@@ -25,13 +25,15 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
 #include "BObol/BDisplayEndpoint.h"
 #include "BObol/BViewController.h"
 #include "icv.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 
 #include "../ged_private.h"
 
@@ -110,7 +112,7 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (!endpoint) {
 	bu_vls_printf(gedp->ged_result_str,
 		"view '%s' has no Obol display endpoint\n",
@@ -119,7 +121,7 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    (void)ged_draw_obol_framebuffer_present(gedp);
+    (void)ged_view_framebuffer_present(gedp);
     BObolViewController *controller = static_cast<BObolViewController *>(
 	bobol_display_endpoint_controller(endpoint));
     if (!grab_fb && (!controller ||

@@ -20,6 +20,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "bv.h"
 #include "ged.h"
 #include "ged/draw.h"
@@ -37,17 +39,17 @@ tclcad_wrapper_sync_dimensions(struct ged_view_context *target_ctx,
 	const struct ged_view_context *source_ctx)
 {
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(source_ctx);
-    struct bobol_endpoint_property_value width =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    struct bobol_endpoint_property_value height =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	ged_view_context_obol_endpoint_get(source_ctx);
+    struct bv_display_property_value width =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value height =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     struct bv *target_view = bv_context_view(ged_view_context_bv(target_ctx));
     if (endpoint && target_view &&
 	bobol_display_endpoint_property_get(endpoint, "endpoint.width",
-	    &width) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	    &width) == BV_DISPLAY_PROPERTY_OK &&
 	bobol_display_endpoint_property_get(endpoint, "endpoint.height",
-	    &height) == BOBOL_ENDPOINT_PROPERTY_OK && width.uint_value &&
+	    &height) == BV_DISPLAY_PROPERTY_OK && width.uint_value &&
 	height.uint_value)
 	bv_dimensions_set(target_view, (int)width.uint_value,
 	    (int)height.uint_value);

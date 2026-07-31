@@ -23,6 +23,9 @@
  *
  */
 #include "common.h"
+
+#include <string.h>
+
 #include "bu/malloc.h"
 #include "bu/log.h"
 #include "icv_private.h"

@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <ctype.h>
 #include <cstdlib>
 #include <cstring>
@@ -1196,7 +1198,7 @@ _view_object_scene_ready(struct _ged_view_info *gd)
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return 0;
     }
-    if (!ged_view_context_display_endpoint_get(gd->cv) &&
+    if (!ged_view_context_obol_endpoint_get(gd->cv) &&
 	!ged_view_context_display_endpoint_ensure(gd->cv)) {
 	bu_vls_printf(gedp->ged_result_str,
 	    ": unable to create display endpoint for current view");

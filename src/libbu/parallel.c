@@ -393,19 +393,25 @@ parallel_mapping(parallel_action_t action, int id, size_t max)
     static struct parallel_info mapping[MAX_PSW*MAX_PSW] = {{0, 0, 0, 0, 0}};
     int got_cpu;
 
+    /*
+     * The returned record remains live until PARALLEL_PUT, but allocation,
+     * initialization, and release must be one publication transaction.
+     * Previously only the free-slot scan was protected, so another thread
+     * could observe or reuse a partially reset record.
+     */
+    bu_semaphore_acquire(BU_SEM_THREAD);
     switch (action) {
 	case PARALLEL_GET:
 	    if (id < 0) {
-		bu_semaphore_acquire(BU_SEM_THREAD);
 		for (got_cpu = 1; got_cpu < MAX_PSW*MAX_PSW; got_cpu++) {
 		    if (mapping[got_cpu].id == 0) {
 			mapping[got_cpu].id = got_cpu;
 			break;
 		    }
 		}
-		bu_semaphore_release(BU_SEM_THREAD);
 
 		if (got_cpu >= MAX_PSW*MAX_PSW) {
+		    bu_semaphore_release(BU_SEM_THREAD);
 		    bu_log("Compile-time parallelism limit reached (%d >= %d).\n", got_cpu, MAX_PSW*MAX_PSW);
 		    bu_bomb("Unable to track threading.\n");
 		}
@@ -424,6 +430,7 @@ parallel_mapping(parallel_action_t action, int id, size_t max)
 	    if (mapping[got_cpu].lim == 0 && max > 0)
 		mapping[got_cpu].lim = max;
 
+	    bu_semaphore_release(BU_SEM_THREAD);
 	    return &mapping[got_cpu];
 
 	case PARALLEL_PUT:
@@ -431,6 +438,7 @@ parallel_mapping(parallel_action_t action, int id, size_t max)
 	    mapping[id].id = 0; /* separate to avoid race */
     }
 
+    bu_semaphore_release(BU_SEM_THREAD);
     return NULL;
 }
 
@@ -441,11 +449,18 @@ parallel_wait_for_slot(int throttle, struct parallel_info *parent, size_t max_th
     size_t threads = max_threads;
 
     while (1) {
-	if (parent->started < parent->finished) {
+	size_t started;
+	size_t finished;
+	bu_semaphore_acquire(BU_SEM_THREAD);
+	started = parent->started;
+	finished = parent->finished;
+	bu_semaphore_release(BU_SEM_THREAD);
+
+	if (started < finished) {
 	    /*bu_log("Warning - parent->started (%d) is less than parent->finished (%d)\n", parent->started, parent->finished);*/
 	    return;
 	}
-	threads = parent->started - parent->finished;
+	threads = started - finished;
 
 	/*bu_log("threads=%d (start %d - done %d)\n", threads, parent->started, parent->finished);
 	  bu_log("max_threads=%d, throttle: %d\n", max_threads, throttle);*/
@@ -590,15 +605,28 @@ bu_parallel(void (*func)(int, void *), size_t ncpu, void *arg)
 	throttle = 1;
 
 	/* any "zero" limit scopes propagate upward */
-	while (parent->lim == 0 && parent->id > 0) {
-	    parent = parallel_mapping(PARALLEL_GET, parent->parent, ncpu);
+	while (1) {
+	    size_t parent_lim;
+	    int parent_id;
+	    int parent_parent;
+	    bu_semaphore_acquire(BU_SEM_THREAD);
+	    parent_lim = parent->lim;
+	    parent_id = parent->id;
+	    parent_parent = parent->parent;
+	    bu_semaphore_release(BU_SEM_THREAD);
+	    if (parent_lim != 0 || parent_id <= 0)
+		break;
+	    parent = parallel_mapping(PARALLEL_GET, parent_parent, ncpu);
 	}
 
 	/* if the top-most parent is unspecified, use all available cpus */
-	if (parent->lim == 0) {
+	bu_semaphore_acquire(BU_SEM_THREAD);
+	size_t parent_lim = parent->lim;
+	bu_semaphore_release(BU_SEM_THREAD);
+	if (parent_lim == 0) {
 	    ncpu = bu_avail_cpus();
 	} else {
-	    ncpu = parent->lim;
+	    ncpu = parent_lim;
 	}
 
 	/* starting a "zero" bu_parallel means we get one worker

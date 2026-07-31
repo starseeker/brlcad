@@ -22,7 +22,7 @@
  * The "view lighting" subcommand: enable/disable the camera-driven headlight
  * and in-scene (database) lights, and control whether the headlight tracks the
  * camera.  Settings are stored per-view in struct bv_lighting_state and pushed
- * to the live Obol renderer via ged_draw_obol_lighting_sync().
+ * to the live Obol renderer via ged_view_lighting_sync().
  *
  */
 
@@ -35,7 +35,7 @@
 #include "bu/opt.h"
 #include "bu/vls.h"
 #include "bv.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 
 #include "../ged_private.h"
 #include "./ged_view.h"
@@ -248,7 +248,7 @@ ged_lighting_core(struct ged *gedp, int argc, const char *argv[])
     int ret;
     if (bu_cmd(_lgt_cmds, ac, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
 	if (ret == BRLCAD_OK) {
-	    (void)ged_draw_obol_lighting_sync(gedp, view_ctx);
+	    (void)ged_view_lighting_sync(gedp, view_ctx);
 	    /* A lighting change alters the rendered appearance without changing
 	     * geometry or the view matrix, so nothing else marks the view dirty.
 	     * Request a view refresh and invoke the application's refresh handler

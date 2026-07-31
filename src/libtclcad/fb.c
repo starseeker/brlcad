@@ -29,6 +29,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,7 +45,7 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "BObol/BDisplayEndpoint.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
 #include "imgstream/fbserv.h"
 #include "tclcad.h"
@@ -53,7 +55,7 @@
 void
 to_fbs_callback(void *clientData)
 {
-    to_refresh_view(clientData);
+    to_refresh_view((struct ged_view_context *)clientData);
 }
 
 static void
@@ -83,11 +85,11 @@ tclcad_obol_framebuffer_bind(struct ged_view_context *view_ctx, Tcl_Interp *inte
 	return TCL_ERROR;
 
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (!endpoint)
 	return TCL_OK;
 
-    if (ged_draw_obol_framebuffer_backend_ensure_for_view(tvd->gedp,
+    if (ged_view_framebuffer_backend_ensure(tvd->gedp,
 	view_ctx) != BRLCAD_OK) {
 	tclcad_fbs_error(interp,
 	    "openfb: unable to attach the Obol framebuffer stream\n");
@@ -119,7 +121,7 @@ to_close_fbs(struct ged_view_context *view_ctx)
     if (!fbsp || fbsp->fbs_clientData != view_ctx)
 	return TCL_OK;
 
-    ged_draw_obol_framebuffer_release(tvd->gedp);
+    ged_view_framebuffer_release(tvd->gedp);
     fbsp->fbs_callback = NULL;
     fbsp->fbs_clientData = NULL;
     fbsp->fbs_interp = NULL;
@@ -176,11 +178,11 @@ to_set_fb_mode(struct ged *gedp,
      * ordering: 0=off, 1=underlay, 2=interlay, 3=overlay.  Keep the
      * endpoint as the rendering authority and translate only at this API. */
     if (argc == 2) {
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	if (ged_view_context_display_property_get(view_ctx,
 		"composition.framebuffer.mode", &value) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK || !value.string_value) {
+	    BV_DISPLAY_PROPERTY_OK || !value.string_value) {
 	    bu_vls_printf(gedp->ged_result_str,
 		"View has no Obol framebuffer composition policy");
 	    return BRLCAD_ERROR;
@@ -216,13 +218,13 @@ to_set_fb_mode(struct ged *gedp,
     const char *composition = mode == TCLCAD_OBJ_FB_MODE_UNDERLAY ?
 	"underlay" : mode == TCLCAD_OBJ_FB_MODE_INTERLAY ? "interlay" :
 	mode == TCLCAD_OBJ_FB_MODE_OVERLAY ? "overlay" : "off";
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_ENUM;
     value.string_value = composition;
     if (ged_view_context_display_property_set(view_ctx,
 	    "composition.framebuffer.mode", &value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK) {
+	BV_DISPLAY_PROPERTY_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "Unable to set Obol framebuffer composition policy");
 	return BRLCAD_ERROR;

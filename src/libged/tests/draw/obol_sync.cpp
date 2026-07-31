@@ -11,6 +11,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BDisplayEndpoint.h"
 #include "BObol/BExportAction.h"
@@ -33,7 +35,7 @@
 #include "ged.h"
 #include "ged/commands.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/selection_state.h"
 #include "ged/view.h"
 #include "opennurbs_sphere.h"
@@ -82,7 +84,7 @@ exercise_ged_value_handle_lifetimes(struct ged *gedp)
     bobol_display_endpoint_t *first_endpoint =
 	bobol_display_endpoint_create(NULL, 0);
     if (!first_endpoint ||
-	!ged_view_context_display_endpoint_set(view_ctx, first_endpoint, 1)) {
+	!ged_view_context_obol_endpoint_set(view_ctx, first_endpoint, 1)) {
 	if (first_endpoint)
 	    bobol_display_endpoint_destroy(first_endpoint);
 	ged_view_context_free(view_ctx);
@@ -108,7 +110,7 @@ exercise_ged_value_handle_lifetimes(struct ged *gedp)
     bobol_display_endpoint_t *second_endpoint =
 	bobol_display_endpoint_create(NULL, 0);
     if (!second_endpoint ||
-	!ged_view_context_display_endpoint_set(view_ctx, second_endpoint, 1)) {
+	!ged_view_context_obol_endpoint_set(view_ctx, second_endpoint, 1)) {
 	if (second_endpoint)
 	    bobol_display_endpoint_destroy(second_endpoint);
 	ged_view_context_free(view_ctx);
@@ -178,10 +180,10 @@ exercise_ged_value_handle_lifetimes(struct ged *gedp)
 	    bobol_display_endpoint_create(NULL, 0);
 	if (!cycle_view || !cycle_endpoint ||
 	    !ged_view_context_host_attach(gedp, cycle_view) ||
-	    !ged_view_context_display_endpoint_set(cycle_view,
+	    !ged_view_context_obol_endpoint_set(cycle_view,
 		cycle_endpoint, 1)) {
 	    if (cycle_endpoint && (!cycle_view ||
-		ged_view_context_display_endpoint_get(cycle_view) !=
+		ged_view_context_obol_endpoint_get(cycle_view) !=
 		    cycle_endpoint))
 		bobol_display_endpoint_destroy(cycle_endpoint);
 	    if (cycle_view)
@@ -1096,6 +1098,7 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
     const char *draw_reuse_root[2] = {"draw", "reuse_root.c"};
     if (ged_exec_draw(gedp, 2, draw_reuse_root) != BRLCAD_OK)
 	FAIL("GED multi-instance transform root draw should succeed");
+    (void)controller->realizePending();
 
     auto compact_for_path = [](SoBRLDatabaseSource *source,
 	    const char *path, BObolCompactInstanceHandle &handle,
@@ -2538,7 +2541,7 @@ main(int argc, char **argv)
 	!ged_view_context_display_endpoint_ensure(initial_view_ctx))
 	FAIL("GED should create an owned display endpoint for its active view");
     bobol_display_endpoint_t *initial_endpoint =
-	ged_view_context_display_endpoint_get(initial_view_ctx);
+	ged_view_context_obol_endpoint_get(initial_view_ctx);
     BObolViewController *initial_view_controller = initial_endpoint ?
 	static_cast<BObolViewController *>(
 	    bobol_display_endpoint_controller(initial_endpoint)) : NULL;
@@ -2563,7 +2566,7 @@ main(int argc, char **argv)
     /* The bridge test below expects eager headless realization.  Detaching the
      * initial endpoint leaves the shared per-GED scene alive while removing
      * the per-view progressive provider. */
-    if (!ged_view_context_display_endpoint_set(initial_view_ctx, NULL, 0))
+    if (!ged_view_context_obol_endpoint_set(initial_view_ctx, NULL, 0))
 	FAIL("GED should detach an ensured endpoint without releasing its scene");
 
     if (exercise_draw_frontier(gedp, owned_scene))
@@ -2611,7 +2614,7 @@ main(int argc, char **argv)
 	    !ged_draw_obol_view_context_feature_store_active(feature_view_ctx))
 	FAIL("GED active view endpoint should expose its Obol feature store");
     bobol_display_endpoint_t *feature_endpoint =
-	ged_view_context_display_endpoint_get(feature_view_ctx);
+	ged_view_context_obol_endpoint_get(feature_view_ctx);
     BObolViewController *feature_view_controller = feature_endpoint ?
 	static_cast<BObolViewController *>(
 	    bobol_display_endpoint_controller(feature_endpoint)) : NULL;
@@ -3650,7 +3653,7 @@ main(int argc, char **argv)
 	    owned_controller->features().exists("cap2::diagnostic") ||
 	    feature_view_controller->features().exists("cap2::rt-preview"))
 	FAIL("GED feature prefix removal should clear owned Obol feature store entries");
-    if (!ged_view_context_display_endpoint_set(feature_view_ctx, NULL, 0))
+    if (!ged_view_context_obol_endpoint_set(feature_view_ctx, NULL, 0))
 	FAIL("GED feature test should detach its temporary endpoint");
     feature_view_controller = NULL;
 
@@ -4793,13 +4796,81 @@ main(int argc, char **argv)
 	    if (!box_source)
 		FAIL("owned Obol source should remain available after shaded draw source realization");
 	    BObolRealizedShapeSummary box_mesh_summary;
-	    if (box_source->getRealizedMeshCount() != 0 ||
+	    /*
+	     * With an attached progressive endpoint, draw success publishes the
+	     * coarse source contract; detached mesh realization is intentionally
+	     * asynchronous.  Wait on the actual carrier-free mesh predicate and
+	     * service requested frames instead of assuming a particular worker
+	     * scheduling speed (notably under TSan).
+	     */
+	    BObolViewController *box_view_controller = owned_controller;
+	    for (int attempt = 0; attempt < 2000; attempt++) {
+		if (box_source->getRealizedMeshCount() == 0 &&
+		    box_source->getRealizedShapeSummary(0,
+			box_mesh_summary) &&
+		    box_mesh_summary.shapeKind ==
+			BObolRealizedShapeSummary::SHAPE_MESH &&
+		    box_mesh_summary.pointCount > 0 &&
+		    box_mesh_summary.indexCount > 0)
+		    break;
+		if (box_view_controller) {
+		    (void)box_view_controller->realizePending();
+		    BObolProgressiveStatus shaded_status;
+		    (void)box_view_controller->advanceProgressiveWork(
+			NULL, &shaded_status);
+		    SbString render_reason;
+		    if (box_view_controller->consumeRenderRequest(
+			    &render_reason)) {
+			const uint64_t frame_started =
+			    box_view_controller->beginRenderTiming();
+			box_view_controller->completeRenderTiming(
+			    frame_started);
+		    }
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		SoBRLDatabaseSource *updated_source =
+		    source_for_representation(owned_scene, "box.s",
+		    SoBRLDatabaseSource::REPRESENTATION_SHADED);
+		if (!updated_source)
+		    updated_source =
+			owned_scene->findDatabaseSource("/box.s");
+		if (!updated_source)
+		    updated_source = source_for_path(owned_scene, "box.s");
+		if (updated_source)
+		    box_source = updated_source;
+	    }
+	    if (!box_source ||
+		box_source->getRealizedMeshCount() != 0 ||
 		!box_source->getRealizedShapeSummary(0, box_mesh_summary) ||
 		box_mesh_summary.shapeKind !=
 		    BObolRealizedShapeSummary::SHAPE_MESH ||
 		box_mesh_summary.pointCount == 0 ||
-		box_mesh_summary.indexCount == 0)
+		box_mesh_summary.indexCount == 0) {
+		BObolDatabaseSourceSummary failed_summary;
+		const int have_failed_summary =
+		    box_source && box_source->getSummary(failed_summary);
+		fprintf(stderr,
+		    "shaded realization source=%p summary=%d status=%d "
+		    "rep=%d compact=%d instances=%d shapes=%d meshes=%d "
+		    "kind=%d points=%d indices=%d scene_sources=%d "
+		    "diagnostic=%s\n",
+		    (void *)box_source, have_failed_summary,
+		    have_failed_summary ?
+			failed_summary.realizationStatus : -1,
+		    have_failed_summary ?
+			failed_summary.representationMode : -1,
+		    box_source ?
+			box_source->isCompactOccurrenceRegistry() : -1,
+		    box_source ? box_source->getCompactInstanceCount() : -1,
+		    box_source ? box_source->getRealizedShapeCount() : -1,
+		    box_source ? box_source->getRealizedMeshCount() : -1,
+		    box_mesh_summary.shapeKind, box_mesh_summary.pointCount,
+		    box_mesh_summary.indexCount,
+		    owned_scene->getDatabaseSourceCount(),
+		    have_failed_summary ?
+			failed_summary.realizationDiagnostic.getString() : "");
 		FAIL("GED shaded source realization should publish carrier-free Obol mesh geometry");
+	    }
 	    BObolDatabaseSourceSummary box_realized_summary;
 	    if (!box_source->getSummary(box_realized_summary) ||
 		    box_realized_summary.stale ||
@@ -5315,6 +5386,10 @@ main(int argc, char **argv)
 	FAIL("GED group record shape count should prefer owned Obol group sources");
     if (owned_scene->removeDatabaseSource("__obol_count_sentinel.s") <= 0)
 	FAIL("owned Obol source count sentinel should be removable");
+    /* Group mode/appearance mutations invalidate the retained source just as
+     * they do in a GUI frame.  This headless test owns the frame pump, so
+     * realize that pending state before asserting the current-record view. */
+    (void)owned_controller->realizePending();
     struct ged_draw_obol_database_source_record source_record;
     memset(&source_record, 0, sizeof(source_record));
     if (!ged_draw_obol_database_source_record_for_path(gedp, "box.s",
@@ -5623,6 +5698,7 @@ main(int argc, char **argv)
     if (ged_exec_draw(gedp, 2, draw_nested_leaf) != BRLCAD_OK ||
 	    ged_exec_draw(gedp, 2, draw_nested_sibling) != BRLCAD_OK)
 	FAIL("GED nested path draws should succeed");
+    (void)owned_controller->realizePending();
     SoBRLDatabaseSource *nested_leaf_source =
 	source_for_path(owned_scene, nested_leaf_source_path);
     SoBRLDatabaseSource *nested_sibling_source =
@@ -6058,7 +6134,7 @@ main(int argc, char **argv)
     bobol_display_endpoint_t *first_populated_endpoint =
 	bobol_display_endpoint_create(&view_controller, 0);
     if (!first_populated_endpoint ||
-	!ged_view_context_display_endpoint_set(initial_view_ctx,
+	!ged_view_context_obol_endpoint_set(initial_view_ctx,
 	    first_populated_endpoint, 1)) {
 	if (first_populated_endpoint)
 	    bobol_display_endpoint_destroy(first_populated_endpoint);
@@ -6068,13 +6144,13 @@ main(int argc, char **argv)
     bobol_display_endpoint_t *replacement_endpoint =
 	bobol_display_endpoint_create(&view_controller, 0);
     if (!replacement_endpoint ||
-	!ged_view_context_display_endpoint_set(initial_view_ctx,
+	!ged_view_context_obol_endpoint_set(initial_view_ctx,
 	    replacement_endpoint, 1)) {
 	if (replacement_endpoint)
 	    bobol_display_endpoint_destroy(replacement_endpoint);
 	FAIL("GED populated view should accept a replacement display endpoint");
     }
-    if (ged_view_context_display_endpoint_get(initial_view_ctx) !=
+    if (ged_view_context_obol_endpoint_get(initial_view_ctx) !=
 	    replacement_endpoint ||
 	ged_draw_obol_scene_controller(gedp) != owned_scene ||
 	!view_controller.getRenderSceneRoot() ||
@@ -6092,10 +6168,10 @@ main(int argc, char **argv)
 	bobol_display_endpoint_create(&progressive_controller, 0);
     if (!progressive_view_ctx || !progressive_endpoint ||
 	!ged_view_context_host_attach(gedp, progressive_view_ctx) ||
-	!ged_view_context_display_endpoint_set(progressive_view_ctx,
+	!ged_view_context_obol_endpoint_set(progressive_view_ctx,
 	    progressive_endpoint, 1)) {
 	if (progressive_endpoint && (!progressive_view_ctx ||
-	    ged_view_context_display_endpoint_get(progressive_view_ctx) !=
+	    ged_view_context_obol_endpoint_get(progressive_view_ctx) !=
 		progressive_endpoint))
 	    bobol_display_endpoint_destroy(progressive_endpoint);
 	if (progressive_view_ctx)
@@ -6106,7 +6182,7 @@ main(int argc, char **argv)
 	    &progressive_controller,
 	    progressive_view_ctx))
 	return 1;
-    (void)ged_view_context_display_endpoint_set(progressive_view_ctx,
+    (void)ged_view_context_obol_endpoint_set(progressive_view_ctx,
 	NULL, 0);
     ged_view_context_free(progressive_view_ctx);
 
@@ -6382,7 +6458,7 @@ main(int argc, char **argv)
     if (exercise_ged_value_handle_lifetimes(gedp))
 	return 1;
 
-    (void)ged_view_context_display_endpoint_set(initial_view_ctx, NULL, 0);
+    (void)ged_view_context_obol_endpoint_set(initial_view_ctx, NULL, 0);
     ged_close(gedp);
     root->unref();
     bu_file_delete(dbpath);

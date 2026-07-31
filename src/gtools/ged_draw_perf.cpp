@@ -27,6 +27,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "bu/app.h"
 
 #include <algorithm>
@@ -50,7 +52,7 @@
 #include "BObol/BDisplayEndpoint.h"
 #include "BObol/BPerformance.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
 
 #include <Inventor/nodes/SoGroup.h>
@@ -430,12 +432,12 @@ initialize_endpoint(struct ged *gedp, const struct options &opts)
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (!endpoint) {
 	endpoint = bobol_display_endpoint_create(NULL, 0);
 	if (!endpoint)
 	    return NULL;
-	if (!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+	if (!ged_view_context_obol_endpoint_set(view_ctx, endpoint, 1)) {
 	    bobol_display_endpoint_destroy(endpoint);
 	    return NULL;
 	}
@@ -480,7 +482,7 @@ run_render(struct ged *gedp, BObolViewController *controller,
 	return BRLCAD_ERROR;
     if (!controller->syncCameraFromViewContext(view_ctx))
 	return BRLCAD_ERROR;
-    (void)ged_draw_obol_faceplate_sync(gedp, view_ctx);
+    (void)ged_view_faceplate_sync(gedp, view_ctx);
     return controller->renderToImage(image, 1, 0, NULL,
 	performance_context_manager(), status);
 }

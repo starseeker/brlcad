@@ -57,7 +57,7 @@
 #include "rt/view.h"
 
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "../qray.h"
 #include "../ged_private.h"
 

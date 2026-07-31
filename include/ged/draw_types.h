@@ -38,7 +38,7 @@
  * structured path form.
  *
  * C++ callers that need to mirror this semantic draw state into an
- * Obol/libBObol view controller should use ged/draw_obol.h.
+ * Obol/libBObol view controller should use ged/display.h.
  */
 /** @{ */
 /* @file ged/draw_types.h */

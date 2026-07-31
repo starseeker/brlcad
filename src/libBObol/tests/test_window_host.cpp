@@ -76,11 +76,11 @@ find_clip_plane(SoNode *node, const char *name)
 }
 
 static void
-property_value_init(struct bobol_endpoint_property_value *value)
+property_value_init(struct bv_display_property_value *value)
 {
     memset(value, 0, sizeof(*value));
     value->struct_size = sizeof(*value);
-    value->type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    value->type = BV_DISPLAY_PROPERTY_BOOL;
 }
 
 struct TestPropertyProvider {
@@ -94,19 +94,19 @@ struct TestPropertyProvider {
 
 static int
 test_property_provider_get(void *data, const char *name,
-	struct bobol_endpoint_property_value *value)
+	struct bv_display_property_value *value)
 {
     TestPropertyProvider *provider =
 	static_cast<TestPropertyProvider *>(data);
     if (!provider || !name || !value)
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     if (bu_strcmp(name, "view.zclip") == 0) {
 	value->bool_value = provider->zclip;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "view.perspective") == 0) {
 	value->double_value = provider->perspective;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "composition.framebuffer.mode") == 0) {
 	if (provider->framebufferMode == 0)
@@ -118,43 +118,43 @@ test_property_provider_get(void *data, const char *name,
 	else if (provider->framebufferMode == 3)
 	    value->string_value = "interlay";
 	else
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	    return BV_DISPLAY_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "view.faceplate.adc.visible") == 0) {
 	value->bool_value = provider->adcVisible;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "view.faceplate.model_axes.visible") == 0) {
 	value->bool_value = provider->modelAxesVisible;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "view.faceplate.view_axes.visible") == 0) {
 	value->bool_value = provider->viewAxesVisible;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
-    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 }
 
 static int
 test_property_provider_set(void *data, const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
     TestPropertyProvider *provider =
 	static_cast<TestPropertyProvider *>(data);
     if (!provider || !name || !value)
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     if (bu_strcmp(name, "view.zclip") == 0) {
 	provider->zclip = value->bool_value ? 1 : 0;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "view.perspective") == 0) {
 	provider->perspective = value->double_value;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "composition.framebuffer.mode") == 0) {
 	if (!value->string_value)
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (bu_strcmp(value->string_value, "off") == 0)
 	    provider->framebufferMode = 0;
 	else if (bu_strcmp(value->string_value, "overlay") == 0)
@@ -164,22 +164,22 @@ test_property_provider_set(void *data, const char *name,
 	else if (bu_strcmp(value->string_value, "interlay") == 0)
 	    provider->framebufferMode = 3;
 	else
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	    return BV_DISPLAY_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "view.faceplate.adc.visible") == 0) {
 	provider->adcVisible = value->bool_value ? 1 : 0;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "view.faceplate.model_axes.visible") == 0) {
 	provider->modelAxesVisible = value->bool_value ? 1 : 0;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (bu_strcmp(name, "view.faceplate.view_axes.visible") == 0) {
 	provider->viewAxesVisible = value->bool_value ? 1 : 0;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
-    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 }
 
 struct InputActionState {
@@ -1039,15 +1039,15 @@ test_host_factory_contract(void)
 	  !bobol_display_endpoint_render_engine_supported(endpoint,
 	      BOBOL_RENDER_ENGINE_HW),
 	  "endpoint reports renderer support from its active host capabilities");
-    struct bobol_endpoint_property_value resolved_property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value resolved_property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     CHECK(bobol_display_endpoint_render_engine_get(endpoint) ==
 	  BOBOL_RENDER_ENGINE_AUTO &&
 	  bobol_display_endpoint_render_engine_resolved_get(endpoint) ==
 	  BOBOL_RENDER_ENGINE_SW &&
 	  bobol_display_endpoint_property_get(endpoint,
 	      "endpoint.renderer.resolved", &resolved_property) ==
-	      BOBOL_ENDPOINT_PROPERTY_OK &&
+	      BV_DISPLAY_PROPERTY_OK &&
 	  resolved_property.string_value &&
 	  bu_strcmp(resolved_property.string_value, "sw") == 0,
 	  "automatic renderer resolves a pixel-presentation factory to software");
@@ -1077,42 +1077,42 @@ test_host_factory_contract(void)
     CHECK(!bobol_host_factory_unregister(high_token),
 	  "live endpoint prevents host factory unregister");
 
-    struct bobol_endpoint_property_value host_dimension =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value host_dimension =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     CHECK(bobol_display_endpoint_property_get(endpoint, "endpoint.width",
-	  &host_dimension) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	  &host_dimension) == BV_DISPLAY_PROPERTY_OK &&
 	  host_dimension.uint_value == 13 && high_state.dimension_queries == 1,
 	  "endpoint dimensions refresh from the active toolkit host");
 
-    struct bobol_endpoint_property_value host_property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    host_property.type = BOBOL_ENDPOINT_PROPERTY_STRING;
+    struct bv_display_property_value host_property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    host_property.type = BV_DISPLAY_PROPERTY_STRING;
     host_property.string_value = "Updated endpoint title";
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.title",
-	  &host_property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	  &host_property) == BV_DISPLAY_PROPERTY_OK &&
 	  high_state.title == "Updated endpoint title",
 	  "typed title property dispatches to a toplevel host");
     property_value_init(&host_property);
     CHECK(bobol_display_endpoint_property_get(endpoint, "endpoint.title",
-	  &host_property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	  &host_property) == BV_DISPLAY_PROPERTY_OK &&
 	  host_property.string_value &&
 	  bu_strcmp(host_property.string_value, "Updated endpoint title") == 0,
 	  "typed title property retains endpoint state");
     property_value_init(&host_property);
-    host_property.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    host_property.type = BV_DISPLAY_PROPERTY_BOOL;
     host_property.bool_value = 1;
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.visible",
-	  &host_property) == BOBOL_ENDPOINT_PROPERTY_OK && high_state.visible,
+	  &host_property) == BV_DISPLAY_PROPERTY_OK && high_state.visible,
 	  "typed visibility property dispatches to a toplevel host");
     property_value_init(&host_property);
     CHECK(bobol_display_endpoint_property_get(endpoint, "endpoint.vsync",
-	  &host_property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	  &host_property) == BV_DISPLAY_PROPERTY_OK &&
 	  host_property.bool_value == 0,
 	  "explicit host creation policy initializes typed vsync state");
-    host_property.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    host_property.type = BV_DISPLAY_PROPERTY_BOOL;
     host_property.bool_value = 1;
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.vsync",
-	  &host_property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	  &host_property) == BV_DISPLAY_PROPERTY_OK &&
 	  high_state.vsync == 1,
 	  "typed vsync property dispatches to a capable presentation host");
 
@@ -1179,11 +1179,11 @@ test_host_factory_contract(void)
 	  BOBOL_RENDER_ENGINE_DIAGNOSTIC) &&
 	  !host_controller->getRenderRoot(),
 	  "diagnostic disables graphical presentation on a hosted endpoint");
-    struct bobol_endpoint_property_value diagnostic_value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value diagnostic_value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "renderer.diagnostic.revision", &diagnostic_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK && diagnostic_value.uint_value > 0,
+	  BV_DISPLAY_PROPERTY_OK && diagnostic_value.uint_value > 0,
 	  "diagnostic selection performs a typed non-graphical traversal");
     const uint64_t diagnostic_revision = diagnostic_value.uint_value;
     property_value_init(&diagnostic_value);
@@ -1191,7 +1191,7 @@ test_host_factory_contract(void)
 	  high_state.frames == frames_before_none &&
 	  bobol_display_endpoint_property_get(endpoint,
 	      "renderer.diagnostic.revision", &diagnostic_value) ==
-	      BOBOL_ENDPOINT_PROPERTY_OK &&
+	      BV_DISPLAY_PROPERTY_OK &&
 	  diagnostic_value.uint_value > diagnostic_revision &&
 	  !bobol_display_endpoint_capture(endpoint, &capture, &capture_size,
 	      &capture_width, &capture_height, &capture_components) &&
@@ -1200,7 +1200,7 @@ test_host_factory_contract(void)
     property_value_init(&diagnostic_value);
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "renderer.diagnostic.summary", &diagnostic_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK && diagnostic_value.string_value &&
+	  BV_DISPLAY_PROPERTY_OK && diagnostic_value.string_value &&
 	  strstr(diagnostic_value.string_value, "scene=available") &&
 	  strstr(diagnostic_value.string_value, "visited_sources="),
 	  "diagnostic exposes its traversal result through a typed summary");
@@ -1211,7 +1211,7 @@ test_host_factory_contract(void)
 	  host_controller->getRenderRoot() == graphical_root &&
 	  bobol_display_endpoint_property_get(endpoint,
 	      "renderer.diagnostic.summary", &diagnostic_value) ==
-	      BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	      BV_DISPLAY_PROPERTY_UNSUPPORTED,
 	  "leaving diagnostic restores the retained graphical root and hides mode-only state");
 
     CHECK(!bobol_display_endpoint_framebuffer_capture_provider_set(endpoint,
@@ -1251,7 +1251,7 @@ test_host_factory_contract(void)
     property_value_init(&resolved_property);
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "endpoint.renderer.resolved", &resolved_property) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK && resolved_property.string_value &&
+	  BV_DISPLAY_PROPERTY_OK && resolved_property.string_value &&
 	  bu_strcmp(resolved_property.string_value, "hw") == 0,
 	  "typed resolved-renderer property reports automatic hardware selection");
     bobol_display_endpoint_destroy(endpoint);
@@ -1647,64 +1647,64 @@ test_display_endpoint_contract(void)
     int found_faceplate_font_properties = 0;
     int found_faceplate_color_properties = 0;
     for (size_t i = 0; i < bobol_display_endpoint_property_count(); i++) {
-	struct bobol_endpoint_property_desc property = {};
+	struct bv_display_property_desc property = {};
 	property.struct_size = sizeof(property);
 	CHECK(bobol_display_endpoint_property_descriptor(i, &property) ==
-	      BOBOL_ENDPOINT_PROPERTY_OK && property.name,
+	      BV_DISPLAY_PROPERTY_OK && property.name,
 	      "display endpoint property descriptors are readable");
 	if (bu_strcmp(property.name, "endpoint.renderer") == 0) {
 	    found_renderer_property = property.type ==
-		BOBOL_ENDPOINT_PROPERTY_ENUM &&
-		(property.access & BOBOL_ENDPOINT_PROPERTY_WRITE) &&
+		BV_DISPLAY_PROPERTY_ENUM &&
+		(property.access & BV_DISPLAY_PROPERTY_WRITE) &&
 		property.allowed_values &&
 		bu_strcmp(property.allowed_values,
 		    "auto,hw,sw,rt,none,diagnostic") == 0;
 	}
 	if (bu_strcmp(property.name, "endpoint.renderer.resolved") == 0) {
 	    found_resolved_renderer_property = property.type ==
-		BOBOL_ENDPOINT_PROPERTY_ENUM &&
-		property.access == BOBOL_ENDPOINT_PROPERTY_READ &&
+		BV_DISPLAY_PROPERTY_ENUM &&
+		property.access == BV_DISPLAY_PROPERTY_READ &&
 		property.allowed_values &&
 		bu_strcmp(property.allowed_values,
 		    "auto,hw,sw,rt,none,diagnostic") == 0;
 	}
 	if (bu_strcmp(property.name, "endpoint.title") == 0)
 	    found_title_property = property.type ==
-		BOBOL_ENDPOINT_PROPERTY_STRING &&
+		BV_DISPLAY_PROPERTY_STRING &&
 		property.required_host_capabilities == BOBOL_HOST_CAP_TOPLEVEL;
 	if (bu_strcmp(property.name, "endpoint.visible") == 0)
 	    found_visibility_property = property.type ==
-		BOBOL_ENDPOINT_PROPERTY_BOOL &&
+		BV_DISPLAY_PROPERTY_BOOL &&
 		property.required_host_capabilities == BOBOL_HOST_CAP_TOPLEVEL;
 	if (bu_strcmp(property.name, "endpoint.vsync") == 0)
 	    found_vsync_property = property.type ==
-		BOBOL_ENDPOINT_PROPERTY_BOOL &&
+		BV_DISPLAY_PROPERTY_BOOL &&
 		property.required_host_capabilities ==
 		    BOBOL_HOST_CAP_PRESENT_VSYNC;
 	if (bu_strcmp(property.name, "view.perspective") == 0)
 	    found_perspective_property = property.type ==
-		BOBOL_ENDPOINT_PROPERTY_DOUBLE &&
-		(property.access & BOBOL_ENDPOINT_PROPERTY_WRITE) &&
+		BV_DISPLAY_PROPERTY_DOUBLE &&
+		(property.access & BV_DISPLAY_PROPERTY_WRITE) &&
 		fabs(property.minimum) < 0.0001 && property.maximum < 180.0;
 	if (bu_strcmp(property.name, "view.faceplate.grid.visible") == 0)
 	    found_faceplate_grid_property = property.type ==
-		BOBOL_ENDPOINT_PROPERTY_BOOL &&
-		(property.access & BOBOL_ENDPOINT_PROPERTY_WRITE);
+		BV_DISPLAY_PROPERTY_BOOL &&
+		(property.access & BV_DISPLAY_PROPERTY_WRITE);
 	if (bu_strcmp(property.name, "composition.framebuffer.mode") == 0)
 	    found_framebuffer_composition_property = property.type ==
-		BOBOL_ENDPOINT_PROPERTY_ENUM &&
-		(property.access & BOBOL_ENDPOINT_PROPERTY_WRITE) &&
+		BV_DISPLAY_PROPERTY_ENUM &&
+		(property.access & BV_DISPLAY_PROPERTY_WRITE) &&
 		property.allowed_values &&
 		bu_strcmp(property.allowed_values, "off,overlay,underlay,interlay") == 0;
 	if (bu_strcmp(property.name, "renderer.antialiasing") == 0)
 	    found_antialiasing_property = property.type ==
-		BOBOL_ENDPOINT_PROPERTY_BOOL &&
-		(property.access & BOBOL_ENDPOINT_PROPERTY_WRITE);
+		BV_DISPLAY_PROPERTY_BOOL &&
+		(property.access & BV_DISPLAY_PROPERTY_WRITE);
 	if (bu_strcmp(property.name, "view.faceplate.params.font_size") == 0 ||
 	    bu_strcmp(property.name, "view.faceplate.center_dot.font_size") == 0 ||
 	    bu_strcmp(property.name, "view.faceplate.scale.font_size") == 0) {
-	    if (property.type == BOBOL_ENDPOINT_PROPERTY_UINT &&
-		(property.access & BOBOL_ENDPOINT_PROPERTY_WRITE) &&
+	    if (property.type == BV_DISPLAY_PROPERTY_UINT &&
+		(property.access & BV_DISPLAY_PROPERTY_WRITE) &&
 		fabs(property.minimum - 5.0) < 0.0001 &&
 		fabs(property.maximum - 96.0) < 0.0001)
 		found_faceplate_font_properties++;
@@ -1712,8 +1712,8 @@ test_display_endpoint_contract(void)
 	if (bu_strcmp(property.name, "view.faceplate.params.color") == 0 ||
 	    bu_strcmp(property.name, "view.faceplate.center_dot.color") == 0 ||
 	    bu_strcmp(property.name, "view.faceplate.scale.color") == 0) {
-	    if (property.type == BOBOL_ENDPOINT_PROPERTY_COLOR3 &&
-		(property.access & BOBOL_ENDPOINT_PROPERTY_WRITE) &&
+	    if (property.type == BV_DISPLAY_PROPERTY_COLOR3 &&
+		(property.access & BV_DISPLAY_PROPERTY_WRITE) &&
 		fabs(property.minimum) < 0.0001 &&
 		fabs(property.maximum - 1.0) < 0.0001)
 		found_faceplate_color_properties++;
@@ -1740,33 +1740,33 @@ test_display_endpoint_contract(void)
     CHECK(found_faceplate_color_properties == 3,
 	  "faceplate color policies declare bounded writable color values");
 
-    struct bobol_endpoint_property_value property_value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_STRING;
+    struct bv_display_property_value property_value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    property_value.type = BV_DISPLAY_PROPERTY_STRING;
     property_value.string_value = "No host";
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.title",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	  &property_value) == BV_DISPLAY_PROPERTY_UNSUPPORTED,
 	  "host properties fail explicitly without a compatible toplevel host");
     property_value_init(&property_value);
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "endpoint.renderer", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
-	  property_value.type == BOBOL_ENDPOINT_PROPERTY_ENUM &&
+	  BV_DISPLAY_PROPERTY_OK &&
+	  property_value.type == BV_DISPLAY_PROPERTY_ENUM &&
 	  bu_strcmp(property_value.string_value, "sw") == 0,
 	  "typed renderer property reads endpoint policy");
     property_value_init(&property_value);
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "endpoint.renderer.supported", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK && property_value.string_value &&
+	  BV_DISPLAY_PROPERTY_OK && property_value.string_value &&
 	  bu_strcmp(property_value.string_value,
 	      "auto,hw,sw,rt,none,diagnostic") == 0,
 	  "typed renderer support property reports the current binding");
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+    property_value.type = BV_DISPLAY_PROPERTY_ENUM;
     property_value.string_value = "quality";
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "controller.software_wire", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK,
+	  BV_DISPLAY_PROPERTY_OK,
 	  "typed software wire property accepts QUALITY");
     BObolViewController *endpoint_controller =
 	static_cast<BObolViewController *>(
@@ -1780,42 +1780,42 @@ test_display_endpoint_contract(void)
 	  "typed software wire property updates the controller");
 
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    property_value.type = BV_DISPLAY_PROPERTY_BOOL;
     property_value.bool_value = 0;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.depth_test", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  !endpoint_controller->isDepthTestEnabled(),
 	  "typed depth property updates the Obol render environment");
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.lighting", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  !endpoint_controller->isLightingEnabled(),
 	  "typed lighting property updates the Obol render environment");
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    property_value.type = BV_DISPLAY_PROPERTY_COLOR3;
     property_value.color3[0] = 0.25;
     property_value.color3[1] = 0.50;
     property_value.color3[2] = 0.75;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.headlight.color", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  endpoint_controller->getHeadlightColor() ==
 	      SbColor(0.25f, 0.50f, 0.75f),
 	  "typed headlight color updates the common render environment");
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    property_value.type = BV_DISPLAY_PROPERTY_DOUBLE;
     property_value.double_value = 0.4;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.headlight.intensity", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  std::fabs(endpoint_controller->getHeadlightIntensity() - 0.4f) <
 	      1.0e-6f,
 	  "typed headlight intensity updates the common render environment");
     property_value_init(&property_value);
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "renderer.headlight.color", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  std::fabs(property_value.color3[0] - 0.25) < 1.0e-9 &&
 	  std::fabs(property_value.color3[1] - 0.50) < 1.0e-9 &&
 	  std::fabs(property_value.color3[2] - 0.75) < 1.0e-9,
@@ -1823,49 +1823,49 @@ test_display_endpoint_contract(void)
     endpoint_controller->setHeadlightColor(SbColor(1.0f, 1.0f, 1.0f));
     endpoint_controller->setHeadlightIntensity(1.0f);
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    property_value.type = BV_DISPLAY_PROPERTY_BOOL;
     property_value.bool_value = 0;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.transparency", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  !endpoint_controller->isTransparencyEnabled(),
 	  "typed transparency property updates the Obol render action");
     property_value_init(&property_value);
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "renderer.transparency", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK && !property_value.bool_value,
+	  BV_DISPLAY_PROPERTY_OK && !property_value.bool_value,
 	  "typed transparency property round trips render policy");
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    property_value.type = BV_DISPLAY_PROPERTY_BOOL;
     property_value.bool_value = 1;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.antialiasing", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  endpoint_controller->isAntialiasingEnabled(),
 	  "typed antialiasing property updates the Obol render action");
     property_value_init(&property_value);
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "renderer.antialiasing", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK && property_value.bool_value,
+	  BV_DISPLAY_PROPERTY_OK && property_value.bool_value,
 	  "typed antialiasing property round trips render policy");
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    property_value.type = BV_DISPLAY_PROPERTY_BOOL;
     property_value.bool_value = 2;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.antialiasing", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_INVALID,
+	  BV_DISPLAY_PROPERTY_INVALID,
 	  "typed Boolean policy rejects values outside its declared range");
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    property_value.type = BV_DISPLAY_PROPERTY_DOUBLE;
     property_value.double_value = -4.0;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.clip.minimum", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK,
+	  BV_DISPLAY_PROPERTY_OK,
 	  "typed clip minimum updates controller camera policy");
     property_value.double_value = 5.0;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.clip.maximum", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK,
+	  BV_DISPLAY_PROPERTY_OK,
 	  "typed clip maximum updates controller camera policy");
     double clip_minimum = 0.0;
     double clip_maximum = 0.0;
@@ -1894,23 +1894,23 @@ test_display_endpoint_contract(void)
 	  "disabling zclip preserves but deactivates retained clip planes");
     bv_context_destroy(clip_view);
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    property_value.type = BV_DISPLAY_PROPERTY_BOOL;
     property_value.bool_value = 1;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "renderer.depth_cue", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  endpoint_controller->isDepthCueEnabled(),
 	  "typed depth-cue property updates the Obol render environment");
 
     CHECK(bobol_display_endpoint_property_get(endpoint, "view.zclip",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	  &property_value) == BV_DISPLAY_PROPERTY_UNSUPPORTED,
 	  "external view property reports unsupported without an owner");
     CHECK(bobol_display_endpoint_property_get(endpoint, "view.perspective",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	  &property_value) == BV_DISPLAY_PROPERTY_UNSUPPORTED,
 	  "external perspective property reports unsupported without an owner");
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "composition.framebuffer.mode", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	  BV_DISPLAY_PROPERTY_UNSUPPORTED,
 	  "external composition property reports unsupported without an owner");
     TestPropertyProvider provider = {};
     CHECK(bobol_display_endpoint_property_provider_set(endpoint,
@@ -1932,38 +1932,38 @@ test_display_endpoint_contract(void)
     property_value_init(&property_value);
     property_value.bool_value = 1;
     CHECK(bobol_display_endpoint_property_set(endpoint, "view.zclip",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_OK && provider.zclip == 1,
+	  &property_value) == BV_DISPLAY_PROPERTY_OK && provider.zclip == 1,
 	  "external property setter updates owner state");
     property_value.bool_value = 0;
     CHECK(bobol_display_endpoint_property_get(endpoint, "view.zclip",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	  &property_value) == BV_DISPLAY_PROPERTY_OK &&
 	  property_value.bool_value == 1,
 	  "external property getter reads owner state");
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    property_value.type = BV_DISPLAY_PROPERTY_DOUBLE;
     property_value.double_value = 45.0;
     CHECK(bobol_display_endpoint_property_set(endpoint, "view.perspective",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	  &property_value) == BV_DISPLAY_PROPERTY_OK &&
 	  fabs(provider.perspective - 45.0) < 0.0001,
 	  "external perspective setter updates owner state");
     property_value_init(&property_value);
     CHECK(bobol_display_endpoint_property_get(endpoint, "view.perspective",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_OK &&
-	  property_value.type == BOBOL_ENDPOINT_PROPERTY_DOUBLE &&
+	  &property_value) == BV_DISPLAY_PROPERTY_OK &&
+	  property_value.type == BV_DISPLAY_PROPERTY_DOUBLE &&
 	  fabs(property_value.double_value - 45.0) < 0.0001,
 	  "external perspective getter reads owner state");
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+    property_value.type = BV_DISPLAY_PROPERTY_ENUM;
     property_value.string_value = "interlay";
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "composition.framebuffer.mode", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK && provider.framebufferMode == 3,
+	  BV_DISPLAY_PROPERTY_OK && provider.framebufferMode == 3,
 	  "external composition setter updates owner state");
     property_value_init(&property_value);
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "composition.framebuffer.mode", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
-	  property_value.type == BOBOL_ENDPOINT_PROPERTY_ENUM &&
+	  BV_DISPLAY_PROPERTY_OK &&
+	  property_value.type == BV_DISPLAY_PROPERTY_ENUM &&
 	  property_value.string_value &&
 	  bu_strcmp(property_value.string_value, "interlay") == 0,
 	  "external composition getter reads owner state");
@@ -1972,32 +1972,32 @@ test_display_endpoint_contract(void)
 	  "endpoint clears its external property owner");
 
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    property_value.type = BV_DISPLAY_PROPERTY_COLOR3;
     property_value.color3[0] = 0.125;
     property_value.color3[1] = 0.25;
     property_value.color3[2] = 0.5;
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "controller.background.bottom", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK,
+	  BV_DISPLAY_PROPERTY_OK,
 	  "typed background property accepts normalized RGB");
     property_value_init(&property_value);
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "controller.background.bottom", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  fabs(property_value.color3[0] - 0.125) < 0.0001 &&
 	  fabs(property_value.color3[1] - 0.25) < 0.0001 &&
 	  fabs(property_value.color3[2] - 0.5) < 0.0001,
 	  "typed background property round trips controller color");
 
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+    property_value.type = BV_DISPLAY_PROPERTY_UINT;
     property_value.uint_value = 320;
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.width",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_OK,
+	  &property_value) == BV_DISPLAY_PROPERTY_OK,
 	  "typed width property resizes the endpoint");
     property_value.uint_value = 240;
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.height",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_OK,
+	  &property_value) == BV_DISPLAY_PROPERTY_OK,
 	  "typed height property resizes the endpoint");
     const SbVec2s property_viewport =
 	endpoint_controller->getViewportRegion().getWindowSize();
@@ -2005,26 +2005,26 @@ test_display_endpoint_contract(void)
 	  "typed size properties update the controller viewport");
 
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_STRING;
+    property_value.type = BV_DISPLAY_PROPERTY_STRING;
     property_value.string_value = "invalid";
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.host",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_READ_ONLY,
+	  &property_value) == BV_DISPLAY_PROPERTY_READ_ONLY,
 	  "typed property API rejects writes to read-only host identity");
     CHECK(bobol_display_endpoint_property_get(endpoint,
 	  "does.not.exist", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_UNKNOWN,
+	  BV_DISPLAY_PROPERTY_UNKNOWN,
 	  "typed property API distinguishes unknown properties");
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    property_value.type = BV_DISPLAY_PROPERTY_DOUBLE;
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.width",
-	  &property_value) == BOBOL_ENDPOINT_PROPERTY_INVALID,
+	  &property_value) == BV_DISPLAY_PROPERTY_INVALID,
 	  "typed property API rejects mismatched value types");
 
     property_value_init(&property_value);
-    property_value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+    property_value.type = BV_DISPLAY_PROPERTY_ENUM;
     property_value.string_value = "rt";
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	  "endpoint.renderer", &property_value) ==
-	  BOBOL_ENDPOINT_PROPERTY_OK &&
+	  BV_DISPLAY_PROPERTY_OK &&
 	  bobol_display_endpoint_render_engine_get(endpoint) ==
 	  BOBOL_RENDER_ENGINE_RT,
 	  "typed renderer property selects retained librt rendering");

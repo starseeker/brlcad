@@ -41,7 +41,7 @@
 
 #include "ged.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "rt/calc.h"
 #include "rt/view.h"
 #include "ged/selection_state.h"

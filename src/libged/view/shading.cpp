@@ -22,7 +22,7 @@
 #include "bu/opt.h"
 #include "bu/vls.h"
 #include "bv.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 
 #include "../ged_bobol_private.hpp"
 #include "../ged_private.h"
@@ -67,7 +67,7 @@ shading_commit(struct ged *gedp, struct ged_view_context *view_ctx,
 {
     if (!bv_shading_state_set(view, shading))
 	return BRLCAD_ERROR;
-    (void)ged_draw_obol_shading_sync(gedp, view_ctx);
+    (void)ged_view_shading_sync(gedp, view_ctx);
     (void)bv_refresh_request(view, GED_VIEW_REFRESH_VIEW);
     ged_refresh_cb(gedp);
     return BRLCAD_OK;

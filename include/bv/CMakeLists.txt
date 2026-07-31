@@ -1,5 +1,6 @@
 set(
   bv_headers
+  display.h
   view.h
 )
 

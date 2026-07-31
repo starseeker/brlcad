@@ -38,7 +38,7 @@
 #endif
 
 #include "ged.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "imgstream/fb_compat.h"
 #include "bv.h"
 #include "bu/str.h"
@@ -104,7 +104,7 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+    ret = ged_view_framebuffer_apply(gedp, view_ctx,
 	fbclear_apply, clearColor, 1);
     if (ret != BRLCAD_OK) {
 	bu_vls_printf(gedp->ged_result_str,
@@ -113,13 +113,13 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (reset_mode) {
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	value.type = BV_DISPLAY_PROPERTY_ENUM;
 	value.string_value = "off";
 	if (ged_view_context_display_property_set(view_ctx,
 		"composition.framebuffer.mode", &value) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK) {
+	    BV_DISPLAY_PROPERTY_OK) {
 	    bu_vls_printf(gedp->ged_result_str,
 		"unable to disable the Obol framebuffer composition");
 	    return BRLCAD_ERROR;

@@ -45,7 +45,7 @@
 
 #include "pkg.h"
 #include "ged.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 
 struct pix2fb_state {
     size_t file_width;	/* default input width */
@@ -226,7 +226,7 @@ ged_pix2fb_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_HELP;
     }
 
-    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+    ret = ged_view_framebuffer_apply(gedp, view_ctx,
 	pix2fb_apply, &p2fbs, 1);
 
     if (p2fbs.infd != 0)

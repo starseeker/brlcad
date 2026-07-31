@@ -43,7 +43,8 @@
 #include "bu/assert.h"
 #include "bu/ptbl.h"
 #include "bu/str.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
+#include "ged/display_obol_private.h"
 #include "ged/view.h"
 #include "./ged_bobol_private.hpp"
 #include "./ged_draw_private.h"
@@ -261,7 +262,7 @@ ged_view_host_record_destroy(struct ged_view_host_record *record)
 	/* The framebuffer bridge owns retained nodes in the endpoint host.  Close
 	 * it while both the host and controller are still valid. */
 	if (record->gedp)
-	    ged_draw_obol_framebuffer_release(record->gedp);
+	    ged_view_framebuffer_release(record->gedp);
 	/* Clear the factory callback before GED releases a controller it owns. */
 	bobol_display_endpoint_host_detach(record->display_endpoint);
 	ged_draw_obol_controller_detach_for_view(record->gedp,
@@ -863,13 +864,15 @@ ged_view_context_update_callback_set(struct ged_view_context *view_ctx,
     return 0;
 }
 
-extern "C" GED_EXPORT struct bobol_display_endpoint *
+extern "C" GED_EXPORT ged_display_endpoint_t *
 ged_view_context_display_endpoint_get(const struct ged_view_context *view_ctx)
 {
     struct ged_view_host_record *record =
 	ged_view_host_record_find_global(view_ctx);
 
-    return record ? record->display_endpoint : NULL;
+    return record ?
+	reinterpret_cast<ged_display_endpoint_t *>(record->display_endpoint) :
+	NULL;
 }
 
 void
@@ -907,16 +910,16 @@ ged_view_context_display_endpoint_ensure(struct ged_view_context *view_ctx)
 /* These adapters own GED view policy even before a display endpoint exists.
  * A null-DM camera context is used by headless clients such as rtwizard. */
 static int ged_endpoint_property_get(void *user_data, const char *name,
-	struct bobol_endpoint_property_value *out);
+	struct bv_display_property_value *out);
 static int ged_endpoint_property_set(void *user_data, const char *name,
-	const struct bobol_endpoint_property_value *value);
+	const struct bv_display_property_value *value);
 
 extern "C" GED_EXPORT int
 ged_view_context_display_property_get(const struct ged_view_context *view_ctx,
-	const char *name, struct bobol_endpoint_property_value *value)
+	const char *name, struct bv_display_property_value *value)
 {
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (!endpoint)
 	return ged_endpoint_property_get((void *)view_ctx, name, value);
     return bobol_display_endpoint_property_get(endpoint, name, value);
@@ -925,10 +928,10 @@ ged_view_context_display_property_get(const struct ged_view_context *view_ctx,
 extern "C" GED_EXPORT int
 ged_view_context_display_property_set(struct ged_view_context *view_ctx,
 	const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (!endpoint)
 	return ged_endpoint_property_set(view_ctx, name, value);
     return bobol_display_endpoint_property_set(endpoint, name, value);
@@ -954,15 +957,15 @@ ged_endpoint_axes_suffix(const char *name, int *model_axes)
 
 static int
 ged_endpoint_adc_property_get(const struct bv *view, const char *name,
-	struct bobol_endpoint_property_value *out)
+	struct bv_display_property_value *out)
 {
     static const char prefix[] = "view.faceplate.adc.";
     if (!name || bu_strncmp(name, prefix, sizeof(prefix) - 1) != 0)
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 
     struct bv_adc_state state = {};
     if (!view || !bv_adc_state_get(&state, view))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     const char *suffix = name + sizeof(prefix) - 1;
     if (BU_STR_EQUAL(suffix, "visible")) {
 	out->bool_value = state.draw ? 1 : 0;
@@ -974,27 +977,27 @@ ged_endpoint_adc_property_get(const struct bv *view, const char *name,
 	    state.line_color : state.tick_color;
 	for (int i = 0; i < 3; i++) {
 	    if (color[i] < 0 || color[i] > 255)
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    out->color3[i] = color[i] / 255.0;
 	}
     } else {
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     }
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
 ged_endpoint_adc_property_set(struct ged_view_context *view_ctx, const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
     static const char prefix[] = "view.faceplate.adc.";
     if (!name || bu_strncmp(name, prefix, sizeof(prefix) - 1) != 0)
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     struct bv_adc_state state = {};
     if (!view || !value || !bv_adc_state_get(&state, view))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     const char *suffix = name + sizeof(prefix) - 1;
     if (BU_STR_EQUAL(suffix, "visible")) {
 	state.draw = value->bool_value ? 1 : 0;
@@ -1007,27 +1010,27 @@ ged_endpoint_adc_property_set(struct ged_view_context *view_ctx, const char *nam
 	for (int i = 0; i < 3; i++)
 	    color[i] = static_cast<int>(std::lround(value->color3[i] * 255.0));
     } else {
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     }
     if (!bv_adc_state_set(view, &state))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     (void)ged_view_context_update(view_ctx);
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
 ged_endpoint_axes_property_get(const struct bv *view, const char *name,
-	struct bobol_endpoint_property_value *out)
+	struct bv_display_property_value *out)
 {
     int model_axes = 0;
     const char *suffix = ged_endpoint_axes_suffix(name, &model_axes);
     if (!suffix)
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 
     struct bv_axes_state state = {};
     if (!view || !(model_axes ? bv_model_axes_state_get(&state, view) :
 	    bv_view_axes_state_get(&state, view)))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
 
     if (BU_STR_EQUAL(suffix, "visible"))
 	out->bool_value = state.draw ? 1 : 0;
@@ -1072,26 +1075,26 @@ ged_endpoint_axes_property_get(const struct bv *view, const char *name,
 	for (int i = 0; i < 3; i++)
 	    out->color3[i] = state.tick_major_color[i] / 255.0;
     } else {
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     }
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
 ged_endpoint_axes_property_set(struct ged_view_context *view_ctx, const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
     int model_axes = 0;
     const char *suffix = ged_endpoint_axes_suffix(name, &model_axes);
     if (!suffix)
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     struct bv_axes_state state = {};
     if (!view || !value || !(model_axes ?
 	bv_model_axes_state_get(&state, view) :
 	bv_view_axes_state_get(&state, view)))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
 
     if (BU_STR_EQUAL(suffix, "visible"))
 	state.draw = value->bool_value ? 1 : 0;
@@ -1140,39 +1143,39 @@ ged_endpoint_axes_property_set(struct ged_view_context *view_ctx, const char *na
 	    state.tick_major_color[i] = static_cast<int>(std::lround(
 		value->color3[i] * 255.0));
     } else {
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     }
 
     if (!(model_axes ? bv_model_axes_state_set(view, &state) :
 	bv_view_axes_state_set(view, &state)))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     (void)ged_view_context_update(view_ctx);
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
 ged_endpoint_property_get(void *user_data, const char *name,
-	struct bobol_endpoint_property_value *out)
+	struct bv_display_property_value *out)
 {
     struct ged_view_context *view_ctx =
 	(struct ged_view_context *)user_data;
     if (!view_ctx || !name || !out)
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     const struct bv *view = bv_context_view_const(
 	(const struct bv_context *)view_ctx);
     const int adc_result = ged_endpoint_adc_property_get(view, name, out);
-    if (adc_result != BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
+    if (adc_result != BV_DISPLAY_PROPERTY_UNSUPPORTED)
 	return adc_result;
     const int axes_result = ged_endpoint_axes_property_get(view, name, out);
-    if (axes_result != BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
+    if (axes_result != BV_DISPLAY_PROPERTY_UNSUPPORTED)
 	return axes_result;
     if (BU_STR_EQUAL(name, "view.perspective")) {
 	out->double_value = bv_perspective_get(view);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.zclip")) {
 	out->bool_value = bv_zclip_get(view) ? 1 : 0;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.navigation.min_delta") ||
 	BU_STR_EQUAL(name, "view.navigation.max_delta") ||
@@ -1180,7 +1183,7 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	BU_STR_EQUAL(name, "view.navigation.scale_scale")) {
 	struct bv_mouse_delta_settings settings = BV_MOUSE_DELTA_SETTINGS_INIT;
 	if (!bv_mouse_delta_settings_get(&settings, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (BU_STR_EQUAL(name, "view.navigation.min_delta"))
 	    out->double_value = settings.min_delta;
 	else if (BU_STR_EQUAL(name, "view.navigation.max_delta"))
@@ -1189,21 +1192,21 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	    out->double_value = settings.rotate_scale;
 	else
 	    out->double_value = settings.scale_scale;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.center_dot.visible")) {
 	struct bv_other_state state = {};
 	if (!view || !bv_center_dot_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	out->bool_value = state.gos_draw ? 1 : 0;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.grid.visible")) {
 	struct bv_grid_state state = {};
 	if (!view || !bv_grid_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	out->bool_value = state.draw ? 1 : 0;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.grid.adaptive") ||
 	BU_STR_EQUAL(name, "view.faceplate.grid.snap") ||
@@ -1217,7 +1220,7 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	BU_STR_EQUAL(name, "view.faceplate.grid.color")) {
 	struct bv_grid_state state = {};
 	if (!view || !bv_grid_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (BU_STR_EQUAL(name, "view.faceplate.grid.adaptive"))
 	    out->bool_value = state.adaptive ? 1 : 0;
 	else if (BU_STR_EQUAL(name, "view.faceplate.grid.snap"))
@@ -1242,7 +1245,7 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	    for (int i = 0; i < 3; i++)
 		out->color3[i] = state.color[i] / 255.0;
 	}
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.interactive.rectangle.visible") ||
 	BU_STR_EQUAL(name, "view.interactive.rectangle.line_width") ||
@@ -1250,32 +1253,32 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	BU_STR_EQUAL(name, "view.interactive.rectangle.color")) {
 	struct bv_interactive_rect_state state = BV_INTERACTIVE_RECT_STATE_INIT;
 	if (!view || !bv_interactive_rect_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (BU_STR_EQUAL(name, "view.interactive.rectangle.visible"))
 	    out->bool_value = state.draw ? 1 : 0;
 	else if (BU_STR_EQUAL(name, "view.interactive.rectangle.line_width")) {
 	    if (state.line_width < 0)
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    out->uint_value = static_cast<uint64_t>(state.line_width);
 	} else if (BU_STR_EQUAL(name, "view.interactive.rectangle.line_style")) {
 	    if (state.line_style < 0 || state.line_style > 1)
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    out->uint_value = static_cast<uint64_t>(state.line_style);
 	} else {
 	    for (int i = 0; i < 3; i++) {
 		if (state.color[i] < 0 || state.color[i] > 255)
-		    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		    return BV_DISPLAY_PROPERTY_INVALID;
 		out->color3[i] = state.color[i] / 255.0;
 	    }
 	}
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.scale.visible")) {
 	struct bv_other_state state = {};
 	if (!view || !bv_scale_overlay_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	out->bool_value = state.gos_draw ? 1 : 0;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.params.visible") ||
 	BU_STR_EQUAL(name, "view.faceplate.params.size") ||
@@ -1286,7 +1289,7 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	BU_STR_EQUAL(name, "view.faceplate.params.fps")) {
 	struct bv_params_state state = {};
 	if (!view || !bv_params_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (BU_STR_EQUAL(name, "view.faceplate.params.visible"))
 	    out->bool_value = state.draw ? 1 : 0;
 	else if (BU_STR_EQUAL(name, "view.faceplate.params.size"))
@@ -1301,14 +1304,14 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	    out->bool_value = state.draw_tw ? 1 : 0;
 	else
 	    out->bool_value = state.draw_fps ? 1 : 0;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.params.font_size")) {
 	struct bv_params_state state = {};
 	if (!view || !bv_params_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	out->uint_value = static_cast<uint64_t>(state.font_size);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.center_dot.font_size") ||
 	BU_STR_EQUAL(name, "view.faceplate.scale.font_size")) {
@@ -1317,20 +1320,20 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	    BU_STR_EQUAL(name, "view.faceplate.center_dot.font_size");
 	if (!view || !(is_center_dot ? bv_center_dot_state_get(&state, view) :
 		bv_scale_overlay_state_get(&state, view)))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	out->uint_value = static_cast<uint64_t>(state.gos_font_size);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.params.color")) {
 	struct bv_params_state state = {};
 	if (!view || !bv_params_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	for (int i = 0; i < 3; i++) {
 	    if (state.color[i] < 0 || state.color[i] > 255)
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    out->color3[i] = state.color[i] / 255.0;
 	}
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.center_dot.color") ||
 	BU_STR_EQUAL(name, "view.faceplate.scale.color")) {
@@ -1339,13 +1342,13 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	    BU_STR_EQUAL(name, "view.faceplate.center_dot.color");
 	if (!view || !(is_center_dot ? bv_center_dot_state_get(&state, view) :
 		bv_scale_overlay_state_get(&state, view)))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	for (int i = 0; i < 3; i++) {
 	    if (state.gos_line_color[i] < 0 || state.gos_line_color[i] > 255)
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    out->color3[i] = state.gos_line_color[i] / 255.0;
 	}
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "composition.framebuffer.mode")) {
 	const int mode = bv_framebuffer_mode_get(
@@ -1359,10 +1362,10 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	else if (mode == BV_FRAMEBUFFER_MODE_INTERLAY)
 	    out->string_value = "interlay";
 	else
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	    return BV_DISPLAY_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_OK;
     }
-    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 }
 
 static int
@@ -1370,11 +1373,11 @@ ged_endpoint_perspective_set(struct ged_view_context *view_ctx, double perspecti
 {
     if (!std::isfinite(perspective) || perspective < 0.0 ||
 	perspective >= 180.0)
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
 
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     if (!view || !bv_perspective_set(view, perspective))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
 
     mat_t pmat;
     if (perspective > SMALL_FASTF) {
@@ -1384,10 +1387,10 @@ ged_endpoint_perspective_set(struct ged_view_context *view_ctx, double perspecti
 	MAT_IDN(pmat);
     }
     if (!bv_pmat_set(view, pmat))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
 
     (void)ged_view_context_update(view_ctx);
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
@@ -1398,7 +1401,7 @@ ged_endpoint_navigation_set(struct ged_view_context *view_ctx, const char *name,
 
     if (!view || !std::isfinite(value) ||
 	!bv_mouse_delta_settings_get(&settings, view))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     if (BU_STR_EQUAL(name, "view.navigation.min_delta"))
 	settings.min_delta = value;
     else if (BU_STR_EQUAL(name, "view.navigation.max_delta"))
@@ -1408,12 +1411,12 @@ ged_endpoint_navigation_set(struct ged_view_context *view_ctx, const char *name,
     else if (BU_STR_EQUAL(name, "view.navigation.scale_scale"))
 	settings.scale_scale = value;
     else
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 
     if (!bv_mouse_delta_settings_set(view, &settings))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     (void)ged_view_context_update(view_ctx);
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
@@ -1423,15 +1426,15 @@ ged_endpoint_faceplate_font_size_set(struct ged_view_context *view_ctx, const ch
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     if (!view || font_size < 5 || font_size > 96)
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
 
     if (BU_STR_EQUAL(name, "view.faceplate.params.font_size")) {
 	struct bv_params_state state = {};
 	if (!bv_params_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	state.font_size = static_cast<int>(font_size);
 	if (!bv_params_state_set(view, &state))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
     } else if (BU_STR_EQUAL(name, "view.faceplate.center_dot.font_size") ||
 	BU_STR_EQUAL(name, "view.faceplate.scale.font_size")) {
 	struct bv_other_state state = {};
@@ -1439,17 +1442,17 @@ ged_endpoint_faceplate_font_size_set(struct ged_view_context *view_ctx, const ch
 	    BU_STR_EQUAL(name, "view.faceplate.center_dot.font_size");
 	if (!(is_center_dot ? bv_center_dot_state_get(&state, view) :
 		bv_scale_overlay_state_get(&state, view)))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	state.gos_font_size = static_cast<int>(font_size);
 	if (!(is_center_dot ? bv_center_dot_state_set(view, &state) :
 		bv_scale_overlay_state_set(view, &state)))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
     } else {
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     }
 
     (void)ged_view_context_update(view_ctx);
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
@@ -1459,20 +1462,20 @@ ged_endpoint_faceplate_color_set(struct ged_view_context *view_ctx, const char *
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     if (!view || !color)
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     for (int i = 0; i < 3; i++) {
 	if (!std::isfinite(color[i]) || color[i] < 0.0 || color[i] > 1.0)
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
     }
 
     if (BU_STR_EQUAL(name, "view.faceplate.params.color")) {
 	struct bv_params_state state = {};
 	if (!bv_params_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	for (int i = 0; i < 3; i++)
 	    state.color[i] = static_cast<int>(std::lround(color[i] * 255.0));
 	if (!bv_params_state_set(view, &state))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
     } else if (BU_STR_EQUAL(name, "view.faceplate.center_dot.color") ||
 	BU_STR_EQUAL(name, "view.faceplate.scale.color")) {
 	struct bv_other_state state = {};
@@ -1480,45 +1483,45 @@ ged_endpoint_faceplate_color_set(struct ged_view_context *view_ctx, const char *
 	    BU_STR_EQUAL(name, "view.faceplate.center_dot.color");
 	if (!(is_center_dot ? bv_center_dot_state_get(&state, view) :
 		bv_scale_overlay_state_get(&state, view)))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	for (int i = 0; i < 3; i++)
 	    state.gos_line_color[i] =
 		static_cast<int>(std::lround(color[i] * 255.0));
 	if (!(is_center_dot ? bv_center_dot_state_set(view, &state) :
 		bv_scale_overlay_state_set(view, &state)))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
     } else {
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     }
 
     (void)ged_view_context_update(view_ctx);
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
 ged_endpoint_property_set(void *user_data, const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
     struct ged_view_context *view_ctx =
 	(struct ged_view_context *)user_data;
     if (!view_ctx || !name || !value)
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     const int adc_result = ged_endpoint_adc_property_set(view_ctx, name,
 	value);
-    if (adc_result != BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
+    if (adc_result != BV_DISPLAY_PROPERTY_UNSUPPORTED)
 	return adc_result;
     const int axes_result = ged_endpoint_axes_property_set(view_ctx, name,
 	value);
-    if (axes_result != BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
+    if (axes_result != BV_DISPLAY_PROPERTY_UNSUPPORTED)
 	return axes_result;
     if (BU_STR_EQUAL(name, "view.perspective"))
 	return ged_endpoint_perspective_set(view_ctx, value->double_value);
     if (BU_STR_EQUAL(name, "view.zclip")) {
 	if (!bv_zclip_set(bv_context_view((struct bv_context *)view_ctx),
 		value->bool_value))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	(void)ged_view_context_update(view_ctx);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.navigation.min_delta") ||
 	BU_STR_EQUAL(name, "view.navigation.max_delta") ||
@@ -1539,22 +1542,22 @@ ged_endpoint_property_set(void *user_data, const char *name,
     if (BU_STR_EQUAL(name, "view.faceplate.center_dot.visible")) {
 	struct bv_other_state state = {};
 	if (!view || !bv_center_dot_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	state.gos_draw = enabled;
 	if (!bv_center_dot_state_set(view, &state))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	(void)ged_view_context_update(view_ctx);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.grid.visible")) {
 	struct bv_grid_state state = {};
 	if (!view || !bv_grid_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	state.draw = enabled;
 	if (!bv_grid_state_set(view, &state))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	(void)ged_view_context_update(view_ctx);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.grid.adaptive") ||
 	BU_STR_EQUAL(name, "view.faceplate.grid.snap") ||
@@ -1568,7 +1571,7 @@ ged_endpoint_property_set(void *user_data, const char *name,
 	BU_STR_EQUAL(name, "view.faceplate.grid.color")) {
 	struct bv_grid_state state = {};
 	if (!view || !bv_grid_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (BU_STR_EQUAL(name, "view.faceplate.grid.adaptive"))
 	    state.adaptive = enabled;
 	else if (BU_STR_EQUAL(name, "view.faceplate.grid.snap"))
@@ -1582,12 +1585,12 @@ ged_endpoint_property_set(void *user_data, const char *name,
 	else if (BU_STR_EQUAL(name,
 		"view.faceplate.grid.resolution.horizontal")) {
 	    if (value->double_value <= 0.0)
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    state.res_h = value->double_value;
 	} else if (BU_STR_EQUAL(name,
 		"view.faceplate.grid.resolution.vertical")) {
 	    if (value->double_value <= 0.0)
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    state.res_v = value->double_value;
 	} else if (BU_STR_EQUAL(name, "view.faceplate.grid.major.horizontal")) {
 	    state.res_major_h = static_cast<int>(value->uint_value);
@@ -1599,9 +1602,9 @@ ged_endpoint_property_set(void *user_data, const char *name,
 		    value->color3[i] * 255.0));
 	}
 	if (!bv_grid_state_set(view, &state))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	(void)ged_view_context_update(view_ctx);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.interactive.rectangle.visible") ||
 	BU_STR_EQUAL(name, "view.interactive.rectangle.line_width") ||
@@ -1609,7 +1612,7 @@ ged_endpoint_property_set(void *user_data, const char *name,
 	BU_STR_EQUAL(name, "view.interactive.rectangle.color")) {
 	struct bv_interactive_rect_state state = BV_INTERACTIVE_RECT_STATE_INIT;
 	if (!view || !bv_interactive_rect_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (BU_STR_EQUAL(name, "view.interactive.rectangle.visible")) {
 	    state.draw = enabled;
 	} else if (BU_STR_EQUAL(name,
@@ -1618,7 +1621,7 @@ ged_endpoint_property_set(void *user_data, const char *name,
 	} else if (BU_STR_EQUAL(name,
 		"view.interactive.rectangle.line_style")) {
 	    if (value->uint_value > 1)
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    state.line_style = static_cast<int>(value->uint_value);
 	} else {
 	    for (int i = 0; i < 3; i++)
@@ -1626,19 +1629,19 @@ ged_endpoint_property_set(void *user_data, const char *name,
 		    value->color3[i] * 255.0));
 	}
 	if (!bv_interactive_rect_state_set(view, &state))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	(void)ged_view_context_update(view_ctx);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.scale.visible")) {
 	struct bv_other_state state = {};
 	if (!view || !bv_scale_overlay_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	state.gos_draw = enabled;
 	if (!bv_scale_overlay_state_set(view, &state))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	(void)ged_view_context_update(view_ctx);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "view.faceplate.params.visible") ||
 	BU_STR_EQUAL(name, "view.faceplate.params.size") ||
@@ -1649,7 +1652,7 @@ ged_endpoint_property_set(void *user_data, const char *name,
 	BU_STR_EQUAL(name, "view.faceplate.params.fps")) {
 	struct bv_params_state state = {};
 	if (!view || !bv_params_state_get(&state, view))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (BU_STR_EQUAL(name, "view.faceplate.params.visible"))
 	    state.draw = enabled;
 	else if (BU_STR_EQUAL(name, "view.faceplate.params.size"))
@@ -1665,13 +1668,13 @@ ged_endpoint_property_set(void *user_data, const char *name,
 	else
 	    state.draw_fps = enabled;
 	if (!bv_params_state_set(view, &state))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	(void)ged_view_context_update(view_ctx);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
     if (BU_STR_EQUAL(name, "composition.framebuffer.mode")) {
 	if (!value->string_value)
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	int mode = BV_FRAMEBUFFER_MODE_OFF;
 	if (BU_STR_EQUAL(value->string_value, "overlay"))
 	    mode = BV_FRAMEBUFFER_MODE_OVERLAY;
@@ -1680,23 +1683,23 @@ ged_endpoint_property_set(void *user_data, const char *name,
 	else if (BU_STR_EQUAL(value->string_value, "interlay"))
 	    mode = BV_FRAMEBUFFER_MODE_INTERLAY;
 	else if (!BU_STR_EQUAL(value->string_value, "off"))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	struct bv *mutable_view = bv_context_view(
 	    (struct bv_context *)view_ctx);
 	const int previous_mode = bv_framebuffer_mode_get(mutable_view);
 	if (!bv_framebuffer_mode_set(mutable_view, mode))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	struct ged_view_host_record *record =
 	    ged_view_host_record_find_global(view_ctx);
 	if (record && record->gedp &&
 	    ged_obol_fbserv_composition_set(record->gedp, mode) != BRLCAD_OK) {
 	    (void)bv_framebuffer_mode_set(mutable_view, previous_mode);
-	    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 	}
 	(void)ged_view_context_update(view_ctx);
-	return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_OK;
     }
-    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 }
 
 static void
@@ -1709,14 +1712,14 @@ ged_endpoint_background_initialize(struct ged_view_context *view_ctx,
     if (!endpoint || !view || !bv_background_state_get(&background, view))
 	return;
 
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_COLOR3;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = background.bottom[i] / 255.0;
     if (bobol_display_endpoint_property_set(endpoint,
 	    "controller.background.bottom", &value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	return;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = background.top[i] / 255.0;
@@ -1727,9 +1730,11 @@ ged_endpoint_background_initialize(struct ged_view_context *view_ctx,
 extern "C" GED_EXPORT int
 ged_view_context_display_endpoint_set(
 	struct ged_view_context *view_ctx,
-	struct bobol_display_endpoint *endpoint,
+	ged_display_endpoint_t *display_endpoint,
 	int take_ownership)
 {
+    bobol_display_endpoint_t *endpoint =
+	reinterpret_cast<bobol_display_endpoint_t *>(display_endpoint);
     struct ged_view_host_record *record =
 	ged_view_host_record_find_global(view_ctx);
     if (!record)
@@ -1744,7 +1749,7 @@ ged_view_context_display_endpoint_set(
 	     * Reassert presentation policy when an endpoint is registered so a
 	     * controller replacement or delayed GUI attachment cannot silently
 	     * restore its own defaults. */
-	    (void)ged_draw_obol_shading_sync(record->gedp, view_ctx);
+	    (void)ged_view_shading_sync(record->gedp, view_ctx);
 	}
 	return 1;
     }
@@ -1789,7 +1794,7 @@ ged_view_context_display_endpoint_set(
 	/* A headless client may configure normal presentation before its
 	 * graphical endpoint exists.  Push that retained, per-view policy only
 	 * after the new endpoint has become the live controller. */
-	(void)ged_draw_obol_shading_sync(record->gedp, view_ctx);
+	(void)ged_view_shading_sync(record->gedp, view_ctx);
     }
 
     if (old_endpoint && owned_old_endpoint)

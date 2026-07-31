@@ -435,7 +435,7 @@ This version of BRL-CAD was compiled to be installed at:\n\
 static const char *
 _bu_dir_brlcad_root(const char *rhs, int fail_quietly)
 {
-    static char result[MAXPATHLEN] = {0};
+    static THREADLOCAL char result[MAXPATHLEN] = {0};
     const char *lhs;
     int length, dirname_length;
     struct bu_vls searched = BU_VLS_INIT_ZERO;
@@ -578,7 +578,8 @@ static const char *
 vdir(char *result, size_t len, va_list args)
 {
     struct bu_vls vls = BU_VLS_INIT_ZERO;
-    static char buf[MAXPATHLEN] = {0};
+    char buf[MAXPATHLEN] = {0};
+    static THREADLOCAL char return_buf[MAXPATHLEN] = {0};
     const char *cpath;
     uintptr_t arg;
 
@@ -658,11 +659,11 @@ vdir(char *result, size_t len, va_list args)
 	bu_vls_free(&vls);
 	return result;
     } else {
-	memset(buf, 0, MAXPATHLEN);
-	bu_strlcpy(buf, bu_vls_cstr(&vls), MAXPATHLEN);
+	memset(return_buf, 0, MAXPATHLEN);
+	bu_strlcpy(return_buf, bu_vls_cstr(&vls), MAXPATHLEN);
     }
     bu_vls_free(&vls);
-    return buf;
+    return return_buf;
 }
 
 

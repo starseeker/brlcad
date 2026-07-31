@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
@@ -71,7 +73,7 @@
 #include "libtermio.h"
 #include "ged.h"
 #include "ged/view.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "BObol/BDisplayEndpoint.h"
 #include "tclcad.h"
 
@@ -2113,7 +2115,7 @@ mged_obol_faceplate_color_scheme_sync(struct mged_state *s, struct mged_display 
     if (!s || !p->display_view_state || !p->display_view_state->vs_gvp || !s->gedp)
 	return;
 
-    (void)ged_draw_obol_faceplate_sync(s->gedp,
+    (void)ged_view_faceplate_sync(s->gedp,
 	p->display_view_state->vs_gvp);
 }
 
@@ -2156,7 +2158,7 @@ mged_obol_faceplate_sync(struct mged_state *s, struct mged_display *p)
     if (!s || !p || !p->display_view_state || !p->display_view_state->vs_gvp || !s->gedp)
 	return;
 
-    (void)ged_draw_obol_faceplate_sync(s->gedp,
+    (void)ged_view_faceplate_sync(s->gedp,
 	p->display_view_state->vs_gvp);
 }
 
@@ -2176,17 +2178,17 @@ mged_obol_framebuffer_composition_sync(const struct mged_display *display,
 	       variables->mv_fb_overlay == 1 ? "interlay" : "overlay";
     }
 
-    struct bobol_endpoint_property_value current =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value current =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(view_ctx,
 	    "composition.framebuffer.mode", &current) ==
-	BOBOL_ENDPOINT_PROPERTY_OK && current.string_value &&
+	BV_DISPLAY_PROPERTY_OK && current.string_value &&
 	BU_STR_EQUAL(current.string_value, mode))
 	return;
 
-    struct bobol_endpoint_property_value next =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    next.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+    struct bv_display_property_value next =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    next.type = BV_DISPLAY_PROPERTY_ENUM;
     next.string_value = mode;
     (void)ged_view_context_display_property_set(view_ctx,
 	"composition.framebuffer.mode", &next);
@@ -2265,7 +2267,7 @@ refresh(struct mged_state *s)
 	struct ged_view_context *view_ctx = p->display_view_state ? p->display_view_state->vs_gvp : NULL;
 	struct bv *view = view_ctx ? mged_view_state_view(p->display_view_state) : NULL;
 	bobol_display_endpoint_t *endpoint = view_ctx ?
-	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	    ged_view_context_obol_endpoint_get(view_ctx) : NULL;
 	mged_display_repaint_consume(p);
 	if (!view || !endpoint)
 	    continue;
@@ -2379,7 +2381,7 @@ mged_finish(struct mged_state *s, int exitcode)
 
 	if (p) {
 	    if (s->gedp) {
-		ged_draw_obol_framebuffer_release(s->gedp);
+		ged_view_framebuffer_release(s->gedp);
 		mged_obol_display_detach(s, p);
 	    }
 	    mged_slider_free_vls(p);

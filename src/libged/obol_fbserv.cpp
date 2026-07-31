@@ -14,6 +14,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <atomic>
 #include <chrono>
 #include <climits>
@@ -42,7 +44,7 @@
 #include "bu/malloc.h"
 #include "bv.h"
 #include "imgstream/fbserv.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
 #include "imgstream/fb_compat.h"
 
@@ -152,7 +154,7 @@ public:
 	 * both retained image nodes and capture ownership. */
 	const bool view_changed = view_ctx != new_view_ctx;
 	bobol_display_endpoint_t *endpoint =
-	    ged_view_context_display_endpoint_get(new_view_ctx);
+	    ged_view_context_obol_endpoint_get(new_view_ctx);
 	const struct bv *view = bv_context_view_const(
 	    (const struct bv_context *)new_view_ctx);
 	int composition = view ? bv_framebuffer_mode_get(view) : 0;
@@ -182,19 +184,19 @@ public:
 	 * dimensions.  Headless/direct endpoints commonly report their 1x1
 	 * construction size even after the caller has configured the view. */
 	if (endpoint && window_host && (width <= 0 || height <= 0)) {
-	    struct bobol_endpoint_property_value property =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    struct bv_display_property_value property =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
 	    if (width <= 0 &&
 		bobol_display_endpoint_property_get(endpoint, "endpoint.width",
-		    &property) == BOBOL_ENDPOINT_PROPERTY_OK &&
-		property.type == BOBOL_ENDPOINT_PROPERTY_UINT &&
+		    &property) == BV_DISPLAY_PROPERTY_OK &&
+		property.type == BV_DISPLAY_PROPERTY_UINT &&
 		property.uint_value > 0 && property.uint_value <= INT_MAX)
 		width = (int)property.uint_value;
-	    property = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    property = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	    if (height <= 0 &&
 		bobol_display_endpoint_property_get(endpoint, "endpoint.height",
-		    &property) == BOBOL_ENDPOINT_PROPERTY_OK &&
-		property.type == BOBOL_ENDPOINT_PROPERTY_UINT &&
+		    &property) == BV_DISPLAY_PROPERTY_OK &&
+		property.type == BV_DISPLAY_PROPERTY_UINT &&
 		property.uint_value > 0 && property.uint_value <= INT_MAX)
 		height = (int)property.uint_value;
 	}
@@ -419,7 +421,7 @@ public:
 	return framebuffer.present();
     }
 
-    int apply(ged_draw_obol_framebuffer_operation_t operation,
+    int apply(ged_view_framebuffer_operation_t operation,
 	    void *userdata, int publish)
     {
 	if (!operation)
@@ -602,7 +604,7 @@ private:
     void bindCaptureProviderLocked()
     {
 	bobol_display_endpoint_t *endpoint = view_ctx ?
-	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	    ged_view_context_obol_endpoint_get(view_ctx) : NULL;
 	if (capture_endpoint == endpoint)
 	    return;
 
@@ -808,7 +810,7 @@ ged_obol_fbserv_configure_for_view(struct ged *gedp,
      * attachment; otherwise the bridge uses its controller-owned host. */
     if (!window_host) {
 	bobol_display_endpoint_t *endpoint =
-	    ged_view_context_display_endpoint_get(view_ctx);
+	    ged_view_context_obol_endpoint_get(view_ctx);
 	if (endpoint) {
 	    window_host = static_cast<BObolWindowHost *>(
 		bobol_display_endpoint_framebuffer_window_host(endpoint));
@@ -821,7 +823,7 @@ ged_obol_fbserv_configure_for_view(struct ged *gedp,
     if (!ged_view_context_display_endpoint_ensure(view_ctx))
 	return BRLCAD_ERROR;
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     void *controller = endpoint ?
 	bobol_display_endpoint_controller(endpoint) : NULL;
     if (!controller)
@@ -855,11 +857,11 @@ ged_obol_fbserv_configure_for_view(struct ged *gedp,
 extern "C" int
 ged_obol_fbserv_ensure_for_view(struct ged *gedp, struct ged_view_context *view_ctx)
 {
-    return ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx);
+    return ged_view_framebuffer_backend_ensure(gedp, view_ctx);
 }
 
 extern "C" GED_EXPORT int
-ged_draw_obol_framebuffer_backend_ensure_for_view(struct ged *gedp,
+ged_view_framebuffer_backend_ensure(struct ged *gedp,
 	struct ged_view_context *view_ctx)
 {
     return ged_obol_fbserv_configure_for_view(gedp, view_ctx, NULL, 0, 0,
@@ -867,9 +869,9 @@ ged_draw_obol_framebuffer_backend_ensure_for_view(struct ged *gedp,
 }
 
 extern "C" GED_EXPORT int
-ged_draw_obol_framebuffer_apply_for_view(struct ged *gedp,
+ged_view_framebuffer_apply(struct ged *gedp,
 	struct ged_view_context *view_ctx,
-	ged_draw_obol_framebuffer_operation_t operation,
+	ged_view_framebuffer_operation_t operation,
 	void *userdata,
 	int publish)
 {
@@ -878,7 +880,7 @@ ged_draw_obol_framebuffer_apply_for_view(struct ged *gedp,
     if (!view_ctx)
 	view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx ||
-	ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) !=
+	ged_view_framebuffer_backend_ensure(gedp, view_ctx) !=
 	    BRLCAD_OK)
 	return BRLCAD_ERROR;
 
@@ -899,7 +901,7 @@ ged_bobol_framebuffer_apply(struct ged *gedp,
     if (!view_ctx)
 	view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx ||
-	ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) !=
+	ged_view_framebuffer_backend_ensure(gedp, view_ctx) !=
 	    BRLCAD_OK)
 	return BRLCAD_ERROR;
 
@@ -909,7 +911,7 @@ ged_bobol_framebuffer_apply(struct ged *gedp,
 }
 
 extern "C" GED_EXPORT int
-ged_draw_obol_framebuffer_backend_install_for_view(struct ged *gedp,
+ged_view_framebuffer_backend_install(struct ged *gedp,
 	struct ged_view_context *view_ctx,
 	void *window_host,
 	int width,
@@ -951,7 +953,7 @@ ged_obol_fbserv_composition_set(struct ged *gedp, int mode)
 }
 
 extern "C" GED_EXPORT int
-ged_draw_obol_view_display_image(struct ged *gedp,
+ged_view_display_image_capture(struct ged *gedp,
 				 struct ged_view_context *view_ctx,
 				 unsigned char **image,
 				 int flip,
@@ -969,7 +971,7 @@ ged_draw_obol_view_display_image(struct ged *gedp,
 	return -1;
 
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     BObolViewController *controller = endpoint ?
 	static_cast<BObolViewController *>(
 	    bobol_display_endpoint_controller(endpoint)) : NULL;
@@ -1021,13 +1023,13 @@ ged_obol_fbserv_present(struct ged *gedp)
 }
 
 extern "C" int
-ged_draw_obol_framebuffer_present(struct ged *gedp)
+ged_view_framebuffer_present(struct ged *gedp)
 {
     return ged_obol_fbserv_present(gedp);
 }
 
 extern "C" void
-ged_draw_obol_framebuffer_release(struct ged *gedp)
+ged_view_framebuffer_release(struct ged *gedp)
 {
     ged_obol_fbserv_release(gedp);
 }

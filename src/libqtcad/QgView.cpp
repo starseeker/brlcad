@@ -26,6 +26,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "BObol/BDisplayEndpoint.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgGL.h"
@@ -108,20 +110,20 @@ qg_endpoint_background_seed(bobol_display_endpoint_t *endpoint,
 	    bv_context_view_const(view_ctx)))
 	return false;
 
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_COLOR3;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = background.bottom[i] / 255.0;
     if (bobol_display_endpoint_property_set(endpoint,
 	    "controller.background.bottom", &value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	return false;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = background.top[i] / 255.0;
     return bobol_display_endpoint_property_set(endpoint,
 	"controller.background.top", &value) ==
-	BOBOL_ENDPOINT_PROPERTY_OK;
+	BV_DISPLAY_PROPERTY_OK;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -191,9 +193,9 @@ QgView::~QgView()
 {
     struct bv_context *view_ctx = viewContext();
     if (endpoint && view_ctx &&
-	ged_view_context_display_endpoint_get(
+	ged_view_context_obol_endpoint_get(
 	    ged_view_context_from_bv(view_ctx)) == endpoint)
-	(void)ged_view_context_display_endpoint_set(
+	(void)ged_view_context_obol_endpoint_set(
 	    ged_view_context_from_bv(view_ctx), nullptr, 0);
     if (canvas) {
 	canvas->setObolInputEndpoint(nullptr);

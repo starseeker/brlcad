@@ -127,13 +127,20 @@ bu_semaphore_init(unsigned int nsemaphores)
 
     if (nsemaphores < 1)
 	nsemaphores = 1;
-    else if (nsemaphores <= bu_nsemaphores)
-	return;	/* Already initialized */
     else if (UNLIKELY(nsemaphores > SEMAPHORE_MAX)) {
 	fprintf(stderr, "bu_semaphore_init(): could not initialize %d semaphores, max is %d\n",
 		nsemaphores, SEMAPHORE_MAX);
 	exit(2); /* cannot call bu_exit() here */
     }
+
+    /*
+     * Do not inspect bu_nsemaphores before taking bu_init_lock.  Acquiring an
+     * already initialized semaphore is common from many worker threads, and
+     * the old unlocked fast path raced a concurrent lazy expansion of this
+     * table.  The platform mutex implementations make the uncontended check
+     * inexpensive and, more importantly, publish each newly initialized
+     * semaphore before any caller uses it.
+     */
 
     /*
      * Begin vendor-specific initialization sections.

@@ -20,6 +20,7 @@
 #include "BObol/BDefines.h"
 #include "BObol/BHostFactory.h"
 #include "BObol/BInput.h"
+#include "bv/display.h"
 
 /** @addtogroup bobol_display
  * @{ */
@@ -87,73 +88,6 @@ struct bobol_rt_source_identity {
 typedef int (*bobol_endpoint_framebuffer_capture_callback)(void *user_data,
 	unsigned char **pixels, size_t *size, unsigned int *width,
 	unsigned int *height, unsigned int *components);
-
-/** Discriminator for one value in the typed endpoint property registry. */
-enum bobol_endpoint_property_type {
-    BOBOL_ENDPOINT_PROPERTY_BOOL = 1,
-    BOBOL_ENDPOINT_PROPERTY_INT = 2,
-    BOBOL_ENDPOINT_PROPERTY_UINT = 3,
-    BOBOL_ENDPOINT_PROPERTY_DOUBLE = 4,
-    BOBOL_ENDPOINT_PROPERTY_STRING = 5,
-    BOBOL_ENDPOINT_PROPERTY_COLOR3 = 6,
-    BOBOL_ENDPOINT_PROPERTY_ENUM = 7
-};
-
-/** Property descriptor access bit permitting reads. */
-#define BOBOL_ENDPOINT_PROPERTY_READ  0x01u
-/** Property descriptor access bit permitting writes. */
-#define BOBOL_ENDPOINT_PROPERTY_WRITE 0x02u
-
-/** Complete result vocabulary for typed property operations. */
-enum bobol_endpoint_property_result {
-    BOBOL_ENDPOINT_PROPERTY_OK = 1,
-    BOBOL_ENDPOINT_PROPERTY_UNKNOWN = 0,
-    BOBOL_ENDPOINT_PROPERTY_INVALID = -1,
-    BOBOL_ENDPOINT_PROPERTY_READ_ONLY = -2,
-    BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED = -3
-};
-
-/** Static metadata for one registered endpoint property.  Returned strings
- * are borrowed process-lifetime registry storage. */
-struct bobol_endpoint_property_desc {
-    uint32_t struct_size; /**< Caller sets this to sizeof the structure. */
-    const char *name; /**< Borrowed canonical property name. */
-    enum bobol_endpoint_property_type type; /**< Required value discriminator. */
-    unsigned int access; /**< BOBOL_ENDPOINT_PROPERTY_READ/WRITE bits. */
-    uint64_t required_host_capabilities; /**< Required BOBOL_HOST_CAP_* bits. */
-    double minimum; /**< Inclusive numeric minimum when applicable. */
-    double maximum; /**< Inclusive numeric maximum when applicable. */
-    const char *allowed_values; /**< Borrowed enum spelling list, or NULL. */
-};
-
-/** Tagged endpoint property value.  Only the field selected by @ref type is
- * meaningful.  Returned strings are borrowed until the next endpoint
- * mutation; setter strings need remain valid only during the call. */
-struct bobol_endpoint_property_value {
-    uint32_t struct_size; /**< Caller sets this to sizeof the structure. */
-    enum bobol_endpoint_property_type type; /**< Active payload discriminator. */
-    int bool_value; /**< Boolean payload, normalized to zero or one. */
-    int64_t int_value; /**< Signed integer or enum payload. */
-    uint64_t uint_value; /**< Unsigned integer payload. */
-    double double_value; /**< Floating-point payload in property-defined units. */
-    double color3[3]; /**< Normalized RGB channels in the range [0,1]. */
-    const char *string_value; /**< Borrowed/setter-input UTF-8 string payload. */
-};
-
-/** External-property getter.  It runs synchronously on the endpoint owner
- * thread and returns bobol_endpoint_property_result. */
-typedef int (*bobol_endpoint_property_get_callback)(void *user_data,
-	const char *name, struct bobol_endpoint_property_value *out);
-/** External-property setter.  The value is borrowed for the synchronous
- * owner-thread callback; return bobol_endpoint_property_result. */
-typedef int (*bobol_endpoint_property_set_callback)(void *user_data,
-	const char *name,
-	const struct bobol_endpoint_property_value *value);
-
-/** Initializer for a bool-valued bobol_endpoint_property_value. */
-#define BOBOL_ENDPOINT_PROPERTY_VALUE_INIT { \
-    sizeof(struct bobol_endpoint_property_value), \
-    BOBOL_ENDPOINT_PROPERTY_BOOL, 0, 0, 0, 0.0, {0.0, 0.0, 0.0}, NULL }
 
 /** Creation flag transferring controller ownership to an endpoint. */
 #define BOBOL_ENDPOINT_OWN_CONTROLLER 0x01u
@@ -387,25 +321,25 @@ bobol_display_endpoint_render_engine_resolved_get(
 /** Enumerate the stable typed endpoint property registry. */
 BOBOL_EXPORT size_t bobol_display_endpoint_property_count(void);
 /** Copy descriptor @p index into a correctly sized output structure.  Returns
- * bobol_endpoint_property_result. */
+ * bv_display_property_result. */
 BOBOL_EXPORT int bobol_display_endpoint_property_descriptor(
-	size_t index, struct bobol_endpoint_property_desc *out);
+	size_t index, struct bv_display_property_desc *out);
 
-/** Get or set one typed property.  Returns bobol_endpoint_property_result. */
+/** Get or set one typed property.  Returns bv_display_property_result. */
 BOBOL_EXPORT int bobol_display_endpoint_property_get(
 	const bobol_display_endpoint_t *endpoint, const char *name,
-	struct bobol_endpoint_property_value *out);
+	struct bv_display_property_value *out);
 /** Set one typed property; the input and any string payload are borrowed only
- * for the call.  Returns bobol_endpoint_property_result. */
+ * for the call.  Returns bv_display_property_result. */
 BOBOL_EXPORT int bobol_display_endpoint_property_set(
 	bobol_display_endpoint_t *endpoint, const char *name,
-	const struct bobol_endpoint_property_value *value);
+	const struct bv_display_property_value *value);
 
 /** Bind optional storage callbacks for properties owned outside libBObol. */
 BOBOL_EXPORT int bobol_display_endpoint_property_provider_set(
 	bobol_display_endpoint_t *endpoint,
-	bobol_endpoint_property_get_callback get_callback,
-	bobol_endpoint_property_set_callback set_callback,
+	bv_display_property_get_callback get_callback,
+	bv_display_property_set_callback set_callback,
 	void *user_data);
 
 __END_DECLS
@@ -434,9 +368,9 @@ public:
     enum bobol_render_engine renderEngine(void) const;
     enum bobol_render_engine resolvedRenderEngine(void) const;
     int propertyGet(const char *name,
-	struct bobol_endpoint_property_value *value) const;
+	struct bv_display_property_value *value) const;
     int propertySet(const char *name,
-	const struct bobol_endpoint_property_value *value);
+	const struct bv_display_property_value *value);
 
     bobol_display_endpoint_t *release(void);
     bobol_display_endpoint_t *get(void) const;

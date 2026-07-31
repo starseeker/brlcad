@@ -236,20 +236,20 @@ main(int argc, char **argv)
 	    SbColor(0.0f, 0.0f, 50.0f / 255.0f))
 	FAIL("qtcad should synchronize its default gradient to Obol");
 
-    struct bobol_endpoint_property_value background_property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    background_property.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value background_property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    background_property.type = BV_DISPLAY_PROPERTY_COLOR3;
     VSET(background_property.color3, 16.0 / 255.0, 32.0 / 255.0,
 	48.0 / 255.0);
     if (bobol_display_endpoint_property_set(view.displayEndpoint(),
 	"controller.background.bottom", &background_property) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	FAIL("qtcad background bottom should use the endpoint property");
     VSET(background_property.color3, 64.0 / 255.0, 80.0 / 255.0,
 	96.0 / 255.0);
     if (bobol_display_endpoint_property_set(view.displayEndpoint(),
 	"controller.background.top", &background_property) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	FAIL("qtcad background top should use the endpoint property");
     view.need_update(QG_VIEW_DRAWN);
     if (controller->getBackgroundBottomColor() !=

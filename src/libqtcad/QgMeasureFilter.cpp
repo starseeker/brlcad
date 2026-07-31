@@ -26,6 +26,7 @@
 #include "common.h"
 
 #include "bv.h"
+#include "ged/view_types.h"
 
 #include <string>
 #include "qtcad/QgMeasureFilter.h"

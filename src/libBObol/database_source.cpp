@@ -23,6 +23,8 @@
 #include "BObol/BViewLod.h"
 #include "BObol/BVListShape.h"
 #include "cad_assembly_private.h"
+#include "compact_occurrence_registry_private.h"
+#include "database_source_private.h"
 #include "database_source_realization.h"
 #include "performance_private.h"
 
@@ -92,203 +94,19 @@
 #include <utility>
 #include <vector>
 
-struct BObolCompactInstanceEntry {
-    BObolCompactInstanceEntry(void) :
-	instance(Obol::CadIdBuilder::Root()),
-	part(Obol::CadIdBuilder::Root()),
-	localToSource(SbMatrix::identity()),
-	geometryTransform(SbMatrix::identity()),
-	placementTransform(SbMatrix::identity()),
-	localTransform(SbMatrix::identity()),
-	authoredVisible(TRUE),
-	visible(TRUE),
-	selectable(TRUE),
-	selected(FALSE),
-	highlighted(FALSE),
-	wireGeometry(FALSE),
-	pointGeometry(FALSE),
-	meshGeometry(FALSE),
-	lodBacked(FALSE),
-	sourceMeshRequestValid(FALSE),
-	geometryRevision(1),
-	appearanceRevision(1),
-	placementRevision(1),
-	visibilityRevision(1),
-	selectionRevision(1),
-	occurrenceIndex(0),
-	booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION)
-    {
-	sourceBounds.makeEmpty();
-    }
-
-    Obol::InstanceId instance;
-    Obol::PartId part;
-    SbMatrix localToSource;
-    SbMatrix geometryTransform;
-    /* Tree/object placement without geometry normalization or PCA reuse. */
-    SbMatrix placementTransform;
-    /* Cached geometryTransform * placementTransform composite. */
-    SbMatrix localTransform;
-    /* Source-local bounds of the retained part after localTransform. */
-    SbBox3f sourceBounds;
-    SoBRLCadAssembly::InstanceSemantic semantic;
-    /*
-     * The compact occurrence key is immutable after the entry is indexed.
-     * Keep it lazily materialized for the few legacy constructors that only
-     * supplied an InstanceId.  Presentation hot paths can then retain a
-     * reference instead of allocating one SbString copy per occurrence.
-     */
-    mutable SbString instanceKey;
-    SbBool authoredVisible;
-    SbBool visible;
-    SbBool selectable;
-    SbBool selected;
-    SbBool highlighted;
-    SbBool wireGeometry;
-    SbBool pointGeometry;
-    SbBool meshGeometry;
-    SbBool lodBacked;
-    SbBool sourceMeshRequestValid;
-    BObolSourceMeshRequest sourceMeshRequest;
-    std::shared_ptr<const Obol::PartGeometry> geometry;
-    BObolRealizedShapeSummary shapeSummary;
-    Obol::InstanceStyle normalStyle;
-    Obol::InstanceStyle selectedStyle;
-    Obol::InstanceStyle highlightedStyle;
-    Obol::InstanceStyle style;
-    uint64_t geometryRevision;
-    uint64_t appearanceRevision;
-    uint64_t placementRevision;
-    uint64_t visibilityRevision;
-    uint64_t selectionRevision;
-    uint32_t occurrenceIndex;
-    int booleanOperation;
-};
-
 static uint64_t database_source_handle_id(void);
 
-struct BObolCompactPartReference {
-    Obol::PartId part;
-    std::shared_ptr<const Obol::PartGeometry> geometry;
-};
-
-struct BObolCompactInstanceIndex {
-    BObolCompactInstanceIndex(void) :
-	wireCount(0),
-	shadedCount(0),
-	sourceMeshRequestCount(0)
+struct SoBRLDatabaseSource::Impl :
+    BObolCadSourceState,
+    BObolCompactOccurrenceRegistryState,
+    BObolCadPresentationBridgeState,
+    BObolDatabaseSourceSensorState
+{
+    Impl(void) :
+	BObolCadSourceState(
+	    database_source_handle_id(), database_source_handle_id())
     {
-	sourceBounds.makeEmpty();
     }
-
-    std::map<std::string, Obol::PartId> partIdByKey;
-    std::unordered_map<const Obol::PartGeometry *, Obol::PartId>
-	partIdByGeometry;
-    std::vector<BObolCompactPartReference> parts;
-    std::vector<Obol::InstanceUpdate> instances;
-    std::vector<Obol::InstanceId> hiddenInstances;
-    std::vector<Obol::InstanceId> selectedInstances;
-    std::vector<Obol::InstanceId> unpickableInstances;
-    std::vector<BObolCompactInstanceEntry> entries;
-    std::unordered_map<Obol::InstanceId, size_t,
-	std::hash<Obol::InstanceId>> entryIndex;
-    std::unordered_map<std::string, size_t> entryIndexByKey;
-    std::unordered_map<std::string, size_t> entryIndexByPath;
-    /*
-     * Semantic subtree operations need ordered prefix lookup while compact
-     * occurrences are still arriving in arbitrary batches.  Keep the O(1)
-     * exact-path table above for merge/upsert and this ordered companion for
-     * selection, visibility, highlighting, and edit-frontier ranges.
-     */
-    std::map<std::string, size_t> entryIndexByOrderedPath;
-    std::unordered_map<std::string, std::vector<size_t>> entryIndicesByLeaf;
-    std::unordered_map<std::string, std::vector<size_t>> entryIndicesBySourceName;
-    std::unordered_map<Obol::PartId, size_t, std::hash<Obol::PartId>>
-	partReferenceCounts;
-    /*
-     * Progressive realization is overwhelmingly append-only.  A running
-     * box therefore handles the common case in O(1) without the six
-     * red-black-tree nodes previously allocated for every occurrence.
-     * Replacing a current extremum marks it dirty; the next query rebuilds
-     * once from each entry's cached bounds.
-     */
-    SbBox3f sourceBounds;
-    bool sourceBoundsDirty = false;
-    int wireCount;
-    int shadedCount;
-    size_t sourceMeshRequestCount;
-};
-
-struct SoBRLDatabaseSource::Impl {
-    struct CadBatchDelta {
-	uint64_t revision = 0;
-	std::vector<size_t> entryIndices;
-    };
-
-    struct DisplayMeshLodDelta {
-	uint64_t revision = 0;
-	std::vector<size_t> entryIndices;
-    };
-
-    struct db_i *dbip = NULL;
-    struct BObolMeshLod *meshLod = NULL;
-    SoBRLCadAssembly *compiledAssembly = NULL;
-    struct BObolCompactInstanceIndex *compactIndex = NULL;
-    struct BObolCompactInstanceIndex *previousCompactIndex = NULL;
-    /* Immutable object-lifetime identity used only for owner-thread result
-     * routing.  Unlike compactHandleSourceId it must not change when a source
-     * is re-realized or adopts a detached compact registry. */
-    const uint64_t routingId = database_source_handle_id();
-    uint64_t compactHandleSourceId = database_source_handle_id();
-    size_t compactExpectedInstanceCount = 0;
-    uint64_t cadBatchRevision = 1;
-    uint64_t cadBatchDeltaFloorRevision = 1;
-    size_t cadBatchDeltaEntryCount = 0;
-    std::deque<CadBatchDelta> cadBatchDeltas;
-    uint64_t displayMeshLodRevision = 1;
-    uint64_t displayMeshLodDeltaFloorRevision = 1;
-    size_t displayMeshLodDeltaEntryCount = 0;
-    std::deque<DisplayMeshLodDelta> displayMeshLodDeltas;
-    /*
-     * A streamed compact contract is usable before the owning source's full
-     * detached realization is complete.  Record the source epoch at the
-     * contract handoff so LoD planning can distinguish that legitimate
-     * provisional state from retained requests made stale by a later edit.
-     */
-    SbBool displayMeshLodContractRevisionValid = FALSE;
-    uint32_t displayMeshLodContractSourceRevision = 0;
-    uint32_t displayMeshLodContractInputsRevision = 0;
-    SbBool compiledAssemblyDirty = TRUE;
-    SbBool compiledAssemblyActive = FALSE;
-    SbUniqueId compiledAssemblyNodeId = 0;
-    uint64_t compiledCompactStructureSignature = 0;
-    uint64_t compiledCompactStyleSignature = 0;
-    uint64_t compiledCompactSemanticSignature = 0;
-    uint64_t compiledCompactHiddenSignature = 0;
-    uint64_t compiledCompactSelectedSignature = 0;
-    uint64_t compiledCompactUnpickableSignature = 0;
-    SbBool compactIndexActive = FALSE;
-    SbBool compactOccurrenceRegistry = FALSE;
-    SbBool compactVisibilityFrontierActive = FALSE;
-    SbBool compactVisibilityFrontierDefault = FALSE;
-    std::vector<SbString> compactVisibilityFrontier;
-    std::vector<SbBool> compactVisibilityFrontierStates;
-    std::vector<SbString> compactSelectedPaths;
-    SbBool meshLodBoundsValid = FALSE;
-    SbVec3f meshLodBoundsMin = SbVec3f(0.0f, 0.0f, 0.0f);
-    SbVec3f meshLodBoundsMax = SbVec3f(0.0f, 0.0f, 0.0f);
-    SoFieldSensor *pathSensor = NULL;
-    SoFieldSensor *instanceKeySensor = NULL;
-    SoFieldSensor *representationKeySensor = NULL;
-    SoFieldSensor *representationModeSensor = NULL;
-    SoFieldSensor *drawModeSensor = NULL;
-    SoFieldSensor *tessellationAbsTolSensor = NULL;
-    SoFieldSensor *tessellationRelTolSensor = NULL;
-    SoFieldSensor *tessellationNormTolSensor = NULL;
-    SoFieldSensor *lodBotThresholdSensor = NULL;
-    SoFieldSensor *sourceRevisionSensor = NULL;
-    SoFieldSensor *inputsRevisionSensor = NULL;
-    SoFieldSensor *viewRevisionSensor = NULL;
 };
 
 static void realized_vlist_shape_summary(const SoBRLVListShape *shape,
@@ -2757,32 +2575,44 @@ static std::shared_ptr<std::mutex>
 compact_stream_lod_realization_mutex(const struct db_i *dbip,
 	const char *treeName)
 {
-    static std::mutex registryMutex;
-    static std::unordered_map<std::string, std::weak_ptr<std::mutex>> registry;
-    static size_t acquisitions = 0;
+    struct registry_state {
+	std::mutex mutex;
+	std::unordered_map<std::string, std::weak_ptr<std::mutex>> entries;
+	size_t acquisitions = 0;
+    };
+    /*
+     * The global realization coordinator owns process-lifetime worker
+     * threads.  A normal function-local registry destructor can therefore
+     * run before the coordinator's destructor and race a final in-flight
+     * lookup during shared-library shutdown.  This tiny, bounded registry is
+     * deliberately process-lifetime storage; expired weak entries are still
+     * scavenged during normal operation.
+     */
+    static registry_state *registry = new registry_state;
 
     std::string key = dbip && dbip->dbi_filename ?
 	dbip->dbi_filename : "<memory>";
     key += '\n';
     key += treeName ? treeName : "";
 
-    std::lock_guard<std::mutex> guard(registryMutex);
-    if ((++acquisitions & 0xffu) == 0) {
-	for (auto it = registry.begin(); it != registry.end();) {
+    std::lock_guard<std::mutex> guard(registry->mutex);
+    if ((++registry->acquisitions & 0xffu) == 0) {
+	for (auto it = registry->entries.begin();
+		it != registry->entries.end();) {
 	    if (it->second.expired())
-		it = registry.erase(it);
+		it = registry->entries.erase(it);
 	    else
 		++it;
 	}
     }
-    const auto found = registry.find(key);
-    if (found != registry.end()) {
+    const auto found = registry->entries.find(key);
+    if (found != registry->entries.end()) {
 	std::shared_ptr<std::mutex> mutex = found->second.lock();
 	if (mutex)
 	    return mutex;
     }
     std::shared_ptr<std::mutex> mutex = std::make_shared<std::mutex>();
-    registry[key] = mutex;
+    registry->entries[key] = mutex;
     return mutex;
 }
 
@@ -11460,190 +11290,6 @@ SoBRLDatabaseSource::setCompactOccurrenceRegistry(
     return this->d->compactIndex->entries.size() >
 	static_cast<size_t>(INT_MAX) ? INT_MAX :
 	static_cast<int>(this->d->compactIndex->entries.size());
-}
-
-void
-BObolCompactOccurrenceStream::push(const BObolCompactOccurrence &occurrence)
-{
-    std::lock_guard<std::mutex> guard(this->mutex);
-    this->pending.push_back(occurrence);
-}
-
-void
-BObolCompactOccurrenceStream::push(BObolCompactOccurrence &&occurrence)
-{
-    std::lock_guard<std::mutex> guard(this->mutex);
-    this->pending.push_back(std::move(occurrence));
-}
-
-void
-BObolCompactOccurrenceStream::pushPriority(
-    const BObolCompactOccurrence &occurrence)
-{
-    std::lock_guard<std::mutex> guard(this->mutex);
-    this->priority.push_back(occurrence);
-}
-
-static size_t
-compact_stream_staged_source_limit(void)
-{
-    static const size_t limit = []() {
-	const size_t mebibyte = 1024ULL * 1024ULL;
-	const char *configured = getenv("BOBOL_LOD_STAGED_SOURCE_MB");
-	if (configured && configured[0]) {
-	    char *end = NULL;
-	    const unsigned long long value = strtoull(configured, &end, 10);
-	    if (end && end != configured && *end == '\0') {
-		if (value == 0)
-		    return static_cast<size_t>(0);
-		if (value > SIZE_MAX / mebibyte)
-		    return SIZE_MAX;
-		return static_cast<size_t>(value) * mebibyte;
-	    }
-	}
-	return static_cast<size_t>(512ULL * mebibyte);
-    }();
-    return limit;
-}
-
-static std::mutex compact_stream_staged_source_budget_mutex;
-static size_t compact_stream_staged_source_budget_bytes = 0;
-
-static bool
-compact_stream_staged_source_reserve(size_t bytes)
-{
-    const size_t limit = compact_stream_staged_source_limit();
-    if (!bytes || !limit)
-	return false;
-    std::lock_guard<std::mutex> guard(
-	compact_stream_staged_source_budget_mutex);
-    if (bytes > limit) {
-	if (compact_stream_staged_source_budget_bytes != 0)
-	    return false;
-	compact_stream_staged_source_budget_bytes = bytes;
-	return true;
-    }
-    if (compact_stream_staged_source_budget_bytes > limit - bytes)
-	return false;
-    compact_stream_staged_source_budget_bytes += bytes;
-    return true;
-}
-
-static void
-compact_stream_staged_source_release(size_t bytes)
-{
-    std::lock_guard<std::mutex> guard(
-	compact_stream_staged_source_budget_mutex);
-    compact_stream_staged_source_budget_bytes =
-	bytes >= compact_stream_staged_source_budget_bytes ?
-	0 : compact_stream_staged_source_budget_bytes - bytes;
-}
-
-BObolCompactOccurrenceStream::~BObolCompactOccurrenceStream(void)
-{
-    std::lock_guard<std::mutex> guard(this->mutex);
-    compact_stream_staged_source_release(this->stagedSourceBytes);
-    this->stagedSourceBytes = 0;
-    this->stagedSources.clear();
-}
-
-SbBool
-BObolCompactOccurrenceStream::retainStagedSource(
-    const std::shared_ptr<const BObolStagedSourceMesh> &source)
-{
-    if (!source || !source->isValid() || !source->byteCount)
-	return FALSE;
-    const size_t limit = compact_stream_staged_source_limit();
-    if (!limit)
-	return FALSE;
-
-    std::lock_guard<std::mutex> guard(this->mutex);
-    /* Keep an exceptional source larger than the ordinary window only while
-     * it is the sole lease.  This enables a Lucy/one-huge-part handoff without
-     * letting a many-leaf coverage pass retain several exceptional imports. */
-    while (!this->stagedSources.empty() &&
-	(source->byteCount > limit ||
-	 this->stagedSourceBytes > limit - source->byteCount)) {
-	const std::shared_ptr<const BObolStagedSourceMesh> &oldest =
-	    this->stagedSources.front();
-	const size_t bytes = oldest ? oldest->byteCount : 0;
-	this->stagedSourceBytes = bytes >= this->stagedSourceBytes ?
-	    0 : this->stagedSourceBytes - bytes;
-	this->stagedSources.pop_front();
-	compact_stream_staged_source_release(bytes);
-    }
-    if (!compact_stream_staged_source_reserve(source->byteCount))
-	return FALSE;
-    if (source->byteCount <= SIZE_MAX - this->stagedSourceBytes)
-	this->stagedSourceBytes += source->byteCount;
-    else
-	this->stagedSourceBytes = SIZE_MAX;
-    this->stagedSources.push_back(source);
-    return TRUE;
-}
-
-size_t
-BObolCompactOccurrenceStream::stagedSourceByteCount(void)
-{
-    std::lock_guard<std::mutex> guard(this->mutex);
-    return this->stagedSourceBytes;
-}
-
-size_t
-BObolCompactOccurrenceStream::drain(std::vector<BObolCompactOccurrence> &out,
-    size_t cap)
-{
-    std::lock_guard<std::mutex> guard(this->mutex);
-    const size_t priorityAvailable =
-	this->priority.size() - this->priorityOffset;
-    const size_t pendingAvailable =
-	this->pending.size() - this->pendingOffset;
-    const size_t available = priorityAvailable + pendingAvailable;
-    const size_t count = (cap == 0 || cap >= available) ? available : cap;
-    if (!count)
-	return 0;
-    out.reserve(out.size() + count);
-    const size_t priorityCount = std::min(count, priorityAvailable);
-    for (size_t i = 0; i < priorityCount; i++)
-	out.push_back(std::move(
-	    this->priority[this->priorityOffset + i]));
-    this->priorityOffset += priorityCount;
-    const size_t pendingCount = count - priorityCount;
-    for (size_t i = 0; i < pendingCount; i++)
-	out.push_back(std::move(this->pending[this->pendingOffset + i]));
-    this->pendingOffset += pendingCount;
-
-    /* Erasing the front of a vector on every 64-occurrence GUI pump moved
-     * nearly the entire remaining 50k stream every frame.  Retain a read
-     * cursor and compact only occasionally, making producer/consumer handoff
-     * amortized linear while preserving the contiguous producer buffer. */
-    if (this->priorityOffset == this->priority.size()) {
-	this->priority.clear();
-	this->priorityOffset = 0;
-    } else if (this->priorityOffset >= 64 &&
-	this->priorityOffset >= this->priority.size() / 2) {
-	this->priority.erase(this->priority.begin(),
-	    this->priority.begin() + this->priorityOffset);
-	this->priorityOffset = 0;
-    }
-    if (this->pendingOffset == this->pending.size()) {
-	this->pending.clear();
-	this->pendingOffset = 0;
-    } else if (this->pendingOffset >= 4096 &&
-	this->pendingOffset >= this->pending.size() / 2) {
-	this->pending.erase(this->pending.begin(),
-	    this->pending.begin() + this->pendingOffset);
-	this->pendingOffset = 0;
-    }
-    return count;
-}
-
-size_t
-BObolCompactOccurrenceStream::size(void)
-{
-    std::lock_guard<std::mutex> guard(this->mutex);
-    return (this->priority.size() - this->priorityOffset) +
-	(this->pending.size() - this->pendingOffset);
 }
 
 /* Populate the derived lookup maps and aggregate bounds for the appended tail

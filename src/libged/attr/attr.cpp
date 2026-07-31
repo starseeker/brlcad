@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "bu/getopt.h"
+#include "bu/str.h"
 #include "rt/cmd.h"
 #include "ged/database.h"
 #include "ged/event_txn.h"

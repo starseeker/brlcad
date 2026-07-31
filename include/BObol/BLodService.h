@@ -180,6 +180,29 @@ bobol_lod_working_set_global_peak_tasks(void);
 
 struct BObolLodServicePrivate;
 
+/**
+ * Process-local bounded LoD execution and retained-residency service.
+ *
+ * Concurrency contract:
+ *
+ * - Public methods are thread safe unless their documentation explicitly
+ *   names the presentation-owner thread.
+ * - The service queue/generation/subscriber lock precedes an individual
+ *   resident-asset lock whenever both are required.  Callers and providers
+ *   must never invert that order.
+ * - Provider realization, cache I/O, mesh preparation, result-ready
+ *   callbacks, and subscriber callbacks execute with neither service nor
+ *   resident-asset locks held.
+ * - Task-local payloads are worker owned until immutable publication.
+ *   Completed mesh arrays are shared immutable values; Coin nodes and fields
+ *   remain presentation-owner-thread only.
+ * - Result-ready callbacks may run on a worker.  They are edge notifications,
+ *   not permission to mutate a view; clients must schedule their owner-thread
+ *   result pump.
+ * - stop() joins service workers and is the explicit process/service shutdown
+ *   barrier.  View and endpoint teardown should instead unsubscribe or release
+ *   its consumer interest, allowing unrelated shared work to continue.
+ */
 class BOBOL_EXPORT BObolLodService {
 public:
     BObolLodService(void);

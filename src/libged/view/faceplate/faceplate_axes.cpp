@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
@@ -108,20 +110,20 @@ static const struct _fp_axes_property_names view_axes_properties = {
 
 static int
 _fp_axes_endpoint_property_set(struct ged_view_context *view_ctx, const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     return endpoint && bobol_display_endpoint_property_set(endpoint, name,
-	value) == BOBOL_ENDPOINT_PROPERTY_OK;
+	value) == BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
 _fp_axes_endpoint_bool_set(struct ged_view_context *view_ctx, const char *name, int enabled)
 {
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_BOOL;
     value.bool_value = enabled ? 1 : 0;
     return _fp_axes_endpoint_property_set(view_ctx, name, &value);
 }
@@ -129,9 +131,9 @@ _fp_axes_endpoint_bool_set(struct ged_view_context *view_ctx, const char *name, 
 static int
 _fp_axes_endpoint_double_set(struct ged_view_context *view_ctx, const char *name, double number)
 {
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_DOUBLE;
     value.double_value = number;
     return _fp_axes_endpoint_property_set(view_ctx, name, &value);
 }
@@ -141,9 +143,9 @@ _fp_axes_endpoint_uint_set(struct ged_view_context *view_ctx, const char *name, 
 {
     if (number < 0)
 	return 0;
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_UINT;
     value.uint_value = (uint64_t)number;
     return _fp_axes_endpoint_property_set(view_ctx, name, &value);
 }
@@ -152,9 +154,9 @@ static int
 _fp_axes_endpoint_color_set(struct ged_view_context *view_ctx, const char *name,
 	const int color[3])
 {
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_COLOR3;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = color[i] / 255.0;
     return _fp_axes_endpoint_property_set(view_ctx, name, &value);
@@ -904,7 +906,7 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
 	if (!bv_model_axes_state_get(&axes, view))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    if (ged_view_context_display_endpoint_get(view_ctx))
+	    if (ged_view_context_obol_endpoint_get(view_ctx))
 		return _fp_bool_property_set(gedp, view_ctx,
 		    "view.faceplate.model_axes.visible", 1);
 	    axes.draw = 1;
@@ -912,7 +914,7 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    if (ged_view_context_display_endpoint_get(view_ctx))
+	    if (ged_view_context_obol_endpoint_get(view_ctx))
 		return _fp_bool_property_set(gedp, view_ctx,
 		    "view.faceplate.model_axes.visible", 0);
 	    axes.draw = 0;
@@ -951,7 +953,7 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate model_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK) {
-	if (ged_view_context_display_endpoint_get(view_ctx)) {
+	if (ged_view_context_obol_endpoint_get(view_ctx)) {
 	    if (!_fp_axes_endpoint_state_apply(view_ctx, &model_axes_properties,
 		&initial_axes, &axes))
 		return BRLCAD_ERROR;
@@ -990,7 +992,7 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
 	if (!bv_view_axes_state_get(&axes, view))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    if (ged_view_context_display_endpoint_get(view_ctx))
+	    if (ged_view_context_obol_endpoint_get(view_ctx))
 		return _fp_bool_property_set(gedp, view_ctx,
 		    "view.faceplate.view_axes.visible", 1);
 	    axes.draw = 1;
@@ -998,7 +1000,7 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    if (ged_view_context_display_endpoint_get(view_ctx))
+	    if (ged_view_context_obol_endpoint_get(view_ctx))
 		return _fp_bool_property_set(gedp, view_ctx,
 		    "view.faceplate.view_axes.visible", 0);
 	    axes.draw = 0;
@@ -1037,7 +1039,7 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate view_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK) {
-	if (ged_view_context_display_endpoint_get(view_ctx)) {
+	if (ged_view_context_obol_endpoint_get(view_ctx)) {
 	    if (!_fp_axes_endpoint_state_apply(view_ctx, &view_axes_properties,
 		&initial_axes, &axes))
 		return BRLCAD_ERROR;

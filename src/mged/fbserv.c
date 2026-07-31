@@ -14,7 +14,7 @@
 #include "common.h"
 
 #include "bu/log.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "imgstream/fbserv.h"
 #include "tclcad.h"
 

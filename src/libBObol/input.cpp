@@ -472,17 +472,17 @@ bobol_display_endpoint_input_faceplate_toggle_apply(
 	return 0;
 
     if (endpoint) {
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	const int get_result = bobol_display_endpoint_property_get(endpoint,
 	    property_name, &value);
-	if (get_result == BOBOL_ENDPOINT_PROPERTY_OK) {
-	    if (value.type != BOBOL_ENDPOINT_PROPERTY_BOOL)
+	if (get_result == BV_DISPLAY_PROPERTY_OK) {
+	    if (value.type != BV_DISPLAY_PROPERTY_BOOL)
 		return 0;
 	    value.bool_value = value.bool_value ? 0 : 1;
 	    const int set_result = bobol_display_endpoint_property_set(endpoint,
 		property_name, &value);
-	    if (set_result != BOBOL_ENDPOINT_PROPERTY_OK)
+	    if (set_result != BV_DISPLAY_PROPERTY_OK)
 		return 0;
 	    if (visible)
 		*visible = value.bool_value;
@@ -490,7 +490,7 @@ bobol_display_endpoint_input_faceplate_toggle_apply(
 	}
 	/* A standalone controller has no GED property owner.  It retains the
 	 * same state locally rather than inventing an application renderer path. */
-	if (get_result != BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
+	if (get_result != BV_DISPLAY_PROPERTY_UNSUPPORTED)
 	    return 0;
     }
 

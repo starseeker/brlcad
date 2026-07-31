@@ -33,6 +33,23 @@ endif()
 brlcad_addexec(test_bobol_lod_update_action test_lod_update_action.cpp "libBObol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_lod_update_action COMMAND test_bobol_lod_update_action)
 
+brlcad_addexec(test_bobol_lod_coordinator test_lod_coordinator.cpp "libbu" TEST ALL_CXX)
+target_include_directories(test_bobol_lod_coordinator PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/..)
+brlcad_add_test(NAME libBObol_lod_coordinator COMMAND test_bobol_lod_coordinator)
+
+brlcad_addexec(test_bobol_compact_occurrence_stream
+  test_compact_occurrence_stream.cpp
+  "libBObol;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
+brlcad_add_test(NAME libBObol_compact_occurrence_stream
+  COMMAND test_bobol_compact_occurrence_stream)
+
+brlcad_addexec(test_bobol_source_realization
+  test_source_realization.cpp
+  "libBObol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
+brlcad_add_test(NAME libBObol_source_realization
+  COMMAND test_bobol_source_realization)
+
 brlcad_addexec(test_bobol_draw_cache test_draw_cache.cpp "libBObol;libwdb;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_draw_cache COMMAND test_bobol_draw_cache)
 
@@ -139,6 +156,9 @@ set(_bobol_headless_tests
   libBObol_image_display
   libBObol_lod_realization
   libBObol_lod_service
+  libBObol_lod_coordinator
+  libBObol_compact_occurrence_stream
+  libBObol_source_realization
   libBObol_lod_update_action
   libBObol_draw_cache
   libBObol_evaluated_points
@@ -164,6 +184,9 @@ endforeach()
 # to ownership, stale-handle, endpoint, or worker/publication boundaries.
 set(_bobol_sanitizer_tests
   libBObol_lod_service
+  libBObol_lod_coordinator
+  libBObol_compact_occurrence_stream
+  libBObol_source_realization
   libBObol_view_store
   libBObol_compact_edit
   libBObol_rt_render
@@ -182,6 +205,7 @@ cmakefiles(
   test_image_display.cpp
   test_image_source.cpp
   test_lod_realization.cpp
+  test_lod_coordinator.cpp
   test_lod_service.cpp
   test_lod_update_action.cpp
   test_mesh_lod_cache.cpp
@@ -195,6 +219,7 @@ cmakefiles(
   test_render.cpp
   test_view_store.cpp
   test_compact_edit.cpp
+  test_compact_occurrence_stream.cpp
   test_window_host.cpp
 )
 

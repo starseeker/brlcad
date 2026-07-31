@@ -443,7 +443,7 @@ function(_bobol_guard_check_display_endpoint_boundary)
   endforeach()
 
   foreach(_rel
-      include/ged/draw_obol.h
+      include/ged/display.h
       src/libged/draw_obol.cpp)
     _bobol_guard_read_rel(_contents "${_rel}")
     _bobol_guard_forbid_regexes("${_rel}" "${_contents}"
@@ -682,7 +682,7 @@ function(_bobol_guard_check_display_endpoint_boundary)
     [[ged_draw_obol_scene_controller_owned]])
 
   _bobol_guard_read_rel(_qg_quad "src/libqtcad/QgQuadView.cpp")
-  string(FIND "${_qg_quad}" [[ged_view_context_display_endpoint_set]]
+  string(FIND "${_qg_quad}" [[ged_view_context_obol_endpoint_set]]
     _qg_quad_endpoint_idx)
   if(_qg_quad_endpoint_idx EQUAL -1)
     _bobol_guard_fail(
@@ -692,8 +692,8 @@ function(_bobol_guard_check_display_endpoint_boundary)
   _bobol_guard_read_rel(_qged_fbserv "src/qged/fbserv.cpp")
   foreach(_needle
       [[displayEndpoint()]]
-      [[ged_view_context_display_endpoint_set]]
-      [[ged_draw_obol_framebuffer_backend_ensure_for_view]]
+      [[ged_view_context_obol_endpoint_set]]
+      [[ged_view_framebuffer_backend_ensure]]
       [[qged_fbserv_release_ged_handlers]])
     string(FIND "${_qged_fbserv}" "${_needle}" _qged_fb_endpoint_idx)
     if(_qged_fb_endpoint_idx EQUAL -1)
@@ -709,7 +709,7 @@ function(_bobol_guard_check_display_endpoint_boundary)
 
   _bobol_guard_read_rel(_ged_fbserv "src/libged/obol_fbserv.cpp")
   foreach(_needle
-      [[ged_view_context_display_endpoint_get]]
+      [[ged_view_context_obol_endpoint_get]]
       [[present_on_flush = 1]])
     string(FIND "${_ged_fbserv}" "${_needle}" _ged_fb_endpoint_host_idx)
     if(_ged_fb_endpoint_host_idx EQUAL -1)
@@ -1100,7 +1100,7 @@ function(_bobol_guard_check_ged_framebuffer_image_ownership)
   endforeach()
 
   _bobol_guard_read_rel(_bridge "src/libged/obol_fbserv.cpp")
-  string(FIND "${_bridge}" [[ged_draw_obol_framebuffer_apply_for_view]]
+  string(FIND "${_bridge}" [[ged_view_framebuffer_apply]]
     _apply_idx)
   if(_apply_idx EQUAL -1)
     _bobol_guard_fail(
@@ -1129,10 +1129,10 @@ endfunction()
 function(_bobol_guard_check_tclcad_obol_readback_bridge)
   _bobol_guard_read_rel(_commands "src/libtclcad/commands.c")
   foreach(_needle
-      [[#include "BObol/BDisplayEndpoint.h"]]
-      [[ged_draw_obol_framebuffer_present]]
+      [[#include "ged/display.h"]]
+      [[ged_view_display_image_capture]]
       [[tclcad_commands_capture_rgb]]
-      [[bobol_display_endpoint_capture]])
+      [[ged_view_context_bv_const]])
     string(FIND "${_commands}" "${_needle}" _idx)
     if(_idx EQUAL -1)
       _bobol_guard_fail(
@@ -1142,6 +1142,7 @@ function(_bobol_guard_check_tclcad_obol_readback_bridge)
   _bobol_guard_forbid_regexes("src/libtclcad/commands.c" "${_commands}"
     [[(^|[^A-Za-z0-9_])ged_draw_obol_view_display_image[ \t\r\n]*\(]]
     [[(^|[^A-Za-z0-9_])dm_get_display_image[ \t\r\n]*\(]]
+    [[(^|[^A-Za-z0-9_])bobol_display_endpoint_capture[ \t\r\n]*\(]]
     [[(^|[^A-Za-z0-9_])dm_(get|set)_(bg|light|transparency|zbuffer|zclip)[ \t\r\n]*\(]]
     [[(^|[^A-Za-z0-9_])to_bounds[ \t\r\n]*\(]])
   foreach(_needle
@@ -1526,7 +1527,7 @@ function(_bobol_guard_check_tkobol_host_ownership)
     foreach(_needle
         [[bobol_display_endpoint_create]]
         [[bobol_display_endpoint_render_engine_set]]
-        [[ged_view_context_display_endpoint_set]]
+        [[ged_view_context_obol_endpoint_set]]
         [[bobol_display_endpoint_host_open]])
       string(FIND "${${_direct_source}}" "${_needle}" _direct_host_idx)
       if(_direct_host_idx EQUAL -1)
@@ -1659,7 +1660,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
     [[(^|[^A-Za-z0-9_])fb_refresh[ \t\r\n]*\(]])
   foreach(_needle
       [[go_draw(draw_view_ctx)]]
-      [[ged_draw_obol_framebuffer_present]]
+      [[ged_view_framebuffer_present]]
       [[bobol_display_endpoint_view_sync]]
       [[bobol_display_endpoint_request_frame]])
     string(FIND "${_tclcad_refresh}" "${_needle}" _tclcad_refresh_idx)
@@ -1697,7 +1698,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
       [[mged_obol_framebuffer_composition_sync]]
       [[composition.framebuffer.mode]]
       [[mged_obol_faceplate_state_sync]]
-      [[ged_draw_obol_faceplate_sync]]
+      [[ged_view_faceplate_sync]]
       [[bobol_display_endpoint_view_sync]]
       [[bobol_display_endpoint_request_frame]])
     string(FIND "${_mged_refresh}" "${_needle}" _mged_refresh_idx)
@@ -1846,7 +1847,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
   _bobol_guard_read_rel(_mged_attach "src/mged/attach.c")
   foreach(_needle
       [[mged_obol_framebuffer_ensure]]
-      [[ged_draw_obol_framebuffer_backend_ensure_for_view]])
+      [[ged_view_framebuffer_backend_ensure]])
     string(FIND "${_mged_attach}" "${_needle}" _mged_fb_backend_idx)
     if(_mged_fb_backend_idx EQUAL -1)
       _bobol_guard_fail(

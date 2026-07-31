@@ -45,6 +45,8 @@
 #include "raytrace.h"
 #include "rt/vlist.h"
 
+#include "../../librt_private.h"
+
 /* local interface header */
 #include "./datum.h"
 

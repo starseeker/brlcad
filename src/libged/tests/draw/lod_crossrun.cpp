@@ -48,6 +48,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -62,7 +64,7 @@
 #include "view_test_util.h"
 #include <ged.h>
 #include <ged/draw.h>
-#include <ged/draw_obol.h>
+#include <ged/display.h>
 #include <ged/db_index.h>
 #include <ged/event_txn.h>
 #include <icv.h>
@@ -75,7 +77,7 @@ log_lod_state(struct ged *gedp, const char *label)
     struct ged_view_context *view_ctx = gedp ?
 	ged_view_active_ctx(gedp) : NULL;
     bobol_display_endpoint_t *endpoint = view_ctx ?
-	ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	ged_view_context_obol_endpoint_get(view_ctx) : NULL;
     BObolViewController *controller = endpoint ?
 	static_cast<BObolViewController *>(
 	    bobol_display_endpoint_controller(endpoint)) : NULL;
@@ -143,7 +145,7 @@ wait_for_lod_service(struct ged *gedp, int timeout_ms)
 {
     struct ged_view_context *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
     bobol_display_endpoint_t *endpoint = view_ctx ?
-	ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	ged_view_context_obol_endpoint_get(view_ctx) : NULL;
     BObolViewController *controller = endpoint ?
 	static_cast<BObolViewController *>(
 	    bobol_display_endpoint_controller(endpoint)) : NULL;

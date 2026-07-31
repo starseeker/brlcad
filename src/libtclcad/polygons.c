@@ -31,6 +31,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "bg/line_layer.h"
 #include "bg/polygon.h"
 #include "bg/lseg.h"
@@ -48,17 +50,17 @@ static void
 tclcad_polygons_sync_dimensions(struct ged_view_context *view_ctx)
 {
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
-    struct bobol_endpoint_property_value width =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    struct bobol_endpoint_property_value height =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	ged_view_context_obol_endpoint_get(view_ctx);
+    struct bv_display_property_value width =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value height =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (endpoint && bobol_display_endpoint_property_get(endpoint,
-	    "endpoint.width", &width) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	    "endpoint.width", &width) == BV_DISPLAY_PROPERTY_OK &&
 	bobol_display_endpoint_property_get(endpoint, "endpoint.height",
-	    &height) == BOBOL_ENDPOINT_PROPERTY_OK &&
-	width.type == BOBOL_ENDPOINT_PROPERTY_UINT &&
-	height.type == BOBOL_ENDPOINT_PROPERTY_UINT && width.uint_value &&
+	    &height) == BV_DISPLAY_PROPERTY_OK &&
+	width.type == BV_DISPLAY_PROPERTY_UINT &&
+	height.type == BV_DISPLAY_PROPERTY_UINT && width.uint_value &&
 	height.uint_value)
 	bv_context_dimensions_set((struct bv_context *)view_ctx,
 	    (int)width.uint_value, (int)height.uint_value);
@@ -1208,7 +1210,7 @@ go_data_polygons(Tcl_Interp *interp,
 		 const char *argv[],
 		 const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     int ret;
 
     /* initialize result */
@@ -1243,7 +1245,7 @@ to_data_polygons(struct ged *gedp,
 		 const char *usage,
 		 int UNUSED(maxargs))
 {
-    void *gdvp;
+    struct ged_view_context *gdvp;
     int ret;
 
     /* initialize result */
@@ -1286,7 +1288,7 @@ go_poly_circ_mode(Tcl_Interp *interp,
 		  const char *argv[],
 		  const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1316,7 +1318,7 @@ to_poly_circ_mode(struct ged *gedp,
 		  const char *usage,
 		  int UNUSED(maxargs))
 {
-    void *gdvp;
+    struct ged_view_context *gdvp;
     struct bu_vls bindings = BU_VLS_INIT_ZERO;
     int ret;
 
@@ -1428,7 +1430,7 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
 static int
 to_poly_cont_build_func(Tcl_Interp *interp,
 			struct ged *gedp,
-			void *gdvp,
+			struct ged_view_context *gdvp,
 			int UNUSED(argc),
 			const char *argv[],
 			const char *usage,
@@ -1541,7 +1543,7 @@ go_poly_cont_build(Tcl_Interp *interp,
 		   const char *argv[],
 		   const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1571,7 +1573,7 @@ to_poly_cont_build(struct ged *gedp,
 		   const char *usage,
 		   int UNUSED(maxargs))
 {
-    void *gdvp;
+    struct ged_view_context *gdvp;
     int ret;
 
     /* initialize result */
@@ -1613,7 +1615,7 @@ go_poly_cont_build_end(Tcl_Interp *UNUSED(interp),
 		       const char *argv[],
 		       const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1637,7 +1639,7 @@ to_poly_cont_build_end(struct ged *gedp,
 		       const char *usage,
 		       int UNUSED(maxargs))
 {
-    void *gdvp;
+    struct ged_view_context *gdvp;
     int ret;
 
     /* initialize result */
@@ -1711,7 +1713,7 @@ go_poly_ell_mode(Tcl_Interp *interp,
 		 const char *argv[],
 		 const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1741,7 +1743,7 @@ to_poly_ell_mode(struct ged *gedp,
 		 const char *usage,
 		 int UNUSED(maxargs))
 {
-    void *gdvp;
+    struct ged_view_context *gdvp;
     struct bu_vls bindings = BU_VLS_INIT_ZERO;
     int ret;
 
@@ -1858,7 +1860,7 @@ go_poly_rect_mode(Tcl_Interp *interp,
 		  const char *argv[],
 		  const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1888,7 +1890,7 @@ to_poly_rect_mode(struct ged *gedp,
 		  const char *usage,
 		  int UNUSED(maxargs))
 {
-    void *gdvp;
+    struct ged_view_context *gdvp;
     struct bu_vls bindings = BU_VLS_INIT_ZERO;
     int ret;
 

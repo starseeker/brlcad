@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 /* Includes for C++17 threading support (used for async ged_exec) */
 #include <atomic>
 #include <functional>
@@ -1426,7 +1428,7 @@ mged_headless_endpoint_ensure(struct mged_state *s, struct ged_view_context *vie
 	return 0;
 
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
 
     const struct bv *view =
 	bv_context_view_const((const struct bv_context *)view_ctx);
@@ -1447,7 +1449,7 @@ mged_headless_endpoint_ensure(struct mged_state *s, struct ged_view_context *vie
 	endpoint = bobol_display_endpoint_create(NULL, 0);
 	if (!endpoint)
 	    return 0;
-	if (!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+	if (!ged_view_context_obol_endpoint_set(view_ctx, endpoint, 1)) {
 	    bobol_display_endpoint_destroy(endpoint);
 	    return 0;
 	}

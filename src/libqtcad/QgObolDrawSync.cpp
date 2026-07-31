@@ -8,6 +8,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "QgObolDrawSyncPrivate.h"
 #include "QgObolSelectionSyncPrivate.h"
 
@@ -52,8 +54,8 @@ qg_obol_sync_ged_draw_transaction(struct ged *gedp,
     if (!sync_txn.view)
         sync_txn.view = ged_view_context_from_bv(display->viewContext());
 
-    if (ged_view_context_display_endpoint_get(sync_txn.view) != endpoint) {
-	if (!ged_view_context_display_endpoint_set(sync_txn.view, endpoint, 0))
+    if (ged_view_context_obol_endpoint_get(sync_txn.view) != endpoint) {
+	if (!ged_view_context_obol_endpoint_set(sync_txn.view, endpoint, 0))
 	    return 0;
     }
 

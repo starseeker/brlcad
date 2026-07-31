@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "bv.h"
 
 #include "qtcad/QgObolWindowHost.h"
@@ -337,20 +339,20 @@ test_qtcad_factory_endpoint(void)
 	host->getController() == controller,
 	"Qt factory canvas borrows the endpoint controller");
 
-    struct bobol_endpoint_property_value property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    property.type = BOBOL_ENDPOINT_PROPERTY_STRING;
+    struct bv_display_property_value property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    property.type = BV_DISPLAY_PROPERTY_STRING;
     property.string_value = "Qt typed endpoint title";
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.title",
-	&property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	&property) == BV_DISPLAY_PROPERTY_OK &&
 	host->canvas()->canvasWidget()->windowTitle() ==
 	    QStringLiteral("Qt typed endpoint title"),
 	"Qt toplevel factory applies the typed title property");
-    property = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    property.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    property = BV_DISPLAY_PROPERTY_VALUE_INIT;
+    property.type = BV_DISPLAY_PROPERTY_BOOL;
     property.bool_value = 1;
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.visible",
-	&property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	&property) == BV_DISPLAY_PROPERTY_OK &&
 	host->canvas()->canvasWidget()->isVisible(),
 	"Qt toplevel factory applies the typed visibility property");
 
@@ -379,7 +381,7 @@ test_qtcad_factory_endpoint(void)
 
     property.bool_value = 0;
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.visible",
-	&property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	&property) == BV_DISPLAY_PROPERTY_OK &&
 	!host->canvas()->canvasWidget()->isVisible(),
 	"Qt typed visibility property hides the toplevel host");
 
@@ -452,15 +454,15 @@ test_qtcad_embedded_factory_endpoint(void)
 	canvas.width() * canvas.devicePixelRatioF()));
     expected_height = static_cast<unsigned int>(std::ceil(
 	canvas.height() * canvas.devicePixelRatioF()));
-    struct bobol_endpoint_property_value property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     CHECK(bobol_display_endpoint_property_get(endpoint, "endpoint.width",
-	&property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	&property) == BV_DISPLAY_PROPERTY_OK &&
 	property.uint_value == expected_width,
 	"embedded Qt endpoint reports the resized canvas width");
-    property = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    property = BV_DISPLAY_PROPERTY_VALUE_INIT;
     CHECK(bobol_display_endpoint_property_get(endpoint, "endpoint.height",
-	&property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	&property) == BV_DISPLAY_PROPERTY_OK &&
 	property.uint_value == expected_height,
 	"embedded Qt endpoint reports the resized canvas height");
 
@@ -600,18 +602,18 @@ test_qtcad_system_gl_factory_endpoint(void)
 
     BObolViewController *controller = static_cast<BObolViewController *>(
 	bobol_display_endpoint_controller(endpoint));
-    struct bobol_endpoint_property_value background =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    background.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value background =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    background.type = BV_DISPLAY_PROPERTY_COLOR3;
     VSET(background.color3, 0.70, 0.20, 0.10);
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	"controller.background.bottom", &background) ==
-	BOBOL_ENDPOINT_PROPERTY_OK,
+	BV_DISPLAY_PROPERTY_OK,
 	"Qt system-GL endpoint accepts its lower background property");
     VSET(background.color3, 0.10, 0.20, 0.70);
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	"controller.background.top", &background) ==
-	BOBOL_ENDPOINT_PROPERTY_OK,
+	BV_DISPLAY_PROPERTY_OK,
 	"Qt system-GL endpoint accepts its upper background property");
     add_visible_obol_content(controller);
     CHECK(bobol_display_endpoint_request_frame(endpoint, "qt-system-gl"),
@@ -695,16 +697,16 @@ test_qtcad_gl_vsync_policy(void)
     CHECK(canvas && canvas->format().swapInterval() == 0,
 	"Qt GL canvas applies disabled vsync before context creation");
 
-    struct bobol_endpoint_property_value property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    property.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bv_display_property_value property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    property.type = BV_DISPLAY_PROPERTY_BOOL;
     property.bool_value = 1;
     CHECK(bobol_display_endpoint_property_set(endpoint, "endpoint.vsync",
-	&property) == BOBOL_ENDPOINT_PROPERTY_OK,
+	&property) == BV_DISPLAY_PROPERTY_OK,
 	"Qt GL host applies typed vsync while its context is unrealized");
-    property = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    property = BV_DISPLAY_PROPERTY_VALUE_INIT;
     CHECK(bobol_display_endpoint_property_get(endpoint, "endpoint.vsync",
-	&property) == BOBOL_ENDPOINT_PROPERTY_OK && property.bool_value &&
+	&property) == BV_DISPLAY_PROPERTY_OK && property.bool_value &&
 	canvas->format().swapInterval() != 0,
 	"Qt GL host reports the applied typed vsync policy");
     bobol_display_endpoint_destroy(endpoint);
@@ -722,7 +724,7 @@ test_qtcad_quad_view_endpoint_association(void)
 	"qtcad quad view creates an endpoint-hosted viewport");
     struct ged_view_context *view_ctx =
 	ged_view_context_from_bv(view->viewContext());
-    CHECK(ged_view_context_display_endpoint_get(view_ctx) ==
+    CHECK(ged_view_context_obol_endpoint_get(view_ctx) ==
 	view->displayEndpoint(),
 	"qtcad quad view associates its endpoint with the GED view record");
     CHECK(session.activeViewContext() == view->viewContext(),
@@ -742,7 +744,7 @@ test_qtcad_quad_view_endpoint_association(void)
 	QgView *quadrant_view = quad.get(quadrant);
 	CHECK(quadrant_view && quadrant_view->displayEndpoint(),
 	    "qtcad lazy quad creation gives every pane an endpoint");
-	CHECK(ged_view_context_display_endpoint_get(
+	CHECK(ged_view_context_obol_endpoint_get(
 	    ged_view_context_from_bv(quadrant_view->viewContext())) ==
 	    quadrant_view->displayEndpoint(),
 	    "qtcad lazy quad pane has one GED-associated endpoint");
@@ -771,7 +773,7 @@ test_qtcad_quad_view_endpoint_association(void)
     for (QgQuadrantId quadrant : quadrants) {
 	QgView *quadrant_view = quad.get(quadrant);
 	CHECK(quadrant_view && quadrant_view->displayEndpoint() &&
-	    ged_view_context_display_endpoint_get(ged_view_context_from_bv(
+	    ged_view_context_obol_endpoint_get(ged_view_context_from_bv(
 		quadrant_view->viewContext())) ==
 	    quadrant_view->displayEndpoint(),
 	    "qtcad lazy quad recreation restores one endpoint per pane");
@@ -792,7 +794,7 @@ test_qtcad_dm_open_command(void)
     CHECK(gedp != NULL, "Qt dm open test opens GED");
     struct ged_view_context *view = ged_view_active_ctx(gedp);
     bv_dimensions_set(bv_context_view(ged_view_context_bv(view)), 96, 72);
-    CHECK(!ged_view_context_display_endpoint_get(view),
+    CHECK(!ged_view_context_obol_endpoint_get(view),
 	"Qt dm open test starts without an endpoint");
 
     const char *open_av[7] = {
@@ -800,7 +802,7 @@ test_qtcad_dm_open_command(void)
     };
     int ret = ged_exec_dm(gedp, 6, open_av);
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view);
+	ged_view_context_obol_endpoint_get(view);
     CHECK(ret == BRLCAD_OK && endpoint &&
 	bobol_display_endpoint_host_factory_name(endpoint) &&
 	strcmp(bobol_display_endpoint_host_factory_name(endpoint),
@@ -812,28 +814,28 @@ test_qtcad_dm_open_command(void)
 	"dm open creates a top-level Qt canvas");
     void *controller = bobol_display_endpoint_controller(endpoint);
 
-    struct bobol_endpoint_property_value background =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    background.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value background =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    background.type = BV_DISPLAY_PROPERTY_COLOR3;
     VSET(background.color3, 0.10, 0.20, 0.30);
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	"controller.background.bottom", &background) ==
-	BOBOL_ENDPOINT_PROPERTY_OK,
+	BV_DISPLAY_PROPERTY_OK,
 	"Qt dm open test updates the endpoint-owned lower background");
     VSET(background.color3, 0.40, 0.50, 0.60);
     CHECK(bobol_display_endpoint_property_set(endpoint,
 	"controller.background.top", &background) ==
-	BOBOL_ENDPOINT_PROPERTY_OK,
+	BV_DISPLAY_PROPERTY_OK,
 	"Qt dm open test updates the endpoint-owned upper background");
 
     const char *close_av[3] = {"dm", "close", NULL};
     CHECK(ged_exec_dm(gedp, 2, close_av) == BRLCAD_OK &&
-	ged_view_context_display_endpoint_get(view) == endpoint &&
+	ged_view_context_obol_endpoint_get(view) == endpoint &&
 	bobol_display_endpoint_controller(endpoint) == controller &&
 	!bobol_display_endpoint_host_factory_name(endpoint),
 	"dm close releases the Qt host while retaining the endpoint");
     CHECK(ged_exec_dm(gedp, 6, open_av) == BRLCAD_OK &&
-	ged_view_context_display_endpoint_get(view) == endpoint &&
+	ged_view_context_obol_endpoint_get(view) == endpoint &&
 	bobol_display_endpoint_controller(endpoint) == controller &&
 	bobol_display_endpoint_host_factory_name(endpoint) &&
 	strcmp(bobol_display_endpoint_host_factory_name(endpoint),

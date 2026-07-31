@@ -34,8 +34,8 @@
 #include "rt/db_fullpath.h"
 #include "rt/db_instance.h"
 #include "rt/view.h"
-#include "BObol/BDisplayEndpoint.h"
 #include "ged/defines.h"
+#include "ged/display.h"
 #include "ged/draw_scene.h"
 
 __BEGIN_DECLS
@@ -144,37 +144,6 @@ GED_EXPORT extern int ged_view_set_context_remove(struct ged_view_set *set, stru
 GED_EXPORT extern int ged_view_context_view_set_attach(struct ged_view_context *view, struct ged_view_set *set);
 GED_EXPORT extern int ged_view_context_update_callback_set(struct ged_view_context *view, ged_view_context_update_callback_t callback, void *data);
 GED_EXPORT extern int ged_view_context_update(struct ged_view_context *view);
-/**
- * Get or replace the Obol display endpoint associated with a GED view.
- *
- * Setting an endpoint also binds its controller to the view's Obol draw
- * synchronization.  When @p take_ownership is non-zero, GED destroys the
- * endpoint after detaching its controller during replacement or view teardown.
- */
-struct bobol_display_endpoint;
-GED_EXPORT extern struct bobol_display_endpoint *
-ged_view_context_display_endpoint_get(const struct ged_view_context *view);
-/** Ensure the hosted view has a GED-owned display endpoint.  Existing
- * endpoints are preserved. */
-GED_EXPORT extern int ged_view_context_display_endpoint_ensure(
-    struct ged_view_context *view);
-GED_EXPORT extern int ged_view_context_display_endpoint_set(
-    struct ged_view_context *view, struct bobol_display_endpoint *endpoint,
-    int take_ownership);
-
-/**
- * Access a render-affecting view policy through the view's Obol endpoint.
- * GED retains the policy in the view context while an endpoint is absent, so
- * headless clients can configure a view before it is presented.  This is
- * policy storage, not a fallback rendering path.
- */
-GED_EXPORT extern int ged_view_context_display_property_get(
-    const struct ged_view_context *view, const char *name,
-    struct bobol_endpoint_property_value *value);
-GED_EXPORT extern int ged_view_context_display_property_set(
-    struct ged_view_context *view, const char *name,
-    const struct bobol_endpoint_property_value *value);
-
 /**
  * Translate the view.
  */

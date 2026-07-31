@@ -14,6 +14,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <climits>
 #include <cstdlib>
 #include <cstring>
@@ -119,7 +121,7 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
-    if (!view_ctx || !ged_view_context_display_endpoint_get(view_ctx)) {
+    if (!view_ctx || !ged_view_context_obol_endpoint_get(view_ctx)) {
 	bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol display endpoint\n");
 	return BRLCAD_ERROR;
@@ -143,7 +145,7 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
      * than a construction-time size or the previously active pane. */
     struct fbserv_fb_info fbinfo;
     int have_backend =
-	ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) ==
+	ged_view_framebuffer_backend_ensure(gedp, view_ctx) ==
 	    BRLCAD_OK && fbs_framebuffer_info(fbs, &fbinfo) == 0;
     if (!have_backend) {
 	bu_vls_printf(gedp->ged_result_str,
@@ -156,21 +158,21 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	return BRLCAD_ERROR;
     }
 
-    struct bobol_endpoint_property_value framebuffer_mode =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value framebuffer_mode =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(view_ctx,
 		"composition.framebuffer.mode", &framebuffer_mode) !=
-	BOBOL_ENDPOINT_PROPERTY_OK) {
+	BV_DISPLAY_PROPERTY_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol framebuffer composition policy\n");
 	return BRLCAD_ERROR;
     }
     if (BU_STR_EQUAL(framebuffer_mode.string_value, "off")) {
-	framebuffer_mode.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+	framebuffer_mode.type = BV_DISPLAY_PROPERTY_ENUM;
 	framebuffer_mode.string_value = "underlay";
 	if (ged_view_context_display_property_set(view_ctx,
 		    "composition.framebuffer.mode", &framebuffer_mode) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK) {
+	    BV_DISPLAY_PROPERTY_OK) {
 	    bu_vls_printf(gedp->ged_result_str,
 		    "unable to enable the Obol framebuffer underlay\n");
 	    return BRLCAD_ERROR;

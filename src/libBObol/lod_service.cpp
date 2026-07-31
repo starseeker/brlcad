@@ -1081,8 +1081,8 @@ bobol_mesh_lod_provider_task(const BObolLodRequest &request,
 	       "view_revision=%llu policy_revision=%llu\n",
 	       name ? name : "", request.requestedLevel, load_ret,
 	       info.face_count, info.point_count, have_info,
-	       static_cast<unsigned long long>(request.viewRevision),
-	       static_cast<unsigned long long>(request.policyRevision));
+	       static_cast<unsigned long long>(request.viewRevision.value()),
+	       static_cast<unsigned long long>(request.policyRevision.value()));
     }
     if (!bobol_mesh_lod_has_active_data(lod)) {
 	BObolLodResult result =
@@ -1282,7 +1282,7 @@ lod_result_slot_map_key(const BObolLodResult &result)
 	key.occurrence = request.objectName.getString();
     key.providerId = request.providerId.getString();
     key.generation = result.generation;
-    key.sourceRoutingId = request.sourceRoutingId;
+    key.sourceRoutingId = request.sourceRoutingId.value();
     key.drawMode = request.drawMode;
     key.resultKind = result.resultKind;
     key.proxyKind = result.resultKind == BOBOL_LOD_RESULT_PROXY ?
@@ -1560,6 +1560,32 @@ struct BObolResidentMeshCompactionWork {
     size_t estimatedWorkingSetBytes = 0;
 };
 
+/*
+ * BObolLodService concurrency contract
+ * ------------------------------------
+ *
+ * Lock order:
+ *   1. BObolLodServicePrivate::mutex (queue/generation/subscriber/service
+ *      residency maps)
+ *   2. BObolResidentMeshAsset::mutex (one retained asset)
+ *
+ * Code which needs both must acquire them in that order.  Expensive provider,
+ * cache, mesh-preparation, Coin/presentation, and subscriber callbacks execute
+ * with neither lock held.  The callback collector reserves subscribers under
+ * the service lock, drops it, invokes callbacks, and reacquires it only to
+ * release each reservation.
+ *
+ * Ownership:
+ *   - pending/completed/cache queues and generation tables are pump/service
+ *     mutex owned;
+ *   - realization callbacks and task-local payloads are worker owned;
+ *   - diagnostic byte/count summaries used without the service lock are
+ *     atomic;
+ *   - resident mesh arrays are guarded by the resident mutex and published as
+ *     immutable shared objects;
+ *   - Coin nodes and fields are never mutated by this service and remain
+ *     presentation-owner-thread only.
+ */
 struct BObolLodServicePrivate {
     explicit BObolLodServicePrivate(BObolLodService *newOwner) :
 	owner(newOwner),
@@ -1996,7 +2022,7 @@ lod_request_active_key(const BObolLodRequest &request)
      */
     if (request.sourceRoutingId != 0) {
 	key += "|route=";
-	key += SbString(std::to_string(request.sourceRoutingId).c_str());
+	key += SbString(std::to_string(request.sourceRoutingId.value()).c_str());
     }
     return key;
 }
@@ -2110,6 +2136,7 @@ lod_normalize_result(BObolLodResult &result, const BObolLodTask &task)
 	if (result.diagnostic.getLength() == 0)
 	    result.diagnostic = "LoD task returned stale request/result";
     }
+    result.canonicalizePayload();
 }
 
 static SbBool

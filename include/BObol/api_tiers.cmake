@@ -33,6 +33,7 @@ set(LIBBOBOL_STABLE_HEADERS
   BSceneController.h
   BSceneGroup.h
   BSnapAction.h
+  BSourceRealization.h
   BSourceMeshRequest.h
   BViewController.h
   BViewQuery.h
@@ -51,6 +52,7 @@ set(LIBBOBOL_ADVANCED_HEADERS
   BImagePlane.h
   BImageSource.h
   BLineLayerOverlay.h
+  BLodIdentifiers.h
   BLodMeshShape.h
   BLodRealization.h
   BLodService.h

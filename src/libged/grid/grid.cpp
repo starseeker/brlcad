@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -39,12 +41,12 @@
  * endpoint update, and -1 when an attached endpoint rejects the policy. */
 static int
 grid_endpoint_property_set(struct ged_view_context *view_ctx, const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
-    if (!ged_view_context_display_endpoint_get(view_ctx))
+    if (!ged_view_context_obol_endpoint_get(view_ctx))
 	return 0;
     return ged_view_context_display_property_set(view_ctx, name, value) ==
-	BOBOL_ENDPOINT_PROPERTY_OK ? 1 : -1;
+	BV_DISPLAY_PROPERTY_OK ? 1 : -1;
 }
 
 
@@ -173,9 +175,9 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 		grid.draw = 1;
 	    else
 		grid.draw = 0;
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_BOOL;
 	    value.bool_value = grid.draw;
 	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
 		"view.faceplate.grid.visible", &value);
@@ -212,9 +214,9 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 		grid.snap = 1;
 	    else
 		grid.snap = 0;
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_BOOL;
 	    value.bool_value = grid.snap;
 	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
 		"view.faceplate.grid.snap", &value);
@@ -236,9 +238,9 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
 	    grid.res_h = user_pt[X] * lbval;
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_DOUBLE;
 	    value.double_value = grid.res_h;
 	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
 		"view.faceplate.grid.resolution.horizontal", &value);
@@ -260,9 +262,9 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
 	    grid.res_v = user_pt[X] * lbval;
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_DOUBLE;
 	    value.double_value = grid.res_v;
 	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
 		"view.faceplate.grid.resolution.vertical", &value);
@@ -285,9 +287,9 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    if (user_pt[X] < 0.0 || user_pt[X] > 2147483647.0)
 		return BRLCAD_ERROR;
 	    grid.res_major_h = (int)user_pt[X];
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_UINT;
 	    value.uint_value = (uint64_t)grid.res_major_h;
 	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
 		"view.faceplate.grid.major.horizontal", &value);
@@ -310,9 +312,9 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    if (user_pt[X] < 0.0 || user_pt[X] > 2147483647.0)
 		return BRLCAD_ERROR;
 	    grid.res_major_v = (int)user_pt[X];
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_UINT;
 	    value.uint_value = (uint64_t)grid.res_major_v;
 	    const int endpoint_result = grid_endpoint_property_set(view_ctx,
 		"view.faceplate.grid.major.vertical", &value);
@@ -343,9 +345,9 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 		"view.faceplate.grid.anchor.y",
 		"view.faceplate.grid.anchor.z"
 	    };
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_DOUBLE;
 	    for (int axis = 0; axis < 3; axis++) {
 		value.double_value = grid.anchor[axis];
 		const int endpoint_result = grid_endpoint_property_set(view_ctx,
@@ -381,9 +383,9 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    grid.color[0] = (int)user_pt[X];
 	    grid.color[1] = (int)user_pt[Y];
 	    grid.color[2] = (int)user_pt[Z];
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_COLOR3;
 	    for (int axis = 0; axis < 3; axis++)
 		value.color3[axis] = grid.color[axis] / 255.0;
 	    const int endpoint_result = grid_endpoint_property_set(view_ctx,

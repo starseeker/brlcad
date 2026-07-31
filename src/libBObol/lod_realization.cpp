@@ -1089,6 +1089,7 @@ BObolLodResult::clear(void)
     preparedCadGeometryRevision = 0;
     residentLevel = -1;
     residentAdmissionRevision = 0;
+    payloadKind = BOBOL_LOD_PAYLOAD_NONE;
     resultKind = BOBOL_LOD_RESULT_NONE;
     qualityTier = BOBOL_LOD_QUALITY_METADATA;
     providerStatus = BOBOL_LOD_PROVIDER_UNKNOWN;
@@ -1106,6 +1107,93 @@ BObolLodResult::clear(void)
     shadedCullBackfaces = FALSE;
     memoryLimited = FALSE;
     diagnostic = "";
+}
+
+void
+BObolLodResult::canonicalizePayload(void)
+{
+    if (providerStatus != BOBOL_LOD_PROVIDER_READY &&
+	providerStatus != BOBOL_LOD_PROVIDER_FALLBACK) {
+	payloadKind = BOBOL_LOD_PAYLOAD_STATUS;
+    } else {
+	switch (resultKind) {
+	    case BOBOL_LOD_RESULT_DIRECTORY:
+		payloadKind = BOBOL_LOD_PAYLOAD_DIRECTORY;
+		break;
+	    case BOBOL_LOD_RESULT_ATTRIBUTES:
+		payloadKind = BOBOL_LOD_PAYLOAD_ATTRIBUTES;
+		break;
+	    case BOBOL_LOD_RESULT_AABB:
+	    case BOBOL_LOD_RESULT_PROXY:
+		payloadKind = BOBOL_LOD_PAYLOAD_PROXY;
+		break;
+	    case BOBOL_LOD_RESULT_MESH:
+	    case BOBOL_LOD_RESULT_FULL_DETAIL:
+		payloadKind = BOBOL_LOD_PAYLOAD_MESH;
+		break;
+	    case BOBOL_LOD_RESULT_NONE:
+		payloadKind = BOBOL_LOD_PAYLOAD_NONE;
+		break;
+	    case BOBOL_LOD_RESULT_DIAGNOSTIC:
+	    default:
+		payloadKind = BOBOL_LOD_PAYLOAD_STATUS;
+		break;
+	}
+    }
+
+    if (payloadKind != BOBOL_LOD_PAYLOAD_DIRECTORY)
+	dependencies.clear();
+    if (payloadKind != BOBOL_LOD_PAYLOAD_ATTRIBUTES)
+	attributes.clear();
+    if (payloadKind != BOBOL_LOD_PAYLOAD_PROXY)
+	proxy.clear();
+    if (payloadKind != BOBOL_LOD_PAYLOAD_MESH) {
+	mesh.clear();
+	progressiveMesh.reset();
+	preparedCadGeometry.reset();
+	preparedCadGeometryRevision = 0;
+	residentLevel = -1;
+	residentAdmissionRevision = 0;
+	hasSnappedPoints = FALSE;
+	hasNormals = FALSE;
+	shadedCullBackfaces = FALSE;
+	memoryLimited = FALSE;
+    }
+    if (payloadKind != BOBOL_LOD_PAYLOAD_PROXY &&
+	payloadKind != BOBOL_LOD_PAYLOAD_MESH)
+	geometry.clear();
+}
+
+SbBool
+BObolLodResult::payloadIsConsistent(void) const
+{
+    const bool hasMesh = mesh.isValid() ||
+	(progressiveMesh && progressiveMesh->isValid()) ||
+	preparedCadGeometry ||
+	(geometry.isValid() &&
+	    (resultKind == BOBOL_LOD_RESULT_MESH ||
+	     resultKind == BOBOL_LOD_RESULT_FULL_DETAIL));
+    const bool hasProxy = proxy.isValid();
+    switch (payloadKind) {
+	case BOBOL_LOD_PAYLOAD_NONE:
+	    return !hasMesh && !hasProxy && dependencies.empty() &&
+		attributes.empty() ? TRUE : FALSE;
+	case BOBOL_LOD_PAYLOAD_DIRECTORY:
+	    return !hasMesh && !hasProxy && attributes.empty() ? TRUE : FALSE;
+	case BOBOL_LOD_PAYLOAD_ATTRIBUTES:
+	    return !hasMesh && !hasProxy && dependencies.empty() ? TRUE : FALSE;
+	case BOBOL_LOD_PAYLOAD_PROXY:
+	    return hasProxy && !hasMesh && dependencies.empty() &&
+		attributes.empty() ? TRUE : FALSE;
+	case BOBOL_LOD_PAYLOAD_MESH:
+	    return hasMesh && !hasProxy && dependencies.empty() &&
+		attributes.empty() ? TRUE : FALSE;
+	case BOBOL_LOD_PAYLOAD_STATUS:
+	    return !hasMesh && !hasProxy && dependencies.empty() &&
+		attributes.empty() ? TRUE : FALSE;
+	default:
+	    return FALSE;
+    }
 }
 
 void
@@ -1244,14 +1332,15 @@ bobol_lod_cache_key(const BObolLodRequest &request)
 
     out.append("bobol-lod-v3;");
     append_string_field(out, "database_id", request.databaseId);
-    append_uint_field(out, "database_revision", request.databaseRevision);
-    append_uint_field(out, "source_revision", request.sourceRevision);
+    append_uint_field(out, "database_revision",
+	request.databaseRevision.value());
+    append_uint_field(out, "source_revision", request.sourceRevision.value());
     append_uint_field(out, "source_content_hash", request.sourceContentHash);
     append_string_field(out, "object_path", request.objectPath);
     append_string_field(out, "object_name", request.objectName);
     append_string_field(out, "occurrence_key", request.occurrenceKey);
-    append_uint_field(out, "view_revision", request.viewRevision);
-    append_uint_field(out, "policy_revision", request.policyRevision);
+    append_uint_field(out, "view_revision", request.viewRevision.value());
+    append_uint_field(out, "policy_revision", request.policyRevision.value());
     append_int_field(out, "draw_mode", request.drawMode);
     append_uint_field(out, "lod_policy", request.lodPolicy);
     append_string_field(out, "provider_id", request.providerId);
@@ -1303,8 +1392,9 @@ bobol_lod_asset_cache_key(const BObolLodRequest &request)
 	    request.sourceContentHash);
     else {
 	append_uint_field(out, "database_revision",
-	    request.databaseRevision);
-	append_uint_field(out, "source_revision", request.sourceRevision);
+	    request.databaseRevision.value());
+	append_uint_field(out, "source_revision",
+	    request.sourceRevision.value());
 	/* Database object names are unique.  The occurrence path is a consumer
 	 * identity and would duplicate one source asset for every comb leaf. */
 	if (request.objectName.getLength() == 0)
@@ -1386,15 +1476,88 @@ bobol_lod_mesh_payload_from_mesh_lod_data(BObolLodMeshPayload &payload,
 }
 
 SbBool
+bobol_lod_request_keys_equal(const BObolLodRequest &lhs,
+			     const BObolLodRequest &rhs)
+{
+    if (bu_strcmp(lhs.databaseId.getString(),
+	    rhs.databaseId.getString()) != 0 ||
+	lhs.databaseRevision != rhs.databaseRevision ||
+	lhs.sourceRevision != rhs.sourceRevision ||
+	lhs.sourceContentHash != rhs.sourceContentHash ||
+	bu_strcmp(lhs.objectPath.getString(), rhs.objectPath.getString()) != 0 ||
+	bu_strcmp(lhs.objectName.getString(), rhs.objectName.getString()) != 0 ||
+	bu_strcmp(lhs.occurrenceKey.getString(),
+	    rhs.occurrenceKey.getString()) != 0 ||
+	lhs.viewRevision != rhs.viewRevision ||
+	lhs.policyRevision != rhs.policyRevision ||
+	lhs.drawMode != rhs.drawMode ||
+	lhs.lodPolicy != rhs.lodPolicy ||
+	bu_strcmp(lhs.providerId.getString(), rhs.providerId.getString()) != 0 ||
+	bu_strcmp(lhs.providerVersion.getString(),
+	    rhs.providerVersion.getString()) != 0 ||
+	lhs.qualityTier != rhs.qualityTier ||
+	lhs.requestedLevel != rhs.requestedLevel)
+	return FALSE;
+
+    if (lhs.bounds.isEmpty() != rhs.bounds.isEmpty())
+	return FALSE;
+    if (!lhs.bounds.isEmpty()) {
+	const SbVec3f lhsBounds[2] = {
+	    lhs.bounds.getMin(), lhs.bounds.getMax()
+	};
+	const SbVec3f rhsBounds[2] = {
+	    rhs.bounds.getMin(), rhs.bounds.getMax()
+	};
+	if (memcmp(lhsBounds, rhsBounds, sizeof(lhsBounds)) != 0)
+	    return FALSE;
+    }
+
+    const BObolLodCounts &a = lhs.sourceCounts;
+    const BObolLodCounts &b = rhs.sourceCounts;
+    if (a.faceCount != b.faceCount ||
+	a.pointCount != b.pointCount ||
+	a.originalPointCount != b.originalPointCount ||
+	a.normalCount != b.normalCount ||
+	a.lineCount != b.lineCount ||
+	a.byteCount != b.byteCount ||
+	lhs.providerParams.size() != rhs.providerParams.size())
+	return FALSE;
+
+    /*
+     * Provider parameter lists are normally tiny.  A counted multiset
+     * comparison avoids the sorted vector copy and heap traffic previously
+     * paid for every completed result while retaining duplicate semantics.
+     */
+    for (size_t i = 0; i < lhs.providerParams.size(); ++i) {
+	const BObolLodProviderParam &needle = lhs.providerParams[i];
+	size_t lhsCount = 0;
+	size_t rhsCount = 0;
+	for (const BObolLodProviderParam &candidate : lhs.providerParams) {
+	    if (bu_strcmp(needle.name.getString(),
+		    candidate.name.getString()) == 0 &&
+		bu_strcmp(needle.value.getString(),
+		    candidate.value.getString()) == 0)
+		++lhsCount;
+	}
+	for (const BObolLodProviderParam &candidate : rhs.providerParams) {
+	    if (bu_strcmp(needle.name.getString(),
+		    candidate.name.getString()) == 0 &&
+		bu_strcmp(needle.value.getString(),
+		    candidate.value.getString()) == 0)
+		++rhsCount;
+	}
+	if (lhsCount != rhsCount)
+	    return FALSE;
+    }
+
+    return TRUE;
+}
+
+SbBool
 bobol_lod_result_matches_request(const BObolLodResult &result,
 				   const BObolLodRequest &request)
 {
-    BObolLodCacheKey expected = bobol_lod_cache_key(request);
-    BObolLodCacheKey actual = result.cacheKey.isValid() ?
-				result.cacheKey : bobol_lod_cache_key(result.request);
-
-    return bu_strcmp(expected.value.getString(), actual.value.getString()) == 0 ?
-	   TRUE : FALSE;
+    return bobol_lod_request_keys_equal(result.request, request);
 }
 
 BObolLodResult
@@ -1451,6 +1614,7 @@ bobol_lod_result_from_mesh_lod_info(
 	result.diagnostic = "Obol mesh LoD result has no active mesh payload";
     }
 
+    result.canonicalizePayload();
     return result;
 }
 
@@ -1478,6 +1642,7 @@ bobol_lod_directory_result(const BObolLodRequest &request,
 			      BOBOL_LOD_RESULT_DIRECTORY, BOBOL_LOD_QUALITY_METADATA);
 
     result.dependencies = dependencies;
+    result.canonicalizePayload();
     return result;
 }
 
@@ -1489,6 +1654,7 @@ bobol_lod_attributes_result(const BObolLodRequest &request,
 			      BOBOL_LOD_RESULT_ATTRIBUTES, BOBOL_LOD_QUALITY_ATTRIBUTES);
 
     result.attributes = attributes;
+    result.canonicalizePayload();
     return result;
 }
 
@@ -1504,6 +1670,7 @@ bobol_lod_aabb_result(const BObolLodRequest &request,
     result.proxy.bounds = bounds;
     if (counts)
 	result.counts = *counts;
+    result.canonicalizePayload();
     return result;
 }
 
@@ -1526,6 +1693,7 @@ bobol_lod_proxy_result(const BObolLodRequest &request,
 	result.diagnostic = "LoD proxy result has no valid proxy payload";
     }
 
+    result.canonicalizePayload();
     return result;
 }
 

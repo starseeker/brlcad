@@ -3,6 +3,7 @@ set(
   adc.cpp
   axes.cpp
   cad_assembly.cpp
+  compact_occurrence_stream.cpp
   database_source.cpp
   display_endpoint.cpp
   display_session.cpp
@@ -21,6 +22,7 @@ set(
   input.cpp
   init.cpp
   line_layer_overlay.cpp
+  lod_coordinator_private.h
   lod_realization.cpp
   lod_service.cpp
   lod_mesh_shape.cpp
@@ -38,6 +40,7 @@ set(
   scene_controller.cpp
   scene_group.cpp
   snap_action.cpp
+  source_realization.cpp
   view_attachment.cpp
   view_controller.cpp
   view_lod.cpp
@@ -89,7 +92,10 @@ cmakefiles(
   axes.cpp
   cad_assembly.cpp
   cad_assembly_private.h
+  compact_occurrence_stream.cpp
+  compact_occurrence_registry_private.h
   database_source.cpp
+  database_source_private.h
   database_source_realization.h
   display_endpoint.cpp
   display_session.cpp
@@ -126,6 +132,7 @@ cmakefiles(
   scene_controller.cpp
   scene_group.cpp
   snap_action.cpp
+  source_realization.cpp
   view_attachment.cpp
   view_controller.cpp
   view_lod.cpp

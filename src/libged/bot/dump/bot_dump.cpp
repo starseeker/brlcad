@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -602,7 +604,7 @@ dl_botdump(struct _ged_bot_dump_client_data *d)
 	return;
     struct ged_view_context *view_ctx = ged_view_active_ctx(d->gedp);
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     BObolViewController *controller = endpoint ?
 	static_cast<BObolViewController *>(
 	    bobol_display_endpoint_controller(endpoint)) : NULL;

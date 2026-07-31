@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -99,7 +101,7 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (ged_rt_is_image_renderer(argv[0]) &&
 	!ged_rt_has_explicit_framebuffer(argc, argv) &&
-	ged_view_context_display_endpoint_get(view_ctx))
+	ged_view_context_obol_endpoint_get(view_ctx))
 	return _ged_external_rt_to_endpoint(gedp, argc, argv, argv[0], NULL);
 
     perspective = bv_perspective_get(

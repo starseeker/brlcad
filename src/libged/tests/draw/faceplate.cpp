@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdio.h>
 #include <fstream>
 
@@ -36,7 +38,7 @@
 #include "view_test_util.h"
 #include <ged.h>
 #include <ged/draw.h>
-#include <ged/draw_obol.h>
+#include <ged/display.h>
 
 #define ADIFF_THRES 0.99
 /* The retained wire renderer preserves projected topology but does not emit
@@ -413,45 +415,45 @@ main(int ac, char *av[]) {
     if (!bv_interactive_rect_state_set(DRAW_TEST_BV(v), &interactive_rect))
 	bu_exit(EXIT_FAILURE, "failed to configure interactive rectangle\n");
 
-    struct bobol_endpoint_property_value interactive_value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    interactive_value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+    struct bv_display_property_value interactive_value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    interactive_value.type = BV_DISPLAY_PROPERTY_UINT;
     interactive_value.uint_value = 3;
     if (ged_view_context_display_property_set(v,
 	    "view.interactive.rectangle.line_width", &interactive_value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	bu_exit(EXIT_FAILURE, "failed to set interactive rectangle line width\n");
     interactive_value.uint_value = 1;
     if (ged_view_context_display_property_set(v,
 	    "view.interactive.rectangle.line_style", &interactive_value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	bu_exit(EXIT_FAILURE, "failed to set interactive rectangle line style\n");
-    struct bobol_endpoint_property_value interactive_readback =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value interactive_readback =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(v,
 	    "view.interactive.rectangle.line_style", &interactive_readback) !=
-	BOBOL_ENDPOINT_PROPERTY_OK || interactive_readback.uint_value != 1)
+	BV_DISPLAY_PROPERTY_OK || interactive_readback.uint_value != 1)
 	bu_exit(EXIT_FAILURE, "interactive rectangle line-style readback failed\n");
     interactive_value.uint_value = 2;
     if (ged_view_context_display_property_set(v,
 	    "view.interactive.rectangle.line_style", &interactive_value) !=
-	BOBOL_ENDPOINT_PROPERTY_INVALID)
+	BV_DISPLAY_PROPERTY_INVALID)
 	bu_exit(EXIT_FAILURE, "invalid interactive rectangle line style was accepted\n");
-    interactive_value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    interactive_value.type = BV_DISPLAY_PROPERTY_COLOR3;
     interactive_value.color3[0] = 1.0;
     interactive_value.color3[1] = 0.25;
     interactive_value.color3[2] = 0.0;
     if (ged_view_context_display_property_set(v,
 	    "view.interactive.rectangle.color", &interactive_value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	bu_exit(EXIT_FAILURE, "failed to set interactive rectangle color\n");
-    interactive_value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    interactive_value.type = BV_DISPLAY_PROPERTY_BOOL;
     interactive_value.bool_value = 1;
     if (ged_view_context_display_property_set(v,
 	    "view.interactive.rectangle.visible", &interactive_value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	bu_exit(EXIT_FAILURE, "failed to show interactive rectangle\n");
-    if (ged_draw_obol_faceplate_sync(gedp, v) != BRLCAD_OK)
+    if (ged_view_faceplate_sync(gedp, v) != BRLCAD_OK)
 	bu_exit(EXIT_FAILURE, "failed to synchronize interactive rectangle\n");
     if (!ged_view_feature_exists(v,
 	    "_faceplate/interactive_rect"))
@@ -462,7 +464,7 @@ main(int ac, char *av[]) {
     interactive_value.bool_value = 0;
     if (ged_view_context_display_property_set(v,
 	    "view.interactive.rectangle.visible", &interactive_value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	bu_exit(EXIT_FAILURE, "failed to hide interactive rectangle\n");
     ret += img_cmp(0, gedp, lcache, false, clear_images, soft_fail, 0,
 	"faceplate_clear", "fp");
@@ -472,7 +474,7 @@ main(int ac, char *av[]) {
     bu_log("Testing framebuffer...\n");
     struct bu_vls fb_img = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fb_img, "%s/moss.png", av[1]);
-    if (ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, v) !=
+    if (ged_view_framebuffer_backend_ensure(gedp, v) !=
 	BRLCAD_OK)
 	bu_exit(EXIT_FAILURE, "failed to initialize Obol framebuffer backend\n");
     icv_image_t *fb_source = icv_read(bu_vls_cstr(&fb_img),
@@ -501,7 +503,7 @@ main(int ac, char *av[]) {
 	    bu_vls_cstr(gedp->ged_result_str));
 
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(v);
+	ged_view_context_obol_endpoint_get(v);
     const size_t expected_size = fb_source->width * fb_source->height * 3;
     if (!framebuffer_matches(endpoint, fb_pixels, expected_size,
 	    (unsigned int)fb_source->width,
@@ -594,7 +596,7 @@ main(int ac, char *av[]) {
     bu_log("Done.\n");
 
 
-    ged_draw_obol_framebuffer_release(gedp);
+    ged_view_framebuffer_release(gedp);
     unsigned char *captured_pixels = NULL;
     size_t captured_size = 0;
     unsigned int captured_width = 0;

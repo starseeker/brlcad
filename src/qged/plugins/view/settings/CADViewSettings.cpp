@@ -50,11 +50,11 @@ qged_framebuffer_mode_get(const struct ged_view_context *view_ctx, int *mode)
     if (!view_ctx || !mode)
 	return 0;
 
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(view_ctx,
 	    "composition.framebuffer.mode", &value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK || !value.string_value)
+	BV_DISPLAY_PROPERTY_OK || !value.string_value)
 	return 0;
 
     if (BU_STR_EQUAL(value.string_value, "off"))
@@ -80,13 +80,13 @@ qged_framebuffer_mode_set(struct ged_view_context *view_ctx, int mode)
 	mode >= static_cast<int>(sizeof(modes) / sizeof(modes[0])))
 	return 0;
 
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_ENUM;
     value.string_value = modes[mode];
     return ged_view_context_display_property_set(view_ctx,
 	"composition.framebuffer.mode", &value) ==
-	BOBOL_ENDPOINT_PROPERTY_OK;
+	BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
@@ -96,10 +96,10 @@ qged_faceplate_property_get(const struct ged_view_context *view_ctx, const char 
     if (!view_ctx || !name || !enabled)
 	return 0;
 
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(view_ctx, name, &value) !=
-	BOBOL_ENDPOINT_PROPERTY_OK)
+	BV_DISPLAY_PROPERTY_OK)
 	return 0;
     *enabled = value.bool_value ? 1 : 0;
     return 1;
@@ -111,12 +111,12 @@ qged_faceplate_property_set(struct ged_view_context *view_ctx, const char *name,
     if (!view_ctx || !name)
 	return 0;
 
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_BOOL;
     value.bool_value = enabled ? 1 : 0;
     return ged_view_context_display_property_set(view_ctx, name, &value) ==
-	BOBOL_ENDPOINT_PROPERTY_OK;
+	BV_DISPLAY_PROPERTY_OK;
 }
 
 /* Helper: update a checkbox to reflect an integer flag, blocking signals

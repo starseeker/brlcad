@@ -39,6 +39,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <cmath>
 #include <fstream>
 #include <string>
@@ -54,7 +56,7 @@
 #include "view_test_util.h"
 #include <ged.h>
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "BObol/BDisplayEndpoint.h"
 #include "BObol/BInit.h"
 #include "BObol/BViewAttachment.h"
@@ -134,7 +136,7 @@ static BObolViewController *
 obol_controller_for_view(struct ged_view_context *view_ctx)
 {
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     return endpoint ? static_cast<BObolViewController *>(
 	bobol_display_endpoint_controller(endpoint)) : NULL;
 }
@@ -166,7 +168,7 @@ static int
 configure_obol_view(struct ged *gedp, struct ged_view_context *view_ctx, int width, int height)
 {
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (!endpoint)
 	return 0;
 
@@ -558,7 +560,7 @@ test_multi_obol_dm_attachment(const char *datadir)
     }
 
     unsigned char *bridge_image = NULL;
-    int bridge_ret = ged_draw_obol_view_display_image(gedp, v0,
+    int bridge_ret = ged_view_display_image_capture(gedp, v0,
 	    &bridge_image, 1, 0);
     if (bridge_ret != 1 || !bridge_image) {
 	bu_log("FAIL: GED Obol display-image bridge should render an "
@@ -698,7 +700,7 @@ test_owned_render_endpoint(const char *datadir)
 	fail = 1;
     }
 
-    if (!fail && ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+    if (!fail && ged_view_framebuffer_backend_ensure(gedp,
 	    view_ctx) != BRLCAD_OK) {
 	bu_log("FAIL: could not create an endpoint-backed framebuffer stream\n");
 	fail = 1;
@@ -931,7 +933,7 @@ test_endpoint_dm_lifecycle(const char *datadir)
     int fail = 0;
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     bv_dimensions_set(DRAW_TEST_BV(view_ctx), 0, 0);
-    if (ged_view_context_display_endpoint_get(view_ctx)) {
+    if (ged_view_context_obol_endpoint_get(view_ctx)) {
 	bu_log("FAIL: lifecycle test unexpectedly started with an endpoint\n");
 	fail = 1;
     }
@@ -946,7 +948,7 @@ test_endpoint_dm_lifecycle(const char *datadir)
     }
 
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     void *controller = endpoint ?
 	bobol_display_endpoint_controller(endpoint) : NULL;
     if (!fail && (!endpoint || !controller ||
@@ -958,16 +960,16 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	bu_log("FAIL: dm open did not establish the requested endpoint state\n");
 	fail = 1;
     }
-    struct bobol_endpoint_property_value endpoint_width =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    struct bobol_endpoint_property_value endpoint_height =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value endpoint_width =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value endpoint_height =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (!fail && (bv_width_get(DRAW_TEST_BV(view_ctx)) != 512 ||
 	bv_height_get(DRAW_TEST_BV(view_ctx)) != 512 ||
 	bobol_display_endpoint_property_get(endpoint, "endpoint.width",
-	    &endpoint_width) != BOBOL_ENDPOINT_PROPERTY_OK ||
+	    &endpoint_width) != BV_DISPLAY_PROPERTY_OK ||
 	bobol_display_endpoint_property_get(endpoint, "endpoint.height",
-	    &endpoint_height) != BOBOL_ENDPOINT_PROPERTY_OK ||
+	    &endpoint_height) != BV_DISPLAY_PROPERTY_OK ||
 	endpoint_width.uint_value != 512 || endpoint_height.uint_value != 512)) {
 	bu_log("FAIL: dm open did not seed a usable canonical viewport\n");
 	fail = 1;
@@ -1097,7 +1099,7 @@ test_endpoint_dm_lifecycle(const char *datadir)
 		bu_vls_cstr(gedp->ged_result_str));
 	fail = 1;
     }
-    if (!fail && (ged_view_context_display_endpoint_get(view_ctx) != endpoint ||
+    if (!fail && (ged_view_context_obol_endpoint_get(view_ctx) != endpoint ||
 	    bobol_display_endpoint_controller(endpoint) != controller ||
 	    bobol_display_endpoint_host_factory_name(endpoint))) {
 	bu_log("FAIL: dm close did not retain endpoint scene identity\n");
@@ -1131,7 +1133,7 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	bu_log("FAIL: dm open accepted an unknown host factory\n");
 	fail = 1;
     }
-    if (!fail && (ged_view_context_display_endpoint_get(view_ctx) != endpoint ||
+    if (!fail && (ged_view_context_obol_endpoint_get(view_ctx) != endpoint ||
 	    bobol_display_endpoint_controller(endpoint) != controller ||
 	    bobol_display_endpoint_host_factory_name(endpoint))) {
 	bu_log("FAIL: failed dm open changed retained endpoint identity\n");
@@ -1209,9 +1211,9 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     int fail = 0;
     struct ged_view_context *first_view = ged_view_active_ctx(gedp);
     bobol_display_endpoint_t *first_endpoint =
-	ged_view_context_display_endpoint_get(first_view);
+	ged_view_context_obol_endpoint_get(first_view);
     if (!first_endpoint ||
-	ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+	ged_view_framebuffer_backend_ensure(gedp,
 	    first_view) != BRLCAD_OK) {
 	bu_log("FAIL: could not bind the first framebuffer endpoint\n");
 	fail = 1;
@@ -1249,7 +1251,7 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
 	    "sw", NULL};
 	const int endpoint_opened = ged_exec_dm(gedp, 8, open_av);
 	const int bridge_bound = endpoint_opened == BRLCAD_OK ?
-	    ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+	    ged_view_framebuffer_backend_ensure(gedp,
 		second_view) : BRLCAD_ERROR;
 	if (endpoint_opened != BRLCAD_OK || bridge_bound != BRLCAD_OK) {
 	    bu_log("FAIL: could not bind the second framebuffer endpoint "
@@ -1260,7 +1262,7 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     }
 
     bobol_display_endpoint_t *second_endpoint = second_view ?
-	ged_view_context_display_endpoint_get(second_view) : NULL;
+	ged_view_context_obol_endpoint_get(second_view) : NULL;
     pixels = NULL;
     size = 0;
     width = 0;
@@ -1288,12 +1290,12 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     /* Endpoint replacement can also happen for one existing view.  Keep the
      * original endpoint alive for this assertion: the replacement must clear
      * its provider before the record stops owning it. */
-    if (!fail && ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+    if (!fail && ged_view_framebuffer_backend_ensure(gedp,
 	first_view) != BRLCAD_OK) {
 	bu_log("FAIL: could not return the framebuffer bridge to the first view\n");
 	fail = 1;
     }
-    if (!fail && !ged_view_context_display_endpoint_set(first_view,
+    if (!fail && !ged_view_context_obol_endpoint_set(first_view,
 	first_endpoint, 0)) {
 	bu_log("FAIL: could not preserve the first endpoint for same-view handoff\n");
 	fail = 1;
@@ -1301,13 +1303,13 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     bobol_display_endpoint_t *replacement_endpoint = NULL;
     if (!fail) {
 	replacement_endpoint = bobol_display_endpoint_create(NULL, 0);
-	if (!replacement_endpoint || !ged_view_context_display_endpoint_set(
+	if (!replacement_endpoint || !ged_view_context_obol_endpoint_set(
 		first_view, replacement_endpoint, 1) ||
-	    ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+	    ged_view_framebuffer_backend_ensure(gedp,
 		first_view) != BRLCAD_OK) {
 	    bu_log("FAIL: could not rebind framebuffer after same-view endpoint replacement\n");
 	    if (replacement_endpoint &&
-		ged_view_context_display_endpoint_get(first_view) !=
+		ged_view_context_obol_endpoint_get(first_view) !=
 		replacement_endpoint)
 		bobol_display_endpoint_destroy(replacement_endpoint);
 	    replacement_endpoint = NULL;
@@ -1334,7 +1336,7 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     if (pixels)
 	bu_free(pixels, "same-view framebuffer capture");
 
-    ged_draw_obol_framebuffer_release(gedp);
+    ged_view_framebuffer_release(gedp);
     pixels = NULL;
 	if (!fail && replacement_endpoint &&
 	bobol_display_endpoint_capture_plane(replacement_endpoint,

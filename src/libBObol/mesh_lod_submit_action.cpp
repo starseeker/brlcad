@@ -9,6 +9,7 @@
 
 #include "bu/log.h"
 #include "bu/str.h"
+#include "bu/time.h"
 
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BLodService.h"
@@ -1764,8 +1765,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			submitAction->viewState->retargetCadPayload(
 			    activePayload, admittedLevel,
 			    retainedRequestedLevel,
-			    request.viewRevision,
-			    request.policyRevision);
+			    request.viewRevision.value(),
+			    request.policyRevision.value());
 		    if (retained && priorLevel != admittedLevel)
 			submitAction->updatedCutCount++;
 		    if (retained && !admissionBlocked &&
@@ -1961,8 +1962,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		if (retargetLevel <= activePayload->activeLevel) {
 		    (void)submitAction->viewState->retargetCadPayload(
 			activePayload, activePayload->activeLevel,
-			request.requestedLevel, request.viewRevision,
-			request.policyRevision);
+			request.requestedLevel, request.viewRevision.value(),
+			request.policyRevision.value());
 		    submitAction->pendingRetainedRefinementCount++;
 		    submitAction->skippedMeshCount++;
 		    continue;
@@ -1973,8 +1974,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		retargetLevel >= 0 &&
 		activePayload->activeLevel != retargetLevel &&
 		submitAction->viewState->retargetCadPayload(activePayload,
-		    retargetLevel, request.requestedLevel, request.viewRevision,
-		    request.policyRevision)) {
+		    retargetLevel, request.requestedLevel,
+		    request.viewRevision.value(),
+		    request.policyRevision.value())) {
 		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
 		if (filter && filter[0] &&
 		    (strstr(request.objectName.getString(), filter) ||
@@ -2014,8 +2016,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		if (providerDeliveryLevel <= activePayload->activeLevel) {
 		    (void)submitAction->viewState->retargetCadPayload(
 			activePayload, activePayload->activeLevel,
-			request.requestedLevel, request.viewRevision,
-			request.policyRevision);
+			request.requestedLevel, request.viewRevision.value(),
+			request.policyRevision.value());
 		    submitAction->pendingRetainedRefinementCount++;
 		    submitAction->skippedMeshCount++;
 		    continue;
@@ -2267,7 +2269,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	if (retargetLevel <= activePayload->activeLevel) {
 	    (void)submitAction->viewState->retargetCadPayload(activePayload,
 		activePayload->activeLevel, request.requestedLevel,
-		request.viewRevision, request.policyRevision);
+		request.viewRevision.value(), request.policyRevision.value());
 	    submitAction->pendingRetainedRefinementCount++;
 	    submitAction->skippedMeshCount++;
 	    source->doAction(action);
@@ -2279,8 +2281,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	retargetLevel >= 0 &&
 	activePayload->activeLevel != retargetLevel &&
 	submitAction->viewState->retargetCadPayload(activePayload,
-	    retargetLevel, request.requestedLevel, request.viewRevision,
-	    request.policyRevision)) {
+	    retargetLevel, request.requestedLevel, request.viewRevision.value(),
+	    request.policyRevision.value())) {
 	submitAction->updatedCutCount++;
 	if (retainedTargetDrawable && retargetLevel < request.requestedLevel) {
 	    submitAction->pendingRetainedRefinementCount++;
@@ -2318,7 +2320,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	if (providerDeliveryLevel <= activePayload->activeLevel) {
 	    (void)submitAction->viewState->retargetCadPayload(activePayload,
 		activePayload->activeLevel, request.requestedLevel,
-		request.viewRevision, request.policyRevision);
+		request.viewRevision.value(), request.policyRevision.value());
 	    submitAction->pendingRetainedRefinementCount++;
 	    submitAction->skippedMeshCount++;
 	    source->doAction(action);
@@ -2493,7 +2495,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	if (retargetLevel <= viewPayload->activeLevel) {
 	    (void)submitAction->viewState->retargetMeshPayload(viewPayload,
 		viewPayload->activeLevel, request.requestedLevel,
-		request.viewRevision, request.policyRevision);
+		request.viewRevision.value(), request.policyRevision.value());
 	    submitAction->pendingRetainedRefinementCount++;
 	    submitAction->skippedMeshCount++;
 	    return;
@@ -2504,8 +2506,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	viewPayload->activeLevel != retargetLevel &&
 	retargetLevel >= 0 &&
 	submitAction->viewState->retargetMeshPayload(viewPayload,
-	    retargetLevel, request.requestedLevel, request.viewRevision,
-	    request.policyRevision)) {
+	    retargetLevel, request.requestedLevel, request.viewRevision.value(),
+	    request.policyRevision.value())) {
 	submitAction->updatedCutCount++;
 	if (retainedTargetDrawable && retargetLevel < request.requestedLevel) {
 	    submitAction->pendingRetainedRefinementCount++;
@@ -2545,7 +2547,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	if (providerDeliveryLevel <= viewPayload->activeLevel) {
 	    (void)submitAction->viewState->retargetMeshPayload(viewPayload,
 		viewPayload->activeLevel, request.requestedLevel,
-		request.viewRevision, request.policyRevision);
+		request.viewRevision.value(), request.policyRevision.value());
 	    submitAction->pendingRetainedRefinementCount++;
 	    submitAction->skippedMeshCount++;
 	    return;

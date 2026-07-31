@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <math.h>
 #include <ctype.h>
@@ -588,7 +590,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 	    }
 
 	    bobol_display_endpoint_t *endpoint =
-		ged_view_context_display_endpoint_get(view_ctx);
+		ged_view_context_obol_endpoint_get(view_ctx);
 	    if (endpoint && !bobol_display_endpoint_resize(endpoint,
 		    (unsigned int)width, (unsigned int)height, 1.0)) {
 		Tcl_AppendResult(s->interp,

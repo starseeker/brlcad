@@ -87,8 +87,8 @@ struct bobol_display_endpoint {
     void *framebuffer_capture_user_data;
     bool factory_frame_callback_bound;
     BObolInputContext input;
-    bobol_endpoint_property_get_callback property_get_callback;
-    bobol_endpoint_property_set_callback property_set_callback;
+    bv_display_property_get_callback property_get_callback;
+    bv_display_property_set_callback property_set_callback;
     void *property_user_data;
     mutable std::string supported_engines;
     std::string diagnostic_summary;
@@ -680,421 +680,421 @@ endpoint_rt_destroy(bobol_display_endpoint_t *endpoint)
 }
 
 #define FACEPLATE_AXES_STYLE_PROPERTIES(_axis) \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".position.x", \
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".position.x", \
+	BV_DISPLAY_PROPERTY_DOUBLE, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, -1.0e12, 1.0e12, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".position.y", \
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".position.y", \
+	BV_DISPLAY_PROPERTY_DOUBLE, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, -1.0e12, 1.0e12, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".position.z", \
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".position.z", \
+	BV_DISPLAY_PROPERTY_DOUBLE, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, -1.0e12, 1.0e12, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".size", \
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".size", \
+	BV_DISPLAY_PROPERTY_DOUBLE, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0e12, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".line_width", \
-	BOBOL_ENDPOINT_PROPERTY_UINT, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".line_width", \
+	BV_DISPLAY_PROPERTY_UINT, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 1.0, 1048576.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".color", \
-	BOBOL_ENDPOINT_PROPERTY_COLOR3, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".color", \
+	BV_DISPLAY_PROPERTY_COLOR3, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".position_only", \
-	BOBOL_ENDPOINT_PROPERTY_BOOL, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".position_only", \
+	BV_DISPLAY_PROPERTY_BOOL, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".labels.visible", \
-	BOBOL_ENDPOINT_PROPERTY_BOOL, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".labels.visible", \
+	BV_DISPLAY_PROPERTY_BOOL, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".labels.color", \
-	BOBOL_ENDPOINT_PROPERTY_COLOR3, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".labels.color", \
+	BV_DISPLAY_PROPERTY_COLOR3, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".triple_color", \
-	BOBOL_ENDPOINT_PROPERTY_BOOL, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".triple_color", \
+	BV_DISPLAY_PROPERTY_BOOL, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.visible", \
-	BOBOL_ENDPOINT_PROPERTY_BOOL, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".ticks.visible", \
+	BV_DISPLAY_PROPERTY_BOOL, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.length", \
-	BOBOL_ENDPOINT_PROPERTY_UINT, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".ticks.length", \
+	BV_DISPLAY_PROPERTY_UINT, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 1.0, 1048576.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.major_length", \
-	BOBOL_ENDPOINT_PROPERTY_UINT, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".ticks.major_length", \
+	BV_DISPLAY_PROPERTY_UINT, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 1.0, 1048576.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.interval", \
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".ticks.interval", \
+	BV_DISPLAY_PROPERTY_DOUBLE, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0e12, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.per_major", \
-	BOBOL_ENDPOINT_PROPERTY_UINT, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".ticks.per_major", \
+	BV_DISPLAY_PROPERTY_UINT, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1048576.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.threshold", \
-	BOBOL_ENDPOINT_PROPERTY_UINT, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".ticks.threshold", \
+	BV_DISPLAY_PROPERTY_UINT, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 2147483647.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.color", \
-	BOBOL_ENDPOINT_PROPERTY_COLOR3, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".ticks.color", \
+	BV_DISPLAY_PROPERTY_COLOR3, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0, NULL}, \
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.major_color", \
-	BOBOL_ENDPOINT_PROPERTY_COLOR3, \
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE, \
+    {sizeof(bv_display_property_desc), "view.faceplate." _axis ".ticks.major_color", \
+	BV_DISPLAY_PROPERTY_COLOR3, \
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE, \
 	0, 0.0, 1.0, NULL}
 
-static const bobol_endpoint_property_desc endpoint_properties[] = {
-    {sizeof(bobol_endpoint_property_desc), "endpoint.renderer",
-	BOBOL_ENDPOINT_PROPERTY_ENUM,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+static const bv_display_property_desc endpoint_properties[] = {
+    {sizeof(bv_display_property_desc), "endpoint.renderer",
+	BV_DISPLAY_PROPERTY_ENUM,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 0.0, "auto,hw,sw,rt,none,diagnostic"},
-    {sizeof(bobol_endpoint_property_desc), "endpoint.renderer.resolved",
-	BOBOL_ENDPOINT_PROPERTY_ENUM, BOBOL_ENDPOINT_PROPERTY_READ,
+    {sizeof(bv_display_property_desc), "endpoint.renderer.resolved",
+	BV_DISPLAY_PROPERTY_ENUM, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, "auto,hw,sw,rt,none,diagnostic"},
-    {sizeof(bobol_endpoint_property_desc), "endpoint.renderer.supported",
-	BOBOL_ENDPOINT_PROPERTY_STRING, BOBOL_ENDPOINT_PROPERTY_READ,
+    {sizeof(bv_display_property_desc), "endpoint.renderer.supported",
+	BV_DISPLAY_PROPERTY_STRING, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "endpoint.width",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "endpoint.width",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 1.0, 32767.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "endpoint.height",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "endpoint.height",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 1.0, 32767.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "endpoint.device_pixel_ratio",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "endpoint.device_pixel_ratio",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.01, 64.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "endpoint.host",
-	BOBOL_ENDPOINT_PROPERTY_STRING, BOBOL_ENDPOINT_PROPERTY_READ,
+    {sizeof(bv_display_property_desc), "endpoint.host",
+	BV_DISPLAY_PROPERTY_STRING, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "endpoint.title",
-	BOBOL_ENDPOINT_PROPERTY_STRING,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "endpoint.title",
+	BV_DISPLAY_PROPERTY_STRING,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	BOBOL_HOST_CAP_TOPLEVEL, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "endpoint.visible",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "endpoint.visible",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	BOBOL_HOST_CAP_TOPLEVEL, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "endpoint.vsync",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "endpoint.vsync",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	BOBOL_HOST_CAP_PRESENT_VSYNC, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "controller.background.bottom",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "controller.background.bottom",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "controller.background.top",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "controller.background.top",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "controller.software_wire",
-	BOBOL_ENDPOINT_PROPERTY_ENUM,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "controller.software_wire",
+	BV_DISPLAY_PROPERTY_ENUM,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 0.0, "auto,quality,fast"},
-    {sizeof(bobol_endpoint_property_desc), "renderer.depth_test",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.depth_test",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.lighting",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.lighting",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.headlight",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.headlight",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.headlight.tracking",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.headlight.tracking",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.scene_lights",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.scene_lights",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.headlight.color",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.headlight.color",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.headlight.intensity",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.headlight.intensity",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.headlight.direction",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.headlight.direction",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, -1.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.transparency",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.transparency",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.antialiasing",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.antialiasing",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.diagnostic.revision",
-	BOBOL_ENDPOINT_PROPERTY_UINT, BOBOL_ENDPOINT_PROPERTY_READ,
+    {sizeof(bv_display_property_desc), "renderer.diagnostic.revision",
+	BV_DISPLAY_PROPERTY_UINT, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc),
+    {sizeof(bv_display_property_desc),
 	"renderer.diagnostic.visited_sources",
-	BOBOL_ENDPOINT_PROPERTY_UINT, BOBOL_ENDPOINT_PROPERTY_READ,
+	BV_DISPLAY_PROPERTY_UINT, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc),
+    {sizeof(bv_display_property_desc),
 	"renderer.diagnostic.realized_sources",
-	BOBOL_ENDPOINT_PROPERTY_UINT, BOBOL_ENDPOINT_PROPERTY_READ,
+	BV_DISPLAY_PROPERTY_UINT, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc),
+    {sizeof(bv_display_property_desc),
 	"renderer.diagnostic.failed_sources",
-	BOBOL_ENDPOINT_PROPERTY_UINT, BOBOL_ENDPOINT_PROPERTY_READ,
+	BV_DISPLAY_PROPERTY_UINT, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc),
+    {sizeof(bv_display_property_desc),
 	"renderer.diagnostic.progressive_pending",
-	BOBOL_ENDPOINT_PROPERTY_BOOL, BOBOL_ENDPOINT_PROPERTY_READ,
+	BV_DISPLAY_PROPERTY_BOOL, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.diagnostic.summary",
-	BOBOL_ENDPOINT_PROPERTY_STRING, BOBOL_ENDPOINT_PROPERTY_READ,
+    {sizeof(bv_display_property_desc), "renderer.diagnostic.summary",
+	BV_DISPLAY_PROPERTY_STRING, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "render.rt.workers",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "render.rt.workers",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 1.0, 64.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "render.rt.samples",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "render.rt.samples",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 1.0, 64.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "render.rt.preview_scale",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "render.rt.preview_scale",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 1.0, 16.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "render.rt.frame_budget_ms",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "render.rt.frame_budget_ms",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 1.0, 1000.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "render.rt.quality",
-	BOBOL_ENDPOINT_PROPERTY_ENUM,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "render.rt.quality",
+	BV_DISPLAY_PROPERTY_ENUM,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 0.0, "interactive,final"},
-    {sizeof(bobol_endpoint_property_desc), "render.rt.geometry_revision",
-	BOBOL_ENDPOINT_PROPERTY_UINT, BOBOL_ENDPOINT_PROPERTY_READ,
+    {sizeof(bv_display_property_desc), "render.rt.geometry_revision",
+	BV_DISPLAY_PROPERTY_UINT, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "render.rt.presentation_revision",
-	BOBOL_ENDPOINT_PROPERTY_UINT, BOBOL_ENDPOINT_PROPERTY_READ,
+    {sizeof(bv_display_property_desc), "render.rt.presentation_revision",
+	BV_DISPLAY_PROPERTY_UINT, BV_DISPLAY_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "composition.rt.layer",
-	BOBOL_ENDPOINT_PROPERTY_ENUM,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "composition.rt.layer",
+	BV_DISPLAY_PROPERTY_ENUM,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 0.0, "underlay,interlay,overlay"},
-    {sizeof(bobol_endpoint_property_desc), "renderer.clip.minimum",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.clip.minimum",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, -1.0e12, 1.0e12, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.clip.maximum",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.clip.maximum",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, -1.0e12, 1.0e12, NULL},
-    {sizeof(bobol_endpoint_property_desc), "renderer.depth_cue",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "renderer.depth_cue",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.perspective",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.perspective",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 179.999, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.zclip",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.zclip",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.navigation.min_delta",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.navigation.min_delta",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, -10000.0, 0.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.navigation.max_delta",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.navigation.max_delta",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 10000.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.navigation.rotate_scale",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.navigation.rotate_scale",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.001, 10.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.navigation.scale_scale",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.navigation.scale_scale",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.001, 100.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.adc.visible",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.adc.visible",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.adc.line_color",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.adc.line_color",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.adc.tick_color",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.adc.tick_color",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.adc.line_width",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.adc.line_width",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 1.0, 1048576.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.center_dot.visible",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.center_dot.visible",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.visible",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.visible",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.adaptive",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.adaptive",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.snap",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.snap",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.anchor.x",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.anchor.x",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, -1.0e12, 1.0e12, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.anchor.y",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.anchor.y",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, -1.0e12, 1.0e12, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.anchor.z",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.anchor.z",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, -1.0e12, 1.0e12, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.resolution.horizontal",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.resolution.horizontal",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0e12, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.resolution.vertical",
-	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.resolution.vertical",
+	BV_DISPLAY_PROPERTY_DOUBLE,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0e12, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.major.horizontal",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.major.horizontal",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 2147483647.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.major.vertical",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.major.vertical",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 2147483647.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.grid.color",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.grid.color",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc),
+    {sizeof(bv_display_property_desc),
 	"view.interactive.rectangle.visible",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc),
+    {sizeof(bv_display_property_desc),
 	"view.interactive.rectangle.line_width",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1048576.0, NULL},
-    {sizeof(bobol_endpoint_property_desc),
+    {sizeof(bv_display_property_desc),
 	"view.interactive.rectangle.line_style",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc),
+    {sizeof(bv_display_property_desc),
 	"view.interactive.rectangle.color",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.model_axes.visible",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.model_axes.visible",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
     FACEPLATE_AXES_STYLE_PROPERTIES("model_axes"),
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.scale.visible",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.scale.visible",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.view_axes.visible",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.view_axes.visible",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
     FACEPLATE_AXES_STYLE_PROPERTIES("view_axes"),
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.params.visible",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.params.visible",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.params.size",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.params.size",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.params.center",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.params.center",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.params.azimuth",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.params.azimuth",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.params.elevation",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.params.elevation",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.params.twist",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.params.twist",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.params.fps",
-	BOBOL_ENDPOINT_PROPERTY_BOOL,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.params.fps",
+	BV_DISPLAY_PROPERTY_BOOL,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.params.font_size",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.params.font_size",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 5.0, 96.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.center_dot.font_size",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.center_dot.font_size",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 5.0, 96.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.scale.font_size",
-	BOBOL_ENDPOINT_PROPERTY_UINT,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.scale.font_size",
+	BV_DISPLAY_PROPERTY_UINT,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 5.0, 96.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.params.color",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.params.color",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.center_dot.color",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.center_dot.color",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "view.faceplate.scale.color",
-	BOBOL_ENDPOINT_PROPERTY_COLOR3,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "view.faceplate.scale.color",
+	BV_DISPLAY_PROPERTY_COLOR3,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
-    {sizeof(bobol_endpoint_property_desc), "composition.framebuffer.mode",
-	BOBOL_ENDPOINT_PROPERTY_ENUM,
-	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+    {sizeof(bv_display_property_desc), "composition.framebuffer.mode",
+	BV_DISPLAY_PROPERTY_ENUM,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 0.0, "off,overlay,underlay,interlay"}
 };
 
 #undef FACEPLATE_AXES_STYLE_PROPERTIES
 
-static const bobol_endpoint_property_desc *
+static const bv_display_property_desc *
 endpoint_property(const char *name)
 {
     if (!name || !name[0])
 	return NULL;
-    for (const bobol_endpoint_property_desc &property : endpoint_properties) {
+    for (const bv_display_property_desc &property : endpoint_properties) {
 	if (bu_strcmp(property.name, name) == 0)
 	    return &property;
     }
@@ -1103,7 +1103,7 @@ endpoint_property(const char *name)
 
 static int
 endpoint_property_host_supported(const bobol_display_endpoint_t *endpoint,
-	const bobol_endpoint_property_desc *property)
+	const bv_display_property_desc *property)
 {
     if (!endpoint || !property)
 	return 0;
@@ -1972,18 +1972,18 @@ bobol_display_endpoint_property_count(void)
 
 extern "C" int
 bobol_display_endpoint_property_descriptor(size_t index,
-	struct bobol_endpoint_property_desc *out)
+	struct bv_display_property_desc *out)
 {
     if (!out || out->struct_size < sizeof(*out) ||
 	index >= bobol_display_endpoint_property_count())
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     *out = endpoint_properties[index];
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static void
-property_value_prepare(bobol_endpoint_property_value *value,
-	enum bobol_endpoint_property_type type)
+property_value_prepare(bv_display_property_value *value,
+	enum bv_display_property_type type)
 {
     const uint32_t struct_size = value->struct_size;
     std::memset(value, 0, sizeof(*value));
@@ -1994,16 +1994,16 @@ property_value_prepare(bobol_endpoint_property_value *value,
 extern "C" int
 bobol_display_endpoint_property_get(
 	const bobol_display_endpoint_t *endpoint, const char *name,
-	struct bobol_endpoint_property_value *out)
+	struct bv_display_property_value *out)
 {
     if (!endpoint || !endpoint->controller || !out ||
 	out->struct_size < sizeof(*out))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
-    const bobol_endpoint_property_desc *property = endpoint_property(name);
+	return BV_DISPLAY_PROPERTY_INVALID;
+    const bv_display_property_desc *property = endpoint_property(name);
     if (!property)
-	return BOBOL_ENDPOINT_PROPERTY_UNKNOWN;
+	return BV_DISPLAY_PROPERTY_UNKNOWN;
     if (!endpoint_property_host_supported(endpoint, property))
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     property_value_prepare(out, property->type);
 
     if (bu_strcmp(name, "endpoint.width") == 0 ||
@@ -2134,9 +2134,9 @@ bobol_display_endpoint_property_get(
 	return endpoint->property_get_callback(endpoint->property_user_data,
 	    name, out);
     } else {
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     }
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
@@ -2151,83 +2151,83 @@ valid_color3(const double color[3])
 extern "C" int
 bobol_display_endpoint_property_set(
 	bobol_display_endpoint_t *endpoint, const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
     if (!endpoint || !endpoint->controller || !value ||
 	value->struct_size < sizeof(*value))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
-    const bobol_endpoint_property_desc *property = endpoint_property(name);
+	return BV_DISPLAY_PROPERTY_INVALID;
+    const bv_display_property_desc *property = endpoint_property(name);
     if (!property)
-	return BOBOL_ENDPOINT_PROPERTY_UNKNOWN;
-    if (!(property->access & BOBOL_ENDPOINT_PROPERTY_WRITE))
-	return BOBOL_ENDPOINT_PROPERTY_READ_ONLY;
+	return BV_DISPLAY_PROPERTY_UNKNOWN;
+    if (!(property->access & BV_DISPLAY_PROPERTY_WRITE))
+	return BV_DISPLAY_PROPERTY_READ_ONLY;
     if (value->type != property->type)
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
-    if (property->type == BOBOL_ENDPOINT_PROPERTY_BOOL &&
+	return BV_DISPLAY_PROPERTY_INVALID;
+    if (property->type == BV_DISPLAY_PROPERTY_BOOL &&
 	value->bool_value != 0 && value->bool_value != 1)
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
-    if (property->type == BOBOL_ENDPOINT_PROPERTY_DOUBLE &&
+	return BV_DISPLAY_PROPERTY_INVALID;
+    if (property->type == BV_DISPLAY_PROPERTY_DOUBLE &&
 	(!std::isfinite(value->double_value) ||
 	 (property->minimum < property->maximum &&
 	  (value->double_value < property->minimum ||
 	   value->double_value > property->maximum))))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
-    if (property->type == BOBOL_ENDPOINT_PROPERTY_UINT &&
+	return BV_DISPLAY_PROPERTY_INVALID;
+    if (property->type == BV_DISPLAY_PROPERTY_UINT &&
 	property->minimum < property->maximum &&
 	(value->uint_value < static_cast<uint64_t>(property->minimum) ||
 	 value->uint_value > static_cast<uint64_t>(property->maximum)))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
-    if (property->type == BOBOL_ENDPOINT_PROPERTY_COLOR3 &&
+	return BV_DISPLAY_PROPERTY_INVALID;
+    if (property->type == BV_DISPLAY_PROPERTY_COLOR3 &&
 	!valid_color3(value->color3))
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
     if (!endpoint_property_host_supported(endpoint, property))
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 
     if (bu_strcmp(name, "endpoint.renderer") == 0) {
 	enum bobol_render_engine engine = BOBOL_RENDER_ENGINE_AUTO;
 	if (!render_engine_from_name(value->string_value, &engine))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (!bobol_display_endpoint_render_engine_set(endpoint, engine))
-	    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     } else if (bu_strcmp(name, "endpoint.width") == 0) {
 	if (value->uint_value < 1 || value->uint_value > 32767 ||
 	    !bobol_display_endpoint_resize(endpoint,
 		static_cast<unsigned int>(value->uint_value), endpoint->height,
 		endpoint->device_pixel_ratio))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
     } else if (bu_strcmp(name, "endpoint.height") == 0) {
 	if (value->uint_value < 1 || value->uint_value > 32767 ||
 	    !bobol_display_endpoint_resize(endpoint, endpoint->width,
 		static_cast<unsigned int>(value->uint_value),
 		endpoint->device_pixel_ratio))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
     } else if (bu_strcmp(name, "endpoint.device_pixel_ratio") == 0) {
 	if (!std::isfinite(value->double_value) ||
 	    value->double_value < 0.01 || value->double_value > 64.0 ||
 	    !bobol_display_endpoint_resize(endpoint, endpoint->width,
 		endpoint->height, value->double_value))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
     } else if (bu_strcmp(name, "endpoint.title") == 0) {
 	if (!value->string_value)
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (!bobol_host_factory_instance_set_title(endpoint->factory,
 	    endpoint->factory_instance, value->string_value))
-	    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 	endpoint->title = value->string_value;
     } else if (bu_strcmp(name, "endpoint.visible") == 0) {
 	if (!bobol_host_factory_instance_set_visible(endpoint->factory,
 	    endpoint->factory_instance, value->bool_value))
-	    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 	endpoint->visible = value->bool_value != 0;
     } else if (bu_strcmp(name, "endpoint.vsync") == 0) {
 	if (!bobol_host_factory_instance_set_vsync(endpoint->factory,
 	    endpoint->factory_instance, value->bool_value))
-	    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 	endpoint->vsync = value->bool_value != 0;
     } else if (bu_strcmp(name, "controller.background.bottom") == 0 ||
 	bu_strcmp(name, "controller.background.top") == 0) {
 	if (!valid_color3(value->color3))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	const SbColor updated(static_cast<float>(value->color3[0]),
 	    static_cast<float>(value->color3[1]),
 	    static_cast<float>(value->color3[2]));
@@ -2242,13 +2242,13 @@ bobol_display_endpoint_property_set(
 	BObolViewController::SoftwareWireMode mode =
 	    BObolViewController::SOFTWARE_WIRE_AUTO;
 	if (!value->string_value)
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	if (bu_strcmp(value->string_value, "quality") == 0)
 	    mode = BObolViewController::SOFTWARE_WIRE_QUALITY;
 	else if (bu_strcmp(value->string_value, "fast") == 0)
 	    mode = BObolViewController::SOFTWARE_WIRE_FAST;
 	else if (bu_strcmp(value->string_value, "auto") != 0)
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	endpoint->controller->setSoftwareWireMode(mode);
     } else if (bu_strcmp(name, "renderer.depth_test") == 0) {
 	endpoint->controller->setDepthTestEnabled(
@@ -2293,7 +2293,7 @@ bobol_display_endpoint_property_set(
 	if (!endpoint->rt)
 	    endpoint->rt = new (std::nothrow) EndpointRtState;
 	if (!endpoint->rt)
-	    return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 	if (bu_strcmp(name, "render.rt.workers") == 0)
 	    endpoint->rt->workers = static_cast<unsigned int>(value->uint_value);
 	else if (bu_strcmp(name, "render.rt.samples") == 0)
@@ -2307,23 +2307,23 @@ bobol_display_endpoint_property_set(
 	    if (!value->string_value ||
 		(bu_strcmp(value->string_value, "interactive") != 0 &&
 		 bu_strcmp(value->string_value, "final") != 0))
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    endpoint->rt->interactiveQuality =
 		bu_strcmp(value->string_value, "interactive") == 0;
 	} else {
 	    int layer = SoBRLViewportImage::INTERLAY;
 	    if (!endpoint_rt_presentation_layer_from_name(value->string_value,
 		&layer))
-		return BOBOL_ENDPOINT_PROPERTY_INVALID;
+		return BV_DISPLAY_PROPERTY_INVALID;
 	    endpoint->rt->presentationLayer = layer;
 	    if (!endpoint_rt_presentation_layer_apply(endpoint))
-		return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+		return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 	}
     } else if (bu_strcmp(name, "renderer.clip.minimum") == 0 ||
 	bu_strcmp(name, "renderer.clip.maximum") == 0) {
 	if (!std::isfinite(value->double_value) ||
 	    value->double_value < -1.0e12 || value->double_value > 1.0e12)
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
 	double minimum = 0.0;
 	double maximum = 0.0;
 	endpoint->controller->getClipBounds(minimum, maximum);
@@ -2332,31 +2332,31 @@ bobol_display_endpoint_property_set(
 	else
 	    maximum = value->double_value;
 	if (!endpoint->controller->setClipBounds(minimum, maximum))
-	    return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	    return BV_DISPLAY_PROPERTY_INVALID;
     } else if (bu_strcmp(name, "renderer.depth_cue") == 0) {
 	endpoint->controller->setDepthCueEnabled(
 	    value->bool_value ? TRUE : FALSE);
     } else if (endpoint->property_set_callback) {
 	const int ret = endpoint->property_set_callback(
 	    endpoint->property_user_data, name, value);
-	if (ret == BOBOL_ENDPOINT_PROPERTY_OK)
+	if (ret == BV_DISPLAY_PROPERTY_OK)
 	    endpoint->controller->requestRender("external property");
 	return ret;
     } else {
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     }
 
     if (endpoint->engine == BOBOL_RENDER_ENGINE_RT &&
 	!endpoint_rt_start(endpoint))
-	return BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
-    return BOBOL_ENDPOINT_PROPERTY_OK;
+	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
+    return BV_DISPLAY_PROPERTY_OK;
 }
 
 extern "C" int
 bobol_display_endpoint_property_provider_set(
 	bobol_display_endpoint_t *endpoint,
-	bobol_endpoint_property_get_callback get_callback,
-	bobol_endpoint_property_set_callback set_callback,
+	bv_display_property_get_callback get_callback,
+	bv_display_property_set_callback set_callback,
 	void *user_data)
 {
     if (!endpoint || ((get_callback || set_callback) && !user_data))
@@ -2453,14 +2453,14 @@ BObolDisplayEndpoint::resolvedRenderEngine(void) const
 
 int
 BObolDisplayEndpoint::propertyGet(const char *name,
-	struct bobol_endpoint_property_value *value) const
+	struct bv_display_property_value *value) const
 {
     return bobol_display_endpoint_property_get(this->endpoint, name, value);
 }
 
 int
 BObolDisplayEndpoint::propertySet(const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
     return bobol_display_endpoint_property_set(this->endpoint, name, value);
 }

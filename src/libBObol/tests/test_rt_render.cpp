@@ -873,50 +873,50 @@ main(int argc, char **argv)
 		 * arrive through an Obol image node and be capturable deterministically. */
 		bobol_display_endpoint_t *endpoint =
 		    bobol_display_endpoint_create(&controller, 0);
-		struct bobol_endpoint_property_value rtPolicy =
-		    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-		rtPolicy.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+		struct bv_display_property_value rtPolicy =
+		    BV_DISPLAY_PROPERTY_VALUE_INIT;
+		rtPolicy.type = BV_DISPLAY_PROPERTY_UINT;
 		rtPolicy.uint_value = 1;
 		if (!ret && (!endpoint || bobol_display_endpoint_property_set(
 		    endpoint, "render.rt.frame_budget_ms", &rtPolicy) !=
-		    BOBOL_ENDPOINT_PROPERTY_OK)) {
+		    BV_DISPLAY_PROPERTY_OK)) {
 		    std::fprintf(stderr, "FAIL: retained rt frame-budget policy was rejected\n");
 		    ret = 1;
 		}
-		rtPolicy = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-		rtPolicy.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+		rtPolicy = BV_DISPLAY_PROPERTY_VALUE_INIT;
+		rtPolicy.type = BV_DISPLAY_PROPERTY_ENUM;
 		rtPolicy.string_value = "interactive";
 	if (!ret && bobol_display_endpoint_property_set(endpoint,
-	    "render.rt.quality", &rtPolicy) != BOBOL_ENDPOINT_PROPERTY_OK) {
+	    "render.rt.quality", &rtPolicy) != BV_DISPLAY_PROPERTY_OK) {
 		    std::fprintf(stderr, "FAIL: retained rt quality policy was rejected\n");
 	    ret = 1;
 	}
-	rtPolicy = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	rtPolicy.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+	rtPolicy = BV_DISPLAY_PROPERTY_VALUE_INIT;
+	rtPolicy.type = BV_DISPLAY_PROPERTY_ENUM;
 	rtPolicy.string_value = "overlay";
 	if (!ret && bobol_display_endpoint_property_set(endpoint,
-	    "composition.rt.layer", &rtPolicy) != BOBOL_ENDPOINT_PROPERTY_OK) {
+	    "composition.rt.layer", &rtPolicy) != BV_DISPLAY_PROPERTY_OK) {
 	    std::fprintf(stderr, "FAIL: retained RT image-layer policy was rejected\n");
 	    ret = 1;
 	}
-		rtPolicy = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		rtPolicy = BV_DISPLAY_PROPERTY_VALUE_INIT;
 		if (!ret && (bobol_display_endpoint_property_get(endpoint,
 		    "render.rt.frame_budget_ms", &rtPolicy) !=
-		    BOBOL_ENDPOINT_PROPERTY_OK || rtPolicy.uint_value != 1u)) {
+		    BV_DISPLAY_PROPERTY_OK || rtPolicy.uint_value != 1u)) {
 		    std::fprintf(stderr, "FAIL: retained rt frame-budget policy did not persist\n");
 		    ret = 1;
 		}
-		rtPolicy = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		rtPolicy = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	if (!ret && (bobol_display_endpoint_property_get(endpoint,
-	    "render.rt.quality", &rtPolicy) != BOBOL_ENDPOINT_PROPERTY_OK ||
+	    "render.rt.quality", &rtPolicy) != BV_DISPLAY_PROPERTY_OK ||
 		    !rtPolicy.string_value ||
 		    bu_strcmp(rtPolicy.string_value, "interactive") != 0)) {
 		    std::fprintf(stderr, "FAIL: retained rt quality policy did not persist\n");
 	    ret = 1;
 	}
-	rtPolicy = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	rtPolicy = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	if (!ret && (bobol_display_endpoint_property_get(endpoint,
-	    "composition.rt.layer", &rtPolicy) != BOBOL_ENDPOINT_PROPERTY_OK ||
+	    "composition.rt.layer", &rtPolicy) != BV_DISPLAY_PROPERTY_OK ||
 	    !rtPolicy.string_value || bu_strcmp(rtPolicy.string_value, "overlay") != 0)) {
 	    std::fprintf(stderr, "FAIL: retained RT image-layer policy did not persist\n");
 	    ret = 1;
@@ -947,16 +947,16 @@ main(int argc, char **argv)
 		    std::fprintf(stderr, "FAIL: retained rt endpoint did not present ray image\n");
 	    ret = 1;
 	}
-	struct bobol_endpoint_property_value rtGeometryRevision =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	struct bobol_endpoint_property_value rtPresentationRevision =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value rtGeometryRevision =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value rtPresentationRevision =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	if (!ret && (bobol_display_endpoint_property_get(endpoint,
 	    "render.rt.geometry_revision", &rtGeometryRevision) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK ||
+	    BV_DISPLAY_PROPERTY_OK ||
 	    bobol_display_endpoint_property_get(endpoint,
 	    "render.rt.presentation_revision", &rtPresentationRevision) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK || !rtGeometryRevision.uint_value ||
+	    BV_DISPLAY_PROPERTY_OK || !rtGeometryRevision.uint_value ||
 	    !rtPresentationRevision.uint_value)) {
 	    std::fprintf(stderr, "FAIL: retained rt endpoint did not expose renderer revisions\n");
 	    ret = 1;
@@ -965,11 +965,11 @@ main(int argc, char **argv)
 	/* A view change arriving during an expensive frame must cancel that
 	 * generation, clear its presentation, and publish only the replacement
 	 * camera.  This is the controller-owned path used by QGED and MGED. */
-	rtPolicy = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	rtPolicy.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+	rtPolicy = BV_DISPLAY_PROPERTY_VALUE_INIT;
+	rtPolicy.type = BV_DISPLAY_PROPERTY_UINT;
 	rtPolicy.uint_value = 64;
 	if (!ret && bobol_display_endpoint_property_set(endpoint,
-	    "render.rt.samples", &rtPolicy) != BOBOL_ENDPOINT_PROPERTY_OK) {
+	    "render.rt.samples", &rtPolicy) != BV_DISPLAY_PROPERTY_OK) {
 	    std::fprintf(stderr, "FAIL: retained rt cancellation fixture did not start expensive frame\n");
 	    ret = 1;
 	}
@@ -990,16 +990,16 @@ main(int argc, char **argv)
 	    std::fprintf(stderr, "FAIL: retained rt published stale pixels after camera cancellation\n");
 	    ret = 1;
 	}
-	struct bobol_endpoint_property_value movedGeometryRevision =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	struct bobol_endpoint_property_value movedPresentationRevision =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value movedGeometryRevision =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value movedPresentationRevision =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	if (!ret && (bobol_display_endpoint_property_get(endpoint,
 	    "render.rt.geometry_revision", &movedGeometryRevision) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK ||
+	    BV_DISPLAY_PROPERTY_OK ||
 	    bobol_display_endpoint_property_get(endpoint,
 	    "render.rt.presentation_revision", &movedPresentationRevision) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK ||
+	    BV_DISPLAY_PROPERTY_OK ||
 	    movedGeometryRevision.uint_value != rtGeometryRevision.uint_value ||
 	    movedPresentationRevision.uint_value <=
 		rtPresentationRevision.uint_value)) {
@@ -1008,7 +1008,7 @@ main(int argc, char **argv)
 	}
 	rtPolicy.uint_value = 1;
 	if (!ret && bobol_display_endpoint_property_set(endpoint,
-	    "render.rt.samples", &rtPolicy) != BOBOL_ENDPOINT_PROPERTY_OK) {
+	    "render.rt.samples", &rtPolicy) != BV_DISPLAY_PROPERTY_OK) {
 	    std::fprintf(stderr, "FAIL: retained rt cancellation fixture did not restore sample policy\n");
 	    ret = 1;
 	}
@@ -1035,11 +1035,11 @@ main(int argc, char **argv)
 	    std::fprintf(stderr, "FAIL: retained RT overlay policy did not reparent image\n");
 	    ret = 1;
 	}
-	rtPolicy = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	rtPolicy.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+	rtPolicy = BV_DISPLAY_PROPERTY_VALUE_INIT;
+	rtPolicy.type = BV_DISPLAY_PROPERTY_ENUM;
 	rtPolicy.string_value = "underlay";
 	if (!ret && bobol_display_endpoint_property_set(endpoint,
-	    "composition.rt.layer", &rtPolicy) != BOBOL_ENDPOINT_PROPERTY_OK) {
+	    "composition.rt.layer", &rtPolicy) != BV_DISPLAY_PROPERTY_OK) {
 	    std::fprintf(stderr, "FAIL: retained RT live layer update was rejected\n");
 	    ret = 1;
 	}
@@ -1079,7 +1079,7 @@ main(int argc, char **argv)
 	    rtPolicy.string_value = "overlay";
 	    if (!ret && (bobol_display_endpoint_property_set(endpoint,
 		    "composition.rt.layer", &rtPolicy) !=
-		    BOBOL_ENDPOINT_PROPERTY_OK ||
+		    BV_DISPLAY_PROPERTY_OK ||
 		!capture_composite(endpoint, composite) ||
 		!mostly_green(composite))) {
 		std::fprintf(stderr, "FAIL: same-layer RT reparent changed framebuffer precedence\n");
@@ -1097,7 +1097,7 @@ main(int argc, char **argv)
 	    rtPolicy.string_value = "underlay";
 	    if (!ret && (bobol_display_endpoint_property_set(endpoint,
 		    "composition.rt.layer", &rtPolicy) !=
-		    BOBOL_ENDPOINT_PROPERTY_OK ||
+		    BV_DISPLAY_PROPERTY_OK ||
 		!capture_composite(endpoint, composite) ||
 		!has_green_surface(composite))) {
 		std::fprintf(stderr, "FAIL: same-layer framebuffer did not follow renderer image\n");

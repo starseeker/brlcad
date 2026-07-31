@@ -111,6 +111,19 @@ enum BObolLodConvergencePhase {
     BOBOL_LOD_CONVERGENCE_ERROR
 };
 
+/** Internal coordinator phase at the last owner-thread transition boundary.
+ *
+ * Unlike BObolLodConvergencePhase, which is a user-facing progress category,
+ * this reports the actual retained-display state machine. */
+enum BObolLodCoordinatorPhase {
+    BOBOL_LOD_COORDINATOR_FALLBACK = 0,
+    BOBOL_LOD_COORDINATOR_COVERAGE,
+    BOBOL_LOD_COORDINATOR_INTERACTIVE,
+    BOBOL_LOD_COORDINATOR_SETTLING,
+    BOBOL_LOD_COORDINATOR_STABLE,
+    BOBOL_LOD_COORDINATOR_COMPACTING
+};
+
 /** User-facing progress for one view epoch.
  *
  * The fraction describes progress toward the current view's terminal,
@@ -122,6 +135,9 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     void clear(void);
 
     int phase;
+    int coordinatorPhase;
+    uint64_t coordinatorTransitionSerial;
+    uint64_t coordinatorProgressSequence;
     uint64_t viewRevision;
     size_t expectedLeafCount;
     size_t availableLeafCount;

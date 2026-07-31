@@ -369,20 +369,28 @@ cache_get_write_txn(struct bu_cache *c, struct bu_cache_txn **t)
     if (UNLIKELY(!c))
 	return NULL;
 
-    // We can't have multiple write txns per cache - lock to prevent
-    // multiple threads trying this at the same time
-    std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
-
-    // If we already have a write txn and we're trying to start another
-    // one, that's a no-no
-    if ((!t || !*t) && c->i->write_txn_active) {
-	bu_log("Error: Attempt to start a second write transaction on the same cache.\n");
-	return NULL;
-    }
-
+    /*
+     * An LMDB write transaction retains its internal writer mutex until
+     * commit or abort.  A caller extending an existing transaction therefore
+     * already holds the LMDB side of the lock order and must not reacquire our
+     * admission mutex.  More importantly, do not hold our mutex while
+     * mdb_txn_begin acquires LMDB's: doing both creates the opposite lock
+     * order and a real deadlock opportunity between new and extended
+     * transactions.
+     */
     MDB_txn *txn = (t && *t) ? (*t)->txn : NULL;
     if (txn)
 	return txn;
+
+    {
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
+	if (c->i->write_txn_active) {
+	    bu_log("Error: Attempt to start a second write transaction on the same cache.\n");
+	    return NULL;
+	}
+	/* Reserve the one permitted writer before entering LMDB. */
+	c->i->write_txn_active = 1;
+    }
 
     int txn_ret = mdb_txn_begin(c->i->env, NULL, 0, &txn);
     if (txn_ret) {
@@ -395,11 +403,10 @@ cache_get_write_txn(struct bu_cache *c, struct bu_cache_txn **t)
 
     if (txn_ret != 0) {
 	bu_log("Error - txn acquisition failed!: %d\n", txn_ret);
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
+	c->i->write_txn_active = 0;
 	return NULL;
     }
-
-    // We have an active write txn - let the cache know
-    c->i->write_txn_active = 1;
 
     if (t) {
 	struct bu_cache_txn *ctxn;
@@ -459,8 +466,10 @@ bu_cache_write(void *data, size_t dsize, const char *key, struct bu_cache *c, st
     if (!c->i->defer_sync)
 	mdb_env_sync(c->i->env, 0);
 
-    // No longer have an active write txn - let the cache know
-    c->i->write_txn_active = 0;
+    {
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
+	c->i->write_txn_active = 0;
+    }
 
     // If we were unsuccessful, return 0;
     if (rc)
@@ -499,10 +508,9 @@ bu_cache_write_commit(struct bu_cache *c, struct bu_cache_txn **t)
 
     struct bu_cache_txn *ctxn = *t;
     int rc = 0;
+    rc = mdb_txn_commit(ctxn->txn);
     {
-	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex); // lock
-	rc = mdb_txn_commit(ctxn->txn);
-	// No longer have an active write txn - let the cache know
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
 	ctxn->cache->i->write_txn_active = 0;
     }
     if (!c->i->defer_sync)
@@ -521,10 +529,9 @@ bu_cache_write_abort(struct bu_cache_txn **t)
 	return;
 
     struct bu_cache_txn *ctxn = *t;
+    mdb_txn_abort(ctxn->txn);
     {
-	std::lock_guard<std::mutex> guard(ctxn->cache->i->write_txn_mutex); // lock
-	mdb_txn_abort(ctxn->txn);
-	// No longer have an active write txn - let the cache know
+	std::lock_guard<std::mutex> guard(ctxn->cache->i->write_txn_mutex);
 	ctxn->cache->i->write_txn_active = 0;
     }
 
@@ -559,11 +566,9 @@ bu_cache_clear(const char *key, struct bu_cache *c, struct bu_cache_txn **t)
 	return;
     }
 
-    int rc = 0;
+    int rc = mdb_txn_commit(txn);
     {
-	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex); // lock
-	rc = mdb_txn_commit(txn);
-	// No longer have an active write txn - let the cache know
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
 	c->i->write_txn_active = 0;
     }
     if (rc && rc != MDB_NOTFOUND)

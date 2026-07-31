@@ -53,7 +53,7 @@
 #include "BObol/BLineLayerOverlay.h"
 #include "BObol/BViewController.h"
 #include "bv.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
 #include "QgObolContextManager.h"
 
@@ -653,7 +653,7 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     struct ged *gedp = static_cast<struct ged *>(
 	ged_view_context_user_data_get(view_ctx));
     if (gedp) {
-	(void)ged_draw_obol_faceplate_sync(gedp, view_ctx);
+	(void)ged_view_faceplate_sync(gedp, view_ctx);
 	return;
     }
 

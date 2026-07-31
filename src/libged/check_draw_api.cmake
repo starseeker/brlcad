@@ -18,12 +18,26 @@ set(_headers
   include/ged/polygon.h
   include/ged/selection.h
   include/ged/result.h
-  include/ged/draw_obol.h
+  include/ged/display.h
 )
 
 set(_actual)
 foreach(_header IN LISTS _headers)
   file(READ "${SOURCE_ROOT}/${_header}" _contents)
+  string(REGEX MATCH
+    "#[ \t]*include[ \t]*[<\"]BObol/"
+    _concrete_renderer_include "${_contents}")
+  if(_concrete_renderer_include)
+    message(FATAL_ERROR
+      "GED draw API contract: ${_header} includes a concrete BObol renderer header")
+  endif()
+  string(REGEX MATCH
+    "(struct[ \t]+bobol_|bobol_display_endpoint|bobol_endpoint_property)"
+    _concrete_renderer_type "${_contents}")
+  if(_concrete_renderer_type)
+    message(FATAL_ERROR
+      "GED draw API contract: ${_header} exposes a concrete BObol renderer type: ${_concrete_renderer_type}")
+  endif()
   string(REGEX MATCH
     "(const[ \t\r\n]+)?void[ \t\r\n]*\\*[ \t\r\n]*(view|view_ctx)[ \t\r\n]*[,)]"
     _untyped_view_parameter "${_contents}")

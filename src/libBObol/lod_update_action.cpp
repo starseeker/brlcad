@@ -286,7 +286,7 @@ SoBRLLodUpdateAction::databaseSourceAction(SoAction *action, SoNode *node)
 				   result.progressiveMesh->isValid() ?
 			       1 : 0,
 			   static_cast<unsigned long long>(
-			       result.request.sourceRoutingId),
+			       result.request.sourceRoutingId.value()),
 			   static_cast<void *>(source),
 			   result.diagnostic.getString());
 	    }

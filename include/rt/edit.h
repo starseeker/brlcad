@@ -75,6 +75,7 @@
 #include "bn/mat.h"
 #include "bu/parse.h"
 #include "bu/avs.h"
+#include "bu/ptbl.h"
 #include "rt/defines.h"
 #include "rt/db_internal.h"
 

@@ -47,6 +47,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <fstream>
 #include <string>
 #include <cstring>
@@ -160,7 +162,7 @@ test_dm_lighting_flags(const char *datadir)
 
     /* --- endpoint-native ged_exec_dm path used by applications ------------ */
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(v);
+	ged_view_context_obol_endpoint_get(v);
     BObolViewController *controller = endpoint ?
 	static_cast<BObolViewController *>(
 	    bobol_display_endpoint_controller(endpoint)) : NULL;

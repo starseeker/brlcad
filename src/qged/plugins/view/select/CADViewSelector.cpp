@@ -24,6 +24,8 @@
  */
 
 #include "common.h"
+
+#include "BObol/BDisplayEndpoint.h"
 #include <QVBoxLayout>
 #include <string>
 #include <set>

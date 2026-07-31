@@ -33,7 +33,7 @@
 #include "icv.h"
 #include "ged.h"
 #include "imgstream/fb_compat.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 
 struct png2fb_state {
     double def_screen_gamma;	/* Don't add more gamma, default = 1.0*/
@@ -206,7 +206,7 @@ ged_png2fb_core(struct ged *gedp, int argc, const char *argv[])
     /* libpng historically used 0.5 when an input did not provide gAMA.
      * Preserve png2fb's display conversion while libicv supplies decoding. */
     p2fbs.image->gamma_corr = (float)(0.5 * p2fbs.def_screen_gamma);
-    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+    ret = ged_view_framebuffer_apply(gedp, view_ctx,
 	png2fb_apply, &p2fbs, 1);
     icv_destroy(p2fbs.image);
 

@@ -38,7 +38,7 @@
 
 #include "BObol/BMeshLodCache.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/scene.h"
 #include "ged/selection.h"
 #include "rt/db_fullpath.h"
@@ -59,6 +59,7 @@ struct rt_pg_internal;
 struct db_tree_state;
 struct model;
 struct nmgregion;
+struct bobol_display_endpoint;
 struct BObolDrawMetadataRecord;
 struct ged_draw_obol_database_source_record;
 
@@ -1765,8 +1766,8 @@ extern int ged_draw_obol_group_rename_for_path(
 	struct ged *gedp,
 	const char *path,
 	const char *new_path);
-/* ged_draw_obol_group_erase_subpath_for_path is declared in the public
- * ged/draw_obol.h (with GED_EXPORT); do not redeclare it here. */
+int ged_draw_group_erase_subpath_for_path(struct ged *gedp,
+	const char *parent_path, const char *subpath);
 extern int ged_draw_obol_group_update_display_for_path(
 	struct ged *gedp,
 	const char *path,

@@ -25,6 +25,8 @@
 /** @} */
 
 #include "common.h"
+
+#include "ged/display_obol_private.h"
 #include "bv.h"
 #include "bu/units.h"
 #include "BObol/BDisplayEndpoint.h"
@@ -43,11 +45,11 @@ tclcad_faceplate_color_endpoint_set(struct ged_view_context *view_ctx, const cha
 {
     if (!view_ctx || !property_name || r < 0 || r > 255 || b < 0 ||
 	b > 255 || g < 0 || g > 255)
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
 
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_COLOR3;
     value.color3[0] = r / 255.0;
     value.color3[1] = g / 255.0;
     value.color3[2] = b / 255.0;
@@ -60,11 +62,11 @@ tclcad_faceplate_bool_endpoint_set(struct ged_view_context *view_ctx, const char
 	int enabled)
 {
     if (!view_ctx || !property_name || enabled < 0 || enabled > 1)
-	return BOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BV_DISPLAY_PROPERTY_INVALID;
 
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_BOOL;
     value.bool_value = enabled;
     return ged_view_context_display_property_set(view_ctx, property_name,
 	&value);
@@ -115,10 +117,10 @@ to_faceplate(struct ged *gedp,
 		if (bu_sscanf(argv[4], "%d", &i) != 1)
 		    goto bad;
 
-		if (ged_view_context_display_endpoint_get(view_ctx)) {
+		if (ged_view_context_obol_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_bool_endpoint_set(view_ctx,
 			"view.faceplate.center_dot.visible", i) !=
-			BOBOL_ENDPOINT_PROPERTY_OK)
+			BV_DISPLAY_PROPERTY_OK)
 			goto bad;
 		} else {
 		    center_dot.gos_draw = i ? 1 : 0;
@@ -141,10 +143,10 @@ to_faceplate(struct ged *gedp,
 		    bu_sscanf(argv[6], "%d", &b) != 1)
 		    goto bad;
 
-		if (ged_view_context_display_endpoint_get(view_ctx)) {
+		if (ged_view_context_obol_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_color_endpoint_set(view_ctx,
 			"view.faceplate.center_dot.color", r, g, b) !=
-		BOBOL_ENDPOINT_PROPERTY_OK)
+		BV_DISPLAY_PROPERTY_OK)
 			goto bad;
 		} else {
 		    if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255)
@@ -220,10 +222,10 @@ to_faceplate(struct ged *gedp,
 		if (bu_sscanf(argv[4], "%d", &i) != 1)
 		    goto bad;
 
-		if (ged_view_context_display_endpoint_get(view_ctx)) {
+		if (ged_view_context_obol_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_bool_endpoint_set(view_ctx,
 			"view.faceplate.params.visible", i) !=
-			BOBOL_ENDPOINT_PROPERTY_OK)
+			BV_DISPLAY_PROPERTY_OK)
 			goto bad;
 		} else {
 		    params.draw = i ? 1 : 0;
@@ -246,10 +248,10 @@ to_faceplate(struct ged *gedp,
 		    bu_sscanf(argv[6], "%d", &b) != 1)
 		    goto bad;
 
-		if (ged_view_context_display_endpoint_get(view_ctx)) {
+		if (ged_view_context_obol_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_color_endpoint_set(view_ctx,
 			"view.faceplate.params.color", r, g, b) !=
-		BOBOL_ENDPOINT_PROPERTY_OK)
+		BV_DISPLAY_PROPERTY_OK)
 			goto bad;
 		} else {
 		    if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255)
@@ -277,10 +279,10 @@ to_faceplate(struct ged *gedp,
 		if (bu_sscanf(argv[4], "%d", &i) != 1)
 		    goto bad;
 
-		if (ged_view_context_display_endpoint_get(view_ctx)) {
+		if (ged_view_context_obol_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_bool_endpoint_set(view_ctx,
 			"view.faceplate.scale.visible", i) !=
-			BOBOL_ENDPOINT_PROPERTY_OK)
+			BV_DISPLAY_PROPERTY_OK)
 			goto bad;
 		} else {
 		    scale_state.gos_draw = i ? 1 : 0;
@@ -303,10 +305,10 @@ to_faceplate(struct ged *gedp,
 		    bu_sscanf(argv[6], "%d", &b) != 1)
 		    goto bad;
 
-		if (ged_view_context_display_endpoint_get(view_ctx)) {
+		if (ged_view_context_obol_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_color_endpoint_set(view_ctx,
 			"view.faceplate.scale.color", r, g, b) !=
-		BOBOL_ENDPOINT_PROPERTY_OK)
+		BV_DISPLAY_PROPERTY_OK)
 			goto bad;
 		} else {
 		    if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255)

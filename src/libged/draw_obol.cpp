@@ -11,6 +11,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BADC.h"
 #include "BObol/BDrawCache.h"
@@ -24,6 +26,7 @@
 #include "BObol/BSceneController.h"
 #include "BObol/BSceneGroup.h"
 #include "BObol/BSnapAction.h"
+#include "BObol/BSourceRealization.h"
 #include "BObol/BViewportImage.h"
 #include "BObol/BVListShape.h"
 #include "BObol/BViewAttachment.h"
@@ -45,7 +48,7 @@
 #include "ged.h"
 #include "ged/db_index.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
 #include "icv.h"
 #include "rt/db5.h"
@@ -76,7 +79,6 @@
 #include <memory>
 #include <set>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -160,10 +162,12 @@ static int ged_obol_stream_cached_leaf_manifest(
     struct db_i *database,
     int draw_mode,
     uint32_t source_revision,
-    BObolCompactOccurrenceStream *stream);
+    BObolCompactOccurrenceStream *stream,
+    void *user_data);
 static int ged_obol_store_leaf_proxy_manifest(
     struct db_i *database,
-    const SoBRLDatabaseSource *source);
+    const SoBRLDatabaseSource *source,
+    void *user_data);
 static int ged_obol_apply_draw_paths_to_scene(
     struct ged *gedp,
     struct ged_view_context *view_ctx,
@@ -268,39 +272,31 @@ struct ged_obol_progressive_provider_data {
 
 struct ged_obol_deferred_realization_item {
     ged_obol_deferred_realization_item(void) :
-	source(NULL), snapshotSourceDatabase(NULL), database(NULL),
+	source(NULL), snapshotSourceDatabase(NULL),
+	ownsSource(FALSE),
 	primaryScene(FALSE), allowWireFallback(FALSE),
-	warmManifest(FALSE), manifestStored(FALSE), streamBatchQuantum(256),
+	streamBatchQuantum(256),
 	streamMergeMicrosecondsPerItem(0.0)
     {
     }
 
     ~ged_obol_deferred_realization_item(void)
     {
-	if (source)
+	if (ownsSource && source)
 	    source->unref();
-	if (database)
-	    db_close(database);
 	if (snapshotSourceDatabase)
 	    db_close(snapshotSourceDatabase);
-	if (snapshotPath.getLength() > 0)
-	    (void)bu_file_delete(snapshotPath.getString());
     }
 
     SoBRLDatabaseSource *source;
     /* Ref-counted live database handle used only to construct the immutable
      * closure snapshot on the worker. */
     struct db_i *snapshotSourceDatabase;
-    struct db_i *database;
-    SbString snapshotPath;
+    SbBool ownsSource;
     std::string instanceKey;
     int drawMode = 0;
     SbBool primaryScene;
     SbBool allowWireFallback;
-    /* Written by the worker before the job's release-store of COMPLETE and
-     * read by the GUI only after its acquire-load. */
-    SbBool warmManifest;
-    SbBool manifestStored;
     /* GUI-thread adaptive publication quantum. */
     size_t streamBatchQuantum;
     /* Conservative observed merge cost.  Batch size alone is not a useful
@@ -308,35 +304,33 @@ struct ged_obol_deferred_realization_item {
      * thousands of records. */
     double streamMergeMicrosecondsPerItem;
     /* Worker->pump stream of completed per-leaf occurrences.  Shared with the
-     * worker lambda so it outlives every push (the job join blocks on the
-     * worker before items are destroyed). */
+     * realization service so it outlives every push. */
     std::shared_ptr<BObolCompactOccurrenceStream> stream;
 };
 
 struct ged_obol_deferred_realization_job {
     enum State {
-	PENDING = 0,
-	RUNNING = 1,
-	COMPLETE = 2,
-	FAILED = 3,
-	CANCELLED = 4
+	PENDING = BOBOL_SOURCE_REALIZATION_PENDING,
+	RUNNING = BOBOL_SOURCE_REALIZATION_RUNNING,
+	COMPLETE = BOBOL_SOURCE_REALIZATION_COMPLETE,
+	FAILED = BOBOL_SOURCE_REALIZATION_FAILED,
+	CANCELLED = BOBOL_SOURCE_REALIZATION_CANCELLED
     };
 
     ged_obol_deferred_realization_job(void) :
-	state(PENDING), cancelRequested(false), stagingLeaseReleaseAfter(0)
+	stagingLeaseReleaseAfter(0)
     {
     }
 
     ~ged_obol_deferred_realization_job(void)
     {
-	cancelRequested.store(true, std::memory_order_release);
-	if (worker.joinable())
-	    worker.join();
+	cancel();
     }
 
     void cancel(void)
     {
-	cancelRequested.store(true, std::memory_order_release);
+	if (realization)
+	    realization->cancel();
 	for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
 	     items) {
 	    if (item && item->stream)
@@ -346,135 +340,48 @@ struct ged_obol_deferred_realization_job {
 
     bool start(void)
     {
-	if (items.empty() || state.load(std::memory_order_acquire) != PENDING)
+	if (items.empty() || realization)
 	    return false;
-	try {
-	    worker = std::thread([this]() {
-		state.store(RUNNING, std::memory_order_release);
-		bool success = true;
-		for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
-		     items) {
-		    if (cancelRequested.load(std::memory_order_acquire)) {
-			success = false;
-			break;
-		    }
-		    SoBRLDatabaseSource *source = item ? item->source : NULL;
-		    if (!source) {
-			success = false;
-			break;
-		    }
-		    /*
-		     * A complete warm manifest is self-contained: it records every
-		     * occurrence transform, leaf bound, material state, and source
-		     * mesh request.  Probe it using the already-cloned live handle
-		     * before reopening and directory-building a multi-gigabyte
-		     * database.  The live source remains the authoritative database
-		     * owner for subsequent view-local PoP requests; the detached
-		     * worker needs a full directory only on a miss/partial manifest.
-		     */
-		    int warmManifest = 0;
-		    if (item->stream && item->snapshotSourceDatabase &&
-			!cancelRequested.load(std::memory_order_acquire))
-			warmManifest = ged_obol_stream_cached_leaf_manifest(
-			    source, item->snapshotSourceDatabase, item->drawMode,
-			    source->sourceRevision.getValue(),
-			    item->stream.get());
-		    item->warmManifest = warmManifest == 2 ? TRUE : FALSE;
-		    if (item->warmManifest && item->snapshotSourceDatabase) {
-			db_close(item->snapshotSourceDatabase);
-			item->snapshotSourceDatabase = NULL;
-		    }
-		    if (!item->warmManifest && !item->database) {
-			const int64_t snapshotStart = bu_gettime();
-			if (!item->snapshotSourceDatabase ||
-			    !source->initializeDetachedRealizationDatabase(
-				item->snapshotSourceDatabase, &item->database,
-				&item->snapshotPath)) {
-			    success = false;
-			    break;
-			}
-			ged_obol_timing_log(
-			    "job: DB snapshot (worker)", snapshotStart, -1);
-			db_close(item->snapshotSourceDatabase);
-			item->snapshotSourceDatabase = NULL;
-		    }
-		    /*
-		     * This is a source-geometry contract, not a worker-role
-		     * inference.  In particular, view-managed wire BoTs require
-		     * mesh realization even if a warm external publication changed
-		     * the transient role before this worker was cloned.
-		     */
-		    const bool mesh =
-			source->usesMeshRealization() ? true : false;
-		    const int64_t realize_start = bu_gettime();
-		    BObolCompactOccurrenceStream *stream =
-			item->stream ? item->stream.get() : NULL;
-		    SbBool realized = warmManifest == 2 ? TRUE :
-			(mesh ? source->realizeDatabaseMesh(stream) :
-			    source->realizeDatabaseWireframe(stream));
-		    if (!realized && mesh && item->allowWireFallback)
-			realized = source->realizeDatabaseWireframe(stream);
-		    ged_obol_timing_log(mesh ?
-			"job: realizeDatabaseMesh (worker)" :
-			"job: realizeDatabaseWireframe (worker)",
-			realize_start, -1);
-		    if (!realized &&
-			!cancelRequested.load(std::memory_order_acquire)) {
-			bu_log("Obol deferred realization failed for '%s': %s\n",
-			    item->instanceKey.c_str(),
-			    source->realizationDiagnostic.getValue().getString());
-			success = false;
-			break;
-		    }
-		    if (!realized) {
-			success = false;
-			break;
-		    }
-		    /*
-		     * Non-BoT and fallback paths may not have an earlier
-		     * bounds-only phase.  Completed detached realization owns
-		     * authoritative source bounds, so adoption is the final safe
-		     * point at which deferred autoview may run once.
-		     */
-		    if (stream && !stream->hasCoverageBoundsComplete())
-			stream->setCoverageBoundsComplete(true);
-		    /* Manifest serialization is proportional to leaf count and
-		     * belongs with the detached realization, not in the final GUI
-		     * adoption tick.  A complete warm manifest is already current
-		     * and needs no rewrite. */
-		    if (!item->warmManifest)
-			item->manifestStored =
-			    ged_obol_store_leaf_proxy_manifest(
-				item->database, source) ? TRUE : FALSE;
-		}
-		if (cancelRequested.load(std::memory_order_acquire))
-		    state.store(CANCELLED, std::memory_order_release);
-		else
-		    state.store(success ? COMPLETE : FAILED,
-			std::memory_order_release);
-	    });
-	} catch (...) {
-	    state.store(FAILED, std::memory_order_release);
-	    return false;
+	std::vector<BObolSourceRealizationRequest> requests(items.size());
+	for (size_t i = 0; i < items.size(); i++) {
+	    ged_obol_deferred_realization_item *item = items[i].get();
+	    if (!item || !item->source || !item->snapshotSourceDatabase)
+		return false;
+	    BObolSourceRealizationRequest &request = requests[i];
+	    request.source = item->source;
+	    request.snapshotSourceDatabase = item->snapshotSourceDatabase;
+	    request.stream = item->stream;
+	    request.clientToken = i;
+	    request.estimatedWorkingSetBytes = 256ULL * 1024ULL * 1024ULL;
+	    request.drawMode = item->drawMode;
+	    request.allowWireFallback = item->allowWireFallback;
+	    request.probeWarmManifest =
+		ged_obol_stream_cached_leaf_manifest;
+	    request.storeManifest = ged_obol_store_leaf_proxy_manifest;
 	}
-	return true;
+	realization = BObolSourceRealizationCoordinator::global().submit(
+	    requests);
+	for (size_t i = 0; i < items.size(); i++) {
+	    if (!requests[i].source) {
+		items[i]->ownsSource = FALSE;
+		items[i]->snapshotSourceDatabase = NULL;
+	    }
+	}
+	return realization ? true : false;
     }
 
-    void join(void)
+    int stateValue(void) const
     {
-	if (worker.joinable())
-	    worker.join();
+	return realization ? realization->state() : PENDING;
     }
 
-    std::atomic<int> state;
-    std::atomic<bool> cancelRequested;
     /* Completed streams retain their bounded cold-source leases briefly after
      * adoption so the following view-LoD traversal can capture them.  Once a
      * task owns a lease its provider shared_ptr, not this grace period, keeps
      * the arrays alive. */
     int64_t stagingLeaseReleaseAfter;
     std::vector<std::unique_ptr<ged_obol_deferred_realization_item>> items;
-    std::thread worker;
+    std::shared_ptr<BObolSourceRealizationJob> realization;
 };
 
 ged_obol_progressive_provider_data::~ged_obol_progressive_provider_data(void)
@@ -3761,7 +3668,7 @@ BObolViewController *
 ged_bobol_view_controller(struct ged_view_context *view_ctx)
 {
     bobol_display_endpoint_t *endpoint = view_ctx ?
-	ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	ged_view_context_obol_endpoint_get(view_ctx) : NULL;
     return endpoint ? static_cast<BObolViewController *>(
 	bobol_display_endpoint_controller(endpoint)) : NULL;
 }
@@ -6457,13 +6364,13 @@ ged_obol_view_context_faceplate_sync(struct ged *gedp, struct ged_view_context *
 	BV_FRAMEBUFFER_MODE_INTERLAY;
     (void)ged_obol_fbserv_composition_set(gedp, framebuffer_mode);
     if (framebuffer_visible)
-	(void)ged_draw_obol_framebuffer_present(gedp);
+	(void)ged_view_framebuffer_present(gedp);
 
     return BRLCAD_OK;
 }
 
 extern "C" int
-ged_draw_obol_faceplate_sync(struct ged *gedp, struct ged_view_context *view_ctx)
+ged_view_faceplate_sync(struct ged *gedp, struct ged_view_context *view_ctx)
 {
     return ged_obol_view_context_faceplate_sync(gedp, view_ctx,
 	ged_obol_view_controller_for_context(view_ctx));
@@ -6606,7 +6513,7 @@ ged_obol_collect_scene_lights(struct ged *gedp,
 }
 
 extern "C" int
-ged_draw_obol_lighting_sync(struct ged *gedp,
+ged_view_lighting_sync(struct ged *gedp,
 	struct ged_view_context *view_ctx)
 {
     if (!view_ctx)
@@ -6646,7 +6553,7 @@ ged_draw_obol_lighting_sync(struct ged *gedp,
 }
 
 extern "C" int
-ged_draw_obol_shading_sync(struct ged *gedp,
+ged_view_shading_sync(struct ged *gedp,
 	struct ged_view_context *view_ctx)
 {
     (void)gedp;
@@ -12533,7 +12440,7 @@ ged_draw_obol_group_rename_for_path(
 }
 
 extern "C" int
-ged_draw_obol_group_erase_subpath_for_path(
+ged_draw_group_erase_subpath_for_path(
     struct ged *gedp,
     const char *parent_path,
     const char *subpath)
@@ -17228,8 +17135,10 @@ ged_obol_stream_cached_leaf_manifest(
     struct db_i *database,
     int draw_mode,
     uint32_t source_revision,
-    BObolCompactOccurrenceStream *stream)
+    BObolCompactOccurrenceStream *stream,
+    void *user_data)
 {
+    (void)user_data;
     if (!source || !database || !stream || stream->isCancelled())
 	return 0;
     const std::string rootPath = ged_obol_skip_leading_slash(
@@ -17431,8 +17340,10 @@ ged_obol_store_structural_proxy_manifest(
 static int
 ged_obol_store_leaf_proxy_manifest(
     struct db_i *database,
-    const SoBRLDatabaseSource *source)
+    const SoBRLDatabaseSource *source,
+    void *user_data)
 {
+    (void)user_data;
     if (!database || !source)
 	return 0;
     const char *sourcePath = source->path.getValue().getString();
@@ -18550,7 +18461,7 @@ ged_obol_cleanup_retired_jobs(ged_obol_progressive_provider_data *data)
 	[now](const std::shared_ptr<ged_obol_deferred_realization_job> &job) {
 	    if (!job)
 		return true;
-	    const int state = job->state.load(std::memory_order_acquire);
+	    const int state = job->stateValue();
 	    if (state == ged_obol_deferred_realization_job::COMPLETE &&
 		job->stagingLeaseReleaseAfter > now)
 		return false;
@@ -18645,6 +18556,7 @@ ged_obol_start_deferred_realization(
 	    new ged_obol_deferred_realization_item);
 	struct db_i *liveDatabase = live->getDatabase();
 	item->source = live->createDetachedRealizationTemplate();
+	item->ownsSource = item->source ? TRUE : FALSE;
 	item->snapshotSourceDatabase = liveDatabase ?
 	    db_clone_dbi(liveDatabase, NULL) : NULL;
 	if (!item->source || !item->snapshotSourceDatabase) {
@@ -18731,8 +18643,7 @@ ged_obol_publish_deferred_realization(
 {
     if (!data || !data->gedp || !controller || !job)
 	return 0;
-    job->join();
-    if (job->state.load(std::memory_order_acquire) !=
+    if (job->stateValue() !=
 	ged_obol_deferred_realization_job::COMPLETE)
 	return 0;
 
@@ -18792,12 +18703,20 @@ ged_obol_publish_deferred_realization(
 		job->items[i]->instanceKey.c_str(), adopted_count);
 	if (adopted_count > 0) {
 	    adopted++;
-	    if (ged_obol_timing_enabled())
+	    BObolSourceRealizationItemResult realization_result;
+	    const SbBool have_realization_result = job->realization &&
+		job->realization->itemResult(i, realization_result);
+	    if (ged_obol_timing_enabled()) {
+		const SbBool warm_manifest = have_realization_result ?
+		    realization_result.warmManifest : FALSE;
+		const SbBool manifest_stored = have_realization_result ?
+		    realization_result.manifestStored : FALSE;
 		bu_log("[obol-timing] deferred manifest: %s n=%d\n",
-		    job->items[i]->warmManifest ? "warm-reused" :
-		    (job->items[i]->manifestStored ?
+		    warm_manifest ? "warm-reused" :
+		    (manifest_stored ?
 			"worker-stored" : "worker-store-failed"),
 		    adopted_count);
+	    }
 	    /* A per-view worker can realize a synchronized scene while the
 	     * structural frontier is owned by the primary scene.  Retire matching
 	     * proxies from both; either side may be the adopted live source. */
@@ -19045,7 +18964,7 @@ ged_obol_progressive_advance_provider(
 	    it = data->pending_jobs.begin(); it != data->pending_jobs.end();) {
 	    const std::shared_ptr<ged_obol_deferred_realization_job> job = *it;
 	    const int job_state = job ?
-		job->state.load(std::memory_order_acquire) :
+		job->stateValue() :
 		ged_obol_deferred_realization_job::FAILED;
 	    if (job_state == ged_obol_deferred_realization_job::PENDING ||
 		job_state == ged_obol_deferred_realization_job::RUNNING) {
@@ -19073,7 +18992,7 @@ ged_obol_progressive_advance_provider(
 	}
 	if (data->deferred_refine_stage == 1) {
 	    const int jobState = data->deferred_job ?
-		data->deferred_job->state.load(std::memory_order_acquire) :
+		data->deferred_job->stateValue() :
 		ged_obol_deferred_realization_job::FAILED;
 	    if (jobState == ged_obol_deferred_realization_job::PENDING ||
 		jobState == ged_obol_deferred_realization_job::RUNNING) {
@@ -19111,7 +19030,7 @@ ged_obol_progressive_advance_provider(
     local_status.inFlight = has_pending_job ? 1 : 0;
     if (has_pending_job && getenv("BOBOL_DRAW_TIMING_VERBOSE")) {
 	const int deferred_state = data->deferred_job ?
-	    data->deferred_job->state.load(std::memory_order_acquire) : -1;
+	    data->deferred_job->stateValue() : -1;
 	bu_log("[obol-timing] provider pending: stage=%d deferred=%d "
 	       "pending_jobs=%zu stream_more=%d\n",
 	       data->deferred_refine_stage, deferred_state,
@@ -21652,7 +21571,7 @@ ged_draw_obol_render_endpoint_ensure_for_view(struct ged *gedp,
     (void)sync_current_scene;
     if (!gedp || !view_ctx)
 	return 0;
-    if (ged_view_context_display_endpoint_get(view_ctx))
+    if (ged_view_context_obol_endpoint_get(view_ctx))
 	return 1;
 
     bobol_init(NULL);
@@ -21668,7 +21587,7 @@ ged_draw_obol_render_endpoint_ensure_for_view(struct ged *gedp,
 	delete controller;
 	return 0;
     }
-    if (!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+    if (!ged_view_context_obol_endpoint_set(view_ctx, endpoint, 1)) {
 	bobol_display_endpoint_destroy(endpoint);
 	return 0;
     }

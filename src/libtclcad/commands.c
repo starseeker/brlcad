@@ -31,6 +31,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
@@ -57,8 +59,9 @@
 #include "wdb.h"
 #include "raytrace.h"
 #include "ged.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
+#include "ged/view_types.h"
 #include "ged/event_txn.h"
 #include "tclcad.h"
 #include "BObol/BDisplayEndpoint.h"
@@ -96,7 +99,7 @@
 static bobol_display_endpoint_t *
 tclcad_commands_endpoint(const struct ged_view_context *view_ctx)
 {
-    return ged_view_context_display_endpoint_get(view_ctx);
+    return ged_view_context_obol_endpoint_get(view_ctx);
 }
 
 /* Only replace Tcl bindings when the selected native host can actually
@@ -116,11 +119,11 @@ tclcad_commands_endpoint_dimension_get(const struct ged_view_context *view_ctx,
 	const char *name)
 {
     bobol_display_endpoint_t *endpoint = tclcad_commands_endpoint(view_ctx);
-    struct bobol_endpoint_property_value property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (!endpoint || bobol_display_endpoint_property_get(endpoint, name,
-	    &property) != BOBOL_ENDPOINT_PROPERTY_OK ||
-	property.type != BOBOL_ENDPOINT_PROPERTY_UINT || !property.uint_value)
+	    &property) != BV_DISPLAY_PROPERTY_OK ||
+	property.type != BV_DISPLAY_PROPERTY_UINT || !property.uint_value)
 	return 0;
     return (int)property.uint_value;
 }
@@ -160,12 +163,12 @@ tclcad_commands_endpoint_bool_get(const struct ged_view_context *view_ctx, const
 {
     bobol_display_endpoint_t *endpoint =
 	tclcad_commands_endpoint(view_ctx);
-    struct bobol_endpoint_property_value property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (!endpoint || !value ||
 	bobol_display_endpoint_property_get(endpoint, name, &property) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK ||
-	property.type != BOBOL_ENDPOINT_PROPERTY_BOOL)
+	    BV_DISPLAY_PROPERTY_OK ||
+	property.type != BV_DISPLAY_PROPERTY_BOOL)
 	return 0;
     *value = property.bool_value ? 1 : 0;
     return 1;
@@ -176,13 +179,13 @@ tclcad_commands_endpoint_bool_set(struct ged_view_context *view_ctx, const char 
 {
     bobol_display_endpoint_t *endpoint =
 	tclcad_commands_endpoint(view_ctx);
-    struct bobol_endpoint_property_value property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    property.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bv_display_property_value property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    property.type = BV_DISPLAY_PROPERTY_BOOL;
     property.bool_value = value ? 1 : 0;
     return endpoint &&
 	bobol_display_endpoint_property_set(endpoint, name, &property) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK;
+	    BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
@@ -317,7 +320,7 @@ static int to_data_move(struct ged *gedp,
 	const char *usage,
 	int maxargs);
 static int to_data_move_func(struct ged *gedp,
-	void *gdvp,
+	struct ged_view_context *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage);
@@ -328,7 +331,7 @@ static int to_data_move_object_mode(struct ged *gedp,
 	const char *usage,
 	int maxargs);
 static int to_data_move_object_mode_func(struct ged *gedp,
-	void *gdvp,
+	struct ged_view_context *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage);
@@ -339,7 +342,7 @@ static int to_data_move_point_mode(struct ged *gedp,
 	const char *usage,
 	int maxargs);
 static int to_data_move_point_mode_func(struct ged *gedp,
-	void *gdvp,
+	struct ged_view_context *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage);
@@ -351,7 +354,7 @@ static int to_data_pick(struct ged *gedp,
 	int maxargs);
 static int
 to_data_pick_func(struct ged *gedp,
-	void *gdvp,
+	struct ged_view_context *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage);
@@ -1265,11 +1268,11 @@ tclcad_view_host_destroy(struct tclcad_obj *top, struct ged_view_context *view_c
     if (view_command && bu_vls_strlen(view_command))
 	Tcl_DeleteCommand(top->to_interp, bu_vls_cstr(view_command));
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (endpoint)
 	(void)bobol_display_endpoint_input_action_handler_clear_if(endpoint,
 	    tclcad_obol_input_action, view_ctx);
-    (void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
+    (void)ged_view_context_obol_endpoint_set(view_ctx, NULL, 0);
 
     if (tvd) {
 	bu_vls_free(&tvd->gdv_pathname);
@@ -1297,10 +1300,10 @@ to_deleteProc(ClientData clientData)
     if (top->to_gedp) {
 
 	// Clean up the libtclcad view data.
-	void *gdvp = NULL;
+	struct ged_view_context *gdvp = NULL;
 	struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    gdvp = BU_PTBL_GET(views, i);
+	    gdvp = (struct ged_view_context *)BU_PTBL_GET(views, i);
 	    tclcad_view_host_destroy(top, gdvp);
 	}
 
@@ -1528,7 +1531,7 @@ to_bg(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1540,11 +1543,11 @@ to_bg(struct ged *gedp,
 
     /* The endpoint controller is the rendering authority. */
     if (argc == 2) {
-	struct bobol_endpoint_property_value property =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value property =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	if (bobol_display_endpoint_property_get(endpoint,
 		"controller.background.bottom", &property) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK)
+	    BV_DISPLAY_PROPERTY_OK)
 	    return BRLCAD_ERROR;
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 		(int)lrint(property.color3[0] * 255.0),
@@ -1565,16 +1568,16 @@ to_bg(struct ged *gedp,
 	    b < 0 || 255 < b)
 	goto bad_color;
 
-    struct bobol_endpoint_property_value property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    property.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    property.type = BV_DISPLAY_PROPERTY_COLOR3;
     VSET(property.color3, r / 255.0, g / 255.0, b / 255.0);
     if (bobol_display_endpoint_property_set(endpoint,
 	    "controller.background.bottom", &property) !=
-		BOBOL_ENDPOINT_PROPERTY_OK ||
+		BV_DISPLAY_PROPERTY_OK ||
 	bobol_display_endpoint_property_set(endpoint,
 	    "controller.background.top", &property) !=
-		BOBOL_ENDPOINT_PROPERTY_OK)
+		BV_DISPLAY_PROPERTY_OK)
 	return BRLCAD_ERROR;
 
     to_refresh_view(gdvp);
@@ -1605,7 +1608,7 @@ to_configure(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1676,7 +1679,7 @@ to_constrain_rmode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1740,7 +1743,7 @@ to_constrain_tmode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1910,7 +1913,7 @@ go_data_move(Tcl_Interp *UNUSED(interp),
 	const char *argv[],
 	const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1957,7 +1960,7 @@ to_data_move(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1971,7 +1974,7 @@ to_data_move(struct ged *gedp,
 
 static int
 to_data_move_func(struct ged *gedp,
-	void *gdvp,
+	struct ged_view_context *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -2325,7 +2328,7 @@ go_data_move_object_mode(Tcl_Interp *UNUSED(interp),
 	const char *argv[],
 	const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -2369,7 +2372,7 @@ to_data_move_object_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2383,7 +2386,7 @@ to_data_move_object_mode(struct ged *gedp,
 
 static int
 to_data_move_object_mode_func(struct ged *gedp,
-	void *gdvp,
+	struct ged_view_context *gdvp,
 	int UNUSED(argc),
 	const char *argv[],
 	const char *usage)
@@ -2414,7 +2417,7 @@ go_data_move_point_mode(Tcl_Interp *UNUSED(interp),
 	const char *argv[],
 	const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -2458,7 +2461,7 @@ to_data_move_point_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2472,7 +2475,7 @@ to_data_move_point_mode(struct ged *gedp,
 
 static int
 to_data_move_point_mode_func(struct ged *gedp,
-	void *gdvp,
+	struct ged_view_context *gdvp,
 	int UNUSED(argc),
 	const char *argv[],
 	const char *usage)
@@ -2502,7 +2505,7 @@ go_data_pick(struct ged *gedp,
 	const char *argv[],
 	const char *usage)
 {
-    void *gdvp = draw_view_ctx;
+    struct ged_view_context *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -2546,7 +2549,7 @@ to_data_pick(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2560,7 +2563,7 @@ to_data_pick(struct ged *gedp,
 
 static int
 to_data_pick_func(struct ged *gedp,
-	void *gdvp,
+	struct ged_view_context *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -2940,7 +2943,7 @@ to_data_vZ(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2965,7 +2968,7 @@ to_data_vZ(struct ged *gedp,
 
 
 static void
-to_init_default_bindings(void *gdvp)
+to_init_default_bindings(struct ged_view_context *gdvp)
 {
     struct bu_vls bindings = BU_VLS_INIT_ZERO;
     const int endpoint_keyboard_input =
@@ -3249,7 +3252,7 @@ to_dplot(struct ged *gedp,
     struct bu_vls callback_cmd = BU_VLS_INIT_ZERO;
     struct bu_vls temp = BU_VLS_INIT_ZERO;
     struct bu_vls result_copy = BU_VLS_INIT_ZERO;
-    void *gdvp;
+    struct ged_view_context *gdvp;
     struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
     const char *who_av[3] = {"who", "b", NULL};
     int first = 1;
@@ -3284,7 +3287,7 @@ to_dplot(struct ged *gedp,
 
 	struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    gdvp = BU_PTBL_GET(views, i);
+	    gdvp = (struct ged_view_context *)BU_PTBL_GET(views, i);
 	    if (to_is_viewable(gdvp)) {
 		tclcad_commands_sync_dimensions(ged_view_active_ctx(gedp), gdvp);
 	    }
@@ -3356,7 +3359,7 @@ to_dplot(struct ged *gedp,
 
     struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = BU_PTBL_GET(views, i);
+	gdvp = (struct ged_view_context *)BU_PTBL_GET(views, i);
 	if (to_is_viewable(gdvp)) {
 	    tclcad_commands_sync_dimensions(ged_view_active_ctx(gedp), gdvp);
 	}
@@ -3402,7 +3405,7 @@ to_fontsize(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3435,13 +3438,13 @@ to_fontsize(struct ged *gedp,
 	    "view.faceplate.center_dot.font_size",
 	    "view.faceplate.scale.font_size"
 	};
-	struct bobol_endpoint_property_value property =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	property.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+	struct bv_display_property_value property =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	property.type = BV_DISPLAY_PROPERTY_UINT;
 	property.uint_value = (uint64_t)fontsize;
 	for (size_t i = 0; i < sizeof(font_properties) / sizeof(font_properties[0]); i++) {
 	    if (bobol_display_endpoint_property_set(endpoint,
-		font_properties[i], &property) != BOBOL_ENDPOINT_PROPERTY_OK)
+		font_properties[i], &property) != BV_DISPLAY_PROPERTY_OK)
 		return BRLCAD_ERROR;
 	}
     } else {
@@ -3537,7 +3540,7 @@ to_init_view_bindings(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3571,7 +3574,7 @@ to_delete_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3663,7 +3666,7 @@ to_hide_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3686,7 +3689,7 @@ to_hide_view(struct ged *gedp,
 
 struct redraw_edited_path_data {
     struct ged *gedp;
-    void *gdvp;
+    struct ged_view_context *gdvp;
     int *need_refresh;
 };
 
@@ -3802,7 +3805,7 @@ to_idle_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3913,7 +3916,7 @@ to_light(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3954,7 +3957,7 @@ to_list_views(struct ged *gedp,
 	const char *UNUSED(usage),
 	int UNUSED(maxargs))
 {
-    void *gdvp;
+    struct ged_view_context *gdvp;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -3966,7 +3969,7 @@ to_list_views(struct ged *gedp,
 
     struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = BU_PTBL_GET(views, i);
+	gdvp = (struct ged_view_context *)BU_PTBL_GET(views, i);
 	bu_vls_printf(gedp->ged_result_str, "%s ", tclcad_commands_view_name(gdvp));
     }
 
@@ -3999,11 +4002,11 @@ to_lod(struct ged *gedp,
 	const char *UNUSED(usage),
 	int UNUSED(maxargs))
 {
-    void *gdvp;
+    struct ged_view_context *gdvp;
 
     struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = BU_PTBL_GET(views, i);
+	gdvp = (struct ged_view_context *)BU_PTBL_GET(views, i);
 	ged_view_active_ctx_set(gedp, gdvp);
 	(*func)(gedp, argc, (const char **)argv);
     }
@@ -4079,7 +4082,7 @@ to_edit_motion_delta_callback(struct ged *gedp,
 	return GED_HELP;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4170,7 +4173,7 @@ to_move_arb_edge_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4228,7 +4231,7 @@ to_move_arb_face_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4342,7 +4345,7 @@ to_bot_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4401,7 +4404,7 @@ to_bot_move_pnts_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4462,7 +4465,7 @@ to_metaball_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4520,7 +4523,7 @@ to_pipe_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4646,7 +4649,7 @@ tclcad_view_host_open(struct ged_view_context *view_ctx, struct tclcad_view_data
     }
     if (!bobol_display_endpoint_render_engine_set(endpoint,
 	    software ? BOBOL_RENDER_ENGINE_SW : BOBOL_RENDER_ENGINE_HW) ||
-	!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+	!ged_view_context_obol_endpoint_set(view_ctx, endpoint, 1)) {
 	bobol_display_endpoint_destroy(endpoint);
 	bu_vls_printf(result, "Obol view endpoint attachment failed\n");
 	return 0;
@@ -4667,7 +4670,7 @@ tclcad_view_host_open(struct ged_view_context *view_ctx, struct tclcad_view_data
     desc.application_context = interp;
     if (!bobol_display_endpoint_host_open(endpoint,
 	    software ? "tk-photo" : "tk-gl", &desc)) {
-	(void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
+	(void)ged_view_context_obol_endpoint_set(view_ctx, NULL, 0);
 	bu_vls_printf(result, "%s host open failed\n",
 	    software ? "TkPhoto" : "Tk OpenGL");
 	return 0;
@@ -4678,7 +4681,7 @@ tclcad_view_host_open(struct ged_view_context *view_ctx, struct tclcad_view_data
 		bobol_input_keyboard_view_profile()) ||
 	    !bobol_display_endpoint_input_action_handler_set(endpoint,
 		tclcad_obol_input_action, view_ctx)) {
-	    (void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
+	    (void)ged_view_context_obol_endpoint_set(view_ctx, NULL, 0);
 	    bu_vls_printf(result, "Tk Obol input endpoint setup failed\n");
 	    return 0;
 	}
@@ -4853,7 +4856,7 @@ to_orotate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4910,7 +4913,7 @@ to_oscale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4968,7 +4971,7 @@ to_otranslate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5020,7 +5023,7 @@ to_paint_rect_area(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5029,7 +5032,7 @@ to_paint_rect_area(struct ged *gedp,
     struct bv_interactive_rect_state rect = BV_INTERACTIVE_RECT_STATE_INIT;
     (void)bv_interactive_rect_state_get(&rect, tclcad_commands_bv_const(gdvp));
     (void)rect;
-    (void)ged_draw_obol_framebuffer_present(gedp);
+    (void)ged_view_framebuffer_present(gedp);
     to_refresh_view(gdvp);
 
     return BRLCAD_OK;
@@ -5046,37 +5049,31 @@ tclcad_commands_capture_rgb(struct ged *gedp, struct ged_view_context *view_ctx,
     *width = 0;
     *height = 0;
 
-    bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
-    if (!endpoint)
-	return 0;
+    const struct bv *view =
+	bv_context_view_const(ged_view_context_bv_const(view_ctx));
+    if (view) {
+	const int view_width = bv_width_get(view);
+	const int view_height = bv_height_get(view);
+	if (view_width > 0)
+	    *width = (unsigned int)view_width;
+	if (view_height > 0)
+	    *height = (unsigned int)view_height;
+    }
+    if (!*width)
+	*width = 512;
+    if (!*height)
+	*height = 512;
 
-    (void)ged_draw_obol_framebuffer_present(gedp);
-    if (!bobol_display_endpoint_view_sync(endpoint, view_ctx))
-	return 0;
-
-    unsigned char *source = NULL;
-    size_t source_size = 0;
-    unsigned int components = 0;
-    if (!bobol_display_endpoint_capture(endpoint, &source, &source_size,
-	    width, height, &components) || !source || !*width || !*height ||
-	    (components != 3 && components != 4) ||
-	    source_size < (size_t)(*width) * (*height) * components) {
-	if (source)
-	    bu_free(source, "TclCAD endpoint capture");
+    /* Capture is a renderer-neutral GED view operation.  Host-specific
+     * endpoint synchronization and RGB/RGBA conversion belong to libged. */
+    const int captured = ged_view_display_image_capture(
+	gedp, view_ctx, pixels, 0, 0);
+    if (captured != 1 || !*pixels) {
+	*pixels = NULL;
+	*width = 0;
+	*height = 0;
 	return 0;
     }
-
-    const size_t pixel_count = (size_t)(*width) * (*height);
-    unsigned char *rgb = (unsigned char *)bu_malloc(pixel_count * 3,
-	"TclCAD RGB endpoint capture");
-    for (size_t i = 0; i < pixel_count; i++) {
-	rgb[i * 3] = source[i * components];
-	rgb[i * 3 + 1] = source[i * components + 1];
-	rgb[i * 3 + 2] = source[i * components + 2];
-    }
-    bu_free(source, "TclCAD endpoint capture");
-    *pixels = rgb;
     return 1;
 }
 
@@ -5107,7 +5104,7 @@ to_pix(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5173,7 +5170,7 @@ to_png(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5264,7 +5261,7 @@ to_rect_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5353,7 +5350,7 @@ to_rotate_arb_face_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5412,7 +5409,7 @@ to_rotate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5574,7 +5571,7 @@ to_protate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5632,7 +5629,7 @@ to_pscale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5690,7 +5687,7 @@ to_ptranslate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5748,7 +5745,7 @@ to_data_scale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5804,7 +5801,7 @@ to_scale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5862,7 +5859,7 @@ to_screen2model(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5913,7 +5910,7 @@ to_screen2view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5957,7 +5954,7 @@ to_set_coord(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6009,7 +6006,7 @@ to_snap_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6140,7 +6137,7 @@ to_translate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6193,7 +6190,7 @@ to_transparency(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6245,7 +6242,7 @@ to_view_callback(struct ged *gedp,
 	return GED_HELP;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6293,7 +6290,7 @@ to_view_win_size(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6363,7 +6360,7 @@ to_view2screen(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6408,7 +6405,7 @@ to_vmake(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6485,7 +6482,7 @@ to_vslew(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6572,7 +6569,7 @@ to_zbuffer(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6631,7 +6628,7 @@ to_zclip(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;

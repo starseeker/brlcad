@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <chrono>
@@ -54,14 +56,14 @@
 #include "view_test_util.h"
 #include <ged.h>
 #include <ged/draw.h>
-#include <ged/draw_obol.h>
+#include <ged/display.h>
 #include <ged/event_txn.h>
 
 static BObolViewController *
 draw_test_endpoint_controller(struct ged_view_context *view_ctx)
 {
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     return endpoint ? static_cast<BObolViewController *>(
 	bobol_display_endpoint_controller(endpoint)) : NULL;
 }
@@ -565,7 +567,7 @@ draw_test_obol_screengrab_impl(struct ged *gedp, struct ged_view_context *view_c
 				static_cast<unsigned int>(height));
     if (!draw_test_sync_obol_camera(controller, v))
 	return -1;
-    (void)ged_draw_obol_faceplate_sync(gedp, v);
+    (void)ged_view_faceplate_sync(gedp, v);
     (void)controller->realizePending();
     (void)ged_selection_draw_sync(gedp, NULL);
     draw_test_obol_debug_dump(gedp, id, controller, v);

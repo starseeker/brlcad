@@ -26,6 +26,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
@@ -37,7 +39,7 @@
 #include "bv.h"
 #include "BObol/BDisplayEndpoint.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 
 #include "../../ged_private.h"
 #include "../ged_view.h"
@@ -85,15 +87,15 @@ _fp_color_property_set(struct ged *gedp, struct ged_view_context *view_ctx,
     }
     bu_color_to_rgb_ints(&color, &rgb[0], &rgb[1], &rgb[2]);
 
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_COLOR3;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = rgb[i] / 255.0;
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (!endpoint || bobol_display_endpoint_property_set(endpoint,
-	property_name, &value) != BOBOL_ENDPOINT_PROPERTY_OK) {
+	property_name, &value) != BV_DISPLAY_PROPERTY_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "active view has no Obol faceplate color policy\n");
 	return BRLCAD_ERROR;
@@ -105,14 +107,14 @@ int
 _fp_bool_property_set(struct ged *gedp, struct ged_view_context *view_ctx,
 	const char *property_name, int enabled)
 {
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_BOOL;
     value.bool_value = enabled;
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (!endpoint || bobol_display_endpoint_property_set(endpoint,
-	property_name, &value) != BOBOL_ENDPOINT_PROPERTY_OK) {
+	property_name, &value) != BV_DISPLAY_PROPERTY_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "active view has no Obol faceplate visibility policy\n");
 	return BRLCAD_ERROR;
@@ -171,7 +173,7 @@ _fp_cmd_center_dot(void *ds, int argc, const char **argv)
 	int enabled = 0;
 	if (!_fp_bool_argument(gedp, argv[0], &enabled))
 	    return BRLCAD_ERROR;
-	if (ged_view_context_display_endpoint_get(view_ctx))
+	if (ged_view_context_obol_endpoint_get(view_ctx))
 	    return _fp_bool_property_set(gedp, view_ctx,
 		"view.faceplate.center_dot.visible", enabled);
 	center_dot.gos_draw = enabled;
@@ -209,13 +211,13 @@ _fp_cmd_fb(void *ds, int argc, const char **argv)
     struct ged *gedp = gd->gedp;
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!argc) {
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	bobol_display_endpoint_t *endpoint =
-	    ged_view_context_display_endpoint_get(view_ctx);
+	    ged_view_context_obol_endpoint_get(view_ctx);
 	if (!endpoint || bobol_display_endpoint_property_get(endpoint,
 		"composition.framebuffer.mode", &value) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK) {
+	    BV_DISPLAY_PROPERTY_OK) {
 	    bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol framebuffer composition policy\n");
 	    return BRLCAD_ERROR;
@@ -242,15 +244,15 @@ _fp_cmd_fb(void *ds, int argc, const char **argv)
 	else if (BU_STR_EQUAL("0", argv[0]))
 	    mode = "off";
 	if (mode) {
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_ENUM;
 	    value.string_value = mode;
 	    bobol_display_endpoint_t *endpoint =
-		ged_view_context_display_endpoint_get(view_ctx);
+		ged_view_context_obol_endpoint_get(view_ctx);
 	    if (endpoint && bobol_display_endpoint_property_set(endpoint,
 		"composition.framebuffer.mode", &value) ==
-		BOBOL_ENDPOINT_PROPERTY_OK)
+		BV_DISPLAY_PROPERTY_OK)
 		return BRLCAD_OK;
 	    bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol framebuffer composition policy\n");
@@ -299,7 +301,7 @@ _fp_cmd_scale(void *ds, int argc, const char **argv)
 	int enabled = 0;
 	if (!_fp_bool_argument(gedp, argv[0], &enabled))
 	    return BRLCAD_ERROR;
-	if (ged_view_context_display_endpoint_get(view_ctx))
+	if (ged_view_context_obol_endpoint_get(view_ctx))
 	    return _fp_bool_property_set(gedp, view_ctx,
 		"view.faceplate.scale.visible", enabled);
 	scale_state.gos_draw = enabled;
@@ -365,7 +367,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	if (BU_STR_EQUAL("1", argv[0]) || BU_STR_EQUAL("0", argv[0])) {
 	    if (!_fp_bool_argument(gedp, argv[0], &enabled))
 		return BRLCAD_ERROR;
-	    if (ged_view_context_display_endpoint_get(view_ctx))
+	    if (ged_view_context_obol_endpoint_get(view_ctx))
 		return _fp_bool_property_set(gedp, view_ctx,
 		    "view.faceplate.params.visible", enabled);
 	    params.draw = enabled;
@@ -435,7 +437,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    int enabled = 0;
 	    if (!_fp_bool_argument(gedp, argv[1], &enabled))
 		return BRLCAD_ERROR;
-	    if (ged_view_context_display_endpoint_get(view_ctx))
+	    if (ged_view_context_obol_endpoint_get(view_ctx))
 		return _fp_bool_property_set(gedp, view_ctx, property_name, enabled);
 	    *draw_flag = enabled;
 	    bv_params_state_set(view, &params);
@@ -452,15 +454,15 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 	    bu_vls_free(&msg);
-	    struct bobol_endpoint_property_value value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+	    struct bv_display_property_value value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    value.type = BV_DISPLAY_PROPERTY_UINT;
 	    value.uint_value = (uint64_t)fsize;
 	    bobol_display_endpoint_t *endpoint =
-		ged_view_context_display_endpoint_get(view_ctx);
+		ged_view_context_obol_endpoint_get(view_ctx);
 	    if (!endpoint || bobol_display_endpoint_property_set(endpoint,
 		"view.faceplate.params.font_size", &value) !=
-		BOBOL_ENDPOINT_PROPERTY_OK) {
+		BV_DISPLAY_PROPERTY_OK) {
 		bu_vls_printf(gedp->ged_result_str,
 		    "active view has no Obol faceplate font policy\n");
 		return BRLCAD_ERROR;
@@ -533,7 +535,7 @@ ged_faceplate_core(struct ged *gedp, int argc, const char *argv[])
     int ret;
     if (bu_cmd(_fp_cmds, ac, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
 	if (ret == BRLCAD_OK)
-	    (void)ged_draw_obol_faceplate_sync(gedp, view_ctx);
+	    (void)ged_view_faceplate_sync(gedp, view_ctx);
 	return ret;
     } else {
 	bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);

@@ -38,6 +38,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
@@ -405,7 +407,7 @@ ged_view_data_lines(struct ged *gedp, int argc, const char *argv[])
 
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     vs.view_ctx = ged_view_active_ctx(gedp);
-    if (!ged_view_context_display_endpoint_get(vs.view_ctx) &&
+    if (!ged_view_context_obol_endpoint_get(vs.view_ctx) &&
 	!ged_view_context_display_endpoint_ensure(vs.view_ctx)) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "unable to create display endpoint for current view");

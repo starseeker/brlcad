@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "bu/app.h"
 
 #include "bu/str.h"
@@ -197,11 +199,11 @@ main(int argc, char **argv)
 	ged_view_context_from_bv(view.viewContext());
     ged_view_active_ctx_set(gedp, view_ctx);
     (void)ged_view_context_host_attach(gedp, view_ctx);
-    if (!ged_view_context_display_endpoint_set(view_ctx,
+    if (!ged_view_context_obol_endpoint_set(view_ctx,
 	    view.displayEndpoint(), 0))
 	FAIL("qtcad test should attach the QgView display endpoint to GED");
     SoNode *attachedRenderRoot = controller->getRenderSceneRoot();
-    if (!ged_view_context_display_endpoint_set(view_ctx,
+    if (!ged_view_context_obol_endpoint_set(view_ctx,
 	    view.displayEndpoint(), 0) ||
 	controller->getRenderSceneRoot() != attachedRenderRoot)
 	FAIL("reaffirming an Obol endpoint should preserve its retained render root");
@@ -215,7 +217,7 @@ main(int argc, char **argv)
     if (!second_controller ||
 	!ged_view_context_host_attach(gedp, second_view_ctx) ||
 	!ged_view_set_context_add(ged_view_set_ctx(gedp), second_view_ctx) ||
-	!ged_view_context_display_endpoint_set(second_view_ctx,
+	!ged_view_context_obol_endpoint_set(second_view_ctx,
 	    secondView.displayEndpoint(), 0))
 	FAIL("qtcad test should attach a second hosted Obol edit view");
     ged_view_active_ctx_set(gedp, view_ctx);
@@ -343,8 +345,14 @@ main(int argc, char **argv)
 	    "preview", 7, 3))
 	FAIL("edit preview shape should carry selection/export/edit-intent metadata");
 
+    /*
+     * The primitive-revision setup above deliberately leaves box.s drawn.
+     * Exercise the preview adapter itself here: applying these query actions
+     * to the complete scene makes the assertion depend on asynchronous draw
+     * publication order and may count or select the unrelated source.
+     */
     SoBRLExportAction previewExport;
-    previewExport.apply(controller->getSceneRoot());
+    previewExport.apply(preview);
     if (previewExport.getLineCount() != 3 ||
 	    bu_strcmp(previewExport.getLine(0).path.getString(), identity) != 0 ||
 	    !previewExport.getLine(0).editEmphasis ||
@@ -356,7 +364,7 @@ main(int argc, char **argv)
     previewSnap.setEnabledKinds(SoBRLSnapAction::LINE_NEAREST);
     previewSnap.setQueryPoint(SbVec3f(1.0f, 0.25f, 0.0f));
     previewSnap.setTolerance(0.01f);
-    previewSnap.apply(controller->getSceneRoot());
+    previewSnap.apply(preview);
     if (!previewSnap.hasCandidate() ||
 	    bu_strcmp(previewSnap.getPath().getString(), identity) != 0 ||
 	    bu_strcmp(previewSnap.getEditIntentId().getString(), previewId) != 0 ||
@@ -365,7 +373,7 @@ main(int argc, char **argv)
 
     SoBRLMeasureAction previewMeasure;
     previewMeasure.setQueryPoint(SbVec3f(1.0f, 0.25f, 0.0f));
-    previewMeasure.apply(controller->getSceneRoot());
+    previewMeasure.apply(preview);
     if (!previewMeasure.hasNearestSegment() ||
 	    bu_strcmp(previewMeasure.getNearestPath().getString(), identity) != 0 ||
 	    bu_strcmp(previewMeasure.getNearestEditIntentId().getString(), previewId) != 0 ||
@@ -402,7 +410,7 @@ main(int argc, char **argv)
 	FAIL("replacement should drop stale geometry and update shape metadata");
 
     SoBRLExportAction replacementExport;
-    replacementExport.apply(controller->getSceneRoot());
+    replacementExport.apply(preview);
     if (replacementExport.getLineCount() != 1 ||
 	    bu_strcmp(replacementExport.getLine(0).editIntentId.getString(), previewId) != 0 ||
 	    bu_strcmp(replacementExport.getLine(0).editIntentRole.getString(), "preview") != 0)
@@ -433,7 +441,7 @@ main(int argc, char **argv)
 	FAIL("custom intent replacement should update shape edit-intent metadata");
 
     SoBRLExportAction customIntentExport;
-    customIntentExport.apply(controller->getSceneRoot());
+    customIntentExport.apply(preview);
     if (customIntentExport.getLineCount() != 1 ||
 	    bu_strcmp(customIntentExport.getLine(0).editIntentId.getString(),
 		customIntentId) != 0 ||
@@ -445,7 +453,7 @@ main(int argc, char **argv)
     customIntentSnap.setEnabledKinds(SoBRLSnapAction::LINE_NEAREST);
     customIntentSnap.setQueryPoint(SbVec3f(2.0f, 0.25f, 0.0f));
     customIntentSnap.setTolerance(0.01f);
-    customIntentSnap.apply(controller->getSceneRoot());
+    customIntentSnap.apply(preview);
     if (!customIntentSnap.hasCandidate() ||
 	    bu_strcmp(customIntentSnap.getEditIntentId().getString(),
 		customIntentId) != 0 ||
@@ -455,7 +463,7 @@ main(int argc, char **argv)
 
     SoBRLMeasureAction customIntentMeasure;
     customIntentMeasure.setQueryPoint(SbVec3f(2.0f, 0.25f, 0.0f));
-    customIntentMeasure.apply(controller->getSceneRoot());
+    customIntentMeasure.apply(preview);
     if (!customIntentMeasure.hasNearestSegment() ||
 	    bu_strcmp(customIntentMeasure.getNearestEditIntentId().getString(),
 		customIntentId) != 0 ||
@@ -522,8 +530,8 @@ main(int argc, char **argv)
     if (!bv_refresh_dirty_get(bv_context_view_const(static_cast<const struct bv_context *>(view.viewContext()))))
 	FAIL("GED-routed edit preview clears should request a qtcad view refresh");
 
-    (void)ged_view_context_display_endpoint_set(second_view_ctx, NULL, 0);
-    (void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
+    (void)ged_view_context_obol_endpoint_set(second_view_ctx, NULL, 0);
+    (void)ged_view_context_obol_endpoint_set(view_ctx, NULL, 0);
     ged_close(gedp);
     bu_file_delete(dbpath);
 

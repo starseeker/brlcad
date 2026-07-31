@@ -10,6 +10,7 @@
 #define BOBOL_BLODREALIZATION_H
 
 #include "BObol/BDefines.h"
+#include "BObol/BLodIdentifiers.h"
 #include "BObol/BMeshLodCache.h"
 
 #include <Inventor/SbBox.h>
@@ -53,6 +54,15 @@ enum BObolLodResultKind {
     BOBOL_LOD_RESULT_DIAGNOSTIC = 7
 };
 
+enum BObolLodPayloadKind {
+    BOBOL_LOD_PAYLOAD_NONE = 0,
+    BOBOL_LOD_PAYLOAD_DIRECTORY = 1,
+    BOBOL_LOD_PAYLOAD_ATTRIBUTES = 2,
+    BOBOL_LOD_PAYLOAD_PROXY = 3,
+    BOBOL_LOD_PAYLOAD_MESH = 4,
+    BOBOL_LOD_PAYLOAD_STATUS = 5
+};
+
 enum BObolLodProviderStatus {
     BOBOL_LOD_PROVIDER_UNKNOWN = 0,
     BOBOL_LOD_PROVIDER_READY = 1,
@@ -88,7 +98,7 @@ struct BOBOL_EXPORT BObolLodProviderParam {
 struct BOBOL_EXPORT BObolLodDependency {
     SbString objectPath;
     SbString objectName;
-    uint64_t sourceRevision;
+    BObolSourceEpoch sourceRevision;
     uint64_t sourceContentHash;
     int requiredQualityTier;
     SbBool optional;
@@ -251,8 +261,8 @@ struct BOBOL_EXPORT BObolLodProxy {
 
 struct BOBOL_EXPORT BObolLodRequest {
     SbString databaseId;
-    uint64_t databaseRevision;
-    uint64_t sourceRevision;
+    BObolDatabaseEpoch databaseRevision;
+    BObolSourceEpoch sourceRevision;
     uint64_t sourceContentHash;
     SbString objectPath;
     SbString objectName;
@@ -266,9 +276,9 @@ struct BOBOL_EXPORT BObolLodRequest {
      * of traversing the scene graph to rediscover an owner already known at
      * submission time.
      */
-    uint64_t sourceRoutingId;
-    uint64_t viewRevision;
-    uint64_t policyRevision;
+    BObolSourceRoutingId sourceRoutingId;
+    BObolViewEpoch viewRevision;
+    BObolPolicyEpoch policyRevision;
     int drawMode;
     uint32_t lodPolicy;
     SbString providerId;
@@ -305,6 +315,10 @@ struct BOBOL_EXPORT BObolLodResult {
      * residentAdmissionRevision identifies the capacity epoch which made
      * that decision so an unchanged view cannot immediately retry it. */
     uint64_t residentAdmissionRevision;
+    /* Authoritative payload category.  resultKind describes the semantic
+     * quality stage; payloadKind makes the active storage alternative
+     * explicit and is canonicalized before service publication. */
+    int payloadKind;
     int resultKind;
     int qualityTier;
     int providerStatus;
@@ -325,6 +339,10 @@ struct BOBOL_EXPORT BObolLodResult {
 
     BObolLodResult(void);
     void clear(void);
+    /* Select the payload category implied by provider status/resultKind and
+     * release every inactive large channel. */
+    void canonicalizePayload(void);
+    SbBool payloadIsConsistent(void) const;
     void addDependency(const SbString &objectPath, const SbString &objectName,
 	uint64_t sourceRevision, uint64_t sourceContentHash,
 	int requiredQualityTier, SbBool optional = FALSE);
@@ -352,6 +370,17 @@ bobol_lod_mesh_payload_from_mesh_lod_data(BObolLodMeshPayload &payload,
 BOBOL_EXPORT SbBool
 bobol_lod_result_matches_request(const BObolLodResult &result,
 	const BObolLodRequest &request);
+
+/**
+ * Allocation-free equality of the complete structured request key.
+ *
+ * Projected diameter and target pixel error are demand diagnostics; the
+ * selected requestedLevel is the provider identity.  Provider parameters are
+ * compared as an order-independent multiset, matching cache serialization.
+ */
+BOBOL_EXPORT SbBool
+bobol_lod_request_keys_equal(const BObolLodRequest &lhs,
+	const BObolLodRequest &rhs);
 
 BOBOL_EXPORT BObolLodResult
 bobol_lod_result_from_mesh_lod_info(const BObolLodRequest &request,

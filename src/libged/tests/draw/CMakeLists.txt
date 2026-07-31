@@ -204,12 +204,16 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t5.g)
 
 # GED draw transaction to Obol controller bridge regression.  Supply the core
 # implementation objects directly so the test can exercise private seams
-# without exporting them from the shared ABI.  Public command/plugin entry
-# points continue to come from libged.  MSVC builds do not currently provide
-# the source-granular libged object target this white-box test requires.
-if(NOT MSVC)
+# without exporting them from the shared ABI.  Resolve the command entry points
+# from the static command archive.  Mixing these objects with shared libged
+# creates duplicate translation-unit statics (notably the view-host registry).
+# Keep this unusually large white-box executable in sanitizer/debug builds:
+# optimized GCC builds would otherwise perform a second whole-GED LTO link
+# whose peak working set can exceed practical CI and developer-machine limits.
+# Smaller black-box GED contract tests remain enabled in optimized builds.
+if(NOT MSVC AND NOT BRLCAD_OPTIMIZED)
   brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp"
-    "libged;libBObol;libwdb" TEST)
+    "libged-static;libBObol;libwdb" TEST)
   if(TARGET ged_test_obol_draw_sync AND TARGET libged-obj)
     set(_ged_obol_private_object_regex
       "/(draw|draw_obol|draw_obol_result|ged_draw_brep|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")

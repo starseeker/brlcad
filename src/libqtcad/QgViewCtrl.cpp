@@ -139,14 +139,14 @@ QgViewCtrl::fb_mode_cmd()
 	struct bv_context *view_ctx = qgviewctrl_active_view(this);
 	if (!view_ctx)
 		return;
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	if (ged_view_context_display_property_get(
 		ged_view_context_from_bv(view_ctx),
 		"composition.framebuffer.mode", &value) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK)
+	    BV_DISPLAY_PROPERTY_OK)
 		return;
-	value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
+	value.type = BV_DISPLAY_PROPERTY_ENUM;
 	if (BU_STR_EQUAL(value.string_value, "off"))
 		value.string_value = "underlay";
 	else if (BU_STR_EQUAL(value.string_value, "underlay"))
@@ -160,7 +160,7 @@ QgViewCtrl::fb_mode_cmd()
 	if (ged_view_context_display_property_set(
 		ged_view_context_from_bv(view_ctx),
 		"composition.framebuffer.mode", &value) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK)
+	    BV_DISPLAY_PROPERTY_OK)
 		return;
 	emit view_changed(QG_VIEW_REFRESH);
 }
@@ -172,12 +172,12 @@ QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 	struct bv_context *view_ctx = qgviewctrl_active_view(this);
 	if (!view_ctx || !flags)
 		return;
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	if (ged_view_context_display_property_get(
 		ged_view_context_from_bv(view_ctx),
 		"composition.framebuffer.mode", &value) !=
-	    BOBOL_ENDPOINT_PROPERTY_OK)
+	    BV_DISPLAY_PROPERTY_OK)
 		return;
 	if (BU_STR_EQUAL(value.string_value, "off")) {
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer_off.png")));

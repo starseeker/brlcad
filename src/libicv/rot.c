@@ -48,6 +48,7 @@
 #include "bu/getopt.h"
 #include "bu/malloc.h"
 #include "bn.h"
+#include "icv/ops.h"
 
 /* TODO: Yuck... why are we using globals for all this?? */
 

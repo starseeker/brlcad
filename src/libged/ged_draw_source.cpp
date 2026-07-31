@@ -4060,7 +4060,7 @@ ged_draw_obol_group_erase_nested_db_full_path(struct ged *gedp,
     char *subpath = ged_draw_db_full_path_range_string(fp, fp->fp_len - 1,
 	    fp->fp_len);
     int erased = parent_path && subpath ?
-	ged_draw_obol_group_erase_subpath_for_path(gedp, parent_path,
+	ged_draw_group_erase_subpath_for_path(gedp, parent_path,
 		subpath) : 0;
 
     if (parent_path)

@@ -23,6 +23,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -46,7 +48,7 @@
 #include "bu/env.h"
 #include "bu/ptbl.h"
 #include "ged.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
 #include "BObol/BDisplayEndpoint.h"
 #include "tclcad.h"
@@ -411,7 +413,7 @@ mged_obol_input_action_apply(struct mged_state *s,
     switch (action) {
 	case BOBOL_ACTION_TOGGLE_ADC: {
 	    if (!bobol_display_endpoint_input_faceplate_toggle_apply(
-		ged_view_context_display_endpoint_get(view_state->vs_gvp),
+		ged_view_context_obol_endpoint_get(view_state->vs_gvp),
 		view_state->vs_gvp, action, NULL))
 		return 0;
 	    mged_obol_input_refresh(s);
@@ -420,7 +422,7 @@ mged_obol_input_action_apply(struct mged_state *s,
 	case BOBOL_ACTION_TOGGLE_MODEL_AXES: {
 	    int visible = 0;
 	    if (!bobol_display_endpoint_input_faceplate_toggle_apply(
-		ged_view_context_display_endpoint_get(view_state->vs_gvp),
+		ged_view_context_obol_endpoint_get(view_state->vs_gvp),
 		view_state->vs_gvp, action, &visible))
 		return 0;
 	    axes_state->ax_model_draw = visible;
@@ -431,7 +433,7 @@ mged_obol_input_action_apply(struct mged_state *s,
 	case BOBOL_ACTION_TOGGLE_VIEW_AXES: {
 	    int visible = 0;
 	    if (!bobol_display_endpoint_input_faceplate_toggle_apply(
-		ged_view_context_display_endpoint_get(view_state->vs_gvp),
+		ged_view_context_obol_endpoint_get(view_state->vs_gvp),
 		view_state->vs_gvp, action, &visible))
 		return 0;
 	    axes_state->ax_view_draw = visible;
@@ -1032,7 +1034,7 @@ mged_obol_input_action_layer_sync(struct mged_state *s)
 	return;
     struct mged_display *mdmp = s->mged_curr_display;
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(mdmp->display_view_state->vs_gvp);
+	ged_view_context_obol_endpoint_get(mdmp->display_view_state->vs_gvp);
     if (!endpoint || !(bobol_display_endpoint_host_capabilities(endpoint) &
 	BOBOL_HOST_CAP_INPUT))
 	return;
@@ -1149,14 +1151,14 @@ mged_display_adc_visibility_set(struct mged_display *dm, int enabled)
 	return 0;
 
     struct ged_view_context *view_ctx = dm->display_view_state->vs_gvp;
-    if (ged_view_context_display_endpoint_get(view_ctx)) {
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    if (ged_view_context_obol_endpoint_get(view_ctx)) {
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	value.type = BV_DISPLAY_PROPERTY_BOOL;
 	value.bool_value = enabled ? 1 : 0;
 	const int ret = ged_view_context_display_property_set(view_ctx,
 	    "view.faceplate.adc.visible", &value) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK;
+	    BV_DISPLAY_PROPERTY_OK;
 	if (ret)
 	    mged_obol_input_action_layer_sync_display(dm);
 	return ret;
@@ -1254,7 +1256,7 @@ mged_display_init(
 	bobol_display_endpoint_destroy(endpoint);
 	goto attach_fail;
     }
-    if (!ged_view_context_display_endpoint_set(ctx, endpoint, 1)) {
+    if (!ged_view_context_obol_endpoint_set(ctx, endpoint, 1)) {
 	failure = "GED view endpoint attachment failed";
 	bobol_display_endpoint_destroy(endpoint);
 	goto attach_fail;
@@ -1277,7 +1279,7 @@ mged_display_init(
 	    software ? "tk-photo" : "tk-gl", &desc)) {
 	failure = software ? "TkPhoto host open failed" :
 	    "Tk OpenGL host open failed";
-	(void)ged_view_context_display_endpoint_set(ctx, NULL, 0);
+	(void)ged_view_context_obol_endpoint_set(ctx, NULL, 0);
 	goto attach_fail;
     }
 
@@ -1292,7 +1294,7 @@ mged_display_init(
     if (!host_window) {
 	failure = "Tk host window lookup failed";
 	bu_vls_free(&widget_path);
-	(void)ged_view_context_display_endpoint_set(ctx, NULL, 0);
+	(void)ged_view_context_obol_endpoint_set(ctx, NULL, 0);
 	goto attach_fail;
     }
     Tk_MakeWindowExist(host_window);
@@ -1343,7 +1345,7 @@ mged_obol_framebuffer_ensure(struct mged_state *s)
     if (!s || !s->gedp || !s->mged_curr_display || !view_state ||
 	!view_state->vs_gvp)
 	return 0;
-    return ged_draw_obol_framebuffer_backend_ensure_for_view(s->gedp,
+    return ged_view_framebuffer_backend_ensure(s->gedp,
 	view_state->vs_gvp) == BRLCAD_OK;
 }
 
@@ -1384,7 +1386,7 @@ mged_obol_display_detach(struct mged_state *s, struct mged_display *mdmp)
 
     const char *logical_path = mged_display_pathname(mdmp);
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(mdmp->display_view_state->vs_gvp);
+	ged_view_context_obol_endpoint_get(mdmp->display_view_state->vs_gvp);
     if (endpoint) {
 	(void)bobol_display_endpoint_input_action_handler_clear_if(endpoint,
 	    mged_obol_input_action, mdmp);
@@ -1396,7 +1398,7 @@ mged_obol_display_detach(struct mged_state *s, struct mged_display *mdmp)
 	    TCL_GLOBAL_ONLY);
     mdmp->display_input_state = NULL;
     mdmp->display_input_motion_pending = 0;
-    (void)ged_view_context_display_endpoint_set(mdmp->display_view_state->vs_gvp,
+    (void)ged_view_context_obol_endpoint_set(mdmp->display_view_state->vs_gvp,
 	    NULL, 0);
 }
 
@@ -1460,7 +1462,7 @@ release(struct mged_state *s, char *name, int need_close)
 	s->mged_curr_display->display_tie->cl_tie = (struct mged_display *)NULL;
 
     if (need_close && s->gedp)
-	ged_draw_obol_framebuffer_release(s->gedp);
+	ged_view_framebuffer_release(s->gedp);
 
     if (need_close) {
 	mged_obol_display_detach(s, s->mged_curr_display);

@@ -441,7 +441,7 @@ set(GED_DRAW_API_HEADERS
   ${CMAKE_SOURCE_DIR}/include/ged/polygon.h
   ${CMAKE_SOURCE_DIR}/include/ged/selection.h
   ${CMAKE_SOURCE_DIR}/include/ged/result.h
-  ${CMAKE_SOURCE_DIR}/include/ged/draw_obol.h
+  ${CMAKE_SOURCE_DIR}/include/ged/display.h
 )
 add_custom_command(
   OUTPUT "${GED_DRAW_API_CHECK}"

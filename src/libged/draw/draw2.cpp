@@ -43,7 +43,7 @@
 #include "rt/view.h"
 
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/database.h"
 #include "ged/view.h"
 

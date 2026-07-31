@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "bv.h"
 
 #include "BObol/BDatabaseSource.h"
@@ -27,7 +29,7 @@
 #include "ged.h"
 #include "ged/db_index.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/event_txn.h"
 #include "QgObolDrawSyncPrivate.h"
 #include "qtcad/QgView.h"
@@ -1352,7 +1354,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	if (draw_result_initialized)
 	    ged_draw_transaction_result_free(&draw_result);
 	if (endpoint_attached)
-	    (void)ged_view_context_display_endpoint_set(
+	    (void)ged_view_context_obol_endpoint_set(
 		ged_view_context_from_bv(view.viewContext()),
 		NULL, 0);
 	if (gedp)
@@ -1526,7 +1528,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	return 0;
     }
     controller->clearDatabaseSources();
-    if (!ged_view_context_display_endpoint_set(
+    if (!ged_view_context_obol_endpoint_set(
 	    ged_view_context_from_bv(view.viewContext()),
 	    view.displayEndpoint(), 0)) {
 	fprintf(stderr, "failed to attach qtcad display endpoint for GED draw\n");

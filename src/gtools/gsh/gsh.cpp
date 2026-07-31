@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <atomic>
 #include <chrono>
 #include <fstream>
@@ -47,7 +49,7 @@
 
 #include "ged.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/db_index.h"
 #include "ged/view.h"
 
@@ -265,12 +267,12 @@ gsh_headless_endpoint_ensure(struct ged *gedp, struct ged_view_context *view_ctx
 	return 0;
 
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     if (!endpoint) {
 	endpoint = bobol_display_endpoint_create(NULL, 0);
 	if (!endpoint)
 	    return 0;
-	if (!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+	if (!ged_view_context_obol_endpoint_set(view_ctx, endpoint, 1)) {
 	    bobol_display_endpoint_destroy(endpoint);
 	    return 0;
 	}
@@ -327,7 +329,7 @@ static BObolWindowHost *
 gsh_headless_endpoint_host(struct ged_view_context *view_ctx)
 {
     bobol_display_endpoint_t *endpoint = view_ctx ?
-	ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	ged_view_context_obol_endpoint_get(view_ctx) : NULL;
     const char *factory = endpoint ?
 	bobol_display_endpoint_host_factory_name(endpoint) : NULL;
     if (!endpoint || !factory || !BU_STR_EQUAL(factory, "headless"))
@@ -357,7 +359,7 @@ gsh_post_opendb_clbk(int UNUSED(argc), const char **UNUSED(argv), void *UNUSED(g
     if (!view_ctx || !gsh_headless_endpoint_ensure(s->gedp, view_ctx, 0))
 	return BRLCAD_ERROR;
     BObolWindowHost *host = gsh_headless_endpoint_host(view_ctx);
-    if (!host || ged_draw_obol_framebuffer_backend_install_for_view(s->gedp,
+    if (!host || ged_view_framebuffer_backend_install(s->gedp,
 	view_ctx, host, 0, 0, 0) != BRLCAD_OK)
 	return BRLCAD_ERROR;
 
@@ -500,7 +502,7 @@ GshState::~GshState()
 	ged_subprocesses_terminate(gedp);
 
     if (gedp)
-	ged_draw_obol_framebuffer_release(gedp);
+	ged_view_framebuffer_release(gedp);
 
     if (gedp && gedp->ged_fbs && fbs_can_close(gedp->ged_fbs))
 	(void)fbs_close(gedp->ged_fbs);
@@ -675,7 +677,7 @@ GshState::view_update()
 	return;
 
     if (qged_display_mode &&
-	!ged_view_context_display_endpoint_get(view_ctx)) {
+	!ged_view_context_obol_endpoint_get(view_ctx)) {
 	(void)gsh_headless_endpoint_ensure(gedp, view_ctx, 1);
 	struct ged_draw_transaction txn =
 	    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
@@ -687,12 +689,12 @@ GshState::view_update()
      * used by headless capture.  In particular, ert enables framebuffer
      * underlay in bv; publishing stream pixels alone cannot make that image
      * part of the Obol render root. */
-    (void)ged_draw_obol_faceplate_sync(gedp, view_ctx);
+    (void)ged_view_faceplate_sync(gedp, view_ctx);
 
     /* ERT/fbserv traffic updates the shared view refresh state in every GSH
      * mode.  Publish it here so headless delay pumping can expose in-flight
      * frames, rather than waiting for a final screengrab. */
-    (void)ged_draw_obol_framebuffer_present(gedp);
+    (void)ged_view_framebuffer_present(gedp);
     bv_context_refresh_complete((struct bv_context *)view_ctx);
 }
 

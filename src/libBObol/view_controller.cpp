@@ -30,6 +30,7 @@
 #include "BObol/BViewLod.h"
 #include "BObol/BViewStore.h"
 #include "cad_assembly_private.h"
+#include "lod_coordinator_private.h"
 #include "raytrace.h"
 #include "rt/view.h"
 
@@ -39,13 +40,12 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <iomanip>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
-#include <sstream>
 #include <string.h>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -254,6 +254,9 @@ void
 BObolLodConvergenceStatus::clear(void)
 {
     this->phase = BOBOL_LOD_CONVERGENCE_IDLE;
+    this->coordinatorPhase = BOBOL_LOD_COORDINATOR_FALLBACK;
+    this->coordinatorTransitionSerial = 0;
+    this->coordinatorProgressSequence = 0;
     this->viewRevision = 0;
     this->expectedLeafCount = 0;
     this->availableLeafCount = 0;
@@ -1155,59 +1158,143 @@ controller_consume_source_full_detail(BObolViewController *controller,
     return consumed;
 }
 
-struct BObolViewController::Impl {
-    explicit Impl(BObolViewController *owner) :
-	featureStore(new BObolFeatureStore(owner)),
-	polygonStore(new BObolPolygonStore(owner)),
-	selectionStore(new BObolSelectionStore)
+/**
+ * Owner-thread progressive-display state.  This first extraction preserves
+ * the exact field layout and algorithms formerly embedded in Impl; it adds
+ * no allocation, virtual dispatch, or per-occurrence indirection.
+ */
+struct BObolLodViewSnapshot {
+    bool same(const BObolLodViewSnapshot &other) const
     {
+	return this->haveCamera == other.haveCamera &&
+	    this->width == other.width &&
+	    this->height == other.height &&
+	    memcmp(&this->size, &other.size, sizeof(this->size)) == 0 &&
+	    memcmp(&this->lodScale, &other.lodScale,
+		sizeof(this->lodScale)) == 0 &&
+	    memcmp(&this->curveScale, &other.curveScale,
+		sizeof(this->curveScale)) == 0 &&
+	    memcmp(&this->pointScale, &other.pointScale,
+		sizeof(this->pointScale)) == 0 &&
+	    this->botThreshold == other.botThreshold &&
+	    memcmp(this->viewVolumeMatrix, other.viewVolumeMatrix,
+		sizeof(this->viewVolumeMatrix)) == 0;
     }
 
-    BObolSceneController sceneController;
-    SoViewport *viewport = new SoViewport;
-    SoBRLViewLodGroup *renderLodRoot = NULL;
-    SoNode *renderBatchRoot = NULL;
-    SoNode *renderPresentationRoot = NULL;
-    SoGroup *framebufferUnderlayRoot = NULL;
-    SoGroup *framebufferInterlayRoot = NULL;
-    SoGroup *framebufferOverlayRoot = NULL;
-    BObolViewAttachment *viewAttachment = new BObolViewAttachment;
-    SoRenderManager *renderManager = new SoRenderManager;
-    SoOffscreenRenderer *imageRenderer = NULL;
-    SoDB::ContextManager *imageRendererManager = NULL;
-    SoCamera *activeCamera = NULL;
-    SbViewportRegion viewportRegion = SbViewportRegion(1, 1);
-    SbColor backgroundBottom = SbColor(0.0f, 0.0f, 0.0f);
-    SbColor backgroundTop = SbColor(0.0f, 0.0f, 0.0f);
-    SoftwareWireMode softwareWireMode = SOFTWARE_WIRE_AUTO;
-    std::atomic<int> endpointGraphicalRenderingEnabled {1};
-    SbBool transparencyEnabled = TRUE;
-    SbBool antialiasingEnabled = FALSE;
-    /* Camera-driven headlight state.  When headlightCameraTracked is TRUE the
-     * headlight direction is rewritten from the camera orientation each sync so
-     * the light follows the viewer (old main-branch behavior); when FALSE the
-     * direction is left constant (scene-fixed).  headlightEnabled is the finer
-     * per-view toggle layered under the master setLightingEnabled(). */
-    SbBool headlightEnabled = TRUE;
-    SbBool headlightCameraTracked = TRUE;
-    SbBool sceneLightsEnabled = FALSE;
-    SbVec3f headlightOffsetEye = bobol_headlight_default_offset();
-    SbRotation lastCameraOrientation = SbRotation::identity();
-    /* In-scene lights, supplied by the GED layer (cache-immune) rather than the
-     * geometry realize walk (which is skipped on a warm LoD cache). */
-    std::vector<BObolSceneLightRealization> sceneLights;
-    double clipMinimum = BV_VIEW_MIN;
-    double clipMaximum = BV_VIEW_MAX;
-    mutable std::mutex renderRequestMutex;
-    SbBool renderRequested = FALSE;
-    SbString renderReason = SbString("");
-    uint64_t renderRequestSerial = 0;
-    std::mutex frameRequestMutex;
-    BObolFrameRequestCallback frameRequestCallback = NULL;
-    void *frameRequestUserData = NULL;
-    mutable std::mutex presentationSyncMutex;
-    BObolPresentationSyncCallback presentationSyncCallback = NULL;
-    void *presentationSyncUserData = NULL;
+    uint8_t haveCamera = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    double size = 0.0;
+    double lodScale = 0.0;
+    double curveScale = 0.0;
+    double pointScale = 0.0;
+    uint32_t botThreshold = 0;
+    float viewVolumeMatrix[16] = {};
+};
+
+struct BObolLodViewScaleSnapshot {
+    bool same(const BObolLodViewScaleSnapshot &other) const
+    {
+	return this->haveCamera == other.haveCamera &&
+	    this->width == other.width &&
+	    this->height == other.height &&
+	    memcmp(&this->size, &other.size, sizeof(this->size)) == 0 &&
+	    memcmp(&this->lodScale, &other.lodScale,
+		sizeof(this->lodScale)) == 0 &&
+	    memcmp(&this->curveScale, &other.curveScale,
+		sizeof(this->curveScale)) == 0 &&
+	    memcmp(&this->pointScale, &other.pointScale,
+		sizeof(this->pointScale)) == 0 &&
+	    this->botThreshold == other.botThreshold &&
+	    this->viewportWidth == other.viewportWidth &&
+	    this->viewportHeight == other.viewportHeight &&
+	    this->cameraTypeKey == other.cameraTypeKey &&
+	    memcmp(&this->aspectRatio, &other.aspectRatio,
+		sizeof(this->aspectRatio)) == 0 &&
+	    memcmp(&this->focalDistance, &other.focalDistance,
+		sizeof(this->focalDistance)) == 0 &&
+	    memcmp(&this->projectionScale, &other.projectionScale,
+		sizeof(this->projectionScale)) == 0;
+    }
+
+    uint8_t haveCamera = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    double size = 0.0;
+    double lodScale = 0.0;
+    double curveScale = 0.0;
+    double pointScale = 0.0;
+    uint32_t botThreshold = 0;
+    int16_t viewportWidth = 0;
+    int16_t viewportHeight = 0;
+    uint64_t cameraTypeKey = 0;
+    float aspectRatio = 0.0f;
+    float focalDistance = 0.0f;
+    float projectionScale = 0.0f;
+};
+
+static_assert(std::is_trivially_copyable<BObolLodViewSnapshot>::value,
+    "view signatures must remain allocation-free values");
+static_assert(std::is_trivially_copyable<BObolLodViewScaleSnapshot>::value,
+    "view scale signatures must remain allocation-free values");
+
+struct BObolLodCoordinator : BObolLodPhaseTracker {
+    Phase derivedPhase(void) const
+    {
+	Inputs inputs;
+	inputs.interactive = lodInteractive || lodGestureActive;
+	inputs.compacting = lodResidentCompactionPlanning;
+	inputs.coverageActive = lodCoveragePassActive;
+	inputs.coverageComplete = lodVisibleCoverageComplete;
+	inputs.generationActive = lodActiveGeneration != 0;
+	inputs.settlingWork =
+	    lodSubmissionPending || lodSubmissionRescanPending ||
+	    lodRetainedRefinementPending || lodBudgetRescanAfterFrame ||
+	    lodStablePresentationHandoffActive ||
+	    lodRefinementAwaitingFrame ||
+	    lodResultPublicationAwaitingFrame ||
+	    lodStableCalibrationFramesRemaining ||
+	    lodStablePointProxyCalibrationPending;
+	return phaseFor(inputs);
+    }
+
+    void reconcilePhase(size_t pendingCount = 0)
+    {
+	Witness witness;
+	witness.viewEpoch = lodViewRevision.value();
+	witness.policyEpoch = lodPolicyRevision.value();
+	witness.renderSerial = renderCompletionSerial;
+	witness.activeGeneration = lodActiveGeneration;
+	witness.residentDemandRevision =
+	    lodResidentCompactionDemandRevision;
+	witness.visibleCount = lodCoveragePassVisibleCount;
+	witness.completedCount = lodCoveragePassCoveredCount;
+	witness.pendingCount = pendingCount;
+
+	switch (derivedPhase()) {
+	    case Phase::FALLBACK:
+		enterFallback(witness);
+		break;
+	    case Phase::COVERAGE:
+		enterCoverage(witness);
+		break;
+	    case Phase::INTERACTIVE:
+		enterInteractive(witness);
+		break;
+	    case Phase::SETTLING:
+		enterSettling(witness);
+		break;
+	    case Phase::STABLE:
+		enterStable(witness);
+		break;
+	    case Phase::COMPACTING:
+		enterCompacting(witness);
+		break;
+	    case Phase::COUNT:
+		break;
+	}
+    }
+
     uint64_t lastRenderTimeNanoseconds = 0;
     uint64_t smoothedRenderTimeNanoseconds = 0;
     uint64_t lastBackgroundRenderTimeNanoseconds = 0;
@@ -1281,8 +1368,8 @@ struct BObolViewController::Impl {
     size_t lodConvergenceCompleteVisibleCount = 0;
     SbBool lodConvergenceCompleteVisibleCountValid = FALSE;
     SbBool lodStableBudgetLimited = FALSE;
-    mutable uint64_t lodConvergenceFractionViewRevision = 0;
-    mutable uint64_t lodConvergenceFractionPolicyRevision = 0;
+    mutable BObolLodViewEpoch lodConvergenceFractionViewRevision;
+    mutable BObolLodPolicyEpoch lodConvergenceFractionPolicyRevision;
     mutable float lodConvergenceFractionFloor = 0.0f;
     void clearLodSubmissionPlan(void)
     {
@@ -1305,8 +1392,8 @@ struct BObolViewController::Impl {
     }
     void resetLodConvergenceFraction(void)
     {
-	lodConvergenceFractionViewRevision = 0;
-	lodConvergenceFractionPolicyRevision = 0;
+	lodConvergenceFractionViewRevision.reset();
+	lodConvergenceFractionPolicyRevision.reset();
 	lodConvergenceFractionFloor = 0.0f;
     }
     void setLodConvergenceCandidateCount(
@@ -1351,21 +1438,46 @@ struct BObolViewController::Impl {
     int64_t lodRefinementBudgetRetryMicroseconds = 0;
     SbBool lodSubmissionRefreshMissing = TRUE;
     int lodSubmissionReset = 0;
-    uint64_t lodLastSubmittedViewRevision = 0;
-    uint64_t lodLastSubmittedPolicyRevision = 0;
-    SbString lodLastSubmittedSourceSignature = SbString("");
-    SbString lodLastSubmittedInventorySignature = SbString("");
-    std::vector<uint64_t> lodLastSubmittedSourceRoutingIds;
-    std::vector<uint64_t> lodLastSubmittedSourceInventoryRevisions;
-    std::vector<SbString> lodLastSubmittedSourceIdentities;
+    BObolLodViewEpoch lodLastSubmittedViewRevision;
+    BObolLodPolicyEpoch lodLastSubmittedPolicyRevision;
+    struct LodSourceSnapshot {
+	SoBRLDatabaseSource *source = NULL;
+	struct db_i *database = NULL;
+	BObolLodSourceRoutingId routingId;
+	BObolLodInventoryEpoch inventoryRevision;
+	SbString databaseId;
+	SbString path;
+	int drawMode = 0;
+	int representationMode = 0;
+	SbBool visible = FALSE;
+	int lodBotThreshold = 0;
+	uint32_t sourceRevision = 0;
+	uint32_t inputsRevision = 0;
+
+	bool sameIdentity(const LodSourceSnapshot &other) const
+	{
+	    return this->database == other.database &&
+		this->routingId == other.routingId &&
+		this->databaseId == other.databaseId &&
+		this->path == other.path &&
+		this->drawMode == other.drawMode &&
+		this->representationMode == other.representationMode &&
+		this->visible == other.visible &&
+		this->lodBotThreshold == other.lodBotThreshold &&
+		this->sourceRevision == other.sourceRevision &&
+		this->inputsRevision == other.inputsRevision;
+	}
+    };
+    std::vector<LodSourceSnapshot> lodLastSubmittedSources;
     SbBool lodSubmissionDeltaActive = FALSE;
     std::vector<SoBRLDatabaseSource *> lodSubmissionDeltaSources;
     std::vector<std::pair<SoBRLDatabaseSource *, std::vector<size_t>>>
 	lodSubmissionDeltaPlans;
-    SbString lodViewSignature = SbString("");
-    SbString lodViewScaleSignature = SbString("");
-    uint64_t lodViewRevision = 1;
-    uint64_t lodPolicyRevision = 1;
+    BObolLodViewSnapshot lodViewSignature;
+    BObolLodViewScaleSnapshot lodViewScaleSignature;
+    SbBool lodViewSignatureValid = FALSE;
+    BObolLodViewEpoch lodViewRevision {1};
+    BObolLodPolicyEpoch lodPolicyRevision {1};
     int64_t lodLastViewChangeMicroseconds = 0;
     SbBool lodInteractive = FALSE;
     SbBool lodGestureActive = FALSE;
@@ -1506,6 +1618,61 @@ struct BObolViewController::Impl {
     unsigned int lastLodRejectedResultCount = 0;
     unsigned int lastLodUnmatchedResultCount = 0;
     SbString lastLodDiagnostics = SbString("");
+};
+
+struct BObolViewController::Impl : BObolLodCoordinator {
+    explicit Impl(BObolViewController *owner) :
+	featureStore(new BObolFeatureStore(owner)),
+	polygonStore(new BObolPolygonStore(owner)),
+	selectionStore(new BObolSelectionStore)
+    {
+    }
+
+    BObolSceneController sceneController;
+    SoViewport *viewport = new SoViewport;
+    SoBRLViewLodGroup *renderLodRoot = NULL;
+    SoNode *renderBatchRoot = NULL;
+    SoNode *renderPresentationRoot = NULL;
+    SoGroup *framebufferUnderlayRoot = NULL;
+    SoGroup *framebufferInterlayRoot = NULL;
+    SoGroup *framebufferOverlayRoot = NULL;
+    BObolViewAttachment *viewAttachment = new BObolViewAttachment;
+    SoRenderManager *renderManager = new SoRenderManager;
+    SoOffscreenRenderer *imageRenderer = NULL;
+    SoDB::ContextManager *imageRendererManager = NULL;
+    SoCamera *activeCamera = NULL;
+    SbViewportRegion viewportRegion = SbViewportRegion(1, 1);
+    SbColor backgroundBottom = SbColor(0.0f, 0.0f, 0.0f);
+    SbColor backgroundTop = SbColor(0.0f, 0.0f, 0.0f);
+    SoftwareWireMode softwareWireMode = SOFTWARE_WIRE_AUTO;
+    std::atomic<int> endpointGraphicalRenderingEnabled {1};
+    SbBool transparencyEnabled = TRUE;
+    SbBool antialiasingEnabled = FALSE;
+    /* Camera-driven headlight state.  When headlightCameraTracked is TRUE the
+     * headlight direction is rewritten from the camera orientation each sync so
+     * the light follows the viewer (old main-branch behavior); when FALSE the
+     * direction is left constant (scene-fixed).  headlightEnabled is the finer
+     * per-view toggle layered under the master setLightingEnabled(). */
+    SbBool headlightEnabled = TRUE;
+    SbBool headlightCameraTracked = TRUE;
+    SbBool sceneLightsEnabled = FALSE;
+    SbVec3f headlightOffsetEye = bobol_headlight_default_offset();
+    SbRotation lastCameraOrientation = SbRotation::identity();
+    /* In-scene lights, supplied by the GED layer (cache-immune) rather than the
+     * geometry realize walk (which is skipped on a warm LoD cache). */
+    std::vector<BObolSceneLightRealization> sceneLights;
+    double clipMinimum = BV_VIEW_MIN;
+    double clipMaximum = BV_VIEW_MAX;
+    mutable std::mutex renderRequestMutex;
+    SbBool renderRequested = FALSE;
+    SbString renderReason = SbString("");
+    uint64_t renderRequestSerial = 0;
+    std::mutex frameRequestMutex;
+    BObolFrameRequestCallback frameRequestCallback = NULL;
+    void *frameRequestUserData = NULL;
+    mutable std::mutex presentationSyncMutex;
+    BObolPresentationSyncCallback presentationSyncCallback = NULL;
+    void *presentationSyncUserData = NULL;
     BObolFeatureStore *featureStore;
     BObolPolygonStore *polygonStore;
     BObolSelectionStore *selectionStore;
@@ -3308,8 +3475,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
 	    nowMicroseconds <=
 		std::numeric_limits<int64_t>::max() - cooldownMicroseconds ?
 	    nowMicroseconds + cooldownMicroseconds : nowMicroseconds;
-	this->d->lodLastSubmittedViewRevision = 0;
-	this->d->lodLastSubmittedPolicyRevision = 0;
+	this->d->lodLastSubmittedViewRevision.reset();
+	this->d->lodLastSubmittedPolicyRevision.reset();
 	this->markProgressiveWorkPending();
     }
     this->d->lodResultPublicationAwaitingFrame = FALSE;
@@ -3318,6 +3485,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
      * merely the drain quantum which originally requested the frame. */
     this->d->lodUnpresentedResultCount = 0;
     this->d->lodUnpresentedResultFirstMicroseconds = 0;
+    this->d->reconcilePhase();
 }
 
 void
@@ -3347,6 +3515,7 @@ BObolViewController::scheduleLodRefinementFrame(const char *reason)
     if (!this->isRenderRequested())
 	this->requestRender(frameReason);
     this->notifyFrameRequest(frameReason);
+    this->d->reconcilePhase();
 }
 
 uint64_t
@@ -4138,7 +4307,7 @@ BObolViewController::advanceProgressiveWork(
 		this->d->viewAttachment->getViewLodState();
 	    const uint64_t demandRevision = viewState ?
 		viewState->residentMeshDemandRevision() :
-		this->d->lodViewRevision;
+		this->d->lodViewRevision.value();
 	    const SbBool continuePlanning =
 		this->d->lodResidentCompactionPlanning &&
 		this->d->lodResidentCompactionDemandRevision ==
@@ -4208,6 +4377,15 @@ BObolViewController::advanceProgressiveWork(
     if (status)
 	*status = localStatus;
 
+    size_t phasePending = localStatus.pendingTasks;
+    phasePending = localStatus.inFlight > SIZE_MAX - phasePending ?
+	SIZE_MAX : phasePending + localStatus.inFlight;
+    phasePending = localStatus.queuedResults > SIZE_MAX - phasePending ?
+	SIZE_MAX : phasePending + localStatus.queuedResults;
+    phasePending = localStatus.queuedCacheWrites > SIZE_MAX - phasePending ?
+	SIZE_MAX : phasePending + localStatus.queuedCacheWrites;
+    this->d->reconcilePhase(phasePending);
+
     const uint64_t advanceCompleted = this->beginRenderTiming();
     this->d->lastProgressiveAdvanceTimeNanoseconds =
 	advanceCompleted > advanceStarted ? advanceCompleted - advanceStarted : 0;
@@ -4259,30 +4437,39 @@ controller_database_id(const struct db_i *dbip)
     return dbip && dbip->dbi_filename ? dbip->dbi_filename : "";
 }
 
-static void
-append_signature_string(std::ostringstream &out, const char *value)
-{
-    size_t len = value ? strlen(value) : 0;
-    out << len << ':' << (value ? value : "") << ';';
-}
+struct controller_lod_view_signatures {
+    BObolLodViewSnapshot view;
+    BObolLodViewScaleSnapshot scale;
+};
 
-static SbString
+static controller_lod_view_signatures
 controller_lod_view_signature(const struct bv_view_info &view,
 			      SbBool haveCamera,
 			      SoCamera *camera,
 			      const SbViewportRegion &region)
 {
-    std::ostringstream out;
+    controller_lod_view_signatures signatures;
+    signatures.view.haveCamera = haveCamera ? 1 : 0;
+    signatures.view.width = view.width;
+    signatures.view.height = view.height;
+    signatures.view.size = view.size;
+    signatures.view.lodScale = view.lod.scale;
+    signatures.view.curveScale = view.lod.curve_scale;
+    signatures.view.pointScale = view.lod.point_scale;
+    signatures.view.botThreshold = view.lod.bot_threshold;
 
-    out << (haveCamera ? 1 : 0) << ';'
-	<< view.width << ';'
-	<< view.height << ';'
-	<< std::setprecision(17)
-	<< view.size << ';'
-	<< view.lod.scale << ';'
-	<< view.lod.curve_scale << ';'
-	<< view.lod.point_scale << ';'
-	<< view.lod.bot_threshold << ';';
+    signatures.scale.haveCamera = haveCamera ? 1 : 0;
+    signatures.scale.width = view.width;
+    signatures.scale.height = view.height;
+    signatures.scale.size = view.size;
+    signatures.scale.lodScale = view.lod.scale;
+    signatures.scale.curveScale = view.lod.curve_scale;
+    signatures.scale.pointScale = view.lod.point_scale;
+    signatures.scale.botThreshold = view.lod.bot_threshold;
+    const SbVec2s viewport = region.getViewportSizePixels();
+    signatures.scale.viewportWidth = viewport[0];
+    signatures.scale.viewportHeight = viewport[1];
+
     if (haveCamera && camera) {
 	double aspect = controller_aspect_from_region(region);
 	if (aspect <= SMALL_FASTF)
@@ -4291,54 +4478,58 @@ controller_lod_view_signature(const struct bv_view_info &view,
 	    static_cast<float>(aspect)).getMatrix();
 	const float *values = matrix[0];
 	for (size_t i = 0; i < 16; i++)
-	    out << std::setprecision(9) << values[i] << ';';
-    }
-
-    return SbString(out.str().c_str());
-}
-
-static SbString
-controller_lod_view_scale_signature(const struct bv_view_info &view,
-				    SbBool haveCamera,
-				    SoCamera *camera,
-				    const SbViewportRegion &region)
-{
-    std::ostringstream out;
-
-    out << (haveCamera ? 1 : 0) << ';'
-	<< view.width << ';'
-	<< view.height << ';'
-	<< std::setprecision(17)
-	<< view.size << ';'
-	<< view.lod.scale << ';'
-	<< view.lod.curve_scale << ';'
-	<< view.lod.point_scale << ';'
-	<< view.lod.bot_threshold << ';';
-    const SbVec2s viewport = region.getViewportSizePixels();
-    out << viewport[0] << ';' << viewport[1] << ';';
-    if (haveCamera && camera) {
-	out << camera->getTypeId().getKey() << ';'
-	    << std::setprecision(9)
-	    << camera->aspectRatio.getValue() << ';'
-	    << camera->focalDistance.getValue() << ';';
+	    signatures.view.viewVolumeMatrix[i] = values[i];
+	signatures.scale.cameraTypeKey =
+	    static_cast<uint64_t>(camera->getTypeId().getKey());
+	signatures.scale.aspectRatio = camera->aspectRatio.getValue();
+	signatures.scale.focalDistance = camera->focalDistance.getValue();
 	if (camera->isOfType(SoOrthographicCamera::getClassTypeId()))
-	    out << static_cast<SoOrthographicCamera *>(camera)->
-		height.getValue() << ';';
+	    signatures.scale.projectionScale =
+		static_cast<SoOrthographicCamera *>(camera)->
+		    height.getValue();
 	else if (camera->isOfType(SoPerspectiveCamera::getClassTypeId()))
-	    out << static_cast<SoPerspectiveCamera *>(camera)->
-		heightAngle.getValue() << ';';
+	    signatures.scale.projectionScale =
+		static_cast<SoPerspectiveCamera *>(camera)->
+		    heightAngle.getValue();
     }
 
-    return SbString(out.str().c_str());
+    return signatures;
 }
 
 struct controller_lod_source_signatures {
-    SbString identity;
-    SbString inventory;
-    std::vector<SoBRLDatabaseSource *> sources;
-    std::vector<uint64_t> routingIds;
-    std::vector<uint64_t> inventoryRevisions;
-    std::vector<SbString> sourceIdentities;
+    std::vector<BObolLodCoordinator::LodSourceSnapshot> sources;
+
+    bool empty(void) const
+    {
+	return this->sources.empty();
+    }
+
+    bool sameIdentities(
+	const std::vector<BObolLodCoordinator::LodSourceSnapshot>
+	    &other) const
+    {
+	if (this->sources.size() != other.size())
+	    return false;
+	for (size_t i = 0; i < this->sources.size(); ++i) {
+	    if (!this->sources[i].sameIdentity(other[i]))
+		return false;
+	}
+	return true;
+    }
+
+    bool sameInventories(
+	const std::vector<BObolLodCoordinator::LodSourceSnapshot>
+	    &other) const
+    {
+	if (!this->sameIdentities(other))
+	    return false;
+	for (size_t i = 0; i < this->sources.size(); ++i) {
+	    if (this->sources[i].inventoryRevision !=
+		    other[i].inventoryRevision)
+		return false;
+	}
+	return true;
+    }
 };
 
 /*
@@ -4358,8 +4549,6 @@ static controller_lod_source_signatures
 controller_lod_source_signature(const BObolViewController *controller)
 {
     controller_lod_source_signatures signatures;
-    std::ostringstream identity;
-    std::ostringstream inventory;
 
     if (!controller)
 	return signatures;
@@ -4408,35 +4597,22 @@ controller_lod_source_signature(const BObolViewController *controller)
 	if (!hasCurrentCompactRequests && !hasCurrentRealizedMesh)
 	    continue;
 
-	const uint64_t routingId = source->getCompactSourceRoutingId();
-	std::ostringstream sourceIdentity;
-	sourceIdentity << "source;" << routingId << ';';
-	append_signature_string(sourceIdentity,
-	    controller_database_id(source->getDatabase()));
-	append_signature_string(sourceIdentity,
-	    source->path.getValue().getString());
-	sourceIdentity << source->drawMode.getValue() << ';'
-	    << source->representationMode.getValue() << ';'
-	    << source->visible.getValue() << ';'
-	    << source->lodBotThreshold.getValue() << ';'
-	    << source->sourceRevision.getValue() << ';'
-	    << source->inputsRevision.getValue() << ';';
-	const std::string sourceIdentityString = sourceIdentity.str();
-	identity << sourceIdentityString;
-
-	inventory << "inventory;" << routingId << ';'
-	    << source->getDisplayMeshLodRevision() << ';'
-	    << source->getCompactInstanceCount() << ';';
-	signatures.sources.push_back(source);
-	signatures.routingIds.push_back(routingId);
-	signatures.inventoryRevisions.push_back(
-	    source->getDisplayMeshLodRevision());
-	signatures.sourceIdentities.push_back(
-	    SbString(sourceIdentityString.c_str()));
+	BObolLodCoordinator::LodSourceSnapshot snapshot;
+	snapshot.source = source;
+	snapshot.database = source->getDatabase();
+	snapshot.routingId.set(source->getCompactSourceRoutingId());
+	snapshot.inventoryRevision.set(source->getDisplayMeshLodRevision());
+	snapshot.databaseId = controller_database_id(source->getDatabase());
+	snapshot.path = source->path.getValue();
+	snapshot.drawMode = source->drawMode.getValue();
+	snapshot.representationMode = source->representationMode.getValue();
+	snapshot.visible = source->visible.getValue();
+	snapshot.lodBotThreshold = source->lodBotThreshold.getValue();
+	snapshot.sourceRevision = source->sourceRevision.getValue();
+	snapshot.inputsRevision = source->inputsRevision.getValue();
+	signatures.sources.push_back(std::move(snapshot));
     }
 
-    signatures.identity = identity.str().c_str();
-    signatures.inventory = inventory.str().c_str();
     return signatures;
 }
 
@@ -4493,13 +4669,9 @@ BObolViewController::setLodService(BObolLodService *service)
     this->d->lodRetainedAdmissionBudgetRemaining = SIZE_MAX;
     this->d->lodRefinementBudgetRetryMicroseconds = 0;
     this->d->lodSettleAfterRenderSerial = 0;
-    this->d->lodLastSubmittedViewRevision = 0;
-    this->d->lodLastSubmittedPolicyRevision = 0;
-    this->d->lodLastSubmittedSourceSignature = "";
-    this->d->lodLastSubmittedInventorySignature = "";
-    this->d->lodLastSubmittedSourceRoutingIds.clear();
-    this->d->lodLastSubmittedSourceInventoryRevisions.clear();
-    this->d->lodLastSubmittedSourceIdentities.clear();
+    this->d->lodLastSubmittedViewRevision.reset();
+    this->d->lodLastSubmittedPolicyRevision.reset();
+    this->d->lodLastSubmittedSources.clear();
     this->d->lodSubmissionDeltaActive = FALSE;
     this->d->lodSubmissionDeltaSources.clear();
     this->d->lodSubmissionDeltaPlans.clear();
@@ -4521,6 +4693,7 @@ BObolViewController::setLodService(BObolLodService *service)
 	this->d->lodResultSubscriberId =
 	    this->d->lodService->subscribeResultReady(
 		BObolViewController::lodResultReadyCB, this);
+    this->d->reconcilePhase();
 }
 
 void
@@ -4548,13 +4721,9 @@ BObolViewController::cancelActiveLodGeneration(void)
     this->d->lodSettleAfterRenderSerial = 0;
     this->d->lodResultsPending.store(0);
     this->d->lodResultsFirstReadyMicroseconds.store(0);
-    this->d->lodLastSubmittedViewRevision = 0;
-    this->d->lodLastSubmittedPolicyRevision = 0;
-    this->d->lodLastSubmittedSourceSignature = "";
-    this->d->lodLastSubmittedInventorySignature = "";
-    this->d->lodLastSubmittedSourceRoutingIds.clear();
-    this->d->lodLastSubmittedSourceInventoryRevisions.clear();
-    this->d->lodLastSubmittedSourceIdentities.clear();
+    this->d->lodLastSubmittedViewRevision.reset();
+    this->d->lodLastSubmittedPolicyRevision.reset();
+    this->d->lodLastSubmittedSources.clear();
     this->d->lodSubmissionDeltaActive = FALSE;
     this->d->lodSubmissionDeltaSources.clear();
     this->d->lodSubmissionDeltaPlans.clear();
@@ -4578,6 +4747,7 @@ BObolViewController::cancelActiveLodGeneration(void)
 	    viewState->setCadPresentationPointProxyPixelThreshold(1.0f);
 	    viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
 	}
+    this->d->reconcilePhase();
 }
 
 void
@@ -4649,6 +4819,7 @@ BObolViewController::setLodAutoSubmit(SbBool enabled)
 	    viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
 	}
     }
+    this->d->reconcilePhase();
 }
 
 SbBool
@@ -5344,9 +5515,7 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 
     const controller_lod_source_signatures signatures =
 	controller_lod_source_signature(this);
-    const SbString &signature = signatures.identity;
-    const SbString &inventorySignature = signatures.inventory;
-    if (signature.getLength() == 0) {
+    if (signatures.empty()) {
 	/*
 	 * No current source can consume a submission cursor.  This is a valid
 	 * transient while a source is replaced, and a terminal state when the
@@ -5370,20 +5539,13 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	this->d->lodCoveragePassSawBoundedSource = FALSE;
 	this->d->lodCoveragePassVisibleCount = 0;
 	this->d->lodCoveragePassCoveredCount = 0;
-	this->d->lodLastSubmittedSourceSignature = "";
-	this->d->lodLastSubmittedInventorySignature = "";
-	this->d->lodLastSubmittedSourceRoutingIds.clear();
-	this->d->lodLastSubmittedSourceInventoryRevisions.clear();
-	this->d->lodLastSubmittedSourceIdentities.clear();
+	this->d->lodLastSubmittedSources.clear();
 	return 0;
     }
 
     if (this->d->lodLastSubmittedViewRevision == this->d->lodViewRevision &&
 	this->d->lodLastSubmittedPolicyRevision == this->d->lodPolicyRevision &&
-	bu_strcmp(this->d->lodLastSubmittedSourceSignature.getString(),
-	       signature.getString()) == 0 &&
-	bu_strcmp(this->d->lodLastSubmittedInventorySignature.getString(),
-	       inventorySignature.getString()) == 0) {
+	signatures.sameInventories(this->d->lodLastSubmittedSources)) {
 	if (this->d->lodSubmissionPending && this->d->lodActiveGeneration != 0)
 	    return this->submitLodRequests(this->d->lodService,
 		this->d->lodActiveGeneration, this->d->lodSubmissionRefreshMissing,
@@ -5404,13 +5566,11 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
     if (generation == 0)
 	generation = this->d->lodService->beginGeneration();
     const bool sourceSetChanged =
-	this->d->lodLastSubmittedSourceSignature.getLength() > 0 &&
-	bu_strcmp(this->d->lodLastSubmittedSourceSignature.getString(),
-	    signature.getString()) != 0;
+	!this->d->lodLastSubmittedSources.empty() &&
+	!signatures.sameIdentities(this->d->lodLastSubmittedSources);
     const bool inventoryChanged =
-	this->d->lodLastSubmittedInventorySignature.getLength() > 0 &&
-	bu_strcmp(this->d->lodLastSubmittedInventorySignature.getString(),
-	    inventorySignature.getString()) != 0;
+	!this->d->lodLastSubmittedSources.empty() &&
+	!signatures.sameInventories(this->d->lodLastSubmittedSources);
     const bool viewOrPolicyChanged =
 	this->d->lodLastSubmittedViewRevision != this->d->lodViewRevision ||
 	this->d->lodLastSubmittedPolicyRevision !=
@@ -5435,17 +5595,18 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	!viewOrPolicyChanged &&
 	this->d->lodSubmissionPending &&
 	this->d->lodSubmissionDeltaActive &&
-	!this->d->lodLastSubmittedSourceRoutingIds.empty()) {
+	!this->d->lodLastSubmittedSources.empty()) {
 	for (size_t currentIndex = 0;
 	     currentIndex < signatures.sources.size(); ++currentIndex) {
-	    const uint64_t routingId = signatures.routingIds[currentIndex];
+	    const BObolLodSourceRoutingId routingId =
+		signatures.sources[currentIndex].routingId;
 	    size_t previousIndex =
-		this->d->lodLastSubmittedSourceRoutingIds.size();
+		this->d->lodLastSubmittedSources.size();
 	    for (size_t candidate = 0;
 		 candidate <
-		    this->d->lodLastSubmittedSourceRoutingIds.size();
+		    this->d->lodLastSubmittedSources.size();
 		 ++candidate) {
-		if (this->d->lodLastSubmittedSourceRoutingIds[candidate] ==
+		if (this->d->lodLastSubmittedSources[candidate].routingId ==
 			routingId) {
 		    previousIndex = candidate;
 		    break;
@@ -5453,22 +5614,17 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	    }
 	    const bool knownSource =
 		previousIndex <
-		    this->d->lodLastSubmittedSourceRoutingIds.size();
+		    this->d->lodLastSubmittedSources.size();
 	    const bool sameIdentity = knownSource &&
-		previousIndex <
-		    this->d->lodLastSubmittedSourceIdentities.size() &&
-		bu_strcmp(
-		    this->d->lodLastSubmittedSourceIdentities[
-			previousIndex].getString(),
-		    signatures.sourceIdentities[currentIndex].getString()) == 0;
+		signatures.sources[currentIndex].sameIdentity(
+		    this->d->lodLastSubmittedSources[previousIndex]);
 	    const uint64_t previousInventory =
-		knownSource && previousIndex <
-			this->d->
-			    lodLastSubmittedSourceInventoryRevisions.size() ?
-		    this->d->lodLastSubmittedSourceInventoryRevisions[
-			previousIndex] : 0;
+		knownSource ?
+		    this->d->lodLastSubmittedSources[previousIndex].
+			inventoryRevision.value() : 0;
 	    if (sameIdentity && previousInventory ==
-		    signatures.inventoryRevisions[currentIndex])
+		    signatures.sources[currentIndex].
+			inventoryRevision.value())
 		continue;
 	    if (!sameIdentity || !previousInventory) {
 		pendingDeltaNeedsFullRescan = true;
@@ -5476,7 +5632,7 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	    }
 
 	    SoBRLDatabaseSource *changedSource =
-		signatures.sources[currentIndex];
+		signatures.sources[currentIndex].source;
 	    std::vector<size_t> changedEntries;
 	    if (!changedSource->getDisplayMeshLodChangedEntries(
 		    previousInventory, changedEntries) ||
@@ -5519,21 +5675,22 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
     if ((sourceSetChanged || inventoryChanged) &&
 	!viewOrPolicyChanged &&
 	!this->d->lodSubmissionPending &&
-	!this->d->lodLastSubmittedSourceRoutingIds.empty()) {
+	!this->d->lodLastSubmittedSources.empty()) {
 	if (!this->d->lodSubmissionDeltaActive) {
 	    this->d->lodSubmissionDeltaSources.clear();
 	    this->d->lodSubmissionDeltaPlans.clear();
 	}
 	for (size_t currentIndex = 0;
 	     currentIndex < signatures.sources.size(); currentIndex++) {
-	    const uint64_t routingId = signatures.routingIds[currentIndex];
+	    const BObolLodSourceRoutingId routingId =
+		signatures.sources[currentIndex].routingId;
 	    size_t previousIndex =
-		this->d->lodLastSubmittedSourceRoutingIds.size();
+		this->d->lodLastSubmittedSources.size();
 	    for (size_t candidate = 0;
 		 candidate <
-		    this->d->lodLastSubmittedSourceRoutingIds.size();
+		    this->d->lodLastSubmittedSources.size();
 		 candidate++) {
-		if (this->d->lodLastSubmittedSourceRoutingIds[candidate] ==
+		if (this->d->lodLastSubmittedSources[candidate].routingId ==
 			routingId) {
 		    previousIndex = candidate;
 		    break;
@@ -5541,29 +5698,24 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	    }
 	    const bool knownSource =
 		previousIndex <
-		    this->d->lodLastSubmittedSourceRoutingIds.size();
+		    this->d->lodLastSubmittedSources.size();
 	    const bool sameIdentity = knownSource &&
-		previousIndex <
-		    this->d->lodLastSubmittedSourceIdentities.size() &&
-		bu_strcmp(
-		    this->d->lodLastSubmittedSourceIdentities[
-			previousIndex].getString(),
-		    signatures.sourceIdentities[currentIndex].getString()) == 0;
+		signatures.sources[currentIndex].sameIdentity(
+		    this->d->lodLastSubmittedSources[previousIndex]);
 	    const uint64_t previousInventory =
-		knownSource && previousIndex <
-			this->d->
-			    lodLastSubmittedSourceInventoryRevisions.size() ?
-		    this->d->lodLastSubmittedSourceInventoryRevisions[
-			previousIndex] : 0;
+		knownSource ?
+		    this->d->lodLastSubmittedSources[previousIndex].
+			inventoryRevision.value() : 0;
 	    const bool inventoryDiffers =
 		!knownSource ||
 		previousInventory !=
-		    signatures.inventoryRevisions[currentIndex];
+		    signatures.sources[currentIndex].
+			inventoryRevision.value();
 	    if (sameIdentity && !inventoryDiffers)
 		continue;
 
 	    SoBRLDatabaseSource *changedSource =
-		signatures.sources[currentIndex];
+		signatures.sources[currentIndex].source;
 	    const bool alreadyTargeted =
 		std::find(this->d->lodSubmissionDeltaSources.begin(),
 		    this->d->lodSubmissionDeltaSources.end(),
@@ -5696,13 +5848,7 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	this->d->lodActiveGeneration = generation;
 	this->d->lodLastSubmittedViewRevision = this->d->lodViewRevision;
 	this->d->lodLastSubmittedPolicyRevision = this->d->lodPolicyRevision;
-	this->d->lodLastSubmittedSourceSignature = signature;
-	this->d->lodLastSubmittedInventorySignature = inventorySignature;
-	this->d->lodLastSubmittedSourceRoutingIds = signatures.routingIds;
-	this->d->lodLastSubmittedSourceInventoryRevisions =
-	    signatures.inventoryRevisions;
-	this->d->lodLastSubmittedSourceIdentities =
-	    signatures.sourceIdentities;
+	this->d->lodLastSubmittedSources = signatures.sources;
     }
     return submitted;
 }
@@ -6142,7 +6288,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    static_cast<float>(aspect));
 	action.setViewVolume(&volume, scenePixelError);
 	action.setGeneration(generation);
-	action.setRevisions(this->d->lodViewRevision, this->d->lodPolicyRevision);
+	action.setRevisions(this->d->lodViewRevision.value(),
+	    this->d->lodPolicyRevision.value());
 	action.setRefreshMissing(refreshMissing);
 	action.setReset(reset);
 	action.setViewLodState(viewLodState);
@@ -6957,18 +7104,18 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	 * 2,048 warm results quadratic on a 50,000-leaf scene.
 	 */
 	SoBRLDatabaseSource *route = NULL;
-	if (drained[i].request.sourceRoutingId &&
+	if (drained[i].request.sourceRoutingId != 0 &&
 	    drained[i].request.occurrenceKey.getLength() > 0) {
 	    const auto renderRoute = renderSourceRoutes.find(
-		drained[i].request.sourceRoutingId);
+		drained[i].request.sourceRoutingId.value());
 	    if (renderRoute != renderSourceRoutes.end())
 		route = renderRoute->second;
 	    else
 		route = this->d->sceneController.findDatabaseSourceRoutingId(
-		    drained[i].request.sourceRoutingId);
+		    drained[i].request.sourceRoutingId.value());
 	}
 	if (getenv("BOBOL_LOD_TRACE_REJECTIONS") &&
-	    drained[i].request.sourceRoutingId &&
+	    drained[i].request.sourceRoutingId != 0 &&
 	    drained[i].request.occurrenceKey.getLength() > 0 &&
 	    !route) {
 	    static std::atomic<unsigned int> routeMissTraceCount(0);
@@ -6980,12 +7127,12 @@ BObolViewController::applyLodResults(BObolLodService *service,
 		       drained[i].request.objectName.getString(),
 		       drained[i].request.occurrenceKey.getString(),
 		       static_cast<unsigned long long>(
-			   drained[i].request.sourceRoutingId));
+			   drained[i].request.sourceRoutingId.value()));
 	}
 	const auto findResidentCad = [&]() {
 	    if (!viewState)
 		return static_cast<const BObolViewLodState::CadPayload *>(NULL);
-	    if (drained[i].request.sourceRoutingId)
+	    if (drained[i].request.sourceRoutingId != 0)
 		return route ? viewState->findCadForResult(route, drained[i]) :
 		    static_cast<const BObolViewLodState::CadPayload *>(NULL);
 	    return viewState->findCadForResult(drained[i]);
@@ -7006,19 +7153,23 @@ BObolViewController::applyLodResults(BObolLodService *service,
 		   drained[i].request.requestedLevel,
 		   drained[i].geometry.activeLevel,
 		   static_cast<unsigned long long>(
-		       drained[i].request.viewRevision),
+		       drained[i].request.viewRevision.value()),
 		   static_cast<unsigned long long>(
-		       drained[i].request.policyRevision),
-		   static_cast<unsigned long long>(this->d->lodViewRevision),
-		   static_cast<unsigned long long>(this->d->lodPolicyRevision),
+		       drained[i].request.policyRevision.value()),
+		   static_cast<unsigned long long>(
+		       this->d->lodViewRevision.value()),
+		   static_cast<unsigned long long>(
+		       this->d->lodPolicyRevision.value()),
 		   resident ? resident->activeLevel : -1,
 		   static_cast<unsigned long long>(
 		       resident ? resident->viewRevision : 0),
 		   static_cast<unsigned long long>(
 		       resident ? resident->policyRevision : 0));
 	}
-	if (drained[i].request.viewRevision != this->d->lodViewRevision ||
-	    drained[i].request.policyRevision != this->d->lodPolicyRevision) {
+	if (drained[i].request.viewRevision !=
+		this->d->lodViewRevision.value() ||
+	    drained[i].request.policyRevision !=
+		this->d->lodPolicyRevision.value()) {
 	    /* A completed mesh from the prior camera remains a valid progressive
 	     * bootstrap when this occurrence still has only its box or an older
 	     * mesh epoch.  Reject it once equal/newer view data is resident so an
@@ -7072,13 +7223,13 @@ BObolViewController::applyLodResults(BObolLodService *service,
 			       drained[i].geometry.activeLevel,
 			       drained[i].request.requestedLevel,
 			       static_cast<unsigned long long>(
-				   drained[i].request.viewRevision),
+				   drained[i].request.viewRevision.value()),
 			       static_cast<unsigned long long>(
-				   drained[i].request.policyRevision),
+				   drained[i].request.policyRevision.value()),
 			       static_cast<unsigned long long>(
-				   this->d->lodViewRevision),
+				   this->d->lodViewRevision.value()),
 			       static_cast<unsigned long long>(
-				   this->d->lodPolicyRevision),
+				   this->d->lodPolicyRevision.value()),
 			       cadPayload ? cadPayload->activeLevel :
 				   (meshPayload ?
 				       meshPayload->activeLevel : -1),
@@ -7106,7 +7257,7 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	    drained[i].request.requestedLevel >
 		drained[i].geometry.activeLevel &&
 	    !drained[i].terminal &&
-	    (!drained[i].request.sourceRoutingId ||
+	    (drained[i].request.sourceRoutingId == 0 ||
 	     !residentCadBefore ||
 	     residentCadBefore->activeLevel <
 		 drained[i].geometry.activeLevel ||
@@ -7114,7 +7265,7 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	      residentMeshBefore->activeLevel <
 		  drained[i].geometry.activeLevel)) ?
 	    TRUE : FALSE;
-	if (drained[i].request.sourceRoutingId &&
+	if (drained[i].request.sourceRoutingId != 0 &&
 	    drained[i].request.occurrenceKey.getLength() > 0) {
 	    if (route && route->hasCompactInstanceKey(
 		    drained[i].request.occurrenceKey.getString())) {
@@ -7259,16 +7410,16 @@ BObolViewController::applyLodResults(BObolLodService *service,
 uint64_t
 BObolViewController::getLodViewRevision(void) const
 {
-    return this->d->lodViewRevision;
+    return this->d->lodViewRevision.value();
 }
 
 void
 BObolViewController::setLodPolicyRevision(uint64_t revision)
 {
     uint64_t newRevision = revision == 0 ? 1 : revision;
-    if (this->d->lodPolicyRevision == newRevision)
+    if (this->d->lodPolicyRevision.value() == newRevision)
 	return;
-    this->d->lodPolicyRevision = newRevision;
+    this->d->lodPolicyRevision.set(newRevision);
     /*
      * A quality-policy revision changes the requested PoP cut, not camera
      * visibility.  Retain the last complete current-view denominator until a
@@ -7282,12 +7433,13 @@ BObolViewController::setLodPolicyRevision(uint64_t revision)
     this->d->lodStablePointProxyCalibrationPending = FALSE;
     this->d->lodStablePointProxyRelaxationActive = FALSE;
     this->requestRender("lod-policy");
+    this->d->reconcilePhase();
 }
 
 uint64_t
 BObolViewController::getLodPolicyRevision(void) const
 {
-    return this->d->lodPolicyRevision;
+    return this->d->lodPolicyRevision.value();
 }
 
 unsigned int
@@ -8330,9 +8482,7 @@ BObolViewController::syncRenderManager(void)
 void
 BObolViewController::advanceLodViewRevision(void)
 {
-    this->d->lodViewRevision++;
-    if (this->d->lodViewRevision == 0)
-	this->d->lodViewRevision++;
+    this->d->lodViewRevision.advance();
     this->d->clearLodConvergenceCandidates();
     this->d->resetLodConvergenceFraction();
     this->d->lodStableBudgetLimited = FALSE;
@@ -8341,14 +8491,13 @@ BObolViewController::advanceLodViewRevision(void)
     this->d->lodStablePresentationHandoffActive = FALSE;
     this->d->lodCoveragePassActive = TRUE;
     this->d->lodVisibleCoverageComplete = FALSE;
+    this->d->reconcilePhase();
 }
 
 void
 BObolViewController::advanceLodPolicyRevision(void)
 {
-    this->d->lodPolicyRevision++;
-    if (this->d->lodPolicyRevision == 0)
-	this->d->lodPolicyRevision++;
+    this->d->lodPolicyRevision.advance();
     /* Quality changes preserve the current view's proven visibility
      * denominator.  Source and camera revisions clear it explicitly. */
     this->d->resetLodConvergenceFraction();
@@ -8357,6 +8506,7 @@ BObolViewController::advanceLodPolicyRevision(void)
     this->d->lodStablePointProxyRelaxationActive = FALSE;
     this->d->lodCoveragePassActive = TRUE;
     this->d->lodVisibleCoverageComplete = FALSE;
+    this->d->reconcilePhase();
 }
 
 static float
@@ -8544,6 +8694,7 @@ BObolViewController::beginLodInteraction(void)
 	this->advanceLodPolicyRevision();
     this->markProgressiveWorkPending();
     this->requestRender("lod-interaction-begin");
+    this->d->reconcilePhase();
 }
 
 void
@@ -8584,6 +8735,7 @@ BObolViewController::endLodInteraction(void)
     this->d->lodSettleAfterRenderSerial = 0;
     this->markProgressiveWorkPending();
     this->requestRender("lod-interaction-end");
+    this->d->reconcilePhase();
 }
 
 SbBool
@@ -8671,7 +8823,28 @@ BObolViewController::getLodConvergenceStatus(
 	BObolLodConvergenceStatus &status) const
 {
     status.clear();
-    status.viewRevision = this->d->lodViewRevision;
+    static_assert(
+	static_cast<int>(BObolLodPhaseTracker::Phase::FALLBACK) ==
+	    BOBOL_LOD_COORDINATOR_FALLBACK &&
+	static_cast<int>(BObolLodPhaseTracker::Phase::COVERAGE) ==
+	    BOBOL_LOD_COORDINATOR_COVERAGE &&
+	static_cast<int>(BObolLodPhaseTracker::Phase::INTERACTIVE) ==
+	    BOBOL_LOD_COORDINATOR_INTERACTIVE &&
+	static_cast<int>(BObolLodPhaseTracker::Phase::SETTLING) ==
+	    BOBOL_LOD_COORDINATOR_SETTLING &&
+	static_cast<int>(BObolLodPhaseTracker::Phase::STABLE) ==
+	    BOBOL_LOD_COORDINATOR_STABLE &&
+	static_cast<int>(BObolLodPhaseTracker::Phase::COMPACTING) ==
+	    BOBOL_LOD_COORDINATOR_COMPACTING,
+	"public and private LoD coordinator phases must agree");
+    const BObolLodPhaseTracker::Phase coordinatorPhase =
+	this->d->currentPhase();
+    status.coordinatorPhase = static_cast<int>(coordinatorPhase);
+    status.coordinatorTransitionSerial =
+	this->d->phaseTransitionSerial();
+    status.coordinatorProgressSequence =
+	this->d->phaseWitness(coordinatorPhase).sequence;
+    status.viewRevision = this->d->lodViewRevision.value();
     status.failedSourceCount = this->getLastFailedSourceCount();
     status.visibleTargetCount =
 	this->d->lodConvergenceCandidateCount();
@@ -8904,20 +9077,21 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 {
     struct bv_view_info view = BV_VIEW_INFO_INIT;
     SbBool haveCamera = this->getViewInfo(&view);
-    SbString signature = controller_lod_view_signature(view, haveCamera,
-	this->d->activeCamera, this->d->viewportRegion);
-    SbString scaleSignature = controller_lod_view_scale_signature(
+    const controller_lod_view_signatures signatures =
+	controller_lod_view_signature(
 	view, haveCamera, this->d->activeCamera, this->d->viewportRegion);
 
-    if (bu_strcmp(this->d->lodViewSignature.getString(), signature.getString()) == 0)
+    if (this->d->lodViewSignatureValid &&
+	this->d->lodViewSignature.same(signatures.view))
 	return;
 
     const SbBool scaleChanged =
-	this->d->lodViewScaleSignature.getLength() > 0 &&
-	bu_strcmp(this->d->lodViewScaleSignature.getString(),
-	    scaleSignature.getString()) != 0 ? TRUE : FALSE;
-    this->d->lodViewSignature = signature;
-    this->d->lodViewScaleSignature = scaleSignature;
+	this->d->lodViewSignatureValid &&
+	!this->d->lodViewScaleSignature.same(signatures.scale) ?
+	    TRUE : FALSE;
+    this->d->lodViewSignature = signatures.view;
+    this->d->lodViewScaleSignature = signatures.scale;
+    this->d->lodViewSignatureValid = TRUE;
     if (advanceOnChange) {
 	this->d->lodViewScaleChanging = scaleChanged;
 	this->advanceLodViewRevision();
@@ -9047,4 +9221,5 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 	    this->markProgressiveWorkPending();
 	}
     }
+    this->d->reconcilePhase();
 }

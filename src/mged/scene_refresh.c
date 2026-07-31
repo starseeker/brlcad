@@ -24,10 +24,12 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "vmath.h"
 #include "bn.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
 
 #include "./mged.h"
@@ -40,7 +42,7 @@ static void
 _mged_obol_refresh(struct mged_state *s, struct ged_view_context *view_ctx)
 {
     if (!s || !s->gedp || !view_ctx ||
-	    !ged_view_context_display_endpoint_get(view_ctx))
+	    !ged_view_context_obol_endpoint_get(view_ctx))
 	return;
 
     struct ged_draw_transaction txn =

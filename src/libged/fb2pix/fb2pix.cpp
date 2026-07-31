@@ -37,7 +37,7 @@
 
 #include "pkg.h"
 #include "ged.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 
 
 struct fb2pix_state {
@@ -146,7 +146,7 @@ ged_fb2pix_core(struct ged *gedp, int argc, const char *argv[])
 
     setmode(fileno(stdout), O_BINARY);
 
-    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+    ret = ged_view_framebuffer_apply(gedp, view_ctx,
 	fb2pix_apply, &f2ps, 0);
 
     if (f2ps.outfp != stdout)

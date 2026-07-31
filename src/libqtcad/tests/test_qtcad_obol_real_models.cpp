@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include "BObol/BExportAction.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BSceneController.h"
@@ -894,7 +896,7 @@ sync_draw_case(const struct model_case &testCase)
 	(void)bv_params_state_set(deterministicView, &deterministicParams);
     }
     (void)ged_view_context_host_attach(gedp, view_ctx);
-    if (!ged_view_context_display_endpoint_set(
+    if (!ged_view_context_obol_endpoint_set(
 	    view_ctx, view.displayEndpoint(), 0)) {
 	ged_close(gedp);
 	return 0;
@@ -1345,7 +1347,7 @@ exercise_m35_color_table_mutation(void)
 	ged_view_context_from_bv(view.viewContext());
     ged_view_active_ctx_set(gedp, view_ctx);
     (void)ged_view_context_host_attach(gedp, view_ctx);
-    if (!ged_view_context_display_endpoint_set(
+    if (!ged_view_context_obol_endpoint_set(
 	    view_ctx, view.displayEndpoint(), 0)) {
 	ged_close(gedp);
 	bu_file_delete(tmp_db);

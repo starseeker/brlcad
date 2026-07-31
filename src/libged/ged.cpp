@@ -50,7 +50,7 @@
 #include "imgstream/fbserv.h"
 
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/event_txn.h"
 #include "./ged_draw_private.h"
 #include "./ged_private.h"

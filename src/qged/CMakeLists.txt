@@ -16,6 +16,8 @@ set(
   QgEdMainWindow.cpp
   QgEdApp.cpp
   QgEdFilter.cpp
+  QgGuiTestDriver.cpp
+  QgProgressiveDiagnostics.cpp
   fbserv.cpp
   QgEdPalette.cpp
 )
@@ -164,6 +166,7 @@ set(
   BUILDING_QT
   CMakeLists.txt
   QgEdCategories.h
+  QgGuiTestDriver.h
   TODO
   fonts/Inconsolata-LICENSE.txt
   fonts/Inconsolata.otf

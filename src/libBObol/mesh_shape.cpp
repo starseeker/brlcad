@@ -884,7 +884,7 @@ SoBRLMeshShape::applyStagedLodResult(const BObolLodResult &result,
 	this->lodDependencyName.set1Value(static_cast<int>(i),
 					  result.dependencies[i].objectName);
 	this->lodDependencySourceRevision.set1Value(static_cast<int>(i),
-					 mesh_lod_uint64_string(result.dependencies[i].sourceRevision));
+					 mesh_lod_uint64_string(result.dependencies[i].sourceRevision.value()));
 	this->lodDependencySourceHash.set1Value(static_cast<int>(i),
 						mesh_lod_uint64_string(result.dependencies[i].sourceContentHash));
 	this->lodDependencyQualityTier.set1Value(static_cast<int>(i),

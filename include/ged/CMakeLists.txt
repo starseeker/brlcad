@@ -5,11 +5,11 @@ set(
   db_index.h
   debug.h
   defines.h
+  display.h
   draw.h
   draw_source.h
   draw_types.h
   draw_scene.h
-  draw_obol.h
   event_txn.h
   objects.h
   polygon.h
@@ -24,7 +24,8 @@ set(
 )
 brlcad_manage_files(ged_headers ${INCLUDE_DIR}/brlcad/ged REQUIRED libged)
 
-cmakefiles(CMakeLists.txt)
+# Deliberately not installed: concrete retained-render host adapter.
+cmakefiles(CMakeLists.txt display_obol_private.h)
 
 # Local Variables:
 # tab-width: 8

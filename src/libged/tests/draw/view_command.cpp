@@ -11,6 +11,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -23,7 +25,7 @@
 #include <bu.h>
 #include <ged.h>
 #include <ged/draw.h>
-#include <ged/draw_obol.h>
+#include <ged/display.h>
 #include <ged/result.h>
 #include "view_test_util.h"
 
@@ -119,11 +121,11 @@ static void
 assert_endpoint_background_color(bobol_display_endpoint_t *endpoint,
 	const char *property_name, double r, double g, double b)
 {
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(bobol_display_endpoint_property_get(endpoint, property_name,
-	&value) == BOBOL_ENDPOINT_PROPERTY_OK);
-    ASSERT(value.type == BOBOL_ENDPOINT_PROPERTY_COLOR3);
+	&value) == BV_DISPLAY_PROPERTY_OK);
+    ASSERT(value.type == BV_DISPLAY_PROPERTY_COLOR3);
     ASSERT(std::fabs(value.color3[0] - r) < 0.0001);
     ASSERT(std::fabs(value.color3[1] - g) < 0.0001);
     ASSERT(std::fabs(value.color3[2] - b) < 0.0001);
@@ -149,10 +151,10 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
     ASSERT(owned != NULL);
     void *owned_controller = bobol_display_endpoint_controller(owned);
     ASSERT(owned_controller != NULL);
-    ASSERT(ged_view_context_display_endpoint_set(view, owned, 1));
-    ASSERT(ged_view_context_display_endpoint_get(view) == owned);
+    ASSERT(ged_view_context_obol_endpoint_set(view, owned, 1));
+    ASSERT(ged_view_context_obol_endpoint_get(view) == owned);
     ASSERT(bobol_display_endpoint_controller(
-	ged_view_context_display_endpoint_get(view)) == owned_controller);
+	ged_view_context_obol_endpoint_get(view)) == owned_controller);
     BObolViewController *view_controller =
 	static_cast<BObolViewController *>(owned_controller);
     ASSERT(view_controller->getNormalStyle() ==
@@ -164,106 +166,106 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
     assert_endpoint_background_color(owned, "controller.background.top",
 	78.0 / 255.0, 90.0 / 255.0, 123.0 / 255.0);
 
-    struct bobol_endpoint_property_value background_property =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    background_property.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value background_property =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    background_property.type = BV_DISPLAY_PROPERTY_COLOR3;
     VSET(background_property.color3, 0.2, 0.4, 0.6);
     ASSERT(bobol_display_endpoint_property_set(owned,
 	"controller.background.bottom", &background_property) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     VSET(background_property.color3, 0.1, 0.3, 0.5);
     ASSERT(bobol_display_endpoint_property_set(owned,
 	"controller.background.top", &background_property) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
 
     /* Re-registering an endpoint must not import stale passive view state. */
-    ASSERT(ged_view_context_display_endpoint_set(view, owned, 1));
+    ASSERT(ged_view_context_obol_endpoint_set(view, owned, 1));
     assert_endpoint_background_color(owned, "controller.background.bottom",
 	0.2, 0.4, 0.6);
     assert_endpoint_background_color(owned, "controller.background.top",
 	0.1, 0.3, 0.5);
 
-    struct bobol_endpoint_property_value perspective =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    perspective.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    struct bv_display_property_value perspective =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    perspective.type = BV_DISPLAY_PROPERTY_DOUBLE;
     perspective.double_value = 45.0;
     ASSERT(ged_view_context_display_property_set(view, "view.perspective",
-	&perspective) == BOBOL_ENDPOINT_PROPERTY_OK);
+	&perspective) == BV_DISPLAY_PROPERTY_OK);
     ASSERT(std::fabs(bv_perspective_get(DRAW_TEST_BV(view)) - 45.0) <
 	0.0001);
-    perspective = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    perspective = BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view, "view.perspective",
-	&perspective) == BOBOL_ENDPOINT_PROPERTY_OK);
-    ASSERT(perspective.type == BOBOL_ENDPOINT_PROPERTY_DOUBLE);
+	&perspective) == BV_DISPLAY_PROPERTY_OK);
+    ASSERT(perspective.type == BV_DISPLAY_PROPERTY_DOUBLE);
     ASSERT(std::fabs(perspective.double_value - 45.0) < 0.0001);
     ASSERT(bobol_display_endpoint_view_sync(owned, view));
     ASSERT(static_cast<BObolViewController *>(owned_controller)->getCamera()
 	->isOfType(SoPerspectiveCamera::getClassTypeId()));
-    perspective.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    perspective.type = BV_DISPLAY_PROPERTY_DOUBLE;
     perspective.double_value = -1.0;
     ASSERT(ged_view_context_display_property_set(view, "view.perspective",
-	&perspective) == BOBOL_ENDPOINT_PROPERTY_INVALID);
+	&perspective) == BV_DISPLAY_PROPERTY_INVALID);
     perspective.double_value = 0.0;
     ASSERT(ged_view_context_display_property_set(view, "view.perspective",
-	&perspective) == BOBOL_ENDPOINT_PROPERTY_OK);
+	&perspective) == BV_DISPLAY_PROPERTY_OK);
     mat_t pmat;
     ASSERT(bv_pmat_get(pmat, DRAW_TEST_BV(view)));
     ASSERT(std::fabs(pmat[0] - 1.0) < 0.0001 &&
 	std::fabs(pmat[5] - 1.0) < 0.0001 &&
 	std::fabs(pmat[14]) < 0.0001);
 
-    struct bobol_endpoint_property_value navigation =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    navigation.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    struct bv_display_property_value navigation =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    navigation.type = BV_DISPLAY_PROPERTY_DOUBLE;
     navigation.double_value = -12.0;
     ASSERT(ged_view_context_display_property_set(view,
 	"view.navigation.min_delta", &navigation) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     navigation.double_value = 12.0;
     ASSERT(ged_view_context_display_property_set(view,
 	"view.navigation.max_delta", &navigation) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     navigation.double_value = 0.6;
     ASSERT(ged_view_context_display_property_set(view,
 	"view.navigation.rotate_scale", &navigation) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     navigation.double_value = 3.0;
     ASSERT(ged_view_context_display_property_set(view,
 	"view.navigation.scale_scale", &navigation) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
-    navigation = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	BV_DISPLAY_PROPERTY_OK);
+    navigation = BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.navigation.rotate_scale", &navigation) ==
-	BOBOL_ENDPOINT_PROPERTY_OK &&
-	navigation.type == BOBOL_ENDPOINT_PROPERTY_DOUBLE &&
+	BV_DISPLAY_PROPERTY_OK &&
+	navigation.type == BV_DISPLAY_PROPERTY_DOUBLE &&
 	std::fabs(navigation.double_value - 0.6) < 0.0001);
-    navigation.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    navigation.type = BV_DISPLAY_PROPERTY_DOUBLE;
     navigation.double_value = 0.0;
     ASSERT(ged_view_context_display_property_set(view,
 	"view.navigation.scale_scale", &navigation) ==
-	BOBOL_ENDPOINT_PROPERTY_INVALID);
+	BV_DISPLAY_PROPERTY_INVALID);
 
     const char *font_properties[] = {
 	"view.faceplate.params.font_size",
 	"view.faceplate.center_dot.font_size",
 	"view.faceplate.scale.font_size"
     };
-    struct bobol_endpoint_property_value font_size =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    font_size.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+    struct bv_display_property_value font_size =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    font_size.type = BV_DISPLAY_PROPERTY_UINT;
     font_size.uint_value = 18;
     for (size_t i = 0; i < sizeof(font_properties) / sizeof(font_properties[0]); i++) {
 	ASSERT(ged_view_context_display_property_set(view, font_properties[i],
-	    &font_size) == BOBOL_ENDPOINT_PROPERTY_OK);
-	font_size = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    &font_size) == BV_DISPLAY_PROPERTY_OK);
+	font_size = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	ASSERT(ged_view_context_display_property_get(view, font_properties[i],
-	    &font_size) == BOBOL_ENDPOINT_PROPERTY_OK);
-	ASSERT(font_size.type == BOBOL_ENDPOINT_PROPERTY_UINT);
+	    &font_size) == BV_DISPLAY_PROPERTY_OK);
+	ASSERT(font_size.type == BV_DISPLAY_PROPERTY_UINT);
 	ASSERT(font_size.uint_value == 18);
-	font_size.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+	font_size.type = BV_DISPLAY_PROPERTY_UINT;
 	font_size.uint_value = 97;
 	ASSERT(ged_view_context_display_property_set(view, font_properties[i],
-	    &font_size) == BOBOL_ENDPOINT_PROPERTY_INVALID);
+	    &font_size) == BV_DISPLAY_PROPERTY_INVALID);
 	font_size.uint_value = 18;
     }
 
@@ -272,24 +274,24 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
 	"view.faceplate.center_dot.color",
 	"view.faceplate.scale.color"
     };
-    struct bobol_endpoint_property_value color =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    color.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value color =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    color.type = BV_DISPLAY_PROPERTY_COLOR3;
     VSET(color.color3, 17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0);
     for (size_t i = 0; i < sizeof(color_properties) / sizeof(color_properties[0]); i++) {
 	ASSERT(ged_view_context_display_property_set(view, color_properties[i],
-	    &color) == BOBOL_ENDPOINT_PROPERTY_OK);
-	color = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    &color) == BV_DISPLAY_PROPERTY_OK);
+	color = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	ASSERT(ged_view_context_display_property_get(view, color_properties[i],
-	    &color) == BOBOL_ENDPOINT_PROPERTY_OK);
-	ASSERT(color.type == BOBOL_ENDPOINT_PROPERTY_COLOR3);
+	    &color) == BV_DISPLAY_PROPERTY_OK);
+	ASSERT(color.type == BV_DISPLAY_PROPERTY_COLOR3);
 	ASSERT(std::fabs(color.color3[0] - 17.0 / 255.0) < 0.0001);
 	ASSERT(std::fabs(color.color3[1] - 34.0 / 255.0) < 0.0001);
 	ASSERT(std::fabs(color.color3[2] - 51.0 / 255.0) < 0.0001);
-	color.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+	color.type = BV_DISPLAY_PROPERTY_COLOR3;
 	VSET(color.color3, 1.1, 0.0, 0.0);
 	ASSERT(ged_view_context_display_property_set(view, color_properties[i],
-	    &color) == BOBOL_ENDPOINT_PROPERTY_INVALID);
+	    &color) == BV_DISPLAY_PROPERTY_INVALID);
 	VSET(color.color3, 17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0);
     }
 
@@ -300,29 +302,29 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
     for (size_t i = 0; i < sizeof(adc_color_properties) /
 	 sizeof(adc_color_properties[0]); i++) {
 	ASSERT(ged_view_context_display_property_set(view, adc_color_properties[i],
-	    &color) == BOBOL_ENDPOINT_PROPERTY_OK);
-	color = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    &color) == BV_DISPLAY_PROPERTY_OK);
+	color = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	ASSERT(ged_view_context_display_property_get(view, adc_color_properties[i],
-	    &color) == BOBOL_ENDPOINT_PROPERTY_OK);
-	ASSERT(color.type == BOBOL_ENDPOINT_PROPERTY_COLOR3);
+	    &color) == BV_DISPLAY_PROPERTY_OK);
+	ASSERT(color.type == BV_DISPLAY_PROPERTY_COLOR3);
 	ASSERT(std::fabs(color.color3[0] - 17.0 / 255.0) < 0.0001);
 	ASSERT(std::fabs(color.color3[1] - 34.0 / 255.0) < 0.0001);
 	ASSERT(std::fabs(color.color3[2] - 51.0 / 255.0) < 0.0001);
-	color.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+	color.type = BV_DISPLAY_PROPERTY_COLOR3;
 	VSET(color.color3, 17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0);
     }
-    struct bobol_endpoint_property_value adc_line_width =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    adc_line_width.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+    struct bv_display_property_value adc_line_width =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    adc_line_width.type = BV_DISPLAY_PROPERTY_UINT;
     adc_line_width.uint_value = 3;
     ASSERT(ged_view_context_display_property_set(view,
 	"view.faceplate.adc.line_width", &adc_line_width) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
-    adc_line_width = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	BV_DISPLAY_PROPERTY_OK);
+    adc_line_width = BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.adc.line_width", &adc_line_width) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
-    ASSERT(adc_line_width.type == BOBOL_ENDPOINT_PROPERTY_UINT);
+	BV_DISPLAY_PROPERTY_OK);
+    ASSERT(adc_line_width.type == BV_DISPLAY_PROPERTY_UINT);
     ASSERT(adc_line_width.uint_value == 3);
 
     const char *faceplate_visibility_properties[] = {
@@ -340,44 +342,44 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
 	"view.faceplate.params.twist",
 	"view.faceplate.params.fps"
     };
-    struct bobol_endpoint_property_value visibility =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    visibility.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bv_display_property_value visibility =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    visibility.type = BV_DISPLAY_PROPERTY_BOOL;
     visibility.bool_value = 0;
     for (size_t i = 0;
 	i < sizeof(faceplate_visibility_properties) /
 	    sizeof(faceplate_visibility_properties[0]); i++) {
 	ASSERT(ged_view_context_display_property_set(view,
 	    faceplate_visibility_properties[i], &visibility) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK);
-	visibility = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    BV_DISPLAY_PROPERTY_OK);
+	visibility = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	ASSERT(ged_view_context_display_property_get(view,
 	    faceplate_visibility_properties[i], &visibility) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK);
-	ASSERT(visibility.type == BOBOL_ENDPOINT_PROPERTY_BOOL);
+	    BV_DISPLAY_PROPERTY_OK);
+	ASSERT(visibility.type == BV_DISPLAY_PROPERTY_BOOL);
 	ASSERT(visibility.bool_value == 0);
-	visibility.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+	visibility.type = BV_DISPLAY_PROPERTY_BOOL;
 	visibility.bool_value = 2;
 	ASSERT(ged_view_context_display_property_set(view,
 	    faceplate_visibility_properties[i], &visibility) ==
-	    BOBOL_ENDPOINT_PROPERTY_INVALID);
+	    BV_DISPLAY_PROPERTY_INVALID);
 	visibility.bool_value = 0;
     }
 
     const char *adc_enable[] = {"adc", "draw", "1", NULL};
     ASSERT(ged_exec_adc(gedp, 3, adc_enable) == BRLCAD_OK);
-    visibility = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    visibility = BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.adc.visible", &visibility) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
-    ASSERT(visibility.type == BOBOL_ENDPOINT_PROPERTY_BOOL);
+	BV_DISPLAY_PROPERTY_OK);
+    ASSERT(visibility.type == BV_DISPLAY_PROPERTY_BOOL);
     ASSERT(visibility.bool_value == 1);
     const char *adc_disable[] = {"adc", "draw", "0", NULL};
     ASSERT(ged_exec_adc(gedp, 3, adc_disable) == BRLCAD_OK);
-    visibility = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    visibility = BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.adc.visible", &visibility) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     ASSERT(visibility.bool_value == 0);
 
     const char *grid_bool_properties[] = {
@@ -386,17 +388,17 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
     };
     for (size_t i = 0; i < sizeof(grid_bool_properties) /
 	 sizeof(grid_bool_properties[0]); i++) {
-	visibility = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	visibility.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+	visibility = BV_DISPLAY_PROPERTY_VALUE_INIT;
+	visibility.type = BV_DISPLAY_PROPERTY_BOOL;
 	visibility.bool_value = 1;
 	ASSERT(ged_view_context_display_property_set(view,
 	    grid_bool_properties[i], &visibility) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK);
-	visibility = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    BV_DISPLAY_PROPERTY_OK);
+	visibility = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	ASSERT(ged_view_context_display_property_get(view,
 	    grid_bool_properties[i], &visibility) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK);
-	ASSERT(visibility.type == BOBOL_ENDPOINT_PROPERTY_BOOL);
+	    BV_DISPLAY_PROPERTY_OK);
+	ASSERT(visibility.type == BV_DISPLAY_PROPERTY_BOOL);
 	ASSERT(visibility.bool_value == 1);
     }
     const char *grid_double_properties[] = {
@@ -408,18 +410,18 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
     };
     for (size_t i = 0; i < sizeof(grid_double_properties) /
 	 sizeof(grid_double_properties[0]); i++) {
-	struct bobol_endpoint_property_value grid_value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	grid_value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	struct bv_display_property_value grid_value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	grid_value.type = BV_DISPLAY_PROPERTY_DOUBLE;
 	grid_value.double_value = 2.0 + static_cast<double>(i);
 	ASSERT(ged_view_context_display_property_set(view,
 	    grid_double_properties[i], &grid_value) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK);
-	grid_value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    BV_DISPLAY_PROPERTY_OK);
+	grid_value = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	ASSERT(ged_view_context_display_property_get(view,
 	    grid_double_properties[i], &grid_value) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK);
-	ASSERT(grid_value.type == BOBOL_ENDPOINT_PROPERTY_DOUBLE);
+	    BV_DISPLAY_PROPERTY_OK);
+	ASSERT(grid_value.type == BV_DISPLAY_PROPERTY_DOUBLE);
 	ASSERT(std::fabs(grid_value.double_value -
 	    (2.0 + static_cast<double>(i))) < 0.0001);
     }
@@ -429,69 +431,69 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
     };
     for (size_t i = 0; i < sizeof(grid_uint_properties) /
 	 sizeof(grid_uint_properties[0]); i++) {
-	struct bobol_endpoint_property_value grid_value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	grid_value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+	struct bv_display_property_value grid_value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	grid_value.type = BV_DISPLAY_PROPERTY_UINT;
 	grid_value.uint_value = 3 + i;
 	ASSERT(ged_view_context_display_property_set(view,
 	    grid_uint_properties[i], &grid_value) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK);
-	grid_value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    BV_DISPLAY_PROPERTY_OK);
+	grid_value = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	ASSERT(ged_view_context_display_property_get(view,
 	    grid_uint_properties[i], &grid_value) ==
-	    BOBOL_ENDPOINT_PROPERTY_OK);
-	ASSERT(grid_value.type == BOBOL_ENDPOINT_PROPERTY_UINT);
+	    BV_DISPLAY_PROPERTY_OK);
+	ASSERT(grid_value.type == BV_DISPLAY_PROPERTY_UINT);
 	ASSERT(grid_value.uint_value == 3 + i);
     }
-    struct bobol_endpoint_property_value grid_color =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    grid_color.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bv_display_property_value grid_color =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    grid_color.type = BV_DISPLAY_PROPERTY_COLOR3;
     VSET(grid_color.color3, 0.1, 0.2, 0.3);
     ASSERT(ged_view_context_display_property_set(view,
 	"view.faceplate.grid.color", &grid_color) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
-    grid_color = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	BV_DISPLAY_PROPERTY_OK);
+    grid_color = BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.grid.color", &grid_color) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
-    ASSERT(grid_color.type == BOBOL_ENDPOINT_PROPERTY_COLOR3);
+	BV_DISPLAY_PROPERTY_OK);
+    ASSERT(grid_color.type == BV_DISPLAY_PROPERTY_COLOR3);
     ASSERT(std::fabs(grid_color.color3[0] - 26.0 / 255.0) < 0.0001);
     ASSERT(std::fabs(grid_color.color3[1] - 51.0 / 255.0) < 0.0001);
     ASSERT(std::fabs(grid_color.color3[2] - 77.0 / 255.0) < 0.0001);
 
     const char *grid_snap[] = {"grid", "snap", "0", NULL};
     ASSERT(ged_exec_grid(gedp, 3, grid_snap) == BRLCAD_OK);
-    visibility = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    visibility = BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.grid.snap", &visibility) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     ASSERT(visibility.bool_value == 0);
     const char *grid_anchor[] = {"grid", "anchor", "7", "8", "9", NULL};
     ASSERT(ged_exec_grid(gedp, 5, grid_anchor) == BRLCAD_OK);
-    struct bobol_endpoint_property_value anchor =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value anchor =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.grid.anchor.z", &anchor) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     ASSERT(std::fabs(anchor.double_value - 9.0) < 0.0001);
     const char *grid_color_command[] = {
 	"grid", "color", "10", "20", "30", NULL
     };
     ASSERT(ged_exec_grid(gedp, 5, grid_color_command) == BRLCAD_OK);
-    grid_color = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    grid_color = BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.grid.color", &grid_color) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     ASSERT(std::fabs(grid_color.color3[0] - 10.0 / 255.0) < 0.0001);
 
     const char *faceplate_grid_color[] = {
 	"view", "faceplate", "grid", "color", "11", "22", "33", NULL
     };
     ASSERT_VIEW_OK(gedp, 7, faceplate_grid_color);
-    grid_color = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    grid_color = BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.grid.color", &grid_color) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     ASSERT(std::fabs(grid_color.color3[2] - 33.0 / 255.0) < 0.0001);
 
     const char *axes_names[] = {"model_axes", "view_axes"};
@@ -512,32 +514,32 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
 	for (const char *suffix : axes_bool_suffixes) {
 	    const std::string property = "view.faceplate." +
 		std::string(axes_name) + "." + suffix;
-	    struct bobol_endpoint_property_value axes_value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    axes_value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+	    struct bv_display_property_value axes_value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    axes_value.type = BV_DISPLAY_PROPERTY_BOOL;
 	    axes_value.bool_value = 1;
 	    ASSERT(ged_view_context_display_property_set(view, property.c_str(),
-		&axes_value) == BOBOL_ENDPOINT_PROPERTY_OK);
-	    axes_value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		&axes_value) == BV_DISPLAY_PROPERTY_OK);
+	    axes_value = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	    ASSERT(ged_view_context_display_property_get(view, property.c_str(),
-		&axes_value) == BOBOL_ENDPOINT_PROPERTY_OK);
-	    ASSERT(axes_value.type == BOBOL_ENDPOINT_PROPERTY_BOOL);
+		&axes_value) == BV_DISPLAY_PROPERTY_OK);
+	    ASSERT(axes_value.type == BV_DISPLAY_PROPERTY_BOOL);
 	    ASSERT(axes_value.bool_value == 1);
 	}
 	for (size_t i = 0; i < sizeof(axes_double_suffixes) /
 	     sizeof(axes_double_suffixes[0]); i++) {
 	    const std::string property = "view.faceplate." +
 		std::string(axes_name) + "." + axes_double_suffixes[i];
-	    struct bobol_endpoint_property_value axes_value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    axes_value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	    struct bv_display_property_value axes_value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    axes_value.type = BV_DISPLAY_PROPERTY_DOUBLE;
 	    axes_value.double_value = 2.0 + static_cast<double>(i);
 	    ASSERT(ged_view_context_display_property_set(view, property.c_str(),
-		&axes_value) == BOBOL_ENDPOINT_PROPERTY_OK);
-	    axes_value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		&axes_value) == BV_DISPLAY_PROPERTY_OK);
+	    axes_value = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	    ASSERT(ged_view_context_display_property_get(view, property.c_str(),
-		&axes_value) == BOBOL_ENDPOINT_PROPERTY_OK);
-	    ASSERT(axes_value.type == BOBOL_ENDPOINT_PROPERTY_DOUBLE);
+		&axes_value) == BV_DISPLAY_PROPERTY_OK);
+	    ASSERT(axes_value.type == BV_DISPLAY_PROPERTY_DOUBLE);
 	    ASSERT(std::fabs(axes_value.double_value -
 		(2.0 + static_cast<double>(i))) < 0.0001);
 	}
@@ -545,31 +547,31 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
 	     sizeof(axes_uint_suffixes[0]); i++) {
 	    const std::string property = "view.faceplate." +
 		std::string(axes_name) + "." + axes_uint_suffixes[i];
-	    struct bobol_endpoint_property_value axes_value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    axes_value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+	    struct bv_display_property_value axes_value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    axes_value.type = BV_DISPLAY_PROPERTY_UINT;
 	    axes_value.uint_value = 2 + i;
 	    ASSERT(ged_view_context_display_property_set(view, property.c_str(),
-		&axes_value) == BOBOL_ENDPOINT_PROPERTY_OK);
-	    axes_value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		&axes_value) == BV_DISPLAY_PROPERTY_OK);
+	    axes_value = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	    ASSERT(ged_view_context_display_property_get(view, property.c_str(),
-		&axes_value) == BOBOL_ENDPOINT_PROPERTY_OK);
-	    ASSERT(axes_value.type == BOBOL_ENDPOINT_PROPERTY_UINT);
+		&axes_value) == BV_DISPLAY_PROPERTY_OK);
+	    ASSERT(axes_value.type == BV_DISPLAY_PROPERTY_UINT);
 	    ASSERT(axes_value.uint_value == 2 + i);
 	}
 	for (const char *suffix : axes_color_suffixes) {
 	    const std::string property = "view.faceplate." +
 		std::string(axes_name) + "." + suffix;
-	    struct bobol_endpoint_property_value axes_value =
-		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    axes_value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+	    struct bv_display_property_value axes_value =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    axes_value.type = BV_DISPLAY_PROPERTY_COLOR3;
 	    VSET(axes_value.color3, 0.2, 0.4, 0.6);
 	    ASSERT(ged_view_context_display_property_set(view, property.c_str(),
-		&axes_value) == BOBOL_ENDPOINT_PROPERTY_OK);
-	    axes_value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		&axes_value) == BV_DISPLAY_PROPERTY_OK);
+	    axes_value = BV_DISPLAY_PROPERTY_VALUE_INIT;
 	    ASSERT(ged_view_context_display_property_get(view, property.c_str(),
-		&axes_value) == BOBOL_ENDPOINT_PROPERTY_OK);
-	    ASSERT(axes_value.type == BOBOL_ENDPOINT_PROPERTY_COLOR3);
+		&axes_value) == BV_DISPLAY_PROPERTY_OK);
+	    ASSERT(axes_value.type == BV_DISPLAY_PROPERTY_COLOR3);
 	    ASSERT(std::fabs(axes_value.color3[0] - 51.0 / 255.0) < 0.0001);
 	    ASSERT(std::fabs(axes_value.color3[2] - 153.0 / 255.0) < 0.0001);
 	}
@@ -578,32 +580,32 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
 	"view", "faceplate", "model_axes", "axes_color", "11", "22", "33", NULL
     };
     ASSERT_VIEW_OK(gedp, 7, faceplate_model_axes_color);
-    struct bobol_endpoint_property_value axes_color =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value axes_color =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.model_axes.color", &axes_color) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     ASSERT(std::fabs(axes_color.color3[1] - 22.0 / 255.0) < 0.0001);
     const char *faceplate_view_axes_tick[] = {
 	"view", "faceplate", "view_axes", "tick_length", "9", NULL
     };
     ASSERT_VIEW_OK(gedp, 5, faceplate_view_axes_tick);
-    struct bobol_endpoint_property_value axes_tick =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bv_display_property_value axes_tick =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view,
 	"view.faceplate.view_axes.ticks.length", &axes_tick) ==
-	BOBOL_ENDPOINT_PROPERTY_OK);
+	BV_DISPLAY_PROPERTY_OK);
     ASSERT(axes_tick.uint_value == 9);
 
     bobol_display_endpoint_t *borrowed =
 	bobol_display_endpoint_create(NULL, 0);
     ASSERT(borrowed != NULL);
-    ASSERT(ged_view_context_display_endpoint_set(view, borrowed, 0));
-    ASSERT(ged_view_context_display_endpoint_get(view) == borrowed);
+    ASSERT(ged_view_context_obol_endpoint_set(view, borrowed, 0));
+    ASSERT(ged_view_context_obol_endpoint_get(view) == borrowed);
     ASSERT(bobol_display_endpoint_controller(
-	ged_view_context_display_endpoint_get(view)) ==
+	ged_view_context_obol_endpoint_get(view)) ==
 	bobol_display_endpoint_controller(borrowed));
-    ASSERT(ged_view_context_display_endpoint_set(view, NULL, 0));
+    ASSERT(ged_view_context_obol_endpoint_set(view, NULL, 0));
     bobol_display_endpoint_destroy(borrowed);
 
     /* Restore this view's production default for the following command

@@ -25,10 +25,12 @@
 /** @} */
 
 #include "common.h"
+
+#include "ged/display_obol_private.h"
 #include "BObol/BDisplayEndpoint.h"
 #include "bv.h"
 #include "ged.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
 #include "tclcad.h"
 
@@ -43,12 +45,12 @@ go_refresh_draw(struct ged *gedp, struct ged_view_context *draw_view_ctx, int UN
 	return;
 
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(draw_view_ctx);
+	ged_view_context_obol_endpoint_get(draw_view_ctx);
     if (!endpoint)
 	return;
 
     go_draw(draw_view_ctx);
-    (void)ged_draw_obol_framebuffer_present(gedp);
+    (void)ged_view_framebuffer_present(gedp);
     if (!bobol_display_endpoint_view_sync(endpoint, draw_view_ctx))
 	return;
     (void)bobol_display_endpoint_request_frame(endpoint, "TclCAD refresh");

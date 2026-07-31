@@ -929,8 +929,8 @@ BObolViewLodState::applyMeshResultInternal(const SoBRLMeshShape *shape,
     payload->requestedLevel = result.request.requestedLevel;
     payload->residentAdmissionRevision =
 	result.residentAdmissionRevision;
-    payload->viewRevision = result.request.viewRevision;
-    payload->policyRevision = result.request.policyRevision;
+    payload->viewRevision = result.request.viewRevision.value();
+    payload->policyRevision = result.request.policyRevision.value();
     payload->counts = result.counts;
     payload->bounds = result.bounds;
     payload->hasSnappedPoints = result.hasSnappedPoints;
@@ -980,8 +980,8 @@ BObolViewLodState::applyProxyResultInternal(const SoBRLMeshShape *shape,
     payload->resultKind = result.resultKind;
     payload->qualityTier = result.qualityTier;
     payload->providerStatus = result.providerStatus;
-    payload->viewRevision = result.request.viewRevision;
-    payload->policyRevision = result.request.policyRevision;
+    payload->viewRevision = result.request.viewRevision.value();
+    payload->policyRevision = result.request.policyRevision.value();
     payload->counts = result.counts;
     payload->bounds = result.bounds;
     payload->diagnostic = result.diagnostic;
@@ -1049,11 +1049,11 @@ BObolViewLodState::applySourceResultInternal(
 	    result.providerStatus)) {
 	CadOccurrenceFailure &failure =
 	    this->cadOccurrenceFailures[sourceBindingKey][occurrenceKey];
-	failure.databaseRevision = result.request.databaseRevision;
-	failure.sourceRevision = result.request.sourceRevision;
+	failure.databaseRevision = result.request.databaseRevision.value();
+	failure.sourceRevision = result.request.sourceRevision.value();
 	failure.sourceContentHash = result.request.sourceContentHash;
-	failure.viewRevision = result.request.viewRevision;
-	failure.policyRevision = result.request.policyRevision;
+	failure.viewRevision = result.request.viewRevision.value();
+	failure.policyRevision = result.request.policyRevision.value();
 	failure.requestedLevel = result.request.requestedLevel;
 	failure.drawMode = result.request.drawMode;
 	failure.qualityTier = result.request.qualityTier;
@@ -1159,8 +1159,8 @@ BObolViewLodState::applySourceResultInternal(
     payload->cacheKey = result.geometry.cacheKey.isValid() ?
 	result.geometry.cacheKey.value : result.cacheKey.value;
     payload->sourceContentHash = result.request.sourceContentHash;
-    payload->databaseRevision = result.request.databaseRevision;
-    payload->sourceRevision = result.request.sourceRevision;
+    payload->databaseRevision = result.request.databaseRevision.value();
+    payload->sourceRevision = result.request.sourceRevision.value();
     payload->resultKind = result.resultKind;
     payload->qualityTier = result.qualityTier;
     payload->providerStatus = result.providerStatus;
@@ -1170,8 +1170,8 @@ BObolViewLodState::applySourceResultInternal(
     payload->requestedLevel = result.request.requestedLevel;
     payload->residentAdmissionRevision =
 	result.residentAdmissionRevision;
-    payload->viewRevision = result.request.viewRevision;
-    payload->policyRevision = result.request.policyRevision;
+    payload->viewRevision = result.request.viewRevision.value();
+    payload->policyRevision = result.request.policyRevision.value();
     payload->counts = result.counts;
     payload->bounds = result.bounds;
     payload->hasSnappedPoints = result.hasSnappedPoints;

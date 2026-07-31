@@ -50,10 +50,10 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get the perspective angle */
     if (argc == 1) {
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	if (ged_view_context_display_property_get(view_ctx, "view.perspective",
-		&value) != BOBOL_ENDPOINT_PROPERTY_OK) {
+		&value) != BV_DISPLAY_PROPERTY_OK) {
 	    bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol perspective policy");
 	    return BRLCAD_ERROR;
@@ -69,12 +69,12 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	}
 
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	value.type = BV_DISPLAY_PROPERTY_DOUBLE;
 	value.double_value = perspective;
 	if (ged_view_context_display_property_set(view_ctx, "view.perspective",
-		&value) != BOBOL_ENDPOINT_PROPERTY_OK) {
+		&value) != BV_DISPLAY_PROPERTY_OK) {
 	    bu_vls_printf(gedp->ged_result_str,
 		"bad perspective angle - %s", argv[1]);
 	    return BRLCAD_ERROR;

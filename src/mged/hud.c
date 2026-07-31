@@ -133,7 +133,7 @@ mged_hud_line_add(struct mged_hud_builder *builder,
 	    sizeof(point_t), "MGED HUD line points"))
 	return 0;
     size_t command_capacity = layer->point_capacity;
-    layer->commands = bu_realloc(layer->commands,
+    layer->commands = (int *)bu_realloc(layer->commands,
 	command_capacity * sizeof(int), "MGED HUD line commands");
     VSET(layer->points[layer->point_count], x1, y1, 0.0);
     layer->commands[layer->point_count++] = GED_DRAW_VIEW_LINE_MOVE;
@@ -152,7 +152,7 @@ mged_hud_label_add(struct mged_hud_builder *builder,
 	    &builder->label_capacity, builder->label_count,
 	    sizeof(struct ged_annotation_label), "MGED HUD labels"))
 	return 0;
-    builder->label_text = bu_realloc(builder->label_text,
+    builder->label_text = (char **)bu_realloc(builder->label_text,
 	builder->label_capacity * sizeof(char *), "MGED HUD label strings");
     size_t index = builder->label_count++;
     builder->label_text[index] = bu_strdup(text);

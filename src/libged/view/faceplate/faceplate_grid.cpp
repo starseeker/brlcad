@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
@@ -49,20 +51,20 @@ struct _ged_fp_grid_info {
 
 static int
 _fp_grid_endpoint_property_set(struct ged_view_context *view_ctx, const char *name,
-	const struct bobol_endpoint_property_value *value)
+	const struct bv_display_property_value *value)
 {
     bobol_display_endpoint_t *endpoint =
-	ged_view_context_display_endpoint_get(view_ctx);
+	ged_view_context_obol_endpoint_get(view_ctx);
     return endpoint && bobol_display_endpoint_property_set(endpoint, name,
-	value) == BOBOL_ENDPOINT_PROPERTY_OK;
+	value) == BV_DISPLAY_PROPERTY_OK;
 }
 
 static int
 _fp_grid_endpoint_bool_set(struct ged_view_context *view_ctx, const char *name, int enabled)
 {
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_BOOL;
     value.bool_value = enabled ? 1 : 0;
     return _fp_grid_endpoint_property_set(view_ctx, name, &value);
 }
@@ -70,9 +72,9 @@ _fp_grid_endpoint_bool_set(struct ged_view_context *view_ctx, const char *name, 
 static int
 _fp_grid_endpoint_double_set(struct ged_view_context *view_ctx, const char *name, double number)
 {
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_DOUBLE;
     value.double_value = number;
     return _fp_grid_endpoint_property_set(view_ctx, name, &value);
 }
@@ -82,9 +84,9 @@ _fp_grid_endpoint_uint_set(struct ged_view_context *view_ctx, const char *name, 
 {
     if (number < 0)
 	return 0;
-    struct bobol_endpoint_property_value value =
-	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
+    struct bv_display_property_value value =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    value.type = BV_DISPLAY_PROPERTY_UINT;
     value.uint_value = (uint64_t)number;
     return _fp_grid_endpoint_property_set(view_ctx, name, &value);
 }
@@ -136,9 +138,9 @@ _fp_grid_endpoint_state_apply(struct ged_view_context *view_ctx,
 	    "view.faceplate.grid.major.vertical", after->res_major_v))
 	return 0;
     if (memcmp(before->color, after->color, sizeof(after->color)) != 0) {
-	struct bobol_endpoint_property_value value =
-	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
+	struct bv_display_property_value value =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	value.type = BV_DISPLAY_PROPERTY_COLOR3;
 	for (int axis = 0; axis < 3; axis++)
 	    value.color3[axis] = after->color[axis] / 255.0;
 	if (!_fp_grid_endpoint_property_set(view_ctx,
@@ -183,7 +185,7 @@ _fp_grid_cmd_draw(void *bs, int argc, const char **argv)
 
     val = (val) ? 1 : 0;
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
-    if (ged_view_context_display_endpoint_get(view_ctx)) {
+    if (ged_view_context_obol_endpoint_get(view_ctx)) {
 	if (_fp_bool_property_set(gedp, view_ctx,
 		"view.faceplate.grid.visible", val) != BRLCAD_OK)
 	    return BRLCAD_ERROR;
@@ -525,7 +527,7 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
 	if (!bv_grid_state_get(&grid, view))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    if (ged_view_context_display_endpoint_get(view_ctx))
+	    if (ged_view_context_obol_endpoint_get(view_ctx))
 		return _fp_bool_property_set(gedp, view_ctx,
 		    "view.faceplate.grid.visible", 1);
 	    grid.draw = 1;
@@ -533,7 +535,7 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    if (ged_view_context_display_endpoint_get(view_ctx))
+	    if (ged_view_context_obol_endpoint_get(view_ctx))
 		return _fp_bool_property_set(gedp, view_ctx,
 		    "view.faceplate.grid.visible", 0);
 	    grid.draw = 0;
@@ -573,7 +575,7 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_grid_cmds, "view faceplate grid", "[options] subcommand [args]", (void *)&ginfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK && !ginfo.draw_property_set) {
-	if (ged_view_context_display_endpoint_get(view_ctx)) {
+	if (ged_view_context_obol_endpoint_get(view_ctx)) {
 	    if (!_fp_grid_endpoint_state_apply(view_ctx, &initial_grid, &grid))
 		return BRLCAD_ERROR;
 	} else {

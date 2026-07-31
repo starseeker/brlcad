@@ -8951,8 +8951,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    if (!viewState.retargetCadPayload(richer,
 		    results[0].geometry.activeLevel,
 		    results[0].request.requestedLevel,
-		    results[0].request.viewRevision,
-		    results[0].request.policyRevision)) {
+		    results[0].request.viewRevision.value(),
+		    results[0].request.policyRevision.value())) {
 		printf("FAIL: compact coordinate-only LoD fixture could not "
 		       "restore its original cut\n");
 		ret = 1;

@@ -30,10 +30,7 @@
 #include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoSeparator.h>
 
-#include <atomic>
-#include <deque>
 #include <memory>
-#include <mutex>
 #include <vector>
 
 class SoBRLVListShape;
@@ -508,7 +505,13 @@ struct BOBOL_EXPORT BObolCompactOccurrence {
  * pointee), so pushing a copy across threads is a race-free refcount bump; all
  * other fields are value types. */
 struct BOBOL_EXPORT BObolCompactOccurrenceStream {
+    BObolCompactOccurrenceStream(void);
     ~BObolCompactOccurrenceStream(void);
+    BObolCompactOccurrenceStream(
+	const BObolCompactOccurrenceStream &) = delete;
+    BObolCompactOccurrenceStream &operator=(
+	const BObolCompactOccurrenceStream &) = delete;
+
     void push(const BObolCompactOccurrence &occurrence);
     void push(BObolCompactOccurrence &&occurrence);
     /* Priority occurrences describe the whole draw target rather than one
@@ -523,72 +526,24 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
     size_t stagedSourceByteCount(void);
     size_t drain(std::vector<BObolCompactOccurrence> &out, size_t cap);
     size_t size(void);
-    void setExpectedCount(size_t count)
-    {
-	/*
-	 * Warm manifests know their complete population before publishing the
-	 * first leaf.  Reserve the producer buffer once so streaming 100k+
-	 * immutable records does not repeatedly copy every previously queued
-	 * value while the GUI drains concurrently.
-	 */
-	{
-	    std::lock_guard<std::mutex> guard(mutex);
-	    const size_t alreadyConsumed =
-		pendingOffset <= pending.size() ? pendingOffset : 0;
-	    const size_t desired =
-		count > SIZE_MAX - alreadyConsumed ?
-		    SIZE_MAX : count + alreadyConsumed;
-	    if (desired > pending.capacity())
-		pending.reserve(desired);
-	}
-	expectedCount.store(count, std::memory_order_release);
-    }
-    size_t getExpectedCount(void) const
-    {
-	return expectedCount.load(std::memory_order_acquire);
-    }
-    void setWarmCoverageComplete(bool complete)
-    {
-	warmCoverageComplete.store(complete, std::memory_order_release);
-    }
-    bool hasWarmCoverageComplete(void) const
-    {
-	return warmCoverageComplete.load(std::memory_order_acquire);
-    }
+    void setExpectedCount(size_t count);
+    size_t getExpectedCount(void) const;
+    void setWarmCoverageComplete(bool complete);
+    bool hasWarmCoverageComplete(void) const;
     /*
      * True once an exact whole-target bound has been queued in the priority
      * lane.  Progressive autoview must not chase the append-only union of
      * partial leaf coverage: doing so recenters the camera on every streamed
      * batch and makes an otherwise monotonic cold draw appear to flicker.
      */
-    void setCoverageBoundsComplete(bool complete)
-    {
-	coverageBoundsComplete.store(complete, std::memory_order_release);
-    }
-    bool hasCoverageBoundsComplete(void) const
-    {
-	return coverageBoundsComplete.load(std::memory_order_acquire);
-    }
-    void requestCancel(void) { cancelled.store(true, std::memory_order_release); }
-    bool isCancelled(void) const
-    {
-	return cancelled.load(std::memory_order_acquire);
-    }
+    void setCoverageBoundsComplete(bool complete);
+    bool hasCoverageBoundsComplete(void) const;
+    void requestCancel(void);
+    bool isCancelled(void) const;
 
-    std::mutex mutex;
-    std::vector<BObolCompactOccurrence> priority;
-    size_t priorityOffset = 0;
-    std::vector<BObolCompactOccurrence> pending;
-    size_t pendingOffset = 0;
-    std::deque<std::shared_ptr<const BObolStagedSourceMesh>> stagedSources;
-    size_t stagedSourceBytes = 0;
-    /* A persisted leaf manifest already supplied every leaf AABB and immutable
-     * source-mesh request.  The authoritative semantics walk may therefore
-     * skip its otherwise redundant full-BoT coverage import pass. */
-    std::atomic<bool> warmCoverageComplete{false};
-    std::atomic<bool> coverageBoundsComplete{false};
-    std::atomic<bool> cancelled{false};
-    std::atomic<size_t> expectedCount{0};
+private:
+    struct Impl;
+    std::unique_ptr<Impl> d;
 };
 
 struct BOBOL_EXPORT BObolRealizedMaterialSummary {

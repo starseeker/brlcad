@@ -70,11 +70,19 @@ test_key_determinism(void)
 	printf("FAIL: LoD cache key not deterministic across parameter order\n");
 	return 1;
     }
+    if (!bobol_lod_request_keys_equal(a, b)) {
+	printf("FAIL: structured LoD key not parameter-order independent\n");
+	return 1;
+    }
 
     b.viewRevision++;
     BObolLodCacheKey key_c = bobol_lod_cache_key(b);
     if (bu_strcmp(key_a.value.getString(), key_c.value.getString()) == 0) {
 	printf("FAIL: LoD cache key did not include view revision\n");
+	return 1;
+    }
+    if (bobol_lod_request_keys_equal(a, b)) {
+	printf("FAIL: structured LoD key ignored view revision\n");
 	return 1;
     }
 
@@ -122,6 +130,8 @@ test_rt_mesh_result(void)
     BObolLodResult result =
 	bobol_lod_result_from_mesh_lod_info(request, info, &status);
     if (result.resultKind != BOBOL_LOD_RESULT_MESH ||
+	result.payloadKind != BOBOL_LOD_PAYLOAD_MESH ||
+	!result.payloadIsConsistent() ||
 	result.qualityTier != BOBOL_LOD_QUALITY_FAST_DISPLAY ||
 	result.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	result.geometry.kind != BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE ||
@@ -391,6 +401,8 @@ test_stage_results(void)
     BObolLodResult result =
 	bobol_lod_directory_result(request, dependencies);
     if (result.resultKind != BOBOL_LOD_RESULT_DIRECTORY ||
+	result.payloadKind != BOBOL_LOD_PAYLOAD_DIRECTORY ||
+	!result.payloadIsConsistent() ||
 	result.qualityTier != BOBOL_LOD_QUALITY_METADATA ||
 	result.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	result.terminal ||
@@ -408,6 +420,8 @@ test_stage_results(void)
     attributes.push_back(color);
     result = bobol_lod_attributes_result(request, attributes);
     if (result.resultKind != BOBOL_LOD_RESULT_ATTRIBUTES ||
+	result.payloadKind != BOBOL_LOD_PAYLOAD_ATTRIBUTES ||
+	!result.payloadIsConsistent() ||
 	result.qualityTier != BOBOL_LOD_QUALITY_ATTRIBUTES ||
 	result.attributes.size() != 1 ||
 	bu_strcmp(result.attributes[0].name.getString(), "display.color") != 0 ||
@@ -419,6 +433,8 @@ test_stage_results(void)
     counts.lineCount = 12;
     result = bobol_lod_aabb_result(request, request.bounds, &counts);
     if (result.resultKind != BOBOL_LOD_RESULT_AABB ||
+	result.payloadKind != BOBOL_LOD_PAYLOAD_PROXY ||
+	!result.payloadIsConsistent() ||
 	result.qualityTier != BOBOL_LOD_QUALITY_PROXY ||
 	result.proxy.kind != BOBOL_LOD_PROXY_AABB ||
 	!result.proxy.isValid() ||
@@ -438,6 +454,8 @@ test_stage_results(void)
     proxy.halfExtents.setValue(4.0f, 5.0f, 6.0f);
     result = bobol_lod_proxy_result(request, proxy, NULL);
     if (result.resultKind != BOBOL_LOD_RESULT_PROXY ||
+	result.payloadKind != BOBOL_LOD_PAYLOAD_PROXY ||
+	!result.payloadIsConsistent() ||
 	result.qualityTier != BOBOL_LOD_QUALITY_PROXY ||
 	result.proxy.kind != BOBOL_LOD_PROXY_OBB ||
 	!result.proxy.isValid() ||
@@ -451,6 +469,8 @@ test_stage_results(void)
     proxy.clear();
     result = bobol_lod_proxy_result(request, proxy, NULL);
     if (result.providerStatus != BOBOL_LOD_PROVIDER_ERROR ||
+	result.payloadKind != BOBOL_LOD_PAYLOAD_STATUS ||
+	!result.payloadIsConsistent() ||
 	!result.terminal ||
 	result.diagnostic.getLength() == 0) {
 	printf("FAIL: LoD invalid proxy diagnostic result\n");

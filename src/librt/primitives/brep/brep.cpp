@@ -33,6 +33,7 @@
 #include <vector>
 #include <list>
 #include <map>
+#include <mutex>
 #include <stack>
 #include <iostream>
 #include <algorithm>
@@ -57,6 +58,20 @@
 
 #include "./brep_local.h"
 #include "./brep_debug.h"
+
+/*
+ * openNURBS model deserialization is not reentrant.  Among other process
+ * globals, its sun-engine initialization enters the C runtime timezone
+ * machinery on every read.  Keep the narrow import boundary serialized while
+ * allowing callers to continue preparing independent non-BREP primitives in
+ * parallel.
+ */
+static std::mutex &
+rt_brep_import_mutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
 
 
 /* define to enable output of debug hit information */
@@ -2610,6 +2625,7 @@ rt_brep_mirror(struct rt_db_internal *ip, const plane_t plane)
 int
 rt_brep_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fastf_t *mat, const struct db_i *dbip)
 {
+    std::lock_guard<std::mutex> importGuard(rt_brep_import_mutex());
     ON::Begin();
     TRACE1("rt_brep_import5");
 

@@ -24,6 +24,8 @@
  */
 
 #include "common.h"
+
+#include "BObol/BDisplayEndpoint.h"
 #include <QMouseEvent>
 #include <QVBoxLayout>
 #include <QtGlobal>

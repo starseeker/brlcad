@@ -42,7 +42,7 @@
 #include "bu/time.h"
 #include "bu/vls.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "rt/view.h"
 
 #include "../ged_bobol_private.hpp"

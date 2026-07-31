@@ -33,12 +33,14 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 /* bu/ipc.h removed - transport handled by libpkg */
 #include "bu/log.h"
 #include "imgstream/fbserv.h"
 #include "pkg.h"
 #include "ged.h"
-#include "ged/draw_obol.h"
+#include "ged/display.h"
 #include "ged/view.h"
 #include "./fbserv.h"
 #include "qtcad/QgTypes.h"
@@ -77,7 +79,7 @@ qged_fbserv_notify_framebuffer_updated(struct fbserv_obj *fbsp)
 	return;
 
     if (qged_fbserv_active_gedp)
-	(void)ged_draw_obol_framebuffer_present(qged_fbserv_active_gedp);
+	(void)ged_view_framebuffer_present(qged_fbserv_active_gedp);
     qged_fbserv_active_display->need_update(QG_VIEW_REFRESH);
 }
 
@@ -298,7 +300,7 @@ qged_fbserv_configure_ged_handlers(struct ged *gedp, QgView *display)
 	return;
 
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
-    if (!view_ctx || !ged_view_context_display_endpoint_set(view_ctx,
+    if (!view_ctx || !ged_view_context_obol_endpoint_set(view_ctx,
 	display->displayEndpoint(), 0)) {
 	bu_log("qged fbserv: unable to associate the active endpoint\n");
 	return;
@@ -306,7 +308,7 @@ qged_fbserv_configure_ged_handlers(struct ged *gedp, QgView *display)
 
 	/* Libged obtains the endpoint's optional retained framebuffer host through
 	 * the Obol factory contract.  QGED owns only socket integration. */
-    if (ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) !=
+    if (ged_view_framebuffer_backend_ensure(gedp, view_ctx) !=
 	BRLCAD_OK) {
 	bu_log("qged fbserv: unable to initialize the Obol framebuffer backend\n");
 	return;
