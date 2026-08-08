@@ -289,6 +289,12 @@ struct BOBOL_EXPORT BObolLodRequest {
      * producer did not have a projectable view and the provider should use its
      * conservative legacy view estimate. */
     float projectedPixelDiameter;
+    /* Projected convex-hull footprint of the occurrence bound.  Diameter is
+     * the conservative geometric-error scale; area and perimeter distinguish
+     * a genuinely prominent surface/silhouette from a long, mostly empty
+     * screen-aligned bounding rectangle. */
+    float projectedPixelArea;
+    float projectedPixelPerimeter;
     float targetPixelError;
     int requestedLevel;
     SbBox3f bounds;

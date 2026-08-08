@@ -134,6 +134,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     refinementFaceBudget(SIZE_MAX),
     refinementFaceBudgetUsed(0),
     refinementBudgetBlockedCount(0),
+    transitionLimitedRefinement(FALSE),
     viewState(NULL),
     compactEntryFirst(0),
     compactEntryLimit(SIZE_MAX),
@@ -374,6 +375,39 @@ SoBRLMeshLodSubmitAction::getRefinementBudgetBlockedCount(void) const
     return this->refinementBudgetBlockedCount;
 }
 
+void
+SoBRLMeshLodSubmitAction::setTransitionLimitedRefinement(SbBool limited)
+{
+    this->transitionLimitedRefinement = limited ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLMeshLodSubmitAction::getTransitionLimitedRefinement(void) const
+{
+    return this->transitionLimitedRefinement;
+}
+
+/* Return the next transition which changes the cumulative face population.
+ * Quantization-only levels preceding that transition are free and are folded
+ * into it.  If no later population exists, the richest requested snap level
+ * is itself the useful (zero-face-cost) transition. */
+static int
+mesh_lod_next_population_level(
+    const BObolLodProgressiveMeshPtr &progressiveMesh,
+    int activeLevel, int preferredLevel)
+{
+    if (!progressiveMesh || preferredLevel <= activeLevel)
+	return activeLevel;
+    preferredLevel = std::min(preferredLevel,
+	progressiveMesh->maximumLevel());
+    const size_t activeFaces = activeLevel >= 0 ?
+	progressiveMesh->hierarchyFaceCount(activeLevel) : 0;
+    for (int level = activeLevel + 1; level <= preferredLevel; ++level)
+	if (progressiveMesh->hierarchyFaceCount(level) > activeFaces)
+	    return level;
+    return preferredLevel;
+}
+
 SbBool
 SoBRLMeshLodSubmitAction::reserveRefinementFaces(
     const BObolLodProgressiveMeshPtr &progressiveMesh,
@@ -431,6 +465,10 @@ SoBRLMeshLodSubmitAction::reserveRefinementLevel(
      */
     if (!progressiveMesh)
 	return activeLevel;
+    if (this->transitionLimitedRefinement &&
+	this->refinementFaceBudget != SIZE_MAX)
+	preferredLevel = mesh_lod_next_population_level(
+	    progressiveMesh, activeLevel, preferredLevel);
     const size_t activeFaces = activeLevel >= 0 ?
 	progressiveMesh->hierarchyFaceCount(activeLevel) : 0;
     if (this->refinementFaceBudget == SIZE_MAX) {
@@ -824,6 +862,89 @@ mesh_lod_box_intersects_render_frustum(const SbBox3f &worldBounds,
 /* Convert an occurrence-local bound to a quantized screen-space PoP demand.
  * Returning false means the box is wholly outside the actual render frustum
  * and no display payload should be loaded for this view. */
+struct MeshLodProjectedPoint {
+    float x;
+    float y;
+};
+
+static float
+mesh_lod_projected_cross(const MeshLodProjectedPoint &origin,
+	const MeshLodProjectedPoint &a, const MeshLodProjectedPoint &b)
+{
+    return (a.x - origin.x) * (b.y - origin.y) -
+	(a.y - origin.y) * (b.x - origin.x);
+}
+
+/* The convex hull of eight projected box corners is a constant-time proxy for
+ * occupied screen footprint.  It is substantially less misleading than the
+ * area of the screen-aligned min/max rectangle, while avoiding any triangle
+ * scan in the view-planning path. */
+static void
+mesh_lod_projected_hull_metrics(MeshLodProjectedPoint *points, int count,
+	float &area, float &perimeter)
+{
+    area = 0.0f;
+    perimeter = 0.0f;
+    if (!points || count < 2)
+	return;
+    std::sort(points, points + count,
+	[](const MeshLodProjectedPoint &a,
+	   const MeshLodProjectedPoint &b) {
+	    if (a.x < b.x)
+		return true;
+	    if (b.x < a.x)
+		return false;
+	    return a.y < b.y;
+	});
+    int uniqueCount = 0;
+    for (int i = 0; i < count; ++i) {
+	if (uniqueCount > 0 &&
+	    !(points[i].x < points[uniqueCount - 1].x) &&
+	    !(points[uniqueCount - 1].x < points[i].x) &&
+	    !(points[i].y < points[uniqueCount - 1].y) &&
+	    !(points[uniqueCount - 1].y < points[i].y))
+	    continue;
+	points[uniqueCount++] = points[i];
+    }
+    if (uniqueCount < 2)
+	return;
+
+    MeshLodProjectedPoint hull[16];
+    int hullCount = 0;
+    for (int i = 0; i < uniqueCount; ++i) {
+	while (hullCount >= 2 &&
+	    mesh_lod_projected_cross(hull[hullCount - 2],
+		hull[hullCount - 1], points[i]) <= 0.0f)
+	    --hullCount;
+	hull[hullCount++] = points[i];
+    }
+    const int lowerCount = hullCount;
+    for (int i = uniqueCount - 2; i >= 0; --i) {
+	while (hullCount > lowerCount &&
+	    mesh_lod_projected_cross(hull[hullCount - 2],
+		hull[hullCount - 1], points[i]) <= 0.0f)
+	    --hullCount;
+	hull[hullCount++] = points[i];
+    }
+    if (hullCount > 1)
+	--hullCount;
+    if (hullCount < 2)
+	return;
+
+    double twiceArea = 0.0;
+    double boundary = 0.0;
+    for (int i = 0; i < hullCount; ++i) {
+	const MeshLodProjectedPoint &a = hull[i];
+	const MeshLodProjectedPoint &b = hull[(i + 1) % hullCount];
+	twiceArea += static_cast<double>(a.x) * b.y -
+	    static_cast<double>(a.y) * b.x;
+	boundary += std::hypot(static_cast<double>(b.x - a.x),
+	    static_cast<double>(b.y - a.y));
+    }
+    area = static_cast<float>(std::fabs(twiceArea) * 0.5);
+    perimeter = static_cast<float>(boundary);
+}
+
 static SbBool
 mesh_lod_apply_projected_demand(BObolLodRequest &request,
 	const SbBox3f &localBounds, const SbMatrix &localToRoot,
@@ -847,6 +968,8 @@ mesh_lod_apply_projected_demand(BObolLodRequest &request,
     SbVec3f projectedMin(FLT_MAX, FLT_MAX, FLT_MAX);
     SbVec3f projectedMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
     SbBool haveProjected = FALSE;
+    MeshLodProjectedPoint projectedPoints[8];
+    int projectedPointCount = 0;
     const SbVec3f bmin = localBounds.getMin();
     const SbVec3f bmax = localBounds.getMax();
     SbVec3f worldCorners[8];
@@ -874,6 +997,10 @@ mesh_lod_apply_projected_demand(BObolLodRequest &request,
 	projectedMin[1] = std::min(projectedMin[1], projected[1]);
 	projectedMax[0] = std::max(projectedMax[0], projected[0]);
 	projectedMax[1] = std::max(projectedMax[1], projected[1]);
+	projectedPoints[projectedPointCount++] = {
+	    projected[0] * static_cast<float>(std::max(1, view.width)),
+	    projected[1] * static_cast<float>(std::max(1, view.height))
+	};
     }
     if (!haveProjected)
 	return TRUE;
@@ -902,7 +1029,13 @@ mesh_lod_apply_projected_demand(BObolLodRequest &request,
     /* PoP coordinates are 16-bit, hence levels 0..15.  The cache clamps this
      * to the populated terminal level of the complete hierarchy. */
     level = std::max(0, std::min(15, level));
+    float projectedArea = 0.0f;
+    float projectedPerimeter = 0.0f;
+    mesh_lod_projected_hull_metrics(projectedPoints, projectedPointCount,
+	projectedArea, projectedPerimeter);
     request.projectedPixelDiameter = diameter;
+    request.projectedPixelArea = projectedArea;
+    request.projectedPixelPerimeter = projectedPerimeter;
     request.targetPixelError = pixelError;
     request.requestedLevel = level;
     return TRUE;
@@ -1328,11 +1461,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	struct CompactCandidate {
 	    size_t index;
 	    float projectedPixels;
+	    double projectedErrorPixels;
+	    double visualFootprint;
 	    double refinementValuePerFace;
 	    int emphasis;
 	    bool needsCoverage;
+	    bool qualityFloorViolation;
 	};
 	if (!submitAction->compactEntryPlanSupplied) {
+	    /* This traversal owns the perceptual order.  Keep each finite-budget
+	     * visit to one populated transition so that marginal ordering remains
+	     * meaningful after the first candidate is admitted. */
+	    submitAction->transitionLimitedRefinement = TRUE;
 	    std::vector<CompactCandidate> candidates;
 	    std::vector<const BObolViewLodState::CadPayload *>
 		offscreenPayloads;
@@ -1399,6 +1539,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		candidate.index = static_cast<size_t>(candidateIndex);
 		candidate.projectedPixels =
 		    projected.projectedPixelDiameter;
+		candidate.visualFootprint = std::max(
+		    std::sqrt(std::max(0.0,
+			static_cast<double>(projected.projectedPixelArea))),
+		    std::max(
+			static_cast<double>(projected.projectedPixelPerimeter) *
+			    0.25,
+			static_cast<double>(candidate.projectedPixels) * 0.25));
 		candidate.emphasis = summary.selected ? 2 :
 		    (summary.highlighted ? 1 : 0);
 		const BObolViewLodState::CadPayload *active =
@@ -1406,6 +1553,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->viewState->findCadForOccurrence(
 			source, summary.sourceInstanceKey) : NULL;
 		candidate.needsCoverage = active == NULL;
+		candidate.projectedErrorPixels = active &&
+		    active->activeLevel >= 0 ?
+		    std::ldexp(static_cast<double>(candidate.projectedPixels),
+			-active->activeLevel) :
+		    std::numeric_limits<double>::infinity();
+		candidate.qualityFloorViolation = active &&
+		    candidate.projectedErrorPixels >
+			std::max(1.0, static_cast<double>(
+			    projected.targetPixelError) * 3.0);
 		candidate.refinementValuePerFace =
 		    static_cast<double>(candidate.projectedPixels);
 		/* Rank already-covered leaves by visible PoP error reduction per
@@ -1423,8 +1579,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		if (active && active->progressiveMesh &&
 		    active->activeLevel >= 0 &&
 		    projected.requestedLevel > active->activeLevel) {
-		    const int nextLevel = std::min(
-			projected.requestedLevel, active->activeLevel + 1);
+		    const int nextLevel = mesh_lod_next_population_level(
+			active->progressiveMesh, active->activeLevel,
+			projected.requestedLevel);
 		    const size_t activeFaces =
 			active->progressiveMesh->hierarchyFaceCount(
 			    active->activeLevel);
@@ -1439,25 +1596,32 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			static_cast<double>(candidate.projectedPixels),
 			-nextLevel);
 		    const double visibleBenefit =
-			std::max(1.0,
-			    static_cast<double>(candidate.projectedPixels)) *
+			std::max(1.0, candidate.visualFootprint) *
 			std::max(0.0, currentError - nextError);
 		    candidate.refinementValuePerFace =
 			visibleBenefit / static_cast<double>(addedFaces);
 		}
 		candidates.push_back(std::move(candidate));
 	    }
-	    /* Scene coverage is the first progressive objective: give visible
-	     * boxes their first useful mesh before enriching already-present
-	     * leaves.  Within refinement, spend faces where the next PoP prefix
-	     * removes the most estimated screen-space error.  Selection and
-	     * highlight remain absolute user-intent priorities. */
+	    /* Scene coverage is the first progressive objective.  For retained
+	     * meshes use a minimax quality floor before benefit/cost: this prevents
+	     * an expensive but unmistakable wheel, blade, or tail from losing
+	     * forever to many cheap low-impact transitions.  Once the conservative
+	     * three-pixel floor is met, spend the remainder by marginal projected
+	     * footprint/error reduction.  Selection and highlight remain absolute
+	     * user-intent priorities. */
 	    std::sort(candidates.begin(), candidates.end(),
 		[](const CompactCandidate &a, const CompactCandidate &b) {
 		if (a.emphasis != b.emphasis)
 		    return a.emphasis > b.emphasis;
 		if (a.needsCoverage != b.needsCoverage)
 		    return a.needsCoverage;
+		if (a.qualityFloorViolation != b.qualityFloorViolation)
+		    return a.qualityFloorViolation;
+		if (a.qualityFloorViolation &&
+		    (a.projectedErrorPixels < b.projectedErrorPixels ||
+		     a.projectedErrorPixels > b.projectedErrorPixels))
+		    return a.projectedErrorPixels > b.projectedErrorPixels;
 		if (a.refinementValuePerFace <
 			b.refinementValuePerFace ||
 		    a.refinementValuePerFace >

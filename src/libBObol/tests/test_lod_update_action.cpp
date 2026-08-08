@@ -7411,6 +7411,153 @@ test_compact_many_leaf_scene_admission(void)
 	}
     }
 
+    /* A coarse, visually dominant part must lead an otherwise equal retained
+     * frontier.  Keep this fixture isolated from the shared-instance tests
+     * above: real vehicle scenes mix tiny hardware with wheels, rotors, and
+     * skins whose projected error needs a hard perceptual floor. */
+    if (!ret) {
+	SoBRLDatabaseSource *prioritySource = new SoBRLDatabaseSource;
+	prioritySource->ref();
+	prioritySource->setDatabase(dbip);
+	prioritySource->path = "priority-root.c";
+	prioritySource->instanceKey = "priority-source";
+	prioritySource->sourceRevision = 902;
+	prioritySource->lodBotThreshold = 1;
+	prioritySource->representationMode =
+	    SoBRLDatabaseSource::REPRESENTATION_SHADED;
+
+	BObolCompactOccurrence small = occurrences.front();
+	small.summary.path = "priority-root.c/small.bot";
+	small.summary.selected = FALSE;
+	small.summary.highlighted = FALSE;
+	small.sourceMeshRequest.path = small.summary.path;
+	small.sourceMeshRequest.meshAssetPath = "lod-submit.bot";
+	small.localTransform.makeIdentity();
+	small.sourceMeshRequest.meshAssetTransform.makeIdentity();
+	BObolCompactOccurrence prominent = small;
+	prominent.summary.path = "priority-root.c/prominent.bot";
+	prominent.sourceMeshRequest.path = prominent.summary.path;
+	prominent.sourceMeshRequest.meshAssetTransform.setScale(
+	    SbVec3f(6.0f, 6.0f, 6.0f));
+	const std::vector<BObolCompactOccurrence> priorityOccurrences = {
+	    small, prominent
+	};
+	if (prioritySource->setCompactOccurrenceRegistry(
+		priorityOccurrences) != 2) {
+	    printf("FAIL: perceptual priority registry setup\n");
+	    ret = 1;
+	} else {
+	    point_t priorityPoints[4];
+	    VSET(priorityPoints[0], 0.0, 0.0, 0.0);
+	    VSET(priorityPoints[1], 1.0, 0.0, 0.0);
+	    VSET(priorityPoints[2], 0.0, 1.0, 0.0);
+	    VSET(priorityPoints[3], 0.0, 0.0, 1.0);
+	    int priorityFaces[12] = {
+		0, 1, 2, 0, 3, 1, 1, 3, 2, 2, 3, 0
+	    };
+	    struct BObolMeshLodData priorityData = {};
+	    priorityData.faces = priorityFaces;
+	    priorityData.face_count = 4;
+	    priorityData.points = priorityPoints;
+	    priorityData.point_count = 4;
+	    priorityData.points_orig = priorityPoints;
+	    priorityData.point_orig_count = 4;
+	    VSET(priorityData.bmin, 0.0, 0.0, 0.0);
+	    VSET(priorityData.bmax, 1.0, 1.0, 1.0);
+	    struct BObolMeshLodHierarchyInfo priorityHierarchy =
+		BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	    priorityHierarchy.min_level = 0;
+	    priorityHierarchy.max_level = 1;
+	    priorityHierarchy.resident_level = 1;
+	    priorityHierarchy.face_count[0] = 1;
+	    priorityHierarchy.face_count[1] = 4;
+	    priorityHierarchy.point_count[0] = 3;
+	    priorityHierarchy.point_count[1] = 4;
+	    VSET(priorityHierarchy.quantization_min, 0.0, 0.0, 0.0);
+	    VSET(priorityHierarchy.quantization_max, 1.0, 1.0, 1.0);
+	    BObolLodProgressiveMeshPtr priorityMesh(
+		new BObolLodProgressiveMesh);
+	    BObolViewLodState priorityState;
+	    bool priorityReady = priorityMesh->update(
+		priorityData, priorityHierarchy, 1, FALSE) ? true : false;
+	    for (int priorityIndex = 0;
+		 priorityReady && priorityIndex < 2; priorityIndex++) {
+		BObolCompactInstanceHandle priorityHandle;
+		BObolCompactInstanceSummary prioritySummary;
+		if (!prioritySource->getCompactInstanceHandle(
+			priorityIndex, priorityHandle) ||
+		    !prioritySource->getCompactInstanceSummary(
+			priorityHandle, prioritySummary)) {
+		    priorityReady = false;
+		    break;
+		}
+		BObolLodResult priorityResult;
+		priorityResult.request.databaseId = "db://priority-test";
+		priorityResult.request.databaseRevision = 2026;
+		priorityResult.request.sourceRevision =
+		    prioritySource->sourceRevision.getValue();
+		priorityResult.request.objectPath =
+		    prioritySummary.meshAssetPath;
+		priorityResult.request.objectName =
+		    prioritySummary.meshAssetName;
+		priorityResult.request.occurrenceKey =
+		    prioritySummary.sourceInstanceKey;
+		priorityResult.request.viewRevision = 6;
+		priorityResult.request.policyRevision = 6;
+		priorityResult.request.drawMode = BOBOL_LOD_DRAW_SHADED;
+		priorityResult.request.providerId = "bobol_mesh_lod";
+		priorityResult.request.providerVersion =
+		    BOBOL_MESH_LOD_PROVIDER_VERSION;
+		priorityResult.request.requestedLevel = 1;
+		priorityResult.request.bounds = priorityMesh->bounds();
+		priorityResult.cacheKey =
+		    bobol_lod_cache_key(priorityResult.request);
+		priorityResult.geometry.kind =
+		    BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
+		priorityResult.geometry.activeLevel = 0;
+		priorityResult.progressiveMesh = priorityMesh;
+		priorityResult.residentLevel = 1;
+		priorityResult.resultKind = BOBOL_LOD_RESULT_MESH;
+		priorityResult.providerStatus = BOBOL_LOD_PROVIDER_READY;
+		priorityResult.bounds = priorityMesh->bounds();
+		priorityResult.counts.faceCount = 1;
+		priorityResult.counts.pointCount = 3;
+		priorityResult.counts.originalPointCount = 3;
+		priorityResult.terminal = FALSE;
+		priorityReady = priorityState.applySourceResult(
+		    prioritySource, priorityResult) ? true : false;
+	    }
+	    if (!priorityReady) {
+		printf("FAIL: perceptual priority retained payload setup\n");
+		ret = 1;
+	    } else {
+		SoBRLMeshLodSubmitAction priorityAction;
+		priorityAction.setService(&service);
+		priorityAction.setDatabase(
+		    dbip, "db://priority-test", 2026);
+		priorityAction.setViewInfo(&view);
+		priorityAction.setViewVolume(&volume, 1.0f);
+		priorityAction.setGeneration(service.beginGeneration());
+		priorityAction.setRevisions(6, 6);
+		priorityAction.setViewLodState(&priorityState);
+		priorityAction.setRefinementFaceBudget(0);
+		priorityAction.setSubmissionTaskLimit(0);
+		priorityAction.apply(prioritySource);
+		std::vector<size_t> priorityPlan;
+		priorityAction.getCompactEntryPlan(priorityPlan);
+		if (priorityPlan.size() != 2 || priorityPlan.front() != 1) {
+		    printf("FAIL: prominent coarse occurrence did not lead the "
+			   "perceptual frontier (plan=%zu first=%zu)\n",
+			   priorityPlan.size(),
+			   priorityPlan.empty() ? SIZE_MAX :
+				priorityPlan.front());
+		    ret = 1;
+		}
+	    }
+	}
+	prioritySource->unref();
+    }
+
     camera->unref();
     service.stop();
     source->unref();
@@ -8194,6 +8341,10 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    service.drainResults(results) != 1 || results.size() != 1 ||
 	    results[0].request.projectedPixelDiameter < 47.0f ||
 	    results[0].request.projectedPixelDiameter > 49.0f ||
+	    results[0].request.projectedPixelArea < 2200.0f ||
+	    results[0].request.projectedPixelArea > 2400.0f ||
+	    results[0].request.projectedPixelPerimeter < 190.0f ||
+	    results[0].request.projectedPixelPerimeter > 194.0f ||
 	    results[0].request.requestedLevel != 6 ||
 	    !results[0].progressiveMesh ||
 	    results[0].geometry.activeLevel !=
@@ -8290,6 +8441,88 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		ret = 1;
 		} else {
 		    results.swap(refinedResults);
+		}
+	    }
+	}
+    }
+
+    /* Renderer-only motion limits must be reversible without another PoP
+     * planning pass.  A deliberately slow measured frame lowers the moving
+     * ceiling; ending a pose-only orthographic gesture restores the prior
+     * stable ceiling immediately while the refinement debounce remains
+     * active. */
+    if (!ret) {
+	BObolViewController restoreController(root, camera);
+	restoreController.setLodAutoSubmit(TRUE);
+	BObolViewLodState *restoreState =
+	    restoreController.getViewLodState();
+	if (!restoreState ||
+	    !restoreState->applySourceResult(source, results[0])) {
+	    printf("FAIL: pose-only stable presentation fixture apply\n");
+	    ret = 1;
+	} else {
+	    const int stableCeiling =
+		restoreController.getLodInteractiveProgressiveCeiling();
+	    const uint64_t now = restoreController.beginRenderTiming();
+	    restoreController.completeRenderTiming(
+		now > 100000000ULL ? now - 100000000ULL : 1);
+	    restoreController.beginLodInteraction();
+	    const int motionCeiling =
+		restoreController.getLodInteractiveProgressiveCeiling();
+	    restoreController.endLodInteraction();
+	    const int releaseCeiling =
+		restoreController.getLodInteractiveProgressiveCeiling();
+	    if (stableCeiling != -1 || motionCeiling < 0 ||
+		releaseCeiling != stableCeiling ||
+		restoreController.isLodGestureActive() ||
+		!restoreController.isLodInteractionActive()) {
+		printf("FAIL: pose-only release did not immediately restore "
+		       "the resident stable presentation (stable=%d motion=%d "
+		       "release=%d gesture=%d interactive=%d)\n",
+		       stableCeiling, motionCeiling, releaseCeiling,
+		       restoreController.isLodGestureActive() ? 1 : 0,
+		       restoreController.isLodInteractionActive() ? 1 : 0);
+		ret = 1;
+	    }
+	}
+    }
+
+    /* Face count alone is not an occurrence-identity witness.  Replacing a
+     * payload during the gesture with an equal-cost payload must invalidate
+     * the snapshot and keep the cautious release ceiling until the quiet
+     * allocator verifies the new population. */
+    if (!ret) {
+	BObolViewController changedController(root, camera);
+	changedController.setLodAutoSubmit(TRUE);
+	BObolViewLodState *changedState =
+	    changedController.getViewLodState();
+	if (!changedState ||
+	    !changedState->applySourceResult(source, results[0])) {
+	    printf("FAIL: changed-population presentation fixture apply\n");
+	    ret = 1;
+	} else {
+	    const uint64_t now = changedController.beginRenderTiming();
+	    changedController.completeRenderTiming(
+		now > 100000000ULL ? now - 100000000ULL : 1);
+	    changedController.beginLodInteraction();
+	    const int motionCeiling =
+		changedController.getLodInteractiveProgressiveCeiling();
+	    const BObolViewLodState::CadPayload *changedPayload =
+		changedState->findCadForResult(results[0]);
+	    if (!changedPayload ||
+		!changedState->removeCadPayload(changedPayload) ||
+		!changedState->applySourceResult(source, results[0])) {
+		printf("FAIL: changed-population presentation mutation\n");
+		ret = 1;
+	    } else {
+		changedController.endLodInteraction();
+		const int releaseCeiling =
+		    changedController.getLodInteractiveProgressiveCeiling();
+		if (motionCeiling < 0 || releaseCeiling != motionCeiling) {
+		    printf("FAIL: equal-cost population change incorrectly "
+			   "restored a stale presentation (motion=%d release=%d)\n",
+			   motionCeiling, releaseCeiling);
+		    ret = 1;
 		}
 	    }
 	}
@@ -8626,6 +8859,55 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    multiResult.counts.pointCount = 3;
 		    multiResult.counts.originalPointCount = 3;
 		    multiResult.terminal = FALSE;
+		    /* A perceptually ordered finite-budget visit is scored for
+		     * one marginal population transition.  Even when the full
+		     * level-2 cut fits, admitting it in one leap would invalidate
+		     * global minimax ordering and allow one prominent occurrence
+		     * to consume the allowance intended for its peers. */
+		    if (!ret) {
+			BObolLodResult fairResult = multiResult;
+			fairResult.request.requestedLevel = 2;
+			BObolViewLodState fairState;
+			if (!fairState.applySourceResult(source, fairResult)) {
+			    printf("FAIL: transition-limited refinement fixture apply\n");
+			    ret = 1;
+			} else {
+			    SoBRLMeshLodSubmitAction fair;
+			    fair.setService(&service);
+			    fair.setDatabase(dbip,
+				"db://compact-projected-test", 2026);
+			    fair.setViewInfo(&view);
+			    fair.setViewVolume(&budgetVolume, 0.5f);
+			    fair.setGeneration(service.beginGeneration());
+			    fair.setRevisions(73, 74);
+			    fair.setViewLodState(&fairState);
+			    fair.setRefinementFaceBudget(3);
+			    fair.setTransitionLimitedRefinement(TRUE);
+			    fair.apply(root);
+			    payload = fairState.findCadForResult(fairResult);
+			    if (!payload || fair.getSubmittedTaskCount() != 0 ||
+				fair.getUpdatedCutCount() != 1 ||
+				fair.getPendingRetainedRefinementCount() != 1 ||
+				fair.getRefinementFaceBudgetUsed() != 1 ||
+				payload->activeLevel != 1 ||
+				payload->requestedLevel != 2 ||
+				fairState.activeFaceCount() != 2) {
+				printf("FAIL: perceptual refinement consumed more "
+				       "than one populated transition (tasks=%u "
+				       "cuts=%u pending=%u used=%zu active=%d "
+				       "requested=%d faces=%zu diagnostics=%s)\n",
+				       fair.getSubmittedTaskCount(),
+				       fair.getUpdatedCutCount(),
+				       fair.getPendingRetainedRefinementCount(),
+				       fair.getRefinementFaceBudgetUsed(),
+				       payload ? payload->activeLevel : -1,
+				       payload ? payload->requestedLevel : -1,
+				       fairState.activeFaceCount(),
+				       fair.getDiagnostics().getString());
+				ret = 1;
+			    }
+			}
+		    }
 		    BObolViewLodState multiState;
 		    if (!multiState.applySourceResult(source, multiResult)) {
 			printf("FAIL: multi-level retained refinement apply\n");

@@ -5086,6 +5086,13 @@ ged_obol_faceplate_style(const int rgb[3],
 		  fallback_b);
     style.hasLineWidth = TRUE;
     style.lineWidth = line_width > 0 ? line_width : 1;
+    /* Faceplate geometry is specified in screen pixels and must neither
+     * participate in nor write the model depth buffer.  Apart from making
+     * the overlays camera-independent, the HUD wrapper is important for
+     * composite controls such as the LoD progress meter: its narrower fill
+     * line occupies the same screen location as the track and would
+     * otherwise fail the depth test after the track was drawn. */
+    style.hud = TRUE;
     return style;
 }
 
@@ -5104,27 +5111,6 @@ ged_obol_faceplate_overlay_info(struct ged_view_context *view_ctx,
     info.sortOrder = 0;
     info.sourcePath = "_faceplate";
     return info;
-}
-
-static int
-ged_obol_view_to_model_point(SbVec3f &out,
-			     struct ged_view_context *view_ctx,
-			     fastf_t x,
-			     fastf_t y,
-			     fastf_t z = 0.0)
-{
-    mat_t view2model;
-    if (!bv_view2model_get(view2model, ged_obol_bv_const(view_ctx)))
-	return 0;
-
-    point_t vpt;
-    point_t mpt;
-    VSET(vpt, x, y, z);
-    MAT4X3PNT(mpt, view2model, vpt);
-    out = SbVec3f(static_cast<float>(mpt[X]),
-		  static_cast<float>(mpt[Y]),
-		  static_cast<float>(mpt[Z]));
-    return 1;
 }
 
 /* Map a faceplate overlay coordinate (GED2PM1 space, -1..1 in both axes) to the
@@ -5157,9 +5143,8 @@ ged_obol_faceplate_append_line(std::vector<SbVec3f> &points,
 {
     SbVec3f a;
     SbVec3f b;
-    if (!ged_obol_view_to_model_point(a, view_ctx, x1, y1) ||
-	!ged_obol_view_to_model_point(b, view_ctx, x2, y2))
-	return;
+    ged_obol_faceplate_to_pixel(a, view_ctx, x1, y1);
+    ged_obol_faceplate_to_pixel(b, view_ctx, x2, y2);
 
     points.push_back(a);
     commands.push_back(static_cast<int32_t>(BObolLineCommand::Move));

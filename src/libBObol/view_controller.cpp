@@ -12,6 +12,7 @@
 #include "bu/time.h"
 
 #include "bv.h"
+#include "BObol/BDatabaseSource.h"
 #include "BObol/BEditPreview.h"
 #include "BObol/BExportAction.h"
 #include "BObol/BHUDLabelOverlay.h"
@@ -35,6 +36,7 @@
 #include "rt/view.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -78,6 +80,94 @@ static std::vector<SoBRLDatabaseSource *> controller_render_database_source_root
     const BObolViewController *controller);
 static std::vector<SoBRLMeshShape *> controller_render_mesh_shapes(
     const BObolViewController *controller);
+
+/* Build the large-scene retained frontier without projecting or sorting every
+ * occurrence on the GUI thread.  requestedLevel is the last exact projected
+ * demand recorded for the payload; requested-active is therefore a
+ * conservative logarithmic screen-error estimate.  A fixed bucket table
+ * makes construction O(frontier) while ensuring severe quality deficits and
+ * explicit user emphasis are visited before cheap, already-smooth details.
+ * The bounded submit action recomputes exact projection for each consumed
+ * wave, so this retained estimate is only an ordering seed. */
+static void
+controller_prioritize_lod_frontier(SoBRLDatabaseSource *source,
+	const BObolViewLodState *viewState,
+	const std::vector<SbString> &occurrenceKeys,
+	std::vector<size_t> &entryIndices)
+{
+    static const size_t emphasisBuckets = 3;
+    static const size_t errorBuckets = 16;
+    static const size_t valueBuckets = 16;
+    static const size_t bucketCount =
+	emphasisBuckets * errorBuckets * valueBuckets;
+    std::array<std::vector<size_t>, bucketCount> buckets;
+    entryIndices.clear();
+    entryIndices.reserve(occurrenceKeys.size());
+    if (!source || !viewState)
+	return;
+
+    for (const SbString &key : occurrenceKeys) {
+	size_t entryIndex = 0;
+	if (!source->getCompactInstanceIndex(key.getString(), entryIndex))
+	    continue;
+	BObolCompactLodPlanningSummary summary;
+	const bool haveSummary = source->getCompactLodPlanningSummary(
+	    static_cast<int>(entryIndex), summary) && summary.valid;
+	const BObolViewLodState::CadPayload *payload =
+	    viewState->findCadForOccurrence(source, key);
+	const int emphasis = haveSummary && summary.selected ? 2 :
+	    (haveSummary && summary.highlighted ? 1 : 0);
+	const int activeLevel = payload ? payload->activeLevel : -1;
+	const int requestedLevel = payload ? payload->requestedLevel : 15;
+	const int errorBucket = std::max(0, std::min(15,
+	    requestedLevel - std::max(0, activeLevel)));
+
+	/* Secondary marginal value uses retained hierarchy counts but no mesh
+	 * scan.  The requested level also supplies a bounded approximation of
+	 * projected footprint for ties at the same worst-error tier. */
+	double value = static_cast<double>(errorBucket + 1);
+	if (payload && payload->progressiveMesh && activeLevel >= 0 &&
+	    requestedLevel > activeLevel) {
+	    const size_t activeFaces = payload->progressiveMesh->
+		hierarchyFaceCount(activeLevel);
+	    int nextLevel = requestedLevel;
+	    for (int level = activeLevel + 1; level <= requestedLevel;
+		 ++level) {
+		if (payload->progressiveMesh->hierarchyFaceCount(level) >
+			activeFaces) {
+		    nextLevel = level;
+		    break;
+		}
+	    }
+	    const size_t nextFaces = payload->progressiveMesh->
+		hierarchyFaceCount(nextLevel);
+	    const size_t addedFaces = nextFaces > activeFaces ?
+		nextFaces - activeFaces : 1;
+	    const double footprint = std::ldexp(1.0,
+		std::max(0, std::min(15, requestedLevel)));
+	    const double currentError = std::ldexp(1.0,
+		std::max(0, std::min(15, requestedLevel - activeLevel)));
+	    const double nextError = std::ldexp(1.0,
+		std::max(0, std::min(15, requestedLevel - nextLevel)));
+	    value = footprint * std::max(0.0, currentError - nextError) /
+		static_cast<double>(addedFaces);
+	}
+	int valueBucket = 0;
+	if (std::isfinite(value) && value > 0.0)
+	    valueBucket = std::max(0, std::min(15,
+		static_cast<int>(std::floor(std::log2(value))) + 8));
+	else if (!std::isfinite(value))
+	    valueBucket = 15;
+	const size_t bucket =
+	    (static_cast<size_t>(emphasis) * errorBuckets +
+	     static_cast<size_t>(errorBucket)) * valueBuckets +
+	    static_cast<size_t>(valueBucket);
+	buckets[bucket].push_back(entryIndex);
+    }
+    for (size_t bucket = bucketCount; bucket > 0; --bucket)
+	entryIndices.insert(entryIndices.end(),
+	    buckets[bucket - 1].begin(), buckets[bucket - 1].end());
+}
 
 static SbBool
 controller_lod_trace_result(const BObolLodResult &result)
@@ -1497,6 +1587,17 @@ struct BObolLodCoordinator : BObolLodPhaseTracker {
      * flattened rebuild on the GUI thread.
      */
     SbBool lodStablePresentationHandoffActive = FALSE;
+    /* Renderer-only stable presentation retained across a camera gesture.
+     * Occurrence cuts and resident arrays remain authoritative; this snapshot
+     * restores their last measured presentation immediately after pose-only
+     * motion instead of walking back through the motion ceiling. */
+    SbBool lodStablePresentationSnapshotValid = FALSE;
+    SbBool lodStablePresentationSnapshotRestored = FALSE;
+    SbBool lodInteractionScaleChanged = FALSE;
+    int lodStablePresentationProgressiveCeiling = -1;
+    float lodStablePresentationPointProxyPixelThreshold = 1.0f;
+    size_t lodStablePresentationActiveFaces = 0;
+    uint64_t lodStablePresentationCadRevision = 0;
     uint64_t lodSettleAfterRenderSerial = 0;
     SbBool lodResidentCompactionPending = FALSE;
     SbBool lodResidentCompactionPlanning = FALSE;
@@ -3989,10 +4090,32 @@ BObolViewController::advanceProgressiveWork(
 	    this->d->lodSettleAfterRenderSerial == 0 &&
 	    this->d->lodLastViewChangeMicroseconds > 0 &&
 	    elapsed >= 150000) {
+	    BObolViewLodState *viewState =
+		this->d->viewAttachment->getViewLodState();
+	    const bool orthographicPresentation = this->d->activeCamera &&
+		this->d->activeCamera->isOfType(
+		    SoOrthographicCamera::getClassTypeId());
+	    const bool unchangedOccurrencePopulation = viewState ?
+		viewState->activeFaceCount() ==
+		    this->d->lodStablePresentationActiveFaces &&
+		viewState->cadRevision() ==
+		    this->d->lodStablePresentationCadRevision :
+		this->d->lodStablePresentationActiveFaces == 0;
+	    if (orthographicPresentation && unchangedOccurrencePopulation &&
+		!this->d->lodInteractionScaleChanged &&
+		this->d->lodStablePresentationSnapshotValid &&
+		!this->d->lodStablePresentationSnapshotRestored) {
+		this->d->lodInteractiveProgressiveCeiling =
+		    this->d->lodStablePresentationProgressiveCeiling;
+		this->d->lodPresentationPointProxyPixelThreshold =
+		    this->d->lodStablePresentationPointProxyPixelThreshold;
+		this->d->lodStablePresentationSnapshotRestored = TRUE;
+	    }
 	    this->d->lodInteractive = FALSE;
 	    this->d->lodViewScaleChanging = FALSE;
 	    this->d->lodReleaseCutFloorActive = FALSE;
 	    this->d->lodStablePresentationHandoffActive =
+		!this->d->lodStablePresentationSnapshotRestored &&
 		(this->d->lodInteractiveProgressiveCeiling >= 0 ||
 		 this->d->lodPresentationPointProxyPixelThreshold > 1.01f) ?
 		    TRUE : FALSE;
@@ -4004,10 +4127,14 @@ BObolViewController::advanceProgressiveWork(
 	    this->d->lodTargetPixelError = 1.0f;
 	    this->d->lodStablePointProxyCalibrationPending = FALSE;
 	    this->d->lodStablePointProxyRelaxationActive = FALSE;
-	    BObolViewLodState *viewState =
-		this->d->viewAttachment->getViewLodState();
 	    if (viewState) {
 		viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
+		if (this->d->lodStablePresentationSnapshotRestored) {
+		    viewState->setCadPresentationProgressiveLodCeiling(
+			this->d->lodInteractiveProgressiveCeiling);
+		    viewState->setCadPresentationPointProxyPixelThreshold(
+			this->d->lodPresentationPointProxyPixelThreshold);
+		}
 		/*
 		 * activeFaceCount() is the retained occurrence population, not
 		 * necessarily the cut just presented under the motion ceiling.
@@ -4016,6 +4143,11 @@ BObolViewController::advanceProgressiveWork(
 		 * measured presentation and reconcile the retained cuts first.
 		 */
 	    }
+	    this->d->lodStablePresentationSnapshotValid = FALSE;
+	    this->d->lodStablePresentationSnapshotRestored = FALSE;
+	    this->d->lodInteractionScaleChanged = FALSE;
+	    this->d->lodStablePresentationActiveFaces = 0;
+	    this->d->lodStablePresentationCadRevision = 0;
 	    this->advanceLodPolicyRevision();
 	} else {
 	    /* Keep the host frame pump alive through the idle debounce. */
@@ -4738,6 +4870,13 @@ BObolViewController::cancelActiveLodGeneration(void)
     this->d->lodStablePointProxyCalibrationPending = FALSE;
     this->d->lodStablePointProxyRelaxationActive = FALSE;
     this->d->lodStablePresentationHandoffActive = FALSE;
+    this->d->lodStablePresentationSnapshotValid = FALSE;
+    this->d->lodStablePresentationSnapshotRestored = FALSE;
+    this->d->lodInteractionScaleChanged = FALSE;
+    this->d->lodStablePresentationProgressiveCeiling = -1;
+    this->d->lodStablePresentationPointProxyPixelThreshold = 1.0f;
+    this->d->lodStablePresentationActiveFaces = 0;
+    this->d->lodStablePresentationCadRevision = 0;
     if (this->d->viewAttachment &&
 	this->d->viewAttachment->getViewLodState())
 	{
@@ -4811,6 +4950,9 @@ BObolViewController::setLodAutoSubmit(SbBool enabled)
 	this->d->lodStablePointProxyCalibrationPending = FALSE;
 	this->d->lodStablePointProxyRelaxationActive = FALSE;
 	this->d->lodStablePresentationHandoffActive = FALSE;
+	this->d->lodStablePresentationSnapshotValid = FALSE;
+	this->d->lodStablePresentationSnapshotRestored = FALSE;
+	this->d->lodInteractionScaleChanged = FALSE;
 	if (this->d->viewAttachment->getViewLodState()) {
 	    BObolViewLodState *viewState =
 		this->d->viewAttachment->getViewLodState();
@@ -6390,19 +6532,17 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    std::vector<SbString> unsatisfiedKeys;
 	    viewLodState->unsatisfiedCadOccurrenceKeys(
 		source, unsatisfiedKeys);
-	    this->d->lodSubmissionPlanEntries.clear();
-	    this->d->lodSubmissionPlanEntries.reserve(
-		unsatisfiedKeys.size());
-	    for (const SbString &key : unsatisfiedKeys) {
-		size_t entryIndex = 0;
-		if (source->getCompactInstanceIndex(
-			key.getString(), entryIndex))
-		    this->d->lodSubmissionPlanEntries.push_back(
-			entryIndex);
-	    }
+	    controller_prioritize_lod_frontier(source, viewLodState,
+		unsatisfiedKeys, this->d->lodSubmissionPlanEntries);
 	    this->d->lodSubmissionPlanSource = source;
 	    this->d->lodSubmissionPlanValid = TRUE;
 	}
+	/* The retained frontier is ordered by the marginal transition which made
+	 * it eligible.  Do not let one visit consume every remaining level and
+	 * invalidate that ordering.  Coverage/index and exact delta scans keep
+	 * their existing bulk behavior. */
+	if (usingUnsatisfiedFrontier)
+	    action.setTransitionLimitedRefinement(TRUE);
 	if (boundedLargeCompact && this->d->lodCoveragePassActive) {
 	    /*
 	     * A bounded index-order window cannot know whether a later window
@@ -8612,6 +8752,21 @@ BObolViewController::beginLodInteraction(void)
 	return;
 
     const float previousPixelError = this->d->lodTargetPixelError;
+    if (!this->d->lodInteractive) {
+	this->d->lodStablePresentationSnapshotValid = TRUE;
+	this->d->lodStablePresentationSnapshotRestored = FALSE;
+	this->d->lodInteractionScaleChanged = FALSE;
+	this->d->lodStablePresentationProgressiveCeiling =
+	    this->d->lodInteractiveProgressiveCeiling;
+	this->d->lodStablePresentationPointProxyPixelThreshold =
+	    this->d->lodPresentationPointProxyPixelThreshold;
+	const BObolViewLodState *snapshotState =
+	    this->d->viewAttachment->getViewLodState();
+	this->d->lodStablePresentationActiveFaces = snapshotState ?
+	    snapshotState->activeFaceCount() : 0;
+	this->d->lodStablePresentationCadRevision = snapshotState ?
+	    snapshotState->cadRevision() : 0;
+    }
     this->d->lodGestureActive = TRUE;
     this->d->lodViewScaleChanging = FALSE;
     this->d->lodReleaseCutFloorActive = FALSE;
@@ -8661,6 +8816,7 @@ BObolViewController::beginLodInteraction(void)
 	this->d->viewAttachment->getViewLodState();
     if (viewState)
 	viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
+
     /*
      * Wheel and trackpad input is normally an unbracketed camera epoch.  It
      * may already have ratcheted the retained presentation to a measured
@@ -8712,14 +8868,45 @@ BObolViewController::endLodInteraction(void)
 	this->d->viewAttachment->getViewLodState();
     if (viewState)
 	viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
+    /* Pose-only orthographic interaction never changed the occurrence cuts;
+     * only renderer-side motion limits hid part of the resident presentation.
+     * Restore the last measured stable limits on release, while retaining the
+     * normal debounce for new projection/refinement work.  A zoom/projection
+     * change must instead keep the responsive cut until it is re-budgeted. */
+    const bool orthographicPresentation = this->d->activeCamera &&
+	this->d->activeCamera->isOfType(
+	    SoOrthographicCamera::getClassTypeId());
+    const bool unchangedOccurrencePopulation = viewState ?
+	viewState->activeFaceCount() ==
+	    this->d->lodStablePresentationActiveFaces &&
+	viewState->cadRevision() ==
+	    this->d->lodStablePresentationCadRevision :
+	this->d->lodStablePresentationActiveFaces == 0;
+    if (orthographicPresentation && unchangedOccurrencePopulation &&
+	!this->d->lodInteractionScaleChanged &&
+	this->d->lodStablePresentationSnapshotValid) {
+	this->d->lodInteractiveProgressiveCeiling =
+	    this->d->lodStablePresentationProgressiveCeiling;
+	this->d->lodPresentationPointProxyPixelThreshold =
+	    this->d->lodStablePresentationPointProxyPixelThreshold;
+	this->d->lodStablePresentationSnapshotRestored = TRUE;
+	this->d->lodReleaseCutFloorActive = FALSE;
+	if (viewState) {
+	    viewState->setCadPresentationProgressiveLodCeiling(
+		this->d->lodInteractiveProgressiveCeiling);
+	    viewState->setCadPresentationPointProxyPixelThreshold(
+		this->d->lodPresentationPointProxyPixelThreshold);
+	}
+    }
     /*
      * Do not promote the face budget to activeFaceCount() here.  The active
      * retained population may be orders of magnitude richer than the
      * responsive cut actually shown through the renderer-wide PoP ceiling.
-     * The ceiling remains installed during the debounce, and the quiet
-     * handoff reconciles retained cuts before releasing it.
+     * Zoom and changed-population releases retain that ceiling through the
+     * quiet handoff; a validated pose-only snapshot was restored above.
      */
-    this->d->lodReleaseCutFloorActive = TRUE;
+    if (!this->d->lodStablePresentationSnapshotRestored)
+	this->d->lodReleaseCutFloorActive = TRUE;
     /* A gesture pass may have exhausted the old, smaller allowance.  Force
      * the release pass to derive its admission state from the coherent floor
      * above rather than reusing that stale remainder. */
@@ -8728,9 +8915,10 @@ BObolViewController::endLodInteraction(void)
     this->d->lodRetainedAdmissionActive = FALSE;
     this->d->lodRetainedAdmissionBudgetRemaining = SIZE_MAX;
     this->d->lodRefinementBudgetRetryMicroseconds = 0;
-    /* Keep the motion cut through the normal quiet-view debounce.  Refining
-     * immediately on button release makes the release event itself block on
-     * a full software frame and defeats coarse interaction. */
+    /* Keep the interaction epoch through the normal quiet-view debounce.
+     * Pose-only presentation may already be restored, but new projection and
+     * refinement work still waits so release cannot block on a full software
+     * planning frame. */
     this->d->lodLastViewChangeMicroseconds = bu_gettime();
     this->d->lodSettleAfterRenderSerial = 0;
     this->markProgressiveWorkPending();
@@ -9115,6 +9303,23 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 	     */
 	    const SbBool continuingInteractive =
 		this->d->lodInteractive;
+	    if (!continuingInteractive) {
+		this->d->lodStablePresentationSnapshotValid = TRUE;
+		this->d->lodStablePresentationSnapshotRestored = FALSE;
+		this->d->lodInteractionScaleChanged = FALSE;
+		this->d->lodStablePresentationProgressiveCeiling =
+		    this->d->lodInteractiveProgressiveCeiling;
+		this->d->lodStablePresentationPointProxyPixelThreshold =
+		    this->d->lodPresentationPointProxyPixelThreshold;
+		const BObolViewLodState *snapshotState =
+		    this->d->viewAttachment->getViewLodState();
+		this->d->lodStablePresentationActiveFaces = snapshotState ?
+		    snapshotState->activeFaceCount() : 0;
+		this->d->lodStablePresentationCadRevision = snapshotState ?
+		    snapshotState->cadRevision() : 0;
+	    }
+	    if (scaleChanged)
+		this->d->lodInteractionScaleChanged = TRUE;
 	    const int64_t now = bu_gettime();
 	    this->d->lodLastViewChangeMicroseconds = now;
 	    this->d->lodInteractive = TRUE;

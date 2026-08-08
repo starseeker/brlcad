@@ -1054,6 +1054,8 @@ BObolLodRequest::clear(void)
     providerVersion = "";
     qualityTier = BOBOL_LOD_QUALITY_METADATA;
     projectedPixelDiameter = 0.0f;
+    projectedPixelArea = 0.0f;
+    projectedPixelPerimeter = 0.0f;
     targetPixelError = 1.0f;
     requestedLevel = -1;
     bounds.makeEmpty();

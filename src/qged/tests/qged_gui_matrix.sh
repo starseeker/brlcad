@@ -152,8 +152,13 @@ case_spec()
 		"all" "0xxx_series" "all/0xxx_series"
 	    ;;
 	lucy)
-	    printf '%s|%s|%s|%s|%s\n' "$build_dir/lucy.g" "lucy.bot.r" \
+	    printf '%s|%s|%s|%s|%s\n' \
+		"${BOBOL_LUCY_DB:-$build_dir/lucy.g}" "lucy.bot.r" \
 		"lucy.bot.r" "lucy.bot" "lucy.bot.r/lucy.bot"
+	    ;;
+	bigboy)
+	    printf '%s|%s|||\n' \
+		"${BOBOL_BIGBOY_DB:-$build_dir/bigboy.g}" "all"
 	    ;;
 	multi_lucy)
 	    printf '%s|%s|||\n' "$build_dir/stanford.g" "multi_lucy"
@@ -763,6 +768,47 @@ validate_report()
 	    ' "$report" >>"$validation" 2>&1; then
 	    printf 'Lucy did not converge to an actual resident PoP mesh\n' \
 		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    # If this run captured a partially converged refining frame, the HUD must
+    # contain a visible phase-colored fill as well as the numeric progress
+    # label.  The faceplate may legitimately lag the diagnostic sample by one
+    # frame, so accept any of the documented phase colors.  The
+    # controller fraction alone did not catch a depth-buffer regression that
+    # left the fill completely hidden behind its gray track.
+    local lod_hud_sample
+    lod_hud_sample=$(jq -r '
+	first(.samples[] |
+	    select((.checkpoint? // "") != "" and
+		(.lod_convergence_phase // 0) == 3 and
+		(.lod_convergence_fraction // 0) > 0.05 and
+		(.lod_convergence_fraction // 1) < 0.99) |
+	    .checkpoint) // empty
+	' "$report" 2>/dev/null)
+    if [[ -n "$lod_hud_sample" && -f "$lod_hud_sample" ]]; then
+	local hud_dimensions hud_width hud_height hud_crop_height
+	local hud_fill_pixels
+	hud_dimensions=$(identify -format '%wx%h' "$lod_hud_sample" \
+	    2>/dev/null || true)
+	hud_width="${hud_dimensions%x*}"
+	hud_height="${hud_dimensions#*x}"
+	hud_fill_pixels=0
+	if [[ "$hud_width" =~ ^[0-9]+$ && "$hud_height" =~ ^[0-9]+$ &&
+		"$hud_width" -gt 80 && "$hud_height" -gt 120 ]]; then
+	    hud_crop_height=$((hud_height - 100))
+	    hud_fill_pixels=$(convert "$lod_hud_sample" \
+		-crop "40x${hud_crop_height}+$((hud_width - 40))+20" \
+		-fuzz 20% -fill white -opaque '#60dcff' \
+		-opaque '#70eb87' -opaque '#ffcd48' -opaque '#ffaa40' \
+		-opaque '#ff5a50' \
+		-fill black +opaque white -format '%[fx:mean*w*h]' info: \
+		2>/dev/null || printf '0')
+	fi
+	if ! awk -v pixels="$hud_fill_pixels" 'BEGIN { exit !(pixels >= 100) }'; then
+	    printf 'LoD convergence HUD track has no visible progress fill (%s pixels)\n' \
+		"$hud_fill_pixels" >>"$validation"
 	    return 1
 	fi
     fi

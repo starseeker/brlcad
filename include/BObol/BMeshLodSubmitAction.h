@@ -77,6 +77,12 @@ public:
     size_t getRefinementFaceBudget(void) const;
     size_t getRefinementFaceBudgetUsed(void) const;
     unsigned int getRefinementBudgetBlockedCount(void) const;
+    /* Limit one finite-budget visit to one populated PoP transition.  This is
+     * used by perceptually ordered refinement frontiers so the score for one
+     * marginal step cannot accidentally grant the same occurrence every
+     * remaining level and starve other visible features. */
+    void setTransitionLimitedRefinement(SbBool limited);
+    SbBool getTransitionLimitedRefinement(void) const;
     void setViewLodState(BObolViewLodState *viewState);
     const BObolViewLodState *getViewLodState(void) const;
     void setCompactEntryRange(size_t first, size_t count);
@@ -168,6 +174,7 @@ private:
     size_t refinementFaceBudget;
     size_t refinementFaceBudgetUsed;
     unsigned int refinementBudgetBlockedCount;
+    SbBool transitionLimitedRefinement;
     BObolViewLodState *viewState;
     size_t compactEntryFirst;
     size_t compactEntryLimit;
