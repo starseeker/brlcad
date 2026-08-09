@@ -151,7 +151,9 @@ return;
     qgcanvas_request_obol_render_if_idle(*d, "qtsw-paint");
 
     QImage image;
-    qgcanvas_get_obol_viewport_image(*d, this, image, true, true, true);
+    bool completedPresentation = false;
+    qgcanvas_get_obol_viewport_image(
+	*d, this, image, true, true, true, &completedPresentation);
     if (image.isNull()) {
 	/* Preserve the opaque-widget contract if an offscreen render fails. */
 	QPainter painter(this);
@@ -162,9 +164,11 @@ return;
     painter.translate(0, height());
     painter.scale(1, -1);
     painter.drawImage(QPoint(0, 0), image);
-    (void)bv_refresh_consume(bv_context_view(d->v));
-    bv_refresh_complete(bv_context_view(d->v));
-    qgcanvas_frame_complete(*d, this);
+    if (completedPresentation) {
+	(void)bv_refresh_consume(bv_context_view(d->v));
+	bv_refresh_complete(bv_context_view(d->v));
+	qgcanvas_frame_complete(*d, this);
+    }
     qgcanvas_queue_obol_progressive_update(*d, this);
     if (!d->obol_paint_initialized) {
 	d->obol_paint_initialized = true;

@@ -227,14 +227,20 @@ check_controller_light_order(BObolViewController &controller,
     SoNode *environment =
 	find_named_node(renderRoot, "BObolRenderEnvironment");
     SoNode *headlight = find_named_node(renderRoot, "BObolHeadlight");
+    SoNode *fill = find_named_node(renderRoot, "BObolStudioFill");
+    SoNode *rim = find_named_node(renderRoot, "BObolStudioRim");
     SoNode *sceneLights = find_named_node(renderRoot, "BObolSceneLights");
     SoGroup *parent = find_node_parent(renderRoot, headlight);
 
-    if (!renderRoot || !camera || !environment || !headlight ||
+    if (!renderRoot || !camera || !environment || !headlight || !fill || !rim ||
 	!sceneLights || !parent ||
 	!headlight->isOfType(SoDirectionalLight::getClassTypeId()) ||
+	!fill->isOfType(SoDirectionalLight::getClassTypeId()) ||
+	!rim->isOfType(SoDirectionalLight::getClassTypeId()) ||
 	find_node_parent(renderRoot, camera) != parent ||
 	find_node_parent(renderRoot, environment) != parent ||
+	find_node_parent(renderRoot, fill) != parent ||
+	find_node_parent(renderRoot, rim) != parent ||
 	find_node_parent(renderRoot, sceneLights) != parent) {
 	return 1;
     }
@@ -242,11 +248,15 @@ check_controller_light_order(BObolViewController &controller,
     const int environmentIndex = parent->findChild(environment);
     const int cameraIndex = parent->findChild(camera);
     const int headlightIndex = parent->findChild(headlight);
+    const int fillIndex = parent->findChild(fill);
+    const int rimIndex = parent->findChild(rim);
     const int sceneLightsIndex = parent->findChild(sceneLights);
     return environmentIndex != 0 ||
 	cameraIndex <= environmentIndex ||
 	headlightIndex != cameraIndex + 1 ||
-	sceneLightsIndex <= headlightIndex;
+	fillIndex != headlightIndex + 1 ||
+	rimIndex != fillIndex + 1 ||
+	sceneLightsIndex <= rimIndex;
 }
 
 static int
@@ -259,7 +269,36 @@ test_view_controller_fixed_gl_light_order(void)
 	SoOrthographicCamera *camera = new SoOrthographicCamera;
 	BObolViewController controller(root, camera);
 	if (check_controller_light_order(controller, camera)) {
-	    printf("FAIL: headlight does not traverse immediately after camera\n");
+	    printf("FAIL: camera light rig does not traverse immediately after camera\n");
+	    ret = 1;
+	}
+	std::vector<BObolSceneLightRealization> cameraLights;
+	controller.getCameraLights(cameraLights);
+	if (!ret && (controller.getLightingProfile() !=
+		BObolViewController::LIGHTING_STUDIO ||
+	    cameraLights.size() != 3u)) {
+	    printf("FAIL: controller did not initialize the studio light rig\n");
+	    ret = 1;
+	}
+	controller.setLightingProfile(BObolViewController::LIGHTING_MGED);
+	controller.getCameraLights(cameraLights);
+	if (!ret && (cameraLights.size() != 1u ||
+	    std::fabs(controller.getLightingAmbientIntensity() - 0.3f) >
+		1.0e-6f)) {
+	    printf("FAIL: controller MGED light profile is not the historical rig\n");
+	    ret = 1;
+	}
+	controller.setLightingProfile(BObolViewController::LIGHTING_STUDIO);
+	controller.setLightingEnabled(FALSE);
+	controller.getCameraLights(cameraLights);
+	if (!ret && !cameraLights.empty()) {
+	    printf("FAIL: disabled controller lighting still exported camera lights\n");
+	    ret = 1;
+	}
+	controller.setLightingEnabled(TRUE);
+	controller.getCameraLights(cameraLights);
+	if (!ret && cameraLights.size() != 3u) {
+	    printf("FAIL: re-enabled controller lighting did not restore studio rig\n");
 	    ret = 1;
 	}
 
@@ -267,6 +306,59 @@ test_view_controller_fixed_gl_light_order(void)
 	controller.setCamera(replacement);
 	if (!ret && check_controller_light_order(controller, replacement)) {
 	    printf("FAIL: replacement camera broke fixed-GL light ordering\n");
+	    ret = 1;
+	}
+    }
+    root->unref();
+    return ret;
+}
+
+static int
+test_view_controller_presentation_deadline_contract(void)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+    int ret = 0;
+    {
+	BObolViewController controller(root, NULL);
+	if (controller.getInteractivePresentationFrameDeadline() !=
+		40000000ULL ||
+	    controller.getStablePresentationFrameDeadline() !=
+		100000000ULL ||
+	    controller.getCurrentPresentationFrameDeadline() !=
+		100000000ULL) {
+	    printf("FAIL: presentation deadline defaults\n");
+	    ret = 1;
+	}
+
+	controller.setPresentationFrameDeadlines(5000000ULL, 9000000ULL);
+	controller.setLodAutoSubmit(TRUE);
+	controller.beginLodInteraction();
+	if (!ret &&
+		controller.getCurrentPresentationFrameDeadline() != 5000000ULL) {
+	    printf("FAIL: interactive presentation deadline selection\n");
+	    ret = 1;
+	}
+	controller.endLodInteraction();
+
+	controller.clearRenderRequest();
+	controller.notePresentationRenderInterrupted(123000000ULL);
+	if (!ret &&
+		(controller.getInterruptedPresentationFrameCount() != 1 ||
+		 controller.getLastInterruptedPresentationTimeNanoseconds() !=
+		     123000000ULL ||
+		 !controller.isRenderRequested() ||
+		 bu_strcmp(controller.getRenderReason().getString(),
+		     "render-deadline") != 0 ||
+		 controller.getCurrentPresentationFrameDeadline() !=
+		     7500000ULL)) {
+	    printf("FAIL: interrupted presentation did not retain the "
+		   "progressive retry barrier\n");
+	    ret = 1;
+	}
+	controller.notePresentationRenderInterrupted(0);
+	if (!ret && controller.getInterruptedPresentationFrameCount() != 1) {
+	    printf("FAIL: zero-duration presentation counted as interrupted\n");
 	    ret = 1;
 	}
     }
@@ -421,6 +513,26 @@ static BObolLodResult
 mesh_payload_refined_task(const BObolLodRequest &request, void *UNUSED(userData))
 {
     return mesh_payload_variant_result(request, 2, 3);
+}
+
+static BObolLodResult
+mesh_payload_requested_refined_task(const BObolLodRequest &request,
+	void *UNUSED(userData))
+{
+    return mesh_payload_variant_result(request, request.requestedLevel, 3);
+}
+
+static BObolLodResult
+copied_progressive_result_task(const BObolLodRequest &request, void *userData)
+{
+    const BObolLodResult *prototype =
+	static_cast<const BObolLodResult *>(userData);
+    if (!prototype)
+	return BObolLodResult();
+    BObolLodResult result = *prototype;
+    result.request = request;
+    result.cacheKey = bobol_lod_cache_key(request);
+    return result;
 }
 
 static void
@@ -3999,6 +4111,7 @@ test_view_controller_mesh_residency_budget_auto(void)
 	SoOrthographicCamera *camera = new SoOrthographicCamera;
 	BObolViewController controller(root, camera);
 	BObolLodService service;
+	uint64_t taskGeneration = 0;
 
 	if (controller.hasMeshResidencyBudget()) {
 	    printf("FAIL: controller mesh residency budget should default disabled\n");
@@ -4021,6 +4134,7 @@ test_view_controller_mesh_residency_budget_auto(void)
 	if (!ret) {
 	    BObolLodTask task;
 	    task.generation = service.beginGeneration();
+	    taskGeneration = task.generation;
 	    task.request = make_request("/budget/auto.bot", "auto.bot");
 	    task.request.viewRevision = controller.getLodViewRevision();
 	    task.request.policyRevision = controller.getLodPolicyRevision();
@@ -4035,7 +4149,8 @@ test_view_controller_mesh_residency_budget_auto(void)
 
 	if (!ret) {
 	    controller.clearRenderRequest();
-	    int applied = controller.applyLodResults(&service);
+	    int applied = controller.applyLodResults(
+		&service, 0, 0, taskGeneration);
 	    BObolSourceMeshRequest sourceRequest;
 	    if (applied != 1 ||
 		controller.getLastLodAppliedResultCount() != 1 ||
@@ -4054,7 +4169,21 @@ test_view_controller_mesh_residency_budget_auto(void)
 		!mesh->makeSourceMeshRequest(sourceRequest) ||
 		check_source_mesh_request(sourceRequest,
 					  "/budget/auto.bot", "auto.bot", 131)) {
-		printf("FAIL: controller mesh residency budget did not auto-evict applied LoD payload\n");
+		printf("FAIL: controller mesh residency budget did not auto-evict "
+		       "applied LoD payload (applied=%d matched=%u initial=%zu "
+		       "final=%zu full=%u display=%u render=%d reason=%s "
+		       "lod=%d exact=%d triangles=%d resident=%zu)\n",
+		       applied, controller.getLastLodAppliedResultCount(),
+		       controller.getLastMeshBudgetInitialResidentBytes(),
+		       controller.getLastMeshBudgetFinalResidentBytes(),
+		       controller.getLastMeshBudgetEvictedFullDetailMeshCount(),
+		       controller.getLastMeshBudgetEvictedDisplayMeshCount(),
+		       controller.isRenderRequested() ? 1 : 0,
+		       controller.getRenderReason().getString(),
+		       mesh->isLodDisplayActive() ? 1 : 0,
+		       mesh->hasFullDetailMesh() ? 1 : 0,
+		       mesh->getTriangleCount(),
+		       mesh->estimateResidentMeshBytes());
 		ret = 1;
 	    }
 	}
@@ -5631,7 +5760,10 @@ test_view_controller_lod_submit_and_apply(void)
     }
 
     {
+	std::atomic<unsigned int> frameRequestCount(0);
 	BObolViewController controller(root, camera);
+	controller.setFrameRequestCallback(
+	    count_frame_request, &frameRequestCount);
 	controller.setLodService(&service);
 	controller.setViewportSize(800, 600);
 	controller.setLodPolicyRevision(99);
@@ -6119,6 +6251,95 @@ test_view_controller_lod_submit_and_apply(void)
 	    bu_dirclear(cache_dir);
 	    return 1;
 	}
+
+	/* A zoom is an active demand epoch, not pose-only frame reuse.  A richer
+	 * suffix which finishes while the gesture remains bracketed must publish
+	 * immediately in a bounded progressive pump; waiting for release leaves a
+	 * visibly magnified coarse image throughout continuous wheel/trackpad
+	 * input.  Start the owned generation before changing scale so the camera
+	 * revision remains the result's authoritative epoch. */
+	const uint64_t zoomGeneration = controller.beginLodGeneration();
+	controller.beginLodInteraction();
+	camera->height = 0.25f;
+	controller.clearRenderRequest();
+	(void)controller.submitLodRequestsIfNeeded();
+	const BObolViewLodState::MeshPayload *zoomBefore =
+	    controller.getViewLodState()->findMesh(mesh);
+	const int zoomPublishedLevel = zoomBefore ?
+	    std::max(zoomBefore->activeLevel + 1, 42) : 42;
+	BObolLodRequest zoomRequest =
+	    make_request("/lod-submit.bot", "lod-submit.bot");
+	zoomRequest.sourceRevision = 303;
+	zoomRequest.viewRevision = controller.getLodViewRevision();
+	zoomRequest.policyRevision = controller.getLodPolicyRevision();
+	zoomRequest.requestedLevel = zoomPublishedLevel;
+	BObolLodTask zoomResultTask;
+	zoomResultTask.generation = zoomGeneration;
+	zoomResultTask.request = zoomRequest;
+	zoomResultTask.realize = mesh_payload_requested_refined_task;
+	zoomResultTask.debugDelayMilliseconds = 200;
+	if (!zoomGeneration || service.submit(zoomResultTask) == 0) {
+	    printf("FAIL: active zoom refinement result setup\n");
+	    controller.endLodInteraction();
+	    service.stop();
+	    root->unref();
+	    bobol_mesh_lod_cache_clear_database(dbip);
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    bu_dirclear(cache_dir);
+	    return 1;
+	}
+	if (wait_for_service(service)) {
+	    printf("FAIL: active zoom refinement did not finish under bracketed input\n");
+	    controller.endLodInteraction();
+	    service.stop();
+	    root->unref();
+	    bobol_mesh_lod_cache_clear_database(dbip);
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    bu_dirclear(cache_dir);
+	    return 1;
+	}
+	BObolProgressiveStatus zoomStatus;
+	(void)controller.advanceProgressiveWork(NULL, &zoomStatus);
+	const BObolViewLodState::MeshPayload *zoomAfter =
+	    controller.getViewLodState()->findMesh(mesh);
+	const unsigned int callbacksBeforePresentation =
+	    frameRequestCount.load(std::memory_order_relaxed);
+	const uint64_t zoomPresentationStarted = controller.beginRenderTiming();
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	controller.completeRenderTiming(zoomPresentationStarted);
+	const bool qualityResumeRequested =
+	    frameRequestCount.load(std::memory_order_relaxed) >
+		callbacksBeforePresentation;
+	controller.endLodInteraction();
+	if (zoomStatus.lodResultsProcessed == 0 ||
+	    zoomStatus.lodResultsApplied == 0 ||
+	    !zoomAfter || zoomAfter == zoomBefore ||
+	    zoomAfter->activeLevel != zoomPublishedLevel ||
+	    zoomAfter->getTriangleCount() != 3 ||
+	    !qualityResumeRequested) {
+	    printf("FAIL: scale-changing interaction held its richer result "
+		   "until quiet (processed=%zu applied=%zu payload=%p/%p "
+		   "level=%d triangles=%d resume=%d interaction=%d scale=%d "
+		   "diagnostics=%s)\n",
+		   zoomStatus.lodResultsProcessed,
+		   zoomStatus.lodResultsApplied,
+		   (const void *)zoomAfter, (const void *)zoomBefore,
+		   zoomAfter ? zoomAfter->activeLevel : -1,
+		   zoomAfter ? zoomAfter->getTriangleCount() : -1,
+		   qualityResumeRequested ? 1 : 0,
+		   controller.isLodInteractionActive() ? 1 : 0,
+		   controller.isLodScaleChangingInteraction() ? 1 : 0,
+		   controller.getLastLodDiagnostics().getString());
+	    service.stop();
+	    root->unref();
+	    bobol_mesh_lod_cache_clear_database(dbip);
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    bu_dirclear(cache_dir);
+	    return 1;
+	}
     }
 
     int ret = 0;
@@ -6498,7 +6719,7 @@ test_view_controller_progressive_lod_results(void)
 	request.policyRevision = controller.getLodPolicyRevision();
 	request.requestedLevel = 2;
 
-	uint64_t generation = service.beginGeneration();
+	uint64_t generation = controller.beginLodGeneration();
 	BObolLodTask coarseTask;
 	coarseTask.generation = generation;
 	coarseTask.request = request;
@@ -6632,7 +6853,7 @@ test_view_controller_large_result_transfer(void)
 	large_payload_task_data data;
 	data.pointCount = 1500000;
 	BObolLodTask task;
-	task.generation = service.beginGeneration();
+	task.generation = controller.beginLodGeneration();
 	task.request = request;
 	task.realize = large_mesh_payload_task;
 	task.realizeData = &data;
@@ -6970,7 +7191,8 @@ test_compact_many_leaf_scene_admission(void)
 	firstWindow.setViewVolume(&volume, 1.0f);
 	firstWindow.setGeneration(service.beginGeneration());
 	firstWindow.setRevisions(1, 1);
-	firstWindow.setRefinementFaceBudget(8192);
+	const size_t provisionalCost = 832;
+	firstWindow.setRefinementCostBudget(16 * provisionalCost);
 	firstWindow.setCompactEntryRange(0, 16);
 	firstWindow.apply(source);
 	firstWindow.getCompactEntryPlan(pinnedPlan);
@@ -6978,7 +7200,8 @@ test_compact_many_leaf_scene_admission(void)
 	    firstWindow.getVisibleMeshCount() != 16 ||
 	    firstWindow.getCoveredVisibleMeshCount() != 0 ||
 	    firstWindow.getSubmittedTaskCount() != 16 ||
-	    firstWindow.getRefinementFaceBudgetUsed() != 8192 ||
+	    firstWindow.getRefinementCostBudgetUsed() !=
+		16 * provisionalCost ||
 	    firstWindow.getRefinementBudgetBlockedCount() != 0 ||
 	    !firstWindow.hasDeferredCompactEntries() ||
 	    firstWindow.getCompactEntryNext() != 16 ||
@@ -6992,7 +7215,7 @@ test_compact_many_leaf_scene_admission(void)
 		   firstWindow.getVisibleMeshCount(),
 		   firstWindow.getCoveredVisibleMeshCount(),
 		   firstWindow.getSubmittedTaskCount(),
-		   firstWindow.getRefinementFaceBudgetUsed(),
+		   firstWindow.getRefinementCostBudgetUsed(),
 		   firstWindow.getRefinementBudgetBlockedCount(),
 		   firstWindow.hasDeferredCompactEntries() ? 1 : 0,
 		   firstWindow.getCompactEntryNext(), pinnedPlan.size(),
@@ -7101,21 +7324,23 @@ test_compact_many_leaf_scene_admission(void)
 	sharedReuse.setGeneration(service.beginGeneration());
 	sharedReuse.setRevisions(1, 1);
 	sharedReuse.setViewLodState(&sharedViewState);
-	sharedReuse.setRefinementFaceBudget(4);
+	const size_t residentOccurrenceCost = 69;
+	sharedReuse.setRefinementCostBudget(residentOccurrenceCost);
 	sharedReuse.setCompactEntryPlan(pinnedPlan);
 	sharedReuse.setCompactEntryRange(2, 1);
 	sharedReuse.apply(source);
 	if (sharedReuse.getVisitedMeshCount() != 1 ||
 	    sharedReuse.getSubmittedTaskCount() != 0 ||
 	    sharedReuse.getUpdatedCutCount() != 1 ||
-	    sharedReuse.getRefinementFaceBudgetUsed() != 4 ||
+	    sharedReuse.getRefinementCostBudgetUsed() !=
+		residentOccurrenceCost ||
 	    sharedViewState.cadMeshPayloadCount() != 2) {
 	    printf("FAIL: many-leaf shared PoP asset was not bound directly "
 		   "(visited=%u tasks=%u cuts=%u used=%zu payloads=%zu)\n",
 		   sharedReuse.getVisitedMeshCount(),
 		   sharedReuse.getSubmittedTaskCount(),
 		   sharedReuse.getUpdatedCutCount(),
-		   sharedReuse.getRefinementFaceBudgetUsed(),
+		   sharedReuse.getRefinementCostBudgetUsed(),
 		   sharedViewState.cadMeshPayloadCount());
 	    ret = 1;
 	}
@@ -7129,7 +7354,7 @@ test_compact_many_leaf_scene_admission(void)
 	secondWindow.setViewVolume(&volume, 1.0f);
 	secondWindow.setGeneration(service.beginGeneration());
 	secondWindow.setRevisions(1, 1);
-	secondWindow.setRefinementFaceBudget(0);
+	secondWindow.setRefinementCostBudget(0);
 	secondWindow.setCompactEntryPlan(pinnedPlan);
 	secondWindow.setCompactEntryRange(16, 16);
 	secondWindow.apply(source);
@@ -7166,8 +7391,10 @@ test_compact_many_leaf_scene_admission(void)
 	retainedAdmission.setGeneration(service.beginGeneration());
 	retainedAdmission.setRevisions(2, 2);
 	retainedAdmission.setViewLodState(&sharedViewState);
-	retainedAdmission.setRefinementFaceBudget(0);
-	retainedAdmission.setRetainedSceneFaceBudget(4);
+	retainedAdmission.setRefinementCostBudget(0);
+	const size_t residentOccurrenceCost = 69;
+	retainedAdmission.setRetainedSceneCostBudget(
+	    residentOccurrenceCost);
 	retainedAdmission.setSubmissionTaskLimit(0);
 	retainedAdmission.setCompactEntryPlan(pinnedPlan);
 	/* Large-scene retained recovery is intentionally windowed.  The first
@@ -7175,14 +7402,15 @@ test_compact_many_leaf_scene_admission(void)
 	 * payload on the UI thread. */
 	retainedAdmission.setCompactEntryRange(0, 1);
 	retainedAdmission.apply(source);
-	if (retainedAdmission.getRetainedSceneFaceBudgetUsed() != 4 ||
+	if (retainedAdmission.getRetainedSceneCostBudgetUsed() !=
+		residentOccurrenceCost ||
 	    retainedAdmission.getUpdatedCutCount() != 0 ||
 	    sharedViewState.activeFaceCount() != 8 ||
 	    sharedViewState.cadMeshPayloadCount() != 2) {
 	    printf("FAIL: bounded retained recovery changed occurrences "
 		   "outside its first window "
 		   "(used=%zu cuts=%u faces=%zu payloads=%zu)\n",
-		   retainedAdmission.getRetainedSceneFaceBudgetUsed(),
+		   retainedAdmission.getRetainedSceneCostBudgetUsed(),
 		   retainedAdmission.getUpdatedCutCount(),
 		   sharedViewState.activeFaceCount(),
 		   sharedViewState.cadMeshPayloadCount());
@@ -7200,15 +7428,15 @@ test_compact_many_leaf_scene_admission(void)
 	retainedAdmissionTail.setGeneration(service.beginGeneration());
 	retainedAdmissionTail.setRevisions(2, 2);
 	retainedAdmissionTail.setViewLodState(&sharedViewState);
-	retainedAdmissionTail.setRefinementFaceBudget(0);
-	retainedAdmissionTail.setRetainedSceneFaceBudget(0);
+	retainedAdmissionTail.setRefinementCostBudget(0);
+	retainedAdmissionTail.setRetainedSceneCostBudget(0);
 	retainedAdmissionTail.setPreserveMeshCoverage(TRUE);
 	retainedAdmissionTail.setSubmissionTaskLimit(0);
 	retainedAdmissionTail.setCompactEntryPlan(pinnedPlan);
 	retainedAdmissionTail.setCompactEntryRange(1, SIZE_MAX);
 	retainedAdmissionTail.apply(source);
-	if (retainedAdmissionTail.getRetainedSceneFaceBudgetUsed() !=
-		(leafCount - 1) * 4 ||
+	if (retainedAdmissionTail.getRetainedSceneCostBudgetUsed() !=
+		(leafCount - 1) * 69 ||
 	    retainedAdmissionTail.getUpdatedCutCount() != leafCount - 2 ||
 	    retainedAdmissionTail.getRefinementBudgetBlockedCount() == 0 ||
 	    sharedViewState.activeFaceCount() != leafCount * 4 ||
@@ -7219,7 +7447,7 @@ test_compact_many_leaf_scene_admission(void)
 		   "the minimum visible mesh floor "
 		   "(used=%zu cuts=%u faces=%zu payloads=%zu "
 		   "source_payloads=%zu)\n",
-		   retainedAdmissionTail.getRetainedSceneFaceBudgetUsed(),
+		   retainedAdmissionTail.getRetainedSceneCostBudgetUsed(),
 		   retainedAdmissionTail.getUpdatedCutCount(),
 		   sharedViewState.activeFaceCount(),
 		   sharedViewState.cadMeshPayloadCount(),
@@ -7242,14 +7470,14 @@ test_compact_many_leaf_scene_admission(void)
 	coverageReadmission.setGeneration(service.beginGeneration());
 	coverageReadmission.setRevisions(3, 3);
 	coverageReadmission.setViewLodState(&sharedViewState);
-	coverageReadmission.setRefinementFaceBudget(0);
-	coverageReadmission.setRetainedSceneFaceBudget(8);
+	coverageReadmission.setRefinementCostBudget(0);
+	coverageReadmission.setRetainedSceneCostBudget(2 * 69);
 	coverageReadmission.setPreserveMeshCoverage(TRUE);
 	coverageReadmission.setSubmissionTaskLimit(0);
 	coverageReadmission.setCompactEntryPlan(pinnedPlan);
 	coverageReadmission.apply(source);
-	if (coverageReadmission.getRetainedSceneFaceBudgetUsed() !=
-		leafCount * 4 ||
+	if (coverageReadmission.getRetainedSceneCostBudgetUsed() !=
+		leafCount * 69 ||
 	    coverageReadmission.getUpdatedCutCount() != leafCount - 2 ||
 	    sharedViewState.activeFaceCount() != leafCount * 4 ||
 	    sharedViewState.cadMeshPayloadCount() != leafCount) {
@@ -7283,7 +7511,7 @@ test_compact_many_leaf_scene_admission(void)
 		   "coverage and advance zero-cost PoP cuts "
 		   "(used=%zu cuts=%u faces=%zu payloads=%zu "
 		   "occurrences=%zu shaded=%zu min=%zu terminal=%zu)\n",
-		   coverageReadmission.getRetainedSceneFaceBudgetUsed(),
+		   coverageReadmission.getRetainedSceneCostBudgetUsed(),
 		   coverageReadmission.getUpdatedCutCount(),
 		   sharedViewState.activeFaceCount(),
 		   sharedViewState.cadMeshPayloadCount(),
@@ -7320,8 +7548,8 @@ test_compact_many_leaf_scene_admission(void)
 	    memoryRecovery.setGeneration(service.beginGeneration());
 	    memoryRecovery.setRevisions(4, 4);
 	    memoryRecovery.setViewLodState(&sharedViewState);
-	    memoryRecovery.setRefinementFaceBudget(0);
-	    memoryRecovery.setRetainedSceneFaceBudget(4);
+	    memoryRecovery.setRefinementCostBudget(0);
+	    memoryRecovery.setRetainedSceneCostBudget(69);
 	    memoryRecovery.setPreserveMeshCoverage(FALSE);
 	    memoryRecovery.setSubmissionTaskLimit(0);
 	    memoryRecovery.setCompactEntryPlan(pinnedPlan);
@@ -7329,7 +7557,7 @@ test_compact_many_leaf_scene_admission(void)
 	    const BObolViewLodState::CadPayload *selectedPayload =
 		sharedViewState.findCadForOccurrence(
 		    source, selectedSummary.sourceInstanceKey);
-	    if (memoryRecovery.getRetainedSceneFaceBudgetUsed() != 4 ||
+	    if (memoryRecovery.getRetainedSceneCostBudgetUsed() != 69 ||
 		memoryRecovery.getUpdatedCutCount() != leafCount - 1 ||
 		memoryRecovery.getRefinementBudgetBlockedCount() == 0 ||
 		sharedViewState.activeFaceCount() != 4 ||
@@ -7339,7 +7567,7 @@ test_compact_many_leaf_scene_admission(void)
 		       "selected occurrence and retire lower-priority payloads "
 		       "(used=%zu cuts=%u blocked=%u faces=%zu payloads=%zu "
 		       "selected=%d)\n",
-		       memoryRecovery.getRetainedSceneFaceBudgetUsed(),
+		       memoryRecovery.getRetainedSceneCostBudgetUsed(),
 		       memoryRecovery.getUpdatedCutCount(),
 		       memoryRecovery.getRefinementBudgetBlockedCount(),
 		       sharedViewState.activeFaceCount(),
@@ -7540,7 +7768,7 @@ test_compact_many_leaf_scene_admission(void)
 		priorityAction.setGeneration(service.beginGeneration());
 		priorityAction.setRevisions(6, 6);
 		priorityAction.setViewLodState(&priorityState);
-		priorityAction.setRefinementFaceBudget(0);
+		priorityAction.setRefinementCostBudget(0);
 		priorityAction.setSubmissionTaskLimit(0);
 		priorityAction.apply(prioritySource);
 		std::vector<size_t> priorityPlan;
@@ -8679,6 +8907,161 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		ret = 1;
 	    }
 
+	    /* A cumulative resident suffix remains useful when a newer wheel
+	     * event advances the camera epoch before its worker result is drained.
+	     * Rebase that result to the current occurrence demand instead of
+	     * rejecting it, but preserve the provider's independently admitted
+	     * presentation cut: residency is not permission to draw the whole
+	     * newly loaded prefix. */
+	    if (!ret) {
+		BObolLodProgressiveMeshPtr rebaseProgressive(
+		    new BObolLodProgressiveMesh);
+		BObolLodResult rebaseSeed = budgetResult;
+		if (!rebaseProgressive->update(
+			partialData, partialHierarchy, 0, FALSE)) {
+		    printf("FAIL: cumulative suffix rebase fixture setup\n");
+		    ret = 1;
+		} else {
+		    rebaseSeed.progressiveMesh = rebaseProgressive;
+		    rebaseSeed.mesh.clear();
+		    BObolCompactInstanceHandle rebaseHandle;
+		    BObolCompactInstanceSummary rebaseSummary;
+		    if (!source->getCompactInstanceHandle(0, rebaseHandle) ||
+			!source->getCompactInstanceSummary(
+			    rebaseHandle, rebaseSummary)) {
+			printf("FAIL: cumulative suffix rebase occurrence setup\n");
+			ret = 1;
+		    }
+		    rebaseSeed.request.occurrenceKey =
+			rebaseSummary.sourceInstanceKey;
+		    rebaseSeed.request.objectPath =
+			rebaseSummary.meshAssetPath;
+		    rebaseSeed.request.objectName =
+			rebaseSummary.meshAssetName;
+		    rebaseSeed.geometry.activeLevel = 0;
+		    rebaseSeed.residentLevel = 0;
+		    rebaseSeed.request.requestedLevel = 1;
+		    rebaseSeed.counts.faceCount = 1;
+		    rebaseSeed.counts.pointCount = 3;
+		    rebaseSeed.counts.originalPointCount = 3;
+		    rebaseSeed.counts.normalCount = 0;
+		    rebaseSeed.terminal = FALSE;
+
+		    BObolViewController rebaseController(root, camera);
+		    rebaseController.setLodService(&service);
+		    rebaseController.setLodAutoSubmit(TRUE);
+		    BObolViewLodState *rebaseState =
+			rebaseController.getViewLodState();
+		    rebaseSeed.request.viewRevision =
+			rebaseController.getLodViewRevision();
+		    rebaseSeed.request.policyRevision =
+			rebaseController.getLodPolicyRevision();
+		    rebaseSeed.request.sourceRoutingId =
+			source->getCompactSourceRoutingId();
+		    rebaseSeed.cacheKey =
+			bobol_lod_cache_key(rebaseSeed.request);
+		    const uint64_t staleView =
+			rebaseSeed.request.viewRevision.value();
+		    if (!rebaseState ||
+			!rebaseState->applySourceResult(source, rebaseSeed)) {
+			printf("FAIL: cumulative suffix rebase seed apply\n");
+			ret = 1;
+		    } else if (!rebaseProgressive->update(
+			    data, hierarchy, 1, FALSE)) {
+			printf("FAIL: cumulative suffix rebase growth\n");
+			ret = 1;
+		    } else {
+			BObolLodResult completed = rebaseSeed;
+			completed.residentLevel = 1;
+			completed.geometry.activeLevel = 0;
+			completed.counts.faceCount = 1;
+			completed.counts.pointCount = 3;
+			completed.counts.originalPointCount = 3;
+			completed.terminal = FALSE;
+			completed.preparedCadGeometry =
+			    rebaseProgressive->prepareCadGeometry(
+				BOBOL_LOD_DRAW_SHADED,
+				&completed.preparedCadGeometryRevision);
+			const uint64_t generation =
+			    rebaseController.beginLodGeneration();
+			BObolLodTask task;
+			task.generation = generation;
+			task.request = completed.request;
+			task.realize = copied_progressive_result_task;
+			task.realizeData = &completed;
+			task.debugDelayMilliseconds = 50;
+			if (!generation || service.submit(task) == 0) {
+			    printf("FAIL: cumulative suffix rebase task submit\n");
+			    ret = 1;
+			} else {
+			    rebaseController.setViewportSize(641, 480);
+			    const BObolViewLodState::CadPayload *current =
+				rebaseState->findCadForResult(rebaseSeed);
+			    /* Deliberately leave the retained occurrence stamped with
+			     * staleView.  Continuous wheel events can outrun both the
+			     * worker result and occurrence metadata; immutable asset
+			     * identity, not a current camera stamp, is the safe rebase
+			     * witness. */
+			    const int waited = wait_for_service(service);
+			    rebaseController.clearProgressiveWorkPending();
+			    const int applied = waited ? -1 :
+				rebaseController.applyLodResults(
+				    &service, 0, 0, generation);
+			    if (!current || waited || applied != 1) {
+				printf("FAIL: cumulative suffix current-view rebase "
+				       "application (current=%p "
+				       "wait=%d applied=%d processed=%zu matched=%u "
+				       "rejected=%u unmatched=%u routing=%llu/%llu "
+				       "diagnostics=%s)\n",
+				       (const void *)current, waited, applied,
+				       rebaseController.getLastLodResultCount(),
+				       rebaseController.getLastLodMatchedResultCount(),
+				       rebaseController.getLastLodRejectedResultCount(),
+				       rebaseController.getLastLodUnmatchedResultCount(),
+				       (unsigned long long)
+					   completed.request.sourceRoutingId.value(),
+				       (unsigned long long)
+					   source->getCompactSourceRoutingId(),
+				       rebaseController.getLastLodDiagnostics().getString());
+				ret = 1;
+			    } else {
+				const BObolViewLodState::CadPayload *after =
+				    rebaseState->findCadForResult(rebaseSeed);
+				if (!after || after->activeLevel != 0 ||
+				    after->residentLevel != 1 ||
+				    after->requestedLevel != 1 ||
+				    after->viewRevision !=
+					rebaseController.getLodViewRevision() ||
+				    after->viewRevision == staleView ||
+				    after->counts.faceCount != 1 ||
+				    !rebaseController.hasProgressiveWorkPending()) {
+				    printf("FAIL: cumulative suffix was discarded "
+					   "after a newer view (active=%d "
+					   "resident=%d requested=%d "
+					   "view=%llu/%llu stale=%llu "
+					   "faces=%zu pending=%d diagnostics=%s)\n",
+					   after ? after->activeLevel : -1,
+					   after ? after->residentLevel : -1,
+					   after ? after->requestedLevel : -1,
+					   (unsigned long long)(after ?
+					       after->viewRevision : 0),
+					   (unsigned long long)
+					       rebaseController.
+						   getLodViewRevision(),
+					   (unsigned long long)staleView,
+					   after ? after->counts.faceCount : 0,
+					   rebaseController.
+					       hasProgressiveWorkPending() ? 1 : 0,
+					   rebaseController.
+					       getLastLodDiagnostics().getString());
+				    ret = 1;
+				}
+			    }
+			}
+		    }
+		}
+	    }
+
 	    SoOrthographicCamera *budgetCamera =
 		new SoOrthographicCamera;
 	    budgetCamera->ref();
@@ -8695,7 +9078,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    blocked.setGeneration(service.beginGeneration());
 	    blocked.setRevisions(63, 64);
 	    blocked.setViewLodState(&budgetState);
-	    blocked.setRefinementFaceBudget(2);
+	    blocked.setRefinementCostBudget(3);
 	    blocked.apply(root);
 	    payload = budgetState.findCadForResult(budgetResult);
 	    BObolCompactInstanceHandle budgetHandle;
@@ -8708,7 +9091,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		blocked.getUpdatedCutCount() != 0 ||
 		blocked.getPendingRetainedRefinementCount() != 1 ||
 		blocked.getRefinementBudgetBlockedCount() != 1 ||
-		blocked.getRefinementFaceBudgetUsed() != 0 ||
+		blocked.getRefinementCostBudgetUsed() != 0 ||
 		payload->activeLevel != 0 || payload->requestedLevel != 1 ||
 		budgetState.activeFaceCount() != 1) {
 		printf("FAIL: retained refinement exceeded its aggregate face "
@@ -8719,7 +9102,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		       blocked.getUpdatedCutCount(),
 		       blocked.getPendingRetainedRefinementCount(),
 		       blocked.getRefinementBudgetBlockedCount(),
-		       blocked.getRefinementFaceBudgetUsed(),
+		       blocked.getRefinementCostBudgetUsed(),
 		       payload ? payload->activeLevel : -1,
 		       payload ? payload->requestedLevel : -1,
 		       budgetState.activeFaceCount(),
@@ -8727,6 +9110,107 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		       budgetSummary.meshAssetPath.getString(),
 		       blocked.getDiagnostics().getString());
 		ret = 1;
+	    }
+
+	    if (!ret) {
+		/* A scale-quality experiment is scene-global even though one
+		 * submit action may visit several occurrences.  Let the first
+		 * complete marginal transition use one unit beyond the ordinary
+		 * budget, then prove the second occurrence remains pending. */
+		std::vector<BObolCompactOccurrence> trialOccurrences =
+		    rekeyedOccurrences;
+		BObolCompactOccurrence secondTrial = trialOccurrences.front();
+		secondTrial.summary.path =
+		    "root.c/post-pca-second/lod-submit.bot";
+		trialOccurrences.push_back(secondTrial);
+		if (source->setCompactOccurrenceRegistry(trialOccurrences) < 0) {
+		    printf("FAIL: one-over-budget trial registry setup\n");
+		    ret = 1;
+		} else {
+		    BObolViewLodState trialState;
+		    std::vector<BObolLodResult> trialResults;
+		    for (size_t trialIndex = 0;
+			 trialIndex < trialOccurrences.size(); ++trialIndex) {
+			BObolCompactInstanceHandle trialHandle;
+			BObolCompactInstanceSummary trialSummary;
+			if (!source->getCompactInstanceHandle(
+				static_cast<int>(trialIndex), trialHandle) ||
+			    !source->getCompactInstanceSummary(
+				trialHandle, trialSummary)) {
+			    ret = 1;
+			    break;
+			}
+			BObolLodResult trialResult = budgetResult;
+			trialResult.progressiveMesh = progressive;
+			trialResult.geometry.activeLevel = 0;
+			trialResult.residentLevel = 1;
+			trialResult.request.requestedLevel = 1;
+			trialResult.request.occurrenceKey =
+			    trialSummary.sourceInstanceKey;
+			trialResult.request.objectPath =
+			    trialSummary.meshAssetPath;
+			trialResult.request.objectName =
+			    trialSummary.meshAssetName;
+			if (!trialState.applySourceResult(source, trialResult)) {
+			    ret = 1;
+			    break;
+			}
+			trialResults.push_back(trialResult);
+		    }
+		    if (ret) {
+			printf("FAIL: one-over-budget trial payload setup\n");
+		    } else {
+			SoBRLMeshLodSubmitAction trial;
+			trial.setService(&service);
+			trial.setDatabase(
+			    dbip, "db://compact-projected-test", 2026);
+			trial.setViewInfo(&view);
+			trial.setViewVolume(&budgetVolume, 1.0f);
+			trial.setGeneration(service.beginGeneration());
+			trial.setRevisions(63, 65);
+			trial.setViewLodState(&trialState);
+			trial.setRefinementCostBudget(3);
+			trial.setOneOverBudgetRefinementLimit(1);
+			trial.apply(root);
+			unsigned int coarseCount = 0;
+			unsigned int richCount = 0;
+			for (const BObolLodResult &trialResult : trialResults) {
+			    const BObolViewLodState::CadPayload *trialPayload =
+				trialState.findCadForResult(trialResult);
+			    if (trialPayload && trialPayload->activeLevel == 0)
+				coarseCount++;
+			    if (trialPayload && trialPayload->activeLevel == 1)
+				richCount++;
+			}
+			if (trial.getOneOverBudgetRefinementLimit() != 1 ||
+			    !trial.getOneOverBudgetRefinementUsed() ||
+			    trial.getUpdatedCutCount() != 1 ||
+			    trial.getRefinementCostBudgetUsed() != 4 ||
+			    trial.getRefinementBudgetBlockedCount() < 1 ||
+			    trial.getPendingRetainedRefinementCount() != 1 ||
+			    coarseCount != 1 || richCount != 1 ||
+			    trialState.activeFaceCount() != 5) {
+			    printf("FAIL: one-over-budget trial was not unique and "
+				   "exactly charged (limit=%zu used=%d cuts=%u "
+				   "cost=%zu blocked=%u pending=%u coarse=%u "
+				   "rich=%u faces=%zu diagnostics=%s)\n",
+				   trial.getOneOverBudgetRefinementLimit(),
+				   trial.getOneOverBudgetRefinementUsed() ? 1 : 0,
+				   trial.getUpdatedCutCount(),
+				   trial.getRefinementCostBudgetUsed(),
+				   trial.getRefinementBudgetBlockedCount(),
+				   trial.getPendingRetainedRefinementCount(),
+				   coarseCount, richCount,
+				   trialState.activeFaceCount(),
+				   trial.getDiagnostics().getString());
+			    ret = 1;
+			}
+		    }
+		}
+		if (source->setCompactOccurrenceRegistry(rekeyedOccurrences) < 0) {
+		    printf("FAIL: one-over-budget trial registry restore\n");
+		    ret = 1;
+		}
 	    }
 
 	    if (!ret) {
@@ -8738,6 +9222,44 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    printf("FAIL: affordable retained refinement fixture apply\n");
 		    ret = 1;
 		}
+		BObolViewLodState ceilingState;
+		if (!ret &&
+		    !ceilingState.applySourceResult(source, admittedResult)) {
+		    printf("FAIL: presentation ceiling fixture apply\n");
+		    ret = 1;
+		}
+		if (!ret) {
+		    SoBRLMeshLodSubmitAction ceilingAction;
+		    ceilingAction.setService(&service);
+		    ceilingAction.setDatabase(
+			dbip, "db://compact-projected-test", 2026);
+		    ceilingAction.setViewInfo(&view);
+		    ceilingAction.setViewVolume(&budgetVolume, 1.0f);
+		    ceilingAction.setGeneration(service.beginGeneration());
+		    ceilingAction.setRevisions(65, 66);
+		    ceilingAction.setViewLodState(&ceilingState);
+		    ceilingAction.setRefinementCostBudget(4);
+		    ceilingAction.setRefinementLevelCeiling(0);
+		    ceilingAction.apply(root);
+		    const BObolViewLodState::CadPayload *ceilingPayload =
+			ceilingState.findCadForResult(admittedResult);
+		    if (!ceilingPayload ||
+			ceilingAction.getRefinementLevelCeiling() != 0 ||
+			ceilingAction.getUpdatedCutCount() != 0 ||
+			ceilingAction.getRefinementCostBudgetUsed() != 0 ||
+			ceilingPayload->activeLevel != 0 ||
+			ceilingPayload->residentLevel != 1) {
+			printf("FAIL: renderer ceiling allowed hidden occurrence "
+			       "promotion (ceiling=%d cuts=%u used=%zu active=%d "
+			       "resident=%d)\n",
+			       ceilingAction.getRefinementLevelCeiling(),
+			       ceilingAction.getUpdatedCutCount(),
+			       ceilingAction.getRefinementCostBudgetUsed(),
+			       ceilingPayload ? ceilingPayload->activeLevel : -1,
+			       ceilingPayload ? ceilingPayload->residentLevel : -1);
+			ret = 1;
+		    }
+		}
 		SoBRLMeshLodSubmitAction admitted;
 		admitted.setService(&service);
 		admitted.setDatabase(dbip, "db://compact-projected-test",
@@ -8747,24 +9269,24 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		admitted.setGeneration(service.beginGeneration());
 		admitted.setRevisions(65, 66);
 		admitted.setViewLodState(&admittedState);
-		admitted.setRefinementFaceBudget(3);
+		admitted.setRefinementCostBudget(4);
 		admitted.apply(root);
 		payload = admittedState.findCadForResult(admittedResult);
 		if (!payload || admitted.getSubmittedTaskCount() != 0 ||
 		    admitted.getUpdatedCutCount() != 1 ||
 		    admitted.getPendingRetainedRefinementCount() != 0 ||
 		    admitted.getRefinementBudgetBlockedCount() != 0 ||
-		    admitted.getRefinementFaceBudgetUsed() != 3 ||
+		    admitted.getRefinementCostBudgetUsed() != 4 ||
 		    payload->activeLevel != 1 ||
 		    admittedState.activeFaceCount() != 4) {
 		    printf("FAIL: retained refinement did not use an affordable "
-			   "face budget (tasks=%u cuts=%u pending=%u blocked=%u "
+			   "render-cost budget (tasks=%u cuts=%u pending=%u blocked=%u "
 			   "used=%zu active=%d faces=%zu diagnostics=%s)\n",
 			   admitted.getSubmittedTaskCount(),
 			   admitted.getUpdatedCutCount(),
 			   admitted.getPendingRetainedRefinementCount(),
 			   admitted.getRefinementBudgetBlockedCount(),
-			   admitted.getRefinementFaceBudgetUsed(),
+			   admitted.getRefinementCostBudgetUsed(),
 			   payload ? payload->activeLevel : -1,
 			   admittedState.activeFaceCount(),
 			   admitted.getDiagnostics().getString());
@@ -8788,8 +9310,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    recovery.setViewLodState(&admittedState);
 		    recovery.setAllowLevelDowngrade(TRUE);
 		    recovery.setPreserveMeshCoverage(TRUE);
-		    recovery.setRefinementFaceBudget(0);
-		    recovery.setRetainedSceneFaceBudget(1);
+		    recovery.setRefinementCostBudget(0);
+		    recovery.setRetainedSceneCostBudget(66);
 		    recovery.setSubmissionTaskLimit(0);
 		    recovery.setCompactEntryRange(0, 1);
 		    recovery.apply(root);
@@ -8802,7 +9324,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			recovery.getUpdatedCutCount() != 1 ||
 			recovery.getPendingRetainedRefinementCount() != 1 ||
 			recovery.getRefinementBudgetBlockedCount() != 0 ||
-			recovery.getRetainedSceneFaceBudgetUsed() != 1 ||
+			recovery.getRetainedSceneCostBudgetUsed() != 66 ||
 			payload->activeLevel != 0 ||
 			payload->requestedLevel != 1 ||
 			unsatisfied.size() != 1 ||
@@ -8818,7 +9340,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			       recovery.
 				   getPendingRetainedRefinementCount(),
 			       recovery.getRefinementBudgetBlockedCount(),
-			       recovery.getRetainedSceneFaceBudgetUsed(),
+			       recovery.getRetainedSceneCostBudgetUsed(),
 			       payload ? payload->activeLevel : -1,
 			       payload ? payload->requestedLevel : -1,
 			       unsatisfied.size());
@@ -8881,14 +9403,14 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    fair.setGeneration(service.beginGeneration());
 			    fair.setRevisions(73, 74);
 			    fair.setViewLodState(&fairState);
-			    fair.setRefinementFaceBudget(3);
+			    fair.setRefinementCostBudget(3);
 			    fair.setTransitionLimitedRefinement(TRUE);
 			    fair.apply(root);
 			    payload = fairState.findCadForResult(fairResult);
 			    if (!payload || fair.getSubmittedTaskCount() != 0 ||
 				fair.getUpdatedCutCount() != 1 ||
 				fair.getPendingRetainedRefinementCount() != 1 ||
-				fair.getRefinementFaceBudgetUsed() != 1 ||
+				fair.getRefinementCostBudgetUsed() != 1 ||
 				payload->activeLevel != 1 ||
 				payload->requestedLevel != 2 ||
 				fairState.activeFaceCount() != 2) {
@@ -8899,7 +9421,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				       fair.getSubmittedTaskCount(),
 				       fair.getUpdatedCutCount(),
 				       fair.getPendingRetainedRefinementCount(),
-				       fair.getRefinementFaceBudgetUsed(),
+				       fair.getRefinementCostBudgetUsed(),
 				       payload ? payload->activeLevel : -1,
 				       payload ? payload->requestedLevel : -1,
 				       fairState.activeFaceCount(),
@@ -8935,7 +9457,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    service.beginGeneration());
 			incremental.setRevisions(69, 70);
 			incremental.setViewLodState(&multiState);
-			incremental.setRefinementFaceBudget(1);
+		incremental.setRefinementCostBudget(1);
 			incremental.apply(root);
 			payload = multiState.findCadForResult(multiResult);
 			if (!payload ||
@@ -8943,7 +9465,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    incremental.getUpdatedCutCount() != 1 ||
 			    incremental.getPendingRetainedRefinementCount() != 1 ||
 			    incremental.getRefinementBudgetBlockedCount() < 1 ||
-			    incremental.getRefinementFaceBudgetUsed() != 1 ||
+		    incremental.getRefinementCostBudgetUsed() != 1 ||
 			    payload->activeLevel != 1 ||
 			    multiState.activeFaceCount() != 2) {
 			    printf("FAIL: retained refinement did not take an "
@@ -8956,7 +9478,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				       getPendingRetainedRefinementCount(),
 				   incremental.
 				       getRefinementBudgetBlockedCount(),
-				   incremental.getRefinementFaceBudgetUsed(),
+			   incremental.getRefinementCostBudgetUsed(),
 				   payload ? payload->activeLevel : -1,
 				   multiState.activeFaceCount(),
 				   incremental.getDiagnostics().getString());
@@ -9530,7 +10052,7 @@ test_view_controller_compact_direct_result_route(void)
 
 	if (!ret) {
 	    BObolLodTask task;
-	    task.generation = service.beginGeneration();
+	    task.generation = controller.beginLodGeneration();
 	    task.request = request;
 	    task.realize = aabb_payload_task;
 	    if (service.submit(task) == 0 || wait_for_service(service)) {
@@ -9572,7 +10094,7 @@ test_view_controller_compact_direct_result_route(void)
 	     */
 	    const BObolViewLodState::CadPayload *payloadBefore = payload;
 	    BObolLodTask replacement;
-	    replacement.generation = service.beginGeneration();
+	    replacement.generation = controller.beginLodGeneration();
 	    replacement.request = request;
 	    replacement.realize = aabb_payload_task;
 	    if (service.submit(replacement) == 0 ||
@@ -9605,7 +10127,7 @@ test_view_controller_compact_direct_result_route(void)
 		controller.clearRenderRequest();
 		request.requestedLevel = 2;
 		BObolLodTask task;
-		task.generation = service.beginGeneration();
+		task.generation = controller.beginLodGeneration();
 		task.request = request;
 		task.realize = mesh_payload_coarse_task;
 		if (service.submit(task) == 0 || wait_for_service(service)) {
@@ -9809,6 +10331,8 @@ main(int argc, char **argv)
     if (test_compact_staged_source_lease())
 	return 1;
     if (test_view_controller_fixed_gl_light_order())
+	return 1;
+    if (test_view_controller_presentation_deadline_contract())
 	return 1;
     if (test_update_action_direct())
 	return 1;

@@ -263,6 +263,38 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			app.run_qcmd(command);
 		    }
 		} else if (events[i].action ==
+		    QLatin1String("qged_command_batch")) {
+		    const QJsonArray commands = events[i].arguments.value(
+			QStringLiteral("commands")).toArray();
+		    if (commands.isEmpty()) {
+			error = QStringLiteral(
+			    "qged_command_batch requires a commands array");
+			success = false;
+		    } else {
+			/* Framing commonly requires an orientation followed by an
+			 * autoview.  Execute that transaction without exposing the
+			 * deliberately invalid intermediate camera as a one-frame GUI
+			 * flash; controller state and final rendering remain ordinary. */
+			const bool updatesEnabled = app.w &&
+			    app.w->updatesEnabled();
+			if (app.w && updatesEnabled)
+			    app.w->setUpdatesEnabled(false);
+			for (const QJsonValue &value : commands) {
+			    const QString command = value.toString();
+			    if (command.isEmpty()) {
+				error = QStringLiteral(
+				    "qged_command_batch contains an empty command");
+				success = false;
+				break;
+			    }
+			    app.run_qcmd(command);
+			}
+			if (app.w && updatesEnabled) {
+			    app.w->setUpdatesEnabled(true);
+			    app.w->update();
+			}
+		    }
+		} else if (events[i].action ==
 		    QLatin1String("wait_progressive_idle")) {
 		    success = qged_test_wait_progressive_idle(app,
 			events[i].arguments.value(
@@ -322,4 +354,3 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 	    app.exit(BRLCAD_OK);
 	});
 }
-

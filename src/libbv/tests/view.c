@@ -112,10 +112,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    grid.color[0] != 255 || grid.color[1] != 255 || grid.color[2] != 255)
 	return fail("new view grid defaults are incorrect");
     if (!bv_lighting_state_get(&lighting, v) ||
+	    lighting.profile != BV_LIGHTING_STUDIO ||
 	    lighting.headlight_enabled != 1 ||
 	    lighting.scene_lights_enabled != 0 ||
 	    lighting.headlight_tracks_camera != 1 ||
-	    !near_point(lighting.headlight_offset, 0.0, 0.0, -1.0))
+	    !near_point(lighting.headlight_offset, 0.35, -0.25, -1.0))
 	return fail("new view lighting defaults are incorrect");
     if (!bv_shading_state_get(&shading, v) ||
 	    shading.normal_style != BV_NORMAL_AUTHORED ||
@@ -293,11 +294,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !grid.snap || !near_fastf(grid.res_h, 2.0) ||
 	    grid.res_major_h != 7)
 	return fail("grid state set/get failed");
+    lighting.profile = BV_LIGHTING_MGED;
     lighting.headlight_enabled = 0;
     lighting.scene_lights_enabled = 1;
     lighting.headlight_tracks_camera = 0;
     if (!bv_lighting_state_set(v, &lighting) ||
 	    !bv_lighting_state_get(&lighting, v) ||
+	    lighting.profile != BV_LIGHTING_MGED ||
 	    lighting.headlight_enabled != 0 ||
 	    lighting.scene_lights_enabled != 1 ||
 	    lighting.headlight_tracks_camera != 0)

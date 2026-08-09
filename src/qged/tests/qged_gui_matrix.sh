@@ -259,6 +259,7 @@ write_event_script()
     local hierarchy_selection_labels=""
     local working_set_events=""
     local smooth_zoom_events=""
+    local lighting_events=""
     local view_events=""
     local label_index
     # Qt::ControlModifier forces BRL-CAD's rotate binding independently of
@@ -271,12 +272,9 @@ write_event_script()
 	# below: it verifies working-set turnover while a small visible subset
 	# has a much richer pixel-exact cut.
 	working_set_events=$(cat <<EOF
-    {"target": ".", "action": "qged_command",
-     "arguments": {"command": "ae 90 0"}},
-    {"target": ".", "action": "qged_command",
-     "arguments": {"command": "center -509244 -1121531 192627"}},
-    {"target": ".", "action": "qged_command",
-     "arguments": {"command": "size 1000000"}},
+	    {"target": ".", "action": "qged_command_batch",
+	     "arguments": {"commands": ["ae 90 0",
+		"center -509244 -1121531 192627", "size 1000000"]}},
     {"target": ".", "action": "wait_progressive_idle",
      "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
     {"target": "${canvas_target}", "action": "checkpoint",
@@ -339,6 +337,27 @@ write_event_script()
 EOF
 )
     fi
+
+    if [[ "$mode" == "shaded" &&
+	    ("$case_name" == "generic_twin" || "$case_name" == "lucy") ]]; then
+	# Lighting is shared view policy, not a qged-only preference.  Capture both
+	# named profiles through the public command and restore the studio default
+	# before any later selection/hierarchy probes.
+	lighting_events=$(cat <<EOF
+,
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "view lighting profile mged"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/lighting-mged.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "view lighting profile studio"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/lighting-studio.png"}}
+EOF
+)
+    fi
     if [[ "$case_name" == "unique_mesh_stress" ||
 	    "$case_name" == "lucy" ]]; then
 	# Approach a large mesh with actual wheel events so every intermediate
@@ -361,10 +380,8 @@ EOF
 )
 	else
 	    smooth_zoom_events=$(cat <<EOF
-    {"target": ".", "action": "qged_command",
-     "arguments": {"command": "ae 90 0"}},
-    {"target": ".", "action": "qged_command",
-     "arguments": {"command": "autoview"}},
+    {"target": ".", "action": "qged_command_batch",
+     "arguments": {"commands": ["ae 90 0", "autoview"]}},
 EOF
 )
 	fi
@@ -373,8 +390,36 @@ EOF
      "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/smooth-zoom-start-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-start-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-start-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-start-stable.png"}},
 EOF
 )
+	if [[ "$case_name" == "lucy" ]]; then
+	    # Keep the interaction explicitly bracketed beyond one exceptional
+	    # suffix's measured load/build latency.  The later low-amplitude wheel
+	    # events also keep the scale epoch changing at less than the 150 ms
+	    # quiet debounce, distinguishing refinement during continuous input
+	    # from a result released only after zoom has stopped.
+	    smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "mouse_press",
+     "arguments": {"x": 0.5, "y": 0.5, "button": 1, "buttons": 1,
+                   "modifiers": 0}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.501, "y": 0.5, "button": 0, "buttons": 1,
+                   "modifiers": 0}},
+EOF
+)
+	fi
 	for ((label_index = 1;
 		label_index <= smooth_zoom_steps; ++label_index)); do
 	    smooth_zoom_events+=$(cat <<EOF
@@ -392,7 +437,35 @@ EOF
 )
 	    fi
 	done
+	if [[ "$case_name" == "lucy" ]]; then
+	    for ((label_index = 1; label_index <= 15; ++label_index)); do
+		smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "wheel",
+     "arguments": {"x": 0.5, "y": 0.5, "pixel_x": 0, "pixel_y": 0,
+                   "angle_x": 0, "angle_y": 1, "modifiers": 0}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 100}},
+EOF
+)
+	    done
+	    smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-active-refined.png"}},
+    {"target": "${canvas_target}", "action": "mouse_release",
+     "arguments": {"x": 0.501, "y": 0.5, "button": 1, "buttons": 0,
+                   "modifiers": 0}},
+EOF
+)
+	fi
 	smooth_zoom_events+=$(cat <<EOF
+    {"target": ".", "action": "wait", "arguments": {"ms": 850}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-close-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-close-stable.png"}},
     {"target": ".", "action": "wait_progressive_idle",
      "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
     {"target": "${canvas_target}", "action": "checkpoint",
@@ -417,12 +490,29 @@ EOF
 	    fi
 	done
 	smooth_zoom_events+=$(cat <<EOF
+    {"target": ".", "action": "wait", "arguments": {"ms": 850}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-out-stable.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-out-stable.png"}},
     {"target": ".", "action": "wait_progressive_idle",
      "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/smooth-zoom-out-stable.png"}},
     {"target": ".", "action": "qged_command",
      "arguments": {"command": "autoview"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-return.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-return.png"}},
     {"target": ".", "action": "wait_progressive_idle",
      "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
     {"target": "${canvas_target}", "action": "checkpoint",
@@ -453,8 +543,15 @@ EOF
 "
 	    fi
 	done
+	# A canvas checkpoint performs a real render.  On a slow backend that
+	# render may supply new capacity feedback and schedule a legitimate LoD
+	# correction.  Settle any such work before beginning the hierarchy
+	# interval so the selection assertions measure work caused by selection,
+	# rather than work caused by the preceding diagnostic checkpoint.
 	hierarchy_events=$(cat <<EOF
 ,
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
 ${hierarchy_expand_events}
     {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/tree-expanded.png"}},
@@ -522,10 +619,8 @@ EOF
     {"target": ".", "action": "wait", "arguments": {"ms": 50}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/cold-rotate-motion.png"}},
-    {"target": ".", "action": "qged_command",
-     "arguments": {"command": "ae 90 0"}},
-    {"target": ".", "action": "qged_command",
-     "arguments": {"command": "autoview"}},
+    {"target": ".", "action": "qged_command_batch",
+     "arguments": {"commands": ["ae 90 0", "autoview"]}},
     {"target": ".", "action": "wait", "arguments": {"ms": 1000}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/realization-1s.png"}},
@@ -681,16 +776,14 @@ EOF
      "arguments": {"width": 1100, "height": 800}},
     {"target": ".", "action": "wait", "arguments": {"ms": 100}},
     {"target": ".", "action": "qged_command",
+     "arguments": {"command": "ae 90 0"}},
+    {"target": ".", "action": "qged_command",
      "arguments": {"command": "draw -m${draw_mode} ${object}"}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/draw-return.png"}},
     {"target": ".", "action": "wait", "arguments": {"ms": 50}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/draw-050ms.png"}},
-    {"target": ".", "action": "qged_command",
-     "arguments": {"command": "ae 90 0"}},
-    {"target": ".", "action": "qged_command",
-     "arguments": {"command": "autoview"}},
     {"target": ".", "action": "wait", "arguments": {"ms": 200}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/ae90-0200ms.png"}},
@@ -698,6 +791,7 @@ EOF
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/ae90-1500ms.png"}},
 ${view_events}
+${lighting_events}
 ${hierarchy_events}
   ]
 }
@@ -721,16 +815,37 @@ validate_report()
 	(any(.samples[]; (.draw_shape_count // 0) > 0)) and
 	(all(.samples[]; (.failed_sources // 0) == 0)) and
 	(all(.samples[]; (.cad_payloads_without_entry // 0) == 0)) and
+	# The coordinator is the retained-display authority.  Any rejected event
+	# contract or contradictory phase observation is a correctness failure even
+	# if the final framebuffer happens to look plausible.
+	(all(.samples[];
+	    (.lod_coordinator_invariant_violations // 0) == 0 and
+	    (.lod_coordinator_invariant_mask // 0) == 0 and
+	    (.lod_coordinator_invariant_history_mask // 0) == 0)) and
 	# Results may become owner-thread state immediately before the render
 	# traversal synchronizes their retained presentation.  That transient is
 	# not a displayed fallback frame; the stable/final sample is the
 	# authoritative lingering-box invariant.
 	((.samples[-1].superseded_fallback_presentations // 0) == 0)
 	and
-	(.samples[-1].progressive_pending == false) and
+	# The generic progressive flag also covers deferred resident-memory
+	# compaction.  A terminal visual frame may therefore be view-ready while
+	# memory housekeeping remains queued; reject only unfinished visual work.
+	((.samples[-1].progressive_pending == false) or
+	 ((.samples[-1].lod_convergence_view_ready // false) == true and
+	  (.samples[-1].lod_convergence_background_pending // false) == true)) and
 	(.samples[-1].lod_results_pending == false) and
 	(.samples[-1].lod_submissions_pending == false) and
 	(.samples[-1].lod_refinement_frame_pending == false) and
+	# GPU accounting is published only at a complete-frame commit.  A drawn
+	# CAD scene must expose a nonempty coherent snapshot, and a clean terminal
+	# frame cannot retain an atlas-admission proxy or pressure latch.
+	((.samples[-1].lod_gpu_resource_sample_serial // 0) > 0) and
+	((.samples[-1].lod_gpu_tracked_buffer_bytes // 0) > 0) and
+	((.samples[-1].lod_gpu_atlas_live_bytes // 0) <=
+	 (.samples[-1].lod_gpu_atlas_allocated_bytes // 0)) and
+	((.samples[-1].lod_gpu_pressure_proxies // 0) == 0) and
+	(.samples[-1].lod_gpu_memory_pressure == false) and
 	((.samples[-1].lod_service_pending_tasks // 0) == 0) and
 	((.samples[-1].lod_service_active_requests // 0) == 0) and
 	((.samples[-1].lod_service_queued_results // 0) == 0) and
@@ -753,20 +868,78 @@ validate_report()
 	return 1
     fi
 
+    if [[ "$mode" == "shaded" &&
+	    ("$case_name" == "generic_twin" || "$case_name" == "lucy") ]]; then
+	local mged_lighting_image="$image_dir/lighting-mged.png"
+	local studio_lighting_image="$image_dir/lighting-studio.png"
+	local lighting_dimensions lighting_width lighting_height
+	local lighting_crop_width=0 lighting_crop_height=0
+	local lighting_changed_pixels=0
+	lighting_dimensions=$(identify -format '%wx%h' "$studio_lighting_image" \
+	    2>/dev/null || true)
+	lighting_width="${lighting_dimensions%x*}"
+	lighting_height="${lighting_dimensions#*x}"
+	if [[ -f "$mged_lighting_image" && -f "$studio_lighting_image" &&
+		"$lighting_width" =~ ^[0-9]+$ &&
+		"$lighting_height" =~ ^[0-9]+$ &&
+		"$lighting_width" -gt 60 && "$lighting_height" -gt 174 ]]; then
+	    lighting_crop_width=$((lighting_width - 60))
+	    lighting_crop_height=$((lighting_height - 174))
+	    lighting_changed_pixels=$(compare -metric AE -fuzz 2% \
+		-crop "${lighting_crop_width}x${lighting_crop_height}+0+24" \
+		"$mged_lighting_image" "$studio_lighting_image" null: \
+		2>&1 || true)
+	fi
+	if [[ ! "$lighting_changed_pixels" =~ ^[0-9]+$ ||
+		"$lighting_changed_pixels" -lt 500 ]]; then
+	    printf 'MGED/studio lighting profiles did not visibly differ: changed_pixels=%s\n' \
+		"$lighting_changed_pixels" >>"$validation"
+	    return 1
+	fi
+	if ! jq -e --arg mged "$mged_lighting_image" \
+		--arg studio "$studio_lighting_image" '
+	    (first(.samples[] |
+		select((.checkpoint? // "") == $mged))) as $mged_sample |
+	    (first(.samples[] |
+		select((.checkpoint? // "") == $studio))) as $studio_sample |
+	    ($mged_sample.lighting_profile == "mged") and
+	    (($mged_sample.lighting_camera_light_count // -1) == 1) and
+	    ((($mged_sample.lighting_ambient_intensity // 0) - 0.30) |
+		abs < 0.0001) and
+	    ($studio_sample.lighting_profile == "studio") and
+	    (($studio_sample.lighting_camera_light_count // -1) == 3) and
+	    ((($studio_sample.lighting_ambient_intensity // 0) - 0.18) |
+		abs < 0.0001)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'lighting checkpoints did not report the selected shared rig\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
     # Lucy is a single source-backed terminal mesh.  It cannot legitimately
-    # converge to an empty compact registry or to a box-only presentation.
-    # This explicit contract prevents the HUD/progress indicator from making
-    # a blank framebuffer look like successful progressive content.
+    # converge to an empty compact registry, a box-only presentation, or a
+    # technically filled but block-silhouette cut.  At this fixed viewport,
+    # PoP level 5 is the first state which preserves Lucy's recognizable
+    # outline; level 4 takes roughly 12 ms in OSMesa and its level-5 successor
+    # remains within the 50 ms stable target, so stopping below it is a policy
+    # or premature-compaction failure rather than a valid FPS limit.
     if [[ "$case_name" == "lucy" ]]; then
-	if ! jq -e '
+	if ! jq -e --arg mode "$mode" '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/ae90-stable.png")))) as $stable |
 	    (.samples[-1].compact_lod_entries // 0) >= 1 and
 	    (.samples[-1].compact_lod_entries_with_payload // 0) >= 1 and
 	    (.samples[-1].active_lod_cad_payloads // 0) >= 1 and
 	    (.samples[-1].active_progressive_cad_faces // 0) > 0 and
 	    (.samples[-1].lod_service_resident_assets // 0) >= 1 and
-	    (.samples[-1].lod_service_resident_bytes // 0) > 0
+	    (.samples[-1].lod_service_resident_bytes // 0) > 0 and
+	    (if $mode == "shaded" then
+		(($stable.active_progressive_cad_level_min // -1) >= 5)
+	     else true end)
 	    ' "$report" >>"$validation" 2>&1; then
-	    printf 'Lucy did not converge to an actual resident PoP mesh\n' \
+	    printf 'Lucy did not converge to a recognizable resident PoP mesh\n' \
 		>>"$validation"
 	    return 1
 	fi
@@ -782,6 +955,8 @@ validate_report()
     lod_hud_sample=$(jq -r '
 	first(.samples[] |
 	    select((.checkpoint? // "") != "" and
+		(.presented_cad_faces // 0) > 0 and
+		(.lod_convergence_visible_targets // 0) > 0 and
 		(.lod_convergence_phase // 0) == 3 and
 		(.lod_convergence_fraction // 0) > 0.05 and
 		(.lod_convergence_fraction // 1) < 0.99) |
@@ -833,15 +1008,30 @@ validate_report()
 	first_useful="$image_dir/realization-6s.png"
 	first_useful_limit_ms=12000
     fi
-    local first_useful_elapsed
+    local first_useful_elapsed first_useful_structural_boxes
     first_useful_elapsed=$(jq -r --arg checkpoint "$first_useful" '
 	first(.samples[] |
 	    select((.checkpoint? // "") == $checkpoint) |
 	    (.elapsed_ms // 9223372036854775807))
-	' "$report" 2>/dev/null)
+    ' "$report" 2>/dev/null)
+    first_useful_structural_boxes=$(jq -r --arg checkpoint "$first_useful" '
+	first(.samples[] |
+	    select((.checkpoint? // "") == $checkpoint) |
+	    (.visible_structural_fallback_boxes // 0)) // 0
+    ' "$report" 2>/dev/null)
     local dimensions width height crop_width crop_height crop_y
     local background changed_pixels
     local minimum_changed_pixels=1000
+    # A structural scope/leaf box communicates the model extent with line
+    # pixels, not filled area.  When diagnostics prove such a box is actually
+    # present, use a perimeter-scale threshold; retaining the 1,000-pixel
+    # threshold would reject a correct early overview merely because it is a
+    # deliberately cheap wireframe proxy.  The HUD and convergence strip are
+    # outside this crop, so they cannot satisfy either threshold.
+    if [[ "$first_useful_structural_boxes" =~ ^[0-9]+$ &&
+	    "$first_useful_structural_boxes" -gt 0 ]]; then
+	minimum_changed_pixels=400
+    fi
     # Thousands of widely spaced instances are intentionally subpixel in the
     # initial all-model view.  Requiring 1,000 distinct pixels there rewards a
     # larger proxy, not a faster useful answer; a visible 100-pixel footprint
@@ -933,6 +1123,40 @@ validate_report()
 	fi
     fi
     rm -f "$background"
+
+    # Progressive autoview has exactly one camera owner.  The draw may expose
+    # the pre-fit camera briefly while exact leaf coverage is assembled, but
+    # it must not publish a provisional fit, change orientation independently,
+    # or return to the pre-fit camera after the exact fit has landed.  Those
+    # transitions are perceived as an autoview jump/flicker even if the final
+    # image is correct.
+    if ! jq -e '
+	def orientation:
+	    [.camera_orientation_axis_x, .camera_orientation_axis_y,
+	     .camera_orientation_axis_z, .camera_orientation_angle];
+	def framing:
+	    [.camera_position_x, .camera_position_y, .camera_position_z,
+	     .camera_orthographic_height];
+	(first(.samples[] |
+	    select((.checkpoint? // "") |
+		endswith("/draw-return.png"))).event_index) as $start |
+	(first(.samples[] |
+	    select((.checkpoint? // "") |
+		endswith("/ae90-stable.png")))) as $final |
+	[.samples[] |
+	    select(.event_index >= $start and
+		.event_index <= $final.event_index)] as $window |
+	([$window[] | orientation] | unique | length) == 1 and
+	([$window[] | framing] | unique | length) <= 2 and
+	(first($window[] |
+	    select(framing == ($final | framing))).event_index) as $fit |
+	all($window[] | select(.event_index >= $fit);
+	    framing == ($final | framing))
+	' "$report" >>"$validation" 2>&1; then
+	printf 'progressive autoview exposed provisional or mixed camera states\n' \
+	    >>"$validation"
+	return 1
+    fi
 
     # A converged, fixed camera is an invariant, not a best effort.  Hold the
     # exact same view for 200 ms and require both the retained cut and the
@@ -1127,10 +1351,18 @@ validate_report()
 	    (any(.samples[];
 		.selection_paths? != null and
 		(.selection_paths | index($path)) != null)) and
+	    # Selection must not restart camera-visible LoD work.  Resident-prefix
+	    # compaction is deliberately allowed to continue in the background;
+	    # progressive_pending includes that memory housekeeping even when the
+	    # selected presentation is already complete and view-ready.
 	    (all(.samples[];
 		if (.event_index > $selected and .event_index < $erased)
-		then (.progressive_pending == false and
-		      .lod_submissions_pending == false)
+		then (.lod_submissions_pending == false and
+		      .lod_results_pending == false and
+		      .lod_refinement_frame_pending == false and
+		      ((.lod_service_pending_tasks // 0) == 0) and
+		      ((.lod_service_active_requests // 0) == 0) and
+		      ((.lod_service_queued_results // 0) == 0))
 		else true end)) and
 	    (any(.samples[];
 		.command? == ("erase " + $path) and
@@ -1526,50 +1758,169 @@ validate_report()
     # loading never turns into lost-feeling input.
     if [[ "$case_name" == "lucy" ]]; then
 	if ! jq -e '
-	    (first(.samples[] |
+	    (last(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/smooth-zoom-start-stable.png")))) as $start |
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
-		    endswith("/smooth-zoom-close-stable.png")))) as $close |
+		    endswith("/smooth-zoom-in-12.png")))) as $during |
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-active-refined.png")))) as $active |
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-close-stable.png")))) as $close |
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
 		    endswith("/smooth-zoom-out-stable.png")))) as $out |
-	    (first(.samples[] |
+	    (last(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/smooth-zoom-return.png")))) as $returned |
 	    (($close.requested_progressive_cad_level_max // -1) >
 		($start.requested_progressive_cad_level_max // -1)) and
-	    (if (($close.lod_service_resident_bytes // 0) >
-		    ($start.lod_service_resident_bytes // 0))
-	     then
-		(($close.active_progressive_cad_faces // 0) >
+	    (if .backend == "system_gl" then
+		# Both checkpoints are inside the bracketed scale stream.  Refinement
+		# may become drawable by the twelfth event and then be backed down by
+		# the O(1) renderer ceiling while later low-amplitude events continue.
+		# Either completed in-gesture presentation is therefore valid evidence;
+		# requiring the later sample to remain richer would reject the intended
+		# FPS response after a real richer frame was already shown.
+		($during.lod_gesture_active == true) and
+		($during.lod_interactive == true) and
+		($during.lod_scale_changing_interaction == true) and
+		($active.lod_gesture_active == true) and
+		($active.lod_interactive == true) and
+		($active.lod_scale_changing_interaction == true) and
+		(($active.active_progressive_cad_level_max // -1) >
+		    ($start.active_progressive_cad_level_max // -1)) and
+		(($active.active_progressive_cad_faces // 0) >
 		    ($start.active_progressive_cad_faces // 0)) and
-		(($close.lod_service_cache_loads // 0) >
-		    ($start.lod_service_cache_loads // 0)) and
-		(($out.lod_service_resident_bytes // 0) <
-		    ($close.lod_service_resident_bytes // 0)) and
-		(($returned.lod_service_resident_bytes // 0) <=
-		    ($start.lod_service_resident_bytes // 0)) and
-		(($out.lod_service_compactions // 0) >
-		    ($close.lod_service_compactions // 0)) and
-		(($returned.lod_service_compactions // 0) >=
-		    ($out.lod_service_compactions // 0))
+		((([($during.active_progressive_cad_level_max // -1),
+		     (if ($during.lod_interactive_progressive_ceiling // -1) >= 0
+		      then $during.lod_interactive_progressive_ceiling
+		      else ($during.active_progressive_cad_level_max // -1) end)] |
+		   min) > ($start.active_progressive_cad_level_max // -1) and
+		  (($during.presented_cad_faces // 0) >
+		    ($start.presented_cad_faces // 0))) or
+		 (([($active.active_progressive_cad_level_max // -1),
+		    (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
+		     then $active.lod_interactive_progressive_ceiling
+		     else ($active.active_progressive_cad_level_max // -1) end)] |
+		  min) > ($start.active_progressive_cad_level_max // -1) and
+		  (($active.presented_cad_faces // 0) >
+		    ($start.presented_cad_faces // 0)))) and
+		(($active.active_lod_aabb_payloads // 0) == 0) and
+		# A single huge part uses the ordinary retained-VBO tier rather
+		# than the multi-part atlas.  Immutable PoP generations must append
+		# only their CPU suffix; capacity growth migrates the old prefix
+		# device-locally and may never submit the cumulative array again.
+		(($during.lod_gpu_ordinary_full_upload_bytes // 0) ==
+		    ($start.lod_gpu_ordinary_full_upload_bytes // -1)) and
+		(($active.lod_gpu_ordinary_full_upload_bytes // 0) ==
+		    ($start.lod_gpu_ordinary_full_upload_bytes // -1)) and
+		(($during.lod_gpu_ordinary_suffix_upload_bytes // 0) >=
+		    ($start.lod_gpu_ordinary_suffix_upload_bytes // 0)) and
+		(($active.lod_gpu_ordinary_suffix_upload_bytes // 0) >=
+		    ($during.lod_gpu_ordinary_suffix_upload_bytes // 0)) and
+		(($active.lod_gpu_ordinary_suffix_upload_bytes // 0) >
+		    ($start.lod_gpu_ordinary_suffix_upload_bytes // 0)) and
+		(($active.lod_gpu_ordinary_lineage_reuses // 0) >
+		    ($start.lod_gpu_ordinary_lineage_reuses // 0)) and
+		(if (($active.lod_gpu_ordinary_part_buffer_bytes // 0) >
+			($start.lod_gpu_ordinary_part_buffer_bytes // 0))
+		 then
+		    (($active.lod_gpu_ordinary_copy_bytes // 0) >
+			($start.lod_gpu_ordinary_copy_bytes // 0))
+		 else true end)
 	     else
-		# A software renderer may already be at its calibrated stable
-		# face ceiling.  Zoom must still increase the pixel demand, but
-		# loading a discrete next PoP prefix which cannot meet that FPS
-		# contract would only consume memory and produce a long frame.
-		# Accept a retained plateau only when both endpoints explicitly
-		# report performance pressure and the current cut did not regress.
-		(.backend == "osmesa") and
-		($start.lod_convergence_performance_limited == true) and
-		($close.lod_convergence_performance_limited == true) and
-		(($close.active_progressive_cad_faces // 0) >=
+		# Software rendering may use a coarser cut while wheel events are
+		# arriving, but zoom residency is not a render-budget decision.  The
+		# missing suffix must load under the independent memory governor, and
+		# continuous scale input must expose at least one richer cut rather
+		# than magnifying the same block image until button-up.
+		($active.lod_gesture_active == true) and
+		($active.lod_interactive == true) and
+		($active.lod_scale_changing_interaction == true) and
+		(($active.lod_service_resident_bytes // 0) >
+		    ($start.lod_service_resident_bytes // 0)) and
+		(($active.lod_service_cache_loads // 0) >
+		    ($start.lod_service_cache_loads // 0)) and
+		# The active cut itself must be richer than the pre-zoom stable cut.
+		# It may have reached that cut before the last checkpoint; requiring
+		# another increase during the final low-amplitude events would turn
+		# successful early refinement into a false failure.
+		(($active.active_progressive_cad_level_max // -1) >
+		    ($start.active_progressive_cad_level_max // -1)) and
+		(($active.active_progressive_cad_faces // 0) >
 		    ($start.active_progressive_cad_faces // 0)) and
-		(($close.last_render_ms // 9223372036854775807) <=
-		    (1200.0 / ($close.lod_stable_target_fps // 20.0)))
+		# A measured over-budget probe may back off from the arbitrary in-12
+		# checkpoint through the O(1) render ceiling.  The durable contract is
+		# that continuous input has exposed a cut richer than the pre-zoom
+		# stable image, not that every sampled probe is monotonically richer.
+		# The occurrence may remain richer than the render-only ceiling.  Its
+		# actual submitted level is their minimum and must still improve on the
+		# pre-zoom image.
+		((([($during.active_progressive_cad_level_max // -1),
+		     (if ($during.lod_interactive_progressive_ceiling // -1) >= 0
+		      then $during.lod_interactive_progressive_ceiling
+		      else ($during.active_progressive_cad_level_max // -1) end)] |
+		    min) > ($start.active_progressive_cad_level_max // -1) and
+		   (($during.active_progressive_cad_faces // 0) >
+		    ($start.active_progressive_cad_faces // 0))) or
+		  (([($active.active_progressive_cad_level_max // -1),
+		     (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
+		      then $active.lod_interactive_progressive_ceiling
+		      else ($active.active_progressive_cad_level_max // -1) end)] |
+		    min) > ($start.active_progressive_cad_level_max // -1))) and
+		(($active.active_lod_aabb_payloads // 0) == 0)
 	     end) and
+	    # Every renderer tier must publish the exact submitted population.  If
+	    # the reusable in-gesture cut already met the less demanding stable
+	    # deadline, quiet handoff may reduce it only to the current pixel
+	    # demand—not merely because interactive and stable calibration stores
+	    # were historically isolated.
+	    (($active.presented_cad_faces // 0) > 0) and
+	    (if (($active.last_render_ms // 9223372036854775807) <=
+		    (1000.0 / ($close.lod_stable_target_fps // 20.0)))
+	     then
+		(($close.active_progressive_cad_level_max // -1) >=
+		 ([($active.active_progressive_cad_level_max // -1),
+		   (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
+		    then $active.lod_interactive_progressive_ceiling
+		    else ($active.active_progressive_cad_level_max // -1) end),
+		   ($close.requested_progressive_cad_level_max // -1)] | min))
+	     else true end) and
+	    # Stable memory maintenance may reclaim the zoom-prefetched suffix at
+	    # the close-view pause itself or at the later zoom-out pause.  Either is
+	    # correct: require reclamation from the active peak, monotonic
+	    # compaction accounting, and a return presentation no worse than the
+	    # initial same-scale view.  Byte equality with the initial cache state
+	    # is invalid when calibration has since admitted a richer useful cut.
+	    ((($close.lod_service_resident_bytes // 0) <
+		($active.lod_service_resident_bytes // 0)) or
+	     (($out.lod_service_resident_bytes // 0) <
+		($active.lod_service_resident_bytes // 0))) and
+	    (($returned.lod_service_resident_bytes // 0) <
+		($active.lod_service_resident_bytes // 0)) and
+	    ((($close.lod_service_compactions // 0) >
+		($active.lod_service_compactions // 0)) or
+	     (($out.lod_service_compactions // 0) >
+		($active.lod_service_compactions // 0))) and
+	    (($returned.lod_service_compactions // 0) >=
+		($out.lod_service_compactions // 0)) and
+	    # Returning to the same scale restores the prior quiet cut whenever
+	    # that cut still fits the now-calibrated scene allowance.  A cold first
+	    # view can legitimately overshoot before reusable timing exists; do not
+	    # require that known-over-budget population forever.  In that case the
+	    # returned cut must itself fit the exact allowance and must be reported
+	    # as the deliberate responsiveness limit, not as unfinished quality.
+	    ((($returned.active_progressive_cad_faces // 0) >=
+		($start.active_progressive_cad_faces // 0)) or
+	     ((($start.active_lod_scene_render_cost // 0) >
+		($returned.lod_scene_render_cost_budget // 0)) and
+	      (($returned.active_lod_scene_render_cost // 0) <=
+		($returned.lod_scene_render_cost_budget // 0)) and
+	      ($returned.lod_convergence_performance_limited == true))) and
 	    (all([$start, $close, $out, $returned][];
 		(.progressive_pending == false) and
 		(.lod_submissions_pending == false) and

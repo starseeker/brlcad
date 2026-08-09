@@ -21,6 +21,27 @@
 #include <vector>
 
 class BObolLodService;
+struct db_i;
+
+/*
+ * A background realization must not borrow the application's raw database
+ * pointer.  This ref-counted lease holds one librt database use until every
+ * copied provider and queued task has released it.
+ */
+class BOBOL_EXPORT BObolDatabaseLease {
+public:
+    static std::shared_ptr<BObolDatabaseLease> acquire(struct db_i *database);
+    ~BObolDatabaseLease(void);
+
+    struct db_i *get(void) const;
+
+    BObolDatabaseLease(const BObolDatabaseLease &) = delete;
+    BObolDatabaseLease &operator=(const BObolDatabaseLease &) = delete;
+
+private:
+    explicit BObolDatabaseLease(struct db_i *database);
+    struct db_i *database;
+};
 
 /* A view-required refinement no larger than these aggregate-admitted deltas
  * is cheaper to load and publish directly than to manufacture intermediate
@@ -41,7 +62,7 @@ typedef void (*BObolLodResultReadyCB)(
 
 struct BOBOL_EXPORT BObolMeshLodProvider {
     BObolLodService *service;
-    struct db_i *dbip;
+    std::shared_ptr<BObolDatabaseLease> databaseLease;
     std::shared_ptr<const BObolStagedSourceMesh> stagedSource;
     /* Exact persistent payload to reopen.  Request::sourceContentHash is a
      * general realization identity and must not be interpreted as an LMDB
@@ -76,30 +97,42 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
      * level whose complete delta was reserved by the submit action. */
     SbBool useDeliveryLevelLimit;
     int deliveryLevelLimit;
+    /* A zoom may need a richer resident prefix even when the measured frame
+     * budget cannot present that complete prefix yet.  In that case the
+     * delivery limit governs cache residency and this independent limit
+     * governs the active draw cut published with the result. */
+    SbBool usePresentationLevelLimit;
+    int presentationLevelLimit;
     int forcedLevel;
     int reset;
 
     BObolMeshLodProvider(void);
     void clear(void);
+    SbBool setDatabase(struct db_i *database);
+    struct db_i *getDatabase(void) const;
 };
 
 struct BOBOL_EXPORT BObolRtSourceFullDetailProvider {
-    struct db_i *dbip;
+    std::shared_ptr<BObolDatabaseLease> databaseLease;
     SbBool validateSourceMetrics;
     uint64_t maxFullDetailFaceCount;
     uint64_t maxFullDetailPointCount;
 
     BObolRtSourceFullDetailProvider(void);
     void clear(void);
+    SbBool setDatabase(struct db_i *database);
+    struct db_i *getDatabase(void) const;
 };
 
 struct BOBOL_EXPORT BObolRtProxyProvider {
-    struct db_i *dbip;
+    std::shared_ptr<BObolDatabaseLease> databaseLease;
     int proxyKind;
     SbBool useRequestBounds;
 
     BObolRtProxyProvider(void);
     void clear(void);
+    SbBool setDatabase(struct db_i *database);
+    struct db_i *getDatabase(void) const;
 };
 
 struct BOBOL_EXPORT BObolLodTask {
@@ -221,8 +254,12 @@ public:
     ~BObolLodService(void);
 
     SbBool start(size_t workerCount = 1, SbBool startCacheWriter = TRUE);
+    /* A shared service may acquire additional view clients over time.  Grow
+     * the pool without cancelling resident assets or outstanding work. */
+    SbBool ensureWorkerCount(size_t workerCount);
     void stop(void);
     SbBool isRunning(void) const;
+    size_t workerCountForDiagnostics(void) const;
 
     uint64_t beginGeneration(void);
     uint64_t currentGeneration(void) const;
@@ -273,6 +310,14 @@ public:
      */
     size_t drainResults(std::vector<BObolLodResult> &results,
 	size_t maxResults = 0, size_t maxEstimatedBytes = 0);
+    /*
+     * Drain only results owned by one submission generation.  A service may
+     * be shared by several views; presentation consumers must use this entry
+     * point so one view cannot consume another view's completed payloads.
+     */
+    size_t drainGenerationResults(std::vector<BObolLodResult> &results,
+	uint64_t generation, size_t maxResults = 0,
+	size_t maxEstimatedBytes = 0);
     size_t drainMatchingResults(std::vector<BObolLodResult> &results,
 	const std::vector<BObolLodRequest> &requests,
 	size_t maxResults = 0);
@@ -285,6 +330,13 @@ public:
     size_t queuedResultCountForDiagnostics(void) const;
     size_t queuedCacheWriteCountForDiagnostics(void) const;
     size_t delayedTaskCountForDiagnostics(void) const;
+    /* O(1) per-generation diagnostics for shared-service consumers. */
+    size_t activeTaskCountForGeneration(uint64_t generation) const;
+    size_t pendingTaskCountForGeneration(uint64_t generation) const;
+    size_t executingTaskCountForGeneration(uint64_t generation) const;
+    size_t queuedResultCountForGeneration(uint64_t generation) const;
+    size_t queuedCacheWriteCountForGeneration(uint64_t generation) const;
+    size_t delayedTaskCountForGeneration(uint64_t generation) const;
     uint64_t rejectedTaskCountForDiagnostics(void) const;
     uint64_t coalescedResultCountForDiagnostics(void) const;
     uint64_t coalescedCacheWriteCountForDiagnostics(void) const;
@@ -335,6 +387,10 @@ public:
 	uint64_t consumerId,
 	std::vector<BObolLodResidentCompaction> &results,
 	size_t maxResults = 0);
+    /* Invalidate an already planned quiet trim before promoting a drawable
+     * prefix which is resident in memory.  Provider requests perform the same
+     * use notification internally; this form covers zero-I/O retargets. */
+    void noteResidentMeshUse(const BObolLodCacheKey &assetKey);
     void releaseResidentMeshConsumer(uint64_t consumerId);
 
 private:

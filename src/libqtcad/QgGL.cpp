@@ -125,12 +125,13 @@ return;
     qgcanvas_request_obol_render_if_idle(*d, "qtgl-paint");
 
     const SbBool rendered =
-	qgcanvas_render_obol_pending(*d, TRUE, TRUE);
+	qgcanvas_render_obol_pending(*d, this, TRUE, TRUE);
     if (rendered && d->v) {
 	(void)bv_refresh_consume(bv_context_view(d->v));
 	bv_refresh_complete(bv_context_view(d->v));
     }
-    qgcanvas_frame_complete(*d, this);
+    if (rendered)
+	qgcanvas_frame_complete(*d, this);
     qgcanvas_queue_obol_progressive_update(*d, this);
     if (!d->obol_paint_initialized) {
 	d->obol_paint_initialized = true;

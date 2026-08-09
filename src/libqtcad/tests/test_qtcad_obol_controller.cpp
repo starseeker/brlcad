@@ -43,6 +43,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <chrono>
+#include <thread>
 
 #define FAIL(_msg) \
     do { \
@@ -163,6 +165,17 @@ request_render_during_traversal(void *data, SoAction *)
 	return;
     request->fired = true;
     request->controller->requestRender("sw-render-followup");
+}
+
+static void
+delay_and_sample_render_deadline(void *data, SoAction *action)
+{
+    const unsigned int delayMilliseconds = data ?
+	*static_cast<unsigned int *>(data) : 0u;
+    std::this_thread::sleep_for(
+	std::chrono::milliseconds(delayMilliseconds));
+    if (action && action->isOfType(SoGLRenderAction::getClassTypeId()))
+	static_cast<SoGLRenderAction *>(action)->abortNow();
 }
 
 int
@@ -420,6 +433,44 @@ main(int argc, char **argv)
     controller->clearRenderRequest();
     sceneRoot->removeChild(followupNode);
 
+    /* A traversal which exceeds its presentation deadline must not expose a
+     * partially cleared OSMesa buffer.  Establish a completed frame, then
+     * interrupt a later traversal and require the immutable cached image and
+     * successor render request to survive. */
+    controller->requestRender("sw-deadline-baseline");
+    paintTarget.fill(0);
+    QPainter deadlineBaselinePainter(&paintTarget);
+    view.render(&deadlineBaselinePainter);
+    deadlineBaselinePainter.end();
+    const QImage deadlineBaseline = paintTarget.copy();
+    const uint64_t interruptedBefore =
+	controller->getInterruptedPresentationFrameCount();
+    unsigned int deadlineDelayMilliseconds = 20u;
+    SoCallback *deadlineNode = new SoCallback;
+    deadlineNode->setCallback(
+	delay_and_sample_render_deadline, &deadlineDelayMilliseconds);
+    sceneRoot->addChild(deadlineNode);
+    sceneRoot->addChild(new SoCube);
+    controller->setPresentationFrameDeadlines(1000000ULL, 1000000ULL);
+    controller->requestRender("sw-deadline-interrupt");
+    paintTarget.fill(0);
+    QPainter deadlinePainter(&paintTarget);
+    view.render(&deadlinePainter);
+    deadlinePainter.end();
+    if (controller->getInterruptedPresentationFrameCount() !=
+	    interruptedBefore + 1u ||
+	!controller->isRenderRequested() ||
+	!BU_STR_EQUAL(controller->getRenderReason().getString(),
+	    "render-deadline"))
+	FAIL("QgSW deadline interruption should schedule a coherent retry");
+    if (paintTarget != deadlineBaseline)
+	FAIL("QgSW deadline interruption should preserve the last completed frame");
+    sceneRoot->removeChild(deadlineNode);
+    sceneRoot->removeChild(sceneRoot->getNumChildren() - 1);
+    controller->setPresentationFrameDeadlines(
+	40000000ULL, 100000000ULL);
+    controller->clearRenderRequest();
+
     TestQgSW swCanvas(NULL);
     swCanvas.resize(160, 120);
     BObolViewController *swController = swCanvas.obolViewController();
@@ -675,6 +726,43 @@ main(int argc, char **argv)
 	    if (paintController->isRenderRequested() &&
 		!paintController->hasProgressiveWorkPending())
 		FAIL("QgGL visible paint should only retain a newly scheduled progressive request");
+
+	    paintController->clearRenderRequest();
+	    paintController->requestRender("gl-deadline-baseline");
+	    glCanvas.makeCurrent();
+	    glCanvas.runPaintGLForTest();
+	    glCanvas.doneCurrent();
+	    const QImage glDeadlineBaseline = glCanvas.grabFramebuffer();
+	    const uint64_t glInterruptedBefore =
+		paintController->getInterruptedPresentationFrameCount();
+	    unsigned int glDeadlineDelayMilliseconds = 20u;
+	    SoCallback *glDeadlineNode = new SoCallback;
+	    glDeadlineNode->setCallback(
+		delay_and_sample_render_deadline,
+		&glDeadlineDelayMilliseconds);
+	    paintRoot->addChild(glDeadlineNode);
+	    paintRoot->addChild(new SoCube);
+	    paintController->setPresentationFrameDeadlines(
+		1000000ULL, 1000000ULL);
+	    paintController->requestRender("gl-deadline-interrupt");
+	    glCanvas.makeCurrent();
+	    glCanvas.runPaintGLForTest();
+	    glCanvas.doneCurrent();
+	    const QImage glDeadlineInterrupted = glCanvas.grabFramebuffer();
+	    if (paintController->getInterruptedPresentationFrameCount() !=
+		    glInterruptedBefore + 1u ||
+		!paintController->isRenderRequested() ||
+		!BU_STR_EQUAL(paintController->getRenderReason().getString(),
+		    "render-deadline"))
+		FAIL("QgGL deadline interruption should schedule a coherent retry");
+	    if (glDeadlineBaseline.isNull() ||
+		glDeadlineInterrupted != glDeadlineBaseline)
+		FAIL("QgGL deadline interruption should preserve the last completed framebuffer");
+	    paintRoot->removeChild(glDeadlineNode);
+	    paintRoot->removeChild(paintRoot->getNumChildren() - 1);
+	    paintController->setPresentationFrameDeadlines(
+		40000000ULL, 100000000ULL);
+	    paintController->clearRenderRequest();
 	}
 #endif
     }

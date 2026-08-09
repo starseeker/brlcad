@@ -1796,7 +1796,7 @@ exercise_brep_lod_contract(struct db_i *dbip)
 	return 0;
     BObolMeshLodProvider provider;
     provider.service = &service;
-    provider.dbip = dbip;
+    provider.setDatabase(dbip);
     /* The fine variant is the current named payload.  Reopening the older
      * coarse key proves provider routing is exact rather than latest-by-name. */
     provider.meshAssetContentHash = coarseKey;

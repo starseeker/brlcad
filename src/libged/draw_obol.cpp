@@ -3946,7 +3946,10 @@ ged_obol_lod_prewarm_submit_name(BObolLodService *service,
 
     BObolMeshLodProvider *provider = new BObolMeshLodProvider;
     provider->service = service;
-    provider->dbip = dbip;
+    if (!provider->setDatabase(dbip)) {
+	delete provider;
+	return 0;
+    }
     provider->useView = FALSE;
     provider->refreshMissing = TRUE;
     provider->shrinkAfterCopy = FALSE;
@@ -5599,6 +5602,10 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		bu_vls_printf(&text, "  %.0f MB resident",
 		    static_cast<double>(status.residentMeshBytes) /
 			(1024.0 * 1024.0));
+	    if (status.gpuTrackedBufferBytes > 0)
+		bu_vls_printf(&text, "  %.0f MB GPU buffers",
+		    static_cast<double>(status.gpuTrackedBufferBytes) /
+			(1024.0 * 1024.0));
 	    break;
 	case BOBOL_LOD_CONVERGENCE_ERROR:
 	    color[0] = 255;
@@ -5613,11 +5620,24 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	    color[0] = 112;
 	    color[1] = 235;
 	    color[2] = 135;
-	    bu_vls_sprintf(&text,
-		status.performanceLimited ?
-		    "View ready  responsiveness-limited  %s triangles" :
-		    "View ready  %s triangles",
-		ged_obol_lod_compact_count(status.activeFaces).c_str());
+	    if (status.gpuMemoryPressure) {
+		color[0] = 255;
+		color[1] = 170;
+		color[2] = 64;
+		bu_vls_sprintf(&text,
+		    "View ready  GPU-memory-limited  %s triangles",
+		    ged_obol_lod_compact_count(status.activeFaces).c_str());
+		if (status.gpuPressureProxyCount > 0)
+		    bu_vls_printf(&text, "  %s pressure proxies",
+			ged_obol_lod_compact_count(
+			    status.gpuPressureProxyCount).c_str());
+	    } else {
+		bu_vls_sprintf(&text,
+		    status.performanceLimited ?
+			"View ready  responsiveness-limited  %s triangles" :
+			"View ready  %s triangles",
+		    ged_obol_lod_compact_count(status.activeFaces).c_str());
+	    }
 	    break;
     }
 
@@ -6512,13 +6532,16 @@ ged_view_lighting_sync(struct ged *gedp,
 
     /* bv_lighting_state is the persistent source of truth; push it to the live
      * Obol controller when one is attached (headless views just keep the bv
-     * state).  Direction tracking must be applied before the enable so a
-     * freshly-enabled headlight picks up the correct direction. */
+     * state).  Select the complete preset before applying its independently
+     * adjustable primary direction. */
     BObolViewController *controller =
 	ged_obol_view_controller_for_context(view_ctx);
     if (!controller)
 	return BRLCAD_OK;
 
+    controller->setLightingProfile(lighting.profile == BV_LIGHTING_MGED ?
+	BObolViewController::LIGHTING_MGED :
+	BObolViewController::LIGHTING_STUDIO);
     controller->setHeadlightOffset(SbVec3f(
 	(float)lighting.headlight_offset[0],
 	(float)lighting.headlight_offset[1],
@@ -17757,7 +17780,10 @@ ged_obol_submit_child_aabb_prewarm(
     if (!provider)
 	return 0;
 
-    provider->dbip = dbip;
+    if (!provider->setDatabase(dbip)) {
+	delete provider;
+	return 0;
+    }
     provider->proxyKind = BOBOL_LOD_PROXY_AABB;
     provider->useRequestBounds = FALSE;
 
@@ -18335,7 +18361,7 @@ ged_obol_deferred_job_coverage_bounds_complete(
     for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
 	 job->items) {
 	if (!item || !item->stream ||
-	    !item->stream->hasCoverageBoundsComplete())
+	    !item->stream->hasCoverageBoundsDrained())
 	    return 0;
     }
     return 1;
@@ -18810,88 +18836,99 @@ ged_obol_drain_streamed_realizations(
 	    if (expectedCount)
 		live->reserveCompactOccurrenceCapacity(expectedCount);
 
-	    size_t batch_cap = std::min(item->streamBatchQuantum,
-		GED_OBOL_STREAM_BATCH_QUANTUM_MAX);
-	    if (max_items) {
-		if (drained_count >= max_items) {
+	    /* A provider budget is a per-pump contract, not a one-batch limit.
+	     * Consume successive adaptive batches from this root while there is
+	     * cheap work and budget left.  Returning after the first 256 records
+	     * coupled realization throughput to paint cadence: an 80 ms OSMesa
+	     * frame advanced a large root far more slowly than a 2 ms GL frame even
+	     * though both had the same 4 ms owner-thread merge allowance. */
+	    for (;;) {
+		size_t batch_cap = std::min(item->streamBatchQuantum,
+		    GED_OBOL_STREAM_BATCH_QUANTUM_MAX);
+		if (max_items) {
+		    if (drained_count >= max_items) {
+			if (has_more)
+			    *has_more = 1;
+			return merged;
+		    }
+		    batch_cap = std::min(batch_cap,
+			max_items - drained_count);
+		}
+		if (max_microseconds &&
+		    item->streamMergeMicrosecondsPerItem > 0.0) {
+		    const int64_t elapsed = bu_gettime() - started;
+		    const uint64_t consumed = elapsed > 0 ?
+			static_cast<uint64_t>(elapsed) : 0;
+		    const uint64_t remaining =
+			consumed < max_microseconds ?
+			max_microseconds - consumed : 0;
+		    /* Leave headroom for map growth, notifications, and the
+		     * controller epilogue.  One occurrence is the irreducible
+		     * forward-progress unit if the estimate is sub-quantum. */
+		    const double estimatedItems =
+			0.70 * static_cast<double>(remaining) /
+			item->streamMergeMicrosecondsPerItem;
+		    const size_t timedCap = std::max<size_t>(
+			1, static_cast<size_t>(estimatedItems));
+		    batch_cap = std::min(batch_cap, timedCap);
+		}
+		std::vector<BObolCompactOccurrence> batch;
+		(void)item->stream->drain(batch, batch_cap);
+		if (batch.empty())
+		    break;
+		drained_count += batch.size();
+		const int64_t mergeStarted = bu_gettime();
+		ged_obol_scene_mutation_batch_scope mutation(itemScene, 1,
+		    batch.size());
+		const int mergedCount = live->mergeCompactOccurrences(batch);
+		if (mergedCount > 0) {
+		    merged = 1;
+		    ged_obol_timing_log("stream: merged occurrences",
+			mergeStarted, (long)mergedCount);
+		}
+		const int64_t mergeElapsed = bu_gettime() - mergeStarted;
+		if (mergeElapsed >= 0) {
+		    const double observed =
+			static_cast<double>(mergeElapsed) /
+			static_cast<double>(batch.size());
+		    if (item->streamMergeMicrosecondsPerItem <= 0.0 ||
+			observed > item->streamMergeMicrosecondsPerItem) {
+			/* React to worsening costs in one sample. */
+			item->streamMergeMicrosecondsPerItem = observed;
+		    } else {
+			/* Permit gradual recovery when later batches are cheaper. */
+			item->streamMergeMicrosecondsPerItem =
+			    0.875 * item->streamMergeMicrosecondsPerItem +
+			    0.125 * observed;
+		    }
+		    const double targetMicroseconds =
+			max_microseconds ?
+			0.70 * static_cast<double>(max_microseconds) : 4000.0;
+		    size_t targetItems = static_cast<size_t>(
+			targetMicroseconds /
+			std::max(0.001,
+			    item->streamMergeMicrosecondsPerItem));
+		    targetItems = std::max<size_t>(16, std::min(
+			targetItems, GED_OBOL_STREAM_BATCH_QUANTUM_MAX));
+		    /* Cost can fall sharply on warm records, but bounded growth keeps
+		     * one cheap batch from scheduling a nonlinear next-frame jump. */
+		    item->streamBatchQuantum = std::min(
+			targetItems, std::max<size_t>(
+			    16, item->streamBatchQuantum * 2));
+		}
+		const bool streamHasMore = item->stream->size() > 0;
+		if (has_more && streamHasMore)
+		    *has_more = 1;
+		const int64_t elapsed = bu_gettime() - started;
+		if ((max_items && drained_count >= max_items) ||
+		    (max_microseconds && elapsed >= 0 &&
+		     static_cast<uint64_t>(elapsed) >= max_microseconds)) {
 		    if (has_more)
 			*has_more = 1;
 		    return merged;
 		}
-		batch_cap = std::min(batch_cap, max_items - drained_count);
-	    }
-	    if (max_microseconds &&
-		item->streamMergeMicrosecondsPerItem > 0.0) {
-		const int64_t elapsed = bu_gettime() - started;
-		const uint64_t consumed = elapsed > 0 ?
-		    static_cast<uint64_t>(elapsed) : 0;
-		const uint64_t remaining =
-		    consumed < max_microseconds ?
-		    max_microseconds - consumed : 0;
-		/* Leave headroom for map growth, notifications, and the
-		 * controller epilogue.  One occurrence is the irreducible
-		 * forward-progress unit if the estimate is sub-quantum. */
-		const double estimatedItems =
-		    0.70 * static_cast<double>(remaining) /
-		    item->streamMergeMicrosecondsPerItem;
-		const size_t timedCap = std::max<size_t>(
-		    1, static_cast<size_t>(estimatedItems));
-		batch_cap = std::min(batch_cap, timedCap);
-	    }
-	    std::vector<BObolCompactOccurrence> batch;
-	    (void)item->stream->drain(batch, batch_cap);
-	    if (batch.empty())
-		continue;
-	    drained_count += batch.size();
-	    const int64_t mergeStarted = bu_gettime();
-	    ged_obol_scene_mutation_batch_scope mutation(itemScene, 1,
-		batch.size());
-	    const int mergedCount = live->mergeCompactOccurrences(batch);
-	    if (mergedCount > 0) {
-		merged = 1;
-		ged_obol_timing_log("stream: merged occurrences",
-		    mergeStarted, (long)mergedCount);
-	    }
-	    const int64_t mergeElapsed = bu_gettime() - mergeStarted;
-	    if (mergeElapsed >= 0 && !batch.empty()) {
-		const double observed =
-		    static_cast<double>(mergeElapsed) /
-		    static_cast<double>(batch.size());
-		if (item->streamMergeMicrosecondsPerItem <= 0.0 ||
-		    observed > item->streamMergeMicrosecondsPerItem) {
-		    /* React to worsening costs in one sample. */
-		    item->streamMergeMicrosecondsPerItem = observed;
-		} else {
-		    /* Permit gradual recovery when later batches are cheaper. */
-		    item->streamMergeMicrosecondsPerItem =
-			0.875 * item->streamMergeMicrosecondsPerItem +
-			0.125 * observed;
-		}
-		const double targetMicroseconds =
-		    max_microseconds ?
-		    0.70 * static_cast<double>(max_microseconds) : 4000.0;
-		size_t targetItems = static_cast<size_t>(
-		    targetMicroseconds /
-		    std::max(0.001,
-			item->streamMergeMicrosecondsPerItem));
-		targetItems = std::max<size_t>(16, std::min(
-		    targetItems, GED_OBOL_STREAM_BATCH_QUANTUM_MAX));
-		/* Cost can fall sharply on warm records, but bounded growth keeps
-		 * one cheap batch from scheduling a nonlinear next-frame jump. */
-		item->streamBatchQuantum = std::min(
-		    targetItems, std::max<size_t>(
-			16, item->streamBatchQuantum * 2));
-	    }
-	    /* More may have been queued while we drained; ask for another tick. */
-	    if (has_more && item->stream->size() > 0)
-		*has_more = 1;
-	    const int64_t elapsed = bu_gettime() - started;
-	    if ((max_items && drained_count >= max_items) ||
-		(max_microseconds && elapsed >= 0 &&
-		 static_cast<uint64_t>(elapsed) >= max_microseconds)) {
-		if (has_more)
-		    *has_more = 1;
-		return merged;
+		if (!streamHasMore)
+		    break;
 	    }
 	}
     }
@@ -18964,6 +19001,13 @@ ged_obol_progressive_advance_provider(
 	    options ? options->maxProviderItems : 0,
 	    options ? options->maxProviderMicroseconds : 0, &stream_more) ?
 	1 : 0;
+    /* Producer completion means the exact extent was queued.  Autoview owns
+     * a stricter publication contract: every final priority occurrence must
+     * have been consumed and merged into the live retained source.  Recheck
+     * immediately after the drain, before a completed job is retired below. */
+    if (data->pending_autoview &&
+	ged_obol_deferred_job_coverage_bounds_complete(data->deferred_job))
+	data->pending_autoview_bounds_complete = 1;
     for (std::vector<std::shared_ptr<ged_obol_deferred_realization_job>>::iterator
 	    it = data->pending_jobs.begin(); it != data->pending_jobs.end();) {
 	    const std::shared_ptr<ged_obol_deferred_realization_job> job = *it;

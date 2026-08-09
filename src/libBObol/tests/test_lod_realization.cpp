@@ -287,6 +287,7 @@ test_worker_prepared_authored_normals(void)
 	mesh->indices.size() != 6 ||
 	mesh->normals.size() != mesh->positions.size() ||
 	mesh->positions.size() <= 4 ||
+	mesh->progressiveLineage != 0 ||
 	!mesh->isProgressive() ||
 	mesh->indexCountAtLevel(0) != 3 ||
 	mesh->indexCountAtLevel(1) != 6 ||
@@ -303,15 +304,11 @@ static int
 test_worker_prepared_generation_lifetime(void)
 {
     point_t points[4];
-    vect_t normals[6];
     int faces[6] = {0, 1, 2, 0, 2, 3};
     VSET(points[0], 0.0, 0.0, 0.0);
     VSET(points[1], 1.0, 0.0, 0.0);
     VSET(points[2], 1.0, 1.0, 0.0);
     VSET(points[3], 0.0, 1.0, 0.0);
-    for (size_t i = 0; i < 6; ++i)
-	VSET(normals[i], 0.0, 0.0, 1.0);
-
     struct BObolMeshLodData data = {};
     data.faces = faces;
     data.face_count = 1;
@@ -319,8 +316,6 @@ test_worker_prepared_generation_lifetime(void)
     data.point_count = 3;
     data.points_orig = points;
     data.point_orig_count = 3;
-    data.normals = normals;
-    data.normal_count = 3;
     VSET(data.bmin, 0.0, 0.0, 0.0);
     VSET(data.bmax, 1.0, 1.0, 0.0);
 
@@ -343,11 +338,12 @@ test_worker_prepared_generation_lifetime(void)
     const std::shared_ptr<const Obol::PartGeometry> coarse =
 	progressive.prepareCadGeometry(
 	    BOBOL_LOD_DRAW_SHADED, &coarseRevision);
+    const uint64_t progressiveLineage =
+	coarse && coarse->shaded ? coarse->shaded->progressiveLineage : 0;
 
     data.face_count = 2;
     data.point_count = 4;
     data.point_orig_count = 4;
-    data.normal_count = 6;
     hierarchy.resident_level = 1;
     if (!progressive.update(data, hierarchy, 1, FALSE))
 	return 1;
@@ -355,9 +351,12 @@ test_worker_prepared_generation_lifetime(void)
     const std::shared_ptr<const Obol::PartGeometry> rich =
 	progressive.prepareCadGeometry(
 	    BOBOL_LOD_DRAW_SHADED, &richRevision);
+    const size_t richBytes = progressive.estimateBytes();
 
     if (!coarse || !coarse->shaded || !rich || !rich->shaded ||
 	coarseRevision == 0 || richRevision <= coarseRevision ||
+	progressiveLineage == 0 ||
+	rich->shaded->progressiveLineage != progressiveLineage ||
 	coarse->shaded->indices.size() != 3 ||
 	rich->shaded->indices.size() != 6 ||
 	!progressive.trim(0)) {
@@ -369,12 +368,16 @@ test_worker_prepared_generation_lifetime(void)
     const std::shared_ptr<const Obol::PartGeometry> trimmed =
 	progressive.prepareCadGeometry(
 	    BOBOL_LOD_DRAW_SHADED, &trimmedRevision);
+    const size_t trimmedBytes = progressive.estimateBytes();
     if (!trimmed || !trimmed->shaded ||
 	trimmedRevision <= richRevision ||
+	trimmed->shaded->progressiveLineage != progressiveLineage ||
 	trimmed->shaded->indices.size() != 3 ||
+	trimmedBytes >= richBytes ||
 	coarse->shaded->indices.size() != 3 ||
 	rich->shaded->indices.size() != 6) {
-	printf("FAIL: published progressive generation lifetime across trim\n");
+	printf("FAIL: published progressive generation lifetime/memory across "
+	       "trim (bytes=%zu/%zu)\n", trimmedBytes, richBytes);
 	return 1;
     }
     return 0;

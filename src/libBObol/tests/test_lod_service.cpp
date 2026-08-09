@@ -1717,6 +1717,75 @@ make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
 }
 
 static int
+test_database_lease_outlives_submitter(void)
+{
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    if (make_provider_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    BObolLodService service;
+    if (!service.start(1, FALSE)) {
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	printf("FAIL: database-lease service setup\n");
+	return 1;
+    }
+
+    BObolRtSourceFullDetailProvider *provider =
+	new BObolRtSourceFullDetailProvider;
+    if (!provider->setDatabase(dbip)) {
+	delete provider;
+	service.stop();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	printf("FAIL: database lease acquisition\n");
+	return 1;
+    }
+
+    BObolLodTask task;
+    task.generation = service.beginGeneration();
+    task.request = make_request("/lod-provider.bot");
+    task.request.objectName = "lod-provider.bot";
+    task.request.sourceCounts.faceCount = 4;
+    task.request.sourceCounts.pointCount = 4;
+    task.realize = bobol_rt_source_full_detail_provider_task;
+    task.realizeData = provider;
+    task.realizeDataFree = bobol_rt_source_full_detail_provider_free;
+    task.debugDelayMilliseconds = 100;
+    if (!service.submit(task)) {
+	delete provider;
+	service.stop();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	printf("FAIL: database-lease task submission\n");
+	return 1;
+    }
+
+    /* Release the application's only database use before the worker wakes. */
+    db_close(dbip);
+    dbip = NULL;
+
+    if (wait_for_settled(service, 1)) {
+	service.stop();
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    std::vector<BObolLodResult> results;
+    service.drainResults(results);
+    service.stop();
+    bu_file_delete(dbpath);
+    if (results.size() != 1 ||
+	results.front().providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	results.front().resultKind != BOBOL_LOD_RESULT_FULL_DETAIL ||
+	!results.front().mesh.isValid()) {
+	printf("FAIL: background provider lost its database lease\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 check_source_full_detail_result(const BObolLodResult &result,
 				const BObolLodRequest &request, const char *label)
 {
@@ -1772,6 +1841,15 @@ test_active_request_duplicate_suppression(void)
     uint64_t duplicateId = service.submitIfNotActive(task);
     if (duplicateId != 0) {
 	printf("FAIL: LoD service accepted duplicate active request\n");
+	service.stop();
+	return 1;
+    }
+    BObolLodTask richerTask = task;
+    richerTask.request.requestedLevel = task.request.requestedLevel + 1;
+    if (!service.hasActiveRequest(richerTask.request) ||
+	service.submitIfNotActive(richerTask) != 0) {
+	printf("FAIL: LoD service queued a superseding level for the same "
+	       "serialized resident occurrence\n");
 	service.stop();
 	return 1;
     }
@@ -1914,7 +1992,7 @@ test_rt_source_full_detail_provider_task(void)
 	return 1;
 
     BObolRtSourceFullDetailProvider provider;
-    provider.dbip = dbip;
+    provider.setDatabase(dbip);
     provider.validateSourceMetrics = TRUE;
 
     BObolLodRequest request = make_request("/lod-provider.bot");
@@ -1958,7 +2036,7 @@ test_rt_source_full_detail_provider_task(void)
     }
 
     BObolRtSourceFullDetailProvider scopedLimitProvider;
-    scopedLimitProvider.dbip = dbip;
+    scopedLimitProvider.setDatabase(dbip);
     scopedLimitProvider.validateSourceMetrics = TRUE;
     scopedLimitProvider.maxFullDetailFaceCount = 2;
     scopedLimitProvider.maxFullDetailPointCount = 4;
@@ -2022,7 +2100,7 @@ test_rt_source_full_detail_provider_task(void)
     }
 
     BObolRtSourceFullDetailProvider wrongSpaceLimitProvider;
-    wrongSpaceLimitProvider.dbip = dbip;
+    wrongSpaceLimitProvider.setDatabase(dbip);
     wrongSpaceLimitProvider.validateSourceMetrics = TRUE;
     wrongSpaceLimitProvider.maxFullDetailFaceCount = 2;
     wrongSpaceLimitProvider.maxFullDetailPointCount = 4;
@@ -2241,7 +2319,7 @@ test_rt_source_full_detail_provider_task(void)
     }
 
     BObolRtSourceFullDetailProvider compactRayLimitProvider;
-    compactRayLimitProvider.dbip = dbip;
+    compactRayLimitProvider.setDatabase(dbip);
     compactRayLimitProvider.validateSourceMetrics = TRUE;
     compactRayLimitProvider.maxFullDetailFaceCount = 1;
     compactRayLimitProvider.maxFullDetailPointCount = 3;
@@ -2526,7 +2604,7 @@ test_rt_source_full_detail_provider_task(void)
 	ret = 1;
     } else {
 	BObolRtSourceFullDetailProvider templatedLimitProvider;
-	templatedLimitProvider.dbip = dbip;
+	templatedLimitProvider.setDatabase(dbip);
 	templatedLimitProvider.validateSourceMetrics = TRUE;
 	templatedLimitProvider.maxFullDetailFaceCount = 2;
 	templatedLimitProvider.maxFullDetailPointCount = 4;
@@ -2574,7 +2652,7 @@ test_rt_source_full_detail_provider_task(void)
     }
 
     BObolRtSourceFullDetailProvider limitProvider;
-    limitProvider.dbip = dbip;
+    limitProvider.setDatabase(dbip);
     limitProvider.maxFullDetailFaceCount = 3;
     BObolLodResult limitedResult =
 	bobol_rt_source_full_detail_provider_task(request, &limitProvider);
@@ -2674,7 +2752,7 @@ test_rt_mesh_provider_task(void)
     }
 
     BObolMeshLodProvider provider;
-    provider.dbip = dbip;
+    provider.setDatabase(dbip);
     provider.useView = TRUE;
     provider.refreshMissing = TRUE;
     provider.view.size = 100.0;
@@ -2768,7 +2846,7 @@ test_rt_mesh_provider_task(void)
      * publication per nominal level creates a severe many-asset tail. */
     BObolMeshLodProvider stagedProvider;
     stagedProvider.service = &service;
-    stagedProvider.dbip = dbip;
+    stagedProvider.setDatabase(dbip);
     stagedProvider.refreshMissing = FALSE;
     stagedProvider.initialRefinementFaceBudget = 2;
     stagedProvider.initialRefinementPointBudget = 4;
@@ -2797,12 +2875,25 @@ test_rt_mesh_provider_task(void)
 	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
     BObolMeshLodProvider directProvider;
     directProvider.service = &service;
-    directProvider.dbip = dbip;
+    directProvider.setDatabase(dbip);
     directProvider.refreshMissing = FALSE;
     directProvider.useCurrentDrawLevel = TRUE;
     directProvider.currentDrawLevel = firstStage.geometry.activeLevel;
     BObolLodResult directStage =
 	service.realizeResidentMeshLod(stagedRequest, directProvider);
+    /* Zoom residency and presentation are separate contracts.  A worker may
+     * make the complete pixel-demanded prefix resident while publishing the
+     * previously affordable draw cut; a later frame can retarget the same
+     * immutable arrays without another cache read. */
+    BObolMeshLodProvider prefetchedProvider = directProvider;
+    prefetchedProvider.progressiveDelivery = FALSE;
+    prefetchedProvider.useDeliveryLevelLimit = TRUE;
+    prefetchedProvider.deliveryLevelLimit = stagedRequest.requestedLevel;
+    prefetchedProvider.usePresentationLevelLimit = TRUE;
+    prefetchedProvider.presentationLevelLimit =
+	firstStage.geometry.activeLevel;
+    BObolLodResult prefetchedStage =
+	service.realizeResidentMeshLod(stagedRequest, prefetchedProvider);
     if (firstStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	firstStage.geometry.activeLevel < 0 ||
 	firstStage.geometry.activeLevel >= stagedRequest.requestedLevel ||
@@ -2826,6 +2917,11 @@ test_rt_mesh_provider_task(void)
 	directStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	directStage.geometry.activeLevel != stagedRequest.requestedLevel ||
 	!directStage.terminal ||
+	prefetchedStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	prefetchedStage.geometry.activeLevel !=
+	    firstStage.geometry.activeLevel ||
+	prefetchedStage.residentLevel != stagedRequest.requestedLevel ||
+	prefetchedStage.terminal ||
 	!firstStage.progressiveMesh ||
 	!firstStagePrepared ||
 	firstStage.progressiveMesh != secondStage.progressiveMesh ||
@@ -2836,16 +2932,20 @@ test_rt_mesh_provider_task(void)
 	secondStage.counts.faceCount > terminalStage.counts.faceCount) {
 	printf("FAIL: retained LoD provider did not stage large growth or "
 	    "collapse a cheap target (levels=%d/%d/%d resident-ahead=%d "
-	    "direct=%d terminal=%d/%d/%d/%d/%d prepared=%d "
+	    "direct=%d prefetched=%d/%d terminal=%d/%d/%d/%d/%d/%d "
+	    "prepared=%d "
 	    "faces=%llu/%llu/%llu/%llu/%llu)\n",
 	    firstStage.geometry.activeLevel, secondStage.geometry.activeLevel,
 	    terminalStage.geometry.activeLevel,
 	    residentAheadStage.geometry.activeLevel,
 	    directStage.geometry.activeLevel,
+	    prefetchedStage.geometry.activeLevel,
+	    prefetchedStage.residentLevel,
 	    firstStage.terminal ? 1 : 0,
 	    secondStage.terminal ? 1 : 0, terminalStage.terminal ? 1 : 0,
 	    residentAheadStage.terminal ? 1 : 0,
 	    directStage.terminal ? 1 : 0,
+	    prefetchedStage.terminal ? 1 : 0,
 	    firstStagePrepared ? 1 : 0,
 	    static_cast<unsigned long long>(firstStage.counts.faceCount),
 	    static_cast<unsigned long long>(secondStage.counts.faceCount),
@@ -2941,9 +3041,69 @@ test_rt_mesh_provider_task(void)
 		       1 : 0,
 		   static_cast<unsigned long long>(
 		       service.residentMeshCacheLoadCountForDiagnostics()),
-		   static_cast<unsigned long long>(loadsBefore));
+		       static_cast<unsigned long long>(loadsBefore));
 	    ret = 1;
 	}
+
+	/* A quiet trim is planned from a complete old demand snapshot.  Renewed
+	 * use may arrive before a worker takes that plan; it must invalidate the
+	 * trim rather than let the old worker shorten the same shared progressive
+	 * object after the richer request has already returned.  Queue before
+	 * starting this isolated service to make that ordering deterministic. */
+	BObolLodService staleCompactionService;
+	BObolMeshLodProvider staleProvider = reloadProvider;
+	staleProvider.service = &staleCompactionService;
+	BObolLodResult staleMinimum =
+	    staleCompactionService.realizeResidentMeshLod(
+		stagedRequest, staleProvider);
+	BObolLodResult staleRich =
+	    staleCompactionService.realizeResidentMeshLod(
+		stagedRequest, staleProvider);
+	size_t staleQueued = 0;
+	BObolLodResult renewedRich;
+	if (staleRich.providerStatus == BOBOL_LOD_PROVIDER_READY &&
+	    staleRich.progressiveMesh &&
+	    staleRich.progressiveMesh->residentLevel() >
+		staleRich.progressiveMesh->minimumLevel()) {
+	    BObolLodResidentDemand staleDemand;
+	    staleDemand.assetKey = staleRich.geometry.cacheKey.value;
+	    staleDemand.level = staleRich.progressiveMesh->minimumLevel();
+	    staleDemand.channelMask = 2;
+	    std::vector<BObolLodResidentDemand> staleDemands(1, staleDemand);
+	    staleQueued = staleCompactionService.scheduleResidentMeshCompaction(
+		0x5678, 1, staleDemands);
+	    renewedRich = staleCompactionService.realizeResidentMeshLod(
+		stagedRequest, staleProvider);
+	}
+	const int staleRichLevel = renewedRich.progressiveMesh ?
+	    renewedRich.progressiveMesh->residentLevel() : -1;
+	const SbBool staleStarted =
+	    staleCompactionService.start(1, FALSE);
+	const int staleWait = staleStarted ?
+	    wait_for_resident_compaction(staleCompactionService) : 1;
+	std::vector<BObolLodResidentCompaction> staleCompletions;
+	staleCompactionService.drainResidentMeshCompactions(
+	    0x5678, staleCompletions);
+	if (staleMinimum.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	    staleRich.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	    !staleRich.progressiveMesh || staleQueued != 1 ||
+	    renewedRich.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	    renewedRich.progressiveMesh != staleRich.progressiveMesh ||
+	    !staleStarted || staleWait || !staleCompletions.empty() ||
+	    staleRich.progressiveMesh->residentLevel() != staleRichLevel ||
+	    staleRichLevel != stagedRequest.requestedLevel) {
+	    printf("FAIL: renewed resident use did not cancel a stale queued "
+		   "compaction (queued=%zu started=%d wait=%d status=%d/%d "
+		   "level=%d/%d results=%zu)\n",
+		   staleQueued, staleStarted ? 1 : 0, staleWait,
+		   staleRich.providerStatus, renewedRich.providerStatus,
+		   staleRich.progressiveMesh ?
+		       staleRich.progressiveMesh->residentLevel() : -1,
+		   staleRichLevel, staleCompletions.size());
+	    ret = 1;
+	}
+	staleCompactionService.stop();
+
 	if (reloaded.providerStatus == BOBOL_LOD_PROVIDER_READY &&
 	    reloaded.progressiveMesh &&
 	    reloaded.progressiveMesh->residentLevel() >
@@ -3151,7 +3311,7 @@ test_rt_mesh_provider_task(void)
     BObolLodService genericService;
     BObolMeshLodProvider genericProvider;
     genericProvider.service = &genericService;
-    genericProvider.dbip = dbip;
+    genericProvider.setDatabase(dbip);
     genericProvider.refreshMissing = TRUE;
     genericProvider.progressiveDelivery = FALSE;
     genericProvider.useForcedLevel = TRUE;
@@ -3194,7 +3354,7 @@ test_rt_mesh_provider_task(void)
     }
 
     BObolMeshLodProvider cachedNormalProvider;
-    cachedNormalProvider.dbip = dbip;
+    cachedNormalProvider.setDatabase(dbip);
     cachedNormalProvider.useForcedLevel = TRUE;
     cachedNormalProvider.forcedLevel = 1;
     cachedNormalProvider.refreshMissing = FALSE;
@@ -3231,7 +3391,7 @@ test_rt_mesh_provider_task(void)
     }
 
     BObolMeshLodProvider forcedProvider;
-    forcedProvider.dbip = dbip;
+    forcedProvider.setDatabase(dbip);
     forcedProvider.useForcedLevel = TRUE;
     forcedProvider.forcedLevel = (results.size() == 1 &&
 				  results[0].geometry.activeLevel >= 0) ?
@@ -3269,7 +3429,7 @@ test_rt_mesh_provider_task(void)
     }
 
     BObolMeshLodProvider staleProvider;
-    staleProvider.dbip = dbip;
+    staleProvider.setDatabase(dbip);
     staleProvider.refreshMissing = FALSE;
 
     BObolLodResult staleResult =
@@ -3284,7 +3444,7 @@ test_rt_mesh_provider_task(void)
     }
 
     BObolMeshLodProvider refreshProvider;
-    refreshProvider.dbip = dbip;
+    refreshProvider.setDatabase(dbip);
     refreshProvider.useView = TRUE;
     refreshProvider.refreshMissing = TRUE;
     refreshProvider.view = provider.view;
@@ -3611,6 +3771,185 @@ test_process_working_set_admission(void)
     return 0;
 }
 
+struct GenerationIsolationState {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool release = false;
+    std::atomic<unsigned int> notifications{0};
+};
+
+static BObolLodResult
+generation_blocking_task(const BObolLodRequest &request, void *userData)
+{
+    GenerationIsolationState *state =
+	static_cast<GenerationIsolationState *>(userData);
+    {
+	std::unique_lock<std::mutex> lock(state->mutex);
+	state->entered = true;
+	state->cv.notify_all();
+	state->cv.wait(lock, [state] { return state->release; });
+    }
+
+    BObolLodResult result;
+    result.request = request;
+    result.cacheKey = bobol_lod_cache_key(request);
+    result.resultKind = BOBOL_LOD_RESULT_AABB;
+    result.qualityTier = request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.terminal = TRUE;
+    result.counts.faceCount = 101;
+    result.bounds = request.bounds;
+    return result;
+}
+
+static BObolLodResult
+generation_ready_task(const BObolLodRequest &request, void *)
+{
+    BObolLodResult result;
+    result.request = request;
+    result.cacheKey = bobol_lod_cache_key(request);
+    result.resultKind = BOBOL_LOD_RESULT_AABB;
+    result.qualityTier = request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.terminal = TRUE;
+    result.counts.faceCount = 202;
+    result.bounds = request.bounds;
+    return result;
+}
+
+static void
+generation_result_ready(BObolLodService *, void *userData)
+{
+    GenerationIsolationState *state =
+	static_cast<GenerationIsolationState *>(userData);
+    state->notifications.fetch_add(1);
+}
+
+static int
+test_generation_scoped_consumers(void)
+{
+    BObolLodService service;
+    GenerationIsolationState state;
+    if (!service.start(1, FALSE)) {
+	printf("FAIL: generation-isolation service setup\n");
+	return 1;
+    }
+    const BObolLodSubscriberId subscriber =
+	service.subscribeResultReady(generation_result_ready, &state);
+    const uint64_t firstGeneration = service.beginGeneration();
+    const uint64_t secondGeneration = service.beginGeneration();
+
+    BObolLodTask first;
+    first.generation = firstGeneration;
+    first.request = make_request("/generation-first.bot");
+    first.realize = generation_blocking_task;
+    first.realizeData = &state;
+    if (!service.submit(first)) {
+	printf("FAIL: first generation submission\n");
+	return 1;
+    }
+    {
+	std::unique_lock<std::mutex> lock(state.mutex);
+	if (!state.cv.wait_for(lock, std::chrono::seconds(2),
+		[&state] { return state.entered; })) {
+	    printf("FAIL: first generation did not begin execution\n");
+	    return 1;
+	}
+    }
+
+    BObolLodTask second;
+    second.generation = secondGeneration;
+    second.request = make_request("/generation-second.bot");
+    second.realize = generation_ready_task;
+    if (!service.submit(second) ||
+	service.activeTaskCountForGeneration(firstGeneration) != 1 ||
+	service.executingTaskCountForGeneration(firstGeneration) != 1 ||
+	service.pendingTaskCountForGeneration(firstGeneration) != 0 ||
+	service.activeTaskCountForGeneration(secondGeneration) != 1 ||
+	service.executingTaskCountForGeneration(secondGeneration) != 0 ||
+	service.pendingTaskCountForGeneration(secondGeneration) != 1) {
+	printf("FAIL: per-generation active/pending/executing counters\n");
+	{
+	    std::lock_guard<std::mutex> lock(state.mutex);
+	    state.release = true;
+	}
+	state.cv.notify_all();
+	return 1;
+    }
+
+    {
+	std::lock_guard<std::mutex> lock(state.mutex);
+	state.release = true;
+    }
+    state.cv.notify_all();
+    if (wait_for_settled(service, 2))
+	return 1;
+    for (int i = 0; i < 200 && state.notifications.load() < 2; ++i)
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    if (service.activeTaskCountForGeneration(firstGeneration) != 0 ||
+	service.activeTaskCountForGeneration(secondGeneration) != 0 ||
+	service.queuedResultCountForGeneration(firstGeneration) != 1 ||
+	service.queuedResultCountForGeneration(secondGeneration) != 1 ||
+	state.notifications.load() != 2) {
+	printf("FAIL: per-generation completion/result notification state "
+	       "(notifications=%u)\n", state.notifications.load());
+	return 1;
+    }
+
+    std::vector<BObolLodResult> secondResults;
+    if (service.drainGenerationResults(
+	    secondResults, secondGeneration) != 1 ||
+	secondResults.size() != 1 ||
+	secondResults.front().generation != secondGeneration ||
+	secondResults.front().counts.faceCount != 202 ||
+	service.queuedResultCountForGeneration(secondGeneration) != 0 ||
+	service.queuedResultCountForGeneration(firstGeneration) != 1 ||
+	service.queuedResultCountForDiagnostics() != 1) {
+	printf("FAIL: draining one generation consumed another generation\n");
+	return 1;
+    }
+
+    std::vector<BObolLodResult> firstResults;
+    if (service.drainGenerationResults(firstResults, firstGeneration) != 1 ||
+	firstResults.size() != 1 ||
+	firstResults.front().generation != firstGeneration ||
+	firstResults.front().counts.faceCount != 101 ||
+	service.queuedResultCountForDiagnostics() != 0) {
+	printf("FAIL: final generation-scoped drain\n");
+	return 1;
+    }
+
+    service.unsubscribeResultReady(subscriber);
+    service.stop();
+    return 0;
+}
+
+static int
+test_managed_service_is_shared(void)
+{
+    BObolViewController first;
+    BObolViewController second;
+    BObolLodService *firstService = first.ensureManagedLodService(1);
+    BObolLodService *secondService = second.ensureManagedLodService(2);
+    if (!firstService || secondService != firstService ||
+	first.getManagedLodWorkerCount() < 2 ||
+	second.getManagedLodWorkerCount() < 2) {
+	printf("FAIL: view controllers did not share and grow the managed service\n");
+	return 1;
+    }
+
+    first.stopManagedLodService();
+    if (first.getLodService() != NULL ||
+	second.getLodService() != secondService || !secondService->isRunning()) {
+	printf("FAIL: releasing one view stopped another view's managed service\n");
+	return 1;
+    }
+    second.stopManagedLodService();
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -3659,6 +3998,8 @@ main(int argc, char **argv)
 	return 1;
     if (test_rt_source_full_detail_provider_task())
 	return 1;
+    if (test_database_lease_outlives_submitter())
+	return 1;
     if (test_rt_mesh_provider_task())
 	return 1;
     if (test_detached_database_snapshot())
@@ -3668,6 +4009,10 @@ main(int argc, char **argv)
     if (test_working_set_admission())
 	return 1;
     if (test_process_working_set_admission())
+	return 1;
+    if (test_generation_scoped_consumers())
+	return 1;
+    if (test_managed_service_is_shared())
 	return 1;
 
     return 0;

@@ -249,11 +249,15 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     requireLodBacked(TRUE),
     allowLevelDowngrade(FALSE),
     allowRetainedRefinement(TRUE),
+    allowResidentPrefetch(FALSE),
+    refinementLevelCeiling(-1),
     allowRepresentationRefinement(TRUE),
     preserveMeshCoverage(FALSE),
-    refinementFaceBudget(SIZE_MAX),
-    refinementFaceBudgetUsed(0),
+    refinementCostBudget(SIZE_MAX),
+    refinementCostBudgetUsed(0),
     refinementBudgetBlockedCount(0),
+    oneOverBudgetRefinementLimit(0),
+    oneOverBudgetRefinementUsed(FALSE),
     transitionLimitedRefinement(FALSE),
     viewState(NULL),
     compactEntryFirst(0),
@@ -265,8 +269,8 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     compactEntryPlanSupplied(FALSE),
     submissionTaskLimit(SIZE_MAX),
     submissionTimeLimitMicroseconds(0),
-    retainedSceneFaceBudget(SIZE_MAX),
-    retainedSceneFaceBudgetUsed(0),
+    retainedSceneCostBudget(SIZE_MAX),
+    retainedSceneCostBudgetUsed(0),
     retainedRecoveredOccurrences(),
     deferredCompactEntries(FALSE),
     visitedMeshCount(0),
@@ -472,6 +476,30 @@ SoBRLMeshLodSubmitAction::getAllowRetainedRefinement(void) const
 }
 
 void
+SoBRLMeshLodSubmitAction::setAllowResidentPrefetch(SbBool allow)
+{
+    this->allowResidentPrefetch = allow ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLMeshLodSubmitAction::getAllowResidentPrefetch(void) const
+{
+    return this->allowResidentPrefetch;
+}
+
+void
+SoBRLMeshLodSubmitAction::setRefinementLevelCeiling(int level)
+{
+    this->refinementLevelCeiling = level;
+}
+
+int
+SoBRLMeshLodSubmitAction::getRefinementLevelCeiling(void) const
+{
+    return this->refinementLevelCeiling;
+}
+
+void
 SoBRLMeshLodSubmitAction::setPreserveMeshCoverage(SbBool preserve)
 {
     this->preserveMeshCoverage = preserve ? TRUE : FALSE;
@@ -484,27 +512,45 @@ SoBRLMeshLodSubmitAction::getPreserveMeshCoverage(void) const
 }
 
 void
-SoBRLMeshLodSubmitAction::setRefinementFaceBudget(size_t additionalFaces)
+SoBRLMeshLodSubmitAction::setRefinementCostBudget(size_t additionalCost)
 {
-    this->refinementFaceBudget = additionalFaces;
+    this->refinementCostBudget = additionalCost;
 }
 
 size_t
-SoBRLMeshLodSubmitAction::getRefinementFaceBudget(void) const
+SoBRLMeshLodSubmitAction::getRefinementCostBudget(void) const
 {
-    return this->refinementFaceBudget;
+    return this->refinementCostBudget;
 }
 
 size_t
-SoBRLMeshLodSubmitAction::getRefinementFaceBudgetUsed(void) const
+SoBRLMeshLodSubmitAction::getRefinementCostBudgetUsed(void) const
 {
-    return this->refinementFaceBudgetUsed;
+    return this->refinementCostBudgetUsed;
 }
 
 unsigned int
 SoBRLMeshLodSubmitAction::getRefinementBudgetBlockedCount(void) const
 {
     return this->refinementBudgetBlockedCount;
+}
+
+void
+SoBRLMeshLodSubmitAction::setOneOverBudgetRefinementLimit(size_t excessCost)
+{
+    this->oneOverBudgetRefinementLimit = excessCost;
+}
+
+size_t
+SoBRLMeshLodSubmitAction::getOneOverBudgetRefinementLimit(void) const
+{
+    return this->oneOverBudgetRefinementLimit;
+}
+
+SbBool
+SoBRLMeshLodSubmitAction::getOneOverBudgetRefinementUsed(void) const
+{
+    return this->oneOverBudgetRefinementUsed;
 }
 
 void
@@ -541,9 +587,9 @@ mesh_lod_next_population_level(
 }
 
 SbBool
-SoBRLMeshLodSubmitAction::reserveRefinementFaces(
+SoBRLMeshLodSubmitAction::reserveRefinementCost(
     const BObolLodProgressiveMeshPtr &progressiveMesh,
-    int activeLevel, int nextLevel)
+    int activeLevel, int nextLevel, int drawMode)
 {
     if (!progressiveMesh || nextLevel <= activeLevel)
 	return TRUE;
@@ -552,40 +598,67 @@ SoBRLMeshLodSubmitAction::reserveRefinementFaces(
 	progressiveMesh->hierarchyFaceCount(activeLevel) : 0;
     const size_t nextFaces =
 	progressiveMesh->hierarchyFaceCount(nextLevel);
-    const size_t additionalFaces =
-	nextFaces > activeFaces ? nextFaces - activeFaces : 0;
-    if (!additionalFaces)
+    const size_t activePoints = activeLevel >= 0 ?
+	progressiveMesh->hierarchyPointCount(activeLevel) : 0;
+    const size_t nextPoints =
+	progressiveMesh->hierarchyPointCount(nextLevel);
+    BObolLodCounts activeCounts;
+    activeCounts.faceCount = activeFaces;
+    activeCounts.pointCount = activePoints;
+    BObolLodCounts nextCounts;
+    nextCounts.faceCount = nextFaces;
+    nextCounts.pointCount = nextPoints;
+    const size_t activeCost = bobol_lod_render_cost_units(
+	activeCounts, drawMode, 0);
+    const size_t nextCost = bobol_lod_render_cost_units(
+	nextCounts, drawMode, 0);
+    const size_t additionalCost = nextCost > activeCost ?
+	nextCost - activeCost : 0;
+    if (!additionalCost)
 	return TRUE;
 
-    if (this->refinementFaceBudget != SIZE_MAX &&
-	(this->refinementFaceBudgetUsed > this->refinementFaceBudget ||
-	 additionalFaces >
-	    this->refinementFaceBudget - this->refinementFaceBudgetUsed)) {
+    if (this->refinementCostBudget != SIZE_MAX &&
+	(this->refinementCostBudgetUsed > this->refinementCostBudget ||
+	 additionalCost >
+	    this->refinementCostBudget - this->refinementCostBudgetUsed)) {
 	if (getenv("BOBOL_LOD_TRACE_BUDGET"))
-	    bu_log("BObol LoD refinement reservation blocked "
+	    bu_log("BObol LoD refinement cost reservation blocked "
 		   "active_level=%d next_level=%d active_faces=%zu "
-		   "next_faces=%zu added_faces=%zu used_faces=%zu "
-		   "budget_faces=%zu\n",
+		   "next_faces=%zu added_cost=%zu used_cost=%zu "
+		   "budget_cost=%zu\n",
 		   activeLevel, nextLevel, activeFaces, nextFaces,
-		   additionalFaces, this->refinementFaceBudgetUsed,
-		   this->refinementFaceBudget);
+		   additionalCost, this->refinementCostBudgetUsed,
+		   this->refinementCostBudget);
 	this->refinementBudgetBlockedCount++;
 	return FALSE;
     }
 
-    this->refinementFaceBudgetUsed =
-	additionalFaces > SIZE_MAX - this->refinementFaceBudgetUsed ?
-	SIZE_MAX : this->refinementFaceBudgetUsed + additionalFaces;
+    this->refinementCostBudgetUsed =
+	additionalCost > SIZE_MAX - this->refinementCostBudgetUsed ?
+	SIZE_MAX : this->refinementCostBudgetUsed + additionalCost;
     return TRUE;
 }
 
 int
 SoBRLMeshLodSubmitAction::reserveRefinementLevel(
     const BObolLodProgressiveMeshPtr &progressiveMesh,
-    int activeLevel, int preferredLevel)
+    int activeLevel, int preferredLevel, int drawMode)
 {
     if (preferredLevel <= activeLevel)
 	return activeLevel;
+
+    /* The renderer-wide ceiling is reversible FPS state, not permission for
+     * the occurrence allocator to advance invisibly behind it.  Keep an
+     * already richer retained cut intact, but admit no new level above the
+     * presentation frontier. */
+    if (this->refinementLevelCeiling >= 0) {
+	if (activeLevel >= this->refinementLevelCeiling)
+	    return activeLevel;
+	preferredLevel = std::min(
+	    preferredLevel, this->refinementLevelCeiling);
+	if (preferredLevel <= activeLevel)
+	    return activeLevel;
+    }
 
     /*
      * A nominal PoP level is not a useful scheduling quantum: adjacent levels
@@ -598,44 +671,91 @@ SoBRLMeshLodSubmitAction::reserveRefinementLevel(
     if (!progressiveMesh)
 	return activeLevel;
     if (this->transitionLimitedRefinement &&
-	this->refinementFaceBudget != SIZE_MAX)
+	this->refinementCostBudget != SIZE_MAX)
 	preferredLevel = mesh_lod_next_population_level(
 	    progressiveMesh, activeLevel, preferredLevel);
     const size_t activeFaces = activeLevel >= 0 ?
 	progressiveMesh->hierarchyFaceCount(activeLevel) : 0;
-    if (this->refinementFaceBudget == SIZE_MAX) {
-	(void)this->reserveRefinementFaces(
-	    progressiveMesh, activeLevel, preferredLevel);
+    const size_t activePoints = activeLevel >= 0 ?
+	progressiveMesh->hierarchyPointCount(activeLevel) : 0;
+    BObolLodCounts activeCounts;
+    activeCounts.faceCount = activeFaces;
+    activeCounts.pointCount = activePoints;
+    const size_t activeCost = bobol_lod_render_cost_units(
+	activeCounts, drawMode, 0);
+    if (this->refinementCostBudget == SIZE_MAX) {
+	(void)this->reserveRefinementCost(
+	    progressiveMesh, activeLevel, preferredLevel, drawMode);
 	return preferredLevel;
     }
     const size_t remaining =
-	this->refinementFaceBudgetUsed >= this->refinementFaceBudget ?
-	    0 : this->refinementFaceBudget -
-		this->refinementFaceBudgetUsed;
+	this->refinementCostBudgetUsed >= this->refinementCostBudget ?
+	    0 : this->refinementCostBudget -
+		this->refinementCostBudgetUsed;
     for (int level = preferredLevel; level > activeLevel; --level) {
-	const size_t levelFaces =
-	    progressiveMesh->hierarchyFaceCount(level);
-	const size_t additionalFaces =
-	    levelFaces > activeFaces ? levelFaces - activeFaces : 0;
-	if (additionalFaces > remaining)
+	BObolLodCounts levelCounts;
+	levelCounts.faceCount = progressiveMesh->hierarchyFaceCount(level);
+	levelCounts.pointCount = progressiveMesh->hierarchyPointCount(level);
+	const size_t levelCost = bobol_lod_render_cost_units(
+	    levelCounts, drawMode, 0);
+	const size_t additionalCost = levelCost > activeCost ?
+	    levelCost - activeCost : 0;
+	if (additionalCost > remaining)
 	    continue;
-	this->refinementFaceBudgetUsed =
-	    additionalFaces >
-		    SIZE_MAX - this->refinementFaceBudgetUsed ?
+	this->refinementCostBudgetUsed =
+	    additionalCost >
+		    SIZE_MAX - this->refinementCostBudgetUsed ?
 		SIZE_MAX :
-		this->refinementFaceBudgetUsed + additionalFaces;
+		this->refinementCostBudgetUsed + additionalCost;
 	return level;
+    }
+
+    /* The ordinary predictor cannot learn a discontinuous PoP transition it
+     * never renders.  A controller may grant one bounded scene-global trial:
+     * select only the next populated prefix, consume all ordinary remainder,
+     * and admit no more than the explicitly bounded excess.  Keeping the
+     * complete marginal charge in refinementCostBudgetUsed makes subsequent
+     * scene-wide accounting conservative even though it exceeds the nominal
+     * action budget. */
+    if (this->oneOverBudgetRefinementLimit > 0 &&
+	!this->oneOverBudgetRefinementUsed) {
+	const int trialLevel = mesh_lod_next_population_level(
+	    progressiveMesh, activeLevel, preferredLevel);
+	if (trialLevel > activeLevel) {
+	    BObolLodCounts trialCounts;
+	    trialCounts.faceCount =
+		progressiveMesh->hierarchyFaceCount(trialLevel);
+	    trialCounts.pointCount =
+		progressiveMesh->hierarchyPointCount(trialLevel);
+	    const size_t trialCost = bobol_lod_render_cost_units(
+		trialCounts, drawMode, 0);
+	    const size_t additionalCost = trialCost > activeCost ?
+		trialCost - activeCost : 0;
+	    const size_t excessCost = additionalCost > remaining ?
+		additionalCost - remaining : 0;
+	    if (additionalCost && excessCost > 0 &&
+		excessCost <= this->oneOverBudgetRefinementLimit) {
+		this->refinementCostBudgetUsed =
+		    additionalCost >
+			    SIZE_MAX - this->refinementCostBudgetUsed ?
+			SIZE_MAX :
+			this->refinementCostBudgetUsed + additionalCost;
+		this->oneOverBudgetRefinementUsed = TRUE;
+		return trialLevel;
+	    }
+	}
     }
     this->refinementBudgetBlockedCount++;
     return activeLevel;
 }
 
 SbBool
-SoBRLMeshLodSubmitAction::reserveInitialFaces(
-    uint64_t sourceFaces, size_t &providerFaceAllowance)
+SoBRLMeshLodSubmitAction::reserveInitialCost(
+    uint64_t sourceFaces, uint64_t sourcePoints, int drawMode,
+    size_t &providerFaceAllowance)
 {
     providerFaceAllowance = 0;
-    if (this->refinementFaceBudget == SIZE_MAX)
+    if (this->refinementCostBudget == SIZE_MAX)
 	return TRUE;
 
     /* The exact minimum populated prefix is not known until the provider has
@@ -651,6 +771,14 @@ SoBRLMeshLodSubmitAction::reserveInitialFaces(
     const size_t reserveFaces = knownFaces ?
 	std::min(knownFaces, provisionalFirstCutFaces) :
 	provisionalFirstCutFaces;
+    const size_t knownPoints = sourcePoints > static_cast<uint64_t>(SIZE_MAX) ?
+	SIZE_MAX : static_cast<size_t>(sourcePoints);
+    BObolLodCounts provisionalCounts;
+    provisionalCounts.faceCount = reserveFaces;
+    provisionalCounts.pointCount = knownPoints ?
+	std::min(knownPoints, reserveFaces * 2) : reserveFaces;
+    const size_t reserveCost = bobol_lod_render_cost_units(
+	provisionalCounts, drawMode, 1);
 
     /*
      * Structural leaf proxies are the coverage guarantee.  A minimum PoP
@@ -665,17 +793,17 @@ SoBRLMeshLodSubmitAction::reserveInitialFaces(
      * may explicitly preserve the minimum visible mesh floor; bounded entry
      * windows and service capacity still prevent an all-at-once cliff.
      */
-    if (this->refinementFaceBudgetUsed > this->refinementFaceBudget ||
-	reserveFaces >
-	    this->refinementFaceBudget - this->refinementFaceBudgetUsed) {
+    if (this->refinementCostBudgetUsed > this->refinementCostBudget ||
+	reserveCost >
+	    this->refinementCostBudget - this->refinementCostBudgetUsed) {
 	this->refinementBudgetBlockedCount++;
 	if (!this->preserveMeshCoverage)
 	    return FALSE;
     }
 
-    this->refinementFaceBudgetUsed =
-	reserveFaces > SIZE_MAX - this->refinementFaceBudgetUsed ?
-	SIZE_MAX : this->refinementFaceBudgetUsed + reserveFaces;
+    this->refinementCostBudgetUsed =
+	reserveCost > SIZE_MAX - this->refinementCostBudgetUsed ?
+	SIZE_MAX : this->refinementCostBudgetUsed + reserveCost;
     /* The reservation may use an exact small source count, while a legacy
      * cache's hierarchy metadata can conservatively report a slightly larger
      * populated minimum.  Keep the provider's local first-cut ceiling at the
@@ -687,19 +815,21 @@ SoBRLMeshLodSubmitAction::reserveInitialFaces(
 }
 
 SbBool
-SoBRLMeshLodSubmitAction::reserveInitialFaceCost(size_t faceCount)
+SoBRLMeshLodSubmitAction::reserveInitialCost(
+    const BObolLodCounts &counts, int drawMode)
 {
-    if (this->refinementFaceBudget != SIZE_MAX &&
-	(this->refinementFaceBudgetUsed > this->refinementFaceBudget ||
-	 faceCount >
-	    this->refinementFaceBudget - this->refinementFaceBudgetUsed)) {
+    const size_t cost = bobol_lod_render_cost_units(counts, drawMode, 1);
+    if (this->refinementCostBudget != SIZE_MAX &&
+	(this->refinementCostBudgetUsed > this->refinementCostBudget ||
+	 cost >
+	    this->refinementCostBudget - this->refinementCostBudgetUsed)) {
 	this->refinementBudgetBlockedCount++;
 	if (!this->preserveMeshCoverage)
 	    return FALSE;
     }
-    this->refinementFaceBudgetUsed =
-	faceCount > SIZE_MAX - this->refinementFaceBudgetUsed ?
-	SIZE_MAX : this->refinementFaceBudgetUsed + faceCount;
+    this->refinementCostBudgetUsed =
+	cost > SIZE_MAX - this->refinementCostBudgetUsed ?
+	SIZE_MAX : this->refinementCostBudgetUsed + cost;
     return TRUE;
 }
 
@@ -761,15 +891,15 @@ SoBRLMeshLodSubmitAction::setSubmissionTimeLimit(uint64_t microseconds)
 }
 
 void
-SoBRLMeshLodSubmitAction::setRetainedSceneFaceBudget(size_t totalFaces)
+SoBRLMeshLodSubmitAction::setRetainedSceneCostBudget(size_t totalCost)
 {
-    this->retainedSceneFaceBudget = totalFaces;
+    this->retainedSceneCostBudget = totalCost;
 }
 
 size_t
-SoBRLMeshLodSubmitAction::getRetainedSceneFaceBudgetUsed(void) const
+SoBRLMeshLodSubmitAction::getRetainedSceneCostBudgetUsed(void) const
 {
-    return this->retainedSceneFaceBudgetUsed;
+    return this->retainedSceneCostBudgetUsed;
 }
 
 size_t
@@ -845,9 +975,10 @@ SoBRLMeshLodSubmitAction::beginTraversal(SoNode *node)
     this->submittedTaskCount = 0;
     this->updatedCutCount = 0;
     this->pendingRetainedRefinementCount = 0;
-    this->refinementFaceBudgetUsed = 0;
+    this->refinementCostBudgetUsed = 0;
     this->refinementBudgetBlockedCount = 0;
-    this->retainedSceneFaceBudgetUsed = 0;
+    this->oneOverBudgetRefinementUsed = FALSE;
+    this->retainedSceneCostBudgetUsed = 0;
     this->retainedRecoveredOccurrences.clear();
     this->skippedMeshCount = 0;
     this->visibleMeshCount = 0;
@@ -1359,6 +1490,19 @@ mesh_lod_payload_memory_limited_for_epoch(
 	request.requestedLevel > payload->activeLevel ? TRUE : FALSE;
 }
 
+static void
+mesh_lod_note_upward_resident_use(
+    SoBRLMeshLodSubmitAction *action, const SbString &cacheKey,
+    int activeLevel, int nextLevel)
+{
+    if (!action || !action->getService() || nextLevel <= activeLevel ||
+	cacheKey.getLength() == 0)
+	return;
+    BObolLodCacheKey key;
+    key.value = cacheKey;
+    action->getService()->noteResidentMeshUse(key);
+}
+
 /* The scene allocator, rather than an arbitrary PoP-level step, chooses the
  * exact population cut whose complete added face cost is admitted. */
 static int
@@ -1476,7 +1620,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	 * renderer's aggregate point channel bound that mesh floor. */
 	if (submitAction->compactEntryFirst == 0 &&
 	    submitAction->compactEntryLimit == SIZE_MAX &&
-	    submitAction->retainedSceneFaceBudget != SIZE_MAX &&
+	    submitAction->retainedSceneCostBudget != SIZE_MAX &&
 	    submitAction->viewState) {
 	    struct RetainedCandidate {
 		const BObolViewLodState::CadPayload *payload;
@@ -1486,6 +1630,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		int minimumLevel;
 		int requestedLevel;
 		size_t minimumFaces;
+		size_t minimumCost;
+		int admittedLevel;
+		size_t admittedFaces;
+		size_t admittedCost;
 	    };
 	    std::vector<const BObolViewLodState::CadPayload *> activePayloads;
 	    std::vector<RetainedCandidate> retainedCandidates;
@@ -1525,6 +1673,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		candidate.minimumLevel = payload->activeLevel;
 		candidate.requestedLevel = projected.requestedLevel;
 		candidate.minimumFaces = payload->counts.faceCount;
+		candidate.minimumCost = bobol_lod_render_cost_units(
+		    payload->counts, payload->drawMode, 1);
+		candidate.admittedLevel = candidate.minimumLevel;
+		candidate.admittedFaces = candidate.minimumFaces;
+		candidate.admittedCost = candidate.minimumCost;
 		if (payload->progressiveMesh) {
 		    candidate.minimumLevel =
 			payload->progressiveMesh->minimumLevel();
@@ -1537,6 +1690,16 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    candidate.minimumFaces =
 			payload->progressiveMesh->faceCount(
 			    candidate.minimumLevel);
+		    BObolLodCounts minimumCounts;
+		    minimumCounts.faceCount = candidate.minimumFaces;
+		    minimumCounts.pointCount =
+			payload->progressiveMesh->pointCount(
+			    candidate.minimumLevel);
+		    candidate.minimumCost = bobol_lod_render_cost_units(
+			minimumCounts, payload->drawMode, 1);
+		    candidate.admittedLevel = candidate.minimumLevel;
+		    candidate.admittedFaces = candidate.minimumFaces;
+		    candidate.admittedCost = candidate.minimumCost;
 		}
 		retainedCandidates.push_back(std::move(candidate));
 	    }
@@ -1549,15 +1712,64 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    return a.projectedPixels > b.projectedPixels;
 		return bu_strcmp(a.occurrenceKey.getString(),
 		    b.occurrenceKey.getString()) < 0;
-		});
+	    });
+	    /* Reserve coverage for every visible occurrence first, then preserve
+	     * the richest already-active prefix which fits the remaining scene
+	     * allowance in screen-priority order.  The old recovery path reset
+	     * every retained mesh to its minimum prefix and relied on later passes
+	     * to walk upward again.  Even a single Lucy therefore flashed from a
+	     * level-7 cut to level 0 before eventually returning to level 6.
+	     *
+	     * This is still a recovery operation: it never promotes beyond the
+	     * existing active cut, never reads or rebuilds geometry, and keeps the
+	     * true projected request as the unsatisfied target.  Zero-cost PoP snap
+	     * improvements are retained automatically. */
+	    size_t minimumSceneCost = 0;
+	    for (const RetainedCandidate &candidate : retainedCandidates)
+		minimumSceneCost = candidate.minimumCost >
+			SIZE_MAX - minimumSceneCost ?
+		    SIZE_MAX : minimumSceneCost + candidate.minimumCost;
+	    size_t upgradeBudget =
+		submitAction->retainedSceneCostBudget > minimumSceneCost ?
+		    submitAction->retainedSceneCostBudget - minimumSceneCost : 0;
+	    if (minimumSceneCost <= submitAction->retainedSceneCostBudget) {
+		for (RetainedCandidate &candidate : retainedCandidates) {
+		    if (!candidate.payload->progressiveMesh)
+			continue;
+		    const int targetLevel = std::min(
+			candidate.payload->activeLevel,
+			candidate.requestedLevel);
+		    for (int level = targetLevel;
+			 level >= candidate.minimumLevel; --level) {
+			if (!candidate.payload->progressiveMesh->canDrawLevel(level))
+			    continue;
+			BObolLodCounts counts;
+			counts.faceCount = candidate.payload->progressiveMesh->
+			    faceCount(level);
+			counts.pointCount = candidate.payload->progressiveMesh->
+			    pointCount(level);
+			const size_t cost = bobol_lod_render_cost_units(
+			    counts, candidate.payload->drawMode, 1);
+			const size_t extra = cost > candidate.minimumCost ?
+			    cost - candidate.minimumCost : 0;
+			if (extra > upgradeBudget)
+			    continue;
+			candidate.admittedLevel = level;
+			candidate.admittedFaces = counts.faceCount;
+			candidate.admittedCost = cost;
+			upgradeBudget -= extra;
+			break;
+		    }
+		}
+	    }
 	    for (const RetainedCandidate &candidate : retainedCandidates) {
 		const size_t remaining =
-		    submitAction->retainedSceneFaceBudgetUsed >=
-			    submitAction->retainedSceneFaceBudget ?
-			0 : submitAction->retainedSceneFaceBudget -
-			    submitAction->retainedSceneFaceBudgetUsed;
+		    submitAction->retainedSceneCostBudgetUsed >=
+			    submitAction->retainedSceneCostBudget ?
+			0 : submitAction->retainedSceneCostBudget -
+			    submitAction->retainedSceneCostBudgetUsed;
 		const bool exceedsBudget =
-		    candidate.minimumFaces > remaining;
+		    candidate.admittedCost > remaining;
 		if (exceedsBudget) {
 		    submitAction->pendingRetainedRefinementCount++;
 		    submitAction->refinementBudgetBlockedCount++;
@@ -1568,25 +1780,25 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			continue;
 		    }
 		}
-		submitAction->retainedSceneFaceBudgetUsed =
-		    candidate.minimumFaces >
+		submitAction->retainedSceneCostBudgetUsed =
+		    candidate.admittedCost >
 			    SIZE_MAX -
-				submitAction->retainedSceneFaceBudgetUsed ?
+				submitAction->retainedSceneCostBudgetUsed ?
 			SIZE_MAX :
-			submitAction->retainedSceneFaceBudgetUsed +
-			    candidate.minimumFaces;
+			submitAction->retainedSceneCostBudgetUsed +
+			    candidate.admittedCost;
 		submitAction->retainedRecoveredOccurrences.insert(
 		    candidate.occurrenceKey.getString());
 		if (candidate.payload->activeLevel !=
-			candidate.minimumLevel &&
-		    candidate.minimumFaces < candidate.payload->counts.faceCount &&
+			candidate.admittedLevel &&
+		    candidate.admittedFaces < candidate.payload->counts.faceCount &&
 		    submitAction->viewState->retargetCadPayload(
-			candidate.payload, candidate.minimumLevel,
+			candidate.payload, candidate.admittedLevel,
 			candidate.requestedLevel,
 			submitAction->viewRevision,
 			submitAction->policyRevision))
 		    submitAction->updatedCutCount++;
-		if (candidate.minimumLevel < candidate.requestedLevel)
+		if (candidate.admittedLevel < candidate.requestedLevel)
 		    submitAction->pendingRetainedRefinementCount++;
 	    }
 	}
@@ -1595,7 +1807,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    float projectedPixels;
 	    double projectedErrorPixels;
 	    double visualFootprint;
-	    double refinementValuePerFace;
+	    double refinementValuePerCost;
 	    int emphasis;
 	    bool needsCoverage;
 	    bool qualityFloorViolation;
@@ -1694,7 +1906,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    candidate.projectedErrorPixels >
 			std::max(1.0, static_cast<double>(
 			    projected.targetPixelError) * 3.0);
-		candidate.refinementValuePerFace =
+		candidate.refinementValuePerCost =
 		    static_cast<double>(candidate.projectedPixels);
 		/* Rank already-covered leaves by visible PoP error reduction per
 		 * additional face.  Raw object size alone lets large, already
@@ -1719,8 +1931,21 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			    active->activeLevel);
 		    const size_t nextFaces =
 			active->progressiveMesh->hierarchyFaceCount(nextLevel);
-		    const size_t addedFaces = nextFaces > activeFaces ?
-			nextFaces - activeFaces : 1;
+		    BObolLodCounts activeCounts;
+		    activeCounts.faceCount = activeFaces;
+		    activeCounts.pointCount =
+			active->progressiveMesh->hierarchyPointCount(
+			    active->activeLevel);
+		    BObolLodCounts nextCounts;
+		    nextCounts.faceCount = nextFaces;
+		    nextCounts.pointCount =
+			active->progressiveMesh->hierarchyPointCount(nextLevel);
+		    const size_t activeCost = bobol_lod_render_cost_units(
+			activeCounts, sourceDrawMode, 0);
+		    const size_t nextCost = bobol_lod_render_cost_units(
+			nextCounts, sourceDrawMode, 0);
+		    const size_t addedCost = nextCost > activeCost ?
+			nextCost - activeCost : 1;
 		    const double currentError = std::ldexp(
 			static_cast<double>(candidate.projectedPixels),
 			-active->activeLevel);
@@ -1730,8 +1955,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    const double visibleBenefit =
 			std::max(1.0, candidate.visualFootprint) *
 			std::max(0.0, currentError - nextError);
-		    candidate.refinementValuePerFace =
-			visibleBenefit / static_cast<double>(addedFaces);
+		    candidate.refinementValuePerCost =
+			visibleBenefit / static_cast<double>(addedCost);
 		}
 		candidates.push_back(std::move(candidate));
 	    }
@@ -1754,12 +1979,12 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    (a.projectedErrorPixels < b.projectedErrorPixels ||
 		     a.projectedErrorPixels > b.projectedErrorPixels))
 		    return a.projectedErrorPixels > b.projectedErrorPixels;
-		if (a.refinementValuePerFace <
-			b.refinementValuePerFace ||
-		    a.refinementValuePerFace >
-			b.refinementValuePerFace)
-		    return a.refinementValuePerFace >
-			b.refinementValuePerFace;
+		if (a.refinementValuePerCost <
+			b.refinementValuePerCost ||
+		    a.refinementValuePerCost >
+			b.refinementValuePerCost)
+		    return a.refinementValuePerCost >
+			b.refinementValuePerCost;
 		if (a.projectedPixels < b.projectedPixels ||
 		    a.projectedPixels > b.projectedPixels)
 		    return a.projectedPixels > b.projectedPixels;
@@ -1825,7 +2050,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    static_cast<int>(i), summary))
 		continue;
 	    if (!summary.valid || !summary.visible) {
-		if (submitAction->retainedSceneFaceBudget != SIZE_MAX &&
+		if (submitAction->retainedSceneCostBudget != SIZE_MAX &&
 		    submitAction->viewState &&
 		    summary.sourceInstanceKey.getLength() > 0) {
 		    const BObolViewLodState::CadPayload *inactive =
@@ -1914,7 +2139,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->viewVolume, submitAction->view,
 		    submitAction->targetPixelError,
 		    compactViewProjectionPtr)) {
-		    if (submitAction->retainedSceneFaceBudget != SIZE_MAX &&
+		    if (submitAction->retainedSceneCostBudget != SIZE_MAX &&
 			submitAction->viewState) {
 			const BObolViewLodState::CadPayload *offscreen =
 			    submitAction->viewState->findCadForOccurrence(
@@ -1992,8 +2217,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		submitAction->retainedRecoveredOccurrences.find(
 		    request.occurrenceKey.getString()) ==
 		    submitAction->retainedRecoveredOccurrences.end() &&
-		submitAction->retainedSceneFaceBudget != SIZE_MAX) {
+		submitAction->retainedSceneCostBudget != SIZE_MAX) {
 		size_t admittedFaces = activePayload->counts.faceCount;
+		BObolLodCounts admittedCounts = activePayload->counts;
 		int admittedLevel = request.requestedLevel;
 		const int targetLevel = request.requestedLevel;
 		if (activePayload->progressiveMesh) {
@@ -2010,6 +2236,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    admittedFaces =
 			activePayload->progressiveMesh->
 			    hierarchyFaceCount(admittedLevel);
+		    admittedCounts.faceCount = admittedFaces;
+		    admittedCounts.pointCount =
+			activePayload->progressiveMesh->
+			    hierarchyPointCount(admittedLevel);
 		    /*
 		     * If this caller has explicitly prohibited a cut downgrade,
 		     * or the minimum prefix saves no submitted faces, retained
@@ -2023,15 +2253,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			admittedFaces >= activePayload->counts.faceCount) {
 			admittedLevel = activePayload->activeLevel;
 			admittedFaces = activePayload->counts.faceCount;
+			admittedCounts = activePayload->counts;
 		    }
 		}
+		const size_t admittedCost = bobol_lod_render_cost_units(
+		    admittedCounts, request.drawMode, 1);
 		const size_t remaining =
-		    submitAction->retainedSceneFaceBudgetUsed >=
-			    submitAction->retainedSceneFaceBudget ?
-			0 : submitAction->retainedSceneFaceBudget -
-			    submitAction->retainedSceneFaceBudgetUsed;
+		    submitAction->retainedSceneCostBudgetUsed >=
+			    submitAction->retainedSceneCostBudget ?
+			0 : submitAction->retainedSceneCostBudget -
+			    submitAction->retainedSceneCostBudgetUsed;
 		const SbBool admissionBlocked =
-		    admittedFaces > remaining ? TRUE : FALSE;
+		    admittedCost > remaining ? TRUE : FALSE;
 		if (admissionBlocked) {
 		    submitAction->pendingRetainedRefinementCount++;
 		    submitAction->refinementBudgetBlockedCount++;
@@ -2047,13 +2280,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			continue;
 		    }
 		}
-		submitAction->retainedSceneFaceBudgetUsed =
-		    admittedFaces >
+		submitAction->retainedSceneCostBudgetUsed =
+		    admittedCost >
 			    SIZE_MAX -
-				submitAction->retainedSceneFaceBudgetUsed ?
+				submitAction->retainedSceneCostBudgetUsed ?
 			SIZE_MAX :
-			submitAction->retainedSceneFaceBudgetUsed +
-			    admittedFaces;
+			submitAction->retainedSceneCostBudgetUsed +
+			    admittedCost;
 		submitAction->retainedRecoveredOccurrences.insert(
 		    request.occurrenceKey.getString());
 		if (activePayload->progressiveMesh) {
@@ -2153,7 +2386,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		     * Charge a minimum drawable shared prefix to the total retained
 		     * admission budget here.  A later current-view epoch refines it
 		     * with the ordinary marginal face allowance. */
-		    if (submitAction->retainedSceneFaceBudget != SIZE_MAX)
+		    if (submitAction->retainedSceneCostBudget != SIZE_MAX)
 			reusedLevel = minimumLevel;
 		    while (reusedLevel >= minimumLevel &&
 			!reusable->progressiveMesh->canDrawLevel(reusedLevel))
@@ -2161,33 +2394,39 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    if (reusedLevel >= minimumLevel) {
 			const size_t reusedFaces =
 			    reusable->progressiveMesh->faceCount(reusedLevel);
+			BObolLodCounts reusedCounts;
+			reusedCounts.faceCount = reusedFaces;
+			reusedCounts.pointCount =
+			    reusable->progressiveMesh->pointCount(reusedLevel);
+			const size_t reusedCost = bobol_lod_render_cost_units(
+			    reusedCounts, request.drawMode, 1);
 			SbBool admitted = TRUE;
-			if (submitAction->retainedSceneFaceBudget != SIZE_MAX) {
+			if (submitAction->retainedSceneCostBudget != SIZE_MAX) {
 			    const size_t remaining =
-				submitAction->retainedSceneFaceBudgetUsed >=
-					submitAction->retainedSceneFaceBudget ?
+				submitAction->retainedSceneCostBudgetUsed >=
+					submitAction->retainedSceneCostBudget ?
 				    0 :
-				    submitAction->retainedSceneFaceBudget -
+				    submitAction->retainedSceneCostBudget -
 				    submitAction->
-					    retainedSceneFaceBudgetUsed;
-			    if (reusedFaces > remaining) {
+					    retainedSceneCostBudgetUsed;
+			    if (reusedCost > remaining) {
 				submitAction->refinementBudgetBlockedCount++;
 				admitted =
 				    submitAction->preserveMeshCoverage;
 			    }
 			    if (admitted)
-				submitAction->retainedSceneFaceBudgetUsed =
-				    reusedFaces >
+				submitAction->retainedSceneCostBudgetUsed =
+				    reusedCost >
 					    SIZE_MAX -
 						submitAction->
-						    retainedSceneFaceBudgetUsed ?
+						    retainedSceneCostBudgetUsed ?
 					SIZE_MAX :
 					submitAction->
-					    retainedSceneFaceBudgetUsed +
-					    reusedFaces;
+					    retainedSceneCostBudgetUsed +
+					    reusedCost;
 			} else {
-			    admitted = submitAction->reserveInitialFaceCost(
-				reusedFaces);
+			    admitted = submitAction->reserveInitialCost(
+				reusedCounts, request.drawMode);
 			}
 			if (!admitted) {
 			    submitAction->pendingRetainedRefinementCount++;
@@ -2266,7 +2505,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		retargetLevel > activePayload->activeLevel) {
 		retargetLevel = submitAction->reserveRefinementLevel(
 		    activePayload->progressiveMesh,
-		    activePayload->activeLevel, retargetLevel);
+		    activePayload->activeLevel, retargetLevel,
+		    request.drawMode);
 		if (retargetLevel <= activePayload->activeLevel) {
 		    (void)submitAction->viewState->retargetCadPayload(
 			activePayload, activePayload->activeLevel,
@@ -2280,8 +2520,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    if (submitAction->reset == 0 && activePayload &&
 		activeAssetMatches &&
 		retargetLevel >= 0 &&
-		activePayload->activeLevel != retargetLevel &&
-		submitAction->viewState->retargetCadPayload(activePayload,
+		activePayload->activeLevel != retargetLevel) {
+		mesh_lod_note_upward_resident_use(submitAction,
+		    activePayload->cacheKey, activePayload->activeLevel,
+		    retargetLevel);
+		if (submitAction->viewState->retargetCadPayload(activePayload,
 		    retargetLevel, request.requestedLevel,
 		    request.viewRevision.value(),
 		    request.policyRevision.value())) {
@@ -2307,9 +2550,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		 * still-missing suffix. */
 		if (retargetLevel == request.requestedLevel)
 		    continue;
+		}
 	    }
 
 	    int providerDeliveryLevel = -1;
+	    int providerPresentationLevel = -1;
 	    if (!submitAction->useForcedLevel && activePayload &&
 		activePayload->progressiveMesh &&
 		request.requestedLevel > activePayload->activeLevel &&
@@ -2317,19 +2562,27 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		const int preferredLevel = mesh_lod_bounded_delivery_level(
 		    activePayload->progressiveMesh,
 		    activePayload->activeLevel, request.requestedLevel);
-		providerDeliveryLevel =
+		providerPresentationLevel =
 		    submitAction->reserveRefinementLevel(
 			activePayload->progressiveMesh,
-			activePayload->activeLevel, preferredLevel);
-		if (providerDeliveryLevel <= activePayload->activeLevel) {
+			activePayload->activeLevel, preferredLevel,
+			request.drawMode);
+		if (providerPresentationLevel <= activePayload->activeLevel) {
 		    (void)submitAction->viewState->retargetCadPayload(
 			activePayload, activePayload->activeLevel,
 			request.requestedLevel, request.viewRevision.value(),
 			request.policyRevision.value());
 		    submitAction->pendingRetainedRefinementCount++;
-		    submitAction->skippedMeshCount++;
-		    continue;
+		    if (!submitAction->allowResidentPrefetch ||
+			activePayload->progressiveMesh->canDrawLevel(
+			    request.requestedLevel)) {
+			submitAction->skippedMeshCount++;
+			continue;
+		    }
+		    providerPresentationLevel = activePayload->activeLevel;
 		}
+		providerDeliveryLevel = submitAction->allowResidentPrefetch ?
+		    request.requestedLevel : providerPresentationLevel;
 	    }
 	    if (getenv("BOBOL_LOD_TRACE_BUDGET"))
 		bu_log("BObol LoD provider admission object=%s occurrence=%s "
@@ -2339,7 +2592,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		       activePayload ? activePayload->activeLevel : -1,
 		       request.requestedLevel,
 		       activeAssetMatches ? 1 : 0,
-		       submitAction->refinementFaceBudget);
+		       submitAction->refinementCostBudget);
 
 	    if (static_cast<size_t>(submitAction->submittedTaskCount) +
 		    pendingTasks.size() >=
@@ -2354,8 +2607,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 
 	    size_t initialFaceAllowance = 0;
 	    if (!activePayload &&
-		!submitAction->reserveInitialFaces(
-		    request.sourceCounts.faceCount, initialFaceAllowance)) {
+		!submitAction->reserveInitialCost(
+		    request.sourceCounts.faceCount,
+		    request.sourceCounts.pointCount, request.drawMode,
+		    initialFaceAllowance)) {
 		submitAction->pendingRetainedRefinementCount++;
 		submitAction->skippedMeshCount++;
 		continue;
@@ -2373,7 +2628,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    provider->brepTessellationNormTol = brepVariant.normTol;
 	    provider->brepVariantMemoryLimited = brepVariant.memoryLimited;
 	    provider->service = submitAction->service;
-	    provider->dbip = submitAction->dbip;
+	    if (!provider->setDatabase(submitAction->dbip)) {
+		delete provider;
+		submitAction->skippedMeshCount++;
+		continue;
+	    }
 	    provider->view = submitAction->view;
 	    provider->useView = TRUE;
 	    provider->refreshMissing = submitAction->refreshMissing;
@@ -2385,6 +2644,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    provider->useDeliveryLevelLimit =
 		providerDeliveryLevel >= 0 ? TRUE : FALSE;
 	    provider->deliveryLevelLimit = providerDeliveryLevel;
+	    provider->usePresentationLevelLimit =
+		providerPresentationLevel >= 0 && providerDeliveryLevel >
+		    providerPresentationLevel ? TRUE : FALSE;
+	    provider->presentationLevelLimit = providerPresentationLevel;
 	    /*
 	     * The scene allocator has already charged the complete marginal
 	     * population of this exact cut.  Do not apply a second per-asset
@@ -2578,7 +2841,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	retargetLevel > activePayload->activeLevel) {
 	retargetLevel = submitAction->reserveRefinementLevel(
 	    activePayload->progressiveMesh, activePayload->activeLevel,
-	    retargetLevel);
+	    retargetLevel, request.drawMode);
 	if (retargetLevel <= activePayload->activeLevel) {
 	    (void)submitAction->viewState->retargetCadPayload(activePayload,
 		activePayload->activeLevel, request.requestedLevel,
@@ -2592,8 +2855,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     if (submitAction->reset == 0 && activePayload &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
 	retargetLevel >= 0 &&
-	activePayload->activeLevel != retargetLevel &&
-	submitAction->viewState->retargetCadPayload(activePayload,
+	activePayload->activeLevel != retargetLevel) {
+	mesh_lod_note_upward_resident_use(submitAction,
+	    activePayload->cacheKey, activePayload->activeLevel,
+	    retargetLevel);
+	if (submitAction->viewState->retargetCadPayload(activePayload,
 	    retargetLevel, request.requestedLevel, request.viewRevision.value(),
 	    request.policyRevision.value())) {
 	submitAction->updatedCutCount++;
@@ -2605,6 +2871,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	if (retargetLevel == request.requestedLevel) {
 	    source->doAction(action);
 	    return;
+	}
 	}
     }
 
@@ -2620,6 +2887,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	return;
     }
     int providerDeliveryLevel = -1;
+    int providerPresentationLevel = -1;
     if (!submitAction->useForcedLevel && activePayload &&
 	activePayload->progressiveMesh &&
 	request.requestedLevel > activePayload->activeLevel &&
@@ -2627,24 +2895,33 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	const int preferredLevel = mesh_lod_bounded_delivery_level(
 	    activePayload->progressiveMesh,
 	    activePayload->activeLevel, request.requestedLevel);
-	providerDeliveryLevel = submitAction->reserveRefinementLevel(
+	providerPresentationLevel = submitAction->reserveRefinementLevel(
 	    activePayload->progressiveMesh, activePayload->activeLevel,
-	    preferredLevel);
-	if (providerDeliveryLevel <= activePayload->activeLevel) {
+	    preferredLevel, request.drawMode);
+	if (providerPresentationLevel <= activePayload->activeLevel) {
 	    (void)submitAction->viewState->retargetCadPayload(activePayload,
 		activePayload->activeLevel, request.requestedLevel,
 		request.viewRevision.value(), request.policyRevision.value());
 	    submitAction->pendingRetainedRefinementCount++;
-	    submitAction->skippedMeshCount++;
-	    source->doAction(action);
-	    return;
+	    if (!submitAction->allowResidentPrefetch ||
+		activePayload->progressiveMesh->canDrawLevel(
+		    request.requestedLevel)) {
+		submitAction->skippedMeshCount++;
+		source->doAction(action);
+		return;
+	    }
+	    providerPresentationLevel = activePayload->activeLevel;
 	}
+	providerDeliveryLevel = submitAction->allowResidentPrefetch ?
+	    request.requestedLevel : providerPresentationLevel;
     }
 
     size_t initialFaceAllowance = 0;
     if (!activePayload &&
-	!submitAction->reserveInitialFaces(
-	    request.sourceCounts.faceCount, initialFaceAllowance)) {
+	!submitAction->reserveInitialCost(
+	    request.sourceCounts.faceCount,
+	    request.sourceCounts.pointCount, request.drawMode,
+	    initialFaceAllowance)) {
 	submitAction->pendingRetainedRefinementCount++;
 	submitAction->skippedMeshCount++;
 	source->doAction(action);
@@ -2653,7 +2930,12 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 
     BObolMeshLodProvider *provider = new BObolMeshLodProvider;
     provider->service = submitAction->service;
-    provider->dbip = submitAction->dbip;
+    if (!provider->setDatabase(submitAction->dbip)) {
+	delete provider;
+	submitAction->skippedMeshCount++;
+	source->doAction(action);
+	return;
+    }
     provider->view = submitAction->view;
     provider->useView = TRUE;
     provider->refreshMissing = submitAction->refreshMissing;
@@ -2665,6 +2947,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     provider->useDeliveryLevelLimit =
 	providerDeliveryLevel >= 0 ? TRUE : FALSE;
     provider->deliveryLevelLimit = providerDeliveryLevel;
+    provider->usePresentationLevelLimit =
+	providerPresentationLevel >= 0 && providerDeliveryLevel >
+	    providerPresentationLevel ? TRUE : FALSE;
+    provider->presentationLevelLimit = providerPresentationLevel;
     if (provider->useDeliveryLevelLimit)
 	provider->progressiveDelivery = FALSE;
     if (initialFaceAllowance) {
@@ -2804,7 +3090,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	retargetLevel > viewPayload->activeLevel) {
 	retargetLevel = submitAction->reserveRefinementLevel(
 	    viewPayload->progressiveMesh, viewPayload->activeLevel,
-	    retargetLevel);
+	    retargetLevel, request.drawMode);
 	if (retargetLevel <= viewPayload->activeLevel) {
 	    (void)submitAction->viewState->retargetMeshPayload(viewPayload,
 		viewPayload->activeLevel, request.requestedLevel,
@@ -2817,8 +3103,10 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     if (submitAction->reset == 0 && viewPayload &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&
 	viewPayload->activeLevel != retargetLevel &&
-	retargetLevel >= 0 &&
-	submitAction->viewState->retargetMeshPayload(viewPayload,
+	retargetLevel >= 0) {
+	mesh_lod_note_upward_resident_use(submitAction,
+	    viewPayload->cacheKey, viewPayload->activeLevel, retargetLevel);
+	if (submitAction->viewState->retargetMeshPayload(viewPayload,
 	    retargetLevel, request.requestedLevel, request.viewRevision.value(),
 	    request.policyRevision.value())) {
 	submitAction->updatedCutCount++;
@@ -2828,6 +3116,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	}
 	if (retargetLevel == request.requestedLevel)
 	    return;
+	}
     }
     if (!submitAction->useForcedLevel && submitAction->reset == 0 &&
 	request.requestedLevel < 0 && viewPayload &&
@@ -2847,6 +3136,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	return;
     }
     int providerDeliveryLevel = -1;
+    int providerPresentationLevel = -1;
     if (!submitAction->useForcedLevel && viewPayload &&
 	viewPayload->progressiveMesh &&
 	request.requestedLevel > viewPayload->activeLevel &&
@@ -2854,23 +3144,32 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	const int preferredLevel = mesh_lod_bounded_delivery_level(
 	    viewPayload->progressiveMesh,
 	    viewPayload->activeLevel, request.requestedLevel);
-	providerDeliveryLevel = submitAction->reserveRefinementLevel(
+	providerPresentationLevel = submitAction->reserveRefinementLevel(
 	    viewPayload->progressiveMesh, viewPayload->activeLevel,
-	    preferredLevel);
-	if (providerDeliveryLevel <= viewPayload->activeLevel) {
+	    preferredLevel, request.drawMode);
+	if (providerPresentationLevel <= viewPayload->activeLevel) {
 	    (void)submitAction->viewState->retargetMeshPayload(viewPayload,
 		viewPayload->activeLevel, request.requestedLevel,
 		request.viewRevision.value(), request.policyRevision.value());
 	    submitAction->pendingRetainedRefinementCount++;
-	    submitAction->skippedMeshCount++;
-	    return;
+	    if (!submitAction->allowResidentPrefetch ||
+		viewPayload->progressiveMesh->canDrawLevel(
+		    request.requestedLevel)) {
+		submitAction->skippedMeshCount++;
+		return;
+	    }
+	    providerPresentationLevel = viewPayload->activeLevel;
 	}
+	providerDeliveryLevel = submitAction->allowResidentPrefetch ?
+	    request.requestedLevel : providerPresentationLevel;
     }
 
     size_t initialFaceAllowance = 0;
     if (!viewPayload &&
-	!submitAction->reserveInitialFaces(
-	    request.sourceCounts.faceCount, initialFaceAllowance)) {
+	!submitAction->reserveInitialCost(
+	    request.sourceCounts.faceCount,
+	    request.sourceCounts.pointCount, request.drawMode,
+	    initialFaceAllowance)) {
 	submitAction->pendingRetainedRefinementCount++;
 	submitAction->skippedMeshCount++;
 	return;
@@ -2878,7 +3177,11 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 
     BObolMeshLodProvider *provider = new BObolMeshLodProvider;
     provider->service = submitAction->service;
-    provider->dbip = submitAction->dbip;
+    if (!provider->setDatabase(submitAction->dbip)) {
+	delete provider;
+	submitAction->skippedMeshCount++;
+	return;
+    }
     provider->view = submitAction->view;
     provider->useView = TRUE;
     provider->refreshMissing = submitAction->refreshMissing;
@@ -2890,6 +3193,10 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     provider->useDeliveryLevelLimit =
 	providerDeliveryLevel >= 0 ? TRUE : FALSE;
     provider->deliveryLevelLimit = providerDeliveryLevel;
+    provider->usePresentationLevelLimit =
+	providerPresentationLevel >= 0 && providerDeliveryLevel >
+	    providerPresentationLevel ? TRUE : FALSE;
+    provider->presentationLevelLimit = providerPresentationLevel;
     if (provider->useDeliveryLevelLimit)
 	provider->progressiveDelivery = FALSE;
     if (initialFaceAllowance) {

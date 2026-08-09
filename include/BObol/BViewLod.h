@@ -49,6 +49,33 @@ class SoCADAssembly;
 class BOBOL_EXPORT BObolViewLodState
 {
 public:
+    /** Renderer-neutral aggregate of the most recent complete-frame CAD GPU
+     * resource snapshots.  Assembly identity is deduplicated before summing. */
+    struct BOBOL_EXPORT CadGpuResourceStatus {
+        size_t trackedBufferBytes = 0;
+        size_t ordinaryPartBufferBytes = 0;
+        size_t progressiveCutBufferBytes = 0;
+        size_t progressiveActiveCutBytes = 0;
+        size_t batchBufferBytes = 0;
+        size_t triangleAtlasAllocatedBytes = 0;
+        size_t triangleAtlasLiveBytes = 0;
+        size_t triangleAtlasConfiguredCapacityBytes = 0;
+        size_t triangleAtlasPartCount = 0;
+        size_t triangleAtlasPageCount = 0;
+        uint64_t ordinaryPartFullUploadBytes = 0;
+        uint64_t ordinaryPartSuffixUploadBytes = 0;
+        uint64_t ordinaryPartGpuCopyBytes = 0;
+        uint64_t ordinaryPartLineageReuseCount = 0;
+        uint64_t triangleAtlasFullUploadBytes = 0;
+        uint64_t triangleAtlasSuffixUploadBytes = 0;
+        uint64_t triangleAtlasLineageReuseCount = 0;
+        size_t pressureProxyCount = 0;
+        uint64_t progressiveEvictionCount = 0;
+        uint64_t triangleAtlasReclamationCount = 0;
+        uint64_t sampleSerial = 0;
+        SbBool memoryPressure = FALSE;
+    };
+
     enum NormalStyle {
 	NORMAL_AUTHORED = 0,
 	NORMAL_FLAT = 1,
@@ -247,14 +274,29 @@ public:
      * arrays are counted once per displayed occurrence because render cost
      * follows instances, not storage aliases. */
     size_t activeFaceCount(void) const;
+    /* Multi-cost scheduler population in shaded-triangle equivalents. */
+    size_t activeRenderCost(void) const;
     /* Actual retained CAD triangle submissions from the most recently
      * completed render.  Returns FALSE when any active CAD presentation did
      * not use a renderer tier with an exact submitted-triangle diagnostic. */
     SbBool lastCadPresentedTriangleCount(size_t &faces) const;
+    /* Exact submitted shaded work translated into the same weighted units as
+     * activeRenderCost and scene admission.  Unlike a triangle-ratio
+     * estimate, this preserves the active PoP cut's point/normal population. */
+    SbBool lastCadPresentedRenderCost(size_t &cost) const;
     /* Latest completed asynchronous GPU timer aggregate.  The serial changes
      * only when at least one retained CAD context publishes a newer result. */
     SbBool lastCadGpuMeasurement(size_t &faces,
 	uint64_t &nanoseconds, uint64_t &serial) const;
+    /** Sample every unique active CAD assembly once after a complete frame.
+     * The individual presentation, timer, replay, and resource queries below
+     * then read one retained aggregate instead of independently walking the
+     * source-presentation map. */
+    void refreshCadPresentationFrameStatus(void) const;
+    /** Aggregate exact Obol-owned buffer accounting from unique active CAD
+     * presentations.  Once the completed frame has been sampled this query
+     * is O(1), never O(parts) or O(source presentations). */
+    SbBool cadGpuResourceStatus(CadGpuResourceStatus &status) const;
     /* TRUE only when every active retained CAD presentation used a reusable
      * indirect command record or flattened transformed atlas in the most
      * recent frame. */
@@ -366,6 +408,23 @@ private:
     mutable float cadPresentationPointProxyPixelThreshold;
     mutable SbBool cadPresentationCameraMotionFrameReuse;
     mutable std::unordered_map<std::string, CadPresentation> cadPresentations;
+    /* Multiple semantic source keys may share one retained assembly.  Track
+     * that uniqueness at mutation time so completed-frame policy never has
+     * to allocate a temporary set or scan duplicate bindings. */
+    mutable std::unordered_map<const SoCADAssembly *, size_t>
+	cadPresentationAssemblyUseCounts;
+    mutable SbBool cadPresentationFrameStatusValid;
+    mutable SbBool cadLastPresentedTriangleCountValid;
+    mutable size_t cadLastPresentedTriangleCount;
+    mutable SbBool cadLastPresentedRenderCostValid;
+    mutable size_t cadLastPresentedRenderCost;
+    mutable SbBool cadLastGpuMeasurementValid;
+    mutable size_t cadLastGpuFaces;
+    mutable uint64_t cadLastGpuNanoseconds;
+    mutable uint64_t cadLastGpuSerial;
+    mutable SbBool cadLastPreparedReplay;
+    mutable SbBool cadGpuResourceStatusValid;
+    mutable CadGpuResourceStatus cadGpuResourceStatusValue;
     /* Authoritative CAD occurrence telemetry is maintained at mutation
      * points.  These values are read on the presentation/UI thread several
      * times per frame; scanning and locking every resident progressive mesh
@@ -380,6 +439,7 @@ private:
     size_t cadSatisfiedMeshPayloadCount;
     size_t cadMemoryLimitedMeshPayloadCount;
     size_t cadActiveFaceCount;
+    size_t cadActiveRenderCost;
     size_t cadDisplayMeshBytes;
     size_t cadProxyKindCounts[5];
     size_t cadProgressiveLevelCounts[16];

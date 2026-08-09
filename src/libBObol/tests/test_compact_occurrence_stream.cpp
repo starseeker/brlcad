@@ -39,6 +39,7 @@ test_priority_and_state(void)
     if (stream.getExpectedCount() != 100000 ||
 	!stream.hasWarmCoverageComplete() ||
 	!stream.hasCoverageBoundsComplete() ||
+	stream.hasCoverageBoundsDrained() ||
 	stream.isCancelled() || stream.size() != 5) {
 	std::fprintf(stderr, "FAIL: stream state\n");
 	return 1;
@@ -49,6 +50,7 @@ test_priority_and_state(void)
 	first[0].occurrenceIndex != 1 ||
 	first[1].occurrenceIndex != 2 ||
 	first[2].occurrenceIndex != 10 ||
+	!stream.hasCoverageBoundsDrained() ||
 	stream.size() != 2) {
 	std::fprintf(stderr, "FAIL: priority drain order\n");
 	return 1;

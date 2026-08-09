@@ -18,6 +18,10 @@ The primary matrix dimensions are:
 - Initial draw return, 50 ms, 200 ms, 1.5 seconds, and stable checkpoints.
 - `ae 90 0`, zoom in/out/return, sustained held-button rotation checkpoints,
   and post-release stable checkpoints.
+- Atomic command transactions for compound camera setup.  In particular,
+  orientation plus `autoview` is committed before Qt updates are re-enabled,
+  so an intentionally incomplete intermediate camera is never presented as a
+  one-frame jump while an operator watches the replay.
 - Lazy hierarchy expansion, exact-path selection/highlighting, nested
   erase/redraw while selected, and selection clearing for models with a
   declared hierarchy probe.
@@ -135,9 +139,37 @@ database-source placeholder cannot satisfy the first-useful-frame gate.
 The inspected model area excludes the border, bottom HUD, and right-side
 convergence indicator; those widgets must never be counted as geometry.
 Lucy's terminal check is stricter still: it requires a resident PoP asset,
-nonzero progressive faces, an entry-backed CAD payload, and filled model
-pixels.  A correctly framed box followed by an empty or permanently skipped
-mesh is a failure in both cold and warm runs.
+nonzero progressive faces, an entry-backed CAD payload, filled model pixels,
+and at least PoP level 5 in the fixed shaded `ae 90 0` view.  Level 4 is still
+a block silhouette and its level-5 successor fits OSMesa's stable frame target;
+accepting any nonzero mesh allowed premature compaction to masquerade as a
+successful terminal view.  A correctly framed box followed by an empty,
+permanently skipped, or unrecognizably coarse mesh is a failure in both cold
+and warm runs.
+Its smooth-zoom probe keeps a gesture active while low-amplitude wheel events
+arrive faster than the quiet debounce.  Before release, both backends must
+load the missing pixel-demanded suffix and submit an effective PoP level
+richer than the pre-zoom stable image.  That proof may occur at the fixed
+in-gesture checkpoint or the later low-amplitude checkpoint: OSMesa may use the
+render-only ceiling to back down a subsequently measured discrete quality
+probe at 100 ms, but the retained occurrence must not restart at its minimum
+cut.  System GL additionally requires flat cumulative
+full-upload bytes and increasing suffix-upload, lineage-reuse, and (when the
+buffer grows) device-copy bytes.  The following quiet checkpoints wait past
+the 750 ms memory-maintenance delay and prove that prefetched residency is
+compacted without losing the useful same-scale return cut.
+
+`QOpenGLWidget::grabFramebuffer()` can itself request and time a render.  A
+checkpoint is therefore instrumentation, not a passive sample.  Stable zoom
+checkpoints use repeated capture/idle settling and validation selects the final
+sample for that name; the start and same-scale return include a final recovery
+round because a cold discrete cut may cross the hard presentation deadline
+only after several otherwise unchanged samples.  Without that round, the
+script can label the deadline-triggered recovery sample stable and immediately
+begin another gesture.  Continuous-interaction checkpoints intentionally do
+not settle, since their purpose is to measure the bounded behavior while
+events are still arriving.
+
 For hierarchy probes, framebuffer comparisons additionally require visible
 whole-row tree selection, selected-subpath erase, redraw, and selection-clear
 transitions.  Those hierarchy operations must return within 250 ms and may
@@ -164,6 +196,13 @@ src/qged/tests/qged_gui_matrix.sh --cases generic_twin \
 qged's OSMesa backend currently uses Obol's retained fixed-function VBO path
 by default.  It preserves the same scene/LoD policy and PoP cut selection as
 the System GL renderer, but uses the faster software presentation kernel.
+Both paths consume the same explicit ambient/material/light snapshot; the
+software renderer does not inherit `GL_COLOR_MATERIAL` or stale fixed-function
+light slots from an earlier frame.  Smoke runs for Generic Twin and Lucy also
+capture the `mged` and `studio` lighting profiles and validate their ambient
+intensity and camera-light counts.  Matching geometry, view, and PoP cuts are
+expected to match visually across System GL and OSMesa; software execution is
+allowed to be slower and its frame budget may select a coarser cut.
 Set `OBOL_CAD_SOFTWARE_GLSL=1` to qualify the programmable OSMesa path through
 the same cold/warm matrix.  The opt-in is intentional: the OSMesa GLSL
 interpreter now has correctness-checked four-lane vertex and fragment

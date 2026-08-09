@@ -131,11 +131,11 @@ sameLights(const std::vector<RtLightSnapshot> &a,
 
 static std::vector<RtLightSnapshot>
 controllerAuthoredLights(BObolViewController *controller,
-	const SbViewportRegion &viewportRegion)
+	const SbViewportRegion &viewportRegion, size_t maximumAuthoredLights)
 {
-    static const size_t maximumAuthoredLights = 8u;
     std::vector<RtLightSnapshot> lights;
-    if (!controller)
+
+    if (!controller || !maximumAuthoredLights)
 	return lights;
 
     /* Search both the geometry scene root and the sibling in-scene light group
@@ -200,6 +200,29 @@ controllerAuthoredLights(BObolViewController *controller,
 		snapshot.direction.normalize();
 	    lights.push_back(snapshot);
 	}
+    }
+    return lights;
+}
+
+static std::vector<RtLightSnapshot>
+controllerCameraLights(BObolViewController *controller)
+{
+    std::vector<RtLightSnapshot> lights;
+    if (!controller)
+	return lights;
+    std::vector<BObolSceneLightRealization> realized;
+    controller->getCameraLights(realized);
+    lights.reserve(realized.size());
+    for (size_t i = 0; i < realized.size(); i++) {
+	RtLightSnapshot snapshot;
+	snapshot.kind = RtLightSnapshot::DIRECTIONAL;
+	snapshot.color = realized[i].color;
+	snapshot.intensity = std::max(0.0f,
+	    std::min(1.0f, realized[i].intensity));
+	snapshot.direction = realized[i].direction;
+	if (snapshot.direction.length() > 0.0f)
+	    snapshot.direction.normalize();
+	lights.push_back(snapshot);
     }
     return lights;
 }
@@ -451,6 +474,7 @@ struct BObolRtRenderer::Private {
     };
 
     std::vector<Source> sources;
+    std::vector<RtLightSnapshot> cameraLights;
     std::vector<RtLightSnapshot> authoredLights;
     SbViewVolume viewVolume;
     SbPlane clipPlanes[2];
@@ -462,13 +486,7 @@ struct BObolRtRenderer::Private {
     SbMatrix viewAffine = SbMatrix::identity();
     SbMatrix viewProjection = SbMatrix::identity();
     SbBool lightingEnabled = TRUE;
-    SbBool headlightEnabled = TRUE;
-    SbColor headlightColor = SbColor(1.0f, 1.0f, 1.0f);
-    float headlightIntensity = 1.0f;
-    /* World-space headlight travel direction, kept in sync with the GL path's
-     * camera-tracked / offset headlight (rather than a hardcoded straight-on
-     * light) so the RT preview matches the interactive view. */
-    SbVec3f headlightDirection = SbVec3f(0.0f, 0.0f, -1.0f);
+    float ambientIntensity = 0.18f;
     SbBool transparencyEnabled = TRUE;
     SbBool cameraReady = FALSE;
     SbBool presentationStateReady = FALSE;
@@ -545,6 +563,7 @@ BObolRtRenderer::clear(void)
     if (!p)
 	return;
     p->sources.clear();
+    p->cameraLights.clear();
     p->authoredLights.clear();
     p->cameraReady = FALSE;
     p->presentationStateReady = FALSE;
@@ -576,14 +595,20 @@ BObolRtRenderer::synchronize(BObolViewController *controller)
     const size_t nextClipPlaneCount =
 	controller->getActiveClipPlanes(nextClipPlanes);
     const SbBool nextLightingEnabled = controller->isLightingEnabled();
-    const SbBool nextHeadlightEnabled = controller->isHeadlightEnabled();
-    const SbColor nextHeadlightColor = controller->getHeadlightColor();
-    const float nextHeadlightIntensity = controller->getHeadlightIntensity();
-    const SbVec3f nextHeadlightDirection = controller->getHeadlightDirection();
+    const float nextAmbientIntensity =
+	controller->getLightingAmbientIntensity();
     const SbBool nextTransparencyEnabled =
 	controller->isTransparencyEnabled();
+    const std::vector<RtLightSnapshot> nextCameraLights =
+	controllerCameraLights(controller);
+    /* Match the interactive renderer's eight-light contract exactly.  Camera
+     * lights are traversed first and therefore have priority; database lights
+     * consume only the remaining slots. */
+    const size_t maximumRtLights = 8u;
+    const size_t maximumAuthoredLights = nextCameraLights.size() <
+	maximumRtLights ? maximumRtLights - nextCameraLights.size() : 0u;
     const std::vector<RtLightSnapshot> nextAuthoredLights =
-	controllerAuthoredLights(controller, region);
+	controllerAuthoredLights(controller, region, maximumAuthoredLights);
     const bool controllerPresentationChanged = !p->presentationStateReady ||
 	!p->viewAffine.equals(nextViewAffine, 1.0e-6f) ||
 	!p->viewProjection.equals(nextViewProjection, 1.0e-6f) ||
@@ -592,11 +617,9 @@ BObolRtRenderer::synchronize(BObolViewController *controller)
 	!sameClipPlanes(p->clipPlanes, p->clipPlaneCount, nextClipPlanes,
 	    nextClipPlaneCount) ||
 	p->lightingEnabled != nextLightingEnabled ||
-	p->headlightEnabled != nextHeadlightEnabled ||
-	p->headlightColor != nextHeadlightColor ||
-	std::fabs(p->headlightIntensity - nextHeadlightIntensity) > 1.0e-6f ||
-	!p->headlightDirection.equals(nextHeadlightDirection, 1.0e-6f) ||
+	std::fabs(p->ambientIntensity - nextAmbientIntensity) > 1.0e-6f ||
 	p->transparencyEnabled != nextTransparencyEnabled ||
+	!sameLights(p->cameraLights, nextCameraLights) ||
 	!sameLights(p->authoredLights, nextAuthoredLights);
     std::vector<RtSourceSnapshot> snapshots;
     const std::vector<SoBRLDatabaseSource *> renderSources =
@@ -714,11 +737,9 @@ BObolRtRenderer::synchronize(BObolViewController *controller)
 	++planeIndex)
 	p->clipPlanes[planeIndex] = nextClipPlanes[planeIndex];
     p->lightingEnabled = nextLightingEnabled;
-    p->headlightEnabled = nextHeadlightEnabled;
-    p->headlightColor = nextHeadlightColor;
-    p->headlightIntensity = nextHeadlightIntensity;
-    p->headlightDirection = nextHeadlightDirection;
+    p->ambientIntensity = nextAmbientIntensity;
     p->transparencyEnabled = nextTransparencyEnabled;
+    p->cameraLights = nextCameraLights;
     p->authoredLights = nextAuthoredLights;
     p->cameraReady = TRUE;
     p->presentationStateReady = TRUE;
@@ -927,7 +948,7 @@ BObolRtRenderer::renderRowsInternal(
 	if (!p->lightingEnabled)
 	    return base;
 	const RtMaterialModel material = materialModel(source, hit);
-	SbVec3f shaded = base * material.ambient;
+	SbVec3f shaded = base * (material.ambient * p->ambientIntensity);
 	const auto addLight = [&](SbVec3f toLight, const SbColor &lightColor,
 		float intensity) {
 	    if (intensity <= 0.0f || toLight.length() <= 0.0f)
@@ -952,17 +973,10 @@ BObolRtRenderer::renderRowsInternal(
 	    shaded += litBase * diffuseIllumination + lightColor * specular;
 	};
 
-	/* Match the GL path's headlight: a directional light travelling along
-	 * p->headlightDirection (camera-tracked / offset), not a hardcoded
-	 * straight-on toEye light.  toLight is the direction back toward the
-	 * source, i.e. the negated travel direction.  Honour the headlight
-	 * enable flag so `view lighting headlight 0` also darkens the RT view. */
-	if (p->headlightEnabled) {
-	    SbVec3f headlightToLight = -p->headlightDirection;
-	    if (headlightToLight.length() <= 0.0f)
-		headlightToLight = toEye;
-	    addLight(headlightToLight, p->headlightColor, p->headlightIntensity);
-	}
+	/* Camera lights are already normalized world-space snapshots of the same
+	 * key/fill/rim nodes traversed by GL and OSMesa. */
+	for (const RtLightSnapshot &light : p->cameraLights)
+	    addLight(-light.direction, light.color, light.intensity);
 	for (const RtLightSnapshot &light : p->authoredLights) {
 	    SbVec3f toLight;
 	    float intensity = light.intensity;

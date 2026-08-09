@@ -294,6 +294,15 @@ BObolCompactOccurrenceStream::hasCoverageBoundsComplete(void) const
 	std::memory_order_acquire);
 }
 
+bool
+BObolCompactOccurrenceStream::hasCoverageBoundsDrained(void)
+{
+    if (!this->d->coverageBoundsComplete.load(std::memory_order_acquire))
+	return false;
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    return this->d->priorityOffset == this->d->priority.size();
+}
+
 void
 BObolCompactOccurrenceStream::requestCancel(void)
 {
@@ -305,4 +314,3 @@ BObolCompactOccurrenceStream::isCancelled(void) const
 {
     return this->d->cancelled.load(std::memory_order_acquire);
 }
-

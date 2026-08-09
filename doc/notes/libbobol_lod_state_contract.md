@@ -15,7 +15,9 @@ For every view:
 
 1. Present the cheapest useful representation immediately.
 2. While the view changes, present a coherent mesh cut that meets the
-   interaction frame target.
+   interaction frame target.  Scale-changing input refines from the current
+   cut and publishes newly available suffixes while input continues; it does
+   not wait for the quiet transition to restart demand from a proxy.
 3. Once the view is quiet, monotonically refine visible geometry toward a
    one-pixel screen-error target, subject to a finite stable frame budget.
 4. Declare stability only when every visible mesh-backed occurrence has its
@@ -51,6 +53,7 @@ pixel_extent[v,o]     projected screen extent in pixels
 demand[v,o]           clamp(ceil(log2(pixel_extent / pixel_error)), 0, 15)
 active[v,o]           currently presented PoP level, or NONE
 resident[a]           richest retained array prefix
+resident_target[v,a]  richest visible pixel demand for asset a in view v
 drawable[a,l]         resident arrays contain all entries required by l
 faces[a,l]            cumulative face prefix for l
 scene_budget[v]       calibrated aggregate submitted-face allowance
@@ -87,11 +90,26 @@ projection.  No separate depth weighting is allowed.
 `COVERAGE`
 : Every visible mesh-backed occurrence receives its minimum coherent PoP
   prefix before any already-covered occurrence receives optional refinement.
+  A scale-only camera refresh is not cold coverage: it retains the preceding
+  cuts and may refine them while its bounded scan verifies current visibility.
+  New source/inventory coverage retains the strict minimum-mesh-first rule.
 
 `INTERACTIVE`
 : A finite scene budget and an O(1) presentation ceiling bound the next frame.
   The exact per-occurrence allocator catches up in bounded waves.  Finer
-  resident arrays are not evicted.
+  resident arrays are not evicted.  Pose-only input may hold richer worker
+  publications to avoid command churn; zoom must apply them in bounded waves
+  and request missing cumulative suffixes without ending the interaction.
+  Render-cost exhaustion does not prohibit a zoom suffix request: residency
+  is admitted by the independent worker working-set and resident-byte limits,
+  while the result publishes the currently affordable presentation cut.  A
+  completed scale frame may expose one richer population before the next
+  input event, using a bounded 10 Hz quality-frame allowance.  This remains
+  active while wheel/trackpad events continue; it does not depend on the quiet
+  debounce or button release.  A successfully presented quality ceiling is
+  retained across later scale epochs.  A deadline miss or a frame slower than
+  100 ms lowers only the O(1) render ceiling; it never rewrites a retained
+  occurrence to its minimum level or discards the richer resident prefix.
 
 `SETTLING`
 : The interaction cut remains until one coarse frame has actually been
@@ -100,11 +118,151 @@ projection.  No separate depth weighting is allowed.
 `STABLE`
 : Refinement proceeds one drawable prefix step per presented frame.  Candidate
   steps are ordered by user emphasis and estimated screen-error reduction per
-  added face.  Stable cuts do not regress within an unchanged view epoch.
+  added face.  Stable cuts do not regress within an unchanged view epoch.  If
+  a newly attempted discrete cut proves too expensive, overload recovery
+  begins from the current presentation: minimum coverage is reserved for all
+  visible occurrences and the richest already-active cuts which fit are kept
+  in screen-priority order.  Recovery must not reset every occurrence to its
+  minimum and then replay initial level walking.
 
 `COMPACTING`
 : After a longer quiet interval, aggregate consumer demand may trim resident
   CPU/GPU tails with headroom.  Active cuts remain drawable throughout.
+
+Persistent PoP cache records are activation-level chunks.  Growing a retained
+asset after compaction reads only `(resident, requested]`; it must not recreate
+a cache-reader copy of `[minimum, resident]`.  The worker constructs and
+atomically publishes a replacement immutable renderer snapshot while the old
+snapshot remains drawable.  Down-trimming allocates the exact retained prefix
+and must not preserve a richer vector's capacity.  Authored corner-normal
+meshes currently use the whole-prefix fallback because globally consistent
+vertex splitting is not derivable from an unannotated suffix.
+
+Each ordinary coordinate/index stream also carries a nonzero process-local
+lineage token.  Equal lineage across immutable geometry generations certifies
+that the preceding position, normal, and index values are an exact prefix and
+that quantization domains and level tables are unchanged.  Obol may then keep
+the existing GPU prefix, submit only the newly published CPU suffix, and use a
+device-local buffer copy when reserved capacity must grow.  A zero or changed
+token requires conservative complete replacement.  GPU compaction may retain
+a richer prefix than CPU residency until its own quiet maintenance pass; draw
+counts still clamp to the active/resident cut, so that retention is invisible.
+
+Only one resident-growth task may be active for a given asset occurrence.
+Wheel epochs with successively richer demands coalesce behind that task; its
+completion wakes planning, which submits the newest still-missing target.
+Serialized levels must not queue as independent work because they cannot grow
+the same asset in parallel and their obsolete result epochs create publication
+churn.
+
+The owner-thread coordinator is the authority for these phases.  Client
+Booleans are observations, not alternate state machines: named gesture and
+cancellation events own their corresponding edges (gesture release retains the
+interactive phase through its quiet debounce), a nonzero pending witness
+cannot produce `STABLE`, and compaction observed before complete coverage is
+canonicalized back to `COVERAGE` or `FALLBACK`.  The raw observation is retained
+for invariant diagnostics, while only the canonical state is published.
+
+Completed-frame CPU and GPU pressure are coordinator inputs, not merely HUD
+telemetry.  Every unique active CAD assembly is sampled once; all policy and
+diagnostic queries consume the retained aggregate in O(1).  A pressure edge
+increments a resource revision and requests one compaction pass after coverage
+and interaction safety gates.  If the same pressure remains after that
+revision is handled, the terminal state is stable and memory-limited rather
+than an endless COMPACTING loop.  A later pressure edge creates a new revision
+and a new recovery opportunity.  If pressure is first observed while recovery
+is disabled, enabling recovery consumes that still-current unhandled revision
+once; the system must not wait for pressure to clear and recur.
+
+Minimum-mesh coverage, user-visible convergence, aggregate scene budgeting,
+view-demand scheduling, renderer-independent quality calculation, resource-
+edge/recovery state, the late calibrated-headroom retry witness, and result-
+publication batching are allocation-free coordinator policies.
+BObolViewController supplies source, worker, completed-frame, and memory
+measurements and executes scheduling decisions, but it does not maintain
+parallel latches or reinterpret their one-shot rules.  The coverage policy
+accumulates saturating visible/covered counts across bounded compact-index
+windows.  A complete non-rescan pass atomically publishes its coverage result
+and authoritative visible denominator before retiring those transient
+counters.  Camera and inventory changes invalidate that proof; a quality-only
+pass may preserve it and avoid a whole-hierarchy recount.
+
+The convergence policy is a scene-pointer-free projection of those retained
+proofs and progress witnesses.  It alone decides ready/background status,
+memory- and performance-limited terminal states, the public HUD phase, and the
+monotonic fraction for one typed view/policy epoch.  A diagnostic query may
+sample this value but cannot introduce another scheduler, hierarchy traversal,
+or alternate interpretation of readiness.
+
+The budget policy treats projected per-occurrence error as demand and measured
+renderer cost as total-scene admission.  It owns the current allowance, the
+remaining budget shared by every bounded occurrence window, retained-cut
+recovery admission, the one-shot overload witness, and the complete stable
+calibration series.  A budget-blocked pass returns one decision describing
+probe eligibility, the frame barrier, and whether the next frame is an
+unchanged calibration replay or a presentation of newly admitted work.  Frame
+completion consumes that witness and either requests the next bounded sample
+or restarts submission; the controller has no parallel rescan, probe-count, or
+terminal-budget latch.  Its stable growth tiers (4x, 2x, and 1.25x), three-
+sample minimum, twelve-sample headroom bound, near-target convergence margin,
+10 Hz zoom-quality probe, and measured overload backoff are deterministic
+boundary-tested decisions.  Deadline feedback may reduce the current
+allowance immediately, but no budget operation rebuilds or discards an
+immutable PoP population.
+
+The view-demand policy owns the camera-local distinction between pose and
+scale changes, the scale-refresh proof carried through bounded coverage
+windows, and the complete interactive quality-probe lifecycle.  One completed
+scale frame may arm one coherent next-population probe; refinement/publication
+and motion-frame barriers prevent early consumption, and a later resident-
+growth completion may rearm exactly one probe.  A successfully presented probe
+retains its ceiling across the next scale event only when it met the policy's
+single 100 ms/10 Hz responsiveness contract.  Quiet handoff atomically retires
+the scale epoch and returns whether stable policy revision must preserve its
+demand refresh.  Clearing the last completed-frame barrier explicitly wakes
+the host even when the generic progressive latch is already set; a subsequent
+scale event therefore cannot starve a now-safe probe by consuming the only
+notification edge.  The controller supplies active-level and frame
+observations and applies the returned renderer ceiling, but it has no parallel
+pending, active, presented, quality-budget, or scale-refresh latches.
+
+The scalar quality policy converts completed-frame timing into the interactive
+pixel error, small-occurrence aggregation threshold, and reversible discrete
+PoP ceiling.  It is scene-pointer-free, sanitizes non-finite inputs, applies
+repeat overload correction relative to the cut which actually produced the
+frame, and rounds toward a known-safe coarser PoP population.  The controller
+may supply measurements and apply those values, but it cannot maintain a
+second version of their clamps, thresholds, or level arithmetic.
+
+Every batch of applied immutable results retains its first-unpresented deadline
+until the publication policy replaces that timer with exactly one requested-
+frame witness.  The first useful mesh and the end of a result stream publish
+immediately; otherwise stable and interactive batches use bounded, render-time-
+adaptive intervals.  A completed frame atomically retires the whole
+accumulated batch, and convergence cannot report ready before that
+presentation.
+
+Headroom admission thresholds are strict: demonstrated capacity must exceed
+the current allowance by 5 percent and the reusable frame must take less than
+120 percent of its target duration.  Stable-presentation handoff and
+point-proxy calibration may consume the frame immediately following a terminal
+planning pass, so the controller revisits the same one-shot admission when
+those barriers clear.  If the interaction ceiling prevented a retained
+occurrence from advancing at all, stable handoff converts that
+unsatisfied-demand annotation into an explicit post-frame rescan.  The first
+ceiling-free frame therefore remains bounded, and no raw demand bit may keep
+the pump alive without a render, submission, worker, result, or timer witness.
+
+Resident compaction is admitted by a separate allocation-free coordinator
+policy.  Its quiet deadline is necessary but not sufficient: minimum mesh
+coverage and every visual-settling witness (coverage/refinement scans,
+calibration, the explicit late-headroom replay, stable handoff, result
+publication, and batched unpublished results) must be complete.  Partial
+service planning continues only when its resident-demand revision still
+matches.  LoD-disabled drawing has no mesh-coverage prerequisite.  If active
+LoD coverage is incomplete but has no worker, submission, provider, frame, or
+timer capable of advancing it, the compaction request is retired; it cannot
+keep the progressive pump or HUD pending by itself.
 
 ## Transition obligations
 
@@ -113,7 +271,9 @@ Every pending flag has exactly one progress witness:
 | Pending condition | Required witness | Completion |
 |---|---|---|
 | source realization | provider task or source callback | fallback or source data published |
+| minimum-mesh coverage | bounded compact-index cursor or full-rescan obligation | complete pass publishes visible/covered proof |
 | asset suffix | queued/in-flight/cache task | result applied or definitive failure |
+| applied result batch | adaptive timer, then exactly one requested frame | completed frame presents the batch |
 | resident retarget | guaranteed requested frame | cut presented |
 | budget blocked with measured headroom | guaranteed calibration frame | allowance grows or capacity is revised |
 | quiet debounce | host timer/frame pump | stable policy revision |
@@ -164,7 +324,14 @@ These must hold after every owner-thread transition:
 3. Shaded, wireframe, bounds, and picking use the same effective active level,
    including the temporary interaction ceiling.
 4. An occurrence binding references the current source, view, policy, and
-   occurrence revisions.  Stale results cannot replace current data.
+   occurrence revisions.  Stale results cannot replace current data.  A
+   camera-stale cumulative suffix may be rebased only when asset pointer,
+   database revision, source revision, content hash, draw mode, source route,
+   and occurrence identity all match; the retained occurrence's old camera
+   stamp is not an asset-identity failure.  Rebase retargets metadata to the
+   current allocator epoch.  Worker publication may extend residency or admit
+   a richer reserved cut, but may never lower an already-richer occurrence
+   cut.  The prepared renderer geometry defines the drawable frontier.
 5. Stable refinement is monotonic for an unchanged view/policy epoch.
 6. All visible mesh-backed occurrences receive minimum coverage before any
    occurrence receives a second optional prefix increment.
@@ -174,7 +341,16 @@ These must hold after every owner-thread transition:
 9. A source edit invalidates affected content; a camera edit does not.
 10. Direct GL rendering restores GL state and invalidates Coin state caches
     before returning.
-
+11. Cross-generation GPU prefix reuse requires an equal nonzero producer
+    lineage; the ordinary and atlas upload counters must show no cumulative
+    CPU re-upload while such a stream grows.
+12. Scene render-cost admission governs `active`, never `resident_target`.
+    Zoom residency is bounded by worker and resident-memory admission, and a
+    prefetched result may not raise `active` above its independently reserved
+    presentation level.
+13. Active camera input never rewrites retained occurrence cuts downward.
+    Responsiveness pressure changes the renderer-wide effective level; quiet
+    admission and memory maintenance are the only cut/retention authorities.
 ## Liveness properties
 
 Using `[]` for “always” and `<>` for “eventually,” the implementation must
@@ -183,6 +359,12 @@ satisfy:
 ```text
 [] (visible_mesh_backed && minimum_resident
     -> <> (active >= minimum || definitive_failure))
+
+[] (scale_interaction && resident_target > resident
+    -> <> (resident increases || memory_limited || definitive_failure))
+
+[] (scale_interaction && richer_drawable && quality_headroom
+    -> <> (effective_level increases before quiet))
 
 [] (pending && affordable_next && host_running
     -> <> presented_next)
@@ -206,18 +388,37 @@ The target demand is per occurrence; admission is per scene.
 
 ```text
 stable demand:       pixel_error = 1
-interactive demand:  adaptive pixel_error >= 4
+interactive demand:  adaptive pixel_error >= 1
 scene face cost:     sum(faces[asset(o), effective_level(v,o)])
 effective level:     min(active[v,o], render_ceiling[v]) when ceiling is set
 ```
 
 The calibrated stable and interactive capacities are separate.  A quiet
 readback or a motion presentation interval cannot contaminate the other
+capacity.  A new interaction may conservatively seed an uninitialized or
+underloaded motion estimate from measured stable geometry throughput; actual
+slow motion frames lower it immediately.  A fast, extremely coarse frame is
+not a lower throughput proof.  Likewise, a deadline miss while only a tiny
+prefix is active may be widget, compositor, or readback overhead; fixed cost
+divided by a handful of triangles must not poison either stable or motion
 capacity.  Budget reductions affect a future view/motion epoch; they do not
 make an unchanged quiet frame visibly regress.
 
+Prepared System GL command replay and an unchanged retained ordinary-VBO
+presentation are both reusable calibration witnesses.  The latter is proven
+by unchanged cumulative full/suffix upload counters and is required by the
+OSMesa fixed-function path.  A reusable frame which demonstrates headroom
+after the normal probe series gets one bounded admission retry for the exact
+`(view revision, policy revision, current budget)` witness.  The terminal
+budget pass must explicitly request this unchanged replay and report it as
+pending convergence; a later selection, HUD, checkpoint, or other unrelated
+repaint is not a substitute progress event.  The view cannot report `STABLE`
+until the witness is consumed or invalidated.  If that retry enlarges the
+budget another distinct witness may retry; an unchanged budget cannot repaint
+forever.
+
 Stable refinement is monotonic within one camera epoch.  A calibration pass
-which changes no visible prefix is a probe, not progress; at most eight such
+which changes no visible prefix is a probe, not progress; at most twelve such
 probes may occur at one unchanged active population.  This bound lets the
 budget span a large discrete next-prefix jump while guaranteeing that
 floating-point calibration convergence or inconsistent thresholds cannot
@@ -260,10 +461,11 @@ ordering without per-frame triangle scans.
 | one compact scheduling wave | `O(wave_size)` projection plus bounded sorting |
 | sparse active-cut update | `O(changed occurrences)` |
 | draw submission | `O(visible occurrences + draw groups)` |
+| completed-frame resource sample | `O(unique presentations)` once; subsequent policy/HUD queries `O(1)` |
 | off-frustum draw cost | zero triangles and no per-asset upload |
 | cache/provider work | bounded by distinct demanded assets, not occurrences |
 | selection/style update | `O(changed paths/instances)`, no full hierarchy scan |
-| stable compaction | background/quiet only; never on the input critical path |
+| stable compaction | background/quiet only, after coverage and every visual-settling witness; never on the input critical path |
 
 Repeated-instance and distinct-asset scale are separate proof obligations.
 The former stresses occurrence planning and instancing.  The latter stresses
@@ -276,6 +478,8 @@ GPU upload, and memory pressure.  Passing one does not imply passing the other.
 |---|---|
 | cold fallback and first mesh | empty-cache GUI timeline and screenshots |
 | resident retarget | unit test proving no provider/cache work |
+| resident suffix/trim | cache test proving suffix-only reads leave no reader prefix, realization test proving exact-capacity trim, and Lucy zoom memory telemetry |
+| continuous zoom refinement | cold/warm Lucy held-gesture checkpoints proving resident growth and a richer effective cut before release on System GL and OSMesa |
 | discrete prefix progress | unit test with active level below a richer resident prefix and an unaffordable direct jump |
 | view working-set turnover | close multi-instance occurrence hashes and images across view directions |
 | unique asset fan-out | thousands-of-distinct-mesh cold/warm stress, worker/cache telemetry, and perf |

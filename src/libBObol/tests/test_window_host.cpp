@@ -1793,6 +1793,30 @@ test_display_endpoint_contract(void)
 	  !endpoint_controller->isLightingEnabled(),
 	  "typed lighting property updates the Obol render environment");
     property_value_init(&property_value);
+    property_value.type = BV_DISPLAY_PROPERTY_ENUM;
+    property_value.string_value = "mged";
+    CHECK(bobol_display_endpoint_property_set(endpoint,
+	  "renderer.lighting.profile", &property_value) ==
+	  BV_DISPLAY_PROPERTY_OK &&
+	  endpoint_controller->getLightingProfile() ==
+	      BObolViewController::LIGHTING_MGED,
+	  "typed lighting profile selects the historical MGED rig");
+    property_value_init(&property_value);
+    CHECK(bobol_display_endpoint_property_get(endpoint,
+	  "renderer.lighting.profile", &property_value) ==
+	  BV_DISPLAY_PROPERTY_OK && property_value.string_value &&
+	  bu_strcmp(property_value.string_value, "mged") == 0,
+	  "typed lighting profile round trips render policy");
+    property_value_init(&property_value);
+    property_value.type = BV_DISPLAY_PROPERTY_ENUM;
+    property_value.string_value = "studio";
+    CHECK(bobol_display_endpoint_property_set(endpoint,
+	  "renderer.lighting.profile", &property_value) ==
+	  BV_DISPLAY_PROPERTY_OK &&
+	  endpoint_controller->getLightingProfile() ==
+	      BObolViewController::LIGHTING_STUDIO,
+	  "typed lighting profile restores the studio rig");
+    property_value_init(&property_value);
     property_value.type = BV_DISPLAY_PROPERTY_COLOR3;
     property_value.color3[0] = 0.25;
     property_value.color3[1] = 0.50;

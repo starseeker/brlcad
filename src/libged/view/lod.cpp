@@ -176,9 +176,12 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		view_controller->getLodInteractiveTargetFps(),
 		view_controller->getLodStableTargetFps());
 	    bu_vls_printf(gedp->ged_result_str,
-		"scene_faces(active/budget): %zu/%zu\n",
-		view_controller->getActiveLodFaceCount(),
-		view_controller->getCurrentLodFaceBudget());
+		"scene_faces(active): %zu\n",
+		view_controller->getActiveLodFaceCount());
+	    bu_vls_printf(gedp->ged_result_str,
+		"scene_render_cost(active/budget): %zu/%zu\n",
+		view_controller->getActiveLodRenderCost(),
+		view_controller->getCurrentLodRenderCostBudget());
 	}
 	return BRLCAD_OK;
     }
@@ -420,11 +423,14 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		"active_scene_faces: %zu\n",
 		view_controller->getActiveLodFaceCount());
 	    bu_vls_printf(gedp->ged_result_str,
-		"scene_face_budget: %zu\n",
-		view_controller->getCurrentLodFaceBudget());
+		"active_scene_render_cost: %zu\n",
+		view_controller->getActiveLodRenderCost());
 	    bu_vls_printf(gedp->ged_result_str,
-		"calibrated_faces_per_second: %.0f\n",
-		view_controller->getCalibratedLodFacesPerSecond());
+		"scene_render_cost_budget: %zu\n",
+		view_controller->getCurrentLodRenderCostBudget());
+	    bu_vls_printf(gedp->ged_result_str,
+		"calibrated_render_cost_per_second: %.0f\n",
+		view_controller->getCalibratedLodRenderCostPerSecond());
 	    bu_vls_printf(gedp->ged_result_str, "in_flight: %zu\n",
 		service ? service->inFlightCount() : 0);
 	    bu_vls_printf(gedp->ged_result_str, "pending_tasks: %zu\n",

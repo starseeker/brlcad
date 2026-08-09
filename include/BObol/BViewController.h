@@ -124,6 +124,23 @@ enum BObolLodCoordinatorPhase {
     BOBOL_LOD_COORDINATOR_COMPACTING
 };
 
+/** Owner-thread event which most recently reconciled the LoD coordinator. */
+enum BObolLodCoordinatorEvent {
+    BOBOL_LOD_EVENT_INITIALIZE = 0,
+    BOBOL_LOD_EVENT_FRAME_COMPLETED,
+    BOBOL_LOD_EVENT_WORK_SCHEDULED,
+    BOBOL_LOD_EVENT_WORK_PUMPED,
+    BOBOL_LOD_EVENT_RESULT_PUBLISHED,
+    BOBOL_LOD_EVENT_SERVICE_CHANGED,
+    BOBOL_LOD_EVENT_GENERATION_CANCELLED,
+    BOBOL_LOD_EVENT_AUTO_SUBMIT_CHANGED,
+    BOBOL_LOD_EVENT_VIEW_INVALIDATED,
+    BOBOL_LOD_EVENT_POLICY_CHANGED,
+    BOBOL_LOD_EVENT_INTERACTION_STARTED,
+    BOBOL_LOD_EVENT_INTERACTION_ENDED,
+    BOBOL_LOD_EVENT_VIEW_OBSERVED
+};
+
 /** User-facing progress for one view epoch.
  *
  * The fraction describes progress toward the current view's terminal,
@@ -136,8 +153,14 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
 
     int phase;
     int coordinatorPhase;
+    int coordinatorEvent;
     uint64_t coordinatorTransitionSerial;
     uint64_t coordinatorProgressSequence;
+    uint64_t coordinatorDispatchSerial;
+    uint64_t coordinatorStagnantDispatchCount;
+    uint64_t coordinatorInvariantViolationCount;
+    uint32_t coordinatorInvariantMask;
+    uint32_t coordinatorInvariantHistoryMask;
     uint64_t viewRevision;
     size_t expectedLeafCount;
     size_t availableLeafCount;
@@ -149,7 +172,8 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t queuedResults;
     size_t queuedCacheWrites;
     size_t activeFaces;
-    size_t faceBudget;
+    size_t activeRenderCost;
+    size_t renderCostBudget;
     size_t residentMeshBytes;
     size_t stableResidentMeshBytes;
     size_t reservedResidentMeshGrowthBytes;
@@ -158,11 +182,33 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t activeWorkingSetBytes;
     size_t peakWorkingSetBytes;
     uint64_t residentCompactionCount;
+    size_t gpuTrackedBufferBytes;
+    size_t gpuOrdinaryPartBufferBytes;
+    size_t gpuProgressiveCutBufferBytes;
+    size_t gpuProgressiveActiveCutBytes;
+    size_t gpuBatchBufferBytes;
+    size_t gpuTriangleAtlasAllocatedBytes;
+    size_t gpuTriangleAtlasLiveBytes;
+    size_t gpuTriangleAtlasConfiguredCapacityBytes;
+    size_t gpuTriangleAtlasPartCount;
+    size_t gpuTriangleAtlasPageCount;
+    uint64_t gpuOrdinaryPartFullUploadBytes;
+    uint64_t gpuOrdinaryPartSuffixUploadBytes;
+    uint64_t gpuOrdinaryPartGpuCopyBytes;
+    uint64_t gpuOrdinaryPartLineageReuseCount;
+    uint64_t gpuTriangleAtlasFullUploadBytes;
+    uint64_t gpuTriangleAtlasSuffixUploadBytes;
+    uint64_t gpuTriangleAtlasLineageReuseCount;
+    size_t gpuPressureProxyCount;
+    uint64_t gpuProgressiveEvictionCount;
+    uint64_t gpuTriangleAtlasReclamationCount;
+    uint64_t gpuResourceSampleSerial;
     float fraction;
     SbBool viewReady;
     SbBool backgroundPending;
     SbBool performanceLimited;
     SbBool memoryLimited;
+    SbBool gpuMemoryPressure;
     /* Individual presentation barriers.  These are intentionally exposed in
      * the aggregate status so hosts and regression reports can distinguish a
      * pending PoP frame from scene-budget calibration or motion handoff. */
@@ -219,6 +265,14 @@ public:
 	SOFTWARE_WIRE_FAST = 2
     };
 
+    /** Named, renderer-independent camera-lighting policies.  Values match
+     * enum bv_lighting_profile so GED can synchronize without translation
+     * tables or client-specific defaults. */
+    enum LightingProfile {
+	LIGHTING_STUDIO = 0,
+	LIGHTING_MGED = 1
+    };
+
     BObolViewController(void);
     explicit BObolViewController(SoNode *root, SoCamera *camera = NULL);
     ~BObolViewController(void);
@@ -252,12 +306,16 @@ public:
     SbBool isDepthTestEnabled(void) const;
     void setLightingEnabled(SbBool enabled);
     SbBool isLightingEnabled(void) const;
+    void setLightingProfile(LightingProfile profile);
+    LightingProfile getLightingProfile(void) const;
+    float getLightingAmbientIntensity(void) const;
     void setNormalStyle(BObolViewLodState::NormalStyle style,
 	float creaseAngleDegrees = 60.0f);
     BObolViewLodState::NormalStyle getNormalStyle(void) const;
     float getNormalCreaseAngle(void) const;
-    /** Enable/disable the camera-driven headlight (layered under the master
-     * setLightingEnabled()). */
+    /** Enable/disable the camera-driven light rig (layered under the master
+     * setLightingEnabled()).  The historical name remains the concise public
+     * command vocabulary for this independent lighting source. */
     void setHeadlightEnabled(SbBool enabled);
     SbBool isHeadlightEnabled(void) const;
     /** When TRUE the headlight direction tracks the camera each frame (old
@@ -270,6 +328,10 @@ public:
     SbVec3f getHeadlightOffset(void) const;
     /** Current world-space headlight travel direction (as last aimed). */
     SbVec3f getHeadlightDirection(void) const;
+    /** Snapshot enabled camera-rig lights in world space for retained
+     * non-Obol renderers such as the librt preview. */
+    void getCameraLights(
+	std::vector<BObolSceneLightRealization> &lights) const;
     /** Enable/disable in-scene (database-derived) light sources. */
     void setSceneLightsEnabled(SbBool enabled);
     SbBool isSceneLightsEnabled(void) const;
@@ -343,6 +405,18 @@ public:
 			 SbString *reason = NULL);
     uint64_t beginRenderTiming(void) const;
     void completeRenderTiming(uint64_t startedNanoseconds);
+    /** Bound a graphical traversal before it can monopolize the endpoint
+     * thread.  Zero disables the corresponding deadline.  Interrupted
+     * frames are not presentation samples; hosts preserve the last completed
+     * image and call notePresentationRenderInterrupted(). */
+    void setPresentationFrameDeadlines(uint64_t interactiveNanoseconds,
+	uint64_t stableNanoseconds);
+    uint64_t getInteractivePresentationFrameDeadline(void) const;
+    uint64_t getStablePresentationFrameDeadline(void) const;
+    uint64_t getCurrentPresentationFrameDeadline(void) const;
+    void notePresentationRenderInterrupted(uint64_t elapsedNanoseconds);
+    uint64_t getInterruptedPresentationFrameCount(void) const;
+    uint64_t getLastInterruptedPresentationTimeNanoseconds(void) const;
     uint64_t getLastRenderTimeNanoseconds(void) const;
     uint64_t getSmoothedRenderTimeNanoseconds(void) const;
     /** Host-side phase timings for the most recently completed render. */
@@ -360,9 +434,9 @@ public:
     /** Record one completed host/offscreen presentation.  This cadence is
      * intentionally separate from render work duration. */
     void noteFramePresented(void);
-    /** Short-horizon presentation cadence used by adaptive rendering policy
-     * and diagnostic telemetry.  This intentionally reacts faster than the
-     * user-facing FPS indication. */
+    /** Short-horizon presentation cadence used by diagnostic telemetry.  LoD
+     * capacity uses measured CPU/GPU work instead: an event-driven host gap
+     * is not a renderer cost. */
     uint64_t getSmoothedPresentationIntervalNanoseconds(void) const;
     uint64_t getSmoothedInteractivePresentationIntervalNanoseconds(void) const;
     /** Human-facing presentation cadence.  This uses an elapsed-time EMA so
@@ -409,6 +483,12 @@ public:
     BObolLodService *ensureManagedLodService(size_t workerCount);
     void stopManagedLodService(void);
     size_t getManagedLodWorkerCount(void) const;
+    /** Begin and claim a result generation on the configured service.
+     * External producers must submit through this generation if this
+     * controller is to consume their results; unscoped FIFO draining is
+     * intentionally unsupported because it lets one view steal another's
+     * work. */
+    uint64_t beginLodGeneration(void);
     void setLodAutoSubmit(SbBool enabled);
     SbBool isLodAutoSubmitEnabled(void) const;
     void setLodForcedLevel(int level);
@@ -473,7 +553,8 @@ public:
 			  int reset = 0);
     int applyLodResults(BObolLodService *service = NULL,
 			size_t maxResults = 0,
-			size_t maxEstimatedBytes = 0);
+			size_t maxEstimatedBytes = 0,
+			uint64_t generation = 0);
     uint64_t getLodViewRevision(void) const;
     void setLodPolicyRevision(uint64_t revision);
     uint64_t getLodPolicyRevision(void) const;
@@ -490,18 +571,19 @@ public:
     int getLodInteractiveProgressiveCeiling(void) const;
     /** Configure aggregate scene frame-rate goals.  Projected per-object
      * error remains the quality demand; these targets calibrate a total
-     * displayed face/segment budget from measured frames so thousands of
-     * individually reasonable cuts cannot collectively collapse FPS. */
+     * render-cost budget from measured frames so shaded faces, wire segments,
+     * points, and repeated occurrences compete for one measured resource. */
     void setLodFrameRateTargets(float interactiveFps, float stableFps);
     float getLodInteractiveTargetFps(void) const;
     float getLodStableTargetFps(void) const;
-    size_t getCurrentLodFaceBudget(void) const;
+    size_t getCurrentLodRenderCostBudget(void) const;
     size_t getActiveLodFaceCount(void) const;
+    size_t getActiveLodRenderCost(void) const;
     /** Return the calibration selected for the controller's current
      * interaction state. */
-    double getCalibratedLodFacesPerSecond(void) const;
-    double getInteractiveCalibratedLodFacesPerSecond(void) const;
-    double getStableCalibratedLodFacesPerSecond(void) const;
+    double getCalibratedLodRenderCostPerSecond(void) const;
+    double getInteractiveCalibratedLodRenderCostPerSecond(void) const;
+    double getStableCalibratedLodRenderCostPerSecond(void) const;
     unsigned int getLastLodVisitedMeshCount(void) const;
     unsigned int getLastLodSubmittedTaskCount(void) const;
     unsigned int getLastLodUpdatedCutCount(void) const;
@@ -736,14 +818,16 @@ private:
     void invalidateDatabaseSourceLodState(void);
     void syncRenderManager(void);
     void advanceLodViewRevision(void);
-    void advanceLodPolicyRevision(void);
+    void advanceLodPolicyRevision(
+	SbBool preserveScaleDemandRefresh = FALSE);
     void syncLodViewSignature(SbBool advanceOnChange = TRUE);
     void scheduleLodRefinementFrame(const char *reason);
+    void armStableLodHeadroomProbeIfReady(void);
     size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BObolLodService *service, void *userData);
     /* Rewrite the headlight direction from the last camera orientation so it
      * tracks the viewer (no-op unless the headlight is enabled and tracked). */
-    void applyTrackedHeadlight(void);
+    void applyTrackedHeadlight(SbBool force = FALSE);
 
     struct Impl;
     std::unique_ptr<Impl> d;

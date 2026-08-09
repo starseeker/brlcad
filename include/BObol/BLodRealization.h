@@ -127,6 +127,16 @@ struct BOBOL_EXPORT BObolLodCounts {
     void clear(void);
 };
 
+/*
+ * Renderer-neutral scheduling currency, expressed in shaded-triangle
+ * equivalents.  It accounts for vertex processing, line expansion, normal
+ * bandwidth, and the irreducible per-occurrence planning cost.  The value is
+ * deliberately cheap to compute from cached hierarchy counts.
+ */
+BOBOL_EXPORT size_t
+bobol_lod_render_cost_units(const BObolLodCounts &counts, int drawMode,
+    size_t occurrenceCount = 1);
+
 struct BOBOL_EXPORT BObolLodCacheKey {
     SbString value;
 
@@ -174,6 +184,9 @@ struct BOBOL_EXPORT BObolLodMeshPayload {
 };
 
 struct BObolLodProgressiveMeshPrivate;
+struct BObolLodProgressiveMeshTrim;
+typedef std::shared_ptr<const BObolLodProgressiveMeshTrim>
+    BObolLodProgressiveMeshTrimPtr;
 
 /* One thread-safe retained PoP asset shared by every occurrence and view that
  * resolves to the same source geometry.  The resident arrays are exact,
@@ -187,6 +200,22 @@ public:
     SbBool update(const struct BObolMeshLodData &data,
 	const struct BObolMeshLodHierarchyInfo &hierarchy,
 	int residentLevel, SbBool shadedCullBackfaces);
+    /* Extend an existing immutable generation by reading only cache levels
+     * above its published resident frontier.  The old generation remains
+     * drawable until the completed replacement is atomically published.
+     * Authored corner-normal meshes currently return FALSE and use update(),
+     * whose global vertex splitting cannot yet be reconstructed from a suffix
+     * alone. */
+    SbBool extendFromCache(struct BObolMeshLod *lod,
+	const struct BObolMeshLodHierarchyInfo &hierarchy,
+	int residentLevel, SbBool shadedCullBackfaces);
+    /* Build a shorter immutable generation without publishing it.  Stable
+     * resident-memory maintenance uses this two-phase form so a newer view or
+     * provider use can invalidate an old trim before it changes the shared
+     * mesh.  commitTrim succeeds only while the exact source generation used
+     * by prepareTrim is still current. */
+    BObolLodProgressiveMeshTrimPtr prepareTrim(int residentLevel) const;
+    SbBool commitTrim(const BObolLodProgressiveMeshTrimPtr &trim);
     SbBool trim(int residentLevel);
     SbBool copyLevel(BObolLodMeshPayload &payload, int level) const;
     SbBool isValid(void) const;

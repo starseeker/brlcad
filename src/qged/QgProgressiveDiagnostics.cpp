@@ -98,6 +98,9 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     if (event.action == QLatin1String("qged_command"))
 	sample.insert(QStringLiteral("command"),
 	    event.arguments.value(QStringLiteral("command")));
+    if (event.action == QLatin1String("qged_command_batch"))
+	sample.insert(QStringLiteral("commands"),
+	    event.arguments.value(QStringLiteral("commands")));
     if (event.action == QLatin1String("checkpoint"))
 	sample.insert(QStringLiteral("checkpoint"),
 	    event.arguments.value(QStringLiteral("name")));
@@ -110,6 +113,7 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     const bool collectStructuralDiagnostics =
 	collectDeepLodDiagnostics ||
 	event.action == QLatin1String("qged_command") ||
+	event.action == QLatin1String("qged_command_batch") ||
 	event.action == QLatin1String("set_current") ||
 	event.action == QLatin1String("clear_selection");
 
@@ -256,6 +260,17 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     }
 
     sample.insert(QStringLiteral("controller_available"), true);
+    const BObolViewController::LightingProfile lightingProfile =
+	controller->getLightingProfile();
+    sample.insert(QStringLiteral("lighting_profile"),
+	lightingProfile == BObolViewController::LIGHTING_MGED ?
+	    QStringLiteral("mged") : QStringLiteral("studio"));
+    sample.insert(QStringLiteral("lighting_ambient_intensity"),
+	static_cast<double>(controller->getLightingAmbientIntensity()));
+    std::vector<BObolSceneLightRealization> cameraLights;
+    controller->getCameraLights(cameraLights);
+    sample.insert(QStringLiteral("lighting_camera_light_count"),
+	static_cast<qint64>(cameraLights.size()));
     BObolSourceRealizationCoordinator &sourceCoordinator =
 	BObolSourceRealizationCoordinator::global();
     sample.insert(QStringLiteral("source_realization_workers"),
@@ -362,17 +377,37 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<double>(controller->getLodInteractiveTargetFps()));
     sample.insert(QStringLiteral("lod_stable_target_fps"),
 	static_cast<double>(controller->getLodStableTargetFps()));
+    sample.insert(QStringLiteral("presentation_deadline_interactive_ms"),
+	static_cast<double>(
+	    controller->getInteractivePresentationFrameDeadline()) /
+	    1000000.0);
+    sample.insert(QStringLiteral("presentation_deadline_stable_ms"),
+	static_cast<double>(controller->getStablePresentationFrameDeadline()) /
+	    1000000.0);
+    sample.insert(QStringLiteral("presentation_deadline_current_ms"),
+	static_cast<double>(controller->getCurrentPresentationFrameDeadline()) /
+	    1000000.0);
+    sample.insert(QStringLiteral("presentation_interrupted_frames"),
+	static_cast<qint64>(
+	    controller->getInterruptedPresentationFrameCount()));
+    sample.insert(QStringLiteral("presentation_last_interrupted_ms"),
+	static_cast<double>(
+	    controller->getLastInterruptedPresentationTimeNanoseconds()) /
+	    1000000.0);
     sample.insert(QStringLiteral("active_lod_scene_faces"),
 	static_cast<qint64>(controller->getActiveLodFaceCount()));
-    sample.insert(QStringLiteral("lod_scene_face_budget"),
-	static_cast<qint64>(controller->getCurrentLodFaceBudget()));
-    sample.insert(QStringLiteral("lod_calibrated_faces_per_second"),
-	controller->getCalibratedLodFacesPerSecond());
+    sample.insert(QStringLiteral("active_lod_scene_render_cost"),
+	static_cast<qint64>(controller->getActiveLodRenderCost()));
+    sample.insert(QStringLiteral("lod_scene_render_cost_budget"),
+	static_cast<qint64>(controller->getCurrentLodRenderCostBudget()));
+    sample.insert(QStringLiteral("lod_calibrated_render_cost_per_second"),
+	controller->getCalibratedLodRenderCostPerSecond());
     sample.insert(QStringLiteral(
-	"lod_interactive_calibrated_faces_per_second"),
-	controller->getInteractiveCalibratedLodFacesPerSecond());
-    sample.insert(QStringLiteral("lod_stable_calibrated_faces_per_second"),
-	controller->getStableCalibratedLodFacesPerSecond());
+	"lod_interactive_calibrated_render_cost_per_second"),
+	controller->getInteractiveCalibratedLodRenderCostPerSecond());
+    sample.insert(QStringLiteral(
+	"lod_stable_calibrated_render_cost_per_second"),
+	controller->getStableCalibratedLodRenderCostPerSecond());
     sample.insert(QStringLiteral("last_progressive_advance_ms"),
 	static_cast<double>(
 	    controller->getLastProgressiveAdvanceTimeNanoseconds()) /
@@ -459,10 +494,22 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	convergence.phase);
     sample.insert(QStringLiteral("lod_coordinator_phase"),
 	convergence.coordinatorPhase);
+    sample.insert(QStringLiteral("lod_coordinator_event"),
+	convergence.coordinatorEvent);
     sample.insert(QStringLiteral("lod_coordinator_transition_serial"),
 	static_cast<qint64>(convergence.coordinatorTransitionSerial));
     sample.insert(QStringLiteral("lod_coordinator_progress_sequence"),
 	static_cast<qint64>(convergence.coordinatorProgressSequence));
+    sample.insert(QStringLiteral("lod_coordinator_dispatch_serial"),
+	static_cast<qint64>(convergence.coordinatorDispatchSerial));
+    sample.insert(QStringLiteral("lod_coordinator_stagnant_dispatches"),
+	static_cast<qint64>(convergence.coordinatorStagnantDispatchCount));
+    sample.insert(QStringLiteral("lod_coordinator_invariant_violations"),
+	static_cast<qint64>(convergence.coordinatorInvariantViolationCount));
+    sample.insert(QStringLiteral("lod_coordinator_invariant_mask"),
+	static_cast<qint64>(convergence.coordinatorInvariantMask));
+    sample.insert(QStringLiteral("lod_coordinator_invariant_history_mask"),
+	static_cast<qint64>(convergence.coordinatorInvariantHistoryMask));
     sample.insert(QStringLiteral("lod_convergence_fraction"),
 	static_cast<double>(convergence.fraction));
     sample.insert(QStringLiteral("lod_convergence_view_ready"),
@@ -509,6 +556,51 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<qint64>(convergence.peakWorkingSetBytes));
     sample.insert(QStringLiteral("lod_convergence_compactions"),
 	static_cast<qint64>(convergence.residentCompactionCount));
+    sample.insert(QStringLiteral("lod_gpu_tracked_buffer_bytes"),
+	static_cast<qint64>(convergence.gpuTrackedBufferBytes));
+    sample.insert(QStringLiteral("lod_gpu_ordinary_part_buffer_bytes"),
+	static_cast<qint64>(convergence.gpuOrdinaryPartBufferBytes));
+    sample.insert(QStringLiteral("lod_gpu_progressive_cut_buffer_bytes"),
+	static_cast<qint64>(convergence.gpuProgressiveCutBufferBytes));
+    sample.insert(QStringLiteral("lod_gpu_progressive_active_cut_bytes"),
+	static_cast<qint64>(convergence.gpuProgressiveActiveCutBytes));
+    sample.insert(QStringLiteral("lod_gpu_batch_buffer_bytes"),
+	static_cast<qint64>(convergence.gpuBatchBufferBytes));
+    sample.insert(QStringLiteral("lod_gpu_atlas_allocated_bytes"),
+	static_cast<qint64>(convergence.gpuTriangleAtlasAllocatedBytes));
+    sample.insert(QStringLiteral("lod_gpu_atlas_live_bytes"),
+	static_cast<qint64>(convergence.gpuTriangleAtlasLiveBytes));
+    sample.insert(QStringLiteral("lod_gpu_atlas_configured_capacity_bytes"),
+	static_cast<qint64>(
+	    convergence.gpuTriangleAtlasConfiguredCapacityBytes));
+    sample.insert(QStringLiteral("lod_gpu_atlas_parts"),
+	static_cast<qint64>(convergence.gpuTriangleAtlasPartCount));
+    sample.insert(QStringLiteral("lod_gpu_atlas_pages"),
+	static_cast<qint64>(convergence.gpuTriangleAtlasPageCount));
+    sample.insert(QStringLiteral("lod_gpu_ordinary_full_upload_bytes"),
+	static_cast<qint64>(convergence.gpuOrdinaryPartFullUploadBytes));
+    sample.insert(QStringLiteral("lod_gpu_ordinary_suffix_upload_bytes"),
+	static_cast<qint64>(convergence.gpuOrdinaryPartSuffixUploadBytes));
+    sample.insert(QStringLiteral("lod_gpu_ordinary_copy_bytes"),
+	static_cast<qint64>(convergence.gpuOrdinaryPartGpuCopyBytes));
+    sample.insert(QStringLiteral("lod_gpu_ordinary_lineage_reuses"),
+	static_cast<qint64>(convergence.gpuOrdinaryPartLineageReuseCount));
+    sample.insert(QStringLiteral("lod_gpu_atlas_full_upload_bytes"),
+	static_cast<qint64>(convergence.gpuTriangleAtlasFullUploadBytes));
+    sample.insert(QStringLiteral("lod_gpu_atlas_suffix_upload_bytes"),
+	static_cast<qint64>(convergence.gpuTriangleAtlasSuffixUploadBytes));
+    sample.insert(QStringLiteral("lod_gpu_atlas_lineage_reuses"),
+	static_cast<qint64>(convergence.gpuTriangleAtlasLineageReuseCount));
+    sample.insert(QStringLiteral("lod_gpu_pressure_proxies"),
+	static_cast<qint64>(convergence.gpuPressureProxyCount));
+    sample.insert(QStringLiteral("lod_gpu_progressive_evictions"),
+	static_cast<qint64>(convergence.gpuProgressiveEvictionCount));
+    sample.insert(QStringLiteral("lod_gpu_atlas_reclamations"),
+	static_cast<qint64>(convergence.gpuTriangleAtlasReclamationCount));
+    sample.insert(QStringLiteral("lod_gpu_resource_sample_serial"),
+	static_cast<qint64>(convergence.gpuResourceSampleSerial));
+    sample.insert(QStringLiteral("lod_gpu_memory_pressure"),
+	convergence.gpuMemoryPressure ? true : false);
     BObolViewLodState *viewLodState = controller->getViewLodState();
     qint64 compactEntries = 0;
     qint64 compactSelectedEntries = 0;
@@ -528,6 +620,10 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     qint64 activeCadSubpixelProxyPoints = 0;
     qint64 visibleStructuralFallbackBoxes = 0;
     qint64 presentedCadFaces = 0;
+    qint64 presentedCadPositions = 0;
+    qint64 presentedCadNormals = 0;
+    qint64 presentedCadOccurrences = 0;
+    bool presentedCadWorkExact = true;
     qint64 measuredCadGpuFaces = 0;
     uint64_t measuredCadGpuNanoseconds = 0;
     uint64_t measuredCadGpuSampleSerial = 0;
@@ -614,6 +710,22 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		    std::numeric_limits<qint64>::max() :
 		    presentedCadFaces +
 			static_cast<qint64>(renderedTriangles);
+		const Obol::CadRenderedShadedWork renderedWork =
+		    presentation->lastRenderedShadedWork();
+		presentedCadWorkExact =
+		    presentedCadWorkExact && renderedWork.exact;
+		const auto addRenderedWork = [](qint64 current, uint64_t value) {
+		    return value > static_cast<uint64_t>(
+			std::numeric_limits<qint64>::max() - current) ?
+			std::numeric_limits<qint64>::max() :
+			current + static_cast<qint64>(value);
+		};
+		presentedCadPositions = addRenderedWork(
+		    presentedCadPositions, renderedWork.positionCount);
+		presentedCadNormals = addRenderedWork(
+		    presentedCadNormals, renderedWork.normalCount);
+		presentedCadOccurrences = addRenderedWork(
+		    presentedCadOccurrences, renderedWork.occurrenceCount);
 		const uint64_t gpuSampleSerial =
 		    presentation->gpuTimerSampleSerial();
 		const uint64_t gpuNanoseconds =
@@ -903,6 +1015,14 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	visibleStructuralFallbackBoxes);
     sample.insert(QStringLiteral("presented_cad_faces"),
 	presentedCadFaces);
+    sample.insert(QStringLiteral("presented_cad_positions"),
+	presentedCadPositions);
+    sample.insert(QStringLiteral("presented_cad_normals"),
+	presentedCadNormals);
+    sample.insert(QStringLiteral("presented_cad_occurrences"),
+	presentedCadOccurrences);
+    sample.insert(QStringLiteral("presented_cad_work_exact"),
+	cadPresentationCount > 0 && presentedCadWorkExact);
     sample.insert(QStringLiteral("measured_cad_gpu_faces"),
 	measuredCadGpuFaces);
     sample.insert(QStringLiteral("measured_cad_gpu_ms"),

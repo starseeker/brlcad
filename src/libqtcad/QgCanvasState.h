@@ -40,6 +40,9 @@
 #include <cstring>
 #include <QImage>
 #include <QOpenGLContext>
+#include <QOpenGLExtraFunctions>
+#include <QOpenGLFramebufferObject>
+#include <QOpenGLWidget>
 #include <QSize>
 #include <QTimer>
 #include <QWidget>
@@ -108,6 +111,8 @@ struct QgCanvasState {
     bool   lod_progress_last_pending = false;
     bool   software_backend = false;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
+    QOpenGLFramebufferObject *presentation_fbo = nullptr;
+    QImage last_completed_software_frame;
     std::chrono::steady_clock::time_point fps_last_publish;
     std::chrono::steady_clock::time_point lod_progress_last_publish;
 
@@ -291,9 +296,12 @@ static inline void
 qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img,
 				 bool consumeRenderRequest = false,
 				 bool borrowRendererBuffer = false,
-				 bool recordPresentationTiming = false)
+				 bool recordPresentationTiming = false,
+				 bool *completedPresentation = nullptr)
 {
     img = QImage();
+    if (completedPresentation)
+	*completedPresentation = false;
     if (!s.obol || !s.obol->getViewport())
 	return;
 
@@ -344,15 +352,58 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	s.obol->getBackgroundTopColor())
 	renderer.setBackgroundGradient(s.obol->getBackgroundBottomColor(),
 	    s.obol->getBackgroundTopColor());
+    struct DeadlineContext {
+	BObolViewController *controller = nullptr;
+	uint64_t deadline = 0;
+	SoGLRenderAction::SoGLRenderAbortCB *previous = nullptr;
+	void *previousData = nullptr;
+    } deadlineContext;
+    const auto deadlineCallback = [](void *userData) {
+	DeadlineContext *context = static_cast<DeadlineContext *>(userData);
+	if (!context)
+	    return SoGLRenderAction::CONTINUE;
+	if (context->previous) {
+	    const SoGLRenderAction::AbortCode prior =
+		(*context->previous)(context->previousData);
+	    if (prior != SoGLRenderAction::CONTINUE)
+		return prior;
+	}
+	return context->controller && context->deadline &&
+	    context->controller->beginRenderTiming() >= context->deadline ?
+	    SoGLRenderAction::ABORT : SoGLRenderAction::CONTINUE;
+    };
     const uint64_t started = s.obol->beginRenderTiming();
+    const uint64_t deadlineDuration = recordPresentationTiming ?
+	s.obol->getCurrentPresentationFrameDeadline() : 0;
+    if (action && deadlineDuration) {
+	deadlineContext.controller = s.obol;
+	deadlineContext.deadline =
+	    started > UINT64_MAX - deadlineDuration ? UINT64_MAX :
+	    started + deadlineDuration;
+	action->getAbortCallback(
+	    deadlineContext.previous, deadlineContext.previousData);
+	action->setAbortCallback(deadlineCallback, &deadlineContext);
+    }
     const SbBool rendered = renderer.render(s.obol->getRenderRoot());
+    const uint64_t completed = s.obol->beginRenderTiming();
+    const SbBool interrupted = action && action->hasTerminated();
+    if (action && deadlineDuration)
+	action->setAbortCallback(
+	    deadlineContext.previous, deadlineContext.previousData);
     /* Image export/checkpoint readback is a second traversal, not a frame the
      * viewport needed to present.  Feeding it into the scene LoD capacity
      * estimator makes screenshot frequency and PNG test checkpoints alter
      * the terminal PoP cut.  QgSW's paint path opts in below; diagnostic
      * image producers deliberately do not. */
-    if (recordPresentationTiming)
+    if (recordPresentationTiming && !interrupted)
 	s.obol->completeRenderTiming(started);
+    if (interrupted) {
+	s.obol->notePresentationRenderInterrupted(
+	    completed > started ? completed - started : 1);
+	if (!s.last_completed_software_frame.isNull())
+	    img = s.last_completed_software_frame;
+	return;
+    }
     if (!rendered)
 	return;
 
@@ -363,7 +414,11 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     QImage raw(buffer, size[0], size[1], size[0] * 4,
 	QImage::Format_RGBX8888);
     if (borrowRendererBuffer) {
-	img = raw;
+	/* Keep one immutable completed frame.  A deadline-aborted OSMesa
+	 * traversal has already overwritten its renderer-owned buffer, so a
+	 * borrowed view cannot preserve the last coherent presentation. */
+	s.last_completed_software_frame = raw.copy();
+	img = s.last_completed_software_frame;
     } else {
 	img = QImage(size[0], size[1], QImage::Format_RGBX8888);
 	for (int y = 0; y < size[1]; y++)
@@ -374,6 +429,8 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	img.setDevicePixelRatio(w->devicePixelRatioF());
     if (recordPresentationTiming && consumeRenderRequest)
 	s.obol->clearRenderRequestIfUnchanged(renderedRequestSerial);
+    if (completedPresentation)
+	*completedPresentation = true;
 }
 
 /** Create the Obol view state every qtcad canvas exposes. */
@@ -415,6 +472,9 @@ qgcanvas_destroy_obol(QgCanvasState &s, QWidget *w)
 {
     delete s.offscreen_renderer;
     s.offscreen_renderer = nullptr;
+    delete s.presentation_fbo;
+    s.presentation_fbo = nullptr;
+    s.last_completed_software_frame = QImage();
     if (s.obol && s.obol->getRenderContextManager() ==
 	    qgcanvas_obol_context_manager(s.software_backend))
 	s.obol->setRenderContextManager(NULL);
@@ -747,16 +807,51 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
 
 /** Render queued Obol work from a caller-owned current GL context. */
 static inline SbBool
-qgcanvas_render_obol_pending(QgCanvasState &s,
+qgcanvas_render_obol_pending(QgCanvasState &s, QOpenGLWidget *widget,
 			     SbBool clearWindow = FALSE,
 			     SbBool clearZBuffer = FALSE)
 {
-    if (!s.obol)
+    if (!s.obol || !widget)
 	return FALSE;
     if (!s.software_backend && !QOpenGLContext::currentContext())
 	return FALSE;
     qgcanvas_bind_obol_render_context(s);
-    return s.obol->renderPending(clearWindow, clearZBuffer, NULL);
+    const QSize renderSize = qgcanvas_render_size(widget);
+    if (renderSize.isEmpty())
+	return FALSE;
+    if (!s.presentation_fbo || s.presentation_fbo->size() != renderSize) {
+	delete s.presentation_fbo;
+	QOpenGLFramebufferObjectFormat format;
+	format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+	format.setSamples(0);
+	s.presentation_fbo = new QOpenGLFramebufferObject(renderSize, format);
+    }
+    if (!s.presentation_fbo || !s.presentation_fbo->isValid()) {
+	delete s.presentation_fbo;
+	s.presentation_fbo = nullptr;
+	return s.obol->renderPending(clearWindow, clearZBuffer, NULL);
+    }
+
+    s.presentation_fbo->bind();
+    const SbBool rendered =
+	s.obol->renderPending(clearWindow, clearZBuffer, NULL);
+    QOpenGLContext *context = QOpenGLContext::currentContext();
+    QOpenGLExtraFunctions *gl = context ? context->extraFunctions() : nullptr;
+    if (gl) {
+	gl->glBindFramebuffer(GL_READ_FRAMEBUFFER,
+	    s.presentation_fbo->handle());
+	gl->glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+	    widget->defaultFramebufferObject());
+	if (rendered)
+	    gl->glBlitFramebuffer(0, 0, renderSize.width(), renderSize.height(),
+		0, 0, renderSize.width(), renderSize.height(),
+		GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	gl->glBindFramebuffer(GL_FRAMEBUFFER,
+	    widget->defaultFramebufferObject());
+    } else {
+	s.presentation_fbo->release();
+    }
+    return rendered;
 }
 
 /** Store current view hashes in @p s. */

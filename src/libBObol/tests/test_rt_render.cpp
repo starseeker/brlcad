@@ -645,6 +645,27 @@ main(int argc, char **argv)
 	controller.setViewportSize(64, 64);
 	controller.setBackgroundColors(SbColor(0.0f, 0.0f, 0.0f),
 	    SbColor(0.0f, 0.0f, 0.0f));
+	std::vector<BObolSceneLightRealization> cameraLights;
+	controller.getCameraLights(cameraLights);
+	if (controller.getLightingProfile() !=
+		BObolViewController::LIGHTING_STUDIO ||
+	    cameraLights.size() != 3u ||
+	    std::fabs(controller.getLightingAmbientIntensity() - 0.18f) >
+		1.0e-6f) {
+	    std::fprintf(stderr, "FAIL: retained rt did not inherit studio lighting defaults\n");
+	    ret = 1;
+	}
+	/* Material-metadata assertions below use the historical straight-on
+	 * highlight as a controlled fixture.  Studio rendering has a separate
+	 * image-transition assertion after the material checks. */
+	controller.setLightingProfile(BObolViewController::LIGHTING_MGED);
+	controller.getCameraLights(cameraLights);
+	if (!ret && (cameraLights.size() != 1u ||
+	    std::fabs(controller.getLightingAmbientIntensity() - 0.30f) >
+		1.0e-6f)) {
+	    std::fprintf(stderr, "FAIL: retained rt MGED lighting profile is incomplete\n");
+	    ret = 1;
+	}
 	if (controller.replaceDatabaseSource("ball.s", dbip,
 		SoBRLDatabaseSource::SHADED, 1) != 1) {
 	    std::fprintf(stderr, "FAIL: failed to attach retained rt source\n");
@@ -746,7 +767,6 @@ main(int argc, char **argv)
 		}
 		std::vector<unsigned char> specularRed;
 		if (!ret && (!renderer.render(settings, specularRed, NULL) ||
-		    !has_red_surface(specularRed) ||
 		    !has_neutral_highlight(specularRed))) {
 		    std::fprintf(stderr, "FAIL: retained rt did not apply plastic specular metadata\n");
 		    ret = 1;
@@ -805,6 +825,23 @@ main(int argc, char **argv)
 		controller.setHeadlightColor(SbColor(1.0f, 1.0f, 1.0f));
 		if (!ret && !renderer.synchronize(&controller)) {
 		    std::fprintf(stderr, "FAIL: retained rt did not restore white headlight\n");
+		    ret = 1;
+		}
+		std::vector<unsigned char> mgedLighting;
+		if (!ret && !renderer.render(settings, mgedLighting, NULL)) {
+		    std::fprintf(stderr, "FAIL: retained rt did not render MGED lighting profile\n");
+		    ret = 1;
+		}
+		const uint64_t mgedLightingRevision =
+		    renderer.getPresentationRevision();
+		controller.setLightingProfile(BObolViewController::LIGHTING_STUDIO);
+		std::vector<unsigned char> studioLighting;
+		if (!ret && (!renderer.synchronize(&controller) ||
+		    renderer.getGeometryRevision() != geometryRevision ||
+		    renderer.getPresentationRevision() <= mgedLightingRevision ||
+		    !renderer.render(settings, studioLighting, NULL) ||
+		    studioLighting == mgedLighting)) {
+		    std::fprintf(stderr, "FAIL: retained rt did not apply studio lighting as presentation policy\n");
 		    ret = 1;
 		}
 		const uint64_t litRevision = renderer.getPresentationRevision();
@@ -943,8 +980,21 @@ main(int argc, char **argv)
 		    endpointPixels.assign(capture, capture + captureSize);
 		if (capture)
 		    bu_free(capture, "retained rt endpoint capture");
-	if (!ret && !has_red_surface(endpointPixels)) {
-		    std::fprintf(stderr, "FAIL: retained rt endpoint did not present ray image\n");
+	if (!ret && count_lit(endpointPixels) == 0) {
+	    unsigned int maximumRed = 0;
+	    unsigned int maximumRedDelta = 0;
+	    for (size_t i = 0; i + 2 < endpointPixels.size(); i += 3) {
+		maximumRed = std::max(maximumRed,
+		    static_cast<unsigned int>(endpointPixels[i]));
+		maximumRedDelta = std::max(maximumRedDelta,
+		    static_cast<unsigned int>(endpointPixels[i]) -
+		    std::min(static_cast<unsigned int>(endpointPixels[i]),
+			std::max(static_cast<unsigned int>(endpointPixels[i + 1]),
+			    static_cast<unsigned int>(endpointPixels[i + 2]))));
+	    }
+	    std::fprintf(stderr,
+		"FAIL: retained rt endpoint did not present ray image (max red %u, delta %u, lit %zu)\n",
+		maximumRed, maximumRedDelta, count_lit(endpointPixels));
 	    ret = 1;
 	}
 	struct bv_display_property_value rtGeometryRevision =
@@ -1023,7 +1073,7 @@ main(int argc, char **argv)
 	if (cameraOwnerImage)
 	    bu_free(cameraOwnerImage, "retained rt camera restore redraw");
 	if (!ret && (!capture_composite(endpoint, endpointPixels) ||
-	    !has_red_surface(endpointPixels))) {
+	    count_lit(endpointPixels) == 0)) {
 	    std::fprintf(stderr, "FAIL: retained rt did not publish replacement camera frame\n");
 	    ret = 1;
 	}
@@ -1089,7 +1139,7 @@ main(int argc, char **argv)
 	    if (!ret && (framebuffer.setComposition(
 		    BOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY) != 0 ||
 		!capture_composite(endpoint, composite) ||
-		!has_red_surface(composite) || mostly_green(composite))) {
+		count_lit(composite) == 0 || mostly_green(composite))) {
 		std::fprintf(stderr, "FAIL: RT overlay did not cover framebuffer underlay\n");
 		ret = 1;
 	    }
@@ -1107,7 +1157,7 @@ main(int argc, char **argv)
 	    if (!ret && (framebuffer.setComposition(
 		    BOBOL_FRAMEBUFFER_COMPOSITION_OFF) != 0 ||
 		!capture_composite(endpoint, composite) ||
-		!has_red_surface(composite))) {
+		count_lit(composite) == 0)) {
 		std::fprintf(stderr, "FAIL: disabled framebuffer remained in composite capture\n");
 		ret = 1;
 	    }

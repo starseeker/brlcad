@@ -43,6 +43,47 @@ fastf_equal(fastf_t a, fastf_t b)
     return std::fabs(a - b) <= SMALL_FASTF;
 }
 
+struct mesh_lod_suffix_test_data {
+    const struct BObolMeshLodHierarchyInfo *hierarchy = NULL;
+    int nextLevel = -1;
+    size_t cumulativePoints = 0;
+    size_t streamedPoints = 0;
+    size_t streamedFaces = 0;
+};
+
+static int
+mesh_lod_suffix_test_callback(int level, const point_t *points,
+	size_t pointCount, const int *faces, size_t faceCount,
+	const vect_t *normals, size_t normalCount, void *callbackData)
+{
+    mesh_lod_suffix_test_data *test =
+	static_cast<mesh_lod_suffix_test_data *>(callbackData);
+    if (!test || !test->hierarchy || level != test->nextLevel ||
+	level <= 0 || level >= BOBOL_MESH_LOD_LEVEL_COUNT)
+	return 0;
+    const BObolMeshLodHierarchyInfo &hierarchy = *test->hierarchy;
+    if (hierarchy.point_count[level] < hierarchy.point_count[level - 1] ||
+	hierarchy.face_count[level] < hierarchy.face_count[level - 1] ||
+	pointCount != hierarchy.point_count[level] -
+	    hierarchy.point_count[level - 1] ||
+	faceCount != hierarchy.face_count[level] -
+	    hierarchy.face_count[level - 1] ||
+	(pointCount && !points) || (faceCount && !faces) ||
+	(normalCount && !normals) ||
+	normalCount != (hierarchy.has_normals ? faceCount * 3 : 0))
+	return 0;
+    test->cumulativePoints += pointCount;
+    for (size_t index = 0; index < faceCount * 3; ++index) {
+	if (faces[index] < 0 ||
+	    static_cast<size_t>(faces[index]) >= test->cumulativePoints)
+	    return 0;
+    }
+    test->streamedPoints += pointCount;
+    test->streamedFaces += faceCount;
+    test->nextLevel++;
+    return 1;
+}
+
 static long double
 mesh_signed_six_volume(const struct BObolMeshLodData &data)
 {
@@ -695,6 +736,43 @@ main(int argc, char *argv[])
 	if (!bobol_mesh_lod_info_get(lod, &surfaceInfo) ||
 	    surfaceInfo.shaded_cull_backfaces) {
 	    printf("FAIL: open surface was marked safe for backface culling\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	struct BObolMeshLodHierarchyInfo suffixHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	if (!bobol_mesh_lod_hierarchy_info_get(lod, &suffixHierarchy) ||
+	    suffixHierarchy.max_level <= suffixHierarchy.min_level) {
+	    printf("FAIL: mesh lod suffix hierarchy unavailable\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	const int levelBeforeSuffix = bobol_mesh_lod_current_level(lod);
+	bobol_mesh_lod_memshrink(lod);
+	mesh_lod_suffix_test_data suffixTest;
+	suffixTest.hierarchy = &suffixHierarchy;
+	suffixTest.nextLevel = suffixHierarchy.min_level + 1;
+	suffixTest.cumulativePoints =
+	    suffixHierarchy.point_count[suffixHierarchy.min_level];
+	if (bobol_mesh_lod_resident_prefix_bytes(lod) != 0 ||
+	    !bobol_mesh_lod_read_resident_suffix(lod,
+		suffixHierarchy.min_level, suffixHierarchy.max_level,
+		mesh_lod_suffix_test_callback, &suffixTest) ||
+	    suffixTest.nextLevel != suffixHierarchy.max_level + 1 ||
+	    suffixTest.streamedPoints !=
+		suffixHierarchy.point_count[suffixHierarchy.max_level] -
+		    suffixHierarchy.point_count[suffixHierarchy.min_level] ||
+	    suffixTest.streamedFaces !=
+		suffixHierarchy.face_count[suffixHierarchy.max_level] -
+		    suffixHierarchy.face_count[suffixHierarchy.min_level] ||
+	    bobol_mesh_lod_current_level(lod) != levelBeforeSuffix ||
+	    bobol_mesh_lod_resident_prefix_bytes(lod) != 0) {
+	    printf("FAIL: mesh lod suffix stream materialized or omitted cache "
+		   "records (levels=%d/%d points=%zu faces=%zu bytes=%zu)\n",
+		   suffixTest.nextLevel, suffixHierarchy.max_level + 1,
+		   suffixTest.streamedPoints, suffixTest.streamedFaces,
+		   bobol_mesh_lod_resident_prefix_bytes(lod));
 	    ret = 1;
 	    goto cleanup;
 	}

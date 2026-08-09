@@ -652,6 +652,8 @@ public:
     bool setLevel(int level, bool materializeSnapped = true);
     bool materializeGeneratedPrefix(int level);
     void releaseGenerationScratch(void);
+    bool readSuffix(int residentLevel, int targetLevel,
+	BObolMeshLodSuffixCallback callback, void *callbackData);
     void shrinkMemory(void);
     size_t residentBytes(void) const;
     size_t residentPrefixBytes(void) const;
@@ -1278,6 +1280,86 @@ BObolPopState::triPopLoad(int startLevel, int level,
 	}
     }
 
+    cacheDone();
+    return true;
+}
+
+bool
+BObolPopState::readSuffix(int residentLevel, int targetLevel,
+	BObolMeshLodSuffixCallback callback, void *callbackData)
+{
+    if (!isValid || !callback || residentLevel < minPopLevel ||
+	targetLevel <= residentLevel || targetLevel > maxPopLevel)
+	return false;
+
+    char component[16] = {0};
+    const auto levelComponent = [&component](const char *prefix,
+	int levelIndex) -> const char * {
+	const size_t prefixLength = strlen(prefix);
+	if (prefixLength >= sizeof(component)) {
+	    component[0] = '\0';
+	    return component;
+	}
+	memcpy(component, prefix, prefixLength);
+	char *out = component + prefixLength;
+	const std::to_chars_result converted =
+	    std::to_chars(out, component + sizeof(component) - 1, levelIndex);
+	if (converted.ec != std::errc()) {
+	    component[0] = '\0';
+	    return component;
+	}
+	*converted.ptr = '\0';
+	return component;
+    };
+
+    /* All borrowed records belong to one immutable cache snapshot.  The
+     * callback consumes each level before cacheDone releases that snapshot;
+     * no cumulative reader-owned vectors are allocated here. */
+    for (int levelIndex = residentLevel + 1;
+	 levelIndex <= targetLevel; ++levelIndex) {
+	const point_t *points = NULL;
+	const int *faces = NULL;
+	const vect_t *normals = NULL;
+	const size_t pointCount = levelVertexCount[levelIndex];
+	const size_t chunkFaceCount = levelTriangleCount[levelIndex];
+	if (pointCount > SIZE_MAX / sizeof(point_t) ||
+	    chunkFaceCount > SIZE_MAX / 3 ||
+	    chunkFaceCount * 3 > SIZE_MAX / sizeof(int) ||
+	    (hasNormals &&
+	     chunkFaceCount * 3 > SIZE_MAX / sizeof(vect_t))) {
+	    cacheDone();
+	    return false;
+	}
+	if (pointCount) {
+	    size_t bytes = cacheGet((void **)&points,
+		levelComponent(CACHE_VERT_LEVEL, levelIndex));
+	    if (bytes != pointCount * sizeof(point_t) || !points) {
+		cacheDone();
+		return false;
+	    }
+	}
+	if (chunkFaceCount) {
+	    size_t bytes = cacheGet((void **)&faces,
+		levelComponent(CACHE_TRI_LEVEL, levelIndex));
+	    if (bytes != chunkFaceCount * 3 * sizeof(int) || !faces) {
+		cacheDone();
+		return false;
+	    }
+	    if (hasNormals) {
+		bytes = cacheGet((void **)&normals,
+		    levelComponent(CACHE_VERTNORM_LEVEL, levelIndex));
+		if (bytes != chunkFaceCount * 3 * sizeof(vect_t) || !normals) {
+		    cacheDone();
+		    return false;
+		}
+	    }
+	}
+	if (!callback(levelIndex, points, pointCount, faces, chunkFaceCount,
+		normals, normals ? chunkFaceCount * 3 : 0, callbackData)) {
+	    cacheDone();
+	    return false;
+	}
+    }
     cacheDone();
     return true;
 }
@@ -2818,6 +2900,19 @@ bobol_mesh_lod_load_resident_level(struct BObolMeshLod *lod, int level,
     level = std::max(level, lod->state->minPopLevel);
     level = std::min(level, lod->state->maxPopLevel);
     return mesh_lod_level(lod, level, reset, false);
+}
+
+int
+bobol_mesh_lod_read_resident_suffix(struct BObolMeshLod *lod,
+	int residentLevel, int targetLevel,
+	BObolMeshLodSuffixCallback callback, void *callbackData)
+{
+    if (!lod || !lod->state || !callback)
+	return 0;
+    residentLevel = std::max(residentLevel, lod->state->minPopLevel);
+    targetLevel = std::min(targetLevel, lod->state->maxPopLevel);
+    return lod->state->readSuffix(
+	residentLevel, targetLevel, callback, callbackData) ? 1 : 0;
 }
 
 int

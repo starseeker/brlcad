@@ -19,10 +19,11 @@
  */
 /** @file libged/view/lighting.cpp
  *
- * The "view lighting" subcommand: enable/disable the camera-driven headlight
- * and in-scene (database) lights, and control whether the headlight tracks the
- * camera.  Settings are stored per-view in struct bv_lighting_state and pushed
- * to the live Obol renderer via ged_view_lighting_sync().
+ * The "view lighting" subcommand: select a named camera-lighting profile,
+ * enable/disable the camera-driven rig and in-scene (database) lights, and
+ * control whether the rig tracks the camera.  Settings are stored per-view in
+ * struct bv_lighting_state and pushed to the live Obol renderer via
+ * ged_view_lighting_sync().
  *
  */
 
@@ -149,6 +150,51 @@ _lgt_cmd_scene(void *ds, int argc, const char **argv)
 }
 
 static int
+_lgt_cmd_profile(void *ds, int argc, const char **argv)
+{
+    const char *usage_string = "lighting profile [studio|mged]";
+    const char *purpose_string = "Get/set the camera-relative lighting preset.";
+    if (_lgt_cmd_msgs(ds, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    argc--; argv++;
+    struct _ged_lgt_info *gd = (struct _ged_lgt_info *)ds;
+    struct ged *gedp = gd->gedp;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    struct bv_lighting_state lighting;
+    if (!view || !bv_lighting_state_get(&lighting, view))
+	return BRLCAD_ERROR;
+
+    if (!argc) {
+	bu_vls_printf(gedp->ged_result_str, "%s",
+	    lighting.profile == BV_LIGHTING_MGED ? "mged" : "studio");
+	return BRLCAD_OK;
+    }
+    if (argc != 1) {
+	bu_vls_printf(gedp->ged_result_str, "usage: %s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+    if (BU_STR_EQUAL(argv[0], "studio")) {
+	lighting.profile = BV_LIGHTING_STUDIO;
+	lighting.headlight_offset[0] = 0.35;
+	lighting.headlight_offset[1] = -0.25;
+	lighting.headlight_offset[2] = -1.0;
+    } else if (BU_STR_EQUAL(argv[0], "mged")) {
+	lighting.profile = BV_LIGHTING_MGED;
+	lighting.headlight_offset[0] = 0.0;
+	lighting.headlight_offset[1] = 0.0;
+	lighting.headlight_offset[2] = -1.0;
+    } else {
+	bu_vls_printf(gedp->ged_result_str,
+	    "unknown lighting profile %s - expected studio or mged\n", argv[0]);
+	return BRLCAD_ERROR;
+    }
+    return bv_lighting_state_set(view, &lighting) ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
+
+static int
 _lgt_cmd_offset(void *ds, int argc, const char **argv)
 {
     const char *usage_string = "lighting offset [x y z]";
@@ -186,6 +232,7 @@ _lgt_cmd_offset(void *ds, int argc, const char **argv)
 }
 
 static const struct bu_cmdtab _lgt_cmds[] = {
+    { "profile",    _lgt_cmd_profile},
     { "headlight",  _lgt_cmd_headlight},
     { "tracking",   _lgt_cmd_tracking},
     { "scene",      _lgt_cmd_scene},
@@ -237,7 +284,8 @@ ged_lighting_core(struct ged *gedp, int argc, const char *argv[])
 	if (!view || !bv_lighting_state_get(&lighting, view))
 	    return BRLCAD_ERROR;
 	bu_vls_printf(gedp->ged_result_str,
-	    "headlight %d\ntracking %d\nscene %d\noffset %g %g %g",
+	    "profile %s\nheadlight %d\ntracking %d\nscene %d\noffset %g %g %g",
+	    lighting.profile == BV_LIGHTING_MGED ? "mged" : "studio",
 	    lighting.headlight_enabled, lighting.headlight_tracks_camera,
 	    lighting.scene_lights_enabled,
 	    lighting.headlight_offset[0], lighting.headlight_offset[1],

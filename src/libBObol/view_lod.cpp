@@ -396,6 +396,12 @@ view_lod_saturating_add(size_t lhs, size_t rhs)
     return rhs > SIZE_MAX - lhs ? SIZE_MAX : lhs + rhs;
 }
 
+static uint64_t
+view_lod_saturating_add_u64(uint64_t lhs, uint64_t rhs)
+{
+    return rhs > UINT64_MAX - lhs ? UINT64_MAX : lhs + rhs;
+}
+
 static size_t
 view_lod_saturating_subtract(size_t lhs, size_t rhs)
 {
@@ -483,12 +489,24 @@ BObolViewLodState::BObolViewLodState(void) :
     cadPresentationProgressiveLodCeiling(-1),
     cadPresentationPointProxyPixelThreshold(1.0f),
     cadPresentationCameraMotionFrameReuse(FALSE),
+    cadPresentationFrameStatusValid(FALSE),
+    cadLastPresentedTriangleCountValid(FALSE),
+    cadLastPresentedTriangleCount(0),
+    cadLastPresentedRenderCostValid(FALSE),
+    cadLastPresentedRenderCost(0),
+    cadLastGpuMeasurementValid(FALSE),
+    cadLastGpuFaces(0),
+    cadLastGpuNanoseconds(0),
+    cadLastGpuSerial(0),
+    cadLastPreparedReplay(FALSE),
+    cadGpuResourceStatusValid(FALSE),
     cadValidPayloadCount(0),
     cadMeshPayloadCountValue(0),
     cadProxyPayloadCountValue(0),
     cadSatisfiedMeshPayloadCount(0),
     cadMemoryLimitedMeshPayloadCount(0),
     cadActiveFaceCount(0),
+    cadActiveRenderCost(0),
     cadDisplayMeshBytes(0),
     cadResidentDemandRevision(1)
 {
@@ -534,6 +552,7 @@ BObolViewLodState::clearCadPayloadMetrics(void)
     this->cadSatisfiedMeshPayloadCount = 0;
     this->cadMemoryLimitedMeshPayloadCount = 0;
     this->cadActiveFaceCount = 0;
+    this->cadActiveRenderCost = 0;
     this->cadDisplayMeshBytes = 0;
     memset(this->cadProxyKindCounts, 0,
 	sizeof(this->cadProxyKindCounts));
@@ -672,6 +691,10 @@ BObolViewLodState::addCadPayloadMetrics(const CadPayload *payload)
 	    view_lod_saturating_add(sourceMeshCount, 1);
 	this->cadActiveFaceCount = view_lod_saturating_add(
 	    this->cadActiveFaceCount, payload->counts.faceCount);
+	this->cadActiveRenderCost = view_lod_saturating_add(
+	    this->cadActiveRenderCost,
+	    bobol_lod_render_cost_units(
+		payload->counts, payload->drawMode, 1));
 	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
 	    payload->requestedLevel < 0 ||
 	    payload->activeLevel >= payload->requestedLevel)
@@ -752,6 +775,10 @@ BObolViewLodState::removeCadPayloadMetrics(const CadPayload *payload)
 	}
 	this->cadActiveFaceCount = view_lod_saturating_subtract(
 	    this->cadActiveFaceCount, payload->counts.faceCount);
+	this->cadActiveRenderCost = view_lod_saturating_subtract(
+	    this->cadActiveRenderCost,
+	    bobol_lod_render_cost_units(
+		payload->counts, payload->drawMode, 1));
 	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
 	    payload->requestedLevel < 0 ||
 	    payload->activeLevel >= payload->requestedLevel)
@@ -827,11 +854,23 @@ BObolViewLodState::setCadPresentation(
     const std::string key = view_lod_source_primary_key(source);
     CadPresentation &presentation = this->cadPresentations[key];
     if (presentation.assembly != assembly) {
-	if (assembly)
+	if (assembly) {
 	    assembly->ref();
-	if (presentation.assembly)
+	    this->cadPresentationAssemblyUseCounts[assembly]++;
+	}
+	if (presentation.assembly) {
+	    const auto use = this->cadPresentationAssemblyUseCounts.find(
+		presentation.assembly);
+	    if (use != this->cadPresentationAssemblyUseCounts.end()) {
+		if (use->second > 1)
+		    use->second--;
+		else
+		    this->cadPresentationAssemblyUseCounts.erase(use);
+	    }
 	    presentation.assembly->unref();
+	}
 	presentation.assembly = assembly;
+	this->cadPresentationFrameStatusValid = FALSE;
     }
     presentation.contentKey = contentKey;
     if (presentation.assembly)
@@ -856,6 +895,8 @@ BObolViewLodState::clearCadPresentations(void) const
 	binding.second.assembly = NULL;
     }
     this->cadPresentations.clear();
+    this->cadPresentationAssemblyUseCounts.clear();
+    this->cadPresentationFrameStatusValid = FALSE;
 }
 
 void
@@ -1558,7 +1599,10 @@ BObolViewLodState::retargetMeshPayload(
 
     payload->activeLevel = activeLevel;
     payload->requestedLevel = requestedLevel;
-    payload->residentLevel = payload->progressiveMesh->residentLevel();
+    /* residentLevel is the last population-bearing PoP level published for
+     * this payload.  A coordinate-only plateau may make a finer activeLevel
+     * drawable without changing that population high-water mark, so do not
+     * overwrite it from the selected cut or from a newer worker generation. */
     payload->residentAdmissionRevision = 0;
     payload->memoryLimited = FALSE;
     payload->viewRevision = viewRevision;
@@ -1581,8 +1625,52 @@ BObolViewLodState::retargetCadPayload(
     uint64_t viewRevision,
     uint64_t policyRevision)
 {
+    /* The shared progressive asset may already contain a worker-built
+     * generation whose result has not reached this view.  The immutable
+     * prepared PartGeometry is the authoritative presentation snapshot; its
+     * progressive channel frontier also preserves coordinate-only levels
+     * above the last population-bearing residentLevel. */
+    const auto preparedChannelLevel = [target](bool wire) {
+	if (!target || !target->progressiveMesh ||
+	    !target->preparedCadGeometry)
+	    return -1;
+	if (wire) {
+	    if (!target->preparedCadGeometry->wire)
+		return -1;
+	    const Obol::WireRep &prepared =
+		*target->preparedCadGeometry->wire;
+	    return prepared.isProgressive() ?
+		static_cast<int>(prepared.progressiveResidentLevel) :
+		target->progressiveMesh->maximumLevel();
+	}
+	if (!target->preparedCadGeometry->shaded)
+	    return -1;
+	const Obol::TriMesh &prepared =
+	    *target->preparedCadGeometry->shaded;
+	return prepared.isProgressive() ?
+	    static_cast<int>(prepared.progressiveResidentLevel) :
+	    target->progressiveMesh->maximumLevel();
+    };
+    const bool needsWire = target &&
+	(target->drawMode == BOBOL_LOD_DRAW_WIRE ||
+	 target->drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE);
+    const bool needsShaded = target &&
+	(target->drawMode == BOBOL_LOD_DRAW_SHADED ||
+	 target->drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
+	 target->drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE);
+    int preparedDrawableLevel = target ? target->residentLevel : -1;
+    if (target && target->preparedCadGeometry) {
+	if (needsWire)
+	    preparedDrawableLevel = preparedChannelLevel(true);
+	if (needsShaded) {
+	    const int shadedLevel = preparedChannelLevel(false);
+	    preparedDrawableLevel = needsWire ?
+		std::min(preparedDrawableLevel, shadedLevel) : shadedLevel;
+	}
+    }
+
     if (!target || !target->progressiveMesh ||
-	!target->progressiveMesh->canDrawLevel(activeLevel) ||
+	activeLevel > preparedDrawableLevel ||
 	requestedLevel < 0)
 	return FALSE;
 
@@ -1646,7 +1734,6 @@ BObolViewLodState::retargetCadPayload(
 	    }
 	}
 	payload->requestedLevel = requestedLevel;
-	payload->residentLevel = payload->progressiveMesh->residentLevel();
 	if (payload->memoryLimited)
 	    this->cadMemoryLimitedMeshPayloadCount =
 		view_lod_saturating_subtract(
@@ -1661,15 +1748,14 @@ BObolViewLodState::retargetCadPayload(
     this->removeCadPayloadMetrics(payload.get());
     payload->activeLevel = activeLevel;
     payload->requestedLevel = requestedLevel;
-    payload->residentLevel = payload->progressiveMesh->residentLevel();
     payload->residentAdmissionRevision = 0;
     payload->memoryLimited = FALSE;
     payload->viewRevision = viewRevision;
     payload->policyRevision = policyRevision;
     payload->counts.faceCount =
-	payload->progressiveMesh->faceCount(activeLevel);
+	payload->progressiveMesh->hierarchyFaceCount(activeLevel);
     payload->counts.pointCount =
-	payload->progressiveMesh->pointCount(activeLevel);
+	payload->progressiveMesh->hierarchyPointCount(activeLevel);
     payload->counts.originalPointCount = payload->counts.pointCount;
     payload->counts.normalCount = payload->hasNormals ?
 	payload->counts.faceCount * 3 : 0;
@@ -1931,113 +2017,266 @@ BObolViewLodState::activeFaceCount(void) const
     return view_lod_saturating_add(faces, this->cadActiveFaceCount);
 }
 
+size_t
+BObolViewLodState::activeRenderCost(void) const
+{
+    size_t cost = 0;
+    const std::vector<MeshPayloadPtr> meshPayloads =
+	view_lod_unique_payloads(this->meshBindings);
+    for (const MeshPayloadPtr &payload : meshPayloads) {
+	if (!payload || !payload->isValid() ||
+	    payload->resultKind != BOBOL_LOD_RESULT_MESH)
+	    continue;
+	cost = view_lod_saturating_add(cost,
+	    bobol_lod_render_cost_units(
+		payload->counts, BOBOL_LOD_DRAW_SHADED, 1));
+    }
+    return view_lod_saturating_add(cost, this->cadActiveRenderCost);
+}
+
 SbBool
 BObolViewLodState::lastCadPresentedTriangleCount(size_t &faces) const
 {
-    faces = 0;
-    SbBool measured = FALSE;
-    std::unordered_set<const SoCADAssembly *> visited;
-    visited.reserve(this->cadPresentations.size());
-    for (const auto &binding : this->cadPresentations) {
-	const SoCADAssembly *assembly = binding.second.assembly;
-	if (!assembly || !visited.insert(assembly).second)
-	    continue;
-	/*
-	 * The retained indirect path (tier 6) and flattened shaded/hidden-line
-	 * paths (tiers 4/3) all publish an exact submitted-triangle count.
-	 * Restricting this diagnostic to tier 6 made OSMesa calibrate from the
-	 * richer producer-retained population instead of what it actually
-	 * rasterized after PoP ceilings and small-part aggregation.
-	 */
-	const int tier = assembly->lastRenderTier();
-	if (tier != 3 && tier != 4 && tier != 6)
-	    return FALSE;
-	const uint64_t triangles = assembly->lastRenderedTriangleCount();
-	if (!triangles)
-	    return FALSE;
-	faces = triangles > static_cast<uint64_t>(SIZE_MAX - faces) ?
-	    SIZE_MAX : faces + static_cast<size_t>(triangles);
-	measured = TRUE;
-    }
-    return measured;
+    if (!this->cadPresentationFrameStatusValid)
+	this->refreshCadPresentationFrameStatus();
+    faces = this->cadLastPresentedTriangleCount;
+    return this->cadLastPresentedTriangleCountValid;
+}
+
+SbBool
+BObolViewLodState::lastCadPresentedRenderCost(size_t &cost) const
+{
+    if (!this->cadPresentationFrameStatusValid)
+	this->refreshCadPresentationFrameStatus();
+    cost = this->cadLastPresentedRenderCost;
+    return this->cadLastPresentedRenderCostValid;
 }
 
 SbBool
 BObolViewLodState::lastCadGpuMeasurement(
 	size_t &faces, uint64_t &nanoseconds, uint64_t &serial) const
 {
-    faces = 0;
-    nanoseconds = 0;
-    serial = 1469598103934665603ULL;
-    SbBool measured = FALSE;
-    std::unordered_set<const SoCADAssembly *> visited;
-    visited.reserve(this->cadPresentations.size());
-    for (const auto &binding : this->cadPresentations) {
-	const SoCADAssembly *assembly = binding.second.assembly;
-	if (!assembly || !visited.insert(assembly).second)
+    if (!this->cadPresentationFrameStatusValid)
+	this->refreshCadPresentationFrameStatus();
+    faces = this->cadLastGpuFaces;
+    nanoseconds = this->cadLastGpuNanoseconds;
+    serial = this->cadLastGpuSerial;
+    return this->cadLastGpuMeasurementValid;
+}
+
+void
+BObolViewLodState::refreshCadPresentationFrameStatus(void) const
+{
+    this->cadLastPresentedTriangleCount = 0;
+    this->cadLastPresentedRenderCost = 0;
+    this->cadLastGpuFaces = 0;
+    this->cadLastGpuNanoseconds = 0;
+    this->cadLastGpuSerial = 1469598103934665603ULL;
+    this->cadGpuResourceStatusValue = CadGpuResourceStatus();
+
+    SbBool haveAssembly = FALSE;
+    SbBool presentedValid = TRUE;
+    SbBool presentedRenderCostValid = TRUE;
+    SbBool gpuMeasurementValid = TRUE;
+    SbBool preparedReplay = TRUE;
+    SbBool resourceSampled = FALSE;
+    uint64_t resourceSerial = 1469598103934665603ULL;
+
+    for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
+	const SoCADAssembly *assembly = entry.first;
+	if (!assembly || !entry.second)
 	    continue;
-	if (assembly->lastRenderTier() != 6)
-	    return FALSE;
-	const uint64_t sampleSerial = assembly->gpuTimerSampleSerial();
-	const uint64_t sampleNanoseconds =
-	    assembly->lastGpuRenderNanoseconds();
-	if (!sampleSerial || !sampleNanoseconds)
-	    return FALSE;
-	const uint64_t triangles =
-	    assembly->lastGpuRenderedTriangleCount();
-	faces = triangles > static_cast<uint64_t>(SIZE_MAX - faces) ?
-	    SIZE_MAX : faces + static_cast<size_t>(triangles);
-	nanoseconds =
-	    sampleNanoseconds > UINT64_MAX - nanoseconds ?
-		UINT64_MAX : nanoseconds + sampleNanoseconds;
-	/* Include assembly identity so two contexts advancing by different
-	 * amounts cannot alias the previous aggregate merely because their
-	 * numeric per-context serials happen to sum to the same value. */
-	const uint64_t identity =
-	    static_cast<uint64_t>(
-		reinterpret_cast<uintptr_t>(assembly));
-	serial ^= identity;
-	serial *= 1099511628211ULL;
-	serial ^= sampleSerial;
-	serial *= 1099511628211ULL;
-	measured = TRUE;
+	haveAssembly = TRUE;
+	const int tier = assembly->lastRenderTier();
+	/* Every Obol renderer tier publishes its exact shaded-triangle
+	 * submission count.  Direct fixed/VBO/immediate and instanced paths do
+	 * this at the draw site, while flattened and indirect paths retain their
+	 * already aggregated count. */
+	const uint64_t presented = assembly->lastRenderedTriangleCount();
+	if (tier < 0 || tier > 6 || !presented) {
+	    presentedValid = FALSE;
+	} else {
+	    this->cadLastPresentedTriangleCount =
+		presented > static_cast<uint64_t>(
+		    SIZE_MAX - this->cadLastPresentedTriangleCount) ?
+		SIZE_MAX : this->cadLastPresentedTriangleCount +
+		    static_cast<size_t>(presented);
+	}
+
+	const Obol::CadRenderedShadedWork work =
+	    assembly->lastRenderedShadedWork();
+	const int presentationDrawMode = assembly->drawMode.getValue();
+	if (!work.exact || !work.triangleCount ||
+	    (presentationDrawMode != SoCADAssembly::SHADED &&
+	     presentationDrawMode != SoCADAssembly::SHADED_WITH_EDGES)) {
+	    presentedRenderCostValid = FALSE;
+	} else {
+	    BObolLodCounts counts;
+	    counts.faceCount = work.triangleCount;
+	    counts.pointCount = work.positionCount;
+	    counts.normalCount = work.normalCount;
+	    const size_t occurrences = work.occurrenceCount >
+		static_cast<uint64_t>(SIZE_MAX) ? SIZE_MAX :
+		static_cast<size_t>(work.occurrenceCount);
+	    this->cadLastPresentedRenderCost = view_lod_saturating_add(
+		this->cadLastPresentedRenderCost,
+		bobol_lod_render_cost_units(
+		    counts, BOBOL_LOD_DRAW_SHADED, occurrences));
+	}
+
+	if (tier != 6) {
+	    gpuMeasurementValid = FALSE;
+	} else {
+	    const uint64_t timerSerial = assembly->gpuTimerSampleSerial();
+	    const uint64_t timerNanoseconds =
+		assembly->lastGpuRenderNanoseconds();
+	    if (!timerSerial || !timerNanoseconds) {
+		gpuMeasurementValid = FALSE;
+	    } else {
+		const uint64_t triangles =
+		    assembly->lastGpuRenderedTriangleCount();
+		this->cadLastGpuFaces =
+		    triangles > static_cast<uint64_t>(
+			SIZE_MAX - this->cadLastGpuFaces) ?
+		    SIZE_MAX : this->cadLastGpuFaces +
+			static_cast<size_t>(triangles);
+		this->cadLastGpuNanoseconds =
+		    timerNanoseconds >
+			UINT64_MAX - this->cadLastGpuNanoseconds ?
+		    UINT64_MAX : this->cadLastGpuNanoseconds +
+			timerNanoseconds;
+		this->cadLastGpuSerial ^= static_cast<uint64_t>(
+		    reinterpret_cast<uintptr_t>(assembly));
+		this->cadLastGpuSerial *= 1099511628211ULL;
+		this->cadLastGpuSerial ^= timerSerial;
+		this->cadLastGpuSerial *= 1099511628211ULL;
+	    }
+	}
+
+	/* Flattened tiers retain transformed atlas ranges.  Tier 6 must report
+	 * exact prepared replay before its timing is reusable calibration. */
+	if (tier != 3 && tier != 4 &&
+	    (tier != 6 || !assembly->lastRenderUsedPreparedReplay()))
+	    preparedReplay = FALSE;
+
+	const Obol::CadGpuResourceSnapshot snapshot =
+	    assembly->gpuResourceSnapshot();
+	if (!snapshot.frameSerial)
+	    continue;
+	CadGpuResourceStatus &status = this->cadGpuResourceStatusValue;
+	status.trackedBufferBytes = view_lod_saturating_add(
+	    status.trackedBufferBytes, snapshot.trackedBufferBytes);
+	status.ordinaryPartBufferBytes = view_lod_saturating_add(
+	    status.ordinaryPartBufferBytes,
+	    snapshot.ordinaryPartBufferBytes);
+	status.progressiveCutBufferBytes = view_lod_saturating_add(
+	    status.progressiveCutBufferBytes,
+	    snapshot.progressiveCutBufferBytes);
+	status.progressiveActiveCutBytes = view_lod_saturating_add(
+	    status.progressiveActiveCutBytes,
+	    snapshot.progressiveActiveCutBytes);
+	status.batchBufferBytes = view_lod_saturating_add(
+	    status.batchBufferBytes, snapshot.batchBufferBytes);
+	status.triangleAtlasAllocatedBytes = view_lod_saturating_add(
+	    status.triangleAtlasAllocatedBytes,
+	    snapshot.triangleAtlasAllocatedBytes);
+	status.triangleAtlasLiveBytes = view_lod_saturating_add(
+	    status.triangleAtlasLiveBytes,
+	    snapshot.triangleAtlasLiveBytes);
+	status.triangleAtlasConfiguredCapacityBytes = view_lod_saturating_add(
+	    status.triangleAtlasConfiguredCapacityBytes,
+	    snapshot.triangleAtlasBudgetBytes);
+	status.triangleAtlasPartCount = view_lod_saturating_add(
+	    status.triangleAtlasPartCount,
+	    snapshot.triangleAtlasPartCount);
+	status.triangleAtlasPageCount = view_lod_saturating_add(
+	    status.triangleAtlasPageCount,
+	    snapshot.triangleAtlasPageCount);
+	status.ordinaryPartFullUploadBytes = view_lod_saturating_add_u64(
+	    status.ordinaryPartFullUploadBytes,
+	    snapshot.ordinaryPartFullUploadBytes);
+	status.ordinaryPartSuffixUploadBytes = view_lod_saturating_add_u64(
+	    status.ordinaryPartSuffixUploadBytes,
+	    snapshot.ordinaryPartSuffixUploadBytes);
+	status.ordinaryPartGpuCopyBytes = view_lod_saturating_add_u64(
+	    status.ordinaryPartGpuCopyBytes,
+	    snapshot.ordinaryPartGpuCopyBytes);
+	status.ordinaryPartLineageReuseCount = view_lod_saturating_add_u64(
+	    status.ordinaryPartLineageReuseCount,
+	    snapshot.ordinaryPartLineageReuseCount);
+	status.triangleAtlasFullUploadBytes = view_lod_saturating_add_u64(
+	    status.triangleAtlasFullUploadBytes,
+	    snapshot.triangleAtlasFullUploadBytes);
+	status.triangleAtlasSuffixUploadBytes = view_lod_saturating_add_u64(
+	    status.triangleAtlasSuffixUploadBytes,
+	    snapshot.triangleAtlasSuffixUploadBytes);
+	status.triangleAtlasLineageReuseCount = view_lod_saturating_add_u64(
+	    status.triangleAtlasLineageReuseCount,
+	    snapshot.triangleAtlasLineageReuseCount);
+	status.pressureProxyCount = view_lod_saturating_add(
+	    status.pressureProxyCount, snapshot.pressureProxyCount);
+	status.progressiveEvictionCount = view_lod_saturating_add_u64(
+	    status.progressiveEvictionCount,
+	    snapshot.progressiveEvictionCount);
+	status.triangleAtlasReclamationCount =
+	    view_lod_saturating_add_u64(
+		status.triangleAtlasReclamationCount,
+		snapshot.triangleAtlasReclamationCount);
+	if (snapshot.atlasAdmissionPressure)
+	    status.memoryPressure = TRUE;
+
+	/* Hash both identity and local completed-frame serial.  Merely summing
+	 * per-context counters can alias when one context advances while another
+	 * remains unchanged. */
+	resourceSerial ^= static_cast<uint64_t>(
+	    reinterpret_cast<uintptr_t>(assembly));
+	resourceSerial *= 1099511628211ULL;
+	resourceSerial ^= snapshot.frameSerial;
+	resourceSerial *= 1099511628211ULL;
+	resourceSampled = TRUE;
     }
-    if (!measured) {
-	serial = 0;
-	return FALSE;
+
+    this->cadLastPresentedTriangleCountValid =
+	haveAssembly && presentedValid;
+    this->cadLastPresentedRenderCostValid =
+	haveAssembly && presentedRenderCostValid &&
+	this->cadLastPresentedRenderCost > 0;
+    this->cadLastGpuMeasurementValid =
+	haveAssembly && gpuMeasurementValid;
+    if (!this->cadLastGpuMeasurementValid)
+	this->cadLastGpuSerial = 0;
+    else if (!this->cadLastGpuSerial)
+	this->cadLastGpuSerial = 1;
+    this->cadLastPreparedReplay = haveAssembly && preparedReplay;
+    this->cadGpuResourceStatusValid = resourceSampled;
+    /* qged diagnostics are JSON and therefore carry this token through a
+     * signed 64-bit integer.  It is an opaque change detector, not an
+     * arithmetic counter, so reserve the sign bit and keep zero as "none". */
+    if (resourceSampled) {
+	this->cadGpuResourceStatusValue.sampleSerial =
+	    resourceSerial & INT64_MAX;
+	if (!this->cadGpuResourceStatusValue.sampleSerial)
+	    this->cadGpuResourceStatusValue.sampleSerial = 1;
     }
-    if (!serial)
-	serial = 1;
-    return TRUE;
+    this->cadPresentationFrameStatusValid = TRUE;
+}
+
+SbBool
+BObolViewLodState::cadGpuResourceStatus(
+	CadGpuResourceStatus &status) const
+{
+    if (!this->cadPresentationFrameStatusValid)
+	this->refreshCadPresentationFrameStatus();
+    status = this->cadGpuResourceStatusValue;
+    return this->cadGpuResourceStatusValid;
 }
 
 SbBool
 BObolViewLodState::lastCadPresentationUsedPreparedReplay(void) const
 {
-    SbBool measured = FALSE;
-    std::unordered_set<const SoCADAssembly *> visited;
-    visited.reserve(this->cadPresentations.size());
-    for (const auto &binding : this->cadPresentations) {
-	const SoCADAssembly *assembly = binding.second.assembly;
-	if (!assembly || !visited.insert(assembly).second)
-	    continue;
-	const int tier = assembly->lastRenderTier();
-	/*
-	 * Flattened shaded/hidden-line tiers retain their transformed atlas
-	 * ranges between frames.  Their per-frame occurrence selection is part
-	 * of sustainable software-renderer cost, while geometry publication is
-	 * already excluded separately by lodResultPublicationAwaitingFrame.
-	 * Treat them as reusable presentations for quiet throughput sampling.
-	 */
-	if (tier == 3 || tier == 4) {
-	    measured = TRUE;
-	    continue;
-	}
-	if (tier != 6 || !assembly->lastRenderUsedPreparedReplay())
-	    return FALSE;
-	measured = TRUE;
-    }
-    return measured;
+    if (!this->cadPresentationFrameStatusValid)
+	this->refreshCadPresentationFrameStatus();
+    return this->cadLastPreparedReplay;
 }
 
 int

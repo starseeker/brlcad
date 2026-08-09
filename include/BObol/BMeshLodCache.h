@@ -68,6 +68,21 @@ typedef int (*BObolMeshLodDetailSetupCallback)(
 typedef int (*BObolMeshLodDetailClearCallback)(void *cb_data);
 typedef int (*BObolMeshLodDetailFreeCallback)(void *cb_data);
 
+/* One borrowed activation-level suffix from an immutable PoP cache snapshot.
+ * Points and faces contain only the records introduced at level; face indices
+ * address the cumulative activation-ordered point array.  normals is either
+ * NULL or contains three corner normals per face.  All pointers are valid only
+ * for the duration of the callback. */
+typedef int (*BObolMeshLodSuffixCallback)(
+	int level,
+	const point_t *points,
+	size_t point_count,
+	const int *faces,
+	size_t face_count,
+	const vect_t *normals,
+	size_t normal_count,
+	void *cb_data);
+
 /* Stable summary of the active mesh LoD state. */
 struct BObolMeshLodInfo {
     int active_level;
@@ -254,6 +269,18 @@ BOBOL_EXPORT int
 bobol_mesh_lod_load_resident_level(struct BObolMeshLod *lod,
 				     int level,
 				     int reset);
+
+/* Read only the activation records in (resident_level, target_level] from one
+ * cache transaction.  Unlike bobol_mesh_lod_load_resident_level(), this does
+ * not materialize or retain a duplicate cumulative prefix in lod and does not
+ * change its active level.  It is the immutable-renderer append path after a
+ * stable memory compaction has released the cache reader's working arrays. */
+BOBOL_EXPORT int
+bobol_mesh_lod_read_resident_suffix(struct BObolMeshLod *lod,
+	int resident_level,
+	int target_level,
+	BObolMeshLodSuffixCallback callback,
+	void *cb_data);
 
 BOBOL_EXPORT int
 bobol_mesh_lod_load_view(struct BObolMeshLod *lod,

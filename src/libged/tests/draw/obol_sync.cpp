@@ -1650,12 +1650,26 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     ged_draw_transaction_result_free(&result);
     if (draw_ret <= 0)
 	FAIL("progressive autoview deferred draw should succeed");
+    if (bv_frame_revision_get(view) != initial_revision)
+	FAIL("deferred draw must not expose a provisional autoview before exact coverage");
 
     /* An explicit autoview while the root is still realizing must replace
      * the transaction's initial fit and continue following final bounds. */
     const char *autoview_cmd[1] = {"autoview"};
     if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
 	FAIL("explicit autoview should arm deferred Obol bound tracking");
+    if (bv_frame_revision_get(view) != initial_revision)
+	FAIL("explicit progressive autoview must remain atomic until exact coverage");
+
+    uint64_t observed_autoview_revision = initial_revision;
+    size_t autoview_application_ticks = 0;
+    const auto note_autoview_application = [&]() {
+	const uint64_t revision = bv_frame_revision_get(view);
+	if (revision == observed_autoview_revision)
+	    return;
+	observed_autoview_revision = revision;
+	autoview_application_ticks++;
+    };
 
     BObolProgressiveOptions options;
     BObolProgressiveStatus status;
@@ -1703,6 +1717,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	if (proxy_ready)
 	    break;
 	(void)controller->advanceProgressiveWork(&options, &status);
+	note_autoview_application();
 	initial_source = scene ? source_for_path(scene,
 	    "progressive_root.c") : NULL;
 	proxy_bounds.makeEmpty();
@@ -1751,6 +1766,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     SoBRLDatabaseSource *settled_source = NULL;
     for (int attempt = 0; attempt < 2000; attempt++) {
 	initial_progress = controller->advanceProgressiveWork(&options, &status);
+	note_autoview_application();
 	settled_source = scene ? source_for_path(scene,
 	    "progressive_root.c") : NULL;
 	compact_counts(settled_source, authoritative_count, overview_count,
@@ -1789,12 +1805,13 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	authoritative_count != 4 || visible_overview_count != 0 ||
 	settled_bounds.isEmpty() ||
 	scene->getDatabaseSourceCount() != initial_scene_source_count + 1 ||
-	bv_frame_revision_get(view) <= initial_revision) {
+	bv_frame_revision_get(view) <= initial_revision ||
+	autoview_application_ticks != 1) {
 	fprintf(stderr, "progressive settle ret=%d changed=%d settled=%d "
 	    "bounds_empty=%d frame=%llu initial=%llu providers=%zu "
 	    "advanced=%zu remaining=%zu pending=%zu scene=%d/%d source=%p "
 	    "compact=%d count=%d authoritative=%zu overviews=%zu "
-	    "visible_overviews=%zu\n",
+	    "visible_overviews=%zu autoview_ticks=%zu\n",
 	    initial_progress, status.changed,
 	    settled, settled_bounds.isEmpty(),
 	    static_cast<unsigned long long>(bv_frame_revision_get(view)),
@@ -1805,7 +1822,8 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	    initial_scene_source_count, (void *)settled_source,
 	    settled_source ? settled_source->isCompactOccurrenceRegistry() : -1,
 	    settled_source ? settled_source->getCompactInstanceCount() : -1,
-	    authoritative_count, overview_count, visible_overview_count);
+	    authoritative_count, overview_count, visible_overview_count,
+	    autoview_application_ticks);
 	if (scene) {
 	    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
 		BObolDatabaseSourceSummary summary;

@@ -811,6 +811,10 @@ static const bv_display_property_desc endpoint_properties[] = {
 	BV_DISPLAY_PROPERTY_BOOL,
 	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
+    {sizeof(bv_display_property_desc), "renderer.lighting.profile",
+	BV_DISPLAY_PROPERTY_ENUM,
+	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
+	0, 0.0, 0.0, "studio,mged"},
     {sizeof(bv_display_property_desc), "renderer.headlight",
 	BV_DISPLAY_PROPERTY_BOOL,
 	BV_DISPLAY_PROPERTY_READ | BV_DISPLAY_PROPERTY_WRITE,
@@ -2061,6 +2065,9 @@ bobol_display_endpoint_property_get(
 	out->bool_value = endpoint->controller->isDepthTestEnabled() ? 1 : 0;
     } else if (bu_strcmp(name, "renderer.lighting") == 0) {
 	out->bool_value = endpoint->controller->isLightingEnabled() ? 1 : 0;
+    } else if (bu_strcmp(name, "renderer.lighting.profile") == 0) {
+	out->string_value = endpoint->controller->getLightingProfile() ==
+	    BObolViewController::LIGHTING_MGED ? "mged" : "studio";
     } else if (bu_strcmp(name, "renderer.headlight") == 0) {
 	out->bool_value = endpoint->controller->isHeadlightEnabled() ? 1 : 0;
     } else if (bu_strcmp(name, "renderer.headlight.tracking") == 0) {
@@ -2256,6 +2263,17 @@ bobol_display_endpoint_property_set(
     } else if (bu_strcmp(name, "renderer.lighting") == 0) {
 	endpoint->controller->setLightingEnabled(
 	    value->bool_value ? TRUE : FALSE);
+    } else if (bu_strcmp(name, "renderer.lighting.profile") == 0) {
+	if (!value->string_value)
+	    return BV_DISPLAY_PROPERTY_INVALID;
+	if (bu_strcmp(value->string_value, "studio") == 0)
+	    endpoint->controller->setLightingProfile(
+		BObolViewController::LIGHTING_STUDIO);
+	else if (bu_strcmp(value->string_value, "mged") == 0)
+	    endpoint->controller->setLightingProfile(
+		BObolViewController::LIGHTING_MGED);
+	else
+	    return BV_DISPLAY_PROPERTY_INVALID;
     } else if (bu_strcmp(name, "renderer.headlight") == 0) {
 	endpoint->controller->setHeadlightEnabled(
 	    value->bool_value ? TRUE : FALSE);

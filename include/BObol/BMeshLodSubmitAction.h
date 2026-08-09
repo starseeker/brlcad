@@ -63,6 +63,17 @@ public:
     SbBool getAllowLevelDowngrade(void) const;
     void setAllowRetainedRefinement(SbBool allow);
     SbBool getAllowRetainedRefinement(void) const;
+    /* Permit a zoom-in pass to request a missing pixel-demanded cache suffix
+     * even when the aggregate render-cost budget cannot expose it yet.
+     * Worker working-set and resident-memory admission remain authoritative;
+     * this only separates residency from presentation cost. */
+    void setAllowResidentPrefetch(SbBool allow);
+    SbBool getAllowResidentPrefetch(void) const;
+    /* Bound upward occurrence-cut admission to the renderer's current
+     * presentation ceiling.  Existing richer cuts are retained and hidden by
+     * the renderer; a negative value disables the bound. */
+    void setRefinementLevelCeiling(int level);
+    int getRefinementLevelCeiling(void) const;
     /* Source representation generation (currently adaptive BREP
      * tessellation) is quiet-view work.  It is independent of inexpensive
      * resident PoP cut changes, which may continue during zoom interaction. */
@@ -78,10 +89,17 @@ public:
     /* Bound aggregate upward PoP growth selected by this traversal.  The
      * budget applies equally to an already-resident cut change and to a
      * provider request for the next missing level. */
-    void setRefinementFaceBudget(size_t additionalFaces);
-    size_t getRefinementFaceBudget(void) const;
-    size_t getRefinementFaceBudgetUsed(void) const;
+    void setRefinementCostBudget(size_t additionalCost);
+    size_t getRefinementCostBudget(void) const;
+    size_t getRefinementCostBudgetUsed(void) const;
     unsigned int getRefinementBudgetBlockedCount(void) const;
+    /* Permit exactly one next-population transition whose marginal cost may
+     * exceed the remaining ordinary refinement budget by at most this amount.
+     * The complete marginal cost is still reported as budget used.  A
+     * controller owns scene-global uniqueness across bounded actions. */
+    void setOneOverBudgetRefinementLimit(size_t excessCost);
+    size_t getOneOverBudgetRefinementLimit(void) const;
+    SbBool getOneOverBudgetRefinementUsed(void) const;
     /* Limit one finite-budget visit to one populated PoP transition.  This is
      * used by perceptually ordered refinement frontiers so the score for one
      * marginal step cannot accidentally grant the same occurrence every
@@ -113,8 +131,8 @@ public:
     /* When an already-resident scene exceeds its calibrated total budget,
      * retarget retained occurrences to minimum prefixes in pinned priority
      * order.  The budget limits refinement above the mesh-coverage floor. */
-    void setRetainedSceneFaceBudget(size_t totalFaces);
-    size_t getRetainedSceneFaceBudgetUsed(void) const;
+    void setRetainedSceneCostBudget(size_t totalCost);
+    size_t getRetainedSceneCostBudgetUsed(void) const;
     size_t getCompactEntryNext(void) const;
     size_t getCompactEntryTotal(void) const;
     SbBool hasDeferredCompactEntries(void) const;
@@ -140,19 +158,19 @@ private:
     static void databaseSourceAction(SoAction *action, SoNode *node);
     static void meshShapeAction(SoAction *action, SoNode *node);
     void appendDiagnostic(const SbString &target, const char *message);
-    SbBool reserveRefinementFaces(
+    SbBool reserveRefinementCost(
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
-	int activeLevel, int nextLevel);
+	int activeLevel, int nextLevel, int drawMode);
     int reserveRefinementLevel(
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
-	int activeLevel, int preferredLevel);
+	int activeLevel, int preferredLevel, int drawMode);
     /* Reserve a conservative first-cut population before its hierarchy has
      * been opened by a worker.  This closes the all-box zero-face blind spot:
      * thousands of independent warm-cache requests must not each interpret
      * an aggregate scene budget as their own private allowance. */
-    SbBool reserveInitialFaces(uint64_t sourceFaces,
-	size_t &providerFaceAllowance);
-    SbBool reserveInitialFaceCost(size_t faceCount);
+    SbBool reserveInitialCost(uint64_t sourceFaces, uint64_t sourcePoints,
+	int drawMode, size_t &providerFaceAllowance);
+    SbBool reserveInitialCost(const BObolLodCounts &counts, int drawMode);
 
     BObolLodService *service;
     struct db_i *dbip;
@@ -175,11 +193,15 @@ private:
     SbBool requireLodBacked;
     SbBool allowLevelDowngrade;
     SbBool allowRetainedRefinement;
+    SbBool allowResidentPrefetch;
+    int refinementLevelCeiling;
     SbBool allowRepresentationRefinement;
     SbBool preserveMeshCoverage;
-    size_t refinementFaceBudget;
-    size_t refinementFaceBudgetUsed;
+    size_t refinementCostBudget;
+    size_t refinementCostBudgetUsed;
     unsigned int refinementBudgetBlockedCount;
+    size_t oneOverBudgetRefinementLimit;
+    SbBool oneOverBudgetRefinementUsed;
     SbBool transitionLimitedRefinement;
     BObolViewLodState *viewState;
     size_t compactEntryFirst;
@@ -191,8 +213,8 @@ private:
     SbBool compactEntryPlanSupplied;
     size_t submissionTaskLimit;
     uint64_t submissionTimeLimitMicroseconds;
-    size_t retainedSceneFaceBudget;
-    size_t retainedSceneFaceBudgetUsed;
+    size_t retainedSceneCostBudget;
+    size_t retainedSceneCostBudgetUsed;
     /* Occurrences charged by the scene-wide retained recovery pass.  The
      * bounded provider window must not charge them a second time. */
     std::unordered_set<std::string> retainedRecoveredOccurrences;

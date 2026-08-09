@@ -540,6 +540,10 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
      */
     void setCoverageBoundsComplete(bool complete);
     bool hasCoverageBoundsComplete(void) const;
+    /** True only after the final whole-target priority occurrence has been
+     * consumed by the owner thread.  Queued completion is a producer fact;
+     * this is the publication acknowledgment progressive autoview needs. */
+    bool hasCoverageBoundsDrained(void);
     void requestCancel(void);
     bool isCancelled(void) const;
 

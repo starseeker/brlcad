@@ -158,14 +158,20 @@ enum bv_normal_style {
     BV_NORMAL_SMOOTH = 2    /**< synthesize crease-aware presentation normals */
 };
 
+/** Camera-relative lighting presets shared by every display client. */
+enum bv_lighting_profile {
+    BV_LIGHTING_STUDIO = 0, /**< asymmetric key/fill/rim inspection lighting */
+    BV_LIGHTING_MGED = 1    /**< historical straight-on MGED headlight */
+};
+
 #define BV_INTERACTIVE_RECT_STATE_INIT { 0, 0, 0, 0, {0, 0}, {0, 0}, 0.0, 0.0, 0.0, 0.0, {0, 0, 0}, {0, 0, 0}, {0, 0}, 0.0 }
 #define BV_MEASURE_RESULT_INIT { 0.0, 0.0, 0.0, 0 }
 #define BV_ADC_STATE_INIT { 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, 0.0, 0.0, 0.0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, {0, 0, 0}, {0, 0, 0}, 0 }
 #define BV_GRID_STATE_INIT { 0, 0, 0, 0, VINIT_ZERO, 0.0, 0.0, 0, 0, {0, 0, 0} }
-/* Headlight on, scene lights off, headlight tracks camera, and light travels
- * straight from the viewer into the scene (the established BRL-CAD shaded
- * display convention). */
-#define BV_LIGHTING_STATE_INIT { 0, 1, 0, 1, {0.0, 0.0, -1.0} }
+/* Studio camera rig on, scene lights off, and camera tracking enabled.  The
+ * primary light travels obliquely from the viewer's upper-left into the scene;
+ * the renderer supplies the complementary fill and rim directions. */
+#define BV_LIGHTING_STATE_INIT { 0, BV_LIGHTING_STUDIO, 1, 0, 1, {0.35, -0.25, -1.0} }
 #define BV_SHADING_STATE_INIT { 0, BV_NORMAL_AUTHORED, 60.0 }
 #define BV_AXES_STATE_INIT { 0, VINIT_ZERO, 0.0, 0, {0, 0, 0}, 0, 0, {0, 0, 0}, 0, 0, 0, 0, 0.0, 0, 0, {0, 0, 0}, {0, 0, 0} }
 #define BV_OTHER_STATE_INIT { 0, {0, 0, 0}, {0, 0, 0}, 0 }
@@ -295,6 +301,7 @@ struct bv_grid_state {
 
 struct bv_lighting_state {
     int       rc;
+    int       profile;                /**< enum bv_lighting_profile */
     int       headlight_enabled;      /**< camera-driven headlight on/off */
     int       scene_lights_enabled;   /**< in-scene (database) lights on/off */
     int       headlight_tracks_camera;/**< headlight follows camera vs scene-fixed */

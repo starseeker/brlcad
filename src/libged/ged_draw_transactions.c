@@ -1176,7 +1176,20 @@ ged_draw_apply_draw_inner(struct ged *gedp,
 
     const int _obol_timing = getenv("BOBOL_DRAW_TIMING") ? 1 : 0;
     int64_t _t = _obol_timing ? bu_gettime() : 0;
-    if (txn->autoview)
+    /* A deferred Obol draw has one camera owner: its progressive provider.
+     * The root source may already contain a cached overview or a partial
+     * structural snapshot here, but neither is the authoritative leaf union.
+     * Fitting that provisional bound and then letting the provider fit the
+     * completed coverage bound exposes two camera states from one draw command
+     * (a visible jump/recenter in qged).  Leave the view untouched until the
+     * provider can publish the exact extent and apply the fit atomically with
+     * that presentation.  Non-progressive clients retain the ordinary
+     * immediate autoview path. */
+    const int progressive_autoview = txn->autoview &&
+	neutral_settings.defer_leaf_expansion && result &&
+	!result->progressive_data_complete &&
+	ged_draw_obol_progressive_available(gedp, view_ctx);
+    if (txn->autoview && !progressive_autoview)
 	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
 						draw_count, 0);
     if (_obol_timing) {

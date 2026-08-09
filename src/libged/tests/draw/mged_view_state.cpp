@@ -632,6 +632,30 @@ test_owned_render_endpoint(const char *datadir)
     if (!fail)
 	controller->setRenderContextManager(bobol_headless_context_manager());
 
+    const char *mged_lighting_av[5] = {
+	"view", "lighting", "profile", "mged", NULL
+    };
+    struct bv_lighting_state lighting_state;
+    if (!fail && (ged_exec(gedp, 4, mged_lighting_av) != BRLCAD_OK ||
+	!bv_lighting_state_get(&lighting_state, DRAW_TEST_BV(view_ctx)) ||
+	lighting_state.profile != BV_LIGHTING_MGED ||
+	controller->getLightingProfile() != BObolViewController::LIGHTING_MGED)) {
+	bu_log("FAIL: view lighting profile did not select shared MGED policy: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    const char *studio_lighting_av[5] = {
+	"view", "lighting", "profile", "studio", NULL
+    };
+    if (!fail && (ged_exec(gedp, 4, studio_lighting_av) != BRLCAD_OK ||
+	!bv_lighting_state_get(&lighting_state, DRAW_TEST_BV(view_ctx)) ||
+	lighting_state.profile != BV_LIGHTING_STUDIO ||
+	controller->getLightingProfile() != BObolViewController::LIGHTING_STUDIO)) {
+	bu_log("FAIL: view lighting profile did not restore shared studio policy: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
     const char *status_av[3] = {"dm", "status", NULL};
     if (!fail && (ged_exec_dm(gedp, 2, status_av) != BRLCAD_OK ||
 	    !strstr(bu_vls_cstr(gedp->ged_result_str), "renderer=auto") ||
