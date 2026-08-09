@@ -156,6 +156,7 @@ extern int rt_arb_indexed_face_set(struct rt_primitive_indexed_face_set *face_se
 
 extern int rt_bot_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
 extern int rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
+extern int rt_brep_wireframe_provider(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol);
 
 /* from db5_bin.c */
 extern int rt_binunif_import5(struct rt_db_internal * ip, const struct bu_external *ep, const mat_t mat, const struct db_i *dbip);
@@ -2136,6 +2137,7 @@ const struct rt_functab OBJ[] = {
 	RTFUNCTAB_FUNC_MAT_CAST(rt_brep_mat),
 	NULL, /* perturb */
 	RTFUNCTAB_FUNC_INDEXED_FACE_SET_CAST(rt_brep_indexed_face_set),
+	RTFUNCTAB_FUNC_WIREFRAME_LINE_SET_CAST(rt_brep_wireframe_provider),
     },
 
     {

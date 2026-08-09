@@ -347,7 +347,6 @@ set(
   trace.c
   vers.c
   vutil.c
-  ged_draw_brep.cpp
   ged_draw_highlight.c
   ged_draw_material.c
   ged_draw_navigation.c
@@ -377,7 +376,6 @@ set(
   ged_view_state.cpp
   ged_util.cpp
   ged_draw_registry.c
-  ged_draw_brep.cpp
   ged_draw_scene_root.c
   ged_draw_source.cpp
   ged_draw_util.c

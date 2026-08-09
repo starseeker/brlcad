@@ -10,6 +10,7 @@
 #define BOBOL_BSOURCEMESHREQUEST_H
 
 #include "BObol/BDefines.h"
+#include "vmath.h"
 
 #include <Inventor/SbBox.h>
 #include <Inventor/SbColor.h>
@@ -30,18 +31,32 @@ struct rt_bot_internal;
 struct BOBOL_EXPORT BObolStagedSourceMesh {
     std::shared_ptr<void> owner;
     const struct rt_bot_internal *bot;
+    /* Generic immutable triangle source.  These arrays are owned by owner
+     * and permit analytic/BREP providers to use the same bounded cold-path
+     * handoff as BoTs without retaining database internals or callbacks. */
+    const point_t *points;
+    const vect_t *normals;
+    const int *faces;
+    size_t pointCount;
+    size_t faceCount;
+    uint64_t contentKey;
+    int shadedCullBackfaces;
     SbString assetName;
     uint32_t sourceRevision;
     size_t byteCount;
 
     BObolStagedSourceMesh(void) :
-	owner(), bot(NULL), assetName(""), sourceRevision(0), byteCount(0)
+	owner(), bot(NULL), points(NULL), normals(NULL), faces(NULL),
+	pointCount(0), faceCount(0), contentKey(0),
+	shadedCullBackfaces(0), assetName(""), sourceRevision(0),
+	byteCount(0)
     {
     }
 
     bool isValid(void) const
     {
-	return owner && bot && assetName.getLength() > 0;
+	return owner && assetName.getLength() > 0 &&
+	    (bot || (points && faces && pointCount && faceCount));
     }
 };
 
@@ -62,6 +77,17 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
     SbString meshAssetPath;
     SbString meshAssetName;
     SbBox3f meshAssetBounds;
+    /* Immutable representation payload identity.  Zero retains the named
+     * authored-mesh lookup; nonzero reopens an exact BREP/tolerance variant
+     * even if another view has since made a different variant the latest. */
+    uint64_t meshAssetContentHash;
+    /* Source-space tessellation contract for generated triangle assets.
+     * Zero values identify authored meshes.  BREP requests retain the
+     * canonical band here so a stable close-up may derive a finer immutable
+     * variant without making the standing scene geometry camera-dependent. */
+    double meshAssetTessellationAbsTol;
+    double meshAssetTessellationRelTol;
+    double meshAssetTessellationNormTol;
     /* Optional cold-path handoff.  This is deliberately transient and is
      * never part of persistent draw/cache identity. */
     std::weak_ptr<const BObolStagedSourceMesh> stagedSource;
@@ -137,6 +163,10 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
 	meshAssetPath = "";
 	meshAssetName = "";
 	meshAssetBounds.makeEmpty();
+	meshAssetContentHash = 0;
+	meshAssetTessellationAbsTol = 0.0;
+	meshAssetTessellationRelTol = 0.0;
+	meshAssetTessellationNormTol = 0.0;
 	stagedSource.reset();
 	meshAssetTransform.makeIdentity();
 	ownerSourceInstanceKey = "";

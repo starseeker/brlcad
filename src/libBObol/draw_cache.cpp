@@ -53,7 +53,7 @@
 #define BOBOL_DRAW_LOD_ASSET_DISK_MAGIC 0x4f424c41u /* OBLA */
 #define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 1u
 #define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
-#define BOBOL_DRAW_MANIFEST_DISK_VERSION 6u
+#define BOBOL_DRAW_MANIFEST_DISK_VERSION 8u
 
 struct BObolDrawCacheContext {
     bu_cache *cache;
@@ -159,8 +159,14 @@ struct BObolDrawManifestOccurrenceDiskHeader {
     uint32_t occurrenceIndex;
     uint32_t metadataValid;
     uint32_t sourceMeshRequestValid;
+    uint32_t meshAssetKind;
+    uint32_t reserved;
+    uint64_t meshAssetContentHash;
     uint64_t sourceFaceCount;
     uint64_t sourcePointCount;
+    double meshAssetTessellationAbsTol;
+    double meshAssetTessellationRelTol;
+    double meshAssetTessellationNormTol;
     fastf_t localMatrix[16];
     fastf_t meshAssetMatrix[16];
     point_t boundsMin;
@@ -2127,6 +2133,14 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 	    (occurrence.metadataValid != 0 && occurrence.metadataValid != 1) ||
 	    (occurrence.sourceMeshRequestValid != 0 &&
 	     occurrence.sourceMeshRequestValid != 1) ||
+	    occurrence.meshAssetKind < BOBOL_DRAW_CACHE_MESH_ASSET_UNKNOWN ||
+	    occurrence.meshAssetKind > BOBOL_DRAW_CACHE_MESH_ASSET_BREP ||
+	    !std::isfinite(occurrence.meshAssetTessellationAbsTol) ||
+	    !std::isfinite(occurrence.meshAssetTessellationRelTol) ||
+	    !std::isfinite(occurrence.meshAssetTessellationNormTol) ||
+	    occurrence.meshAssetTessellationAbsTol < 0.0 ||
+	    occurrence.meshAssetTessellationRelTol < 0.0 ||
+	    occurrence.meshAssetTessellationNormTol < 0.0 ||
 	    !bobol_draw_manifest_boolean_valid(occurrence.booleanOperation) ||
 	    !bobol_draw_manifest_matrix_valid(occurrence.localMatrix) ||
 	    !bobol_draw_proxy_bbox_valid(occurrence.boundsMin,
@@ -2181,8 +2195,18 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 	occurrenceHeader.metadataValid = occurrence.metadataValid ? 1u : 0u;
 	occurrenceHeader.sourceMeshRequestValid =
 	    occurrence.sourceMeshRequestValid ? 1u : 0u;
+	occurrenceHeader.meshAssetKind =
+	    static_cast<uint32_t>(occurrence.meshAssetKind);
+	occurrenceHeader.meshAssetContentHash =
+	    occurrence.meshAssetContentHash;
 	occurrenceHeader.sourceFaceCount = occurrence.sourceFaceCount;
 	occurrenceHeader.sourcePointCount = occurrence.sourcePointCount;
+	occurrenceHeader.meshAssetTessellationAbsTol =
+	    occurrence.meshAssetTessellationAbsTol;
+	occurrenceHeader.meshAssetTessellationRelTol =
+	    occurrence.meshAssetTessellationRelTol;
+	occurrenceHeader.meshAssetTessellationNormTol =
+	    occurrence.meshAssetTessellationNormTol;
 	memcpy(occurrenceHeader.localMatrix, occurrence.localMatrix,
 	    sizeof(occurrenceHeader.localMatrix));
 	memcpy(occurrenceHeader.meshAssetMatrix,
@@ -2339,6 +2363,14 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 		    meshAssetPathLength ||
 	    occurrenceHeader.metadataValid > 1 ||
 	    occurrenceHeader.sourceMeshRequestValid > 1 ||
+	    occurrenceHeader.meshAssetKind >
+		BOBOL_DRAW_CACHE_MESH_ASSET_BREP ||
+	    !std::isfinite(occurrenceHeader.meshAssetTessellationAbsTol) ||
+	    !std::isfinite(occurrenceHeader.meshAssetTessellationRelTol) ||
+	    !std::isfinite(occurrenceHeader.meshAssetTessellationNormTol) ||
+	    occurrenceHeader.meshAssetTessellationAbsTol < 0.0 ||
+	    occurrenceHeader.meshAssetTessellationRelTol < 0.0 ||
+	    occurrenceHeader.meshAssetTessellationNormTol < 0.0 ||
 	    (occurrenceHeader.sourceMeshRequestValid &&
 	     (!meshAssetPathLength || !meshAssetNameLength ||
 	      !bobol_draw_manifest_matrix_valid(
@@ -2397,8 +2429,18 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	occurrence.metadataValid = occurrenceHeader.metadataValid ? 1 : 0;
 	occurrence.sourceMeshRequestValid =
 	    occurrenceHeader.sourceMeshRequestValid ? 1 : 0;
+	occurrence.meshAssetKind =
+	    static_cast<int>(occurrenceHeader.meshAssetKind);
+	occurrence.meshAssetContentHash =
+	    occurrenceHeader.meshAssetContentHash;
 	occurrence.sourceFaceCount = occurrenceHeader.sourceFaceCount;
 	occurrence.sourcePointCount = occurrenceHeader.sourcePointCount;
+	occurrence.meshAssetTessellationAbsTol =
+	    occurrenceHeader.meshAssetTessellationAbsTol;
+	occurrence.meshAssetTessellationRelTol =
+	    occurrenceHeader.meshAssetTessellationRelTol;
+	occurrence.meshAssetTessellationNormTol =
+	    occurrenceHeader.meshAssetTessellationNormTol;
 	memcpy(occurrence.localMatrix, occurrenceHeader.localMatrix,
 	    sizeof(occurrence.localMatrix));
 	memcpy(occurrence.meshAssetMatrix,

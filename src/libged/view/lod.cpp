@@ -35,7 +35,6 @@
 #include "BObol/BViewAttachment.h"
 #include "BObol/BViewController.h"
 #include "bu/cmd.h"
-#include "bu/hash.h"
 #include "bu/parallel.h"
 #include "bu/snooze.h"
 #include "bu/str.h"
@@ -313,8 +312,6 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	    if (!gedp || !gedp->dbip)
 		return BRLCAD_ERROR;
 
-	    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-
 	    // Clear any old cache in memory
 	    bobol_mesh_lod_cache_clear_database(gedp->dbip);
 
@@ -326,15 +323,15 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		continue;
 	    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
 		total++;
-	    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP)
-		total++;
 	    FOR_ALL_DIRECTORY_END;
 
 	    FOR_ALL_DIRECTORY_START(dp, gedp->dbip)
 	    if (dp->d_addr == RT_DIR_PHONY_ADDR)
 		continue;
 
-	    // No need to open up the internal unless it's a BoT or a BRep
+	    // BREP display assets are tolerance-specific and are populated by the
+	    // owned database-source producer when requested.  This command only
+	    // prewarms source meshes that already exist as database BoTs.
 	    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
 		done++;
 		bu_log("Caching BoT %s (%d of %d)\n", dp->d_namep, done, total);
@@ -343,67 +340,6 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		if (bobol_mesh_lod_cache_refresh(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||
 		    !status.has_cache_key)
 		    continue;
-	    }
-
-	    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP) {
-		unsigned long long key = 0;
-		struct bu_external ext = BU_EXTERNAL_INIT_ZERO;
-		if (db_get_external(&ext, dp, gedp->dbip))
-		    continue;
-		key = bu_data_hash((void *)ext.ext_buf,  ext.ext_nbytes);
-		bu_free_external(&ext);
-		if (!key)
-		    continue;
-
-		struct rt_db_internal dbintern;
-		RT_DB_INTERNAL_INIT(&dbintern);
-		struct rt_db_internal *ip = &dbintern;
-		int ret = rt_db_get_internal(ip, dp, gedp->dbip, NULL);
-		if (ret < 0)
-		    continue;
-
-		if (ip->idb_minor_type != DB5_MINORTYPE_BRLCAD_BREP) {
-		    rt_db_free_internal(&dbintern);
-		    continue;
-		}
-		done++;
-		struct bu_vls pname = BU_VLS_INIT_ZERO;
-		bu_log("Caching BRep %s (%d of %d)\n", dp->d_namep, done, total);
-		bu_vls_free(&pname);
-		struct rt_brep_internal *bi = (struct rt_brep_internal *)ip->idb_ptr;
-		RT_BREP_CK_MAGIC(bi);
-
-		// Unlike a BoT, which has the mesh data already, we need to generate the
-		// mesh from the brep
-		int *faces = NULL;
-		int face_cnt = 0;
-		vect_t *normals = NULL;
-		point_t *pnts = NULL;
-		int pnt_cnt = 0;
-		struct bn_tol *tol = &wdbp->wdb_tol;
-		struct bg_tess_tol *ttol = &wdbp->wdb_ttol;
-
-		int bret = brep_cdt_fast(&faces, &face_cnt, &normals, &pnts, &pnt_cnt, bi->brep, -1, ttol, tol);
-		if (bret != BRLCAD_OK) {
-		    bu_free(faces, "faces");
-		    bu_free(normals, "normals");
-		    bu_free(pnts, "pnts");
-		    rt_db_free_internal(&dbintern);
-		    continue;
-		}
-
-		// BRep LoD uses generated mesh data rather than a database
-		// full-detail mesh payload.
-		struct BObolMeshLodCacheStatus status =
-			BOBOL_MESH_LOD_CACHE_STATUS_INIT;
-		(void)bobol_mesh_lod_cache_store_mesh(gedp->dbip, dp->d_namep,
-							(const point_t *)pnts, (size_t)pnt_cnt, normals,
-							faces, (size_t)face_cnt, key, 0, &status);
-
-		rt_db_free_internal(&dbintern);
-		bu_free(faces, "faces");
-		bu_free(normals, "normals");
-		bu_free(pnts, "pnts");
 	    }
 	    FOR_ALL_DIRECTORY_END;
 
@@ -429,9 +365,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		FOR_ALL_DIRECTORY_START(dp, gedp->dbip)
 		if (dp->d_addr == RT_DIR_PHONY_ADDR)
 		    continue;
-		// checking both BoTs and BREPs
-		if ((dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) ||
-		    (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP)) {
+		if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
 		    struct BObolMeshLodCacheStatus status =
 			    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
 		    if (bobol_mesh_lod_cache_status(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||

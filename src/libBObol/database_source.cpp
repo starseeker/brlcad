@@ -36,6 +36,7 @@
 #include "bu/color.h"
 #include "bu/cv.h"
 #include "bu/file.h"
+#include "bu/hash.h"
 #include "bu/list.h"
 #include "bu/parallel.h"
 #include "bu/str.h"
@@ -50,8 +51,6 @@
 #include "rt/db_fullpath.h"
 #include "rt/eval_wireframe.h"
 #include "rt/primitives/annot.h"
-#include "rt/primitives/brep.h"
-#include "rt/primitives/bspline.h"
 #include "rt/tree.h"
 #include "rt/vlist.h"
 #include "rt/view.h"
@@ -687,6 +686,7 @@ BObolCompactInstanceHandle::isValid(void) const
 
 BObolCompactInstanceSummary::BObolCompactInstanceSummary(void) :
     valid(FALSE),
+    sourceContentHash(0),
     sourceFaceCount(0),
     sourcePointCount(0),
     localToSource(SbMatrix::identity()),
@@ -725,6 +725,7 @@ BObolCompactInstanceSummary::BObolCompactInstanceSummary(void) :
 
 BObolCompactLodInstanceSummary::BObolCompactLodInstanceSummary(void) :
     valid(FALSE),
+    sourceContentHash(0),
     sourceFaceCount(0),
     sourcePointCount(0),
     localToSource(SbMatrix::identity()),
@@ -1679,12 +1680,33 @@ source_lod_solid_size(const SoBRLDatabaseSource *source,
 static void
 source_lod_cache_key_append(std::string &cacheKey,
 			    const SoBRLDatabaseSource *source,
-			    const SbBox3f &localBounds)
+			    const SbBox3f &localBounds,
+			    bool viewIndependent = false)
 {
     /* Normal wire geometry is source-local and independent of viewport
      * policy.  Only CSG LoD realizes a view-dependent line payload here;
      * mesh/BOT proxy variants carry their geometry-affecting threshold in
      * their own key. */
+    if (viewIndependent) {
+	/* Canonical BREP wire and shaded assets never encode a camera.  They do
+	 * encode the source-space tessellation contract, so changing an adaptive
+	 * tessellation setting cannot accidentally reuse an in-memory payload
+	 * produced for a different error bound. */
+	char suffix[256] = {0};
+	snprintf(suffix, sizeof(suffix),
+	    ":brep-source-lod:%s:%d:%.17g:%.17g:%.17g",
+	    BOBOL_MESH_LOD_PROVIDER_VERSION,
+	    source ? source->drawMode.getValue() :
+		SoBRLDatabaseSource::WIREFRAME,
+	    static_cast<double>(source ?
+		source->tessellationAbsTol.getValue() : -1.0f),
+	    static_cast<double>(source ?
+		source->tessellationRelTol.getValue() : -1.0f),
+	    static_cast<double>(source ?
+		source->tessellationNormTol.getValue() : -1.0f));
+	cacheKey += suffix;
+	return;
+    }
     if (!source_csg_lod_active(source))
 	return;
 
@@ -2426,7 +2448,10 @@ SoBRLDatabaseSource::seedCompactRealizationCache(
 	/* Realization lookup keys are formed before an internal is fetched, so
 	 * their LoD size fallback intentionally starts with empty bounds. */
 	SbBox3f lookupBounds;
-	source_lod_cache_key_append(cacheKey, this, lookupBounds);
+	const bool viewIndependent = BU_STR_EQUAL(
+	    entry.shapeSummary.sourceType.getString(), "brep");
+	source_lod_cache_key_append(cacheKey, this, lookupBounds,
+	    viewIndependent);
 
 	if (entry.geometry) {
 	    BObolCachedPartGeometry cached;
@@ -3671,6 +3696,185 @@ cad_wire_part_geometry_from_plot_internal(struct rt_db_internal *intern,
     return cad_wire_part_geometry_from_line_set(points, commands, geometry);
 }
 
+static double
+cad_wire_point_segment_distance_squared(const SbVec3f &point,
+	const SbVec3f &start, const SbVec3f &end)
+{
+    const SbVec3f delta = end - start;
+    const double lengthSquared = static_cast<double>(delta.sqrLength());
+    if (!(lengthSquared > 0.0))
+	return static_cast<double>((point - start).sqrLength());
+    double t = static_cast<double>((point - start).dot(delta)) /
+	lengthSquared;
+    t = std::max(0.0, std::min(1.0, t));
+    const SbVec3f nearest = start + delta * static_cast<float>(t);
+    return static_cast<double>((point - nearest).sqrLength());
+}
+
+static std::vector<size_t>
+cad_wire_simplify_polyline(const std::vector<SbVec3f> &points,
+	double tolerance)
+{
+    std::vector<size_t> result;
+    if (points.size() < 3 || !(tolerance > 0.0)) {
+	result.resize(points.size());
+	std::iota(result.begin(), result.end(), 0);
+	return result;
+    }
+    std::vector<unsigned char> keep(points.size(), 0);
+    keep.front() = 1;
+    keep.back() = 1;
+    std::vector<std::pair<size_t, size_t>> work;
+    work.emplace_back(0, points.size() - 1);
+    const double toleranceSquared = tolerance * tolerance;
+    while (!work.empty()) {
+	const std::pair<size_t, size_t> range = work.back();
+	work.pop_back();
+	double maximum = toleranceSquared;
+	size_t split = range.first;
+	for (size_t i = range.first + 1; i < range.second; ++i) {
+	    const double distance = cad_wire_point_segment_distance_squared(
+		points[i], points[range.first], points[range.second]);
+	    if (distance > maximum) {
+		maximum = distance;
+		split = i;
+	    }
+	}
+	if (split != range.first) {
+	    keep[split] = 1;
+	    if (split > range.first + 1)
+		work.emplace_back(range.first, split);
+	    if (range.second > split + 1)
+		work.emplace_back(split, range.second);
+	}
+    }
+    result.reserve(points.size());
+    for (size_t i = 0; i < keep.size(); ++i)
+	if (keep[i])
+	    result.push_back(i);
+    return result;
+}
+
+static bool
+cad_wire_level_equal(const std::vector<SbVec3f> &leftPoints,
+	const std::vector<uint32_t> &leftIds,
+	const std::vector<SbVec3f> &rightPoints,
+	const std::vector<uint32_t> &rightIds)
+{
+    if (leftPoints.size() != rightPoints.size() || leftIds != rightIds)
+	return false;
+    for (size_t i = 0; i < leftPoints.size(); ++i)
+	if (leftPoints[i] != rightPoints[i])
+	    return false;
+    return true;
+}
+
+static int
+cad_progressive_wire_part_geometry_from_provider(
+    struct rt_db_internal *intern, const SoBRLDatabaseSource *source,
+    Obol::PartGeometry &geometry)
+{
+    if (!source_mesh_lod_active(source) ||
+	!internal_payload_magic_valid(intern) || !intern->idb_meth ||
+	!intern->idb_meth->ft_wireframe_line_set)
+	return 0;
+
+    struct rt_primitive_lod_realization realization;
+    memset(&realization, 0, sizeof(realization));
+    const struct bg_tess_tol ttol = source_tess_tol(source);
+    const struct bn_tol tol = BN_TOL_INIT_TOL;
+    const int ret = intern->idb_meth->ft_wireframe_line_set(
+	&realization, intern, &ttol, &tol);
+    if (ret < 0 || !realization.has_line_set ||
+	!realization.line_points || !realization.line_count) {
+	primitive_realization_line_set_free(&realization);
+	return 0;
+    }
+
+    std::vector<std::vector<SbVec3f>> curves;
+    for (size_t i = 0; i < realization.line_count; ++i) {
+	const int command = realization.line_commands ?
+	    realization.line_commands[i] : RT_PRIMITIVE_LINE_DRAW;
+	const SbVec3f point(
+	    static_cast<float>(realization.line_points[i][X]),
+	    static_cast<float>(realization.line_points[i][Y]),
+	    static_cast<float>(realization.line_points[i][Z]));
+	if (command == RT_PRIMITIVE_LINE_MOVE || curves.empty())
+	    curves.emplace_back();
+	if (curves.back().empty() || curves.back().back() != point)
+	    curves.back().push_back(point);
+    }
+    primitive_realization_line_set_free(&realization);
+    curves.erase(std::remove_if(curves.begin(), curves.end(),
+	[](const std::vector<SbVec3f> &curve) { return curve.size() < 2; }),
+	curves.end());
+    if (curves.empty())
+	return 0;
+
+    Obol::WireRep wire;
+    wire.bounds.makeEmpty();
+    for (const std::vector<SbVec3f> &curve : curves)
+	for (const SbVec3f &point : curve)
+	    wire.bounds.extendBy(point);
+    if (wire.bounds.isEmpty())
+	return 0;
+
+    std::vector<SbVec3f> previousPoints;
+    std::vector<uint32_t> previousIds;
+    uint32_t previousFirst = 0;
+    uint32_t previousCount = 0;
+    for (uint8_t level = 0; level < 16; ++level) {
+	std::vector<SbVec3f> levelPoints;
+	std::vector<uint32_t> levelIds;
+	for (size_t curveIndex = 0; curveIndex < curves.size(); ++curveIndex) {
+	    const std::vector<SbVec3f> &curve = curves[curveIndex];
+	    SbBox3f curveBounds;
+	    curveBounds.makeEmpty();
+	    for (const SbVec3f &point : curve)
+		curveBounds.extendBy(point);
+	    const SbVec3f extent = curveBounds.getMax() - curveBounds.getMin();
+	    const double diagonal = sqrt(static_cast<double>(extent.sqrLength()));
+	    const double tolerance = level == 15 ? 0.0 :
+		ldexp(diagonal, -static_cast<int>(level) - 2);
+	    const std::vector<size_t> selected =
+		cad_wire_simplify_polyline(curve, tolerance);
+	    for (size_t i = 1; i < selected.size(); ++i) {
+		levelPoints.push_back(curve[selected[i - 1]]);
+		levelPoints.push_back(curve[selected[i]]);
+		levelIds.push_back(static_cast<uint32_t>(
+		    std::min<size_t>(curveIndex, UINT32_MAX)));
+	    }
+	}
+	if (levelPoints.size() / 2 > UINT32_MAX ||
+	    wire.segmentCount() > UINT32_MAX - levelPoints.size() / 2)
+	    return 0;
+	if (level > 0 && cad_wire_level_equal(levelPoints, levelIds,
+		previousPoints, previousIds)) {
+	    wire.progressiveSegmentFirst[level] = previousFirst;
+	    wire.progressiveSegmentCount[level] = previousCount;
+	    continue;
+	}
+	const uint32_t first = static_cast<uint32_t>(wire.segmentCount());
+	const uint32_t count = static_cast<uint32_t>(levelPoints.size() / 2);
+	wire.segmentPoints.insert(wire.segmentPoints.end(),
+	    levelPoints.begin(), levelPoints.end());
+	wire.segmentIds.insert(wire.segmentIds.end(),
+	    levelIds.begin(), levelIds.end());
+	wire.progressiveSegmentFirst[level] = first;
+	wire.progressiveSegmentCount[level] = count;
+	previousPoints = std::move(levelPoints);
+	previousIds = std::move(levelIds);
+	previousFirst = first;
+	previousCount = count;
+    }
+    wire.progressiveMinimumLevel = 0;
+    wire.progressiveResidentLevel = 15;
+    wire.progressiveQuantizationMinimum = wire.bounds.getMin();
+    wire.progressiveQuantizationMaximum = wire.bounds.getMax();
+    geometry.wire = std::move(wire);
+    return 1;
+}
+
 
 static SoBRLVListShape *
 vlist_from_lod_realization_internal(struct rt_db_internal *intern,
@@ -3712,6 +3916,9 @@ cad_wire_part_geometry_from_lod_realization_internal(
 	struct rt_db_internal *intern, const SoBRLDatabaseSource *source,
 	const SbBox3f &localBounds, Obol::PartGeometry &geometry)
 {
+    if (cad_progressive_wire_part_geometry_from_provider(
+	    intern, source, geometry))
+	return 1;
     if (!source_csg_lod_active(source) || !internal_payload_magic_valid(intern)
 	|| !intern->idb_meth || !intern->idb_meth->ft_lod_realize ||
 	intern->idb_type == ID_BOT || intern->idb_type == ID_MATERIAL)
@@ -3851,7 +4058,8 @@ static union tree *
     if (data->compact_index) {
 	SbBox3f cacheBounds;
 	std::string cacheKey = realize_geometry_cache_key(dp);
-	source_lod_cache_key_append(cacheKey, data->source, cacheBounds);
+	source_lod_cache_key_append(cacheKey, data->source, cacheBounds,
+	    dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
 	const BObolCachedPartGeometry *cachedCad =
 	    find_wire_cad_geometry_any(data->cache, cacheKey);
 	std::shared_ptr<const Obol::PartGeometry> cadGeometry = cachedCad ?
@@ -3966,7 +4174,8 @@ static union tree *
     SoBRLVListShape *sharedShape = NULL;
     SbBox3f cacheBounds;
     std::string cacheKey = realize_geometry_cache_key(dp);
-    source_lod_cache_key_append(cacheKey, data->source, cacheBounds);
+    source_lod_cache_key_append(cacheKey, data->source, cacheBounds,
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
     std::map<std::string, SoBRLVListShape *>::iterator found =
 	data->cache->sharedWireGeometry.find(cacheKey);
     if (found != data->cache->sharedWireGeometry.end())
@@ -4312,7 +4521,8 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 		 wireLodThreshold);
 	cacheKey += suffix;
     }
-    source_lod_cache_key_append(cacheKey, source, localBounds);
+    source_lod_cache_key_append(cacheKey, source, localBounds,
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
     std::map<std::string, SoBRLVListShape *>::iterator found =
 	cache->sharedWireGeometry.find(cacheKey);
     if (found != cache->sharedWireGeometry.end())
@@ -4478,7 +4688,8 @@ realize_direct_leaf_wireframe_compact(
 		 wireLodThreshold);
 	cacheKey += suffix;
     }
-    source_lod_cache_key_append(cacheKey, source, localBounds);
+    source_lod_cache_key_append(cacheKey, source, localBounds,
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
     std::shared_ptr<const Obol::PartGeometry> cadGeometry;
     const BObolCachedPartGeometry *cachedCad =
 	find_wire_cad_geometry_any(cache, cacheKey);
@@ -5133,15 +5344,7 @@ cad_mesh_part_geometry_from_bot(const struct rt_bot_internal *bot,
 static void
 primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *faceSet)
 {
-    if (!faceSet)
-	return;
-    if (faceSet->points)
-	bu_free(faceSet->points, "primitive indexed-face points");
-    if (faceSet->normals)
-	bu_free(faceSet->normals, "primitive indexed-face normals");
-    if (faceSet->indices)
-	bu_free(faceSet->indices, "primitive indexed-face indices");
-    memset(faceSet, 0, sizeof(*faceSet));
+    rt_primitive_indexed_face_set_free(faceSet);
 }
 
 static int
@@ -5424,6 +5627,173 @@ cad_mesh_part_geometry_from_indexed_face_set(
 	return 0;
     geometry.shaded = std::move(mesh);
     return 1;
+}
+
+struct BObolOwnedStagedTriangleMesh {
+    std::vector<fastf_t> points;
+    std::vector<fastf_t> normals;
+    std::vector<int> faces;
+};
+
+static unsigned long long
+cad_brep_shaded_asset_key(struct db_i *dbip, struct directory *dp,
+	const struct bg_tess_tol *ttol, const struct bn_tol *tol)
+{
+    if (!dbip || !dp || !ttol || !tol)
+	return 0;
+    struct bu_external external = BU_EXTERNAL_INIT_ZERO;
+    if (db_get_external(&external, dp, dbip) != 0)
+	return 0;
+    struct bu_data_hash_state *hash = bu_data_hash_create();
+    static const char contract[] =
+	"BObol-display-asset:shaded-triangles:brep-indexed-face-set-v2:";
+    bu_data_hash_update(hash, contract, sizeof(contract));
+    bu_data_hash_update(hash, BOBOL_MESH_LOD_PROVIDER_VERSION,
+	strlen(BOBOL_MESH_LOD_PROVIDER_VERSION));
+    bu_data_hash_update(hash, external.ext_buf, external.ext_nbytes);
+    const double tess[] = {
+	ttol->abs, ttol->rel, ttol->norm, ttol->absmax, ttol->absmin,
+	ttol->relmax, ttol->relmin, ttol->rel_lmax, ttol->rel_lmin
+    };
+    const double geometric[] = {
+	tol->dist, tol->dist_sq, tol->perp, tol->para
+    };
+    bu_data_hash_update(hash, tess, sizeof(tess));
+    bu_data_hash_update(hash, geometric, sizeof(geometric));
+    unsigned long long key = bu_data_hash_val(hash);
+    bu_data_hash_destroy(hash);
+    bu_free_external(&external);
+    return key ? key : 1;
+}
+
+static std::shared_ptr<BObolStagedSourceMesh>
+cad_staged_mesh_from_primitive_face_set(
+    struct db_i *dbip, struct directory *dp, struct rt_db_internal *intern,
+    const struct bg_tess_tol *ttol, const struct bn_tol *tol,
+    uint32_t sourceRevision, BObolSourceMeshRequest &request)
+{
+    request.clear();
+    if (!dbip || !dp || !internal_payload_magic_valid(intern) ||
+	!intern->idb_meth->ft_indexed_face_set || !ttol || !tol)
+	return std::shared_ptr<BObolStagedSourceMesh>();
+
+    struct rt_primitive_indexed_face_set faceSet;
+    struct bv_view_info viewInfo = BV_VIEW_INFO_INIT;
+    memset(&faceSet, 0, sizeof(faceSet));
+    if (intern->idb_meth->ft_indexed_face_set(&faceSet, intern, ttol, tol,
+	    &viewInfo) != BRLCAD_OK) {
+	primitive_indexed_face_set_free(&faceSet);
+	return std::shared_ptr<BObolStagedSourceMesh>();
+    }
+
+    size_t cornerCount = 0;
+    for (size_t i = 0; i < faceSet.index_count; ++i)
+	if (faceSet.indices[i] >= 0)
+	    ++cornerCount;
+    const bool haveNormals =
+	faceSet.normals && faceSet.normal_count == cornerCount;
+    std::vector<int32_t> triangles;
+    std::vector<SbVec3f> triangleNormals;
+    if (!indexed_faces_to_triangles(faceSet.indices, faceSet.index_count,
+	    faceSet.point_count, triangles,
+	    haveNormals ? faceSet.normals : NULL,
+	    haveNormals ? faceSet.normal_count : 0,
+	    haveNormals ? &triangleNormals : NULL) ||
+	triangles.size() / 3 > static_cast<size_t>(INT_MAX)) {
+	primitive_indexed_face_set_free(&faceSet);
+	return std::shared_ptr<BObolStagedSourceMesh>();
+    }
+
+    std::shared_ptr<BObolOwnedStagedTriangleMesh> owned =
+	std::make_shared<BObolOwnedStagedTriangleMesh>();
+    owned->points.resize(faceSet.point_count * 3);
+    SbBox3f bounds;
+    bounds.makeEmpty();
+    for (size_t i = 0; i < faceSet.point_count; ++i) {
+	for (size_t axis = 0; axis < 3; ++axis) {
+	    const fastf_t value = faceSet.points[i][axis];
+	    if (!std::isfinite(value)) {
+		primitive_indexed_face_set_free(&faceSet);
+		return std::shared_ptr<BObolStagedSourceMesh>();
+	    }
+	    owned->points[i * 3 + axis] = value;
+	}
+	bounds.extendBy(SbVec3f(
+	    static_cast<float>(faceSet.points[i][X]),
+	    static_cast<float>(faceSet.points[i][Y]),
+	    static_cast<float>(faceSet.points[i][Z])));
+    }
+    owned->faces.reserve(triangles.size());
+    for (const int32_t index : triangles)
+	owned->faces.push_back(static_cast<int>(index));
+    if (haveNormals && triangleNormals.size() == triangles.size()) {
+	owned->normals.resize(triangleNormals.size() * 3);
+	for (size_t i = 0; i < triangleNormals.size(); ++i)
+	    for (size_t axis = 0; axis < 3; ++axis)
+		owned->normals[i * 3 + axis] = triangleNormals[i][axis];
+    }
+    primitive_indexed_face_set_free(&faceSet);
+    if (bounds.isEmpty() || owned->faces.empty())
+	return std::shared_ptr<BObolStagedSourceMesh>();
+
+    std::shared_ptr<BObolStagedSourceMesh> staged =
+	std::make_shared<BObolStagedSourceMesh>();
+    staged->owner = owned;
+    staged->points = reinterpret_cast<const point_t *>(owned->points.data());
+    staged->normals = owned->normals.empty() ? NULL :
+	reinterpret_cast<const vect_t *>(owned->normals.data());
+    staged->faces = owned->faces.data();
+    staged->pointCount = owned->points.size() / 3;
+    staged->faceCount = owned->faces.size() / 3;
+    staged->contentKey = cad_brep_shaded_asset_key(dbip, dp, ttol, tol);
+    staged->shadedCullBackfaces = 0;
+    staged->assetName = dp->d_namep ? dp->d_namep : "";
+    staged->sourceRevision = sourceRevision;
+    staged->byteCount = owned->points.size() * sizeof(fastf_t) +
+	owned->normals.size() * sizeof(fastf_t) +
+	owned->faces.size() * sizeof(int);
+    if (!staged->contentKey || !staged->isValid())
+	return std::shared_ptr<BObolStagedSourceMesh>();
+
+    request.faceCount = staged->faceCount;
+    request.pointCount = staged->pointCount;
+    request.bounds = bounds;
+    request.meshAssetBounds = bounds;
+    request.meshAssetName = staged->assetName;
+    request.meshAssetTessellationAbsTol = ttol->abs;
+    request.meshAssetTessellationRelTol = ttol->rel;
+    request.meshAssetTessellationNormTol = ttol->norm;
+    return staged;
+}
+
+std::shared_ptr<BObolStagedSourceMesh>
+bobol_database_brep_staged_mesh_variant(
+    struct db_i *dbip, const char *name, const struct bg_tess_tol *ttol,
+    uint64_t contentKey, uint32_t sourceRevision,
+    BObolSourceMeshRequest &request)
+{
+    request.clear();
+    if (!dbip || !name || !name[0] || !ttol || !contentKey)
+	return std::shared_ptr<BObolStagedSourceMesh>();
+    struct directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
+    if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BREP)
+	return std::shared_ptr<BObolStagedSourceMesh>();
+    struct rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    if (rt_db_get_internal(&intern, dp, dbip, NULL) < 0)
+	return std::shared_ptr<BObolStagedSourceMesh>();
+    const struct bn_tol tol = BN_TOL_INIT_TOL;
+    std::shared_ptr<BObolStagedSourceMesh> staged =
+	cad_staged_mesh_from_primitive_face_set(
+	    dbip, dp, &intern, ttol, &tol, sourceRevision, request);
+    rt_db_free_internal(&intern);
+    if (!staged)
+	return staged;
+    /* The view allocator derives this identity from the validated canonical
+     * asset plus a discrete tolerance band.  Do not let the helper's direct
+     * database hash create a second logical identity for the same band. */
+    staged->contentKey = contentKey;
+    return staged;
 }
 
 static int
@@ -5753,7 +6123,8 @@ compact_mesh_prefill_collect_leaf(struct db_tree_state *tsp,
 
     SbBox3f cacheBounds;
     std::string cacheKey = realize_geometry_cache_key(dp);
-    source_lod_cache_key_append(cacheKey, collect->source, cacheBounds);
+    source_lod_cache_key_append(cacheKey, collect->source, cacheBounds,
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
     if (!collect->seen.insert(cacheKey).second)
 	return make_nop_tree();
     if (collect->cache->findMeshVListCadGeometry(cacheKey) ||
@@ -6848,7 +7219,8 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
     SoBRLMeshShape *sharedMeshShape = NULL;
     SbBox3f cacheBounds;
     std::string cacheKey = realize_geometry_cache_key(dp);
-    source_lod_cache_key_append(cacheKey, source, cacheBounds);
+    source_lod_cache_key_append(cacheKey, source, cacheBounds,
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
     std::map<std::string, SoBRLVListShape *>::iterator foundVList =
 	cache->sharedMeshVListGeometry.find(cacheKey);
     if (foundVList != cache->sharedMeshVListGeometry.end()) {
@@ -7004,7 +7376,8 @@ static int
 realize_direct_leaf_mesh_compact(
     SoBRLDatabaseSource *source,
     BObolDatabaseSourceRealizationCache *cache,
-    uint32_t revision)
+    uint32_t revision,
+    BObolCompactOccurrenceStream *stream)
 {
     struct db_i *dbip = source ? source->getDatabase() : NULL;
     if (!source || !cache || !dbip || source_has_auxiliary_children(source))
@@ -7019,6 +7392,12 @@ realize_direct_leaf_mesh_compact(
 	db_lookup(dbip, leafName.c_str(), LOOKUP_QUIET);
     if (!dp || (dp->d_flags & RT_DIR_COMB))
 	return 0;
+    /* A streamed BREP needs its box-first, bounded producer path.  The direct
+     * optimization would otherwise complete tessellation and PoP generation
+     * before publishing any useful visual. */
+    if (stream && source->lodBotThreshold.getValue() > 0 &&
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP)
+	return 0;
 
     const std::string fullPath =
 	database_source_full_path_string(source->path.getValue());
@@ -7026,7 +7405,8 @@ realize_direct_leaf_mesh_compact(
     SoBRLMeshShape *sharedMeshShape = NULL;
     SbBox3f cacheBounds;
     std::string cacheKey = realize_geometry_cache_key(dp);
-    source_lod_cache_key_append(cacheKey, source, cacheBounds);
+    source_lod_cache_key_append(cacheKey, source, cacheBounds,
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
     std::map<std::string, SoBRLVListShape *>::iterator foundVList =
 	cache->sharedMeshVListGeometry.find(cacheKey);
     if (foundVList != cache->sharedMeshVListGeometry.end()) {
@@ -7125,14 +7505,46 @@ realize_direct_leaf_mesh_compact(
 		const struct rt_bot_internal *bot = internalType == ID_BOT ?
 		    static_cast<const struct rt_bot_internal *>(
 			validInternal.local.idb_ptr) : NULL;
-		if (bot && source->lodBotThreshold.getValue() > 0 &&
+		if (internalType == ID_BREP &&
+		    source->lodBotThreshold.getValue() > 0 &&
+		    validInternal.local.idb_meth &&
+		    validInternal.local.idb_meth->ft_indexed_face_set) {
+		    const struct bg_tess_tol ttol = source_tess_tol(source);
+		    const struct bn_tol tol = BN_TOL_INIT_TOL;
+		    std::shared_ptr<BObolStagedSourceMesh> staged =
+			cad_staged_mesh_from_primitive_face_set(
+			    dbip, dp, &validInternal.local, &ttol, &tol,
+			    revision, sourceMeshRequest);
+		    if (staged) {
+			sourceMeshRequest.meshAssetPath = fullPath.c_str();
+			sourceMeshRequest.meshAssetName = dp->d_namep;
+			struct BObolMeshLodCacheStatus cacheStatus =
+			    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+			if (bobol_mesh_lod_cache_store_mesh_variant(
+				dbip, dp->d_namep,
+				staged->points, staged->pointCount,
+				staged->normals, staged->faces,
+				staged->faceCount, staged->contentKey,
+				staged->shadedCullBackfaces,
+				&cacheStatus) == BRLCAD_OK &&
+			    cad_wire_part_geometry_from_aabb(
+				sourceMeshRequest.bounds, generated)) {
+			    sourceMeshRequest.meshAssetContentHash =
+				cacheStatus.cache_key;
+			    generatedGeometry = 1;
+			    lodBacked = true;
+			}
+		    }
+		}
+		if (!generatedGeometry && bot &&
+		    source->lodBotThreshold.getValue() > 0 &&
 		    bot->num_faces >= source->lodBotThreshold.getValue() &&
 		    cad_source_mesh_request_from_bot(sourceMeshRequest, bot) &&
 		    cad_wire_part_geometry_from_aabb(sourceMeshRequest.bounds,
 			generated)) {
 		    generatedGeometry = 1;
 		    lodBacked = true;
-		} else {
+		} else if (!generatedGeometry) {
 		    generatedGeometry = cad_mesh_part_geometry_from_internal(
 			&validInternal.local, source, generated);
 		}
@@ -7801,7 +8213,8 @@ static union tree *
     if (data->compact_index) {
 	SbBox3f cacheBounds;
 	std::string cacheKey = realize_geometry_cache_key(dp);
-	source_lod_cache_key_append(cacheKey, data->source, cacheBounds);
+	source_lod_cache_key_append(cacheKey, data->source, cacheBounds,
+	    dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
 	const BObolCachedPartGeometry *cachedWire =
 	    data->cache->findMeshVListCadGeometry(cacheKey);
 	const BObolCachedPartGeometry *cachedMesh =
@@ -8007,7 +8420,8 @@ static union tree *
     SoBRLMeshShape *sharedMeshShape = NULL;
     SbBox3f cacheBounds;
     std::string cacheKey = realize_geometry_cache_key(dp);
-    source_lod_cache_key_append(cacheKey, data->source, cacheBounds);
+    source_lod_cache_key_append(cacheKey, data->source, cacheBounds,
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
     std::map<std::string, SoBRLVListShape *>::iterator foundVList =
 	data->cache->sharedMeshVListGeometry.find(cacheKey);
     if (foundVList != data->cache->sharedMeshVListGeometry.end()) {
@@ -14942,6 +15356,11 @@ struct compact_coverage_asset {
     unsigned char mode = 0;
     unsigned char orientation = 0;
     bool coverageReady = false;
+    /* True only when geometry is the standing proxy for a source-backed
+     * triangle PoP asset.  BREP wire drawing has its own immutable
+     * progressive line representation and must not also submit the shaded
+     * tessellation as a wire overlay. */
+    bool sourceMeshReady = false;
     bool ready = false;
     std::once_flag coverageOnce;
     std::once_flag realizeOnce;
@@ -14977,7 +15396,10 @@ static size_t
 compact_coverage_working_set_estimate(const struct db_i *dbip,
 	const struct directory *dp)
 {
-    const size_t fixedBytes = 8ULL * 1024ULL * 1024ULL;
+    const bool brep = dp &&
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP;
+    const size_t fixedBytes = brep ?
+	64ULL * 1024ULL * 1024ULL : 8ULL * 1024ULL * 1024ULL;
     if (!dp)
 	return fixedBytes;
     size_t encodedBytes = dp->d_len;
@@ -15000,9 +15422,10 @@ compact_coverage_working_set_estimate(const struct db_i *dbip,
      * lease window; downstream PoP construction takes its own face/point
      * reservation before it can overlap another import.
      */
-    if (encodedBytes > (SIZE_MAX - fixedBytes) / 3)
+    const size_t copyFactor = brep ? 8 : 3;
+    if (encodedBytes > (SIZE_MAX - fixedBytes) / copyFactor)
 	return SIZE_MAX;
-    return encodedBytes * 3 + fixedBytes;
+    return encodedBytes * copyFactor + fixedBytes;
 }
 
 /*
@@ -15124,6 +15547,22 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     return !bounds.isEmpty();
 }
 
+static bool
+compact_coverage_primitive_bounds(struct db_i *dbip, struct directory *dp,
+	SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    if (!dbip || !dp)
+	return false;
+    struct rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    if (rt_db_get_internal(&intern, dp, dbip, NULL) < 0)
+	return false;
+    const bool valid = local_bounds_from_internal(&intern, bounds);
+    rt_db_free_internal(&intern);
+    return valid && !bounds.isEmpty();
+}
+
 static size_t
 compact_coverage_bot_source_bytes(const struct rt_bot_internal *bot)
 {
@@ -15161,7 +15600,8 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	return TREE_NULL;
     if (collect->stream->isCancelled())
 	return make_nop_tree();
-    if (dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
+    if (dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT &&
+	dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BREP)
 	return make_nop_tree();
 
     const std::string instanceIdentity =
@@ -15183,7 +15623,8 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 
     SbBox3f unusedBounds;
     std::string cacheKey = realize_geometry_cache_key(dp);
-    source_lod_cache_key_append(cacheKey, collect->source, unusedBounds);
+    source_lod_cache_key_append(cacheKey, collect->source, unusedBounds,
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
     size_t assetIndex = 0;
     auto foundAsset = collect->assetIndices.find(cacheKey);
     if (foundAsset == collect->assetIndices.end()) {
@@ -15210,8 +15651,10 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	snprintf(suffix, sizeof(suffix), "@%u", duplicateOrdinal);
 	semanticPath += suffix;
     }
+    const char *sourceType =
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP ? "brep" : "bot";
     occurrence.summary = compact_occurrence_tree_summary(
-	collect->source, tsp, semanticPath.c_str(), dp->d_namep, "bot",
+	collect->source, tsp, semanticPath.c_str(), dp->d_namep, sourceType,
 	"aabb", collect->revision,
 	BObolRealizedShapeSummary::SHAPE_MESH, collect->materialSweep);
     occurrence.occurrenceIndex = pathp->fp_cinst && pathp->fp_len ?
@@ -15369,7 +15812,8 @@ compact_stream_publish_parallel_coverage(
 	    compact_coverage_asset &asset = *item.asset;
 	    std::call_once(asset.coverageOnce, [&]() {
 		size_t coverageWorkingSet = asset.estimatedWorkingSetBytes;
-		if (db_version(source->getDatabase()) == 5 && asset.dp) {
+		if (db_version(source->getDatabase()) == 5 && asset.dp &&
+		    asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
 		    const size_t fixedBytes = 1024ULL * 1024ULL;
 		    const size_t encodedBytes = asset.dp->d_len;
 		    coverageWorkingSet =
@@ -15377,11 +15821,18 @@ compact_stream_publish_parallel_coverage(
 			SIZE_MAX : encodedBytes + fixedBytes;
 		}
 		bobol_lod_working_set_acquire(coverageWorkingSet);
-		asset.coverageReady = !stream->isCancelled() &&
-		    compact_coverage_bot_bounds(source->getDatabase(),
-			asset.dp, asset.coverageBounds, asset.vertexCount,
-			asset.faceCount, asset.mode, asset.orientation) &&
-		    asset.faceCount >= source->lodBotThreshold.getValue();
+		if (!stream->isCancelled() && asset.dp &&
+		    asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
+		    asset.coverageReady = compact_coverage_bot_bounds(
+			source->getDatabase(), asset.dp, asset.coverageBounds,
+			asset.vertexCount, asset.faceCount, asset.mode,
+			asset.orientation) &&
+			asset.faceCount >= source->lodBotThreshold.getValue();
+		} else if (!stream->isCancelled() && asset.dp &&
+		    asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP) {
+		    asset.coverageReady = compact_coverage_primitive_bounds(
+			source->getDatabase(), asset.dp, asset.coverageBounds);
+		}
 		if (asset.coverageReady) {
 		    asset.coverageGeometry = compact_coverage_aabb_geometry(
 			asset.coverageBounds, asset.proxyGeometryTransform);
@@ -15511,6 +15962,7 @@ compact_stream_publish_parallel_coverage(
 				asset.proxyGeometryTransform);
 			}
 			asset.ready = asset.geometry ? true : false;
+			asset.sourceMeshReady = asset.ready;
 			/* Transfer this already-paid cold import into a bounded,
 			 * weakly referenced stream lease.  The first visible LoD
 			 * task can build its PoP cache from these arrays instead of
@@ -15549,7 +16001,68 @@ compact_stream_publish_parallel_coverage(
 				    asset.sourceMeshRequest.stagedSource = staged;
 			    }
 			}
+	    } else if (intern.idb_type == ID_BREP && intern.idb_ptr &&
+		source->drawMode.getValue() ==
+		    SoBRLDatabaseSource::WIREFRAME) {
+		/* BREP wire is a first-class progressive representation.  Its
+		 * ranges all reference one immutable line buffer and the renderer
+		 * selects the view cut directly.  Building the shaded face-set PoP
+		 * as well made one BREP appear twice: correct native curves plus a
+		 * coarse triangulation overlay which looked like a lingering box. */
+		Obol::PartGeometry wireGeometry;
+		if (cad_progressive_wire_part_geometry_from_provider(
+			&intern, source, wireGeometry) > 0 &&
+		    wireGeometry.wire) {
+		    asset.vertexCount = wireGeometry.wire->segmentCount() * 2;
+		    asset.faceCount = 0;
+		    asset.proxyGeometryTransform = SbMatrix::identity();
+		    asset.geometry =
+			std::make_shared<const Obol::PartGeometry>(
+			    std::move(wireGeometry));
+		    asset.ready = asset.geometry ? true : false;
+		}
+	    } else if (intern.idb_type == ID_BREP && intern.idb_ptr &&
+		intern.idb_meth && intern.idb_meth->ft_indexed_face_set) {
+		const struct bg_tess_tol ttol = source_tess_tol(source);
+		const struct bn_tol tol = BN_TOL_INIT_TOL;
+		std::shared_ptr<BObolStagedSourceMesh> staged =
+		    cad_staged_mesh_from_primitive_face_set(
+			source->getDatabase(), asset.dp, &intern, &ttol, &tol,
+			revision, asset.sourceMeshRequest);
+		if (staged) {
+		    asset.sourceMeshRequest.meshAssetPath =
+			asset.assetPath.c_str();
+		    asset.sourceMeshRequest.meshAssetName =
+			asset.dp->d_namep ? asset.dp->d_namep : "";
+		    asset.vertexCount = staged->pointCount;
+		    asset.faceCount = staged->faceCount;
+		    /* BREP tessellation is already detached and fully owned on this
+		     * bounded worker.  Populate the representation-aware PoP cache
+		     * here so eviction of the short staged lease cannot strand a
+		     * standing box with no database-side BoT fallback. */
+		    struct BObolMeshLodCacheStatus cacheStatus =
+			BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+		    const int stored = bobol_mesh_lod_cache_store_mesh_variant(
+			source->getDatabase(), staged->assetName.getString(),
+			staged->points, staged->pointCount, staged->normals,
+			staged->faces, staged->faceCount, staged->contentKey,
+			staged->shadedCullBackfaces, &cacheStatus);
+		    if (stored == BRLCAD_OK) {
+			asset.sourceMeshRequest.meshAssetContentHash =
+			    cacheStatus.cache_key;
+			asset.geometry = asset.coverageReady &&
+			    asset.coverageGeometry ? asset.coverageGeometry :
+			    compact_coverage_aabb_geometry(
+				asset.sourceMeshRequest.bounds,
+				asset.proxyGeometryTransform);
+			asset.ready = asset.geometry ? true : false;
+			asset.sourceMeshReady = asset.ready;
 		    }
+		    if (asset.ready && !stream->isCancelled() &&
+			stream->retainStagedSource(staged))
+			asset.sourceMeshRequest.stagedSource = staged;
+		}
+	    }
 		}
 		if (ownsInternal)
 		    rt_db_free_internal(&intern);
@@ -15575,15 +16088,29 @@ compact_stream_publish_parallel_coverage(
 	     * normally adopted as authoritative, so a later serial realization
 	     * cannot be relied upon to repair this metadata.
 	     */
-	    occurrence.sourceMeshRequestValid = TRUE;
-	    occurrence.sourceMeshRequest = asset.sourceMeshRequest;
+	    occurrence.sourceMeshRequestValid = asset.sourceMeshReady ?
+		TRUE : FALSE;
+	    if (occurrence.sourceMeshRequestValid)
+		occurrence.sourceMeshRequest = asset.sourceMeshRequest;
 	    occurrence.occurrenceIndex = item.occurrence.occurrenceIndex;
 	    occurrence.booleanOperation = item.occurrence.booleanOperation;
 	    occurrence.summary = item.occurrence.summary;
-	    compact_source_mesh_request_sync(occurrence.sourceMeshRequest,
-		occurrence.summary);
-	    compact_summary_lod_from_source_mesh_request(occurrence.summary,
-		occurrence.sourceMeshRequest);
+	    if (occurrence.sourceMeshRequestValid) {
+		compact_source_mesh_request_sync(occurrence.sourceMeshRequest,
+		    occurrence.summary);
+		compact_summary_lod_from_source_mesh_request(occurrence.summary,
+		    occurrence.sourceMeshRequest);
+	    } else if (asset.geometry && asset.geometry->wire) {
+		occurrence.summary.shapeKind =
+		    BObolRealizedShapeSummary::SHAPE_VLIST;
+		occurrence.summary.geometryKind = "wire";
+		occurrence.summary.pointCount = asset.vertexCount;
+		occurrence.summary.commandCount = asset.vertexCount;
+		occurrence.summary.segmentCount =
+		    asset.geometry->wire->segmentCount();
+		occurrence.summary.boundsValid = TRUE;
+		occurrence.summary.bounds = asset.geometry->wire->bounds;
+	    }
 	    stream->push(std::move(occurrence));
 	    publishedContracts.fetch_add(1);
 	}
@@ -15689,8 +16216,14 @@ compact_stream_publish_parallel_coverage(
 	 collect.assets) {
 	compact_coverage_asset &asset = *assetPtr;
 	const std::string broadKey = compact_coverage_broad_key(asset);
-	if (broadKey.empty() || broadCounts[broadKey] != 1 ||
-	    !asset.geometry)
+	const bool brepAsset = asset.dp &&
+	    asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP;
+	const bool nativeBrepWire = brepAsset && asset.geometry &&
+	    asset.geometry->wire && !asset.sourceMeshReady;
+	if ((!brepAsset &&
+	     (broadKey.empty() || broadCounts[broadKey] != 1)) ||
+	    !asset.geometry || !asset.ready ||
+	    (!asset.sourceMeshReady && !nativeBrepWire))
 	    continue;
 	/* A self asset needs no transformed-reuse mapping record.  The completed
 	 * leaf manifest persists its canonical source request directly; writing
@@ -15704,9 +16237,12 @@ compact_stream_publish_parallel_coverage(
 	 * framed the unit cube and view culling correctly rejected the actual
 	 * (often million-unit) mesh forever.
 	 */
+	const SbBox3f &cachedBounds = asset.sourceMeshReady ?
+	    asset.sourceMeshRequest.bounds : asset.geometry->wire->bounds;
 	cache->storeMeshCadGeometryReference(asset.cacheKey, asset.geometry,
-	    asset.proxyGeometryTransform, "bot", "aabb",
-	    &asset.sourceMeshRequest.bounds, true, &asset.sourceMeshRequest);
+	    asset.proxyGeometryTransform, brepAsset ? "brep" : "bot",
+	    nativeBrepWire ? "wire" : "aabb", &cachedBounds, true,
+	    asset.sourceMeshReady ? &asset.sourceMeshRequest : NULL);
 	seeded++;
     }
     if (getenv("BOBOL_DRAW_TIMING"))
@@ -15787,7 +16323,7 @@ bobol_database_source_realize_mesh_compact_with_cache(
 	if (directTimer.active())
 	    bobol_performance_counter_add(BOBOL_PERF_DIRECT_LEAF_CALLS, 1);
 	directRealized = realize_direct_leaf_mesh_compact(source, cache,
-	    revision);
+	    revision, stream);
 	if (directTimer.active()) {
 	    if (directRealized > 0) {
 		bobol_performance_counter_add(
@@ -16556,18 +17092,7 @@ static void
 primitive_realization_line_set_free(
     struct rt_primitive_lod_realization *realization)
 {
-    if (!realization)
-	return;
-    if (realization->line_points)
-	bu_free(realization->line_points, "primitive realization line-set points");
-    if (realization->line_commands)
-	bu_free(realization->line_commands,
-		"primitive realization line-set commands");
-    realization->line_points = NULL;
-    realization->line_commands = NULL;
-    realization->line_count = 0;
-    realization->line_capacity = 0;
-    realization->has_line_set = 0;
+    rt_primitive_lod_realization_free(realization);
 }
 
 static int32_t
@@ -16871,7 +17396,7 @@ SoBRLDatabaseSource::publishPrimitiveWireframe(
     if (intern->idb_type == ID_SUBMODEL)
 	return publish_primitive_submodel_wireframe(this, intern, ttol, tol);
 
-    if (intern->idb_type == ID_BREP || intern->idb_type == ID_BSPLINE) {
+    if (intern->idb_meth && intern->idb_meth->ft_wireframe_line_set) {
 	struct rt_primitive_lod_realization realization;
 	memset(&realization, 0, sizeof(realization));
 	struct bn_tol localTol;
@@ -16880,9 +17405,14 @@ SoBRLDatabaseSource::publishPrimitiveWireframe(
 	    BN_TOL_INIT_SET_TOL(&localTol);
 	    useTol = &localTol;
 	}
-	int ret = intern->idb_type == ID_BREP ?
-	    rt_brep_wireframe_line_set(&realization, intern, useTol) :
-	    rt_nurb_wireframe_line_set(&realization, intern, useTol);
+	struct bg_tess_tol localTtol;
+	const struct bg_tess_tol *useTtol = ttol;
+	if (!useTtol) {
+	    BG_TESS_TOL_INIT_SET_TOL(&localTtol);
+	    useTtol = &localTtol;
+	}
+	int ret = intern->idb_meth->ft_wireframe_line_set(&realization,
+	    intern, useTtol, useTol);
 	if (ret < 0 || !realization.has_line_set) {
 	    primitive_realization_line_set_free(&realization);
 	    return -1;
@@ -17806,6 +18336,8 @@ SoBRLDatabaseSource::getCompactInstanceSummary(
 	summary.meshAssetPath = entry->sourceMeshRequest.meshAssetPath;
 	summary.meshAssetName = entry->sourceMeshRequest.meshAssetName;
 	summary.meshAssetBounds = entry->sourceMeshRequest.meshAssetBounds;
+	summary.sourceContentHash =
+	    entry->sourceMeshRequest.meshAssetContentHash;
 	summary.sourceFaceCount = entry->sourceMeshRequest.faceCount;
 	summary.sourcePointCount = entry->sourceMeshRequest.pointCount;
     }
@@ -17870,6 +18402,8 @@ SoBRLDatabaseSource::getCompactLodInstanceSummary(
 	summary.meshAssetPath = entry.sourceMeshRequest.meshAssetPath;
 	summary.meshAssetName = entry.sourceMeshRequest.meshAssetName;
 	summary.meshAssetBounds = entry.sourceMeshRequest.meshAssetBounds;
+	summary.sourceContentHash =
+	    entry.sourceMeshRequest.meshAssetContentHash;
 	summary.sourceFaceCount = entry.sourceMeshRequest.faceCount;
 	summary.sourcePointCount = entry.sourceMeshRequest.pointCount;
     }

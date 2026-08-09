@@ -1685,6 +1685,181 @@ exercise_generated_primitive(struct db_i *dbip,
 }
 
 static int
+exercise_brep_lod_contract(struct db_i *dbip)
+{
+    if (!dbip)
+	return 0;
+
+    struct BObolMeshLodCacheStatus invalidated =
+	BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    (void)bobol_mesh_lod_cache_invalidate(dbip, "brep.s", &invalidated);
+
+    SoSeparator *wireRoot = new SoSeparator;
+    wireRoot->ref();
+    SoBRLDatabaseSource *wireSource = new SoBRLDatabaseSource;
+    wireSource->setDatabase(dbip);
+    wireSource->path = "brep.s";
+    wireSource->sourceRevision = 410;
+    wireSource->drawMode = SoBRLDatabaseSource::WIREFRAME;
+    wireSource->setRealizationViewPolicy(TRUE, TRUE, TRUE,
+	100.0f, 1.0f, 512, 512, 1, 0.0f, 0.0f);
+    wireRoot->addChild(wireSource);
+
+    SoBRLRealizeAction wireRealize;
+    wireRealize.apply(wireRoot);
+    BObolCompactOccurrence wireOccurrence;
+    bool wireValid = wireRealize.getRealizedSourceCount() == 1 &&
+	wireSource->getCompactOccurrence(0, wireOccurrence) &&
+	wireOccurrence.geometry && wireOccurrence.geometry->wire &&
+	wireOccurrence.geometry->wire->isProgressive();
+    if (wireValid) {
+	const Obol::WireRep &wire = *wireOccurrence.geometry->wire;
+	for (uint8_t level = 0; level < 16; ++level) {
+	    const size_t first = wire.segmentFirstAtLevel(level);
+	    const size_t count = wire.segmentCountAtLevel(level);
+	    if (first > wire.segmentCount() ||
+		count > wire.segmentCount() - first) {
+		wireValid = false;
+		break;
+	    }
+	}
+	wireValid = wireValid && wire.segmentCountAtLevel(15) > 0;
+    }
+    wireRoot->unref();
+    if (!wireValid)
+	return 0;
+
+    const auto realizeShaded = [dbip](float relativeTolerance,
+	uint32_t revision, uint64_t *cacheKey,
+	BObolSourceMeshRequest *meshRequest) {
+	SoSeparator *root = new SoSeparator;
+	root->ref();
+	SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+	source->setDatabase(dbip);
+	source->path = "brep.s";
+	source->sourceRevision = revision;
+	source->drawMode = SoBRLDatabaseSource::SHADED;
+	source->tessellationRelTol = relativeTolerance;
+	source->setRealizationViewPolicy(TRUE, FALSE, TRUE,
+	    100.0f, 1.0f, 512, 512, 1, 0.0f, 0.0f);
+	root->addChild(source);
+	SoBRLRealizeAction realize;
+	realize.apply(root);
+	BObolCompactOccurrence occurrence;
+	struct BObolMeshLodCacheStatus status =
+	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	const bool valid = realize.getRealizedSourceCount() == 1 &&
+	    source->getCompactOccurrence(0, occurrence) &&
+	    occurrence.lodBacked && occurrence.sourceMeshRequestValid &&
+	    occurrence.sourceMeshRequest.faceCount > 0 &&
+	    occurrence.sourceMeshRequest.pointCount > 0 &&
+	    occurrence.geometry && occurrence.geometry->wire &&
+	    bobol_mesh_lod_cache_status(dbip, "brep.s", &status) ==
+		BRLCAD_OK && status.has_cache_key &&
+	    status.has_cached_payload &&
+	    occurrence.sourceMeshRequest.meshAssetContentHash ==
+		status.cache_key;
+	if (cacheKey)
+	    *cacheKey = status.cache_key;
+	if (meshRequest && valid)
+	    *meshRequest = occurrence.sourceMeshRequest;
+	root->unref();
+	return valid;
+    };
+
+    uint64_t coarseKey = 0;
+    uint64_t fineKey = 0;
+    BObolSourceMeshRequest coarseRequest;
+    if (!realizeShaded(0.15f, 411, &coarseKey, &coarseRequest) ||
+	!coarseKey ||
+	!realizeShaded(0.05f, 412, &fineKey, NULL) || !fineKey ||
+	coarseKey == fineKey)
+	return 0;
+    if (fabs(coarseRequest.meshAssetTessellationRelTol - 0.15) >
+	1.0e-6)
+	return 0;
+
+    struct BObolMeshLod *coarseVariant =
+	bobol_mesh_lod_get_cached_prefix(dbip, coarseKey);
+    struct BObolMeshLod *fineVariant =
+	bobol_mesh_lod_get_cached_prefix(dbip, fineKey);
+    const bool variantsCoexist = coarseVariant && fineVariant;
+    if (coarseVariant)
+	bobol_mesh_lod_destroy(coarseVariant);
+    if (fineVariant)
+	bobol_mesh_lod_destroy(fineVariant);
+    if (!variantsCoexist)
+	return 0;
+
+    BObolLodService service;
+    if (!service.start(1, TRUE))
+	return 0;
+    BObolMeshLodProvider provider;
+    provider.service = &service;
+    provider.dbip = dbip;
+    /* The fine variant is the current named payload.  Reopening the older
+     * coarse key proves provider routing is exact rather than latest-by-name. */
+    provider.meshAssetContentHash = coarseKey;
+    provider.useForcedLevel = TRUE;
+    provider.forcedLevel = 0;
+    provider.refreshMissing = FALSE;
+    BObolLodRequest request;
+    request.objectPath = "/brep.s";
+    request.objectName = "brep.s";
+    request.sourceContentHash = coarseKey;
+    request.drawMode = BOBOL_LOD_DRAW_SHADED;
+    request.qualityTier = BOBOL_LOD_QUALITY_FAST_DISPLAY;
+    BObolLodResult result =
+	bobol_mesh_lod_provider_task(request, &provider);
+    if (result.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	!result.geometry.isValid() || !result.mesh.isValid() ||
+	result.counts.faceCount == 0 || result.counts.pointCount == 0) {
+	service.stop();
+	return 0;
+	}
+
+    /* A view-selected BREP band has a deterministic identity distinct from
+     * the canonical tessellation.  On an exact miss the provider must build,
+     * persist, and reopen that immutable band without replacing either
+     * sibling variant. */
+    uint64_t adaptiveKey = coarseKey ^ 0x9e3779b97f4a7c15ULL;
+    if (!adaptiveKey || adaptiveKey == coarseKey || adaptiveKey == fineKey)
+	adaptiveKey = coarseKey + 17;
+    provider.meshAssetContentHash = adaptiveKey;
+    provider.generateBrepVariant = TRUE;
+    provider.brepTessellationAbsTol =
+	coarseRequest.meshAssetTessellationAbsTol > 0.0 ?
+	coarseRequest.meshAssetTessellationAbsTol * 0.5 : 0.0;
+    provider.brepTessellationRelTol =
+	coarseRequest.meshAssetTessellationRelTol * 0.5;
+    provider.brepTessellationNormTol =
+	coarseRequest.meshAssetTessellationNormTol > 0.0 ?
+	coarseRequest.meshAssetTessellationNormTol * 0.5 : 0.0;
+    provider.refreshMissing = TRUE;
+    request.sourceContentHash = adaptiveKey;
+    BObolLodResult adaptiveResult =
+	bobol_mesh_lod_provider_task(request, &provider);
+    struct BObolMeshLod *adaptiveVariant =
+	bobol_mesh_lod_get_cached_prefix(dbip, adaptiveKey);
+    coarseVariant = bobol_mesh_lod_get_cached_prefix(dbip, coarseKey);
+    fineVariant = bobol_mesh_lod_get_cached_prefix(dbip, fineKey);
+    const bool adaptiveValid =
+	adaptiveResult.providerStatus == BOBOL_LOD_PROVIDER_READY &&
+	adaptiveResult.geometry.isValid() && adaptiveResult.mesh.isValid() &&
+	adaptiveResult.counts.faceCount > 0 &&
+	adaptiveResult.counts.pointCount > 0 && adaptiveVariant &&
+	coarseVariant && fineVariant;
+    if (adaptiveVariant)
+	bobol_mesh_lod_destroy(adaptiveVariant);
+    if (coarseVariant)
+	bobol_mesh_lod_destroy(coarseVariant);
+    if (fineVariant)
+	bobol_mesh_lod_destroy(fineVariant);
+    service.stop();
+    return adaptiveValid;
+}
+
+static int
 exercise_generated_primitive_wire_diagnostic(struct db_i *dbip,
 	const char *name,
 	const char *type_name,
@@ -4966,6 +5141,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed VOL object-data primitive coverage should pass");
     if (!exercise_generated_primitive(dbip, "brep.s", 1, 0, viewport))
 	FAIL("database-backed BREP wire primitive coverage should pass");
+    if (!exercise_brep_lod_contract(dbip))
+	FAIL("database-backed BREP shaded/wire LoD contract should pass");
     if (!exercise_generated_primitive_wire_diagnostic(dbip, "empty.brep", "brep", viewport))
 	FAIL("database-backed empty BREP wire diagnostic coverage should pass");
     if (!exercise_generated_primitive_mesh_diagnostic(dbip, "empty.brep", "brep", viewport))

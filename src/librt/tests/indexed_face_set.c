@@ -20,13 +20,7 @@
 static void
 face_set_free(struct rt_primitive_indexed_face_set *set)
 {
-    if (set->points)
-	bu_free(set->points, "indexed-face test points");
-    if (set->normals)
-	bu_free(set->normals, "indexed-face test normals");
-    if (set->indices)
-	bu_free(set->indices, "indexed-face test indices");
-    memset(set, 0, sizeof(*set));
+    rt_primitive_indexed_face_set_free(set);
 }
 
 static int

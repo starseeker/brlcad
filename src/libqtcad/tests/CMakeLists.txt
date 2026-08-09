@@ -547,6 +547,7 @@ if(TARGET test_qtcad_obol_real_models)
 	  nist_pmi6_shaded
 	  nist_pmi11_shaded
 	  nist_pmi7_10_shaded
+	  nist_pmi7_10_wire
       m35_color_table_mutation)
     brlcad_add_test(
       NAME test_qtcad_obol_real_models_${_qtcad_real_model_case}

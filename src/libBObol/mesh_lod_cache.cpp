@@ -2573,8 +2573,8 @@ bobol_mesh_lod_cache_refresh_from_bot_open(
     return bobol_mesh_lod_get_named_cached_prefix(dbip, name);
 }
 
-int
-bobol_mesh_lod_cache_store_mesh(
+static int
+mesh_lod_cache_store_mesh_impl(
     struct db_i *dbip,
     const char *name,
     const point_t *vertices,
@@ -2584,7 +2584,8 @@ bobol_mesh_lod_cache_store_mesh(
     size_t faceCount,
     unsigned long long userKey,
     int shadedCullBackfaces,
-    struct BObolMeshLodCacheStatus *status)
+    struct BObolMeshLodCacheStatus *status,
+    bool preserveVariants)
 {
     struct BObolMeshLodCacheStatus current =
 	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
@@ -2609,7 +2610,7 @@ bobol_mesh_lod_cache_store_mesh(
 	return BRLCAD_ERROR;
     }
 
-    if (current.has_cache_key &&
+    if (!preserveVariants && current.has_cache_key &&
 	(current.cache_key != userKey || !current.has_cached_payload)) {
 	current.cleared_cache_entry = 1;
 	current.cleared_cache_key = current.cache_key;
@@ -2620,7 +2621,8 @@ bobol_mesh_lod_cache_store_mesh(
 	current.stale_cache_entry = 0;
     }
 
-    if (current.has_cache_key && current.has_cached_payload) {
+    if (current.has_cache_key && current.has_cached_payload &&
+	(!preserveVariants || current.cache_key == userKey)) {
 	if (status)
 	    *status = current;
 	mesh_lod_context_destroy(context);
@@ -2652,6 +2654,42 @@ bobol_mesh_lod_cache_store_mesh(
 
     mesh_lod_context_destroy(context);
     return current.has_cached_payload ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
+int
+bobol_mesh_lod_cache_store_mesh(
+    struct db_i *dbip,
+    const char *name,
+    const point_t *vertices,
+    size_t vertexCount,
+    const vect_t *normals,
+    const int *faces,
+    size_t faceCount,
+    unsigned long long userKey,
+    int shadedCullBackfaces,
+    struct BObolMeshLodCacheStatus *status)
+{
+    return mesh_lod_cache_store_mesh_impl(dbip, name, vertices, vertexCount,
+	normals, faces, faceCount, userKey, shadedCullBackfaces, status,
+	false);
+}
+
+int
+bobol_mesh_lod_cache_store_mesh_variant(
+    struct db_i *dbip,
+    const char *name,
+    const point_t *vertices,
+    size_t vertexCount,
+    const vect_t *normals,
+    const int *faces,
+    size_t faceCount,
+    unsigned long long userKey,
+    int shadedCullBackfaces,
+    struct BObolMeshLodCacheStatus *status)
+{
+    return mesh_lod_cache_store_mesh_impl(dbip, name, vertices, vertexCount,
+	normals, faces, faceCount, userKey, shadedCullBackfaces, status,
+	true);
 }
 
 struct BObolMeshLod *

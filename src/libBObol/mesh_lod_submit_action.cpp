@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "bu/log.h"
+#include "bu/hash.h"
 #include "bu/str.h"
 #include "bu/time.h"
 
@@ -43,6 +44,124 @@ mesh_lod_saturating_scaled_add(size_t total, uint64_t count, size_t scale)
 	return SIZE_MAX;
     const size_t bytes = static_cast<size_t>(count) * scale;
     return bytes > SIZE_MAX - total ? SIZE_MAX : total + bytes;
+}
+
+struct MeshLodBrepVariantDemand {
+    uint64_t contentHash = 0;
+    double absTol = 0.0;
+    double relTol = 0.0;
+    double normTol = 0.0;
+    size_t estimatedWorkingSetBytes = 0;
+    unsigned int band = 0;
+    SbBool generate = FALSE;
+    SbBool memoryLimited = FALSE;
+};
+
+static uint64_t
+mesh_lod_brep_variant_hash(uint64_t canonicalHash, unsigned int band)
+{
+    if (!canonicalHash || !band)
+	return canonicalHash;
+    struct bu_data_hash_state *state = bu_data_hash_create();
+    static const char contract[] = "BObol-BREP-tessellation-band-v1";
+    bu_data_hash_update(state, contract, sizeof(contract));
+    bu_data_hash_update(state, BOBOL_MESH_LOD_PROVIDER_VERSION,
+	strlen(BOBOL_MESH_LOD_PROVIDER_VERSION));
+    bu_data_hash_update(state, &canonicalHash, sizeof(canonicalHash));
+    bu_data_hash_update(state, &band, sizeof(band));
+    uint64_t hash = bu_data_hash_val(state);
+    bu_data_hash_destroy(state);
+    return hash ? hash : 1;
+}
+
+static size_t
+mesh_lod_brep_variant_working_set(uint64_t canonicalFaces,
+	unsigned int band)
+{
+    /* Halving a surface tolerance can grow a two-dimensional tessellation by
+     * four.  Include detached face-set arrays, corner normals, PoP build
+     * scratch, and one immutable publication.  This is deliberately
+     * conservative: admission serializes a large refinement before the
+     * tessellator can exhaust the host. */
+    uint64_t faces = std::max<uint64_t>(1, canonicalFaces);
+    for (unsigned int i = 0; i < band; ++i) {
+	if (faces > UINT64_MAX / 4)
+	    return SIZE_MAX;
+	faces *= 4;
+    }
+    return mesh_lod_saturating_scaled_add(
+	64ULL * 1024ULL * 1024ULL, faces, 512);
+}
+
+static MeshLodBrepVariantDemand
+mesh_lod_brep_variant_demand(
+    const BObolSourceMeshRequest &sourceRequest,
+    const BObolLodRequest &projectedRequest,
+    const BObolViewLodState::CadPayload *activePayload,
+    const BObolLodService *service, SbBool allowGeneration)
+{
+    MeshLodBrepVariantDemand demand;
+    demand.contentHash = sourceRequest.meshAssetContentHash;
+    demand.absTol = sourceRequest.meshAssetTessellationAbsTol;
+    demand.relTol = sourceRequest.meshAssetTessellationRelTol;
+    demand.normTol = sourceRequest.meshAssetTessellationNormTol;
+    const bool validTolerances =
+	std::isfinite(demand.absTol) && demand.absTol >= 0.0 &&
+	std::isfinite(demand.relTol) && demand.relTol >= 0.0 &&
+	std::isfinite(demand.normTol) && demand.normTol >= 0.0 &&
+	(demand.absTol > 0.0 || demand.relTol > 0.0 ||
+	 demand.normTol > 0.0);
+    const bool brep = BU_STR_EQUAL(
+	sourceRequest.sourceType.getString(), "brep") &&
+	demand.contentHash && validTolerances;
+    if (!brep)
+	return demand;
+
+    /* Source tessellation is the reusable canonical representation.  It is
+     * intentionally sized to remain pixel-faithful through a normal
+     * full-window view; only close-ups beyond that reference generate a new
+     * immutable band.  Powers of two prevent smooth wheel zoom from creating
+     * a continuum of cache variants. */
+    static const double canonicalPixelDiameter = 1024.0;
+    const double targetError = std::max(0.125,
+	static_cast<double>(projectedRequest.targetPixelError));
+    const double ratio = static_cast<double>(
+	projectedRequest.projectedPixelDiameter) /
+	(canonicalPixelDiameter * targetError);
+    unsigned int wantedBand = ratio > 1.0 ?
+	static_cast<unsigned int>(std::ceil(std::log2(ratio))) : 0;
+    wantedBand = std::min<unsigned int>(wantedBand, 15);
+
+    if (!allowGeneration) {
+	/* Interaction never launches a BREP tessellator.  Keep the already
+	 * presented representation even while its cheap PoP prefix changes. */
+	if (activePayload && activePayload->sourceContentHash)
+	    demand.contentHash = activePayload->sourceContentHash;
+	return demand;
+    }
+
+    unsigned int admittedBand = wantedBand;
+    const size_t workingLimit = service ? service->getWorkingSetLimit() :
+	SIZE_MAX;
+    const size_t generationLimit = workingLimit == SIZE_MAX ? SIZE_MAX :
+	workingLimit - workingLimit / 4;
+    while (admittedBand > 0 &&
+	mesh_lod_brep_variant_working_set(
+	    sourceRequest.faceCount, admittedBand) > generationLimit)
+	--admittedBand;
+    demand.memoryLimited = admittedBand < wantedBand ? TRUE : FALSE;
+    demand.band = admittedBand;
+    demand.contentHash = mesh_lod_brep_variant_hash(
+	sourceRequest.meshAssetContentHash, admittedBand);
+    const double scale = std::ldexp(1.0, -static_cast<int>(admittedBand));
+    demand.absTol = demand.absTol > 0.0 ? demand.absTol * scale : 0.0;
+    demand.relTol *= scale;
+    demand.normTol = demand.normTol > 0.0 ? demand.normTol * scale : 0.0;
+    demand.estimatedWorkingSetBytes =
+	mesh_lod_brep_variant_working_set(
+	    sourceRequest.faceCount, admittedBand);
+    demand.generate = admittedBand > 0 ? TRUE : FALSE;
+    return demand;
 }
 
 /*
@@ -130,6 +249,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     requireLodBacked(TRUE),
     allowLevelDowngrade(FALSE),
     allowRetainedRefinement(TRUE),
+    allowRepresentationRefinement(TRUE),
     preserveMeshCoverage(FALSE),
     refinementFaceBudget(SIZE_MAX),
     refinementFaceBudgetUsed(0),
@@ -162,6 +282,18 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
 {
     SO_ACTION_CONSTRUCTOR(SoBRLMeshLodSubmitAction);
     bv_view_info_init(&this->view);
+}
+
+void
+SoBRLMeshLodSubmitAction::setAllowRepresentationRefinement(SbBool allow)
+{
+    this->allowRepresentationRefinement = allow;
+}
+
+SbBool
+SoBRLMeshLodSubmitAction::getAllowRepresentationRefinement(void) const
+{
+    return this->allowRepresentationRefinement;
 }
 
 SoBRLMeshLodSubmitAction::~SoBRLMeshLodSubmitAction(void)
@@ -1738,17 +1870,20 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		submitAction->skippedMeshCount++;
 		continue;
 	    }
+	    BObolSourceMeshRequest sourceMeshRequest;
+	    const SbBool haveSourceMeshRequest =
+		source->getCompactSourceMeshRequest(
+		    static_cast<int>(i), sourceMeshRequest);
 
 	    BObolLodRequest request;
 	    request.databaseId = submitAction->databaseId;
 	    request.databaseRevision = submitAction->databaseRevision;
 	    request.sourceRevision = source->sourceRevision.getValue();
-	    /* The compact part may currently be only an AABB and will be
-	     * replaced by richer presentation data.  Its part identity is not
-	     * source-content identity.  Leaving this unset makes the stable
-	     * geometry key use database/source revisions and object identity,
-	     * which survive box -> PoP presentation replacement. */
-	    request.sourceContentHash = 0;
+	    /* Source-backed meshes carry their exact immutable cache identity when
+	     * available.  In particular, a generated BREP's tessellation-variant
+	     * key is independent of the standing AABB part which the result will
+	     * replace. */
+	    request.sourceContentHash = summary.sourceContentHash;
 	    request.objectPath = summary.meshAssetPath.getLength() > 0 ?
 		summary.meshAssetPath : target;
 	    request.objectName = summary.meshAssetName.getLength() > 0 ?
@@ -1815,6 +1950,14 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    else if (activePayload)
 		mesh_lod_apply_level_hysteresis(request,
 		    activePayload->activeLevel);
+	    const MeshLodBrepVariantDemand brepVariant =
+		haveSourceMeshRequest ? mesh_lod_brep_variant_demand(
+		    sourceMeshRequest, request, activePayload,
+		    submitAction->service,
+		    submitAction->allowRepresentationRefinement) :
+		MeshLodBrepVariantDemand();
+	    if (brepVariant.contentHash)
+		request.sourceContentHash = brepVariant.contentHash;
 	    const SbBool terminalFailure =
 		submitAction->viewState &&
 		submitAction->viewState->
@@ -1993,7 +2136,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		const BObolViewLodState::CadPayload *reusable =
 		    submitAction->viewState->findCadForAsset(
 			source, request.objectPath);
-		if (reusable && reusable->progressiveMesh) {
+		if (reusable && reusable->progressiveMesh &&
+		    reusable->sourceContentHash == request.sourceContentHash) {
 		    int reusedLevel = std::min(request.requestedLevel,
 			reusable->progressiveMesh->maximumLevel());
 		    const int minimumLevel =
@@ -2217,13 +2361,17 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		continue;
 	    }
 
-		    BObolMeshLodProvider *provider = new BObolMeshLodProvider;
-		    BObolSourceMeshRequest sourceMeshRequest;
-		    const SbBool haveSourceMeshRequest =
-			source->getCompactSourceMeshRequest(
-			    static_cast<int>(i), sourceMeshRequest);
-		    if (haveSourceMeshRequest)
-			provider->stagedSource = sourceMeshRequest.stagedSource.lock();
+	    BObolMeshLodProvider *provider = new BObolMeshLodProvider;
+	    if (haveSourceMeshRequest &&
+		request.sourceContentHash ==
+		    sourceMeshRequest.meshAssetContentHash)
+		provider->stagedSource = sourceMeshRequest.stagedSource.lock();
+	    provider->meshAssetContentHash = request.sourceContentHash;
+	    provider->generateBrepVariant = brepVariant.generate;
+	    provider->brepTessellationAbsTol = brepVariant.absTol;
+	    provider->brepTessellationRelTol = brepVariant.relTol;
+	    provider->brepTessellationNormTol = brepVariant.normTol;
+	    provider->brepVariantMemoryLimited = brepVariant.memoryLimited;
 	    provider->service = submitAction->service;
 	    provider->dbip = submitAction->dbip;
 	    provider->view = submitAction->view;
@@ -2270,13 +2418,14 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			"BOBOL_LOD_TASK_DELAY_MS");
 		    const int workingSetLevel = providerDeliveryLevel >= 0 ?
 			providerDeliveryLevel : request.requestedLevel;
-		    task.estimatedWorkingSetBytes = activePayload ?
+		    task.estimatedWorkingSetBytes = brepVariant.generate ?
+			brepVariant.estimatedWorkingSetBytes : (activePayload ?
 			mesh_lod_resident_task_estimate(
 			    activePayload->progressiveMesh, workingSetLevel,
 			    activePayload->hasNormals, request.drawMode) :
 			(haveSourceMeshRequest ?
 			    mesh_lod_warm_source_task_estimate(
-				sourceMeshRequest, request) : 0);
+				sourceMeshRequest, request) : 0));
 		    pendingTasks.push_back(std::move(task));
 	}
 

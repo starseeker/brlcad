@@ -193,6 +193,7 @@ struct BOBOL_EXPORT BObolCompactInstanceSummary {
     SbString meshAssetPath;
     SbString meshAssetName;
     SbBox3f meshAssetBounds;
+    uint64_t sourceContentHash;
     uint64_t sourceFaceCount;
     uint64_t sourcePointCount;
     SbMatrix localToSource;
@@ -244,6 +245,7 @@ struct BOBOL_EXPORT BObolCompactLodInstanceSummary {
     SbString meshAssetPath;
     SbString meshAssetName;
     SbBox3f meshAssetBounds;
+    uint64_t sourceContentHash;
     uint64_t sourceFaceCount;
     uint64_t sourcePointCount;
     SbMatrix localToSource;

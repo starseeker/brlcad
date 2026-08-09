@@ -17074,9 +17074,17 @@ ged_obol_structural_proxy_manifest_occurrence(
 	BObolSourceMeshRequest &request = occurrence.sourceMeshRequest;
 	request.path = node.path.c_str();
 	request.sourceName = node.objectName.c_str();
-	request.sourceType = "bot";
+	request.sourceType = cached.meshAssetKind ==
+	    BOBOL_DRAW_CACHE_MESH_ASSET_BREP ? "brep" : "bot";
 	request.meshAssetPath = cached.meshAssetPath;
 	request.meshAssetName = cached.meshAssetName;
+	request.meshAssetContentHash = cached.meshAssetContentHash;
+	request.meshAssetTessellationAbsTol =
+	    cached.meshAssetTessellationAbsTol;
+	request.meshAssetTessellationRelTol =
+	    cached.meshAssetTessellationRelTol;
+	request.meshAssetTessellationNormTol =
+	    cached.meshAssetTessellationNormTol;
 	request.meshAssetBounds = SbBox3f(
 	    SbVec3f(static_cast<float>(cached.meshAssetBoundsMin[X]),
 		static_cast<float>(cached.meshAssetBoundsMin[Y]),
@@ -17418,6 +17426,17 @@ ged_obol_store_leaf_proxy_manifest(
 		break;
 	    }
 	    cached.sourceMeshRequestValid = 1;
+	    cached.meshAssetKind = BU_STR_EQUAL(
+		request.sourceType.getString(), "brep") ?
+		BOBOL_DRAW_CACHE_MESH_ASSET_BREP :
+		BOBOL_DRAW_CACHE_MESH_ASSET_BOT;
+	    cached.meshAssetContentHash = request.meshAssetContentHash;
+	    cached.meshAssetTessellationAbsTol =
+		request.meshAssetTessellationAbsTol;
+	    cached.meshAssetTessellationRelTol =
+		request.meshAssetTessellationRelTol;
+	    cached.meshAssetTessellationNormTol =
+		request.meshAssetTessellationNormTol;
 	    cached.meshAssetPath = bu_strdup(assetPath);
 	    cached.meshAssetName = bu_strdup(assetName);
 	    if (!cached.meshAssetPath || !cached.meshAssetName) {

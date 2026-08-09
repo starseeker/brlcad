@@ -91,6 +91,17 @@ struct rt_primitive_indexed_face_set {
 };
 
 /**
+ * Release display arrays on the same library side that allocated them.
+ * Besides making ownership explicit, this avoids cross-CRT frees when librt
+ * is a DLL on Windows.
+ */
+RT_EXPORT extern void
+rt_primitive_lod_realization_free(struct rt_primitive_lod_realization *realization);
+
+RT_EXPORT extern void
+rt_primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *face_set);
+
+/**
  * This needs to be at the end of the raytrace.h header file, so that
  * all the structure names are known.  The "union record" and "struct
  * nmgregion" pointers are problematic, so generic pointers are used
@@ -331,6 +342,20 @@ struct rt_functab {
 			       const struct bn_tol * /*tol*/,
 			       const struct bv_view_info * /*view info*/);
 #define RTFUNCTAB_FUNC_INDEXED_FACE_SET_CAST(_func) ((int (*)(struct rt_primitive_indexed_face_set *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct bv_view_info *))((void (*)(void))_func))
+
+    /** Canonical, view-independent CAD wire source for retained LoD. */
+#ifdef __cplusplus
+    int (*ft_wireframe_line_set)(struct rt_primitive_lod_realization * /*realization*/,
+				 struct rt_db_internal * /*ip*/,
+				 const struct bg_tess_tol * /*ttol*/,
+				 const struct bn_tol * /*tol*/) = nullptr;
+#else
+    int (*ft_wireframe_line_set)(struct rt_primitive_lod_realization * /*realization*/,
+				 struct rt_db_internal * /*ip*/,
+				 const struct bg_tess_tol * /*ttol*/,
+				 const struct bn_tol * /*tol*/);
+#endif
+#define RTFUNCTAB_FUNC_WIREFRAME_LINE_SET_CAST(_func) ((int (*)(struct rt_primitive_lod_realization *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *))((void (*)(void))_func))
 
 };
 

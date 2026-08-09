@@ -892,6 +892,32 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
+
+	struct BObolMeshLod *firstVariant = NULL;
+	struct BObolMeshLod *secondVariant = NULL;
+	if (bobol_mesh_lod_cache_store_mesh_variant(dbip, meshObjname,
+		reinterpret_cast<const point_t *>(vertices),
+		static_cast<size_t>(vertexCount),
+		reinterpret_cast<const vect_t *>(detailNormals), faces,
+		static_cast<size_t>(faceCount), 525252ULL, 0,
+		&cacheStatus) != BRLCAD_OK ||
+	    cacheStatus.cache_key != 525252ULL ||
+	    !(firstVariant = bobol_mesh_lod_get_cached_prefix(
+		dbip, 424242ULL)) ||
+	    !(secondVariant = bobol_mesh_lod_get_cached_prefix(
+		dbip, 525252ULL)) ||
+	    bobol_mesh_lod_load_display_level(firstVariant, 100, 0) < 0 ||
+	    bobol_mesh_lod_load_display_level(secondVariant, 100, 0) < 0) {
+	    printf("FAIL: mesh lod representation variants did not coexist\n");
+	    if (firstVariant)
+		bobol_mesh_lod_destroy(firstVariant);
+	    if (secondVariant)
+		bobol_mesh_lod_destroy(secondVariant);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(firstVariant);
+	bobol_mesh_lod_destroy(secondVariant);
     }
 
     if (test_detail_callbacks(dbip, meshObjname, vertices, faces,

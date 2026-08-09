@@ -3120,6 +3120,79 @@ test_rt_mesh_provider_task(void)
 
     service.stop();
 
+    /* Analytic and BREP producers hand the service owned triangle arrays,
+     * rather than a database BoT or a callback into a temporary internal.
+     * Exercise that cold-cache path and then discard the staging owner: the
+     * resident/persistent PoP asset must remain usable on its own. */
+    struct GenericStagedOwner {
+	std::vector<fastf_t> points;
+	std::vector<fastf_t> normals;
+	std::vector<int> faces;
+    };
+    std::shared_ptr<GenericStagedOwner> genericOwner =
+	std::make_shared<GenericStagedOwner>();
+    genericOwner->points = cachedVertices;
+    genericOwner->normals = cachedNormals;
+    genericOwner->faces = cachedFaces;
+    std::shared_ptr<BObolStagedSourceMesh> genericStaged =
+	std::make_shared<BObolStagedSourceMesh>();
+    genericStaged->owner = genericOwner;
+    genericStaged->points = reinterpret_cast<const point_t *>(
+	genericOwner->points.data());
+    genericStaged->normals = reinterpret_cast<const vect_t *>(
+	genericOwner->normals.data());
+    genericStaged->faces = genericOwner->faces.data();
+    genericStaged->pointCount = genericOwner->points.size() / 3;
+    genericStaged->faceCount = genericOwner->faces.size() / 3;
+    genericStaged->contentKey = 0xb5e0b5e0ULL;
+    genericStaged->assetName = "lod-two-tri.bot";
+    genericStaged->sourceRevision = 17;
+
+    BObolLodService genericService;
+    BObolMeshLodProvider genericProvider;
+    genericProvider.service = &genericService;
+    genericProvider.dbip = dbip;
+    genericProvider.refreshMissing = TRUE;
+    genericProvider.progressiveDelivery = FALSE;
+    genericProvider.useForcedLevel = TRUE;
+    genericProvider.forcedLevel = 15;
+    genericProvider.stagedSource = genericStaged;
+    BObolLodRequest genericRequest = make_request("/lod-two-tri.bot");
+    genericRequest.objectName = "lod-two-tri.bot";
+    genericRequest.sourceContentHash = 0;
+    genericRequest.sourceCounts.faceCount = genericStaged->faceCount;
+    genericRequest.sourceCounts.pointCount = genericStaged->pointCount;
+    BObolLodResult genericResult;
+    BObolLodResult genericReload;
+    struct BObolMeshLodCacheStatus genericStatus =
+	BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    if (genericService.start(1, TRUE)) {
+	genericResult = genericService.realizeResidentMeshLod(
+	    genericRequest, genericProvider);
+	genericProvider.stagedSource.reset();
+	genericStaged.reset();
+	genericOwner.reset();
+	genericReload = genericService.realizeResidentMeshLod(
+	    genericRequest, genericProvider);
+	(void)bobol_mesh_lod_cache_status(dbip, "lod-two-tri.bot",
+	    &genericStatus);
+	genericService.stop();
+    }
+    if (genericResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	!genericResult.progressiveMesh || !genericResult.geometry.isValid() ||
+	!genericStatus.has_cache_key || !genericStatus.has_cached_payload ||
+	genericReload.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	genericReload.progressiveMesh != genericResult.progressiveMesh ||
+	!genericReload.geometry.isValid()) {
+	printf("FAIL: owned generic staged mesh did not survive cold PoP "
+	       "publication (status=%d reload=%d cache=%d/%d same=%d)\n",
+	    genericResult.providerStatus, genericReload.providerStatus,
+	    genericStatus.has_cache_key, genericStatus.has_cached_payload,
+	    genericReload.progressiveMesh == genericResult.progressiveMesh ?
+		1 : 0);
+	ret = 1;
+    }
+
     BObolMeshLodProvider cachedNormalProvider;
     cachedNormalProvider.dbip = dbip;
     cachedNormalProvider.useForcedLevel = TRUE;

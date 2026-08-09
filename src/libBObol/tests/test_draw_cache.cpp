@@ -81,6 +81,15 @@ check_manifest(const BObolDrawManifest *manifest)
 	bu_strcmp(manifest->occurrences[1].path, path_region_full_name) != 0 ||
 	bu_strcmp(manifest->occurrences[1].sourceName, path_region_name) != 0 ||
 	!manifest->occurrences[0].sourceMeshRequestValid ||
+	manifest->occurrences[0].meshAssetKind !=
+	    BOBOL_DRAW_CACHE_MESH_ASSET_BREP ||
+	manifest->occurrences[0].meshAssetContentHash != 0x123456789abcdef0ULL ||
+	!fastf_equal(manifest->occurrences[0].meshAssetTessellationAbsTol,
+	    0.125) ||
+	!fastf_equal(manifest->occurrences[0].meshAssetTessellationRelTol,
+	    0.01) ||
+	!fastf_equal(manifest->occurrences[0].meshAssetTessellationNormTol,
+	    0.5) ||
 	!manifest->occurrences[0].meshAssetPath ||
 	!manifest->occurrences[0].meshAssetName ||
 	bu_strcmp(manifest->occurrences[0].meshAssetPath,
@@ -134,6 +143,11 @@ make_manifest(BObolDrawManifest *manifest)
     leaf.path = bu_strdup(path_full_name);
     leaf.sourceName = bu_strdup(path_leaf_name);
     leaf.sourceMeshRequestValid = 1;
+    leaf.meshAssetKind = BOBOL_DRAW_CACHE_MESH_ASSET_BREP;
+    leaf.meshAssetContentHash = 0x123456789abcdef0ULL;
+    leaf.meshAssetTessellationAbsTol = 0.125;
+    leaf.meshAssetTessellationRelTol = 0.01;
+    leaf.meshAssetTessellationNormTol = 0.5;
     leaf.meshAssetPath = bu_strdup(path_full_name);
     leaf.meshAssetName = bu_strdup(path_leaf_name);
     VSET(leaf.meshAssetBoundsMin, -10.0, -20.0, -30.0);

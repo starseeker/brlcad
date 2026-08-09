@@ -40,7 +40,11 @@
  * behavior are asserted by dedicated semantic tests. */
 #define ADIFF_THRES 0.95
 #define MESH_LOD_ADIFF_THRES 0.80
-#define CSG_LOD_ADIFF_THRES 0.98
+/* Progressive wire ranges now honor their selected retained level in the
+ * software renderer.  The legacy control rendered the complete wire payload
+ * even while its metadata claimed a coarse cut, so use this only as a broad
+ * placement/material sanity check; focused tests assert the actual range. */
+#define CSG_LOD_ADIFF_THRES 0.95
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, fastf_t approximate_check, const char *clear_root, const char *img_root);
@@ -346,8 +350,9 @@ main(int ac, char *av[]) {
     ged_exec_view(gedp, 4, s_av);
 
     /*
-     * CSG LoD wire proxies are exact enough to be visually/semantically
-     * stable, but line raster phase differs by a few pixels between backends.
+     * CSG LoD now draws the selected progressive wire range.  It must remain
+     * spatially recognizable, but need not reproduce the historical bug in
+     * which the complete wire array was always submitted.
      */
     ret += img_cmp(6, gedp, lcache, false, clear_images, soft_fail, CSG_LOD_ADIFF_THRES, "lod_clear", "lod");
 

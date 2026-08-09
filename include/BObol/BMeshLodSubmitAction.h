@@ -63,6 +63,11 @@ public:
     SbBool getAllowLevelDowngrade(void) const;
     void setAllowRetainedRefinement(SbBool allow);
     SbBool getAllowRetainedRefinement(void) const;
+    /* Source representation generation (currently adaptive BREP
+     * tessellation) is quiet-view work.  It is independent of inexpensive
+     * resident PoP cut changes, which may continue during zoom interaction. */
+    void setAllowRepresentationRefinement(SbBool allow);
+    SbBool getAllowRepresentationRefinement(void) const;
     /* A coverage pass may exceed the learned triangle budget by the minimum
      * drawable prefix of each visible mesh.  This is a presentation floor,
      * not refinement: renderer-side point aggregation is responsible for
@@ -170,6 +175,7 @@ private:
     SbBool requireLodBacked;
     SbBool allowLevelDowngrade;
     SbBool allowRetainedRefinement;
+    SbBool allowRepresentationRefinement;
     SbBool preserveMeshCoverage;
     size_t refinementFaceBudget;
     size_t refinementFaceBudgetUsed;

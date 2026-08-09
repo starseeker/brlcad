@@ -1020,6 +1020,34 @@ sync_draw_case(const struct model_case &testCase)
 	    Qt::SmoothTransformation);
     int visibleByteDiff = image_byte_diff(comparisonEmpty, visibleImage);
     fastf_t visibleSsim = image_ssim(comparisonEmpty, visibleImage);
+    /* A deferred cold draw publishes its root immediately, but the exact
+     * aggregate/leaf bounds arrive on the occurrence stream.  Wait only for
+     * the first useful visual here; the separate settling check below proves
+     * that boxes are replaced by the requested BREP meshes. */
+    if (testCase.deferLeafExpansion &&
+	(visibleImage.isNull() || litPixels < 20 || visibleByteDiff < 100 ||
+	 visibleSsim >= 0.9999)) {
+	for (int attempt = 0; attempt < 2000; attempt++) {
+	    QCoreApplication::processEvents();
+	    (void)controller->advanceProgressiveWork(NULL, NULL);
+	    const char *autoviewCommand[1] = {"autoview"};
+	    (void)ged_exec_autoview(gedp, 1, autoviewCommand);
+	    view.need_update(QG_VIEW_REFRESH);
+	    controller->requestRender("real-model-first-progressive-visual");
+	    QCoreApplication::processEvents();
+	    view.get_viewport_image(visibleImage);
+	    litPixels = lit_pixel_count(visibleImage);
+	    comparisonEmpty = emptyImage.size() == visibleImage.size() ?
+		emptyImage : emptyImage.scaled(visibleImage.size(),
+		    Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+	    visibleByteDiff = image_byte_diff(comparisonEmpty, visibleImage);
+	    visibleSsim = image_ssim(comparisonEmpty, visibleImage);
+	    if (!visibleImage.isNull() && litPixels >= 20 &&
+		visibleByteDiff >= 100 && visibleSsim < 0.9999)
+		break;
+	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+    }
     print_timing(testCase, "render-readback", phaseStart);
     if (visibleImage.isNull() || litPixels < 20 || visibleByteDiff < 100 ||
 	visibleSsim >= 0.9999) {
@@ -1030,9 +1058,12 @@ sync_draw_case(const struct model_case &testCase)
 	ged_close(gedp);
 	return 0;
     }
-    const int nistBlueCase = BU_STR_EQUAL(testCase.root, "Document") &&
+    const int nistBlueCase =
+	testCase.obolDrawMode == SoBRLDatabaseSource::SHADED &&
+	BU_STR_EQUAL(testCase.root, "Document") &&
 	strstr(testCase.file, "nist/NIST_MBE_PMI_");
-    if (nistBlueCase &&
+
+    if (nistBlueCase && !testCase.deferLeafExpansion &&
 	!nist_blue_material_is_correct(controller, testCase.file)) {
 	fprintf(stderr,
 	    "%s:%s did not preserve the Brep_1 region's 121/156/242 material\n",
@@ -1040,7 +1071,9 @@ sync_draw_case(const struct model_case &testCase)
 	ged_close(gedp);
 	return 0;
     }
+
     if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
+	!testCase.deferLeafExpansion &&
 	!nist_pmi7_10_materials_are_correct(controller)) {
 	fprintf(stderr,
 	    "%s:%s did not preserve all four region materials\n",
@@ -1058,7 +1091,7 @@ sync_draw_case(const struct model_case &testCase)
 	    return 0;
 	}
     }
-    if (nistBlueCase) {
+    if (nistBlueCase && !testCase.deferLeafExpansion) {
 	const int bluePixels = nist_pmi3_blue_pixel_count(visibleImage);
 	if (bluePixels < 20) {
 	    fprintf(stderr,
@@ -1068,7 +1101,8 @@ sync_draw_case(const struct model_case &testCase)
 	    return 0;
 	}
     }
-    if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded")) {
+    if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
+	!testCase.deferLeafExpansion) {
 	const int colorMask = nist_pmi7_10_color_mask(visibleImage);
 	if (colorMask != 7) {
 	    fprintf(stderr,
@@ -1085,10 +1119,31 @@ sync_draw_case(const struct model_case &testCase)
     if (testCase.deferLeafExpansion) {
 	BObolProgressiveStatus progressiveStatus;
 	int settled = 0;
-	for (int attempt = 0; attempt < 2000; attempt++) {
+	const int64_t settleDeadline = bu_gettime() + 30000000;
+	int64_t lastFeedbackFrame = 0;
+	for (int attempt = 0; bu_gettime() < settleDeadline; attempt++) {
 	    QCoreApplication::processEvents();
 	    const int advanced = controller->advanceProgressiveWork(NULL,
 		&progressiveStatus);
+	    /* Hidden software views do not receive a normal expose/paint stream.
+	     * The production coordinator intentionally gates richer cuts on a
+	     * completed presentation, so supply that feedback at a bounded 10 Hz
+	     * instead of either starving it or rendering on every 1 ms poll. */
+	    const int64_t now = bu_gettime();
+	    if (progressiveStatus.hasMore &&
+		(controller->hasPendingLodRefinementFrame() ||
+		 lastFeedbackFrame == 0 || now - lastFeedbackFrame >= 100000)) {
+		view.need_update(QG_VIEW_REFRESH);
+		controller->requestRender("real-model-progressive-feedback");
+		QCoreApplication::processEvents();
+		QImage feedbackImage;
+		const uint64_t renderStarted = controller->beginRenderTiming();
+		view.get_viewport_image(feedbackImage);
+		controller->completeRenderTiming(renderStarted);
+		if (!feedbackImage.isNull() && controller->isRenderRequested())
+		    (void)controller->consumeRenderRequest(NULL);
+		lastFeedbackFrame = bu_gettime();
+	    }
 	    if (!progressiveStatus.hasMore &&
 		(progressiveStatus.changed || advanced == 0 || attempt > 0)) {
 		settled = 1;
@@ -1097,17 +1152,69 @@ sync_draw_case(const struct model_case &testCase)
 	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
 	if (!settled) {
-	    fprintf(stderr, "%s:%s deferred realization did not settle\n",
-		testCase.file, testCase.root);
+	    BObolLodConvergenceStatus convergence;
+	    controller->getLodConvergenceStatus(convergence);
+	    fprintf(stderr, "%s:%s deferred realization did not settle: "
+		"providers=%zu/%zu lod=%zu/%zu submitted=%zu cached=%zu "
+		"expanded=%zu existing=%zu remaining=%zu proxies=%zu "
+		"pending=%zu in_flight=%zu results=%zu writes=%zu "
+		"changed=%d more=%d controller={work=%d results=%d "
+		"submissions=%d refinement_frame=%d render=%d interaction=%d} "
+		"convergence={phase=%d coordinator=%d expected=%zu "
+		"available=%zu visible=%zu active=%zu satisfied=%zu "
+		"fraction=%.3g ready=%d background=%d refine=%d "
+		"calibrate=%d handoff=%d point=%d}\n",
+		testCase.file, testCase.root,
+		progressiveStatus.providerAdvanced,
+		progressiveStatus.providerCount,
+		progressiveStatus.lodResultsApplied,
+		progressiveStatus.lodResultsProcessed,
+		progressiveStatus.submitted,
+		progressiveStatus.alreadyCached,
+		progressiveStatus.expanded,
+		progressiveStatus.existing,
+		progressiveStatus.remaining,
+		progressiveStatus.proxyPublished,
+		progressiveStatus.pendingTasks,
+		progressiveStatus.inFlight,
+		progressiveStatus.queuedResults,
+		progressiveStatus.queuedCacheWrites,
+		progressiveStatus.changed,
+		progressiveStatus.hasMore,
+		controller->hasProgressiveWorkPending() ? 1 : 0,
+		controller->hasPendingLodResults() ? 1 : 0,
+		controller->hasPendingLodSubmissions() ? 1 : 0,
+		controller->hasPendingLodRefinementFrame() ? 1 : 0,
+		controller->isRenderRequested() ? 1 : 0,
+		controller->isLodInteractionActive() ? 1 : 0,
+		convergence.phase, convergence.coordinatorPhase,
+		convergence.expectedLeafCount,
+		convergence.availableLeafCount,
+		convergence.visibleTargetCount,
+		convergence.activePayloadCount,
+		convergence.satisfiedPayloadCount,
+		static_cast<double>(convergence.fraction),
+		convergence.viewReady ? 1 : 0,
+		convergence.backgroundPending ? 1 : 0,
+		convergence.refinementFramePending ? 1 : 0,
+		convergence.budgetCalibrationPending ? 1 : 0,
+		convergence.stablePresentationHandoffPending ? 1 : 0,
+		convergence.pointProxyCalibrationPending ? 1 : 0);
 	    ged_close(gedp);
 	    return 0;
 	}
+	const char *settledAutoviewCommand[1] = {"autoview"};
+	(void)ged_exec_autoview(gedp, 1, settledAutoviewCommand);
+	view.need_update(QG_VIEW_REFRESH);
 	controller->requestRender("real-model-deferred-settled");
 	QCoreApplication::processEvents();
 	QImage settledImage;
 	view.get_viewport_image(settledImage);
-	const int settledTableColorPixels =
-	    m35_table_color_pixel_count(settledImage);
+	if (capturePath && capturePath[0] != '\0')
+	    (void)settledImage.save(QString::fromUtf8(capturePath) +
+		QStringLiteral(".settled.png"));
+	const int settledTableColorPixels = testCase.expectM35TableColor ?
+	    m35_table_color_pixel_count(settledImage) : 0;
 	BObolSceneController settledScene(controller->getRenderSceneRoot());
 	struct geometry_counts settledCounts = realized_geometry_counts(
 	    &settledScene, controller, testCase.obolDrawMode, NULL, NULL);
@@ -1134,7 +1241,8 @@ sync_draw_case(const struct model_case &testCase)
 	/* Exercise the interactive camera-update path as well.  M35 has enough
 	 * retained sources to use the cross-source render batch, whose visual
 	 * state must also remain stable across view-only revisions. */
-	if (testCase.obolDrawMode == SoBRLDatabaseSource::SHADED) {
+	if (testCase.obolDrawMode == SoBRLDatabaseSource::SHADED &&
+	    testCase.expectM35TableColor) {
 	    /* This regression targets retained batch synchronization, not the
 	     * asynchronous LoD provider.  Keep the database lifetime local to
 	     * this test by preventing a camera update from launching worker
@@ -1163,13 +1271,56 @@ sync_draw_case(const struct model_case &testCase)
 	     settledCounts.triangleCount < testCase.minMeshTriangles) :
 	    (settledCounts.shapeCount < testCase.minWireShapes ||
 	     settledCounts.segmentCount < testCase.minWireSegments);
-	if (settledTableColorPixels < 20 || settledGeometryTooSmall) {
+	if ((testCase.expectM35TableColor && settledTableColorPixels < 20) ||
+	    settledGeometryTooSmall) {
 	    fprintf(stderr,
 		"%s:%s settled deferred draw lost M35 table colors or detail: "
 		"table_color_pixels=%d shapes=%d segments=%d meshes=%d triangles=%d\n",
 		testCase.file, testCase.root, settledTableColorPixels,
 		settledCounts.shapeCount, settledCounts.segmentCount,
 		settledCounts.meshCount, settledCounts.triangleCount);
+	    ged_close(gedp);
+	    return 0;
+	}
+	if (nistBlueCase &&
+	    nist_pmi3_blue_pixel_count(settledImage) < 20) {
+	    fprintf(stderr,
+		"%s:%s settled deferred BREP draw lost the lit blue material\n",
+		testCase.file, testCase.root);
+	    ged_close(gedp);
+	    return 0;
+	}
+	if (nistBlueCase &&
+	    !nist_blue_material_is_correct(controller, testCase.file)) {
+	    fprintf(stderr,
+		"%s:%s settled deferred BREP draw lost region material state\n",
+		testCase.file, testCase.root);
+	    ged_close(gedp);
+	    return 0;
+	}
+	if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
+	    nist_pmi7_10_color_mask(settledImage) != 7) {
+	    fprintf(stderr,
+		"%s:%s settled deferred BREP draw lost one or more region colors\n",
+		testCase.file, testCase.root);
+	    ged_close(gedp);
+	    return 0;
+	}
+	if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
+	    !nist_pmi7_10_materials_are_correct(controller)) {
+	    fprintf(stderr,
+		"%s:%s settled deferred BREP draw lost region material metadata\n",
+		testCase.file, testCase.root);
+	    ged_close(gedp);
+	    return 0;
+	}
+	if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_wire") &&
+	    controller->getActiveLodMeshPayloadCount() != 0) {
+	    fprintf(stderr,
+		"%s:%s deferred BREP wire draw retained a shaded PoP "
+		"overlay: mesh_payloads=%zu\n",
+		testCase.file, testCase.root,
+		controller->getActiveLodMeshPayloadCount());
 	    ged_close(gedp);
 	    return 0;
 	}
@@ -1591,28 +1742,31 @@ main(int argc, char **argv)
 	    SoBRLDatabaseSource::SHADED, 0, 0, 100, 1000, 0, 0, 1, 1, 1},
 	{"nist_pmi1_shaded", "nist/NIST_MBE_PMI_1.g", "Document",
 	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
-	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi2_shaded", "nist/NIST_MBE_PMI_2.g", "Document",
 	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
-	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi3_shaded", "nist/NIST_MBE_PMI_3.g", "Document",
 	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
-	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi4_shaded", "nist/NIST_MBE_PMI_4.g", "Document",
 	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
-	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi5_shaded", "nist/NIST_MBE_PMI_5.g", "Document",
 	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
-	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi6_shaded", "nist/NIST_MBE_PMI_6.g", "Document",
 	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
-	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi11_shaded", "nist/NIST_MBE_PMI_11.g", "Document",
 	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
-	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi7_10_shaded", "nist/NIST_MBE_PMI_7-10.g",
 	    "NIST_MBE_PMI_7-10.3dm", GED_DRAW_MODE_SHADED,
-	    SoBRLDatabaseSource::SHADED, 0, 0, 4, 100, 0, 0, 0, 0, 0}
+	    SoBRLDatabaseSource::SHADED, 0, 0, 4, 100, 0, 0, 0, 1, 0},
+	{"nist_pmi7_10_wire", "nist/NIST_MBE_PMI_7-10.g",
+	    "NIST_MBE_PMI_7-10.3dm", GED_DRAW_MODE_WIRE,
+	    SoBRLDatabaseSource::WIREFRAME, 4, 100, 0, 0, 0, 0, 0, 1, 0}
     };
 
     int ran = 0;

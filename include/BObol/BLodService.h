@@ -43,6 +43,18 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
     BObolLodService *service;
     struct db_i *dbip;
     std::shared_ptr<const BObolStagedSourceMesh> stagedSource;
+    /* Exact persistent payload to reopen.  Request::sourceContentHash is a
+     * general realization identity and must not be interpreted as an LMDB
+     * key; authored sources and tests legitimately use non-cache hashes. */
+    uint64_t meshAssetContentHash;
+    /* Stable-view BREP representation refinement.  The standing source owns
+     * the canonical band; a provider may materialize a finer immutable band
+     * on a worker when it is absent from the persistent cache. */
+    SbBool generateBrepVariant;
+    double brepTessellationAbsTol;
+    double brepTessellationRelTol;
+    double brepTessellationNormTol;
+    SbBool brepVariantMemoryLimited;
     struct bv_view_info view;
     SbBool useView;
     SbBool refreshMissing;

@@ -190,6 +190,23 @@ bobol_mesh_lod_cache_store_mesh(
 	int shaded_cull_backfaces,
 	struct BObolMeshLodCacheStatus *status);
 
+/* Store a representation variant without deleting another payload associated
+ * with the same database object name.  Consumers must retain and reopen the
+ * returned immutable cache key.  This is the BREP/tessellation-band path;
+ * authored BoT replacement continues to use store_mesh above. */
+BOBOL_EXPORT int
+bobol_mesh_lod_cache_store_mesh_variant(
+	struct db_i *dbip,
+	const char *name,
+	const point_t *vertices,
+	size_t vertex_count,
+	const vect_t *normals,
+	const int *faces,
+	size_t face_count,
+	unsigned long long user_key,
+	int shaded_cull_backfaces,
+	struct BObolMeshLodCacheStatus *status);
+
 BOBOL_EXPORT struct BObolMeshLod *
 bobol_mesh_lod_get(struct db_i *dbip, const char *name);
 

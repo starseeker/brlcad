@@ -56,8 +56,6 @@
 #include "rt/vlist.h"
 #include "rt/view.h"
 #include "rt/primitives/arb8.h"
-#include "rt/primitives/brep.h"
-#include "rt/primitives/bspline.h"
 #include "rt/primitives/datum.h"
 #include "rt/primitives/dsp.h"
 #include "rt/primitives/ebm.h"
@@ -192,14 +190,6 @@ static int ged_draw_obol_database_source_bot_mesh_lod_realize(
 	const char *path,
 	struct db_i *dbip,
 	struct directory *dp,
-	struct ged_view_context *view_ctx);
-static int ged_draw_obol_database_source_brep_mesh_lod_realize(
-	struct ged *gedp,
-	const char *path,
-	struct db_i *dbip,
-	struct directory *dp,
-	const struct bg_tess_tol *ttol,
-	const struct bn_tol *tol,
 	struct ged_view_context *view_ctx);
 static int ged_draw_obol_database_source_adaptive_wireframe_realize(
     struct ged *gedp,
@@ -6342,24 +6332,6 @@ ged_draw_shape_ref_lod_ensure_obol(struct ged *gedp,
 	(void)ged_draw_obol_database_source_bot_mesh_lod_realize(gedp,
 		token->path, realize_dbip, dp, first_view_ctx);
     }
-    if ((roles & GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_MESH) && dp &&
-	    dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP) {
-	struct db_i *realize_dbip = runtime.valid && runtime.dbip ?
-	    runtime.dbip : gedp->dbip;
-	struct bg_tess_tol local_ttol;
-	BG_TESS_TOL_INIT_SET_TOL(&local_ttol);
-	if (runtime.tessellation_abs_tol >= 0.0)
-	    local_ttol.abs = runtime.tessellation_abs_tol;
-	if (runtime.tessellation_rel_tol >= 0.0)
-	    local_ttol.rel = runtime.tessellation_rel_tol;
-	if (runtime.tessellation_norm_tol >= 0.0)
-	    local_ttol.norm = runtime.tessellation_norm_tol;
-	struct bn_tol local_tol = BN_TOL_INIT_TOL;
-	(void)ged_draw_obol_database_source_brep_mesh_lod_realize(gedp,
-		token->path, realize_dbip, dp, &local_ttol, &local_tol,
-		first_view_ctx);
-    }
-
     if (free_local_fullpath)
 	db_free_full_path(&local_fullpath);
     return 1;
@@ -6688,79 +6660,6 @@ ged_draw_obol_database_source_bot_mesh_lod_realize(
     int level = bobol_mesh_lod_load_view(mesh_lod, &view_info, 0);
     if (level < 0)
 	bu_log("Error loading info for initial Obol LoD view\n");
-
-    struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
-    if (bobol_mesh_lod_info_get(mesh_lod, &info))
-	(void)ged_draw_obol_database_source_set_mesh_lod_bounds_for_path(gedp,
-		path, info.bmin, info.bmax);
-
-    int published = ged_draw_obol_database_source_publish_current_mesh_lod(
-	    gedp, path, mesh_lod);
-    if (published) {
-	struct ged_draw_obol_database_source_record record;
-	memset(&record, 0, sizeof(record));
-	if (ged_draw_obol_database_source_record_for_path(gedp, path,
-		&record)) {
-	    (void)ged_draw_obol_database_source_set_realization_for_path(gedp,
-		    path, 1, 0, record.source_revision,
-		    record.inputs_revision, GED_DRAW_STALE_NONE);
-	}
-    }
-    return published;
-}
-
-
-static int
-ged_draw_obol_database_source_brep_mesh_lod_realize(
-	struct ged *gedp,
-	const char *path,
-	struct db_i *dbip,
-	struct directory *dp,
-	const struct bg_tess_tol *ttol,
-	const struct bn_tol *tol,
-	struct ged_view_context *view_ctx)
-{
-    if (!gedp || !path || !path[0] || !dbip || !dp || !view_ctx)
-	return 0;
-
-    struct ged_draw_obol_database_source_runtime runtime;
-    memset(&runtime, 0, sizeof(runtime));
-    if (!ged_draw_obol_database_source_runtime_for_path(gedp, path,
-	    &runtime) || !runtime.valid)
-	return 0;
-
-    struct BObolMeshLod *mesh_lod = runtime.mesh_lod;
-    if (!mesh_lod) {
-	point_t bmin, bmax;
-	int bounds_valid = 0;
-	if (!ged_draw_brep_mesh_lod_cache_prepare(&mesh_lod, bmin, bmax,
-		&bounds_valid, dbip, dp, ttol, tol))
-	    return 0;
-	if (!mesh_lod)
-	    return 0;
-
-	if (!ged_draw_brep_mesh_lod_detail_setup(mesh_lod, dbip, dp, ttol,
-		tol)) {
-	    bobol_mesh_lod_destroy(mesh_lod);
-	    return 0;
-	}
-
-	if (!ged_draw_obol_database_source_set_mesh_lod_for_path(gedp, path,
-		mesh_lod)) {
-	    bobol_mesh_lod_destroy(mesh_lod);
-	    return 0;
-	}
-
-	if (bounds_valid)
-	    (void)ged_draw_obol_database_source_set_mesh_lod_bounds_for_path(
-		    gedp, path, bmin, bmax);
-    }
-
-    struct bv_view_info view_info = BV_VIEW_INFO_INIT;
-    ged_view_feature_info_get(&view_info, view_ctx);
-    int level = bobol_mesh_lod_load_view(mesh_lod, &view_info, 0);
-    if (level < 0)
-	bu_log("Error loading info for initial Obol BREP LoD view\n");
 
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
     if (bobol_mesh_lod_info_get(mesh_lod, &info))

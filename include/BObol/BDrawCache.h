@@ -31,6 +31,9 @@ __BEGIN_DECLS
 #define BOBOL_DRAW_CACHE_LOD_ASSET_NAME_MAX 1024
 #define BOBOL_DRAW_CACHE_PROXY_AABB 1
 #define BOBOL_DRAW_CACHE_PROXY_OBB 2
+#define BOBOL_DRAW_CACHE_MESH_ASSET_UNKNOWN 0
+#define BOBOL_DRAW_CACHE_MESH_ASSET_BOT 1
+#define BOBOL_DRAW_CACHE_MESH_ASSET_BREP 2
 
 struct db_i;
 struct db_tree_state;
@@ -103,6 +106,11 @@ struct BObolDrawManifestOccurrence {
      * replacement.  Structural-only manifests leave sourceMeshRequestValid
      * false. */
     int sourceMeshRequestValid;
+    int meshAssetKind;
+    uint64_t meshAssetContentHash;
+    double meshAssetTessellationAbsTol;
+    double meshAssetTessellationRelTol;
+    double meshAssetTessellationNormTol;
     char *meshAssetPath;
     char *meshAssetName;
     point_t meshAssetBoundsMin;

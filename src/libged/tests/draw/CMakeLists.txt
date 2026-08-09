@@ -216,7 +216,7 @@ if(NOT MSVC AND NOT BRLCAD_OPTIMIZED)
     "libged-static;libBObol;libwdb" TEST)
   if(TARGET ged_test_obol_draw_sync AND TARGET libged-obj)
     set(_ged_obol_private_object_regex
-      "/(draw|draw_obol|draw_obol_result|ged_draw_brep|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")
+      "/(draw|draw_obol|draw_obol_result|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")
     target_sources(ged_test_obol_draw_sync PRIVATE
       "$<FILTER:$<TARGET_OBJECTS:libged-obj>,INCLUDE,${_ged_obol_private_object_regex}>")
   endif()

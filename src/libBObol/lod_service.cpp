@@ -17,6 +17,8 @@
 #include "BObol/BLodService.h"
 #include "BObol/BMeshLodCache.h"
 
+#include "database_source_realization.h"
+
 #include "raytrace.h"
 #include "rt/view.h"
 
@@ -51,6 +53,12 @@ BObolMeshLodProvider::clear(void)
     service = NULL;
     dbip = NULL;
     stagedSource.reset();
+    meshAssetContentHash = 0;
+    generateBrepVariant = FALSE;
+    brepTessellationAbsTol = 0.0;
+    brepTessellationRelTol = 0.0;
+    brepTessellationNormTol = 0.0;
+    brepVariantMemoryLimited = FALSE;
     bv_view_info_init(&view);
     useView = FALSE;
     refreshMissing = TRUE;
@@ -3203,15 +3211,54 @@ BObolLodService::realizeResidentMeshLod(
 	 * At distinct-asset scale this avoids one database lookup, one name-cache
 	 * lookup, and one LMDB read transaction per successful warm task.
 	 */
-	if (request.sourceContentHash)
+	const bool exactVariant = provider.meshAssetContentHash != 0;
+	if (exactVariant)
 	    resident->lod = bobol_mesh_lod_get_cached_prefix(
-		provider.dbip, request.sourceContentHash);
-	if (!resident->lod)
+		provider.dbip, provider.meshAssetContentHash);
+	if (!resident->lod && exactVariant && provider.generateBrepVariant) {
+	    const int64_t variantStarted = bu_gettime();
+	    struct bg_tess_tol ttol = BG_TESS_TOL_INIT_TOL;
+	    ttol.abs = std::max(0.0, provider.brepTessellationAbsTol);
+	    ttol.rel = std::max(0.0, provider.brepTessellationRelTol);
+	    ttol.norm = std::max(0.0, provider.brepTessellationNormTol);
+	    BObolSourceMeshRequest generatedRequest;
+	    std::shared_ptr<BObolStagedSourceMesh> generated =
+		bobol_database_brep_staged_mesh_variant(
+		    provider.dbip, name, &ttol,
+		    provider.meshAssetContentHash,
+		    request.sourceRevision.value(), generatedRequest);
+	    if (generated && generated->isValid() &&
+		bobol_mesh_lod_cache_store_mesh_variant(
+		    provider.dbip, name, generated->points,
+		    generated->pointCount, generated->normals,
+		    generated->faces, generated->faceCount,
+		    provider.meshAssetContentHash,
+		    generated->shadedCullBackfaces,
+		    &resident->status) == BRLCAD_OK) {
+		resident->lod = bobol_mesh_lod_get_cached_prefix(
+		    provider.dbip, provider.meshAssetContentHash);
+	    }
+	    if (getenv("BOBOL_DRAW_TIMING"))
+		bu_log("BObol BREP variant object=%s content=%llu "
+		       "rel_tol=%.17g faces=%zu elapsed_ms=%.3f status=%s\n",
+		       name,
+		       static_cast<unsigned long long>(
+			   provider.meshAssetContentHash),
+		       ttol.rel,
+		       generated ? generated->faceCount : 0,
+		       static_cast<double>(bu_gettime() - variantStarted) /
+			   1000.0,
+		       resident->lod ? "ready" : "failed");
+	}
+	if (!resident->lod && !exactVariant)
 	    resident->lod = bobol_mesh_lod_get_named_cached_prefix(
 		provider.dbip, name);
 	if (resident->lod) {
-	    resident->status.directory_found = 1;
-	    resident->status.is_bot = 1;
+	    struct directory *assetDirectory = db_lookup(provider.dbip, name,
+		LOOKUP_QUIET);
+	    resident->status.directory_found = assetDirectory ? 1 : 0;
+	    resident->status.is_bot = assetDirectory &&
+		assetDirectory->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT ? 1 : 0;
 	    resident->status.has_cache_key = 1;
 	    resident->status.has_cached_payload = 1;
 	    resident->status.stale_cache_entry = 0;
@@ -3223,33 +3270,52 @@ BObolLodService::realizeResidentMeshLod(
 		return lod_provider_status_result(request,
 		    BOBOL_LOD_PROVIDER_ERROR,
 		    "resident mesh provider could not query cache status");
-	    if ((!resident->status.has_cache_key ||
+	    if ((exactVariant || !resident->status.has_cache_key ||
 		 !resident->status.has_cached_payload ||
 		 resident->status.stale_cache_entry) &&
 		provider.refreshMissing) {
 		const int64_t refreshStarted = bu_gettime();
 		const std::shared_ptr<const BObolStagedSourceMesh> &staged =
 		    provider.stagedSource;
+		const uint64_t stagedFaceCount = staged ?
+		    (staged->faceCount ? staged->faceCount :
+		     (staged->bot ? staged->bot->num_faces : 0)) : 0;
+		const uint64_t stagedPointCount = staged ?
+		    (staged->pointCount ? staged->pointCount :
+		     (staged->bot ? staged->bot->num_vertices : 0)) : 0;
 		const bool stagedMatches =
 		    staged && staged->isValid() &&
 		    staged->sourceRevision == request.sourceRevision &&
 		    bu_strcmp(staged->assetName.getString(), name) == 0 &&
 		    (!request.sourceCounts.faceCount ||
-		     request.sourceCounts.faceCount == staged->bot->num_faces) &&
+		     request.sourceCounts.faceCount == stagedFaceCount) &&
 		    (!request.sourceCounts.pointCount ||
-		     request.sourceCounts.pointCount ==
-			 staged->bot->num_vertices);
+		     request.sourceCounts.pointCount == stagedPointCount);
 		int refreshResult = BRLCAD_ERROR;
-		if (stagedMatches) {
+		if (stagedMatches && staged->bot) {
 		    resident->lod =
 			bobol_mesh_lod_cache_refresh_from_bot_open(
 			    provider.dbip, name, staged->bot,
 			    &resident->status);
 		    refreshResult = resident->lod ?
 			BRLCAD_OK : BRLCAD_ERROR;
-		} else {
+		} else if (stagedMatches) {
+		    refreshResult = bobol_mesh_lod_cache_store_mesh_variant(
+			provider.dbip, name, staged->points,
+			staged->pointCount, staged->normals, staged->faces,
+			staged->faceCount, staged->contentKey,
+			staged->shadedCullBackfaces, &resident->status);
+		    if (refreshResult == BRLCAD_OK &&
+			resident->status.has_cache_key)
+			resident->lod = bobol_mesh_lod_get_cached_prefix(
+			    provider.dbip, resident->status.cache_key);
+		} else if (!exactVariant) {
 		    refreshResult = bobol_mesh_lod_cache_refresh(
 			provider.dbip, name, &resident->status);
+		} else {
+		    return lod_provider_status_result(request,
+			BOBOL_LOD_PROVIDER_CACHE_MISS,
+			"resident mesh provider has no exact staged variant");
 		}
 		if (refreshResult != BRLCAD_OK)
 		    return lod_provider_status_result(request,
@@ -3261,10 +3327,14 @@ BObolLodService::realizeResidentMeshLod(
 			   (bu_gettime() - refreshStarted) / 1000.0,
 			   stagedMatches ? 1 : 0);
 	    }
-	    if (!resident->lod && resident->status.has_cache_key)
+	    if (!resident->lod && exactVariant)
+		resident->lod = bobol_mesh_lod_get_cached_prefix(
+		    provider.dbip, provider.meshAssetContentHash);
+	    if (!resident->lod && !exactVariant &&
+		resident->status.has_cache_key)
 		resident->lod = bobol_mesh_lod_get_cached_prefix(
 		    provider.dbip, resident->status.cache_key);
-	    if (!resident->lod)
+	    if (!resident->lod && !exactVariant)
 		resident->lod = bobol_mesh_lod_get_named_cached_prefix(
 		    provider.dbip, name);
 	}
@@ -3422,7 +3492,6 @@ BObolLodService::realizeResidentMeshLod(
     result.residentLevel = residentLevel;
     result.residentAdmissionRevision =
 	growthReservation.revision();
-    result.memoryLimited = memoryLimited;
     result.counts.faceCount = resident->mesh->faceCount(drawLevel);
     result.counts.pointCount = resident->mesh->pointCount(drawLevel);
     result.counts.originalPointCount = result.counts.pointCount;
@@ -3434,6 +3503,12 @@ BObolLodService::realizeResidentMeshLod(
     result.shadedCullBackfaces = resident->mesh->cullBackfaces();
     result.terminal = drawLevel >= std::max(hierarchy.min_level,
 	std::min(hierarchy.max_level, requestedLevel)) ? TRUE : FALSE;
+    /* A representation-band admission cap is not a reason to stop walking
+     * the admitted band's PoP prefix.  Publish it only on that band's
+     * terminal result; treating it as an immediate resident-memory failure
+     * would strand a BREP at its first coarse cut. */
+    result.memoryLimited = memoryLimited ||
+	(provider.brepVariantMemoryLimited && result.terminal);
 
     /*
      * Prepare the renderer target on this worker for every CAD consumer, not

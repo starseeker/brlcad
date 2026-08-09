@@ -73,6 +73,20 @@ rt_brep_import_mutex()
     return mutex;
 }
 
+/* SurfaceTree construction and several openNURBS curve/surface evaluators
+ * lazily mutate process-wide and object-adjacent caches.  Independent BREP
+ * internals therefore still cannot safely execute the legacy wire evaluator
+ * concurrently.  Keep that limitation at the primitive provider boundary;
+ * clients may prepare all non-BREP work in parallel and never need to know
+ * about openNURBS internals.  The indexed-face-set tessellator has its own
+ * parallel-safe ownership path and is intentionally not covered here. */
+static std::mutex &
+rt_brep_wireframe_mutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
 
 /* define to enable output of debug hit information */
 /* #define RT_DEBUG_HITS 1 */
@@ -2087,6 +2101,7 @@ rt_brep_standard_wireframe(struct brep_line_sink *sink,
 			   struct rt_db_internal *ip,
 			   const struct bn_tol *tol)
 {
+    std::lock_guard<std::mutex> wireframeGuard(rt_brep_wireframe_mutex());
     struct rt_brep_internal* bi;
     int i;
     const fastf_t dist_tol = (tol && tol->dist > 0.0) ? tol->dist :
@@ -2174,6 +2189,16 @@ rt_brep_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 	return ret;
 
     return primitive_lod_line_set_finish(realization) ? 0 : -1;
+}
+
+
+extern "C" int
+rt_brep_wireframe_provider(struct rt_primitive_lod_realization *realization,
+			   struct rt_db_internal *ip,
+			   const struct bg_tess_tol *UNUSED(ttol),
+			   const struct bn_tol *tol)
+{
+    return rt_brep_wireframe_line_set(realization, ip, tol);
 }
 
 

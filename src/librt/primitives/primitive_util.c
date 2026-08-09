@@ -160,6 +160,30 @@ primitive_lod_line_set_free(struct rt_primitive_lod_realization *realization)
     realization->has_line_set = 0;
 }
 
+void
+rt_primitive_lod_realization_free(struct rt_primitive_lod_realization *realization)
+{
+    primitive_lod_line_set_free(realization);
+    if (!realization)
+	return;
+    realization->source_identity = 0;
+    realization->geometry_revision = 0;
+}
+
+void
+rt_primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *face_set)
+{
+    if (!face_set)
+	return;
+    if (face_set->points)
+	bu_free(face_set->points, "primitive indexed-face points");
+    if (face_set->normals)
+	bu_free(face_set->normals, "primitive indexed-face normals");
+    if (face_set->indices)
+	bu_free(face_set->indices, "primitive indexed-face indices");
+    memset(face_set, 0, sizeof(*face_set));
+}
+
 int
 primitive_lod_line_set_begin(struct rt_primitive_lod_realization *realization)
 {

@@ -4114,7 +4114,24 @@ BObolViewController::advanceProgressiveWork(
 	    this->d->lodInteractive = FALSE;
 	    this->d->lodViewScaleChanging = FALSE;
 	    this->d->lodReleaseCutFloorActive = FALSE;
+	    const bool haveRetainedMeshPayloads =
+		this->getActiveLodMeshPayloadCount() > 0;
+	    /* A motion ceiling also applies to native progressive wire stored in
+	     * the standing CAD assembly.  It has no view-state mesh payload and
+	     * therefore no occurrence pass capable of completing the mesh
+	     * handoff below.  Restore its stable range directly; the policy
+	     * revision already requests the one frame needed to present it. */
+	    if (!haveRetainedMeshPayloads) {
+		this->d->lodInteractiveProgressiveCeiling = -1;
+		this->d->lodPresentationPointProxyPixelThreshold = 1.0f;
+		if (viewState) {
+		    viewState->setCadPresentationProgressiveLodCeiling(-1);
+		    viewState->setCadPresentationPointProxyPixelThreshold(1.0f);
+		    viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
+		}
+	    }
 	    this->d->lodStablePresentationHandoffActive =
+		haveRetainedMeshPayloads &&
 		!this->d->lodStablePresentationSnapshotRestored &&
 		(this->d->lodInteractiveProgressiveCeiling >= 0 ||
 		 this->d->lodPresentationPointProxyPixelThreshold > 1.01f) ?
@@ -6456,6 +6473,9 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    scaleDemandChanged || applyRetainedAdmission);
 	action.setAllowRetainedRefinement(
 	    (this->d->forceTerminalLodRefinement || scaleDemandChanged) &&
+	    !this->d->lodRefinementAwaitingFrame ? TRUE : FALSE);
+	action.setAllowRepresentationRefinement(
+	    !this->d->lodInteractive &&
 	    !this->d->lodRefinementAwaitingFrame ? TRUE : FALSE);
 	/* A calibrated face budget governs richness above the minimum drawable
 	 * mesh floor.  Returning a visible resident PoP payload to its box is

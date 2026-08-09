@@ -654,19 +654,6 @@ struct ged_draw_view_export_detail {
     } annotation;
 };
 
-extern int ged_draw_brep_mesh_lod_detail_setup(struct BObolMeshLod *lod,
-							  struct db_i *dbip,
-							  struct directory *dp,
-							  const struct bg_tess_tol *ttol,
-							  const struct bn_tol *tol);
-extern int ged_draw_brep_mesh_lod_cache_prepare(struct BObolMeshLod **lod,
-							   point_t bmin,
-							   point_t bmax,
-							   int *bounds_valid,
-							   struct db_i *dbip,
-							   struct directory *dp,
-							   const struct bg_tess_tol *ttol,
-							   const struct bn_tol *tol);
 extern void *ged_draw_source_root_attach_view_contexts(
 	struct ged *gedp,
 	struct ged_view_context *active_view_ctx,
