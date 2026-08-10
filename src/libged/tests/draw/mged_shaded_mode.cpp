@@ -74,10 +74,10 @@ static void
 do_refresh(struct ged *gedp)
 {
     struct ged_view_context *v = ged_view_active_ctx(gedp);
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    txn.view = v;
-    ged_draw_apply_transaction(gedp, &txn, NULL);
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = v;
+    (void)ged_scene_redraw(gedp, &request, NULL);
 }
 
 /* Screen grabs are a point-in-time assertion, so settle the small test model

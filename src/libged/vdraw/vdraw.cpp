@@ -737,7 +737,7 @@ vdraw_overlay_geometry_from_curve(const struct vd_curve *curve,
 
 
 static const char *
-vdraw_command_scene_result_format(
+vdraw_feature_batch_result_format(
 	const struct vdraw_overlay_publish_geometry *pg)
 {
     if (!pg)
@@ -757,7 +757,7 @@ vdraw_command_scene_result_format(
 
 
 static const char *
-vdraw_command_scene_result_kind(
+vdraw_feature_batch_result_kind(
 	const struct vdraw_overlay_publish_geometry *pg)
 {
     if (!pg)
@@ -777,13 +777,13 @@ vdraw_command_scene_result_kind(
 
 
 static int
-vdraw_command_scene_geometry_publish(struct ged *gedp,
+vdraw_feature_batch_geometry_publish(struct ged *gedp,
 	const char *name,
 	const struct vdraw_overlay_publish_geometry *pg,
 	unsigned long rgb)
 {
-    const char *result_format = vdraw_command_scene_result_format(pg);
-    const char *result_kind = vdraw_command_scene_result_kind(pg);
+    const char *result_format = vdraw_feature_batch_result_format(pg);
+    const char *result_kind = vdraw_feature_batch_result_kind(pg);
     if (!gedp || !name || !pg || !result_format || !result_kind ||
 	    !pg->points || !pg->geometry.point_count)
 	return 0;
@@ -931,9 +931,9 @@ vdraw_send(void *data, int argc, const char *argv[])
 	bu_vls_printf(gedp->ged_result_str, "-1");
 	return BRLCAD_OK;
     }
-    int command_scene_status = vdraw_command_scene_geometry_publish(gedp,
+    int feature_batch_status = vdraw_feature_batch_geometry_publish(gedp,
 	    solid_name, &pg, gedp->i->ged_gdp->gd_currVHead->vdc_rgb);
-    idx = command_scene_status > 0 ? 0 : -1;
+    idx = feature_batch_status > 0 ? 0 : -1;
     vdraw_overlay_publish_geometry_free(&pg);
 
     bu_vls_printf(gedp->ged_result_str, "%d", idx);

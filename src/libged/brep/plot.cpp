@@ -1040,7 +1040,7 @@ _brep_plot_publish(struct ged *gedp, struct bg_line_layer_builder *plot, const c
 
     struct bu_vls nroot = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&nroot, "brep::%s", sname);
-    (void)_ged_line_layer_builder_publish_command_scene_feature(gedp,
+    (void)_ged_view_feature_batch_publish_line_layer_builder(gedp,
 	    bu_vls_cstr(&nroot), plot, "brep", "command-result",
 	    bu_vls_cstr(&nroot), "brep-debug-plot", 0);
     bu_vls_free(&nroot);
@@ -1071,7 +1071,7 @@ brep_plot_publish_indexed_face_set(struct ged *gedp,
 
     struct bu_vls nroot = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&nroot, "brep::%s", sname);
-    int ret = _ged_indexed_face_set_publish_command_scene_feature(gedp,
+    int ret = _ged_view_feature_batch_publish_indexed_face_set(gedp,
 	    bu_vls_cstr(&nroot),
 	    points, point_count,
 	    normals, normal_count,

@@ -67,7 +67,7 @@ nirt_qray_result_clear(struct ged *gedp, const char *name)
     if (!gedp || !name || !name[0])
 	return;
 
-    (void)_ged_command_scene_features_remove_prefix(gedp, name,
+    (void)_ged_view_feature_batch_remove_prefix(gedp, name,
 	    "nirt", "command-result", 0);
 }
 
@@ -601,7 +601,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 	    if (fp) {
 	    fastf_t csize = view_ctx ?
 		bv_scale_get(bv_context_view_const((const struct bv_context *)view_ctx)) * 0.01 : 1.0;
-	    int pret = _ged_draw_uplot_to_command_scene_feature(gedp, fp,
+	    int pret = _ged_view_feature_batch_publish_uplot(gedp, fp,
 		    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename),
 		    csize, gedp->i->ged_gdp->gd_uplotOutputMode,
 		    "nirt", "command-result", NULL, "query-ray", 0);

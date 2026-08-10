@@ -31,7 +31,6 @@
 #include "ged/draw.h"
 #include "ged/display.h"
 #include "ged/event_txn.h"
-#include "QgObolDrawSyncPrivate.h"
 #include "qtcad/QgView.h"
 
 #include <Inventor/SoViewport.h>
@@ -1331,8 +1330,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     BObolLodService service;
     int service_started = 0;
     int endpoint_attached = 0;
-    struct ged_draw_transaction_result draw_result;
-    int draw_result_initialized = 0;
+    struct ged_scene_result *draw_result = NULL;
     struct progressive_lod_timings timings = {};
     const int startup_deferred =
 	testCase.startupOnly || testCase.startupRefine ||
@@ -1351,8 +1349,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	}
 	if (service_started)
 	    service.stop();
-	if (draw_result_initialized)
-	    ged_draw_transaction_result_free(&draw_result);
+	ged_scene_result_destroy(draw_result);
 	if (endpoint_attached)
 	    (void)ged_view_context_obol_endpoint_set(
 		ged_view_context_from_bv(view.viewContext()),
@@ -1548,11 +1545,17 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 			    GED_DRAW_MODE_WIRE : GED_DRAW_MODE_SHADED);
     appearance.defer_leaf_expansion = startup_deferred ? 1 : 0;
 
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, active_draw_target);
-    txn.view = ged_view_context_from_bv(view.viewContext());
-    txn.appearance = &appearance;
-    txn.autoview = production_auto_expand ? 1 : 0;
+    const char *draw_path = active_draw_target;
+    struct ged_scene_draw_request draw_request;
+    ged_scene_draw_request_init(&draw_request);
+    draw_request.view = ged_view_context_from_bv(view.viewContext());
+    draw_request.paths = &draw_path;
+    draw_request.path_count = 1;
+    draw_request.style.draw_mode =
+	static_cast<enum ged_scene_draw_mode>(appearance.draw_mode);
+    draw_request.realization.mode = startup_deferred ?
+	GED_SCENE_REALIZE_PROGRESSIVE : GED_SCENE_REALIZE_EAGER;
+    draw_request.autoview = production_auto_expand ? 1 : 0;
 
     int sync_changed = 0;
     int render_source_count = 0;
@@ -1597,10 +1600,10 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 				     "obol_shaded_realize");
 	render_source_count = controller->getDatabaseSourceCount();
     } else {
-	ged_draw_transaction_result_init(&draw_result);
-	draw_result_initialized = 1;
+	draw_result = ged_scene_result_create();
 	phase_start = bu_gettime();
-	draw_ret = ged_draw_apply_transaction(gedp, &txn, &draw_result);
+	draw_ret = ged_scene_draw(gedp, &draw_request, draw_result) ==
+	    GED_SCENE_OK ? 1 : -1;
 	record_progressive_lod_phase(timings.drawApplySeconds, phase_start,
 				     total_start, testCase, "draw_apply");
 	render_source_count =
@@ -1608,8 +1611,9 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     }
     if (!testCase.shadedLod) {
 	phase_start = bu_gettime();
-	sync_changed = qg_obol_sync_ged_draw_transaction(gedp, &txn,
-		       &draw_result, &view);
+	sync_changed = ged_scene_result_changed(draw_result);
+	if (sync_changed)
+	    view.need_update(QG_VIEW_REFRESH);
 	record_progressive_lod_phase(timings.syncSeconds, phase_start,
 				     total_start, testCase, "obol_sync");
 	render_source_count =
@@ -1623,7 +1627,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     if (draw_ret < 0 || render_source_count <= 0) {
 	fprintf(stderr, "qtcad progressive LoD draw/sync failed: draw_ret=%d sync_changed=%d source_count=%d errors=%s\n",
 		draw_ret, sync_changed, render_source_count,
-		bu_vls_cstr(&draw_result.errors));
+		ged_scene_result_diagnostic(draw_result));
 	cleanup();
 	return 0;
     }
@@ -1644,10 +1648,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    return 0;
 	}
     }
-    if (draw_result_initialized) {
-	ged_draw_transaction_result_free(&draw_result);
-	draw_result_initialized = 0;
-    }
+    ged_scene_result_destroy(draw_result);
+    draw_result = NULL;
     qtcad_obol_print_render_diagnostics(gedp, testCase, controller,
 					"before-view-all");
 
@@ -2130,25 +2132,23 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	}
 
 	    appearance.defer_leaf_expansion = 0;
-	    struct ged_draw_transaction refine_txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_DRAW, active_draw_target);
-	    refine_txn.view = ged_view_context_from_bv(view.viewContext());
-	    refine_txn.appearance = &appearance;
+	    struct ged_scene_draw_request refine_request = draw_request;
+	    refine_request.realization.mode = GED_SCENE_REALIZE_EAGER;
+	    refine_request.autoview = 0;
 
-	    ged_draw_transaction_result_init(&draw_result);
-	    draw_result_initialized = 1;
+	    draw_result = ged_scene_result_create();
 	    double refine_draw_seconds = 0.0;
 	    phase_start = bu_gettime();
-	    int refine_draw_ret = ged_draw_apply_transaction(gedp, &refine_txn,
-				  &draw_result);
+	    int refine_draw_ret = ged_scene_draw(gedp, &refine_request,
+		draw_result) == GED_SCENE_OK ? 1 : -1;
 	    record_progressive_lod_phase(refine_draw_seconds, phase_start,
 					 total_start, testCase,
 					 "refine_draw_apply");
 
 	    double refine_sync_seconds = 0.0;
 	    phase_start = bu_gettime();
-	    (void)qg_obol_sync_ged_draw_transaction(gedp, &refine_txn,
-		    &draw_result, &view);
+	    if (ged_scene_result_changed(draw_result))
+		view.need_update(QG_VIEW_REFRESH);
 	    record_progressive_lod_phase(refine_sync_seconds, phase_start,
 		    total_start, testCase, "refine_obol_sync");
 	    int refine_source_count =
@@ -2160,13 +2160,13 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		fprintf(stderr,
 			"qtcad progressive LoD startup-refine draw failed: draw_ret=%d source_count=%d mesh_count=%d errors=%s\n",
 			refine_draw_ret, refine_source_count, refine_mesh_count,
-			bu_vls_cstr(&draw_result.errors));
+			ged_scene_result_diagnostic(draw_result));
 		cleanup();
 		return 0;
 	    }
 
-	    ged_draw_transaction_result_free(&draw_result);
-	    draw_result_initialized = 0;
+	    ged_scene_result_destroy(draw_result);
+	    draw_result = NULL;
 	    qtcad_obol_print_render_diagnostics(gedp, testCase, controller,
 						"after-refine-draw");
     }

@@ -12,8 +12,7 @@
 #ifndef GED_POLYGON_H
 #define GED_POLYGON_H
 
-#include "common.h"
-#include "ged/draw_types.h"
+#include "ged/polygon_types.h"
 
 __BEGIN_DECLS
 
@@ -184,4 +183,3 @@ ged_polygon_csg(ged_polygon_ref target,
 __END_DECLS
 
 #endif /* GED_POLYGON_H */
-

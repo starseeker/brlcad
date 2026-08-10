@@ -13,17 +13,27 @@ set(_headers
   include/ged/view.h
   include/ged/draw_types.h
   include/ged/scene.h
-  include/ged/draw_source.h
+  include/ged/scene_types.h
   include/ged/view_feature.h
+  include/ged/view_feature_types.h
   include/ged/polygon.h
+  include/ged/polygon_types.h
   include/ged/selection.h
-  include/ged/result.h
+  include/ged/selection_types.h
+  include/ged/view_feature_batch.h
   include/ged/display.h
 )
 
 set(_actual)
 foreach(_header IN LISTS _headers)
   file(READ "${SOURCE_ROOT}/${_header}" _contents)
+  string(REGEX MATCH
+    "#[ \t]*include[ \t]*[<\"]common\\.h[>\"]"
+    _common_header_include "${_contents}")
+  if(_common_header_include)
+    message(FATAL_ERROR
+      "GED draw API contract: installed header ${_header} includes common.h")
+  endif()
   string(REGEX MATCH
     "#[ \t]*include[ \t]*[<\"]BObol/"
     _concrete_renderer_include "${_contents}")
@@ -59,7 +69,7 @@ list(SORT _actual)
 
 foreach(_obsolete_prefix
     "^ged_draw_view_context_"
-    "^ged_draw_command_scene_"
+    "^ged_draw_feature_batch_"
     "^ged_draw_obol_database_source_"
     "^ged_draw_obol_(controller|scene_controller)")
   foreach(_name IN LISTS _actual)

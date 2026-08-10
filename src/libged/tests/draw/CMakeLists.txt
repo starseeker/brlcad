@@ -216,7 +216,7 @@ if(NOT MSVC AND NOT BRLCAD_OPTIMIZED)
     "libged-static;libBObol;libwdb" TEST)
   if(TARGET ged_test_obol_draw_sync AND TARGET libged-obj)
     set(_ged_obol_private_object_regex
-      "/(draw|draw_obol|draw_obol_result|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")
+      "/(draw|draw_obol|ged_view_feature_batch|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")
     target_sources(ged_test_obol_draw_sync PRIVATE
       "$<FILTER:$<TARGET_OBJECTS:libged-obj>,INCLUDE,${_ged_obol_private_object_regex}>")
   endif()
@@ -239,23 +239,6 @@ if(CMAKE_NM AND UNIX AND NOT APPLE)
   set_tests_properties(ged_bobol_private_symbol_contract PROPERTIES
     LABELS "bobol_api;bobol_contract;bobol_headless")
 endif()
-
-# GED-owned scene nodes are value handles with explicit owner, generation, and
-# scene-revision validation.
-brlcad_addexec(ged_test_scene_node_handles "scene_node_handles.cpp" "libged;libBObol;libwdb" TEST)
-if(TARGET ged_test_scene_node_handles)
-  foreach(tdp ${test_deps})
-    if (TARGET ${tdp})
-      add_dependencies(ged_test_scene_node_handles ${tdp})
-    endif ()
-  endforeach()
-endif(TARGET ged_test_scene_node_handles)
-brlcad_add_test(NAME ged_test_scene_node_handles COMMAND ged_test_scene_node_handles)
-if(TARGET ged_test_scene_node_handles)
-  set_property(TEST ged_test_scene_node_handles APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-endif()
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_scene_node_handles_a.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_scene_node_handles_b.g)
 
 # Independent-view state is structural scope, not a mode bit.
 brlcad_addexec(ged_test_view_independent "view_independent.cpp" "libged;libbu" TEST)

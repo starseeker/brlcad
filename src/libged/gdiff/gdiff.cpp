@@ -77,7 +77,7 @@ gdiff_replace_line_feature(struct ged *gedp, const char *name,
     struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
     style.color_valid = 1;
     VSET(style.color, r, g, b);
-    (void)_ged_line_set_publish_command_scene_feature(gedp, name,
+    (void)_ged_view_feature_batch_publish_line_set(gedp, name,
 	    (const point_t *)points, NULL, point_count, &style,
 	    "gdiff", "command-result", NULL, result_kind, 0);
     if (points)

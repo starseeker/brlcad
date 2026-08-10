@@ -113,10 +113,11 @@ ged_hide_core(struct ged *gedp, int argc, const char *argv[])
 	    bu_free_external(&ext);
 	}
 
-	struct ged_draw_transaction txn =
-	    ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
-					    dp->d_namep, 0.0);
-	ged_draw_apply_transaction(gedp, &txn, NULL);
+	struct ged_scene_path_request request;
+	ged_scene_path_request_init(&request);
+	request.path = dp->d_namep;
+	request.match = GED_SCENE_PATH_MATCH_OBJECT;
+	(void)ged_scene_visibility_set(gedp, &request, 0, NULL);
     }
 
     return BRLCAD_OK;

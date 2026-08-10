@@ -256,8 +256,13 @@ replot_original_solid(struct mged_state *s, ged_draw_shape_ref ref)
 
     struct bu_vls feature_name = BU_VLS_INIT_ZERO;
     mged_edit_preview_name(&feature_name, source_path);
-    if (mged_edit_preview_clear_all(s, bu_vls_cstr(&feature_name)))
-	(void)ged_draw_shape_ref_set_visible(s->gedp, ref, 1);
+    if (mged_edit_preview_clear_all(s, bu_vls_cstr(&feature_name))) {
+	struct ged_scene_path_request request;
+	ged_scene_path_request_init(&request);
+	request.path = source_path;
+	request.draw_mode = (enum ged_scene_draw_mode)rec.draw_mode;
+	(void)ged_scene_visibility_set(s->gedp, &request, 1, NULL);
+    }
 
     bu_vls_free(&feature_name);
     bu_free(source_path, "MGED edit-preview source path");
@@ -327,10 +332,15 @@ replot_modified_solid(
 	return -1;
     }
 
-    if (preview_status > 0 && rec.visible)
-	(void)ged_draw_shape_ref_set_visible(s->gedp, ref, 0);
+    if (preview_status > 0 && rec.visible) {
+	struct ged_scene_path_request request;
+	ged_scene_path_request_init(&request);
+	request.path = source_path;
+	request.draw_mode = (enum ged_scene_draw_mode)rec.draw_mode;
+	(void)ged_scene_visibility_set(s->gedp, &request, 0, NULL);
+    }
     if (preview_status > 0)
-	ged_draw_shape_set_highlighted(s->gedp, ref, 1);
+	(void)ged_scene_occurrence_highlight_set(s->gedp, ref, 1, NULL);
 
     bu_vls_free(&feature_name);
     bu_free(source_path, "MGED edit-preview source path");

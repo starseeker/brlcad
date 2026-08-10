@@ -34,7 +34,6 @@
 #ifndef GED_SELECTION_STATE_H
 #define GED_SELECTION_STATE_H
 
-#include "common.h"
 
 #include <stddef.h>
 

@@ -112,19 +112,17 @@ preview_draw_paths(struct ged *gedp, struct ged_view_context *view_ctx, int path
     if (!gedp || !view_ctx || path_count <= 0 || !paths)
 	return BRLCAD_OK;
 
-    struct ged_draw_appearance_settings settings =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    settings.draw_mode = preview_draw_mode_to_ged_mode(preview_mode);
+    struct ged_scene_draw_request request;
+    ged_scene_draw_request_init(&request);
+    request.view = view_ctx;
+    request.paths = paths;
+    request.path_count = (size_t)path_count;
+    request.style.draw_mode = (enum ged_scene_draw_mode)
+	preview_draw_mode_to_ged_mode(preview_mode);
+    request.realization.mode = GED_SCENE_REALIZE_EAGER;
 
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
-    txn.view = view_ctx;
-    txn.paths = paths;
-    txn.path_count = path_count;
-    txn.appearance = &settings;
-
-    return (ged_draw_apply_transaction(gedp, &txn, NULL) < 0) ?
-	BRLCAD_ERROR : BRLCAD_OK;
+    return ged_scene_draw(gedp, &request, NULL) == GED_SCENE_OK ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 
@@ -535,7 +533,7 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
 	    GED_VIEW_FEATURE_STYLE_INIT;
 	style.color_valid = 1;
 	VSET(style.color, 255, 255, 0);
-	(void)_ged_line_set_publish_command_scene_feature(gedp,
+	(void)_ged_view_feature_batch_publish_line_set(gedp,
 		"preview::eye_path",
 		(const point_t *)preview_eye_path.points,
 		preview_eye_path.cmds,

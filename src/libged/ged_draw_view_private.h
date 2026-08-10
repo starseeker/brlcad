@@ -69,6 +69,10 @@ GED_EXPORT extern int ged_selection_add_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,
 	const char *path);
+GED_EXPORT extern int ged_selection_remove_path(
+	struct ged_view_context *view_ctx,
+	enum ged_selection_kind kind,
+	const char *path);
 GED_EXPORT extern int ged_selection_set_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,

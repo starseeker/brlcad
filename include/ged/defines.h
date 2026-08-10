@@ -28,7 +28,7 @@
 #ifndef GED_DEFINES_H
 #define GED_DEFINES_H
 
-#include "common.h"
+#include "bu/defines.h"
 #include "bu/hash.h"
 #include "bu/list.h"
 #include "bu/process.h"

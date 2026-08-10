@@ -17,11 +17,11 @@
 #define GED_DRAW_H
 
 #include "ged/draw_types.h"
+#include "ged/scene_types.h"
 #include "ged/scene.h"
-#include "ged/draw_source.h"
 #include "ged/view_feature.h"
 #include "ged/polygon.h"
 #include "ged/selection.h"
-#include "ged/result.h"
+#include "ged/view_feature_batch.h"
 
 #endif /* GED_DRAW_H */

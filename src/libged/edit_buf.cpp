@@ -50,12 +50,15 @@
 
 Ged_Internal::~Ged_Internal()
 {
-    ged_draw_frontier_state_destroy(gedp);
     for (auto &kv : edit_buf) {
+	if (gedp && !ged_scene_edit_scope_ref_is_null(kv.second.edit_scope))
+	    (void)ged_scene_edit_release(gedp, kv.second.edit_scope,
+		GED_SCENE_EDIT_CANCEL, NULL);
 	rt_edit_destroy(kv.second.s);
 	db_free_full_path(&kv.second.dfp);
     }
     edit_buf.clear();
+    ged_draw_frontier_state_destroy(gedp);
 }
 
 
@@ -75,17 +78,13 @@ _edit_buf_key(const struct db_full_path *dfp)
 
 
 static void
-_edit_buf_release_draw_promotion(struct ged *gedp,
-				 ged_draw_promotion_ref promotion,
-				 int outcome)
+_edit_buf_release_scope(struct ged *gedp,
+			ged_scene_edit_scope_ref scope,
+			enum ged_scene_edit_outcome outcome)
 {
-    if (!gedp || ged_draw_promotion_ref_is_null(promotion))
+    if (!gedp || ged_scene_edit_scope_ref_is_null(scope))
 	return;
-
-    struct ged_draw_promotion_result result;
-    ged_draw_promotion_result_init(&result);
-    (void)ged_draw_release_promotion(gedp, promotion, outcome, &result);
-    ged_draw_promotion_result_free(&result);
+    (void)ged_scene_edit_release(gedp, scope, outcome, NULL);
 }
 
 
@@ -120,8 +119,8 @@ ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edi
     /* If an entry already exists, free it first */
     auto it = gi->edit_buf.find(key);
     if (it != gi->edit_buf.end()) {
-	_edit_buf_release_draw_promotion(gedp,
-	    it->second.draw_promotion, GED_DRAW_PROMOTION_CANCEL);
+	_edit_buf_release_scope(gedp, it->second.edit_scope,
+	    GED_SCENE_EDIT_CANCEL);
 	rt_edit_destroy(it->second.s);
 	db_free_full_path(&it->second.dfp);
 	gi->edit_buf.erase(it);
@@ -135,18 +134,14 @@ ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edi
      * object, but must not draw occurrences the user did not already request.
      * The promotion only changes the logical presentation frontier; retained
      * Obol sources continue to own geometry, cache, and PoP residency. */
-    struct ged_draw_promotion_request request =
-	GED_DRAW_PROMOTION_REQUEST_INIT;
-    request.dfp = dfp;
+    struct ged_scene_edit_request request;
+    ged_scene_edit_request_init(&request);
+    request.path = key.c_str();
     request.view = ged_draw_active_view_ctx(gedp);
-    request.scope = GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES;
-    request.auto_draw = 0;
-    request.role = "libged-edit-buffer";
-    struct ged_draw_promotion_result promotion;
-    ged_draw_promotion_result_init(&promotion);
-    if (ged_draw_promote_path(gedp, &request, &promotion) > 0)
-	entry.draw_promotion = promotion.promotion;
-    ged_draw_promotion_result_free(&promotion);
+    request.occurrences = GED_SCENE_EDIT_ALL_DRAWN_OCCURRENCES;
+    request.draw_if_absent = 0;
+    request.purpose = "libged-edit-buffer";
+    (void)ged_scene_edit_acquire(gedp, &request, &entry.edit_scope, NULL);
     gi->edit_buf[key] = entry;
 }
 
@@ -165,8 +160,7 @@ ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp)
 
     struct rt_edit *s = it->second.s;
     struct directory *dp = DB_FULL_PATH_CUR_DIR(&it->second.dfp);
-    const ged_draw_promotion_ref draw_promotion =
-	it->second.draw_promotion;
+    const ged_scene_edit_scope_ref edit_scope = it->second.edit_scope;
 
     int ret = BRLCAD_ERROR;
     if (dp && gedp->dbip) {
@@ -184,9 +178,9 @@ ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp)
 	ged_db_index_refresh(gedp);
 	ged_event_notify_object_modified(gedp, dp->d_namep, 1, NULL);
     }
-    _edit_buf_release_draw_promotion(gedp, draw_promotion,
-	ret == BRLCAD_OK ? GED_DRAW_PROMOTION_COMMIT :
-	GED_DRAW_PROMOTION_CANCEL);
+    _edit_buf_release_scope(gedp, edit_scope,
+	ret == BRLCAD_OK ? GED_SCENE_EDIT_COMMIT :
+	GED_SCENE_EDIT_CANCEL);
 
     return ret;
 }
@@ -204,13 +198,11 @@ ged_edit_buf_abandon(struct ged *gedp, const struct db_full_path *dfp)
     if (it == gi->edit_buf.end())
 	return;
 
-    const ged_draw_promotion_ref draw_promotion =
-	it->second.draw_promotion;
+    const ged_scene_edit_scope_ref edit_scope = it->second.edit_scope;
     rt_edit_destroy(it->second.s);
     db_free_full_path(&it->second.dfp);
     gi->edit_buf.erase(it);
-    _edit_buf_release_draw_promotion(gedp, draw_promotion,
-	GED_DRAW_PROMOTION_CANCEL);
+    _edit_buf_release_scope(gedp, edit_scope, GED_SCENE_EDIT_CANCEL);
 }
 
 
@@ -240,8 +232,7 @@ ged_edit_buf_flush(struct ged *gedp)
 
 	struct rt_edit *s = it->second.s;
 	struct directory *dp = DB_FULL_PATH_CUR_DIR(&it->second.dfp);
-	const ged_draw_promotion_ref draw_promotion =
-	    it->second.draw_promotion;
+	const ged_scene_edit_scope_ref edit_scope = it->second.edit_scope;
 	int committed = 0;
 
 	if (dp && gedp->dbip) {
@@ -255,9 +246,8 @@ ged_edit_buf_flush(struct ged *gedp)
 	rt_edit_destroy(s);
 	db_free_full_path(&it->second.dfp);
 	gi->edit_buf.erase(it);
-	_edit_buf_release_draw_promotion(gedp, draw_promotion,
-	    committed ? GED_DRAW_PROMOTION_COMMIT :
-	    GED_DRAW_PROMOTION_CANCEL);
+	_edit_buf_release_scope(gedp, edit_scope,
+	    committed ? GED_SCENE_EDIT_COMMIT : GED_SCENE_EDIT_CANCEL);
     }
 
     if (any_written)

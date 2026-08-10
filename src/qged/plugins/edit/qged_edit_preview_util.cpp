@@ -21,6 +21,7 @@
 
 #include "bu/malloc.h"
 #include "ged/draw.h"
+#include "ged/view_feature_internal.h"
 #include "qtcad/QgPluginContext.h"
 
 #include "qged_edit_preview_util.h"

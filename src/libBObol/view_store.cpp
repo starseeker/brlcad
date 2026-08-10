@@ -1581,6 +1581,29 @@ BObolFeatureStore::removePrefix(const SbString &prefix,
     return removed;
 }
 
+size_t
+BObolFeatureStore::countPrefix(const SbString &prefix,
+			       unsigned int scopeMask,
+			       const BObolFeatureOwner *owner) const
+{
+    const std::string p = store_string(prefix);
+    if (p.empty())
+	return 0;
+
+    size_t count = 0;
+    for (std::map<uint64_t, BObolFeatureStoreRecord *>::const_iterator it =
+	 this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	if (!it->second ||
+	    !(store_scope_bit(it->second->scope) & scopeMask) ||
+	    (owner && !store_owner_matches(it->second->owner, owner)))
+	    continue;
+	const std::string name = store_string(it->second->name);
+	if (name.compare(0, p.size(), p) == 0)
+	    count++;
+    }
+    return count;
+}
+
 void
 BObolFeatureStore::markCommandOwnerGeneration(
     const BObolFeatureOwner &owner)

@@ -12,8 +12,7 @@
 #ifndef GED_SELECTION_H
 #define GED_SELECTION_H
 
-#include "common.h"
-#include "ged/draw_types.h"
+#include "ged/selection_types.h"
 
 __BEGIN_DECLS
 
@@ -35,14 +34,6 @@ ged_view_selection_set_pick(
     const struct ged_pick_result *result,
     ged_view_selection_path_cb cb,
     void *data);
-
-GED_EXPORT extern int
-ged_view_selection_add_shape(
-    struct ged *gedp,
-    struct ged_view_context *view_ctx,
-    ged_draw_shape_ref ref,
-    struct ged_view_context **selection_view_ctx,
-    struct bu_vls *path);
 
 GED_EXPORT extern struct ged_pick_result *
 ged_pick_result_create(void);
@@ -128,11 +119,6 @@ ged_view_selection_snap(struct ged_view_context *view_ctx,
 	enum ged_selection_snap_kind kind,
 	point_t candidate);
 
-
-GED_EXPORT extern int
-ged_view_selection_set_highlight(struct ged *gedp,
-	struct ged_view_context *view_ctx,
-	ged_draw_shape_ref ref);
 
 __END_DECLS
 

@@ -40,6 +40,8 @@
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "ged.h"
+#include "ged/scene_internal.h"
+#include "ged/view_feature_internal.h"
 #include "include/plugin.h"
 #include "./ged_draw_private.h"
 
@@ -69,6 +71,19 @@ struct ged_qray_fmt {
 struct ged_db_index;
 struct ged_event_txn_state;
 struct ged_selection_state;
+
+struct ged_scene_edit_internal_result {
+    int status;
+    ged_scene_edit_scope_ref scope;
+    size_t occurrence_count;
+    size_t replaced_root_count;
+    size_t replacement_path_count;
+    size_t conflict_count;
+    uint64_t scene_revision_before;
+    uint64_t scene_revision_after;
+    struct bu_vls paths;
+    struct bu_vls errors;
+};
 
 struct vd_curve {
     struct bu_list      l;
@@ -184,15 +199,20 @@ class Ged_Internal {
 	struct ged_edit_buf_entry {
 	    struct db_full_path dfp;
 	    struct rt_edit *s;
-	    ged_draw_promotion_ref draw_promotion =
-		GED_DRAW_PROMOTION_REF_NULL;
+	    ged_scene_edit_scope_ref edit_scope =
+		GED_SCENE_EDIT_SCOPE_REF_NULL;
 	};
 	std::unordered_map<std::string, ged_edit_buf_entry> edit_buf;
 
-	// Backend-neutral draw-frontier promotions.  The concrete C++ state is
+	// Backend-neutral semantic edit scopes.  The concrete C++ state is
 	// private to ged_draw_frontier.cpp so renderer and application headers do
 	// not inherit its implementation.
 	void *draw_frontier_state = nullptr;
+
+	// Optional owner-scoped backend override used by non-rendering consumers
+	// and reducer contract tests.  Null selects the private Obol adapter.
+	const struct ged_scene_backend_ops *scene_backend_ops = nullptr;
+	void *scene_backend_data = nullptr;
 };
 
 #else
@@ -291,7 +311,7 @@ GED_EXPORT extern int _ged_external_rt_to_endpoint(
 	const char *program,
 	const char *callback_command);
 GED_EXPORT extern void ged_draw_registry_free(struct ged *gedp);
-GED_EXPORT extern void ged_draw_observers_free(struct ged *gedp);
+GED_EXPORT extern void ged_scene_observers_free(struct ged *gedp);
 
 /* Data for tree walk */
 struct draw_data_t {
@@ -347,9 +367,11 @@ GED_EXPORT extern int _ged_combadd2(struct ged *gedp,
 			 matp_t m,
 			 int validate);
 
-/* defined in ged_draw_material.c */
+/* Internal command-plugin ABI for typed retained feature publication.  These
+ * helpers are exported only because libged command modules are shared
+ * libraries; they are not part of the installed libged API. */
 
-GED_EXPORT extern int _ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
+GED_EXPORT extern int _ged_view_feature_batch_publish_uplot(struct ged *gedp,
 				       FILE *fp,
 				       const char *name,
 				       double char_size,
@@ -359,7 +381,7 @@ GED_EXPORT extern int _ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
 				       const char *remove_prefix,
 				       const char *result_kind,
 				       uint64_t generation);
-GED_EXPORT extern int _ged_draw_uplot_files_to_command_scene_feature(
+GED_EXPORT extern int _ged_view_feature_batch_publish_uplot_files(
 				       struct ged *gedp,
 				       const char * const *files,
 				       size_t file_count,
@@ -377,7 +399,7 @@ GED_EXPORT extern struct ged_uplot_stream *_ged_uplot_stream_create(double char_
 GED_EXPORT extern int _ged_uplot_stream_process(struct ged_uplot_stream *stream,
 				       FILE *fp,
 				       int command);
-GED_EXPORT extern int _ged_uplot_stream_publish_command_scene_feature(struct ged *gedp,
+GED_EXPORT extern int _ged_view_feature_batch_publish_uplot_stream(struct ged *gedp,
 				       struct ged_uplot_stream *stream,
 				       const char *name,
 				       const char *owner_id,
@@ -386,7 +408,7 @@ GED_EXPORT extern int _ged_uplot_stream_publish_command_scene_feature(struct ged
 				       const char *result_kind,
 				       uint64_t generation);
 GED_EXPORT extern void _ged_uplot_stream_free(struct ged_uplot_stream *stream);
-GED_EXPORT extern int _ged_line_layer_builder_publish_command_scene_feature(
+GED_EXPORT extern int _ged_view_feature_batch_publish_line_layer_builder(
 				       struct ged *gedp,
 				       const char *name,
 				       const struct bg_line_layer_builder *builder,
@@ -395,7 +417,7 @@ GED_EXPORT extern int _ged_line_layer_builder_publish_command_scene_feature(
 				       const char *remove_prefix,
 				       const char *result_kind,
 				       uint64_t generation);
-GED_EXPORT extern int _ged_line_set_publish_command_scene_feature(
+GED_EXPORT extern int _ged_view_feature_batch_publish_line_set(
 				       struct ged *gedp,
 				       const char *name,
 				       const point_t *points,
@@ -407,7 +429,7 @@ GED_EXPORT extern int _ged_line_set_publish_command_scene_feature(
 				       const char *remove_prefix,
 				       const char *result_kind,
 				       uint64_t generation);
-GED_EXPORT extern int _ged_indexed_face_set_publish_command_scene_feature(
+GED_EXPORT extern int _ged_view_feature_batch_publish_indexed_face_set(
 				       struct ged *gedp,
 				       const char *name,
 				       const point_t *points,
@@ -422,7 +444,7 @@ GED_EXPORT extern int _ged_indexed_face_set_publish_command_scene_feature(
 				       const char *remove_prefix,
 				       const char *result_kind,
 				       uint64_t generation);
-GED_EXPORT extern int _ged_command_scene_features_remove_prefix(
+GED_EXPORT extern int _ged_view_feature_batch_remove_prefix(
 				       struct ged *gedp,
 				       const char *prefix,
 				       const char *owner_id,
@@ -672,7 +694,76 @@ GED_EXPORT extern void            ged_edit_buf_abandon(struct ged *gedp, const s
 GED_EXPORT extern void            ged_edit_buf_flush(struct ged *gedp);
 
 /* Draw-frontier internals (ged_draw_frontier.cpp). */
+struct ged_draw_frontier_root_record {
+    const char *path;
+    struct ged_view_context *view;
+    int mode;
+    const struct ged_draw_appearance_settings *appearance;
+};
+
+struct ged_draw_frontier_visibility_record {
+    const char *root_path;
+    struct ged_view_context *view;
+    int mode;
+    const char *const *paths;
+    const int *visible;
+    size_t rule_count;
+    int clear;
+};
+
+struct ged_draw_frontier_presentation_record {
+    const char *root_path;
+    const char *path;
+    struct ged_view_context *view;
+    int mode;
+    enum ged_draw_transaction_kind kind;
+    enum ged_scene_path_match match;
+    double value;
+};
+
+typedef int (*ged_draw_frontier_root_cb)(
+    const struct ged_draw_frontier_root_record *record,
+    void *userdata);
+
+typedef int (*ged_draw_frontier_visibility_cb)(
+    const struct ged_draw_frontier_visibility_record *record,
+    void *userdata);
+
+typedef int (*ged_draw_frontier_presentation_cb)(
+    const struct ged_draw_frontier_presentation_record *record,
+    void *userdata);
+
 GED_EXPORT extern void ged_draw_frontier_state_destroy(struct ged *gedp);
+extern void ged_scene_edit_internal_result_init(
+	struct ged_scene_edit_internal_result *result);
+extern void ged_scene_edit_internal_result_free(
+	struct ged_scene_edit_internal_result *result);
+extern int ged_scene_edit_acquire_internal(
+	struct ged *gedp, const struct ged_scene_edit_request *request,
+	ged_scene_edit_scope_ref *scope,
+	struct ged_scene_edit_internal_result *result);
+extern int ged_scene_edit_release_internal(
+	struct ged *gedp, ged_scene_edit_scope_ref scope,
+	enum ged_scene_edit_outcome outcome,
+	struct ged_scene_edit_internal_result *result);
+extern int ged_draw_frontier_has_roots(
+	struct ged *gedp, struct ged_view_context *view_ctx, int mode);
+extern int ged_draw_frontier_foreach_root(
+	struct ged *gedp, struct ged_view_context *view_ctx, int mode,
+	ged_draw_frontier_root_cb callback, void *userdata);
+extern int ged_draw_frontier_visibility_changes_foreach(
+	struct ged *gedp, ged_draw_frontier_visibility_cb callback,
+	void *userdata);
+extern int ged_draw_frontier_visibility_snapshot_foreach(
+	struct ged *gedp, ged_draw_frontier_visibility_cb callback,
+	void *userdata);
+extern int ged_draw_frontier_presentation_snapshot_foreach(
+	struct ged *gedp, ged_draw_frontier_presentation_cb callback,
+	void *userdata);
+extern int ged_draw_frontier_presentation_set(
+	struct ged *gedp, const struct ged_draw_transaction *txn,
+	const char *resolved_path);
+extern int ged_draw_frontier_highlights_clear(struct ged *gedp);
 GED_EXPORT extern int ged_draw_frontier_erase_path(
 	struct ged *gedp, const char *path, struct ged_view_context *view_ctx,
 	int mode, int prefix, struct ged_draw_transaction_result *result);
@@ -692,15 +783,15 @@ GED_EXPORT extern void ged_draw_frontier_note_transaction(
 	const char *resolved_path);
 
 /* Obol presentation mask for one retained database-source draw root. */
-GED_EXPORT extern int ged_draw_obol_source_visibility_frontier_set(
+extern int ged_draw_obol_source_visibility_frontier_set(
 	struct ged *gedp, const char *root_path,
 	struct ged_view_context *view_ctx, int mode,
 	const char *const *paths, size_t path_count);
-GED_EXPORT extern int ged_draw_obol_source_visibility_overrides_set(
+extern int ged_draw_obol_source_visibility_overrides_set(
 	struct ged *gedp, const char *root_path,
 	struct ged_view_context *view_ctx, int mode,
 	const char *const *paths, const int *visible, size_t rule_count);
-GED_EXPORT extern int ged_draw_obol_source_visibility_frontier_clear(
+extern int ged_draw_obol_source_visibility_frontier_clear(
 	struct ged *gedp, const char *root_path,
 	struct ged_view_context *view_ctx, int mode);
 

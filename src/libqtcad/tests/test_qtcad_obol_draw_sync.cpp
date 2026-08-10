@@ -19,9 +19,12 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "ged.h"
+#include "ged/scene_internal.h"
+#include "ged/display_obol_private.h"
 #include "ged/draw.h"
+#include "ged/event_txn.h"
 #include "ged/view.h"
-#include "QgObolDrawSyncPrivate.h"
+#include "QgSceneSyncPrivate.h"
 #include "qtcad/QgView.h"
 #include "raytrace.h"
 #include "rt/db_fullpath.h"
@@ -107,6 +110,7 @@ make_draw_sync_db(const char *dbpath)
     BU_LIST_INIT(&pair.l);
     ret = ret &&
 	mk_addmember("box.s", &pair.l, NULL, WMOP_UNION) != NULL &&
+	mk_addmember("ball.s", &pair.l, NULL, WMOP_UNION) != NULL &&
 	mk_lcomb(wdbp, "pair.c", &pair, 0, NULL, NULL, NULL, 0) == 0;
     wdb_close(wdbp);
     return ret;
@@ -242,6 +246,39 @@ render_source_count(BObolViewController *controller)
     return static_cast<int>(render_sources(controller).size());
 }
 
+static int
+visible_compact_occurrence_count(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return 0;
+    int count = 0;
+    for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+	BObolCompactOccurrence occurrence;
+	if (source->getCompactOccurrence(i, occurrence) &&
+		occurrence.summary.visible)
+	    count++;
+    }
+    return count;
+}
+
+static int
+compact_occurrence_for_path(SoBRLDatabaseSource *source, const char *path,
+	BObolCompactOccurrence *out)
+{
+    if (!source || !path)
+	return 0;
+    for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+	BObolCompactOccurrence occurrence;
+	if (!source->getCompactOccurrence(i, occurrence) ||
+	    !test_path_equal(occurrence.summary.path.getString(), path))
+	    continue;
+	if (out)
+	    *out = occurrence;
+	return 1;
+    }
+    return 0;
+}
+
 static SoBRLDatabaseSource *
 render_source(BObolViewController *controller, int index)
 {
@@ -310,8 +347,7 @@ struct draw_observer_sync_context {
 
 static void
 test_draw_observer(struct ged *gedp,
-	const struct ged_draw_transaction *txn,
-	const struct ged_draw_transaction_result *result,
+	const struct ged_scene_delta *delta,
 	void *client_data)
 {
     struct draw_observer_sync_context *ctx =
@@ -319,25 +355,19 @@ test_draw_observer(struct ged *gedp,
     if (!ctx || !ctx->view)
 	return;
     ctx->calls++;
-    ctx->changed += qg_obol_sync_ged_draw_transaction(gedp, txn, result,
-	    ctx->view);
+    ctx->changed += qg_scene_delta_notify(gedp, delta, ctx->view);
 }
 
 static int
-apply_and_sync(struct ged *gedp,
-	QgView *view,
-	struct ged_draw_transaction *txn,
+scene_result_matches(enum ged_scene_status status,
+	struct ged_scene_result *result,
 	int expect_changed)
 {
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int draw_ret = ged_draw_apply_transaction(gedp, txn, &result);
-    int changed = qg_obol_sync_ged_draw_transaction(gedp, txn, &result, view);
-    ged_draw_transaction_result_free(&result);
-
-    if (draw_ret < 0)
-	return 0;
-    return expect_changed ? changed != 0 : changed == 0;
+    const int changed = ged_scene_result_changed(result);
+    const int matches = status == GED_SCENE_OK &&
+	(expect_changed ? changed != 0 : changed == 0);
+    ged_scene_result_destroy(result);
+    return matches;
 }
 
 int
@@ -358,19 +388,108 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);
+
+    /* A renderer attachment must consume the complete current semantic
+     * snapshot, including visibility-frontier changes committed while the
+     * scene was headless. */
+    struct ged_view_context *headless_view = ged_view_context_create();
+    if (!headless_view || !ged_view_context_host_attach(gedp, headless_view))
+	FAIL("headless snapshot test should create an attached view context");
+    ged_view_active_ctx_set(gedp, headless_view);
+    const char *headless_paths[] = {"pair.c"};
+    struct ged_scene_draw_request headless_draw;
+    ged_scene_draw_request_init(&headless_draw);
+    headless_draw.view = headless_view;
+    headless_draw.paths = headless_paths;
+    headless_draw.path_count = 1;
+    headless_draw.realization.mode = GED_SCENE_REALIZE_EAGER;
+    struct ged_scene_result *headless_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_draw(gedp, &headless_draw,
+	    headless_result), headless_result, 1))
+	FAIL("headless draw intent should commit without a renderer");
+    struct ged_scene_path_request headless_path;
+    ged_scene_path_request_init(&headless_path);
+    headless_path.view = headless_view;
+    headless_path.path = "box.s";
+    headless_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_visibility_set(gedp,
+	    &headless_path, 0, headless_result), headless_result, 0))
+	FAIL("exact compact path matching must not fall back to a leaf basename");
+    headless_path.path = "pair.c/ball.s";
+    headless_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_opacity_set(gedp, &headless_path,
+	    0.25, headless_result), headless_result, 1))
+	FAIL("headless compact opacity should be retained before realization");
+    headless_path.path = "ball.s";
+    headless_path.match = GED_SCENE_PATH_MATCH_OBJECT;
+    headless_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_highlight_set(gedp, &headless_path,
+	    1, headless_result), headless_result, 1))
+	FAIL("headless object highlight should be retained before realization");
+    struct ged_scene_erase_request headless_erase;
+    ged_scene_erase_request_init(&headless_erase);
+    headless_erase.view = headless_view;
+    headless_erase.path = "pair.c/box.s";
+    headless_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_erase(gedp, &headless_erase,
+	    headless_result), headless_result, 1))
+	FAIL("headless subpath erase should commit a visibility frontier");
+    BObolViewController *controller = view.obolViewController();
+    if (!controller || render_source_count(controller) != 0)
+	FAIL("headless semantic commits must not construct renderer sources");
+    if (!ged_view_context_obol_endpoint_set(headless_view,
+	    view.displayEndpoint(), 0))
+	FAIL("delayed endpoint attachment should accept a semantic snapshot");
+    SoBRLDatabaseSource *headless_source =
+	source_for_path(controller, "pair.c");
+    if (!headless_source || headless_source->getCompactInstanceCount() != 2 ||
+	    visible_compact_occurrence_count(headless_source) != 1)
+	FAIL("delayed endpoint snapshot should preserve the headless erase frontier");
+    BObolCompactOccurrence headless_ball;
+    if (!compact_occurrence_for_path(headless_source, "pair.c/ball.s",
+	    &headless_ball) || !headless_ball.summary.highlighted ||
+	    fabsf(headless_ball.summary.transparency - 0.75f) > 1.0e-6f) {
+	fprintf(stderr, "headless ball found=%d highlighted=%d transparency=%g\n",
+	    compact_occurrence_for_path(headless_source, "pair.c/ball.s", NULL),
+	    headless_ball.summary.highlighted ? 1 : 0,
+	    headless_ball.summary.transparency);
+	FAIL("delayed endpoint snapshot should preserve compact highlight and opacity");
+    }
+    ged_scene_path_request_init(&headless_path);
+    headless_path.view = headless_view;
+    headless_path.path = "pair.c/ball.s";
+    headless_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_visibility_set(gedp,
+	    &headless_path, 0, headless_result), headless_result, 1))
+	FAIL("compact visibility should update retained scene intent");
+    headless_source = source_for_path(controller, "pair.c");
+    if (!headless_source || visible_compact_occurrence_count(headless_source))
+	FAIL("attached endpoint should apply compact visibility without leaf records");
+    if (!compact_occurrence_for_path(headless_source, "pair.c/ball.s",
+	    &headless_ball) || !headless_ball.summary.highlighted ||
+	    fabsf(headless_ball.summary.transparency - 0.75f) > 1.0e-6f)
+	FAIL("compact visibility must preserve prior highlight and opacity state");
+    (void)ged_view_context_obol_endpoint_set(headless_view, NULL, 0);
+    struct ged_scene_clear_request headless_clear;
+    ged_scene_clear_request_init(&headless_clear);
+    headless_clear.view = headless_view;
+    headless_clear.scope = GED_SCENE_CLEAR_VIEW;
+    headless_result = ged_scene_result_create();
+    if (ged_scene_clear(gedp, &headless_clear, headless_result) != GED_SCENE_OK)
+	FAIL("headless snapshot test should clear its view-scoped draw intent");
+    ged_scene_result_destroy(headless_result);
+    ged_view_context_free(headless_view);
+    controller->clearDatabaseSources();
+
     struct ged_view_context *ged_view_ctx =
 	ged_view_context_from_bv(view.viewContext());
 	ged_view_active_ctx_set(gedp, ged_view_ctx);
 	(void)ged_view_context_host_attach(gedp, ged_view_ctx);
-
-    BObolViewController *controller = view.obolViewController();
-    if (!controller)
-	FAIL("QgView should expose an Obol controller");
     controller->clearDatabaseSources();
 
     struct draw_observer_sync_context obs = {&view, 0, 0};
-    ged_draw_observer_token observerToken =
-	ged_draw_observer_add(gedp, test_draw_observer, &obs);
+    ged_scene_observer_token observerToken =
+	ged_scene_observer_add(gedp, test_draw_observer, &obs);
     if (!observerToken)
 	FAIL("GED draw observer should register for qtcad Obol draw sync");
 
@@ -436,22 +555,25 @@ main(int argc, char **argv)
 	FAIL("real GED erase command should notify and sync qtcad Obol");
     if (render_source_count(controller) != 0)
 	FAIL("observer-synced GED erase should remove Obol database sources");
-    if (ged_draw_observer_remove(gedp, observerToken) != 1)
+    if (ged_scene_observer_remove(gedp, observerToken) != 1)
 	FAIL("GED draw observer should unregister after qtcad Obol sync test");
     controller->clearDatabaseSources();
 
-    struct ged_draw_appearance_settings box_appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    box_appearance.color_override = 1;
-    box_appearance.color[0] = 10;
-    box_appearance.color[1] = 20;
-    box_appearance.color[2] = 30;
-    box_appearance.s_line_width = 5;
-    struct ged_draw_transaction draw_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
+    const char *box_paths[] = {"box.s"};
+    struct ged_scene_draw_request draw_box;
+    ged_scene_draw_request_init(&draw_box);
     draw_box.view = ged_view_ctx;
-    draw_box.appearance = &box_appearance;
-    if (!apply_and_sync(gedp, &view, &draw_box, 1))
+    draw_box.paths = box_paths;
+    draw_box.path_count = 1;
+    draw_box.realization.mode = GED_SCENE_REALIZE_EAGER;
+    draw_box.style.color_override = 1;
+    draw_box.style.color[0] = 10;
+    draw_box.style.color[1] = 20;
+    draw_box.style.color[2] = 30;
+    draw_box.style.line_width = 5;
+    struct ged_scene_result *scene_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_draw(gedp, &draw_box, scene_result),
+	    scene_result, 1))
 	FAIL("GED draw should sync a wire Obol database source");
     if (render_source_count(controller) != 1)
 	FAIL("Obol draw sync should create one database source");
@@ -477,12 +599,9 @@ main(int argc, char **argv)
 	    fabs(source->transparency.getValue() - box_record.transparency) >
 	    1.0e-6)
 	FAIL("Obol draw sync should seed source display state from GED records");
-    ged_scene_node_ref box_scene_ctx = ged_scene_shape_node(gedp,
-	box_record.ref);
     struct ged_draw_scene_display_summary box_display;
-    if (ged_scene_node_ref_is_null(box_scene_ctx) ||
-	    !ged_scene_node_display_summary(gedp, box_scene_ctx,
-		&box_display) ||
+    if (!ged_draw_shape_ref_display_summary(gedp, box_record.ref,
+	    &box_display) ||
 	    !box_display.valid ||
 	    !box_display.material_valid)
 	FAIL("GED draw should expose neutral display/material state for box.s");
@@ -515,10 +634,7 @@ main(int argc, char **argv)
     if (visibleImage.isNull() || nonblack_pixel_count(visibleImage) < 10)
 	FAIL("Obol-synced GED draw should be visible through qtcad capture");
 
-    struct ged_draw_transaction stale_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "box.s");
-    stale_box.view = ged_view_ctx;
-    if (!apply_and_sync(gedp, &view, &stale_box, 1))
+    if (ged_event_notify_object_modified(gedp, "box.s", 1, NULL) < 0)
 	FAIL("GED stale-source event should refresh Obol source state");
     struct ged_draw_shape_record stale_record;
     if (!test_shape_record_by_path(gedp, "box.s", &stale_record) ||
@@ -546,10 +662,13 @@ main(int argc, char **argv)
 	    shape_summary.ownerSourceStale)
 	FAIL("Obol realized summary should carry current GED source lineage");
 
-    struct ged_draw_transaction erase_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "box.s");
+    struct ged_scene_erase_request erase_box;
+    ged_scene_erase_request_init(&erase_box);
     erase_box.view = ged_view_ctx;
-    if (!apply_and_sync(gedp, &view, &erase_box, 1))
+    erase_box.path = "box.s";
+    scene_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_erase(gedp, &erase_box, scene_result),
+	    scene_result, 1))
 	FAIL("GED erase should remove an Obol database source");
     if (render_source_count(controller) != 0)
 	FAIL("Obol draw sync should remove erased database sources");
@@ -557,14 +676,17 @@ main(int argc, char **argv)
 	    BObolSceneTreeSummary::NODE_GROUP, NULL))
 	FAIL("Obol draw sync should prune empty GED draw groups after erase");
 
-    struct ged_draw_appearance_settings shaded_appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
-    struct ged_draw_transaction draw_ball =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "ball.s");
+    const char *ball_paths[] = {"ball.s"};
+    struct ged_scene_draw_request draw_ball;
+    ged_scene_draw_request_init(&draw_ball);
     draw_ball.view = ged_view_ctx;
-    draw_ball.appearance = &shaded_appearance;
-    int drew_ball = apply_and_sync(gedp, &view, &draw_ball, 1);
+    draw_ball.paths = ball_paths;
+    draw_ball.path_count = 1;
+    draw_ball.realization.mode = GED_SCENE_REALIZE_EAGER;
+    draw_ball.style.draw_mode = GED_SCENE_DRAW_SHADED;
+    scene_result = ged_scene_result_create();
+    int drew_ball = scene_result_matches(
+	ged_scene_draw(gedp, &draw_ball, scene_result), scene_result, 1);
     if (!drew_ball)
 	FAIL("GED shaded draw should sync a shaded Obol database source");
     source = render_source(controller, 0);
@@ -576,17 +698,17 @@ main(int argc, char **argv)
 	FAIL("shaded Obol database source should preserve draw mode and mesh geometry");
 
     const char *paths[2] = {"box.s", "ball.s"};
-    struct ged_draw_appearance_settings wire_appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    wire_appearance.draw_mode = GED_DRAW_MODE_WIRE;
-    wire_appearance.mixed_modes = 1;
-    struct ged_draw_transaction draw_both =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
+    struct ged_scene_draw_request draw_both;
+    ged_scene_draw_request_init(&draw_both);
     draw_both.view = ged_view_ctx;
     draw_both.paths = paths;
     draw_both.path_count = 2;
-    draw_both.appearance = &wire_appearance;
-    int drew_both = apply_and_sync(gedp, &view, &draw_both, 1);
+    draw_both.realization.mode = GED_SCENE_REALIZE_EAGER;
+    draw_both.style.draw_mode = GED_SCENE_DRAW_WIRE;
+    draw_both.style.mixed_modes = 1;
+    scene_result = ged_scene_result_create();
+    int drew_both = scene_result_matches(
+	ged_scene_draw(gedp, &draw_both, scene_result), scene_result, 1);
     if (!drew_both)
 	FAIL("multi-path GED draw should sync multiple Obol database sources");
     if (render_source_count(controller) != 3 ||
@@ -604,10 +726,12 @@ main(int argc, char **argv)
 	source_for_path_mode(controller, "ball.s", SoBRLDatabaseSource::WIREFRAME);
     SoBRLDatabaseSource *ballShadedBeforeRedraw =
 	source_for_path_mode(controller, "ball.s", SoBRLDatabaseSource::SHADED);
-    struct ged_draw_transaction redraw_all =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    struct ged_scene_redraw_request redraw_all;
+    ged_scene_redraw_request_init(&redraw_all);
     redraw_all.view = ged_view_ctx;
-    if (!apply_and_sync(gedp, &view, &redraw_all, 1))
+    scene_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_redraw(gedp, &redraw_all,
+	    scene_result), scene_result, 1))
 	FAIL("GED redraw should invalidate the retained Obol render");
     if (render_source_count(controller) != 3 ||
 	    source_for_path_mode(controller, "box.s",
@@ -618,18 +742,25 @@ main(int argc, char **argv)
 		SoBRLDatabaseSource::SHADED) != ballShadedBeforeRedraw)
 	FAIL("Obol redraw should preserve retained database sources");
 
-    struct ged_draw_transaction clear_all =
-	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
-    clear_all.view = ged_view_ctx;
-    if (!apply_and_sync(gedp, &view, &clear_all, 1))
+    struct ged_scene_clear_request clear_all;
+    ged_scene_clear_request_init(&clear_all);
+    scene_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_clear(gedp, &clear_all,
+	    scene_result), scene_result, 1))
 	FAIL("GED clear should clear Obol database sources");
     if (render_source_count(controller) != 0)
 	FAIL("Obol draw sync should clear all database sources");
 
-    struct ged_draw_transaction draw_nested =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c/box.s");
+    const char *nested_paths[] = {"pair.c/box.s"};
+    struct ged_scene_draw_request draw_nested;
+    ged_scene_draw_request_init(&draw_nested);
     draw_nested.view = ged_view_ctx;
-    if (!apply_and_sync(gedp, &view, &draw_nested, 1))
+    draw_nested.paths = nested_paths;
+    draw_nested.path_count = 1;
+    draw_nested.realization.mode = GED_SCENE_REALIZE_EAGER;
+    scene_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_draw(gedp, &draw_nested,
+	    scene_result), scene_result, 1))
 	FAIL("nested GED draw should sync an Obol database source");
     if (render_source_count(controller) != 1 ||
 	    !source_for_path(controller, "pair.c/box.s"))
@@ -639,10 +770,13 @@ main(int argc, char **argv)
 	    source->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME)
 	FAIL("full-path Obol draw sync should publish the nested source owner");
 
-    struct ged_draw_transaction erase_nested =
-	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "pair.c/box.s");
+    struct ged_scene_erase_request erase_nested;
+    ged_scene_erase_request_init(&erase_nested);
     erase_nested.view = ged_view_ctx;
-    if (!apply_and_sync(gedp, &view, &erase_nested, 1))
+    erase_nested.path = "pair.c/box.s";
+    scene_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_erase(gedp, &erase_nested,
+	    scene_result), scene_result, 1))
 	FAIL("nested GED erase should remove an Obol database source");
     if (render_source_count(controller) != 0 ||
 	    scene_display_summary_by_path(controller, "pair.c/box.s",

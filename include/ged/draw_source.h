@@ -12,7 +12,6 @@
 #ifndef GED_DRAW_SOURCE_H
 #define GED_DRAW_SOURCE_H
 
-#include "common.h"
 #include "ged/draw_types.h"
 
 __BEGIN_DECLS
@@ -41,30 +40,6 @@ ged_draw_source_snapshot(
     ged_draw_shape_ref ref,
     struct ged_draw_shape_source_snapshot *out);
 
-
-GED_EXPORT extern int
-ged_draw_source_node_summary(struct ged *gedp,
-	ged_scene_node_ref node,
-	struct ged_draw_database_source_summary *out);
-
-GED_EXPORT extern int
-ged_draw_source_lod_policy_get(
-    ged_draw_source_lod_policy *policy,
-    const struct ged_view_context *view_ctx);
-
-GED_EXPORT extern int
-ged_draw_source_lod_policy_apply(
-    struct ged_view_context *view_ctx,
-    const ged_draw_source_lod_policy *policy);
-
-GED_EXPORT extern int
-ged_draw_source_lod_policy_apply_bot_threshold(
-    struct ged_view_context *view_ctx,
-    const ged_draw_source_lod_policy *policy,
-    size_t bot_threshold);
-
-GED_EXPORT extern int
-ged_draw_source_lod_bounds_update(struct ged_view_context *view_ctx);
 
 __END_DECLS
 

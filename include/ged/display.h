@@ -19,7 +19,6 @@
 #ifndef GED_DISPLAY_H
 #define GED_DISPLAY_H
 
-#include "common.h"
 
 #include <stddef.h>
 

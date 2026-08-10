@@ -29,7 +29,6 @@
 #ifndef GED_COMMANDS_H
 #define GED_COMMANDS_H
 
-#include "common.h"
 #include "ged/defines.h"
 
 

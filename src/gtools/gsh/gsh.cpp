@@ -191,10 +191,10 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 	    l = 0;
 	}
     } else {
-	l = ged_draw_scene_hash(gedp);
+	l = ged_scene_revision(gedp);
     }
 
-    g = ged_draw_scene_hash(gedp);
+    g = ged_scene_revision(gedp);
     if (db_index_check && bv_refresh_dirty_get(view))
 	r = 1;
 
@@ -679,10 +679,10 @@ GshState::view_update()
     if (qged_display_mode &&
 	!ged_view_context_obol_endpoint_get(view_ctx)) {
 	(void)gsh_headless_endpoint_ensure(gedp, view_ctx, 1);
-	struct ged_draw_transaction txn =
-	    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-	txn.view = view_ctx;
-	(void)ged_draw_apply_transaction(gedp, &txn, NULL);
+	struct ged_scene_redraw_request request;
+	ged_scene_redraw_request_init(&request);
+	request.view = view_ctx;
+	(void)ged_scene_redraw(gedp, &request, NULL);
     }
 
     /* Keep view-owned composition and faceplate state in the same controller

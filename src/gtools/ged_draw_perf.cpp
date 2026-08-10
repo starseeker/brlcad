@@ -584,24 +584,17 @@ run_once(const struct options &opts, int iter)
 
     if (draw_ret == BRLCAD_OK) {
 	if (opts.redraw) {
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-	    struct ged_draw_transaction_result result;
-	    ged_draw_transaction_result_init(&result);
+	    struct ged_scene_redraw_request request;
+	    ged_scene_redraw_request_init(&request);
 	    start = std::chrono::steady_clock::now();
-	    const int txn_ret = ged_draw_apply_transaction(gedp, &txn, &result);
+	    const enum ged_scene_status status =
+		ged_scene_redraw(gedp, &request, NULL);
 	    t.redraw_ms = elapsed_ms(start);
-	    ged_draw_transaction_result_free(&result);
-	    redraw_ret = txn_ret < 0 ? BRLCAD_ERROR : BRLCAD_OK;
+	    redraw_ret = status == GED_SCENE_OK ? BRLCAD_OK : BRLCAD_ERROR;
 	}
 
-	const int semantic_shape_count = ged_draw_shape_count(gedp);
-	if (semantic_shape_count >= 0) {
-	    source_count = (size_t)semantic_shape_count;
-	    source_count_ret = BRLCAD_OK;
-	} else {
-	    source_count_ret = BRLCAD_ERROR;
-	}
+	source_count = ged_scene_occurrence_count(gedp);
+	source_count_ret = BRLCAD_OK;
     }
 
     if (draw_ret == BRLCAD_OK && opts.autoview) {

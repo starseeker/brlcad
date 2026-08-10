@@ -48,8 +48,6 @@
 #ifndef GED_DB_INDEX_H
 #define GED_DB_INDEX_H
 
-#include "common.h"
-
 #include <stddef.h>
 
 #include "bu/vls.h"

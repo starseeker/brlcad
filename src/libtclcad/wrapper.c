@@ -310,8 +310,8 @@ to_view_func_common(struct ged *gedp,
 
     bu_free(av, "free av copy");
 
-    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    if (ged_draw_source_lod_policy_get(&lod_policy, view_ctx) &&
+    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_view_lod_policy_get(&lod_policy, view_ctx) &&
 	lod_policy.csg_enabled && lod_policy.zoom_refresh)
     {
 	const char *gr_av[] = {"redraw", NULL};

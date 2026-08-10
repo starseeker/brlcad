@@ -386,10 +386,10 @@ static void
 do_obol_refresh(struct ged *gedp)
 {
     struct ged_view_context *v = ged_view_active_ctx(gedp);
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    txn.view = v;
-    ged_draw_apply_transaction(gedp, &txn, NULL);
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = v;
+    (void)ged_scene_redraw(gedp, &request, NULL);
 }
 
 /* Count non-background (non-black) pixels in a PNG. */
@@ -464,6 +464,11 @@ test_gui_obol_render(const char *datadir)
     /* Draw + autoview + ae — mirrors MGEDpage::draw() + refreshDisplay() */
     const char *s_av[4] = {"draw", "all.g", NULL};
     ged_exec_draw(gedp, 2, s_av);
+    if (!draw_test_obol_progressive_drain(gedp,
+	    ged_view_active_ctx(gedp), 500, 1)) {
+	bu_log("FAIL: GUI-mode progressive draw did not settle before capture\n");
+	fail = 1;
+    }
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
     s_av[0] = "ae"; s_av[1] = "35"; s_av[2] = "25"; s_av[3] = NULL;

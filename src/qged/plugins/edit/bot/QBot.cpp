@@ -37,6 +37,7 @@
 #include <QVBoxLayout>
 #include "ged.h"
 #include "ged/draw.h"
+#include "ged/view_feature_internal.h"
 #include "rt/db_io.h"
 #include "rt/directory.h"
 #include "rt/primitives/bot.h"

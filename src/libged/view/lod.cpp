@@ -145,7 +145,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	bu_vls_printf(gedp->ged_result_str, "unable to read LoD policy\n");
 	return BRLCAD_ERROR;
     }
-    ged_draw_source_lod_policy lod_policy;
+    ged_view_lod_policy lod_policy;
     attachment->getLodPolicy(&lod_policy);
     BObolViewController *view_controller =
 	ged_bobol_view_controller(view_ctx);

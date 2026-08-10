@@ -738,12 +738,12 @@ be_accept(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	edsol = 0;
 
 	sedit_accept(s);		/* zeros "edsol" var */
-	mged_edit_release_promotion(s, GED_DRAW_PROMOTION_COMMIT);
+	mged_edit_scope_release(s, GED_SCENE_EDIT_COMMIT);
 
 	mmenu_set_all(s, MENU_L1, NULL);
 	mmenu_set_all(s, MENU_L2, NULL);
 
-	ged_draw_set_highlight_state(s->gedp, 0);
+	(void)ged_scene_highlights_clear(s->gedp, NULL);
 
 	mged_highlight_clear(s);
 	mged_color_soltab(s);
@@ -754,7 +754,7 @@ be_accept(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	movedir = 0;	/* No edit modes set */
 
 	oedit_accept(s);
-	mged_edit_release_promotion(s, GED_DRAW_PROMOTION_COMMIT);
+	mged_edit_scope_release(s, GED_SCENE_EDIT_COMMIT);
 
 	mmenu_set_all(s, MENU_L2, NULL);
 
@@ -808,14 +808,14 @@ be_reject(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	    mmenu_set_all(s, MENU_L2, NULL);
 
 	    sedit_reject(s);
-	    mged_edit_release_promotion(s, GED_DRAW_PROMOTION_CANCEL);
+	    mged_edit_scope_release(s, GED_SCENE_EDIT_CANCEL);
 	    break;
 
 	case ST_O_EDIT:
 	    mmenu_set_all(s, MENU_L2, NULL);
 
 	    oedit_reject(s);
-	    mged_edit_release_promotion(s, GED_DRAW_PROMOTION_CANCEL);
+	    mged_edit_scope_release(s, GED_SCENE_EDIT_CANCEL);
 	    break;
 	case ST_O_PICK:
 	    break;
@@ -833,7 +833,7 @@ be_reject(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
     mged_highlight_clear(s);		/* None selected */
 
     /* Clear illumination flags */
-    ged_draw_set_highlight_state(s->gedp, 0);
+    (void)ged_scene_highlights_clear(s->gedp, NULL);
 
     mged_color_soltab(s);
     (void)chg_state(s, s->global_editing_state, ST_VIEW, "Edit Reject");
@@ -961,8 +961,8 @@ stateChange(struct mged_state *s, int UNUSED(oldstate), int newstate)
 {
     /* Abnormal exits still retire a promotion.  Normal accept/reject release
      * it earlier with the explicit outcome; this call is idempotent. */
-    if (newstate == ST_VIEW && s->edit_promotion.active)
-	mged_edit_release_promotion(s, GED_DRAW_PROMOTION_CANCEL);
+    if (newstate == ST_VIEW && s->edit_scope.active)
+	mged_edit_scope_release(s, GED_SCENE_EDIT_CANCEL);
 
     switch (newstate) {
 	case ST_VIEW:

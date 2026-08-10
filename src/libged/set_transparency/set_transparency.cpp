@@ -66,10 +66,16 @@ ged_set_transparency_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make_value(GED_DRAW_TXN_TRANSPARENCY,
-					argv[1], transparency);
-    ged_draw_apply_transaction(gedp, &txn, NULL);
+    struct ged_scene_path_request request;
+    ged_scene_path_request_init(&request);
+    request.path = argv[1];
+    request.match = GED_SCENE_PATH_MATCH_SUBTREE;
+    if (ged_scene_opacity_set(gedp, &request, 1.0 - transparency, NULL) !=
+	GED_SCENE_OK) {
+	bu_vls_printf(gedp->ged_result_str,
+		"opacity must be between 0 and 1\n");
+	return BRLCAD_ERROR;
+    }
 
     return BRLCAD_OK;
 }

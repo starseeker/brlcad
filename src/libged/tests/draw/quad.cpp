@@ -90,10 +90,10 @@ dm_refresh(struct ged *gedp, int vnum)
     if (!draw_test_obol_progressive_drain(gedp, v, 2000, 1))
 	bu_exit(EXIT_FAILURE,
 	    "Obol progressive realization did not settle before baseline capture\n");
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    txn.view = v;
-    ged_draw_apply_transaction(gedp, &txn, NULL);
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = v;
+    (void)ged_scene_redraw(gedp, &request, NULL);
 
 }
 

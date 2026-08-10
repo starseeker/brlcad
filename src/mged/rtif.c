@@ -41,6 +41,7 @@
 
 #include "vmath.h"
 #include "raytrace.h"
+#include "ged/scene_internal.h"
 #include "ged/view.h"
 
 #include "./sedit.h"
@@ -73,7 +74,7 @@ _rtif_shape_translate_geometry(struct mged_state *s, ged_draw_shape_ref ref, con
 {
     if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref))
 	return 0;
-    return ged_draw_shape_ref_translate_geometry(s->gedp, ref, xlate);
+    return ged_scene_internal_shape_translate_geometry(s->gedp, ref, xlate);
 }
 
 static int
@@ -81,7 +82,7 @@ _rtif_shape_set_center(struct mged_state *s, ged_draw_shape_ref ref, const point
 {
     if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref))
 	return 0;
-    return ged_draw_shape_ref_set_center(s->gedp, ref, center);
+    return ged_scene_internal_shape_set_center(s->gedp, ref, center);
 }
 
 static int

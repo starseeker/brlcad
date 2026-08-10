@@ -25,9 +25,9 @@
  * layer batches and coalesces local mutations, reconciles core GED services,
  * then notifies application observers with stable post-reconcile state.
  *
- * Reconciliation delegates draw repair to the canonical ged_draw_transaction
- * API.  Callers should treat these event records as semantic database events,
- * not as draw transactions themselves.
+ * Reconciliation delegates draw repair to the semantic scene reducer.
+ * Callers should treat these records as database events, not rendering
+ * transactions.
  */
 /** @{ */
 /** @file ged/event_txn.h */
@@ -35,7 +35,6 @@
 #ifndef GED_EVENT_TXN_H
 #define GED_EVENT_TXN_H
 
-#include "common.h"
 
 #include <stddef.h>
 #include <stdint.h>

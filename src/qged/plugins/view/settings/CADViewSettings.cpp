@@ -281,8 +281,8 @@ CADViewSettings::checkbox_refresh(unsigned long long)
 	return;
     struct ged_view_context *view_ctx = ged_view_context_from_bv(bv_ctx);
 
-    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    (void)ged_draw_source_lod_policy_get(&lod_policy, view_ctx);
+    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_view_lod_policy_get(&lod_policy, view_ctx);
 
     set_ckbx(acsg_ckbx,     lod_policy.csg_enabled);
     set_ckbx(amesh_ckbx,    lod_policy.mesh_enabled);
@@ -337,13 +337,13 @@ CADViewSettings::view_refresh(unsigned long long)
 
     /* Preserve non-widget LoD policy fields and update only the settings
      * owned by this widget. */
-    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    (void)ged_draw_source_lod_policy_get(&lod_policy, view_ctx);
+    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_view_lod_policy_get(&lod_policy, view_ctx);
     lod_policy.csg_enabled = ckbx_val(acsg_ckbx);
     lod_policy.mesh_enabled = ckbx_val(amesh_ckbx);
     lod_policy.zoom_refresh =
 	lod_policy.csg_enabled || lod_policy.mesh_enabled;
-    (void)ged_draw_source_lod_policy_apply(view_ctx, &lod_policy);
+    (void)ged_view_lod_policy_apply(view_ctx, &lod_policy);
     (void)qged_framebuffer_mode_set(view_ctx, fb_mode_combo->currentIndex());
     (void)qged_faceplate_property_set(view_ctx,
 	"view.faceplate.adc.visible", ckbx_val(adc_ckbx));

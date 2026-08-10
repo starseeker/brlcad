@@ -45,13 +45,10 @@ _mged_obol_refresh(struct mged_state *s, struct ged_view_context *view_ctx)
 	    !ged_view_context_obol_endpoint_get(view_ctx))
 	return;
 
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    txn.view = view_ctx;
-    (void)ged_draw_apply_transaction(s->gedp, &txn, &result);
-    ged_draw_transaction_result_free(&result);
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = view_ctx;
+    (void)ged_scene_redraw(s->gedp, &request, NULL);
 }
 
 void

@@ -1855,13 +1855,13 @@ mged_display_var_init(struct mged_state *s, struct mged_display *target_display)
     ged_view_context_owned_add(s->gedp, view_ctx);
     ged_view_context_update_callback_set(view_ctx,
 	    mged_view_callback, (void *)view_state);
-    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    if (ged_draw_source_lod_policy_get(&lod_policy, view_ctx)) {
+    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_view_lod_policy_get(&lod_policy, view_ctx)) {
 	lod_policy.csg_enabled = 0;
 	lod_policy.zoom_refresh = 0;
 	lod_policy.point_scale = 1.0;
 	lod_policy.curve_scale = 1.0;
-	ged_draw_source_lod_policy_apply(view_ctx, &lod_policy);
+	ged_view_lod_policy_apply(view_ctx, &lod_policy);
     }
     view_state->vs_rc = 1;
     view_ring_init(s->mged_curr_display->display_view_state, (struct _view_state *)NULL);

@@ -3813,8 +3813,8 @@ to_idle_mode(struct ged *gedp,
 
     mode = tclcad_view_polygon_mode_from_view_ctx(gdvp);
 
-    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    if (ged_draw_source_lod_policy_get(&lod_policy, gdvp) &&
+    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_view_lod_policy_get(&lod_policy, gdvp) &&
 	    lod_policy.csg_enabled &&
 	    lod_policy.zoom_refresh &&
 	    mode == TCLCAD_SCALE_MODE)
@@ -4784,11 +4784,11 @@ to_new_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    if (ged_draw_source_lod_policy_get(&lod_policy, new_view_ctx)) {
+    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_view_lod_policy_get(&lod_policy, new_view_ctx)) {
 	lod_policy.point_scale = 1.0;
 	lod_policy.curve_scale = 1.0;
-	ged_draw_source_lod_policy_apply(new_view_ctx, &lod_policy);
+	ged_view_lod_policy_apply(new_view_ctx, &lod_policy);
     }
 
     /* Set default bindings */

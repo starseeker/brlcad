@@ -27,6 +27,7 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/view.h"
+#include "ged/view_feature_internal.h"
 #include "qtcad/QgGedEventBatch.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
@@ -310,7 +311,7 @@ main(int argc, char **argv)
 	rt_db_free_internal(&multi_box_intern);
 	FAIL("primitive revision test should draw its edited object");
     }
-    const uint64_t revision_before_edit = ged_draw_scene_revision(gedp);
+    const uint64_t revision_before_edit = ged_scene_revision(gedp);
     {
 	QgGedEventBatch event_batch(gedp);
 	if (rt_db_put_internal(multi_box_dp, gedp->dbip,
@@ -320,7 +321,7 @@ main(int argc, char **argv)
 	}
 	(void)ged_event_notify_object_modified(gedp, "box.s", 1, NULL);
     }
-    if (ged_draw_scene_revision(gedp) <= revision_before_edit)
+    if (ged_scene_revision(gedp) <= revision_before_edit)
 	FAIL("accepted primitive edit should advance the GED scene revision");
 
     controller->clearRenderRequest();

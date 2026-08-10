@@ -440,7 +440,8 @@ edit_com(struct mged_state *s,
 
     CHECK_DBI_NULL;
 
-    initial_blank_screen = ged_draw_has_shapes(s->gedp) ? 0 : 1;
+    initial_blank_screen = ged_scene_has_paths(s->gedp,
+	ged_view_active_ctx(s->gedp), GED_SCENE_DRAW_DEFAULT) ? 0 : 1;
 
     /* check args for "-A" (attributes) and "-o" and "-R" */
     bu_vls_strcpy(&vls, argv[0]);
@@ -614,7 +615,8 @@ edit_com(struct mged_state *s,
 
 	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
-	non_empty = ged_draw_has_shapes(s->gedp);
+	non_empty = ged_scene_has_paths(s->gedp,
+	    ged_view_active_ctx(s->gedp), GED_SCENE_DRAW_DEFAULT);
 
 	/* If we went from blank screen to non-blank, resize */
 	if (mged_variables->mv_autosize && initial_blank_screen && non_empty) {
@@ -1219,14 +1221,15 @@ f_sed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     if (argc >= 2) {
 	struct db_full_path sed_path;
 	if (db_string_to_path(&sed_path, s->dbip, argv[argc - 1]) == 0) {
-	    (void)mged_edit_promote_target(s, &sed_path,
-		GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES);
+	    (void)mged_edit_scope_acquire(s, &sed_path,
+		GED_SCENE_EDIT_ALL_DRAWN_OCCURRENCES);
 	    db_free_full_path(&sed_path);
 	}
     }
 
     /* Common part of illumination */
-    if (!ged_draw_has_shapes(s->gedp)) {
+    if (!ged_scene_has_paths(s->gedp, ged_view_active_ctx(s->gedp),
+	    GED_SCENE_DRAW_DEFAULT)) {
 	Tcl_AppendResult(interp, "no solids being displayed\n", (char *)NULL);
 	return TCL_ERROR;
     }
@@ -1711,10 +1714,10 @@ mged_zoom(struct mged_state *s, double val)
     }
 
     ret = TCL_OK;
-    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
     void *active_view = ged_view_active_ctx(s->gedp);
     if (active_view &&
-	ged_draw_source_lod_policy_get(&lod_policy, active_view) &&
+	ged_view_lod_policy_get(&lod_policy, active_view) &&
 	lod_policy.csg_enabled && lod_policy.zoom_refresh) {
 	ret = redraw_visible_objects(s);
     }

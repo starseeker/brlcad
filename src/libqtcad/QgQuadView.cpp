@@ -378,11 +378,11 @@ QgQuadView::changeToQuadFrame()
 		}
 		// Copy the LoD source policy so all quadrants use the same
 		// source-selection behavior.
-		ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-		if (ged_draw_source_lod_policy_get(&lod_policy,
+		ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+		if (ged_view_lod_policy_get(&lod_policy,
 				ged_view_context_from_bv(
 				    views[kUpperRightQuadrant]->viewContext()))) {
-			ged_draw_source_lod_policy_apply(
+			ged_view_lod_policy_apply(
 				ged_view_context_from_bv(views[i]->viewContext()),
 				&lod_policy);
 		}
@@ -444,7 +444,7 @@ QgQuadView::changeToQuadFrame()
 	for (int i = kUpperRightQuadrant + 1; i < kLowerRightQuadrant + 1; i++) {
 		struct ged_view_context *view_ctx =
 		    ged_view_context_from_bv(views[i]->viewContext());
-		ged_draw_source_lod_bounds_update(view_ctx);
+		ged_view_lod_bounds_update(view_ctx);
 	}
 	{
 	std::set<std::string> paths =

@@ -73,6 +73,8 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/event_txn.h"
+#include "ged/scene_internal.h"
+#include "ged/view_feature_internal.h"
 #include "rt/edit.h"
 #include "wdb.h"
 #include "tcl.h"
@@ -194,10 +196,10 @@ extern int ecmd_bot_pickt_multihit_clbk(int ac, const char **av, void *d, void *
 extern int ecmd_nmg_edebug_clbk(int ac, const char **av, void *d, void *d2);
 extern int ecmd_extrude_skt_name_clbk(int ac, const char **av, void *d, void *d2);
 
-/* Backend-neutral draw-frontier promotion for the current edit session. */
-struct mged_edit_promotion {
+/* Backend-neutral semantic scene scope for the current edit session. */
+struct mged_edit_scope {
     int active;
-    ged_draw_promotion_ref ref;
+    ged_scene_edit_scope_ref ref;
 };
 
 /* global application state */
@@ -231,8 +233,8 @@ struct mged_state {
     struct mged_edit_state *s_edit;
     int global_editing_state; // main global editing state (ugh)
 
-    /* Sub-object promotion (oed/sed on a sub-path of a drawn comb). */
-    struct mged_edit_promotion edit_promotion;
+    /* Independently addressable oed/sed sub-path scope. */
+    struct mged_edit_scope edit_scope;
 
     /* Non-zero when an edit or view callback has requested redraw. */
     int update_views;
@@ -319,10 +321,10 @@ extern void slewview(struct mged_state *s, vect_t view_pos);
 extern void moveHinstance(struct mged_state *s, struct directory *cdp, struct directory *dp, matp_t xlate);
 extern void moveHobj(struct mged_state *s, struct directory *dp, matp_t xlate);
 
-/* Promote an edit target to the active draw frontier and release it on edit
- * completion.  Both functions are idempotent at the MGED session boundary. */
-extern int mged_edit_promote_target(struct mged_state *s, const struct db_full_path *both, int scope);
-extern void mged_edit_release_promotion(struct mged_state *s, int outcome);
+/* Acquire an edit target scope and release it on edit completion.  Both
+ * functions are idempotent at the MGED session boundary. */
+extern int mged_edit_scope_acquire(struct mged_state *s, const struct db_full_path *both, enum ged_scene_edit_occurrence_scope occurrences);
+extern void mged_edit_scope_release(struct mged_state *s, enum ged_scene_edit_outcome outcome);
 /* Object-edit live preview: plot the edited reference solid at its edited pose
  * (model_changes applied) so oed shows interactive feedback in the Obol scene
  * until MGED is cut over to the libged edit logic.  See src/mged/edsol.c. */

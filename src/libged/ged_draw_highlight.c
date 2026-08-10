@@ -24,55 +24,10 @@
 
 #include "common.h"
 
-#include "bu/str.h"
-
 #include "ged.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
 #include "./ged_draw_private.h"
-
-struct ged_draw_highlight_path_prefix_ctx {
-    struct ged *gedp;
-    const struct db_full_path *path;
-    size_t prefix_len;
-    int highlighted;
-    int matched;
-};
-
-
-struct _highlight_by_name_ctx {
-    struct ged          *gedp;
-    const char          *name;
-    ged_draw_shape_ref   result;
-};
-
-
-struct _iflag_shape_ctx {
-    struct ged *gedp;
-    int highlighted;
-};
-
-
-static int
-_iflag_shape_record_cb(const struct ged_draw_shape_record *rec, void *ud)
-{
-    struct _iflag_shape_ctx *ctx = (struct _iflag_shape_ctx *)ud;
-    if (ctx && rec)
-	(void)ged_draw_shape_ref_set_highlighted(ctx->gedp, rec->ref,
-		ctx->highlighted);
-    return 1;
-}
-
-
-static void
-_sg_set_highlight_all(struct ged *gedp, int highlighted)
-{
-    struct _iflag_shape_ctx ctx;
-    ctx.gedp = gedp;
-    ctx.highlighted = highlighted ? 1 : 0;
-    ged_draw_foreach_shape_record(gedp, _iflag_shape_record_cb, &ctx);
-}
-
 
 /* ------------------------------------------------------------------ */
 /* highlighted draw-ref tracker                                       */
@@ -143,82 +98,6 @@ _sg_set_highlighted_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
 
 
 void
-ged_draw_set_highlight_state(struct ged *gedp, int highlighted)
-{
-    if (!gedp)
-	return;
-
-    uint64_t highlight_rev0 = ged_draw_highlight_revision(gedp);
-    int obol_changed = ged_draw_obol_highlight_state_set(gedp, highlighted);
-
-    if (!highlighted) {
-	struct ged_drawable *gdp = gedp->i ? gedp->i->ged_gdp : NULL;
-	/* Fast path: when exactly one shape is highlighted and tracked,
-	 * clear only that shape in O(1) rather than sweeping the whole tree. */
-	if (!ged_draw_shape_ref_is_null(
-		_sg_highlighted_shape_ref(gdp))) {
-	    (void)_sg_set_highlighted_shape_ref(gedp,
-		    GED_DRAW_SHAPE_REF_NULL);
-	    return;
-	}
-    }
-    _sg_set_highlight_all(gedp, highlighted);
-    if (obol_changed &&
-	    ged_draw_highlight_revision(gedp) == highlight_rev0 &&
-	    gedp->i && gedp->i->ged_gdp)
-	gedp->i->ged_gdp->gd_highlight_rev++;
-}
-
-
-static int
-_ged_draw_highlight_path_prefix_cb(const struct ged_draw_shape_record *rec,
-				   void *userdata)
-{
-    struct ged_draw_highlight_path_prefix_ctx *ctx =
-	(struct ged_draw_highlight_path_prefix_ctx *)userdata;
-    if (!ctx || !rec || !rec->fullpath ||
-	    rec->fullpath->fp_len < ctx->prefix_len)
-	return 1;
-
-    for (size_t i = 0; i < ctx->prefix_len; i++) {
-	if (DB_FULL_PATH_GET(rec->fullpath, i) !=
-		DB_FULL_PATH_GET(ctx->path, i))
-	    return 1;
-    }
-
-    if (ged_draw_shape_ref_set_highlighted(ctx->gedp, rec->ref,
-	    ctx->highlighted)) {
-	ctx->matched++;
-    }
-    return 1;
-}
-
-
-int
-ged_draw_set_highlighted_path_prefix(struct ged *gedp,
-				     const struct db_full_path *path,
-				     size_t path_pos,
-				     int highlighted)
-{
-    if (!gedp || !path || path->fp_len <= 0)
-	return 0;
-
-    struct ged_draw_highlight_path_prefix_ctx ctx;
-    ctx.gedp = gedp;
-    ctx.path = path;
-    ctx.prefix_len = path_pos + 1;
-    if (ctx.prefix_len > path->fp_len)
-	ctx.prefix_len = path->fp_len;
-    ctx.highlighted = highlighted ? 1 : 0;
-    ctx.matched = 0;
-
-    ged_draw_foreach_shape_record(gedp, _ged_draw_highlight_path_prefix_cb, &ctx);
-    ged_draw_highlighted_shape_ref_invalidate(gedp);
-    return ctx.matched;
-}
-
-
-void
 ged_draw_set_highlighted_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
 {
     if (!gedp)
@@ -248,45 +127,6 @@ ged_draw_shape_set_highlighted(struct ged *gedp, ged_draw_shape_ref ref, int hig
 }
 
 
-ged_draw_shape_ref
-ged_draw_highlighted_shape_ref(const struct ged *gedp)
-{
-    if (!gedp || !gedp->i)
-	return GED_DRAW_SHAPE_REF_NULL;
-    return _sg_highlighted_shape_ref(gedp->i->ged_gdp);
-}
-
-
-static int
-_highlight_by_name_shape_cb(const struct ged_draw_shape_record *rec, void *udata)
-{
-    struct _highlight_by_name_ctx *ctx = (struct _highlight_by_name_ctx *)udata;
-    if (!ctx || !rec || !ctx->name)
-	return 1;
-    if ((rec->leaf_name && BU_STR_EQUAL(rec->leaf_name, ctx->name)) ||
-	    (rec->display_name && BU_STR_EQUAL(rec->display_name, ctx->name))) {
-	ctx->result = rec->ref;
-	return 0;
-    }
-    return 1;
-}
-
-
-ged_draw_shape_ref
-ged_draw_highlight_shape_ref_by_name(struct ged *gedp, const char *name)
-{
-    if (!gedp || !name)
-	return GED_DRAW_SHAPE_REF_NULL;
-    struct _highlight_by_name_ctx ctx;
-    ctx.gedp = gedp;
-    ctx.name = name;
-    ctx.result = GED_DRAW_SHAPE_REF_NULL;
-    ged_draw_foreach_shape_record(gedp, _highlight_by_name_shape_cb, &ctx);
-    ged_draw_set_highlighted_shape_ref(gedp, ctx.result);
-    return ctx.result;
-}
-
-
 /**
  * Return the highlight-state revision counter.  Bumped on every transition
  * of the highlighted draw ref.
@@ -301,6 +141,15 @@ ged_draw_highlight_revision(const struct ged *gedp)
     if (!gedp || !gedp->i || !gedp->i->ged_gdp)
         return 0;
     return gedp->i->ged_gdp->gd_highlight_rev;
+}
+
+
+uint64_t
+ged_draw_highlight_revision_advance(struct ged *gedp)
+{
+    if (!gedp || !gedp->i || !gedp->i->ged_gdp)
+	return 0;
+    return ++gedp->i->ged_gdp->gd_highlight_rev;
 }
 
 

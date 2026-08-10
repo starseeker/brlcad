@@ -286,7 +286,7 @@ draw_edges(struct ged *gedp, struct rt_bot_internal *bot, int num_edges, int edg
     struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
     style.color_valid = 1;
     VSET(style.color, draw_color[0], draw_color[1], draw_color[2]);
-    (void)_ged_line_set_publish_command_scene_feature(gedp,
+    (void)_ged_view_feature_batch_publish_line_set(gedp,
 	    bu_vls_cstr(&nroot), (const point_t *)points, NULL,
 	    (size_t)num_edges * 2, &style, "bot_check", "command-result",
 	    NULL, "edge-check", 0);

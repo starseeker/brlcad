@@ -75,10 +75,10 @@ static void
 do_full_refresh(struct ged *gedp)
 {
     struct ged_view_context *v = ged_view_active_ctx(gedp);
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    txn.view = v;
-    ged_draw_apply_transaction(gedp, &txn, NULL);
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = v;
+    (void)ged_scene_redraw(gedp, &request, NULL);
 }
 
 static double
@@ -247,16 +247,20 @@ test_highlight_state(const char *datadir)
 	bu_log("FAIL: initial Obol realization did not settle for highlight test\n");
 	fail = 1;
     }
-    uint64_t highlight_rev0 = ged_draw_highlight_revision(gedp);
+    uint64_t highlight_rev0 = ged_scene_highlight_revision(gedp);
     fail += capture_screengrab_nonempty(gedp,
 	    "mged_view_state_t1_base.png", "initial highlight state");
 
-    ged_draw_set_highlight_state(gedp, 1);
+    struct ged_scene_path_request highlight_request;
+    ged_scene_path_request_init(&highlight_request);
+    highlight_request.path = "box.s";
+    highlight_request.match = GED_SCENE_PATH_MATCH_OBJECT;
+    (void)ged_scene_highlight_set(gedp, &highlight_request, 1, NULL);
     do_full_refresh(gedp);
     fail += capture_screengrab_nonempty(gedp,
 	    "mged_view_state_t1_highlight.png", "highlighted state");
 
-    uint64_t highlight_rev1 = ged_draw_highlight_revision(gedp);
+    uint64_t highlight_rev1 = ged_scene_highlight_revision(gedp);
     if (highlight_rev1 <= highlight_rev0) {
 	bu_log("FAIL: highlight revision did not advance after highlight set\n");
 	fail = 1;
@@ -277,12 +281,12 @@ test_highlight_state(const char *datadir)
 	bu_log("PASS: highlighted Obol capture visibly differs from initial capture\n");
     }
 
-    ged_draw_set_highlight_state(gedp, 0);
+    (void)ged_scene_highlights_clear(gedp, NULL);
     do_full_refresh(gedp);
     fail += capture_screengrab_nonempty(gedp,
 	    "mged_view_state_t1_clear.png", "cleared highlight state");
 
-    uint64_t highlight_rev2 = ged_draw_highlight_revision(gedp);
+    uint64_t highlight_rev2 = ged_scene_highlight_revision(gedp);
     if (highlight_rev2 <= highlight_rev1) {
 	bu_log("FAIL: highlight revision did not advance after highlight clear\n");
 	fail = 1;
@@ -486,11 +490,11 @@ test_multi_obol_dm_attachment(const char *datadir)
 		    "with their attached Obol controllers\n");
 	    fail = 1;
 	} else {
-	    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+	    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
 	    lod_policy.csg_enabled = 1;
 	    lod_policy.bot_threshold = 42;
 	    lod_policy.scale = 2.5;
-	    if (!ged_draw_source_lod_policy_apply(v1, &lod_policy)) {
+	    if (!ged_view_lod_policy_apply(v1, &lod_policy)) {
 		bu_log("FAIL: applying per-view LoD policy should succeed\n");
 		fail = 1;
 	    } else {
@@ -518,6 +522,10 @@ test_multi_obol_dm_attachment(const char *datadir)
     if (!fail && ged_exec_draw(gedp, 2, draw_av) != BRLCAD_OK) {
 	bu_log("FAIL: shared draw failed: %s\n",
 		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    if (!fail && !draw_test_obol_progressive_drain(gedp, v0, 500, 1)) {
+	bu_log("FAIL: shared progressive draw did not settle before image capture\n");
 	fail = 1;
     }
 

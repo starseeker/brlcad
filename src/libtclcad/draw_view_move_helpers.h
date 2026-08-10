@@ -35,6 +35,7 @@
 #include "vmath.h"
 
 #include "ged/draw.h"
+#include "ged/view_feature_internal.h"
 
 __BEGIN_DECLS
 

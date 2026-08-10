@@ -500,7 +500,7 @@ ged_view_feature_info_get(struct bv_view_info *view_info,
 }
 
 extern "C" GED_EXPORT int
-ged_draw_source_lod_policy_get(ged_draw_source_lod_policy *policy,
+ged_view_lod_policy_get(ged_view_lod_policy *policy,
 				     const struct ged_view_context *view_ctx)
 {
     struct ged_view_host_record *record =
@@ -520,8 +520,8 @@ ged_draw_source_lod_policy_get(ged_draw_source_lod_policy *policy,
 }
 
 extern "C" GED_EXPORT int
-ged_draw_source_lod_policy_apply(struct ged_view_context *view_ctx,
-				       const ged_draw_source_lod_policy *policy)
+ged_view_lod_policy_apply(struct ged_view_context *view_ctx,
+			  const ged_view_lod_policy *policy)
 {
     struct ged_view_host_record *record =
 	ged_view_host_record_find_global(view_ctx);
@@ -537,21 +537,21 @@ ged_draw_source_lod_policy_apply(struct ged_view_context *view_ctx,
 }
 
 extern "C" GED_EXPORT int
-ged_draw_source_lod_policy_apply_bot_threshold(
+ged_view_lod_policy_apply_bot_threshold(
 	struct ged_view_context *view_ctx,
-	const ged_draw_source_lod_policy *policy,
+	const ged_view_lod_policy *policy,
 	size_t bot_threshold)
 {
     if (!policy)
 	return 0;
 
-    ged_draw_source_lod_policy override_policy = *policy;
+    ged_view_lod_policy override_policy = *policy;
     override_policy.bot_threshold = bot_threshold;
-    return ged_draw_source_lod_policy_apply(view_ctx, &override_policy);
+    return ged_view_lod_policy_apply(view_ctx, &override_policy);
 }
 
 extern "C" GED_EXPORT int
-ged_draw_source_lod_bounds_update(struct ged_view_context *view_ctx)
+ged_view_lod_bounds_update(struct ged_view_context *view_ctx)
 {
     return view_ctx ? 1 : 0;
 }
@@ -637,7 +637,7 @@ ged_view_context_independent_scope_destroy(struct ged_view_context *view_ctx)
     (void)view_ctx;
 }
 
-extern "C" GED_EXPORT ged_draw_scene_handle
+extern "C" ged_draw_scene_handle
 ged_view_context_scene_root_ref(const struct ged_view_context *view_ctx)
 {
     struct ged_view_host_record *record =
@@ -652,7 +652,7 @@ ged_view_context_scene_root_ref(const struct ged_view_context *view_ctx)
 	    GED_DRAW_SCENE_BACKEND_OBOL);
 }
 
-extern "C" GED_EXPORT int
+extern "C" int
 ged_view_context_scene_root_ref_attach(struct ged_view_context *view_ctx,
 				       ged_draw_scene_handle root_ref)
 {

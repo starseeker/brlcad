@@ -224,15 +224,16 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    }
 	}
 
-	if (gedp && ged_draw_scene_available(gedp)) {
+	if (gedp && ged_scene_available(gedp)) {
 	    sample.insert(QStringLiteral("draw_scene_revision"),
-		QString::number(ged_draw_scene_revision(gedp)));
+		QString::number(ged_scene_revision(gedp)));
 	    if (collectStructuralDiagnostics) {
 		sample.insert(QStringLiteral("draw_shape_count"),
-		    ged_draw_shape_count(gedp));
+		    static_cast<qint64>(ged_scene_occurrence_count(gedp)));
 		struct bu_vls drawListing = BU_VLS_INIT_ZERO;
-		const size_t drawCount = ged_draw_list_paths(gedp,
-		    ged_view_active_ctx(gedp), -1, 0, &drawListing);
+		const size_t drawCount = ged_scene_paths_append(gedp,
+		    ged_view_active_ctx(gedp), GED_SCENE_DRAW_DEFAULT,
+		    GED_SCENE_PATHS_DRAW_INTENTS, &drawListing);
 		const QStringList drawPaths =
 		    QString::fromLocal8Bit(bu_vls_cstr(&drawListing))
 		    .split(QRegularExpression(QStringLiteral("[\\r\\n]+")),

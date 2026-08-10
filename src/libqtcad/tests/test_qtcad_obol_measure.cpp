@@ -21,7 +21,7 @@
 #include "bu/str.h"
 #include "ged.h"
 #include "ged/draw.h"
-#include "QgObolDrawSyncPrivate.h"
+#include "QgSceneSyncPrivate.h"
 #include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgView.h"
@@ -66,15 +66,25 @@ make_measure_db(const char *dbpath)
 static int
 apply_and_sync(struct ged *gedp,
 	QgView *view,
-	struct ged_draw_transaction *txn)
+	struct ged_view_context *view_ctx,
+	const char *path,
+	enum ged_scene_draw_mode mode)
 {
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int draw_ret = ged_draw_apply_transaction(gedp, txn, &result);
-    int changed = qg_obol_sync_ged_draw_transaction(gedp, txn, &result, view);
-    ged_draw_transaction_result_free(&result);
-
-    return draw_ret >= 0 && changed != 0;
+    if (!qg_scene_bind(gedp, view))
+	return 0;
+    struct ged_scene_draw_request request;
+    ged_scene_draw_request_init(&request);
+    request.view = view_ctx;
+    request.paths = &path;
+    request.path_count = 1;
+    request.style.draw_mode = mode;
+    request.realization.mode = GED_SCENE_REALIZE_EAGER;
+    struct ged_scene_result *result = ged_scene_result_create();
+    const enum ged_scene_status status = ged_scene_draw(gedp, &request,
+	result);
+    const int changed = ged_scene_result_changed(result);
+    ged_scene_result_destroy(result);
+    return status == GED_SCENE_OK && changed;
 }
 
 static int
@@ -218,14 +228,8 @@ main(int argc, char **argv)
     controller->clearDatabaseSources();
     controller->setViewportSize(180, 140);
 
-    struct ged_draw_appearance_settings shaded_appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
-    struct ged_draw_transaction draw_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = view_ctx;
-    draw_box.appearance = &shaded_appearance;
-    int drew_box = apply_and_sync(gedp, &view, &draw_box);
+    int drew_box = apply_and_sync(gedp, &view, view_ctx, "box.s",
+	GED_SCENE_DRAW_SHADED);
     if (!drew_box)
 	FAIL("GED shaded draw should sync box source into Obol");
 

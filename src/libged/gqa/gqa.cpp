@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <math.h>
@@ -44,9 +45,10 @@
 #include "bu/parallel.h"
 #include "bu/getopt.h"
 #include "vmath.h"
-#include "bn/mat.h"
 #include "raytrace.h"
-#include "bv/plot3.h"
+#include "bg/line_layer.h"
+#include "bg/plot3.h"
+#include "ged/draw.h"
 #include "analyze.h"
 
 #include "../ged_private.h"
@@ -55,7 +57,7 @@ struct analyze_densities *_gd_densities;
 char *_gd_densities_source;
 
 /* bu_getopt() options */
-const char *options = "A:a:de:f:g:Gn:N:p:P:qrS:s:t:U:u:vV:W:h?";
+const char *gqa_options = "A:a:de:f:g:Gn:N:p:P:qrS:s:t:U:u:vV:W:h?";
 const char *options_str = "[-A A|a|b|c|e|g|m|o|p|v|w] [-a az] [-d] [-e el] [-f densityFile] [-g spacing|upper,lower|upper-lower] [-G] [-n nhits] [-N nviews] [-p plotPrefix] [-P ncpus] [-q] [-r] [-S nsamples] [-t overlap_tol] [-U useair] [-u len_units vol_units wt_units] [-v] [-V volume_tol] [-W weight_tol]";
 
 #define ANALYSIS_VOLUMES          1
@@ -83,7 +85,6 @@ static int multiple_analyses;
 
 static double azimuth_deg;
 static double elevation_deg;
-static int azel_requested; /* set when -a and/or -e supplied */
 static char *densityFileName;
 static double gridSpacing;
 static double gridSpacingLimit;
@@ -158,19 +159,6 @@ struct cstate {
 
     vect_t u_dir;  /* direction of U vector for "current view" */
     vect_t v_dir;  /* direction of V vector for "current view" */
-
-    /* arbitrary azimuth/elevation view support.  When use_azel is nonzero (set
-     * only when -a and/or -e were supplied on the command line), gqa shoots a
-     * single oblique view whose ray direction (azel_dir) and grid basis
-     * (azel_u, azel_v) are derived from a bn_mat_ae() azimuth/elevation
-     * rotation instead of the default axis-aligned scheme.  All three are unit
-     * vectors.
-     */
-    int use_azel;
-    vect_t azel_dir; /* ray/invariant direction for the oblique view */
-    vect_t azel_u;   /* U (grid column) basis vector for the oblique view */
-    vect_t azel_v;   /* V (grid row) basis vector for the oblique view */
-
     struct rt_i *rtip;
     long steps[3]; /* this is per-dimension, not per-view */
     vect_t span;   /* How much space does the geometry span in each of X, Y, Z directions */
@@ -184,10 +172,374 @@ struct cstate {
 };
 
 
+enum ged_gqa_result_family {
+    GQA_RESULT_OVERLAPS = 0,
+    GQA_RESULT_GAPS,
+    GQA_RESULT_ADJ_AIR,
+    GQA_RESULT_EXP_AIR,
+    GQA_RESULT_VOLUME,
+    GQA_RESULT_COUNT
+};
+
 struct ged_gqa_plot {
-    struct bv_vlblock *vbp;
-    struct bu_list *vhead;
+    struct bg_line_layer_builder *builder[GQA_RESULT_COUNT];
 } ged_gqa_plot;
+
+static const char *
+ged_gqa_result_name(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return "gqa::overlaps";
+	case GQA_RESULT_GAPS:
+	    return "gqa::gaps";
+	case GQA_RESULT_ADJ_AIR:
+	    return "gqa::adjacent-air";
+	case GQA_RESULT_EXP_AIR:
+	    return "gqa::exposed-air";
+	case GQA_RESULT_VOLUME:
+	    return "gqa::volume-samples";
+	default:
+	    return NULL;
+    }
+}
+
+static const char *
+ged_gqa_result_kind(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return "overlap";
+	case GQA_RESULT_GAPS:
+	    return "gap";
+	case GQA_RESULT_ADJ_AIR:
+	    return "adjacent-air";
+	case GQA_RESULT_EXP_AIR:
+	    return "exposed-air";
+	case GQA_RESULT_VOLUME:
+	    return "volume-sample";
+	default:
+	    return NULL;
+    }
+}
+
+static const char *
+ged_gqa_result_schema(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return "brlcad.gqa.overlap.v1";
+	case GQA_RESULT_GAPS:
+	    return "brlcad.gqa.gap.v1";
+	case GQA_RESULT_ADJ_AIR:
+	    return "brlcad.gqa.adjacent-air.v1";
+	case GQA_RESULT_EXP_AIR:
+	    return "brlcad.gqa.exposed-air.v1";
+	case GQA_RESULT_VOLUME:
+	    return "brlcad.gqa.volume-sample.v1";
+	default:
+	    return NULL;
+    }
+}
+
+static const char *
+ged_gqa_result_severity(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return "error";
+	case GQA_RESULT_GAPS:
+	case GQA_RESULT_ADJ_AIR:
+	case GQA_RESULT_EXP_AIR:
+	    return "warning";
+	case GQA_RESULT_VOLUME:
+	    return "info";
+	default:
+	    return "unknown";
+    }
+}
+
+static int *
+ged_gqa_result_color(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return overlap_color;
+	case GQA_RESULT_GAPS:
+	    return gap_color;
+	case GQA_RESULT_ADJ_AIR:
+	    return adjAir_color;
+	case GQA_RESULT_EXP_AIR:
+	    return expAir_color;
+	case GQA_RESULT_VOLUME:
+	    return adjAir_color;
+	default:
+	    return NULL;
+    }
+}
+
+static int
+ged_gqa_result_requested(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return (analysis_flags & ANALYSIS_PLOT_OVERLAPS) ? 1 : 0;
+	case GQA_RESULT_GAPS:
+	    return (analysis_flags & ANALYSIS_GAPS) ? 1 : 0;
+	case GQA_RESULT_ADJ_AIR:
+	    return (analysis_flags & ANALYSIS_ADJ_AIR) ? 1 : 0;
+	case GQA_RESULT_EXP_AIR:
+	    return (analysis_flags & ANALYSIS_EXP_AIR) ? 1 : 0;
+	case GQA_RESULT_VOLUME:
+	    return ((analysis_flags & ANALYSIS_VOLUMES) && plot_prefix) ? 1 : 0;
+	default:
+	    return 0;
+    }
+}
+
+static int
+ged_gqa_result_visuals_requested(void)
+{
+    int i;
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (ged_gqa_result_requested((enum ged_gqa_result_family)i))
+	    return 1;
+    }
+    return 0;
+}
+
+static int
+ged_gqa_plot_create(void)
+{
+    int i;
+    memset(&ged_gqa_plot, 0, sizeof(ged_gqa_plot));
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (!ged_gqa_result_requested((enum ged_gqa_result_family)i))
+	    continue;
+	ged_gqa_plot.builder[i] = bg_line_layer_builder_create();
+	if (!ged_gqa_plot.builder[i]) {
+	    int j;
+	    for (j = 0; j < i; j++) {
+		if (ged_gqa_plot.builder[j])
+		    bg_line_layer_builder_free(ged_gqa_plot.builder[j]);
+	    }
+	    memset(&ged_gqa_plot, 0, sizeof(ged_gqa_plot));
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+static int
+ged_gqa_plot_append_rgb(enum ged_gqa_result_family family, const int *rgb,
+	const point_t a, const point_t b)
+{
+    if (family < 0 || family >= GQA_RESULT_COUNT ||
+	    !ged_gqa_plot.builder[family] || !rgb)
+	return 0;
+
+    if (!bg_line_layer_builder_add(ged_gqa_plot.builder[family],
+		rgb[0], rgb[1], rgb[2], a, BG_GEOMETRY_LINE_MOVE))
+	return 0;
+    return bg_line_layer_builder_add(ged_gqa_plot.builder[family],
+	    rgb[0], rgb[1], rgb[2], b, BG_GEOMETRY_LINE_DRAW);
+}
+
+static int
+ged_gqa_plot_append(enum ged_gqa_result_family family, const point_t a,
+	const point_t b)
+{
+    return ged_gqa_plot_append_rgb(family, ged_gqa_result_color(family),
+	    a, b);
+}
+
+static void
+ged_gqa_plot_free(void)
+{
+    int i;
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (ged_gqa_plot.builder[i])
+	    bg_line_layer_builder_free(ged_gqa_plot.builder[i]);
+    }
+    memset(&ged_gqa_plot, 0, sizeof(ged_gqa_plot));
+}
+
+static int
+gqa_publish_result_fallback(struct ged *gedp,
+	struct ged_view_context *active_view,
+	enum ged_gqa_result_family family)
+{
+    const char *name = ged_gqa_result_name(family);
+    struct bg_line_layer_builder *builder =
+	(family >= 0 && family < GQA_RESULT_COUNT) ?
+	ged_gqa_plot.builder[family] : NULL;
+
+    if (!gedp || !name || !builder)
+	return 0;
+
+    int handled = ged_diagnostic_line_layer_publish(gedp, name, builder);
+    if (!handled && active_view) {
+	handled = ged_annotation_diagnostic_line_layer_builder_replace(
+		active_view, name, builder);
+    }
+    return handled;
+}
+
+static int
+gqa_publish_result_metadata(struct ged_view_feature_batch *scene,
+	const char *name,
+	enum ged_gqa_result_family family,
+	const struct bg_line_layer_builder *builder)
+{
+    if (!scene || !name || !builder)
+	return 0;
+
+    char layer_count[64] = {0};
+    char point_count[64] = {0};
+    snprintf(layer_count, sizeof(layer_count), "%zu",
+	    bg_line_layer_builder_layer_count(builder));
+    snprintf(point_count, sizeof(point_count), "%zu",
+	    bg_line_layer_builder_point_count(builder));
+    struct ged_view_feature_metadata metadata[8] = {
+	{"result.feature", name},
+	{"result.format", "line-layer-builder"},
+	{"result.layer_count", layer_count},
+	{"result.point_count", point_count},
+	{"result.owner", "gqa"},
+	{"result.kind", ged_gqa_result_kind(family)},
+	{"result.schema", ged_gqa_result_schema(family)},
+	{"result.severity", ged_gqa_result_severity(family)}
+    };
+    return ged_view_feature_batch_metadata_replace(scene, name,
+	    metadata, 8);
+}
+
+static int
+gqa_publish_result_primitive_metadata(struct ged_view_feature_batch *scene,
+	const char *name,
+	enum ged_gqa_result_family family,
+	const struct bg_line_layer_builder *builder)
+{
+    if (!scene || !name || !builder)
+	return 0;
+
+    int primitive = 0;
+    const size_t layer_count = bg_line_layer_builder_layer_count(builder);
+    for (size_t i = 0; i < layer_count; i++) {
+	const struct bg_line_layer *layer =
+	    bg_line_layer_builder_layer_at(builder, i);
+	if (!layer)
+	    continue;
+	const point_t *points = bg_line_layer_points(layer);
+	const int *commands = bg_line_layer_commands(layer);
+	const size_t point_count = bg_line_layer_point_count(layer);
+	if (!points || !commands)
+	    continue;
+	point_t previous = VINIT_ZERO;
+	int have_previous = 0;
+	for (size_t j = 0; j < point_count; j++) {
+	    if (commands[j] == BG_GEOMETRY_LINE_DRAW && have_previous) {
+		char primitive_buf[64] = {0};
+		char start[192] = {0};
+		char end[192] = {0};
+		snprintf(primitive_buf, sizeof(primitive_buf), "%d", primitive);
+		snprintf(start, sizeof(start), "%.17g %.17g %.17g",
+		    V3ARGS(previous));
+		snprintf(end, sizeof(end), "%.17g %.17g %.17g",
+		    V3ARGS(points[j]));
+		struct ged_view_feature_metadata metadata[7] = {
+		    {"result.schema", ged_gqa_result_schema(family)},
+		    {"result.primitive", primitive_buf},
+		    {"result.primitive.kind", ged_gqa_result_kind(family)},
+		    {"result.severity", ged_gqa_result_severity(family)},
+		    {"segment.start_mm", start},
+		    {"segment.end_mm", end},
+		    {"result.units", "mm"}
+		};
+		if (!ged_view_feature_batch_primitive_metadata_replace(
+			scene, name, primitive, metadata, 7))
+		    return 0;
+		primitive++;
+	    }
+	    if (commands[j] == BG_GEOMETRY_LINE_MOVE ||
+		commands[j] == BG_GEOMETRY_LINE_DRAW) {
+		VMOVE(previous, points[j]);
+		have_previous = 1;
+	    }
+	}
+    }
+
+    return 1;
+}
+
+static int
+gqa_publish_result_visuals(struct ged *gedp,
+	struct ged_view_context *active_view)
+{
+    int i;
+    int have_builder = 0;
+
+    if (!gedp)
+	return 0;
+
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (ged_gqa_plot.builder[i]) {
+	    have_builder = 1;
+	    break;
+	}
+    }
+    if (!have_builder)
+	return 0;
+
+    if (active_view) {
+	struct ged_view_feature_batch_desc desc =
+	    GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	desc.owner_id = "gqa";
+	desc.owner_role = "command-result";
+	struct ged_view_feature_batch *scene =
+	    ged_view_feature_batch_begin(active_view, &desc);
+	if (scene) {
+	    struct ged_view_feature_style style =
+		GED_VIEW_FEATURE_STYLE_INIT;
+	    style.visible = 1;
+	    style.selectable = 1;
+	    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+		const char *name =
+		    ged_gqa_result_name((enum ged_gqa_result_family)i);
+		if (name)
+		    (void)ged_view_feature_batch_remove_prefix(
+			    scene, name);
+	    }
+	    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+		const char *name =
+		    ged_gqa_result_name((enum ged_gqa_result_family)i);
+		if (!name || !ged_gqa_plot.builder[i])
+		    continue;
+		if (!ged_view_feature_batch_line_layer_builder_replace(
+			scene, name, ged_gqa_plot.builder[i], &style) ||
+			!gqa_publish_result_metadata(scene, name,
+			    (enum ged_gqa_result_family)i,
+			    ged_gqa_plot.builder[i]) ||
+			!gqa_publish_result_primitive_metadata(scene, name,
+			    (enum ged_gqa_result_family)i,
+			    ged_gqa_plot.builder[i])) {
+		    ged_view_feature_batch_abort(scene);
+		    return 0;
+		}
+	    }
+	    int ret = ged_view_feature_batch_commit(scene);
+	    return ret ? 1 : 0;
+	}
+    }
+
+    int handled = 0;
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (ged_gqa_plot.builder[i])
+	    handled |= gqa_publish_result_fallback(gedp, active_view,
+		    (enum ged_gqa_result_family)i);
+    }
+    return handled;
+}
 
 /* summary data structure for objects specified on command line */
 static struct per_obj_data {
@@ -286,6 +638,83 @@ static struct region_pair overlapList = {
     (double)0.0,
     {0.0, 0.0, 0.0, }
 };
+
+static int
+gqa_publish_overlap_label(struct ged *gedp,
+	struct ged_view_context *active_view)
+{
+    if (!gedp)
+	return 0;
+
+    size_t pair_count = 0;
+    unsigned long sample_count = 0;
+    struct region_pair *rp = NULL;
+    for (BU_LIST_FOR (rp, region_pair, &(overlapList.l))) {
+	pair_count++;
+	sample_count += rp->count;
+    }
+
+    struct bu_vls text = BU_VLS_INIT_ZERO;
+    bu_vls_printf(&text, "gqa overlaps: %lu samples, %zu pairs",
+	    sample_count, pair_count);
+
+    struct ged_diagnostic_hud_label label = GED_DIAGNOSTIC_HUD_LABEL_INIT;
+    label.label_id = "gqa::overlaps::summary";
+    label.text = bu_vls_cstr(&text);
+    label.position[0] = 8.0;
+    label.position[1] = 58.0;
+    label.color[0] = 255;
+    label.color[1] = 255;
+    label.color[2] = 0;
+    label.font_size = 12.0;
+    label.source_id = (uint32_t)pair_count;
+
+    if (active_view) {
+	struct ged_view_feature_batch_desc desc =
+	    GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	desc.owner_id = "gqa";
+	desc.owner_role = "command-result";
+	struct ged_view_feature_batch *scene =
+	    ged_view_feature_batch_begin(active_view, &desc);
+	if (scene) {
+	    const int published =
+		ged_view_feature_batch_hud_label_replace(scene,
+			label.label_id, &label);
+	    char pairs[64] = {0};
+	    char samples[64] = {0};
+	    snprintf(pairs, sizeof(pairs), "%zu", pair_count);
+	    snprintf(samples, sizeof(samples), "%lu", sample_count);
+	    struct ged_view_feature_metadata metadata[7] = {
+		{"result.feature", label.label_id},
+		{"result.owner", "gqa"},
+		{"result.kind", "overlap-summary"},
+		{"result.pair_count", pairs},
+		{"result.sample_count", samples},
+		{"result.schema", "brlcad.gqa.overlap-summary.v1"},
+		{"result.severity", sample_count ? "error" : "info"}
+	    };
+	    const int metadata_published = published ?
+		ged_view_feature_batch_metadata_replace(scene,
+			label.label_id, metadata, 7) : 0;
+	    if (published && metadata_published &&
+		    ged_view_feature_batch_commit(scene)) {
+		bu_vls_free(&text);
+		return 1;
+	    }
+	    if (!published || !metadata_published)
+		ged_view_feature_batch_abort(scene);
+	    bu_vls_free(&text);
+	    return 0;
+	}
+    }
+
+    int ret = 0;
+    if (ged_diagnostic_hud_label_handler_available(gedp))
+	ret = ged_diagnostic_hud_label_publish(gedp, &label);
+
+    bu_vls_free(&text);
+    return ret;
+}
 
 
 /**
@@ -487,7 +916,7 @@ parse_args(struct ged *gedp, int ac, char *av[])
     bu_optind = 1;
 
     /* get all the option flags from the command line */
-    while ((c=bu_getopt(ac, av, options)) != -1) {
+    while ((c=bu_getopt(ac, av, gqa_options)) != -1) {
 	switch (c) {
 	    case 'A':
 		{
@@ -584,20 +1013,18 @@ parse_args(struct ged *gedp, int ac, char *av[])
 		    break;
 		}
 	    case 'a':
+		bu_vls_printf(gedp->ged_result_str, "azimuth not implemented\n");
 		if (bn_decode_angle(&azimuth_deg,bu_optarg) == 0) {
 		    bu_vls_printf(gedp->ged_result_str, "error parsing azimuth \"%s\"\n", bu_optarg);
 		    return -1;
 		}
-		/* -a is honored; flag that an oblique az/el view was requested */
-		azel_requested = 1;
 		break;
 	    case 'e':
+		bu_vls_printf(gedp->ged_result_str, "elevation not implemented\n");
 		if (bn_decode_angle(&elevation_deg,bu_optarg) == 0) {
 		    bu_vls_printf(gedp->ged_result_str, "error parsing elevation \"%s\"\n", bu_optarg);
 		    return -1;
 		}
-		/* -e is honored; flag that an oblique az/el view was requested */
-		azel_requested = 1;
 		break;
 	    case 'd': debug = 1; break;
 
@@ -825,8 +1252,7 @@ _gqa_overlap(struct application *ap,
 
     if (analysis_flags & ANALYSIS_PLOT_OVERLAPS) {
 	bu_semaphore_acquire(state->sem_worker);
-	BV_ADD_VLIST(ged_gqa_plot.vbp->free_vlist_hd, ged_gqa_plot.vhead, ihit, BV_VLIST_LINE_MOVE);
-	BV_ADD_VLIST(ged_gqa_plot.vbp->free_vlist_hd, ged_gqa_plot.vhead, ohit, BV_VLIST_LINE_DRAW);
+	(void)ged_gqa_plot_append(GQA_RESULT_OVERLAPS, ihit, ohit);
 	bu_semaphore_release(state->sem_worker);
     }
 
@@ -899,6 +1325,10 @@ void _gqa_exposed_air(struct application *ap,
 	pdv_3line(plot_expair, in_pt, out_pt);
 	bu_semaphore_release(state->sem_plot);
     }
+
+    bu_semaphore_acquire(state->sem_worker);
+    (void)ged_gqa_plot_append(GQA_RESULT_EXP_AIR, in_pt, out_pt);
+    bu_semaphore_release(state->sem_worker);
 }
 
 
@@ -1010,6 +1440,13 @@ _gqa_hit(struct application *ap, struct partition *PartHeadp, struct seg *segs)
 			pl_color(plot_gaps, V3ARGS(gap_color));
 			pdv_3line(plot_gaps, pt, gapEnd);
 			bu_semaphore_release(state->sem_plot);
+		    }
+		    {
+			vect_t gapEnd;
+			VJOIN1(gapEnd, pt, -gap_dist, ap->a_ray.r_dir);
+			bu_semaphore_acquire(state->sem_worker);
+			(void)ged_gqa_plot_append(GQA_RESULT_GAPS, pt, gapEnd);
+			bu_semaphore_release(state->sem_worker);
 		    }
 		}
 	    }
@@ -1192,18 +1629,20 @@ _gqa_hit(struct application *ap, struct partition *PartHeadp, struct seg *segs)
 		bu_semaphore_release(state->sem_worker);
 	    }
 
-	    if (plot_volume) {
+	    if (plot_volume || ged_gqa_plot.builder[GQA_RESULT_VOLUME]) {
 		VJOIN1(opt, ap->a_ray.r_pt, pp->pt_outhit->hit_dist, ap->a_ray.r_dir);
 
-		bu_semaphore_acquire(state->sem_plot);
-		if (ap->a_user & 1) {
-		    pl_color(plot_volume, V3ARGS(gap_color));
-		} else {
-		    pl_color(plot_volume, V3ARGS(adjAir_color));
+		const int *rgb = (ap->a_user & 1) ? gap_color : adjAir_color;
+		if (plot_volume) {
+		    bu_semaphore_acquire(state->sem_plot);
+		    pl_color(plot_volume, V3ARGS(rgb));
+		    pdv_3line(plot_volume, pt, opt);
+		    bu_semaphore_release(state->sem_plot);
 		}
 
-		pdv_3line(plot_volume, pt, opt);
-		bu_semaphore_release(state->sem_plot);
+		bu_semaphore_acquire(state->sem_worker);
+		(void)ged_gqa_plot_append_rgb(GQA_RESULT_VOLUME, rgb, pt, opt);
+		bu_semaphore_release(state->sem_worker);
 	    }
 	}
 
@@ -1223,10 +1662,16 @@ _gqa_hit(struct application *ap, struct partition *PartHeadp, struct seg *segs)
 		d *= 0.25;
 		VJOIN1(aapt, pt, d, ap->a_ray.r_dir);
 
-		bu_semaphore_acquire(state->sem_plot);
-		pl_color(plot_adjair, V3ARGS(adjAir_color));
-		pdv_3line(plot_adjair, pt, aapt);
-		bu_semaphore_release(state->sem_plot);
+		if (plot_adjair) {
+		    bu_semaphore_acquire(state->sem_plot);
+		    pl_color(plot_adjair, V3ARGS(adjAir_color));
+		    pdv_3line(plot_adjair, pt, aapt);
+		    bu_semaphore_release(state->sem_plot);
+		}
+
+		bu_semaphore_acquire(state->sem_worker);
+		(void)ged_gqa_plot_append(GQA_RESULT_ADJ_AIR, pt, aapt);
+		bu_semaphore_release(state->sem_worker);
 	    }
 	}
 
@@ -1302,7 +1747,6 @@ plane_worker(int cpu, void *ptr)
     struct cstate *state = (struct cstate *)ptr;
     unsigned long shot_cnt;
     struct ged *gedp = state->gedp;
-    point_t azel_origin = VINIT_ZERO; /* back-plane corner for oblique grid */
 
     if (aborted)
 	return;
@@ -1317,44 +1761,9 @@ plane_worker(int cpu, void *ptr)
     ap.A_LENDEN = 0.0; /* really the cumulative length*density for weight computation*/
     ap.A_LEN = 0.0;    /* really the cumulative length for volume computation */
 
-    if (state->use_azel) {
-	/* fire along the oblique az/el direction */
-	VMOVE(ap.a_ray.r_dir, state->azel_dir);
-
-	/* Grid origin: start at the model bounding-box center and back
-	 * off along -azel_dir by the full bounding-box diagonal so the
-	 * ray start plane is guaranteed to be clear of the geometry.
-	 * The grid is then laid out from a corner (center minus half
-	 * the u/v extent) in the azel_u/azel_v plane.  Loop bounds reuse
-	 * steps[u_axis]/steps[v_axis], a conservative superset of the
-	 * oblique footprint; rays that miss are handled by _gqa_miss.
-	 */
-	{
-	    point_t bb_center;
-	    vect_t diag, backoff;
-	    fastf_t diag_len;
-	    fastf_t u_half, v_half;
-
-	    VADD2SCALE(bb_center, ap.a_rt_i->mdl_min, ap.a_rt_i->mdl_max, 0.5);
-	    VSUB2(diag, ap.a_rt_i->mdl_max, ap.a_rt_i->mdl_min);
-	    diag_len = MAGNITUDE(diag);
-
-	    VSCALE(backoff, state->azel_dir, -diag_len);
-
-	    u_half = 0.5 * (state->steps[state->u_axis]) * gridSpacing;
-	    v_half = 0.5 * (state->steps[state->v_axis]) * gridSpacing;
-
-	    VMOVE(azel_origin, bb_center);
-	    VADD2(azel_origin, azel_origin, backoff);
-	    VJOIN2(azel_origin, azel_origin,
-		   -u_half, state->azel_u,
-		   -v_half, state->azel_v);
-	}
-    } else {
-	/* gross hack */
-	ap.a_ray.r_dir[state->u_axis] = ap.a_ray.r_dir[state->v_axis] = 0.0;
-	ap.a_ray.r_dir[state->i_axis] = 1.0;
-    }
+    /* gross hack */
+    ap.a_ray.r_dir[state->u_axis] = ap.a_ray.r_dir[state->v_axis] = 0.0;
+    ap.a_ray.r_dir[state->i_axis] = 1.0;
 
     ap.A_STATE = ptr; /* really copying the state ptr to the a_uptr */
 
@@ -1378,16 +1787,9 @@ plane_worker(int cpu, void *ptr)
 	     * numbered row in a grid refinement
 	     */
 	    for (u=1; u < state->steps[state->u_axis]; u++) {
-		if (state->use_azel) {
-		    /* oblique grid point in the azel_u/azel_v plane */
-		    VJOIN2(ap.a_ray.r_pt, azel_origin,
-			   u*gridSpacing, state->azel_u,
-			   v_coord, state->azel_v);
-		} else {
-		    ap.a_ray.r_pt[state->u_axis] = ap.a_rt_i->mdl_min[state->u_axis] + u*gridSpacing;
-		    ap.a_ray.r_pt[state->v_axis] = ap.a_rt_i->mdl_min[state->v_axis] + v_coord;
-		    ap.a_ray.r_pt[state->i_axis] = ap.a_rt_i->mdl_min[state->i_axis];
-		}
+		ap.a_ray.r_pt[state->u_axis] = ap.a_rt_i->mdl_min[state->u_axis] + u*gridSpacing;
+		ap.a_ray.r_pt[state->v_axis] = ap.a_rt_i->mdl_min[state->v_axis] + v_coord;
+		ap.a_ray.r_pt[state->i_axis] = ap.a_rt_i->mdl_min[state->i_axis];
 
 		if (debug) {
 		    bu_semaphore_acquire(state->sem_worker);
@@ -1408,16 +1810,9 @@ plane_worker(int cpu, void *ptr)
 	     * them have been computed in a previous iteration.
 	     */
 	    for (u=1; u < state->steps[state->u_axis]; u+=2) {
-		if (state->use_azel) {
-		    /* oblique grid point in the azel_u/azel_v plane */
-		    VJOIN2(ap.a_ray.r_pt, azel_origin,
-			   u*gridSpacing, state->azel_u,
-			   v_coord, state->azel_v);
-		} else {
-		    ap.a_ray.r_pt[state->u_axis] = ap.a_rt_i->mdl_min[state->u_axis] + u*gridSpacing;
-		    ap.a_ray.r_pt[state->v_axis] = ap.a_rt_i->mdl_min[state->v_axis] + v_coord;
-		    ap.a_ray.r_pt[state->i_axis] = ap.a_rt_i->mdl_min[state->i_axis];
-		}
+		ap.a_ray.r_pt[state->u_axis] = ap.a_rt_i->mdl_min[state->u_axis] + u*gridSpacing;
+		ap.a_ray.r_pt[state->v_axis] = ap.a_rt_i->mdl_min[state->v_axis] + v_coord;
+		ap.a_ray.r_pt[state->i_axis] = ap.a_rt_i->mdl_min[state->i_axis];
 
 		if (debug) {
 		    bu_semaphore_acquire(state->sem_worker);
@@ -2616,7 +3011,7 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
     struct region *regp;
     static const char *usage = "object [object ...]";
     struct resource resp[MAX_PSW];	/* memory resources for multi-cpu processing */
-    struct bu_list *vlfree = &rt_vlfree;
+    int result_visuals_enabled = 0;
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
@@ -2636,7 +3031,6 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
     multiple_analyses = 1;
     azimuth_deg = 0.0;
     elevation_deg = 0.0;
-    azel_requested = 0;
     densityFileName = (char *)0;
 
     /* FIXME: this is completely arbitrary, should probably be based
@@ -2663,7 +3057,6 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
     use_air = 1;
     num_objects = 0;
     num_views = 3;
-    state.use_azel = 0;
     verbose = 0;
     quiet_missed_report = 0;
     plot_prefix = NULL;
@@ -2683,41 +3076,17 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    /* If the user supplied -a and/or -e, shoot a single oblique view whose
-     * direction and grid basis come from an azimuth/elevation rotation, rather
-     * than the default 3 axis-aligned views.  bn_mat_ae() builds a rotation
-     * where azimuth is about +Z and elevation lifts from the XY plane (azimuth
-     * +X, elevation +Z, degrees).  We view INTO the model, so the
-     * ray/invariant direction is the -X column of the ae matrix (the direction
-     * the viewer looks along); azel_u/azel_v are the +Y and +Z columns and
-     * span the grid plane.  All three are unitized.
-     */
-    if (azel_requested) {
-	mat_t ae_rot;
-	vect_t view_x, view_y, view_z;
-
-	bn_mat_ae(ae_rot, azimuth_deg, elevation_deg);
-
-	/* columns of the rotation: image of the world +X, +Y, +Z axes */
-	VSET(view_x, ae_rot[0], ae_rot[4], ae_rot[8]);
-	VSET(view_y, ae_rot[1], ae_rot[5], ae_rot[9]);
-	VSET(view_z, ae_rot[2], ae_rot[6], ae_rot[10]);
-
-	/* ray travels INTO the geometry along -view_x */
-	VREVERSE(state.azel_dir, view_x);
-	VMOVE(state.azel_u, view_y);
-	VMOVE(state.azel_v, view_z);
-	VUNITIZE(state.azel_dir);
-	VUNITIZE(state.azel_u);
-	VUNITIZE(state.azel_v);
-
-	state.use_azel = 1;
-	num_views = 1;
-    }
-
-    if (analysis_flags & ANALYSIS_PLOT_OVERLAPS) {
-	ged_gqa_plot.vbp = bv_vlblock_init(vlfree, 32);
-	ged_gqa_plot.vhead = bv_vlblock_find(ged_gqa_plot.vbp, 0xFF, 0xFF, 0x00);
+    struct ged_view_context *active_view = ged_view_active_ctx(gedp);
+    result_visuals_enabled = ged_gqa_result_visuals_requested() &&
+	(active_view || ged_diagnostic_line_layer_handler_available(gedp));
+    if (ged_gqa_result_visuals_requested()) {
+	if (result_visuals_enabled) {
+	    if (!ged_gqa_plot_create())
+		result_visuals_enabled = 0;
+	} else if (analysis_flags & ANALYSIS_PLOT_OVERLAPS) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "overlap overlay requested, but no view is available\n");
+	}
     }
 
     rtip = rt_i_create(gedp->dbip);
@@ -2831,42 +3200,22 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
 	    if (verbose)
 		bu_vls_printf(gedp->ged_result_str, "  view %d\n", view);
 
-	    if (state.use_azel) {
-		/* Single oblique az/el view.  The axis-index scheme is
-		 * retained only so the shared bookkeeping (state.area[],
-		 * state.steps[], and the _gqa_hit switch) still has valid
-		 * indices; the actual ray direction and grid layout come from
-		 * state.azel_* in plane_worker.  Use a fixed default basis
-		 * (invariant Z, U along X, V along Y).  Area/mass figures for
-		 * the oblique view are approximate in this release (documented
-		 * limitation).
-		 */
-		state.i_axis = 2;
-		state.curr_view = 0;
-		state.u_axis = 0;
-		state.v_axis = 1;
+	    /* gross hack.  By assuming we have <= 3 views, we can let
+	     * the view # indicate a coordinate axis.  Note this is
+	     * used as an index into state.area[]
+	     */
+	    state.i_axis = state.curr_view = view;
+	    state.u_axis = (state.curr_view+1) % 3;
+	    state.v_axis = (state.curr_view+2) % 3;
 
-		VMOVE(state.u_dir, state.azel_u);
-		VMOVE(state.v_dir, state.azel_v);
-		state.v = 1;
-	    } else {
-		/* gross hack.  By assuming we have <= 3 views, we can let
-		 * the view # indicate a coordinate axis.  Note this is
-		 * used as an index into state.area[]
-		 */
-		state.i_axis = state.curr_view = view;
-		state.u_axis = (state.curr_view+1) % 3;
-		state.v_axis = (state.curr_view+2) % 3;
+	    state.u_dir[state.u_axis] = 1;
+	    state.u_dir[state.v_axis] = 0;
+	    state.u_dir[state.i_axis] = 0;
 
-		state.u_dir[state.u_axis] = 1;
-		state.u_dir[state.v_axis] = 0;
-		state.u_dir[state.i_axis] = 0;
-
-		state.v_dir[state.u_axis] = 0;
-		state.v_dir[state.v_axis] = 1;
-		state.v_dir[state.i_axis] = 0;
-		state.v = 1;
-	    }
+	    state.v_dir[state.u_axis] = 0;
+	    state.v_dir[state.v_axis] = 1;
+	    state.v_dir[state.i_axis] = 0;
+	    state.v = 1;
 
 	    bu_parallel(plane_worker, ncpu, (void *)&state);
 
@@ -2896,19 +3245,16 @@ aborted:
     if (!aborted) {
 	summary_reports(gedp, &state);
 
-	if (analysis_flags & ANALYSIS_PLOT_OVERLAPS) {
-	    if (gedp->new_cmd_forms) {
-		struct bview *view = gedp->ged_gvp;
-		bv_vlblock_obj(ged_gqa_plot.vbp, view, "gqa::overlaps");
-	    } else {
-		_ged_cvt_vlblock_to_solids(gedp, ged_gqa_plot.vbp, "OVERLAPS", 0);
-	    }
+	if (result_visuals_enabled) {
+	    (void)gqa_publish_result_visuals(gedp, active_view);
 	}
+	if (analysis_flags & ANALYSIS_PLOT_OVERLAPS)
+	    (void)gqa_publish_overlap_label(gedp, active_view);
     } else
 	aborted = 0; /* reset flag */
 
-    if (analysis_flags & ANALYSIS_PLOT_OVERLAPS)
-	bv_vlblock_free(ged_gqa_plot.vbp);
+    if (result_visuals_enabled)
+	ged_gqa_plot_free();
 
     /* Clear out the lists */
     while (BU_LIST_WHILE (rp, region_pair, &overlapList.l)) {

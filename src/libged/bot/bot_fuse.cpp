@@ -167,7 +167,7 @@ show_dangling_edges(struct ged *gedp, const uint32_t *magic_p, const char *name,
 	struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
 	style.color_valid = 1;
 	VSET(style.color, 255, 255, 0);
-	(void)_ged_line_set_publish_command_scene_feature(gedp,
+	(void)_ged_view_feature_batch_publish_line_set(gedp,
 		bu_vls_cstr(&nroot), (const point_t *)lines.points, NULL,
 		lines.count, &style, "bot_fuse", "command-result", NULL,
 		"open-edge", 0);

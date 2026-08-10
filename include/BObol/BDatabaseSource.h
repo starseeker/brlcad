@@ -75,6 +75,13 @@ enum BObolSceneLightKind {
     BOBOL_SCENE_LIGHT_DIRECTIONAL = 2
 };
 
+/** Explicit semantic path matching for compact occurrence updates. */
+enum BObolCompactPathMatch {
+    BOBOL_COMPACT_PATH_EXACT = 0,
+    BOBOL_COMPACT_PATH_SUBTREE,
+    BOBOL_COMPACT_PATH_OBJECT
+};
+
 /** A light source derived from a database region whose optical shader is
  * "light".  Positions/directions are world-space (the realize walk's
  * accumulated transform is already applied), so consumers need no further
@@ -1120,6 +1127,23 @@ public:
 	int visibleValid, SbBool visible,
 	int selectedValid, SbBool selected,
 	int highlightedValid, SbBool highlighted);
+    int setCompactInstanceDisplayStateForPathMatch(const char *path,
+	BObolCompactPathMatch match,
+	int visibleValid, SbBool visible,
+	int selectedValid, SbBool selected,
+	int highlightedValid, SbBool highlighted);
+    int setCompactInstanceTransparencyForPathMatch(const char *path,
+	BObolCompactPathMatch match, float nextTransparency);
+    /* Retained semantic presentation overrides.  Unlike the immediate
+     * display-state helpers above, these rules are also applied to compact
+     * occurrences that stream into the source later. */
+    int setCompactInstanceVisibilityOverrideForPathMatch(const char *path,
+	BObolCompactPathMatch match, SbBool visible);
+    int setCompactInstanceHighlightOverrideForPathMatch(const char *path,
+	BObolCompactPathMatch match, SbBool highlighted);
+    int setCompactInstanceTransparencyOverrideForPathMatch(const char *path,
+	BObolCompactPathMatch match, float nextTransparency);
+    int clearCompactInstanceHighlightOverrides(void);
     /**
      * Restrict this source's visible compact occurrences to the union of the
      * supplied semantic path subtrees.  Geometry, instances, PoP residency,
@@ -1148,6 +1172,16 @@ public:
      * their complete semantic subtree; an empty list clears compact selection.
      */
     int syncCompactInstanceSelectedPaths(const std::vector<SbString> &paths);
+    /**
+     * Apply an incremental semantic selection change.  Removed paths are
+     * cleared before added paths are asserted, allowing one commit to replace
+     * an ancestor selection with a descendant (or the reverse) without a
+     * full compact-index pass.  The resulting frontier is retained for
+     * occurrences streamed in later.
+     */
+    int applyCompactInstanceSelectionDelta(
+	const std::vector<SbString> &addedPaths,
+	const std::vector<SbString> &removedPaths);
     int setCompactInstanceSelectableForPath(const char *path,
 	SbBool includeDescendants, SbBool selectable);
     int setCompactInstanceRegionIdForPath(const char *path,
@@ -1245,6 +1279,7 @@ private:
     void rebuildCompactInstanceDisplayState(SbBool syncSourceState);
     int reapplyCompactInstanceVisibilityFrontier(size_t firstEntry = 0);
     int reapplyCompactInstanceSelectedPaths(size_t firstEntry = 0);
+    int reapplyCompactInstancePresentationOverrides(size_t firstEntry = 0);
     void syncCompactInstancePlacementState(void);
     void seedCompactRealizationCache(
 	BObolDatabaseSourceRealizationCache *cache) const;

@@ -28,7 +28,6 @@
 #ifndef GED_DATABASE_H
 #define GED_DATABASE_H
 
-#include "common.h"
 #include "ged/defines.h"
 
 __BEGIN_DECLS

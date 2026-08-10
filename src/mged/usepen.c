@@ -104,7 +104,7 @@ mged_pen_pick_cache_ensure(struct mged_state *s)
 {
     if (!s || !s->gedp)
 	return;
-    uint64_t revision = ged_draw_scene_revision(s->gedp);
+    uint64_t revision = ged_scene_revision(s->gedp);
     if (pen_pick_cache.valid && pen_pick_cache.gedp == s->gedp &&
 	pen_pick_cache.scene_revision == revision)
 	return;
@@ -170,14 +170,15 @@ mged_highlight_set_shape_ref(struct mged_state *s, ged_draw_shape_ref ref)
     if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref)) {
 	mged_highlight.shape = GED_DRAW_SHAPE_REF_NULL;
 	if (s && s->gedp) {
-	    ged_draw_set_highlighted_shape_ref(s->gedp, GED_DRAW_SHAPE_REF_NULL);
+	    (void)ged_scene_occurrence_highlight_set(s->gedp,
+		GED_DRAW_SHAPE_REF_NULL, 0, NULL);
 	    (void)ged_view_selection_set_highlight(s->gedp,
 		    view_ctx, GED_DRAW_SHAPE_REF_NULL);
 	}
 	return;
     }
     mged_highlight.shape = ref;
-    ged_draw_set_highlighted_shape_ref(s->gedp, ref);
+    (void)ged_scene_occurrence_highlight_set(s->gedp, ref, 1, NULL);
     (void)ged_view_selection_set_highlight(s->gedp,
 	    view_ctx, mged_highlight.shape);
 }
@@ -396,8 +397,19 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
  got:
     /* Include all solids with same tree top */
     {
-	(void)ged_draw_set_highlighted_path_prefix(s->gedp, hrec.fullpath,
-		(size_t)highlight_path_pos, 1);
+	struct bu_vls prefix = BU_VLS_INIT_ZERO;
+	for (size_t i = 0; i <= (size_t)highlight_path_pos; i++) {
+	    struct directory *dp = DB_FULL_PATH_GET(hrec.fullpath, i);
+	    if (dp)
+		bu_vls_printf(&prefix, "/%s", dp->d_namep);
+	}
+	struct ged_scene_path_request request;
+	ged_scene_path_request_init(&request);
+	request.view = ged_view_active_ctx(s->gedp);
+	request.path = bu_vls_cstr(&prefix);
+	request.match = GED_SCENE_PATH_MATCH_SUBTREE;
+	(void)ged_scene_highlight_set(s->gedp, &request, 1, NULL);
+	bu_vls_free(&prefix);
     }
 
     if (!illum_only) {

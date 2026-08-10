@@ -50,16 +50,14 @@
 #include "fbserv.h"
 #include "QgEdCategories.h"
 #include "QgEdFilter.h"
-#include "QgObolDrawSyncPrivate.h"
-#include "QgObolSelectionSyncPrivate.h"
+#include "QgSceneSyncPrivate.h"
 #include "QgObolViewSyncPrivate.h"
 
 #include <QEventLoop>
 
 static void
-qged_obol_draw_observer(struct ged *gedp,
-	const struct ged_draw_transaction *txn,
-	const struct ged_draw_transaction_result *result,
+qged_scene_observer(struct ged *gedp,
+	const struct ged_scene_delta *delta,
 	void *client_data)
 {
     QgEdApp *a = static_cast<QgEdApp *>(client_data);
@@ -69,13 +67,13 @@ qged_obol_draw_observer(struct ged *gedp,
     QgView *display = a->w->CurrentDisplay();
     if (!display)
 	return;
-    if (!qg_obol_display_accepts_ged_draw_transaction_view(txn, display))
+    if (!qg_scene_delta_accepts_view(delta, display))
 	return;
-    if (!qg_obol_ged_draw_transaction_has_view(txn) &&
+    if (!qg_scene_delta_has_view(delta) &&
 	    !qg_obol_display_accepts_ged_active_view(gedp, display))
 	return;
 
-    (void)qg_obol_sync_ged_draw_transaction(gedp, txn, result, display);
+    (void)qg_scene_delta_notify(gedp, delta, display);
 }
 
 static struct bv_context *
@@ -286,8 +284,8 @@ QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode, 
 
     // Let GED know to use the QgQuadView view as its current view
     mdl->session()->setActiveViewContext(qged_current_view_context(w));
-    m_obol_draw_observer_token = ged_draw_observer_add(gedp,
-	    &qged_obol_draw_observer, (void *)this);
+    m_obol_draw_observer_token = ged_scene_observer_add(gedp,
+	    &qged_scene_observer, (void *)this);
 
     // Read the saved window size, if any
     QSettings settings("BRL-CAD", "QGED");
@@ -385,7 +383,7 @@ QgEdApp::~QgEdApp() {
     if (mdl && mdl->ged()) {
 	ged_subprocesses_terminate(mdl->ged());
 	if (m_obol_draw_observer_token) {
-	    ged_draw_observer_remove(mdl->ged(), m_obol_draw_observer_token);
+	    ged_scene_observer_remove(mdl->ged(), m_obol_draw_observer_token);
 	    m_obol_draw_observer_token = 0;
 	}
 	qged_fbserv_release_ged_handlers(mdl->ged());
@@ -430,20 +428,9 @@ QgEdApp::do_view_changed(QgViewUpdateFlags flags)
 {
     QTCAD_SLOT("QgEdApp::do_view_changed", 1);
 
-    if ((flags & QG_VIEW_SELECT) || (flags & QG_VIEW_DRAWN)) {
-	QgView *display = w ? w->CurrentDisplay() : NULL;
-	int selection_changed = (flags & QG_VIEW_SELECT) ?
-	    qg_obol_sync_selection_state(mdl ? mdl->ged() : GED_NULL,
-		display, nullptr) :
-	    qg_obol_sync_selection_state_if_active(
-		mdl ? mdl->ged() : GED_NULL, display, nullptr);
-	if (selection_changed)
-	    flags |= QG_VIEW_REFRESH;
-    }
-
     /* QG_VIEW_DRAWN is an invalidation/repaint signal, not a request to
      * mutate the retained scene.  GED draw transactions have already been
-     * synchronized to Obol by qged_obol_draw_observer.  Reissuing a global
+     * synchronized by qged_scene_observer.  Reissuing a global
      * REDRAW here rebuilt every retained source, restarted progressive LoD,
      * and caused whole-tree draw-state invalidation after even a one-path
      * erase. */
@@ -592,14 +579,6 @@ QgEdApp::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 		view_flags |= QG_VIEW_DRAWN;
 	}
 
-	if ((view_flags & QG_VIEW_SELECT) || (view_flags & QG_VIEW_DRAWN)) {
-	    QgView *display = w ? w->CurrentDisplay() : NULL;
-	    int selection_changed = (view_flags & QG_VIEW_SELECT) ?
-		qg_obol_sync_selection_state(gedp, display, nullptr) :
-		qg_obol_sync_selection_state_if_active(gedp, display, nullptr);
-	    if (selection_changed)
-		view_flags |= QG_VIEW_REFRESH;
-	}
     }
 
     if (ret & GED_MORE) {
