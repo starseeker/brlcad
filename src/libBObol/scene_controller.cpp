@@ -1167,6 +1167,8 @@ BObolDatabaseSourcePublishState::BObolDatabaseSourcePublishState(void) :
     materialColorValid(FALSE),
     materialColor(1.0f, 1.0f, 1.0f),
     materialRevision(0),
+    materialPolicyValid(FALSE),
+    materialPolicy(SoBRLDatabaseSource::MATERIAL_INHERIT),
     roleFlagsValid(FALSE),
     roleFlags(SoBRLDatabaseSource::REALIZATION_ROLE_NONE),
     viewPolicyValid(FALSE),
@@ -2732,6 +2734,15 @@ BObolSceneController::publishDatabaseSourceInstance(
 	state.sourceRepresentationKey : effectiveInstanceKey;
 
     int changed = 0;
+
+    /* Material policy is an input to realization, not a display-state patch.
+     * Apply it before configuration can publish or rebuild any occurrence.
+     * A new database draw must not realize once using the constructor's
+     * aggregate-material default and only then switch to full-path colors. */
+    if (state.materialPolicyValid &&
+	source->setMaterialPolicyState(state.materialPolicy) > 0)
+	changed = 1;
+
     const int needsConfigure =
 	!sourceExisted ||
 	!indexKeysUnchanged ||

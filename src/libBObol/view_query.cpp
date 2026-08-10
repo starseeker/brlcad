@@ -171,13 +171,13 @@ bobol_view_pick_record_nearer(const BObolViewPickRecord &a,
 static void
 bobol_view_pick_display(BObolViewController *controller,
 	SoRayPickAction &action,
+	const SbVec3f &worldRayOrigin,
 	bool pickAll,
 	std::vector<BObolViewPickRecord> &records)
 {
     action.setPickAll(pickAll ? TRUE : FALSE);
     action.apply(controller->getViewport()->getRoot());
 
-    const SbVec3f &origin = action.getLine().getPosition();
     if (pickAll) {
 	const SoPickedPointList &points = action.getPickedPointList();
 	records.reserve(records.size() + static_cast<size_t>(points.getLength()));
@@ -186,7 +186,8 @@ bobol_view_pick_display(BObolViewController *controller,
 	    const SoBRLPickDetail *detail = bobol_view_pick_detail(point);
 	    if (detail)
 		bobol_view_pick_insert(records,
-		    bobol_view_pick_record(point, detail, origin), pickAll);
+		    bobol_view_pick_record(point, detail, worldRayOrigin),
+		    pickAll);
 	}
 	return;
     }
@@ -195,7 +196,7 @@ bobol_view_pick_display(BObolViewController *controller,
     const SoBRLPickDetail *detail = bobol_view_pick_detail(point);
     if (detail)
 	bobol_view_pick_insert(records,
-	    bobol_view_pick_record(point, detail, origin), pickAll);
+	    bobol_view_pick_record(point, detail, worldRayOrigin), pickAll);
 }
 
 static int
@@ -262,7 +263,7 @@ bobol_view_pick_camera_line(BObolViewController *controller,
     const float nx = std::max(0.0f, std::min(1.0f,
 	static_cast<float>(viewportX) / static_cast<float>(size[0])));
     const float ny = std::max(0.0f, std::min(1.0f,
-	static_cast<float>(viewportY + 1) / static_cast<float>(size[1])));
+	static_cast<float>(viewportY) / static_cast<float>(size[1])));
     const float aspect = static_cast<float>(size[0]) /
 	static_cast<float>(size[1]);
     controller->getCamera()->getViewVolume(aspect).projectPointToLine(
@@ -294,20 +295,20 @@ bobol_view_pick_point(BObolViewController *controller,
     const int viewportX = std::max(0, std::min(x, static_cast<int>(size[0]) - 1));
     const int viewportY = std::max(0, std::min(static_cast<int>(size[1]) - 1 - y,
 	static_cast<int>(size[1]) - 1));
+    SbLine worldLine;
+    if (!bobol_view_pick_camera_line(controller, viewportX, viewportY,
+	    worldLine))
+	return 0;
     SoRayPickAction action(region);
     action.setPoint(SbVec2s(static_cast<short>(viewportX),
 	static_cast<short>(viewportY)));
     action.setRadius(radiusPixels > 0.0f ? radiusPixels : 1.0f);
-    bobol_view_pick_display(controller, action, pickAll, records);
+    bobol_view_pick_display(controller, action, worldLine.getPosition(),
+	pickAll, records);
 
-    const SbLine &line = action.getLine();
-    bobol_view_pick_source_exact(controller, line, pickAll, records,
+    bobol_view_pick_source_exact(controller, worldLine, pickAll, records,
 	submittedSourceRequestCount);
-    SbLine rtLine = line;
-    if (records.empty())
-	(void)bobol_view_pick_camera_line(controller, viewportX, viewportY,
-	    rtLine);
-    bobol_view_pick_rt_exact(controller, rtLine, pickAll, records);
+    bobol_view_pick_rt_exact(controller, worldLine, pickAll, records);
     if (pickAll)
 	std::stable_sort(records.begin(), records.end(),
 	    bobol_view_pick_record_nearer);
@@ -331,7 +332,7 @@ bobol_view_pick_ray(BObolViewController *controller,
 
     SoRayPickAction action(controller->getViewportRegion());
     action.setRay(rayOrigin, rayDirection);
-    bobol_view_pick_display(controller, action, pickAll, records);
+    bobol_view_pick_display(controller, action, rayOrigin, pickAll, records);
 
     SbLine line;
     line.setPosDir(rayOrigin, rayDirection);

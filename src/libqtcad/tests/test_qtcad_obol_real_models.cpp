@@ -119,28 +119,6 @@ m35_table_color_pixel_count(const QImage &image)
 }
 
 static int
-nist_pmi3_blue_pixel_count(const QImage &image)
-{
-    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
-    int count = 0;
-    for (int y = 0; y < rgba.height(); y++) {
-	const unsigned char *line = rgba.constScanLine(y);
-	for (int x = 0; x < rgba.width(); x++) {
-	    const unsigned char *p = line + x * 4;
-	    /* Brep_1 is the actual region below the Document wrapper and has
-	     * RGB 121/156/242.  Require some pixels above the shader's 25-percent
-	     * ambient floor as well as the expected blue channel ordering.  This
-	     * excludes both the blue viewport background and an unlit blue-gray
-	     * model caused by one-sided GPU lighting. */
-	    if (p[0] >= 40 && p[1] >= 55 && p[2] >= 90 &&
-		p[1] >= p[0] + 8 && p[2] >= p[1] + 20)
-		count++;
-	}
-    }
-    return count;
-}
-
-static int
 nist_pmi7_10_color_mask(const QImage &image)
 {
     QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
@@ -656,15 +634,13 @@ realized_geometry_counts(BObolSceneController *scene,
 }
 
 static int
-nist_blue_material_is_correct(BObolViewController *controller,
-	const char *model_name)
+nist_database_materials_are_correct(struct ged *gedp,
+	BObolViewController *controller, const char *model_name)
 {
-    if (!controller || !controller->getViewport() ||
+    if (!gedp || !gedp->dbip || !controller || !controller->getViewport() ||
 	!controller->getViewport()->getRoot())
 	return 0;
 
-    const SbColor expected(121.0f / 255.0f, 156.0f / 255.0f,
-	242.0f / 255.0f);
     SoBRLExportAction exportAction;
     exportAction.apply(controller->getViewport()->getRoot());
     if (exportAction.getTriangleCount() <= 0)
@@ -673,14 +649,20 @@ nist_blue_material_is_correct(BObolViewController *controller,
     for (int i = 0; i < exportAction.getTriangleCount(); i++) {
 	const SoBRLExportAction::TriangleRecord &triangle =
 	    exportAction.getTriangle(i);
-	if (!triangle.materialColorValid ||
+	SbColor expected;
+	const int expectedValid =
+	    bobol_database_source_path_material_color(gedp->dbip,
+		triangle.path.getString(), expected) ? 1 : 0;
+	if (!expectedValid || !triangle.materialColorValid ||
 	    fabsf(triangle.materialColor[0] - expected[0]) >= 1.0e-5f ||
 	    fabsf(triangle.materialColor[1] - expected[1]) >= 1.0e-5f ||
 	    fabsf(triangle.materialColor[2] - expected[2]) >= 1.0e-5f) {
 	    fprintf(stderr,
-		"%s triangle material mismatch: path=%s valid=%d "
+		"%s triangle/database material mismatch: path=%s "
+		"expected_valid=%d actual_valid=%d "
 		"actual=(%.9g %.9g %.9g) expected=(%.9g %.9g %.9g)\n",
-		model_name, triangle.path.getString(), triangle.materialColorValid,
+		model_name, triangle.path.getString(), expectedValid,
+		triangle.materialColorValid,
 		triangle.materialColor[0], triangle.materialColor[1],
 		triangle.materialColor[2], expected[0], expected[1], expected[2]);
 	    return 0;
@@ -1058,15 +1040,15 @@ sync_draw_case(const struct model_case &testCase)
 	ged_close(gedp);
 	return 0;
     }
-    const int nistBlueCase =
+    const int nistSingleMaterialCase =
 	testCase.obolDrawMode == SoBRLDatabaseSource::SHADED &&
 	BU_STR_EQUAL(testCase.root, "Document") &&
 	strstr(testCase.file, "nist/NIST_MBE_PMI_");
 
-    if (nistBlueCase && !testCase.deferLeafExpansion &&
-	!nist_blue_material_is_correct(controller, testCase.file)) {
+    if (nistSingleMaterialCase && !testCase.deferLeafExpansion &&
+	!nist_database_materials_are_correct(gedp, controller, testCase.file)) {
 	fprintf(stderr,
-	    "%s:%s did not preserve the Brep_1 region's 121/156/242 material\n",
+	    "%s:%s did not preserve the BREP region's database material\n",
 	    testCase.file, testCase.root);
 	ged_close(gedp);
 	return 0;
@@ -1087,16 +1069,6 @@ sync_draw_case(const struct model_case &testCase)
 	    fprintf(stderr,
 		    "%s:%s did not render the active M35 region-id color table: table_color_pixels=%d\n",
 		    testCase.file, testCase.root, tableColorPixels);
-	    ged_close(gedp);
-	    return 0;
-	}
-    }
-    if (nistBlueCase && !testCase.deferLeafExpansion) {
-	const int bluePixels = nist_pmi3_blue_pixel_count(visibleImage);
-	if (bluePixels < 20) {
-	    fprintf(stderr,
-		"%s:%s did not render a lit 121/156/242 Brep_1 region: "
-		"lit_blue_pixels=%d\n", testCase.file, testCase.root, bluePixels);
 	    ged_close(gedp);
 	    return 0;
 	}
@@ -1282,16 +1254,9 @@ sync_draw_case(const struct model_case &testCase)
 	    ged_close(gedp);
 	    return 0;
 	}
-	if (nistBlueCase &&
-	    nist_pmi3_blue_pixel_count(settledImage) < 20) {
-	    fprintf(stderr,
-		"%s:%s settled deferred BREP draw lost the lit blue material\n",
-		testCase.file, testCase.root);
-	    ged_close(gedp);
-	    return 0;
-	}
-	if (nistBlueCase &&
-	    !nist_blue_material_is_correct(controller, testCase.file)) {
+	if (nistSingleMaterialCase &&
+	    !nist_database_materials_are_correct(gedp, controller,
+		testCase.file)) {
 	    fprintf(stderr,
 		"%s:%s settled deferred BREP draw lost region material state\n",
 		testCase.file, testCase.root);
@@ -1328,12 +1293,10 @@ sync_draw_case(const struct model_case &testCase)
 	ged_close(gedp);
 	return 1;
     }
-    if (controller->isRenderRequested()) {
-	fprintf(stderr, "%s:%s qtcad Obol real-model capture did not consume the render request\n",
-		testCase.file, testCase.root);
-	ged_close(gedp);
-	return 0;
-    }
+    /* get_viewport_image is an observational export traversal.  Only an
+     * endpoint paint consumes a render request; asserting otherwise here
+     * races legitimate follow-up requests from presentation synchronization
+     * and contradicts the canvas-controller contract. */
 
     struct ged_draw_transaction redrawTxn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);

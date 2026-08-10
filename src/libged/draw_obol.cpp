@@ -275,6 +275,7 @@ struct ged_obol_deferred_realization_item {
     ged_obol_deferred_realization_item(void) :
 	source(NULL), snapshotSourceDatabase(NULL),
 	ownsSource(FALSE),
+	sourceDrawMode(SoBRLDatabaseSource::WIREFRAME),
 	primaryScene(FALSE), allowWireFallback(FALSE),
 	streamBatchQuantum(256),
 	streamMergeMicrosecondsPerItem(0.0)
@@ -296,6 +297,11 @@ struct ged_obol_deferred_realization_item {
     SbBool ownsSource;
     std::string instanceKey;
     int drawMode = 0;
+    /* drawMode is the GED presentation mode passed to manifest callbacks.
+     * SoBRLDatabaseSource deliberately has only wire/shaded draw modes, with
+     * shaded-bots versus shaded-all carried by representationMode.  Preserve
+     * that distinct source field as the asynchronous result-admission stamp. */
+    int sourceDrawMode;
     uint32_t sourceRevision = 0;
     uint32_t inputsRevision = 0;
     uint32_t viewRevision = 0;
@@ -2517,6 +2523,8 @@ ged_obol_replace_path(struct ged *gedp,
 	source_state.materialColorValid ? TRUE : FALSE;
     publish_state.materialColor = source_state.materialColor;
     publish_state.materialRevision = source_state.materialRevision;
+    publish_state.materialPolicyValid = TRUE;
+    publish_state.materialPolicy = SoBRLDatabaseSource::MATERIAL_DATABASE;
     if (!preserve_external_current) {
 	publish_state.roleFlagsValid = TRUE;
 	publish_state.roleFlags = SoBRLDatabaseSource::REALIZATION_ROLE_NONE;
@@ -2571,16 +2579,6 @@ ged_obol_replace_path(struct ged *gedp,
     if (changed < 0)
 	return changed;
 
-    /* Database-source draws preserve material resolved for individual tree
-     * occurrences.  This also keeps independently synchronized views from
-     * applying an aggregate root color to every compact instance. */
-    const int material_policy_changed =
-	scene->setDatabaseSourceInstanceMaterialPolicy(instance_key.c_str(),
-	    SoBRLDatabaseSource::MATERIAL_DATABASE);
-    if (material_policy_changed < 0)
-	return material_policy_changed;
-    if (material_policy_changed > 0)
-	changed = 1;
     if (ged_obol_sync_group_state(scene, source_state,
 				  instance_key.c_str()))
 	changed = 1;
@@ -17130,6 +17128,24 @@ ged_obol_structural_proxy_manifest_occurrence(
 	request.drawMode = occurrence.summary.drawMode;
 	request.recordRole = "lod-source";
 	request.geometryKind = "surface";
+	/* The manifest summary contains the authoritative effective material and
+	 * region state for this occurrence.  Keep the source-backed refinement
+	 * request semantically identical to its standing proxy: otherwise the
+	 * first PoP/BREP replacement loses full-path color inheritance and falls
+	 * back to the aggregate source material. */
+	request.sourceId = occurrence.summary.sourceId;
+	request.sourceIdentity = occurrence.summary.sourceIdentity;
+	request.regionId = occurrence.summary.regionId;
+	request.airCode = occurrence.summary.airCode;
+	request.materialId = occurrence.summary.materialId;
+	request.los = occurrence.summary.los;
+	request.materialColorValid =
+	    occurrence.summary.materialColorValid ? 1 : 0;
+	request.materialColor = occurrence.summary.materialColor;
+	request.materialShader = occurrence.summary.materialShader;
+	request.colorOverride = occurrence.summary.colorOverride ? 1 : 0;
+	request.color = occurrence.summary.color;
+	request.transparency = occurrence.summary.transparency;
 	request.lodAvailable = 1;
 	const SbVec3f bmin = request.bounds.getMin();
 	const SbVec3f bmax = request.bounds.getMax();
@@ -17152,7 +17168,7 @@ ged_obol_leaf_manifest_cache_identity(const SoBRLDatabaseSource *source,
 	return std::string();
     char variant[320] = {0};
     snprintf(variant, sizeof(variant),
-	"|leaf-v1|draw=%d|representation=%d|bot=%u|tess=%.17g,%.17g,%.17g",
+	"|leaf-v2|draw=%d|representation=%d|bot=%u|tess=%.17g,%.17g,%.17g",
 	source->drawMode.getValue(), source->representationMode.getValue(),
 	source->lodBotThreshold.getValue(),
 	static_cast<double>(source->tessellationAbsTol.getValue()),
@@ -18584,6 +18600,7 @@ ged_obol_start_deferred_realization(
 	item->representationMode = item->source->representationMode.getValue();
 	item->instanceKey = live->instanceKey.getValue().getString();
 	item->drawMode = drawMode;
+	item->sourceDrawMode = item->source->drawMode.getValue();
 	item->primaryScene = usePrimaryScene;
 	item->allowWireFallback =
 	    data->deferred_appearance.strict_fallback ? FALSE : TRUE;
@@ -18690,7 +18707,7 @@ ged_obol_publish_deferred_realization(
 	    return 0;
 	if (live->sourceRevision.getValue() != item->sourceRevision ||
 	    live->inputsRevision.getValue() != item->inputsRevision ||
-	    live->drawMode.getValue() != item->drawMode ||
+	    live->drawMode.getValue() != item->sourceDrawMode ||
 	    live->representationMode.getValue() !=
 		item->representationMode) {
 	    if (ged_obol_timing_enabled()) {
@@ -18705,7 +18722,7 @@ ged_obol_publish_deferred_realization(
 		    item->inputsRevision,
 		    live->viewRevision.getValue(),
 		    item->viewRevision,
-		    live->drawMode.getValue(), item->drawMode,
+		    live->drawMode.getValue(), item->sourceDrawMode,
 		    live->representationMode.getValue(),
 		    item->representationMode);
 	    }
@@ -18849,7 +18866,7 @@ ged_obol_drain_streamed_realizations(
 	     * merge stale geometry onto the current live source. */
 	    if (live->sourceRevision.getValue() != item->sourceRevision ||
 		live->inputsRevision.getValue() != item->inputsRevision ||
-		live->drawMode.getValue() != item->drawMode ||
+		live->drawMode.getValue() != item->sourceDrawMode ||
 		live->representationMode.getValue() !=
 		    item->representationMode)
 		continue;
