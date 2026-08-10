@@ -1043,7 +1043,7 @@ test_convergence_policy(void)
 
     input.failedSourceCount = 1;
     decision = policy.evaluate(input);
-    if (decision.phase != Policy::Phase::ERROR) {
+    if (decision.phase != Policy::Phase::CONVERROR) {
 	std::fprintf(stderr, "FAIL: convergence error phase\n");
 	return 1;
     }
@@ -2183,7 +2183,7 @@ public:
     {
 	const BObolLodConvergencePolicy::Decision decision =
 	    this->convergenceDecision();
-	if (decision.phase == BObolLodConvergencePolicy::Phase::ERROR)
+	if (decision.phase == BObolLodConvergencePolicy::Phase::CONVERROR)
 	    return true;
 	if (this->witnesses() != WITNESS_NONE || decision.visualPending)
 	    return false;

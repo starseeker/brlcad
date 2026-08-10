@@ -370,7 +370,7 @@ public:
 	REFINING,
 	CALIBRATING,
 	BACKGROUND,
-	ERROR
+	CONVERROR
     };
 
     struct Inputs {
@@ -492,7 +492,7 @@ public:
 	}
 
 	if (inputs.failedSourceCount > 0)
-	    decision.phase = Phase::ERROR;
+	    decision.phase = Phase::CONVERROR;
 	decision.fraction = std::max(0.0f,
 	    std::min(1.0f, decision.fraction));
 	if (this->fractionViewEpoch != inputs.viewEpoch ||
@@ -501,7 +501,7 @@ public:
 	    this->fractionPolicyEpoch = inputs.policyEpoch;
 	    this->fractionFloorValue = 0.0f;
 	}
-	if (decision.phase != Phase::ERROR) {
+	if (decision.phase != Phase::CONVERROR) {
 	    decision.fraction = std::max(
 		decision.fraction, this->fractionFloorValue);
 	    this->fractionFloorValue = decision.fraction;

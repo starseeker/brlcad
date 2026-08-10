@@ -10174,7 +10174,7 @@ BObolViewController::getLodConvergenceStatus(
 	    BOBOL_LOD_CONVERGENCE_CALIBRATING &&
 	static_cast<int>(BObolLodConvergencePolicy::Phase::BACKGROUND) ==
 	    BOBOL_LOD_CONVERGENCE_BACKGROUND &&
-	static_cast<int>(BObolLodConvergencePolicy::Phase::ERROR) ==
+	static_cast<int>(BObolLodConvergencePolicy::Phase::CONVERROR) ==
 	    BOBOL_LOD_CONVERGENCE_ERROR,
 	"public and private LoD convergence phases must agree");
     status.phase = static_cast<int>(convergence.phase);
