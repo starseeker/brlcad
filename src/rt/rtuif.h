@@ -40,6 +40,22 @@
 #include "raytrace.h"
 #include "optical.h"
 
+typedef int (*rt_frame_execute_callback)(int framenumber, void *data);
+typedef int (*rt_frame_runner_callback)(rt_frame_execute_callback execute,
+	int framenumber, void *data);
+typedef void (*rt_framebuffer_flush_callback)(void *data);
+
+/* Optional application-owned frame runner.  rt uses this only when a visible
+ * display session needs the caller thread to pump its native event loop. */
+extern void rt_frame_runner_set(rt_frame_runner_callback callback, void *data);
+
+/* The common view code requests a progressive flush after framebuffer writes.
+ * Headless consumers retain the default no-op; a visible host registers its
+ * owner-thread-safe presentation callback. */
+extern void rt_framebuffer_flush_callback_set(
+	rt_framebuffer_flush_callback callback, void *data);
+extern void rt_fb_progressive_flush(void);
+
 
 /**
  * Called by main() at the start of a run.  Should set up rayhit() and

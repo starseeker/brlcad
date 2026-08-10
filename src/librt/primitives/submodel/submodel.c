@@ -50,7 +50,7 @@
 
 #define RT_SUBMODEL_O(m) bu_offsetof(struct rt_submodel_internal, m)
 
-EXTERNCPP const struct bu_structparse rt_submodel_parse[] = {
+const struct bu_structparse rt_submodel_parse[] = {
     {"%V", 1, "file", RT_SUBMODEL_O(file), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%V", 1, "treetop", RT_SUBMODEL_O(treetop), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%d", 1, "meth", RT_SUBMODEL_O(meth), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
@@ -168,7 +168,7 @@ rt_submodel_resources_free(struct rt_i *rtip)
  * A struct submodel_specific is created, and its address is stored in
  * stp->st_specific for use by submodel_shot().
  */
-C_DECL int
+int
 rt_submodel_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 {
     struct rt_submodel_internal *sip;
@@ -325,7 +325,7 @@ rt_submodel_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rti
 }
 
 
-C_DECL void
+void
 rt_submodel_print(const struct soltab *stp)
 {
     const struct submodel_specific *submodel =
@@ -519,7 +519,7 @@ rt_submodel_a_hit(struct application *ap, struct partition *PartHeadp, struct se
  * 0 MISS
  * >0 HIT
  */
-C_DECL int
+int
 rt_submodel_shot(struct soltab *stp, struct xray *rp, struct application *ap, struct seg *seghead)
 {
     struct submodel_specific *submodel =
@@ -598,7 +598,7 @@ rt_submodel_vshot(struct soltab *stp[], struct xray *rp[], struct seg *segp, int
 /**
  * Given ONE ray distance, return the normal and entry/exit point.
  */
-C_DECL void
+void
 rt_submodel_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 {
     RT_CK_HIT(hitp);
@@ -621,7 +621,7 @@ rt_submodel_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 /**
  * Return the curvature of the submodel.
  */
-C_DECL void
+void
 rt_submodel_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
 {
     if (!cvp || !hitp)
@@ -645,7 +645,7 @@ rt_submodel_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
  * u = azimuth
  * v = elevation
  */
-C_DECL void
+void
 rt_submodel_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct uvcoord *uvp)
 {
     if (ap) RT_CK_APPLICATION(ap);
@@ -660,7 +660,7 @@ rt_submodel_uv(struct application *ap, struct soltab *stp, struct hit *hitp, str
 }
 
 
-C_DECL void
+void
 rt_submodel_free(struct soltab *stp)
 {
     struct submodel_specific *submodel =
@@ -749,7 +749,7 @@ rt_submodel_wireframe_leaf(struct db_tree_state *tsp, const struct db_full_path 
  * which by definition, is all one color.
  */
 C_DECL int
-rt_submodel_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bview *UNUSED(info))
+rt_submodel_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
 {
     struct rt_submodel_internal *sip;
     struct db_tree_state state;
@@ -821,7 +821,7 @@ rt_submodel_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct 
  * -1 failure
  * 0 OK.  *r points to nmgregion that holds this tessellation.
  */
-C_DECL int
+int
 rt_submodel_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol))
 {
     struct rt_submodel_internal *sip;
@@ -841,7 +841,7 @@ rt_submodel_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *i
  * Import an SUBMODEL from the database format to the internal format.
  * Apply modeling transformations as well.
  */
-C_DECL int
+int
 rt_submodel_import4(struct rt_db_internal *ip, const struct bu_external *ep, const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_submodel_internal *sip;
@@ -896,7 +896,7 @@ rt_submodel_import4(struct rt_db_internal *ip, const struct bu_external *ep, con
 /**
  * The name is added by the caller, in the usual place.
  */
-C_DECL int
+int
 rt_submodel_export4(struct bu_external *ep, const struct rt_db_internal *ip, double UNUSED(local2mm), const struct db_i *dbip)
 {
     struct rt_submodel_internal *sip;
@@ -925,7 +925,7 @@ rt_submodel_export4(struct bu_external *ep, const struct rt_db_internal *ip, dou
     return 0;
 }
 
-C_DECL int
+int
 rt_submodel_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_internal *UNUSED(ip))
 {
     if (!rop || !mat)
@@ -943,7 +943,7 @@ rt_submodel_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_
  * Import an SUBMODEL from the database format to the internal format.
  * Apply modeling transformations as well.
  */
-C_DECL int
+int
 rt_submodel_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_submodel_internal *sip;
@@ -994,7 +994,7 @@ rt_submodel_import5(struct rt_db_internal *ip, const struct bu_external *ep, con
 /**
  * The name is added by the caller, in the usual place.
  */
-C_DECL int
+int
 rt_submodel_export5(struct bu_external *ep, const struct rt_db_internal *ip, double UNUSED(local2mm), const struct db_i *dbip)
 {
     struct rt_submodel_internal *sip;
@@ -1026,7 +1026,7 @@ rt_submodel_export5(struct bu_external *ep, const struct rt_db_internal *ip, dou
  * First line describes type of solid.
  * Additional lines are indented one tab, and give parameter values.
  */
-C_DECL int
+int
 rt_submodel_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose, double UNUSED(mm2local))
 {
     struct rt_submodel_internal *sip = (struct rt_submodel_internal *)ip->idb_ptr;
@@ -1070,7 +1070,7 @@ rt_submodel_make(const struct rt_functab *ftp, struct rt_db_internal *intern, co
 /**
  * Free the storage associated with the rt_db_internal version of this solid.
  */
-C_DECL void
+void
 rt_submodel_ifree(struct rt_db_internal *ip)
 {
     struct rt_submodel_internal *sip;
@@ -1088,7 +1088,7 @@ rt_submodel_ifree(struct rt_db_internal *ip)
 }
 
 
-C_DECL int
+int
 rt_submodel_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip)
 {
     if (ip) RT_CK_DB_INTERNAL(ip);

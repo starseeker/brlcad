@@ -37,18 +37,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <atomic>
 
 
 #include "bu/sort.h"
+#include "bu/hash.h"
 #include "vmath.h"
 #include "bn.h"
 #include "rt/geom.h"
 #include "raytrace.h"
-#include "bv/lod.h"
-#include "bv/plot3.h"
+#include "bg/plot3.h"
+#include "imgstream/fbserv.h"
 
-#include "bv/defines.h"
-
+#include "ged/draw.h"
+#include "ged/display.h"
+#include "ged/event_txn.h"
+#include "./ged_draw_private.h"
 #include "./ged_private.h"
 #include "./include/plugin.h"
 
@@ -56,6 +60,71 @@ extern "C" void libged_init(void);
 
 extern "C" {
 #include "./qray.h"
+}
+
+static std::atomic<uint64_t> ged_scene_owner_counter(1);
+
+static uint64_t
+ged_scene_owner_next(void)
+{
+    uint64_t owner = ged_scene_owner_counter.fetch_add(1,
+	std::memory_order_relaxed);
+    if (!owner)
+	owner = ged_scene_owner_counter.fetch_add(1, std::memory_order_relaxed);
+    return owner;
+}
+
+static void
+ged_old_selection_set_free(struct rt_selection_set *set)
+{
+    if (!set)
+	return;
+
+    if (set->free_selection) {
+	for (size_t i = 0; i < BU_PTBL_LEN(&set->selections); i++) {
+	    struct rt_selection *selection = (struct rt_selection *)BU_PTBL_GET(&set->selections, i);
+	    if (selection)
+		set->free_selection(selection);
+	}
+    }
+
+    bu_ptbl_free(&set->selections);
+    BU_FREE(set, struct rt_selection_set);
+}
+
+static void
+ged_old_object_selections_free(struct rt_object_selections *obj_selections)
+{
+    if (!obj_selections)
+	return;
+
+    if (obj_selections->sets) {
+	struct bu_hash_entry *entry = NULL;
+	while ((entry = bu_hash_next(obj_selections->sets, entry)) != NULL) {
+	    struct rt_selection_set *set = (struct rt_selection_set *)bu_hash_value(entry, NULL);
+	    ged_old_selection_set_free(set);
+	}
+	bu_hash_destroy(obj_selections->sets);
+	obj_selections->sets = NULL;
+    }
+
+    BU_FREE(obj_selections, struct rt_object_selections);
+}
+
+static void
+ged_old_selections_free(struct ged *gedp)
+{
+    if (!gedp || !gedp->ged_selections)
+	return;
+
+    struct bu_hash_entry *entry = NULL;
+    while ((entry = bu_hash_next(gedp->ged_selections, entry)) != NULL) {
+	struct rt_object_selections *obj_selections = (struct rt_object_selections *)bu_hash_value(entry, NULL);
+	ged_old_object_selections_free(obj_selections);
+    }
+
+    bu_hash_destroy(gedp->ged_selections);
+    gedp->ged_selections = NULL;
 }
 
 
@@ -85,6 +154,12 @@ ged_subprocesses_terminate(struct ged *gedp)
 	BU_PUT(rrp, struct ged_subprocess);
     }
     bu_ptbl_reset(&gedp->ged_subp);
+
+    /* A renderer may have installed one or more local framebuffer clients.
+     * Closing them here joins toolkit/bridge watchers before their display
+     * targets can be released by an application-level staged shutdown. */
+    if (gedp->ged_fbs)
+	(void)fbs_drop_ipc_clients(gedp->ged_fbs);
 }
 
 
@@ -98,13 +173,22 @@ ged_close(struct ged *gedp)
      * resources or the database they reference are dismantled. */
     ged_subprocesses_terminate(gedp);
 
+    /* Clear all displayed geometry BEFORE closing the database.
+     * Scene objects hold directory pointers that are only valid while dbip is
+     * open; closing dbip first causes use-after-free during draw-scene
+     * teardown.  ged_close_core() in close/close.cpp already
+     * follows this order — this function must match it. */
+    if (gedp->dbip) {
+	const char *av[1] = {"zap"};
+	ged_exec_zap(gedp, 1, (const char **)av);
+    }
+
+    ged_event_librt_callbacks_disable(gedp);
+
     if (gedp->dbip) {
 	db_close(gedp->dbip);
 	gedp->dbip = NULL;
     }
-
-    if (gedp->ged_lod)
-	bv_mesh_lod_context_destroy(gedp->ged_lod);
 
     ged_destroy(gedp);
     gedp = NULL;
@@ -120,6 +204,11 @@ ged_init(struct ged *gedp)
     BU_GET(gedp->i, struct ged_impl);
     gedp->i->magic = GED_MAGIC;
     gedp->i->i = new Ged_Internal;
+    gedp->i->i->gedp = gedp;
+    gedp->i->ged_view_state_ctx = NULL;
+    gedp->i->ged_db_indexp = ged_db_index_create(gedp);
+    gedp->i->ged_event_txnp = ged_event_txn_state_create(gedp);
+    gedp->i->ged_selection_statep = ged_selection_state_create(gedp);
 
     gedp->dbip = NULL;
     gedp->u_data = NULL;
@@ -128,34 +217,49 @@ ged_init(struct ged *gedp)
     bu_vls_init(&gedp->go_name);
 
     // View related containers
-    bv_set_init(&gedp->ged_views);
-    BU_PTBL_INIT(&gedp->ged_free_views);
-
-    /* TODO: If we're init-ing the list here, does that mean the gedp has
-     * ownership of all solid objects created and stored here, and should we
-     * then free them when ged_free is called? (don't appear to be currently,
-     * just calling FREE_BV_SCENE_OBJ which doesn't de-allocate... */
-    BU_PTBL_INIT(&gedp->free_solids);
-
-    // Establish an initial view
-    BU_ALLOC(gedp->ged_gvp, struct bview);
-    bv_init(gedp->ged_gvp, &gedp->ged_views);
-    bu_vls_sprintf(&gedp->ged_gvp->gv_name, "default");
-    bv_set_add_view(&gedp->ged_views, gedp->ged_gvp);
-    bu_ptbl_ins(&gedp->ged_free_views, (long *)gedp->ged_gvp);
+    ged_view_state_init(gedp);
 
     /* Create a non-opened fbserv */
     BU_GET(gedp->ged_fbs, struct fbserv_obj);
-    gedp->ged_fbs->fbs_listener.fbsl_fd = -1;
+    fbs_init(gedp->ged_fbs);
 
     BU_GET(gedp->i->ged_gdp, struct ged_drawable);
-    BU_GET(gedp->i->ged_gdp->gd_headDisplay, struct bu_list);
-    BU_LIST_INIT(gedp->i->ged_gdp->gd_headDisplay);
+    ged_scene_root_ref_clear(gedp);
+    BU_PTBL_INIT(&gedp->i->ged_gdp->gd_draw_registry);
+    gedp->i->ged_gdp->gd_draw_registry_init = 1;
+    gedp->i->ged_gdp->gd_draw_next_token = 1;
+    gedp->i->ged_gdp->gd_draw_shapes_by_component_hash = NULL;
+    gedp->i->ged_gdp->gd_draw_shapes_by_path_hash = NULL;
+    gedp->i->ged_gdp->gd_draw_groups_by_component_hash = NULL;
+    gedp->i->ged_gdp->gd_draw_groups_by_path_hash = NULL;
+    gedp->i->ged_gdp->gd_draw_index_shape_component_queries = 0;
+    gedp->i->ged_gdp->gd_draw_index_shape_component_candidates = 0;
+    gedp->i->ged_gdp->gd_draw_index_group_component_queries = 0;
+    gedp->i->ged_gdp->gd_draw_index_group_component_candidates = 0;
+    gedp->i->ged_gdp->gd_draw_index_path_queries = 0;
+    gedp->i->ged_gdp->gd_draw_index_path_candidates = 0;
+    gedp->i->ged_gdp->gd_draw_index_slow_path_shape_scans = 0;
+    gedp->i->ged_gdp->gd_draw_index_slow_path_group_scans = 0;
+    BU_PTBL_INIT(&gedp->i->ged_gdp->gd_draw_observers);
+    gedp->i->ged_gdp->gd_draw_observers_init = 1;
+    gedp->i->ged_gdp->gd_draw_next_observer_token = 1;
+    gedp->i->ged_gdp->gd_draw_observer_dispatch_depth = 0;
+    gedp->i->ged_gdp->gd_obol_state = NULL;
+    BU_PTBL_INIT(&gedp->i->ged_gdp->gd_obol_context_tokens);
+    gedp->i->ged_gdp->gd_obol_context_tokens_init = 1;
+    gedp->i->ged_gdp->gd_obol_context_owner = ged_scene_owner_next();
+    gedp->i->ged_gdp->gd_obol_next_context_token = 1;
+    /* Start at 1 so that freshly-drawn shapes (s_color_rev=0 from calloc)
+     * are always stale on the first color_from_soltab call (B4). */
+    gedp->i->ged_gdp->gd_mater_rev = 1;
     BU_GET(gedp->i->ged_gdp->gd_headVDraw, struct bu_list);
     BU_LIST_INIT(gedp->i->ged_gdp->gd_headVDraw);
 
     gedp->i->ged_gdp->gd_uplotOutputMode = PL_OUTPUT_MODE_BINARY;
     qray_init(gedp->i->ged_gdp);
+
+    /* Eagerly create the draw root so GED_CHECK_DRAWABLE succeeds */
+    ged_draw_ensure_root_attached(gedp);
 
     BU_GET(gedp->ged_log, struct bu_vls);
     bu_vls_init(gedp->ged_log);
@@ -174,12 +278,11 @@ ged_init(struct ged *gedp)
     gedp->ged_refresh_handler = NULL;
     gedp->ged_refresh_clientdata = NULL;
     gedp->ged_output_handler = NULL;
-    gedp->ged_create_vlist_scene_obj_callback = NULL;
-    gedp->ged_create_vlist_display_list_callback = NULL;
-    gedp->ged_destroy_vlist_callback = NULL;
     gedp->ged_create_io_handler = NULL;
     gedp->ged_delete_io_handler = NULL;
     gedp->ged_io_data = NULL;
+    gedp->ged_line_layer_overlay_handler = NULL;
+    gedp->ged_line_layer_overlay_data = NULL;
 
     /* Editor info */
     gedp->app_editors_cnt = 0;
@@ -192,16 +295,71 @@ ged_init(struct ged *gedp)
     /* User data */
     BU_PTBL_INIT(&gedp->ged_uptrs);
 
+    gedp->ged_selections = NULL;
+
     /* ? */
     gedp->ged_output_script = NULL;
     gedp->ged_internal_call = 0;
     gedp->ged_skip_clbks = 0;
 
-    gedp->dbi_state = NULL;
-
     gedp->ged_interp = NULL;
 
-    gedp->new_cmd_forms = 0;
+}
+
+void
+ged_diagnostic_line_layer_handler_set(struct ged *gedp,
+	ged_diagnostic_line_layer_func_t handler,
+	void *data)
+{
+    if (!gedp)
+	return;
+    gedp->ged_line_layer_overlay_handler = handler;
+    gedp->ged_line_layer_overlay_data = data;
+}
+
+int
+ged_diagnostic_line_layer_handler_available(const struct ged *gedp)
+{
+    return (gedp && gedp->ged_line_layer_overlay_handler) ? 1 : 0;
+}
+
+int
+ged_diagnostic_line_layer_publish(struct ged *gedp,
+	const char *name,
+	const struct bg_line_layer_builder *builder)
+{
+    if (!gedp || !gedp->ged_line_layer_overlay_handler || !name || !builder)
+	return 0;
+    return (*gedp->ged_line_layer_overlay_handler)(gedp, name, builder,
+	    gedp->ged_line_layer_overlay_data) ? 1 : 0;
+}
+
+void
+ged_diagnostic_hud_label_handler_set(struct ged *gedp,
+	ged_diagnostic_hud_label_func_t handler,
+	void *data)
+{
+    if (!gedp)
+	return;
+    gedp->ged_hud_label_overlay_handler = handler;
+    gedp->ged_hud_label_overlay_data = data;
+}
+
+int
+ged_diagnostic_hud_label_handler_available(const struct ged *gedp)
+{
+    return (gedp && gedp->ged_hud_label_overlay_handler) ? 1 : 0;
+}
+
+int
+ged_diagnostic_hud_label_publish(struct ged *gedp,
+	const struct ged_diagnostic_hud_label *label)
+{
+    if (!gedp || !gedp->ged_hud_label_overlay_handler || !label ||
+	    !label->label_id || !label->label_id[0])
+	return 0;
+    return (*gedp->ged_hud_label_overlay_handler)(gedp, label,
+	    gedp->ged_hud_label_overlay_data) ? 1 : 0;
 }
 
 struct ged *
@@ -221,38 +379,37 @@ ged_free(struct ged *gedp)
 
     bu_vls_free(&gedp->go_name);
 
-    gedp->ged_gvp = NULL;
-
-    for (size_t i = 0; i < BU_PTBL_LEN(&gedp->ged_free_views); i++) {
-	struct bview *gdvp = (struct bview *)BU_PTBL_GET(&gedp->ged_free_views, i);
-	bv_free(gdvp);
-	bu_free((void *)gdvp, "bv");
-    }
-    bu_ptbl_free(&gedp->ged_free_views);
-    bv_set_free(&gedp->ged_views);
-
-    if (gedp->i->ged_gdp != GED_DRAWABLE_NULL) {
-
-	for (size_t i = 0; i < BU_PTBL_LEN(&gedp->free_solids); i++) {
-	    // TODO - FREE_BV_SCENE_OBJ macro is stashing on the free_scene_obj list, not
-	    // BU_PUT-ing the solid objects themselves - is that what we expect
-	    // when doing ged_free?  I.e., is ownership of the free solid list
-	    // with the struct ged or with the application as a whole?  We're
-	    // BU_PUT-ing gedp->ged_views.free_scene_obj - above why just that one?
-#if 0
-	    struct bv_scene_obj *sp = (struct bv_scene_obj *)BU_PTBL_GET(&gedp->free_solids, i);
-	    BV_FREE_VLIST(vlfree, &(sp->s_vlist));
-#endif
+	/* Framebuffer bridge teardown can remove retained nodes and request a
+	 * frame, so release it before the endpoint-backed view state. */
+	if (gedp->ged_fbs) {
+	    ged_obol_fbserv_release(gedp);
+	    BU_PUT(gedp->ged_fbs, struct fbserv_obj);
 	}
-	bu_ptbl_free(&gedp->free_solids);
 
-	if (gedp->i->ged_gdp->gd_headDisplay)
-	    BU_PUT(gedp->i->ged_gdp->gd_headDisplay, struct bu_vls);
-	if (gedp->i->ged_gdp->gd_headVDraw)
-	    BU_PUT(gedp->i->ged_gdp->gd_headVDraw, struct bu_vls);
-	qray_free(gedp->i->ged_gdp);
-	BU_PUT(gedp->i->ged_gdp, struct ged_drawable);
-    }
+    ged_view_state_free(gedp);
+
+	if (gedp->i->ged_gdp != GED_DRAWABLE_NULL) {
+
+	ged_scene_root_ref_clear(gedp);  /* freed by zap */
+	if (gedp->i->ged_gdp->gd_headVDraw) {
+	    struct vd_curve *curve = NULL;
+	    while (BU_LIST_WHILE(curve, vd_curve, gedp->i->ged_gdp->gd_headVDraw)) {
+		BU_LIST_DEQUEUE(&curve->l);
+		if (curve->vdc_points)
+		    bu_free(curve->vdc_points, "vdraw points");
+		if (curve->vdc_commands)
+		    bu_free(curve->vdc_commands, "vdraw commands");
+		BU_PUT(curve, struct vd_curve);
+	    }
+	    BU_PUT(gedp->i->ged_gdp->gd_headVDraw, struct bu_list);
+	}
+		qray_free(gedp->i->ged_gdp);
+		ged_draw_obol_context_tokens_free(gedp);
+		ged_draw_obol_scene_controller_detach(gedp);
+		ged_draw_observers_free(gedp);
+		ged_draw_registry_free(gedp);
+		BU_PUT(gedp->i->ged_gdp, struct ged_drawable);
+	    }
 
     if (gedp->ged_log) {
 	bu_vls_free(gedp->ged_log);
@@ -269,12 +426,24 @@ ged_free(struct ged *gedp)
 	BU_PUT(gedp->ged_result_str, struct bu_vls);
     }
 
+    ged_old_selections_free(gedp);
+
+    if (gedp->i && gedp->i->ged_db_indexp) {
+	ged_db_index_destroy(gedp->i->ged_db_indexp);
+	gedp->i->ged_db_indexp = NULL;
+    }
+    if (gedp->i && gedp->i->ged_event_txnp) {
+	ged_event_txn_state_destroy(gedp->i->ged_event_txnp);
+	gedp->i->ged_event_txnp = NULL;
+    }
+    if (gedp->i && gedp->i->ged_selection_statep) {
+	ged_selection_state_destroy(gedp->i->ged_selection_statep);
+	gedp->i->ged_selection_statep = NULL;
+    }
+
     BU_PUT(gedp->ged_cbs, struct ged_callback_state);
 
     bu_ptbl_free(&gedp->ged_subp);
-
-    if (gedp->ged_fbs)
-	BU_PUT(gedp->ged_fbs, struct fbserv_obj);
 
     bu_ptbl_free(&gedp->editor_opts);
     bu_ptbl_free(&gedp->terminal_opts);
@@ -352,10 +521,9 @@ ged_open(const char *dbtype, const char *filename, int existing_only)
 
     gedp = ged_create();
     gedp->dbip = wdbp->dbip;
+    ged_event_librt_callbacks_enable(gedp);
 
     db_update_nref(gedp->dbip);
-
-    gedp->ged_lod = NULL;
 
     return gedp;
 }
@@ -470,45 +638,6 @@ ged_output_handler_cb(struct ged *gedp, char *str)
     }
 }
 
-void
-ged_create_vlist_solid_cb(struct ged *gedp, struct bv_scene_obj *s)
-{
-    if (gedp->ged_create_vlist_scene_obj_callback != GED_CREATE_VLIST_SOLID_FUNC_NULL) {
-	gedp->ged_cbs->ged_create_vlist_scene_obj_callback_cnt++;
-	if (gedp->ged_cbs->ged_create_vlist_scene_obj_callback_cnt > 1) {
-	    bu_log("Warning - recursive call of gedp->ged_create_vlist_scene_obj_callback!\n");
-	}
-	(*gedp->ged_create_vlist_scene_obj_callback)(gedp->vlist_ctx, s);
-	gedp->ged_cbs->ged_create_vlist_scene_obj_callback_cnt--;
-    }
-}
-
-void
-ged_create_vlist_display_list_cb(struct ged *gedp, struct display_list *dl)
-{
-    if (gedp->ged_create_vlist_display_list_callback != GED_CREATE_VLIST_DISPLAY_LIST_FUNC_NULL) {
-	gedp->ged_cbs->ged_create_vlist_display_list_callback_cnt++;
-	if (gedp->ged_cbs->ged_create_vlist_display_list_callback_cnt > 1) {
-	    bu_log("Warning - recursive call of gedp->ged_create_vlist_callback!\n");
-	}
-	(*gedp->ged_create_vlist_display_list_callback)(gedp->vlist_ctx, dl);
-	gedp->ged_cbs->ged_create_vlist_display_list_callback_cnt--;
-    }
-}
-
-void
-ged_destroy_vlist_cb(struct ged *gedp, unsigned int i, int j)
-{
-    if (gedp->ged_destroy_vlist_callback != GED_DESTROY_VLIST_FUNC_NULL) {
-	gedp->ged_cbs->ged_destroy_vlist_callback_cnt++;
-	if (gedp->ged_cbs->ged_destroy_vlist_callback_cnt > 1) {
-	    bu_log("Warning - recursive call of gedp->ged_destroy_vlist_callback!\n");
-	}
-	(*gedp->ged_destroy_vlist_callback)(gedp->vlist_ctx, i, j);
-	gedp->ged_cbs->ged_destroy_vlist_callback_cnt--;
-    }
-}
-
 int
 ged_clbk_set(struct ged *gedp, const char *cmd_str, int mode, bu_clbk_t f, void *d)
 {
@@ -570,31 +699,6 @@ ged_clbk_get(bu_clbk_t *f, void **d, struct ged *gedp, const char *cmd_str, int 
     (*f) = c_it->second.first;
     (*d) = c_it->second.second;
     return BRLCAD_OK;
-}
-
-void
-ged_dm_ctx_set(struct ged *gedp, const char *dm_type, void *ctx)
-{
-    if (!gedp || !dm_type)
-	return;
-
-    GED_CK_MAGIC(gedp);
-    Ged_Internal *gedip = gedp->i->i;
-    gedip->dm_map[std::string(dm_type)] = ctx;
-}
-
-void *
-ged_dm_ctx_get(struct ged *gedp, const char *dm_type)
-{
-    if (!gedp || !dm_type)
-	return NULL;
-
-    GED_CK_MAGIC(gedp);
-    Ged_Internal *gedip = gedp->i->i;
-    std::string dm(dm_type);
-    if (gedip->dm_map.find(dm) == gedip->dm_map.end())
-	return NULL;
-    return gedip->dm_map[dm];
 }
 
 // Local Variables:

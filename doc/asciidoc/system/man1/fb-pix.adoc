@@ -57,21 +57,21 @@ Print a usage message and exit.
 ====
 [source,bash]
 ----
-$ rt -s 1024 -F /dev/fb havoc.g havoc
-$ fb-pix -s 1024 | pix-png -s 1024 > havoc.png
+$ rt -s 1024 -o havoc.pix havoc.g havoc
+$ pix-png -s 1024 < havoc.pix > havoc.png
 ----
-Renders a model to the framebuffer with *rt*(1), saves the 1024x1024
-framebuffer contents to a *pix*(5) stream on standard output, and pipes
-it into *pix-png*(1) to produce a PNG file.
+Renders a model to a *pix*(5) file with *rt*(1) and converts it to PNG.
+Use *fb-pix* with a memory, file, remote, or diagnostic imgstream target when
+an existing framebuffer stream must be exported.
 ====
 
 .Save the framebuffer color map baked into the pixels
 ====
 [source,bash]
 ----
-$ fb-pix -c -F /dev/ogl scene.pix
+$ fb-pix -c -F scene.pix
 ----
-Saves the image from the `/dev/ogl` framebuffer with the framebuffer
+Saves the image from the file-backed framebuffer with the framebuffer
 color map applied to each pixel value, so the stored file reflects the
 displayed image even if a non-linear color map was loaded.
 ====

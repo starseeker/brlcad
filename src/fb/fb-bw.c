@@ -38,7 +38,7 @@
 #include "bu/getopt.h"
 #include "bu/exit.h"
 #include "vmath.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 #define LINELEN 8192
@@ -168,7 +168,7 @@ get_args(int argc, char **argv)
 int
 main(int argc, char **argv)
 {
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
 
     int x, y;
     int xin, yin;		/* number of screen output lines */
@@ -187,23 +187,25 @@ main(int argc, char **argv)
     }
 
     /* Open Display Device */
-    if ((fbp = fb_open(framebuffer, width, height)) == NULL) {
-	fprintf(stderr, "fb_open failed\n");
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)width,
+	    (size_t)height)) == NULL) {
+	fprintf(stderr, "imgstream framebuffer open failed\n");
 	bu_exit(1, NULL);
     }
 
     /* determine "reasonable" behavior */
-    xin = fb_getwidth(fbp) - scr_xoff;
+    xin = (int)imgstream_fb_width(fbp) - scr_xoff;
     CLAMP(xin, 0, width);
-    yin = fb_getheight(fbp) - scr_yoff;
+    yin = (int)imgstream_fb_height(fbp) - scr_yoff;
     CLAMP(yin, 0, height);
 
     for (y = scr_yoff; y < scr_yoff + yin; y++) {
 	size_t ret;
 	if (inverse) {
-	    (void)fb_read(fbp, scr_xoff, fb_getheight(fbp)-1-y, inbuf, xin);
+	    (void)imgstream_fb_read(fbp, scr_xoff,
+		(int)imgstream_fb_height(fbp)-1-y, inbuf, (size_t)xin);
 	} else {
-	    (void)fb_read(fbp, scr_xoff, y, inbuf, xin);
+	    (void)imgstream_fb_read(fbp, scr_xoff, y, inbuf, (size_t)xin);
 	}
 	for (x = 0; x < xin; x++) {
 	    obuf[x] = (((int)inbuf[3*x+RED]) + ((int)inbuf[3*x+GRN])
@@ -214,7 +216,7 @@ main(int argc, char **argv)
 	    perror("fwrite");
     }
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 

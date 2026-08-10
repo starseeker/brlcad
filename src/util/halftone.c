@@ -78,7 +78,7 @@
 #include "bu/malloc.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 #define	DLEVEL	1
 #define THRESHOLD	127
@@ -965,8 +965,14 @@ setup(int argc, char **argv)
 	}
 	bu_free(ifname,"ifname alloc from bu_file_realpath");
 	if (autosize) {
-	    if ( !fb_common_file_size((size_t *)&width, (size_t *)&height, argv[bu_optind], 1)) {
+	    size_t image_width = 0;
+	    size_t image_height = 0;
+	    if (!imgstream_image_file_size(&image_width, &image_height,
+		    argv[bu_optind], 1)) {
 		(void) fprintf(stderr, "halftone: unable to autosize.\n");
+	    } else {
+		width = (long)image_width;
+		height = (long)image_height;
 	    }
 	}
     }

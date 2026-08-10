@@ -41,7 +41,6 @@
 #include "bu/path.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
 
 #include "./rtuif.h"
 #include "./ext.h"
@@ -164,26 +163,26 @@ view_eol(struct application *ap)
 		bu_semaphore_release( BU_SEM_SYSCALL );
 	    }
 	}
-	if ( fbp != FB_NULL ) {
+	if (fbp != NULL && rt_fb_output_enabled) {
 	    size_t pixel;
 
 	    if (fb_scanbuf == NULL)
-		fb_scanbuf = (unsigned char *)bu_malloc(width * sizeof(RGBpixel), "framebuffer scanline");
+		fb_scanbuf = (unsigned char *)bu_malloc(width * sizeof(rt_pixel_t), "framebuffer scanline");
 	    for (pixel = 0; pixel < width; pixel++) {
-		fb_scanbuf[pixel * sizeof(RGBpixel) + RED] = scanbuf[pixel];
-		fb_scanbuf[pixel * sizeof(RGBpixel) + GRN] = scanbuf[pixel];
-		fb_scanbuf[pixel * sizeof(RGBpixel) + BLU] = scanbuf[pixel];
+		fb_scanbuf[pixel * sizeof(rt_pixel_t) + RED] = scanbuf[pixel];
+		fb_scanbuf[pixel * sizeof(rt_pixel_t) + GRN] = scanbuf[pixel];
+		fb_scanbuf[pixel * sizeof(rt_pixel_t) + BLU] = scanbuf[pixel];
 	    }
 	    if (rtg_parallel) {
 		bu_semaphore_acquire( BU_SEM_SYSCALL );
 	    }
-	    fb_write( fbp, 0, ap->a_y, fb_scanbuf, width );
+	    imgstream_fb_write(fbp, 0, ap->a_y, fb_scanbuf, (size_t)width);
 	    if (rtg_parallel) {
 		bu_semaphore_release( BU_SEM_SYSCALL );
 	    }
 	}
 
-	if (fbp == FB_NULL && outfp == NULL)
+	if (bif == NULL && (!fbp || !rt_fb_output_enabled) && outfp == NULL)
 	    bu_log("rtxray: strange, no end of line actions taken.\n");
     }
 }

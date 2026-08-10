@@ -30,7 +30,6 @@ endforeach(mp ${man3_EN})
 cmakefiles(
   ${man3_EN}
   libbu.adoc
-  libdm.adoc
   TODO
   CMakeLists.txt
 )

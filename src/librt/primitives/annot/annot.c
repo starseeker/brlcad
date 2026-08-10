@@ -45,11 +45,13 @@
 #include "bu/opt.h"
 #include "bu/str.h"
 #include "bg/polygon.h"
+#include "bg/vlist.h"
 #include "rt/db4.h"
 #include "nmg.h"
 #include "rt/geom.h"
 #include "rt/primitives/annot.h"
 #include "raytrace.h"
+#include "rt/vlist.h"
 
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic push
@@ -170,7 +172,7 @@ rt_txt_pos_flag(int *pos_flag, int p_hor, int p_ver)
 
 
 static int
-ant_check_pos(const struct txt_seg *tsg, const char **rel_pos)
+ant_check_pos(const struct txt_seg *tsg, char **rel_pos)
 {
     switch (tsg->rel_pos) {
 	case RT_TXT_POS_BL:
@@ -217,12 +219,12 @@ ant_label_dimensions(const struct txt_seg *tsg, hpoint_t ref_pt,
     VSET(bmin, INFINITY, INFINITY, INFINITY);
     VSET(bmax, -INFINITY, -INFINITY, -INFINITY);
 
-    bv_vlist_2string(&vhead, vlfree, tsg->label.vls_str, ref_pt[0], ref_pt[1], tsg->txt_size, tsg->txt_rot_angle);
-    bv_vlist_bbox(&vhead, &bmin, &bmax, NULL, NULL);
+    rt_vlist_2string(&vhead, vlfree, tsg->label.vls_str, ref_pt[0], ref_pt[1], tsg->txt_size, tsg->txt_rot_angle);
+    bg_vlist_bbox(&vhead, &bmin, &bmax, NULL, NULL);
 
     *length = bmax[0] - ref_pt[0];
     *height = bmax[1] - ref_pt[1];
-    BV_FREE_VLIST(vlfree, &vhead);
+    RT_FREE_VLIST(vlfree, &vhead);
 }
 
 
@@ -499,7 +501,7 @@ rt_annot_validate(const struct rt_annot_internal *annot_ip,
  * !0 Error in description
  *
  */
-C_DECL int
+int
 rt_annot_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 {
     if (!stp)
@@ -517,7 +519,7 @@ rt_annot_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 }
 
 
-C_DECL void
+void
 rt_annot_print(const struct soltab *stp)
 {
     if (stp) RT_CK_SOLTAB(stp);
@@ -532,7 +534,7 @@ rt_annot_print(const struct soltab *stp)
  * 0 MISS
  * >0 HIT
  */
-C_DECL int
+int
 rt_annot_shot(struct soltab *stp, struct xray *rp, struct application *ap, struct seg *seghead)
 {
     if (!stp || !rp || !ap || !seghead)
@@ -568,7 +570,7 @@ rt_annot_vshot(struct soltab **stp, struct xray **UNUSED(rp), struct seg *segp, 
 /**
  * Given ONE ray distance, return the normal and entry/exit point.
  */
-C_DECL void
+void
 rt_annot_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 {
     if (!hitp || !rp)
@@ -585,7 +587,7 @@ rt_annot_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 /**
  * Return the curvature of the annotation.
  */
-C_DECL void
+void
 rt_annot_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
 {
     if (!cvp || !hitp)
@@ -600,7 +602,7 @@ rt_annot_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
 }
 
 
-C_DECL void
+void
 rt_annot_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct uvcoord *uvp)
 {
     if (ap) RT_CK_APPLICATION(ap);
@@ -611,7 +613,7 @@ rt_annot_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct
 }
 
 
-C_DECL void
+void
 rt_annot_free(struct soltab *stp)
 {
     if (stp) RT_CK_SOLTAB(stp);
@@ -752,7 +754,7 @@ annot_local_point(struct bu_list *vlfree, struct bu_list *vhead,
     point_t point;
 
     VSET(point, x, y, 0.0);
-    BV_ADD_VLIST(vlfree, vhead, point, command);
+    RT_ADD_VLIST(vlfree, vhead, point, command);
     if (x < bmin[X]) bmin[X] = x;
     if (y < bmin[Y]) bmin[Y] = y;
     if (x > bmax[X]) bmax[X] = x;
@@ -775,7 +777,7 @@ annot_quadratic(struct bu_list *vlfree, struct bu_list *vhead,
 	    t*t*end[X];
 	fastf_t y = mt*mt*start[Y] + 2.0*mt*t*control[Y] +
 	    t*t*end[Y];
-	annot_local_point(vlfree, vhead, x, y, BV_VLIST_LINE_DRAW,
+	annot_local_point(vlfree, vhead, x, y, RT_VLIST_LINE_DRAW,
 	    bmin, bmax);
     }
 }
@@ -797,7 +799,7 @@ annot_cubic(struct bu_list *vlfree, struct bu_list *vhead,
 	    3.0*mt*t*t*control2[X] + t*t*t*end[X];
 	fastf_t y = mt*mt*mt*start[Y] + 3.0*mt*mt*t*control1[Y] +
 	    3.0*mt*t*t*control2[Y] + t*t*t*end[Y];
-	annot_local_point(vlfree, vhead, x, y, BV_VLIST_LINE_DRAW,
+	annot_local_point(vlfree, vhead, x, y, RT_VLIST_LINE_DRAW,
 	    bmin, bmax);
     }
 }
@@ -810,7 +812,7 @@ annot_font_text(struct bu_list *vlfree, struct bu_list *vhead,
 {
     struct bu_mapped_file *mapped;
     struct bu_list local;
-    struct bv_vlist *vp;
+    rt_vlist *vp;
     stt_fontinfo font;
     const unsigned char *cursor;
     const unsigned char *end;
@@ -900,11 +902,11 @@ annot_font_text(struct bu_list *vlfree, struct bu_list *vhead,
 		    case STT_vmove:
 			V2MOVE(current, target);
 			annot_local_point(vlfree, &local, current[X], current[Y],
-			    BV_VLIST_LINE_MOVE, bmin, bmax);
+			    RT_VLIST_LINE_MOVE, bmin, bmax);
 			break;
 		    case STT_vline:
 			annot_local_point(vlfree, &local, target[X], target[Y],
-			    BV_VLIST_LINE_DRAW, bmin, bmax);
+			    RT_VLIST_LINE_DRAW, bmin, bmax);
 			V2MOVE(current, target);
 			break;
 		    case STT_vcurve:
@@ -952,9 +954,9 @@ annot_font_text(struct bu_list *vlfree, struct bu_list *vhead,
 	    levels[level_count++] = bmin[Y] + 0.45 * (bmax[Y] - bmin[Y]);
 	for (size_t i = 0; i < level_count; ++i) {
 	    VSET(decoration, bmin[X], levels[i], 0.0);
-	    BV_ADD_VLIST(vlfree, &local, decoration, BV_VLIST_LINE_MOVE);
+	    RT_ADD_VLIST(vlfree, &local, decoration, RT_VLIST_LINE_MOVE);
 	    VSET(decoration, bmax[X], levels[i], 0.0);
-	    BV_ADD_VLIST(vlfree, &local, decoration, BV_VLIST_LINE_DRAW);
+	    RT_ADD_VLIST(vlfree, &local, decoration, RT_VLIST_LINE_DRAW);
 	}
     }
 
@@ -991,7 +993,7 @@ annot_font_text(struct bu_list *vlfree, struct bu_list *vhead,
 
     cosine = cos(tsg->txt_rot_angle * DEG2RAD);
     sine = sin(tsg->txt_rot_angle * DEG2RAD);
-    for (BU_LIST_FOR(vp, bv_vlist, &local)) {
+    for (BU_LIST_FOR(vp, bg_vlist, &local)) {
 	size_t i;
 	for (i = 0; i < vp->nused; ++i) {
 	    point2d_t uv;
@@ -1006,11 +1008,11 @@ annot_font_text(struct bu_list *vlfree, struct bu_list *vhead,
 	    V2SET(uv, annot_ip->verts[tsg->ref_pt][X] + mx,
 		annot_ip->verts[tsg->ref_pt][Y] + my);
 	    annot_map_2d(point, base, uv, annot_ip);
-	    BV_ADD_VLIST(vlfree, vhead, point, vp->cmd[i]);
+	    RT_ADD_VLIST(vlfree, vhead, point, vp->cmd[i]);
 	}
     }
 
-    BV_FREE_VLIST(vlfree, &local);
+    RT_FREE_VLIST(vlfree, &local);
     bu_close_mapped_file(mapped);
     return 1;
 }
@@ -1067,11 +1069,11 @@ annot_fill_vlist(struct bu_list *vlfree, struct bu_list *vhead,
 	annot_map_2d(p0, base, annot_ip->verts[faces[3*i]], annot_ip);
 	annot_map_2d(p1, base, annot_ip->verts[faces[3*i + 1]], annot_ip);
 	annot_map_2d(p2, base, annot_ip->verts[faces[3*i + 2]], annot_ip);
-	BV_ADD_VLIST(vlfree, vhead, normal, BV_VLIST_POLY_START);
-	BV_ADD_VLIST(vlfree, vhead, p2, BV_VLIST_POLY_MOVE);
-	BV_ADD_VLIST(vlfree, vhead, p0, BV_VLIST_POLY_DRAW);
-	BV_ADD_VLIST(vlfree, vhead, p1, BV_VLIST_POLY_DRAW);
-	BV_ADD_VLIST(vlfree, vhead, p2, BV_VLIST_POLY_END);
+	RT_ADD_VLIST(vlfree, vhead, normal, RT_VLIST_POLY_START);
+	RT_ADD_VLIST(vlfree, vhead, p2, RT_VLIST_POLY_MOVE);
+	RT_ADD_VLIST(vlfree, vhead, p0, RT_VLIST_POLY_DRAW);
+	RT_ADD_VLIST(vlfree, vhead, p1, RT_VLIST_POLY_DRAW);
+	RT_ADD_VLIST(vlfree, vhead, p2, RT_VLIST_POLY_END);
     }
     bu_free(faces, "annotation fill faces");
     return 0;
@@ -1112,9 +1114,9 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 		break;
 	    }
 	    annot_map_2d(pt, V, annot_ip->verts[lsg->start], annot_ip);
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_MOVE);
+	    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_MOVE);
 	    annot_map_2d(pt, V, annot_ip->verts[lsg->end], annot_ip);
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+	    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 	    break;
 	case ANN_TSEG_MAGIC:
 	    tsg = (struct txt_seg *)lng;
@@ -1149,10 +1151,10 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 		    basis[10] = normal[Z];
 		    bn_mat_angles(rotation, 0.0, 0.0, tsg->txt_rot_angle);
 		    bn_mat_mul(text_mat, basis, rotation);
-		    bv_vlist_3string(vhead, vlfree, tsg->label.vls_str, pt,
+		    rt_vlist_3string(vhead, vlfree, tsg->label.vls_str, pt,
 			text_mat, tsg->txt_size);
 		} else {
-		    bv_vlist_2string(vhead, vlfree, tsg->label.vls_str,
+		    rt_vlist_2string(vhead, vlfree, tsg->label.vls_str,
 			pt[0], pt[1], tsg->txt_size, tsg->txt_rot_angle);
 		}
 	    }
@@ -1231,16 +1233,16 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 		    oldu = 1.0;
 		    oldv = 0.0;
 		    VJOIN2(start_pt, center, oldu, semi_a, oldv, semi_b);
-		    BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_MOVE);
+		    RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_MOVE);
 		    for (i=1; i<nsegs; i++) {
 			newu = oldu * cosdel - oldv * sindel;
 			newv = oldu * sindel + oldv * cosdel;
 			VJOIN2(pt, center, newu, semi_a, newv, semi_b);
-			BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+			RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 			oldu = newu;
 			oldv = newv;
 		    }
-		    BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_DRAW);
+		    RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_DRAW);
 		    break;
 		}
 
@@ -1298,13 +1300,13 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 		annot_map_2d(start_pt, V, start2d, annot_ip);
 		oldu = (start2d[0] - center2d[0]);
 		oldv = (start2d[1] - center2d[1]);
-		BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_MOVE);
+		RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_MOVE);
 		for (i=0; i<nsegs; i++) {
 		    newu = oldu * cosdel - oldv * sindel;
 		    newv = oldu * sindel + oldv * cosdel;
 		    V2SET(new_uv, newu, newv);
 		    annot_map_2d(pt, center, new_uv, annot_ip);
-		    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+		    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		    oldu = newu;
 		    oldv = newv;
 		}
@@ -1333,14 +1335,14 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 			inv_weight = 1.0/nsg->weights[0];
 			VSCALE(start_pt, start_pt, inv_weight);
 		    }
-		    BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_MOVE);
+		    RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_MOVE);
 		    for (i=1; i<nsg->c_size; i++) {
 			annot_map_2d(pt, V, annot_ip->verts[nsg->ctl_points[i]], annot_ip);
 			if (RT_NURB_IS_PT_RATIONAL(nsg->pt_type)) {
 			    inv_weight = 1.0/nsg->weights[i];
 			    VSCALE(pt, pt, inv_weight);
 			}
-			BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+			RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		    }
 		    break;
 		}
@@ -1415,9 +1417,9 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 			    pt[j] /= pt[coords-1];
 		    }
 		    if (i == 0)
-			BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_MOVE);
+			RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_MOVE);
 		    else
-			BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+			RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		}
 		bu_free((char *)eg.ctl_points, "eg.ctl_points");
 		break;
@@ -1445,10 +1447,10 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 	    if (bsg->degree == 1) {
 		/* straight line */
 		annot_map_2d(start_pt, V, annot_ip->verts[bsg->ctl_points[0]], annot_ip);
-		BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_MOVE);
+		RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_MOVE);
 		for (i=1; i<=bsg->degree; i++) {
 		    annot_map_2d(pt, V, annot_ip->verts[bsg->ctl_points[i]], annot_ip);
-		    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+		    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		}
 		break;
 	    }
@@ -1503,13 +1505,13 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 	    /* plot the results */
 	    bz = BU_LIST_FIRST(bezier_2d_list, &bezier_hd->l);
 	    annot_map_2d(pt, V, bz->ctl[0], annot_ip);
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_MOVE);
+	    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_MOVE);
 
 	    while (BU_LIST_WHILE(bz, bezier_2d_list, &(bezier_hd->l))) {
 		BU_LIST_DEQUEUE(&bz->l);
 		for (i=1; i<=bsg->degree; i++) {
 		    annot_map_2d(pt, V, bz->ctl[i], annot_ip);
-		    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+		    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		}
 		bu_free((char *)bz->ctl, "g_annot.c: bz->ctl");
 		bu_free((char *)bz, "g_annot.c: bz");
@@ -1561,7 +1563,7 @@ ant_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
     if (annot_ip->flags & RT_ANNOT_MODEL_SPACE)
 	VMOVE(base, annot_ip->V);
     else
-	BV_VLIST_SET_DISP_MAT(vlfree, vhead, annot_ip->V);
+	RT_VLIST_SET_DISP_MAT(vlfree, vhead, annot_ip->V);
 
     /* Filled areas, in particular OpenNURBS-style text masks and STEP
      * blanking boxes, are backgrounds.  Emit them before strokes and text
@@ -1594,17 +1596,17 @@ ant_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 		}
 	    }
 	    if (custom_width)
-		BV_VLIST_SET_LINE_WIDTH(vlfree, vhead, width);
+		RT_VLIST_SET_LINE_WIDTH(vlfree, vhead, width);
 	    ret += seg_to_vlist(vlfree, vhead, ttol, base, annot_ip,
 		ant->segments[seg_no], annot_ip->styles ?
 		&annot_ip->styles[seg_no] : NULL);
 	    if (custom_width)
-		BV_VLIST_SET_LINE_WIDTH(vlfree, vhead, 1.0);
+		RT_VLIST_SET_LINE_WIDTH(vlfree, vhead, 1.0);
 	}
     }
 
     if (!(annot_ip->flags & RT_ANNOT_MODEL_SPACE))
-	BV_VLIST_SET_MODEL_MAT(vlfree, vhead);
+	RT_VLIST_SET_MODEL_MAT(vlfree, vhead);
 
     (void)V;
 
@@ -1613,7 +1615,7 @@ ant_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 
 
 C_DECL int
-rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bview *UNUSED(info))
+rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     struct rt_annot_internal *annot_ip;
     int ret;
@@ -1635,7 +1637,7 @@ rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_
     return myret;
 }
 
-C_DECL int
+int
 rt_annot_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_internal *ip)
 {
     if (!rop || !ip || !mat)
@@ -1663,7 +1665,7 @@ rt_annot_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_int
  * Import an annotation from the database format to the internal format.
  * Apply modeling transformations as well.
  */
-C_DECL int
+int
 rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_annot_internal *annot_ip;
@@ -2082,7 +2084,7 @@ import_error:
 /**
  * The name is added by the caller, in the usual place.
  */
-C_DECL int
+int
 rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_annot_internal *annot_ip;
@@ -2528,7 +2530,7 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
  * line describes type of solid.  Additional lines are indented one
  * tab, and give parameter values.
  */
-C_DECL int
+int
 rt_annot_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose, double mm2local)
 {
     struct rt_annot_internal *annot_ip =
@@ -2647,7 +2649,7 @@ rt_annot_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbo
 			    V2INTCLAMPARGS(annot_ip->verts[tsg->ref_pt]));
 		}
 		bu_vls_strcat(str, buf);
-		ant_check_pos(tsg, (const char **)&rel_pos);
+		ant_check_pos(tsg, &rel_pos);
 		sprintf(buf, "\t\tRelative position: %s\n", rel_pos);
 		bu_vls_strcat(str, buf);
 		/* Annotation text is unbounded (for example, imported multi-line
@@ -2877,7 +2879,7 @@ annot_styles_free(struct rt_annot_internal *annot_ip)
  * Free the storage associated with the rt_db_internal version of this
  * solid.
  */
-C_DECL void
+void
 rt_annot_ifree(struct rt_db_internal *ip)
 {
     struct rt_annot_internal *annot_ip;
@@ -3119,7 +3121,7 @@ ant_to_tcl_list(struct bu_vls *vls, struct rt_ant *ant)
 }
 
 
-C_DECL int
+int
 rt_annot_form(struct bu_vls *logstr, const struct rt_functab *ftp)
 {
     BU_CK_VLS(logstr);
@@ -3133,7 +3135,7 @@ rt_annot_form(struct bu_vls *logstr, const struct rt_functab *ftp)
 }
 
 
-C_DECL int
+int
 rt_annot_get(struct bu_vls *logstr, const struct rt_db_internal *intern, const char *attr)
 {
     struct rt_annot_internal *ann=(struct rt_annot_internal *)intern->idb_ptr;
@@ -3411,7 +3413,7 @@ ant_get_tcl(struct bu_vls *logstr, struct rt_ant *ant, const char *argv1)
 }
 
 
-C_DECL int
+int
 rt_annot_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int argc, const char **argv)
 {
     struct rt_annot_internal *annot_ip;
@@ -3524,7 +3526,7 @@ rt_annot_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int argc, 
 }
 
 
-C_DECL int
+int
 rt_annot_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip)
 {
     if (ip) RT_CK_DB_INTERNAL(ip);
@@ -3532,7 +3534,7 @@ rt_annot_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip)
     return 0;			/* OK */
 }
 
-C_DECL const char *
+const char *
 rt_annot_keypoint(point_t *pt, const char *keystr, const mat_t mat, const struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol))
 {
     if (!pt || !ip)

@@ -42,6 +42,7 @@
 #include "nmg.h"
 #include "rt/geom.h"
 #include "raytrace.h"
+#include "rt/vlist.h"
 
 #include "../../librt_private.h"
 
@@ -66,7 +67,7 @@ struct tgc_specific {
     char tgc_AD_CB;		/* boolean:  A*D == C*B */
 };
 
-__BEGIN_DECLS
+
 extern int rt_rec_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip);
 
 static void rt_tgc_rotate(fastf_t *A, fastf_t *B, fastf_t *Hv, fastf_t *Rot, fastf_t *Inv, struct tgc_specific *tgc);
@@ -74,7 +75,7 @@ static void rt_tgc_shear(const fastf_t *vect, int axis, fastf_t *Shr, fastf_t *T
 static void rt_tgc_scale(fastf_t a, fastf_t b, fastf_t h, fastf_t *Scl, fastf_t *Inv);
 
 void rt_pnt_sort(register fastf_t *t, int npts);
-__END_DECLS
+
 
 #define VLARGE 1000000.0
 
@@ -109,7 +110,7 @@ __END_DECLS
     }
 
 
-EXTERNCPP const struct bu_structparse rt_tgc_parse[] = {
+const struct bu_structparse rt_tgc_parse[] = {
     { "%f", 3, "V", bu_offsetofarray(struct rt_tgc_internal, v, fastf_t, X), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     { "%f", 3, "H", bu_offsetofarray(struct rt_tgc_internal, h, fastf_t, X), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     { "%f", 3, "A", bu_offsetofarray(struct rt_tgc_internal, a, fastf_t, X), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
@@ -162,7 +163,7 @@ clt_tgc_pack(struct bu_pool *pool, struct soltab *stp)
 /**
  * Compute the bounding RPP for a truncated general cone
  */
-C_DECL int
+int
 rt_tgc_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct bn_tol *UNUSED(tol)) {
     vect_t work, temp;
 
@@ -212,7 +213,7 @@ rt_tgc_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct 
  * the transformation matrix (if you really want to know why, talk to
  * Ed Davisson).
  */
-C_DECL int
+int
 rt_tgc_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 {
     struct rt_tgc_internal *tip;
@@ -521,7 +522,7 @@ rt_tgc_scale(fastf_t a, fastf_t b, fastf_t h, fastf_t *Scl, fastf_t *Inv)
 }
 
 
-C_DECL void
+void
 rt_tgc_print(register const struct soltab *stp)
 {
     register const struct tgc_specific *tgc =
@@ -572,7 +573,7 @@ rt_tgc_print(register const struct soltab *stp)
  * root finder.  Use those values of 't' to compute the points of
  * intersection in the original coordinate system.
  */
-C_DECL int
+int
 rt_tgc_shot(struct soltab *stp, register struct xray *rp, struct application *ap, struct seg *seghead)
 {
     register const struct tgc_specific *tgc =
@@ -1034,7 +1035,7 @@ rt_tgc_shot(struct soltab *stp, register struct xray *rp, struct application *ap
 /**
  * The Homer vectorized version.
  */
-C_DECL void
+void
 rt_tgc_vshot(struct soltab **stp, register struct xray **rp, struct seg *segp, int n, struct application *ap)
 
 
@@ -1541,7 +1542,7 @@ rt_pnt_sort(fastf_t t[], int npts)
  * after mapping back to absolute coordinates, we divide the 2 out of
  * the above expressions.
  */
-C_DECL void
+void
 rt_tgc_norm(register struct hit *hitp, struct soltab *stp, register struct xray *rp)
 {
     register struct tgc_specific *tgc =
@@ -1583,7 +1584,7 @@ rt_tgc_norm(register struct hit *hitp, struct soltab *stp, register struct xray 
 }
 
 
-C_DECL void
+void
 rt_tgc_uv(struct application *ap, struct soltab *stp, register struct hit *hitp, register struct uvcoord *uvp)
 {
     struct tgc_specific *tgc = (struct tgc_specific *)stp->st_specific;
@@ -1639,7 +1640,7 @@ rt_tgc_uv(struct application *ap, struct soltab *stp, register struct hit *hitp,
 }
 
 
-C_DECL void
+void
 rt_tgc_free(struct soltab *stp)
 {
     register struct tgc_specific *tgc =
@@ -1653,7 +1654,7 @@ rt_tgc_free(struct soltab *stp)
  * Import a TGC from the database format to the internal format.
  * Apply modeling transformations as well.
  */
-C_DECL int
+int
 rt_tgc_import4(struct rt_db_internal *ip, const struct bu_external *ep, register const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_tgc_internal *tip;
@@ -1695,7 +1696,7 @@ rt_tgc_import4(struct rt_db_internal *ip, const struct bu_external *ep, register
 }
 
 
-C_DECL int
+int
 rt_tgc_export4(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_tgc_internal *tip;
@@ -1727,7 +1728,7 @@ rt_tgc_export4(struct bu_external *ep, const struct rt_db_internal *ip, double l
     return 0;
 }
 
-C_DECL int
+int
 rt_tgc_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_internal *ip)
 {
     if (!rop || !ip || !mat)
@@ -1761,7 +1762,7 @@ rt_tgc_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_inter
  * Import a TGC from the database format to the internal format.
  * Apply modeling transformations as well.
  */
-C_DECL int
+int
 rt_tgc_import5(struct rt_db_internal *ip, const struct bu_external *ep, register const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_tgc_internal *tip;
@@ -1801,7 +1802,7 @@ rt_tgc_import5(struct rt_db_internal *ip, const struct bu_external *ep, register
 }
 
 
-C_DECL int
+int
 rt_tgc_export5(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_tgc_internal *tip;
@@ -1840,7 +1841,7 @@ rt_tgc_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
  * First line describes type of solid.
  * Additional lines are indented one tab, and give parameter values.
  */
-C_DECL int
+int
 rt_tgc_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose, double mm2local)
 {
     struct rt_tgc_internal *tip = (struct rt_tgc_internal *)ip->idb_ptr;
@@ -1923,7 +1924,7 @@ rt_tgc_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose
 /**
  * Free the storage associated with the rt_db_internal version of this solid.
  */
-C_DECL void
+void
 rt_tgc_ifree(struct rt_db_internal *ip)
 {
     RT_CK_DB_INTERNAL(ip);
@@ -1964,7 +1965,7 @@ tgc_tri_degen(const fastf_t *p0, const fastf_t *p1, const fastf_t *p2,
 
 
 /* version using tolerances */
-C_DECL int
+int
 rt_tgc_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
 {
     struct shell *s;		/* shell to hold facetted TGC */
@@ -2877,10 +2878,8 @@ rt_tgc_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, co
 	NMG_CK_FACEUSE(fu);
 
 	if (nmg_calc_face_g(fu, vlfree)) {
-	    char *estr = bu_strdup("");
 	    bu_log("rt_tess_tgc: failed to calculate plane equation\n");
-	    nmg_pr_fu_briefly(fu, estr);
-	    bu_free(estr, "estr");
+	    nmg_pr_fu_briefly(fu, "");
 	    return -1;
 	}
     }
@@ -3307,7 +3306,7 @@ nmg_tgc_nurb_cyl(struct faceuse *fu, fastf_t *top_mat, fastf_t *bot_mat)
  * 0 OK. *r points to nmgregion that holds this tessellation
  */
 
-C_DECL int
+int
 rt_tgc_tnurb(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bn_tol *tol)
 {
     struct rt_tgc_internal *tip;
@@ -3471,8 +3470,7 @@ struct ellipse {
 
 static void
 draw_lines_between_rec_ellipses(
-    struct bu_list *vlfree,
-    struct bu_list *vhead,
+    struct rt_primitive_lod_realization *realization,
     struct ellipse ellipse1,
     vect_t h,
     int num_lines)
@@ -3486,16 +3484,17 @@ draw_lines_between_rec_ellipses(
 				ellipse1.axis_a, ellipse1.axis_b, i * radian_step);
 	VADD2(ellipse2_point, ellipse1_point, h);
 
-	BV_ADD_VLIST(vlfree, vhead, ellipse1_point, BV_VLIST_LINE_MOVE);
-	BV_ADD_VLIST(vlfree, vhead, ellipse2_point, BV_VLIST_LINE_DRAW);
+	(void)primitive_lod_line_set_append(realization, ellipse1_point,
+		RT_PRIMITIVE_LINE_MOVE);
+	(void)primitive_lod_line_set_append(realization, ellipse2_point,
+		RT_PRIMITIVE_LINE_DRAW);
     }
 }
 
 
 static void
 draw_lines_between_ellipses(
-    struct bu_list *vlfree,
-    struct bu_list *vhead,
+    struct rt_primitive_lod_realization *realization,
     struct ellipse ellipse1,
     struct ellipse ellipse2,
     int num_lines)
@@ -3510,8 +3509,10 @@ draw_lines_between_ellipses(
 	ellipse_point_at_radian(ellipse2_point, ellipse2.center,
 				ellipse2.axis_a, ellipse2.axis_b, i * radian_step);
 
-	BV_ADD_VLIST(vlfree, vhead, ellipse1_point, BV_VLIST_LINE_MOVE);
-	BV_ADD_VLIST(vlfree, vhead, ellipse2_point, BV_VLIST_LINE_DRAW);
+	(void)primitive_lod_line_set_append(realization, ellipse1_point,
+		RT_PRIMITIVE_LINE_MOVE);
+	(void)primitive_lod_line_set_append(realization, ellipse2_point,
+		RT_PRIMITIVE_LINE_DRAW);
     }
 }
 
@@ -3571,8 +3572,8 @@ tgc_connecting_lines(
 }
 
 
-C_DECL int
-rt_tgc_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bview *v, fastf_t s_size)
+static int
+rt_tgc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     int points_per_ellipse, connecting_lines;
     struct rt_tgc_internal *tip;
@@ -3581,9 +3582,9 @@ rt_tgc_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
     fastf_t avg_diameter;
     fastf_t tgc_mag_a, tgc_mag_b, tgc_mag_c, tgc_mag_d;
 
-    BU_CK_LIST_HEAD(vhead);
+    if (!realization)
+	return -1;
     RT_CK_DB_INTERNAL(ip);
-    struct bu_list *vlfree = &rt_vlfree;
     tip = (struct rt_tgc_internal *)ip->idb_ptr;
     RT_TGC_CK_MAGIC(tip);
 
@@ -3593,7 +3594,7 @@ rt_tgc_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
     tgc_mag_d = MAGNITUDE(tip->d);
     avg_diameter = tgc_mag_a + tgc_mag_b + tgc_mag_c + tgc_mag_d;
     avg_diameter /= 2.0;
-    point_spacing = solid_point_spacing(v, avg_diameter);
+    point_spacing = bv_view_solid_point_spacing(v, avg_diameter);
 
     points_per_ellipse = tgc_points_per_ellipse(ip, point_spacing);
 
@@ -3601,13 +3602,16 @@ rt_tgc_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
 	point_t p;
 
 	VADD2(p, tip->v, tip->h);
-	BV_ADD_VLIST(vlfree, vhead, tip->v, BV_VLIST_LINE_MOVE);
-	BV_ADD_VLIST(vlfree, vhead, p, BV_VLIST_LINE_DRAW);
+	if (!primitive_lod_line_set_append(realization, tip->v,
+		    RT_PRIMITIVE_LINE_MOVE) ||
+		!primitive_lod_line_set_append(realization, p,
+		    RT_PRIMITIVE_LINE_DRAW))
+	    return -1;
 
 	return 0;
     }
 
-    connecting_lines = tgc_connecting_lines(tip, v->gv_s->curve_scale, s_size);
+    connecting_lines = tgc_connecting_lines(tip, bv_view_lod_curve_scale(v), s_size);
 
     if (connecting_lines < 4) {
 	connecting_lines = 4;
@@ -3637,12 +3641,20 @@ rt_tgc_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
 	/* calculate and plot first ellipse */
 	ellipse_point_at_radian(pts[0], tip->v, tip->a, tip->b,
 				radian_step * (points_per_ellipse - 1));
-	BV_ADD_VLIST(vlfree, vhead, pts[0], BV_VLIST_LINE_MOVE);
+	if (!primitive_lod_line_set_append(realization, pts[0],
+		    RT_PRIMITIVE_LINE_MOVE)) {
+	    bu_free(pts, "tgc points");
+	    return -1;
+	}
 
 	radian = 0;
 	for (i = 0; i < points_per_ellipse; ++i) {
 	    ellipse_point_at_radian(pts[i], tip->v, tip->a, tip->b, radian);
-	    BV_ADD_VLIST(vlfree, vhead, pts[i], BV_VLIST_LINE_DRAW);
+	    if (!primitive_lod_line_set_append(realization, pts[i],
+			RT_PRIMITIVE_LINE_DRAW)) {
+		bu_free(pts, "tgc points");
+		return -1;
+	    }
 
 	    radian += radian_step;
 	}
@@ -3652,23 +3664,33 @@ rt_tgc_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
 	    VADD2(pts[i], tip->h, pts[i]);
 	}
 
-	BV_ADD_VLIST(vlfree, vhead, pts[points_per_ellipse - 1], BV_VLIST_LINE_MOVE);
+	if (!primitive_lod_line_set_append(realization,
+		    pts[points_per_ellipse - 1], RT_PRIMITIVE_LINE_MOVE)) {
+	    bu_free(pts, "tgc points");
+	    return -1;
+	}
 	for (i = 0; i < points_per_ellipse; ++i) {
-	    BV_ADD_VLIST(vlfree, vhead, pts[i], BV_VLIST_LINE_DRAW);
+	    if (!primitive_lod_line_set_append(realization, pts[i],
+			RT_PRIMITIVE_LINE_DRAW)) {
+		bu_free(pts, "tgc points");
+		return -1;
+	    }
 	}
 
 	bu_free(pts, "tgc points");
 
-	draw_lines_between_rec_ellipses(vlfree, vhead, ellipse1, tip->h,
+	draw_lines_between_rec_ellipses(realization, ellipse1, tip->h,
 					connecting_lines);
     } else {
-	plot_ellipse(vlfree, vhead, ellipse1.center, ellipse1.axis_a, ellipse1.axis_b,
-		     points_per_ellipse);
+	if (!primitive_lod_append_ellipse(realization, ellipse1.center,
+		    ellipse1.axis_a, ellipse1.axis_b, points_per_ellipse))
+	    return -1;
 
-	plot_ellipse(vlfree, vhead, ellipse2.center, ellipse2.axis_a, ellipse2.axis_b,
-		     points_per_ellipse);
+	if (!primitive_lod_append_ellipse(realization, ellipse2.center,
+		    ellipse2.axis_a, ellipse2.axis_b, points_per_ellipse))
+	    return -1;
 
-	draw_lines_between_ellipses(vlfree, vhead, ellipse1, ellipse2,
+	draw_lines_between_ellipses(realization, ellipse1, ellipse2,
 				    connecting_lines);
     }
 
@@ -3676,8 +3698,210 @@ rt_tgc_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
 }
 
 
+int
+rt_tgc_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
+{
+    if (!primitive_lod_line_set_begin(realization))
+	return -1;
+
+    int ret = rt_tgc_lod_line_set(realization, ip, tol, v, s_size);
+    if (ret < 0)
+	return ret;
+    return primitive_lod_line_set_finish(realization) ? ret : -1;
+}
+
+int
+rt_tgc_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
+{
+    struct rt_tgc_internal *tgc;
+    fastf_t amag, bmag, cmag, dmag, max_radius, min_radius;
+    fastf_t cscale = 0.0, dscale = 0.0;
+    fastf_t chord_tol;
+    vect_t residual, cross;
+    int segments;
+    int height_segments = 1;
+    int top_apex;
+    int forward;
+
+    if (face_set)
+	memset(face_set, 0, sizeof(*face_set));
+    if (!face_set || !ip || !ttol || !tol)
+	return BRLCAD_ERROR;
+    RT_CK_DB_INTERNAL(ip);
+    BG_CK_TESS_TOL(ttol);
+    BN_CK_TOL(tol);
+    tgc = (struct rt_tgc_internal *)ip->idb_ptr;
+    RT_TGC_CK_MAGIC(tgc);
+
+    amag = MAGNITUDE(tgc->a);
+    bmag = MAGNITUDE(tgc->b);
+    cmag = MAGNITUDE(tgc->c);
+    dmag = MAGNITUDE(tgc->d);
+    if (amag <= tol->dist || bmag <= tol->dist ||
+	MAGNITUDE(tgc->h) <= tol->dist)
+	return BRLCAD_ERROR;
+    top_apex = cmag <= tol->dist && dmag <= tol->dist;
+    if (!top_apex) {
+	if (cmag <= tol->dist || dmag <= tol->dist)
+	    return BRLCAD_ERROR;
+	cscale = VDOT(tgc->c, tgc->a) / MAGSQ(tgc->a);
+	dscale = VDOT(tgc->d, tgc->b) / MAGSQ(tgc->b);
+	VSCALE(residual, tgc->a, cscale);
+	VSUB2(residual, tgc->c, residual);
+	if (MAGSQ(residual) > tol->dist_sq)
+	    return BRLCAD_ERROR;
+	VSCALE(residual, tgc->b, dscale);
+	VSUB2(residual, tgc->d, residual);
+	if (MAGSQ(residual) > tol->dist_sq || cscale < 0.0 || dscale < 0.0)
+	    return BRLCAD_ERROR;
+    }
+
+    max_radius = FMAX(FMAX(amag, bmag), FMAX(cmag, dmag));
+    min_radius = FMIN(amag, bmag);
+    if (!top_apex)
+	min_radius = FMIN(min_radius, FMIN(cmag, dmag));
+    if (ttol->abs > 0.0)
+	chord_tol = FMAX(ttol->abs, tol->dist);
+    else if (ttol->rel > 0.0)
+	chord_tol = max_radius * FMIN(ttol->rel, 1.0);
+    else
+	chord_tol = max_radius * 0.1;
+    segments = rt_num_circular_segments(chord_tol, max_radius);
+    if (ttol->norm > 0.0 && min_radius > SMALL_FASTF) {
+	const fastf_t alpha = 2.0 * atan(tan(ttol->norm) *
+	    FMIN(1.0, min_radius / max_radius));
+	if (alpha > SMALL_FASTF) {
+	    const int normal_segments = (int)(M_2PI / alpha + 0.999999);
+	    if (normal_segments > segments)
+		segments = normal_segments;
+	}
+    }
+    if (segments < 8)
+	segments = 8;
+    if (segments > INT_MAX / 8)
+	return BRLCAD_ERROR;
+    segments = ((segments + 3) / 4) * 4;
+
+    /* A general TGC is linear along each corresponding bottom/top point.
+     * Between two angular samples, however, changing ellipse axes form a
+     * bilinear patch.  A triangle pair differs from that patch by at most one
+     * quarter of the change in its angular edge vector.  Subdivide height
+     * until that conservative bound is within the requested chord tolerance. */
+    if (!top_apex) {
+	fastf_t max_edge_delta = 0.0;
+	for (int i = 0; i < segments; i++) {
+	    const fastf_t a0 = M_2PI * (fastf_t)i / (fastf_t)segments;
+	    const fastf_t a1 = M_2PI * (fastf_t)(i + 1) /
+		(fastf_t)segments;
+	    vect_t bottom_edge, top_edge, edge_delta;
+	    VCOMB2(bottom_edge, cos(a1) - cos(a0), tgc->a,
+		sin(a1) - sin(a0), tgc->b);
+	    VCOMB2(top_edge, cos(a1) - cos(a0), tgc->c,
+		sin(a1) - sin(a0), tgc->d);
+	    VSUB2(edge_delta, top_edge, bottom_edge);
+	    max_edge_delta = FMAX(max_edge_delta, MAGNITUDE(edge_delta));
+	}
+	if (max_edge_delta > 4.0 * chord_tol) {
+	    const fastf_t required = max_edge_delta / (4.0 * chord_tol);
+	    if (required > (fastf_t)INT_MAX)
+		return BRLCAD_ERROR;
+	    height_segments = (int)(required + 0.999999);
+	}
+	if (height_segments < 1 || height_segments > INT_MAX / segments)
+	    return BRLCAD_ERROR;
+    }
+
+    const size_t point_count = top_apex ?
+	(size_t)segments + 1 :
+	(size_t)segments * (size_t)(height_segments + 1);
+    const size_t side_faces = top_apex ?
+	(size_t)segments :
+	(size_t)segments * (size_t)height_segments * 2;
+    const size_t cap_count = top_apex ? 1 : 2;
+    const size_t index_count = side_faces * 4 +
+	cap_count * ((size_t)segments + 1);
+    face_set->points = (point_t *)bu_calloc(point_count, sizeof(point_t),
+	"TGC indexed-face points");
+    face_set->indices = (int *)bu_calloc(index_count, sizeof(int),
+	"TGC indexed-face indices");
+
+    if (top_apex) {
+	for (int i = 0; i < segments; i++) {
+	    const fastf_t angle = M_2PI * (fastf_t)i / (fastf_t)segments;
+	    VJOIN2(face_set->points[i], tgc->v, cos(angle), tgc->a,
+		sin(angle), tgc->b);
+	}
+	VADD2(face_set->points[segments], tgc->v, tgc->h);
+    } else {
+	for (int ring = 0; ring <= height_segments; ring++) {
+	    const fastf_t f = (fastf_t)ring / (fastf_t)height_segments;
+	    point_t center;
+	    vect_t axis_a, axis_b;
+	    VJOIN1(center, tgc->v, f, tgc->h);
+	    VBLEND2(axis_a, 1.0 - f, tgc->a, f, tgc->c);
+	    VBLEND2(axis_b, 1.0 - f, tgc->b, f, tgc->d);
+	    for (int i = 0; i < segments; i++) {
+		const fastf_t angle = M_2PI * (fastf_t)i /
+		    (fastf_t)segments;
+		const size_t point_index =
+		    (size_t)ring * (size_t)segments + (size_t)i;
+		VJOIN2(face_set->points[point_index], center,
+		    cos(angle), axis_a, sin(angle), axis_b);
+	    }
+	}
+    }
+
+    VCROSS(cross, tgc->a, tgc->b);
+    forward = VDOT(cross, tgc->h) >= 0.0;
+    size_t out = 0;
+    for (int ring = 0; ring < height_segments; ring++) {
+	const int bottom_offset = ring * segments;
+	const int top_offset = (ring + 1) * segments;
+	for (int i = 0; i < segments; i++) {
+	    const int next = forward ? (i + 1) % segments :
+		(i + segments - 1) % segments;
+	if (top_apex) {
+	    face_set->indices[out++] = i;
+	    face_set->indices[out++] = next;
+	    face_set->indices[out++] = segments;
+	    face_set->indices[out++] = -1;
+	} else {
+	    face_set->indices[out++] = bottom_offset + i;
+	    face_set->indices[out++] = bottom_offset + next;
+	    face_set->indices[out++] = top_offset + next;
+	    face_set->indices[out++] = -1;
+	    face_set->indices[out++] = bottom_offset + i;
+	    face_set->indices[out++] = top_offset + next;
+	    face_set->indices[out++] = top_offset + i;
+	    face_set->indices[out++] = -1;
+	}
+	}
+    }
+    for (int i = 0; i < segments; i++) {
+	const int vertex = forward ? segments - 1 - i : i;
+	face_set->indices[out++] = vertex;
+    }
+    face_set->indices[out++] = -1;
+    if (!top_apex) {
+	const int top_offset = height_segments * segments;
+	for (int i = 0; i < segments; i++) {
+	    const int vertex = forward ? i : segments - 1 - i;
+	    face_set->indices[out++] = top_offset + vertex;
+	}
+	face_set->indices[out++] = -1;
+    }
+
+    face_set->point_count = point_count;
+    face_set->index_count = out;
+    face_set->source_identity = (uint64_t)(uintptr_t)tgc;
+    face_set->geometry_revision = 1;
+    return out == index_count ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
 C_DECL int
-rt_tgc_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bview *UNUSED(info))
+rt_tgc_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     struct rt_tgc_internal *tip;
     register int i;
@@ -3696,21 +3920,21 @@ rt_tgc_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
     rt_ell_16pnts(top, work, tip->c, tip->d);
 
     /* Draw the top */
-    BV_ADD_VLIST(vlfree, vhead, &top[15*ELEMENTS_PER_VECT], BV_VLIST_LINE_MOVE);
+    RT_ADD_VLIST(vlfree, vhead, &top[15*ELEMENTS_PER_VECT], RT_VLIST_LINE_MOVE);
     for (i=0; i<16; i++) {
-	BV_ADD_VLIST(vlfree, vhead, &top[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_DRAW);
+	RT_ADD_VLIST(vlfree, vhead, &top[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_DRAW);
     }
 
     /* Draw the bottom */
-    BV_ADD_VLIST(vlfree, vhead, &bottom[15*ELEMENTS_PER_VECT], BV_VLIST_LINE_MOVE);
+    RT_ADD_VLIST(vlfree, vhead, &bottom[15*ELEMENTS_PER_VECT], RT_VLIST_LINE_MOVE);
     for (i=0; i<16; i++) {
-	BV_ADD_VLIST(vlfree, vhead, &bottom[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_DRAW);
+	RT_ADD_VLIST(vlfree, vhead, &bottom[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_DRAW);
     }
 
     /* Draw connections */
     for (i=0; i<16; i += 4) {
-	BV_ADD_VLIST(vlfree, vhead, &top[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_MOVE);
-	BV_ADD_VLIST(vlfree, vhead, &bottom[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_DRAW);
+	RT_ADD_VLIST(vlfree, vhead, &top[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_MOVE);
+	RT_ADD_VLIST(vlfree, vhead, &bottom[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_DRAW);
     }
     return 0;
 }
@@ -3719,7 +3943,7 @@ rt_tgc_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
 /**
  * Return the curvature of the TGC.
  */
-C_DECL void
+void
 rt_tgc_curve(register struct curvature *cvp, register struct hit *hitp, struct soltab *stp)
 {
     register struct tgc_specific *tgc =
@@ -3843,7 +4067,7 @@ rt_tgc_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip)
 }
 
 
-C_DECL void
+void
 rt_tgc_volume(fastf_t *vol, const struct rt_db_internal *ip)
 {
     int tgc_type = 0;
@@ -3938,7 +4162,7 @@ rt_tgc_volume(fastf_t *vol, const struct rt_db_internal *ip)
 }
 
 
-C_DECL void
+void
 rt_tgc_surf_area(fastf_t *area, const struct rt_db_internal *ip)
 {
     int tgc_type = 0;
@@ -4016,7 +4240,7 @@ rt_tgc_surf_area(fastf_t *area, const struct rt_db_internal *ip)
 }
 
 
-C_DECL void
+void
 rt_tgc_centroid(point_t *cent, const struct rt_db_internal *ip)
 {
     int tgc_type = 0;
@@ -4054,7 +4278,7 @@ rt_tgc_centroid(point_t *cent, const struct rt_db_internal *ip)
     }
 }
 
-C_DECL int
+int
 rt_tgc_labels(struct rt_point_labels *pl, int pl_max, const mat_t xform, const struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol))
 {
     int lcnt = 5;
@@ -4093,7 +4317,7 @@ rt_tgc_labels(struct rt_point_labels *pl, int pl_max, const mat_t xform, const s
     return lcnt;
 }
 
-C_DECL int
+int
 rt_tgc_perturb(struct rt_db_internal **oip, const struct rt_db_internal *ip, int planar_only, fastf_t val)
 {
     if (NEAR_ZERO(val, SMALL_FASTF))
@@ -4165,7 +4389,7 @@ rt_tgc_perturb(struct rt_db_internal **oip, const struct rt_db_internal *ip, int
     return BRLCAD_OK;
 }
 
-C_DECL const char *
+const char *
 rt_tgc_keypoint(point_t *pt, const char *keystr, const mat_t mat, const struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol))
 {
     if (!pt || !ip)

@@ -213,7 +213,8 @@ struct pnt_normal_thickness {
 };
 
 static struct pnt_normal_thickness *
-pnthickness_create() {
+pnthickness_create()
+{
     struct pnt_normal_thickness *p;
     BU_GET(p, struct pnt_normal_thickness);
     BU_ALLOC(p->pt, struct pnt_normal);
@@ -222,7 +223,8 @@ pnthickness_create() {
 
 /* p->pt may be  used to construct the final pnts object */
 static void
-pnthickness_free(struct pnt_normal_thickness *p, int free_pnt) {
+pnthickness_free(struct pnt_normal_thickness *p, int free_pnt)
+{
     if (!p) return;
     if (free_pnt) {
 	bu_free(p->pt, "free pnt");
@@ -231,7 +233,8 @@ pnthickness_free(struct pnt_normal_thickness *p, int free_pnt) {
 }
 
 static void
-_tgc_hack_fix(struct partition *part, struct soltab *stp) {
+_tgc_hack_fix(struct partition *part, struct soltab *stp)
+{
     /* hack fix for bad tgc surfaces - avoids a logging crash, which is probably something else altogether... */
     if (bu_strncmp("rec", stp->st_meth->ft_label, 3) == 0 || bu_strncmp("tgc", stp->st_meth->ft_label, 3) == 0) {
 
@@ -264,7 +267,7 @@ outer_pnts_hit(struct application *ap, struct partition *PartHeadp, struct seg *
 
     in_pt = pnthickness_create();
     VJOIN1(in_pt->pt->v, ap->a_ray.r_pt, in_part->pt_inhit->hit_dist, ap->a_ray.r_dir);
-    RT_HIT_NORMAL(in_pt->pt->n, in_part->pt_inhit, stp, &(app->a_ray), in_part->pt_inflip);
+    RT_HIT_NORMAL(in_pt->pt->n, in_part->pt_inhit, stp, &(ap->a_ray), in_part->pt_inflip);
     in_pt->thickness = 0.0;
     bu_ptbl_ins(pnset, (long *)in_pt);
 
@@ -272,7 +275,7 @@ outer_pnts_hit(struct application *ap, struct partition *PartHeadp, struct seg *
     if (bu_strncmp("half", ostp->st_meth->ft_label, 4) != 0) {
 	out_pt = pnthickness_create();
 	VJOIN1(out_pt->pt->v, ap->a_ray.r_pt, out_part->pt_outhit->hit_dist, ap->a_ray.r_dir);
-	RT_HIT_NORMAL(out_pt->pt->n, out_part->pt_outhit, ostp, &(app->a_ray), out_part->pt_outflip);
+	RT_HIT_NORMAL(out_pt->pt->n, out_part->pt_outhit, ostp, &(ap->a_ray), out_part->pt_outflip);
 	// If we don't have a viable normal, we don't want the point
 	if (!VNEAR_ZERO(out_pt->pt->n, VUNITIZE_TOL)) {
 	    bu_ptbl_ins(pnset, (long *)out_pt);
@@ -340,8 +343,8 @@ all_pnts_hit(struct application *app, struct partition *partH, struct seg *UNUSE
 
 static int
 op_overlap(struct application *ap, struct partition *UNUSED(pp),
-		struct region *UNUSED(reg1), struct region *UNUSED(reg2),
-		struct partition *UNUSED(hp))
+	   struct region *UNUSED(reg1), struct region *UNUSED(reg2),
+	   struct partition *UNUSED(hp))
 {
     RT_CK_APPLICATION(ap);
     return 0;
@@ -423,7 +426,7 @@ get_sobol_rays(fastf_t *rays, long int craynum, point_t center, fastf_t radius, 
 /* 0 = success, -1 error */
 int
 rt_gen_obj_pnts(struct rt_pnts_internal *rpnts, fastf_t *avg_thickness, struct db_i *dbip,
-       const char *obj, struct bn_tol *tol, int flags, int max_pnts, int max_time, int verbosity)
+		const char *obj, struct bn_tol *tol, int flags, int max_pnts, int max_time, int verbosity)
 {
     int pntcnt = 0;
     size_t i;
@@ -435,7 +438,7 @@ rt_gen_obj_pnts(struct rt_pnts_internal *rpnts, fastf_t *avg_thickness, struct d
     double avgt = 0.0;
     struct rt_i *rtip = NULL;
     size_t ncpus = bu_avail_cpus();
-    struct rt_gen_worker_vars *state = (struct rt_gen_worker_vars *)bu_calloc(ncpus+1, sizeof(struct rt_gen_worker_vars ), "state");
+    struct rt_gen_worker_vars *state = (struct rt_gen_worker_vars *)bu_calloc(ncpus+1, sizeof(struct rt_gen_worker_vars), "state");
     struct bu_ptbl **grid_pnts = NULL;
     struct bu_ptbl **rand_pnts = NULL;
     struct bu_ptbl **sobol_pnts = NULL;
@@ -474,7 +477,10 @@ rt_gen_obj_pnts(struct rt_pnts_internal *rpnts, fastf_t *avg_thickness, struct d
 	state[i].ind_src = &ind;
 	rt_init_resource(state[i].resp, (int)i, rtip);
     }
-    if (rt_gettree(rtip, obj) < 0) return -1;
+    if (rt_gettree(rtip, obj) < 0) {
+	ret = -1;
+	goto memfree;
+    }
 
     rt_prep_parallel(rtip, (int)ncpus);
 
@@ -691,7 +697,8 @@ rt_gen_obj_pnts(struct rt_pnts_internal *rpnts, fastf_t *avg_thickness, struct d
 	ret = 0;
 
 	avgt = thickness_total / (double)total_pnts;
-	if (avg_thickness) (*avg_thickness) = avgt;
+	if (avg_thickness)
+	    *avg_thickness = avgt;
     }
 
 
@@ -744,4 +751,3 @@ memfree:
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

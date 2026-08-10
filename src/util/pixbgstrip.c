@@ -37,7 +37,7 @@
 #include "bu/malloc.h"
 #include "bu/exit.h"
 #include "bn.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 static unsigned char *scanline;		/* 1 scanline pixel buffer */
@@ -182,7 +182,7 @@ main(int argc, char **argv)
     /* autosize input? */
     if (fileinput && autosize) {
 	size_t w, h;
-	if (fb_common_file_size(&w, &h, file_name, 3)) {
+	if (imgstream_image_file_size(&w, &h, file_name, 3)) {
 	    file_width = (long)w;
 	} else {
 	    fprintf(stderr, "pixbgstrip: unable to autosize\n");
@@ -194,7 +194,7 @@ main(int argc, char **argv)
 	bu_exit(1, NULL);
     }
 
-    scanbytes = file_width * sizeof(RGBpixel);
+    scanbytes = file_width * 3;
     scanline = (unsigned char *)bu_malloc(scanbytes, "scanline");
 
     while (!feof(infp)) {

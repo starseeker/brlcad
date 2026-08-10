@@ -41,7 +41,6 @@
 #include "bn/str.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
 
 #include "./rtuif.h"
 #include "./ext.h"

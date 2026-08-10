@@ -32,6 +32,9 @@
 #include "rt/directory.h"
 #include "rt/nongeom.h"
 
+struct rt_wdb;
+struct rt_binunif_internal;
+
 __BEGIN_DECLS
 
 /* defined in binary_obj.c */

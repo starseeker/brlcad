@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -38,11 +40,14 @@ ged_view2model_vec_core(struct ged *gedp, int argc, const char *argv[])
     point_t model_vec;
     point_t view_vec;
     mat_t inv_Viewrot;
+    mat_t view_rotation;
     double scan[3];
     static const char *usage = "x y z";
 
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -57,7 +62,9 @@ ged_view2model_vec_core(struct ged *gedp, int argc, const char *argv[])
     /* convert from double to fastf_t */
     VMOVE(view_vec, scan);
 
-    bn_mat_inv(inv_Viewrot, gedp->ged_gvp->gv_rotation);
+    bv_rotation_get(view_rotation,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
+    bn_mat_inv(inv_Viewrot, view_rotation);
     MAT4X3PNT(model_vec, inv_Viewrot, view_vec);
 
     bn_encode_vect(gedp->ged_result_str, model_vec, 1);

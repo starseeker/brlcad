@@ -1,7 +1,6 @@
 # LIBGED is set up based on a plugin architecture, with common functionality
 # defined in a core library.
 
-brlcad_find_package(LMDB REQUIRED)
 brlcad_find_package(PNG REQUIRED)
 brlcad_find_package(REGEX REQUIRED)
 
@@ -20,11 +19,25 @@ add_custom_target(ged_plugins_sentinel DEPENDS ${GED_PLUGINS_SENTINEL})
 set_target_properties(ged_plugins_sentinel PROPERTIES FOLDER "BRL-CAD Plugins/ged")
 
 # Utility program for finding and setting up GED commands
-set(GED_CMD_SCANNER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/ged_cmd_scanner.cpp")
-set(GED_CMD_SCANNER_TARGET ged_cmd_scanner)
-add_executable(${GED_CMD_SCANNER_TARGET} EXCLUDE_FROM_ALL "${GED_CMD_SCANNER_SRC}")
-set_target_properties(${GED_CMD_SCANNER_TARGET} PROPERTIES FOLDER "BRL-CAD Build Utilities")
-set(GED_CMD_SCANNER "$<TARGET_FILE:${GED_CMD_SCANNER_TARGET}>")
+set(GED_CMD_SCANNER ${CMAKE_BINARY_DIR}/CMakeTmp/ged_cmd_scanner${CMAKE_EXECUTABLE_SUFFIX})
+file(REMOVE "${GED_CMD_SCANNER}")
+set(_ged_scanner_sanitizer_override)
+if(BRLCAD_ENABLE_ADDRESS_SANITIZER OR BRLCAD_ENABLE_UNDEFINED_SANITIZER OR BRLCAD_SANITIZE_THREAD)
+  set(_ged_scanner_sanitizer_override -fno-sanitize=all)
+endif()
+try_compile(
+  ged_cmd_scanner
+  "${CMAKE_BINARY_DIR}/CMakeTmp"
+  SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/ged_cmd_scanner.cpp"
+  COMPILE_DEFINITIONS ${_ged_scanner_sanitizer_override}
+  LINK_OPTIONS ${_ged_scanner_sanitizer_override}
+  OUTPUT_VARIABLE GED_SCANNER_BLD_OUT
+  COPY_FILE "${GED_CMD_SCANNER}"
+  )
+unset(_ged_scanner_sanitizer_override)
+if (NOT EXISTS ${GED_CMD_SCANNER})
+  message(FATAL_ERROR "Unable to build ged command scanner: ${GED_SCANNER_BLD_OUT}")
+endif()
 set(GED_CMD_LIST ${CMAKE_CURRENT_BINARY_DIR}/../ged_cmds.txt)
 file(REMOVE ${GED_CMD_LIST})
 
@@ -192,10 +205,15 @@ function(ged_plugin_library name)
 
     # Find package calls will need to be repeated at the parent scope,
     # so pass the info up
-    get_property(local_calls DIRECTORY PROPERTY BRLCAD_LOCAL_PACKAGE_CALLS)
-    if(local_calls)
-      set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.." APPEND PROPERTY BRLCAD_LOCAL_PACKAGE_CALLS ${local_calls})
+    get_property(pkg_calls DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.." PROPERTY BRLCAD_LOCAL_PACKAGE_CALLS)
+    if(NOT pkg_calls)
+      set(pkg_calls "")
     endif()
+    get_property(local_calls DIRECTORY PROPERTY BRLCAD_LOCAL_PACKAGE_CALLS)
+    foreach(c ${local_calls})
+      list(APPEND pkg_calls "${c}")
+    endforeach()
+    set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.." PROPERTY BRLCAD_LOCAL_PACKAGE_CALLS "${pkg_calls}")
   else()
     add_library(${name} SHARED ${plugin_sources})
     target_compile_definitions(${name} PRIVATE GED_PLUGIN BRLCADBUILD HAVE_CONFIG_H)
@@ -219,10 +237,6 @@ function(ged_plugin_library name)
     if(GEDPL_COMPILE_OPTIONS)
       target_compile_options(${name} PRIVATE ${GEDPL_COMPILE_OPTIONS})
     endif()
-
-    # On some platforms distclean has additional cleanup to do
-    distclean("${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/ged/${name}.exp") 
-    distclean("${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/ged/${name}.pdb") 
 
   endif()
 endfunction()
@@ -288,11 +302,6 @@ function(ged_subprocess_library name)
   endif()
 
   add_dependencies(ged_subprocesses_sentinel ${name})
-
-  # On some platforms distclean has additional cleanup to do
-  distclean("${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/ged_exec/${name}.exp") 
-  distclean("${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/ged_exec/${name}.pdb") 
-
 endfunction(ged_subprocess_library name)
 
 # =========================================================================
@@ -307,45 +316,84 @@ set(GED_CMD_SRC ${CMAKE_CURRENT_BINARY_DIR}/ged_cmds.cpp)
 distclean("${GED_CMD_SRC}")
 set(GED_STATIC_REGISTRATION_CPP ${CMAKE_CURRENT_BINARY_DIR}/ged_static_registration.cpp)
 distclean("${GED_STATIC_REGISTRATION_CPP}")
-set_source_files_properties(${GED_CMD_HDR} ${GED_CMD_SRC} ${GED_STATIC_REGISTRATION_CPP} PROPERTIES GENERATED TRUE)
-set_source_files_properties(${GED_CMD_HDR} PROPERTIES HEADER_FILE_ONLY TRUE)
+
 
 set(
   LIBGED_SOURCES
   ${GED_CMD_SRC}
   ${GED_STATIC_REGISTRATION_CPP}
+  cmd_schemas.cpp
   edit_buf.cpp
+  event_txn.cpp
   exec.cpp
+  external_rt.cpp
   ged_init.cpp
   columns.c
-  dbi_state.cpp
-  display_list.c
+  db_index.cpp
+  draw_obol.cpp
+  draw_obol_result.cpp
   draw.cpp
   ged.cpp
+  ged_view_state.cpp
   ged_inside.c
   ged_track.c
   ged_util.cpp
+  obol_fbserv.cpp
   get_obj_bounds.c
   get_solid_kp.c
   path.c
   pnts_util.c
-  points_eval.c
   polyclip.cpp
   qray.cpp
+  selection_state.cpp
   tab_complete.cpp
   trace.c
   vers.c
   vutil.c
-  view/data_lines.c
+  ged_draw_highlight.c
+  ged_draw_material.c
+  ged_draw_navigation.c
+  ged_draw_scene_root.c
+  ged_draw_transactions.c
+  ged_draw_frontier.cpp
+  ged_draw_tree.c
+  ged_draw_util.c
+  ged_draw_view.cpp
+  ged_draw_overlay.c
+  ged_draw_registry.c
+  ged_draw_records.c
+  ged_draw_source.cpp
+  view/data_lines.cpp
   wdb_importFg4Section.c
-  wireframe_eval.c
 )
+
+# Keep the direct Obol bridge in stable, individually addressable objects.
+# Internal integration tests link these objects into the test executable so
+# private bridge seams remain absent from libged's shared ABI.
+set(
+  GED_OBOL_PRIVATE_BRIDGE_SOURCES
+  draw_obol.cpp
+  draw_obol_result.cpp
+  draw.cpp
+  ged.cpp
+  ged_view_state.cpp
+  ged_util.cpp
+  ged_draw_registry.c
+  ged_draw_scene_root.c
+  ged_draw_source.cpp
+  ged_draw_util.c
+  obol_fbserv.cpp
+  polyclip.cpp
+)
+set_source_files_properties(${GED_OBOL_PRIVATE_BRIDGE_SOURCES}
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 set_property(
   SOURCE ged_init.cpp
   APPEND
   PROPERTY COMPILE_DEFINITIONS "GED_PLUGIN_SUFFIX=\"${CMAKE_SHARED_LIBRARY_SUFFIX}\""
 )
+
 
 # Note - libged_deps is defined by ${BRLCAD_SOURCE_DIR}/src/source_dirs.cmake
 set(GED_PUBLIC_LIBS ${libged_deps})
@@ -354,6 +402,7 @@ set(
   PNG::PNG
   LMDB::LMDB
   REGEX::REGEX
+  Threads::Threads
   ${WINSOCK_LIB}
   ${M_LIBRARY}
   ${DL_LIBRARY}
@@ -374,12 +423,41 @@ set(
 brlcad_addlib(libged "${LIBGED_SOURCES}" "" "${GED_LOCAL_INCLUDE_DIRS}"
   PUBLIC_LIBS ${GED_PUBLIC_LIBS}
   PRIVATE_LIBS ${GED_PRIVATE_LIBS}
-  UNITY_BUILD_SKIP ged_init.cpp
+  UNITY_BUILD_SKIP exec.cpp ged_init.cpp ${GED_STATIC_REGISTRATION_CPP}
   # The full static library link is too large for some testing environments -
   # disable this test
   NO_STATIC_LINK_TEST
 )
 set_target_properties(libged PROPERTIES VERSION 20.0.1 SOVERSION 20)
+
+set(GED_DRAW_API_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/ged_draw_api.symbols")
+set(GED_DRAW_API_CHECK "${CMAKE_CURRENT_BINARY_DIR}/ged_draw_api.checked")
+set(GED_DRAW_API_HEADERS
+  ${CMAKE_SOURCE_DIR}/include/ged/view_types.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view.h
+  ${CMAKE_SOURCE_DIR}/include/ged/draw_types.h
+  ${CMAKE_SOURCE_DIR}/include/ged/scene.h
+  ${CMAKE_SOURCE_DIR}/include/ged/draw_source.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view_feature.h
+  ${CMAKE_SOURCE_DIR}/include/ged/polygon.h
+  ${CMAKE_SOURCE_DIR}/include/ged/selection.h
+  ${CMAKE_SOURCE_DIR}/include/ged/result.h
+  ${CMAKE_SOURCE_DIR}/include/ged/display.h
+)
+add_custom_command(
+  OUTPUT "${GED_DRAW_API_CHECK}"
+  COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}
+    -DMANIFEST=${GED_DRAW_API_MANIFEST}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_draw_api.cmake
+  COMMAND ${CMAKE_COMMAND} -E touch "${GED_DRAW_API_CHECK}"
+  DEPENDS ${GED_DRAW_API_HEADERS} ${GED_DRAW_API_MANIFEST}
+          ${CMAKE_CURRENT_SOURCE_DIR}/check_draw_api.cmake
+  VERBATIM
+)
+add_custom_target(ged_draw_api_check ALL DEPENDS "${GED_DRAW_API_CHECK}")
+add_dependencies(libged ged_draw_api_check)
+set_target_properties(ged_draw_api_check PROPERTIES FOLDER "BRL-CAD Libraries")
 if (LIBGED_STATIC_CORE)
   target_link_libraries(libged PRIVATE libged_plugin_deps)
   if (TARGET libged-static)
@@ -446,8 +524,8 @@ add_subdirectory(copy)
 add_subdirectory(copyeval)
 add_subdirectory(copymat)
 add_subdirectory(cpi)
-add_subdirectory(db)
 add_subdirectory(dbip)
+add_subdirectory(db)
 add_subdirectory(debug)
 add_subdirectory(debugbu)
 add_subdirectory(debugdir)
@@ -639,10 +717,9 @@ add_subdirectory(xpush)
 add_subdirectory(zap)
 add_subdirectory(zoom)
 
-
 #############################################
 # Plugins defined - now generate the wrappers
-message("Adding plugin wrapper generation rules...")
+message("Generating plugin wrapper files...")
 
 # We'll need to write input files with source lists
 # for the scanner
@@ -696,7 +773,7 @@ add_custom_command(
   VERBATIM
 )
 
-message("Adding plugin wrapper generation rules... done.")
+message("Generating plugin wrapper files... done.")
 
 
 if(LIBGED_STATIC_CORE)
@@ -737,6 +814,7 @@ endif()
 set(
   ged_ignore_files
   CMakeLists.txt
+  check_bobol_private_symbols.cmake
   NOTES
   README
   TODO
@@ -744,12 +822,14 @@ set(
   bot/ged_bot.h
   brep/ged_brep.h
   check/check_private.h
-  dbi.h
+  ged_bobol_private.hpp
+  draw_obol_bridge_private.hpp
+  ged_draw_private.h
+  ged_draw_view_private.h
   ged_cmd_scanner.cpp
   ged_private.h
   include/plugin.h
   joint/joint.h
-  osg.cpp
   pnts_util.h
   qray.h
 )

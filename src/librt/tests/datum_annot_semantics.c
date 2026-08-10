@@ -18,7 +18,7 @@
 #include "bu/file.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
-#include "bv/vlist.h"
+#include "rt/vlist.h"
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "rt/primitives/annot.h"
@@ -321,18 +321,18 @@ main(int argc, char **argv)
 	BU_LIST_INIT(&vhead);
 	if (OBJ[ID_ANNOT].ft_plot(&vhead, &intern, &ttol, &tol, NULL) < 0)
 	    bu_exit(1, "unable to plot model-space annotation\n");
-	if (bv_vlist_cmd_cnt((struct bv_vlist *)&vhead) < 20)
+	if (bg_vlist_cmd_cnt((rt_vlist *)&vhead) < 20)
 	    bu_exit(1, "annotation font outlines were not plotted\n");
 	{
-	    struct bv_vlist *vp;
+	    rt_vlist *vp;
 	    size_t polygon_starts = 0;
 	    size_t width_commands = 0;
-	    for (BU_LIST_FOR(vp, bv_vlist, &vhead)) {
+	    for (BU_LIST_FOR(vp, bg_vlist, &vhead)) {
 		size_t i;
 		for (i = 0; i < vp->nused; ++i)
-		    if (vp->cmd[i] == BV_VLIST_POLY_START)
+		    if (vp->cmd[i] == RT_VLIST_POLY_START)
 			++polygon_starts;
-		    else if (vp->cmd[i] == BV_VLIST_LINE_WIDTH)
+		    else if (vp->cmd[i] == RT_VLIST_LINE_WIDTH)
 			++width_commands;
 	    }
 	    if (!polygon_starts)
@@ -344,14 +344,14 @@ main(int argc, char **argv)
 	    point_t bmin, bmax;
 	    VSET(bmin, INFINITY, INFINITY, INFINITY);
 	    VSET(bmax, -INFINITY, -INFINITY, -INFINITY);
-	    (void)bv_vlist_bbox(&vhead, &bmin, &bmax, NULL, NULL);
+	    (void)bg_vlist_bbox(&vhead, &bmin, &bmax, NULL, NULL);
 	    if (!NEAR_EQUAL(bmin[X], 10.0, SMALL_FASTF) ||
 		    !NEAR_EQUAL(bmax[X], 10.0, SMALL_FASTF) ||
 		    bmax[Y] <= bmin[Y] || bmax[Z] <= bmin[Z])
 		bu_exit(1, "annotation outlines left their model-space plane\n");
 	}
 	check_vector("annotation plot anchor", loaded->V, original_anchor);
-	BV_FREE_VLIST(&rt_vlfree, &vhead);
+	RT_FREE_VLIST(&rt_vlfree, &vhead);
     }
     rt_db_free_internal(&intern);
 

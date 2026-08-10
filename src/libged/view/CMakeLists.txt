@@ -6,30 +6,34 @@ set(
   align.c
   autoview.c
   autoview2.cpp
-  axes.c
+  axes.cpp
   center.cpp
   eye.c
-  faceplate/faceplate.c
-  faceplate/faceplate_axes.c
-  faceplate/faceplate_grid.c
-  faceplate/interactive_rect.c
-  gobjs.cpp
+  faceplate/faceplate.cpp
+  faceplate/faceplate_axes.cpp
+  faceplate/faceplate_grid.cpp
+  faceplate/interactive_rect.cpp
+  feature_resolver.cpp
   knob.c
-  labels.c
-  lines.c
+  labels.cpp
+  lighting.cpp
+  lines.cpp
   lod.cpp
   lookat.c
   objs.cpp
-  polygons.c
+  polygons.cpp
   quat.c
   qvrot.c
-  saveview.c
+  saveview.cpp
+  shading.cpp
   size.c
   snap.c
-  view.c
+  view.cpp
   viewdir.c
   ypr.c
 )
+set_source_files_properties(saveview.cpp TARGET_DIRECTORY libged
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 ged_plugin_library(ged-view
   ${VIEW_SRCS}
@@ -39,6 +43,7 @@ ged_plugin_library(ged-view
 
 cmakefiles(
   CMakeLists.txt
+  feature_resolver.hpp
   ged_view.h
   faceplate/faceplate.h
 )

@@ -1,0 +1,264 @@
+Obol Hosted Application Ownership Matrix
+========================================
+
+Last reviewed: 2026-07-18
+
+Purpose
+-------
+
+This matrix records the authoritative ownership chain for every currently
+supported graphical BRL-CAD application.  A hosted view must have exactly one
+GED view context, display endpoint, Obol controller, and native host.  The
+application owns its window and event loop only.  A row is source-audited when
+the named source establishes that chain; it is runtime-validated only when the
+listed test runs against an appropriate host.
+
+Canonical ownership and attachment
+----------------------------------
+
+::
+
+    application / GED owner
+      |
+      +-- owns struct ged
+      |     |
+      |     +-- owns one BObolSceneController (shared database/result scene)
+      |     |       +-- may be attached to endpoint A, B, ... (borrowed)
+      |     |
+      |     +-- owns each ged_view_context
+      |             |
+      |             +-- owns or borrows exactly one bobol_display_endpoint
+      |                         |
+      |                         +-- owns BObolViewController and local stores
+      |                         +-- owns or borrows one BObolWindowHost
+      |
+      +-- owns native windows and toolkit event loop
+
+The typed view context plus its endpoint is the sole attachment boundary.
+Endpoint replacement first binds the populated shared scene to the new
+endpoint, preserves the view-local camera and presentation contract, then
+detaches and destroys the old endpoint according to its ownership flag.  View
+destruction detaches its endpoint before releasing the view context.  GED
+destruction first tears down all views/endpoints and then its one shared scene.
+Scene ownership is never transferred by attach, replace, or detach.  A hidden
+view remains a complete context/endpoint pair; visibility does not change
+ownership.
+
+QGED
+----
+
+* GED context: `QgSession` owns `struct ged`; each `QgView` supplies the
+  active `bv_context` through `viewContext()`.
+* Endpoint/controller/host: `QgView` creates one embedded endpoint, selects
+  its HW or SW Obol engine, and opens the matching `qt-gl` or `qt-sw` host.
+  `QgQuadView` associates each visible endpoint with its GED view context.
+* Input/framebuffer/close: Qt canvases dispatch endpoint input.  QGED binds
+  the visible endpoint to the active GED context, then libged selects that
+  endpoint's host for the one session Obol/imgstream stream.  QGED owns only
+  TCP/IPC notifier delivery and repaint scheduling through its
+  `qged_fbserv_*` adapter, not a framebuffer host or controller.  An active-pane
+  switch transactionally attaches the same imgstream framebuffer to the new
+  host and applies its requested composition before detaching the old retained
+  image layer; pixels, view, cursor, composition, and stream identity survive
+  the move.  A rejected attachment or composition leaves the old image and
+  capture owner live.  QGED clears its non-owning notifier target before
+  GED destroys fbserv.
+  `QgView` detaches that endpoint from GED before destruction.
+  Its optional TCP notifier is constrained to IPv4 loopback; external service
+  is intentionally delegated to standalone fbserv's authenticated TLS path.
+  Selection tools install one guarded endpoint action layer containing their
+  local bindings and handler; libBObol routes by layer provenance and does
+  not define or interpret QGED action identifiers.  An explicit unhandled
+  result falls through to the matching standard view action.
+* Evidence: `test_qtcad_obol_window_host`, controller, draw synchronization,
+  real-model, framebuffer, and progressive-LoD tests.  The framebuffer test
+  moves a live stream between two Qt software endpoints, verifies old retained
+  image removal, new-host physical sizing, and new-pixel presentation.  The
+  libBObol window-host regression independently verifies same-identity
+  rehost, pixel/view/cursor/composition preservation, attachment- and
+  composition-rejected target rollback, explicit detach/reattach, and recovery
+  after host destruction.  The QGED framebuffer regression also verifies that
+  a live composition-property rejection reports unsupported and restores both
+  its passive BV value and retained image layer.
+  `regress-qged-ert`
+  owns an isolated Xvfb server and verifies the software endpoint launches
+  ERT through IPC at the laid-out canvas size, completes, and leaves QGED
+  alive; unavailable X infrastructure is an explicit skip.  The window-host
+  regression also closes and reopens a Qt software host through `dm`, proving
+  that this replaces only the native host while retaining its GED context,
+  display endpoint, and controller.  It also proves that an explicit
+  endpoint-owned background survives replacement; a newly created canvas may
+  not seed the retained controller from its own passive view defaults.
+  On 2026-07-15 the hardware QGED host was also exercised on a native X
+  server with the retained RT engine.  The Qt factory now reports the live
+  canvas dimensions (including device-pixel ratio) after layout, and viewport
+  image polling synchronizes worker presentation before traversing the scene.
+  A 912x678 Moss capture consequently contains the shaded RT frame across the
+  complete canvas rather than a stale startup-sized layer or only the cleared
+  gradient.  `test_qtcad_obol_window_host` independently resizes a live canvas
+  and proves both endpoint dimension refresh and presentation synchronization.
+
+MGED
+----
+
+* GED context: the active `mged_view_state` context is authoritative.
+* Endpoint/controller/host: `mged_display_init` creates one endpoint, selects HW
+  or SW explicitly, attaches it to that context, and opens `tk-gl` or
+  `tk-photo`.  The `mged_display` application record is an input/view shell;
+  MGED retains no `struct dm` or graphical renderer.
+* Input/framebuffer/close: the Tk host prepends one host-unique bindtag to the
+  canvas and containing toplevel.  It normalizes native Tk input and dispatches
+  endpoint actions before application bindings; the bridge is shared by X11
+  and WGL rather than relying on an Xlib-only callback.  Framebuffer
+  composition is endpoint-based.  detach clears the endpoint association
+  before the host is released.  MGED/TclCAD TCP listeners are likewise
+  loopback-only, and libpkg now honors that requested bind interface rather
+  than exposing the embedded listener on all interfaces.  Child renderers
+  normally use the locally trusted IPC route.
+* Evidence: headless MGED smoke, ERT, and progressive-LoD tests.  The
+  isolated-X `mged_tkobol_attach_smoke` opens a direct hardware Tk endpoint,
+  verifies its physical resize, drives a shifted primary-pan gesture at the
+  child widget through MGED's application-owned shift-primary action layer,
+  including snapped
+  view motion, and drives control-primary rotation and shift-control-primary
+  scale through the same typed begin/motion/cancel contract.  MGED defines
+  these action tokens locally; libBObol owns only normalization, matching,
+  and typed-result transport.  The smoke verifies that
+  exact native bindings no longer duplicate these gestures, then exercises
+  representative axis-constrained translate, rotate, and scale lifecycles.
+  ADC transform mode uses a separate MGED-owned action layer selected from
+  authoritative visibility and transform state; the smoke exercises direct
+  translation, angle, and distance plus their constrained variants, including
+  cancellation and duplicate-binding checks.  The same application layer owns
+  MGED's edit-axes, perspective-mode/cycle, whole-faceplate visibility, and
+  faceplate-GUI policy shortcuts and keeps those application-only tokens out
+  of libBObol.  The Tk and Qt adapters normalize F3/F6/F7/F8 to the same
+  toolkit-neutral key values; MGED removes the raw Tcl bindings so one
+  physical key press applies each policy exactly once.  The same layer now
+  owns the unmodified middle-button `dm m` lifecycle, including snapped
+  center/edit and mode-specific pick/query/rectangle policy, rubber-band
+  motion, and release.  Unmodified left/right zoom are MGED-local one-shot
+  actions.  Toolkit-neutral modifier identities and focus events cancel an
+  active gesture without retaining the raw Tcl key-release commands.  The
+  isolated-X smoke checks zoom-rectangle completion, post-release,
+  modifier-release, and focus-loss cancellation, and verifies the migrated
+  native bindings are inert.
+  It captures a nonblank System-GL frame and releases the host.  The native
+  toplevel and its Togl child now both follow endpoint resize; the smoke
+  verifies their physical 320x240 dimensions instead of trusting only passive
+  BV size.  The same native-X run switches that retained endpoint to RT,
+  captures a shaded frame, changes the camera, captures a distinct second
+  frame, and switches back to HW.  Geometry revision remains 1 while
+  presentation revision advances from 1 to 2, proving camera-only interaction
+  does not rebuild the retained raytrace scene.  Both RT captures are nonblank
+  320x240 images and include the endpoint background/faceplate composition.
+  This is usable-X11 lifecycle coverage.  The same Tk bridge is compiled for
+  WGL but still needs native Windows validation; macOS needs a supported Tk
+  host and validation.
+
+GSH
+---
+
+* GED context: the active GSH GED view context.
+* Endpoint/controller/host: GSH requests the standard headless endpoint from
+  GED.  It owns neither a private controller nor a separate native host.
+* Input/framebuffer/close: not applicable to the headless shell; framebuffer
+  and ERT publication use the endpoint composition path.
+* Evidence: GSH basic, ERT, and progressive-LoD smoke tests.
+
+Standalone rt and fbserv
+------------------------
+
+* Endpoint/controller/host: a visible legacy display specification opens one
+  `bobol_display_session`.  The session owns one endpoint and controller,
+  one provider-created native host, and its one imgstream framebuffer.  The
+  registered QtCAD-first/TclCAD-fallback provider owns only toolkit state.
+* rt: its display-session runner executes ray work on a worker while the
+  opening thread polls the native host.  Framebuffer writes request
+  presentation; only the owner thread performs retained-image and toolkit
+  work.
+* fbserv: its existing service loop polls the same session while transport
+  writes request presentation.  It has no second window, controller, or
+  framebuffer host.  TCP is loopback-only by default.  Explicit `-R` remote
+  access requires strict session-token authentication and TLS; clients pin
+  the printed SHA-256 certificate fingerprint before sending the token.
+  `-R -u`/`FBSERV_INSECURE` are named compatibility opt-outs rather than an
+  accidental public listener.
+* Headless diagnostics: `/dev/null` is not a display session.  It allocates
+  no imgstream image or pixel buffer, initializes no provider, and discards
+  framebuffer writes while retaining dimensions and compatibility metadata.
+  `rt` also gates its framebuffer I/O for this sink.
+  This image-stream sink is separate from the endpoint `diagnostic` engine.
+  An endpoint in diagnostic mode retains and traverses its existing scene but
+  disables its controller's graphical root, host frame notifications, and
+  composite capture.  Its typed diagnostic properties report traversal
+  revision, source realization counts, progressive state, and scene bounds.
+  The `none` engine uses the same graphical suppression without traversal;
+  both leave the independent framebuffer capture plane available.
+* Close: visible sessions close the imgstream framebuffer, endpoint, then
+  provider host.  Non-display targets close their imgstream framebuffer
+  directly.
+* Evidence: `rt_null_sink` runs `rt -F /dev/null` with display variables
+  unset.  `rt_display_swrast`, `rt_display_ogl`, `fbserv_display_swrast`, and
+  `fbserv_display_ogl` cover the visible Qt provider paths under Xvfb.
+  `imgstream_fbserv_auth_test` verifies loopback listener binding,
+  fail-closed secure-remote state, token format, and TLS fingerprint creation;
+  `imgstream_fbserv_tls_test` verifies wrong-pin rejection and a correct-pin,
+  authenticated pixel exchange through the production TLS server and remote
+  client.  The lifecycle and parallel TCP/IPC regressions verify strict
+  authentication, packet fragmentation, shutdown, and concurrent local
+  sessions.
+
+Tcl Ged, Archer, and rtwizard
+-----------------------------
+
+* GED context: `cadwidgets::Ged` owns one `go_open` GED object.  It creates a
+  named context per pane with `new_view`; the active pane selects the GED
+  active context.
+* Endpoint/controller/host: `to_new_view` creates a context, then the Tk
+  `tkobol` path creates one endpoint, selects its engine, attaches it to the
+  context, and opens the `tk-gl` or `tk-photo` factory host.  Each intentional
+  quad pane is therefore a separate complete hosted view, rather than a
+  shared renderer with hidden state.
+* Input/framebuffer/close: `to_new_view` installs endpoint-aware bindings.
+  libged owns one session Obol/imgstream framebuffer bridge; TclCAD binds its
+  capture provider to the active or explicitly selected output endpoint and
+  never casts a factory-host instance to a generic window host.  Auxiliary
+  pane creation does not retarget that stream, and pane deletion rebinds the
+  surviving active endpoint before freeing the deleted context.
+  `to_deleteProc` iterates all owned view contexts and
+  `tclcad_view_host_destroy` releases each endpoint before GED closes.
+* Archer: `ArcherCore` embeds `cadwidgets::Ged`; it has no independent scene,
+  controller, or display host.  Its obsolete display-manager discovery and
+  ineffective `-type` option have been removed.  Archer now names the sole
+  Tk Obol host directly.
+* rtwizard: the historical GUI script embeds an `ArcherCore` view-only
+  instance and consequently uses the same Tk endpoint chain.  The GED
+  `rtwizard` command itself consumes the active view camera and launches the
+  standalone renderer with `--no-gui`; it does not create a parallel scene
+  display.
+* Evidence: `tclcad_test_new_view_cleanup` verifies GED destruction and that
+  the retired `dm_list` discovery command is absent.
+  `tclcad_test_tkobol_widget_smoke` passes under `xvfb-run` and covers direct
+  top-level, embedded, and software views, plus active hardware-pane deletion
+  while a software pane remains: the surviving endpoint renders, captures, and
+  is then released.  `tclcad_test_archer_obol_smoke` instantiates the view-only
+  embedded `ArcherCore` configuration used by the historical rtwizard GUI,
+  verifies its four `tkobol` endpoints, draws, and verifies that all four
+  widgets and the native GED command are removed.  The
+  `rtwizard_gui_obol_smoke` regression starts the production historical GUI,
+  selects its rendering page, verifies the embedded four-pane `ArcherCore`,
+  draws through the active Tk Obol endpoint, writes the live framebuffer over
+  IPC, captures the composed pixel, and verifies teardown leaves no GED views
+  or endpoints.  It passes both under its isolated Xvfb harness and against a
+  usable native X display.
+  `RtControl` is now a `cadwidgets::Ged`-only component; its unreachable
+  `Mged` branches have been deleted.
+
+Required Follow-up
+------------------
+
+1. Treat a hidden quad pane as an intentional inactive hosted view, not an
+   excuse to share controllers or native hosts.  If lazy pane creation is
+   introduced for resource use, preserve the same one-context/one-endpoint
+   ownership and add lifecycle coverage before deleting the eager path.

@@ -30,6 +30,7 @@
 #include "bu/cmd.h"
 #include "bu/getopt.h"
 #include "bu/hash.h"
+#include "ged/event_txn.h"
 
 #include "../ged_private.h"
 
@@ -162,7 +163,7 @@ killtree_process(struct db_i *dbip, struct directory *dp, struct killtree_data *
 	    bu_vls_printf(gktdp->gedp->ged_result_str, "%s ", dp->d_namep);
 	}
     } else {
-	_dl_eraseAllNamesFromDisplay(gktdp->gedp, dp->d_namep, 0);
+	char *deleted_name = bu_strdup(dp->d_namep);
 
 	bu_vls_printf(gktdp->gedp->ged_result_str, "KILL %s:  %s\n",
 		      (dp->d_flags & RT_DIR_COMB) ? "COMB" : "Solid",
@@ -170,19 +171,24 @@ killtree_process(struct db_i *dbip, struct directory *dp, struct killtree_data *
 
 	if (!gktdp->killrefs) {
 	    if (db_delete(dbip, dp) != 0 || db_dirdelete(dbip, dp) != 0) {
-		bu_vls_printf(gktdp->gedp->ged_result_str, "an error occurred while deleting %s\n", dp->d_namep);
+		bu_vls_printf(gktdp->gedp->ged_result_str, "an error occurred while deleting %s\n", deleted_name);
+	    } else {
+		ged_event_notify_object_removed(gktdp->gedp, deleted_name, NULL);
 	    }
 	} else {
 	    append_name(&gktdp->av, &gktdp->ac, &gktdp->av_capacity, dp->d_namep);
 
 	    if (db_delete(dbip, dp) != 0 || db_dirdelete(dbip, dp) != 0) {
-		bu_vls_printf(gktdp->gedp->ged_result_str, "an error occurred while deleting %s\n", dp->d_namep);
+		bu_vls_printf(gktdp->gedp->ged_result_str, "an error occurred while deleting %s\n", deleted_name);
 
 		/* Remove from list */
 		bu_free((void *)gktdp->av[--gktdp->ac], "killtree_callback");
 		gktdp->av[gktdp->ac] = (char *)0;
+	    } else {
+		ged_event_notify_object_removed(gktdp->gedp, deleted_name, NULL);
 	    }
 	}
+	bu_free(deleted_name, "killtree deleted name");
     }
 }
 
@@ -263,6 +269,8 @@ ged_killtree_core(struct ged *gedp, int argc, const char *argv[])
     /* Objects that would be killed are in the first sublist */
     if (gktd.print)
 	bu_vls_printf(gedp->ged_result_str, "{");
+    else
+	ged_event_batch_begin(gedp);
 
     for (i = 1; i < argc; i++) {
 	dp = db_lookup(gedp->dbip, argv[i], LOOKUP_QUIET);
@@ -326,6 +334,8 @@ ged_killtree_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Done removing stuff - update references. */
     db_update_nref(gedp->dbip);
+    if (!gktd.print)
+	ged_event_batch_end(gedp, NULL);
 
     return BRLCAD_OK;
 }

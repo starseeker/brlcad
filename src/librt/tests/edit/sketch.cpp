@@ -44,6 +44,7 @@
 #include "bu/malloc.h"
 #include "nmg.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 #include "rt/primitives/sketch.h"
 #include "rt/rt_ecmds.h"
@@ -114,20 +115,10 @@ main(int argc, char *argv[])
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 100.0;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 50.0;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_size(&v, 100.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     s->local2base = 1.0;
 
@@ -672,7 +663,7 @@ main(int argc, char *argv[])
 	       skt5->verts[0][0], skt5->u_vec,
 	       skt5->verts[0][1], skt5->v_vec);
 	mat_t m2ov;
-	bn_mat_mul(m2ov, v->gv_model2view, s->model_changes);
+	bn_mat_mul(m2ov, v.gv_model2view, s->model_changes);
 	point_t v0_view;
 	MAT4X3PNT(v0_view, m2ov, v0_3d);
 

@@ -31,6 +31,22 @@ set(
   notes/hypot.txt
   notes/mater.txt
   notes/matrix.txt
+  notes/brl_obol_matrices.txt
+  notes/brl_obol_view_lod.txt
+  notes/brl_obol_view_operations.txt
+  notes/ged_draw_api.md
+  notes/libbobol_active_debt.md
+  notes/libbobol_api_contract.md
+  notes/libbobol_architecture.md
+  notes/libbobol_lod_state_contract.md
+  notes/libbobol_platform_threading_matrix.md
+  notes/obol_endpoint_lifecycle.md
+  notes/obol_framebuffer_protocol.txt
+  notes/obol_grid_snap.txt
+  notes/obol_hosted_application_ownership.txt
+  notes/obol_legacy_dependency_inventory.txt
+  notes/obol_overlay_coverage.txt
+  notes/obol_realization_coverage.txt
   pre_BRL-CAD.bib
 )
 add_doc(documentation_DATA ".")

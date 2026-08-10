@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "ged/display_obol_private.h"
+
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
@@ -69,15 +71,17 @@
 #include "raytrace.h"
 #define LIBTERMIO_IMPLEMENTATION
 #include "libtermio.h"
-#include "bv/util.h"
 #include "ged.h"
+#include "ged/view.h"
+#include "ged/display.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "tclcad.h"
 
 /* private */
 #include "./mged.h"
 #include "./sedit.h"
 #include "./menu.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./cmd.h"
 #include "./f_cmd.h" // for f_opendb
 #include "brlcad_ident.h"
@@ -89,9 +93,9 @@
 #define SPACES "                                                                                                                                                                                                                                                                                                           "
 
 
-extern void draw_e_axes(struct mged_state *);
-extern void draw_m_axes(struct mged_state *);
-extern void draw_v_axes(struct mged_state *);
+extern void mged_edit_axes_state_sync(struct mged_state *);
+extern void mged_adc_state_refresh(struct mged_state *);
+extern void mged_rubber_band_state_sync(struct mged_state *);
 
 /* defined in chgmodel.c */
 extern void set_localunit_TclVar(struct mged_state *s);
@@ -102,9 +106,6 @@ extern struct bu_vls *history_cur(void);
 extern struct bu_vls *history_next(const char *);
 
 // FIXME: Globals
-
-/* defined in dozoom.c */
-extern unsigned char geometry_default_color[];
 
 /* defined in set.c */
 extern struct _mged_variables default_mged_variables;
@@ -144,12 +145,43 @@ struct mged_state *MGED_STATE = NULL;
 
 jmp_buf jmp_env;	/* For non-local gotos */
 // FIXME: Global
-double frametime;	/* time needed to draw last frame */
+double frametime;	/* smoothed interval between completed frames */
 
 // FIXME: Global
 struct rt_wdb rtg_headwdb;  /* head of database object list */
 
 void (*cur_sigint)(int);	/* Current SIGINT status */
+
+
+int
+mged_event_batch_begin_dbip(struct db_i *dbip)
+{
+    if (!dbip || !MGED_STATE || !MGED_STATE->gedp ||
+	    !MGED_STATE->dbip || MGED_STATE->dbip != dbip ||
+	    MGED_STATE->gedp->dbip != dbip)
+	return 0;
+    return ged_event_batch_begin(MGED_STATE->gedp) > 0;
+}
+
+
+void
+mged_event_batch_end_dbip(struct db_i *dbip, int started)
+{
+    if (started && dbip && MGED_STATE && MGED_STATE->gedp &&
+	    MGED_STATE->dbip == dbip && MGED_STATE->gedp->dbip == dbip)
+	(void)ged_event_batch_end(MGED_STATE->gedp, NULL);
+}
+
+
+int
+mged_event_notify_database_metadata_changed_dbip(struct db_i *dbip)
+{
+    if (!dbip || !MGED_STATE || !MGED_STATE->gedp ||
+	    !MGED_STATE->dbip || MGED_STATE->dbip != dbip ||
+	    MGED_STATE->gedp->dbip != dbip)
+	return 0;
+    return ged_event_notify_database_metadata_changed(MGED_STATE->gedp, NULL);
+}
 
 
 int
@@ -369,7 +401,6 @@ notify_parent_done(int parent) {
 }
 
 
-#if defined(HAVE_WINDOWS_H)
 void
 mgedInvalidParameterHandler(const wchar_t* UNUSED(expression),
 			    const wchar_t* UNUSED(function),
@@ -381,7 +412,6 @@ mgedInvalidParameterHandler(const wchar_t* UNUSED(expression),
  * Windows, I think you're number one!
  */
 }
-#endif
 
 
 void
@@ -399,19 +429,27 @@ pr_beep(void)
 }
 
 
+/* so the Windows-specific calls blend in */
+#if !defined(_WIN32) || defined(__CYGWIN__)
+void _set_invalid_parameter_handler(void (*callback)(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, uintptr_t)) { if (callback) return; }
+#endif
+
+
+
+
 /*
- * attaches the specified display manager
+ * attaches the specified Obol endpoint host
  */
 static void
-attach_display_manager(Tcl_Interp *interpreter, const char *manager, const char *display)
+attach_endpoint_host(Tcl_Interp *interpreter, const char *host_type, const char *display)
 {
     struct bu_vls tcl_cmd = BU_VLS_INIT_ZERO;
     bu_vls_printf(&tcl_cmd, "attach ");
     if (display && strlen(display) > 0)
 	bu_vls_printf(&tcl_cmd, "-d %s ", display);
-    if (!manager)
-	manager = "nu";
-    bu_vls_printf(&tcl_cmd, "%s", manager);
+    if (!host_type)
+	host_type = "nu";
+    bu_vls_printf(&tcl_cmd, "%s", host_type);
     Tcl_Eval(interpreter, bu_vls_cstr(&tcl_cmd));
     bu_vls_free(&tcl_cmd);
     bu_log("%s\n", Tcl_GetStringResult(interpreter));
@@ -472,44 +510,53 @@ sig3(int UNUSED(sig))
 void
 new_edit_mats(struct mged_state *s)
 {
-    struct mged_dm *save_dm_list;
+    struct mged_display *save_display;
 
-    save_dm_list = s->mged_curr_dm;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!p->dm_owner)
+    save_display = s->mged_curr_display;
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p->display_owner)
 	    continue;
 
-	set_curr_dm(s, p);
-	bn_mat_mul(view_state->vs_model2objview, view_state->vs_gvp->gv_model2view, MEDIT(s)->model_changes);
+	mged_current_display_set(s, p);
+	mat_t model2view;
+	struct bv *view = mged_view_context_view(view_state->vs_gvp);
+	bv_model2view_get(model2view, view);
+	bn_mat_mul(view_state->vs_model2objview, model2view, MEDIT(s)->model_changes);
 	bn_mat_inv(view_state->vs_objview2model, view_state->vs_model2objview);
 
 	/* Keep rt_edit’s own cached matrix in sync for external users */
 	MAT_COPY(MEDIT(s)->model2objview, view_state->vs_model2objview);
 
-	view_state->vs_flag = 1;
+	mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
     }
 
-    set_curr_dm(s, save_dm_list);
+    mged_current_display_set(s, save_display);
+
+    /* Object edit has no dozoom-style scene transform in the Obol branch;
+     * re-plot the edited object at its live pose so the move is visible. */
+    mged_oedit_live_preview(s);
 }
 
 
 void
-mged_view_callback(struct bview *gvp,
+mged_view_callback(struct ged_view_context *view_ctx,
 		   void *clientData)
 {
     struct mged_state *s = MGED_STATE;
     struct _view_state *vsp = (struct _view_state *)clientData;
 
-    if (!gvp)
+    if (!view_ctx)
 	return;
 
     if (s->global_editing_state != ST_VIEW) {
-	bn_mat_mul(vsp->vs_model2objview, gvp->gv_model2view, MEDIT(s)->model_changes);
+	mat_t model2view;
+	bv_model2view_get(model2view, mged_view_context_view(view_ctx));
+	bn_mat_mul(vsp->vs_model2objview, model2view, MEDIT(s)->model_changes);
 	bn_mat_inv(vsp->vs_objview2model, vsp->vs_model2objview);
     }
-    vsp->vs_flag = 1;
-    dm_set_dirty(s->mged_curr_dm->dm_dmp, 1);
+    mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_VIEW_RECORD);
 }
 
 
@@ -520,42 +567,35 @@ mged_view_callback(struct bview *gvp,
 void
 new_mats(struct mged_state *s)
 {
-    bv_update(view_state->vs_gvp);
+    ged_view_context_update(view_state->vs_gvp);
 }
 
 static int
-mged_dm_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
+mged_display_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
 {
     struct mged_state *s = (struct mged_state *)u2;
     if (!s || ac < 2 || !av)
         return BRLCAD_OK;
 
-    const char *dbg = getenv("GED_DM_DURING_DEBUG");
+    const char *dbg = getenv("GED_DISPLAY_DURING_DEBUG");
     if (dbg && BU_STR_EQUAL(dbg, "1")) {
-        bu_log("mged dm during callback: ");
+        bu_log("mged display during callback: ");
         for (int i = 0; i < ac; i++) {
             bu_log("%s%s", av[i], (i + 1 < ac) ? " " : "\n");
         }
     }
 
     if (BU_STR_EQUAL(av[1], "set")) {
-        if (ac > 2 && BU_STR_EQUAL(av[2], "zclip") && DMP && view_state && view_state->vs_gvp && view_state->vs_gvp->gv_s) {
-            view_state->vs_gvp->gv_s->gv_zclip = dm_get_zclip(DMP);
-        }
-        if (view_state)
-            view_state->vs_flag = 1;
-        DMP_dirty = 1;
-        if (DMP)
-            dm_set_dirty(DMP, 1);
+	if (view_state)
+	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
+        mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_DEVICE_SETTING);
         return BRLCAD_OK;
     }
 
     if (BU_STR_EQUAL(av[1], "bg") || BU_STR_EQUAL(av[1], "attach")) {
         if (view_state)
-            view_state->vs_flag = 1;
-        DMP_dirty = 1;
-        if (DMP)
-            dm_set_dirty(DMP, 1);
+            mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
+        mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_DEVICE_SETTING);
     }
 
     return BRLCAD_OK;
@@ -590,7 +630,7 @@ struct mged_color_opt {
  *
  * Two usage phases:
  *   (a) Early options (attach, classic_mged, …) are applied immediately
- *       after bu_opt_parse returns, before Tcl/DM initialisation.
+ *       after bu_opt_parse returns, before Tcl/Obol host initialisation.
  *   (b) Deferred options (mged_variables, grid, colours, …) are applied by
  *       apply_cli_overrides() after do_rc() so that CLI flags always win
  *       over any .mgedrc settings.
@@ -631,7 +671,6 @@ struct mged_cli_overrides {
 
     /* mged_variables (rset var / set <name>) */
     int use_air;            /* --use-air / --no-use-air */
-    int dlist;              /* --dlist   / --no-dlist   */
     int faceplate;          /* --faceplate / --no-faceplate */
     int orig_gui;           /* MGED_CLI_UNSET_INT / 0 / 1 */
     int linewidth;          /* --linewidth #  (pixels, >=1) */
@@ -640,7 +679,6 @@ struct mged_cli_overrides {
     int fb;                 /* MGED_CLI_UNSET_INT / 0 / 1 */
     int fb_all;             /* MGED_CLI_UNSET_INT / 0 / 1 */
     int fb_overlay;         /* --fb-overlay 0|1|2 */
-    int predictor;          /* --predictor / --no-predictor */
     int hot_key;            /* MGED_CLI_UNSET_INT / keycode */
     int context;            /* MGED_CLI_UNSET_INT / 0 / 1 */
     int sliders;            /* MGED_CLI_UNSET_INT / 0 / 1 */
@@ -651,13 +689,10 @@ struct mged_cli_overrides {
     char rotate_about;      /* --rotate-about m|v|e */
     char transform;         /* --transform v|a|e */
     double perspective;     /* --perspective #  (degrees, MGED_CLI_UNSET_DBL = not set) */
-    double predictor_advance;   /* --predictor-advance # */
-    double predictor_length;    /* --predictor-length # */
     double nmg_eu_dist;         /* --nmg-eu-dist # */
-    double eye_sep_dist;        /* --eye-sep-dist # (mm, 0 = mono) */
 
     /* Tcl mged_default array entries */
-    const char *dm_type;    /* --dm-type type */
+    const char *host_type;  /* --host type */
     const char *geom;       /* --geom WxH+X+Y (command window) */
     const char *ggeom;      /* --ggeom WxH+X+Y (graphics window) */
 
@@ -1019,7 +1054,7 @@ mged_process_char(struct mged_state *s, char ch)
 	    if (Tcl_CommandComplete(bu_vls_addr(&s->input_str_prefix))) {
 		curr_cmd_list = &head_cmd_list;
 		if (curr_cmd_list->cl_tie)
-		    set_curr_dm(s, curr_cmd_list->cl_tie);
+		    mged_current_display_set(s, curr_cmd_list->cl_tie);
 
 		reset_Tty(fileno(stdin)); /* Backwards compatibility */
 		(void)signal(SIGINT, SIG_IGN);
@@ -1404,7 +1439,7 @@ mged_process_char(struct mged_state *s, char ch)
 int
 event_check(struct mged_state *s, int non_blocking)
 {
-    struct mged_dm *save_dm_list;
+    struct mged_display *save_display;
     int save_edflag;
 
     if (mged_shutting_down(s))
@@ -1443,12 +1478,12 @@ event_check(struct mged_state *s, int non_blocking)
     /*********************************
      * Handle rate-based processing *
      *********************************/
-    save_dm_list = s->mged_curr_dm;
+    save_display = s->mged_curr_display;
     if (MEDIT(s)->k.rot_m_flag) {
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 	char save_coords;
 
-	set_curr_dm(s, s->s_edit->edit_rate_mr_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_mr_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'm';
 
@@ -1482,7 +1517,7 @@ event_check(struct mged_state *s, int non_blocking)
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 	char save_coords;
 
-	set_curr_dm(s, s->s_edit->edit_rate_or_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_or_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'o';
 
@@ -1516,7 +1551,7 @@ event_check(struct mged_state *s, int non_blocking)
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 	char save_coords;
 
-	set_curr_dm(s, s->s_edit->edit_rate_vr_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_vr_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'v';
 
@@ -1550,7 +1585,7 @@ event_check(struct mged_state *s, int non_blocking)
 	char save_coords;
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 
-	set_curr_dm(s, s->s_edit->edit_rate_mt_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_mt_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'm';
 
@@ -1564,10 +1599,11 @@ event_check(struct mged_state *s, int non_blocking)
 	}
 
 	non_blocking++;
+	fastf_t view_local_scale = bv_scale_get(mged_view_state_view(view_state)) * s->dbip->dbi_base2local;
 	bu_vls_printf(&vls, "knob -i -e aX %f aY %f aZ %f\n",
-		      MEDIT(s)->k.tra_m[X] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-		      MEDIT(s)->k.tra_m[Y] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-		      MEDIT(s)->k.tra_m[Z] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local);
+		      MEDIT(s)->k.tra_m[X] * 0.05 * view_local_scale,
+		      MEDIT(s)->k.tra_m[Y] * 0.05 * view_local_scale,
+		      MEDIT(s)->k.tra_m[Z] * 0.05 * view_local_scale);
 
 	Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	bu_vls_free(&vls);
@@ -1583,7 +1619,7 @@ event_check(struct mged_state *s, int non_blocking)
 	char save_coords;
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 
-	set_curr_dm(s, s->s_edit->edit_rate_vt_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_vt_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'v';
 
@@ -1597,10 +1633,11 @@ event_check(struct mged_state *s, int non_blocking)
 	}
 
 	non_blocking++;
+	fastf_t view_local_scale = bv_scale_get(mged_view_state_view(view_state)) * s->dbip->dbi_base2local;
 	bu_vls_printf(&vls, "knob -i -e aX %f aY %f aZ %f\n",
-		      MEDIT(s)->k.tra_v[X] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-		      MEDIT(s)->k.tra_v[Y] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-		      MEDIT(s)->k.tra_v[Z] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local);
+		      MEDIT(s)->k.tra_v[X] * 0.05 * view_local_scale,
+		      MEDIT(s)->k.tra_v[Y] * 0.05 * view_local_scale,
+		      MEDIT(s)->k.tra_v[Z] * 0.05 * view_local_scale);
 
 	Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	bu_vls_free(&vls);
@@ -1637,74 +1674,75 @@ event_check(struct mged_state *s, int non_blocking)
 	    edobj = save_edflag;
     }
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!p->dm_owner)
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p->display_owner)
 	    continue;
 
-	set_curr_dm(s, p);
+	mged_current_display_set(s, p);
+	fastf_t view_local_scale = bv_scale_get(mged_view_state_view(view_state)) * s->dbip->dbi_base2local;
 
-	if (view_state->k.rot_m_flag) {
+	if (view_state->k.rot_model_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -o %c -i -m ax %f ay %f az %f\n",
-			  view_state->k.origin_m,
-			  view_state->k.rot_m[X],
-			  view_state->k.rot_m[Y],
-			  view_state->k.rot_m[Z]);
+			  view_state->k.rot_model_origin,
+			  view_state->k.rot_model[X],
+			  view_state->k.rot_model[Y],
+			  view_state->k.rot_model[Z]);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
-	if (view_state->k.tra_m_flag) {
+	if (view_state->k.trans_model_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -i -m aX %f aY %f aZ %f\n",
-			  view_state->k.tra_m[X] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-			  view_state->k.tra_m[Y] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-			  view_state->k.tra_m[Z] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local);
+			  view_state->k.trans_model[X] * 0.05 * view_local_scale,
+			  view_state->k.trans_model[Y] * 0.05 * view_local_scale,
+			  view_state->k.trans_model[Z] * 0.05 * view_local_scale);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
-	if (view_state->k.rot_v_flag) {
+	if (view_state->k.rot_view_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -o %c -i -v ax %f ay %f az %f\n",
-			  view_state->k.origin_v,
-			  view_state->k.rot_v[X],
-			  view_state->k.rot_v[Y],
-			  view_state->k.rot_v[Z]);
+			  view_state->k.rot_view_origin,
+			  view_state->k.rot_view[X],
+			  view_state->k.rot_view[Y],
+			  view_state->k.rot_view[Z]);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
-	if (view_state->k.tra_v_flag) {
+	if (view_state->k.trans_view_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -i -v aX %f aY %f aZ %f",
-			  view_state->k.tra_v[X] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-			  view_state->k.tra_v[Y] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-			  view_state->k.tra_v[Z] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local);
+			  view_state->k.trans_view[X] * 0.05 * view_local_scale,
+			  view_state->k.trans_view[Y] * 0.05 * view_local_scale,
+			  view_state->k.trans_view[Z] * 0.05 * view_local_scale);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
-	if (view_state->k.sca_flag) {
+	if (view_state->k.scale_rate_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "zoom %f",
-			  1.0 / (1.0 - (view_state->k.sca / 10.0)));
+			  1.0 / (1.0 - (view_state->k.scale_rate / 10.0)));
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
 
-	set_curr_dm(s, save_dm_list);
+	mged_current_display_set(s, save_display);
     }
 
     return non_blocking;
@@ -1822,7 +1860,7 @@ stdin_input(ClientData clientData, int UNUSED(mask))
 	    int cmd_status;
 	    curr_cmd_list = &head_cmd_list;
 	    if (curr_cmd_list->cl_tie)
-		set_curr_dm(s, curr_cmd_list->cl_tie);
+		mged_current_display_set(s, curr_cmd_list->cl_tie);
 
 	    cmd_status = cmdline(s, &s->input_str_prefix, 1);
 	    if (cmd_status == CMD_MORE) {
@@ -1948,15 +1986,241 @@ std_out_or_err(ClientData clientData, int UNUSED(mask))
 }
 
 
+void
+mged_refresh_request_view(struct mged_state *UNUSED(s), struct _view_state *vsp, unsigned int flags)
+{
+    if (!vsp || !vsp->vs_gvp)
+	return;
+
+    bv_refresh_request(mged_view_state_view(vsp), flags ? flags : GED_VIEW_REFRESH_ALL);
+}
+
+void
+mged_refresh_request_current(struct mged_state *s, unsigned int flags)
+{
+    if (!s)
+	return;
+
+    mged_refresh_request_view(s, view_state, flags);
+}
+
+void
+mged_refresh_request_all(struct mged_state *s, unsigned int flags)
+{
+    int requested = 0;
+
+    if (!s)
+	return;
+
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p || !p->display_view_state)
+	    continue;
+	mged_refresh_request_view(s, p->display_view_state, flags);
+	requested = 1;
+    }
+
+    if (!requested)
+	mged_refresh_request_current(s, flags);
+}
+
+static void
+mged_obol_faceplate_color_scheme_apply(struct mged_display *p)
+{
+    if (!p || !p->display_view_state || !p->display_view_state->vs_gvp ||
+	!p->display_color_scheme || !p->display_color_scheme_dirty)
+	return;
+
+    struct bv *view = mged_view_state_view(p->display_view_state);
+    struct bv_other_state center_dot = BV_OTHER_STATE_INIT;
+    (void)bv_center_dot_state_get(&center_dot, view);
+    VMOVE(center_dot.gos_line_color, p->display_color_scheme->cs_center_dot);
+    (void)bv_center_dot_state_set(view, &center_dot);
+
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+    (void)bv_params_state_get(&params, view);
+    VMOVE(params.color, p->display_color_scheme->cs_status_text1);
+    (void)bv_params_state_set(view, &params);
+    p->display_color_scheme_dirty = 0;
+}
+
+/* MGED owns these retained axes defaults.  Do not apply them on routine
+ * redraws: a live endpoint may have a more recent typed policy value. */
+static void
+mged_obol_faceplate_axes_state_apply(struct mged_display *p)
+{
+    if (!p || !p->display_view_state || !p->display_view_state->vs_gvp ||
+	!p->display_color_scheme || !p->display_axes_state || !p->display_axes_state_dirty)
+	return;
+
+    struct bv *view = mged_view_state_view(p->display_view_state);
+    const struct _axes_state *display_axes = p->display_axes_state;
+    const struct _color_scheme *display_scheme = p->display_color_scheme;
+
+    struct bv_axes_state model_axes = BV_AXES_STATE_INIT;
+    (void)bv_model_axes_state_get(&model_axes, view);
+    model_axes.draw = display_axes->ax_model_draw;
+    VMOVE(model_axes.axes_pos, display_axes->ax_model_pos);
+    model_axes.axes_size = display_axes->ax_model_size * RT_INV_VIEW;
+    model_axes.line_width = display_axes->ax_model_linewidth;
+    model_axes.label_flag = 1;
+    VMOVE(model_axes.axes_color, display_scheme->cs_model_axes);
+    VMOVE(model_axes.label_color, display_scheme->cs_model_axes_label);
+    (void)bv_model_axes_state_set(view, &model_axes);
+
+    struct bv_axes_state view_axes = BV_AXES_STATE_INIT;
+    (void)bv_view_axes_state_get(&view_axes, view);
+    view_axes.draw = display_axes->ax_view_draw;
+    VSET(view_axes.axes_pos,
+	display_axes->ax_view_pos[X] * RT_INV_VIEW,
+	display_axes->ax_view_pos[Y] * RT_INV_VIEW, 0.0);
+    if (VNEAR_ZERO(view_axes.axes_pos, SMALL_FASTF))
+	view_axes.axes_pos[X] = 10.0 * SMALL_FASTF;
+    view_axes.axes_size = display_axes->ax_view_size * RT_INV_VIEW;
+    view_axes.line_width = display_axes->ax_view_linewidth;
+    view_axes.label_flag = 1;
+    VMOVE(view_axes.axes_color, display_scheme->cs_view_axes);
+    VMOVE(view_axes.label_color, display_scheme->cs_view_axes_label);
+    (void)bv_view_axes_state_set(view, &view_axes);
+    p->display_axes_state_dirty = 0;
+}
+
+static void
+mged_obol_faceplate_adc_style_apply(struct mged_display *p)
+{
+    if (!p || !p->display_view_state || !p->display_view_state->vs_gvp ||
+	!p->display_color_scheme || !p->display_adc_style_dirty)
+	return;
+
+    struct bv_adc_state adc = BV_ADC_STATE_INIT;
+    struct bv *view = mged_view_state_view(p->display_view_state);
+    if (bv_adc_state_get(&adc, view)) {
+	VMOVE(adc.line_color, p->display_color_scheme->cs_adc_line);
+	VMOVE(adc.tick_color, p->display_color_scheme->cs_adc_tick);
+	(void)bv_adc_state_set(view, &adc);
+    }
+    p->display_adc_style_dirty = 0;
+}
+
+void
+mged_obol_faceplate_color_scheme_sync(struct mged_state *s, struct mged_display *p)
+{
+	if (!p || (!p->display_color_scheme_dirty && !p->display_axes_state_dirty &&
+	    !p->display_adc_style_dirty))
+	return;
+
+    mged_obol_faceplate_color_scheme_apply(p);
+    mged_obol_faceplate_axes_state_apply(p);
+    mged_obol_faceplate_adc_style_apply(p);
+    if (!s || !p->display_view_state || !p->display_view_state->vs_gvp || !s->gedp)
+	return;
+
+    (void)ged_view_faceplate_sync(s->gedp,
+	p->display_view_state->vs_gvp);
+}
+
+static void
+mged_obol_faceplate_state_sync(struct mged_state *s, struct mged_display *p)
+{
+    if (!s || !p || !p->display_view_state || !p->display_view_state->vs_gvp ||
+	!p->display_variables || !p->display_color_scheme || !p->display_axes_state)
+	return;
+
+    struct bv *view = mged_view_state_view(p->display_view_state);
+    struct bv_other_state center_dot = BV_OTHER_STATE_INIT;
+    (void)bv_center_dot_state_get(&center_dot, view);
+    center_dot.gos_draw =
+	(!p->display_variables->mv_fb ||
+	 p->display_variables->mv_fb_overlay != 2);
+    (void)bv_center_dot_state_set(view, &center_dot);
+
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+    (void)bv_params_state_get(&params, view);
+    /* MGED publishes its complete status line through dotitles().  Keep the
+     * generic bv parameter overlay disabled so the same camera state is not
+     * drawn a second time. */
+    params.draw = 0;
+    (void)bv_params_state_set(view, &params);
+    mged_obol_faceplate_color_scheme_apply(p);
+
+    mged_adc_state_refresh(s);
+    mged_obol_faceplate_adc_style_apply(p);
+    mged_edit_axes_state_sync(s);
+    mged_rubber_band_state_sync(s);
+
+    mged_obol_faceplate_axes_state_apply(p);
+}
+
+void
+mged_obol_faceplate_sync(struct mged_state *s, struct mged_display *p)
+{
+    mged_obol_faceplate_state_sync(s, p);
+    if (!s || !p || !p->display_view_state || !p->display_view_state->vs_gvp || !s->gedp)
+	return;
+
+    (void)ged_view_faceplate_sync(s->gedp,
+	p->display_view_state->vs_gvp);
+}
+
+static void
+mged_obol_framebuffer_composition_sync(const struct mged_display *display,
+	struct ged_view_context *view_ctx)
+{
+	if (!view_ctx || !display || !display->display_variables)
+	    return;
+
+	const struct _mged_variables *variables = display->display_variables;
+    const char *mode = "off";
+	if (variables->mv_fb) {
+	/* MGED's fb_overlay is intentionally not libbv's historic numeric
+	 * ordering: 0=underlay, 1=interlay, 2=overlay. */
+	mode = variables->mv_fb_overlay == 0 ? "underlay" :
+	       variables->mv_fb_overlay == 1 ? "interlay" : "overlay";
+    }
+
+    struct bv_display_property_value current =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    if (ged_view_context_display_property_get(view_ctx,
+	    "composition.framebuffer.mode", &current) ==
+	BV_DISPLAY_PROPERTY_OK && current.string_value &&
+	BU_STR_EQUAL(current.string_value, mode))
+	return;
+
+    struct bv_display_property_value next =
+	BV_DISPLAY_PROPERTY_VALUE_INIT;
+    next.type = BV_DISPLAY_PROPERTY_ENUM;
+    next.string_value = mode;
+    (void)ged_view_context_display_property_set(view_ctx,
+	"composition.framebuffer.mode", &next);
+}
+
+int
+mged_refresh_pending(struct mged_state *s)
+{
+    if (!s)
+	return 0;
+
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p || !p->display_view_state || !p->display_view_state->vs_gvp)
+	    continue;
+	if (bv_refresh_dirty_get(mged_view_state_view(p->display_view_state)))
+	    return 1;
+    }
+
+    return (view_state && view_state->vs_gvp) ?
+	bv_refresh_dirty_get(mged_view_state_view(view_state)) : 0;
+}
+
 
 /**
- * NOTE that this routine is not to be casually used to refresh the
- * screen.  The normal procedure for screen refresh is to manipulate
- * the necessary global variables, and wait for refresh to be called
- * at the bottom of the while loop in main().  However, when it is
- * absolutely necessary to flush a change in the solids table out to
- * the display in the middle of a routine somewhere (such as the "B"
- * command processor), then this routine may be called.
+ * NOTE that this routine is not to be casually used to refresh the screen.
+ * The normal procedure is to commit view/scene changes and request refresh
+ * with mged_refresh_request_*(), then wait for refresh to be called at the
+ * bottom of the main loop.  However, when it is absolutely necessary to flush a
+ * change in the solids table out to the display in the middle of a routine
+ * somewhere (such as the "B" command processor), then this routine may be
+ * called.
  *
  * If you don't understand the ramifications of using this routine,
  * then you don't want to call it.
@@ -1964,11 +2228,13 @@ std_out_or_err(ClientData clientData, int UNUSED(mask))
 void
 refresh(struct mged_state *s)
 {
-    struct mged_dm *save_dm_list;
+    struct mged_display *save_display;
     struct bu_vls overlay_vls = BU_VLS_INIT_ZERO;
     struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
     int do_overlay = 1;
-    int64_t elapsed_time, start_time = bu_gettime();
+    static int64_t last_frame_complete = 0;
+    static int cadence_samples = 0;
+    int64_t frame_complete = 0;
     int do_time = 0;
 
     if (mged_shutting_down(s))
@@ -1979,176 +2245,91 @@ refresh(struct mged_state *s)
      * this call catches anything produced between timer ticks. */
     mged_pr_output(s->interp);
 
-    /* Display Manager / Views */
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!p->dm_view_state)
+    /* Graphics Views */
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p->display_view_state || !p->display_view_state->vs_gvp)
 	    continue;
-	if (s->update_views || p->dm_view_state->vs_flag)
-	    p->dm_dirty = 1;
+	if (bv_refresh_dirty_get(mged_view_state_view(p->display_view_state)))
+	    mged_display_repaint_request(p, MGED_REPAINT_VIEW_RECORD);
     }
 
-    /*
-     * This needs to be done separately because dm_view_state may be
-     * shared.
-     */
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!p->dm_view_state)
+    save_display = s->mged_curr_display;
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	mged_current_display_set(s, p);
+	/* The endpoint host owns native visibility and presentation readiness.
+	 * The legacy process-global mapped flag only describes a Tk window and
+	 * must not suppress headless or independently hosted endpoints. */
+	if (!mged_display_repaint_pending(p))
 	    continue;
-	p->dm_view_state->vs_flag = 0;
-    }
 
-    s->update_views = 0;
+	struct ged_view_context *view_ctx = p->display_view_state ? p->display_view_state->vs_gvp : NULL;
+	struct bv *view = view_ctx ? mged_view_state_view(p->display_view_state) : NULL;
+	bobol_display_endpoint_t *endpoint = view_ctx ?
+	    ged_view_context_obol_endpoint_get(view_ctx) : NULL;
+	mged_display_repaint_consume(p);
+	if (!view || !endpoint)
+	    continue;
+	if (frametime > 0.0) {
+	    const double ns = frametime * 1000000000.0;
+	    if (ns > 0.0 && ns < (double)UINT64_MAX)
+		(void)bv_frametime_set(view, (uint64_t)ns);
+	}
 
-    save_dm_list = s->mged_curr_dm;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	/*
-	 * if something has changed, then go update the display.
-	 * Otherwise, we are happy with the view we have
-	 */
-	set_curr_dm(s, p);
-	(void)dm_configure_win(DMP, 0);
-	if (mapped && DMP_dirty) {
-	    int restore_zbuffer = 0;
-
-	    if (mged_variables->mv_fb &&
-		dm_get_zbuffer(DMP)) {
-		restore_zbuffer = 1;
-		(void)dm_make_current(DMP);
-		(void)dm_set_zbuffer(DMP, 0);
+	(void)bv_refresh_consume(view);
+	do_time = 1;
+	if (s->dbip != DBI_NULL) {
+	    if (do_overlay) {
+		bu_vls_trunc(&overlay_vls, 0);
+		create_text_overlay(s, &overlay_vls);
+		do_overlay = 0;
 	    }
+	    if (viewpoint_hook)
+		(*viewpoint_hook)();
+	}
 
-	    DMP_dirty = 0;
-	    do_time = 1;
-	    VMOVE(geometry_default_color, color_scheme->cs_geo_def);
+	mged_obol_framebuffer_composition_sync(p, view_ctx);
+	mged_obol_faceplate_sync(s, p);
 
-	    if (s->dbip != DBI_NULL) {
-		if (do_overlay) {
-		    bu_vls_trunc(&overlay_vls, 0);
-		    create_text_overlay(s, &overlay_vls);
-		    do_overlay = 0;
-		}
-
-		/* XXX VR hack */
-		if (viewpoint_hook)  (*viewpoint_hook)();
-	    }
-
-	    if (mged_variables->mv_predictor)
-		predictor_frame(s);
-
-	    if (dm_get_dirty(DMP)) {
-
-		dm_draw_begin(DMP);	/* update displaylist prolog */
-
-		if (s->dbip != DBI_NULL) {
-		    /* do framebuffer underlay */
-		    if (mged_variables->mv_fb && !mged_variables->mv_fb_overlay) {
-			if (mged_variables->mv_fb_all)
-			    fb_refresh(fbp, 0, 0, dm_get_width(DMP), dm_get_height(DMP));
-			else if (mged_variables->mv_mouse_behavior != 'z')
-			    paint_rect_area(s);
-		    }
-
-		    /* do framebuffer overlay for entire window */
-		    if (mged_variables->mv_fb &&
-			    mged_variables->mv_fb_overlay &&
-			    mged_variables->mv_fb_all) {
-			fb_refresh(fbp, 0, 0, dm_get_width(DMP), dm_get_height(DMP));
-
-			if (restore_zbuffer)
-			    dm_set_zbuffer(DMP, 1);
-		    } else {
-			if (restore_zbuffer)
-			    dm_set_zbuffer(DMP, 1);
-
-			/* Draw each solid in its proper place on the
-			 * screen by applying zoom, rotation, &
-			 * translation.  Calls dm_loadmatrix() and
-			 * dm_draw_vlist().
-			 */
-
-			if (dm_get_stereo(DMP) == 0 ||
-				mged_variables->mv_eye_sep_dist <= 0) {
-			    /* Normal viewing */
-			    dozoom(s, 0);
-			} else {
-			    /* Stereo viewing */
-			    dozoom(s, 1);
-			    dozoom(s, 2);
-			}
-
-			/* do framebuffer overlay in rectangular area */
-			if (mged_variables->mv_fb &&
-				mged_variables->mv_fb_overlay &&
-				mged_variables->mv_mouse_behavior != 'z')
-			    paint_rect_area(s);
-		    }
-
-
-		    /* Restore to non-rotated, full brightness */
-		    dm_hud_begin(DMP);
-
-		    /* only if not doing overlay */
-		    if (!mged_variables->mv_fb ||
-			    mged_variables->mv_fb_overlay != 2) {
-			if (rubber_band->rb_active || rubber_band->rb_draw)
-			    draw_rect(s);
-
-			if (grid_state->draw)
-			    draw_grid(s);
-
-			/* Compute and display angle/distance cursor */
-			if (adc_state->adc_draw)
-			    adcursor(s);
-
-			if (axes_state->ax_view_draw)
-			    draw_v_axes(s);
-
-			if (axes_state->ax_model_draw)
-			    draw_m_axes(s);
-
-			if (axes_state->ax_edit_draw &&
-				(s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT))
-			    draw_e_axes(s);
-
-			/* Display titles, etc., if desired */
-			bu_vls_strcpy(&tmp_vls, bu_vls_addr(&overlay_vls));
-			dotitles(s, &tmp_vls);
-			bu_vls_trunc(&tmp_vls, 0);
-		    }
-		}
-
-		/* only if not doing overlay */
-		if (!mged_variables->mv_fb ||
-			mged_variables->mv_fb_overlay != 2) {
-		    /* Draw center dot */
-		    dm_set_fg(DMP,
-			    color_scheme->cs_center_dot[0],
-			    color_scheme->cs_center_dot[1],
-			    color_scheme->cs_center_dot[2], 1, 1.0);
-		    dm_draw_point_2d(DMP, 0.0, 0.0);
-		}
-
-		dm_draw_end(DMP);
-		dm_set_dirty(DMP, 0);
-
+	if (s->dbip != DBI_NULL) {
+	    mged_obol_scene_refresh(s);
+	    if (!mged_variables->mv_fb || mged_variables->mv_fb_overlay != 2) {
+		bu_vls_strcpy(&tmp_vls, bu_vls_addr(&overlay_vls));
+		dotitles(s, &tmp_vls);
+		bu_vls_trunc(&tmp_vls, 0);
 	    }
 	}
+
+	/* Sync the camera (updates it and the tracked headlight), then present a
+	 * frame.  We only reach here when the display is repaint-pending (the view
+	 * was marked dirty), so present unconditionally rather than only when the
+	 * camera moved -- otherwise render-state changes that don't move the camera
+	 * (lighting toggles, faceplate, etc.) would never reach the screen. */
+	(void)bobol_display_endpoint_view_sync(endpoint, view_ctx);
+	(void)bobol_display_endpoint_request_frame(endpoint, "MGED refresh");
+	bv_refresh_complete(view);
     }
 
     /* a frame was drawn */
     if (do_time) {
-	elapsed_time = bu_gettime() - start_time;
-	/* Only use reasonable measurements */
-	if (elapsed_time > 10LL && elapsed_time < 30000000LL) {
-	    /* Smoothly transition to new speed */
-	    frametime = 0.9 * frametime + 0.1 * elapsed_time / 1000000LL;
+	frame_complete = bu_gettime();
+	if (last_frame_complete > 0) {
+	    const int64_t cadence = frame_complete - last_frame_complete;
+	    /* Report the measured interval between completed refreshes.  The old
+	     * value was only the work duration inside refresh(), which could claim
+	     * hundreds of FPS even when the window was updating slowly. */
+	    if (cadence > 10LL && cadence < 30000000LL) {
+		const double sample = cadence / 1000000.0;
+		frametime = cadence_samples ?
+		    0.8 * frametime + 0.2 * sample : sample;
+		cadence_samples++;
+	    }
 	}
+	last_frame_complete = frame_complete;
     }
 
-    set_curr_dm(s, save_dm_list);
+    mged_current_display_set(s, save_display);
 
     bu_vls_free(&overlay_vls);
     bu_vls_free(&tmp_vls);
@@ -2175,9 +2356,9 @@ mged_finish(struct mged_state *s, int exitcode)
 
     mged_quiesce_tcl(s);
 
-    /* Subprocess completion callbacks may reference the active display.
-     * Stop and reap them before releasing any display manager; ged_close()
-     * repeats this operation as an idempotent final safeguard. */
+    /* Subprocess completion and framebuffer IPC callbacks may reference the
+     * active display.  Stop and reap them before releasing any display host;
+     * ged_close() repeats this operation as an idempotent final safeguard. */
     if (s->gedp)
 	ged_subprocesses_terminate(s->gedp);
 
@@ -2186,33 +2367,30 @@ mged_finish(struct mged_state *s, int exitcode)
     mged_global_variable_teardown(s);
 
     (void)sprintf(place, "exit_status=%d", exitcode);
-    size_t active_dm_cnt;
+    size_t active_display_count;
 
     /* Release all displays. */
-    active_dm_cnt = BU_PTBL_LEN(&active_dm_set);
-    while (active_dm_cnt > 0) {
-	struct mged_dm *p;
+    active_display_count = BU_PTBL_LEN(&active_display_set);
+    while (active_display_count > 0) {
+	struct mged_display *p;
 
-	active_dm_cnt--;
-	p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, active_dm_cnt);
+	active_display_count--;
+	p = (struct mged_display *)BU_PTBL_GET(&active_display_set, active_display_count);
 
-	bu_ptbl_rm(&active_dm_set, (long *)p);
+	bu_ptbl_rm(&active_display_set, (long *)p);
 
 	if (p) {
-	    if (p->dm_dmp)
-		dm_close(p->dm_dmp);
-	    BV_FREE_VLIST(s->vlfree, &p->dm_p_vlist);
+	    if (s->gedp) {
+		ged_view_framebuffer_release(s->gedp);
+		mged_obol_display_detach(s, p);
+	    }
 	    mged_slider_free_vls(p);
-	    free_all_resources(p);
-	    if (p->dm_dlist_state && !--p->dm_dlist_state->dl_rc)
-		bu_free(p->dm_dlist_state, "mged_finish: dlist_state");
-	    bu_free(p, "release: mged_curr_dm");
+	    bu_free(p, "release: mged_curr_display");
 	}
 
-	set_curr_dm(s, MGED_DM_NULL);
+	mged_current_display_set(s, MGED_DISPLAY_NULL);
     }
-    bu_ptbl_free(&active_dm_set);
-    mged_dm_init_state = MGED_DM_NULL;
+    bu_ptbl_free(&active_display_set);
 
     history_cleanup();
     while (BU_LIST_NON_EMPTY(&head_cmd_list.l)) {
@@ -2229,17 +2407,14 @@ mged_finish(struct mged_state *s, int exitcode)
     bu_log_delete_hook(gui_output, (void *)s);
     mged_output_cleanup();
 
-    /* Delete the in-memory Tcl database object while its C backing object is
-     * still valid.  Its delete callback closes a cloned database reference.
-     * The libged-backed db command is not a database object and remains valid
-     * until the interpreter itself is deleted.
-     */
+    /* Delete Tcl database commands while their C backing objects are still
+     * valid.  Their command delete callbacks participate in closing cloned
+     * database references. */
     if (s->interp) {
 	Tcl_Preserve((ClientData)s->interp);
-	if (s->wdbp)
-	    bu_observer_free(&s->wdbp->wdb_observers);
 	/* Rename only commands that still exist, and log unexpected failures
 	 * instead of letting Tcl errors interrupt staged shutdown. */
+	mged_rename_tcl_cmd(s->interp, MGED_DB_NAME);
 	mged_rename_tcl_cmd(s->interp, ".inmem");
 	Tcl_Release((ClientData)s->interp);
     }
@@ -2375,7 +2550,6 @@ apply_cli_overrides(struct mged_state *s, struct mged_cli_overrides *cl)
 
     /* --- mged_variables -------------------------------------------------- */
     if (cl->use_air        != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("use_air",        cl->use_air);
-    if (cl->dlist          != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("dlist",          cl->dlist);
     if (cl->faceplate      != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("faceplate",      cl->faceplate);
     if (cl->orig_gui       != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("orig_gui",       cl->orig_gui);
     if (cl->linewidth      != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("linewidth",      cl->linewidth);
@@ -2384,7 +2558,6 @@ apply_cli_overrides(struct mged_state *s, struct mged_cli_overrides *cl)
     if (cl->fb             != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("fb",             cl->fb);
     if (cl->fb_all         != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("fb_all",         cl->fb_all);
     if (cl->fb_overlay     != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("fb_overlay",     cl->fb_overlay);
-    if (cl->predictor      != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("predictor",      cl->predictor);
     if (cl->hot_key        != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("hot_key",        cl->hot_key);
     if (cl->context        != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("context",        cl->context);
     if (cl->sliders        != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("sliders",        cl->sliders);
@@ -2395,14 +2568,11 @@ apply_cli_overrides(struct mged_state *s, struct mged_cli_overrides *cl)
     if (cl->rotate_about   != '\0')               CLI_SETVAR_CHAR("rotate_about",  cl->rotate_about);
     if (cl->transform      != '\0')               CLI_SETVAR_CHAR("transform",     cl->transform);
     if (cli_dbl_is_set(cl->perspective))         CLI_SETVAR_DBL("perspective",    cl->perspective);
-    if (cli_dbl_is_set(cl->predictor_advance))   CLI_SETVAR_DBL("predictor_advance", cl->predictor_advance);
-    if (cli_dbl_is_set(cl->predictor_length))    CLI_SETVAR_DBL("predictor_length",  cl->predictor_length);
     if (cli_dbl_is_set(cl->nmg_eu_dist))         CLI_SETVAR_DBL("nmg_eu_dist",    cl->nmg_eu_dist);
-    if (cli_dbl_is_set(cl->eye_sep_dist))        CLI_SETVAR_DBL("eye_sep_dist",   cl->eye_sep_dist);
 
     /* --- Tcl mged_default array entries ---------------------------------- */
-    if (cl->dm_type)
-	Tcl_SetVar2(s->interp, "mged_default", "dm_type", cl->dm_type,  TCL_GLOBAL_ONLY);
+    if (cl->host_type)
+	Tcl_SetVar2(s->interp, "mged_default", "host_type", cl->host_type, TCL_GLOBAL_ONLY);
     if (cl->geom)
 	Tcl_SetVar2(s->interp, "mged_default", "geom",    cl->geom,     TCL_GLOBAL_ONLY);
     if (cl->ggeom)
@@ -2565,26 +2735,23 @@ main(int argc, char *argv[])
     mged_global_db_ctx.init_flag = 1;
 
     char *attach = (char *)NULL;
-    BU_ALLOC(s->mged_curr_dm, struct mged_dm);
-    bu_ptbl_init(&active_dm_set, 8, "dm set");
-    bu_ptbl_ins(&active_dm_set, (long *)s->mged_curr_dm);
-    mged_dm_init_state = s->mged_curr_dm;
-    s->mged_curr_dm->dm_netfd = -1;
+    BU_ALLOC(s->mged_curr_display, struct mged_display);
+    bu_vls_init(&s->mged_curr_display->display_pathname);
+    bu_vls_strcpy(&s->mged_curr_display->display_pathname, "nu");
+    bu_ptbl_init(&active_display_set, 8, "dm set");
+    bu_ptbl_ins(&active_display_set, (long *)s->mged_curr_display);
+    mged_initial_display = s->mged_curr_display;
 
     setmode(fileno(stdin), O_BINARY);
     setmode(fileno(stdout), O_BINARY);
     setmode(fileno(stderr), O_BINARY);
 
-#if defined(HAVE_WINDOWS_H)
     (void)_set_invalid_parameter_handler(mgedInvalidParameterHandler);
-#endif
 
     bu_setprogname(argv[0]);
 
 #if defined(HAVE_TK)
-    if (dm_have_graphics()) {
-	s->classic_mged = 0;
-    }
+    s->classic_mged = 0;
 #endif
 
     /*
@@ -2600,7 +2767,6 @@ main(int argc, char *argv[])
 
     /* Initialise all int fields to MGED_CLI_UNSET_INT ("not given") */
     cl.use_air          = MGED_CLI_UNSET_INT;
-    cl.dlist            = MGED_CLI_UNSET_INT;
     cl.faceplate        = MGED_CLI_UNSET_INT;
     cl.orig_gui         = MGED_CLI_UNSET_INT;
     cl.linewidth        = MGED_CLI_UNSET_INT;
@@ -2609,7 +2775,6 @@ main(int argc, char *argv[])
     cl.fb               = MGED_CLI_UNSET_INT;
     cl.fb_all           = MGED_CLI_UNSET_INT;
     cl.fb_overlay       = MGED_CLI_UNSET_INT;
-    cl.predictor        = MGED_CLI_UNSET_INT;
     cl.hot_key          = MGED_CLI_UNSET_INT;
     cl.context          = MGED_CLI_UNSET_INT;
     cl.sliders          = MGED_CLI_UNSET_INT;
@@ -2623,10 +2788,7 @@ main(int argc, char *argv[])
 
     /* Initialise double fields to MGED_CLI_UNSET_DBL ("not given") */
     cl.perspective        = MGED_CLI_UNSET_DBL;
-    cl.predictor_advance  = MGED_CLI_UNSET_DBL;
-    cl.predictor_length   = MGED_CLI_UNSET_DBL;
     cl.nmg_eu_dist        = MGED_CLI_UNSET_DBL;
-    cl.eye_sep_dist       = MGED_CLI_UNSET_DBL;
     cl.grid_rh            = MGED_CLI_UNSET_DBL;
     cl.grid_rv            = MGED_CLI_UNSET_DBL;
 
@@ -2644,9 +2806,9 @@ main(int argc, char *argv[])
     /* Option table: the BU_OPT macro takes (slot, shortopt, longopt, arghelp,
      * argprocess, set_var, help) — 7 arguments.  Long-only options use NULL for
      * shortopt.  No-argument options use "" for arghelp and NULL for argprocess. */
-    struct bu_opt_desc opt_defs[54];
+    struct bu_opt_desc opt_defs[50];
     /* ---- Existing short options, now with long aliases ---- */
-    BU_OPT(opt_defs[0],  "a", "attach",           "type",    bu_opt_str,      &cl.attach,           "display manager attach target");
+    BU_OPT(opt_defs[0],  "a", "attach",           "host",    bu_opt_str,      &cl.attach,           "Obol endpoint host attachment target");
     BU_OPT(opt_defs[1],  "d", "display",           "string",  bu_opt_str,      &cl.dpy_string,       "X display string");
     BU_OPT(opt_defs[2],  "r", "read-only",         "",        NULL,            &cl.read_only,        "open database read-only");
     BU_OPT(opt_defs[3],  "p", "pipe",              "",        NULL,            &cl.pipe_mode,        "pipe mode (emit CMD_DONE sentinels)");
@@ -2671,45 +2833,38 @@ main(int argc, char *argv[])
     /* ---- mged_variables: boolean on/off pairs ---- */
     BU_OPT(opt_defs[17], NULL, "use-air",          "",        NULL,            &cl.use_air,          "enable use_air");
     BU_OPT(opt_defs[18], NULL, "no-use-air",       "",        flag_set_zero,   &cl.use_air,          "disable use_air");
-    BU_OPT(opt_defs[19], NULL, "dlist",            "",        NULL,            &cl.dlist,            "enable display lists");
-    BU_OPT(opt_defs[20], NULL, "no-dlist",         "",        flag_set_zero,   &cl.dlist,            "disable display lists");
-    BU_OPT(opt_defs[21], NULL, "faceplate",        "",        NULL,            &cl.faceplate,        "show faceplate overlay");
-    BU_OPT(opt_defs[22], NULL, "no-faceplate",     "",        flag_set_zero,   &cl.faceplate,        "hide faceplate overlay");
-    BU_OPT(opt_defs[23], NULL, "predictor",        "",        NULL,            &cl.predictor,        "enable view predictor");
-    BU_OPT(opt_defs[24], NULL, "no-predictor",     "",        flag_set_zero,   &cl.predictor,        "disable view predictor");
+    BU_OPT(opt_defs[19], NULL, "faceplate",        "",        NULL,            &cl.faceplate,        "show faceplate overlay");
+    BU_OPT(opt_defs[20], NULL, "no-faceplate",     "",        flag_set_zero,   &cl.faceplate,        "hide faceplate overlay");
     /* ---- mged_variables: valued options ---- */
-    BU_OPT(opt_defs[25], NULL, "linewidth",        "#",       bu_opt_int,      &cl.linewidth,        "wireframe line width (pixels, >=1)");
-    BU_OPT(opt_defs[26], NULL, "linestyle",        "s|d",     bu_opt_char,     &cl.linestyle,        "line style: s=solid, d=dashed");
-    BU_OPT(opt_defs[27], NULL, "perspective",      "#",       bu_opt_fastf_t,  &cl.perspective,      "perspective angle in degrees (-1=off)");
-    BU_OPT(opt_defs[28], NULL, "eye-sep-dist",     "#",       bu_opt_fastf_t,  &cl.eye_sep_dist,     "stereo eye separation (mm, 0=mono)");
-    BU_OPT(opt_defs[29], NULL, "port",             "#",       bu_opt_int,      &cl.port,             "framebuffer server listen port (0-65535)");
-    BU_OPT(opt_defs[30], NULL, "coords",           "m|v",     bu_opt_char,     &cl.coords,           "constraint coords: m=model v=view");
-    BU_OPT(opt_defs[31], NULL, "rotate-about",     "m|v|e",   bu_opt_char,     &cl.rotate_about,     "rotate center: m=model v=view e=eye");
-    BU_OPT(opt_defs[32], NULL, "transform",        "v|a|e",   bu_opt_char,     &cl.transform,        "mouse transform: v=view a=adc e=edit");
-    BU_OPT(opt_defs[33], NULL, "nmg-eu-dist",      "#",       bu_opt_fastf_t,  &cl.nmg_eu_dist,      "NMG edge-use distance tolerance");
-    BU_OPT(opt_defs[34], NULL, "mouse-behavior",   "v|a|e",   bu_opt_char,     &cl.mouse_behavior,   "mouse behavior mode");
-    BU_OPT(opt_defs[35], NULL, "predictor-advance","#",       bu_opt_fastf_t,  &cl.predictor_advance,"predictor advance time (s)");
-    BU_OPT(opt_defs[36], NULL, "predictor-length", "#",       bu_opt_fastf_t,  &cl.predictor_length, "predictor trail length (s)");
-    BU_OPT(opt_defs[37], NULL, "perspective-mode", "0|1",     bu_opt_int,      &cl.perspective_mode, "enable/disable perspective mode");
-    BU_OPT(opt_defs[38], NULL, "context",          "0|1",     bu_opt_int,      &cl.context,          "context mode (0=off)");
-    BU_OPT(opt_defs[39], NULL, "sliders",          "0|1",     bu_opt_int,      &cl.sliders,          "show sliders");
-    BU_OPT(opt_defs[40], NULL, "hot-key",          "#",       bu_opt_int,      &cl.hot_key,          "hot key character code");
-    BU_OPT(opt_defs[41], NULL, "fb-overlay",       "0|1|2",   bu_opt_int,      &cl.fb_overlay,       "framebuffer overlay: 0=under 1=inter 2=over");
+    BU_OPT(opt_defs[21], NULL, "linewidth",        "#",       bu_opt_int,      &cl.linewidth,        "wireframe line width (pixels, >=1)");
+    BU_OPT(opt_defs[22], NULL, "linestyle",        "s|d",     bu_opt_char,     &cl.linestyle,        "line style: s=solid, d=dashed");
+    BU_OPT(opt_defs[23], NULL, "perspective",      "#",       bu_opt_fastf_t,  &cl.perspective,      "perspective angle in degrees (-1=off)");
+    BU_OPT(opt_defs[24], NULL, "port",             "#",       bu_opt_int,      &cl.port,             "framebuffer server listen port (0-65535)");
+    BU_OPT(opt_defs[25], NULL, "coords",           "m|v",     bu_opt_char,     &cl.coords,           "constraint coords: m=model v=view");
+    BU_OPT(opt_defs[26], NULL, "rotate-about",     "m|v|e",   bu_opt_char,     &cl.rotate_about,     "rotate center: m=model v=view e=eye");
+    BU_OPT(opt_defs[27], NULL, "transform",        "v|a|e",   bu_opt_char,     &cl.transform,        "mouse transform: v=view a=adc e=edit");
+    BU_OPT(opt_defs[28], NULL, "nmg-eu-dist",      "#",       bu_opt_fastf_t,  &cl.nmg_eu_dist,      "NMG edge-use distance tolerance");
+    BU_OPT(opt_defs[29], NULL, "mouse-behavior",   "v|a|e",   bu_opt_char,     &cl.mouse_behavior,   "mouse behavior mode");
+    BU_OPT(opt_defs[30], NULL, "perspective-mode", "0|1",     bu_opt_int,      &cl.perspective_mode, "enable/disable perspective mode");
+    BU_OPT(opt_defs[31], NULL, "context",          "0|1",     bu_opt_int,      &cl.context,          "context mode (0=off)");
+    BU_OPT(opt_defs[32], NULL, "sliders",          "0|1",     bu_opt_int,      &cl.sliders,          "show sliders");
+    BU_OPT(opt_defs[33], NULL, "hot-key",          "#",       bu_opt_int,      &cl.hot_key,          "hot key character code");
+    BU_OPT(opt_defs[34], NULL, "fb-overlay",       "0|1|2",   bu_opt_int,      &cl.fb_overlay,       "framebuffer overlay: 0=under 1=inter 2=over");
     /* ---- window/display (Tcl mged_default array) ---- */
-    BU_OPT(opt_defs[42], NULL, "dm-type",          "type",    bu_opt_str,      &cl.dm_type,          "display manager type (e.g. ogl, swrast)");
-    BU_OPT(opt_defs[43], NULL, "geom",             "WxH+X+Y", bu_opt_str,      &cl.geom,             "command window geometry");
-    BU_OPT(opt_defs[44], NULL, "ggeom",            "WxH+X+Y", bu_opt_str,      &cl.ggeom,            "graphics window geometry");
+    BU_OPT(opt_defs[35], NULL, "host",             "type",    bu_opt_str,      &cl.host_type,        "Obol GUI host type (tkobol)");
+    BU_OPT(opt_defs[36], NULL, "geom",             "WxH+X+Y", bu_opt_str,      &cl.geom,             "command window geometry");
+    BU_OPT(opt_defs[37], NULL, "ggeom",            "WxH+X+Y", bu_opt_str,      &cl.ggeom,            "graphics window geometry");
     /* ---- grid (rset g …) ---- */
-    BU_OPT(opt_defs[45], NULL, "grid-draw",        "0|1",     bu_opt_int,      &cl.grid_draw,        "show/hide grid");
-    BU_OPT(opt_defs[46], NULL, "grid-snap",        "0|1",     bu_opt_int,      &cl.grid_snap,        "enable/disable grid snap");
-    BU_OPT(opt_defs[47], NULL, "grid-rh",          "#",       bu_opt_fastf_t,  &cl.grid_rh,          "horizontal grid resolution");
-    BU_OPT(opt_defs[48], NULL, "grid-rv",          "#",       bu_opt_fastf_t,  &cl.grid_rv,          "vertical grid resolution");
-    BU_OPT(opt_defs[49], NULL, "grid-mrh",         "#",       bu_opt_int,      &cl.grid_mrh,         "horizontal major grid interval");
-    BU_OPT(opt_defs[50], NULL, "grid-mrv",         "#",       bu_opt_int,      &cl.grid_mrv,         "vertical major grid interval");
+    BU_OPT(opt_defs[38], NULL, "grid-draw",        "0|1",     bu_opt_int,      &cl.grid_draw,        "show/hide grid");
+    BU_OPT(opt_defs[39], NULL, "grid-snap",        "0|1",     bu_opt_int,      &cl.grid_snap,        "enable/disable grid snap");
+    BU_OPT(opt_defs[40], NULL, "grid-rh",          "#",       bu_opt_fastf_t,  &cl.grid_rh,          "horizontal grid resolution");
+    BU_OPT(opt_defs[41], NULL, "grid-rv",          "#",       bu_opt_fastf_t,  &cl.grid_rv,          "vertical grid resolution");
+    BU_OPT(opt_defs[42], NULL, "grid-mrh",         "#",       bu_opt_int,      &cl.grid_mrh,         "horizontal major grid interval");
+    BU_OPT(opt_defs[43], NULL, "grid-mrv",         "#",       bu_opt_int,      &cl.grid_mrv,         "vertical major grid interval");
     /* ---- colour scheme subset (rset cs …) ---- */
-    BU_OPT(opt_defs[51], NULL, "bg",               "R G B",   parse_opt_color, &cl.bg_color,         "background colour (0-255 per component, or #RRGGBB)");
-    BU_OPT(opt_defs[52], NULL, "geo-color",        "R G B",   parse_opt_color, &cl.geo_def_color,    "default geometry wireframe colour");
-    BU_OPT_NULL(opt_defs[53]);
+    BU_OPT(opt_defs[44], NULL, "bg",               "R G B",   parse_opt_color, &cl.bg_color,         "background colour (0-255 per component, or #RRGGBB)");
+    BU_OPT(opt_defs[45], NULL, "geo-color",        "R G B",   parse_opt_color, &cl.geo_def_color,    "default geometry wireframe colour");
+    BU_OPT_NULL(opt_defs[46]);
 
     /* bu_opt_parse does not consume argv[0] (the program name).
      * Skip it manually so that the remaining args match what the
@@ -2735,10 +2890,8 @@ main(int argc, char *argv[])
 
     /* -v / --version */
     if (cl.print_version) {
-	printf("%s%s%s%s%s%s\n",
+	printf("%s%s%s%s\n",
 	       brlcad_ident("MGED Geometry Editor"),
-	       dm_version(),
-	       fb_version(),
 	       rt_version(),
 	       bn_version(),
 	       bu_version());
@@ -2760,7 +2913,7 @@ main(int argc, char *argv[])
     /* -o (developer option: use old GUI) */
     if (cl.old_gui_flag) {
 	bu_log("WARNING: -o is a developer option and subject to change.  Do not use.\n");
-	old_mged_gui = 0;
+	old_mged_gui = 1;
     }
 
     /* -x / --rt-debug  and  -X / --bu-debug: parse_debug_uint() stores the
@@ -2777,12 +2930,12 @@ main(int argc, char *argv[])
 
     /*
      * In classic mode, -a directly controls the attach target.
-     * In GUI mode, the startup scripts choose the DM from
-     * mged_default(dm_type), so mirror -a into dm_type unless the
-     * user explicitly supplied --dm-type.
+     * In GUI mode, the startup scripts choose the Obol host from
+     * mged_default(host_type).  Only the graphical tkobol attach target is
+     * also a GUI host; nu remains a no-window startup mode.
      */
-    if (cl.attach && !cl.dm_type)
-	cl.dm_type = cl.attach;
+    if (cl.attach && BU_STR_EQUAL(cl.attach, "tkobol") && !cl.host_type)
+	cl.host_type = cl.attach;
 
     /* -d / --display */
     if (cl.dpy_string)
@@ -2903,27 +3056,9 @@ main(int argc, char *argv[])
     bu_vls_strcpy(&head_cmd_list.cl_name, "mged");
     curr_cmd_list = &head_cmd_list;
 
-    /* initialize predictor stuff */
-    BU_LIST_INIT(&s->mged_curr_dm->dm_p_vlist);
-    predictor_init(s);
-
-    /* register application provided routines */
-
-    DMP = dm_open(NULL, s->interp, "nu", 0, NULL);
-    struct bu_vls *dpvp = dm_get_pathname(DMP);
-    if (dpvp) {
-	bu_vls_strcpy(dpvp, "nu");
-    }
-
-    /* If we're only doing the 'nu' dm we don't need most of mged_dm_init, but
-     * we do still need to register the dm_commands */
-    s->mged_curr_dm->dm_cmd_hook = dm_commands;
-
-    struct bu_vls *tnvp = dm_get_tkname(s->mged_curr_dm->dm_dmp);
-    if (tnvp) {
-	bu_vls_init(tnvp); /* this may leak */
-	bu_vls_strcpy(tnvp, "nu");
-    }
+    /* The initial no-window state still needs the command dispatcher, but
+     * no longer opens a null graphical backend. */
+    s->mged_curr_display->display_command_hook = mged_display_command;
 
     BU_ALLOC(rubber_band, struct _rubber_band);
     *rubber_band = default_rubber_band;		/* struct copy */
@@ -2933,31 +3068,37 @@ main(int argc, char *argv[])
 
     BU_ALLOC(color_scheme, struct _color_scheme);
     *color_scheme = default_color_scheme;	/* struct copy */
-
-    BU_ALLOC(grid_state, struct bv_grid_state);
-    *grid_state = default_grid_state;		/* struct copy */
+    s->mged_curr_display->display_color_scheme_dirty = 1;
 
     BU_ALLOC(axes_state, struct _axes_state);
     *axes_state = default_axes_state;		/* struct copy */
-
-    BU_ALLOC(adc_state, struct _adc_state);
-    adc_state->adc_rc = 1;
-    adc_state->adc_a1 = adc_state->adc_a2 = 45.0;
+    s->mged_curr_display->display_axes_state_dirty = 1;
+    s->mged_curr_display->display_adc_style_dirty = 1;
 
     BU_ALLOC(menu_state, struct _menu_state);
     menu_state->ms_rc = 1;
 
-    BU_ALLOC(dlist_state, struct _dlist_state);
-    dlist_state->dl_rc = 1;
-
     BU_ALLOC(view_state, struct _view_state);
     view_state->vs_rc = 1;
-    view_ring_init(s->mged_curr_dm->dm_view_state, (struct _view_state *)NULL);
+    view_ring_init(s->mged_curr_display->display_view_state, (struct _view_state *)NULL);
     MAT_IDN(view_state->vs_ModelDelta);
+    if (view_state->vs_gvp) {
+	struct bv *view = mged_view_state_view(view_state);
+	struct bv_grid_state grid;
+	struct bv_adc_state adc;
+	memcpy(&grid, &default_grid_state, sizeof(grid));
+	bv_grid_state_set(view, &grid);
+	if (bv_adc_state_get(&adc, view)) {
+	    adc.a1 = 45.0;
+	    adc.a2 = 45.0;
+	    bv_adc_state_set(view, &adc);
+	}
+    }
 
     am_mode = AMM_IDLE;
-    mged_dm_owner = 1;
-    frametime = 1;
+    s->mged_curr_display->display_owner = 1;
+    /* No presentation cadence exists until two refreshes have completed. */
+    frametime = 0;
 
     MAT_IDN(MEDIT(s)->model_changes);
     MAT_IDN(MEDIT(s)->acc_rot_sol);
@@ -2986,12 +3127,12 @@ main(int argc, char *argv[])
     /* prepare mged, adjust our path, get set up to use Tcl */
 
     mged_setup(s);
-    (void)ged_clbk_set(s->gedp, "dm", BU_CLBK_DURING, mged_dm_during_clbk, (void *)s);
+    (void)ged_clbk_set(s->gedp, "dm", BU_CLBK_DURING, mged_display_during_clbk, (void *)s);
     new_mats(s);
 
     mmenu_init(s);
     btn_head_menu(MEDIT(s), 0, 0, 0, s);
-    mged_link_vars(s->mged_curr_dm);
+    mged_link_vars(s->mged_curr_display);
 
     bu_vls_printf(&s->input_str, "set version \"%s\"", brlcad_ident("Geometry Editor (MGED)"));
     (void)Tcl_Eval(s->interp, bu_vls_addr(&s->input_str));
@@ -3125,12 +3266,8 @@ main(int argc, char *argv[])
 
 	    if (old_mged_gui) {
 		if (attach && strlen(attach) > 0) {
-		    Tcl_SetVar2(s->interp, "mged_default", "dm_type", attach, TCL_GLOBAL_ONLY);
-		    if (BU_STR_EQUAL(attach, "tkswrast")) {
-			bu_vls_printf(&vls, "gui -dt %s -config g", attach);
-		    } else {
-			bu_vls_printf(&vls, "gui -dt %s", attach);
-		    }
+		    Tcl_SetVar2(s->interp, "mged_default", "host_type", attach, TCL_GLOBAL_ONLY);
+		    bu_vls_printf(&vls, "gui -host %s", attach);
 		} else {
 		    bu_vls_strcpy(&vls, "gui");
 		}
@@ -3139,7 +3276,7 @@ main(int argc, char *argv[])
 		Tcl_DString temp;
 		const char *archer_trans;
 		Tcl_DStringInit(&temp);
-		const char *archer = bu_dir(NULL, 0, BU_DIR_DATA, "tclscripts", "archer", "archer_launch.tcl", NULL);
+		const char *archer = bu_dir(NULL, 0, BU_DIR_DATA, "tclscripts", "archer", "init", "archer_launch.tcl", NULL);
 		archer_trans = Tcl_TranslateFileName(s->interp, archer, &temp);
 		tclcad_set_argv(s->interp, argc, (const char **)argv);
 		status = Tcl_EvalFile(s->interp, archer_trans);
@@ -3178,12 +3315,31 @@ main(int argc, char *argv[])
 		/* we're going to close out stdout/stderr as we
 		 * proceed in GUI mode, so create some pipes.
 		 */
+#ifdef HAVE_WINDOWS_H
+		/* The generic pipe() macro in config_win.h.in creates a pipe
+		 * with only a 256-byte kernel buffer.  These pipes capture all
+		 * C-level stdout/stderr for the GUI and are drained only by the
+		 * main thread's Tcl event loop; a tiny buffer makes it trivial
+		 * for a burst of C output emitted from inside a Tcl/Tk callback
+		 * (e.g. a render or command handler) to fill the pipe and block
+		 * the writer -- which is the same thread that would drain it,
+		 * i.e. a self-deadlock.  Use a large buffer instead.  (The write
+		 * ends are additionally set non-blocking below as a hard
+		 * backstop.) */
+		result = _pipe(pipe_out, 1048576, _O_TEXT);
+		if (result == -1)
+		    perror("pipe");
+		result = _pipe(pipe_err, 1048576, _O_TEXT);
+		if (result == -1)
+		    perror("pipe");
+#else
 		result = pipe(pipe_out);
 		if (result == -1)
 		    perror("pipe");
 		result = pipe(pipe_err);
 		if (result == -1)
 		    perror("pipe");
+#endif
 #endif  /* HAVE_PIPE */
 
 		/* since we're in GUI mode, display any bu_bomb()
@@ -3208,21 +3364,14 @@ main(int argc, char *argv[])
     bu_ptbl_free(&cl.set_pairs);
     bu_ptbl_free(&cl.rset_pairs);
 
-    /* XXX total hack that fixes a dm init issue on Mac OS X where the
-     * dm first opens filled with garbage.
-     */
-    {
-	unsigned char *dm_bg;
-	dm_get_bg(&dm_bg, NULL, DMP);
-	dm_set_bg(DMP, dm_bg[0], dm_bg[1], dm_bg[2], dm_bg[0], dm_bg[1], dm_bg[2]);
-    }
-
-    /* initialize a display manager */
-    if (s->interactive && s->classic_mged) {
+    /* Initialize an Obol endpoint host. Interactive classic MGED prompts when
+     * no target is specified; batch/classic MGED only attaches when the user
+     * explicitly requests a non-nu host. */
+    if ((s->interactive && s->classic_mged) || (!s->interactive && attach)) {
 	if (!attach) {
 	    get_attached(s);
 	} else {
-	    attach_display_manager(s->interp, attach, s->dpy_string);
+	    attach_endpoint_host(s->interp, attach, s->dpy_string);
 	}
 
 	/* In GUI mode, openw.tcl's init_mged_gui applies mged_default(ggeom)
@@ -3231,14 +3380,14 @@ main(int argc, char *argv[])
 	 * this in their .mgedrc before the attach happens, e.g.:
 	 *   set mged_default(ggeom) 512x512+0+0
 	 */
-	if (DMP && dm_graphical(DMP)) {
-	    struct bu_vls *pn = dm_get_pathname(DMP);
+	if (s->mged_curr_display && s->mged_curr_display->display_hosted) {
+	    const char *pn = mged_display_pathname(s->mged_curr_display);
 	    const char *ggeom = Tcl_GetVar(s->interp, "mged_default(ggeom)", TCL_GLOBAL_ONLY);
-	    if (pn && bu_vls_strlen(pn) && ggeom && strlen(ggeom)) {
+	    if (pn && ggeom && strlen(ggeom)) {
 		struct bu_vls geom_cmd = BU_VLS_INIT_ZERO;
 		/* Brace the geometry string so Tcl does not interpret any
 		 * special characters that might appear in a user's .mgedrc. */
-		bu_vls_printf(&geom_cmd, "wm geometry %s {%s}", bu_vls_cstr(pn), ggeom);
+		bu_vls_printf(&geom_cmd, "wm geometry %s {%s}", pn, ggeom);
 		if (Tcl_Eval(s->interp, bu_vls_cstr(&geom_cmd)) != TCL_OK)
 		    bu_log("mged: failed to apply mged_default(ggeom) \"%s\": %s\n",
 			   ggeom, Tcl_GetStringResult(s->interp));
@@ -3354,6 +3503,26 @@ main(int argc, char *argv[])
 	    (void)close(pipe_err[1]); /* only a write pipe */
 
 #ifdef HAVE_WINDOWS_H
+	    /* Backstop against a self-deadlock on the capture pipes: put the
+	     * write ends (now fd 1/2) into non-blocking mode.  If the pipe ever
+	     * fills faster than the main-thread event loop can drain it -- which
+	     * happens when C code emits a large burst of output from inside a
+	     * Tcl/Tk callback that is itself running under the event loop -- a
+	     * blocking WriteFile would wait forever for the very thread that is
+	     * blocked writing.  In PIPE_NOWAIT mode WriteFile returns
+	     * immediately instead (dropping the overflow), so the process stays
+	     * responsive rather than freezing.  The large buffer above keeps
+	     * such dropping from happening under any realistic output volume. */
+	    {
+		DWORD nowait = PIPE_NOWAIT;
+		HANDLE hout = (HANDLE)_get_osfhandle(fileno(stdout));
+		HANDLE herr = (HANDLE)_get_osfhandle(fileno(stderr));
+		if (hout != INVALID_HANDLE_VALUE)
+		    (void)SetNamedPipeHandleState(hout, &nowait, NULL, NULL);
+		if (herr != INVALID_HANDLE_VALUE)
+		    (void)SetNamedPipeHandleState(herr, &nowait, NULL, NULL);
+	    }
+
 	    /* On Windows, Tcl's stdout/stderr channels are backed by the native
 	     * Windows HANDLEs that Tcl captured at startup.  In a GUI-only
 	     * process those are typically INVALID_HANDLE_VALUE (no console), so
@@ -3384,21 +3553,11 @@ main(int argc, char *argv[])
 	     * old channel begins tearing down, so no such sync is required.
 	     * The old channel was also backed by INVALID_HANDLE_VALUE (no
 	     * console), so no I/O threads were ever successfully dispatched on
-	     * it.
-	     *
-	     * Critically, the new channel must own its OWN duplicate of the
-	     * pipe-write handle rather than the native HANDLE already owned by
-	     * CRT fd 1/2.  If Tcl were handed the CRT's handle directly, both
-	     * Tcl (on channel teardown) and the CRT (when mged_restore_stdio's
-	     * dup2 replaces the descriptor at exit) would CloseHandle the same
-	     * handle — a double close that intermittently corrupts whatever
-	     * handle Windows has since recycled into that slot, trashing the
-	     * stdout stream on quit.  mged_dup_file_channel() performs the
-	     * DuplicateHandle so ownership stays separate, matching the
-	     * discipline mged_restore_stdio() relies on. */
+	     * it. */
 	    {
 		Tcl_Channel old_out = Tcl_GetStdChannel(TCL_STDOUT);
-		Tcl_Channel wout = mged_dup_file_channel(fileno(stdout), TCL_WRITABLE);
+		Tcl_Channel wout = Tcl_MakeFileChannel(
+		    (ClientData)_get_osfhandle(fileno(stdout)), TCL_WRITABLE);
 		if (wout) {
 		    Tcl_SetChannelOption(s->interp, wout, "-blocking", "false");
 		    Tcl_SetChannelOption(s->interp, wout, "-buffering", "line");
@@ -3411,7 +3570,8 @@ main(int argc, char *argv[])
 		}
 
 		Tcl_Channel old_err = Tcl_GetStdChannel(TCL_STDERR);
-		Tcl_Channel werr = mged_dup_file_channel(fileno(stderr), TCL_WRITABLE);
+		Tcl_Channel werr = Tcl_MakeFileChannel(
+		    (ClientData)_get_osfhandle(fileno(stderr)), TCL_WRITABLE);
 		if (werr) {
 		    Tcl_SetChannelOption(s->interp, werr, "-blocking", "false");
 		    Tcl_SetChannelOption(s->interp, werr, "-buffering", "line");
@@ -3475,7 +3635,7 @@ main(int argc, char *argv[])
 	    break;
 
 	/*
-	 * Cause the control portion of the displaylist to be updated
+	 * Cause the control portion of the drawn scene to be updated
 	 * to reflect the changes made above.
 	 */
 	refresh(s);

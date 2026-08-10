@@ -25,6 +25,7 @@
 
 #include <iostream>
 #include <QSettings>
+#include <QTimer>
 
 #include "main_window.h"
 #include "isstapp.h"
@@ -56,8 +57,12 @@ int main(int argc, char *argv[])
 	app.load_g(filename, argc, (const char **)argv);
     }
 
+    const bool smoke = qEnvironmentVariableIsSet("BRLCAD_QISST_SMOKE");
+    if (smoke)
+	app.w.canvas->setPreviewResolution(1);
+
     // This is an illustration of how to force an exact size for
-    // the OpenGL canvas.  Useful when we need a framebuffer window
+    // the image canvas.  Useful when we need a framebuffer window
     // to exactly match a specified size.
     QSize cminsize = app.w.canvas->minimumSize();
     QSize cmaxsize = app.w.canvas->maximumSize();
@@ -67,6 +72,12 @@ int main(int argc, char *argv[])
 
     // Draw the window
     app.w.show();
+
+    if (smoke) {
+	QObject::connect(app.w.canvas, &isstView::imagePresented, &app,
+	    [&app]() { app.quit(); });
+	QTimer::singleShot(5000, &app, [&app]() { app.exit(1); });
+    }
 
     // Having forced the size we wanted, restore the original settings
     // to allow for subsequent change (if it would have been allowed

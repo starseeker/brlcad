@@ -34,6 +34,7 @@
 #include "common.h"
 #include "vmath.h"
 #include "bg/defines.h"
+#include "bg/pca.h"
 #include "bu/vls.h"
 
 __BEGIN_DECLS
@@ -452,6 +453,63 @@ BG_EXPORT extern unsigned long long
 bg_trimesh_hash(
 	const int *f, size_t num_f, const point_t *p, size_t num_p,
 	fastf_t dist_tol
+	);
+
+/**
+ * A transform-invariant candidate key for a triangle mesh.
+ *
+ * frame maps the source mesh into its deterministic PCA coordinate system.
+ * hash summarizes the quantized canonical vertex sequence and triangle index
+ * sequence without allocating a reordered copy of the mesh.  It is an
+ * optional fast candidate key only: callers must use bg_trimesh_pca_equal
+ * before sharing geometry.  Symmetric or line-like meshes return
+ * BRLCAD_ERROR because their PCA orientation is not stable enough to define a
+ * cache key.
+ */
+struct bg_trimesh_pca_signature {
+    struct bg_pca_frame frame;
+    unsigned long long hash;
+};
+
+/**
+ * Generate a transform-invariant mesh candidate key in linear time and
+ * constant auxiliary memory.
+ *
+ * No mesh data is allocated, reordered, or retained by this routine.
+ * dist_tol controls the canonical-coordinate quantization;
+ * min_relative_axis_gap is passed to bg_pca_canonical_frame.  The hash may
+ * miss values straddling a quantization boundary, so it must not be the only
+ * candidate-selection mechanism when complete fuzzy matching is required.
+ *
+ * @return BRLCAD_OK on success, BRLCAD_ERROR for invalid or PCA-ambiguous
+ * input.
+ */
+BG_EXPORT extern int
+bg_trimesh_pca_get_signature(
+	struct bg_trimesh_pca_signature *signature,
+	const int *faces, size_t faceCount, const point_t *points,
+	size_t pointCount, fastf_t dist_tol, fastf_t min_relative_axis_gap
+	);
+
+/**
+ * Verify a PCA-signature candidate without allocating or sorting mesh data.
+ *
+ * The mesh arrays must retain identical vertex and face ordering.  This is the
+ * normal case for a transformed copy and makes verification linear-time.  It
+ * does not require matching hashes, allowing callers to use a coarse,
+ * tolerance-aware candidate index without false negatives from hash bins.  It
+ * deliberately declines reordered candidates; callers needing a general,
+ * slower comparison can use bg_trimesh_diff after materializing canonical
+ * coordinates.  A nonzero return means the meshes are not safe to share.
+ */
+BG_EXPORT extern int
+bg_trimesh_pca_equal(
+	const struct bg_trimesh_pca_signature *firstSignature,
+	const int *firstFaces, size_t firstFaceCount, const point_t *firstPoints,
+	size_t firstPointCount,
+	const struct bg_trimesh_pca_signature *secondSignature,
+	const int *secondFaces, size_t secondFaceCount, const point_t *secondPoints,
+	size_t secondPointCount, fastf_t dist_tol
 	);
 
 

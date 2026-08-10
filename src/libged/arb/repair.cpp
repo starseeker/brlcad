@@ -18,6 +18,7 @@
 #include "rt/db_internal.h"
 #include "wdb.h"
 
+#include "ged/event_txn.h"
 #include "ged_arb.h"
 #include "../ged_private.h"
 

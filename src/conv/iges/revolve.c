@@ -402,6 +402,7 @@ revolve(size_t entityno)
 	return 0;
     }
 
+    bu_vls_free(&cutname);
 
     /* Free the TRC structures */
     trcptr = trcs;

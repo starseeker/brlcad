@@ -19,6 +19,7 @@
 #include "bu/opt.h"
 #include "rt/geom.h"
 #include "wdb.h"
+#include "ged/event_txn.h"
 
 #include "../ged_private.h"
 #include "rt/functab.h"
@@ -104,6 +105,7 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
     int ret = EDOBJ[intern.idb_type].ft_repair(&log_str, &intern, NULL, original_argc, original_argv);
 
     if (ret == 0) {
+	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
         struct directory *out_dp = dp;
         const char *rname = objname;
         if (!in_place_repair) {
@@ -111,6 +113,8 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
             out_dp = db_diradd(gedp->dbip, rname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&intern.idb_type);
             if (out_dp == RT_DIR_NULL) {
                 bu_vls_printf(gedp->ged_result_str, "{\"status\":\"error\",\"message\":\"Failed to add new directory entry\"}");
+		if (event_batch_opened)
+		    ged_event_batch_end(gedp, NULL);
                 bu_vls_free(&log_str);
                 rt_db_free_internal(&intern);
                 bu_free(original_argv, "argv copy");
@@ -121,12 +125,20 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
 
         if (rt_db_put_internal(out_dp, gedp->dbip, &intern) < 0) {
             bu_vls_printf(gedp->ged_result_str, "{\"status\":\"error\",\"message\":\"Failed to write repaired object back to database\"}");
+	    if (event_batch_opened)
+		ged_event_batch_end(gedp, NULL);
             bu_vls_free(&log_str);
             rt_db_free_internal(&intern);
             bu_free(original_argv, "argv copy");
             bu_vls_free(&out_name);
             return BRLCAD_ERROR;
         }
+	if (in_place_repair)
+	    (void)ged_event_notify_object_modified(gedp, rname, 1, NULL);
+	else
+	    (void)ged_event_notify_object_added(gedp, rname, NULL);
+	if (event_batch_opened)
+	    ged_event_batch_end(gedp, NULL);
     }
 
     if (bu_vls_strlen(&log_str) > 0) {

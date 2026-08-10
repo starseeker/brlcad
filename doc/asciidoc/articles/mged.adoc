@@ -898,7 +898,6 @@ image::images/fillet.gif[width=250]
 *** <<StatusBar2,Status Bar>>
 *** <<Collaborate2,Collaborate>>
 *** <<Rateknobs2,Rateknobs>>
-*** <<DisplayLists2,Display Lists>>
 ** <<Misc,Misc>>
 
 *** <<zclipping,Z Clipping>>
@@ -1550,7 +1549,6 @@ The _status bar_ contains two lines for displaying information about the state o
 *** <<StatusBar,Status Bar>> - toggle display of the command window’s status bar.
 *** *Collaborate* - toggle collaborate mode. When in collaborate mode, the upper right pane’s view can be shared with other instances of MGED’s new GUI that are also collaborating.
 *** *Rateknobs* - toggle rate knob mode. When in rate knob mode, transformation with the mouse becomes rate based. For example, if the user rotates the view about the X axis, the view continues to rotate about the X axis until the rate rotation is stopped.
-*** *Display Lists* - toggle the use of display lists. This currently affects only Ogl display managers. When using display lists the screen update time is significantly faster. This is especially noticeable when running MGED remotely. Use of display lists is encouraged unless the geometry being viewed is bigger than the Ogl server can handle (i.e. the server runs out of available memory for storing display lists). When this happens the machine will begin to swap (and little else). If huge pieces of geometry need to be viewed, consider toggling off display lists. Note that using display lists while viewing geometry of any significant size will incur noticeable compute time up front to create the display lists.
 ** _Misc_
 
 *** _Z Clipping_ - toggles zclipping. When zclipping is active, the Z value of each point is checked against the min and max Z values of the viewing cube. If the Z value of the point is found to be outside this range, it is clipped (i.e. not drawn). Zclipping can be used to remove geometric detail that may be occluding geometry of greater interest.
@@ -1880,7 +1878,6 @@ x 					delete character
 |<<rcctor,rcc-tor>>
 |<<red,red>>
 |<<refresh,refresh>>
-|<<regdebug,regdebug>>
 |<<regdef,regdef>>
 |<<regions,regions>>
 |<<release,release>>
@@ -3562,7 +3559,7 @@ mged> garbage_collect
 **
 
 
-gui [_-config b|c|g_] [__-d display_string__] [__-gd graphics_display_string__] [__-dt graphics_type__] [_-id name_] [_-c -h -j -s_]::
+gui [_-config b|c|g_] [__-d display_string__] [__-gd graphics_display_string__] [__-host host_type__] [_-id name_] [_-c -h -j -s_]::
 This command is used to create an instance of MGED s default Tcl/Tk graphical user interface (GUI). The following options are allowed:
 
 
@@ -3583,9 +3580,8 @@ This command is used to create an instance of MGED s default Tcl/Tk graphical us
                                the display_string. Note that this string format is the same
                                as the X DISPLAY environment variable.
 
-       -dt graphics_type       Indicates the type of graphics windows to use. The possible
-                               choices are X and ogl (for machines that support OpenGL).
-                               Defaults to ogl, if supported; otherwise X.
+       -host host_type         Selects the Obol host used for graphics windows.
+                               tkobol is the supported host.
 
        -id name                Specify the id to use when referring to this instance of the
                                GUI.
@@ -4578,7 +4574,7 @@ The “prj_add” command appends information to the specified _shaderfile_. The
 
 
 ps [_-f font_] [_-t title_] [_-c creator_] [__-s size_in_inches__] [__-l line_width__] output_file::
-The “ps” command temporarily attaches the _Postscript_ display manager and outputs the current MGED display to the specified __output_file__ in _PostScript_ format. The _-f_ option allows the _font_ to be user-specified. The _-t_ option allows the user to provide a title (the default is “No Title”). The _-c_ option allows the user to specify the creator of the file (the default is “LIBDM dm-ps”). The _s_ specifies the size of the drawing in inches. The _l_ specifies the width of the lines drawn.
+The “ps” command exports the retained current view to the specified __output_file__ in _PostScript_ format. The _-f_ option allows the _font_ to be user-specified. The _-t_ option allows the user to provide a title (the default is “No Title”). The _-c_ option allows the user to specify the creator of the file. The _s_ specifies the size of the drawing in inches. The _l_ specifies the width of the lines drawn.
 
 
 Examples:::
@@ -4907,20 +4903,6 @@ mged> refresh
 
 
 – Update the MGED display.
-
-**
-
-
-regdebug [__debug_level__]::
-The “regdebug” command with no options toggles the display manager debug flag. If a __debug_level__ is supplied, then the display manager debug flag is set to that value.
-
-
-Examples:::
-mged> regdebug
-
-
-
-– Toggle the display manager debug flag.
 
 **
 
@@ -5699,8 +5681,6 @@ hot_key – the X11 keysym definition for the key to toggle the __send_key__ val
 
 context – if nonzero (the default), then primitive editing parameters entered via the <<p,p>> command will be applied to the edited shape in the context of the <<COMBINATION,combination>> tree above it in the displayed hierarchy. This means, for example, a translation applied to a shape will translate the shape to some point such that when the transformation matrices for that <<path,path>> are applied, the edited shape will appear at the specified location. If _context_ is set to zero, then the primitive edit operations will be applied directly to the edited shape. This means that a translation to a specific point may result in the edited shape being drawn at a point different from that specified (due to transformations in the _combination_ tree above it). Note that this only affects primitive edit operations that use the _p_ command.
 
-dlist – if nonzero, use display lists.
-
 use_air – if nonzero, use air while raytracing.
 
 listen – if nonzero, listen for connections to MGED s built-in fbserv.
@@ -5760,8 +5740,6 @@ perspective_mode – if nonzero, turn perspective on; otherwise, turn it off.
 toggle_perspective – used to toggle among the four canned perspective angles (i.e., 30, 45, 60, and 90).
 
 nmg_eu_dist – when the _-u_ option to the <<ev,ev>> command is used, the NMG edgeuses are drawn this distance (mm) away from the actual edge.
-
-eye_sep_dist – if greater than zero, this is the eye separation distance (mm) for stereo viewing; otherwise, stereo is off.
 
 union_op – not currently used.
 
@@ -6453,7 +6431,7 @@ Set the current default input value.
 
 
 share [-u] resource dm1 [dm2]::
-The “share” command provides a mechanism to share (or unshare with the *u* option) resources among display managers. When a resource is shared between two or more display managers, any change to that resource is seen only in the sharing display managers. The supported resource types are: ad (ADC), ax (Axes), c (Color Schemes), d (Display Lists), g (Grid), m (Menu), r (Rubber Band), vi (View), and var (MGED Variables).
+The “share” command provides a mechanism to share (or unshare with the *u* option) resources among display managers. When a resource is shared between two or more display managers, any change to that resource is seen only in the sharing display managers. The supported resource types are: ad (ADC), ax (Axes), c (Color Schemes), g (Grid), m (Menu), r (Rubber Band), vi (View), and var (MGED Variables).
 
 
 Examples:::
@@ -6806,9 +6784,9 @@ __mged_default(display)__ indicates where to display the command window and othe
 
 __mged_default(gdisplay)__ indicates where to display the geometry window if not combined with the command window. See the <<mged_default,mged_default(comb)>> variable.
 
-*mged_default(dm_type)*
+*mged_default(host_type)*
 
-__mged_default(dm_type)__ indicates the default display manager type.
+__mged_default(host_type)__ indicates the default Obol GUI host type.
 
 *mged_default(comb)*
 

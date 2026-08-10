@@ -85,8 +85,8 @@
 #include "bu/interrupt.h"
 #include "bu/process.h"
 #include "bu/exit.h"
-#include "dm.h"
-#include "bv/plot3.h"
+#include "imgstream/fb_compat.h"
+#include "bg/plot3.h"
 
 #define COMMA ','
 
@@ -138,7 +138,7 @@ extern int kill(pid_t, int);
 /* Program constants computed from device parameters:	*/
 #define BANDS (Nscanlines / lines_per_band)	/* # of "bands" */
 #define BANDSLOP (BANDS+2)			/* # bands in array */
-#define BYTES (Npixels * sizeof(RGBpixel))	/* max data bytes per scan */
+#define BYTES (Npixels * 3)	/* max data bytes per scan */
 #define XMAX (Npixels - 1)
 #define YMAX (Nscanlines - 1)
 
@@ -167,7 +167,7 @@ typedef short tiny;		/* for very small numbers */
 #define false 0
 #define true 1
 
-RGBpixel cur_color = { 255, 255, 255 };
+unsigned char cur_color[3] = { 255, 255, 255 };
 
 typedef struct {
     short x;
@@ -187,7 +187,7 @@ typedef struct descr {
     short minor;		/* minor dir delta (nonneg) */
     short e;			/* DDA error accumulator */
     short de;			/* increment for `e' */
-    RGBpixel col;		/* COLOR of this vector */
+    unsigned char col[3];	/* COLOR of this vector */
     struct descr *freep;	/* next in free list, or NULL */
 } stroke; 			/* rasterization descriptor */
 #define STROKE_MAGIC 0x12997601	/* Magic number */
@@ -320,7 +320,7 @@ static int sigs[] = {
 
 
 static FILE *pfin;		/* input file FIO block ptr */
-struct fb *fbp;			/* Current framebuffer */
+imgstream_fb_t *fbp;		/* Current framebuffer */
 
 
 /*
@@ -404,12 +404,12 @@ Raster(stroke *vp, struct band *np)
 
 	/* set the appropriate pixel in the buffer */
 	if (immediate) {
-	    fb_write(fbp, vp->pixel.x, dy, vp->col, 1);
+	    imgstream_fb_write(fbp, vp->pixel.x, dy, vp->col, 1);
 	} else {
 	    unsigned char *pp;
 
-	    pp = (unsigned char *)&buffer[((dy*Npixels) + vp->pixel.x)*sizeof(RGBpixel)];
-	    COPYRGB(pp, vp->col);
+	    pp = &buffer[((dy*Npixels) + vp->pixel.x)*3];
+	    memcpy(pp, vp->col, 3);
 	}
 
 	if (vp->major-- == 0) {
@@ -451,11 +451,11 @@ OutBuild(void)				/* returns true if successful */
 
     if (single_banded) {
 	if (debug) fprintf(stderr, "OutBuild:  band y=%d\n", ystart);
-	if (fb_write(fbp, 0, ystart, buffer, buffersize/sizeof(RGBpixel)) <= 0)
+	if (imgstream_fb_write(fbp, 0, ystart, buffer, buffersize/3) <= 0)
 	    return false;	/* can't write image file */
 	if (over) {
 	    /* Read back the composite image */
-	    if (fb_read(fbp, 0, ystart, buffer, buffersize/sizeof(RGBpixel)) <= 0)
+	    if (imgstream_fb_read(fbp, 0, ystart, buffer, buffersize/3) <= 0)
 		fprintf(stderr, "plot3-fb:  band read error\n");
 	}
 	return true;
@@ -475,7 +475,7 @@ OutBuild(void)				/* returns true if successful */
 	if (debug) fprintf(stderr, "OutBuild:  band y=%d\n", ystart);
 	if (over) {
 	    /* Read in current band */
-	    if (fb_read(fbp, 0, ystart, buffer, buffersize/sizeof(RGBpixel)) <= 0)
+	    if (imgstream_fb_read(fbp, 0, ystart, buffer, buffersize/3) <= 0)
 		fprintf(stderr, "plot3-fb:  band read error\n");
 	} else {
 	    /* clear pixels in the band */
@@ -489,7 +489,7 @@ OutBuild(void)				/* returns true if successful */
 	   next band list or else it freed the descriptor */
 
 	if (debug) fprintf(stderr, "OutBuild:  fbwrite y=%d\n", ystart);
-	if (fb_write(fbp, 0, ystart, buffer, buffersize/sizeof(RGBpixel)) <= 0)
+	if (imgstream_fb_write(fbp, 0, ystart, buffer, buffersize/3) <= 0)
 	    return false;	/* can't write image file */
     }
 
@@ -650,7 +650,7 @@ static int
 Foo(int code)				/* returns status code */
 {
     if (debug) fprintf(stderr, "Foo(%d)\n", code);
-    fb_close(fbp);		/* release framebuffer */
+    imgstream_fb_close(fbp);	/* release framebuffer */
 
     FreeUp();			/* deallocate descriptors */
 
@@ -669,7 +669,7 @@ prep_dda(stroke *vp, coords *pt1, coords *pt2)
     vp->major = pt2->y - vp->pixel.y;	/* always nonnegative */
     vp->ysign = vp->major ? 1 : 0;
     vp->minor = pt2->x - vp->pixel.x;
-    COPYRGB(vp->col, cur_color);
+    memcpy(vp->col, cur_color, 3);
     if ((vp->xsign = vp->minor ? (vp->minor > 0 ? 1 : -1) : 0) < 0)
 	vp->minor = -vp->minor;
 
@@ -990,7 +990,7 @@ DoFile(void)	/* returns vpl status code */
 		    }
 		    if (!firsterase) {
 			if (immediate)
-			    fb_clear(fbp, RGBPIXEL_NULL);
+			    imgstream_fb_clear(fbp, NULL);
 			over = 0;
 		    }
 		    firsterase = false;
@@ -1370,16 +1370,17 @@ main(int argc, char **argv)
     }
 
     /* Open frame buffer, adapt to slightly smaller ones */
-    if ((fbp = fb_open(framebuffer, Npixels, Nscanlines)) == FB_NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)Npixels,
+				 (size_t)Nscanlines)) == NULL) {
 	fprintf(stderr, "plot3-fb: fb_open failed\n");
 	bu_exit(1, NULL);
     }
-    Npixels = fb_getwidth(fbp);
-    Nscanlines = fb_getheight(fbp);
+    Npixels = (int)imgstream_fb_width(fbp);
+    Nscanlines = (int)imgstream_fb_height(fbp);
     if (immediate) {
 	lines_per_band = Nscanlines;
 	if (!over)
-	    fb_clear(fbp, RGBPIXEL_NULL);
+	    imgstream_fb_clear(fbp, NULL);
     } else if (Nscanlines <= 512) {
 	/* make one full size band */
 	lines_per_band = Nscanlines;
@@ -1399,8 +1400,8 @@ main(int argc, char **argv)
     delta = Nscanlines;
     deltao2 = Nscanlines/2;
 
-    buffersize = lines_per_band*Npixels*sizeof(RGBpixel);
-    if ((buffer = (unsigned char *)malloc(buffersize)) == RGBPIXEL_NULL) {
+    buffersize = (size_t)lines_per_band * (size_t)Npixels * 3;
+    if ((buffer = (unsigned char *)malloc(buffersize)) == NULL) {
 	fprintf(stderr, "plot3-fb:  malloc error\n");
 	bu_exit(1, NULL);
     }
@@ -1414,7 +1415,7 @@ main(int argc, char **argv)
     bandEnd = &band[BANDS];
     if (single_banded && over) {
 	/* Read in initial screen */
-	if (fb_read(fbp, 0, 0, buffer, buffersize/sizeof(RGBpixel)) <= 0)
+	if (imgstream_fb_read(fbp, 0, 0, buffer, buffersize/3) <= 0)
 	    fprintf(stderr, "plot3-fb: band read error\n");
     }
     if (debug)

@@ -30,6 +30,8 @@
 #ifndef BG_POLYGON_TYPES_H
 #define BG_POLYGON_TYPES_H
 
+#include <stddef.h>
+
 #include "common.h"
 #include "vmath.h"
 

@@ -44,6 +44,7 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 #include "rt/rt_ecmds.h"
 #include "brep/util.h"
@@ -110,14 +111,10 @@ open_edit(struct directory *dp, struct db_i *dbip)
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_identity_size(&v, 1000.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     return s;
 }

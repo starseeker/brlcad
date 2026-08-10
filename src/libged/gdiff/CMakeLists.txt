@@ -1,7 +1,9 @@
 set(PLUGIN_LIBS libged libbu)
+set_source_files_properties(gdiff.cpp TARGET_DIRECTORY libged
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 ged_plugin_library(ged-gdiff
-  gdiff.c
+  gdiff.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

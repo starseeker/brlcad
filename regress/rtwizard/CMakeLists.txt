@@ -24,7 +24,9 @@ if(TARGET rtwizard)
   # necessary inputs for the CTest tests
   add_dependencies(regress-rtwizard rtwizard pixcmp m35.g)
 
-  # All rtwizard tests used the same script
+  # All rtwizard tests use the same script.  The controls were regenerated
+  # after Obol made autoview use the actual combined scene bounds rather than
+  # the legacy per-leaf safety cubes, which displaced otherwise correct views.
   set(TSCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/regress-rtwiz.cmake.in")
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")
@@ -32,7 +34,7 @@ if(TARGET rtwizard)
   set(TARGET_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/m35_A.pix")
   set(LOG_FILE "${CMAKE_CURRENT_BINARY_DIR}/m35_A.log")
   set(OPTIONS "all.g -t A --benchmark -s 512")
-  brlcad_regression_test(regress-rtwiz_m35_A "rtwizard;pixcmp;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
+  brlcad_regression_test(regress-rtwiz_m35_A "rtwizard;pixcmp;imgdiff;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
   distclean(${LOG_FILE} ${TARGET_IMAGE})
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")
@@ -40,7 +42,7 @@ if(TARGET rtwizard)
   set(TARGET_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/m35_B.pix")
   set(LOG_FILE "${CMAKE_CURRENT_BINARY_DIR}/m35_B.log")
   set(OPTIONS "-l component -t B --benchmark -z 2")
-  brlcad_regression_test(regress-rtwiz_m35_B "rtwizard;pixcmp;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
+  brlcad_regression_test(regress-rtwiz_m35_B "rtwizard;pixcmp;imgdiff;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
   distclean(${LOG_FILE} ${TARGET_IMAGE})
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")
@@ -48,7 +50,7 @@ if(TARGET rtwizard)
   set(TARGET_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/m35_C.pix")
   set(LOG_FILE "${CMAKE_CURRENT_BINARY_DIR}/m35_C.log")
   set(OPTIONS "-c component -l component -t C --benchmark -z 2")
-  brlcad_regression_test(regress-rtwiz_m35_C "rtwizard;pixcmp;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
+  brlcad_regression_test(regress-rtwiz_m35_C "rtwizard;pixcmp;imgdiff;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
   distclean(${LOG_FILE} ${TARGET_IMAGE})
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")
@@ -56,7 +58,7 @@ if(TARGET rtwizard)
   set(TARGET_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/m35_D.pix")
   set(LOG_FILE "${CMAKE_CURRENT_BINARY_DIR}/m35_D.log")
   set(OPTIONS "-l component -c component/suspension,component/power.train -t D --benchmark -z 2")
-  brlcad_regression_test(regress-rtwiz_m35_D "rtwizard;pixcmp;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
+  brlcad_regression_test(regress-rtwiz_m35_D "rtwizard;pixcmp;imgdiff;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
   distclean(${LOG_FILE} ${TARGET_IMAGE})
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")
@@ -64,7 +66,7 @@ if(TARGET rtwizard)
   set(TARGET_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/m35_E.pix")
   set(LOG_FILE "${CMAKE_CURRENT_BINARY_DIR}/m35_E.log")
   set(OPTIONS "-g component -c component/power.train -t E --benchmark -z 2")
-  brlcad_regression_test(regress-rtwiz_m35_E "rtwizard;pixcmp;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
+  brlcad_regression_test(regress-rtwiz_m35_E "rtwizard;pixcmp;imgdiff;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
   set_tests_properties(regress-rtwiz_m35_E PROPERTIES TIMEOUT 900)
   distclean(${LOG_FILE} ${TARGET_IMAGE})
 
@@ -73,7 +75,7 @@ if(TARGET rtwizard)
   set(TARGET_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/m35_F.pix")
   set(LOG_FILE "${CMAKE_CURRENT_BINARY_DIR}/m35_F.log")
   set(OPTIONS "-l component -g component -c component/power.train -t F --benchmark -z 2")
-  brlcad_regression_test(regress-rtwiz_m35_F "rtwizard;pixcmp;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
+  brlcad_regression_test(regress-rtwiz_m35_F "rtwizard;pixcmp;imgdiff;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
   set_tests_properties(regress-rtwiz_m35_F PROPERTIES TIMEOUT 900)
   distclean(${LOG_FILE} ${TARGET_IMAGE})
 
@@ -82,7 +84,7 @@ if(TARGET rtwizard)
   set(TARGET_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/m35_edge_only.pix")
   set(LOG_FILE "${CMAKE_CURRENT_BINARY_DIR}/m35_edge_only.log")
   set(OPTIONS "-l component --benchmark -z 2")
-  brlcad_regression_test(regress-rtwiz_m35_edge_only "rtwizard;pixcmp;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
+  brlcad_regression_test(regress-rtwiz_m35_edge_only "rtwizard;pixcmp;imgdiff;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
   distclean(${LOG_FILE} ${TARGET_IMAGE})
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")
@@ -90,7 +92,7 @@ if(TARGET rtwizard)
   set(TARGET_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/m35_edge_only_color.pix")
   set(LOG_FILE "${CMAKE_CURRENT_BINARY_DIR}/m35_edge_only_color.log")
   set(OPTIONS "-l component --benchmark -z 2 --line-color 100/200/255 -C 30/30/30")
-  brlcad_regression_test(regress-rtwiz_m35_edge_only_color "rtwizard;pixcmp;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
+  brlcad_regression_test(regress-rtwiz_m35_edge_only_color "rtwizard;pixcmp;imgdiff;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
   distclean(${LOG_FILE} ${TARGET_IMAGE})
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")
@@ -100,6 +102,36 @@ if(TARGET rtwizard)
     TEST_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/regress-rtwiz-anim.cmake.in"
     EXEC rtwizard
   )
+
+  # Exercise the historical GUI itself, including the embedded ArcherCore
+  # view, production Tk hosts, and the framebuffer-preview IPC path.  The
+  # rcfile schedules assertions from inside the wizard event loop so this
+  # starts the real rtwizard executable rather than reconstructing its pages
+  # in a test harness.
+  if(UNIX)
+    find_program(RTWIZARD_XVFB_RUN_EXECUTABLE xvfb-run)
+    if(RTWIZARD_XVFB_RUN_EXECUTABLE)
+      set(RTWIZARD_GUI_SMOKE_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/rtwizard_gui_smoke.png")
+      add_test(
+        NAME rtwizard_gui_obol_smoke
+        COMMAND
+          ${SH_EXEC} ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh
+          ${RTWIZARD_XVFB_RUN_EXECUTABLE} $<TARGET_FILE:rtwizard> --gui -i
+          ${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/moss.g -c all.g
+      )
+      set_property(
+        TEST rtwizard_gui_obol_smoke APPEND
+        PROPERTY
+          ENVIRONMENT
+            BRLCAD_ROOT=${CMAKE_BINARY_DIR}
+            RTWIZARD_RCFILE=${CMAKE_CURRENT_SOURCE_DIR}/rtwizard_gui_smoke.tcl
+            RTWIZARD_GUI_SMOKE_OUTPUT=${RTWIZARD_GUI_SMOKE_OUTPUT}
+      )
+      set_property(TEST rtwizard_gui_obol_smoke PROPERTY SKIP_RETURN_CODE 125)
+      set_property(TEST rtwizard_gui_obol_smoke PROPERTY TIMEOUT 120)
+      distclean(${RTWIZARD_GUI_SMOKE_OUTPUT})
+    endif(RTWIZARD_XVFB_RUN_EXECUTABLE)
+  endif(UNIX)
 
   distclean(${CMAKE_CURRENT_BINARY_DIR}/rtedge.log)
 endif()
@@ -116,6 +148,7 @@ cmakefiles(
   m35_edge_only_ref.pix
   regress-rtwiz.cmake.in
   regress-rtwiz-anim.cmake.in
+  rtwizard_gui_smoke.tcl
 )
 
 # Local Variables:

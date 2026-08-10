@@ -2,7 +2,7 @@ set(PLUGIN_LIBS libged libbu)
 
 set(
   NMG_SRCS
-  nmg.c
+  nmg.cpp
   nmg_cmface.c
   nmg_collapse.c
   nmg_fix_normals.c
