@@ -191,6 +191,12 @@ draw_test_obol_progressive_drain(struct ged *gedp, struct ged_view_context *view
 	draw_test_endpoint_controller(view_ctx);
     if (!controller)
 	return 0;
+    /* The production host synchronizes the retained camera before pumping a
+     * view epoch.  Test callers commonly issue `autoview` and then drain
+     * directly; without this handoff they settled the preceding camera and
+     * the subsequent capture started a fresh, transient LoD epoch. */
+    if (!draw_test_sync_obol_camera(controller, view_ctx))
+	return 0;
 
     BObolProgressiveOptions options;
     options.forceTerminalLodRefinement = TRUE;
@@ -761,6 +767,26 @@ img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear
     }
 
     dm_refresh(gedp);
+    /* The comparison is a stable-frame contract.  Several callers frame the
+     * scene with autoview immediately before arriving here; that camera
+     * change starts a new view-dependent LoD epoch even when source geometry
+     * was already settled.  Capturing without pumping that epoch compared a
+     * timing-dependent first frame (often including the convergence HUD)
+     * against a terminal reference image. */
+    struct ged_view_context *capture_view = draw_test_active_view_ctx(gedp);
+    if (draw_test_obol_capture_enabled() &&
+	!draw_test_obol_progressive_drain(gedp, capture_view, 2000, 1)) {
+	bu_log("Obol baseline capture %d did not settle its current view\n", id);
+	if (soft_fail) {
+	    if (clear_scene)
+		scene_clear(gedp);
+	    bu_vls_free(&tname);
+	    bu_vls_free(&cname);
+	    return BRLCAD_ERROR;
+	}
+	bu_exit(EXIT_FAILURE,
+	    "Obol baseline capture did not settle its current view\n");
+    }
     int obol_capture = draw_test_obol_screengrab_if_enabled(gedp, id,
 		       bu_vls_cstr(&tname));
     if (obol_capture != 1)
@@ -900,6 +926,21 @@ img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool
     bu_vls_sprintf(&cname, "%s/empty.png", cdir);
 
     dm_refresh(gedp);
+    struct ged_view_context *capture_view = draw_test_active_view_ctx(gedp);
+    if (draw_test_obol_capture_enabled() &&
+	!draw_test_obol_progressive_drain(gedp, capture_view, 2000, 1)) {
+	bu_log("Obol semantic capture %d did not settle its current view\n", id);
+	if (clear_image)
+	    bu_file_delete(bu_vls_cstr(&tname));
+	bu_vls_free(&tname);
+	bu_vls_free(&cname);
+	if (clear_scene)
+	    scene_clear(gedp);
+	if (soft_fail)
+	    return BRLCAD_ERROR;
+	bu_exit(EXIT_FAILURE,
+	    "Obol semantic capture did not settle its current view\n");
+    }
     int obol_capture = draw_test_obol_screengrab_if_enabled(gedp, id,
 		       bu_vls_cstr(&tname));
     if (obol_capture != 1)

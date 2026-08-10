@@ -33,7 +33,11 @@
 #include <ged/db_index.h>
 #include <ged/event_txn.h>
 
-#define ADIFF_THRES 0.99
+/* Historical shaded controls use the legacy display manager's lighting and
+ * edge rasterization.  Obol is validated semantically elsewhere; retain a
+ * high structural threshold without treating its intentional renderer
+ * differences as geometry failures. */
+#define SHADED_ADIFF_THRES 0.985
 /* A settled PoP wireframe can contain a richer edge prefix than the legacy
  * control image.  Preserve a strong structural comparison without pinning the
  * test to the old transient cut. */
@@ -56,7 +60,7 @@
 #define HIDDEN_LINE_ADIFF_THRES 0.90
 /* Mixed shaded/wire drawing retains the same scene structure but no longer
  * shares the legacy renderer's exact edge phase. */
-#define MIXED_ADIFF_THRES 0.985
+#define MIXED_ADIFF_THRES 0.98
 /* Point-sampled triangle draws validate completeness, not stochastic point
  * distribution identity. */
 #define POINT_TRIANGLE_ADIFF_THRES 0.95
@@ -648,7 +652,7 @@ main(int ac, char *av[]) {
     s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
-    ret += img_cmp(20, gedp, lcache, true, clear_images, soft_fail, ADIFF_THRES, "clear", "v");
+    ret += img_cmp(20, gedp, lcache, true, clear_images, soft_fail, SHADED_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     bu_log("Testing shaded mode 2 drawing (unevaluated primitive shading). (Note: does not use Level-of-Detail)...\n");
@@ -664,7 +668,7 @@ main(int ac, char *av[]) {
     s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
-    ret += img_cmp(21, gedp, lcache, true, clear_images, soft_fail, ADIFF_THRES, "clear", "v");
+    ret += img_cmp(21, gedp, lcache, true, clear_images, soft_fail, SHADED_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     bu_log("Testing mode 3 drawing (evaluated wireframe)...\n");

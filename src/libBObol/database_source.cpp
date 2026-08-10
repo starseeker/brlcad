@@ -3287,19 +3287,15 @@ compact_occurrence_tree_summary(const SoBRLDatabaseSource *source,
 	static_cast<float>(tsp->ts_mater.ma_color[2]));
     summary.materialShader = tsp->ts_mater.ma_shader ?
 	tsp->ts_mater.ma_shader : "";
-    if (source && source->materialColorValid.getValue() &&
-	(source->materialPolicy.getValue() !=
-	 SoBRLDatabaseSource::MATERIAL_DATABASE ||
-	 !summary.materialColorValid)) {
-	summary.materialColorValid = TRUE;
-	summary.materialColor = source->materialColor.getValue();
-    }
-    /* db_walk_tree has already resolved combination inheritance into tsp.
-     * Re-walking the full database path for every leaf dominated large-model
-     * realization.  Only consult db_full_path_color when the tree state has no
-     * color (notably region-id color-table fallback). */
-    if (source && !source->colorOverride.getValue() &&
-	!summary.materialColorValid) {
+    const bool databaseMaterial = source &&
+	source->materialPolicy.getValue() ==
+	    SoBRLDatabaseSource::MATERIAL_DATABASE;
+    /* db_tree_state does not always contain the same effective color as
+     * db_full_path_color (region-table fallback and some inherited BREP
+     * colors are notable cases).  The prefix-cached sweep implements those
+     * full-path rules without re-importing every combination for every leaf,
+     * and is authoritative whenever database materials are requested. */
+    if (databaseMaterial) {
 	BObolMaterialPathState resolved;
 	SbColor databaseColor;
 	const bool haveColor = materialSweep ?
@@ -3310,7 +3306,17 @@ compact_occurrence_tree_summary(const SoBRLDatabaseSource *source,
 	    summary.materialColorValid = TRUE;
 	    summary.materialColor = materialSweep ? resolved.color :
 		databaseColor;
+	    if (materialSweep) {
+		summary.regionId = resolved.regionId;
+		summary.airCode = resolved.airCode;
+		summary.materialId = resolved.materialId;
+		summary.los = resolved.los;
+		summary.materialShader = resolved.shader.c_str();
+	    }
 	}
+    } else if (source && source->materialColorValid.getValue()) {
+	summary.materialColorValid = TRUE;
+	summary.materialColor = source->materialColor.getValue();
     }
     /* Compact entries represent individual database occurrences.  Source
      * metadata belongs to the aggregate and must not replace the occurrence's

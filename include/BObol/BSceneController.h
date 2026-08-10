@@ -64,6 +64,8 @@ struct BOBOL_EXPORT BObolDatabaseSourcePublishState {
     SbBool materialColorValid;
     SbColor materialColor;
     uint32_t materialRevision;
+    SbBool materialPolicyValid;
+    int materialPolicy;
     SbBool roleFlagsValid;
     int roleFlags;
     SbBool viewPolicyValid;
