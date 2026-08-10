@@ -32,7 +32,7 @@ struct SourceRealizationItem {
 	source(NULL), snapshotSourceDatabase(NULL), database(NULL),
 	clientToken(0), estimatedWorkingSetBytes(0), drawMode(0),
 	allowWireFallback(FALSE),
-	probeWarmManifest(NULL), storeManifest(NULL), callbackData(NULL),
+	probeWarmManifest(NULL), storeManifest(NULL),
 	state(BOBOL_SOURCE_REALIZATION_PENDING), warmManifest(false),
 	manifestStored(false)
     {
@@ -65,7 +65,7 @@ struct SourceRealizationItem {
     SbBool allowWireFallback;
     BObolSourceWarmManifestProbe probeWarmManifest;
     BObolSourceManifestStore storeManifest;
-    void *callbackData;
+    std::shared_ptr<void> callbackContext;
     std::atomic<int> state;
     std::atomic<bool> warmManifest;
     std::atomic<bool> manifestStored;
@@ -91,7 +91,13 @@ struct BObolSourceRealizationJobPrivate {
 struct SourceRealizationWork {
     std::shared_ptr<BObolSourceRealizationJobPrivate> job;
     size_t itemIndex = 0;
+    /* First-fit memory admission may bypass an older, temporarily too-large
+     * root to keep otherwise idle workers useful.  Bound those bypasses so a
+     * sustained stream of small roots cannot starve a vehicle-scale source. */
+    size_t memoryBypassCount = 0;
 };
+
+static const size_t SOURCE_REALIZATION_MAX_MEMORY_BYPASSES = 8;
 
 static size_t
 source_work_estimated_bytes(const SourceRealizationWork &work)
@@ -150,7 +156,7 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
 	warmManifest = item->probeWarmManifest(source,
 	    item->snapshotSourceDatabase, item->drawMode,
 	    source->sourceRevision.getValue(), item->stream.get(),
-	    item->callbackData);
+	    item->callbackContext.get());
     }
     item->warmManifest.store(warmManifest == 2, std::memory_order_release);
     if (item->warmManifest.load(std::memory_order_acquire) &&
@@ -185,15 +191,22 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
 	    !source_job_cancelled(job.get()))
 	    realized = source->realizeDatabaseWireframe(stream);
 	success = realized ? true : false;
-	if (success && stream && !stream->hasCoverageBoundsComplete())
-	    stream->setCoverageBoundsComplete(true);
+	if (success && stream && !stream->hasCoverageBoundsComplete()) {
+	    SbBox3f finalBounds;
+	    if (source->getSourceBounds(finalBounds) &&
+		!finalBounds.isEmpty()) {
+		stream->setCoverageBounds(finalBounds);
+		stream->setCoverageBoundsComplete(true);
+	    }
+	}
 	if (success &&
 	    !item->warmManifest.load(std::memory_order_acquire) &&
 	    item->storeManifest &&
 	    !source_job_cancelled(job.get()))
 	    item->manifestStored.store(
 		item->storeManifest(item->database, source,
-		    item->callbackData) ? true : false,
+		    stream,
+		    item->callbackContext.get()) ? true : false,
 		std::memory_order_release);
     } else {
 	success = false;
@@ -261,23 +274,26 @@ struct BObolSourceRealizationCoordinatorPrivate {
 static void
 source_realization_worker(BObolSourceRealizationCoordinatorPrivate *service)
 {
+    const auto fits = [service](const SourceRealizationWork &candidate) {
+	const size_t estimate = source_work_estimated_bytes(candidate);
+	return !service->active || service->maxActiveBytes == SIZE_MAX ||
+	    (estimate <= service->maxActiveBytes &&
+	     service->activeBytes <= service->maxActiveBytes - estimate);
+    };
     for (;;) {
 	SourceRealizationWork work;
 	size_t admittedBytes = 0;
 	{
 	    std::unique_lock<std::mutex> lock(service->mutex);
-	    service->cv.wait(lock, [service]() {
+	    service->cv.wait(lock, [service, &fits]() {
 		if (service->stopping)
 		    return true;
 		for (const SourceRealizationWork &candidate : service->queue) {
-		    const size_t estimate =
-			source_work_estimated_bytes(candidate);
-		    if (!service->active ||
-			service->maxActiveBytes == SIZE_MAX ||
-			(estimate <= service->maxActiveBytes &&
-			 service->activeBytes <=
-			    service->maxActiveBytes - estimate))
+		    if (fits(candidate))
 			return true;
+		    if (candidate.memoryBypassCount >=
+			    SOURCE_REALIZATION_MAX_MEMORY_BYPASSES)
+			return false;
 		}
 		return false;
 	    });
@@ -286,22 +302,27 @@ source_realization_worker(BObolSourceRealizationCoordinatorPrivate *service)
 	    auto selected = service->queue.end();
 	    for (auto candidate = service->queue.begin();
 		    candidate != service->queue.end(); ++candidate) {
-		const size_t estimate =
-		    source_work_estimated_bytes(*candidate);
-		if (!service->active ||
-		    service->maxActiveBytes == SIZE_MAX ||
-		    (estimate <= service->maxActiveBytes &&
-		     service->activeBytes <=
-			service->maxActiveBytes - estimate)) {
+		if (fits(*candidate)) {
 		    selected = candidate;
-		    admittedBytes = estimate;
+		    admittedBytes = source_work_estimated_bytes(*candidate);
 		    break;
 		}
+		if (candidate->memoryBypassCount >=
+			SOURCE_REALIZATION_MAX_MEMORY_BYPASSES)
+		    break;
 	    }
 	    if (selected == service->queue.end()) {
 		if (service->stopping)
 		    return;
 		continue;
+	    }
+	    /* Only candidates actually skipped by this admission age.  A blocked
+	     * candidate which later fits is consumed without carrying stale age,
+	     * and unrelated work behind the selected item is unaffected. */
+	    for (auto bypassed = service->queue.begin();
+		    bypassed != selected; ++bypassed) {
+		if (bypassed->memoryBypassCount != SIZE_MAX)
+		    bypassed->memoryBypassCount++;
 	    }
 	    work = std::move(*selected);
 	    service->queue.erase(selected);
@@ -344,7 +365,7 @@ BObolSourceRealizationRequest::BObolSourceRealizationRequest(void) :
     source(NULL), snapshotSourceDatabase(NULL), clientToken(0),
     estimatedWorkingSetBytes(0), drawMode(0),
     allowWireFallback(FALSE), probeWarmManifest(NULL), storeManifest(NULL),
-    callbackData(NULL)
+    callbackContext()
 {
 }
 
@@ -474,11 +495,13 @@ BObolSourceRealizationCoordinator::submit(
     std::shared_ptr<BObolSourceRealizationJobPrivate> job(
 	new BObolSourceRealizationJobPrivate);
     job->items.reserve(requests.size());
-    for (BObolSourceRealizationRequest &request : requests) {
+    /* Prepare every fallible allocation before crossing the ownership
+     * boundary.  A failed submission is specified to leave all request
+     * resources with the caller, including when process teardown has already
+     * closed the global queue. */
+    for (const BObolSourceRealizationRequest &request : requests) {
 	std::unique_ptr<SourceRealizationItem> item(
 	    new SourceRealizationItem);
-	item->source = request.source;
-	item->snapshotSourceDatabase = request.snapshotSourceDatabase;
 	item->stream = request.stream;
 	item->clientToken = request.clientToken;
 	item->estimatedWorkingSetBytes = request.estimatedWorkingSetBytes;
@@ -486,19 +509,28 @@ BObolSourceRealizationCoordinator::submit(
 	item->allowWireFallback = request.allowWireFallback;
 	item->probeWarmManifest = request.probeWarmManifest;
 	item->storeManifest = request.storeManifest;
-	item->callbackData = request.callbackData;
-	request.source = NULL;
-	request.snapshotSourceDatabase = NULL;
 	job->items.push_back(std::move(item));
     }
-    job->remaining.store(job->items.size(), std::memory_order_release);
-    job->state.store(BOBOL_SOURCE_REALIZATION_RUNNING,
-	std::memory_order_release);
 
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	if (this->p->stopping)
 	    return std::shared_ptr<BObolSourceRealizationJob>();
+	/* The queue lock serializes this commit with coordinator teardown.  From
+	 * here onward submission cannot fail: transfer all caller resources and
+	 * publish their work records as one atomic batch. */
+	for (size_t i = 0; i < requests.size(); ++i) {
+	    BObolSourceRealizationRequest &request = requests[i];
+	    SourceRealizationItem *item = job->items[i].get();
+	    item->source = request.source;
+	    item->snapshotSourceDatabase = request.snapshotSourceDatabase;
+	    item->callbackContext = std::move(request.callbackContext);
+	    request.source = NULL;
+	    request.snapshotSourceDatabase = NULL;
+	}
+	job->remaining.store(job->items.size(), std::memory_order_release);
+	job->state.store(BOBOL_SOURCE_REALIZATION_RUNNING,
+	    std::memory_order_release);
 	for (size_t i = 0; i < job->items.size(); i++) {
 	    SourceRealizationWork work;
 	    work.job = job;

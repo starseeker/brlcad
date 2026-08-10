@@ -72,6 +72,13 @@ static int
 check_manifest(const BObolDrawManifest *manifest)
 {
     if (!manifest || manifest->occurrenceCount != 2 ||
+	!manifest->coverageBoundsValid ||
+	!fastf_equal(manifest->coverageBoundsMin[X], -100.0) ||
+	!fastf_equal(manifest->coverageBoundsMin[Y], -200.0) ||
+	!fastf_equal(manifest->coverageBoundsMin[Z], -300.0) ||
+	!fastf_equal(manifest->coverageBoundsMax[X], 400.0) ||
+	!fastf_equal(manifest->coverageBoundsMax[Y], 500.0) ||
+	!fastf_equal(manifest->coverageBoundsMax[Z], 600.0) ||
 	!manifest->occurrences || !manifest->occurrences[0].path ||
 	!manifest->occurrences[0].sourceName ||
 	!manifest->occurrences[1].path ||
@@ -132,6 +139,9 @@ make_manifest(BObolDrawManifest *manifest)
     if (!manifest)
 	return 0;
     bobol_draw_manifest_init(manifest);
+    manifest->coverageBoundsValid = 1;
+    VSET(manifest->coverageBoundsMin, -100.0, -200.0, -300.0);
+    VSET(manifest->coverageBoundsMax, 400.0, 500.0, 600.0);
     manifest->occurrenceCount = 2;
     manifest->occurrences = static_cast<BObolDrawManifestOccurrence *>(
 	bu_calloc(manifest->occurrenceCount, sizeof(*manifest->occurrences),
@@ -782,6 +792,21 @@ main(int argc, char *argv[])
     if (bobol_draw_manifest_cache_store(dbip, path_top_name, &manifest) !=
 	BRLCAD_ERROR) {
 	printf("FAIL: draw manifest accepted non-database boolean operation\n");
+	ret = 1;
+	goto cleanup;
+    }
+    bobol_draw_manifest_free(&manifest);
+
+    if (!make_manifest(&manifest)) {
+	printf("FAIL: draw manifest invalid-coverage setup\n");
+	ret = 1;
+	goto cleanup;
+    }
+    manifest.coverageBoundsMin[X] =
+	manifest.coverageBoundsMax[X] + 1.0;
+    if (bobol_draw_manifest_cache_store(dbip, path_top_name, &manifest) !=
+	BRLCAD_ERROR) {
+	printf("FAIL: draw manifest accepted invalid coverage bounds\n");
 	ret = 1;
 	goto cleanup;
     }

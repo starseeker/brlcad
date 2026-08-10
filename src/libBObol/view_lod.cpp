@@ -1933,6 +1933,7 @@ BObolViewLodState::cadMeshPayloadCountForSource(
 void
 BObolViewLodState::unsatisfiedCadOccurrenceKeys(
     const SoBRLDatabaseSource *source,
+    uint64_t residentAdmissionRevision,
     std::vector<SbString> &occurrenceKeys) const
 {
     occurrenceKeys.clear();
@@ -1942,9 +1943,26 @@ BObolViewLodState::unsatisfiedCadOccurrenceKeys(
 	view_lod_source_primary_key(source));
     if (found == this->cadUnsatisfiedOccurrencesBySource.end())
 	return;
+    const std::string sourceKey = view_lod_source_primary_key(source);
+    const auto sourcePayloads = this->cadSourceBindings.find(sourceKey);
     occurrenceKeys.reserve(found->second.size());
-    for (const std::string &key : found->second)
+    for (const std::string &key : found->second) {
+	/* A resident-memory denial is authoritative only for the capacity
+	 * epoch which produced it.  Omitting that occurrence from the sparse
+	 * frontier makes hard pressure a stable terminal condition instead of
+	 * an idle rescan loop.  Reclamation or a configured-limit increase
+	 * advances the service epoch and makes the occurrence actionable again. */
+	if (residentAdmissionRevision &&
+	    sourcePayloads != this->cadSourceBindings.end()) {
+	    const auto payload = sourcePayloads->second.find(key);
+	    if (payload != sourcePayloads->second.end() && payload->second &&
+		payload->second->memoryLimited &&
+		payload->second->residentAdmissionRevision ==
+		    residentAdmissionRevision)
+		continue;
+	}
 	occurrenceKeys.push_back(key.c_str());
+    }
 }
 
 size_t

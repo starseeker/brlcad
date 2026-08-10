@@ -259,8 +259,9 @@ public:
      * stable refinement pass can visit only its work frontier rather than
      * rediscovering it by projecting every source leaf. */
     void unsatisfiedCadOccurrenceKeys(
-	const SoBRLDatabaseSource *source,
-	std::vector<SbString> &occurrenceKeys) const;
+        const SoBRLDatabaseSource *source,
+        uint64_t residentAdmissionRevision,
+        std::vector<SbString> &occurrenceKeys) const;
     size_t cadProxyPayloadCount(int proxyKind = BOBOL_LOD_PROXY_NONE) const;
     /** Count current display payloads and those which have reached their
      * recorded view target.  This is telemetry only and does not mutate or

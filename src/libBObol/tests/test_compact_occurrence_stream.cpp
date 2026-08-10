@@ -28,17 +28,24 @@ test_priority_and_state(void)
     BObolCompactOccurrenceStream stream;
     stream.setExpectedCount(100000);
     stream.setWarmCoverageComplete(true);
-    stream.setCoverageBoundsComplete(true);
+    const SbBox3f exactBounds(SbVec3f(-10.0f, -20.0f, -30.0f),
+	SbVec3f(40.0f, 50.0f, 60.0f));
+    stream.setCoverageBounds(exactBounds);
 
     stream.push(occurrence(10));
     stream.push(occurrence(11));
     stream.pushPriority(occurrence(1));
     stream.pushPriority(occurrence(2));
     stream.push(occurrence(12));
+    stream.setCoverageBoundsComplete(true);
+
+    SbBox3f publishedBounds;
 
     if (stream.getExpectedCount() != 100000 ||
 	!stream.hasWarmCoverageComplete() ||
 	!stream.hasCoverageBoundsComplete() ||
+	!stream.getCoverageBounds(publishedBounds) ||
+	publishedBounds != exactBounds ||
 	stream.hasCoverageBoundsDrained() ||
 	stream.isCancelled() || stream.size() != 5) {
 	std::fprintf(stderr, "FAIL: stream state\n");
@@ -51,6 +58,8 @@ test_priority_and_state(void)
 	first[1].occurrenceIndex != 2 ||
 	first[2].occurrenceIndex != 10 ||
 	!stream.hasCoverageBoundsDrained() ||
+	!stream.getCoverageBounds(publishedBounds) ||
+	publishedBounds != exactBounds ||
 	stream.size() != 2) {
 	std::fprintf(stderr, "FAIL: priority drain order\n");
 	return 1;

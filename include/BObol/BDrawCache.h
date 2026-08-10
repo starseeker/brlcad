@@ -128,6 +128,13 @@ struct BObolDrawManifestOccurrence {
 };
 
 struct BObolDrawManifest {
+    /* Exact source-local extent of the complete draw target.  This is a
+     * path-scoped fact, unlike the object-name proxy cache: a manifest for
+     * a/b/c may include transforms and Boolean context which are not valid
+     * for another occurrence of c. */
+    int coverageBoundsValid;
+    point_t coverageBoundsMin;
+    point_t coverageBoundsMax;
     size_t occurrenceCount;
     struct BObolDrawManifestOccurrence *occurrences;
 };

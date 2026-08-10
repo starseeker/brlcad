@@ -39,9 +39,10 @@
  *    e. ged_close.
  *
  *  Assert that R2 renders non-empty LoD output from the cache established by
- *  Run 1.  Exact pixel equality is intentionally not required: the Obol render
- *  path may use different cache identities without changing user-facing LoD
- *  semantics.
+ *  Run 1, and that the deferred whole-target autoview is identical across the
+ *  cold and warm paths.  Exact pixel equality is intentionally not required:
+ *  the Obol render path may use different cache identities without changing
+ *  user-facing LoD semantics.
  *
  * Usage: ged_test_lod_crossrun <directory-containing-moss.g>
  */
@@ -50,6 +51,7 @@
 
 #include "ged/display_obol_private.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -302,6 +304,10 @@ main(int ac, char *av[])
 
     bu_setenv("LIBRT_USE_COMB_INSTANCE_SPECIFIERS", "1", 1);
 
+    point_t run1_center = VINIT_ZERO;
+    fastf_t run1_size = 0.0;
+    int run1_camera_valid = 0;
+
     /* Make a private copy of moss.g so facetize doesn't dirty the source */
     struct bu_vls srcpath = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&srcpath, "%s/moss.g", datadir);
@@ -355,6 +361,13 @@ main(int ac, char *av[])
     if (!r1_wait)
 	bu_log("Run 1: LoD service wait timed out\n");
 
+    const struct bv *run1_view = bv_context_view_const(
+	(const struct bv_context *)ged_view_active_ctx(gedp));
+    if (r1_wait && run1_view && bv_center_get(run1_center, run1_view)) {
+	run1_size = bv_size_get(run1_view);
+	run1_camera_valid = isfinite(run1_size) && run1_size > 0.0;
+    }
+
     int r1_ret = render_to_file(gedp, "lod_cr_run1.png");
     bu_log("Run 1 image captured (%s)\n", r1_ret ? "WARN: screengrab failed" : "ok");
 
@@ -389,6 +402,16 @@ main(int ac, char *av[])
     if (!r2_wait)
 	bu_log("Run 2: LoD service wait timed out\n");
 
+    point_t run2_center = VINIT_ZERO;
+    fastf_t run2_size = 0.0;
+    int run2_camera_valid = 0;
+    const struct bv *run2_view = bv_context_view_const(
+	(const struct bv_context *)ged_view_active_ctx(gedp));
+    if (r2_wait && run2_view && bv_center_get(run2_center, run2_view)) {
+	run2_size = bv_size_get(run2_view);
+	run2_camera_valid = isfinite(run2_size) && run2_size > 0.0;
+    }
+
     int r2_ret = render_to_file(gedp, "lod_cr_run2.png");
     bu_log("Run 2 image captured (%s)\n", r2_ret ? "WARN: screengrab failed" : "ok");
 
@@ -409,8 +432,24 @@ main(int ac, char *av[])
     } else if (!png_not_empty("lod_cr_run1.png") || !png_not_empty("lod_cr_run2.png")) {
 	bu_log("FAIL: LoD cross-run produced empty rendered output\n");
 	ret = 1;
+    } else if (!run1_camera_valid || !run2_camera_valid) {
+	bu_log("FAIL: LoD cross-run did not publish finite terminal autoviews\n");
+	ret = 1;
     } else {
-	bu_log("PASS: LoD cross-run rendered cached LoD output\n");
+	const fastf_t camera_tolerance = std::max<fastf_t>(1.0e-6,
+	    std::max(fabs(run1_size), fabs(run2_size)) * 1.0e-6);
+	if (!VNEAR_EQUAL(run1_center, run2_center, camera_tolerance) ||
+	    !NEAR_EQUAL(run1_size, run2_size, camera_tolerance)) {
+	    bu_log("FAIL: cold/warm LoD autoview differs: "
+		"cold center=(%.17g %.17g %.17g) size=%.17g; "
+		"warm center=(%.17g %.17g %.17g) size=%.17g\n",
+		run1_center[X], run1_center[Y], run1_center[Z], run1_size,
+		run2_center[X], run2_center[Y], run2_center[Z], run2_size);
+	    ret = 1;
+	} else {
+	    bu_log("PASS: LoD cross-run rendered cached output with "
+		"cache-independent autoview\n");
+	}
     }
 
     /* Cleanup */

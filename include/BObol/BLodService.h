@@ -291,6 +291,8 @@ public:
     size_t availableResultTaskCapacity(void) const;
 
     uint64_t submit(const BObolLodTask &task);
+    /* Suppress an equivalent request while either its producer is active or
+     * its completed result is still awaiting publication. */
     uint64_t submitIfNotActive(const BObolLodTask &task);
     /*
      * Submit a producer wave under one service lock and wake workers once.

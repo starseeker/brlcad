@@ -532,6 +532,12 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
     size_t getExpectedCount(void) const;
     void setWarmCoverageComplete(bool complete);
     bool hasWarmCoverageComplete(void) const;
+    /* Publish/query the immutable source-local extent of the complete draw
+     * target.  The value remains available after its priority presentation
+     * occurrence has been drained, allowing the cache writer and autoview
+     * follower to consume exactly the same producer fact. */
+    void setCoverageBounds(const SbBox3f &bounds);
+    bool getCoverageBounds(SbBox3f &bounds);
     /*
      * True once an exact whole-target bound has been queued in the priority
      * lane.  Progressive autoview must not chase the append-only union of
@@ -839,7 +845,9 @@ public:
 	uint32_t revision);
     /* Capture the small, immutable field configuration needed by detached
      * realization without copying database geometry.  This is safe to call on
-     * the scene owner thread and returns a ref-counted unattached source. */
+     * the scene owner thread and returns a ref-counted unattached source with
+     * field sensors disabled.  After launch it is worker-exclusive until the
+     * realization job publishes a terminal state. */
     SoBRLDatabaseSource *createDetachedRealizationTemplate(void) const;
     /* Populate a detached template on a realization worker.  File-backed
      * inputs use an independent read handle and therefore require the caller

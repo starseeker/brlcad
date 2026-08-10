@@ -64,6 +64,32 @@ In an orthographic view, equal projected extents have equal LoD value
 regardless of depth.  In a perspective view, distance matters only through
 projection.  No separate depth weighting is allowed.
 
+## Draw extent and autoview contract
+
+Each progressive draw source has one authoritative source-local coverage
+extent for `(full draw path, source revision)`.  It is a producer fact, not a
+measurement of whichever fallback or PoP cut happens to be visible.
+
+1. Cold coverage computes the extent while enumerating all eligible
+   occurrences and publishes it once through the stream's priority lane.
+2. The owner thread may fit the camera only after that final priority record
+   has been drained and merged.  “Worker queued” is not “scene published.”
+3. A warm manifest stores the identical path-scoped extent.  It may declare
+   warm coverage authoritative only when that extent and every immutable leaf
+   source request are present.
+4. Object-name AABB/OBB caches remain object-local.  A transformed occurrence
+   union must never overwrite them; the same leaf may be drawn through several
+   paths with different transforms and Boolean contexts.
+5. During initial progressive draw the provider is the sole camera owner.
+   Transaction code must not apply a provisional fit from partial boxes.
+6. One request produces at most one framing transition and may never roll back
+   to an earlier partial extent.  Cold/warm and System GL/OSMesa runs of the
+   same source/view must produce the same final camera.
+
+The initial blank/default frame to exact-model fit can remain visible on a
+slow backend.  It is one intentional transition; a partial-fit/exact-fit pair
+is a contract violation.
+
 ## State machine
 
 ```text
@@ -110,10 +136,26 @@ projection.  No separate depth weighting is allowed.
   retained across later scale epochs.  A deadline miss or a frame slower than
   100 ms lowers only the O(1) render ceiling; it never rewrites a retained
   occurrence to its minimum level or discards the richer resident prefix.
+  System GL motion decisions use the slower of completed endpoint traversal
+  and asynchronous CAD GPU time; OSMesa supplies the same evidence through
+  completed traversal time.  An aborted Coin traversal has no exact submitted
+  work denominator.  It may drive deadline backoff, the global render ceiling,
+  or sub-pixel aggregation, but it may not reduce calibrated throughput,
+  persistent scene budget, occurrence cuts, or residency.
 
 `SETTLING`
 : The interaction cut remains until one coarse frame has actually been
-  presented and the quiet debounce expires.
+  presented and the quiet debounce expires.  Pose retention is legal only if
+  the interaction began from a view already proven ready.  Initial draw,
+  partial coverage, and unfinished refinement may never become terminal merely
+  because an orthographic camera event was pose-only.  The epoch separately
+  records “scale changed at least once” and “the current camera edge changes
+  scale”; a later rotation cannot rearm a zoom probe, and a scale round trip is
+  tested by its final signature rather than by the presence of wheel events.
+  On entry to quiet state, the last proven stable scene allowance replaces the
+  transient 60 FPS motion allowance.  A post-release frame which installs a
+  new interaction ceiling before debounce must reapply the stable snapshot or
+  enter a witnessed handoff; it cannot report ready with that ceiling stuck.
 
 `STABLE`
 : Refinement proceeds one drawable prefix step per presented frame.  Candidate
@@ -127,7 +169,12 @@ projection.  No separate depth weighting is allowed.
 
 `COMPACTING`
 : After a longer quiet interval, aggregate consumer demand may trim resident
-  CPU/GPU tails with headroom.  Active cuts remain drawable throughout.
+  CPU/GPU tails with headroom.  Active cuts remain drawable throughout.  GPU
+  atlas maintenance may consolidate compatible live ranges with one bounded
+  page-sized device-local scratch buffer, update part offsets atomically, and
+  delete emptied pages.  It must never require a second scene-sized atlas or a
+  source reload.  Consolidation is permitted only after resident demand has
+  been quiet long enough to make the current cuts a stable witness.
 
 Persistent PoP cache records are activation-level chunks.  Growing a retained
 asset after compaction reads only `(resident, requested]`; it must not recreate
@@ -155,6 +202,23 @@ Serialized levels must not queue as independent work because they cannot grow
 the same asset in parallel and their obsolete result epochs create publication
 churn.
 
+A service request owns its duplicate-suppression identity from admission until
+the owner thread drains its result, not merely until the worker finishes.  A
+completed result waiting in the coalesced publication queue is still active for
+submission purposes.  Releasing the identity at worker completion permits a
+fast warm-cache result to be resubmitted once per planning wave while GUI
+publication is deliberately batched, causing needless work and visible
+convergence cycling.
+
+A resident-memory denial is scoped to the resident-admission revision at which
+it was observed.  For that unchanged revision it is a terminal capacity fact,
+not an actionable unsatisfied occurrence, and an identical scene-budget
+retarget must not erase it.  The denial becomes actionable again only after a
+capacity/residency revision changes, or after the occurrence's requested
+asset, view, or policy identity changes.  This makes a genuinely saturated
+scene quiet without preventing progress when eviction or a larger limit later
+creates headroom.
+
 The owner-thread coordinator is the authority for these phases.  Client
 Booleans are observations, not alternate state machines: named gesture and
 cancellation events own their corresponding edges (gesture release retains the
@@ -173,6 +237,15 @@ than an endless COMPACTING loop.  A later pressure edge creates a new revision
 and a new recovery opportunity.  If pressure is first observed while recovery
 is disabled, enabling recovery consumes that still-current unhandled revision
 once; the system must not wait for pressure to clear and recur.
+
+Coverage necessity is part of the coverage policy, not a separate controller
+latch.  LoD-disabled or service-detached views are vacuously covered.  When
+coverage is required, invalidating its proof immediately gates compaction;
+an old planning cursor cannot claim `COMPACTING` concurrently with missing
+minimum coverage.  If cancellation, source erase, LoD disable, or an empty
+view removes the coverage producer, retiring the associated compaction request
+also acknowledges that pressure-recovery revision.  It may not leave an
+unwitnessed background obligation.
 
 Minimum-mesh coverage, user-visible convergence, aggregate scene budgeting,
 view-demand scheduling, renderer-independent quality calculation, resource-
@@ -351,6 +424,29 @@ These must hold after every owner-thread transition:
 13. Active camera input never rewrites retained occurrence cuts downward.
     Responsiveness pressure changes the renderer-wide effective level; quiet
     admission and memory maintenance are the only cut/retention authorities.
+14. A progressive autoview is fulfilled only from the acknowledged exact
+    path-scoped coverage extent.  That certified source-local extent remains
+    authoritative after every partial registry merge and final detached
+    adoption; a representation-derived union may be used only before the
+    certification exists.  Cache state, publication order, and renderer
+    cadence cannot alter the final camera.
+15. Wanting a richer retained cut is not a progress witness.  A pending phase
+    must name a task, result, bounded cursor, timer, or presentation frame which
+    can discharge it; otherwise the current performance-limited cut is a stable
+    terminal state until a new view, resource, or residency edge arrives.
+16. A renderer may report persistent atlas-admission pressure in a terminal
+    memory-limited state.  That state is legal only with complete coverage, a
+    view-ready convergence proof, no pressure replacement proxies, no pending
+    visual work, and a coherent drawable cut; clearing the observation is not
+    a liveness requirement when the visible working set genuinely exceeds the
+    allowance.
+17. Duplicate suppression spans worker execution and queued publication.  A
+    result waiting for owner-thread drain owns the same request identity as its
+    producer; coalescing may replace its payload but may not make that request
+    appear absent.
+18. A current resident-admission denial is excluded from the actionable
+    unsatisfied frontier.  An identical render-budget retarget preserves that
+    witness, and a new resident-admission revision reopens it.
 ## Liveness properties
 
 Using `[]` for “always” and `<>` for “eventually,” the implementation must
@@ -477,18 +573,22 @@ GPU upload, and memory pressure.  Passing one does not imply passing the other.
 | Contract area | Required evidence |
 |---|---|
 | cold fallback and first mesh | empty-cache GUI timeline and screenshots |
+| progressive autoview | exact cold/warm and System GL/OSMesa final-camera equivalence, automated cross-run center/size equality, and no provisional rollback |
 | resident retarget | unit test proving no provider/cache work |
 | resident suffix/trim | cache test proving suffix-only reads leave no reader prefix, realization test proving exact-capacity trim, and Lucy zoom memory telemetry |
 | continuous zoom refinement | cold/warm Lucy held-gesture checkpoints proving resident growth and a richer effective cut before release on System GL and OSMesa |
 | discrete prefix progress | unit test with active level below a richer resident prefix and an unaffordable direct jump |
 | view working-set turnover | close multi-instance occurrence hashes and images across view directions |
 | unique asset fan-out | thousands-of-distinct-mesh cold/warm stress, worker/cache telemetry, and perf |
+| saturated residency | hard-cap cold/warm stress proving a quiet memory-limited terminal cut, bounded task count, and resubmission only after an admission revision edge |
+| queued-result ownership | service test proving duplicate rejection before result drain and readmission after drain; warm stress proving bounded task fan-out |
 | scene budget | held-motion and stable face/FPS telemetry |
 | tail/silhouette quality | Generic Twin multi-angle image comparison |
-| GL state | System GL apitrace plus corruption/noise screenshots |
+| renderer packet semantics | independent exhaustive oracle over sparse ownership, hidden/proxy channel rules, retained ranges, and all serialized progressive-level inputs |
+| GL state | deep before/after state sentinel on every exercised System GL and OSMesa route, with apitrace for any failure |
 | wire parity | shaded/wire active-level and image matrix |
 | selection/edit | hierarchy selection, erase/redraw, promotion/demotion, and picking tests |
-| liveness | report rejects pending-without-witness and stable-with-affordable-next states |
+| liveness | exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness or stable-with-affordable-next states |
 
 The GUI runner is permitted to use generous wall-clock time for cold asset
 construction, but it must not use that generosity to accept a terminal box,

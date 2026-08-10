@@ -233,6 +233,30 @@ public:
 	    this->coverageCompleteValue = false;
     }
 
+    /* The semantic view policy owns whether minimum-mesh coverage is a
+     * prerequisite at all.  Keep that fact beside the coverage proof instead
+     * of adding a second controller latch: LoD-disabled and detached-service
+     * views are vacuously covered, while a stale compaction cursor may never
+     * overlap an invalidated required inventory. */
+    void setRequired(bool required)
+    {
+	this->requiredValue = required;
+    }
+
+    bool required(void) const { return this->requiredValue; }
+    bool effectiveActive(void) const
+    {
+	return this->requiredValue && this->activeValue;
+    }
+    bool effectiveComplete(void) const
+    {
+	return !this->requiredValue || this->coverageCompleteValue;
+    }
+    bool compactionAllowed(void) const
+    {
+	return this->effectiveComplete();
+    }
+
     void deactivate(void)
     {
 	this->activeValue = false;
@@ -319,6 +343,7 @@ private:
 	return right > SIZE_MAX - left ? SIZE_MAX : left + right;
     }
 
+    bool requiredValue = false;
     bool activeValue = true;
     bool sawBoundedSourceValue = false;
     bool coverageCompleteValue = false;
@@ -864,6 +889,12 @@ public:
 	    this->currentBudgetValue, budget);
     }
 
+    void raiseCurrentBudget(size_t budget)
+    {
+	this->currentBudgetValue = std::max(
+	    this->currentBudgetValue, budget);
+    }
+
     size_t seedBudget(void) const { return this->seedBudgetValue; }
     size_t currentBudget(void) const { return this->currentBudgetValue; }
     bool passInitialized(void) const { return this->passInitializedValue; }
@@ -1054,7 +1085,13 @@ public:
 
     bool rearmAfterResidentGrowth(bool interactive)
     {
-	if (!interactive || !this->interactionScaleChangedValue)
+	/* A suffix which arrives after an earlier wheel event remains useful,
+	 * but it must not turn a later pose-only segment of the same debounce
+	 * epoch back into a scale-quality probe.  The epoch-wide bit is the quiet
+	 * convergence obligation; the camera-local bit says whether the current
+	 * presentation is actually changing scale. */
+	if (!interactive || !this->viewScaleChangingValue ||
+	    !this->interactionScaleChangedValue)
 	    return false;
 	this->qualityProbeActiveValue = false;
 	this->qualityProbePendingValue = true;
@@ -1063,10 +1100,11 @@ public:
 	return true;
     }
 
-    bool finishQuietInteraction(void)
+    bool finishQuietInteraction(bool returnedToStartingScale = false)
     {
 	const bool completedScaleInteraction =
-	    this->interactionScaleChangedValue;
+	    this->interactionScaleChangedValue &&
+	    !returnedToStartingScale;
 	this->viewScaleChangingValue = false;
 	this->interactionScaleChangedValue = false;
 	this->qualityProbeActiveValue = false;
@@ -1137,9 +1175,12 @@ public:
     }
     bool scaleChangingInteraction(bool interactive) const
     {
-	return interactive &&
-	    (this->viewScaleChangingValue ||
-	     this->interactionScaleChangedValue);
+	/* interactionScaleChangedValue intentionally survives a mixed wheel and
+	 * mouse gesture until quiet convergence.  It cannot classify the current
+	 * frame: after a wheel event, rotation/translation must keep the existing
+	 * occurrence cuts and use only the reversible renderer ceiling for FPS
+	 * control. */
+	return interactive && this->viewScaleChangingValue;
     }
 
 private:
@@ -1212,11 +1253,13 @@ public:
 	bool rescanAfterFrame = false;
 	bool changedCut = false;
 	bool retainedRefinementPending = false;
+	bool retainedRefinementBudgetBlocked = false;
     };
 
     struct CompletedPassDecision {
 	bool finishHandoff = false;
 	bool requestRetainedRescan = false;
+	bool retireRetainedObservation = false;
     };
 
     void capturePrior(int progressiveCeiling,
@@ -1229,6 +1272,7 @@ public:
 	this->priorRestoredValue = false;
 	this->provenQualityValue = Snapshot();
 	this->handoffActiveValue = false;
+	this->handoffPresentationRequiredValue = false;
 	this->handoffCostFloorValue = 0;
     }
 
@@ -1259,9 +1303,26 @@ public:
 	    if (inputs.orthographic && !inputs.scaleChanged &&
 		this->priorStableValue.valid &&
 		populationMatches(
-		    this->priorStableValue.population, inputs.population))
+		    this->priorStableValue.population, inputs.population)) {
 		decision.restoredPriorStable = true;
-	    else
+		/* Button-up may restore this snapshot before the 150 ms quiet
+		 * debounce.  A frame which then misses the stricter interactive
+		 * deadline can install another temporary renderer ceiling.  Reapply
+		 * the proven stable limits here; otherwise the prior-restored flag
+		 * suppresses both restoration and handoff, leaving that motion
+		 * ceiling in an apparently ready quiet view. */
+		if (inputs.currentProgressiveCeiling !=
+			this->priorStableValue.progressiveCeiling ||
+		    std::fabs(sanitizeThreshold(
+			inputs.currentPointProxyPixelThreshold) -
+			this->priorStableValue.pointProxyPixelThreshold) > 1.0e-6f) {
+		    decision.apply = true;
+		    decision.progressiveCeiling =
+			this->priorStableValue.progressiveCeiling;
+		    decision.pointProxyPixelThreshold =
+			this->priorStableValue.pointProxyPixelThreshold;
+		}
+	    } else
 		this->priorRestoredValue = false;
 	    return decision;
 	}
@@ -1304,12 +1365,18 @@ public:
 	    decision.progressiveCeiling = -1;
 	    decision.pointProxyPixelThreshold = 1.0f;
 	    this->handoffActiveValue = false;
+	    this->handoffPresentationRequiredValue = false;
 	    this->handoffCostFloorValue = 0;
 	} else {
 	    const bool constrained = decision.progressiveCeiling >= 0 ||
 		decision.pointProxyPixelThreshold > 1.01f;
 	    this->handoffActiveValue =
 		!decision.restoredPriorStable && constrained;
+	    /* The constrained interaction cut was already presented before the
+	     * quiet debounce called beginQuiet().  A deadline recovery uses
+	     * armHandoff(true) instead and must prove one successful constrained
+	     * frame before its ceiling can be removed. */
+	    this->handoffPresentationRequiredValue = false;
 	    this->handoffCostFloorValue =
 		this->handoffActiveValue && decision.restoredProvenQuality ?
 		    decision.provenRenderCostFloor : 0;
@@ -1325,11 +1392,22 @@ public:
     CompletedPassDecision completePass(const CompletedPassInputs &inputs)
     {
 	CompletedPassDecision decision;
-	if (!this->handoffActiveValue || !inputs.completed ||
+	if (!inputs.completed ||
 	    inputs.submissionPending || inputs.rescanAfterFrame ||
-	    inputs.changedCut)
+	    inputs.changedCut || inputs.retainedRefinementBudgetBlocked ||
+	    this->handoffPresentationRequiredValue)
 	    return decision;
+	if (!this->handoffActiveValue) {
+	    /* Wanting a richer retained cut is an observation, not a liveness
+	     * witness.  With no admitted cut, budget barrier, handoff, or rescan,
+	     * the current calibrated cut is terminal until a new external edge
+	     * starts another pass. */
+	    decision.retireRetainedObservation =
+		inputs.retainedRefinementPending;
+	    return decision;
+	}
 	this->handoffActiveValue = false;
+	this->handoffPresentationRequiredValue = false;
 	this->handoffCostFloorValue = 0;
 	decision.finishHandoff = true;
 	decision.requestRetainedRescan =
@@ -1337,20 +1415,31 @@ public:
 	return decision;
     }
 
-    void armHandoff(void)
+    void armHandoff(bool presentationRequired)
     {
 	this->handoffActiveValue = true;
+	this->handoffPresentationRequiredValue = presentationRequired;
 	this->handoffCostFloorValue = 0;
+    }
+    bool noteFramePresented(void)
+    {
+	const bool released = this->handoffActiveValue &&
+	    this->handoffPresentationRequiredValue;
+	if (this->handoffActiveValue)
+	    this->handoffPresentationRequiredValue = false;
+	return released;
     }
     void cancelHandoff(void)
     {
 	this->handoffActiveValue = false;
+	this->handoffPresentationRequiredValue = false;
 	this->handoffCostFloorValue = 0;
     }
 
     void viewInvalidated(void)
     {
 	this->handoffActiveValue = false;
+	this->handoffPresentationRequiredValue = false;
 	this->handoffCostFloorValue = 0;
 	this->provenQualityValue = Snapshot();
     }
@@ -1361,10 +1450,16 @@ public:
 	this->provenQualityValue = Snapshot();
 	this->priorRestoredValue = false;
 	this->handoffActiveValue = false;
+	this->handoffPresentationRequiredValue = false;
 	this->handoffCostFloorValue = 0;
     }
 
     bool handoffPending(void) const { return this->handoffActiveValue; }
+    bool handoffPresentationPending(void) const
+    {
+	return this->handoffActiveValue &&
+	    this->handoffPresentationRequiredValue;
+    }
     size_t handoffCostFloor(void) const
     {
 	return this->handoffCostFloorValue;
@@ -1420,6 +1515,7 @@ private:
     Snapshot provenQualityValue;
     bool priorRestoredValue = false;
     bool handoffActiveValue = false;
+    bool handoffPresentationRequiredValue = false;
     size_t handoffCostFloorValue = 0;
 };
 

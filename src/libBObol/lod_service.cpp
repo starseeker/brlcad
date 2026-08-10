@@ -1796,6 +1796,10 @@ struct BObolLodServicePrivate {
 	BObolLodResultSlotMapKeyHash> cacheWriteSlots;
     std::vector<BObolLodSubscriber> subscribers;
     std::unordered_map<std::string, size_t> activeRequestKeyCounts;
+    /* A completed producer still owns its request identity until the queued
+     * presentation result is drained.  This prevents a fast cache hit from
+     * being resubmitted while the GUI intentionally coalesces result waves. */
+    std::unordered_map<std::string, size_t> queuedResultRequestKeyCounts;
     std::unordered_map<std::string, std::shared_ptr<BObolResidentMeshAsset>>
 	residentMeshes;
     /* Append-only while the service is running.  Stable planning advances a
@@ -2163,6 +2167,18 @@ lod_active_request_key_recorded_unlocked(const BObolLodServicePrivate *p,
 	   p->activeRequestKeyCounts.end() ? TRUE : FALSE;
 }
 
+static SbBool
+lod_request_key_recorded_unlocked(const BObolLodServicePrivate *p,
+	const SbString &key)
+{
+    if (lod_active_request_key_recorded_unlocked(p, key))
+	return TRUE;
+    if (!p || key.getLength() == 0)
+	return FALSE;
+    return p->queuedResultRequestKeyCounts.find(key.getString()) !=
+	p->queuedResultRequestKeyCounts.end() ? TRUE : FALSE;
+}
+
 static void
 lod_active_request_key_remove_unlocked(BObolLodServicePrivate *p,
 				       const SbString &key)
@@ -2177,6 +2193,35 @@ lod_active_request_key_remove_unlocked(BObolLodServicePrivate *p,
 	found->second--;
     else
 	p->activeRequestKeyCounts.erase(found);
+}
+
+static void
+lod_queued_result_request_key_add_unlocked(BObolLodServicePrivate *p,
+	const BObolLodRequest &request)
+{
+    if (!p)
+	return;
+    const SbString key = lod_request_active_key(request);
+    if (key.getLength() > 0)
+	p->queuedResultRequestKeyCounts[key.getString()]++;
+}
+
+static void
+lod_queued_result_request_key_remove_unlocked(BObolLodServicePrivate *p,
+	const BObolLodRequest &request)
+{
+    if (!p)
+	return;
+    const SbString key = lod_request_active_key(request);
+    if (key.getLength() == 0)
+	return;
+    auto found = p->queuedResultRequestKeyCounts.find(key.getString());
+    if (found == p->queuedResultRequestKeyCounts.end())
+	return;
+    if (found->second > 1)
+	found->second--;
+    else
+	p->queuedResultRequestKeyCounts.erase(found);
 }
 
 static BObolLodResult
@@ -2597,14 +2642,27 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 		const auto existing = p->resultSlots.find(slot);
 		if (existing != p->resultSlots.end()) {
 		    if (lod_result_supersedes(
-			    completedResult, *existing->second))
+			    completedResult, *existing->second)) {
+			const SbString oldRequestKey = lod_request_active_key(
+			    existing->second->request);
+			const SbString newRequestKey = lod_request_active_key(
+			    completedResult.request);
+			if (oldRequestKey != newRequestKey) {
+			    lod_queued_result_request_key_remove_unlocked(
+				p, existing->second->request);
+			    lod_queued_result_request_key_add_unlocked(
+				p, completedResult.request);
+			}
 			*existing->second = std::move(completedResult);
+		    }
 		    p->coalescedResults++;
 		} else {
 		    notifyResultReady =
 			lod_generation_count_unlocked(
 			    p->generationResultCounts,
 			    completedResult.generation) == 0 ? TRUE : FALSE;
+		    lod_queued_result_request_key_add_unlocked(
+			p, completedResult.request);
 		    p->results.push_back(std::move(completedResult));
 		    p->resultSlots.emplace(slot, std::prev(p->results.end()));
 		    lod_generation_count_add_unlocked(
@@ -3262,6 +3320,7 @@ BObolLodService::stop(void)
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	this->p->cacheWrites.clear();
 	this->p->results.clear();
+	this->p->queuedResultRequestKeyCounts.clear();
 	this->p->cacheWriteSlots.clear();
 	this->p->resultSlots.clear();
 	this->p->completed.clear();
@@ -4170,6 +4229,8 @@ BObolLodService::cancelGeneration(uint64_t generation)
 	for (std::list<BObolLodResult>::iterator it =
 		 this->p->results.begin(); it != this->p->results.end();) {
 	    if (it->generation == generation) {
+		lod_queued_result_request_key_remove_unlocked(
+		    this->p, it->request);
 		this->p->resultSlots.erase(lod_result_slot_map_key(*it));
 		lod_generation_count_remove_unlocked(
 		    this->p->generationResultCounts, generation);
@@ -4353,7 +4414,7 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
     }
 
     if (skipActiveDuplicate &&
-	lod_active_request_key_recorded_unlocked(p, activeKey))
+	lod_request_key_recorded_unlocked(p, activeKey))
 	return 0;
 
     const uint64_t id = item.id;
@@ -4454,7 +4515,7 @@ BObolLodService::hasActiveRequest(
     const SbString key = lod_request_active_key(request);
 
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    return lod_active_request_key_recorded_unlocked(this->p, key);
+    return lod_request_key_recorded_unlocked(this->p, key);
 }
 
 static size_t
@@ -4516,6 +4577,8 @@ BObolLodService::drainResults(std::vector<BObolLodResult> &results,
 	    (estimatedBytes >= maxEstimatedBytes ||
 	     frontBytes > maxEstimatedBytes - estimatedBytes))
 	    break;
+	lod_queued_result_request_key_remove_unlocked(
+	    this->p, this->p->results.front().request);
 	this->p->resultSlots.erase(
 	    lod_result_slot_map_key(this->p->results.front()));
 	lod_generation_count_remove_unlocked(
@@ -4559,6 +4622,8 @@ BObolLodService::drainGenerationResults(
 	     resultBytes > maxEstimatedBytes - estimatedBytes))
 	    break;
 
+	lod_queued_result_request_key_remove_unlocked(
+	    this->p, it->request);
 	this->p->resultSlots.erase(lod_result_slot_map_key(*it));
 	lod_generation_count_remove_unlocked(
 	    this->p->generationResultCounts, generation);
@@ -4601,6 +4666,8 @@ BObolLodService::drainMatchingResults(
 	    continue;
 	}
 
+	lod_queued_result_request_key_remove_unlocked(
+	    this->p, it->request);
 	this->p->resultSlots.erase(lod_result_slot_map_key(*it));
 	lod_generation_count_remove_unlocked(
 	    this->p->generationResultCounts, it->generation);

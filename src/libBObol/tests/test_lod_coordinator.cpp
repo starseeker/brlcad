@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <array>
+#include <cstdint>
 #include <type_traits>
 
 static_assert(sizeof(BObolLodViewEpoch) == sizeof(uint64_t),
@@ -366,6 +367,196 @@ test_adversarial_result_order(void)
     return 0;
 }
 
+static bool
+same_machine_inputs(const LodMachine::Inputs &lhs,
+    const LodMachine::Inputs &rhs)
+{
+    return lhs.interactive == rhs.interactive &&
+	lhs.compacting == rhs.compacting &&
+	lhs.coverageActive == rhs.coverageActive &&
+	lhs.coverageComplete == rhs.coverageComplete &&
+	lhs.generationActive == rhs.generationActive &&
+	lhs.settlingWork == rhs.settlingWork &&
+	lhs.gestureActive == rhs.gestureActive &&
+	lhs.cpuMemoryPressure == rhs.cpuMemoryPressure &&
+	lhs.gpuMemoryPressure == rhs.gpuMemoryPressure &&
+	lhs.resourceRecoveryPending == rhs.resourceRecoveryPending;
+}
+
+static LodMachine::Phase
+phase_for_canonical_inputs(const LodMachine::Inputs &inputs,
+    const LodMachine::Witness &witness)
+{
+    if (inputs.interactive || inputs.gestureActive)
+	return LodMachine::Phase::INTERACTIVE;
+    if (inputs.coverageActive || !inputs.coverageComplete)
+	return inputs.generationActive ? LodMachine::Phase::COVERAGE :
+	    LodMachine::Phase::FALLBACK;
+    if (inputs.compacting || inputs.resourceRecoveryPending)
+	return LodMachine::Phase::COMPACTING;
+    if (inputs.settlingWork || witness.pendingCount != 0)
+	return LodMachine::Phase::SETTLING;
+    return LodMachine::Phase::STABLE;
+}
+
+/*
+ * Exhaust the complete scalar input domain for every lifecycle event.  This
+ * is deliberately deterministic rather than a timing fuzzer: a failing mask
+ * is an exact replay token, all contradictory caller observations are
+ * covered, and the follow-up valid observation proves that canonicalization
+ * never installs a sticky recovery latch.
+ */
+static int
+test_exhaustive_state_contract(void)
+{
+    using Event = LodMachine::Event;
+    using Invariant = LodMachine::Invariant;
+    using Phase = LodMachine::Phase;
+    static const size_t inputDomain = 1u << 10;
+    static const size_t witnessDomain = 3;
+
+    for (size_t inputMask = 0; inputMask < inputDomain; ++inputMask) {
+	LodMachine::Inputs observed;
+	observed.interactive = (inputMask & (1u << 0)) != 0;
+	observed.compacting = (inputMask & (1u << 1)) != 0;
+	observed.coverageActive = (inputMask & (1u << 2)) != 0;
+	observed.coverageComplete = (inputMask & (1u << 3)) != 0;
+	observed.generationActive = (inputMask & (1u << 4)) != 0;
+	observed.settlingWork = (inputMask & (1u << 5)) != 0;
+	observed.gestureActive = (inputMask & (1u << 6)) != 0;
+	observed.cpuMemoryPressure = (inputMask & (1u << 7)) != 0;
+	observed.gpuMemoryPressure = (inputMask & (1u << 8)) != 0;
+	observed.resourceRecoveryPending =
+	    (inputMask & (1u << 9)) != 0;
+
+	for (size_t witnessCase = 0; witnessCase < witnessDomain;
+		++witnessCase) {
+	    LodMachine::Witness observedWitness;
+	    observedWitness.viewEpoch = 11;
+	    observedWitness.policyEpoch = 17;
+	    observedWitness.activeGeneration = 23;
+	    observedWitness.visibleCount = witnessCase ? 5 : 0;
+	    observedWitness.completedCount = witnessCase == 1 ? 7 :
+		(witnessCase == 2 ? 3 : 0);
+	    observedWitness.pendingCount = witnessCase == 2 ? 2 : 0;
+
+	    for (size_t eventIndex = 0;
+		    eventIndex < static_cast<size_t>(Event::COUNT);
+		    ++eventIndex) {
+		const Event event = static_cast<Event>(eventIndex);
+		LodMachine::Inputs canonical = observed;
+		if (event == Event::INTERACTION_STARTED) {
+		    canonical.interactive = true;
+		    canonical.gestureActive = true;
+		} else if (event == Event::INTERACTION_ENDED) {
+		    canonical.gestureActive = false;
+		} else if (event == Event::GENERATION_CANCELLED) {
+		    canonical.generationActive = false;
+		}
+		if (!canonical.coverageComplete)
+		    canonical.compacting = false;
+		if (!canonical.cpuMemoryPressure &&
+			!canonical.gpuMemoryPressure)
+		    canonical.resourceRecoveryPending = false;
+		if (observedWitness.pendingCount != 0)
+		    canonical.settlingWork = true;
+
+		LodMachine::Witness canonicalWitness = observedWitness;
+		if (canonicalWitness.completedCount >
+			canonicalWitness.visibleCount)
+		    canonicalWitness.completedCount =
+			canonicalWitness.visibleCount;
+
+		uint32_t expectedInvariant = Invariant::INVARIANT_NONE;
+		if (observedWitness.completedCount >
+			observedWitness.visibleCount)
+		    expectedInvariant |=
+			Invariant::INVARIANT_COMPLETED_EXCEEDS_VISIBLE;
+		if (observed.compacting && !observed.coverageComplete)
+		    expectedInvariant |=
+			Invariant::INVARIANT_COMPACTION_WITHOUT_COVERAGE;
+		if (!observed.interactive && !observed.gestureActive &&
+			!observed.compacting && observed.coverageComplete &&
+			!observed.coverageActive && !observed.settlingWork &&
+			observedWitness.pendingCount != 0)
+		    expectedInvariant |=
+			Invariant::INVARIANT_STABLE_WITH_PENDING_WORK;
+		if (event == Event::INTERACTION_STARTED &&
+			(!observed.interactive || !observed.gestureActive))
+		    expectedInvariant |=
+			Invariant::INVARIANT_INTERACTION_EVENT_WITHOUT_INTERACTION;
+		if (event == Event::INTERACTION_ENDED &&
+			observed.gestureActive)
+		    expectedInvariant |=
+			Invariant::INVARIANT_INTERACTION_END_WITH_GESTURE;
+		if (event == Event::GENERATION_CANCELLED &&
+			observed.generationActive)
+		    expectedInvariant |=
+			Invariant::INVARIANT_CANCEL_EVENT_WITH_GENERATION;
+		if (observed.resourceRecoveryPending &&
+			!observed.cpuMemoryPressure &&
+			!observed.gpuMemoryPressure)
+		    expectedInvariant |=
+			Invariant::INVARIANT_RESOURCE_RECOVERY_WITHOUT_PRESSURE;
+
+		const Phase expectedPhase = phase_for_canonical_inputs(
+		    canonical, canonicalWitness);
+		const bool expectedCanonicalization =
+		    !same_machine_inputs(observed, canonical) ||
+		    observedWitness.completedCount !=
+			canonicalWitness.completedCount;
+
+		LodMachine machine;
+		const LodMachine::Transition transition = machine.dispatch(
+		    event, observed, observedWitness);
+		if (transition.current != expectedPhase ||
+		    transition.invariantMask != expectedInvariant ||
+		    transition.canonicalized != expectedCanonicalization ||
+		    !same_machine_inputs(machine.lastInputs(), canonical) ||
+		    !same_machine_inputs(
+			machine.lastObservedInputs(), observed) ||
+		    machine.phaseWitness(expectedPhase).completedCount !=
+			canonicalWitness.completedCount ||
+		    machine.invariantViolationCount() !=
+			(expectedInvariant ? 1u : 0u)) {
+		    std::fprintf(stderr,
+			"FAIL: exhaustive state contract mask=%zu witness=%zu "
+			"event=%zu phase=%u/%u invariant=0x%x/0x%x\n",
+			inputMask, witnessCase, eventIndex,
+			static_cast<unsigned int>(transition.current),
+			static_cast<unsigned int>(expectedPhase),
+			transition.invariantMask, expectedInvariant);
+		    return 1;
+		}
+
+		/* No contradictory observation may poison the next valid quiet
+		 * proof.  This is the bounded discharge guarantee used after
+		 * cancellation, provider failure, and pressure recovery. */
+		LodMachine::Inputs stable;
+		stable.coverageComplete = true;
+		stable.generationActive = true;
+		LodMachine::Witness stableWitness;
+		stableWitness.viewEpoch = 12;
+		stableWitness.policyEpoch = 18;
+		stableWitness.visibleCount = 5;
+		stableWitness.completedCount = 5;
+		const LodMachine::Transition recovered = machine.dispatch(
+		    Event::VIEW_OBSERVED, stable, stableWitness);
+		if (recovered.current != Phase::STABLE ||
+		    recovered.invariantMask != Invariant::INVARIANT_NONE ||
+		    machine.lastInvariantMask() != Invariant::INVARIANT_NONE ||
+		    !machine.lastInputs().coverageComplete) {
+		    std::fprintf(stderr,
+			"FAIL: exhaustive state recovery mask=%zu witness=%zu "
+			"event=%zu\n", inputMask, witnessCase, eventIndex);
+		    return 1;
+		}
+	    }
+	}
+    }
+    return 0;
+}
+
 static int
 test_event_and_invariant_contract(void)
 {
@@ -655,8 +846,16 @@ test_coverage_policy(void)
     Policy policy;
     if (!policy.active() || policy.sawBoundedSource() ||
 	policy.coverageComplete() || policy.visibleCount() != 0 ||
-	policy.coveredCount() != 0 || policy.hasCompleteVisibleCount()) {
+	policy.coveredCount() != 0 || policy.hasCompleteVisibleCount() ||
+	policy.required() || policy.effectiveActive() ||
+	!policy.effectiveComplete() || !policy.compactionAllowed()) {
 	std::fprintf(stderr, "FAIL: initial coverage policy\n");
+	return 1;
+    }
+    policy.setRequired(true);
+    if (!policy.required() || !policy.effectiveActive() ||
+	policy.effectiveComplete() || policy.compactionAllowed()) {
+	std::fprintf(stderr, "FAIL: required coverage gate\n");
 	return 1;
     }
 
@@ -718,8 +917,16 @@ test_coverage_policy(void)
     }
     policy.reset();
     if (policy.active() || policy.coverageComplete() ||
-	policy.sawBoundedSource() || policy.hasCompleteVisibleCount()) {
+	policy.sawBoundedSource() || policy.hasCompleteVisibleCount() ||
+	!policy.required() || policy.effectiveComplete() ||
+	policy.compactionAllowed()) {
 	std::fprintf(stderr, "FAIL: coverage reset\n");
+	return 1;
+    }
+    policy.setRequired(false);
+    if (policy.effectiveActive() || !policy.effectiveComplete() ||
+	!policy.compactionAllowed()) {
+	std::fprintf(stderr, "FAIL: optional coverage gate\n");
 	return 1;
     }
     return 0;
@@ -990,6 +1197,12 @@ test_budget_policy(void)
     policy.reduceCurrentBudget(90000);
     if (policy.currentBudget() != 90000) {
 	std::fprintf(stderr, "FAIL: deadline budget backoff\n");
+	return 1;
+    }
+    policy.raiseCurrentBudget(120000);
+    policy.raiseCurrentBudget(100000);
+    if (policy.currentBudget() != 120000) {
+	std::fprintf(stderr, "FAIL: stable budget restoration\n");
 	return 1;
     }
     policy.resetOverloadRecovery();
@@ -1278,11 +1491,34 @@ test_view_demand_policy(void)
 	std::fprintf(stderr, "FAIL: gesture-end view-demand state\n");
 	return 1;
     }
+
+    /* A bracketed rotation may begin before an unbracketed wheel epoch's
+     * quiet debounce.  The earlier scale change remains a stable-convergence
+     * obligation, but it must not classify the rotation frame or a late
+     * resident suffix as another scale-quality probe. */
+    policy.beginGesture(false);
+    camera = policy.observeCameraChange(false, 10000000ULL);
+    policy.beginCameraInteraction(false, false);
+    if (camera.retainPriorQualityCeiling ||
+	!policy.interactionScaleChanged() ||
+	policy.scaleChangingInteraction(true) ||
+	policy.rearmAfterResidentGrowth(true)) {
+	std::fprintf(stderr, "FAIL: mixed zoom/pose demand isolation\n");
+	return 1;
+    }
     if (!policy.finishQuietInteraction() ||
 	policy.viewScaleChanging() || policy.interactionScaleChanged() ||
 	policy.qualityProbeActive() || policy.qualityProbePending() ||
 	policy.qualityProbePresented() || policy.qualityBudgetActive()) {
 	std::fprintf(stderr, "FAIL: quiet scale handoff\n");
+	return 1;
+    }
+
+    policy.reset();
+    (void)policy.observeCameraChange(true, 10000000ULL);
+    policy.beginCameraInteraction(true, true);
+    if (policy.finishQuietInteraction(true)) {
+	std::fprintf(stderr, "FAIL: scale round trip required retarget\n");
 	return 1;
     }
 
@@ -1352,9 +1588,13 @@ test_presentation_policy(void)
 	return 1;
     }
     restore = policy.beginQuiet(input);
-    if (!restore.restoredPriorStable || restore.startHandoff ||
+	if (!restore.apply || !restore.restoredPriorStable ||
+	restore.progressiveCeiling != 8 ||
+	std::fabs(restore.pointProxyPixelThreshold - 2.0f) > 0.0001f ||
+	restore.startHandoff ||
 	policy.handoffPending() || policy.handoffCostFloor() != 0) {
-	std::fprintf(stderr, "FAIL: restored presentation started handoff\n");
+	std::fprintf(stderr,
+	    "FAIL: quiet debounce did not reapply restored presentation\n");
 	return 1;
     }
 
@@ -1379,8 +1619,57 @@ test_presentation_policy(void)
     completed.retainedRefinementPending = true;
     Policy::CompletedPassDecision completion = policy.completePass(completed);
     if (!completion.finishHandoff || !completion.requestRetainedRescan ||
-	policy.handoffPending()) {
+	completion.retireRetainedObservation || policy.handoffPending()) {
 	std::fprintf(stderr, "FAIL: unchanged pass did not complete handoff\n");
+	return 1;
+    }
+
+    /* A quiet render-deadline correction has not presented its constrained
+     * cut yet.  An unchanged planning pass cannot remove that ceiling; only a
+     * completed presentation supplies the missing proof. */
+    policy.reset();
+    policy.armHandoff(true);
+    completed = Policy::CompletedPassInputs();
+    completed.completed = true;
+    completion = policy.completePass(completed);
+    if (completion.finishHandoff || !policy.handoffPending() ||
+	!policy.handoffPresentationPending()) {
+	std::fprintf(stderr, "FAIL: unpresented deadline handoff completed\n");
+	return 1;
+    }
+    if (!policy.noteFramePresented()) {
+	std::fprintf(stderr, "FAIL: deadline frame did not release handoff barrier\n");
+	return 1;
+    }
+    completion = policy.completePass(completed);
+    if (!completion.finishHandoff || policy.handoffPending() ||
+	policy.handoffPresentationPending()) {
+	std::fprintf(stderr, "FAIL: presented deadline handoff not completed\n");
+	return 1;
+    }
+
+    /* A richer retained target with no handoff, cut, budget barrier, or
+     * rescan is terminal quality state, not self-sustaining background work. */
+    completed = Policy::CompletedPassInputs();
+    completed.completed = true;
+    completed.retainedRefinementPending = true;
+    completion = policy.completePass(completed);
+    if (!completion.retireRetainedObservation ||
+	completion.finishHandoff || completion.requestRetainedRescan) {
+	std::fprintf(stderr, "FAIL: unwitnessed retained observation not retired\n");
+	return 1;
+    }
+    completed.retainedRefinementBudgetBlocked = true;
+    completion = policy.completePass(completed);
+    if (completion.retireRetainedObservation) {
+	std::fprintf(stderr, "FAIL: budget-owned retained observation retired\n");
+	return 1;
+    }
+    completed.retainedRefinementBudgetBlocked = false;
+    completed.changedCut = true;
+    completion = policy.completePass(completed);
+    if (completion.retireRetainedObservation) {
+	std::fprintf(stderr, "FAIL: frame-owned retained observation retired\n");
 	return 1;
     }
 
@@ -1727,6 +2016,568 @@ test_compaction_policy(void)
     return 0;
 }
 
+/*
+ * A deterministic composed-lifecycle model for the coordinator policies.
+ *
+ * The direct tests above prove each allocation-free value at its boundaries;
+ * this runner proves that their witnesses compose.  It deliberately models
+ * the owner-thread contracts rather than sleeping or launching workers: every
+ * seed is an exact replay token and FakeClock is the only source of time.
+ * Random perturbations include repeated partial coverage checkpoints,
+ * provider failure during interaction, cancellation under memory pressure,
+ * delayed publication, view invalidation, and bounded compaction.
+ */
+class BObolLodSeededSequence {
+public:
+    enum Witness : uint32_t {
+	WITNESS_NONE = 0,
+	WITNESS_SERVICE_TASK = 1u << 0,
+	WITNESS_COVERAGE_CURSOR = 1u << 1,
+	WITNESS_PUBLICATION_DEADLINE = 1u << 2,
+	WITNESS_PRESENTATION_FRAME = 1u << 3,
+	WITNESS_INTERACTION_INPUT = 1u << 4,
+	WITNESS_QUIET_TIMER = 1u << 5,
+	WITNESS_COMPACTION_DEADLINE = 1u << 6,
+	WITNESS_COMPACTION_CURSOR = 1u << 7
+    };
+
+    explicit BObolLodSeededSequence(uint64_t seedValue) :
+	seed(seedValue ? seedValue : 1), randomState(seedValue ? seedValue : 1)
+    {
+	coverage.reset();
+	this->reconcile(LodMachine::Event::INITIALIZE);
+    }
+
+    uint32_t random(void)
+    {
+	/* xorshift64* has no platform library state and therefore preserves the
+	 * seed as a stable failure reproducer. */
+	uint64_t value = randomState;
+	value ^= value >> 12;
+	value ^= value << 25;
+	value ^= value >> 27;
+	randomState = value;
+	return static_cast<uint32_t>(
+	    (value * UINT64_C(2685821657736338717)) >> 32);
+    }
+
+    void perturb(unsigned int action)
+    {
+	switch (action % 13) {
+	    case 0: this->startSource(); break;
+	    case 1: this->coverageCheckpoint(); break;
+	    case 2: this->completeProvider(); break;
+	    case 3: this->startInteraction(); break;
+	    case 4: this->endGesture(); break;
+	    case 5: this->togglePressure(); break;
+	    case 6: this->cancelGeneration(); break;
+	    case 7: this->failProvider(); break;
+	    case 8: this->applyResult(); break;
+	    case 9: this->advanceClock(); break;
+	    case 10: this->requestCompaction(); break;
+	    case 11: this->invalidateView(); break;
+	    case 12: this->changePolicy(); break;
+	}
+    }
+
+    bool progressOne(void)
+    {
+	if (gestureActive) {
+	    this->endGesture();
+	    return true;
+	}
+	if (interactive || quietTimer) {
+	    nowMicroseconds += 200000;
+	    interactive = false;
+	    quietTimer = false;
+	    policyEpoch.advance();
+	    this->reconcile(LodMachine::Event::POLICY_CHANGED);
+	    return true;
+	}
+	if (servicePending) {
+	    this->completeProvider();
+	    return true;
+	}
+	if (coverageCursor) {
+	    this->coverageCheckpoint();
+	    return true;
+	}
+	if (publication.framePending()) {
+	    publication.frameCompleted();
+	    renderSerial++;
+	    this->reconcile(LodMachine::Event::FRAME_COMPLETED);
+	    return true;
+	}
+	if (publication.awaitingDeadline()) {
+	    nowMicroseconds += 300000;
+	    BObolLodPublicationPolicy::Inputs inputs;
+	    inputs.nowMicroseconds = nowMicroseconds;
+	    inputs.interactive = interactive;
+	    inputs.streamIdle = !servicePending;
+	    (void)publication.decide(inputs);
+	    this->reconcile(LodMachine::Event::WORK_PUMPED);
+	    return true;
+	}
+	if (compactionCursor) {
+	    compaction.finishPlanning(true, residentDemandRevision,
+		nowMicroseconds);
+	    compactionCursor = false;
+	    if (resources.recoveryPending())
+		resources.markRecoveryHandled();
+	    this->reconcile(LodMachine::Event::WORK_PUMPED);
+	    return true;
+	}
+	if (compaction.pending() || resources.recoveryPending()) {
+	    BObolLodCompactionPolicy::Inputs inputs =
+		this->compactionInputs();
+	    if (nowMicroseconds < compaction.deadlineMicroseconds())
+		nowMicroseconds = compaction.deadlineMicroseconds();
+	    inputs.nowMicroseconds = nowMicroseconds;
+	    const BObolLodCompactionPolicy::Decision decision =
+		compaction.decide(inputs);
+	    if (decision.admission ==
+		    BObolLodCompactionPolicy::Admission::PLAN) {
+		residentDemandRevision++;
+		if (!residentDemandRevision)
+		    residentDemandRevision++;
+		compaction.finishPlanning(false, residentDemandRevision,
+		    nowMicroseconds);
+		compactionCursor = true;
+	    } else if (decision.retiredRequest &&
+		resources.recoveryPending()) {
+		resources.markRecoveryHandled();
+	    } else if (decision.admission ==
+		BObolLodCompactionPolicy::Admission::DEFER) {
+		/* Its prerequisite must be one of the earlier named witnesses. */
+		return false;
+	    }
+	    this->reconcile(LodMachine::Event::WORK_PUMPED);
+	    return true;
+	}
+	return false;
+    }
+
+    uint32_t witnesses(void) const
+    {
+	uint32_t result = WITNESS_NONE;
+	if (servicePending)
+	    result |= WITNESS_SERVICE_TASK;
+	if (coverageCursor)
+	    result |= WITNESS_COVERAGE_CURSOR;
+	if (publication.awaitingDeadline())
+	    result |= WITNESS_PUBLICATION_DEADLINE;
+	if (publication.framePending())
+	    result |= WITNESS_PRESENTATION_FRAME;
+	if (gestureActive)
+	    result |= WITNESS_INTERACTION_INPUT;
+	else if (interactive || quietTimer)
+	    result |= WITNESS_QUIET_TIMER;
+	if (compactionCursor)
+	    result |= WITNESS_COMPACTION_CURSOR;
+	else if (compaction.pending() || resources.recoveryPending())
+	    result |= WITNESS_COMPACTION_DEADLINE;
+	return result;
+    }
+
+    bool terminal(void)
+    {
+	const BObolLodConvergencePolicy::Decision decision =
+	    this->convergenceDecision();
+	if (decision.phase == BObolLodConvergencePolicy::Phase::ERROR)
+	    return true;
+	if (this->witnesses() != WITNESS_NONE || decision.visualPending)
+	    return false;
+	return machine.currentPhase() == LodMachine::Phase::STABLE ||
+	    machine.currentPhase() == LodMachine::Phase::FALLBACK;
+    }
+
+    bool valid(void)
+    {
+	if (machine.lastInvariantMask() != LodMachine::INVARIANT_NONE)
+	    return false;
+	const BObolLodConvergencePolicy::Decision decision =
+	    this->convergenceDecision();
+	if (!this->terminal() && this->witnesses() == WITNESS_NONE)
+	    return false;
+	if (decision.viewReady && decision.visualPending)
+	    return false;
+	const uint32_t foregroundWitnesses = this->witnesses() &
+	    ~(WITNESS_COMPACTION_DEADLINE | WITNESS_COMPACTION_CURSOR);
+	/* Resident maintenance is explicitly background work: the visible
+	 * coordinator may be STABLE while convergence reports BACKGROUND, but
+	 * every foreground witness must keep it out of the terminal phase. */
+	if (machine.currentPhase() == LodMachine::Phase::STABLE &&
+	    foregroundWitnesses != WITNESS_NONE)
+	    return false;
+	return true;
+    }
+
+    uint64_t replaySeed(void) const { return seed; }
+    LodMachine::Phase phase(void) const { return machine.currentPhase(); }
+    uint32_t invariantMask(void) const
+    {
+	return machine.lastInvariantMask();
+    }
+
+private:
+    void startSource(void)
+    {
+	if (sourceActive || servicePending)
+	    return;
+	providerFailed = false;
+	providerCancelled = false;
+	sourceActive = true;
+	coverage.setRequired(true);
+	servicePending = true;
+	generationActive = true;
+	visibleCount = 7 + random() % 57;
+	coveredCount = 0;
+	coverage.reset();
+	coverage.activate(true);
+	coverageCursor = true;
+	viewEpoch.advance();
+	this->reconcile(LodMachine::Event::WORK_SCHEDULED);
+    }
+
+    void coverageCheckpoint(void)
+    {
+	if (!coverageCursor)
+	    return;
+	const size_t remaining = visibleCount > coveredCount ?
+	    visibleCount - coveredCount : 0;
+	const size_t quantum = std::min<size_t>(
+	    remaining, 1 + random() % 11);
+	coverage.observe(quantum, quantum);
+	coveredCount += quantum;
+	if (quantum)
+	    publication.noteApplied(quantum, nowMicroseconds);
+	if (coveredCount >= visibleCount) {
+	    (void)coverage.completeIfReady(true, false);
+	    coverageCursor = false;
+	}
+	this->publicationDecision(!coveredCount || coveredCount == quantum,
+	    !servicePending && !coverageCursor);
+	this->reconcile(LodMachine::Event::RESULT_PUBLISHED);
+    }
+
+    void completeProvider(void)
+    {
+	if (!servicePending)
+	    return;
+	servicePending = false;
+	this->publicationDecision(false, true);
+	this->reconcile(LodMachine::Event::RESULT_PUBLISHED);
+    }
+
+    void startInteraction(void)
+    {
+	if (gestureActive)
+	    return;
+	interactive = true;
+	gestureActive = true;
+	quietTimer = false;
+	this->reconcile(LodMachine::Event::INTERACTION_STARTED);
+    }
+
+    void endGesture(void)
+    {
+	if (!gestureActive)
+	    return;
+	gestureActive = false;
+	interactive = true;
+	quietTimer = true;
+	this->reconcile(LodMachine::Event::INTERACTION_ENDED);
+    }
+
+    void togglePressure(void)
+    {
+	const bool cpu = !resources.cpuPressure();
+	const bool gpu = cpu && ((random() & 1u) != 0);
+	const BObolLodResourcePolicy::Decision decision =
+	    resources.observe(cpu, gpu, true);
+	if (decision.queueRecovery)
+	    compaction.requestImmediate(nowMicroseconds);
+	this->reconcile(LodMachine::Event::FRAME_COMPLETED);
+    }
+
+    void cancelGeneration(void)
+    {
+	if (!sourceActive && !servicePending)
+	    return;
+	servicePending = false;
+	sourceActive = false;
+	coverage.setRequired(false);
+	generationActive = false;
+	providerCancelled = true;
+	providerFailed = false;
+	coverageCursor = false;
+	coverage.reset();
+	publication.reset();
+	this->reconcile(LodMachine::Event::GENERATION_CANCELLED);
+    }
+
+    void failProvider(void)
+    {
+	if (!servicePending)
+	    return;
+	servicePending = false;
+	sourceActive = false;
+	coverage.setRequired(false);
+	generationActive = false;
+	providerFailed = true;
+	providerCancelled = false;
+	coverageCursor = false;
+	coverage.reset();
+	publication.reset();
+	this->reconcile(LodMachine::Event::RESULT_PUBLISHED);
+    }
+
+    void applyResult(void)
+    {
+	if (!sourceActive || providerFailed || providerCancelled)
+	    return;
+	publication.noteApplied(1 + random() % 8, nowMicroseconds);
+	this->publicationDecision(false, !servicePending);
+	this->reconcile(LodMachine::Event::RESULT_PUBLISHED);
+    }
+
+    void advanceClock(void)
+    {
+	nowMicroseconds += 1 + random() % 400000;
+	if (quietTimer && nowMicroseconds > 150000) {
+	    interactive = false;
+	    quietTimer = false;
+	    policyEpoch.advance();
+	}
+	this->publicationDecision(false, !servicePending);
+	this->reconcile(LodMachine::Event::WORK_PUMPED);
+    }
+
+    void requestCompaction(void)
+    {
+	compaction.requestAfter(nowMicroseconds, 50000);
+	this->reconcile(LodMachine::Event::WORK_SCHEDULED);
+    }
+
+    void invalidateView(void)
+    {
+	viewEpoch.advance();
+	if (sourceActive) {
+	    coverage.reset();
+	    coverage.activate(true);
+	    coverageCursor = true;
+	    coveredCount = 0;
+	}
+	this->reconcile(LodMachine::Event::VIEW_INVALIDATED);
+    }
+
+    void changePolicy(void)
+    {
+	policyEpoch.advance();
+	this->reconcile(LodMachine::Event::POLICY_CHANGED);
+    }
+
+    void publicationDecision(bool firstUseful, bool streamIdle)
+    {
+	BObolLodPublicationPolicy::Inputs inputs;
+	inputs.nowMicroseconds = nowMicroseconds;
+	inputs.interactive = interactive;
+	inputs.firstUseful = firstUseful;
+	inputs.streamIdle = streamIdle;
+	(void)publication.decide(inputs);
+    }
+
+    BObolLodCompactionPolicy::Inputs compactionInputs(void) const
+    {
+	BObolLodCompactionPolicy::Inputs inputs;
+	inputs.automatic = true;
+	inputs.interactive = interactive;
+	inputs.coverageRequired = sourceActive;
+	inputs.coverageComplete =
+	    !sourceActive || coverage.coverageComplete();
+	inputs.coverageProgressPending = coverageCursor;
+	inputs.settlingPending = publication.pending() || quietTimer;
+	inputs.realizationPending = servicePending;
+	inputs.submissionPending = coverageCursor;
+	inputs.serviceAvailable = true;
+	inputs.nowMicroseconds = nowMicroseconds;
+	return inputs;
+    }
+
+    BObolLodConvergencePolicy::Decision convergenceDecision(void)
+    {
+	BObolLodConvergencePolicy::Inputs inputs;
+	inputs.viewEpoch = viewEpoch;
+	inputs.policyEpoch = policyEpoch;
+	inputs.expectedLeafCount = sourceActive || providerFailed ?
+	    visibleCount : 0;
+	inputs.availableLeafCount = sourceActive ? coveredCount : 0;
+	inputs.visibleTargetCount = sourceActive ? visibleCount : 0;
+	inputs.activePayloadCount = sourceActive ? coveredCount : 0;
+	inputs.satisfiedPayloadCount = inputs.activePayloadCount;
+	inputs.pendingTasks = servicePending ? 1 : 0;
+	inputs.submissionPending = coverageCursor;
+	inputs.publicationPending = publication.pending();
+	inputs.interactive = interactive;
+	inputs.compactionPending =
+	    compaction.pending() || compactionCursor ||
+	    resources.recoveryPending();
+	inputs.structuralDiscovery = servicePending;
+	inputs.failedSourceCount = providerFailed ? 1 : 0;
+	inputs.gpuMemoryPressure = resources.gpuPressure();
+	return convergence.evaluate(inputs);
+    }
+
+    void reconcile(LodMachine::Event event)
+    {
+	LodMachine::Inputs inputs;
+	inputs.interactive = interactive;
+	inputs.gestureActive = gestureActive;
+	inputs.coverageActive = coverage.effectiveActive();
+	inputs.coverageComplete = coverage.effectiveComplete();
+	inputs.compacting = (compaction.planning() || compactionCursor) &&
+	    coverage.compactionAllowed();
+	inputs.generationActive = generationActive;
+	inputs.cpuMemoryPressure = resources.cpuPressure();
+	inputs.gpuMemoryPressure = resources.gpuPressure();
+	inputs.resourceRecoveryPending = resources.recoveryPending();
+	inputs.settlingWork = servicePending || quietTimer ||
+	    publication.pending();
+
+	LodMachine::Witness witness;
+	witness.viewEpoch = viewEpoch.value();
+	witness.policyEpoch = policyEpoch.value();
+	witness.renderSerial = renderSerial;
+	witness.activeGeneration = generationActive ? 1 : 0;
+	witness.residentDemandRevision = residentDemandRevision;
+	witness.resourcePressureRevision = resources.revision();
+	witness.visibleCount = visibleCount;
+	witness.completedCount = coveredCount;
+	witness.pendingCount =
+	    static_cast<size_t>(servicePending) +
+	    static_cast<size_t>(coverageCursor) +
+	    static_cast<size_t>(publication.pending()) +
+	    static_cast<size_t>(quietTimer);
+	(void)machine.dispatch(event, inputs, witness);
+    }
+
+    const uint64_t seed;
+    uint64_t randomState;
+    int64_t nowMicroseconds = 1;
+    BObolLodViewEpoch viewEpoch {1};
+    BObolLodPolicyEpoch policyEpoch {1};
+    uint64_t renderSerial = 0;
+    uint64_t residentDemandRevision = 0;
+    size_t visibleCount = 0;
+    size_t coveredCount = 0;
+    bool sourceActive = false;
+    bool servicePending = false;
+    bool generationActive = false;
+    bool coverageCursor = false;
+    bool providerFailed = false;
+    bool providerCancelled = false;
+    bool interactive = false;
+    bool gestureActive = false;
+    bool quietTimer = false;
+    bool compactionCursor = false;
+    LodMachine machine;
+    BObolLodResourcePolicy resources;
+    BObolLodCoveragePolicy coverage;
+    BObolLodPublicationPolicy publication;
+    BObolLodCompactionPolicy compaction;
+    BObolLodConvergencePolicy convergence;
+};
+
+static int
+test_seeded_composed_lifecycle(void)
+{
+    static const size_t seedCount = 512;
+    static const size_t perturbationsPerSeed = 96;
+    static const size_t dischargeBound = 128;
+    const auto discharge = [](BObolLodSeededSequence &sequence,
+	    const char *scenario) {
+	for (size_t step = 0;
+		step < dischargeBound && !sequence.terminal(); ++step) {
+	    if (sequence.progressOne() && sequence.valid())
+		continue;
+	    std::fprintf(stderr,
+		"FAIL: composed lifecycle %s seed=%llu step=%zu "
+		"phase=%u witnesses=0x%x invariant=0x%x\n",
+		scenario,
+		static_cast<unsigned long long>(sequence.replaySeed()),
+		step, static_cast<unsigned int>(sequence.phase()),
+		sequence.witnesses(), sequence.invariantMask());
+	    return 1;
+	}
+	if (sequence.terminal())
+	    return 0;
+	std::fprintf(stderr,
+	    "FAIL: composed lifecycle %s exceeded discharge bound seed=%llu "
+	    "phase=%u witnesses=0x%x\n", scenario,
+	    static_cast<unsigned long long>(sequence.replaySeed()),
+	    static_cast<unsigned int>(sequence.phase()),
+	    sequence.witnesses());
+	return 1;
+    };
+
+    /* Keep the release-critical compositions explicit even though the seeded
+     * corpus also reaches them.  The action numbers are part of this fake
+     * service's stable replay vocabulary. */
+    {
+	BObolLodSeededSequence repeatedCheckpoints(UINT64_C(0x43504f494e54));
+	repeatedCheckpoints.perturb(0);  /* source/service start */
+	repeatedCheckpoints.perturb(1);
+	repeatedCheckpoints.perturb(1);
+	repeatedCheckpoints.perturb(1);
+	repeatedCheckpoints.perturb(2);  /* provider stream idle */
+	if (!repeatedCheckpoints.valid() ||
+	    discharge(repeatedCheckpoints, "repeated-checkpoints"))
+	    return 1;
+    }
+    {
+	BObolLodSeededSequence failureDuringInput(UINT64_C(0x4641494c5552));
+	failureDuringInput.perturb(0); /* source/service start */
+	failureDuringInput.perturb(3); /* interaction start */
+	failureDuringInput.perturb(7); /* terminal provider failure */
+	if (!failureDuringInput.valid() || !failureDuringInput.terminal()) {
+	    std::fprintf(stderr,
+		"FAIL: provider failure during interaction did not terminate\n");
+	    return 1;
+	}
+    }
+    {
+	BObolLodSeededSequence pressureCancellation(UINT64_C(0x505245535355));
+	pressureCancellation.perturb(0); /* source/service start */
+	pressureCancellation.perturb(5); /* memory pressure edge */
+	pressureCancellation.perturb(6); /* generation cancellation */
+	if (!pressureCancellation.valid() ||
+	    discharge(pressureCancellation, "pressure-during-cancellation"))
+	    return 1;
+    }
+
+    for (uint64_t seed = 1; seed <= seedCount; ++seed) {
+	BObolLodSeededSequence sequence(seed);
+	for (size_t step = 0; step < perturbationsPerSeed; ++step) {
+	    sequence.perturb(sequence.random());
+	    const size_t opportunistic = sequence.random() % 3;
+	    for (size_t i = 0; i < opportunistic; ++i)
+		(void)sequence.progressOne();
+	    if (!sequence.valid()) {
+		std::fprintf(stderr,
+		    "FAIL: composed lifecycle seed=%llu step=%zu "
+		    "phase=%u witnesses=0x%x invariant=0x%x\n",
+		    static_cast<unsigned long long>(sequence.replaySeed()),
+		    step, static_cast<unsigned int>(sequence.phase()),
+		    sequence.witnesses(), sequence.invariantMask());
+		return 1;
+	    }
+	}
+	if (discharge(sequence, "seeded"))
+	    return 1;
+    }
+    return 0;
+}
+
 int
 main(void)
 {
@@ -1737,6 +2588,8 @@ main(void)
     if (test_phase_decision_contract())
 	return 1;
     if (test_adversarial_result_order())
+	return 1;
+    if (test_exhaustive_state_contract())
 	return 1;
     if (test_event_and_invariant_contract())
 	return 1;
@@ -1759,6 +2612,8 @@ main(void)
     if (test_publication_policy())
 	return 1;
     if (test_compaction_policy())
+	return 1;
+    if (test_seeded_composed_lifecycle())
 	return 1;
     return 0;
 }

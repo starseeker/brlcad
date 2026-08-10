@@ -845,7 +845,17 @@ validate_report()
 	((.samples[-1].lod_gpu_atlas_live_bytes // 0) <=
 	 (.samples[-1].lod_gpu_atlas_allocated_bytes // 0)) and
 	((.samples[-1].lod_gpu_pressure_proxies // 0) == 0) and
-	(.samples[-1].lod_gpu_memory_pressure == false) and
+	# A scene whose useful visible working set exceeds the configured GPU
+	# allowance may terminate at a coherent memory-limited cut.  Requiring the
+	# renderer admission-pressure observation to disappear made the 50k/150k
+	# qualification fixtures fail precisely when the coordinator honored that
+	# contract.  Pressure is acceptable only with an explicit terminal proof;
+	# ordinary scenes and every non-ready/pending state still require it clear.
+	((.samples[-1].lod_gpu_memory_pressure == false) or
+	 ((.samples[-1].lod_convergence_memory_limited // false) == true and
+	  (.samples[-1].lod_convergence_view_ready // false) == true and
+	  (.samples[-1].lod_convergence_fraction // 0) >= 1 and
+	  (.samples[-1].progressive_pending == false))) and
 	((.samples[-1].lod_service_pending_tasks // 0) == 0) and
 	((.samples[-1].lod_service_active_requests // 0) == 0) and
 	((.samples[-1].lod_service_queued_results // 0) == 0) and
@@ -865,6 +875,7 @@ validate_report()
 	 else true
 	 end)
 	' "$report" >"$validation" 2>&1; then
+	printf 'base terminal rendering contract failed\n' >>"$validation"
 	return 1
     fi
 
@@ -1003,10 +1014,19 @@ validate_report()
     # Exclude the border, HUD strip, and right-side convergence indicator.
     local first_useful="$image_dir/ae90-1500ms.png"
     local first_useful_limit_ms=5000
-    if [[ "$case_name" == "unique_mesh_150k_stress" &&
-	    "$cache_state" == "cold" ]]; then
-	first_useful="$image_dir/realization-6s.png"
-	first_useful_limit_ms=12000
+    if [[ "$cache_state" == "cold" ]]; then
+	if [[ "$case_name" == "unique_mesh_150k_stress" ]]; then
+	    first_useful="$image_dir/realization-6s.png"
+	    first_useful_limit_ms=12000
+	elif [[ "$case_name" == "unique_mesh_50k_stress" ]]; then
+	    # Exact whole-target coverage is published during the intentional
+	    # cold held-drag segment.  Use the first checkpoint after the harness
+	    # restores its reference ae/autoview; the earlier 1.5 s image remains
+	    # the responsiveness/partial-coverage sample and cannot be required to
+	    # have the final camera extent.
+	    first_useful="$image_dir/realization-1s.png"
+	    first_useful_limit_ms=6000
+	fi
     fi
     local first_useful_elapsed first_useful_structural_boxes
     first_useful_elapsed=$(jq -r --arg checkpoint "$first_useful" '
@@ -1130,7 +1150,16 @@ validate_report()
     # or return to the pre-fit camera after the exact fit has landed.  Those
     # transitions are perceived as an autoview jump/flicker even if the final
     # image is correct.
-    if ! jq -e '
+    local autoview_window_start="$image_dir/draw-return.png"
+    if [[ "$case_name" == "unique_mesh_50k_stress" ||
+	    "$case_name" == "unique_mesh_150k_stress" ]]; then
+	# These fixtures deliberately rotate during cold realization, then issue
+	# one atomic ae/autoview reference command.  Start after that user-authored
+	# camera transition so it is not misclassified as a progressive-autoview
+	# write.  Ordinary cases continue to prove the full draw-return window.
+	autoview_window_start="$image_dir/realization-1s.png"
+    fi
+    if ! jq -e --arg window_start "$autoview_window_start" '
 	def orientation:
 	    [.camera_orientation_axis_x, .camera_orientation_axis_y,
 	     .camera_orientation_axis_z, .camera_orientation_angle];
@@ -1138,8 +1167,7 @@ validate_report()
 	    [.camera_position_x, .camera_position_y, .camera_position_z,
 	     .camera_orthographic_height];
 	(first(.samples[] |
-	    select((.checkpoint? // "") |
-		endswith("/draw-return.png"))).event_index) as $start |
+	    select((.checkpoint? // "") == $window_start)).event_index) as $start |
 	(first(.samples[] |
 	    select((.checkpoint? // "") |
 		endswith("/ae90-stable.png")))) as $final |
@@ -1454,9 +1482,10 @@ validate_report()
 	fi
     fi
 
-    # A large software-rendered mesh must actually shed work while the mouse
-    # is held.  Merely raising a policy number is not enough: verify the
-    # triangles submitted by the renderer and the resulting frame time.
+    # A large software-rendered mesh must remain responsive while the mouse is
+    # held.  Retaining the current cut is the preferred outcome when it already
+    # meets the controller's published deadline; otherwise verify that the
+    # render-only ceiling actually sheds submitted triangles.
     #
     # The render-only ceiling deliberately leaves producer-authored active
     # cuts intact so a pose-only interaction can recover without rebuilding
@@ -1483,15 +1512,17 @@ validate_report()
 		# coarsening only the expensive cut.  Test the rendering contract,
 		# not one internal pressure signal.
 		(($motion.presented_cad_faces // 0) > 0) and
-		(($motion.presented_cad_faces // 0) * 100 <=
-		 ($stable.presented_cad_faces // 0) * 95) and
-		(($motion.lod_interactive_progressive_ceiling // -1) >= 0) and
+		((($motion.last_render_ms // 9223372036854775807) <=
+		  ($motion.presentation_deadline_current_ms // 0)) or
+		 ((($motion.presented_cad_faces // 0) * 100 <=
+		   ($stable.presented_cad_faces // 0) * 95) and
+		  (($motion.lod_interactive_progressive_ceiling // -1) >= 0))) and
 		(($stable.lod_interactive_progressive_ceiling // -2) == -1) and
 		(($motion.last_render_ms // 9223372036854775807) <= 250)
 	    end
 	end
 	' "$report" >>"$validation" 2>&1; then
-	printf 'software interaction did not select and render a bounded coarse cut\n' \
+	printf 'software interaction was neither deadline-safe nor measurably coarsened\n' \
 	    >>"$validation"
 	return 1
     fi
@@ -2208,6 +2239,78 @@ capture_baseline()
     echo "PASS" > "$out/status.txt"
 }
 
+# A progressive autoview has one path-scoped camera result.  Cache warmth and
+# renderer speed may change when that result becomes available, but must not
+# change the result itself.  The first run for a case/mode/swap tuple records
+# the reference; every cold/warm and System/OSMesa peer must match it within a
+# small float-serialization tolerance.
+validate_autoview_camera_contract()
+{
+    local case_name="$1"
+    local backend="$2"
+    local mode="$3"
+    local swap="$4"
+    local phase="$5"
+    local run="${case_name}-${backend}-${mode}-swap${swap//-/_}-${phase}"
+    local report="$artifact_dir/cases/$run/report.json"
+    local camera_dir="$artifact_dir/camera-contracts"
+    local reference="$camera_dir/${case_name}-${mode}-swap${swap//-/_}.json"
+    local snapshot="$camera_dir/$run.json"
+    mkdir -p "$camera_dir"
+
+    if [[ ! -r "$report" ]] || ! jq -e '
+	[.samples[] | select(.checkpoint != null and
+	    (.checkpoint | endswith("/ae90-stable.png")))] | length > 0
+	' "$report" >/dev/null; then
+	printf 'FAIL,%s-camera-contract,0,%s\n' "$run" \
+	    "missing stable autoview telemetry" >> "$artifact_dir/results.csv"
+	return 1
+    fi
+
+    jq -c '
+	[.samples[] | select(.checkpoint != null and
+	    (.checkpoint | endswith("/ae90-stable.png")))] | last | {
+	position: [.camera_position_x, .camera_position_y, .camera_position_z],
+	orientation: [.camera_orientation_angle, .camera_orientation_axis_x,
+	    .camera_orientation_axis_y, .camera_orientation_axis_z],
+	orthographic_height: .camera_orthographic_height,
+	focal_distance: .camera_focal_distance,
+	near_distance: .camera_near_distance,
+	far_distance: .camera_far_distance
+	}
+    ' "$report" > "$snapshot"
+
+    if [[ ! -e "$reference" ]]; then
+	cp "$snapshot" "$reference"
+    fi
+    if ! jq -e -n --slurpfile actual "$snapshot" \
+	    --slurpfile expected "$reference" '
+	def close($a; $b):
+	    ($a != null and $b != null and
+	     (($a - $b) | abs) <=
+	     ([0.0001, ((($a | abs) + ($b | abs)) * 0.000001)] | max));
+	def array_close($a; $b):
+	    ($a | length) == ($b | length) and
+	    all(range(0; $a | length); close($a[.]; $b[.]));
+	($actual[0]) as $a | ($expected[0]) as $e |
+	array_close($a.position; $e.position) and
+	array_close($a.orientation; $e.orientation) and
+	close($a.orthographic_height; $e.orthographic_height) and
+	close($a.focal_distance; $e.focal_distance) and
+	close($a.near_distance; $e.near_distance) and
+	close($a.far_distance; $e.far_distance)
+	' >/dev/null; then
+	printf 'FAIL,%s-camera-contract,0,%s\n' "$run" \
+	    "final camera differs by cache state or renderer" \
+	    >> "$artifact_dir/results.csv"
+	return 1
+    fi
+
+    printf 'PASS,%s-camera-contract,0,\n' "$run" \
+	>> "$artifact_dir/results.csv"
+    return 0
+}
+
 printf 'status,run,seconds,detail\n' > "$artifact_dir/results.csv"
 ldd "$qged" > "$artifact_dir/qged-ldd.txt" 2>&1 || true
 
@@ -2361,14 +2464,22 @@ for case_name in "${cases[@]}"; do
 		# writes.  This is still a completely cold cache: the new directory
 		# contains neither format metadata nor cached payloads.
 		mkdir "$cache"
-		run_current "$case_name" "$db" "$object" "$backend" "$mode" \
-		    "$swap" "cold" "$cache" "$settle_ms" "$hierarchy_root" \
-		    "$hierarchy_child" "$hierarchy_path" ||
+		if run_current "$case_name" "$db" "$object" "$backend" \
+			"$mode" "$swap" "cold" "$cache" "$settle_ms" \
+			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
+		    validate_autoview_camera_contract "$case_name" "$backend" \
+			"$mode" "$swap" "cold" || failures=$((failures + 1))
+		else
 		    failures=$((failures + 1))
-		run_current "$case_name" "$db" "$object" "$backend" "$mode" \
-		    "$swap" "warm" "$cache" "$settle_ms" "$hierarchy_root" \
-		    "$hierarchy_child" "$hierarchy_path" ||
+		fi
+		if run_current "$case_name" "$db" "$object" "$backend" \
+			"$mode" "$swap" "warm" "$cache" "$settle_ms" \
+			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
+		    validate_autoview_camera_contract "$case_name" "$backend" \
+			"$mode" "$swap" "warm" || failures=$((failures + 1))
+		else
 		    failures=$((failures + 1))
+		fi
 		find "$cache" -type f -printf '%s %T@ %p\n' 2>/dev/null |
 		    sort -n > "$pair/cache-files.txt"
 	    done

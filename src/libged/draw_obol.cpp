@@ -167,6 +167,7 @@ static int ged_obol_stream_cached_leaf_manifest(
 static int ged_obol_store_leaf_proxy_manifest(
     struct db_i *database,
     const SoBRLDatabaseSource *source,
+    BObolCompactOccurrenceStream *stream,
     void *user_data);
 static int ged_obol_apply_draw_paths_to_scene(
     struct ged *gedp,
@@ -295,6 +296,10 @@ struct ged_obol_deferred_realization_item {
     SbBool ownsSource;
     std::string instanceKey;
     int drawMode = 0;
+    uint32_t sourceRevision = 0;
+    uint32_t inputsRevision = 0;
+    uint32_t viewRevision = 0;
+    int representationMode = 0;
     SbBool primaryScene;
     SbBool allowWireFallback;
     /* GUI-thread adaptive publication quantum. */
@@ -17134,6 +17139,28 @@ ged_obol_structural_proxy_manifest_occurrence(
     return occurrence;
 }
 
+/* A final leaf registry is representation data, not merely hierarchy data.
+ * Keep it out of the structural-manifest namespace and distinguish every
+ * source policy which can change the immutable wire/shaded asset contract.
+ * The draw-cache payload still carries and validates this complete identity,
+ * so a hash collision remains a cache miss rather than a correctness risk. */
+static std::string
+ged_obol_leaf_manifest_cache_identity(const SoBRLDatabaseSource *source,
+    const std::string &rootPath)
+{
+    if (!source || rootPath.empty())
+	return std::string();
+    char variant[320] = {0};
+    snprintf(variant, sizeof(variant),
+	"|leaf-v1|draw=%d|representation=%d|bot=%u|tess=%.17g,%.17g,%.17g",
+	source->drawMode.getValue(), source->representationMode.getValue(),
+	source->lodBotThreshold.getValue(),
+	static_cast<double>(source->tessellationAbsTol.getValue()),
+	static_cast<double>(source->tessellationRelTol.getValue()),
+	static_cast<double>(source->tessellationNormTol.getValue()));
+    return rootPath + variant;
+}
+
 /*
  * Warm leaf coverage is a producer-side concern.  Deserialize and enqueue it
  * on the detached worker rather than constructing tens of thousands of CAD
@@ -17169,54 +17196,63 @@ ged_obol_stream_cached_leaf_manifest(
     ctx.drawMode = draw_mode;
     ctx.sourceRevision = source_revision;
 
-    /*
-     * Preserve the exact cached target extent when the first leaf batch
-     * switches the live source from its external root proxy to a compact
-     * registry.  Without this handoff the overview vanished after only 512 of
-     * 50k leaves were present.  Final authoritative adoption intentionally
-     * omits this synthetic occurrence and retires it once coverage is whole.
-     */
-    const char *cacheName = strrchr(rootPath.c_str(), '/');
-    cacheName = cacheName ? cacheName + 1 : rootPath.c_str();
-    struct BObolDrawProxyRecord rootProxy;
-    bobol_draw_proxy_record_init(&rootProxy);
-    bool exactOverviewQueued = false;
-    if (bobol_draw_proxy_cache_get(database, cacheName,
-	    BOBOL_DRAW_CACHE_PROXY_AABB, &rootProxy) == BRLCAD_OK &&
-	rootProxy.pointCount == 2) {
-	ged_obol_structural_proxy_node node;
-	node.path = rootPath + "/@draw-extent";
-	node.objectName = cacheName;
-	node.instanceKey = node.path;
-	node.boolOp = DB_OP_UNION;
-	node.row = 0;
-	node.localMatrix = SbMatrix::identity();
-	VMOVE(node.boundsMin, rootProxy.points[0]);
-	VMOVE(node.boundsMax, rootProxy.points[1]);
-	node.publishBounds = 1;
-	node.metadataValid = 0;
-	BObolCompactOccurrence overview =
-	    ged_obol_structural_proxy_occurrence(ctx, node);
-	overview.summary.recordRole = "lod-overview";
-	overview.summary.geometryKind = "overview-aabb";
-	overview.summary.selectable = FALSE;
-	if (overview.geometry) {
-	    stream->pushPriority(overview);
-	    exactOverviewQueued = true;
-	}
-    }
-
     struct BObolDrawManifest manifest;
     bobol_draw_manifest_init(&manifest);
-    if (bobol_draw_manifest_cache_get(database, rootPath.c_str(),
+
+    const std::string manifestIdentity =
+	ged_obol_leaf_manifest_cache_identity(source, rootPath);
+    if (manifestIdentity.empty() ||
+	bobol_draw_manifest_cache_get(database, manifestIdentity.c_str(),
 	    &manifest) != BRLCAD_OK)
 	return 0;
     stream->setExpectedCount(manifest.occurrenceCount);
 
-    bool complete = manifest.occurrenceCount > 0;
+    /*
+     * Preserve the exact path-scoped target extent when the first leaf batch
+     * switches the live source from its external root proxy to a compact
+     * registry.  An object-name AABB is not interchangeable with this value:
+     * subpath transforms and Boolean context belong to the draw root.  Final
+     * authoritative adoption intentionally omits this synthetic occurrence
+     * and retires it once coverage is whole.
+     */
+    const char *cacheName = strrchr(rootPath.c_str(), '/');
+    cacheName = cacheName ? cacheName + 1 : rootPath.c_str();
+    bool exactOverviewQueued = false;
+    if (manifest.coverageBoundsValid) {
+	const SbBox3f exactBounds(
+	    SbVec3f(static_cast<float>(manifest.coverageBoundsMin[X]),
+		static_cast<float>(manifest.coverageBoundsMin[Y]),
+		static_cast<float>(manifest.coverageBoundsMin[Z])),
+	    SbVec3f(static_cast<float>(manifest.coverageBoundsMax[X]),
+		static_cast<float>(manifest.coverageBoundsMax[Y]),
+		static_cast<float>(manifest.coverageBoundsMax[Z])));
+	if (!exactBounds.isEmpty()) {
+	    stream->setCoverageBounds(exactBounds);
+	    ged_obol_structural_proxy_node node;
+	    node.path = rootPath + "/@draw-extent";
+	    node.objectName = cacheName;
+	    node.instanceKey = node.path;
+	    node.boolOp = DB_OP_UNION;
+	    node.row = 0;
+	    node.localMatrix = SbMatrix::identity();
+	    VMOVE(node.boundsMin, manifest.coverageBoundsMin);
+	    VMOVE(node.boundsMax, manifest.coverageBoundsMax);
+	    node.publishBounds = 1;
+	    node.metadataValid = 0;
+	    BObolCompactOccurrence overview =
+		ged_obol_structural_proxy_occurrence(ctx, node);
+	    overview.summary.recordRole = "lod-overview";
+	    overview.summary.geometryKind = "overview-aabb";
+	    overview.summary.selectable = FALSE;
+	    if (overview.geometry) {
+		stream->pushPriority(overview);
+		exactOverviewQueued = true;
+	    }
+	}
+    }
+
+    bool complete = manifest.occurrenceCount > 0 && exactOverviewQueued;
     size_t pushed = 0;
-    SbBox3f aggregateBounds;
-    aggregateBounds.makeEmpty();
     for (size_t i = 0; i < manifest.occurrenceCount; i++) {
 	if (stream->isCancelled()) {
 	    complete = false;
@@ -17231,56 +17267,10 @@ ged_obol_stream_cached_leaf_manifest(
 	}
 	if (!occurrence.sourceMeshRequestValid)
 	    complete = false;
-	if (!exactOverviewQueued) {
-	    SbBox3f occurrenceBounds(
-		SbVec3f(static_cast<float>(manifest.occurrences[i].
-			boundsMin[X]),
-		    static_cast<float>(manifest.occurrences[i].
-			boundsMin[Y]),
-		    static_cast<float>(manifest.occurrences[i].
-			boundsMin[Z])),
-		SbVec3f(static_cast<float>(manifest.occurrences[i].
-			boundsMax[X]),
-		    static_cast<float>(manifest.occurrences[i].
-			boundsMax[Y]),
-		    static_cast<float>(manifest.occurrences[i].
-			boundsMax[Z])));
-	    occurrenceBounds.transform(
-		ged_obol_sbmatrix_from_mat(
-		    manifest.occurrences[i].localMatrix));
-	    if (!occurrenceBounds.isEmpty())
-		aggregateBounds.extendBy(occurrenceBounds);
-	}
 	stream->push(std::move(occurrence));
 	pushed++;
     }
     bobol_draw_manifest_free(&manifest);
-    if (!exactOverviewQueued && !aggregateBounds.isEmpty()) {
-	ged_obol_structural_proxy_node node;
-	node.path = rootPath + "/@draw-extent";
-	node.objectName = cacheName;
-	node.instanceKey = node.path;
-	node.boolOp = DB_OP_UNION;
-	node.row = 0;
-	node.localMatrix = SbMatrix::identity();
-	const SbVec3f aggregateMin = aggregateBounds.getMin();
-	const SbVec3f aggregateMax = aggregateBounds.getMax();
-	VSET(node.boundsMin, aggregateMin[0], aggregateMin[1],
-	    aggregateMin[2]);
-	VSET(node.boundsMax, aggregateMax[0], aggregateMax[1],
-	    aggregateMax[2]);
-	node.publishBounds = 1;
-	node.metadataValid = 0;
-	BObolCompactOccurrence overview =
-	    ged_obol_structural_proxy_occurrence(ctx, node);
-	overview.summary.recordRole = "lod-overview";
-	overview.summary.geometryKind = "overview-aabb";
-	overview.summary.selectable = FALSE;
-	if (overview.geometry) {
-	    stream->pushPriority(overview);
-	    exactOverviewQueued = true;
-	}
-    }
     if (exactOverviewQueued)
 	stream->setCoverageBoundsComplete(true);
     if (complete && pushed)
@@ -17357,6 +17347,7 @@ static int
 ged_obol_store_leaf_proxy_manifest(
     struct db_i *database,
     const SoBRLDatabaseSource *source,
+    BObolCompactOccurrenceStream *stream,
     void *user_data)
 {
     (void)user_data;
@@ -17376,7 +17367,9 @@ ged_obol_store_leaf_proxy_manifest(
 	if (!source->getCompactOccurrence(i, occurrence) ||
 	    !occurrence.summary.valid || !occurrence.summary.boundsValid ||
 	    occurrence.summary.bounds.isEmpty() ||
-	    occurrence.summary.path.getLength() == 0)
+	    occurrence.summary.path.getLength() == 0 ||
+	    BU_STR_EQUAL(occurrence.summary.recordRole.getString(),
+		"lod-overview"))
 	    continue;
 	occurrences.push_back(std::move(occurrence));
     }
@@ -17392,9 +17385,18 @@ ged_obol_store_leaf_proxy_manifest(
     if (!manifest.occurrences)
 	return 0;
 
+    SbBox3f exactCoverageBounds;
+    if (stream && stream->getCoverageBounds(exactCoverageBounds)) {
+	manifest.coverageBoundsValid = 1;
+	const SbVec3f exactMin = exactCoverageBounds.getMin();
+	const SbVec3f exactMax = exactCoverageBounds.getMax();
+	VSET(manifest.coverageBoundsMin, exactMin[0], exactMin[1],
+	    exactMin[2]);
+	VSET(manifest.coverageBoundsMax, exactMax[0], exactMax[1],
+	    exactMax[2]);
+    }
+
     int valid = 1;
-    SbBox3f aggregateBounds;
-    aggregateBounds.makeEmpty();
     for (size_t i = 0; i < occurrences.size(); i++) {
 	const BObolCompactOccurrence &occurrence = occurrences[i];
 	struct BObolDrawManifestOccurrence &cached =
@@ -17412,17 +17414,6 @@ ged_obol_store_leaf_proxy_manifest(
 	const SbVec3f bmax = occurrence.summary.bounds.getMax();
 	VSET(cached.boundsMin, bmin[0], bmin[1], bmin[2]);
 	VSET(cached.boundsMax, bmax[0], bmax[1], bmax[2]);
-	const SbBox3f localBounds(
-	    SbVec3f(static_cast<float>(cached.boundsMin[X]),
-		static_cast<float>(cached.boundsMin[Y]),
-		static_cast<float>(cached.boundsMin[Z])),
-	    SbVec3f(static_cast<float>(cached.boundsMax[X]),
-		static_cast<float>(cached.boundsMax[Y]),
-		static_cast<float>(cached.boundsMax[Z])));
-	SbBox3f transformedBounds = localBounds;
-	transformedBounds.transform(occurrence.localTransform);
-	if (!transformedBounds.isEmpty())
-	    aggregateBounds.extendBy(transformedBounds);
 	cached.booleanOperation =
 	    occurrence.booleanOperation ==
 		SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? DB_OP_SUBTRACT :
@@ -17512,22 +17503,11 @@ ged_obol_store_leaf_proxy_manifest(
 	}
     }
 
-    const int stored = valid &&
-	bobol_draw_manifest_cache_store(database, rootPath.c_str(),
+    const std::string manifestIdentity =
+	ged_obol_leaf_manifest_cache_identity(source, rootPath);
+    const int stored = valid && !manifestIdentity.empty() &&
+	bobol_draw_manifest_cache_store(database, manifestIdentity.c_str(),
 	    &manifest) == BRLCAD_OK;
-    if (stored && !aggregateBounds.isEmpty()) {
-	const char *cacheName = strrchr(rootPath.c_str(), '/');
-	cacheName = cacheName ? cacheName + 1 : rootPath.c_str();
-	point_t cacheBounds[2];
-	const SbVec3f aggregateMin = aggregateBounds.getMin();
-	const SbVec3f aggregateMax = aggregateBounds.getMax();
-	VSET(cacheBounds[0], aggregateMin[0], aggregateMin[1],
-	    aggregateMin[2]);
-	VSET(cacheBounds[1], aggregateMax[0], aggregateMax[1],
-	    aggregateMax[2]);
-	(void)bobol_draw_proxy_cache_store(database, cacheName,
-	    BOBOL_DRAW_CACHE_PROXY_AABB, cacheBounds, 2, NULL);
-    }
     bobol_draw_manifest_free(&manifest);
     return stored ? 1 : 0;
 }
@@ -18594,6 +18574,14 @@ ged_obol_start_deferred_realization(
 		key.c_str());
 	    return 0;
 	}
+	/* These fields are the immutable result-admission stamp.  The detached
+	 * Coin source becomes worker-exclusive after start(); the GUI streaming
+	 * pump must not read it again until the job's release-published terminal
+	 * state makes final adoption safe. */
+	item->sourceRevision = item->source->sourceRevision.getValue();
+	item->inputsRevision = item->source->inputsRevision.getValue();
+	item->viewRevision = item->source->viewRevision.getValue();
+	item->representationMode = item->source->representationMode.getValue();
 	item->instanceKey = live->instanceKey.getValue().getString();
 	item->drawMode = drawMode;
 	item->primaryScene = usePrimaryScene;
@@ -18665,6 +18653,10 @@ ged_obol_remove_database_source_descendants(
     return ged_obol_remove_instance_keys(descendants, scene);
 }
 
+static int ged_obol_apply_stream_coverage_bounds(
+    SoBRLDatabaseSource *source,
+    BObolCompactOccurrenceStream *stream);
+
 static int
 ged_obol_publish_deferred_realization(
     ged_obol_progressive_provider_data *data,
@@ -18696,13 +18688,11 @@ ged_obol_publish_deferred_realization(
 	SoBRLDatabaseSource *detached = item ? item->source : NULL;
 	if (!live || !detached)
 	    return 0;
-	if (live->sourceRevision.getValue() !=
-		detached->sourceRevision.getValue() ||
-	    live->inputsRevision.getValue() !=
-		detached->inputsRevision.getValue() ||
-	    live->drawMode.getValue() != detached->drawMode.getValue() ||
+	if (live->sourceRevision.getValue() != item->sourceRevision ||
+	    live->inputsRevision.getValue() != item->inputsRevision ||
+	    live->drawMode.getValue() != item->drawMode ||
 	    live->representationMode.getValue() !=
-		detached->representationMode.getValue()) {
+		item->representationMode) {
 	    if (ged_obol_timing_enabled()) {
 		bu_log("[obol-timing] deferred adoption rejected for %s: "
 		    "source=%u/%u inputs=%u/%u view(non-binding)=%u/%u "
@@ -18710,14 +18700,14 @@ ged_obol_publish_deferred_realization(
 		    "representation=%d/%d\n",
 		    item->instanceKey.c_str(),
 		    live->sourceRevision.getValue(),
-		    detached->sourceRevision.getValue(),
+		    item->sourceRevision,
 		    live->inputsRevision.getValue(),
-		    detached->inputsRevision.getValue(),
+		    item->inputsRevision,
 		    live->viewRevision.getValue(),
-		    detached->viewRevision.getValue(),
-		    live->drawMode.getValue(), detached->drawMode.getValue(),
+		    item->viewRevision,
+		    live->drawMode.getValue(), item->drawMode,
 		    live->representationMode.getValue(),
-		    detached->representationMode.getValue());
+		    item->representationMode);
 	    }
 	    return 0;
 	}
@@ -18728,6 +18718,11 @@ ged_obol_publish_deferred_realization(
     for (size_t i = 0; i < liveSources.size(); i++) {
 	const int adopted_count = liveSources[i]->adoptDetachedCompactRealization(
 	    job->items[i]->source, TRUE);
+	/* Detached adoption rebuilds the registry-derived union.  Preserve the
+	 * stream's representation-independent path extent for future explicit
+	 * autoviews as well as the pending progressive fit. */
+	(void)ged_obol_apply_stream_coverage_bounds(liveSources[i],
+	    job->items[i]->stream.get());
 	if (ged_obol_timing_enabled())
 	    bu_log("[obol-timing] deferred adoption for %s: n=%d\n",
 		job->items[i]->instanceKey.c_str(), adopted_count);
@@ -18772,6 +18767,35 @@ ged_obol_publish_deferred_realization(
  * merges had become more expensive.  Start each stream at 256 and adapt
  * between 64 and this ceiling from its measured atomic merge time. */
 static const size_t GED_OBOL_STREAM_BATCH_QUANTUM_MAX = 2048;
+
+/*
+ * A compact registry's derived union is useful while no stronger information
+ * exists, but it is not the autoview contract.  Structural and mesh records
+ * may use asset-local bounds plus placement transforms, and they arrive in a
+ * renderer-dependent order.  Recomputing sourceBounds from each partial
+ * registry therefore made a warm, fast renderer occasionally frame a
+ * different extent than a cold or slower renderer.
+ *
+ * The realization stream publishes one immutable path-scoped coverage bound.
+ * Once available, keep that value authoritative across every incremental
+ * merge and final detached adoption.  setSourceBoundsState stores source-local
+ * bounds; getEffectiveSourceBounds applies the source placement exactly once.
+ */
+static int
+ged_obol_apply_stream_coverage_bounds(
+    SoBRLDatabaseSource *source,
+    BObolCompactOccurrenceStream *stream)
+{
+    if (!source || !stream || !stream->hasCoverageBoundsComplete())
+	return 0;
+
+    SbBox3f bounds;
+    if (!stream->getCoverageBounds(bounds) || bounds.isEmpty())
+	return 0;
+
+    (void)source->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
+    return 1;
+}
 
 /* Drain completed per-leaf occurrences from every running realization job and
  * merge them onto the live compact root as they arrive, so geometry streams in
@@ -18818,19 +18842,16 @@ ged_obol_drain_streamed_realizations(
 	    SoBRLDatabaseSource *live = itemScene ?
 		itemScene->findDatabaseSourceInstance(item->instanceKey.c_str()) :
 		NULL;
-	    SoBRLDatabaseSource *detached = item->source;
-	    if (!live || !detached)
+	    if (!live || !item->source)
 		continue;
 	    /* A source/draw-mode change after this job launched makes its stream
 	     * stale; the job will be retired by the pump's revision drain.  Do not
 	     * merge stale geometry onto the current live source. */
-	    if (live->sourceRevision.getValue() !=
-		    detached->sourceRevision.getValue() ||
-		live->inputsRevision.getValue() !=
-		    detached->inputsRevision.getValue() ||
-		live->drawMode.getValue() != detached->drawMode.getValue() ||
+	    if (live->sourceRevision.getValue() != item->sourceRevision ||
+		live->inputsRevision.getValue() != item->inputsRevision ||
+		live->drawMode.getValue() != item->drawMode ||
 		live->representationMode.getValue() !=
-		    detached->representationMode.getValue())
+		    item->representationMode)
 		continue;
 	    const size_t expectedCount = item->stream->getExpectedCount();
 	    if (expectedCount)
@@ -18881,6 +18902,11 @@ ged_obol_drain_streamed_realizations(
 		ged_obol_scene_mutation_batch_scope mutation(itemScene, 1,
 		    batch.size());
 		const int mergedCount = live->mergeCompactOccurrences(batch);
+		/* mergeCompactOccurrences derives a partial registry union.
+		 * Restore the immutable whole-target extent before any camera
+		 * observer can inspect this atomic scene mutation. */
+		(void)ged_obol_apply_stream_coverage_bounds(live,
+		    item->stream.get());
 		if (mergedCount > 0) {
 		    merged = 1;
 		    ged_obol_timing_log("stream: merged occurrences",

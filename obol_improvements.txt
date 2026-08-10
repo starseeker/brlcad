@@ -29,7 +29,14 @@ The architecture is now beyond several items in the original roadmap below:
   renderer configuration snapshot, qged diagnostics unit, and interruptible
   renderer executors exist;
 * source realization no longer joins a per-draw worker during ordinary handle
-  teardown;
+  teardown.  Worker callback context now has shared lifetime ownership, the
+  detached Coin template keeps field sensors disabled, and the GUI admits
+  streamed results through an immutable launch stamp instead of racing worker
+  field writes;
+* memory-aware source scheduling retains useful first-fit parallelism but ages
+  a blocked large root after eight bypasses.  A continuous stream of small
+  roots can no longer starve a vehicle-scale source while the global transient
+  memory limit is active;
 * both System GL and OSMesa pass the Generic Twin cold/warm shaded/wire smoke
   matrix with stable convergence, no coordinator invariant violations, and no
   terminal structural boxes; and
@@ -50,6 +57,93 @@ The architecture is now beyond several items in the original roadmap below:
   applied with Qt updates suppressed until the final camera is valid, removing
   a harness-generated one-frame view jump without changing production camera
   or LoD behavior.
+* progressive autoview now has one explicit owner and one exact path-scoped
+  extent.  Draw transactions never fit partial structural coverage; the owner
+  waits until the final priority extent is drained into the scene.  Cold
+  coverage carries that same extent into the warm manifest rather than
+  overwriting an object-name proxy cache with a transformed occurrence union.
+  The certified extent is restored after every incremental registry merge and
+  final detached adoption, so a fast warm renderer cannot replace it with a
+  representation- or publication-order-dependent derived union.
+  The graphical matrix compares the complete final camera across cold/warm and
+  System GL/OSMesa runs.  Generic Twin now matches bit-for-bit in all four
+  cases.
+* retained richer-cut observations no longer masquerade as liveness
+  witnesses.  A completed pass with no cut, budget barrier, handoff, service
+  work, or frame retires the annotation; a later view, capacity, or resident
+  result edge may rearm it.  This closes the timing-sensitive warm OSMesa
+  wireframe BACKGROUND loop exposed by a post-idle capture.
+* interaction restoration is now a measured, non-destructive contract.  The
+  coordinator distinguishes the current pose/scale edge from an earlier scale
+  event in the same debounce epoch, recognizes exact scale round trips, and
+  restores the last proven stable scene allowance after the temporary 60 FPS
+  motion budget.  Pose-only orthographic retention is enabled only when input
+  began from a view already proven ready, preventing an incomplete cold draw
+  from being frozen as a terminal cut.
+* Coin deadline aborts are no longer treated as triangle-throughput samples.
+  They bound endpoint latency with the reversible global PoP ceiling and
+  sub-pixel aggregation, while only completed frames with an exact submitted
+  population may change calibrated capacity, retained cuts, or residency.  A
+  constrained deadline retry now supplies an explicit successor-pass wakeup,
+  and quiet debounce reapplies a stable snapshot if another interaction limit
+  appeared after button-up.
+* fragmented triangle atlases now consolidate live compatible ranges using a
+  single page-sized device-local scratch buffer.  Empty pages are deleted and
+  all moved part offsets/VAOs are revisioned without rebuilding source data.
+  The maintenance threshold is pressure plus substantial fragmentation, so
+  the normal render path pays no whole-atlas copying cost.
+
+The completed regression evidence for these changes includes:
+
+* every one of the 1,024 coordinator input combinations, three witness classes,
+  and thirteen lifecycle events (39,936 exact replay cases) canonicalizes to
+  the specified phase and then discharges to a valid quiet terminal state;
+* cancellation while a source callback is running keeps its context alive
+  after every client reference is dropped, returns immediately, and releases
+  the context after worker acknowledgement.  A deterministic mixed-size queue
+  test proves that a memory-blocked large root receives bounded admission;
+* a 50,000-distinct-mesh System GL interaction retained 22,232,003 active
+  faces, 490,338,656 resident bytes, and the identical 57,037 compaction count
+  across a pure rotation and quiet restoration; the prior failure compacted
+  tens of thousands of assets and fell to roughly 0.6M active faces;
+* the deliberately fragmented atlas case reclaimed 520 MB down to 134 MB
+  (31 pages to 8) while continuing to render the completed frame; and
+* final Generic Twin cold/warm shaded matrices pass independently on System GL
+  and OSMesa.  OSMesa initial `ae 90 0` now reaches the filled approximately
+  95k-100k active-triangle presentation instead of prematurely declaring a
+  visibly incomplete approximately 13.6k cut ready.  Both backends clear their
+  interaction ceilings at quiet convergence.
+* the final shaded and wire cold/warm matrices pass on both System GL and
+  OSMesa with deep direct-GL state validation enabled.  The 2026-08-09 final
+  camera matrix also caught and fixed a warm System-GL autoview race; its
+  rerun passed all eight renderer/mode/cache combinations, while an automated
+  cross-run test now compares cold and warm terminal center and size.  The
+  final 50,000-mesh
+  warm replay reached ready in 20.7 seconds, retained 17,663,979 active faces,
+  413,814,092 resident bytes, and the unchanged 50,000 compaction count across
+  rotation, and returned to ready 1.8 seconds after release with no boxes or
+  coordinator violations.
+* a deterministic 256 MiB resident-cap run now proves the saturated case rather
+  than relying on an uncapped success.  Cold and warm System GL runs both end
+  with all 50,000 occurrences as meshes, zero boxes, no queued/pending work,
+  no coordinator violations, about 9.2 million active faces, and a coherent
+  memory-limited cut within eight bytes of the configured cap.  Capacity-denied
+  occurrences remain terminal for the current admission revision and reopen
+  only when capacity changes; an identical scene-budget retarget no longer
+  destroys that witness and restarts the loop.
+* LoD service request identity now extends through owner-thread result drain.
+  Fast warm-cache completions waiting in the coalesced publication queue can no
+  longer be resubmitted by successive planning waves.  On the same 50,000-mesh
+  fixture this reduced warm completed tasks from 529,488 to 143,251 (73 percent),
+  reduced first terminal readiness from 74.6 to 19.9 seconds, and reduced the
+  complete interaction script from 87.2 to 35.0 seconds.  Initial mesh and face
+  counts grow monotonically; after readiness the 9,238,332-face cut remains
+  unchanged through zoom, rotation, selection, subpath erase/redraw, and clear,
+  with no fallback regression or visual cycling.
+* the post-fix Generic Twin matrix passes all eight cold/warm, shaded/wire, and
+  System GL/OSMesa combinations, including camera contracts and terminal
+  zero-box validation.  The complete build and the focused LoD, cache, draw,
+  cross-run, and selection regression set are clean.
 
 Unified resource feedback is now complete for the current renderer tiers.
 Obol publishes allocation, pressure, eviction, reclamation, and upload
@@ -64,75 +158,52 @@ resource accounting—dominating the instrumented harness.
 
 The remaining major design gaps, in priority order, are:
 
-1. Coordinator authority is incomplete.  The explicit state machine now
-   canonicalizes contradictory observations and owns named phase transitions,
-   and allocation-free coordinator policies now own completed-frame resource
-   pressure edges/recovery revisions and the one-shot late calibrated-headroom
-   witness.  A third value policy owns resident-compaction requests, quiet
-   deadlines, visual-settling admission, partial planning continuation, and
-   demand revisions.  A fourth owns result-publication batches, adaptive
-   deadlines, and the unique requested-frame witness which replaces each
-   batch timer.  A fifth owns minimum-mesh coverage accumulation across
-   bounded compact-index windows, rescan-safe completion, missing-coverage
-   classification, and the authoritative visible denominator.  Camera and
-   inventory epochs invalidate that proof while quality-only passes may retain
-   it without a whole-hierarchy recount.  A sixth policy owns the public
-   convergence proof: ready/background state, terminal memory/performance
-   limits, HUD phase, and monotonic progress for a typed view/policy epoch.
-   A seventh policy owns aggregate scene-cost admission, bounded growth and
-   overload backoff, the pass-wide remainder shared by every compact-index
-   window, retained-cut recovery, the overload revision witness, and stable
-   calibration-series scheduling.  Its one decision owns the three-sample
-   minimum, bounded twelve-frame headroom series, admitted-work frame barrier,
-   post-frame rescan, and terminal budget-limited classification.  The
-   controller no longer carries parallel probe counters, remaining-frame,
-   rescan, or budget-terminal latches, and the write-only refinement retry
-   timestamp from earlier iterations has been removed.  BObolViewController
-   executes those decisions but no longer reinterprets their latch contracts.
-   An eighth allocation-free policy now owns camera-local pose/scale
-   classification, scale-demand refresh across bounded coverage, quality-
-   probe pending/active/presented state, resident-growth rearming, the
-   100 ms/10 Hz quality contract, and quiet scale-epoch retirement.  The
-   controller executes the returned one-level ceiling and retains the stable
-   presentation snapshot; it no longer carries parallel zoom-demand latches.
-   A ninth scalar quality policy owns renderer-independent pixel-error,
-   point-proxy correction, and discrete PoP-ceiling calculations, including
-   finite-input sanitation and current-cut-relative overload correction.
-   Move the remaining stable-presentation snapshot/handoff decision behind a
-   value policy before declaring coordinator authority complete.  That
-   handoff should retain a reusable interactive quality cut when its completed
-   frame already met the less demanding stable deadline.  OSMesa Lucy can,
-   for example, present PoP 7 in roughly 39-40 ms during scale input but
-   currently settles back to PoP 6 because stable and interactive throughput
-   evidence are isolated; preserving this safe lower-bound proof would improve
-   fidelity without weakening either FPS target.
+1. Production qualification remains larger than the current green matrix.
+   The final release gate still needs cold/partial/warm multi-gigabyte scenes,
+   the generated 150k distinct-asset fixture, repeated-instance visibility
+   turnover, adaptive BREP bands, hierarchy edit/erase/selection stress,
+   explicit memory ceilings, and p95/max input latency on both render
+   backends.  The 50k cold/warm System GL fixture now reaches 50,000 mesh
+   payloads, zero boxes, no pending work, and a coherent terminal
+   memory-limited state; the harness no longer incorrectly requires genuine
+   persistent renderer admission pressure to disappear.
 
-2. Source/client ownership remains split.  The expensive detached realization
-   execution belongs to libBObol, but the 21k-line libged draw adapter still
-   owns progressive-provider orchestration, transactions, manifests, hierarchy
-   integration, and client routing.  Finish the semantic draw-intent boundary
-   and renderer-neutral GED endpoint so qged, MGED, and gsh are thin hosts of
-   the same service.
+2. Source/client code ownership is correct at the service boundary but remains
+   physically concentrated.  Detached realization, worker admission,
+   cancellation, and cache/mesh execution belong to libBObol; the public GED
+   endpoint is renderer-neutral and qged, MGED, and gsh consume the same
+   controller.  The 21k-line libged adapter still combines transaction,
+   hierarchy/frontier, warm-manifest, feature/overlay, query/pick, and
+   owner-thread adoption code.  Extract those as private semantic adapters;
+   do not move host routing or live-scene publication onto workers.
 
-3. Implementation concentration is still a correctness risk.  database_source,
-   draw_obol, view_controller, and SoCADAssembly/executor units combine too many
-   contracts.  Split them behind the already established indexed/SoA and pImpl
-   boundaries; do not replace compact registries with per-occurrence objects or
-   whole-scene traversals.
+3. Implementation concentration remains a maintainability risk rather than an
+   unproven runtime contract.  database_source, draw_obol, view_controller,
+   SoCADAssembly, and the executor unit should continue to split behind the
+   established indexed/SoA, private-state, and pImpl boundaries.  Preserve
+   compact registries, append/sparse deltas, and bounded owner-thread windows;
+   never replace them with per-occurrence scene nodes or whole-scene replay.
 
-4. Renderer-tier equivalence still needs systematic proof.  Deadline safe
-   points and coherent retry now cover every executor, but visibility, style,
-   PoP-cut, culling, and primitive-count semantics still have multiple tier
-   implementations.  Add packet-level conformance and GL-state sentinel tests
-   before further executor cleanup.
+4. Renderer semantics now have one allocation-free resolved-draw contract.
+   Every current executor calls it for sparse liveness and PoP-level
+   resolution, and an independent oracle checks 27,615,232 ownership,
+   hidden/proxy/channel/range and complete serialized-level cases.  Deep GL
+   state sentinels pass the System GL and OSMesa cold/warm shaded/wire matrix.
+   The remaining conformance work is broader image-tolerance qualification of
+   every less-common style/culling route, not another packet model.
 
-5. Production qualification remains larger than the current green smoke
-   matrix.  The final gate must include cold/partial/warm multi-gigabyte scenes,
-   50k+ distinct assets, repeated-instance visibility turnover, adaptive BREP
-   bands, hierarchy edit/erase/selection stress, memory ceilings, and p95/max
-   input latency on both render backends.
+Coordinator end-to-end fault qualification is complete for the current state
+model.  In addition to the 39,936 exact scalar replays, 512 deterministic
+seeds each execute 96 fake-clock/fake-service perturbations with bounded
+discharge, plus explicit repeated-checkpoint, provider-failure-during-input,
+and pressure-during-cancellation sequences.  Every nonterminal foreground or
+background obligation must expose a named task, cursor, frame, or timer and
+reach a terminal/error state.  This proof found and fixed stale compaction
+after coverage invalidation and an unacknowledged pressure revision after a
+coverage producer was cancelled; BObolViewController still acquires no
+parallel lifecycle latch.
 
-6. Resident growth of one very large PoP asset is no longer a GPU upload
+5. Resident growth of one very large PoP asset is no longer a GPU upload
    ceiling or a correctness/interaction blocker.  The retained provider
    now reads only activation chunks in (resident, requested] after compaction,
    extends the existing immutable population, and atomically publishes the

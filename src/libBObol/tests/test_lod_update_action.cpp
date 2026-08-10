@@ -342,6 +342,8 @@ test_view_controller_presentation_deadline_contract(void)
 	controller.endLodInteraction();
 
 	controller.clearRenderRequest();
+	const size_t budgetBeforeInterruptedPresentation =
+	    controller.getCurrentLodRenderCostBudget();
 	controller.notePresentationRenderInterrupted(123000000ULL);
 	if (!ret &&
 		(controller.getInterruptedPresentationFrameCount() != 1 ||
@@ -351,9 +353,11 @@ test_view_controller_presentation_deadline_contract(void)
 		 bu_strcmp(controller.getRenderReason().getString(),
 		     "render-deadline") != 0 ||
 		 controller.getCurrentPresentationFrameDeadline() !=
-		     7500000ULL)) {
+		     7500000ULL ||
+		 controller.getCurrentLodRenderCostBudget() !=
+		     budgetBeforeInterruptedPresentation)) {
 	    printf("FAIL: interrupted presentation did not retain the "
-		   "progressive retry barrier\n");
+		   "progressive retry barrier and proven scene budget\n");
 	    ret = 1;
 	}
 	controller.notePresentationRenderInterrupted(0);
@@ -9113,6 +9117,70 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    }
 
 	    if (!ret) {
+		/* A hard resident-memory denial and a scene-cost denial are
+		 * independent terminal witnesses.  Rechecking the same demand
+		 * must not erase the resident admission epoch merely because the
+		 * scene allocator also cannot afford its next transition. */
+		BObolLodResult limitedResult = budgetResult;
+		limitedResult.request.viewRevision = 81;
+		limitedResult.request.policyRevision = 82;
+		limitedResult.memoryLimited = TRUE;
+		const uint64_t denialRevision =
+		    service.residentMeshAdmissionRevision() + 1;
+		limitedResult.residentAdmissionRevision = denialRevision;
+		BObolViewLodState limitedState;
+		if (!limitedState.applySourceResult(source, limitedResult)) {
+		    printf("FAIL: memory-limited frontier fixture apply\n");
+		    ret = 1;
+		} else {
+		    std::vector<SbString> blockedFrontier;
+		    limitedState.unsatisfiedCadOccurrenceKeys(
+			source, denialRevision, blockedFrontier);
+		    std::vector<SbString> reopenedFrontier;
+		    limitedState.unsatisfiedCadOccurrenceKeys(
+			source, service.residentMeshAdmissionRevision(),
+			reopenedFrontier);
+		    SoBRLMeshLodSubmitAction repeatedDenial;
+		    repeatedDenial.setService(&service);
+		    repeatedDenial.setDatabase(
+			dbip, "db://compact-projected-test", 2026);
+		    repeatedDenial.setViewInfo(&view);
+		    repeatedDenial.setViewVolume(&budgetVolume, 1.0f);
+		    repeatedDenial.setGeneration(service.beginGeneration());
+		    repeatedDenial.setRevisions(81, 82);
+		    repeatedDenial.setViewLodState(&limitedState);
+		    repeatedDenial.setRefinementCostBudget(3);
+		    repeatedDenial.apply(root);
+		    const BObolViewLodState::CadPayload *limitedPayload =
+			limitedState.findCadForResult(limitedResult);
+		    if (!blockedFrontier.empty() ||
+			reopenedFrontier.size() != 1 || !limitedPayload ||
+			repeatedDenial.getSubmittedTaskCount() != 0 ||
+			repeatedDenial.getPendingRetainedRefinementCount() != 1 ||
+			repeatedDenial.getRefinementBudgetBlockedCount() != 1 ||
+			!limitedPayload->memoryLimited ||
+			limitedPayload->residentAdmissionRevision !=
+			    denialRevision) {
+			printf("FAIL: repeated budget denial lost or rescanned its "
+			       "memory-capacity witness (blocked=%zu reopened=%zu "
+			       "tasks=%u pending=%u budget_blocked=%u "
+			       "limited=%d admission=%llu/%llu)\n",
+			       blockedFrontier.size(), reopenedFrontier.size(),
+			       repeatedDenial.getSubmittedTaskCount(),
+			       repeatedDenial.
+				   getPendingRetainedRefinementCount(),
+			       repeatedDenial.getRefinementBudgetBlockedCount(),
+			       limitedPayload && limitedPayload->memoryLimited ?
+				   1 : 0,
+			       (unsigned long long)(limitedPayload ?
+				   limitedPayload->residentAdmissionRevision : 0),
+			       (unsigned long long)denialRevision);
+			ret = 1;
+		    }
+		}
+	    }
+
+	    if (!ret) {
 		/* A scale-quality experiment is scene-global even though one
 		 * submit action may visit several occurrences.  Let the first
 		 * complete marginal transition use one unit beyond the ordinary
@@ -9318,7 +9386,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    payload = admittedState.findCadForResult(admittedResult);
 		    std::vector<SbString> unsatisfied;
 		    admittedState.unsatisfiedCadOccurrenceKeys(
-			source, unsatisfied);
+			source, 0, unsatisfied);
 		    if (!payload ||
 			recovery.getSubmittedTaskCount() != 0 ||
 			recovery.getUpdatedCutCount() != 1 ||
@@ -9437,7 +9505,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    } else {
 			std::vector<SbString> unsatisfied;
 			multiState.unsatisfiedCadOccurrenceKeys(
-			    source, unsatisfied);
+			    source, 0, unsatisfied);
 			if (unsatisfied.size() != 1 ||
 			    bu_strcmp(unsatisfied[0].getString(),
 				multiResult.request.occurrenceKey.getString()) !=
@@ -9487,7 +9555,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			if (!ret) {
 			    unsatisfied.clear();
 			    multiState.unsatisfiedCadOccurrenceKeys(
-				source, unsatisfied);
+				source, 0, unsatisfied);
 			    if (unsatisfied.size() != 1 ||
 				!multiState.retargetCadPayload(
 				    payload, payload->activeLevel,
@@ -9497,7 +9565,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				ret = 1;
 			    } else {
 				multiState.unsatisfiedCadOccurrenceKeys(
-				    source, unsatisfied);
+				    source, 0, unsatisfied);
 				if (!unsatisfied.empty()) {
 				    printf("FAIL: retained refinement frontier "
 					   "kept a satisfied occurrence\n");

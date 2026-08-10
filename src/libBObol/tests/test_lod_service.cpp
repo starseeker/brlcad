@@ -1858,8 +1858,10 @@ test_active_request_duplicate_suppression(void)
 	service.stop();
 	return 1;
     }
-    if (service.hasActiveRequest(task.request)) {
-	printf("FAIL: LoD service retained active request after completion\n");
+    if (!service.hasActiveRequest(task.request) ||
+	service.submitIfNotActive(task) != 0) {
+	printf("FAIL: LoD service released request identity before queued "
+	       "result publication\n");
 	service.stop();
 	return 1;
     }
@@ -1867,6 +1869,11 @@ test_active_request_duplicate_suppression(void)
     std::vector<BObolLodResult> results;
     if (service.drainResults(results) != 1 || results.size() != 1) {
 	printf("FAIL: LoD service duplicate suppression changed result count\n");
+	service.stop();
+	return 1;
+    }
+    if (service.hasActiveRequest(task.request)) {
+	printf("FAIL: LoD service retained request identity after result drain\n");
 	service.stop();
 	return 1;
     }
@@ -1897,6 +1904,39 @@ test_active_request_duplicate_suppression(void)
 	    service.stop();
 	    return 1;
 	}
+    }
+
+    /* A result slot may coalesce a newer content revision before the owner
+     * drains it.  Duplicate ownership must follow the replacement request;
+     * otherwise the old content key remains suppressed forever and the new
+     * key appears available while its result is still queued. */
+    BObolLodTask queuedOld = task;
+    queuedOld.debugDelayMilliseconds = 0;
+    if (service.submit(queuedOld) == 0 || wait_for_settled(service, 1)) {
+	printf("FAIL: LoD service did not queue old coalescing fixture\n");
+	service.stop();
+	return 1;
+    }
+    BObolLodTask queuedNew = queuedOld;
+    queuedNew.request.sourceRevision++;
+    queuedNew.request.sourceContentHash++;
+    if (service.submit(queuedNew) == 0 || wait_for_settled(service, 1) ||
+	service.hasActiveRequest(queuedOld.request) ||
+	!service.hasActiveRequest(queuedNew.request)) {
+	printf("FAIL: LoD service did not transfer queued request identity "
+	       "during result coalescing\n");
+	service.stop();
+	return 1;
+    }
+    results.clear();
+    if (service.drainResults(results) != 1 || results.size() != 1 ||
+	!bobol_lod_result_matches_request(results[0], queuedNew.request) ||
+	service.hasActiveRequest(queuedOld.request) ||
+	service.hasActiveRequest(queuedNew.request)) {
+	printf("FAIL: LoD service retained coalesced request ownership after "
+	       "publication\n");
+	service.stop();
+	return 1;
     }
 
     service.stop();

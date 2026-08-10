@@ -42,13 +42,17 @@ typedef int (*BObolSourceWarmManifestProbe)(
 typedef int (*BObolSourceManifestStore)(
 	struct db_i *database,
 	const SoBRLDatabaseSource *source,
+	BObolCompactOccurrenceStream *stream,
 	void *userData);
 
 /**
  * One move-by-contract request.  submit() consumes source and
  * snapshotSourceDatabase on success and sets both caller fields to NULL.
  * source must have one caller-owned Coin reference.  The database must be an
- * independently owned handle suitable for worker reads.
+ * independently owned handle suitable for worker reads.  callbackContext is
+ * retained through the last worker callback, including after the client drops
+ * or cancels its job handle; callbacks must not borrow shorter-lived client
+ * storage through another pointer.
  */
 struct BOBOL_EXPORT BObolSourceRealizationRequest {
     BObolSourceRealizationRequest(void);
@@ -65,7 +69,7 @@ struct BOBOL_EXPORT BObolSourceRealizationRequest {
     SbBool allowWireFallback;
     BObolSourceWarmManifestProbe probeWarmManifest;
     BObolSourceManifestStore storeManifest;
-    void *callbackData;
+    std::shared_ptr<void> callbackContext;
 };
 
 enum BObolSourceRealizationState {

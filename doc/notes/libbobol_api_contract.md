@@ -71,8 +71,22 @@ past owner teardown.
 Scene nodes, controllers, stores, endpoints, and rendering providers are
 owner-thread objects.  Their public mutating and query methods run on the host
 owner thread.  LoD workers receive database snapshots or plain request values
-and return plain result data; they do not mutate Coin nodes, global type state,
-or an OpenGL context.  The owner thread drains and publishes worker results.
+and return plain result data; they do not mutate live Coin nodes, global type
+state, or an OpenGL context.  Source realization has one narrow exception: a
+detached, untraversed database-source template with all field sensors disabled
+is transferred exclusively to one worker.  The GUI reads an immutable launch
+stamp and the occurrence stream while that worker runs; it may inspect or
+adopt the detached node only after the job publishes a terminal state with
+release semantics.  The owner thread drains and publishes all live scene
+changes.
+
+Source-realization submission is transactional.  The coordinator validates
+and prepares the complete request batch before its queue lock commits any
+ownership transfer.  Failure leaves every source reference, database handle,
+stream, and callback context with the caller; success consumes all source and
+database handles in the batch atomically.  A shared callback context remains
+alive through the last worker callback even when the client cancels and drops
+its job handle.
 
 Frame-request and presentation callbacks may be invoked while the controller
 is active, but never after callback removal returns.  A callback must not
@@ -111,3 +125,10 @@ methods use BRL-CAD model units; screen coordinates are pixels in the bound
 viewport; colors use normalized Inventor channels unless a C declaration says
 RGB bytes.  LoD time budgets are microseconds and render timing values are
 nanoseconds, as named in their declarations.
+
+`sourceBounds` is also source-local.  Before realization certifies complete
+coverage it may be a conservative union derived from the current compact
+registry.  Once a realization stream publishes its complete coverage bound,
+that value is authoritative across incremental geometry replacement and final
+adoption; consumers apply the source placement only when requesting effective
+scene bounds.

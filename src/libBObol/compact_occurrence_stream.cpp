@@ -32,6 +32,7 @@ struct BObolCompactOccurrenceStream::Impl {
      * skip its otherwise redundant full-BoT coverage import pass. */
     std::atomic<bool> warmCoverageComplete {false};
     std::atomic<bool> coverageBoundsComplete {false};
+    SbBox3f coverageBounds;
     std::atomic<bool> cancelled {false};
     std::atomic<size_t> expectedCount {0};
 };
@@ -278,6 +279,21 @@ bool
 BObolCompactOccurrenceStream::hasWarmCoverageComplete(void) const
 {
     return this->d->warmCoverageComplete.load(std::memory_order_acquire);
+}
+
+void
+BObolCompactOccurrenceStream::setCoverageBounds(const SbBox3f &bounds)
+{
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    this->d->coverageBounds = bounds;
+}
+
+bool
+BObolCompactOccurrenceStream::getCoverageBounds(SbBox3f &bounds)
+{
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    bounds = this->d->coverageBounds;
+    return !bounds.isEmpty();
 }
 
 void

@@ -39,7 +39,7 @@
 #include <vector>
 
 #define BOBOL_DRAW_CACHE_FORMAT_FILE "draw_data.format"
-#define BOBOL_DRAW_CACHE_CURRENT_FORMAT 4
+#define BOBOL_DRAW_CACHE_CURRENT_FORMAT 5
 #define BOBOL_DRAW_CACHE_AABB "bb"
 #define BOBOL_DRAW_CACHE_OBB "obb"
 #define BOBOL_DRAW_CACHE_LOD_ASSET "lod_asset"
@@ -53,7 +53,7 @@
 #define BOBOL_DRAW_LOD_ASSET_DISK_MAGIC 0x4f424c41u /* OBLA */
 #define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 1u
 #define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
-#define BOBOL_DRAW_MANIFEST_DISK_VERSION 8u
+#define BOBOL_DRAW_MANIFEST_DISK_VERSION 9u
 
 struct BObolDrawCacheContext {
     bu_cache *cache;
@@ -147,6 +147,9 @@ struct BObolDrawManifestDiskHeader {
     uint64_t databaseFingerprint;
     uint64_t occurrenceCount;
     uint32_t rootPathLength;
+    uint32_t coverageBoundsValid;
+    point_t coverageBoundsMin;
+    point_t coverageBoundsMax;
     uint32_t reserved;
 };
 
@@ -2074,6 +2077,9 @@ bobol_draw_manifest_init(BObolDrawManifest *manifest)
 {
     if (!manifest)
 	return;
+    manifest->coverageBoundsValid = 0;
+    VSETALL(manifest->coverageBoundsMin, 0.0);
+    VSETALL(manifest->coverageBoundsMax, 0.0);
     manifest->occurrenceCount = 0;
     manifest->occurrences = NULL;
 }
@@ -2108,6 +2114,13 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 {
     if (!dbip || !rootPath || !rootPath[0] || !manifest ||
 	!manifest->occurrenceCount || !manifest->occurrences)
+	return BRLCAD_ERROR;
+
+    if ((manifest->coverageBoundsValid != 0 &&
+	 manifest->coverageBoundsValid != 1) ||
+	(manifest->coverageBoundsValid &&
+	 !bobol_draw_proxy_bbox_valid(manifest->coverageBoundsMin,
+	     manifest->coverageBoundsMax)))
 	return BRLCAD_ERROR;
 
     const size_t rootLength = strlen(rootPath);
@@ -2168,6 +2181,11 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
     header.databaseFingerprint = bobol_draw_cache_database_fingerprint(dbip);
     header.occurrenceCount = static_cast<uint64_t>(manifest->occurrenceCount);
     header.rootPathLength = static_cast<uint32_t>(rootLength);
+    header.coverageBoundsValid = manifest->coverageBoundsValid ? 1u : 0u;
+    if (manifest->coverageBoundsValid) {
+	VMOVE(header.coverageBoundsMin, manifest->coverageBoundsMin);
+	VMOVE(header.coverageBoundsMax, manifest->coverageBoundsMax);
+    }
     memcpy(disk.data(), &header, sizeof(header));
     size_t offset = sizeof(header);
     memcpy(disk.data() + offset, rootPath, rootLength);
@@ -2301,6 +2319,10 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	header.version != BOBOL_DRAW_MANIFEST_DISK_VERSION ||
 	header.databaseFingerprint != currentFingerprint ||
 	header.rootPathLength != rootLength || !header.occurrenceCount ||
+	header.coverageBoundsValid > 1 ||
+	(header.coverageBoundsValid &&
+	 (!bobol_draw_proxy_bbox_valid(header.coverageBoundsMin,
+	      header.coverageBoundsMax))) ||
 	header.occurrenceCount > SIZE_MAX / sizeof(BObolDrawManifestOccurrence)) {
 	if (getenv("BOBOL_DRAW_TIMING"))
 	    bu_log("[obol-timing] manifest cache header rejected for %s "
@@ -2329,6 +2351,11 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 
     BObolDrawManifest loaded;
     bobol_draw_manifest_init(&loaded);
+    loaded.coverageBoundsValid = header.coverageBoundsValid ? 1 : 0;
+    if (loaded.coverageBoundsValid) {
+	VMOVE(loaded.coverageBoundsMin, header.coverageBoundsMin);
+	VMOVE(loaded.coverageBoundsMax, header.coverageBoundsMax);
+    }
     loaded.occurrenceCount = static_cast<size_t>(header.occurrenceCount);
     loaded.occurrences = static_cast<BObolDrawManifestOccurrence *>(
 	bu_calloc(loaded.occurrenceCount, sizeof(*loaded.occurrences),

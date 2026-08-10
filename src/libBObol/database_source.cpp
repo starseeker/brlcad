@@ -14385,7 +14385,11 @@ SoBRLDatabaseSource::createDetachedRealizationTemplate(void) const
     detached->staleReason = STALE_SOURCE;
     detached->realizationStatus = UNREALIZED;
     detached->realizationDiagnostic = "";
-    detached->attachFieldSensors();
+    /* The template becomes worker-exclusive after launch.  Field sensors use
+     * Coin's owner-thread sensor machinery and serve no purpose on this node:
+     * its configuration is immutable and its realization outputs are adopted
+     * only after a release-published terminal result.  Leave them detached so
+     * worker field writes cannot enqueue owner-thread sensor callbacks. */
     return detached;
 }
 
@@ -15356,6 +15360,7 @@ struct compact_coverage_asset {
     unsigned char mode = 0;
     unsigned char orientation = 0;
     bool coverageReady = false;
+    bool lodEligible = false;
     /* True only when geometry is the standing proxy for a source-backed
      * triangle PoP asset.  BREP wire drawing has its own immutable
      * progressive line representation and must not also submit the shaded
@@ -15600,10 +15605,6 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	return TREE_NULL;
     if (collect->stream->isCancelled())
 	return make_nop_tree();
-    if (dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT &&
-	dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BREP)
-	return make_nop_tree();
-
     const std::string instanceIdentity =
 	realize_walk_instance_identity(tsp, pathp);
     if (instanceIdentity.empty() ||
@@ -15652,7 +15653,9 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	semanticPath += suffix;
     }
     const char *sourceType =
-	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP ? "brep" : "bot";
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP ? "brep" :
+	(dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT ? "bot" :
+	 "primitive");
     occurrence.summary = compact_occurrence_tree_summary(
 	collect->source, tsp, semanticPath.c_str(), dp->d_namep, sourceType,
 	"aabb", collect->revision,
@@ -15824,14 +15827,19 @@ compact_stream_publish_parallel_coverage(
 		if (!stream->isCancelled() && asset.dp &&
 		    asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
 		    asset.coverageReady = compact_coverage_bot_bounds(
-			source->getDatabase(), asset.dp, asset.coverageBounds,
-			asset.vertexCount, asset.faceCount, asset.mode,
-			asset.orientation) &&
-			asset.faceCount >= source->lodBotThreshold.getValue();
-		} else if (!stream->isCancelled() && asset.dp &&
-		    asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP) {
+			source->getDatabase(), asset.dp,
+			asset.coverageBounds, asset.vertexCount,
+			asset.faceCount, asset.mode, asset.orientation);
+		    asset.lodEligible = asset.coverageReady &&
+			asset.faceCount >=
+			    source->lodBotThreshold.getValue();
+		} else if (!stream->isCancelled() && asset.dp) {
 		    asset.coverageReady = compact_coverage_primitive_bounds(
-			source->getDatabase(), asset.dp, asset.coverageBounds);
+			source->getDatabase(), asset.dp,
+			asset.coverageBounds);
+		    asset.lodEligible = asset.coverageReady &&
+			asset.dp->d_minor_type ==
+			    DB5_MINORTYPE_BRLCAD_BREP;
 		}
 		if (asset.coverageReady) {
 		    asset.coverageGeometry = compact_coverage_aabb_geometry(
@@ -15880,14 +15888,15 @@ compact_stream_publish_parallel_coverage(
 		occurrence.geometryTransform =
 		    asset.proxyGeometryTransform;
 		occurrence.localTransform = item.occurrence.localTransform;
-		occurrence.lodBacked = TRUE;
+		occurrence.lodBacked = asset.lodEligible ? TRUE : FALSE;
 		occurrence.sourceMeshRequestValid = FALSE;
 		occurrence.occurrenceIndex =
 		    item.occurrence.occurrenceIndex;
 		occurrence.booleanOperation =
 		    item.occurrence.booleanOperation;
 		occurrence.summary = item.occurrence.summary;
-		occurrence.summary.lodAvailable = TRUE;
+		occurrence.summary.lodAvailable =
+		    asset.lodEligible ? TRUE : FALSE;
 		occurrence.summary.lodActiveLevel =
 		    BOBOL_LOD_QUALITY_PROXY;
 		occurrence.summary.lodFaceCount = asset.faceCount;
@@ -15925,6 +15934,8 @@ compact_stream_publish_parallel_coverage(
 	    if (!item.asset || stream->isCancelled())
 		continue;
 	    compact_coverage_asset &asset = *item.asset;
+	    if (!asset.lodEligible)
+		continue;
 	    std::call_once(asset.realizeOnce, [&]() {
 		bobol_lod_working_set_acquire(
 		    asset.estimatedWorkingSetBytes);
@@ -16162,6 +16173,7 @@ compact_stream_publish_parallel_coverage(
      * are present.
      */
     if (!aggregateBounds.isEmpty()) {
+	stream->setCoverageBounds(aggregateBounds);
 	BObolCompactOccurrence overview =
 	    compact_coverage_overview_occurrence(source, treeName,
 		aggregateBounds, revision);

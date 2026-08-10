@@ -130,6 +130,22 @@ main(int ac, char *av[]) {
     if (draw_test_obol_view_init(gedp, v, 512, 512) != BRLCAD_OK)
 	bu_exit(EXIT_FAILURE, "failed to initialize headless Obol render endpoint\n");
 
+    /*
+     * The shaded controls predate the Studio default and intentionally
+     * describe the historical MGED light rig.  Select that presentation
+     * policy explicitly: this is a selection/placement test, and must not
+     * acquire false failures when the application's default lighting profile
+     * evolves.  The view-state and renderer tests exercise both named
+     * lighting profiles and the Studio default independently.
+     */
+    s_av[0] = "view";
+    s_av[1] = "lighting";
+    s_av[2] = "profile";
+    s_av[3] = "mged";
+    s_av[4] = NULL;
+    if (ged_exec_view(gedp, 4, s_av) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "failed to select deterministic MGED test lighting\n");
+
     s_av[0] = "ae";
     s_av[1] = "35";
     s_av[2] = "25";

@@ -1491,6 +1491,28 @@ mesh_lod_payload_memory_limited_for_epoch(
 }
 
 static void
+mesh_lod_retarget_cad_demand_if_changed(
+    BObolViewLodState *state,
+    const BObolViewLodState::CadPayload *payload,
+    const BObolLodRequest &request)
+{
+    if (!state || !payload)
+	return;
+    /* retargetCadPayload also invalidates a previous capacity-denial
+     * witness.  That is correct for a new demand, but not for the identical
+     * active/requested cut and epoch.  Rewriting identical metadata here
+     * made a budget-blocked pass forget a current memory denial and enqueue
+     * the same sparse frontier forever. */
+    if (payload->requestedLevel == request.requestedLevel &&
+	payload->viewRevision == request.viewRevision &&
+	payload->policyRevision == request.policyRevision)
+	return;
+    (void)state->retargetCadPayload(payload, payload->activeLevel,
+	request.requestedLevel, request.viewRevision.value(),
+	request.policyRevision.value());
+}
+
+static void
 mesh_lod_note_upward_resident_use(
     SoBRLMeshLodSubmitAction *action, const SbString &cacheKey,
     int activeLevel, int nextLevel)
@@ -2508,10 +2530,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    activePayload->activeLevel, retargetLevel,
 		    request.drawMode);
 		if (retargetLevel <= activePayload->activeLevel) {
-		    (void)submitAction->viewState->retargetCadPayload(
-			activePayload, activePayload->activeLevel,
-			request.requestedLevel, request.viewRevision.value(),
-			request.policyRevision.value());
+		    mesh_lod_retarget_cad_demand_if_changed(
+			submitAction->viewState, activePayload, request);
 		    submitAction->pendingRetainedRefinementCount++;
 		    submitAction->skippedMeshCount++;
 		    continue;
@@ -2568,10 +2588,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			activePayload->activeLevel, preferredLevel,
 			request.drawMode);
 		if (providerPresentationLevel <= activePayload->activeLevel) {
-		    (void)submitAction->viewState->retargetCadPayload(
-			activePayload, activePayload->activeLevel,
-			request.requestedLevel, request.viewRevision.value(),
-			request.policyRevision.value());
+		    mesh_lod_retarget_cad_demand_if_changed(
+			submitAction->viewState, activePayload, request);
 		    submitAction->pendingRetainedRefinementCount++;
 		    if (!submitAction->allowResidentPrefetch ||
 			activePayload->progressiveMesh->canDrawLevel(
@@ -2843,9 +2861,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    activePayload->progressiveMesh, activePayload->activeLevel,
 	    retargetLevel, request.drawMode);
 	if (retargetLevel <= activePayload->activeLevel) {
-	    (void)submitAction->viewState->retargetCadPayload(activePayload,
-		activePayload->activeLevel, request.requestedLevel,
-		request.viewRevision.value(), request.policyRevision.value());
+	    mesh_lod_retarget_cad_demand_if_changed(
+		submitAction->viewState, activePayload, request);
 	    submitAction->pendingRetainedRefinementCount++;
 	    submitAction->skippedMeshCount++;
 	    source->doAction(action);
@@ -2899,9 +2916,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    activePayload->progressiveMesh, activePayload->activeLevel,
 	    preferredLevel, request.drawMode);
 	if (providerPresentationLevel <= activePayload->activeLevel) {
-	    (void)submitAction->viewState->retargetCadPayload(activePayload,
-		activePayload->activeLevel, request.requestedLevel,
-		request.viewRevision.value(), request.policyRevision.value());
+	    mesh_lod_retarget_cad_demand_if_changed(
+		submitAction->viewState, activePayload, request);
 	    submitAction->pendingRetainedRefinementCount++;
 	    if (!submitAction->allowResidentPrefetch ||
 		activePayload->progressiveMesh->canDrawLevel(
