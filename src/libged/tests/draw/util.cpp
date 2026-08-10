@@ -681,10 +681,10 @@ dm_refresh(struct ged *gedp)
     struct ged_view_context *v = draw_test_active_view_ctx(gedp);
     if (!v)
 	return;
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    txn.view = v;
-    ged_draw_apply_transaction(gedp, &txn, NULL);
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = v;
+    (void)ged_scene_redraw(gedp, &request, NULL);
 
     BObolViewController *controller = draw_test_endpoint_controller(v);
     if (controller)

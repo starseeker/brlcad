@@ -22,8 +22,7 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/selection_state.h"
-#include "QgObolDrawSyncPrivate.h"
-#include "QgObolSelectionSyncPrivate.h"
+#include "QgSceneSyncPrivate.h"
 #include "qtcad/QgView.h"
 #include "raytrace.h"
 #include "wdb.h"
@@ -91,17 +90,96 @@ make_selection_sync_db(const char *dbpath)
 }
 
 static int
-apply_and_sync(struct ged *gedp,
-	QgView *view,
-	struct ged_draw_transaction *txn)
+scene_result_finish(enum ged_scene_status status,
+	struct ged_scene_result *result, QgView *view)
 {
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int draw_ret = ged_draw_apply_transaction(gedp, txn, &result);
-    int changed = qg_obol_sync_ged_draw_transaction(gedp, txn, &result, view);
-    ged_draw_transaction_result_free(&result);
+    const int changed = result ? ged_scene_result_changed(result) : 0;
+    ged_scene_result_destroy(result);
+    if (status == GED_SCENE_OK && changed && view)
+	view->need_update(QG_VIEW_REFRESH);
+    return status == GED_SCENE_OK && changed;
+}
 
-    return draw_ret >= 0 && changed != 0;
+static int
+draw_scene_path(struct ged *gedp, QgView *view,
+	struct ged_view_context *view_ctx, const char *path,
+	enum ged_scene_draw_mode mode)
+{
+    struct ged_scene_draw_request request;
+    ged_scene_draw_request_init(&request);
+    request.view = view_ctx;
+    request.paths = &path;
+    request.path_count = 1;
+    request.style.draw_mode = mode;
+    request.realization.mode = GED_SCENE_REALIZE_EAGER;
+    struct ged_scene_result *result = ged_scene_result_create();
+    return scene_result_finish(ged_scene_draw(gedp, &request, result),
+	result, view);
+}
+
+static int
+erase_scene_path(struct ged *gedp, QgView *view,
+	struct ged_view_context *view_ctx, const char *path)
+{
+    struct ged_scene_erase_request request;
+    ged_scene_erase_request_init(&request);
+    request.view = view_ctx;
+    request.path = path;
+    struct ged_scene_result *result = ged_scene_result_create();
+    return scene_result_finish(ged_scene_erase(gedp, &request, result),
+	result, view);
+}
+
+static int
+set_scene_path_visibility(struct ged *gedp, QgView *view,
+	struct ged_view_context *view_ctx, const char *path, int visible)
+{
+    struct ged_scene_path_request request;
+    ged_scene_path_request_init(&request);
+    request.view = view_ctx;
+    request.path = path;
+    struct ged_scene_result *result = ged_scene_result_create();
+    return scene_result_finish(ged_scene_visibility_set(gedp, &request,
+	visible, result), result, view);
+}
+
+static int
+refresh_modified_path(struct ged *gedp, QgView *view, const char *path)
+{
+    const int changed = ged_event_notify_object_modified(gedp, path, 1,
+	NULL);
+    if (changed > 0 && view)
+	view->need_update(QG_VIEW_REFRESH);
+    return changed > 0;
+}
+
+static int
+refresh_renamed_path(struct ged *gedp, QgView *view,
+	const char *old_path, const char *new_path)
+{
+    const int changed = ged_event_notify_object_renamed(gedp, old_path,
+	new_path, NULL);
+    if (changed > 0 && view)
+	view->need_update(QG_VIEW_REFRESH);
+    return changed > 0;
+}
+
+static int
+refresh_path_material(struct ged *gedp, QgView *view, const char *path)
+{
+    const int changed = ged_event_notify_object_material_changed(gedp,
+	path, NULL);
+    if (changed > 0 && view)
+	view->need_update(QG_VIEW_REFRESH);
+    return changed > 0;
+}
+
+static int
+refresh_scene_materials(struct ged *gedp, QgView *view)
+{
+    struct ged_scene_result *result = ged_scene_result_create();
+    return scene_result_finish(ged_scene_materials_changed(gedp, result),
+	result, view);
 }
 
 static SoBRLDatabaseSource *
@@ -448,21 +526,15 @@ main(int argc, char **argv)
     if (!controller)
 	FAIL("QgView should expose an Obol controller");
     controller->clearDatabaseSources();
+    if (!qg_scene_bind(gedp, &view))
+	FAIL("qtcad selection test should bind its semantic scene endpoint");
 
-    struct ged_draw_transaction draw_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &draw_box))
+    if (!draw_scene_path(gedp, &view, view_ctx, "box.s",
+	GED_SCENE_DRAW_WIRE))
 	FAIL("GED wire draw should sync box source into Obol");
 
-    struct ged_draw_appearance_settings shaded_appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
-    struct ged_draw_transaction draw_ball =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "ball.s");
-    draw_ball.view = view_ctx;
-    draw_ball.appearance = &shaded_appearance;
-    int drew_ball = apply_and_sync(gedp, &view, &draw_ball);
+    int drew_ball = draw_scene_path(gedp, &view, view_ctx, "ball.s",
+	GED_SCENE_DRAW_SHADED);
     if (!drew_ball)
 	FAIL("GED shaded draw should sync ball source into Obol");
 
@@ -473,25 +545,25 @@ main(int argc, char **argv)
     if (!ball || ball->getCompactInstanceCount() <= 0)
 	FAIL("ball should have realized Obol mesh geometry");
 
-    if (qg_obol_sync_selection_state(gedp, &view, nullptr) != 0)
+    if (ged_selection_draw_sync(gedp, nullptr) != 0)
 	FAIL("empty GED selection should not change unselected Obol geometry");
-    if (qg_obol_sync_selection_state_if_active(gedp, &view, nullptr) != 0)
+    if (ged_selection_draw_sync(gedp, nullptr) != 0)
 	FAIL("draw-triggered selection sync should skip an empty selection");
     if (source_has_selected_shapes(box) || source_has_selected_shapes(ball))
 	FAIL("fresh Obol geometry should start unselected");
 
     if (!ged_selection_select_path(gedp, nullptr, "box.s", 1))
 	FAIL("GED should select box path");
-    if (!qg_obol_sync_selection_state(gedp, &view, nullptr))
+    if (!ged_selection_draw_sync(gedp, nullptr))
 	FAIL("box selection should update Obol selection fields");
     if (!source_has_selected_shapes(box) || source_has_selected_shapes(ball))
 	FAIL("Obol selection should select only box geometry");
-    if (qg_obol_sync_selection_state(gedp, &view, nullptr) != 0)
+    if (ged_selection_draw_sync(gedp, nullptr) != 0)
 	FAIL("repeating selection sync should be stable");
 
     if (!ged_selection_select_path(gedp, nullptr, "ball.s", 1))
 	FAIL("GED should select ball path");
-    if (!qg_obol_sync_selection_state(gedp, &view, nullptr))
+    if (!ged_selection_draw_sync(gedp, nullptr))
 	FAIL("ball selection should update Obol mesh selection fields");
     if (!source_has_selected_shapes(box) || !source_has_selected_shapes(ball))
 	FAIL("Obol selection should retain box and add ball geometry");
@@ -499,7 +571,7 @@ main(int argc, char **argv)
     if (!ged_selection_clear(gedp, nullptr))
 	FAIL("GED should clear default selection");
     ged_selection_recompute(gedp, nullptr);
-    if (!qg_obol_sync_selection_state(gedp, &view, nullptr))
+    if (!ged_selection_draw_sync(gedp, nullptr))
 	FAIL("clearing GED selection should clear Obol selection fields");
     if (source_has_selected_shapes(box) || source_has_selected_shapes(ball))
 	FAIL("Obol selection fields should clear with GED selection");
@@ -520,8 +592,13 @@ main(int argc, char **argv)
     lateSource->path = "box.s";
     lateRoot->addChild(lateSource);
     if (!ged_selection_select_path(gedp, nullptr, "box.s", 1) ||
-	!qg_obol_sync_selection_state(gedp, &view, nullptr))
+	!ged_selection_draw_sync(gedp, nullptr))
 	FAIL("pre-publication selection should be retained by the source");
+    std::vector<SbString> lateAdded = {SbString("box.s")};
+    std::vector<SbString> lateRemoved;
+    if (!lateSource->applyCompactInstanceSelectionDelta(lateAdded,
+	lateRemoved))
+	FAIL("backend publication must retain selection before geometry arrives");
     std::shared_ptr<Obol::PartGeometry> lateGeometry =
 	std::make_shared<Obol::PartGeometry>();
     lateGeometry->shaded.emplace();
@@ -551,7 +628,11 @@ main(int argc, char **argv)
     if (!ged_selection_clear(gedp, nullptr))
 	FAIL("GED should clear the late-publication selection");
     ged_selection_recompute(gedp, nullptr);
-    if (!qg_obol_sync_selection_state(gedp, &view, nullptr) ||
+
+    lateAdded.clear();
+    lateRemoved.push_back(SbString("box.s"));
+    if (!ged_selection_draw_sync(gedp, nullptr) ||
+	!lateSource->applyCompactInstanceSelectionDelta(lateAdded, lateRemoved) ||
 	compact_selected_count(lateSource) != 0)
 	FAIL("late-publication selection should clear normally");
 
@@ -563,6 +644,13 @@ main(int argc, char **argv)
     const char *streamedPaths[] = {
 	"root/z/leaf.s", "root/a/leaf.s", "root/m/leaf.s"
     };
+    if (!lateSource->setCompactInstanceVisibilityOverrideForPathMatch(
+	    "root", BOBOL_COMPACT_PATH_SUBTREE, FALSE) ||
+	!lateSource->setCompactInstanceHighlightOverrideForPathMatch(
+	    "leaf.s", BOBOL_COMPACT_PATH_OBJECT, TRUE) ||
+	!lateSource->setCompactInstanceTransparencyOverrideForPathMatch(
+	    "leaf.s", BOBOL_COMPACT_PATH_OBJECT, 0.6f))
+	FAIL("presentation overrides should be retained before occurrences arrive");
     std::vector<BObolCompactOccurrence> streamedOccurrences;
     for (const char *streamedPath : streamedPaths) {
 	BObolCompactOccurrence streamedOccurrence = lateOccurrence;
@@ -572,6 +660,19 @@ main(int argc, char **argv)
     }
     if (lateSource->mergeCompactOccurrences(streamedOccurrences) != 3)
 	FAIL("out-of-order compact occurrences should append");
+    int styledStreamed = 0;
+    for (int i = 0; i < lateSource->getCompactInstanceCount(); i++) {
+	BObolCompactOccurrence occurrence;
+	if (!lateSource->getCompactOccurrence(i, occurrence) ||
+	    !strstr(occurrence.summary.path.getString(), "root/"))
+	    continue;
+	if (occurrence.summary.visible || !occurrence.summary.highlighted ||
+	    fabsf(occurrence.summary.transparency - 0.6f) > 1.0e-6f)
+	    FAIL("streamed occurrences should inherit retained presentation overrides");
+	styledStreamed++;
+    }
+    if (styledStreamed != 3)
+	FAIL("every streamed occurrence should receive retained presentation state");
     std::vector<SbString> selectedSubtree = {SbString("root")};
     if (!lateSource->syncCompactInstanceSelectedPaths(selectedSubtree) ||
 	compact_selected_count(lateSource) != 3)
@@ -583,10 +684,8 @@ main(int argc, char **argv)
     lateRoot->removeChild(lateSource);
 
     controller->clearDatabaseSources();
-    struct ged_draw_transaction draw_pair =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c");
-    draw_pair.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &draw_pair))
+    if (!draw_scene_path(gedp, &view, view_ctx, "pair.c",
+	GED_SCENE_DRAW_WIRE))
 	FAIL("GED wire draw should publish a compact combination root");
     SoBRLDatabaseSource *pair = find_source(controller, "pair.c");
     if (!pair || !pair->hasCompactInstanceIndex() ||
@@ -707,10 +806,8 @@ main(int argc, char **argv)
 	    independent_box.geometryRevision))
 	FAIL("independent view policy should isolate geometry changes from the shared source");
 
-    struct ged_draw_transaction draw_repeated =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
-    draw_repeated.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &draw_repeated))
+    if (!draw_scene_path(gedp, &view, view_ctx, "repeated.c",
+	GED_SCENE_DRAW_WIRE))
 	FAIL("large repeated draw should publish a compact occurrence registry");
     SoBRLDatabaseSource *repeated = find_source(controller, "repeated.c");
     if (!repeated || !repeated->isCompactOccurrenceRegistry() ||
@@ -843,13 +940,9 @@ main(int argc, char **argv)
     MAT_DELTAS(changed_repeated_leaf->tr_l.tl_mat, 73.0, 19.0, 5.0);
     if (rt_db_put_internal(repeated_dp, gedp->dbip, &repeated_internal) < 0)
 	FAIL("repeated transform edit should update the combination");
-    struct ged_draw_transaction transform_repeated =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "repeated.c");
-    transform_repeated.view = view_ctx;
-    transform_repeated.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
-    if (!apply_and_sync(gedp, &view, &transform_repeated))
+    if (!refresh_modified_path(gedp, &view, "repeated.c"))
 	FAIL("repeated transform edit should reconcile the retained aggregate");
     struct BObolPerformanceCounters repeated_edit_counters;
     bobol_performance_counters_get(&repeated_edit_counters);
@@ -881,8 +974,18 @@ main(int argc, char **argv)
 	repeated_edit_counters.source_replace_calls != 0 ||
 	repeated_edit_counters.sources_visited != 0 ||
 	repeated_edit_counters.sources_realized != 0 ||
-	repeated_edit_counters.cad_compact_sources != 1)
+	repeated_edit_counters.cad_compact_sources != 1) {
+	fprintf(stderr, "localized transform counters: placements=%d plots=%" PRIu64
+	    " wire_misses=%" PRIu64 " replaces=%" PRIu64
+	    " visited=%" PRIu64 " realized=%" PRIu64 " compact=%" PRIu64 "\n",
+	    changed_placements, repeated_edit_counters.plot_calls,
+	    repeated_edit_counters.wire_cache_misses,
+	    repeated_edit_counters.source_replace_calls,
+	    repeated_edit_counters.sources_visited,
+	    repeated_edit_counters.sources_realized,
+	    repeated_edit_counters.cad_compact_sources);
 	FAIL("localized repeated transform should change one placement without geometry work");
+    }
 
     BObolDatabaseSourceSummary repeated_after_summary;
     if (!repeated->getSummary(repeated_after_summary) ||
@@ -944,18 +1047,13 @@ main(int argc, char **argv)
 	    FAIL("cross-view edit should advance exactly one placement per scene");
     }
 
-    struct ged_draw_transaction erase_repeated =
-	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "repeated.c");
-    erase_repeated.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &erase_repeated) ||
+    if (!erase_scene_path(gedp, &view, view_ctx, "repeated.c") ||
 	find_source(controller, "repeated.c"))
 	FAIL("top-level erase should release the primary repeated source");
-    struct ged_draw_transaction redraw_shared_repeated =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
-    redraw_shared_repeated.view = view_ctx;
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
-    if (!apply_and_sync(gedp, &view, &redraw_shared_repeated))
+    if (!draw_scene_path(gedp, &view, view_ctx, "repeated.c",
+	GED_SCENE_DRAW_WIRE))
 	FAIL("shared-resident repeated source should redraw");
     struct BObolPerformanceCounters shared_residency_counters;
     bobol_performance_counters_get(&shared_residency_counters);
@@ -964,21 +1062,16 @@ main(int argc, char **argv)
 	shared_residency_counters.wire_cache_misses != 0)
 	FAIL("remaining view owners should retain shared repository geometry");
 
-    struct ged_draw_transaction erase_repeated_again =
-	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "repeated.c");
-    erase_repeated_again.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &erase_repeated_again) ||
+    if (!erase_scene_path(gedp, &view, view_ctx, "repeated.c") ||
 	independent_scene.removeDatabaseSourceInstance(
 	    repeated_after_summary.instanceKey.getString()) <= 0 ||
 	third_scene.removeDatabaseSourceInstance(
 	    repeated_after_summary.instanceKey.getString()) <= 0)
 	FAIL("last-owner test should erase the repeated source from every view");
-    struct ged_draw_transaction redraw_evicted_repeated =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
-    redraw_evicted_repeated.view = view_ctx;
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
-    if (!apply_and_sync(gedp, &view, &redraw_evicted_repeated))
+    if (!draw_scene_path(gedp, &view, view_ctx, "repeated.c",
+	GED_SCENE_DRAW_WIRE))
 	FAIL("last-owner-evicted repeated source should redraw");
     struct BObolPerformanceCounters evicted_residency_counters;
     bobol_performance_counters_get(&evicted_residency_counters);
@@ -1001,16 +1094,10 @@ main(int argc, char **argv)
 	camera_only_counters.plot_calls != 0)
 	FAIL("camera-only updates should not publish or realize database sources");
 
-    struct ged_draw_transaction erase_repeated_for_lod =
-	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "repeated.c");
-    erase_repeated_for_lod.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &erase_repeated_for_lod))
+    if (!erase_scene_path(gedp, &view, view_ctx, "repeated.c"))
 	FAIL("large compact LoD test should replace the wire representation");
-    struct ged_draw_transaction draw_repeated_shaded =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
-    draw_repeated_shaded.view = view_ctx;
-    draw_repeated_shaded.appearance = &shaded_appearance;
-    if (!apply_and_sync(gedp, &view, &draw_repeated_shaded))
+    if (!draw_scene_path(gedp, &view, view_ctx, "repeated.c",
+	GED_SCENE_DRAW_SHADED))
 	FAIL("large compact LoD test should publish a shaded aggregate");
     SoBRLDatabaseSource *repeated_shaded =
 	find_source(controller, "repeated.c");
@@ -1022,7 +1109,7 @@ main(int argc, char **argv)
     const uint64_t lod_revision_before_selection =
 	pair->getDisplayMeshLodRevision();
     if (!ged_selection_select_path(gedp, nullptr, "pair.c/box.s", 1) ||
-	!qg_obol_sync_selection_state(gedp, &view, nullptr))
+	!ged_selection_draw_sync(gedp, nullptr))
 	FAIL("nested GED selection should update the aggregate occurrence");
     if (pair->getDisplayMeshLodRevision() !=
 	lod_revision_before_selection)
@@ -1046,11 +1133,8 @@ main(int argc, char **argv)
 
     const uint64_t lod_revision_before_visibility =
 	pair->getDisplayMeshLodRevision();
-    struct ged_draw_transaction hide_box =
-	ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
-	    "pair.c/box.s", 0.0);
-    hide_box.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &hide_box))
+    if (!set_scene_path_visibility(gedp, &view, view_ctx,
+	"pair.c/box.s", 0))
 	FAIL("nested visibility transaction should address aggregate geometry");
     int hidden_count = compact_hidden_count(pair);
     if (hidden_count != 1)
@@ -1080,26 +1164,18 @@ main(int argc, char **argv)
 	FAIL("nested visibility should advance only the occurrence visibility revision");
     }
 
-    struct ged_draw_transaction show_box =
-	ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
-	    "pair.c/box.s", 1.0);
-    show_box.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &show_box))
+    if (!set_scene_path_visibility(gedp, &view, view_ctx,
+	"pair.c/box.s", 1))
 	FAIL("nested visibility restore should address aggregate geometry");
 
-    struct ged_draw_transaction erase_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "pair.c/box.s");
-    erase_box.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &erase_box))
+    if (!erase_scene_path(gedp, &view, view_ctx, "pair.c/box.s"))
 	FAIL("nested erase should address aggregate geometry");
     hidden_count = compact_hidden_count(pair);
     if (hidden_count != 1)
 	FAIL("nested erase should hide exactly one aggregate occurrence");
 
-    struct ged_draw_transaction redraw_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c/box.s");
-    redraw_box.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &redraw_box))
+    if (!draw_scene_path(gedp, &view, view_ctx, "pair.c/box.s",
+	GED_SCENE_DRAW_WIRE))
 	FAIL("nested draw should restore aggregate geometry");
     hidden_count = compact_hidden_count(pair);
     if (hidden_count != 0)
@@ -1110,13 +1186,9 @@ main(int argc, char **argv)
     if (!compact_summary_for_path(pair, "box.s", box_handle, box_before) ||
 	!compact_summary_for_path(pair, "ball.s", ball_handle, ball_before))
 	FAIL("aggregate refresh test should resolve stable occurrence handles");
-    struct ged_draw_transaction stale_pair_style =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    stale_pair_style.view = view_ctx;
-    stale_pair_style.stale_reason = GED_DRAW_STALE_SETTINGS_CHANGED;
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
-    if (!apply_and_sync(gedp, &view, &stale_pair_style))
+    if (!refresh_modified_path(gedp, &view, "pair.c"))
 	FAIL("style revision should republish aggregate instance state");
     struct BObolPerformanceCounters style_counters;
     bobol_performance_counters_get(&style_counters);
@@ -1164,11 +1236,7 @@ main(int argc, char **argv)
     if (rt_db_put_internal(box_dp, gedp->dbip, &box_internal) < 0)
 	FAIL("aggregate refresh test should update the box primitive");
 
-    struct ged_draw_transaction stale_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "box.s");
-    stale_box.view = view_ctx;
-    stale_box.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
-    if (!apply_and_sync(gedp, &view, &stale_box))
+    if (!refresh_modified_path(gedp, &view, "box.s"))
 	FAIL("primitive edit should refresh the matching compact part");
     BObolCompactInstanceSummary box_after;
     BObolCompactInstanceSummary ball_after;
@@ -1243,13 +1311,9 @@ main(int argc, char **argv)
     comb->tree = new_root;
     if (rt_db_put_internal(pair_dp, gedp->dbip, &pair_internal) < 0)
 	FAIL("aggregate structural refresh should append a combination member");
-    struct ged_draw_transaction stale_pair =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    stale_pair.view = view_ctx;
-    stale_pair.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
-    if (!apply_and_sync(gedp, &view, &stale_pair))
+    if (!refresh_modified_path(gedp, &view, "pair.c"))
 	FAIL("combination edit should rebuild the compact occurrence diff");
     struct BObolPerformanceCounters structural_counters;
     bobol_performance_counters_get(&structural_counters);
@@ -1298,11 +1362,7 @@ main(int argc, char **argv)
     if (rt_db_put_internal(pair_dp, gedp->dbip, &pair_internal) < 0)
 	FAIL("transform diff should update the combination occurrence");
 
-    struct ged_draw_transaction transform_pair =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    transform_pair.view = view_ctx;
-    transform_pair.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
-    if (!apply_and_sync(gedp, &view, &transform_pair))
+    if (!refresh_modified_path(gedp, &view, "pair.c"))
 	FAIL("combination transform should reconcile retained occurrences");
     pair = find_source(controller, "pair.c");
     BObolCompactInstanceSummary box_structure_after;
@@ -1344,14 +1404,8 @@ main(int argc, char **argv)
     (void)ged_selection_clear(gedp, nullptr);
     ged_selection_recompute(gedp, nullptr);
     controller->clearDatabaseSources();
-    struct ged_draw_appearance_settings pair_shaded_appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    pair_shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
-    struct ged_draw_transaction draw_pair_shaded =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c");
-    draw_pair_shaded.view = view_ctx;
-    draw_pair_shaded.appearance = &pair_shaded_appearance;
-    if (!apply_and_sync(gedp, &view, &draw_pair_shaded))
+    if (!draw_scene_path(gedp, &view, view_ctx, "pair.c",
+	GED_SCENE_DRAW_SHADED))
 	FAIL("GED shaded draw should publish a compact combination root");
     pair = find_source(controller, "pair.c");
     if (!pair || !pair->isCompactOccurrenceRegistry() ||
@@ -1368,7 +1422,7 @@ main(int argc, char **argv)
     if (pair->hasDisplayMeshLodRequests())
 	FAIL("terminal analytic meshes must not enter PoP LoD scheduling");
     if (!ged_selection_select_path(gedp, nullptr, "pair.c/ball.s", 1) ||
-	!qg_obol_sync_selection_state(gedp, &view, nullptr))
+	!ged_selection_draw_sync(gedp, nullptr))
 	FAIL("nested shaded selection should update the aggregate occurrence");
     selected_count = compact_selected_count(pair);
     if (selected_count != 1)
@@ -1400,13 +1454,9 @@ main(int argc, char **argv)
     MAT_DELTAS(extra_leaf->tr_l.tl_mat, 0.0, 0.0, 2.0);
     if (rt_db_put_internal(pair_dp, gedp->dbip, &pair_internal) < 0)
 	FAIL("shaded transform diff should update the combination occurrence");
-    struct ged_draw_transaction transform_shaded_pair =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    transform_shaded_pair.view = view_ctx;
-    transform_shaded_pair.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
-    if (!apply_and_sync(gedp, &view, &transform_shaded_pair))
+    if (!refresh_modified_path(gedp, &view, "pair.c"))
 	FAIL("shaded transform should reconcile retained mesh occurrences");
     struct BObolPerformanceCounters shaded_structural_counters;
     bobol_performance_counters_get(&shaded_structural_counters);
@@ -1453,11 +1503,7 @@ main(int argc, char **argv)
     VSCALE(ell->c, ell->c, 1.5);
     if (rt_db_put_internal(ball_dp, gedp->dbip, &ball_internal) < 0)
 	FAIL("shaded refresh test should update the sphere primitive");
-    struct ged_draw_transaction stale_ball =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "ball.s");
-    stale_ball.view = view_ctx;
-    stale_ball.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
-    if (!apply_and_sync(gedp, &view, &stale_ball))
+    if (!refresh_modified_path(gedp, &view, "ball.s"))
 	FAIL("shaded primitive edit should refresh the matching compact part");
     if (!pair->isCompactInstanceHandleValid(box_handle) ||
 	!pair->isCompactInstanceHandleValid(ball_handle) ||
@@ -1471,14 +1517,8 @@ main(int argc, char **argv)
     (void)ged_selection_clear(gedp, nullptr);
     ged_selection_recompute(gedp, nullptr);
     controller->clearDatabaseSources();
-    struct ged_draw_appearance_settings pair_hidden_appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    pair_hidden_appearance.draw_mode = GED_DRAW_MODE_HIDDEN_LINE;
-    struct ged_draw_transaction draw_pair_hidden =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c");
-    draw_pair_hidden.view = view_ctx;
-    draw_pair_hidden.appearance = &pair_hidden_appearance;
-    if (!apply_and_sync(gedp, &view, &draw_pair_hidden))
+    if (!draw_scene_path(gedp, &view, view_ctx, "pair.c",
+	GED_SCENE_DRAW_HIDDEN_LINE))
 	FAIL("GED hidden-line draw should publish a compact combination root");
     pair = find_source(controller, "pair.c");
     if (!pair || !pair->isCompactOccurrenceRegistry() ||
@@ -1488,7 +1528,7 @@ main(int argc, char **argv)
 	pair->getCompiledAssemblyInstanceCount() != 3)
 	FAIL("hidden-line pair should compile three addressable mesh occurrences");
     if (!ged_selection_select_path(gedp, nullptr, "pair.c/box.s", 1) ||
-	!qg_obol_sync_selection_state(gedp, &view, nullptr))
+	!ged_selection_draw_sync(gedp, nullptr))
 	FAIL("nested hidden-line selection should update the aggregate occurrence");
     selected_count = compact_selected_count(pair);
     if (selected_count != 1)
@@ -1516,13 +1556,9 @@ main(int argc, char **argv)
 	FAIL("hidden-line removal diff should remove the extra occurrence");
     if (rt_db_put_internal(pair_dp, gedp->dbip, &pair_internal) < 0)
 	FAIL("hidden-line removal diff should update the combination");
-    struct ged_draw_transaction remove_hidden_member =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    remove_hidden_member.view = view_ctx;
-    remove_hidden_member.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
-    if (!apply_and_sync(gedp, &view, &remove_hidden_member))
+    if (!refresh_modified_path(gedp, &view, "pair.c"))
 	FAIL("hidden-line member removal should reconcile retained occurrences");
     struct BObolPerformanceCounters hidden_remove_counters;
     bobol_performance_counters_get(&hidden_remove_counters);
@@ -1555,13 +1591,9 @@ main(int argc, char **argv)
     orb_leaf->tr_l.tl_name = bu_strdup("orb.s");
     if (rt_db_put_internal(pair_dp, gedp->dbip, &pair_internal) < 0)
 	FAIL("hidden-line rename diff should update the combination reference");
-    struct ged_draw_transaction rename_hidden_member =
-	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_RENAMED, "ball.s");
-    rename_hidden_member.new_path = "orb.s";
-    rename_hidden_member.view = view_ctx;
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
-    if (!apply_and_sync(gedp, &view, &rename_hidden_member))
+    if (!refresh_renamed_path(gedp, &view, "ball.s", "orb.s"))
 	FAIL("hidden-line member rename should reconcile retained occurrences");
     struct BObolPerformanceCounters hidden_rename_counters;
     bobol_performance_counters_get(&hidden_rename_counters);
@@ -1596,18 +1628,11 @@ main(int argc, char **argv)
     comb->rgb[2] = 34;
     if (rt_db_put_internal(pair_dp, gedp->dbip, &pair_internal) < 0)
 	FAIL("aggregate material update should write the combination color");
-    struct ged_draw_transaction material_pair =
-	ged_draw_transaction_make(GED_DRAW_TXN_MATERIAL_CHANGED, "pair.c");
-    material_pair.view = view_ctx;
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
-    if (!apply_and_sync(gedp, &view, &material_pair))
+    if (!refresh_path_material(gedp, &view, "pair.c"))
 	FAIL("aggregate material transaction should advance retained material state");
-    struct ged_draw_transaction refresh_pair_material =
-	ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS,
-	    "pair.c");
-    refresh_pair_material.view = view_ctx;
-    if (!apply_and_sync(gedp, &view, &refresh_pair_material))
+    if (!refresh_scene_materials(gedp, &view))
 	FAIL("aggregate material refresh should update retained style");
     struct BObolPerformanceCounters material_counters;
     bobol_performance_counters_get(&material_counters);

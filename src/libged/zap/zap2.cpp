@@ -35,10 +35,15 @@
 static int
 zap_draw_db_scope(struct ged *gedp, struct ged_view_context *view_ctx)
 {
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR_SCOPE, NULL);
-    txn.view = view_ctx;
-    return ged_draw_apply_transaction(gedp, &txn, NULL);
+    struct ged_scene_clear_request request;
+    ged_scene_clear_request_init(&request);
+    request.scope = GED_SCENE_CLEAR_VIEW;
+    request.view = view_ctx;
+    struct ged_scene_result *result = ged_scene_result_create();
+    enum ged_scene_status status = ged_scene_clear(gedp, &request, result);
+    int changed = result ? ged_scene_result_changed(result) : 0;
+    ged_scene_result_destroy(result);
+    return status == GED_SCENE_OK ? changed : -1;
 }
 
 
@@ -182,9 +187,9 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (full_canonical_clear) {
-	struct ged_draw_transaction txn =
-	    ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
-	(void)ged_draw_apply_transaction(gedp, &txn, NULL);
+	struct ged_scene_clear_request request;
+	ged_scene_clear_request_init(&request);
+	(void)ged_scene_clear(gedp, &request, NULL);
     }
 
     bu_vls_free(&cvls);

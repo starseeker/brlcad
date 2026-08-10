@@ -23,7 +23,6 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "icv.h"
-#include "QgObolDrawSyncPrivate.h"
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgObolPick.h"
 #include "qtcad/QgObolSnap.h"
@@ -904,34 +903,37 @@ sync_draw_case(const struct model_case &testCase)
     QImage emptyImage;
     view.get_viewport_image(emptyImage);
 
-    struct ged_draw_appearance_settings appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    appearance.draw_mode = testCase.gedDrawMode;
-    appearance.defer_leaf_expansion = testCase.deferLeafExpansion;
-    appearance.strict_fallback = testCase.strictFallback;
+    const char *draw_path = testCase.root;
+    struct ged_scene_draw_request draw_request;
+    ged_scene_draw_request_init(&draw_request);
+    draw_request.view = view_ctx;
+    draw_request.paths = &draw_path;
+    draw_request.path_count = 1;
+    draw_request.style.draw_mode =
+	static_cast<enum ged_scene_draw_mode>(testCase.gedDrawMode);
+    draw_request.realization.mode = testCase.deferLeafExpansion ?
+	GED_SCENE_REALIZE_PROGRESSIVE : GED_SCENE_REALIZE_EAGER;
+    draw_request.realization.strict = testCase.strictFallback;
 
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, testCase.root);
-    txn.view = view_ctx;
-    txn.appearance = &appearance;
-
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
+    struct ged_scene_result *result = ged_scene_result_create();
     int64_t phaseStart = bu_gettime();
-    int drawRet = ged_draw_apply_transaction(gedp, &txn, &result);
+    int drawRet = ged_scene_draw(gedp, &draw_request, result) ==
+	GED_SCENE_OK ? 1 : -1;
     print_timing(testCase, "ged-draw-transaction", phaseStart);
     phaseStart = bu_gettime();
-    int changed = qg_obol_sync_ged_draw_transaction(gedp, &txn, &result, &view);
+    int changed = ged_scene_result_changed(result);
+    if (changed)
+	view.need_update(QG_VIEW_REFRESH);
     print_timing(testCase, "obol-sync-transaction", phaseStart);
     if (drawRet < 0) {
-	const char *drawErrors = bu_vls_cstr(&result.errors);
+	const char *drawErrors = ged_scene_result_diagnostic(result);
 	fprintf(stderr, "%s:%s GED draw failed: %s\n", testCase.file,
 		testCase.root, drawErrors ? drawErrors : "");
-	ged_draw_transaction_result_free(&result);
+	ged_scene_result_destroy(result);
 	ged_close(gedp);
 	return 0;
     }
-    ged_draw_transaction_result_free(&result);
+    ged_scene_result_destroy(result);
 
     /* QgView endpoints use the same deferred publication boundary as the
      * interactive canvas.  Drain it explicitly before inspecting geometry. */
@@ -1298,19 +1300,18 @@ sync_draw_case(const struct model_case &testCase)
      * races legitimate follow-up requests from presentation synchronization
      * and contradicts the canvas-controller contract. */
 
-    struct ged_draw_transaction redrawTxn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    redrawTxn.view = view_ctx;
-    struct ged_draw_transaction_result redrawResult;
-    ged_draw_transaction_result_init(&redrawResult);
+    struct ged_scene_redraw_request redraw_request;
+    ged_scene_redraw_request_init(&redraw_request);
+    redraw_request.view = view_ctx;
+    struct ged_scene_result *redraw_result = ged_scene_result_create();
     phaseStart = bu_gettime();
-    int redrawRet = ged_draw_apply_transaction(gedp, &redrawTxn,
-	&redrawResult);
-    (void)qg_obol_sync_ged_draw_transaction(gedp, &redrawTxn,
-	&redrawResult, &view);
+    int redrawRet = ged_scene_redraw(gedp, &redraw_request,
+	redraw_result) == GED_SCENE_OK ? 1 : -1;
+    if (ged_scene_result_changed(redraw_result))
+	view.need_update(QG_VIEW_REFRESH);
     int64_t redrawUs = bu_gettime() - phaseStart;
     print_timing(testCase, "redraw-transaction", phaseStart);
-    ged_draw_transaction_result_free(&redrawResult);
+    ged_scene_result_destroy(redraw_result);
     QCoreApplication::processEvents();
     QImage redrawnImage;
     view.get_viewport_image(redrawnImage);
@@ -1318,15 +1319,14 @@ sync_draw_case(const struct model_case &testCase)
 	(void)redrawnImage.save(
 	    QString::fromUtf8(capturePath) + QStringLiteral(".redraw1.png"));
 
-    struct ged_draw_transaction_result secondRedrawResult;
-    ged_draw_transaction_result_init(&secondRedrawResult);
+    struct ged_scene_result *second_redraw_result = ged_scene_result_create();
     int64_t secondRedrawStart = bu_gettime();
-    int secondRedrawRet = ged_draw_apply_transaction(gedp, &redrawTxn,
-	&secondRedrawResult);
-    (void)qg_obol_sync_ged_draw_transaction(gedp, &redrawTxn,
-	&secondRedrawResult, &view);
+    int secondRedrawRet = ged_scene_redraw(gedp, &redraw_request,
+	second_redraw_result) == GED_SCENE_OK ? 1 : -1;
+    if (ged_scene_result_changed(second_redraw_result))
+	view.need_update(QG_VIEW_REFRESH);
     int64_t secondRedrawUs = bu_gettime() - secondRedrawStart;
-    ged_draw_transaction_result_free(&secondRedrawResult);
+    ged_scene_result_destroy(second_redraw_result);
     QCoreApplication::processEvents();
     QImage secondRedrawnImage;
     view.get_viewport_image(secondRedrawnImage);
@@ -1379,21 +1379,12 @@ sync_draw_case(const struct model_case &testCase)
 static int
 sync_material_refresh_to_view(struct ged *gedp, QgView &view)
 {
-    /* Direct librt mutations bypass GED's material-change event.  Advance the
-     * synchronization stamp explicitly before requesting a recolor sweep. */
-    ged_draw_bump_material_revision(gedp);
-    struct ged_view_context *view_ctx =
-	ged_view_context_from_bv(view.viewContext());
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS, NULL);
-    txn.view = view_ctx;
-
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int changed = ged_draw_apply_transaction(gedp, &txn, &result) > 0;
+    struct ged_scene_result *result = ged_scene_result_create();
+    int changed = ged_scene_materials_changed(gedp, result) ==
+	GED_SCENE_OK && ged_scene_result_changed(result);
     if (changed)
 	view.need_update(QG_VIEW_REFRESH);
-    ged_draw_transaction_result_free(&result);
+    ged_scene_result_destroy(result);
     return changed;
 }
 
@@ -1477,30 +1468,30 @@ exercise_m35_color_table_mutation(void)
     controller->clearDatabaseSources();
     report_phase("setup");
 
-    struct ged_draw_appearance_settings appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    appearance.draw_mode = GED_DRAW_MODE_WIRE;
-
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "all.g");
-    txn.view = view_ctx;
-    txn.appearance = &appearance;
-
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int drawRet = ged_draw_apply_transaction(gedp, &txn, &result);
+    const char *all_path = "all.g";
+    struct ged_scene_draw_request draw_request;
+    ged_scene_draw_request_init(&draw_request);
+    draw_request.view = view_ctx;
+    draw_request.paths = &all_path;
+    draw_request.path_count = 1;
+    draw_request.style.draw_mode = GED_SCENE_DRAW_WIRE;
+    draw_request.realization.mode = GED_SCENE_REALIZE_EAGER;
+    struct ged_scene_result *result = ged_scene_result_create();
+    int drawRet = ged_scene_draw(gedp, &draw_request, result) ==
+	GED_SCENE_OK ? 1 : -1;
     report_phase("draw-transaction");
-    int changed = qg_obol_sync_ged_draw_transaction(gedp, &txn, &result,
-	    &view);
+    int changed = ged_scene_result_changed(result);
+    if (changed)
+	view.need_update(QG_VIEW_REFRESH);
     if (drawRet < 0 || !changed) {
 	fprintf(stderr, "m35 color-table draw/sync failed: draw=%d changed=%d errors=%s\n",
-		drawRet, changed, bu_vls_cstr(&result.errors));
-	ged_draw_transaction_result_free(&result);
+		drawRet, changed, ged_scene_result_diagnostic(result));
+	ged_scene_result_destroy(result);
 	ged_close(gedp);
 	bu_file_delete(tmp_db);
 	return 0;
     }
-    ged_draw_transaction_result_free(&result);
+    ged_scene_result_destroy(result);
     report_phase("initial-draw");
 
     BObolSceneController render_scene(controller->getRenderSceneRoot());

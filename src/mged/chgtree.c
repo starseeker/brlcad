@@ -266,7 +266,8 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     }
 
     /* Common part of illumination */
-    if (!ged_draw_has_shapes(s->gedp)) {
+    if (!ged_scene_has_paths(s->gedp, ged_view_active_ctx(s->gedp),
+	    GED_SCENE_DRAW_DEFAULT)) {
 	Tcl_AppendResult(interp, "no solids in view", (char *)NULL);
 	return TCL_ERROR;
     }
@@ -323,7 +324,7 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     /* Find the matching displayed shape and make its draw ref the highlighted edit target. */
     ged_draw_shape_ref highlighted_shape = find_solid_ref_with_path(s, &both);
     if (ged_draw_shape_ref_is_null(highlighted_shape) &&
-	mged_edit_promote_target(s, &both, GED_DRAW_PROMOTE_EXACT_OCCURRENCE)) {
+	mged_edit_scope_acquire(s, &both, GED_SCENE_EDIT_EXACT_OCCURRENCE)) {
 	/* Target is a sub-object of a drawn comb: libged promoted its exact
 	 * occurrence to the draw frontier. */
 	highlighted_shape = find_solid_ref_with_path(s, &both);

@@ -482,15 +482,11 @@ private:
 				   bool terminal_subtree = true);
 	void notifyDrawnItemsChanged();
 	void notifyDrawnPathChanged(const char *path);
-	void notifyDrawnTransactionChanged(
-					   const void *result_ctx,
-					   const char *fallback_path);
+	void notifyDrawnTransactionChanged(const void *delta_ctx);
 	void flushPendingDrawNotifications();
-	void handleDrawTransactionEvent(
-					const void *txn_ctx,
-					const void *result_ctx);
+	void handleDrawTransactionEvent(const void *delta_ctx);
 	void recordPendingDatabaseEventPaths(const struct ged_event_txn_result *result);
-	void notifyPendingDatabaseEventItemsChanged(bool terminal_subtree);
+	void notifyPendingDatabaseEventItemsChanged();
 	void flushPendingDatabaseEventNotifications();
 	void handleDatabaseEventTxn(const struct ged_event *events,
 				    size_t event_count,
@@ -550,7 +546,6 @@ private:
 	int pending_db_event_force_reset = 0;
 	int pending_db_event_metadata_only = 0;
 	int pending_db_event_all = 0;
-	int pending_db_event_terminal_subtree = 0;
 	std::vector<std::string> pending_db_event_paths;
 };
 

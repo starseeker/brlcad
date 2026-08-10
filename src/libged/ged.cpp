@@ -406,7 +406,7 @@ ged_free(struct ged *gedp)
 		qray_free(gedp->i->ged_gdp);
 		ged_draw_obol_context_tokens_free(gedp);
 		ged_draw_obol_scene_controller_detach(gedp);
-		ged_draw_observers_free(gedp);
+		ged_scene_observers_free(gedp);
 		ged_draw_registry_free(gedp);
 		BU_PUT(gedp->i->ged_gdp, struct ged_drawable);
 	    }

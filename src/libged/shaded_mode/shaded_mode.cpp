@@ -56,8 +56,9 @@ ged_shaded_mode_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     /* get shaded mode */
+
     if (argc == 1) {
-	int mode = ged_draw_default_mode(gedp);
+	int mode = (int)ged_scene_default_draw_mode(gedp);
 	bu_vls_printf(gedp->ged_result_str, "%d", mode);
 	return BRLCAD_OK;
     }
@@ -72,10 +73,8 @@ ged_shaded_mode_core(struct ged *gedp, int argc, const char *argv[])
 	if (shaded_mode < 0 || 2 < shaded_mode)
 	    goto bad;
 
-	struct ged_draw_transaction txn =
-	    ged_draw_transaction_make_value(GED_DRAW_TXN_DEFAULT_DRAW_MODE,
-					    NULL, (double)shaded_mode);
-	ged_draw_apply_transaction(gedp, &txn, NULL);
+	(void)ged_scene_default_draw_mode_set(gedp,
+	    (enum ged_scene_draw_mode)shaded_mode, NULL);
 	return BRLCAD_OK;
     }
 

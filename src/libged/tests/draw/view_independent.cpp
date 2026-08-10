@@ -53,7 +53,8 @@ drawn_paths(struct ged *gedp, struct ged_view_context *v)
 {
     std::vector<std::string> ret;
     struct bu_vls paths = BU_VLS_INIT_ZERO;
-    ged_draw_list_paths(gedp, v, -1, 0, &paths);
+    ged_scene_paths_append(gedp, v, GED_SCENE_DRAW_DEFAULT,
+	GED_SCENE_PATHS_DRAW_INTENTS, &paths);
 
     const char *s = bu_vls_cstr(&paths);
     const char *start = s;
@@ -117,8 +118,10 @@ draw_shared(struct ged *gedp, const char *path)
 static int
 draw_shared_autoview(struct ged *gedp, const char *path)
 {
-    const char *av[3] = {"draw", path, NULL};
-    return ged_exec_draw(gedp, 2, av);
+    /* This test owns no render loop, so make its autoview assertion about the
+     * view-scope contract rather than asynchronous progressive scheduling. */
+    const char *av[4] = {"draw", "--eager-leaf-expansion", path, NULL};
+    return ged_exec_draw(gedp, 3, av);
 }
 
 static int

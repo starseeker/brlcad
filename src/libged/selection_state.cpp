@@ -23,6 +23,7 @@
 
 #include "common.h"
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <set>
@@ -37,10 +38,13 @@
 
 #include "./ged_draw_view_private.h"
 #include "./ged_private.h"
+#include "./ged_scene_backend_private.h"
 
 
 struct ged_native_selection_set {
     std::set<std::string> selected_paths;
+    std::set<std::string> synced_paths;
+    uint64_t synced_scene_revision = 0;
     mutable int index_current = 0;
     mutable std::set<ged_db_index_id> selected_path_hashes;
     mutable std::set<ged_db_index_id> active_path_hashes;
@@ -934,75 +938,6 @@ ged_selection_native_hash(const ged_native_selection_set *set)
 }
 
 
-struct ged_selection_native_view_snapshot_ctx {
-    std::map<void *, std::set<std::string>> *snapshot;
-};
-
-
-static int
-ged_selection_native_view_snapshot_cb(struct ged_view_context *view_ctx,
-				      const char *path,
-				      void *data)
-{
-    struct ged_selection_native_view_snapshot_ctx *ctx =
-	(struct ged_selection_native_view_snapshot_ctx *)data;
-    if (!ctx || !ctx->snapshot || !view_ctx || !path || !path[0])
-	return 1;
-
-    (*ctx->snapshot)[view_ctx].insert(ged_selection_canonical_path(path));
-    return 1;
-}
-
-
-static void
-ged_selection_native_view_snapshot(struct ged *gedp,
-				   std::map<void *, std::set<std::string>> &snapshot)
-{
-    if (!gedp)
-	return;
-
-    struct ged_selection_native_view_snapshot_ctx ctx;
-    ctx.snapshot = &snapshot;
-
-    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-    for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
-	struct ged_view_context *view_ctx =
-	    (struct ged_view_context *)BU_PTBL_GET(views, i);
-	ged_view_selection_visit(view_ctx,
-		ged_selection_native_view_snapshot_cb, &ctx);
-    }
-}
-
-
-struct ged_selection_native_draw_sync_ctx {
-    struct ged *gedp;
-    const ged_native_selection_set *set;
-    std::map<void *, std::set<std::string>> *new_selection;
-    int display_changed;
-};
-
-
-static void
-ged_selection_native_add_path_to_views(
-	struct ged_selection_native_draw_sync_ctx *ctx,
-	const std::string &path)
-{
-    if (!ctx || !ctx->gedp || !ctx->new_selection || path.empty())
-	return;
-
-    struct bu_ptbl *views = ged_view_set_views_ctx(ctx->gedp);
-    for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
-	struct ged_view_context *view_ctx =
-	    (struct ged_view_context *)BU_PTBL_GET(views, i);
-	if (!view_ctx)
-	    continue;
-	if (ged_selection_add_path(view_ctx,
-		GED_SELECTION_SELECTED_PATH, path.c_str()) > 0)
-	    (*ctx->new_selection)[view_ctx].insert(path);
-    }
-}
-
-
 static int
 ged_selection_native_draw_sync(struct ged *gedp,
 			       const ged_native_selection_set *set)
@@ -1010,35 +945,71 @@ ged_selection_native_draw_sync(struct ged *gedp,
     if (!gedp || !set)
 	return 0;
 
-    std::map<void *, std::set<std::string>> old_selection;
-    std::map<void *, std::set<std::string>> new_selection;
-    ged_selection_native_view_snapshot(gedp, old_selection);
+    ged_native_selection_set *mutable_set =
+	const_cast<ged_native_selection_set *>(set);
+    std::vector<std::string> added;
+    std::vector<std::string> removed;
+    std::set_difference(set->selected_paths.begin(), set->selected_paths.end(),
+	set->synced_paths.begin(), set->synced_paths.end(),
+	std::back_inserter(added));
+    std::set_difference(set->synced_paths.begin(), set->synced_paths.end(),
+	set->selected_paths.begin(), set->selected_paths.end(),
+	std::back_inserter(removed));
 
+    const uint64_t scene_revision = ged_draw_scene_revision(gedp);
+    if (scene_revision != set->synced_scene_revision) {
+	/* Newly drawn sources must inherit retained semantic selection even when
+	 * the selection itself did not change.  Indexed source routing keeps this
+	 * proportional to selected paths, not total scene size. */
+	for (const std::string &path : set->selected_paths) {
+	    if (std::find(added.begin(), added.end(), path) == added.end())
+		added.push_back(path);
+	}
+    }
+
+    int changed = 0;
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
 	struct ged_view_context *view_ctx =
 	    (struct ged_view_context *)BU_PTBL_GET(views, i);
-	ged_view_selection_clear(view_ctx);
+	if (!view_ctx)
+	    continue;
+	for (const std::string &path : removed) {
+	    if (ged_selection_remove_path(view_ctx,
+		    GED_SELECTION_SELECTED_PATH, path.c_str()))
+		changed = 1;
+	}
+	for (const std::string &path : added) {
+	    if (ged_selection_add_path(view_ctx,
+		    GED_SELECTION_SELECTED_PATH, path.c_str()))
+		changed = 1;
+	}
     }
 
-    struct ged_selection_native_draw_sync_ctx ctx;
-    ctx.gedp = gedp;
-    ctx.set = set;
-    ctx.new_selection = &new_selection;
-    ctx.display_changed = 0;
-
+    std::vector<const char *> added_paths;
+    std::vector<const char *> removed_paths;
     std::vector<const char *> selected_paths;
+    added_paths.reserve(added.size());
+    removed_paths.reserve(removed.size());
     selected_paths.reserve(set->selected_paths.size());
-    for (const std::string &path : set->selected_paths) {
+    for (const std::string &path : added)
+	added_paths.push_back(path.c_str());
+    for (const std::string &path : removed)
+	removed_paths.push_back(path.c_str());
+    for (const std::string &path : set->selected_paths)
 	selected_paths.push_back(path.c_str());
-	ged_selection_native_add_path_to_views(&ctx, path);
-    }
-    if (ged_draw_obol_database_sources_sync_selected_paths(gedp,
+    if ((!added_paths.empty() || !removed_paths.empty()) &&
+	ged_scene_backend_selection_private(gedp,
+	    added_paths.empty() ? NULL : added_paths.data(), added_paths.size(),
+	    removed_paths.empty() ? NULL : removed_paths.data(),
+	    removed_paths.size(),
 	    selected_paths.empty() ? NULL : selected_paths.data(),
 	    selected_paths.size()))
-	ctx.display_changed = 1;
+	changed = 1;
 
-    return old_selection != new_selection || ctx.display_changed;
+    mutable_set->synced_paths = set->selected_paths;
+    mutable_set->synced_scene_revision = scene_revision;
+    return changed;
 }
 
 

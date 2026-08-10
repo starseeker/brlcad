@@ -100,14 +100,6 @@ ged_draw_default_mode(const struct ged *gedp)
     return gedp->i->ged_gdp->gd_shaded_mode;
 }
 
-unsigned long long
-ged_draw_scene_hash(struct ged *gedp)
-{
-    if (!gedp)
-        return 0;
-    return (unsigned long long)gedp->i->ged_gdp->gd_draw_rev;
-}
-
 uint64_t
 ged_draw_scene_revision(struct ged *gedp)
 {

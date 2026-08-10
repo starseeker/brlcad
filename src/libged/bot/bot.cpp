@@ -724,7 +724,7 @@ _bot_cmd_plot(void *bs, int argc, const char **argv)
     struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
     style.color_valid = 1;
     VSET(style.color, rgb[0], rgb[1], rgb[2]);
-    (void)_ged_line_set_publish_command_scene_feature(gb->gedp,
+    (void)_ged_view_feature_batch_publish_line_set(gb->gedp,
 	    bu_vls_cstr(&nroot), (const point_t *)points, cmds, point_count,
 	    &style, "bot", "command-result", NULL, "face-plot", 0);
     bu_vls_free(&nroot);

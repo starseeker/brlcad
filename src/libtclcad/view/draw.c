@@ -27,6 +27,7 @@
 #include "common.h"
 #include "bv.h"
 #include "ged.h"
+#include "ged/scene_internal.h"
 #include "ged/draw.h"
 #include "ged/view.h"
 #include "tclcad.h"
@@ -44,10 +45,10 @@ go_draw(struct ged_view_context *view_ctx)
     if (!view_ctx || !current_top || !current_top->to_gedp)
 	return;
 
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    txn.view = view_ctx;
-    (void)ged_draw_apply_transaction(current_top->to_gedp, &txn, NULL);
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = view_ctx;
+    (void)ged_scene_redraw(current_top->to_gedp, &request, NULL);
 }
 
 

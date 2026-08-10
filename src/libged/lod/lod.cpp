@@ -65,7 +65,7 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 	ged_view_context_obol_attachment(view_ctx);
     if (!attachment)
 	return BRLCAD_ERROR;
-    ged_draw_source_lod_policy lod_policy;
+    ged_view_lod_policy lod_policy;
     attachment->getLodPolicy(&lod_policy);
     /* Print current state if no args are supplied */
     if (argc == 1) {

@@ -1040,6 +1040,9 @@ ged_draw_has_paths(struct ged *gedp,
     if (!gedp)
 	return 0;
 
+    if (ged_draw_frontier_has_roots(gedp, view_ctx, mode))
+	return 1;
+
     struct _draw_has_paths_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.gedp = gedp;

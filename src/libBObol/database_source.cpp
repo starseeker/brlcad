@@ -8917,11 +8917,30 @@ compact_style_equal(const Obol::InstanceStyle &a,
 static Obol::InstanceStyle
 compact_effective_style(const BObolCompactInstanceEntry &entry)
 {
-    if (entry.highlighted)
-	return entry.highlightedStyle;
-    if (entry.selected)
-	return entry.selectedStyle;
-    return entry.normalStyle;
+    Obol::InstanceStyle style = entry.highlighted ? entry.highlightedStyle :
+	(entry.selected ? entry.selectedStyle : entry.normalStyle);
+    if (entry.presentationTransparencyValid)
+	style.color[3] = 1.0f - entry.presentationTransparency;
+    return style;
+}
+
+static SbBool
+compact_effective_authored_visibility(
+    const BObolCompactInstanceEntry &entry)
+{
+    if (!entry.authoredVisible &&
+	BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
+	    "lod-overview"))
+	return FALSE;
+    return entry.presentationVisibleValid ? entry.presentationVisible :
+	entry.authoredVisible;
+}
+
+static SbBool
+compact_effective_highlight(const BObolCompactInstanceEntry &entry)
+{
+    return entry.presentationHighlightedValid ?
+	entry.presentationHighlighted : entry.authoredHighlighted;
 }
 
 static void
@@ -8954,6 +8973,11 @@ compact_sync_shape_summary_state(BObolCompactInstanceEntry &entry)
     summary.selectable = entry.selectable;
     summary.selected = entry.selected;
     summary.highlighted = entry.highlighted;
+    summary.lineStyle = entry.style.linePattern == 0xffffu ? 0 : 1;
+    summary.lineWidth = entry.style.lineWidth > 0.0f ?
+	static_cast<int>(entry.style.lineWidth + 0.5f) : 0;
+    summary.transparency = std::max(0.0f,
+	std::min(1.0f, 1.0f - entry.style.color[3]));
 }
 
 static void
@@ -11372,7 +11396,8 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
     entry.visible = entry.authoredVisible;
     entry.selectable = input.occurrence.summary.selectable;
     entry.selected = input.occurrence.summary.selected;
-    entry.highlighted = input.occurrence.summary.highlighted;
+    entry.authoredHighlighted = input.occurrence.summary.highlighted;
+    entry.highlighted = compact_effective_highlight(entry);
     entry.shapeSummary = input.occurrence.summary;
     entry.occurrenceIndex = input.occurrence.occurrenceIndex;
     entry.booleanOperation = input.occurrence.booleanOperation;
@@ -11578,10 +11603,19 @@ compact_merge_runtime_state(const BObolCompactInstanceIndex *current,
 		}
 	    }
 	    entry.authoredVisible = previous.authoredVisible;
+	    entry.presentationVisibleValid = previous.presentationVisibleValid;
+	    entry.presentationVisible = previous.presentationVisible;
 	    entry.visible = previous.visible;
 	    entry.selectable = previous.selectable;
 	    entry.selected = previous.selected;
+	    entry.authoredHighlighted = previous.authoredHighlighted;
+	    entry.presentationHighlightedValid =
+		previous.presentationHighlightedValid;
+	    entry.presentationHighlighted = previous.presentationHighlighted;
 	    entry.highlighted = previous.highlighted;
+	    entry.presentationTransparencyValid =
+		previous.presentationTransparencyValid;
+	    entry.presentationTransparency = previous.presentationTransparency;
 	    entry.geometryRevision = previous.geometryRevision;
 	    if (entry.part != previous.part)
 		entry.geometryRevision = compact_next_revision(
@@ -11637,6 +11671,7 @@ SoBRLDatabaseSource::setCompactOccurrence(
     }
 
     this->installCompactInstanceIndex(next, FALSE);
+    (void)this->reapplyCompactInstancePresentationOverrides(0);
     remove_non_auxiliary_children(this);
     this->markCompiledAssemblyDirty();
 
@@ -11696,6 +11731,7 @@ SoBRLDatabaseSource::setCompactOccurrenceRegistry(
     }
 
     this->installCompactInstanceIndex(next, TRUE);
+    (void)this->reapplyCompactInstancePresentationOverrides(0);
     remove_non_auxiliary_children(this);
     this->markCompiledAssemblyDirty();
     if (!aggregateBounds.isEmpty())
@@ -12010,6 +12046,8 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
      */
     if (this->d->compactVisibilityFrontierActive)
 	(void)this->reapplyCompactInstanceVisibilityFrontier(firstNew);
+    if (!this->d->compactPresentationOverrides.empty())
+	(void)this->reapplyCompactInstancePresentationOverrides(firstNew);
     if (!this->d->compactSelectedPaths.empty())
 	(void)this->reapplyCompactInstanceSelectedPaths(firstNew);
     this->d->compactOccurrenceRegistry = TRUE;
@@ -18622,6 +18660,57 @@ compact_visit_entries_for_path(const BObolCompactInstanceIndex *index,
     }
 }
 
+template <typename Visitor>
+static void
+compact_visit_entries_for_path_match(const BObolCompactInstanceIndex *index,
+	const char *queryPath, BObolCompactPathMatch match, Visitor visitor)
+{
+    if (!index)
+	return;
+
+    const char *query = database_source_skip_leading_slash(
+	queryPath ? queryPath : "");
+    if (!query[0]) {
+	for (size_t entryIndex = 0; entryIndex < index->entries.size();
+		entryIndex++)
+	    visitor(entryIndex);
+	return;
+    }
+
+    if (match == BOBOL_COMPACT_PATH_OBJECT) {
+	const std::string object = database_source_leaf_component(
+	    SbString(query));
+	auto leafEntries = index->entryIndicesByLeaf.find(object);
+	if (leafEntries == index->entryIndicesByLeaf.end())
+	    return;
+	for (size_t entryIndex : leafEntries->second)
+	    visitor(entryIndex);
+	return;
+    }
+
+    const std::string pathKey(query);
+    if (match == BOBOL_COMPACT_PATH_EXACT) {
+	auto entry = index->entryIndexByOrderedPath.find(pathKey);
+	if (entry != index->entryIndexByOrderedPath.end() &&
+	    entry->second < index->entries.size())
+	    visitor(entry->second);
+	return;
+    }
+
+    const size_t prefixLength = pathKey.size();
+    auto entry = index->entryIndexByOrderedPath.lower_bound(pathKey);
+    for (; entry != index->entryIndexByOrderedPath.end(); ++entry) {
+	const char *candidate = entry->first.c_str();
+	if (bu_strncmp(candidate, pathKey.c_str(), prefixLength))
+	    break;
+	const char suffix = candidate[prefixLength];
+	if (suffix != '\0' && suffix != '/' && suffix != '@')
+	    continue;
+	if (entry->second < index->entries.size())
+	    visitor(entry->second);
+    }
+}
+
 int
 SoBRLDatabaseSource::getCompactInstanceCountForPath(const char *queryPath,
     SbBool includeDescendants) const
@@ -18665,40 +18754,60 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
     int selectedValid, SbBool nextSelected,
     int highlightedValid, SbBool nextHighlighted)
 {
+    const char *query = database_source_skip_leading_slash(
+	queryPath ? queryPath : "");
+    const bool leafQuery = query[0] && !strchr(query, '/') &&
+	!strchr(query, '@');
+    const BObolCompactPathMatch match = leafQuery ?
+	BOBOL_COMPACT_PATH_OBJECT :
+	(includeDescendants ? BOBOL_COMPACT_PATH_SUBTREE :
+	 BOBOL_COMPACT_PATH_EXACT);
+    return this->setCompactInstanceDisplayStateForPathMatch(queryPath,
+	match, visibleValid, nextVisible, selectedValid, nextSelected,
+	highlightedValid, nextHighlighted);
+}
+
+int
+SoBRLDatabaseSource::setCompactInstanceDisplayStateForPathMatch(
+    const char *queryPath, BObolCompactPathMatch match,
+    int visibleValid, SbBool nextVisible,
+    int selectedValid, SbBool nextSelected,
+    int highlightedValid, SbBool nextHighlighted)
+{
     if (!this->d->compactIndex)
 	return 0;
+    if (match != BOBOL_COMPACT_PATH_EXACT &&
+	match != BOBOL_COMPACT_PATH_SUBTREE &&
+	match != BOBOL_COMPACT_PATH_OBJECT)
+	return 0;
+
     int changed = 0;
     bool anyVisibilityChanged = false;
     std::vector<size_t> visibilityChangedEntries;
-
-    compact_visit_entries_for_path(this->d->compactIndex, queryPath,
-	includeDescendants, [this, visibleValid, nextVisible, selectedValid,
-	nextSelected, highlightedValid, nextHighlighted, &changed,
-	&anyVisibilityChanged, &visibilityChangedEntries](size_t entryIndex) {
+    const bool frontierActive =
+	this->d->compactVisibilityFrontierActive ? true : false;
+    compact_visit_entries_for_path_match(this->d->compactIndex, queryPath,
+	match, [this, visibleValid, nextVisible, selectedValid, nextSelected,
+	highlightedValid, nextHighlighted, &changed, &anyVisibilityChanged,
+	&visibilityChangedEntries, frontierActive](size_t entryIndex) {
 	BObolCompactInstanceEntry &entry =
 	    this->d->compactIndex->entries[entryIndex];
 	bool visibilityChanged = false;
 	bool selectionChanged = false;
-	/*
-	 * Retirement of the synthetic whole-target extent is monotonic within
-	 * one compact source epoch.  A redraw synchronizes the root path as
-	 * visible after the authoritative stream has completed; treating that
-	 * user-facing root visibility as authored visibility for every internal
-	 * record used to resurrect the retired overview and leave one box over
-	 * the finished model.  A genuinely new realization installs a new index
-	 * (and therefore a newly authored overview), so there is no valid reason
-	 * to revive this internal record in place.
-	 */
 	const bool retiredOverview =
 	    BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
 		"lod-overview") && !entry.authoredVisible;
 	if (visibleValid && !(nextVisible && retiredOverview) &&
 	    entry.authoredVisible != nextVisible) {
 	    entry.authoredVisible = nextVisible;
-	    entry.visible = nextVisible;
-	    visibilityChanged = true;
-	    anyVisibilityChanged = true;
-	    visibilityChangedEntries.push_back(entryIndex);
+	    const SbBool effectiveVisible =
+		compact_effective_authored_visibility(entry);
+	    if (!frontierActive && entry.visible != effectiveVisible) {
+		entry.visible = effectiveVisible;
+		visibilityChanged = true;
+		anyVisibilityChanged = true;
+		visibilityChangedEntries.push_back(entryIndex);
+	    }
 	    changed++;
 	}
 	if (selectedValid && entry.selected != nextSelected) {
@@ -18706,9 +18815,15 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
 	    selectionChanged = true;
 	    changed++;
 	}
-	if (highlightedValid && entry.highlighted != nextHighlighted) {
-	    entry.highlighted = nextHighlighted;
-	    selectionChanged = true;
+	if (highlightedValid &&
+	    entry.authoredHighlighted != nextHighlighted) {
+	    entry.authoredHighlighted = nextHighlighted;
+	    const SbBool effectiveHighlighted =
+		compact_effective_highlight(entry);
+	    if (entry.highlighted != effectiveHighlighted) {
+		entry.highlighted = effectiveHighlighted;
+		selectionChanged = true;
+	    }
 	    changed++;
 	}
 	if (visibilityChanged)
@@ -18733,6 +18848,288 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
 	this->touch();
     }
     return changed;
+}
+
+
+int
+SoBRLDatabaseSource::setCompactInstanceTransparencyForPathMatch(
+    const char *queryPath, BObolCompactPathMatch match,
+    float nextTransparency)
+{
+    if (!this->d->compactIndex ||
+	(match != BOBOL_COMPACT_PATH_EXACT &&
+	 match != BOBOL_COMPACT_PATH_SUBTREE &&
+	 match != BOBOL_COMPACT_PATH_OBJECT))
+	return 0;
+    nextTransparency = std::max(0.0f, std::min(1.0f, nextTransparency));
+    const float alpha = 1.0f - nextTransparency;
+    int changed = 0;
+    compact_visit_entries_for_path_match(this->d->compactIndex, queryPath,
+	match, [this, &changed, alpha](size_t entryIndex) {
+	BObolCompactInstanceEntry &entry =
+	    this->d->compactIndex->entries[entryIndex];
+	if (!database_source_float_different(entry.normalStyle.color[3],
+		alpha) &&
+	    !database_source_float_different(entry.selectedStyle.color[3],
+		alpha) &&
+	    !database_source_float_different(entry.highlightedStyle.color[3],
+		alpha))
+	    return;
+	entry.normalStyle.color[3] = alpha;
+	entry.selectedStyle.color[3] = alpha;
+	entry.highlightedStyle.color[3] = alpha;
+	entry.style = compact_effective_style(entry);
+	entry.appearanceRevision = compact_next_revision(
+	    entry.appearanceRevision);
+	changed++;
+    });
+    if (changed) {
+	this->rebuildCompactInstanceDisplayState(FALSE);
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty();
+	this->touch();
+    }
+    return changed;
+}
+
+
+static bool
+compact_presentation_path_matches(const BObolCompactInstanceEntry &entry,
+	const SbString &queryPath, BObolCompactPathMatch match)
+{
+    const char *candidate = database_source_skip_leading_slash(
+	entry.semantic.path.getString());
+    const char *query = database_source_skip_leading_slash(
+	queryPath.getString());
+    if (!candidate || !query || !query[0])
+	return !query || !query[0];
+    if (match == BOBOL_COMPACT_PATH_OBJECT)
+	return database_source_leaf_component(entry.semantic.path) ==
+	    database_source_leaf_component(queryPath);
+
+    const size_t queryLength = strlen(query);
+    if (bu_strncmp(candidate, query, queryLength))
+	return false;
+    const char suffix = candidate[queryLength];
+    if (match == BOBOL_COMPACT_PATH_EXACT)
+	return suffix == '\0';
+    return suffix == '\0' || suffix == '/' || suffix == '@';
+}
+
+
+static bool
+compact_presentation_override_same_key(
+    const BObolCompactOccurrenceRegistryState::PresentationOverride &left,
+    const BObolCompactOccurrenceRegistryState::PresentationOverride &right)
+{
+    return left.property == right.property && left.match == right.match &&
+	database_source_string_equal(left.path, right.path.getString());
+}
+
+
+static bool
+compact_presentation_override_same_value(
+    const BObolCompactOccurrenceRegistryState::PresentationOverride &left,
+    const BObolCompactOccurrenceRegistryState::PresentationOverride &right)
+{
+    if (!compact_presentation_override_same_key(left, right))
+	return false;
+    if (left.property ==
+	BObolCompactOccurrenceRegistryState::PresentationOverride::TRANSPARENCY)
+	return !database_source_float_different(left.transparency,
+	    right.transparency);
+    return left.state == right.state;
+}
+
+
+int
+SoBRLDatabaseSource::reapplyCompactInstancePresentationOverrides(
+    size_t firstEntry)
+{
+    if (!this->d->compactIndex)
+	return 0;
+    BObolCompactInstanceIndex &index = *this->d->compactIndex;
+    firstEntry = std::min(firstEntry, index.entries.size());
+    int changed = 0;
+    std::vector<size_t> styleChangedEntries;
+    for (size_t entryIndex = firstEntry; entryIndex < index.entries.size();
+	entryIndex++) {
+	BObolCompactInstanceEntry &entry = index.entries[entryIndex];
+	const SbBool oldPresentationVisibleValid =
+	    entry.presentationVisibleValid;
+	const SbBool oldPresentationVisible = entry.presentationVisible;
+	const SbBool oldHighlighted = entry.highlighted;
+	const SbBool oldPresentationTransparencyValid =
+	    entry.presentationTransparencyValid;
+	const float oldPresentationTransparency =
+	    entry.presentationTransparency;
+	const Obol::InstanceStyle oldStyle = entry.style;
+	entry.presentationVisibleValid = FALSE;
+	entry.presentationVisible = TRUE;
+	entry.presentationHighlightedValid = FALSE;
+	entry.presentationHighlighted = FALSE;
+	entry.presentationTransparencyValid = FALSE;
+	entry.presentationTransparency = 0.0f;
+	for (const BObolCompactOccurrenceRegistryState::PresentationOverride &rule :
+	     this->d->compactPresentationOverrides) {
+	    if (!compact_presentation_path_matches(entry, rule.path,
+		    rule.match))
+		continue;
+	    switch (rule.property) {
+		case BObolCompactOccurrenceRegistryState::PresentationOverride::VISIBILITY:
+		    entry.presentationVisibleValid = TRUE;
+		    entry.presentationVisible = rule.state;
+		    break;
+		case BObolCompactOccurrenceRegistryState::PresentationOverride::HIGHLIGHT:
+		    entry.presentationHighlightedValid = TRUE;
+		    entry.presentationHighlighted = rule.state;
+		    break;
+		case BObolCompactOccurrenceRegistryState::PresentationOverride::TRANSPARENCY:
+		    entry.presentationTransparencyValid = TRUE;
+		    entry.presentationTransparency = rule.transparency;
+		    break;
+	    }
+	}
+	entry.highlighted = compact_effective_highlight(entry);
+	entry.style = compact_effective_style(entry);
+	if (entry.highlighted != oldHighlighted) {
+	    entry.selectionRevision = compact_next_revision(
+		entry.selectionRevision);
+	    changed++;
+	}
+	if (!compact_style_equal(entry.style, oldStyle)) {
+	    entry.appearanceRevision = compact_next_revision(
+		entry.appearanceRevision);
+	    styleChangedEntries.push_back(entryIndex);
+	    changed++;
+	}
+	if (entry.presentationVisibleValid != oldPresentationVisibleValid ||
+	    entry.presentationVisible != oldPresentationVisible ||
+	    entry.presentationTransparencyValid !=
+		oldPresentationTransparencyValid ||
+	    database_source_float_different(entry.presentationTransparency,
+		oldPresentationTransparency))
+	    changed++;
+	compact_sync_shape_summary_state(entry);
+	if (entryIndex < index.instances.size())
+	    index.instances[entryIndex].record.style = entry.style;
+    }
+    const int visibilityChanged =
+	this->reapplyCompactInstanceVisibilityFrontier(firstEntry);
+    if (!styleChangedEntries.empty()) {
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty(styleChangedEntries);
+	this->touch();
+    }
+    return changed + visibilityChanged;
+}
+
+
+static int
+compact_presentation_override_store(
+    std::vector<BObolCompactOccurrenceRegistryState::PresentationOverride> &rules,
+    const BObolCompactOccurrenceRegistryState::PresentationOverride &next)
+{
+    if (!rules.empty() &&
+	compact_presentation_override_same_value(rules.back(), next))
+	return 0;
+    const std::vector<BObolCompactOccurrenceRegistryState::PresentationOverride>
+	previous = rules;
+    rules.erase(std::remove_if(rules.begin(), rules.end(),
+	[&next](const BObolCompactOccurrenceRegistryState::PresentationOverride &rule) {
+	    return compact_presentation_override_same_key(rule, next);
+	}), rules.end());
+    rules.push_back(next);
+    if (previous.size() != rules.size())
+	return 1;
+    for (size_t i = 0; i < previous.size(); i++) {
+	if (!compact_presentation_override_same_value(previous[i], rules[i]))
+	    return 1;
+    }
+    return 0;
+}
+
+
+int
+SoBRLDatabaseSource::setCompactInstanceVisibilityOverrideForPathMatch(
+    const char *queryPath, BObolCompactPathMatch match, SbBool nextVisible)
+{
+    if (match != BOBOL_COMPACT_PATH_EXACT &&
+	match != BOBOL_COMPACT_PATH_SUBTREE &&
+	match != BOBOL_COMPACT_PATH_OBJECT)
+	return 0;
+    BObolCompactOccurrenceRegistryState::PresentationOverride rule;
+    rule.property = BObolCompactOccurrenceRegistryState::PresentationOverride::VISIBILITY;
+    rule.path = queryPath ? queryPath : "";
+    rule.match = match;
+    rule.state = nextVisible;
+    const int stored = compact_presentation_override_store(
+	this->d->compactPresentationOverrides, rule);
+    const int applied = stored ?
+	this->reapplyCompactInstancePresentationOverrides(0) : 0;
+    return stored || applied ? 1 : 0;
+}
+
+
+int
+SoBRLDatabaseSource::setCompactInstanceHighlightOverrideForPathMatch(
+    const char *queryPath, BObolCompactPathMatch match, SbBool nextHighlighted)
+{
+    if (match != BOBOL_COMPACT_PATH_EXACT &&
+	match != BOBOL_COMPACT_PATH_SUBTREE &&
+	match != BOBOL_COMPACT_PATH_OBJECT)
+	return 0;
+    BObolCompactOccurrenceRegistryState::PresentationOverride rule;
+    rule.property = BObolCompactOccurrenceRegistryState::PresentationOverride::HIGHLIGHT;
+    rule.path = queryPath ? queryPath : "";
+    rule.match = match;
+    rule.state = nextHighlighted;
+    const int stored = compact_presentation_override_store(
+	this->d->compactPresentationOverrides, rule);
+    const int applied = stored ?
+	this->reapplyCompactInstancePresentationOverrides(0) : 0;
+    return stored || applied ? 1 : 0;
+}
+
+
+int
+SoBRLDatabaseSource::setCompactInstanceTransparencyOverrideForPathMatch(
+    const char *queryPath, BObolCompactPathMatch match,
+    float nextTransparency)
+{
+    if (match != BOBOL_COMPACT_PATH_EXACT &&
+	match != BOBOL_COMPACT_PATH_SUBTREE &&
+	match != BOBOL_COMPACT_PATH_OBJECT)
+	return 0;
+    BObolCompactOccurrenceRegistryState::PresentationOverride rule;
+    rule.property = BObolCompactOccurrenceRegistryState::PresentationOverride::TRANSPARENCY;
+    rule.path = queryPath ? queryPath : "";
+    rule.match = match;
+    rule.transparency = std::max(0.0f,
+	std::min(1.0f, nextTransparency));
+    const int stored = compact_presentation_override_store(
+	this->d->compactPresentationOverrides, rule);
+    const int applied = stored ?
+	this->reapplyCompactInstancePresentationOverrides(0) : 0;
+    return stored || applied ? 1 : 0;
+}
+
+
+int
+SoBRLDatabaseSource::clearCompactInstanceHighlightOverrides(void)
+{
+    const size_t previous = this->d->compactPresentationOverrides.size();
+    this->d->compactPresentationOverrides.erase(std::remove_if(
+	this->d->compactPresentationOverrides.begin(),
+	this->d->compactPresentationOverrides.end(),
+	[](const BObolCompactOccurrenceRegistryState::PresentationOverride &rule) {
+	    return rule.property ==
+		BObolCompactOccurrenceRegistryState::PresentationOverride::HIGHLIGHT;
+	}), this->d->compactPresentationOverrides.end());
+    if (previous == this->d->compactPresentationOverrides.size())
+	return 0;
+    (void)this->reapplyCompactInstancePresentationOverrides(0);
+    return 1;
 }
 
 
@@ -18773,7 +19170,8 @@ SoBRLDatabaseSource::reapplyCompactInstanceVisibilityFrontier(
     for (size_t i = firstEntry; i < index.entries.size(); i++) {
 	BObolCompactInstanceEntry &entry = index.entries[i];
 	const SbBool nextVisible =
-	    entry.authoredVisible && allowed[i - firstEntry];
+	    compact_effective_authored_visibility(entry) &&
+	    allowed[i - firstEntry];
 	if (entry.visible == nextVisible)
 	    continue;
 	entry.visible = nextVisible;
@@ -18896,6 +19294,13 @@ SoBRLDatabaseSource::reapplyCompactInstanceSelectedPaths(
 	return 0;
 
     BObolCompactInstanceIndex &index = *this->d->compactIndex;
+    /* The compact records supersede the aggregate overview for selection
+     * presentation.  Selection paths are reapplied below per occurrence; do
+     * not leave the source proxy selected as a second, potentially lingering
+     * white box. */
+    if (!index.entries.empty() && !this->d->compactSelectedPaths.empty() &&
+	this->selected.getValue())
+	this->selected = FALSE;
     firstEntry = std::min(firstEntry, index.entries.size());
     const size_t candidateCount = index.entries.size() - firstEntry;
     std::vector<unsigned char> touched(candidateCount, 0);
@@ -19029,6 +19434,58 @@ SoBRLDatabaseSource::syncCompactInstanceSelectedPaths(
     this->d->compactSelectedPaths = paths;
     const int changed = this->reapplyCompactInstanceSelectedPaths();
     return changed > 0 ? changed : 1;
+}
+
+
+int
+SoBRLDatabaseSource::applyCompactInstanceSelectionDelta(
+    const std::vector<SbString> &addedPaths,
+    const std::vector<SbString> &removedPaths)
+{
+    int frontierChanged = 0;
+    int displayChanged = 0;
+
+    for (const SbString &removed : removedPaths) {
+	const char *selectedPath = removed.getString();
+	if (!selectedPath || !selectedPath[0])
+	    continue;
+	for (auto it = this->d->compactSelectedPaths.begin();
+	     it != this->d->compactSelectedPaths.end();) {
+	    if (database_source_string_equal(*it, selectedPath)) {
+		it = this->d->compactSelectedPaths.erase(it);
+		frontierChanged++;
+	    } else {
+		++it;
+	    }
+	}
+	displayChanged += this->setCompactInstanceDisplayStateForPathMatch(
+	    selectedPath, BOBOL_COMPACT_PATH_SUBTREE,
+	    0, FALSE, 1, FALSE, 0, FALSE);
+    }
+
+    for (const SbString &added : addedPaths) {
+	const char *selectedPath = added.getString();
+	if (!selectedPath || !selectedPath[0])
+	    continue;
+	bool found = false;
+	for (const SbString &existing : this->d->compactSelectedPaths) {
+	    if (database_source_string_equal(existing, selectedPath)) {
+		found = true;
+		break;
+	    }
+	}
+	if (!found) {
+	    this->d->compactSelectedPaths.push_back(added);
+	    frontierChanged++;
+	}
+	displayChanged += this->setCompactInstanceDisplayStateForPathMatch(
+	    selectedPath, BOBOL_COMPACT_PATH_SUBTREE,
+	    0, FALSE, 1, TRUE, 0, FALSE);
+    }
+
+    if (frontierChanged && !displayChanged)
+	this->touch();
+    return displayChanged > 0 ? displayChanged : frontierChanged;
 }
 
 

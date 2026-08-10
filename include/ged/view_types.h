@@ -18,7 +18,7 @@
 #ifndef GED_VIEW_TYPES_H
 #define GED_VIEW_TYPES_H
 
-#include "common.h"
+#include "bu/defines.h"
 
 #ifndef GED_EXPORT
 #  if defined(GED_DLL_EXPORTS) && defined(GED_DLL_IMPORTS)
@@ -37,9 +37,11 @@ __BEGIN_DECLS
 struct ged_view_context;
 struct ged_view_set;
 struct bv_context;
+struct bv_lod_policy;
 
 typedef struct ged_view_context ged_view_context;
 typedef struct ged_view_set ged_view_set;
+typedef struct bv_lod_policy ged_view_lod_policy;
 
 /**
  * Explicit compatibility boundary between GED's owned view context and its

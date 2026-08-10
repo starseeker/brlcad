@@ -1,0 +1,772 @@
+GED DRAWING API AND IMPLEMENTATION CLEANUP PLAN
+================================================
+
+Status: semantic/API consolidation and baseline validation complete;
+        production-scale graphical/performance gates remain
+Scope: libged drawing, view features, selection, event reconciliation,
+       the private Obol adapter, and qged/MGED/gsh client integration
+
+
+IMPLEMENTATION STATUS (2026-08-10)
+----------------------------------
+
+The high-risk ownership and update-path portions of this plan are now
+implemented:
+
+* Public typed scene requests, opaque results, structured committed deltas,
+  observers, semantic queries, and generation-checked edit scopes replace the
+  generic transaction and promotion APIs.
+
+* One private backend operations seam receives semantic snapshots, committed
+  transactions, and incremental selection changes.  A recording fake backend
+  proves snapshot-on-attach and one apply per draw/erase commit without
+  constructing Obol.
+
+* Exact and subtree erase, ancestor/descendant draw-frontier subsumption,
+  headless retained intent, and deferred presentation rules share the semantic
+  reducer.  Exact erase of a compact semantic root no longer depends on a
+  legacy realized-leaf record.
+
+* libged is the semantic selection authority.  QgObolSelectionSync and its
+  duplicate renderer traversal are deleted; QgSceneSync consumes the canonical
+  committed state.
+
+* MGED and qged edit paths use typed scene edit scopes and retained edit
+  previews.  Raw vlist animation helpers and legacy realized-record navigation
+  are isolated in uninstalled in-tree headers rather than advertised as the
+  semantic scene API.
+
+* Concrete retained-render node handles and public endpoint scene-root
+  attachment were removed from installed headers.  A headless GED retains
+  compact draw intent and an attached backend receives the current snapshot.
+
+* The old result-scene publication family is now the producer-neutral
+  ged_view_feature_batch API.  Geometry and metadata are deep-copied and staged;
+  commit publishes the staged sequence and abort publishes nothing.  The
+  untyped custom Coin-node publication escape hatch was removed.
+
+* Producer-specific Tcl/data/diagnostic annotation helpers and ownerless
+  mutable feature handles are no longer part of the installed API.  They remain
+  in an explicitly uninstalled migration header until their in-tree producers
+  are ported to feature batches.
+
+* Installed scene.h was reduced from the combined semantic/realization surface
+  to the semantic contract.  The reviewed drawing manifest is currently 201
+  installed symbols rather than the roughly 340-symbol migration surface.
+
+* Installed GED headers no longer include common.h, compile independently as
+  both C11 and C++17, and pass the checked drawing API manifest.  qged, MGED,
+  gsh, state-service, view-command, edit-preview, draw-sync, and selection-sync
+  targets build against the new boundaries.
+
+* Shared scene frontiers now consistently use one shared scope for all
+  non-independent views, while independent views retain exact view ownership.
+  Descendant draw roots report partial parent state, semantic highlight
+  changes advance their revision, and deleted retained roots can be retired
+  without depending on post-delete database path resolution.
+
+* Compact top-level selection now uses explicit subtree matching.  This avoids
+  the ambiguous legacy one-component-path rule that selected a root token but
+  failed to select its compact occurrences.
+
+* QgModel no longer treats renderer style deltas as draw-frontier changes or
+  repaints every loaded descendant for a named material event.  Database
+  events provide precise row-role invalidation; structural combination changes
+  continue through grouped hierarchy deltas.  This preserves bounded update
+  cost for very large loaded trees.
+
+
+VALIDATION STATUS (2026-08-10)
+------------------------------
+
+The current implementation passed the following rebuilt .build validation:
+
+* qged, MGED, gsh, the drawing clients, and the affected test executables all
+  link against the consolidated interfaces.
+
+* All 52 drawing_baseline tests passed.  This set includes the
+  4,096- and 16,384-child QgModel hierarchy tests, Generic_Twin progressive
+  startup and wireframe tests, NIST BRep shaded/wire tests, real-model
+  interactions, selection, editing previews, and MGED view behavior.  The
+  16,384-child test completed in 71.12 seconds.  The System-GL/X11 host test was
+  skipped because the headless test environment did not provide that display.
+
+* All 23 bobol_contract/bobol_headless tests passed, including retained render,
+  LoD service/coordinator, source realization, compact occurrences, mesh cache,
+  edit, window-host, API, and private-symbol contracts.
+
+* The installed draw API manifest check passes with 201 reviewed symbols;
+  libged exports no ged_draw_obol_source_* implementation helpers; and
+  git diff --check reports no whitespace errors.
+
+* The 16,384-child test now carries an actual slow CTest label in addition to
+  its name, so routine non-slow drawing runs can exclude it reliably.
+
+These results validate semantic/API behavior and bounded headless integration.
+They do not replace the required production graphical, visual-comparison,
+perf/FPS, cache, and memory-pressure runs listed below.
+
+Work intentionally still pending before calling the cleanup production-ready:
+
+* Port the remaining in-tree annotation producers to typed feature batches,
+  then delete view_feature_internal.h rather than preserving wrappers.
+
+* Replace MGED's remaining realized-shape navigation with semantic occurrence
+  identities, then delete scene_record_api_internal.h and remove realized
+  records from the installed draw_types.h dependency graph.
+
+* Split feature, polygon, selection, and legacy record types out of the broad
+  draw_types.h umbrella.  Rehome the public view LoD policy under a view/display
+  domain and make source invalidation/snapshot helpers private.
+
+* Physically split draw_obol.cpp and ged_draw_source.cpp only after the above
+  API boundaries settle.  This is deliberately sequenced after semantic
+  consolidation so file movement cannot obscure performance regressions.
+
+* Run the complete cold/warm 50k/150k and real-model GUI/perf/image/memory
+  matrix after the final in-tree producer ports.  Focused contract tests are
+  green, but this broader gate remains mandatory because API cleanup must not
+  regress compact realization or LoD throughput.
+
+
+1. OBJECTIVE AND DECISIONS
+--------------------------
+
+The drawing stack should be deliberately consolidated before its new APIs are
+treated as production interfaces.  The LoD, compact-source, progressive
+realization, draw-frontier, and edit-promotion work contains important and
+performance-sensitive functionality that should be retained.  The principal
+problem is that the migration has left multiple overlapping interfaces and
+state-update routes around that functionality.
+
+The cleanup should optimize for the best final design.  Compatibility with
+intermediate drawing APIs is not required.  qged, MGED, and gsh should be
+ported together to the final API, and obsolete APIs should be deleted rather
+than retained as wrappers.
+
+The design must preserve the large-model performance properties established
+by the 50k/150k stress models and the real-model graphical tests.  In
+particular, cleanup must not introduce a per-leaf libged mirror of all realized
+geometry, per-leaf GUI-thread copying, or full-scene traversal for sparse
+updates.
+
+
+2. EXECUTIVE RECOMMENDATION
+---------------------------
+
+Establish one lightweight semantic scene authority in libged.  Commands and
+database mutation events update that state through one scene reducer.  Each
+committed operation produces one typed scene delta.  A private backend adapter
+applies that delta to Obol exactly once, and application observers receive the
+same committed delta for tree-model and repaint invalidation.
+
+Obol and libBObol should remain responsible for heavy retained geometry,
+progressive realization, PoP3D state, view-aware LoD, draw batching, picking
+acceleration, and renderer-specific presentation.  Libged should own user
+intent and semantic state: drawn roots, view/mode scopes, compact subpath
+visibility frontiers, edit expansion scopes, semantic selection, and stable
+identities.
+
+The intended flow is:
+
+    GED command or database mutation event
+                    |
+                    v
+        libged semantic scene reducer
+        - draw intents
+        - erase/visibility frontiers
+        - edit scopes
+        - selection state
+                    |
+                    v
+             one typed delta
+                    |
+          +---------+----------+
+          |                    |
+          v                    v
+    private backend       committed observers
+       adapter            and GUI invalidation
+          |
+          v
+       Obol/LoD
+
+Progressive LoD publication is presentation state.  It may generate progress,
+convergence, and repaint notifications, but it must not re-enter the semantic
+draw transaction path or repeatedly change the semantic scene revision.
+
+
+3. CURRENT STRENGTHS TO PRESERVE
+--------------------------------
+
+* Compact retained draw roots and subpath visibility frontiers are the right
+  basis for handling erase, expand, and collapse without duplicating all leaf
+  geometry in libged.
+
+* The generation-checked edit-promotion acquire/release concept is sound.  Its
+  conflict detection and exactly-once release contract should survive in the
+  final edit-scope API.
+
+* Database mutation event batching and coalescing are useful.  They should feed
+  the same scene reducer used by explicit draw operations.
+
+* Obol's compact occurrence registry, progressive source realization, shared
+  geometry, batching, and LoD management must remain backend responsibilities.
+
+* Public library interfaces should remain C.  C++17 is appropriate for private
+  libged and Obol implementation code.
+
+
+4. HIGH-PRIORITY DESIGN PROBLEMS
+--------------------------------
+
+4.1 Multiple draw synchronization paths
+
+A draw may call ged_draw_obol_apply_draw_paths directly.  The transaction
+dispatcher also has an attached-scene synchronization fallback, and the Obol
+transaction observer performs attached-scene synchronization again.  Correct
+behavior therefore depends on several paths remaining mutually idempotent.
+
+There must be one renderer application point per committed semantic
+transaction.  The scene reducer should produce a delta, and the registered
+backend should apply that delta once.  Initial backend attachment should apply
+one full semantic snapshot through the same adapter contract.
+
+
+4.2 Duplicate selection authorities and synchronization
+
+GED owns semantic selection sets, but selected paths are also retained in
+per-view renderer state.  The current libged synchronization clears and
+rebuilds view selection state, then updates Obol.  libqtcad independently
+traverses Obol sources and applies the selection state again.
+
+Libged must be the sole semantic selection authority.  Selection commits
+should calculate an incremental delta containing added paths, removed paths,
+and affected ancestor/object states.  The Obol adapter should update its
+compact occurrence selection index once.  qged should consume the semantic
+delta to update affected Qt rows and request repaint; it should not traverse
+Obol scene nodes.
+
+Delete the obsolete QgObolSelectionSync implementation once all qged paths use
+the canonical selection commit.
+
+
+4.3 Renderer-neutral public interfaces expose renderer details
+
+The installed ged_draw_scene_handle contains a void pointer and an explicit
+OBOL backend value.  Public draw application also unconditionally ensures an
+Obol controller.  These behaviors contradict the stated renderer-neutral
+interface.
+
+Make concrete scene handles and endpoint binding private.  A headless GED
+context must be able to retain lightweight draw intent without constructing a
+renderer.  Attaching a graphical endpoint should instantiate its backend and
+apply the current semantic snapshot.
+
+
+4.4 The draw transaction is an unsafe optional-field bag
+
+ged_draw_transaction combines paths, full paths, view scope, mode, appearance,
+autoview, a generic double value, stale reasons, removal, redraw, rename, and
+source update state.  The value field has different meanings for visibility,
+highlighting, transparency, and draw mode.  Appearance is passed through a
+const void pointer.
+
+Replace the public generic transaction with typed operations and request
+structures.  An internal tagged variant may still be used by the reducer, but
+invalid field combinations should not be representable in public code.
+
+Recommended public operations include:
+
+    ged_scene_draw()
+    ged_scene_erase()
+    ged_scene_visibility_set()
+    ged_scene_redraw()
+    ged_scene_clear()
+    ged_scene_observer_add()
+    ged_scene_observer_remove()
+
+The draw request should contain only paths, view scope, draw presentation
+style, realization policy, and autoview policy.  The erase request should
+explicitly select exact-path or subtree-prefix matching.
+
+
+4.5 Appearance combines unrelated concepts
+
+ged_draw_appearance_settings contains database drawing style, annotation
+properties, migration-era field names, and realization behavior.
+
+Split it into:
+
+* ged_scene_style: draw mode, optional color override, opacity, line width,
+  and relevant database presentation flags.
+
+* ged_scene_realization_policy: automatic/eager realization and any explicit
+  diagnostic override.  Deferred leaf expansion is not an appearance.
+
+* ged_view_feature_style: view feature visibility, selection eligibility,
+  color, line style, arrows, labels, and other annotation presentation.
+
+Rename the current transparency field to opacity if zero means clear and one
+means opaque.  Use enum-typed fields rather than int where the value is an
+enumeration.
+
+
+4.6 Excessive view-feature API surface
+
+ged/view_feature.h contains generic feature APIs plus parallel annotation,
+data, Tcl, diagnostic, line, arrow, axes, label, polygon, edit-preview, and
+command-result functions.  Producer origin such as "Tcl" or "data" should not
+define a generic library API family.
+
+Replace these entry points with a retained feature model:
+
+    ged_view_feature_create_or_replace()
+    ged_view_feature_update()
+    ged_view_feature_geometry_replace()
+    ged_view_feature_query()
+    ged_view_feature_remove()
+    ged_view_feature_remove_prefix()
+
+Support a feature batch for producers that publish multiple related objects:
+
+    ged_view_feature_batch_begin()
+    ged_view_feature_batch_commit()
+    ged_view_feature_batch_abort()
+
+Use typed geometry descriptors for lines, points, indexed faces, labels, axes,
+and HUD elements.  Domain-specific command helpers may remain private to
+libged commands.
+
+The current ged_result_* retained-render API should either become this feature
+batch API or be renamed ged_view_result_* so it cannot be confused with draw
+and event transaction results.
+
+
+4.7 Inconsistent handles and global reverse lookup
+
+Draw shape, group, scene node, promotion, feature, polygon, and scene handles
+use several incompatible token layouts.  Some feature operations take a view
+owner while reference-based setters do not.  Owner-less setters require a
+process-global view-host registry to resolve an owner ID and assert the owner
+thread.
+
+Use semantically distinct handle types with a consistent owner/id/generation
+pattern.  Always pass the owning context to operations:
+
+    ged_scene_node_query(gedp, node, ...)
+    ged_view_feature_update(view_ctx, feature, ...)
+
+This makes stale and cross-owner checks explicit and permits removal of the
+global view-host reverse-lookup registry.
+
+Distinguish these identities clearly:
+
+* draw intent: a user-visible root/path/view/mode request;
+* database occurrence: a stable path/instance identity under an intent;
+* view feature: a view-owned retained annotation or result object;
+* renderer object: private backend state, never a public libged handle.
+
+
+4.8 Public APIs expose internal mutation and diagnostic mechanisms
+
+ged/scene.h currently combines semantic scene operations, raw geometry
+mutation, record traversal, material revision management, compatibility
+aliases, export validation, and HUD synchronization.
+
+Remove public direct geometry mutation such as shape-array translation,
+geometry clearing, and manual bounds updates.  MGED editing should publish a
+shared edit preview or semantic animation override rather than modifying a
+canonical rendered record directly.
+
+Move export/test validation to a private or explicitly diagnostic header.
+Move HUD functions to the view-feature/display domain.  Remove duplicate erase
+and revision aliases.
+
+
+4.9 Observer results are stringly typed
+
+Draw and event results encode affected names in bu_vls strings.  QgModel then
+parses words back into paths, with extra logic to recover transaction paths
+when the string is insufficient.  This is inefficient and cannot robustly
+represent all escaped database names.
+
+Observers should receive structured deltas with arrays or callback accessors
+for affected draw-intent IDs, path IDs, database object IDs, and optional
+display strings.  Counts belong in result fields; mutation functions should
+return a consistent status rather than alternately returning status, Boolean,
+or affected-object count.
+
+
+5. TARGET RESPONSIBILITY BOUNDARIES
+-----------------------------------
+
+5.1 Public libged semantic API
+
+Owns:
+
+* draw and erase intent;
+* view/mode scoping;
+* compact visibility/erase frontier;
+* edit expansion scopes;
+* semantic selection sets;
+* database mutation events;
+* stable public identities and read-only snapshots;
+* renderer-neutral display policy and capture requests.
+
+Does not expose:
+
+* Obol, Coin, OpenGL, or OSMesa node types;
+* renderer backend enums or pointers;
+* PoP buffers or cache implementation types;
+* direct mutable geometry arrays;
+* per-leaf renderer realization records.
+
+
+5.2 Private libged scene core
+
+Owns:
+
+* the compact semantic scene state;
+* one reducer/apply path;
+* typed semantic deltas;
+* path and occurrence indexes needed for commands and selection;
+* event reconciliation;
+* backend attachment and initial snapshot delivery;
+* observer ordering and reentrancy rules.
+
+
+5.3 Private Obol backend adapter
+
+Owns translation between semantic deltas and Obol operations:
+
+* attach/detach;
+* full snapshot application;
+* batched draw/erase/style/visibility deltas;
+* selection deltas;
+* edit-preview feature publication;
+* view and display policy propagation;
+* presentation progress and repaint notification.
+
+The adapter should expose a narrow operations table or private C++ interface,
+not hundreds of ged_draw_obol_* functions.
+
+
+5.4 Obol and libBObol
+
+Own:
+
+* retained renderer scene nodes;
+* compact occurrence registries;
+* shared immutable geometry payloads;
+* asynchronous source realization;
+* PoP3D cache and resident-prefix management;
+* view-aware LoD and scene-level budgets;
+* renderer batching and draw-call reduction;
+* picking acceleration;
+* System GL and OSMesa presentation implementations.
+
+
+5.5 qged, MGED, and gsh clients
+
+Clients issue semantic libged operations and consume committed deltas.  They do
+not repair renderer state, walk Obol nodes, or infer changed paths from result
+strings.
+
+qged maps typed changes to targeted Qt dataChanged/row operations and repaint
+requests.  Per-QgModel timing and notification state should be stored in the
+model, not process globals.
+
+MGED uses the same draw, erase, selection, edit-scope, and edit-preview APIs.
+Legacy direct shape visibility/geometry mutation should be retired.
+
+gsh may retain draw intent without a renderer; attaching a view later realizes
+the current semantic state through the backend snapshot contract.
+
+
+6. API AND NAMING CONVENTIONS
+-----------------------------
+
+Follow BRL-CAD's HACKING convention: ged_<domain>_<action>, lower case with
+underscores.
+
+Recommended domains:
+
+    ged_scene_*
+    ged_scene_edit_*
+    ged_selection_*
+    ged_view_feature_*
+    ged_view_display_*
+    ged_event_*
+
+Use create/destroy for heap-owned objects, init/clear for caller-owned storage,
+and open/close or acquire/release for lifetime-scoped resources.  Predicates
+should be named with is/has/available vocabulary and return only Boolean
+values.
+
+Mutation and query functions should use one documented return convention.
+Recommended behavior is a status return with changed counts and detailed
+diagnostics in an output result.  Do not overload successful positive values
+as both status and count.
+
+Avoid large positional initializer macros.  Use explicit init functions for
+request/result structures that may evolve.  Document every borrowed pointer,
+callback lifetime, thread restriction, and ownership transfer in the public
+header.
+
+
+7. SOURCE ORGANIZATION
+----------------------
+
+Recommended layout:
+
+    include/ged/scene.h
+    include/ged/scene_types.h
+    include/ged/selection.h
+    include/ged/view_feature.h
+    include/ged/display.h
+    include/ged/event.h
+
+    src/libged/scene/state.*
+    src/libged/scene/command.*
+    src/libged/scene/frontier.*
+    src/libged/scene/edit_scope.*
+    src/libged/scene/query.*
+    src/libged/scene/selection.*
+    src/libged/scene/event_bridge.*
+
+    src/libged/view/feature.*
+    src/libged/view/feature_batch.*
+    src/libged/view/pick.*
+    src/libged/view/display.*
+
+    src/libged/backends/backend_private.*
+    src/libged/backends/obol/adapter.*
+    src/libged/backends/obol/source_realization.*
+    src/libged/backends/obol/progressive.*
+    src/libged/backends/obol/lod.*
+    src/libged/backends/obol/feature_store.*
+    src/libged/backends/obol/picking.*
+    src/libged/backends/obol/display.*
+
+Private headers should be local to the owning subsystem.  Replace the large
+ged_draw_private.h declaration collection with small boundary headers.  Cross-
+translation-unit private symbols should be HIDDEN.  Symbols genuinely needed
+by dynamically loaded libged command plugins should be placed in a documented
+internal-plugin header and audited separately from the installed public API.
+
+
+8. HACKING AND STYLE REQUIREMENTS
+---------------------------------
+
+Apply the HACKING refactoring priority of proportion, integrity, then clarity:
+first establish ownership and one update path, then remove duplication, then
+perform naming and formatting cleanup.
+
+Required cleanup includes:
+
+* Installed headers must not include common.h.
+* Every public function must have Doxygen documentation in its installed
+  declaration.
+* Installed headers must be self-contained and parse independently.
+* Public APIs remain C11/C++17-compatible C interfaces.
+* Public symbols use GED_EXPORT; private cross-file symbols use HIDDEN.
+* Remove dead aliases, duplicate declarations, obsolete migration wrappers,
+  and misleading comments.
+* Eliminate new global registries and move per-owner state into GED/view/model
+  storage.
+* Use consistent enum, Boolean, RGB/color, revision, size, and ownership types.
+* Preserve BSD KNF/Stroustrup formatting, four-character indentation, and
+  eight-character tab stops.
+
+
+9. IMPLEMENTATION SEQUENCE
+--------------------------
+
+Phase 0: Freeze behavior and performance evidence
+
+* Record cold/warm visual and performance baselines before structural changes.
+* Retain Generic_Twin, lucy, multi_lucy, stanford, havoc, Hubble, bigboy, the
+  5k/50k/150k unique hierarchy tests, shaded/wireframe, System GL, and OSMesa.
+* Capture time to overall box, leaf coverage, first mesh, useful stable view,
+  pixel-exact convergence, selection response, erase response, GUI input
+  latency, frame time, resident memory, and cache reuse.
+* Add a fake backend test that records snapshots and deltas without Obol.
+
+
+Phase 1: Introduce the semantic reducer and typed delta internally
+
+* Define compact draw-intent, occurrence, frontier, edit-scope, and selection
+  identities.
+* Define a typed scene delta and committed observer event.
+* Place existing public entry points temporarily over the reducer while porting
+  functionality.  Do not retain these wrappers in the final API.
+* Prove that one semantic transaction produces one committed delta.
+
+
+Phase 2: Establish one backend application path
+
+* Add the private backend adapter contract.
+* Apply a full semantic snapshot only on backend attachment/replacement.
+* Apply each subsequent typed delta exactly once.
+* Remove direct Obol application from the transaction core, the fallback sync,
+  and redundant observer sync.
+* Keep progressive presentation notifications separate from semantic deltas.
+
+
+Phase 3: Consolidate selection
+
+* Compute selection additions/removals and impacted hierarchy IDs once.
+* Feed selection deltas through the backend adapter.
+* Have qged update only affected rows using the same delta.
+* Delete QgObolSelectionSync and duplicate qged synchronization calls.
+* Verify selection made before deferred leaves arrive is retained and applied
+  when occurrence indexes are published.
+
+
+Phase 4: Consolidate edit and erase behavior
+
+* Rehome promotion as a scene edit-scope API with acquire/release semantics.
+* Route erase exact/prefix, draw subsumption, expand/collapse, selection repair,
+  and edit-scope conflict handling through the reducer.
+* Port MGED sed/oed and qged edit previews to the common edit contract.
+* Remove direct public shape geometry mutation used for edit display.
+
+
+Phase 5: Replace public APIs
+
+* Introduce final typed scene, feature, selection, display, and event headers.
+* Port qged, MGED, gsh, libqtcad tests, and libged commands together.
+* Delete generic transaction bags, public renderer handles, raw geometry
+  mutators, compatibility erase/revision aliases, and producer-specific feature
+  APIs.
+* Replace string affected-name results with typed result accessors/deltas.
+
+
+Phase 6: Split implementation by ownership
+
+* Move renderer-specific code under backends/obol.
+* Split progressive, realization, feature, picking, display, and LoD logic at
+  real ownership boundaries.
+* Reduce private headers to narrow subsystem contracts.
+* Move QgModel timing globals into QgModel-owned storage and remove obsolete
+  Obol-named client bridges.
+
+
+Phase 7: Harden the public contract
+
+* Compile every installed header independently as C11 and C++17.
+* Audit exported library symbols against the final installed headers.
+* Maintain a separate internal-plugin ABI list if necessary.
+* Add ownership, stale-reference, cross-owner, reentrancy, teardown, headless,
+  endpoint replacement, and concurrency tests.
+* Regenerate and lock a deliberately small API manifest only after the review
+  is complete.
+
+
+Phase 8: Re-run production-readiness validation
+
+* Run lower-level, integration, GUI, visual comparison, perf, FPS, and memory
+  tests across the full model matrix.
+* Compare System GL and OSMesa semantics and images within intended renderer
+  tolerances.
+* Confirm qged, MGED, and gsh produce the same draw/erase/edit/selection state.
+
+
+10. PERFORMANCE INVARIANTS
+--------------------------
+
+The following are hard constraints during cleanup:
+
+* At most one backend scene-mutation batch per semantic transaction.
+* No per-leaf geometry copying on the GUI thread.
+* No required per-leaf semantic scene node in libged for a compact draw root.
+* No full renderer-scene traversal for a sparse selection or style change.
+* No rebuilding already resident PoP data solely because a transaction was
+  observed twice or a view repaint was requested.
+* Geometry payloads are immutable/shared or moved into their final owner; large
+  arrays are not copied between redundant scene representations.
+* Draw/erase/selection deltas are batched, and ordering between individual leaf
+  publications is not a user-visible requirement.
+* Progressive workers remain bounded by memory as well as CPU concurrency.
+* Renderer and cache memory can reduce non-visible resident PoP prefixes under
+  pressure without deleting semantic draw intent.
+* Semantic revisions change for semantic state; presentation/LoD revisions
+  change for refinement.  Clients can distinguish them cheaply.
+* GUI input and view motion cannot wait indefinitely for a long render or scene
+  merge.  Backend work remains bounded and interruptible at publication
+  boundaries.
+
+
+11. TESTING REQUIREMENTS
+------------------------
+
+11.1 Reducer and backend contract tests
+
+* draw one path, multiple paths, ancestor after descendant, and descendant
+  after ancestor;
+* exact erase and subtree erase under shared/nested roots;
+* draw/erase while an edit scope is active;
+* commit/cancel/conflict edit-scope release;
+* database add/remove/rename/tree/material changes;
+* backend attach, detach, replacement, and headless operation;
+* stale and cross-owner IDs;
+* exactly one delta and one backend application per transaction;
+* observer add/remove during dispatch and reentrant follow-up operations.
+
+
+11.2 Selection tests
+
+* sparse and large range selections;
+* select before leaf realization;
+* selection under draw subsumption and subpath erase;
+* selection maintained through database rename/delete and edit scope changes;
+* selected, active ancestor, immediate parent, grandparent, and tree-row roles;
+* no full-view clear/rebuild for a sparse change;
+* no qged-side Obol traversal.
+
+
+11.3 Large-model and LoD tests
+
+* completely cold and warm cache starts;
+* overall target box followed by leaf boxes and meshes;
+* orthographic rotation/translation retaining useful existing detail unless
+  frame pressure requires coarsening;
+* zoom-in refinement from the current resident level and zoom-out memory
+  recovery;
+* visible-instance changes during rotation;
+* thousands of distinct meshes and reused instances;
+* varied object sizes, hierarchy depths, regions, colors, shaded and wireframe;
+* no final-state boxes unless policy explicitly reports unresolved/failure;
+* convergence progress accurately reaches stable state;
+* no visual cycling, mesh-to-box regression, or repeated progressive restart.
+
+
+11.4 Public API tests
+
+* independent C11 and C++17 header compilation;
+* approved symbol visibility only;
+* Doxygen coverage for all public functions;
+* ownership and lifetime documentation checks;
+* consistent result/status semantics;
+* no installed header references to Obol, Coin, GL, or private libged headers.
+
+
+12. DEFINITION OF DONE
+----------------------
+
+The cleanup is complete when:
+
+* libged has one compact semantic scene authority and one mutation reducer;
+* each committed semantic operation reaches a renderer exactly once;
+* Obol is accessible only through a narrow private backend adapter;
+* qged, MGED, and gsh use the same public scene, selection, and edit APIs;
+* qged contains no renderer traversal for semantic draw or selection repair;
+* public APIs contain no renderer handles, generic value bags, or direct
+  geometry mutation;
+* the public feature API is small, typed, and producer-neutral;
+* global owner reverse lookup is eliminated;
+* installed headers and symbol visibility conform to HACKING;
+* obsolete intermediate APIs and wrappers are removed;
+* cold/warm, GUI, selection, edit, erase, FPS, memory, and visual tests pass;
+* 50k/150k and real-world large-model results meet or improve the recorded
+  pre-cleanup performance baselines.

@@ -294,7 +294,7 @@ joint_mesh(struct ged *gedp, int argc, const char *argv[])
     (void)argv;
 
     topc = ged_who_argv(gedp, topv, (const char **)(topv+2000));
-    ged_draw_set_highlight_state(gedp, 0);
+    (void)ged_scene_highlights_clear(gedp, NULL);
 
     (void)db_walk_tree(gedp->dbip, topc, (const char **)topv,
 		     1,			/* Number of cpus */
@@ -328,7 +328,7 @@ joint_mesh(struct ged *gedp, int argc, const char *argv[])
 	struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
 	style.color_valid = 1;
 	VSET(style.color, 0, 255, 255);
-	(void)_ged_line_set_publish_command_scene_feature(gedp, "joint",
+	(void)_ged_view_feature_batch_publish_line_set(gedp, "joint",
 		(const point_t *)lines.points, NULL, lines.count, &style,
 		"joint", "command-result", NULL, "joint-mesh", 0);
     }

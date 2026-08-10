@@ -420,9 +420,7 @@ main(int ac, char *av[]) {
     }
 
     gedp = ged_open("db", av[1], 1);
-    struct ged_draw_transaction init_txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_NONE, NULL);
-    if (ged_draw_apply_transaction(gedp, &init_txn, NULL) < 0)
+    if (!ged_scene_available(gedp))
 	bu_exit(EXIT_FAILURE, "Could not initialize draw state for GQA test.\n");
     ged_exec_gqa(gedp, 3, gqa);
     printf("%s\n", bu_vls_cstr(gedp->ged_result_str));
@@ -485,8 +483,7 @@ main(int ac, char *av[]) {
     gedp = open_gqa_result_fixture();
     if (!gedp)
 	bu_exit(EXIT_FAILURE, "Could not create GQA result fixture database.\n");
-    init_txn = ged_draw_transaction_make(GED_DRAW_TXN_NONE, NULL);
-    if (ged_draw_apply_transaction(gedp, &init_txn, NULL) < 0)
+    if (!ged_scene_available(gedp))
 	bu_exit(EXIT_FAILURE, "Could not initialize draw state for the GQA result fixture.\n");
 
     run_gqa_result_case(gedp, "-Ag", "gap.g", "gqa::gaps", "gap",

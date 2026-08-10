@@ -331,9 +331,10 @@ set(
   columns.c
   db_index.cpp
   draw_obol.cpp
-  draw_obol_result.cpp
+  ged_view_feature_batch.cpp
   draw.cpp
   ged.cpp
+  ged_scene_api.cpp
   ged_view_state.cpp
   ged_inside.c
   ged_track.c
@@ -373,7 +374,7 @@ set(
 set(
   GED_OBOL_PRIVATE_BRIDGE_SOURCES
   draw_obol.cpp
-  draw_obol_result.cpp
+  ged_view_feature_batch.cpp
   draw.cpp
   ged.cpp
   ged_view_state.cpp
@@ -437,11 +438,15 @@ set(GED_DRAW_API_HEADERS
   ${CMAKE_SOURCE_DIR}/include/ged/view.h
   ${CMAKE_SOURCE_DIR}/include/ged/draw_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/scene.h
+  ${CMAKE_SOURCE_DIR}/include/ged/scene_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/draw_source.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_feature.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view_feature_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/polygon.h
+  ${CMAKE_SOURCE_DIR}/include/ged/polygon_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/selection.h
-  ${CMAKE_SOURCE_DIR}/include/ged/result.h
+  ${CMAKE_SOURCE_DIR}/include/ged/selection_types.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view_feature_batch.h
   ${CMAKE_SOURCE_DIR}/include/ged/display.h
 )
 add_custom_command(
@@ -827,6 +832,7 @@ set(
   ged_draw_view_private.h
   ged_cmd_scanner.cpp
   ged_private.h
+  ged_scene_reducer_private.h
   include/plugin.h
   joint/joint.h
   pnts_util.h

@@ -28,7 +28,6 @@
 #ifndef GED_VIEW_H
 #define GED_VIEW_H
 
-#include "common.h"
 #include "bn/tol.h"
 #include "bg/polygon.h"
 #include "rt/db_fullpath.h"
@@ -36,7 +35,7 @@
 #include "rt/view.h"
 #include "ged/defines.h"
 #include "ged/display.h"
-#include "ged/draw_scene.h"
+#include "ged/scene.h"
 
 __BEGIN_DECLS
 
@@ -58,8 +57,6 @@ typedef enum ged_view_clear_flags {
 #define GED_VIEW_REFRESH_FORCE       0x80000000u
 #define GED_VIEW_REFRESH_ALL         0xffffffffu
 
-GED_EXPORT extern int ged_draw_scene_available(struct ged *gedp);
-
 struct ged_polygon_export_state {
     fastf_t scale;
     point_t origin;
@@ -73,7 +70,7 @@ struct ged_polygon_export_state {
 
 /** Check if a drawable exists */
 #define GED_CHECK_DRAWABLE(_gedp, _flags) \
-    if (!ged_draw_scene_available(_gedp)) { \
+    if (!ged_scene_available(_gedp)) { \
 	int ged_check_drawable_quiet = (_flags) & GED_QUIET; \
 	if (!ged_check_drawable_quiet) { \
 	    bu_vls_trunc((_gedp)->ged_result_str, 0); \
@@ -125,14 +122,31 @@ GED_EXPORT extern int ged_scale_args(struct ged *gedp, int argc, const char *arg
 GED_EXPORT extern int ged_view_context_is_independent(const struct ged_view_context *view);
 GED_EXPORT extern int ged_view_context_independent_scope_is_null(struct ged_view_context *view, int create);
 GED_EXPORT extern void ged_view_context_independent_scope_destroy(struct ged_view_context *view);
-GED_EXPORT extern ged_draw_scene_handle ged_view_context_scene_root_ref(const struct ged_view_context *view);
-GED_EXPORT extern int ged_view_context_scene_root_ref_attach(struct ged_view_context *view, ged_draw_scene_handle root_ref);
 GED_EXPORT extern int ged_view_context_scene_attached(const struct ged_view_context *view);
 GED_EXPORT extern size_t ged_view_context_clear(struct ged_view_context *view, int flags);
 GED_EXPORT extern void *ged_view_context_user_data_get(const struct ged_view_context *view);
 GED_EXPORT extern int ged_view_context_user_data_set(struct ged_view_context *view, void *user_data);
 GED_EXPORT extern void *ged_view_context_tclcad_data_get(const struct ged_view_context *view);
 GED_EXPORT extern int ged_view_context_tclcad_data_set(struct ged_view_context *view, void *tcl_data);
+
+/** Copy the effective view LoD policy into caller-owned storage. */
+GED_EXPORT extern int
+ged_view_lod_policy_get(ged_view_lod_policy *policy,
+	const struct ged_view_context *view);
+
+/** Sanitize and apply a complete LoD policy to a view. */
+GED_EXPORT extern int
+ged_view_lod_policy_apply(struct ged_view_context *view,
+	const ged_view_lod_policy *policy);
+
+/** Apply a LoD policy with an explicit automatic-mode BoT threshold. */
+GED_EXPORT extern int
+ged_view_lod_policy_apply_bot_threshold(struct ged_view_context *view,
+	const ged_view_lod_policy *policy, size_t bot_threshold);
+
+/** Recompute cached LoD bounds after the view geometry changes. */
+GED_EXPORT extern int
+ged_view_lod_bounds_update(struct ged_view_context *view);
 GED_EXPORT extern int ged_view_context_callbacks_set(struct ged_view_context *view, struct bu_ptbl *callbacks);
 GED_EXPORT extern struct ged_view_context *ged_view_context_create(void);
 GED_EXPORT extern struct ged_view_context *ged_view_context_create_with_set(struct ged_view_set *set);

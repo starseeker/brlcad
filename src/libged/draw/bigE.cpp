@@ -2161,16 +2161,26 @@ ged_eval_wire_display_core(struct ged *gedp, int argc, const char *argv[], int e
     }
 
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
-    txn.view = view_ctx;
-    txn.paths = argv;
-    txn.path_count = argc;
-    txn.appearance = &settings;
-    txn.autoview = !no_autoview && !ged_draw_has_paths(gedp, view_ctx, -1);
+    struct ged_scene_draw_request request;
+    ged_scene_draw_request_init(&request);
+    request.view = view_ctx;
+    request.paths = argv;
+    request.path_count = (size_t)argc;
+    request.style.draw_mode =
+	(enum ged_scene_draw_mode)settings.draw_mode;
+    request.style.opacity = settings.transparency;
+    request.style.color_override = settings.color_override;
+    request.style.color[0] = settings.color[0];
+    request.style.color[1] = settings.color[1];
+    request.style.color[2] = settings.color[2];
+    request.style.line_width = settings.s_line_width;
+    request.style.mixed_modes = settings.mixed_modes;
+    request.realization.mode = GED_SCENE_REALIZE_EAGER;
+    request.autoview = !no_autoview &&
+	!ged_scene_has_paths(gedp, view_ctx, GED_SCENE_DRAW_DEFAULT);
 
-    return (ged_draw_apply_transaction(gedp, &txn, NULL) < 0) ?
-	BRLCAD_ERROR : BRLCAD_OK;
+    return ged_scene_draw(gedp, &request, NULL) == GED_SCENE_OK ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 

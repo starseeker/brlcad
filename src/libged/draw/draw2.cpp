@@ -469,19 +469,34 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     /* For autoview gating, base blank-slate detection on DB draw state.
      * View-only objects (overlays, helpers, etc.) should not suppress
      * autoview when no DB geometry is currently drawn. */
-    if (!ged_draw_has_paths(gedp, cv, -1)) {
+    if (!ged_scene_has_paths(gedp, cv, GED_SCENE_DRAW_DEFAULT)) {
 	blank_slate = 1;
     }
 
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
-    txn.view = cv;
-    txn.paths = argv;
-    txn.path_count = argc;
-    txn.appearance = &vs;
-    txn.autoview = blank_slate && !no_autoview;
-    return (ged_draw_apply_transaction(gedp, &txn, NULL) < 0) ?
-	BRLCAD_ERROR : BRLCAD_OK;
+    struct ged_scene_draw_request request;
+    ged_scene_draw_request_init(&request);
+    request.view = cv;
+    request.paths = argv;
+    request.path_count = (size_t)argc;
+    request.style.draw_mode =
+	static_cast<enum ged_scene_draw_mode>(vs.draw_mode);
+    request.style.opacity = vs.transparency;
+    request.style.color_override = vs.color_override;
+    request.style.color[0] = vs.color[0];
+    request.style.color[1] = vs.color[1];
+    request.style.color[2] = vs.color[2];
+    request.style.line_width = vs.s_line_width;
+    request.style.mixed_modes = vs.mixed_modes;
+    if (vs.draw_solid_lines_only)
+	request.style.flags |= GED_SCENE_STYLE_SOLID_LINES_ONLY;
+    if (vs.draw_non_subtract_only)
+	request.style.flags |= GED_SCENE_STYLE_NON_SUBTRACT_ONLY;
+    request.realization.mode = vs.defer_leaf_expansion ?
+	GED_SCENE_REALIZE_PROGRESSIVE : GED_SCENE_REALIZE_EAGER;
+    request.realization.strict = vs.strict_fallback;
+    request.autoview = blank_slate && !no_autoview;
+    return ged_scene_draw(gedp, &request, NULL) == GED_SCENE_OK ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 extern "C" int
@@ -524,22 +539,13 @@ ged_redraw2_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     int ret = BRLCAD_OK;
-    if (!argc) {
-	struct ged_draw_transaction txn =
-	    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-	txn.view = cv;
-	if (ged_draw_apply_transaction(gedp, &txn, NULL) < 0)
-	    ret = BRLCAD_ERROR;
-	return ret;
-    }
-
-    for (int i = 0; i < argc; i++) {
-	struct ged_draw_transaction txn =
-	    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, argv[i]);
-	txn.view = cv;
-	if (ged_draw_apply_transaction(gedp, &txn, NULL) < 0)
-	    ret = BRLCAD_ERROR;
-    }
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = cv;
+    request.paths = argc ? argv : NULL;
+    request.path_count = argc > 0 ? (size_t)argc : 0;
+    if (ged_scene_redraw(gedp, &request, NULL) != GED_SCENE_OK)
+	ret = BRLCAD_ERROR;
 
     return ret;
 }

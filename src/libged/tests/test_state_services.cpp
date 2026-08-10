@@ -56,6 +56,8 @@
 #include "rt/db_attr.h"
 #include "wdb.h"
 
+#include "../ged_scene_backend_private.h"
+
 static int g_failures = 0;
 static const size_t default_index_scale_fanout = 8192;
 static const size_t slow_index_scale_fanout = 100000;
@@ -1062,7 +1064,7 @@ event_order_cb(struct ged *gedp,
 	obs->all_paths.push_back(events[i].path ? events[i].path : "");
 	obs->redraws.push_back(events[i].redraw);
     }
-    obs->current_draw_revision = ged_draw_scene_revision(gedp);
+    obs->current_draw_revision = ged_scene_revision(gedp);
     if (result) {
 	obs->coalesced_count = result->coalesced_event_count;
 	obs->result_draw_before = result->draw_scene_revision_before;
@@ -1546,7 +1548,7 @@ test_events(struct ged *gedp)
     const char *draw_av[2] = {"draw", "all.g"};
     CHECK(ged_exec_draw(gedp, 2, draw_av) == BRLCAD_OK,
 	  "event ordering setup draw all.g must succeed");
-    uint64_t drawn_revision = ged_draw_scene_revision(gedp);
+    uint64_t drawn_revision = ged_scene_revision(gedp);
     CHECK(drawn_revision > 0,
 	  "event ordering setup must create a drawn-scene revision");
 
@@ -1635,7 +1637,7 @@ test_events(struct ged *gedp)
 			       event_order_cb, &metadata_direct_post);
     CHECK(metadata_direct_post_token != 0,
 	  "direct metadata observer must register");
-    uint64_t metadata_draw_before = ged_draw_scene_revision(gedp);
+    uint64_t metadata_draw_before = ged_scene_revision(gedp);
     ged_event_txn_result_init(&result);
     CHECK(ged_event_notify_database_metadata_changed(gedp, &result) >= 0,
 	  "direct metadata event publish must succeed");
@@ -2135,7 +2137,7 @@ test_events(struct ged *gedp)
     CHECK(ged_event_observer_remove(gedp, joint2_translate_post_token) == 1,
 	  "joint2 selection translate observer removal must succeed");
 
-    uint64_t material_revision_before = ged_draw_material_revision(gedp);
+    uint64_t material_revision_before = ged_scene_material_revision(gedp);
     ged_event_txn_result_init(&result);
     CHECK(ged_event_notify_object_material_changed(gedp, "box.r",
 	    &result) >= 0,
@@ -2143,7 +2145,7 @@ test_events(struct ged *gedp)
     CHECK(result.event_count == 1 &&
 	  result.coalesced_event_count == 1,
 	  "named material event result must report one coalesced event");
-    CHECK(ged_draw_material_revision(gedp) > material_revision_before,
+    CHECK(ged_scene_material_revision(gedp) > material_revision_before,
 	  "named material event must bump draw material revision");
     CHECK(std::string(bu_vls_cstr(&result.affected_names)).find("box.r") !=
 	  std::string::npos,
@@ -2163,11 +2165,11 @@ test_events(struct ged *gedp)
     if (rmater_fp) {
 	std::fprintf(rmater_fp, "box.r plastic 21 43 65 1 0\n");
 	std::fclose(rmater_fp);
-	uint64_t rmater_revision_before = ged_draw_material_revision(gedp);
+	uint64_t rmater_revision_before = ged_scene_material_revision(gedp);
 	const char *rmater_av[3] = {"rmater", rmater_file, NULL};
 	CHECK(ged_exec(gedp, 2, rmater_av) == BRLCAD_OK,
 	      "rmater command must publish named material event");
-	CHECK(ged_draw_material_revision(gedp) > rmater_revision_before,
+	CHECK(ged_scene_material_revision(gedp) > rmater_revision_before,
 	      "rmater command must bump draw material revision");
 	CHECK(std::find(rmater_post.all_kinds.begin(),
 			rmater_post.all_kinds.end(),
@@ -2188,13 +2190,13 @@ test_events(struct ged *gedp)
     CHECK(material_assign_post_token != 0,
 	  "material assign observer must register");
     uint64_t material_assign_revision_before =
-	ged_draw_material_revision(gedp);
+	ged_scene_material_revision(gedp);
     const char *material_assign_av[5] = {"material", "assign", "box.r",
 					 "modern_test_material", NULL
 					};
     CHECK(ged_exec(gedp, 4, material_assign_av) == BRLCAD_OK,
 	  "material assign command must publish named material event");
-    CHECK(ged_draw_material_revision(gedp) > material_assign_revision_before,
+    CHECK(ged_scene_material_revision(gedp) > material_assign_revision_before,
 	  "material assign command must bump draw material revision");
     CHECK(std::find(material_assign_post.all_kinds.begin(),
 		    material_assign_post.all_kinds.end(),
@@ -2250,7 +2252,7 @@ test_events(struct ged *gedp)
     CHECK(mater_density_set_post_token != 0,
 	  "mater density set observer must register");
     uint64_t mater_density_set_revision_before =
-	ged_draw_material_revision(gedp);
+	ged_scene_material_revision(gedp);
     const char *mater_density_set_av[5] = {"mater", "-d", "set",
 					   "42,1.0,ModernMapMaterial", NULL
 					  };
@@ -2269,7 +2271,7 @@ test_events(struct ged *gedp)
 		    GED_EVENT_MATERIAL_CHANGED) !=
 	  mater_density_set_post.all_kinds.end(),
 	  "mater density set command must emit global material-changed event");
-    CHECK(ged_draw_material_revision(gedp) >
+    CHECK(ged_scene_material_revision(gedp) >
 	  mater_density_set_revision_before,
 	  "mater density set command must bump draw material revision");
     struct directory *mater_density_set_dp = db_lookup(gedp->dbip,
@@ -2401,13 +2403,13 @@ test_events(struct ged *gedp)
 			       event_order_cb, &color_post);
     CHECK(color_post_token != 0,
 	  "color command observer must register");
-    uint64_t color_revision_before = ged_draw_material_revision(gedp);
+    uint64_t color_revision_before = ged_scene_material_revision(gedp);
     const char *color_av[7] = {"color", "902", "903",
 			       "44", "55", "66", NULL
 			      };
     CHECK(ged_exec(gedp, 6, color_av) == BRLCAD_OK,
 	  "color command must publish global material event");
-    CHECK(ged_draw_material_revision(gedp) > color_revision_before,
+    CHECK(ged_scene_material_revision(gedp) > color_revision_before,
 	  "color command must bump draw material revision");
     CHECK(std::find(color_post.all_kinds.begin(),
 		    color_post.all_kinds.end(),
@@ -2453,13 +2455,13 @@ test_events(struct ged *gedp)
 			       event_order_cb, &concat_post);
     CHECK(concat_post_token != 0,
 	  "concat color-table observer must register");
-    uint64_t concat_revision_before = ged_draw_material_revision(gedp);
+    uint64_t concat_revision_before = ged_scene_material_revision(gedp);
     const char *concat_av[5] = {"concat", "-c", concat_src_g,
 				"_ged_concat_", NULL
 			       };
     CHECK(concat_src && ged_exec(gedp, 4, concat_av) == BRLCAD_OK,
 	  "concat -c command must publish global material event");
-    CHECK(ged_draw_material_revision(gedp) > concat_revision_before,
+    CHECK(ged_scene_material_revision(gedp) > concat_revision_before,
 	  "concat -c command must bump draw material revision");
     CHECK(std::find(concat_post.all_kinds.begin(),
 		    concat_post.all_kinds.end(),
@@ -3253,7 +3255,7 @@ test_events(struct ged *gedp)
 			       event_order_cb, &adjust_attr_post);
     CHECK(adjust_attr_post_token != 0,
 	  "adjust comb attr observer must register");
-    uint64_t adjust_attr_revision_before = ged_draw_material_revision(gedp);
+    uint64_t adjust_attr_revision_before = ged_scene_material_revision(gedp);
     const char *adjust_attr_av[7] = {"adjust", adjust_event_comb, "region",
 				     "1", "id", "8110", NULL
 				    };
@@ -3270,7 +3272,7 @@ test_events(struct ged *gedp)
     CHECK(!observed_named_structural_fallback(adjust_attr_post,
 	    adjust_event_comb),
 	  "adjust comb metadata semantic events must cover raw fallback");
-    CHECK(ged_draw_material_revision(gedp) > adjust_attr_revision_before,
+    CHECK(ged_scene_material_revision(gedp) > adjust_attr_revision_before,
 	  "adjust comb id edit must bump draw material revision");
     CHECK(ged_event_observer_remove(gedp, adjust_attr_post_token) == 1,
 	  "adjust comb attr observer removal must succeed");
@@ -3282,7 +3284,7 @@ test_events(struct ged *gedp)
     CHECK(adjust_material_post_token != 0,
 	  "adjust comb material observer must register");
     uint64_t adjust_material_revision_before =
-	ged_draw_material_revision(gedp);
+	ged_scene_material_revision(gedp);
     const char *adjust_material_av[5] = {"adjust", adjust_event_comb,
 					 "shader", "plastic", NULL
 					};
@@ -3296,7 +3298,7 @@ test_events(struct ged *gedp)
     CHECK(!observed_named_structural_fallback(adjust_material_post,
 	    adjust_event_comb),
 	  "adjust comb material event must cover raw fallback");
-    CHECK(ged_draw_material_revision(gedp) >
+    CHECK(ged_scene_material_revision(gedp) >
 	  adjust_material_revision_before,
 	  "adjust comb material edit must bump draw material revision");
     CHECK(ged_event_observer_remove(gedp, adjust_material_post_token) == 1,
@@ -5659,7 +5661,7 @@ test_events(struct ged *gedp)
 			       event_order_cb, &comb_color_post);
     CHECK(comb_color_post_token != 0,
 	  "comb_color observer must register");
-    uint64_t comb_color_revision_before = ged_draw_material_revision(gedp);
+    uint64_t comb_color_revision_before = ged_scene_material_revision(gedp);
     const char *comb_color_av[6] = {"comb_color", comb_event_region, "11",
 				    "22", "33", NULL
 				   };
@@ -5673,7 +5675,7 @@ test_events(struct ged *gedp)
     CHECK(!observed_named_structural_fallback(comb_color_post,
 	    comb_event_region),
 	  "comb_color semantic event must cover raw comb fallback");
-    CHECK(ged_draw_material_revision(gedp) > comb_color_revision_before,
+    CHECK(ged_scene_material_revision(gedp) > comb_color_revision_before,
 	  "comb_color command must bump draw material revision");
     CHECK(ged_event_observer_remove(gedp, comb_color_post_token) == 1,
 	  "comb_color observer removal must succeed");
@@ -5684,7 +5686,7 @@ test_events(struct ged *gedp)
 			       event_order_cb, &shader_post);
     CHECK(shader_post_token != 0,
 	  "shader observer must register");
-    uint64_t shader_revision_before = ged_draw_material_revision(gedp);
+    uint64_t shader_revision_before = ged_scene_material_revision(gedp);
     const char *shader_av[5] = {"shader", comb_event_region, "plastic",
 				"di=0.5", NULL
 			       };
@@ -5698,7 +5700,7 @@ test_events(struct ged *gedp)
     CHECK(!observed_named_structural_fallback(shader_post,
 	    comb_event_region),
 	  "shader semantic event must cover raw comb fallback");
-    CHECK(ged_draw_material_revision(gedp) > shader_revision_before,
+    CHECK(ged_scene_material_revision(gedp) > shader_revision_before,
 	  "shader command must bump draw material revision");
     CHECK(ged_event_observer_remove(gedp, shader_post_token) == 1,
 	  "shader observer removal must succeed");
@@ -5709,12 +5711,12 @@ test_events(struct ged *gedp)
 			       event_order_cb, &shader_noop_post);
     CHECK(shader_noop_post_token != 0,
 	  "shader no-op observer must register");
-    uint64_t shader_revision_after = ged_draw_material_revision(gedp);
+    uint64_t shader_revision_after = ged_scene_material_revision(gedp);
     CHECK(ged_exec(gedp, 4, shader_av) == BRLCAD_OK,
 	  "shader no-op command must succeed");
     CHECK(shader_noop_post.calls == 0,
 	  "shader no-op command must not publish an event transaction");
-    CHECK(ged_draw_material_revision(gedp) == shader_revision_after,
+    CHECK(ged_scene_material_revision(gedp) == shader_revision_after,
 	  "shader no-op command must not bump draw material revision");
     CHECK(ged_event_observer_remove(gedp, shader_noop_post_token) == 1,
 	  "shader no-op observer removal must succeed");
@@ -5725,7 +5727,7 @@ test_events(struct ged *gedp)
 			       event_order_cb, &item_post);
     CHECK(item_post_token != 0,
 	  "item observer must register");
-    uint64_t item_revision_before = ged_draw_material_revision(gedp);
+    uint64_t item_revision_before = ged_scene_material_revision(gedp);
     const char *item_av[7] = {"item", comb_event_region, "8101", "0",
 			      "41", "100", NULL
 			     };
@@ -5741,7 +5743,7 @@ test_events(struct ged *gedp)
 	  "item command must emit material-changed event for region/material ids");
     CHECK(!observed_named_structural_fallback(item_post, comb_event_region),
 	  "item semantic events must cover raw comb fallback");
-    CHECK(ged_draw_material_revision(gedp) > item_revision_before,
+    CHECK(ged_scene_material_revision(gedp) > item_revision_before,
 	  "item command must bump draw material revision");
     CHECK(ged_event_observer_remove(gedp, item_post_token) == 1,
 	  "item observer removal must succeed");
@@ -5752,7 +5754,7 @@ test_events(struct ged *gedp)
 			       event_order_cb, &edcomb_post);
     CHECK(edcomb_post_token != 0,
 	  "edcomb observer must register");
-    uint64_t edcomb_revision_before = ged_draw_material_revision(gedp);
+    uint64_t edcomb_revision_before = ged_scene_material_revision(gedp);
     const char *edcomb_av[8] = {"edcomb", comb_event_region, "R", "8102",
 				"0", "100", "42", NULL
 			       };
@@ -5768,7 +5770,7 @@ test_events(struct ged *gedp)
 	  "edcomb command must emit material-changed event for region/material ids");
     CHECK(!observed_named_structural_fallback(edcomb_post, comb_event_region),
 	  "edcomb semantic events must cover raw comb fallback");
-    CHECK(ged_draw_material_revision(gedp) > edcomb_revision_before,
+    CHECK(ged_scene_material_revision(gedp) > edcomb_revision_before,
 	  "edcomb command must bump draw material revision");
     CHECK(ged_event_observer_remove(gedp, edcomb_post_token) == 1,
 	  "edcomb observer removal must succeed");
@@ -5787,7 +5789,7 @@ test_events(struct ged *gedp)
 	std::fprintf(rcodes_fp, "8103 0 43 100 %s\n", comb_event_region);
 	std::fprintf(rcodes_fp, "8201 0 51 100 %s\n", comb_event_region_b);
 	std::fclose(rcodes_fp);
-	uint64_t rcodes_revision_before = ged_draw_material_revision(gedp);
+	uint64_t rcodes_revision_before = ged_scene_material_revision(gedp);
 	const char *rcodes_av[3] = {"rcodes", rcodes_file, NULL};
 	CHECK(ged_exec(gedp, 2, rcodes_av) == BRLCAD_OK,
 	      "rcodes command must publish region metadata events");
@@ -5810,7 +5812,7 @@ test_events(struct ged *gedp)
 	      !observed_named_structural_fallback(rcodes_post,
 		      comb_event_region_b),
 	      "rcodes semantic events must cover raw comb fallback");
-	CHECK(ged_draw_material_revision(gedp) > rcodes_revision_before,
+	CHECK(ged_scene_material_revision(gedp) > rcodes_revision_before,
 	      "rcodes command must bump draw material revision");
 	bu_file_delete(rcodes_file);
     }
@@ -6143,48 +6145,220 @@ test_events(struct ged *gedp)
     return 0;
 }
 
+struct scene_delta_observer {
+    size_t calls = 0;
+    enum ged_scene_delta_kind kind = GED_SCENE_DELTA_UNKNOWN;
+    std::vector<std::string> paths;
+    uint64_t revision_before = 0;
+    uint64_t revision_after = 0;
+};
+
+struct recording_scene_backend {
+    size_t apply_calls = 0;
+    size_t snapshot_calls = 0;
+    std::vector<enum ged_draw_transaction_kind> kinds;
+};
+
+static int
+recording_scene_backend_apply(
+    struct ged *UNUSED(gedp),
+    const struct ged_draw_transaction *transaction,
+    const struct ged_draw_transaction_result *UNUSED(result),
+    void *client_data)
+{
+    recording_scene_backend *backend =
+	static_cast<recording_scene_backend *>(client_data);
+    if (!backend || !transaction)
+	return 0;
+    backend->apply_calls++;
+    backend->kinds.push_back(transaction->kind);
+    return 1;
+}
+
+static int
+recording_scene_backend_snapshot(struct ged *UNUSED(gedp), void *client_data)
+{
+    recording_scene_backend *backend =
+	static_cast<recording_scene_backend *>(client_data);
+    if (!backend)
+	return 0;
+    backend->snapshot_calls++;
+    return 1;
+}
+
+static void
+scene_delta_cb(struct ged *UNUSED(gedp),
+	       const struct ged_scene_delta *delta,
+	       void *client_data)
+{
+    scene_delta_observer *observer =
+	static_cast<scene_delta_observer *>(client_data);
+    if (!observer)
+	return;
+    observer->calls++;
+    observer->kind = ged_scene_delta_kind(delta);
+    observer->paths.clear();
+    for (size_t i = 0; i < ged_scene_delta_path_count(delta); i++) {
+	const char *path = ged_scene_delta_path_at(delta, i);
+	if (path)
+	    observer->paths.emplace_back(path);
+    }
+    observer->revision_before = ged_scene_delta_revision_before(delta);
+    observer->revision_after = ged_scene_delta_revision_after(delta);
+}
+
 static int
 test_draw(struct ged *gedp)
 {
     bu_log("=== GedDrawState retained path queries ===\n");
 
-    const char *draw_av[2] = {"draw", "all.g"};
-    CHECK(ged_exec_draw(gedp, 2, draw_av) == BRLCAD_OK,
-	  "draw all.g must succeed");
-    CHECK(ged_draw_has_shapes(gedp) == 1,
-	  "retained draw state must contain shapes after draw");
-    CHECK(ged_draw_scene_revision(gedp) > 0,
+    struct ged_scene_result *scene_result = ged_scene_result_create();
+    CHECK(scene_result != NULL,
+	  "typed scene result allocation must succeed");
+
+    struct ged_scene_draw_request invalid_request;
+    ged_scene_draw_request_init(&invalid_request);
+    CHECK(ged_scene_draw(gedp, &invalid_request, scene_result) ==
+	  GED_SCENE_INVALID,
+	  "typed draw must reject an empty path request");
+    CHECK(ged_scene_result_status(scene_result) == GED_SCENE_INVALID,
+	  "typed scene result must preserve invalid-request status");
+
+    struct ged *backend_gedp = ged_open("db", gedp->dbip->dbi_filename, 0);
+    CHECK(backend_gedp != NULL,
+	"backend contract test must open an isolated headless GED owner");
+    if (!backend_gedp) {
+	ged_scene_result_destroy(scene_result);
+	return 1;
+    }
+    recording_scene_backend recording_backend;
+    const struct ged_scene_backend_ops recording_ops = {
+	recording_scene_backend_apply,
+	recording_scene_backend_snapshot,
+	NULL
+    };
+    ged_scene_backend_set_private(backend_gedp, &recording_ops,
+	&recording_backend);
+
+    CHECK(recording_backend.snapshot_calls == 1,
+	"backend attachment must consume exactly one semantic snapshot");
+    const char *recording_paths[] = {"all.g"};
+    struct ged_scene_draw_request recording_draw;
+    ged_scene_draw_request_init(&recording_draw);
+    recording_draw.paths = recording_paths;
+    recording_draw.path_count = 1;
+    recording_draw.realization.mode = GED_SCENE_REALIZE_EAGER;
+    CHECK(ged_scene_draw(backend_gedp, &recording_draw, scene_result) ==
+	GED_SCENE_OK,
+	"recording backend draw must commit");
+    CHECK(recording_backend.apply_calls == 1 &&
+	recording_backend.kinds.size() == 1 &&
+	recording_backend.kinds[0] == GED_DRAW_TXN_DRAW,
+	"one semantic draw commit must reach the backend exactly once");
+    struct ged_scene_erase_request recording_erase;
+    ged_scene_erase_request_init(&recording_erase);
+    recording_erase.path = "all.g";
+    CHECK(ged_scene_erase(backend_gedp, &recording_erase, scene_result) ==
+	GED_SCENE_OK, "recording backend erase must commit");
+    CHECK(recording_backend.apply_calls == 2 &&
+	recording_backend.kinds.size() == 2 &&
+	recording_backend.kinds[0] == GED_DRAW_TXN_DRAW &&
+	recording_backend.kinds[1] == GED_DRAW_TXN_ERASE,
+	"one semantic erase commit must reach the backend exactly once");
+    ged_scene_backend_set_private(backend_gedp, NULL, NULL);
+    ged_close(backend_gedp);
+
+    const char *scene_paths[] = {"all.g"};
+    scene_delta_observer observer;
+    ged_scene_observer_token observer_token =
+	ged_scene_observer_add(gedp, scene_delta_cb, &observer);
+    CHECK(observer_token != 0,
+	  "typed scene observer registration must succeed");
+    struct ged_scene_draw_request draw_request;
+    ged_scene_draw_request_init(&draw_request);
+    draw_request.paths = scene_paths;
+    draw_request.path_count = 1;
+    draw_request.realization.mode = GED_SCENE_REALIZE_EAGER;
+    CHECK(ged_scene_draw(gedp, &draw_request, scene_result) == GED_SCENE_OK,
+	  "typed draw all.g must succeed");
+    CHECK(ged_scene_result_status(scene_result) == GED_SCENE_OK,
+	  "typed draw result must report success");
+    CHECK(ged_scene_result_changed(scene_result) == 1,
+	  "typed draw must report a semantic scene change");
+    CHECK(ged_scene_result_path_count(scene_result) == 1,
+	  "typed draw must report its affected path");
+    CHECK(BU_STR_EQUAL(ged_scene_result_path_at(scene_result, 0), "all.g"),
+	  "typed draw affected path must be structured and exact");
+    CHECK(ged_scene_result_revision_after(scene_result) >
+	  ged_scene_result_revision_before(scene_result),
+	  "typed draw must report an advancing scene revision");
+    CHECK(ged_scene_result_path_at(scene_result, 1) == NULL,
+	  "typed result path access must reject an out-of-range index");
+    CHECK(observer.calls == 1,
+	  "one typed draw operation must publish exactly one committed delta");
+    CHECK(observer.kind == GED_SCENE_DELTA_DRAW,
+	  "typed observer must identify a committed draw delta");
+    CHECK(observer.paths.size() == 1 && observer.paths[0] == "all.g",
+	  "typed observer must receive the structured draw path");
+    CHECK(observer.revision_after > observer.revision_before,
+	  "typed observer must receive the committed revision transition");
+    /* A semantic draw must remain valid without constructing a renderer or a
+     * per-leaf libged mirror.  Attached-backend tests validate realized
+     * occurrence counts separately. */
+    CHECK(ged_scene_revision(gedp) > 0,
 	  "draw scene revision must advance after draw");
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     CHECK(view_ctx != NULL,
 	  "draw test must have an active GED view context");
-    CHECK(ged_draw_path_state(gedp, view_ctx, "all.g", -1) == 1,
+    CHECK(ged_scene_path_state_get(gedp, view_ctx, "all.g",
+	GED_SCENE_DRAW_DEFAULT) == GED_SCENE_PATH_DRAWN,
 	  "draw path_state must report all.g fully drawn");
-    CHECK(ged_draw_path_state(gedp, view_ctx,
-			      "all.g/platform.r", -1) == 1,
+    CHECK(ged_scene_path_state_get(gedp, view_ctx,
+			      "all.g/platform.r", GED_SCENE_DRAW_DEFAULT) ==
+	  GED_SCENE_PATH_DRAWN,
 	  "draw path_state must report child path drawn");
 
     struct bu_vls group_paths = BU_VLS_INIT_ZERO;
-    CHECK(ged_draw_list_paths(gedp, view_ctx, -1, 0, &group_paths) > 0,
+    CHECK(ged_scene_paths_append(gedp, view_ctx, GED_SCENE_DRAW_DEFAULT,
+	GED_SCENE_PATHS_DRAW_INTENTS, &group_paths) > 0,
 	  "draw list must report command-level paths");
     CHECK(std::string(bu_vls_cstr(&group_paths)).find("all.g") !=
 	  std::string::npos,
 	  "draw list must include all.g");
     bu_vls_free(&group_paths);
 
-    struct bu_vls leaf_paths = BU_VLS_INIT_ZERO;
-    CHECK(ged_draw_list_paths(gedp, view_ctx, -1, 1, &leaf_paths) > 0,
-	  "expanded draw list must report realized leaf paths");
-    CHECK(std::string(bu_vls_cstr(&leaf_paths)).find("platform.r") !=
-	  std::string::npos,
-	  "expanded draw list must include realized child paths");
-    bu_vls_free(&leaf_paths);
+    /* Compact rendering intentionally has no required per-leaf libged
+     * mirror.  Backend realization/streaming tests own occurrence coverage;
+     * this semantic reducer test verifies only retained draw intent. */
 
-    const char *erase_av[2] = {"erase", "all.g"};
-    CHECK(ged_exec_erase(gedp, 2, erase_av) == BRLCAD_OK,
-	  "erase all.g must succeed");
-    CHECK(ged_draw_path_state(gedp, view_ctx, "all.g", -1) == 0,
+    struct ged_scene_erase_request erase_request;
+    ged_scene_erase_request_init(&erase_request);
+    erase_request.path = "all.g";
+    CHECK(ged_scene_erase(gedp, &erase_request, scene_result) == GED_SCENE_OK,
+	  "typed erase all.g must succeed");
+    CHECK(ged_scene_result_status(scene_result) == GED_SCENE_OK,
+	  "typed erase result must report success");
+    CHECK(ged_scene_result_changed(scene_result) == 1,
+	  "typed erase must report a semantic scene change");
+    CHECK(ged_scene_result_path_count(scene_result) == 1 &&
+	  BU_STR_EQUAL(ged_scene_result_path_at(scene_result, 0), "all.g"),
+	  "typed erase must report its affected path");
+    CHECK(observer.calls == 2,
+	  "one typed erase operation must publish exactly one committed delta");
+    CHECK(observer.kind == GED_SCENE_DELTA_ERASE &&
+	  observer.paths.size() == 1 && observer.paths[0] == "all.g",
+	  "typed observer must receive the structured erase delta");
+    CHECK(ged_scene_path_state_get(gedp, view_ctx, "all.g",
+	GED_SCENE_DRAW_DEFAULT) == GED_SCENE_PATH_NOT_DRAWN,
 	  "draw path_state must clear after erase");
+
+    ged_scene_result_clear(scene_result);
+    CHECK(ged_scene_result_status(scene_result) == GED_SCENE_OK &&
+	  ged_scene_result_path_count(scene_result) == 0,
+	  "typed scene result clear must reset reusable storage");
+    CHECK(ged_scene_observer_remove(gedp, observer_token) == 1,
+	  "typed scene observer removal must succeed");
+    ged_scene_result_destroy(scene_result);
 
     return 0;
 }

@@ -53,12 +53,11 @@ set(
   QgKeyVal.cpp
   QgMeasureFilter.cpp
   QgModel.cpp
-  QgObolDrawSync.cpp
+  QgSceneSync.cpp
   QgObolExport.cpp
   QgObolMeasure.cpp
   QgObolPick.cpp
   QgObolSnap.cpp
-  QgObolSelectionSync.cpp
   QgObolViewSync.cpp
   QgObolWindowHost.cpp
   QgPaletteController.cpp
@@ -145,8 +144,7 @@ set(
   ${qtcad_hdrs}
   QgCanvasInput.h
   QgCanvasState.h
-  QgObolDrawSyncPrivate.h
-  QgObolSelectionSyncPrivate.h
+  QgSceneSyncPrivate.h
   QgObolViewSyncPrivate.h
   qtcad_resources.qrc
   QgGL.cpp

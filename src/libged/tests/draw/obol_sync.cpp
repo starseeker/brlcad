@@ -36,8 +36,10 @@
 #include "ged/commands.h"
 #include "ged/draw.h"
 #include "ged/display.h"
+#include "ged/scene_internal.h"
 #include "ged/selection_state.h"
 #include "ged/view.h"
+#include "ged/view_feature_internal.h"
 #include "opennurbs_sphere.h"
 #include "rt/db_internal.h"
 #include "rt/edit.h"
@@ -438,23 +440,13 @@ struct command_result_callback_state {
     int saw_remove_prefix;
     int saw_stale_failure;
     int saw_commit_failure;
-    int saw_custom_update;
     uint64_t line_layers_feature_id;
     uint64_t metadata_feature_id;
     uint64_t primitive_metadata_feature_id;
-    uint64_t custom_feature_id;
-};
-
-struct custom_node_provider_state {
-    int call_count;
-    int saw_request;
-    uint64_t generation;
-    int local;
-    SoNode *node;
 };
 
 static void
-command_result_cb(const struct ged_result_event *result, void *data)
+command_event_cb(const struct ged_view_feature_batch_event *result, void *data)
 {
     struct command_result_callback_state *ctx =
 	(struct command_result_callback_state *)data;
@@ -463,16 +455,16 @@ command_result_cb(const struct ged_result_event *result, void *data)
 
     ctx->callback_count++;
     switch (result->status) {
-	case GED_RESULT_ACCEPTED:
+	case GED_VIEW_FEATURE_BATCH_ACCEPTED:
 	    ctx->accepted_count++;
 	    break;
-	case GED_RESULT_UPDATED:
+	case GED_VIEW_FEATURE_BATCH_UPDATED:
 	    ctx->updated_count++;
 	    break;
-	case GED_RESULT_REMOVED:
+	case GED_VIEW_FEATURE_BATCH_REMOVED:
 	    ctx->removed_count++;
 	    break;
-	case GED_RESULT_FAILED:
+	case GED_VIEW_FEATURE_BATCH_FAILED:
 	    ctx->failed_count++;
 	    break;
 	default:
@@ -481,62 +473,35 @@ command_result_cb(const struct ged_result_event *result, void *data)
 
     const char *name = result->feature_name ? result->feature_name : "";
     const char *command = result->command ? result->command : "";
-    if (result->status == GED_RESULT_UPDATED &&
+    if (result->status == GED_VIEW_FEATURE_BATCH_UPDATED &&
 	    BU_STR_EQUAL(name, "rtcheck::overlaps") &&
 	    BU_STR_EQUAL(command, "lineLayersReplace")) {
 	ctx->saw_line_layers_update = 1;
 	ctx->line_layers_feature_id = result->feature_id;
     }
-    if (result->status == GED_RESULT_UPDATED &&
+    if (result->status == GED_VIEW_FEATURE_BATCH_UPDATED &&
 	    BU_STR_EQUAL(name, "rtcheck::overlaps") &&
 	    BU_STR_EQUAL(command, "metadataReplace")) {
 	ctx->saw_metadata_update = 1;
 	ctx->metadata_feature_id = result->feature_id;
     }
-    if (result->status == GED_RESULT_UPDATED &&
+    if (result->status == GED_VIEW_FEATURE_BATCH_UPDATED &&
 	    BU_STR_EQUAL(name, "rtcheck::overlaps") &&
 	    BU_STR_EQUAL(command, "primitiveMetadataReplace")) {
 	ctx->saw_primitive_metadata_update = 1;
 	ctx->primitive_metadata_feature_id = result->feature_id;
     }
-    if (result->status == GED_RESULT_REMOVED &&
+    if (result->status == GED_VIEW_FEATURE_BATCH_REMOVED &&
 	    BU_STR_EQUAL(command, "removePrefix") &&
 	    bu_strncmp(name, "rtcheck::", strlen("rtcheck::")) == 0)
 	ctx->saw_remove_prefix = 1;
-    if (result->status == GED_RESULT_FAILED &&
+    if (result->status == GED_VIEW_FEATURE_BATCH_FAILED &&
 	    BU_STR_EQUAL(name, "rtcheck::generation") &&
 	    BU_STR_EQUAL(command, "lineLayersReplace"))
 	ctx->saw_stale_failure = 1;
-    if (result->status == GED_RESULT_FAILED &&
+    if (result->status == GED_VIEW_FEATURE_BATCH_FAILED &&
 	    BU_STR_EQUAL(command, "commit"))
 	ctx->saw_commit_failure = 1;
-    if (result->status == GED_RESULT_UPDATED &&
-	    BU_STR_EQUAL(name, "custom::node") &&
-	    BU_STR_EQUAL(command, "customNodeReplace")) {
-	ctx->saw_custom_update = 1;
-	ctx->custom_feature_id = result->feature_id;
-    }
-}
-
-static void *
-custom_node_provider_cb(
-	const struct ged_result_custom_node_request *request,
-	void *data)
-{
-    struct custom_node_provider_state *ctx =
-	(struct custom_node_provider_state *)data;
-    if (!ctx || !request)
-	return NULL;
-
-    ctx->call_count++;
-    ctx->saw_request =
-	BU_STR_EQUAL(request->feature_name, "custom::node") &&
-	BU_STR_EQUAL(request->owner_id, "custom") &&
-	BU_STR_EQUAL(request->owner_role, "command-result");
-    ctx->generation = request->generation;
-    ctx->local = request->local;
-    ctx->node = new SoSeparator;
-    return ctx->node;
 }
 
 static int
@@ -2186,8 +2151,8 @@ frontier_paths(struct ged *gedp)
 {
     std::set<std::string> paths;
     struct bu_vls listing = BU_VLS_INIT_ZERO;
-    (void)ged_draw_list_paths(gedp, ged_view_active_ctx(gedp), -1, 0,
-	&listing);
+    (void)ged_scene_paths_append(gedp, ged_view_active_ctx(gedp),
+	GED_SCENE_DRAW_DEFAULT, GED_SCENE_PATHS_DRAW_INTENTS, &listing);
     const char *start = bu_vls_cstr(&listing);
     for (const char *p = start; ; p++) {
 	if (*p != '\n' && *p != '\r' && *p != '\0')
@@ -2295,18 +2260,20 @@ exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
     if (!ged_selection_select_path(gedp, NULL, nested_target, 1))
 	FAIL("frontier test should select the nested target");
 
-    struct ged_draw_promotion_request request =
-	GED_DRAW_PROMOTION_REQUEST_INIT;
+    struct ged_scene_edit_request request;
+    ged_scene_edit_request_init(&request);
     request.path = nested_target;
     request.view = ged_view_active_ctx(gedp);
-    request.scope = GED_DRAW_PROMOTE_EXACT_OCCURRENCE;
-    request.role = "frontier-regression";
-    struct ged_draw_promotion_result promotion;
-    ged_draw_promotion_result_init(&promotion);
-    if (ged_draw_promote_path(gedp, &request, &promotion) <= 0 ||
-	    promotion.occurrence_count != 1 ||
-	    promotion.replaced_root_count != 1)
+    request.occurrences = GED_SCENE_EDIT_EXACT_OCCURRENCE;
+    request.purpose = "frontier-regression";
+    ged_scene_edit_scope_ref edit_scope = GED_SCENE_EDIT_SCOPE_REF_NULL;
+    struct ged_scene_result *edit_result = ged_scene_result_create();
+    if (ged_scene_edit_acquire(gedp, &request, &edit_scope,
+	    edit_result) != GED_SCENE_OK ||
+	    ged_scene_result_path_count(edit_result) != 1 ||
+	    ged_scene_result_group_count(edit_result) != 1)
 	FAIL("exact promotion should split one drawn root");
+    ged_scene_result_destroy(edit_result);
     if (!scene || scene->getDatabaseSourceCount() != 1 ||
 	    !source_for_path(scene, nested_root))
 	FAIL("promotion must retain one LoD/data-owning database source");
@@ -2321,17 +2288,15 @@ exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
     if (ged_selection_count(gedp, NULL) != 1)
 	FAIL("promotion must not change semantic selection membership");
 
-    struct ged_draw_promotion_result released;
-    ged_draw_promotion_result_init(&released);
-    if (ged_draw_release_promotion(gedp, promotion.promotion,
-	    GED_DRAW_PROMOTION_CANCEL, &released) <= 0 ||
-	    released.conflict_count != 0 ||
+    edit_result = ged_scene_result_create();
+    if (ged_scene_edit_release(gedp, edit_scope,
+	    GED_SCENE_EDIT_CANCEL, edit_result) != GED_SCENE_OK ||
+	    ged_scene_result_conflict_count(edit_result) != 0 ||
 	    frontier_paths(gedp) != std::set<std::string>{nested_root})
 	FAIL("unchanged promotion should collapse to its original draw intent");
     if (ged_selection_count(gedp, NULL) != 1)
 	FAIL("promotion collapse must preserve semantic selection membership");
-    ged_draw_promotion_result_free(&released);
-    ged_draw_promotion_result_free(&promotion);
+    ged_scene_result_destroy(edit_result);
 
     /* The common librt edit buffer owns the same presentation lifecycle:
      * staging a primitive edit promotes every already-drawn occurrence, while
@@ -2413,22 +2378,23 @@ exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
     if (frontier_paths(gedp) != std::set<std::string>{nested_root})
 	FAIL("a covered narrow draw must remain subsumed by the broad intent");
 
-    struct ged_draw_transaction erase =
-	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, nested_target);
+    struct ged_scene_erase_request erase;
+    ged_scene_erase_request_init(&erase);
+    erase.path = nested_target;
     erase.view = ged_view_active_ctx(gedp);
-    struct ged_draw_transaction_result erase_result;
-    ged_draw_transaction_result_init(&erase_result);
-    if (ged_draw_apply_transaction(gedp, &erase, &erase_result) <= 0 ||
-	    !erase_result.presentation_only ||
+    struct ged_scene_result *erase_result = ged_scene_result_create();
+    if (ged_scene_erase(gedp, &erase, erase_result) != GED_SCENE_OK ||
 	    frontier_paths(gedp) != std::set<std::string>{nested_root} ||
-	    ged_draw_path_state(gedp, ged_draw_active_view_ctx(gedp),
-		nested_root, -1) != 2 ||
-	    ged_draw_path_state(gedp, ged_draw_active_view_ctx(gedp),
-		nested_target, -1) != 0 ||
-	    ged_draw_path_state(gedp, ged_draw_active_view_ctx(gedp),
-		nested_sibling, -1) != 1)
+	    ged_scene_path_state_get(gedp, ged_draw_active_view_ctx(gedp),
+		nested_root, GED_SCENE_DRAW_DEFAULT) !=
+		GED_SCENE_PATH_PARTIALLY_DRAWN ||
+	    ged_scene_path_state_get(gedp, ged_draw_active_view_ctx(gedp),
+		nested_target, GED_SCENE_DRAW_DEFAULT) !=
+		GED_SCENE_PATH_NOT_DRAWN ||
+	    ged_scene_path_state_get(gedp, ged_draw_active_view_ctx(gedp),
+		nested_sibling, GED_SCENE_DRAW_DEFAULT) != GED_SCENE_PATH_DRAWN)
 	FAIL("nested erase should retain one compact owner with partial/hidden/full path states");
-    ged_draw_transaction_result_free(&erase_result);
+    ged_scene_result_destroy(erase_result);
     SoBRLDatabaseSource *nested_source =
 	source_for_path(scene, nested_root);
     if (!nested_source || nested_source->getCompactInstanceCount() != 3 ||
@@ -2467,54 +2433,65 @@ exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
 	FAIL("all-occurrence promotion should draw the reuse root");
     request.path =
 	"reuse_root.c/reuse_inst_a.c/reuse_shared.c/reuse_leaf.s";
-    request.scope = GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES;
-    ged_draw_promotion_result_init(&promotion);
-    if (ged_draw_promote_path(gedp, &request, &promotion) <= 0 ||
-	    promotion.occurrence_count != 2 ||
-	    promotion.replaced_root_count != 1 ||
+    request.occurrences = GED_SCENE_EDIT_ALL_DRAWN_OCCURRENCES;
+    edit_scope = GED_SCENE_EDIT_SCOPE_REF_NULL;
+    edit_result = ged_scene_result_create();
+    if (ged_scene_edit_acquire(gedp, &request, &edit_scope,
+	    edit_result) != GED_SCENE_OK ||
+	    ged_scene_result_path_count(edit_result) != 2 ||
+	    ged_scene_result_group_count(edit_result) != 1 ||
 	    frontier_paths(gedp) != std::set<std::string>{"reuse_root.c"})
 	FAIL("all-occurrence promotion should retain one compact owner per root");
-    ged_draw_promotion_result_init(&released);
-    if (ged_draw_release_promotion(gedp, promotion.promotion,
-	    GED_DRAW_PROMOTION_COMMIT, &released) <= 0 ||
+    ged_scene_result_destroy(edit_result);
+    edit_result = ged_scene_result_create();
+    if (ged_scene_edit_release(gedp, edit_scope,
+	    GED_SCENE_EDIT_COMMIT, edit_result) != GED_SCENE_OK ||
 	    frontier_paths(gedp) != std::set<std::string>{"reuse_root.c"})
 	FAIL("all-occurrence promotion should collapse without duplicate roots");
-    ged_draw_promotion_result_free(&released);
-    ged_draw_promotion_result_free(&promotion);
+    ged_scene_result_destroy(edit_result);
 
     frontier_clear(gedp);
     if (frontier_draw_one(gedp, "dup_twice.c") != BRLCAD_OK)
 	FAIL("duplicate-occurrence promotion should draw its root");
     request.path = "dup_twice.c/dup_leaf.s@1";
-    request.scope = GED_DRAW_PROMOTE_EXACT_OCCURRENCE;
-    ged_draw_promotion_result_init(&promotion);
-    if (ged_draw_promote_path(gedp, &request, &promotion) <= 0 ||
+    request.occurrences = GED_SCENE_EDIT_EXACT_OCCURRENCE;
+    edit_scope = GED_SCENE_EDIT_SCOPE_REF_NULL;
+    edit_result = ged_scene_result_create();
+    if (ged_scene_edit_acquire(gedp, &request, &edit_scope,
+	    edit_result) != GED_SCENE_OK ||
 	    frontier_paths(gedp) != std::set<std::string>{"dup_twice.c"})
 	FAIL("exact promotion should preserve duplicate child occurrences");
+    ged_scene_result_destroy(edit_result);
 
-    erase = ged_draw_transaction_make(GED_DRAW_TXN_ERASE, request.path);
+    ged_scene_erase_request_init(&erase);
+    erase.path = request.path;
     erase.view = ged_view_active_ctx(gedp);
-    if (ged_draw_apply_transaction(gedp, &erase, NULL) <= 0)
+    erase_result = ged_scene_result_create();
+    if (ged_scene_erase(gedp, &erase, erase_result) != GED_SCENE_OK ||
+	!ged_scene_result_changed(erase_result))
 	FAIL("draw change inside a promotion should succeed");
-    ged_draw_promotion_result_init(&released);
-    const int duplicate_release = ged_draw_release_promotion(
-	gedp, promotion.promotion, GED_DRAW_PROMOTION_CANCEL, &released);
+    ged_scene_result_destroy(erase_result);
+    edit_result = ged_scene_result_create();
+    const enum ged_scene_status duplicate_release = ged_scene_edit_release(
+	gedp, edit_scope, GED_SCENE_EDIT_CANCEL, edit_result);
     const std::set<std::string> duplicate_frontier = frontier_paths(gedp);
-    const int duplicate_state = ged_draw_path_state(
-	gedp, ged_draw_active_view_ctx(gedp), request.path, -1);
-    if (duplicate_release != 0 || released.conflict_count != 1 ||
+    const enum ged_scene_path_state duplicate_state =
+	ged_scene_path_state_get(gedp, ged_draw_active_view_ctx(gedp),
+	    request.path, GED_SCENE_DRAW_DEFAULT);
+    if (duplicate_release != GED_SCENE_OK ||
+	    ged_scene_result_conflict_count(edit_result) != 1 ||
 	    duplicate_frontier != std::set<std::string>{"dup_twice.c"} ||
-	    duplicate_state != 0) {
+	    duplicate_state != GED_SCENE_PATH_NOT_DRAWN) {
 	fprintf(stderr,
 	    "duplicate conflict: release=%d conflicts=%zu state=%d paths=",
-	    duplicate_release, released.conflict_count, duplicate_state);
+	    static_cast<int>(duplicate_release),
+	    ged_scene_result_conflict_count(edit_result), duplicate_state);
 	for (const std::string &path : duplicate_frontier)
 	    fprintf(stderr, " %s", path.c_str());
 	fprintf(stderr, "\n");
 	FAIL("same-root conflict should preserve the user's current frontier");
     }
-    ged_draw_promotion_result_free(&released);
-    ged_draw_promotion_result_free(&promotion);
+    ged_scene_result_destroy(edit_result);
 
     (void)ged_selection_clear(gedp, NULL);
     frontier_clear(gedp);
@@ -2918,16 +2895,27 @@ main(int argc, char **argv)
 	FAIL("GED diagnostic line-layer replacement should stamp typed Obol diagnostic metadata");
 
     struct command_result_callback_state command_callback_state = {};
-    struct ged_result_desc command_scene_desc =
-	GED_RESULT_SCENE_DESC_INIT;
-    command_scene_desc.owner_id = "rtcheck";
-    command_scene_desc.owner_role = "command-result";
-    command_scene_desc.result_cb = command_result_cb;
-    command_scene_desc.result_cb_data = &command_callback_state;
-    struct ged_result_scene *command_scene =
-	ged_result_begin(feature_view_ctx, &command_scene_desc);
-    if (!command_scene)
-	FAIL("GED command-scene begin should create an Obol-backed publication context");
+    struct ged_view_feature_batch_desc feature_batch_desc =
+	GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    feature_batch_desc.owner_id = "rtcheck";
+    feature_batch_desc.owner_role = "command-result";
+    feature_batch_desc.event_cb = command_event_cb;
+    feature_batch_desc.event_cb_data = &command_callback_state;
+    struct ged_view_feature_batch *aborted_scene =
+	ged_view_feature_batch_begin(feature_view_ctx, &feature_batch_desc);
+    if (!aborted_scene ||
+	!ged_view_feature_batch_line_set_replace(aborted_scene,
+	    "rtcheck::aborted", feature_points, feature_cmds, 2, NULL) ||
+	owned_controller->features().exists("rtcheck::aborted"))
+	FAIL("GED feature batches must not publish staged geometry before commit");
+    ged_view_feature_batch_abort(aborted_scene);
+    if (owned_controller->features().exists("rtcheck::aborted"))
+	FAIL("GED feature-batch abort must discard staged geometry");
+
+    struct ged_view_feature_batch *feature_batch =
+	ged_view_feature_batch_begin(feature_view_ctx, &feature_batch_desc);
+    if (!feature_batch)
+	FAIL("GED feature-batch begin should create an Obol-backed publication context");
     struct ged_view_feature_style command_style =
 	GED_VIEW_FEATURE_STYLE_INIT;
     command_style.visible = 1;
@@ -2938,23 +2926,26 @@ main(int argc, char **argv)
     command_layer.points = feature_points;
     command_layer.commands = feature_cmds;
     command_layer.point_count = 2;
-    struct ged_result_metadata command_metadata[2] = {
+    struct ged_view_feature_metadata command_metadata[2] = {
 	{"result.kind", "overlap"},
 	{"result.count", "1"}
     };
-    struct ged_result_metadata command_primitive_metadata[2] = {
+    struct ged_view_feature_metadata command_primitive_metadata[2] = {
 	{"overlap.objects", "box.s cone.s"},
 	{"overlap.depth", "0.25"}
     };
-    if (!ged_result_line_layers_replace(command_scene,
+    if (!ged_view_feature_batch_line_layers_replace(feature_batch,
 	    "rtcheck::overlaps", &command_layer, 1, &command_style) ||
-	    !ged_result_feature_metadata_replace(command_scene,
+	    !ged_view_feature_batch_metadata_replace(feature_batch,
 		"rtcheck::overlaps", command_metadata, 2) ||
-	    !ged_result_feature_primitive_metadata_replace(
-		command_scene, "rtcheck::overlaps", 0,
-		command_primitive_metadata, 2) ||
-	    !ged_result_commit(command_scene))
-	FAIL("GED command-scene line-layer replacement should commit");
+	    !ged_view_feature_batch_primitive_metadata_replace(
+		feature_batch, "rtcheck::overlaps", 0,
+		command_primitive_metadata, 2))
+	FAIL("GED feature-batch line-layer replacement should stage");
+    if (owned_controller->features().exists("rtcheck::overlaps"))
+	FAIL("GED feature-batch geometry and metadata must remain staged until commit");
+    if (!ged_view_feature_batch_commit(feature_batch))
+	FAIL("GED feature-batch line-layer replacement should commit");
     BObolFeatureHandle command_handle =
 	owned_controller->features().find("rtcheck::overlaps",
 		BOBOL_FEATURE_SCOPE_SHARED);
@@ -2984,7 +2975,7 @@ main(int argc, char **argv)
 		BObolOverlayClass::CommandResult,
 		BObolOverlayLifecycle::PerCommand,
 		BObolOverlayOrder::PostTransparent))
-	FAIL("GED command-scene result should be shared, owned, selectable-aware command content");
+	FAIL("GED feature-batch result should be shared, owned, selectable-aware command content");
     if (command_callback_state.accepted_count < 2 ||
 	    command_callback_state.updated_count < 2 ||
 	    !command_callback_state.saw_line_layers_update ||
@@ -2994,7 +2985,7 @@ main(int argc, char **argv)
 	    command_callback_state.metadata_feature_id != command_handle.id ||
 	    command_callback_state.primitive_metadata_feature_id !=
 		command_handle.id)
-	FAIL("GED command-scene result callback should report line-layer and metadata updates with feature handles");
+	FAIL("GED feature-batch result callback should report line-layer and metadata updates with feature handles");
     struct bu_vls primitive_key = BU_VLS_INIT_ZERO;
     struct bu_vls primitive_value = BU_VLS_INIT_ZERO;
     if (ged_view_feature_primitive_metadata_count(
@@ -3006,7 +2997,7 @@ main(int argc, char **argv)
 	    !BU_STR_EQUAL(bu_vls_cstr(&primitive_value), "box.s cone.s")) {
 	bu_vls_free(&primitive_key);
 	bu_vls_free(&primitive_value);
-	FAIL("GED command-scene primitive metadata should read back through neutral view APIs");
+	FAIL("GED feature-batch primitive metadata should read back through neutral view APIs");
     }
     bu_vls_free(&primitive_key);
     bu_vls_free(&primitive_value);
@@ -3031,13 +3022,13 @@ main(int argc, char **argv)
 		feature_view_ctx, "rtcheck::overlaps", 0, &primitive_index) ||
 	    primitive_index != 0) {
 	bu_vls_free(&resolved_feature);
-	FAIL("GED command-scene child primitive picks should resolve and set parent primitive state");
+	FAIL("GED feature-batch child primitive picks should resolve and set parent primitive state");
     }
     bu_vls_free(&resolved_feature);
     if (ged_view_feature_pick_primitive_resolve(
 	    feature_view_ctx, "rtcheck::overlaps/yellow", 1, 0, 0, NULL,
 	    &resolved_primitive))
-	FAIL("GED command-scene child primitive resolver should reject out-of-range picks");
+	FAIL("GED feature-batch child primitive resolver should reject out-of-range picks");
     struct ged_view_feature_summary command_summary =
 	GED_VIEW_FEATURE_SUMMARY_INIT;
     if (!ged_view_feature_get_summary(feature_view_ctx,
@@ -3045,12 +3036,12 @@ main(int argc, char **argv)
 	    command_summary.primitive_metadata_count != 1 ||
 	    command_summary.selected_primitive_count != 1 ||
 	    command_summary.highlighted_primitive_count != 1)
-	FAIL("GED command-scene result summary should report primitive state");
+	FAIL("GED feature-batch result summary should report primitive state");
     if (!owned_controller->features().record(command_handle,
 		command_record) ||
 	    command_record.selectedPrimitives.size() != 1 ||
 	    command_record.highlightedPrimitives.size() != 1)
-	FAIL("GED command-scene result record should preserve primitive state");
+	FAIL("GED feature-batch result record should preserve primitive state");
     SoBRLVListShape *command_vlist = first_feature_vlist(
 	    owned_controller->features().node(command_handle));
     if (!command_vlist ||
@@ -3058,25 +3049,25 @@ main(int argc, char **argv)
 	    command_vlist->selectedPrimitive[0] != 0 ||
 	    command_vlist->highlightedPrimitive.getNum() != 1 ||
 	    command_vlist->highlightedPrimitive[0] != 0)
-	FAIL("GED command-scene result primitive state should reach realized Coin VLIST");
+	FAIL("GED feature-batch result primitive state should reach realized Coin VLIST");
 
-    command_scene = ged_result_begin(feature_view_ctx,
-	    &command_scene_desc);
-    if (!command_scene ||
-	    ged_result_features_remove_prefix(command_scene,
+    feature_batch = ged_view_feature_batch_begin(feature_view_ctx,
+	    &feature_batch_desc);
+    if (!feature_batch ||
+	    ged_view_feature_batch_remove_prefix(feature_batch,
 		"rtcheck::") != 1 ||
-	    !ged_result_commit(command_scene) ||
+	    !ged_view_feature_batch_commit(feature_batch) ||
 	    owned_controller->features().exists("rtcheck::overlaps"))
-	FAIL("GED command-scene remove-prefix should remove owned shared command results");
+	FAIL("GED feature-batch remove-prefix should remove owned shared command results");
     if (command_callback_state.removed_count < 1 ||
 	    !command_callback_state.saw_remove_prefix)
-	FAIL("GED command-scene result callback should report owner-scoped feature removal");
+	FAIL("GED feature-batch result callback should report owner-scoped feature removal");
 
-    command_scene_desc.generation = 10;
-    struct ged_result_scene *stale_scene =
-	ged_result_begin(feature_view_ctx, &command_scene_desc);
+    feature_batch_desc.generation = 10;
+    struct ged_view_feature_batch *stale_scene =
+	ged_view_feature_batch_begin(feature_view_ctx, &feature_batch_desc);
     if (!stale_scene)
-	FAIL("GED command-scene stale generation test should create old scene");
+	FAIL("GED feature-batch stale generation test should create old scene");
 
     point_t latest_points[2] = {
 	{0.0, 0.0, 0.0},
@@ -3088,14 +3079,14 @@ main(int argc, char **argv)
     latest_layer.points = latest_points;
     latest_layer.commands = feature_cmds;
     latest_layer.point_count = 2;
-    command_scene_desc.generation = 11;
-    command_scene = ged_result_begin(feature_view_ctx,
-	    &command_scene_desc);
-    if (!command_scene ||
-	    !ged_result_line_layers_replace(command_scene,
+    feature_batch_desc.generation = 11;
+    feature_batch = ged_view_feature_batch_begin(feature_view_ctx,
+	    &feature_batch_desc);
+    if (!feature_batch ||
+	    !ged_view_feature_batch_line_layers_replace(feature_batch,
 		"rtcheck::generation", &latest_layer, 1, &command_style) ||
-	    !ged_result_commit(command_scene))
-	FAIL("GED command-scene latest generation should publish");
+	    !ged_view_feature_batch_commit(feature_batch))
+	FAIL("GED feature-batch latest generation should publish");
 
     point_t stale_points[2] = {
 	{0.0, 0.0, 0.0},
@@ -3107,14 +3098,14 @@ main(int argc, char **argv)
     stale_layer.points = stale_points;
     stale_layer.commands = feature_cmds;
     stale_layer.point_count = 2;
-    if (ged_result_line_layers_replace(stale_scene,
+    if (ged_view_feature_batch_line_layers_replace(stale_scene,
 	    "rtcheck::generation", &stale_layer, 1, &command_style) ||
-	    ged_result_commit(stale_scene))
-	FAIL("GED command-scene stale generation should be rejected");
+	    ged_view_feature_batch_commit(stale_scene))
+	FAIL("GED feature-batch stale generation should be rejected");
     if (command_callback_state.failed_count < 2 ||
 	    !command_callback_state.saw_stale_failure ||
 	    !command_callback_state.saw_commit_failure)
-	FAIL("GED command-scene result callback should report stale generation rejection");
+	FAIL("GED feature-batch result callback should report stale generation rejection");
 
     command_handle = owned_controller->features().find("rtcheck::generation",
 	    BOBOL_FEATURE_SCOPE_SHARED);
@@ -3124,95 +3115,23 @@ main(int argc, char **argv)
 	    command_record.owner.generation != 11 ||
 	    command_record.points.size() != 2 ||
 	    !NEAR_EQUAL(command_record.points[1][1], 2.0f, SMALL_FASTF))
-	FAIL("GED command-scene stale generation should not replace latest result");
-    command_scene = ged_result_begin(feature_view_ctx,
-	    &command_scene_desc);
-    if (!command_scene ||
-	    ged_result_features_remove_prefix(command_scene,
+	FAIL("GED feature-batch stale generation should not replace latest result");
+    feature_batch = ged_view_feature_batch_begin(feature_view_ctx,
+	    &feature_batch_desc);
+    if (!feature_batch ||
+	    ged_view_feature_batch_remove_prefix(feature_batch,
 		"rtcheck::generation") != 1 ||
-	    !ged_result_commit(command_scene) ||
+	    !ged_view_feature_batch_commit(feature_batch) ||
 	    owned_controller->features().exists("rtcheck::generation"))
-	FAIL("GED command-scene generation cleanup should remove latest result");
+	FAIL("GED feature-batch generation cleanup should remove latest result");
 
-    struct custom_node_provider_state custom_provider_state = {};
-    struct ged_view_feature_style custom_style =
-	GED_VIEW_FEATURE_STYLE_INIT;
-    custom_style.visible = 1;
-    custom_style.selectable = 1;
-    struct ged_result_metadata custom_metadata[1] = {
-	{"result.kind", "custom-node"}
-    };
-    command_scene_desc.owner_id = "custom";
-    command_scene_desc.owner_role = "command-result";
-    command_scene_desc.generation = 33;
-    command_scene = ged_result_begin(feature_view_ctx,
-	    &command_scene_desc);
-    if (!command_scene ||
-	    !ged_result_custom_node_replace(command_scene,
-		"custom::node", custom_node_provider_cb,
-		&custom_provider_state, &custom_style) ||
-	    !ged_result_feature_metadata_replace(command_scene,
-		"custom::node", custom_metadata, 1) ||
-	    !ged_result_commit(command_scene))
-	FAIL("GED command-scene custom Coin node provider should commit");
-    if (custom_provider_state.call_count != 1 ||
-	    !custom_provider_state.saw_request ||
-	    custom_provider_state.generation != 33 ||
-	    custom_provider_state.local)
-	FAIL("GED command-scene custom Coin provider should receive owner/scope request metadata");
-    BObolFeatureHandle custom_handle =
-	owned_controller->features().find("custom::node",
-		BOBOL_FEATURE_SCOPE_SHARED);
-    BObolFeatureRecord custom_record;
-    if (!custom_handle.isValid() ||
-	    !owned_controller->features().record(custom_handle,
-		custom_record) ||
-	    custom_record.kind != BObolFeatureKind::CustomNode ||
-	    custom_record.scope != BObolFeatureScope::Shared ||
-	    custom_record.owner.generation != 33 ||
-	    custom_record.metadata.size() != 1 ||
-	    !BU_STR_EQUAL(custom_record.metadata[0].value.getString(),
-		"custom-node") ||
-	    owned_controller->features().node(custom_handle) !=
-		custom_provider_state.node ||
-	    !feature_overlay_matches(owned_controller, "custom::node",
-		BObolOverlayClass::CommandResult,
-		BObolOverlayLifecycle::PerCommand,
-		BObolOverlayOrder::PostTransparent))
-	FAIL("GED command-scene custom Coin node should be an owned shared command-result feature");
-    int custom_primitive = 7;
-    if (!ged_view_feature_set_selection(
-		feature_view_ctx, "custom::node", &custom_primitive, 1) ||
-	    !ged_view_feature_set_highlights(
-		feature_view_ctx, "custom::node", &custom_primitive, 1) ||
-	    !owned_controller->features().record(custom_handle,
-		custom_record) ||
-	    custom_record.selectedPrimitives.size() != 1 ||
-	    custom_record.selectedPrimitives[0] != 7 ||
-	    custom_record.highlightedPrimitives.size() != 1 ||
-	    custom_record.highlightedPrimitives[0] != 7 ||
-	    owned_controller->features().node(custom_handle) !=
-		custom_provider_state.node)
-	FAIL("GED command-scene custom Coin node should preserve primitive state without replacing the provider node");
-    if (!command_callback_state.saw_custom_update ||
-	    command_callback_state.custom_feature_id != custom_handle.id)
-	FAIL("GED command-scene custom Coin node should report result callbacks");
-    command_scene = ged_result_begin(feature_view_ctx,
-	    &command_scene_desc);
-    if (!command_scene ||
-	    ged_result_features_remove_prefix(command_scene,
-		"custom::") != 1 ||
-	    !ged_result_commit(command_scene) ||
-	    owned_controller->features().exists("custom::node"))
-	FAIL("GED command-scene custom Coin node cleanup should use owner-scoped removal");
-
-    command_scene_desc.generation = 0;
-    command_scene_desc.result_cb = NULL;
-    command_scene_desc.result_cb_data = NULL;
+    feature_batch_desc.generation = 0;
+    feature_batch_desc.event_cb = NULL;
+    feature_batch_desc.event_cb_data = NULL;
 
     FILE *nirt_plot = tmpfile();
     if (!nirt_plot)
-	FAIL("NIRT/qray command-scene uplot test should create a temporary plot stream");
+	FAIL("NIRT/qray feature-batch uplot test should create a temporary plot stream");
     int old_plot_mode = pl_getOutputMode();
     pl_setOutputMode(PL_OUTPUT_MODE_BINARY);
     point_t nirt_a = VINIT_ZERO;
@@ -3221,11 +3140,11 @@ main(int argc, char **argv)
     pdv_3line(nirt_plot, nirt_a, nirt_b);
     pl_setOutputMode(old_plot_mode);
     rewind(nirt_plot);
-    if (_ged_draw_uplot_to_command_scene_feature(gedp, nirt_plot,
+    if (_ged_view_feature_batch_publish_uplot(gedp, nirt_plot,
 	    "query_ray", 1.0, PL_OUTPUT_MODE_BINARY, "nirt",
 	    "command-result", "query_ray", "query-ray", 0) != BRLCAD_OK) {
 	fclose(nirt_plot);
-	FAIL("NIRT/qray uplot import should publish through command-scene ownership");
+	FAIL("NIRT/qray uplot import should publish through feature-batch ownership");
     }
     fclose(nirt_plot);
     BObolFeatureHandle nirt_handle =
@@ -3284,27 +3203,27 @@ main(int argc, char **argv)
 		BObolOverlayClass::CommandResult,
 		BObolOverlayLifecycle::PerCommand,
 		BObolOverlayOrder::PostTransparent))
-	FAIL("NIRT/qray command-scene uplot result should be shared owned command content");
-    command_scene_desc.owner_id = "nirt";
-    command_scene = ged_result_begin(feature_view_ctx,
-	    &command_scene_desc);
-    if (!command_scene ||
-	    ged_result_features_remove_prefix(command_scene,
+	FAIL("NIRT/qray feature-batch uplot result should be shared owned command content");
+    feature_batch_desc.owner_id = "nirt";
+    feature_batch = ged_view_feature_batch_begin(feature_view_ctx,
+	    &feature_batch_desc);
+    if (!feature_batch ||
+	    ged_view_feature_batch_remove_prefix(feature_batch,
 		"query_ray") != 1 ||
-	    !ged_result_commit(command_scene) ||
+	    !ged_view_feature_batch_commit(feature_batch) ||
 	    owned_controller->features().exists("query_ray"))
-	FAIL("NIRT/qray command-scene cleanup should remove owned shared command results");
+	FAIL("NIRT/qray feature-batch cleanup should remove owned shared command results");
 
     FILE *rtcheck_plot = tmpfile();
     if (!rtcheck_plot)
-	FAIL("rtcheck command-scene schema test should create a temporary plot stream");
+	FAIL("rtcheck feature-batch schema test should create a temporary plot stream");
     old_plot_mode = pl_getOutputMode();
     pl_setOutputMode(PL_OUTPUT_MODE_BINARY);
     pl_color(rtcheck_plot, 255, 255, 0);
     pdv_3line(rtcheck_plot, nirt_a, nirt_b);
     pl_setOutputMode(old_plot_mode);
     rewind(rtcheck_plot);
-    if (_ged_draw_uplot_to_command_scene_feature(gedp, rtcheck_plot,
+    if (_ged_view_feature_batch_publish_uplot(gedp, rtcheck_plot,
 	    "rtcheck::schema", 1.0, PL_OUTPUT_MODE_BINARY, "rtcheck",
 	    "command-result", "rtcheck::schema", "overlap", 17) != BRLCAD_OK) {
 	fclose(rtcheck_plot);
@@ -3332,21 +3251,21 @@ main(int argc, char **argv)
 	!BU_STR_EQUAL(rtcheck_schema_record.primitiveMetadata[0].metadata[7].key.getString(),
 	    "hit.entry_mm"))
 	FAIL("rtcheck result should retain overlap schema, generation, severity, and hit metadata");
-    command_scene_desc.owner_id = "rtcheck";
-    command_scene_desc.generation = 17;
-    command_scene = ged_result_begin(feature_view_ctx,
-	&command_scene_desc);
-    if (!command_scene ||
-	ged_result_features_remove_prefix(command_scene,
+    feature_batch_desc.owner_id = "rtcheck";
+    feature_batch_desc.generation = 17;
+    feature_batch = ged_view_feature_batch_begin(feature_view_ctx,
+	&feature_batch_desc);
+    if (!feature_batch ||
+	ged_view_feature_batch_remove_prefix(feature_batch,
 	    "rtcheck::schema") != 1 ||
-	!ged_result_commit(command_scene))
+	!ged_view_feature_batch_commit(feature_batch))
 	FAIL("rtcheck schema result should use owner-scoped cleanup");
-    command_scene_desc.generation = 0;
+    feature_batch_desc.generation = 0;
 
     struct bg_line_layer_builder *builder_publish =
 	bg_line_layer_builder_create();
     if (!builder_publish)
-	FAIL("command-scene builder publish test should allocate a builder");
+	FAIL("feature-batch builder publish test should allocate a builder");
     point_t builder_a = {0.0, 0.0, 0.0};
     point_t builder_b = {0.0, 1.0, 0.0};
     if (!bg_line_layer_builder_add(builder_publish, 255, 255, 0,
@@ -3354,13 +3273,13 @@ main(int argc, char **argv)
 	    !bg_line_layer_builder_add(builder_publish, 255, 255, 0,
 		builder_b, BG_GEOMETRY_LINE_DRAW)) {
 	bg_line_layer_builder_free(builder_publish);
-	FAIL("command-scene builder publish test should accept line geometry");
+	FAIL("feature-batch builder publish test should accept line geometry");
     }
-    if (_ged_line_layer_builder_publish_command_scene_feature(gedp,
+    if (_ged_view_feature_batch_publish_line_layer_builder(gedp,
 	    "nmg::_helper_test", builder_publish, "nmg",
 	    "command-result", "nmg::_helper_test", "nmg-test", 0) != BRLCAD_OK) {
 	bg_line_layer_builder_free(builder_publish);
-	FAIL("line-layer builder helper should publish through command-scene ownership");
+	FAIL("line-layer builder helper should publish through feature-batch ownership");
     }
     bg_line_layer_builder_free(builder_publish);
     BObolFeatureHandle builder_handle =
@@ -3390,29 +3309,29 @@ main(int argc, char **argv)
 		BObolOverlayLifecycle::PerCommand,
 		BObolOverlayOrder::PostTransparent))
 	FAIL("line-layer builder helper should preserve shared owned command-result metadata");
-    command_scene_desc.owner_id = "nmg";
-    command_scene = ged_result_begin(feature_view_ctx,
-	    &command_scene_desc);
-    if (!command_scene ||
-	    ged_result_features_remove_prefix(command_scene,
+    feature_batch_desc.owner_id = "nmg";
+    feature_batch = ged_view_feature_batch_begin(feature_view_ctx,
+	    &feature_batch_desc);
+    if (!feature_batch ||
+	    ged_view_feature_batch_remove_prefix(feature_batch,
 		"nmg::_helper_test") != 1 ||
-	    !ged_result_commit(command_scene) ||
+	    !ged_view_feature_batch_commit(feature_batch) ||
 	    owned_controller->features().exists("nmg::_helper_test"))
 	FAIL("line-layer builder helper result should clean up by owner-scoped prefix");
 
     struct bg_line_layer_builder *builder_generation =
 	bg_line_layer_builder_create();
     if (!builder_generation)
-	FAIL("command-scene builder generation test should create builder");
+	FAIL("feature-batch builder generation test should create builder");
     point_t builder_latest_b = {0.0, 2.0, 0.0};
     if (!bg_line_layer_builder_add(builder_generation, 255, 255, 0,
 		builder_a, BG_GEOMETRY_LINE_MOVE) ||
 	    !bg_line_layer_builder_add(builder_generation, 255, 255, 0,
 		builder_latest_b, BG_GEOMETRY_LINE_DRAW)) {
 	bg_line_layer_builder_free(builder_generation);
-	FAIL("command-scene builder generation test should accept latest geometry");
+	FAIL("feature-batch builder generation test should accept latest geometry");
     }
-    if (_ged_line_layer_builder_publish_command_scene_feature(gedp,
+    if (_ged_view_feature_batch_publish_line_layer_builder(gedp,
 	    "nmg::_helper_generation", builder_generation, "nmg",
 	    "command-result", "nmg::_helper_generation", "nmg-generation",
 	    22) != BRLCAD_OK) {
@@ -3423,16 +3342,16 @@ main(int argc, char **argv)
 
     builder_generation = bg_line_layer_builder_create();
     if (!builder_generation)
-	FAIL("command-scene builder stale generation test should create builder");
+	FAIL("feature-batch builder stale generation test should create builder");
     point_t builder_stale_b = {0.0, 3.0, 0.0};
     if (!bg_line_layer_builder_add(builder_generation, 255, 255, 0,
 		builder_a, BG_GEOMETRY_LINE_MOVE) ||
 	    !bg_line_layer_builder_add(builder_generation, 255, 255, 0,
 		builder_stale_b, BG_GEOMETRY_LINE_DRAW)) {
 	bg_line_layer_builder_free(builder_generation);
-	FAIL("command-scene builder stale generation test should accept stale geometry");
+	FAIL("feature-batch builder stale generation test should accept stale geometry");
     }
-    if (_ged_line_layer_builder_publish_command_scene_feature(gedp,
+    if (_ged_view_feature_batch_publish_line_layer_builder(gedp,
 	    "nmg::_helper_generation", builder_generation, "nmg",
 	    "command-result", "nmg::_helper_generation", "nmg-generation",
 	    21) == BRLCAD_OK) {
@@ -3456,17 +3375,17 @@ main(int argc, char **argv)
 		"result.generation") ||
 	    !BU_STR_EQUAL(builder_record.metadata[6].value.getString(), "22"))
 	FAIL("line-layer builder helper stale generation should not replace latest result");
-    command_scene_desc.owner_id = "nmg";
-    command_scene_desc.generation = 22;
-    command_scene = ged_result_begin(feature_view_ctx,
-	    &command_scene_desc);
-    if (!command_scene ||
-	    ged_result_features_remove_prefix(command_scene,
+    feature_batch_desc.owner_id = "nmg";
+    feature_batch_desc.generation = 22;
+    feature_batch = ged_view_feature_batch_begin(feature_view_ctx,
+	    &feature_batch_desc);
+    if (!feature_batch ||
+	    ged_view_feature_batch_remove_prefix(feature_batch,
 		"nmg::_helper_generation") != 1 ||
-	    !ged_result_commit(command_scene) ||
+	    !ged_view_feature_batch_commit(feature_batch) ||
 	    owned_controller->features().exists("nmg::_helper_generation"))
 	FAIL("line-layer builder helper generation result should clean up by owner-scoped prefix");
-    command_scene_desc.generation = 0;
+    feature_batch_desc.generation = 0;
 
     int ged_preview_owner = 0;
     ged_view_feature_ref ged_preview_ref =
@@ -4477,7 +4396,8 @@ main(int argc, char **argv)
 	FAIL("GED shape-context geometry summary should read realized geometry from the owned Obol controller");
 	    vect_t draw_bounds_min;
 	    vect_t draw_bounds_max;
-	    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
+	    if (ged_scene_bounds(gedp, &draw_bounds_min, &draw_bounds_max,
+		    GED_SCENE_BOUNDS_DATABASE) ||
 		    draw_bounds_max[0] < 11.9)
 		FAIL("GED draw bounds should read database-source bounds from the owned Obol controller");
 	    vect_t context_bounds_min;
@@ -4510,7 +4430,7 @@ main(int argc, char **argv)
 		FAIL("owned Obol source should move back to the root group after context bounds");
 	    vect_t box_xlate;
 	    VSET(box_xlate, 5.0, 0.0, 0.0);
-	    if (!ged_draw_shape_ref_translate_geometry(gedp, box_record.ref,
+	    if (!ged_scene_internal_shape_translate_geometry(gedp, box_record.ref,
 		    box_xlate))
 		FAIL("GED shape geometry translation should succeed");
 	    if (!ged_draw_shape_ref_line_point_at(gedp, box_record.ref, 1,
@@ -4519,7 +4439,8 @@ main(int argc, char **argv)
 		    fabs(box_line_point[1]) > 0.001 ||
 		    fabs(box_line_point[2]) > 0.001)
 		FAIL("GED shape translation should mutate owned Obol VLIST points");
-	    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
+	    if (ged_scene_bounds(gedp, &draw_bounds_min, &draw_bounds_max,
+		    GED_SCENE_BOUNDS_DATABASE) ||
 		    draw_bounds_max[0] < 16.9)
 		FAIL("GED draw bounds should reflect translated owned Obol VLIST points");
 	    point_t published_points[3] = {
@@ -4547,7 +4468,8 @@ main(int argc, char **argv)
 		    fabs(box_line_point[1]) > 0.001 ||
 		    fabs(box_line_point[2]) > 0.001)
 		FAIL("GED Obol source line-set publish should update owned Obol VLIST points");
-	    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
+	    if (ged_scene_bounds(gedp, &draw_bounds_min, &draw_bounds_max,
+		    GED_SCENE_BOUNDS_DATABASE) ||
 		    draw_bounds_max[0] < 22.9)
 		FAIL("GED draw bounds should reflect published owned Obol VLIST points");
 	    box_shape = box_source->getRealizedShape();
@@ -4556,7 +4478,7 @@ main(int argc, char **argv)
 	    point_t explicit_center;
 	    VSET(explicit_center, 30.0, 31.0, 32.0);
 	    ged_draw_index_stats_reset(gedp);
-	    if (!ged_draw_shape_ref_set_center(gedp, box_record.ref,
+	    if (!ged_scene_internal_shape_set_center(gedp, box_record.ref,
 		    explicit_center))
 		FAIL("GED shape center setter should succeed");
 	    SbVec3f obol_center = box_shape->drawCenter.getValue();
@@ -4577,7 +4499,7 @@ main(int argc, char **argv)
 			0.001f)
 		FAIL("GED shape center setter should update owned Obol source placement");
 	    int bounds_bad_cmd = -1;
-	    if (!ged_draw_shape_ref_update_bounds_from_geometry(gedp,
+	    if (!ged_scene_internal_shape_bounds_update(gedp,
 		    box_record.ref, &bounds_bad_cmd) ||
 		    bounds_bad_cmd != 0)
 		FAIL("GED shape bounds update should succeed for owned Obol VLIST");
@@ -4600,7 +4522,7 @@ main(int argc, char **argv)
 		    !box_placement_summary.drawSizeValid ||
 		    fabs(box_placement_summary.drawSize - 2.0f) > 0.001f)
 		FAIL("GED shape bounds update should update owned Obol source placement");
-	    if (!ged_draw_shape_ref_geometry_clear(gedp, box_record.ref))
+	    if (!ged_scene_internal_shape_geometry_clear(gedp, box_record.ref))
 		FAIL("GED shape geometry clear should succeed");
 	    if (!ged_draw_shape_ref_line_summary(gedp, box_record.ref,
 		    &box_line) ||
@@ -4612,7 +4534,8 @@ main(int argc, char **argv)
 		    !box_geometry.valid ||
 		    box_geometry.point_count != 0)
 		FAIL("GED shape geometry clear should update owned Obol geometry summary");
-	    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
+	    if (ged_scene_bounds(gedp, &draw_bounds_min, &draw_bounds_max,
+		    GED_SCENE_BOUNDS_DATABASE) ||
 		    draw_bounds_max[0] > 20.0)
 		FAIL("GED draw bounds should reflect cleared owned Obol VLIST points");
 	    point_t aux_points[2] = {
@@ -4672,7 +4595,7 @@ main(int argc, char **argv)
 		    !aux_shape->drawCenterValid.getValue() ||
 		    !aux_shape->drawSizeValid.getValue())
 		FAIL("GED Obol auxiliary line-set bridge should inherit owned source placement");
-	    if (!ged_draw_shape_ref_geometry_clear(gedp, box_record.ref) ||
+	    if (!ged_scene_internal_shape_geometry_clear(gedp, box_record.ref) ||
 		    box_source->findAuxiliaryVListShape(
 			"obol_aux_clear_sentinel"))
 		FAIL("GED shape geometry clear should clear owned Obol auxiliary VLISTs");
@@ -4703,7 +4626,7 @@ main(int argc, char **argv)
 		    box_geometry.point_count != 2 ||
 		    box_geometry.index_count != 0)
 		FAIL("GED shape point-set geometry summary should read owned Obol point-set publication");
-	    if (!ged_draw_shape_ref_geometry_clear(gedp, box_record.ref))
+	    if (!ged_scene_internal_shape_geometry_clear(gedp, box_record.ref))
 		FAIL("GED shape point-set geometry clear should succeed");
 	    point_t mesh_points[4] = {
 		{31.0, 0.0, 0.0},
@@ -4741,10 +4664,11 @@ main(int argc, char **argv)
 		    box_geometry.point_count != 4 ||
 		    box_geometry.index_count != 6)
 		FAIL("GED shape geometry summary should read owned Obol mesh publication");
-	    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
+	    if (ged_scene_bounds(gedp, &draw_bounds_min, &draw_bounds_max,
+		    GED_SCENE_BOUNDS_DATABASE) ||
 		    draw_bounds_max[0] < 31.9)
 		FAIL("GED draw bounds should reflect published owned Obol mesh points");
-	    if (!ged_draw_shape_ref_geometry_clear(gedp, box_record.ref))
+	    if (!ged_scene_internal_shape_geometry_clear(gedp, box_record.ref))
 		FAIL("GED shape geometry clear should clear owned Obol mesh");
 	    if (box_mesh->point.getNum() != 0 ||
 		    box_mesh->coordIndex.getNum() != 0)
@@ -4794,7 +4718,7 @@ main(int argc, char **argv)
 		    !BU_STR_EQUAL(box_geometry.geometry_name, "line-set") ||
 		    box_geometry.point_count == 0)
 		FAIL("GED primitive wireframe publication should publish owned Obol line geometry");
-	    if (!ged_draw_shape_ref_geometry_clear(gedp, box_record.ref))
+	    if (!ged_scene_internal_shape_geometry_clear(gedp, box_record.ref))
 		FAIL("GED shape geometry clear should clear primitive wireframe publication");
 	    const char *draw_box_shaded[3] = {"draw", "-m2", "box.s"};
 	    if (ged_exec_draw(gedp, 3, draw_box_shaded) != BRLCAD_OK)
@@ -5010,7 +4934,8 @@ main(int argc, char **argv)
 		    !box_line.valid ||
 		    box_line.point_count == 0)
 		FAIL("GED redraw should publish wire geometry after owned Obol draw matrix readback");
-	    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
+	    if (ged_scene_bounds(gedp, &draw_bounds_min, &draw_bounds_max,
+		    GED_SCENE_BOUNDS_DATABASE) ||
 		    draw_bounds_max[0] < 40.9)
 		FAIL("GED redraw should use owned Obol draw matrix");
 	    if (owned_scene->setDatabaseSourcePlacementState(
@@ -5036,14 +4961,14 @@ main(int argc, char **argv)
 		FAIL("GED LoD view context should be available");
 	    if (!bv_scale_set(DRAW_TEST_BV(lod_view_ctx), 7.0))
 		FAIL("GED LoD view context scale should be settable");
-	    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+	    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
 	    lod_policy.csg_enabled = 1;
 	    lod_policy.mesh_enabled = 0;
 	    lod_policy.scale = 1.75;
 	    lod_policy.bot_threshold = 77;
 	    lod_policy.curve_scale = 2.25;
 	    lod_policy.point_scale = 3.25;
-	    if (!ged_draw_source_lod_policy_apply(lod_view_ctx, &lod_policy))
+	    if (!ged_view_lod_policy_apply(lod_view_ctx, &lod_policy))
 		FAIL("GED LoD view policy should be settable");
 	    struct ged_view_context *lod_view_ctxs[1] = {lod_view_ctx};
 	    ged_draw_index_stats_reset(gedp);
@@ -5088,12 +5013,13 @@ main(int argc, char **argv)
 		    &box_record);
 	    if (!box_record.found)
 		FAIL("GED shape record should refresh after LoD policy test");
-		    if (!ged_draw_shape_ref_geometry_clear(gedp, box_record.ref))
+		    if (!ged_scene_internal_shape_geometry_clear(gedp, box_record.ref))
 			FAIL("GED shape geometry clear should clear shaded source realization mesh");
 		    ged_draw_index_stats_reset(gedp);
 		    if (!ged_draw_shape_ref_set_visible(gedp, box_record.ref, 1))
 			FAIL("GED visible setter should succeed");
-    if (!ged_draw_shape_set_highlighted(gedp, box_record.ref, 0))
+    if (ged_scene_occurrence_highlight_set(gedp, box_record.ref, 0, NULL) !=
+	    GED_SCENE_OK)
 	FAIL("GED highlighted setter should succeed");
     const unsigned char override_color[3] = {10, 20, 30};
     if (!ged_draw_shape_ref_set_color(gedp, box_record.ref, override_color))
@@ -5210,14 +5136,14 @@ main(int argc, char **argv)
 	FAIL("GED stale shape-ref view context should recover cached source state");
     if (!bv_scale_set(DRAW_TEST_BV(stale_lod_view_ctx), 9.0))
 	FAIL("GED stale shape-ref LoD context scale should be settable");
-    ged_draw_source_lod_policy stale_lod_policy = BV_LOD_POLICY_INIT;
+    ged_view_lod_policy stale_lod_policy = BV_LOD_POLICY_INIT;
     stale_lod_policy.csg_enabled = 1;
     stale_lod_policy.mesh_enabled = 0;
     stale_lod_policy.scale = 2.75;
     stale_lod_policy.bot_threshold = 91;
     stale_lod_policy.curve_scale = 6.25;
     stale_lod_policy.point_scale = 7.25;
-    if (!ged_draw_source_lod_policy_apply(stale_lod_view_ctx,
+    if (!ged_view_lod_policy_apply(stale_lod_view_ctx,
 	    &stale_lod_policy))
 	FAIL("GED stale shape-ref LoD policy should be settable");
     struct ged_view_context *stale_lod_view_ctxs[1] = {stale_lod_view_ctx};
@@ -5587,15 +5513,6 @@ main(int argc, char **argv)
     ged_draw_transaction_result_free(&display_result);
     if (!source_for_path(owned_scene, "draft_move.s"))
 	FAIL("GED material-changed transaction should preserve Obol-only sources");
-    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS,
-	    NULL);
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
-	    &display_result) <= 0)
-	FAIL("GED material-refresh transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
-    if (!source_for_path(owned_scene, "draft_move.s"))
-	FAIL("GED material-refresh transaction should preserve Obol-only sources");
     display_txn = ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     ged_draw_transaction_result_init(&display_result);
     if (ged_draw_apply_transaction(gedp, &display_txn,

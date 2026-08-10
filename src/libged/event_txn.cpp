@@ -575,7 +575,13 @@ ged_event_reconcile_draw(struct ged *gedp,
 		    affected_paths);
 	    struct ged_draw_transaction txn =
 		ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
-			event.name.c_str());
+		    event.name.c_str());
+	    std::vector<const char *> affected_path_views;
+	    affected_path_views.reserve(affected_paths.size());
+	    for (const std::string &affected_path : affected_paths)
+		affected_path_views.push_back(affected_path.c_str());
+	    txn.paths = affected_path_views.data();
+	    txn.path_count = static_cast<int>(affected_path_views.size());
 	    txn.redraw = event.redraw ? 1 : 0;
 	    ret = ged_event_apply_draw_txn(gedp, &txn, result);
 	    for (const std::string &affected_path : affected_paths)
@@ -656,20 +662,18 @@ ged_event_reconcile_draw(struct ged *gedp,
 	    std::vector<std::string> affected_paths;
 	    if (!event.name.empty())
 		ged_event_collect_index_affected_paths(gedp, event.name,
-			affected_paths);
+		    affected_paths);
+	    std::vector<const char *> affected_path_views;
+	    affected_path_views.reserve(affected_paths.size());
+	    for (const std::string &affected_path : affected_paths)
+		affected_path_views.push_back(affected_path.c_str());
 	    struct ged_draw_transaction changed =
 		ged_draw_transaction_make(GED_DRAW_TXN_MATERIAL_CHANGED,
-			nullptr);
+		    nullptr);
+	    changed.paths = affected_path_views.empty() ? nullptr :
+		affected_path_views.data();
+	    changed.path_count = (int)affected_path_views.size();
 	    ret = ged_event_apply_draw_txn(gedp, &changed, result);
-	    struct ged_draw_transaction refresh =
-		ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS,
-			nullptr);
-	    int refresh_ret = ged_event_apply_draw_txn(gedp, &refresh,
-		    result);
-	    if (refresh_ret < 0)
-		ret = refresh_ret;
-	    else if (ret >= 0)
-		ret += refresh_ret;
 	    for (const std::string &affected_path : affected_paths)
 		ged_event_result_note_name(result, affected_path.c_str());
 	    break;

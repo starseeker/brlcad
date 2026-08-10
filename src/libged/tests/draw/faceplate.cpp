@@ -39,6 +39,7 @@
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/display.h>
+#include <ged/view_feature_internal.h>
 
 #define ADIFF_THRES 0.99
 /* The retained wire renderer preserves projected topology but does not emit

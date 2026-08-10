@@ -43,6 +43,7 @@
 #include "bu/str.h"
 #include "bv.h"
 #include "ged/draw.h"
+#include "ged/scene_internal.h"
 #include "ged/db_index.h"
 #include "ged/view.h"
 #include "nmg.h"
@@ -1698,28 +1699,6 @@ ged_draw_rt_path_matches_pattern(const char *path, const char *pattern)
     return (path && pattern && !bu_path_match(pattern, path, 0)) ? 1 : 0;
 }
 
-struct ged_draw_rt_record_match_ctx {
-    const char *pattern;
-    int found;
-};
-
-static int
-ged_draw_rt_record_match_cb(
-	const struct ged_draw_view_db_object_record *rec,
-	void *userdata)
-{
-    struct ged_draw_rt_record_match_ctx *ctx =
-	(struct ged_draw_rt_record_match_ctx *)userdata;
-    if (!ctx || !rec || !rec->path)
-	return 1;
-    if (rec->visible && rec->is_database_source &&
-	    ged_draw_rt_path_matches_pattern(rec->path, ctx->pattern)) {
-	ctx->found = 1;
-	return 0;
-    }
-    return 1;
-}
-
 struct ged_draw_rt_pick_ctx {
     struct ged_view_context *view_ctx;
     const char *pattern;
@@ -1745,27 +1724,6 @@ ged_draw_rt_pick_record_cb(
 	ged_draw_rt_path_skip_leading_slash(rec->path);
     if (ged_pick_result_append_path(ctx->result, source_path, 0.0))
 	ctx->count++;
-    return 1;
-}
-
-struct ged_draw_rt_source_match_ctx {
-    const char *prefix;
-    int found;
-};
-
-static int
-ged_draw_rt_source_match_cb(struct ged *UNUSED(gedp),
-			    const char *path,
-			    void *userdata)
-{
-    struct ged_draw_rt_source_match_ctx *ctx =
-	(struct ged_draw_rt_source_match_ctx *)userdata;
-    if (!ctx || !path)
-	return 1;
-    if (ged_draw_rt_path_matches_prefix(path, ctx->prefix)) {
-	ctx->found = 1;
-	return 0;
-    }
     return 1;
 }
 
@@ -1801,44 +1759,6 @@ ged_pick_semantic_path(
 
     ged_pick_result_free(result);
     return NULL;
-}
-
-int
-ged_scene_check_export(
-	struct ged *gedp,
-	struct ged_view_context *view_ctx,
-	const char *drawn_prefix,
-	struct ged_scene_export_report *summary)
-{
-    if (summary)
-	memset(summary, 0, sizeof(*summary));
-    if (!view_ctx || !drawn_prefix || !drawn_prefix[0] || !summary ||
-	    !ged_draw_obol_scene_controller_is_owned(gedp))
-	return 0;
-
-    struct ged_draw_rt_record_match_ctx record_ctx;
-    memset(&record_ctx, 0, sizeof(record_ctx));
-    record_ctx.pattern = drawn_prefix;
-    ged_draw_view_context_foreach_export_record(view_ctx,
-	    GED_DRAW_VIEW_EXPORT_QUERY_VISIBLE_ONLY |
-	    GED_DRAW_VIEW_EXPORT_QUERY_DB_OBJECTS,
-	    GED_DRAW_VIEW_EXPORT_RENDER_VISIBLE_ONLY |
-	    GED_DRAW_VIEW_EXPORT_RENDER_PAYLOAD_PREPARE,
-	    NULL, GED_DRAW_VIEW_EXPORT_DRAW_MODE_ANY,
-	    ged_draw_rt_record_match_cb, &record_ctx);
-
-    struct ged_draw_rt_source_match_ctx source_ctx;
-    memset(&source_ctx, 0, sizeof(source_ctx));
-    source_ctx.prefix = drawn_prefix;
-    (void)ged_draw_obol_database_source_paths_foreach(gedp, 1,
-	    ged_draw_rt_source_match_cb, &source_ctx);
-
-    summary->export_record_found = record_ctx.found;
-    summary->render_item_found = source_ctx.found;
-    summary->backend_node_found = source_ctx.found;
-    summary->export_render_consistent = record_ctx.found && source_ctx.found;
-    summary->export_backend_consistent = record_ctx.found && source_ctx.found;
-    return 1;
 }
 
 #define GED_DRAW_OBOL_CONTEXT_TOKEN_MAGIC 0x47444f626f6c4354ULL
@@ -5556,7 +5476,7 @@ ged_draw_shape_ref_obol_update_vlist_bounds(
 
 
 int
-ged_draw_shape_ref_set_center(struct ged *gedp, ged_draw_shape_ref ref,
+ged_scene_internal_shape_set_center(struct ged *gedp, ged_draw_shape_ref ref,
 			      const point_t center)
 {
     if (!center)
@@ -5571,7 +5491,8 @@ ged_draw_shape_ref_set_center(struct ged *gedp, ged_draw_shape_ref ref,
 
 
 int
-ged_draw_shape_ref_geometry_clear(struct ged *gedp, ged_draw_shape_ref ref)
+ged_scene_internal_shape_geometry_clear(struct ged *gedp,
+	ged_draw_shape_ref ref)
 {
     int obol_cleared = 0;
     obol_cleared = ged_draw_shape_ref_obol_clear_vlist(gedp, ref);
@@ -5586,7 +5507,7 @@ ged_draw_shape_ref_geometry_clear(struct ged *gedp, ged_draw_shape_ref ref)
 
 
 int
-ged_draw_shape_ref_update_bounds_from_geometry(struct ged *gedp,
+ged_scene_internal_shape_bounds_update(struct ged *gedp,
 					       ged_draw_shape_ref ref,
 					       int *bad_cmd)
 {
@@ -6226,8 +6147,8 @@ ged_draw_shape_ref_lod_ensure_obol(struct ged *gedp,
 	    !token->path[0] || !first_view_ctx)
 	return 0;
 
-    ged_draw_source_lod_policy policy;
-    ged_draw_source_lod_policy_get(&policy, first_view_ctx);
+    ged_view_lod_policy policy;
+    ged_view_lod_policy_get(&policy, first_view_ctx);
 
     struct ged_draw_obol_draw_state_summary draw_state;
     memset(&draw_state, 0, sizeof(draw_state));
@@ -6838,7 +6759,8 @@ ged_scene_node_geometry_summary(struct ged *gedp,
 
 
 int
-ged_draw_shape_ref_translate_geometry(struct ged *gedp, ged_draw_shape_ref ref,
+ged_scene_internal_shape_translate_geometry(struct ged *gedp,
+	ged_draw_shape_ref ref,
 				      const vect_t xlate)
 {
     struct _ged_draw_obol_translate_ctx ctx;

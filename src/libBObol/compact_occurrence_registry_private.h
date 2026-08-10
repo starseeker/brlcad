@@ -32,10 +32,17 @@ struct BObolCompactInstanceEntry {
 	placementTransform(SbMatrix::identity()),
 	localTransform(SbMatrix::identity()),
 	authoredVisible(TRUE),
+	presentationVisibleValid(FALSE),
+	presentationVisible(TRUE),
 	visible(TRUE),
 	selectable(TRUE),
 	selected(FALSE),
+	authoredHighlighted(FALSE),
+	presentationHighlightedValid(FALSE),
+	presentationHighlighted(FALSE),
 	highlighted(FALSE),
+	presentationTransparencyValid(FALSE),
+	presentationTransparency(0.0f),
 	wireGeometry(FALSE),
 	pointGeometry(FALSE),
 	meshGeometry(FALSE),
@@ -70,11 +77,22 @@ struct BObolCompactInstanceEntry {
      * reference instead of allocating one SbString copy per occurrence.
      */
     mutable SbString instanceKey;
+    /* Authored fields are the reusable source baseline.  Semantic scene
+     * presentation rules are overlays and must never destroy that baseline:
+     * an endpoint snapshot may replace or clear the overlay after a source
+     * has already streamed thousands of occurrences. */
     SbBool authoredVisible;
+    SbBool presentationVisibleValid;
+    SbBool presentationVisible;
     SbBool visible;
     SbBool selectable;
     SbBool selected;
+    SbBool authoredHighlighted;
+    SbBool presentationHighlightedValid;
+    SbBool presentationHighlighted;
     SbBool highlighted;
+    SbBool presentationTransparencyValid;
+    float presentationTransparency;
     SbBool wireGeometry;
     SbBool pointGeometry;
     SbBool meshGeometry;

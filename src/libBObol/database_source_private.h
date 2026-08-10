@@ -41,6 +41,19 @@ struct BObolCadSourceState {
 };
 
 struct BObolCompactOccurrenceRegistryState {
+    struct PresentationOverride {
+	enum Property {
+	    VISIBILITY = 0,
+	    HIGHLIGHT,
+	    TRANSPARENCY
+	};
+	Property property = VISIBILITY;
+	SbString path;
+	BObolCompactPathMatch match = BOBOL_COMPACT_PATH_EXACT;
+	SbBool state = FALSE;
+	float transparency = 0.0f;
+    };
+
     struct CadBatchDelta {
 	uint64_t revision = 0;
 	std::vector<size_t> entryIndices;
@@ -78,6 +91,7 @@ struct BObolCompactOccurrenceRegistryState {
     std::vector<SbString> compactVisibilityFrontier;
     std::vector<SbBool> compactVisibilityFrontierStates;
     std::vector<SbString> compactSelectedPaths;
+    std::vector<PresentationOverride> compactPresentationOverrides;
 };
 
 struct BObolCadPresentationBridgeState {

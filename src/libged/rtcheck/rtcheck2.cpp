@@ -144,7 +144,7 @@ rtcheck_vector_handler(void *clientData, int type)
 	// unowned views, but Obol-owned views get CommandResult metadata and owner
 	// scoped cleanup.
 	const char *sname = "rtcheck::";
-	(void)_ged_uplot_stream_publish_command_scene_feature(gedp,
+	(void)_ged_view_feature_batch_publish_uplot_stream(gedp,
 		rtcp->uplot, sname, "rtcheck", "command-result", sname,
 		"overlap", rtcp->generation);
     }

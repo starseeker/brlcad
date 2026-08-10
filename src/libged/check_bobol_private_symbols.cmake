@@ -21,6 +21,7 @@ endif()
 
 foreach(_private_prefix
     "ged_bobol_"
+    "ged_draw_obol_source_"
     "ged_draw_obol_controller"
     "ged_draw_obol_scene_controller"
     "ged_draw_obol_database_source_"

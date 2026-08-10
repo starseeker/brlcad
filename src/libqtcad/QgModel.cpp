@@ -57,6 +57,7 @@
 #include "ged/db_index.h"
 #include "ged/draw.h"
 #include "ged/event_txn.h"
+#include "ged/scene_internal.h"
 #include "ged/selection_state.h"
 #include "raytrace.h"
 #define ALPHANUM_IMPL
@@ -72,8 +73,7 @@ static_assert(DB_OP_UNION == 'u', "DB_OP_UNION enum value changed; update QgItem
 
 struct QgModelDrawObserverAccess {
 	static void callback(struct ged *gedp,
-			     const struct ged_draw_transaction *txn,
-			     const struct ged_draw_transaction_result *result,
+			     const struct ged_scene_delta *delta,
 			     void *client_data);
 };
 
@@ -157,15 +157,34 @@ qgmodel_active_view_context(const QgModel *model)
 	return session ? ged_view_context_from_bv(session->activeViewContext()) : nullptr;
 }
 
-static int
-qgmodel_apply_draw_transaction(struct ged *gedp,
-			       struct ged_draw_transaction *txn)
+static enum ged_scene_status
+qgmodel_apply_scene_draw(struct ged *gedp,
+			 const struct ged_scene_draw_request *request,
+			 int *changed)
 {
-	struct ged_draw_transaction_result result;
-	ged_draw_transaction_result_init(&result);
-	int ret = ged_draw_apply_transaction(gedp, txn, &result);
-	ged_draw_transaction_result_free(&result);
-	return ret;
+	struct ged_scene_result *result = ged_scene_result_create();
+	if (!result)
+		return GED_SCENE_ERROR;
+	enum ged_scene_status status = ged_scene_draw(gedp, request, result);
+	if (changed)
+		*changed = ged_scene_result_changed(result);
+	ged_scene_result_destroy(result);
+	return status;
+}
+
+static enum ged_scene_status
+qgmodel_apply_scene_erase(struct ged *gedp,
+			  const struct ged_scene_erase_request *request,
+			  int *changed)
+{
+	struct ged_scene_result *result = ged_scene_result_create();
+	if (!result)
+		return GED_SCENE_ERROR;
+	enum ged_scene_status status = ged_scene_erase(gedp, request, result);
+	if (changed)
+		*changed = ged_scene_result_changed(result);
+	ged_scene_result_destroy(result);
+	return status;
 }
 
 static bool
@@ -425,7 +444,7 @@ QgModel::QgModel(QObject *p, const char *npath)
 	items->clear();
 	itemIndexClear();
 
-	draw_observer_token = ged_draw_observer_add(gedp,
+	draw_observer_token = ged_scene_observer_add(gedp,
 		&QgModelDrawObserverAccess::callback, this);
 	event_observer_token = ged_event_observer_add(gedp,
 		GED_EVENT_OBSERVER_POST_RECONCILE,
@@ -453,7 +472,7 @@ QgModel::~QgModel()
 	qgmodel_draw_timing_stats.erase(this);
 
 	if (m_session && m_session->ged() && draw_observer_token) {
-		ged_draw_observer_remove(m_session->ged(),
+		ged_scene_observer_remove(m_session->ged(),
 			draw_observer_token);
 		draw_observer_token = 0;
 	}
@@ -1896,7 +1915,8 @@ QgModel::data(const QModelIndex &index, int role) const
 			return QVariant(qi->draw_state);
 		std::string path = item_path(qi);
 		qi->draw_state = (gedp && view_ctx) ?
-			ged_draw_path_state(gedp, view_ctx, path.c_str(), -1) : 0;
+			ged_scene_path_state_get(gedp, view_ctx, path.c_str(),
+			    GED_SCENE_DRAW_DEFAULT) : GED_SCENE_PATH_NOT_DRAWN;
 		qi->draw_state_view_ctx = view_ctx;
 		qi->draw_state_valid = true;
 		return QVariant(qi->draw_state);
@@ -2258,25 +2278,21 @@ QgModel::notifyDrawnPathChanged(const char *path)
 
 void
 QgModel::notifyDrawnTransactionChanged(
-	const void *result_ctx,
-	const char *fallback_path)
+	const void *delta_ctx)
 {
-	const struct ged_draw_transaction_result *result =
-		static_cast<const struct ged_draw_transaction_result *>(result_ctx);
-	const char *names = (result && BU_VLS_IS_INITIALIZED(&result->names)) ?
-		bu_vls_cstr(&result->names) : nullptr;
-	if (names && names[0]) {
-		std::vector<std::string> paths;
-		qgmodel_append_unique_paths_from_words(paths, names);
-		for (const std::string &path : paths)
-			notifyDrawnPathChanged(path.c_str());
+	const struct ged_scene_delta *delta =
+		static_cast<const struct ged_scene_delta *>(delta_ctx);
+	const size_t path_count = ged_scene_delta_path_count(delta);
+	if (!path_count) {
+		notifyDrawnItemsChanged();
 		return;
 	}
 
-	if (fallback_path && fallback_path[0])
-		notifyDrawnPathChanged(fallback_path);
-	else
-		notifyDrawnItemsChanged();
+	for (size_t i = 0; i < path_count; i++) {
+		const char *path = ged_scene_delta_path_at(delta, i);
+		if (path && path[0])
+			notifyDrawnPathChanged(path);
+	}
 }
 
 
@@ -2299,47 +2315,29 @@ QgModel::flushPendingDrawNotifications()
 
 void
 QgModel::handleDrawTransactionEvent(
-	const void *txn_ctx,
-	const void *result_ctx)
+	const void *delta_ctx)
 {
-	const struct ged_draw_transaction *txn =
-		static_cast<const struct ged_draw_transaction *>(txn_ctx);
-	const struct ged_draw_transaction_result *result =
-		static_cast<const struct ged_draw_transaction_result *>(result_ctx);
+	const struct ged_scene_delta *delta =
+		static_cast<const struct ged_scene_delta *>(delta_ctx);
 	draw_observer_event_count++;
 
-	if (txn && (txn->kind == GED_DRAW_TXN_MATERIAL_CHANGED ||
-		txn->kind == GED_DRAW_TXN_REFRESH_MATERIAL_COLORS)) {
+	if (ged_scene_delta_kind(delta) == GED_SCENE_DELTA_STYLE) {
+		/* A style-only scene delta cannot change DrawnDisplayRole.  Database
+		 * observers issue the precise row-role notifications for material and
+		 * attribute changes; treating a named material refresh as a draw-path
+		 * change needlessly repaints every loaded descendant. */
 		pending_draw_event_view_only = 1;
 		return;
 	}
 
 	if (draw_observer_defer_depth > 0) {
 		int recorded = 0;
-		const char *names =
-			(result && BU_VLS_IS_INITIALIZED(&result->names)) ?
-			bu_vls_cstr(&result->names) : nullptr;
-		if (names && names[0]) {
-			size_t before = pending_draw_event_paths.size();
-			qgmodel_append_unique_paths_from_words(pending_draw_event_paths,
-				names);
-			if (pending_draw_event_paths.size() > before)
+		const size_t path_count = ged_scene_delta_path_count(delta);
+		for (size_t i = 0; i < path_count; i++) {
+			const char *path = ged_scene_delta_path_at(delta, i);
+			if (path && path[0]) {
+				qgmodel_append_unique_path(pending_draw_event_paths, path);
 				recorded = 1;
-		}
-		const char *path = txn ? txn->path : nullptr;
-		if (!recorded && path && path[0]) {
-			qgmodel_append_unique_path(pending_draw_event_paths, path);
-			recorded = 1;
-		}
-		int path_count = (txn && txn->paths && txn->path_count > 0) ?
-			txn->path_count : 0;
-		if (!recorded && path_count > 0) {
-			for (int i = 0; i < path_count; i++) {
-				const char *mpath = txn->paths[i];
-				if (mpath && mpath[0]) {
-					qgmodel_append_unique_path(pending_draw_event_paths, mpath);
-					recorded = 1;
-				}
 			}
 		}
 		if (!recorded)
@@ -2347,8 +2345,7 @@ QgModel::handleDrawTransactionEvent(
 		return;
 	}
 
-	notifyDrawnTransactionChanged(result,
-		txn ? txn->path : nullptr);
+	notifyDrawnTransactionChanged(delta);
 }
 
 
@@ -2365,7 +2362,7 @@ QgModel::recordPendingDatabaseEventPaths(const struct ged_event_txn_result *resu
 
 
 void
-QgModel::notifyPendingDatabaseEventItemsChanged(bool terminal_subtree)
+QgModel::notifyPendingDatabaseEventItemsChanged()
 {
 	QVector<int> roles;
 	roles << Qt::DisplayRole << BoolInternalRole << DirectoryInternalRole
@@ -2378,21 +2375,18 @@ QgModel::notifyPendingDatabaseEventItemsChanged(bool terminal_subtree)
 		std::vector<std::string> notify_paths;
 		notify_paths.reserve(pending_db_event_paths.size());
 		for (const std::string &path : pending_db_event_paths) {
-			if (!terminal_subtree &&
-				qgmodel_path_has_queued_ancestor(
+			if (qgmodel_path_has_queued_ancestor(
 					pending_db_event_paths, path))
 				continue;
 			notify_paths.push_back(path);
 		}
 		for (const std::string &path : notify_paths)
-			notifyPathItemsChanged(path.c_str(), roles,
-				terminal_subtree);
+			notifyPathItemsChanged(path.c_str(), roles, false);
 	}
 
 	pending_db_event_paths.clear();
 	pending_db_event_metadata_only = 0;
 	pending_db_event_all = 0;
-	pending_db_event_terminal_subtree = 0;
 }
 
 
@@ -2410,7 +2404,6 @@ QgModel::flushPendingDatabaseEventNotifications()
 		pending_db_event_metadata_only = 0;
 		pending_db_event_paths.clear();
 		pending_db_event_all = 0;
-		pending_db_event_terminal_subtree = 0;
 		return;
 	}
 
@@ -2425,7 +2418,7 @@ QgModel::flushPendingDatabaseEventNotifications()
 		pending_db_event_force_reset = 0;
 		pending_db_event_metadata_only = 0;
 		if (applied_delta) {
-			notifyPendingDatabaseEventItemsChanged(false);
+			notifyPendingDatabaseEventItemsChanged();
 			emit mdl_changed_db((void *)gedp);
 			if (m_session)
 				m_session->notifyDbChanged(gedp->dbip);
@@ -2436,7 +2429,6 @@ QgModel::flushPendingDatabaseEventNotifications()
 			pending_db_event_paths.clear();
 			pending_db_event_all = 0;
 			pending_db_event_metadata_only = 0;
-			pending_db_event_terminal_subtree = 0;
 			g_update(gedp->dbip);
 		}
 		return;
@@ -2450,10 +2442,8 @@ QgModel::flushPendingDatabaseEventNotifications()
 	if (metadata_only) {
 		pending_db_event_paths.clear();
 		pending_db_event_all = 0;
-		pending_db_event_terminal_subtree = 0;
 	} else {
-		notifyPendingDatabaseEventItemsChanged(
-			pending_db_event_terminal_subtree != 0);
+		notifyPendingDatabaseEventItemsChanged();
 	}
 	emit mdl_changed_db((void *)gedp);
 	if (m_session)
@@ -2480,8 +2470,6 @@ QgModel::handleDatabaseEventTxn(const struct ged_event *events,
 				pending_db_event_model_reset = 1;
 			if (qgmodel_event_requires_model_reset(events[i].kind))
 				pending_db_event_force_reset = 1;
-			if (events[i].kind == GED_EVENT_OBJECT_MODIFIED)
-				pending_db_event_terminal_subtree = 1;
 			if (events[i].kind == GED_EVENT_MATERIAL_CHANGED &&
 			    !events[i].name && !events[i].path)
 				pending_db_event_all = 1;
@@ -2496,10 +2484,14 @@ QgModel::handleDatabaseEventTxn(const struct ged_event *events,
 			qgmodel_append_unique_path(pending_db_event_paths,
 				events[i].child_name);
 		}
+		/* Database events carry precise affected names, and structural
+		 * combination changes take the grouped hierarchy-delta path above.
+		 * Invalidating every loaded descendant for a non-structural object or
+		 * material change is unnecessary and turns one edit into an O(scene)
+		 * repaint on large trees. */
 		if (metadata_only && !pending_db_event_model_reset &&
 			pending_db_event_paths.empty() &&
-			!pending_db_event_all &&
-			!pending_db_event_terminal_subtree)
+			!pending_db_event_all)
 			pending_db_event_metadata_only = 1;
 		else
 			pending_db_event_metadata_only = 0;
@@ -2514,8 +2506,7 @@ QgModel::handleDatabaseEventTxn(const struct ged_event *events,
 
 void
 QgModelDrawObserverAccess::callback(struct ged *gedp,
-				    const struct ged_draw_transaction *txn,
-				    const struct ged_draw_transaction_result *result,
+				    const struct ged_scene_delta *delta,
 				    void *client_data)
 {
 	(void)gedp;
@@ -2525,7 +2516,7 @@ QgModelDrawObserverAccess::callback(struct ged *gedp,
 		bool timing_enabled = qgmodel_draw_timing_is_enabled(model);
 		int64_t start_us = timing_enabled ?
 			bu_gettime() : 0;
-		model->handleDrawTransactionEvent(txn, result);
+		model->handleDrawTransactionEvent(delta);
 		if (timing_enabled)
 			qgmodel_draw_timing_stats_for(model).observer_callback_us +=
 				(uint64_t)(bu_gettime() - start_us);
@@ -2589,7 +2580,7 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 {
 	struct ged *gedp = m_session->ged();
 	model_dbip = gedp->dbip;
-	uint64_t draw_rev_before = ged_draw_scene_revision(gedp);
+	uint64_t draw_rev_before = ged_scene_revision(gedp);
 	uint64_t draw_event_count_before = draw_observer_event_count;
 	uint64_t db_event_count_before = event_observer_event_count;
 
@@ -2602,7 +2593,6 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 	pending_db_event_metadata_only = 0;
 	pending_db_event_paths.clear();
 	pending_db_event_all = 0;
-	pending_db_event_terminal_subtree = 0;
 
 	if (!ged_cmd_exists(argv[0])) {
 		const char *ccmd = nullptr;
@@ -2640,7 +2630,6 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 		pending_db_event_metadata_only = 0;
 		pending_db_event_paths.clear();
 		pending_db_event_all = 0;
-		pending_db_event_terminal_subtree = 0;
 		return ret;
 	}
 
@@ -2656,7 +2645,6 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 		pending_db_event_metadata_only = 0;
 		pending_db_event_paths.clear();
 		pending_db_event_all = 0;
-		pending_db_event_terminal_subtree = 0;
 		g_update(gedp->dbip);
 	} else if (pending_db_event_notify || pending_db_event_model_reset) {
 		flushPendingDatabaseEventNotifications();
@@ -2664,7 +2652,7 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 		g_update(gedp->dbip);
 	}
 
-	uint64_t draw_rev_after = ged_draw_scene_revision(gedp);
+	uint64_t draw_rev_after = ged_scene_revision(gedp);
 	if (draw_rev_after != draw_rev_before ||
 		draw_observer_event_count != draw_event_count_before) {
 		if (draw_observer_event_count != draw_event_count_before)
@@ -2695,8 +2683,8 @@ QgModel::drawnPathState(const char *path) const
 
 	struct ged *gedp = m_session ? m_session->ged() : NULL;
 	struct ged_view_context *view_ctx = qgmodel_active_view_context(this);
-	return (gedp && view_ctx) ? ged_draw_path_state(gedp, view_ctx, path,
-		-1) : 0;
+	return (gedp && view_ctx) ? ged_scene_path_state_get(gedp, view_ctx,
+		path, GED_SCENE_DRAW_DEFAULT) : GED_SCENE_PATH_NOT_DRAWN;
 }
 
 int
@@ -2739,12 +2727,13 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 		qgmodel_draw_timing_stats_for(this).draw_calls++;
 	int64_t blank_slate_start_us = timing_enabled ?
 		bu_gettime() : 0;
-	int blank_slate = !ged_draw_has_paths(gedp, view_ctx, -1);
+	int blank_slate = !ged_scene_has_paths(gedp, view_ctx,
+		GED_SCENE_DRAW_DEFAULT);
 	if (timing_enabled)
 		qgmodel_draw_timing_stats_for(this).blank_slate_check_us +=
 			(uint64_t)(bu_gettime() - blank_slate_start_us);
 
-	uint64_t draw_rev_before = ged_draw_scene_revision(gedp);
+	uint64_t draw_rev_before = ged_scene_revision(gedp);
 	uint64_t draw_event_count_before = draw_observer_event_count;
 	int manage_draw_notifications = (draw_observer_defer_depth == 0);
 	if (manage_draw_notifications) {
@@ -2755,22 +2744,24 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 	draw_observer_defer_depth++;
 	int64_t transaction_start_us = timing_enabled ?
 		bu_gettime() : 0;
-	struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
-	txn.view = view_ctx;
-	txn.paths = draw_paths.data();
-	txn.path_count = (int)draw_paths.size();
-	txn.autoview = blank_slate ? 1 : 0;
-	int ret = qgmodel_apply_draw_transaction(gedp, &txn);
+	struct ged_scene_draw_request request;
+	ged_scene_draw_request_init(&request);
+	request.view = view_ctx;
+	request.paths = draw_paths.data();
+	request.path_count = draw_paths.size();
+	request.autoview = blank_slate ? 1 : 0;
+	int result_changed = 0;
+	enum ged_scene_status status = qgmodel_apply_scene_draw(gedp,
+		&request, &result_changed);
 	if (timing_enabled)
 		qgmodel_draw_timing_stats_for(this).transaction_us +=
 			(uint64_t)(bu_gettime() - transaction_start_us);
 	draw_observer_defer_depth--;
 
-	uint64_t draw_rev_after = ged_draw_scene_revision(gedp);
+	uint64_t draw_rev_after = ged_scene_revision(gedp);
 	int draw_events_seen = (draw_observer_event_count !=
 		draw_event_count_before);
-	int draw_changed = (ret > 0 || draw_events_seen ||
+	int draw_changed = (result_changed || draw_events_seen ||
 		draw_rev_after != draw_rev_before);
 	if (manage_draw_notifications && draw_changed) {
 		if (draw_events_seen)
@@ -2784,7 +2775,7 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 			qgmodel_draw_timing_stats_for(this).view_signal_us +=
 				(uint64_t)(bu_gettime() - view_signal_start_us);
 	}
-	if (ret < 0) {
+	if (status != GED_SCENE_OK) {
 		return BRLCAD_ERROR;
 	}
 	if (timing_enabled)
@@ -2829,14 +2820,17 @@ QgModel::erase(const char *inst_path)
 	if (!gedp || !view_ctx || !inst_path || !inst_path[0])
 		return BRLCAD_ERROR;
 
-	struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_ERASE, inst_path);
-	txn.view = view_ctx;
-	int ret = qgmodel_apply_draw_transaction(gedp, &txn);
-	if (ret < 0)
+	struct ged_scene_erase_request request;
+	ged_scene_erase_request_init(&request);
+	request.view = view_ctx;
+	request.path = inst_path;
+	int changed = 0;
+	enum ged_scene_status status = qgmodel_apply_scene_erase(gedp,
+		&request, &changed);
+	if (status != GED_SCENE_OK)
 		return BRLCAD_ERROR;
 
-	if (ret > 0) {
+	if (changed) {
 		emit view_changed(QG_VIEW_DRAWN);
 	}
 	return BRLCAD_OK;

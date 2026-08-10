@@ -878,9 +878,11 @@ _rm_remove_from_comb(struct ged *gedp, struct directory *parent_dp,
     }
 
     if (path_expr) {
-	struct ged_draw_transaction txn =
-	    ged_draw_transaction_make(GED_DRAW_TXN_ERASE_PREFIX, path_expr);
-	(void)ged_draw_apply_transaction(gedp, &txn, NULL);
+	struct ged_scene_erase_request request;
+	ged_scene_erase_request_init(&request);
+	request.path = path_expr;
+	request.match = GED_SCENE_ERASE_SUBTREE;
+	(void)ged_scene_erase(gedp, &request, NULL);
     }
     bu_vls_printf(&path, "%s/%s", parent_dp->d_namep,
 	bu_vls_cstr(&child_name));

@@ -199,14 +199,14 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
 		bu_vls_free(&vname);
 		return BRLCAD_ERROR;
 	    }
-	    ret = _ged_draw_uplot_files_to_command_scene_feature(gedp,
+	    ret = _ged_view_feature_batch_publish_uplot_files(gedp,
 		    (const char * const *)files, count, bu_vls_cstr(&nroot),
 		    size, gedp->i->ged_gdp->gd_uplotOutputMode, "overlay",
 		    "command-result", bu_vls_cstr(&nroot),
 		    "uplot-overlay", 0);
 	    bu_argv_free(count, files);
 	} else {
-	    ret = _ged_draw_uplot_to_command_scene_feature(gedp, fp,
+	    ret = _ged_view_feature_batch_publish_uplot(gedp, fp,
 		    bu_vls_cstr(&nroot), size,
 		    gedp->i->ged_gdp->gd_uplotOutputMode, "overlay",
 		    "command-result", bu_vls_cstr(&nroot),

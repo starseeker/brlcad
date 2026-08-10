@@ -357,7 +357,7 @@ QEll::update_viewobj_name(const QString &)
 	bu_vls_sprintf(&oname, "%s", ell_name->text().toLocal8Bit().data());
     if (!bu_vls_strlen(&oname)) {
 	dp = RT_DIR_NULL;
-	ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+	(void)ged_scene_highlights_clear(gedp, NULL);
 	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);
 	clear_labels();
@@ -376,7 +376,11 @@ QEll::update_viewobj_name(const QString &)
     const bool object_changed = ndp != dp;
     dp = ndp;
     if (dp && dp->d_minor_type == DB5_MINORTYPE_BRLCAD_ELL) {
-	ged_draw_highlight_shape_ref_by_name(gedp, bu_vls_cstr(&oname));
+	struct ged_scene_path_request request;
+	ged_scene_path_request_init(&request);
+	request.path = bu_vls_cstr(&oname);
+	request.match = GED_SCENE_PATH_MATCH_OBJECT;
+	(void)ged_scene_highlight_set(gedp, &request, 1, NULL);
 	if (object_changed)
 	    read_from_db();
 	else
@@ -384,7 +388,7 @@ QEll::update_viewobj_name(const QString &)
 	return;
     }
 
-    ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+    (void)ged_scene_highlights_clear(gedp, NULL);
     qged_edit_feature_clear_geometry(p);
     qged_edit_feature_set_visible(p, 0);
     clear_labels();
@@ -449,7 +453,7 @@ QEll::reset_for_database()
 
     struct ged *gedp = getGed();
     if (gedp)
-	ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+	(void)ged_scene_highlights_clear(gedp, NULL);
     if (!qged_edit_feature_ref_is_null(p)) {
 	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);

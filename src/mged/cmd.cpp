@@ -2739,7 +2739,8 @@ cmd_blast(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, cons
 
 	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
-	non_empty = ged_draw_has_shapes(s->gedp);
+	non_empty = ged_scene_has_paths(s->gedp,
+	    ged_view_active_ctx(s->gedp), GED_SCENE_DRAW_DEFAULT);
 
 	if (mged_variables->mv_autosize && non_empty) {
 	    struct view_ring *vrp;

@@ -460,12 +460,6 @@ ged_pick_rect(struct ged_view_context *view_ctx, int x0, int y0, int x1, int y1)
 }
 
 int
-ged_annotation_hud_sync(struct ged_view_context *UNUSED(view_ctx))
-{
-    return 1;
-}
-
-int
 ged_annotation_hud_axes_replace(
 	struct ged_view_context *view_ctx,
 	const char *name,
@@ -592,6 +586,17 @@ ged_selection_add_path(
 	const char *path)
 {
     return ged_draw_obol_view_context_selection_add_path(view_ctx,
+	    (int)kind, path);
+}
+
+
+int
+ged_selection_remove_path(
+	struct ged_view_context *view_ctx,
+	enum ged_selection_kind kind,
+	const char *path)
+{
+    return ged_draw_obol_view_context_selection_remove_path(view_ctx,
 	    (int)kind, path);
 }
 

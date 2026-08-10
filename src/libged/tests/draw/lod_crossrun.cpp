@@ -241,10 +241,10 @@ render_to_file(struct ged *gedp, const char *outfile)
 {
     struct ged_view_context *v = ged_view_active_ctx(gedp);
     ged_db_index_refresh(gedp);
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    txn.view = v;
-    ged_draw_apply_transaction(gedp, &txn, NULL);
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = v;
+    (void)ged_scene_redraw(gedp, &request, NULL);
 
     const char *sg_av[2] = {"screengrab", outfile};
     return ged_exec_screengrab(gedp, 2, sg_av);

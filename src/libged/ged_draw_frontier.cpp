@@ -50,6 +50,15 @@ struct visibility_rule {
     bool visible = true;
 };
 
+struct presentation_rule {
+    ged_draw_transaction_kind kind = GED_DRAW_TXN_NONE;
+    std::string path;
+    struct ged_view_context *view = nullptr;
+    int mode = -1;
+    enum ged_scene_path_match match = GED_SCENE_PATH_MATCH_EXACT;
+    double value = 0.0;
+};
+
 struct frontier_root {
     std::string path;
     path_ids ids;
@@ -58,6 +67,7 @@ struct frontier_root {
     struct ged_draw_appearance_settings appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
     std::vector<visibility_rule> rules;
+    std::vector<presentation_rule> presentation;
     bool auto_draw = false;
     bool conflict = false;
 };
@@ -70,13 +80,18 @@ struct promotion_record {
     std::vector<frontier_root> roots;
 };
 
+struct frontier_backend_change {
+    frontier_root root;
+    bool clear = false;
+};
+
 struct frontier_state {
     uint64_t owner = 0;
     uint64_t next_id = 1;
     std::map<uint64_t, promotion_record> promotions;
     std::vector<frontier_root> roots;
+    std::vector<frontier_backend_change> backend_changes;
 };
-
 
 static frontier_state *
 state_get(struct ged *gedp, bool create)
@@ -107,11 +122,38 @@ root_scope_equal(const frontier_root &left, const frontier_root &right)
 }
 
 
+static void
+frontier_backend_change_note(frontier_state *state,
+			     const frontier_root &root, bool clear)
+{
+    if (!state)
+	return;
+    auto found = std::find_if(state->backend_changes.begin(),
+	state->backend_changes.end(),
+	[&root](const frontier_backend_change &candidate) {
+	    return root_scope_equal(candidate.root, root);
+	});
+    frontier_backend_change change;
+    change.root = root;
+    change.clear = clear;
+    if (found == state->backend_changes.end())
+	state->backend_changes.push_back(change);
+    else
+	*found = change;
+}
+
+
 static bool
 root_in_scope(const frontier_root &root, struct ged_view_context *view,
 	      int mode)
 {
-    if (view && root.view && view != root.view)
+    /* A non-independent view is a viewport onto the shared scene, not a
+     * distinct semantic draw scope.  Store and compare all shared scopes as
+     * NULL so a draw issued from one shared view is visible in every other
+     * shared view, while independent scopes remain strictly view-local. */
+    struct ged_view_context *scope_view =
+	(view && ged_view_context_is_independent(view)) ? view : nullptr;
+    if (root.view != scope_view)
 	return false;
     if (mode >= 0 && root.mode >= 0 && mode != root.mode)
 	return false;
@@ -134,21 +176,12 @@ canonical_path(const char *path)
 
 
 static std::string
-request_path(const struct ged_draw_promotion_request *request)
+request_path(const struct ged_scene_edit_request *request)
 {
     if (!request)
 	return std::string();
-    if (request->path && request->path[0])
-	return canonical_path(request->path);
-    if (!request->dfp)
-	return std::string();
-
-    char *path = db_path_to_string(request->dfp);
-    if (!path)
-	return std::string();
-    std::string result = canonical_path(path);
-    bu_free(path, "draw promotion request path");
-    return result;
+    return request->path && request->path[0] ?
+	canonical_path(request->path) : std::string();
 }
 
 
@@ -169,6 +202,61 @@ ids_prefix(const path_ids &prefix, const path_ids &path)
 {
     return prefix.size() <= path.size() &&
 	std::equal(prefix.begin(), prefix.end(), path.begin());
+}
+
+
+static bool resolve_path(struct ged *gedp, const std::string &path,
+	path_ids &ids);
+
+
+static bool
+object_occurs_under_root(struct ged *gedp, const frontier_root &root,
+			 const std::string &path)
+{
+    path_ids query;
+    if (!resolve_path(gedp, path, query) || query.empty())
+	return false;
+    struct ged_db_index_record leaf;
+    if (!ged_db_index_record_get(gedp, query.back(), &leaf) || !leaf.valid)
+	return false;
+    const size_t count = ged_db_index_affected_path_count(gedp,
+	leaf.object_id, 0);
+    for (size_t row = 0; row < count; row++) {
+	const size_t depth = ged_db_index_affected_path_at(gedp,
+	    leaf.object_id, row, nullptr, 0, 0);
+	if (!depth || depth < root.ids.size())
+	    continue;
+	path_ids occurrence(depth);
+	if (ged_db_index_affected_path_at(gedp, leaf.object_id, row,
+		occurrence.data(), occurrence.size(), 0) == depth &&
+	    ids_prefix(root.ids, occurrence))
+	    return true;
+    }
+    return false;
+}
+
+
+static bool
+presentation_root_matches(struct ged *gedp, const frontier_root &root,
+			  const presentation_rule &rule)
+{
+    if (!root_in_scope(root, rule.view, rule.mode))
+	return false;
+    if (rule.match == GED_SCENE_PATH_MATCH_OBJECT)
+	return object_occurs_under_root(gedp, root, rule.path);
+    return path_prefix(root.path, rule.path) ||
+	path_prefix(rule.path, root.path);
+}
+
+
+static bool
+presentation_rule_equal(const presentation_rule &left,
+			const presentation_rule &right)
+{
+    return left.kind == right.kind && left.path == right.path &&
+	left.view == right.view && left.mode == right.mode &&
+	left.match == right.match &&
+	std::fabs(left.value - right.value) <= 1.0e-12;
 }
 
 
@@ -207,152 +295,15 @@ print_path(struct ged *gedp, const path_ids &ids)
 }
 
 
-static std::set<std::string>
-listed_frontier(struct ged *gedp, struct ged_view_context *view, int mode)
-{
-    std::set<std::string> paths;
-    struct bu_vls listing = BU_VLS_INIT_ZERO;
-    (void)ged_draw_list_paths(gedp, view, mode, 0, &listing);
-
-    const char *start = bu_vls_cstr(&listing);
-    for (const char *p = start; ; p++) {
-	if (*p != '\n' && *p != '\r' && *p != '\0')
-	    continue;
-	if (p > start) {
-	    std::string value(start, static_cast<size_t>(p - start));
-	    value = canonical_path(value.c_str());
-	    if (!value.empty())
-		paths.insert(value);
-	}
-	if (*p == '\0')
-	    break;
-	start = p + 1;
-    }
-    bu_vls_free(&listing);
-    return paths;
-}
-
-
-struct source_root_collect_context {
-    std::set<std::string> *paths = nullptr;
-};
-
-
-static int
-collect_source_root_cb(
-    struct ged *UNUSED(gedp),
-    const struct ged_draw_obol_database_source_record *record,
-    void *data)
-{
-    source_root_collect_context *ctx =
-	static_cast<source_root_collect_context *>(data);
-    if (!ctx || !ctx->paths || !record || !record->valid ||
-	!record->visible)
-	return 1;
-    const char *path = record->source_path && record->source_path[0] ?
-	record->source_path : record->database_path;
-    const std::string canonical = canonical_path(path);
-    if (!canonical.empty())
-	ctx->paths->insert(canonical);
-    return 1;
-}
-
-
-static std::set<std::string>
-listed_source_roots(struct ged *gedp)
-{
-    std::set<std::string> paths;
-    source_root_collect_context ctx;
-    ctx.paths = &paths;
-    const int status =
-	ged_draw_obol_visible_database_source_records_foreach_fast(
-	    gedp, collect_source_root_cb, &ctx);
-    if (status < 0)
-	paths.clear();
-    return paths;
-}
-
-
-struct root_collect_context {
-    struct ged *gedp = nullptr;
-    struct ged_view_context *view = nullptr;
-    int mode = -1;
-    const std::set<std::string> *listed = nullptr;
-    std::vector<frontier_root> *roots = nullptr;
-};
-
-
-static int
-collect_root_cb(const struct ged_draw_group_record *record, void *data)
-{
-    root_collect_context *ctx = static_cast<root_collect_context *>(data);
-    if (!ctx || !record || !record->path || !ctx->listed || !ctx->roots)
-	return 1;
-    if (!record->visible || record->is_overlay || record->is_local_source ||
-	!ged_draw_group_record_in_view(record, ctx->view))
-	return 1;
-    if (ctx->mode >= 0 && record->draw_mode != ctx->mode)
-	return 1;
-
-    const std::string path = canonical_path(record->path);
-    if (path.empty() || ctx->listed->find(path) == ctx->listed->end())
-	return 1;
-
-    frontier_root root;
-    root.path = path;
-    root.view = record->view ? record->view : ctx->view;
-    root.mode = record->draw_mode;
-    root.appearance = record->appearance;
-    if (!resolve_path(ctx->gedp, root.path, root.ids))
-	return 1;
-
-    const auto duplicate = std::find_if(ctx->roots->begin(), ctx->roots->end(),
-	[&root](const frontier_root &candidate) {
-	    return candidate.path == root.path &&
-		candidate.view == root.view && candidate.mode == root.mode;
-	});
-    if (duplicate == ctx->roots->end())
-	ctx->roots->push_back(root);
-    return 1;
-}
-
-
 static std::vector<frontier_root>
 current_roots(struct ged *gedp, struct ged_view_context *view, int mode)
 {
     std::vector<frontier_root> roots;
-    std::set<std::string> paths;
-    if (ged_draw_obol_scene_controller_full_synced(gedp))
-	paths = listed_source_roots(gedp);
-    if (paths.empty())
-	paths = listed_frontier(gedp, view, mode);
-    if (!paths.empty()) {
-	root_collect_context ctx;
-	ctx.gedp = gedp;
-	ctx.view = view;
-	ctx.mode = mode;
-	ctx.listed = &paths;
-	ctx.roots = &roots;
-	ged_draw_foreach_group_record(gedp, collect_root_cb, &ctx);
-    }
-
-    /* Once a source has a semantic frontier its physical owner root is
-     * intentionally absent from the collapsed user-facing listing.  Merge the
-     * retained owners back here so subsequent nested operations continue to
-     * address the same source rather than manufacturing new sources. */
     frontier_state *state = state_get(gedp, false);
     if (state) {
 	for (const frontier_root &retained : state->roots) {
-	    if (!root_in_scope(retained, view, mode))
-		continue;
-	    auto found = std::find_if(roots.begin(), roots.end(),
-		[&retained](const frontier_root &candidate) {
-		    return root_scope_equal(candidate, retained);
-		});
-	    if (found == roots.end())
+	    if (root_in_scope(retained, view, mode))
 		roots.push_back(retained);
-	    else
-		*found = retained;
 	}
     }
     return roots;
@@ -469,7 +420,10 @@ frontier_appearance_equal(
 	  left.color[2] == right.color[2])) &&
 	left.s_line_width == right.s_line_width &&
 	left.draw_solid_lines_only == right.draw_solid_lines_only &&
-	left.draw_non_subtract_only == right.draw_non_subtract_only;
+	left.draw_non_subtract_only == right.draw_non_subtract_only &&
+	left.mixed_modes == right.mixed_modes &&
+	left.strict_fallback == right.strict_fallback &&
+	left.defer_leaf_expansion == right.defer_leaf_expansion;
 }
 
 
@@ -480,72 +434,16 @@ retained_root_apply(struct ged *gedp, frontier_root &root)
     if (!state)
 	return -1;
 
-    std::vector<std::string> paths;
-    std::vector<int> visible;
-    paths.reserve(root.rules.size());
-    visible.reserve(root.rules.size());
-    for (const visibility_rule &rule : root.rules) {
-	const std::string path = print_path(gedp, rule.ids);
-	if (path.empty())
-	    continue;
-	paths.push_back(path);
-	visible.push_back(rule.visible ? 1 : 0);
-    }
-    std::vector<const char *> args;
-    args.reserve(paths.size());
-    for (const std::string &path : paths)
-	args.push_back(path.c_str());
-
-    int renderer_changed = 0;
-    if (paths.empty()) {
-	renderer_changed = ged_draw_obol_source_visibility_frontier_clear(
-	    gedp, root.path.c_str(), root.view, root.mode);
-    } else {
-	renderer_changed = ged_draw_obol_source_visibility_overrides_set(
-	    gedp, root.path.c_str(), root.view, root.mode,
-	    args.data(), visible.data(), args.size());
-    }
-    (void)renderer_changed;
-
     auto found = std::find_if(state->roots.begin(), state->roots.end(),
 	[&root](const frontier_root &candidate) {
 	    return root_scope_equal(candidate, root);
 	});
-    if (root.rules.empty()) {
-	if (found != state->roots.end())
-	    state->roots.erase(found);
-	return 1;
-    }
-
     if (found == state->roots.end())
 	state->roots.push_back(root);
     else
 	*found = root;
+    frontier_backend_change_note(state, root, root.rules.empty());
     return 1;
-}
-
-
-static int
-draw_paths_direct(struct ged *gedp, const frontier_root &root,
-		  const std::vector<std::string> &paths)
-{
-    if (paths.empty())
-	return 0;
-
-    std::vector<const char *> path_args;
-    path_args.reserve(paths.size());
-    for (const std::string &path : paths)
-	path_args.push_back(path.c_str());
-
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, nullptr);
-    txn.view = root.view;
-    txn.mode = root.mode;
-    txn.paths = path_args.data();
-    txn.path_count = static_cast<int>(path_args.size());
-    txn.appearance = &root.appearance;
-    txn.autoview = 0;
-    return ged_draw_apply_draw_inner(gedp, &txn, nullptr, nullptr);
 }
 
 
@@ -555,7 +453,7 @@ promotion_occurrences(struct ged *gedp, const path_ids &requested, int scope)
     std::vector<path_ids> occurrences;
     if (requested.empty())
 	return occurrences;
-    if (scope != GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES) {
+    if (scope != GED_SCENE_EDIT_ALL_DRAWN_OCCURRENCES) {
 	occurrences.push_back(requested);
 	return occurrences;
     }
@@ -581,7 +479,7 @@ promotion_occurrences(struct ged *gedp, const path_ids &requested, int scope)
 
 
 static void
-append_result_path(struct ged_draw_promotion_result *result,
+append_result_path(struct ged_scene_edit_internal_result *result,
 		   const std::string &path)
 {
     if (!result || path.empty())
@@ -593,7 +491,7 @@ append_result_path(struct ged_draw_promotion_result *result,
 
 
 static void
-result_prepare(struct ged_draw_promotion_result *result, struct ged *gedp)
+result_prepare(struct ged_scene_edit_internal_result *result, struct ged *gedp)
 {
     if (!result)
 	return;
@@ -608,7 +506,7 @@ result_prepare(struct ged_draw_promotion_result *result, struct ged *gedp)
 	bu_vls_trunc(&result->errors, 0);
     }
     result->status = 0;
-    result->promotion = GED_DRAW_PROMOTION_REF_NULL;
+    result->scope = GED_SCENE_EDIT_SCOPE_REF_NULL;
     result->occurrence_count = 0;
     result->replaced_root_count = 0;
     result->replacement_path_count = 0;
@@ -634,9 +532,243 @@ ged_draw_frontier_state_destroy(struct ged *gedp)
 
 
 extern "C" int
-ged_draw_promotion_ref_is_null(ged_draw_promotion_ref promotion)
+ged_draw_frontier_has_roots(struct ged *gedp,
+			    struct ged_view_context *view_ctx,
+			    int mode)
 {
-    return (!promotion.owner || !promotion.id || !promotion.generation) ? 1 : 0;
+    frontier_state *state = state_get(gedp, false);
+    if (!state)
+	return 0;
+    for (const frontier_root &root : state->roots) {
+	if (root_in_scope(root, view_ctx, mode))
+	    return 1;
+    }
+    return 0;
+}
+
+
+extern "C" int
+ged_draw_frontier_foreach_root(struct ged *gedp,
+			       struct ged_view_context *view_ctx,
+			       int mode,
+			       ged_draw_frontier_root_cb callback,
+			       void *userdata)
+{
+    if (!callback)
+	return -1;
+    frontier_state *state = state_get(gedp, false);
+    if (!state)
+	return 0;
+
+    int count = 0;
+    for (const frontier_root &root : state->roots) {
+	if (!root_in_scope(root, view_ctx, mode))
+	    continue;
+	struct ged_draw_frontier_root_record record;
+	record.path = root.path.c_str();
+	record.view = root.view;
+	record.mode = root.mode;
+	record.appearance = &root.appearance;
+	count++;
+	if (!callback(&record, userdata))
+	    break;
+    }
+    return count;
+}
+
+
+static int
+frontier_visibility_emit(
+    struct ged *gedp,
+    const frontier_backend_change &change,
+    ged_draw_frontier_visibility_cb callback,
+    void *userdata)
+{
+    std::vector<std::string> paths;
+    std::vector<int> visible;
+    if (!change.clear) {
+	paths.reserve(change.root.rules.size());
+	visible.reserve(change.root.rules.size());
+	for (const visibility_rule &rule : change.root.rules) {
+	    const std::string path = print_path(gedp, rule.ids);
+	    if (path.empty())
+		continue;
+	    paths.push_back(path);
+	    visible.push_back(rule.visible ? 1 : 0);
+	}
+    }
+    std::vector<const char *> path_views;
+    path_views.reserve(paths.size());
+    for (const std::string &path : paths)
+	path_views.push_back(path.c_str());
+
+    struct ged_draw_frontier_visibility_record record;
+    record.root_path = change.root.path.c_str();
+    record.view = change.root.view;
+    record.mode = change.root.mode;
+    record.paths = path_views.empty() ? nullptr : path_views.data();
+    record.visible = visible.empty() ? nullptr : visible.data();
+    record.rule_count = path_views.size();
+    record.clear = change.clear || path_views.empty();
+    return callback(&record, userdata);
+}
+
+
+extern "C" int
+ged_draw_frontier_visibility_changes_foreach(
+    struct ged *gedp,
+    ged_draw_frontier_visibility_cb callback,
+    void *userdata)
+{
+    if (!gedp || !callback)
+	return -1;
+    frontier_state *state = state_get(gedp, false);
+    if (!state || state->backend_changes.empty())
+	return 0;
+
+    std::vector<frontier_backend_change> changes;
+    changes.swap(state->backend_changes);
+    int count = 0;
+    for (size_t i = 0; i < changes.size(); i++) {
+	count++;
+	if (frontier_visibility_emit(gedp, changes[i], callback, userdata))
+	    continue;
+	for (; i < changes.size(); i++)
+	    frontier_backend_change_note(state, changes[i].root,
+		changes[i].clear);
+	break;
+    }
+    return count;
+}
+
+
+extern "C" int
+ged_draw_frontier_visibility_snapshot_foreach(
+    struct ged *gedp,
+    ged_draw_frontier_visibility_cb callback,
+    void *userdata)
+{
+    if (!gedp || !callback)
+	return -1;
+    frontier_state *state = state_get(gedp, false);
+    if (!state)
+	return 0;
+
+    int count = 0;
+    for (const frontier_root &root : state->roots) {
+	if (root.rules.empty())
+	    continue;
+	frontier_backend_change change;
+	change.root = root;
+	if (!frontier_visibility_emit(gedp, change, callback, userdata))
+	    return count;
+	count++;
+    }
+    state->backend_changes.clear();
+    return count;
+}
+
+
+extern "C" int
+ged_draw_frontier_presentation_snapshot_foreach(
+    struct ged *gedp,
+    ged_draw_frontier_presentation_cb callback,
+    void *userdata)
+{
+    if (!gedp || !callback)
+	return -1;
+    frontier_state *state = state_get(gedp, false);
+    if (!state)
+	return 0;
+
+    int count = 0;
+    for (const frontier_root &root : state->roots) {
+	for (const presentation_rule &rule : root.presentation) {
+	    struct ged_draw_frontier_presentation_record record;
+	    record.root_path = root.path.c_str();
+	    record.path = rule.path.c_str();
+	    record.view = rule.view;
+	    record.mode = rule.mode;
+	    record.kind = rule.kind;
+	    record.match = rule.match;
+	    record.value = rule.value;
+	    count++;
+	    if (!callback(&record, userdata))
+		return count;
+	}
+    }
+    return count;
+}
+
+
+extern "C" int
+ged_draw_frontier_presentation_set(
+    struct ged *gedp,
+    const struct ged_draw_transaction *txn,
+    const char *resolved_path)
+{
+    if (!gedp || !txn || !resolved_path || !resolved_path[0])
+	return 0;
+    if (txn->kind != GED_DRAW_TXN_VISIBILITY &&
+	txn->kind != GED_DRAW_TXN_HIGHLIGHT &&
+	txn->kind != GED_DRAW_TXN_TRANSPARENCY)
+	return 0;
+
+    frontier_state *state = state_get(gedp, false);
+    if (!state)
+	return 0;
+
+    presentation_rule rule;
+    rule.kind = txn->kind;
+    rule.path = canonical_path(resolved_path);
+    rule.view = (txn->view && ged_view_context_is_independent(txn->view)) ?
+	txn->view : nullptr;
+    rule.mode = txn->mode;
+    rule.match = txn->match;
+    rule.value = txn->value;
+    if (rule.path.empty())
+	return 0;
+
+    int changed = 0;
+    for (frontier_root &root : state->roots) {
+	if (!presentation_root_matches(gedp, root, rule))
+	    continue;
+	const std::vector<presentation_rule> previous = root.presentation;
+	root.presentation.erase(std::remove_if(root.presentation.begin(),
+	    root.presentation.end(), [&rule](const presentation_rule &candidate) {
+		return candidate.kind == rule.kind &&
+		    candidate.path == rule.path &&
+		    candidate.view == rule.view &&
+		    candidate.mode == rule.mode &&
+		    candidate.match == rule.match;
+	    }), root.presentation.end());
+	root.presentation.push_back(rule);
+	if (previous.size() != root.presentation.size() ||
+	    !std::equal(previous.begin(), previous.end(),
+		root.presentation.begin(), presentation_rule_equal))
+	    changed++;
+    }
+    return changed;
+}
+
+
+extern "C" int
+ged_draw_frontier_highlights_clear(struct ged *gedp)
+{
+    frontier_state *state = state_get(gedp, false);
+    if (!state)
+	return 0;
+    int changed = 0;
+    for (frontier_root &root : state->roots) {
+	const size_t previous = root.presentation.size();
+	root.presentation.erase(std::remove_if(root.presentation.begin(),
+	    root.presentation.end(), [](const presentation_rule &rule) {
+		return rule.kind == GED_DRAW_TXN_HIGHLIGHT;
+	    }), root.presentation.end());
+	if (previous != root.presentation.size())
+	    changed++;
+    }
+    return changed;
 }
 
 
@@ -701,9 +833,21 @@ ged_draw_frontier_path_state(struct ged *gedp,
     if (!gedp || !path || !path[0])
 	return -1;
 
+    const std::string target_path = canonical_path(path);
+    std::vector<frontier_root> roots =
+	current_roots(gedp, view_ctx, mode);
     path_ids target;
-    if (!resolve_path(gedp, canonical_path(path), target))
+    /* Removal notifications arrive after librt has removed the directory
+     * entry.  Preserve exact semantic lookup by retained path long enough for
+     * the reducer to retire that draw root; requiring a fresh database-index
+     * resolution here left killed top-level roots permanently drawn. */
+    if (!resolve_path(gedp, target_path, target)) {
+	for (const frontier_root &root : roots) {
+	    if (root.path == target_path)
+		return 1;
+	}
 	return -1;
+    }
 
     /* The retained database source is itself the semantic visibility
      * frontier even before it acquires an erase/edit override.  Consulting
@@ -712,11 +856,8 @@ ged_draw_frontier_path_state(struct ged *gedp,
      * caller then fell back to enumerating every compact leaf occurrence for
      * every visible Qt tree row.
      *
-     * current_roots combines the small, view-scoped group-record set with the
-     * retained rule set.  Query cost is therefore proportional to drawn roots
-     * and path depth, not to leaf count. */
-    std::vector<frontier_root> roots =
-	current_roots(gedp, view_ctx, mode);
+     * Query cost is proportional to semantic draw roots and path depth, not
+     * to realized leaf count. */
     if (roots.empty())
 	return -1;
 
@@ -725,9 +866,18 @@ ged_draw_frontier_path_state(struct ged *gedp,
     bool partially_visible = false;
     for (const frontier_root &root : roots) {
 	if (!root_in_scope(root, view_ctx, mode) ||
-	    !ids_prefix(root.ids, target))
+	    (!ids_prefix(root.ids, target) &&
+	     !ids_prefix(target, root.ids)))
 	    continue;
 	matched = true;
+	/* One or more draw roots below the queried hierarchy item establish a
+	 * partial state.  This is the common Qt-tree case after drawing a child
+	 * path directly; it must not require enumerating all of the parent's
+	 * leaves to answer the row-paint query. */
+	if (ids_prefix(target, root.ids) && target != root.ids) {
+	    partially_visible = true;
+	    continue;
+	}
 	const bool visible = frontier_path_visible(root, target);
 	bool partial = false;
 	for (const visibility_rule &rule : root.rules) {
@@ -828,13 +978,24 @@ ged_draw_frontier_note_transaction(
 		++it;
 		continue;
 	    }
-	    if (!frontier_reconcile_database_paths(gedp, *it) ||
-		it->rules.empty()) {
-		(void)ged_draw_obol_source_visibility_frontier_clear(gedp,
-		    it->path.c_str(), it->view, it->mode);
+	    bool affected = paths.empty();
+	    for (const std::string &path : paths) {
+		if (path_prefix(it->path, path) ||
+		    path_prefix(path, it->path)) {
+		    affected = true;
+		    break;
+		}
+	    }
+	    if (!affected) {
+		++it;
+		continue;
+	    }
+	    if (!frontier_reconcile_database_paths(gedp, *it)) {
+		frontier_backend_change_note(state, *it, true);
 		it = state->roots.erase(it);
 		continue;
 	    }
+	    frontier_backend_change_note(state, *it, it->rules.empty());
 	    ++it;
 	}
     }
@@ -850,12 +1011,18 @@ ged_draw_frontier_note_transaction(
 	bool retire = all_roots;
 	if (!retire && (txn->kind == GED_DRAW_TXN_ERASE ||
 		txn->kind == GED_DRAW_TXN_ERASE_PREFIX ||
-		txn->kind == GED_DRAW_TXN_DRAW)) {
+		txn->kind == GED_DRAW_TXN_DRAW ||
+		(txn->kind == GED_DRAW_TXN_SOURCE_UPDATED &&
+		 txn->removed))) {
 	    for (const std::string &path : paths) {
 		/* Erasing an owner, or explicitly drawing a broader owner, retires
 		 * the narrower source's presentation rules.  A descendant draw is
 		 * absorbed by ged_draw_frontier_absorb_draw and keeps the owner. */
-		if (path_prefix(path, it->path)) {
+		const bool erase_owner = txn->kind != GED_DRAW_TXN_DRAW &&
+		    path == it->path;
+		const bool broader_owner = path != it->path &&
+		    path_prefix(path, it->path);
+		if (erase_owner || broader_owner) {
 		    retire = true;
 		    break;
 		}
@@ -865,8 +1032,7 @@ ged_draw_frontier_note_transaction(
 	    ++it;
 	    continue;
 	}
-	(void)ged_draw_obol_source_visibility_frontier_clear(gedp,
-	    it->path.c_str(), it->view, it->mode);
+	frontier_backend_change_note(state, *it, true);
 	it = state->roots.erase(it);
     }
 }
@@ -908,6 +1074,12 @@ ged_draw_frontier_absorb_draw(
     std::vector<frontier_root> roots =
 	current_roots(gedp, txn->view, mode);
     std::vector<bool> changed(roots.size(), false);
+    std::vector<bool> backend_refresh(roots.size(), false);
+    std::vector<bool> added(roots.size(), false);
+    frontier_state *state = state_get(gedp, true);
+    if (!state)
+	return -1;
+    int new_roots = 0;
     for (const std::string &path : requested_paths) {
 	path_ids target;
 	if (!resolve_path(gedp, path, target))
@@ -915,56 +1087,89 @@ ged_draw_frontier_absorb_draw(
 
 	size_t owner = roots.size();
 	for (size_t i = 0; i < roots.size(); i++) {
-	    if (roots[i].mode != mode ||
-		!frontier_appearance_equal(roots[i].appearance, appearance) ||
-		!ids_prefix(roots[i].ids, target))
+	    if (roots[i].mode != mode || !ids_prefix(roots[i].ids, target))
 		continue;
 	    if (owner == roots.size() ||
 		roots[i].ids.size() > roots[owner].ids.size())
 		owner = i;
 	}
-	if (owner == roots.size())
-	    return 0;
+	if (owner != roots.size() && roots[owner].ids == target) {
+	    if (!frontier_appearance_equal(roots[owner].appearance,
+		    appearance)) {
+		roots[owner].appearance = appearance;
+		changed[owner] = true;
+		backend_refresh[owner] = true;
+	    }
+	    continue;
+	}
+	if (owner != roots.size() &&
+	    !frontier_appearance_equal(roots[owner].appearance, appearance))
+	    owner = roots.size();
+	if (owner == roots.size()) {
+	    frontier_root root;
+	    root.path = path;
+	    root.ids = target;
+	    root.view = (txn->view &&
+		ged_view_context_is_independent(txn->view)) ? txn->view : nullptr;
+	    root.mode = mode;
+	    root.appearance = appearance;
+	    roots.push_back(root);
+	    changed.push_back(false);
+	    backend_refresh.push_back(false);
+	    added.push_back(true);
+	    new_roots++;
+	    continue;
+	}
 
 	if (frontier_set_subtree_visibility(roots[owner], target, true))
 	    changed[owner] = true;
     }
 
     int changed_roots = 0;
+    int refresh_roots = 0;
     for (size_t i = 0; i < roots.size(); i++) {
+	if (added[i]) {
+	    state->roots.push_back(roots[i]);
+	    continue;
+	}
 	if (!changed[i])
 	    continue;
 	if (retained_root_apply(gedp, roots[i]) < 0)
 	    return -1;
 	changed_roots++;
+	if (backend_refresh[i])
+	    refresh_roots++;
     }
     if (changed_roots)
 	(void)ged_selection_draw_sync(gedp, nullptr);
-    if (result) {
+    if (result && changed_roots && !new_roots && !refresh_roots) {
 	result->affected_groups +=
 	    static_cast<int>(requested_paths.size());
 	result->affected_shapes +=
 	    static_cast<int>(requested_paths.size());
 	result->presentation_only = 1;
     }
-    return static_cast<int>(requested_paths.size());
+    return (new_roots || refresh_roots) ? 0 :
+	static_cast<int>(requested_paths.size());
 }
 
 
 extern "C" void
-ged_draw_promotion_result_init(struct ged_draw_promotion_result *result)
+ged_scene_edit_internal_result_init(
+    struct ged_scene_edit_internal_result *result)
 {
     if (!result)
 	return;
     *result = {};
     BU_VLS_INIT(&result->paths);
     BU_VLS_INIT(&result->errors);
-    result->promotion = GED_DRAW_PROMOTION_REF_NULL;
+    result->scope = GED_SCENE_EDIT_SCOPE_REF_NULL;
 }
 
 
 extern "C" void
-ged_draw_promotion_result_free(struct ged_draw_promotion_result *result)
+ged_scene_edit_internal_result_free(
+    struct ged_scene_edit_internal_result *result)
 {
     if (!result)
 	return;
@@ -977,12 +1182,16 @@ ged_draw_promotion_result_free(struct ged_draw_promotion_result *result)
 
 
 extern "C" int
-ged_draw_promote_path(struct ged *gedp,
-		      const struct ged_draw_promotion_request *request,
-		      struct ged_draw_promotion_result *result)
+ged_scene_edit_acquire_internal(
+    struct ged *gedp,
+    const struct ged_scene_edit_request *request,
+    ged_scene_edit_scope_ref *scope,
+    struct ged_scene_edit_internal_result *result)
 {
     result_prepare(result, gedp);
-    if (!gedp || !request || !ged_db_index_available(gedp)) {
+    if (scope)
+	*scope = GED_SCENE_EDIT_SCOPE_REF_NULL;
+    if (!gedp || !request || !scope || !ged_db_index_available(gedp)) {
 	if (result)
 	    bu_vls_strcat(&result->errors,
 		"draw promotion requires a database index");
@@ -999,15 +1208,18 @@ ged_draw_promote_path(struct ged *gedp,
 	return -1;
     }
 
+    const int requested_mode =
+	request->draw_mode == GED_SCENE_DRAW_DEFAULT ? -1 :
+	static_cast<int>(request->draw_mode);
     std::vector<path_ids> occurrences =
-	promotion_occurrences(gedp, requested_ids, request->scope);
+	promotion_occurrences(gedp, requested_ids, request->occurrences);
     if (occurrences.empty())
 	occurrences.push_back(requested_ids);
 
     std::vector<frontier_root> roots =
-	current_roots(gedp, request->view, request->mode);
+	current_roots(gedp, request->view, requested_mode);
     promotion_record promotion;
-    promotion.role = request->role ? request->role : "";
+    promotion.role = request->purpose ? request->purpose : "";
 
     std::set<std::string> handled_occurrences;
     std::vector<bool> occurrence_drawn(occurrences.size(), false);
@@ -1044,7 +1256,7 @@ ged_draw_promote_path(struct ged *gedp,
 	/* "All occurrences" means all occurrences already represented by the
 	 * user's draw intents.  It must not make every database occurrence
 	 * visible.  Auto-draw applies only to the explicitly requested path. */
-	if (!occurrence_drawn[occurrence_index] && request->auto_draw &&
+	if (!occurrence_drawn[occurrence_index] && request->draw_if_absent &&
 	    occurrence == requested_ids) {
 	    const std::string occurrence_path = print_path(gedp, occurrence);
 	    if (occurrence_path.empty())
@@ -1052,19 +1264,28 @@ ged_draw_promote_path(struct ged *gedp,
 	    frontier_root root;
 	    root.path = occurrence_path;
 	    root.ids = occurrence;
-	    root.view = request->view;
-	    root.mode = request->mode >= 0 ? request->mode :
+	    root.view = (request->view &&
+		ged_view_context_is_independent(request->view)) ?
+		request->view : nullptr;
+	    root.mode = requested_mode >= 0 ? requested_mode :
 		ged_draw_default_mode(gedp);
 	    const struct ged_draw_appearance_settings default_appearance =
 		GED_DRAW_APPEARANCE_SETTINGS_INIT;
 	    root.appearance = default_appearance;
 	    root.appearance.draw_mode = root.mode;
 	    root.auto_draw = true;
-	    std::vector<std::string> replacement(1, occurrence_path);
-	    if (draw_paths_direct(gedp, root, replacement) < 0) {
+	    const char *draw_path = occurrence_path.c_str();
+	    struct ged_scene_draw_request draw_request;
+	    ged_scene_draw_request_init(&draw_request);
+	    draw_request.view = root.view;
+	    draw_request.paths = &draw_path;
+	    draw_request.path_count = 1;
+	    draw_request.style.draw_mode =
+		static_cast<enum ged_scene_draw_mode>(root.mode);
+	    if (ged_scene_draw(gedp, &draw_request, nullptr) != GED_SCENE_OK) {
 		if (result)
 		    bu_vls_printf(&result->errors,
-			"failed to auto-draw promotion target %s",
+			"failed to draw edit target %s",
 			occurrence_path.c_str());
 		return -1;
 	    }
@@ -1097,13 +1318,14 @@ ged_draw_promote_path(struct ged *gedp,
 	result->replacement_path_count = promotion.occurrences.size();
     state->promotions[promotion.id] = promotion;
 
-    ged_draw_promotion_ref ref = {
+    ged_scene_edit_scope_ref ref = {
 	state->owner, promotion.id, promotion.generation
     };
+    *scope = ref;
     (void)ged_selection_draw_sync(gedp, nullptr);
     if (result) {
 	result->status = 1;
-	result->promotion = ref;
+	result->scope = ref;
 	result->occurrence_count = promotion.occurrences.size();
 	for (const std::string &path : promotion.occurrences)
 	    append_result_path(result, path);
@@ -1114,10 +1336,11 @@ ged_draw_promote_path(struct ged *gedp,
 
 
 extern "C" int
-ged_draw_release_promotion(struct ged *gedp,
-			   ged_draw_promotion_ref ref,
-			   int outcome,
-			   struct ged_draw_promotion_result *result)
+ged_scene_edit_release_internal(
+    struct ged *gedp,
+    ged_scene_edit_scope_ref ref,
+    enum ged_scene_edit_outcome outcome,
+    struct ged_scene_edit_internal_result *result)
 {
     result_prepare(result, gedp);
     frontier_state *state = state_get(gedp, false);
@@ -1147,12 +1370,18 @@ ged_draw_release_promotion(struct ged *gedp,
     if (!conflicts) {
 	for (frontier_root &root : promotion.roots) {
 	    if (root.auto_draw) {
-		if (ged_draw_erase_path_string_scoped(gedp,
-			root.path.c_str(), root.view, root.mode) < 0) {
+		struct ged_scene_erase_request erase_request;
+		ged_scene_erase_request_init(&erase_request);
+		erase_request.view = root.view;
+		erase_request.path = root.path.c_str();
+		erase_request.draw_mode =
+		    static_cast<enum ged_scene_draw_mode>(root.mode);
+		if (ged_scene_erase(gedp, &erase_request, nullptr) !=
+		    GED_SCENE_OK) {
 		    if (result)
 			bu_vls_printf(&result->errors,
-			    "failed to remove auto-drawn promotion root %s",
-			root.path.c_str());
+			    "failed to remove automatically drawn edit root %s",
+			    root.path.c_str());
 		    return -1;
 		}
 	    }
@@ -1166,7 +1395,7 @@ ged_draw_release_promotion(struct ged *gedp,
     (void)ged_selection_draw_sync(gedp, nullptr);
     if (result) {
 	result->status = conflicts ? 0 : changed;
-	result->promotion = ref;
+	result->scope = ref;
 	result->occurrence_count = promotion.occurrences.size();
 	result->replaced_root_count = promotion.roots.size();
 	result->conflict_count = conflicts;
@@ -1195,6 +1424,41 @@ ged_draw_frontier_erase_path(struct ged *gedp, const char *path,
     path_ids target;
     if (!resolve_path(gedp, target_path, target))
 	return 0;
+
+    /* An owning root is semantic state even when no legacy per-leaf records
+     * were materialized (the normal headless/progressive case).  Depending
+     * on the old record eraser here made an exact erase a no-op, leaving the
+     * draw intent alive forever.  Retire matching owners directly and let
+     * the one committed ERASE delta remove their backend sources. */
+    frontier_state *state = state_get(gedp, false);
+    int retired_roots = 0;
+    if (state) {
+	for (auto it = state->roots.begin(); it != state->roots.end(); ) {
+	    if (!root_in_scope(*it, view_ctx, mode) || it->ids != target) {
+		++it;
+		continue;
+	    }
+	    frontier_backend_change_note(state, *it, true);
+	    it = state->roots.erase(it);
+	    retired_roots++;
+	}
+    }
+    if (retired_roots) {
+	/* During the migration an eager draw may also own lightweight record
+	 * entries.  Remove those inside the same reducer operation without
+	 * making their presence a condition for semantic success. */
+	if (view_ctx || mode >= 0)
+	    (void)ged_draw_erase_path_string_scoped(gedp,
+		target_path.c_str(), view_ctx, mode);
+	else
+	    (void)ged_draw_erase_path_string(gedp, target_path.c_str());
+	if (result) {
+	    result->affected_groups += retired_roots;
+	    result->affected_shapes += retired_roots;
+	}
+	(void)ged_selection_draw_sync(gedp, nullptr);
+	return retired_roots;
+    }
 
     std::vector<frontier_root> roots =
 	current_roots(gedp, view_ctx, mode);

@@ -197,8 +197,9 @@ ged_illum_core(struct ged *gedp, int argc, const char *argv[])
 {
     int illum = 1;
     int changed = 0;
-    struct ged_draw_transaction txn;
-    struct ged_draw_transaction_result result;
+    struct ged_scene_path_request request;
+    struct ged_scene_result *result = NULL;
+    enum ged_scene_status status = GED_SCENE_ERROR;
     static const char *usage = "[-n] obj";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -227,11 +228,15 @@ ged_illum_core(struct ged *gedp, int argc, const char *argv[])
     if (argc != 2)
 	goto bad;
 
-    txn = ged_draw_transaction_make_value(GED_DRAW_TXN_HIGHLIGHT,
-	    argv[1], (double)illum);
-    ged_draw_transaction_result_init(&result);
-    changed = ged_draw_apply_transaction(gedp, &txn, &result);
-    ged_draw_transaction_result_free(&result);
+    ged_scene_path_request_init(&request);
+    request.path = argv[1];
+    request.match = GED_SCENE_PATH_MATCH_OBJECT;
+    result = ged_scene_result_create();
+    status = ged_scene_highlight_set(gedp, &request, illum, result);
+    changed = result ? ged_scene_result_changed(result) : 0;
+    ged_scene_result_destroy(result);
+    if (status != GED_SCENE_OK)
+	return BRLCAD_ERROR;
     if (!changed) {
 	bu_vls_printf(gedp->ged_result_str, "illum: %s not found", argv[1]);
 	return BRLCAD_ERROR;

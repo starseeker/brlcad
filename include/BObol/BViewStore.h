@@ -440,6 +440,9 @@ public:
     size_t removePrefix(const SbString &prefix,
 	unsigned int scopeMask,
 	const BObolFeatureOwner *owner);
+    size_t countPrefix(const SbString &prefix,
+	unsigned int scopeMask = BOBOL_FEATURE_SCOPE_ALL,
+	const BObolFeatureOwner *owner = NULL) const;
     void markCommandOwnerGeneration(const BObolFeatureOwner &owner);
     SbBool commandOwnerGenerationCurrent(
 	const BObolFeatureOwner &owner) const;

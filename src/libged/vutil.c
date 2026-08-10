@@ -201,7 +201,7 @@ nmg_plot_eu(struct ged *gedp, struct edgeuse *es_eu, const struct bn_tol *tol)
     struct bg_line_layer_builder *plot = bg_line_layer_builder_create();
 
     nmg_line_layer_around_eu(plot, es_eu, tab, 1, tol);
-    (void)_ged_line_layer_builder_publish_command_scene_feature(gedp,
+    (void)_ged_view_feature_batch_publish_line_layer_builder(gedp,
 	    "nmg::_EU_", plot, "nmg", "command-result", "nmg::_EU_",
 	    "nmg-edgeuse", 0);
 

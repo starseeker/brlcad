@@ -38,11 +38,15 @@
 
 #include "BObol/BMeshLodCache.h"
 #include "ged/draw.h"
+#include "ged/draw_source.h"
+#include "ged/draw_scene.h"
 #include "ged/display.h"
 #include "ged/scene.h"
 #include "ged/selection.h"
 #include "rt/db_fullpath.h"
 #include "rt/view.h"
+
+#include "./ged_scene_reducer_private.h"
 
 __BEGIN_DECLS
 
@@ -62,6 +66,97 @@ struct nmgregion;
 struct bobol_display_endpoint;
 struct BObolDrawMetadataRecord;
 struct ged_draw_obol_database_source_record;
+
+extern uint64_t ged_draw_material_revision(const struct ged *gedp);
+extern void ged_draw_bump_material_revision(struct ged *gedp);
+extern uint64_t ged_draw_scene_revision(struct ged *gedp);
+extern int ged_draw_scene_available(struct ged *gedp);
+extern int ged_draw_default_mode(const struct ged *gedp);
+extern int ged_draw_bounds(struct ged *gedp, vect_t *min, vect_t *max,
+	int include_overlays);
+extern uint64_t ged_draw_highlight_revision(const struct ged *gedp);
+extern uint64_t ged_draw_highlight_revision_advance(struct ged *gedp);
+extern void ged_draw_set_highlighted_shape_ref(struct ged *gedp,
+	ged_draw_shape_ref ref);
+extern int ged_draw_shape_set_highlighted(struct ged *gedp,
+	ged_draw_shape_ref ref, int highlighted);
+extern int ged_draw_has_shapes(struct ged *gedp);
+extern int ged_draw_path_state(struct ged *gedp,
+	struct ged_view_context *view_ctx, const char *path, int mode);
+extern size_t ged_draw_list_paths(struct ged *gedp,
+	struct ged_view_context *view_ctx, int mode, int expanded,
+	struct bu_vls *result);
+extern int ged_draw_has_paths(struct ged *gedp,
+	struct ged_view_context *view_ctx, int mode);
+extern int ged_draw_shape_count(struct ged *gedp);
+extern int ged_draw_has_groups(struct ged *gedp);
+extern void ged_draw_clear(struct ged *gedp);
+extern int ged_draw_clear_view(struct ged *gedp,
+	struct ged_view_context *view_ctx);
+
+/* Obol traversal identity used only inside the backend adapter and its
+ * white-box tests.  Semantic clients must use draw paths and typed scene
+ * deltas rather than renderer-node handles. */
+typedef struct ged_scene_node_ref {
+    uint64_t owner;
+    uint64_t id;
+    uint64_t generation;
+    uint64_t scene_revision;
+} ged_scene_node_ref;
+
+#define GED_SCENE_NODE_REF_NULL_INIT {0, 0, 0, 0}
+#ifdef __cplusplus
+#  define GED_SCENE_NODE_REF_NULL ged_scene_node_ref{0, 0, 0, 0}
+#else
+#  define GED_SCENE_NODE_REF_NULL ((ged_scene_node_ref){0, 0, 0, 0})
+#endif
+
+extern int ged_scene_node_ref_is_null(ged_scene_node_ref ref);
+extern int ged_scene_node_ref_equal(ged_scene_node_ref a,
+	ged_scene_node_ref b);
+extern ged_scene_node_ref ged_scene_first_node(struct ged *gedp);
+extern ged_scene_node_ref ged_scene_shape_node(struct ged *gedp,
+	ged_draw_shape_ref ref);
+extern ged_scene_node_ref ged_scene_shape_cache_node(struct ged *gedp,
+	ged_draw_shape_ref ref);
+extern ged_scene_node_ref ged_scene_group_node(struct ged *gedp,
+	ged_draw_group_ref ref);
+extern ged_draw_shape_ref ged_scene_shape_ref(struct ged *gedp,
+	ged_scene_node_ref node);
+extern int ged_scene_node_line_summary(struct ged *gedp,
+	ged_scene_node_ref node, struct ged_draw_view_line_summary *out);
+extern int ged_scene_node_line_point_at(struct ged *gedp,
+	ged_scene_node_ref node, size_t index, point_t out);
+extern int ged_scene_node_line_command_at(struct ged *gedp,
+	ged_scene_node_ref node, size_t index, int *out);
+extern int ged_scene_node_geometry_summary(struct ged *gedp,
+	ged_scene_node_ref node, struct ged_draw_shape_geometry_summary *out);
+extern int ged_scene_node_has_state(struct ged *gedp,
+	ged_scene_node_ref node);
+extern ged_scene_node_ref ged_scene_node_source(struct ged *gedp,
+	ged_scene_node_ref node);
+extern const struct db_full_path *ged_scene_node_fullpath(struct ged *gedp,
+	ged_scene_node_ref node);
+extern int ged_scene_group_dbpath(struct ged *gedp,
+	ged_scene_node_ref group, struct db_full_path *out);
+extern int ged_scene_group_is_overlay(struct ged *gedp,
+	ged_scene_node_ref group);
+extern int ged_scene_node_display_summary(struct ged *gedp,
+	ged_scene_node_ref node, struct ged_draw_scene_display_summary *out);
+extern int ged_scene_node_tree_summary(struct ged *gedp,
+	ged_scene_node_ref node, struct ged_draw_scene_tree_summary *out);
+extern ged_scene_node_ref ged_scene_node_child_at(struct ged *gedp,
+	ged_scene_node_ref node, size_t index);
+extern ged_scene_node_ref ged_scene_node_parent(struct ged *gedp,
+	ged_scene_node_ref node);
+extern const char *ged_scene_node_name(struct ged *gedp,
+	ged_scene_node_ref node);
+extern int ged_scene_node_subtree_bounds(struct ged *gedp,
+	ged_scene_node_ref node, vect_t *min, vect_t *max,
+	int include_overlays);
+extern int ged_draw_source_node_summary(struct ged *gedp,
+	ged_scene_node_ref node,
+	struct ged_draw_database_source_summary *out);
 
 typedef int (*ged_draw_group_ref_index_cb)(ged_draw_group_ref ref,
 					   void *userdata);
@@ -385,9 +480,13 @@ extern int ged_draw_obol_view_context_selection_contains_path(
 	int kind,
 	const char *path);
 extern int ged_draw_obol_view_context_selection_add_path(
-	struct ged_view_context *view_ctx,
-	int kind,
-	const char *path);
+    struct ged_view_context *view_ctx,
+    int kind,
+    const char *path);
+extern int ged_draw_obol_view_context_selection_remove_path(
+    struct ged_view_context *view_ctx,
+    int kind,
+    const char *path);
 extern int ged_draw_obol_view_context_selection_set_path(
 	struct ged_view_context *view_ctx,
 	int kind,
@@ -1127,7 +1226,8 @@ extern ged_draw_group_ref ged_draw_group_ref_lookup_or_create(struct ged *gedp,
 									 const struct db_full_path *dfp);
 
 extern int ged_draw_erase_path_string(struct ged *gedp,
-							 const char *path);
+						 const char *path);
+extern void ged_draw_erase_name(struct ged *gedp, const char *name);
 extern int ged_draw_erase_path_prefix_string(struct ged *gedp,
 								const char *path);
 extern int ged_draw_erase_path_string_scoped(struct ged *gedp,
@@ -1151,6 +1251,11 @@ extern int ged_draw_apply_draw_inner(
 	const char *path, struct ged_draw_transaction_result *result);
 
 extern void ged_draw_highlighted_shape_ref_invalidate(struct ged *gedp);
+
+extern ged_draw_scene_handle ged_view_context_scene_root_ref(
+    const struct ged_view_context *view);
+extern int ged_view_context_scene_root_ref_attach(
+    struct ged_view_context *view, ged_draw_scene_handle root_ref);
 
 extern ged_draw_shape_ref ged_draw_registry_shape_ref_from_source_ref(
 	struct ged *gedp,
@@ -1198,9 +1303,6 @@ extern int ged_draw_obol_progressive_autoview_follow(
 	struct ged *gedp,
 	struct ged_view_context *view_ctx,
 	fastf_t factor);
-extern int ged_draw_obol_highlight_state_set(
-	struct ged *gedp,
-	int highlighted);
 extern int ged_draw_obol_scene_root_child_count(
 	struct ged *gedp,
 	size_t *out);
@@ -1220,13 +1322,6 @@ extern int ged_draw_obol_database_source_summary_for_path(
 	struct ged *gedp,
 	const char *path,
 	struct ged_draw_database_source_summary *out);
-extern int ged_draw_obol_apply_draw_paths(
-	struct ged *gedp,
-	struct ged_view_context *view_ctx,
-	const char **paths,
-	int path_count,
-	const struct ged_draw_appearance_settings *settings,
-	struct ged_draw_transaction_result *result);
 extern int ged_draw_obol_database_source_paths_foreach(
 	struct ged *gedp,
 	int skip_overlay_groups,
@@ -1490,10 +1585,6 @@ extern int ged_draw_obol_database_source_refresh_material_color_for_path(
 	const char *path,
 	struct db_i *dbip,
 	uint64_t material_revision);
-extern int ged_draw_obol_database_sources_refresh_material_colors(
-	struct ged *gedp,
-	struct db_i *dbip,
-	uint64_t material_revision);
 extern int ged_draw_obol_database_source_evaluated_region_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -1541,9 +1632,17 @@ extern int ged_draw_obol_database_source_set_selected_for_instance_key(
 	const char *instance_key,
 	int selected);
 extern int ged_draw_obol_database_sources_sync_selected_paths(
-	struct ged *gedp,
-	const char *const *paths,
-	size_t path_count);
+    struct ged *gedp,
+    const char *const *paths,
+    size_t path_count);
+extern int ged_draw_obol_database_sources_apply_selection_delta(
+    struct ged *gedp,
+    const char *const *added_paths,
+    size_t added_count,
+    const char *const *removed_paths,
+    size_t removed_count,
+    const char *const *selected_paths,
+    size_t selected_count);
 extern int ged_draw_obol_shape_update_display_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -1668,9 +1767,27 @@ extern int ged_draw_obol_scene_controller_full_synced(
 extern int ged_draw_obol_scene_controller_owned_internal(
     struct ged *gedp);
 extern int ged_draw_obol_scene_sync_attached_transaction(
-	struct ged *gedp,
-	const struct ged_draw_transaction *txn,
-	const struct ged_draw_transaction_result *result);
+    struct ged *gedp,
+    const struct ged_draw_transaction *txn,
+    const struct ged_draw_transaction_result *result);
+extern int ged_draw_obol_backend_apply_transaction(
+    struct ged *gedp,
+    const struct ged_draw_transaction *txn,
+    const struct ged_draw_transaction_result *result);
+extern uint64_t ged_scene_revision_advance(struct ged *gedp);
+extern void ged_scene_delta_dispatch_internal(
+    struct ged *gedp,
+    enum ged_scene_delta_kind kind,
+    struct ged_view_context *view_ctx,
+    const char *const *paths,
+    size_t path_count,
+    int affects_all,
+    size_t group_count,
+    size_t shape_count,
+    int presentation_only,
+    uint64_t revision_before,
+    uint64_t revision_after,
+    const char *diagnostic);
 extern int ged_draw_obol_database_source_ensure_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -1857,8 +1974,14 @@ extern int ged_draw_group_ref_appearance_settings(struct ged *gedp,
 extern int ged_draw_group_ref_set_visible(struct ged *gedp,
 						     ged_draw_group_ref ref,
 						     int visible);
-/* ged_draw_shape_ref_set_visible, _get_color, _set_color are declared in the
- * public ged/scene.h (with GED_EXPORT); do not redeclare them here. */
+extern int ged_draw_shape_ref_set_visible(struct ged *gedp,
+	ged_draw_shape_ref ref, int visible);
+extern int ged_draw_shape_ref_set_color(struct ged *gedp,
+	ged_draw_shape_ref ref, const unsigned char rgb[3]);
+extern int ged_draw_shape_ref_set_material_color(struct ged *gedp,
+	ged_draw_shape_ref ref, const unsigned char rgb[3]);
+extern int ged_draw_shape_ref_set_evaluated_region(struct ged *gedp,
+	ged_draw_shape_ref ref, int evaluated_region);
 extern int ged_draw_shape_ref_set_highlighted(struct ged *gedp,
 							 ged_draw_shape_ref ref,
 							 int highlighted);

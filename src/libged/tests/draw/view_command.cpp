@@ -26,7 +26,8 @@
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/display.h>
-#include <ged/result.h>
+#include <ged/view_feature_batch.h>
+#include <ged/view_feature_internal.h>
 #include "view_test_util.h"
 
 #define ASSERT(cond) do { \
@@ -111,10 +112,10 @@ assert_feature_overlay(struct ged_view_context *view, const char *name,
 static void
 refresh_scene_records(struct ged *gedp, struct ged_view_context *v)
 {
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    txn.view = v;
-    ASSERT(ged_draw_apply_transaction(gedp, &txn, NULL) >= 0);
+    struct ged_scene_redraw_request request;
+    ged_scene_redraw_request_init(&request);
+    request.view = v;
+    ASSERT(ged_scene_redraw(gedp, &request, NULL) == GED_SCENE_OK);
 }
 
 static void
@@ -632,16 +633,6 @@ test_command_report_record_consistency(struct ged *gedp,
     ASSERT(solids.find("all.g") != std::string::npos);
     ASSERT(solids.find("cent=") != std::string::npos);
 
-    struct ged_scene_export_report consistency =
-	GED_SCENE_EXPORT_CONSISTENCY_INIT;
-    ASSERT(ged_scene_check_export(gedp, v, "all.g",
-	    &consistency));
-    ASSERT(consistency.export_record_found);
-    ASSERT(consistency.render_item_found);
-    ASSERT(consistency.export_render_consistent);
-    ASSERT(consistency.backend_node_found);
-    ASSERT(consistency.export_backend_consistent);
-
     struct ged_pick_result *pick =
 	ged_pick_semantic_path(gedp, v, "all.g");
     struct bu_vls pick_path = BU_VLS_INIT_ZERO;
@@ -814,19 +805,32 @@ main(int argc, const char **argv)
     ASSERT(result_str(gedp).find("No view feature named no_such_feature") !=
 	std::string::npos);
 
-    struct ged_result_desc result_desc = GED_RESULT_SCENE_DESC_INIT;
+    struct ged_view_feature_batch_desc result_desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
     result_desc.owner_id = "view-command-test";
     result_desc.owner_role = "command";
     result_desc.run_id = "run-1";
     result_desc.generation = 1;
-    struct ged_result_scene *result_scene = ged_result_begin(views[0],
+    struct ged_view_feature_batch *aborted_batch =
+	ged_view_feature_batch_begin(views[0], &result_desc);
+    point_t aborted_points[2] = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
+    int aborted_commands[2] = {0, 1};
+    ASSERT(aborted_batch != NULL);
+    ASSERT(aborted_batch && ged_view_feature_batch_line_set_replace(
+	aborted_batch, "aborted_line", aborted_points, aborted_commands, 2,
+	NULL));
+    ASSERT(!ged_view_feature_exists(views[0], "aborted_line"));
+    ged_view_feature_batch_abort(aborted_batch);
+    ASSERT(!ged_view_feature_exists(views[0], "aborted_line"));
+
+    struct ged_view_feature_batch *result_scene = ged_view_feature_batch_begin(views[0],
 	&result_desc);
     point_t result_points[2] = {{0.0, 0.0, 0.0}, {1.0, 1.0, 0.0}};
     int result_commands[2] = {0, 1};
     ASSERT(result_scene != NULL);
-    ASSERT(result_scene && ged_result_line_set_replace(result_scene,
+    ASSERT(result_scene && ged_view_feature_batch_line_set_replace(result_scene,
 	"result_line", result_points, result_commands, 2, NULL));
-    ASSERT(result_scene && ged_result_commit(result_scene));
+    ASSERT(!ged_view_feature_exists(views[0], "result_line"));
+    ASSERT(result_scene && ged_view_feature_batch_commit(result_scene));
     const char *c1result[] = {"view", "feature", "--json", "info", "result_line", NULL};
     ASSERT(run_view(gedp, 5, c1result) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("\"command_result\":true") !=

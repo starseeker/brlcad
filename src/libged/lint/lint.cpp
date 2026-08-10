@@ -100,7 +100,7 @@ lint_data::plot_publish(const char *name)
 	bu_color_to_rgb_chars(color, rgb);
     style.color_valid = 1;
     VSET(style.color, rgb[0], rgb[1], rgb[2]);
-    (void)_ged_line_set_publish_command_scene_feature(gedp, name,
+    (void)_ged_view_feature_batch_publish_line_set(gedp, name,
 	    (const point_t *)plot_points, plot_cmds, plot_point_count, &style,
 	    "lint", "command-result", NULL, "lint-visual", 0);
 }

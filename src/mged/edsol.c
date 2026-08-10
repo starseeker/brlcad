@@ -110,7 +110,8 @@ _replot_active_shape_cb(const struct ged_draw_shape_record *rec, void *ud)
 	return 1;
     (void)replot_original_solid(d->s, rec->ref);
     if (d->clear_highlight)
-	ged_draw_shape_set_highlighted(d->s->gedp, rec->ref, 0);
+	(void)ged_scene_occurrence_highlight_set(d->s->gedp, rec->ref, 0,
+	    NULL);
     return 1;
 }
 
@@ -131,64 +132,76 @@ _replot_lastsol_cb(const struct ged_draw_shape_record *rec, void *ud)
 }
 
 /* ------------------------------------------------------------------------
- * Shared libged draw-frontier promotion for oed/sed.
+ * Shared libged semantic edit scopes for oed/sed.
  * ------------------------------------------------------------------------ */
 
 int
-mged_edit_promote_target(struct mged_state *s,
-			 const struct db_full_path *both,
-			 int scope)
+mged_edit_scope_acquire(struct mged_state *s,
+			const struct db_full_path *both,
+			enum ged_scene_edit_occurrence_scope occurrences)
 {
     if (!s || !s->gedp || !both || both->fp_len == 0)
 	return 0;
 
-    if (s->edit_promotion.active)
-	mged_edit_release_promotion(s, GED_DRAW_PROMOTION_CANCEL);
+    if (s->edit_scope.active)
+	mged_edit_scope_release(s, GED_SCENE_EDIT_CANCEL);
 
-    struct ged_draw_promotion_request request =
-	GED_DRAW_PROMOTION_REQUEST_INIT;
-    request.dfp = both;
+    char *path = db_path_to_string(both);
+    if (!path)
+	return 0;
+    struct ged_scene_edit_request request;
+    ged_scene_edit_request_init(&request);
+    request.path = path;
     request.view = ged_view_active_ctx(s->gedp);
-    request.scope = scope;
-    request.auto_draw = 1;
-    request.role = (scope == GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES) ?
+    request.occurrences = occurrences;
+    request.draw_if_absent = 1;
+    request.purpose =
+	(occurrences == GED_SCENE_EDIT_ALL_DRAWN_OCCURRENCES) ?
 	"mged-sed" : "mged-oed";
 
-    struct ged_draw_promotion_result result;
-    ged_draw_promotion_result_init(&result);
-    int ret = ged_draw_promote_path(s->gedp, &request, &result);
-    if (ret > 0) {
-	s->edit_promotion.ref = result.promotion;
-	s->edit_promotion.active = 1;
+    struct ged_scene_result *result = ged_scene_result_create();
+    ged_scene_edit_scope_ref scope = GED_SCENE_EDIT_SCOPE_REF_NULL;
+    enum ged_scene_status status = ged_scene_edit_acquire(s->gedp, &request,
+	&scope, result);
+    bu_free(path, "MGED edit scope path");
+    if (status == GED_SCENE_OK &&
+	!ged_scene_edit_scope_ref_is_null(scope)) {
+	s->edit_scope.ref = scope;
+	s->edit_scope.active = 1;
 	mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    } else if (ret < 0 && bu_vls_strlen(&result.errors)) {
-	Tcl_AppendResult(s->interp, bu_vls_cstr(&result.errors), "\n",
+    } else if (status == GED_SCENE_ERROR &&
+	ged_scene_result_diagnostic(result)[0]) {
+	Tcl_AppendResult(s->interp, ged_scene_result_diagnostic(result), "\n",
 	    (char *)NULL);
     }
-    ged_draw_promotion_result_free(&result);
-    return ret > 0;
+    ged_scene_result_destroy(result);
+    return status == GED_SCENE_OK &&
+	!ged_scene_edit_scope_ref_is_null(scope);
 }
 
 
 void
-mged_edit_release_promotion(struct mged_state *s, int outcome)
+mged_edit_scope_release(struct mged_state *s,
+			enum ged_scene_edit_outcome outcome)
 {
-    if (!s || !s->gedp || !s->edit_promotion.active)
+    if (!s || !s->gedp || !s->edit_scope.active)
 	return;
 
-    ged_draw_promotion_ref ref = s->edit_promotion.ref;
-    s->edit_promotion.active = 0;
-    s->edit_promotion.ref = GED_DRAW_PROMOTION_REF_NULL;
+    ged_scene_edit_scope_ref ref = s->edit_scope.ref;
+    s->edit_scope.active = 0;
+    s->edit_scope.ref = GED_SCENE_EDIT_SCOPE_REF_NULL;
 
-    struct ged_draw_promotion_result result;
-    ged_draw_promotion_result_init(&result);
-    int ret = ged_draw_release_promotion(s->gedp, ref, outcome, &result);
-    if (ret < 0 && bu_vls_strlen(&result.errors))
-	Tcl_AppendResult(s->interp, bu_vls_cstr(&result.errors), "\n",
+    struct ged_scene_result *result = ged_scene_result_create();
+    enum ged_scene_status status = ged_scene_edit_release(s->gedp, ref,
+	outcome, result);
+    if (status != GED_SCENE_OK && ged_scene_result_diagnostic(result)[0])
+	Tcl_AppendResult(s->interp, ged_scene_result_diagnostic(result), "\n",
 	    (char *)NULL);
-    else if (result.conflict_count && bu_vls_strlen(&result.errors))
-	bu_log("MGED edit promotion: %s\n", bu_vls_cstr(&result.errors));
-    ged_draw_promotion_result_free(&result);
+    else if (ged_scene_result_conflict_count(result) &&
+	ged_scene_result_diagnostic(result)[0])
+	bu_log("MGED edit scope: %s\n",
+	    ged_scene_result_diagnostic(result));
+    ged_scene_result_destroy(result);
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
 }
 

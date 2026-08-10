@@ -35,6 +35,7 @@
 #include "bu/vls.h"
 #include "imgstream/fbserv.h"
 #include "ged/defines.h"
+#include "ged/view_feature_internal.h"
 #include "rt/view.h"
 #include "tclcad/defines.h"
 

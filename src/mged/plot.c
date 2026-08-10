@@ -150,7 +150,8 @@ f_area(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     if (not_state(s, ST_VIEW, "Presented Area Calculation") == TCL_ERROR)
 	return TCL_ERROR;
 
-    if (!ged_draw_has_shapes(s->gedp)) {
+    if (!ged_scene_has_paths(s->gedp, ged_view_active_ctx(s->gedp),
+	    GED_SCENE_DRAW_DEFAULT)) {
 	Tcl_AppendResult(interp, "No objects displayed!!!\n", (char *)NULL);
 	return TCL_ERROR;
     }

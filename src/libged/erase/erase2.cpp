@@ -146,11 +146,13 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
 	    if (!dp || !dp->d_namep)
 		continue;
 
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_ERASE, dp->d_namep);
-	    txn.view = view_ctx;
-	    txn.mode = mode;
-	    if (ged_draw_apply_transaction(gedp, &txn, NULL) < 0)
+	    struct ged_scene_erase_request request;
+	    ged_scene_erase_request_init(&request);
+	    request.path = dp->d_namep;
+	    request.view = view_ctx;
+	    request.draw_mode = mode < 0 ? GED_SCENE_DRAW_DEFAULT :
+		(enum ged_scene_draw_mode)mode;
+	    if (ged_scene_erase(gedp, &request, NULL) != GED_SCENE_OK)
 		ret = BRLCAD_ERROR;
 	}
 
@@ -161,13 +163,15 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
 
     int ret = BRLCAD_OK;
     for (int i = 0; i < argc; i++) {
-	struct ged_draw_transaction txn =
-	    ged_draw_transaction_make(
-		    recursive ? GED_DRAW_TXN_ERASE_PREFIX : GED_DRAW_TXN_ERASE,
-		    argv[i]);
-	txn.view = view_ctx;
-	txn.mode = mode;
-	if (ged_draw_apply_transaction(gedp, &txn, NULL) < 0)
+	struct ged_scene_erase_request request;
+	ged_scene_erase_request_init(&request);
+	request.path = argv[i];
+	request.view = view_ctx;
+	request.match = recursive ? GED_SCENE_ERASE_SUBTREE :
+	    GED_SCENE_ERASE_EXACT;
+	request.draw_mode = mode < 0 ? GED_SCENE_DRAW_DEFAULT :
+	    (enum ged_scene_draw_mode)mode;
+	if (ged_scene_erase(gedp, &request, NULL) != GED_SCENE_OK)
 	    ret = BRLCAD_ERROR;
     }
 

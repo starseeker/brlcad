@@ -732,6 +732,8 @@ if(TARGET Qt6::Widgets)
       APPEND PROPERTY ENVIRONMENT BRLCAD_QGMODEL_DRAW_CHILDREN=64)
     set_property(TEST slow-test_qgmodel_scale_16384
       APPEND PROPERTY LABELS drawing_baseline)
+    set_property(TEST slow-test_qgmodel_scale_16384
+      APPEND PROPERTY LABELS slow)
   endif()
 endif(TARGET Qt6::Widgets)
 

@@ -73,10 +73,10 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
     if (BU_STR_EQUAL(argv[0], "idle")) {
 
 	/* redraw after scaling */
-	ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+	ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
 	struct ged_view_context *active_view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
 	if (active_view_ctx &&
-	    ged_draw_source_lod_policy_get(&lod_policy, active_view_ctx) &&
+	    ged_view_lod_policy_get(&lod_policy, active_view_ctx) &&
 	    lod_policy.csg_enabled &&
 	    lod_policy.zoom_refresh &&
 	    (am_mode == AMM_SCALE ||
