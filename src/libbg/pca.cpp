@@ -30,6 +30,9 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <float.h>
+#include <algorithm>
+#include <cmath>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic push /* start new diagnostic pragma */
@@ -39,7 +42,7 @@
 #  pragma clang diagnostic ignored "-Wdocumentation"
 #  pragma clang diagnostic ignored "-Wfloat-equal"
 #endif
-#include <Eigen/SVD>
+#include <Eigen/Eigenvalues>
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic pop /* end ignoring warnings */
 #elif defined(__clang__)
@@ -51,49 +54,207 @@
 #include "bn/mat.h"
 #include "bg/pca.h"
 
-// Use SVD algorithm from Soderkvist to fit a plane to vertex points
-extern "C" int
-bg_pca(point_t *c, vect_t *xa, vect_t *ya, vect_t *za, size_t npnts, const point_t *pnts)
+static int
+pca_frame(struct bg_pca_frame *frame, size_t npnts, const point_t *pnts)
 {
-    if (!c || !xa || !ya || !za || npnts == 0 || !pnts)
+    if (!frame || npnts == 0 || !pnts)
 	return BRLCAD_ERROR;
 
     // 1.  Find the center point
-    point_t center = VINIT_ZERO;
+    double center[3] = {0.0, 0.0, 0.0};
+    double centerCompensation[3] = {0.0, 0.0, 0.0};
     for (size_t i = 0; i < npnts; i++) {
-	VADD2(center, pnts[i], center);
+	if (!isfinite(pnts[i][X]) || !isfinite(pnts[i][Y]) ||
+	    !isfinite(pnts[i][Z]))
+	    return BRLCAD_ERROR;
+	for (int axis = 0; axis < 3; axis++) {
+	    const double corrected = static_cast<double>(pnts[i][axis]) -
+		centerCompensation[axis];
+	    const double next = center[axis] + corrected;
+	    centerCompensation[axis] = (next - center[axis]) - corrected;
+	    center[axis] = next;
+	}
     }
-    VSCALE(center, center, 1.0/(fastf_t)npnts);
+    for (int axis = 0; axis < 3; axis++)
+	center[axis] /= static_cast<double>(npnts);
 
-    // 2.  Transfer the points into Eigen data types
-    Eigen::MatrixXd A(3, npnts);
+    // 2.  Accumulate the 3x3 covariance matrix.  This is mathematically
+    // equivalent to the left singular vectors of the centered 3xN matrix,
+    // but avoids allocating a second copy of every input point.
+    // Symmetry leaves six independent values.  Scalar compensated sums avoid
+    // Eigen expression work in the per-vertex hot loop.
+    double covariance[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    double covarianceCompensation[6] = {0.0, 0.0, 0.0,
+	0.0, 0.0, 0.0};
     for (size_t i = 0; i < npnts; i++) {
-	A(0,i) = pnts[i][X] - center[X];
-	A(1,i) = pnts[i][Y] - center[Y];
-	A(2,i) = pnts[i][Z] - center[Z];
+	const double dx = static_cast<double>(pnts[i][X]) - center[X];
+	const double dy = static_cast<double>(pnts[i][Y]) - center[Y];
+	const double dz = static_cast<double>(pnts[i][Z]) - center[Z];
+	const double values[6] = {dx * dx, dx * dy, dx * dz,
+	    dy * dy, dy * dz, dz * dz};
+	for (size_t valueIndex = 0; valueIndex < 6; valueIndex++) {
+	    const double corrected = values[valueIndex] -
+		covarianceCompensation[valueIndex];
+	    const double next = covariance[valueIndex] + corrected;
+	    covarianceCompensation[valueIndex] =
+		(next - covariance[valueIndex]) - corrected;
+	    covariance[valueIndex] = next;
+	}
     }
 
-    // 3.  Perform SVD
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinU);
+    Eigen::Matrix3d covarianceMatrix;
+    covarianceMatrix << covariance[0], covariance[1], covariance[2],
+	covariance[1], covariance[3], covariance[4],
+	covariance[2], covariance[4], covariance[5];
 
-    // 4.  Extract the vectors from the U matrix
-    vect_t xaxis, yaxis, zaxis;
-    xaxis[X] = svd.matrixU()(0,0);
-    xaxis[Y] = svd.matrixU()(1,0);
-    xaxis[Z] = svd.matrixU()(2,0);
-    yaxis[X] = svd.matrixU()(0,1);
-    yaxis[Y] = svd.matrixU()(1,1);
-    yaxis[Z] = svd.matrixU()(2,1);
-    zaxis[X] = svd.matrixU()(0,2);
-    zaxis[Y] = svd.matrixU()(1,2);
-    zaxis[Z] = svd.matrixU()(2,2);
+    // 3.  Solve the symmetric covariance matrix.  Eigenvalues are ascending;
+    // expose the corresponding singular-value magnitudes in descending order.
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(covarianceMatrix);
+    if (solver.info() != Eigen::Success)
+	return BRLCAD_ERROR;
 
-    // 5.  Set the outputs
-    VMOVE(*c, center);
-    VMOVE(*xa, xaxis);
-    VMOVE(*ya, yaxis);
-    VMOVE(*za, zaxis);
+    // 4.  Extract the principal axes.  A 3x3 solver always gives three axes,
+    // including for one- and two-point inputs.
+    frame->center[X] = static_cast<fastf_t>(center[X]);
+    frame->center[Y] = static_cast<fastf_t>(center[Y]);
+    frame->center[Z] = static_cast<fastf_t>(center[Z]);
+    const Eigen::Matrix3d axes = solver.eigenvectors();
+    vect_t *outputAxes[3] = {&frame->xaxis, &frame->yaxis, &frame->zaxis};
+    for (int i = 0; i < 3; i++) {
+	const int axisIndex = 2 - i;
+	(*outputAxes[i])[X] = axes(0, axisIndex);
+	(*outputAxes[i])[Y] = axes(1, axisIndex);
+	(*outputAxes[i])[Z] = axes(2, axisIndex);
+	const double eigenvalue = std::max(0.0, solver.eigenvalues()(axisIndex));
+	frame->singular_values[i] = static_cast<fastf_t>(std::sqrt(eigenvalue));
+    }
 
+    return BRLCAD_OK;
+}
+
+static int
+pca_axis_sign(vect_t axis, const point_t center, size_t npnts,
+	const point_t *pnts)
+{
+    fastf_t largest = 0.0;
+    fastf_t sign = 0.0;
+    const fastf_t relativeTolerance = 64.0 * DBL_EPSILON;
+    for (size_t i = 0; i < npnts; i++) {
+	vect_t delta;
+	VSUB2(delta, pnts[i], center);
+	const fastf_t projection = VDOT(delta, axis);
+	const fastf_t magnitude = fabs(projection);
+	if (magnitude > largest * (1.0 + relativeTolerance)) {
+	    largest = magnitude;
+	    sign = projection;
+	    continue;
+	}
+	if (largest > 0.0 &&
+	    fabs(magnitude - largest) <= largest * relativeTolerance &&
+	    projection * sign < 0.0)
+	    return BRLCAD_ERROR;
+    }
+    if (largest <= SMALL_FASTF || fabs(sign) <= SMALL_FASTF)
+	return BRLCAD_ERROR;
+    if (sign < 0.0)
+	VREVERSE(axis, axis);
+    return BRLCAD_OK;
+}
+
+extern "C" int
+bg_pca_get_frame(struct bg_pca_frame *frame, size_t npnts, const point_t *pnts)
+{
+    return pca_frame(frame, npnts, pnts);
+}
+
+// Use SVD algorithm from Soderkvist to fit a plane to vertex points
+extern "C" int
+bg_pca(point_t *c, vect_t *xa, vect_t *ya, vect_t *za, size_t npnts,
+	const point_t *pnts)
+{
+    if (!c || !xa || !ya || !za)
+	return BRLCAD_ERROR;
+    struct bg_pca_frame frame;
+    if (pca_frame(&frame, npnts, pnts) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+    VMOVE(*c, frame.center);
+    VMOVE(*xa, frame.xaxis);
+    VMOVE(*ya, frame.yaxis);
+    VMOVE(*za, frame.zaxis);
+    return BRLCAD_OK;
+}
+
+extern "C" int
+bg_pca_canonical_frame(struct bg_pca_frame *frame, size_t npnts,
+	const point_t *pnts, fastf_t min_relative_axis_gap)
+{
+    if (pca_frame(frame, npnts, pnts) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    const fastf_t minimumGap = min_relative_axis_gap > 0.0 ?
+	min_relative_axis_gap : 1.0e-6;
+    const fastf_t first = frame->singular_values[0];
+    const fastf_t second = frame->singular_values[1];
+    const fastf_t third = frame->singular_values[2];
+    if (!isfinite(first) || !isfinite(second) || !isfinite(third) ||
+	first <= SMALL_FASTF || second <= SMALL_FASTF ||
+	first - second <= first * minimumGap ||
+	(third > SMALL_FASTF && second - third <= second * minimumGap))
+	return BRLCAD_ERROR;
+
+    if (pca_axis_sign(frame->xaxis, frame->center, npnts, pnts) !=
+	BRLCAD_OK ||
+	pca_axis_sign(frame->yaxis, frame->center, npnts, pnts) !=
+	BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    VCROSS(frame->zaxis, frame->xaxis, frame->yaxis);
+    if (MAGNITUDE(frame->zaxis) <= SMALL_FASTF)
+	return BRLCAD_ERROR;
+    VUNITIZE(frame->zaxis);
+    VCROSS(frame->yaxis, frame->zaxis, frame->xaxis);
+    if (MAGNITUDE(frame->yaxis) <= SMALL_FASTF)
+	return BRLCAD_ERROR;
+    VUNITIZE(frame->yaxis);
+    return BRLCAD_OK;
+}
+
+extern "C" int
+bg_pca_frame_to_matrix(mat_t matrix, const struct bg_pca_frame *frame)
+{
+    if (!matrix || !frame || MAGNITUDE(frame->xaxis) <= SMALL_FASTF ||
+	MAGNITUDE(frame->yaxis) <= SMALL_FASTF ||
+	MAGNITUDE(frame->zaxis) <= SMALL_FASTF)
+	return BRLCAD_ERROR;
+
+    mat_t rotation;
+    mat_t translation;
+    MAT_IDN(rotation);
+    VMOVE(&rotation[0], frame->xaxis);
+    VMOVE(&rotation[4], frame->yaxis);
+    VMOVE(&rotation[8], frame->zaxis);
+    MAT_IDN(translation);
+    MAT_DELTAS_VEC_NEG(translation, frame->center);
+    bn_mat_mul(matrix, rotation, translation);
+    return BRLCAD_OK;
+}
+
+extern "C" int
+bg_pca_frame_relative_matrix(mat_t matrix,
+	const struct bg_pca_frame *sourceFrame,
+	const struct bg_pca_frame *targetFrame)
+{
+    if (!matrix || !sourceFrame || !targetFrame)
+	return BRLCAD_ERROR;
+
+    mat_t sourceToCanonical;
+    mat_t targetToCanonical;
+    mat_t canonicalToTarget;
+    if (bg_pca_frame_to_matrix(sourceToCanonical, sourceFrame) != BRLCAD_OK ||
+	bg_pca_frame_to_matrix(targetToCanonical, targetFrame) != BRLCAD_OK ||
+	!bn_mat_inverse(canonicalToTarget, targetToCanonical))
+	return BRLCAD_ERROR;
+    bn_mat_mul(matrix, canonicalToTarget, sourceToCanonical);
     return BRLCAD_OK;
 }
 

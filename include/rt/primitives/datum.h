@@ -8,6 +8,8 @@
  * modify it under the terms of the GNU Lesser General Public License
  * version 2.1 as published by the Free Software Foundation.
  */
+/** @addtogroup rt_datum */
+/** @{ */
 /** @file rt/primitives/datum.h */
 
 #ifndef RT_PRIMITIVES_DATUM_H
@@ -30,7 +32,23 @@ RT_EXPORT extern int rt_datum_validate(
     const struct rt_datum_internal *datum,
     struct bu_vls *messages);
 
+struct rt_db_internal;
+struct rt_primitive_lod_realization;
+
+RT_EXPORT extern int rt_datum_wireframe_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip);
+
+/** @} */
+
 __END_DECLS
 
 #endif /* RT_PRIMITIVES_DATUM_H */
 
+/*
+ * Local Variables:
+ * tab-width: 8
+ * mode: C
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

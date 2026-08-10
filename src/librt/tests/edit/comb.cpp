@@ -46,6 +46,7 @@
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 #include "rt/nongeom.h"
 #include "rt/tree.h"
@@ -166,20 +167,10 @@ main(int argc, char *argv[])
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 200.0;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 100.0;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width  = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_size(&v, 200.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, g_dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, g_dbip, &tol, &v);
     s->mv_context = 0;
     s->local2base = 1.0;
 

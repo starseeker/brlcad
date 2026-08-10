@@ -66,6 +66,7 @@ set(
   unknown_opt
   optind_boundary
   multiple_opts
+  progressive_flush
 )
 
 foreach(tname ${RT_OPT_TESTS})

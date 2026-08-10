@@ -38,4 +38,5 @@ CMakeLists.txt.user
 .clang-format
 *__pycache__*
 
-
+# Convenience Obol link
+/obol

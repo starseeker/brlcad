@@ -40,13 +40,8 @@ permission to use and distribute the software in accordance with the
 terms specified in this license.
 
 file:/src/libbu/tcllist.c
-file:/src/libdm/wgl/wintk/tkWinPort.h
-file:/src/libdm/wgl/wintk/tkIntDecls.h
-file:/src/libdm/wgl/wintk/tkWinInt.h
-file:/src/libdm/wgl/wintk/tkInt.h
-file:/src/libdm/wgl/wintk/tkWin.h
-file:/src/libdm/wgl/wintk/tkIntPlatDecls.h
-file:/src/libdm/wgl/wintk/tkPort.h
+file:/src/libtclcad/tkobol/vendor/togl/toglFont.c
+file:/src/libtclcad/tkobol/vendor/togl/toglFont.h
 
 tkImgFmtPPM.c --
 
@@ -62,4 +57,3 @@ Author: Paul Mackerras (paulus@cs.anu.edu.au),
 file:/src/libtclcad/tkImgFmtPIX.c
 file:/src/tclscripts/cad_clrpick.tcl
 file:/src/tclscripts/html_library.tcl
-

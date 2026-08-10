@@ -38,9 +38,10 @@
 
 #include "bu/app.h"
 #include "bu/color.h"
+#include "bu/getopt.h"
 #include "bu/str.h"
 #include "bu/exit.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 /*
@@ -50,7 +51,7 @@
  */
 #define THRESH 20
 
-struct fb *fbp;
+imgstream_fb_t *fbp;
 FILE *fp;
 
 long rxb[256][256], rxg[256][256], bxg[256][256];
@@ -61,33 +62,41 @@ unsigned char ibuf[8*1024*3];
 
 void disp_array(long int (*v)[256], int xoff, int yoff);
 
-static const char *Usage = "Usage: pixhist3d [file.pix]\n";
+static const char *Usage = "Usage: pixhist3d [-F framebuffer] [file.pix]\n";
 
 int
 main(int argc, char **argv)
 {
     int n;
+    int c;
+    const char *framebuffer = NULL;
 
     bu_setprogname(argv[0]);
 
     setmode(fileno(stdin), O_BINARY);
     setmode(fileno(stdout), O_BINARY);
 
-    if (argc > 1) {
-	if ( BU_STR_EQUAL(argv[1],"-h") || BU_STR_EQUAL(argv[1],"-?"))
-	    bu_exit(2, "%s", Usage);
-	if ((fp = fopen(argv[1], "rb")) == NULL) {
-	    fprintf(stderr, "%s", Usage);
-	    bu_exit(1, "pixhist3d: can't open \"%s\"\n", argv[1]);
+    while ((c = bu_getopt(argc, argv, "F:h?")) != -1) {
+	switch (c) {
+	    case 'F': framebuffer = bu_optarg; break;
+	    default: bu_exit(2, "%s", Usage);
 	}
+    }
+
+    if (bu_optind < argc) {
+	if ((fp = fopen(argv[bu_optind], "rb")) == NULL) {
+	    fprintf(stderr, "%s", Usage);
+	    bu_exit(1, "pixhist3d: can't open \"%s\"\n", argv[bu_optind]);
+	}
+	bu_optind++;
     } else
 	fp = stdin;
 
-    if (isatty(fileno(fp))) {
+    if (bu_optind < argc || isatty(fileno(fp))) {
 	bu_exit(2, "%s", Usage);
     }
 
-    if ((fbp = fb_open(NULL, 512, 512)) == NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, 512, 512)) == NULL) {
 	bu_exit(12, "fb_open failed\n");
     }
 
@@ -135,7 +144,7 @@ main(int argc, char **argv)
     disp_array(rxb, 256, 0);
     disp_array(bxg, 0, 256);
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 
@@ -159,7 +168,7 @@ disp_array(long int (*v)[256], int xoff, int yoff)
 		max = v[y][x];
 	}
     }
-    scale = 255.0 / ((double)max);
+    scale = max > 0 ? 255.0 / ((double)max) : 0.0;
 
     /* plot them */
     for (y = 0; y < 256; y++) {
@@ -171,7 +180,7 @@ disp_array(long int (*v)[256], int xoff, int yoff)
 		value = THRESH;
 	    obuf[x*3+RED] = obuf[x*3+GRN] = obuf[x*3+BLU] = value;
 	}
-	fb_write(fbp, xoff, yoff+y, obuf, 256);
+	imgstream_fb_write(fbp, xoff, yoff+y, obuf, 256);
     }
 }
 

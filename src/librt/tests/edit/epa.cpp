@@ -49,6 +49,7 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/rt_ecmds.h"
 
 
@@ -160,20 +161,10 @@ main(int argc, char *argv[])
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512;
-    v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
 
     struct rt_epa_internal *edit_epa = (struct rt_epa_internal *)s->es_int.idb_ptr;
@@ -326,7 +317,7 @@ main(int argc, char *argv[])
 
     /* ================================================================
      * ECMD_EPA_H - XY mouse-driven scale
-     * es_scale = 1 + 0.25 * |ypos * INV_BV|
+     * es_scale = 1 + 0.25 * |ypos * RT_INV_VIEW|
      * ypos=1383: es_scale = 1 + 0.25*(1383/2048) = 1.168823242...
      * H_new = H * es_scale = (0,0, 20*1.168823242) = (0,0, 23.376464843750)
      * ================================================================*/
@@ -336,8 +327,8 @@ main(int argc, char *argv[])
     {
 	int xpos = 1372;
 	int ypos = 1383;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
 
@@ -364,8 +355,8 @@ main(int argc, char *argv[])
     {
 	int xpos = 1482;
 	int ypos = 762;
-	mousevec[X] = xpos * INV_BV;
-	mousevec[Y] = ypos * INV_BV;
+	mousevec[X] = xpos * RT_INV_VIEW;
+	mousevec[Y] = ypos * RT_INV_VIEW;
 	mousevec[Z] = 0;
     }
 

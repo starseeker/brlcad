@@ -34,6 +34,7 @@
 #include "bu/malloc.h"
 #include "bu/magic.h"
 #include "raytrace.h"
+#include "rt/edit.h"
 #include "rt/functab.h"   /* EDOBJ */
 #include "rt/geom.h"      /* rt_tor_internal, rt_ell_internal */
 

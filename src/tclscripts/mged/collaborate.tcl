@@ -77,10 +77,10 @@ proc collab_join { id } {
 	return "collab_join: $id is already in the collaborative session"
     }
 
-    if [winfo exists $mged_gui($id,active_dm)] {
+    if [winfo exists $mged_gui($id,active_pane)] {
 	set nw $mged_gui($id,top).ur
     } else {
-	return "collab_join: unrecognized pathname - $mged_gui($id,active_dm)"
+	return "collab_join: unrecognized pathname - $mged_gui($id,active_pane)"
     }
 
     if [llength $mged_collaborators] {
@@ -110,10 +110,10 @@ proc collab_quit { id } {
 	return "collab_quit: bad id - $id"
     }
 
-    if [winfo exists $mged_gui($id,active_dm)] {
-	set w $mged_gui($id,active_dm)
+    if [winfo exists $mged_gui($id,active_pane)] {
+	set w $mged_gui($id,active_pane)
     } else {
-	return "collab_quit: unrecognized pathname - $mged_gui($id,active_dm)"
+	return "collab_quit: unrecognized pathname - $mged_gui($id,active_pane)"
     }
 
     catch {share -u view $w}

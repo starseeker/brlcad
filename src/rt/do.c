@@ -47,7 +47,6 @@
 #include "bu/vls.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
 #include "icv.h"
 
 #include "./rtuif.h"
@@ -79,6 +78,26 @@ extern void worker(int cpu, void *arg);
 
 extern struct icv_image *bif;
 unsigned char *pixmap = NULL; /**< Pixel Map for rerendering of black pixels */
+
+static rt_frame_runner_callback frame_runner = NULL;
+static void *frame_runner_data = NULL;
+
+void
+rt_frame_runner_set(rt_frame_runner_callback callback, void *data)
+{
+    frame_runner = callback;
+    frame_runner_data = callback ? data : NULL;
+}
+
+static int do_frame_execute(int framenumber, void *data);
+
+int
+do_frame(int framenumber)
+{
+    if (frame_runner)
+	return frame_runner(do_frame_execute, framenumber, frame_runner_data);
+    return do_frame_execute(framenumber, NULL);
+}
 
 
 /**
@@ -688,11 +707,11 @@ extern double airdensity;
 static unsigned int clt_mode;           /* Active render buffers */
 static uint8_t clt_o[2];		/* Sub buffer offsets in bytes: {CLT_COLOR, MAX} */
 
-static struct fb *clt_fbp = FB_NULL;
+static imgstream_fb_t *clt_fbp = NULL;
 
 
 void
-clt_connect_fb(struct fb *fbp)
+clt_connect_fb(imgstream_fb_t *fbp)
 {
     clt_fbp = fbp;
 }
@@ -774,9 +793,10 @@ clt_run(int cur_pixel, int last_pixel)
 
     pixelp = pixels + cur_pixel*clt_o[1];
 
-    if (clt_fbp != FB_NULL) {
+    if (clt_fbp != NULL && rt_fb_output_enabled) {
         bu_semaphore_acquire(BU_SEM_SYSCALL);
-        count = fb_write(clt_fbp, a_x, a_y, pixelp, npix);
+        count = (int)imgstream_fb_write(clt_fbp, a_x, a_y, pixelp,
+		(size_t)npix);
         bu_semaphore_release(BU_SEM_SYSCALL);
         if (count < npix)
             bu_exit(EXIT_FAILURE, "pixel fb_write error");
@@ -891,8 +911,8 @@ validate_raytrace(struct rt_i *rtip)
  *
  * Returns -1 on error, 0 if OK.
  */
-int
-do_frame(int framenumber)
+static int
+do_frame_execute(int framenumber, void *UNUSED(data))
 {
     struct bu_vls times = BU_VLS_INIT_ZERO;
     char framename[256] = {0};		/* File name to hold current frame */
@@ -1022,7 +1042,7 @@ do_frame(int framenumber)
 
     /* Allocate data for pixel map for rerendering of black pixels */
     if (pixmap == NULL) {
-	pixmap = (unsigned char*)bu_calloc(sizeof(RGBpixel), width*height, "pixmap allocate");
+	pixmap = (unsigned char *)bu_calloc(3, width*height, "pixmap allocate");
     }
 
     /*
@@ -1083,7 +1103,7 @@ do_frame(int framenumber)
 
 		/* check if partial result */
 		ret = fstat(fd, &sb);
-		if (ret >= 0 && sb.st_size > 0 && (size_t)sb.st_size < width*height*sizeof(RGBpixel)) {
+		if (ret >= 0 && sb.st_size > 0 && (size_t)sb.st_size < width*height*3) {
 
 		    /* Read existing pix data into the frame buffer */
 		    if (sb.st_size > 0) {

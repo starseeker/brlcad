@@ -39,7 +39,7 @@
 
 #include "./mged.h"
 #include "./sedit.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 #define V3BASE2LOCAL(_pt)	(_pt)[X]*s->dbip->dbi_base2local, (_pt)[Y]*s->dbip->dbi_base2local, (_pt)[Z]*s->dbip->dbi_base2local
 
@@ -119,7 +119,7 @@ f_tedit(ClientData clientData, Tcl_Interp *interp, int argc, const char **UNUSED
 
 	/* Update the display */
 	replot_editing_solid(0, NULL, s, NULL);
-	view_state->vs_flag = 1;
+	mged_refresh_request_current(s, GED_VIEW_REFRESH_VIEW);
 	Tcl_AppendResult(interp, "done\n", (char *)NULL);
     }
 

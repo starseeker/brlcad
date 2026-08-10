@@ -42,7 +42,7 @@
 #include "bu/cv.h"
 #include "bu/snooze.h"
 #include "bn.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 #define OPT_STRING "acf:s:n:w:#:h?"
@@ -211,7 +211,7 @@ main (int argc, char **argv)
     if (fileinput && autosize) {
 	size_t w, h;
 
-	if (fb_common_file_size(&w, &h, file_name, d_per_l * 8)) {
+	if (imgstream_image_file_size(&w, &h, file_name, d_per_l * 8)) {
 	    file_width = (long)w;
 	    file_height = (long)h;
 	} else

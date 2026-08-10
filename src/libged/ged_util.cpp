@@ -28,6 +28,7 @@
 
 #include "common.h"
 
+#include <cmath>
 #include <stdlib.h>
 #include <string.h>
 
@@ -40,11 +41,13 @@
 #endif
 
 #include "bio.h"
+#include "bnetwork.h"
 #include "bresource.h"
 
 
 #include "bu/app.h"
 #include "bu/cmd.h"
+#include "bu/cv.h"
 #include "bu/env.h"
 #include "bu/file.h"
 #include "bu/opt.h"
@@ -53,11 +56,41 @@
 #include "bu/str.h"
 #include "bu/units.h"
 #include "bu/vls.h"
+#include "bg/line_layer.h"
+#include "bg/plot3.h"
 #include "bv.h"
-
+#include "imgstream/fbserv.h"
 #include "ged.h"
+#include "ged/draw.h"
+#include "ged/event_txn.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BExportAction.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BViewController.h"
+#include <Inventor/SoViewport.h>
+#include "./ged_bobol_private.hpp"
 #include "./ged_private.h"
-#include "./dbi.h"
+
+extern "C" ged_draw_group_ref
+ged_scene_root_group_ref(struct ged *gedp)
+{
+    if (gedp && gedp->i && gedp->i->ged_gdp)
+	return gedp->i->ged_gdp->gd_scene_root_group_ref;
+    return GED_DRAW_GROUP_REF_NULL;
+}
+
+extern "C" void
+ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root)
+{
+    if (gedp && gedp->i && gedp->i->ged_gdp)
+	gedp->i->ged_gdp->gd_scene_root_group_ref = root;
+}
+
+extern "C" void
+ged_scene_root_ref_clear(struct ged *gedp)
+{
+    ged_scene_root_group_ref_set(gedp, GED_DRAW_GROUP_REF_NULL);
+}
 
 int
 _ged_subcmd_help(struct ged *gedp, struct bu_opt_desc *gopts, const struct bu_cmdtab *cmds, const char *cmdname, const char *cmdargs, void *gd, int argc, const char **argv)
@@ -246,54 +279,6 @@ _ged_subcmd2_help(struct ged *gedp, struct bu_opt_desc *gopts, std::map<std::str
 
     return BRLCAD_OK;
 }
-
-/* NOTE - caller must initialize vmin and vmax to INFINITY and -INFINITY
- * respectively (we don't do it here so callers may run this routine
- * repeatedly over different tables to accumulate bounds. */
-static int
-scene_bounding_sph(struct bu_ptbl *so, vect_t *vmin, vect_t *vmax, int pflag)
-{
-    struct bv_scene_obj *sp;
-    vect_t minus, plus;
-    int is_empty = 1;
-
-    /* calculate the bounding for of all solids being displayed */
-    for (size_t i = 0; i < BU_PTBL_LEN(so); i++) {
-	struct bv_scene_group *g = (struct bv_scene_group *)BU_PTBL_GET(so, i);
-	if (BU_PTBL_LEN(&g->children)) {
-	    for (size_t j = 0; j < BU_PTBL_LEN(&g->children); j++) {
-		sp = (struct bv_scene_obj *)BU_PTBL_GET(&g->children, j);
-		minus[X] = sp->s_center[X] - sp->s_size;
-		minus[Y] = sp->s_center[Y] - sp->s_size;
-		minus[Z] = sp->s_center[Z] - sp->s_size;
-		VMIN((*vmin), minus);
-		plus[X] = sp->s_center[X] + sp->s_size;
-		plus[Y] = sp->s_center[Y] + sp->s_size;
-		plus[Z] = sp->s_center[Z] + sp->s_size;
-		VMAX((*vmax), plus);
-
-		is_empty = 0;
-	    }
-	} else {
-	    // If we're an evaluated object, the group itself has the
-	    // necessary info.
-	    minus[X] = g->s_center[X] - g->s_size;
-	    minus[Y] = g->s_center[Y] - g->s_size;
-	    minus[Z] = g->s_center[Z] - g->s_size;
-	    VMIN((*vmin), minus);
-	    plus[X] = g->s_center[X] + g->s_size;
-	    plus[Y] = g->s_center[Y] + g->s_size;
-	    plus[Z] = g->s_center[Z] + g->s_size;
-	    VMAX((*vmax), plus);
-	}
-    }
-    if (!pflag) {
-	bu_log("todo - handle pflag\n");
-    }
-
-    return is_empty;
-}
-
 
 int
 _ged_results_init(struct ged_results *results)
@@ -843,8 +828,12 @@ ged_rot_args(struct ged *gedp, int argc, const char *argv[], char *coord, mat_t 
 	*coord = argv[1][1];
 	--argc;
 	++argv;
-    } else
-	*coord = gedp->ged_gvp->gv_coord;
+    } else {
+	struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+	if (!view_ctx)
+	    return BRLCAD_ERROR;
+	*coord = bv_coord_get(bv_context_view_const((const struct bv_context *)view_ctx));
+    }
 
     if (argc != 2 && argc != 4) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
@@ -961,8 +950,12 @@ ged_tra_args(struct ged *gedp, int argc, const char *argv[], char *coord, vect_t
 	*coord = argv[1][1];
 	--argc;
 	++argv;
-    } else
-	*coord = gedp->ged_gvp->gv_coord;
+    } else {
+	struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+	if (!view_ctx)
+	    return BRLCAD_ERROR;
+	*coord = bv_coord_get(bv_context_view_const((const struct bv_context *)view_ctx));
+    }
 
     if (argc != 2 && argc != 4) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
@@ -1060,30 +1053,86 @@ ged_scale_args(struct ged *gedp, int argc, const char *argv[], fastf_t *sf1, fas
     return ret;
 }
 
+static size_t
+_ged_bobol_path_list(struct ged *gedp, struct ged_view_context *view,
+	int expanded, struct bu_vls *paths)
+{
+    BObolSceneController *scene = ged_bobol_scene(gedp);
+    if (!scene || !paths)
+	return 0;
+
+    std::set<std::string> unique_paths;
+    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
+	BObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) ||
+	    !ged_bobol_source_in_view(view, summary) || !summary.visible)
+	    continue;
+	const char *path = summary.path.getString();
+	if (!expanded && summary.parentGroupPath.getLength() &&
+	    !BU_STR_EQUAL(summary.parentGroupPath.getString(), "/"))
+	    path = summary.parentGroupPath.getString();
+	while (path && *path == '/')
+	    path++;
+	if (path && path[0])
+	    unique_paths.insert(path);
+    }
+    for (const std::string &path : unique_paths)
+	bu_vls_printf(paths, "%s\n", path.c_str());
+    return unique_paths.size();
+}
+
+
+static size_t
+_ged_draw_intent_path_count(struct ged *gedp)
+{
+    struct bu_vls paths = BU_VLS_INIT_ZERO;
+    struct ged_view_context *view = gedp ? ged_view_active_ctx(gedp) : NULL;
+    const size_t count = _ged_bobol_path_list(gedp, view, 0, &paths);
+    bu_vls_free(&paths);
+    return count;
+}
+
+
+static int
+_ged_draw_path_list_fill_argv(struct ged *gedp,
+			      const struct bu_vls *paths,
+			      char **start,
+			      const char **end)
+{
+    char **vp = start;
+    const char *path = bu_vls_cstr(paths);
+
+    while (path && *path) {
+	const char *nl = strchr(path, '\n');
+	size_t len = nl ? (size_t)(nl - path) : strlen(path);
+	if (len > 0) {
+	    if ((vp != NULL) && ((const char **)vp < end)) {
+		char *arg = (char *)bu_malloc(len + 1, "ged who argv path");
+		memcpy(arg, path, len);
+		arg[len] = '\0';
+		*vp++ = arg;
+	    } else {
+		bu_vls_printf(gedp->ged_result_str,
+			"INTERNAL ERROR: ged_who_argv() ran out of space at %.*s\n",
+			(int)len, path);
+		break;
+	    }
+	}
+	if (!nl)
+	    break;
+	path = nl + 1;
+    }
+
+    if ((vp != NULL) && ((const char **)vp < end))
+	*vp = (char *)0;
+
+    return vp - start;
+}
+
 size_t
 ged_who_argc(struct ged *gedp)
 {
-    if (gedp->new_cmd_forms) {
-	if (!gedp || !gedp->ged_gvp || !gedp->dbi_state)
-	    return 0;
-	DbiState *dbis = (DbiState *)gedp->dbi_state;
-	BViewState *bvs = dbis->get_view_state(gedp->ged_gvp);
-	if (bvs)
-	    return bvs->count_drawn_paths(-1, true);
-	return 0;
-    }
-
-    struct display_list *gdlp = NULL;
-    size_t visibleCount = 0;
-
-    if (!gedp || !gedp->i->ged_gdp || !gedp->i->ged_gdp->gd_headDisplay)
-	return 0;
-
-    for (BU_LIST_FOR(gdlp, display_list, gedp->i->ged_gdp->gd_headDisplay)) {
-	visibleCount++;
-    }
-
-    return visibleCount;
+    return _ged_draw_intent_path_count(gedp);
 }
 
 
@@ -1098,32 +1147,7 @@ ged_who_argc(struct ged *gedp)
 int
 ged_who_argv(struct ged *gedp, char **start, const char **end)
 {
-    char **vp = start;
     if (!gedp)
-	return 0;
-    if (gedp->new_cmd_forms) {
-	if (!gedp->ged_gvp || !gedp->dbi_state)
-	    return 0;
-	DbiState *dbis = (DbiState *)gedp->dbi_state;
-	BViewState *bvs = dbis->get_view_state(gedp->ged_gvp);
-	if (bvs) {
-	    std::vector<std::string> drawn_paths = bvs->list_drawn_paths(-1, true);
-	    for (size_t i = 0; i < drawn_paths.size(); i++) {
-		if ((vp != NULL) && ((const char **)vp < end)) {
-		    *vp++ = bu_strdup(drawn_paths[i].c_str());
-		} else {
-		    bu_vls_printf(gedp->ged_result_str, "INTERNAL ERROR: ged_who_argv() ran out of space at %s\n", drawn_paths[i].c_str());
-		    break;
-		}
-	    }
-	} else {
-	    return 0;
-	}
-    }
-
-    struct display_list *gdlp;
-
-    if (!gedp || !gedp->i->ged_gdp || !gedp->i->ged_gdp->gd_headDisplay)
 	return 0;
 
     if (UNLIKELY(!start || !end)) {
@@ -1131,23 +1155,11 @@ ged_who_argv(struct ged *gedp, char **start, const char **end)
 	return 0;
     }
 
-    for (BU_LIST_FOR(gdlp, display_list, gedp->i->ged_gdp->gd_headDisplay)) {
-	if (((struct directory *)gdlp->dl_dp)->d_addr == RT_DIR_PHONY_ADDR)
-	    continue;
-
-	if ((vp != NULL) && ((const char **)vp < end)) {
-	    *vp++ = bu_strdup(bu_vls_addr(&gdlp->dl_path));
-	} else {
-	    bu_vls_printf(gedp->ged_result_str, "INTERNAL ERROR: ged_who_argv() ran out of space at %s\n", ((struct directory *)gdlp->dl_dp)->d_namep);
-	    break;
-	}
-    }
-
-    if ((vp != NULL) && ((const char **)vp < end)) {
-	*vp = (char *) 0;
-    }
-
-    return vp-start;
+    struct bu_vls paths = BU_VLS_INIT_ZERO;
+    (void)_ged_bobol_path_list(gedp, ged_view_active_ctx(gedp), 0, &paths);
+    int count = _ged_draw_path_list_fill_argv(gedp, &paths, start, end);
+    bu_vls_free(&paths);
+    return count;
 }
 
 void
@@ -1215,21 +1227,1267 @@ _ged_do_list(struct ged *gedp, struct directory *dp, int verbose)
     }
 }
 
-void
-_ged_cvt_vlblock_to_solids(struct ged *gedp, struct bv_vlblock *vbp, const char *name, int copy)
+enum ged_uplot_arg_type {
+    GED_UPLOT_BAD = 0,
+    GED_UPLOT_NONE = 1,
+    GED_UPLOT_SHORT = 2,
+    GED_UPLOT_IEEE = 3,
+    GED_UPLOT_CHAR = 4,
+    GED_UPLOT_STRING = 5
+};
+
+struct ged_uplot_op {
+    int targ;
+    int narg;
+    const char *desc;
+};
+
+static const struct ged_uplot_op ged_uplot_error = {GED_UPLOT_BAD, 0, "error"};
+static const struct ged_uplot_op ged_uplot_letters[] = {
+    /*A*/ {GED_UPLOT_BAD, 0, ""},
+    /*B*/ {GED_UPLOT_BAD, 0, ""},
+    /*C*/ {GED_UPLOT_CHAR, 3, "color"},
+    /*D*/ {GED_UPLOT_BAD, 0, ""},
+    /*E*/ {GED_UPLOT_BAD, 0, ""},
+    /*F*/ {GED_UPLOT_NONE, 0, "flush"},
+    /*G*/ {GED_UPLOT_BAD, 0, ""},
+    /*H*/ {GED_UPLOT_BAD, 0, ""},
+    /*I*/ {GED_UPLOT_BAD, 0, ""},
+    /*J*/ {GED_UPLOT_BAD, 0, ""},
+    /*K*/ {GED_UPLOT_BAD, 0, ""},
+    /*L*/ {GED_UPLOT_SHORT, 6, "3line"},
+    /*M*/ {GED_UPLOT_SHORT, 3, "3move"},
+    /*N*/ {GED_UPLOT_SHORT, 3, "3cont"},
+    /*O*/ {GED_UPLOT_IEEE, 3, "d_3move"},
+    /*P*/ {GED_UPLOT_SHORT, 3, "3point"},
+    /*Q*/ {GED_UPLOT_IEEE, 3, "d_3cont"},
+    /*R*/ {GED_UPLOT_BAD, 0, ""},
+    /*S*/ {GED_UPLOT_SHORT, 6, "3space"},
+    /*T*/ {GED_UPLOT_BAD, 0, ""},
+    /*U*/ {GED_UPLOT_BAD, 0, ""},
+    /*V*/ {GED_UPLOT_IEEE, 6, "d_3line"},
+    /*W*/ {GED_UPLOT_IEEE, 6, "d_3space"},
+    /*X*/ {GED_UPLOT_IEEE, 3, "d_3point"},
+    /*Y*/ {GED_UPLOT_BAD, 0, ""},
+    /*Z*/ {GED_UPLOT_BAD, 0, ""},
+    /*[*/ {GED_UPLOT_BAD, 0, ""},
+    /*\*/ {GED_UPLOT_BAD, 0, ""},
+    /*]*/ {GED_UPLOT_BAD, 0, ""},
+    /*^*/ {GED_UPLOT_BAD, 0, ""},
+    /*_*/ {GED_UPLOT_BAD, 0, ""},
+    /*`*/ {GED_UPLOT_BAD, 0, ""},
+    /*a*/ {GED_UPLOT_SHORT, 6, "arc"},
+    /*b*/ {GED_UPLOT_BAD, 0, ""},
+    /*c*/ {GED_UPLOT_SHORT, 3, "circle"},
+    /*d*/ {GED_UPLOT_BAD, 0, ""},
+    /*e*/ {GED_UPLOT_NONE, 0, "erase"},
+    /*f*/ {GED_UPLOT_STRING, 1, "linmod"},
+    /*g*/ {GED_UPLOT_BAD, 0, ""},
+    /*h*/ {GED_UPLOT_BAD, 0, ""},
+    /*i*/ {GED_UPLOT_IEEE, 3, "d_circle"},
+    /*j*/ {GED_UPLOT_BAD, 0, ""},
+    /*k*/ {GED_UPLOT_BAD, 0, ""},
+    /*l*/ {GED_UPLOT_SHORT, 4, "line"},
+    /*m*/ {GED_UPLOT_SHORT, 2, "move"},
+    /*n*/ {GED_UPLOT_SHORT, 2, "cont"},
+    /*o*/ {GED_UPLOT_IEEE, 2, "d_move"},
+    /*p*/ {GED_UPLOT_SHORT, 2, "point"},
+    /*q*/ {GED_UPLOT_IEEE, 2, "d_cont"},
+    /*r*/ {GED_UPLOT_IEEE, 6, "d_arc"},
+    /*s*/ {GED_UPLOT_SHORT, 4, "space"},
+    /*t*/ {GED_UPLOT_STRING, 1, "label"},
+    /*u*/ {GED_UPLOT_BAD, 0, ""},
+    /*v*/ {GED_UPLOT_IEEE, 4, "d_line"},
+    /*w*/ {GED_UPLOT_IEEE, 4, "d_space"},
+    /*x*/ {GED_UPLOT_IEEE, 2, "d_point"},
+    /*y*/ {GED_UPLOT_BAD, 0, ""},
+    /*z*/ {GED_UPLOT_BAD, 0, ""}
+};
+
+struct ged_uplot_layer {
+    long rgb;
+    point_t *points;
+    int *commands;
+    size_t count;
+    size_t capacity;
+};
+
+struct ged_uplot_stream {
+    struct ged_uplot_layer *layers;
+    size_t layer_count;
+    size_t layer_capacity;
+    size_t current_layer;
+    point_t lpnt;
+    int moved;
+    double char_size;
+    int mode;
+};
+
+static int
+ged_uplot_getshort(FILE *fp)
 {
-    size_t i;
-    char shortname[32] = {0};
-    char namebuf[64] = {0};
+    int lo = getc(fp);
+    int hi = getc(fp);
+    if (lo == EOF || hi == EOF)
+	return 0;
 
-    bu_strlcpy(shortname, name, sizeof(shortname));
+    long v = lo;
+    v |= (hi << 8);
+    if (v <= 0x7FFF)
+	return (int)v;
+    long w = -1;
+    w &= ~0x7FFF;
+    return (int)(w | v);
+}
 
-    for (i = 0; i < vbp->nused; i++) {
-	if (BU_LIST_IS_EMPTY(&(vbp->head[i])))
-	    continue;
-	snprintf(namebuf, 64, "%s%lx", shortname, vbp->rgb[i]);
-	invent_solid(gedp, namebuf, &vbp->head[i], vbp->rgb[i], copy, 1.0, 0, 0);
+static void
+ged_uplot_read_binary_args(FILE *fp, const struct ged_uplot_op *up, char *carg, fastf_t *arg)
+{
+    char inbuf[SIZEOF_NETWORK_DOUBLE] = {'\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0'};
+
+    for (int i = 0; i < up->narg; i++) {
+	switch (up->targ) {
+	    case GED_UPLOT_SHORT:
+		arg[i] = ged_uplot_getshort(fp);
+		break;
+	    case GED_UPLOT_IEEE:
+	    {
+		double scan = 0.0;
+		size_t ret = fread(inbuf, SIZEOF_NETWORK_DOUBLE, 1, fp);
+		if (ret != 1)
+		    bu_log("WARNING: uplot read failure\n");
+		bu_cv_ntohd((unsigned char *)&scan, (unsigned char *)inbuf, 1);
+		arg[i] = scan;
+		break;
+	    }
+	    case GED_UPLOT_STRING:
+	    {
+		int j = 0;
+		int cc = 0;
+		while (!feof(fp) && (cc = getc(fp)) != '\n' && cc != EOF) {
+		    if (j < 255)
+			carg[j++] = (char)cc;
+		}
+		carg[j] = '\0';
+		break;
+	    }
+	    case GED_UPLOT_CHAR:
+	    {
+		int cc = getc(fp);
+		if (cc == EOF)
+		    return;
+		carg[i] = (char)cc;
+		arg[i] = 0;
+		break;
+	    }
+	    case GED_UPLOT_NONE:
+	    default:
+		arg[i] = 0;
+		break;
+	}
     }
+}
+
+static void
+ged_uplot_read_text_args(FILE *fp, const struct ged_uplot_op *up, char *carg, fastf_t *arg)
+{
+    for (int i = 0; i < up->narg; i++) {
+	switch (up->targ) {
+	    case GED_UPLOT_SHORT:
+	    case GED_UPLOT_IEEE:
+	    {
+		double val = 0.0;
+		int ret = fscanf(fp, "%lf", &val);
+		if (ret != 1)
+		    bu_log("WARNING: uplot numeric input failure\n");
+		else
+		    arg[i] = val;
+		break;
+	    }
+	    case GED_UPLOT_STRING:
+	    {
+		int ret = fscanf(fp, "%255s\n", &carg[0]);
+		if (ret != 1)
+		    bu_log("WARNING: uplot string input failure\n");
+		break;
+	    }
+	    case GED_UPLOT_CHAR:
+	    {
+		unsigned int tchar = 0;
+		int ret = fscanf(fp, "%u", &tchar);
+		if (ret != 1)
+		    bu_log("WARNING: uplot character input failure\n");
+		if (tchar > 255)
+		    tchar = 255;
+		carg[i] = (char)tchar;
+		arg[i] = 0;
+		break;
+	    }
+	    case GED_UPLOT_NONE:
+	    default:
+		arg[i] = 0;
+		break;
+	}
+    }
+}
+
+static void
+ged_uplot_layer_free(struct ged_uplot_layer *layer)
+{
+    if (!layer)
+	return;
+    if (layer->points)
+	bu_free(layer->points, "ged uplot layer points");
+    if (layer->commands)
+	bu_free(layer->commands, "ged uplot layer commands");
+    memset(layer, 0, sizeof(*layer));
+}
+
+static void
+ged_uplot_builder_free(struct ged_uplot_stream *ctx)
+{
+    if (!ctx)
+	return;
+    for (size_t i = 0; i < ctx->layer_count; i++)
+	ged_uplot_layer_free(&ctx->layers[i]);
+    if (ctx->layers)
+	bu_free(ctx->layers, "ged uplot layers");
+    memset(ctx, 0, sizeof(*ctx));
+}
+
+static struct ged_uplot_layer *
+ged_uplot_layer_find(struct ged_uplot_stream *ctx, long rgb)
+{
+    if (!ctx)
+	return NULL;
+
+    for (size_t i = 0; i < ctx->layer_count; i++) {
+	if (ctx->layers[i].rgb == rgb) {
+	    ctx->current_layer = i;
+	    return &ctx->layers[i];
+	}
+    }
+
+    if (ctx->layer_count >= ctx->layer_capacity) {
+	size_t old_capacity = ctx->layer_capacity;
+	size_t new_capacity = old_capacity ? old_capacity * 2 : 4;
+	ctx->layers = (struct ged_uplot_layer *)bu_realloc(ctx->layers,
+		new_capacity * sizeof(struct ged_uplot_layer), "ged uplot layers");
+	memset(ctx->layers + old_capacity, 0,
+		(new_capacity - old_capacity) * sizeof(struct ged_uplot_layer));
+	ctx->layer_capacity = new_capacity;
+    }
+
+    struct ged_uplot_layer *layer = &ctx->layers[ctx->layer_count];
+    memset(layer, 0, sizeof(*layer));
+    layer->rgb = rgb;
+    ctx->current_layer = ctx->layer_count;
+    ctx->layer_count++;
+    return layer;
+}
+
+static struct ged_uplot_layer *
+ged_uplot_current_layer(struct ged_uplot_stream *ctx)
+{
+    if (!ctx || ctx->current_layer >= ctx->layer_count)
+	return NULL;
+    return &ctx->layers[ctx->current_layer];
+}
+
+static int
+ged_uplot_layer_append(struct ged_uplot_layer *layer, const point_t point, int command)
+{
+    if (!layer)
+	return 0;
+    if (layer->count >= layer->capacity) {
+	size_t new_capacity = layer->capacity ? layer->capacity * 2 : 64;
+	layer->points = (point_t *)bu_realloc(layer->points,
+		new_capacity * sizeof(point_t), "ged uplot layer points");
+	layer->commands = (int *)bu_realloc(layer->commands,
+		new_capacity * sizeof(int), "ged uplot layer commands");
+	layer->capacity = new_capacity;
+    }
+    VMOVE(layer->points[layer->count], point);
+    layer->commands[layer->count] = command;
+    layer->count++;
+    return 1;
+}
+
+static void
+ged_uplot_append_text(struct ged_uplot_stream *ctx, const char *text)
+{
+    struct ged_uplot_layer *layer = ged_uplot_current_layer(ctx);
+    if (!ctx || !layer || !text)
+	return;
+
+    point_t last_pos = VINIT_ZERO;
+    if (layer->count)
+	VMOVE(last_pos, layer->points[layer->count - 1]);
+
+    double offset = 0.0;
+    for (const unsigned char *cp = (const unsigned char *)text; *cp;
+	    cp++, offset += ctx->char_size) {
+	vect_t local;
+	point_t point;
+
+	VSET(local, offset, 0.0, 0.0);
+	VADD2(point, last_pos, local);
+	(void)ged_uplot_layer_append(layer, point, BG_GEOMETRY_LINE_MOVE);
+
+	for (int *stroke_ptr = plot3_font_getchar(cp); *stroke_ptr != PLOT3_FONT_LAST;
+		stroke_ptr++) {
+	    int stroke = *stroke_ptr;
+	    int ysign = 1;
+	    int draw = 1;
+
+	    if (stroke == PLOT3_FONT_NEGY) {
+		ysign = -1;
+		stroke = *++stroke_ptr;
+	    }
+	    if (stroke < 0) {
+		stroke = -stroke;
+		draw = 0;
+	    }
+
+	    VSET(local, (stroke / 11) * 0.1 * ctx->char_size + offset,
+		    (ysign * (stroke % 11)) * 0.1 * ctx->char_size, 0.0);
+	    VADD2(point, last_pos, local);
+	    (void)ged_uplot_layer_append(layer, point,
+		    draw ? BG_GEOMETRY_LINE_DRAW : BG_GEOMETRY_LINE_MOVE);
+	}
+    }
+}
+
+static int
+ged_uplot_process_value(struct ged_uplot_stream *ctx, FILE *fp, int c)
+{
+    if (!ctx || !fp)
+	return -1;
+
+    const struct ged_uplot_op *up = NULL;
+    if (c < 'A' || c > 'z')
+	up = &ged_uplot_error;
+    else
+	up = &ged_uplot_letters[c - 'A'];
+
+    if (up->targ == GED_UPLOT_BAD) {
+	bu_log("Bad uplot command '%c' (0x%02x)\n", c, c);
+	return -1;
+    }
+
+    char carg[256] = {0};
+    fastf_t arg[6] = {0.0};
+    if (up->narg > 0) {
+	if (ctx->mode == PL_OUTPUT_MODE_BINARY)
+	    ged_uplot_read_binary_args(fp, up, carg, arg);
+	else
+	    ged_uplot_read_text_args(fp, up, carg, arg);
+    }
+
+    struct ged_uplot_layer *layer = ged_uplot_current_layer(ctx);
+    vect_t a, b;
+    switch (c) {
+	case 's':
+	case 'w':
+	case 'S':
+	case 'W':
+	    break;
+	case 'm':
+	case 'o':
+	    arg[Z] = 0;
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_MOVE);
+	    VMOVE(ctx->lpnt, arg);
+	    ctx->moved = 1;
+	    break;
+	case 'M':
+	case 'O':
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_MOVE);
+	    VMOVE(ctx->lpnt, arg);
+	    ctx->moved = 1;
+	    break;
+	case 'n':
+	case 'q':
+	    if (!ctx->moved) {
+		(void)ged_uplot_layer_append(layer, ctx->lpnt, BG_GEOMETRY_LINE_MOVE);
+		ctx->moved = 1;
+	    }
+	    arg[Z] = 0;
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_DRAW);
+	    VMOVE(ctx->lpnt, arg);
+	    break;
+	case 'N':
+	case 'Q':
+	    if (!ctx->moved) {
+		(void)ged_uplot_layer_append(layer, ctx->lpnt, BG_GEOMETRY_LINE_MOVE);
+		ctx->moved = 1;
+	    }
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_DRAW);
+	    VMOVE(ctx->lpnt, arg);
+	    break;
+	case 'l':
+	case 'v':
+	    VSET(a, arg[0], arg[1], 0.0);
+	    VSET(b, arg[2], arg[3], 0.0);
+	    (void)ged_uplot_layer_append(layer, a, BG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, b, BG_GEOMETRY_LINE_DRAW);
+	    break;
+	case 'L':
+	case 'V':
+	    VSET(a, arg[0], arg[1], arg[2]);
+	    VSET(b, arg[3], arg[4], arg[5]);
+	    (void)ged_uplot_layer_append(layer, a, BG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, b, BG_GEOMETRY_LINE_DRAW);
+	    break;
+	case 'p':
+	case 'x':
+	    arg[Z] = 0;
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_DRAW);
+	    break;
+	case 'P':
+	case 'X':
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_DRAW);
+	    break;
+	case 'C':
+	{
+	    long rgb = ((long)(unsigned char)carg[0] << 16) |
+		((long)(unsigned char)carg[1] << 8) |
+		(long)(unsigned char)carg[2];
+	    layer = ged_uplot_layer_find(ctx, rgb);
+	    ctx->moved = 0;
+	    break;
+	}
+	case 't':
+	    ged_uplot_append_text(ctx, carg);
+	    break;
+	default:
+	    break;
+    }
+
+    return layer ? 0 : -1;
+}
+
+static void
+ged_uplot_builder_init(struct ged_uplot_stream *ctx, double char_size, int mode)
+{
+    if (!ctx)
+	return;
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->char_size = char_size;
+    ctx->mode = mode;
+    VSETALL(ctx->lpnt, 0.0);
+    (void)ged_uplot_layer_find(ctx, 0xFFFF00);
+}
+
+static int
+ged_uplot_parse_stream(struct ged_uplot_stream *ctx, FILE *fp)
+{
+    if (!ctx || !fp)
+	return BRLCAD_ERROR;
+    int c = 0;
+    while (!feof(fp) && (c = getc(fp)) != EOF) {
+	if (ged_uplot_process_value(ctx, fp, c) < 0)
+	    return BRLCAD_ERROR;
+    }
+    return BRLCAD_OK;
+}
+
+static int
+ged_uplot_feature_layers_create(const char *name,
+	struct ged_uplot_stream *ctx,
+	struct ged_annotation_line_layer **layers_out,
+	char ***names_out,
+	size_t *live_layers_out)
+{
+    if (!name || !ctx || !layers_out || !names_out || !live_layers_out)
+	return BRLCAD_ERROR;
+
+    *layers_out = NULL;
+    *names_out = NULL;
+    *live_layers_out = 0;
+
+    size_t live_layers = 0;
+    for (size_t i = 0; i < ctx->layer_count; i++) {
+	if (ctx->layers[i].count)
+	    live_layers++;
+    }
+
+    struct ged_annotation_line_layer *layers = NULL;
+    char **names = NULL;
+    if (live_layers) {
+	layers = (struct ged_annotation_line_layer *)bu_calloc(live_layers,
+		sizeof(struct ged_annotation_line_layer), "ged uplot feature layers");
+	names = (char **)bu_calloc(live_layers, sizeof(char *), "ged uplot feature layer names");
+    }
+
+    size_t idx = 0;
+    for (size_t i = 0; i < ctx->layer_count; i++) {
+	if (!ctx->layers[i].count)
+	    continue;
+	struct ged_annotation_line_layer init = GED_ANNOTATION_LINE_LAYER_INIT;
+	layers[idx] = init;
+	layers[idx].points = (const point_t *)ctx->layers[i].points;
+	layers[idx].commands = ctx->layers[i].commands;
+	layers[idx].point_count = ctx->layers[i].count;
+	layers[idx].style.color_valid = 1;
+	layers[idx].style.color[0] = (ctx->layers[i].rgb >> 16) & 0xFF;
+	layers[idx].style.color[1] = (ctx->layers[i].rgb >> 8) & 0xFF;
+	layers[idx].style.color[2] = ctx->layers[i].rgb & 0xFF;
+
+	struct bu_vls lname = BU_VLS_INIT_ZERO;
+	bu_vls_sprintf(&lname, "%s_%ld_%ld_%ld", name,
+		(ctx->layers[i].rgb >> 16) & 0xFF,
+		(ctx->layers[i].rgb >> 8) & 0xFF,
+		ctx->layers[i].rgb & 0xFF);
+	names[idx] = bu_strdup(bu_vls_cstr(&lname));
+	layers[idx].name = names[idx];
+	bu_vls_free(&lname);
+	idx++;
+    }
+
+    *layers_out = layers;
+    *names_out = names;
+    *live_layers_out = live_layers;
+    return BRLCAD_OK;
+}
+
+static void
+ged_uplot_feature_layers_free(
+	struct ged_annotation_line_layer *layers,
+	char **names,
+	size_t live_layers)
+{
+    for (size_t i = 0; i < live_layers; i++) {
+	if (names && names[i])
+	    bu_free(names[i], "ged uplot feature layer name");
+    }
+    if (names)
+	bu_free(names, "ged uplot feature layer names");
+    if (layers)
+	bu_free(layers, "ged uplot feature layers");
+}
+
+static int
+ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_stream *ctx)
+{
+    struct ged_view_context *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx || !name || !ctx)
+	return BRLCAD_ERROR;
+
+    struct ged_annotation_line_layer *layers = NULL;
+    char **names = NULL;
+    size_t live_layers = 0;
+    if (ged_uplot_feature_layers_create(name, ctx, &layers, &names,
+	    &live_layers) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    int ret = ged_annotation_line_layers_replace(view_ctx, name, 0,
+	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
+
+    ged_uplot_feature_layers_free(layers, names, live_layers);
+    return ret;
+}
+
+static void
+ged_command_metadata_add(struct ged_result_metadata *metadata,
+	size_t *metadata_count,
+	const char *key,
+	const char *value)
+{
+    if (!metadata || !metadata_count || !key)
+	return;
+
+    metadata[*metadata_count].key = key;
+    metadata[*metadata_count].value = value ? value : "";
+    (*metadata_count)++;
+}
+
+static const char *
+ged_uplot_result_schema(const char *owner_id, const char *result_kind)
+{
+    if (owner_id && result_kind && BU_STR_EQUAL(owner_id, "rtcheck") &&
+	BU_STR_EQUAL(result_kind, "overlap"))
+	return "brlcad.rtcheck.overlap.v1";
+    if (owner_id && result_kind && BU_STR_EQUAL(owner_id, "nirt") &&
+	BU_STR_EQUAL(result_kind, "query-ray"))
+	return "brlcad.nirt.query-ray.v1";
+    return NULL;
+}
+
+static long
+ged_uplot_qray_rgb(const struct ged_qray_color *color)
+{
+    if (!color)
+	return -1;
+    return ((long)(unsigned char)color->r << 16) |
+	((long)(unsigned char)color->g << 8) |
+	(long)(unsigned char)color->b;
+}
+
+static void
+ged_uplot_primitive_semantics(struct ged *gedp,
+	const char *owner_id,
+	const char *result_kind,
+	long rgb,
+	const char **kind,
+	const char **severity,
+	const char **parity)
+{
+    if (kind)
+	*kind = "segment";
+    if (severity)
+	*severity = "info";
+    if (parity)
+	*parity = NULL;
+
+    if (owner_id && result_kind && BU_STR_EQUAL(owner_id, "rtcheck") &&
+	BU_STR_EQUAL(result_kind, "overlap")) {
+	if (kind)
+	    *kind = "overlap";
+	if (severity)
+	    *severity = "error";
+	return;
+    }
+
+    if (!gedp || !gedp->i || !gedp->i->ged_gdp || !owner_id ||
+	!result_kind || !BU_STR_EQUAL(owner_id, "nirt") ||
+	!BU_STR_EQUAL(result_kind, "query-ray"))
+	return;
+
+    const struct ged_drawable *gdp = gedp->i->ged_gdp;
+    if (rgb == ged_uplot_qray_rgb(&gdp->gd_qray_overlap_color)) {
+	if (kind)
+	    *kind = "overlap";
+	if (severity)
+	    *severity = "error";
+    } else if (rgb == ged_uplot_qray_rgb(&gdp->gd_qray_void_color)) {
+	if (kind)
+	    *kind = "gap";
+	if (severity)
+	    *severity = "warning";
+    } else if (rgb == ged_uplot_qray_rgb(&gdp->gd_qray_odd_color)) {
+	if (kind)
+	    *kind = "partition";
+	if (parity)
+	    *parity = "odd";
+    } else if (rgb == ged_uplot_qray_rgb(&gdp->gd_qray_even_color)) {
+	if (kind)
+	    *kind = "partition";
+	if (parity)
+	    *parity = "even";
+    }
+}
+
+static int
+ged_uplot_publish_primitive_metadata(struct ged *gedp,
+	struct ged_result_scene *scene,
+	const char *name,
+	const struct ged_uplot_stream *stream,
+	const char *owner_id,
+	const char *result_kind,
+	const char *schema)
+{
+    if (!scene || !name || !stream || !schema)
+	return 1;
+
+    int primitive = 0;
+    for (size_t i = 0; i < stream->layer_count; i++) {
+	const struct ged_uplot_layer *layer = &stream->layers[i];
+	if (!layer->count)
+	    continue;
+
+	const char *kind = NULL;
+	const char *severity = NULL;
+	const char *parity = NULL;
+	ged_uplot_primitive_semantics(gedp, owner_id, result_kind,
+		layer->rgb, &kind, &severity, &parity);
+
+	char color[16] = {0};
+	snprintf(color, sizeof(color), "#%06lx", layer->rgb & 0xFFFFFF);
+	point_t previous = VINIT_ZERO;
+	int have_previous = 0;
+	for (size_t j = 0; j < layer->count; j++) {
+	    const int command = layer->commands[j];
+	    if (command == BG_GEOMETRY_LINE_DRAW && have_previous) {
+		char primitive_buf[64] = {0};
+		char start[192] = {0};
+		char end[192] = {0};
+		snprintf(primitive_buf, sizeof(primitive_buf), "%d", primitive);
+		snprintf(start, sizeof(start), "%.17g %.17g %.17g",
+		    V3ARGS(previous));
+		snprintf(end, sizeof(end), "%.17g %.17g %.17g",
+		    V3ARGS(layer->points[j]));
+		struct ged_result_metadata metadata[10];
+		size_t metadata_count = 0;
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.schema", schema);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.primitive", primitive_buf);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.primitive.kind", kind);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.severity", severity);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.color", color);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "segment.start_mm", start);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "segment.end_mm", end);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "hit.entry_mm", start);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "hit.exit_mm", end);
+		if (parity)
+		    ged_command_metadata_add(metadata, &metadata_count,
+			"nirt.partition.parity", parity);
+		if (!ged_result_feature_primitive_metadata_replace(
+			scene, name, primitive, metadata, metadata_count))
+		    return 0;
+		primitive++;
+	    }
+	    if (command == BG_GEOMETRY_LINE_MOVE ||
+		command == BG_GEOMETRY_LINE_DRAW) {
+		VMOVE(previous, layer->points[j]);
+		have_previous = 1;
+	    }
+	}
+    }
+
+    return 1;
+}
+
+static int
+ged_uplot_publish_command_scene_feature(struct ged *gedp,
+	struct ged_uplot_stream *stream,
+	const char *name,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    struct ged_view_context *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx || !stream || !name)
+	return BRLCAD_ERROR;
+
+    struct ged_result_desc desc =
+	GED_RESULT_SCENE_DESC_INIT;
+    desc.owner_id = owner_id;
+    desc.owner_role = owner_role;
+    desc.generation = generation;
+    struct ged_result_scene *scene =
+	ged_result_begin(view_ctx, &desc);
+    if (!scene) {
+	if (remove_prefix && remove_prefix[0])
+	    (void)ged_view_feature_remove_prefix(view_ctx,
+		    remove_prefix);
+	return ged_uplot_publish_feature(gedp, name, stream);
+    }
+
+    if (remove_prefix && remove_prefix[0])
+	(void)ged_result_features_remove_prefix(scene,
+		remove_prefix);
+
+    struct ged_annotation_line_layer *layers = NULL;
+    char **names = NULL;
+    size_t live_layers = 0;
+    if (ged_uplot_feature_layers_create(name, stream, &layers, &names,
+	    &live_layers) != BRLCAD_OK) {
+	ged_result_abort(scene);
+	return BRLCAD_ERROR;
+    }
+
+    size_t point_count = 0;
+    for (size_t i = 0; i < live_layers; i++)
+	point_count += layers[i].point_count;
+
+    int ret = ged_result_line_layers_replace(scene, name,
+	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
+    /* An empty plot clears the prior result feature.  There is consequently
+     * no feature to annotate, but the removal itself is a successful scene
+     * update. */
+    if (ret == BRLCAD_OK && live_layers > 0) {
+	char layer_count_buf[64] = {0};
+	char point_count_buf[64] = {0};
+	char generation_buf[64] = {0};
+	snprintf(layer_count_buf, sizeof(layer_count_buf), "%zu",
+		live_layers);
+	snprintf(point_count_buf, sizeof(point_count_buf), "%zu",
+		point_count);
+	if (generation)
+	    snprintf(generation_buf, sizeof(generation_buf), "%llu",
+		    (unsigned long long)generation);
+	const char *schema = ged_uplot_result_schema(owner_id, result_kind);
+	struct ged_result_metadata metadata[10];
+	size_t metadata_count = 0;
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.feature", name);
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.format", "uplot-line-layers");
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.layer_count", layer_count_buf);
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.point_count", point_count_buf);
+	if (owner_id && owner_id[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.owner", owner_id);
+	if (result_kind && result_kind[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.kind", result_kind);
+	if (generation_buf[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.generation", generation_buf);
+	if (schema) {
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.schema", schema);
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.severity",
+		    (owner_id && BU_STR_EQUAL(owner_id, "rtcheck")) ?
+		    "error" : "mixed");
+	}
+	ret = ged_result_feature_metadata_replace(scene, name,
+		metadata, metadata_count) ? BRLCAD_OK : BRLCAD_ERROR;
+	if (ret == BRLCAD_OK && schema &&
+	    !ged_uplot_publish_primitive_metadata(gedp, scene, name, stream,
+		owner_id, result_kind, schema))
+	    ret = BRLCAD_ERROR;
+    }
+    ged_uplot_feature_layers_free(layers, names, live_layers);
+    if (ret == BRLCAD_OK)
+	ret = ged_result_commit(scene) ? BRLCAD_OK : BRLCAD_ERROR;
+    else
+	ged_result_abort(scene);
+    return ret;
+}
+
+extern "C" int
+_ged_line_layer_builder_publish_command_scene_feature(struct ged *gedp,
+	const char *name,
+	const struct bg_line_layer_builder *builder,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    if (!gedp || !name || !builder)
+	return BRLCAD_ERROR;
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (view_ctx) {
+	struct ged_result_desc desc =
+	    GED_RESULT_SCENE_DESC_INIT;
+	desc.owner_id = owner_id;
+	desc.owner_role = owner_role;
+	desc.generation = generation;
+	struct ged_result_scene *scene =
+	    ged_result_begin(view_ctx, &desc);
+	if (scene) {
+	    if (remove_prefix && remove_prefix[0])
+		(void)ged_result_features_remove_prefix(scene,
+			remove_prefix);
+
+	    struct ged_view_feature_style style =
+		GED_VIEW_FEATURE_STYLE_INIT;
+	    style.visible = 1;
+	    style.selectable = 1;
+	    const int published =
+		ged_result_line_layer_builder_replace(scene,
+			name, builder, &style);
+	    int metadata_published = 0;
+	    if (published) {
+		char layer_count_buf[64] = {0};
+		char point_count_buf[64] = {0};
+		char generation_buf[64] = {0};
+		snprintf(layer_count_buf, sizeof(layer_count_buf), "%zu",
+			bg_line_layer_builder_layer_count(builder));
+		snprintf(point_count_buf, sizeof(point_count_buf), "%zu",
+			bg_line_layer_builder_point_count(builder));
+		if (generation)
+		    snprintf(generation_buf, sizeof(generation_buf), "%llu",
+			    (unsigned long long)generation);
+		struct ged_result_metadata metadata[7];
+		size_t metadata_count = 0;
+		ged_command_metadata_add(metadata, &metadata_count,
+			"result.feature", name);
+		ged_command_metadata_add(metadata, &metadata_count,
+			"result.format", "line-layer-builder");
+		ged_command_metadata_add(metadata, &metadata_count,
+			"result.layer_count", layer_count_buf);
+		ged_command_metadata_add(metadata, &metadata_count,
+			"result.point_count", point_count_buf);
+		if (owner_id && owner_id[0])
+		    ged_command_metadata_add(metadata, &metadata_count,
+			    "result.owner", owner_id);
+		if (result_kind && result_kind[0])
+		    ged_command_metadata_add(metadata, &metadata_count,
+			    "result.kind", result_kind);
+		if (generation_buf[0])
+		    ged_command_metadata_add(metadata, &metadata_count,
+			    "result.generation", generation_buf);
+		metadata_published =
+		    ged_result_feature_metadata_replace(scene,
+			    name, metadata, metadata_count);
+	    }
+	    if (published && metadata_published &&
+		    ged_result_commit(scene))
+		return BRLCAD_OK;
+	    if (!published || !metadata_published)
+		ged_result_abort(scene);
+	    return BRLCAD_ERROR;
+	}
+    }
+
+    int handled = ged_diagnostic_line_layer_publish(gedp, name, builder);
+    if (!handled && view_ctx) {
+	handled = ged_annotation_diagnostic_line_layer_builder_replace(
+		view_ctx, name, builder);
+    }
+    return handled ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
+extern "C" int
+_ged_line_set_publish_command_scene_feature(struct ged *gedp,
+	const char *name,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_view_feature_style *style,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    if (!gedp || !name)
+	return BRLCAD_ERROR;
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return BRLCAD_ERROR;
+
+    struct ged_view_feature_style publish_style =
+	GED_VIEW_FEATURE_STYLE_INIT;
+    if (style)
+	publish_style = *style;
+    if (publish_style.visible < 0)
+	publish_style.visible = 1;
+    if (publish_style.selectable < 0)
+	publish_style.selectable = 1;
+
+    struct ged_result_desc desc =
+	GED_RESULT_SCENE_DESC_INIT;
+    desc.owner_id = owner_id;
+    desc.owner_role = owner_role;
+    desc.generation = generation;
+    struct ged_result_scene *scene =
+	ged_result_begin(view_ctx, &desc);
+    if (!scene) {
+	if (remove_prefix && remove_prefix[0])
+	    (void)ged_view_feature_remove_prefix(view_ctx,
+		    remove_prefix);
+	if (!points || !point_count)
+	    return ged_view_feature_remove(view_ctx, name) ?
+		BRLCAD_OK : BRLCAD_ERROR;
+	return ged_annotation_lines_replace(view_ctx, name, 0,
+		points, cmds, point_count, &publish_style) ?
+	    BRLCAD_OK : BRLCAD_ERROR;
+    }
+
+    if (remove_prefix && remove_prefix[0])
+	(void)ged_result_features_remove_prefix(scene,
+		remove_prefix);
+
+    const int published = ged_result_line_set_replace(scene,
+	    name, points, cmds, point_count, &publish_style);
+    int metadata_published = 1;
+    if (published && points && point_count) {
+	char point_count_buf[64] = {0};
+	char generation_buf[64] = {0};
+	snprintf(point_count_buf, sizeof(point_count_buf), "%zu",
+		point_count);
+	if (generation)
+	    snprintf(generation_buf, sizeof(generation_buf), "%llu",
+		    (unsigned long long)generation);
+	struct ged_result_metadata metadata[6];
+	size_t metadata_count = 0;
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.feature", name);
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.format", "line-set");
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.point_count", point_count_buf);
+	if (owner_id && owner_id[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.owner", owner_id);
+	if (result_kind && result_kind[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.kind", result_kind);
+	if (generation_buf[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.generation", generation_buf);
+	metadata_published =
+	    ged_result_feature_metadata_replace(scene, name,
+		    metadata, metadata_count);
+    }
+
+    if (published && metadata_published &&
+	    ged_result_commit(scene))
+	return BRLCAD_OK;
+    if (!published || !metadata_published)
+	ged_result_abort(scene);
+    return BRLCAD_ERROR;
+}
+
+extern "C" int
+_ged_indexed_face_set_publish_command_scene_feature(struct ged *gedp,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const vect_t *normals,
+	size_t normal_count,
+	const int *indices,
+	size_t index_count,
+	const struct ged_view_feature_style *style,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    if (!gedp || !name)
+	return BRLCAD_ERROR;
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return BRLCAD_ERROR;
+
+    struct ged_view_feature_style publish_style =
+	GED_VIEW_FEATURE_STYLE_INIT;
+    if (style)
+	publish_style = *style;
+    if (publish_style.visible < 0)
+	publish_style.visible = 1;
+    if (publish_style.selectable < 0)
+	publish_style.selectable = 1;
+
+    struct ged_result_desc desc =
+	GED_RESULT_SCENE_DESC_INIT;
+    desc.owner_id = owner_id;
+    desc.owner_role = owner_role;
+    desc.generation = generation;
+    struct ged_result_scene *scene =
+	ged_result_begin(view_ctx, &desc);
+    if (!scene) {
+	if (remove_prefix && remove_prefix[0])
+	    (void)ged_view_feature_remove_prefix(view_ctx,
+		    remove_prefix);
+	if (!points || !point_count || !indices || !index_count)
+	    return ged_view_feature_remove(view_ctx, name) ?
+		BRLCAD_OK : BRLCAD_ERROR;
+	return ged_view_feature_indexed_face_set_replace(view_ctx, name, 0,
+		points, point_count, normals, normal_count, indices,
+		index_count, &publish_style) ? BRLCAD_OK : BRLCAD_ERROR;
+    }
+
+    if (remove_prefix && remove_prefix[0])
+	(void)ged_result_features_remove_prefix(scene,
+		remove_prefix);
+
+    const int published = ged_result_indexed_face_set_replace(scene,
+	    name, points, point_count, normals, normal_count, indices,
+	    index_count, &publish_style);
+    int metadata_published = 1;
+    if (published && points && point_count && indices && index_count) {
+	char point_count_buf[64] = {0};
+	char normal_count_buf[64] = {0};
+	char index_count_buf[64] = {0};
+	char generation_buf[64] = {0};
+	snprintf(point_count_buf, sizeof(point_count_buf), "%zu",
+		point_count);
+	snprintf(normal_count_buf, sizeof(normal_count_buf), "%zu",
+		normal_count);
+	snprintf(index_count_buf, sizeof(index_count_buf), "%zu",
+		index_count);
+	if (generation)
+	    snprintf(generation_buf, sizeof(generation_buf), "%llu",
+		    (unsigned long long)generation);
+	struct ged_result_metadata metadata[8];
+	size_t metadata_count = 0;
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.feature", name);
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.format", "indexed-face-set");
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.point_count", point_count_buf);
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.normal_count", normal_count_buf);
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.index_count", index_count_buf);
+	if (owner_id && owner_id[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.owner", owner_id);
+	if (result_kind && result_kind[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.kind", result_kind);
+	if (generation_buf[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.generation", generation_buf);
+	metadata_published =
+	    ged_result_feature_metadata_replace(scene, name,
+		    metadata, metadata_count);
+    }
+
+    if (published && metadata_published &&
+	    ged_result_commit(scene))
+	return BRLCAD_OK;
+    if (!published || !metadata_published)
+	ged_result_abort(scene);
+    return BRLCAD_ERROR;
+}
+
+extern "C" int
+_ged_command_scene_features_remove_prefix(struct ged *gedp,
+	const char *prefix,
+	const char *owner_id,
+	const char *owner_role,
+	uint64_t generation)
+{
+    if (!gedp || !prefix || !prefix[0])
+	return BRLCAD_ERROR;
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return BRLCAD_ERROR;
+
+    struct ged_result_desc desc =
+	GED_RESULT_SCENE_DESC_INIT;
+    desc.owner_id = owner_id;
+    desc.owner_role = owner_role;
+    desc.generation = generation;
+    struct ged_result_scene *scene =
+	ged_result_begin(view_ctx, &desc);
+    if (!scene) {
+	(void)ged_view_feature_remove_prefix(view_ctx, prefix);
+	return BRLCAD_OK;
+    }
+
+    (void)ged_result_features_remove_prefix(scene, prefix);
+    return ged_result_commit(scene) ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
+
+extern "C" int
+_ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
+	FILE *fp,
+	const char *name,
+	double char_size,
+	int mode,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    if (!gedp || !fp || !name || !ged_view_active_ctx(gedp))
+	return BRLCAD_ERROR;
+
+    struct ged_uplot_stream ctx;
+    ged_uplot_builder_init(&ctx, char_size, mode);
+
+    int ret = ged_uplot_parse_stream(&ctx, fp);
+    if (ret == BRLCAD_OK)
+	ret = ged_uplot_publish_command_scene_feature(gedp, &ctx, name,
+		owner_id, owner_role, remove_prefix, result_kind,
+		generation);
+
+    ged_uplot_builder_free(&ctx);
+    return ret;
+}
+
+extern "C" int
+_ged_draw_uplot_files_to_command_scene_feature(
+	struct ged *gedp,
+	const char * const *files,
+	size_t file_count,
+	const char *name,
+	double char_size,
+	int mode,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    if (!gedp || !files || !file_count || !name || !ged_view_active_ctx(gedp))
+	return BRLCAD_ERROR;
+
+    struct ged_uplot_stream ctx;
+    ged_uplot_builder_init(&ctx, char_size, mode);
+
+    int ret = BRLCAD_OK;
+    for (size_t i = 0; i < file_count; i++) {
+	FILE *fp = fopen(files[i], "rb");
+	if (!fp) {
+	    if (gedp->ged_result_str)
+		bu_vls_printf(gedp->ged_result_str, "failed to open plot file - %s\n", files[i]);
+	    ret = BRLCAD_ERROR;
+	    break;
+	}
+	ret = ged_uplot_parse_stream(&ctx, fp);
+	fclose(fp);
+	if (ret != BRLCAD_OK)
+	    break;
+    }
+
+    if (ret == BRLCAD_OK)
+	ret = ged_uplot_publish_command_scene_feature(gedp, &ctx, name,
+		owner_id, owner_role, remove_prefix, result_kind,
+		generation);
+
+    ged_uplot_builder_free(&ctx);
+    return ret;
+}
+
+extern "C" struct ged_uplot_stream *
+_ged_uplot_stream_create(double char_size, int mode)
+{
+    struct ged_uplot_stream *stream = NULL;
+    BU_GET(stream, struct ged_uplot_stream);
+    ged_uplot_builder_init(stream, char_size, mode);
+    return stream;
+}
+
+extern "C" int
+_ged_uplot_stream_process(struct ged_uplot_stream *stream, FILE *fp, int command)
+{
+    if (!stream || !fp)
+	return BRLCAD_ERROR;
+    return (ged_uplot_process_value(stream, fp, command) == 0) ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
+extern "C" int
+_ged_uplot_stream_publish_command_scene_feature(struct ged *gedp,
+	struct ged_uplot_stream *stream,
+	const char *name,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    return ged_uplot_publish_command_scene_feature(gedp, stream, name,
+	    owner_id, owner_role, remove_prefix, result_kind, generation);
+}
+
+extern "C" void
+_ged_uplot_stream_free(struct ged_uplot_stream *stream)
+{
+    if (!stream)
+	return;
+    ged_uplot_builder_free(stream);
+    BU_PUT(stream, struct ged_uplot_stream);
 }
 
 /* print a message to let the user know they need to quit their
@@ -1678,14 +2936,23 @@ void
 _ged_rt_set_eye_model(struct ged *gedp,
 		      vect_t eye_model)
 {
-    if (gedp->ged_gvp->gv_s->gv_zclip || gedp->ged_gvp->gv_perspective > 0) {
+    struct ged_view_context *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx)
+	return;
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    if (bv_zclip_get(view) ||
+	    bv_perspective_get(view) > 0) {
+	mat_t view2model;
 	vect_t temp;
 
+	bv_view2model_get(view2model, view);
 	VSET(temp, 0.0, 0.0, 1.0);
-	MAT4X3PNT(eye_model, gedp->ged_gvp->gv_view2model, temp);
+	MAT4X3PNT(eye_model, view2model, temp);
     } else {
 	/* not doing zclipping, so back out of geometry */
 	int i;
+	mat_t view_center;
+	mat_t view_rotation;
 	vect_t direction;
 	vect_t extremum[2];
 	double t_in;
@@ -1693,31 +2960,89 @@ _ged_rt_set_eye_model(struct ged *gedp,
 	vect_t diag2;
 	point_t ecenter;
 
-	VSET(eye_model, -gedp->ged_gvp->gv_center[MDX],
-	     -gedp->ged_gvp->gv_center[MDY], -gedp->ged_gvp->gv_center[MDZ]);
+	bv_center_mat_get(view_center, view);
+	bv_rotation_get(view_rotation, view);
+	MAT_DELTAS_GET_NEG(eye_model, view_center);
 
 	for (i = 0; i < 3; ++i) {
 	    extremum[0][i] = INFINITY;
 	    extremum[1][i] = -INFINITY;
 	}
 
-	if (gedp->new_cmd_forms) {
-	    VSETALL(extremum[0],  INFINITY);
-	    VSETALL(extremum[1], -INFINITY);
-	    struct bu_ptbl *db_objs = bv_view_objs(gedp->ged_gvp, BV_DB_OBJS);
-	    if (db_objs)
-		(void)scene_bounding_sph(db_objs, &(extremum[0]), &(extremum[1]), 1);
-	    struct bu_ptbl *local_db_objs = bv_view_objs(gedp->ged_gvp, BV_DB_OBJS | BV_LOCAL_OBJS);
-	    if (local_db_objs)
-		(void)scene_bounding_sph(local_db_objs, &(extremum[0]), &(extremum[1]), 1);
-	} else {
-	    (void)dl_bounding_sph(gedp->i->ged_gdp->gd_headDisplay, &(extremum[0]), &(extremum[1]), 1);
+	BObolSceneController *scene = ged_bobol_scene(gedp);
+	SbBox3f bounds;
+	bounds.makeEmpty();
+	int have_finite_bounds = 0;
+	if (scene && scene->getDatabaseSourceBounds(bounds, TRUE) &&
+	    !bounds.isEmpty() &&
+	    std::isfinite(bounds.getMin()[0]) &&
+	    std::isfinite(bounds.getMin()[1]) &&
+	    std::isfinite(bounds.getMin()[2]) &&
+	    std::isfinite(bounds.getMax()[0]) &&
+	    std::isfinite(bounds.getMax()[1]) &&
+	    std::isfinite(bounds.getMax()[2])) {
+	    const SbVec3f bmin = bounds.getMin();
+	    const SbVec3f bmax = bounds.getMax();
+	    VSET(extremum[0], bmin[0], bmin[1], bmin[2]);
+	    VSET(extremum[1], bmax[0], bmax[1], bmax[2]);
+	    have_finite_bounds = 1;
 	}
 
-	VMOVEN(direction, gedp->ged_gvp->gv_rotation + 8, 3);
+	/* A coarse-first draw may launch rt before its first leaf bounds have
+	 * reached the retained scene.  An explicit raytrace is already a
+	 * heavyweight operation, so it is both safe and necessary to resolve
+	 * the displayed database paths synchronously here.  Without this
+	 * fallback the infinite sentinels below produce a NaN eye point and a
+	 * valid model raytraces as an empty frame. */
+	if (!have_finite_bounds && gedp->dbip) {
+	    const size_t requested_count = ged_who_argc(gedp);
+	    std::vector<char *> displayed(requested_count + 1, NULL);
+	    const int displayed_count = requested_count ?
+		ged_who_argv(gedp, displayed.data(),
+		    (const char **)(displayed.data() + displayed.size())) : 0;
+	    struct bu_vls messages = BU_VLS_INIT_ZERO;
+	    point_t db_min;
+	    point_t db_max;
+	    if (displayed_count > 0 &&
+		rt_obj_bounds(&messages, gedp->dbip, displayed_count,
+		    (const char **)displayed.data(), 0, db_min, db_max) ==
+		    BRLCAD_OK &&
+		std::isfinite(db_min[0]) && std::isfinite(db_min[1]) &&
+		std::isfinite(db_min[2]) && std::isfinite(db_max[0]) &&
+		std::isfinite(db_max[1]) && std::isfinite(db_max[2])) {
+		VMOVE(extremum[0], db_min);
+		VMOVE(extremum[1], db_max);
+		have_finite_bounds = 1;
+	    }
+	    bu_vls_free(&messages);
+	    for (char *path : displayed)
+		if (path)
+		    bu_free(path, "ged who argv path");
+	}
+
+	/* Malformed/infinite geometry must not be allowed to poison the rt
+	 * control stream.  Retain the user's center and use the finite view size
+	 * as a conservative last resort. */
+	if (!have_finite_bounds) {
+	    fastf_t extent = bv_size_get(view);
+	    if (!std::isfinite(extent) || extent <= SMALL_FASTF)
+		extent = 1.0;
+	    extent *= 0.5;
+	    VSET(extremum[0], eye_model[X] - extent,
+		eye_model[Y] - extent, eye_model[Z] - extent);
+	    VSET(extremum[1], eye_model[X] + extent,
+		eye_model[Y] + extent, eye_model[Z] + extent);
+	}
+
+	VMOVEN(direction, view_rotation + 8, 3);
 	for (i = 0; i < 3; ++i)
 	    if (NEAR_ZERO(direction[i], 1e-10))
 		direction[i] = 0.0;
+	if (!std::isfinite(direction[0]) ||
+	    !std::isfinite(direction[1]) ||
+	    !std::isfinite(direction[2]) ||
+	    VNEAR_ZERO(direction, SMALL_FASTF))
+	    VSET(direction, 0.0, 0.0, 1.0);
 
 	VSUB2(diag1, extremum[1], extremum[0]);
 	VADD2(ecenter, extremum[1], extremum[0]);
@@ -1728,12 +3053,64 @@ _ged_rt_set_eye_model(struct ged *gedp,
     }
 }
 
+/* Finalize an rt subprocess: wait for it, fire notify/end_clbk, and
+ * release the ged_subprocess struct.  This MUST be called on the GUI
+ * (main) thread for hosts that use a worker-thread IO listener (qged),
+ * because rrtp->end_clbk typically mutates Qt widgets (e.g. toolbar
+ * actions in QgViewCtrl).  For synchronous hosts (tclcad/gsh) the
+ * caller is already on the main thread, so this is a no-op distinction
+ * there.
+ */
+static void
+_ged_rt_finalize(struct ged_subprocess *rrtp)
+{
+    struct ged *gedp = rrtp->gedp;
+
+    /* Either EOF has been sent or there was a read error;
+     * there is no need to block indefinitely. */
+    bu_log("_ged_rt_finalize: waiting for rt pid=%d (timeout=120s)\n",
+	   rrtp->p ? bu_process_pid(rrtp->p) : -1);
+    int retcode = bu_process_wait_n(&rrtp->p, 120);
+    int aborted = (retcode == ERROR_PROCESS_ABORTED);
+
+    if (aborted)
+	bu_log("Raytrace aborted.\n");
+    else if (retcode)
+	bu_log("Raytrace failed.\n");
+    else
+	bu_log("Raytrace complete.\n");
+
+    /* Phase A2 (ert reliability): drop any IPC fbserv client(s) attached
+     * to this ged's fbserv now that rt has exited.  Without this, the
+     * close of the rt-side IPC pipe is only observed asynchronously
+     * (next QSocketNotifier::activated edge), which can leave
+     * if_active_clients > 0 across this ert boundary — defeating the
+     * deferred-resize finalization in imgstream's drop_client and
+     * potentially racing with the next ert's fbs_open_ipc.  In qged,
+     * IPC fbserv clients are created exclusively by libged/dm/ert.cpp
+     * via fbs_open_ipc(), so it is safe to drop every IPC slot here.
+     * fbs_drop_ipc_clients invokes the registered close handler for each
+     * slot, which uses deleteLater() in qged for safe async tear-down on the
+     * GUI thread (see comment above _ged_rt_finalize). */
+    if (gedp->ged_fbs)
+	(void)fbs_drop_ipc_clients(gedp->ged_fbs);
+
+    if (gedp->i->ged_gdp->gd_rtCmdNotify != (void (*)(int))0)
+	gedp->i->ged_gdp->gd_rtCmdNotify(aborted);
+
+    if (rrtp->end_clbk)
+	rrtp->end_clbk(0, NULL, &aborted, rrtp->end_clbk_data);
+
+    /* free rrtp */
+    bu_ptbl_rm(&gedp->ged_subp, (long *)rrtp);
+    BU_PUT(rrtp, struct ged_subprocess);
+}
+
 void
 _ged_rt_output_handler2(void *clientData, int type)
 {
     struct ged_subprocess *rrtp = (struct ged_subprocess *)clientData;
     int count = 0;
-    int retcode = 0;
     int read_failed_stderr = 0;
     int read_failed_stdout = 0;
     char line[RT_MAXLINE+1] = {0};
@@ -1745,6 +3122,16 @@ _ged_rt_output_handler2(void *clientData, int type)
 
     struct ged *gedp = rrtp->gedp;
 
+    /* type == -1 is the canonical "finalize on the GUI thread" entry,
+     * dispatched by hosts (qged's QgConsole::detach) once all per-stream
+     * listeners for this subprocess have been retired.  Just finalize and
+     * return; do not attempt any more reads.
+     */
+    if (type == -1) {
+	_ged_rt_finalize(rrtp);
+	return;
+    }
+
     /* Get data from rt */
     if (rrtp->stderr_active && (count = bu_process_read_n(rrtp->p, BU_PROCESS_STDERR, RT_MAXLINE, (char *)line)) <= 0) {
 	read_failed_stderr = 1;
@@ -1754,49 +3141,36 @@ _ged_rt_output_handler2(void *clientData, int type)
     }
 
     if (read_failed_stderr || read_failed_stdout) {
-	/* Done watching for output, undo subprocess I/O hooks. */
-	if (type != -1 && gedp->ged_delete_io_handler) {
-
-	    if (rrtp->stdin_active || rrtp->stdout_active || rrtp->stderr_active) {
-		// If anyone else is still listening, we're not done yet.
-		if (rrtp->stdin_active) {
-		    (*gedp->ged_delete_io_handler)(rrtp, BU_PROCESS_STDIN);
-		    return;
-		}
-		if (rrtp->stdout_active) {
-		    (*gedp->ged_delete_io_handler)(rrtp, BU_PROCESS_STDOUT);
-		    return;
-		}
-		if (rrtp->stderr_active) {
-		    (*gedp->ged_delete_io_handler)(rrtp, BU_PROCESS_STDERR);
-		    return;
-		}
-	    }
-
-	    return;
+	/* Done watching for output on whichever stream just hit EOF /
+	 * a read error.  Detach that single stream listener; do *not*
+	 * touch any other stream's listener here (each stream's worker
+	 * thread will handle its own EOF in turn).
+	 *
+	 * For synchronous hosts (tclcad/gsh) ged_delete_io_handler
+	 * clears the stream-active flag inline before returning, so by
+	 * the time control returns here all streams may already be
+	 * inactive and we can finalize on the spot (we are on the main
+	 * thread).  For asynchronous hosts (qged) ged_delete_io_handler
+	 * only disconnects the QSocketNotifier; the stream-active flag
+	 * is cleared later, on the GUI thread, by QgConsole::detach,
+	 * which then re-enters this function with type == -1 to
+	 * finalize.  In that case we must NOT finalize here, because we
+	 * are running on a worker thread.
+	 */
+	if (gedp->ged_delete_io_handler) {
+	    bu_process_io_t failed = read_failed_stderr ? BU_PROCESS_STDERR : BU_PROCESS_STDOUT;
+	    (*gedp->ged_delete_io_handler)(rrtp, failed);
+	} else {
+	    if (read_failed_stderr) rrtp->stderr_active = 0;
+	    if (read_failed_stdout) rrtp->stdout_active = 0;
 	}
 
-	/* Either EOF has been sent or there was a read error.
-	 * there is no need to block indefinitely */
-	retcode = bu_process_wait_n(&rrtp->p, 120);
-	int aborted = (retcode == ERROR_PROCESS_ABORTED);
-
-	if (aborted)
-	    bu_log("Raytrace aborted.\n");
-	else if (retcode)
-	    bu_log("Raytrace failed.\n");
-	else
-	    bu_log("Raytrace complete.\n");
-
-	if (gedp->i->ged_gdp->gd_rtCmdNotify != (void (*)(int))0)
-	    gedp->i->ged_gdp->gd_rtCmdNotify(aborted);
-
-	if (rrtp->end_clbk)
-	    rrtp->end_clbk(0, NULL, &aborted, rrtp->end_clbk_data);
-
-	/* free rrtp */
-	bu_ptbl_rm(&gedp->ged_subp, (long *)rrtp);
-	BU_PUT(rrtp, struct ged_subprocess);
+	/* If all streams are now inactive synchronously (no async
+	 * delete_io_handler in effect), finalize here.  Otherwise the
+	 * type == -1 re-entry will finalize on the GUI thread.
+	 */
+	if (!rrtp->stdin_active && !rrtp->stdout_active && !rrtp->stderr_active)
+	    _ged_rt_finalize(rrtp);
 
 	return;
     }
@@ -1812,149 +3186,80 @@ _ged_rt_output_handler2(void *clientData, int type)
 
 }
 
-static int
-ged_rt_output_handler_helper(struct ged_subprocess* rrtp, bu_process_io_t type)
-{
-    int active = 0;
-    int count = 0;
-    char line[RT_MAXLINE+1] = {0};
-
-    if (type == BU_PROCESS_STDERR) active = rrtp->stderr_active;
-    if (type == BU_PROCESS_STDOUT) active = rrtp->stdout_active;
-
-    if (active && (count = bu_process_read_n(rrtp->p, type, RT_MAXLINE, (char *)line)) <= 0) {
-	/* Done watching for output or a bad read, undo subprocess I/O hooks. */
-	struct ged *gedp = rrtp->gedp;
-	if (gedp->ged_delete_io_handler) {
-	    (*gedp->ged_delete_io_handler)(rrtp, type);
-	} else {
-	    if (type == BU_PROCESS_STDERR) rrtp->stderr_active = 0;
-	    if (type == BU_PROCESS_STDOUT) rrtp->stdout_active = 0;
-	}
-
-	return 1;
-    }
-
-
-    /* for feelgoodedness */
-    line[count] = '\0';
-
-    /* handle (i.e., probably log to stderr) the resulting line */
-    if (rrtp->gedp->ged_output_handler != (void (*)(struct ged *, char *))0)
-	ged_output_handler_cb(rrtp->gedp, line);
-    else
-	bu_vls_printf(rrtp->gedp->ged_result_str, "%s", line);
-
-    return 0;
-}
-
 void
 _ged_rt_output_handler(void *clientData, int mask)
 {
-    struct ged_subprocess *rrtp = (struct ged_subprocess *)clientData;
-    if ((rrtp == (struct ged_subprocess *)NULL) || (rrtp->gedp == (struct ged *)NULL))
-	return;
-
-    BU_CKMAG(rrtp, GED_CMD_MAGIC, "ged subprocess");
-
-    struct ged *gedp = rrtp->gedp;
-    if (gedp->new_cmd_forms) {
-	_ged_rt_output_handler2(clientData, mask);
-	return;
-    }
-
-    /* Get data from rt */
-    if (ged_rt_output_handler_helper(rrtp, BU_PROCESS_STDERR) || ged_rt_output_handler_helper(rrtp, BU_PROCESS_STDOUT)) {
-	/* don't fully clean up until we mark each stream inactive */
-	if (rrtp->stderr_active || rrtp->stdout_active)
-	    return;
-
-	int retcode = 0;
-
-	/* Either EOF has been sent or there was a read error.
-	 * there is no need to block indefinitely */
-	retcode = bu_process_wait_n(&rrtp->p, 120);
-	int aborted = (retcode == ERROR_PROCESS_ABORTED);
-
-	if (aborted)
-	    bu_log("Raytrace aborted.\n");
-	else if (retcode)
-	    bu_log("Raytrace failed.\n");
-	else
-	    bu_log("Raytrace complete.\n");
-
-	if (gedp->i->ged_gdp->gd_rtCmdNotify != (void (*)(int))0)
-	    gedp->i->ged_gdp->gd_rtCmdNotify(aborted);
-
-	if (rrtp->end_clbk)
-	    rrtp->end_clbk(0, NULL, &aborted, rrtp->end_clbk_data);
-
-	/* free rrtp */
-	bu_ptbl_rm(&gedp->ged_subp, (long *)rrtp);
-	BU_PUT(rrtp, struct ged_subprocess);
-
-	return;
-    }
+    _ged_rt_output_handler2(clientData, mask);
 }
 
 
 static void
-dl_bitwise_and_fullpath(struct bu_list *hdlp, int flag_val)
+dl_bitwise_and_fullpath(struct ged *gedp, int flag_val)
 {
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
-    size_t i;
-    struct bv_scene_obj *sp;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!gedp || !gedp->dbip || !controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
+	return;
 
-    gdlp = BU_LIST_NEXT(display_list, hdlp);
-    while (BU_LIST_NOT_HEAD(gdlp, hdlp)) {
-        next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-        for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    if (!sp->s_u_data)
-		continue;
-	    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-
-	    for (i = 0; i < bdata->s_fullpath.fp_len; i++) {
-                DB_FULL_PATH_GET(&bdata->s_fullpath, i)->d_flags &= flag_val;
-	    }
-        }
-
-        gdlp = next_gdlp;
+    SoBRLExportAction export_action;
+    export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+    export_action.apply(controller->getViewport()->getRoot());
+    std::vector<SoBRLExportAction::ObjectRecord> records;
+    export_action.collectObjectRecords(records,
+	SoBRLExportAction::QUERY_VISIBLE_ONLY |
+	SoBRLExportAction::QUERY_DATABASE_OBJECTS);
+    for (const SoBRLExportAction::ObjectRecord &record : records) {
+	if (!record.databaseIntent || record.path.getLength() == 0)
+	    continue;
+	struct db_full_path fp;
+	db_full_path_init(&fp);
+	if (db_string_to_path(&fp, gedp->dbip,
+		record.path.getString()) < 0) {
+	    db_free_full_path(&fp);
+	    continue;
+	}
+	for (size_t i = 0; i < fp.fp_len; i++)
+	    DB_FULL_PATH_GET(&fp, i)->d_flags &= flag_val;
+	db_free_full_path(&fp);
     }
 }
 
-
-
 static void
-dl_write_animate(struct bu_list *hdlp, FILE *fp)
+dl_write_animate(struct ged *gedp, FILE *fp)
 {
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
-    size_t i;
-    struct bv_scene_obj *sp;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!gedp || !gedp->dbip || !fp || !controller ||
+	!controller->getViewport() || !controller->getViewport()->getRoot())
+	return;
 
-    gdlp = BU_LIST_NEXT(display_list, hdlp);
-    while (BU_LIST_NOT_HEAD(gdlp, hdlp)) {
-        next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-        for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    if (!sp->s_u_data)
+    SoBRLExportAction export_action;
+    export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+    export_action.apply(controller->getViewport()->getRoot());
+    std::vector<SoBRLExportAction::ObjectRecord> records;
+    export_action.collectObjectRecords(records,
+	SoBRLExportAction::QUERY_VISIBLE_ONLY |
+	SoBRLExportAction::QUERY_DATABASE_OBJECTS);
+    for (const SoBRLExportAction::ObjectRecord &record : records) {
+	if (!record.databaseIntent || record.path.getLength() == 0)
+	    continue;
+	struct db_full_path path;
+	db_full_path_init(&path);
+	if (db_string_to_path(&path, gedp->dbip,
+		record.path.getString()) < 0) {
+	    db_free_full_path(&path);
+	    continue;
+	}
+	for (size_t i = 0; i < path.fp_len; i++) {
+	    if (DB_FULL_PATH_GET(&path, i)->d_flags & RT_DIR_USED)
 		continue;
-	    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-
-	    for (i = 0; i < bdata->s_fullpath.fp_len; i++) {
-                if (!(DB_FULL_PATH_GET(&bdata->s_fullpath, i)->d_flags & RT_DIR_USED)) {
-		    struct animate *anp;
-                    for (anp = DB_FULL_PATH_GET(&bdata->s_fullpath, i)->d_animate; anp; anp=anp->an_forw) {
-			db_write_anim(fp, anp);
-		    }
-                    DB_FULL_PATH_GET(&bdata->s_fullpath, i)->d_flags |= RT_DIR_USED;
-		}
-	    }
-        }
-
-        gdlp = next_gdlp;
+	    for (struct animate *anp = DB_FULL_PATH_GET(&path, i)->d_animate;
+		 anp; anp = anp->an_forw)
+		db_write_anim(fp, anp);
+	    DB_FULL_PATH_GET(&path, i)->d_flags |= RT_DIR_USED;
+	}
+	db_free_full_path(&path);
     }
 }
 
@@ -1966,6 +3271,11 @@ _ged_rt_write(struct ged *gedp,
 	      const char **argv)
 {
     quat_t quat;
+    struct ged_view_context *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx)
+	return;
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
 
     /* Double-precision IEEE floating point only guarantees 15-17
      * digits of precision; single-precision only 6-9 significant
@@ -1976,8 +3286,8 @@ _ged_rt_write(struct ged *gedp,
      * from 9->14 "should" be safe as it's above our calculation
      * tolerance and above single-precision capability.
      */
-    fprintf(fp, "viewsize %.14e;\n", gedp->ged_gvp->gv_size);
-    quat_mat2quat(quat, gedp->ged_gvp->gv_rotation);
+    bv_orientation_quat_get(quat, view);
+    fprintf(fp, "viewsize %.14e;\n", bv_size_get(view));
     fprintf(fp, "orientation %.14e %.14e %.14e %.14e;\n", V4ARGS(quat));
     fprintf(fp, "eye_pt %.14e %.14e %.14e;\n",
 		  eye_model[X], eye_model[Y], eye_model[Z]);
@@ -1993,23 +3303,19 @@ _ged_rt_write(struct ged *gedp,
      * remove the -1 case.) */
     if (argc >= 0) {
 	if (!argc) {
-	    if (gedp->new_cmd_forms) {
-		DbiState *dbis = (DbiState *)gedp->dbi_state;
-		BViewState *bvs = dbis->get_view_state(gedp->ged_gvp);
-		if (bvs) {
-		    std::vector<std::string> drawn_paths = bvs->list_drawn_paths(-1, true);
-		    for (size_t i = 0; i < drawn_paths.size(); i++) {
-			fprintf(fp, "draw %s;\n", drawn_paths[i].c_str());
-		    }
-		}
-	    } else {
-		struct display_list *gdlp;
-		for (BU_LIST_FOR(gdlp, display_list, gedp->i->ged_gdp->gd_headDisplay)) {
-		    if (((struct directory *)gdlp->dl_dp)->d_addr == RT_DIR_PHONY_ADDR)
-			continue;
-		    fprintf(fp, "draw %s;\n", bu_vls_addr(&gdlp->dl_path));
-		}
+	    struct bu_vls paths = BU_VLS_INIT_ZERO;
+	    (void)_ged_bobol_path_list(gedp, view_ctx, 0, &paths);
+	    const char *path = bu_vls_cstr(&paths);
+	    while (path && *path) {
+		const char *nl = strchr(path, '\n');
+		size_t len = nl ? (size_t)(nl - path) : strlen(path);
+		if (len > 0)
+		    fprintf(fp, "draw %.*s;\n", (int)len, path);
+		if (!nl)
+		    break;
+		path = nl + 1;
 	    }
+	    bu_vls_free(&paths);
 	} else {
 	    int i = 0;
 	    while (i < argc) {
@@ -2020,11 +3326,11 @@ _ged_rt_write(struct ged *gedp,
 	fprintf(fp, "prep;\n");
     }
 
-    dl_bitwise_and_fullpath(gedp->i->ged_gdp->gd_headDisplay, ~RT_DIR_USED);
+    dl_bitwise_and_fullpath(gedp, ~RT_DIR_USED);
 
-    dl_write_animate(gedp->i->ged_gdp->gd_headDisplay, fp);
+    dl_write_animate(gedp, fp);
 
-    dl_bitwise_and_fullpath(gedp->i->ged_gdp->gd_headDisplay, ~RT_DIR_USED);
+    dl_bitwise_and_fullpath(gedp, ~RT_DIR_USED);
 
     fprintf(fp, "end;\n");
 }
@@ -2086,6 +3392,15 @@ ged_get_object_selections(struct ged *gedp, const char *object_name)
 {
     struct rt_object_selections *obj_selections;
 
+    if (!gedp || !object_name || !object_name[0])
+	return NULL;
+
+    if (!gedp->ged_selections)
+	gedp->ged_selections = bu_hash_create(0);
+
+    if (!gedp->ged_selections)
+	return NULL;
+
     obj_selections = (struct rt_object_selections *)bu_hash_get(gedp->ged_selections, (uint8_t *)object_name, strlen(object_name));
 
     if (!obj_selections) {
@@ -2104,7 +3419,13 @@ ged_get_selection_set(struct ged *gedp, const char *object_name, const char *sel
     struct rt_object_selections *obj_selections;
     struct rt_selection_set *set;
 
+    if (!selection_name || !selection_name[0])
+	return NULL;
+
     obj_selections = ged_get_object_selections(gedp, object_name);
+    if (!obj_selections || !obj_selections->sets)
+	return NULL;
+
     set = (struct rt_selection_set *)bu_hash_get(obj_selections->sets, (uint8_t *)selection_name, strlen(selection_name));
     if (!set) {
 	BU_ALLOC(set, struct rt_selection_set);
@@ -2177,6 +3498,7 @@ _ged_combadd2(struct ged *gedp,
     size_t actual_count;
     size_t curr_count;
     int i;
+    int created_comb = 0;
 
     if (argc < 1)
 	return BRLCAD_ERROR;
@@ -2197,7 +3519,13 @@ _ged_combadd2(struct ged *gedp,
 	intern.idb_type = ID_COMBINATION;
 	intern.idb_meth = &OBJ[ID_COMBINATION];
 
-	GED_DB_DIRADD(gedp, dp, combname, -1, 0, flags, (void *)&intern.idb_type, 0);
+	dp = db_diradd(gedp->dbip, combname, -1, 0, flags,
+		(void *)&intern.idb_type);
+	if (dp == RT_DIR_NULL) {
+	    bu_vls_printf(gedp->ged_result_str, "Unable to add %s to the database.", combname);
+	    return BRLCAD_ERROR;
+	}
+	created_comb = 1;
 
 	BU_ALLOC(comb, struct rt_comb_internal);
 	RT_COMB_INTERNAL_INIT(comb);
@@ -2305,12 +3633,27 @@ addmembers:
     comb->tree = (union tree *)db_mkgift_tree(tree_list, node_count);
 
     /* and finally, write it out */
-    GED_DB_PUT_INTERN(gedp, dp, &intern, 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
+	bu_vls_printf(gedp->ged_result_str, "Database write failure.");
+	if (event_batch_opened)
+	    ged_event_batch_end(gedp, NULL);
+	bu_free((char *)tree_list, "combadd: tree_list");
+	rt_db_free_internal(&intern);
+	return BRLCAD_ERROR;
+    }
 
     bu_free((char *)tree_list, "combadd: tree_list");
 
     /* Done changing stuff - update nref. */
     db_update_nref(gedp->dbip);
+
+    if (created_comb)
+	(void)ged_event_notify_object_added(gedp, combname, NULL);
+    else
+	(void)ged_event_notify_comb_tree_changed(gedp, combname, 1, NULL);
+    if (event_batch_opened)
+	ged_event_batch_end(gedp, NULL);
 
     return BRLCAD_OK;
 }
@@ -2532,12 +3875,12 @@ _ged_characterize_pathspec(struct bu_vls *normalized, struct ged *gedp, const ch
 
 #endif
 
-struct display_list *
-ged_dl(struct ged *gedp)
+int
+ged_draw_scene_available(struct ged *gedp)
 {
-    if (!gedp || !gedp->i || !gedp->i->ged_gdp)
-	return NULL;
-    return (struct display_list *)gedp->i->ged_gdp->gd_headDisplay;
+    if (!ged_draw_group_ref_is_null(ged_scene_root_group_ref(gedp)))
+	return 1;
+    return ged_view_active_ctx(gedp) ? 1 : 0;
 }
 
 void

@@ -1,0 +1,71 @@
+/* D R A W _ S O U R C E . H
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ *
+ * This library is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 2.1.
+ */
+/** @file ged/draw_source.h */
+
+#ifndef GED_DRAW_SOURCE_H
+#define GED_DRAW_SOURCE_H
+
+#include "common.h"
+#include "ged/draw_types.h"
+
+__BEGIN_DECLS
+
+GED_EXPORT extern int
+ged_draw_source_mark_changed(struct ged *gedp,
+			      const char *path,
+			      ged_draw_stale_reason reason);
+
+GED_EXPORT extern int
+ged_draw_source_apply_update(struct ged *gedp,
+			       const char *path,
+			       int removed,
+			       int redraw);
+
+GED_EXPORT extern const char *
+ged_draw_source_stale_reason_name(ged_draw_stale_reason reason);
+
+/**
+ * Return non-zero when @p gedp has an initialized draw scene.
+ */
+
+GED_EXPORT extern int
+ged_draw_source_snapshot(
+    struct ged *gedp,
+    ged_draw_shape_ref ref,
+    struct ged_draw_shape_source_snapshot *out);
+
+
+GED_EXPORT extern int
+ged_draw_source_node_summary(struct ged *gedp,
+	ged_scene_node_ref node,
+	struct ged_draw_database_source_summary *out);
+
+GED_EXPORT extern int
+ged_draw_source_lod_policy_get(
+    ged_draw_source_lod_policy *policy,
+    const struct ged_view_context *view_ctx);
+
+GED_EXPORT extern int
+ged_draw_source_lod_policy_apply(
+    struct ged_view_context *view_ctx,
+    const ged_draw_source_lod_policy *policy);
+
+GED_EXPORT extern int
+ged_draw_source_lod_policy_apply_bot_threshold(
+    struct ged_view_context *view_ctx,
+    const ged_draw_source_lod_policy *policy,
+    size_t bot_threshold);
+
+GED_EXPORT extern int
+ged_draw_source_lod_bounds_update(struct ged_view_context *view_ctx);
+
+__END_DECLS
+
+#endif /* GED_DRAW_SOURCE_H */

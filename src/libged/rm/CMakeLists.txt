@@ -1,7 +1,9 @@
 set(PLUGIN_LIBS libged librt libbu)
+set_source_files_properties(rm.cpp TARGET_DIRECTORY libged
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 ged_plugin_library(ged-rm
-  rm.c
+  rm.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

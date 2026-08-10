@@ -44,7 +44,13 @@
 const char *
 bu_path_normalize(const char *path)
 {
-    static char resolved[MAXPATHLEN] = {0};
+    /*
+     * The returned storage is intentionally reusable, but it must not be
+     * shared by unrelated worker threads.  LoD cache preparation normalizes
+     * paths concurrently and a process-global buffer lets one caller mutate
+     * another caller's result while it is being copied.
+     */
+    static THREADLOCAL char resolved[MAXPATHLEN] = {0};
     const char *q;
     char *p;
     if (!path) return ((const char *)NULL);

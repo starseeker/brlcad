@@ -48,6 +48,7 @@
 #include "bu/getopt.h"
 #include "bu/malloc.h"
 #include "bn.h"
+#include "icv/ops.h"
 
 /* interface header, needed to export properly */
 #include "icv/ops.h"

@@ -153,12 +153,12 @@ proc ia_changestate { args } {
 
     set id [lindex $args 0]
 
-    if {$mged_display($mged_gui($id,active_dm),adc) != ""} {
-	set mged_gui($id,illum_label) $mged_display($mged_gui($id,active_dm),adc)
+    if {$mged_display($mged_gui($id,active_pane),adc) != ""} {
+	set mged_gui($id,illum_label) $mged_display($mged_gui($id,active_pane),adc)
     } elseif {[string length $mged_display(keypoint)]>0} {
 	set mged_gui($id,illum_label) $mged_display(keypoint)
     } elseif {$mged_display(state) == "VIEWING"} {
-	set mged_gui($id,illum_label) $mged_display($mged_gui($id,active_dm),fps)
+	set mged_gui($id,illum_label) $mged_display($mged_gui($id,active_pane),fps)
     } else {
 	if {$mged_display(state) == "OBJ PATH"} {
 	    set mged_gui($id,illum_label) [format "Illuminated path: %s/__MATRIX__%s" \
@@ -434,7 +434,7 @@ proc ia_invoke { w } {
     } elseif {$mged_gui($id,apply_to) == 2} {
 	set cmd "mged_apply_using_list $id \"$hcmd\""
     } elseif {$mged_gui($id,apply_to) == 3} {
-	set cmd "mged_apply_all $mged_gui($id,active_dm) \"$hcmd\""
+	set cmd "mged_apply_all $mged_gui($id,active_pane) \"$hcmd\""
     } else {
 	set cmd $hcmd
     }

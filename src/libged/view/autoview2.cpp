@@ -26,9 +26,18 @@
 #include "common.h"
 
 #include <cstdlib>
+#include <algorithm>
 
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BMeasureAction.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BViewController.h"
+#include <Inventor/SoViewport.h>
 #include "bu/opt.h"
-#include "dm.h"
+#include "bv.h"
+#include "ged/draw.h"
+#include "../ged_bobol_private.hpp"
+#include "../ged_draw_private.h"
 #include "../ged_private.h"
 
 /* Return 1 (and set *v) if the entire string parses as a number. */
@@ -47,6 +56,64 @@ _autoview_arg_is_num(const char *s, double *v)
 
     if (v)
 	*v = d;
+    return 1;
+}
+
+static int
+_autoview_bobol_database_bounds(struct ged *gedp, vect_t *min, vect_t *max)
+{
+    int empty = 1;
+    /* Never ray-prepare database members on the caller/UI thread merely to
+     * frame a progressive scene.  Cold large BoTs can spend tens of seconds
+     * in rt_obj_bounds/rt_gettree here.  The draw provider publishes cheap
+     * per-leaf bounds and the progressive autoview follower reframes when
+     * those arrive. */
+    return ged_draw_obol_scene_database_autoview_bounds(gedp, min, max,
+	&empty, 0) && !empty;
+}
+
+static int
+_autoview_obol_database_scene(
+	struct ged *gedp,
+	struct ged_view_context *view_ctx,
+	fastf_t factor,
+	int all_view_objs)
+{
+    if (all_view_objs)
+	return 0;
+
+    vect_t min, max;
+    if (!_autoview_bobol_database_bounds(gedp, &min, &max))
+	return 0;
+
+    bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+	    factor, min, max);
+    return 1;
+}
+
+static int
+_autoview_bobol_view_scene(struct ged_view_context *view_ctx,
+	fastf_t factor)
+{
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
+	return 0;
+
+    SoBRLMeasureAction measure;
+    measure.setGeometryPolicy(SoBRLMeasureAction::DISPLAY_LEVEL);
+    measure.apply(controller->getViewport()->getRoot());
+    const SbBox3f &bounds = measure.getBounds();
+    if (bounds.isEmpty())
+	return 0;
+
+    const SbVec3f bmin = bounds.getMin();
+    const SbVec3f bmax = bounds.getMax();
+    vect_t min, max;
+    VSET(min, bmin[0], bmin[1], bmin[2]);
+    VSET(max, bmax[0], bmax[1], bmax[2]);
+    bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+	factor, min, max);
     return 1;
 }
 
@@ -83,11 +150,11 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     int all_view_objs = 0;
     int print_help = 0;
     fastf_t scale = -1.0;
-    struct bview *v = gedp->ged_gvp;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
 
     struct bu_opt_desc d[5];
     BU_OPT(d[0], "h", "help",      "",        NULL,     &print_help, "Print help and exit");
-    BU_OPT(d[1], "",   "all-objs", "",        NULL,  &all_view_objs, "Bound all non-faceplate view objects");
+    BU_OPT(d[1], "",   "all-objs", "",        NULL,  &all_view_objs, "Bound all non-faceplate view features");
     BU_OPT(d[2], "s", "scale",  "#", &bu_opt_fastf_t,         &scale, "Set view scale (model scale relative to view size)");
     BU_OPT(d[3], "V", "view",  "name", &bu_opt_vls,           &cvls, "Specify view to adjust");
     BU_OPT_NULL(d[4]);
@@ -104,8 +171,8 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     argc = opt_ret;
 
     if (bu_vls_strlen(&cvls)) {
-	v = bv_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
-	if (!v) {
+	view_ctx = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
+	if (!view_ctx) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
@@ -137,10 +204,22 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	point_t min, max;
 	if (rt_obj_bounds(gedp->ged_result_str, gedp->dbip, argc, argv, 0, min, max) != BRLCAD_OK)
 	    return BRLCAD_ERROR;
-	bv_autoview_bounds(v, factor, min, max);
+	bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+		factor, min, max);
     } else {
-	// libbv has the nuts and bolts
-	bv_autoview(v, factor, all_view_objs);
+	if (all_view_objs)
+	    (void)_autoview_bobol_view_scene(view_ctx, factor);
+	else if (!ged_draw_obol_progressive_autoview_follow(gedp, view_ctx,
+		factor))
+	    (void)_autoview_obol_database_scene(gedp, view_ctx, factor, 0);
+	/*
+	 * A deferred Obol root publishes monotonic partial coverage before its
+	 * exact whole-target bound.  Applying the current partial union here and
+	 * then fitting the exact union later produces two camera jumps from one
+	 * autoview command.  If a progressive source can accept the request,
+	 * defer the fit entirely; its exact-bound publication fulfills it once.
+	 * A settled/non-progressive scene follows the ordinary immediate path.
+	 */
     }
 
     return BRLCAD_OK;
@@ -154,4 +233,3 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

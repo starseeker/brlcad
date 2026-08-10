@@ -22,6 +22,7 @@
 #include "pch.h"
 #include "InformationGatherer.h"
 #include "bu/log.h"
+#include "rt/db_io.h"
 
 std::string getCmdPath(std::string exeDir, const char* cmd) {
     char buf[MAXPATHLEN] = {0};
@@ -503,10 +504,7 @@ InformationGatherer::gatherInformation(std::string UNUSED(name))
 
 
     //Gather DB Version
-    cmd[0] = "dbversion";
-    cmd[1] = NULL;
-    ged_exec_dbversion(g, 1, cmd);
-    infoMap["version"] = bu_vls_addr(g->ged_result_str);
+    infoMap["version"] = std::to_string(db_version(g->dbip));
 
     // CHECK
     //Gather primitives, regions, total objects

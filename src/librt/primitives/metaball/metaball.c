@@ -58,8 +58,8 @@
 #include "nmg.h"
 #include "rt/db4.h"
 #include "rt/geom.h"
-#include "rt/primitives/metaball.h"
 #include "raytrace.h"
+#include "rt/vlist.h"
 #include "wdb.h"
 #include "../../librt_private.h"
 
@@ -163,7 +163,7 @@ rt_metaball_get_bounding_sphere(point_t *center, fastf_t threshold, struct rt_me
 /**
  * Calculate a bounding RPP around a metaball
  */
-C_DECL int
+int
 rt_metaball_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct bn_tol *UNUSED(tol))
 {
     struct rt_metaball_internal *mb;
@@ -185,7 +185,7 @@ rt_metaball_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const st
  * prep and build bounding volumes... unfortunately, generating the
  * bounding sphere is too 'loose' (I think) and O(n^2).
  */
-C_DECL int
+int
 rt_metaball_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 {
     struct rt_metaball_internal *mb, *nmb;
@@ -235,7 +235,7 @@ rt_metaball_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rti
 }
 
 
-C_DECL void
+void
 rt_metaball_print(register const struct soltab *stp)
 {
     int metaball_count = 0;
@@ -363,7 +363,7 @@ rt_metaball_find_intersection(point_t *intersect, const struct rt_metaball_inter
 }
 
 
-C_DECL int
+int
 rt_metaball_shot(struct soltab *stp, register struct xray *rp, struct application *ap, struct seg *seghead)
 {
     struct rt_metaball_internal *mb = (struct rt_metaball_internal *)stp->st_specific;
@@ -555,7 +555,7 @@ rt_metaball_norm_internal(vect_t *n, point_t *p, struct rt_metaball_internal *mb
 /**
  * Given ONE ray distance, return the normal and entry/exit point.
  */
-C_DECL void
+void
 rt_metaball_norm(register struct hit *hitp, struct soltab *stp, register struct xray *rp)
 {
     if (rp) RT_CK_RAY(rp);	/* unused. */
@@ -567,7 +567,7 @@ rt_metaball_norm(register struct hit *hitp, struct soltab *stp, register struct 
 /**
  * Return the curvature of the metaball.
  */
-C_DECL void
+void
 rt_metaball_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
 {
     struct rt_metaball_internal *metaball = (struct rt_metaball_internal *)stp->st_specific;
@@ -587,7 +587,7 @@ rt_metaball_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
  * u = azimuth
  * v = elevation
  */
-C_DECL void
+void
 rt_metaball_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct uvcoord *uvp)
 {
     struct rt_metaball_internal *metaball = (struct rt_metaball_internal *)stp->st_specific;
@@ -625,7 +625,7 @@ rt_metaball_uv(struct application *ap, struct soltab *stp, struct hit *hitp, str
 }
 
 
-C_DECL void
+void
 rt_metaball_free(register struct soltab *stp)
 {
     struct rt_metaball_internal *metaball = (struct rt_metaball_internal *)stp->st_specific;
@@ -650,17 +650,17 @@ rt_metaball_plot_sph(struct bu_list *vlfree, struct bu_list *vhead, point_t *cen
     rt_ell_16pnts(bottom, *center, b, c);
     rt_ell_16pnts(middle, *center, a, c);
 
-    BV_ADD_VLIST(vlfree, vhead, &top[15*ELEMENTS_PER_VECT], BV_VLIST_LINE_MOVE);
-    for (i = 0; i < 16; i++) BV_ADD_VLIST(vlfree, vhead, &top[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_DRAW);
-    BV_ADD_VLIST(vlfree, vhead, &bottom[15*ELEMENTS_PER_VECT], BV_VLIST_LINE_MOVE);
-    for (i = 0; i < 16; i++) BV_ADD_VLIST(vlfree, vhead, &bottom[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_DRAW);
-    BV_ADD_VLIST(vlfree, vhead, &middle[15*ELEMENTS_PER_VECT], BV_VLIST_LINE_MOVE);
-    for (i = 0; i < 16; i++) BV_ADD_VLIST(vlfree, vhead, &middle[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_DRAW);
+    RT_ADD_VLIST(vlfree, vhead, &top[15*ELEMENTS_PER_VECT], RT_VLIST_LINE_MOVE);
+    for (i = 0; i < 16; i++) RT_ADD_VLIST(vlfree, vhead, &top[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_DRAW);
+    RT_ADD_VLIST(vlfree, vhead, &bottom[15*ELEMENTS_PER_VECT], RT_VLIST_LINE_MOVE);
+    for (i = 0; i < 16; i++) RT_ADD_VLIST(vlfree, vhead, &bottom[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_DRAW);
+    RT_ADD_VLIST(vlfree, vhead, &middle[15*ELEMENTS_PER_VECT], RT_VLIST_LINE_MOVE);
+    for (i = 0; i < 16; i++) RT_ADD_VLIST(vlfree, vhead, &middle[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_DRAW);
 }
 
 
 C_DECL int
-rt_metaball_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bview *UNUSED(info))
+rt_metaball_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     struct rt_metaball_internal *mb;
     struct wdb_metaball_pnt *mbpt;
@@ -684,7 +684,7 @@ rt_metaball_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct 
     return 0;
 }
 
-C_DECL int
+int
 rt_metaball_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_internal *ip)
 {
     if (!rop || !mat)
@@ -715,7 +715,7 @@ rt_metaball_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_
  * Import an metaball/sphere from the database format to the internal
  * structure. Apply modeling transformations as well.
  */
-C_DECL int
+int
 rt_metaball_import5(struct rt_db_internal *ip, const struct bu_external *ep, register const fastf_t *mat, const struct db_i *dbip)
 {
     struct wdb_metaball_pnt *mbpt;
@@ -774,7 +774,7 @@ rt_metaball_import5(struct rt_db_internal *ip, const struct bu_external *ep, reg
  * fastf_t X2 (start point)
  * ...
  */
-C_DECL int
+int
 rt_metaball_export5(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_metaball_internal *mb;
@@ -822,7 +822,7 @@ rt_metaball_export5(struct bu_external *ep, const struct rt_db_internal *ip, dou
  * line describes type of solid. Additional lines are indented one
  * tab, and give parameter values.
  */
-C_DECL int
+int
 rt_metaball_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose, double UNUSED(mm2local))
 {
     int metaball_count = 0;
@@ -866,7 +866,7 @@ rt_metaball_describe(struct bu_vls *str, const struct rt_db_internal *ip, int ve
  * Free the storage associated with the rt_db_internal version of this
  * solid.  This only effects the in-memory copy.
  */
-C_DECL void
+void
 rt_metaball_ifree(struct rt_db_internal *ip)
 {
     register struct rt_metaball_internal *metaball;
@@ -941,7 +941,7 @@ rt_metaball_make(const struct rt_functab *ftp, struct rt_db_internal *intern, co
 }
 
 
-C_DECL int
+int
 rt_metaball_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip)
 {
     if (ip) RT_CK_DB_INTERNAL(ip);
@@ -953,7 +953,7 @@ rt_metaball_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip
 /**
  * db get/g2asc
  */
-C_DECL int
+int
 rt_metaball_get(struct bu_vls *logstr, const struct rt_db_internal *intern, const char *UNUSED(attr))
 {
     struct rt_metaball_internal *mb = (struct rt_metaball_internal *)intern->idb_ptr;
@@ -974,7 +974,7 @@ rt_metaball_get(struct bu_vls *logstr, const struct rt_db_internal *intern, cons
 /**
  * used for db put/asc2g
  */
-C_DECL int
+int
 rt_metaball_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int argc, const char **argv)
 {
     struct rt_metaball_internal *mb;
@@ -1048,7 +1048,7 @@ rt_metaball_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int arg
 }
 
 
-C_DECL int
+int
 rt_metaball_form(struct bu_vls *logstr, const struct rt_functab *ftp)
 {
     RT_CK_FUNCTAB(ftp);

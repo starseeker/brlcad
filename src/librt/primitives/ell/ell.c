@@ -38,15 +38,15 @@
 #include "nmg.h"
 #include "rt/geom.h"
 #include "raytrace.h"
+#include "rt/vlist.h"
 
 #include "../../librt_private.h"
 
-__BEGIN_DECLS
+
 extern int rt_sph_prep(struct soltab *stp, struct rt_db_internal *ip,
 		       struct rt_i *rtip);
-__END_DECLS
 
-EXTERNCPP const struct bu_structparse rt_ell_parse[] = {
+const struct bu_structparse rt_ell_parse[] = {
     { "%f", 3, "V", bu_offsetofarray(struct rt_ell_internal, v, fastf_t, X), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     { "%f", 3, "A", bu_offsetofarray(struct rt_ell_internal, a, fastf_t, X), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     { "%f", 3, "B", bu_offsetofarray(struct rt_ell_internal, b, fastf_t, X), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
@@ -218,7 +218,7 @@ rt_ell_is_sph(const struct rt_db_internal* ip) {
 /**
  * Compute the bounding RPP for an ellipsoid
  */
-C_DECL int
+int
 rt_ell_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct bn_tol *UNUSED(tol)) {
     vect_t w1, w2, P;
     vect_t Au, Bu, Cu;	/* A, B, C with unit length */
@@ -303,7 +303,7 @@ rt_ell_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct 
  * A struct ell_specific is created, and its address is stored in
  * stp->st_specific for use by rt_ell_shot().
  */
-C_DECL int
+int
 rt_ell_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 {
     register struct ell_specific *ell;
@@ -414,7 +414,7 @@ rt_ell_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 }
 
 
-C_DECL void
+void
 rt_ell_print(register const struct soltab *stp)
 {
     register struct ell_specific *ell =
@@ -435,7 +435,7 @@ rt_ell_print(register const struct soltab *stp)
  * 0 MISS
  * >0 HIT
  */
-C_DECL int
+int
 rt_ell_shot(struct soltab *stp, register struct xray *rp, struct application *ap, struct seg *seghead)
 {
     register struct ell_specific *ell =
@@ -483,7 +483,7 @@ rt_ell_shot(struct soltab *stp, register struct xray *rp, struct application *ap
 /**
  * This is the Becker vector version.
  */
-C_DECL void
+void
 rt_ell_vshot(struct soltab **stp, struct xray **rp, struct seg *segp, int n, struct application *ap)
 /* An array of solid pointers */
 /* An array of ray pointers */
@@ -542,7 +542,7 @@ rt_ell_vshot(struct soltab **stp, struct xray **rp, struct seg *segp, int n, str
 /**
  * Given ONE ray distance, return the normal and entry/exit point.
  */
-C_DECL void
+void
 rt_ell_norm(register struct hit *hitp, struct soltab *stp, register struct xray *rp)
 {
     register struct ell_specific *ell =
@@ -564,7 +564,7 @@ rt_ell_norm(register struct hit *hitp, struct soltab *stp, register struct xray 
 /**
  * Return the curvature of the ellipsoid.
  */
-C_DECL void
+void
 rt_ell_curve(register struct curvature *cvp, register struct hit *hitp, struct soltab *stp)
 {
     register struct ell_specific *ell =
@@ -604,7 +604,7 @@ rt_ell_curve(register struct curvature *cvp, register struct hit *hitp, struct s
  * u = azimuth
  * v = elevation
  */
-C_DECL void
+void
 rt_ell_uv(struct application *ap, struct soltab *stp, register struct hit *hitp, register struct uvcoord *uvp)
 {
     register struct ell_specific *ell =
@@ -638,7 +638,7 @@ rt_ell_uv(struct application *ap, struct soltab *stp, register struct hit *hitp,
 }
 
 
-C_DECL void
+void
 rt_ell_free(register struct soltab *stp)
 {
     register struct ell_specific *ell =
@@ -691,8 +691,7 @@ rt_ell_16pnts(fastf_t *ov,
 }
 
 struct ell_draw_configuration {
-    struct bu_list *vlfree;
-    struct bu_list *vhead;
+    struct rt_primitive_lod_realization *realization;
     vect_t ell_center;
     vect_t ell_axis_vector_a;
     vect_t ell_axis_vector_b;
@@ -773,8 +772,10 @@ draw_cross_sections_along_ell_vector(struct ell_draw_configuration config)
 		cross_section.ellipsoid_travel_axis_position / ell_t_mag);
 	VADD2(cross_section.translation, cross_section.translation, config.ell_center);
 
-	plot_ellipse(config.vlfree, config.vhead, cross_section.translation, cross_section.a,
-		     cross_section.b, points_per_section);
+	if (!primitive_lod_append_ellipse(config.realization,
+		    cross_section.translation, cross_section.a,
+		    cross_section.b, points_per_section))
+	    return;
     }
 }
 
@@ -797,32 +798,31 @@ ell_ellipse_points(
     return avg_circumference / point_spacing;
 }
 
-C_DECL int
-rt_ell_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bview *v, fastf_t s_size)
+static int
+rt_ell_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     struct ell_draw_configuration config;
     struct rt_ell_internal *eip;
 
-    BU_CK_LIST_HEAD(vhead);
+    if (!realization)
+	return -1;
     RT_CK_DB_INTERNAL(ip);
-    struct bu_list *vlfree = &rt_vlfree;
     eip = (struct rt_ell_internal *)ip->idb_ptr;
     RT_ELL_CK_MAGIC(eip);
 
-    fastf_t point_spacing = solid_point_spacing(v, s_size);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, s_size);
 
-    config.vlfree = vlfree;
-    config.vhead = vhead;
+    config.realization = realization;
     VMOVE(config.ell_center, eip->v);
 
     config.points_per_section = ell_ellipse_points(eip, point_spacing);
 
     if (config.points_per_section < 4) {
-	BV_ADD_VLIST(vlfree, vhead, eip->v, BV_VLIST_POINT_DRAW);
-	return 0;
+	return primitive_lod_line_set_append(realization, eip->v,
+		RT_PRIMITIVE_POINT_DRAW) ? 0 : -1;
     }
 
-    config.num_cross_sections = primitive_curve_count(ip, tol, v->gv_s->curve_scale, s_size);
+    config.num_cross_sections = primitive_curve_count(ip, tol, bv_view_lod_curve_scale(v), s_size);
 
     VMOVE(config.ell_travel_vector, eip->a);
     VMOVE(config.ell_axis_vector_a, eip->b);
@@ -844,8 +844,20 @@ rt_ell_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
     return 0;
 }
 
+int
+rt_ell_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
+{
+    if (!primitive_lod_line_set_begin(realization))
+	return -1;
+
+    int ret = rt_ell_lod_line_set(realization, ip, tol, v, s_size);
+    if (ret < 0)
+	return ret;
+    return primitive_lod_line_set_finish(realization) ? ret : -1;
+}
+
 C_DECL int
-rt_ell_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bview *UNUSED(info))
+rt_ell_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     register int i;
     struct rt_ell_internal *eip;
@@ -863,19 +875,19 @@ rt_ell_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
     rt_ell_16pnts(bottom, eip->v, eip->b, eip->c);
     rt_ell_16pnts(middle, eip->v, eip->a, eip->c);
 
-    BV_ADD_VLIST(vlfree, vhead, &top[15*ELEMENTS_PER_VECT], BV_VLIST_LINE_MOVE);
+    RT_ADD_VLIST(vlfree, vhead, &top[15*ELEMENTS_PER_VECT], RT_VLIST_LINE_MOVE);
     for (i = 0; i < 16; i++) {
-	BV_ADD_VLIST(vlfree, vhead, &top[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_DRAW);
+	RT_ADD_VLIST(vlfree, vhead, &top[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_DRAW);
     }
 
-    BV_ADD_VLIST(vlfree, vhead, &bottom[15*ELEMENTS_PER_VECT], BV_VLIST_LINE_MOVE);
+    RT_ADD_VLIST(vlfree, vhead, &bottom[15*ELEMENTS_PER_VECT], RT_VLIST_LINE_MOVE);
     for (i = 0; i < 16; i++) {
-	BV_ADD_VLIST(vlfree, vhead, &bottom[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_DRAW);
+	RT_ADD_VLIST(vlfree, vhead, &bottom[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_DRAW);
     }
 
-    BV_ADD_VLIST(vlfree, vhead, &middle[15*ELEMENTS_PER_VECT], BV_VLIST_LINE_MOVE);
+    RT_ADD_VLIST(vlfree, vhead, &middle[15*ELEMENTS_PER_VECT], RT_VLIST_LINE_MOVE);
     for (i = 0; i < 16; i++) {
-	BV_ADD_VLIST(vlfree, vhead, &middle[i*ELEMENTS_PER_VECT], BV_VLIST_LINE_DRAW);
+	RT_ADD_VLIST(vlfree, vhead, &middle[i*ELEMENTS_PER_VECT], RT_VLIST_LINE_DRAW);
     }
 
     return 0;
@@ -948,7 +960,172 @@ struct ell_vert_strip {
  * -1 failure
  * 0 OK.  *r points to nmgregion that holds this tessellation.
  */
-C_DECL int
+static void
+ell_indexed_face_append(int *indices, size_t *out, const point_t *points,
+	const point_t center, const int *face, int count)
+{
+    vect_t edge1, edge2, normal, outward;
+    point_t face_center = VINIT_ZERO;
+    int reverse = 0;
+
+    VSUB2(edge1, points[face[1]], points[face[0]]);
+    VSUB2(edge2, points[face[2]], points[face[0]]);
+    VCROSS(normal, edge1, edge2);
+    for (int i = 0; i < count; i++)
+	VADD2(face_center, face_center, points[face[i]]);
+    VSCALE(face_center, face_center, 1.0 / (fastf_t)count);
+    VSUB2(outward, face_center, center);
+    reverse = VDOT(normal, outward) < 0.0;
+    for (int i = 0; i < count; i++)
+	indices[(*out)++] = reverse ? face[count - 1 - i] : face[i];
+    indices[(*out)++] = -1;
+}
+
+
+int
+rt_ell_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
+{
+    struct rt_ell_internal *ell;
+    fastf_t alen, blen, clen, radius, dtol, theta_tol;
+    vect_t au, bu, cu;
+    int quarter_segments;
+
+    if (face_set)
+	memset(face_set, 0, sizeof(*face_set));
+    if (!face_set || !ip || !ttol || !tol)
+	return BRLCAD_ERROR;
+    RT_CK_DB_INTERNAL(ip);
+    BG_CK_TESS_TOL(ttol);
+    BN_CK_TOL(tol);
+    ell = (struct rt_ell_internal *)ip->idb_ptr;
+    RT_ELL_CK_MAGIC(ell);
+
+    alen = MAGNITUDE(ell->a);
+    blen = MAGNITUDE(ell->b);
+    clen = MAGNITUDE(ell->c);
+    if (alen <= tol->dist || blen <= tol->dist || clen <= tol->dist)
+	return BRLCAD_ERROR;
+    VSCALE(au, ell->a, 1.0 / alen);
+    VSCALE(bu, ell->b, 1.0 / blen);
+    VSCALE(cu, ell->c, 1.0 / clen);
+    if (!NEAR_ZERO(VDOT(au, bu), tol->dist) ||
+	!NEAR_ZERO(VDOT(au, cu), tol->dist) ||
+	!NEAR_ZERO(VDOT(bu, cu), tol->dist))
+	return BRLCAD_ERROR;
+
+    radius = FMAX(alen, FMAX(blen, clen));
+    dtol = primitive_get_absolute_tolerance(ttol, radius);
+    {
+	fastf_t ntol_dummy = M_PI;
+	primitive_clamp_tess_tol(&dtol, &ntol_dummy, 2.0 * radius);
+    }
+    if (dtol > radius)
+	dtol = radius;
+    theta_tol = 2.0 * acos(1.0 - dtol / radius);
+    if (ttol->norm > 0.0) {
+	const fastf_t min_ntol = prim_min_norm_tol();
+	const fastf_t ntol_eff = ttol->norm < min_ntol ?
+	    min_ntol : ttol->norm;
+	if (ntol_eff < theta_tol)
+	    theta_tol = ntol_eff;
+    }
+    {
+	const fastf_t bbox_diag = 2.0 * radius;
+	fastf_t min_chord = bbox_diag > SMALL_FASTF && bbox_diag < 1.0 ?
+	    bbox_diag * 0.01 : prim_min_abs_tol();
+	fastf_t theta_min;
+	if (min_chord < BN_TOL_DIST)
+	    min_chord = BN_TOL_DIST;
+	theta_min = 2.0 * asin(FMIN(1.0, min_chord / (2.0 * radius)));
+	if (theta_tol < theta_min)
+	    theta_tol = theta_min;
+    }
+    quarter_segments = (int)(M_PI_2 / theta_tol + 0.999);
+    if (quarter_segments < 2)
+	quarter_segments = 2;
+    if (quarter_segments > INT_MAX / 8)
+	return BRLCAD_ERROR;
+
+    const int latitude_segments = quarter_segments * 2;
+    const int longitude_segments = quarter_segments * 4;
+    const size_t point_count = 2 +
+	(size_t)(latitude_segments - 1) * longitude_segments;
+    const size_t triangle_faces = (size_t)longitude_segments * 2;
+    const size_t quad_faces =
+	(size_t)(latitude_segments - 2) * longitude_segments;
+    const size_t index_count = triangle_faces * 4 + quad_faces * 5;
+    if (point_count > INT_MAX)
+	return BRLCAD_ERROR;
+    face_set->points = (point_t *)bu_calloc(point_count, sizeof(point_t),
+	"ELL indexed-face points");
+    face_set->indices = (int *)bu_calloc(index_count, sizeof(int),
+	"ELL indexed-face indices");
+
+    VADD2(face_set->points[0], ell->v, ell->b);
+    size_t point_out = 1;
+    for (int latitude = 1; latitude < latitude_segments; latitude++) {
+	const fastf_t phi = M_PI * (fastf_t)latitude /
+	    (fastf_t)latitude_segments;
+	const fastf_t sin_phi = sin(phi);
+	const fastf_t cos_phi = cos(phi);
+	for (int longitude = 0; longitude < longitude_segments; longitude++) {
+	    const fastf_t theta = M_2PI * (fastf_t)longitude /
+		(fastf_t)longitude_segments;
+	    VJOIN3(face_set->points[point_out], ell->v,
+		sin_phi * cos(theta), ell->a,
+		cos_phi, ell->b,
+		sin_phi * sin(theta), ell->c);
+	    point_out++;
+	}
+    }
+    const int south = (int)point_out;
+    VSUB2(face_set->points[point_out], ell->v, ell->b);
+    point_out++;
+
+    size_t index_out = 0;
+    for (int longitude = 0; longitude < longitude_segments; longitude++) {
+	const int next = (longitude + 1) % longitude_segments;
+	int face[4];
+	face[0] = 0;
+	face[1] = 1 + longitude;
+	face[2] = 1 + next;
+	ell_indexed_face_append(face_set->indices, &index_out,
+	    (const point_t *)face_set->points, ell->v, face, 3);
+	for (int latitude = 0; latitude < latitude_segments - 2; latitude++) {
+	    const int ring = 1 + latitude * longitude_segments;
+	    const int next_ring = ring + longitude_segments;
+	    face[0] = ring + longitude;
+	    face[1] = next_ring + longitude;
+	    face[2] = next_ring + next;
+	    face[3] = ring + next;
+	    ell_indexed_face_append(face_set->indices, &index_out,
+		(const point_t *)face_set->points, ell->v, face, 4);
+	}
+	const int last_ring = 1 +
+	    (latitude_segments - 2) * longitude_segments;
+	face[0] = last_ring + longitude;
+	face[1] = south;
+	face[2] = last_ring + next;
+	ell_indexed_face_append(face_set->indices, &index_out,
+	    (const point_t *)face_set->points, ell->v, face, 3);
+    }
+    if (point_out != point_count || index_out != index_count) {
+	bu_free(face_set->points, "ELL indexed-face points");
+	bu_free(face_set->indices, "ELL indexed-face indices");
+	memset(face_set, 0, sizeof(*face_set));
+	return BRLCAD_ERROR;
+    }
+    face_set->point_count = point_count;
+    face_set->index_count = index_count;
+    face_set->source_identity = (uint64_t)(uintptr_t)ell;
+    face_set->geometry_revision = 1;
+    return BRLCAD_OK;
+}
+
+
+int
 rt_ell_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
 {
     mat_t R;
@@ -1328,7 +1505,7 @@ fail:
  * Import an ellipsoid/sphere from the database format to the internal
  * structure.  Apply modeling transformations as well.
  */
-C_DECL int
+int
 rt_ell_import4(struct rt_db_internal *ip, const struct bu_external *ep, register const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_ell_internal *eip;
@@ -1368,7 +1545,7 @@ rt_ell_import4(struct rt_db_internal *ip, const struct bu_external *ep, register
 }
 
 
-C_DECL int
+int
 rt_ell_export4(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_ell_internal *tip;
@@ -1398,7 +1575,7 @@ rt_ell_export4(struct bu_external *ep, const struct rt_db_internal *ip, double l
     return 0;
 }
 
-C_DECL int
+int
 rt_ell_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_internal *ip)
 {
     if (!rop || !ip || !mat)
@@ -1427,7 +1604,7 @@ rt_ell_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_inter
  * Import an ellipsoid/sphere from the database format to the internal
  * structure.  Apply modeling transformations as well.
  */
-C_DECL int
+int
 rt_ell_import5(struct rt_db_internal *ip, const struct bu_external *ep, register const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_ell_internal *eip;
@@ -1470,7 +1647,7 @@ rt_ell_import5(struct rt_db_internal *ip, const struct bu_external *ep, register
  * B vector
  * C vector
  */
-C_DECL int
+int
 rt_ell_export5(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_ell_internal *eip;
@@ -1507,7 +1684,7 @@ rt_ell_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
  * line describes type of solid.  Additional lines are indented one
  * tab, and give parameter values.
  */
-C_DECL int
+int
 rt_ell_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose, double mm2local)
 {
     register struct rt_ell_internal *tip =
@@ -1573,7 +1750,7 @@ rt_ell_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose
  * Free the storage associated with the rt_db_internal version of this
  * solid.
  */
-C_DECL void
+void
 rt_ell_ifree(struct rt_db_internal *ip)
 {
     RT_CK_DB_INTERNAL(ip);
@@ -1595,7 +1772,7 @@ static const fastf_t rt_ell_uvw[5*ELEMENTS_PER_VECT] = {
 };
 
 
-C_DECL int
+int
 rt_ell_tnurb(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bn_tol *tol)
 {
     mat_t R;
@@ -1884,7 +2061,7 @@ nmg_sphere_face_snurb(struct faceuse *fu, const matp_t m)
  * @return 0 on success
  * @return -1 on failure
  */
-C_DECL int
+int
 rt_ell_params(struct pc_pc_set *UNUSED(pcs), const struct rt_db_internal *UNUSED(ip))
 {
     return -1;			/* FAIL */
@@ -1986,7 +2163,7 @@ ell_angle(fastf_t *p1, fastf_t a, fastf_t b, fastf_t dtol, fastf_t ntol)
 /**
  * Computes volume of a ellipsoid.
  */
-C_DECL void
+void
 rt_ell_volume(fastf_t *volume, const struct rt_db_internal *ip)
 {
     fastf_t mag_a, mag_b, mag_c;
@@ -2003,7 +2180,7 @@ rt_ell_volume(fastf_t *volume, const struct rt_db_internal *ip)
 /**
  * Computes centroid of an ellipsoid
  */
-C_DECL void
+void
 rt_ell_centroid(point_t *cent, const struct rt_db_internal *ip)
 {
     struct rt_ell_internal *eip = (struct rt_ell_internal *)ip->idb_ptr;
@@ -2018,7 +2195,7 @@ rt_ell_centroid(point_t *cent, const struct rt_db_internal *ip)
  */
 #define PROLATE 1
 #define OBLATE 2
-C_DECL void
+void
 rt_ell_surf_area(fastf_t *area, const struct rt_db_internal *ip)
 {
     fastf_t mag_a, mag_b, mag_c;
@@ -2103,7 +2280,7 @@ rt_ell_surf_area(fastf_t *area, const struct rt_db_internal *ip)
     }
 }
 
-C_DECL int
+int
 rt_ell_labels(struct rt_point_labels *pl, int pl_max, const mat_t xform, const struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol))
 {
     int lcnt = 4;
@@ -2139,7 +2316,7 @@ rt_ell_labels(struct rt_point_labels *pl, int pl_max, const mat_t xform, const s
     return lcnt;
 }
 
-C_DECL const char *
+const char *
 rt_ell_keypoint(point_t *pt, const char *keystr, const mat_t mat, const struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol))
 {
     if (!pt || !ip)
@@ -2186,7 +2363,7 @@ ell_kpt_end:
  * structure; the output preserves the input idb_type.  @a planar_only is
  * ignored because an ellipsoid has no planar faces.
  */
-C_DECL int
+int
 rt_ell_perturb(struct rt_db_internal **oip, const struct rt_db_internal *ip,
 	       int UNUSED(planar_only), fastf_t val)
 {

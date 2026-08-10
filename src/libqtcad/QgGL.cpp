@@ -19,51 +19,45 @@
  */
 /** @file QgGL.cpp
  *
- * Use a QOpenGLWidget to display libdm drawing content.
+ * Use a QOpenGLWidget to display Obol/Coin drawing content.
  *
  */
 
 #include "common.h"
 
+#include "bv.h"
+
+#include <QImage>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QOpenGLWidget>
+#include <QResizeEvent>
+#include <QWheelEvent>
 #include <QtGlobal>
 
-extern "C" {
-#include "bu/malloc.h"
-}
-#include "bindings.h"
+#include "QgCanvasState.h"   /* pimpl definition + shared helpers */
 #include "qtcad/QgGL.h"
 
-// FROM MGED
-#define XMIN            (-2048)
-#define XMAX            (2047)
-#define YMIN            (-2048)
-#define YMAX            (2047)
-
-// from BV_MIN and BV_MAX
-#define QTGL_ZMIN -2048
-#define QTGL_ZMAX 2047
-
-QgGL::QgGL(QWidget *parent, struct fb *fbp)
-    : QOpenGLWidget(parent), ifp(fbp)
+QgGL::QgGL(QWidget *parent, BObolViewController *controller,
+    bool create_controller)
+    : QOpenGLWidget(parent)
 {
+    d = new QgCanvasState();
+    qgcanvas_init_obol(*d, this, false, controller, create_controller);
+    d->lmouse_mode = BV_ADJUST_SCALE;
+
     // Provide a view specific to this widget - set gedp->ged_gvp to v
     // if this is the current view
-    BU_GET(local_v, struct bview);
-    bv_init(local_v, NULL);
-    bu_vls_sprintf(&local_v->gv_name, "qtgl");
-    v = local_v;
+    d->v = qgcanvas_view_context_create("qtgl");
+    qgcanvas_sync_obol_camera(*d);
+    qgcanvas_initialize_obol_background(*d);
 
-    // We can't initialize dmp successfully until more of the OpenGL
-    // initialization is complete
-    dmp = NULL;
-
-    // If we weren't supplied with a framebuffer, allocate one.
-    // We don't open it until we have the dmp.
-    if (!ifp) {
-	ifp = fb_raw("qtgl");
-	fb_set_standalone(ifp, 0);
-    }
+    /* A Qt update may reach paintGL before asynchronous Obol work has
+     * published a replacement frame.  Preserve the last complete image in
+     * that case.  NoPartialUpdate invalidates the QOpenGLWidget FBO before
+     * every paint; a renderPending() no-op would then hand Qt undefined color
+     * storage, observed on NVIDIA as black/RGB-dotted zoom frames. */
+    setUpdateBehavior(QOpenGLWidget::PartialUpdate);
 
     // This is an important Qt setting for interactivity - it allowing key
     // bindings to propagate to this widget and trigger actions such as
@@ -73,14 +67,49 @@ QgGL::QgGL(QWidget *parent, struct fb *fbp)
 
 QgGL::~QgGL()
 {
-    if (dmp)
-	dm_close(dmp);
-    if (ifp && !fb_get_standalone(ifp)) {
-	fb_close_existing(ifp);
-    }
-    BU_PUT(local_v, struct bv);
+	d->input.setEndpoint(NULL);
+    qgcanvas_destroy_obol(*d, this);
+    qgcanvas_view_context_destroy(d->v);
+    d->v = nullptr;
+    delete d;
+    d = nullptr;
 }
 
+struct bv_context *
+QgGL::viewContext() const
+{
+    return d ? d->v : nullptr;
+}
+
+BObolViewController *
+QgGL::obolViewController() const
+{
+    return d->obol;
+}
+
+void
+QgGL::setObolViewController(BObolViewController *controller)
+{
+    qgcanvas_bind_obol_controller(*d, this, controller);
+}
+
+void
+QgGL::setObolInputEndpoint(struct bobol_display_endpoint *endpoint)
+{
+	d->input.setEndpoint(endpoint);
+}
+
+int
+QgGL::currentView() const
+{
+    return d->current;
+}
+
+void
+QgGL::set_current(int active)
+{
+    d->current = active;
+}
 
 void QgGL::paintGL()
 {
@@ -88,170 +117,152 @@ void QgGL::paintGL()
     int h = height();
     // Zero size == nothing to do
     if (!w || !h)
-	return;
+return;
 
-    if (!m_init) {
+    qgcanvas_sync_obol_viewport(*d, this);
+    qgcanvas_sync_obol_camera(*d);
+    initializeOpenGLFunctions();
+    qgcanvas_request_obol_render_if_idle(*d, "qtgl-paint");
 
-	if (!dmp) {
-
-	    // This is needed so we can work with Qt's OpenGL widget
-	    // using standard OpenGL functions.
-	    initializeOpenGLFunctions();
-
-	    // Do the standard libdm attach to get our rendering backend.
-	    const char *acmd = "attach";
-	    dmp = dm_open((void *)this, NULL, "qtgl", 1, &acmd);
-	    if (!dmp)
-		return;
-
-	    // If we have a framebuffer, now we can open it
-	    if (ifp) {
-		struct fb_platform_specific *fbps = fb_get_platform_specific(FB_QTGL_MAGIC);
-		fbps->data = (void *)dmp;
-		fb_setup_existing(ifp, dm_get_width(dmp), dm_get_height(dmp), fbps);
-		fb_put_platform_specific(fbps);
-	    }
-
-	    dm_set_pathname(dmp, "QTDM");
-	}
-
-	// QTGL_ZMIN and QTGL_ZMAX are historical - need better
-	// documentation on why those specific values are used.
-	//fastf_t windowbounds[6] = { XMIN, XMAX, YMIN, YMAX, QTGL_ZMIN, QTGL_ZMAX };
-	fastf_t windowbounds[6] = { -1, 1, -1, 1, QTGL_ZMIN, QTGL_ZMAX };
-	dm_set_win_bounds(dmp, windowbounds);
-
-	if (v) {
-	    // Associate the view scale with the dmp
-	    dm_set_vp(dmp, &v->gv_scale);
-
-	    // Let the view know it now has an associated display manager
-	    v->dmp = dmp;
-
-	    // View interaction coordinates use Qt's device-independent pixels.
-	    v->gv_width = width();
-	    v->gv_height = height();
-	}
-
-	// If we have a ptbl defining the current dm set and/or an unset
-	// pointer to indicate the current dm, go ahead and set them.
-	if (dm_set)
-	    bu_ptbl_ins_unique(dm_set, (long int *)dmp);
-
-	// Ready to go
-	m_init = true;
+    const SbBool rendered =
+	qgcanvas_render_obol_pending(*d, this, TRUE, TRUE);
+    if (rendered && d->v) {
+	(void)bv_refresh_consume(bv_context_view(d->v));
+	bv_refresh_complete(bv_context_view(d->v));
+    }
+    if (rendered)
+	qgcanvas_frame_complete(*d, this);
+    qgcanvas_queue_obol_progressive_update(*d, this);
+    if (!d->obol_paint_initialized) {
+	d->obol_paint_initialized = true;
 	emit init_done();
     }
-
-    if (!m_init || !dmp || !v)
-	return;
-
-    // Re-draw the background to clear any previous drawing
-    unsigned char *dm_bg1;
-    unsigned char *dm_bg2;
-    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
-    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
-
-    // Go ahead and set the flag, but (unlike the rendering thread
-    // implementation) we need to do the draw routine every time in paintGL, or
-    // we end up with unrendered frames.
-    dm_set_dirty(dmp, 0);
-    dm_draw_objs(v, draw_custom, draw_udata);
-    dm_draw_end(dmp);
 }
 
 void QgGL::resizeGL(int, int)
 {
-    if (!dmp || !v)
-	return;
-    dm_configure_win(dmp, 0);
-    v->gv_width = width();
-    v->gv_height = height();
-    if (ifp) {
-	fb_configure_window(ifp, dm_get_width(dmp), dm_get_height(dmp));
-    }
-    if (dmp)
-	dm_set_dirty(dmp, 1);
+    qgcanvas_sync_obol_viewport(*d, this);
+    if (d->v)
+	qgcanvas_request_update(*d, BV_REFRESH_VIEW);
     emit changed();
+}
+
+void QgGL::resizeEvent(QResizeEvent *e)
+{
+    QOpenGLWidget::resizeEvent(e);
+    qgcanvas_sync_obol_viewport(*d, this);
+    if (!d->v)
+return;
+    QSize rsize = qgcanvas_render_size(this);
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
+    qgcanvas_request_update(*d, BV_REFRESH_VIEW);
+    emit changed();
+}
+
+void QgGL::request_update(uint32_t refresh_flags)
+{
+    uint32_t requested = refresh_flags ? refresh_flags : BV_REFRESH_ALL;
+    qgcanvas_request_update(*d, requested);
+    if (d->fb_update_queued)
+return;
+    d->fb_update_queued = true;
+    QMetaObject::invokeMethod(this, "queued_update", Qt::QueuedConnection);
 }
 
 void QgGL::need_update()
 {
-    bv_log(4, "QgGL::need_update");
     QTCAD_SLOT("QgGL::need_update", 1);
-    if (!dmp)
-	return;
-    dm_set_dirty(dmp, 1);
+    request_update(BV_REFRESH_VIEW);
+}
+
+void QgGL::present_frame()
+{
+    QTCAD_SLOT("QgGL::present_frame", 1);
+    request_update(BV_REFRESH_FRAMEBUFFER | BV_REFRESH_FORCE);
+}
+
+void QgGL::queued_update()
+{
+    d->fb_update_queued = false;
     update();
 }
 
-void QgGL::keyPressEvent(QKeyEvent *k) {
+void QgGL::keyPressEvent(QKeyEvent *k)
+{
 
-    if (!dmp || !v || !current || !use_default_keybindings) {
-	QOpenGLWidget::keyPressEvent(k);
-	return;
+    if (!d->v || !d->current || !d->use_default_keybindings) {
+QOpenGLWidget::keyPressEvent(k);
+return;
     }
 
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
-    v->gv_width = width();
-    v->gv_height = height();
+    QSize rsize = qgcanvas_render_size(this);
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    if (CADkeyPressEvent(v, x_prev, y_prev, k)) {
-	dm_set_dirty(dmp, 1);
-	update();
-	emit changed();
+    if (d->input.keyPressEvent(d->v, d->x_prev,
+	    d->y_prev, k)) {
+qgcanvas_request_update(*d, BV_REFRESH_VIEW);
+update();
+emit changed();
     }
 
     QOpenGLWidget::keyPressEvent(k);
 }
 
-void QgGL::mousePressEvent(QMouseEvent *e) {
+void QgGL::mousePressEvent(QMouseEvent *e)
+{
 
-    if (!dmp || !v || !current || !use_default_mousebindings) {
-	QOpenGLWidget::mousePressEvent(e);
-	return;
+    if (!d->v || !d->current || !d->use_default_mousebindings) {
+QOpenGLWidget::mousePressEvent(e);
+return;
     }
 
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
-    v->gv_width = width();
-    v->gv_height = height();
+    QSize rsize = qgcanvas_render_size(this);
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    if (CADmousePressEvent(v, x_prev, y_prev, e)) {
-	dm_set_dirty(dmp, 1);
-	update();
-	emit changed();
+    if (d->input.mousePressEvent(d->v, d->x_prev,
+	    d->y_prev, e)) {
+qgcanvas_request_update(*d, BV_REFRESH_VIEW);
+update();
+emit changed();
     }
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    x_press_pos = (double)e->x();
-    y_press_pos = (double)e->y();
+    d->x_press_pos = (double)e->x();
+    d->y_press_pos = (double)e->y();
 #else
-    x_press_pos = e->position().x();
-    y_press_pos = e->position().y();
+    d->x_press_pos = e->position().x();
+    d->y_press_pos = e->position().y();
 #endif
-    //bu_log("X,Y: %g, %g\n", x_press_pos, y_press_pos);
+    //bu_log("X,Y: %g, %g\n", d->x_press_pos, d->y_press_pos);
 
     QOpenGLWidget::mousePressEvent(e);
 }
 
-void QgGL::mouseReleaseEvent(QMouseEvent *e) {
+void QgGL::mouseReleaseEvent(QMouseEvent *e)
+{
+    if (d->obol && e->button() == Qt::LeftButton)
+	d->obol->endLodInteraction();
 
-    if (!v) {
-	QOpenGLWidget::mouseReleaseEvent(e);
-	return;
+    if (!d->v) {
+QOpenGLWidget::mouseReleaseEvent(e);
+return;
     }
 
     // To avoid an abrupt jump in scene motion the next time movement is
     // started with the mouse, after we release we return to the default state.
-    x_prev = -INT_MAX;
-    y_prev = -INT_MAX;
+    d->x_prev = -INT_MAX;
+    d->y_prev = -INT_MAX;
 
-    if (CADmouseReleaseEvent(v, x_press_pos, y_press_pos, x_prev, y_prev, e, lmouse_mode)) {
-       dm_set_dirty(dmp, 1);
-       update();
-       emit changed();
+    if (d->input.mouseReleaseEvent(d->v,
+	    d->x_press_pos, d->y_press_pos, d->x_prev, d->y_prev, e,
+	    d->lmouse_mode)) {
+qgcanvas_request_update(*d, BV_REFRESH_VIEW);
+update();
+emit changed();
     }
 
     QOpenGLWidget::mouseReleaseEvent(e);
@@ -259,53 +270,57 @@ void QgGL::mouseReleaseEvent(QMouseEvent *e) {
 
 void QgGL::mouseMoveEvent(QMouseEvent *e)
 {
-    if (!dmp || !v || !current || !use_default_mousebindings) {
-	QOpenGLWidget::mouseMoveEvent(e);
-	return;
+    if (!d->v || !d->current || !d->use_default_mousebindings) {
+QOpenGLWidget::mouseMoveEvent(e);
+return;
     }
 
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
-    v->gv_width = width();
-    v->gv_height = height();
+    QSize rsize = qgcanvas_render_size(this);
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    int mret = CADmouseMoveEvent(v, x_prev, y_prev, e, lmouse_mode);
+    if (d->obol && e->buttons().testFlag(Qt::LeftButton))
+	d->obol->beginLodInteraction();
+    int mret = d->input.mouseMoveEvent(d->v,
+	    d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (mret > 0) {
-	dm_set_dirty(dmp, 1);
-	update();
-	emit changed();
+qgcanvas_request_update(*d, BV_REFRESH_VIEW);
+update();
+emit changed();
     }
 
     // Current positions are the new previous positions
     if (mret != -1) {
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-        x_prev = e->x();
-        y_prev = e->y();
+d->x_prev = e->x();
+d->y_prev = e->y();
 #else
-        x_prev = e->position().x();
-        y_prev = e->position().y();
+d->x_prev = e->position().x();
+d->y_prev = e->position().y();
 #endif
     }
 
     QOpenGLWidget::mouseMoveEvent(e);
 }
 
-void QgGL::wheelEvent(QWheelEvent *e) {
+void QgGL::wheelEvent(QWheelEvent *e)
+{
 
-    if (!dmp || !v || !current || !use_default_mousebindings) {
-	QOpenGLWidget::wheelEvent(e);
-	return;
+    if (!d->v || !d->current || !d->use_default_mousebindings) {
+QOpenGLWidget::wheelEvent(e);
+return;
     }
 
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
-    v->gv_width = width();
-    v->gv_height = height();
+    QSize rsize = qgcanvas_render_size(this);
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    if (CADwheelEvent(v, e)) {
-	dm_set_dirty(dmp, 1);
-	update();
-	emit changed();
+    if (d->input.wheelEvent(d->v, e)) {
+qgcanvas_request_update(*d, BV_REFRESH_VIEW);
+update();
+emit changed();
     }
 
     QOpenGLWidget::wheelEvent(e);
@@ -313,111 +328,89 @@ void QgGL::wheelEvent(QWheelEvent *e) {
 
 void QgGL::stash_hashes()
 {
-    if (!dmp) {
-	prev_dhash = 0;
-    } else {
-	prev_dhash = dm_hash(dmp);
-    }
-    prev_vhash = bv_hash(v);
+    qgcanvas_stash_hashes(*d);
 }
 
 bool QgGL::diff_hashes()
 {
-    bool ret = false;
-    unsigned long long c_dhash = 0;
-    unsigned long long c_vhash = 0;
-
-    if (dmp)
-	c_dhash = dm_hash(dmp);
-    c_vhash = bv_hash(v);
-
-    if (dmp && dm_get_dirty(dmp))
-	ret = true;
-
-    if (prev_dhash != c_dhash) {
-	if (dmp)
-	    dm_set_dirty(dmp, 1);
-	ret = true;
-    }
-    if (prev_vhash != c_vhash) {
-	if (dmp)
-	    dm_set_dirty(dmp, 1);
-	ret = true;
-    }
-
+    bool ret = qgcanvas_diff_hashes_check(*d);
     if (ret) {
-	need_update();
-	emit changed();
+need_update();
+emit changed();
     }
-
     return ret;
 }
 
-void QgGL::save_image() {
-    QImage image = this->grabFramebuffer();
-    image.save("file.png");
+void QgGL::save_image()
+{
+    QImage image;
+    get_viewport_image(image);
+    if (!image.isNull())
+	image.save("file.png");
+}
+
+void QgGL::render_to_file(const QString &filename)
+{
+    QImage img;
+    get_viewport_image(img);
+    if (!img.isNull())
+img.convertToFormat(QImage::Format_RGB32).save(filename);
+}
+
+void QgGL::get_viewport_image(QImage &img)
+{
+    img = QImage();
+    if (!d->v)
+	return;
+
+    qgcanvas_get_obol_viewport_image(*d, this, img);
+}
+
+void QgGL::get_obol_viewport_image(QImage &img)
+{
+    qgcanvas_get_obol_viewport_image(*d, this, img);
 }
 
 void QgGL::aet(double a, double e, double t)
 {
-    if (!v)
-	return;
-
-    fastf_t aet[3];
-    double aetd[3];
-    aetd[0] = a;
-    aetd[1] = e;
-    aetd[2] = t;
-
-    /* convert from double to fastf_t */
-    VMOVE(aet, aetd);
-
-    VMOVE(v->gv_aet, aet);
-
-    /* TODO - based on the suspect bv_mat_aet... */
-    mat_t tmat;
-    fastf_t twist;
-    fastf_t c_twist;
-    fastf_t s_twist;
-    bn_mat_angles(v->gv_rotation, 270.0 + v->gv_aet[1], 0.0, 270.0 - v->gv_aet[0]);
-    twist = -v->gv_aet[2] * DEG2RAD;
-    c_twist = cos(twist);
-    s_twist = sin(twist);
-    bn_mat_zrot(tmat, s_twist, c_twist);
-    bn_mat_mul2(tmat, v->gv_rotation);
-
-    bv_update(v);
+    qgcanvas_aet(*d, a, e, t);
 }
 
 void
 QgGL::enableDefaultKeyBindings()
 {
-    use_default_keybindings = true;
+    d->use_default_keybindings = true;
 }
 
 void
 QgGL::disableDefaultKeyBindings()
 {
-    use_default_keybindings = false;
+    d->use_default_keybindings = false;
 }
 
 void
 QgGL::enableDefaultMouseBindings()
 {
-    use_default_mousebindings = true;
+    d->use_default_mousebindings = true;
 }
 
 void
 QgGL::disableDefaultMouseBindings()
 {
-    use_default_mousebindings = false;
+    d->use_default_mousebindings = false;
+}
+
+int
+QgGL::lmouseMoveDefault() const
+{
+    return d->lmouse_mode;
 }
 
 void
 QgGL::set_lmouse_move_default(int mm)
 {
     QTCAD_SLOT("QgGL::set_lmouse_move_default", 1);
-    lmouse_mode = mm;
+    d->lmouse_mode = mm;
 }
 
 // Local Variables:

@@ -20,9 +20,9 @@
 ###
 #
 # Description -
-#	The raytrace control panel is designed to be used with an
-#	Mged object. It probably should be an inner class of the Mged
-#	class.
+#	The raytrace control panel is designed to be used with a
+#	cadwidgets::Ged object. It should eventually become a component of that
+#	widget rather than maintaining a separate compatibility interface.
 #
 
 ::itk::usual RtControl {
@@ -40,7 +40,7 @@
     itk_option define -other other Other "-A 0.9"
     itk_option define -size size Size 512
     itk_option define -color color Color {0 0 0}
-    itk_option define -mged mged Mged ""
+    itk_option define -ged ged Ged ""
     itk_option define -fb_active_pane_callback fb_active_pane_callback FB_Active_Pane_Callback ""
     itk_option define -fb_enabled fb_enabled FB_Enabled 0
     itk_option define -fb_enabled_callback fb_enabled_callback FB_Enabled_Callback ""
@@ -113,8 +113,7 @@
 	variable colorE
 	variable jitterM
 	variable lmodelM
-	variable isaMged 0
-	variable isaGed 0
+	variable isGed 0
 
 	method build_adv {}
 	method build_photon_map {_parent}
@@ -388,8 +387,8 @@
     }
 }
 
-::itcl::configbody RtControl::mged {
-    if {$itk_option(-mged) == ""} {
+::itcl::configbody RtControl::ged {
+    if {$itk_option(-ged) == ""} {
 	return
     }
 
@@ -470,30 +469,24 @@
 }
 
 ::itcl::body RtControl::abort {} {
-    if {!$isaMged && !$isaGed} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object"
+    if {!$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object"
     }
 
-    if {$isaMged} {
-	$itk_option(-mged) component $rtActivePane rtabort
-    } else {
-	$itk_option(-mged) rtabort
-    }
+    $itk_option(-ged) rtabort
 }
 
 ::itcl::body RtControl::clear {} {
-    global tcl_platform
-
-    if {!$isaMged && !$isaGed} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object"
+    if {!$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object"
     }
 
-    $itk_option(-mged) fbclear $rtColor
+    $itk_option(-ged) fbclear $rtColor
 }
 
 ::itcl::body RtControl::raytrace {} {
-    if {!$isaMged && !$isaGed} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object"
+    if {!$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object"
     }
 
     if {$itk_option(-do_rtedge)} {
@@ -502,38 +495,33 @@
 	set rt_cmd_name "rt"
     }
 
-    if {$isaMged} {
-	set rt_cmd "$itk_option(-mged) component $rtActivePane $rt_cmd_name -F [get_cooked_dest]"
-    } else {
-	# isaGed must be true
-	set rt_cmd "$itk_option(-mged) pane_$rt_cmd_name $rtActivePane -F [get_cooked_dest]"
+    set rt_cmd "$itk_option(-ged) pane_$rt_cmd_name $rtActivePane -F [get_cooked_dest]"
 
-	if {[$itk_option(-mged) rect draw]} {
-	    set pos [$itk_option(-mged) rect pos]
-	    set dim [$itk_option(-mged) rect dim]
+    if {[$itk_option(-ged) rect draw]} {
+	set pos [$itk_option(-ged) rect pos]
+	set dim [$itk_option(-ged) rect dim]
 
-	    set xmin [lindex $pos 0]
-	    set ymin [lindex $pos 1]
-	    set width [lindex $dim 0]
-	    set height [lindex $dim 1]
+	set xmin [lindex $pos 0]
+	set ymin [lindex $pos 1]
+	set width [lindex $dim 0]
+	set height [lindex $dim 1]
 
-	    if {$width != 0 && $height != 0} {
-		if {$width > 0} {
-		    set xmax [expr $xmin + $width]
-		} else {
-		    set xmax $xmin
-		    set xmin [expr $xmax + $width]
-		}
-
-		if {$height > 0} {
-		    set ymax [expr $ymin + $height]
-		} else {
-		    set ymax $ymin
-		    set ymin [expr $ymax + $height]
-		}
-
-		append rt_cmd " -j $xmin,$ymin,$xmax,$ymax"
+	if {$width != 0 && $height != 0} {
+	    if {$width > 0} {
+		set xmax [expr $xmin + $width]
+	    } else {
+		set xmax $xmin
+		set xmin [expr $xmax + $width]
 	    }
+
+	    if {$height > 0} {
+		set ymax [expr $ymin + $height]
+	    } else {
+		set ymax $ymin
+		set ymin [expr $ymax + $height]
+	    }
+
+	    append rt_cmd " -j $xmin,$ymin,$xmax,$ymax"
 	}
     }
 
@@ -610,8 +598,8 @@
 }
 
 ::itcl::body RtControl::setActivePane {{_pane ""}} {
-    if {!$isaMged && !$isaGed} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object"
+    if {!$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object"
     }
 
     if {$_pane == ""} {
@@ -717,13 +705,11 @@
 }
 
 ::itcl::body RtControl::updateControlPanel {} {
-    if {[catch {$itk_option(-mged) isa Mged} isaMged] ||
-	[catch {$itk_option(-mged) isa cadwidgets::Ged} isaGed] ||
-	(!$isaMged && !$isaGed)} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object, itk_option(-mged) - $itk_option(-mged)"
+    if {[catch {$itk_option(-ged) isa ::cadwidgets::Ged} isGed] || !$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object, itk_option(-ged) - $itk_option(-ged)"
     }
 
-    set rtActivePane [$itk_option(-mged) pane]
+    set rtActivePane [$itk_option(-ged) pane]
 
     # Doing it this way eliminates the obnoxious window flash
     after idle [::itcl::code $this update_control_panel]
@@ -984,8 +970,8 @@
 }
 
 ::itcl::body RtControl::set_color {} {
-    if {!$isaMged && !$isaGed} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object"
+    if {!$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object"
     }
 
     switch -- $rtColor {
@@ -1028,8 +1014,8 @@
 }
 
 ::itcl::body RtControl::set_fb_mode {} {
-    if {!$isaMged && !$isaGed} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object"
+    if {!$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object"
     }
 
     switch -- $fb_mode_str {
@@ -1051,8 +1037,8 @@
 }
 
 ::itcl::body RtControl::set_fb_mode_str {} {
-    if {!$isaMged && !$isaGed} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object"
+    if {!$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object"
     }
 
     switch -- $fb_mode {
@@ -1072,8 +1058,8 @@
 }
 
 ::itcl::body RtControl::set_size {} {
-    if {!$isaMged && !$isaGed} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object"
+    if {!$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object"
     }
 
     set rtSize [getSize]
@@ -1150,33 +1136,18 @@
 	ur -
 	ll -
 	lr {
-	    if {$isaMged} {
-		if {![$itk_option(-mged) component $dest fb_active]} {
-		    $itk_option(-mged) component $dest fb_active 1
+	    if {![$itk_option(-ged) pane_set_fb_mode $dest]} {
+		$itk_option(-ged) component $dest fb_active 1
 
-		    # update the Inactive/Underlay/Overlay radiobutton
-		    set fb_mode [subst $[subst fb_mode_$dest]]
-		    set_fb_mode_str
+		# update the Inactive/Underlay/Overlay radiobutton
+		set fb_mode [subst $[subst fb_mode_$dest]]
+		set_fb_mode_str
 
-		    if {$itk_option(-fb_mode_callback) != ""} {
-			catch {$itk_option(-fb_mode_callback) $fb_mode}
-		    }
+		if {$itk_option(-fb_mode_callback) != ""} {
+		    catch {$itk_option(-fb_mode_callback) $fb_mode}
 		}
-		return [$itk_option(-mged) component $dest listen]
-	    } else {
-		if {![$itk_option(-mged) pane_set_fb_mode $dest]} {
-		    $itk_option(-mged) component $dest fb_active 1
-
-		    # update the Inactive/Underlay/Overlay radiobutton
-		    set fb_mode [subst $[subst fb_mode_$dest]]
-		    set_fb_mode_str
-
-		    if {$itk_option(-fb_mode_callback) != ""} {
-			catch {$itk_option(-fb_mode_callback) $fb_mode}
-		    }
-		}
-		return [$itk_option(-mged) pane_listen $dest]
 	    }
+	    return [$itk_option(-ged) pane_listen $dest]
 	}
 	default {
 	    # Already cooked.
@@ -1186,18 +1157,10 @@
 }
 
 ::itcl::body RtControl::fb_mode {} {
-    if {$isaMged} {
-	if {$itk_option(-fb_enabled)} {
-	    $itk_option(-mged) component $rtActivePane fb_active $fb_mode
-	} else {
-	    $itk_option(-mged) component $rtActivePane fb_active 0
-	}
+    if {$itk_option(-fb_enabled)} {
+	$itk_option(-ged) pane_set_fb_mode $rtActivePane $fb_mode
     } else {
-	if {$itk_option(-fb_enabled)} {
-	    $itk_option(-mged) pane_set_fb_mode $rtActivePane $fb_mode
-	} else {
-	    $itk_option(-mged) pane_set_fb_mode $rtActivePane 0
-	}
+	$itk_option(-ged) pane_set_fb_mode $rtActivePane 0
     }
 
     set fb_mode_$rtActivePane $fb_mode
@@ -1208,8 +1171,8 @@
 }
 
 ::itcl::body RtControl::ok {} {
-    if {!$isaMged && !$isaGed} {
-	error "Raytrace Control Panel($this) is not associated with an Mged object"
+    if {!$isGed} {
+	error "Raytrace Control Panel($this) is not associated with a GED object"
     }
 
     raytrace
@@ -1225,7 +1188,7 @@
 ::itcl::body RtControl::get_cooked_dest {} {
     if {$rtActivePane == ""} {
 	# use the active pane
-	set rtActivePane [$itk_option(-mged) pane]
+	set rtActivePane [$itk_option(-ged) pane]
     }
 
     set cooked_dest [cook_dest $rtActivePane]
@@ -1238,11 +1201,7 @@
 		# Cause the framebuffer to listen for clients on port 0.
 		# If port 0 isn't available, the next available port will
 		# be returned.
-		if {$isaMged} {
-		    set cooked_dest [$itk_option(-mged) component $rtActivePane listen 0]
-		} else {
-		    set cooked_dest [$itk_option(-mged) pane_listen $rtActivePane 0]
-		}
+		set cooked_dest [$itk_option(-ged) pane_listen $rtActivePane 0]
 	    }
 	    default {
 		# We should only get here if $dest is -1,
@@ -1358,32 +1317,32 @@
 }
 
 ::itcl::body RtControl::enterOkCB {} {
-    if {!$isaMged && !$isaGed} {
-	set msg "Not associated with an Mged object"
+    if {!$isGed} {
+	set msg "Not associated with a GED object"
     } else {
 	set msg "Raytrace $rtActivePane's view and dismiss"
     }
 }
 
 ::itcl::body RtControl::enterRaytraceCB {} {
-    if {!$isaMged && !$isaGed} {
-	set msg "Not associated with an Mged object"
+    if {!$isGed} {
+	set msg "Not associated with a GED object"
     } else {
 	set msg "Raytrace $rtActivePane's view"
     }
 }
 
 ::itcl::body RtControl::enterAbortCB {} {
-    if {!$isaMged && !$isaGed} {
-	set msg "Not associated with an Mged object"
+    if {!$isGed} {
+	set msg "Not associated with a GED object"
     } else {
 	set msg "Abort all raytraces started from $rtActivePane"
     }
 }
 
 ::itcl::body RtControl::enterClearCB {} {
-    if {!$isaMged && !$isaGed} {
-	set msg "Not associated with an Mged object"
+    if {!$isGed} {
+	set msg "Not associated with a GED object"
     } else {
 	set msg "Clear $rtActivePane with the following color - $rtColor"
     }
@@ -1427,15 +1386,11 @@
 #
 #
 ::itcl::body RtControl::getSize {} {
-    if {!$isaMged && !$isaGed} {
-	error "Not associated with an Mged object"
+    if {!$isGed} {
+	error "Not associated with a GED object"
     }
 
-    if {$isaMged} {
-	set size [$itk_option(-mged) component $rtActivePane cget -dmsize]
-    } else {
-	set size [$itk_option(-mged) pane_win_size $rtActivePane]
-    }
+    set size [$itk_option(-ged) pane_win_size $rtActivePane]
     return "[lindex $size 0]x[lindex $size 1]"
 }
 
@@ -1515,11 +1470,7 @@
     set_size
 
     # update the Inactive/Underlay/Overlay radiobutton
-    if {$isaMged} {
-	set mode [$itk_option(-mged) component $rtActivePane fb_active]
-    } else {
-	set mode [$itk_option(-mged) pane_set_fb_mode $rtActivePane]
-    }
+    set mode [$itk_option(-ged) pane_set_fb_mode $rtActivePane]
 
     if {$mode < 1} {
 	set itk_option(-fb_enabled) 0

@@ -6,8 +6,8 @@ datarootdir=@datarootdir@
 datadir=@datadir@
 
 Name: libbv
-Description: BRL-CAD View Library
+Description: BRL-CAD View Mechanics Library
 Version: @BRLCAD_VERSION@
 Requires: libbg libbn libbu
-Libs: -L${libdir} -lbg -lbn -lbu -llmdb @LIBM@
+Libs: -L${libdir} -lbv -lbg -lbn -lbu -llmdb @LIBM@
 Cflags: -I${includedir}/brlcad -I${includedir}

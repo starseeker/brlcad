@@ -61,9 +61,10 @@
 #endif
 #include "RTree.h"
 
+#include "bu/log.h"
 #include "bu/malloc.h"
 #include "bn/rand.h"
-#include "bv/plot3.h"
+#include "bg/plot3.h"
 #include "bg/polygon.h"
 #include "bg/plane.h"
 

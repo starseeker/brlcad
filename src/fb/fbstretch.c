@@ -84,7 +84,7 @@
 #include "bu/interrupt.h"
 #include "bu/log.h"
 #include "bu/str.h"
-#include "dm.h"			/* BRL-CAD package libfb.a interface */
+#include "imgstream/fb_compat.h"
 
 
 #define USAGE1 "fbstretch [ -s size ] [ -w width ] [ -n height ]"
@@ -102,9 +102,9 @@ static float y_scale = -1.0;		/* vertical scaling factor */
 static bool_t x_compress;		/* set if compressing horizontally */
 static bool_t y_compress;		/* set if compressing vertically */
 static char *src_file = NULL;		/* source frame buffer name */
-static struct fb *src_fbp = FB_NULL;	/* source frame buffer handle */
+static imgstream_fb_t *src_fbp = NULL;	/* source frame buffer handle */
 static char *dst_file = NULL;		/* destination frame buffer name */
-static struct fb *dst_fbp = FB_NULL;	/* destination frame buffer handle */
+static imgstream_fb_t *dst_fbp = NULL;	/* destination frame buffer handle */
 static int src_width = 512;
 static int src_height = 512;		/* source image size */
 static int dst_width = 0;
@@ -114,23 +114,23 @@ static unsigned char *dst_buf;		/* calloc()ed output scan line buffer */
 
 /* in ioutil.c */
 extern void Message(const char *format, ...);
-extern void Fatal(struct fb *fbiop, const char *format, ...);
+extern void Fatal(imgstream_fb_t *fbiop, const char *format, ...);
 
 
 static void
 Stretch_Fatal(const char *str)
 {
-    if (src_fbp != FB_NULL && fb_close(src_fbp) == -1) {
-	Message("Error closing input frame buffer");
-	src_fbp = FB_NULL;
+    if (src_fbp != NULL) {
+	imgstream_fb_close(src_fbp);
+	src_fbp = NULL;
     }
 
-    if (dst_fbp != FB_NULL && fb_close(dst_fbp) == -1) {
-	Message("Error closing output frame buffer");
-	src_fbp = FB_NULL;
+    if (dst_fbp != NULL) {
+	imgstream_fb_close(dst_fbp);
+	dst_fbp = NULL;
     }
 
-    Fatal(FB_NULL, "%s", str);
+    Fatal(NULL, "%s", str);
     /* NOT REACHED */
 }
 
@@ -192,11 +192,11 @@ main(int argc, char **argv)
 		    sample = 1;
 		    break;
 
-		case 'f':	/* -f in_struct fb */
+		case 'f':	/* -f input framebuffer */
 		    src_file = bu_optarg;
 		    break;
 
-		case 'F':	/* -F out_struct fb */
+		case 'F':	/* -F output framebuffer */
 		    dst_file = bu_optarg;
 		    break;
 
@@ -302,10 +302,10 @@ main(int argc, char **argv)
 
     /* Open frame buffer(s) for unbuffered input/output. */
 
-    if ((src_fbp = fb_open(src_file == NULL ? dst_file : src_file,
-			   src_width, src_height
+    if ((src_fbp = imgstream_fb_open(src_file == NULL ? dst_file : src_file,
+			   (size_t)src_width, (size_t)src_height
 	     )
-	    ) == FB_NULL
+	    ) == NULL
 	)
 	Stretch_Fatal("Couldn't open input image");
     else {
@@ -313,10 +313,10 @@ main(int argc, char **argv)
 
 	/* Use smaller input size in preference to requested size. */
 
-	if ((wt = fb_getwidth(src_fbp)) < src_width)
+	if ((wt = (int)imgstream_fb_width(src_fbp)) < src_width)
 	    src_width = wt;
 
-	if ((ht = fb_getheight(src_fbp)) < src_height)
+	if ((ht = (int)imgstream_fb_height(src_fbp)) < src_height)
 	    src_height = ht;
 
 	if (verbose)
@@ -337,17 +337,18 @@ main(int argc, char **argv)
 	    || (dst_file != NULL && BU_STR_EQUAL(src_file, dst_file))
 	    )
 	    dst_fbp = src_fbp;	/* No No No Not a Second Time */
-	else if ((dst_fbp = fb_open(dst_file, dst_width, dst_height))
-		 == FB_NULL
+	else if ((dst_fbp = imgstream_fb_open(dst_file, (size_t)dst_width,
+				       (size_t)dst_height))
+		 == NULL
 	    )
 	    Stretch_Fatal("Couldn't open output frame buffer");
 
 	/* Use smaller output size in preference to requested size. */
 
-	if ((wt = fb_getwidth(dst_fbp)) < dst_width)
+	if ((wt = (int)imgstream_fb_width(dst_fbp)) < dst_width)
 	    dst_width = wt;
 
-	if ((ht = fb_getheight(dst_fbp)) < dst_height)
+	if ((ht = (int)imgstream_fb_height(dst_fbp)) < dst_height)
 	    dst_height = ht;
 
 	if (verbose)
@@ -370,20 +371,20 @@ main(int argc, char **argv)
     if ((src_buf = (unsigned char *)calloc(
 	     y_compress ? (int)(1 / y_scale + 1 - EPSILON) * src_width
 	     : src_width,
-	     sizeof(RGBpixel)
+	     3
 	     )
 	    ) == NULL
 	|| (dst_buf = (unsigned char *)calloc(
 		y_compress ? dst_width
 		: (int)(y_scale + 1 - EPSILON) * dst_width,
-		sizeof(RGBpixel)
+		3
 		)
 	    ) == NULL
 	)
 	Stretch_Fatal("Insufficient memory for scan line buffers.");
 
-#define Src(x, y)	(&src_buf[(x) + src_width * (y) * sizeof(RGBpixel)])
-#define Dst(x, y)	(&dst_buf[(x) + dst_width * (y) * sizeof(RGBpixel)])
+#define Src(x, y)	(&src_buf[3 * ((x) + src_width * (y))])
+#define Dst(x, y)	(&dst_buf[3 * ((x) + dst_width * (y))])
 
     /* Do the horizontal/vertical expansion/compression.  I wanted to merge
        these but didn't like the extra bookkeeping overhead in the loops. */
@@ -426,7 +427,7 @@ main(int argc, char **argv)
 	    /* Clear out top margin. */
 
 	    for (; dst_y < dst_height; ++dst_y)
-		if (fb_write(dst_fbp, 0, dst_y,
+		if (imgstream_fb_write(dst_fbp, 0, dst_y,
 			     (unsigned char *)Dst(0, 0),
 			     dst_width
 			) == -1
@@ -443,7 +444,7 @@ main(int argc, char **argv)
 	/* Fill input scan line buffer. */
 
 	for (src_y = bot_y; src_y < top_y; ++src_y)
-	    if (fb_read(src_fbp, 0, src_y,
+	    if (imgstream_fb_read(src_fbp, 0, src_y,
 			(unsigned char *)Src(0, src_y - bot_y),
 			src_width
 		    ) == -1
@@ -463,7 +464,7 @@ main(int argc, char **argv)
 	if (top_x <= bot_x) {
 	ccflush:		/* End of band; flush buffer. */
 
-	    if (fb_write(dst_fbp, 0, dst_y,
+	    if (imgstream_fb_write(dst_fbp, 0, dst_y,
 			 (unsigned char *)Dst(0, 0),
 			 dst_width
 		    ) == -1
@@ -532,7 +533,7 @@ main(int argc, char **argv)
 
 	/* Fill input scan line buffer. */
 
-	if (fb_read(src_fbp, 0, src_y, (unsigned char *)Src(0, 0),
+	if (imgstream_fb_read(src_fbp, 0, src_y, (unsigned char *)Src(0, 0),
 		    src_width
 		) == -1
 	    )
@@ -552,7 +553,7 @@ main(int argc, char **argv)
 	ceflush:		/* End of band; flush buffer. */
 
 	    for (dst_y = top_y; --dst_y >= bot_y;)
-		if (fb_write(dst_fbp, 0, dst_y,
+		if (imgstream_fb_write(dst_fbp, 0, dst_y,
 			     (unsigned char *)Dst(0, dst_y - bot_y
 				 ),
 			     dst_width
@@ -639,7 +640,7 @@ main(int argc, char **argv)
 	    /* Clear out top margin. */
 
 	    for (; dst_y < dst_height; ++dst_y)
-		if (fb_write(dst_fbp, 0, dst_y,
+		if (imgstream_fb_write(dst_fbp, 0, dst_y,
 			     (unsigned char *)Dst(0, 0),
 			     dst_width
 			) == -1
@@ -656,7 +657,7 @@ main(int argc, char **argv)
 	/* Fill input scan line buffer. */
 
 	for (src_y = bot_y; src_y < top_y; ++src_y)
-	    if (fb_read(src_fbp, 0, src_y,
+	    if (imgstream_fb_read(src_fbp, 0, src_y,
 			(unsigned char *)Src(0, src_y - bot_y),
 			src_width
 		    ) == -1
@@ -667,7 +668,7 @@ main(int argc, char **argv)
     ecxloop:
 	if (src_x < 0) {
 	    /* End of band; flush buffer. */
-	    if (fb_write(dst_fbp, 0, dst_y,
+	    if (imgstream_fb_write(dst_fbp, 0, dst_y,
 			 (unsigned char *)Dst(0, 0),
 			 dst_width
 		    ) == -1
@@ -749,7 +750,7 @@ main(int argc, char **argv)
 	assert(top_y - bot_y <= (int)(y_scale + 1 - EPSILON));
 
 	/* Fill input scan line buffer. */
-	if (fb_read(src_fbp, 0, src_y, (unsigned char *)Src(0, 0),
+	if (imgstream_fb_read(src_fbp, 0, src_y, (unsigned char *)Src(0, 0),
 		    src_width
 		) == -1
 	    )
@@ -761,7 +762,7 @@ main(int argc, char **argv)
 	    /* End of band; flush buffer. */
 
 	    for (dst_y = top_y; --dst_y >= bot_y;)
-		if (fb_write(dst_fbp, 0, dst_y,
+		if (imgstream_fb_write(dst_fbp, 0, dst_y,
 			     (unsigned char *)Dst(0, dst_y - bot_y
 				 ),
 			     dst_width
@@ -798,13 +799,12 @@ main(int argc, char **argv)
 done:
     /* Close the frame buffers. */
 
-    assert(src_fbp != FB_NULL && dst_fbp != FB_NULL);
+    assert(src_fbp != NULL && dst_fbp != NULL);
 
-    if (fb_close(src_fbp) == -1)
-	Message("Error closing input frame buffer");
+    imgstream_fb_close(src_fbp);
 
-    if (dst_fbp != src_fbp && fb_close(dst_fbp) == -1)
-	Message("Error closing output frame buffer");
+    if (dst_fbp != src_fbp)
+	imgstream_fb_close(dst_fbp);
 
     return 0;
 }

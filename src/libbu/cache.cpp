@@ -24,6 +24,7 @@
 
 #include "common.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <mutex>
@@ -66,6 +67,7 @@ struct bu_cache_impl {
     MDB_dbi dbi;
     struct bu_vls *fname;
     int write_txn_active; // 0 = no active write txn, 1 = active
+    int defer_sync; // committed data is flushed once at clean close
     std::mutex write_txn_mutex;
 };
 
@@ -75,10 +77,12 @@ struct bu_cache_txn {
 };
 
 struct bu_cache *
-bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
+bu_cache_open_with_options(const char *cache_db, int create,
+			   size_t max_cache_size, unsigned int options)
 {
     size_t page_size;
     size_t msize;
+    unsigned int lmdb_flags = MDB_NOSYNC | MDB_NOTLS;
 
     if (!cache_db)
 	return NULL;
@@ -94,7 +98,7 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
 
 	// Ensure the necessary top level dirs are present
 	bu_dir(cdb, MAXPATHLEN, BU_DIR_CACHE, NULL);
-	if (!bu_file_exists(cdb, NULL))
+	if (cdb[0] && !bu_file_exists(cdb, NULL))
 	    bu_mkdir(cdb);
 
 	// Break cache_db up into component directories with bu_path_component,
@@ -111,7 +115,7 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
 	    bu_path_component(&cdbd, bu_vls_cstr(&cdbd), BU_PATH_DIRNAME);
 	}
 	bu_dir(cdb, MAXPATHLEN, BU_DIR_CACHE, NULL);
-	bu_vls_sprintf(&ctmp, "%s", cdb);
+	bu_vls_sprintf(&ctmp, "%s", cdb[0] ? cdb : ".");
 	for (long long i = dirs.size() - 1; i >= 0; i--) {
 	    bu_vls_printf(&ctmp, "%c%s", BU_DIR_SEPARATOR, dirs[i].c_str());
 	    if (!bu_file_exists(bu_vls_cstr(&ctmp), NULL))
@@ -130,6 +134,7 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
     bu_vls_init(c->i->fname);
     bu_vls_sprintf(c->i->fname, "%s", cdb);
     c->i->write_txn_active = 0;
+    c->i->defer_sync = (options & BU_CACHE_OPEN_DEFER_SYNC) ? 1 : 0;
 
     // Base maximum readers on an estimate of how many threads
     // we might want to fire off
@@ -137,8 +142,13 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
     if (!mreaders)
 	mreaders = 1;
     int ncpus = bu_avail_cpus();
-    if (ncpus > 0 && (size_t)ncpus > mreaders)
-	mreaders = (size_t)ncpus + 2;
+    if (ncpus > 0)
+	mreaders = std::max(mreaders, static_cast<size_t>(ncpus));
+    /* A process can have multiple worker pools and ordinary callers holding
+     * read transactions in addition to its nominal CPU-sized pool.  Reader
+     * slots are inexpensive LMDB bookkeeping; sizing them exactly to CPU
+     * count made legitimate concurrent cache reads intermittently fail. */
+    mreaders = std::max(static_cast<size_t>(64), mreaders + 8);
 
     // Set up LMDB environments
     if (mdb_env_create(&c->i->env))
@@ -153,7 +163,9 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
 	goto bu_context_close_fail;
 
     // Need to call mdb_env_sync() at appropriate points.
-    if (mdb_env_open(c->i->env, cdb, MDB_NOSYNC, 0664))
+    if (options & BU_CACHE_OPEN_NORDAHEAD)
+	lmdb_flags |= MDB_NORDAHEAD;
+    if (mdb_env_open(c->i->env, cdb, lmdb_flags, 0664))
 	goto bu_context_close_fail;
 
     // Do the initial dbi setup.  Opening with a write transaction
@@ -162,8 +174,7 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
     MDB_txn *txn;
     if (mdb_txn_begin(c->i->env, NULL, 0, &txn) != 0) // begin write txn
 	goto bu_context_close_fail;
-    if (mdb_dbi_open(txn, NULL, 0, &c->i->dbi) != 0) // open unnamed db
-    {
+    if (mdb_dbi_open(txn, NULL, 0, &c->i->dbi) != 0) { // open unnamed db
 	mdb_txn_abort(txn);
 	goto bu_context_close_fail;
     }
@@ -182,6 +193,12 @@ bu_context_fail:
     delete c->i;
     BU_PUT(c, struct bu_cache);
     return NULL;
+}
+
+struct bu_cache *
+bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
+{
+    return bu_cache_open_with_options(cache_db, create, max_cache_size, 0);
 }
 
 int
@@ -205,7 +222,7 @@ bu_cache_close(struct bu_cache *c)
     mdb_env_close(c->i->env);
     bu_vls_free(c->i->fname);
     BU_PUT(c->i->fname, struct bu_vls);
-    BU_PUT(c->i, struct bu_cache_impl);
+    delete c->i;
     BU_PUT(c, struct bu_cache);
 
     return BRLCAD_OK;
@@ -301,6 +318,9 @@ bu_cache_get(void **data, const char *key, struct bu_cache *c, struct bu_cache_t
     mdb_key.mv_data = (void *)key;
     int rc = mdb_get(txn, c->i->dbi, &mdb_key, &mdb_data[0]);
     if (rc) {
+	if (rc != MDB_NOTFOUND)
+	    bu_log("Error - cache read failed for key '%s': %d (%s)\n",
+		key, rc, mdb_strerror(rc));
 	if (data)
 	    (*data) = NULL;
 	if (!t)
@@ -349,20 +369,28 @@ cache_get_write_txn(struct bu_cache *c, struct bu_cache_txn **t)
     if (UNLIKELY(!c))
 	return NULL;
 
-    // We can't have multiple write txns per cache - lock to prevent
-    // multiple threads trying this at the same time
-    std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
-
-    // If we already have a write txn and we're trying to start another
-    // one, that's a no-no
-    if ((!t || !*t) && c->i->write_txn_active) {
-        bu_log("Error: Attempt to start a second write transaction on the same cache.\n");
-        return NULL;
-    }
-
+    /*
+     * An LMDB write transaction retains its internal writer mutex until
+     * commit or abort.  A caller extending an existing transaction therefore
+     * already holds the LMDB side of the lock order and must not reacquire our
+     * admission mutex.  More importantly, do not hold our mutex while
+     * mdb_txn_begin acquires LMDB's: doing both creates the opposite lock
+     * order and a real deadlock opportunity between new and extended
+     * transactions.
+     */
     MDB_txn *txn = (t && *t) ? (*t)->txn : NULL;
     if (txn)
 	return txn;
+
+    {
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
+	if (c->i->write_txn_active) {
+	    bu_log("Error: Attempt to start a second write transaction on the same cache.\n");
+	    return NULL;
+	}
+	/* Reserve the one permitted writer before entering LMDB. */
+	c->i->write_txn_active = 1;
+    }
 
     int txn_ret = mdb_txn_begin(c->i->env, NULL, 0, &txn);
     if (txn_ret) {
@@ -375,11 +403,10 @@ cache_get_write_txn(struct bu_cache *c, struct bu_cache_txn **t)
 
     if (txn_ret != 0) {
 	bu_log("Error - txn acquisition failed!: %d\n", txn_ret);
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
+	c->i->write_txn_active = 0;
 	return NULL;
     }
-
-    // We have an active write txn - let the cache know
-    c->i->write_txn_active = 1;
 
     if (t) {
 	struct bu_cache_txn *ctxn;
@@ -436,10 +463,13 @@ bu_cache_write(void *data, size_t dsize, const char *key, struct bu_cache *c, st
     // Not doing multiple writes - proceed
     rc |= mdb_txn_commit(txn);
     txn = NULL;
-    mdb_env_sync(c->i->env, 0);
+    if (!c->i->defer_sync)
+	mdb_env_sync(c->i->env, 0);
 
-    // No longer have an active write txn - let the cache know
-    c->i->write_txn_active = 0;
+    {
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
+	c->i->write_txn_active = 0;
+    }
 
     // If we were unsuccessful, return 0;
     if (rc)
@@ -478,13 +508,13 @@ bu_cache_write_commit(struct bu_cache *c, struct bu_cache_txn **t)
 
     struct bu_cache_txn *ctxn = *t;
     int rc = 0;
+    rc = mdb_txn_commit(ctxn->txn);
     {
-	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex); // lock
-	rc = mdb_txn_commit(ctxn->txn);
-	// No longer have an active write txn - let the cache know
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
 	ctxn->cache->i->write_txn_active = 0;
     }
-    mdb_env_sync(c->i->env, 0);
+    if (!c->i->defer_sync)
+	mdb_env_sync(c->i->env, 0);
     ctxn->cache = NULL;
     BU_PUT(ctxn, struct bu_cache_txn);
     *t = NULL;
@@ -499,10 +529,9 @@ bu_cache_write_abort(struct bu_cache_txn **t)
 	return;
 
     struct bu_cache_txn *ctxn = *t;
+    mdb_txn_abort(ctxn->txn);
     {
-	std::lock_guard<std::mutex> guard(ctxn->cache->i->write_txn_mutex); // lock
-	mdb_txn_abort(ctxn->txn);
-	// No longer have an active write txn - let the cache know
+	std::lock_guard<std::mutex> guard(ctxn->cache->i->write_txn_mutex);
 	ctxn->cache->i->write_txn_active = 0;
     }
 
@@ -537,16 +566,15 @@ bu_cache_clear(const char *key, struct bu_cache *c, struct bu_cache_txn **t)
 	return;
     }
 
-    int rc = 0;
+    int rc = mdb_txn_commit(txn);
     {
-	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex); // lock
-	rc = mdb_txn_commit(txn);
-	// No longer have an active write txn - let the cache know
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
 	c->i->write_txn_active = 0;
     }
     if (rc && rc != MDB_NOTFOUND)
 	bu_log("Clear operation for %s failed\n", key);
-    mdb_env_sync(c->i->env, 0);
+    if (!c->i->defer_sync)
+	mdb_env_sync(c->i->env, 0);
 }
 
 int

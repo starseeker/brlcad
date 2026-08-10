@@ -435,7 +435,6 @@ parallel_mapping(parallel_action_t action, int id, size_t max)
     }
 
     bu_semaphore_release(BU_SEM_THREAD);
-
     if (action == PARALLEL_GET && !result) {
 	bu_log("Compile-time parallelism limit reached (%d >= %d).\n", got_cpu, MAX_PSW*MAX_PSW);
 	bu_bomb("Unable to track threading.\n");
@@ -623,15 +622,28 @@ bu_parallel(void (*func)(int, void *), size_t ncpu, void *arg)
 	throttle = 1;
 
 	/* any "zero" limit scopes propagate upward */
-	while (parent->lim == 0 && parent->id > 0) {
-	    parent = parallel_mapping(PARALLEL_GET, parent->parent, ncpu);
+	while (1) {
+	    size_t parent_lim;
+	    int parent_id;
+	    int parent_parent;
+	    bu_semaphore_acquire(BU_SEM_THREAD);
+	    parent_lim = parent->lim;
+	    parent_id = parent->id;
+	    parent_parent = parent->parent;
+	    bu_semaphore_release(BU_SEM_THREAD);
+	    if (parent_lim != 0 || parent_id <= 0)
+		break;
+	    parent = parallel_mapping(PARALLEL_GET, parent_parent, ncpu);
 	}
 
 	/* if the top-most parent is unspecified, use all available cpus */
-	if (parent->lim == 0) {
+	bu_semaphore_acquire(BU_SEM_THREAD);
+	size_t parent_lim = parent->lim;
+	bu_semaphore_release(BU_SEM_THREAD);
+	if (parent_lim == 0) {
 	    ncpu = bu_avail_cpus();
 	} else {
-	    ncpu = parent->lim;
+	    ncpu = parent_lim;
 	}
 
 	/* starting a "zero" bu_parallel means we get one worker

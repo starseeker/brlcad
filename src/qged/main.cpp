@@ -1,4 +1,4 @@
-/*                        M A I N . C X X
+/*                        M A I N . C P P
  * BRL-CAD
  *
  * Copyright (c) 2014-2026 United States Government as represented by
@@ -17,39 +17,34 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file main.cxx
+/** @file main.cpp
  *
- * Command line parsing and main application launching for qbrlcad
- *
+ * Command-line parsing and main application launching for qged.
  */
 
 #include "common.h"
 
-#include <iostream>
+#include <cstdlib>
 
-#include <QTimer>
-#include <QCommandLineOption>
-#include <QCommandLineParser>
-#include <QApplication>
-#include <QTextStream>
+#include <QSurfaceFormat>
 
+#include "brlcad_version.h"
 #include "bu/app.h"
 #include "bu/log.h"
 #include "bu/opt.h"
-#include "brlcad_version.h"
-
+#include "bu/vls.h"
 #include "QgEdApp.h"
-#include "fbserv.h"
+#include "QgGuiTestDriver.h"
 
 static void
-qged_usage(const char *cmd, struct bu_opt_desc *d) {
+qged_usage(const char *cmd, struct bu_opt_desc *descriptions)
+{
     struct bu_vls str = BU_VLS_INIT_ZERO;
-    char *option_help = bu_opt_describe(d, NULL);
+    char *optionHelp = bu_opt_describe(descriptions, NULL);
     bu_vls_sprintf(&str, "Usage: %s [options] [file.g]\n", cmd);
-    if (option_help) {
-	bu_vls_printf(&str, "Options:\n%s\n", option_help);
-    }
-    bu_free(option_help, "help str");
+    if (optionHelp)
+	bu_vls_printf(&str, "Options:\n%s\n", optionHelp);
+    bu_free(optionHelp, "help str");
     bu_log("%s", bu_vls_cstr(&str));
     bu_vls_free(&str);
 }
@@ -68,83 +63,148 @@ int
 main(int argc, char **argv)
 {
 #endif
+    int consoleMode = 0;
+    int softwareRasterMode = 0;
+    int quadMode = 0;
+    int printHelp = 0;
+    struct bu_vls message = BU_VLS_INIT_ZERO;
+    const char *startupCommands = NULL;
+    const char *testScript = NULL;
+    const char *testReport = NULL;
+    const char *executableName = argv[0];
 
-    int console_mode = 0;
-    int swrast_mode = 0;
-    int quad_mode = 0;
-    int print_help = 0;
-    struct bu_vls msg = BU_VLS_INIT_ZERO;
-    const char *exec_name = argv[0];
-
-    // All BRL-CAD programs need to set this in order for relative path lookups
-    // to work reliably.
     bu_setprogname(argv[0]);
 
-    /* Done with command name argv[0] */
-    argc-=(argc>0); argv+=(argc>0);
+    if (argc > 0) {
+	argc--;
+	argv++;
+    }
 
-    /* Handle top level application options */
-    struct bu_opt_desc d[6];
-    BU_OPT(d[0],  "h", "help",   "", NULL, &print_help,    "Print help and exit");
-    BU_OPT(d[1],  "?", "",       "", NULL, &print_help,    "");
-    BU_OPT(d[2],  "c", "no-gui", "", NULL, &console_mode,  "Run without GUI");
-    BU_OPT(d[3],  "s", "swrast", "", NULL, &swrast_mode,   "Use software rendering for 3D view");
-    BU_OPT(d[4],  "4", "quad",   "", NULL, &quad_mode,     "Launch using quad view");
-    BU_OPT_NULL(d[5]);
+    struct bu_opt_desc descriptions[9];
+    BU_OPT(descriptions[0], "h", "help", "", NULL, &printHelp,
+	"Print help and exit");
+    BU_OPT(descriptions[1], "?", "", "", NULL, &printHelp, "");
+    BU_OPT(descriptions[2], "c", "no-gui", "", NULL, &consoleMode,
+	"Run without GUI");
+    BU_OPT(descriptions[3], "s", "swrast", "", NULL, &softwareRasterMode,
+	"Use offscreen rendering for 3D view");
+    BU_OPT(descriptions[4], "4", "quad", "", NULL, &quadMode,
+	"Launch using quad view");
+    BU_OPT(descriptions[5], "e", "exec", "commands", &bu_opt_str,
+	&startupCommands,
+	"Run semicolon-separated GED commands after GUI initialization");
+    BU_OPT(descriptions[6], "", "test-script", "events.json", &bu_opt_str,
+	&testScript, "Replay a qtcad GUI event stream and exit with test status");
+    BU_OPT(descriptions[7], "", "test-report", "report.json", &bu_opt_str,
+	&testReport, "Write timing and LoD samples while replaying a GUI test");
+    BU_OPT_NULL(descriptions[8]);
 
-    // High level options are only defined prior to the file argument (if there
-    // is one).  See if we need to limit our processing
-    int acmax = 0;
+    int optionArgumentCount = 0;
     for (int i = 0; i < argc; i++) {
-	if (argv[i][0] == '-') {
-	    acmax++;
-	} else {
+	if (argv[i][0] != '-')
 	    break;
+	optionArgumentCount++;
+	if ((BU_STR_EQUAL(argv[i], "-e") ||
+		BU_STR_EQUAL(argv[i], "--exec") ||
+		BU_STR_EQUAL(argv[i], "--test-script") ||
+		BU_STR_EQUAL(argv[i], "--test-report")) &&
+	    i + 1 < argc) {
+	    optionArgumentCount++;
+	    i++;
 	}
     }
 
-    // Process high level args
-    int opt_ac = bu_opt_parse(&msg, acmax, (const char **)argv, d);
-    if (opt_ac < 0) {
-	bu_log("%s\n", bu_vls_cstr(&msg));
-	bu_vls_free(&msg);
+    int parsedCount = bu_opt_parse(
+	&message, optionArgumentCount, (const char **)argv, descriptions);
+    if (parsedCount < 0) {
+	bu_log("%s\n", bu_vls_cstr(&message));
+	bu_vls_free(&message);
 	return BRLCAD_ERROR;
     }
 
-    // Shift everything not processed by bu_opt_parse down in argv to the last
-    // option left behind by bu_opt_parse (or the beginning of the array if
-    // opt_ac == 0
-    int opt_rem = opt_ac;
-    for (int i = acmax; i < argc; i++) {
-	argv[opt_ac + (i - acmax)] = argv[i];
-	opt_rem++;
+    int remainingCount = parsedCount;
+    for (int i = optionArgumentCount; i < argc; i++) {
+	argv[parsedCount + (i - optionArgumentCount)] = argv[i];
+	remainingCount++;
     }
+    argc = remainingCount;
 
-    // Set argc to the full count of whatever is left
-    argc = opt_rem;
-
-    if (print_help) {
-	qged_usage(exec_name, d);
-	bu_vls_free(&msg);
+    if (printHelp) {
+	qged_usage(executableName, descriptions);
+	bu_vls_free(&message);
 	return BRLCAD_OK;
     }
 
-    // TODO - if we have commands beyond a .g file, we're supposed to process
-    // and exit...
-    if (argc > 1 && !console_mode) {
+    if (argc > 1 && !consoleMode) {
 	bu_log("For qged GUI mode need either zero or one .g files specified\n");
+	bu_vls_free(&message);
 	return BRLCAD_ERROR;
     }
 
-    if (console_mode) {
+    if (consoleMode) {
 	bu_log("Unimplemented\n");
+	bu_vls_free(&message);
 	return BRLCAD_ERROR;
     }
 
-    // We derive our own app type from QApplication
-    QgEdApp app(argc, argv, swrast_mode, quad_mode);
+    if (startupCommands)
+	bu_log("qged: queued startup commands: %s\n", startupCommands);
 
-    // Setup complete - time to enter the interactive event loop
+#ifdef BRLCAD_OPENGL
+    if (!softwareRasterMode) {
+	QSurfaceFormat format;
+	format.setRenderableType(QSurfaceFormat::OpenGL);
+	format.setDepthBufferSize(24);
+	format.setStencilBufferSize(8);
+
+	/* QOpenGLWidget renders into a Qt-owned FBO.  The compositor owns final
+	 * presentation pacing; applying another v-sync gate to the intermediate
+	 * context severely reduces interactive retained-view throughput. */
+	int swapInterval = 0;
+	const char *swapOverride = std::getenv("QGED_SWAP_INTERVAL");
+	if (swapOverride && swapOverride[0]) {
+	    char *end = NULL;
+	    const long value = std::strtol(swapOverride, &end, 10);
+	    if (end && end[0] == '\0' && value >= -1 && value <= 1)
+		swapInterval = static_cast<int>(value);
+	    else
+		bu_log("qged: ignoring invalid QGED_SWAP_INTERVAL=%s "
+		       "(expected -1, 0, or 1)\n", swapOverride);
+	}
+	format.setSwapInterval(swapInterval);
+	QSurfaceFormat::setDefaultFormat(format);
+    }
+#endif
+
+    const QString startup = startupCommands ?
+	QString::fromLocal8Bit(startupCommands) : QString();
+
+    /* QApplication requires a valid executable argv[0].  The qged option
+     * parser has removed it from the optional database arguments. */
+    const char *databaseFile = argc ? argv[0] : NULL;
+    int qtArgc = 1;
+    char *qtArgv[] = {const_cast<char *>(executableName), NULL};
+    QgEdApp app(
+	qtArgc, qtArgv, databaseFile, softwareRasterMode, quadMode);
+
+    if (!startup.isEmpty()) {
+	const QStringList commands = startup.split(';', Qt::SkipEmptyParts);
+	for (const QString &command : commands) {
+	    const QString trimmed = command.trimmed();
+	    bu_log("qged: executing startup command: %s\n",
+		trimmed.toLocal8Bit().constData());
+	    app.run_qcmd(trimmed);
+	}
+    }
+
+    if (testScript) {
+	const QString script = QString::fromLocal8Bit(testScript);
+	const QString reportFile = testReport ?
+	    QString::fromLocal8Bit(testReport) : QString();
+	qged_schedule_gui_test(
+	    app, script, reportFile, softwareRasterMode != 0);
+    }
+    bu_vls_free(&message);
     return app.exec();
 }
 

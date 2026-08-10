@@ -1,0 +1,467 @@
+BRL-CAD / Obol Matrix and View Conventions
+===========================================
+
+Purpose
+-------
+
+This note records the matrix, coordinate, and view-size rules that the
+BRL-CAD-to-Obol migration must preserve.  It is intended to be a durable
+resource for libBObol, qtcad/qged, GED drawing tests, and future Obol camera
+work.  The immediate goal is to replace measured view corrections with a
+defensible conversion contract.
+
+
+Coordinate Frames
+-----------------
+
+BRL-CAD model coordinates and Obol world coordinates should be treated as the
+same right-handed XYZ model space unless a caller explicitly requests a
+different import transform.  Database geometry loaded into Obol should keep
+its BRL-CAD `(x, y, z)` values as Obol `(x, y, z)` values.
+
+The important difference is not a global model-axis relabeling.  The important
+differences are:
+
+* BRL-CAD VMATH matrix multiplication uses column vectors.
+* Obol/Coin matrix APIs normally use column-order storage and row-vector style
+  point transforms for common geometry operations.
+* BRL-CAD `gv_size` is the horizontal view size.
+* Obol `SoOrthographicCamera::height` is the vertical camera height.
+* BRL-CAD view space and Obol camera local space both have +Z out of the
+  screen/camera, so the camera looks in the -Z direction.
+
+BRL-CAD documentation describes the MGED screen coordinate system as
+right-handed, with +Z perpendicular to the screen and out of the screen.
+The librt view-feature documentation defines azimuth 0 along model +X,
+positive azimuth counter-clockwise about +Z, and elevation +90 along +Z.
+Obol `SoCamera` defaults to position `(0, 0, 1)`, looking along negative Z,
+with up along positive Y.  Those conventions line up at the camera/view-space
+level: view +Z is the camera-back/out-of-screen direction, and look direction
+is -view-Z.
+
+
+Database Source Geometry and Placement
+--------------------------------------
+
+`SoBRLDatabaseSource` primary geometry is source-local.  VLIST, point, and
+mesh point arrays published to a database source must not have the source
+`drawMatrix` pre-applied.  `drawMatrix` is local-to-scene placement metadata
+and is applied explicitly by traversal, bounds, autoview, and export/pick/snap
+code that needs scene coordinates.
+
+Database realization follows the same rule.  `db_walk_tree_leaf_instances`
+supplies path, material/region state, member transforms, and a directory entry
+before importing the leaf.  On cache misses libBObol performs one owned
+local-space primitive import, builds shared local geometry, and gives each
+visible leaf an explicit instance transform.  The visible leaf shape keeps path
+identity and draw/edit state, while the shared node is geometry only.
+
+Repeated instances of the same primitive or comb tree must reuse that local
+geometry when they can.  The current realization action seeds its temporary
+geometry cache from already-current realized sources before realizing stale
+ones, so separate GED draw transactions can still share local geometry for
+later transformed instances.  This is not a persistent cross-refresh cache:
+database edits, direct geometry edits, or stale sources must still rebuild
+through the normal realization path until an explicit persistent key and
+invalidation policy exists.
+
+User-level GED display transactions operate on logical displayed database
+paths, not internal suffixed Obol instance paths.  Visibility and highlight
+updates therefore apply consistently to all matching repeated leaf instances
+for the requested object family.  Narrow refresh of one realized source uses
+the explicit `SoBRLDatabaseSource::instanceKey` path through
+`BObolSceneController::markDatabaseSourceInstanceStale`; realization then
+keeps geometry source-local and can seed rebuilt instances from current
+siblings.
+
+GED draw transactions follow the same leaf-instance boundary for normal
+database draw modes.  Obol-owned wire, shaded-BoT, shaded, and hidden-line
+draw requests are expanded with `db_walk_tree_leaf_instances`; each resulting
+full leaf path becomes an explicit Obol database source and is realized by
+libBObol.  Do not replace this with aggregate root mesh sources unless the
+aggregate representation can preserve per-leaf material, region, identity, and
+transform semantics explicitly.
+
+Evaluated wire and evaluated sampled-points are requested-path providers rather
+than leaf-instance expansion.  They publish source-local provider output to the
+Obol database source for the requested path, preserving draw matrix placement
+as source metadata.  Evaluated wire now has a librt core API,
+`rt_eval_wireframe(vhead, vlfree, dbip, path, tol, ttol, opts)`, which accepts
+full path/name style input and emits an RT vlist.  The options flags can force
+the historical Big-E path or the symbolic boolweave path for comparison and
+fallback if the default changes.  libBObol adapts that vlist
+to the BG line-command arrays currently used by Obol/GED publication.  The
+default evaluator still uses the old Big-E algorithm internally, but it owns
+local librt resource/vlist state, records typed output internally, and
+aggregates explicit per-region results in deterministic ordinal order.
+Multiple prepared evaluator contexts are image-equivalent when consumed in
+serial region order, but dynamic out-of-order region execution is not;
+parallel work should therefore move isolated ray/classification jobs behind
+per-thread resources rather than reorder region evaluation.  The opt-in
+boolweave diagnostic uses the active region's real prepared soltabs to compare
+candidate-level Big-E output against librt partitions without changing default
+output.  The current opt-in symbolic evaluator injects known source-boundary
+intervals, uses boolweave for interval/CSG ordering, and emits candidate
+intervals whose ternary CSG state is `ON`; rook differences still need CSG
+inspection before replacing the default baseline.  Avoid globally
+scaling/bumping an alternate database as the primary correctness strategy.
+
+External primary geometry publication also follows this rule.  Producers must
+emit source-local geometry before calling the libBObol publish APIs.  Legacy
+draw-tree paths that still obtain transformed mesh arrays localize those arrays
+explicitly at the producer boundary before publication; the generic
+database-source publisher does not infer coordinate space from draw mode.
+
+Bounds code must avoid double-applying placement.  If a realized source already
+contains explicit realization transforms, bounds traversal uses those child
+transforms.  If a source has only source-local published bounds and no realized
+children, bounds traversal applies `drawMatrix` to the source-local bounds.
+
+
+BRL-CAD Matrix Contract
+-----------------------
+
+`include/vmath.h` is the authoritative contract for BRL-CAD matrix math:
+
+* `mat_t` is documented in row/column positions as a 4x4 matrix stored in a
+  16-element array.
+* VMATH uses column-vector semantics.
+* A point transform is:
+
+```
+view_vec = model2view_mat * model_vec
+```
+
+* Additional transforms multiply on the left.
+* Translation values are in elements 3, 7, and 11 for the column-vector
+  semantic matrix.
+* The historical homogeneous scale lives in element 15.
+
+For an affine BRL-CAD view with center `C`, rotation `R`, and scale `S`:
+
+```
+gv_model2view = gv_rotation * gv_center
+gv_model2view[15] = gv_scale
+gv_view2model = inverse(gv_model2view)
+```
+
+For model point `p`:
+
+```
+view = R * (p - C) / S
+```
+
+The rows of `gv_rotation` are the model-space directions of the BRL-CAD view
+axes:
+
+* row 0: view +X, screen right
+* row 1: view +Y, screen up
+* row 2: view +Z, out of screen / camera back
+
+Consequently the model-space look direction is:
+
+```
+look = -row2(gv_rotation)
+```
+
+The model-space camera position for a direct camera representation is:
+
+```
+eye = C + row2(gv_rotation) * distance
+```
+
+where `distance` is any positive distance large enough for clipping/focal
+policy.  For orthographic rendering, changing `distance` alone must not change
+the projected size.
+
+
+BRL-CAD View Size and Aspect
+----------------------------
+
+`struct bsg_view` records:
+
+```
+gv_size = 2.0 * gv_scale
+gv_isize = 1.0 / gv_size
+gv_width, gv_height = active pixel window
+```
+
+The legacy screen-to-view conversion is:
+
+```
+aspect = gv_width / gv_height
+view_x = 2 * screen_x / gv_width - 1
+view_y = (1 - 2 * screen_y / gv_height) / aspect
+```
+
+Therefore the visible BRL-CAD view-space window is:
+
+```
+x in [-1, +1]
+y in [-1/aspect, +1/aspect]
+```
+
+and the visible model-space extents for an orthographic view are:
+
+```
+horizontal model size = gv_size
+vertical model size   = gv_size / aspect
+```
+
+This is the source of the current qtcad/GED camera-sync mismatch.  Obol
+`SoOrthographicCamera::height` is vertical height; BRL-CAD `gv_size` is
+horizontal size.  A direct Obol orthographic camera must use:
+
+```
+camera->height      = gv_size / aspect
+camera->aspectRatio = aspect
+```
+
+not `gv_size`, `2 * gv_size`, or `4 * gv_scale`.
+
+
+Raster Boundary Case: Polygon Rectangle
+---------------------------------------
+
+The `ged_test_drawing_basic` rectangle polygon case is a useful guard against
+ad hoc camera fixes.  The test creates a view-space rectangle from screen
+points `(190, 190)` and `(380, 290)` in a 512x512 viewport.  The legacy
+screen-to-view math maps those points back to OpenGL window-space y values of
+`322.0` and `222.0`, which correspond to top-origin rows 189 and 289.
+
+The direct Obol camera projection reproduced the top edge exactly, but
+projected the lower point to:
+
+```
+screen = (0.74218755960464478, 0.43359372019767761, ...)
+window = (380.00003051757812, 221.99998474121094)
+```
+
+That tiny negative epsilon relative to the integer y boundary moves the
+rasterized lower line from row 289 to row 290.  Pixel analysis showed the
+current rendering's only meaningful rectangle difference was that one bottom
+edge row; the top, left, and right edges aligned.  Switching the shape renderer
+from independent line segments to `GL_LINE_STRIP`, and submitting polygon
+contour points through double-precision VLIST storage, did not change the
+result.  This rules out independent segment topology and simple float vertex
+truncation as the cause.
+
+The mismatch is a camera/projection viewport-boundary tie-break produced by
+floating-point realization of mathematically equivalent view coordinates.  For
+polygon image tests, Hamming/perceptual thresholds are appropriate for
+raster-sensitive edge and fill cases, while raw pixel diffs remain useful
+diagnostics.  Do not rebaseline polygon images solely for this class of
+boundary shift.  If exact pixel parity is ever required, the fix should be a
+documented libBObol camera/view projection policy, such as exact
+viewport-centered mapping or a deliberate snap rule, not a measured per-shape
+offset.
+
+
+Autoview Bounds
+---------------
+
+Autoview framing is a separate contract from camera import.  The legacy
+all-scene autoview path did not feed a tight aggregate scene bounding box
+directly into the view size calculation.  For each displayed database object,
+it computed the object's tight center and maximum axis length, expanded that
+object to a cube:
+
+```
+object_size = max(bmax - bmin)
+object_min  = center - object_size
+object_max  = center + object_size
+```
+
+and then unioned those padded object envelopes before applying the autoview
+scale factor.  This preserves the historical model2view framing behavior and
+is why a tight Obol aggregate database bound can produce a view that is about
+two times too close even when the direct Obol camera math is correct.
+
+The fix is not to multiply `SoOrthographicCamera::height` by an empirical
+factor.  The Obol draw bridge should expose an explicit autoview-envelope
+query for database sources, while ordinary scene/subtree bounds remain tight
+model-space bounding boxes.  No-argument GED autoview may use that envelope;
+named-object bounds and precise bounds APIs should stay tight unless they are
+explicitly documented as autoview framing helpers.
+
+
+Legacy libdm/OpenGL Path
+------------------------
+
+The legacy OpenGL display-manager path loads `gv_model2view` as the modelview
+matrix and, for the non-perspective case, uses:
+
+```
+glOrtho(-1, 1, -1, 1, clipminz, clipmaxz)
+```
+
+Before loading the modelview matrix, `gl_loadMatrix` repacks BRL-CAD's matrix
+array into OpenGL column-major memory and multiplies the semantic second row
+by `dm_aspect`.  In semantic matrix form, the effective legacy modelview is:
+
+```
+diag(1, aspect, 1, 1) * gv_model2view
+```
+
+with a fixed normalized projection.  This is equivalent to using
+`gv_model2view` directly and giving the camera/view volume a vertical extent
+of `2/aspect` and horizontal extent of `2`.
+
+
+Obol/Coin Matrix Contract
+-------------------------
+
+Obol inherits Coin's matrix conventions.  `SbMatrix` documents matrices as
+column-order and says row-order matrices from another source are converted by
+transposition.  Common geometry transforms use `SbMatrix::multVecMatrix`,
+which applies a row-vector style operation:
+
+```
+dst = src * M
+```
+
+Therefore a general BRL-CAD `mat_t` used as an Obol transform must be imported
+as:
+
+```
+M_obol = transpose(M_brl)
+```
+
+That rule applies to database/object transforms and to the normalized
+`gv_model2view` transform strategy below.
+
+Do not confuse the general transform import rule with camera-orientation
+construction.  `SoCamera::lookAt` builds an `SbRotation` matrix whose rows are
+the camera-local axes expressed in world coordinates.  For a BRL-CAD
+`gv_rotation`, those are already the three rows of `gv_rotation`: right, up,
+and camera-back.  A direct Obol camera orientation should therefore be built
+from those rows as axes, not by blindly applying the generic transform
+transpose rule.
+
+
+Canonical Orthographic Bridge
+-----------------------------
+
+The production bridge should be a direct model-space Obol camera.  BRL-CAD is
+moving to Obol as the canonical interaction and rendering stack, so qtcad,
+qged, and GED tests should use one shared libBObol direct-camera adapter
+instead of preserving a normalized legacy-view transform as the active path.
+
+* Use `SoOrthographicCamera`.
+* Set `viewportMapping = SoCamera::LEAVE_ALONE`.
+* Set `aspectRatio = width / height`.
+* Set `height = gv_size / aspect`.
+* Set `orientation` from the rows of `gv_rotation`:
+  row0 = camera local +X in model space,
+  row1 = camera local +Y in model space,
+  row2 = camera local +Z/camera-back in model space.
+* Set `position = center + row2 * distance`.
+* Set clipping/focal policy explicitly.
+
+This is the right representation for interactive Obol camera ownership.
+Obol's existing `SoCamera::orbitCamera` already implements a BRL-CAD-style
+camera-local yaw/pitch orbit and should be reused rather than duplicating that
+logic in qtcad/qged.
+
+Reference Strategy: normalized BRL-CAD view transform
+
+The normalized transform strategy remains useful for parity tests and for
+debugging the legacy `dm_loadmatrix` relationship, but it should not be the
+main production view path.
+
+* Insert an Obol transform imported as `transpose(gv_model2view)`.
+* Use a fixed orthographic camera centered on normalized view space.
+* Set `viewportMapping = SoCamera::LEAVE_ALONE`.
+* Set `aspectRatio = aspect`.
+* Set `height = 2.0 / aspect`.
+
+After the transform, geometry is in BRL-CAD normalized view coordinates.  The
+camera volume then covers the legacy window:
+
+```
+x in [-1, +1]
+y in [-1/aspect, +1/aspect]
+```
+
+This is closest to the old `dm_loadmatrix` path.  Use it only where a test or
+diagnostic specifically needs to prove matrix conversion independent of higher
+level camera behavior.
+
+
+Perspective Boundary
+--------------------
+
+BRL-CAD perspective uses explicit projection matrices (`gv_pmat` and
+`gv_pmodel2view`), including Deering/stereo paths in some callers.  A plain
+`SoPerspectiveCamera::heightAngle` mapping can represent only the simple
+symmetric case.
+
+For migration correctness, perspective should not be fitted with measured
+camera distances or scale factors.  The proper boundary is an explicit matrix
+view path in libBObol/Obol that can install the BRL-CAD view and projection
+matrices directly.  Obol already has projection-matrix state elements; if the
+public node/action API is not sufficient, adding an Obol explicit-matrix
+camera/view node is cleaner than carrying ad-hoc perspective conversions in
+qtcad, qged, or GED tests.
+
+
+Retired Local Paths
+-------------------
+
+The migration previously had multiple local camera/matrix bridges:
+
+* GED draw-test camera sync used a local matrix helper and a measured
+  `scale * 4.0` orthographic height.
+* qtcad camera sync used its own helper, transposed the view rotation for
+  camera orientation, and used `scale * 2.0`.
+* libged Obol draw code has a separate general BRL-CAD matrix-to-`SbMatrix`
+  conversion helper.
+
+The qtcad and GED draw-test camera sync paths should remain thin callers of
+the shared libBObol direct-camera adapter.  Other BRL-CAD-to-Obol matrix
+conversion sites should use, or be reduced to, the shared libBObol matrix
+conversion helper as they are touched.
+
+
+Shared libBObol Target
+------------------------
+
+libBObol should own the BRL-CAD view import/export boundary.  The intended
+shared API shape is:
+
+* general BRL-CAD `mat_t` to Obol `SbMatrix` conversion:
+  `M_obol = transpose(M_brl)`.
+* BRL-CAD view rotation to Obol camera orientation conversion:
+  use `gv_rotation` rows as camera-local axes.
+* RT/GED view-context to Obol camera sync:
+  obtain width, height, `gv_size`, center, rotation, perspective, clipping,
+  and matrices through neutral RT view APIs.
+* Obol camera to RT/GED view-info export:
+  for orthographic cameras, report BRL-CAD horizontal size as
+  `camera->height * aspect`.
+* perspective import/export:
+  route through an explicit matrix path or mark unsupported until that path is
+  present.
+
+qtcad, qged, and GED tests should call this shared libBObol adapter instead
+of maintaining local camera math.  qtcad/qged interactive orbit should use
+Obol camera operations, especially `SoCamera::orbitCamera`, and then sync
+through the same view boundary as needed.
+
+
+Completion Markers
+------------------
+
+The view-math migration is complete when:
+
+* no qtcad/qged/GED-test code carries private BRL-CAD-to-Obol camera math;
+* orthographic imports use `height = gv_size / aspect`;
+* orthographic exports report horizontal BRL-CAD size, not Obol vertical
+  height;
+* normalized-transform parity tests, if retained, are explicitly reference
+  diagnostics rather than production bridge behavior;
+* direct-camera parity tests prove the row-axis orientation import;
+* perspective either uses an explicit matrix path or is explicitly excluded
+  from the orthographic bridge tests; and
+* qtcad visible Qt/system-OpenGL presentation and OSMesa/offscreen readback use
+  the same libBObol view adapter.

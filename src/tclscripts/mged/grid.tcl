@@ -151,7 +151,7 @@ proc do_grid_anchor { id } {
     }
 
     # Initialize variables
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set grid_control_anchor($id) [_mged_rset grid anchor]
 
     toplevel $top -screen $mged_gui($id,screen)
@@ -188,7 +188,7 @@ control panel." } }
 	{ { summary "Apply the grid anchor control panel
 settings to the grid." } }
     button $top.resetB -relief raised -text "Reset"\
-	-command "winset \$mged_gui($id,active_dm);\
+	-command "winset \$mged_gui($id,active_pane);\
 	    set grid_control_anchor($id) \[rset grid anchor\]"
     hoc_register_data $top.resetB "Reset"\
 	{ { summary "Reset the control panel from the grid." } }
@@ -584,7 +584,7 @@ proc grid_control_reset { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     set grid_control($id,draw) [rset grid draw]
     set grid_control($id,snap) [rset grid snap]
@@ -695,7 +695,7 @@ proc grid_spacing_autosize { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set val [grid_autosize]
 
     set grid_control_spacing($id,tick) $val
@@ -706,7 +706,7 @@ proc grid_control_autosize { id } {
     global mged_gui
     global grid_control
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set val [grid_autosize]
 
     set grid_control($id,rh) $val
@@ -746,7 +746,7 @@ proc grid_spacing_reset { id spacing_type } {
     global mged_gui
     global grid_control_spacing
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     if {$spacing_type == "v"} {
 	set grid_control_spacing($id,tick) [eval format "%.5f" [rset grid rv]]

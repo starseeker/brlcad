@@ -35,7 +35,6 @@
 #include "vmath.h"
 #include "bn.h"
 #include "raytrace.h"
-#include "dm.h"		/* Added because RGBpixel is now needed in do_pixel() */
 
 #include "./rtuif.h"
 #include "./ext.h"
@@ -153,7 +152,7 @@ do_pixel(int cpu, int pat_num, int pixelnum)
     static const double one_over_255 = 1.0 / 255.0;
     static const fastf_t usec_per_sec = 1000000.0;
     static const fastf_t nsec_per_sec = 1000000000.0;
-    const int pindex = (pixelnum * sizeof(RGBpixel));
+    const int pindex = (pixelnum * sizeof(rt_pixel_t));
     int64_t pixel_start = 0;
     int pixel_timer_thread_cpu = 0;
     fastf_t pixel_timer_scale = usec_per_sec;

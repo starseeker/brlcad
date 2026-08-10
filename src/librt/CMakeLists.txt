@@ -94,7 +94,6 @@ set(
   bool_tess.c
   bundle.c
   cache.c
-  cache_lod.c
   cache_lz4.c
   cmd.c
   cyclic.c
@@ -137,6 +136,7 @@ set(
   dir.c
   dspline.c
   edit.cpp
+  eval_wireframe.cpp
   fortray.c
   globals.c
   htbl.c
@@ -308,7 +308,6 @@ set(
   uv.c
   vds/vds.c
   vers.c
-  view.c
   vlist.c
   vshoot.c
   wdb.c

@@ -37,7 +37,9 @@
 #include "rt/db4.h"
 #include "nmg.h"
 #include "rt/geom.h"
+#include "rt/primitives/eto.h"
 #include "raytrace.h"
+#include "rt/vlist.h"
 
 #include "../../librt_private.h"
 
@@ -141,7 +143,7 @@ struct eto_specific {
 };
 
 
-EXTERNCPP const struct bu_structparse rt_eto_parse[] = {
+const struct bu_structparse rt_eto_parse[] = {
     { "%f", 3, "V",   bu_offsetofarray(struct rt_eto_internal, eto_V, fastf_t, X), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     { "%f", 3, "N",   bu_offsetofarray(struct rt_eto_internal, eto_N, fastf_t, X), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     { "%f", 3, "C",   bu_offsetofarray(struct rt_eto_internal, eto_C, fastf_t, X), BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
@@ -192,7 +194,7 @@ clt_eto_pack(struct bu_pool *pool, struct soltab *stp)
 /**
  * Calculate bounding RPP of elliptical torus
  */
-C_DECL int
+int
 rt_eto_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct bn_tol *UNUSED(tol))
 {
     vect_t P, Nu, w1;	/* for RPP calculation */
@@ -256,7 +258,7 @@ rt_eto_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct 
  * A struct eto_specific is created, and its address is stored in
  * stp->st_specific for use by rt_eto_shot().
  */
-C_DECL int
+int
 rt_eto_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 {
     struct eto_specific *eto;
@@ -324,7 +326,7 @@ rt_eto_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 }
 
 
-C_DECL void
+void
 rt_eto_print(const struct soltab *stp)
 {
     const struct eto_specific *eto =
@@ -371,7 +373,7 @@ rt_eto_print(const struct soltab *stp)
  * 0 MISS
  * >0 HIT
  */
-C_DECL int
+int
 rt_eto_shot(struct soltab *stp, struct xray *rp, struct application *ap, struct seg *seghead)
 {
     struct eto_specific *eto =
@@ -730,7 +732,7 @@ rt_eto_vshot(struct soltab **stp, struct xray **rp, struct seg *segp, int n, str
  *
  * (df/dx, df/dy, df/dz)
  */
-C_DECL void
+void
 rt_eto_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 {
     struct eto_specific *eto =
@@ -764,7 +766,7 @@ rt_eto_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 /**
  * Return the curvature of the eto.
  */
-C_DECL void
+void
 rt_eto_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
 {
     fastf_t a, b, ch, cv, dh, dv, k_circ, k_ell, phi, rad, xp,
@@ -827,7 +829,7 @@ rt_eto_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
 }
 
 
-C_DECL void
+void
 rt_eto_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct uvcoord *uvp)
 {
     fastf_t horz, theta_u, theta_v, vert;
@@ -869,7 +871,7 @@ rt_eto_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct u
 }
 
 
-C_DECL void
+void
 rt_eto_free(struct soltab *stp)
 {
     struct eto_specific *eto =
@@ -1094,8 +1096,8 @@ eto_ellipse_points(
     return circumference / point_spacing;
 }
 
-C_DECL int
-rt_eto_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bview *v, fastf_t s_size)
+static int
+rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     struct rt_eto_internal *eto;
     fastf_t radian, radian_step;
@@ -1104,16 +1106,16 @@ rt_eto_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
     fastf_t mag_N, mag_ai, mag_aj, mag_bi, mag_bj;
     int i, num_cross_sections, points_per_ellipse;
 
-    BU_CK_LIST_HEAD(vhead);
+    if (!realization)
+	return -1;
     RT_CK_DB_INTERNAL(ip);
 
-    struct bu_list *vlfree = &rt_vlfree;
     eto = (struct rt_eto_internal *)ip->idb_ptr;
     if (!eto_is_valid(eto)) {
 	return -1;
     }
 
-    fastf_t point_spacing = solid_point_spacing(v, s_size);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, s_size);
 
     VMOVE(eto_V, eto->eto_V);
 
@@ -1172,11 +1174,15 @@ rt_eto_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
     }
 
     VJOIN1(center, eto_V, mag_aj / mag_N, eto_N);
-    plot_ellipse(vlfree, vhead, center, contour_A, contour_B, points_per_ellipse);
+    if (!primitive_lod_append_ellipse(realization, center, contour_A,
+		contour_B, points_per_ellipse))
+	return -1;
 
     eto_contour_axes(contour_A, contour_B, eto_A, eto_B, -mag_ai);
     VJOIN1(center, eto_V, -mag_aj / mag_N, eto_N);
-    plot_ellipse(vlfree, vhead, center, contour_A, contour_B, points_per_ellipse);
+    if (!primitive_lod_append_ellipse(realization, center, contour_A,
+		contour_B, points_per_ellipse))
+	return -1;
 
     /* plot elliptical contour showing extent of ellipse +B/-B */
     eto_contour_axes(contour_A, contour_B, eto_A, eto_B, mag_bi);
@@ -1188,14 +1194,18 @@ rt_eto_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
     }
 
     VJOIN1(center, eto_V, mag_bj / mag_N, eto_N);
-    plot_ellipse(vlfree, vhead, center, contour_A, contour_B, points_per_ellipse);
+    if (!primitive_lod_append_ellipse(realization, center, contour_A,
+		contour_B, points_per_ellipse))
+	return -1;
 
     eto_contour_axes(contour_A, contour_B, eto_A, eto_B, -mag_bi);
     VJOIN1(center, eto_V, -mag_bj / mag_N, eto_N);
-    plot_ellipse(vlfree, vhead, center, contour_A, contour_B, points_per_ellipse);
+    if (!primitive_lod_append_ellipse(realization, center, contour_A,
+		contour_B, points_per_ellipse))
+	return -1;
 
     /* draw elliptical radial cross sections */
-    num_cross_sections = primitive_curve_count(ip, tol, v->gv_s->curve_scale, s_size);
+    num_cross_sections = primitive_curve_count(ip, tol, bv_view_lod_curve_scale(v), s_size);
 
     if (num_cross_sections < 3) {
 	num_cross_sections = 3;
@@ -1219,13 +1229,62 @@ rt_eto_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
 	VCOMB2(ellipse_A, mag_ai, I, mag_aj, J);
 	VCOMB2(ellipse_B, mag_bi, I, mag_bj, J);
 
-	plot_ellipse(vlfree, vhead, center, ellipse_A, ellipse_B, points_per_ellipse);
+	if (!primitive_lod_append_ellipse(realization, center, ellipse_A,
+		    ellipse_B, points_per_ellipse))
+	    return -1;
 
 	radian += radian_step;
     }
 
     return 0;
 }
+
+int
+rt_eto_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
+{
+    if (!primitive_lod_line_set_begin(realization))
+	return -1;
+
+    int ret = rt_eto_lod_line_set(realization, ip, tol, v, s_size);
+    if (ret < 0)
+	return ret;
+    return primitive_lod_line_set_finish(realization) ? ret : -1;
+}
+
+struct eto_line_sink {
+    struct bu_list *vlfree;
+    struct bu_list *vhead;
+    struct rt_primitive_lod_realization *realization;
+    int ok;
+};
+
+
+static void
+rt_eto_line_sink_append(struct eto_line_sink *sink, const point_t p, int command)
+{
+    if (!sink || !sink->ok)
+	return;
+
+    if (sink->realization) {
+	if (!primitive_lod_line_set_append(sink->realization, p, command))
+	    sink->ok = 0;
+	return;
+    }
+
+    if (!sink->vlfree || !sink->vhead) {
+	sink->ok = 0;
+	return;
+    }
+
+    if (command == RT_PRIMITIVE_LINE_MOVE) {
+	RT_ADD_VLIST(sink->vlfree, sink->vhead, p, RT_VLIST_LINE_MOVE);
+    } else if (command == RT_PRIMITIVE_LINE_DRAW) {
+	RT_ADD_VLIST(sink->vlfree, sink->vhead, p, RT_VLIST_LINE_DRAW);
+    } else {
+	sink->ok = 0;
+    }
+}
+
 
 /**
  * The ETO has the following input fields:
@@ -1236,22 +1295,23 @@ rt_eto_adaptive_plot(struct bu_list *vhead, struct rt_db_internal *ip, const str
  * eto_C Semimajor axis (vector) of eto cross section
  * eto_rd Semiminor axis length (scalar) of eto cross section
  */
-C_DECL int
-rt_eto_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bview *UNUSED(info))
+static int
+rt_eto_standard_line_set(struct eto_line_sink *sink, struct rt_db_internal *ip,
+			 const struct bg_tess_tol *ttol)
 {
     fastf_t a, b;	/* axis lengths of ellipse */
     fastf_t ang, ch, cv, dh, dv, ntol, dtol, phi, theta;
-    fastf_t *eto_ells;
+    fastf_t *eto_ells = NULL;
     int i, j, npts, nells;
-    point_t *ell;	/* array of ellipse points */
+    point_t *ell = NULL;	/* array of ellipse points */
     point_t Ell_V;	/* vertex of an ellipse */
     struct rt_eto_internal *tip;
     vect_t Au, Bu, Nu, Cp, Dp, Xu;
 
-    BU_CK_LIST_HEAD(vhead);
+    if (!sink || !ttol)
+	return -1;
     RT_CK_DB_INTERNAL(ip);
 
-    struct bu_list *vlfree = &rt_vlfree;
     tip = (struct rt_eto_internal *)ip->idb_ptr;
     if (!eto_is_valid(tip)) {
 	return -1;
@@ -1316,6 +1376,7 @@ rt_eto_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
     /* make sure ellipse doesn't overlap itself when revolved */
     if (ch > tip->eto_r || dh > tip->eto_r) {
 	bu_log("eto_plot: revolved ellipse overlaps itself\n");
+	bu_free((char *)ell, "make_ellipse pts");
 	return -1;
     }
 
@@ -1349,24 +1410,69 @@ rt_eto_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
 
     /* draw ellipses */
     for (i = 0; i < nells; i++) {
-	BV_ADD_VLIST(vlfree, vhead, ETO_PTA(i, npts-1), BV_VLIST_LINE_MOVE);
+	rt_eto_line_sink_append(sink, ETO_PTA(i, npts-1),
+		RT_PRIMITIVE_LINE_MOVE);
 	for (j = 0; j < npts; j++)
-	    BV_ADD_VLIST(vlfree, vhead, ETO_PTA(i, j), BV_VLIST_LINE_DRAW);
+	    rt_eto_line_sink_append(sink, ETO_PTA(i, j),
+		    RT_PRIMITIVE_LINE_DRAW);
     }
 
     /* draw connecting circles */
     for (i = 0; i < npts; i++) {
-	BV_ADD_VLIST(vlfree, vhead, ETO_PTA(nells-1, i), BV_VLIST_LINE_MOVE);
+	rt_eto_line_sink_append(sink, ETO_PTA(nells-1, i),
+		RT_PRIMITIVE_LINE_MOVE);
 	for (j = 0; j < nells; j++)
-	    BV_ADD_VLIST(vlfree, vhead, ETO_PTA(j, i), BV_VLIST_LINE_DRAW);
+	    rt_eto_line_sink_append(sink, ETO_PTA(j, i),
+		    RT_PRIMITIVE_LINE_DRAW);
     }
 
     bu_free((char *)eto_ells, "ells[]");
-    return 0;
+    bu_free((char *)ell, "make_ellipse pts");
+    return sink->ok ? 0 : -1;
+}
+
+
+int
+rt_eto_wireframe_line_set(struct rt_primitive_lod_realization *realization,
+			  struct rt_db_internal *ip,
+			  const struct bg_tess_tol *ttol)
+{
+    struct eto_line_sink sink;
+
+    if (!primitive_lod_line_set_begin(realization))
+	return -1;
+
+    sink.vlfree = NULL;
+    sink.vhead = NULL;
+    sink.realization = realization;
+    sink.ok = 1;
+
+    int ret = rt_eto_standard_line_set(&sink, ip, ttol);
+    if (ret < 0)
+	return ret;
+    return primitive_lod_line_set_finish(realization) ? ret : -1;
 }
 
 
 C_DECL int
+rt_eto_plot(struct bu_list *vhead, struct rt_db_internal *ip,
+	    const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol),
+	    const struct bv_view_info *UNUSED(info))
+{
+    struct eto_line_sink sink;
+
+    BU_CK_LIST_HEAD(vhead);
+
+    sink.vlfree = &rt_vlfree;
+    sink.vhead = vhead;
+    sink.realization = NULL;
+    sink.ok = 1;
+
+    return rt_eto_standard_line_set(&sink, ip, ttol);
+}
+
+
+int
 rt_eto_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
 {
     fastf_t a, b;	/* axis lengths of ellipse */
@@ -1802,7 +1908,7 @@ rt_eto_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, co
  * Import a eto from the database format to the internal format.
  * Apply modeling transformations at the same time.
  */
-C_DECL int
+int
 rt_eto_import4(struct rt_db_internal *ip, const struct bu_external *ep, const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_eto_internal *tip;
@@ -1868,7 +1974,7 @@ rt_eto_import4(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 /**
  * The name will be added by the caller.
  */
-C_DECL int
+int
 rt_eto_export4(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_eto_internal *tip;
@@ -1902,7 +2008,7 @@ rt_eto_export4(struct bu_external *ep, const struct rt_db_internal *ip, double l
     return 0;
 }
 
-C_DECL int
+int
 rt_eto_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_internal *ip)
 {
     if (!rop || !ip || !mat)
@@ -1935,7 +2041,7 @@ rt_eto_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_inter
  * Import a eto from the database format to the internal format.
  * Apply modeling transformations at the same time.
  */
-C_DECL int
+int
 rt_eto_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_eto_internal *tip;
@@ -1981,7 +2087,7 @@ rt_eto_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 /**
  * The name will be added by the caller.
  */
-C_DECL int
+int
 rt_eto_export5(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_eto_internal *tip;
@@ -2022,7 +2128,7 @@ rt_eto_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
  * line describes type of solid.  Additional lines are indented one
  * tab, and give parameter values.
  */
-C_DECL int
+int
 rt_eto_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose, double mm2local)
 {
     struct rt_eto_internal *tip =
@@ -2067,7 +2173,7 @@ rt_eto_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose
 /**
  * Free the storage associated with the rt_db_internal version of this solid.
  */
-C_DECL void
+void
 rt_eto_ifree(struct rt_db_internal *ip)
 {
     struct rt_eto_internal *tip;
@@ -2108,7 +2214,7 @@ rt_eto_make(const struct rt_functab *ftp, struct rt_db_internal *intern, const c
 }
 
 
-C_DECL int
+int
 rt_eto_params(struct pc_pc_set *ps, const struct rt_db_internal *ip)
 {
     if (!ps) return 0;
@@ -2145,7 +2251,7 @@ eto_is_self_intersecting(const struct rt_eto_internal *tip)
 }
 
 
-C_DECL void
+void
 rt_eto_volume(fastf_t *vol, const struct rt_db_internal *ip)
 {
     fastf_t mag_c;
@@ -2167,7 +2273,7 @@ rt_eto_volume(fastf_t *vol, const struct rt_db_internal *ip)
 }
 
 
-C_DECL void
+void
 rt_eto_centroid(point_t *cent, const struct rt_db_internal *ip)
 {
     struct rt_eto_internal *tip = (struct rt_eto_internal *)ip->idb_ptr;
@@ -2176,7 +2282,7 @@ rt_eto_centroid(point_t *cent, const struct rt_db_internal *ip)
 }
 
 
-C_DECL void
+void
 rt_eto_surf_area(fastf_t *area, const struct rt_db_internal *ip)
 {
     fastf_t circum, mag_c;
@@ -2221,7 +2327,7 @@ eto_is_valid(struct rt_eto_internal *eto)
     return 1;
 }
 
-C_DECL int
+int
 rt_eto_labels(struct rt_point_labels *pl, int pl_max, const mat_t xform, const struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol))
 {
     int lcnt = 4;
@@ -2274,7 +2380,7 @@ rt_eto_labels(struct rt_point_labels *pl, int pl_max, const mat_t xform, const s
     return lcnt;
 }
 
-C_DECL const char *
+const char *
 rt_eto_keypoint(point_t *pt, const char *keystr, const mat_t mat, const struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol))
 {
     if (!pt || !ip)
@@ -2303,7 +2409,7 @@ eto_kpt_end:
 }
 
 
-C_DECL int
+int
 rt_eto_perturb(struct rt_db_internal **oip, const struct rt_db_internal *ip, int UNUSED(planar_only), fastf_t val)
 {
     if (NEAR_ZERO(val, SMALL_FASTF))

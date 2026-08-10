@@ -72,32 +72,38 @@ set(
 # TODO - should these be in brlcad/tie instead?
 brlcad_manage_files(tie_HDRS ${INCLUDE_DIR}/tie)
 
-# Tcl/Tk based ISST
+# Tcl/Tk based ISST.  ADRT produces an RGB image; TkPhoto presents those
+# pixels directly, so this tool does not need a graphical display manager or
+# an OpenGL context.
 
-if(BRLCAD_ENABLE_OPENGL AND OPEGL_TARGETS AND BRLCAD_ENABLE_TK)
-
-  set(local_isst_dirs
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/librender
-  )
+if(BRLCAD_ENABLE_TK AND TK_LIBRARY)
+  set(local_isst_dirs ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/librender)
 
   set(
     isst_libs
     libtclcad
     librender
-    libdm
     ${TCL_LIBRARY}
-    ${OPENGL_TARGETS}
-    ${IMM32_LIBRARY}
-    ${COMCTL32_LIBRARY}
+    ${TK_LIBRARY}
     ${M_LIBRARY}
     )
 
   brlcad_adddata(isst.tcl tclscripts/isst)
   brlcad_addexec(isst isst.c "${isst_libs}" GUI)
   target_include_directories(isst BEFORE PRIVATE ${local_isst_dirs})
-  add_target_deps(isst isst_tcl_cp TclIndexBld dm_plugins)
-endif()
+  add_target_deps(isst isst_tcl_cp TclIndexBld)
+  if(UNIX AND SH_EXEC)
+    find_program(ISST_XVFB_RUN_EXECUTABLE xvfb-run)
+    if(ISST_XVFB_RUN_EXECUTABLE)
+      brlcad_add_test(NAME adrt_isst_tk_photo_smoke
+	COMMAND ${SH_EXEC} ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh
+	${ISST_XVFB_RUN_EXECUTABLE} $<TARGET_FILE:isst>)
+      set_property(TEST adrt_isst_tk_photo_smoke APPEND PROPERTY ENVIRONMENT
+	"BRLCAD_ROOT=${CMAKE_BINARY_DIR};BRLCAD_ISST_SMOKE=1")
+      set_property(TEST adrt_isst_tk_photo_smoke PROPERTY SKIP_RETURN_CODE 125)
+    endif(ISST_XVFB_RUN_EXECUTABLE)
+  endif(UNIX AND SH_EXEC)
+endif(BRLCAD_ENABLE_TK AND TK_LIBRARY)
 
 cmakefiles(isst.tcl)
 cmakefiles(isst.c)
