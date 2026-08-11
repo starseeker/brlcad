@@ -1,9 +1,13 @@
 /*               T E S T _ Q T C A D _ E V E N T _ P L A Y E R . C P P
  * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
  */
 
 #include "common.h"
 
+#include "bu/app.h"
 #include "qtcad/QgTestEvent.h"
 
 #include <QApplication>
@@ -47,6 +51,7 @@ protected:
 int
 main(int argc, char **argv)
 {
+    bu_setprogname(argv[0]);
     QApplication app(argc, argv);
 
     QWidget root;

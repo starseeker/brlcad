@@ -704,7 +704,7 @@ test_polygon_nodes_and_sketch(BObolViewController &view)
 	!view.polygons().updateModelPoint(csgB,
 					  SbVec3f(1.5f, 0.75f, 0.0f),
 					  BObolPolygonUpdate::Default) ||
-	!view.polygons().csg(csgA, csgB, bg_Union))
+	!view.polygons().csg(csgA, csgB, BG_POLYGON_BOOLEAN_UNION))
 	FAIL("polygon CSG union should succeed for overlapping Obol polygons");
     BObolPolygonRecord csgRecord;
     if (!view.polygons().record(csgA, csgRecord) ||

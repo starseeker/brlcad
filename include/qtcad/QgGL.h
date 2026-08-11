@@ -86,6 +86,8 @@ void set_current(int active) override;
 signals:
 void changed();
 void init_done();
+/** Exact completed framebuffer, emitted only when a diagnostic observer is connected. */
+void frame_presented(const QImage &image);
 
 public slots:
 void need_update()               override;

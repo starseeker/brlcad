@@ -37,7 +37,7 @@
 #include <QVBoxLayout>
 #include "ged.h"
 #include "ged/draw.h"
-#include "ged/view_feature_internal.h"
+#include "ged/view_feature_batch.h"
 #include "rt/db_io.h"
 #include "rt/directory.h"
 #include "rt/primitives/bot.h"
@@ -256,7 +256,6 @@ QBot::update_obj_wireframe()
 	return;
 
     qged_edit_feature_clear_geometry(p);
-    qged_edit_feature_set_view(p, m_ctx);
     qged_edit_feature_set_visible(p, 1);
 
     if (qged_edit_feature_replace_bot_face_lines(p,
@@ -281,10 +280,22 @@ QBot::update_obj_wireframe()
 	surface_style.color[0] = 72;
 	surface_style.color[1] = 126;
 	surface_style.color[2] = 168;
-	(void)ged_view_feature_indexed_face_set_replace(view_ctx,
-	    "_bot_edit_surface", 1, (const point_t *)surface_points,
-	    bot->num_vertices, NULL, 0, bot->faces,
-	    bot->num_faces * 3, &surface_style);
+	struct ged_view_feature_batch_desc desc =
+	    GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	desc.owner_id = "qged-bot-edit";
+	desc.owner_role = "edit-handle";
+	desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE;
+	desc.lifecycle = GED_VIEW_FEATURE_LIFECYCLE_PER_TOOL;
+	desc.local = 1;
+	struct ged_view_feature_batch *batch =
+	    ged_view_feature_batch_begin(view_ctx, &desc);
+	if (batch && ged_view_feature_batch_indexed_face_set_replace(batch,
+		"_bot_edit_surface", (const point_t *)surface_points,
+		bot->num_vertices, NULL, 0, bot->faces,
+		bot->num_faces * 3, &surface_style))
+	    (void)ged_view_feature_batch_commit(batch);
+	else if (batch)
+	    ged_view_feature_batch_abort(batch);
 	bu_free(surface_points, "BOT edit surface points");
     }
 
@@ -344,8 +355,21 @@ QBot::publish_selection_handle()
     style.color[0] = 255;
     style.color[1] = 196;
     style.color[2] = 32;
-    (void)ged_annotation_lines_replace(view_ctx, "_bot_edit_handle",
-	1, (const point_t *)points, commands, count, &style);
+    struct ged_view_feature_batch_desc desc =
+	GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "qged-bot-edit";
+    desc.owner_role = "edit-handle";
+    desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE;
+    desc.lifecycle = GED_VIEW_FEATURE_LIFECYCLE_PER_TOOL;
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(view_ctx, &desc);
+    if (batch && ged_view_feature_batch_line_set_replace(batch,
+	    "_bot_edit_handle", (const point_t *)points, commands, count,
+	    &style))
+	(void)ged_view_feature_batch_commit(batch);
+    else if (batch)
+	ged_view_feature_batch_abort(batch);
     bu_free(commands, "BOT edit selection handle commands");
     bu_free(points, "BOT edit selection handles");
 }

@@ -1663,7 +1663,7 @@ exercise_m35_color_table_mutation(void)
     }
 
     print_timing({"m35_color_table_mutation", "m35.g", "all.g",
-	    GED_DRAW_MODE_WIRE, SoBRLDatabaseSource::WIREFRAME,
+	    GED_SCENE_DRAW_WIRE, SoBRLDatabaseSource::WIREFRAME,
 	    0, 0, 0, 0, 0, 0, 0, 0, 0}, "total", totalStart);
 
     ged_close(gedp);
@@ -1680,46 +1680,46 @@ main(int argc, char **argv)
     QApplication app(argc, argv);
 
     const struct model_case cases[] = {
-	{"pinewood_wire", "pinewood.g", "pinewood", GED_DRAW_MODE_WIRE,
+	{"pinewood_wire", "pinewood.g", "pinewood", GED_SCENE_DRAW_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 2, 41, 0, 0, 0, 0, 0, 0, 0},
-	{"pinewood_shaded", "pinewood.g", "pinewood", GED_DRAW_MODE_SHADED,
+	{"pinewood_shaded", "pinewood.g", "pinewood", GED_SCENE_DRAW_SHADED,
 	    SoBRLDatabaseSource::SHADED, 0, 0, 21, 501, 0, 0, 0, 0, 0},
-	{"havoc_wire", "havoc.g", "havoc", GED_DRAW_MODE_WIRE,
+	{"havoc_wire", "havoc.g", "havoc", GED_SCENE_DRAW_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 10, 100, 0, 0, 0, 0, 0, 0, 0},
-	{"m35_wire_interactions", "m35.g", "all.g", GED_DRAW_MODE_WIRE,
+	{"m35_wire_interactions", "m35.g", "all.g", GED_SCENE_DRAW_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 0, 1, 0, 0},
-	{"m35_wire_pick_all_stress", "m35.g", "all.g", GED_DRAW_MODE_WIRE,
+	{"m35_wire_pick_all_stress", "m35.g", "all.g", GED_SCENE_DRAW_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 1, 1, 0, 0},
-	{"m35_deferred_wire_color", "m35.g", "all.g", GED_DRAW_MODE_WIRE,
+	{"m35_deferred_wire_color", "m35.g", "all.g", GED_SCENE_DRAW_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0, 1, 1, 0},
-	{"m35_deferred_shaded_color", "m35.g", "all.g", GED_DRAW_MODE_SHADED,
+	{"m35_deferred_shaded_color", "m35.g", "all.g", GED_SCENE_DRAW_SHADED,
 	    SoBRLDatabaseSource::SHADED, 0, 0, 100, 1000, 0, 0, 1, 1, 1},
 	{"nist_pmi1_shaded", "nist/NIST_MBE_PMI_1.g", "Document",
-	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
 	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi2_shaded", "nist/NIST_MBE_PMI_2.g", "Document",
-	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
 	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi3_shaded", "nist/NIST_MBE_PMI_3.g", "Document",
-	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
 	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi4_shaded", "nist/NIST_MBE_PMI_4.g", "Document",
-	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
 	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi5_shaded", "nist/NIST_MBE_PMI_5.g", "Document",
-	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
 	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi6_shaded", "nist/NIST_MBE_PMI_6.g", "Document",
-	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
 	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi11_shaded", "nist/NIST_MBE_PMI_11.g", "Document",
-	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    GED_SCENE_DRAW_SHADED, SoBRLDatabaseSource::SHADED,
 	    0, 0, 1, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi7_10_shaded", "nist/NIST_MBE_PMI_7-10.g",
-	    "NIST_MBE_PMI_7-10.3dm", GED_DRAW_MODE_SHADED,
+	    "NIST_MBE_PMI_7-10.3dm", GED_SCENE_DRAW_SHADED,
 	    SoBRLDatabaseSource::SHADED, 0, 0, 4, 100, 0, 0, 0, 1, 0},
 	{"nist_pmi7_10_wire", "nist/NIST_MBE_PMI_7-10.g",
-	    "NIST_MBE_PMI_7-10.3dm", GED_DRAW_MODE_WIRE,
+	    "NIST_MBE_PMI_7-10.3dm", GED_SCENE_DRAW_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 4, 100, 0, 0, 0, 0, 0, 1, 0}
     };
 
@@ -1740,7 +1740,7 @@ main(int argc, char **argv)
 
     if (BU_STR_EQUAL(getenv("BOBOL_QTCAD_GENERIC_TWIN"), "1")) {
 	const struct model_case genericTwinCase = {
-	    "generic_twin_wire", "faa/Generic_Twin.g", "all", GED_DRAW_MODE_WIRE,
+	    "generic_twin_wire", "faa/Generic_Twin.g", "all", GED_SCENE_DRAW_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0, 0, 0, 0
 	};
 	if (should_run_case(argc, argv, genericTwinCase.name)) {

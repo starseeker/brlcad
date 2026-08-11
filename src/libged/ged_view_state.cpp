@@ -31,8 +31,10 @@
 #include "common.h"
 
 #include <cmath>
+#include <array>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "bn/mat.h"
 #include "BObol/BDisplayEndpoint.h"
@@ -49,6 +51,7 @@
 #include "./ged_bobol_private.hpp"
 #include "./ged_draw_private.h"
 #include "./ged_draw_view_private.h"
+#include "./ged_view_data_line_private.h"
 #include "./ged_private.h"
 
 struct ged_view_state_storage {
@@ -85,10 +88,18 @@ struct ged_view_host_record {
     ged_view_context_update_callback_t update_callback;
     void *update_callback_data;
     BObolViewAttachment *obol_attachment;
+    struct data_line_state {
+	int draw = 0;
+	int color[3] = {255, 255, 0};
+	int line_width = 0;
+	std::vector<std::array<fastf_t, 3>> points;
+    } data_lines[2];
 };
 
-/* Non-owning live-record index used only to resolve value-handle owner ids.
- * Per-GED host_records own the records. */
+/* Non-owning live-record index for locating GED host state from the libbv
+ * context pointer accepted by the public view API.  Per-GED host_records own
+ * the records.  Value handles are deliberately not resolved through this
+ * index: callers must supply their owning context explicitly. */
 static struct bu_ptbl ged_view_host_registry;
 static int ged_view_host_registry_initialized = 0;
 static uint64_t ged_view_host_next_identity = 1;
@@ -170,23 +181,6 @@ ged_view_host_record_find_global(const struct ged_view_context *view_ctx)
 	struct ged_view_host_record *record =
 	    (struct ged_view_host_record *)BU_PTBL_GET(&ged_view_host_registry, i);
 	if (record && record->view_ctx == view_ctx)
-	    return record;
-    }
-
-    return NULL;
-}
-
-static struct ged_view_host_record *
-ged_view_host_record_find_identity(uint64_t identity)
-{
-    std::lock_guard<std::mutex> guard(ged_view_host_registry_mutex);
-    if (!identity || !ged_view_host_registry_initialized)
-	return NULL;
-
-    for (size_t i = 0; i < BU_PTBL_LEN(&ged_view_host_registry); i++) {
-	struct ged_view_host_record *record =
-	    (struct ged_view_host_record *)BU_PTBL_GET(&ged_view_host_registry, i);
-	if (record && record->identity == identity)
 	    return record;
     }
 
@@ -418,28 +412,6 @@ ged_view_context_reference_owner(const struct ged_view_context *view_ctx, int lo
     return (record->identity << 1) | (local ? 1u : 0u);
 }
 
-struct ged_view_context *
-ged_view_context_from_reference_owner(uint64_t owner, int *local)
-{
-    if (local)
-	*local = 0;
-    if (!owner)
-	return NULL;
-
-    struct ged_view_host_record *record =
-	ged_view_host_record_find_identity(owner >> 1);
-    if (!record)
-	return NULL;
-    const bool owner_thread =
-	record->owner_thread == std::this_thread::get_id();
-    BU_ASSERT(owner_thread);
-    if (!owner_thread)
-	return NULL;
-    if (local)
-	*local = (owner & 1u) ? 1 : 0;
-    return record->view_ctx;
-}
-
 int
 ged_view_context_obol_attachment_bind(struct ged_view_context *view_ctx,
 				      BObolViewAttachment *attachment)
@@ -574,7 +546,7 @@ ged_view_selection_snap(struct ged_view_context *view_ctx,
 	    kind, candidate);
 }
 
-extern "C" GED_EXPORT void
+extern "C" void
 ged_draw_source_lod_bounds_callback_set(struct ged_view_context *view_ctx)
 {
     struct ged_view_host_record *record =
@@ -588,7 +560,7 @@ ged_draw_source_lod_bounds_callback_set(struct ged_view_context *view_ctx)
     (void)view_ctx;
 }
 
-extern "C" GED_EXPORT int
+extern "C" int
 ged_draw_source_lod_bounds_callback_is(const struct ged_view_context *view_ctx)
 {
     struct ged_view_host_record *record =
@@ -702,6 +674,71 @@ ged_view_context_user_data_set(struct ged_view_context *view_ctx, void *user_dat
 {
     return bv_context_user_data_set((struct bv_context *)view_ctx,
 	    user_data);
+}
+
+extern "C" GED_EXPORT void
+ged_view_data_line_state_clear(struct ged_view_data_line_state *state)
+{
+    if (!state)
+	return;
+    if (state->points)
+	bu_free(state->points, "GED view data-line state points");
+    struct ged_view_data_line_state init = GED_VIEW_DATA_LINE_STATE_INIT;
+    *state = init;
+}
+
+extern "C" GED_EXPORT int
+ged_view_data_line_state_get(const struct ged_view_context *view_ctx,
+	int staged, struct ged_view_data_line_state *state)
+{
+    if (!state)
+	return 0;
+    struct ged_view_data_line_state init = GED_VIEW_DATA_LINE_STATE_INIT;
+    *state = init;
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+    if (!record)
+	return 0;
+    const struct ged_view_host_record::data_line_state &stored =
+	record->data_lines[staged ? 1 : 0];
+    state->draw = stored.draw;
+    VMOVE(state->color, stored.color);
+    state->line_width = stored.line_width;
+    state->point_count = stored.points.size();
+    if (state->point_count) {
+	state->points = (point_t *)bu_calloc(state->point_count,
+	    sizeof(point_t), "GED view data-line state points");
+	for (size_t i = 0; i < state->point_count; i++) {
+	    state->points[i][X] = stored.points[i][X];
+	    state->points[i][Y] = stored.points[i][Y];
+	    state->points[i][Z] = stored.points[i][Z];
+	}
+    }
+    return 1;
+}
+
+extern "C" GED_EXPORT int
+ged_view_data_line_state_replace(struct ged_view_context *view_ctx,
+	int staged, const struct ged_view_data_line_state *state)
+{
+    if (!state || (state->point_count && !state->points))
+	return 0;
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+    if (!record)
+	return 0;
+    struct ged_view_host_record::data_line_state &stored =
+	record->data_lines[staged ? 1 : 0];
+    stored.draw = state->draw ? 1 : 0;
+    VMOVE(stored.color, state->color);
+    stored.line_width = state->line_width;
+    stored.points.clear();
+    stored.points.reserve(state->point_count);
+    for (size_t i = 0; i < state->point_count; i++) {
+	stored.points.push_back({state->points[i][X], state->points[i][Y],
+	    state->points[i][Z]});
+    }
+    return 1;
 }
 
 extern "C" GED_EXPORT void *

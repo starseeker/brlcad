@@ -11,13 +11,16 @@ endif()
 set(_headers
   include/ged/view_types.h
   include/ged/view.h
-  include/ged/draw_types.h
   include/ged/scene.h
   include/ged/scene_types.h
   include/ged/view_feature.h
   include/ged/view_feature_types.h
-  include/ged/polygon.h
-  include/ged/polygon_types.h
+  include/ged/view_edit.h
+  include/ged/view_edit_types.h
+  include/ged/view_export.h
+  include/ged/view_export_types.h
+  include/ged/view_polygon.h
+  include/ged/view_polygon_types.h
   include/ged/selection.h
   include/ged/selection_types.h
   include/ged/view_feature_batch.h

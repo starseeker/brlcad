@@ -29,6 +29,7 @@
 #include "bv.h"
 
 #include <QImage>
+#include <QMetaMethod>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -156,14 +157,24 @@ return;
 	*d, this, image, true, true, true, &completedPresentation);
     if (image.isNull()) {
 	/* Preserve the opaque-widget contract if an offscreen render fails. */
-	QPainter painter(this);
-	painter.fillRect(e->rect(), Qt::black);
+	{
+	    QPainter painter(this);
+	    painter.fillRect(e->rect(), Qt::black);
+	}
+	QImage black(qgcanvas_render_size(this), QImage::Format_RGBA8888);
+	black.fill(Qt::black);
+	black.setDevicePixelRatio(devicePixelRatioF());
+	if (isSignalConnected(QMetaMethod::fromSignal(
+		&QgSW::frame_presented)))
+	    emit frame_presented(black);
 	return;
     }
-    QPainter painter(this);
-    painter.translate(0, height());
-    painter.scale(1, -1);
-    painter.drawImage(QPoint(0, 0), image);
+    {
+	QPainter painter(this);
+	painter.translate(0, height());
+	painter.scale(1, -1);
+	painter.drawImage(QPoint(0, 0), image);
+    }
     if (completedPresentation) {
 	(void)bv_refresh_consume(bv_context_view(d->v));
 	bv_refresh_complete(bv_context_view(d->v));
@@ -173,6 +184,15 @@ return;
     if (!d->obol_paint_initialized) {
 	d->obol_paint_initialized = true;
 	emit init_done();
+    }
+    if (isSignalConnected(QMetaMethod::fromSignal(
+	    &QgSW::frame_presented))) {
+	/* paintEvent presents the renderer's bottom-up buffer through the
+	 * inverse QPainter transform above.  Publish the exact displayed
+	 * orientation to diagnostic observers. */
+	QImage presented = image.flipped(Qt::Vertical);
+	presented.setDevicePixelRatio(devicePixelRatioF());
+	emit frame_presented(presented);
     }
 }
 

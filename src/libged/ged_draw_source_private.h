@@ -7,34 +7,35 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License version 2.1.
  */
-/** @file ged/draw_source.h */
+/** @file ged_draw_source_private.h */
 
-#ifndef GED_DRAW_SOURCE_H
-#define GED_DRAW_SOURCE_H
+#ifndef GED_DRAW_SOURCE_PRIVATE_H
+#define GED_DRAW_SOURCE_PRIVATE_H
 
-#include "ged/draw_types.h"
+#include "./ged_draw_types_private.h"
+#include "./ged_scene_record_private.h"
 
 __BEGIN_DECLS
 
-GED_EXPORT extern int
+extern int
 ged_draw_source_mark_changed(struct ged *gedp,
 			      const char *path,
 			      ged_draw_stale_reason reason);
 
-GED_EXPORT extern int
+extern int
 ged_draw_source_apply_update(struct ged *gedp,
 			       const char *path,
 			       int removed,
 			       int redraw);
 
-GED_EXPORT extern const char *
+extern const char *
 ged_draw_source_stale_reason_name(ged_draw_stale_reason reason);
 
 /**
  * Return non-zero when @p gedp has an initialized draw scene.
  */
 
-GED_EXPORT extern int
+extern int
 ged_draw_source_snapshot(
     struct ged *gedp,
     ged_draw_shape_ref ref,
@@ -43,4 +44,4 @@ ged_draw_source_snapshot(
 
 __END_DECLS
 
-#endif /* GED_DRAW_SOURCE_H */
+#endif /* GED_DRAW_SOURCE_PRIVATE_H */

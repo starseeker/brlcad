@@ -48,7 +48,7 @@
 
 #define POP_MAXLEVEL 16
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 13
+#define CACHE_CURRENT_FORMAT 14
 
 #define CACHE_POP_MAX_LEVEL "max"
 #define CACHE_POP_MIN_LEVEL "min"
@@ -215,6 +215,20 @@ mesh_lod_arrays_validate(const int *faces,
 	return 0;
     if (faceCountIn > ((size_t)-1) / 3)
 	return 0;
+
+    for (size_t pointIndex = 0; pointIndex < pointCountIn; ++pointIndex) {
+	for (size_t axis = 0; axis < 3; ++axis) {
+	    if (!std::isfinite(points[pointIndex][axis]))
+		return 0;
+	}
+    }
+    for (size_t pointIndex = 0; pointIndex < pointOrigCountIn;
+	 pointIndex++) {
+	for (size_t axis = 0; axis < 3; ++axis) {
+	    if (!std::isfinite(pointsOrig[pointIndex][axis]))
+		return 0;
+	}
+    }
 
     const size_t indexCount = faceCountIn * 3;
     for (size_t index = 0; index < indexCount; index++) {
@@ -927,7 +941,7 @@ BObolPopState::BObolPopState(
 
     if (!userKey) {
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char semantics[] = "BObol-PoP3D-format-13";
+	static const char semantics[] = "BObol-PoP3D-format-14";
 	bu_data_hash_update(state, semantics, sizeof(semantics));
 	bu_data_hash_update(state, vertices, inputVertexCount * sizeof(point_t));
 	bu_data_hash_update(state, faces, 3 * inputFaceCount * sizeof(int));
@@ -1032,41 +1046,110 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 	memcpy(output, buffer, expected);
 	return true;
     };
-    if (!readMetadata(CACHE_POP_MAX_LEVEL, &maxPopLevel,
-	    sizeof(maxPopLevel)) ||
-	!readMetadata(CACHE_POP_MIN_LEVEL, &minPopLevel,
-	    sizeof(minPopLevel)) ||
+    const auto readLevelCounts = [this](const char *component,
+	size_t *output) -> bool {
+	void *buffer = NULL;
+	const size_t size = cacheGet(&buffer, component);
+	if (!buffer || !output)
+	    return false;
+	const size_t count = POP_MAXLEVEL + 1;
+	if (size == count * sizeof(uint64_t)) {
+	    const unsigned char *bytes =
+		static_cast<const unsigned char *>(buffer);
+	    for (size_t level = 0; level < count; ++level) {
+		uint64_t diskCount = 0;
+		memcpy(&diskCount, bytes + level * sizeof(diskCount),
+		    sizeof(diskCount));
+		if (diskCount > static_cast<uint64_t>(SIZE_MAX))
+		    return false;
+		output[level] = static_cast<size_t>(diskCount);
+	    }
+	    return true;
+	}
+	return false;
+    };
+    int32_t diskMaxLevel = -1;
+    int32_t diskMinLevel = -1;
+    uint8_t diskCullBackfaces = 0;
+    uint8_t diskHasNormals = 0;
+    if (!readMetadata(CACHE_POP_MAX_LEVEL, &diskMaxLevel,
+	    sizeof(diskMaxLevel)) ||
+	!readMetadata(CACHE_POP_MIN_LEVEL, &diskMinLevel,
+	    sizeof(diskMinLevel)) ||
 	!readMetadata(CACHE_SHADED_CULL_BACKFACES,
-	    &shadedCullBackfaces, sizeof(shadedCullBackfaces)) ||
+	    &diskCullBackfaces, sizeof(diskCullBackfaces)) ||
 	!readMetadata(CACHE_HAS_NORMALS,
-	    &hasNormals, sizeof(hasNormals)) ||
-	!readMetadata(CACHE_VERTEX_COUNT, levelVertexCount,
-	    sizeof(levelVertexCount)) ||
-	!readMetadata(CACHE_TRI_COUNT, levelTriangleCount,
-	    sizeof(levelTriangleCount))) {
+	    &diskHasNormals, sizeof(diskHasNormals)) ||
+	!readLevelCounts(CACHE_VERTEX_COUNT, levelVertexCount) ||
+	!readLevelCounts(CACHE_TRI_COUNT, levelTriangleCount)) {
 	cacheDone();
 	return;
     }
+    if (diskCullBackfaces > 1 || diskHasNormals > 1) {
+	cacheDone();
+	return;
+    }
+    maxPopLevel = static_cast<int>(diskMaxLevel);
+    minPopLevel = static_cast<int>(diskMinLevel);
+    shadedCullBackfaces = diskCullBackfaces != 0;
+    hasNormals = diskHasNormals != 0;
 
     {
-	fastf_t minmax[6];
-	const char *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer, CACHE_OBJ_BOUNDS);
-	if (bufferSize != (sizeof(bbmin) + sizeof(bbmax) + sizeof(minmax))) {
+	double diskBounds[12] = {};
+	void *buffer = NULL;
+	size_t bufferSize = cacheGet(&buffer, CACHE_OBJ_BOUNDS);
+	if (bufferSize != sizeof(diskBounds) || !buffer) {
 	    cacheDone();
 	    return;
 	}
-	memcpy(&bbmin, buffer, sizeof(bbmin));
-	buffer += sizeof(bbmin);
-	memcpy(&bbmax, buffer, sizeof(bbmax));
-	buffer += sizeof(bbmax);
-	memcpy(&minmax, buffer, sizeof(minmax));
-	minx = minmax[0];
-	miny = minmax[1];
-	minz = minmax[2];
-	maxx = minmax[3];
-	maxy = minmax[4];
-	maxz = minmax[5];
+	memcpy(diskBounds, buffer, sizeof(diskBounds));
+	VSET(bbmin, diskBounds[0], diskBounds[1], diskBounds[2]);
+	VSET(bbmax, diskBounds[3], diskBounds[4], diskBounds[5]);
+	minx = static_cast<fastf_t>(diskBounds[6]);
+	miny = static_cast<fastf_t>(diskBounds[7]);
+	minz = static_cast<fastf_t>(diskBounds[8]);
+	maxx = static_cast<fastf_t>(diskBounds[9]);
+	maxy = static_cast<fastf_t>(diskBounds[10]);
+	maxz = static_cast<fastf_t>(diskBounds[11]);
+    }
+    {
+	const bool validLevels = minPopLevel >= 0 &&
+	    maxPopLevel >= minPopLevel && maxPopLevel < POP_MAXLEVEL;
+	const bool validBounds =
+	    std::isfinite(minx) && std::isfinite(miny) &&
+	    std::isfinite(minz) && std::isfinite(maxx) &&
+	    std::isfinite(maxy) && std::isfinite(maxz) &&
+	    minx <= maxx && miny <= maxy && minz <= maxz &&
+	    std::isfinite(bbmin[X]) && std::isfinite(bbmin[Y]) &&
+	    std::isfinite(bbmin[Z]) && std::isfinite(bbmax[X]) &&
+	    std::isfinite(bbmax[Y]) && std::isfinite(bbmax[Z]) &&
+	    bbmin[X] <= bbmax[X] && bbmin[Y] <= bbmax[Y] &&
+	    bbmin[Z] <= bbmax[Z];
+	size_t totalPoints = 0;
+	size_t totalFaces = 0;
+	bool validCounts = levelVertexCount[POP_MAXLEVEL] == 0 &&
+	    levelTriangleCount[POP_MAXLEVEL] == 0;
+	for (int level = 0; validCounts && level < POP_MAXLEVEL; ++level) {
+	    if (levelVertexCount[level] > SIZE_MAX - totalPoints ||
+		levelTriangleCount[level] > SIZE_MAX - totalFaces) {
+		validCounts = false;
+		break;
+	    }
+	    totalPoints += levelVertexCount[level];
+	    totalFaces += levelTriangleCount[level];
+	    if (level > maxPopLevel &&
+		(levelVertexCount[level] || levelTriangleCount[level]))
+		validCounts = false;
+	}
+	if (!validLevels || !validBounds || !validCounts ||
+	    !totalPoints || !totalFaces ||
+	    totalPoints > static_cast<size_t>(
+		std::numeric_limits<int>::max()) ||
+	    totalFaces > static_cast<size_t>(
+		std::numeric_limits<int>::max())) {
+	    cacheDone();
+	    return;
+	}
     }
     /*
      * Retained drawing loads its first cumulative prefix immediately.  Let
@@ -1687,33 +1770,37 @@ bool
 BObolPopState::cacheTri(void)
 {
     {
+	const int32_t diskMaxLevel = static_cast<int32_t>(maxPopLevel);
 	std::stringstream stream;
-	stream.write(reinterpret_cast<const char *>(&maxPopLevel),
-		     sizeof(maxPopLevel));
+	stream.write(reinterpret_cast<const char *>(&diskMaxLevel),
+		     sizeof(diskMaxLevel));
 	if (!cacheWrite(CACHE_POP_MAX_LEVEL, stream))
 	    return false;
     }
 
     {
+	const int32_t diskMinLevel = static_cast<int32_t>(minPopLevel);
 	std::stringstream stream;
-	stream.write(reinterpret_cast<const char *>(&minPopLevel),
-		     sizeof(minPopLevel));
+	stream.write(reinterpret_cast<const char *>(&diskMinLevel),
+		     sizeof(diskMinLevel));
 	if (!cacheWrite(CACHE_POP_MIN_LEVEL, stream))
 	    return false;
     }
 
     {
+	const uint8_t diskCullBackfaces = shadedCullBackfaces ? 1u : 0u;
 	std::stringstream stream;
-	stream.write(reinterpret_cast<const char *>(&shadedCullBackfaces),
-		     sizeof(shadedCullBackfaces));
+	stream.write(reinterpret_cast<const char *>(&diskCullBackfaces),
+		     sizeof(diskCullBackfaces));
 	if (!cacheWrite(CACHE_SHADED_CULL_BACKFACES, stream))
 	    return false;
     }
 
     {
+	const uint8_t diskHasNormals = hasNormals ? 1u : 0u;
 	std::stringstream stream;
-	stream.write(reinterpret_cast<const char *>(&hasNormals),
-		     sizeof(hasNormals));
+	stream.write(reinterpret_cast<const char *>(&diskHasNormals),
+		     sizeof(diskHasNormals));
 	if (!cacheWrite(CACHE_HAS_NORMALS, stream))
 	    return false;
     }
@@ -1721,7 +1808,7 @@ BObolPopState::cacheTri(void)
     {
 	std::stringstream stream;
 	for (size_t levelIndex = 0; levelIndex <= POP_MAXLEVEL; levelIndex++) {
-	    size_t count = 0;
+	    uint64_t count = 0;
 	    if (levelIndex >= levelTriVerts.size()) {
 		stream.write(reinterpret_cast<const char *>(&count),
 			     sizeof(count));
@@ -1733,7 +1820,7 @@ BObolPopState::cacheTri(void)
 			     sizeof(count));
 		continue;
 	    }
-	    count = levelTriVerts[levelIndex].size();
+	    count = static_cast<uint64_t>(levelTriVerts[levelIndex].size());
 	    stream.write(reinterpret_cast<const char *>(&count), sizeof(count));
 	}
 	if (!cacheWrite(CACHE_VERTEX_COUNT, stream))
@@ -1743,14 +1830,14 @@ BObolPopState::cacheTri(void)
     {
 	std::stringstream stream;
 	for (size_t levelIndex = 0; levelIndex <= POP_MAXLEVEL; levelIndex++) {
-	    size_t count = 0;
+	    uint64_t count = 0;
 	    if (static_cast<int>(levelIndex) > maxPopLevel ||
 		!levelTris[levelIndex].size()) {
 		stream.write(reinterpret_cast<const char *>(&count),
 			     sizeof(count));
 		continue;
 	    }
-	    count = levelTris[levelIndex].size();
+	    count = static_cast<uint64_t>(levelTris[levelIndex].size());
 	    stream.write(reinterpret_cast<const char *>(&count), sizeof(count));
 	}
 	if (!cacheWrite(CACHE_TRI_COUNT, stream))
@@ -1848,15 +1935,23 @@ BObolPopState::cache(void)
 	*context->i->accessMutex);
 
     {
+	const double diskBounds[12] = {
+	    static_cast<double>(bbmin[X]),
+	    static_cast<double>(bbmin[Y]),
+	    static_cast<double>(bbmin[Z]),
+	    static_cast<double>(bbmax[X]),
+	    static_cast<double>(bbmax[Y]),
+	    static_cast<double>(bbmax[Z]),
+	    static_cast<double>(minx),
+	    static_cast<double>(miny),
+	    static_cast<double>(minz),
+	    static_cast<double>(maxx),
+	    static_cast<double>(maxy),
+	    static_cast<double>(maxz)
+	};
 	std::stringstream stream;
-	stream.write(reinterpret_cast<const char *>(&bbmin), sizeof(bbmin));
-	stream.write(reinterpret_cast<const char *>(&bbmax), sizeof(bbmax));
-	stream.write(reinterpret_cast<const char *>(&minx), sizeof(minx));
-	stream.write(reinterpret_cast<const char *>(&miny), sizeof(miny));
-	stream.write(reinterpret_cast<const char *>(&minz), sizeof(minz));
-	stream.write(reinterpret_cast<const char *>(&maxx), sizeof(maxx));
-	stream.write(reinterpret_cast<const char *>(&maxy), sizeof(maxy));
-	stream.write(reinterpret_cast<const char *>(&maxz), sizeof(maxz));
+	stream.write(reinterpret_cast<const char *>(diskBounds),
+	    sizeof(diskBounds));
 	isValid = cacheWrite(CACHE_OBJ_BOUNDS, stream);
     }
 

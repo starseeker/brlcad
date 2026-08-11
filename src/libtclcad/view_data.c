@@ -25,6 +25,7 @@
 
 #include <string.h>
 
+#include "bg/polygon.h"
 #include "ged/view.h"
 #include "./tclcad_private.h"
 
@@ -37,7 +38,7 @@ tclcad_polygon_state_init(tclcad_polygon_state *state)
 	return;
 
     memset(state, 0, sizeof(*state));
-    state->gdps_clip_type = bg_Union;
+    state->gdps_clip_type = BG_POLYGON_BOOLEAN_UNION;
     MAT_ZERO(state->gdps_rotation);
     MAT_ZERO(state->gdps_view2model);
     MAT_ZERO(state->gdps_model2view);
@@ -69,6 +70,72 @@ tclcad_view_data_init(struct tclcad_view_data *tvd, struct ged *gedp)
     tvd->gedp = gedp;
 
     tclcad_view_state_init(&tvd->tcl_data);
+}
+
+static void
+tclcad_arrow_state_clear(struct tclcad_data_arrow_state *state)
+{
+    if (state && state->gdas_points)
+	bu_free(state->gdas_points, "TclCAD arrow points");
+}
+
+static void
+tclcad_axes_state_clear(struct tclcad_data_axes_state *state)
+{
+    if (state && state->points)
+	bu_free(state->points, "TclCAD axes points");
+}
+
+static void
+tclcad_label_state_clear(tclcad_label_state *state)
+{
+    if (!state)
+	return;
+    if (state->gdls_labels) {
+	for (int i = 0; i < state->gdls_num_labels; i++) {
+	    if (state->gdls_labels[i])
+		bu_free(state->gdls_labels[i], "TclCAD label");
+	}
+	bu_free(state->gdls_labels, "TclCAD labels");
+    }
+    if (state->gdls_points)
+	bu_free(state->gdls_points, "TclCAD label points");
+}
+
+static void
+tclcad_line_state_clear(struct tclcad_data_line_state *state)
+{
+    if (state && state->gdls_points)
+	bu_free(state->gdls_points, "TclCAD line points");
+}
+
+static void
+tclcad_polygon_state_clear(tclcad_polygon_state *state)
+{
+    if (!state)
+	return;
+    bg_polygons_clear(&state->gdps_polygons);
+    if (state->gdps_styles)
+	bu_free(state->gdps_styles, "TclCAD polygon styles");
+}
+
+void
+tclcad_view_data_clear(struct tclcad_view_data *tvd)
+{
+    if (!tvd)
+	return;
+    tclcad_view_state *state = &tvd->tcl_data;
+    tclcad_arrow_state_clear(&state->gv_data_arrows);
+    tclcad_axes_state_clear(&state->gv_data_axes);
+    tclcad_label_state_clear(&state->gv_data_labels);
+    tclcad_line_state_clear(&state->gv_data_lines);
+    tclcad_polygon_state_clear(&state->gv_data_polygons);
+    tclcad_arrow_state_clear(&state->gv_sdata_arrows);
+    tclcad_axes_state_clear(&state->gv_sdata_axes);
+    tclcad_label_state_clear(&state->gv_sdata_labels);
+    tclcad_line_state_clear(&state->gv_sdata_lines);
+    tclcad_polygon_state_clear(&state->gv_sdata_polygons);
+    memset(state, 0, sizeof(*state));
 }
 
 struct bu_vls *

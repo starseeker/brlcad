@@ -65,7 +65,7 @@ void
 create_text_overlay(struct mged_state *s, struct bu_vls *vp)
 {
     struct directory *dp;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     int have_highlight = mged_highlight_shape_record(s, &hrec);
 
     BU_CK_VLS(vp);
@@ -242,7 +242,7 @@ void
 dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 {
     size_t i = 0;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     int have_highlight = mged_highlight_shape_record(s, &hrec);
     int highlighted_legacy_eval = have_highlight ? hrec.evaluated_region : 0;
 

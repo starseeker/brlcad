@@ -29,6 +29,7 @@
 
 #include <QImage>
 #include <QKeyEvent>
+#include <QMetaMethod>
 #include <QMouseEvent>
 #include <QOpenGLWidget>
 #include <QResizeEvent>
@@ -133,6 +134,29 @@ return;
     if (rendered)
 	qgcanvas_frame_complete(*d, this);
     qgcanvas_queue_obol_progressive_update(*d, this);
+    /*
+     * A test recorder must observe the framebuffer already produced by this
+     * paint.  QOpenGLWidget::grabFramebuffer() from frameSwapped can request
+     * another paint and thereby change the behavior being measured.  Do the
+     * readback here, while Qt's FBO is current, and pay nothing unless a
+     * diagnostic observer is connected.
+     */
+    if (isSignalConnected(QMetaMethod::fromSignal(
+	    &QgGL::frame_presented))) {
+	const QSize renderSize = qgcanvas_render_size(this);
+	QImage image(renderSize, QImage::Format_RGBA8888);
+	if (!image.isNull()) {
+	    GLint oldPackAlignment = 4;
+	    glGetIntegerv(GL_PACK_ALIGNMENT, &oldPackAlignment);
+	    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	    glReadPixels(0, 0, renderSize.width(), renderSize.height(),
+		GL_RGBA, GL_UNSIGNED_BYTE, image.bits());
+	    glPixelStorei(GL_PACK_ALIGNMENT, oldPackAlignment);
+	    image = image.flipped(Qt::Vertical);
+	    image.setDevicePixelRatio(devicePixelRatioF());
+	    emit frame_presented(image);
+	}
+    }
     if (!d->obol_paint_initialized) {
 	d->obol_paint_initialized = true;
 	emit init_done();

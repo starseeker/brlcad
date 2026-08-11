@@ -156,6 +156,14 @@ brlcad_addexec(
   ALL_CXX
 )
 
+brlcad_addexec(
+  qged_apng_encode
+  tests/qged_apng_encode.cpp
+  "libicv;libbu"
+  NO_INSTALL
+  ALL_CXX
+)
+
 # Theme subdirectory handles file bookkeeping for CMake
 add_subdirectory(theme)
 
@@ -176,6 +184,7 @@ set(
   tests/README.md
   tests/generate_many_lucy_stress.tcl
   tests/generate_unique_mesh_stress.cpp
+  tests/qged_apng_encode.cpp
   tests/qged_gui_matrix.sh
   qged_signals.eps
   qged_signals.dia

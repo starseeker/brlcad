@@ -36,6 +36,7 @@
 #include "ged/defines.h"
 #include "ged/display.h"
 #include "ged/scene.h"
+#include "ged/view_export.h"
 
 __BEGIN_DECLS
 
@@ -56,17 +57,6 @@ typedef enum ged_view_clear_flags {
 #define GED_VIEW_REFRESH_OVERLAY     0x00000010u
 #define GED_VIEW_REFRESH_FORCE       0x80000000u
 #define GED_VIEW_REFRESH_ALL         0xffffffffu
-
-struct ged_polygon_export_state {
-    fastf_t scale;
-    point_t origin;
-    mat_t rotation;
-    mat_t view2model;
-    mat_t model2view;
-    struct bg_polygons polygons;
-    fastf_t data_vZ;
-};
-
 
 /** Check if a drawable exists */
 #define GED_CHECK_DRAWABLE(_gedp, _flags) \
@@ -89,12 +79,6 @@ struct ged_polygon_export_state {
 	} \
 	return (_flags); \
     }
-
-GED_EXPORT extern int ged_export_polygon(struct ged *gedp, const struct ged_polygon_export_state *polygon_state, size_t polygon_i, const char *sname);
-GED_EXPORT extern struct bg_polygon *ged_import_polygon(struct ged *gedp, const char *sname);
-GED_EXPORT extern int ged_polygons_overlap(struct ged *gedp, struct bg_polygon *polyA, struct bg_polygon *polyB);
-GED_EXPORT extern void ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vfilldir, fastf_t vfilldelta);
-
 
 /**
  * Rotate angle degrees about the specified axis

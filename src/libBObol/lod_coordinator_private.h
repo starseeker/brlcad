@@ -125,31 +125,55 @@ private:
  * One-shot proof for a late calibrated-headroom admission retry.  Normal
  * probe counts remain a bounded short-horizon mechanism; this witness covers
  * the ordering where reusable timing becomes available only after those
- * probes ended.  A retry is unique for (view, policy, current budget), so an
- * impossible discrete next population cannot repaint forever.
+ * probes ended.  A retry is unique for (view, policy), not for the floating
+ * calibrated budget.  The latter necessarily changes after measuring a
+ * discrete PoP transition; including it in the identity lets an unaffordable
+ * transition alternate forever between its two neighboring cuts.
  */
 class BObolLodHeadroomPolicy {
 public:
     bool armRetry(BObolLodViewEpoch viewEpoch,
-	BObolLodPolicyEpoch policyEpoch, size_t currentBudget)
+	BObolLodPolicyEpoch policyEpoch, size_t currentBudget,
+	size_t activePopulationCost)
     {
 	if ((this->pendingValue &&
 		this->pendingViewRevision == viewEpoch.value() &&
 		this->pendingPolicyRevision == policyEpoch.value() &&
-		this->pendingBudget == currentBudget) ||
+		this->pendingPopulationCost == activePopulationCost) ||
 	    (this->viewRevision == viewEpoch.value() &&
 		this->policyRevision == policyEpoch.value() &&
-		this->budget == currentBudget))
+		this->populationCost == activePopulationCost))
 	    return false;
 	this->pendingValue = true;
 	this->pendingViewRevision = viewEpoch.value();
 	this->pendingPolicyRevision = policyEpoch.value();
 	this->pendingBudget = currentBudget;
+	this->pendingPopulationCost = activePopulationCost;
+	this->pendingTransientReplayCount = 0;
 	return true;
+    }
+
+    bool deferTransientReplay(BObolLodViewEpoch viewEpoch,
+	BObolLodPolicyEpoch policyEpoch, size_t currentBudget,
+	size_t activePopulationCost)
+    {
+	if (!this->pendingMatches(viewEpoch, policyEpoch, currentBudget,
+		activePopulationCost) ||
+	    this->pendingTransientReplayCount >=
+		maxTransientReplayDeferrals())
+	    return false;
+	this->pendingTransientReplayCount++;
+	return true;
+    }
+
+    static constexpr unsigned int maxTransientReplayDeferrals(void)
+    {
+	return 2;
     }
 
     bool consumeRetry(BObolLodViewEpoch viewEpoch,
 	BObolLodPolicyEpoch policyEpoch, size_t currentBudget,
+	size_t activePopulationCost,
 	long double demonstratedBudget, uint64_t elapsedNanoseconds,
 	uint64_t targetNanoseconds, bool reusableSample)
     {
@@ -158,11 +182,14 @@ public:
 	const bool matchingWitness =
 	    this->pendingViewRevision == viewEpoch.value() &&
 	    this->pendingPolicyRevision == policyEpoch.value() &&
-	    this->pendingBudget == currentBudget;
+	    this->pendingBudget == currentBudget &&
+	    this->pendingPopulationCost == activePopulationCost;
 	this->pendingValue = false;
 	this->pendingViewRevision = 0;
 	this->pendingPolicyRevision = 0;
 	this->pendingBudget = SIZE_MAX;
+	this->pendingPopulationCost = SIZE_MAX;
+	this->pendingTransientReplayCount = 0;
 	if (!matchingWitness)
 	    return false;
 	/* Consuming the explicitly requested replay retires this exact witness
@@ -171,6 +198,7 @@ public:
 	this->viewRevision = viewEpoch.value();
 	this->policyRevision = policyEpoch.value();
 	this->budget = currentBudget;
+	this->populationCost = activePopulationCost;
 	if (!reusableSample || !targetNanoseconds ||
 	    !(demonstratedBudget * 20.0L >
 		static_cast<long double>(currentBudget) * 21.0L) ||
@@ -186,26 +214,33 @@ public:
 	this->pendingViewRevision = 0;
 	this->pendingPolicyRevision = 0;
 	this->pendingBudget = SIZE_MAX;
+	this->pendingPopulationCost = SIZE_MAX;
+	this->pendingTransientReplayCount = 0;
     }
 
     bool retryPending(void) const { return this->pendingValue; }
     bool pendingMatches(BObolLodViewEpoch viewEpoch,
-	BObolLodPolicyEpoch policyEpoch, size_t currentBudget) const
+	BObolLodPolicyEpoch policyEpoch, size_t currentBudget,
+	size_t activePopulationCost) const
     {
 	return this->pendingValue &&
 	    this->pendingViewRevision == viewEpoch.value() &&
 	    this->pendingPolicyRevision == policyEpoch.value() &&
-	    this->pendingBudget == currentBudget;
+	    this->pendingBudget == currentBudget &&
+	    this->pendingPopulationCost == activePopulationCost;
     }
 
 private:
     uint64_t viewRevision = 0;
     uint64_t policyRevision = 0;
     size_t budget = SIZE_MAX;
+    size_t populationCost = SIZE_MAX;
     bool pendingValue = false;
     uint64_t pendingViewRevision = 0;
     uint64_t pendingPolicyRevision = 0;
     size_t pendingBudget = SIZE_MAX;
+    size_t pendingPopulationCost = SIZE_MAX;
+    unsigned int pendingTransientReplayCount = 0;
 };
 
 /*
@@ -594,6 +629,9 @@ public:
 	    this->retainedAdmissionRemainingValue;
 	if (this->passInitializedValue)
 	    return decision;
+	const bool requestedRetainedRecovery =
+	    this->requestedRetainedRecoveryBudgetValue != SIZE_MAX &&
+	    inputs.activeCost > this->requestedRetainedRecoveryBudgetValue;
 
 	const long double targetNanoseconds = inputs.targetFps > 0.0f ?
 	    1000000000.0L / static_cast<long double>(inputs.targetFps) : 0.0L;
@@ -658,9 +696,11 @@ public:
 		costBudget = std::min(costBudget, growthLimit);
 	    }
 	    if (!inputs.interactive && !overloadRecovery &&
+		!inputs.stablePresentationHandoff &&
 		this->currentBudgetValue != SIZE_MAX)
 		costBudget = std::max(costBudget, this->currentBudgetValue);
-	    if (!inputs.interactive && this->currentBudgetValue != SIZE_MAX &&
+	    if (!inputs.interactive && !inputs.stablePresentationHandoff &&
+		this->currentBudgetValue != SIZE_MAX &&
 		costBudget > this->currentBudgetValue &&
 		targetNanoseconds > 0.0L &&
 		inputs.observedStableNanoseconds > 0 &&
@@ -714,14 +754,36 @@ public:
 	if (inputs.stablePresentationCostFloor > 0 && costBudget != SIZE_MAX)
 	    costBudget = std::max(
 		costBudget, inputs.stablePresentationCostFloor);
+	/* Point aggregation is a last-resort population bound, not a substitute
+	 * for PoP triangle allocation.  When the presentation controller is
+	 * returning a temporary multi-pixel point cut to the one-pixel contract,
+	 * it may explicitly ask this pass to compact reducible retained prefixes
+	 * first.  The first request forces immediate retained admission; its
+	 * measured ceiling remains in force for this view/policy epoch.  Without
+	 * that persistent ceiling the cheaper recovery frame recalibrates a larger
+	 * budget and immediately re-admits the exact discrete cut which just missed
+	 * the frame deadline. */
+	if (requestedRetainedRecovery)
+	    costBudget = std::min(
+		costBudget, this->requestedRetainedRecoveryBudgetValue);
+	if (!inputs.forceTerminal &&
+	    this->retainedRecoveryCeilingValue != SIZE_MAX)
+	    costBudget = std::min(
+		costBudget, this->retainedRecoveryCeilingValue);
 
 	this->currentBudgetValue = costBudget;
 	this->refinementRemainingValue = costBudget == SIZE_MAX ? SIZE_MAX :
 	    (costBudget > inputs.activeCost ?
 		costBudget - inputs.activeCost : 0);
+	/* A presentation handoff removes a reversible renderer ceiling; it does
+	 * not authorize rewriting retained occurrence cuts.  In particular, a
+	 * zoom must begin at the last coherent cut and adjust from there instead
+	 * of normalizing every occurrence to a cheap baseline.  Cold coverage and
+	 * point-proxy recovery request retained admission explicitly, while a
+	 * completed over-budget quiet frame uses overloadRecovery. */
 	this->retainedAdmissionValue =
 	    (inputs.interactive || overloadRecovery ||
-	     inputs.stablePresentationHandoff) &&
+	     requestedRetainedRecovery) &&
 	    costBudget != SIZE_MAX && inputs.activeCost > costBudget;
 	if (overloadRecovery) {
 	    this->overloadRecoveryPerformedValue = true;
@@ -730,6 +792,7 @@ public:
 	this->retainedAdmissionRemainingValue =
 	    this->retainedAdmissionValue ? costBudget : SIZE_MAX;
 	this->passInitializedValue = true;
+	this->requestedRetainedRecoveryBudgetValue = SIZE_MAX;
 
 	decision.initialized = true;
 	decision.overloadRecovery = overloadRecovery;
@@ -765,8 +828,14 @@ public:
 	    this->probeCountValue = 0;
 	    this->calibrationFramesRemainingValue = 0;
 	}
+	/* Three unchanged presentations are enough to reject a one-frame setup
+	 * or compositor outlier.  Replaying the same cut twelve times does not
+	 * add new capacity information; on very large scenes it needlessly holds
+	 * convergence behind repeated full presentation work.  The resulting
+	 * calibrated budget is retained and the next admission pass supplies the
+	 * next distinct sample. */
 	static constexpr unsigned int minimumProbes = 3;
-	static constexpr unsigned int maximumProbes = 12;
+	static constexpr unsigned int maximumProbes = minimumProbes;
 	decision.probeEligible =
 	    !inputs.interactive && !inputs.stablePresentationHandoff &&
 	    !inputs.passAdmittedWork && inputs.activeCost > 0 &&
@@ -860,6 +929,8 @@ public:
     void reset(void)
     {
 	this->currentBudgetValue = this->seedBudgetValue;
+	this->requestedRetainedRecoveryBudgetValue = SIZE_MAX;
+	this->retainedRecoveryCeilingValue = SIZE_MAX;
 	this->resetPass();
 	this->resetOverloadRecovery();
 	this->resetCalibration();
@@ -889,14 +960,53 @@ public:
 	    this->currentBudgetValue, budget);
     }
 
+    void requestRetainedRecovery(size_t budget)
+    {
+	if (!budget || budget == SIZE_MAX)
+	    return;
+	this->requestedRetainedRecoveryBudgetValue = std::min(
+	    this->requestedRetainedRecoveryBudgetValue, budget);
+	this->retainedRecoveryCeilingValue = std::min(
+	    this->retainedRecoveryCeilingValue, budget);
+	this->currentBudgetValue = std::min(
+	    this->currentBudgetValue, budget);
+    }
+
+    /* Normalize a retained population for one admission pass without
+     * recording a capacity ceiling.  Motion/cold handoff uses this to obtain
+     * a coherent measured baseline; subsequent passes must be free to spend
+     * the headroom demonstrated by that baseline. */
+    void requestRetainedNormalization(size_t budget)
+    {
+	if (!budget || budget == SIZE_MAX)
+	    return;
+	this->requestedRetainedRecoveryBudgetValue = std::min(
+	    this->requestedRetainedRecoveryBudgetValue, budget);
+	this->currentBudgetValue = std::min(
+	    this->currentBudgetValue, budget);
+    }
+
+    void clearRetainedRecoveryCeiling(void)
+    {
+	this->requestedRetainedRecoveryBudgetValue = SIZE_MAX;
+	this->retainedRecoveryCeilingValue = SIZE_MAX;
+    }
+
     void raiseCurrentBudget(size_t budget)
     {
-	this->currentBudgetValue = std::max(
-	    this->currentBudgetValue, budget);
+	size_t raisedBudget = std::max(this->currentBudgetValue, budget);
+	if (this->retainedRecoveryCeilingValue != SIZE_MAX)
+	    raisedBudget = std::min(
+		raisedBudget, this->retainedRecoveryCeilingValue);
+	this->currentBudgetValue = raisedBudget;
     }
 
     size_t seedBudget(void) const { return this->seedBudgetValue; }
     size_t currentBudget(void) const { return this->currentBudgetValue; }
+    bool retainedRecoveryCeilingActive(void) const
+    {
+	return this->retainedRecoveryCeilingValue != SIZE_MAX;
+    }
     bool passInitialized(void) const { return this->passInitializedValue; }
     size_t refinementRemaining(void) const
     {
@@ -939,6 +1049,8 @@ private:
     size_t refinementRemainingValue = SIZE_MAX;
     size_t retainedAdmissionRemainingValue = SIZE_MAX;
     size_t overloadRecoveryActiveCostValue = 0;
+    size_t requestedRetainedRecoveryBudgetValue = SIZE_MAX;
+    size_t retainedRecoveryCeilingValue = SIZE_MAX;
     size_t probeActiveCostValue = 0;
     unsigned int probeCountValue = 0;
     unsigned int calibrationFramesRemainingValue = 0;
@@ -1003,10 +1115,18 @@ public:
 	return decision;
     }
 
+    void seedQualityFloor(int progressiveCeiling)
+    {
+	this->qualityFloorValue = progressiveCeiling >= 0 ?
+	    std::min(progressiveCeiling, 15) : -1;
+    }
+
     void beginGesture(bool newInteractionEpoch)
     {
-	if (newInteractionEpoch)
+	if (newInteractionEpoch) {
 	    this->interactionScaleChangedValue = false;
+	    this->qualityFloorValue = -1;
+	}
 	this->viewScaleChangingValue = false;
 	this->qualityProbeActiveValue = false;
 	this->qualityProbePendingValue = false;
@@ -1017,8 +1137,10 @@ public:
     void beginCameraInteraction(bool newInteractionEpoch,
 	bool scaleChanged)
     {
-	if (newInteractionEpoch)
+	if (newInteractionEpoch) {
 	    this->interactionScaleChangedValue = false;
+	    this->qualityFloorValue = -1;
+	}
 	if (scaleChanged)
 	    this->interactionScaleChangedValue = true;
     }
@@ -1030,10 +1152,52 @@ public:
 	this->qualityProbePresentedValue = false;
     }
 
-    void noteFramePresented(void)
+    void noteFramePresented(int progressiveCeiling, bool exact,
+	uint64_t elapsedNanoseconds)
     {
-	if (this->qualityBudgetActiveValue)
-	    this->qualityProbePresentedValue = true;
+	if (!this->qualityBudgetActiveValue)
+	    return;
+	const bool responsive = exact && elapsedNanoseconds > 0 &&
+	    elapsedNanoseconds <= qualityFrameDurationNanoseconds();
+	this->qualityProbePresentedValue = responsive;
+	if (responsive && progressiveCeiling >= 0)
+	    this->qualityFloorValue = std::max(this->qualityFloorValue,
+		std::min(progressiveCeiling, 15));
+    }
+
+    void noteQualityMiss(int correctedCeiling)
+    {
+	if (correctedCeiling < 0)
+	    return;
+	if (this->qualityFloorValue < 0)
+	    this->qualityFloorValue = correctedCeiling;
+	else
+	    this->qualityFloorValue = std::min(
+		this->qualityFloorValue, correctedCeiling);
+	this->qualityProbePresentedValue = false;
+    }
+
+    bool rearmAfterQualityFrame(bool interactive, int activeMaximum,
+	int presentedMaximum, bool exact, uint64_t elapsedNanoseconds)
+    {
+	/* A cache hit can make a richer occurrence cut active without publishing
+	 * a worker result, so rearmAfterResidentGrowth() alone cannot guarantee
+	 * that already resident detail is ever offered.  Permit one successor
+	 * only after the current quality cut was exactly presented inside the hard
+	 * deadline.  The completed-frame barrier serializes the steps, and a
+	 * missed deadline takes the correction path instead of rearming. */
+	if (!interactive || !this->viewScaleChangingValue ||
+	    !this->interactionScaleChangedValue ||
+	    !this->qualityBudgetActiveValue ||
+	    !this->qualityProbeActiveValue || !exact ||
+	    !elapsedNanoseconds ||
+	    elapsedNanoseconds > qualityFrameDurationNanoseconds() ||
+	    activeMaximum < 0 || presentedMaximum < 0 ||
+	    activeMaximum <= presentedMaximum)
+	    return false;
+	this->qualityProbeActiveValue = false;
+	this->qualityProbePendingValue = true;
+	return true;
     }
 
     bool noteMotionFrameSettled(void)
@@ -1080,6 +1244,15 @@ public:
 	    inputs.activeMaximum;
 	decision.progressiveCeiling = presentedMaximum >= 15 ?
 	    15 : presentedMaximum + 1;
+	/* A stable cut which was presented within the hard zoom-quality
+	 * deadline is a stronger starting point than the deliberately coarser
+	 * 60 Hz motion cut.  Replaying it does not expose new immutable data and
+	 * is still protected by the presentation deadline.  This avoids walking
+	 * back through several PoP populations every time wheel input pauses. */
+	if (this->qualityFloorValue >= 0)
+	    decision.progressiveCeiling = std::max(
+		decision.progressiveCeiling,
+		std::min(inputs.activeMaximum, this->qualityFloorValue));
 	return decision;
     }
 
@@ -1111,6 +1284,7 @@ public:
 	this->qualityProbePendingValue = false;
 	this->qualityProbePresentedValue = false;
 	this->qualityBudgetActiveValue = false;
+	this->qualityFloorValue = -1;
 	return completedScaleInteraction;
     }
 
@@ -1143,6 +1317,7 @@ public:
 	this->qualityProbePendingValue = false;
 	this->qualityProbePresentedValue = false;
 	this->qualityBudgetActiveValue = false;
+	this->qualityFloorValue = -1;
     }
 
     bool scaleDemandRefreshActive(void) const
@@ -1173,6 +1348,10 @@ public:
     {
 	return this->qualityBudgetActiveValue;
     }
+    int qualityFloor(void) const
+    {
+	return this->qualityFloorValue;
+    }
     bool scaleChangingInteraction(bool interactive) const
     {
 	/* interactionScaleChangedValue intentionally survives a mixed wheel and
@@ -1191,6 +1370,7 @@ private:
     bool qualityProbePendingValue = false;
     bool qualityProbePresentedValue = false;
     bool qualityBudgetActiveValue = false;
+    int qualityFloorValue = -1;
 };
 
 /*
@@ -1260,6 +1440,7 @@ public:
 	bool finishHandoff = false;
 	bool requestRetainedRescan = false;
 	bool retireRetainedObservation = false;
+	bool preservePresentationLimits = false;
     };
 
     void capturePrior(int progressiveCeiling,
@@ -1273,6 +1454,8 @@ public:
 	this->provenQualityValue = Snapshot();
 	this->handoffActiveValue = false;
 	this->handoffPresentationRequiredValue = false;
+	this->handoffPreservePresentationLimitsValue = false;
+	this->handoffChangedCutValue = false;
 	this->handoffCostFloorValue = 0;
     }
 
@@ -1366,12 +1549,16 @@ public:
 	    decision.pointProxyPixelThreshold = 1.0f;
 	    this->handoffActiveValue = false;
 	    this->handoffPresentationRequiredValue = false;
+	    this->handoffPreservePresentationLimitsValue = false;
+	    this->handoffChangedCutValue = false;
 	    this->handoffCostFloorValue = 0;
 	} else {
 	    const bool constrained = decision.progressiveCeiling >= 0 ||
 		decision.pointProxyPixelThreshold > 1.01f;
 	    this->handoffActiveValue =
 		!decision.restoredPriorStable && constrained;
+	    this->handoffPreservePresentationLimitsValue = false;
+	    this->handoffChangedCutValue = false;
 	    /* The constrained interaction cut was already presented before the
 	     * quiet debounce called beginQuiet().  A deadline recovery uses
 	     * armHandoff(true) instead and must prove one successful constrained
@@ -1392,9 +1579,13 @@ public:
     CompletedPassDecision completePass(const CompletedPassInputs &inputs)
     {
 	CompletedPassDecision decision;
+	if (this->handoffActiveValue && inputs.completed && inputs.changedCut)
+	    this->handoffChangedCutValue = true;
 	if (!inputs.completed ||
 	    inputs.submissionPending || inputs.rescanAfterFrame ||
-	    inputs.changedCut || inputs.retainedRefinementBudgetBlocked ||
+	    inputs.changedCut ||
+	    (inputs.retainedRefinementBudgetBlocked &&
+	     !this->handoffActiveValue) ||
 	    this->handoffPresentationRequiredValue)
 	    return decision;
 	if (!this->handoffActiveValue) {
@@ -1406,12 +1597,21 @@ public:
 		inputs.retainedRefinementPending;
 	    return decision;
 	}
+	const bool preservePresentationLimits =
+	    !this->handoffChangedCutValue &&
+	    (this->handoffPreservePresentationLimitsValue ||
+	     inputs.retainedRefinementBudgetBlocked);
 	this->handoffActiveValue = false;
 	this->handoffPresentationRequiredValue = false;
+	this->handoffPreservePresentationLimitsValue = false;
+	this->handoffChangedCutValue = false;
 	this->handoffCostFloorValue = 0;
 	decision.finishHandoff = true;
+	decision.preservePresentationLimits = preservePresentationLimits;
 	decision.requestRetainedRescan =
-	    inputs.retainedRefinementPending;
+	    inputs.retainedRefinementPending &&
+	    !inputs.retainedRefinementBudgetBlocked &&
+	    !preservePresentationLimits;
 	return decision;
     }
 
@@ -1419,6 +1619,12 @@ public:
     {
 	this->handoffActiveValue = true;
 	this->handoffPresentationRequiredValue = presentationRequired;
+	/* A presentation-required handoff is created only by a hard frame
+	 * deadline.  Its first completed constrained frame is already the proof
+	 * of the richest currently sustainable renderer cut; do not immediately
+	 * remove that cut and retry the frame which just exceeded the deadline. */
+	this->handoffPreservePresentationLimitsValue = presentationRequired;
+	this->handoffChangedCutValue = false;
 	this->handoffCostFloorValue = 0;
     }
     bool noteFramePresented(void)
@@ -1433,6 +1639,8 @@ public:
     {
 	this->handoffActiveValue = false;
 	this->handoffPresentationRequiredValue = false;
+	this->handoffPreservePresentationLimitsValue = false;
+	this->handoffChangedCutValue = false;
 	this->handoffCostFloorValue = 0;
     }
 
@@ -1440,6 +1648,8 @@ public:
     {
 	this->handoffActiveValue = false;
 	this->handoffPresentationRequiredValue = false;
+	this->handoffPreservePresentationLimitsValue = false;
+	this->handoffChangedCutValue = false;
 	this->handoffCostFloorValue = 0;
 	this->provenQualityValue = Snapshot();
     }
@@ -1451,6 +1661,8 @@ public:
 	this->priorRestoredValue = false;
 	this->handoffActiveValue = false;
 	this->handoffPresentationRequiredValue = false;
+	this->handoffPreservePresentationLimitsValue = false;
+	this->handoffChangedCutValue = false;
 	this->handoffCostFloorValue = 0;
     }
 
@@ -1516,6 +1728,8 @@ private:
     bool priorRestoredValue = false;
     bool handoffActiveValue = false;
     bool handoffPresentationRequiredValue = false;
+    bool handoffPreservePresentationLimitsValue = false;
+    bool handoffChangedCutValue = false;
     size_t handoffCostFloorValue = 0;
 };
 
@@ -1653,6 +1867,116 @@ private:
 	    1000000000.0 / static_cast<double>(targetFps) :
 	    1000000000.0 / 60.0;
     }
+};
+
+/*
+ * Bracket the camera-local small-occurrence aggregation cut using actual
+ * completed/interrupted draw evidence.  A larger threshold is cheaper.  The
+ * old controller alternated an aggressive pressure multiplication with a
+ * fixed 0.75 relaxation step; near the renderer deadline those two rules
+ * formed a permanent coarse/fine oscillation.  Remembering the finest proven
+ * safe cut and the coarsest proven unsafe cut turns the same feedback into a
+ * convergent geometric search.
+ */
+class BObolLodPointProxyCalibrationPolicy {
+public:
+    struct Decision {
+	float threshold = 1.0f;
+	bool changed = false;
+	bool continueRelaxation = false;
+    };
+
+    void reset(void)
+    {
+	this->unsafeThreshold = 0.0f;
+	this->safeThreshold = 0.0f;
+    }
+
+    Decision interrupted(float currentThreshold,
+	uint64_t renderNanoseconds, float targetFps)
+    {
+	Decision decision;
+	const float current = sanitize(currentThreshold);
+	decision.threshold = current;
+	this->unsafeThreshold = std::max(this->unsafeThreshold, current);
+	/* A formerly safe threshold which now misses describes a larger/newer
+	 * scene population.  Its old upper bracket is no longer evidence. */
+	if (this->safeThreshold > 0.0f &&
+	    this->safeThreshold <= this->unsafeThreshold + 0.0001f)
+	    this->safeThreshold = 0.0f;
+
+	float next = BObolLodQualityPolicy::pointProxyThreshold(
+	    current, renderNanoseconds, targetFps);
+	if (this->safeThreshold > this->unsafeThreshold)
+	    next = static_cast<float>(std::sqrt(
+		static_cast<double>(this->safeThreshold) *
+		static_cast<double>(this->unsafeThreshold)));
+	next = sanitize(next);
+	decision.threshold = next;
+	decision.changed = std::fabs(next - current) > 0.01f;
+	decision.continueRelaxation = decision.changed && next > 1.01f;
+	return decision;
+    }
+
+    Decision completed(float currentThreshold,
+	uint64_t renderNanoseconds, float targetFps,
+	bool reusableSample, bool relaxationProbe)
+    {
+	Decision decision;
+	const float current = sanitize(currentThreshold);
+	decision.threshold = current;
+	if (!reusableSample || !renderNanoseconds || targetFps <= 0.0f)
+	    return decision;
+
+	const long double target = 1000000000.0L /
+	    static_cast<long double>(targetFps);
+	if (static_cast<long double>(renderNanoseconds) > target * 1.10L) {
+	    return this->interrupted(
+		current, renderNanoseconds, targetFps);
+	}
+
+	if (this->safeThreshold <= 0.0f || current < this->safeThreshold)
+	    this->safeThreshold = current;
+	if (!relaxationProbe || current <= 1.01f ||
+	    static_cast<long double>(renderNanoseconds) >= target * 0.80L)
+	    return decision;
+
+	float next = current;
+	if (this->unsafeThreshold > 0.0f &&
+	    this->safeThreshold > this->unsafeThreshold) {
+	    /* Once the bracket is within eight percent, retaining the proven
+	     * safe side avoids visible threshold chatter for negligible quality. */
+	    if (this->safeThreshold / this->unsafeThreshold <= 1.08f)
+		return decision;
+	    next = static_cast<float>(std::sqrt(
+		static_cast<double>(this->safeThreshold) *
+		static_cast<double>(this->unsafeThreshold)));
+	} else {
+	    const long double ratio = std::sqrt(
+		static_cast<long double>(renderNanoseconds) /
+		(target * 0.80L));
+	    const long double factor = std::max<long double>(0.75L,
+		std::min<long double>(1.0L, ratio));
+	    next = static_cast<float>(std::max<long double>(1.0L,
+		static_cast<long double>(current) * factor));
+	}
+
+	next = sanitize(next);
+	decision.threshold = next;
+	decision.changed = std::fabs(next - current) > 0.01f;
+	decision.continueRelaxation = decision.changed && next > 1.01f;
+	return decision;
+    }
+
+private:
+    static float sanitize(float threshold)
+    {
+	return std::isfinite(threshold) ?
+	    std::max(1.0f, std::min(64.0f, threshold)) : 1.0f;
+    }
+
+    float unsafeThreshold = 0.0f;
+    float safeThreshold = 0.0f;
 };
 
 /*

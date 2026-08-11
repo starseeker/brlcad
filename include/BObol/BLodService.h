@@ -103,6 +103,12 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
      * governs the active draw cut published with the result. */
     SbBool usePresentationLevelLimit;
     int presentationLevelLimit;
+    /* When the first retained publication reopens an already complete
+     * persistent hierarchy, make the view-requested prefix resident in that
+     * same worker task while still presenting only the minimum useful cut.
+     * Cold cache construction deliberately keeps the ordinary minimum-first
+     * path so expensive new PoP work cannot delay first content. */
+    SbBool prefetchCachedTargetOnFirstPublication;
     int forcedLevel;
     int reset;
 

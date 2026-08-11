@@ -41,26 +41,24 @@ extern "C" {
 #include "qtcad/defines.h"
 #include "qtcad/QgViewFilter.h"
 
-enum qg_polygon_type {
-	QG_POLYGON_GENERAL = 0,
-	QG_POLYGON_CIRCLE = 1,
-	QG_POLYGON_ELLIPSE = 2,
-	QG_POLYGON_RECTANGLE = 3,
-	QG_POLYGON_SQUARE = 4
-};
+using qg_polygon_type = ged_view_polygon_type;
+static constexpr qg_polygon_type QG_POLYGON_GENERAL = GED_VIEW_POLYGON_GENERAL;
+static constexpr qg_polygon_type QG_POLYGON_CIRCLE = GED_VIEW_POLYGON_CIRCLE;
+static constexpr qg_polygon_type QG_POLYGON_ELLIPSE = GED_VIEW_POLYGON_ELLIPSE;
+static constexpr qg_polygon_type QG_POLYGON_RECTANGLE = GED_VIEW_POLYGON_RECTANGLE;
+static constexpr qg_polygon_type QG_POLYGON_SQUARE = GED_VIEW_POLYGON_SQUARE;
 
-enum qg_polygon_update_mode {
-	QG_POLYGON_UPDATE_DEFAULT = 0,
-	QG_POLYGON_UPDATE_PROPS_ONLY = 1,
-	QG_POLYGON_UPDATE_PT_SELECT = 2,
-	QG_POLYGON_UPDATE_PT_SELECT_CLEAR = 3,
-	QG_POLYGON_UPDATE_PT_MOVE = 4,
-	QG_POLYGON_UPDATE_PT_APPEND = 5
-};
+using qg_polygon_update_mode = enum ged_view_polygon_update;
+static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_DEFAULT = GED_VIEW_POLYGON_UPDATE_DEFAULT;
+static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PROPS_ONLY = GED_VIEW_POLYGON_UPDATE_PROPS_ONLY;
+static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PT_SELECT = GED_VIEW_POLYGON_UPDATE_PT_SELECT;
+static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PT_SELECT_CLEAR = GED_VIEW_POLYGON_UPDATE_PT_SELECT_CLEAR;
+static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PT_MOVE = GED_VIEW_POLYGON_UPDATE_PT_MOVE;
+static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PT_APPEND = GED_VIEW_POLYGON_UPDATE_PT_APPEND;
 
-typedef ged_polygon_ref qg_polygon_ref;
-#define QG_POLYGON_REF_NULL_INIT GED_POLYGON_REF_NULL_INIT
-typedef struct ged_polygon_record qg_polygon_record;
+typedef ged_view_polygon_ref qg_polygon_ref;
+#define QG_POLYGON_REF_NULL_INIT GED_VIEW_POLYGON_REF_NULL_INIT
+typedef struct ged_view_polygon_record qg_polygon_record;
 
 // Filters designed for specific editing modes
 class QTCAD_EXPORT QgPolyFilter : public QgViewFilter {
@@ -85,9 +83,9 @@ signals:
 public:
 	bool close_polygon();
 
-	bg_clip_t op = bg_None;
+	enum bg_polygon_boolean_op op = BG_POLYGON_BOOLEAN_NONE;
 	qg_polygon_ref polygon = QG_POLYGON_REF_NULL_INIT;
-	int ptype = QG_POLYGON_CIRCLE;
+	qg_polygon_type ptype = QG_POLYGON_CIRCLE;
 	bool close_general_poly = true; // set to false if application wants to allow non-closed polygons
 	struct bu_color fill_color = BU_COLOR_BLUE;
 	struct bu_color edge_color = BU_COLOR_YELLOW;

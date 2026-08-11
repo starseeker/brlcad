@@ -210,6 +210,10 @@ QPolyCreate::finalize(bool)
     struct ged *gedp = getGed();
     if (!gedp)
 	return;
+    void *v = qpolycreate_view(m_ctx);
+    if (!v)
+	return;
+    struct ged_view_context *view_ctx = qpolycreate_ged_view(v);
 
     close_general_poly->blockSignals(true);
     close_general_poly->setChecked(true);
@@ -218,7 +222,7 @@ QPolyCreate::finalize(bool)
 
     // If we're not keeping the polygon due to its being
     // used for previous boolean ops, we're done
-    if (ged_polygon_ref_is_null(p))
+    if (ged_view_polygon_ref_is_null(p))
 	return;
 
     // If we're keeping the object, there are some housekeeping
@@ -244,9 +248,10 @@ QPolyCreate::finalize(bool)
 	    struct directory *sk_dp = RT_DIR_NULL;
 	    {
 		QgGedEventBatch event_batch(gedp);
-		sk_dp = ged_polygon_export_sketch(gedp->dbip, sk_name, p);
+		sk_dp = ged_view_polygon_export_sketch(view_ctx, gedp->dbip,
+			sk_name, p);
 	    }
-	    ged_polygon_user_data_set(p, (void *)sk_dp);
+	    ged_view_polygon_user_data_set(view_ctx, p, (void *)sk_dp);
 	    emit view_updated(QG_VIEW_DB);
 	}
 	bu_free(sk_name, "name cpy");
@@ -257,7 +262,7 @@ QPolyCreate::finalize(bool)
     ps->sketch_name->setText("");
     sketch_sync();
 
-    p = GED_POLYGON_REF_NULL;
+    p = GED_VIEW_POLYGON_REF_NULL;
     emit view_updated(QG_VIEW_REFRESH);
 }
 
@@ -285,11 +290,11 @@ QPolyCreate::do_vpoly_copy()
 	return;
     }
     char *sname = bu_strdup(vpoly_name->text().toLocal8Bit().data());
-    p = ged_polygon_dup(qpolycreate_ged_view(v), sname,
+    p = ged_view_polygon_dup(qpolycreate_ged_view(v), sname,
 	    bu_vls_cstr(&vname));
     bu_free(sname, "name cpy");
     bu_vls_free(&vname);
-    if (ged_polygon_ref_is_null(p))
+    if (ged_view_polygon_ref_is_null(p))
 	return;
 
     // Done processing view feature - increment name
@@ -301,7 +306,7 @@ QPolyCreate::do_vpoly_copy()
     bu_vls_free(&pname);
 
     do_bool = false;
-    p = GED_POLYGON_REF_NULL;
+    p = GED_VIEW_POLYGON_REF_NULL;
     emit view_updated(QG_VIEW_REFRESH);
 }
 
@@ -337,10 +342,10 @@ QPolyCreate::do_import_sketch()
     }
 
     // Names are valid, dp is ready - try the sketch import
-    p = ged_polygon_import_sketch(bu_vls_cstr(&vname),
-	    gedp->dbip, dp, qpolycreate_ged_view(v), 1);
+    p = ged_view_polygon_import_sketch(qpolycreate_ged_view(v),
+	    bu_vls_cstr(&vname), gedp->dbip, dp, 1);
     bu_vls_free(&vname);
-    if (ged_polygon_ref_is_null(p))
+    if (ged_view_polygon_ref_is_null(p))
 	return;
 
     // Done processing view feature - increment name
@@ -352,7 +357,7 @@ QPolyCreate::do_import_sketch()
     bu_vls_free(&pname);
 
     do_bool = false;
-    p = GED_POLYGON_REF_NULL;
+    p = GED_VIEW_POLYGON_REF_NULL;
     emit view_updated(QG_VIEW_REFRESH);
 }
 
@@ -422,8 +427,8 @@ void
 QPolyCreate::toggle_line_snapping(bool s)
 {
     void *v = qpolycreate_view(m_ctx);
-    qg_polygon_ref co = (cf) ? cf->polygon : GED_POLYGON_REF_NULL;
-    if (!v || ged_polygon_ref_is_null(co))
+    qg_polygon_ref co = (cf) ? cf->polygon : GED_VIEW_POLYGON_REF_NULL;
+    if (!v || ged_view_polygon_ref_is_null(co))
 	return;
 
     struct bv *view = bv_context_view(static_cast<struct bv_context *>(v));
@@ -431,9 +436,9 @@ QPolyCreate::toggle_line_snapping(bool s)
     if (!s) {
 	bv_snap_lines_set(view, 0);
     } else {
-	ged_polygon_snap_exclude_set(qpolycreate_ged_view(v), co);
+	ged_view_polygon_snap_exclude_set(qpolycreate_ged_view(v), co);
 	bv_snap_lines_set(view,
-		ged_polygon_snap_count(qpolycreate_ged_view(v), co) ? 1 : 0);
+		ged_view_polygon_snap_count(qpolycreate_ged_view(v), co) ? 1 : 0);
     }
 
     emit settings_changed(QG_VIEW_DRAWN);
@@ -517,7 +522,7 @@ QPolyCreate::toplevel_config(bool)
     if (!gedp || !v)
 	return;
 
-    if (!ged_polygon_ref_is_null(p)) {
+    if (!ged_view_polygon_ref_is_null(p)) {
 	finalize(true);
     }
 
@@ -526,7 +531,7 @@ QPolyCreate::toplevel_config(bool)
     // This function is called when a top level mode change was initiated
     // by a selection button.  Clear any selected points being displayed.
     if (gedp)
-	draw_change = ged_polygon_clear_point_selection(
+	draw_change = ged_view_polygon_clear_point_selection(
 		qpolycreate_ged_view(v)) ? true : false;
 
     if (draw_change && gedp)
@@ -571,9 +576,9 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
     //  If we're continuing to edit the existing polygon, the options are
     //  whatever is already established - otherwise, grab from the widget
     //  settings
-    if (!ged_polygon_ref_is_null(p)) {
+    if (!ged_view_polygon_ref_is_null(p)) {
 	qg_polygon_record rec;
-	if (ged_polygon_record_get(p, &rec))
+	if (ged_view_polygon_record_get(qpolycreate_ged_view(v), p, &rec))
 	    cf->ptype = rec.type;
     } else {
 	if (ellipse_mode->isChecked()) {
@@ -589,15 +594,15 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
 	    cf->ptype = QG_POLYGON_GENERAL;
 	}
 
-	cf->op = bg_None;
+    cf->op = BG_POLYGON_BOOLEAN_NONE;
 	if (csg_modes->currentText() == "Union") {
-	    cf->op = bg_Union;
+	    cf->op = BG_POLYGON_BOOLEAN_UNION;
 	}
 	if (csg_modes->currentText() == "Subtraction") {
-	    cf->op = bg_Difference;
+	    cf->op = BG_POLYGON_BOOLEAN_DIFFERENCE;
 	}
 	if (csg_modes->currentText() == "Intersection") {
-	    cf->op = bg_Intersection;
+	    cf->op = BG_POLYGON_BOOLEAN_INTERSECTION;
 	}
 
 	cf->fill_poly = (ps->fill_poly->isChecked()) ? true : false;
@@ -626,7 +631,7 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
 	struct _qpolycreate_poly_collect pc;
 	pc.polys = &polyvec;
 	pc.exclude = p;
-	ged_polygon_visit_records(qpolycreate_ged_view(v),
+	ged_view_polygon_visit_records(qpolycreate_ged_view(v),
 		_qpolycreate_poly_collect_cb, &pc);
 	for (auto s : polyvec)
 	    pcf->bool_objs.push_back(s);

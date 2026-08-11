@@ -40,7 +40,7 @@
 #include "./menu.h"
 
 
-struct mged_highlight_state mged_highlight = {GED_DRAW_SHAPE_REF_NULL_INIT, 0};
+struct mged_highlight_state mged_highlight = {GED_SCENE_OCCURRENCE_REF_NULL_INIT, 0};
 
 struct mged_pen_pick_cache {
     struct ged *gedp;
@@ -55,7 +55,7 @@ struct mged_pen_pick_candidate {
     char *path;
     char *instance_key;
     int draw_mode;
-    ged_draw_shape_ref ref;
+    ged_scene_occurrence_ref ref;
 };
 
 static struct mged_pen_pick_cache pen_pick_cache = {0};
@@ -74,7 +74,7 @@ mged_pen_pick_cache_clear(void)
 }
 
 static int
-mged_pen_pick_cache_append(const struct ged_draw_shape_candidate *candidate,
+mged_pen_pick_cache_append(const struct ged_scene_occurrence_candidate *candidate,
 	void *userdata)
 {
     struct mged_pen_pick_cache *cache =
@@ -95,7 +95,7 @@ mged_pen_pick_cache_append(const struct ged_draw_shape_candidate *candidate,
     out->instance_key = bu_strdup(candidate->instance_key ?
 	    candidate->instance_key : candidate->path);
     out->draw_mode = candidate->draw_mode;
-    out->ref = GED_DRAW_SHAPE_REF_NULL;
+    out->ref = GED_SCENE_OCCURRENCE_REF_NULL;
     return 1;
 }
 
@@ -112,74 +112,74 @@ mged_pen_pick_cache_ensure(struct mged_state *s)
     mged_pen_pick_cache_clear();
     pen_pick_cache.gedp = s->gedp;
     pen_pick_cache.scene_revision = revision;
-    ged_draw_foreach_visible_shape_candidate(s->gedp,
+    ged_scene_occurrence_candidates_visit(s->gedp,
 	    mged_pen_pick_cache_append, &pen_pick_cache);
     pen_pick_cache.valid = 1;
 }
 
-static ged_draw_shape_ref
+static ged_scene_occurrence_ref
 mged_pen_pick_ref(struct mged_state *s, size_t index)
 {
     mged_pen_pick_cache_ensure(s);
     if (index >= pen_pick_cache.count)
-	return GED_DRAW_SHAPE_REF_NULL;
+	return GED_SCENE_OCCURRENCE_REF_NULL;
 
     struct mged_pen_pick_candidate *candidate =
 	&pen_pick_cache.candidates[index];
-    if (ged_draw_shape_ref_is_null(candidate->ref)) {
-	struct ged_draw_shape_candidate lookup;
+    if (ged_scene_occurrence_ref_is_null(candidate->ref)) {
+	struct ged_scene_occurrence_candidate lookup;
 	lookup.path = candidate->path;
 	lookup.instance_key = candidate->instance_key;
 	lookup.draw_mode = candidate->draw_mode;
-	candidate->ref = ged_draw_shape_ref_for_candidate(s->gedp, &lookup);
+	candidate->ref = ged_scene_occurrence_candidate_resolve(s->gedp, &lookup);
     }
     return candidate->ref;
 }
 
-ged_draw_shape_ref
+ged_scene_occurrence_ref
 mged_pen_pick_first(struct mged_state *s)
 {
     return mged_pen_pick_ref(s, 0);
 }
 
-ged_draw_shape_ref
+ged_scene_occurrence_ref
 mged_highlight_shape_ref(struct mged_state *s)
 {
-    if (!s || !s->gedp || ged_draw_shape_ref_is_null(mged_highlight.shape))
-	return GED_DRAW_SHAPE_REF_NULL;
-    struct ged_draw_shape_record rec;
-    if (!ged_draw_shape_record_get(s->gedp, mged_highlight.shape, &rec))
-	return GED_DRAW_SHAPE_REF_NULL;
+    if (!s || !s->gedp || ged_scene_occurrence_ref_is_null(mged_highlight.shape))
+	return GED_SCENE_OCCURRENCE_REF_NULL;
+    struct ged_scene_occurrence_info rec;
+    if (!ged_scene_occurrence_get(s->gedp, mged_highlight.shape, &rec))
+	return GED_SCENE_OCCURRENCE_REF_NULL;
     return mged_highlight.shape;
 }
 
 int
-mged_highlight_shape_record(struct mged_state *s, struct ged_draw_shape_record *out)
+mged_highlight_shape_record(struct mged_state *s, struct ged_scene_occurrence_info *out)
 {
-    if (!s || !s->gedp || !out || ged_draw_shape_ref_is_null(mged_highlight.shape))
+    if (!s || !s->gedp || !out || ged_scene_occurrence_ref_is_null(mged_highlight.shape))
 	return 0;
-    return ged_draw_shape_record_get(s->gedp, mged_highlight.shape, out);
+    return ged_scene_occurrence_get(s->gedp, mged_highlight.shape, out);
 }
 
 void
-mged_highlight_set_shape_ref(struct mged_state *s, ged_draw_shape_ref ref)
+mged_highlight_set_shape_ref(struct mged_state *s, ged_scene_occurrence_ref ref)
 {
     /* The visual highlight is scene-wide, while interaction selection belongs
      * to the active view that initiated the illuminate action. */
     struct ged_view_context *view_ctx = view_state ? view_state->vs_gvp : NULL;
-    if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref)) {
-	mged_highlight.shape = GED_DRAW_SHAPE_REF_NULL;
+    if (!s || !s->gedp || ged_scene_occurrence_ref_is_null(ref)) {
+	mged_highlight.shape = GED_SCENE_OCCURRENCE_REF_NULL;
 	if (s && s->gedp) {
 	    (void)ged_scene_occurrence_highlight_set(s->gedp,
-		GED_DRAW_SHAPE_REF_NULL, 0, NULL);
-	    (void)ged_view_selection_set_highlight(s->gedp,
-		    view_ctx, GED_DRAW_SHAPE_REF_NULL);
+		GED_SCENE_OCCURRENCE_REF_NULL, 0, NULL);
+	    (void)ged_view_selection_highlight_occurrence_set(s->gedp,
+		    view_ctx, GED_SCENE_OCCURRENCE_REF_NULL);
 	}
 	return;
     }
     mged_highlight.shape = ref;
     (void)ged_scene_occurrence_highlight_set(s->gedp, ref, 1, NULL);
-    (void)ged_view_selection_set_highlight(s->gedp,
+    (void)ged_view_selection_highlight_occurrence_set(s->gedp,
 	    view_ctx, mged_highlight.shape);
 }
 
@@ -187,7 +187,7 @@ void
 mged_highlight_clear(struct mged_state *s)
 {
     mged_pen_pick_cache_clear();
-    mged_highlight_set_shape_ref(s, GED_DRAW_SHAPE_REF_NULL);
+    mged_highlight_set_shape_ref(s, GED_SCENE_OCCURRENCE_REF_NULL);
 }
 
 /* Preserve MGED's tablet-style vertical illuminate selection, but build its
@@ -195,7 +195,7 @@ mged_highlight_clear(struct mged_state *s)
 static void
 highlight_from_y(struct mged_state *s, int y)
 {
-    ged_draw_shape_ref ref = GED_DRAW_SHAPE_REF_NULL;
+    ged_scene_occurrence_ref ref = GED_SCENE_OCCURRENCE_REF_NULL;
     mged_pen_pick_cache_ensure(s);
     if (pen_pick_cache.count) {
 	fastf_t pos = ((fastf_t)y + RT_VIEW_MAX) / RT_VIEW_RANGE;
@@ -221,7 +221,7 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
 
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     int have_highlight = mged_highlight_shape_record(s, &hrec);
 
     if (argc < 1 || 2 < argc) {
@@ -251,11 +251,11 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	    return TCL_ERROR;
 	}
     } else {
-	if (ged_draw_shape_ref_is_null(mged_highlight_shape_ref(s)))
+	if (ged_scene_occurrence_ref_is_null(mged_highlight_shape_ref(s)))
 	    return TCL_ERROR;
 
 	/* Advance using snapshotted DFS integer index — single snapshot
-	 * build, O(N) total.  ged_draw_advance_shape_ref wraps circularly. */
+	 * build, O(N) total.  ged_scene_occurrence_advance wraps circularly. */
 	int delta = (argc == 1 || *argv[1] == 'f') ? +1
 	            : (*argv[1] == 'b')             ? -1
 	            : 0;
@@ -263,8 +263,8 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	    Tcl_AppendResult(interp, "aip: bad parameter - ", argv[1], "\n", (char *)NULL);
 	    return TCL_ERROR;
 	}
-	ged_draw_shape_ref next_ref = ged_draw_advance_shape_ref(s->gedp, mged_highlight.shape, delta);
-	if (ged_draw_shape_ref_is_null(next_ref)) {
+	ged_scene_occurrence_ref next_ref = ged_scene_occurrence_advance(s->gedp, mged_highlight.shape, delta);
+	if (ged_scene_occurrence_ref_is_null(next_ref)) {
 	    /* No shapes drawn — nothing to advance to */
 	    return TCL_OK;
 	}
@@ -340,7 +340,7 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
     size_t j;
     int illum_only = 0;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
 
     CHECK_DBI_NULL;
 
@@ -566,7 +566,7 @@ f_mouse(
 	case ST_O_PATH:
 	    {
 		/* Convert DT position to path element select. */
-		struct ged_draw_shape_record hrec;
+		struct ged_scene_occurrence_info hrec;
 		int have_highlight = mged_highlight_shape_record(s, &hrec);
 		isave = highlight_path_pos;
 		if (have_highlight && hrec.fullpath)

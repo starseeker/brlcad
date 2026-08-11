@@ -185,7 +185,8 @@ main(int argc, char **argv)
     int qtArgc = 1;
     char *qtArgv[] = {const_cast<char *>(executableName), NULL};
     QgEdApp app(
-	qtArgc, qtArgv, databaseFile, softwareRasterMode, quadMode);
+	qtArgc, qtArgv, databaseFile, softwareRasterMode, quadMode,
+	testScript != NULL);
 
     if (!startup.isEmpty()) {
 	const QStringList commands = startup.split(';', Qt::SkipEmptyParts);

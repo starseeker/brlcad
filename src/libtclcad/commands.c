@@ -995,7 +995,7 @@ static struct to_cmdtab ged_cmds[] = {
 
 
 struct to_cmdtab to_cmds[] = {
-    {"autoview",	"vname", TO_UNLIMITED, to_autoview, GED_FUNC_PTR_NULL},
+    {"autoview",	"vname [options] [object ...]", TO_UNLIMITED, to_autoview, GED_FUNC_PTR_NULL},
     {"base2local",	(char *)0, TO_UNLIMITED, to_base2local, GED_FUNC_PTR_NULL},
     {"bg",	"[r g b]", TO_UNLIMITED, to_bg, GED_FUNC_PTR_NULL},
     {"blast",	(char *)0, TO_UNLIMITED, to_blast, GED_FUNC_PTR_NULL},
@@ -1275,6 +1275,7 @@ tclcad_view_host_destroy(struct tclcad_obj *top, struct ged_view_context *view_c
     (void)ged_view_context_obol_endpoint_set(view_ctx, NULL, 0);
 
     if (tvd) {
+	tclcad_view_data_clear(tvd);
 	bu_vls_free(&tvd->gdv_pathname);
 	bu_vls_free(&tvd->gdv_edit_motion_delta_callback);
 	bu_vls_free(&tvd->gdv_callback);
@@ -2165,8 +2166,8 @@ to_data_move_func(struct ged *gedp,
 	MAT4X3PNT(mpoint, view2model, vpoint);
 	VMOVE(_cpts[dindex], mpoint);
 
-	    fastf_t _half = 1.0;
-	    ged_annotation_data_axes_half_size_get(gdvp, feature_name, &_half);
+	    fastf_t _half =
+		_tclcad_draw_view_data_axes_half_size(gdvp, feature_name);
 
 	    int _color[3]; int _lw, _vis;
 	    _tclcad_draw_view_data_axes_style_read(gdvp, feature_name, _color, &_lw, &_vis);
@@ -2190,8 +2191,8 @@ to_data_move_func(struct ged *gedp,
 	MAT4X3PNT(mpoint, view2model, vpoint);
 	VMOVE(_cpts[dindex], mpoint);
 
-	    fastf_t _half = 1.0;
-	    ged_annotation_data_axes_half_size_get(gdvp, feature_name, &_half);
+	    fastf_t _half =
+		_tclcad_draw_view_data_axes_half_size(gdvp, feature_name);
 
 	    int _color[3]; int _lw, _vis;
 	    _tclcad_draw_view_data_axes_style_read(gdvp, feature_name, _color, &_lw, &_vis);
@@ -4774,6 +4775,7 @@ to_new_view(struct ged *gedp,
     if (!tclcad_view_host_open(new_view_ctx, tvd, current_top->to_interp,
 	    argc, argv, gedp->ged_result_str)) {
 	tclcad_view_data_unbind_view_ctx(new_view_ctx);
+	tclcad_view_data_clear(tvd);
 	bu_vls_free(&tvd->gdv_pathname);
 	bu_vls_free(&tvd->gdv_edit_motion_delta_callback);
 	bu_vls_free(&tvd->gdv_callback);

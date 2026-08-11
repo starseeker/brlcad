@@ -933,11 +933,11 @@ struct _fill_data {
     int               exact;
     int               ri;
     int               nmatch;
-    ged_draw_shape_ref lastfound;
+    ged_scene_occurrence_ref lastfound;
 };
 
 static int
-_fill_shape_cb(const struct ged_draw_shape_record *rec, void *ud)
+_fill_shape_cb(const struct ged_scene_occurrence_info *rec, void *ud)
 {
     struct _fill_data *d = (struct _fill_data *)ud;
     int a_new_match;
@@ -975,7 +975,7 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
     struct directory *dp;
-    ged_draw_shape_ref lastfound = GED_DRAW_SHAPE_REF_NULL;
+    ged_scene_occurrence_ref lastfound = GED_SCENE_OCCURRENCE_REF_NULL;
     int nmatch;
     int c;
     size_t i;
@@ -1109,8 +1109,8 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	fd.exact = exact;
 	fd.ri = ri;
 	fd.nmatch = 0;
-	fd.lastfound = GED_DRAW_SHAPE_REF_NULL;
-	ged_draw_foreach_shape_record(s->gedp, _fill_shape_cb, &fd);
+	fd.lastfound = GED_SCENE_OCCURRENCE_REF_NULL;
+	ged_scene_occurrences_visit(s->gedp, _fill_shape_cb, &fd);
 	nmatch = fd.nmatch;
 	lastfound = fd.lastfound;
     }

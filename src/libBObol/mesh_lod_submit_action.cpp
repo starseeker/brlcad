@@ -1513,6 +1513,23 @@ mesh_lod_retarget_cad_demand_if_changed(
 }
 
 static void
+mesh_lod_retarget_mesh_demand_if_changed(
+    BObolViewLodState *state,
+    const BObolViewLodState::MeshPayload *payload,
+    const BObolLodRequest &request)
+{
+    if (!state || !payload)
+	return;
+    if (payload->requestedLevel == request.requestedLevel &&
+	payload->viewRevision == request.viewRevision &&
+	payload->policyRevision == request.policyRevision)
+	return;
+    (void)state->retargetMeshPayload(payload, payload->activeLevel,
+	request.requestedLevel, request.viewRevision.value(),
+	request.policyRevision.value());
+}
+
+static void
 mesh_lod_note_upward_resident_use(
     SoBRLMeshLodSubmitAction *action, const SbString &cacheKey,
     int activeLevel, int nextLevel)
@@ -1835,10 +1852,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    bool qualityFloorViolation;
 	};
 	if (!submitAction->compactEntryPlanSupplied) {
-	    /* This traversal owns the perceptual order.  Keep each finite-budget
-	     * visit to one populated transition so that marginal ordering remains
-	     * meaningful after the first candidate is admitted. */
-	    submitAction->transitionLimitedRefinement = TRUE;
+	    /* This traversal owns the perceptual order.  Coverage has already
+	     * established one mesh per visible occurrence; visit the strongest
+	     * deficits first and let each choose its richest budget-fitting
+	     * resident cut.  Repeating a whole-scene pass for every nominal PoP
+	     * transition made stable convergence proportional to hierarchy depth. */
 	    std::vector<CompactCandidate> candidates;
 	    std::vector<const BObolViewLodState::CadPayload *>
 		offscreenPayloads;
@@ -2612,6 +2630,23 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		       activeAssetMatches ? 1 : 0,
 		       submitAction->refinementCostBudget);
 
+	    /*
+	     * An in-flight cumulative-prefix load is coalesced by asset and
+	     * occurrence, independently of camera revisions.  Record the newest
+	     * view demand before submitBatch() can reject this task as an active
+	     * duplicate.  Otherwise a wheel stream can outrun the worker while the
+	     * retained occurrence still advertises the older cut.  The completed
+	     * suffix is then safely rebased but has no current demand witness to
+	     * admit it, so refinement appears only after button-up.  This is a
+	     * metadata-only update; it neither journals a presentation mutation nor
+	     * traverses the scene.
+	     */
+	    if (!submitAction->useForcedLevel && activePayload &&
+		activeAssetMatches &&
+		request.requestedLevel > activePayload->activeLevel)
+		mesh_lod_retarget_cad_demand_if_changed(
+		    submitAction->viewState, activePayload, request);
+
 	    if (static_cast<size_t>(submitAction->submittedTaskCount) +
 		    pendingTasks.size() >=
 		    submitAction->submissionTaskLimit) {
@@ -2666,6 +2701,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		providerPresentationLevel >= 0 && providerDeliveryLevel >
 		    providerPresentationLevel ? TRUE : FALSE;
 	    provider->presentationLevelLimit = providerPresentationLevel;
+	    provider->prefetchCachedTargetOnFirstPublication =
+		!activePayload ? TRUE : FALSE;
 	    /*
 	     * The scene allocator has already charged the complete marginal
 	     * population of this exact cut.  Do not apply a second per-asset
@@ -2682,7 +2719,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    initialFaceAllowance > SIZE_MAX / 2 ?
 			SIZE_MAX : initialFaceAllowance * 2;
 	    }
-	    provider->shrinkAfterCopy = FALSE;
+	    provider->shrinkAfterCopy = TRUE;
 		    /* A shared source asset may serve many occurrences at
 		     * different levels.  Trimming is therefore a post-generation
 		     * aggregate operation, never a leaf-request side effect. */
@@ -2905,8 +2942,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     }
     int providerDeliveryLevel = -1;
     int providerPresentationLevel = -1;
-    if (!submitAction->useForcedLevel && activePayload &&
-	activePayload->progressiveMesh &&
+	if (!submitAction->useForcedLevel && activePayload &&
+	    activePayload->progressiveMesh &&
 	request.requestedLevel > activePayload->activeLevel &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request)) {
 	const int preferredLevel = mesh_lod_bounded_delivery_level(
@@ -2928,11 +2965,16 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    }
 	    providerPresentationLevel = activePayload->activeLevel;
 	}
-	providerDeliveryLevel = submitAction->allowResidentPrefetch ?
-	    request.requestedLevel : providerPresentationLevel;
-    }
+	    providerDeliveryLevel = submitAction->allowResidentPrefetch ?
+		request.requestedLevel : providerPresentationLevel;
+	}
+	if (!submitAction->useForcedLevel && activePayload &&
+	    mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
+	    request.requestedLevel > activePayload->activeLevel)
+	    mesh_lod_retarget_cad_demand_if_changed(
+		submitAction->viewState, activePayload, request);
 
-    size_t initialFaceAllowance = 0;
+	size_t initialFaceAllowance = 0;
     if (!activePayload &&
 	!submitAction->reserveInitialCost(
 	    request.sourceCounts.faceCount,
@@ -2967,6 +3009,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	providerPresentationLevel >= 0 && providerDeliveryLevel >
 	    providerPresentationLevel ? TRUE : FALSE;
     provider->presentationLevelLimit = providerPresentationLevel;
+    provider->prefetchCachedTargetOnFirstPublication =
+	!activePayload ? TRUE : FALSE;
     if (provider->useDeliveryLevelLimit)
 	provider->progressiveDelivery = FALSE;
     if (initialFaceAllowance) {
@@ -2975,7 +3019,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    initialFaceAllowance > SIZE_MAX / 2 ?
 		SIZE_MAX : initialFaceAllowance * 2;
     }
-    provider->shrinkAfterCopy = FALSE;
+    provider->shrinkAfterCopy = TRUE;
 	    provider->compactResident = FALSE;
     provider->reset = submitAction->reset;
 
@@ -3153,8 +3197,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     }
     int providerDeliveryLevel = -1;
     int providerPresentationLevel = -1;
-    if (!submitAction->useForcedLevel && viewPayload &&
-	viewPayload->progressiveMesh &&
+	if (!submitAction->useForcedLevel && viewPayload &&
+	    viewPayload->progressiveMesh &&
 	request.requestedLevel > viewPayload->activeLevel &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request)) {
 	const int preferredLevel = mesh_lod_bounded_delivery_level(
@@ -3176,11 +3220,16 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    }
 	    providerPresentationLevel = viewPayload->activeLevel;
 	}
-	providerDeliveryLevel = submitAction->allowResidentPrefetch ?
-	    request.requestedLevel : providerPresentationLevel;
-    }
+	    providerDeliveryLevel = submitAction->allowResidentPrefetch ?
+		request.requestedLevel : providerPresentationLevel;
+	}
+	if (!submitAction->useForcedLevel && viewPayload &&
+	    mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&
+	    request.requestedLevel > viewPayload->activeLevel)
+	    mesh_lod_retarget_mesh_demand_if_changed(
+		submitAction->viewState, viewPayload, request);
 
-    size_t initialFaceAllowance = 0;
+	size_t initialFaceAllowance = 0;
     if (!viewPayload &&
 	!submitAction->reserveInitialCost(
 	    request.sourceCounts.faceCount,
@@ -3213,6 +3262,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	providerPresentationLevel >= 0 && providerDeliveryLevel >
 	    providerPresentationLevel ? TRUE : FALSE;
     provider->presentationLevelLimit = providerPresentationLevel;
+    provider->prefetchCachedTargetOnFirstPublication =
+	!viewPayload ? TRUE : FALSE;
     if (provider->useDeliveryLevelLimit)
 	provider->progressiveDelivery = FALSE;
     if (initialFaceAllowance) {
@@ -3221,7 +3272,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    initialFaceAllowance > SIZE_MAX / 2 ?
 		SIZE_MAX : initialFaceAllowance * 2;
     }
-    provider->shrinkAfterCopy = FALSE;
+    provider->shrinkAfterCopy = TRUE;
 	    provider->compactResident = FALSE;
     provider->reset = submitAction->reset;
 

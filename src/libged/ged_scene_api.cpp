@@ -40,6 +40,11 @@ struct ged_scene_result {
     std::string diagnostic;
 };
 
+static ged_scene_occurrence_ref ged_scene_occurrence_from_shape_ref(
+    struct ged *gedp, ged_draw_shape_ref ref);
+static ged_draw_shape_ref ged_scene_occurrence_to_shape_ref(
+    struct ged *gedp, ged_scene_occurrence_ref occurrence);
+
 
 static void
 ged_scene_result_reset(struct ged_scene_result *result)
@@ -596,10 +601,14 @@ ged_scene_highlights_clear(struct ged *gedp, struct ged_scene_result *result)
 
 extern "C" enum ged_scene_status
 ged_scene_occurrence_highlight_set(struct ged *gedp,
-	ged_draw_shape_ref occurrence, int highlighted,
+	ged_scene_occurrence_ref occurrence, int highlighted,
 	struct ged_scene_result *result)
 {
-    if (!gedp || (ged_draw_shape_ref_is_null(occurrence) && highlighted)) {
+    ged_draw_shape_ref shape_ref = ged_scene_occurrence_to_shape_ref(gedp,
+	occurrence);
+    if (!gedp || (ged_scene_occurrence_ref_is_null(occurrence) && highlighted) ||
+	(!ged_scene_occurrence_ref_is_null(occurrence) &&
+	 ged_draw_shape_ref_is_null(shape_ref))) {
 	if (result) {
 	    ged_scene_result_reset(result);
 	    result->status = GED_SCENE_INVALID;
@@ -608,7 +617,7 @@ ged_scene_occurrence_highlight_set(struct ged *gedp,
     }
     struct ged_draw_transaction transaction = ged_draw_transaction_make_value(
 	GED_DRAW_TXN_HIGHLIGHT_OCCURRENCE, NULL, highlighted ? 1.0 : 0.0);
-    transaction.shape_ref = occurrence;
+    transaction.shape_ref = shape_ref;
     return ged_scene_apply_typed_transaction(gedp, &transaction, NULL, 0,
 	result);
 }
@@ -834,6 +843,209 @@ extern "C" int
 ged_scene_has_occurrences(struct ged *gedp)
 {
     return ged_scene_occurrence_count(gedp) ? 1 : 0;
+}
+
+
+static ged_scene_occurrence_ref
+ged_scene_occurrence_from_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
+{
+    ged_scene_occurrence_ref occurrence = GED_SCENE_OCCURRENCE_REF_NULL;
+    if (!gedp || ged_draw_shape_ref_is_null(ref))
+	return occurrence;
+    occurrence.owner = reinterpret_cast<uintptr_t>(gedp);
+    occurrence.id = static_cast<uint64_t>(ref.token);
+    occurrence.generation = 1;
+    return occurrence;
+}
+
+
+static ged_draw_shape_ref
+ged_scene_occurrence_to_shape_ref(struct ged *gedp,
+	ged_scene_occurrence_ref occurrence)
+{
+    ged_draw_shape_ref ref = GED_DRAW_SHAPE_REF_NULL;
+    if (!gedp || !occurrence.owner || !occurrence.id ||
+	occurrence.owner != reinterpret_cast<uintptr_t>(gedp) ||
+	occurrence.generation != 1)
+	return ref;
+    ref.token = static_cast<uintptr_t>(occurrence.id);
+    ref.scene_revision = ged_draw_scene_revision(gedp);
+    struct ged_draw_shape_record record;
+    if (!ged_draw_shape_record_get(gedp, ref, &record))
+	return GED_DRAW_SHAPE_REF_NULL;
+    return ref;
+}
+
+
+extern "C" int
+ged_scene_occurrence_ref_is_null(ged_scene_occurrence_ref occurrence)
+{
+    return !occurrence.owner && !occurrence.id && !occurrence.generation;
+}
+
+
+extern "C" int
+ged_scene_occurrence_ref_equal(ged_scene_occurrence_ref a,
+	ged_scene_occurrence_ref b)
+{
+    return a.owner == b.owner && a.id == b.id &&
+	a.generation == b.generation;
+}
+
+
+static void
+ged_scene_occurrence_info_fill(struct ged *gedp,
+	const struct ged_draw_shape_record *record,
+	struct ged_scene_occurrence_info *out)
+{
+    if (!record || !out)
+	return;
+    *out = ged_scene_occurrence_info();
+    out->ref = ged_scene_occurrence_from_shape_ref(gedp, record->ref);
+    out->fullpath = record->fullpath;
+    out->path = record->display_name;
+    out->leaf_name = record->leaf_name;
+    out->path_hash = record->path_hash;
+    out->view = ged_draw_shape_ref_view_context(gedp, record->ref);
+    out->draw_mode = static_cast<enum ged_scene_draw_mode>(record->draw_mode);
+    out->opacity = 1.0 - record->transparency;
+    out->visible = record->visible;
+    out->highlighted = record->highlighted;
+    out->selected = record->selected;
+    out->evaluated_region = record->evaluated_region;
+    out->line_width = record->line_width;
+    VMOVE(out->center, record->center);
+}
+
+
+struct ged_scene_occurrence_visit_context {
+    struct ged *gedp;
+    ged_scene_occurrence_func_t callback;
+    void *client_data;
+    size_t count;
+};
+
+
+static int
+ged_scene_occurrence_visit_cb(const struct ged_draw_shape_record *record,
+	void *client_data)
+{
+    struct ged_scene_occurrence_visit_context *context =
+	static_cast<struct ged_scene_occurrence_visit_context *>(client_data);
+    if (!context || !context->callback || !record)
+	return 0;
+    struct ged_scene_occurrence_info occurrence;
+    ged_scene_occurrence_info_fill(context->gedp, record, &occurrence);
+    context->count++;
+    return context->callback(&occurrence, context->client_data);
+}
+
+
+extern "C" size_t
+ged_scene_occurrences_visit(struct ged *gedp,
+	ged_scene_occurrence_func_t callback, void *client_data)
+{
+    if (!gedp || !callback)
+	return 0;
+    struct ged_scene_occurrence_visit_context context = {
+	gedp, callback, client_data, 0
+    };
+    ged_draw_foreach_shape_record(gedp, ged_scene_occurrence_visit_cb,
+	&context);
+    return context.count;
+}
+
+
+struct ged_scene_candidate_visit_context {
+    ged_scene_occurrence_candidate_func_t callback;
+    void *client_data;
+    size_t count;
+};
+
+
+static int
+ged_scene_candidate_visit_cb(const struct ged_draw_shape_candidate *candidate,
+	void *client_data)
+{
+    struct ged_scene_candidate_visit_context *context =
+	static_cast<struct ged_scene_candidate_visit_context *>(client_data);
+    if (!context || !context->callback || !candidate)
+	return 0;
+    struct ged_scene_occurrence_candidate semantic;
+    semantic.path = candidate->path;
+    semantic.instance_key = candidate->instance_key;
+    semantic.draw_mode =
+	static_cast<enum ged_scene_draw_mode>(candidate->draw_mode);
+    context->count++;
+    return context->callback(&semantic, context->client_data);
+}
+
+
+extern "C" size_t
+ged_scene_occurrence_candidates_visit(
+    struct ged *gedp, ged_scene_occurrence_candidate_func_t callback,
+    void *client_data)
+{
+    if (!gedp || !callback)
+	return 0;
+    struct ged_scene_candidate_visit_context context = {
+	callback, client_data, 0
+    };
+    ged_draw_foreach_visible_shape_candidate(gedp,
+	ged_scene_candidate_visit_cb, &context);
+    return context.count;
+}
+
+
+extern "C" ged_scene_occurrence_ref
+ged_scene_occurrence_candidate_resolve(
+    struct ged *gedp, const struct ged_scene_occurrence_candidate *candidate)
+{
+    if (!gedp || !candidate)
+	return GED_SCENE_OCCURRENCE_REF_NULL;
+    struct ged_draw_shape_candidate internal;
+    internal.path = candidate->path;
+    internal.instance_key = candidate->instance_key;
+    internal.draw_mode = static_cast<int>(candidate->draw_mode);
+    return ged_scene_occurrence_from_shape_ref(gedp,
+	ged_draw_shape_ref_for_candidate(gedp, &internal));
+}
+
+
+extern "C" int
+ged_scene_occurrence_get(struct ged *gedp,
+	ged_scene_occurrence_ref occurrence,
+	struct ged_scene_occurrence_info *out)
+{
+    if (!out)
+	return 0;
+    ged_draw_shape_ref ref = ged_scene_occurrence_to_shape_ref(gedp,
+	occurrence);
+    struct ged_draw_shape_record record;
+    if (ged_draw_shape_ref_is_null(ref) ||
+	!ged_draw_shape_record_get(gedp, ref, &record))
+	return 0;
+    ged_scene_occurrence_info_fill(gedp, &record, out);
+    return 1;
+}
+
+
+extern "C" ged_scene_occurrence_ref
+ged_scene_occurrence_first(struct ged *gedp)
+{
+    return ged_scene_occurrence_from_shape_ref(gedp,
+	ged_draw_first_shape_ref(gedp));
+}
+
+
+extern "C" ged_scene_occurrence_ref
+ged_scene_occurrence_advance(struct ged *gedp,
+	ged_scene_occurrence_ref occurrence, int delta)
+{
+    ged_draw_shape_ref ref = ged_scene_occurrence_to_shape_ref(gedp,
+	occurrence);
+    return ged_scene_occurrence_from_shape_ref(gedp,
+	ged_draw_advance_shape_ref(gedp, ref, delta));
 }
 
 

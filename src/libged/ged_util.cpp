@@ -1696,7 +1696,7 @@ ged_uplot_parse_stream(struct ged_uplot_stream *ctx, FILE *fp)
 static int
 ged_uplot_feature_layers_create(const char *name,
 	struct ged_uplot_stream *ctx,
-	struct ged_annotation_line_layer **layers_out,
+	struct ged_view_feature_line_layer **layers_out,
 	char ***names_out,
 	size_t *live_layers_out)
 {
@@ -1713,11 +1713,11 @@ ged_uplot_feature_layers_create(const char *name,
 	    live_layers++;
     }
 
-    struct ged_annotation_line_layer *layers = NULL;
+    struct ged_view_feature_line_layer *layers = NULL;
     char **names = NULL;
     if (live_layers) {
-	layers = (struct ged_annotation_line_layer *)bu_calloc(live_layers,
-		sizeof(struct ged_annotation_line_layer), "ged uplot feature layers");
+	layers = (struct ged_view_feature_line_layer *)bu_calloc(live_layers,
+		sizeof(struct ged_view_feature_line_layer), "ged uplot feature layers");
 	names = (char **)bu_calloc(live_layers, sizeof(char *), "ged uplot feature layer names");
     }
 
@@ -1725,7 +1725,7 @@ ged_uplot_feature_layers_create(const char *name,
     for (size_t i = 0; i < ctx->layer_count; i++) {
 	if (!ctx->layers[i].count)
 	    continue;
-	struct ged_annotation_line_layer init = GED_ANNOTATION_LINE_LAYER_INIT;
+	struct ged_view_feature_line_layer init = GED_VIEW_FEATURE_LINE_LAYER_INIT;
 	layers[idx] = init;
 	layers[idx].points = (const point_t *)ctx->layers[i].points;
 	layers[idx].commands = ctx->layers[i].commands;
@@ -1754,7 +1754,7 @@ ged_uplot_feature_layers_create(const char *name,
 
 static void
 ged_uplot_feature_layers_free(
-	struct ged_annotation_line_layer *layers,
+	struct ged_view_feature_line_layer *layers,
 	char **names,
 	size_t live_layers)
 {
@@ -1766,27 +1766,6 @@ ged_uplot_feature_layers_free(
 	bu_free(names, "ged uplot feature layer names");
     if (layers)
 	bu_free(layers, "ged uplot feature layers");
-}
-
-static int
-ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_stream *ctx)
-{
-    struct ged_view_context *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
-    if (!view_ctx || !name || !ctx)
-	return BRLCAD_ERROR;
-
-    struct ged_annotation_line_layer *layers = NULL;
-    char **names = NULL;
-    size_t live_layers = 0;
-    if (ged_uplot_feature_layers_create(name, ctx, &layers, &names,
-	    &live_layers) != BRLCAD_OK)
-	return BRLCAD_ERROR;
-
-    int ret = ged_annotation_line_layers_replace(view_ctx, name, 0,
-	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
-
-    ged_uplot_feature_layers_free(layers, names, live_layers);
-    return ret;
 }
 
 static void
@@ -1978,18 +1957,14 @@ ged_uplot_publish_view_feature_batch(struct ged *gedp,
     desc.generation = generation;
     struct ged_view_feature_batch *scene =
 	ged_view_feature_batch_begin(view_ctx, &desc);
-    if (!scene) {
-	if (remove_prefix && remove_prefix[0])
-	    (void)ged_view_feature_remove_prefix(view_ctx,
-		    remove_prefix);
-	return ged_uplot_publish_feature(gedp, name, stream);
-    }
+    if (!scene)
+	return BRLCAD_ERROR;
 
     if (remove_prefix && remove_prefix[0])
 	(void)ged_view_feature_batch_remove_prefix(scene,
 		remove_prefix);
 
-    struct ged_annotation_line_layer *layers = NULL;
+    struct ged_view_feature_line_layer *layers = NULL;
     char **names = NULL;
     size_t live_layers = 0;
     if (ged_uplot_feature_layers_create(name, stream, &layers, &names,
@@ -2140,10 +2115,6 @@ _ged_view_feature_batch_publish_line_layer_builder(struct ged *gedp,
     }
 
     int handled = ged_diagnostic_line_layer_publish(gedp, name, builder);
-    if (!handled && view_ctx) {
-	handled = ged_annotation_diagnostic_line_layer_builder_replace(
-		view_ctx, name, builder);
-    }
     return handled ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
@@ -2190,9 +2161,7 @@ _ged_view_feature_batch_publish_line_set(struct ged *gedp,
 	if (!points || !point_count)
 	    return ged_view_feature_remove(view_ctx, name) ?
 		BRLCAD_OK : BRLCAD_ERROR;
-	return ged_annotation_lines_replace(view_ctx, name, 0,
-		points, cmds, point_count, &publish_style) ?
-	    BRLCAD_OK : BRLCAD_ERROR;
+	return BRLCAD_ERROR;
     }
 
     if (remove_prefix && remove_prefix[0])
@@ -2286,9 +2255,7 @@ _ged_view_feature_batch_publish_indexed_face_set(struct ged *gedp,
 	if (!points || !point_count || !indices || !index_count)
 	    return ged_view_feature_remove(view_ctx, name) ?
 		BRLCAD_OK : BRLCAD_ERROR;
-	return ged_view_feature_indexed_face_set_replace(view_ctx, name, 0,
-		points, point_count, normals, normal_count, indices,
-		index_count, &publish_style) ? BRLCAD_OK : BRLCAD_ERROR;
+	return BRLCAD_ERROR;
     }
 
     if (remove_prefix && remove_prefix[0])

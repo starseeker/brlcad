@@ -2601,7 +2601,6 @@ test_events(struct ged *gedp)
     const char *bev_event_child = "_ged_event_bev_child.s";
     const char *bev_event_region = "_ged_event_bev_region.r";
     const char *bev_event_dst = "_ged_event_bev.nmg";
-    const char *polyclip_event_sketch = "_ged_event_polyclip.sketch";
     const char *analyze_pnts_src = "_ged_event_analyze_src.pnts";
     const char *analyze_vol_src = "_ged_event_analyze_vol.s";
     const char *analyze_pnts_out = "_ged_event_analyze_out.pnts";
@@ -4096,56 +4095,6 @@ test_events(struct ged *gedp)
 	  "bev fixture must not publish removals");
     CHECK(ged_event_observer_remove(gedp, bev_post_token) == 1,
 	  "bev observer removal must succeed");
-
-    struct ged_polygon_export_state polyclip_state;
-    std::memset(&polyclip_state, 0, sizeof(polyclip_state));
-    MAT_IDN(polyclip_state.rotation);
-    MAT_IDN(polyclip_state.model2view);
-    MAT_IDN(polyclip_state.view2model);
-    polyclip_state.scale = 1.0;
-    VSET(polyclip_state.origin, 0.0, 0.0, 0.0);
-    polyclip_state.data_vZ = 0.0;
-    int polyclip_hole = 0;
-    point_t polyclip_points[4];
-    VSET(polyclip_points[0], 0.0, 0.0, 0.0);
-    VSET(polyclip_points[1], 1.0, 0.0, 0.0);
-    VSET(polyclip_points[2], 1.0, 1.0, 0.0);
-    VSET(polyclip_points[3], 0.0, 1.0, 0.0);
-    struct bg_poly_contour polyclip_contour;
-    std::memset(&polyclip_contour, 0, sizeof(polyclip_contour));
-    polyclip_contour.num_points = 4;
-    polyclip_contour.point = polyclip_points;
-    struct bg_polygon polyclip_polygon;
-    std::memset(&polyclip_polygon, 0, sizeof(polyclip_polygon));
-    polyclip_polygon.num_contours = 1;
-    polyclip_polygon.hole = &polyclip_hole;
-    polyclip_polygon.contour = &polyclip_contour;
-    polyclip_state.polygons.num_polygons = 1;
-    polyclip_state.polygons.polygon = &polyclip_polygon;
-
-    event_order_observer polyclip_post;
-    ged_event_observer_token polyclip_post_token =
-	ged_event_observer_add(gedp, GED_EVENT_OBSERVER_POST_RECONCILE,
-			       event_order_cb, &polyclip_post);
-    CHECK(polyclip_post_token != 0,
-	  "polyclip export observer must register");
-    CHECK(ged_export_polygon(gedp, &polyclip_state, 0,
-			     polyclip_event_sketch) == BRLCAD_OK,
-	  "polyclip export helper must publish object creation event");
-    CHECK(polyclip_post.calls == 1,
-	  "polyclip export helper must publish one event transaction");
-    CHECK(observed_named_event(polyclip_post, GED_EVENT_OBJECT_ADDED,
-			       polyclip_event_sketch),
-	  "polyclip export helper must emit object-added event");
-    CHECK(db_lookup(gedp->dbip, polyclip_event_sketch, LOOKUP_QUIET) !=
-	  RT_DIR_NULL,
-	  "polyclip export helper must create sketch object");
-    CHECK(std::find(polyclip_post.all_kinds.begin(),
-		    polyclip_post.all_kinds.end(), GED_EVENT_OBJECT_REMOVED) ==
-	  polyclip_post.all_kinds.end(),
-	  "polyclip export helper fixture must not publish removals");
-    CHECK(ged_event_observer_remove(gedp, polyclip_post_token) == 1,
-	  "polyclip export observer removal must succeed");
 
     if (!run_slow_state_service_tests()) {
 	bu_log("Skipping extended GED command event sweep; set BRLCAD_RUN_SLOW_TESTS=1 to run it.\n");

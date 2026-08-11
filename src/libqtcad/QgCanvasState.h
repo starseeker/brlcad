@@ -55,6 +55,7 @@
 #include "BObol/BHUDLabelOverlay.h"
 #include "BObol/BLineLayerOverlay.h"
 #include "BObol/BViewController.h"
+#include "BObol/BViewLod.h"
 #include "bv.h"
 #include "ged/display.h"
 #include "ged/view.h"
@@ -112,6 +113,7 @@ struct QgCanvasState {
     bool   software_backend = false;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
     QOpenGLFramebufferObject *presentation_fbo = nullptr;
+    bool presentation_fbo_has_completed_frame = false;
     QImage last_completed_software_frame;
     std::chrono::steady_clock::time_point fps_last_publish;
     std::chrono::steady_clock::time_point lod_progress_last_publish;
@@ -384,9 +386,18 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	    deadlineContext.previous, deadlineContext.previousData);
 	action->setAbortCallback(deadlineCallback, &deadlineContext);
     }
+    BObolViewLodState *presentationState =
+	s.obol ? s.obol->getViewLodState() : nullptr;
+    if (presentationState)
+	presentationState->beginCadPresentationFrame();
     const SbBool rendered = renderer.render(s.obol->getRenderRoot());
     const uint64_t completed = s.obol->beginRenderTiming();
-    const SbBool interrupted = action && action->hasTerminated();
+    if (presentationState)
+	presentationState->refreshCadPresentationFrameStatus();
+    const SbBool cadFrameIncomplete = presentationState &&
+	!presentationState->lastCadPresentationFrameExact();
+    const SbBool interrupted =
+	(action && action->hasTerminated()) || cadFrameIncomplete;
     if (action && deadlineDuration)
 	action->setAbortCallback(
 	    deadlineContext.previous, deadlineContext.previousData);
@@ -400,8 +411,31 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     if (interrupted) {
 	s.obol->notePresentationRenderInterrupted(
 	    completed > started ? completed - started : 1);
-	if (!s.last_completed_software_frame.isNull())
+	if (!s.last_completed_software_frame.isNull()) {
 	    img = s.last_completed_software_frame;
+	} else if (rendered) {
+	    /* Before the first exact frame exists, a deadline-bounded structural
+	     * prefix is still the fastest useful cold-start presentation.  Show
+	     * that provisional image, but do not promote it to the retained
+	     * completed frame: later interruptions must never regress a mesh view
+	     * back to this box-only prefix. */
+	    unsigned char *buffer = renderer.getBuffer();
+	    if (buffer) {
+		QImage raw(buffer, size[0], size[1], size[0] * 4,
+		    QImage::Format_RGBX8888);
+		if (borrowRendererBuffer) {
+		    img = raw.copy();
+		} else {
+		    img = QImage(size[0], size[1], QImage::Format_RGBX8888);
+		    for (int y = 0; y < size[1]; y++)
+			std::memcpy(img.scanLine(size[1] - 1 - y),
+			    raw.constScanLine(y),
+			    static_cast<size_t>(size[0]) * 4);
+		}
+	    }
+	}
+	if (w && !img.isNull())
+	    img.setDevicePixelRatio(w->devicePixelRatioF());
 	return;
     }
     if (!rendered)
@@ -821,6 +855,7 @@ qgcanvas_render_obol_pending(QgCanvasState &s, QOpenGLWidget *widget,
 	return FALSE;
     if (!s.presentation_fbo || s.presentation_fbo->size() != renderSize) {
 	delete s.presentation_fbo;
+	s.presentation_fbo_has_completed_frame = false;
 	QOpenGLFramebufferObjectFormat format;
 	format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
 	format.setSamples(0);
@@ -829,6 +864,7 @@ qgcanvas_render_obol_pending(QgCanvasState &s, QOpenGLWidget *widget,
     if (!s.presentation_fbo || !s.presentation_fbo->isValid()) {
 	delete s.presentation_fbo;
 	s.presentation_fbo = nullptr;
+	s.presentation_fbo_has_completed_frame = false;
 	return s.obol->renderPending(clearWindow, clearZBuffer, NULL);
     }
 
@@ -842,7 +878,7 @@ qgcanvas_render_obol_pending(QgCanvasState &s, QOpenGLWidget *widget,
 	    s.presentation_fbo->handle());
 	gl->glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
 	    widget->defaultFramebufferObject());
-	if (rendered)
+	if (rendered || !s.presentation_fbo_has_completed_frame)
 	    gl->glBlitFramebuffer(0, 0, renderSize.width(), renderSize.height(),
 		0, 0, renderSize.width(), renderSize.height(),
 		GL_COLOR_BUFFER_BIT, GL_NEAREST);
@@ -851,6 +887,8 @@ qgcanvas_render_obol_pending(QgCanvasState &s, QOpenGLWidget *widget,
     } else {
 	s.presentation_fbo->release();
     }
+    if (rendered)
+	s.presentation_fbo_has_completed_frame = true;
     return rendered;
 }
 

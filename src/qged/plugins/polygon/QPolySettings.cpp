@@ -30,6 +30,7 @@
 #include "bu/str.h"
 #include "bu/vls.h"
 #include "bu/color.h"
+#include "bv/view.h"
 #include "ged/draw.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgView.h"
@@ -59,8 +60,8 @@ qpolysettings_unique_polygon_name(struct bu_vls *oname,
 
     const char *npattern = "([-_:]*[0-9]+[-_:]*)[^0-9]*$";
     long int loop_guard = 0;
-    while (!ged_polygon_ref_is_null(
-	    ged_polygon_find(ged_view_context_from_bv(
+    while (!ged_view_polygon_ref_is_null(
+	    ged_view_polygon_find(ged_view_context_from_bv(
 		    static_cast<struct bv_context *>(view)),
 		    bu_vls_cstr(&vseed))) &&
 	    loop_guard < LONG_MAX) {
@@ -278,7 +279,7 @@ QPolySettings::do_grid_snapping_changed()
 
 
 void
-QPolySettings::settings_sync(const struct ged_polygon_record *p)
+QPolySettings::settings_sync(const struct ged_view_polygon_record *p)
 {
     if (!p)
 	return;

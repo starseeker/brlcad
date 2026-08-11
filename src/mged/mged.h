@@ -73,8 +73,7 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/event_txn.h"
-#include "ged/scene_internal.h"
-#include "ged/view_feature_internal.h"
+#include "ged/scene.h"
 #include "rt/edit.h"
 #include "wdb.h"
 #include "tcl.h"
@@ -330,7 +329,7 @@ extern void mged_edit_scope_release(struct mged_state *s, enum ged_scene_edit_ou
  * until MGED is cut over to the libged edit logic.  See src/mged/edsol.c. */
 extern void mged_oedit_live_preview(struct mged_state *s);
 /* Locate the drawn shape record matching a full path (chgtree.c). */
-extern ged_draw_shape_ref find_solid_ref_with_path(struct mged_state *s, struct db_full_path *pathp);
+extern ged_scene_occurrence_ref find_solid_ref_with_path(struct mged_state *s, struct db_full_path *pathp);
 extern void quit(struct mged_state *s);
 extern void refresh(struct mged_state *s);
 extern void mged_obol_display_detach(struct mged_state *s, struct mged_display *mdmp);
@@ -367,16 +366,16 @@ void history_cleanup(void);
 extern int movedir;  /* RARROW | UARROW | SARROW | ROTARROW */
 
 struct mged_highlight_state {
-    ged_draw_shape_ref shape; /* NULL ref if none, else highlighted shape */
+    ged_scene_occurrence_ref shape; /* NULL ref if none, else highlighted shape */
     int path_pos;            /* path index of highlighted element */
 };
 extern struct mged_highlight_state mged_highlight;
 #define highlight_path_pos (mged_highlight.path_pos)
-extern ged_draw_shape_ref mged_highlight_shape_ref(struct mged_state *s);
-extern int mged_highlight_shape_record(struct mged_state *s, struct ged_draw_shape_record *out);
-extern void mged_highlight_set_shape_ref(struct mged_state *s, ged_draw_shape_ref ref);
+extern ged_scene_occurrence_ref mged_highlight_shape_ref(struct mged_state *s);
+extern int mged_highlight_shape_record(struct mged_state *s, struct ged_scene_occurrence_info *out);
+extern void mged_highlight_set_shape_ref(struct mged_state *s, ged_scene_occurrence_ref ref);
 extern void mged_highlight_clear(struct mged_state *s);
-extern ged_draw_shape_ref mged_pen_pick_first(struct mged_state *s);
+extern ged_scene_occurrence_ref mged_pen_pick_first(struct mged_state *s);
 extern int sedraw; /* apply solid editing changes */
 extern int edobj; /* object editing options */
 
@@ -499,9 +498,9 @@ void vls_col_item(struct bu_vls *str, const char *cp);
 void vls_col_eol(struct bu_vls *str);
 
 /* dodraw.c */
-int replot_modified_solid(struct mged_state *s, ged_draw_shape_ref ref, struct rt_db_internal *ip, const mat_t mat);
-int replot_original_solid(struct mged_state *s, ged_draw_shape_ref ref);
-void add_solid_record_path_to_result(Tcl_Interp *interpreter, const struct ged_draw_shape_record *rec);
+int replot_modified_solid(struct mged_state *s, ged_scene_occurrence_ref ref, struct rt_db_internal *ip, const mat_t mat);
+int replot_original_solid(struct mged_state *s, ged_scene_occurrence_ref ref);
+void add_solid_record_path_to_result(Tcl_Interp *interpreter, const struct ged_scene_occurrence_info *rec);
 int redraw_visible_objects(struct mged_state *s);
 
 /* scene_refresh.c */

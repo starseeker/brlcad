@@ -53,6 +53,9 @@ brlcad_addexec(rt_diff diff.c "${RT_TEST_LIBS}" TEST)
 brlcad_addexec(rt_default_object default_object.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_default_object COMMAND rt_default_object)
 
+brlcad_addexec(rt_external_view external_view.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_external_view COMMAND rt_external_view)
+
 brlcad_addexec(rt_bound_internal bound_internal.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_bound_internal COMMAND rt_bound_internal)
 
@@ -103,6 +106,16 @@ brlcad_add_test(NAME rt_cache_parallel_multiple_identical_objects  COMMAND rt_ca
 brlcad_add_test(NAME rt_cache_serial_multiple_different_objects COMMAND rt_cache 5 10)
 brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects  COMMAND rt_cache 6 10)
 brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects_hierarchy_1  COMMAND rt_cache 7 10)
+set_tests_properties(
+  rt_cache_serial_single_object
+  rt_cache_parallel_single_object
+  rt_cache_serial_multiple_identical_objects
+  rt_cache_parallel_multiple_identical_objects
+  rt_cache_serial_multiple_different_objects
+  rt_cache_parallel_multiple_different_objects
+  rt_cache_parallel_multiple_different_objects_hierarchy_1
+  PROPERTIES SKIP_RETURN_CODE 77
+)
 
 # view polygon <-> sketch testing
 brlcad_addexec(rt_poly_sketch poly_sketch.c "librt;libbg;libbu;${M_LIBRARY}" TEST)

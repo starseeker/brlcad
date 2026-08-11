@@ -168,7 +168,6 @@ namespace eval RtWizard {
 
 	variable widthIndex
 	variable heightIndex
-	variable lastPort 0
 
 	}
     }
@@ -524,7 +523,6 @@ namespace eval RtWizard {
     # getFrameBuffer - opens a framebuffer endpoint and returns its address.
     #
     ::itcl::body FbPage::getFrameBuffer { width height {screenOnly false} } {
-	global tcl_platform
 	#
 	# If the user specified a framebuffer file and it is
 	# not null, return the name. Otherwise, open an on-screen
@@ -569,45 +567,18 @@ namespace eval RtWizard {
 	    set ::RtWizard::wizard_state(pid) $pid
 	    return "$port $pid"
 	}
-	# On-screen output is a distinct framebuffer surface.  Its requested
-	# dimensions may intentionally differ from the embedded modeling view, so
-	# compositing it into that view would stretch square renders in a
-	# rectangular pane.  Standalone fbserv maps these legacy display names to
-	# the corresponding Obol display provider.
-	set ::env(FBSERV_TOKEN) [rtwiz_gen_token]
-	set binpath [bu_dir bin]
-	set port [incr lastPort]
-	if {$::tcl_platform(platform) == "windows"} {
-	    set fbType "/dev/wgl"
-	} else {
-	    set fbType "/dev/ogl"
+	# On-screen rendering belongs to the active Obol view.  Its framebuffer
+	# bridge accepts the renderer's requested dimensions independently of the
+	# widget size and composites the completed image without creating a second
+	# legacy GL window.  IPC also avoids port allocation races and keeps the
+	# endpoint lifetime tied to the view that owns it.
+	set pane [$::mgedObj gedCmd pane]
+	$::mgedObj gedCmd pane_set_fb_mode $pane 3
+	set address [$::mgedObj gedCmd pane_listen $pane ipc]
+	if {$address eq ""} {
+	    error "unable to open the Obol framebuffer endpoint for pane $pane"
 	}
-	while { [rtwiz_port_occupied $port] } {
-	    incr port
-	}
-	set fbserv_owned 0
-	while { !$fbserv_owned } {
-	    while { [rtwiz_port_occupied $port] } {
-		incr port
-	    }
-	    if {[catch {exec "$binpath/fbserv" -A -w $width -n $height -F $fbType -p $port &} catchResult] != 0} {
-		if {$::RtWizard::wizard_state(verbose)} {
-		    puts "fbserv launch on port $port failed: $catchResult"
-		}
-	    }
-	    after 1000
-	    if { [catch {exec "$binpath/fbclear" -F $port 0 0 0}] == 0 } {
-		set fbserv_owned 1
-	    } else {
-		if {$::RtWizard::wizard_state(verbose)} {
-		    puts "fbserv port $port: collision detected, retrying."
-		}
-		incr port
-	    }
-	}
-	set lastPort $port
-	set ::RtWizard::wizard_state(fbserv_port) $port
-	return "$port"
+	return "ipc:$address"
     }
 
     #--------------------#

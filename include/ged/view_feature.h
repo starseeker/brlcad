@@ -117,6 +117,32 @@ GED_EXPORT extern int
 ged_view_feature_get_summary(struct ged_view_context *view_ctx,
 	const char *name, struct ged_view_feature_summary *summary);
 
+/** Return the number of labels retained by a named label feature. */
+GED_EXPORT extern size_t
+ged_view_feature_label_count(struct ged_view_context *view_ctx,
+	const char *name);
+
+/** Copy one retained label into caller-owned storage. */
+GED_EXPORT extern int
+ged_view_feature_label_copy(struct ged_view_context *view_ctx,
+	const char *name, size_t index, struct bu_vls *text, point_t point,
+	unsigned char rgb[3]);
+
+/** Copy one retained axes center and its model-space half size. */
+GED_EXPORT extern int
+ged_view_feature_axes_copy(struct ged_view_context *view_ctx,
+	const char *name, size_t index, point_t center, fastf_t *half_size);
+
+/** Allocate and copy all points in a retained line/point feature. */
+GED_EXPORT extern int
+ged_view_feature_points_copy(struct ged_view_context *view_ctx,
+	const char *name, point_t **points, size_t *point_count);
+
+/** Copy the renderer-neutral line command associated with one point. */
+GED_EXPORT extern int
+ged_view_feature_line_command_at(struct ged_view_context *view_ctx,
+	const char *name, size_t index, int *command);
+
 __END_DECLS
 
 #endif /* GED_VIEW_FEATURE_H */

@@ -37,16 +37,16 @@
 #define MGED_EDIT_PREVIEW_PREFIX "_mged_edit_preview::"
 
 static int
-mged_check_shape_ref(struct mged_state *s, ged_draw_shape_ref ref, const char *caller)
+mged_check_shape_ref(struct mged_state *s, ged_scene_occurrence_ref ref, const char *caller)
 {
-    if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref)) {
+    if (!s || !s->gedp || ged_scene_occurrence_ref_is_null(ref)) {
 	if (s && s->interp && caller)
 	    Tcl_AppendResult(s->interp, caller, "() ref is NULL\n", (char *)NULL);
 	return 0;
     }
 
-    struct ged_draw_shape_record rec;
-    if (!ged_draw_shape_record_get(s->gedp, ref, &rec)) {
+    struct ged_scene_occurrence_info rec;
+    if (!ged_scene_occurrence_get(s->gedp, ref, &rec)) {
 	if (s->interp && caller)
 	    Tcl_AppendResult(s->interp, caller, "() stale draw ref\n", (char *)NULL);
 	return 0;
@@ -132,7 +132,7 @@ mged_edit_preview_publish_view(
 	transaction.color[2] = color_scheme->cs_edit_info[2];
     }
 
-    if (!ged_view_feature_edit_transaction_apply(view_ctx,
+    if (!ged_view_edit_transaction_apply(view_ctx,
 	    &transaction, NULL))
 	return -1;
 
@@ -197,7 +197,7 @@ mged_edit_preview_clear_view(struct mged_state *s,
 	GED_VIEW_EDIT_TRANSACTION_INIT;
     transaction.event = GED_VIEW_EDIT_PREVIEW_CANCEL;
     transaction.feature_name = name;
-    removed = ged_view_feature_edit_transaction_apply(view_ctx,
+    removed = ged_view_edit_transaction_apply(view_ctx,
 	    &transaction, NULL);
     if (removed)
 	mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
@@ -240,13 +240,13 @@ mged_edit_preview_clear_all(struct mged_state *s, const char *name)
  * 0 OK
  */
 int
-replot_original_solid(struct mged_state *s, ged_draw_shape_ref ref)
+replot_original_solid(struct mged_state *s, ged_scene_occurrence_ref ref)
 {
     if (s->dbip == DBI_NULL)
 	return 0;
 
-    struct ged_draw_shape_record rec;
-    if (!ged_draw_shape_record_get(s->gedp, ref, &rec))
+    struct ged_scene_occurrence_info rec;
+    if (!ged_scene_occurrence_get(s->gedp, ref, &rec))
 	return 0;
     if (!rec.fullpath || rec.fullpath->fp_len <= 0)
 	return 0;
@@ -283,7 +283,7 @@ replot_original_solid(struct mged_state *s, ged_draw_shape_ref ref)
 int
 replot_modified_solid(
 	struct mged_state *s,
-	ged_draw_shape_ref ref,
+	ged_scene_occurrence_ref ref,
 	struct rt_db_internal *ip,
 	const mat_t mat)
 {
@@ -292,8 +292,8 @@ replot_modified_solid(
 	return -1;
     }
 
-    struct ged_draw_shape_record rec;
-    if (!ged_draw_shape_record_get(s->gedp, ref, &rec) ||
+    struct ged_scene_occurrence_info rec;
+    if (!ged_scene_occurrence_get(s->gedp, ref, &rec) ||
 	    !rec.fullpath || rec.fullpath->fp_len <= 0) {
 	Tcl_AppendResult(s->interp, "replot_modified_solid() stale draw path\n", (char *)NULL);
 	return -1;
@@ -350,7 +350,7 @@ replot_modified_solid(
 void
 add_solid_record_path_to_result(
     Tcl_Interp *interp,
-    const struct ged_draw_shape_record *rec)
+    const struct ged_scene_occurrence_info *rec)
 {
     struct bu_vls str = BU_VLS_INIT_ZERO;
     if (!rec || !rec->fullpath)

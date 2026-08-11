@@ -29,6 +29,7 @@
 
 #include "vmath.h"
 #include "ged.h"
+#include "ged/view_feature_batch.h"
 #include "ged/view.h"
 #include "imgstream/fbserv.h"
 #include "./mged.h"
@@ -37,6 +38,27 @@
 extern int mged_vscale(struct mged_state *s, fastf_t sfactor);
 
 static void adjust_rect_for_zoom(struct mged_state *);
+
+static int
+mged_rect_hud_lines_replace(struct ged_view_context *view_ctx,
+	const char *name, const point_t *points, const int *commands,
+	size_t point_count, const struct ged_view_feature_style *style)
+{
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "mged-rubber-band";
+    desc.owner_role = "faceplate";
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(view_ctx, &desc);
+    if (!batch)
+	return 0;
+    if (!ged_view_feature_batch_hud_line_set_replace(batch, name, points,
+	    commands, point_count, style)) {
+	ged_view_feature_batch_abort(batch);
+	return 0;
+    }
+    return ged_view_feature_batch_commit(batch);
+}
 
 struct _rubber_band default_rubber_band = {
     /* rb_rc */		1,
@@ -183,7 +205,7 @@ mged_rubber_band_state_sync(struct mged_state *s)
 
     if ((!rubber_band->rb_active && !rubber_band->rb_draw) ||
 	(ZERO(rubber_band->rb_width) && ZERO(rubber_band->rb_height))) {
-	(void)ged_annotation_hud_lines_replace(view_ctx, name,
+	(void)mged_rect_hud_lines_replace(view_ctx, name,
 		NULL, NULL, 0, NULL);
 	return;
     }
@@ -227,7 +249,7 @@ mged_rubber_band_state_sync(struct mged_state *s)
     style.line_width = rubber_band->rb_linewidth > 0 ?
 	rubber_band->rb_linewidth : 1;
     style.line_style = line_style;
-    (void)ged_annotation_hud_lines_replace(view_ctx, name,
+    (void)mged_rect_hud_lines_replace(view_ctx, name,
 	(const point_t *)points, cmds, 8, &style);
 }
 

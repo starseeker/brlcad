@@ -57,7 +57,7 @@
 #include "ged/db_index.h"
 #include "ged/draw.h"
 #include "ged/event_txn.h"
-#include "ged/scene_internal.h"
+#include "ged/scene.h"
 #include "ged/selection_state.h"
 #include "raytrace.h"
 #define ALPHANUM_IMPL

@@ -1533,17 +1533,14 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	return 0;
     }
     endpoint_attached = 1;
-    struct ged_draw_appearance_settings appearance =
-	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
     /* The production automatic fixture mirrors `e -m1`: begin with compact
      * leaf boxes, shade BoTs through view-aware LoD payloads, and use ordinary
      * geometry for the remaining leaves. */
-    appearance.draw_mode = testCase.startupAutoExpand ?
-			   GED_DRAW_MODE_SHADED_BOTS :
+    enum ged_scene_draw_mode startup_draw_mode = testCase.startupAutoExpand ?
+			   GED_SCENE_DRAW_SHADED_BOTS :
 			   ((testCase.startupOnly || testCase.startupExpand ||
 			     testCase.startupWireLod) ?
-			    GED_DRAW_MODE_WIRE : GED_DRAW_MODE_SHADED);
-    appearance.defer_leaf_expansion = startup_deferred ? 1 : 0;
+			    GED_SCENE_DRAW_WIRE : GED_SCENE_DRAW_SHADED);
 
     const char *draw_path = active_draw_target;
     struct ged_scene_draw_request draw_request;
@@ -1551,8 +1548,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     draw_request.view = ged_view_context_from_bv(view.viewContext());
     draw_request.paths = &draw_path;
     draw_request.path_count = 1;
-    draw_request.style.draw_mode =
-	static_cast<enum ged_scene_draw_mode>(appearance.draw_mode);
+    draw_request.style.draw_mode = startup_draw_mode;
     draw_request.realization.mode = startup_deferred ?
 	GED_SCENE_REALIZE_PROGRESSIVE : GED_SCENE_REALIZE_EAGER;
     draw_request.autoview = production_auto_expand ? 1 : 0;
@@ -1992,7 +1988,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		phase_start = bu_gettime();
 		size_t prewarm_submitted =
 		    qtcad_obol_frontier_prewarm(
-			gedp, active_draw_target, appearance.draw_mode, 1,
+			gedp, active_draw_target,
+			(int)draw_request.style.draw_mode, 1,
 			testCase.minVisitedMeshCount, &pass_prewarm_status);
 		total_prewarm_submitted += prewarm_submitted;
 		if (!qtcad_obol_wait_for_lod_service_idle(gedp,
@@ -2048,7 +2045,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		phase_start = bu_gettime();
 		int pass_expanded =
 		    qtcad_obol_frontier_expand(
-			gedp, active_draw_target, appearance.draw_mode, 1,
+			gedp, active_draw_target,
+			(int)draw_request.style.draw_mode, 1,
 			testCase.minVisitedMeshCount, &pass_expansion_status);
 		record_progressive_lod_phase(pass_expand_seconds, phase_start,
 					     total_start, testCase,
@@ -2131,7 +2129,6 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    }
 	}
 
-	    appearance.defer_leaf_expansion = 0;
 	    struct ged_scene_draw_request refine_request = draw_request;
 	    refine_request.realization.mode = GED_SCENE_REALIZE_EAGER;
 	    refine_request.autoview = 0;

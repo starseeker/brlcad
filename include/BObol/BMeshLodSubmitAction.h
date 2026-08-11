@@ -100,10 +100,10 @@ public:
     void setOneOverBudgetRefinementLimit(size_t excessCost);
     size_t getOneOverBudgetRefinementLimit(void) const;
     SbBool getOneOverBudgetRefinementUsed(void) const;
-    /* Limit one finite-budget visit to one populated PoP transition.  This is
-     * used by perceptually ordered refinement frontiers so the score for one
-     * marginal step cannot accidentally grant the same occurrence every
-     * remaining level and starve other visible features. */
+    /* Limit one finite-budget visit to one populated PoP transition.  Stable
+     * retained refinement normally jumps to the richest budget-fitting cut;
+     * this stricter pacing is reserved for motion-time quality probes which
+     * require a completed-frame deadline between transitions. */
     void setTransitionLimitedRefinement(SbBool limited);
     SbBool getTransitionLimitedRefinement(void) const;
     void setViewLodState(BObolViewLodState *viewState);

@@ -32,6 +32,7 @@
 #include "bu/units.h"
 #include "ged.h"
 #include "ged/view.h"
+#include "ged/view_feature_batch.h"
 #include "rt/view.h"
 #include "tclcad.h"
 
@@ -40,8 +41,8 @@
 #include "../tclcad_private.h"
 #include "../view/view.h"
 
-/* Data-axes getters and setters operate through typed GED draw-view data-axis
- * facades.  The view dimensions are the canonical pixel geometry. */
+/* TclCAD owns data-axes command state.  GED receives immutable retained
+ * publication batches and is never queried as a command-state database. */
 #define BVDAS_DEFAULT_VIEW_WIDTH 512
 
 static fastf_t
@@ -53,6 +54,44 @@ _tclcad_data_axes_display_scale(struct ged_view_context *view_ctx)
 	(const struct bv_context *)view_ctx);
     return bv_size_get(view) /
 	(fastf_t)(width > 0 ? width : BVDAS_DEFAULT_VIEW_WIDTH);
+}
+
+int
+tclcad_data_axes_publish(struct ged_view_context *view_ctx, const char *name,
+	const struct tclcad_data_axes_state *state)
+{
+    if (!view_ctx || !name || !state)
+	return 0;
+
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "tclcad-axes";
+    desc.owner_role = "tcl-overlay";
+    desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_TCL_OVERLAY;
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(view_ctx, &desc);
+    if (!batch)
+	return 0;
+
+    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    style.visible = state->draw ? 1 : 0;
+    style.selectable = 1;
+    style.color_valid = 1;
+    style.color[0] = (unsigned char)state->color[0];
+    style.color[1] = (unsigned char)state->color[1];
+    style.color[2] = (unsigned char)state->color[2];
+    style.line_width = state->line_width;
+    const point_t *centers = state->draw && state->num_points > 0 ?
+	(const point_t *)state->points : NULL;
+    const size_t count = centers ? (size_t)state->num_points : 0;
+    const fastf_t half_size = state->size > 0.0 ?
+	state->size * 0.5 * _tclcad_data_axes_display_scale(view_ctx) : 0.0;
+    if (!ged_view_feature_batch_axes_replace(batch, name, centers, count,
+	    half_size, &style)) {
+	ged_view_feature_batch_abort(batch);
+	return 0;
+    }
+    return ged_view_feature_batch_commit(batch);
 }
 
 static int
@@ -664,13 +703,18 @@ to_data_axes_func(Tcl_Interp *interp,
 		  int argc,
 		  const char *argv[])
 {
-    /* The feature name is the only per-variant state needed here. */
-    const char *feature_name = (argv[0][0] == 's') ? "_tcl_sdata_axes" : "_tcl_data_axes";
+    const int staged = argv[0][0] == 's';
+    const char *feature_name = staged ? "_tcl_sdata_axes" : "_tcl_data_axes";
+    tclcad_view_state *view_state =
+	tclcad_view_tcl_data_from_view_ctx(view_ctx);
+    if (!view_state)
+	return BRLCAD_ERROR;
+    struct tclcad_data_axes_state *state = staged ?
+	&view_state->gv_sdata_axes : &view_state->gv_data_axes;
 
     if (BU_STR_EQUAL(argv[1], "draw")) {
 	if (argc == 2) {
-	    bu_vls_printf(gedp->ged_result_str, "%d",
-			  ged_annotation_data_axes_draw_get(view_ctx, feature_name) ? 1 : 0);
+	    bu_vls_printf(gedp->ged_result_str, "%d", state->draw);
 	    return BRLCAD_OK;
 	}
 
@@ -680,7 +724,8 @@ to_data_axes_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &i) != 1)
 		goto bad;
 
-	    ged_annotation_data_axes_draw_set(view_ctx, feature_name, i ? 1 : 0);
+	    state->draw = i ? 1 : 0;
+	    (void)tclcad_data_axes_publish(view_ctx, feature_name, state);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -691,13 +736,8 @@ to_data_axes_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "color")) {
 	if (argc == 2) {
-	    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
-	    if (ged_annotation_data_axes_style_get(view_ctx, feature_name, &style) && style.color_valid) {
-		bu_vls_printf(gedp->ged_result_str, "%d %d %d",
-			      (int)style.color[0], (int)style.color[1], (int)style.color[2]);
-	    } else {
-		bu_vls_printf(gedp->ged_result_str, "0 0 0");
-	    }
+	    bu_vls_printf(gedp->ged_result_str, "%d %d %d",
+		state->color[0], state->color[1], state->color[2]);
 	    return BRLCAD_OK;
 	}
 
@@ -716,7 +756,8 @@ to_data_axes_func(Tcl_Interp *interp,
 		b < 0 || 255 < b)
 		goto bad;
 
-	    ged_annotation_data_axes_color_set(view_ctx, feature_name, r, g, b);
+	    VSET(state->color, r, g, b);
+	    (void)tclcad_data_axes_publish(view_ctx, feature_name, state);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -727,11 +768,7 @@ to_data_axes_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "line_width")) {
 	if (argc == 2) {
-	    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
-	    if (ged_annotation_data_axes_style_get(view_ctx, feature_name, &style))
-		bu_vls_printf(gedp->ged_result_str, "%d", style.line_width);
-	    else
-		bu_vls_printf(gedp->ged_result_str, "0");
+	    bu_vls_printf(gedp->ged_result_str, "%d", state->line_width);
 	    return BRLCAD_OK;
 	}
 
@@ -741,7 +778,8 @@ to_data_axes_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &line_width) != 1)
 		goto bad;
 
-	    ged_annotation_data_axes_line_width_set(view_ctx, feature_name, line_width);
+	    state->line_width = line_width;
+	    (void)tclcad_data_axes_publish(view_ctx, feature_name, state);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -752,11 +790,7 @@ to_data_axes_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "size")) {
 	if (argc == 2) {
-	    fastf_t size = 0.0;
-	    fastf_t sf = _tclcad_data_axes_display_scale(view_ctx);
-	    ged_annotation_data_axes_size_get(view_ctx, feature_name, sf,
-		    &size);
-	    bu_vls_printf(gedp->ged_result_str, "%lf", size);
+	    bu_vls_printf(gedp->ged_result_str, "%lf", state->size);
 	    return BRLCAD_OK;
 	}
 
@@ -766,24 +800,8 @@ to_data_axes_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%lf", &size) != 1)
 		goto bad;
 
-	    /* Extract current centers and rebuild with new halfAxesSize. */
-	    struct ged_view_feature_style saved_style = GED_VIEW_FEATURE_STYLE_INIT;
-	    ged_annotation_data_axes_style_get(view_ctx, feature_name,
-		    &saved_style);
-
-	    point_t *cpts = NULL;
-	    size_t ncpts = 0;
-	    (void)ged_annotation_data_axes_centers_copy(view_ctx,
-		    feature_name, &cpts, &ncpts);
-
-	    fastf_t sf = _tclcad_data_axes_display_scale(view_ctx);
-	    fastf_t half = (fastf_t)size * 0.5f * sf;
-
-	    if (cpts && ncpts)
-		(void)ged_annotation_data_axes_centers_replace(view_ctx, feature_name, cpts, ncpts,
-			half, &saved_style);
-	    if (cpts)
-		bu_free(cpts, "GED draw view axes centers copy");
+	    state->size = (fastf_t)size;
+	    (void)tclcad_data_axes_publish(view_ctx, feature_name, state);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -796,14 +814,9 @@ to_data_axes_func(Tcl_Interp *interp,
 	register int i;
 
 	if (argc == 2) {
-	    point_t *cpts = NULL;
-	    size_t ncpts = 0;
-	    if (ged_annotation_data_axes_centers_copy(view_ctx, feature_name, &cpts, &ncpts)) {
-		for (size_t j = 0; j < ncpts; ++j)
-		    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ", V3ARGS(cpts[j]));
-		if (cpts)
-		    bu_free(cpts, "GED draw view axes centers copy");
-	    }
+	    for (int j = 0; j < state->num_points; j++)
+		bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ",
+		    V3ARGS(state->points[j]));
 	    return BRLCAD_OK;
 	}
 
@@ -816,20 +829,14 @@ to_data_axes_func(Tcl_Interp *interp,
 		return BRLCAD_ERROR;
 	    }
 
-	    /* Save style and size from existing object before replacing it. */
-	    struct ged_view_feature_style saved_style = GED_VIEW_FEATURE_STYLE_INIT;
-	    ged_annotation_data_axes_style_get(view_ctx, feature_name,
-		    &saved_style);
+	    if (state->points) {
+		bu_free(state->points, "TclCAD axes points");
+		state->points = NULL;
+	    }
+	    state->num_points = 0;
 
-	    /* Recover halfAxesSize from existing object (use default 1.0 if none). */
-	    fastf_t half = 1.0;
-	    ged_annotation_data_axes_half_size_get(view_ctx, feature_name,
-		    &half);
-
-	    /* Clear out: remove old GED draw-view feature. */
 	    if (ac < 1) {
-		ged_annotation_data_axes_centers_replace(view_ctx,
-			feature_name, NULL, 0, half, &saved_style);
+		(void)tclcad_data_axes_publish(view_ctx, feature_name, state);
 		to_refresh_view(view_ctx);
 		Tcl_Free((char *)av);
 		return BRLCAD_OK;
@@ -849,10 +856,9 @@ to_data_axes_func(Tcl_Interp *interp,
 		VMOVE(pts[i], scan);
 	    }
 
-	    /* Rebuild draw-view data axes from new centers, preserving style. */
-	    (void)ged_annotation_data_axes_centers_replace(view_ctx, feature_name, pts, (size_t)ac,
-		    half, &saved_style);
-	    bu_free(pts, "axes points");
+	    state->points = pts;
+	    state->num_points = ac;
+	    (void)tclcad_data_axes_publish(view_ctx, feature_name, state);
 	    Tcl_Free((char *)av);
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;

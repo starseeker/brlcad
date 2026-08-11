@@ -194,7 +194,6 @@ QRevolve::update_obj_wireframe()
     }
 
     qged_edit_feature_clear_geometry(p);
-    qged_edit_feature_set_view(p, m_ctx);
     qged_edit_feature_set_visible(p, 1);
 
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);

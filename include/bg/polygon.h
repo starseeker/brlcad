@@ -32,17 +32,11 @@
 
 #include "common.h"
 #include "vmath.h"
-#include "bu/color.h"
 #include "bn/tol.h"
 #include "bg/defines.h"
 #include "bg/polygon_types.h"
 
 __BEGIN_DECLS
-
-/* TODO - the following are operations originally from libged - ultimately need
- * to better integrate these and the other polygon routines.  For now, trying
- * to get all the related logic in the same place so it is clearer what we do
- * and don't have, and make what we do have easier to reuse. */
 
 /*
  * Weird upper limit from clipper ---> sqrt(2^63 -1)/2
@@ -50,45 +44,111 @@ __BEGIN_DECLS
  */
 #define CLIPPER_MAX 1518500249
 
-BG_EXPORT extern fastf_t
-bg_find_polygon_area(
-	struct bg_polygon *gpoly,
-	fastf_t sf,
-	plane_t *vp,
-	fastf_t size
-	);
+/** Initialize an empty caller-owned polygon. */
+BG_EXPORT extern void bg_polygon_init(struct bg_polygon *polygon);
 
-BG_EXPORT extern int
-bg_polygons_overlap(
-	struct bg_polygon *polyA,
-	struct bg_polygon *polyB,
-	plane_t *vp,
-	const struct bn_tol *tol,
-	fastf_t iscale
-	);
+/** Release all arrays owned by @p polygon and restore the empty state. */
+BG_EXPORT extern void bg_polygon_clear(struct bg_polygon *polygon);
 
-BG_EXPORT extern struct bg_polygon *
-bg_clip_polygon(
-	bg_clip_t op,
-       	struct bg_polygon *subj,
-       	struct bg_polygon *clip,
-       	fastf_t sf,
-	plane_t *vp
-	);
+/** Initialize an empty caller-owned polygon collection. */
+BG_EXPORT extern void bg_polygons_init(struct bg_polygons *polygons);
 
-BG_EXPORT extern struct bg_polygon *
-bg_clip_polygons(
-	bg_clip_t op,
-       	struct bg_polygons *subj,
-       	struct bg_polygons *clip,
-       	fastf_t sf,
-	plane_t *vp
-	);
+/** Release a collection and every polygon it owns. */
+BG_EXPORT extern void bg_polygons_clear(struct bg_polygons *polygons);
 
-BG_EXPORT extern void bg_polygon_free(struct bg_polygon *gpp);
-BG_EXPORT extern void bg_polygons_free(struct bg_polygons *gpp);
+/**
+ * Deep-copy @p source into @p destination.
+ *
+ * @p destination must be initialized.  Its previous contents are replaced.
+ * The function is safe when source and destination are the same object.
+ * Returns zero on success and non-zero for invalid input.
+ */
+BG_EXPORT extern int bg_polygon_copy(struct bg_polygon *destination,
+	const struct bg_polygon *source);
 
-BG_EXPORT extern void bg_polygon_cpy(struct bg_polygon *dest, struct bg_polygon *src);
+/** Transfer all owned arrays from @p source to initialized @p destination. */
+BG_EXPORT extern int bg_polygon_move(struct bg_polygon *destination,
+	struct bg_polygon *source);
+
+/** Return the total number of points in all contours. */
+BG_EXPORT extern size_t bg_polygon_point_count(const struct bg_polygon *polygon);
+
+/** Append one model-space point to a contour. */
+BG_EXPORT extern int bg_polygon_append_point(struct bg_polygon *polygon,
+	size_t contour, const point_t point);
+
+/** Translate every point by @p delta. */
+BG_EXPORT extern int bg_polygon_translate(struct bg_polygon *polygon,
+	const vect_t delta);
+
+/** Set the open/closed state of one contour. */
+BG_EXPORT extern int bg_polygon_contour_open_set(struct bg_polygon *polygon,
+	size_t contour, int open);
+
+/** Set the open/closed state of every contour. */
+BG_EXPORT extern int bg_polygon_contours_open_set(struct bg_polygon *polygon,
+	int open);
+
+/**
+ * Find the nearest stored vertex to @p point.
+ *
+ * Any output pointer may be NULL.  Returns zero when a point was found.
+ */
+BG_EXPORT extern int bg_polygon_closest_point(const struct bg_polygon *polygon,
+	const point_t point, size_t *contour, size_t *point_index,
+	fastf_t *distance_sq);
+
+/** Replace @p polygon with an axis-aligned rectangle in @p plane. */
+BG_EXPORT extern int bg_polygon_make_rectangle(struct bg_polygon *polygon,
+	const plane_t plane, const point_t first_corner,
+	const point_t opposite_corner, int square);
+
+/**
+ * Replace @p polygon with a sampled ellipse or circle in @p plane.
+ *
+ * For an ellipse, the plane-coordinate differences from @p center to
+ * @p radius_point are its two signed radii.  For a circle, their Euclidean
+ * length is the radius.
+ */
+BG_EXPORT extern int bg_polygon_make_ellipse(struct bg_polygon *polygon,
+	const plane_t plane, const point_t center, const point_t radius_point,
+	int circle, size_t segment_count);
+
+/**
+ * Generate open hatch segments clipped to @p polygon.
+ *
+ * @p result must be initialized.  The slope is expressed in plane
+ * coordinates and spacing must be positive.  Returns zero on success.
+ */
+BG_EXPORT extern int bg_polygon_hatch(struct bg_polygon *result,
+	const struct bg_polygon *polygon, const plane_t plane,
+	const vect2d_t slope, fastf_t spacing);
+
+/** Calculate signed projected polygon area using the requested coordinate scale. */
+BG_EXPORT extern fastf_t bg_polygon_area(const struct bg_polygon *polygon,
+	fastf_t coordinate_scale, const plane_t plane, fastf_t view_scale);
+
+/** Return non-zero when two projected polygon interiors overlap. */
+BG_EXPORT extern int bg_polygon_overlaps(const struct bg_polygon *a,
+	const struct bg_polygon *b, const plane_t plane,
+	const struct bn_tol *tol, fastf_t coordinate_scale);
+
+/**
+ * Apply a boolean operation and replace initialized @p result.
+ *
+ * Inputs are projected onto @p plane when it is non-NULL.  Returns zero on
+ * success.  An empty result is a successful result.
+ */
+BG_EXPORT extern int bg_polygon_boolean(struct bg_polygon *result,
+	enum bg_polygon_boolean_op op, const struct bg_polygon *subject,
+	const struct bg_polygon *clip, fastf_t coordinate_scale,
+	const plane_t plane);
+
+/** Apply a boolean operation to two polygon collections. */
+BG_EXPORT extern int bg_polygons_boolean(struct bg_polygon *result,
+	enum bg_polygon_boolean_op op, const struct bg_polygons *subject,
+	const struct bg_polygons *clip, fastf_t coordinate_scale,
+	const plane_t plane);
 
 /**
  * @brief
@@ -99,7 +159,8 @@ BG_EXPORT extern void bg_polygon_cpy(struct bg_polygon *dest, struct bg_polygon 
  * bbox.
  */
 BG_EXPORT extern void
-bg_polygon_view_bbox(point2d_t *bmin, point2d_t *bmax, struct bg_polygon *p, matp_t model2view);
+bg_polygon_view_bbox(point2d_t *bmin, point2d_t *bmax,
+	const struct bg_polygon *p, const mat_t model2view);
 
 /********************************
  * Operations on 2D point types *
@@ -250,7 +311,7 @@ bg_poly_triangulate(int **faces, int *num_faces, point2d_t **out_pts, int *num_o
  */
 BG_EXPORT extern int
 bg_polygon_triangulate(int **faces, int *num_faces, point_t **out_pts, int *num_outpts,
-		       struct bg_polygon *p, triangulation_t type);
+		       const struct bg_polygon *p, triangulation_t type);
 
 
 /* Test function - do not use */

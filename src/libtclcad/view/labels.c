@@ -27,6 +27,7 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
+#include "ged/view_feature_batch.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -34,38 +35,41 @@
 #include "../tclcad_private.h"
 #include "../view/view.h"
 
-/* Keep draw-view label features in sync with the TclCAD per-view data-labels
- * state so the current renderer draws labels through retained features.
- *
- * The draw, color and labels getters in to_data_labels_func recover values
- * through typed GED data-label facades instead of TclCAD per-view data
- * directly.  The size getter still uses TclCAD per-view data because font size
- * is not stored in the retained draw-view child features yet.
- *
- * TclCAD per-view data continues to be written by setters here because label
- * parsing still builds a TclCAD label-state input record.  This is now
- * internal state used solely for feature sync. */
+/* TclCAD owns command state; GED owns only the retained presentation copied
+ * from that state.  This keeps command introspection independent of renderer
+ * realization and permits the feature store to be replaced or detached. */
 
-static int
-_tclcad_data_labels_sync_draw_view(struct ged_view_context *view_ctx,
+int
+tclcad_data_labels_publish(struct ged_view_context *view_ctx,
 				   tclcad_label_state *gdlsp,
 				   const char *name)
 {
     if (!view_ctx || !gdlsp || !name)
 	return 0;
 
-    if (!gdlsp->gdls_draw || gdlsp->gdls_num_labels < 1)
-	return ged_annotation_data_labels_replace(view_ctx, name, 0,
-		NULL, 0);
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "tclcad-labels";
+    desc.owner_role = "tcl-overlay";
+    desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_TCL_OVERLAY;
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(view_ctx, &desc);
+    if (!batch)
+	return 0;
+
+    if (!gdlsp->gdls_draw || gdlsp->gdls_num_labels < 1) {
+	int ret = ged_view_feature_batch_labels_replace(batch, name, NULL, 0,
+		NULL);
+	return ret ? ged_view_feature_batch_commit(batch) :
+	    (ged_view_feature_batch_abort(batch), 0);
+    }
 
     size_t label_count = (size_t)gdlsp->gdls_num_labels;
-    struct ged_annotation_label *labels =
-	(struct ged_annotation_label *)bu_calloc(label_count,
-		sizeof(struct ged_annotation_label), "TclCAD data labels");
+    struct ged_view_feature_label *labels =
+	(struct ged_view_feature_label *)bu_calloc(label_count,
+		sizeof(struct ged_view_feature_label), "TclCAD data labels");
 
     for (size_t i = 0; i < label_count; i++) {
-	struct ged_annotation_label init = GED_ANNOTATION_LABEL_INIT;
-	labels[i] = init;
 	labels[i].text = gdlsp->gdls_labels[i];
 	VMOVE(labels[i].point, gdlsp->gdls_points[i]);
 	labels[i].color_valid = 1;
@@ -75,10 +79,14 @@ _tclcad_data_labels_sync_draw_view(struct ged_view_context *view_ctx,
 	labels[i].font_size = gdlsp->gdls_size;
     }
 
-    int ret = ged_annotation_data_labels_replace(view_ctx, name, 1,
-	    labels, label_count);
+    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    style.visible = 1;
+    style.selectable = 1;
+    int ret = ged_view_feature_batch_labels_replace(batch, name, labels,
+	label_count, &style);
     bu_free(labels, "TclCAD data labels");
-    return ret;
+    return ret ? ged_view_feature_batch_commit(batch) :
+	(ged_view_feature_batch_abort(batch), 0);
 }
 
 int
@@ -172,8 +180,7 @@ to_data_labels_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "draw")) {
 	if (argc == 2) {
-	    bu_vls_printf(gedp->ged_result_str, "%d",
-			  ged_annotation_data_labels_draw_get(view_ctx, feature_name));
+	    bu_vls_printf(gedp->ged_result_str, "%d", gdlsp->gdls_draw);
 	    return BRLCAD_OK;
 	}
 
@@ -188,7 +195,7 @@ to_data_labels_func(Tcl_Interp *interp,
 	    else
 		gdlsp->gdls_draw = 0;
 
-	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
+	    (void)tclcad_data_labels_publish(view_ctx, gdlsp, feature_name);
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
 	}
@@ -198,13 +205,9 @@ to_data_labels_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "color")) {
 	if (argc == 2) {
-	    unsigned char rgb[3] = {0, 0, 0};
-	    if (ged_annotation_data_labels_color_get(view_ctx, feature_name, rgb)) {
-		bu_vls_printf(gedp->ged_result_str, "%d %d %d",
-			      (int)rgb[0], (int)rgb[1], (int)rgb[2]);
-	    } else {
-		bu_vls_printf(gedp->ged_result_str, "0 0 0");
-	    }
+	    bu_vls_printf(gedp->ged_result_str, "%d %d %d",
+		gdlsp->gdls_color[0], gdlsp->gdls_color[1],
+		gdlsp->gdls_color[2]);
 	    return BRLCAD_OK;
 	}
 
@@ -225,7 +228,7 @@ to_data_labels_func(Tcl_Interp *interp,
 
 	    VSET(gdlsp->gdls_color, r, g, b);
 
-	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
+	    (void)tclcad_data_labels_publish(view_ctx, gdlsp, feature_name);
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
 	}
@@ -239,19 +242,11 @@ to_data_labels_func(Tcl_Interp *interp,
 	/* { {{label this} {0 0 0}} {{label that} {100 100 100}} }*/
 
 	if (argc == 2) {
-	    size_t _child_cnt = ged_annotation_data_labels_count(view_ctx, feature_name);
-	    if (_child_cnt > 0) {
-		for (size_t _k = 0; _k < _child_cnt; _k++) {
-		    struct bu_vls text = BU_VLS_INIT_ZERO;
-		    point_t pt;
-		    if (!ged_annotation_data_labels_copy(view_ctx, feature_name, _k, &text, pt, NULL)) {
-			bu_vls_free(&text);
-			continue;
-		    }
-		    bu_vls_printf(gedp->ged_result_str, "{{%s}", bu_vls_cstr(&text));
-		    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf}} ", V3ARGS(pt));
-		    bu_vls_free(&text);
-		}
+	    for (int k = 0; k < gdlsp->gdls_num_labels; k++) {
+		bu_vls_printf(gedp->ged_result_str, "{{%s}",
+		    gdlsp->gdls_labels[k]);
+		bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf}} ",
+		    V3ARGS(gdlsp->gdls_points[k]));
 	    }
 	    return BRLCAD_OK;
 	}
@@ -276,7 +271,7 @@ to_data_labels_func(Tcl_Interp *interp,
 	    /* Clear out data points */
 	    if (ac < 1) {
 		Tcl_Free((char *)av);
-		(void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
+		(void)tclcad_data_labels_publish(view_ctx, gdlsp, feature_name);
 		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
@@ -341,7 +336,7 @@ to_data_labels_func(Tcl_Interp *interp,
 	    }
 
 	    Tcl_Free((char *)av);
-	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
+	    (void)tclcad_data_labels_publish(view_ctx, gdlsp, feature_name);
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
 	}
@@ -361,7 +356,7 @@ to_data_labels_func(Tcl_Interp *interp,
 
 	    gdlsp->gdls_size = size;
 
-	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
+	    (void)tclcad_data_labels_publish(view_ctx, gdlsp, feature_name);
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
 	}

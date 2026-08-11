@@ -29,12 +29,35 @@
 #include "vmath.h"
 #include "bn.h"
 #include "ged.h"
+#include "ged/view.h"
+#include "ged/view_feature_batch.h"
+#include "rt/view.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 /* local sp_hook function */
 static void ax_set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
+
+static int
+mged_hud_axes_replace(struct ged_view_context *view_ctx, const char *name,
+	const struct bv_axes_state *axes, const mat_t rotation)
+{
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "mged-edit-axes";
+    desc.owner_role = "faceplate";
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(view_ctx, &desc);
+    if (!batch)
+	return 0;
+    if (!ged_view_feature_batch_hud_axes_replace(batch, name, axes,
+	    rotation)) {
+	ged_view_feature_batch_abort(batch);
+	return 0;
+    }
+    return ged_view_feature_batch_commit(batch);
+}
 
 struct _axes_state default_axes_state = {
     /* ax_rc */			1,
@@ -50,13 +73,7 @@ struct _axes_state default_axes_state = {
     /* ax_edit_size1 */		500,
     /* ax_edit_size2 */		500,
     /* ax_edit_linewidth1 */	1,
-    /* ax_edit_linewidth2 */	1,
-    /* ax_model_tick_enable */		0,
-    /* ax_model_tick_interval */	100.0,
-    /* ax_model_ticks_per_major */	10,
-    /* ax_model_tick_length */		4,
-    /* ax_model_tick_major_length */	8,
-    /* ax_model_tick_threshold */	8
+    /* ax_edit_linewidth2 */	1
 };
 
 
@@ -66,12 +83,6 @@ struct bu_structparse axes_vparse[] = {
     {"%d", 1, "model_size",	AX_O(ax_model_size),		ax_set_dirty_flag, NULL, NULL },
     {"%d", 1, "model_linewidth",AX_O(ax_model_linewidth),	ax_set_dirty_flag, NULL, NULL },
     {"%f", 3, "model_pos",	AX_O(ax_model_pos),		ax_set_dirty_flag, NULL, NULL },
-    {"%d", 1, "model_tick_enable",	AX_O(ax_model_tick_enable),		ax_set_dirty_flag, NULL, NULL },
-    {"%f", 1, "model_tick_interval",	AX_O(ax_model_tick_interval),		ax_set_dirty_flag, NULL, NULL },
-    {"%d", 1, "model_ticks_per_major",	AX_O(ax_model_ticks_per_major),		ax_set_dirty_flag, NULL, NULL },
-    {"%d", 1, "model_tick_length",	AX_O(ax_model_tick_length),		ax_set_dirty_flag, NULL, NULL },
-    {"%d", 1, "model_tick_major_length",AX_O(ax_model_tick_major_length),	ax_set_dirty_flag, NULL, NULL },
-    {"%d", 1, "model_tick_threshold",	AX_O(ax_model_tick_threshold),		ax_set_dirty_flag, NULL, NULL },
     {"%d", 1, "view_draw",	AX_O(ax_view_draw),		ax_set_dirty_flag, NULL, NULL },
     {"%d", 1, "view_size",	AX_O(ax_view_size),		ax_set_dirty_flag, NULL, NULL },
     {"%d", 1, "view_linewidth",	AX_O(ax_view_linewidth),	ax_set_dirty_flag, NULL, NULL },
@@ -88,119 +99,78 @@ struct bu_structparse axes_vparse[] = {
 static void
 ax_set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
 		  const char *UNUSED(name),
-		  void *UNUSED(base),
+		  void *base,
 		  const char *UNUSED(value),
 		  void *data)
 {
     struct mged_state *s = (struct mged_state *)data;
+    struct _axes_state *changed_state = (struct _axes_state *)base;
     MGED_CK_STATE(s);
-    for (size_t i = 0; i < BU_PTBL_LEN(&active_dm_set); i++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, i);
-	if (m_dmp->dm_axes_state == axes_state) {
-	    m_dmp->dm_dirty = 1;
-	    dm_set_dirty(m_dmp->dm_dmp, 1);
+    for (size_t i = 0; i < BU_PTBL_LEN(&active_display_set); i++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, i);
+	if (m_dmp->display_axes_state == changed_state) {
+	    m_dmp->display_axes_state_dirty = 1;
+	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
 	}
     }
 }
 
 
 void
-draw_e_axes(struct mged_state *s)
+mged_edit_axes_state_sync(struct mged_state *s)
 {
     point_t v_ap1;                 /* axes position in view coordinates */
     point_t v_ap2;                 /* axes position in view coordinates */
+    mat_t model2view;
     mat_t rot_mat;
-    struct bv_axes gas;
+    mat_t view_rotation;
+    struct bv_axes_state gas;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
+
+    bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
+    bv_rotation_get(view_rotation, mged_view_context_view_const(view_ctx));
 
     if (s->global_editing_state == ST_S_EDIT) {
-	MAT4X3PNT(v_ap1, view_state->vs_gvp->gv_model2view, MEDIT(s)->e_axes_pos);
-	MAT4X3PNT(v_ap2, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
+	MAT4X3PNT(v_ap1, model2view, MEDIT(s)->e_axes_pos);
+	MAT4X3PNT(v_ap2, model2view, MEDIT(s)->curr_e_axes_pos);
     } else if (s->global_editing_state == ST_O_EDIT) {
 	point_t m_ap2;
 
-	MAT4X3PNT(v_ap1, view_state->vs_gvp->gv_model2view, MEDIT(s)->e_keypoint);
+	MAT4X3PNT(v_ap1, model2view, MEDIT(s)->e_keypoint);
 	MAT4X3PNT(m_ap2, MEDIT(s)->model_changes, MEDIT(s)->e_keypoint);
-	MAT4X3PNT(v_ap2, view_state->vs_gvp->gv_model2view, m_ap2);
-    } else
+	MAT4X3PNT(v_ap2, model2view, m_ap2);
+    } else {
+	(void)mged_hud_axes_replace(view_ctx,
+		"_faceplate/edit_axes/initial", NULL, NULL);
+	(void)mged_hud_axes_replace(view_ctx,
+		"_faceplate/edit_axes/current", NULL, NULL);
 	return;
+    }
 
-    memset(&gas, 0, sizeof(struct bv_axes));
+    memset(&gas, 0, sizeof(gas));
+    gas.draw = axes_state->ax_edit_draw;
     gas.label_flag = 1;
     VMOVE(gas.axes_pos, v_ap1);
-    gas.axes_size = axes_state->ax_edit_size1 * INV_BV;
+    gas.axes_size = axes_state->ax_edit_size1 * RT_INV_VIEW;
     VMOVE(gas.axes_color, color_scheme->cs_edit_axes1);
     VMOVE(gas.label_color, color_scheme->cs_edit_axes_label1);
     gas.line_width = axes_state->ax_edit_linewidth1;
 
-    dm_draw_hud_axes(DMP, view_state->vs_gvp->gv_size, view_state->vs_gvp->gv_rotation, &gas);
+    (void)mged_hud_axes_replace(view_ctx,
+	    "_faceplate/edit_axes/initial", &gas, view_rotation);
 
-    memset(&gas, 0, sizeof(struct bv_axes));
+    memset(&gas, 0, sizeof(gas));
+    gas.draw = axes_state->ax_edit_draw;
     gas.label_flag = 1;
     VMOVE(gas.axes_pos, v_ap2);
-    gas.axes_size = axes_state->ax_edit_size2 * INV_BV;
+    gas.axes_size = axes_state->ax_edit_size2 * RT_INV_VIEW;
     VMOVE(gas.axes_color, color_scheme->cs_edit_axes2);
     VMOVE(gas.label_color, color_scheme->cs_edit_axes_label2);
     gas.line_width = axes_state->ax_edit_linewidth2;
 
-    bn_mat_mul(rot_mat, view_state->vs_gvp->gv_rotation, MEDIT(s)->acc_rot_sol);
-    dm_draw_hud_axes(DMP, view_state->vs_gvp->gv_size, rot_mat, &gas);
-}
-
-
-void
-draw_m_axes(struct mged_state *s)
-{
-    point_t m_ap;			/* axes position in model coordinates, mm */
-    point_t v_ap;			/* axes position in view coordinates */
-    struct bv_axes gas;
-
-    VSCALE(m_ap, axes_state->ax_model_pos, s->dbip->dbi_local2base);
-    MAT4X3PNT(v_ap, view_state->vs_gvp->gv_model2view, m_ap);
-
-    memset(&gas, 0, sizeof(struct bv_axes));
-    gas.label_flag = 1;
-    VMOVE(gas.axes_pos, v_ap);
-    gas.axes_size = axes_state->ax_model_size * INV_BV;
-    VMOVE(gas.axes_color, color_scheme->cs_model_axes);
-    VMOVE(gas.label_color, color_scheme->cs_model_axes_label);
-    gas.line_width = axes_state->ax_model_linewidth;
-
-    /* Ticked scale along the model axes.  The rendering support
-     * already exists in dm_draw_hud_axes; here we surface it through the
-     * classic MGED "rset ax model_tick_*" controls. */
-    gas.tick_enabled = axes_state->ax_model_tick_enable;
-    gas.tick_interval = axes_state->ax_model_tick_interval;
-    gas.ticks_per_major = axes_state->ax_model_ticks_per_major;
-    gas.tick_length = axes_state->ax_model_tick_length;
-    gas.tick_major_length = axes_state->ax_model_tick_major_length;
-    gas.tick_threshold = axes_state->ax_model_tick_threshold;
-    VMOVE(gas.tick_color, color_scheme->cs_model_axes);
-    VMOVE(gas.tick_major_color, color_scheme->cs_model_axes_label);
-
-    dm_draw_hud_axes(DMP, view_state->vs_gvp->gv_size, view_state->vs_gvp->gv_rotation, &gas);
-}
-
-
-void
-draw_v_axes(struct mged_state *s)
-{
-    point_t v_ap;			/* axes position in view coordinates */
-    struct bv_axes gas;
-
-    VSET(v_ap,
-	 axes_state->ax_view_pos[X] * INV_BV,
-	 axes_state->ax_view_pos[Y] * INV_BV / dm_get_aspect(DMP),
-	 0.0);
-
-    memset(&gas, 0, sizeof(struct bv_axes));
-    gas.label_flag = 1;
-    VMOVE(gas.axes_pos, v_ap);
-    gas.axes_size = axes_state->ax_view_size * INV_BV;
-    VMOVE(gas.axes_color, color_scheme->cs_view_axes);
-    VMOVE(gas.label_color, color_scheme->cs_view_axes_label);
-    gas.line_width = axes_state->ax_view_linewidth;
-
-    dm_draw_hud_axes(DMP, view_state->vs_gvp->gv_size, view_state->vs_gvp->gv_rotation, &gas);
+    bn_mat_mul(rot_mat, view_rotation, MEDIT(s)->acc_rot_sol);
+    (void)mged_hud_axes_replace(view_ctx,
+	    "_faceplate/edit_axes/current", &gas, rot_mat);
 }
 
 

@@ -28,7 +28,9 @@
 #include <inttypes.h>
 #include "bio.h"
 
+#include <algorithm>
 #include <array>
+#include <climits>
 #include <map>
 #include <set>
 #include <vector>
@@ -894,79 +896,203 @@ bg_tri_plot_2d(const char *filename, const int *faces, int num_faces, const poin
 
 extern "C" int
 bg_polygon_triangulate(int **faces, int *num_faces, point_t **out_pts, int *num_outpts,
-	struct bg_polygon *p, triangulation_t type)
+	const struct bg_polygon *p, triangulation_t type)
 {
-    if (!faces || !num_faces || !out_pts || !num_outpts || !p)
+    if (faces)
+	*faces = NULL;
+    if (num_faces)
+	*num_faces = 0;
+    if (out_pts)
+	*out_pts = NULL;
+    if (num_outpts)
+	*num_outpts = 0;
+    if (!faces || !num_faces || !out_pts || !num_outpts || !p ||
+	!p->num_contours || !p->contour)
 	return -1;
 
-    // Fit the outer contour to get a 2D plane (bg_polygon is in principle a 3D data structure)
-    point_t pcenter;
-    vect_t  pnorm;
-    plane_t pl;
-    if (bg_fit_plane(&pcenter, &pnorm, p->contour[0].num_points, p->contour[0].point)) {
-	return -1;
-    }
-    bg_plane_pt_nrml(&pl, pcenter, pnorm);
-
-    // Count all points
-    int pnt_cnt = 0;
-    for (size_t i = 0; i < p->num_contours; ++i) {
-	pnt_cnt += p->contour[i].num_points;
-    }
-
-    // Translate the bg_polygon into bg_nested_poly_triangulate inputs
-    point2d_t *pnts_2d = (point2d_t *)bu_calloc(pnt_cnt, sizeof(point2d_t), "projected points");
-    int *ocontour = NULL;
-    int ocontour_cnt = 0;
-    int **holes_array = (int **)bu_calloc(p->num_contours - 1, sizeof(int *), "holes");
-    size_t *holes_npts = (size_t *)bu_calloc(p->num_contours - 1, sizeof(size_t), "holes_cnt");
-    int curr_pnt = 0;
-    for (size_t i = 0; i < p->num_contours; ++i) {
-	int *cpnts = (int *)bu_calloc(p->contour[i].num_points, sizeof(int), "point indices");
-	if (i > 0) {
-	    holes_array[i-1] = cpnts;
-	    holes_npts[i-1] = p->contour[i].num_points;
+    size_t plane_contour = SIZE_MAX;
+    size_t total_points = 0;
+    std::vector<size_t> offsets(p->num_contours, 0);
+    std::vector<size_t> outers;
+    std::vector<size_t> holes;
+    for (size_t i = 0; i < p->num_contours; i++) {
+	const struct bg_poly_contour &contour = p->contour[i];
+	if (contour.open || contour.num_points < 3 || !contour.point ||
+	    contour.num_points > static_cast<size_t>(INT_MAX) ||
+	    total_points > static_cast<size_t>(INT_MAX) - contour.num_points)
+	    return -1;
+	offsets[i] = total_points;
+	total_points += contour.num_points;
+	if (p->hole && p->hole[i]) {
+	    holes.push_back(i);
 	} else {
-	    ocontour = cpnts;
-	    ocontour_cnt = p->contour[i].num_points;
-	}
-	for (size_t j = 0; j < p->contour[i].num_points; ++j) {
-	    vect2d_t p2d;
-	    bg_plane_closest_pt(&p2d[0], &p2d[1], &pl, &p->contour[i].point[j]);
-	    V2MOVE(pnts_2d[curr_pnt], p2d);
-	    cpnts[j] = curr_pnt;
-	    curr_pnt++;
+	    if (plane_contour == SIZE_MAX)
+		plane_contour = i;
+	    outers.push_back(i);
 	}
     }
+    if (plane_contour == SIZE_MAX || outers.empty())
+	return -1;
 
-    int *tri_faces = NULL;
-    int tri_num_faces = 0;
-    point2d_t *tri_out_pts = NULL;
-    int tri_num_outpts = 0;
-    int ret = bg_nested_poly_triangulate(&tri_faces, &tri_num_faces, &tri_out_pts, &tri_num_outpts, ocontour, ocontour_cnt, (const int **)holes_array, (const size_t *)holes_npts, p->num_contours - 1, NULL, 0, pnts_2d, pnt_cnt, type);
+    point_t center;
+    vect_t normal;
+    plane_t plane;
+    if (bg_fit_plane(&center, &normal,
+	    p->contour[plane_contour].num_points,
+	    p->contour[plane_contour].point))
+	return -1;
+    bg_plane_pt_nrml(&plane, center, normal);
 
-
-    // Translate 2D plane points into 3D points
-    point_t *pnts_3d = (point_t *)bu_calloc(pnt_cnt, sizeof(point_t), "3D points");
-    for (int i = 0; i < pnt_cnt; i++) {
-	bg_plane_pt_at(&pnts_3d[i], &pl, pnts_2d[i][0], pnts_2d[i][1]);
+    std::vector<std::array<fastf_t, 2>> projected(total_points);
+    for (size_t i = 0; i < p->num_contours; i++) {
+	for (size_t j = 0; j < p->contour[i].num_points; j++) {
+	    bg_plane_closest_pt(&projected[offsets[i] + j][0],
+		&projected[offsets[i] + j][1], &plane,
+		&p->contour[i].point[j]);
+	}
     }
 
-    // Assign outputs
-    *faces = tri_faces;
-    *num_faces = tri_num_faces;
-    *out_pts = pnts_3d;
-    *num_outpts = tri_num_outpts;
-
-    // Clean up 2D and translation arrays
-    bu_free(ocontour, "free ocontour");
-    for (size_t i = 0; i < p->num_contours - 1; i++) {
-	bu_free(holes_array[i], "free holes array");
+    std::vector<std::vector<size_t>> component_holes(p->num_contours);
+    for (size_t hole_index : holes) {
+	const point2d_t *sample = reinterpret_cast<const point2d_t *>(
+	    projected[offsets[hole_index]].data());
+	size_t owner = SIZE_MAX;
+	for (size_t outer_index : outers) {
+	    std::vector<std::array<fastf_t, 2>> outer_points(
+		p->contour[outer_index].num_points);
+	    for (size_t j = 0; j < outer_points.size(); j++) {
+		outer_points[j][0] = projected[offsets[outer_index] + j][0];
+		outer_points[j][1] = projected[offsets[outer_index] + j][1];
+	    }
+	    if (bg_pnt_in_polygon(outer_points.size(),
+		    reinterpret_cast<const point2d_t *>(outer_points.data()),
+		    sample)) {
+		owner = outer_index;
+		break;
+	    }
+	}
+	if (owner == SIZE_MAX)
+	    return -1;
+	component_holes[owner].push_back(hole_index);
     }
-    bu_free(holes_npts, "hole cnts");
-    bu_free(pnts_2d, "2d pnts");
 
-    return ret;
+    std::vector<int> combined_faces;
+    std::vector<std::array<fastf_t, 3>> combined_points;
+    for (size_t outer_index : outers) {
+	std::vector<int> outer(p->contour[outer_index].num_points);
+	for (size_t j = 0; j < outer.size(); j++)
+	    outer[j] = static_cast<int>(offsets[outer_index] + j);
+
+	const std::vector<size_t> &owned_holes = component_holes[outer_index];
+	std::vector<std::vector<int>> hole_storage(owned_holes.size());
+	std::vector<const int *> hole_arrays(owned_holes.size(), NULL);
+	std::vector<size_t> hole_counts(owned_holes.size(), 0);
+	for (size_t h = 0; h < owned_holes.size(); h++) {
+	    const size_t contour_index = owned_holes[h];
+	    hole_storage[h].resize(p->contour[contour_index].num_points);
+	    for (size_t j = 0; j < hole_storage[h].size(); j++)
+		hole_storage[h][j] = static_cast<int>(offsets[contour_index] + j);
+	    hole_arrays[h] = hole_storage[h].data();
+	    hole_counts[h] = hole_storage[h].size();
+	}
+
+	int *component_faces = NULL;
+	int component_face_count = 0;
+	point2d_t *component_points = NULL;
+	int component_point_count = 0;
+	const int status = bg_nested_poly_triangulate(&component_faces,
+	    &component_face_count, &component_points, &component_point_count,
+	    outer.data(), outer.size(), hole_arrays.data(), hole_counts.data(),
+	    hole_arrays.size(), NULL, 0,
+	    reinterpret_cast<const point2d_t *>(projected.data()),
+	    projected.size(), type);
+	if (status || component_face_count < 0 || component_point_count < 0 ||
+	    component_face_count > INT_MAX / 3 ||
+	    (component_face_count && !component_faces) ||
+	    (component_point_count && !component_points)) {
+	    if (component_faces)
+		bu_free(component_faces, "component triangulation faces");
+	    if (component_points)
+		bu_free(component_points, "component triangulation points");
+	    return status ? status : -1;
+	}
+	if (component_point_count) {
+	    if (combined_points.size() + static_cast<size_t>(component_point_count) >
+		    static_cast<size_t>(INT_MAX)) {
+		bu_free(component_faces, "component triangulation faces");
+		bu_free(component_points, "component triangulation points");
+		return -1;
+	    }
+	    const int point_offset = static_cast<int>(combined_points.size());
+	    for (int i = 0; i < component_point_count; i++) {
+		point_t point;
+		bg_plane_pt_at(&point, &plane, component_points[i][0],
+		    component_points[i][1]);
+		combined_points.push_back({point[X], point[Y], point[Z]});
+	    }
+	    for (int i = 0; i < component_face_count * 3; i++) {
+		if (component_faces[i] < 0 ||
+		    component_faces[i] >= component_point_count) {
+		    bu_free(component_faces, "component triangulation faces");
+		    bu_free(component_points, "component triangulation points");
+		    return -1;
+		}
+		combined_faces.push_back(component_faces[i] + point_offset);
+	    }
+	} else {
+	    /* Index-preserving algorithms return indices into projected and do not
+	     * allocate out_pts.  Compact just the referenced component vertices so
+	     * every returned face indexes the wrapper's output point array. */
+	    std::unordered_map<int, int> point_map;
+	    for (int i = 0; i < component_face_count * 3; i++) {
+		const int source_index = component_faces[i];
+		if (source_index < 0 ||
+		    static_cast<size_t>(source_index) >= projected.size()) {
+		    bu_free(component_faces, "component triangulation faces");
+		    return -1;
+		}
+		auto found = point_map.find(source_index);
+		if (found == point_map.end()) {
+		    if (combined_points.size() >= static_cast<size_t>(INT_MAX)) {
+			bu_free(component_faces, "component triangulation faces");
+			return -1;
+		    }
+		    point_t point;
+		    bg_plane_pt_at(&point, &plane, projected[source_index][0],
+			projected[source_index][1]);
+		    const int output_index = static_cast<int>(combined_points.size());
+		    combined_points.push_back({point[X], point[Y], point[Z]});
+		    point_map[source_index] = output_index;
+		    combined_faces.push_back(output_index);
+		} else {
+		    combined_faces.push_back(found->second);
+		}
+	    }
+	}
+	if (component_faces)
+	    bu_free(component_faces, "component triangulation faces");
+	if (component_points)
+	    bu_free(component_points, "component triangulation points");
+    }
+
+    if (combined_faces.size() / 3 > static_cast<size_t>(INT_MAX) ||
+	combined_points.size() > static_cast<size_t>(INT_MAX))
+	return -1;
+    if (!combined_faces.empty()) {
+	*faces = static_cast<int *>(bu_calloc(combined_faces.size(), sizeof(int),
+	    "polygon triangulation faces"));
+	std::copy(combined_faces.begin(), combined_faces.end(), *faces);
+    }
+    if (!combined_points.empty()) {
+	*out_pts = static_cast<point_t *>(bu_calloc(combined_points.size(),
+	    sizeof(point_t), "polygon triangulation points"));
+	for (size_t i = 0; i < combined_points.size(); i++)
+	    VSET((*out_pts)[i], combined_points[i][X], combined_points[i][Y],
+		combined_points[i][Z]);
+    }
+    *num_faces = static_cast<int>(combined_faces.size() / 3);
+    *num_outpts = static_cast<int>(combined_points.size());
+    return 0;
 }
 
 // Local Variables:

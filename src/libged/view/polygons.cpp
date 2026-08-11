@@ -89,13 +89,13 @@ static BObolPolygonType
 _poly_type(int type)
 {
     switch (type) {
-	case GED_POLYGON_CIRCLE:
+	case GED_VIEW_POLYGON_CIRCLE:
 	    return BObolPolygonType::Circle;
-	case GED_POLYGON_ELLIPSE:
+	case GED_VIEW_POLYGON_ELLIPSE:
 	    return BObolPolygonType::Ellipse;
-	case GED_POLYGON_RECTANGLE:
+	case GED_VIEW_POLYGON_RECTANGLE:
 	    return BObolPolygonType::Rectangle;
-	case GED_POLYGON_SQUARE:
+	case GED_VIEW_POLYGON_SQUARE:
 	    return BObolPolygonType::Square;
 	default:
 	    return BObolPolygonType::General;
@@ -106,15 +106,15 @@ static BObolPolygonUpdate
 _poly_update_type(int op)
 {
     switch (op) {
-	case GED_POLYGON_UPDATE_PROPS_ONLY:
+	case GED_VIEW_POLYGON_UPDATE_PROPS_ONLY:
 	    return BObolPolygonUpdate::PropsOnly;
-	case GED_POLYGON_UPDATE_PT_SELECT:
+	case GED_VIEW_POLYGON_UPDATE_PT_SELECT:
 	    return BObolPolygonUpdate::PointSelect;
-	case GED_POLYGON_UPDATE_PT_SELECT_CLEAR:
+	case GED_VIEW_POLYGON_UPDATE_PT_SELECT_CLEAR:
 	    return BObolPolygonUpdate::PointSelectClear;
-	case GED_POLYGON_UPDATE_PT_MOVE:
+	case GED_VIEW_POLYGON_UPDATE_PT_MOVE:
 	    return BObolPolygonUpdate::PointMove;
-	case GED_POLYGON_UPDATE_PT_APPEND:
+	case GED_VIEW_POLYGON_UPDATE_PT_APPEND:
 	    return BObolPolygonUpdate::PointAppend;
 	default:
 	    return BObolPolygonUpdate::Default;
@@ -236,17 +236,17 @@ _poly_cmd_create(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    int type = GED_POLYGON_GENERAL;
+    int type = GED_VIEW_POLYGON_GENERAL;
     if (argc == 3) {
 	if (BU_STR_EQUAL(argv[2], "circ") || BU_STR_EQUAL(argv[2], "circle"))
-	    type = GED_POLYGON_CIRCLE;
+	    type = GED_VIEW_POLYGON_CIRCLE;
 	if (BU_STR_EQUAL(argv[2], "ell") || BU_STR_EQUAL(argv[2], "ellipse"))
-	    type = GED_POLYGON_ELLIPSE;
+	    type = GED_VIEW_POLYGON_ELLIPSE;
 	if (BU_STR_EQUAL(argv[2], "rect") || BU_STR_EQUAL(argv[2], "rectangle"))
-	    type = GED_POLYGON_RECTANGLE;
+	    type = GED_VIEW_POLYGON_RECTANGLE;
 	if (BU_STR_EQUAL(argv[2], "sq") || BU_STR_EQUAL(argv[2], "square"))
-	    type = GED_POLYGON_SQUARE;
-	if (type == GED_POLYGON_GENERAL) {
+	    type = GED_VIEW_POLYGON_SQUARE;
+	if (type == GED_VIEW_POLYGON_GENERAL) {
 	    bu_vls_printf(gedp->ged_result_str, "Unknown polygon type %s\n", argv[2]);
 	    return BRLCAD_ERROR;
 	}
@@ -332,7 +332,7 @@ _poly_cmd_select(void *bs, int argc, const char **argv)
     if (!binding.controller || !binding.controller->polygons().setCurrent(
 	    binding.handle, contour_ind, -1))
 	return BRLCAD_ERROR;
-    if (!_poly_update_screen(gd, x, y, GED_POLYGON_UPDATE_PT_SELECT))
+    if (!_poly_update_screen(gd, x, y, GED_VIEW_POLYGON_UPDATE_PT_SELECT))
 	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
@@ -398,7 +398,7 @@ _poly_cmd_append(void *bs, int argc, const char **argv)
     if (!binding.controller || !binding.controller->polygons().setCurrent(
 	    binding.handle, contour_ind, -1))
 	return BRLCAD_ERROR;
-    if (!_poly_update_screen(gd, x, y, GED_POLYGON_UPDATE_PT_APPEND))
+    if (!_poly_update_screen(gd, x, y, GED_VIEW_POLYGON_UPDATE_PT_APPEND))
 	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
@@ -448,7 +448,7 @@ _poly_cmd_move(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    if (!_poly_update_screen(gd, x, y, GED_POLYGON_UPDATE_PT_MOVE))
+    if (!_poly_update_screen(gd, x, y, GED_VIEW_POLYGON_UPDATE_PT_MOVE))
 	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
@@ -480,7 +480,7 @@ _poly_cmd_clear(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    _poly_update(gd, GED_POLYGON_UPDATE_DEFAULT);
+    _poly_update(gd, GED_VIEW_POLYGON_UPDATE_DEFAULT);
 
     return BRLCAD_OK;
 }
@@ -933,17 +933,17 @@ _poly_cmd_csg(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    bg_clip_t op = bg_Union;
+    enum bg_polygon_boolean_op op = BG_POLYGON_BOOLEAN_UNION;
     char c = argv[0][0];
     switch (c) {
 	case 'u':
-	    op = bg_Union;
+	    op = BG_POLYGON_BOOLEAN_UNION;
 	    break;
 	case '-':
-	    op = bg_Difference;
+	    op = BG_POLYGON_BOOLEAN_DIFFERENCE;
 	    break;
 	case '+':
-	    op = bg_Intersection;
+	    op = BG_POLYGON_BOOLEAN_INTERSECTION;
 	    break;
 	default:
 	    bu_vls_printf(gedp->ged_result_str, "Invalid boolean operator \"%s\"\n", argv[0]);

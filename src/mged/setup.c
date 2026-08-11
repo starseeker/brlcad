@@ -147,8 +147,10 @@ static struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "db", cmd_stub, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "db_glob", cmd_ged_plain_wrapper, ged_exec_db_glob, NULL},
     {MGED_CMD_MAGIC, "dbconcat", cmd_ged_plain_wrapper, ged_exec_dbconcat, NULL},
+    {MGED_CMD_MAGIC, "dbfind", cmd_ged_info_wrapper, ged_exec_dbfind, NULL},
     {MGED_CMD_MAGIC, "dbip", cmd_ged_plain_wrapper, ged_exec_dbip, NULL},  // TODO - this needs to go away
     {MGED_CMD_MAGIC, "dbot_dump", cmd_ged_plain_wrapper, ged_exec_dbot_dump, NULL},
+    {MGED_CMD_MAGIC, "dbversion", cmd_ged_plain_wrapper, ged_exec_dbversion, NULL},
     {MGED_CMD_MAGIC, "debug", cmd_ged_plain_wrapper, ged_exec_debug, NULL},
     {MGED_CMD_MAGIC, "debugbu", cmd_ged_plain_wrapper, ged_exec_debugbu, NULL},
     {MGED_CMD_MAGIC, "debugdir", cmd_ged_plain_wrapper, ged_exec_debugdir, NULL},

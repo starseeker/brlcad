@@ -392,6 +392,7 @@ main(int argc, char *argv[])
     BObolDrawMetadataRecord metadata;
     BObolDrawManifest manifest;
     BObolDrawManifest loadedManifest;
+    BObolDrawManifest manifestDescription;
     point_t center;
     point_t aabbMin;
     point_t aabbMax;
@@ -401,6 +402,7 @@ main(int argc, char *argv[])
     bu_setprogname(argv[0]);
     bobol_draw_manifest_init(&manifest);
     bobol_draw_manifest_init(&loadedManifest);
+    bobol_draw_manifest_init(&manifestDescription);
 
     if (argc != 1) {
 	printf("Usage: %s\n", argv[0]);
@@ -623,9 +625,18 @@ main(int argc, char *argv[])
     if (!make_manifest(&manifest) ||
 	bobol_draw_manifest_cache_store(dbip, path_top_name, &manifest) !=
 	BRLCAD_OK ||
+	bobol_draw_manifest_cache_describe(dbip, path_top_name,
+	    &manifestDescription) != BRLCAD_OK ||
+	!manifestDescription.coverageBoundsValid ||
+	manifestDescription.occurrenceCount != manifest.occurrenceCount ||
+	manifestDescription.occurrences != NULL ||
+	!point_equal(manifestDescription.coverageBoundsMin,
+	    manifest.coverageBoundsMin) ||
+	!point_equal(manifestDescription.coverageBoundsMax,
+	    manifest.coverageBoundsMax) ||
 	bobol_draw_manifest_cache_get(dbip, path_top_name, &loadedManifest) !=
 	BRLCAD_OK || check_manifest(&loadedManifest)) {
-	printf("FAIL: draw manifest store/get\n");
+	printf("FAIL: draw manifest store/describe/get\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -886,6 +897,12 @@ main(int argc, char *argv[])
 	bobol_draw_manifest_cache_get(dbip, NULL,
 		&loadedManifest) != BRLCAD_ERROR ||
 	bobol_draw_manifest_cache_get(dbip, path_top_name,
+		NULL) != BRLCAD_ERROR ||
+	bobol_draw_manifest_cache_describe(NULL, path_top_name,
+		&manifestDescription) != BRLCAD_ERROR ||
+	bobol_draw_manifest_cache_describe(dbip, NULL,
+		&manifestDescription) != BRLCAD_ERROR ||
+	bobol_draw_manifest_cache_describe(dbip, path_top_name,
 		NULL) != BRLCAD_ERROR ||
 	bobol_draw_manifest_cache_invalidate_database(NULL) != BRLCAD_ERROR) {
 	printf("FAIL: draw cache null handling\n");

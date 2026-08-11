@@ -40,8 +40,7 @@
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "ged.h"
-#include "ged/scene_internal.h"
-#include "ged/view_feature_internal.h"
+#include "./ged_scene_record_api_private.h"
 #include "include/plugin.h"
 #include "./ged_draw_private.h"
 
@@ -158,6 +157,10 @@ struct ged_drawable {
 };
 
 __BEGIN_DECLS
+
+GED_EXPORT extern int ged_view_feature_gobject_create(
+    struct ged *gedp, struct ged_view_context *view_ctx,
+    const char *db_path, const char *gobject_name, struct bu_vls *result);
 ged_draw_group_ref ged_scene_root_group_ref(struct ged *gedp);
 void ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root);
 void ged_scene_root_ref_clear(struct ged *gedp);

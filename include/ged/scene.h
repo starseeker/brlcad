@@ -213,6 +213,64 @@ ged_scene_occurrence_count(struct ged *gedp);
 GED_EXPORT extern int
 ged_scene_has_occurrences(struct ged *gedp);
 
+/** Return non-zero when an occurrence reference is null. */
+GED_EXPORT extern int
+ged_scene_occurrence_ref_is_null(ged_scene_occurrence_ref occurrence);
+
+/** Return non-zero when two occurrence references identify the same object. */
+GED_EXPORT extern int
+ged_scene_occurrence_ref_equal(ged_scene_occurrence_ref a,
+			       ged_scene_occurrence_ref b);
+
+/** Visit semantic snapshots of the currently realized occurrences. */
+GED_EXPORT extern size_t
+ged_scene_occurrences_visit(struct ged *gedp,
+			    ged_scene_occurrence_func_t callback,
+			    void *client_data);
+
+/**
+ * Visit the lightweight visible-occurrence index used by interactive picking.
+ * This does not force compact scene sources to realize mesh records.
+ */
+GED_EXPORT extern size_t
+ged_scene_occurrence_candidates_visit(
+    struct ged *gedp,
+    ged_scene_occurrence_candidate_func_t callback,
+    void *client_data);
+
+/** Resolve a lightweight candidate only when an operation needs an occurrence. */
+GED_EXPORT extern ged_scene_occurrence_ref
+ged_scene_occurrence_candidate_resolve(
+    struct ged *gedp,
+    const struct ged_scene_occurrence_candidate *candidate);
+
+/**
+ * Copy a semantic snapshot for an occurrence reference.
+ *
+ * Borrowed strings and full paths in @p out remain valid until the next scene
+ * mutation; copy them if they must live longer.
+ */
+GED_EXPORT extern int
+ged_scene_occurrence_get(struct ged *gedp,
+			 ged_scene_occurrence_ref occurrence,
+			 struct ged_scene_occurrence_info *out);
+
+/** Return the first realized occurrence in scene navigation order. */
+GED_EXPORT extern ged_scene_occurrence_ref
+ged_scene_occurrence_first(struct ged *gedp);
+
+/** Advance circularly through realized occurrences in scene navigation order. */
+GED_EXPORT extern ged_scene_occurrence_ref
+ged_scene_occurrence_advance(struct ged *gedp,
+			     ged_scene_occurrence_ref occurrence,
+			     int delta);
+
+/** Set the transient highlight on one exact occurrence, or clear with NULL. */
+GED_EXPORT extern enum ged_scene_status
+ged_scene_occurrence_highlight_set(struct ged *gedp,
+	ged_scene_occurrence_ref occurrence, int highlighted,
+	struct ged_scene_result *result);
+
 /**
  * Compute model-space scene bounds.  Returns zero on success and one when no
  * object contributes to the requested bounds scope.

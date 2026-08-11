@@ -443,6 +443,28 @@ db_read(const struct db_i *dbip,
        	b_off_t offset);
 
 /**
+ * Return a borrowed, read-only view of one object's complete serialized
+ * database record when the database or directory object is memory backed.
+ *
+ * This is the zero-copy counterpart to db_get_external().  The returned
+ * pointer remains owned by dbip (or by an RT_DIR_INMEM directory entry), is
+ * valid only while both dbip and dp remain alive and unmodified, and must not
+ * be freed or written through.  It is intended for bounded metadata readers
+ * which can consume the on-disk representation directly without allocating
+ * and copying a potentially very large object.
+ *
+ * On success, *nbytes receives the serialized record size.  For a v5
+ * database this is dp->d_len bytes; for v4 it is dp->d_len database records.
+ * Returns NULL when no stable memory-backed view is available or the
+ * directory range is invalid.  Callers which require the data must then use
+ * db_get_external() or db_read().
+ */
+RT_EXPORT extern const unsigned char *
+db_external_view(const struct db_i *dbip,
+		 const struct directory *dp,
+		 size_t *nbytes);
+
+/**
  * Add name from dp->d_namep to external representation of solid, and
  * write it into a file.
  *

@@ -30,114 +30,98 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
-#include <algorithm>
-#include <vector>
 
-#include "BObol/BViewController.h"
 #include "bu/cmd.h"
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
 
 #include "../ged_private.h"
-#include "../ged_bobol_private.hpp"
 #include "./ged_view.h"
 
-static BObolFeatureStyle
-_axes_style(const struct ged_annotation_axes &axes)
-{
-    BObolFeatureStyle style;
-    style.hasColor = TRUE;
-    style.color = SbColor(
-	static_cast<float>(std::clamp(axes.color[0], 0, 255)) / 255.0f,
-	static_cast<float>(std::clamp(axes.color[1], 0, 255)) / 255.0f,
-	static_cast<float>(std::clamp(axes.color[2], 0, 255)) / 255.0f);
-    style.hasLineWidth = TRUE;
-    style.lineWidth = axes.line_width;
-    return style;
-}
+struct ged_view_annotation_axes_state {
+    point_t position;
+    fastf_t size;
+    int line_width;
+    int color[3];
+};
 
 static int
 _axes_publish(struct _ged_view_info *gd,
-    const struct ged_annotation_axes &axes,
-    const BObolFeatureRecord *existing = nullptr)
+    const struct ged_view_annotation_axes_state &axes, int local)
 {
-    BObolViewController *controller = existing ? nullptr :
-	ged_bobol_feature_controller(gd->gedp, gd->cv, gd->local_obj);
-    BObolFeatureScope scope = gd->local_obj ?
-	BObolFeatureScope::Local : BObolFeatureScope::Shared;
-    BObolFeatureOwner owner = ged_bobol_view_feature_owner(gd->cv);
-    const BObolFeatureOwner *owner_ptr = gd->local_obj ? &owner : nullptr;
-
-    struct ged_bobol_feature_binding binding;
-    if (existing) {
-	binding = ged_bobol_feature_find(gd->gedp, gd->cv, gd->vobj);
-	controller = binding.controller;
-	scope = existing->scope;
-	owner = existing->owner;
-	owner_ptr = scope == BObolFeatureScope::Local ? &owner : nullptr;
-    }
-    if (!controller)
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "ged-view-annotation-axes";
+    desc.owner_role = "user-annotation";
+    desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION;
+    desc.lifecycle = GED_VIEW_FEATURE_LIFECYCLE_PERSISTENT;
+    desc.overlay_order = GED_VIEW_FEATURE_OVERLAY_ORDER_MODEL;
+    desc.local = local;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(gd->cv, &desc);
+    if (!batch)
 	return 0;
 
-    std::vector<SbVec3f> centers;
-    centers.emplace_back(static_cast<float>(axes.position[X]),
-	static_cast<float>(axes.position[Y]),
-	static_cast<float>(axes.position[Z]));
-    const BObolFeatureStyle style = _axes_style(axes);
-    return controller->features().publishAxes(gd->vobj, scope, centers,
-	static_cast<float>(axes.size), &style, owner_ptr).isValid() ? 1 : 0;
+    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    style.visible = 1;
+    style.color_valid = 1;
+    for (int i = 0; i < 3; i++)
+	style.color[i] = static_cast<unsigned char>(
+	    axes.color[i] < 0 ? 0 : axes.color[i] > 255 ? 255 : axes.color[i]);
+    style.line_width = axes.line_width;
+    if (!ged_view_feature_batch_axes_replace(batch, gd->vobj,
+	    &axes.position, 1, axes.size, &style)) {
+	ged_view_feature_batch_abort(batch);
+	return 0;
+    }
+    return ged_view_feature_batch_commit(batch);
 }
 
 static int
-_axes_state(struct _ged_view_info *gd, struct ged_annotation_axes *axes)
+_axes_state(struct _ged_view_info *gd,
+    struct ged_view_annotation_axes_state *axes,
+    struct ged_view_feature_summary *summary = nullptr)
 {
-    struct ged_bobol_feature_binding binding =
-	ged_bobol_feature_find(gd->gedp, gd->cv, gd->vobj);
-    if (!binding.controller || !binding.handle.isValid()) {
+    struct ged_view_feature_summary current = GED_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_view_feature_get_summary(gd->cv, gd->vobj, &current) ||
+	!current.exists || current.kind != GED_VIEW_FEATURE_KIND_AXES) {
 	bu_vls_printf(gd->gedp->ged_result_str,
 	    "View feature named %s does not exist\n", gd->vobj);
 	return 0;
     }
 
-    std::vector<SbVec3f> centers;
-    float size = 0.0f;
-    if (!binding.controller->features().axesCenters(binding.handle,
-	    centers, &size) || centers.empty()) {
+    memset(axes, 0, sizeof(*axes));
+    if (!ged_view_feature_axes_copy(gd->cv, gd->vobj, 0,
+	    axes->position, &axes->size)) {
 	bu_vls_printf(gd->gedp->ged_result_str,
 	    "View feature %s has no axes state\n", gd->vobj);
 	return 0;
     }
 
-    memset(axes, 0, sizeof(*axes));
-    VSET(axes->position, centers[0][0], centers[0][1], centers[0][2]);
-    axes->size = size;
-    BObolFeatureStyle style;
-    if (binding.controller->features().style(binding.handle, style)) {
-	const SbColor color = style.hasColor ? style.color :
-	    SbColor(1.0f, 1.0f, 1.0f);
-	axes->color[0] = static_cast<int>(color[0] * 255.0f + 0.5f);
-	axes->color[1] = static_cast<int>(color[1] * 255.0f + 0.5f);
-	axes->color[2] = static_cast<int>(color[2] * 255.0f + 0.5f);
-	axes->line_width = style.hasLineWidth ? style.lineWidth : 1;
+    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    axes->line_width = 1;
+    VSET(axes->color, 255, 255, 255);
+    if (ged_view_feature_style_get(gd->cv, gd->vobj, &style)) {
+	if (style.color_valid)
+	    VSET(axes->color, style.color[0], style.color[1], style.color[2]);
+	if (style.line_width > 0)
+	    axes->line_width = style.line_width;
     }
+    if (summary)
+	*summary = current;
     return 1;
 }
 
 static int
 _axes_replace(struct _ged_view_info *gd,
-    const struct ged_annotation_axes &axes)
+    const struct ged_view_annotation_axes_state &axes)
 {
-    struct ged_bobol_feature_binding binding =
-	ged_bobol_feature_find(gd->gedp, gd->cv, gd->vobj);
-    BObolFeatureRecord record;
-    if (!binding.controller || !binding.handle.isValid() ||
-	!binding.controller->features().record(binding.handle, record)) {
-	bu_vls_printf(gd->gedp->ged_result_str,
-	    "View feature named %s does not exist\n", gd->vobj);
+    struct ged_view_annotation_axes_state current;
+    struct ged_view_feature_summary summary = GED_VIEW_FEATURE_SUMMARY_INIT;
+    if (!_axes_state(gd, &current, &summary))
 	return 0;
-    }
-    if (!_axes_publish(gd, axes, &record)) {
+    if (!_axes_publish(gd, axes,
+	    summary.scope == GED_VIEW_FEATURE_SCOPE_LOCAL)) {
 	bu_vls_printf(gd->gedp->ged_result_str,
 	    "Failed to set axes state for %s\n", gd->vobj);
 	return 0;
@@ -172,18 +156,18 @@ _axes_cmd_create(void *bs, int argc, const char **argv)
 	}
     }
 
-    struct ged_annotation_axes l;
+    struct ged_view_annotation_axes_state l;
     memset(&l, 0, sizeof(l));
     VMOVE(l.position, p);
     l.line_width = 1;
     l.size = 10;
     VSET(l.color, 255, 255, 0);
-    if (ged_bobol_feature_find(gd->gedp, gd->cv, gd->vobj).handle.isValid()) {
+    if (ged_view_feature_exists(gd->cv, gd->vobj)) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "View feature named %s already exists\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
-    if (!_axes_publish(gd, l)) {
+    if (!_axes_publish(gd, l, gd->local_obj)) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "Failed to set axes state for %s\n", gd->vobj);
 	return BRLCAD_ERROR;
@@ -206,7 +190,7 @@ _axes_cmd_pos(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct ged_annotation_axes a;
+    struct ged_view_annotation_axes_state a;
     if (!_axes_state(gd, &a))
 	return BRLCAD_ERROR;
     if (argc == 0) {
@@ -245,7 +229,7 @@ _axes_cmd_size(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct ged_annotation_axes a;
+    struct ged_view_annotation_axes_state a;
     if (!_axes_state(gd, &a))
 	return BRLCAD_ERROR;
      if (argc == 0) {
@@ -283,7 +267,7 @@ _axes_cmd_linewidth(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct ged_annotation_axes a;
+    struct ged_view_annotation_axes_state a;
     if (!_axes_state(gd, &a))
 	return BRLCAD_ERROR;
      if (argc == 0) {
@@ -326,7 +310,7 @@ _axes_cmd_axes_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct ged_annotation_axes a;
+    struct ged_view_annotation_axes_state a;
     if (!_axes_state(gd, &a))
 	return BRLCAD_ERROR;
      if (argc == 0) {

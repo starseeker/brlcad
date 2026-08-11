@@ -353,13 +353,21 @@ test_large_compact_lod_churn(SoBRLDatabaseSource *source)
 {
     if (!source || !source->getDatabase() ||
 	source->getCompactInstanceCount() <= 0 ||
-	!source->hasRealizedMeshGeometry())
+	!source->hasRealizedMeshGeometry()) {
+	fprintf(stderr, "large LoD churn setup: source=%d database=%d "
+	    "instances=%d mesh=%d\n", source ? 1 : 0,
+	    source && source->getDatabase() ? 1 : 0,
+	    source ? source->getCompactInstanceCount() : -1,
+	    source && source->hasRealizedMeshGeometry() ? 1 : 0);
 	return 0;
+	}
 
     BObolLodService service;
     service.setQueueLimits(96, 96, 96);
-    if (!service.start(2, FALSE))
+	if (!service.start(2, FALSE)) {
+	fprintf(stderr, "large LoD churn setup: service start failed\n");
 	return 0;
+	}
 
     SoSeparator *root = new SoSeparator;
     root->ref();
@@ -492,6 +500,8 @@ test_compact_lod_scale(struct db_i *dbip)
     source->stale = FALSE;
     source->staleReason = SoBRLDatabaseSource::STALE_NONE;
     if (installed != candidateCount) {
+	fprintf(stderr, "typed compact LoD setup: installed=%d expected=%d\n",
+	    installed, candidateCount);
 	source->ref();
 	source->unref();
 	return 0;
@@ -1522,7 +1532,7 @@ main(int argc, char **argv)
 	FAIL("GED hidden-line draw should publish a compact combination root");
     pair = find_source(controller, "pair.c");
     if (!pair || !pair->isCompactOccurrenceRegistry() ||
-	pair->representationMode.getValue() != GED_DRAW_MODE_HIDDEN_LINE ||
+	pair->representationMode.getValue() != GED_SCENE_DRAW_HIDDEN_LINE ||
 	pair->getCompactInstanceCountForPath("pair.c", TRUE) != 3 ||
 	!pair->prepareCompiledAssembly() ||
 	pair->getCompiledAssemblyInstanceCount() != 3)

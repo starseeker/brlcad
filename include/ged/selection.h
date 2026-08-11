@@ -13,6 +13,7 @@
 #define GED_SELECTION_H
 
 #include "ged/selection_types.h"
+#include "ged/scene_types.h"
 
 __BEGIN_DECLS
 
@@ -27,6 +28,22 @@ ged_view_selection_visit(
 
 GED_EXPORT extern int
 ged_view_selection_clear(struct ged_view_context *view_ctx);
+
+/** Add one exact semantic occurrence to the selected-path set. */
+GED_EXPORT extern int
+ged_view_selection_add_occurrence(
+    struct ged *gedp,
+    struct ged_view_context *view_ctx,
+    ged_scene_occurrence_ref occurrence,
+    struct ged_view_context **selection_view_ctx,
+    struct bu_vls *path);
+
+/** Replace the transient highlighted-reference selection with an occurrence. */
+GED_EXPORT extern int
+ged_view_selection_highlight_occurrence_set(
+    struct ged *gedp,
+    struct ged_view_context *view_ctx,
+    ged_scene_occurrence_ref occurrence);
 
 GED_EXPORT extern int
 ged_view_selection_set_pick(

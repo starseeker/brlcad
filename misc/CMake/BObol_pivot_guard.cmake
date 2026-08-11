@@ -676,9 +676,9 @@ function(_bobol_guard_check_display_endpoint_boundary)
     endif()
   endforeach()
 
-  _bobol_guard_read_rel(_qg_draw_sync "src/libqtcad/QgObolDrawSync.cpp")
-  _bobol_guard_forbid_regexes("src/libqtcad/QgObolDrawSync.cpp"
-    "${_qg_draw_sync}"
+  _bobol_guard_read_rel(_qg_scene_sync "src/libqtcad/QgSceneSync.cpp")
+  _bobol_guard_forbid_regexes("src/libqtcad/QgSceneSync.cpp"
+    "${_qg_scene_sync}"
     [[ged_draw_obol_scene_controller_owned]])
 
   _bobol_guard_read_rel(_qg_quad "src/libqtcad/QgQuadView.cpp")
@@ -739,15 +739,17 @@ function(_bobol_guard_check_display_endpoint_boundary)
       "src/libged/draw_obol.cpp uses controller ownership as a scene capability gate")
   endif()
 
-  foreach(_rel
-      src/libged/ged_draw_source.cpp
-      src/libged/ged_draw_transactions.c)
-    _bobol_guard_read_rel(_draw_c "${_rel}")
-    string(FIND "${_draw_c}" [[ged_draw_obol_scene_controller_ensure_owned(gedp, 1)]]
-	      _scene_ensure_idx)
-    if(_scene_ensure_idx EQUAL -1)
+  _bobol_guard_read_rel(_scene_api "src/libged/ged_scene_api.cpp")
+  foreach(_needle
+      [[ged_scene_backend_apply_private]]
+      [[scene_backend_ops->apply]]
+      [[ged_scene_backend_snapshot_private]]
+      [[scene_backend_ops->snapshot]]
+      [[ged_scene_backend_set_private]])
+    string(FIND "${_scene_api}" "${_needle}" _scene_backend_idx)
+    if(_scene_backend_idx EQUAL -1)
       _bobol_guard_fail(
-	"${_rel} no longer synchronizes the attached endpoint scene before drawing")
+	"libged lost its single semantic scene-backend seam (${_needle})")
     endif()
   endforeach()
 endfunction()
@@ -1645,7 +1647,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
     [[ged_view_context_display_manager_set]])
   foreach(_needle
       [[mged_obol_scene_refresh]]
-      [[GED_DRAW_TXN_REDRAW]])
+      [[ged_scene_redraw]])
     string(FIND "${_mged_scene_refresh}" "${_needle}" _scene_refresh_idx)
     if(_scene_refresh_idx EQUAL -1)
       _bobol_guard_fail(
@@ -1754,7 +1756,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
   _bobol_guard_forbid_regexes("src/mged/axes.c" "${_mged_axes}"
     [[(^|[^A-Za-z0-9_])dm_draw_hud_axes[ \t\r\n]*\(]])
   foreach(_needle
-      [[ged_annotation_hud_axes_replace]]
+      [[ged_view_feature_batch_hud_axes_replace]]
       [[_faceplate/edit_axes/initial]]
       [[_faceplate/edit_axes/current]])
     string(FIND "${_mged_axes}" "${_needle}" _retained_edit_axes_idx)
@@ -2006,7 +2008,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
     [[(^|[^A-Za-z0-9_])dm_get_dname[ \t\r\n]*\(]])
   foreach(_needle
       [[mged_rubber_band_state_sync]]
-      [[ged_annotation_hud_lines_replace]]
+      [[ged_view_feature_batch_hud_line_set_replace]]
       [[_faceplate/rubber_band]])
     string(FIND "${_mged_rect}" "${_needle}" _retained_rubber_band_idx)
     if(_retained_rubber_band_idx EQUAL -1)

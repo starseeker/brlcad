@@ -37,9 +37,14 @@
 
 __BEGIN_DECLS
 
-/* The following data types are originally from bv - we keep them
- * separate here to maximize their ease of reuse */
-typedef enum { bg_None, bg_Union, bg_Difference, bg_Intersection, bg_Xor } bg_clip_t;
+/** Boolean operation applied to one or more planar polygons. */
+enum bg_polygon_boolean_op {
+    BG_POLYGON_BOOLEAN_NONE = 0,
+    BG_POLYGON_BOOLEAN_UNION,
+    BG_POLYGON_BOOLEAN_DIFFERENCE,
+    BG_POLYGON_BOOLEAN_INTERSECTION,
+    BG_POLYGON_BOOLEAN_XOR
+};
 
 struct bg_poly_contour {
     size_t    num_points;
@@ -51,21 +56,16 @@ struct bg_polygon {
     size_t                  num_contours;
     int                     *hole;
     struct bg_poly_contour  *contour;
-
-    // TODO - in principle these shouldn't be here, but the libtclcad code uses
-    // them so it will take some thought to refactor them up from this
-    // container...
-    int                 gp_color[3];
-    int                 gp_line_width;          /* in pixels */
-    int                 gp_line_style;
 };
 
-#define BG_POLYGON_NULL {0, NULL, NULL, {0, 0, 0}, 0, 0}
+#define BG_POLYGON_INIT_ZERO {0, NULL, NULL}
 
 struct bg_polygons {
     size_t            num_polygons;
     struct bg_polygon *polygon;
 };
+
+#define BG_POLYGONS_INIT_ZERO {0, NULL}
 
 __END_DECLS
 

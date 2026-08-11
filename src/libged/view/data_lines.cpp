@@ -21,8 +21,9 @@
  *
  * Logic for drawing arbitrary lines not associated with geometry.
  *
- * The data-line feature (_tcl_data_lines / _tcl_sdata_lines) is stored as a
- * view-local BObol line set.
+ * Command state is owned by the GED view host and published as a view-local
+ * retained feature batch.  Renderer realization is never queried to answer a
+ * command getter.
  *
  * Usage example (Archer / QGED):
  *
@@ -38,112 +39,93 @@
 
 #include "common.h"
 
-#include "ged/display_obol_private.h"
-
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
 #include <vector>
 
-#include "BObol/BViewController.h"
 #include "bu/cmd.h"
 #include "bu/malloc.h"
 #include "bu/opt.h"
 #include "bu/str.h"
 #include "bu/vls.h"
 #include "bv.h"
-#include "../ged_bobol_private.hpp"
+#include "ged/view_feature_batch.h"
 #include "../ged_private.h"
+#include "../ged_view_data_line_private.h"
 #include "./ged_view.h"
 
 struct view_dlines_state {
     struct ged *gedp;
     struct ged_view_context *view_ctx;
     const char *feature_name;
+    int staged;
 };
 
-static BObolFeatureOwner
-_view_dlines_owner(const struct view_dlines_state *vs)
-{
-    return ged_bobol_view_feature_owner(vs ? vs->view_ctx : nullptr);
-}
-
-static BObolViewController *
-_view_dlines_controller(const struct view_dlines_state *vs)
-{
-    return vs ? ged_bobol_view_controller(vs->view_ctx) : nullptr;
-}
-
-static BObolFeatureHandle
-_view_dlines_handle(const struct view_dlines_state *vs)
-{
-    BObolViewController *controller = _view_dlines_controller(vs);
-    if (!controller || !vs || !vs->feature_name)
-	return BObolFeatureHandle();
-    const BObolFeatureOwner owner = _view_dlines_owner(vs);
-    return controller->features().findOwned(vs->feature_name,
-	BOBOL_FEATURE_SCOPE_LOCAL, &owner);
-}
-
-static BObolOverlayInfo
-_view_dlines_overlay(const struct view_dlines_state *vs)
-{
-    BObolOverlayInfo overlay;
-    overlay.isOverlay = TRUE;
-    overlay.ownerToken = vs ? vs->view_ctx : nullptr;
-    overlay.role = BObolOverlayRole::Model;
-    overlay.overlayClass = BObolOverlayClass::TclOverlay;
-    overlay.lifecycle = BObolOverlayLifecycle::PerCommand;
-    overlay.order = BObolOverlayOrder::PostTransparent;
-    overlay.sourcePath = (vs && vs->feature_name) ? vs->feature_name : "";
-    return overlay;
-}
-
 static bool
-_view_dlines_style(const struct view_dlines_state *vs,
-    BObolFeatureStyle *style)
+_view_dlines_publish(const struct view_dlines_state *vs,
+    const struct ged_view_data_line_state *state)
 {
-    BObolViewController *controller = _view_dlines_controller(vs);
-    const BObolFeatureHandle handle = _view_dlines_handle(vs);
-    return controller && handle.isValid() && style &&
-	controller->features().style(handle, *style);
-}
-
-static unsigned char
-_view_dlines_color_channel(float value)
-{
-    if (value <= 0.0f)
-	return 0;
-    if (value >= 1.0f)
-	return 255;
-    return static_cast<unsigned char>(value * 255.0f + 0.5f);
-}
-
-static bool
-_view_dlines_replace(struct view_dlines_state *vs,
-    const std::vector<SbVec3f> &points, const BObolFeatureStyle &style)
-{
-    BObolViewController *controller = _view_dlines_controller(vs);
-    if (!controller || !vs || !vs->feature_name)
+    if (!vs || !vs->view_ctx || !vs->feature_name || !state)
 	return false;
-
-    const BObolFeatureOwner owner = _view_dlines_owner(vs);
-    (void)controller->features().removeOwned(vs->feature_name,
-	BOBOL_FEATURE_SCOPE_LOCAL, &owner);
-    if (points.size() < 2)
-	return true;
-
-    std::vector<int32_t> commands(points.size(),
-	static_cast<int32_t>(BObolLineCommand::Draw));
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "ged-data-lines";
+    desc.owner_role = "user-overlay";
+    desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION;
+    desc.lifecycle = GED_VIEW_FEATURE_LIFECYCLE_PERSISTENT;
+    desc.overlay_order = GED_VIEW_FEATURE_OVERLAY_ORDER_MODEL;
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(vs->view_ctx, &desc);
+    if (!batch)
+	return false;
+    std::vector<int> commands(state->point_count, GED_DRAW_VIEW_LINE_DRAW);
     for (size_t i = 0; i + 1 < commands.size(); i += 2) {
-	commands[i] = static_cast<int32_t>(BObolLineCommand::Move);
-	commands[i + 1] = static_cast<int32_t>(BObolLineCommand::Draw);
+	commands[i] = GED_DRAW_VIEW_LINE_MOVE;
+	commands[i + 1] = GED_DRAW_VIEW_LINE_DRAW;
     }
-    const BObolFeatureHandle handle = controller->features().publishLineSet(
-	vs->feature_name, BObolFeatureScope::Local, points, commands, &style,
-	&owner);
-    return handle.isValid() && controller->features().setOverlayInfo(handle,
-	_view_dlines_overlay(vs));
+    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    style.visible = state->draw ? 1 : 0;
+    style.selectable = 1;
+    style.color_valid = 1;
+    style.color[0] = (unsigned char)state->color[0];
+    style.color[1] = (unsigned char)state->color[1];
+    style.color[2] = (unsigned char)state->color[2];
+    style.line_width = state->line_width;
+    const point_t *points = state->draw && state->point_count >= 2 ?
+	(const point_t *)state->points : NULL;
+    const size_t point_count = points ? state->point_count : 0;
+    if (!ged_view_feature_batch_line_set_replace(batch, vs->feature_name,
+	    points, point_count ? commands.data() : NULL, point_count, &style)) {
+	ged_view_feature_batch_abort(batch);
+	return false;
+    }
+    return ged_view_feature_batch_commit(batch) != 0;
+}
+
+static bool
+_view_dlines_update(const struct view_dlines_state *vs,
+    const struct ged_view_data_line_state *state)
+{
+    return vs && state && ged_view_data_line_state_replace(vs->view_ctx,
+	vs->staged, state) && _view_dlines_publish(vs, state);
+}
+
+extern "C" GED_EXPORT int
+ged_view_data_line_state_publish(struct ged_view_context *view_ctx, int staged)
+{
+    if (!view_ctx)
+	return 0;
+    struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
+    if (!ged_view_data_line_state_get(view_ctx, staged, &state))
+	return 0;
+    struct view_dlines_state vs = {};
+    vs.view_ctx = view_ctx;
+    vs.feature_name = staged ? "_tcl_sdata_lines" : "_tcl_data_lines";
+    vs.staged = staged ? 1 : 0;
+    const int ret = _view_dlines_publish(&vs, &state) ? 1 : 0;
+    ged_view_data_line_state_clear(&state);
+    return ret;
 }
 
 static int
@@ -153,10 +135,11 @@ _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
     struct ged *gedp = vs->gedp;
 
     if (argc == 1) {
-	BObolFeatureStyle style;
-	const int visible = _view_dlines_style(vs, &style) &&
-	    style.hasVisible && style.visible;
-	bu_vls_printf(gedp->ged_result_str, "%d", visible);
+	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
+	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	    return BRLCAD_ERROR;
+	bu_vls_printf(gedp->ged_result_str, "%d", state.draw);
+	ged_view_data_line_state_clear(&state);
 	return BRLCAD_OK;
     }
 
@@ -165,14 +148,14 @@ _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
 
 	if (bu_sscanf(argv[1], "%d", &i) != 1) return BRLCAD_ERROR;
 
-	if (!i) {
-	    BObolViewController *controller = _view_dlines_controller(vs);
-	    const BObolFeatureOwner owner = _view_dlines_owner(vs);
-	    if (controller)
-		(void)controller->features().removeOwned(vs->feature_name,
-		    BOBOL_FEATURE_SCOPE_LOCAL, &owner);
-	}
-	/* draw=1 is a no-op here; use "points" to create/re-enable. */
+	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
+	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	    return BRLCAD_ERROR;
+	state.draw = i ? 1 : 0;
+	const bool updated = _view_dlines_update(vs, &state);
+	ged_view_data_line_state_clear(&state);
+	if (!updated)
+	    return BRLCAD_ERROR;
 
 	ged_refresh_cb(gedp);
 
@@ -214,14 +197,11 @@ _view_dlines_cmd_color(void *bs, int argc, const char **argv)
     struct ged *gedp = vs->gedp;
 
     if (argc == 1) {
-	BObolFeatureStyle style;
-	if (_view_dlines_style(vs, &style) && style.hasColor) {
-	    bu_vls_printf(gedp->ged_result_str, "%d %d %d",
-		_view_dlines_color_channel(style.color[0]),
-		_view_dlines_color_channel(style.color[1]),
-		_view_dlines_color_channel(style.color[2]));
-	} else
-	    bu_vls_printf(gedp->ged_result_str, "0 0 0");
+	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
+	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	    return BRLCAD_ERROR;
+	bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(state.color));
+	ged_view_data_line_state_clear(&state);
 	return BRLCAD_OK;
     }
 
@@ -240,13 +220,14 @@ _view_dlines_cmd_color(void *bs, int argc, const char **argv)
 		b < 0 || 255 < b)
 	    return BRLCAD_ERROR;
 
-	BObolViewController *controller = _view_dlines_controller(vs);
-	const BObolFeatureHandle handle = _view_dlines_handle(vs);
-	if (controller && handle.isValid())
-	    (void)controller->features().setColor(handle,
-		SbColor(static_cast<float>(r) / 255.0f,
-		    static_cast<float>(g) / 255.0f,
-		    static_cast<float>(b) / 255.0f));
+	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
+	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	    return BRLCAD_ERROR;
+	VSET(state.color, r, g, b);
+	const bool updated = _view_dlines_update(vs, &state);
+	ged_view_data_line_state_clear(&state);
+	if (!updated)
+	    return BRLCAD_ERROR;
 
 	ged_refresh_cb(gedp);
 
@@ -263,11 +244,11 @@ _view_dlines_cmd_line_width(void *bs, int argc, const char **argv)
     struct ged *gedp = vs->gedp;
 
     if (argc == 1) {
-	BObolFeatureStyle style;
-	if (_view_dlines_style(vs, &style) && style.hasLineWidth)
-	    bu_vls_printf(gedp->ged_result_str, "%d", style.lineWidth);
-	else
-	    bu_vls_printf(gedp->ged_result_str, "0");
+	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
+	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	    return BRLCAD_ERROR;
+	bu_vls_printf(gedp->ged_result_str, "%d", state.line_width);
+	ged_view_data_line_state_clear(&state);
 	return BRLCAD_OK;
     }
 
@@ -277,10 +258,14 @@ _view_dlines_cmd_line_width(void *bs, int argc, const char **argv)
 	if (bu_sscanf(argv[1], "%d", &line_width) != 1)
 	    return BRLCAD_ERROR;
 
-	BObolViewController *controller = _view_dlines_controller(vs);
-	const BObolFeatureHandle handle = _view_dlines_handle(vs);
-	if (controller && handle.isValid())
-	    (void)controller->features().setLineWidth(handle, line_width);
+	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
+	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	    return BRLCAD_ERROR;
+	state.line_width = line_width;
+	const bool updated = _view_dlines_update(vs, &state);
+	ged_view_data_line_state_clear(&state);
+	if (!updated)
+	    return BRLCAD_ERROR;
 
 	ged_refresh_cb(gedp);
 
@@ -298,17 +283,13 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
     int i;
 
     if (argc == 1) {
-	BObolViewController *controller = _view_dlines_controller(vs);
-	const BObolFeatureHandle handle = _view_dlines_handle(vs);
-	std::vector<SbVec3f> points;
-	if (controller && handle.isValid() &&
-	    controller->features().points(handle, points)) {
-	    for (const SbVec3f &point : points)
-		bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ",
-		    static_cast<double>(point[0]),
-		    static_cast<double>(point[1]),
-		    static_cast<double>(point[2]));
-	}
+	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
+	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	    return BRLCAD_ERROR;
+	for (size_t j = 0; j < state.point_count; j++)
+	    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ",
+		V3ARGS(state.points[j]));
+	ged_view_data_line_state_clear(&state);
 	return BRLCAD_OK;
     }
 
@@ -327,45 +308,52 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 
-	/* Preserve existing style when replacing the points payload. */
-	BObolFeatureStyle saved_style;
-	if (!_view_dlines_style(vs, &saved_style)) {
-	    saved_style.hasVisible = TRUE;
-	    saved_style.visible = TRUE;
-	    saved_style.hasColor = TRUE;
-	    saved_style.color = SbColor(1.0f, 1.0f, 0.0f);
-	    saved_style.hasLineWidth = TRUE;
-	    saved_style.lineWidth = 0;
+	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
+	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state)) {
+	    bu_free((char *)av, "av");
+	    return BRLCAD_ERROR;
 	}
 
 	if (ac < 2) {
-	    (void)_view_dlines_replace(vs, std::vector<SbVec3f>(),
-		saved_style);
+	    if (state.points)
+		bu_free(state.points, "GED view data-line state points");
+	    state.points = NULL;
+	    state.point_count = 0;
+	    const bool updated = _view_dlines_update(vs, &state);
+	    ged_view_data_line_state_clear(&state);
 	    ged_refresh_cb(gedp);
 	    bu_free((char *)av, "av");
-	    return BRLCAD_OK;
+	    return updated ? BRLCAD_OK : BRLCAD_ERROR;
 	}
 
-	std::vector<SbVec3f> points;
-	points.reserve(static_cast<size_t>(ac));
+	point_t *points = (point_t *)bu_calloc((size_t)ac, sizeof(point_t),
+	    "GED data-lines points");
 	for (i = 0; i < ac; ++i) {
 	    double scan[3];
 
 	    if (bu_sscanf(av[i], "%lf %lf %lf", &scan[X], &scan[Y], &scan[Z]) != 3) {
 		bu_vls_printf(gedp->ged_result_str, "bad data point - %s\n", av[i]);
+		bu_free(points, "GED data-lines points");
+		ged_view_data_line_state_clear(&state);
 		ged_refresh_cb(gedp);
 		bu_free((char *)av, "av");
 		return BRLCAD_ERROR;
 	    }
-	    points.emplace_back(static_cast<float>(scan[X]),
-		static_cast<float>(scan[Y]), static_cast<float>(scan[Z]));
+	    VSET(points[i], scan[X], scan[Y], scan[Z]);
 	}
 
-	if (!_view_dlines_replace(vs, points, saved_style)) {
+	if (state.points)
+	    bu_free(state.points, "GED view data-line state points");
+	state.points = points;
+	state.point_count = (size_t)ac;
+	state.draw = 1;
+	if (!_view_dlines_update(vs, &state)) {
+	    ged_view_data_line_state_clear(&state);
 	    ged_refresh_cb(gedp);
 	    bu_free((char *)av, "av");
 	    return BRLCAD_ERROR;
 	}
+	ged_view_data_line_state_clear(&state);
 	ged_refresh_cb(gedp);
 	bu_free((char *)av, "av");
 	return BRLCAD_OK;
@@ -407,17 +395,13 @@ ged_view_data_lines(struct ged *gedp, int argc, const char *argv[])
 
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     vs.view_ctx = ged_view_active_ctx(gedp);
-    if (!ged_view_context_obol_endpoint_get(vs.view_ctx) &&
-	!ged_view_context_display_endpoint_ensure(vs.view_ctx)) {
-	bu_vls_printf(gedp->ged_result_str,
-	    "unable to create display endpoint for current view");
-	return BRLCAD_ERROR;
-    }
 
     if (argv[0][0] == 's') {
 	vs.feature_name = "_tcl_sdata_lines";
+	vs.staged = 1;
     } else {
 	vs.feature_name = "_tcl_data_lines";
+	vs.staged = 0;
     }
 
     argc--;argv++;

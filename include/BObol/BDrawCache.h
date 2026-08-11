@@ -177,6 +177,32 @@ BOBOL_EXPORT int
 bobol_draw_manifest_cache_get(struct db_i *dbip, const char *rootPath,
 	struct BObolDrawManifest *manifest);
 
+/* Visit a manifest directly from its read-only cache mapping.  begin is
+ * called once after the header and exact coverage extent are validated;
+ * occurrence is then called in stored order.  Occurrence string pointers are
+ * valid only for the duration of that callback.  Returning zero from either
+ * callback stops the visit and reports BRLCAD_ERROR.  This API avoids copying
+ * and retaining an entire large manifest before its first useful record can
+ * be published. */
+typedef int (*BObolDrawManifestBeginCallback)(
+    const struct BObolDrawManifest *manifest, void *userData);
+typedef int (*BObolDrawManifestOccurrenceCallback)(
+    const struct BObolDrawManifestOccurrence *occurrence,
+    size_t occurrenceIndex, void *userData);
+
+BOBOL_EXPORT int
+bobol_draw_manifest_cache_stream(struct db_i *dbip, const char *rootPath,
+    BObolDrawManifestBeginCallback begin,
+    BObolDrawManifestOccurrenceCallback occurrence, void *userData);
+
+/* Read only the validated manifest description and exact coverage extent.
+ * No occurrence strings or records are decoded or allocated, making this
+ * suitable for an O(1) warm-start overview on the UI thread.  The returned
+ * description never owns an occurrences array. */
+BOBOL_EXPORT int
+bobol_draw_manifest_cache_describe(struct db_i *dbip, const char *rootPath,
+    struct BObolDrawManifest *description);
+
 /* Manifests and transformed-LoD asset mappings describe relationships among
  * database objects, so an edit conservatively invalidates both record types. */
 BOBOL_EXPORT int

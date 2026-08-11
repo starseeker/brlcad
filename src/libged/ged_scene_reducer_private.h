@@ -19,7 +19,8 @@
 #include <stdint.h>
 
 #include "bu/vls.h"
-#include "ged/draw_types.h"
+#include "./ged_draw_types_private.h"
+#include "./ged_scene_record_private.h"
 #include "ged/scene_types.h"
 
 __BEGIN_DECLS

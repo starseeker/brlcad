@@ -15,8 +15,13 @@
 #ifndef GED_SELECTION_TYPES_H
 #define GED_SELECTION_TYPES_H
 
+#include <stddef.h>
+
+#include "vmath.h"
 #include "ged/defines.h"
 
+struct bu_vls;
+struct ged_pick_result;
 struct ged_view_context;
 
 __BEGIN_DECLS

@@ -56,6 +56,11 @@
 class TestQgGL : public QgGL {
 public:
     explicit TestQgGL(QWidget *parent = NULL) : QgGL(parent) {}
+    bool hasFramebufferForTest(void) const
+    {
+	return this->isValid() && this->context() &&
+	    this->defaultFramebufferObject() != 0;
+    }
     void runKeyPressForTest(QKeyEvent *event) { this->keyPressEvent(event); }
     void runMousePressForTest(QMouseEvent *event) { this->mousePressEvent(event); }
     void runMouseReleaseForTest(QMouseEvent *event) { this->mouseReleaseEvent(event); }
@@ -645,7 +650,11 @@ main(int argc, char **argv)
 	glCanvas.resize(128, 96);
 	glCanvas.show();
 	app.processEvents();
-	if (glCanvas.isValid()) {
+	/* Qt's offscreen platform may report a nominally valid OpenGL widget
+	 * while explicitly declining to create its FBO.  The software/controller
+	 * contract above remains testable there; direct GL presentation requires
+	 * an actual platform framebuffer and is covered by the X11 GL test. */
+	if (glCanvas.hasFramebufferForTest()) {
 	    BObolViewController *paintController = glCanvas.obolViewController();
 	    if (!paintController ||
 		    !paintController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))

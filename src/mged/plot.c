@@ -48,30 +48,16 @@ extern FILE *fdopen(int fd, const char *mode);
 #endif
 
 static int
-_area_check_record(const struct ged_draw_view_db_object_record *rec, void *data)
-{
-    int *area_err = (int *)data;
-    if (!rec || !area_err)
-	return 1;
-
-    if (!rec->evaluated_region && rec->line_style != 0) {
-	*area_err = 1;
-	return 0;
-    }
-
-    return 1;
-}
-
-static int
 _area_has_unsupported_subtraction(struct mged_state *s)
 {
     if (!s || !s->gedp)
 	return 0;
 
-    int area_err = 0;
-    ged_draw_foreach_visible_view_db_object_record(ged_view_active_ctx(s->gedp),
-	    _area_check_record, &area_err);
-    return area_err;
+    struct ged_view_database_export_summary summary;
+    if (!ged_view_database_export_summary_get(ged_view_active_ctx(s->gedp),
+	    &summary))
+	return 0;
+    return summary.has_unsupported_subtraction;
 }
 
 /* Callback: write shape vlists to cad_boundp pipe. */
@@ -98,15 +84,6 @@ _area_write_segment(const point_t a, const point_t b, void *data)
 	    last[Y] * d->dbip->dbi_base2local,
 	    fin[X]  * d->dbip->dbi_base2local,
 	    fin[Y]  * d->dbip->dbi_base2local);
-    return 1;
-}
-
-static int
-_area_write_record(const struct ged_draw_view_db_object_record *rec, void *data)
-{
-    struct _area_write_data *d = (struct _area_write_data *)data;
-    (void)ged_draw_view_db_object_record_foreach_segment(rec,
-	    _area_write_segment, d);
     return 1;
 }
 
@@ -247,8 +224,8 @@ f_area(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	wd.fp_w = fp_w;
 	wd.rotation = (const mat_t *)&view_rotation;
 	wd.dbip = s->dbip;
-	ged_draw_foreach_visible_view_db_object_record(ged_view_active_ctx(s->gedp),
-		_area_write_record, &wd);
+	(void)ged_view_database_export_segments_visit(
+		ged_view_active_ctx(s->gedp), _area_write_segment, &wd);
     }
 
     fclose(fp_w);

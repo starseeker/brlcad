@@ -285,8 +285,6 @@ QEll::update_obj_wireframe()
     db_free_full_path(&full_path);
 
     qged_edit_feature_clear_geometry(p);
-    qged_edit_feature_set_view(p, m_ctx);
-
     // Set up the rt_db_internal and trigger the plotting routine with the
     // current ell parameters
     struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;

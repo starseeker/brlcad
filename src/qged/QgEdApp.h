@@ -61,7 +61,8 @@ class QgEdApp : public QApplication
 
     public:
 	QgEdApp(int &argc, char *argv[], const char *db_file = nullptr,
-		int swrast_mode = 0, int quad_mode = 0);
+		int swrast_mode = 0, int quad_mode = 0,
+		bool test_mode = false);
 	~QgEdApp();
 
 	int run_cmd(struct bu_vls *msg, int argc, const char **argv);

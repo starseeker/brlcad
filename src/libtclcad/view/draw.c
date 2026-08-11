@@ -27,7 +27,7 @@
 #include "common.h"
 #include "bv.h"
 #include "ged.h"
-#include "ged/scene_internal.h"
+#include "ged/scene.h"
 #include "ged/draw.h"
 #include "ged/view.h"
 #include "tclcad.h"
@@ -52,63 +52,6 @@ go_draw(struct ged_view_context *view_ctx)
 }
 
 
-struct to_edit_redraw_data {
-    struct ged *gedp;
-    const char **argv;
-    const struct db_full_path *subpath;
-};
-
-
-static int
-to_edit_redraw_record_cb(const struct ged_draw_view_db_object_record *rec,
-			 void *userdata)
-{
-    struct to_edit_redraw_data *d = (struct to_edit_redraw_data *)userdata;
-    if (!rec || !rec->path || !d || !d->gedp || !d->subpath)
-	return 1;
-
-    struct db_full_path rec_path;
-    db_full_path_init(&rec_path);
-    if (db_string_to_path(&rec_path, d->gedp->dbip, rec->path) < 0) {
-	db_free_full_path(&rec_path);
-	return 1;
-    }
-
-    size_t pi;
-    for (pi = 0; pi < d->subpath->fp_len; pi++) {
-	if (!db_full_path_search(&rec_path, d->subpath->fp_names[pi]))
-	    continue;
-
-	/* Match found -- re-execute draw for this path */
-	struct bu_vls mflag = BU_VLS_INIT_ZERO;
-	struct bu_vls xflag = BU_VLS_INIT_ZERO;
-	char *av[5] = {0};
-	int arg = 0;
-
-	av[arg++] = (char *)d->argv[0];
-	if (rec->draw_mode == 4) {
-	    av[arg++] = "-h";
-	} else {
-	    bu_vls_printf(&mflag, "-m%d", rec->draw_mode);
-	    bu_vls_printf(&xflag, "-x%f", rec->transparency);
-	    av[arg++] = bu_vls_addr(&mflag);
-	    av[arg++] = bu_vls_addr(&xflag);
-	}
-	av[arg] = bu_strdup(rec->path);
-
-	ged_exec(d->gedp, arg + 1, (const char **)av);
-
-	bu_free(av[arg], "to_edit_redraw");
-	bu_vls_free(&mflag);
-	bu_vls_free(&xflag);
-	break;
-    }
-
-    db_free_full_path(&rec_path);
-    return 1;
-}
-
-
 int
 to_edit_redraw(struct ged *gedp,
 	       int argc,
@@ -117,23 +60,26 @@ to_edit_redraw(struct ged *gedp,
     if (argc != 2)
 	return BRLCAD_ERROR;
 
-    struct db_full_path subpath;
-    if (db_string_to_path(&subpath, gedp->dbip, argv[1]) != 0)
-	return BRLCAD_OK;  /* path not found — nothing to do */
+    if (!gedp || !argv[1] || !argv[1][0])
+	return BRLCAD_ERROR;
 
-    struct to_edit_redraw_data d = {gedp, argv, &subpath};
-
-    /* Iterate view-scoped DB object export records through the GED draw
-     * boundary instead of walking local TclCAD draw state. */
+    /* Redraw is a semantic retained-source operation.  Supplying the edited
+     * path lets the scene reducer match every owning draw intent without
+     * exporting renderer records or re-executing draw commands. */
+    const char *paths[] = {argv[1]};
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     size_t vi;
     for (vi = 0; vi < BU_PTBL_LEN(views); vi++) {
 	struct ged_view_context *view_ctx =
 	    (struct ged_view_context *)BU_PTBL_GET(views, vi);
-	ged_draw_foreach_view_db_object_record(view_ctx, to_edit_redraw_record_cb, &d);
+	struct ged_scene_redraw_request request;
+	ged_scene_redraw_request_init(&request);
+	request.view = view_ctx;
+	request.paths = paths;
+	request.path_count = 1;
+	(void)ged_scene_redraw(gedp, &request, NULL);
     }
 
-    db_free_full_path(&subpath);
     to_refresh_all_views(current_top);
     return BRLCAD_OK;
 }

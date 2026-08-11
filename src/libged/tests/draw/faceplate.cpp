@@ -39,7 +39,6 @@
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/display.h>
-#include <ged/view_feature_internal.h>
 
 #define ADIFF_THRES 0.99
 /* The retained wire renderer preserves projected topology but does not emit
@@ -99,6 +98,78 @@ wait_for_progressive_draw(struct ged *gedp, struct ged_view_context *view_ctx)
     if (!draw_test_obol_progressive_drain(gedp, view_ctx, 2000, 1))
 	bu_exit(EXIT_FAILURE,
 	    "Obol progressive realization did not settle before baseline capture\n");
+}
+
+static struct ged_view_feature_batch *
+faceplate_feature_batch(struct ged_view_context *view_ctx)
+{
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "faceplate-test";
+    desc.owner_role = "test";
+    desc.generation = 1;
+    return ged_view_feature_batch_begin(view_ctx, &desc);
+}
+
+static int
+faceplate_hud_axes_replace(struct ged_view_context *view_ctx, const char *name,
+	const struct bv_axes_state *axes, const mat_t rotation)
+{
+    struct ged_view_feature_batch *batch = faceplate_feature_batch(view_ctx);
+    if (!batch)
+	return 0;
+    if (!ged_view_feature_batch_hud_axes_replace(batch, name, axes, rotation)) {
+	ged_view_feature_batch_abort(batch);
+	return 0;
+    }
+    return ged_view_feature_batch_commit(batch);
+}
+
+static int
+faceplate_hud_lines_replace(struct ged_view_context *view_ctx, const char *name,
+	const point_t *points, const int *cmds, size_t point_count,
+	const struct ged_view_feature_style *style)
+{
+    struct ged_view_feature_batch *batch = faceplate_feature_batch(view_ctx);
+    if (!batch)
+	return 0;
+    if (!ged_view_feature_batch_hud_line_set_replace(batch, name, points,
+	    cmds, point_count, style)) {
+	ged_view_feature_batch_abort(batch);
+	return 0;
+    }
+    return ged_view_feature_batch_commit(batch);
+}
+
+static int
+faceplate_hud_labels_replace(struct ged_view_context *view_ctx, const char *name,
+	const struct ged_view_feature_label *labels, size_t label_count,
+	const struct ged_view_feature_style *style)
+{
+    struct ged_view_feature_batch *batch = faceplate_feature_batch(view_ctx);
+    if (!batch)
+	return 0;
+    if (!ged_view_feature_batch_hud_labels_replace(batch, name, labels,
+	    label_count, style)) {
+	ged_view_feature_batch_abort(batch);
+	return 0;
+    }
+    return ged_view_feature_batch_commit(batch);
+}
+
+static int
+faceplate_hud_line_layers_replace(struct ged_view_context *view_ctx,
+	const char *name, const struct ged_view_feature_line_layer *layers,
+	size_t layer_count, const struct ged_view_feature_style *style)
+{
+    struct ged_view_feature_batch *batch = faceplate_feature_batch(view_ctx);
+    if (!batch)
+	return 0;
+    if (!ged_view_feature_batch_hud_line_layers_replace(batch, name, layers,
+	    layer_count, style)) {
+	ged_view_feature_batch_abort(batch);
+	return 0;
+    }
+    return ged_view_feature_batch_commit(batch);
 }
 
 int
@@ -337,13 +408,13 @@ main(int ac, char *av[]) {
     edit_axes.label_flag = 1;
     VSET(edit_axes.axes_color, 255, 128, 0);
     VSET(edit_axes.label_color, 255, 255, 255);
-    if (!ged_annotation_hud_axes_replace(v, "_test/edit_axes",
+    if (!faceplate_hud_axes_replace(v, "_test/edit_axes",
 	    &edit_axes, edit_rotation) ||
 	!ged_view_feature_exists(v, "_test/edit_axes/lines") ||
 	!ged_view_feature_exists(v, "_test/edit_axes/labels"))
 	bu_exit(EXIT_FAILURE, "retained HUD axes publication failed\n");
     edit_axes.draw = 0;
-    if (!ged_annotation_hud_axes_replace(v, "_test/edit_axes",
+    if (!faceplate_hud_axes_replace(v, "_test/edit_axes",
 	    &edit_axes, edit_rotation) ||
 	ged_view_feature_exists(v, "_test/edit_axes/lines") ||
 	ged_view_feature_exists(v, "_test/edit_axes/labels"))
@@ -356,34 +427,34 @@ main(int ac, char *av[]) {
     hud_style.visible = 1;
     hud_style.color_valid = 1;
     VSET(hud_style.color, 32, 192, 255);
-    if (!ged_annotation_hud_lines_replace(v, "_test/hud_lines",
+    if (!faceplate_hud_lines_replace(v, "_test/hud_lines",
 	    (const point_t *)hud_points, hud_cmds, 2, &hud_style) ||
 	!ged_view_feature_exists(v, "_test/hud_lines"))
 	bu_exit(EXIT_FAILURE, "retained HUD line publication failed\n");
-    if (!ged_annotation_hud_lines_replace(v, "_test/hud_lines",
+    if (!faceplate_hud_lines_replace(v, "_test/hud_lines",
 	    NULL, NULL, 0, NULL) ||
 	ged_view_feature_exists(v, "_test/hud_lines"))
 	bu_exit(EXIT_FAILURE, "retained HUD line removal failed\n");
 
-    struct ged_annotation_label hud_label =
-	GED_ANNOTATION_LABEL_INIT;
+    struct ged_view_feature_label hud_label =
+	{};
     hud_label.text = "retained HUD";
     VSET(hud_label.point, -0.5, 0.5, 0.0);
     hud_label.color_valid = 1;
     VSET(hud_label.color, 255, 196, 32);
     hud_label.font_size = 14.0;
-    if (!ged_annotation_hud_labels_replace(v, "_test/hud_labels",
+    if (!faceplate_hud_labels_replace(v, "_test/hud_labels",
 	    &hud_label, 1, &hud_style) ||
 	!ged_view_feature_exists(v, "_test/hud_labels"))
 	bu_exit(EXIT_FAILURE, "retained HUD label publication failed\n");
-    if (!ged_annotation_hud_labels_replace(v, "_test/hud_labels",
+    if (!faceplate_hud_labels_replace(v, "_test/hud_labels",
 	    NULL, 0, NULL) ||
 	ged_view_feature_exists(v, "_test/hud_labels"))
 	bu_exit(EXIT_FAILURE, "retained HUD label removal failed\n");
 
-    struct ged_annotation_line_layer hud_layers[2] = {
-	GED_ANNOTATION_LINE_LAYER_INIT,
-	GED_ANNOTATION_LINE_LAYER_INIT
+    struct ged_view_feature_line_layer hud_layers[2] = {
+	GED_VIEW_FEATURE_LINE_LAYER_INIT,
+	GED_VIEW_FEATURE_LINE_LAYER_INIT
     };
     hud_layers[0].name = "first";
     hud_layers[0].points = (const point_t *)hud_points;
@@ -393,11 +464,11 @@ main(int ac, char *av[]) {
     hud_layers[1] = hud_layers[0];
     hud_layers[1].name = "second";
     hud_layers[1].style.color[0] = 255;
-    if (!ged_annotation_hud_line_layers_replace(v,
+    if (!faceplate_hud_line_layers_replace(v,
 	    "_test/hud_line_layers", hud_layers, 2, &hud_style) ||
 	!ged_view_feature_exists(v, "_test/hud_line_layers"))
 	bu_exit(EXIT_FAILURE, "retained HUD line-layer publication failed\n");
-    if (!ged_annotation_hud_line_layers_replace(v,
+    if (!faceplate_hud_line_layers_replace(v,
 	    "_test/hud_line_layers", NULL, 0, NULL) ||
 	ged_view_feature_exists(v, "_test/hud_line_layers"))
 	bu_exit(EXIT_FAILURE, "retained HUD line-layer removal failed\n");

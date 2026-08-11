@@ -89,6 +89,10 @@ void set_current(int active) override;
 signals:
 void changed();
 void init_done();
+/* Test/diagnostic observation point emitted after a complete software canvas
+ * image has been painted.  Normal presentation has no connected receiver. */
+/** Exact image painted by this software endpoint. */
+void frame_presented(const QImage &image);
 
 public slots:
 void need_update()                override;

@@ -414,7 +414,9 @@ public:
     uint64_t getInteractivePresentationFrameDeadline(void) const;
     uint64_t getStablePresentationFrameDeadline(void) const;
     uint64_t getCurrentPresentationFrameDeadline(void) const;
-    void notePresentationRenderInterrupted(uint64_t elapsedNanoseconds);
+    void notePresentationRenderInterrupted(uint64_t elapsedNanoseconds,
+	SbBool cadDrawAttempted = TRUE,
+	SbBool cadPreparationChanged = FALSE);
     uint64_t getInterruptedPresentationFrameCount(void) const;
     uint64_t getLastInterruptedPresentationTimeNanoseconds(void) const;
     uint64_t getLastRenderTimeNanoseconds(void) const;
