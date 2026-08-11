@@ -21,15 +21,15 @@
 
 #include "bu/malloc.h"
 #include "ged/draw.h"
-#include "ged/view_feature_internal.h"
+#include "ged/view_edit.h"
 #include "qtcad/QgPluginContext.h"
 
 #include "qged_edit_preview_util.h"
 
-static ged_view_feature_ref
+static ged_view_edit_ref
 qged_edit_feature_ref_to_ged(struct qged_edit_feature_ref ref)
 {
-    ged_view_feature_ref ged_ref = {
+    ged_view_edit_ref ged_ref = {
 	ref.owner, ref.id, ref.generation
     };
     return ged_ref;
@@ -37,24 +37,25 @@ qged_edit_feature_ref_to_ged(struct qged_edit_feature_ref ref)
 
 
 static struct qged_edit_feature_ref
-qged_edit_feature_ref_from_ged(ged_view_feature_ref ref)
+qged_edit_feature_ref_from_ged(struct ged_view_context *view_ctx,
+	ged_view_edit_ref ref)
 {
     struct qged_edit_feature_ref qged_ref = {
-	ref.owner, ref.id, ref.generation
+	view_ctx, ref.owner, ref.id, ref.generation
     };
     return qged_ref;
 }
 
 
-static enum ged_view_feature_family
+static enum ged_view_edit_geometry_family
 qged_edit_feature_family_to_ged(enum qged_edit_feature_family family)
 {
     switch (family) {
 	case QGED_EDIT_FEATURE_TRANSIENT_PREVIEW:
-	    return GED_VIEW_FEATURE_TRANSIENT_PREVIEW;
+	    return GED_VIEW_EDIT_GEOMETRY_TRANSIENT_PREVIEW;
 	case QGED_EDIT_FEATURE_UNKNOWN:
 	default:
-	    return GED_VIEW_FEATURE_UNKNOWN;
+	    return GED_VIEW_EDIT_GEOMETRY_UNKNOWN;
     }
 }
 
@@ -98,7 +99,7 @@ qged_edit_ged_view_context(const QgPluginContext *ctx)
 int
 qged_edit_feature_ref_is_null(struct qged_edit_feature_ref ref)
 {
-    return ged_view_feature_ref_is_null(
+    return ged_view_edit_ref_is_null(
 	    qged_edit_feature_ref_to_ged(ref));
 }
 
@@ -116,7 +117,7 @@ qged_edit_preview_publish_event(const QgPluginContext *ctx,
     transaction.feature = qged_edit_feature_ref_to_ged(feature);
     transaction.feature_name = feature_name;
     transaction.source_path = source_path;
-    return ged_view_feature_edit_transaction_apply(
+    return ged_view_edit_transaction_apply(
 	qged_edit_ged_view_context(ctx), &transaction, NULL);
 }
 
@@ -127,9 +128,10 @@ qged_edit_feature_overlay_ensure(const QgPluginContext *ctx,
 				 const void *owner,
 				 const char *source_path)
 {
-    return qged_edit_feature_ref_from_ged(
-	    ged_view_feature_overlay_ensure(
-		qged_edit_ged_view_context(ctx),
+	struct ged_view_context *view_ctx = qged_edit_ged_view_context(ctx);
+    return qged_edit_feature_ref_from_ged(view_ctx,
+	    ged_view_edit_overlay_ensure(
+		view_ctx,
 		name, owner, source_path));
 }
 
@@ -139,8 +141,9 @@ qged_edit_feature_label_ensure(const QgPluginContext *ctx,
 			       const char *name,
 			       const void *owner)
 {
-    return qged_edit_feature_ref_from_ged(
-	    ged_view_feature_label_ensure(qged_edit_ged_view_context(ctx),
+	struct ged_view_context *view_ctx = qged_edit_ged_view_context(ctx);
+    return qged_edit_feature_ref_from_ged(view_ctx,
+	    ged_view_edit_label_ensure(view_ctx,
 		name, owner));
 }
 
@@ -156,22 +159,16 @@ qged_edit_feature_remove(const QgPluginContext *ctx, const char *name)
 int
 qged_edit_feature_remove_ref(struct qged_edit_feature_ref ref)
 {
-    return ged_view_feature_remove_ref(qged_edit_feature_ref_to_ged(ref));
-}
-
-
-void
-qged_edit_feature_set_view(struct qged_edit_feature_ref ref, const QgPluginContext *ctx)
-{
-    ged_view_feature_set_context(qged_edit_feature_ref_to_ged(ref),
-	    qged_edit_ged_view_context(ctx));
+    return ged_view_edit_remove_ref(ref.view_ctx,
+	qged_edit_feature_ref_to_ged(ref));
 }
 
 
 void
 qged_edit_feature_set_visible(struct qged_edit_feature_ref ref, int visible)
 {
-    ged_view_feature_set_visible(qged_edit_feature_ref_to_ged(ref),
+	ged_view_edit_visible_set(ref.view_ctx,
+	    qged_edit_feature_ref_to_ged(ref),
 	    visible);
 }
 
@@ -179,7 +176,8 @@ qged_edit_feature_set_visible(struct qged_edit_feature_ref ref, int visible)
 void
 qged_edit_feature_set_color(struct qged_edit_feature_ref ref, int r, int g, int b)
 {
-    ged_view_feature_set_color(qged_edit_feature_ref_to_ged(ref),
+	ged_view_edit_color_set(ref.view_ctx,
+	    qged_edit_feature_ref_to_ged(ref),
 	    r, g, b);
 }
 
@@ -187,7 +185,8 @@ qged_edit_feature_set_color(struct qged_edit_feature_ref ref, int r, int g, int 
 int
 qged_edit_feature_touch(struct qged_edit_feature_ref ref)
 {
-    return ged_view_feature_touch(qged_edit_feature_ref_to_ged(ref));
+    return ged_view_edit_touch(ref.view_ctx,
+	qged_edit_feature_ref_to_ged(ref));
 }
 
 
@@ -215,7 +214,8 @@ qged_edit_feature_labels_replace(struct qged_edit_feature_ref ref,
 	}
     }
 
-    int ret = ged_view_feature_labels_replace(
+    int ret = ged_view_edit_labels_replace(
+	    ref.view_ctx,
 	    qged_edit_feature_ref_to_ged(ref),
 	    labels, label_count > 0 ? (size_t)label_count : 0);
     if (labels)
@@ -230,7 +230,8 @@ qged_edit_preview_lines_replace(struct qged_edit_feature_ref ref,
 				const struct qged_edit_preview_lines *lines)
 {
     size_t count = lines ? lines->count : 0;
-    return ged_view_feature_points_replace(
+    return ged_view_edit_points_replace(
+	    ref.view_ctx,
 	    qged_edit_feature_ref_to_ged(ref),
 	    qged_edit_feature_family_to_ged(family),
 	    count ? (const point_t *)lines->points : NULL,
@@ -242,7 +243,8 @@ qged_edit_preview_lines_replace(struct qged_edit_feature_ref ref,
 int
 qged_edit_feature_clear_geometry(struct qged_edit_feature_ref ref)
 {
-    return ged_view_feature_clear_geometry(
+    return ged_view_edit_geometry_clear(
+	    ref.view_ctx,
 	    qged_edit_feature_ref_to_ged(ref));
 }
 

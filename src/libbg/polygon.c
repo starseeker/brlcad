@@ -33,39 +33,60 @@
 #include "bg/polygon.h"
 
 void
-bg_polygon_free(struct bg_polygon *gpp)
+bg_polygon_init(struct bg_polygon *polygon)
 {
-    if (gpp->num_contours == 0)
+    if (!polygon)
+	return;
+    polygon->num_contours = 0;
+    polygon->hole = NULL;
+    polygon->contour = NULL;
+}
+
+void
+bg_polygon_clear(struct bg_polygon *polygon)
+{
+    if (!polygon)
 	return;
 
-    for (size_t j = 0; j < gpp->num_contours; ++j) {
-	if (gpp->contour[j].num_points > 0) {
-	    bu_free((void *)gpp->contour[j].point, "contour points");
+    if (polygon->contour) {
+	for (size_t j = 0; j < polygon->num_contours; ++j) {
+	    if (polygon->contour[j].point)
+		bu_free((void *)polygon->contour[j].point, "contour points");
 	}
+	bu_free((void *)polygon->contour, "contour");
     }
-
-    bu_free((void *)gpp->contour, "contour");
-    bu_free((void *)gpp->hole, "hole");
-    gpp->num_contours = 0;
+    if (polygon->hole)
+	bu_free((void *)polygon->hole, "hole");
+    bg_polygon_init(polygon);
 }
 
 void
-bg_polygons_free(struct bg_polygons *gpp)
+bg_polygons_init(struct bg_polygons *polygons)
 {
-    if (gpp->num_polygons == 0)
+    if (!polygons)
+	return;
+    polygons->num_polygons = 0;
+    polygons->polygon = NULL;
+}
+
+void
+bg_polygons_clear(struct bg_polygons *polygons)
+{
+    if (!polygons)
 	return;
 
-    for (size_t i = 0; i < gpp->num_polygons; ++i) {
-	bg_polygon_free(&gpp->polygon[i]);
-    }
 
-    bu_free((void *)gpp->polygon, "data polygons");
-    gpp->polygon = (struct bg_polygon *)0;
-    gpp->num_polygons = 0;
+    if (polygons->polygon) {
+	for (size_t i = 0; i < polygons->num_polygons; ++i)
+	    bg_polygon_clear(&polygons->polygon[i]);
+	bu_free((void *)polygons->polygon, "polygons");
+    }
+    bg_polygons_init(polygons);
 }
 
 void
-bg_polygon_view_bbox(point2d_t *bmin, point2d_t *bmax, struct bg_polygon *p, matp_t model2view)
+bg_polygon_view_bbox(point2d_t *bmin, point2d_t *bmax,
+	const struct bg_polygon *p, const mat_t model2view)
 {
     if (!bmin || !bmax || !p)
 	return;
@@ -81,7 +102,7 @@ bg_polygon_view_bbox(point2d_t *bmin, point2d_t *bmax, struct bg_polygon *p, mat
     // considered for the bbox dimensions even if they are outside the positive
     // contours.  ONLY considering positive contour points.
     for (size_t i = 0; i < p->num_contours; i++) {
-	struct bg_poly_contour *c = &p->contour[i];
+	const struct bg_poly_contour *c = &p->contour[i];
 	if (!c->num_points)
 	    continue;
 	for (size_t j = 0; j < c->num_points; j++) {
@@ -314,33 +335,254 @@ bg_polygon_direction(size_t npts, const point2d_t *pts, const int *pt_indices)
 }
 
 
-void
-bg_polygon_cpy(struct bg_polygon *dest, struct bg_polygon *src)
+int
+bg_polygon_copy(struct bg_polygon *destination,
+	const struct bg_polygon *source)
 {
-    if (!dest || !src)
-	return;
+    if (!destination || !source)
+	return 1;
+    if (destination == source)
+	return 0;
 
-    dest->num_contours = src->num_contours;
-    dest->hole = NULL;
-    dest->contour = NULL;
-    if (!src->num_contours)
-	return;
+    struct bg_polygon copy = BG_POLYGON_INIT_ZERO;
+    if (source->num_contours && !source->contour)
+	return 1;
 
-    dest->hole = (int *)bu_calloc(src->num_contours, sizeof(int), "hole");
-    dest->contour = (struct bg_poly_contour *)bu_calloc(src->num_contours, sizeof(struct bg_poly_contour), "contour");
-    for (size_t i = 0; i < src->num_contours; i++) {
-	dest->hole[i] = src->hole[i];
+    copy.num_contours = source->num_contours;
+    if (!source->num_contours) {
+	bg_polygon_clear(destination);
+	return 0;
     }
-    for (size_t i = 0; i < src->num_contours; i++) {
-	dest->contour[i].num_points = src->contour[i].num_points;
-	dest->contour[i].open = src->contour[i].open;
-	if (!src->contour[i].num_points)
+
+    copy.hole = (int *)bu_calloc(source->num_contours, sizeof(int), "hole");
+    copy.contour = (struct bg_poly_contour *)bu_calloc(source->num_contours,
+	    sizeof(struct bg_poly_contour), "contour");
+    for (size_t i = 0; i < source->num_contours; i++)
+	copy.hole[i] = source->hole ? source->hole[i] : 0;
+    for (size_t i = 0; i < source->num_contours; i++) {
+	if (source->contour[i].num_points && !source->contour[i].point) {
+	    bg_polygon_clear(&copy);
+	    return 1;
+	}
+	copy.contour[i].num_points = source->contour[i].num_points;
+	copy.contour[i].open = source->contour[i].open;
+	if (!source->contour[i].num_points)
 	    continue;
-	dest->contour[i].point = (point_t *)bu_calloc(src->contour[i].num_points, sizeof(point_t), "point");
-	for (size_t j = 0; j < src->contour[i].num_points; j++) {
-	    VMOVE(dest->contour[i].point[j], src->contour[i].point[j]);
+	copy.contour[i].point = (point_t *)bu_calloc(
+		source->contour[i].num_points, sizeof(point_t), "point");
+	for (size_t j = 0; j < source->contour[i].num_points; j++) {
+	    VMOVE(copy.contour[i].point[j], source->contour[i].point[j]);
 	}
     }
+
+    bg_polygon_clear(destination);
+    *destination = copy;
+    return 0;
+}
+
+int
+bg_polygon_move(struct bg_polygon *destination, struct bg_polygon *source)
+{
+    if (!destination || !source)
+	return 1;
+    if (destination == source)
+	return 0;
+    bg_polygon_clear(destination);
+    *destination = *source;
+    bg_polygon_init(source);
+    return 0;
+}
+
+size_t
+bg_polygon_point_count(const struct bg_polygon *polygon)
+{
+    size_t count = 0;
+    if (!polygon || !polygon->contour)
+	return 0;
+    for (size_t i = 0; i < polygon->num_contours; i++)
+	count += polygon->contour[i].num_points;
+    return count;
+}
+
+int
+bg_polygon_append_point(struct bg_polygon *polygon, size_t contour,
+	const point_t point)
+{
+    if (!polygon || !point || contour >= polygon->num_contours ||
+	    !polygon->contour)
+	return 1;
+
+    struct bg_poly_contour *c = &polygon->contour[contour];
+    const size_t count = c->num_points;
+    c->point = (point_t *)bu_realloc(c->point,
+	    (count + 1) * sizeof(point_t), "polygon contour points");
+    VMOVE(c->point[count], point);
+    c->num_points++;
+    return 0;
+}
+
+int
+bg_polygon_translate(struct bg_polygon *polygon, const vect_t delta)
+{
+    if (!polygon || !delta || (polygon->num_contours && !polygon->contour))
+	return 1;
+    for (size_t i = 0; i < polygon->num_contours; i++) {
+	struct bg_poly_contour *c = &polygon->contour[i];
+	if (c->num_points && !c->point)
+	    return 1;
+	for (size_t j = 0; j < c->num_points; j++)
+	    VADD2(c->point[j], c->point[j], delta);
+    }
+    return 0;
+}
+
+int
+bg_polygon_contour_open_set(struct bg_polygon *polygon, size_t contour,
+	int open)
+{
+    if (!polygon || !polygon->contour || contour >= polygon->num_contours)
+	return 1;
+    polygon->contour[contour].open = open ? 1 : 0;
+    return 0;
+}
+
+int
+bg_polygon_contours_open_set(struct bg_polygon *polygon, int open)
+{
+    if (!polygon || (polygon->num_contours && !polygon->contour))
+	return 1;
+    for (size_t i = 0; i < polygon->num_contours; i++)
+	polygon->contour[i].open = open ? 1 : 0;
+    return 0;
+}
+
+int
+bg_polygon_closest_point(const struct bg_polygon *polygon,
+	const point_t point, size_t *contour, size_t *point_index,
+	fastf_t *distance_sq)
+{
+    if (!polygon || !point || !polygon->contour)
+	return 1;
+
+    fastf_t best = INFINITY;
+    size_t best_contour = 0;
+    size_t best_point = 0;
+    int found = 0;
+    for (size_t i = 0; i < polygon->num_contours; i++) {
+	const struct bg_poly_contour *c = &polygon->contour[i];
+	if (c->num_points && !c->point)
+	    return 1;
+	for (size_t j = 0; j < c->num_points; j++) {
+	    const fastf_t d = DIST_PNT_PNT_SQ(c->point[j], point);
+	    if (!found || d < best) {
+		best = d;
+		best_contour = i;
+		best_point = j;
+		found = 1;
+	    }
+	}
+    }
+    if (!found)
+	return 1;
+    if (contour)
+	*contour = best_contour;
+    if (point_index)
+	*point_index = best_point;
+    if (distance_sq)
+	*distance_sq = best;
+    return 0;
+}
+
+static int
+bg_polygon_prepare_single_contour(struct bg_polygon *polygon, size_t count)
+{
+    if (!polygon || !count)
+	return 1;
+    struct bg_polygon replacement = BG_POLYGON_INIT_ZERO;
+    replacement.num_contours = 1;
+    replacement.hole = (int *)bu_calloc(1, sizeof(int), "polygon hole");
+    replacement.contour = (struct bg_poly_contour *)bu_calloc(1,
+	    sizeof(struct bg_poly_contour), "polygon contour");
+    replacement.contour[0].num_points = count;
+    replacement.contour[0].point = (point_t *)bu_calloc(count,
+	    sizeof(point_t), "polygon points");
+    bg_polygon_clear(polygon);
+    *polygon = replacement;
+    return 0;
+}
+
+int
+bg_polygon_make_rectangle(struct bg_polygon *polygon, const plane_t plane,
+	const point_t first_corner, const point_t opposite_corner, int square)
+{
+    if (!polygon || !plane || !first_corner || !opposite_corner)
+	return 1;
+
+    plane_t local_plane;
+    HMOVE(local_plane, plane);
+    fastf_t x1 = 0.0, y1 = 0.0, x2 = 0.0, y2 = 0.0;
+    if (bg_plane_closest_pt(&x1, &y1, &local_plane,
+	    (point_t *)first_corner) ||
+	    bg_plane_closest_pt(&x2, &y2, &local_plane,
+	    (point_t *)opposite_corner))
+	return 1;
+    if (square) {
+	const fastf_t dx = x2 - x1;
+	const fastf_t dy = y2 - y1;
+	const fastf_t side = fmax(fabs(dx), fabs(dy));
+	x2 = dx < 0.0 ? x1 - side : x1 + side;
+	y2 = dy < 0.0 ? y1 - side : y1 + side;
+    }
+
+    struct bg_polygon replacement = BG_POLYGON_INIT_ZERO;
+    if (bg_polygon_prepare_single_contour(&replacement, 4))
+	return 1;
+    replacement.contour[0].open = 0;
+    (void)bg_plane_pt_at(&replacement.contour[0].point[0], &local_plane,
+	    x1, y1);
+    (void)bg_plane_pt_at(&replacement.contour[0].point[1], &local_plane,
+	    x1, y2);
+    (void)bg_plane_pt_at(&replacement.contour[0].point[2], &local_plane,
+	    x2, y2);
+    (void)bg_plane_pt_at(&replacement.contour[0].point[3], &local_plane,
+	    x2, y1);
+    return bg_polygon_move(polygon, &replacement);
+}
+
+int
+bg_polygon_make_ellipse(struct bg_polygon *polygon, const plane_t plane,
+	const point_t center, const point_t radius_point, int circle,
+	size_t segment_count)
+{
+    if (!polygon || !plane || !center || !radius_point || segment_count < 3)
+	return 1;
+
+    plane_t local_plane;
+    HMOVE(local_plane, plane);
+    fastf_t cx = 0.0, cy = 0.0, px = 0.0, py = 0.0;
+    if (bg_plane_closest_pt(&cx, &cy, &local_plane, (point_t *)center) ||
+	    bg_plane_closest_pt(&px, &py, &local_plane,
+	    (point_t *)radius_point))
+	return 1;
+    fastf_t rx = px - cx;
+    fastf_t ry = py - cy;
+    if (circle) {
+	const fastf_t r = sqrt(rx * rx + ry * ry);
+	rx = r;
+	ry = r;
+    }
+
+    struct bg_polygon replacement = BG_POLYGON_INIT_ZERO;
+    if (bg_polygon_prepare_single_contour(&replacement, segment_count))
+	return 1;
+    replacement.contour[0].open = 0;
+    const double two_pi = 6.283185307179586476925286766559;
+    for (size_t i = 0; i < segment_count; i++) {
+	const double angle = two_pi * (double)i / (double)segment_count;
+	(void)bg_plane_pt_at(&replacement.contour[0].point[i], &local_plane,
+		cx + cos(angle) * rx, cy + sin(angle) * ry);
+    }
+    return bg_polygon_move(polygon, &replacement);
 }
 
 void

@@ -135,7 +135,7 @@ test_non_origin_plane_roundtrip(void)
     compare_rt_polygon_data(&p, rtobj, "non-origin plane polygon roundtrip");
 
     rt_sketch_polygon_destroy(rtobj);
-    bg_polygon_free(&p.polygon);
+    bg_polygon_clear(&p.polygon);
     db_close(wfp->dbip);
     bu_file_delete(ofile);
 }
@@ -172,7 +172,7 @@ write_test_poly_database(const char *ofile)
     if (odp == RT_DIR_NULL)
 	bu_exit(EXIT_FAILURE, "Failed to write polygon to input database %s\n", ofile);
 
-    bg_polygon_free(&p.polygon);
+    bg_polygon_clear(&p.polygon);
     db_close(wfp->dbip);
 }
 

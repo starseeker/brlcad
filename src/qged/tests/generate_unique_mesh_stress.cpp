@@ -1,6 +1,9 @@
 /*                 G E N E R A T E _ U N I Q U E _ M E S H _ S T R E S S . C P P
  * BRL-CAD
  *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ *
  * Generate a vehicle-like workload with many genuinely distinct, moderately
  * detailed BoT leaves.  This complements repeated-instance Lucy stress:
  * every leaf has different vertex content and therefore exercises distinct
@@ -18,6 +21,7 @@
 #include <vector>
 
 #include "bn/mat.h"
+#include "bu/app.h"
 #include "raytrace.h"
 #include "wdb.h"
 
@@ -363,6 +367,7 @@ finish_hierarchy_level(struct rt_wdb *wdbp,
 int
 main(int argc, char **argv)
 {
+    bu_setprogname(argv[0]);
     if (argc < 2 || argc > 4) {
 	std::fprintf(stderr,
 	    "Usage: %s output.g [mesh-count=5000] [max-grid-cells=224]\n",

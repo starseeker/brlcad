@@ -101,6 +101,12 @@ puts "glob_compat_mode \$glob_compat_mode "
 
 in half.s half 0 0 1 -1
 r half.r u half.s
+# A halfspace is unbounded, so its display proxy is not a camera contract.
+# Specify the historical projection camera explicitly rather than depending
+# on whichever finite proxy a drawing backend uses for automatic framing.
+press top
+center 0 0 249
+size 4000
 prj_add shaders.half.prj "$EAGLECAD" 512 438
 mater half.r "stack prj shaders.half.prj;plastic di=.8 sp=.3" 76 158 113 0
 

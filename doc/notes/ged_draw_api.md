@@ -10,19 +10,27 @@ libged implementation details.
 | Header | Vocabulary | Responsibility |
 | --- | --- | --- |
 | `ged/view.h` | `ged_view_*` | Opaque view and view-set lifecycle, host policy, and display endpoint |
-| `ged/scene.h` | `ged_scene_*`, retained `ged_draw_*` records | Semantic draw transactions, groups, shapes, and scene queries |
-| `ged/draw_source.h` | `ged_draw_source_*` | Renderer-neutral source snapshots and source-state queries |
-| `ged/view_feature.h` | `ged_view_feature_*`, `ged_annotation_*` | Managed per-view features and annotations |
-| `ged/polygon.h` | `ged_polygon_*` | Managed view polygons and sketch conversion |
+| `ged/scene.h` | `ged_scene_*` | Semantic draw intent, scene queries, occurrences, deltas, and edit scopes |
+| `ged/view_feature.h` | `ged_view_feature_*` | Read-only queries for managed per-view presentation features |
+| `ged/view_feature_batch.h` | `ged_view_feature_batch_*` | Atomic typed feature publication by in-tree producers |
+| `ged/view_polygon.h` | `ged_view_polygon_*` | View-owned polygon editing, presentation, and sketch conversion |
+| `ged/view_edit.h` | `ged_view_edit_*` | Retained edit-preview publication and lifecycle |
+| `ged/view_export.h` | `ged_view_database_export_*` | Renderer-neutral database presentation export |
 | `ged/selection.h` | `ged_selection_*`, `ged_pick_*` | Per-view selection and immutable pick results |
-| `ged/result.h` | `ged_result_*` | Atomic command-result scene publication |
-| `ged/draw.h` | none | Convenience umbrella for the six draw-domain headers |
+| `ged/draw.h` | none | Convenience umbrella for the drawing-domain headers |
 
 Names do not repeat `draw_view_context`: the opaque first argument already
 identifies a GED view.  Renderer names do not appear in renderer-neutral
-headers.  Database traversal, publication, LoD realization, framebuffer, and
-direct controller operations are private services and are not stable libged
-API.
+headers.  Realized shape/group/source records, database traversal, LoD
+realization, framebuffer internals, and direct controller operations are
+private services and are not stable libged API.
+
+The view-polygon domain owns retained interaction state, not polygon
+algorithms.  `bg/polygon.h` and `bg/polygon_types.h` are the canonical lower
+level representation and topology API for area, boolean operations, overlap,
+and triangulation.  A generally useful polygon algorithm belongs in libbg;
+libged should only adapt it to a view, a database sketch, or a presentation
+feature.
 
 ## Ownership and lifetime
 
@@ -34,23 +42,23 @@ implementation.  Its display endpoint is the only public renderer attachment
 boundary and follows the ownership rules in
 `obol_endpoint_lifecycle.md`.
 
-Scene, feature, and polygon references are copyable values.  They do not retain
-their owner.  Record pointers and strings returned in callbacks are borrowed
-and valid only for the callback, or until the documented scene revision
-changes.  Functions returning an allocated result or array identify the
-matching free operation in their declaration.  A command-result scene owns its
-staged records until commit or abort; either operation consumes that staging
-object.
+Scene occurrence, edit, feature, and polygon references are copyable values.
+They do not retain their owner.  Occurrence references remain valid across
+unrelated scene commits and become stale when that occurrence is retired;
+retired identifiers are not reused.  Record pointers and strings returned in
+callbacks are borrowed and valid only for the callback, or until the next
+documented owner mutation.  Feature batches own deep-copied staged geometry
+until commit or abort; either operation consumes the batch.
 
 ## Threading
 
-View lifecycle, endpoint, feature, annotation, polygon, selection, pick, and
-result-scene calls run on the view owner's thread.  Value-reference resolution
-asserts this rule in assertion builds and rejects cross-thread use otherwise.
-GED scene transactions and observer registration are likewise serialized by
-the GED owner.  Worker services may compute source geometry, but publication
-back to a view is marshalled to the owner thread.  No installed call grants
-concurrent mutation merely because its handle is opaque.
+View lifecycle, endpoint, feature, polygon, edit-preview, selection, and pick
+calls run on the view owner's thread.  Value-reference resolution asserts this
+rule in assertion builds and rejects cross-thread use otherwise.  GED scene
+transactions and observer registration are likewise serialized by the GED
+owner.  Worker services may compute source geometry, but publication back to a
+view is marshalled to the owner thread.  No installed call grants concurrent
+mutation merely because its handle is opaque.
 
 ## Return and error conventions
 
@@ -79,5 +87,7 @@ callbacks run only after the resulting state and revision are stable.
 The `ged_draw_api_check` build target extracts exported declarations from the
 installed domain headers and fails if a symbol is added or removed without an
 intentional manifest update.  Private Obol and librt adapters must never appear
-in that manifest.
-
+in that manifest.  The current reviewed manifest contains 233 symbols.
+Dynamic-symbol checks also reject the former realized
+shape/group/source/scene-record families even though their definitions still
+exist as private implementation seams.

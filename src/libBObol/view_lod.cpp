@@ -489,15 +489,18 @@ BObolViewLodState::BObolViewLodState(void) :
     cadPresentationProgressiveLodCeiling(-1),
     cadPresentationPointProxyPixelThreshold(1.0f),
     cadPresentationCameraMotionFrameReuse(FALSE),
+    cadPresentationFrameObservationArmed(FALSE),
     cadPresentationFrameStatusValid(FALSE),
-    cadLastPresentedTriangleCountValid(FALSE),
-    cadLastPresentedTriangleCount(0),
+    cadLastPresentedPrimitiveCountValid(FALSE),
+    cadLastPresentedPrimitiveCount(0),
     cadLastPresentedRenderCostValid(FALSE),
     cadLastPresentedRenderCost(0),
+    cadLastPresentationFrameExact(FALSE),
     cadLastGpuMeasurementValid(FALSE),
     cadLastGpuFaces(0),
     cadLastGpuNanoseconds(0),
     cadLastGpuSerial(0),
+    cadLastGpuPointProxyPixelThreshold(1.0f),
     cadLastPreparedReplay(FALSE),
     cadGpuResourceStatusValid(FALSE),
     cadValidPayloadCount(0),
@@ -507,6 +510,7 @@ BObolViewLodState::BObolViewLodState(void) :
     cadMemoryLimitedMeshPayloadCount(0),
     cadActiveFaceCount(0),
     cadActiveRenderCost(0),
+    cadMinimumActiveRenderCost(0),
     cadDisplayMeshBytes(0),
     cadResidentDemandRevision(1)
 {
@@ -537,7 +541,58 @@ view_lod_cad_payload_is_satisfied(
     return view_lod_cad_payload_is_mesh(payload) &&
 	(payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
 	 payload->requestedLevel < 0 ||
-	 payload->activeLevel >= payload->requestedLevel);
+	payload->activeLevel >= payload->requestedLevel);
+}
+
+static size_t
+view_lod_minimum_cad_payload_render_cost(
+    const BObolViewLodState::CadPayload *payload)
+{
+    if (!payload)
+	return 0;
+
+    BObolLodCounts counts = payload->counts;
+    if (payload->progressiveMesh && payload->progressiveMesh->isValid()) {
+	const int minimumLevel = payload->progressiveMesh->minimumLevel();
+	if (minimumLevel >= 0 &&
+	    payload->progressiveMesh->canDrawLevel(minimumLevel)) {
+	    counts.faceCount = payload->progressiveMesh->faceCount(
+		minimumLevel);
+	    counts.pointCount = payload->progressiveMesh->pointCount(
+		minimumLevel);
+	}
+    }
+    return bobol_lod_render_cost_units(counts, payload->drawMode, 1);
+}
+
+/*
+ * Residency and presentation answer different questions.  activeLevel is
+ * the cut selected by the aggregate frame budget; requestedLevel is the cut
+ * justified by the current view.  Preserve the latter only as far as this
+ * immutable generation is already resident.  This makes performance-only
+ * coarsening a draw-count change, while zoom-out and memory-pressure recovery
+ * can still reclaim suffixes without promising data which has not loaded.
+ */
+static int
+view_lod_resident_demand_level(int activeLevel, int requestedLevel,
+	int residentLevel)
+{
+    if (activeLevel < 0)
+	return -1;
+    if (requestedLevel < 0 || residentLevel < 0)
+	return activeLevel;
+    return std::max(activeLevel, std::min(requestedLevel, residentLevel));
+}
+
+static int
+view_lod_cad_resident_demand_level(
+    const BObolViewLodState::CadPayload *payload)
+{
+    return payload ? view_lod_resident_demand_level(payload->activeLevel,
+	payload->requestedLevel,
+	payload->progressiveMesh ?
+	    payload->progressiveMesh->residentLevel() :
+	    payload->residentLevel) : -1;
 }
 
 void
@@ -553,6 +608,7 @@ BObolViewLodState::clearCadPayloadMetrics(void)
     this->cadMemoryLimitedMeshPayloadCount = 0;
     this->cadActiveFaceCount = 0;
     this->cadActiveRenderCost = 0;
+    this->cadMinimumActiveRenderCost = 0;
     this->cadDisplayMeshBytes = 0;
     memset(this->cadProxyKindCounts, 0,
 	sizeof(this->cadProxyKindCounts));
@@ -568,10 +624,11 @@ BObolViewLodState::clearCadPayloadMetrics(void)
 void
 BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
 {
+    const int demandLevel = view_lod_cad_resident_demand_level(payload);
     if (!payload || !payload->progressiveMesh ||
 	!payload->progressiveMesh->isValid() ||
 	payload->cacheKey.getLength() == 0 ||
-	payload->activeLevel < 0 || payload->activeLevel > 15)
+	demandLevel < 0 || demandLevel > 15)
 	return;
     this->cadResidentDemandRevision++;
     if (!this->cadResidentDemandRevision)
@@ -587,13 +644,13 @@ BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
 	state.demandIndex = this->cadResidentDemands.size();
 	BObolLodResidentDemand demand;
 	demand.assetKey = payload->cacheKey;
-	demand.level = payload->activeLevel;
+	demand.level = demandLevel;
 	demand.channelMask = channelMask;
 	this->cadResidentDemands.push_back(demand);
     }
-    state.levelCounts[payload->activeLevel]++;
-    if (payload->activeLevel > state.maximumLevel) {
-	state.maximumLevel = payload->activeLevel;
+    state.levelCounts[demandLevel]++;
+    if (demandLevel > state.maximumLevel) {
+	state.maximumLevel = demandLevel;
 	this->cadResidentDemands[state.demandIndex].level =
 	    state.maximumLevel;
     }
@@ -606,8 +663,9 @@ BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
 void
 BObolViewLodState::removeCadResidentDemand(const CadPayload *payload)
 {
+    const int demandLevel = view_lod_cad_resident_demand_level(payload);
     if (!payload || payload->cacheKey.getLength() == 0 ||
-	payload->activeLevel < 0 || payload->activeLevel > 15)
+	demandLevel < 0 || demandLevel > 15)
 	return;
     this->cadResidentDemandRevision++;
     if (!this->cadResidentDemandRevision)
@@ -619,8 +677,8 @@ BObolViewLodState::removeCadResidentDemand(const CadPayload *payload)
     CadResidentDemandState &state = found->second;
     const unsigned int channelMask =
 	view_lod_cad_payload_channel_mask(payload) & 3u;
-    if (state.levelCounts[payload->activeLevel])
-	state.levelCounts[payload->activeLevel]--;
+    if (state.levelCounts[demandLevel])
+	state.levelCounts[demandLevel]--;
     if (state.channelCounts[channelMask])
 	state.channelCounts[channelMask]--;
     state.channelMask = 0;
@@ -628,10 +686,10 @@ BObolViewLodState::removeCadResidentDemand(const CadPayload *payload)
 	if (state.channelCounts[mask])
 	    state.channelMask |= mask;
     }
-    if (payload->activeLevel == state.maximumLevel &&
-	!state.levelCounts[payload->activeLevel]) {
+    if (demandLevel == state.maximumLevel &&
+	!state.levelCounts[demandLevel]) {
 	state.maximumLevel = -1;
-	for (int level = payload->activeLevel - 1; level >= 0; --level) {
+	for (int level = demandLevel - 1; level >= 0; --level) {
 	    if (!state.levelCounts[level])
 		continue;
 	    state.maximumLevel = level;
@@ -695,6 +753,9 @@ BObolViewLodState::addCadPayloadMetrics(const CadPayload *payload)
 	    this->cadActiveRenderCost,
 	    bobol_lod_render_cost_units(
 		payload->counts, payload->drawMode, 1));
+	this->cadMinimumActiveRenderCost = view_lod_saturating_add(
+	    this->cadMinimumActiveRenderCost,
+	    view_lod_minimum_cad_payload_render_cost(payload));
 	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
 	    payload->requestedLevel < 0 ||
 	    payload->activeLevel >= payload->requestedLevel)
@@ -779,6 +840,9 @@ BObolViewLodState::removeCadPayloadMetrics(const CadPayload *payload)
 	    this->cadActiveRenderCost,
 	    bobol_lod_render_cost_units(
 		payload->counts, payload->drawMode, 1));
+	this->cadMinimumActiveRenderCost = view_lod_saturating_subtract(
+	    this->cadMinimumActiveRenderCost,
+	    view_lod_minimum_cad_payload_render_cost(payload));
 	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
 	    payload->requestedLevel < 0 ||
 	    payload->activeLevel >= payload->requestedLevel)
@@ -1733,7 +1797,11 @@ BObolViewLodState::retargetCadPayload(
 		    occurrenceKey);
 	    }
 	}
+	/* requestedLevel contributes to the retained view demand even when the
+	 * presented cut is unchanged.  Update that O(1) aggregate in place. */
+	this->removeCadResidentDemand(payload.get());
 	payload->requestedLevel = requestedLevel;
+	this->addCadResidentDemand(payload.get());
 	if (payload->memoryLimited)
 	    this->cadMemoryLimitedMeshPayloadCount =
 		view_lod_saturating_subtract(
@@ -2052,13 +2120,44 @@ BObolViewLodState::activeRenderCost(void) const
     return view_lod_saturating_add(cost, this->cadActiveRenderCost);
 }
 
+size_t
+BObolViewLodState::minimumActiveRenderCost(void) const
+{
+    size_t cost = 0;
+    const std::vector<MeshPayloadPtr> meshPayloads =
+	view_lod_unique_payloads(this->meshBindings);
+    for (const MeshPayloadPtr &payload : meshPayloads) {
+	if (!payload || !payload->isValid() ||
+	    payload->resultKind != BOBOL_LOD_RESULT_MESH)
+	    continue;
+	BObolLodCounts counts = payload->counts;
+	if (payload->progressiveMesh &&
+	    payload->progressiveMesh->isValid()) {
+	    const int minimumLevel =
+		payload->progressiveMesh->minimumLevel();
+	    if (minimumLevel >= 0 &&
+		payload->progressiveMesh->canDrawLevel(minimumLevel)) {
+		counts.faceCount = payload->progressiveMesh->faceCount(
+		    minimumLevel);
+		counts.pointCount = payload->progressiveMesh->pointCount(
+		    minimumLevel);
+	    }
+	}
+	cost = view_lod_saturating_add(cost,
+	    bobol_lod_render_cost_units(
+		counts, BOBOL_LOD_DRAW_SHADED, 1));
+    }
+    return view_lod_saturating_add(
+	cost, this->cadMinimumActiveRenderCost);
+}
+
 SbBool
-BObolViewLodState::lastCadPresentedTriangleCount(size_t &faces) const
+BObolViewLodState::lastCadPresentedPrimitiveCount(size_t &primitives) const
 {
     if (!this->cadPresentationFrameStatusValid)
 	this->refreshCadPresentationFrameStatus();
-    faces = this->cadLastPresentedTriangleCount;
-    return this->cadLastPresentedTriangleCountValid;
+    primitives = this->cadLastPresentedPrimitiveCount;
+    return this->cadLastPresentedPrimitiveCountValid;
 }
 
 SbBool
@@ -2071,34 +2170,117 @@ BObolViewLodState::lastCadPresentedRenderCost(size_t &cost) const
 }
 
 SbBool
+BObolViewLodState::lastCadPresentationFrameExact(void) const
+{
+    if (!this->cadPresentationFrameStatusValid)
+	this->refreshCadPresentationFrameStatus();
+    return this->cadLastPresentationFrameExact;
+}
+
+SbBool
 BObolViewLodState::lastCadGpuMeasurement(
-	size_t &faces, uint64_t &nanoseconds, uint64_t &serial) const
+	size_t &faces, uint64_t &nanoseconds, uint64_t &serial,
+	float &pointProxyPixelThreshold) const
 {
     if (!this->cadPresentationFrameStatusValid)
 	this->refreshCadPresentationFrameStatus();
     faces = this->cadLastGpuFaces;
     nanoseconds = this->cadLastGpuNanoseconds;
     serial = this->cadLastGpuSerial;
+    pointProxyPixelThreshold = this->cadLastGpuPointProxyPixelThreshold;
     return this->cadLastGpuMeasurementValid;
+}
+
+SbBool
+BObolViewLodState::hasCadPresentationAssemblies(void) const
+{
+    for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
+	if (entry.first && entry.second)
+	    return TRUE;
+    }
+    return FALSE;
+}
+
+uint64_t
+BObolViewLodState::cadPresentationExecutionSerial(void) const
+{
+    uint64_t serial = 0;
+    for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
+	const SoCADAssembly *assembly = entry.first;
+	if (!assembly || !entry.second)
+	    continue;
+	const uint64_t value = assembly->renderExecutionSerial();
+	serial = value > UINT64_MAX - serial ? UINT64_MAX : serial + value;
+    }
+    return serial;
+}
+
+uint64_t
+BObolViewLodState::cadPresentationPreparationSerial(void) const
+{
+    uint64_t serial = 0;
+    for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
+	const SoCADAssembly *assembly = entry.first;
+	if (!assembly || !entry.second)
+	    continue;
+	const uint64_t value = assembly->renderPreparationSerial();
+	serial = value > UINT64_MAX - serial ? UINT64_MAX : serial + value;
+    }
+    return serial;
+}
+
+void
+BObolViewLodState::beginCadPresentationFrame(void) const
+{
+    this->cadPresentationFrameStartExecutionSerials.clear();
+    this->cadPresentationFrameStartExecutionSerials.reserve(
+	this->cadPresentationAssemblyUseCounts.size());
+    for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
+	const SoCADAssembly *assembly = entry.first;
+	if (!assembly || !entry.second || !assembly->instanceCount())
+	    continue;
+	this->cadPresentationFrameStartExecutionSerials.emplace(
+	    assembly, assembly->renderExecutionSerial());
+    }
+    this->cadPresentationFrameObservationArmed = TRUE;
+    this->cadPresentationFrameStatusValid = FALSE;
 }
 
 void
 BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 {
-    this->cadLastPresentedTriangleCount = 0;
+    this->cadLastPresentedPrimitiveCount = 0;
     this->cadLastPresentedRenderCost = 0;
     this->cadLastGpuFaces = 0;
     this->cadLastGpuNanoseconds = 0;
     this->cadLastGpuSerial = 1469598103934665603ULL;
+    this->cadLastGpuPointProxyPixelThreshold = 1.0f;
+    this->cadLastPresentationFrameExact = TRUE;
     this->cadGpuResourceStatusValue = CadGpuResourceStatus();
 
     SbBool haveAssembly = FALSE;
     SbBool presentedValid = TRUE;
     SbBool presentedRenderCostValid = TRUE;
     SbBool gpuMeasurementValid = TRUE;
+    SbBool haveGpuPointProxyPixelThreshold = FALSE;
     SbBool preparedReplay = TRUE;
     SbBool resourceSampled = FALSE;
     uint64_t resourceSerial = 1469598103934665603ULL;
+
+    /* lastRenderedWork() belongs to an assembly, not to the host traversal.
+     * If Coin stops between assemblies, an unvisited assembly still reports
+     * the preceding frame's exact record.  Require every non-empty assembly
+     * present at frame start to have entered its renderer during this frame. */
+    if (this->cadPresentationFrameObservationArmed) {
+	for (const auto &entry :
+		this->cadPresentationFrameStartExecutionSerials) {
+	    if (!entry.first ||
+		entry.first->renderExecutionSerial() == entry.second) {
+		this->cadLastPresentationFrameExact = FALSE;
+		break;
+	    }
+	}
+    }
 
     for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
 	const SoCADAssembly *assembly = entry.first;
@@ -2106,40 +2288,50 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	    continue;
 	haveAssembly = TRUE;
 	const int tier = assembly->lastRenderTier();
-	/* Every Obol renderer tier publishes its exact shaded-triangle
-	 * submission count.  Direct fixed/VBO/immediate and instanced paths do
-	 * this at the draw site, while flattened and indirect paths retain their
-	 * already aggregated count. */
-	const uint64_t presented = assembly->lastRenderedTriangleCount();
-	if (tier < 0 || tier > 6 || !presented) {
+	const Obol::CadRenderedWork work = assembly->lastRenderedWork();
+	if (!work.exact)
+	    this->cadLastPresentationFrameExact = FALSE;
+	const uint64_t presented = work.triangleCount >
+	    UINT64_MAX - work.lineCount ? UINT64_MAX :
+	    work.triangleCount + work.lineCount;
+	if (tier < 0 || tier > 6 || !work.exact || !presented) {
 	    presentedValid = FALSE;
 	} else {
-	    this->cadLastPresentedTriangleCount =
+	    this->cadLastPresentedPrimitiveCount =
 		presented > static_cast<uint64_t>(
-		    SIZE_MAX - this->cadLastPresentedTriangleCount) ?
-		SIZE_MAX : this->cadLastPresentedTriangleCount +
+		    SIZE_MAX - this->cadLastPresentedPrimitiveCount) ?
+		SIZE_MAX : this->cadLastPresentedPrimitiveCount +
 		    static_cast<size_t>(presented);
 	}
 
-	const Obol::CadRenderedShadedWork work =
-	    assembly->lastRenderedShadedWork();
 	const int presentationDrawMode = assembly->drawMode.getValue();
-	if (!work.exact || !work.triangleCount ||
-	    (presentationDrawMode != SoCADAssembly::SHADED &&
-	     presentationDrawMode != SoCADAssembly::SHADED_WITH_EDGES)) {
+	BObolLodCounts counts;
+	int costDrawMode = BOBOL_LOD_DRAW_SHADED;
+	if (presentationDrawMode == SoCADAssembly::WIREFRAME) {
+	    counts.lineCount = work.lineCount;
+	    costDrawMode = BOBOL_LOD_DRAW_WIRE;
+	} else if (presentationDrawMode == SoCADAssembly::SHADED) {
+	    counts.faceCount = work.triangleCount;
+	} else if (presentationDrawMode == SoCADAssembly::SHADED_WITH_EDGES ||
+		presentationDrawMode == SoCADAssembly::HIDDEN_LINE) {
+	    counts.faceCount = work.triangleCount;
+	    counts.lineCount = work.lineCount;
+	    costDrawMode = BOBOL_LOD_DRAW_HIDDEN_LINE;
+	} else {
+	    presentedRenderCostValid = FALSE;
+	}
+	counts.pointCount = work.positionCount;
+	counts.normalCount = work.normalCount;
+	if (!work.exact || (!counts.faceCount && !counts.lineCount)) {
 	    presentedRenderCostValid = FALSE;
 	} else {
-	    BObolLodCounts counts;
-	    counts.faceCount = work.triangleCount;
-	    counts.pointCount = work.positionCount;
-	    counts.normalCount = work.normalCount;
 	    const size_t occurrences = work.occurrenceCount >
 		static_cast<uint64_t>(SIZE_MAX) ? SIZE_MAX :
 		static_cast<size_t>(work.occurrenceCount);
 	    this->cadLastPresentedRenderCost = view_lod_saturating_add(
 		this->cadLastPresentedRenderCost,
 		bobol_lod_render_cost_units(
-		    counts, BOBOL_LOD_DRAW_SHADED, occurrences));
+		    counts, costDrawMode, occurrences));
 	}
 
 	if (tier != 6) {
@@ -2151,6 +2343,21 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	    if (!timerSerial || !timerNanoseconds) {
 		gpuMeasurementValid = FALSE;
 	    } else {
+		const float timerPointThreshold =
+		    assembly->lastGpuPointProxyPixelThreshold();
+		if (!std::isfinite(timerPointThreshold)) {
+		    gpuMeasurementValid = FALSE;
+		} else if (!haveGpuPointProxyPixelThreshold) {
+		    this->cadLastGpuPointProxyPixelThreshold =
+			timerPointThreshold;
+		    haveGpuPointProxyPixelThreshold = TRUE;
+		} else if (std::fabs(
+			this->cadLastGpuPointProxyPixelThreshold -
+			timerPointThreshold) > 0.01f) {
+		    /* Multiple assemblies share one point-cut policy.  A mixed
+		     * asynchronous sample has no single cut which can update it. */
+		    gpuMeasurementValid = FALSE;
+		}
 		const uint64_t triangles =
 		    assembly->lastGpuRenderedTriangleCount();
 		this->cadLastGpuFaces =
@@ -2254,13 +2461,14 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	resourceSampled = TRUE;
     }
 
-    this->cadLastPresentedTriangleCountValid =
+    this->cadLastPresentedPrimitiveCountValid =
 	haveAssembly && presentedValid;
     this->cadLastPresentedRenderCostValid =
 	haveAssembly && presentedRenderCostValid &&
 	this->cadLastPresentedRenderCost > 0;
     this->cadLastGpuMeasurementValid =
-	haveAssembly && gpuMeasurementValid;
+	haveAssembly && gpuMeasurementValid &&
+	haveGpuPointProxyPixelThreshold;
     if (!this->cadLastGpuMeasurementValid)
 	this->cadLastGpuSerial = 0;
     else if (!this->cadLastGpuSerial)
@@ -2388,12 +2596,16 @@ BObolViewLodState::residentMeshDemands(
     for (const MeshPayloadPtr &payload : meshPayloads) {
 	if (!payload || !payload->progressiveMesh ||
 	    !payload->progressiveMesh->isValid() ||
-	    payload->cacheKey.getLength() == 0 ||
-	    payload->activeLevel < 0)
+	    payload->cacheKey.getLength() == 0)
+	    continue;
+	const int demandLevel = view_lod_resident_demand_level(
+	    payload->activeLevel, payload->requestedLevel,
+	    payload->progressiveMesh->residentLevel());
+	if (demandLevel < 0)
 	    continue;
 	DemandAggregate &aggregate =
 	    maximumLevels[payload->cacheKey.getString()];
-	aggregate.level = std::max(aggregate.level, payload->activeLevel);
+	aggregate.level = std::max(aggregate.level, demandLevel);
     }
 
     demands.clear();

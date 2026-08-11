@@ -39,14 +39,6 @@ struct gqa_segment_writer {
     size_t count;
 };
 
-struct gqa_record_capture {
-    struct gqa_segment_writer *writer;
-    const char *plot_fname;
-    const char *feature_path;
-    int rgb[3];
-    int write_plot;
-};
-
 static int
 write_gqa_segment(const point_t a, const point_t b, void *data)
 {
@@ -54,33 +46,6 @@ write_gqa_segment(const point_t a, const point_t b, void *data)
     if (writer->fp)
 	pdv_3line(writer->fp, a, b);
     writer->count++;
-    return 1;
-}
-
-static int
-capture_gqa_record(const struct ged_draw_view_db_object_record *rec, void *data)
-{
-    struct gqa_record_capture *capture = (struct gqa_record_capture *)data;
-    struct gqa_segment_writer *writer = capture ? capture->writer : NULL;
-
-    if (!writer || !capture || !capture->feature_path || !rec ||
-	    !rec->path || !strstr(rec->path, capture->feature_path))
-	return 1;
-    if (!rec->vlist_point_count)
-	return 1;
-
-    if (capture->write_plot && !writer->fp) {
-	writer->fp = fopen(capture->plot_fname, "wb");
-	if (!writer->fp)
-	    bu_exit(EXIT_FAILURE, "Could not open %s for writing\n",
-		    capture->plot_fname);
-	pl_color(writer->fp, capture->rgb[0], capture->rgb[1],
-		capture->rgb[2]);
-    }
-    printf("found %s;\n", rec->path);
-    (void)ged_draw_view_db_object_record_foreach_segment(rec,
-	    write_gqa_segment, writer);
-
     return 1;
 }
 
@@ -153,7 +118,7 @@ require_command_result_label(struct ged_view_context *view_ctx, const char *feat
 		"%s was not published as a command-result label.\n",
 		feature_name);
 
-    if (ged_annotation_label_count(view_ctx, feature_name) != 1)
+    if (ged_view_feature_label_count(view_ctx, feature_name) != 1)
 	bu_exit(EXIT_FAILURE,
 		"%s did not publish exactly one label.\n",
 		feature_name);
@@ -161,7 +126,7 @@ require_command_result_label(struct ged_view_context *view_ctx, const char *feat
     struct bu_vls text = BU_VLS_INIT_ZERO;
     point_t point = VINIT_ZERO;
     unsigned char rgb[3] = {0, 0, 0};
-    if (!ged_annotation_label_copy(view_ctx, feature_name, 0,
+    if (!ged_view_feature_label_copy(view_ctx, feature_name, 0,
 	    &text, point, rgb)) {
 	bu_vls_free(&text);
 	bu_exit(EXIT_FAILURE,
@@ -199,19 +164,34 @@ count_gqa_feature_segments(struct ged_view_context *view_ctx, const char *featur
 	const char *plot_fname, const int rgb[3], int write_plot)
 {
     struct gqa_segment_writer writer = {NULL, 0};
-    struct ged_draw_view_record_query query;
-    memset(&query, 0, sizeof(query));
-    query.flags = GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS;
-    query.draw_mode = -1;
-    struct gqa_record_capture record_capture = {&writer, plot_fname,
-	feature_name, {255, 255, 255}, write_plot};
-    if (rgb) {
-	record_capture.rgb[0] = rgb[0];
-	record_capture.rgb[1] = rgb[1];
-	record_capture.rgb[2] = rgb[2];
+    point_t *points = NULL;
+    size_t point_count = 0;
+    if (!ged_view_feature_points_copy(view_ctx, feature_name, &points,
+	    &point_count))
+	return 0;
+    if (write_plot && point_count) {
+	writer.fp = fopen(plot_fname, "wb");
+	if (!writer.fp) {
+	    bu_free(points, "GQA feature points");
+	    bu_exit(EXIT_FAILURE, "Could not open %s for writing\n",
+		    plot_fname);
+	}
+	pl_color(writer.fp, rgb ? rgb[0] : 255, rgb ? rgb[1] : 255,
+		rgb ? rgb[2] : 255);
     }
-    ged_draw_foreach_view_record_query(view_ctx, &query, capture_gqa_record,
-	    &record_capture);
+    point_t previous = VINIT_ZERO;
+    int have_previous = 0;
+    for (size_t i = 0; i < point_count; i++) {
+	int command = GED_DRAW_VIEW_LINE_MOVE;
+	if (!ged_view_feature_line_command_at(view_ctx, feature_name, i,
+		&command))
+	    continue;
+	if (command == GED_DRAW_VIEW_LINE_DRAW && have_previous)
+	    (void)write_gqa_segment(previous, points[i], &writer);
+	VMOVE(previous, points[i]);
+	have_previous = 1;
+    }
+    bu_free(points, "GQA feature points");
     if (writer.fp)
 	fclose(writer.fp);
     return writer.count;

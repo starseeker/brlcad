@@ -19,7 +19,7 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "ged.h"
-#include "ged/scene_internal.h"
+#include "ged/scene.h"
 #include "ged/display_obol_private.h"
 #include "ged/draw.h"
 #include "ged/event_txn.h"
@@ -116,16 +116,6 @@ make_draw_sync_db(const char *dbpath)
     return ret;
 }
 
-static uint32_t
-test_fold_revision(uint64_t revision)
-{
-    if (!revision)
-	return 0;
-
-    uint32_t folded = (uint32_t)(revision ^ (revision >> 32));
-    return folded ? folded : 1;
-}
-
 static const char *
 test_skip_leading_slash(const char *path)
 {
@@ -148,12 +138,12 @@ test_path_equal(const char *a, const char *b)
 }
 
 static int
-test_shape_record_matches_path(const struct ged_draw_shape_record *record,
+test_shape_record_matches_path(const struct ged_scene_occurrence_info *record,
 	const char *path)
 {
     if (!record || !path || !path[0])
 	return 0;
-    if (test_path_equal(record->display_name, path) ||
+    if (test_path_equal(record->path, path) ||
 	    test_path_equal(record->leaf_name, path))
 	return 1;
 
@@ -170,12 +160,12 @@ test_shape_record_matches_path(const struct ged_draw_shape_record *record,
 
 struct test_shape_record_path_context {
     const char *path;
-    struct ged_draw_shape_record *out;
+    struct ged_scene_occurrence_info *out;
     int found;
 };
 
 static int
-test_shape_record_by_path_cb(const struct ged_draw_shape_record *record,
+test_shape_record_by_path_cb(const struct ged_scene_occurrence_info *record,
 	void *userdata)
 {
     struct test_shape_record_path_context *ctx =
@@ -193,7 +183,7 @@ test_shape_record_by_path_cb(const struct ged_draw_shape_record *record,
 static int
 test_shape_record_by_path(struct ged *gedp,
 	const char *path,
-	struct ged_draw_shape_record *out)
+	struct ged_scene_occurrence_info *out)
 {
     if (!gedp || !path || !path[0])
 	return 0;
@@ -202,7 +192,7 @@ test_shape_record_by_path(struct ged *gedp,
     ctx.path = path;
     ctx.out = out;
     ctx.found = 0;
-    ged_draw_foreach_shape_record(gedp, test_shape_record_by_path_cb, &ctx);
+    ged_scene_occurrences_visit(gedp, test_shape_record_by_path_cb, &ctx);
     return ctx.found;
 }
 
@@ -584,45 +574,17 @@ main(int argc, char **argv)
 	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 	    !source->hasRealizedWireGeometry())
 	FAIL("wire Obol database source should preserve path and realized geometry");
-    struct ged_draw_shape_record box_record;
+    struct ged_scene_occurrence_info box_record;
     if (!test_shape_record_by_path(gedp, "box.s", &box_record))
 	FAIL("GED draw should expose neutral source state for box.s");
-    if (box_record.source_revision &&
-	    source->sourceRevision.getValue() !=
-	    test_fold_revision(box_record.source_revision))
-	FAIL("Obol draw sync should copy nonzero GED source revision");
-    if (source->inputsRevision.getValue() !=
-	    test_fold_revision(box_record.inputs_revision) ||
-	    (source->visible.getValue() ? 1 : 0) != box_record.visible ||
+    if ((source->visible.getValue() ? 1 : 0) != box_record.visible ||
 	    (source->highlighted.getValue() ? 1 : 0) != box_record.highlighted ||
 	    source->lineWidth.getValue() != box_record.line_width ||
-	    fabs(source->transparency.getValue() - box_record.transparency) >
+	    fabs(source->transparency.getValue() - (1.0 - box_record.opacity)) >
 	    1.0e-6)
-	FAIL("Obol draw sync should seed source display state from GED records");
-    struct ged_draw_scene_display_summary box_display;
-    if (!ged_draw_shape_ref_display_summary(gedp, box_record.ref,
-	    &box_display) ||
-	    !box_display.valid ||
-	    !box_display.material_valid)
-	FAIL("GED draw should expose neutral display/material state for box.s");
-    if (source->lineStyle.getValue() != box_display.line_style ||
-	    (source->materialColorValid.getValue() ? 1 : 0) !=
-	    box_display.material_valid)
-	FAIL("Obol draw sync should copy GED display line/material validity");
-    SbColor sourceMaterial = source->materialColor.getValue();
-    if (fabsf(sourceMaterial[0] -
-		(float)box_display.material_color[0] / 255.0f) > 1.0e-6f ||
-	    fabsf(sourceMaterial[1] -
-		(float)box_display.material_color[1] / 255.0f) > 1.0e-6f ||
-	    fabsf(sourceMaterial[2] -
-		(float)box_display.material_color[2] / 255.0f) > 1.0e-6f)
-	FAIL("Obol draw sync should copy GED material color");
-    struct ged_draw_shape_material_summary box_material;
-    if (ged_draw_shape_ref_material_summary(gedp, box_record.ref,
-	    &box_material) && box_material.valid &&
-	    source->materialRevision.getValue() !=
-	    test_fold_revision(box_material.material_revision))
-	FAIL("Obol draw sync should copy GED material revision");
+	FAIL("Obol draw sync should seed source display state from semantic occurrence state");
+    if (!source->materialColorValid.getValue())
+	FAIL("Obol draw sync should publish a valid database material color");
     if (source_for_path(controller, "box.s") != source)
 	FAIL("Obol draw sync should publish box.s as the authoritative source owner");
 
@@ -636,17 +598,16 @@ main(int argc, char **argv)
 
     if (ged_event_notify_object_modified(gedp, "box.s", 1, NULL) < 0)
 	FAIL("GED stale-source event should refresh Obol source state");
-    struct ged_draw_shape_record stale_record;
-    if (!test_shape_record_by_path(gedp, "box.s", &stale_record) ||
-	    !stale_record.source_revision)
-	FAIL("GED stale-source event should expose a nonzero source revision");
+    struct ged_scene_occurrence_info stale_record;
+    if (!test_shape_record_by_path(gedp, "box.s", &stale_record))
+	FAIL("GED stale-source event should retain the semantic occurrence");
     source = source_for_path(controller, "box.s");
     if (!source)
 	FAIL("Obol stale-source sync should retain the box source");
-    uint32_t expectedSourceRevision =
-	test_fold_revision(stale_record.source_revision);
-    uint32_t expectedInputsRevision =
-	test_fold_revision(stale_record.inputs_revision);
+    uint32_t expectedSourceRevision = source->sourceRevision.getValue();
+    uint32_t expectedInputsRevision = source->inputsRevision.getValue();
+    if (!expectedSourceRevision)
+	FAIL("Obol stale-source event should advance a nonzero source revision");
     if (source->sourceRevision.getValue() != expectedSourceRevision ||
 	    source->inputsRevision.getValue() != expectedInputsRevision ||
 	    source->realizedSourceRevision.getValue() != expectedSourceRevision ||

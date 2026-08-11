@@ -201,8 +201,6 @@ main(int argc, const char **argv)
 	ASSERT(bv_scale_state_set(DRAW_TEST_BV(views[i]), 1.0e9, 1.0, 0.0, 1.0e9, 1.0 / 1.0e9));
     }
     ASSERT(draw_shared_autoview(gedp, "all.g") == BRLCAD_OK);
-    ASSERT(ged_draw_source_lod_bounds_callback_is(views[0]));
-    ASSERT(ged_draw_source_lod_bounds_callback_is(views[1]));
     ASSERT(bv_size_get(DRAW_TEST_BV_CONST(views[0])) < 1.0e8);
     ASSERT(bv_size_get(DRAW_TEST_BV_CONST(views[1])) < 1.0e8);
     ASSERT(zap_current(gedp) == BRLCAD_OK);

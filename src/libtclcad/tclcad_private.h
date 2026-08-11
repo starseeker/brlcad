@@ -35,7 +35,6 @@
 #include "bu/vls.h"
 #include "imgstream/fbserv.h"
 #include "ged/defines.h"
-#include "ged/view_feature_internal.h"
 #include "rt/view.h"
 #include "tclcad/defines.h"
 
@@ -81,6 +80,12 @@ struct tclcad_data_line_state {
     point_t   *gdls_points;
 };
 
+struct tclcad_polygon_style {
+    int color[3];
+    int line_width;
+    int line_style;
+};
+
 typedef struct tclcad_polygon_state {
     int                 gdps_draw;
     int                 gdps_moveAll;
@@ -92,13 +97,14 @@ typedef struct tclcad_polygon_state {
     size_t              gdps_curr_polygon_i;
     size_t              gdps_curr_point_i;
     point_t             gdps_prev_point;
-    bg_clip_t           gdps_clip_type;
+    enum bg_polygon_boolean_op gdps_clip_type;
     fastf_t             gdps_scale;
     point_t             gdps_origin;
     mat_t               gdps_rotation;
     mat_t               gdps_view2model;
     mat_t               gdps_model2view;
     struct bg_polygons  gdps_polygons;
+    struct tclcad_polygon_style *gdps_styles;
     fastf_t             gdps_data_vZ;
 } tclcad_polygon_state;
 
@@ -184,6 +190,7 @@ extern int tclcad_eval(Tcl_Interp *interp, const char *command, size_t num_args,
 extern int tclcad_eval_noresult(Tcl_Interp *interp, const char *command, size_t num_args, const char * const *args);
 
 extern void tclcad_view_data_init(struct tclcad_view_data *tvd, struct ged *gedp);
+extern void tclcad_view_data_clear(struct tclcad_view_data *tvd);
 extern struct tclcad_view_data *tclcad_view_data_from_view_ctx(const struct ged_view_context *view_ctx);
 extern struct bu_vls *tclcad_view_pathname_vls(const struct ged_view_context *view_ctx);
 extern tclcad_view_state *tclcad_view_tcl_data_from_view_ctx(struct ged_view_context *view_ctx);
@@ -196,6 +203,12 @@ extern int tclcad_view_hide_from_view_ctx(struct ged_view_context *view_ctx);
 extern int tclcad_view_polygon_cflag_from_view_ctx(struct ged_view_context *view_ctx, int staged);
 extern int tclcad_view_polygon_cflag_clear(struct ged_view_context *view_ctx, int staged);
 extern tclcad_label_state *tclcad_view_label_state_from_view_ctx(struct ged_view_context *view_ctx, int staged);
+extern int tclcad_data_labels_publish(struct ged_view_context *view_ctx,
+	tclcad_label_state *state, const char *name);
+extern int tclcad_data_arrows_publish(struct ged_view_context *view_ctx,
+	const char *name, const struct tclcad_data_arrow_state *state);
+extern int tclcad_data_axes_publish(struct ged_view_context *view_ctx,
+	const char *name, const struct tclcad_data_axes_state *state);
 extern int tclcad_view_prim_labels_state_from_view_ctx(struct bv_other_state *state, struct ged_view_context *view_ctx);
 extern int tclcad_view_prim_labels_state_set(struct ged_view_context *view_ctx, const struct bv_other_state *state);
 extern int tclcad_view_data_bind_view_ctx(struct ged_view_context *view_ctx, struct tclcad_view_data *tvd);

@@ -18,7 +18,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cfloat>
 #include <charconv>
+#include <cmath>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -320,6 +322,101 @@ static bool
 bobol_prepare_authored_corner_normals(
     Obol::TriMesh &mesh, const std::vector<SbVec3f> &cornerNormals);
 
+static bool
+bobol_lod_finite_render_coordinate(fastf_t value)
+{
+    return std::isfinite(value) &&
+	std::fabs(value) <= static_cast<fastf_t>(FLT_MAX);
+}
+
+static bool
+bobol_lod_finite_vector(const fastf_t *value)
+{
+    return value &&
+	bobol_lod_finite_render_coordinate(value[X]) &&
+	bobol_lod_finite_render_coordinate(value[Y]) &&
+	bobol_lod_finite_render_coordinate(value[Z]);
+}
+
+static bool
+bobol_lod_valid_bounds(const fastf_t *minimum, const fastf_t *maximum)
+{
+    return bobol_lod_finite_vector(minimum) &&
+	bobol_lod_finite_vector(maximum) &&
+	minimum[X] <= maximum[X] &&
+	minimum[Y] <= maximum[Y] &&
+	minimum[Z] <= maximum[Z];
+}
+
+static bool
+bobol_lod_point_in_domain(const fastf_t *point,
+	const fastf_t *minimum, const fastf_t *maximum)
+{
+    if (!bobol_lod_finite_vector(point) ||
+	!bobol_lod_valid_bounds(minimum, maximum))
+	return false;
+    for (size_t axis = 0; axis < 3; ++axis) {
+	const fastf_t scale = std::max<fastf_t>(1.0,
+	    std::max(std::fabs(minimum[axis]),
+		std::max(std::fabs(maximum[axis]),
+		    std::fabs(maximum[axis] - minimum[axis]))));
+	const fastf_t tolerance = 64.0 *
+	    std::numeric_limits<fastf_t>::epsilon() * scale;
+	if (point[axis] < minimum[axis] - tolerance ||
+	    point[axis] > maximum[axis] + tolerance)
+	    return false;
+    }
+    return true;
+}
+
+static bool
+bobol_lod_hierarchy_valid(
+    const struct BObolMeshLodData &data,
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    int residentLevel)
+{
+    if (hierarchy.min_level < 0 ||
+	hierarchy.max_level < hierarchy.min_level ||
+	hierarchy.max_level >= BOBOL_MESH_LOD_LEVEL_COUNT ||
+	residentLevel < hierarchy.min_level ||
+	residentLevel > hierarchy.max_level ||
+	hierarchy.resident_level != residentLevel ||
+	!bobol_lod_valid_bounds(data.bmin, data.bmax) ||
+	!bobol_lod_valid_bounds(hierarchy.quantization_min,
+	    hierarchy.quantization_max))
+	return false;
+
+    size_t priorPoints = 0;
+    size_t priorFaces = 0;
+    for (int level = 0; level <= hierarchy.max_level; ++level) {
+	const size_t points = hierarchy.point_count[level];
+	const size_t faces = hierarchy.face_count[level];
+	if (points < priorPoints || faces < priorFaces ||
+	    points > static_cast<size_t>(
+		std::numeric_limits<int32_t>::max()) ||
+	    faces > static_cast<size_t>(
+		std::numeric_limits<int32_t>::max()) / 3)
+	    return false;
+	priorPoints = points;
+	priorFaces = faces;
+    }
+    for (int level = hierarchy.max_level + 1;
+	 level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
+	const size_t points = hierarchy.point_count[level];
+	const size_t faces = hierarchy.face_count[level];
+	/* Public fixtures historically leave post-terminal entries zero, while
+	 * cache-backed hierarchyInfo reports the final cumulative totals.  Both
+	 * are unambiguous; mixed or changing post-terminal counts are not. */
+	if ((points && points != priorPoints) ||
+	    (faces && faces != priorFaces))
+	    return false;
+    }
+    return hierarchy.point_count[residentLevel] ==
+	data.point_orig_count &&
+	hierarchy.face_count[residentLevel] == data.face_count &&
+	data.point_orig_count > 0 && data.face_count > 0;
+}
+
 static std::shared_ptr<BObolLodProgressiveMeshGeneration>
 progressive_generation_from_data(
     const struct BObolMeshLodData &data,
@@ -327,6 +424,8 @@ progressive_generation_from_data(
     int residentLevel, SbBool shadedCullBackfaces,
     uint64_t revision, uint64_t progressiveLineage)
 {
+    if (!bobol_lod_hierarchy_valid(data, hierarchy, residentLevel))
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
     std::shared_ptr<BObolLodProgressiveMeshGeneration> generation(
 	new BObolLodProgressiveMeshGeneration);
     std::shared_ptr<Obol::PartGeometry> geometry(
@@ -359,6 +458,10 @@ progressive_generation_from_data(
 
     mesh.positions.resize(data.point_orig_count);
     for (size_t i = 0; i < data.point_orig_count; ++i) {
+	if (!bobol_lod_point_in_domain(data.points_orig[i],
+		hierarchy.quantization_min,
+		hierarchy.quantization_max))
+	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
 	mesh.positions[i] = SbVec3f(
 	    static_cast<float>(data.points_orig[i][X]),
 	    static_cast<float>(data.points_orig[i][Y]),
@@ -404,6 +507,8 @@ progressive_generation_from_data(
 	std::vector<SbVec3f> cornerNormals;
 	cornerNormals.resize(indexCount);
 	for (size_t i = 0; i < indexCount; ++i) {
+	    if (!bobol_lod_finite_vector(data.normals[i]))
+		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
 	    cornerNormals[i] = SbVec3f(
 		static_cast<float>(data.normals[i][X]),
 		static_cast<float>(data.normals[i][Y]),
@@ -573,6 +678,9 @@ BObolLodProgressiveMesh::update(
 	residentLevel >= BOBOL_MESH_LOD_LEVEL_COUNT)
 	return FALSE;
 
+    if (!bobol_lod_hierarchy_valid(data, hierarchy, residentLevel))
+	return FALSE;
+
     if (data.point_orig_count >
 	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
 	data.face_count >
@@ -628,15 +736,24 @@ bobol_progressive_suffix_append(int level, const point_t *points,
 	return 0;
 
     for (size_t i = 0; i < pointCount; ++i) {
+	if (!bobol_lod_point_in_domain(points[i],
+		hierarchy.quantization_min,
+		hierarchy.quantization_max))
+	    return 0;
+    }
+    const size_t finalPointCount = priorPointCount + pointCount;
+    for (size_t i = 0; i < faceCount * 3; ++i) {
+	if (faces[i] < 0 ||
+	    static_cast<size_t>(faces[i]) >= finalPointCount)
+	    return 0;
+    }
+    for (size_t i = 0; i < pointCount; ++i) {
 	mesh.positions.push_back(SbVec3f(
 	    static_cast<float>(points[i][X]),
 	    static_cast<float>(points[i][Y]),
 	    static_cast<float>(points[i][Z])));
     }
     for (size_t i = 0; i < faceCount * 3; ++i) {
-	if (faces[i] < 0 ||
-	    static_cast<size_t>(faces[i]) >= mesh.positions.size())
-	    return 0;
 	mesh.indices.push_back(static_cast<uint32_t>(faces[i]));
     }
     builder->expectedLevel++;
@@ -1309,6 +1426,10 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 	    generation->quantizationMinimum;
 	wireRep.progressiveQuantizationMaximum =
 	    generation->quantizationMaximum;
+	/* Triangle-edge wire records are emitted in cumulative triangle-prefix
+	 * order.  They therefore inherit the source PoP stream's append-only
+	 * identity; native curve LoD records do not make this promise. */
+	wireRep.progressiveLineage = sourceMesh->progressiveLineage;
 	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
 	    const size_t segments = generation->faceCount[level] * 3;
 	    wireRep.progressiveSegmentCount[level] =

@@ -102,9 +102,9 @@ class QPolyCreate : public QWidget
 	bool eventFilter(QObject *, QEvent *);
 
     private:
-	bg_clip_t op = bg_Union;
+	enum bg_polygon_boolean_op op = BG_POLYGON_BOOLEAN_UNION;
 	int poly_cnt = 0;
-	ged_polygon_ref p = GED_POLYGON_REF_NULL_INIT;
+	ged_view_polygon_ref p = GED_VIEW_POLYGON_REF_NULL_INIT;
 	bool do_bool = false;
 
 	QgPolyFilter *cf = NULL;

@@ -52,7 +52,7 @@
 static void init_sedit_vars(struct mged_state *), init_oedit_vars(struct mged_state *), init_oedit_guts(struct mged_state *);
 
 static int
-mged_current_edit_record(struct mged_state *s, struct ged_draw_shape_record *rec)
+mged_current_edit_record(struct mged_state *s, struct ged_scene_occurrence_info *rec)
 {
     if (!s || !rec)
 	return 0;
@@ -64,7 +64,7 @@ mged_current_edit_record(struct mged_state *s, struct ged_draw_shape_record *rec
 }
 
 static struct directory *
-mged_current_edit_leaf(const struct ged_draw_shape_record *rec)
+mged_current_edit_leaf(const struct ged_scene_occurrence_info *rec)
 {
     if (!rec || !rec->fullpath || rec->fullpath->fp_len <= 0)
 	return RT_DIR_NULL;
@@ -80,7 +80,7 @@ struct _replot_modified_data {
 };
 
 static int
-_replot_modified_shape_cb(const struct ged_draw_shape_record *rec, void *ud)
+_replot_modified_shape_cb(const struct ged_scene_occurrence_info *rec, void *ud)
 {
     struct _replot_modified_data *d = (struct _replot_modified_data *)ud;
     if (!rec || !rec->fullpath || rec->fullpath->fp_len <= 0)
@@ -103,7 +103,7 @@ struct _replot_active_data {
 };
 
 static int
-_replot_active_shape_cb(const struct ged_draw_shape_record *rec, void *ud)
+_replot_active_shape_cb(const struct ged_scene_occurrence_info *rec, void *ud)
 {
     struct _replot_active_data *d = (struct _replot_active_data *)ud;
     if (!rec || !rec->highlighted)
@@ -121,7 +121,7 @@ struct _replot_lastsol_data {
 };
 
 static int
-_replot_lastsol_cb(const struct ged_draw_shape_record *rec, void *ud)
+_replot_lastsol_cb(const struct ged_scene_occurrence_info *rec, void *ud)
 {
     struct _replot_lastsol_data *d = (struct _replot_lastsol_data *)ud;
     if (!rec || !rec->fullpath || rec->fullpath->fp_len <= 0)
@@ -701,7 +701,7 @@ f_get_solid_keypoint(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUS
 void
 init_sedit(struct mged_state *s)
 {
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
 
     if (s->dbip == DBI_NULL || !mged_current_edit_record(s, &hrec))
 	return;
@@ -801,7 +801,7 @@ int
 replot_editing_solid(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUSED(id))
 {
     struct mged_state *s = (struct mged_state *)d;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     if (!mged_current_edit_record(s, &hrec))
 	return BRLCAD_OK;
 
@@ -810,7 +810,7 @@ replot_editing_solid(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNU
     rd.leaf_dp = mged_current_edit_leaf(&hrec);
     rd.es_int = &MEDIT(s)->es_int;
     MAT_IDN(rd.pre_mat);   /* solid edit: geometry is already modified in es_int */
-    ged_draw_foreach_shape_record(s->gedp, _replot_modified_shape_cb, &rd);
+    ged_scene_occurrences_visit(s->gedp, _replot_modified_shape_cb, &rd);
 
     return BRLCAD_OK;
 }
@@ -827,7 +827,7 @@ replot_editing_solid(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNU
 void
 mged_oedit_live_preview(struct mged_state *s)
 {
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     if (!s || s->global_editing_state != ST_O_EDIT)
 	return;
     if (!mged_current_edit_record(s, &hrec))
@@ -842,7 +842,7 @@ mged_oedit_live_preview(struct mged_state *s)
     rd.leaf_dp = mged_current_edit_leaf(&hrec);
     rd.es_int = &MEDIT(s)->es_int;
     MAT_COPY(rd.pre_mat, MEDIT(s)->model_changes);
-    ged_draw_foreach_shape_record(s->gedp, _replot_modified_shape_cb, &rd);
+    ged_scene_occurrences_visit(s->gedp, _replot_modified_shape_cb, &rd);
 }
 
 
@@ -1057,7 +1057,7 @@ static void
 init_oedit_guts(struct mged_state *s)
 {
     const char *strp="";
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     struct directory *leaf;
 
     /* for safety sake */
@@ -1145,7 +1145,7 @@ set_oedit_bbox_keypoint(struct mged_state *s)
     point_t bbmin;
     point_t bbmax;
     struct db_full_path path;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     char *path_name;
 
     if (!MEDIT(s) || !mged_current_edit_record(s, &hrec) || !hrec.fullpath)
@@ -1199,7 +1199,7 @@ void oedit_reject(struct mged_state *s);
 static void
 oedit_apply(struct mged_state *s, int continue_editing)
 {
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     /* matrices used to accept editing done from a depth
      * >= 2 from the top of the illuminated path
      */
@@ -1245,7 +1245,7 @@ oedit_apply(struct mged_state *s, int continue_editing)
     struct _replot_active_data rd;
     rd.s = s;
     rd.clear_highlight = !continue_editing;
-    ged_draw_foreach_shape_record(s->gedp, _replot_active_shape_cb, &rd);
+    ged_scene_occurrences_visit(s->gedp, _replot_active_shape_cb, &rd);
 }
 
 
@@ -1261,7 +1261,7 @@ oedit_accept(struct mged_state *s)
 	struct _replot_active_data rd;
 	rd.s = s;
 	rd.clear_highlight = 1;
-	ged_draw_foreach_shape_record(s->gedp, _replot_active_shape_cb, &rd);
+	ged_scene_occurrences_visit(s->gedp, _replot_active_shape_cb, &rd);
 
 	bu_log("Sorry, this database is READ-ONLY\n");
 	pr_prompt(s);
@@ -1283,7 +1283,7 @@ oedit_reject(struct mged_state *s)
     struct _replot_active_data rd;
     rd.s = s;
     rd.clear_highlight = 1;
-    ged_draw_foreach_shape_record(s->gedp, _replot_active_shape_cb, &rd);
+    ged_scene_occurrences_visit(s->gedp, _replot_active_shape_cb, &rd);
 
     if (MEDIT(s)->ipe_ptr) {
 	if (MEDIT(s)->es_int.idb_type > 0 &&
@@ -1347,7 +1347,7 @@ static int
 sedit_apply(struct mged_state *s, int accept_flag)
 {
     struct directory *dp;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
 
     /* reset internal variables */
     if (EDOBJ[MEDIT(s)->es_int.idb_type].ft_prim_edit_reset)
@@ -1431,7 +1431,7 @@ sedit_apply(struct mged_state *s, int accept_flag)
 	    struct _replot_lastsol_data rd;
 	    rd.s = s;
 	    rd.leaf_dp = dp;
-	    ged_draw_foreach_shape_record(s->gedp, _replot_lastsol_cb, &rd);
+	    ged_scene_occurrences_visit(s->gedp, _replot_lastsol_cb, &rd);
 	}
     } else {
 	/* rt_db_put_internal frees the internal representation as a side effect.
@@ -1476,7 +1476,7 @@ sedit_accept(struct mged_state *s)
 void
 sedit_reject(struct mged_state *s)
 {
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
 
     if (not_state(s, ST_S_EDIT, "Solid edit reject") || !mged_current_edit_record(s, &hrec)) {
 	return;
@@ -1485,7 +1485,7 @@ sedit_reject(struct mged_state *s)
     struct _replot_lastsol_data rd;
     rd.s = s;
     rd.leaf_dp = mged_current_edit_leaf(&hrec);
-    ged_draw_foreach_shape_record(s->gedp, _replot_lastsol_cb, &rd);
+    ged_scene_occurrences_visit(s->gedp, _replot_lastsol_cb, &rd);
 
     menu_state->ms_flag = 0;
     movedir = 0;
@@ -1713,7 +1713,7 @@ f_get_sedit(ClientData clientData, Tcl_Interp *interp, int argc, const char *arg
     struct rt_db_internal ces_int;
     Tcl_Obj *pto;
     Tcl_Obj *pnto;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     struct directory *leaf;
 
     if (argc < 1 || 2 < argc) {
@@ -1882,7 +1882,7 @@ f_sedit_reset(ClientData clientData, Tcl_Interp *interp, int argc, const char *U
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     struct directory *leaf;
 
     if (s->global_editing_state != ST_S_EDIT || !mged_current_edit_record(s, &hrec))
@@ -2026,7 +2026,7 @@ f_oedit_apply(ClientData clientData, Tcl_Interp *interp, int UNUSED(argc), const
 
     struct bu_vls vls = BU_VLS_INIT_ZERO;
     const char *strp="";
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
 
     CHECK_DBI_NULL;
     int bbox_keypoint = BU_STR_EQUAL(MEDIT(s)->e_keytag, "bounding-box center");

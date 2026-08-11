@@ -503,8 +503,8 @@ bv_35_25(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), ch
 static int
 ill_common(struct mged_state *s) {
     /* Common part of illumination */
-    ged_draw_shape_ref first = mged_pen_pick_first(s);
-    if (ged_draw_shape_ref_is_null(first)) {
+    ged_scene_occurrence_ref first = mged_pen_pick_first(s);
+    if (ged_scene_occurrence_ref_is_null(first)) {
 	Tcl_AppendResult(s->interp, "no solids in view\n", (char *)NULL);
 	return 0;	/* BAD */
     }

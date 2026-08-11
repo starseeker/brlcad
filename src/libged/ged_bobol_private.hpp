@@ -25,7 +25,7 @@
 #include "BObol/BFramebuffer.h"
 #include "bu/str.h"
 #include "bv.h"
-#include "ged/draw_types.h"
+#include "./ged_draw_types_private.h"
 #include "ged/view.h"
 
 struct db_i;

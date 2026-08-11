@@ -27,6 +27,8 @@
 
 #include <cstdlib>
 #include <algorithm>
+#include <string>
+#include <vector>
 
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BMeasureAction.h"
@@ -36,6 +38,7 @@
 #include "bu/opt.h"
 #include "bv.h"
 #include "ged/draw.h"
+#include "ged/scene.h"
 #include "../ged_bobol_private.hpp"
 #include "../ged_draw_private.h"
 #include "../ged_private.h"
@@ -60,7 +63,57 @@ _autoview_arg_is_num(const char *s, double *v)
 }
 
 static int
-_autoview_bobol_database_bounds(struct ged *gedp, vect_t *min, vect_t *max)
+_autoview_bounds_finite(const point_t min, const point_t max)
+{
+    return min && max && isfinite(min[X]) && isfinite(min[Y]) &&
+	isfinite(min[Z]) && isfinite(max[X]) && isfinite(max[Y]) &&
+	isfinite(max[Z]) && min[X] <= max[X] && min[Y] <= max[Y] &&
+	min[Z] <= max[Z];
+}
+
+static int
+_autoview_named_database_bounds(struct ged *gedp, int argc,
+	const char *argv[], point_t min, point_t max)
+{
+    if (!gedp || !gedp->dbip || argc <= 0 || !argv)
+	return 0;
+
+    if (rt_obj_bounds(gedp->ged_result_str, gedp->dbip, argc, argv, 0,
+	    min, max) == BRLCAD_OK && _autoview_bounds_finite(min, max))
+	return 1;
+
+    /* A combination containing an unbounded halfspace can make its raw
+     * aggregate bounds non-finite.  Retain every finite requested object and
+     * fall back to the finite, non-subtractive members of an affected
+     * combination.  This is the same framing policy used by retained scene
+     * sources and avoids poisoning the camera with NaN values. */
+    VSETALL(min, INFINITY);
+    VSETALL(max, -INFINITY);
+    int have_bounds = 0;
+    for (int i = 0; i < argc; i++) {
+	point_t path_min;
+	point_t path_max;
+	struct bu_vls messages = BU_VLS_INIT_ZERO;
+	const char *path = argv[i];
+	int bounded = rt_obj_bounds(&messages, gedp->dbip, 1, &path, 0,
+	    path_min, path_max) == BRLCAD_OK &&
+	    _autoview_bounds_finite(path_min, path_max);
+	bu_vls_free(&messages);
+	if (!bounded)
+	    bounded = ged_database_path_member_autoview_bounds(gedp, path,
+		&path_min, &path_max);
+	if (!bounded || !_autoview_bounds_finite(path_min, path_max))
+	    continue;
+	VMIN(min, path_min);
+	VMAX(max, path_max);
+	have_bounds = 1;
+    }
+    return have_bounds;
+}
+
+static int
+_autoview_bobol_database_bounds(struct ged *gedp, vect_t *min, vect_t *max,
+	int allow_member_bounds)
 {
     int empty = 1;
     /* Never ray-prepare database members on the caller/UI thread merely to
@@ -69,7 +122,55 @@ _autoview_bobol_database_bounds(struct ged *gedp, vect_t *min, vect_t *max)
      * per-leaf bounds and the progressive autoview follower reframes when
      * those arrive. */
     return ged_draw_obol_scene_database_autoview_bounds(gedp, min, max,
-	&empty, 0) && !empty;
+	&empty, allow_member_bounds) && !empty;
+}
+
+static int
+_autoview_semantic_draw_bounds(struct ged *gedp,
+	struct ged_view_context *view_ctx, vect_t *min, vect_t *max)
+{
+    if (!gedp || !gedp->dbip || !min || !max)
+	return 0;
+
+    struct bu_vls listed = BU_VLS_INIT_ZERO;
+    size_t path_count = ged_scene_paths_append(gedp, view_ctx,
+	GED_SCENE_DRAW_DEFAULT, GED_SCENE_PATHS_DRAW_INTENTS, &listed);
+    if (!path_count && view_ctx)
+	path_count = ged_scene_paths_append(gedp, NULL,
+	    GED_SCENE_DRAW_DEFAULT, GED_SCENE_PATHS_DRAW_INTENTS, &listed);
+    if (!path_count || !bu_vls_strlen(&listed)) {
+	bu_vls_free(&listed);
+	return 0;
+    }
+
+    std::vector<std::string> paths;
+    const char *begin = bu_vls_cstr(&listed);
+    const char *cursor = begin;
+    while (true) {
+	if (*cursor != '\n' && *cursor != '\r' && *cursor != '\0') {
+	    cursor++;
+	    continue;
+	}
+	if (cursor > begin)
+	    paths.emplace_back(begin, static_cast<size_t>(cursor - begin));
+	if (*cursor == '\0')
+	    break;
+	begin = ++cursor;
+    }
+
+    std::vector<const char *> path_args;
+    path_args.reserve(paths.size());
+    for (const std::string &path : paths)
+	path_args.push_back(path.c_str());
+
+    struct bu_vls messages = BU_VLS_INIT_ZERO;
+    const int have_bounds = !path_args.empty() &&
+	rt_obj_bounds(&messages, gedp->dbip,
+	    static_cast<int>(path_args.size()), path_args.data(), 0, *min,
+	    *max) == BRLCAD_OK && _autoview_bounds_finite(*min, *max);
+    bu_vls_free(&messages);
+    bu_vls_free(&listed);
+    return have_bounds;
 }
 
 static int
@@ -77,13 +178,16 @@ _autoview_obol_database_scene(
 	struct ged *gedp,
 	struct ged_view_context *view_ctx,
 	fastf_t factor,
-	int all_view_objs)
+	int all_view_objs,
+	int allow_member_bounds)
 {
     if (all_view_objs)
 	return 0;
 
     vect_t min, max;
-    if (!_autoview_bobol_database_bounds(gedp, &min, &max))
+    if (!_autoview_bobol_database_bounds(gedp, &min, &max,
+	    allow_member_bounds) &&
+	!_autoview_semantic_draw_bounds(gedp, view_ctx, &min, &max))
 	return 0;
 
     bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
@@ -202,8 +306,11 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	/* Frame only the named objects.  Bound them directly from the
 	 * database (they need not be displayed). */
 	point_t min, max;
-	if (rt_obj_bounds(gedp->ged_result_str, gedp->dbip, argc, argv, 0, min, max) != BRLCAD_OK)
+	if (!_autoview_named_database_bounds(gedp, argc, argv, min, max)) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"Unable to determine finite autoview bounds for the requested objects");
 	    return BRLCAD_ERROR;
+	}
 	bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
 		factor, min, max);
     } else {
@@ -211,7 +318,13 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	    (void)_autoview_bobol_view_scene(view_ctx, factor);
 	else if (!ged_draw_obol_progressive_autoview_follow(gedp, view_ctx,
 		factor))
-	    (void)_autoview_obol_database_scene(gedp, view_ctx, factor, 0);
+	    /* No progressive provider can fulfill this request (notably the
+	     * null presentation used by rtwizard).  In that case explicit
+	     * autoview must synchronously obtain finite database-member bounds;
+	     * returning success with the untouched sentinel camera produces NaN
+	     * eye-model values.  First-draw transactions retain their separate
+	     * cheap/progressive path and do not pay this fallback cost. */
+	    (void)_autoview_obol_database_scene(gedp, view_ctx, factor, 0, 1);
 	/*
 	 * A deferred Obol root publishes monotonic partial coverage before its
 	 * exact whole-target bound.  Applying the current partial union here and

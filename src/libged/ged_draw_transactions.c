@@ -1089,6 +1089,11 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
     int have_obol_bounds =
 	ged_draw_obol_scene_database_autoview_bounds(gedp, &obol_min,
 	    &obol_max, &obol_empty, 0) && !obol_empty;
+    if (have_obol_bounds &&
+	(!isfinite(obol_min[X]) || !isfinite(obol_min[Y]) ||
+	 !isfinite(obol_min[Z]) || !isfinite(obol_max[X]) ||
+	 !isfinite(obol_max[Y]) || !isfinite(obol_max[Z])))
+	have_obol_bounds = 0;
 
     vect_t database_min, database_max;
     int have_database_bounds = 0;
@@ -1098,6 +1103,11 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
 	have_database_bounds = rt_obj_bounds(&messages, gedp->dbip,
 	    draw_count, draw_paths, 0, database_min, database_max) ==
 	    BRLCAD_OK;
+	if (have_database_bounds &&
+	    (!isfinite(database_min[X]) || !isfinite(database_min[Y]) ||
+	     !isfinite(database_min[Z]) || !isfinite(database_max[X]) ||
+	     !isfinite(database_max[Y]) || !isfinite(database_max[Z])))
+	    have_database_bounds = 0;
 	bu_vls_free(&messages);
     }
 

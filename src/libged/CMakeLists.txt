@@ -331,6 +331,10 @@ set(
   columns.c
   db_index.cpp
   draw_obol.cpp
+  ged_obol_pick_private.cpp
+  ged_obol_polygon_private.cpp
+  ged_obol_presentation_private.cpp
+  ged_obol_selection_private.cpp
   ged_view_feature_batch.cpp
   draw.cpp
   ged.cpp
@@ -344,7 +348,6 @@ set(
   get_solid_kp.c
   path.c
   pnts_util.c
-  polyclip.cpp
   qray.cpp
   selection_state.cpp
   tab_complete.cpp
@@ -364,6 +367,7 @@ set(
   ged_draw_registry.c
   ged_draw_records.c
   ged_draw_source.cpp
+  ged_view_export_private.cpp
   view/data_lines.cpp
   wdb_importFg4Section.c
 )
@@ -374,6 +378,10 @@ set(
 set(
   GED_OBOL_PRIVATE_BRIDGE_SOURCES
   draw_obol.cpp
+  ged_obol_pick_private.cpp
+  ged_obol_polygon_private.cpp
+  ged_obol_presentation_private.cpp
+  ged_obol_selection_private.cpp
   ged_view_feature_batch.cpp
   draw.cpp
   ged.cpp
@@ -382,9 +390,9 @@ set(
   ged_draw_registry.c
   ged_draw_scene_root.c
   ged_draw_source.cpp
+  ged_view_export_private.cpp
   ged_draw_util.c
   obol_fbserv.cpp
-  polyclip.cpp
 )
 set_source_files_properties(${GED_OBOL_PRIVATE_BRIDGE_SOURCES}
   PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
@@ -436,14 +444,14 @@ set(GED_DRAW_API_CHECK "${CMAKE_CURRENT_BINARY_DIR}/ged_draw_api.checked")
 set(GED_DRAW_API_HEADERS
   ${CMAKE_SOURCE_DIR}/include/ged/view_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/view.h
-  ${CMAKE_SOURCE_DIR}/include/ged/draw_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/scene.h
   ${CMAKE_SOURCE_DIR}/include/ged/scene_types.h
-  ${CMAKE_SOURCE_DIR}/include/ged/draw_source.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_feature.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_feature_types.h
-  ${CMAKE_SOURCE_DIR}/include/ged/polygon.h
-  ${CMAKE_SOURCE_DIR}/include/ged/polygon_types.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view_polygon.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view_polygon_types.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view_export.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view_export_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/selection.h
   ${CMAKE_SOURCE_DIR}/include/ged/selection_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_feature_batch.h
@@ -463,6 +471,13 @@ add_custom_command(
 add_custom_target(ged_draw_api_check ALL DEPENDS "${GED_DRAW_API_CHECK}")
 add_dependencies(libged ged_draw_api_check)
 set_target_properties(ged_draw_api_check PROPERTIES FOLDER "BRL-CAD Libraries")
+
+cmakefiles(
+  ged_draw_types_private.h
+  ged_draw_source_private.h
+  ged_scene_record_api_private.h
+  ged_scene_record_private.h
+)
 if (LIBGED_STATIC_CORE)
   target_link_libraries(libged PRIVATE libged_plugin_deps)
   if (TARGET libged-static)

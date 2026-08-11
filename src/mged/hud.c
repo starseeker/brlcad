@@ -150,13 +150,14 @@ mged_hud_label_add(struct mged_hud_builder *builder,
 	return 0;
     if (!mged_hud_capacity_grow((void **)&builder->labels,
 	    &builder->label_capacity, builder->label_count,
-	    sizeof(struct ged_annotation_label), "MGED HUD labels"))
+	    sizeof(struct ged_view_feature_label), "MGED HUD labels"))
 	return 0;
     builder->label_text = (char **)bu_realloc(builder->label_text,
 	builder->label_capacity * sizeof(char *), "MGED HUD label strings");
     size_t index = builder->label_count++;
     builder->label_text[index] = bu_strdup(text);
-    struct ged_annotation_label label = GED_ANNOTATION_LABEL_INIT;
+    struct ged_view_feature_label label;
+    memset(&label, 0, sizeof(label));
     label.text = builder->label_text[index];
     VSET(label.point, x, y, 0.0);
     label.color_valid = 1;
@@ -174,14 +175,21 @@ mged_hud_builder_publish(struct mged_hud_builder *builder)
 	return 0;
 
     struct bu_vls name = BU_VLS_INIT_ZERO;
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "mged-hud";
+    desc.owner_role = "faceplate";
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(builder->view_ctx, &desc);
+    if (!batch)
+	return 0;
     bu_vls_printf(&name, "%s/labels", builder->prefix);
-    int labels_ok = ged_annotation_hud_labels_replace(
-	builder->view_ctx, bu_vls_cstr(&name), builder->labels,
-	builder->label_count, NULL);
+    int labels_ok = ged_view_feature_batch_hud_labels_replace(batch,
+	bu_vls_cstr(&name), builder->labels, builder->label_count, NULL);
 
-    struct ged_annotation_line_layer *layers = NULL;
+    struct ged_view_feature_line_layer *layers = NULL;
     if (builder->layer_count)
-	layers = (struct ged_annotation_line_layer *)bu_calloc(
+	layers = (struct ged_view_feature_line_layer *)bu_calloc(
 	    builder->layer_count, sizeof(*layers), "MGED HUD publish layers");
     for (size_t i = 0; i < builder->layer_count; i++) {
 	layers[i].name = builder->layers[i].name;
@@ -198,10 +206,12 @@ mged_hud_builder_publish(struct mged_hud_builder *builder)
 	layers[i].style.line_style = builder->layers[i].line_style;
     }
     bu_vls_sprintf(&name, "%s/lines", builder->prefix);
-    int lines_ok = ged_annotation_hud_line_layers_replace(
-	builder->view_ctx, bu_vls_cstr(&name), layers,
-	builder->layer_count, NULL);
+    int lines_ok = ged_view_feature_batch_hud_line_layers_replace(batch,
+	bu_vls_cstr(&name), layers, builder->layer_count, NULL);
     bu_free(layers, "MGED HUD publish layers");
     bu_vls_free(&name);
-    return labels_ok && lines_ok;
+    if (labels_ok && lines_ok)
+	return ged_view_feature_batch_commit(batch);
+    ged_view_feature_batch_abort(batch);
+    return 0;
 }

@@ -24,6 +24,7 @@ perf_case=""
 perf_phase="cold"
 apitrace_case=""
 run_timeout=180
+capture_apng=0
 
 usage()
 {
@@ -43,6 +44,7 @@ Usage: qged_gui_matrix.sh [options]
   --perf CASE              Record the selected backend case with perf
   --perf-phase PHASE       cold, warm, or both (default: cold)
   --apitrace CASE          Trace one cold System GL case with apitrace
+  --capture-apng           Capture every presented frame into an APNG
   --timeout SECONDS        Per-process timeout (default: 180)
 
 Cases: generic_twin, lucy, multi_lucy, multi_lucy_xpush, stanford, havoc,
@@ -69,6 +71,7 @@ while [[ $# -gt 0 ]]; do
 	--perf) perf_case="$2"; shift 2 ;;
 	--perf-phase) perf_phase="$2"; shift 2 ;;
 	--apitrace) apitrace_case="$2"; shift 2 ;;
+	--capture-apng) capture_apng=1; shift ;;
 	--timeout) run_timeout="$2"; shift 2 ;;
 	--help|-h) usage; exit 0 ;;
 	*) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -103,9 +106,17 @@ artifact_dir="$(realpath -m "$artifact_dir")"
 
 qged="$build_dir/bin/qged"
 gsh="$build_dir/bin/gsh"
+apng_encoder="$build_dir/bin/qged_apng_encode"
+if [[ ! -x "$apng_encoder" ]]; then
+    apng_encoder="$build_dir/src/qged/qged_apng_encode"
+fi
 baseline_qged="$main_build_dir/bin/qged"
 if [[ ! -x "$qged" || ! -x "$gsh" ]]; then
     echo "ERROR: qged and gsh are required in $build_dir/bin" >&2
+    exit 2
+fi
+if [[ "$capture_apng" -eq 1 && ! -x "$apng_encoder" ]]; then
+    echo "ERROR: APNG frame encoder is required: $apng_encoder" >&2
     exit 2
 fi
 for required_tool in jq identify convert compare; do
@@ -415,7 +426,7 @@ EOF
      "arguments": {"x": 0.5, "y": 0.5, "button": 1, "buttons": 1,
                    "modifiers": 0}},
     {"target": "${canvas_target}", "action": "mouse_move",
-     "arguments": {"x": 0.501, "y": 0.5, "button": 0, "buttons": 1,
+     "arguments": {"x": 0.52, "y": 0.5, "button": 0, "buttons": 1,
                    "modifiers": 0}},
 EOF
 )
@@ -447,11 +458,20 @@ EOF
 EOF
 )
 	    done
+	    # A first richer System-GL VBO presentation can legitimately hit the
+	    # 100 ms hard deadline after completing its one-time upload.  Make that
+	    # bounded attempt observable, then leave the button held while the
+	    # event loop services the controller's requested retained-data replay.
+	    # The validated checkpoint still requires an actually submitted richer
+	    # frame; this pause tests retry liveness rather than accepting metadata.
 	    smooth_zoom_events+=$(cat <<EOF
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/smooth-zoom-active-first-attempt.png"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 250}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/smooth-zoom-active-refined.png"}},
     {"target": "${canvas_target}", "action": "mouse_release",
-     "arguments": {"x": 0.501, "y": 0.5, "button": 1, "buttons": 0,
+     "arguments": {"x": 0.52, "y": 0.5, "button": 1, "buttons": 0,
                    "modifiers": 0}},
 EOF
 )
@@ -1048,8 +1068,9 @@ validate_report()
     # threshold would reject a correct early overview merely because it is a
     # deliberately cheap wireframe proxy.  The HUD and convergence strip are
     # outside this crop, so they cannot satisfy either threshold.
-    if [[ "$first_useful_structural_boxes" =~ ^[0-9]+$ &&
-	    "$first_useful_structural_boxes" -gt 0 ]]; then
+    if [[ "$mode" == "wire" ||
+	    ("$first_useful_structural_boxes" =~ ^[0-9]+$ &&
+	     "$first_useful_structural_boxes" -gt 0) ]]; then
 	minimum_changed_pixels=400
     fi
     # Thousands of widely spaced instances are intentionally subpixel in the
@@ -1517,7 +1538,16 @@ validate_report()
 		 ((($motion.presented_cad_faces // 0) * 100 <=
 		   ($stable.presented_cad_faces // 0) * 95) and
 		  (($motion.lod_interactive_progressive_ceiling // -1) >= 0))) and
-		(($stable.lod_interactive_progressive_ceiling // -2) == -1) and
+		# A quiet hard-deadline recovery may deliberately retain its proven
+		# renderer-only ceiling.  That is stable convergence, not unfinished
+		# interaction, provided the exact quiet frame met its own deadline and
+		# restored at least as rich a prefix as the held-motion frame.
+		((($stable.lod_interactive_progressive_ceiling // -2) == -1) or
+		 ((($stable.presented_cad_work_exact // false) == true) and
+		  (($stable.lod_interactive_progressive_ceiling // -1) >=
+		   ($motion.lod_interactive_progressive_ceiling // -1)) and
+		  (($stable.last_render_ms // 9223372036854775807) <=
+		   ($stable.presentation_deadline_current_ms // 0)))) and
 		(($motion.last_render_ms // 9223372036854775807) <= 250)
 	    end
 	end
@@ -1788,13 +1818,19 @@ validate_report()
     # coarse prefix.  Keep wheel dispatch bounded throughout so background
     # loading never turns into lost-feeling input.
     if [[ "$case_name" == "lucy" ]]; then
-	if ! jq -e '
+	if ! jq -e --arg mode "$mode" '
+	    def submitted:
+		if $mode == "wire" then (.presented_cad_lines // 0)
+		else (.presented_cad_faces // 0) end;
 	    (last(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/smooth-zoom-start-stable.png")))) as $start |
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/smooth-zoom-in-12.png")))) as $during |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-active-first-attempt.png")))) as $attempt |
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/smooth-zoom-active-refined.png")))) as $active |
@@ -1807,6 +1843,30 @@ validate_report()
 	    (last(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/smooth-zoom-return.png")))) as $returned |
+	    # PoP bit populations can have a roughly fourfold discontinuity.  On
+	    # software GL the next discrete cut may exceed even the explicit 10 Hz
+	    # zoom-quality deadline.  In that case loading the requested suffix,
+	    # retaining the current exact cut, and declining the known-bad jump is
+	    # the only responsive outcome; it must not be mistaken for stalled LoD.
+	    (((((($active.active_progressive_cad_level_max // -1) ==
+		 ($start.active_progressive_cad_level_max // -2)) and
+	        (($active.active_progressive_cad_faces // 0) >=
+		 ($start.active_progressive_cad_faces // 0))) or
+	       # The richer immutable prefix may already be resident while its
+	       # first coherent presentation exceeds the hard deadline.  A counted
+	       # abort is the required proof in that case; retaining the last exact
+	       # completed cut is the responsive result, not failed refinement.
+	       ((($active.active_progressive_cad_level_max // -1) >
+		 ($start.active_progressive_cad_level_max // -1)) and
+	        (($active.presentation_interrupted_frames // 0) >
+		 ($start.presentation_interrupted_frames // 0)))) and
+	      (($active | submitted) >= ($start | submitted)) and
+	      (($active.requested_progressive_cad_level_max // -1) >
+	       ($active.active_progressive_cad_level_max // -1)) and
+	      (($active.lod_interactive_progressive_ceiling // -1) >= 0) and
+	      (($active.last_render_ms // 9223372036854775807) <=
+	       ($active.presentation_deadline_current_ms // 0)))) as
+		$discreteBounded |
 	    (($close.requested_progressive_cad_level_max // -1) >
 		($start.requested_progressive_cad_level_max // -1)) and
 	    (if .backend == "system_gl" then
@@ -1819,6 +1879,9 @@ validate_report()
 		($during.lod_gesture_active == true) and
 		($during.lod_interactive == true) and
 		($during.lod_scale_changing_interaction == true) and
+		($attempt.lod_gesture_active == true) and
+		($attempt.lod_interactive == true) and
+		($attempt.lod_scale_changing_interaction == true) and
 		($active.lod_gesture_active == true) and
 		($active.lod_interactive == true) and
 		($active.lod_scale_changing_interaction == true) and
@@ -1831,15 +1894,19 @@ validate_report()
 		      then $during.lod_interactive_progressive_ceiling
 		      else ($during.active_progressive_cad_level_max // -1) end)] |
 		   min) > ($start.active_progressive_cad_level_max // -1) and
-		  (($during.presented_cad_faces // 0) >
-		    ($start.presented_cad_faces // 0))) or
+		  (($during | submitted) > ($start | submitted))) or
+		 (([($attempt.active_progressive_cad_level_max // -1),
+		    (if ($attempt.lod_interactive_progressive_ceiling // -1) >= 0
+		     then $attempt.lod_interactive_progressive_ceiling
+		     else ($attempt.active_progressive_cad_level_max // -1) end)] |
+		   min) > ($start.active_progressive_cad_level_max // -1) and
+		  (($attempt | submitted) > ($start | submitted))) or
 		 (([($active.active_progressive_cad_level_max // -1),
 		    (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
 		     then $active.lod_interactive_progressive_ceiling
 		     else ($active.active_progressive_cad_level_max // -1) end)] |
 		  min) > ($start.active_progressive_cad_level_max // -1) and
-		  (($active.presented_cad_faces // 0) >
-		    ($start.presented_cad_faces // 0)))) and
+		  (($active | submitted) > ($start | submitted)))) and
 		(($active.active_lod_aabb_payloads // 0) == 0) and
 		# A single huge part uses the ordinary retained-VBO tier rather
 		# than the multi-part atlas.  Immutable PoP generations must append
@@ -1880,10 +1947,11 @@ validate_report()
 		# It may have reached that cut before the last checkpoint; requiring
 		# another increase during the final low-amplitude events would turn
 		# successful early refinement into a false failure.
-		(($active.active_progressive_cad_level_max // -1) >
-		    ($start.active_progressive_cad_level_max // -1)) and
-		(($active.active_progressive_cad_faces // 0) >
-		    ($start.active_progressive_cad_faces // 0)) and
+		((($active.active_progressive_cad_level_max // -1) >
+		   ($start.active_progressive_cad_level_max // -1) and
+		  ($active.active_progressive_cad_faces // 0) >
+		   ($start.active_progressive_cad_faces // 0)) or
+		 $discreteBounded) and
 		# A measured over-budget probe may back off from the arbitrary in-12
 		# checkpoint through the O(1) render ceiling.  The durable contract is
 		# that continuous input has exposed a cut richer than the pre-zoom
@@ -1902,7 +1970,8 @@ validate_report()
 		     (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
 		      then $active.lod_interactive_progressive_ceiling
 		      else ($active.active_progressive_cad_level_max // -1) end)] |
-		    min) > ($start.active_progressive_cad_level_max // -1))) and
+		    min) > ($start.active_progressive_cad_level_max // -1)) or
+		  $discreteBounded) and
 		(($active.active_lod_aabb_payloads // 0) == 0)
 	     end) and
 	    # Every renderer tier must publish the exact submitted population.  If
@@ -1910,7 +1979,7 @@ validate_report()
 	    # deadline, quiet handoff may reduce it only to the current pixel
 	    # demand—not merely because interactive and stable calibration stores
 	    # were historically isolated.
-	    (($active.presented_cad_faces // 0) > 0) and
+	    (($active | submitted) > 0) and
 	    (if (($active.last_render_ms // 9223372036854775807) <=
 		    (1000.0 / ($close.lod_stable_target_fps // 20.0)))
 	     then
@@ -1922,17 +1991,28 @@ validate_report()
 		   ($close.requested_progressive_cad_level_max // -1)] | min))
 	     else true end) and
 	    # Stable memory maintenance may reclaim the zoom-prefetched suffix at
-	    # the close-view pause itself or at the later zoom-out pause.  Either is
-	    # correct: require reclamation from the active peak, monotonic
-	    # compaction accounting, and a return presentation no worse than the
-	    # initial same-scale view.  Byte equality with the initial cache state
-	    # is invalid when calibration has since admitted a richer useful cut.
-	    ((($close.lod_service_resident_bytes // 0) <
-		($active.lod_service_resident_bytes // 0)) or
-	     (($out.lod_service_resident_bytes // 0) <
-		($active.lod_service_resident_bytes // 0))) and
-	    (($returned.lod_service_resident_bytes // 0) <
-		($active.lod_service_resident_bytes // 0)) and
+	    # the close-view pause itself or at the later zoom-out pause.  Require
+	    # strict byte reclamation when the final cut is coarser.  If calibration
+	    # proves that the zoom-peak cut is itself the pixel-appropriate terminal
+	    # cut (notably fast System GL wire), discarding its required prefix would
+	    # only force a reload; compaction must still run and memory may not grow
+	    # beyond that peak.
+	    ((($out.lod_service_resident_bytes // 0) <
+		([($active.lod_service_resident_bytes // 0),
+		  ($close.lod_service_resident_bytes // 0)] | max)) or
+	     ((($out.active_progressive_cad_level_max // -1) >=
+	       ($active.active_progressive_cad_level_max // -1)) and
+	      (($out.lod_service_resident_bytes // 0) <=
+	       ([($active.lod_service_resident_bytes // 0),
+		  ($close.lod_service_resident_bytes // 0)] | max)))) and
+	    ((($returned.lod_service_resident_bytes // 0) <
+		([($active.lod_service_resident_bytes // 0),
+		  ($close.lod_service_resident_bytes // 0)] | max)) or
+	     ((($returned.active_progressive_cad_level_max // -1) >=
+	       ($active.active_progressive_cad_level_max // -1)) and
+	      (($returned.lod_service_resident_bytes // 0) <=
+	       ([($active.lod_service_resident_bytes // 0),
+		  ($close.lod_service_resident_bytes // 0)] | max)))) and
 	    ((($close.lod_service_compactions // 0) >
 		($active.lod_service_compactions // 0)) or
 	     (($out.lod_service_compactions // 0) >
@@ -2044,6 +2124,10 @@ run_current()
 	"$case_name"
 
     local env_args=("BU_DIR_CACHE=$cache_dir")
+    if [[ "$capture_apng" -eq 1 ]]; then
+	mkdir -p "$out/frames"
+	env_args+=("QGED_TEST_FRAME_DIR=$out/frames")
+    fi
     if [[ "$swap" != "default" ]]; then
 	env_args+=("QGED_SWAP_INTERVAL=$swap")
     fi
@@ -2071,6 +2155,15 @@ run_current()
     local status
     if timeout --signal=TERM "$run_timeout" "${command[@]}" \
 	    >"$out/stdout.log" 2>"$out/stderr.log"; then
+	if [[ "$capture_apng" -eq 1 ]]; then
+	    if ! "$apng_encoder" "$out/frames/frames.tsv" \
+		    "$out/presented.apng" --remove-inputs \
+		    >"$out/apng.stdout.log" 2>"$out/apng.stderr.log"; then
+		printf 'FAIL,%s,%s,apng-encode\n' "$run_name" \
+		    "$((SECONDS - started))" >> "$artifact_dir/results.csv"
+		return 1
+	    fi
+	fi
 	if validate_report "$out/report.json" "$out/images" "$object" \
 		"$hierarchy_path" "$out/validation.log" "$cache_state" \
 		"$case_name" "$mode"; then

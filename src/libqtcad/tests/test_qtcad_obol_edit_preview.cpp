@@ -26,8 +26,8 @@
 #include "bu/malloc.h"
 #include "ged.h"
 #include "ged/draw.h"
+#include "ged/view_edit.h"
 #include "ged/view.h"
-#include "ged/view_feature_internal.h"
 #include "qtcad/QgGedEventBatch.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
@@ -148,7 +148,7 @@ edit_preview_update(QgView *view, const char *name, const char *path,
     transaction.point_count = (size_t)count;
     transaction.source_revision = source_revision;
     transaction.inputs_revision = inputs_revision;
-    const int ret = ged_view_feature_edit_transaction_apply(
+    const int ret = ged_view_edit_transaction_apply(
 	ged_view_context_from_bv(view->viewContext()), &transaction, NULL);
     bu_free(ged_points, "edit transaction test points");
     if (ret)
@@ -163,7 +163,7 @@ edit_preview_clear(QgView *view, const char *name)
 	GED_VIEW_EDIT_TRANSACTION_INIT;
     transaction.event = GED_VIEW_EDIT_PREVIEW_CANCEL;
     transaction.feature_name = name;
-    const int ret = ged_view_feature_edit_transaction_apply(
+    const int ret = ged_view_edit_transaction_apply(
 	ged_view_context_from_bv(view->viewContext()), &transaction, NULL);
     if (ret)
 	view->need_update(QG_VIEW_DRAWN);
@@ -257,7 +257,7 @@ main(int argc, char **argv)
     multi_transaction.points = (const point_t *)multi_points;
     multi_transaction.commands = multi_commands;
     multi_transaction.point_count = 2;
-    if (ged_draw_edit_transaction_apply(gedp, &multi_transaction) < 2 ||
+    if (ged_view_edit_transaction_apply_all(gedp, &multi_transaction) < 2 ||
 	!controller->features().exists("_test_multi_edit_preview") ||
 	!second_controller->features().exists("_test_multi_edit_preview"))
 	FAIL("neutral edit transactions should publish to every hosted view");
@@ -265,7 +265,7 @@ main(int argc, char **argv)
     multi_transaction.points = NULL;
     multi_transaction.commands = NULL;
     multi_transaction.point_count = 0;
-    if (ged_draw_edit_transaction_apply(gedp, &multi_transaction) < 2 ||
+    if (ged_view_edit_transaction_apply_all(gedp, &multi_transaction) < 2 ||
 	controller->features().exists("_test_multi_edit_preview") ||
 	second_controller->features().exists("_test_multi_edit_preview"))
 	FAIL("neutral edit cancellation should retire previews from every hosted view");
@@ -290,7 +290,7 @@ main(int argc, char **argv)
     primitive_transaction.dbip = gedp->dbip;
     primitive_transaction.internal = &multi_box_intern;
     primitive_transaction.matrix = multi_matrix;
-    if (ged_draw_edit_transaction_apply(gedp, &primitive_transaction) < 2 ||
+    if (ged_view_edit_transaction_apply_all(gedp, &primitive_transaction) < 2 ||
 	!controller->features().exists("_test_multi_primitive_edit") ||
 	!second_controller->features().exists("_test_multi_primitive_edit")) {
 	rt_db_free_internal(&multi_box_intern);
@@ -299,7 +299,7 @@ main(int argc, char **argv)
     primitive_transaction.event = GED_VIEW_EDIT_PREVIEW_COMMIT;
     primitive_transaction.internal = NULL;
     primitive_transaction.matrix = NULL;
-    if (ged_draw_edit_transaction_apply(gedp, &primitive_transaction) < 2 ||
+    if (ged_view_edit_transaction_apply_all(gedp, &primitive_transaction) < 2 ||
 	controller->features().exists("_test_multi_primitive_edit") ||
 	second_controller->features().exists("_test_multi_primitive_edit")) {
 	rt_db_free_internal(&multi_box_intern);

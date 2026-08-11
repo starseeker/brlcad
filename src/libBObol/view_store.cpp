@@ -2766,7 +2766,7 @@ struct BObolPolygonStore::Impl {
 		 records.begin(); it != records.end(); ++it) {
 	    if (it->second) {
 		store_release_node(controller, it->second->node);
-		bg_polygon_free(&it->second->polygon);
+		bg_polygon_clear(&it->second->polygon);
 		delete it->second;
 	    }
 	}
@@ -2835,7 +2835,7 @@ store_polygon_init_one_point(struct bg_polygon *poly, const SbVec3f &point)
 {
     if (!poly)
 	return;
-    bg_polygon_free(poly);
+    bg_polygon_clear(poly);
     poly->num_contours = 1;
     poly->hole = (int *)bu_calloc(1, sizeof(int), "BObol polygon hole");
     poly->contour = (struct bg_poly_contour *)bu_calloc(1,
@@ -3010,146 +3010,17 @@ store_polygon_hatch_segments(
     const SbVec2f &slope,
     float spacing)
 {
-    if (!poly || !vp || poly->num_contours < 1 ||
-	poly->contour[0].num_points < 3 ||
-	fabs(static_cast<fastf_t>(spacing)) < BN_TOL_DIST)
-	return NULL;
-
     vect2d_t line_slope;
     store_polygon_canonical_hatch_slope(line_slope, slope);
-    const fastf_t line_spacing = fabs(static_cast<fastf_t>(spacing));
-
-    struct bg_polygon poly_2d = BG_POLYGON_NULL;
-    vect2d_t b2d_min = {MAX_FASTF, MAX_FASTF};
-    vect2d_t b2d_max = {-MAX_FASTF, -MAX_FASTF};
-
-    poly_2d.num_contours = poly->num_contours;
-    poly_2d.hole = (int *)bu_calloc(poly->num_contours, sizeof(int),
-				    "BObol hatch mask holes");
-    poly_2d.contour = (struct bg_poly_contour *)bu_calloc(
-			  poly->num_contours, sizeof(struct bg_poly_contour),
-			  "BObol hatch mask contours");
-    for (size_t i = 0; i < poly->num_contours; i++) {
-	poly_2d.hole[i] = poly->hole[i];
-	poly_2d.contour[i].num_points = poly->contour[i].num_points;
-	poly_2d.contour[i].point = (point_t *)bu_calloc(
-				       poly->contour[i].num_points, sizeof(point_t),
-				       "BObol hatch mask points");
-	for (size_t j = 0; j < poly->contour[i].num_points; j++) {
-	    vect2d_t p2d;
-	    point_t src_point;
-	    VMOVE(src_point, poly->contour[i].point[j]);
-	    bg_plane_closest_pt(&p2d[0], &p2d[1], const_cast<plane_t *>(vp),
-				&src_point);
-	    VSET(poly_2d.contour[i].point[j], p2d[0], p2d[1], 0.0);
-	    V2MINMAX(b2d_min, b2d_max, p2d);
-	}
-    }
-
-    vect2d_t bcenter, lseg, per;
-    bcenter[0] = (b2d_max[0] - b2d_min[0]) * 0.5 + b2d_min[0];
-    bcenter[1] = (b2d_max[1] - b2d_min[1]) * 0.5 + b2d_min[1];
-    const fastf_t ldiag = DIST_PNT2_PNT2(b2d_max, b2d_min);
-    V2MOVE(lseg, line_slope);
-
-    const int dir_step_cnt = static_cast<int>(0.5 * ldiag /
-			     line_spacing + 1.0);
-    if (dir_step_cnt < 2) {
-	bg_polygon_free(&poly_2d);
-	return NULL;
-    }
-
-    const int step_cnt = 2 * dir_step_cnt - 1;
-    struct bg_polygon poly_lines = BG_POLYGON_NULL;
-    poly_lines.num_contours = static_cast<size_t>(step_cnt);
-    poly_lines.hole = (int *)bu_calloc(poly_lines.num_contours,
-				       sizeof(int), "BObol hatch line holes");
-    poly_lines.contour = (struct bg_poly_contour *)bu_calloc(
-			     poly_lines.num_contours, sizeof(struct bg_poly_contour),
-			     "BObol hatch line contours");
-
-    struct bg_poly_contour *c = &poly_lines.contour[0];
-    vect2d_t p2d1, p2d2;
-    c->num_points = 2;
-    c->open = 1;
-    c->point = (point_t *)bu_calloc(c->num_points, sizeof(point_t),
-				    "BObol hatch line points");
-    V2JOIN1(p2d1, bcenter, ldiag * 0.51, lseg);
-    V2JOIN1(p2d2, bcenter, -ldiag * 0.51, lseg);
-    VSET(c->point[0], p2d1[0], p2d1[1], 0.0);
-    VSET(c->point[1], p2d2[0], p2d2[1], 0.0);
-
-    V2SET(per, -lseg[1], lseg[0]);
-    V2UNITIZE(per);
-    for (int i = 1; i < dir_step_cnt + 1; i++) {
-	c = &poly_lines.contour[i];
-	c->num_points = 2;
-	c->open = 1;
-	c->point = (point_t *)bu_calloc(c->num_points, sizeof(point_t),
-					"BObol hatch line points");
-	V2JOIN2(p2d1, bcenter, line_spacing * i, per, ldiag * 0.51, lseg);
-	V2JOIN2(p2d2, bcenter, line_spacing * i, per, -ldiag * 0.51, lseg);
-	VSET(c->point[0], p2d1[0], p2d1[1], 0.0);
-	VSET(c->point[1], p2d2[0], p2d2[1], 0.0);
-    }
-
-    V2SET(per, lseg[1], -lseg[0]);
-    V2UNITIZE(per);
-    for (int i = 1 + dir_step_cnt; i < step_cnt; i++) {
-	c = &poly_lines.contour[i];
-	c->num_points = 2;
-	c->open = 1;
-	c->point = (point_t *)bu_calloc(c->num_points, sizeof(point_t),
-					"BObol hatch line points");
-	const fastf_t offset = line_spacing *
-			       (static_cast<fastf_t>(i) - static_cast<fastf_t>(dir_step_cnt));
-	V2JOIN2(p2d1, bcenter, offset, per, ldiag * 0.51, lseg);
-	V2JOIN2(p2d2, bcenter, offset, per, -ldiag * 0.51, lseg);
-	VSET(c->point[0], p2d1[0], p2d1[1], 0.0);
-	VSET(c->point[1], p2d2[0], p2d2[1], 0.0);
-    }
-
-    struct bg_polygon *fpoly = bg_clip_polygon(bg_Intersection,
-			       &poly_lines, &poly_2d, CLIPPER_MAX, NULL);
-    if (!fpoly || !fpoly->num_contours) {
-	bg_polygon_free(&poly_lines);
-	bg_polygon_free(&poly_2d);
-	if (fpoly) {
-	    bg_polygon_free(fpoly);
-	    BU_PUT(fpoly, struct bg_polygon);
-	}
-	return NULL;
-    }
-
     struct bg_polygon *poly_fill = NULL;
     BU_GET(poly_fill, struct bg_polygon);
-    *poly_fill = BG_POLYGON_NULL;
-    poly_fill->num_contours = fpoly->num_contours;
-    poly_fill->hole = (int *)bu_calloc(fpoly->num_contours, sizeof(int),
-				       "BObol hatch output holes");
-    poly_fill->contour = (struct bg_poly_contour *)bu_calloc(
-			     fpoly->num_contours, sizeof(struct bg_poly_contour),
-			     "BObol hatch output contours");
-    for (size_t i = 0; i < fpoly->num_contours; i++) {
-	poly_fill->hole[i] = fpoly->hole[i];
-	poly_fill->contour[i].open = 1;
-	poly_fill->contour[i].num_points = fpoly->contour[i].num_points;
-	poly_fill->contour[i].point = (point_t *)bu_calloc(
-					  fpoly->contour[i].num_points, sizeof(point_t),
-					  "BObol hatch output points");
-	for (size_t j = 0; j < fpoly->contour[i].num_points; j++) {
-	    bg_plane_pt_at(&poly_fill->contour[i].point[j],
-			   const_cast<plane_t *>(vp),
-			   fpoly->contour[i].point[j][0],
-			   fpoly->contour[i].point[j][1]);
-	}
+    bg_polygon_init(poly_fill);
+    if (bg_polygon_hatch(poly_fill, poly, *vp, line_slope,
+	    static_cast<fastf_t>(spacing)) || !poly_fill->num_contours) {
+	bg_polygon_clear(poly_fill);
+	BU_PUT(poly_fill, struct bg_polygon);
+	return NULL;
     }
-
-    bg_polygon_free(&poly_lines);
-    bg_polygon_free(&poly_2d);
-    bg_polygon_free(fpoly);
-    BU_PUT(fpoly, struct bg_polygon);
-
     return poly_fill;
 }
 
@@ -3205,8 +3076,8 @@ store_polygon_mesh_fill_node(const BObolPolygonStoreRecord &rec)
 	    indices.push_back(static_cast<int32_t>(faces[i]));
 	bu_free(faces, "BObol polygon fill faces");
     } else {
-	struct bg_polygon poly = BG_POLYGON_NULL;
-	bg_polygon_cpy(&poly, const_cast<struct bg_polygon *>(&rec.polygon));
+	struct bg_polygon poly = BG_POLYGON_INIT_ZERO;
+	(void)bg_polygon_copy(&poly, &rec.polygon);
 
 	int *faces = NULL;
 	int numFaces = 0;
@@ -3214,7 +3085,7 @@ store_polygon_mesh_fill_node(const BObolPolygonStoreRecord &rec)
 	int numOutPts = 0;
 	int ret = bg_polygon_triangulate(&faces, &numFaces, &outPts, &numOutPts,
 					 &poly, TRI_EAR_CLIPPING);
-	bg_polygon_free(&poly);
+	bg_polygon_clear(&poly);
 
 	if (ret || numFaces <= 0 || numOutPts <= 0 || !faces || !outPts) {
 	    if (faces)
@@ -3296,7 +3167,7 @@ store_polygon_hatch_fill_node(const BObolPolygonStoreRecord &rec)
 	}
     }
 
-    bg_polygon_free(hatch);
+    bg_polygon_clear(hatch);
     BU_PUT(hatch, struct bg_polygon);
 
     if (points.empty())
@@ -3420,13 +3291,9 @@ store_polygon_append_point(BObolPolygonStoreRecord *rec,
 	if (contourIndex >= rec->polygon.num_contours)
 	    contourIndex = rec->polygon.num_contours - 1;
 
-	struct bg_poly_contour *contour = &rec->polygon.contour[contourIndex];
-	const size_t oldCount = contour->num_points;
-	contour->point = (point_t *)bu_realloc(contour->point,
-					       (oldCount + 1) * sizeof(point_t),
-					       "BObol polygon append point");
-	store_point(contour->point[oldCount], model_point);
-	contour->num_points = oldCount + 1;
+	point_t appended;
+	store_point(appended, model_point);
+	(void)bg_polygon_append_point(&rec->polygon, contourIndex, appended);
     }
 }
 
@@ -3447,32 +3314,12 @@ store_polygon_set_rectangle(BObolPolygonStoreRecord *rec,
     fastf_t fy = 0.0;
     store_polygon_plane_uv(&pfx, &pfy, zplane, rec->originPoint);
     store_polygon_plane_uv(&fx, &fy, zplane, corner);
-    if (square) {
-	const fastf_t dx = fx - pfx;
-	const fastf_t dy = fy - pfy;
-	const fastf_t side = std::max(std::fabs(dx), std::fabs(dy));
-	fx = dx < 0.0 ? pfx - side : pfx + side;
-	fy = dy < 0.0 ? pfy - side : pfy + side;
-    }
 
-    bg_polygon_free(&rec->polygon);
-    rec->polygon.num_contours = 1;
-    rec->polygon.hole = (int *)bu_calloc(1, sizeof(int),
-					 "BObol rectangle hole");
-    rec->polygon.contour = (struct bg_poly_contour *)bu_calloc(1,
-			   sizeof(struct bg_poly_contour), "BObol rectangle contour");
-    rec->polygon.contour[0].num_points = 4;
-    rec->polygon.contour[0].open = 0;
-    rec->polygon.contour[0].point = (point_t *)bu_calloc(4,
-				    sizeof(point_t), "BObol rectangle points");
-    store_point(rec->polygon.contour[0].point[0],
-		store_polygon_plane_point(zplane, pfx, pfy));
-    store_point(rec->polygon.contour[0].point[1],
-		store_polygon_plane_point(zplane, pfx, fy));
-    store_point(rec->polygon.contour[0].point[2],
-		store_polygon_plane_point(zplane, fx, fy));
-    store_point(rec->polygon.contour[0].point[3],
-		store_polygon_plane_point(zplane, fx, pfy));
+    point_t first_corner, opposite_corner;
+    store_point(first_corner, store_polygon_plane_point(zplane, pfx, pfy));
+    store_point(opposite_corner, store_polygon_plane_point(zplane, fx, fy));
+    (void)bg_polygon_make_rectangle(&rec->polygon, zplane, first_corner,
+	opposite_corner, square ? 1 : 0);
 }
 
 static void
@@ -3493,33 +3340,13 @@ store_polygon_set_ellipse(BObolPolygonStoreRecord *rec,
     fastf_t fy = 0.0;
     store_polygon_plane_uv(&pfx, &pfy, zplane, rec->originPoint);
     store_polygon_plane_uv(&fx, &fy, zplane, corner);
-    fastf_t rx = fx - pfx;
-    fastf_t ry = fy - pfy;
-    if (circle) {
-	const fastf_t r = std::sqrt(rx * rx + ry * ry);
-	rx = r;
-	ry = r;
-    }
 
-    bg_polygon_free(&rec->polygon);
-    rec->polygon.num_contours = 1;
-    rec->polygon.hole = (int *)bu_calloc(1, sizeof(int),
-					 "BObol ellipse hole");
-    rec->polygon.contour = (struct bg_poly_contour *)bu_calloc(1,
-			   sizeof(struct bg_poly_contour), "BObol ellipse contour");
-    rec->polygon.contour[0].num_points = nsegs;
-    rec->polygon.contour[0].open = 0;
-    rec->polygon.contour[0].point = (point_t *)bu_calloc(nsegs,
-				    sizeof(point_t), "BObol ellipse points");
-    for (int i = 0; i < nsegs; i++) {
-	const double twoPi = 6.283185307179586476925286766559;
-	const float a = static_cast<float>(twoPi *
-					   static_cast<double>(i) / static_cast<double>(nsegs));
-	store_point(rec->polygon.contour[0].point[i],
-		    store_polygon_plane_point(zplane,
-					      pfx + std::cos(a) * rx,
-					      pfy + std::sin(a) * ry));
-    }
+    point_t center, radius_point;
+    store_point(center, store_polygon_plane_point(zplane, pfx, pfy));
+    store_point(radius_point, store_polygon_plane_point(zplane,
+	fx, fy));
+    (void)bg_polygon_make_ellipse(&rec->polygon, zplane, center,
+	radius_point, circle ? 1 : 0, nsegs);
 }
 
 BObolPolygonStore::BObolPolygonStore(void) : impl(new Impl)
@@ -3651,8 +3478,7 @@ BObolPolygonStore::duplicate(BObolPolygonHandle handle,
     if (!dst)
 	return BObolPolygonHandle();
 
-    bg_polygon_free(&dst->polygon);
-    bg_polygon_cpy(&dst->polygon, &src->polygon);
+    (void)bg_polygon_copy(&dst->polygon, &src->polygon);
     dst->visual = src->visual;
     dst->currentContour = src->currentContour;
     dst->currentPoint = src->currentPoint;
@@ -3768,14 +3594,8 @@ BObolPolygonStore::move(BObolPolygonHandle handle,
     SbVec3f current = store_polygon_project_to_zplane(rec, currentPoint);
     SbVec3f previous = store_polygon_project_to_zplane(rec, previousPoint);
     SbVec3f delta = current - previous;
-    for (size_t i = 0; i < rec->polygon.num_contours; i++) {
-	struct bg_poly_contour &contour = rec->polygon.contour[i];
-	for (size_t j = 0; j < contour.num_points; j++) {
-	    contour.point[j][X] += delta[0];
-	    contour.point[j][Y] += delta[1];
-	    contour.point[j][Z] += delta[2];
-	}
-    }
+    vect_t translation = {delta[0], delta[1], delta[2]};
+    (void)bg_polygon_translate(&rec->polygon, translation);
     rec->originPoint += delta;
     rec->revision++;
     this->impl->realize(rec);
@@ -3813,7 +3633,7 @@ BObolPolygonStore::remove(BObolPolygonHandle handle)
 
     this->impl->names.erase(store_key(rec->scope, rec->name));
     store_release_node(this->impl->controller, rec->node);
-    bg_polygon_free(&rec->polygon);
+    bg_polygon_clear(&rec->polygon);
     this->impl->records.erase(rec->id);
     delete rec;
     if (this->impl->controller)
@@ -3919,7 +3739,9 @@ BObolPolygonStore::setContourOpen(BObolPolygonHandle handle,
     if (!rec || contour < 0 ||
 	contour >= static_cast<long>(rec->polygon.num_contours))
 	return FALSE;
-    rec->polygon.contour[contour].open = open ? 1 : 0;
+    if (bg_polygon_contour_open_set(&rec->polygon,
+	static_cast<size_t>(contour), open ? 1 : 0))
+	return FALSE;
     rec->revision++;
     this->impl->realize(rec);
     return TRUE;
@@ -3932,8 +3754,8 @@ BObolPolygonStore::setAllContoursOpen(BObolPolygonHandle handle,
     BObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
 	return FALSE;
-    for (size_t i = 0; i < rec->polygon.num_contours; i++)
-	rec->polygon.contour[i].open = open ? 1 : 0;
+    if (bg_polygon_contours_open_set(&rec->polygon, open ? 1 : 0))
+	return FALSE;
     rec->revision++;
     this->impl->realize(rec);
     return TRUE;
@@ -4104,8 +3926,7 @@ BObolPolygonStore::setGeometry(BObolPolygonHandle handle,
     BObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec || !polygon)
 	return FALSE;
-    bg_polygon_free(&rec->polygon);
-    bg_polygon_cpy(&rec->polygon, const_cast<struct bg_polygon *>(polygon));
+    (void)bg_polygon_copy(&rec->polygon, polygon);
     rec->revision++;
     this->impl->realize(rec);
     return TRUE;
@@ -4124,8 +3945,7 @@ BObolPolygonStore::copyGeometry(BObolPolygonHandle handle,
     BObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec || !polygonOut)
 	return FALSE;
-    bg_polygon_cpy(polygonOut, &rec->polygon);
-    return TRUE;
+    return bg_polygon_copy(polygonOut, &rec->polygon) == 0 ? TRUE : FALSE;
 }
 
 SbBool
@@ -4152,8 +3972,8 @@ BObolPolygonStore::area(BObolPolygonHandle handle, double viewScale) const
     BObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
 	return 0.0;
-    return static_cast<double>(bg_find_polygon_area(&rec->polygon,
-			       CLIPPER_MAX, &rec->viewPlane, viewScale));
+    return static_cast<double>(bg_polygon_area(&rec->polygon,
+			       CLIPPER_MAX, rec->viewPlane, viewScale));
 }
 
 SbBool
@@ -4166,26 +3986,27 @@ BObolPolygonStore::overlaps(BObolPolygonHandle a,
     BObolPolygonStoreRecord *rb = this->impl->record(b);
     if (!ra || !rb)
 	return FALSE;
-    return bg_polygons_overlap(&ra->polygon, &rb->polygon, &ra->viewPlane,
+    return bg_polygon_overlaps(&ra->polygon, &rb->polygon, ra->viewPlane,
 			       &tol, viewScale) ? TRUE : FALSE;
 }
 
 SbBool
 BObolPolygonStore::csg(BObolPolygonHandle target,
 			 BObolPolygonHandle stencil,
-			 bg_clip_t op)
+			 enum bg_polygon_boolean_op op)
 {
     BObolPolygonStoreRecord *rt = this->impl->record(target);
     BObolPolygonStoreRecord *rs = this->impl->record(stencil);
     if (!rt || !rs)
 	return FALSE;
-    if (op == bg_None || rs->polygon.num_contours == 0)
+    if (op == BG_POLYGON_BOOLEAN_NONE || rs->polygon.num_contours == 0)
 	return FALSE;
 
     if (rt->polygon.num_contours == 0) {
-	if (op != bg_Union)
+	if (op != BG_POLYGON_BOOLEAN_UNION)
 	    return FALSE;
-	bg_polygon_cpy(&rt->polygon, &rs->polygon);
+	if (bg_polygon_copy(&rt->polygon, &rs->polygon))
+	    return FALSE;
 	rt->type = rs->type;
 	rt->currentContour = rs->currentContour;
 	rt->currentPoint = rs->currentPoint;
@@ -4198,19 +4019,16 @@ BObolPolygonStore::csg(BObolPolygonHandle target,
     }
 
     const struct bn_tol tol = BN_TOL_INIT_TOL;
-    if (!bg_polygons_overlap(&rt->polygon, &rs->polygon, &rt->viewPlane,
+    if (!bg_polygon_overlaps(&rt->polygon, &rs->polygon, rt->viewPlane,
 			     &tol, CLIPPER_MAX))
 	return FALSE;
 
-    struct bg_polygon *result = bg_clip_polygon(op, &rt->polygon,
-				&rs->polygon, CLIPPER_MAX, &rt->viewPlane);
-    if (!result)
+    struct bg_polygon result = BG_POLYGON_INIT_ZERO;
+    if (bg_polygon_boolean(&result, op, &rt->polygon,
+	    &rs->polygon, CLIPPER_MAX, rt->viewPlane))
 	return FALSE;
 
-    bg_polygon_free(&rt->polygon);
-    bg_polygon_cpy(&rt->polygon, result);
-    bg_polygon_free(result);
-    bu_free(result, "BObol polygon CSG result");
+    (void)bg_polygon_move(&rt->polygon, &result);
     rt->type = BObolPolygonType::General;
     rt->revision++;
     this->impl->realize(rt);
@@ -4262,7 +4080,7 @@ BObolPolygonStore::importSketch(const SbString &name,
     if (data.have_edge_color)
 	rec->visual.edgeColor = store_bu_to_sbcolor(data.edge_color);
     rec->visual.viewZ = static_cast<float>(data.vZ);
-    bg_polygon_cpy(&rec->polygon, &data.polygon);
+    (void)bg_polygon_copy(&rec->polygon, &data.polygon);
 
     rt_sketch_polygon_data_free(&data);
 
@@ -4295,7 +4113,7 @@ BObolPolygonStore::exportSketch(BObolPolygonHandle handle,
     data.vZ = rec->visual.viewZ;
     data.have_edge_color = 1;
     store_sbcolor_to_bu(rec->visual.edgeColor, &data.edge_color);
-    bg_polygon_cpy(&data.polygon, &rec->polygon);
+    (void)bg_polygon_copy(&data.polygon, &rec->polygon);
 
     struct directory *dp = db_sketch_polygon_data_to_sketch(dbip,
 			   store_string(name).c_str(), &data);

@@ -30,6 +30,7 @@
 #include "bn.h"
 #include "ged.h"
 #include "ged/view.h"
+#include "ged/view_feature_batch.h"
 #include "rt/view.h"
 
 #include "./mged.h"
@@ -37,6 +38,26 @@
 
 /* local sp_hook function */
 static void ax_set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
+
+static int
+mged_hud_axes_replace(struct ged_view_context *view_ctx, const char *name,
+	const struct bv_axes_state *axes, const mat_t rotation)
+{
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "mged-edit-axes";
+    desc.owner_role = "faceplate";
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(view_ctx, &desc);
+    if (!batch)
+	return 0;
+    if (!ged_view_feature_batch_hud_axes_replace(batch, name, axes,
+	    rotation)) {
+	ged_view_feature_batch_abort(batch);
+	return 0;
+    }
+    return ged_view_feature_batch_commit(batch);
+}
 
 struct _axes_state default_axes_state = {
     /* ax_rc */			1,
@@ -119,9 +140,9 @@ mged_edit_axes_state_sync(struct mged_state *s)
 	MAT4X3PNT(m_ap2, MEDIT(s)->model_changes, MEDIT(s)->e_keypoint);
 	MAT4X3PNT(v_ap2, model2view, m_ap2);
     } else {
-	(void)ged_annotation_hud_axes_replace(view_ctx,
+	(void)mged_hud_axes_replace(view_ctx,
 		"_faceplate/edit_axes/initial", NULL, NULL);
-	(void)ged_annotation_hud_axes_replace(view_ctx,
+	(void)mged_hud_axes_replace(view_ctx,
 		"_faceplate/edit_axes/current", NULL, NULL);
 	return;
     }
@@ -135,7 +156,7 @@ mged_edit_axes_state_sync(struct mged_state *s)
     VMOVE(gas.label_color, color_scheme->cs_edit_axes_label1);
     gas.line_width = axes_state->ax_edit_linewidth1;
 
-    (void)ged_annotation_hud_axes_replace(view_ctx,
+    (void)mged_hud_axes_replace(view_ctx,
 	    "_faceplate/edit_axes/initial", &gas, view_rotation);
 
     memset(&gas, 0, sizeof(gas));
@@ -148,7 +169,7 @@ mged_edit_axes_state_sync(struct mged_state *s)
     gas.line_width = axes_state->ax_edit_linewidth2;
 
     bn_mat_mul(rot_mat, view_rotation, MEDIT(s)->acc_rot_sol);
-    (void)ged_annotation_hud_axes_replace(view_ctx,
+    (void)mged_hud_axes_replace(view_ctx,
 	    "_faceplate/edit_axes/current", &gas, rot_mat);
 }
 

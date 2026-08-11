@@ -145,7 +145,10 @@ _ged_draw_registry_entries_free(struct ged_drawable *gdp)
 	bu_free(entry, "ged draw registry entry");
     }
     bu_ptbl_reset(&gdp->gd_draw_registry);
-    gdp->gd_draw_next_token = 1;
+    /* Never recycle occurrence ids in a live GED context.  A retired public
+     * occurrence reference must not alias a later object after scene clear. */
+    if (!gdp->gd_draw_next_token)
+	gdp->gd_draw_next_token = 1;
 }
 
 

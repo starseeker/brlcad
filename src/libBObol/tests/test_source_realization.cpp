@@ -123,6 +123,7 @@ make_request(BObolSourceRealizationRequest &request,
 int
 main(int argc, char **argv)
 {
+    bu_setprogname(argv[0]);
     if (argc != 1) {
 	std::fprintf(stderr, "Usage: %s\n", argv[0]);
 	return 1;

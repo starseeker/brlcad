@@ -204,7 +204,8 @@ struct qged_qcmd_cleanup {
 };
 
 
-QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode, int quad_mode) :QApplication(argc, argv)
+QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode,
+	int quad_mode, bool test_mode) :QApplication(argc, argv)
 {
     setOrganizationName("BRL-CAD");
     setOrganizationDomain("brlcad.org");
@@ -294,7 +295,14 @@ QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode, 
     if (QFileInfo(settings.fileName()).exists())
 	std::cout << "Reading settings from " << settings.fileName().toStdString() << "\n";
 
-    if (!QFileInfo(settings.fileName()).exists()) {
+    /* A replay is a hermetic viewport test, not a continuation of the local
+     * operator's desktop.  Restoring a saved top-level geometry before the
+     * event script's explicit resize leaves two asynchronous X11 configure
+     * requests in flight.  Under a slow software draw the older request can
+     * arrive seconds later, temporarily changing the viewport and therefore
+     * the fitted camera.  It also makes screenshots depend on personal dock
+     * state. */
+    if (test_mode || !QFileInfo(settings.fileName()).exists()) {
 	w->resize(QSize(1100, 800));
     } else {
 	//https://bugreports.qt.io/browse/QTBUG-16252?focusedCommentId=250562&page=com.atlassian.jira.plugin.system.issuetabpanels%3Acomment-tabpanel#comment-250562

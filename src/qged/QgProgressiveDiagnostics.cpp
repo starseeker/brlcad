@@ -49,6 +49,7 @@
 #include "bu/vls.h"
 #include "ged/scene.h"
 #include "ged/selection_state.h"
+#include "qtcad/QgCanvasBase.h"
 
 #include "QgEdApp.h"
 #include "QgGuiTestDriver.h"
@@ -73,16 +74,22 @@ qged_test_collect_database_source_roots(
 	qged_test_collect_database_source_roots(group->getChild(i), sources);
 }
 
-static BObolViewController *
-qged_test_event_controller(QgEdApp &app, const QgTestEvent &event)
+static QgView *
+qged_test_event_view(QgEdApp &app, const QgTestEvent &event)
 {
     QObject *target = app.w ?
 	QgEventRecorder::resolveObject(app.w, event.target) : nullptr;
     for (QObject *object = target; object; object = object->parent()) {
 	if (QgView *view = qobject_cast<QgView *>(object))
-	    return view->obolViewController();
+	    return view;
     }
-    QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+    return app.w ? app.w->CurrentDisplay() : nullptr;
+}
+
+static BObolViewController *
+qged_test_event_controller(QgEdApp &app, const QgTestEvent &event)
+{
+    QgView *view = qged_test_event_view(app, event);
     return view ? view->obolViewController() : nullptr;
 }
 
@@ -106,6 +113,22 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    event.arguments.value(QStringLiteral("name")));
     sample.insert(QStringLiteral("elapsed_ms"), elapsedMilliseconds);
     sample.insert(QStringLiteral("event_duration_us"), eventMicroseconds);
+    if (app.w) {
+	sample.insert(QStringLiteral("window_width"), app.w->width());
+	sample.insert(QStringLiteral("window_height"), app.w->height());
+    }
+    if (QgView *view = qged_test_event_view(app, event)) {
+	sample.insert(QStringLiteral("view_width"), view->width());
+	sample.insert(QStringLiteral("view_height"), view->height());
+	if (QgCanvasBase *canvas = view->canvasBase()) {
+	    if (QWidget *widget = canvas->canvasWidget()) {
+		sample.insert(QStringLiteral("canvas_width"), widget->width());
+		sample.insert(QStringLiteral("canvas_height"), widget->height());
+		sample.insert(QStringLiteral("canvas_device_pixel_ratio"),
+		    static_cast<double>(widget->devicePixelRatioF()));
+	    }
+	}
+    }
     /* Full draw-frontier and selection listings cross the GED/Obol hierarchy
      * and are structural diagnostics, not frame telemetry.  Sampling them
      * after every 8 ms motion interval made the validation harness dominate
@@ -621,6 +644,7 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     qint64 activeCadSubpixelProxyPoints = 0;
     qint64 visibleStructuralFallbackBoxes = 0;
     qint64 presentedCadFaces = 0;
+    qint64 presentedCadLines = 0;
     qint64 presentedCadPositions = 0;
     qint64 presentedCadNormals = 0;
     qint64 presentedCadOccurrences = 0;
@@ -628,6 +652,7 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     qint64 measuredCadGpuFaces = 0;
     uint64_t measuredCadGpuNanoseconds = 0;
     uint64_t measuredCadGpuSampleSerial = 0;
+    double measuredCadGpuPointProxyPixelThreshold = 1.0;
     qint64 cadFramePlanBuildCountMax = 0;
     qint64 cadFramePlanInstanceRecordCountMax = 0;
     bool cadPreparedReplayAll = true;
@@ -702,17 +727,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 			presentation->pointProxyPixelThreshold.getValue()));
 		visibleStructuralFallbackBoxes += static_cast<qint64>(
 		    presentation->lastUncollapsedStructuralProxyCount());
-		const uint64_t renderedTriangles =
-		    presentation->lastRenderedTriangleCount();
-		presentedCadFaces = renderedTriangles >
-			static_cast<uint64_t>(
-			    std::numeric_limits<qint64>::max() -
-				presentedCadFaces) ?
-		    std::numeric_limits<qint64>::max() :
-		    presentedCadFaces +
-			static_cast<qint64>(renderedTriangles);
-		const Obol::CadRenderedShadedWork renderedWork =
-		    presentation->lastRenderedShadedWork();
+		const Obol::CadRenderedWork renderedWork =
+		    presentation->lastRenderedWork();
 		presentedCadWorkExact =
 		    presentedCadWorkExact && renderedWork.exact;
 		const auto addRenderedWork = [](qint64 current, uint64_t value) {
@@ -721,6 +737,10 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 			std::numeric_limits<qint64>::max() :
 			current + static_cast<qint64>(value);
 		};
+		presentedCadFaces = addRenderedWork(
+		    presentedCadFaces, renderedWork.triangleCount);
+		presentedCadLines = addRenderedWork(
+		    presentedCadLines, renderedWork.lineCount);
 		presentedCadPositions = addRenderedWork(
 		    presentedCadPositions, renderedWork.positionCount);
 		presentedCadNormals = addRenderedWork(
@@ -733,6 +753,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		    presentation->lastGpuRenderNanoseconds();
 		const uint64_t gpuTriangles =
 		    presentation->lastGpuRenderedTriangleCount();
+		const double gpuPointThreshold =
+		    presentation->lastGpuPointProxyPixelThreshold();
 		if (gpuSampleSerial && gpuNanoseconds) {
 		    measuredCadGpuSampleSerial =
 			std::max(measuredCadGpuSampleSerial, gpuSampleSerial);
@@ -748,6 +770,9 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 			std::numeric_limits<qint64>::max() :
 			measuredCadGpuFaces +
 			    static_cast<qint64>(gpuTriangles);
+		    measuredCadGpuPointProxyPixelThreshold = std::max(
+			measuredCadGpuPointProxyPixelThreshold,
+			gpuPointThreshold);
 		}
 		const int tier = presentation->lastRenderTier();
 		if (tier >= 0) {
@@ -1016,6 +1041,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	visibleStructuralFallbackBoxes);
     sample.insert(QStringLiteral("presented_cad_faces"),
 	presentedCadFaces);
+    sample.insert(QStringLiteral("presented_cad_lines"),
+	presentedCadLines);
     sample.insert(QStringLiteral("presented_cad_positions"),
 	presentedCadPositions);
     sample.insert(QStringLiteral("presented_cad_normals"),
@@ -1030,6 +1057,9 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<double>(measuredCadGpuNanoseconds) / 1000000.0);
     sample.insert(QStringLiteral("measured_cad_gpu_sample_serial"),
 	QString::number(measuredCadGpuSampleSerial));
+    sample.insert(
+	QStringLiteral("measured_cad_gpu_point_proxy_pixel_threshold"),
+	measuredCadGpuPointProxyPixelThreshold);
     sample.insert(QStringLiteral("cad_frame_plan_build_count_max"),
 	cadFramePlanBuildCountMax);
     sample.insert(QStringLiteral("cad_frame_plan_instance_record_count_max"),

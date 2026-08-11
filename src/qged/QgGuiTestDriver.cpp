@@ -13,10 +13,13 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <memory>
 #include <vector>
 
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -27,8 +30,13 @@
 
 #include "BObol/BLodService.h"
 #include "BObol/BViewController.h"
+#include "BObol/BViewLod.h"
 #include "brlcad_version.h"
 #include "bu/log.h"
+#include "qtcad/QgCanvasBase.h"
+#include "qtcad/QgGL.h"
+#include "qtcad/QgSW.h"
+#include "qtcad/QgView.h"
 #include "QgEdApp.h"
 #include "QgGuiTestDriver.h"
 
@@ -79,6 +87,171 @@ qged_write_test_report(const QString &fileName, const QJsonObject &report,
     }
     return true;
 }
+
+class QgedPresentedFrameCapture {
+public:
+    explicit QgedPresentedFrameCapture(const QString &directory)
+	: directory_(QDir(directory).absolutePath())
+    {
+	bool limitOk = false;
+	const QByteArray configuredLimit = qgetenv("QGED_TEST_FRAME_LIMIT");
+	const int configured = configuredLimit.toInt(&limitOk);
+	if (limitOk && configured > 0)
+	    limit_ = configured;
+	if (!QDir().mkpath(directory_)) {
+	    error_ = QStringLiteral("unable to create frame directory: %1")
+		.arg(directory_);
+	    return;
+	}
+	manifest_.setFileName(
+	    QDir(directory_).filePath(QStringLiteral("frames.tsv")));
+	stateManifest_.setFileName(
+	    QDir(directory_).filePath(QStringLiteral("states.tsv")));
+	if (!manifest_.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+	    !stateManifest_.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+	    error_ = manifest_.errorString();
+	    if (error_.isEmpty())
+		error_ = stateManifest_.errorString();
+	    return;
+	}
+	clock_.start();
+	valid_ = true;
+    }
+
+    void capture(const QImage &presentedFrame,
+	BObolViewController *controller)
+    {
+	if (!valid_ || presentedFrame.isNull() || capturing_)
+	    return;
+	if (captured_ >= limit_) {
+	    ++dropped_;
+	    return;
+	}
+	capturing_ = true;
+	const QImage rgba = presentedFrame.convertToFormat(
+	    QImage::Format_RGBA8888);
+	if (rgba.isNull() || rgba.bytesPerLine() != rgba.width() * 4) {
+	    ++failed_;
+	    capturing_ = false;
+	    return;
+	}
+	const QString baseName = QStringLiteral("frame-%1.rgba")
+	    .arg(captured_, 6, 10, QLatin1Char('0'));
+	const QString framePath = QDir(directory_).filePath(baseName);
+	QFile output(framePath);
+	const qint64 bytes = static_cast<qint64>(rgba.width()) *
+	    static_cast<qint64>(rgba.height()) * 4;
+	if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+	    output.write(reinterpret_cast<const char *>(rgba.constBits()),
+		bytes) != bytes) {
+	    ++failed_;
+	    output.remove();
+	    capturing_ = false;
+	    return;
+	}
+	output.close();
+	const qint64 elapsedUsec = clock_.nsecsElapsed() / 1000;
+	const QByteArray row = QStringLiteral("%1\t%2\t%3\t%4\n")
+	    .arg(framePath)
+	    .arg(rgba.width())
+	    .arg(rgba.height())
+	    .arg(elapsedUsec)
+	    .toUtf8();
+	if (manifest_.write(row) != row.size()) {
+	    ++failed_;
+	    QFile::remove(framePath);
+	} else {
+	    QByteArray reason = controller ?
+		controller->getRenderReason().getString() : "";
+	    reason.replace('\t', ' ');
+	    reason.replace('\n', ' ');
+	    BObolViewLodState *lodState = controller ?
+		controller->getViewLodState() : nullptr;
+	    size_t presentedPrimitives = 0;
+	    size_t presentedRenderCost = 0;
+	    const bool exactCadFrame = lodState &&
+		lodState->lastCadPresentationFrameExact();
+	    const bool havePresentedPrimitives = lodState &&
+		lodState->lastCadPresentedPrimitiveCount(
+		    presentedPrimitives);
+	    const bool havePresentedRenderCost = lodState &&
+		lodState->lastCadPresentedRenderCost(presentedRenderCost);
+	    const QByteArray stateRow = QStringLiteral(
+		"%1\t%2\t%3\t%4\t%5\t%6\t%7\t%8\t%9\t%10\t%11\t%12\t%13\t%14\n")
+		.arg(captured_)
+		.arg(elapsedUsec)
+		.arg(controller ? static_cast<qulonglong>(
+		    controller->getActiveLodMeshPayloadCount()) : 0)
+		.arg(controller ? static_cast<qulonglong>(
+		    controller->getActiveLodCadPayloadCount()) : 0)
+		.arg(controller ? static_cast<qulonglong>(
+		    controller->getLodViewRevision()) : 0)
+		.arg(controller ? static_cast<qulonglong>(
+		    controller->getLodPolicyRevision()) : 0)
+		.arg(controller ?
+		    controller->getLodInteractiveProgressiveCeiling() : -1)
+		.arg(controller && controller->isLodInteractionActive() ? 1 : 0)
+		.arg(exactCadFrame ? 1 : 0)
+		.arg(havePresentedPrimitives ?
+		    static_cast<qulonglong>(presentedPrimitives) : 0)
+		.arg(havePresentedRenderCost ?
+		    static_cast<qulonglong>(presentedRenderCost) : 0)
+		.arg(controller ? static_cast<qulonglong>(
+		    controller->getInterruptedPresentationFrameCount()) : 0)
+		.arg(controller ? static_cast<qulonglong>(
+		    controller->getLastInterruptedPresentationTimeNanoseconds()) : 0)
+		.arg(QString::fromLocal8Bit(reason))
+		.toUtf8();
+	    if (stateManifest_.write(stateRow) != stateRow.size())
+		++failed_;
+	    ++captured_;
+	}
+	capturing_ = false;
+    }
+
+    void finish()
+    {
+	if (manifest_.isOpen())
+	    manifest_.flush();
+	if (stateManifest_.isOpen())
+	    stateManifest_.flush();
+    }
+
+    QJsonObject summary() const
+    {
+	QJsonObject result;
+	result.insert(QStringLiteral("directory"), directory_);
+	result.insert(QStringLiteral("manifest"), manifest_.fileName());
+	result.insert(QStringLiteral("state_manifest"),
+	    stateManifest_.fileName());
+	result.insert(QStringLiteral("captured"), captured_);
+	result.insert(QStringLiteral("dropped"), dropped_);
+	result.insert(QStringLiteral("failed"), failed_);
+	result.insert(QStringLiteral("limit"), limit_);
+	result.insert(QStringLiteral("valid"), valid_);
+	if (!error_.isEmpty())
+	    result.insert(QStringLiteral("error"), error_);
+	return result;
+    }
+
+private:
+    QString directory_;
+    QFile manifest_;
+    QFile stateManifest_;
+    QElapsedTimer clock_;
+    int captured_ = 0;
+    int dropped_ = 0;
+    int failed_ = 0;
+    /*
+     * libicv deliberately owns lossless image copies while assembling an
+     * APNG.  Keep an accidental long-running diagnostic from consuming
+     * unbounded memory; callers may raise this explicit test-only limit.
+     */
+    int limit_ = 300;
+    bool valid_ = false;
+    bool capturing_ = false;
+    QString error_;
+};
 
 static bool
 qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
@@ -208,6 +381,7 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 	    QElapsedTimer elapsed;
 	    QJsonArray samples;
 	    QJsonObject report;
+	    std::shared_ptr<QgedPresentedFrameCapture> frameCapture;
 	    report.insert(QStringLiteral("schema"),
 		QStringLiteral("brlcad.qged.gui-report"));
 	    report.insert(QStringLiteral("version"), 1);
@@ -221,6 +395,30 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 	    report.insert(QStringLiteral("swap_interval"),
 		QString::fromLocal8Bit(std::getenv("QGED_SWAP_INTERVAL") ?
 		    std::getenv("QGED_SWAP_INTERVAL") : "default"));
+	    const QString frameDirectory = QString::fromLocal8Bit(
+		std::getenv("QGED_TEST_FRAME_DIR") ?
+		std::getenv("QGED_TEST_FRAME_DIR") : "");
+	    if (!frameDirectory.isEmpty() && app.w) {
+		frameCapture = std::make_shared<QgedPresentedFrameCapture>(
+		    frameDirectory);
+		QgView *view = app.w->CurrentDisplay();
+		QgCanvasBase *canvas = view ? view->canvasBase() : nullptr;
+		QWidget *canvasWidget = canvas ? canvas->canvasWidget() : nullptr;
+		BObolViewController *captureController =
+		    view ? view->obolViewController() : nullptr;
+		if (QgGL *glWidget = qobject_cast<QgGL *>(canvasWidget)) {
+		    QObject::connect(glWidget, &QgGL::frame_presented, &app,
+			[frameCapture, captureController](const QImage &image) {
+			    frameCapture->capture(image, captureController);
+			});
+		} else if (QgSW *softwareWidget =
+			qobject_cast<QgSW *>(canvasWidget)) {
+		    QObject::connect(softwareWidget, &QgSW::frame_presented,
+			&app, [frameCapture, captureController](const QImage &image) {
+			    frameCapture->capture(image, captureController);
+			});
+		}
+	    }
 	    player.setCheckpointHandler([](QWidget *widget,
 		    const QString &name, QString *checkpointError) {
 		if (!widget || name.isEmpty()) {
@@ -231,9 +429,21 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		    return false;
 		}
 		bool saved = false;
-		if (QOpenGLWidget *glWidget =
+	if (QOpenGLWidget *glWidget =
 			qobject_cast<QOpenGLWidget *>(widget)) {
 		    const QImage frame = glWidget->grabFramebuffer();
+		    saved = !frame.isNull() && frame.save(name);
+		} else if (QgSW *softwareWidget =
+			qobject_cast<QgSW *>(widget)) {
+		    /* QWidget::grab() invokes QgSW::paintEvent(), turning a
+		     * diagnostic readback into a second deadline-governed
+		     * presentation.  On software GL the readback itself can cross
+		     * that deadline and make checkpoint frequency alter the retained
+		     * PoP cut.  The canvas image API performs the same traversal as an
+		     * observational export: no progressive advance, capacity sample,
+		     * or deadline feedback. */
+		    QImage frame;
+		    softwareWidget->get_viewport_image(frame);
 		    saved = !frame.isNull() && frame.save(name);
 		} else {
 		    const QPixmap frame = widget->grab();
@@ -337,6 +547,11 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 	    report.insert(QStringLiteral("success"), success);
 	    report.insert(QStringLiteral("elapsed_ms"), elapsed.elapsed());
 	    report.insert(QStringLiteral("samples"), samples);
+	    if (frameCapture) {
+		frameCapture->finish();
+		report.insert(QStringLiteral("presented_frame_capture"),
+		    frameCapture->summary());
+	    }
 	    if (!success)
 		report.insert(QStringLiteral("error"), error);
 	    QString reportError;

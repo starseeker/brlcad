@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "BObol/BDatabaseSource.h"
+#include "bu/app.h"
 
 #include <atomic>
 #include <cstdio>
@@ -138,8 +139,10 @@ test_concurrent_producers(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
+    (void)argc;
+    bu_setprogname(argv[0]);
     if (test_priority_and_state())
 	return 1;
     if (test_concurrent_producers())

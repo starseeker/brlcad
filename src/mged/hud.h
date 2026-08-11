@@ -14,6 +14,7 @@
 
 #include "common.h"
 #include "ged/draw.h"
+#include "ged/view_feature_batch.h"
 
 __BEGIN_DECLS
 
@@ -31,7 +32,7 @@ struct mged_hud_line_layer {
 struct mged_hud_builder {
     struct ged_view_context *view_ctx;
     char *prefix;
-    struct ged_annotation_label *labels;
+    struct ged_view_feature_label *labels;
     char **label_text;
     size_t label_count;
     size_t label_capacity;

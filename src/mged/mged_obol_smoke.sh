@@ -198,13 +198,13 @@ if [ "$rt_geometry_0" -le 0 ] || [ "$rt_geometry_0" -ne "$rt_geometry_1" ] ||
     exit 1
 fi
 
-# PIX and endpoint captures both use bottom-left row order.  These samples
-# avoid the faceplate border and prove the requested blue-bottom/red-top
-# gradient was not discarded or vertically inverted by screengrab.
-set -- `od -An -tu1 -N3 -j 155100 "$PIX_OUT"`
+# PIX and endpoint captures both use bottom-left row order.  Sample x=300,
+# safely away from the faceplate border, model, and right-side LoD progress
+# bar, to prove the requested blue-bottom/red-top gradient was preserved.
+set -- `od -An -tu1 -N3 -j 154500 "$PIX_OUT"`
 bottom_r=$1
 bottom_b=$3
-set -- `od -An -tu1 -N3 -j 615900 "$PIX_OUT"`
+set -- `od -An -tu1 -N3 -j 615300 "$PIX_OUT"`
 top_r=$1
 top_b=$3
 if [ "$bottom_b" -le "$bottom_r" ] || [ "$top_r" -le "$top_b" ]; then

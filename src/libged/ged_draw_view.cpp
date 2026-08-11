@@ -460,55 +460,6 @@ ged_pick_rect(struct ged_view_context *view_ctx, int x0, int y0, int x1, int y1)
 }
 
 int
-ged_annotation_hud_axes_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const struct bv_axes_state *axes,
-	const mat_t rotation)
-{
-    return ged_draw_obol_view_context_hud_axes_replace(view_ctx, name,
-	    axes, rotation);
-}
-
-int
-ged_annotation_hud_lines_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const point_t *points,
-	const int *cmds,
-	size_t point_count,
-	const struct ged_view_feature_style *style)
-{
-    return ged_draw_obol_view_context_hud_lines_replace(view_ctx, name,
-	    points, cmds, point_count, style);
-}
-
-int
-ged_annotation_hud_labels_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const struct ged_annotation_label *labels,
-	size_t label_count,
-	const struct ged_view_feature_style *style)
-{
-    return ged_draw_obol_view_context_hud_labels_replace(view_ctx, name,
-	    labels, label_count, style);
-}
-
-int
-ged_annotation_hud_line_layers_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const struct ged_annotation_line_layer *layers,
-	size_t layer_count,
-	const struct ged_view_feature_style *style)
-{
-    return ged_draw_obol_view_context_hud_line_layers_replace(view_ctx, name,
-	    layers, layer_count, style);
-}
-
-
-int
 ged_selection_available(struct ged_view_context *view_ctx)
 {
     return ged_draw_obol_view_context_selection_available(view_ctx);
@@ -630,9 +581,10 @@ ged_view_feature_remove(struct ged_view_context *view_ctx, const char *name)
 
 
 int
-ged_view_feature_remove_ref(ged_view_feature_ref ref)
+ged_view_edit_remove_ref(struct ged_view_context *view_ctx,
+	ged_view_edit_ref ref)
 {
-    return ged_draw_obol_view_feature_remove_ref(ref);
+    return ged_draw_obol_view_feature_remove_ref(view_ctx, ref);
 }
 
 
@@ -967,16 +919,16 @@ ged_view_feature_highlight_at(
 }
 
 int
-ged_view_feature_ref_is_null(ged_view_feature_ref ref)
+ged_view_edit_ref_is_null(ged_view_edit_ref ref)
 {
     return ged_draw_obol_view_feature_ref_is_null(ref);
 }
 
 
 int
-ged_view_feature_edit_preview_publish_event(
+ged_view_edit_preview_publish_event(
 	struct ged_view_context *view_ctx,
-	ged_view_feature_ref feature,
+	ged_view_edit_ref feature,
 	enum ged_view_edit_preview_event event,
 	const char *source_path)
 {
@@ -985,49 +937,49 @@ ged_view_feature_edit_preview_publish_event(
 }
 
 int
-ged_view_feature_edit_transaction_apply(
+ged_view_edit_transaction_apply(
 	struct ged_view_context *view_ctx,
 	const struct ged_view_edit_transaction *transaction,
-	ged_view_feature_ref *feature_out)
+	ged_view_edit_ref *feature_out)
 {
     if (feature_out)
-	*feature_out = GED_VIEW_FEATURE_REF_NULL;
+	*feature_out = GED_VIEW_EDIT_REF_NULL;
     if (!view_ctx || !transaction || !transaction->feature_name ||
 	!transaction->feature_name[0])
 	return 0;
 
-    ged_view_feature_ref feature = transaction->feature;
+    ged_view_edit_ref feature = transaction->feature;
     const int terminal =
 	transaction->event == GED_VIEW_EDIT_PREVIEW_COMMIT ||
 	transaction->event == GED_VIEW_EDIT_PREVIEW_CANCEL ||
 	transaction->event == GED_VIEW_EDIT_PREVIEW_DISCARD;
     if (terminal) {
-	int ret = ged_view_feature_ref_is_null(feature) ?
+	int ret = ged_view_edit_ref_is_null(feature) ?
 	    ged_view_feature_remove(view_ctx,
 		transaction->feature_name) :
-	    ged_view_feature_edit_preview_publish_event(view_ctx, feature,
+	    ged_view_edit_preview_publish_event(view_ctx, feature,
 		transaction->event, transaction->source_path);
 	return ret;
     }
 
-    if (ged_view_feature_ref_is_null(feature))
-	feature = ged_view_feature_overlay_ensure(view_ctx,
+    if (ged_view_edit_ref_is_null(feature))
+	feature = ged_view_edit_overlay_ensure(view_ctx,
 	    transaction->feature_name, transaction->owner,
 	    transaction->source_path);
-    if (ged_view_feature_ref_is_null(feature))
+    if (ged_view_edit_ref_is_null(feature))
 	return 0;
 
     if (transaction->color_valid)
-	ged_view_feature_set_color(feature, transaction->color[0],
+	    ged_view_edit_color_set(view_ctx, feature, transaction->color[0],
 	    transaction->color[1], transaction->color[2]);
 
     int updated = 1;
     if (transaction->internal) {
-	updated = ged_view_feature_primitive_wireframe_replace(feature,
+	updated = ged_view_edit_primitive_wireframe_replace(view_ctx, feature,
 	    transaction->dbip, transaction->internal, transaction->matrix,
 	    transaction->ttol, transaction->tol);
     } else if (transaction->point_count > 0) {
-	updated = ged_view_feature_edit_preview_replace(feature,
+	updated = ged_view_edit_preview_replace(view_ctx, feature,
 	    transaction->source_path, transaction->edit_intent_id,
 	    transaction->edit_intent_role, transaction->points,
 	    transaction->commands, transaction->point_count,
@@ -1036,7 +988,7 @@ ged_view_feature_edit_transaction_apply(
     if (!updated)
 	return 0;
 
-    (void)ged_view_feature_edit_preview_publish_event(view_ctx,
+    (void)ged_view_edit_preview_publish_event(view_ctx,
 	feature, transaction->event, transaction->source_path);
     if (feature_out)
 	*feature_out = feature;
@@ -1044,7 +996,7 @@ ged_view_feature_edit_transaction_apply(
 }
 
 int
-ged_draw_edit_transaction_apply(
+ged_view_edit_transaction_apply_all(
 	struct ged *gedp,
 	const struct ged_view_edit_transaction *transaction)
 {
@@ -1052,7 +1004,7 @@ ged_draw_edit_transaction_apply(
 	return 0;
 
     struct ged_view_edit_transaction local = *transaction;
-    local.feature = GED_VIEW_FEATURE_REF_NULL;
+    local.feature = GED_VIEW_EDIT_REF_NULL;
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     struct ged_view_context *active_view = ged_view_active_ctx(gedp);
     int active_seen = 0;
@@ -1066,21 +1018,21 @@ ged_draw_edit_transaction_apply(
 		continue;
 	    if (view_ctx == active_view)
 		active_seen = 1;
-	    if (ged_view_feature_edit_transaction_apply(view_ctx,
+	    if (ged_view_edit_transaction_apply(view_ctx,
 		    &local, NULL))
 		applied++;
 	}
     }
 
     if (active_view && !active_seen &&
-	ged_view_feature_edit_transaction_apply(active_view, &local, NULL))
+	ged_view_edit_transaction_apply(active_view, &local, NULL))
 	applied++;
     return applied;
 }
 
 
-ged_view_feature_ref
-ged_view_feature_overlay_ensure(
+ged_view_edit_ref
+ged_view_edit_overlay_ensure(
 	struct ged_view_context *view_ctx,
 	const char *name,
 	const void *owner,
@@ -1091,8 +1043,8 @@ ged_view_feature_overlay_ensure(
 }
 
 
-ged_view_feature_ref
-ged_view_feature_label_ensure(struct ged_view_context *view_ctx,
+ged_view_edit_ref
+ged_view_edit_label_ensure(struct ged_view_context *view_ctx,
 					   const char *name,
 					   const void *owner)
 {
@@ -1101,63 +1053,62 @@ ged_view_feature_label_ensure(struct ged_view_context *view_ctx,
 }
 
 
-void
-ged_view_feature_set_context(ged_view_feature_ref ref, struct ged_view_context *view_ctx)
+int
+ged_view_edit_visible_set(struct ged_view_context *view_ctx,
+	ged_view_edit_ref ref, int visible)
 {
-    (void)ged_draw_obol_view_feature_set_context(ref, view_ctx);
+    return ged_draw_obol_view_feature_set_visible(view_ctx, ref, visible);
 }
 
 
-void
-ged_view_feature_set_visible(ged_view_feature_ref ref, int visible)
-{
-    (void)ged_draw_obol_view_feature_set_visible(ref, visible);
-}
-
-
-void
-ged_view_feature_set_color(ged_view_feature_ref ref,
+int
+ged_view_edit_color_set(struct ged_view_context *view_ctx,
+			ged_view_edit_ref ref,
 				int r,
 				int g,
 				int b)
 {
-    (void)ged_draw_obol_view_feature_set_color(ref, r, g, b);
+    return ged_draw_obol_view_feature_set_color(view_ctx, ref, r, g, b);
 }
 
 
 int
-ged_view_feature_touch(ged_view_feature_ref ref)
+ged_view_edit_touch(struct ged_view_context *view_ctx,
+	ged_view_edit_ref ref)
 {
-    return ged_draw_obol_view_feature_touch(ref);
+    return ged_draw_obol_view_feature_touch(view_ctx, ref);
 }
 
 
 int
-ged_view_feature_labels_replace(
-	ged_view_feature_ref ref,
+ged_view_edit_labels_replace(
+    struct ged_view_context *view_ctx,
+    ged_view_edit_ref ref,
 	const struct ged_view_feature_label *labels,
 	size_t label_count)
 {
-    return ged_draw_obol_view_feature_labels_replace(ref, labels,
+    return ged_draw_obol_view_feature_labels_replace(view_ctx, ref, labels,
 	    label_count);
 }
 
 
 int
-ged_view_feature_points_replace(
-	ged_view_feature_ref ref,
-	enum ged_view_feature_family family,
+ged_view_edit_points_replace(
+    struct ged_view_context *view_ctx,
+    ged_view_edit_ref ref,
+	enum ged_view_edit_geometry_family family,
 	const point_t *points,
 	const int *cmds,
 	size_t point_count)
 {
-    return ged_draw_obol_view_feature_points_replace(ref, family, points,
+    return ged_draw_obol_view_feature_points_replace(view_ctx, ref, family, points,
 	    cmds, point_count);
 }
 
 int
-ged_view_feature_edit_preview_replace(
-	ged_view_feature_ref ref,
+ged_view_edit_preview_replace(
+    struct ged_view_context *view_ctx,
+    ged_view_edit_ref ref,
 	const char *source_path,
 	const char *edit_intent_id,
 	const char *edit_intent_role,
@@ -1167,16 +1118,17 @@ ged_view_feature_edit_preview_replace(
 	uint32_t source_revision,
 	uint32_t inputs_revision)
 {
-    return ged_draw_obol_view_feature_edit_preview_replace(ref, source_path,
+    return ged_draw_obol_view_feature_edit_preview_replace(view_ctx, ref, source_path,
 	    edit_intent_id, edit_intent_role, points, cmds, point_count,
 	    source_revision, inputs_revision);
 }
 
 
 int
-ged_view_feature_clear_geometry(ged_view_feature_ref ref)
+ged_view_edit_geometry_clear(struct ged_view_context *view_ctx,
+	ged_view_edit_ref ref)
 {
-    return ged_draw_obol_view_feature_clear_geometry(ref);
+    return ged_draw_obol_view_feature_clear_geometry(view_ctx, ref);
 }
 
 
@@ -1223,128 +1175,6 @@ ged_view_feature_visible_set(struct ged_view_context *view_ctx, const char *name
     return lookup.controller && lookup.handle.isValid() &&
 	lookup.controller->features().setVisible(lookup.handle,
 	    visible ? TRUE : FALSE) ? 1 : 0;
-}
-
-
-int
-ged_view_feature_depth(struct ged_view_context *view_ctx,
-				    const char *name,
-				    int mode,
-				    fastf_t *depth)
-{
-    if (depth)
-	*depth = 0.0;
-    const struct ged_bobol_feature_lookup lookup =
-	ged_bobol_feature_find(view_ctx, name);
-    BObolFeatureRecord record;
-    if (!depth || !lookup.controller || !lookup.handle.isValid() ||
-	!lookup.controller->features().record(lookup.handle, record))
-	return 0;
-
-    mat_t model2view;
-    if (!bv_model2view_get(model2view,
-	    bv_context_view_const(ged_view_context_bv_const(view_ctx))))
-	return 0;
-    int have_depth = 0;
-    fastf_t calculated = mode ? -DBL_MAX : DBL_MAX;
-    const auto consider = [&](const SbVec3f &point) {
-	point_t model_point;
-	point_t view_point;
-	VSET(model_point, point[0], point[1], point[2]);
-	MAT4X3PNT(view_point, model2view, model_point);
-	if (!have_depth || (mode && view_point[Z] > calculated) ||
-	    (!mode && view_point[Z] < calculated))
-	    calculated = view_point[Z];
-	have_depth = 1;
-    };
-    for (const SbVec3f &point : record.points)
-	consider(point);
-    for (const BObolLabel &label : record.labels) {
-	consider(label.point);
-	if (label.hasLeader)
-	    consider(label.target);
-    }
-    for (const SbVec3f &center : record.axesCenters)
-	consider(center);
-    if (!have_depth)
-	return 0;
-    *depth = calculated;
-    return 1;
-}
-
-
-struct ged_bobol_depth_visit {
-    struct ged_view_context *view_ctx;
-    int mode;
-    ged_view_feature_depth_cb cb;
-    void *data;
-    int count;
-};
-
-static int
-ged_bobol_depth_visit_record(const BObolFeatureRecord &record, void *data)
-{
-    struct ged_bobol_depth_visit *visit =
-	static_cast<struct ged_bobol_depth_visit *>(data);
-    if (!visit || !visit->cb)
-	return 0;
-
-    mat_t model2view;
-    if (!bv_model2view_get(model2view,
-	    bv_context_view_const(ged_view_context_bv_const(visit->view_ctx))))
-	return 1;
-    int have_depth = 0;
-    fastf_t calculated = visit->mode ? -DBL_MAX : DBL_MAX;
-    const auto consider = [&](const SbVec3f &point) {
-	point_t model_point;
-	point_t view_point;
-	VSET(model_point, point[0], point[1], point[2]);
-	MAT4X3PNT(view_point, model2view, model_point);
-	if (!have_depth || (visit->mode && view_point[Z] > calculated) ||
-	    (!visit->mode && view_point[Z] < calculated))
-	    calculated = view_point[Z];
-	have_depth = 1;
-    };
-    for (const SbVec3f &point : record.points)
-	consider(point);
-    for (const BObolLabel &label : record.labels) {
-	consider(label.point);
-	if (label.hasLeader)
-	    consider(label.target);
-    }
-    for (const SbVec3f &center : record.axesCenters)
-	consider(center);
-    if (!have_depth)
-	return 1;
-    visit->count++;
-    return visit->cb(calculated, visit->data);
-}
-
-
-int
-ged_view_feature_depth_foreach(
-	struct ged_view_context *view_ctx,
-	int mode,
-	ged_view_feature_depth_cb cb,
-	void *data)
-{
-    if (!view_ctx || !cb)
-	return 0;
-    struct ged_bobol_depth_visit visit = {view_ctx, mode, cb, data, 0};
-    BObolViewController *local = ged_bobol_view_controller(view_ctx);
-    const BObolFeatureOwner owner = ged_bobol_feature_owner(view_ctx);
-    if (local) {
-	local->features().visitRecords(ged_bobol_depth_visit_record, &visit,
-	    BOBOL_FEATURE_SCOPE_LOCAL, &owner);
-	local->features().visitRecords(ged_bobol_depth_visit_record, &visit,
-	    BOBOL_FEATURE_SCOPE_SHARED, nullptr);
-    }
-    BObolViewController *shared =
-	ged_bobol_shared_feature_controller(view_ctx);
-    if (shared && shared != local)
-	shared->features().visitRecords(ged_bobol_depth_visit_record, &visit,
-	    BOBOL_FEATURE_SCOPE_SHARED, nullptr);
-    return visit.count;
 }
 
 
@@ -1400,410 +1230,15 @@ ged_view_feature_realize(struct ged_view_context *view_ctx,
 }
 
 
-int
-ged_view_feature_indexed_face_set_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int local,
-	const point_t *points,
-	size_t point_count,
-	const vect_t *normals,
-	size_t normal_count,
-	const int *indices,
-	size_t index_count,
-	const struct ged_view_feature_style *style)
-{
-    return ged_draw_obol_view_context_indexed_face_set_replace(view_ctx,
-	    name, local, points, point_count, normals, normal_count, indices,
-	    index_count, style);
-}
-
-
-int
-ged_annotation_lines_replace(struct ged_view_context *view_ctx,
-				    const char *name,
-				    int local,
-				    const point_t *points,
-				    const int *cmds,
-				    size_t point_count,
-				    const struct ged_view_feature_style *style)
-{
-    return ged_draw_obol_view_context_lines_replace(view_ctx, name, local,
-	    points, cmds, point_count, style);
-}
-
-
-int
-ged_annotation_tcl_polygons_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const point_t *points,
-	const int *cmds,
-	size_t point_count,
-	const struct ged_view_feature_style *style)
-{
-    return ged_draw_obol_view_context_tcl_polygons_replace(view_ctx, name,
-	    points, cmds, point_count, style);
-}
-
-
-int
-ged_annotation_data_polygons_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int draw,
-	const point_t *points,
-	const int *cmds,
-	size_t point_count,
-	const struct ged_view_feature_style *style)
-{
-    if (!view_ctx || !name)
-	return 0;
-
-    if (!draw || !points || !cmds || !point_count) {
-	(void)ged_view_feature_remove(view_ctx, name);
-	return 1;
-    }
-
-    return ged_annotation_tcl_polygons_replace(view_ctx, name, points,
-	    cmds, point_count, style);
-}
-
-
-int
-ged_annotation_line_layer_builder_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int local,
-	const struct bg_line_layer_builder *builder)
-{
-    return ged_draw_obol_view_context_line_layer_builder_replace(view_ctx,
-	    name, local, builder);
-}
-
-
-int
-ged_annotation_diagnostic_line_layer_builder_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const struct bg_line_layer_builder *builder)
-{
-    return ged_draw_obol_view_context_diagnostic_line_layer_builder_replace(
-	    view_ctx, name, builder);
-}
-
-
-int
-ged_annotation_line_layers_replace(struct ged_view_context *view_ctx,
-					  const char *name,
-					  int local,
-					  const struct ged_annotation_line_layer *layers,
-					  size_t layer_count,
-					  const struct ged_view_feature_style *style)
-{
-    return ged_draw_obol_view_context_line_layers_replace(view_ctx, name,
-	    local, layers, layer_count, style);
-}
-
-
-int
-ged_annotation_lines_create_model_annotation(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int local,
-	const point_t point)
-{
-    return ged_draw_obol_view_context_lines_create_model_annotation(
-	    view_ctx, name, local, point);
-}
-
-
-int
-ged_annotation_lines_append_point(struct ged_view_context *view_ctx,
-					 const char *name,
-					 const point_t point)
-{
-    return ged_draw_obol_view_context_lines_append_point(view_ctx, name,
-	    point);
-}
-
-
-static int
-ged_annotation_line_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int local,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_view_feature_style *style)
-{
-    if (!view_ctx || !name)
-	return 0;
-
-    (void)ged_view_feature_remove(view_ctx, name);
-    if (!points || !point_count)
-	return 1;
-
-    if (!ged_annotation_lines_create_model_annotation(view_ctx, name,
-	    local, points[0]))
-	return 0;
-
-    for (size_t i = 1; i < point_count; i++) {
-	if (!ged_annotation_lines_append_point(view_ctx, name,
-		points[i])) {
-	    (void)ged_view_feature_remove(view_ctx, name);
-	    return 0;
-	}
-    }
-
-    if (style && !ged_view_feature_style_apply(view_ctx, name,
-	    style, 0)) {
-	(void)ged_view_feature_remove(view_ctx, name);
-	return 0;
-    }
-
-    return 1;
-}
-
-
-int
-ged_annotation_line_create(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int local,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_view_feature_style *style,
-	struct bu_vls *result)
-{
-    if (!view_ctx || !name || !points || !point_count)
-	return 0;
-
-    if (ged_view_feature_exists(view_ctx, name)) {
-	if (result)
-	    bu_vls_printf(result, "View feature named %s already exists\n",
-		    name);
-	return 0;
-    }
-
-    if (!ged_annotation_line_replace(view_ctx, name,
-	    local, points, point_count, style)) {
-	if (result)
-	    bu_vls_printf(result, "Failed to create %s\n", name);
-	return 0;
-    }
-
-    return 1;
-}
-
-
-int
-ged_annotation_line_append(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	struct bu_vls *result)
-{
-    if (!view_ctx || !name || !points || !point_count)
-	return 0;
-
-    if (!ged_view_feature_exists(view_ctx, name)) {
-	if (result)
-	    bu_vls_printf(result, "no view feature named %s\n", name);
-	return 0;
-    }
-
-    for (size_t i = 0; i < point_count; i++) {
-	if (!ged_annotation_lines_append_point(view_ctx, name,
-		points[i])) {
-	    if (result)
-		bu_vls_printf(result,
-			"Failed to append point %zu to %s\n", i, name);
-	    return 0;
-	}
-    }
-
-    return 1;
-}
-
-
-int
-ged_annotation_line_erase(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	size_t start,
-	size_t count,
-	struct bu_vls *result)
-{
-    point_t *points = NULL;
-    size_t point_count = 0;
-
-    if (!view_ctx || !name || !count)
-	return 0;
-
-    if (!ged_view_feature_exists(view_ctx, name)) {
-	if (result)
-	    bu_vls_printf(result, "no view feature named %s\n", name);
-	return 0;
-    }
-
-    if (!ged_view_feature_points_copy(view_ctx, name, &points,
-	    &point_count)) {
-	if (result)
-	    bu_vls_printf(result, "Failed to read points for %s\n", name);
-	return 0;
-    }
-
-    if (start >= point_count || count > point_count - start) {
-	if (result)
-	    bu_vls_printf(result,
-		    "Point range [%zu, %zu) is outside %s point count %zu\n",
-		    start, start + count, name, point_count);
-	if (points)
-	    bu_free(points, "GED draw view annotation line copied points");
-	return 0;
-    }
-
-    struct ged_view_feature_style style =
-	GED_VIEW_FEATURE_STYLE_INIT;
-    int have_style = ged_view_feature_style_get(view_ctx, name,
-	    &style);
-    size_t new_count = point_count - count;
-    point_t *new_points = NULL;
-    if (new_count) {
-	new_points = (point_t *)bu_calloc(new_count, sizeof(point_t),
-		"GED draw view annotation line rebuilt points");
-	size_t out = 0;
-	for (size_t i = 0; i < point_count; i++) {
-	    if (i >= start && i < start + count)
-		continue;
-	    VMOVE(new_points[out], points[i]);
-	    out++;
-	}
-    }
-
-    int ret = ged_annotation_line_replace(view_ctx, name,
-	    1, (const point_t *)new_points, new_count,
-	    have_style ? &style : NULL);
-
-    if (new_points)
-	bu_free(new_points, "GED draw view annotation line rebuilt points");
-    if (points)
-	bu_free(points, "GED draw view annotation line copied points");
-
-    if (!ret && result)
-	bu_vls_printf(result, "Failed to update %s\n", name);
-    return ret ? 1 : 0;
-}
-
-
-int
-ged_annotation_line_clear(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	struct bu_vls *result)
-{
-    if (!view_ctx || !name)
-	return 0;
-
-    if (!ged_view_feature_exists(view_ctx, name)) {
-	if (result)
-	    bu_vls_printf(result, "no view feature named %s\n", name);
-	return 0;
-    }
-
-    if (!ged_view_feature_remove(view_ctx, name)) {
-	if (result)
-	    bu_vls_printf(result, "Failed to clear %s\n", name);
-	return 0;
-    }
-
-    return 1;
-}
-
-
-int
-ged_annotation_label_set(struct ged_view_context *view_ctx,
-				   const char *name,
-				   int local,
-				   const char *text,
-				   const point_t point,
-				   const point_t target,
-				   int has_target)
-{
-    return ged_draw_obol_view_context_label_create(view_ctx, name, local,
-	    text, point, target, has_target);
-}
-
-
-int
-ged_annotation_label_create(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int local,
-	const char *text,
-	const point_t point,
-	const point_t target,
-	int has_target,
-	struct bu_vls *result)
-{
-    if (!view_ctx || !name || !text || !point || (has_target && !target))
-	return 0;
-
-    if (ged_view_feature_exists(view_ctx, name)) {
-	if (result)
-	    bu_vls_printf(result, "View feature named %s already exists\n",
-		    name);
-	return 0;
-    }
-
-    if (!ged_annotation_label_set(view_ctx, name, local, text,
-	    point, target, has_target)) {
-	if (result)
-	    bu_vls_printf(result, "Failed to create %s\n", name);
-	return 0;
-    }
-
-    return 1;
-}
-
-
-int
-ged_annotation_labels_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int local,
-	const struct ged_annotation_label *labels,
-	size_t label_count)
-{
-    return ged_draw_obol_view_context_labels_replace(view_ctx, name, local,
-	    labels, label_count);
-}
-
-
-int
-ged_annotation_tcl_labels_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int draw,
-	const struct ged_annotation_label *labels,
-	size_t label_count)
-{
-    return ged_draw_obol_view_context_tcl_labels_replace(view_ctx, name,
-	    draw, labels, label_count);
-}
-
-
 size_t
-ged_annotation_label_count(struct ged_view_context *view_ctx, const char *name)
+ged_view_feature_label_count(struct ged_view_context *view_ctx, const char *name)
 {
     return ged_draw_obol_view_context_label_count(view_ctx, name);
 }
 
 
 int
-ged_annotation_label_copy(struct ged_view_context *view_ctx,
+ged_view_feature_label_copy(struct ged_view_context *view_ctx,
 				 const char *name,
 				 size_t index,
 				 struct bu_vls *text,
@@ -1816,44 +1251,29 @@ ged_annotation_label_copy(struct ged_view_context *view_ctx,
 
 
 int
-ged_annotation_label_point_set(struct ged_view_context *view_ctx,
-				      const char *name,
-				      size_t index,
-				      const point_t point)
+ged_view_feature_axes_copy(struct ged_view_context *view_ctx,
+	const char *name, size_t index, point_t center, fastf_t *half_size)
 {
-    return ged_draw_obol_view_context_label_point_set(view_ctx, name, index,
-	    point);
-}
+    if (center)
+	VSETALL(center, 0.0);
+    if (half_size)
+	*half_size = 0.0;
+    if (!name || !name[0] || !center)
+	return 0;
 
+    const struct ged_bobol_feature_lookup lookup =
+	ged_bobol_feature_find(view_ctx, name);
+    std::vector<SbVec3f> centers;
+    float size = 0.0f;
+    if (!lookup.controller || !lookup.handle.isValid() ||
+	!lookup.controller->features().axesCenters(lookup.handle, centers,
+	    &size) || index >= centers.size())
+	return 0;
 
-int
-ged_annotation_line_style_get(struct ged_view_context *view_ctx,
-				     const char *name,
-				     struct ged_draw_view_line_style *style)
-{
-    return ged_draw_obol_view_context_line_style_get(view_ctx, name, style);
-}
-
-
-int
-ged_annotation_line_color_set(struct ged_view_context *view_ctx,
-				     const char *name,
-				     int r,
-				     int g,
-				     int b)
-{
-    return ged_draw_obol_view_context_line_color_set(view_ctx, name, r, g,
-	    b);
-}
-
-
-int
-ged_annotation_line_width_set(struct ged_view_context *view_ctx,
-				     const char *name,
-				     int line_width)
-{
-    return ged_draw_obol_view_context_line_width_set(view_ctx, name,
-	    line_width);
+    VSET(center, centers[index][0], centers[index][1], centers[index][2]);
+    if (half_size)
+	*half_size = static_cast<fastf_t>(size);
+    return 1;
 }
 
 
@@ -1880,733 +1300,9 @@ ged_view_feature_line_command_at(
 }
 
 
-int
-ged_annotation_lines_points_copy(struct ged_view_context *view_ctx,
-					const char *name,
-					point_t **points,
-					size_t *point_count)
-{
-    return ged_view_feature_points_copy(view_ctx, name, points,
-	    point_count);
-}
-
-
-int
-ged_annotation_tcl_lines_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_draw_view_line_style *style)
-{
-    return ged_draw_obol_view_context_tcl_lines_replace(view_ctx, name,
-	    points, point_count, style);
-}
-
-
-int
-ged_annotation_data_lines_draw_get(
-	struct ged_view_context *view_ctx,
-	const char *name)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_view_feature_visible(view_ctx, name);
-}
-
-
-int
-ged_annotation_data_lines_draw_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int draw)
-{
-    if (!view_ctx || !name)
-	return 0;
-
-    if (!draw)
-	(void)ged_view_feature_remove(view_ctx, name);
-
-    return 1;
-}
-
-
-int
-ged_annotation_data_lines_style_get(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	struct ged_draw_view_line_style *style)
-{
-    if (!view_ctx || !name || !style)
-	return 0;
-    return ged_annotation_line_style_get(view_ctx, name, style);
-}
-
-
-int
-ged_annotation_data_lines_color_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int r,
-	int g,
-	int b)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_line_color_set(view_ctx, name, r, g, b);
-}
-
-
-int
-ged_annotation_data_lines_line_width_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int line_width)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_line_width_set(view_ctx, name, line_width);
-}
-
-
-int
-ged_annotation_data_lines_points_copy(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	point_t **points,
-	size_t *point_count)
-{
-    if (!view_ctx || !name || !points || !point_count)
-	return 0;
-    return ged_annotation_lines_points_copy(view_ctx, name, points,
-	    point_count);
-}
-
-
-int
-ged_annotation_data_lines_points_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_draw_view_line_style *style)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_tcl_lines_replace(view_ctx, name, points,
-	    point_count, style);
-}
-
-
-int
-ged_annotation_data_labels_draw_get(
-	struct ged_view_context *view_ctx,
-	const char *name)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_view_feature_exists(view_ctx, name);
-}
-
-
-int
-ged_annotation_data_labels_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int draw,
-	const struct ged_annotation_label *labels,
-	size_t label_count)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_tcl_labels_replace(view_ctx, name, draw,
-	    labels, label_count);
-}
-
-
-int
-ged_annotation_data_labels_color_get(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	unsigned char rgb[3])
-{
-    if (rgb) {
-	rgb[0] = 0;
-	rgb[1] = 0;
-	rgb[2] = 0;
-    }
-    if (!view_ctx || !name || !rgb)
-	return 0;
-    return ged_annotation_label_copy(view_ctx, name, 0, NULL, NULL,
-	    rgb);
-}
-
-
-size_t
-ged_annotation_data_labels_count(
-	struct ged_view_context *view_ctx,
-	const char *name)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_label_count(view_ctx, name);
-}
-
-
-int
-ged_annotation_data_labels_copy(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	size_t index,
-	struct bu_vls *text,
-	point_t point,
-	unsigned char rgb[3])
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_label_copy(view_ctx, name, index, text,
-	    point, rgb);
-}
-
-
-int
-ged_annotation_data_labels_point_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	size_t index,
-	const point_t point)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_label_point_set(view_ctx, name, index, point);
-}
-
-
-static void
-ged_draw_data_arrow_style_default(struct ged_view_feature_style *style)
-{
-    if (!style)
-	return;
-    struct ged_view_feature_style init =
-	GED_VIEW_FEATURE_STYLE_INIT;
-    *style = init;
-    style->visible = 1;
-    style->color_valid = 1;
-    style->color[0] = 255;
-    style->color[1] = 255;
-    style->color[2] = 0;
-    style->line_width = 0;
-    style->arrow = 1;
-}
-
-
-int
-ged_annotation_data_arrows_draw_get(
-	struct ged_view_context *view_ctx,
-	const char *name)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_view_feature_exists(view_ctx, name);
-}
-
-
-int
-ged_annotation_data_arrows_draw_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int draw)
-{
-    if (!view_ctx || !name)
-	return 0;
-    (void)ged_view_feature_visible_set(view_ctx, name,
-	    draw ? 1 : 0);
-    return 1;
-}
-
-
-int
-ged_annotation_data_arrows_style_get(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	struct ged_view_feature_style *style)
-{
-    if (!style)
-	return 0;
-    ged_draw_data_arrow_style_default(style);
-    if (!view_ctx || !name)
-	return 0;
-
-    struct ged_view_feature_style current =
-	GED_VIEW_FEATURE_STYLE_INIT;
-    if (!ged_view_feature_style_get(view_ctx, name, &current))
-	return 1;
-
-    style->visible = current.visible;
-    if (current.color_valid) {
-	style->color_valid = 1;
-	style->color[0] = current.color[0];
-	style->color[1] = current.color[1];
-	style->color[2] = current.color[2];
-    }
-    style->line_width = current.line_width;
-    style->arrow_tip_length = current.arrow_tip_length;
-    style->arrow_tip_width = current.arrow_tip_width;
-    return 1;
-}
-
-
-int
-ged_annotation_data_arrows_color_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int r,
-	int g,
-	int b)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_line_color_set(view_ctx, name, r, g, b);
-}
-
-
-int
-ged_annotation_data_arrows_line_width_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int line_width)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_line_width_set(view_ctx, name, line_width);
-}
-
-
-int
-ged_annotation_data_arrows_points_copy(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	point_t **points,
-	size_t *point_count)
-{
-    if (!view_ctx || !name || !points || !point_count)
-	return 0;
-    return ged_view_feature_points_copy(view_ctx, name, points,
-	    point_count);
-}
-
-
-int
-ged_annotation_data_arrows_points_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	point_t *points,
-	size_t point_count,
-	const struct ged_view_feature_style *style)
-{
-    if (!view_ctx || !name)
-	return 0;
-    if (point_count < 2) {
-	(void)ged_view_feature_remove(view_ctx, name);
-	return 1;
-    }
-    return ged_annotation_tcl_arrows_replace(view_ctx, name, points,
-	    point_count, style);
-}
-
-
-int
-ged_annotation_data_arrows_tip_get(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	fastf_t *tip_length,
-	fastf_t *tip_width)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_arrow_tip_get(view_ctx, name, tip_length,
-	    tip_width);
-}
-
-
-int
-ged_annotation_data_arrows_tip_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	fastf_t tip_length,
-	fastf_t tip_width)
-{
-    if (!view_ctx || !name)
-	return 0;
-    if (!ged_annotation_arrow_tip_get(view_ctx, name, NULL, NULL))
-	return 1;
-    return ged_annotation_arrow_tip_set(view_ctx, name, tip_length,
-	    tip_width);
-}
-
-
-int
-ged_annotation_arrow_tip_get(struct ged_view_context *view_ctx,
-				    const char *name,
-				    fastf_t *tip_length,
-				    fastf_t *tip_width)
-{
-    return ged_draw_obol_view_context_arrow_tip_get(view_ctx, name,
-	    tip_length, tip_width);
-}
-
-
-int
-ged_annotation_arrow_tip_set(struct ged_view_context *view_ctx,
-				    const char *name,
-				    fastf_t tip_length,
-				    fastf_t tip_width)
-{
-    return ged_draw_obol_view_context_arrow_tip_set(view_ctx, name,
-	    tip_length, tip_width);
-}
-
-
-int
-ged_annotation_tcl_arrows_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	point_t *points,
-	size_t point_count,
-	const struct ged_view_feature_style *style)
-{
-    return ged_draw_obol_view_context_tcl_arrows_replace(view_ctx, name,
-	    points, point_count, style);
-}
-
-
-int
-ged_view_feature_axes_centers_copy(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	point_t **centers,
-	size_t *center_count)
-{
-    return ged_draw_obol_view_context_feature_axes_centers_copy(view_ctx,
-	    name, centers, center_count);
-}
-
-
-int
-ged_annotation_tcl_axes_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	point_t *centers,
-	size_t center_count,
-	fastf_t half_axes_size,
-	const struct ged_view_feature_style *style)
-{
-    return ged_draw_obol_view_context_tcl_axes_replace(view_ctx, name,
-	    centers, center_count, half_axes_size, style);
-}
-
-
-static void
-ged_draw_data_axes_style_default(struct ged_view_feature_style *style)
-{
-    if (!style)
-	return;
-    struct ged_view_feature_style init =
-	GED_VIEW_FEATURE_STYLE_INIT;
-    *style = init;
-    style->visible = 1;
-    style->color_valid = 1;
-    style->color[0] = 255;
-    style->color[1] = 255;
-    style->color[2] = 0;
-    style->line_width = 0;
-}
-
-
-int
-ged_annotation_data_axes_draw_get(
-	struct ged_view_context *view_ctx,
-	const char *name)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_view_feature_exists(view_ctx, name);
-}
-
-
-int
-ged_annotation_data_axes_draw_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int draw)
-{
-    if (!view_ctx || !name)
-	return 0;
-    (void)ged_view_feature_visible_set(view_ctx, name,
-	    draw ? 1 : 0);
-    return 1;
-}
-
-
-int
-ged_annotation_data_axes_style_get(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	struct ged_view_feature_style *style)
-{
-    if (!style)
-	return 0;
-    ged_draw_data_axes_style_default(style);
-    if (!view_ctx || !name)
-	return 0;
-
-    struct ged_view_feature_style current =
-	GED_VIEW_FEATURE_STYLE_INIT;
-    if (!ged_view_feature_style_get(view_ctx, name, &current))
-	return 1;
-
-    style->visible = current.visible;
-    if (current.color_valid) {
-	style->color_valid = 1;
-	style->color[0] = current.color[0];
-	style->color[1] = current.color[1];
-	style->color[2] = current.color[2];
-    }
-    style->line_width = current.line_width;
-    return 1;
-}
-
-
-int
-ged_annotation_data_axes_color_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int r,
-	int g,
-	int b)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_line_color_set(view_ctx, name, r, g, b);
-}
-
-
-int
-ged_annotation_data_axes_line_width_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int line_width)
-{
-    if (!view_ctx || !name)
-	return 0;
-    return ged_annotation_line_width_set(view_ctx, name, line_width);
-}
-
-
-int
-ged_annotation_data_axes_half_size_get(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	fastf_t *half_axes_size)
-{
-    if (half_axes_size)
-	*half_axes_size = 1.0;
-    if (!view_ctx || !name || !half_axes_size)
-	return 0;
-
-    point_t *points = NULL;
-    size_t point_count = 0;
-    int copied = ged_view_feature_points_copy(view_ctx, name,
-	    &points, &point_count);
-    if (copied && point_count >= 2)
-	*half_axes_size = (points[1][X] - points[0][X]) * 0.5;
-    if (points)
-	bu_free(points, "GED draw view data axes points copy");
-    return 1;
-}
-
-
-int
-ged_annotation_data_axes_size_get(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	fastf_t display_scale,
-	fastf_t *size)
-{
-    if (size)
-	*size = 0.0;
-    if (!view_ctx || !name || !size)
-	return 0;
-
-    point_t *points = NULL;
-    size_t point_count = 0;
-    int copied = ged_view_feature_points_copy(view_ctx, name,
-	    &points, &point_count);
-    if (copied && point_count >= 2) {
-	fastf_t half = (points[1][X] - points[0][X]) * 0.5;
-	*size = (display_scale > 0.0) ? (half * 2.0 / display_scale) : 0.0;
-    }
-    if (points)
-	bu_free(points, "GED draw view data axes points copy");
-    return 1;
-}
-
-
-int
-ged_annotation_data_axes_centers_copy(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	point_t **centers,
-	size_t *center_count)
-{
-    if (!view_ctx || !name || !centers || !center_count)
-	return 0;
-    return ged_view_feature_axes_centers_copy(view_ctx, name,
-	    centers, center_count);
-}
-
-
-int
-ged_annotation_data_axes_centers_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	point_t *centers,
-	size_t center_count,
-	fastf_t half_axes_size,
-	const struct ged_view_feature_style *style)
-{
-    if (!view_ctx || !name)
-	return 0;
-    if (!centers || !center_count) {
-	(void)ged_view_feature_remove(view_ctx, name);
-	return 1;
-    }
-    return ged_annotation_tcl_axes_replace(view_ctx, name, centers,
-	    center_count, half_axes_size, style);
-}
-
-
-int
-ged_annotation_axes_set(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int local,
-	const struct ged_annotation_axes *state)
-{
-    return ged_draw_obol_view_context_axes_create(view_ctx, name, local,
-	    state);
-}
-
-
-int
-ged_annotation_axes_get(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	struct ged_annotation_axes *state)
-{
-    return ged_draw_obol_view_context_axes_state_get(view_ctx, name, state);
-}
-
-
-int
-ged_annotation_axes_update(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const struct ged_annotation_axes *state)
-{
-    return ged_draw_obol_view_context_axes_state_replace(view_ctx, name,
-	    state);
-}
-
-
-int
-ged_annotation_axes_create(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	int local,
-	const struct ged_annotation_axes *state,
-	struct bu_vls *result)
-{
-    if (!view_ctx || !name || !state)
-	return 0;
-
-    if (ged_view_feature_exists(view_ctx, name)) {
-	if (result)
-	    bu_vls_printf(result, "View feature named %s already exists\n",
-		    name);
-	return 0;
-    }
-
-    if (!ged_annotation_axes_set(view_ctx, name, local, state)) {
-	if (result)
-	    bu_vls_printf(result, "Failed to set axes state for %s\n",
-		    name);
-	return 0;
-    }
-
-    return 1;
-}
-
-
-int
-ged_annotation_axes_state_get(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	struct ged_annotation_axes *state,
-	struct bu_vls *result)
-{
-    if (!view_ctx || !name || !state)
-	return 0;
-
-    if (!ged_view_feature_exists(view_ctx, name)) {
-	if (result)
-	    bu_vls_printf(result, "View feature named %s does not exist\n",
-		    name);
-	return 0;
-    }
-
-    if (!ged_annotation_axes_get(view_ctx, name, state)) {
-	if (result)
-	    bu_vls_printf(result, "View feature %s has no axes state\n",
-		    name);
-	return 0;
-    }
-
-    return 1;
-}
-
-
-int
-ged_annotation_axes_state_replace(
-	struct ged_view_context *view_ctx,
-	const char *name,
-	const struct ged_annotation_axes *state,
-	struct bu_vls *result)
-{
-    if (!view_ctx || !name || !state)
-	return 0;
-
-    if (!ged_view_feature_exists(view_ctx, name)) {
-	if (result)
-	    bu_vls_printf(result, "View feature named %s does not exist\n",
-		    name);
-	return 0;
-    }
-
-    if (!ged_annotation_axes_update(view_ctx, name, state)) {
-	if (result)
-	    bu_vls_printf(result, "Failed to set axes state for %s\n",
-		    name);
-	return 0;
-    }
-
-    return 1;
-}
-
-
 static int
-_ged_polygon_edge_color(struct bu_color *edge_color,
-	const struct ged_polygon_record *record)
+_ged_view_polygon_edge_color(struct bu_color *edge_color,
+	const struct ged_view_polygon_record *record)
 {
     if (!edge_color || !record)
 	return 0;
@@ -2615,21 +1311,21 @@ _ged_polygon_edge_color(struct bu_color *edge_color,
 
 
 int
-ged_polygon_ref_is_null(ged_polygon_ref ref)
+ged_view_polygon_ref_is_null(ged_view_polygon_ref ref)
 {
     return (ref.owner && ref.id && ref.generation) ? 0 : 1;
 }
 
 
-ged_polygon_ref
-ged_polygon_find(struct ged_view_context *view_ctx, const char *name)
+ged_view_polygon_ref
+ged_view_polygon_find(struct ged_view_context *view_ctx, const char *name)
 {
     return ged_draw_obol_view_context_polygon_find(view_ctx, name);
 }
 
 
-ged_polygon_ref
-ged_polygon_find_scoped(struct ged_view_context *view_ctx,
+ged_view_polygon_ref
+ged_view_polygon_find_scoped(struct ged_view_context *view_ctx,
 					  const char *name,
 					  int local_only)
 {
@@ -2638,28 +1334,27 @@ ged_polygon_find_scoped(struct ged_view_context *view_ctx,
 }
 
 
-ged_polygon_ref
-ged_polygon_select(struct ged_view_context *view_ctx,
+ged_view_polygon_ref
+ged_view_polygon_select(struct ged_view_context *view_ctx,
 				     const point_t model_point)
 {
     return ged_draw_obol_view_context_polygon_select(view_ctx, model_point);
 }
 
 
-ged_polygon_ref
-ged_polygon_create(struct ged_view_context *view_ctx,
-				     const char *name,
-				     int local,
-				     int type,
-				     const point_t screen_point)
+ged_view_polygon_ref
+ged_view_polygon_create(struct ged_view_context *view_ctx,
+			const char *name, int local,
+			enum ged_view_polygon_type type,
+			const point_t model_point)
 {
     return ged_draw_obol_view_context_polygon_create(view_ctx, name, local,
-	    type, screen_point);
+	    type, model_point);
 }
 
 
-ged_polygon_ref
-ged_polygon_dup(struct ged_view_context *view_ctx,
+ged_view_polygon_ref
+ged_view_polygon_dup(struct ged_view_context *view_ctx,
 				  const char *name,
 				  const char *new_name)
 {
@@ -2667,12 +1362,9 @@ ged_polygon_dup(struct ged_view_context *view_ctx,
 }
 
 
-ged_polygon_ref
-ged_polygon_import_sketch(const char *name,
-					    struct db_i *dbip,
-					    struct directory *dp,
-					    struct ged_view_context *view_ctx,
-					    int local)
+ged_view_polygon_ref
+ged_view_polygon_import_sketch(struct ged_view_context *view_ctx,
+	const char *name, struct db_i *dbip, struct directory *dp, int local)
 {
     return ged_draw_obol_view_context_polygon_import_sketch(name, dbip, dp,
 	    view_ctx, local);
@@ -2680,9 +1372,9 @@ ged_polygon_import_sketch(const char *name,
 
 
 void
-ged_polygon_visit_records(
+ged_view_polygon_visit_records(
 	struct ged_view_context *view_ctx,
-	ged_polygon_record_cb callback,
+	ged_view_polygon_record_cb callback,
 	void *data)
 {
     ged_draw_obol_view_context_polygon_visit_records(view_ctx, callback,
@@ -2691,72 +1383,69 @@ ged_polygon_visit_records(
 
 
 size_t
-ged_polygon_snap_count(struct ged_view_context *view_ctx,
-	ged_polygon_ref exclude)
+ged_view_polygon_snap_count(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref exclude)
 {
     return ged_draw_obol_view_context_polygon_snap_count(view_ctx, exclude);
 }
 
 
 int
-ged_polygon_clear_point_selection(struct ged_view_context *view_ctx)
+ged_view_polygon_clear_point_selection(struct ged_view_context *view_ctx)
 {
     return ged_draw_obol_view_context_polygon_clear_point_selection(view_ctx);
 }
 
 
 int
-ged_polygon_snap_exclude_set(
+ged_view_polygon_snap_exclude_set(
 	struct ged_view_context *view_ctx,
-	ged_polygon_ref ref)
+	ged_view_polygon_ref ref)
 {
     return ged_draw_obol_view_context_polygon_snap_exclude_set(view_ctx, ref);
 }
 
 
 struct directory *
-ged_polygon_export_sketch(struct db_i *dbip,
-				    const char *name,
-				    ged_polygon_ref ref)
+ged_view_polygon_export_sketch(struct ged_view_context *view_ctx,
+	struct db_i *dbip, const char *name, ged_view_polygon_ref ref)
 {
-    return ged_draw_obol_view_polygon_export_sketch(dbip, name, ref);
+    return ged_draw_obol_view_polygon_export_sketch(view_ctx, dbip, name,
+	    ref);
 }
 
 
 int
-ged_polygon_record_get(ged_polygon_ref ref,
-				 struct ged_polygon_record *record)
+ged_view_polygon_record_get(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, struct ged_view_polygon_record *record)
 {
     if (!record)
 	return 0;
 
-    return ged_draw_obol_view_polygon_record_get(ref, record);
+    return ged_draw_obol_view_polygon_record_get(view_ctx, ref, record);
 }
 
 
 int
-ged_polygon_has_data(ged_polygon_ref ref)
+ged_view_polygon_has_data(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref)
 {
-    struct ged_polygon_record ged_record;
-    return ged_polygon_record_get(ref, &ged_record) ? 1 : 0;
+    struct ged_view_polygon_record ged_record;
+    return ged_view_polygon_record_get(view_ctx, ref, &ged_record) ? 1 : 0;
 }
 
 
 int
-ged_polygon_update(ged_polygon_ref ref,
-				     struct ged_view_context *view_ctx,
-				     int op)
+ged_view_polygon_update(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, enum ged_view_polygon_update op)
 {
     return ged_draw_obol_view_context_polygon_update(ref, view_ctx, op);
 }
 
 
 int
-ged_polygon_update_screen_pt(ged_polygon_ref ref,
-					       struct ged_view_context *view_ctx,
-					       int x,
-					       int y,
-					       int op)
+ged_view_polygon_update_screen_pt(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, int x, int y, enum ged_view_polygon_update op)
 {
     return ged_draw_obol_view_context_polygon_update_screen_pt(ref,
 	    view_ctx, x, y, op);
@@ -2764,25 +1453,26 @@ ged_polygon_update_screen_pt(ged_polygon_ref ref,
 
 
 int
-ged_polygon_move(ged_polygon_ref ref,
-			   point_t *current_point,
-			   point_t *previous_point)
+ged_view_polygon_move(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, const point_t current_point,
+	const point_t previous_point)
 {
-    return ged_draw_obol_view_polygon_move(ref, current_point,
+    return ged_draw_obol_view_polygon_move(view_ctx, ref, current_point,
 	    previous_point);
 }
 
 
 int
-ged_polygon_set_name(ged_polygon_ref ref,
-			       const char *name)
+ged_view_polygon_set_name(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, const char *name)
 {
-    return ged_draw_obol_view_polygon_set_name(ref, name);
+    return ged_draw_obol_view_polygon_set_name(view_ctx, ref, name);
 }
 
 
 int
-ged_polygon_set_visual(ged_polygon_ref ref,
+ged_view_polygon_set_visual(struct ged_view_context *view_ctx,
+				 ged_view_polygon_ref ref,
 				 const struct bu_color *edge_color,
 				 const struct bu_color *fill_color,
 				 fastf_t fill_slope_x,
@@ -2791,88 +1481,90 @@ ged_polygon_set_visual(ged_polygon_ref ref,
 				 fastf_t vZ,
 				 int fill_flag)
 {
-    return ged_draw_obol_view_polygon_set_visual(ref, edge_color, fill_color,
-	    fill_slope_x, fill_slope_y, fill_density, vZ, fill_flag);
+    return ged_draw_obol_view_polygon_set_visual(view_ctx, ref, edge_color,
+	    fill_color, fill_slope_x, fill_slope_y, fill_density, vZ,
+	    fill_flag);
 }
 
 
 int
-ged_polygon_set_current(ged_polygon_ref ref,
-				  long contour_i,
-				  long point_i)
+ged_view_polygon_set_current(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, long contour_i, long point_i)
 {
-    return ged_draw_obol_view_context_polygon_set_current(ref, contour_i,
-	    point_i);
+    return ged_draw_obol_view_context_polygon_set_current(view_ctx, ref,
+	    contour_i, point_i);
 }
 
 
 int
-ged_polygon_set_contour_open(ged_polygon_ref ref,
-				       long contour_i,
-				       int open)
+ged_view_polygon_set_contour_open(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, long contour_i, int open)
 {
-    return ged_draw_obol_view_context_polygon_set_contour_open(ref,
-	    contour_i, open);
+    return ged_draw_obol_view_context_polygon_set_contour_open(view_ctx,
+	    ref, contour_i, open);
 }
 
 
 int
-ged_polygon_set_all_contours_open(ged_polygon_ref ref,
-					    int open)
+ged_view_polygon_set_all_contours_open(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, int open)
 {
-    return ged_draw_obol_view_polygon_set_all_contours_open(ref, open);
+    return ged_draw_obol_view_polygon_set_all_contours_open(view_ctx, ref,
+	    open);
 }
 
 
 int
-ged_polygon_close(ged_polygon_ref ref)
+ged_view_polygon_close(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref)
 {
-    return ged_draw_obol_view_polygon_close(ref);
+    return ged_draw_obol_view_polygon_close(view_ctx, ref);
 }
 
 
 int
-ged_polygon_clear_selected_point(ged_polygon_ref ref)
+ged_view_polygon_clear_selected_point(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref)
 {
-    return ged_draw_obol_view_polygon_clear_selected_point(ref);
+    return ged_draw_obol_view_polygon_clear_selected_point(view_ctx, ref);
 }
 
 
 int
-ged_polygon_remove(ged_polygon_ref ref)
+ged_view_polygon_remove(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref)
 {
-    return ged_draw_obol_view_polygon_remove(ref);
+    return ged_draw_obol_view_polygon_remove(view_ctx, ref);
 }
 
 
 void *
-ged_polygon_user_data(ged_polygon_ref ref)
+ged_view_polygon_user_data(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref)
 {
-    return ged_draw_obol_view_polygon_user_data(ref);
+    return ged_draw_obol_view_polygon_user_data(view_ctx, ref);
 }
 
 
 int
-ged_polygon_user_data_set(ged_polygon_ref ref,
-				    void *user_data)
+ged_view_polygon_user_data_set(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, void *user_data)
 {
-    return ged_draw_obol_view_polygon_user_data_set(ref, user_data);
+    return ged_draw_obol_view_polygon_user_data_set(view_ctx, ref, user_data);
 }
 
 
 int
-ged_polygon_area(ged_polygon_ref ref,
-				   struct ged_view_context *view_ctx,
-				   fastf_t *area)
+ged_view_polygon_area(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, fastf_t *area)
 {
     return ged_draw_obol_view_context_polygon_area(ref, view_ctx, area);
 }
 
 
 int
-ged_polygon_overlap(ged_polygon_ref ref,
-				      struct ged_view_context *view_ctx,
-				      const char *other_name,
+ged_view_polygon_overlap(struct ged_view_context *view_ctx,
+				      ged_view_polygon_ref ref, const char *other_name,
 				      const struct bn_tol *tol,
 				      int *overlap)
 {
@@ -2882,29 +1574,30 @@ ged_polygon_overlap(ged_polygon_ref ref,
 
 
 int
-ged_polygon_set_fill(ged_polygon_ref ref,
+ged_view_polygon_set_fill(struct ged_view_context *view_ctx,
+			       ged_view_polygon_ref ref,
 			       int fill_flag,
 			       fastf_t fill_slope_x,
 			       fastf_t fill_slope_y,
 			       fastf_t fill_density)
 {
-    struct ged_polygon_record record;
+    struct ged_view_polygon_record record;
     struct bu_color edge_color;
-    if (!ged_polygon_record_get(ref, &record) ||
-	    !_ged_polygon_edge_color(&edge_color, &record))
+    if (!ged_view_polygon_record_get(view_ctx, ref, &record) ||
+	    !_ged_view_polygon_edge_color(&edge_color, &record))
 	return 0;
-    return ged_polygon_set_visual(ref, &edge_color,
+    return ged_view_polygon_set_visual(view_ctx, ref, &edge_color,
 	    &record.fill_color, fill_slope_x, fill_slope_y, fill_density,
 	    record.vZ, fill_flag);
 }
 
 
 int
-ged_polygon_fill_color_get(ged_polygon_ref ref,
-				     struct bu_color *fill_color)
+ged_view_polygon_fill_color_get(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, struct bu_color *fill_color)
 {
-    struct ged_polygon_record record;
-    if (!fill_color || !ged_polygon_record_get(ref, &record))
+    struct ged_view_polygon_record record;
+    if (!fill_color || !ged_view_polygon_record_get(view_ctx, ref, &record))
 	return 0;
     BU_COLOR_CPY(fill_color, &record.fill_color);
     return 1;
@@ -2912,44 +1605,43 @@ ged_polygon_fill_color_get(ged_polygon_ref ref,
 
 
 int
-ged_polygon_fill_color_set(ged_polygon_ref ref,
-				     const struct bu_color *fill_color)
+ged_view_polygon_fill_color_set(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, const struct bu_color *fill_color)
 {
-    struct ged_polygon_record record;
+    struct ged_view_polygon_record record;
     struct bu_color edge_color;
-    if (!fill_color || !ged_polygon_record_get(ref, &record) ||
-	    !_ged_polygon_edge_color(&edge_color, &record))
+    if (!fill_color || !ged_view_polygon_record_get(view_ctx, ref, &record) ||
+	    !_ged_view_polygon_edge_color(&edge_color, &record))
 	return 0;
-    return ged_polygon_set_visual(ref, &edge_color, fill_color,
+    return ged_view_polygon_set_visual(view_ctx, ref, &edge_color, fill_color,
 	    record.fill_dir[0], record.fill_dir[1], record.fill_delta,
 	    record.vZ, record.fill_flag);
 }
 
 
 int
-ged_polygon_csg_name(ged_polygon_ref target,
-				  struct ged_view_context *view_ctx,
-				  const char *other_name,
-				  bg_clip_t op)
+ged_view_polygon_csg_name(struct ged_view_context *view_ctx,
+				  ged_view_polygon_ref target, const char *other_name,
+				  enum bg_polygon_boolean_op op)
 {
     if (!view_ctx || !other_name)
 	return 0;
 
-    ged_polygon_ref other_ref =
-	ged_polygon_find(view_ctx, other_name);
-    if (ged_polygon_ref_is_null(other_ref))
+    ged_view_polygon_ref other_ref =
+	ged_view_polygon_find(view_ctx, other_name);
+    if (ged_view_polygon_ref_is_null(other_ref))
 	return 0;
 
-    return ged_polygon_csg(target, other_ref, op);
+    return ged_view_polygon_csg(view_ctx, target, other_ref, op);
 }
 
 
 int
-ged_polygon_csg(ged_polygon_ref target,
-			  ged_polygon_ref stencil,
-			  bg_clip_t op)
+ged_view_polygon_csg(struct ged_view_context *view_ctx,
+			  ged_view_polygon_ref target, ged_view_polygon_ref stencil,
+			  enum bg_polygon_boolean_op op)
 {
-    return ged_draw_obol_view_polygon_csg(target, stencil, op);
+    return ged_draw_obol_view_polygon_csg(view_ctx, target, stencil, op);
 }
 
 /*

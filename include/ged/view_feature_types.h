@@ -24,22 +24,13 @@
 #include "ged/defines.h"
 
 struct bg_line_layer_builder;
-struct bg_tess_tol;
-struct bn_tol;
 struct bu_vls;
 struct bv_axes_state;
 struct bv_view_info;
-struct db_i;
 struct ged;
 struct ged_view_context;
-struct rt_db_internal;
 
 __BEGIN_DECLS
-
-struct ged_draw_view_line_style {
-    int color[3];
-    int line_width;
-};
 
 struct ged_view_feature_style {
     int visible;
@@ -55,75 +46,7 @@ struct ged_view_feature_style {
 
 #define GED_VIEW_FEATURE_STYLE_INIT { -1, -1, 0, {0, 0, 0}, -1, -1, -1, -1.0, -1.0 }
 
-/**
- * Opaque value reference to a managed view feature.
- *
- * The values identify the issuing view owner, object, and backing-store
- * generation.  A reference does not retain its owner and contains no pointer.
- */
-typedef struct ged_view_feature_ref {
-    uint64_t owner;
-    uint64_t id;
-    uint64_t generation;
-} ged_view_feature_ref;
-
-#define GED_VIEW_FEATURE_REF_NULL_INIT {0, 0, 0}
-#ifdef __cplusplus
-#  define GED_VIEW_FEATURE_REF_NULL ged_view_feature_ref{0, 0, 0}
-#else
-#  define GED_VIEW_FEATURE_REF_NULL ((ged_view_feature_ref){0, 0, 0})
-#endif
-
-enum ged_view_feature_family {
-    GED_VIEW_FEATURE_UNKNOWN = 0,
-    GED_VIEW_FEATURE_TRANSIENT_PREVIEW = 1
-};
-
-enum ged_view_edit_preview_event {
-    GED_VIEW_EDIT_PREVIEW_BEGIN = 0,
-    GED_VIEW_EDIT_PREVIEW_UPDATE,
-    GED_VIEW_EDIT_PREVIEW_COMMIT,
-    GED_VIEW_EDIT_PREVIEW_CANCEL,
-    GED_VIEW_EDIT_PREVIEW_REPLACE_SOURCE,
-    GED_VIEW_EDIT_PREVIEW_DISCARD
-};
-
-struct ged_view_edit_transaction {
-    enum ged_view_edit_preview_event event;
-    ged_view_feature_ref feature;
-    const char *feature_name;
-    const void *owner;
-    const char *source_path;
-    const char *edit_intent_id;
-    const char *edit_intent_role;
-    const point_t *points;
-    const int *commands;
-    size_t point_count;
-    struct db_i *dbip;
-    struct rt_db_internal *internal;
-    const fastf_t *matrix;
-    const struct bg_tess_tol *ttol;
-    const struct bn_tol *tol;
-    uint32_t source_revision;
-    uint32_t inputs_revision;
-    int color_valid;
-    unsigned char color[3];
-};
-
-#define GED_VIEW_EDIT_TRANSACTION_INIT { \
-    GED_VIEW_EDIT_PREVIEW_UPDATE, GED_VIEW_FEATURE_REF_NULL, \
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, \
-    NULL, 0, 0, 0, {255, 255, 255} }
-
 struct ged_view_feature_label {
-    const char *text;
-    point_t point;
-    int color_valid;
-    unsigned char color[3];
-    fastf_t font_size;
-};
-
-struct ged_annotation_label {
     const char *text;
     point_t point;
     int color_valid;
@@ -135,16 +58,8 @@ struct ged_annotation_label {
     fastf_t font_size;
 };
 
-#define GED_ANNOTATION_LABEL_INIT { NULL, VINIT_ZERO, 0, {0, 0, 0}, 0, VINIT_ZERO, 0, 0, 0.0 }
-
-struct ged_annotation_axes {
-    point_t position;
-    fastf_t size;
-    int line_width;
-    int color[3];
-};
-
-struct ged_annotation_line_layer {
+/** One independently styled line layer in a retained feature batch. */
+struct ged_view_feature_line_layer {
     const char *name;
     const point_t *points;
     const int *commands;
@@ -152,7 +67,7 @@ struct ged_annotation_line_layer {
     struct ged_view_feature_style style;
 };
 
-#define GED_ANNOTATION_LINE_LAYER_INIT { NULL, NULL, NULL, 0, GED_VIEW_FEATURE_STYLE_INIT }
+#define GED_VIEW_FEATURE_LINE_LAYER_INIT { NULL, NULL, NULL, 0, GED_VIEW_FEATURE_STYLE_INIT }
 
 struct ged_view_feature_batch;
 
@@ -185,11 +100,14 @@ struct ged_view_feature_batch_desc {
     const char *run_id;
     uint64_t generation;
     int local;
+    int overlay_class;
+    int lifecycle;
+    int overlay_order;
     ged_view_feature_batch_callback event_cb;
     void *event_cb_data;
 };
 
-#define GED_VIEW_FEATURE_BATCH_DESC_INIT { NULL, NULL, NULL, 0, 0, NULL, NULL }
+#define GED_VIEW_FEATURE_BATCH_DESC_INIT { NULL, NULL, NULL, 0, 0, GED_VIEW_FEATURE_OVERLAY_CLASS_COMMAND_RESULT, GED_VIEW_FEATURE_LIFECYCLE_PER_COMMAND, GED_VIEW_FEATURE_OVERLAY_ORDER_POST_TRANSPARENT, NULL, NULL }
 
 struct ged_view_feature_metadata {
     const char *key;
@@ -198,7 +116,12 @@ struct ged_view_feature_metadata {
 
 #define GED_VIEW_FEATURE_METADATA_INIT { NULL, NULL }
 
-typedef int (*ged_view_feature_depth_cb)(fastf_t depth, void *data);
+/** Renderer-neutral commands associated with retained line-set points. */
+enum ged_draw_view_line_command {
+    GED_DRAW_VIEW_LINE_MOVE = 0,
+    GED_DRAW_VIEW_LINE_DRAW = 1,
+    GED_DRAW_VIEW_LINE_POINT_DRAW = 12
+};
 
 enum ged_view_feature_kind {
     GED_VIEW_FEATURE_KIND_UNKNOWN = 0,
@@ -248,6 +171,14 @@ enum ged_view_feature_lifecycle {
     GED_VIEW_FEATURE_LIFECYCLE_PER_VIEW,
     GED_VIEW_FEATURE_LIFECYCLE_SHARED_VIEW_SET,
     GED_VIEW_FEATURE_LIFECYCLE_AUTO_REMOVE_ON_SOURCE
+};
+
+enum ged_view_feature_overlay_order {
+    GED_VIEW_FEATURE_OVERLAY_ORDER_UNKNOWN = 0,
+    GED_VIEW_FEATURE_OVERLAY_ORDER_MODEL,
+    GED_VIEW_FEATURE_OVERLAY_ORDER_SCREEN,
+    GED_VIEW_FEATURE_OVERLAY_ORDER_XRAY,
+    GED_VIEW_FEATURE_OVERLAY_ORDER_POST_TRANSPARENT
 };
 
 #define GED_VIEW_FEATURE_OWNER_ID_MAX 64

@@ -146,14 +146,14 @@ f_copy_inv(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
 
 struct _fswp_data {
     struct db_full_path *pathp;
-    ged_draw_shape_ref ret;
-    ged_draw_shape_ref leaf_ret;
+    ged_scene_occurrence_ref ret;
+    ged_scene_occurrence_ref leaf_ret;
     int count;
     int leaf_count;
 };
 
 static int
-_find_shape_with_path_cb(const struct ged_draw_shape_record *rec, void *ud)
+_find_shape_with_path_cb(const struct ged_scene_occurrence_info *rec, void *ud)
 {
     struct _fswp_data *d = (struct _fswp_data *)ud;
     if (!rec || !rec->fullpath) return 1;
@@ -174,18 +174,18 @@ _find_shape_with_path_cb(const struct ged_draw_shape_record *rec, void *ud)
     return 1; /* keep scanning for duplicates */
 }
 
-ged_draw_shape_ref
+ged_scene_occurrence_ref
 find_solid_ref_with_path(struct mged_state *s, struct db_full_path *pathp)
 {
     RT_CK_FULL_PATH(pathp);
 
     struct _fswp_data d;
     d.pathp = pathp;
-    d.ret = GED_DRAW_SHAPE_REF_NULL;
-    d.leaf_ret = GED_DRAW_SHAPE_REF_NULL;
+    d.ret = GED_SCENE_OCCURRENCE_REF_NULL;
+    d.leaf_ret = GED_SCENE_OCCURRENCE_REF_NULL;
     d.count = 0;
     d.leaf_count = 0;
-    ged_draw_foreach_shape_record(s->gedp, _find_shape_with_path_cb, &d);
+    ged_scene_occurrences_visit(s->gedp, _find_shape_with_path_cb, &d);
 
     if (d.count > 1) {
 	struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
@@ -194,9 +194,9 @@ find_solid_ref_with_path(struct mged_state *s, struct db_full_path *pathp)
 	bu_vls_free(&tmp_vls);
     }
 
-    if (!ged_draw_shape_ref_is_null(d.ret))
+    if (!ged_scene_occurrence_ref_is_null(d.ret))
 	return d.ret;
-    return d.leaf_count == 1 ? d.leaf_ret : GED_DRAW_SHAPE_REF_NULL;
+    return d.leaf_count == 1 ? d.leaf_ret : GED_SCENE_OCCURRENCE_REF_NULL;
 }
 
 
@@ -207,7 +207,7 @@ struct _fbp_data {
 };
 
 static int
-_find_path_below_cb(const struct ged_draw_shape_record *rec, void *ud)
+_find_path_below_cb(const struct ged_scene_occurrence_info *rec, void *ud)
 {
     struct _fbp_data *d = (struct _fbp_data *)ud;
     if (!d || d->found || !rec || !rec->fullpath)
@@ -224,7 +224,7 @@ find_path_below(struct mged_state *s, const struct db_full_path *prefix,
 	struct db_full_path *result)
 {
     struct _fbp_data d = {prefix, result, 0};
-    ged_draw_foreach_shape_record(s->gedp, _find_path_below_cb, &d);
+    ged_scene_occurrences_visit(s->gedp, _find_path_below_cb, &d);
     return d.found;
 }
 
@@ -312,7 +312,7 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     }
 
     /* Patterned after ill_common() ... */
-    mged_highlight_set_shape_ref(s, ged_draw_first_shape_ref(s->gedp));
+    mged_highlight_set_shape_ref(s, ged_scene_occurrence_first(s->gedp));
     edobj = 0;		/* sanity */
     movedir = 0;		/* No edit modes set */
     MAT_IDN(MEDIT(s)->model_changes);	/* No changes yet */
@@ -322,15 +322,15 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     new_mats(s);
 
     /* Find the matching displayed shape and make its draw ref the highlighted edit target. */
-    ged_draw_shape_ref highlighted_shape = find_solid_ref_with_path(s, &both);
-    if (ged_draw_shape_ref_is_null(highlighted_shape) &&
+    ged_scene_occurrence_ref highlighted_shape = find_solid_ref_with_path(s, &both);
+    if (ged_scene_occurrence_ref_is_null(highlighted_shape) &&
 	mged_edit_scope_acquire(s, &both, GED_SCENE_EDIT_EXACT_OCCURRENCE)) {
 	/* Target is a sub-object of a drawn comb: libged promoted its exact
 	 * occurrence to the draw frontier. */
 	highlighted_shape = find_solid_ref_with_path(s, &both);
     }
     mged_highlight_set_shape_ref(s, highlighted_shape);
-    if (ged_draw_shape_ref_is_null(highlighted_shape)) {
+    if (ged_scene_occurrence_ref_is_null(highlighted_shape)) {
 	db_free_full_path(&lhs);
 	db_free_full_path(&rhs);
 	db_free_full_path(&both);

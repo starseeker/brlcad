@@ -47,7 +47,7 @@ GED_EXPORT extern int
 ged_view_feature_batch_line_layers_replace(
     struct ged_view_feature_batch *batch,
     const char *name,
-    const struct ged_annotation_line_layer *layers,
+    const struct ged_view_feature_line_layer *layers,
     size_t layer_count,
     const struct ged_view_feature_style *style);
 
@@ -69,6 +69,70 @@ ged_view_feature_batch_point_set_replace(
     const point_t *points,
     size_t point_count,
     const struct ged_view_feature_style *style);
+
+/** Stage a named model-space label set.  Label text and values are copied. */
+GED_EXPORT extern int
+ged_view_feature_batch_labels_replace(
+    struct ged_view_feature_batch *batch,
+    const char *name,
+    const struct ged_view_feature_label *labels,
+    size_t label_count,
+    const struct ged_view_feature_style *style);
+
+/** Stage a named model-space arrow set.  Point pairs define arrow shafts. */
+GED_EXPORT extern int
+ged_view_feature_batch_arrow_replace(
+    struct ged_view_feature_batch *batch,
+    const char *name,
+    const point_t *points,
+    size_t point_count,
+    const struct ged_view_feature_style *style);
+
+/** Stage model-space axes centered at each point in @p centers. */
+GED_EXPORT extern int
+ged_view_feature_batch_axes_replace(
+    struct ged_view_feature_batch *batch,
+    const char *name,
+    const point_t *centers,
+    size_t center_count,
+    fastf_t half_size,
+    const struct ged_view_feature_style *style);
+
+/** Stage labels whose points are normalized view coordinates in [-1, 1]. */
+GED_EXPORT extern int
+ged_view_feature_batch_hud_labels_replace(
+    struct ged_view_feature_batch *batch,
+    const char *name,
+    const struct ged_view_feature_label *labels,
+    size_t label_count,
+    const struct ged_view_feature_style *style);
+
+/** Stage normalized-view line geometry locked to the screen. */
+GED_EXPORT extern int
+ged_view_feature_batch_hud_line_set_replace(
+    struct ged_view_feature_batch *batch,
+    const char *name,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count,
+    const struct ged_view_feature_style *style);
+
+/** Stage independently styled normalized-view line layers. */
+GED_EXPORT extern int
+ged_view_feature_batch_hud_line_layers_replace(
+    struct ged_view_feature_batch *batch,
+    const char *name,
+    const struct ged_view_feature_line_layer *layers,
+    size_t layer_count,
+    const struct ged_view_feature_style *style);
+
+/** Stage a retained faceplate axes overlay for one view. */
+GED_EXPORT extern int
+ged_view_feature_batch_hud_axes_replace(
+    struct ged_view_feature_batch *batch,
+    const char *name,
+    const struct bv_axes_state *axes,
+    const mat_t rotation);
 
 /** Stage a named indexed triangle surface; all arrays are copied. */
 GED_EXPORT extern int

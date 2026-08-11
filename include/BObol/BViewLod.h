@@ -277,18 +277,47 @@ public:
     size_t activeFaceCount(void) const;
     /* Multi-cost scheduler population in shaded-triangle equivalents. */
     size_t activeRenderCost(void) const;
-    /* Actual retained CAD triangle submissions from the most recently
+    /* Irreducible retained PoP population in the same weighted units as
+     * activeRenderCost().  This is the cost after every currently displayed
+     * progressive occurrence has been retargeted to its minimum drawable
+     * prefix; it lets the controller distinguish reducible triangle detail
+     * from a genuine per-visible-object floor before aggregating objects into
+     * point proxies. */
+    size_t minimumActiveRenderCost(void) const;
+    /* Actual retained CAD primitive submissions from the most recently
      * completed render.  Returns FALSE when any active CAD presentation did
-     * not use a renderer tier with an exact submitted-triangle diagnostic. */
-    SbBool lastCadPresentedTriangleCount(size_t &faces) const;
-    /* Exact submitted shaded work translated into the same weighted units as
+     * not publish an exact completed-frame work record. */
+    SbBool lastCadPresentedPrimitiveCount(size_t &primitives) const;
+    /* Exact submitted work translated into the same weighted units as
      * activeRenderCost and scene admission.  Unlike a triangle-ratio
-     * estimate, this preserves the active PoP cut's point/normal population. */
+     * estimate, this preserves shaded and wire population costs. */
     SbBool lastCadPresentedRenderCost(size_t &cost) const;
+    /** TRUE when every retained CAD assembly completed all drawing channels
+     * for the latest traversal.  Deadline-stopped point/wire-only buffers are
+     * coherent GL results, but are not complete presentation frames. */
+    SbBool lastCadPresentationFrameExact(void) const;
     /* Latest completed asynchronous GPU timer aggregate.  The serial changes
      * only when at least one retained CAD context publishes a newer result. */
     SbBool lastCadGpuMeasurement(size_t &faces,
-	uint64_t &nanoseconds, uint64_t &serial) const;
+	uint64_t &nanoseconds, uint64_t &serial,
+	float &pointProxyPixelThreshold) const;
+    /** TRUE when this view currently owns at least one retained CAD
+     * presentation.  A completed zero-work CAD frame is not evidence for
+     * calibrating the still-active occurrence population. */
+    SbBool hasCadPresentationAssemblies(void) const;
+    /** Aggregate monotonic token for retained CAD draw attempts.  Comparing
+     * this value around one render distinguishes deadline spent preparing a
+     * resumable plan from deadline spent submitting actual CAD geometry. */
+    uint64_t cadPresentationExecutionSerial(void) const;
+    /** Aggregate monotonic token for retained CAD preparation work.  A
+     * deadline abort which changes this token is not a steady draw-capacity
+     * sample. */
+    uint64_t cadPresentationPreparationSerial(void) const;
+    /** Snapshot the retained CAD assemblies immediately before one endpoint
+     * presentation traversal.  The matching refresh call can then reject a
+     * stale exact work record when a deadline stops traversal between CAD
+     * assemblies or before an assembly reaches its renderer. */
+    void beginCadPresentationFrame(void) const;
     /** Sample every unique active CAD assembly once after a complete frame.
      * The individual presentation, timer, replay, and resource queries below
      * then read one retained aggregate instead of independently walking the
@@ -314,11 +343,11 @@ public:
      * during rotation/translation.  Zoom and quiet frames must disable it. */
     void setCadPresentationCameraMotionFrameReuse(SbBool enabled) const;
     size_t estimateDisplayMeshBytes(void) const;
-    /* Report the richest prefix currently drawn by any view-local occurrence
-     * of each retained asset.  This is deliberately activeLevel rather than
-     * the unconstrained requestedLevel: the service consumes this snapshot
-     * only after submission and worker activity are idle, and uses it to
-     * reclaim prefixes above the stable scene-budget cut. */
+    /* Report the richest already-resident, view-requested prefix of each
+     * retained asset.  Presentation admission may draw a coarser activeLevel
+     * to meet the frame budget, but that must not discard useful data which
+     * still fits the resident-memory budget.  A lower request after zoom-out
+     * and explicit memory-pressure recovery remain valid compaction edges. */
     void residentMeshDemands(
 	std::vector<BObolLodResidentDemand> &demands) const;
     uint64_t residentMeshDemandRevision(void) const;
@@ -414,15 +443,20 @@ private:
      * to allocate a temporary set or scan duplicate bindings. */
     mutable std::unordered_map<const SoCADAssembly *, size_t>
 	cadPresentationAssemblyUseCounts;
+    mutable std::unordered_map<const SoCADAssembly *, uint64_t>
+	cadPresentationFrameStartExecutionSerials;
+    mutable SbBool cadPresentationFrameObservationArmed;
     mutable SbBool cadPresentationFrameStatusValid;
-    mutable SbBool cadLastPresentedTriangleCountValid;
-    mutable size_t cadLastPresentedTriangleCount;
+    mutable SbBool cadLastPresentedPrimitiveCountValid;
+    mutable size_t cadLastPresentedPrimitiveCount;
     mutable SbBool cadLastPresentedRenderCostValid;
     mutable size_t cadLastPresentedRenderCost;
+    mutable SbBool cadLastPresentationFrameExact;
     mutable SbBool cadLastGpuMeasurementValid;
     mutable size_t cadLastGpuFaces;
     mutable uint64_t cadLastGpuNanoseconds;
     mutable uint64_t cadLastGpuSerial;
+    mutable float cadLastGpuPointProxyPixelThreshold;
     mutable SbBool cadLastPreparedReplay;
     mutable SbBool cadGpuResourceStatusValid;
     mutable CadGpuResourceStatus cadGpuResourceStatusValue;
@@ -441,11 +475,12 @@ private:
     size_t cadMemoryLimitedMeshPayloadCount;
     size_t cadActiveFaceCount;
     size_t cadActiveRenderCost;
+    size_t cadMinimumActiveRenderCost;
     size_t cadDisplayMeshBytes;
     size_t cadProxyKindCounts[5];
     size_t cadProgressiveLevelCounts[16];
     /*
-     * Retain the active per-asset CAD demand aggregate at the same mutation
+     * Retain the resident view-demand aggregate at the same mutation
      * points as the other payload telemetry.  Reconstructing this table from
      * tens of thousands of occurrences during a paint/quiet compaction made
      * an otherwise unrelated selection event stall the GUI thread.

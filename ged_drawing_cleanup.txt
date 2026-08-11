@@ -46,13 +46,35 @@ implemented:
   untyped custom Coin-node publication escape hatch was removed.
 
 * Producer-specific Tcl/data/diagnostic annotation helpers and ownerless
-  mutable feature handles are no longer part of the installed API.  They remain
-  in an explicitly uninstalled migration header until their in-tree producers
-  are ported to feature batches.
+  mutable feature handles are no longer part of the installed API.  All
+  in-tree producers use typed feature batches, and the migration-only
+  view_feature_internal.h header has been deleted.
 
 * Installed scene.h was reduced from the combined semantic/realization surface
-  to the semantic contract.  The reviewed drawing manifest is currently 201
-  installed symbols rather than the roughly 340-symbol migration surface.
+  to the semantic contract.  Realized shape/group/source records and their
+  mutable geometry APIs are private libged implementation details.  Stable,
+  owner-checked semantic occurrence references now support navigation,
+  selection, highlighting, editing, and path lookup without exposing renderer
+  records.  The reviewed drawing manifest is currently 233 installed symbols
+  rather than the roughly 340-symbol migration surface.
+
+* View polygon state is now the ged_view_polygon_* domain.  Polygon geometry,
+  topology, boolean operations, overlap, area, and triangulation are owned by
+  libbg; libged only manages view ownership, editing state, sketch conversion,
+  and presentation.  The duplicate libged polygon types and clipping
+  implementation have been deleted.  libbg triangulation now handles multiple
+  components, nested holes/islands, replacement point arrays, and consistent
+  failure-output initialization.
+
+* Renderer-neutral database export uses summary and segment visitors rather
+  than raw draw records.  MGED, TclCAD, qged, libqtcad, and in-tree commands no
+  longer include the retired installed record or producer-helper headers.
+
+* The largest private adapters have begun a physical ownership split without
+  changing their compact hot paths: view export/path picking, renderer picking,
+  retained polygons, selection, and feature/faceplate/lighting presentation
+  now compile as independent translation units.  Private cross-unit record and
+  source declarations are not exported from libged.
 
 * Installed GED headers no longer include common.h, compile independently as
   both C11 and C++17, and pass the checked drawing API manifest.  qged, MGED,
@@ -95,9 +117,16 @@ The current implementation passed the following rebuilt .build validation:
   LoD service/coordinator, source realization, compact occurrences, mesh cache,
   edit, window-host, API, and private-symbol contracts.
 
-* The installed draw API manifest check passes with 201 reviewed symbols;
-  libged exports no ged_draw_obol_source_* implementation helpers; and
-  git diff --check reports no whitespace errors.
+* The installed draw API manifest check passes with 233 reviewed symbols;
+  libged exports no legacy shape/group/source/scene-record interface or
+  ged_draw_obol_source_* implementation helper; and git diff --check reports
+  no whitespace errors.
+
+* After the final producer ports, polygon consolidation, record privatization,
+  and translation-unit split, the focused 12-test semantic/polygon/client
+  contract set passes.  It includes state services, MGED view state,
+  view-independent drawing, faceplate, qtcad draw/edit/selection integration,
+  and libbg polygon topology/triangulation.
 
 * The 16,384-child test now carries an actual slow CTest label in addition to
   its name, so routine non-slow drawing runs can exclude it reliably.
@@ -108,25 +137,16 @@ perf/FPS, cache, and memory-pressure runs listed below.
 
 Work intentionally still pending before calling the cleanup production-ready:
 
-* Port the remaining in-tree annotation producers to typed feature batches,
-  then delete view_feature_internal.h rather than preserving wrappers.
-
-* Replace MGED's remaining realized-shape navigation with semantic occurrence
-  identities, then delete scene_record_api_internal.h and remove realized
-  records from the installed draw_types.h dependency graph.
-
-* Split feature, polygon, selection, and legacy record types out of the broad
-  draw_types.h umbrella.  Rehome the public view LoD policy under a view/display
-  domain and make source invalidation/snapshot helpers private.
-
-* Physically split draw_obol.cpp and ged_draw_source.cpp only after the above
-  API boundaries settle.  This is deliberately sequenced after semantic
-  consolidation so file movement cannot obscure performance regressions.
-
 * Run the complete cold/warm 50k/150k and real-model GUI/perf/image/memory
-  matrix after the final in-tree producer ports.  Focused contract tests are
-  green, but this broader gate remains mandatory because API cleanup must not
-  regress compact realization or LoD throughput.
+  matrix on the final source organization.  Focused contracts and client builds
+  are green, but this broader gate remains mandatory because API cleanup must
+  not regress compact realization, LoD throughput, interaction latency, or
+  renderer equivalence.
+
+* Continue subdividing the private source-realization core only where profiling
+  or ownership review identifies a useful boundary.  The remaining file size
+  is not itself permission to replace indexed/compact storage with per-leaf
+  mirrors, add GUI-thread copies, or introduce extra scene traversals.
 
 
 1. OBJECTIVE AND DECISIONS

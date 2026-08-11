@@ -15487,11 +15487,12 @@ compact_coverage_working_set_estimate(const struct db_i *dbip,
  * first in the BoT body, so this bounded decoder can publish every leaf box
  * and the exact draw-target extent before the detail phase pays those costs.
  *
- * db_get_external still owns one encoded-object copy.  The independent
- * read-only realization database is memory mapped, making these calls
- * parallel and free of the live editor handle's shared stdio cursor.  V4
- * retains the complete-import fallback because its record layout does not
- * offer the same compact body contract.
+ * A detached read-only realization database normally supplies a borrowed
+ * memory-mapped record, so this pass scans the serialized vertices in place
+ * without allocating or copying the faces which follow them.  Non-mapped v5
+ * databases retain the db_get_external fallback.  V4 retains the complete
+ * import fallback because its record layout does not offer the same compact
+ * body contract.
  */
 static bool
 compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
@@ -15532,18 +15533,59 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 
     struct bu_external external;
     BU_EXTERNAL_INIT(&external);
-    if (db_get_external(&external, dp, dbip) < 0)
-	return false;
+    size_t serializedBytes = 0;
+    const unsigned char *serialized = db_external_view(
+	dbip, dp, &serializedBytes);
+    const bool borrowed = serialized != NULL;
+    if (!borrowed) {
+	if (db_get_external(&external, dp, dbip) < 0)
+	    return false;
+	serialized = external.ext_buf;
+	serializedBytes = external.ext_nbytes;
+    }
+
+    const size_t headerBytes = sizeof(struct db5_ondisk_header);
+    size_t encodedObjectUnits = 0;
+    size_t objectLengthBytes = 0;
+    bool serializedEnvelopeValid = serializedBytes >= headerBytes;
+    if (serializedEnvelopeValid) {
+	const int width = (serialized[1] &
+	    DB5HDR_HFLAGS_OBJECT_WIDTH_MASK) >>
+	    DB5HDR_HFLAGS_OBJECT_WIDTH_SHIFT;
+	const size_t widthBytes = static_cast<size_t>(1) << width;
+	serializedEnvelopeValid = width >= DB5HDR_WIDTHCODE_8BIT &&
+	    width <= DB5HDR_WIDTHCODE_64BIT &&
+	    headerBytes <= serializedBytes &&
+	    widthBytes <= serializedBytes - headerBytes;
+	if (serializedEnvelopeValid) {
+	    (void)db5_decode_length(&encodedObjectUnits,
+		serialized + headerBytes, width);
+	    serializedEnvelopeValid =
+		encodedObjectUnits <= SIZE_MAX / 8;
+	    objectLengthBytes = serializedEnvelopeValid ?
+		encodedObjectUnits * 8 : 0;
+	    serializedEnvelopeValid = objectLengthBytes >= headerBytes &&
+		objectLengthBytes <= serializedBytes;
+	}
+    }
 
     struct db5_raw_internal raw;
     const bool rawValid =
-	db5_get_raw_internal_ptr(&raw, external.ext_buf) != NULL &&
+	serializedEnvelopeValid &&
+	db5_get_raw_internal_ptr(&raw, serialized) != NULL &&
+	raw.object_length == objectLengthBytes &&
 	raw.major_type == DB5_MAJORTYPE_BRLCAD &&
 	raw.minor_type == DB5_MINORTYPE_BRLCAD_BOT &&
 	raw.body.ext_buf && raw.body.ext_nbytes >=
-	    2 * SIZEOF_NETWORK_LONG + 3;
+	    2 * SIZEOF_NETWORK_LONG + 3 &&
+	raw.body.ext_buf >= serialized &&
+	static_cast<size_t>(raw.body.ext_buf - serialized) <
+	    raw.object_length &&
+	raw.body.ext_nbytes <= raw.object_length -
+	    static_cast<size_t>(raw.body.ext_buf - serialized) - 1;
     if (!rawValid) {
-	bu_free_external(&external);
+	if (!borrowed)
+	    bu_free_external(&external);
 	return false;
     }
 
@@ -15556,7 +15598,8 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 	SIZEOF_NETWORK_DOUBLE * ELEMENTS_PER_POINT;
     if (!vertices || vertices > (SIZE_MAX - fixedBytes) / vertexStride ||
 	fixedBytes + vertices * vertexStride > raw.body.ext_nbytes) {
-	bu_free_external(&external);
+	if (!borrowed)
+	    bu_free_external(&external);
 	return false;
     }
 
@@ -15566,21 +15609,31 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     point_t minimum = {INFINITY, INFINITY, INFINITY};
     point_t maximum = {-INFINITY, -INFINITY, -INFINITY};
     size_t finiteVertices = 0;
-    for (size_t i = 0; i < vertices; ++i) {
-	double value[ELEMENTS_PER_POINT] = {0.0, 0.0, 0.0};
-	bu_cv_ntohd(reinterpret_cast<unsigned char *>(value), point,
-	    ELEMENTS_PER_POINT);
-	point += vertexStride;
-	if (!std::isfinite(value[X]) || !std::isfinite(value[Y]) ||
-	    !std::isfinite(value[Z]))
-	    continue;
-	for (size_t axis = 0; axis < 3; ++axis) {
-	    minimum[axis] = std::min(minimum[axis], value[axis]);
-	    maximum[axis] = std::max(maximum[axis], value[axis]);
+    /* Convert in cache-sized blocks.  A bu_cv_ntohd call per vertex dominated
+     * cold extent discovery for a 150k-part database even though the source
+     * was already memory mapped; batching also gives the compiler a simple
+     * finite/min/max loop to vectorize. */
+    static const size_t vertexBlock = 256;
+    double decoded[vertexBlock * ELEMENTS_PER_POINT];
+    for (size_t first = 0; first < vertices; first += vertexBlock) {
+	const size_t count = std::min(vertexBlock, vertices - first);
+	bu_cv_ntohd(reinterpret_cast<unsigned char *>(decoded), point,
+	    count * ELEMENTS_PER_POINT);
+	point += count * vertexStride;
+	for (size_t i = 0; i < count; ++i) {
+	    const double *value = decoded + i * ELEMENTS_PER_POINT;
+	    if (!std::isfinite(value[X]) || !std::isfinite(value[Y]) ||
+		!std::isfinite(value[Z]))
+		continue;
+	    for (size_t axis = 0; axis < 3; ++axis) {
+		minimum[axis] = std::min(minimum[axis], value[axis]);
+		maximum[axis] = std::max(maximum[axis], value[axis]);
+	    }
+	    finiteVertices++;
 	}
-	finiteVertices++;
     }
-    bu_free_external(&external);
+    if (!borrowed)
+	bu_free_external(&external);
     if (!finiteVertices)
 	return false;
 
@@ -15787,10 +15840,8 @@ compact_coverage_overview_occurrence(SoBRLDatabaseSource *source,
 	overview.geometryTransform);
     if (!overview.geometry)
 	return overview;
-    std::string overviewPath(treeName);
-    overviewPath += "/@draw-extent";
     overview.summary = compact_occurrence_summary(source,
-	overviewPath.c_str(), treeName, "proxy", "overview-aabb", revision,
+	treeName, treeName, "proxy", "overview-aabb", revision,
 	BObolRealizedShapeSummary::SHAPE_VLIST);
     overview.summary.recordRole = "lod-overview";
     overview.summary.selectable = FALSE;
@@ -15835,7 +15886,10 @@ compact_stream_publish_parallel_coverage(
     size_t workerCount = bu_avail_cpus();
     workerCount = std::max<size_t>(1, std::min<size_t>(workerCount, 32));
     const auto coverageWorker = [&]() {
-	bu_nice_set(5);
+	/* Bounds and the first useful overview are foreground draw latency, not
+	 * speculative refinement.  Lowering these workers' priority let unrelated
+	 * renderer/cache work starve a cold scene into several blank seconds.
+	 * Full-array import below remains niced. */
 	for (;;) {
 	    compact_coverage_work_item item;
 	    {
@@ -15862,7 +15916,11 @@ compact_stream_publish_parallel_coverage(
 		if (db_version(source->getDatabase()) == 5 && asset.dp &&
 		    asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
 		    const size_t fixedBytes = 1024ULL * 1024ULL;
-		    const size_t encodedBytes = asset.dp->d_len;
+		    size_t borrowedBytes = 0;
+		    const bool zeroCopy = db_external_view(
+			source->getDatabase(), asset.dp,
+			&borrowedBytes) != NULL;
+		    const size_t encodedBytes = zeroCopy ? 0 : asset.dp->d_len;
 		    coverageWorkingSet =
 			encodedBytes > SIZE_MAX - fixedBytes ?
 			SIZE_MAX : encodedBytes + fixedBytes;

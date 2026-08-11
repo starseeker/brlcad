@@ -366,6 +366,39 @@ test_view_controller_presentation_deadline_contract(void)
 	    ret = 1;
 	}
     }
+    {
+	BObolViewController controller(root, NULL);
+	controller.clearRenderRequest();
+	const size_t budgetBeforePreparation =
+	    controller.getCurrentLodRenderCostBudget();
+	controller.notePresentationRenderInterrupted(
+	    123000000ULL, TRUE, TRUE);
+	if (!ret &&
+		(controller.getInterruptedPresentationFrameCount() != 1 ||
+		 !controller.isRenderRequested() ||
+		 bu_strcmp(controller.getRenderReason().getString(),
+		     "render-preparation-replay") != 0 ||
+		 controller.getCurrentLodRenderCostBudget() !=
+		     budgetBeforePreparation)) {
+	    printf("FAIL: first preparation-heavy deadline did not request an "
+		   "unchanged presentation retry\n");
+	    ret = 1;
+	}
+	controller.clearRenderRequest();
+	controller.notePresentationRenderInterrupted(
+	    123000000ULL, TRUE, TRUE);
+	if (!ret &&
+	    (controller.getInterruptedPresentationFrameCount() != 2 ||
+	     !controller.isRenderRequested() ||
+	     bu_strcmp(controller.getRenderReason().getString(),
+		 "render-preparation-replay") != 0 ||
+	     controller.getCurrentLodRenderCostBudget() !=
+		 budgetBeforePreparation)) {
+	    printf("FAIL: continuing resumable preparation was misclassified "
+		   "as a draw-capacity failure\n");
+	    ret = 1;
+	}
+    }
     root->unref();
     return ret;
 }
@@ -4324,6 +4357,22 @@ test_mesh_lod_submit_action(void)
 	}
     }
 
+    /* The delayed duplicate fixture deliberately realizes an AABB while
+     * advertising the mesh-provider request key.  It tests only active-key
+     * suppression and is not a valid resident mesh-provider result.  Reset
+     * the service before the real provider test so that synthetic fixture
+     * cannot poison its resident asset slot. */
+    service.stop();
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD submit action service did not restart after active-duplicate fixture\n");
+	root->unref();
+	bobol_mesh_lod_cache_clear_database(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+
     SoBRLMeshLodSubmitAction submit;
     submit.setService(&service);
     submit.setDatabase(dbip, "db://lod-submit-test", 2026);
@@ -4392,7 +4441,16 @@ test_mesh_lod_submit_action(void)
 	viewPolicyResults[0].geometry.activeLevel !=
 	    viewPolicyResults[0].progressiveMesh->minimumLevel() ||
 	viewPolicyResults[0].terminal) {
-	printf("FAIL: LoD submit action did not publish coverage-first minimum\n");
+	printf("FAIL: LoD submit action did not publish coverage-first minimum "
+	       "mesh=%d active=%d minimum=%d terminal=%d status=%d "
+	       "diagnostic=%s\n",
+	       viewPolicyResults[0].progressiveMesh ? 1 : 0,
+	       viewPolicyResults[0].geometry.activeLevel,
+	       viewPolicyResults[0].progressiveMesh ?
+		   viewPolicyResults[0].progressiveMesh->minimumLevel() : -1,
+	       viewPolicyResults[0].terminal ? 1 : 0,
+	       viewPolicyResults[0].providerStatus,
+	       viewPolicyResults[0].diagnostic.getString());
 	service.stop();
 	root->unref();
 	bobol_mesh_lod_cache_clear_database(dbip);
@@ -6066,6 +6124,8 @@ test_view_controller_lod_submit_and_apply(void)
 	    const int pendingRequestedLevel = std::min(
 		activePayload->progressiveMesh->maximumLevel(),
 		residentLevel + 1);
+	    const int retainedDemandLevel = std::max(savedActiveLevel,
+		std::min(pendingRequestedLevel, residentLevel));
 	    if (pendingRequestedLevel > residentLevel) {
 		std::vector<BObolLodResidentDemand> demands;
 		if (!controller.getViewLodState()->retargetMeshPayload(
@@ -6085,8 +6145,13 @@ test_view_controller_lod_submit_and_apply(void)
 		if (activePayload->activeLevel != savedActiveLevel ||
 		    activePayload->requestedLevel != pendingRequestedLevel ||
 		    demands.size() != 1 ||
-		    demands[0].level != savedActiveLevel) {
-		    printf("FAIL: resident demand did not follow the stable active PoP cut\n");
+		    demands[0].level != retainedDemandLevel) {
+		    printf("FAIL: resident demand did not preserve the loaded view-requested PoP prefix "
+			"active=%d requested=%d resident=%d demands=%zu level=%d\n",
+			activePayload->activeLevel,
+			activePayload->requestedLevel, residentLevel,
+			demands.size(),
+			demands.empty() ? -1 : demands[0].level);
 		    service.stop();
 		    root->unref();
 		    bobol_mesh_lod_cache_clear_database(dbip);
@@ -8356,7 +8421,7 @@ test_compact_aabb_stream_upgrade(void)
     retirementSource->instanceKey = "retirement-root-instance";
 
     BObolCompactOccurrence overview = proxy;
-    overview.summary.path = "retirement-root.c/@draw-extent";
+    overview.summary.path = "retirement-root.c";
     overview.summary.sourceName = "retirement-root.c";
     overview.summary.sourceType = "proxy";
     overview.summary.geometryKind = "overview-aabb";
@@ -8999,14 +9064,23 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    ret = 1;
 			} else {
 			    rebaseController.setViewportSize(641, 480);
-			    const BObolViewLodState::CadPayload *current =
-				rebaseState->findCadForResult(rebaseSeed);
-			    /* Deliberately leave the retained occurrence stamped with
-			     * staleView.  Continuous wheel events can outrun both the
-			     * worker result and occurrence metadata; immutable asset
-			     * identity, not a current camera stamp, is the safe rebase
-			     * witness. */
-			    const int waited = wait_for_service(service);
+				    const BObolViewLodState::CadPayload *current =
+					rebaseState->findCadForResult(rebaseSeed);
+				    /* Deliberately leave the retained occurrence stamped with
+				     * staleView.  Continuous wheel events can outrun both the
+				     * worker result and occurrence metadata; immutable asset
+				     * identity, not a current camera stamp, is the safe rebase
+				     * witness.  Also preserve a newer requested cut: an active
+				     * cumulative load coalesces later wheel requests, but those
+				     * requests remain the occurrence's current demand and must
+				     * survive the older worker completion. */
+				    if (current && !rebaseState->retargetCadPayload(
+					    current, 0, 2, staleView,
+					    current->policyRevision)) {
+					printf("FAIL: cumulative suffix newer demand setup\n");
+					ret = 1;
+				    }
+				    const int waited = wait_for_service(service);
 			    rebaseController.clearProgressiveWorkPending();
 			    const int applied = waited ? -1 :
 				rebaseController.applyLodResults(
@@ -9031,9 +9105,9 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    } else {
 				const BObolViewLodState::CadPayload *after =
 				    rebaseState->findCadForResult(rebaseSeed);
-				if (!after || after->activeLevel != 0 ||
-				    after->residentLevel != 1 ||
-				    after->requestedLevel != 1 ||
+					if (!after || after->activeLevel != 0 ||
+					    after->residentLevel != 1 ||
+					    after->requestedLevel != 2 ||
 				    after->viewRevision !=
 					rebaseController.getLodViewRevision() ||
 				    after->viewRevision == staleView ||
@@ -9778,6 +9852,31 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
     if (!ret) {
 	const BObolViewLodState::CadPayload *payload =
 	    viewState.findCadForResult(results[0]);
+	if (payload && payload->progressiveMesh &&
+	    viewState.cadMeshPayloadCount() == 1 &&
+	    viewState.meshPayloadCount() == 0) {
+	    const int minimumLevel =
+		payload->progressiveMesh->minimumLevel();
+	    BObolLodCounts minimumCounts;
+	    minimumCounts.faceCount =
+		payload->progressiveMesh->faceCount(minimumLevel);
+	    minimumCounts.pointCount =
+		payload->progressiveMesh->pointCount(minimumLevel);
+	    const size_t expectedMinimumCost =
+		bobol_lod_render_cost_units(
+		    minimumCounts, payload->drawMode, 1);
+	    if (viewState.minimumActiveRenderCost() !=
+		expectedMinimumCost ||
+		viewState.minimumActiveRenderCost() >
+		    viewState.activeRenderCost()) {
+		printf("FAIL: retained minimum PoP cost telemetry "
+		       "(minimum=%zu expected=%zu active=%zu)\n",
+		       viewState.minimumActiveRenderCost(),
+		       expectedMinimumCost,
+		       viewState.activeRenderCost());
+		ret = 1;
+	    }
+	}
 	int drawableLevel = payload && payload->progressiveMesh ?
 	    payload->progressiveMesh->residentLevel() : -1;
 	if (payload && payload->progressiveMesh) {

@@ -87,7 +87,7 @@ rt_sketch_polygon_data_init(struct rt_sketch_polygon_data *poly)
     rt_sketch_polygon_set_default_color(&poly->fill_color, 1.0, 1.0, 1.0);
     rt_sketch_polygon_set_default_color(&poly->edge_color, 1.0, 1.0, 1.0);
     HSET(poly->vp, 0.0, 0.0, 1.0, 0.0);
-    poly->polygon = (struct bg_polygon)BG_POLYGON_NULL;
+    poly->polygon = (struct bg_polygon)BG_POLYGON_INIT_ZERO;
 }
 
 void
@@ -96,7 +96,7 @@ rt_sketch_polygon_data_free(struct rt_sketch_polygon_data *poly)
     if (!poly)
 	return;
 
-    bg_polygon_free(&poly->polygon);
+    bg_polygon_clear(&poly->polygon);
     rt_sketch_polygon_data_init(poly);
 }
 
@@ -104,25 +104,30 @@ int
 rt_sketch_polygon_data_copy(struct rt_sketch_polygon_data *dest,
 	const struct rt_sketch_polygon_data *src)
 {
+    struct rt_sketch_polygon_data copy;
+
     if (!dest || !src)
 	return -1;
 
     if (dest == src)
 	return 0;
 
-    bg_polygon_free(&dest->polygon);
-    *dest = *src;
-    dest->polygon = (struct bg_polygon)BG_POLYGON_NULL;
-    bg_polygon_cpy(&dest->polygon, (struct bg_polygon *)&src->polygon);
+    copy = *src;
+    copy.polygon = (struct bg_polygon)BG_POLYGON_INIT_ZERO;
+    if (bg_polygon_copy(&copy.polygon, &src->polygon))
+	return -1;
+
+    bg_polygon_clear(&dest->polygon);
+    *dest = copy;
     return 0;
 }
 
-static void
+static int
 rt_sketch_polygon_to_data(struct rt_sketch_polygon_data *data,
 	const struct rt_sketch_polygon *poly)
 {
     if (!data || !poly)
-	return;
+	return -1;
 
     rt_sketch_polygon_data_init(data);
     data->type = poly->type;
@@ -135,7 +140,7 @@ rt_sketch_polygon_to_data(struct rt_sketch_polygon_data *data,
     data->vZ = poly->vZ;
     data->have_edge_color = poly->have_edge_color;
     BU_COLOR_CPY(&data->edge_color, &poly->edge_color);
-    bg_polygon_cpy(&data->polygon, (struct bg_polygon *)&poly->polygon);
+    return bg_polygon_copy(&data->polygon, &poly->polygon);
 }
 
 static void
@@ -349,19 +354,19 @@ end:
 	    bu_opt_fastf_t(NULL, 1, (const char **)&val, (void *)&poly->fill_delta);
 	}
 	val = bu_avs_get(&lavs, "POLYGON_TYPE");
-	if (BU_STR_EQUAL(val, "CIRCLE")) {
+	if (val && BU_STR_EQUAL(val, "CIRCLE")) {
 	    poly->type = RT_SKETCH_POLYGON_CIRCLE;
 	}
-	if (BU_STR_EQUAL(val, "ELLIPSE")) {
+	if (val && BU_STR_EQUAL(val, "ELLIPSE")) {
 	    poly->type = RT_SKETCH_POLYGON_ELLIPSE;
 	}
-	if (BU_STR_EQUAL(val, "RECTANGLE")) {
+	if (val && BU_STR_EQUAL(val, "RECTANGLE")) {
 	    poly->type = RT_SKETCH_POLYGON_RECTANGLE;
 	}
-	if (BU_STR_EQUAL(val, "SQUARE")) {
+	if (val && BU_STR_EQUAL(val, "SQUARE")) {
 	    poly->type = RT_SKETCH_POLYGON_SQUARE;
 	}
-	if (BU_STR_EQUAL(val, "GENERAL")) {
+	if (val && BU_STR_EQUAL(val, "GENERAL")) {
 	    poly->type = RT_SKETCH_POLYGON_GENERAL;
 	}
     }
@@ -392,7 +397,10 @@ db_sketch_to_polygon_data(struct rt_sketch_polygon_data *data,
 	return -1;
 
     rt_sketch_polygon_data_free(data);
-    rt_sketch_polygon_to_data(data, poly);
+    if (rt_sketch_polygon_to_data(data, poly)) {
+	rt_sketch_polygon_destroy(poly);
+	return -1;
+    }
     rt_sketch_polygon_destroy(poly);
     return 0;
 }
@@ -408,7 +416,7 @@ rt_sketch_polygon_destroy(struct rt_sketch_polygon *poly)
 {
     if (!poly)
 	return;
-    bg_polygon_free(&poly->polygon);
+    bg_polygon_clear(&poly->polygon);
     BU_PUT(poly, struct rt_sketch_polygon);
 }
 

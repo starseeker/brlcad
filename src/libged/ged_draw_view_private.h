@@ -40,8 +40,6 @@ class BObolViewAttachment;
  * the remaining bits identify a live GED view host record. */
 GED_EXPORT extern uint64_t ged_view_context_reference_owner(
 	const struct ged_view_context *view_ctx, int local);
-GED_EXPORT extern struct ged_view_context *ged_view_context_from_reference_owner(
-	uint64_t owner, int *local);
 GED_EXPORT extern BObolViewAttachment *ged_view_context_obol_attachment(
 	const struct ged_view_context *view_ctx);
 GED_EXPORT extern int ged_view_context_obol_attachment_bind(
@@ -77,8 +75,8 @@ GED_EXPORT extern int ged_selection_set_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,
 	const char *path);
-GED_EXPORT extern void ged_draw_source_lod_bounds_callback_set(struct ged_view_context *view_ctx);
-GED_EXPORT extern int ged_draw_source_lod_bounds_callback_is(const struct ged_view_context *view_ctx);
+extern void ged_draw_source_lod_bounds_callback_set(struct ged_view_context *view_ctx);
+extern int ged_draw_source_lod_bounds_callback_is(const struct ged_view_context *view_ctx);
 
 __END_DECLS
 

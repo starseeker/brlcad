@@ -1,5 +1,8 @@
 # Generate a balanced many-instance combination in a writable copy of lucy.g.
 #
+# Copyright (c) 2026 United States Government as represented by
+# the U.S. Army Research Laboratory.
+#
 # Usage:
 #   cp --reflink=auto lucy.g many_lucy.g
 #   BOBOL_STRESS_INSTANCE_COUNT=5000 \

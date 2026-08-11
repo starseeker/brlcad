@@ -2039,20 +2039,6 @@ bobol_draw_manifest_add_size(size_t *total, size_t add)
     return 1;
 }
 
-static char *
-bobol_draw_manifest_copy_string(const unsigned char *data, size_t length)
-{
-    if (!data || length > SIZE_MAX - 1)
-	return NULL;
-    char *copy = static_cast<char *>(bu_malloc(length + 1,
-	"bobol draw manifest string"));
-    if (!copy)
-	return NULL;
-    memcpy(copy, data, length);
-    copy[length] = '\0';
-    return copy;
-}
-
 static int
 bobol_draw_manifest_matrix_valid(const fastf_t matrix[16])
 {
@@ -2279,10 +2265,11 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 }
 
 extern "C" int
-bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
-	BObolDrawManifest *manifest)
+bobol_draw_manifest_cache_stream(db_i *dbip, const char *rootPath,
+	BObolDrawManifestBeginCallback begin,
+	BObolDrawManifestOccurrenceCallback visit, void *userData)
 {
-    if (!dbip || !rootPath || !rootPath[0] || !manifest)
+    if (!dbip || !rootPath || !rootPath[0])
 	return BRLCAD_ERROR;
 
     char key[BU_CACHE_KEY_MAXLEN] = {0};
@@ -2292,20 +2279,25 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 
     void *data = NULL;
     size_t dataSize = 0;
+    bu_cache_txn *transaction = NULL;
     int sem = bobol_draw_cache_semaphore();
     bu_semaphore_acquire(sem);
     BObolDrawCacheHandle handle;
     if (bobol_draw_cache_open(&handle, dbip)) {
-	dataSize = bu_cache_get(&data, key, handle.cache, NULL);
-	bobol_draw_cache_close(&handle);
+	/* A retained read transaction returns LMDB's read-only mapping rather
+	 * than allocating and copying a potentially hundreds-of-megabytes value.
+	 * Keep the draw-cache lifecycle lock until the callbacks finish so an
+	 * explicit cache clear cannot retire the mapped environment underneath
+	 * them.  PoP mesh data uses its own cache and remains fully concurrent. */
+	dataSize = bu_cache_get(&data, key, handle.cache, &transaction);
     }
-    bu_semaphore_release(sem);
     if (!data || dataSize < sizeof(BObolDrawManifestDiskHeader)) {
 	if (getenv("BOBOL_DRAW_TIMING"))
 	    bu_log("[obol-timing] manifest cache record unavailable for %s "
 		"(bytes=%zu)\n", rootPath, dataSize);
-	if (data)
-	    bu_free(data, "bobol draw manifest data");
+	bu_cache_get_done(&transaction);
+	bobol_draw_cache_close(&handle);
+	bu_semaphore_release(sem);
 	return BRLCAD_ERROR;
     }
 
@@ -2333,7 +2325,9 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 		(unsigned long long)currentFingerprint,
 		header.rootPathLength, rootLength,
 		(unsigned long long)header.occurrenceCount, dataSize);
-	bu_free(data, "bobol draw manifest data");
+	bu_cache_get_done(&transaction);
+	bobol_draw_cache_close(&handle);
+	bu_semaphore_release(sem);
 	return BRLCAD_ERROR;
     }
 
@@ -2344,29 +2338,41 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	if (getenv("BOBOL_DRAW_TIMING"))
 	    bu_log("[obol-timing] manifest cache root rejected for %s\n",
 		rootPath);
-	bu_free(data, "bobol draw manifest data");
+	bu_cache_get_done(&transaction);
+	bobol_draw_cache_close(&handle);
+	bu_semaphore_release(sem);
 	return BRLCAD_ERROR;
     }
-	offset += rootLength;
+    offset += rootLength;
 
-    BObolDrawManifest loaded;
-    bobol_draw_manifest_init(&loaded);
-    loaded.coverageBoundsValid = header.coverageBoundsValid ? 1 : 0;
-    if (loaded.coverageBoundsValid) {
-	VMOVE(loaded.coverageBoundsMin, header.coverageBoundsMin);
-	VMOVE(loaded.coverageBoundsMax, header.coverageBoundsMax);
+    BObolDrawManifest description;
+    bobol_draw_manifest_init(&description);
+    description.coverageBoundsValid = header.coverageBoundsValid ? 1 : 0;
+    if (description.coverageBoundsValid) {
+	VMOVE(description.coverageBoundsMin, header.coverageBoundsMin);
+	VMOVE(description.coverageBoundsMax, header.coverageBoundsMax);
     }
-    loaded.occurrenceCount = static_cast<size_t>(header.occurrenceCount);
-    loaded.occurrences = static_cast<BObolDrawManifestOccurrence *>(
-	bu_calloc(loaded.occurrenceCount, sizeof(*loaded.occurrences),
-	    "bobol draw manifest occurrences"));
-    if (!loaded.occurrences) {
-	bu_free(data, "bobol draw manifest data");
+    description.occurrenceCount = static_cast<size_t>(header.occurrenceCount);
+    if (begin && !begin(&description, userData)) {
+	bu_cache_get_done(&transaction);
+	bobol_draw_cache_close(&handle);
+	bu_semaphore_release(sem);
 	return BRLCAD_ERROR;
+    }
+
+    /* A description-only caller has all of the fixed-size information it
+     * requested.  Do not validate or decode the variable occurrence body on
+     * the latency-sensitive owner thread.  Full streaming and cache_get still
+     * validate every occurrence below. */
+    if (!visit) {
+	bu_cache_get_done(&transaction);
+	bobol_draw_cache_close(&handle);
+	bu_semaphore_release(sem);
+	return BRLCAD_OK;
     }
 
     int valid = 1;
-    for (size_t i = 0; valid && i < loaded.occurrenceCount; i++) {
+    for (size_t i = 0; valid && i < description.occurrenceCount; i++) {
 	if (offset > dataSize ||
 	    dataSize - offset < sizeof(BObolDrawManifestOccurrenceDiskHeader)) {
 	    valid = 0;
@@ -2424,33 +2430,41 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	    if (getenv("BOBOL_DRAW_TIMING"))
 		bu_log("[obol-timing] manifest cache occurrence rejected for "
 		    "%s at %zu/%zu (offset=%zu bytes=%zu)\n", rootPath, i,
-		    loaded.occurrenceCount, offset, dataSize);
+		    description.occurrenceCount, offset, dataSize);
 	    valid = 0;
 	    break;
 	}
-	BObolDrawManifestOccurrence &occurrence = loaded.occurrences[i];
-	occurrence.path = bobol_draw_manifest_copy_string(bytes + offset,
+	/* Reusable callback-local strings eliminate four persistent allocations
+	 * per occurrence.  The consumer must copy anything it retains, as stated
+	 * by the public streaming contract. */
+	std::string path(reinterpret_cast<const char *>(bytes + offset),
 	    pathLength);
 	offset += pathLength;
-	occurrence.sourceName = bobol_draw_manifest_copy_string(bytes + offset,
-	    sourceNameLength);
+	std::string sourceName(
+	    reinterpret_cast<const char *>(bytes + offset), sourceNameLength);
 	offset += sourceNameLength;
+	std::string meshAssetPath;
+	std::string meshAssetName;
 	if (meshAssetPathLength) {
-	    occurrence.meshAssetPath = bobol_draw_manifest_copy_string(
-		bytes + offset, meshAssetPathLength);
+	    meshAssetPath.assign(
+		reinterpret_cast<const char *>(bytes + offset),
+		meshAssetPathLength);
 	    offset += meshAssetPathLength;
 	}
 	if (meshAssetNameLength) {
-	    occurrence.meshAssetName = bobol_draw_manifest_copy_string(
-		bytes + offset, meshAssetNameLength);
+	    meshAssetName.assign(
+		reinterpret_cast<const char *>(bytes + offset),
+		meshAssetNameLength);
 	    offset += meshAssetNameLength;
 	}
-	if (!occurrence.path || !occurrence.sourceName ||
-	    (occurrenceHeader.sourceMeshRequestValid &&
-	     (!occurrence.meshAssetPath || !occurrence.meshAssetName))) {
-	    valid = 0;
-	    break;
-	}
+	BObolDrawManifestOccurrence occurrence;
+	memset(&occurrence, 0, sizeof(occurrence));
+	occurrence.path = const_cast<char *>(path.c_str());
+	occurrence.sourceName = const_cast<char *>(sourceName.c_str());
+	occurrence.meshAssetPath = meshAssetPathLength ?
+	    const_cast<char *>(meshAssetPath.c_str()) : NULL;
+	occurrence.meshAssetName = meshAssetNameLength ?
+	    const_cast<char *>(meshAssetName.c_str()) : NULL;
 	occurrence.booleanOperation = occurrenceHeader.booleanOperation;
 	occurrence.occurrenceIndex = occurrenceHeader.occurrenceIndex;
 	occurrence.metadataValid = occurrenceHeader.metadataValid ? 1 : 0;
@@ -2483,18 +2497,135 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	}
 	bobol_draw_metadata_from_disk(&occurrence.metadata,
 	    &occurrenceHeader.metadata);
+	if (visit && !visit(&occurrence, i, userData)) {
+	    valid = 0;
+	    break;
+	}
     }
     if (!valid || offset != dataSize) {
 	if (getenv("BOBOL_DRAW_TIMING"))
 	    bu_log("[obol-timing] manifest cache body rejected for %s "
 		"(offset=%zu bytes=%zu)\n", rootPath, offset, dataSize);
-	bobol_draw_manifest_free(&loaded);
-	bu_free(data, "bobol draw manifest data");
+	bu_cache_get_done(&transaction);
+	bobol_draw_cache_close(&handle);
+	bu_semaphore_release(sem);
 	return BRLCAD_ERROR;
     }
 
-    bu_free(data, "bobol draw manifest data");
+    bu_cache_get_done(&transaction);
+    bobol_draw_cache_close(&handle);
+    bu_semaphore_release(sem);
+    return BRLCAD_OK;
+}
+
+struct BObolDrawManifestDescriptionContext {
+    BObolDrawManifest *description = NULL;
+    int captured = 0;
+};
+
+static int
+bobol_draw_manifest_describe_begin(const BObolDrawManifest *description,
+	void *userData)
+{
+    BObolDrawManifestDescriptionContext *context =
+	static_cast<BObolDrawManifestDescriptionContext *>(userData);
+    if (!context || !context->description || !description)
+	return 0;
+    context->description->coverageBoundsValid =
+	description->coverageBoundsValid;
+    VMOVE(context->description->coverageBoundsMin,
+	description->coverageBoundsMin);
+    VMOVE(context->description->coverageBoundsMax,
+	description->coverageBoundsMax);
+    context->description->occurrenceCount = description->occurrenceCount;
+    context->description->occurrences = NULL;
+    context->captured = 1;
+    return 1;
+}
+
+extern "C" int
+bobol_draw_manifest_cache_describe(db_i *dbip, const char *rootPath,
+	BObolDrawManifest *description)
+{
+    if (!description)
+	return BRLCAD_ERROR;
+    bobol_draw_manifest_init(description);
+    BObolDrawManifestDescriptionContext context;
+    context.description = description;
+    const int status = bobol_draw_manifest_cache_stream(dbip, rootPath,
+	bobol_draw_manifest_describe_begin, NULL, &context);
+    return status == BRLCAD_OK && context.captured ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
+
+struct BObolDrawManifestCollector {
+    BObolDrawManifest manifest;
+};
+
+static int
+bobol_draw_manifest_collect_begin(const BObolDrawManifest *description,
+	void *userData)
+{
+    BObolDrawManifestCollector *collector =
+	static_cast<BObolDrawManifestCollector *>(userData);
+    if (!collector || !description || !description->occurrenceCount)
+	return 0;
+    collector->manifest.coverageBoundsValid =
+	description->coverageBoundsValid;
+    VMOVE(collector->manifest.coverageBoundsMin,
+	description->coverageBoundsMin);
+    VMOVE(collector->manifest.coverageBoundsMax,
+	description->coverageBoundsMax);
+    collector->manifest.occurrenceCount = description->occurrenceCount;
+    collector->manifest.occurrences =
+	static_cast<BObolDrawManifestOccurrence *>(bu_calloc(
+	    description->occurrenceCount,
+	    sizeof(*collector->manifest.occurrences),
+	    "bobol draw manifest occurrences"));
+    return collector->manifest.occurrences ? 1 : 0;
+}
+
+static int
+bobol_draw_manifest_collect_occurrence(
+	const BObolDrawManifestOccurrence *occurrence, size_t index,
+	void *userData)
+{
+    BObolDrawManifestCollector *collector =
+	static_cast<BObolDrawManifestCollector *>(userData);
+    if (!collector || !occurrence ||
+	index >= collector->manifest.occurrenceCount)
+	return 0;
+    BObolDrawManifestOccurrence &copy =
+	collector->manifest.occurrences[index];
+    copy = *occurrence;
+    copy.path = occurrence->path ? bu_strdup(occurrence->path) : NULL;
+    copy.sourceName = occurrence->sourceName ?
+	bu_strdup(occurrence->sourceName) : NULL;
+    copy.meshAssetPath = occurrence->meshAssetPath ?
+	bu_strdup(occurrence->meshAssetPath) : NULL;
+    copy.meshAssetName = occurrence->meshAssetName ?
+	bu_strdup(occurrence->meshAssetName) : NULL;
+    return copy.path && copy.sourceName &&
+	(!occurrence->meshAssetPath || copy.meshAssetPath) &&
+	(!occurrence->meshAssetName || copy.meshAssetName);
+}
+
+extern "C" int
+bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
+	BObolDrawManifest *manifest)
+{
+    if (!manifest)
+	return BRLCAD_ERROR;
+    BObolDrawManifestCollector collector;
+    bobol_draw_manifest_init(&collector.manifest);
+    const int status = bobol_draw_manifest_cache_stream(dbip, rootPath,
+	bobol_draw_manifest_collect_begin,
+	bobol_draw_manifest_collect_occurrence, &collector);
+    if (status != BRLCAD_OK) {
+	bobol_draw_manifest_free(&collector.manifest);
+	return BRLCAD_ERROR;
+    }
     bobol_draw_manifest_free(manifest);
-    *manifest = loaded;
+    *manifest = collector.manifest;
     return BRLCAD_OK;
 }

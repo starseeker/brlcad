@@ -41,7 +41,7 @@
 
 #include "vmath.h"
 #include "raytrace.h"
-#include "ged/scene_internal.h"
+#include "ged/scene.h"
 #include "ged/view.h"
 
 #include "./sedit.h"
@@ -52,48 +52,21 @@
 
 /* Callback: find the displayed shape for database solid "EYE" for rmats. */
 struct _rtif_eye_data {
-    struct mged_state *s;
     struct directory *dp;
     Tcl_Interp *interp;
-    vect_t sav_start;
     vect_t sav_center;
-    ged_draw_shape_ref ref; /* set on match */
+    struct db_full_path *path;
     int found;
 };
 
 static int
-_rtif_shape_last_point(struct mged_state *s, ged_draw_shape_ref ref, point_t out)
-{
-    if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref))
-	return 0;
-    return ged_draw_shape_ref_last_point(s->gedp, ref, out);
-}
-
-static int
-_rtif_shape_translate_geometry(struct mged_state *s, ged_draw_shape_ref ref, const vect_t xlate)
-{
-    if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref))
-	return 0;
-    return ged_scene_internal_shape_translate_geometry(s->gedp, ref, xlate);
-}
-
-static int
-_rtif_shape_set_center(struct mged_state *s, ged_draw_shape_ref ref, const point_t center)
-{
-    if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref))
-	return 0;
-    return ged_scene_internal_shape_set_center(s->gedp, ref, center);
-}
-
-static int
-_rtif_eye_shape_cb(const struct ged_draw_shape_record *rec, void *ud)
+_rtif_eye_shape_cb(const struct ged_scene_occurrence_info *rec, void *ud)
 {
     struct _rtif_eye_data *d = (struct _rtif_eye_data *)ud;
     if (!rec || !rec->fullpath || rec->fullpath->fp_len <= 0) return 1;
     if (DB_FULL_PATH_CUR_DIR(rec->fullpath) != d->dp) return 1;
-    if (!_rtif_shape_last_point(d->s, rec->ref, d->sav_start)) return 1;
     VMOVE(d->sav_center, rec->center);
-    d->ref = rec->ref;
+    db_dup_full_path(d->path, rec->fullpath);
     Tcl_AppendResult(d->interp, "animating EYE solid\n", (char *)NULL);
     d->found = 1;
     return 0; /* stop visiting */
@@ -240,12 +213,19 @@ f_rmats(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     struct directory *dp = NULL;
     vect_t eye_model = VINIT_ZERO;
     vect_t sav_center = VINIT_ZERO;
-    vect_t sav_start = VINIT_ZERO;
     vect_t xlate = VINIT_ZERO;
+    struct db_full_path eye_path;
+    struct rt_db_internal eye_internal;
+    mat_t eye_path_mat;
+    char *eye_path_name = NULL;
+    int eye_preview_active = 0;
 
     /* static due to setjmp */
     static int mode = 0;
-    static ged_draw_shape_ref sp_ref;
+
+    db_full_path_init(&eye_path);
+    RT_DB_INTERNAL_INIT(&eye_internal);
+    MAT_IDN(eye_path_mat);
 
     CHECK_DBI_NULL;
 
@@ -266,8 +246,6 @@ f_rmats(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    sp_ref = GED_DRAW_SHAPE_REF_NULL;
-
     mode = -1;
     if (argc > 2)
 	mode = atoi(argv[2]);
@@ -280,18 +258,35 @@ f_rmats(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 
 	    {
 		struct _rtif_eye_data d;
-		d.s = s;
 		d.dp = dp;
 		d.interp = interp;
-		VSETALL(d.sav_start, 0.0);
 		VSETALL(d.sav_center, 0.0);
-		d.ref = GED_DRAW_SHAPE_REF_NULL;
+		d.path = &eye_path;
 		d.found = 0;
-		ged_draw_foreach_shape_record(s->gedp, _rtif_eye_shape_cb, &d);
+		ged_scene_occurrences_visit(s->gedp, _rtif_eye_shape_cb, &d);
 		if (d.found) {
-		    VMOVE(sav_start, d.sav_start);
 		    VMOVE(sav_center, d.sav_center);
-		    sp_ref = d.ref;
+		    if (rt_db_get_internal(&eye_internal, dp, s->dbip,
+			    NULL) < 0) {
+			db_free_full_path(&eye_path);
+			fclose(fp);
+			return TCL_ERROR;
+		    }
+		    (void)db_path_to_mat(s->dbip, &eye_path, eye_path_mat,
+			eye_path.fp_len - 1);
+		    eye_path_name = db_path_to_string(&eye_path);
+		    if (!eye_path_name) {
+			rt_db_free_internal(&eye_internal);
+			db_free_full_path(&eye_path);
+			fclose(fp);
+			return TCL_ERROR;
+		    }
+		    struct ged_scene_path_request request;
+		    ged_scene_path_request_init(&request);
+		    request.path = eye_path_name;
+		    request.match = GED_SCENE_PATH_MATCH_EXACT;
+		    (void)ged_scene_visibility_set(s->gedp, &request, 0, NULL);
+		    eye_preview_active = 1;
 		    goto work;
 		}
 	    }
@@ -340,26 +335,53 @@ work:
 		break;
 	    }
 	    case 1:
-		/* Adjust center for drawn scene devices */
-		_rtif_shape_set_center(s, sp_ref, eye_model);
-
-		/* Adjust vector list for non-dl devices */
-		if (!_rtif_shape_last_point(s, sp_ref, xlate)) break;
-		VSUB2(xlate, eye_model, xlate);
-		_rtif_shape_translate_geometry(s, sp_ref, xlate);
+		if (eye_preview_active) {
+		    mat_t translation;
+		    mat_t preview_mat;
+		    MAT_IDN(translation);
+		    VSUB2(xlate, eye_model, sav_center);
+		    MAT_DELTAS_VEC(translation, xlate);
+		    bn_mat_mul(preview_mat, translation, eye_path_mat);
+		    struct ged_view_edit_transaction transaction =
+			GED_VIEW_EDIT_TRANSACTION_INIT;
+		    transaction.event = GED_VIEW_EDIT_PREVIEW_UPDATE;
+		    transaction.feature_name = "_mged_rmats_eye";
+		    transaction.owner = (const void *)s;
+		    transaction.source_path = eye_path_name;
+		    transaction.edit_intent_id = "rmats-eye";
+		    transaction.edit_intent_role = "animation";
+		    transaction.dbip = s->dbip;
+		    transaction.internal = &eye_internal;
+		    transaction.matrix = preview_mat;
+		    transaction.ttol = &s->tol.ttol;
+		    transaction.tol = &s->tol.tol;
+		    (void)ged_view_edit_transaction_apply_all(s->gedp,
+			&transaction);
+		}
 		break;
 	}
 	mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	refresh(s);	/* Draw new display */
     }
 
-    if (mode == 1) {
-	_rtif_shape_set_center(s, sp_ref, sav_center);
-	if (_rtif_shape_last_point(s, sp_ref, xlate)) {
-	    VSUB2(xlate, sav_start, xlate);
-	    _rtif_shape_translate_geometry(s, sp_ref, xlate);
-	}
+    if (eye_preview_active) {
+	struct ged_view_edit_transaction transaction =
+	    GED_VIEW_EDIT_TRANSACTION_INIT;
+	transaction.event = GED_VIEW_EDIT_PREVIEW_CANCEL;
+	transaction.feature_name = "_mged_rmats_eye";
+	transaction.owner = (const void *)s;
+	(void)ged_view_edit_transaction_apply_all(s->gedp, &transaction);
+	struct ged_scene_path_request request;
+	ged_scene_path_request_init(&request);
+	request.path = eye_path_name;
+	request.match = GED_SCENE_PATH_MATCH_EXACT;
+	(void)ged_scene_visibility_set(s->gedp, &request, 1, NULL);
     }
+
+    if (eye_path_name)
+	bu_free(eye_path_name, "rmats EYE path");
+    rt_db_free_internal(&eye_internal);
+    db_free_full_path(&eye_path);
 
     fclose(fp);
     (void)mged_svbase(s);

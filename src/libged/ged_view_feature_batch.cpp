@@ -16,12 +16,16 @@
 #include "BObol/BViewController.h"
 #include "BObol/BViewStore.h"
 #include "bg/line_layer.h"
+#include "bv.h"
 #include "ged.h"
 #include "ged/view_feature_batch.h"
 #include "ged/view_feature.h"
 
 #include "./draw_obol_bridge_private.hpp"
+#include "./ged_draw_private.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -38,6 +42,9 @@ struct ged_view_feature_batch {
     BObolViewController *controller;
     BObolFeatureOwner owner;
     BObolFeatureScope scope;
+    BObolOverlayClass overlay_class;
+    BObolOverlayLifecycle lifecycle;
+    BObolOverlayOrder overlay_order;
     ged_view_feature_batch_callback event_cb;
     void *event_cb_data;
     std::vector<std::function<int(struct ged_view_feature_batch *)>> operations;
@@ -58,6 +65,18 @@ struct ged_view_feature_staged_line_layer {
     struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
 };
 
+struct ged_view_feature_staged_label {
+    std::string text;
+    point_t point = VINIT_ZERO;
+    int color_valid = 0;
+    unsigned char color[3] = {0, 0, 0};
+    int line_flag = 0;
+    point_t target = VINIT_ZERO;
+    int anchor = 0;
+    int arrow = 0;
+    fastf_t font_size = 0.0;
+};
+
 static ged_view_feature_staged_style
 ged_view_feature_stage_style(const struct ged_view_feature_style *style)
 {
@@ -75,6 +94,51 @@ ged_view_feature_stage_vectors(const fastf_t *values, size_t vector_count)
     if (!values || !vector_count)
 	return {};
     return std::vector<fastf_t>(values, values + vector_count * 3);
+}
+
+static BObolLabel
+ged_view_feature_batch_label_to_obol(const struct ged_view_feature_label &src)
+{
+    BObolLabel label;
+    label.text = src.text ? src.text : "";
+    label.point = SbVec3f(static_cast<float>(src.point[X]),
+	static_cast<float>(src.point[Y]),
+	static_cast<float>(src.point[Z]));
+    if (src.color_valid) {
+	label.hasColor = TRUE;
+	label.color = SbColor(src.color[0] / 255.0f,
+	    src.color[1] / 255.0f, src.color[2] / 255.0f);
+    }
+    if (src.font_size > 0.0)
+	label.fontSize = static_cast<float>(src.font_size);
+    label.hasLeader = src.line_flag ? TRUE : FALSE;
+    label.target = SbVec3f(static_cast<float>(src.target[X]),
+	static_cast<float>(src.target[Y]),
+	static_cast<float>(src.target[Z]));
+    label.anchor = src.anchor;
+    label.arrow = src.arrow ? TRUE : FALSE;
+    return label;
+}
+
+static SbVec3f
+ged_view_feature_batch_hud_point(struct ged_view_context *view_ctx,
+	const point_t point)
+{
+    const struct bv *view = bv_context_view_const(
+	(const struct bv_context *)view_ctx);
+    const int width = view ? bv_width_get(view) : 0;
+    const int height = view ? bv_height_get(view) : 0;
+    return SbVec3f(static_cast<float>((point[X] + 1.0) * 0.5 * width),
+	static_cast<float>((point[Y] + 1.0) * 0.5 * height), 0.0f);
+}
+
+static BObolOverlayInfo
+ged_view_feature_batch_hud_overlay_info(
+	const struct ged_view_feature_batch *scene, const char *name)
+{
+    return ged_obol_model_overlay_info(scene ? scene->view_ctx : NULL,
+	BObolOverlayClass::Faceplate, BObolOverlayLifecycle::PerView,
+	BObolOverlayOrder::PostTransparent, name);
 }
 
 static int
@@ -165,11 +229,65 @@ ged_obol_feature_batch_overlay_info(
 {
     BObolOverlayInfo info =
 	ged_obol_model_overlay_info(scene ? scene->view_ctx : NULL,
+				    scene ? scene->overlay_class :
 				    BObolOverlayClass::CommandResult,
+				    scene ? scene->lifecycle :
 				    BObolOverlayLifecycle::PerCommand,
+				    scene ? scene->overlay_order :
 				    BObolOverlayOrder::PostTransparent,
 				    source_path);
     return info;
+}
+
+static BObolOverlayClass
+ged_obol_feature_batch_overlay_class(int value)
+{
+    switch (value) {
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_NONE: return BObolOverlayClass::None;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_FACEPLATE: return BObolOverlayClass::Faceplate;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE: return BObolOverlayClass::EditHandle;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_MEASURE: return BObolOverlayClass::Measure;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_SELECTION_RUBBER_BAND: return BObolOverlayClass::SelectionRubberBand;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_SNAP_GUIDE: return BObolOverlayClass::SnapGuide;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_DIAGNOSTIC: return BObolOverlayClass::Diagnostic;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_TCL_OVERLAY: return BObolOverlayClass::TclOverlay;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_POLYGON_EDIT: return BObolOverlayClass::PolygonEdit;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_SKETCH_EDIT: return BObolOverlayClass::SketchEdit;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION: return BObolOverlayClass::UserAnnotation;
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_COMMAND_RESULT:
+	case GED_VIEW_FEATURE_OVERLAY_CLASS_UNKNOWN:
+	default: return BObolOverlayClass::CommandResult;
+    }
+}
+
+static BObolOverlayLifecycle
+ged_obol_feature_batch_lifecycle(int value)
+{
+    switch (value) {
+	case GED_VIEW_FEATURE_LIFECYCLE_NONE: return BObolOverlayLifecycle::None;
+	case GED_VIEW_FEATURE_LIFECYCLE_PERSISTENT: return BObolOverlayLifecycle::Persistent;
+	case GED_VIEW_FEATURE_LIFECYCLE_PER_FRAME: return BObolOverlayLifecycle::PerFrame;
+	case GED_VIEW_FEATURE_LIFECYCLE_PER_TOOL: return BObolOverlayLifecycle::PerTool;
+	case GED_VIEW_FEATURE_LIFECYCLE_PER_VIEW: return BObolOverlayLifecycle::PerView;
+	case GED_VIEW_FEATURE_LIFECYCLE_SHARED_VIEW_SET: return BObolOverlayLifecycle::SharedViewSet;
+	case GED_VIEW_FEATURE_LIFECYCLE_AUTO_REMOVE_ON_SOURCE: return BObolOverlayLifecycle::AutoRemoveOnSource;
+	case GED_VIEW_FEATURE_LIFECYCLE_PER_COMMAND:
+	case GED_VIEW_FEATURE_LIFECYCLE_UNKNOWN:
+	default: return BObolOverlayLifecycle::PerCommand;
+    }
+}
+
+static BObolOverlayOrder
+ged_obol_feature_batch_overlay_order(int value)
+{
+    switch (value) {
+	case GED_VIEW_FEATURE_OVERLAY_ORDER_MODEL: return BObolOverlayOrder::Model;
+	case GED_VIEW_FEATURE_OVERLAY_ORDER_SCREEN: return BObolOverlayOrder::Screen;
+	case GED_VIEW_FEATURE_OVERLAY_ORDER_XRAY: return BObolOverlayOrder::XRay;
+	case GED_VIEW_FEATURE_OVERLAY_ORDER_POST_TRANSPARENT:
+	case GED_VIEW_FEATURE_OVERLAY_ORDER_UNKNOWN:
+	default: return BObolOverlayOrder::PostTransparent;
+    }
 }
 
 static int
@@ -215,6 +333,13 @@ ged_view_feature_batch_begin(
     scene->controller->features().markCommandOwnerGeneration(scene->owner);
     scene->scope = local ?
 		   BObolFeatureScope::Local : BObolFeatureScope::Shared;
+    scene->overlay_class = ged_obol_feature_batch_overlay_class(
+	desc ? desc->overlay_class : GED_VIEW_FEATURE_OVERLAY_CLASS_COMMAND_RESULT);
+    scene->lifecycle = ged_obol_feature_batch_lifecycle(
+	desc ? desc->lifecycle : GED_VIEW_FEATURE_LIFECYCLE_PER_COMMAND);
+    scene->overlay_order = ged_obol_feature_batch_overlay_order(
+	desc ? desc->overlay_order :
+	GED_VIEW_FEATURE_OVERLAY_ORDER_POST_TRANSPARENT);
     scene->event_cb = desc ? desc->event_cb : NULL;
     scene->event_cb_data = desc ? desc->event_cb_data : NULL;
     scene->committing = 0;
@@ -388,7 +513,7 @@ extern "C" int
 ged_view_feature_batch_line_layers_replace(
     struct ged_view_feature_batch *scene,
     const char *name,
-    const struct ged_annotation_line_layer *layers,
+    const struct ged_view_feature_line_layer *layers,
     size_t layer_count,
     const struct ged_view_feature_style *style)
 {
@@ -428,12 +553,12 @@ ged_view_feature_batch_line_layers_replace(
 	scene->operations.emplace_back(
 	    [staged_name, staged_style, staged_layers](
 		struct ged_view_feature_batch *batch) {
-		std::vector<struct ged_annotation_line_layer> layers_copy;
+		std::vector<struct ged_view_feature_line_layer> layers_copy;
 		layers_copy.reserve(staged_layers.size());
 		for (const ged_view_feature_staged_line_layer &staged :
 		    staged_layers) {
-		    struct ged_annotation_line_layer layer =
-			GED_ANNOTATION_LINE_LAYER_INIT;
+		    struct ged_view_feature_line_layer layer =
+			GED_VIEW_FEATURE_LINE_LAYER_INIT;
 		    layer.name = staged.name.empty() ? NULL :
 			staged.name.c_str();
 		    layer.points = staged.points.empty() ? NULL :
@@ -698,6 +823,547 @@ ged_view_feature_batch_point_set_replace(
     ged_obol_feature_batch_notify(scene,
 				  GED_VIEW_FEATURE_BATCH_UPDATED, name, "pointSetReplace",
 				  NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_view_feature_batch_labels_replace(
+    struct ged_view_feature_batch *scene,
+    const char *name,
+    const struct ged_view_feature_label *labels,
+    size_t label_count,
+    const struct ged_view_feature_style *style)
+{
+    if (!ged_obol_feature_batch_valid(scene) || !name || !name[0] ||
+	(label_count && !labels)) {
+	if (ged_obol_feature_batch_valid(scene))
+	    scene->failed = 1;
+	return 0;
+    }
+
+    if (!scene->committing) {
+	if (!ged_obol_feature_batch_writable(scene, name, "labelsReplace"))
+	    return 0;
+	const std::string staged_name(name);
+	const ged_view_feature_staged_style staged_style =
+	    ged_view_feature_stage_style(style);
+	std::vector<ged_view_feature_staged_label> staged_labels;
+	staged_labels.reserve(label_count);
+	for (size_t i = 0; i < label_count; i++) {
+	    ged_view_feature_staged_label staged;
+	    staged.text = labels[i].text ? labels[i].text : "";
+	    VMOVE(staged.point, labels[i].point);
+	    staged.color_valid = labels[i].color_valid;
+	    staged.color[0] = labels[i].color[0];
+	    staged.color[1] = labels[i].color[1];
+	    staged.color[2] = labels[i].color[2];
+	    staged.line_flag = labels[i].line_flag;
+	    VMOVE(staged.target, labels[i].target);
+	    staged.anchor = labels[i].anchor;
+	    staged.arrow = labels[i].arrow;
+	    staged.font_size = labels[i].font_size;
+	    staged_labels.push_back(staged);
+	}
+	scene->operations.emplace_back(
+	    [staged_name, staged_style, staged_labels](
+		struct ged_view_feature_batch *batch) {
+		std::vector<struct ged_view_feature_label> copied;
+		copied.reserve(staged_labels.size());
+		for (const ged_view_feature_staged_label &staged : staged_labels) {
+		    struct ged_view_feature_label label = {};
+		    label.text = staged.text.c_str();
+		    VMOVE(label.point, staged.point);
+		    label.color_valid = staged.color_valid;
+		    label.color[0] = staged.color[0];
+		    label.color[1] = staged.color[1];
+		    label.color[2] = staged.color[2];
+		    label.line_flag = staged.line_flag;
+		    VMOVE(label.target, staged.target);
+		    label.anchor = staged.anchor;
+		    label.arrow = staged.arrow;
+		    label.font_size = staged.font_size;
+		    copied.push_back(label);
+		}
+		return ged_view_feature_batch_labels_replace(batch,
+		    staged_name.c_str(), copied.empty() ? NULL : copied.data(),
+		    copied.size(), staged_style.valid ? &staged_style.value : NULL);
+	    });
+	return 1;
+    }
+
+    if (!ged_obol_feature_batch_writable(scene, name, "labelsReplace"))
+	return 0;
+    if (!label_count) {
+	(void)ged_obol_feature_batch_remove_feature(scene, name,
+	    "labelsReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+
+    std::vector<BObolLabel> obol_labels;
+    obol_labels.reserve(label_count);
+    for (size_t i = 0; i < label_count; i++)
+	obol_labels.push_back(ged_view_feature_batch_label_to_obol(labels[i]));
+    BObolFeatureStyle obol_style = ged_obol_feature_style_from_ged(style);
+    BObolFeatureHandle handle = scene->controller->features().publishLabels(
+	name, scene->scope, obol_labels, style ? &obol_style : NULL,
+	&scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_FAILED,
+	    name, "labelsReplace", "feature publish failed");
+	return 0;
+    }
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	ged_obol_feature_batch_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_UPDATED,
+	name, "labelsReplace", NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_view_feature_batch_arrow_replace(
+    struct ged_view_feature_batch *scene,
+    const char *name,
+    const point_t *points,
+    size_t point_count,
+    const struct ged_view_feature_style *style)
+{
+    if (!ged_obol_feature_batch_valid(scene) || !name || !name[0] ||
+	(point_count && !points)) {
+	if (ged_obol_feature_batch_valid(scene))
+	    scene->failed = 1;
+	return 0;
+    }
+    if (!scene->committing) {
+	if (!ged_obol_feature_batch_writable(scene, name, "arrowReplace"))
+	    return 0;
+	const std::string staged_name(name);
+	const ged_view_feature_staged_style staged_style =
+	    ged_view_feature_stage_style(style);
+	const std::vector<fastf_t> staged_points =
+	    ged_view_feature_stage_vectors(
+		reinterpret_cast<const fastf_t *>(points), point_count);
+	scene->operations.emplace_back(
+	    [staged_name, staged_style, staged_points](
+		struct ged_view_feature_batch *batch) {
+		return ged_view_feature_batch_arrow_replace(batch,
+		    staged_name.c_str(), staged_points.empty() ? NULL :
+		    reinterpret_cast<const point_t *>(staged_points.data()),
+		    staged_points.size() / 3,
+		    staged_style.valid ? &staged_style.value : NULL);
+	    });
+	return 1;
+    }
+    if (!ged_obol_feature_batch_writable(scene, name, "arrowReplace"))
+	return 0;
+    if (!point_count) {
+	(void)ged_obol_feature_batch_remove_feature(scene, name,
+	    "arrowReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+    BObolFeatureStyle obol_style = ged_obol_feature_style_from_ged(style);
+    BObolFeatureHandle handle = scene->controller->features().publishArrow(
+	name, scene->scope, ged_obol_points_from_ged(points, point_count),
+	style ? &obol_style : NULL, &scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_FAILED,
+	    name, "arrowReplace", "feature publish failed");
+	return 0;
+    }
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	ged_obol_feature_batch_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_UPDATED,
+	name, "arrowReplace", NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_view_feature_batch_axes_replace(
+    struct ged_view_feature_batch *scene,
+    const char *name,
+    const point_t *centers,
+    size_t center_count,
+    fastf_t half_size,
+    const struct ged_view_feature_style *style)
+{
+    if (!ged_obol_feature_batch_valid(scene) || !name || !name[0] ||
+	(center_count && !centers) || half_size < 0.0) {
+	if (ged_obol_feature_batch_valid(scene))
+	    scene->failed = 1;
+	return 0;
+    }
+    if (!scene->committing) {
+	if (!ged_obol_feature_batch_writable(scene, name, "axesReplace"))
+	    return 0;
+	const std::string staged_name(name);
+	const ged_view_feature_staged_style staged_style =
+	    ged_view_feature_stage_style(style);
+	const std::vector<fastf_t> staged_centers =
+	    ged_view_feature_stage_vectors(
+		reinterpret_cast<const fastf_t *>(centers), center_count);
+	scene->operations.emplace_back(
+	    [staged_name, staged_style, staged_centers, half_size](
+		struct ged_view_feature_batch *batch) {
+		return ged_view_feature_batch_axes_replace(batch,
+		    staged_name.c_str(), staged_centers.empty() ? NULL :
+		    reinterpret_cast<const point_t *>(staged_centers.data()),
+		    staged_centers.size() / 3, half_size,
+		    staged_style.valid ? &staged_style.value : NULL);
+	    });
+	return 1;
+    }
+    if (!ged_obol_feature_batch_writable(scene, name, "axesReplace"))
+	return 0;
+    if (!center_count) {
+	(void)ged_obol_feature_batch_remove_feature(scene, name,
+	    "axesReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+    BObolFeatureStyle obol_style = ged_obol_feature_style_from_ged(style);
+    BObolFeatureHandle handle = scene->controller->features().publishAxes(
+	name, scene->scope, ged_obol_points_from_ged(centers, center_count),
+	static_cast<float>(half_size), style ? &obol_style : NULL,
+	&scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_FAILED,
+	    name, "axesReplace", "feature publish failed");
+	return 0;
+    }
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	ged_obol_feature_batch_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_UPDATED,
+	name, "axesReplace", NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_view_feature_batch_hud_labels_replace(
+    struct ged_view_feature_batch *scene,
+    const char *name,
+    const struct ged_view_feature_label *labels,
+    size_t label_count,
+    const struct ged_view_feature_style *style)
+{
+    if (!ged_obol_feature_batch_valid(scene) || !name || !name[0] ||
+	(label_count && !labels)) {
+	if (ged_obol_feature_batch_valid(scene))
+	    scene->failed = 1;
+	return 0;
+    }
+    if (!scene->committing) {
+	if (!ged_obol_feature_batch_writable(scene, name, "hudLabelsReplace"))
+	    return 0;
+	const std::string staged_name(name);
+	const ged_view_feature_staged_style staged_style =
+	    ged_view_feature_stage_style(style);
+	std::vector<ged_view_feature_staged_label> staged_labels;
+	staged_labels.reserve(label_count);
+	for (size_t i = 0; i < label_count; i++) {
+	    ged_view_feature_staged_label staged;
+	    staged.text = labels[i].text ? labels[i].text : "";
+	    VMOVE(staged.point, labels[i].point);
+	    staged.color_valid = labels[i].color_valid;
+	    VMOVE(staged.color, labels[i].color);
+	    staged.line_flag = labels[i].line_flag;
+	    VMOVE(staged.target, labels[i].target);
+	    staged.anchor = labels[i].anchor;
+	    staged.arrow = labels[i].arrow;
+	    staged.font_size = labels[i].font_size;
+	    staged_labels.push_back(staged);
+	}
+	scene->operations.emplace_back(
+	    [staged_name, staged_style, staged_labels](
+		struct ged_view_feature_batch *batch) {
+		std::vector<struct ged_view_feature_label> copied;
+		copied.reserve(staged_labels.size());
+		for (const ged_view_feature_staged_label &staged : staged_labels) {
+		    struct ged_view_feature_label label = {};
+		    label.text = staged.text.c_str();
+		    VMOVE(label.point, staged.point);
+		    label.color_valid = staged.color_valid;
+		    VMOVE(label.color, staged.color);
+		    label.line_flag = staged.line_flag;
+		    VMOVE(label.target, staged.target);
+		    label.anchor = staged.anchor;
+		    label.arrow = staged.arrow;
+		    label.font_size = staged.font_size;
+		    copied.push_back(label);
+		}
+		return ged_view_feature_batch_hud_labels_replace(batch,
+		    staged_name.c_str(), copied.empty() ? NULL : copied.data(),
+		    copied.size(), staged_style.valid ? &staged_style.value : NULL);
+	    });
+	return 1;
+    }
+    if (!ged_obol_feature_batch_writable(scene, name, "hudLabelsReplace"))
+	return 0;
+    if (!label_count) {
+	(void)ged_obol_feature_batch_remove_feature(scene, name,
+	    "hudLabelsReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+    std::vector<BObolLabel> obol_labels;
+    obol_labels.reserve(label_count);
+    for (size_t i = 0; i < label_count; i++) {
+	BObolLabel label = ged_view_feature_batch_label_to_obol(labels[i]);
+	label.point = ged_view_feature_batch_hud_point(scene->view_ctx,
+	    labels[i].point);
+	if (labels[i].line_flag)
+	    label.target = ged_view_feature_batch_hud_point(scene->view_ctx,
+		labels[i].target);
+	obol_labels.push_back(label);
+    }
+    BObolFeatureStyle obol_style = ged_obol_feature_style_from_ged(style);
+    BObolFeatureHandle handle = scene->controller->features().publishHudLabels(
+	name, scene->scope, obol_labels, style ? &obol_style : NULL,
+	&scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	return 0;
+    }
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	ged_view_feature_batch_hud_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_UPDATED,
+	name, "hudLabelsReplace", NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_view_feature_batch_hud_line_set_replace(
+    struct ged_view_feature_batch *scene,
+    const char *name,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count,
+    const struct ged_view_feature_style *style)
+{
+    if (!ged_obol_feature_batch_valid(scene) || !name || !name[0] ||
+	(point_count && !points)) {
+	if (ged_obol_feature_batch_valid(scene))
+	    scene->failed = 1;
+	return 0;
+    }
+    if (!scene->committing) {
+	if (!ged_obol_feature_batch_writable(scene, name, "hudLineSetReplace"))
+	    return 0;
+	const std::string staged_name(name);
+	const ged_view_feature_staged_style staged_style =
+	    ged_view_feature_stage_style(style);
+	const std::vector<fastf_t> staged_points =
+	    ged_view_feature_stage_vectors(
+		reinterpret_cast<const fastf_t *>(points), point_count);
+	std::vector<int> staged_commands;
+	if (cmds && point_count)
+	    staged_commands.assign(cmds, cmds + point_count);
+	scene->operations.emplace_back(
+	    [staged_name, staged_style, staged_points, staged_commands](
+		struct ged_view_feature_batch *batch) {
+		return ged_view_feature_batch_hud_line_set_replace(batch,
+		    staged_name.c_str(), staged_points.empty() ? NULL :
+		    reinterpret_cast<const point_t *>(staged_points.data()),
+		    staged_commands.empty() ? NULL : staged_commands.data(),
+		    staged_points.size() / 3,
+		    staged_style.valid ? &staged_style.value : NULL);
+	    });
+	return 1;
+    }
+    if (!ged_obol_feature_batch_writable(scene, name, "hudLineSetReplace"))
+	return 0;
+    if (!point_count) {
+	(void)ged_obol_feature_batch_remove_feature(scene, name,
+	    "hudLineSetReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+    std::vector<SbVec3f> screen_points;
+    screen_points.reserve(point_count);
+    for (size_t i = 0; i < point_count; i++)
+	screen_points.push_back(ged_view_feature_batch_hud_point(
+	    scene->view_ctx, points[i]));
+    BObolFeatureStyle obol_style = ged_obol_feature_style_from_ged(style);
+    obol_style.hud = TRUE;
+    BObolFeatureHandle handle = scene->controller->features().publishLineSet(
+	name, scene->scope, screen_points,
+	ged_obol_commands_from_ged(cmds, point_count), &obol_style,
+	&scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	return 0;
+    }
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	ged_view_feature_batch_hud_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_UPDATED,
+	name, "hudLineSetReplace", NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_view_feature_batch_hud_line_layers_replace(
+    struct ged_view_feature_batch *scene,
+    const char *name,
+    const struct ged_view_feature_line_layer *layers,
+    size_t layer_count,
+    const struct ged_view_feature_style *style)
+{
+    if (!ged_obol_feature_batch_valid(scene) || !name || !name[0]) {
+	if (ged_obol_feature_batch_valid(scene))
+	    scene->failed = 1;
+	return 0;
+    }
+    if (!scene->committing) {
+	if (!ged_obol_feature_batch_writable(scene, name,
+		"hudLineLayersReplace"))
+	    return 0;
+	const std::string staged_name(name);
+	const ged_view_feature_staged_style staged_style =
+	    ged_view_feature_stage_style(style);
+	std::vector<ged_view_feature_staged_line_layer> staged_layers;
+	staged_layers.reserve(layer_count);
+	for (size_t i = 0; layers && i < layer_count; i++) {
+	    ged_view_feature_staged_line_layer staged;
+	    staged.name = layers[i].name ? layers[i].name : "";
+	    staged.style = layers[i].style;
+	    staged.points = ged_view_feature_stage_vectors(
+		reinterpret_cast<const fastf_t *>(layers[i].points),
+		layers[i].point_count);
+	    if (layers[i].commands && layers[i].point_count)
+		staged.commands.assign(layers[i].commands,
+		    layers[i].commands + layers[i].point_count);
+	    staged_layers.push_back(std::move(staged));
+	}
+	scene->operations.emplace_back(
+	    [staged_name, staged_style, staged_layers](
+		struct ged_view_feature_batch *batch) {
+		std::vector<struct ged_view_feature_line_layer> copied;
+		copied.reserve(staged_layers.size());
+		for (const ged_view_feature_staged_line_layer &staged :
+		    staged_layers) {
+		    struct ged_view_feature_line_layer layer =
+			GED_VIEW_FEATURE_LINE_LAYER_INIT;
+		    layer.name = staged.name.empty() ? NULL : staged.name.c_str();
+		    layer.points = staged.points.empty() ? NULL :
+			reinterpret_cast<const point_t *>(staged.points.data());
+		    layer.commands = staged.commands.empty() ? NULL :
+			staged.commands.data();
+		    layer.point_count = staged.points.size() / 3;
+		    layer.style = staged.style;
+		    copied.push_back(layer);
+		}
+		return ged_view_feature_batch_hud_line_layers_replace(batch,
+		    staged_name.c_str(), copied.empty() ? NULL : copied.data(),
+		    copied.size(), staged_style.valid ? &staged_style.value : NULL);
+	    });
+	return 1;
+    }
+    if (!ged_obol_feature_batch_writable(scene, name,
+	    "hudLineLayersReplace"))
+	return 0;
+    std::vector<BObolLineLayer> obol_layers;
+    for (size_t i = 0; layers && i < layer_count; i++) {
+	if (!layers[i].points || !layers[i].point_count)
+	    continue;
+	BObolLineLayer layer;
+	layer.name = layers[i].name ? layers[i].name : name;
+	layer.style = ged_obol_feature_style_from_ged(&layers[i].style);
+	layer.style.hud = TRUE;
+	for (size_t j = 0; j < layers[i].point_count; j++) {
+	    layer.points.push_back(ged_view_feature_batch_hud_point(
+		scene->view_ctx, layers[i].points[j]));
+	    layer.commands.push_back(ged_obol_line_command_from_ged(
+		layers[i].commands ? layers[i].commands[j] : -1, j));
+	}
+	obol_layers.push_back(std::move(layer));
+    }
+    if (obol_layers.empty()) {
+	(void)ged_obol_feature_batch_remove_feature(scene, name,
+	    "hudLineLayersReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+    BObolFeatureStyle obol_style = ged_obol_feature_style_from_ged(style);
+    obol_style.hud = TRUE;
+    BObolFeatureHandle handle = scene->controller->features().publishLineLayers(
+	name, scene->scope, obol_layers, &obol_style, &scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	return 0;
+    }
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	ged_view_feature_batch_hud_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_UPDATED,
+	name, "hudLineLayersReplace", NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_view_feature_batch_hud_axes_replace(
+    struct ged_view_feature_batch *scene,
+    const char *name,
+    const struct bv_axes_state *axes,
+    const mat_t rotation)
+{
+    if (!ged_obol_feature_batch_valid(scene) || !name || !name[0]) {
+	if (ged_obol_feature_batch_valid(scene))
+	    scene->failed = 1;
+	return 0;
+    }
+    if (!scene->committing) {
+	if (!ged_obol_feature_batch_writable(scene, name, "hudAxesReplace"))
+	    return 0;
+	const std::string staged_name(name);
+	const bool has_axes = axes != NULL;
+	struct bv_axes_state staged_axes = BV_AXES_STATE_INIT;
+	if (axes)
+	    staged_axes = *axes;
+	std::array<fastf_t, 16> staged_rotation = {};
+	const bool has_rotation = rotation != NULL;
+	if (rotation)
+	    std::copy(rotation, rotation + 16, staged_rotation.begin());
+	scene->operations.emplace_back(
+	    [staged_name, has_axes, staged_axes, has_rotation, staged_rotation](
+		struct ged_view_feature_batch *batch) {
+		mat_t rotation_copy;
+		if (has_rotation)
+		    std::copy(staged_rotation.begin(), staged_rotation.end(),
+			rotation_copy);
+		return ged_view_feature_batch_hud_axes_replace(batch,
+		    staged_name.c_str(), has_axes ? &staged_axes : NULL,
+		    has_rotation ? rotation_copy : NULL);
+	    });
+	return 1;
+    }
+    if (!ged_draw_obol_view_context_hud_axes_replace(scene->view_ctx, name,
+	    axes, rotation)) {
+	scene->failed = 1;
+	return 0;
+    }
+    scene->changed++;
+    ged_obol_feature_batch_notify(scene, GED_VIEW_FEATURE_BATCH_UPDATED,
+	name, "hudAxesReplace", NULL);
     return 1;
 }
 

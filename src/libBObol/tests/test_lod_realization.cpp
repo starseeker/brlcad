@@ -384,6 +384,87 @@ test_worker_prepared_generation_lifetime(void)
 }
 
 static int
+test_progressive_generation_rejects_corruption(void)
+{
+    point_t points[3];
+    vect_t normals[3];
+    int faces[3] = {0, 1, 2};
+    VSET(points[0], 0.0, 0.0, 0.0);
+    VSET(points[1], 1.0, 0.0, 0.0);
+    VSET(points[2], 0.0, 1.0, 0.0);
+    for (size_t i = 0; i < 3; ++i)
+	VSET(normals[i], 0.0, 0.0, 1.0);
+
+    struct BObolMeshLodData data = {};
+    data.faces = faces;
+    data.face_count = 1;
+    data.points = points;
+    data.point_count = 3;
+    data.points_orig = points;
+    data.point_orig_count = 3;
+    VSET(data.bmin, 0.0, 0.0, 0.0);
+    VSET(data.bmax, 1.0, 1.0, 0.0);
+
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    hierarchy.min_level = 0;
+    hierarchy.max_level = 0;
+    hierarchy.resident_level = 0;
+    for (size_t level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
+	hierarchy.face_count[level] = 1;
+	hierarchy.point_count[level] = 3;
+    }
+    VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
+    VSET(hierarchy.quantization_max, 1.0, 1.0, 0.0);
+
+    BObolLodProgressiveMesh progressive;
+    if (!progressive.update(data, hierarchy, 0, FALSE)) {
+	printf("FAIL: progressive corruption fixture did not initialize\n");
+	return 1;
+    }
+    const uint64_t validRevision = progressive.revision();
+
+    points[2][X] = INFINITY;
+    if (progressive.update(data, hierarchy, 0, FALSE) ||
+	progressive.revision() != validRevision) {
+	printf("FAIL: progressive generation accepted a non-finite point\n");
+	return 1;
+    }
+    points[2][X] = 2.0;
+    if (progressive.update(data, hierarchy, 0, FALSE) ||
+	progressive.revision() != validRevision) {
+	printf("FAIL: progressive generation accepted a point outside its "
+	       "quantization domain\n");
+	return 1;
+    }
+    points[2][X] = 0.0;
+    faces[2] = 3;
+    if (progressive.update(data, hierarchy, 0, FALSE) ||
+	progressive.revision() != validRevision) {
+	printf("FAIL: progressive generation accepted an invalid index\n");
+	return 1;
+    }
+    faces[2] = 2;
+    hierarchy.point_count[0] = 2;
+    if (progressive.update(data, hierarchy, 0, FALSE) ||
+	progressive.revision() != validRevision) {
+	printf("FAIL: progressive generation accepted mismatched hierarchy "
+	       "counts\n");
+	return 1;
+    }
+    hierarchy.point_count[0] = 3;
+    data.normals = normals;
+    data.normal_count = 3;
+    normals[1][Y] = NAN;
+    if (progressive.update(data, hierarchy, 0, FALSE) ||
+	progressive.revision() != validRevision) {
+	printf("FAIL: progressive generation accepted a non-finite normal\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_stage_results(void)
 {
     BObolLodRequest request = make_request();
@@ -513,6 +594,8 @@ main(int argc, char **argv)
     if (test_worker_prepared_authored_normals())
 	return 1;
     if (test_worker_prepared_generation_lifetime())
+	return 1;
+    if (test_progressive_generation_rejects_corruption())
 	return 1;
     if (test_stage_results())
 	return 1;

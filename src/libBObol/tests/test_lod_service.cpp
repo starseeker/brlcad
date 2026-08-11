@@ -2996,6 +2996,52 @@ test_rt_mesh_provider_task(void)
 	ret = 1;
     }
 
+    /* A new view reopening a complete persistent hierarchy should pay one
+     * cache task: make the view target resident, publish the minimum useful
+     * cut, and discard the cache reader's duplicate arrays.  Presentation
+     * can subsequently retarget the immutable prefix under its frame budget
+     * without a second provider task or a cleanup-only compaction. */
+    BObolLodService warmFirstService;
+    BObolMeshLodProvider warmFirstProvider;
+    warmFirstProvider.service = &warmFirstService;
+    warmFirstProvider.setDatabase(dbip);
+    warmFirstProvider.refreshMissing = FALSE;
+    warmFirstProvider.prefetchCachedTargetOnFirstPublication = TRUE;
+    warmFirstProvider.shrinkAfterCopy = TRUE;
+    BObolLodResult warmFirst = warmFirstService.realizeResidentMeshLod(
+	stagedRequest, warmFirstProvider);
+    SbBool warmFirstPlanningComplete = FALSE;
+    size_t warmFirstMaintenance = 0;
+    if (warmFirst.progressiveMesh && warmFirst.geometry.cacheKey.isValid()) {
+	BObolLodResidentDemand demand;
+	demand.assetKey = warmFirst.geometry.cacheKey.value;
+	demand.level = warmFirst.residentLevel;
+	demand.channelMask = 2;
+	std::vector<BObolLodResidentDemand> demands(1, demand);
+	warmFirstMaintenance = warmFirstService.scheduleResidentMeshCompaction(
+	    0x9876, 1, demands, &warmFirstPlanningComplete);
+    }
+    if (warmFirst.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	!warmFirst.progressiveMesh ||
+	warmFirst.geometry.activeLevel !=
+	    warmFirst.progressiveMesh->minimumLevel() ||
+	warmFirst.residentLevel != stagedRequest.requestedLevel ||
+	warmFirst.terminal || !warmFirstPlanningComplete ||
+	warmFirstMaintenance != 0) {
+	printf("FAIL: warm first publication did not prefetch once and release "
+	       "duplicate backing (status=%d active=%d min=%d resident=%d "
+	       "requested=%d terminal=%d planned=%d maintenance=%zu)\n",
+	       warmFirst.providerStatus, warmFirst.geometry.activeLevel,
+	       warmFirst.progressiveMesh ?
+		   warmFirst.progressiveMesh->minimumLevel() : -1,
+	       warmFirst.residentLevel, stagedRequest.requestedLevel,
+	       warmFirst.terminal ? 1 : 0,
+	       warmFirstPlanningComplete ? 1 : 0,
+	       warmFirstMaintenance);
+	ret = 1;
+    }
+    warmFirstService.releaseResidentMeshConsumer(0x9876);
+
     /* A stable demand snapshot protects the presented prefix.  Once the
      * asset disappears from every consumer snapshot, the service must keep
      * only its minimum useful prefix and later restore richer data from the
@@ -3022,12 +3068,12 @@ test_rt_mesh_provider_task(void)
 	    0x1234, maintenanceResults);
 	const size_t maintainedBytes =
 	    service.residentMeshBytesForDiagnostics();
-	if (maintenanceQueued != 1 || maintenanceWait ||
+	if (maintenanceQueued != 0 || maintenanceWait ||
 	    !maintenanceResults.empty() ||
 	    terminalStage.progressiveMesh->residentLevel() != richLevel ||
-	    maintainedBytes >= richBytes) {
-	    printf("FAIL: stable resident PoP demand did not release its "
-		   "duplicate cache prefix (queued=%zu level=%d/%d "
+	    maintainedBytes != richBytes) {
+	    printf("FAIL: stable resident PoP demand queued redundant backing "
+		   "cleanup (queued=%zu level=%d/%d "
 		   "bytes=%zu/%zu results=%zu)\n",
 		   maintenanceQueued,
 		   terminalStage.progressiveMesh->residentLevel(), richLevel,

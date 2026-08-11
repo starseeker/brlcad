@@ -37,7 +37,10 @@
 #include "bg/polygon.h"
 #include "bg/lseg.h"
 #include "bv.h"
+#include "ged/event_txn.h"
 #include "ged/view.h"
+#include "ged/view_feature_batch.h"
+#include "rt/primitives/sketch.h"
 #include "tclcad.h"
 #include "BObol/BDisplayEndpoint.h"
 
@@ -86,6 +89,48 @@ tclcad_polygons_bv_const(const struct ged_view_context *view_ctx)
     return bv_context_view_const((const struct bv_context *)view_ctx);
 }
 
+static void
+tclcad_polygon_style_init(struct tclcad_polygon_style *style,
+	const tclcad_polygon_state *state)
+{
+    if (!style || !state)
+	return;
+    VMOVE(style->color, state->gdps_color);
+    style->line_width = state->gdps_line_width;
+    style->line_style = state->gdps_line_style;
+}
+
+static int
+tclcad_polygon_styles_resize(tclcad_polygon_state *state, size_t count)
+{
+    if (!state)
+	return 0;
+    const size_t old_count = state->gdps_polygons.num_polygons;
+    if (!count) {
+	if (state->gdps_styles)
+	    bu_free(state->gdps_styles, "TclCAD polygon styles");
+	state->gdps_styles = NULL;
+	return 1;
+    }
+    state->gdps_styles = (struct tclcad_polygon_style *)bu_realloc(
+	state->gdps_styles, count * sizeof(struct tclcad_polygon_style),
+	"TclCAD polygon styles");
+    for (size_t i = old_count; i < count; i++)
+	tclcad_polygon_style_init(&state->gdps_styles[i], state);
+    return 1;
+}
+
+static void
+tclcad_polygon_state_geometry_clear(tclcad_polygon_state *state)
+{
+    if (!state)
+	return;
+    bg_polygons_clear(&state->gdps_polygons);
+    if (state->gdps_styles)
+	bu_free(state->gdps_styles, "TclCAD polygon styles");
+    state->gdps_styles = NULL;
+}
+
 static unsigned long long
 tclcad_polygons_prepare_snap(struct ged_view_context *view_ctx)
 {
@@ -108,20 +153,6 @@ tclcad_polygons_snap_point_2d(struct ged_view_context *view_ctx, fastf_t *vx, fa
 	bv_snap_grid_2d(tclcad_polygons_bv_const(view_ctx), vx, vy) : 0;
 }
 
-static void
-tclcad_polygon_export_state_from_tcl(struct ged_polygon_export_state *export_state,
-				     const tclcad_polygon_state *gdpsp)
-{
-    memset(export_state, 0, sizeof(*export_state));
-    export_state->scale = gdpsp->gdps_scale;
-    VMOVE(export_state->origin, gdpsp->gdps_origin);
-    MAT_COPY(export_state->rotation, gdpsp->gdps_rotation);
-    MAT_COPY(export_state->view2model, gdpsp->gdps_view2model);
-    MAT_COPY(export_state->model2view, gdpsp->gdps_model2view);
-    export_state->polygons = gdpsp->gdps_polygons;
-    export_state->data_vZ = gdpsp->gdps_data_vZ;
-}
-
 /* Keep a draw-view feature in sync with the TclCAD data-polygons state so the
  * current renderer picks up polygon outlines through retained features.
  *
@@ -139,9 +170,23 @@ _sync_tcl_polygons_to_draw_view(struct ged_view_context *view_ctx, tclcad_polygo
     if (!view_ctx || !gdpsp || !feature_name)
 	return;
 
+    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    desc.owner_id = "tclcad-polygons";
+    desc.owner_role = "polygon-edit";
+    desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_POLYGON_EDIT;
+    desc.lifecycle = GED_VIEW_FEATURE_LIFECYCLE_PER_TOOL;
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(view_ctx, &desc);
+    if (!batch)
+	return;
+
     if (!gdpsp->gdps_draw || gdpsp->gdps_polygons.num_polygons < 1) {
-	(void)ged_annotation_data_polygons_replace(view_ctx, feature_name,
-		0, NULL, NULL, 0, NULL);
+	if (ged_view_feature_batch_line_set_replace(batch, feature_name,
+		NULL, NULL, 0, NULL))
+	    (void)ged_view_feature_batch_commit(batch);
+	else
+	    ged_view_feature_batch_abort(batch);
 	return;
     }
 
@@ -161,8 +206,11 @@ _sync_tcl_polygons_to_draw_view(struct ged_view_context *view_ctx, tclcad_polygo
 	}
     }
     if (!point_count) {
-	(void)ged_annotation_data_polygons_replace(view_ctx, feature_name,
-		0, NULL, NULL, 0, NULL);
+	if (ged_view_feature_batch_line_set_replace(batch, feature_name,
+		NULL, NULL, 0, NULL))
+	    (void)ged_view_feature_batch_commit(batch);
+	else
+	    ged_view_feature_batch_abort(batch);
 	return;
     }
 
@@ -201,8 +249,11 @@ _sync_tcl_polygons_to_draw_view(struct ged_view_context *view_ctx, tclcad_polygo
     style.line_width = gdpsp->gdps_line_width;
     style.line_style = gdpsp->gdps_line_style;
 
-    (void)ged_annotation_data_polygons_replace(view_ctx, feature_name,
-	    1, (const point_t *)points, cmds, point_count, &style);
+    if (ged_view_feature_batch_line_set_replace(batch, feature_name,
+	    (const point_t *)points, cmds, point_count, &style))
+	(void)ged_view_feature_batch_commit(batch);
+    else
+	ged_view_feature_batch_abort(batch);
     bu_free(points, "tcl polygon feature points");
     bu_free(cmds, "tcl polygon feature cmds");
 }
@@ -304,11 +355,10 @@ to_extract_polygons_av(Tcl_Interp *interp, struct ged *gedp, struct ged_view_con
     register size_t i;
     int ac;
 
+    if (!tclcad_polygon_styles_resize(gdpsp, polygon_ac))
+	return BRLCAD_ERROR;
     gdpsp->gdps_polygons.num_polygons = polygon_ac;
     gdpsp->gdps_polygons.polygon = (struct bg_polygon *)bu_calloc(polygon_ac, sizeof(struct bg_polygon), "data polygons");
-    for (i = 0; i < polygon_ac; ++i) {
-	// TODO - allocate properties containers for each polygon
-    }
 
     for (i = 0; i < polygon_ac; ++i) {
 	size_t contour_ac;
@@ -326,7 +376,6 @@ to_extract_polygons_av(Tcl_Interp *interp, struct ged *gedp, struct ged_view_con
 	    return BRLCAD_ERROR;
 	}
 
-	VMOVE(gdpsp->gdps_polygons.polygon[i].gp_color, gdpsp->gdps_color);
 	if (contour_ac)
 	    Tcl_Free((char *)contour_av);
     }
@@ -388,10 +437,11 @@ to_data_polygons_func(Tcl_Interp *interp,
 	if (argc == 3) {
 	    int op;
 
-	    if (bu_sscanf(argv[2], "%d", &op) != 1 || op > bg_Xor)
+	    if (bu_sscanf(argv[2], "%d", &op) != 1 ||
+		op > BG_POLYGON_BOOLEAN_XOR)
 		goto bad;
 
-	    gdpsp->gdps_clip_type = (bg_clip_t)op;
+	    gdpsp->gdps_clip_type = (enum bg_polygon_boolean_op)op;
 
 	    return BRLCAD_OK;
 	}
@@ -467,7 +517,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 		goto bad;
 
 	    bu_vls_printf(gedp->ged_result_str, "%d %d %d",
-			  V3ARGS(gdpsp->gdps_polygons.polygon[i].gp_color));
+			  V3ARGS(gdpsp->gdps_styles[i].color));
 
 	    return BRLCAD_OK;
 	}
@@ -493,7 +543,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 		goto bad;
 
 	    /* Set the color for polygon i */
-	    VSET(gdpsp->gdps_polygons.polygon[i].gp_color, r, g, b);
+	    VSET(gdpsp->gdps_styles[i].color, r, g, b);
 
 	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, feature_name);
 
@@ -536,7 +586,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 
 	    /* Set the color for all polygons */
 	    for (i = 0; i < gdpsp->gdps_polygons.num_polygons; ++i) {
-		VSET(gdpsp->gdps_polygons.polygon[i].gp_color, r, g, b);
+		VSET(gdpsp->gdps_styles[i].color, r, g, b);
 	    }
 
 	    /* Set the default polygon color */
@@ -565,7 +615,8 @@ to_data_polygons_func(Tcl_Interp *interp,
 		i >= gdpsp->gdps_polygons.num_polygons)
 		goto bad;
 
-	    bu_vls_printf(gedp->ged_result_str, "%d", gdpsp->gdps_polygons.polygon[i].gp_line_width);
+	    bu_vls_printf(gedp->ged_result_str, "%d",
+		gdpsp->gdps_styles[i].line_width);
 
 	    return BRLCAD_OK;
 	}
@@ -583,7 +634,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    if (line_width < 0)
 		line_width = 0;
 
-	    gdpsp->gdps_polygons.polygon[i].gp_line_width = line_width;
+	    gdpsp->gdps_styles[i].line_width = line_width;
 
 	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, feature_name);
 
@@ -618,7 +669,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 
 	    /* Set the line width for all polygons */
 	    for (i = 0; i < gdpsp->gdps_polygons.num_polygons; ++i) {
-		gdpsp->gdps_polygons.polygon[i].gp_line_width = line_width;
+		gdpsp->gdps_styles[i].line_width = line_width;
 	    }
 
 	    /* Set the default line width */
@@ -647,7 +698,8 @@ to_data_polygons_func(Tcl_Interp *interp,
 		i >= gdpsp->gdps_polygons.num_polygons)
 		goto bad;
 
-	    bu_vls_printf(gedp->ged_result_str, "%d", gdpsp->gdps_polygons.polygon[i].gp_line_style);
+	    bu_vls_printf(gedp->ged_result_str, "%d",
+		gdpsp->gdps_styles[i].line_style);
 
 	    return BRLCAD_OK;
 	}
@@ -664,9 +716,9 @@ to_data_polygons_func(Tcl_Interp *interp,
 
 
 	    if (line_style <= 0)
-		gdpsp->gdps_polygons.polygon[i].gp_line_style = 0;
+		gdpsp->gdps_styles[i].line_style = 0;
 	    else
-		gdpsp->gdps_polygons.polygon[i].gp_line_style = 1;
+		gdpsp->gdps_styles[i].line_style = 1;
 
 	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, feature_name);
 
@@ -703,7 +755,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 
 	    /* Set the line width for all polygons */
 	    for (i = 0; i < gdpsp->gdps_polygons.num_polygons; ++i) {
-		gdpsp->gdps_polygons.polygon[i].gp_line_style = line_style;
+		gdpsp->gdps_styles[i].line_style = line_style;
 	    }
 
 	    /* Set the default line style */
@@ -742,6 +794,10 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    contour_ac = ac;
 
 	    i = gdpsp->gdps_polygons.num_polygons;
+	    if (!tclcad_polygon_styles_resize(gdpsp, i + 1)) {
+		Tcl_Free((char *)contour_av);
+		return BRLCAD_ERROR;
+	    }
 	    ++gdpsp->gdps_polygons.num_polygons;
 	    gdpsp->gdps_polygons.polygon = (struct bg_polygon *)bu_realloc(gdpsp->gdps_polygons.polygon,
 										  gdpsp->gdps_polygons.num_polygons * sizeof(struct bg_polygon),
@@ -752,10 +808,6 @@ to_data_polygons_func(Tcl_Interp *interp,
 		Tcl_Free((char *)contour_av);
 		return BRLCAD_ERROR;
 	    }
-
-	    VMOVE(gdpsp->gdps_polygons.polygon[i].gp_color, gdpsp->gdps_color);
-	    gdpsp->gdps_polygons.polygon[i].gp_line_style = gdpsp->gdps_line_style;
-	    gdpsp->gdps_polygons.polygon[i].gp_line_width = gdpsp->gdps_line_width;
 
 	    Tcl_Free((char *)contour_av);
 
@@ -775,7 +827,7 @@ to_data_polygons_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "clip")) {
 	size_t i, j;
 	int op;
-	struct bg_polygon *gpp;
+	struct bg_polygon result = BG_POLYGON_INIT_ZERO;
 
 	if (argc > 5)
 	    goto bad;
@@ -800,41 +852,35 @@ to_data_polygons_func(Tcl_Interp *interp,
 
 	if (argc != 5)
 	    op = gdpsp->gdps_clip_type;
-	else if (bu_sscanf(argv[4], "%d", &op) != 1 || op > bg_Xor)
+	else if (bu_sscanf(argv[4], "%d", &op) != 1 ||
+		op > BG_POLYGON_BOOLEAN_XOR)
 	    goto bad;
 
 	plane_t pl;
 	bv_plane_get(&pl, tclcad_polygons_bv_const(gdvp));
 
-	gpp = bg_clip_polygon((bg_clip_t)op,
-			       &gdpsp->gdps_polygons.polygon[i],
-			       &gdpsp->gdps_polygons.polygon[j],
-			       CLIPPER_MAX,
-			       &pl);
-
-	/* Free the target polygon */
-	bg_polygon_free(&gdpsp->gdps_polygons.polygon[i]);
+	if (bg_polygon_boolean(&result, (enum bg_polygon_boolean_op)op,
+		&gdpsp->gdps_polygons.polygon[i],
+		&gdpsp->gdps_polygons.polygon[j], CLIPPER_MAX, pl))
+	    return BRLCAD_ERROR;
+	(void)bg_polygon_move(&gdpsp->gdps_polygons.polygon[i], &result);
 
 	/* When using defaults, the clip polygon is assumed to be temporary and is removed after clipping */
 	if (argc == 2) {
 	    /* Free the clip polygon */
-	    bg_polygon_free(&gdpsp->gdps_polygons.polygon[j]);
+	    bg_polygon_clear(&gdpsp->gdps_polygons.polygon[j]);
 
 	    /* No longer need space for the clip polygon */
 	    --gdpsp->gdps_polygons.num_polygons;
 	    gdpsp->gdps_polygons.polygon = (struct bg_polygon *)bu_realloc(gdpsp->gdps_polygons.polygon,
 									  gdpsp->gdps_polygons.num_polygons * sizeof(struct bg_polygon),
 									  "realloc polygon");
+	    gdpsp->gdps_styles = (struct tclcad_polygon_style *)bu_realloc(
+		gdpsp->gdps_styles,
+		gdpsp->gdps_polygons.num_polygons *
+		    sizeof(struct tclcad_polygon_style),
+		"realloc polygon styles");
 	}
-
-	/* Replace the target polygon with the newly clipped polygon. */
-	/* Not doing a struct copy to avoid overwriting the color, line width and line style. */
-	gdpsp->gdps_polygons.polygon[i].num_contours = gpp->num_contours;
-	gdpsp->gdps_polygons.polygon[i].hole = gpp->hole;
-	gdpsp->gdps_polygons.polygon[i].contour = gpp->contour;
-
-	/* Free the clipped polygon container */
-	bu_free((void *)gpp, "clip gpp");
 
 	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, feature_name);
 
@@ -849,8 +895,6 @@ to_data_polygons_func(Tcl_Interp *interp,
      */
     if (BU_STR_EQUAL(argv[1], "export")) {
 	size_t i;
-	int ret;
-	struct ged_polygon_export_state export_state;
 
 	if (argc != 4)
 	    goto bad;
@@ -859,9 +903,34 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    i >= gdpsp->gdps_polygons.num_polygons)
 	    goto bad;
 
-	tclcad_polygon_export_state_from_tcl(&export_state, gdpsp);
+	struct rt_sketch_polygon_data data;
+	rt_sketch_polygon_data_init(&data);
+	if (bg_polygon_copy(&data.polygon,
+		&gdpsp->gdps_polygons.polygon[i])) {
+	    rt_sketch_polygon_data_free(&data);
+	    return BRLCAD_ERROR;
+	}
+	(void)bv_plane_get(&data.vp, tclcad_polygons_bv_const(gdvp));
+	(void)bg_plane_pt_at(&data.origin_point, &data.vp, 0.0, 0.0);
+	data.vZ = gdpsp->gdps_data_vZ;
+	unsigned char edge_rgb[3] = {
+	    (unsigned char)gdpsp->gdps_styles[i].color[0],
+	    (unsigned char)gdpsp->gdps_styles[i].color[1],
+	    (unsigned char)gdpsp->gdps_styles[i].color[2]
+	};
+	data.have_edge_color = bu_color_from_rgb_chars(&data.edge_color,
+	    edge_rgb);
 
-	if ((ret = ged_export_polygon(gedp, &export_state, i, argv[3])) != BRLCAD_OK)
+	const int batch_open = ged_event_batch_begin(gedp) > 0;
+	struct directory *created = db_sketch_polygon_data_to_sketch(
+	    gedp->dbip, argv[3], &data);
+	rt_sketch_polygon_data_free(&data);
+	if (created)
+	    (void)ged_event_notify_object_added(gedp, argv[3], NULL);
+	if (batch_open)
+	    (void)ged_event_batch_end(gedp, NULL);
+	const int ret = created ? BRLCAD_OK : BRLCAD_ERROR;
+	if (ret != BRLCAD_OK)
 	    bu_vls_printf(gedp->ged_result_str, "%s: failed to export polygon %zu to %s", argv[0], i, argv[3]);
 
 	return ret;
@@ -872,27 +941,39 @@ to_data_polygons_func(Tcl_Interp *interp,
      * Import sketch_name and append
      */
     if (BU_STR_EQUAL(argv[1], "import")) {
-	struct bg_polygon *gpp;
 	size_t i;
 
 	if (argc != 3)
 	    goto bad;
 
-	if ((gpp = ged_import_polygon(gedp, argv[2])) == (struct bg_polygon *)0) {
+	struct directory *dp = db_lookup(gedp->dbip, argv[2], LOOKUP_QUIET);
+	struct rt_sketch_polygon_data data;
+	rt_sketch_polygon_data_init(&data);
+	if (dp == RT_DIR_NULL || db_sketch_to_polygon_data(&data, argv[2],
+		gedp->dbip, dp)) {
+	    rt_sketch_polygon_data_free(&data);
 	    bu_vls_printf(gedp->ged_result_str, "%s: failed to import sketch %s", argv[0], argv[2]);
 	    return BRLCAD_ERROR;
 	}
 
 	i = gdpsp->gdps_polygons.num_polygons;
+	if (!tclcad_polygon_styles_resize(gdpsp, i + 1)) {
+	    rt_sketch_polygon_data_free(&data);
+	    return BRLCAD_ERROR;
+	}
 	++gdpsp->gdps_polygons.num_polygons;
 	gdpsp->gdps_polygons.polygon = (struct bg_polygon *)bu_realloc(gdpsp->gdps_polygons.polygon,
 								      gdpsp->gdps_polygons.num_polygons * sizeof(struct bg_polygon),
 								      "realloc polygon");
 
-	gdpsp->gdps_polygons.polygon[i] = *gpp;  /* struct copy */
-	VMOVE(gdpsp->gdps_polygons.polygon[i].gp_color, gdpsp->gdps_color);
-	gdpsp->gdps_polygons.polygon[i].gp_line_style = gdpsp->gdps_line_style;
-	gdpsp->gdps_polygons.polygon[i].gp_line_width = gdpsp->gdps_line_width;
+	bg_polygon_init(&gdpsp->gdps_polygons.polygon[i]);
+	(void)bg_polygon_move(&gdpsp->gdps_polygons.polygon[i], &data.polygon);
+	if (data.have_edge_color) {
+	    unsigned char rgb[3] = {0, 0, 0};
+	    if (bu_color_to_rgb_chars(&data.edge_color, rgb))
+		VSET(gdpsp->gdps_styles[i].color, rgb[0], rgb[1], rgb[2]);
+	}
+	rt_sketch_polygon_data_free(&data);
 
 	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, feature_name);
 
@@ -923,7 +1004,22 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    goto bad;
 	}
 
-	ged_polygon_fill_segments(gedp, &gdpsp->gdps_polygons.polygon[i], vdir, vdelta);
+	plane_t plane;
+	(void)bv_plane_get(&plane, tclcad_polygons_bv_const(gdvp));
+	struct bg_polygon hatch = BG_POLYGON_INIT_ZERO;
+	const fastf_t spacing = fabs(vdelta) *
+	    bv_scale_get(tclcad_polygons_bv_const(gdvp));
+	if (bg_polygon_hatch(&hatch, &gdpsp->gdps_polygons.polygon[i],
+		plane, vdir, spacing))
+	    return BRLCAD_ERROR;
+	for (size_t contour_i = 0; contour_i < hatch.num_contours;
+		contour_i++) {
+	    for (size_t point_i = 0;
+		    point_i < hatch.contour[contour_i].num_points; point_i++)
+		bu_vls_printf(gedp->ged_result_str, "{%lf %lf %lf} ",
+		    V3ARGS(hatch.contour[contour_i].point[point_i]));
+	}
+	bg_polygon_clear(&hatch);
 
 	return BRLCAD_OK;
     }
@@ -946,8 +1042,8 @@ to_data_polygons_func(Tcl_Interp *interp,
 	plane_t pl;
 	bv_plane_get(&pl, tclcad_polygons_bv_const(gdvp));
 
-	area = bg_find_polygon_area(&gdpsp->gdps_polygons.polygon[i], CLIPPER_MAX,
-				     &pl, gdpsp->gdps_scale);
+	area = bg_polygon_area(&gdpsp->gdps_polygons.polygon[i], CLIPPER_MAX,
+			       pl, gdpsp->gdps_scale);
 	bu_vls_printf(gedp->ged_result_str, "%lf", area);
 
 	return BRLCAD_OK;
@@ -972,7 +1068,13 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    j >= gdpsp->gdps_polygons.num_polygons)
 	    goto bad;
 
-	ret = ged_polygons_overlap(gedp, &gdpsp->gdps_polygons.polygon[i], &gdpsp->gdps_polygons.polygon[j]);
+	plane_t plane;
+	(void)bv_plane_get(&plane, tclcad_polygons_bv_const(gdvp));
+	struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip,
+	    RT_WDB_TYPE_DB_DEFAULT);
+	ret = bg_polygon_overlaps(&gdpsp->gdps_polygons.polygon[i],
+	    &gdpsp->gdps_polygons.polygon[j], plane, &wdbp->wdb_tol,
+	    bv_scale_get(tclcad_polygons_bv_const(gdvp)));
 	bu_vls_printf(gedp->ged_result_str, "%d", ret);
 
 	return BRLCAD_OK;
@@ -1036,7 +1138,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    }
 	    polygon_ac = ac;
 
-	    bg_polygons_free(&gdpsp->gdps_polygons);
+	    tclcad_polygon_state_geometry_clear(gdpsp);
 	    gdpsp->gdps_target_polygon_i = 0;
 
 	    if (polygon_ac < 1) {
@@ -1090,12 +1192,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    return BRLCAD_ERROR;
 	}
 
-	bg_polygon_free(&gdpsp->gdps_polygons.polygon[i]);
-
-	/* Not doing a struct copy to avoid overwriting the color, line width and line style. */
-	gdpsp->gdps_polygons.polygon[i].num_contours = gp.num_contours;
-	gdpsp->gdps_polygons.polygon[i].hole = gp.hole;
-	gdpsp->gdps_polygons.polygon[i].contour = gp.contour;
+	(void)bg_polygon_move(&gdpsp->gdps_polygons.polygon[i], &gp);
 
 	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, feature_name);
 
@@ -1109,7 +1206,7 @@ to_data_polygons_func(Tcl_Interp *interp,
      * Append pt to polygon_i/contour_j
      */
     if (BU_STR_EQUAL(argv[1], "append_point")) {
-	size_t i, j, k;
+	size_t i, j;
 	double pt[ELEMENTS_PER_POINT]; /* must be double for scan */
 
 	if (argc != 5)
@@ -1126,12 +1223,8 @@ to_data_polygons_func(Tcl_Interp *interp,
 	if (bu_sscanf(argv[4], "%lf %lf %lf", &pt[X], &pt[Y], &pt[Z]) != 3)
 	    goto bad;
 
-	k = gdpsp->gdps_polygons.polygon[i].contour[j].num_points;
-	++gdpsp->gdps_polygons.polygon[i].contour[j].num_points;
-	gdpsp->gdps_polygons.polygon[i].contour[j].point = (point_t *)bu_realloc(gdpsp->gdps_polygons.polygon[i].contour[j].point,
-											   gdpsp->gdps_polygons.polygon[i].contour[j].num_points * sizeof(point_t),
-											   "realloc point");
-	VMOVE(gdpsp->gdps_polygons.polygon[i].contour[j].point[k], pt);
+	if (bg_polygon_append_point(&gdpsp->gdps_polygons.polygon[i], j, pt))
+	    return BRLCAD_ERROR;
 	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, feature_name);
 
 	to_refresh_view(gdvp);

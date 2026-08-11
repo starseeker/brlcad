@@ -18,7 +18,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "vmath.h"
+
 struct ged;
+struct db_full_path;
 struct ged_scene_delta;
 struct ged_scene_result;
 struct ged_view_context;
@@ -54,6 +57,66 @@ enum ged_scene_path_listing {
     GED_SCENE_PATHS_DRAW_INTENTS = 0,
     GED_SCENE_PATHS_REALIZED_OCCURRENCES
 };
+
+/**
+ * Stable identity of one database occurrence represented by the scene.
+ *
+ * The fields are opaque.  References remain valid across unrelated scene
+ * commits and become invalid only when their occurrence is retired or their
+ * owning GED context is destroyed.  Clients must not compare or interpret
+ * individual fields; use ged_scene_occurrence_ref_equal().
+ */
+typedef struct ged_scene_occurrence_ref {
+    uintptr_t owner;
+    uint64_t id;
+    uint64_t generation;
+} ged_scene_occurrence_ref;
+
+#define GED_SCENE_OCCURRENCE_REF_NULL_INIT {0, 0, 0}
+#ifdef __cplusplus
+#  define GED_SCENE_OCCURRENCE_REF_NULL ged_scene_occurrence_ref{0, 0, 0}
+#else
+#  define GED_SCENE_OCCURRENCE_REF_NULL ((ged_scene_occurrence_ref){0, 0, 0})
+#endif
+
+/**
+ * Callback-lifetime semantic snapshot of a realized database occurrence.
+ *
+ * Strings and @p fullpath are borrowed and must not be retained.  This record
+ * deliberately contains semantic identity and presentation state only; mesh,
+ * vlist, renderer-node, cache, and LoD storage are backend-private.
+ */
+struct ged_scene_occurrence_info {
+    ged_scene_occurrence_ref ref;
+    const struct db_full_path *fullpath;
+    const char *path;
+    const char *leaf_name;
+    unsigned long long path_hash;
+    struct ged_view_context *view;
+    enum ged_scene_draw_mode draw_mode;
+    double opacity;
+    int visible;
+    int highlighted;
+    int selected;
+    int evaluated_region;
+    int line_width;
+    point_t center;
+};
+
+/** Lightweight visible-occurrence candidate used by interactive navigation. */
+struct ged_scene_occurrence_candidate {
+    const char *path;
+    const char *instance_key;
+    enum ged_scene_draw_mode draw_mode;
+};
+
+typedef int (*ged_scene_occurrence_func_t)(
+    const struct ged_scene_occurrence_info *occurrence,
+    void *client_data);
+
+typedef int (*ged_scene_occurrence_candidate_func_t)(
+    const struct ged_scene_occurrence_candidate *candidate,
+    void *client_data);
 
 /** Geometry classes included in a scene-bounds query. */
 enum ged_scene_bounds_scope {

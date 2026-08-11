@@ -165,7 +165,7 @@ struct BOBOL_EXPORT BObolFeatureStyle {
      * is expressed in pixel coordinates (origin bottom-left, 0..width/0..height)
      * and is rendered through an SoHUDKit rather than the model/view pipeline.
      * Used by the faceplate GUI so its lines stay fixed on screen like the
-     * HUD text labels (see ged_annotation_hud_line*_replace). */
+     * HUD text labels published through the view-feature batch adapter. */
     SbBool hud;
 
     BObolFeatureStyle(void);
@@ -735,7 +735,7 @@ public:
 	double viewScale) const;
     SbBool csg(BObolPolygonHandle target,
 	BObolPolygonHandle stencil,
-	bg_clip_t op);
+	enum bg_polygon_boolean_op op);
 
     BObolPolygonHandle importSketch(const SbString &name,
 	BObolFeatureScope scope,

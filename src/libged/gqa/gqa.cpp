@@ -378,10 +378,7 @@ gqa_publish_result_fallback(struct ged *gedp,
 	return 0;
 
     int handled = ged_diagnostic_line_layer_publish(gedp, name, builder);
-    if (!handled && active_view) {
-	handled = ged_annotation_diagnostic_line_layer_builder_replace(
-		active_view, name, builder);
-    }
+    (void)active_view;
     return handled;
 }
 

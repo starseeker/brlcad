@@ -27,7 +27,6 @@
 #include <ged/draw.h>
 #include <ged/display.h>
 #include <ged/view_feature_batch.h>
-#include <ged/view_feature_internal.h>
 #include "view_test_util.h"
 
 #define ASSERT(cond) do { \
@@ -871,7 +870,7 @@ main(int argc, const char **argv)
 
     const char *l0[] = {"view", "annotation", "label", "create", "u_label", "note", "1", "2", "3", NULL};
     ASSERT_VIEW_OK(gedp, 9, l0);
-    ASSERT(ged_annotation_label_count(views[0], "u_label") == 1);
+    ASSERT(ged_view_feature_label_count(views[0], "u_label") == 1);
     const char *l1[] = {"view", "feature", "info", "u_label", "type", NULL};
     ASSERT_VIEW_OK(gedp, 5, l1);
     ASSERT(!result_str(gedp).empty());
@@ -936,12 +935,12 @@ main(int argc, const char **argv)
     const char *p7[] = {"view", "polygon", "area", "u_poly", NULL};
     ASSERT_VIEW_OK(gedp, 4, p7);
     ASSERT(!result_str(gedp).empty());
-    ged_polygon_ref poly_ref =
-	ged_polygon_find(views[0], "u_poly");
-    ASSERT(!ged_polygon_ref_is_null(poly_ref));
-    struct ged_polygon_record poly_rec = {};
-    ASSERT(ged_polygon_record_get(poly_ref, &poly_rec));
-    ASSERT(poly_rec.type == GED_POLYGON_GENERAL);
+    ged_view_polygon_ref poly_ref =
+	ged_view_polygon_find(views[0], "u_poly");
+    ASSERT(!ged_view_polygon_ref_is_null(poly_ref));
+    struct ged_view_polygon_record poly_rec = {};
+    ASSERT(ged_view_polygon_record_get(views[0], poly_ref, &poly_rec));
+    ASSERT(poly_rec.type == GED_VIEW_POLYGON_GENERAL);
     ASSERT(poly_rec.contour_count == 1);
     ASSERT(poly_rec.point_count == 4);
     ASSERT(poly_rec.first_contour_open == 0);

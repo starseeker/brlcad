@@ -39,6 +39,7 @@
 #include "bv.h"
 #include "ged/db_index.h"
 #include "ged/draw.h"
+#include "ged/view_export.h"
 #include "rt/view.h"
 #include "./ged_private.h"
 #include "./ged_draw_private.h"
@@ -1176,6 +1177,24 @@ ged_view_selection_set_highlight(struct ged *gedp,
     return ret;
 }
 
+
+int
+ged_view_selection_highlight_occurrence_set(
+	struct ged *gedp,
+	struct ged_view_context *view_ctx,
+	ged_scene_occurrence_ref occurrence)
+{
+    ged_draw_shape_ref ref = GED_DRAW_SHAPE_REF_NULL;
+    if (!ged_scene_occurrence_ref_is_null(occurrence)) {
+	if (!gedp || occurrence.owner != (uintptr_t)gedp ||
+		occurrence.generation != 1 || !occurrence.id)
+	    return 0;
+	ref.token = (uintptr_t)occurrence.id;
+	ref.scene_revision = ged_draw_scene_revision(gedp);
+    }
+    return ged_view_selection_set_highlight(gedp, view_ctx, ref);
+}
+
 int
 ged_view_selection_add_shape(
 	struct ged *gedp,
@@ -1219,6 +1238,25 @@ ged_view_selection_add_shape(
 
 
 int
+ged_view_selection_add_occurrence(
+	struct ged *gedp,
+	struct ged_view_context *view_ctx,
+	ged_scene_occurrence_ref occurrence,
+	struct ged_view_context **selection_view_ctx,
+	struct bu_vls *path)
+{
+    if (!gedp || occurrence.owner != (uintptr_t)gedp ||
+	occurrence.generation != 1 || !occurrence.id)
+	return 0;
+    ged_draw_shape_ref ref;
+    ref.token = (uintptr_t)occurrence.id;
+    ref.scene_revision = ged_draw_scene_revision(gedp);
+    return ged_view_selection_add_shape(gedp, view_ctx, ref,
+	selection_view_ctx, path);
+}
+
+
+int
 ged_draw_group_record_get(struct ged *gedp,
 			  ged_draw_group_ref ref,
 			  struct ged_draw_group_record *out)
@@ -1249,6 +1287,92 @@ ged_draw_group_record_get(struct ged *gedp,
     out->is_local_source = group_summary.is_local_source;
     (void)ged_draw_group_ref_shape_count(gedp, ref, &out->shape_count);
     return 1;
+}
+
+
+struct _ged_view_export_summary_context {
+    struct ged_view_database_export_summary *summary;
+};
+
+
+static int
+_ged_view_export_summary_cb(
+	const struct ged_draw_view_db_object_record *record, void *client_data)
+{
+    struct _ged_view_export_summary_context *context =
+	(struct _ged_view_export_summary_context *)client_data;
+    if (!context || !context->summary || !record)
+	return 0;
+    context->summary->object_count++;
+    if (!record->evaluated_region && record->line_style != 0)
+	context->summary->has_unsupported_subtraction = 1;
+    return 1;
+}
+
+
+int
+ged_view_database_export_summary_get(
+	struct ged_view_context *view_ctx,
+	struct ged_view_database_export_summary *summary)
+{
+    if (!view_ctx || !summary)
+	return 0;
+    memset(summary, 0, sizeof(*summary));
+    struct _ged_view_export_summary_context context = {summary};
+    ged_draw_foreach_visible_view_db_object_record(view_ctx,
+	_ged_view_export_summary_cb, &context);
+    return 1;
+}
+
+
+struct _ged_view_export_segment_context {
+    ged_view_export_segment_func_t callback;
+    void *client_data;
+    size_t count;
+};
+
+
+static int
+_ged_view_export_segment_cb(const point_t start, const point_t end,
+	void *client_data)
+{
+    struct _ged_view_export_segment_context *context =
+	(struct _ged_view_export_segment_context *)client_data;
+    if (!context || !context->callback)
+	return 0;
+    context->count++;
+    return context->callback(start, end, context->client_data);
+}
+
+
+static int
+_ged_view_export_object_segments_cb(
+	const struct ged_draw_view_db_object_record *record, void *client_data)
+{
+    struct _ged_view_export_segment_context *context =
+	(struct _ged_view_export_segment_context *)client_data;
+    if (!record || !context)
+	return 0;
+    (void)ged_draw_view_db_object_record_foreach_segment(record,
+	_ged_view_export_segment_cb, context);
+    return 1;
+}
+
+
+size_t
+ged_view_database_export_segments_visit(
+	struct ged_view_context *view_ctx,
+	ged_view_export_segment_func_t callback,
+	void *client_data)
+{
+    if (!view_ctx || !callback)
+	return 0;
+    struct _ged_view_export_segment_context context = {
+	callback, client_data, 0
+    };
+    ged_draw_foreach_visible_view_db_object_record(view_ctx,
+	_ged_view_export_object_segments_cb, &context);
+    return context.count;
 }
 
 

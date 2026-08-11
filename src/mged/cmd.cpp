@@ -866,7 +866,7 @@ cmd_ged_info_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, c
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     int have_highlight = mged_highlight_shape_record(s, &hrec);
 
     if (s->gedp == GED_NULL)
@@ -1108,7 +1108,7 @@ cmd_ged_inside(ClientData clientData, Tcl_Interp *interpreter, int argc, const c
     struct mged_state *s = ctp->s;
     const char *new_cmd[3];
     struct rt_db_internal intern;
-    struct ged_draw_shape_record hrec;
+    struct ged_scene_occurrence_info hrec;
     int have_highlight = mged_highlight_shape_record(s, &hrec);
 
     if (s->gedp == GED_NULL)

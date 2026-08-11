@@ -107,6 +107,7 @@ BObolMeshLodProvider::clear(void)
     deliveryLevelLimit = -1;
     usePresentationLevelLimit = FALSE;
     presentationLevelLimit = -1;
+    prefetchCachedTargetOnFirstPublication = FALSE;
     forcedLevel = 0;
     reset = 0;
 }
@@ -3495,6 +3496,7 @@ BObolLodService::realizeResidentMeshLod(
 	return lod_provider_status_result(request, BOBOL_LOD_PROVIDER_STALE,
 	    "resident mesh asset identity collision");
 
+    bool persistentHierarchyAvailable = resident->lod != NULL;
     if (!resident->lod) {
 	/*
 	 * Compact requests captured the validated immutable content key while
@@ -3508,6 +3510,10 @@ BObolLodService::realizeResidentMeshLod(
 	if (exactVariant)
 	    resident->lod = bobol_mesh_lod_get_cached_prefix(
 		dbip, provider.meshAssetContentHash);
+	if (!resident->lod && !exactVariant)
+	    resident->lod = bobol_mesh_lod_get_named_cached_prefix(
+		dbip, name);
+	persistentHierarchyAvailable = resident->lod != NULL;
 	if (!resident->lod && exactVariant && provider.generateBrepVariant) {
 	    const int64_t variantStarted = bu_gettime();
 	    struct bg_tess_tol ttol = BG_TESS_TOL_INIT_TOL;
@@ -3543,9 +3549,6 @@ BObolLodService::realizeResidentMeshLod(
 			   1000.0,
 		       resident->lod ? "ready" : "failed");
 	}
-	if (!resident->lod && !exactVariant)
-	    resident->lod = bobol_mesh_lod_get_named_cached_prefix(
-		dbip, name);
 	if (resident->lod) {
 	    struct directory *assetDirectory = db_lookup(dbip, name,
 		LOOKUP_QUIET);
@@ -3689,9 +3692,21 @@ BObolLodService::realizeResidentMeshLod(
      * byte-admitted target; this is two-phase coverage, not nominal
      * level-by-level walking.
      */
-    if (publishedLevel < hierarchy.min_level)
+    const bool warmFirstPrefetch =
+	publishedLevel < hierarchy.min_level &&
+	persistentHierarchyAvailable &&
+	provider.prefetchCachedTargetOnFirstPublication &&
+	!provider.reset && !provider.useForcedLevel &&
+	requestedLevel >= hierarchy.min_level;
+    if (warmFirstPrefetch)
+	residentTarget = std::min(hierarchy.max_level, requestedLevel);
+    else if (publishedLevel < hierarchy.min_level)
 	residentTarget = hierarchy.min_level;
-    int drawTarget = residentTarget;
+    /* A warm first task may populate the complete view-demanded immutable
+     * prefix, but its publication remains the cheapest useful mesh.  The
+     * next presentation pass can select any budget-admitted cut from those
+     * already resident arrays without another cache task. */
+    int drawTarget = warmFirstPrefetch ? hierarchy.min_level : residentTarget;
     if (provider.usePresentationLevelLimit &&
 	provider.presentationLevelLimit >= hierarchy.min_level)
 	drawTarget = std::min(drawTarget,
@@ -3785,6 +3800,18 @@ BObolLodService::realizeResidentMeshLod(
 		return lod_provider_status_result(request,
 		    BOBOL_LOD_PROVIDER_CACHE_MISS,
 		    "resident mesh provider could not load the requested prefix");
+	    /* hierarchy_info includes the cache handle's current resident level.
+	     * Loading a cheaper prefix changes that value; retaining the snapshot
+	     * taken before the load makes an otherwise valid immutable generation
+	     * fail its level-consistency check.  This is common when a shared warm
+	     * cache handle last served a richer view and a new consumer first asks
+	     * for coverage minimum. */
+	    if (!bobol_mesh_lod_hierarchy_info_get(
+		    resident->lod, &hierarchy) ||
+		hierarchy.resident_level != residentLevel)
+		return lod_provider_status_result(request,
+		    BOBOL_LOD_PROVIDER_ERROR,
+		    "resident mesh provider could not refresh loaded hierarchy metadata");
 	    struct BObolMeshLodData data;
 	    if (!bobol_mesh_lod_info_get(resident->lod, &info) ||
 		!bobol_mesh_lod_data_get(resident->lod, &data))
@@ -3857,6 +3884,14 @@ BObolLodService::realizeResidentMeshLod(
 	    request.drawMode, &result.preparedCadGeometryRevision);
     preparedGeometryMicroseconds = std::max<int64_t>(
 	0, bu_gettime() - preparedGeometryStarted);
+    /* The renderer generation above is self-contained.  Keeping the cache
+     * reader's cumulative arrays duplicates every point/index and previously
+     * required one background compaction job per asset merely to release
+     * them.  Suffix growth reads its missing ranges directly from persistent
+     * storage, so eager release preserves progressive extension while making
+     * first publication the final backing-storage cleanup step. */
+    if (provider.shrinkAfterCopy && resident->lod)
+	bobol_mesh_lod_memshrink(resident->lod);
 
     const size_t residentBytes = lod_resident_asset_bytes(*resident);
     const size_t backingBytes =

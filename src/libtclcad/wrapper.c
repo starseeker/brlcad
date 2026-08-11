@@ -284,17 +284,20 @@ to_view_func_common(struct ged *gedp,
     /* must be wanting help */
     if (argc == 1) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+	bu_free(av, "free av copy");
 	return GED_HELP;
     }
 
     if (maxargs != TO_UNLIMITED && maxargs < argc) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+	bu_free(av, "free av copy");
 	return BRLCAD_ERROR;
     }
 
     view_ctx = ged_view_find_ctx(gedp, argv[1]);
     if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
+	bu_free(av, "free av copy");
 	return BRLCAD_ERROR;
     }
 
@@ -310,6 +313,13 @@ to_view_func_common(struct ged *gedp,
 
     bu_free(av, "free av copy");
 
+    /* Everything below is post-command bookkeeping.  Redraw, callback, and
+     * endpoint refresh operations may themselves dispatch GED commands, but
+     * their results are implementation details and must not replace the
+     * result of the command Tcl invoked. */
+    struct bu_vls command_result = BU_VLS_INIT_ZERO;
+    bu_vls_strcpy(&command_result, bu_vls_cstr(gedp->ged_result_str));
+
     ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
     if (ged_view_lod_policy_get(&lod_policy, view_ctx) &&
 	lod_policy.csg_enabled && lod_policy.zoom_refresh)
@@ -323,21 +333,20 @@ to_view_func_common(struct ged *gedp,
 
     if (ret == BRLCAD_OK) {
 	struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
-	if (!tvd)
+	if (!tvd) {
+	    bu_vls_free(&command_result);
 	    return BRLCAD_ERROR;
+	}
 	if (cflag && 0 < bu_vls_strlen(&tvd->gdv_callback)) {
-	    struct bu_vls save_result = BU_VLS_INIT_ZERO;
-
-	    bu_vls_printf(&save_result, "%s", bu_vls_addr(gedp->ged_result_str));
 	    Tcl_Eval(current_top->to_interp, bu_vls_addr(&tvd->gdv_callback));
-	    bu_vls_trunc(gedp->ged_result_str, 0);
-	    bu_vls_printf(gedp->ged_result_str, "%s", bu_vls_addr(&save_result));
-	    bu_vls_free(&save_result);
 	}
 
 	if (rflag)
 	    to_refresh_view(view_ctx);
     }
+
+    bu_vls_strcpy(gedp->ged_result_str, bu_vls_cstr(&command_result));
+    bu_vls_free(&command_result);
 
     return ret;
 }

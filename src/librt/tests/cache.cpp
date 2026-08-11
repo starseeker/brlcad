@@ -547,6 +547,17 @@ main(int ac, char *av[])
 
     bu_setprogname(av[0]);
 
+    /* These tests exercise the only prep serializer presently available to
+     * librt.  BREP prep serialization is deliberately disabled while its
+     * cached face/trim references are being hardened; treating the resulting
+     * absence of cache files as a cache failure obscures that capability
+     * decision and leaves stale test directories behind. */
+    if (!OBJ[ID_BREP].ft_prep_serialize) {
+	bu_log("SKIP: BREP prep-cache serialization is disabled\n");
+	bu_free(rp, "real path");
+	return 77;
+    }
+
     ac--; av++;
 
     if (ac < 1) {
@@ -633,4 +644,3 @@ main(int ac, char *av[])
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
