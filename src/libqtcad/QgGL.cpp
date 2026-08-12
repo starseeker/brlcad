@@ -64,6 +64,7 @@ QgGL::QgGL(QWidget *parent, BObolViewController *controller,
     // bindings to propagate to this widget and trigger actions such as
     // resolution scaling, rotation, etc.
     setFocusPolicy(Qt::WheelFocus);
+    setMouseTracking(true);
 }
 
 QgGL::~QgGL()

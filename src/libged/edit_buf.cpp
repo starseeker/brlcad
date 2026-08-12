@@ -39,7 +39,7 @@
 #include "rt/edit.h"
 
 #include "ged/db_index.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "ged/scene.h"
 #include "./ged_private.h"
 
@@ -216,7 +216,7 @@ ged_edit_buf_flush(struct ged *gedp)
     if (gi->edit_buf.empty())
 	return;
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     /* Collect keys up front to avoid iterator invalidation during erase */
     std::vector<std::string> keys;

@@ -29,7 +29,7 @@
 #include <string.h>
 
 #include "bu/cmd.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -136,7 +136,7 @@ ged_nmg_collapse_core(struct ged *gedp, int argc, const char *argv[])
 
     count = (size_t)nmg_edge_collapse(m, &wdbp->wdb_tol, tol_coll, min_angle, vlfree);
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     dp = db_diradd(gedp->dbip, new_name, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&intern.idb_type);
     if (dp == RT_DIR_NULL) {
 	if (event_batch_opened)

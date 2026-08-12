@@ -31,7 +31,7 @@
 
 #include "rt/geom.h"
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -90,7 +90,7 @@ ged_cpi_core(struct ged *gedp, int argc, const char *argv[])
     /* translate to end of "original" cylinder */
     VADD2(tgc_ip->v, tgc_ip->v, tgc_ip->h);
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     dp = db_diradd(gedp->dbip, argv[2], RT_DIR_PHONY_ADDR, 0, proto->d_flags, &proto->d_minor_type);
     if (dp == RT_DIR_NULL) {

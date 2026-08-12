@@ -28,7 +28,7 @@
 #include <string.h>
 
 #include "bu/cmd.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../../librt/librt_private.h"
 
 #include "../ged_private.h"
@@ -540,7 +540,7 @@ ged_xpush_core(struct ged *gedp, int argc, const char *argv[])
     /* Free list of tree-tops */
     bu_ptbl_free(&tops);
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     /* Make new names */
     db_treewalk_basic(gedp->dbip, old_dp, Make_new_name, Make_new_name, (void *)gedp);

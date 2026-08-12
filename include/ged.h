@@ -52,10 +52,10 @@
 #include "ged/version.h"
 #include "ged/database.h"
 #include "ged/db_index.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
+#include "ged/selection.h"
 #include "ged/commands.h"
 #include "ged/objects.h"
-#include "ged/selection_state.h"
 #include "ged/view.h"
 #include "ged/debug.h"
 

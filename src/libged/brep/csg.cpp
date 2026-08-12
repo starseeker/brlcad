@@ -45,7 +45,7 @@
 #include "wdb.h"
 #include "analyze.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 /* TODO - this indicates something should be public API from libbrep... */
 #include "../libbrep/shape_recognition/shape_recognition.h"
@@ -800,7 +800,7 @@ int _ged_brep_to_csg(struct ged *gedp, const char *dp_name, int verify)
     struct directory *dp = db_lookup(gedp->dbip, dp_name, LOOKUP_QUIET);
     if (dp == RT_DIR_NULL) return BRLCAD_ERROR;
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     if (dp->d_flags & RT_DIR_COMB) {
 	ret = comb_to_csg(gedp, &log, &ito, dp, verify) ? BRLCAD_ERROR : BRLCAD_OK;

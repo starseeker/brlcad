@@ -26,10 +26,14 @@
 #include <string.h>
 
 #include "bg/polygon.h"
+#include "bv/view.h"
 #include "ged/view.h"
 #include "./tclcad_private.h"
 
 #define TCLCAD_DEFAULT_FONT_SIZE 20
+
+/* Address-only identity for TclCAD's private libbv context attachment. */
+static const char tclcad_view_owner_key = 0;
 
 static void
 tclcad_polygon_state_init(tclcad_polygon_state *state)
@@ -149,7 +153,8 @@ tclcad_view_pathname_vls(const struct ged_view_context *view_ctx)
 struct tclcad_view_data *
 tclcad_view_data_from_view_ctx(const struct ged_view_context *view_ctx)
 {
-    void *tcl_data = ged_view_context_tclcad_data_get(view_ctx);
+    void *tcl_data = bv_context_owner_data_get(
+	(const struct bv_context *)view_ctx, &tclcad_view_owner_key);
     return tcl_data ? (struct tclcad_view_data *)((char *)tcl_data -
 	offsetof(struct tclcad_view_data, tcl_data)) : NULL;
 }
@@ -279,14 +284,15 @@ tclcad_view_prim_labels_state_set(struct ged_view_context *view_ctx, const struc
 int
 tclcad_view_data_bind_view_ctx(struct ged_view_context *view_ctx, struct tclcad_view_data *tvd)
 {
-    return ged_view_context_tclcad_data_set(view_ctx,
-	tvd ? (void *)&tvd->tcl_data : NULL);
+    return bv_context_owner_data_set((struct bv_context *)view_ctx,
+	&tclcad_view_owner_key, tvd ? (void *)&tvd->tcl_data : NULL);
 }
 
 void
 tclcad_view_data_unbind_view_ctx(struct ged_view_context *view_ctx)
 {
-    (void)ged_view_context_tclcad_data_set(view_ctx, NULL);
+    (void)bv_context_owner_data_set((struct bv_context *)view_ctx,
+	&tclcad_view_owner_key, NULL);
 }
 
 /*

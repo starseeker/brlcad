@@ -45,7 +45,7 @@
 #include "bu/cmd.h"
 #include "bu/color.h"
 #include "bu/opt.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "wdb.h"
@@ -163,7 +163,7 @@ brep_write_object(struct ged *gedp, const char *name, ON_Brep *brep, int added)
     if (!gedp || !name || !brep)
 	return BRLCAD_ERROR;
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     if (mk_brep(wdbp, name, (void *)brep)) {
 	if (event_batch_opened)
@@ -1136,7 +1136,7 @@ _brep_cmd_selection(void *bs, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 	}
-	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	if (rt_db_put_internal(gb->dp, gedp->dbip, &gb->intern) < 0) {
 	    if (event_batch_opened)
 		ged_event_batch_end(gedp, NULL);

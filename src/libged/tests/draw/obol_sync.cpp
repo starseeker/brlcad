@@ -37,7 +37,7 @@
 #include "ged/draw.h"
 #include "ged/display.h"
 #include "../../ged_scene_record_api_private.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 #include "ged/view.h"
 #include "opennurbs_sphere.h"
 #include "rt/db_internal.h"
@@ -99,7 +99,7 @@ static struct ged_view_feature_batch *
 test_feature_batch(struct ged_view_context *view_ctx, int local,
 	int overlay_class, int lifecycle, int order)
 {
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "obol-sync-test";
     desc.owner_role = "test-feature";
     desc.local = local;
@@ -237,11 +237,9 @@ exercise_ged_value_handle_lifetimes(struct ged *gedp)
 	FAIL("value-handle lifetime test should attach its first endpoint");
     }
 
-    int owner = 0;
     ged_view_edit_ref first_feature =
 	ged_view_edit_overlay_ensure(view_ctx,
-	    "handle-lifetime::feature", &owner,
-	    "handle-lifetime::source.s");
+	    "handle-lifetime::feature", "handle-lifetime::source.s");
     point_t origin = {0.0, 0.0, 0.0};
     ged_view_polygon_ref first_polygon =
 	ged_view_polygon_create(view_ctx,
@@ -286,8 +284,7 @@ exercise_ged_value_handle_lifetimes(struct ged *gedp)
 
     ged_view_edit_ref second_feature =
 	ged_view_edit_overlay_ensure(view_ctx,
-	    "handle-lifetime::feature", &owner,
-	    "handle-lifetime::source.s");
+	    "handle-lifetime::feature", "handle-lifetime::source.s");
     ged_view_polygon_ref second_polygon =
 	ged_view_polygon_create(view_ctx,
 	    "handle-lifetime::polygon", 1, GED_VIEW_POLYGON_SQUARE,
@@ -311,8 +308,7 @@ exercise_ged_value_handle_lifetimes(struct ged *gedp)
 
     ged_view_edit_ref recreated_feature =
 	ged_view_edit_overlay_ensure(view_ctx,
-	    "handle-lifetime::feature", &owner,
-	    "handle-lifetime::source.s");
+	    "handle-lifetime::feature", "handle-lifetime::source.s");
     ged_view_polygon_ref recreated_polygon =
 	ged_view_polygon_create(view_ctx,
 	    "handle-lifetime::polygon", 1, GED_VIEW_POLYGON_SQUARE,
@@ -350,7 +346,7 @@ exercise_ged_value_handle_lifetimes(struct ged *gedp)
 	}
 	ged_view_edit_ref cycle_ref =
 	    ged_view_edit_overlay_ensure(cycle_view,
-		"handle-lifetime::cycle", &owner, NULL);
+		"handle-lifetime::cycle", NULL);
 	if (ged_view_edit_ref_is_null(cycle_ref)) {
 	    ged_view_context_free(cycle_view);
 	    FAIL("repeated handle lifetime cycle should issue a reference");
@@ -2069,7 +2065,7 @@ exercise_typed_pick_result(void)
     if (!result)
 	FAIL("typed pick result should allocate");
 
-    struct ged_pick_detail input = GED_PICK_DETAIL_INIT;
+    struct ged_pick_detail input = ged_pick_detail_default();
     input.source_id = 17;
     input.primitive_kind = 3;
     input.primitive_index = 9;
@@ -2088,7 +2084,7 @@ exercise_typed_pick_result(void)
 
     struct ged_pick_result *first =
 	ged_pick_result_filter_first(result);
-    struct ged_pick_detail output = GED_PICK_DETAIL_INIT;
+    struct ged_pick_detail output = ged_pick_detail_default();
     if (!first || ged_pick_result_count(first) != 1 ||
 	!ged_pick_result_detail(first, 0, &output) ||
 	output.source_id != input.source_id ||
@@ -2493,7 +2489,7 @@ exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
 	FAIL("a direct narrow draw should create only a narrow lazy source");
     if (!ged_selection_select_path(gedp, NULL, nested_target, 1))
 	FAIL("subsumption test should establish compact selection");
-    (void)ged_selection_draw_sync(gedp, NULL);
+    (void)ged_selection_present_private(gedp);
     if (frontier_selected_occurrences_for_path(narrow_source,
 	    nested_target) <= 0)
 	FAIL("narrow source should expose the established compact selection");
@@ -2775,7 +2771,7 @@ main(int argc, char **argv)
 	GED_DRAW_VIEW_LINE_DRAW
     };
     struct ged_view_feature_style feature_style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     feature_style.visible = 1;
     feature_style.color_valid = 1;
     feature_style.color[0] = 20;
@@ -2790,7 +2786,7 @@ main(int argc, char **argv)
 	    !owned_controller->features().exists("cap2::line"))
 	FAIL("GED feature line replacement should publish into the owned Obol feature store");
     struct ged_view_feature_summary feature_summary =
-	GED_VIEW_FEATURE_SUMMARY_INIT;
+	ged_view_feature_summary_default();
     if (!ged_view_feature_get_summary(feature_view_ctx,
 	    "cap2::line", &feature_summary) ||
 	    !feature_summary.exists ||
@@ -2835,14 +2831,14 @@ main(int argc, char **argv)
 		"cap2::line") != 0)
 	FAIL("GED feature visibility should mutate owned Obol feature style");
     struct ged_view_feature_style changed_line_style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     changed_line_style.color_valid = 1;
     VSET(changed_line_style.color, 90, 80, 70);
     changed_line_style.line_width = 5;
     if (!ged_view_feature_style_apply(feature_view_ctx, "cap2::line",
 	    &changed_line_style, 0))
 	FAIL("GED line style setters should mutate owned Obol feature style");
-    struct ged_view_feature_style line_style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style line_style = ged_view_feature_style_default();
     if (!ged_view_feature_style_get(feature_view_ctx,
 	    "cap2::line", &line_style) || !line_style.color_valid ||
 	    line_style.color[0] != 90 || line_style.color[1] != 80 ||
@@ -2854,7 +2850,7 @@ main(int argc, char **argv)
 	GED_DRAW_VIEW_LINE_MOVE, GED_DRAW_VIEW_LINE_DRAW
     };
     struct ged_view_feature_style tcl_feature_style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     tcl_feature_style.visible = 1;
     tcl_feature_style.color_valid = 1;
     VSET(tcl_feature_style.color, 101, 102, 103);
@@ -2870,7 +2866,7 @@ main(int argc, char **argv)
 		BObolOverlayOrder::PostTransparent))
 	FAIL("GED Tcl line replacement should publish typed Obol overlay metadata");
     struct ged_view_feature_summary tcl_line_summary =
-	GED_VIEW_FEATURE_SUMMARY_INIT;
+	ged_view_feature_summary_default();
     if (!ged_view_feature_get_summary(feature_view_ctx,
 	    "cap2::tcl-line", &tcl_line_summary) ||
 	    !tcl_line_summary.exists ||
@@ -2964,7 +2960,7 @@ main(int argc, char **argv)
     created_label.line_flag = 1;
     VMOVE(created_label.target, created_label_target);
     struct ged_view_feature_style created_label_style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     created_label_style.visible = 1;
     created_label_style.color_valid = 1;
     VSET(created_label_style.color, 255, 255, 0);
@@ -2993,7 +2989,7 @@ main(int argc, char **argv)
     fastf_t tip_length = 0.0;
     fastf_t tip_width = 0.0;
     struct ged_view_feature_style arrow_style_read =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     if (!ged_view_feature_style_get(feature_view_ctx, "cap2::arrow",
 	    &arrow_style_read))
 	FAIL("GED arrow style readback should read owned Obol feature style");
@@ -3005,7 +3001,7 @@ main(int argc, char **argv)
 	FAIL("GED arrow tip readback should read owned Obol feature style");
 
     point_t axes_center = {1.0, 1.0, 1.0};
-    struct ged_view_feature_style axes_style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style axes_style = ged_view_feature_style_default();
     axes_style.visible = 1;
     axes_style.color_valid = 1;
     VSET(axes_style.color, 11, 22, 33);
@@ -3020,7 +3016,7 @@ main(int argc, char **argv)
     point_t axes_readback = VINIT_ZERO;
     fastf_t axes_size = 0.0;
     struct ged_view_feature_style axes_style_read =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     if (!ged_view_feature_axes_copy(feature_view_ctx, "cap2::axes", 0,
 	    axes_readback, &axes_size) ||
 	    !ged_view_feature_style_get(feature_view_ctx, "cap2::axes",
@@ -3091,7 +3087,7 @@ main(int argc, char **argv)
 
     struct command_result_callback_state command_callback_state = {};
     struct ged_view_feature_batch_desc feature_batch_desc =
-	GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	ged_view_feature_batch_desc_default();
     feature_batch_desc.owner_id = "rtcheck";
     feature_batch_desc.owner_role = "command-result";
     feature_batch_desc.event_cb = command_event_cb;
@@ -3112,11 +3108,11 @@ main(int argc, char **argv)
     if (!feature_batch)
 	FAIL("GED feature-batch begin should create an Obol-backed publication context");
     struct ged_view_feature_style command_style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     command_style.visible = 1;
     command_style.selectable = 0;
     struct ged_view_feature_line_layer command_layer =
-	GED_VIEW_FEATURE_LINE_LAYER_INIT;
+	ged_view_feature_line_layer_default();
     command_layer.name = "rtcheck::overlaps/yellow";
     command_layer.points = feature_points;
     command_layer.commands = feature_cmds;
@@ -3225,7 +3221,7 @@ main(int argc, char **argv)
 	    &resolved_primitive))
 	FAIL("GED feature-batch child primitive resolver should reject out-of-range picks");
     struct ged_view_feature_summary command_summary =
-	GED_VIEW_FEATURE_SUMMARY_INIT;
+	ged_view_feature_summary_default();
     if (!ged_view_feature_get_summary(feature_view_ctx,
 	    "rtcheck::overlaps", &command_summary) ||
 	    command_summary.primitive_metadata_count != 1 ||
@@ -3269,7 +3265,7 @@ main(int argc, char **argv)
 	{0.0, 2.0, 0.0}
     };
     struct ged_view_feature_line_layer latest_layer =
-	GED_VIEW_FEATURE_LINE_LAYER_INIT;
+	ged_view_feature_line_layer_default();
     latest_layer.name = "rtcheck::generation/latest";
     latest_layer.points = latest_points;
     latest_layer.commands = feature_cmds;
@@ -3288,7 +3284,7 @@ main(int argc, char **argv)
 	{0.0, 3.0, 0.0}
     };
     struct ged_view_feature_line_layer stale_layer =
-	GED_VIEW_FEATURE_LINE_LAYER_INIT;
+	ged_view_feature_line_layer_default();
     stale_layer.name = "rtcheck::generation/stale";
     stale_layer.points = stale_points;
     stale_layer.commands = feature_cmds;
@@ -3582,11 +3578,9 @@ main(int argc, char **argv)
 	FAIL("line-layer builder helper generation result should clean up by owner-scoped prefix");
     feature_batch_desc.generation = 0;
 
-    int ged_preview_owner = 0;
     ged_view_edit_ref ged_preview_ref =
 	ged_view_edit_overlay_ensure(feature_view_ctx,
-		"cap2::ged-preview", &ged_preview_owner,
-		"cap2::ged-source.s");
+		"cap2::ged-preview", "cap2::ged-source.s");
     if (ged_view_edit_ref_is_null(ged_preview_ref))
 	FAIL("GED feature overlay ensure should return an Obol feature ref");
     BObolFeatureHandle ged_preview_handle =
@@ -3604,7 +3598,7 @@ main(int argc, char **argv)
 		BObolOverlayLifecycle::PerTool ||
 	    ged_preview_summary.overlay.order !=
 		BObolOverlayOrder::PostTransparent ||
-	    ged_preview_summary.overlay.ownerToken != &ged_preview_owner ||
+	    ged_preview_summary.overlay.ownerToken != feature_view_ctx ||
 	    !BU_STR_EQUAL(ged_preview_summary.overlay.sourcePath.getString(),
 		"cap2::ged-source.s"))
 	FAIL("GED feature overlay API should publish typed Obol edit-preview metadata");
@@ -3718,8 +3712,7 @@ main(int argc, char **argv)
 	FAIL("GED feature commit preview events should retire transient Obol edit previews");
     ged_preview_ref =
 	ged_view_edit_overlay_ensure(feature_view_ctx,
-		"cap2::ged-preview", &ged_preview_owner,
-		"cap2::ged-source.s");
+		"cap2::ged-preview", "cap2::ged-source.s");
 	ged_preview_handle =
 	    feature_view_controller->features().find("cap2::ged-preview");
     if (ged_view_edit_ref_is_null(ged_preview_ref) ||
@@ -3734,10 +3727,8 @@ main(int argc, char **argv)
 	    !ged_preview_record.points.empty())
 	FAIL("GED feature clear geometry should clear the Obol feature record");
 
-    int ged_label_owner = 0;
     ged_view_edit_ref ged_label_ref =
-	ged_view_edit_label_ensure(feature_view_ctx,
-		"cap2::ged-label", &ged_label_owner);
+	ged_view_edit_label_ensure(feature_view_ctx, "cap2::ged-label");
     struct ged_view_feature_label ged_label;
     memset(&ged_label, 0, sizeof(ged_label));
     ged_label.text = "ged label";
@@ -3763,13 +3754,13 @@ main(int argc, char **argv)
 		"ged label") ||
 	    fabs(ged_label_record.labels[0].fontSize - 16.0f) > 0.001f ||
 	    !ged_label_record.overlay.isOverlay ||
-	    ged_label_record.overlay.ownerToken != &ged_label_owner)
+	    ged_label_record.overlay.ownerToken != feature_view_ctx)
 	FAIL("GED feature label API should publish typed Obol label records");
     if (!ged_view_edit_remove_ref(feature_view_ctx, ged_label_ref) ||
 	    feature_view_controller->features().exists("cap2::ged-label"))
 	FAIL("GED feature reference removal should delete the exact Obol-backed feature record");
     ged_label_ref = ged_view_edit_label_ensure(feature_view_ctx,
-	    "cap2::ged-label", &ged_label_owner);
+	    "cap2::ged-label");
     if (ged_view_edit_ref_is_null(ged_label_ref) ||
 	    !ged_view_feature_remove(feature_view_ctx, "cap2::ged-label") ||
 	    feature_view_controller->features().exists("cap2::ged-label"))

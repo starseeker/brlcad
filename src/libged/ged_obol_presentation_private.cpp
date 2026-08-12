@@ -150,8 +150,7 @@ static BObolViewController *
 ged_obol_view_controller_ensure_for_context(struct ged_view_context *view_ctx,
 	int sync_current_scene)
 {
-    struct ged *gedp = view_ctx ?
-	static_cast<struct ged *>(ged_view_context_user_data_get(view_ctx)) : NULL;
+    struct ged *gedp = ged_view_context_owner(view_ctx);
     if (!gedp)
 	return NULL;
     BObolViewController *controller = ged_bobol_view_controller(view_ctx);
@@ -168,8 +167,7 @@ static BObolViewController *
 ged_obol_shared_view_controller_ensure_for_context(
     struct ged_view_context *view_ctx, int sync_current_scene)
 {
-    struct ged *gedp = view_ctx ?
-	static_cast<struct ged *>(ged_view_context_user_data_get(view_ctx)) : NULL;
+    struct ged *gedp = ged_view_context_owner(view_ctx);
     if (!gedp)
 	return NULL;
     BObolViewController *controller = ged_draw_obol_controller(gedp);
@@ -184,8 +182,7 @@ ged_obol_shared_view_controller_ensure_for_context(
 static BObolViewController *
 ged_obol_shared_view_controller_for_context(struct ged_view_context *view_ctx)
 {
-    struct ged *gedp = view_ctx ?
-	static_cast<struct ged *>(ged_view_context_user_data_get(view_ctx)) : NULL;
+    struct ged *gedp = ged_view_context_owner(view_ctx);
     return gedp ? ged_draw_obol_controller(gedp) : NULL;
 }
 
@@ -2260,7 +2257,6 @@ ged_obol_ged_feature_ref(struct ged_view_context *view_ctx,
 
 static BObolOverlayInfo
 ged_obol_edit_overlay_info(struct ged_view_context *view_ctx,
-			      const void *owner,
 			      const char *source_path,
 			      int sort_order)
 {
@@ -2269,7 +2265,7 @@ ged_obol_edit_overlay_info(struct ged_view_context *view_ctx,
 				 BObolOverlayLifecycle::PerTool,
 				 BObolOverlayOrder::PostTransparent,
 				 source_path);
-    overlay.ownerToken = owner ? owner : view_ctx;
+    overlay.ownerToken = view_ctx;
     overlay.sortOrder = sort_order;
     return overlay;
 }
@@ -2368,7 +2364,6 @@ extern "C" ged_view_edit_ref
 ged_draw_obol_view_context_feature_overlay_ensure(
     struct ged_view_context *view_ctx,
     const char *name,
-    const void *owner,
     const char *source_path)
 {
     BObolViewController *controller =
@@ -2402,15 +2397,14 @@ ged_draw_obol_view_context_feature_overlay_ensure(
 	return GED_VIEW_EDIT_REF_NULL;
 
     (void)controller->features().setOverlayInfo(handle,
-	    ged_obol_edit_overlay_info(view_ctx, owner, source_path, 0));
+	    ged_obol_edit_overlay_info(view_ctx, source_path, 0));
     return ged_obol_ged_feature_ref(view_ctx, controller, handle, 1);
 }
 
 extern "C" ged_view_edit_ref
 ged_draw_obol_view_context_feature_label_ensure(
     struct ged_view_context *view_ctx,
-    const char *name,
-    const void *owner)
+    const char *name)
 {
     BObolViewController *controller =
 	ged_obol_view_controller_ensure_for_context(view_ctx, 1);
@@ -2434,7 +2428,7 @@ ged_draw_obol_view_context_feature_label_ensure(
 	return GED_VIEW_EDIT_REF_NULL;
 
     (void)controller->features().setOverlayInfo(handle,
-	    ged_obol_edit_overlay_info(view_ctx, owner, name, 1));
+	    ged_obol_edit_overlay_info(view_ctx, name, 1));
     return ged_obol_ged_feature_ref(view_ctx, controller, handle, 1);
 }
 

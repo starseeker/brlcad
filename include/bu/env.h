@@ -47,7 +47,9 @@ BU_EXPORT extern int bu_setenv(const char *name, const char *value, int overwrit
 #define BU_MEM_PAGE_SIZE 2
 
 /**
- * Report system memory sizes.
+ * Report system memory sizes.  BU_MEM_AVAIL is the memory the operating
+ * system can presently make available, including reclaimable cache when the
+ * platform reports it, rather than only completely unused physical pages.
  *
  * Returns -1 on error and the size of the requested memory type on
  * success.  Optionally if sz is non-NULL, the size of the requested

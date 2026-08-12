@@ -209,9 +209,9 @@ BObolViewLodState::MeshPayload::MeshPayload(void) :
     resultKind(BOBOL_LOD_RESULT_NONE),
     qualityTier(BOBOL_LOD_QUALITY_METADATA),
     providerStatus(BOBOL_LOD_PROVIDER_UNKNOWN),
-    activeLevel(-1),
-    residentLevel(-1),
-    requestedLevel(-1),
+    activeCut(-1),
+    residentCut(-1),
+    requestedCut(-1),
     residentAdmissionRevision(0),
     viewRevision(0),
     policyRevision(0),
@@ -327,9 +327,17 @@ BObolViewLodState::CadPayload::CadPayload(void) :
     qualityTier(BOBOL_LOD_QUALITY_METADATA),
     providerStatus(BOBOL_LOD_PROVIDER_UNKNOWN),
     drawMode(BOBOL_LOD_DRAW_UNKNOWN),
-    activeLevel(-1),
-    residentLevel(-1),
-    requestedLevel(-1),
+    activeCut(-1),
+    residentCut(-1),
+    requestedCut(-1),
+    allocatedCut(-1),
+    allocationDrawMode(BOBOL_LOD_DRAW_UNKNOWN),
+    allocationViewRevision(0),
+    allocationPolicyRevision(0),
+    projectedPixelDiameter(0.0f),
+    projectedPixelArea(0.0f),
+    projectedPixelPerimeter(0.0f),
+    targetPixelError(0.0f),
     residentAdmissionRevision(0),
     viewRevision(0),
     policyRevision(0),
@@ -516,8 +524,8 @@ BObolViewLodState::BObolViewLodState(void) :
 {
     memset(this->cadProxyKindCounts, 0,
 	sizeof(this->cadProxyKindCounts));
-    memset(this->cadProgressiveLevelCounts, 0,
-	sizeof(this->cadProgressiveLevelCounts));
+    memset(this->cadProgressiveCutCounts, 0,
+	sizeof(this->cadProgressiveCutCounts));
 }
 
 BObolViewLodState::~BObolViewLodState(void)
@@ -540,8 +548,8 @@ view_lod_cad_payload_is_satisfied(
 {
     return view_lod_cad_payload_is_mesh(payload) &&
 	(payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
-	 payload->requestedLevel < 0 ||
-	payload->activeLevel >= payload->requestedLevel);
+	 payload->requestedCut < 0 ||
+	payload->activeCut >= payload->requestedCut);
 }
 
 static size_t
@@ -553,46 +561,44 @@ view_lod_minimum_cad_payload_render_cost(
 
     BObolLodCounts counts = payload->counts;
     if (payload->progressiveMesh && payload->progressiveMesh->isValid()) {
-	const int minimumLevel = payload->progressiveMesh->minimumLevel();
-	if (minimumLevel >= 0 &&
-	    payload->progressiveMesh->canDrawLevel(minimumLevel)) {
-	    counts.faceCount = payload->progressiveMesh->faceCount(
-		minimumLevel);
-	    counts.pointCount = payload->progressiveMesh->pointCount(
-		minimumLevel);
-	}
+	const int minimumCut = payload->progressiveMesh->minimumCut();
+	if (minimumCut >= 0 &&
+	    payload->progressiveMesh->canDrawCut(minimumCut))
+	    counts = bobol_lod_progressive_counts(
+		payload->progressiveMesh, minimumCut,
+		payload->hasNormals);
     }
     return bobol_lod_render_cost_units(counts, payload->drawMode, 1);
 }
 
 /*
- * Residency and presentation answer different questions.  activeLevel is
- * the cut selected by the aggregate frame budget; requestedLevel is the cut
+ * Residency and presentation answer different questions.  activeCut is
+ * the cut selected by the aggregate frame budget; requestedCut is the cut
  * justified by the current view.  Preserve the latter only as far as this
  * immutable generation is already resident.  This makes performance-only
  * coarsening a draw-count change, while zoom-out and memory-pressure recovery
  * can still reclaim suffixes without promising data which has not loaded.
  */
 static int
-view_lod_resident_demand_level(int activeLevel, int requestedLevel,
-	int residentLevel)
+view_lod_resident_demand_cut(int activeCut, int requestedCut,
+	int residentCut)
 {
-    if (activeLevel < 0)
+    if (activeCut < 0)
 	return -1;
-    if (requestedLevel < 0 || residentLevel < 0)
-	return activeLevel;
-    return std::max(activeLevel, std::min(requestedLevel, residentLevel));
+    if (requestedCut < 0 || residentCut < 0)
+	return activeCut;
+    return std::max(activeCut, std::min(requestedCut, residentCut));
 }
 
 static int
-view_lod_cad_resident_demand_level(
+view_lod_cad_resident_demand_cut(
     const BObolViewLodState::CadPayload *payload)
 {
-    return payload ? view_lod_resident_demand_level(payload->activeLevel,
-	payload->requestedLevel,
+    return payload ? view_lod_resident_demand_cut(payload->activeCut,
+	payload->requestedCut,
 	payload->progressiveMesh ?
-	    payload->progressiveMesh->residentLevel() :
-	    payload->residentLevel) : -1;
+	    payload->progressiveMesh->residentCut() :
+	    payload->residentCut) : -1;
 }
 
 void
@@ -612,8 +618,8 @@ BObolViewLodState::clearCadPayloadMetrics(void)
     this->cadDisplayMeshBytes = 0;
     memset(this->cadProxyKindCounts, 0,
 	sizeof(this->cadProxyKindCounts));
-    memset(this->cadProgressiveLevelCounts, 0,
-	sizeof(this->cadProgressiveLevelCounts));
+    memset(this->cadProgressiveCutCounts, 0,
+	sizeof(this->cadProgressiveCutCounts));
     this->cadMeshPayloadCountsBySource.clear();
     this->cadUnsatisfiedOccurrencesBySource.clear();
     this->cadPayloadsByAssetKey.clear();
@@ -624,11 +630,11 @@ BObolViewLodState::clearCadPayloadMetrics(void)
 void
 BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
 {
-    const int demandLevel = view_lod_cad_resident_demand_level(payload);
+    const int demandCut = view_lod_cad_resident_demand_cut(payload);
     if (!payload || !payload->progressiveMesh ||
 	!payload->progressiveMesh->isValid() ||
 	payload->cacheKey.getLength() == 0 ||
-	demandLevel < 0 || demandLevel > 15)
+	demandCut < 0 || demandCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
 	return;
     this->cadResidentDemandRevision++;
     if (!this->cadResidentDemandRevision)
@@ -644,15 +650,15 @@ BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
 	state.demandIndex = this->cadResidentDemands.size();
 	BObolLodResidentDemand demand;
 	demand.assetKey = payload->cacheKey;
-	demand.level = demandLevel;
+	demand.cut = demandCut;
 	demand.channelMask = channelMask;
 	this->cadResidentDemands.push_back(demand);
     }
-    state.levelCounts[demandLevel]++;
-    if (demandLevel > state.maximumLevel) {
-	state.maximumLevel = demandLevel;
-	this->cadResidentDemands[state.demandIndex].level =
-	    state.maximumLevel;
+    state.cutCounts[demandCut]++;
+    if (demandCut > state.maximumCut) {
+	state.maximumCut = demandCut;
+	this->cadResidentDemands[state.demandIndex].cut =
+	    state.maximumCut;
     }
     state.channelCounts[channelMask]++;
     state.channelMask |= channelMask;
@@ -663,9 +669,9 @@ BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
 void
 BObolViewLodState::removeCadResidentDemand(const CadPayload *payload)
 {
-    const int demandLevel = view_lod_cad_resident_demand_level(payload);
+    const int demandCut = view_lod_cad_resident_demand_cut(payload);
     if (!payload || payload->cacheKey.getLength() == 0 ||
-	demandLevel < 0 || demandLevel > 15)
+	demandCut < 0 || demandCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
 	return;
     this->cadResidentDemandRevision++;
     if (!this->cadResidentDemandRevision)
@@ -677,8 +683,8 @@ BObolViewLodState::removeCadResidentDemand(const CadPayload *payload)
     CadResidentDemandState &state = found->second;
     const unsigned int channelMask =
 	view_lod_cad_payload_channel_mask(payload) & 3u;
-    if (state.levelCounts[demandLevel])
-	state.levelCounts[demandLevel]--;
+    if (state.cutCounts[demandCut])
+	state.cutCounts[demandCut]--;
     if (state.channelCounts[channelMask])
 	state.channelCounts[channelMask]--;
     state.channelMask = 0;
@@ -686,19 +692,19 @@ BObolViewLodState::removeCadResidentDemand(const CadPayload *payload)
 	if (state.channelCounts[mask])
 	    state.channelMask |= mask;
     }
-    if (demandLevel == state.maximumLevel &&
-	!state.levelCounts[demandLevel]) {
-	state.maximumLevel = -1;
-	for (int level = demandLevel - 1; level >= 0; --level) {
-	    if (!state.levelCounts[level])
+    if (demandCut == state.maximumCut &&
+	!state.cutCounts[demandCut]) {
+	state.maximumCut = -1;
+	for (int cut = demandCut - 1; cut >= 0; --cut) {
+	    if (!state.cutCounts[cut])
 		continue;
-	    state.maximumLevel = level;
+	    state.maximumCut = cut;
 	    break;
 	}
     }
-    if (state.maximumLevel >= 0) {
-	this->cadResidentDemands[state.demandIndex].level =
-	    state.maximumLevel;
+    if (state.maximumCut >= 0) {
+	this->cadResidentDemands[state.demandIndex].cut =
+	    state.maximumCut;
 	this->cadResidentDemands[state.demandIndex].channelMask =
 	    state.channelMask;
 	return;
@@ -757,21 +763,21 @@ BObolViewLodState::addCadPayloadMetrics(const CadPayload *payload)
 	    this->cadMinimumActiveRenderCost,
 	    view_lod_minimum_cad_payload_render_cost(payload));
 	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
-	    payload->requestedLevel < 0 ||
-	    payload->activeLevel >= payload->requestedLevel)
+	    payload->requestedCut < 0 ||
+	    payload->activeCut >= payload->requestedCut)
 	    this->cadSatisfiedMeshPayloadCount = view_lod_saturating_add(
 		this->cadSatisfiedMeshPayloadCount, 1);
 	if (payload->memoryLimited)
 	    this->cadMemoryLimitedMeshPayloadCount =
 		view_lod_saturating_add(
 		    this->cadMemoryLimitedMeshPayloadCount, 1);
-	if (payload->progressiveMesh && payload->activeLevel >= 0 &&
-	    payload->activeLevel <
-		static_cast<int>(sizeof(this->cadProgressiveLevelCounts) /
-		    sizeof(this->cadProgressiveLevelCounts[0])))
-	    this->cadProgressiveLevelCounts[payload->activeLevel] =
+	if (payload->progressiveMesh && payload->activeCut >= 0 &&
+	    payload->activeCut <
+		static_cast<int>(sizeof(this->cadProgressiveCutCounts) /
+		    sizeof(this->cadProgressiveCutCounts[0])))
+	    this->cadProgressiveCutCounts[payload->activeCut] =
 		view_lod_saturating_add(
-		    this->cadProgressiveLevelCounts[payload->activeLevel], 1);
+		    this->cadProgressiveCutCounts[payload->activeCut], 1);
 	return;
     }
 
@@ -844,21 +850,21 @@ BObolViewLodState::removeCadPayloadMetrics(const CadPayload *payload)
 	    this->cadMinimumActiveRenderCost,
 	    view_lod_minimum_cad_payload_render_cost(payload));
 	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
-	    payload->requestedLevel < 0 ||
-	    payload->activeLevel >= payload->requestedLevel)
+	    payload->requestedCut < 0 ||
+	    payload->activeCut >= payload->requestedCut)
 	    this->cadSatisfiedMeshPayloadCount = view_lod_saturating_subtract(
 		this->cadSatisfiedMeshPayloadCount, 1);
 	if (payload->memoryLimited)
 	    this->cadMemoryLimitedMeshPayloadCount =
 		view_lod_saturating_subtract(
 		    this->cadMemoryLimitedMeshPayloadCount, 1);
-	if (payload->progressiveMesh && payload->activeLevel >= 0 &&
-	    payload->activeLevel <
-		static_cast<int>(sizeof(this->cadProgressiveLevelCounts) /
-		    sizeof(this->cadProgressiveLevelCounts[0])))
-	    this->cadProgressiveLevelCounts[payload->activeLevel] =
+	if (payload->progressiveMesh && payload->activeCut >= 0 &&
+	    payload->activeCut <
+		static_cast<int>(sizeof(this->cadProgressiveCutCounts) /
+		    sizeof(this->cadProgressiveCutCounts[0])))
+	    this->cadProgressiveCutCounts[payload->activeCut] =
 		view_lod_saturating_subtract(
-		    this->cadProgressiveLevelCounts[payload->activeLevel], 1);
+		    this->cadProgressiveCutCounts[payload->activeCut], 1);
 	return;
     }
 
@@ -938,7 +944,7 @@ BObolViewLodState::setCadPresentation(
     }
     presentation.contentKey = contentKey;
     if (presentation.assembly)
-	presentation.assembly->progressiveLodCeiling =
+	presentation.assembly->progressiveCutCeiling =
 	    this->cadPresentationProgressiveLodCeiling;
     if (presentation.assembly)
 	presentation.assembly->pointProxyPixelThreshold =
@@ -1029,9 +1035,10 @@ BObolViewLodState::applyMeshResultInternal(const SoBRLMeshShape *shape,
     payload->resultKind = result.resultKind;
     payload->qualityTier = result.qualityTier;
     payload->providerStatus = result.providerStatus;
-    payload->activeLevel = result.geometry.activeLevel;
-    payload->residentLevel = result.residentLevel;
-    payload->requestedLevel = result.request.requestedLevel;
+    payload->activeCut = result.geometry.activeCut;
+    payload->residentCut = result.residentCut;
+    payload->requestedCut = result.resolvedCut >= 0 ?
+	result.resolvedCut : result.request.requestedCut;
     payload->residentAdmissionRevision =
 	result.residentAdmissionRevision;
     payload->viewRevision = result.request.viewRevision.value();
@@ -1159,7 +1166,7 @@ BObolViewLodState::applySourceResultInternal(
 	failure.sourceContentHash = result.request.sourceContentHash;
 	failure.viewRevision = result.request.viewRevision.value();
 	failure.policyRevision = result.request.policyRevision.value();
-	failure.requestedLevel = result.request.requestedLevel;
+	failure.requestedCut = result.request.requestedCut;
 	failure.drawMode = result.request.drawMode;
 	failure.qualityTier = result.request.qualityTier;
 	failure.providerStatus = result.providerStatus;
@@ -1215,7 +1222,7 @@ BObolViewLodState::applySourceResultInternal(
 		    result.request.sourceContentHash &&
 		failure.viewRevision == result.request.viewRevision &&
 		failure.policyRevision == result.request.policyRevision &&
-		failure.requestedLevel == result.request.requestedLevel &&
+		failure.requestedCut == result.request.requestedCut &&
 		failure.drawMode == result.request.drawMode &&
 		failure.qualityTier == result.request.qualityTier) {
 		sourceFailures->second.erase(failed);
@@ -1270,9 +1277,16 @@ BObolViewLodState::applySourceResultInternal(
     payload->qualityTier = result.qualityTier;
     payload->providerStatus = result.providerStatus;
     payload->drawMode = result.request.drawMode;
-    payload->activeLevel = result.geometry.activeLevel;
-    payload->residentLevel = result.residentLevel;
-    payload->requestedLevel = result.request.requestedLevel;
+    payload->activeCut = result.geometry.activeCut;
+    payload->residentCut = result.residentCut;
+    payload->requestedCut = result.resolvedCut >= 0 ?
+	result.resolvedCut : result.request.requestedCut;
+    payload->projectedPixelDiameter =
+	result.request.projectedPixelDiameter;
+    payload->projectedPixelArea = result.request.projectedPixelArea;
+    payload->projectedPixelPerimeter =
+	result.request.projectedPixelPerimeter;
+    payload->targetPixelError = result.request.targetPixelError;
     payload->residentAdmissionRevision =
 	result.residentAdmissionRevision;
     payload->viewRevision = result.request.viewRevision.value();
@@ -1294,6 +1308,15 @@ BObolViewLodState::applySourceResultInternal(
 	return TRUE;
     CadPayloadPtr publishedPayload;
     if (current != sourcePayloads.end() && current->second) {
+	/* Provider results replace renderer generations, not the owner-thread
+	 * scene allocation.  Preserve the latter across an asynchronous resident
+	 * suffix publication; its epoch checks make a stale allocation inert. */
+	payload->allocatedCut = current->second->allocatedCut;
+	payload->allocationDrawMode = current->second->allocationDrawMode;
+	payload->allocationViewRevision =
+	    current->second->allocationViewRevision;
+	payload->allocationPolicyRevision =
+	    current->second->allocationPolicyRevision;
 	this->removeCadPayloadMetrics(current->second.get());
 	const bool reuseCompactSlot =
 	    result.request.occurrenceKey.getLength() > 0 &&
@@ -1339,7 +1362,7 @@ BObolViewLodState::applySourceResultInternal(
 	if (resident == sourceAssets.end() || !resident->second ||
 	    bu_strcmp(resident->second->cacheKey.getString(),
 		payload->cacheKey.getString()) != 0 ||
-	    resident->second->residentLevel <= payload->residentLevel)
+	    resident->second->residentCut <= payload->residentCut)
 	    sourceAssets[assetKey] = publishedPayload;
     }
 
@@ -1600,7 +1623,7 @@ BObolViewLodState::hasCadOccurrenceTerminalFailure(
 	failure.sourceContentHash == request.sourceContentHash &&
 	failure.viewRevision == request.viewRevision &&
 	failure.policyRevision == request.policyRevision &&
-	failure.requestedLevel == request.requestedLevel &&
+	failure.requestedCut == request.requestedCut &&
 	failure.drawMode == request.drawMode &&
 	failure.qualityTier == request.qualityTier &&
 	view_lod_provider_status_is_terminal_failure(
@@ -1641,14 +1664,14 @@ BObolViewLodState::findCadForResult(
 SbBool
 BObolViewLodState::retargetMeshPayload(
     const BObolViewLodState::MeshPayload *target,
-    int activeLevel,
-    int requestedLevel,
+    int activeCut,
+    int requestedCut,
     uint64_t viewRevision,
     uint64_t policyRevision)
 {
     if (!target || !target->progressiveMesh ||
-	!target->progressiveMesh->canDrawLevel(activeLevel) ||
-	requestedLevel < 0)
+	!target->progressiveMesh->canDrawCut(activeCut) ||
+	requestedCut < 0)
 	return FALSE;
 
     MeshPayloadPtr payload;
@@ -1661,40 +1684,34 @@ BObolViewLodState::retargetMeshPayload(
     if (!payload)
 	return FALSE;
 
-    payload->activeLevel = activeLevel;
-    payload->requestedLevel = requestedLevel;
-    /* residentLevel is the last population-bearing PoP level published for
-     * this payload.  A coordinate-only plateau may make a finer activeLevel
+    payload->activeCut = activeCut;
+    payload->requestedCut = requestedCut;
+    /* residentCut is the last population-bearing PoP cut published for
+     * this payload.  A coordinate-only plateau may make a finer activeCut
      * drawable without changing that population high-water mark, so do not
      * overwrite it from the selected cut or from a newer worker generation. */
     payload->residentAdmissionRevision = 0;
     payload->memoryLimited = FALSE;
     payload->viewRevision = viewRevision;
     payload->policyRevision = policyRevision;
-    payload->counts.faceCount =
-	payload->progressiveMesh->faceCount(activeLevel);
-    payload->counts.pointCount =
-	payload->progressiveMesh->pointCount(activeLevel);
-    payload->counts.originalPointCount = payload->counts.pointCount;
-    payload->counts.normalCount = payload->hasNormals ?
-	payload->counts.faceCount * 3 : 0;
+    payload->counts = bobol_lod_progressive_counts(
+	payload->progressiveMesh, activeCut, payload->hasNormals);
     return TRUE;
 }
 
 SbBool
 BObolViewLodState::retargetCadPayload(
     const BObolViewLodState::CadPayload *target,
-    int activeLevel,
-    int requestedLevel,
-    uint64_t viewRevision,
-    uint64_t policyRevision)
+    int activeCut,
+    const BObolLodRequest &demand)
 {
+    const int requestedCut = demand.requestedCut;
     /* The shared progressive asset may already contain a worker-built
      * generation whose result has not reached this view.  The immutable
      * prepared PartGeometry is the authoritative presentation snapshot; its
-     * progressive channel frontier also preserves coordinate-only levels
-     * above the last population-bearing residentLevel. */
-    const auto preparedChannelLevel = [target](bool wire) {
+     * progressive channel frontier also preserves coordinate-only cuts
+     * above the last population-bearing residentCut. */
+    const auto preparedChannelCut = [target](bool wire) {
 	if (!target || !target->progressiveMesh ||
 	    !target->preparedCadGeometry)
 	    return -1;
@@ -1704,38 +1721,47 @@ BObolViewLodState::retargetCadPayload(
 	    const Obol::WireRep &prepared =
 		*target->preparedCadGeometry->wire;
 	    return prepared.isProgressive() ?
-		static_cast<int>(prepared.progressiveResidentLevel) :
-		target->progressiveMesh->maximumLevel();
+		static_cast<int>(prepared.progressiveResidentCut) :
+		target->progressiveMesh->maximumCut();
 	}
 	if (!target->preparedCadGeometry->shaded)
 	    return -1;
 	const Obol::TriMesh &prepared =
 	    *target->preparedCadGeometry->shaded;
 	return prepared.isProgressive() ?
-	    static_cast<int>(prepared.progressiveResidentLevel) :
-	    target->progressiveMesh->maximumLevel();
+	    static_cast<int>(prepared.progressiveResidentCut) :
+	    target->progressiveMesh->maximumCut();
     };
+    /* The immutable progressive asset may be retained across a representation
+     * switch.  Validate the channel demanded now, not the channel which last
+     * published the payload. */
     const bool needsWire = target &&
-	(target->drawMode == BOBOL_LOD_DRAW_WIRE ||
-	 target->drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE);
+	(demand.drawMode == BOBOL_LOD_DRAW_WIRE ||
+	 demand.drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE);
     const bool needsShaded = target &&
-	(target->drawMode == BOBOL_LOD_DRAW_SHADED ||
-	 target->drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
-	 target->drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE);
-    int preparedDrawableLevel = target ? target->residentLevel : -1;
+	(demand.drawMode == BOBOL_LOD_DRAW_SHADED ||
+	 demand.drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
+	 demand.drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE);
+    int preparedDrawableCut = target ? target->residentCut : -1;
     if (target && target->preparedCadGeometry) {
 	if (needsWire)
-	    preparedDrawableLevel = preparedChannelLevel(true);
+	    preparedDrawableCut = preparedChannelCut(true);
 	if (needsShaded) {
-	    const int shadedLevel = preparedChannelLevel(false);
-	    preparedDrawableLevel = needsWire ?
-		std::min(preparedDrawableLevel, shadedLevel) : shadedLevel;
+	    const int shadedCut = preparedChannelCut(false);
+	    preparedDrawableCut = needsWire ?
+		std::min(preparedDrawableCut, shadedCut) : shadedCut;
 	}
     }
 
     if (!target || !target->progressiveMesh ||
-	activeLevel > preparedDrawableLevel ||
-	requestedLevel < 0)
+	/* A representation-only retarget does not expose a new cut.  The CAD
+	 * assembly owns preparation of the newly selected renderer channel and may
+	 * already have cached it on the shared progressive generation even though
+	 * this occurrence's historical preparedCadGeometry handle names the prior
+	 * channel.  Require a prepared frontier only when the cut itself advances. */
+	(activeCut != target->activeCut &&
+	 activeCut > preparedDrawableCut) ||
+	requestedCut < 0)
 	return FALSE;
 
     CadPayloadPtr payload;
@@ -1751,22 +1777,54 @@ BObolViewLodState::retargetCadPayload(
     if (!payload)
 	return FALSE;
 
+    /* A scene allocation is valid only for the exact demand epoch and
+     * renderer channel it priced.  The controller installs a matching new
+     * allocation before its bounded application pass; ordinary camera/policy
+     * retargets invalidate an older decision without touching presentation. */
+    if (payload->allocationViewRevision != demand.viewRevision.value() ||
+	payload->allocationPolicyRevision != demand.policyRevision.value() ||
+	payload->allocationDrawMode != demand.drawMode) {
+	payload->allocatedCut = -1;
+	payload->allocationDrawMode = BOBOL_LOD_DRAW_UNKNOWN;
+	payload->allocationViewRevision = 0;
+	payload->allocationPolicyRevision = 0;
+    }
+
     /*
-     * A camera-only demand update often changes requestedLevel/revisions
+     * A camera-only demand update often changes requestedCut/revisions
      * while deliberately retaining the current drawable prefix.  That is
      * metadata, not a presentation mutation: keep aggregate face/resident
      * metrics and the assembly occurrence journal untouched.  Publishing a
      * false geometry change here made every pose-only motion frame repack
      * hundreds of otherwise identical occurrences.
      */
-    if (payload->activeLevel == activeLevel) {
+    if (payload->activeCut == activeCut) {
+	/* drawMode is render-cost currency, not only descriptive result
+	 * provenance.  A progressive shaded/wire switch needs no provider result,
+	 * so update the aggregate metrics in place even when the cut itself is
+	 * unchanged. */
+	if (payload->drawMode != demand.drawMode) {
+	    this->removeCadPayloadMetrics(payload.get());
+	    payload->drawMode = demand.drawMode;
+	    payload->requestedCut = requestedCut;
+	    payload->projectedPixelDiameter = demand.projectedPixelDiameter;
+	    payload->projectedPixelArea = demand.projectedPixelArea;
+	    payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
+	    payload->targetPixelError = demand.targetPixelError;
+	    payload->residentAdmissionRevision = 0;
+	    payload->memoryLimited = FALSE;
+	    payload->viewRevision = demand.viewRevision.value();
+	    payload->policyRevision = demand.policyRevision.value();
+	    this->addCadPayloadMetrics(payload.get());
+	    return TRUE;
+	}
 	const bool wasSatisfied =
 	    payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
-	    payload->requestedLevel < 0 ||
-	    payload->activeLevel >= payload->requestedLevel;
+	    payload->requestedCut < 0 ||
+	    payload->activeCut >= payload->requestedCut;
 	const bool isSatisfied =
 	    payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
-	    requestedLevel < 0 || activeLevel >= requestedLevel;
+	    requestedCut < 0 || activeCut >= requestedCut;
 	if (wasSatisfied != isSatisfied) {
 	    if (isSatisfied)
 		this->cadSatisfiedMeshPayloadCount =
@@ -1797,10 +1855,14 @@ BObolViewLodState::retargetCadPayload(
 		    occurrenceKey);
 	    }
 	}
-	/* requestedLevel contributes to the retained view demand even when the
+	/* requestedCut contributes to the retained view demand even when the
 	 * presented cut is unchanged.  Update that O(1) aggregate in place. */
 	this->removeCadResidentDemand(payload.get());
-	payload->requestedLevel = requestedLevel;
+	payload->requestedCut = requestedCut;
+	payload->projectedPixelDiameter = demand.projectedPixelDiameter;
+	payload->projectedPixelArea = demand.projectedPixelArea;
+	payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
+	payload->targetPixelError = demand.targetPixelError;
 	this->addCadResidentDemand(payload.get());
 	if (payload->memoryLimited)
 	    this->cadMemoryLimitedMeshPayloadCount =
@@ -1808,28 +1870,63 @@ BObolViewLodState::retargetCadPayload(
 		    this->cadMemoryLimitedMeshPayloadCount, 1);
 	payload->residentAdmissionRevision = 0;
 	payload->memoryLimited = FALSE;
-	payload->viewRevision = viewRevision;
-	payload->policyRevision = policyRevision;
+	payload->viewRevision = demand.viewRevision.value();
+	payload->policyRevision = demand.policyRevision.value();
 	return TRUE;
     }
 
     this->removeCadPayloadMetrics(payload.get());
-    payload->activeLevel = activeLevel;
-    payload->requestedLevel = requestedLevel;
+    payload->activeCut = activeCut;
+    payload->drawMode = demand.drawMode;
+    payload->requestedCut = requestedCut;
+    payload->projectedPixelDiameter = demand.projectedPixelDiameter;
+    payload->projectedPixelArea = demand.projectedPixelArea;
+    payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
+    payload->targetPixelError = demand.targetPixelError;
     payload->residentAdmissionRevision = 0;
     payload->memoryLimited = FALSE;
-    payload->viewRevision = viewRevision;
-    payload->policyRevision = policyRevision;
-    payload->counts.faceCount =
-	payload->progressiveMesh->hierarchyFaceCount(activeLevel);
-    payload->counts.pointCount =
-	payload->progressiveMesh->hierarchyPointCount(activeLevel);
-    payload->counts.originalPointCount = payload->counts.pointCount;
-    payload->counts.normalCount = payload->hasNormals ?
-	payload->counts.faceCount * 3 : 0;
+    payload->viewRevision = demand.viewRevision.value();
+    payload->policyRevision = demand.policyRevision.value();
+    payload->counts = bobol_lod_progressive_counts(
+	payload->progressiveMesh, activeCut, payload->hasNormals);
     this->addCadPayloadMetrics(payload.get());
     this->noteCadOccurrenceChanged(
 	payload->sourceBindingKey.getString(), payload->sourceInstanceKey);
+    return TRUE;
+}
+
+SbBool
+BObolViewLodState::setCadAllocatedCut(
+    const BObolViewLodState::CadPayload *target,
+    int allocatedCut,
+    uint64_t viewRevision,
+    uint64_t policyRevision,
+    int drawMode)
+{
+    if (!target || !target->progressiveMesh ||
+	!target->progressiveMesh->isValid() || allocatedCut < 0 ||
+	allocatedCut < target->progressiveMesh->minimumCut() ||
+	allocatedCut > target->progressiveMesh->maximumCut() ||
+	viewRevision == 0 || policyRevision == 0)
+	return FALSE;
+
+    CadPayloadPtr payload;
+    const auto source = this->cadSourceBindings.find(
+	target->sourceBindingKey.getString());
+    if (source != this->cadSourceBindings.end()) {
+	const auto occurrence = source->second.find(
+	    view_lod_cad_occurrence_key(target->sourceInstanceKey));
+	if (occurrence != source->second.end() &&
+	    occurrence->second.get() == target)
+	    payload = occurrence->second;
+    }
+    if (!payload)
+	return FALSE;
+
+    payload->allocatedCut = allocatedCut;
+    payload->allocationDrawMode = drawMode;
+    payload->allocationViewRevision = viewRevision;
+    payload->allocationPolicyRevision = policyRevision;
     return TRUE;
 }
 
@@ -2060,8 +2157,8 @@ BObolViewLodState::convergencePayloadCounts(size_t &active,
 	    payload->resultKind != BOBOL_LOD_RESULT_MESH)
 	    continue;
 	active++;
-	if (payload->requestedLevel < 0 ||
-	    payload->activeLevel >= payload->requestedLevel)
+	if (payload->requestedCut < 0 ||
+	    payload->activeCut >= payload->requestedCut)
 	    satisfied++;
 	if (payload->memoryLimited)
 	    memoryLimited++;
@@ -2133,14 +2230,13 @@ BObolViewLodState::minimumActiveRenderCost(void) const
 	BObolLodCounts counts = payload->counts;
 	if (payload->progressiveMesh &&
 	    payload->progressiveMesh->isValid()) {
-	    const int minimumLevel =
-		payload->progressiveMesh->minimumLevel();
-	    if (minimumLevel >= 0 &&
-		payload->progressiveMesh->canDrawLevel(minimumLevel)) {
-		counts.faceCount = payload->progressiveMesh->faceCount(
-		    minimumLevel);
-		counts.pointCount = payload->progressiveMesh->pointCount(
-		    minimumLevel);
+	    const int minimumCut =
+		payload->progressiveMesh->minimumCut();
+	    if (minimumCut >= 0 &&
+		payload->progressiveMesh->canDrawCut(minimumCut)) {
+		counts = bobol_lod_progressive_counts(
+		    payload->progressiveMesh, minimumCut,
+		    payload->hasNormals);
 	    }
 	}
 	cost = view_lod_saturating_add(cost,
@@ -2506,25 +2602,26 @@ BObolViewLodState::lastCadPresentationUsedPreparedReplay(void) const
 }
 
 int
-BObolViewLodState::maximumActiveProgressiveLevel(void) const
+BObolViewLodState::maximumActiveProgressiveCut(void) const
 {
-    for (int level =
-	    static_cast<int>(sizeof(this->cadProgressiveLevelCounts) /
-		sizeof(this->cadProgressiveLevelCounts[0])) - 1;
-	level >= 0; --level)
-	if (this->cadProgressiveLevelCounts[level])
-	    return level;
+    for (int cut =
+	    static_cast<int>(sizeof(this->cadProgressiveCutCounts) /
+		sizeof(this->cadProgressiveCutCounts[0])) - 1;
+	cut >= 0; --cut)
+	if (this->cadProgressiveCutCounts[cut])
+	    return cut;
     return -1;
 }
 
 void
-BObolViewLodState::setCadPresentationProgressiveLodCeiling(int level) const
+BObolViewLodState::setCadPresentationProgressiveCutCeiling(int cut) const
 {
-    level = level < 0 ? -1 : std::min(15, level);
-    this->cadPresentationProgressiveLodCeiling = level;
+    cut = cut < 0 ? -1 : std::min<int>(
+	Obol::ProgressiveCutLimit - 1, cut);
+    this->cadPresentationProgressiveLodCeiling = cut;
     for (const auto &presentation : this->cadPresentations)
 	if (presentation.second.assembly)
-	    presentation.second.assembly->progressiveLodCeiling = level;
+	    presentation.second.assembly->progressiveCutCeiling = cut;
 }
 
 void
@@ -2578,16 +2675,16 @@ BObolViewLodState::residentMeshDemands(
 	return;
 
     struct DemandAggregate {
-	int level = -1;
+	int cut = -1;
 	unsigned int channelMask = 0;
     };
-    std::unordered_map<std::string, DemandAggregate> maximumLevels;
-    maximumLevels.reserve(
+    std::unordered_map<std::string, DemandAggregate> richestCuts;
+    richestCuts.reserve(
 	demands.size() + this->meshBindings.size());
     for (const BObolLodResidentDemand &demand : demands) {
 	DemandAggregate &aggregate =
-	    maximumLevels[demand.assetKey.getString()];
-	aggregate.level = std::max(aggregate.level, demand.level);
+	    richestCuts[demand.assetKey.getString()];
+	aggregate.cut = std::max(aggregate.cut, demand.cut);
 	aggregate.channelMask |= demand.channelMask;
     }
 
@@ -2598,22 +2695,22 @@ BObolViewLodState::residentMeshDemands(
 	    !payload->progressiveMesh->isValid() ||
 	    payload->cacheKey.getLength() == 0)
 	    continue;
-	const int demandLevel = view_lod_resident_demand_level(
-	    payload->activeLevel, payload->requestedLevel,
-	    payload->progressiveMesh->residentLevel());
-	if (demandLevel < 0)
+	const int demandCut = view_lod_resident_demand_cut(
+	    payload->activeCut, payload->requestedCut,
+	    payload->progressiveMesh->residentCut());
+	if (demandCut < 0)
 	    continue;
 	DemandAggregate &aggregate =
-	    maximumLevels[payload->cacheKey.getString()];
-	aggregate.level = std::max(aggregate.level, demandLevel);
+	    richestCuts[payload->cacheKey.getString()];
+	aggregate.cut = std::max(aggregate.cut, demandCut);
     }
 
     demands.clear();
-    demands.reserve(maximumLevels.size());
-    for (const auto &entry : maximumLevels) {
+    demands.reserve(richestCuts.size());
+    for (const auto &entry : richestCuts) {
 	BObolLodResidentDemand demand;
 	demand.assetKey = entry.first.c_str();
-	demand.level = entry.second.level;
+	demand.cut = entry.second.cut;
 	demand.channelMask = entry.second.channelMask;
 	demands.push_back(demand);
     }
@@ -2630,13 +2727,13 @@ BObolViewLodState::applyResidentMeshCompaction(
     const BObolLodResidentCompaction &result)
 {
     if (result.assetKey.getLength() == 0 || !result.progressiveMesh ||
-	!result.progressiveMesh->isValid() || result.residentLevel < 0)
+	!result.progressiveMesh->isValid() || result.residentCut < 0)
 	return 0;
     /* Another view may have extended the shared asset after this completion
      * was queued.  Never publish an older prepared generation over that
      * richer replacement; its next stable snapshot will compact again if
      * the aggregate demand permits it. */
-    if (result.progressiveMesh->residentLevel() != result.residentLevel ||
+    if (result.progressiveMesh->residentCut() != result.residentCut ||
 	(result.preparedCadGeometryRevision &&
 	 result.preparedCadGeometryRevision !=
 	    result.progressiveMesh->revision()))
@@ -2657,7 +2754,7 @@ BObolViewLodState::applyResidentMeshCompaction(
     for (CadPayload *payload : indexed->second) {
 	if (!payload || payload->progressiveMesh != result.progressiveMesh)
 	    continue;
-	payload->residentLevel = result.residentLevel;
+	payload->residentCut = result.residentCut;
 	const unsigned int needed =
 	    view_lod_cad_payload_channel_mask(payload);
 	if (result.preparedCadGeometry &&

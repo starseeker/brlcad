@@ -25,17 +25,30 @@ struct ged_view_context;
 
 __BEGIN_DECLS
 
+/** Initialize a caller-owned edit-preview transaction. */
+GED_EXPORT extern void
+ged_view_edit_transaction_init(struct ged_view_edit_transaction *transaction);
+
+/** Return an initialized edit-preview transaction value. */
+GED_HEADER_INLINE struct ged_view_edit_transaction
+ged_view_edit_transaction_default(void)
+{
+    struct ged_view_edit_transaction transaction;
+    ged_view_edit_transaction_init(&transaction);
+    return transaction;
+}
+
 /** Return non-zero when @p ref is the null edit reference. */
 GED_EXPORT extern int ged_view_edit_ref_is_null(ged_view_edit_ref ref);
 
-/** Ensure a local edit-preview line feature and return its value reference. */
+/** Ensure a view-owned edit-preview line feature and return its reference. */
 GED_EXPORT extern ged_view_edit_ref ged_view_edit_overlay_ensure(
-    struct ged_view_context *view_ctx, const char *name, const void *owner,
+    struct ged_view_context *view_ctx, const char *name,
     const char *source_path);
 
-/** Ensure a local edit label feature and return its value reference. */
+/** Ensure a view-owned edit label feature and return its reference. */
 GED_EXPORT extern ged_view_edit_ref ged_view_edit_label_ensure(
-    struct ged_view_context *view_ctx, const char *name, const void *owner);
+    struct ged_view_context *view_ctx, const char *name);
 
 /** Remove exactly the edit feature identified by @p ref. */
 GED_EXPORT extern int ged_view_edit_remove_ref(

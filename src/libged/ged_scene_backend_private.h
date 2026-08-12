@@ -33,19 +33,21 @@ struct ged_scene_backend_ops {
 	void *client_data);
 };
 
-COMPILER_DLLEXPORT extern int ged_scene_backend_apply_private(
+extern int ged_scene_backend_apply_private(
     struct ged *gedp,
     const struct ged_draw_transaction *transaction,
     const struct ged_draw_transaction_result *result);
 
-COMPILER_DLLEXPORT extern int ged_scene_backend_snapshot_private(struct ged *gedp);
+extern int ged_scene_backend_snapshot_private(struct ged *gedp);
 
-COMPILER_DLLEXPORT extern int ged_scene_backend_selection_private(
+extern int ged_scene_backend_selection_private(
     struct ged *gedp,
     const char *const *added_paths, size_t added_count,
     const char *const *removed_paths, size_t removed_count,
     const char *const *selected_paths, size_t selected_count);
 
+/* This one entry point is the deliberately exported in-tree backend adapter
+ * hook.  The apply/snapshot/selection calls remain hidden reducer details. */
 COMPILER_DLLEXPORT extern void ged_scene_backend_set_private(
     struct ged *gedp,
     const struct ged_scene_backend_ops *operations,

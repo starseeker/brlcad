@@ -16,14 +16,26 @@ libged implementation details.
 | `ged/view_polygon.h` | `ged_view_polygon_*` | View-owned polygon editing, presentation, and sketch conversion |
 | `ged/view_edit.h` | `ged_view_edit_*` | Retained edit-preview publication and lifecycle |
 | `ged/view_export.h` | `ged_view_database_export_*` | Renderer-neutral database presentation export |
-| `ged/selection.h` | `ged_selection_*`, `ged_pick_*` | Per-view selection and immutable pick results |
+| `ged/selection.h` | `ged_selection_*`, `ged_pick_*` | GED-owned semantic selection, view selection helpers, and immutable pick results |
+| `ged/event.h` | `ged_event_*` | Batched database mutation events and reconciled opaque results |
 | `ged/draw.h` | none | Convenience umbrella for the drawing-domain headers |
+
+`ged/plugin/obol.h` is a deliberately separate, backend-specific plugin
+extension.  It exposes the borrowed active Obol endpoint to command plugins
+that explicitly opt into libBObol/Coin and its owner-thread/lifetime rules.
+It is not part of the renderer-neutral GED draw API.  Custom nodes should
+normally be published through Obol's feature store so ownership, metadata,
+picking, and removal stay coherent, but the extension does not prohibit direct
+controller or scene access.
 
 Names do not repeat `draw_view_context`: the opaque first argument already
 identifies a GED view.  Renderer names do not appear in renderer-neutral
 headers.  Realized shape/group/source records, database traversal, LoD
 realization, framebuffer internals, and direct controller operations are
-private services and are not stable libged API.
+private services and are not stable libged API.  Producer-private host state
+uses identity-keyed libbv context owner slots; producer names and
+producer-specific `void *` storage do not appear in the installed GED drawing
+API.
 
 The view-polygon domain owns retained interaction state, not polygon
 algorithms.  `bg/polygon.h` and `bg/polygon_types.h` are the canonical lower
@@ -81,13 +93,33 @@ operation returns failure without dereferencing retired storage.  Mutations
 are atomic at their documented transaction/commit boundary.  Observer
 callbacks run only after the resulting state and revision are stable.
 
+Caller-owned public descriptors are initialized with their named `_init`
+function.  Where expression initialization is useful, the corresponding
+typed `_default()` helper returns the same value.  Migration-era positional or
+aliasing `*_INIT` macros are not part of the drawing API.
+
 ## Stable surface
 
 `src/libged/ged_draw_api.symbols` is the reviewed draw/view export manifest.
 The `ged_draw_api_check` build target extracts exported declarations from the
 installed domain headers and fails if a symbol is added or removed without an
 intentional manifest update.  Private Obol and librt adapters must never appear
-in that manifest.  The current reviewed manifest contains 233 symbols.
+in that manifest.  The current reviewed manifest contains 304 symbols.
+
+Display-endpoint access and explicit renderer-window-host framebuffer binding
+are deliberately absent from the installed renderer-neutral headers.  In-tree
+host adapters use the uninstalled `ged/display_obol_private.h` boundary, while
+third-party plugins that intentionally opt into Obol use the separately
+audited `ged/plugin/obol.h` extension point.
+The opt-in Obol plugin extension has its own
+`src/libged/ged_obol_plugin_api.symbols` manifest so backend-specific access
+cannot accidentally expand the renderer-neutral surface.
+In-tree dynamic GED command modules need a few retained-feature publication
+helpers, and alternative in-tree backends need the single adapter installer.
+Those non-installed symbols are reviewed separately in
+`src/libged/ged_draw_plugin_api.symbols`; the dynamic-symbol contract rejects
+both unlisted additions to those families and accidental exports of reducer,
+frontier, selection-adapter, and view-attachment helpers.
 Dynamic-symbol checks also reject the former realized
 shape/group/source/scene-record families even though their definitions still
 exist as private implementation seams.

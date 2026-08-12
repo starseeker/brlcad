@@ -62,7 +62,7 @@
 #include "ged/display.h"
 #include "ged/view.h"
 #include "ged/view_types.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "tclcad.h"
 #include "BObol/BDisplayEndpoint.h"
 #include "BObol/BHostFactory.h"
@@ -1438,7 +1438,7 @@ to_open_tcl(ClientData UNUSED(clientData),
     }
     const char *disable_events = Tcl_GetVar(interp, "tclcad_disable_events", TCL_GLOBAL_ONLY);
     if (disable_events && atoi(disable_events))
-	ged_event_txn_disable(gedp);
+	ged_event_disable(gedp);
     gedp->ged_interp = (void *)interp;
 
     disable_events = Tcl_GetVar(interp, "tclcad_disable_events",

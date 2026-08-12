@@ -31,7 +31,7 @@
 
 #include "bu/str.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/db_attr.h"
 
 
@@ -126,7 +126,7 @@ ged_adjust_core(struct ged *gedp, int argc, const char *argv[])
 	return status;
     }
 
-    int event_depth = ged_event_batch_begin(gedp);
+    int event_depth = ged_event_batch_begin(gedp) == GED_EVENT_OK;
     if (wdb_put_internal(wdbp, name, &intern, 1.0) < 0) {
 	bu_vls_printf(gedp->ged_result_str, "wdb_export(%s) failure", name);
 	if (event_depth > 0)

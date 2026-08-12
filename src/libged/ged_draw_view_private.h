@@ -38,14 +38,14 @@ class BObolViewAttachment;
 
 /* Value-handle owner identities.  The low bit records local/shared scope;
  * the remaining bits identify a live GED view host record. */
-GED_EXPORT extern uint64_t ged_view_context_reference_owner(
+extern uint64_t ged_view_context_reference_owner(
 	const struct ged_view_context *view_ctx, int local);
-GED_EXPORT extern BObolViewAttachment *ged_view_context_obol_attachment(
+extern BObolViewAttachment *ged_view_context_obol_attachment(
 	const struct ged_view_context *view_ctx);
-GED_EXPORT extern int ged_view_context_obol_attachment_bind(
+extern int ged_view_context_obol_attachment_bind(
 	struct ged_view_context *view_ctx,
 	BObolViewAttachment *attachment);
-GED_EXPORT extern int ged_view_context_obol_attachment_unbind(
+extern int ged_view_context_obol_attachment_unbind(
 	struct ged_view_context *view_ctx,
 	BObolViewAttachment *attachment);
 #endif
@@ -58,20 +58,20 @@ enum ged_selection_kind {
     GED_SELECTION_HIGHLIGHTED_REF = 1
 };
 
-GED_EXPORT extern int ged_selection_available(struct ged_view_context *view_ctx);
-GED_EXPORT extern int ged_selection_contains_path(
+extern int ged_selection_available(struct ged_view_context *view_ctx);
+extern int ged_selection_contains_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,
 	const char *path);
-GED_EXPORT extern int ged_selection_add_path(
+extern int ged_selection_add_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,
 	const char *path);
-GED_EXPORT extern int ged_selection_remove_path(
+extern int ged_selection_remove_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,
 	const char *path);
-GED_EXPORT extern int ged_selection_set_path(
+extern int ged_selection_set_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,
 	const char *path);

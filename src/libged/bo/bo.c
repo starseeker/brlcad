@@ -32,7 +32,7 @@
 
 #include "bu/getopt.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 int
@@ -169,7 +169,7 @@ ged_bo_core(struct ged *gedp, int argc, const char *argv[])
 
 	/* make a binunif of the entire file */
 	struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	if (rt_mk_binunif (wdbp, obj_name, file_name, minor_type, 0)) {
 	    bu_vls_printf(gedp->ged_result_str, "Error creating %s", obj_name);
 	    if (event_batch_opened)

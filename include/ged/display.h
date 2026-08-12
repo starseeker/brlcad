@@ -28,45 +28,22 @@
 __BEGIN_DECLS
 
 struct imgstream_fb;
-struct ged_display_endpoint;
-
-/**
- * Opaque renderer-neutral display attachment.
- *
- * The concrete retained renderer and window-system adapter are deliberately
- * unavailable through the installed GED API.  In-tree host adapters bind
- * their implementation through a private adapter; ordinary clients express
- * presentation intent through the semantic operations below.
- */
-typedef struct ged_display_endpoint ged_display_endpoint_t;
-
-/** Return the borrowed display attachment for a view, or NULL if headless. */
-GED_EXPORT ged_display_endpoint_t *
-ged_view_context_display_endpoint_get(const struct ged_view_context *view);
 
 /** Ensure the hosted view has a GED-owned display attachment. */
 GED_EXPORT int
 ged_view_context_display_endpoint_ensure(struct ged_view_context *view);
 
-/**
- * Replace a display attachment.
- *
- * When @p take_ownership is non-zero GED releases the attachment after
- * disconnecting it during replacement or view teardown.
- */
-GED_EXPORT int
-ged_view_context_display_endpoint_set(struct ged_view_context *view,
-	ged_display_endpoint_t *endpoint, int take_ownership);
-
-/**
- * Access renderer-neutral presentation policy.
- *
- * GED retains the policy in the view context while an endpoint is absent, so
- * headless clients may configure a view before it is presented.
- */
+/** Copy a renderer-neutral presentation property from the view policy. */
 GED_EXPORT int
 ged_view_context_display_property_get(const struct ged_view_context *view,
 	const char *name, struct bv_display_property_value *value);
+
+/**
+ * Set a renderer-neutral presentation property.
+ *
+ * GED retains the policy while an endpoint is absent, so headless clients may
+ * configure a view before it is presented.
+ */
 GED_EXPORT int
 ged_view_context_display_property_set(struct ged_view_context *view,
 	const char *name, const struct bv_display_property_value *value);
@@ -78,20 +55,6 @@ typedef int (*ged_view_framebuffer_operation_t)(
 /** Present pending framebuffer-stream state on the active view owner thread. */
 GED_EXPORT int
 ged_view_framebuffer_present(struct ged *gedp);
-
-/**
- * Install the active renderer's framebuffer backend for one view.
- *
- * @p window_host is an optional borrowed renderer-host handle.  Generic
- * clients should pass NULL and let the attached display choose its host.
- */
-GED_EXPORT int
-ged_view_framebuffer_backend_install(struct ged *gedp,
-	struct ged_view_context *view_ctx,
-	void *window_host,
-	int width,
-	int height,
-	int present_on_flush);
 
 /** Ensure a framebuffer backend exists for one view. */
 GED_EXPORT int

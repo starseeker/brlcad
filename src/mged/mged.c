@@ -160,7 +160,7 @@ mged_event_batch_begin_dbip(struct db_i *dbip)
 	    !MGED_STATE->dbip || MGED_STATE->dbip != dbip ||
 	    MGED_STATE->gedp->dbip != dbip)
 	return 0;
-    return ged_event_batch_begin(MGED_STATE->gedp) > 0;
+    return ged_event_batch_begin(MGED_STATE->gedp) == GED_EVENT_OK;
 }
 
 
@@ -180,7 +180,8 @@ mged_event_notify_database_metadata_changed_dbip(struct db_i *dbip)
 	    !MGED_STATE->dbip || MGED_STATE->dbip != dbip ||
 	    MGED_STATE->gedp->dbip != dbip)
 	return 0;
-    return ged_event_notify_database_metadata_changed(MGED_STATE->gedp, NULL);
+    return ged_event_notify_database_metadata_changed(MGED_STATE->gedp,
+	NULL) == GED_EVENT_OK;
 }
 
 

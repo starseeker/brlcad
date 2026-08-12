@@ -31,7 +31,7 @@
 
 #include "bu/parallel.h"
 #include "bu/getopt.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/geom.h"
 
 #include "../ged_private.h"
@@ -293,7 +293,7 @@ ged_bev_core(struct ged *gedp, int argc, const char *argv[])
     intern.idb_ptr = (void *)bev_nmg_model;
     bev_nmg_model = (struct model *)NULL;
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     dp = db_diradd(gedp->dbip, newname, RT_DIR_PHONY_ADDR, 0,
 	    RT_DIR_SOLID, (void *)&intern.idb_type);
     if (dp == RT_DIR_NULL) {

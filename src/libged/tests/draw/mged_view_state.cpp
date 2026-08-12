@@ -478,16 +478,12 @@ test_multi_obol_dm_attachment(const char *datadir)
 	    bu_log("PASS: typed software-wire modes are queryable and view-local\n");
     }
     if (!fail) {
-	BObolViewAttachment *v0_attachment =
-	    ged_view_context_obol_attachment(v0);
-	BObolViewAttachment *v1_attachment =
-	    ged_view_context_obol_attachment(v1);
+	BObolViewAttachment *v0_attachment = v0_controller->getViewAttachment();
+	BObolViewAttachment *v1_attachment = v1_controller->getViewAttachment();
 	if (!v0_attachment || !v1_attachment ||
-		v0_attachment != v0_controller->getViewAttachment() ||
-		v1_attachment != v1_controller->getViewAttachment() ||
 		v0_attachment == v1_attachment) {
-	    bu_log("FAIL: GED view contexts should share attachment state "
-		    "with their attached Obol controllers\n");
+	    bu_log("FAIL: GED views should have distinct controller attachment "
+		    "state\n");
 	    fail = 1;
 	} else {
 	    ged_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;

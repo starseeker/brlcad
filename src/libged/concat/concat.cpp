@@ -34,7 +34,7 @@
 #include "bu/cmd.h"
 #include "bu/opt.h"
 #include "bu/getopt.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/geom.h"
 #include "../../librt/librt_private.h"
 
@@ -301,7 +301,7 @@ copy_object(struct ged *gedp,
 		owrite_backup = std::string(bu_vls_cstr(&bname));
 	    }
 	    bu_vls_free(&bname);
-	    callbacks_disabled = ged_event_librt_callbacks_disable(gedp);
+	    callbacks_disabled = ged_event_librt_callbacks_disable(gedp) == GED_EVENT_OK;
 	    if (db_rename(cc_data->target_dbip, oride_dp, owrite_backup.c_str()) < 0) {
 		if (callbacks_disabled)
 		    (void)ged_event_librt_callbacks_enable(gedp);
@@ -505,7 +505,7 @@ ged_concat_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Copying an external database can touch many objects.  Suppress detailed
      * per-object reconciliation and let live consumers do one final rebuild. */
-    int bulk_started = (ged_event_bulk_begin(gedp) > 0);
+    int bulk_started = (ged_event_bulk_begin(gedp) == GED_EVENT_OK);
     FOR_ALL_DIRECTORY_START(dp, cc_data.incoming_dbip) {
 	if (dp->d_major_type == DB5_MAJORTYPE_ATTRIBUTE_ONLY)
 	    continue;

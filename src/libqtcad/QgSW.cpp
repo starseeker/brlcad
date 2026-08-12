@@ -64,6 +64,7 @@ QgSW::QgSW(QWidget *parent, BObolViewController *controller,
     // bindings to propagate to this widget and trigger actions such as
     // resolution scaling, rotation, etc.
     setFocusPolicy(Qt::WheelFocus);
+    setMouseTracking(true);
 }
 
 QgSW::~QgSW()
@@ -167,6 +168,18 @@ return;
 	if (isSignalConnected(QMetaMethod::fromSignal(
 		&QgSW::frame_presented)))
 	    emit frame_presented(black);
+	/*
+	 * A cold progressive source may not have published even its scope
+	 * bounds by the first traversal.  That is a valid transient blank
+	 * presentation, not an idle pipeline.  Keep the provider pump armed or
+	 * this early return loses the only wakeup that can replace the blank
+	 * frame with the newly published boxes and meshes.
+	 */
+	qgcanvas_queue_obol_progressive_update(*d, this);
+	if (!d->obol_paint_initialized) {
+	    d->obol_paint_initialized = true;
+	    emit init_done();
+	}
 	return;
     }
     {

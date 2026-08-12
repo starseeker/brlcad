@@ -74,7 +74,7 @@ gdiff_replace_line_feature(struct ged *gedp, const char *name,
 
     size_t point_count = 0;
     point_t *points = gdiff_segment_points(segments, &point_count);
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     style.color_valid = 1;
     VSET(style.color, r, g, b);
     (void)_ged_view_feature_batch_publish_line_set(gedp, name,

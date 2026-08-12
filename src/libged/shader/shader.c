@@ -24,7 +24,7 @@
  */
 
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 int
@@ -84,7 +84,7 @@ ged_shader_core(struct ged *gedp, int argc, const char *argv[])
 	bu_vls_vlscat(&comb->shader, &new_shader);
 	bu_vls_free(&new_shader);
 
-	event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
 	    if (event_batch_opened)
 		ged_event_batch_end(gedp, NULL);

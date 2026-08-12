@@ -136,10 +136,9 @@ edit_preview_update(QgView *view, const char *name, const char *path,
 	ged_points[i][Z] = points[i][2];
     }
     struct ged_view_edit_transaction transaction =
-	GED_VIEW_EDIT_TRANSACTION_INIT;
+	ged_view_edit_transaction_default();
     transaction.event = GED_VIEW_EDIT_PREVIEW_UPDATE;
     transaction.feature_name = name;
-    transaction.owner = view;
     transaction.source_path = path;
     transaction.edit_intent_id = intent_id ? intent_id : name;
     transaction.edit_intent_role = intent_role ? intent_role : "preview";
@@ -160,7 +159,7 @@ static int
 edit_preview_clear(QgView *view, const char *name)
 {
     struct ged_view_edit_transaction transaction =
-	GED_VIEW_EDIT_TRANSACTION_INIT;
+	ged_view_edit_transaction_default();
     transaction.event = GED_VIEW_EDIT_PREVIEW_CANCEL;
     transaction.feature_name = name;
     const int ret = ged_view_edit_transaction_apply(
@@ -247,10 +246,9 @@ main(int argc, char **argv)
 	GED_DRAW_VIEW_LINE_DRAW
     };
     struct ged_view_edit_transaction multi_transaction =
-	GED_VIEW_EDIT_TRANSACTION_INIT;
+	ged_view_edit_transaction_default();
     multi_transaction.event = GED_VIEW_EDIT_PREVIEW_BEGIN;
     multi_transaction.feature_name = "_test_multi_edit_preview";
-    multi_transaction.owner = &view;
     multi_transaction.source_path = "/box.s::multi-edit";
     multi_transaction.edit_intent_id = "edit::box.s/multi";
     multi_transaction.edit_intent_role = "translate";
@@ -280,10 +278,9 @@ main(int argc, char **argv)
     MAT_IDN(multi_matrix);
     MAT_DELTAS(multi_matrix, 3.0, 0.0, 0.0);
     struct ged_view_edit_transaction primitive_transaction =
-	GED_VIEW_EDIT_TRANSACTION_INIT;
+	ged_view_edit_transaction_default();
     primitive_transaction.event = GED_VIEW_EDIT_PREVIEW_REPLACE_SOURCE;
     primitive_transaction.feature_name = "_test_multi_primitive_edit";
-    primitive_transaction.owner = &view;
     primitive_transaction.source_path = "box.s";
     primitive_transaction.edit_intent_id = "edit::box.s/primitive";
     primitive_transaction.edit_intent_role = "primitive-edit";
@@ -494,7 +491,7 @@ main(int argc, char **argv)
 	FAIL("GED-routed edit preview updates should request a qtcad view refresh");
 
     struct ged_view_feature_summary gedSummary =
-	GED_VIEW_FEATURE_SUMMARY_INIT;
+	ged_view_feature_summary_default();
     if (!ged_view_feature_get_summary(view_ctx, gedPreviewId,
 	    &gedSummary) ||
 	    !gedSummary.exists ||

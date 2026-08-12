@@ -18,9 +18,61 @@
 #ifndef GED_VIEW_FEATURE_BATCH_H
 #define GED_VIEW_FEATURE_BATCH_H
 
-#include "ged/view_feature_types.h"
+#include "ged/view_feature.h"
 
 __BEGIN_DECLS
+
+/** Initialize a feature-batch descriptor with command-result defaults. */
+GED_EXPORT extern void
+ged_view_feature_batch_desc_init(struct ged_view_feature_batch_desc *desc);
+
+/** Return an initialized feature-batch descriptor value. */
+GED_HEADER_INLINE struct ged_view_feature_batch_desc
+ged_view_feature_batch_desc_default(void)
+{
+    struct ged_view_feature_batch_desc desc;
+    ged_view_feature_batch_desc_init(&desc);
+    return desc;
+}
+
+/** Initialize caller-owned feature-batch event storage. */
+GED_EXPORT extern void
+ged_view_feature_batch_event_init(struct ged_view_feature_batch_event *event);
+
+/** Return initialized feature-batch event storage. */
+GED_HEADER_INLINE struct ged_view_feature_batch_event
+ged_view_feature_batch_event_default(void)
+{
+    struct ged_view_feature_batch_event event;
+    ged_view_feature_batch_event_init(&event);
+    return event;
+}
+
+/** Initialize a caller-owned retained line-layer descriptor. */
+GED_EXPORT extern void
+ged_view_feature_line_layer_init(struct ged_view_feature_line_layer *layer);
+
+/** Return an initialized retained line-layer descriptor. */
+GED_HEADER_INLINE struct ged_view_feature_line_layer
+ged_view_feature_line_layer_default(void)
+{
+    struct ged_view_feature_line_layer layer;
+    ged_view_feature_line_layer_init(&layer);
+    return layer;
+}
+
+/** Initialize a caller-owned feature metadata entry. */
+GED_EXPORT extern void
+ged_view_feature_metadata_init(struct ged_view_feature_metadata *metadata);
+
+/** Return an initialized feature-metadata entry. */
+GED_HEADER_INLINE struct ged_view_feature_metadata
+ged_view_feature_metadata_default(void)
+{
+    struct ged_view_feature_metadata metadata;
+    ged_view_feature_metadata_init(&metadata);
+    return metadata;
+}
 
 /** Begin an owner-scoped staged feature batch for @p view_ctx. */
 GED_EXPORT extern struct ged_view_feature_batch *
@@ -51,7 +103,11 @@ ged_view_feature_batch_line_layers_replace(
     size_t layer_count,
     const struct ged_view_feature_style *style);
 
-/** Stage a named line set.  Point and command arrays are copied. */
+/**
+ * Stage a named line set.  Point and command arrays are copied.  A zero-point
+ * set remains a valid styled retained feature; use ged_view_feature_remove()
+ * when the feature itself should cease to exist.
+ */
 GED_EXPORT extern int
 ged_view_feature_batch_line_set_replace(
     struct ged_view_feature_batch *batch,

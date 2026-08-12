@@ -33,7 +33,6 @@
 #include "common.h"
 
 #include "bu/str.h"
-
 #include <climits>
 #include <chrono>
 #include <cmath>
@@ -111,6 +110,7 @@ struct QgCanvasState {
     bool   progressive_update_queued = false;
     bool   lod_progress_last_pending = false;
     bool   software_backend = false;
+    QWidget *frame_request_widget = nullptr;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
     QOpenGLFramebufferObject *presentation_fbo = nullptr;
     bool presentation_fbo_has_completed_frame = false;
@@ -195,7 +195,7 @@ static inline void
 qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 {
     if (s.obol && !s.obol->isRenderRequested())
-	s.obol->requestRender(reason);
+	s.obol->requestPresentationRender(reason);
 }
 
 /* LoD completion may be reported by a worker thread after Qt's last paint.
@@ -205,23 +205,48 @@ qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 static inline void
 qgcanvas_obol_frame_requested(void *user_data, const char *UNUSED(reason))
 {
-    QWidget *w = static_cast<QWidget *>(user_data);
-    if (w)
-	QMetaObject::invokeMethod(w, "update", Qt::QueuedConnection);
+    QgCanvasState *s = static_cast<QgCanvasState *>(user_data);
+    QWidget *w = s ? s->frame_request_widget : nullptr;
+    if (!w)
+	return;
+    const bool softwareBackend = s->software_backend;
+    /* A software canvas has no swap/expose wake source of its own, and Qt may
+     * coalesce update() indefinitely while qged's command/test layer owns a
+     * nested event loop.  Queue the call onto the widget thread in both
+     * cases, but make the OSMesa endpoint synchronous once it gets there.
+     * Its Coin traversal still owns the controller's hard abort deadline. */
+
+    QMetaObject::invokeMethod(w, [s, w, softwareBackend]() {
+	/* update() is only a hint and may be folded into the paint whose
+	 * completion raised this request.  A refinement barrier is a stronger
+	 * contract: the controller cannot admit its successor cut until a new
+	 * frame has actually traversed the published population.  Present that
+	 * frame synchronously once this queued callback reaches the widget thread,
+	 * on either backend.  Ordinary System GL refreshes remain coalescible. */
+	if (softwareBackend ||
+	    (s->obol && s->obol->hasPendingLodRefinementFrame()))
+	    w->repaint();
+	else
+	    w->update();
+    }, Qt::QueuedConnection);
 }
 
 static inline void
 qgcanvas_bind_obol_frame_requests(QgCanvasState &s, QWidget *w)
 {
-    if (s.obol && w)
-	s.obol->setFrameRequestCallback(qgcanvas_obol_frame_requested, w);
+    if (s.obol && w) {
+	s.frame_request_widget = w;
+	s.obol->setFrameRequestCallback(qgcanvas_obol_frame_requested, &s);
+    }
 }
 
 static inline void
 qgcanvas_unbind_obol_frame_requests(QgCanvasState &s, QWidget *w)
 {
-    if (s.obol && w)
-	s.obol->clearFrameRequestCallback(w);
+    if (s.obol && w) {
+	s.obol->clearFrameRequestCallback(&s);
+	s.frame_request_widget = nullptr;
+    }
 }
 
 static inline void
@@ -234,32 +259,51 @@ qgcanvas_advance_obol_progressive(QgCanvasState &s)
 static inline void
 qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 {
-    if (!s.obol || !w || !s.obol->hasProgressiveWorkPending() ||
+    if (!s.obol || !w ||
+	(!s.obol->hasProgressiveWorkPending() &&
+	 !s.obol->isRenderRequested()) ||
 	s.progressive_update_queued)
 	return;
 
     s.progressive_update_queued = true;
     QTimer::singleShot(16, w, [&s, w]() {
 	s.progressive_update_queued = false;
-	if (!s.obol || !s.obol->hasProgressiveWorkPending())
+	if (!s.obol ||
+	    (!s.obol->hasProgressiveWorkPending() &&
+	     !s.obol->isRenderRequested()))
 	    return;
 
 	/* Poll background providers and LoD service state without forcing an
 	 * expensive duplicate paint.  advanceProgressiveWork() requests a
 	 * render only when presentation data or a retained PoP cut actually
 	 * changes; otherwise keep this lightweight timer pump alive. */
-	(void)s.obol->advanceProgressiveWork(NULL, NULL);
-	if (s.obol->isRenderRequested())
-	    w->update();
-	if (s.lod_progress_last_pending &&
-	    !s.obol->hasProgressiveWorkPending())
-	    w->update();
-	/* Do not depend on Qt delivering that paint to keep the provider pump
-	 * alive.  update() may be coalesced, deferred while the widget is not
-	 * exposed, or consumed by a nested event loop.  The next timer remains
-	 * lightweight while a presentation is pending because the controller's
-	 * refinement-frame gate prevents it from advancing past an unpresented
-	 * cut. */
+	if (s.obol->hasProgressiveWorkPending())
+	    (void)s.obol->advanceProgressiveWork(NULL, NULL);
+	const bool needsPresentation = s.obol->isRenderRequested() ||
+	    (s.lod_progress_last_pending &&
+	     !s.obol->hasProgressiveWorkPending());
+	if (needsPresentation) {
+	    /* QWidget::update() may remain coalesced indefinitely while the GUI
+	     * test/command layer is running a nested event loop and no unrelated
+	     * expose event occurs.  A direct-GL canvas has Qt's swap machinery as
+	     * an additional wake source; the software canvas does not.  Its
+	     * bounded 16 ms endpoint pump therefore presents synchronously from
+	     * this timer callback.  The callback is outside paintEvent, and each
+	     * traversal retains Obol's hard frame deadline, so this cannot recurse
+	     * or turn an expensive frame into an uninterruptible GUI loop. */
+	    if (s.software_backend ||
+		s.obol->hasPendingLodRefinementFrame()) {
+		w->repaint();
+	    } else
+		w->update();
+	}
+	/* Do not depend on Qt delivering that paint to keep either the provider
+	 * pump or an explicit frame request alive.  update() may be coalesced with
+	 * the paint whose completion raised a calibration request.  That request
+	 * does not necessarily represent background progressive work, so a timer
+	 * gated only by hasProgressiveWorkPending() can strand it forever.  The
+	 * next timer remains lightweight and retires itself as soon as a paint
+	 * consumes the request and no provider work remains. */
 	qgcanvas_queue_obol_progressive_update(s, w);
     });
 }
@@ -320,16 +364,17 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
      * BObolViewController::renderToImage(), so they must perform the same
      * presentation synchronization explicitly before traversing the scene. */
     s.obol->synchronizePresentation();
-    /*
-     * The software canvas traverses directly rather than calling
-     * BObolViewController::renderPending(), so retire only the request whose
-     * state is about to be rendered.  completeRenderTiming() may publish a
-     * follow-up calibration/refinement frame; consuming the boolean after
-     * that call erased the newer request and stranded its frame barrier.
-     */
-    const uint64_t renderedRequestSerial =
-	(recordPresentationTiming && consumeRenderRequest) ?
-	    s.obol->renderRequestSerialGet() : 0;
+    /* The software canvas traverses directly rather than calling
+     * BObolViewController::renderPending().  Consume the request being
+     * attempted before traversal, just as renderPending() does.  Leaving the
+     * old boolean set until after completeRenderTiming() prevents a follow-up
+     * calibration request from producing an empty-to-pending wake edge: the
+     * serial preserves that request, but Qt never learns it is runnable.
+     * Consuming first also makes requests published during traversal distinct
+     * and self-waking. */
+    SbBool lodCapacityRelevant = TRUE;
+    if (recordPresentationTiming && consumeRenderRequest)
+	(void)s.obol->consumeRenderRequest(NULL, &lodCapacityRelevant);
 
     const SbViewportRegion &region = s.obol->getViewportRegion();
     SbVec2s size = region.getViewportSizePixels();
@@ -375,7 +420,8 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	    SoGLRenderAction::ABORT : SoGLRenderAction::CONTINUE;
     };
     const uint64_t started = s.obol->beginRenderTiming();
-    const uint64_t deadlineDuration = recordPresentationTiming ?
+    const uint64_t deadlineDuration =
+	recordPresentationTiming && lodCapacityRelevant ?
 	s.obol->getCurrentPresentationFrameDeadline() : 0;
     if (action && deadlineDuration) {
 	deadlineContext.controller = s.obol;
@@ -388,10 +434,18 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     }
     BObolViewLodState *presentationState =
 	s.obol ? s.obol->getViewLodState() : nullptr;
+    const uint64_t cadExecutionBefore = presentationState ?
+	presentationState->cadPresentationExecutionSerial() : 0;
+    const uint64_t cadPreparationBefore = presentationState ?
+	presentationState->cadPresentationPreparationSerial() : 0;
     if (presentationState)
 	presentationState->beginCadPresentationFrame();
     const SbBool rendered = renderer.render(s.obol->getRenderRoot());
     const uint64_t completed = s.obol->beginRenderTiming();
+    const uint64_t cadExecutionAfter = presentationState ?
+	presentationState->cadPresentationExecutionSerial() : 0;
+    const uint64_t cadPreparationAfter = presentationState ?
+	presentationState->cadPresentationPreparationSerial() : 0;
     if (presentationState)
 	presentationState->refreshCadPresentationFrameStatus();
     const SbBool cadFrameIncomplete = presentationState &&
@@ -407,10 +461,15 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
      * the terminal PoP cut.  QgSW's paint path opts in below; diagnostic
      * image producers deliberately do not. */
     if (recordPresentationTiming && !interrupted)
-	s.obol->completeRenderTiming(started);
+	s.obol->completeRenderTiming(started, lodCapacityRelevant);
     if (interrupted) {
-	s.obol->notePresentationRenderInterrupted(
-	    completed > started ? completed - started : 1);
+	if (recordPresentationTiming) {
+	    s.obol->notePresentationRenderInterrupted(
+		completed > started ? completed - started : 1,
+		cadExecutionAfter != cadExecutionBefore ? TRUE : FALSE,
+		cadPreparationAfter != cadPreparationBefore ? TRUE : FALSE,
+		lodCapacityRelevant);
+	}
 	if (!s.last_completed_software_frame.isNull()) {
 	    img = s.last_completed_software_frame;
 	} else if (rendered) {
@@ -461,8 +520,6 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     }
     if (w)
 	img.setDevicePixelRatio(w->devicePixelRatioF());
-    if (recordPresentationTiming && consumeRenderRequest)
-	s.obol->clearRenderRequestIfUnchanged(renderedRequestSerial);
     if (completedPresentation)
 	*completedPresentation = true;
 }
@@ -744,8 +801,7 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
 	return;
 
     struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
-    struct ged *gedp = static_cast<struct ged *>(
-	ged_view_context_user_data_get(view_ctx));
+    struct ged *gedp = ged_view_context_owner(view_ctx);
     if (gedp) {
 	(void)ged_view_faceplate_sync(gedp, view_ctx);
 	return;

@@ -925,7 +925,8 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
     // High level options are only defined prior to the subcommand
     int cmd_pos = -1;
     for (int i = 0; i < argc; i++) {
-	if (bu_cmd_valid(_view_cmds, argv[i]) == BRLCAD_OK) {
+	if (bu_cmd_valid(_view_cmds, argv[i]) == BRLCAD_OK ||
+	    _ged_cmd_namespace_has_child("view", argv[i])) {
 	    cmd_pos = i;
 	    break;
 	}
@@ -950,6 +951,7 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
 	} else {
 	    _ged_subcmd_help(gedp, (struct bu_opt_desc *)d, (const struct bu_cmdtab *)_view_cmds, "view", "[options] subcommand [args]", &gd, 0, NULL);
 	}
+	_ged_cmd_namespace_help(gedp, "view", _view_cmds);
 	bu_vls_free(&vname);
 	return BRLCAD_OK;
     }
@@ -958,6 +960,7 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
     if (cmd_pos == -1) {
 	bu_vls_printf(gedp->ged_result_str, ": no valid subcommand specified\n");
 	_ged_subcmd_help(gedp, (struct bu_opt_desc *)d, (const struct bu_cmdtab *)_view_cmds, "view", "[options] subcommand [args]", &gd, 0, NULL);
+	_ged_cmd_namespace_help(gedp, "view", _view_cmds);
 	bu_vls_free(&vname);
 	return BRLCAD_ERROR;
     }
@@ -981,12 +984,23 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     int ret;
-    if (bu_cmd(_view_cmds, argc, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
+    if (bu_cmd_valid(_view_cmds, argv[0]) == BRLCAD_OK &&
+	bu_cmd(_view_cmds, argc, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
 	bu_vls_free(&vname);
 	return ret;
-    } else {
-	bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);
     }
+
+    struct ged_view_context *saved_view = ged_view_active_ctx(gedp);
+    ged_view_active_ctx_set(gedp, gd.cv);
+    const int plugin_found = _ged_cmd_namespace_exec(gedp, "view",
+	argc, argv, &ret);
+    ged_view_active_ctx_set(gedp, saved_view);
+    if (plugin_found) {
+	bu_vls_free(&vname);
+	return ret;
+    }
+
+    bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);
 
     bu_vls_free(&vname);
     return BRLCAD_ERROR;

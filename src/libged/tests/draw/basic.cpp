@@ -31,7 +31,7 @@
 #include "view_test_util.h"
 #include <ged.h>
 #include <ged/db_index.h>
-#include <ged/event_txn.h>
+#include <ged/event.h>
 
 /* Historical shaded controls use the legacy display manager's lighting and
  * edge rasterization.  Obol is validated semantically elsewhere; retain a

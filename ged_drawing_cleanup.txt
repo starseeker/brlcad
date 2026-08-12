@@ -7,7 +7,7 @@ Scope: libged drawing, view features, selection, event reconciliation,
        the private Obol adapter, and qged/MGED/gsh client integration
 
 
-IMPLEMENTATION STATUS (2026-08-10)
+IMPLEMENTATION STATUS (2026-08-11)
 ----------------------------------
 
 The high-risk ownership and update-path portions of this plan are now
@@ -27,9 +27,21 @@ implemented:
   reducer.  Exact erase of a compact semantic root no longer depends on a
   legacy realized-leaf record.
 
-* libged is the semantic selection authority.  QgObolSelectionSync and its
-  duplicate renderer traversal are deleted; QgSceneSync consumes the canonical
-  committed state.
+* libged is the semantic selection authority.  Selection mutations publish one
+  effective union delta automatically, nested batches coalesce multi-path and
+  multi-set changes, and deferred sources inherit the retained selection when
+  realized.  QgObolSelectionSync, public manual repair calls, and duplicate
+  qged renderer traversal are deleted.
+
+* Database mutations use the final ged_event API: typed copied inputs, opaque
+  results with structured accessors, explicit status values, nested batching,
+  and post-reconcile observers.  The migration-era event transaction header,
+  mutable result layout, string-packed paths, and overloaded count/status
+  returns are deleted.
+
+* Large positional public initializer macros were replaced by typed init and
+  default functions.  The API checker rejects reintroduction of the migration
+  aliases, so public call sites no longer encode descriptor structure layout.
 
 * MGED and qged edit paths use typed scene edit scopes and retained edit
   previews.  Raw vlist animation helpers and legacy realized-record navigation
@@ -55,7 +67,7 @@ implemented:
   mutable geometry APIs are private libged implementation details.  Stable,
   owner-checked semantic occurrence references now support navigation,
   selection, highlighting, editing, and path lookup without exposing renderer
-  records.  The reviewed drawing manifest is currently 233 installed symbols
+  records.  The reviewed drawing manifest is currently 304 installed symbols
   rather than the roughly 340-symbol migration surface.
 
 * View polygon state is now the ged_view_polygon_* domain.  Polygon geometry,
@@ -98,7 +110,7 @@ implemented:
   cost for very large loaded trees.
 
 
-VALIDATION STATUS (2026-08-10)
+VALIDATION STATUS (2026-08-11)
 ------------------------------
 
 The current implementation passed the following rebuilt .build validation:
@@ -110,14 +122,14 @@ The current implementation passed the following rebuilt .build validation:
   4,096- and 16,384-child QgModel hierarchy tests, Generic_Twin progressive
   startup and wireframe tests, NIST BRep shaded/wire tests, real-model
   interactions, selection, editing previews, and MGED view behavior.  The
-  16,384-child test completed in 71.12 seconds.  The System-GL/X11 host test was
+  16,384-child test completed in 63.04 seconds.  The System-GL/X11 host test was
   skipped because the headless test environment did not provide that display.
 
-* All 23 bobol_contract/bobol_headless tests passed, including retained render,
+* All 24 bobol_contract/bobol_headless tests passed, including retained render,
   LoD service/coordinator, source realization, compact occurrences, mesh cache,
   edit, window-host, API, and private-symbol contracts.
 
-* The installed draw API manifest check passes with 233 reviewed symbols;
+* The installed draw API manifest check passes with 304 reviewed symbols;
   libged exports no legacy shape/group/source/scene-record interface or
   ged_draw_obol_source_* implementation helper; and git diff --check reports
   no whitespace errors.

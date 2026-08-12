@@ -21,7 +21,7 @@
 #include "bu/file.h"
 #include "ged.h"
 #include "ged/draw.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 #include "QgSceneSyncPrivate.h"
 #include "qtcad/QgView.h"
 #include "raytrace.h"
@@ -146,32 +146,32 @@ set_scene_path_visibility(struct ged *gedp, QgView *view,
 static int
 refresh_modified_path(struct ged *gedp, QgView *view, const char *path)
 {
-    const int changed = ged_event_notify_object_modified(gedp, path, 1,
-	NULL);
-    if (changed > 0 && view)
+    const int updated = ged_event_notify_object_modified(gedp, path, 1,
+	NULL) == GED_EVENT_OK;
+    if (updated && view)
 	view->need_update(QG_VIEW_REFRESH);
-    return changed > 0;
+    return updated;
 }
 
 static int
 refresh_renamed_path(struct ged *gedp, QgView *view,
 	const char *old_path, const char *new_path)
 {
-    const int changed = ged_event_notify_object_renamed(gedp, old_path,
-	new_path, NULL);
-    if (changed > 0 && view)
+    const int updated = ged_event_notify_object_renamed(gedp, old_path,
+	new_path, NULL) == GED_EVENT_OK;
+    if (updated && view)
 	view->need_update(QG_VIEW_REFRESH);
-    return changed > 0;
+    return updated;
 }
 
 static int
 refresh_path_material(struct ged *gedp, QgView *view, const char *path)
 {
-    const int changed = ged_event_notify_object_material_changed(gedp,
-	path, NULL);
-    if (changed > 0 && view)
+    const int updated = ged_event_notify_object_material_changed(gedp,
+	path, NULL) == GED_EVENT_OK;
+    if (updated && view)
 	view->need_update(QG_VIEW_REFRESH);
-    return changed > 0;
+    return updated;
 }
 
 static int
@@ -555,34 +555,22 @@ main(int argc, char **argv)
     if (!ball || ball->getCompactInstanceCount() <= 0)
 	FAIL("ball should have realized Obol mesh geometry");
 
-    if (ged_selection_draw_sync(gedp, nullptr) != 0)
-	FAIL("empty GED selection should not change unselected Obol geometry");
-    if (ged_selection_draw_sync(gedp, nullptr) != 0)
-	FAIL("draw-triggered selection sync should skip an empty selection");
     if (source_has_selected_shapes(box) || source_has_selected_shapes(ball))
 	FAIL("fresh Obol geometry should start unselected");
 
     if (!ged_selection_select_path(gedp, nullptr, "box.s", 1))
 	FAIL("GED should select box path");
-    if (!ged_selection_draw_sync(gedp, nullptr))
-	FAIL("box selection should update Obol selection fields");
     if (!source_has_selected_shapes(box) || source_has_selected_shapes(ball))
-	FAIL("Obol selection should select only box geometry");
-    if (ged_selection_draw_sync(gedp, nullptr) != 0)
-	FAIL("repeating selection sync should be stable");
+	FAIL("a semantic selection commit should select only box geometry");
 
     if (!ged_selection_select_path(gedp, nullptr, "ball.s", 1))
 	FAIL("GED should select ball path");
-    if (!ged_selection_draw_sync(gedp, nullptr))
-	FAIL("ball selection should update Obol mesh selection fields");
     if (!source_has_selected_shapes(box) || !source_has_selected_shapes(ball))
 	FAIL("Obol selection should retain box and add ball geometry");
 
     if (!ged_selection_clear(gedp, nullptr))
 	FAIL("GED should clear default selection");
     ged_selection_recompute(gedp, nullptr);
-    if (!ged_selection_draw_sync(gedp, nullptr))
-	FAIL("clearing GED selection should clear Obol selection fields");
     if (source_has_selected_shapes(box) || source_has_selected_shapes(ball))
 	FAIL("Obol selection fields should clear with GED selection");
 
@@ -601,8 +589,7 @@ main(int argc, char **argv)
     lateSource->setDatabase(gedp->dbip);
     lateSource->path = "box.s";
     lateRoot->addChild(lateSource);
-    if (!ged_selection_select_path(gedp, nullptr, "box.s", 1) ||
-	!ged_selection_draw_sync(gedp, nullptr))
+    if (!ged_selection_select_path(gedp, nullptr, "box.s", 1))
 	FAIL("pre-publication selection should be retained by the source");
     std::vector<SbString> lateAdded = {SbString("box.s")};
     std::vector<SbString> lateRemoved;
@@ -641,9 +628,8 @@ main(int argc, char **argv)
 
     lateAdded.clear();
     lateRemoved.push_back(SbString("box.s"));
-    if (!ged_selection_draw_sync(gedp, nullptr) ||
-	!lateSource->applyCompactInstanceSelectionDelta(lateAdded, lateRemoved) ||
-	compact_selected_count(lateSource) != 0)
+    if (!lateSource->applyCompactInstanceSelectionDelta(lateAdded,
+	lateRemoved) || compact_selected_count(lateSource) != 0)
 	FAIL("late-publication selection should clear normally");
 
     /*
@@ -1118,8 +1104,7 @@ main(int argc, char **argv)
 
     const uint64_t lod_revision_before_selection =
 	pair->getDisplayMeshLodRevision();
-    if (!ged_selection_select_path(gedp, nullptr, "pair.c/box.s", 1) ||
-	!ged_selection_draw_sync(gedp, nullptr))
+    if (!ged_selection_select_path(gedp, nullptr, "pair.c/box.s", 1))
 	FAIL("nested GED selection should update the aggregate occurrence");
     if (pair->getDisplayMeshLodRevision() !=
 	lod_revision_before_selection)
@@ -1431,8 +1416,7 @@ main(int argc, char **argv)
     }
     if (pair->hasDisplayMeshLodRequests())
 	FAIL("terminal analytic meshes must not enter PoP LoD scheduling");
-    if (!ged_selection_select_path(gedp, nullptr, "pair.c/ball.s", 1) ||
-	!ged_selection_draw_sync(gedp, nullptr))
+    if (!ged_selection_select_path(gedp, nullptr, "pair.c/ball.s", 1))
 	FAIL("nested shaded selection should update the aggregate occurrence");
     selected_count = compact_selected_count(pair);
     if (selected_count != 1)
@@ -1537,8 +1521,7 @@ main(int argc, char **argv)
 	!pair->prepareCompiledAssembly() ||
 	pair->getCompiledAssemblyInstanceCount() != 3)
 	FAIL("hidden-line pair should compile three addressable mesh occurrences");
-    if (!ged_selection_select_path(gedp, nullptr, "pair.c/box.s", 1) ||
-	!ged_selection_draw_sync(gedp, nullptr))
+    if (!ged_selection_select_path(gedp, nullptr, "pair.c/box.s", 1))
 	FAIL("nested hidden-line selection should update the aggregate occurrence");
     selected_count = compact_selected_count(pair);
     if (selected_count != 1)

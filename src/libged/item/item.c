@@ -26,7 +26,7 @@
 #include "common.h"
 #include <stdlib.h>
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 int
 ged_item_core(struct ged *gedp, int argc, const char *argv[])
@@ -118,7 +118,7 @@ ged_item_core(struct ged *gedp, int argc, const char *argv[])
 	comb->los = los;
     }
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
 	bu_vls_printf(gedp->ged_result_str, "Database write failure.");
 	if (event_batch_opened)

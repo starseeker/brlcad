@@ -53,8 +53,49 @@ struct ged_view_feature_batch {
     int failed;
 };
 
+
+void
+ged_view_feature_batch_desc_init(struct ged_view_feature_batch_desc *desc)
+{
+    if (!desc)
+	return;
+    *desc = {};
+    desc->overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_COMMAND_RESULT;
+    desc->lifecycle = GED_VIEW_FEATURE_LIFECYCLE_PER_COMMAND;
+    desc->overlay_order = GED_VIEW_FEATURE_OVERLAY_ORDER_POST_TRANSPARENT;
+}
+
+
+void
+ged_view_feature_batch_event_init(struct ged_view_feature_batch_event *event)
+{
+    if (!event)
+	return;
+    *event = {};
+    event->status = GED_VIEW_FEATURE_BATCH_NONE;
+}
+
+
+void
+ged_view_feature_line_layer_init(struct ged_view_feature_line_layer *layer)
+{
+    if (!layer)
+	return;
+    *layer = {};
+    ged_view_feature_style_init(&layer->style);
+}
+
+
+void
+ged_view_feature_metadata_init(struct ged_view_feature_metadata *metadata)
+{
+    if (!metadata)
+	return;
+    *metadata = {};
+}
+
 struct ged_view_feature_staged_style {
-    struct ged_view_feature_style value = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style value = ged_view_feature_style_default();
     bool valid = false;
 };
 
@@ -62,7 +103,7 @@ struct ged_view_feature_staged_line_layer {
     std::string name;
     std::vector<fastf_t> points;
     std::vector<int> commands;
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
 };
 
 struct ged_view_feature_staged_label {
@@ -161,7 +202,7 @@ ged_obol_feature_batch_notify(
 	return;
 
     struct ged_view_feature_batch_event result =
-	    GED_VIEW_FEATURE_BATCH_EVENT_INIT;
+	    ged_view_feature_batch_event_default();
     result.status = status;
     result.feature_name = name;
     result.command = command;
@@ -558,7 +599,7 @@ ged_view_feature_batch_line_layers_replace(
 		for (const ged_view_feature_staged_line_layer &staged :
 		    staged_layers) {
 		    struct ged_view_feature_line_layer layer =
-			GED_VIEW_FEATURE_LINE_LAYER_INIT;
+			ged_view_feature_line_layer_default();
 		    layer.name = staged.name.empty() ? NULL :
 			staged.name.c_str();
 		    layer.points = staged.points.empty() ? NULL :
@@ -702,15 +743,6 @@ ged_view_feature_batch_line_set_replace(
 				      GED_VIEW_FEATURE_BATCH_FAILED, name, "lineSetReplace",
 				      "missing line payload");
 	return 0;
-    }
-
-    if (!points || !point_count) {
-	(void)ged_obol_feature_batch_remove_feature(scene, name,
-		"lineSetReplace");
-	if (scene->failed)
-	    return 0;
-	scene->changed++;
-	return 1;
     }
 
     BObolFeatureStyle obol_style =
@@ -1260,7 +1292,7 @@ ged_view_feature_batch_hud_line_layers_replace(
 		for (const ged_view_feature_staged_line_layer &staged :
 		    staged_layers) {
 		    struct ged_view_feature_line_layer layer =
-			GED_VIEW_FEATURE_LINE_LAYER_INIT;
+			ged_view_feature_line_layer_default();
 		    layer.name = staged.name.empty() ? NULL : staged.name.c_str();
 		    layer.points = staged.points.empty() ? NULL :
 			reinterpret_cast<const point_t *>(staged.points.data());
@@ -1600,7 +1632,7 @@ ged_view_feature_batch_metadata_replace(
 		metadata_copy.reserve(staged_metadata.size());
 		for (const auto &item : staged_metadata) {
 		    struct ged_view_feature_metadata metadata_item =
-			GED_VIEW_FEATURE_METADATA_INIT;
+			ged_view_feature_metadata_default();
 		    metadata_item.key = item.first.c_str();
 		    metadata_item.value = item.second.c_str();
 		    metadata_copy.push_back(metadata_item);
@@ -1704,7 +1736,7 @@ ged_view_feature_batch_primitive_metadata_replace(
 		metadata_copy.reserve(staged_metadata.size());
 		for (const auto &item : staged_metadata) {
 		    struct ged_view_feature_metadata metadata_item =
-			GED_VIEW_FEATURE_METADATA_INIT;
+			ged_view_feature_metadata_default();
 		    metadata_item.key = item.first.c_str();
 		    metadata_item.value = item.second.c_str();
 		    metadata_copy.push_back(metadata_item);

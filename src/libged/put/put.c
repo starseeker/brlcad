@@ -30,7 +30,7 @@
 #include <string.h>
 
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 int
@@ -98,7 +98,7 @@ ged_put_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     if (wdb_put_internal(wdbp, name, &intern, 1.0) < 0) {
 	bu_vls_printf(gedp->ged_result_str, "wdb_put_internal(%s)", argv[1]);
 	if (event_batch_opened)

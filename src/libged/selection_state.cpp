@@ -34,7 +34,7 @@
 #include "bu/path.h"
 #include "bu/vls.h"
 #include "ged/draw.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 
 #include "./ged_draw_view_private.h"
 #include "./ged_private.h"
@@ -43,8 +43,6 @@
 
 struct ged_native_selection_set {
     std::set<std::string> selected_paths;
-    std::set<std::string> synced_paths;
-    uint64_t synced_scene_revision = 0;
     mutable int index_current = 0;
     mutable std::set<ged_db_index_id> selected_path_hashes;
     mutable std::set<ged_db_index_id> active_path_hashes;
@@ -56,7 +54,11 @@ struct ged_native_selection_set {
 struct ged_selection_state {
     struct ged *gedp;
     uint64_t revision;
+    int batch_depth;
     std::map<std::string, ged_native_selection_set> native_sets;
+    std::set<std::string> dirty_sets;
+    std::set<std::string> presented_paths;
+    uint64_t presented_scene_revision;
 };
 
 struct ged_selection_source_record_info {
@@ -939,29 +941,33 @@ ged_selection_native_hash(const ged_native_selection_set *set)
 
 
 static int
-ged_selection_native_draw_sync(struct ged *gedp,
-			       const ged_native_selection_set *set)
+ged_selection_native_present(struct ged *gedp)
 {
-    if (!gedp || !set)
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    if (!gedp || !state)
 	return 0;
 
-    ged_native_selection_set *mutable_set =
-	const_cast<ged_native_selection_set *>(set);
+    std::set<std::string> effective_paths;
+    for (const auto &entry : state->native_sets)
+	effective_paths.insert(entry.second.selected_paths.begin(),
+	    entry.second.selected_paths.end());
+
     std::vector<std::string> added;
     std::vector<std::string> removed;
-    std::set_difference(set->selected_paths.begin(), set->selected_paths.end(),
-	set->synced_paths.begin(), set->synced_paths.end(),
+    std::set_difference(effective_paths.begin(), effective_paths.end(),
+	state->presented_paths.begin(), state->presented_paths.end(),
 	std::back_inserter(added));
-    std::set_difference(set->synced_paths.begin(), set->synced_paths.end(),
-	set->selected_paths.begin(), set->selected_paths.end(),
+    std::set_difference(state->presented_paths.begin(),
+	state->presented_paths.end(), effective_paths.begin(),
+	effective_paths.end(),
 	std::back_inserter(removed));
 
     const uint64_t scene_revision = ged_draw_scene_revision(gedp);
-    if (scene_revision != set->synced_scene_revision) {
+    if (scene_revision != state->presented_scene_revision) {
 	/* Newly drawn sources must inherit retained semantic selection even when
 	 * the selection itself did not change.  Indexed source routing keeps this
 	 * proportional to selected paths, not total scene size. */
-	for (const std::string &path : set->selected_paths) {
+	for (const std::string &path : effective_paths) {
 	    if (std::find(added.begin(), added.end(), path) == added.end())
 		added.push_back(path);
 	}
@@ -988,28 +994,57 @@ ged_selection_native_draw_sync(struct ged *gedp,
 
     std::vector<const char *> added_paths;
     std::vector<const char *> removed_paths;
-    std::vector<const char *> selected_paths;
+    std::vector<const char *> selected_path_views;
     added_paths.reserve(added.size());
     removed_paths.reserve(removed.size());
-    selected_paths.reserve(set->selected_paths.size());
+    selected_path_views.reserve(effective_paths.size());
     for (const std::string &path : added)
 	added_paths.push_back(path.c_str());
     for (const std::string &path : removed)
 	removed_paths.push_back(path.c_str());
-    for (const std::string &path : set->selected_paths)
-	selected_paths.push_back(path.c_str());
+    for (const std::string &path : effective_paths)
+	selected_path_views.push_back(path.c_str());
     if ((!added_paths.empty() || !removed_paths.empty()) &&
 	ged_scene_backend_selection_private(gedp,
 	    added_paths.empty() ? NULL : added_paths.data(), added_paths.size(),
 	    removed_paths.empty() ? NULL : removed_paths.data(),
 	    removed_paths.size(),
-	    selected_paths.empty() ? NULL : selected_paths.data(),
-	    selected_paths.size()))
+	    selected_path_views.empty() ? NULL : selected_path_views.data(),
+	    selected_path_views.size()))
 	changed = 1;
 
-    mutable_set->synced_paths = set->selected_paths;
-    mutable_set->synced_scene_revision = scene_revision;
+    state->presented_paths = effective_paths;
+    state->presented_scene_revision = scene_revision;
     return changed;
+}
+
+
+static void
+ged_selection_dirty_mark(struct ged *gedp, const char *set_name)
+{
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    if (!state)
+	return;
+
+    const std::string key = ged_selection_set_key(set_name);
+    if (state->batch_depth) {
+	state->dirty_sets.insert(key);
+	return;
+    }
+
+    (void)ged_selection_native_present(gedp);
+}
+
+
+static void
+ged_selection_dirty_flush(struct ged *gedp)
+{
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    if (!state || state->batch_depth || state->dirty_sets.empty())
+	return;
+
+    state->dirty_sets.clear();
+    (void)ged_selection_native_present(gedp);
 }
 
 
@@ -1019,6 +1054,8 @@ ged_selection_state_create(struct ged *gedp)
     struct ged_selection_state *state = new ged_selection_state;
     state->gedp = gedp;
     state->revision = 1;
+    state->batch_depth = 0;
+    state->presented_scene_revision = 0;
     return state;
 }
 
@@ -1036,6 +1073,29 @@ int
 ged_selection_state_available(struct ged *gedp)
 {
     return (gedp && gedp->i && gedp->i->ged_selection_statep) ? 1 : 0;
+}
+
+
+int
+ged_selection_batch_begin(struct ged *gedp)
+{
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    if (!state)
+	return 0;
+    state->batch_depth++;
+    return 1;
+}
+
+
+int
+ged_selection_batch_end(struct ged *gedp)
+{
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    if (!state || state->batch_depth <= 0)
+	return 0;
+    state->batch_depth--;
+    ged_selection_dirty_flush(gedp);
+    return 1;
 }
 
 
@@ -1121,9 +1181,13 @@ ged_selection_clear(struct ged *gedp, const char *set_name)
 	ged_selection_native_set(state, set_name, 1);
     if (!native_set)
 	return 0;
+    const int changed = native_set->selected_paths.empty() ? 0 : 1;
     native_set->selected_paths.clear();
     ged_selection_native_index_invalidate(native_set);
-    ged_selection_revision_bump(gedp);
+    if (changed) {
+	ged_selection_revision_bump(gedp);
+	ged_selection_dirty_mark(gedp, set_name);
+    }
     return 1;
 }
 
@@ -1134,16 +1198,27 @@ ged_selection_clear_matching(struct ged *gedp, const char *set_pattern)
     struct ged_selection_state *state = ged_selection_native_state(gedp);
     std::vector<std::string> keys =
 	ged_selection_native_set_keys(state, set_pattern, 1);
+    const int own_batch = state && !state->batch_depth;
+    if (own_batch)
+	(void)ged_selection_batch_begin(gedp);
+    int changed = 0;
     for (const std::string &key : keys) {
 	ged_native_selection_set *native_set =
 	    ged_selection_native_set(state, key.c_str(), 0);
 	if (native_set) {
+	    const int set_changed = native_set->selected_paths.empty() ? 0 : 1;
 	    native_set->selected_paths.clear();
 	    ged_selection_native_index_invalidate(native_set);
+	    if (set_changed) {
+		changed = 1;
+		ged_selection_dirty_mark(gedp, key.c_str());
+	    }
 	}
     }
-    if (keys.size())
+    if (changed)
 	ged_selection_revision_bump(gedp);
+    if (own_batch)
+	(void)ged_selection_batch_end(gedp);
     return (int)keys.size();
 }
 
@@ -1158,7 +1233,11 @@ ged_selection_path_op(struct ged *gedp,
     struct ged_selection_state *state = ged_selection_native_state(gedp);
     ged_native_selection_set *native_set =
 	ged_selection_native_set(state, set_name, 1);
-    return ged_selection_native_path_op(gedp, native_set, path, select_path);
+    const uint64_t before = state ? state->revision : 0;
+    int ret = ged_selection_native_path_op(gedp, native_set, path, select_path);
+    if (ret && state && state->revision != before)
+	ged_selection_dirty_mark(gedp, set_name);
+    return ret;
 }
 
 
@@ -1177,7 +1256,11 @@ ged_selection_path_matching_op(struct ged *gedp,
 
     ged_native_selection_set *native_set =
 	ged_selection_native_set(state, keys[0].c_str(), 1);
-    return ged_selection_native_path_op(gedp, native_set, path, select_path);
+    const uint64_t before = state ? state->revision : 0;
+    int ret = ged_selection_native_path_op(gedp, native_set, path, select_path);
+    if (ret && state && state->revision != before)
+	ged_selection_dirty_mark(gedp, keys[0].c_str());
+    return ret;
 }
 
 
@@ -1234,8 +1317,13 @@ ged_selection_select_path_ids(struct ged *gedp,
     if (!path || !path_len)
 	return 0;
 
-    return ged_selection_native_path_ids_op(gedp, set_name, path, path_len,
-	1);
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    const uint64_t before = state ? state->revision : 0;
+    int ret = ged_selection_native_path_ids_op(gedp, set_name, path,
+	path_len, 1);
+    if (ret && state && state->revision != before)
+	ged_selection_dirty_mark(gedp, set_name);
+    return ret;
 }
 
 
@@ -1250,8 +1338,13 @@ ged_selection_deselect_path_ids(struct ged *gedp,
     if (!path || !path_len)
 	return 0;
 
-    return ged_selection_native_path_ids_op(gedp, set_name, path, path_len,
-	0);
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    const uint64_t before = state ? state->revision : 0;
+    int ret = ged_selection_native_path_ids_op(gedp, set_name, path,
+	path_len, 0);
+    if (ret && state && state->revision != before)
+	ged_selection_dirty_mark(gedp, set_name);
+    return ret;
 }
 
 
@@ -1289,13 +1382,25 @@ ged_selection_expand_matching(struct ged *gedp, const char *set_pattern)
     struct ged_selection_state *state = ged_selection_native_state(gedp);
     std::vector<std::string> keys =
 	ged_selection_native_set_keys(state, set_pattern, 0);
+    const int own_batch = state && !state->batch_depth;
+    if (own_batch)
+	(void)ged_selection_batch_begin(gedp);
+    int changed = 0;
     for (const std::string &key : keys) {
 	ged_native_selection_set *native_set =
 	    ged_selection_native_set(state, key.c_str(), 0);
+	const std::set<std::string> before = native_set ?
+	    native_set->selected_paths : std::set<std::string>();
 	ged_selection_native_expand(gedp, native_set);
+	if (native_set && native_set->selected_paths != before) {
+	    changed = 1;
+	    ged_selection_dirty_mark(gedp, key.c_str());
+	}
     }
-    if (keys.size())
+    if (changed)
 	ged_selection_revision_bump(gedp);
+    if (own_batch)
+	(void)ged_selection_batch_end(gedp);
     return (int)keys.size();
 }
 
@@ -1306,41 +1411,33 @@ ged_selection_collapse_matching(struct ged *gedp, const char *set_pattern)
     struct ged_selection_state *state = ged_selection_native_state(gedp);
     std::vector<std::string> keys =
 	ged_selection_native_set_keys(state, set_pattern, 0);
+    const int own_batch = state && !state->batch_depth;
+    if (own_batch)
+	(void)ged_selection_batch_begin(gedp);
+    int changed = 0;
     for (const std::string &key : keys) {
 	ged_native_selection_set *native_set =
 	    ged_selection_native_set(state, key.c_str(), 0);
+	const std::set<std::string> before = native_set ?
+	    native_set->selected_paths : std::set<std::string>();
 	ged_selection_native_collapse(gedp, native_set);
+	if (native_set && native_set->selected_paths != before) {
+	    changed = 1;
+	    ged_selection_dirty_mark(gedp, key.c_str());
+	}
     }
-    if (keys.size())
+    if (changed)
 	ged_selection_revision_bump(gedp);
+    if (own_batch)
+	(void)ged_selection_batch_end(gedp);
     return (int)keys.size();
 }
 
 
 int
-ged_selection_draw_sync(struct ged *gedp, const char *set_name)
+ged_selection_present_private(struct ged *gedp)
 {
-    struct ged_selection_state *state = ged_selection_native_state(gedp);
-    ged_native_selection_set *native_set =
-	ged_selection_native_set(state, set_name, 0);
-    return ged_selection_native_draw_sync(gedp, native_set);
-}
-
-
-int
-ged_selection_draw_sync_matching(struct ged *gedp, const char *set_pattern)
-{
-    int changed = 0;
-    struct ged_selection_state *state = ged_selection_native_state(gedp);
-    std::vector<std::string> keys =
-	ged_selection_native_set_keys(state, set_pattern, 0);
-    for (const std::string &key : keys) {
-	ged_native_selection_set *native_set =
-	    ged_selection_native_set(state, key.c_str(), 0);
-	if (ged_selection_native_draw_sync(gedp, native_set))
-	    changed = 1;
-    }
-    return changed;
+    return ged_selection_native_present(gedp);
 }
 
 

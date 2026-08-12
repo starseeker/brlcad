@@ -164,8 +164,8 @@ case_spec()
 	    ;;
 	lucy)
 	    printf '%s|%s|%s|%s|%s\n' \
-		"${BOBOL_LUCY_DB:-$build_dir/lucy.g}" "lucy.bot.r" \
-		"lucy.bot.r" "lucy.bot" "lucy.bot.r/lucy.bot"
+		"${BOBOL_LUCY_DB:-$build_dir/lucy.g}" "all" \
+		"all" "r.stl" "all/r.stl"
 	    ;;
 	bigboy)
 	    printf '%s|%s|||\n' \
@@ -214,7 +214,7 @@ case_spec()
 	hubble)
 	    printf '%s|%s|%s|%s|%s\n' \
 		"/home/cyapp/models/NASA/Hubble/Hubble_Space_Telescope.g" \
-		"all.g" "all.g" "SA4097" "all.g/SA4097"
+		"all.g" "all.g" "c360" "all.g/c360"
 	    ;;
 	*) return 1 ;;
     esac
@@ -584,6 +584,8 @@ ${hierarchy_expand_events}
      "arguments": {"name": "${image_dir}/selection-visible.png"}},
     {"target": ".", "action": "qged_command",
      "arguments": {"command": "erase ${hierarchy_path}"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 50}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/subpath-erased.png"}},
     {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
@@ -650,6 +652,10 @@ EOF
     {"target": ".", "action": "wait", "arguments": {"ms": 3000}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/realization-6s.png"}},
+    {"target": ".", "action": "wait_progressive_scope_ready",
+     "arguments": {"timeout_ms": 30000, "quiet_ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/scope-ready.png"}},
     {"target": ".", "action": "wait_progressive_idle",
      "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
     {"target": "${canvas_target}", "action": "checkpoint",
@@ -830,6 +836,8 @@ validate_report()
     local mode="${8:-shaded}"
 
     if ! jq -e '
+	.schema == "brlcad.qged.gui-report" and
+	.version == 2 and
 	.success == true and
 	(.samples | length) > 0 and
 	(any(.samples[]; (.draw_shape_count // 0) > 0)) and
@@ -864,15 +872,23 @@ validate_report()
 	((.samples[-1].lod_gpu_tracked_buffer_bytes // 0) > 0) and
 	((.samples[-1].lod_gpu_atlas_live_bytes // 0) <=
 	 (.samples[-1].lod_gpu_atlas_allocated_bytes // 0)) and
-	((.samples[-1].lod_gpu_pressure_proxies // 0) == 0) and
 	# A scene whose useful visible working set exceeds the configured GPU
 	# allowance may terminate at a coherent memory-limited cut.  Requiring the
-	# renderer admission-pressure observation to disappear made the 50k/150k
-	# qualification fixtures fail precisely when the coordinator honored that
-	# contract.  Pressure is acceptable only with an explicit terminal proof;
-	# ordinary scenes and every non-ready/pending state still require it clear.
+	# renderer admission-pressure observation or its aggregate point records to
+	# disappear made the 50k/150k qualification fixtures fail precisely when
+	# the coordinator honored that contract.  The exact atlas builder admits
+	# minimum prefixes in visual-importance order; only the least-important
+	# eligible suffix is represented by those points.  Pressure is acceptable
+	# only with an explicit terminal proof; ordinary scenes and every
+	# non-ready/pending state still require both the latch and proxy count clear.
 	((.samples[-1].lod_gpu_memory_pressure == false) or
 	 ((.samples[-1].lod_convergence_memory_limited // false) == true and
+	  (.samples[-1].lod_convergence_view_ready // false) == true and
+	  (.samples[-1].lod_convergence_fraction // 0) >= 1 and
+	  (.samples[-1].progressive_pending == false))) and
+	(((.samples[-1].lod_gpu_pressure_proxies // 0) == 0) or
+	 ((.samples[-1].lod_gpu_memory_pressure // false) == true and
+	  (.samples[-1].lod_convergence_memory_limited // false) == true and
 	  (.samples[-1].lod_convergence_view_ready // false) == true and
 	  (.samples[-1].lod_convergence_fraction // 0) >= 1 and
 	  (.samples[-1].progressive_pending == false))) and
@@ -950,11 +966,10 @@ validate_report()
 
     # Lucy is a single source-backed terminal mesh.  It cannot legitimately
     # converge to an empty compact registry, a box-only presentation, or a
-    # technically filled but block-silhouette cut.  At this fixed viewport,
-    # PoP level 5 is the first state which preserves Lucy's recognizable
-    # outline; level 4 takes roughly 12 ms in OSMesa and its level-5 successor
-    # remains within the 50 ms stable target, so stopping below it is a policy
-    # or premature-compaction failure rather than a valid FPS limit.
+    # technically filled but block-silhouette cut.  Cut ordinals are
+    # producer-defined, so recognizability is validated with certified
+    # projected error and the prominent-object floor rather than a historical
+    # hard-coded ordinal.
     if [[ "$case_name" == "lucy" ]]; then
 	if ! jq -e --arg mode "$mode" '
 	    (first(.samples[] |
@@ -967,10 +982,59 @@ validate_report()
 	    (.samples[-1].lod_service_resident_assets // 0) >= 1 and
 	    (.samples[-1].lod_service_resident_bytes // 0) > 0 and
 	    (if $mode == "shaded" then
-		(($stable.active_progressive_cad_level_min // -1) >= 5)
+		(($stable.lod_prominent_cad_payloads // 0) >= 1) and
+		(($stable.lod_prominent_cad_quality_floor_violations // 0) == 0) and
+		(if ($stable.lod_convergence_performance_limited // false) then
+		    true
+		 else
+		    (($stable.lod_max_cad_normalized_error //
+			9223372036854775807) <=
+			(($stable.lod_target_pixel_error // 1) * 1.251))
+		 end)
 	     else true end)
 	    ' "$report" >>"$validation" 2>&1; then
 	    printf 'Lucy did not converge to a recognizable resident PoP mesh\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    # Hubble combines a few large silhouette-defining assemblies (solar
+    # panels, telescope body, doors) with thousands of much smaller parts.
+    # It is therefore the real-model qualification case for the scene-wide
+    # visual-importance allocator: every quiet reference view must identify a
+    # nonempty prominent set and satisfy its quality floor.  A renderer with
+    # enough calibrated capacity must also keep every visible projected error
+    # within the allocator's 25 percent hysteresis; a correctly reported
+    # performance-limited software cut may spend less on small parts but not
+    # leave the prominent population unrecognizably coarse.
+    # Motion frames may temporarily violate the quiet floor to meet the input
+    # deadline and are checked separately by the interaction contract.
+    if [[ "$case_name" == "hubble" ]]; then
+	if ! jq -e '
+	    [ .samples[] |
+	      select((.checkpoint? // "") |
+		endswith("/ae90-stable.png") or
+		endswith("/zoom-in-stable.png") or
+		endswith("/zoom-out-stable.png") or
+		endswith("/zoom-return-stable.png") or
+		endswith("/rotate-stable.png") or
+		endswith("/final-stable.png")) ] as $stable |
+	    ($stable | length) >= 6 and
+	    all($stable[];
+		(.lod_convergence_view_ready // false) == true and
+		(.lod_prominent_cad_payloads // 0) > 0 and
+		(.lod_prominent_cad_quality_floor_violations // 0) == 0 and
+		(.lod_max_cad_visual_footprint_pixels // 0) > 0 and
+		(if (.lod_convergence_performance_limited // false) then
+		    true
+		 else
+		    (.lod_cad_quality_floor_violations // 0) == 0 and
+		    (.lod_max_cad_normalized_error // 9223372036854775807) <=
+			((.lod_target_pixel_error // 1) * 1.251)
+		 end))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Hubble visual-importance allocator left a prominent quiet-view quality deficit\n' \
 		>>"$validation"
 	    return 1
 	fi
@@ -1039,13 +1103,14 @@ validate_report()
 	    first_useful="$image_dir/realization-6s.png"
 	    first_useful_limit_ms=12000
 	elif [[ "$case_name" == "unique_mesh_50k_stress" ]]; then
-	    # Exact whole-target coverage is published during the intentional
-	    # cold held-drag segment.  Use the first checkpoint after the harness
-	    # restores its reference ae/autoview; the earlier 1.5 s image remains
-	    # the responsiveness/partial-coverage sample and cannot be required to
-	    # have the final camera extent.
-	    first_useful="$image_dir/realization-1s.png"
-	    first_useful_limit_ms=6000
+	    # The reference autoview is intentionally deferred until the exact
+	    # whole-target scope is known; fitting a 10k/50k partial prefix would
+	    # make the camera visibly jump as discovery expands the bounds.  The
+	    # one/three-second images remain responsiveness and partial-coverage
+	    # samples.  Judge representative whole-scene coverage at the explicit
+	    # six-second scope checkpoint, just as for the 150k cold tier.
+	    first_useful="$image_dir/realization-6s.png"
+	    first_useful_limit_ms=12000
 	fi
     fi
     local first_useful_elapsed first_useful_structural_boxes
@@ -1113,34 +1178,42 @@ validate_report()
     fi
 
     # A prefix-ordered traversal can satisfy the raw pixel count while showing
-    # only the first row of a large two-dimensional assembly.  For the 50k
-    # fixture, compare the early model-pixel extent with the same reference
-    # view after convergence.  First-useful means spatially representative
-    # whole-scene coverage, not merely "some geometry exists."
+    # only the first row of a large two-dimensional assembly.  Keep that
+    # responsiveness checkpoint distinct from the authoritative scope
+    # checkpoint, then compare the latter with the same reference view after
+    # convergence.  Scope-ready means spatially representative whole-scene
+    # coverage, not merely "some geometry exists."
     if [[ "$case_name" == "unique_mesh_50k_stress" ||
 	    "$case_name" == "unique_mesh_150k_stress" ]]; then
+	local scope_image="$image_dir/scope-ready.png"
 	local stable_image="$image_dir/ae90-stable.png"
-	local stable_background early_extent stable_extent
+	local scope_background stable_background early_extent stable_extent
 	local early_extent_width early_extent_height
 	local stable_extent_width stable_extent_height
+	scope_background=$(mktemp \
+	    "$artifact_dir/.qged-scope-background.XXXXXX.png")
 	stable_background=$(mktemp \
 	    "$artifact_dir/.qged-stable-background.XXXXXX.png")
 	early_extent=""
 	stable_extent=""
-	if convert "$stable_image" \
+	if convert "$scope_image" \
+		-crop "1x${crop_height}+0+${crop_y}" +repage \
+		-scale "${crop_width}x${crop_height}!" "$scope_background" \
+		2>/dev/null &&
+	    convert "$stable_image" \
 		-crop "1x${crop_height}+0+${crop_y}" +repage \
 		-scale "${crop_width}x${crop_height}!" "$stable_background" \
 		2>/dev/null; then
-	    early_extent=$(convert "$first_useful" \
+	    early_extent=$(convert "$scope_image" \
 		-crop "${crop_width}x${crop_height}+0+${crop_y}" +repage \
-		"$background" -compose difference -composite -threshold 3% \
+		"$scope_background" -compose difference -composite -threshold 3% \
 		-trim -format '%@' info: 2>/dev/null || true)
 	    stable_extent=$(convert "$stable_image" \
 		-crop "${crop_width}x${crop_height}+0+${crop_y}" +repage \
 		"$stable_background" -compose difference -composite \
 		-threshold 3% -trim -format '%@' info: 2>/dev/null || true)
 	fi
-	rm -f "$stable_background"
+	rm -f "$scope_background" "$stable_background"
 	early_extent_width="${early_extent%%x*}"
 	early_extent_height="${early_extent#*x}"
 	early_extent_height="${early_extent_height%%+*}"
@@ -1245,10 +1318,10 @@ validate_report()
 	    ($held.active_progressive_cad_occurrence_hash // "?")) and
 	(($first.active_progressive_cad_faces // -1) ==
 	    ($held.active_progressive_cad_faces // -2)) and
-	(($first.requested_progressive_cad_level_min // -99) ==
-	    ($held.requested_progressive_cad_level_min // -98)) and
-	(($first.requested_progressive_cad_level_max // -99) ==
-	    ($held.requested_progressive_cad_level_max // -98))
+	(($first.requested_progressive_cad_cut_min // -99) ==
+	    ($held.requested_progressive_cad_cut_min // -98)) and
+	(($first.requested_progressive_cad_cut_max // -99) ==
+	    ($held.requested_progressive_cad_cut_max // -98))
 	' "$report" >>"$validation" 2>&1; then
 	printf 'fixed converged view changed retained/camera state during hold\n' \
 	    >>"$validation"
@@ -1293,6 +1366,29 @@ validate_report()
     # where a 5 ms Generic Twin frame was dropped from about 100k faces to the
     # 50k seed merely because the mouse button went down.
     if [[ "$case_name" == "generic_twin" ]]; then
+	# A scalar minimax threshold may straddle a large group of equal discrete
+	# PoP transitions.  Performance-limited is not a valid explanation for
+	# prominent quality debt while most of the calibrated scene allowance is
+	# unused: the marginal allocator must spend that stranded headroom.
+	if ! jq -e '
+	    [ .samples[] |
+	      select((.checkpoint? // "") |
+		endswith("/ae90-stable.png") or
+		endswith("/zoom-in-stable.png") or
+		endswith("/zoom-out-stable.png") or
+		endswith("/zoom-return-stable.png") or
+		endswith("/rotate-stable.png") or
+		endswith("/final-stable.png")) ] as $stable |
+	    ($stable | length) >= 6 and
+	    all($stable[];
+		((.lod_prominent_cad_quality_floor_violations // 0) == 0) or
+		 ((.active_lod_scene_render_cost // 0) >=
+		  ((.lod_scene_render_cost_budget // 0) * 0.8)))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Generic Twin left prominent quality debt with unused scene budget\n' \
+		>>"$validation"
+	    return 1
+	fi
 	if ! jq -e '
 	    (first(.samples[] | select(.action == "wheel"))) as $zoomIn |
 	    (first(.samples[] |
@@ -1524,7 +1620,8 @@ validate_report()
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/rotate-stable.png")))) as $stable |
-	    if (($stable.presented_cad_faces // 0) < 100000)
+	    if (($stable.presented_cad_faces // 0) < 100000 or
+		($stable.active_progressive_cad_payloads // 0) == 0)
 	    then true
 	    else
 		# Pressure may be expressed either by a larger per-object pixel
@@ -1535,9 +1632,16 @@ validate_report()
 		(($motion.presented_cad_faces // 0) > 0) and
 		((($motion.last_render_ms // 9223372036854775807) <=
 		  ($motion.presentation_deadline_current_ms // 0)) or
-		 ((($motion.presented_cad_faces // 0) * 100 <=
-		   ($stable.presented_cad_faces // 0) * 95) and
-		  (($motion.lod_interactive_progressive_ceiling // -1) >= 0))) and
+		 (((($motion.presented_cad_faces // 0) * 100 <=
+		    ($stable.presented_cad_faces // 0) * 95) and
+		   (($motion.lod_interactive_progressive_ceiling // -1) >= 0)) or
+		  # Rotation changes visibility.  A held view can therefore submit
+		  # more total faces than the settled reference while still applying
+		  # a real renderer-only cut.  The ceiling below the retained active
+		  # maximum is the direct witness for that non-destructive coarsening.
+		  ((($motion.lod_interactive_progressive_ceiling // -1) >= 0) and
+		   (($motion.lod_interactive_progressive_ceiling // -1) <
+		    ($motion.active_progressive_cad_cut_max // -1))))) and
 		# A quiet hard-deadline recovery may deliberately retain its proven
 		# renderer-only ceiling.  That is stable convergence, not unfinished
 		# interaction, provided the exact quiet frame met its own deadline and
@@ -1848,27 +1952,27 @@ validate_report()
 	    # zoom-quality deadline.  In that case loading the requested suffix,
 	    # retaining the current exact cut, and declining the known-bad jump is
 	    # the only responsive outcome; it must not be mistaken for stalled LoD.
-	    (((((($active.active_progressive_cad_level_max // -1) ==
-		 ($start.active_progressive_cad_level_max // -2)) and
+	    (((((($active.active_progressive_cad_cut_max // -1) ==
+		 ($start.active_progressive_cad_cut_max // -2)) and
 	        (($active.active_progressive_cad_faces // 0) >=
 		 ($start.active_progressive_cad_faces // 0))) or
 	       # The richer immutable prefix may already be resident while its
 	       # first coherent presentation exceeds the hard deadline.  A counted
 	       # abort is the required proof in that case; retaining the last exact
 	       # completed cut is the responsive result, not failed refinement.
-	       ((($active.active_progressive_cad_level_max // -1) >
-		 ($start.active_progressive_cad_level_max // -1)) and
+	       ((($active.active_progressive_cad_cut_max // -1) >
+		 ($start.active_progressive_cad_cut_max // -1)) and
 	        (($active.presentation_interrupted_frames // 0) >
 		 ($start.presentation_interrupted_frames // 0)))) and
 	      (($active | submitted) >= ($start | submitted)) and
-	      (($active.requested_progressive_cad_level_max // -1) >
-	       ($active.active_progressive_cad_level_max // -1)) and
+	      (($active.requested_progressive_cad_cut_max // -1) >
+	       ($active.active_progressive_cad_cut_max // -1)) and
 	      (($active.lod_interactive_progressive_ceiling // -1) >= 0) and
 	      (($active.last_render_ms // 9223372036854775807) <=
 	       ($active.presentation_deadline_current_ms // 0)))) as
 		$discreteBounded |
-	    (($close.requested_progressive_cad_level_max // -1) >
-		($start.requested_progressive_cad_level_max // -1)) and
+	    (($close.requested_progressive_cad_cut_max // -1) >
+		($start.requested_progressive_cad_cut_max // -1)) and
 	    (if .backend == "system_gl" then
 		# Both checkpoints are inside the bracketed scale stream.  Refinement
 		# may become drawable by the twelfth event and then be backed down by
@@ -1885,27 +1989,27 @@ validate_report()
 		($active.lod_gesture_active == true) and
 		($active.lod_interactive == true) and
 		($active.lod_scale_changing_interaction == true) and
-		(($active.active_progressive_cad_level_max // -1) >
-		    ($start.active_progressive_cad_level_max // -1)) and
+		(($active.active_progressive_cad_cut_max // -1) >
+		    ($start.active_progressive_cad_cut_max // -1)) and
 		(($active.active_progressive_cad_faces // 0) >
 		    ($start.active_progressive_cad_faces // 0)) and
-		((([($during.active_progressive_cad_level_max // -1),
+		((([($during.active_progressive_cad_cut_max // -1),
 		     (if ($during.lod_interactive_progressive_ceiling // -1) >= 0
 		      then $during.lod_interactive_progressive_ceiling
-		      else ($during.active_progressive_cad_level_max // -1) end)] |
-		   min) > ($start.active_progressive_cad_level_max // -1) and
+		      else ($during.active_progressive_cad_cut_max // -1) end)] |
+		   min) > ($start.active_progressive_cad_cut_max // -1) and
 		  (($during | submitted) > ($start | submitted))) or
-		 (([($attempt.active_progressive_cad_level_max // -1),
+		 (([($attempt.active_progressive_cad_cut_max // -1),
 		    (if ($attempt.lod_interactive_progressive_ceiling // -1) >= 0
 		     then $attempt.lod_interactive_progressive_ceiling
-		     else ($attempt.active_progressive_cad_level_max // -1) end)] |
-		   min) > ($start.active_progressive_cad_level_max // -1) and
+		     else ($attempt.active_progressive_cad_cut_max // -1) end)] |
+		   min) > ($start.active_progressive_cad_cut_max // -1) and
 		  (($attempt | submitted) > ($start | submitted))) or
-		 (([($active.active_progressive_cad_level_max // -1),
+		 (([($active.active_progressive_cad_cut_max // -1),
 		    (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
 		     then $active.lod_interactive_progressive_ceiling
-		     else ($active.active_progressive_cad_level_max // -1) end)] |
-		  min) > ($start.active_progressive_cad_level_max // -1) and
+		     else ($active.active_progressive_cad_cut_max // -1) end)] |
+		  min) > ($start.active_progressive_cad_cut_max // -1) and
 		  (($active | submitted) > ($start | submitted)))) and
 		(($active.active_lod_aabb_payloads // 0) == 0) and
 		# A single huge part uses the ordinary retained-VBO tier rather
@@ -1947,8 +2051,8 @@ validate_report()
 		# It may have reached that cut before the last checkpoint; requiring
 		# another increase during the final low-amplitude events would turn
 		# successful early refinement into a false failure.
-		((($active.active_progressive_cad_level_max // -1) >
-		   ($start.active_progressive_cad_level_max // -1) and
+		((($active.active_progressive_cad_cut_max // -1) >
+		   ($start.active_progressive_cad_cut_max // -1) and
 		  ($active.active_progressive_cad_faces // 0) >
 		   ($start.active_progressive_cad_faces // 0)) or
 		 $discreteBounded) and
@@ -1959,18 +2063,18 @@ validate_report()
 		# The occurrence may remain richer than the render-only ceiling.  Its
 		# actual submitted level is their minimum and must still improve on the
 		# pre-zoom image.
-		((([($during.active_progressive_cad_level_max // -1),
+		((([($during.active_progressive_cad_cut_max // -1),
 		     (if ($during.lod_interactive_progressive_ceiling // -1) >= 0
 		      then $during.lod_interactive_progressive_ceiling
-		      else ($during.active_progressive_cad_level_max // -1) end)] |
-		    min) > ($start.active_progressive_cad_level_max // -1) and
+		      else ($during.active_progressive_cad_cut_max // -1) end)] |
+		    min) > ($start.active_progressive_cad_cut_max // -1) and
 		   (($during.active_progressive_cad_faces // 0) >
 		    ($start.active_progressive_cad_faces // 0))) or
-		  (([($active.active_progressive_cad_level_max // -1),
+		  (([($active.active_progressive_cad_cut_max // -1),
 		     (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
 		      then $active.lod_interactive_progressive_ceiling
-		      else ($active.active_progressive_cad_level_max // -1) end)] |
-		    min) > ($start.active_progressive_cad_level_max // -1)) or
+		      else ($active.active_progressive_cad_cut_max // -1) end)] |
+		    min) > ($start.active_progressive_cad_cut_max // -1)) or
 		  $discreteBounded) and
 		(($active.active_lod_aabb_payloads // 0) == 0)
 	     end) and
@@ -1983,12 +2087,12 @@ validate_report()
 	    (if (($active.last_render_ms // 9223372036854775807) <=
 		    (1000.0 / ($close.lod_stable_target_fps // 20.0)))
 	     then
-		(($close.active_progressive_cad_level_max // -1) >=
-		 ([($active.active_progressive_cad_level_max // -1),
+		(($close.active_progressive_cad_cut_max // -1) >=
+		 ([($active.active_progressive_cad_cut_max // -1),
 		   (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
 		    then $active.lod_interactive_progressive_ceiling
-		    else ($active.active_progressive_cad_level_max // -1) end),
-		   ($close.requested_progressive_cad_level_max // -1)] | min))
+		    else ($active.active_progressive_cad_cut_max // -1) end),
+		   ($close.requested_progressive_cad_cut_max // -1)] | min))
 	     else true end) and
 	    # Stable memory maintenance may reclaim the zoom-prefetched suffix at
 	    # the close-view pause itself or at the later zoom-out pause.  Require
@@ -2000,16 +2104,16 @@ validate_report()
 	    ((($out.lod_service_resident_bytes // 0) <
 		([($active.lod_service_resident_bytes // 0),
 		  ($close.lod_service_resident_bytes // 0)] | max)) or
-	     ((($out.active_progressive_cad_level_max // -1) >=
-	       ($active.active_progressive_cad_level_max // -1)) and
+	     ((($out.active_progressive_cad_cut_max // -1) >=
+	       ($active.active_progressive_cad_cut_max // -1)) and
 	      (($out.lod_service_resident_bytes // 0) <=
 	       ([($active.lod_service_resident_bytes // 0),
 		  ($close.lod_service_resident_bytes // 0)] | max)))) and
 	    ((($returned.lod_service_resident_bytes // 0) <
 		([($active.lod_service_resident_bytes // 0),
 		  ($close.lod_service_resident_bytes // 0)] | max)) or
-	     ((($returned.active_progressive_cad_level_max // -1) >=
-	       ($active.active_progressive_cad_level_max // -1)) and
+	     ((($returned.active_progressive_cad_cut_max // -1) >=
+	       ($active.active_progressive_cad_cut_max // -1)) and
 	      (($returned.lod_service_resident_bytes // 0) <=
 	       ([($active.lod_service_resident_bytes // 0),
 		  ($close.lod_service_resident_bytes // 0)] | max)))) and

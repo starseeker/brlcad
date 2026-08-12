@@ -32,7 +32,7 @@
 
 #include "bg/chull.h"
 #include "rt/geom.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "wdb.h"
 #include "../ged_private.h"
 
@@ -80,7 +80,7 @@ ged_heal_core(struct ged *gedp, int argc, const char *argv[])
 
     analyze_heal_bot(bot, zipper_tol);
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     if (rt_db_put_internal(bot_dp, gedp->dbip, &intern) < 0) {
 	if (event_batch_opened)
 	    ged_event_batch_end(gedp, NULL);

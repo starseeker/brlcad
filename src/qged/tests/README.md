@@ -46,16 +46,27 @@ ninja -C .build qged_unique_mesh_stress_generator
 The default fixture has 5,000 independently stored, independently perturbed
 BoTs spanning approximately 500 to 100,000 faces, with an aggregate near 42
 million source faces.  Exactly 95 percent are closed, consistently oriented,
-shared-index manifold ellipsoids.  The remaining five percent is divided
-equally between open heightfield surfaces and deliberately non-manifold closed
-meshes; leaf names identify all three classes.  This ratio makes normal
-vehicle-part behavior the primary correctness and performance signal while
-retaining adverse-input coverage.  Physical extent varies independently of
-triangle count and spans hull-scale skins through structural pieces,
-subsystems, ordinary components, and bolt-scale leaves.  The leaves occupy a
-three-dimensional elongated envelope with varied orientations.  Sixteen-leaf
-groups mix colored regions and ordinary combinations, and balanced eight-way
-parent levels provide a deep hierarchy.
+shared-index manifold meshes.  The remaining five percent is divided equally
+between open surfaces and deliberately non-manifold closed meshes; leaf names
+identify all three topology classes.  This ratio makes normal vehicle-part
+behavior the primary correctness and performance signal while retaining
+adverse-input coverage.
+
+The deterministic shape profile is modeled after the visual distribution of
+the Hubble qualification model rather than a uniform mesh array.  It combines
+rounded main bodies, cylinders, long thin booms, box-like equipment, very thin
+panels, open dishes, and irregular housings.  Physical extent varies
+independently of triangle count across more than two orders of magnitude,
+from hull-scale skins through structural pieces, subsystems, ordinary
+components, and bolt-scale leaves.  Consecutive hierarchy branches form
+recognizable bus, paired panel-wing, truss/boom, and instrument-cluster macro
+assemblies.  This deliberately correlates hierarchy locality with different
+visual significance: a prefix-biased realization or LoD allocator can no
+longer appear representative merely because every branch contains the same
+uniform sample.  Sixteen-leaf groups mix colored regions and ordinary
+combinations, and balanced eight-way parent levels provide a deep hierarchy.
+The generator rejects a 1,000-or-larger fixture if any shape family, the thin
+aspect-ratio tail, or the required physical-size range is absent.
 It therefore stresses source import, PoP construction, cache fan-out, result
 publication, upload, hierarchy expansion, region/color handling, and memory
 pressure rather than shared-asset instancing.  `--profile stress` includes it
@@ -111,7 +122,7 @@ requiring the background state machine to terminate.
 The smoke profile likewise gives terminal quiescence 30 seconds while keeping
 its first-useful framebuffer gate and terminal non-box PoP-payload assertion
 separate.  Lucy contains roughly 28 million source faces: on a genuinely empty
-cache the final PoP cache write, bounded level walking, calibration cooldown,
+cache the final PoP cache write, bounded cut progression, calibration cooldown,
 and resident compaction may finish after 15 seconds without implying that the
 user waited that long for a useful visual.
 
@@ -140,16 +151,16 @@ The inspected model area excludes the border, bottom HUD, and right-side
 convergence indicator; those widgets must never be counted as geometry.
 Lucy's terminal check is stricter still: it requires a resident PoP asset,
 nonzero progressive faces, an entry-backed CAD payload, filled model pixels,
-and at least PoP level 5 in the fixed shaded `ae 90 0` view.  Level 4 is still
-a block silhouette and its level-5 successor fits OSMesa's stable frame target;
-accepting any nonzero mesh allowed premature compaction to masquerade as a
-successful terminal view.  A correctly framed box followed by an empty,
-permanently skipped, or unrecognizably coarse mesh is a failure in both cold
-and warm runs.
+and a satisfied prominent-object projected-error floor in the fixed shaded
+`ae 90 0` view.  Cut ordinals are producer-defined and deliberately have no
+quality meaning; accepting either an arbitrary minimum ordinal or merely a
+nonzero mesh allowed premature compaction to masquerade as a successful
+terminal view.  A correctly framed box followed by an empty, permanently
+skipped, or unrecognizably coarse mesh is a failure in both cold and warm runs.
 Its smooth-zoom probe keeps a gesture active while low-amplitude wheel events
 arrive faster than the quiet debounce.  Before release, both backends must
-load the missing pixel-demanded suffix and submit an effective PoP level
-richer than the pre-zoom stable image.  That proof may occur at the fixed
+load the missing pixel-demanded suffix and submit a richer effective PoP cut
+than the pre-zoom stable image.  That proof may occur at the fixed
 in-gesture checkpoint or the later low-amplitude checkpoint: OSMesa may use the
 render-only ceiling to back down a subsequently measured discrete quality
 probe at 100 ms, but the retained occurrence must not restart at its minimum
@@ -212,9 +223,10 @@ make GLSL the software default until representative Generic Twin, Lucy, and
 distinct-mesh stress runs meet or beat the fixed path without changing
 framebuffer correctness.
 
-The `report.json` beside each image set records render duration, presentation
+The version-2 `report.json` beside each image set records render duration,
+presentation
 cadence/FPS, pending progressive work, LoD view/policy revisions, submitted and
-applied work, active PoP cut levels and face/point counts, cache-service
+applied work, active PoP cuts and face/point counts, cache-service
 activity, realization failures, and diagnostics after every replay event.
 Command text and checkpoint paths are recorded with their samples so
 draw/erase phases can be compared without relying on brittle event indexes.

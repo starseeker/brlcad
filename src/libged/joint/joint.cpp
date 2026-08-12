@@ -325,7 +325,7 @@ joint_mesh(struct ged *gedp, int argc, const char *argv[])
     }
 
     {
-	struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+	struct ged_view_feature_style style = ged_view_feature_style_default();
 	style.color_valid = 1;
 	VSET(style.color, 0, 255, 255);
 	(void)_ged_view_feature_batch_publish_line_set(gedp, "joint",

@@ -463,6 +463,7 @@ struct bv_context {
     int owns_view;
     struct bv_context_set *view_set;
     struct bu_ptbl callbacks;
+    struct bu_ptbl owner_data;
 };
 
 struct bv_context_set {
@@ -641,6 +642,17 @@ BV_EXPORT extern int bv_context_name_set(struct bv_context *ctx, const char *nam
 BV_EXPORT extern const char *bv_context_name_get(const struct bv_context *ctx);
 BV_EXPORT extern int bv_context_user_data_set(struct bv_context *ctx, void *user_data);
 BV_EXPORT extern void *bv_context_user_data_get(const struct bv_context *ctx);
+/**
+ * Bind private state owned by a higher-level context implementation.
+ *
+ * Owner data is separate from application user data.  Each identity key has
+ * one borrowed value, allowing independent higher-level libraries to attach
+ * state without a global reverse registry.  Passing NULL removes that key's
+ * value.  Keys are compared by identity and are never dereferenced.
+ */
+BV_EXPORT extern int bv_context_owner_data_set(struct bv_context *ctx, const void *owner_key, void *data);
+/** Return the borrowed value for @p owner_key, or NULL when it is unbound. */
+BV_EXPORT extern void *bv_context_owner_data_get(const struct bv_context *ctx, const void *owner_key);
 BV_EXPORT extern int bv_context_dimensions_set(struct bv_context *ctx, int width, int height);
 BV_EXPORT extern int bv_context_width_get(const struct bv_context *ctx);
 BV_EXPORT extern int bv_context_height_get(const struct bv_context *ctx);

@@ -22,6 +22,7 @@
 #include "vmath.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 __BEGIN_DECLS
 
@@ -29,15 +30,17 @@ struct db_i;
 struct BObolMeshLod;
 struct rt_bot_internal;
 
-#define BOBOL_MESH_LOD_LEVEL_COUNT 16
+#define BOBOL_MESH_LOD_QUANTIZATION_BITS 16
+#define BOBOL_MESH_LOD_CUT_COUNT_MAX \
+    (1 + 3 * (BOBOL_MESH_LOD_QUANTIZATION_BITS - 1))
 
 /* Display-provider contract version.  Bump this whenever the meaning or
  * completeness of a selected PoP cut changes. */
-#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-pop-cache-v9"
+#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-pop-cuts-v10"
 
 /* Borrowed active LoD arrays; valid until the LoD is reloaded or destroyed. */
 struct BObolMeshLodData {
-    const int *faces;
+    const uint32_t *faces;
     size_t face_count;
     const point_t *points;
     size_t point_count;
@@ -49,35 +52,16 @@ struct BObolMeshLodData {
     point_t bmax;
 };
 
-/* Full-detail mesh arrays supplied by producer callbacks.  The callback owns
- * the array lifetimes; libBObol borrows them until the matching clear/free
- * callback. */
-struct BObolMeshLodDetail {
-    const int *faces;
-    size_t face_count;
-    const point_t *points;
-    size_t point_count;
-    const point_t *points_orig;
-    size_t point_orig_count;
-    const vect_t *normals;
-    size_t normal_count;
-};
-
-typedef int (*BObolMeshLodDetailSetupCallback)(
-	struct BObolMeshLodDetail *detail, void *cb_data);
-typedef int (*BObolMeshLodDetailClearCallback)(void *cb_data);
-typedef int (*BObolMeshLodDetailFreeCallback)(void *cb_data);
-
-/* One borrowed activation-level suffix from an immutable PoP cache snapshot.
- * Points and faces contain only the records introduced at level; face indices
+/* One borrowed activation-cut suffix from an immutable PoP cache snapshot.
+ * Points and faces contain only the records introduced at cut; face indices
  * address the cumulative activation-ordered point array.  normals is either
  * NULL or contains three corner normals per face.  All pointers are valid only
  * for the duration of the callback. */
 typedef int (*BObolMeshLodSuffixCallback)(
-	int level,
+	int cut,
 	const point_t *points,
 	size_t point_count,
-	const int *faces,
+	const uint32_t *faces,
 	size_t face_count,
 	const vect_t *normals,
 	size_t normal_count,
@@ -85,7 +69,7 @@ typedef int (*BObolMeshLodSuffixCallback)(
 
 /* Stable summary of the active mesh LoD state. */
 struct BObolMeshLodInfo {
-    int active_level;
+    int active_cut;
     size_t face_count;
     size_t point_count;
     size_t point_orig_count;
@@ -100,13 +84,24 @@ struct BObolMeshLodInfo {
     point_t bmax;
 };
 
+/* Immutable facts for one independently drawable cumulative prefix. */
+struct BObolMeshLodCutInfo {
+    uint64_t face_count;
+    uint64_t point_count;
+    uint64_t resident_bytes;
+    double object_error;
+    uint8_t quantization_bits[3];
+    uint8_t exact;
+};
+
 /* Immutable hierarchy metadata plus the currently resident cumulative cut.
  * Counts are cumulative: face_count[n] and point_count[n] describe the prefix
- * that may be drawn at display level n. */
+ * that may be drawn at cut n. */
 struct BObolMeshLodHierarchyInfo {
-    int min_level;
-    int max_level;
-    int resident_level;
+    int min_cut;
+    int max_cut;
+    int resident_cut;
+    uint32_t cut_count;
     /* Immutable representation facts needed before any prefix is loaded.
      * Resident-memory admission must not infer these from whichever arrays
      * happened to be active on an opened cache handle. */
@@ -118,8 +113,7 @@ struct BObolMeshLodHierarchyInfo {
      * zero-extent axis is left unsnapped. */
     point_t quantization_min;
     point_t quantization_max;
-    size_t face_count[BOBOL_MESH_LOD_LEVEL_COUNT];
-    size_t point_count[BOBOL_MESH_LOD_LEVEL_COUNT];
+    struct BObolMeshLodCutInfo cuts[BOBOL_MESH_LOD_CUT_COUNT_MAX];
 };
 
 /* Stable status for a database object's mesh LoD cache entry. */
@@ -136,7 +130,7 @@ struct BObolMeshLodCacheStatus {
 };
 
 #define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
-#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, VINIT_ZERO, VINIT_ZERO, {0}, {0} }
+#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, {{0, 0, 0, 0.0, {0, 0, 0}, 0}} }
 #define BOBOL_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 BOBOL_EXPORT void
@@ -249,46 +243,37 @@ bobol_mesh_lod_get_cached_prefix(struct db_i *dbip,
 BOBOL_EXPORT unsigned long long
 bobol_mesh_lod_cache_key_get(const struct BObolMeshLod *lod);
 
+/* Materialize exactly one producer-defined cumulative cut.  The requested
+ * cut must lie in [min_cut, max_cut]; callers select it from hierarchy
+ * metadata rather than relying on ordinal clamping. */
 BOBOL_EXPORT int
-bobol_mesh_lod_load_level(struct BObolMeshLod *lod,
-			    int level,
+bobol_mesh_lod_load_cut(struct BObolMeshLod *lod,
+			  int cut,
 			    int reset);
 
-/* Load a cumulative PoP display cut.  This is the API for interactive drawing;
- * bobol_mesh_lod_load_level is reserved for explicit/exact requests which may
- * intentionally materialize the separate source mesh. */
+/* Append/trim exactly one resident cumulative prefix without materializing the
+ * cut-snapped CPU point array.  Retained renderers consume points_orig and
+ * select a draw prefix independently for each occurrence.  The same strict
+ * [min_cut, max_cut] input contract applies. */
 BOBOL_EXPORT int
-bobol_mesh_lod_load_display_level(struct BObolMeshLod *lod,
-				    int level,
-				    int reset);
-
-/* Append/trim a resident cumulative prefix without materializing the
- * level-snapped CPU point array.  Retained renderers consume points_orig and
- * select a draw prefix independently for each occurrence. */
-BOBOL_EXPORT int
-bobol_mesh_lod_load_resident_level(struct BObolMeshLod *lod,
-				     int level,
+bobol_mesh_lod_load_resident_cut(struct BObolMeshLod *lod,
+				   int cut,
 				     int reset);
 
-/* Read only the activation records in (resident_level, target_level] from one
- * cache transaction.  Unlike bobol_mesh_lod_load_resident_level(), this does
+/* Read only the activation records in (resident_cut, target_cut] from one
+ * cache transaction.  Unlike bobol_mesh_lod_load_resident_cut(), this does
  * not materialize or retain a duplicate cumulative prefix in lod and does not
- * change its active level.  It is the immutable-renderer append path after a
+ * change its active cut.  It is the immutable-renderer append path after a
  * stable memory compaction has released the cache reader's working arrays. */
 BOBOL_EXPORT int
 bobol_mesh_lod_read_resident_suffix(struct BObolMeshLod *lod,
-	int resident_level,
-	int target_level,
+	int resident_cut,
+	int target_cut,
 	BObolMeshLodSuffixCallback callback,
 	void *cb_data);
 
 BOBOL_EXPORT int
-bobol_mesh_lod_load_view(struct BObolMeshLod *lod,
-			   const struct bv_view_info *info,
-			   int reset);
-
-BOBOL_EXPORT int
-bobol_mesh_lod_current_level(const struct BObolMeshLod *lod);
+bobol_mesh_lod_current_cut(const struct BObolMeshLod *lod);
 
 BOBOL_EXPORT int
 bobol_mesh_lod_has_active_data(const struct BObolMeshLod *lod);
@@ -313,19 +298,15 @@ bobol_mesh_lod_hierarchy_info_get(
 	const struct BObolMeshLod *lod,
 	struct BObolMeshLodHierarchyInfo *info);
 
-BOBOL_EXPORT void
-bobol_mesh_lod_detail_init(struct BObolMeshLodDetail *detail);
-
+/* Select the coarsest cut whose conservative object-space quantization error
+ * projects to no more than target_pixel_error.  projected_pixel_diameter is
+ * the occurrence's full projected bound; selection is therefore invariant to
+ * the number and ordinal spacing of producer-defined cuts. */
 BOBOL_EXPORT int
-bobol_mesh_lod_detail_callbacks_set(
-	struct BObolMeshLod *lod,
-	BObolMeshLodDetailSetupCallback setup_clbk,
-	BObolMeshLodDetailClearCallback clear_clbk,
-	BObolMeshLodDetailFreeCallback free_clbk,
-	void *cb_data);
-
-BOBOL_EXPORT void
-bobol_mesh_lod_detail_callbacks_clear(struct BObolMeshLod *lod);
+bobol_mesh_lod_select_cut(
+	const struct BObolMeshLodHierarchyInfo *hierarchy,
+	double projected_pixel_diameter,
+	double target_pixel_error);
 
 BOBOL_EXPORT void
 bobol_mesh_lod_memshrink(struct BObolMeshLod *lod);

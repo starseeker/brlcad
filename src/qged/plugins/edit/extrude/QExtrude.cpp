@@ -180,7 +180,7 @@ QExtrude::update_obj_wireframe()
     if (!gedp)
 	return;
 
-    p = qged_edit_feature_overlay_ensure(m_ctx, "_extrude_edit", this,
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_extrude_edit",
 	    bu_vls_cstr(&oname));
     if (qged_edit_feature_ref_is_null(p))
 	return;

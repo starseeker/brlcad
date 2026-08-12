@@ -32,7 +32,7 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "rt/db_attr.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "wdb.h"
 
 #include "tire_private.h"
@@ -74,7 +74,7 @@ void
 CsgTransaction::commit()
 {
     if (!dry_run_ && gedp_ && (!created_.empty() || !attributed_.empty())) {
-	int event_depth = ged_event_batch_begin(gedp_);
+	int event_depth = ged_event_batch_begin(gedp_) == GED_EVENT_OK;
 	if (!created_.empty())
 	    (void)ged_event_notify_object_added(gedp_, created_.back().c_str(), NULL);
 	for (const std::string &name : attributed_)

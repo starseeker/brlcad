@@ -68,6 +68,21 @@ if(TARGET ged_test_plugins)
   add_dependencies(ged_test_plugins ged_plugins)
 endif(TARGET ged_test_plugins)
 
+# A real dynamic-only command verifies the installed Obol plugin extension,
+# custom-node publication, input ownership, and teardown contract together.
+brlcad_addexec(ged_test_navigation_gizmo_plugin
+  test_navigation_gizmo_plugin.cpp "libged;libBObol;libbv;libbu" TEST ALL_CXX)
+if(TARGET ged_test_navigation_gizmo_plugin)
+  add_dependencies(ged_test_navigation_gizmo_plugin ged_plugins ged-navgizmo)
+endif()
+brlcad_add_test(NAME ged_test_navigation_gizmo_plugin
+  COMMAND ged_test_navigation_gizmo_plugin
+    "${CMAKE_CURRENT_SOURCE_DIR}/draw")
+if(TARGET ged_test_navigation_gizmo_plugin)
+  set_property(TEST ged_test_navigation_gizmo_plugin APPEND PROPERTY
+    ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+endif()
+
 brlcad_addexec(ged_test_cmd_schemas test_cmd_schemas.cpp libged TEST)
 if(TARGET ged_test_cmd_schemas)
   add_dependencies(ged_test_cmd_schemas ged_plugins)
@@ -92,9 +107,11 @@ if(TARGET ged_test_select)
   add_dependencies(ged_test_select ged_plugins)
 endif(TARGET ged_test_select)
 
-# Public GED state-service coverage.  This deliberately avoids removed
-# migration-internal APIs.
-brlcad_addexec(ged_test_state_services test_state_services.cpp "libged;libBObol" TEST)
+# Public GED state-service coverage plus one white-box recording-backend
+# contract.  The backend installer is the sole audited private adapter hook;
+# reducer apply/snapshot/selection helpers remain hidden from the shared ABI.
+brlcad_addexec(ged_test_state_services test_state_services.cpp
+  "libged;libBObol" TEST)
 if(TARGET ged_test_state_services)
   add_dependencies(ged_test_state_services ged_plugins)
 endif(TARGET ged_test_state_services)
@@ -152,6 +169,7 @@ cmakefiles(
   obb_tests.g
   ged_tests.g
   test_cmd_schemas.cpp
+  test_navigation_gizmo_plugin.cpp
   pnts_in_out.g
 )
 

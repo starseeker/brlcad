@@ -103,14 +103,12 @@ qged_edit_preview_publish_event(const QgPluginContext *ctx,
 struct qged_edit_feature_ref
 qged_edit_feature_overlay_ensure(const QgPluginContext *ctx,
 				 const char *name,
-				 const void *owner,
 				 const char *source_path);
 
 
 struct qged_edit_feature_ref
 qged_edit_feature_label_ensure(const QgPluginContext *ctx,
-			       const char *name,
-			       const void *owner);
+			       const char *name);
 
 
 int

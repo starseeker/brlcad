@@ -27,7 +27,7 @@
 
 #include "common.h"
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "qtcad/defines.h"
 
 struct ged;
@@ -45,7 +45,7 @@ public:
 
     bool started() const;
 
-    int end(struct ged_event_txn_result *result = nullptr);
+    enum ged_event_status end(struct ged_event_result *result = nullptr);
 
 private:
     struct ged *m_gedp = nullptr;

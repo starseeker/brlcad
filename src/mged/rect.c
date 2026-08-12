@@ -44,7 +44,7 @@ mged_rect_hud_lines_replace(struct ged_view_context *view_ctx,
 	const char *name, const point_t *points, const int *commands,
 	size_t point_count, const struct ged_view_feature_style *style)
 {
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "mged-rubber-band";
     desc.owner_role = "faceplate";
     desc.local = 1;
@@ -241,7 +241,7 @@ mged_rubber_band_state_sync(struct mged_state *s)
 	GED_DRAW_VIEW_LINE_MOVE, GED_DRAW_VIEW_LINE_DRAW
     };
     struct ged_view_feature_style style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     style.visible = 1;
     style.selectable = 0;
     style.color_valid = 1;

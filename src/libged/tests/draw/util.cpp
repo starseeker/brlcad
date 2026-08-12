@@ -57,7 +57,7 @@
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/display.h>
-#include <ged/event_txn.h>
+#include <ged/event.h>
 
 static BObolViewController *
 draw_test_endpoint_controller(struct ged_view_context *view_ctx)
@@ -575,7 +575,6 @@ draw_test_obol_screengrab_impl(struct ged *gedp, struct ged_view_context *view_c
 	return -1;
     (void)ged_view_faceplate_sync(gedp, v);
     (void)controller->realizePending();
-    (void)ged_selection_draw_sync(gedp, NULL);
     draw_test_obol_debug_dump(gedp, id, controller, v);
 
     const SbViewportRegion &region = controller->getViewportRegion();

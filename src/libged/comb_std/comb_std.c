@@ -32,7 +32,7 @@
 #include "vmath.h"
 #include "rt/geom.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 struct tokens {
@@ -519,7 +519,7 @@ ged_comb_std_core(struct ged *gedp, int argc, const char *argv[])
 	} else
 	    comb->region_flag = 0;
 
-	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
 	    bu_vls_printf(gedp->ged_result_str, "Database write failure.");
 	    if (event_batch_opened)
@@ -661,7 +661,7 @@ ged_comb_std_core(struct ged *gedp, int argc, const char *argv[])
 	intern.idb_meth = &OBJ[ID_COMBINATION];
 	intern.idb_ptr = (void *)comb;
 
-	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	dp = db_diradd(gedp->dbip, comb_name, RT_DIR_PHONY_ADDR, 0,
 		flags, (void *)&intern.idb_type);
 	if (dp == RT_DIR_NULL) {

@@ -25,6 +25,7 @@ set(_headers
   include/ged/selection_types.h
   include/ged/view_feature_batch.h
   include/ged/display.h
+  include/ged/event.h
 )
 
 set(_actual)
@@ -52,14 +53,60 @@ foreach(_header IN LISTS _headers)
       "GED draw API contract: ${_header} exposes a concrete BObol renderer type: ${_concrete_renderer_type}")
   endif()
   string(REGEX MATCH
+    "#[ \t]*include[ \t]*[<\"][^>\"]*(private|_private)\\.h[>\"]"
+    _private_header_include "${_contents}")
+  if(_private_header_include)
+    message(FATAL_ERROR
+      "GED draw API contract: ${_header} includes a private implementation header")
+  endif()
+  string(REGEX MATCH "(Obol|Coin3D|OpenGL|OSMesa)"
+    _renderer_vocabulary "${_contents}")
+  if(_renderer_vocabulary)
+    message(FATAL_ERROR
+      "GED draw API contract: ${_header} references renderer vocabulary: ${_renderer_vocabulary}")
+  endif()
+  foreach(_obsolete_init
+      GED_VIEW_FEATURE_STYLE_INIT
+      GED_VIEW_FEATURE_SUMMARY_INIT
+      GED_VIEW_FEATURE_BATCH_DESC_INIT
+      GED_VIEW_FEATURE_BATCH_EVENT_INIT
+      GED_VIEW_FEATURE_LINE_LAYER_INIT
+      GED_VIEW_FEATURE_METADATA_INIT
+      GED_VIEW_EDIT_TRANSACTION_INIT
+      GED_PICK_DETAIL_INIT)
+    string(REGEX MATCH "#[ \t]*define[ \t]+${_obsolete_init}([ \t]|$)"
+      _obsolete_init_match "${_contents}")
+    if(_obsolete_init_match)
+      message(FATAL_ERROR
+        "GED draw API contract: obsolete initializer alias ${_obsolete_init}; use its typed init/default function")
+    endif()
+  endforeach()
+  string(REGEX MATCH
     "(const[ \t\r\n]+)?void[ \t\r\n]*\\*[ \t\r\n]*(view|view_ctx)[ \t\r\n]*[,)]"
     _untyped_view_parameter "${_contents}")
   if(_untyped_view_parameter)
     message(FATAL_ERROR
       "GED draw API contract: ${_header} exposes an untyped view parameter: ${_untyped_view_parameter}")
   endif()
-  string(REGEX MATCHALL "GED_EXPORT[^;]*;" _declarations "${_contents}")
+  string(REGEX MATCHALL
+    "(^|\n)[ \t]*GED_EXPORT[ \t\r\n]+(extern[ \t\r\n]+)?[^;]*;"
+    _declarations "${_contents}")
   foreach(_declaration IN LISTS _declarations)
+    string(REGEX MATCH "ged_[A-Za-z0-9_]+" _declaration_name
+      "${_declaration}")
+    if(NOT _declaration_name)
+      continue()
+    endif()
+    string(FIND "${_contents}" "${_declaration}" _declaration_offset)
+    string(SUBSTRING "${_contents}" 0 ${_declaration_offset}
+      _declaration_prefix)
+    string(REGEX MATCH
+      "/\\*\\*([^*]|\\*+[^*/])*\\*+/[ \t\r\n]*$"
+      _declaration_documentation "${_declaration_prefix}")
+    if(NOT _declaration_documentation)
+      message(FATAL_ERROR
+        "GED draw API contract: ${_header} declaration ${_declaration_name} has no immediately preceding Doxygen documentation")
+    endif()
     string(REGEX MATCH "ged_[A-Za-z0-9_]+[ \t\r\n]*\\(" _name "${_declaration}")
     if(_name)
       string(REGEX REPLACE "[ \t\r\n]*\\($" "" _name "${_name}")
@@ -74,7 +121,8 @@ foreach(_obsolete_prefix
     "^ged_draw_view_context_"
     "^ged_draw_feature_batch_"
     "^ged_draw_obol_database_source_"
-    "^ged_draw_obol_(controller|scene_controller)")
+    "^ged_draw_obol_(controller|scene_controller)"
+    "^ged_view_context_(tclcad|user_data)_")
   foreach(_name IN LISTS _actual)
     if(_name MATCHES "${_obsolete_prefix}")
       message(FATAL_ERROR

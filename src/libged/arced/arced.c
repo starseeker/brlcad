@@ -28,7 +28,7 @@
 #include <string.h>
 
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 int
@@ -120,7 +120,7 @@ ged_arced_core(struct ged *gedp, int argc, const char *argv[])
 	tp->tr_l.tl_mat = (matp_t)NULL;
     }
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
 	bu_vls_printf(gedp->ged_result_str, "Database write error, aborting");

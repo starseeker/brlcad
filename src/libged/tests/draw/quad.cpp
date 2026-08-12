@@ -36,7 +36,7 @@
 #include "view_test_util.h"
 #include <ged.h>
 #include <ged/draw.h>
-#include <ged/event_txn.h>
+#include <ged/event.h>
 
 /* Historical controls came from four legacy display managers and encode
  * their primitive wire tessellation.  The retained renderer is checked
@@ -317,7 +317,7 @@ vline(struct ged *gedp, int l_id, int x0, int y0, int z0, int x1, int y1, int z1
 	bu_exit(EXIT_FAILURE, "failed to append shared line %s: %s\n", bu_vls_cstr(&lname), bu_vls_cstr(gedp->ged_result_str));
 
     struct ged_view_feature_summary geom_summary =
-	GED_VIEW_FEATURE_SUMMARY_INIT;
+	ged_view_feature_summary_default();
     if (!ged_view_feature_get_summary(ged_view_active_ctx(gedp),
 	    bu_vls_cstr(&lname), &geom_summary) ||
 	    !geom_summary.exists)
@@ -330,7 +330,7 @@ vline(struct ged *gedp, int l_id, int x0, int y0, int z0, int x1, int y1, int z1
 	struct ged_view_context *v =
 	    (struct ged_view_context *)BU_PTBL_GET(views, i);
 	struct ged_view_feature_summary view_summary =
-	    GED_VIEW_FEATURE_SUMMARY_INIT;
+	    ged_view_feature_summary_default();
 	if (ged_view_feature_get_summary(v, bu_vls_cstr(&lname),
 		&view_summary) && view_summary.exists)
 	    render_count++;

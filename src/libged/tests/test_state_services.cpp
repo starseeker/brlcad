@@ -19,8 +19,10 @@
  */
 /** @file test_state_services.cpp
  *
- * Public GED state-service coverage.  This test deliberately avoids removed
- * migration-internal APIs, which must not be preserved by test contracts.
+ * Public GED state-service coverage.  The sole white-box exception is the
+ * audited recording-backend installer used to prove snapshot-on-attach and
+ * exactly one backend apply per semantic commit.  Removed migration APIs are
+ * not preserved by this test.
  *
  * Usage: ged_test_state_services <dir-containing-moss.g>
  */
@@ -50,8 +52,8 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/db_index.h"
-#include "ged/event_txn.h"
-#include "ged/selection_state.h"
+#include "ged/event.h"
+#include "ged/selection.h"
 #include "nmg.h"
 #include "rt/db_attr.h"
 #include "wdb.h"
@@ -120,8 +122,8 @@ open_service_ged(const char *path)
     if (!gedp)
 	return NULL;
 
-    CHECK(ged_event_txn_available(gedp) == 1,
-	  "GedEventTxn service must be available");
+    CHECK(ged_event_available(gedp) == 1,
+	  "GED event service must be available");
     CHECK(ged_db_index_available(gedp) == 1,
 	  "GedDbIndex service must be available");
     CHECK(ged_selection_state_available(gedp) == 1,
@@ -1001,19 +1003,35 @@ static void
 event_count_cb(struct ged *UNUSED(gedp),
 	       const struct ged_event *UNUSED(events),
 	       size_t event_count,
-	       const struct ged_event_txn_result *result,
+	       const struct ged_event_result *result,
 	       void *client_data)
 {
     struct event_counts *counts = (struct event_counts *)client_data;
     counts->calls++;
     counts->event_count += event_count;
     if (result)
-	counts->coalesced_count += result->coalesced_event_count;
+	counts->coalesced_count += ged_event_result_coalesced_count(result);
 }
 
 struct event_order_shared {
     std::vector<char> phases;
 };
+
+static std::string
+event_result_path_text(const struct ged_event_result *result)
+{
+    std::string text;
+    const size_t count = ged_event_result_path_count(result);
+    for (size_t i = 0; i < count; i++) {
+	const char *path = ged_event_result_path_at(result, i);
+	if (!path)
+	    continue;
+	if (!text.empty())
+	    text.append("\n");
+	text.append(path);
+    }
+    return text;
+}
 
 struct event_order_observer {
     event_order_shared *shared = nullptr;
@@ -1021,9 +1039,9 @@ struct event_order_observer {
     size_t calls = 0;
     size_t event_count = 0;
     size_t coalesced_count = 0;
-    std::vector<ged_event_kind> kinds;
-    std::vector<ged_event_kind> all_kinds;
-    std::vector<ged_event_kind> all_named_kinds;
+    std::vector<enum ged_event_kind> kinds;
+    std::vector<enum ged_event_kind> all_kinds;
+    std::vector<enum ged_event_kind> all_named_kinds;
     std::vector<std::string> all_named_names;
     std::vector<std::string> all_parent_names;
     std::vector<std::string> all_child_names;
@@ -1040,7 +1058,7 @@ static void
 event_order_cb(struct ged *gedp,
 	       const struct ged_event *events,
 	       size_t event_count,
-	       const struct ged_event_txn_result *result,
+	       const struct ged_event_result *result,
 	       void *client_data)
 {
     struct event_order_observer *obs =
@@ -1066,15 +1084,14 @@ event_order_cb(struct ged *gedp,
     }
     obs->current_draw_revision = ged_scene_revision(gedp);
     if (result) {
-	obs->coalesced_count = result->coalesced_event_count;
-	obs->result_draw_before = result->draw_scene_revision_before;
-	obs->result_draw_after = result->draw_scene_revision_after;
-	obs->affected_names = bu_vls_cstr(&result->affected_names);
-	if (bu_vls_strlen(&result->affected_names)) {
+    obs->coalesced_count = ged_event_result_coalesced_count(result);
+    obs->result_draw_before = ged_event_result_scene_revision_before(result);
+    obs->result_draw_after = ged_event_result_scene_revision_after(result);
+	obs->affected_names = event_result_path_text(result);
+	if (!obs->affected_names.empty()) {
 	    if (!obs->all_affected_names.empty())
-		obs->all_affected_names.append(" ");
-	    obs->all_affected_names.append(bu_vls_cstr(
-					       &result->affected_names));
+		obs->all_affected_names.append("\n");
+	    obs->all_affected_names.append(obs->affected_names);
 	}
     }
     if (obs->shared)
@@ -1082,7 +1099,8 @@ event_order_cb(struct ged *gedp,
 }
 
 static bool
-observed_scoped_event(const event_order_observer &obs, ged_event_kind kind,
+observed_scoped_event(const event_order_observer &obs,
+		      enum ged_event_kind kind,
 		      const char *name, const char *parent_name,
 		      const char *path)
 {
@@ -1100,7 +1118,8 @@ observed_scoped_event(const event_order_observer &obs, ged_event_kind kind,
 }
 
 static bool
-observed_named_event(const event_order_observer &obs, ged_event_kind kind,
+observed_named_event(const event_order_observer &obs,
+		     enum ged_event_kind kind,
 		     const char *name)
 {
     for (size_t i = 0; i < obs.all_named_kinds.size() &&
@@ -1280,7 +1299,7 @@ done:
 static int
 test_events(struct ged *gedp)
 {
-    bu_log("=== GedEventTxn service batching/observers ===\n");
+    bu_log("=== GED event service batching/observers ===\n");
 
     struct event_counts internal_counts;
     struct event_counts post_counts;
@@ -1293,29 +1312,29 @@ test_events(struct ged *gedp)
     CHECK(internal_token != 0, "internal event observer must register");
     CHECK(post_token != 0, "post-reconcile event observer must register");
 
-    struct ged_event_txn_result result;
-    ged_event_txn_result_init(&result);
-    CHECK(ged_event_batch_begin(gedp) == 1,
+    struct ged_event_result *result = ged_event_result_create();
+    ged_event_result_clear(result);
+    CHECK(ged_event_batch_begin(gedp) == GED_EVENT_OK,
 	  "event batch begin must succeed");
-    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == 0,
+    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == GED_EVENT_OK,
 	  "batched notify must queue first object-modified event");
-    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == 0,
+    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == GED_EVENT_OK,
 	  "batched notify must queue duplicate object-modified event");
-    CHECK(ged_event_batch_end(gedp, &result) >= 0,
+    CHECK(ged_event_batch_end(gedp, result) == GED_EVENT_OK,
 	  "event batch end must reconcile queued events");
 
-    CHECK(result.event_count == 2,
+    CHECK(ged_event_result_event_count(result) == 2,
 	  "event result must report two queued input events");
-    CHECK(result.coalesced_event_count == 1,
+    CHECK(ged_event_result_coalesced_count(result) == 1,
 	  "event result must coalesce duplicate events");
     CHECK(internal_counts.calls == 1 && internal_counts.event_count == 1,
 	  "internal observer must see one coalesced event batch");
     CHECK(post_counts.calls == 1 && post_counts.event_count == 1,
 	  "post observer must see one coalesced event batch");
-    CHECK(std::string(bu_vls_cstr(&result.affected_names)).find("all.g") !=
+    CHECK(event_result_path_text(result).find("all.g") !=
 	  std::string::npos,
 	  "event result must identify affected names");
-    ged_event_txn_result_free(&result);
+    ged_event_result_clear(result);
 
     void (*old_refresh_handler)(void *) = gedp->ged_refresh_handler;
     void *old_refresh_clientdata = gedp->ged_refresh_clientdata;
@@ -1329,20 +1348,20 @@ test_events(struct ged *gedp)
 			       event_order_cb, &bulk_post);
     CHECK(bulk_post_token != 0,
 	  "bulk transaction observer must register");
-    ged_event_txn_result_init(&result);
-    CHECK(ged_event_bulk_begin(gedp) == 1,
+    ged_event_result_clear(result);
+    CHECK(ged_event_bulk_begin(gedp) == GED_EVENT_OK,
 	  "bulk transaction begin must succeed");
     CHECK(ged_event_bulk_active(gedp) == 1,
 	  "bulk transaction must report active");
-    CHECK(ged_event_batch_begin(gedp) == 1,
+    CHECK(ged_event_batch_begin(gedp) == GED_EVENT_OK,
 	  "bulk transaction must allow nested command batches to pair");
-    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == 0,
+    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == GED_EVENT_OK,
 	  "bulk transaction must defer published mutation events");
-    CHECK(ged_event_batch_end(gedp, NULL) == 0,
+    CHECK(ged_event_batch_end(gedp, NULL) == GED_EVENT_OK,
 	  "bulk transaction nested command batch end must not reconcile");
     CHECK(bulk_post.calls == 0,
 	  "bulk transaction must not dispatch before final refresh");
-    CHECK(ged_event_bulk_end(gedp, &result) >= 0,
+    CHECK(ged_event_bulk_end(gedp, result) == GED_EVENT_OK,
 	  "bulk transaction end must perform final refresh");
     CHECK(ged_event_bulk_active(gedp) == 0,
 	  "bulk transaction must report inactive after end");
@@ -1351,11 +1370,11 @@ test_events(struct ged *gedp)
     CHECK(bulk_post.kinds.size() == 1 &&
 	  bulk_post.kinds[0] == GED_EVENT_BATCH_REBUILD,
 	  "bulk transaction final event must be a batch rebuild");
-    CHECK(result.event_count == 1 && result.coalesced_event_count == 1,
+    CHECK(ged_event_result_event_count(result) == 1 && ged_event_result_coalesced_count(result) == 1,
 	  "bulk transaction result must report one final rebuild event");
     CHECK(refresh_counts.calls == 1,
 	  "bulk transaction must run one final refresh callback");
-    ged_event_txn_result_free(&result);
+    ged_event_result_clear(result);
     CHECK(ged_event_observer_remove(gedp, bulk_post_token) == 1,
 	  "bulk transaction observer removal must succeed");
 
@@ -1366,37 +1385,37 @@ test_events(struct ged *gedp)
 			       event_order_cb, &outer_bulk_post);
     CHECK(outer_bulk_post_token != 0,
 	  "outer bulk transaction observer must register");
-    ged_event_txn_result_init(&result);
-    CHECK(ged_event_batch_begin(gedp) == 1,
+    ged_event_result_clear(result);
+    CHECK(ged_event_batch_begin(gedp) == GED_EVENT_OK,
 	  "outer bulk command batch begin must succeed");
-    CHECK(ged_event_bulk_begin(gedp) == 1,
+    CHECK(ged_event_bulk_begin(gedp) == GED_EVENT_OK,
 	  "outer bulk transaction begin must succeed");
-    CHECK(ged_event_batch_begin(gedp) == 2,
+    CHECK(ged_event_batch_begin(gedp) == GED_EVENT_OK,
 	  "outer bulk nested command batch must increment depth");
-    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == 0,
+    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == GED_EVENT_OK,
 	  "outer bulk nested event must be deferred");
-    CHECK(ged_event_batch_end(gedp, NULL) == 1,
+    CHECK(ged_event_batch_end(gedp, NULL) == GED_EVENT_OK,
 	  "outer bulk nested command batch must leave outer batch open");
     CHECK(outer_bulk_post.calls == 0,
 	  "outer bulk nested command batch must not dispatch");
-    CHECK(ged_event_bulk_end(gedp, NULL) == 0,
+    CHECK(ged_event_bulk_end(gedp, NULL) == GED_EVENT_OK,
 	  "outer bulk transaction end must queue final refresh in outer batch");
     CHECK(outer_bulk_post.calls == 0,
 	  "outer bulk final refresh must wait for outer batch end");
     CHECK(refresh_counts.calls == 0,
 	  "outer bulk final refresh callback must wait for outer batch end");
-    CHECK(ged_event_batch_end(gedp, &result) >= 0,
+    CHECK(ged_event_batch_end(gedp, result) == GED_EVENT_OK,
 	  "outer bulk command batch end must dispatch final refresh");
     CHECK(outer_bulk_post.calls == 1 && outer_bulk_post.event_count == 1,
 	  "outer bulk observer must see one final event");
     CHECK(outer_bulk_post.kinds.size() == 1 &&
 	  outer_bulk_post.kinds[0] == GED_EVENT_BATCH_REBUILD,
 	  "outer bulk final event must be a batch rebuild");
-    CHECK(result.event_count == 1 && result.coalesced_event_count == 1,
+    CHECK(ged_event_result_event_count(result) == 1 && ged_event_result_coalesced_count(result) == 1,
 	  "outer bulk result must report one final rebuild event");
     CHECK(refresh_counts.calls == 1,
 	  "outer bulk must run one final refresh callback");
-    ged_event_txn_result_free(&result);
+    ged_event_result_clear(result);
     CHECK(ged_event_observer_remove(gedp, outer_bulk_post_token) == 1,
 	  "outer bulk transaction observer removal must succeed");
 
@@ -1406,7 +1425,7 @@ test_events(struct ged *gedp)
     CHECK(ged_event_observer_remove(gedp, post_token) == 1,
 	  "post observer removal must succeed");
     post_counts = event_counts();
-    CHECK(ged_event_notify_object_added(gedp, "all.g", NULL) >= 0,
+    CHECK(ged_event_notify_object_added(gedp, "all.g", NULL) == GED_EVENT_OK,
 	  "direct event publish must succeed after observer removal");
     CHECK(post_counts.calls == 0,
 	  "removed post observer must not receive later events");
@@ -1423,19 +1442,19 @@ test_events(struct ged *gedp)
 	wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     const char *direct_add_name = "_ged_event_direct_add.s";
     point_t direct_add_center = {520.0, 0.0, 0.0};
-    ged_event_txn_result_init(&result);
+    ged_event_result_clear(result);
     CHECK(event_wdbp != RT_WDB_NULL,
 	  "librt add coalescing fixture must open writer");
-    CHECK(ged_event_batch_begin(gedp) == 1,
+    CHECK(ged_event_batch_begin(gedp) == GED_EVENT_OK,
 	  "librt add coalescing batch begin must succeed");
     CHECK(event_wdbp && mk_sph(event_wdbp, direct_add_name,
 			       direct_add_center, 1.0) == 0,
 	  "librt add coalescing fixture must create object");
-    CHECK(ged_event_batch_end(gedp, &result) >= 0,
+    CHECK(ged_event_batch_end(gedp, result) == GED_EVENT_OK,
 	  "librt add coalescing batch end must reconcile");
-    CHECK(result.event_count >= 2,
+    CHECK(ged_event_result_event_count(result) >= 2,
 	  "librt add coalescing test must queue raw add and put callbacks");
-    CHECK(result.coalesced_event_count == 1,
+    CHECK(ged_event_result_coalesced_count(result) == 1,
 	  "librt add coalescing must reduce add plus put to one event");
     CHECK(librt_add_post.kinds.size() == 1 &&
 	  librt_add_post.kinds[0] == GED_EVENT_OBJECT_ADDED,
@@ -1447,10 +1466,10 @@ test_events(struct ged *gedp)
 		    librt_add_post.all_kinds.end(),
 		    GED_EVENT_COMB_TREE_CHANGED) == librt_add_post.all_kinds.end(),
 	  "librt add coalescing must suppress redundant modified fallback");
-    CHECK(std::string(bu_vls_cstr(&result.affected_names)).
+    CHECK(event_result_path_text(result).
 	  find(direct_add_name) != std::string::npos,
 	  "librt add coalescing result must identify added object");
-    ged_event_txn_result_free(&result);
+    ged_event_result_clear(result);
     CHECK(ged_event_observer_remove(gedp, librt_add_post_token) == 1,
 	  "librt add coalescing observer removal must succeed");
 
@@ -1570,23 +1589,23 @@ test_events(struct ged *gedp)
     CHECK(post_order_token != 0,
 	  "post ordering observer must register");
 
-    ged_event_txn_result_init(&result);
-    CHECK(ged_event_batch_begin(gedp) == 1,
+    ged_event_result_clear(result);
+    CHECK(ged_event_batch_begin(gedp) == GED_EVENT_OK,
 	  "event ordering batch begin must succeed");
-    CHECK(ged_event_notify_object_modified(gedp, "all.g", 0, NULL) == 0,
+    CHECK(ged_event_notify_object_modified(gedp, "all.g", 0, NULL) == GED_EVENT_OK,
 	  "event ordering must queue first modified event");
-    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == 0,
+    CHECK(ged_event_notify_object_modified(gedp, "all.g", 1, NULL) == GED_EVENT_OK,
 	  "event ordering must queue redraw modified event");
-    CHECK(ged_event_notify_attribute_changed(gedp, "platform.r", 0, NULL) == 0,
+    CHECK(ged_event_notify_attribute_changed(gedp, "platform.r", 0, NULL) == GED_EVENT_OK,
 	  "event ordering must queue first attribute event");
-    CHECK(ged_event_notify_attribute_changed(gedp, "platform.r", 1, NULL) == 0,
+    CHECK(ged_event_notify_attribute_changed(gedp, "platform.r", 1, NULL) == GED_EVENT_OK,
 	  "event ordering must queue redraw attribute event");
-    CHECK(ged_event_batch_end(gedp, &result) >= 0,
+    CHECK(ged_event_batch_end(gedp, result) == GED_EVENT_OK,
 	  "event ordering batch end must reconcile queued events");
 
-    CHECK(result.event_count == 4,
+    CHECK(ged_event_result_event_count(result) == 4,
 	  "event ordering result must report all queued inputs");
-    CHECK(result.coalesced_event_count == 2,
+    CHECK(ged_event_result_coalesced_count(result) == 2,
 	  "event ordering result must coalesce mixed duplicate events");
     CHECK(order_shared.phases.size() == 2 &&
 	  order_shared.phases[0] == 'I' &&
@@ -1615,9 +1634,9 @@ test_events(struct ged *gedp)
 	  internal_order.result_draw_before,
 	  "internal observer must see pre-reconcile result revisions");
     CHECK(post_order.current_draw_revision ==
-	  result.draw_scene_revision_after,
+	  ged_event_result_scene_revision_after(result),
 	  "post observer must see reconciled draw scene revision");
-    CHECK(post_order.result_draw_after == result.draw_scene_revision_after,
+    CHECK(post_order.result_draw_after == ged_event_result_scene_revision_after(result),
 	  "post observer result must report reconciled draw revision");
     CHECK(post_order.result_draw_after >= post_order.result_draw_before,
 	  "post observer draw revision must not move backward");
@@ -1625,7 +1644,7 @@ test_events(struct ged *gedp)
 	  post_order.affected_names.find("platform.r") != std::string::npos,
 	  "post observer result must include mixed affected names");
 
-    ged_event_txn_result_free(&result);
+    ged_event_result_clear(result);
     CHECK(ged_event_observer_remove(gedp, post_order_token) == 1,
 	  "post ordering observer removal must succeed");
     CHECK(ged_event_observer_remove(gedp, internal_order_token) == 1,
@@ -1638,24 +1657,24 @@ test_events(struct ged *gedp)
     CHECK(metadata_direct_post_token != 0,
 	  "direct metadata observer must register");
     uint64_t metadata_draw_before = ged_scene_revision(gedp);
-    ged_event_txn_result_init(&result);
-    CHECK(ged_event_notify_database_metadata_changed(gedp, &result) >= 0,
+    ged_event_result_clear(result);
+    CHECK(ged_event_notify_database_metadata_changed(gedp, result) == GED_EVENT_OK,
 	  "direct metadata event publish must succeed");
-    CHECK(result.event_count == 1 &&
-	  result.coalesced_event_count == 1,
+    CHECK(ged_event_result_event_count(result) == 1 &&
+	  ged_event_result_coalesced_count(result) == 1,
 	  "direct metadata event result must report one coalesced event");
-    CHECK(result.draw_status == 0 && result.db_index_status == 0 &&
-	  result.selection_status == 0,
+    CHECK(ged_event_result_draw_change_count(result) == 0 && ged_event_result_db_index_change_count(result) == 0 &&
+	  ged_event_result_selection_changed(result) == 0,
 	  "direct metadata event must not redraw, reindex, or recompute selection");
-    CHECK(result.draw_scene_revision_after == metadata_draw_before,
+    CHECK(ged_event_result_scene_revision_after(result) == metadata_draw_before,
 	  "direct metadata event must not advance draw scene revision");
     CHECK(metadata_direct_post.kinds.size() == 1 &&
 	  metadata_direct_post.kinds[0] ==
 	  GED_EVENT_DATABASE_METADATA_CHANGED,
 	  "direct metadata observer must see database-metadata event");
-    CHECK(bu_vls_strlen(&result.affected_names) == 0,
+    CHECK(ged_event_result_path_count(result) == 0,
 	  "direct metadata event must not report object paths");
-    ged_event_txn_result_free(&result);
+    ged_event_result_clear(result);
     CHECK(ged_event_observer_remove(gedp, metadata_direct_post_token) == 1,
 	  "direct metadata observer removal must succeed");
 
@@ -2138,19 +2157,19 @@ test_events(struct ged *gedp)
 	  "joint2 selection translate observer removal must succeed");
 
     uint64_t material_revision_before = ged_scene_material_revision(gedp);
-    ged_event_txn_result_init(&result);
+    ged_event_result_clear(result);
     CHECK(ged_event_notify_object_material_changed(gedp, "box.r",
-	    &result) >= 0,
+	    result) >= 0,
 	  "named material event publish must succeed");
-    CHECK(result.event_count == 1 &&
-	  result.coalesced_event_count == 1,
+    CHECK(ged_event_result_event_count(result) == 1 &&
+	  ged_event_result_coalesced_count(result) == 1,
 	  "named material event result must report one coalesced event");
     CHECK(ged_scene_material_revision(gedp) > material_revision_before,
 	  "named material event must bump draw material revision");
-    CHECK(std::string(bu_vls_cstr(&result.affected_names)).find("box.r") !=
+    CHECK(event_result_path_text(result).find("box.r") !=
 	  std::string::npos,
 	  "named material event result must identify affected paths");
-    ged_event_txn_result_free(&result);
+    ged_event_result_clear(result);
 
     event_order_observer rmater_post;
     ged_event_observer_token rmater_post_token =
@@ -6091,6 +6110,7 @@ test_events(struct ged *gedp)
     CHECK(ged_exec_erase(gedp, 2, erase_av) == BRLCAD_OK,
 	  "event ordering cleanup erase all.g must succeed");
 
+    ged_event_result_destroy(result);
     return 0;
 }
 
@@ -6105,7 +6125,9 @@ struct scene_delta_observer {
 struct recording_scene_backend {
     size_t apply_calls = 0;
     size_t snapshot_calls = 0;
+    size_t selection_calls = 0;
     std::vector<enum ged_draw_transaction_kind> kinds;
+    std::vector<std::string> selected_paths;
 };
 
 static int
@@ -6132,6 +6154,27 @@ recording_scene_backend_snapshot(struct ged *UNUSED(gedp), void *client_data)
     if (!backend)
 	return 0;
     backend->snapshot_calls++;
+    return 1;
+}
+
+static int
+recording_scene_backend_selection(
+    struct ged *UNUSED(gedp),
+    const char *const *UNUSED(added_paths), size_t UNUSED(added_count),
+    const char *const *UNUSED(removed_paths), size_t UNUSED(removed_count),
+    const char *const *selected_paths, size_t selected_count,
+    void *client_data)
+{
+    recording_scene_backend *backend =
+	static_cast<recording_scene_backend *>(client_data);
+    if (!backend)
+	return 0;
+    backend->selection_calls++;
+    backend->selected_paths.clear();
+    for (size_t i = 0; selected_paths && i < selected_count; i++) {
+	if (selected_paths[i])
+	    backend->selected_paths.emplace_back(selected_paths[i]);
+    }
     return 1;
 }
 
@@ -6184,13 +6227,33 @@ test_draw(struct ged *gedp)
     const struct ged_scene_backend_ops recording_ops = {
 	recording_scene_backend_apply,
 	recording_scene_backend_snapshot,
-	NULL
+	recording_scene_backend_selection
     };
     ged_scene_backend_set_private(backend_gedp, &recording_ops,
 	&recording_backend);
 
     CHECK(recording_backend.snapshot_calls == 1,
 	"backend attachment must consume exactly one semantic snapshot");
+    CHECK(ged_selection_batch_begin(backend_gedp) == 1,
+	"selection batch begin must succeed on a headless GED owner");
+    CHECK(ged_selection_select_path(backend_gedp, NULL,
+	"all.g/platform.r", 0) == 1 &&
+	ged_selection_select_path(backend_gedp, "qa_union",
+	"all.g/cone.r", 0) == 1,
+	"selection batch must accept paths in default and named sets");
+    CHECK(recording_backend.selection_calls == 0,
+	"selection mutations inside a batch must not apply early");
+    CHECK(ged_selection_batch_end(backend_gedp) == 1 &&
+	recording_backend.selection_calls == 1 &&
+	recording_backend.selected_paths.size() == 2,
+	"one selection batch must apply one backend union delta");
+    CHECK(ged_selection_clear(backend_gedp, "qa_union") == 1 &&
+	recording_backend.selection_calls == 2 &&
+	recording_backend.selected_paths.size() == 1 &&
+	recording_backend.selected_paths[0] == "all.g/platform.r",
+	"clearing one named set must retain other selected-set presentation");
+    CHECK(ged_selection_clear(backend_gedp, NULL) == 1,
+	"recording selection cleanup must succeed");
     const char *recording_paths[] = {"all.g"};
     struct ged_scene_draw_request recording_draw;
     ged_scene_draw_request_init(&recording_draw);

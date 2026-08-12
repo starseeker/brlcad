@@ -45,6 +45,8 @@ static_assert(std::is_trivially_copyable<BObolLodQualityPolicy>::value,
     "quality policy must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<BObolLodPublicationPolicy>::value,
     "publication policy must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<BObolLodResidentGrowthPolicy>::value,
+    "resident-growth policy must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<BObolLodCompactionPolicy>::value,
     "compaction policy must remain an allocation-free value");
 
@@ -780,77 +782,106 @@ test_headroom_policy(void)
     const BObolLodViewEpoch view(4);
     const BObolLodPolicyEpoch lodPolicy(9);
     if (policy.retryPending() ||
-	!policy.armRetry(view, lodPolicy, 100, 1000) ||
+	!policy.armRetry(view, lodPolicy, 1000, 100) ||
 	!policy.retryPending() ||
-	!policy.pendingMatches(view, lodPolicy, 100, 1000) ||
-	policy.pendingMatches(BObolLodViewEpoch(5), lodPolicy, 100, 1000) ||
-	policy.pendingMatches(view, lodPolicy, 101, 1000) ||
-	policy.pendingMatches(view, lodPolicy, 100, 1001) ||
-	policy.armRetry(view, lodPolicy, 100, 1000) ||
-	!policy.consumeRetry(view, lodPolicy, 100, 1000, 106.0L, 90, 100,
+	!policy.pendingMatches(view, lodPolicy, 1000) ||
+	policy.pendingMatches(BObolLodViewEpoch(5), lodPolicy, 1000) ||
+	policy.pendingMatches(view, lodPolicy, 1001) ||
+	policy.armRetry(view, lodPolicy, 1000, 100) ||
+	/* The measured allowance may legitimately grow between arming the replay
+	 * and consuming its timing sample.  Witness identity is the immutable
+	 * population and camera/policy epoch, not that evolving allowance. */
+	!policy.consumeRetry(view, lodPolicy, 101, 1000, 107.0L, 90, 100,
 	    true) || policy.retryPending() ||
-	policy.armRetry(view, lodPolicy, 100, 1000) ||
-	policy.armRetry(view, lodPolicy, 120, 1000)) {
+	policy.armRetry(view, lodPolicy, 1000, 101)) {
 	std::fprintf(stderr, "FAIL: explicit headroom witness lifecycle\n");
 	return 1;
     }
-    if (!policy.armRetry(view, lodPolicy, 120, 1001) ||
+    /* Calibration may discover more capacity after the first witness.  Only
+     * material growth above the monotonic high-water may revisit the same
+     * population, which admits useful refinement without budget jitter. */
+    if (policy.armRetry(view, lodPolicy, 1000, 126) ||
+	!policy.armRetry(view, lodPolicy, 1000, 127) ||
+	policy.armRetry(view, lodPolicy, 1000, 127) ||
+	!policy.consumeRetry(view, lodPolicy, 127, 1000, 140.0L, 90, 100,
+	    true) ||
+	policy.armRetry(view, lodPolicy, 1000, 158) ||
+	!policy.armRetry(view, lodPolicy, 1000, 159) ||
+	policy.consumeRetry(view, lodPolicy, 159, 1000, 160.0L, 90, 100,
+	    true) ||
+	policy.armRetry(view, lodPolicy, 1000, 159)) {
+	std::fprintf(stderr, "FAIL: monotonic headroom budget high-water\n");
+	return 1;
+    }
+    if (!policy.armRetry(view, lodPolicy, 1001, 120) ||
 	!policy.consumeRetry(view, lodPolicy, 120, 1001,
 	    200.0L, 10, 100, true) ||
-	!policy.armRetry(BObolLodViewEpoch(5), lodPolicy, 120, 2000) ||
+	!policy.armRetry(BObolLodViewEpoch(5), lodPolicy, 2000, 120) ||
 	!policy.consumeRetry(BObolLodViewEpoch(5), lodPolicy, 120, 2000,
 	    200.0L, 10, 100, true) ||
 	!policy.armRetry(BObolLodViewEpoch(5), BObolLodPolicyEpoch(10),
-	    120, 2000) ||
+	    2000, 120) ||
 	!policy.consumeRetry(BObolLodViewEpoch(5),
 	    BObolLodPolicyEpoch(10), 120, 2000, 200.0L, 10, 100, true)) {
 	std::fprintf(stderr, "FAIL: headroom progress witnesses\n");
 	return 1;
     }
-    if (!policy.armRetry(BObolLodViewEpoch(6), lodPolicy, 200, 3000) ||
+    if (!policy.armRetry(BObolLodViewEpoch(6), lodPolicy, 3000, 200) ||
 	policy.consumeRetry(BObolLodViewEpoch(6), lodPolicy, 200, 3000,
 	    210.0L, 10, 100, true) ||
-	policy.armRetry(BObolLodViewEpoch(6), lodPolicy, 200, 3000)) {
+	policy.armRetry(BObolLodViewEpoch(6), lodPolicy, 3000, 200)) {
 	std::fprintf(stderr, "FAIL: exact threshold headroom admitted\n");
 	return 1;
     }
-    if (!policy.armRetry(BObolLodViewEpoch(7), lodPolicy, 200, 3000) ||
+    if (!policy.armRetry(BObolLodViewEpoch(7), lodPolicy, 3000, 200) ||
 	policy.consumeRetry(BObolLodViewEpoch(7), lodPolicy, 200, 3000,
 	    300.0L, 120, 100, true)) {
 	std::fprintf(stderr, "FAIL: slow headroom sample admitted\n");
 	return 1;
     }
-    if (!policy.armRetry(BObolLodViewEpoch(8), lodPolicy, 200, 3000) ||
+    if (!policy.armRetry(BObolLodViewEpoch(8), lodPolicy, 3000, 200) ||
 	policy.consumeRetry(BObolLodViewEpoch(8), lodPolicy, 200, 3000,
 	    300.0L, 10, 100, false)) {
 	std::fprintf(stderr, "FAIL: non-reusable headroom sample admitted\n");
 	return 1;
     }
+    /* Cold timing can leave an old conservative allocation stamped into the
+     * occurrences after the scene allowance has already grown.  A reusable
+     * frame which proves headroom over the drawn population must trigger one
+     * recomputation even when it cannot saturate and thereby prove the full
+     * (already larger) allowance. */
+    if (!policy.armRetry(BObolLodViewEpoch(80), lodPolicy, 100, 500) ||
+	!policy.consumeRetry(BObolLodViewEpoch(80), lodPolicy, 500, 100,
+	    250.0L, 50, 100, true) ||
+	policy.armRetry(BObolLodViewEpoch(80), lodPolicy, 100, 500)) {
+	std::fprintf(stderr, "FAIL: stale underallocated population witness\n");
+	return 1;
+    }
     const BObolLodViewEpoch transientView(81);
-    if (!policy.armRetry(transientView, lodPolicy, 200, 3001) ||
-	!policy.deferTransientReplay(transientView, lodPolicy, 200, 3001) ||
+    if (!policy.armRetry(transientView, lodPolicy, 3001, 200) ||
+	!policy.deferTransientReplay(transientView, lodPolicy, 3001) ||
 	!policy.retryPending() ||
-	!policy.deferTransientReplay(transientView, lodPolicy, 200, 3001) ||
-	policy.deferTransientReplay(transientView, lodPolicy, 200, 3001) ||
+	!policy.deferTransientReplay(transientView, lodPolicy, 3001) ||
+	policy.deferTransientReplay(transientView, lodPolicy, 3001) ||
 	!policy.retryPending() ||
 	policy.deferTransientReplay(BObolLodViewEpoch(82), lodPolicy,
-	    200, 3001) ||
+	    3001) ||
 	!policy.consumeRetry(transientView, lodPolicy, 200, 3001,
 	    300.0L, 10, 100, true) || policy.retryPending() ||
-	policy.armRetry(transientView, lodPolicy, 200, 3001)) {
+	policy.armRetry(transientView, lodPolicy, 3001, 200)) {
 	std::fprintf(stderr, "FAIL: bounded transient headroom replay\n");
 	return 1;
     }
-    if (!policy.armRetry(BObolLodViewEpoch(9), lodPolicy, 200, 3000) ||
+    if (!policy.armRetry(BObolLodViewEpoch(9), lodPolicy, 3000, 200) ||
 	policy.consumeRetry(BObolLodViewEpoch(10), lodPolicy, 200, 3000,
 	    300.0L, 10, 100, true) || policy.retryPending() ||
-	!policy.armRetry(BObolLodViewEpoch(9), lodPolicy, 200, 3000)) {
+	!policy.armRetry(BObolLodViewEpoch(9), lodPolicy, 3000, 200)) {
 	std::fprintf(stderr, "FAIL: stale headroom witness handling\n");
 	return 1;
     }
     policy.cancelRetry();
     if (policy.retryPending() || policy.pendingMatches(
-	    BObolLodViewEpoch(9), lodPolicy, 200, 3000)) {
+	    BObolLodViewEpoch(9), lodPolicy, 3000)) {
 	std::fprintf(stderr, "FAIL: headroom witness cancellation\n");
 	return 1;
     }
@@ -911,7 +942,7 @@ test_coverage_policy(void)
     }
 
     /* A quality-only pass preserves the latest view denominator and its
-     * minimum-mesh proof while collecting a fresh set of counters. */
+	 * minimum-mesh proof while collecting a fresh set of counters. */
     policy.activate(false);
     policy.observe(5, 5);
     completion = policy.completeIfReady(true, false);
@@ -1106,26 +1137,40 @@ test_budget_policy(void)
     using Policy = BObolLodBudgetPolicy;
     Policy policy;
     Policy::Inputs input;
+    input.activeCost = 1234;
+    input.minimumActiveCost = 321;
     Policy::Decision decision = policy.beginPass(input);
     if (!decision.initialized || decision.totalBudget != 50000 ||
-	decision.refinementBudget != 50000 || decision.retainedAdmission ||
-	!policy.passInitialized() || policy.currentBudget() != 50000) {
+	decision.refinementBudget != 48766 || decision.retainedAdmission ||
+	!policy.passInitialized() || policy.currentBudget() != 50000 ||
+	policy.passActiveCost() != 1234 ||
+	policy.passMinimumActiveCost() != 321) {
 	std::fprintf(stderr, "FAIL: seed scene budget\n");
 	return 1;
     }
+    input.activeCost = 9999;
+    input.minimumActiveCost = 8888;
     decision = policy.beginPass(input);
-    if (decision.initialized || decision.totalBudget != 50000) {
+	if (decision.initialized || decision.totalBudget != 50000 ||
+	policy.passActiveCost() != 1234 ||
+	policy.passMinimumActiveCost() != 321) {
 	std::fprintf(stderr, "FAIL: duplicate scene budget initialization\n");
 	return 1;
     }
     policy.consumeRefinement(12000);
-    if (policy.refinementRemaining() != 38000) {
+    if (policy.refinementRemaining() != 36766) {
 	std::fprintf(stderr, "FAIL: refinement budget consumption\n");
 	return 1;
     }
 
     policy.resetPass();
+    if (policy.passActiveCost() != 0 ||
+	policy.passMinimumActiveCost() != 0) {
+	std::fprintf(stderr, "FAIL: bounded-pass cost snapshot reset\n");
+	return 1;
+    }
     input.activeCost = 100000;
+    input.minimumActiveCost = 0;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 10000000.0L;
     input.observedStableNanoseconds = 10000000ULL;
@@ -1180,9 +1225,54 @@ test_budget_policy(void)
 	    policy.overloadRecoveryActiveCost());
 	return 1;
     }
+
+    /* A many-occurrence fixed cost is not described by the triangle-rate
+     * calibration.  Three exact stable misses must therefore authorize the
+     * direct duration-based recovery even when that estimator predicts the
+     * active cut should fit. */
+    policy.reset();
+    policy.raiseCurrentBudget(400000);
+    policy.resetPass();
+    input = Policy::Inputs();
+    input.activeCost = 400000;
+    input.targetFps = 20.0f;
+    input.calibratedCostPerSecond = 20000000.0L;
+    input.observedStableNanoseconds = 80000000ULL;
+    policy.setProbeCount(3);
+    decision = policy.beginPass(input);
+    if (!decision.overloadRecovery || decision.totalBudget != 200000 ||
+	!decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: repeated exact deadline misses did not override the "
+	    "throughput model recovery=%d budget=%zu admission=%d\n",
+	    decision.overloadRecovery ? 1 : 0, decision.totalBudget,
+	    decision.retainedAdmission ? 1 : 0);
+	return 1;
+    }
     policy.consumeRetainedAdmission(75000);
     if (policy.retainedAdmissionRemaining() != 125000) {
 	std::fprintf(stderr, "FAIL: retained admission consumption\n");
+	return 1;
+    }
+
+    /* Minimum mesh coverage is pre-reserved.  Bounded windows carry only the
+     * upgrade allowance so every slice cannot charge the same floor and
+     * normalize the whole scene before refinement restarts. */
+    policy.reset();
+    policy.requestRetainedRecovery(200000);
+    input = Policy::Inputs();
+    input.activeCost = 400000;
+    input.minimumActiveCost = 125000;
+    input.targetFps = 20.0f;
+    input.calibratedCostPerSecond = 4000000.0L;
+    decision = policy.beginPass(input);
+    if (!decision.retainedAdmission ||
+	decision.totalBudget != 200000 ||
+	decision.retainedAdmissionBudget != 75000) {
+	std::fprintf(stderr,
+	    "FAIL: retained admission did not reserve coverage floor "
+	    "budget=%zu upgrade=%zu\n",
+	    decision.totalBudget, decision.retainedAdmissionBudget);
 	return 1;
     }
 
@@ -1270,6 +1360,159 @@ test_budget_policy(void)
 	std::fprintf(stderr,
 	    "FAIL: retained normalization incorrectly persisted budget=%zu\n",
 	    decision.totalBudget);
+	return 1;
+    }
+
+    /* A changed quiet camera pose does not imply overload: it may leave the
+     * same total cost affordable while moving projected importance between
+     * occurrences.  Authorize one reallocation at the retained budget, then
+     * consume the authority so an unchanged view cannot churn its cuts. */
+    policy.reset();
+    policy.raiseCurrentBudget(200000);
+    policy.requestRetainedReallocation();
+    input = Policy::Inputs();
+    input.activeCost = 150000;
+    input.minimumActiveCost = 50000;
+    decision = policy.beginPass(input);
+    if (decision.totalBudget != 200000 ||
+	!decision.retainedAdmission ||
+	decision.retainedAdmissionBudget != 150000) {
+	std::fprintf(stderr,
+	    "FAIL: retained importance reallocation budget=%zu "
+	    "admission=%d upgrade=%zu\n",
+	    decision.totalBudget, decision.retainedAdmission ? 1 : 0,
+	    decision.retainedAdmissionBudget);
+	return 1;
+    }
+    policy.resetPass();
+    decision = policy.beginPass(input);
+    if (decision.retainedAdmission ||
+	decision.retainedAdmissionBudget != SIZE_MAX) {
+	std::fprintf(stderr,
+	    "FAIL: retained importance reallocation was not one-shot\n");
+	return 1;
+    }
+
+    /* A late reusable frame may prove a larger allowance after the original
+     * allocation became terminal.  Reallocate the whole population using the
+     * newly calibrated capacity rather than preserving the smaller allowance
+     * merely because the current cut is already under it. */
+    policy.reset();
+    policy.raiseCurrentBudget(200000);
+    policy.requestRetainedReallocation(false);
+    input = Policy::Inputs();
+    input.activeCost = 150000;
+    input.minimumActiveCost = 50000;
+    input.targetFps = 20.0f;
+    input.calibratedCostPerSecond = 8000000.0L;
+    decision = policy.beginPass(input);
+    if (decision.totalBudget != 400000 || !decision.retainedAdmission ||
+	decision.retainedAdmissionBudget != 350000) {
+	std::fprintf(stderr,
+	    "FAIL: demonstrated headroom did not reallocate grown budget\n");
+	return 1;
+    }
+
+    /* A prominent-quality allocation may deliberately use capacity between
+     * the preferred stable cadence and the hard quality-frame deadline.  It
+     * must remain a fixed point across ordinary 20 Hz overload evaluation;
+     * an actual hard-deadline miss explicitly rejects the floor. */
+    policy.reset();
+    policy.raiseCurrentBudget(200000);
+    policy.requestRetainedReallocation();
+    input = Policy::Inputs();
+    input.activeCost = 150000;
+    input.minimumActiveCost = 50000;
+    decision = policy.beginPass(input);
+    policy.setRetainedQualityFloorBudget(
+	300000, 0x1111111111111111ULL, 150000, 50000);
+    if (policy.currentBudget() != 300000 ||
+	policy.retainedAdmissionRemaining() != 250000) {
+	std::fprintf(stderr, "FAIL: retained quality-floor admission setup\n");
+	return 1;
+    }
+    policy.resetPass();
+    policy.resetOverloadRecovery();
+    input.activeCost = 300000;
+    input.targetFps = 20.0f;
+    input.calibratedCostPerSecond = 4000000.0L;
+    input.observedStableNanoseconds = 80000000ULL;
+    policy.setProbeCount(3);
+    decision = policy.beginPass(input);
+    if (decision.totalBudget != 300000 || decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: retained quality floor was not a stable fixed point\n");
+	return 1;
+    }
+    if (policy.noteRetainedQualityFloorMiss() ||
+	policy.noteRetainedQualityFloorMiss() ||
+	policy.retainedQualityFloorRejected()) {
+	std::fprintf(stderr,
+	    "FAIL: transient deadline miss rejected quality floor\n");
+	return 1;
+    }
+    policy.setRetainedQualityFloorBudget(
+	300000, 0x2222222222222222ULL, 300000, 50000);
+    if (policy.noteRetainedQualityFloorMiss() ||
+	policy.retainedQualityFloorRejected()) {
+	std::fprintf(stderr,
+	    "FAIL: distinct quality-floor populations shared misses\n");
+	return 1;
+    }
+    policy.noteRetainedQualityFloorMet();
+    if (policy.noteRetainedQualityFloorMiss() ||
+	policy.noteRetainedQualityFloorMiss() ||
+	!policy.noteRetainedQualityFloorMiss()) {
+	std::fprintf(stderr,
+	    "FAIL: repeated deadline misses did not reject quality floor\n");
+	return 1;
+    }
+    policy.resetPass();
+    policy.resetOverloadRecovery();
+    policy.setProbeCount(3);
+    decision = policy.beginPass(input);
+    if (!policy.retainedQualityFloorRejected() ||
+	decision.totalBudget >= 300000 || !decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: hard-deadline rejection retained the quality floor\n");
+	return 1;
+    }
+
+    /* A calibrated successor to a minimax allocation must recompute that
+     * allocation using the newly demonstrated allowance.  Reusing the old
+     * per-occurrence allocation stamps makes the richer budget inert and can
+     * leave a warm Hubble view indefinitely coarse. */
+    policy.reset();
+    policy.raiseCurrentBudget(200000);
+    policy.requestRetainedReallocation();
+    input = Policy::Inputs();
+    input.activeCost = 150000;
+    input.minimumActiveCost = 50000;
+    decision = policy.beginPass(input);
+    Policy::CalibrationInputs retainedCalibration;
+    retainedCalibration.activeCost = 150000;
+    retainedCalibration.targetNanoseconds = 50000000ULL;
+    retainedCalibration.observedNanoseconds = 10000000ULL;
+    retainedCalibration.calibratedBudget = 400000.0L;
+    retainedCalibration.passAdmittedWork = true;
+    retainedCalibration.retainedAllocation = true;
+    Policy::CalibrationDecision retainedProbe =
+	policy.finishBlockedPass(retainedCalibration);
+    Policy::CompletedFrameDecision retainedFrame =
+	policy.completeCalibrationFrame();
+    input.targetFps = 20.0f;
+    input.calibratedCostPerSecond = 8000000.0L;
+    decision = policy.beginPass(input);
+    if (!retainedProbe.requestFrame ||
+	!retainedFrame.restartSubmission ||
+	decision.totalBudget != 400000 || !decision.retainedAdmission ||
+	decision.retainedAdmissionBudget != 350000) {
+	std::fprintf(stderr,
+	    "FAIL: calibrated minimax successor did not reallocate its grown "
+	    "budget (frame=%d budget=%zu admission=%d upgrade=%zu)\n",
+	    retainedFrame.restartSubmission ? 1 : 0, decision.totalBudget,
+	    decision.retainedAdmission ? 1 : 0,
+	    decision.retainedAdmissionBudget);
 	return 1;
     }
 
@@ -1461,6 +1704,35 @@ test_quality_policy(void)
 	return 1;
     }
 
+    /* Exact completed frames admit the finest subpixel tier whose inverse-
+     * square work estimate fits both time and scene-cost headroom.  This may
+     * move directly to 0.5, take the intermediate 0.75 rung, or remain at the
+     * fast one-pixel target.  The witness deliberately includes a completed
+     * first-use frame: upload/preparation cost only makes it conservative. */
+    if (!near(Policy::stablePixelError(
+	    1.0f, 100, 400, 10000000ULL, 20.0f, true, true), 0.5f) ||
+	!near(Policy::stablePixelError(
+	    1.0f, 100, SIZE_MAX, 10000000ULL, 20.0f, true, true), 0.5f) ||
+	!near(Policy::stablePixelError(
+	    0.75f, 100, 225, 10000000ULL, 20.0f, true, true), 0.5f) ||
+	!near(Policy::stablePixelError(
+	    0.5f, 100, 10000, 1000000ULL, 20.0f, true, true), 0.5f) ||
+	!near(Policy::stablePixelError(
+	    1.0f, 101, 400, 10000000ULL, 20.0f, true, true), 0.75f) ||
+	!near(Policy::stablePixelError(
+	    1.0f, 100, 200, 20000000ULL, 20.0f, true, true), 0.75f) ||
+	!near(Policy::stablePixelError(
+	    1.0f, 113, 200, 29000000ULL, 20.0f, true, true), 1.0f) ||
+	!near(Policy::stablePixelError(
+	    1.0f, 100, 400, 10000000ULL, 20.0f, false, true), 1.0f) ||
+	!near(Policy::stablePixelError(
+	    1.0f, 100, 400, 10000000ULL, 20.0f, true, false), 1.0f) ||
+	!near(Policy::stablePixelError(
+	    4.0f, 100, 400, 10000000ULL, 20.0f, true, true), 4.0f)) {
+	std::fprintf(stderr, "FAIL: stable subpixel headroom policy\n");
+	return 1;
+    }
+
 
     if (!near(Policy::pointProxyThreshold(
 	    0.0f, 10000000ULL, 60.0f), 1.0f) ||
@@ -1489,7 +1761,7 @@ test_quality_policy(void)
 		threshold, 66666668ULL, 60.0f);
 	} else {
 	    decision = pointCalibration.completed(
-		threshold, 10000000ULL, 60.0f, true, true);
+		threshold, 10000000ULL, 60.0f, true);
 	}
 	threshold = decision.threshold;
 	if (!decision.changed) {
@@ -1505,11 +1777,52 @@ test_quality_policy(void)
     }
     pointCalibration.reset();
     const auto preparationOnly = pointCalibration.completed(
-	8.0f, 10000000ULL, 60.0f, false, true);
+	8.0f, 10000000ULL, 60.0f, false);
     if (preparationOnly.changed || preparationOnly.continueRelaxation ||
 	!near(preparationOnly.threshold, 8.0f)) {
 	std::fprintf(stderr,
 	    "FAIL: non-reusable point-proxy preparation changed quality\n");
+	return 1;
+    }
+
+    /* Losing the initiating pressure-probe latch while a large scene streams
+     * results must not strand a coarse point cut.  Reusable headroom alone is
+     * the durable continuation witness. */
+    pointCalibration.reset();
+    const auto recoveredCoarse = pointCalibration.completed(
+	8.0f, 10000000ULL, 60.0f, true);
+    if (!recoveredCoarse.changed || !recoveredCoarse.continueRelaxation ||
+	!(recoveredCoarse.threshold < 8.0f)) {
+	std::fprintf(stderr,
+	    "FAIL: reusable coarse point cut did not recover quality\n");
+	return 1;
+    }
+    if (pointCalibration.requiresReusableConfirmation(1.0f) ||
+	pointCalibration.requiresReusableConfirmation(
+	    std::numeric_limits<float>::quiet_NaN()) ||
+	!pointCalibration.requiresReusableConfirmation(1.02f) ||
+	!pointCalibration.requiresReusableConfirmation(8.0f)) {
+	std::fprintf(stderr,
+	    "FAIL: point-proxy reusable confirmation floor\n");
+	return 1;
+    }
+
+    /* A safe coarse small-part cut must not collapse all reducible mesh
+     * prefixes.  That old coupling made Hubble alternate forever between a
+     * one-pixel population and a roughly two-pixel population, starving its
+     * large solar arrays of the detail budget. */
+    if (BObolLodPointProxyCalibrationPolicy::
+	    shouldRecoverTriangleDetail(true, false, true, false) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    shouldRecoverTriangleDetail(false, true, true, false) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    shouldRecoverTriangleDetail(true, true, true, true) ||
+	!BObolLodPointProxyCalibrationPolicy::
+	    shouldRecoverTriangleDetail(true, true, false, false) ||
+	!BObolLodPointProxyCalibrationPolicy::
+	    shouldRecoverTriangleDetail(true, true, true, false)) {
+	std::fprintf(stderr,
+	    "FAIL: point/triangle recovery ignores protected quality floor\n");
 	return 1;
     }
 
@@ -1763,6 +2076,20 @@ test_view_demand_policy(void)
     if (policy.scaleDemandRefreshActive() || policy.viewScaleChanging() ||
 	policy.interactionScaleChanged() || policy.qualityBudgetActive()) {
 	std::fprintf(stderr, "FAIL: view-demand reset\n");
+	return 1;
+    }
+
+    policy.beginGesture(true);
+    (void)policy.observeCameraChange(true, 0);
+    policy.beginCameraInteraction(true, true);
+    (void)policy.noteMotionFrameSettled();
+    probeInput = Policy::QualityProbeInputs();
+    probeInput.activeMaximum = 31;
+    probeInput.presentationCeiling = 20;
+    probe = policy.beginQualityProbe(probeInput);
+    if (!probe.begin || probe.progressiveCeiling != 21) {
+	std::fprintf(stderr,
+	    "FAIL: quality probe retained legacy 16-cut ceiling\n");
 	return 1;
     }
     return 0;
@@ -2120,6 +2447,43 @@ test_publication_policy(void)
     policy.reset();
     if (policy.pending() || policy.framePending()) {
 	std::fprintf(stderr, "FAIL: publication reset\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_resident_growth_policy(void)
+{
+    BObolLodResidentGrowthPolicy policy;
+    if (policy.pending() ||
+	policy.consumeIfReady(true, true, true)) {
+	std::fprintf(stderr, "FAIL: initial resident-growth policy\n");
+	return 1;
+    }
+
+    policy.noteRicherPrefixAvailable();
+    policy.noteRicherPrefixAvailable();
+    if (!policy.pending() ||
+	policy.consumeIfReady(false, true, true) ||
+	policy.consumeIfReady(true, false, true) ||
+	policy.consumeIfReady(true, true, false) ||
+	!policy.pending()) {
+	std::fprintf(stderr,
+	    "FAIL: resident growth did not coalesce behind readiness\n");
+	return 1;
+    }
+    if (!policy.consumeIfReady(true, true, true) || policy.pending() ||
+	policy.consumeIfReady(true, true, true)) {
+	std::fprintf(stderr,
+	    "FAIL: resident growth allocation edge was not one-shot\n");
+	return 1;
+    }
+
+    policy.noteRicherPrefixAvailable();
+    policy.reset();
+    if (policy.pending()) {
+	std::fprintf(stderr, "FAIL: resident-growth reset\n");
 	return 1;
     }
     return 0;
@@ -2887,6 +3251,8 @@ main(int argc, char **argv)
     if (test_presentation_policy())
 	return 1;
     if (test_publication_policy())
+	return 1;
+    if (test_resident_growth_policy())
 	return 1;
     if (test_compaction_policy())
 	return 1;

@@ -11,6 +11,7 @@
 #include "BObol/BDisplayEndpoint.h"
 #include "bv.h"
 
+#include <algorithm>
 #include <limits.h>
 
 BObolInputEvent::BObolInputEvent(void) :
@@ -58,9 +59,7 @@ BObolInputBinding::BObolInputBinding(
 BObolInputContext::BObolInputContext(void) :
     handler(NULL),
     handlerData(NULL),
-    layerHandler(NULL),
-    layerHandlerData(NULL),
-    layerOwner(NULL)
+    nextLayerOrder(1)
 {
 }
 
@@ -72,12 +71,10 @@ void
 BObolInputContext::clear(void)
 {
     this->bindings.clear();
-    this->layerBindings.clear();
+    this->actionLayers.clear();
     this->handler = NULL;
     this->handlerData = NULL;
-    this->layerHandler = NULL;
-    this->layerHandlerData = NULL;
-    this->layerOwner = NULL;
+    this->nextLayerOrder = 1;
 }
 
 void
@@ -121,28 +118,44 @@ BObolInputContext::setActionLayer(const BObolInputActionLayer *layer,
 	void *owner, void *userData)
 {
     if (!layer || !layer->handler || !layer->bindings ||
-	!layer->bindingCount || !owner ||
-	(this->layerOwner && this->layerOwner != owner))
+	!layer->bindingCount || !owner)
 	return 0;
 
-    this->layerBindings.assign(layer->bindings,
+    ActionLayer *target = NULL;
+    for (ActionLayer &entry : this->actionLayers) {
+	if (entry.owner == owner) {
+	    target = &entry;
+	    break;
+	}
+    }
+    if (!target) {
+	this->actionLayers.push_back(ActionLayer());
+	target = &this->actionLayers.back();
+	target->owner = owner;
+    }
+    target->bindings.assign(layer->bindings,
 	layer->bindings + layer->bindingCount);
-    this->layerHandler = layer->handler;
-    this->layerHandlerData = userData;
-    this->layerOwner = owner;
+    target->handler = layer->handler;
+    target->handlerData = userData;
+    target->order = this->nextLayerOrder++;
+    if (!this->nextLayerOrder)
+	this->nextLayerOrder = 1;
     return 1;
 }
 
 int
 BObolInputContext::clearActionLayerIf(void *owner)
 {
-    if (!owner || this->layerOwner != owner)
+    if (!owner)
 	return 0;
-    this->layerBindings.clear();
-    this->layerHandler = NULL;
-    this->layerHandlerData = NULL;
-    this->layerOwner = NULL;
-    return 1;
+    for (std::vector<ActionLayer>::iterator it = this->actionLayers.begin();
+	 it != this->actionLayers.end(); ++it) {
+	if (it->owner != owner)
+	    continue;
+	this->actionLayers.erase(it);
+	return 1;
+    }
+    return 0;
 }
 
 static unsigned int
@@ -179,10 +192,15 @@ BObolInputContext::dispatch(const BObolInputEvent *event) const
     if (!event)
 	return -1;
 
-    const BObolInputBinding *baseWinner = NULL;
-    const BObolInputBinding *layerWinner = NULL;
-    int baseScore = INT_MIN;
-    int layerScore = INT_MIN;
+    struct Candidate {
+	BObolInputAction action;
+	BObolInputActionHandler handler;
+	void *handlerData;
+	int score;
+	uint64_t order;
+	int layer;
+    };
+    std::vector<Candidate> candidates;
 
     const auto consider = [event](const BObolInputBinding &binding,
 	const BObolInputBinding **winner, int *winnerScore) {
@@ -195,36 +213,47 @@ BObolInputContext::dispatch(const BObolInputEvent *event) const
 	    *winnerScore = score;
 	}
     };
+    const BObolInputBinding *baseWinner = NULL;
+    int baseScore = INT_MIN;
     for (const BObolInputBinding &binding : this->bindings)
 	consider(binding, &baseWinner, &baseScore);
-    for (const BObolInputBinding &binding : this->layerBindings)
-	consider(binding, &layerWinner, &layerScore);
-    if (!baseWinner && !layerWinner)
-	return 0;
+    if (baseWinner && baseWinner->action != BOBOL_ACTION_NONE &&
+	this->handler) {
+	Candidate candidate = {baseWinner->action, this->handler,
+	    this->handlerData, baseScore, 0, 0};
+	candidates.push_back(candidate);
+    }
 
-    /* A handler may replace its owner-scoped layer while beginning or ending
-     * a gesture.  Copy both candidate actions and handlers before invoking it
-     * so replacement cannot invalidate a binding needed for fallthrough. */
-    const BObolInputAction baseAction = baseWinner ? baseWinner->action :
-	static_cast<BObolInputAction>(BOBOL_ACTION_NONE);
-    const BObolInputAction layerAction = layerWinner ?
-	layerWinner->action :
-	static_cast<BObolInputAction>(BOBOL_ACTION_NONE);
-    BObolInputActionHandler baseHandler = this->handler;
-    void *baseHandlerData = this->handlerData;
-    BObolInputActionHandler appHandler = this->layerHandler;
-    void *appHandlerData = this->layerHandlerData;
+    for (const ActionLayer &layer : this->actionLayers) {
+	const BObolInputBinding *winner = NULL;
+	int score = INT_MIN;
+	for (const BObolInputBinding &binding : layer.bindings)
+	    consider(binding, &winner, &score);
+	if (!winner || winner->action == BOBOL_ACTION_NONE || !layer.handler)
+	    continue;
+	Candidate candidate = {winner->action, layer.handler,
+	    layer.handlerData, score, layer.order, 1};
+	candidates.push_back(candidate);
+    }
 
-    if (layerWinner && layerScore >= baseScore &&
-	layerAction != BOBOL_ACTION_NONE) {
-	const int result = appHandler ? appHandler(appHandlerData, layerAction,
-	    event) : BOBOL_INPUT_RESULT_UNHANDLED;
+    std::stable_sort(candidates.begin(), candidates.end(),
+	[](const Candidate &a, const Candidate &b) {
+	    if (a.score != b.score)
+		return a.score > b.score;
+	    if (a.layer != b.layer)
+		return a.layer > b.layer;
+	    return a.order > b.order;
+	});
+
+    /* Handlers may replace or remove layers during dispatch.  Candidates are
+     * value snapshots, so fallthrough never dereferences mutated storage. */
+    for (const Candidate &candidate : candidates) {
+	const int result = candidate.handler(candidate.handlerData,
+	    candidate.action, event);
 	if (result != BOBOL_INPUT_RESULT_UNHANDLED)
 	    return result;
     }
-    return baseWinner && baseAction != BOBOL_ACTION_NONE && baseHandler ?
-	baseHandler(baseHandlerData, baseAction, event) :
-	BOBOL_INPUT_RESULT_UNHANDLED;
+    return BOBOL_INPUT_RESULT_UNHANDLED;
 }
 
 int
@@ -234,9 +263,11 @@ BObolInputContext::hasAction(BObolInputAction action) const
 	if (binding.action == action)
 	    return 1;
     }
-    for (const BObolInputBinding &binding : this->layerBindings) {
-	if (binding.action == action)
-	    return 1;
+    for (const ActionLayer &layer : this->actionLayers) {
+	for (const BObolInputBinding &binding : layer.bindings) {
+	    if (binding.action == action)
+		return 1;
+	}
     }
     return 0;
 }
@@ -244,7 +275,10 @@ BObolInputContext::hasAction(BObolInputAction action) const
 size_t
 BObolInputContext::bindingCount(void) const
 {
-    return this->bindings.size() + this->layerBindings.size();
+    size_t count = this->bindings.size();
+    for (const ActionLayer &layer : this->actionLayers)
+	count += layer.bindings.size();
+    return count;
 }
 
 extern "C" const BObolInputProfile *

@@ -226,7 +226,7 @@ QBot::update_obj_wireframe()
     if (!gedp)
 	return;
 
-    p = qged_edit_feature_overlay_ensure(m_ctx, "_bot_edit", this,
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_bot_edit",
 	    bu_vls_cstr(&oname));
     if (qged_edit_feature_ref_is_null(p))
 	return;
@@ -273,7 +273,7 @@ QBot::update_obj_wireframe()
 	for (size_t i = 0; i < bot->num_vertices; i++)
 	    VMOVE(surface_points[i], &bot->vertices[i * 3]);
 	struct ged_view_feature_style surface_style =
-	    GED_VIEW_FEATURE_STYLE_INIT;
+	    ged_view_feature_style_default();
 	surface_style.visible = 1;
 	surface_style.selectable = 1;
 	surface_style.color_valid = 1;
@@ -281,7 +281,7 @@ QBot::update_obj_wireframe()
 	surface_style.color[1] = 126;
 	surface_style.color[2] = 168;
 	struct ged_view_feature_batch_desc desc =
-	    GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	    ged_view_feature_batch_desc_default();
 	desc.owner_id = "qged-bot-edit";
 	desc.owner_role = "edit-handle";
 	desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE;
@@ -348,7 +348,7 @@ QBot::publish_selection_handle()
     }
 
     struct ged_view_feature_style style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     style.visible = 1;
     style.selectable = 1;
     style.color_valid = 1;
@@ -356,7 +356,7 @@ QBot::publish_selection_handle()
     style.color[1] = 196;
     style.color[2] = 32;
     struct ged_view_feature_batch_desc desc =
-	GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	ged_view_feature_batch_desc_default();
     desc.owner_id = "qged-bot-edit";
     desc.owner_role = "edit-handle";
     desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE;
@@ -441,7 +441,7 @@ QBot::eventFilter(QObject *, QEvent *event)
     struct ged_pick_result *result =
 	ged_pick_nearest(view_ctx,
 	    mouse->pos().x(), mouse->pos().y());
-    struct ged_pick_detail detail = GED_PICK_DETAIL_INIT;
+    struct ged_pick_detail detail = ged_pick_detail_default();
     struct bu_vls path = BU_VLS_INIT_ZERO;
     const int picked = result && ged_pick_result_count(result) > 0 &&
 	ged_pick_result_path(result, 0, &path) &&

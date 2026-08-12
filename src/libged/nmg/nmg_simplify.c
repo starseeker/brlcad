@@ -28,7 +28,7 @@
 #include <string.h>
 
 #include "bu/cmd.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/geom.h"
 
 #include "../ged_private.h"
@@ -254,7 +254,7 @@ out1:
 	bu_vls_printf(gedp->ged_result_str,
 		"Single vertexuse in shell of %s has been ignored in conversion\n", nmg_name);
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     dp = db_diradd(gedp->dbip, new_name,
 	RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&new_intern.idb_type);
 

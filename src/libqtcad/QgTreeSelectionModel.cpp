@@ -33,7 +33,7 @@
 #include "qtcad/QgTreeSelectionModel.h"
 #include "qtcad/QgSignalFlags.h"
 
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 
 static void
 qg_commit_selection_change(QgTreeView *treeview, QgModel *model)
@@ -44,13 +44,12 @@ qg_commit_selection_change(QgTreeView *treeview, QgModel *model)
 	/* All path mutations in one Qt selection request are complete before
 	 * deriving ancestor/descendant metadata or touching retained
 	 * presentation.  Large range selections therefore pay for exactly one
-	 * hierarchy recompute, one sparse draw sync, and one indexed row
+	 * hierarchy recompute, one sparse selection commit, and one indexed row
 	 * notification pass. */
 	ged_selection_recompute(model->ged(), nullptr);
+	(void)ged_selection_batch_end(model->ged());
 
-	QgViewUpdateFlags flags = QG_VIEW_SELECT;
-	if (ged_selection_draw_sync(model->ged(), nullptr))
-		flags |= QG_VIEW_REFRESH;
+	QgViewUpdateFlags flags = QG_VIEW_SELECT | QG_VIEW_REFRESH;
 
 	emit treeview->view_changed(flags);
 	model->notifySelectionItemsChanged();
@@ -77,6 +76,7 @@ QgTreeSelectionModel::select(const QItemSelection &selection, QItemSelectionMode
 		return;
 	}
 	struct ged *gedp = m->ged();
+	(void)ged_selection_batch_begin(gedp);
 
 	QModelIndexList dl = selection.indexes();
 	std::unordered_set<QgItem *> visited;
@@ -130,6 +130,7 @@ QgTreeSelectionModel::select(const QModelIndex &index, QItemSelectionModel::Sele
 		return;
 	}
 	struct ged *gedp = m->ged();
+	(void)ged_selection_batch_begin(gedp);
 
 	if (flags & QItemSelectionModel::Clear)
 		ged_selection_clear(gedp, nullptr);

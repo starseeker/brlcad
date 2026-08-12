@@ -45,7 +45,7 @@
 #include "raytrace.h"
 #include "wdb.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 static void
 track_notify_added_if_present(struct ged *gedp, const char *name)
@@ -86,7 +86,7 @@ ged_track_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     int ret = ged_track2(gedp->ged_result_str, wdbp, argv);
     if (ret == BRLCAD_OK) {
 	struct bu_vls name = BU_VLS_INIT_ZERO;

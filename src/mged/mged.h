@@ -72,7 +72,7 @@
 #include "bu/vls.h"
 #include "ged.h"
 #include "ged/draw.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "ged/scene.h"
 #include "rt/edit.h"
 #include "wdb.h"
@@ -285,7 +285,7 @@ mged_event_batch_begin(struct mged_state *s)
 {
     if (!s || !s->gedp || !s->dbip || s->gedp->dbip != s->dbip)
 	return 0;
-    return ged_event_batch_begin(s->gedp) > 0;
+    return ged_event_batch_begin(s->gedp) == GED_EVENT_OK;
 }
 
 

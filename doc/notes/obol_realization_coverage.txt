@@ -194,8 +194,9 @@ or non-source-local query metadata stays whole-object while measure query
 hints remain whole-object until a bounded measurement provider exists.  The
 same LoD gate also verifies source-backed request conversion replaces stale template
 `source_query.*` params with current request metadata, and that non-forced
-mesh LoD submissions use the same view-policy active level as a direct
-`bobol_mesh_lod_load_view` selection for the submitted `rt_view_info` while
+mesh LoD submissions use the same view-policy active cut as
+`bobol_mesh_lod_select_cut` for the submitted projected extent and pixel-error
+target while
 rejecting duplicate queued/running view-policy requests through LoD service
 active-request tracking.
 

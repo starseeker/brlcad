@@ -55,6 +55,21 @@
 #include <thread>
 #include <vector>
 
+static void
+complete_test_hierarchy(struct BObolMeshLodHierarchyInfo &hierarchy)
+{
+    hierarchy.cut_count = static_cast<uint32_t>(hierarchy.max_cut + 1);
+    for (int cut = 0; cut <= hierarchy.max_cut; ++cut) {
+	const bool exact = cut == hierarchy.max_cut;
+	hierarchy.cuts[cut].object_error =
+	    static_cast<double>(hierarchy.max_cut - cut);
+	hierarchy.cuts[cut].quantization_bits[X] = exact ? 16 : 15;
+	hierarchy.cuts[cut].quantization_bits[Y] = exact ? 16 : 15;
+	hierarchy.cuts[cut].quantization_bits[Z] = exact ? 16 : 15;
+	hierarchy.cuts[cut].exact = exact ? 1 : 0;
+    }
+}
+
 static BObolLodRequest
 make_request(const char *path, const char *name)
 {
@@ -481,7 +496,9 @@ mesh_payload_result(const BObolLodRequest &request)
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = result.cacheKey;
-    result.geometry.activeLevel = 2;
+    result.geometry.activeCut = 2;
+    result.resolvedCut = request.requestedCut >= 0 ?
+	request.requestedCut : result.geometry.activeCut;
     result.counts.faceCount = 2;
     result.counts.pointCount = 4;
     result.bounds = request.bounds;
@@ -513,12 +530,14 @@ aabb_payload_task(const BObolLodRequest &request, void *UNUSED(userData))
 
 static BObolLodResult
 mesh_payload_variant_result(const BObolLodRequest &request,
-			    int activeLevel,
+			    int activeCut,
 			    int triangleCount)
 {
     BObolLodResult result = mesh_payload_result(request);
 
-    result.geometry.activeLevel = activeLevel;
+    result.geometry.activeCut = activeCut;
+    result.resolvedCut = request.requestedCut >= 0 ?
+	request.requestedCut : activeCut;
     result.mesh.clear();
     result.mesh.points.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
     result.mesh.points.push_back(SbVec3f(2.0f, 0.0f, 0.0f));
@@ -556,7 +575,7 @@ static BObolLodResult
 mesh_payload_requested_refined_task(const BObolLodRequest &request,
 	void *UNUSED(userData))
 {
-    return mesh_payload_variant_result(request, request.requestedLevel, 3);
+    return mesh_payload_variant_result(request, request.requestedCut, 3);
 }
 
 static BObolLodResult
@@ -631,7 +650,7 @@ source_full_detail_result(const BObolLodRequest &request)
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = result.cacheKey;
-    result.geometry.activeLevel = -1;
+    result.geometry.activeCut = -1;
     result.counts.faceCount = 1;
     result.counts.pointCount = 3;
     result.bounds = request.bounds;
@@ -741,33 +760,6 @@ submit_source_full_detail_task(BObolLodService &service,
 }
 
 static int
-expected_view_lod_level(struct db_i *dbip,
-			const char *name,
-			const struct bv_view_info *view,
-			int *level)
-{
-    if (!dbip || !name || !view || !level)
-	return 1;
-
-    struct BObolMeshLod *lod = bobol_mesh_lod_get(dbip, name);
-    if (!lod)
-	return 1;
-
-    struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
-    int ret = 0;
-    if (bobol_mesh_lod_load_view(lod, view, 0) < 0 ||
-	!bobol_mesh_lod_info_get(lod, &info) ||
-	info.active_level < 0) {
-	ret = 1;
-    } else {
-	*level = info.active_level;
-    }
-
-    bobol_mesh_lod_destroy(lod);
-    return ret;
-}
-
-static int
 make_submit_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
 {
     static const char *objname = "lod-submit.bot";
@@ -813,6 +805,49 @@ make_submit_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
     if (mk_bot(wdbp, objname, RT_BOT_SOLID, RT_BOT_UNORIENTED, 0,
 	       4, 4, vertices, faces, NULL, NULL) != 0) {
 	printf("FAIL: LoD submit mk_bot\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    /* A populated progressive hierarchy for residency/presentation tests.
+     * Interior grid vertices collapse at coarse quantization cuts and become
+     * independently drawable as precision increases; the tetrahedron above
+     * has only coordinate-only cuts and cannot exercise suffix loading. */
+    std::vector<fastf_t> prefetchVertices;
+    std::vector<int> prefetchFaces;
+    static const int gridSide = 5;
+    prefetchVertices.reserve(gridSide * gridSide * 3);
+    for (int y = 0; y < gridSide; ++y) {
+	for (int x = 0; x < gridSide; ++x) {
+	    prefetchVertices.push_back(static_cast<fastf_t>(x) /
+		static_cast<fastf_t>(gridSide - 1));
+	    prefetchVertices.push_back(static_cast<fastf_t>(y) /
+		static_cast<fastf_t>(gridSide - 1));
+	    prefetchVertices.push_back(
+		((x + y) & 1) ? 0.0625 : 0.0);
+	}
+    }
+    prefetchFaces.reserve((gridSide - 1) * (gridSide - 1) * 6);
+    for (int y = 0; y < gridSide - 1; ++y) {
+	for (int x = 0; x < gridSide - 1; ++x) {
+	    const int a = y * gridSide + x;
+	    const int b = a + 1;
+	    const int c = a + gridSide;
+	    const int d = c + 1;
+	    prefetchFaces.push_back(a);
+	    prefetchFaces.push_back(b);
+	    prefetchFaces.push_back(d);
+	    prefetchFaces.push_back(a);
+	    prefetchFaces.push_back(d);
+	    prefetchFaces.push_back(c);
+	}
+    }
+    if (mk_bot(wdbp, "lod-prefetch.bot", RT_BOT_SURFACE,
+	    RT_BOT_CCW, 0, gridSide * gridSide,
+	    static_cast<int>(prefetchFaces.size() / 3),
+	    prefetchVertices.data(), prefetchFaces.data(), NULL, NULL) != 0) {
+	printf("FAIL: LoD resident prefetch mk_bot\n");
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	return 1;
@@ -1075,7 +1110,7 @@ test_update_action_direct(void)
 	update.getUnmatchedResultCount() != 1 ||
 	update.getDiagnostics().getLength() == 0 ||
 	!meshDPayload ||
-	meshDPayload->activeLevel != 2 ||
+	meshDPayload->activeCut != 2 ||
 	meshDPayload->getTriangleCount() != 2) {
 	printf("FAIL: LoD update action view-local counts or payload\n");
 	renderRoot->unref();
@@ -4374,9 +4409,17 @@ test_mesh_lod_submit_action(void)
     }
 
     SoBRLMeshLodSubmitAction submit;
+    SoOrthographicCamera *viewPolicyCamera = new SoOrthographicCamera;
+    viewPolicyCamera->ref();
+    viewPolicyCamera->position = SbVec3f(0.5f, 0.5f, 5.0f);
+    viewPolicyCamera->height = 10.0f;
+    const SbViewVolume viewPolicyVolume =
+	viewPolicyCamera->getViewVolume(640.0f / 480.0f);
+    viewPolicyCamera->unref();
     submit.setService(&service);
     submit.setDatabase(dbip, "db://lod-submit-test", 2026);
     submit.setViewInfo(&view);
+    submit.setViewVolume(&viewPolicyVolume, 1.0f);
     submit.setGeneration(service.beginGeneration());
     submit.setRevisions(55, 66);
     submit.apply(root);
@@ -4418,10 +4461,9 @@ test_mesh_lod_submit_action(void)
 	return 1;
     }
 
-    int expectedViewLevel = -1;
-    if (expected_view_lod_level(dbip, "lod-submit.bot", &view,
-				&expectedViewLevel)) {
-	printf("FAIL: LoD submit action view-policy active level helper failed\n");
+    const int expectedViewCut = viewPolicyResults[0].resolvedCut;
+    if (expectedViewCut < 0) {
+	printf("FAIL: LoD submit action published no producer-resolved cut\n");
 	service.stop();
 	root->unref();
 	bobol_mesh_lod_cache_clear_database(dbip);
@@ -4437,17 +4479,21 @@ test_mesh_lod_submit_action(void)
      * capacity.  The unchanged view request must then refine directly to the
      * view-policy target on its next pass.
      */
+    const int initialMinimumCut = viewPolicyResults[0].progressiveMesh ?
+	viewPolicyResults[0].progressiveMesh->minimumCut() : -1;
+    const bool requiresCoverageRefinement =
+	expectedViewCut > initialMinimumCut;
     if (!viewPolicyResults[0].progressiveMesh ||
-	viewPolicyResults[0].geometry.activeLevel !=
-	    viewPolicyResults[0].progressiveMesh->minimumLevel() ||
-	viewPolicyResults[0].terminal) {
+	viewPolicyResults[0].geometry.activeCut != initialMinimumCut ||
+	(viewPolicyResults[0].terminal ? true : false) ==
+	    requiresCoverageRefinement) {
 	printf("FAIL: LoD submit action did not publish coverage-first minimum "
 	       "mesh=%d active=%d minimum=%d terminal=%d status=%d "
 	       "diagnostic=%s\n",
 	       viewPolicyResults[0].progressiveMesh ? 1 : 0,
-	       viewPolicyResults[0].geometry.activeLevel,
+	       viewPolicyResults[0].geometry.activeCut,
 	       viewPolicyResults[0].progressiveMesh ?
-		   viewPolicyResults[0].progressiveMesh->minimumLevel() : -1,
+		   viewPolicyResults[0].progressiveMesh->minimumCut() : -1,
 	       viewPolicyResults[0].terminal ? 1 : 0,
 	       viewPolicyResults[0].providerStatus,
 	       viewPolicyResults[0].diagnostic.getString());
@@ -4460,36 +4506,39 @@ test_mesh_lod_submit_action(void)
 	return 1;
     }
 
-    SoBRLMeshLodSubmitAction refineSubmit;
-    refineSubmit.setService(&service);
-    refineSubmit.setDatabase(dbip, "db://lod-submit-test", 2026);
-    refineSubmit.setViewInfo(&view);
-    refineSubmit.setGeneration(service.beginGeneration());
-    refineSubmit.setRevisions(55, 66);
-    refineSubmit.apply(root);
-    if (refineSubmit.getSubmittedTaskCount() != 1 ||
-	wait_for_service(service)) {
-	printf("FAIL: LoD submit action did not queue coverage refinement\n");
-	service.stop();
-	root->unref();
-	bobol_mesh_lod_cache_clear_database(dbip);
-	db_close(dbip);
-	bu_file_delete(dbpath);
-	bu_dirclear(cache_dir);
-	return 1;
-    }
-    std::vector<BObolLodResult> refinedViewPolicyResults;
-    if (service.drainResults(refinedViewPolicyResults) != 1 ||
-	refinedViewPolicyResults.size() != 1 ||
-	refinedViewPolicyResults[0].geometry.activeLevel != expectedViewLevel) {
-	printf("FAIL: LoD submit action did not use view-policy refinement level\n");
-	service.stop();
-	root->unref();
-	bobol_mesh_lod_cache_clear_database(dbip);
-	db_close(dbip);
-	bu_file_delete(dbpath);
-	bu_dirclear(cache_dir);
-	return 1;
+    if (requiresCoverageRefinement) {
+	SoBRLMeshLodSubmitAction refineSubmit;
+	refineSubmit.setService(&service);
+	refineSubmit.setDatabase(dbip, "db://lod-submit-test", 2026);
+	refineSubmit.setViewInfo(&view);
+	refineSubmit.setViewVolume(&viewPolicyVolume, 1.0f);
+	refineSubmit.setGeneration(service.beginGeneration());
+	refineSubmit.setRevisions(55, 66);
+	refineSubmit.apply(root);
+	std::vector<BObolLodResult> refinementResults;
+	if (refineSubmit.getSubmittedTaskCount() != 1 ||
+	    wait_for_service(service) ||
+	    service.drainResults(refinementResults) != 1 ||
+	    refinementResults.size() != 1 ||
+	    refinementResults[0].resolvedCut != expectedViewCut ||
+	    refinementResults[0].geometry.activeCut <= initialMinimumCut ||
+	    refinementResults[0].geometry.activeCut > expectedViewCut) {
+	    printf("FAIL: LoD submit action did not make bounded view-policy "
+		   "refinement progress (expected=%d minimum=%d results=%zu "
+		   "active=%d resolved=%d)\n", expectedViewCut,
+		   initialMinimumCut, refinementResults.size(),
+		   refinementResults.empty() ? -1 :
+		       refinementResults[0].geometry.activeCut,
+		   refinementResults.empty() ? -1 :
+		       refinementResults[0].resolvedCut);
+	    service.stop();
+	    root->unref();
+	    bobol_mesh_lod_cache_clear_database(dbip);
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    bu_dirclear(cache_dir);
+	    return 1;
+	}
     }
 
     /* Projected demand, not whole-view model size, selects interactive PoP
@@ -4501,8 +4550,8 @@ test_mesh_lod_submit_action(void)
     projectedCamera->height = 10.0f;
     const SbViewVolume projectedVolume =
 	projectedCamera->getViewVolume(640.0f / 480.0f);
-    int motionLevel = -1;
-    int settledLevel = -1;
+    int motionCut = -1;
+    int settledCut = -1;
     for (int pass = 0; pass < 2; pass++) {
 	SoBRLMeshLodSubmitAction projectedSubmit;
 	projectedSubmit.setService(&service);
@@ -4527,7 +4576,7 @@ test_mesh_lod_submit_action(void)
 	std::vector<BObolLodResult> projectedResults;
 	if (service.drainResults(projectedResults) != 1 ||
 	    projectedResults.size() != 1 ||
-	    projectedResults[0].request.requestedLevel < 0) {
+	    projectedResults[0].resolvedCut < 0) {
 	    printf("FAIL: projected LoD demand result was not view-quantized\n");
 	    service.stop();
 	    root->unref();
@@ -4539,12 +4588,12 @@ test_mesh_lod_submit_action(void)
 	    return 1;
 	}
 	if (pass)
-	    settledLevel = projectedResults[0].request.requestedLevel;
+	    settledCut = projectedResults[0].resolvedCut;
 	else
-	    motionLevel = projectedResults[0].request.requestedLevel;
+	    motionCut = projectedResults[0].resolvedCut;
     }
-    if (settledLevel <= motionLevel) {
-	printf("FAIL: settled projected LoD demand did not refine motion level\n");
+    if (settledCut <= motionCut) {
+	printf("FAIL: settled projected LoD demand did not refine motion cut\n");
 	service.stop();
 	root->unref();
 	bobol_mesh_lod_cache_clear_database(dbip);
@@ -5413,7 +5462,7 @@ test_mesh_lod_submit_action(void)
     }
 
     if (!ret) {
-	int forcedLevel = expectedViewLevel;
+	int forcedCut = expectedViewCut;
 	SoBRLMeshLodSubmitAction forcedSubmit;
 	forcedSubmit.setService(&service);
 	forcedSubmit.setViewLodState(&viewState);
@@ -5421,11 +5470,11 @@ test_mesh_lod_submit_action(void)
 	forcedSubmit.setViewInfo(&view);
 	forcedSubmit.setGeneration(service.beginGeneration());
 	forcedSubmit.setRevisions(77, 88);
-	forcedSubmit.setForcedLevel(forcedLevel);
+	forcedSubmit.setForcedCut(forcedCut);
 	forcedSubmit.apply(root);
 
-	if (!forcedSubmit.hasForcedLevel() ||
-	    forcedSubmit.getForcedLevel() != forcedLevel ||
+	if (!forcedSubmit.hasForcedCut() ||
+	    forcedSubmit.getForcedCut() != forcedCut ||
 	    forcedSubmit.getSubmittedTaskCount() != 1) {
 	    printf("FAIL: LoD submit action forced-level policy was not applied\n");
 	    ret = 1;
@@ -5435,7 +5484,7 @@ test_mesh_lod_submit_action(void)
 	    std::vector<BObolLodResult> forcedResults;
 	    service.drainResults(forcedResults);
 	    if (forcedResults.size() != 1 ||
-		forcedResults[0].geometry.activeLevel != forcedLevel ||
+		forcedResults[0].geometry.activeCut != forcedCut ||
 		!forcedResults[0].mesh.isValid()) {
 		printf("FAIL: LoD submit action forced-level result was not returned\n");
 		ret = 1;
@@ -5448,7 +5497,7 @@ test_mesh_lod_submit_action(void)
 		    viewState.findMesh(mesh);
 		if (forcedUpdate.getAppliedResultCount() != 1 ||
 		    !forcedPayload ||
-		    forcedPayload->activeLevel != forcedLevel) {
+		    forcedPayload->activeCut != forcedCut) {
 		    printf("FAIL: LoD submit action forced-level result was not applied\n");
 		    ret = 1;
 		}
@@ -5939,7 +5988,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    const BObolViewLodState::MeshPayload *settlePayload =
 		controller.getViewLodState()->findMesh(mesh);
 	    if (settlePayload &&
-		settlePayload->activeLevel == settlePayload->requestedLevel &&
+		settlePayload->activeCut == settlePayload->requestedCut &&
 		service.pendingTaskCountForDiagnostics() == 0 &&
 		service.queuedResultCountForDiagnostics() == 0)
 		break;
@@ -5966,13 +6015,13 @@ test_view_controller_lod_submit_and_apply(void)
 	const BObolViewLodState::MeshPayload *settledPayload =
 	    controller.getViewLodState()->findMesh(mesh);
 	if (!settledPayload ||
-	    settledPayload->activeLevel != settledPayload->requestedLevel) {
+	    settledPayload->activeCut != settledPayload->requestedCut) {
 	    printf("FAIL: LoD view controller stranded its coverage-first "
 		   "minimum (active=%d requested=%d tasks=%u cuts=%u "
 		   "skipped=%u progressive=%d frame=%d pending=%zu "
 		   "queued=%zu render=%d reason=%s diagnostic=%s)\n",
-		   settledPayload ? settledPayload->activeLevel : -1,
-		   settledPayload ? settledPayload->requestedLevel : -1,
+		   settledPayload ? settledPayload->activeCut : -1,
+		   settledPayload ? settledPayload->requestedCut : -1,
 		   controller.getLastLodSubmittedTaskCount(),
 		   controller.getLastLodUpdatedCutCount(),
 		   controller.getLastLodSkippedMeshCount(),
@@ -6087,11 +6136,11 @@ test_view_controller_lod_submit_and_apply(void)
 		   (unsigned long long)controller.getLodViewRevision(),
 		   (unsigned long long)previousViewRevision,
 		   controller.isRenderRequested() ? 1 : 0,
-		   failedPayload ? failedPayload->activeLevel : -1,
-		   failedPayload ? failedPayload->requestedLevel : -1,
-		   failedPayload ? failedPayload->residentLevel : -1,
+		   failedPayload ? failedPayload->activeCut : -1,
+		   failedPayload ? failedPayload->requestedCut : -1,
+		   failedPayload ? failedPayload->residentCut : -1,
 		   failedPayload && failedPayload->progressiveMesh ?
-		       failedPayload->progressiveMesh->maximumLevel() : -1,
+		       failedPayload->progressiveMesh->maximumCut() : -1,
 		   controller.getRenderReason().getString(),
 		   controller.getLastLodDiagnostics().getString());
 	    service.stop();
@@ -6117,16 +6166,16 @@ test_view_controller_lod_submit_and_apply(void)
 	const BObolViewLodState::MeshPayload *activePayload =
 	    controller.getViewLodState()->findMesh(mesh);
 	if (activePayload && activePayload->progressiveMesh) {
-	    const int savedActiveLevel = activePayload->activeLevel;
-	    const int savedRequestedLevel = activePayload->requestedLevel;
-	    const int residentLevel =
-		activePayload->progressiveMesh->residentLevel();
+	    const int savedActiveLevel = activePayload->activeCut;
+	    const int savedRequestedLevel = activePayload->requestedCut;
+	    const int residentCut =
+		activePayload->progressiveMesh->residentCut();
 	    const int pendingRequestedLevel = std::min(
-		activePayload->progressiveMesh->maximumLevel(),
-		residentLevel + 1);
+		activePayload->progressiveMesh->maximumCut(),
+		residentCut + 1);
 	    const int retainedDemandLevel = std::max(savedActiveLevel,
-		std::min(pendingRequestedLevel, residentLevel));
-	    if (pendingRequestedLevel > residentLevel) {
+		std::min(pendingRequestedLevel, residentCut));
+	    if (pendingRequestedLevel > residentCut) {
 		std::vector<BObolLodResidentDemand> demands;
 		if (!controller.getViewLodState()->retargetMeshPayload(
 			activePayload, savedActiveLevel, pendingRequestedLevel,
@@ -6142,16 +6191,16 @@ test_view_controller_lod_submit_and_apply(void)
 		    return 1;
 		}
 		controller.getViewLodState()->residentMeshDemands(demands);
-		if (activePayload->activeLevel != savedActiveLevel ||
-		    activePayload->requestedLevel != pendingRequestedLevel ||
+		if (activePayload->activeCut != savedActiveLevel ||
+		    activePayload->requestedCut != pendingRequestedLevel ||
 		    demands.size() != 1 ||
-		    demands[0].level != retainedDemandLevel) {
+		    demands[0].cut != retainedDemandLevel) {
 		    printf("FAIL: resident demand did not preserve the loaded view-requested PoP prefix "
 			"active=%d requested=%d resident=%d demands=%zu level=%d\n",
-			activePayload->activeLevel,
-			activePayload->requestedLevel, residentLevel,
+			activePayload->activeCut,
+			activePayload->requestedCut, residentCut,
 			demands.size(),
-			demands.empty() ? -1 : demands[0].level);
+			demands.empty() ? -1 : demands[0].cut);
 		    service.stop();
 		    root->unref();
 		    bobol_mesh_lod_cache_clear_database(dbip);
@@ -6176,7 +6225,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    }
 	}
 	const int residentCameraLevel =
-	    activePayload ? activePayload->activeLevel : -1;
+	    activePayload ? activePayload->activeCut : -1;
 	previousViewRevision = controller.getLodViewRevision();
 	camera->height = 2.002f;
 	controller.clearRenderRequest();
@@ -6189,7 +6238,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    controller.getLodViewRevision() == previousViewRevision ||
 	    controller.getViewLodState()->findMesh(mesh) != activePayload ||
 	    !activePayload ||
-	    activePayload->activeLevel != residentCameraLevel ||
+	    activePayload->activeCut != residentCameraLevel ||
 	    service.queuedResultCountForDiagnostics() != 0 ||
 	    !controller.isRenderRequested()) {
 	    printf("FAIL: sub-level camera jitter restarted resident PoP loading "
@@ -6202,7 +6251,7 @@ test_view_controller_lod_submit_and_apply(void)
 		   (unsigned long long)previousViewRevision,
 		   (const void *)controller.getViewLodState()->findMesh(mesh),
 		   (const void *)activePayload,
-		   activePayload ? activePayload->activeLevel : -1,
+		   activePayload ? activePayload->activeCut : -1,
 		   residentCameraLevel,
 		   service.queuedResultCountForDiagnostics(),
 		   controller.isRenderRequested() ? 1 : 0,
@@ -6216,12 +6265,12 @@ test_view_controller_lod_submit_and_apply(void)
 	    return 1;
 	}
 
-	int forcedLevel = activePayload ? activePayload->activeLevel : 0;
+	int forcedCut = activePayload ? activePayload->activeCut : 0;
 	uint64_t previousPolicyRevision = controller.getLodPolicyRevision();
 	controller.clearRenderRequest();
-	controller.setLodForcedLevel(forcedLevel);
-	if (!controller.hasLodForcedLevel() ||
-	    controller.getLodForcedLevel() != forcedLevel ||
+	controller.setLodForcedCut(forcedCut);
+	if (!controller.hasLodForcedCut() ||
+	    controller.getLodForcedCut() != forcedCut ||
 	    controller.getLodPolicyRevision() == previousPolicyRevision ||
 	    !controller.isRenderRequested() ||
 	    bu_strcmp(controller.getRenderReason().getString(),
@@ -6261,8 +6310,8 @@ test_view_controller_lod_submit_and_apply(void)
 	if (controller.processPendingLodResults() != 1 ||
 	    controller.getLastLodAppliedResultCount() != 1 ||
 	    !controller.getViewLodState()->findMesh(mesh) ||
-	    controller.getViewLodState()->findMesh(mesh)->activeLevel !=
-	    forcedLevel ||
+	    controller.getViewLodState()->findMesh(mesh)->activeCut !=
+	    forcedCut ||
 	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-result") != 0) {
 	    printf("FAIL: LoD view controller did not apply forced-level result\n");
@@ -6277,8 +6326,8 @@ test_view_controller_lod_submit_and_apply(void)
 
 	previousPolicyRevision = controller.getLodPolicyRevision();
 	controller.clearRenderRequest();
-	controller.clearLodForcedLevel();
-	if (controller.hasLodForcedLevel() ||
+	controller.clearLodForcedCut();
+	if (controller.hasLodForcedCut() ||
 	    controller.getLodPolicyRevision() == previousPolicyRevision ||
 	    !controller.isRenderRequested() ||
 	    bu_strcmp(controller.getRenderReason().getString(),
@@ -6335,13 +6384,13 @@ test_view_controller_lod_submit_and_apply(void)
 	const BObolViewLodState::MeshPayload *zoomBefore =
 	    controller.getViewLodState()->findMesh(mesh);
 	const int zoomPublishedLevel = zoomBefore ?
-	    std::max(zoomBefore->activeLevel + 1, 42) : 42;
+	    std::max(zoomBefore->activeCut + 1, 42) : 42;
 	BObolLodRequest zoomRequest =
 	    make_request("/lod-submit.bot", "lod-submit.bot");
 	zoomRequest.sourceRevision = 303;
 	zoomRequest.viewRevision = controller.getLodViewRevision();
 	zoomRequest.policyRevision = controller.getLodPolicyRevision();
-	zoomRequest.requestedLevel = zoomPublishedLevel;
+	zoomRequest.requestedCut = zoomPublishedLevel;
 	BObolLodTask zoomResultTask;
 	zoomResultTask.generation = zoomGeneration;
 	zoomResultTask.request = zoomRequest;
@@ -6385,7 +6434,7 @@ test_view_controller_lod_submit_and_apply(void)
 	if (zoomStatus.lodResultsProcessed == 0 ||
 	    zoomStatus.lodResultsApplied == 0 ||
 	    !zoomAfter || zoomAfter == zoomBefore ||
-	    zoomAfter->activeLevel != zoomPublishedLevel ||
+	    zoomAfter->activeCut != zoomPublishedLevel ||
 	    zoomAfter->getTriangleCount() != 3 ||
 	    !qualityResumeRequested) {
 	    printf("FAIL: scale-changing interaction held its richer result "
@@ -6395,7 +6444,7 @@ test_view_controller_lod_submit_and_apply(void)
 		   zoomStatus.lodResultsProcessed,
 		   zoomStatus.lodResultsApplied,
 		   (const void *)zoomAfter, (const void *)zoomBefore,
-		   zoomAfter ? zoomAfter->activeLevel : -1,
+		   zoomAfter ? zoomAfter->activeCut : -1,
 		   zoomAfter ? zoomAfter->getTriangleCount() : -1,
 		   qualityResumeRequested ? 1 : 0,
 		   controller.isLodInteractionActive() ? 1 : 0,
@@ -6786,7 +6835,7 @@ test_view_controller_progressive_lod_results(void)
 	BObolLodRequest request = make_request("/progress/lod.bot", "lod.bot");
 	request.viewRevision = controller.getLodViewRevision();
 	request.policyRevision = controller.getLodPolicyRevision();
-	request.requestedLevel = 2;
+	request.requestedCut = 2;
 
 	uint64_t generation = controller.beginLodGeneration();
 	BObolLodTask coarseTask;
@@ -6832,7 +6881,7 @@ test_view_controller_progressive_lod_results(void)
 	    displayExport.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
 	    displayExport.apply(controller.getRenderSceneRoot());
 	    if (!payload ||
-		payload->activeLevel != 1 ||
+		payload->activeCut != 1 ||
 		payload->getTriangleCount() != 1 ||
 		displayExport.getTriangleCount() != 1 ||
 		mesh->lodAvailable.getValue() ||
@@ -6877,7 +6926,7 @@ test_view_controller_progressive_lod_results(void)
 	    displayExport.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
 	    displayExport.apply(controller.getRenderSceneRoot());
 	    if (!payload ||
-		payload->activeLevel != 2 ||
+		payload->activeCut != 2 ||
 		payload->getTriangleCount() != 3 ||
 		displayExport.getTriangleCount() != 3 ||
 		service.queuedResultCountForDiagnostics() != 0 ||
@@ -7299,7 +7348,7 @@ test_compact_many_leaf_scene_admission(void)
 	VSET(points[1], 1.0, 0.0, 0.0);
 	VSET(points[2], 0.0, 1.0, 0.0);
 	VSET(points[3], 0.0, 0.0, 1.0);
-	int faces[12] = {
+	uint32_t faces[12] = {
 	    0, 1, 2, 0, 3, 1, 1, 3, 2, 2, 3, 0
 	};
 	struct BObolMeshLodData data = {};
@@ -7313,15 +7362,16 @@ test_compact_many_leaf_scene_admission(void)
 	VSET(data.bmax, 1.0, 1.0, 1.0);
 	struct BObolMeshLodHierarchyInfo hierarchy =
 	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-	hierarchy.min_level = 0;
-	hierarchy.max_level = 4;
-	hierarchy.resident_level = 4;
+	hierarchy.min_cut = 0;
+	hierarchy.max_cut = 4;
+	hierarchy.resident_cut = 4;
 	for (int level = 0; level <= 4; ++level) {
-	    hierarchy.face_count[level] = 4;
-	    hierarchy.point_count[level] = 4;
+	    hierarchy.cuts[level].face_count = 4;
+	    hierarchy.cuts[level].point_count = 4;
 	}
 	VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
 	VSET(hierarchy.quantization_max, 1.0, 1.0, 1.0);
+	complete_test_hierarchy(hierarchy);
 	BObolLodProgressiveMeshPtr progressive(
 	    new BObolLodProgressiveMesh);
 	BObolCompactInstanceHandle handle;
@@ -7348,7 +7398,7 @@ test_compact_many_leaf_scene_admission(void)
 		BOBOL_MESH_LOD_PROVIDER_VERSION;
 	    residentRequest.qualityTier =
 		BOBOL_LOD_QUALITY_FAST_DISPLAY;
-	    residentRequest.requestedLevel = 4;
+	    residentRequest.requestedCut = 4;
 	    residentRequest.bounds = SbBox3f(
 		SbVec3f(0.0f, 0.0f, 0.0f),
 		SbVec3f(1.0f, 1.0f, 1.0f));
@@ -7364,9 +7414,10 @@ test_compact_many_leaf_scene_admission(void)
 		residentRequest.providerVersion;
 	    residentResult.geometry.cacheKey =
 		bobol_lod_asset_cache_key(residentRequest);
-	    residentResult.geometry.activeLevel = 4;
+	    residentResult.geometry.activeCut = 4;
 	    residentResult.progressiveMesh = progressive;
-	    residentResult.residentLevel = 4;
+	    residentResult.resolvedCut = 4;
+	    residentResult.residentCut = 4;
 	    residentResult.resultKind = BOBOL_LOD_RESULT_MESH;
 	    residentResult.qualityTier =
 		BOBOL_LOD_QUALITY_FAST_DISPLAY;
@@ -7571,9 +7622,9 @@ test_compact_many_leaf_scene_admission(void)
 		occurrenceBindings++;
 		if (bound->drawMode == BOBOL_LOD_DRAW_SHADED)
 		    shadedBindings++;
-		if (bound->activeLevel == 0)
+		if (bound->activeCut == 0)
 		    minimumBindings++;
-		if (bound->activeLevel == 4)
+		if (bound->activeCut == 4)
 		    terminalBindings++;
 	    }
 	    printf("FAIL: resident shared asset readmission did not preserve "
@@ -7749,7 +7800,7 @@ test_compact_many_leaf_scene_admission(void)
 	    VSET(priorityPoints[1], 1.0, 0.0, 0.0);
 	    VSET(priorityPoints[2], 0.0, 1.0, 0.0);
 	    VSET(priorityPoints[3], 0.0, 0.0, 1.0);
-	    int priorityFaces[12] = {
+	    uint32_t priorityFaces[12] = {
 		0, 1, 2, 0, 3, 1, 1, 3, 2, 2, 3, 0
 	    };
 	    struct BObolMeshLodData priorityData = {};
@@ -7763,15 +7814,16 @@ test_compact_many_leaf_scene_admission(void)
 	    VSET(priorityData.bmax, 1.0, 1.0, 1.0);
 	    struct BObolMeshLodHierarchyInfo priorityHierarchy =
 		BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-	    priorityHierarchy.min_level = 0;
-	    priorityHierarchy.max_level = 1;
-	    priorityHierarchy.resident_level = 1;
-	    priorityHierarchy.face_count[0] = 1;
-	    priorityHierarchy.face_count[1] = 4;
-	    priorityHierarchy.point_count[0] = 3;
-	    priorityHierarchy.point_count[1] = 4;
+	    priorityHierarchy.min_cut = 0;
+	    priorityHierarchy.max_cut = 1;
+	    priorityHierarchy.resident_cut = 1;
+	    priorityHierarchy.cuts[0].face_count = 1;
+	    priorityHierarchy.cuts[1].face_count = 4;
+	    priorityHierarchy.cuts[0].point_count = 3;
+	    priorityHierarchy.cuts[1].point_count = 4;
 	    VSET(priorityHierarchy.quantization_min, 0.0, 0.0, 0.0);
 	    VSET(priorityHierarchy.quantization_max, 1.0, 1.0, 1.0);
+	    complete_test_hierarchy(priorityHierarchy);
 	    BObolLodProgressiveMeshPtr priorityMesh(
 		new BObolLodProgressiveMesh);
 	    BObolViewLodState priorityState;
@@ -7805,15 +7857,16 @@ test_compact_many_leaf_scene_admission(void)
 		priorityResult.request.providerId = "bobol_mesh_lod";
 		priorityResult.request.providerVersion =
 		    BOBOL_MESH_LOD_PROVIDER_VERSION;
-		priorityResult.request.requestedLevel = 1;
+		priorityResult.request.requestedCut = 1;
+		priorityResult.resolvedCut = 1;
 		priorityResult.request.bounds = priorityMesh->bounds();
 		priorityResult.cacheKey =
 		    bobol_lod_cache_key(priorityResult.request);
 		priorityResult.geometry.kind =
 		    BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
-		priorityResult.geometry.activeLevel = 0;
+		priorityResult.geometry.activeCut = 0;
 		priorityResult.progressiveMesh = priorityMesh;
-		priorityResult.residentLevel = 1;
+		priorityResult.residentCut = 1;
 		priorityResult.resultKind = BOBOL_LOD_RESULT_MESH;
 		priorityResult.providerStatus = BOBOL_LOD_PROVIDER_READY;
 		priorityResult.bounds = priorityMesh->bounds();
@@ -8642,10 +8695,23 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    results[0].request.projectedPixelArea > 2400.0f ||
 	    results[0].request.projectedPixelPerimeter < 190.0f ||
 	    results[0].request.projectedPixelPerimeter > 194.0f ||
-	    results[0].request.requestedLevel != 6 ||
 	    !results[0].progressiveMesh ||
-	    results[0].geometry.activeLevel !=
-		results[0].progressiveMesh->minimumLevel() ||
+	    results[0].resolvedCut <
+		results[0].progressiveMesh->minimumCut() ||
+	    results[0].resolvedCut >
+		results[0].progressiveMesh->maximumCut() ||
+	    results[0].progressiveMesh->projectedErrorAtCut(
+		results[0].resolvedCut,
+		results[0].request.projectedPixelDiameter) >
+		results[0].request.targetPixelError * 1.000001 ||
+	    (results[0].resolvedCut >
+		 results[0].progressiveMesh->minimumCut() &&
+	     results[0].progressiveMesh->projectedErrorAtCut(
+		 results[0].resolvedCut - 1,
+		 results[0].request.projectedPixelDiameter) <=
+		 results[0].request.targetPixelError) ||
+	    results[0].geometry.activeCut !=
+		results[0].progressiveMesh->minimumCut() ||
 	    results[0].terminal) {
 	    printf("FAIL: compact projected LoD did not apply source placement exactly once\n");
 	    ret = 1;
@@ -8660,7 +8726,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	const BObolViewLodState::CadPayload *payload =
 	    viewState.findCadForResult(results[0]);
 	if (update.getAppliedResultCount() != 1 || !payload ||
-	    payload->activeLevel < 0 ||
+	    payload->activeCut < 0 ||
 	    payload->counts.faceCount != results[0].counts.faceCount) {
 	    printf("FAIL: compact projected LoD payload was not installed\n");
 	    ret = 1;
@@ -8694,9 +8760,9 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		   refine.getPendingRetainedRefinementCount(),
 		   refinedResults.size(),
 		   refinedResults.empty() ? -1 :
-		       refinedResults[0].geometry.activeLevel,
+		       refinedResults[0].geometry.activeCut,
 		   refinedResults.empty() ? -1 :
-		       refinedResults[0].request.requestedLevel,
+		       refinedResults[0].resolvedCut,
 		   refinedResults.empty() ? 0 :
 		       (refinedResults[0].terminal ? 1 : 0),
 		   refine.getDiagnostics().getString());
@@ -8706,7 +8772,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		viewState.findCadForResult(results[0]);
 	    if (service.drainResults(refinedResults) != 0 ||
 		!payload ||
-		payload->activeLevel != payload->requestedLevel) {
+		payload->activeCut != payload->requestedCut) {
 		printf("FAIL: compact projected LoD retained refinement did "
 		       "not reach its requested cut\n");
 		ret = 1;
@@ -8714,16 +8780,16 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		/* Keep the fixture's result descriptor synchronized with the
 		 * in-place retained cut used by the remaining presentation
 		 * assertions. */
-		results[0].geometry.activeLevel = payload->activeLevel;
-		results[0].residentLevel = payload->residentLevel;
+		results[0].geometry.activeCut = payload->activeCut;
+		results[0].residentCut = payload->residentCut;
 		results[0].counts = payload->counts;
 		results[0].terminal = TRUE;
 	    }
 	} else {
 	    if (service.drainResults(refinedResults) != 1 ||
 		refinedResults.size() != 1 ||
-		refinedResults[0].geometry.activeLevel !=
-		    refinedResults[0].request.requestedLevel ||
+		refinedResults[0].geometry.activeCut !=
+		    refinedResults[0].resolvedCut ||
 		!refinedResults[0].terminal) {
 		printf("FAIL: compact projected LoD provider refinement did "
 		       "not reach its requested cut\n");
@@ -8895,7 +8961,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
      * richer view demand for a later budget epoch. */
     if (!ret) {
 	point_t points[6];
-	int faces[12] = {
+	uint32_t faces[12] = {
 	    0, 1, 2,
 	    0, 2, 3,
 	    0, 3, 4,
@@ -8916,15 +8982,16 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	VSET(data.bmax, 1.0, 1.0, 1.0);
 	struct BObolMeshLodHierarchyInfo hierarchy =
 	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-	hierarchy.min_level = 0;
-	hierarchy.max_level = 1;
-	hierarchy.resident_level = 1;
-	hierarchy.face_count[0] = 1;
-	hierarchy.point_count[0] = 3;
-	hierarchy.face_count[1] = 4;
-	hierarchy.point_count[1] = 6;
+	hierarchy.min_cut = 0;
+	hierarchy.max_cut = 1;
+	hierarchy.resident_cut = 1;
+	hierarchy.cuts[0].face_count = 1;
+	hierarchy.cuts[0].point_count = 3;
+	hierarchy.cuts[1].face_count = 4;
+	hierarchy.cuts[1].point_count = 6;
 	VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
 	VSET(hierarchy.quantization_max, 1.0, 1.0, 1.0);
+	complete_test_hierarchy(hierarchy);
 
 	BObolLodProgressiveMeshPtr progressive(
 	    new BObolLodProgressiveMesh);
@@ -8935,21 +9002,22 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	partialData.point_count = 3;
 	partialData.point_orig_count = 3;
 	struct BObolMeshLodHierarchyInfo partialHierarchy = hierarchy;
-	partialHierarchy.resident_level = 0;
+	partialHierarchy.resident_cut = 0;
 	BObolLodResult budgetResult = results[0];
 	if (!progressive->update(data, hierarchy, 1, FALSE) ||
 	    !partialProgressive->update(
 		partialData, partialHierarchy, 0, FALSE) ||
 	    partialProgressive->faceCount(1) != 1 ||
-	    partialProgressive->hierarchyFaceCount(1) != 4) {
+	    partialProgressive->hierarchyFaceCountAtCut(1) != 4) {
 	    printf("FAIL: retained refinement budget fixture setup\n");
 	    ret = 1;
 	} else {
 	    budgetResult.progressiveMesh = partialProgressive;
 	    budgetResult.mesh.clear();
-	    budgetResult.geometry.activeLevel = 0;
-	    budgetResult.residentLevel = 0;
-	    budgetResult.request.requestedLevel = 1;
+	    budgetResult.geometry.activeCut = 0;
+	    budgetResult.residentCut = 0;
+	    budgetResult.request.requestedCut = 1;
+	    budgetResult.resolvedCut = 1;
 	    budgetResult.counts.faceCount = 1;
 	    budgetResult.counts.pointCount = 3;
 	    budgetResult.counts.originalPointCount = 3;
@@ -9007,9 +9075,10 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			rebaseSummary.meshAssetPath;
 		    rebaseSeed.request.objectName =
 			rebaseSummary.meshAssetName;
-		    rebaseSeed.geometry.activeLevel = 0;
-		    rebaseSeed.residentLevel = 0;
-		    rebaseSeed.request.requestedLevel = 1;
+		    rebaseSeed.geometry.activeCut = 0;
+		    rebaseSeed.residentCut = 0;
+		    rebaseSeed.request.requestedCut = 1;
+		    rebaseSeed.resolvedCut = 1;
 		    rebaseSeed.counts.faceCount = 1;
 		    rebaseSeed.counts.pointCount = 3;
 		    rebaseSeed.counts.originalPointCount = 3;
@@ -9041,8 +9110,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			ret = 1;
 		    } else {
 			BObolLodResult completed = rebaseSeed;
-			completed.residentLevel = 1;
-			completed.geometry.activeLevel = 0;
+			completed.residentCut = 1;
+			completed.geometry.activeCut = 0;
 			completed.counts.faceCount = 1;
 			completed.counts.pointCount = 3;
 			completed.counts.originalPointCount = 3;
@@ -9066,6 +9135,11 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    rebaseController.setViewportSize(641, 480);
 				    const BObolViewLodState::CadPayload *current =
 					rebaseState->findCadForResult(rebaseSeed);
+				    BObolLodRequest newerDemand = completed.request;
+				    newerDemand.requestedCut = 2;
+				    newerDemand.viewRevision = staleView;
+				    newerDemand.policyRevision =
+					current ? current->policyRevision : 0;
 				    /* Deliberately leave the retained occurrence stamped with
 				     * staleView.  Continuous wheel events can outrun both the
 				     * worker result and occurrence metadata; immutable asset
@@ -9075,8 +9149,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				     * requests remain the occurrence's current demand and must
 				     * survive the older worker completion. */
 				    if (current && !rebaseState->retargetCadPayload(
-					    current, 0, 2, staleView,
-					    current->policyRevision)) {
+					    current, 0, newerDemand)) {
 					printf("FAIL: cumulative suffix newer demand setup\n");
 					ret = 1;
 				    }
@@ -9105,9 +9178,9 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    } else {
 				const BObolViewLodState::CadPayload *after =
 				    rebaseState->findCadForResult(rebaseSeed);
-					if (!after || after->activeLevel != 0 ||
-					    after->residentLevel != 1 ||
-					    after->requestedLevel != 2 ||
+					if (!after || after->activeCut != 0 ||
+					    after->residentCut != 1 ||
+					    after->requestedCut != 2 ||
 				    after->viewRevision !=
 					rebaseController.getLodViewRevision() ||
 				    after->viewRevision == staleView ||
@@ -9118,9 +9191,9 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 					   "resident=%d requested=%d "
 					   "view=%llu/%llu stale=%llu "
 					   "faces=%zu pending=%d diagnostics=%s)\n",
-					   after ? after->activeLevel : -1,
-					   after ? after->residentLevel : -1,
-					   after ? after->requestedLevel : -1,
+					   after ? after->activeCut : -1,
+					   after ? after->residentCut : -1,
+					   after ? after->requestedCut : -1,
 					   (unsigned long long)(after ?
 					       after->viewRevision : 0),
 					   (unsigned long long)
@@ -9144,7 +9217,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		new SoOrthographicCamera;
 	    budgetCamera->ref();
 	    budgetCamera->position = SbVec3f(100.5f, 0.5f, 5.0f);
-	    budgetCamera->height = 300.0f;
+	    budgetCamera->height = 150.0f;
 	    const SbViewVolume budgetVolume =
 		budgetCamera->getViewVolume(640.0f / 480.0f);
 
@@ -9170,7 +9243,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		blocked.getPendingRetainedRefinementCount() != 1 ||
 		blocked.getRefinementBudgetBlockedCount() != 1 ||
 		blocked.getRefinementCostBudgetUsed() != 0 ||
-		payload->activeLevel != 0 || payload->requestedLevel != 1 ||
+		payload->activeCut != 0 || payload->requestedCut != 1 ||
 		budgetState.activeFaceCount() != 1) {
 		printf("FAIL: retained refinement exceeded its aggregate face "
 		       "budget (tasks=%u cuts=%u pending=%u blocked=%u used=%zu "
@@ -9181,13 +9254,59 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		       blocked.getPendingRetainedRefinementCount(),
 		       blocked.getRefinementBudgetBlockedCount(),
 		       blocked.getRefinementCostBudgetUsed(),
-		       payload ? payload->activeLevel : -1,
-		       payload ? payload->requestedLevel : -1,
+		       payload ? payload->activeCut : -1,
+		       payload ? payload->requestedCut : -1,
 		       budgetState.activeFaceCount(),
 		       payload ? payload->sourcePath.getString() : "",
 		       budgetSummary.meshAssetPath.getString(),
 		       blocked.getDiagnostics().getString());
 		ret = 1;
+	    }
+
+	    if (!ret) {
+		/* A retained perceptual allocation above the resident prefix is
+		 * actionable provider work.  Keep that witness separate from the
+		 * ordinary richer-cut observation: the latter may be retired when a
+		 * stable scene is genuinely budget limited, while this one must start
+		 * a cache/provider pass. */
+		SoBRLMeshLodSubmitAction missingResident;
+		missingResident.setService(&service);
+		missingResident.setDatabase(
+		    dbip, "db://compact-projected-test", 2026);
+		missingResident.setViewInfo(&view);
+		missingResident.setViewVolume(&budgetVolume, 1.0f);
+		missingResident.setGeneration(service.beginGeneration());
+		missingResident.setRevisions(63, 64);
+		missingResident.setViewLodState(&budgetState);
+		missingResident.setAllowCutDowngrade(TRUE);
+		missingResident.setPreserveMeshCoverage(TRUE);
+		missingResident.setRefinementCostBudget(0);
+		missingResident.setRetainedSceneUpgradeCostBudget(4);
+		missingResident.setRetainedSceneMaximumNormalizedError(1.0);
+		missingResident.setSubmissionTaskLimit(0);
+		missingResident.setCompactEntryRange(0, 1);
+		missingResident.apply(root);
+		payload = budgetState.findCadForResult(budgetResult);
+		if (!payload ||
+		    missingResident.getSubmittedTaskCount() != 0 ||
+		    missingResident.getUpdatedCutCount() != 0 ||
+		    missingResident.getPendingResidentRefinementCount() != 1 ||
+		    missingResident.getRetainedSceneUpgradeCostBudgetUsed() != 0 ||
+		    payload->activeCut != 0 || payload->residentCut != 0 ||
+		    payload->requestedCut != 1) {
+		    printf("FAIL: retained allocation lost its missing-resident "
+			   "provider witness (tasks=%u cuts=%u resident_pending=%u "
+			   "used=%zu active=%d resident=%d requested=%d)\n",
+			   missingResident.getSubmittedTaskCount(),
+			   missingResident.getUpdatedCutCount(),
+			   missingResident.getPendingResidentRefinementCount(),
+			   missingResident.
+			       getRetainedSceneUpgradeCostBudgetUsed(),
+			   payload ? payload->activeCut : -1,
+			   payload ? payload->residentCut : -1,
+			   payload ? payload->requestedCut : -1);
+		    ret = 1;
+		}
 	    }
 
 	    if (!ret) {
@@ -9284,9 +9403,10 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			}
 			BObolLodResult trialResult = budgetResult;
 			trialResult.progressiveMesh = progressive;
-			trialResult.geometry.activeLevel = 0;
-			trialResult.residentLevel = 1;
-			trialResult.request.requestedLevel = 1;
+			trialResult.geometry.activeCut = 0;
+			trialResult.residentCut = 1;
+			trialResult.request.requestedCut = 1;
+			trialResult.resolvedCut = 1;
 			trialResult.request.occurrenceKey =
 			    trialSummary.sourceInstanceKey;
 			trialResult.request.objectPath =
@@ -9319,9 +9439,9 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			for (const BObolLodResult &trialResult : trialResults) {
 			    const BObolViewLodState::CadPayload *trialPayload =
 				trialState.findCadForResult(trialResult);
-			    if (trialPayload && trialPayload->activeLevel == 0)
+			    if (trialPayload && trialPayload->activeCut == 0)
 				coarseCount++;
-			    if (trialPayload && trialPayload->activeLevel == 1)
+			    if (trialPayload && trialPayload->activeCut == 1)
 				richCount++;
 			}
 			if (trial.getOneOverBudgetRefinementLimit() != 1 ||
@@ -9358,7 +9478,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    if (!ret) {
 		BObolLodResult admittedResult = budgetResult;
 		admittedResult.progressiveMesh = progressive;
-		admittedResult.residentLevel = 1;
+		admittedResult.residentCut = 1;
 		BObolViewLodState admittedState;
 		if (!admittedState.applySourceResult(source, admittedResult)) {
 		    printf("FAIL: affordable retained refinement fixture apply\n");
@@ -9381,24 +9501,24 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    ceilingAction.setRevisions(65, 66);
 		    ceilingAction.setViewLodState(&ceilingState);
 		    ceilingAction.setRefinementCostBudget(4);
-		    ceilingAction.setRefinementLevelCeiling(0);
+		    ceilingAction.setRefinementCutCeiling(0);
 		    ceilingAction.apply(root);
 		    const BObolViewLodState::CadPayload *ceilingPayload =
 			ceilingState.findCadForResult(admittedResult);
 		    if (!ceilingPayload ||
-			ceilingAction.getRefinementLevelCeiling() != 0 ||
+			ceilingAction.getRefinementCutCeiling() != 0 ||
 			ceilingAction.getUpdatedCutCount() != 0 ||
 			ceilingAction.getRefinementCostBudgetUsed() != 0 ||
-			ceilingPayload->activeLevel != 0 ||
-			ceilingPayload->residentLevel != 1) {
+			ceilingPayload->activeCut != 0 ||
+			ceilingPayload->residentCut != 1) {
 			printf("FAIL: renderer ceiling allowed hidden occurrence "
 			       "promotion (ceiling=%d cuts=%u used=%zu active=%d "
 			       "resident=%d)\n",
-			       ceilingAction.getRefinementLevelCeiling(),
+			       ceilingAction.getRefinementCutCeiling(),
 			       ceilingAction.getUpdatedCutCount(),
 			       ceilingAction.getRefinementCostBudgetUsed(),
-			       ceilingPayload ? ceilingPayload->activeLevel : -1,
-			       ceilingPayload ? ceilingPayload->residentLevel : -1);
+			       ceilingPayload ? ceilingPayload->activeCut : -1,
+			       ceilingPayload ? ceilingPayload->residentCut : -1);
 			ret = 1;
 		    }
 		}
@@ -9419,7 +9539,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    admitted.getPendingRetainedRefinementCount() != 0 ||
 		    admitted.getRefinementBudgetBlockedCount() != 0 ||
 		    admitted.getRefinementCostBudgetUsed() != 4 ||
-		    payload->activeLevel != 1 ||
+		    payload->activeCut != 1 ||
 		    admittedState.activeFaceCount() != 4) {
 		    printf("FAIL: retained refinement did not use an affordable "
 			   "render-cost budget (tasks=%u cuts=%u pending=%u blocked=%u "
@@ -9429,10 +9549,133 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			   admitted.getPendingRetainedRefinementCount(),
 			   admitted.getRefinementBudgetBlockedCount(),
 			   admitted.getRefinementCostBudgetUsed(),
-			   payload ? payload->activeLevel : -1,
+			   payload ? payload->activeCut : -1,
 			   admittedState.activeFaceCount(),
 			   admitted.getDiagnostics().getString());
 		    ret = 1;
+		}
+		if (!ret) {
+		    /* The minimum prefix costs 66 weighted units and level one
+		     * costs four more.  The bounded upgrade allowance must keep
+		     * that affordable active level directly, without publishing a
+		     * temporary level-zero cut first. */
+		    SoBRLMeshLodSubmitAction directRecovery;
+		    directRecovery.setService(&service);
+		    directRecovery.setDatabase(
+			dbip, "db://compact-projected-test", 2026);
+		    directRecovery.setViewInfo(&view);
+		    directRecovery.setViewVolume(&budgetVolume, 1.0f);
+		    directRecovery.setGeneration(service.beginGeneration());
+		    directRecovery.setRevisions(66, 67);
+		    directRecovery.setViewLodState(&admittedState);
+		    directRecovery.setAllowCutDowngrade(TRUE);
+		    directRecovery.setPreserveMeshCoverage(TRUE);
+		    directRecovery.setRefinementCostBudget(0);
+		    directRecovery.setRetainedSceneUpgradeCostBudget(4);
+		    directRecovery.setSubmissionTaskLimit(0);
+		    directRecovery.setCompactEntryRange(0, 1);
+		    directRecovery.apply(root);
+		    payload = admittedState.findCadForResult(admittedResult);
+		    if (!payload ||
+			directRecovery.getSubmittedTaskCount() != 0 ||
+			directRecovery.getUpdatedCutCount() != 0 ||
+			directRecovery.
+			    getRetainedSceneUpgradeCostBudgetUsed() != 4 ||
+			payload->activeCut != 1) {
+			printf("FAIL: bounded retained recovery did not preserve "
+			       "the richest affordable active cut "
+			       "(tasks=%u cuts=%u used=%zu active=%d)\n",
+			       directRecovery.getSubmittedTaskCount(),
+			       directRecovery.getUpdatedCutCount(),
+			       directRecovery.
+				   getRetainedSceneUpgradeCostBudgetUsed(),
+			       payload ? payload->activeCut : -1);
+			ret = 1;
+		    }
+		}
+		if (!ret) {
+		    /* A scene-wide perceptual ceiling selects a specific retained
+		     * population independently of registry order.  A loose ceiling
+		     * may reclaim this occurrence to minimum; tightening it reuses
+		     * the same immutable prefix and restores the richer cut without a
+		     * provider task. */
+		    SoBRLMeshLodSubmitAction looseCeiling;
+		    looseCeiling.setService(&service);
+		    looseCeiling.setDatabase(
+			dbip, "db://compact-projected-test", 2026);
+		    looseCeiling.setViewInfo(&view);
+		    looseCeiling.setViewVolume(&budgetVolume, 1.0f);
+		    looseCeiling.setGeneration(service.beginGeneration());
+		    looseCeiling.setRevisions(66, 67);
+		    looseCeiling.setViewLodState(&admittedState);
+		    looseCeiling.setAllowCutDowngrade(TRUE);
+		    looseCeiling.setPreserveMeshCoverage(TRUE);
+		    looseCeiling.setRefinementCostBudget(0);
+		    looseCeiling.setRetainedSceneUpgradeCostBudget(4);
+		    looseCeiling.setRetainedSceneMaximumNormalizedError(1.0e9);
+		    looseCeiling.setSubmissionTaskLimit(0);
+		    looseCeiling.setCompactEntryRange(0, 1);
+		    looseCeiling.apply(root);
+		    payload = admittedState.findCadForResult(admittedResult);
+		    if (!payload || looseCeiling.getSubmittedTaskCount() != 0 ||
+			looseCeiling.getUpdatedCutCount() != 1 ||
+			looseCeiling.getPendingRetainedRefinementCount() != 1 ||
+			looseCeiling.getRefinementBudgetBlockedCount() != 1 ||
+			looseCeiling.getRetainedQualityLimitedCount() != 1 ||
+			looseCeiling.getRetainedAdmissionBlockedCount() != 0 ||
+			looseCeiling.
+			    getRetainedSceneUpgradeCostBudgetUsed() != 0 ||
+			payload->activeCut != 0 || payload->requestedCut != 1) {
+			printf("FAIL: loose retained error ceiling did not reclaim "
+			       "the affordable minimum cut or retain its calibration "
+			       "witness (tasks=%u cuts=%u pending=%u blocked=%u "
+			       "used=%zu active=%d requested=%d)\n",
+			       looseCeiling.getSubmittedTaskCount(),
+			       looseCeiling.getUpdatedCutCount(),
+			       looseCeiling.
+				   getPendingRetainedRefinementCount(),
+			       looseCeiling.getRefinementBudgetBlockedCount(),
+			       looseCeiling.
+				   getRetainedSceneUpgradeCostBudgetUsed(),
+			       payload ? payload->activeCut : -1,
+			       payload ? payload->requestedCut : -1);
+			ret = 1;
+		    }
+		    if (!ret) {
+			SoBRLMeshLodSubmitAction tightCeiling;
+			tightCeiling.setService(&service);
+			tightCeiling.setDatabase(
+			    dbip, "db://compact-projected-test", 2026);
+			tightCeiling.setViewInfo(&view);
+			tightCeiling.setViewVolume(&budgetVolume, 1.0f);
+			tightCeiling.setGeneration(service.beginGeneration());
+			tightCeiling.setRevisions(66, 67);
+			tightCeiling.setViewLodState(&admittedState);
+			tightCeiling.setAllowCutDowngrade(TRUE);
+			tightCeiling.setPreserveMeshCoverage(TRUE);
+			tightCeiling.setRefinementCostBudget(0);
+			tightCeiling.setRetainedSceneUpgradeCostBudget(4);
+			tightCeiling.setRetainedSceneMaximumNormalizedError(1.0);
+			tightCeiling.setSubmissionTaskLimit(0);
+			tightCeiling.setCompactEntryRange(0, 1);
+			tightCeiling.apply(root);
+			payload = admittedState.findCadForResult(admittedResult);
+			if (!payload || tightCeiling.getSubmittedTaskCount() != 0 ||
+			    tightCeiling.getUpdatedCutCount() != 1 ||
+			    tightCeiling.
+				getRetainedSceneUpgradeCostBudgetUsed() != 4 ||
+			    payload->activeCut != 1) {
+			    printf("FAIL: tight retained error ceiling did not "
+				   "restore the resident cut (tasks=%u cuts=%u "
+				   "used=%zu active=%d)\n",
+				   tightCeiling.getSubmittedTaskCount(),
+				   tightCeiling.getUpdatedCutCount(),
+				   tightCeiling.
+				       getRetainedSceneUpgradeCostBudgetUsed(),
+				   payload ? payload->activeCut : -1);
+			    ret = 1;
+			}
+		    }
 		}
 		if (!ret) {
 		    /*
@@ -9450,7 +9693,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    recovery.setGeneration(service.beginGeneration());
 		    recovery.setRevisions(67, 68);
 		    recovery.setViewLodState(&admittedState);
-		    recovery.setAllowLevelDowngrade(TRUE);
+		    recovery.setAllowCutDowngrade(TRUE);
 		    recovery.setPreserveMeshCoverage(TRUE);
 		    recovery.setRefinementCostBudget(0);
 		    recovery.setRetainedSceneCostBudget(66);
@@ -9467,8 +9710,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			recovery.getPendingRetainedRefinementCount() != 1 ||
 			recovery.getRefinementBudgetBlockedCount() != 0 ||
 			recovery.getRetainedSceneCostBudgetUsed() != 66 ||
-			payload->activeLevel != 0 ||
-			payload->requestedLevel != 1 ||
+			payload->activeCut != 0 ||
+			payload->requestedCut != 1 ||
 			unsatisfied.size() != 1 ||
 			bu_strcmp(unsatisfied[0].getString(),
 			    payload->sourceInstanceKey.getString()) != 0) {
@@ -9483,8 +9726,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				   getPendingRetainedRefinementCount(),
 			       recovery.getRefinementBudgetBlockedCount(),
 			       recovery.getRetainedSceneCostBudgetUsed(),
-			       payload ? payload->activeLevel : -1,
-			       payload ? payload->requestedLevel : -1,
+			       payload ? payload->activeCut : -1,
+			       payload ? payload->requestedCut : -1,
 			       unsatisfied.size());
 			ret = 1;
 		    }
@@ -9497,16 +9740,17 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		 * level instead of repeatedly trying (and failing) to charge the
 		 * whole active-to-resident jump. */
 		struct BObolMeshLodHierarchyInfo multiHierarchy = hierarchy;
-		multiHierarchy.max_level = 3;
-		multiHierarchy.resident_level = 2;
-		multiHierarchy.face_count[0] = 1;
-		multiHierarchy.face_count[1] = 2;
-		multiHierarchy.face_count[2] = 4;
-		multiHierarchy.face_count[3] = 8;
-		multiHierarchy.point_count[0] = 3;
-		multiHierarchy.point_count[1] = 4;
-		multiHierarchy.point_count[2] = 6;
-		multiHierarchy.point_count[3] = 8;
+		multiHierarchy.max_cut = 3;
+		multiHierarchy.resident_cut = 2;
+		multiHierarchy.cuts[0].face_count = 1;
+		multiHierarchy.cuts[1].face_count = 2;
+		multiHierarchy.cuts[2].face_count = 4;
+		multiHierarchy.cuts[3].face_count = 8;
+		multiHierarchy.cuts[0].point_count = 3;
+		multiHierarchy.cuts[1].point_count = 4;
+		multiHierarchy.cuts[2].point_count = 6;
+		multiHierarchy.cuts[3].point_count = 8;
+		complete_test_hierarchy(multiHierarchy);
 		BObolLodProgressiveMeshPtr multiProgressive(
 		    new BObolLodProgressiveMesh);
 		BObolLodResult multiResult = budgetResult;
@@ -9516,9 +9760,10 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    ret = 1;
 		} else {
 		    multiResult.progressiveMesh = multiProgressive;
-		    multiResult.geometry.activeLevel = 0;
-		    multiResult.residentLevel = 2;
-		    multiResult.request.requestedLevel = 3;
+		    multiResult.geometry.activeCut = 0;
+		    multiResult.residentCut = 2;
+		    multiResult.request.requestedCut = 3;
+		    multiResult.resolvedCut = 3;
 		    multiResult.counts.faceCount = 1;
 		    multiResult.counts.pointCount = 3;
 		    multiResult.counts.originalPointCount = 3;
@@ -9530,7 +9775,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		     * to consume the allowance intended for its peers. */
 		    if (!ret) {
 			BObolLodResult fairResult = multiResult;
-			fairResult.request.requestedLevel = 2;
+			fairResult.request.requestedCut = 2;
+			fairResult.resolvedCut = 2;
 			BObolViewLodState fairState;
 			if (!fairState.applySourceResult(source, fairResult)) {
 			    printf("FAIL: transition-limited refinement fixture apply\n");
@@ -9553,8 +9799,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				fair.getUpdatedCutCount() != 1 ||
 				fair.getPendingRetainedRefinementCount() != 1 ||
 				fair.getRefinementCostBudgetUsed() != 1 ||
-				payload->activeLevel != 1 ||
-				payload->requestedLevel != 2 ||
+				payload->activeCut != 1 ||
+				payload->requestedCut != 3 ||
 				fairState.activeFaceCount() != 2) {
 				printf("FAIL: perceptual refinement consumed more "
 				       "than one populated transition (tasks=%u "
@@ -9564,8 +9810,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				       fair.getUpdatedCutCount(),
 				       fair.getPendingRetainedRefinementCount(),
 				       fair.getRefinementCostBudgetUsed(),
-				       payload ? payload->activeLevel : -1,
-				       payload ? payload->requestedLevel : -1,
+				       payload ? payload->activeCut : -1,
+				       payload ? payload->requestedCut : -1,
 				       fairState.activeFaceCount(),
 				       fair.getDiagnostics().getString());
 				ret = 1;
@@ -9608,7 +9854,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    incremental.getPendingRetainedRefinementCount() != 1 ||
 			    incremental.getRefinementBudgetBlockedCount() < 1 ||
 		    incremental.getRefinementCostBudgetUsed() != 1 ||
-			    payload->activeLevel != 1 ||
+			    payload->activeCut != 1 ||
 			    multiState.activeFaceCount() != 2) {
 			    printf("FAIL: retained refinement did not take an "
 				   "affordable intermediate cut (tasks=%u cuts=%u "
@@ -9621,19 +9867,24 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				   incremental.
 				       getRefinementBudgetBlockedCount(),
 			   incremental.getRefinementCostBudgetUsed(),
-				   payload ? payload->activeLevel : -1,
+				   payload ? payload->activeCut : -1,
 				   multiState.activeFaceCount(),
 				   incremental.getDiagnostics().getString());
 			    ret = 1;
 			}
 			if (!ret) {
-			    unsatisfied.clear();
-			    multiState.unsatisfiedCadOccurrenceKeys(
-				source, 0, unsatisfied);
-			    if (unsatisfied.size() != 1 ||
-				!multiState.retargetCadPayload(
-				    payload, payload->activeLevel,
-				    payload->activeLevel, 71, 72)) {
+			unsatisfied.clear();
+			multiState.unsatisfiedCadOccurrenceKeys(
+			    source, 0, unsatisfied);
+			BObolLodRequest satisfiedDemand;
+			satisfiedDemand.requestedCut =
+			    payload ? payload->activeCut : -1;
+			satisfiedDemand.viewRevision = 71;
+			satisfiedDemand.policyRevision = 72;
+			if (unsatisfied.size() != 1 ||
+			    !multiState.retargetCadPayload(
+				    payload, payload->activeCut,
+				    satisfiedDemand)) {
 				printf("FAIL: retained refinement frontier "
 				       "lost pending work before satisfaction\n");
 				ret = 1;
@@ -9680,8 +9931,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    !geometry->shaded || geometry->wire ||
 	    !geometry->shaded->isProgressive() || !record ||
 	    !record->localToRoot.equals(placement, 0.000001f) ||
-	    record->lodLevel != results[0].geometry.activeLevel ||
-	    geometry->shaded->indexCountAtLevel(record->lodLevel) !=
+	    record->lodCut != results[0].geometry.activeCut ||
+	    geometry->shaded->indexCountAtCut(record->lodCut) !=
 		results[0].counts.faceCount * 3) {
 	    printf("FAIL: shaded compact presentation did not retain the "
 		   "worker-owned resident PoP geometry and asset transform "
@@ -9698,22 +9949,22 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		   geometry && geometry->wire ? 1 : 0,
 		   geometry && geometry->shaded &&
 		       geometry->shaded->isProgressive() ? 1 : 0,
-		   record ? 1 : 0, record ? record->lodLevel : -1,
-		   results[0].geometry.activeLevel,
+		   record ? 1 : 0, record ? record->lodCut : -1,
+		   results[0].geometry.activeCut,
 		   results[0].preparedCadGeometry &&
 		       results[0].preparedCadGeometry->shaded ?
 		       results[0].preparedCadGeometry->shaded->
-			   progressiveMinimumLevel : -1,
+			   progressiveMinimumCut : -1,
 		   results[0].preparedCadGeometry &&
 		       results[0].preparedCadGeometry->shaded ?
 		       results[0].preparedCadGeometry->shaded->
-			   progressiveResidentLevel : -1,
+			   progressiveResidentCut : -1,
 		   geometry && geometry->shaded && record ?
-		       geometry->shaded->indexCountAtLevel(record->lodLevel) : 0,
+		       geometry->shaded->indexCountAtCut(record->lodCut) : 0,
 		   results[0].preparedCadGeometry &&
 		       results[0].preparedCadGeometry->shaded ?
 		       results[0].preparedCadGeometry->shaded->
-			   indexCountAtLevel(results[0].geometry.activeLevel) : 0,
+			   indexCountAtCut(results[0].geometry.activeCut) : 0,
 		   (unsigned long long)results[0].counts.faceCount * 3);
 	    ret = 1;
 	}
@@ -9792,9 +10043,33 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		ret = 1;
 	    }
 	}
-	if (!ret) {
-	    /*
-	     * Erasing a selected subpath only hides its retained occurrence.
+		if (!ret) {
+		    /* A complete instance-record update (placement, geometry, or part)
+		     * must not overwrite a newer selected style.  Draw/erase/redraw can
+		     * make a PoP part replacement coincide with the retained selection
+		     * revision, so exercise the same full-record branch while selected. */
+		    SbMatrix movedPlacement = placement;
+		    movedPlacement[3][0] += 0.5f;
+		    source->drawMatrix = movedPlacement;
+		    (void)source->compactViewLodAssembly(payloads, &viewState);
+		    const std::optional<Obol::InstanceRecord> movedRecord =
+			assembly->getInstanceRecord(ids[0]);
+		    const bool movedSelectedStyle = movedRecord &&
+			movedRecord->style.hasColorOverride &&
+			fabsf(movedRecord->style.color[0] - 0.25f) < 1.0e-6f &&
+			fabsf(movedRecord->style.color[1] - 0.75f) < 1.0e-6f &&
+			fabsf(movedRecord->style.color[2] - 0.125f) < 1.0e-6f;
+		    source->drawMatrix = placement;
+		    (void)source->compactViewLodAssembly(payloads, &viewState);
+		    if (!movedSelectedStyle) {
+			printf("FAIL: complete compact record update overwrote a newer "
+			       "selected style\n");
+			ret = 1;
+		    }
+		}
+		if (!ret) {
+		    /*
+		     * Erasing a selected subpath only hides its retained occurrence.
 	     * Restoring that visibility must not silently replace the selected
 	     * instance style with the normal style.  This is the exact sequence
 	     * used by qged's hierarchy erase/draw workflow.
@@ -9847,7 +10122,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 
     /* A retained population prefix may already contain every point and face
      * required by finer coordinate-only cuts.  The Obol part must advertise
-     * that drawable frontier, not clamp the instance back to the last level
+     * that drawable frontier, not clamp the instance back to the last cut
      * that happened to add array entries. */
     if (!ret) {
 	const BObolViewLodState::CadPayload *payload =
@@ -9855,13 +10130,12 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	if (payload && payload->progressiveMesh &&
 	    viewState.cadMeshPayloadCount() == 1 &&
 	    viewState.meshPayloadCount() == 0) {
-	    const int minimumLevel =
-		payload->progressiveMesh->minimumLevel();
-	    BObolLodCounts minimumCounts;
-	    minimumCounts.faceCount =
-		payload->progressiveMesh->faceCount(minimumLevel);
-	    minimumCounts.pointCount =
-		payload->progressiveMesh->pointCount(minimumLevel);
+	    const int minimumCut =
+		payload->progressiveMesh->minimumCut();
+	    const BObolLodCounts minimumCounts =
+		bobol_lod_progressive_counts(
+		    payload->progressiveMesh, minimumCut,
+		    payload->hasNormals);
 	    const size_t expectedMinimumCost =
 		bobol_lod_render_cost_units(
 		    minimumCounts, payload->drawMode, 1);
@@ -9877,25 +10151,30 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		ret = 1;
 	    }
 	}
-	int drawableLevel = payload && payload->progressiveMesh ?
-	    payload->progressiveMesh->residentLevel() : -1;
+	int drawableCut = payload && payload->progressiveMesh ?
+	    payload->progressiveMesh->residentCut() : -1;
 	if (payload && payload->progressiveMesh) {
-	    for (int level = drawableLevel + 1;
-		 level <= payload->progressiveMesh->maximumLevel(); ++level) {
-		if (!payload->progressiveMesh->canDrawLevel(level))
+	    for (int cut = drawableCut + 1;
+		 cut <= payload->progressiveMesh->maximumCut(); ++cut) {
+		if (!payload->progressiveMesh->canDrawCut(cut))
 		    break;
-		drawableLevel = level;
+		drawableCut = cut;
 	    }
 	}
 	if (!payload || !payload->progressiveMesh ||
-	    drawableLevel <= payload->progressiveMesh->residentLevel()) {
+	    drawableCut <= payload->progressiveMesh->residentCut()) {
 	    printf("FAIL: compact coordinate-only LoD fixture has no drawable plateau\n");
 	    ret = 1;
-	} else if (!viewState.retargetCadPayload(payload, drawableLevel,
-		drawableLevel, 63, 64)) {
+	} else {
+	    BObolLodRequest drawableDemand = results[0].request;
+	    drawableDemand.requestedCut = drawableCut;
+	    drawableDemand.viewRevision = 63;
+	    drawableDemand.policyRevision = 64;
+	    if (!viewState.retargetCadPayload(
+		    payload, drawableCut, drawableDemand)) {
 	    printf("FAIL: compact coordinate-only LoD cut could not be retargeted\n");
 	    ret = 1;
-	} else {
+	    } else {
 	    std::vector<const BObolViewLodState::CadPayload *> payloads;
 	    viewState.findCadPayloads(source, payloads);
 	    (void)source->compactViewLodAssembly(payloads, &viewState);
@@ -9908,22 +10187,31 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		std::optional<Obol::InstanceRecord>();
 	    const Obol::PartGeometry *geometry =
 		record ? assembly->partGeometry(record->part) : NULL;
-	    if (!record || record->lodLevel != drawableLevel || !geometry ||
+	    if (!record || record->lodCut != drawableCut || !geometry ||
 		!geometry->shaded ||
-		geometry->shaded->progressiveResidentLevel < drawableLevel) {
+		geometry->shaded->progressiveResidentCut < drawableCut) {
 		printf("FAIL: Obol clamped a drawable coordinate-only PoP cut "
-		       "to its population level\n");
+		       "to its population cut (requested=%d record=%d "
+		       "geometry=%d shaded=%d resident=%d cuts=%zu)\n",
+		       drawableCut, record ? record->lodCut : -1,
+		       geometry ? 1 : 0,
+		       geometry && geometry->shaded ? 1 : 0,
+		       geometry && geometry->shaded ?
+			   geometry->shaded->progressiveResidentCut : -1,
+		       geometry && geometry->shaded ?
+			   geometry->shaded->progressiveCuts.size() : 0);
 		ret = 1;
+	    }
 	    }
 	}
 	if (!ret) {
 	    const BObolViewLodState::CadPayload *richer =
 		viewState.findCadForResult(results[0]);
-	    if (!viewState.retargetCadPayload(richer,
-		    results[0].geometry.activeLevel,
-		    results[0].request.requestedLevel,
-		    results[0].request.viewRevision.value(),
-		    results[0].request.policyRevision.value())) {
+	    BObolLodRequest originalDemand = results[0].request;
+	    originalDemand.requestedCut = results[0].resolvedCut;
+	    if (!viewState.retargetCadPayload(
+		    richer, results[0].geometry.activeCut,
+		    originalDemand)) {
 		printf("FAIL: compact coordinate-only LoD fixture could not "
 		       "restore its original cut\n");
 		ret = 1;
@@ -10038,11 +10326,11 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	if (!assembly || ids.size() != 1 || !geometry ||
 	    geometry->shaded || !geometry->wire ||
 	    !geometry->wire->isProgressive() || !record ||
-	    record->lodLevel != results[0].geometry.activeLevel ||
-	    geometry->wire->segmentCountAtLevel(record->lodLevel) !=
+	    record->lodCut != results[0].geometry.activeCut ||
+	    geometry->wire->segmentCountAtCut(record->lodCut) !=
 		results[0].counts.faceCount * 3 ||
 	    before != after || !after ||
-	    after->activeLevel != results[0].geometry.activeLevel ||
+	    after->activeCut != results[0].geometry.activeCut ||
 	    after->counts.faceCount != results[0].counts.faceCount) {
 	    printf("FAIL: wire compact presentation did not preserve the shaded PoP cut\n");
 	    ret = 1;
@@ -10051,6 +10339,11 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 
     if (!ret) {
 	SoBRLMeshLodSubmitAction wireSubmit;
+	const BObolViewLodState::CadPayload *shadedPayload =
+	    viewState.findCadForResult(results[0]);
+	const size_t expectedWireCost = shadedPayload ?
+	    bobol_lod_render_cost_units(
+		shadedPayload->counts, BOBOL_LOD_DRAW_WIRE, 1) : 0;
 	wireSubmit.setService(&service);
 	wireSubmit.setViewLodState(&viewState);
 	wireSubmit.setDatabase(dbip, "db://compact-projected-test", 2026);
@@ -10059,12 +10352,81 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	wireSubmit.setGeneration(service.beginGeneration());
 	wireSubmit.setRevisions(63, 62);
 	wireSubmit.apply(root);
+	const BObolViewLodState::CadPayload *wirePayload =
+	    viewState.findCadForResult(results[0]);
 	if (wireSubmit.getVisitedMeshCount() != 1 ||
 	    wireSubmit.getSubmittedTaskCount() != 0 ||
 	    wireSubmit.getSkippedMeshCount() != 1 ||
-	    service.queuedResultCountForDiagnostics() != 0) {
-	    printf("FAIL: wire mode restarted an already-resident PoP request\n");
+	    service.queuedResultCountForDiagnostics() != 0 ||
+	    !wirePayload || wirePayload != shadedPayload ||
+	    wirePayload->drawMode != BOBOL_LOD_DRAW_WIRE ||
+	    viewState.activeRenderCost() != expectedWireCost) {
+	    printf("FAIL: wire mode did not retarget the retained PoP asset and "
+		   "render-cost currency in place "
+		   "(visited=%u tasks=%u skipped=%u queued=%zu payload=%d "
+		   "identity=%d mode=%d cost=%zu expected=%zu)\n",
+		   wireSubmit.getVisitedMeshCount(),
+		   wireSubmit.getSubmittedTaskCount(),
+		   wireSubmit.getSkippedMeshCount(),
+		   service.queuedResultCountForDiagnostics(),
+		   wirePayload ? 1 : 0,
+		   wirePayload == shadedPayload ? 1 : 0,
+		   wirePayload ? wirePayload->drawMode : -1,
+		   viewState.activeRenderCost(), expectedWireCost);
 	    ret = 1;
+	}
+	if (!ret) {
+	    const int allocatedCut = wirePayload->activeCut;
+	    if (!viewState.setCadAllocatedCut(wirePayload, allocatedCut,
+		    63, 62, BOBOL_LOD_DRAW_WIRE)) {
+		printf("FAIL: retained PoP scene allocation could not be recorded\n");
+		ret = 1;
+	    } else {
+		/* A worker may publish a richer immutable resident generation after
+		 * the owner-thread allocation has completed.  Replacing the result
+		 * generation must preserve that allocation and pointer-stable
+		 * occurrence slot. */
+		BObolLodResult residentGrowth = results[0];
+		residentGrowth.request.drawMode = BOBOL_LOD_DRAW_WIRE;
+		residentGrowth.request.viewRevision = 63;
+		residentGrowth.request.policyRevision = 62;
+		residentGrowth.request.requestedCut =
+		    wirePayload->requestedCut;
+		residentGrowth.resolvedCut = wirePayload->requestedCut;
+		residentGrowth.geometry.activeCut = wirePayload->activeCut;
+		residentGrowth.counts = wirePayload->counts;
+		if (!viewState.applySourceResult(source, residentGrowth)) {
+		    printf("FAIL: retained PoP resident-growth result was rejected\n");
+		    ret = 1;
+		} else {
+		    const BObolViewLodState::CadPayload *afterGrowth =
+			viewState.findCadForResult(residentGrowth);
+		    if (afterGrowth != wirePayload ||
+			afterGrowth->allocatedCut != allocatedCut ||
+			afterGrowth->allocationViewRevision != 63 ||
+			afterGrowth->allocationPolicyRevision != 62 ||
+			afterGrowth->allocationDrawMode != BOBOL_LOD_DRAW_WIRE) {
+			printf("FAIL: resident growth discarded the retained PoP "
+			       "scene allocation\n");
+			ret = 1;
+		    }
+		    }
+		}
+	    }
+	    if (!ret) {
+	    BObolLodRequest nextView = results[0].request;
+	    nextView.drawMode = BOBOL_LOD_DRAW_WIRE;
+	    nextView.requestedCut = wirePayload->requestedCut;
+	    nextView.viewRevision = 64;
+	    nextView.policyRevision = 62;
+	    if (!viewState.retargetCadPayload(
+		    wirePayload, wirePayload->activeCut, nextView) ||
+		wirePayload->allocatedCut >= 0 ||
+		wirePayload->allocationViewRevision != 0 ||
+		wirePayload->allocationPolicyRevision != 0) {
+		printf("FAIL: a new view epoch retained a stale PoP scene allocation\n");
+		ret = 1;
+	    }
 	}
     }
 
@@ -10093,13 +10455,232 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    partialResults.size() != 1 ||
 	    partialResults[0].request.projectedPixelDiameter < 4790.0f ||
 	    partialResults[0].request.projectedPixelDiameter > 4810.0f ||
-	    partialResults[0].request.requestedLevel != 13) {
+	    !partialResults[0].progressiveMesh ||
+	    partialResults[0].resolvedCut <
+		partialResults[0].progressiveMesh->minimumCut() ||
+	    partialResults[0].resolvedCut >
+		partialResults[0].progressiveMesh->maximumCut() ||
+	    partialResults[0].progressiveMesh->projectedErrorAtCut(
+		partialResults[0].resolvedCut,
+		partialResults[0].request.projectedPixelDiameter) >
+		partialResults[0].request.targetPixelError * 1.000001 ||
+	    (partialResults[0].resolvedCut >
+		 partialResults[0].progressiveMesh->minimumCut() &&
+	     partialResults[0].progressiveMesh->projectedErrorAtCut(
+		 partialResults[0].resolvedCut - 1,
+		 partialResults[0].request.projectedPixelDiameter) <=
+		 partialResults[0].request.targetPixelError)) {
 	    printf("FAIL: partially visible mesh demand was clipped to viewport size\n");
 	    ret = 1;
 	}
     }
 
     camera->unref();
+    service.stop();
+    root->setViewLodState(NULL);
+    root->unref();
+    bobol_mesh_lod_cache_clear_database(dbip);
+    db_close(dbip);
+    bu_file_delete(dbpath);
+    bu_dirclear(cacheDir);
+    return ret;
+}
+
+static int
+test_allocated_presentation_allows_resident_prefetch(void)
+{
+    char cacheDir[MAXPATHLEN] = {0};
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    int ret = 0;
+
+    bu_dir(cacheDir, MAXPATHLEN, BU_DIR_CURR,
+	"bobol_allocated_resident_prefetch_cache", NULL);
+    bu_dirclear(cacheDir);
+    bu_mkdir(cacheDir);
+    bu_setenv("BU_DIR_CACHE", cacheDir, 1);
+    if (make_submit_test_db(dbpath, sizeof(dbpath), &dbip)) {
+	bu_dirclear(cacheDir);
+	return 1;
+    }
+
+    BObolViewLodState viewState;
+    SoBRLViewLodGroup *root = new SoBRLViewLodGroup;
+    root->ref();
+    root->setViewLodState(&viewState);
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "prefetch-root.c";
+    source->instanceKey = "allocated-prefetch-source";
+    source->sourceRevision = 707;
+    source->lodBotThreshold = 1;
+    source->representationMode =
+	SoBRLDatabaseSource::REPRESENTATION_SHADED;
+    root->addChild(source);
+
+    BObolCompactOccurrence occurrence;
+    occurrence.geometry = compact_projected_proxy_geometry();
+    occurrence.summary.valid = TRUE;
+    occurrence.summary.shapeKind =
+	BObolRealizedShapeSummary::SHAPE_VLIST;
+    occurrence.summary.path = "prefetch-root.c/lod-prefetch.bot";
+    occurrence.summary.sourceName = "lod-prefetch.bot";
+    occurrence.summary.sourceType = "bot";
+    occurrence.summary.sourceId = 707;
+    occurrence.summary.visible = TRUE;
+    occurrence.summary.selectable = TRUE;
+    occurrence.lodBacked = TRUE;
+    occurrence.sourceMeshRequestValid = TRUE;
+    occurrence.sourceMeshRequest.path = occurrence.summary.path;
+    occurrence.sourceMeshRequest.sourceName = "lod-prefetch.bot";
+    occurrence.sourceMeshRequest.meshAssetPath = "lod-prefetch.bot";
+    occurrence.sourceMeshRequest.meshAssetName = "lod-prefetch.bot";
+    occurrence.sourceMeshRequest.faceCount = 32;
+    occurrence.sourceMeshRequest.pointCount = 25;
+    occurrence.sourceMeshRequest.bounds = SbBox3f(
+	SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 1.0f, 0.0625f));
+    occurrence.sourceMeshRequest.meshAssetBounds =
+	occurrence.sourceMeshRequest.bounds;
+    occurrence.sourceMeshRequest.meshAssetTransform.makeIdentity();
+    std::vector<BObolCompactOccurrence> occurrences(1, occurrence);
+    if (source->setCompactOccurrenceRegistry(occurrences) != 1) {
+	printf("FAIL: allocated resident-prefetch occurrence setup\n");
+	ret = 1;
+    }
+
+    BObolLodService service;
+    if (!ret && !service.start(1, TRUE)) {
+	printf("FAIL: allocated resident-prefetch service setup\n");
+	ret = 1;
+    }
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->ref();
+    camera->position = SbVec3f(0.5f, 0.5f, 5.0f);
+    camera->height = 2.0f;
+    const SbViewVolume volume = camera->getViewVolume(640.0f / 480.0f);
+    struct bv_view_info view = BV_VIEW_INFO_INIT;
+    view.width = 640;
+    view.height = 480;
+    view.size = 2.0;
+
+    BObolLodResult initialResult;
+    if (!ret) {
+	SoBRLMeshLodSubmitAction initialSubmit;
+	initialSubmit.setService(&service);
+	initialSubmit.setViewLodState(&viewState);
+	initialSubmit.setDatabase(dbip, "db://allocated-prefetch-test", 2026);
+	initialSubmit.setViewInfo(&view);
+	initialSubmit.setViewVolume(&volume, 0.05f);
+	initialSubmit.setGeneration(service.beginGeneration());
+	initialSubmit.setRevisions(31, 41);
+	initialSubmit.apply(root);
+	std::vector<BObolLodResult> initialResults;
+	if (initialSubmit.getSubmittedTaskCount() != 1 ||
+	    wait_for_service(service) ||
+	    service.drainResults(initialResults) != 1 ||
+	    initialResults.size() != 1 ||
+	    !initialResults[0].progressiveMesh ||
+	    initialResults[0].resolvedCut <=
+		initialResults[0].progressiveMesh->minimumCut() ||
+	    initialResults[0].geometry.activeCut !=
+		initialResults[0].progressiveMesh->minimumCut() ||
+	    initialResults[0].progressiveMesh->canDrawCut(
+		initialResults[0].resolvedCut) ||
+	    !viewState.applySourceResult(source, initialResults[0])) {
+	    printf("FAIL: cold resident-prefetch fixture did not publish "
+		   "a coarse presentation with missing demanded suffix\n");
+	    ret = 1;
+	} else {
+	    initialResult = initialResults[0];
+	}
+    }
+
+    const BObolViewLodState::CadPayload *payload = !ret ?
+	viewState.findCadForResult(initialResult) : NULL;
+    const int presentationCut = payload ? payload->activeCut : -1;
+    if (!ret && (!payload || presentationCut < 0 ||
+	!viewState.setCadAllocatedCut(
+	    payload, presentationCut, 31, 41, BOBOL_LOD_DRAW_SHADED))) {
+	printf("FAIL: resident-prefetch scene allocation setup\n");
+	ret = 1;
+    }
+
+	    if (!ret) {
+		SoBRLMeshLodSubmitAction prefetchSubmit;
+	prefetchSubmit.setService(&service);
+	prefetchSubmit.setViewLodState(&viewState);
+	prefetchSubmit.setDatabase(dbip, "db://allocated-prefetch-test", 2026);
+	prefetchSubmit.setViewInfo(&view);
+	prefetchSubmit.setViewVolume(&volume, 0.05f);
+	prefetchSubmit.setGeneration(service.beginGeneration());
+	prefetchSubmit.setRevisions(31, 41);
+	prefetchSubmit.setAllowResidentPrefetch(TRUE);
+	prefetchSubmit.setRefinementCostBudget(0);
+	prefetchSubmit.apply(root);
+	std::vector<BObolLodResult> prefetchResults;
+	if (prefetchSubmit.getSubmittedTaskCount() != 1 ||
+	    wait_for_service(service) ||
+	    service.drainResults(prefetchResults) != 1 ||
+	    prefetchResults.size() != 1 ||
+	    prefetchResults[0].request.requestedCut <= presentationCut ||
+	    prefetchResults[0].resolvedCut !=
+		prefetchResults[0].request.requestedCut ||
+	    prefetchResults[0].geometry.activeCut != presentationCut ||
+	    !prefetchResults[0].progressiveMesh ||
+	    !prefetchResults[0].progressiveMesh->canDrawCut(
+		prefetchResults[0].request.requestedCut) ||
+	    !viewState.applySourceResult(source, prefetchResults[0])) {
+	    printf("FAIL: allocated presentation cut suppressed quiet "
+		   "resident suffix prefetch (tasks=%u results=%zu)\n",
+		   prefetchSubmit.getSubmittedTaskCount(),
+		   prefetchResults.size());
+	    ret = 1;
+	} else {
+	    const BObolViewLodState::CadPayload *after =
+		viewState.findCadForResult(prefetchResults[0]);
+	    if (after != payload || after->activeCut != presentationCut ||
+		after->allocatedCut != presentationCut) {
+		printf("FAIL: resident suffix prefetch changed the allocated "
+		       "presentation cut\n");
+		ret = 1;
+	    }
+		}
+	    }
+
+	    if (!ret) {
+		/* A resident suffix behind a finite allocation remains actionable
+		 * quality debt.  Treating the allocated cut as fully satisfied strands
+		 * warm-cache views at the conservative bootstrap allowance: there is no
+		 * worker result, cut mutation, or frame barrier left to teach the scene
+		 * allocator about the cheap retained presentation. */
+		SoBRLMeshLodSubmitAction capacitySubmit;
+		capacitySubmit.setService(&service);
+		capacitySubmit.setViewLodState(&viewState);
+		capacitySubmit.setDatabase(dbip,
+		    "db://allocated-prefetch-test", 2026);
+		capacitySubmit.setViewInfo(&view);
+		capacitySubmit.setViewVolume(&volume, 0.05f);
+		capacitySubmit.setGeneration(service.beginGeneration());
+		capacitySubmit.setRevisions(31, 41);
+		capacitySubmit.setAllowResidentPrefetch(TRUE);
+		capacitySubmit.setRefinementCostBudget(0);
+		capacitySubmit.apply(root);
+		if (capacitySubmit.getSubmittedTaskCount() != 0 ||
+		    capacitySubmit.getSkippedMeshCount() != 1 ||
+		    capacitySubmit.getPendingRetainedRefinementCount() != 1 ||
+		    capacitySubmit.getRefinementBudgetBlockedCount() != 1) {
+		    printf("FAIL: resident allocated cut hid actionable capacity debt "
+			   "(tasks=%u skipped=%u pending=%u blocked=%u)\n",
+			   capacitySubmit.getSubmittedTaskCount(),
+			   capacitySubmit.getSkippedMeshCount(),
+			   capacitySubmit.getPendingRetainedRefinementCount(),
+			   capacitySubmit.getRefinementBudgetBlockedCount());
+		    ret = 1;
+		}
+	    }
+
+	    camera->unref();
     service.stop();
     root->setViewLodState(NULL);
     root->unref();
@@ -10292,7 +10873,7 @@ test_view_controller_compact_direct_result_route(void)
 		ret = 1;
 	    } else {
 		controller.clearRenderRequest();
-		request.requestedLevel = 2;
+		request.requestedCut = 2;
 		BObolLodTask task;
 		task.generation = controller.beginLodGeneration();
 		task.request = request;
@@ -10493,65 +11074,89 @@ main(int argc, char **argv)
     }
     bu_setprogname(argv[0]);
 
+    char processCacheDir[MAXPATHLEN] = {0};
+    bu_dir(processCacheDir, MAXPATHLEN, BU_DIR_CURR,
+	"bobol_lod_update_action_process_cache", NULL);
+    bu_dirclear(processCacheDir);
+    bu_mkdir(processCacheDir);
+    bu_setenv("BU_DIR_CACHE", processCacheDir, 1);
+    char resolvedCacheDir[MAXPATHLEN] = {0};
+    bu_dir(resolvedCacheDir, MAXPATHLEN, BU_DIR_CACHE, NULL);
+    if (!BU_STR_EQUAL(processCacheDir, resolvedCacheDir)) {
+	printf("FAIL: LoD update test cache isolation (%s != %s)\n",
+	    processCacheDir, resolvedCacheDir);
+	return 1;
+    }
+
     bobol_init(NULL);
 
-    if (test_compact_staged_source_lease())
+    const auto runIsolated = [&processCacheDir](int (*test)(void)) {
+	bu_dirclear(processCacheDir);
+	bu_mkdir(processCacheDir);
+	bu_setenv("BU_DIR_CACHE", processCacheDir, 1);
+	return test();
+    };
+
+    if (runIsolated(test_compact_staged_source_lease))
 	return 1;
-    if (test_view_controller_fixed_gl_light_order())
+    if (runIsolated(test_view_controller_fixed_gl_light_order))
 	return 1;
-    if (test_view_controller_presentation_deadline_contract())
+    if (runIsolated(test_view_controller_presentation_deadline_contract))
 	return 1;
-    if (test_update_action_direct())
+    if (runIsolated(test_update_action_direct))
 	return 1;
-    if (test_scene_database_source_summary())
+    if (runIsolated(test_scene_database_source_summary))
 	return 1;
-    if (test_update_action_service_drain())
+    if (runIsolated(test_update_action_service_drain))
 	return 1;
-    if (test_mesh_lod_request_and_view_info())
+    if (runIsolated(test_mesh_lod_request_and_view_info))
 	return 1;
-    if (test_export_record_metadata())
+    if (runIsolated(test_export_record_metadata))
 	return 1;
-    if (test_rt_exact_pick_provider())
+    if (runIsolated(test_rt_exact_pick_provider))
 	return 1;
-    if (test_mesh_residency_budget_action())
+    if (runIsolated(test_mesh_residency_budget_action))
 	return 1;
-    if (test_view_controller_mesh_residency_budget_auto())
+    if (runIsolated(test_view_controller_mesh_residency_budget_auto))
 	return 1;
-    if (test_view_lod_mesh_eviction_preserves_proxy())
+    if (runIsolated(test_view_lod_mesh_eviction_preserves_proxy))
 	return 1;
-    if (test_mesh_lod_submit_action())
+    if (runIsolated(test_mesh_lod_submit_action))
 	return 1;
-    if (test_compact_many_leaf_scene_admission())
+    if (runIsolated(test_compact_many_leaf_scene_admission))
 	return 1;
-    if (test_compact_native_mesh_not_pop_submitted())
+    if (runIsolated(test_compact_native_mesh_not_pop_submitted))
 	return 1;
-    if (test_view_controller_compact_append_preserves_submission_cursor())
+    if (runIsolated(test_view_controller_compact_append_preserves_submission_cursor))
 	return 1;
-    if (test_compact_aabb_stream_upgrade())
+    if (runIsolated(test_compact_aabb_stream_upgrade))
 	return 1;
-    if (test_compact_mesh_lod_projection_and_mode_parity())
+    if (runIsolated(test_allocated_presentation_allows_resident_prefetch))
 	return 1;
-    if (test_view_controller_source_backed_multi_source_exact_submit())
+    if (runIsolated(test_compact_mesh_lod_projection_and_mode_parity))
 	return 1;
-    if (test_view_controller_source_backed_partial_ready_submit())
+    if (runIsolated(test_view_controller_source_backed_multi_source_exact_submit))
 	return 1;
-    if (test_view_controller_shared_lod_is_view_local())
+    if (runIsolated(test_view_controller_source_backed_partial_ready_submit))
 	return 1;
-    if (test_view_controller_progressive_lod_results())
+    if (runIsolated(test_view_controller_shared_lod_is_view_local))
 	return 1;
-    if (test_view_controller_large_result_transfer())
+    if (runIsolated(test_view_controller_progressive_lod_results))
 	return 1;
-    if (test_view_local_lod_only_pick())
+    if (runIsolated(test_view_controller_large_result_transfer))
 	return 1;
-    if (test_view_controller_compact_direct_result_route())
+    if (runIsolated(test_view_local_lod_only_pick))
 	return 1;
-    if (test_compact_occurrence_lod_identity())
+    if (runIsolated(test_view_controller_compact_direct_result_route))
 	return 1;
-    if (test_view_controller_lod_submit_and_apply())
+    if (runIsolated(test_compact_occurrence_lod_identity))
 	return 1;
-    if (test_view_controller_lod_source_churn())
+    if (runIsolated(test_view_controller_lod_submit_and_apply))
+	return 1;
+    if (runIsolated(test_view_controller_lod_source_churn))
 	return 1;
 
+    bu_dirclear(processCacheDir);
     return 0;
 }
 

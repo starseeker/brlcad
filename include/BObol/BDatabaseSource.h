@@ -165,6 +165,7 @@ struct BOBOL_EXPORT BObolDatabaseSourceSummary {
     SbBool drawSizeValid;
     float drawSize;
     SbBool sourceBoundsValid;
+    SbBool sourceBoundsExact;
     SbBox3f sourceBounds;
     SbBool stale;
     uint32_t staleReason;
@@ -469,7 +470,7 @@ struct BOBOL_EXPORT BObolRealizedShapeSummary {
     SbBool colorOverride;
     SbColor color;
     SbBool lodAvailable;
-    int lodActiveLevel;
+    int lodActiveCut;
     uint64_t lodFaceCount;
     uint64_t lodPointCount;
     uint64_t lodOriginalPointCount;
@@ -523,9 +524,10 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
 
     void push(const BObolCompactOccurrence &occurrence);
     void push(BObolCompactOccurrence &&occurrence);
-    /* Priority occurrences describe the whole draw target rather than one
-     * leaf.  Drain them before an already queued leaf backlog so a completed
-     * aggregate extent can frame a very large cold draw immediately. */
+    /* Priority occurrences describe the current whole draw target rather than
+     * one leaf.  The newest undrained occurrence supersedes its predecessor;
+     * drain it before an already queued leaf backlog so a completed aggregate
+     * extent can frame a very large cold draw immediately. */
     void pushPriority(const BObolCompactOccurrence &occurrence);
     /* Retain a bounded LRU window of full cold imports long enough for the
      * first view-selected LoD task to reuse them.  Occurrences hold weak
@@ -785,6 +787,9 @@ public:
     SoSFBool drawSizeValid;
     SoSFFloat drawSize;
     SoSFBool sourceBoundsValid;
+    /* TRUE only when sourceBoundsMin/Max describe the complete immutable
+     * target extent rather than the union of a partially streamed registry. */
+    SoSFBool sourceBoundsExact;
     SoSFVec3f sourceBoundsMin;
     SoSFVec3f sourceBoundsMax;
     SoSFFloat tessellationAbsTol;
@@ -958,9 +963,11 @@ public:
     int setSourceBoundsState(SbBool boundsValid,
 	const SbVec3f &boundsMin,
 	const SbVec3f &boundsMax);
+    int setSourceBoundsExactState(SbBool boundsExact);
     void clearSourceBounds(void);
     SbBool getSourceBounds(SbBox3f &bounds) const;
     SbBool getEffectiveSourceBounds(SbBox3f &bounds) const;
+    SbBool hasExactSourceBounds(void) const;
     SbBool needsRealization(void) const;
     SbBool realizePrototypeWireframe(void);
     SbBool realizeDatabaseWireframe(void);

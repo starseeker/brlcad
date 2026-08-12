@@ -120,7 +120,7 @@ qtcad_measure_source_result(const BObolLodRequest &request,
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = result.cacheKey;
-    result.geometry.activeLevel =
+    result.geometry.activeCut =
 	resultKind == BOBOL_LOD_RESULT_MESH ? 1 : -1;
     result.geometry.borrowed = FALSE;
 

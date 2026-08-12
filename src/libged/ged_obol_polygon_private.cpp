@@ -102,8 +102,7 @@ static BObolViewController *
 ged_obol_shared_view_controller_ensure_for_context(
     struct ged_view_context *view_ctx, int sync_current_scene)
 {
-    struct ged *gedp = view_ctx ?
-	static_cast<struct ged *>(ged_view_context_user_data_get(view_ctx)) : NULL;
+    struct ged *gedp = ged_view_context_owner(view_ctx);
     if (!gedp)
 	return NULL;
     BObolViewController *controller = ged_draw_obol_controller(gedp);
@@ -118,8 +117,7 @@ ged_obol_shared_view_controller_ensure_for_context(
 static BObolViewController *
 ged_obol_shared_view_controller_for_context(struct ged_view_context *view_ctx)
 {
-    struct ged *gedp = view_ctx ?
-	static_cast<struct ged *>(ged_view_context_user_data_get(view_ctx)) : NULL;
+    struct ged *gedp = ged_view_context_owner(view_ctx);
     return gedp ? ged_draw_obol_controller(gedp) : NULL;
 }
 

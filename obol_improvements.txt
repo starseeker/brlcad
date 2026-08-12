@@ -19,6 +19,92 @@ behavior, correctness, maintainability, and large-model performance are the
 goals.
 
 
+Progressive-cut redesign status (2026-08-11)
+---------------------------------------------
+
+The mesh PoP path has now been deliberately broken from its intermediate
+16-level API and cache format.  The replacement is an explicit admissible-cut
+contract:
+
+* libBObol's canonical mesh producer starts at one significant bit per
+  nondegenerate object axis and refines the axis with the largest remaining
+  object-space error one bit at a time.  A fully three-dimensional 16-bit
+  hierarchy therefore has 46 independently drawable cuts instead of sixteen
+  lock-step cuts, without the old approximately fourfold population jumps.
+* Every cut publishes cumulative point, face, and resident-byte counts,
+  per-axis quantization precision, a conservative object-space error bound,
+  and an exact-terminal flag.  View selection binary-searches those facts;
+  neither libBObol nor Obol infers quality from a cut ordinal.
+* Cut 15 is ordinary.  Obol now exposes a named `ProgressiveCutUnspecified`
+  sentinel which resolves to the richest resident cut.  Render plans, GPU
+  range keys, picking, fixed-function fallback, and indirect batching no
+  longer encode an implicit “15 means full” rule.
+* Cache format 15 stores fixed-width uint32 topology and the canonical cut
+  table.  The loader rejects incompatible schedules, invalid ranges and
+  counts, nonfinite or out-of-domain coordinates, invalid cumulative indices,
+  and missing/nonfinite authored normals before publishing data.  Existing
+  caches are intentionally invalidated.
+* LMDB records are treated as byte-aligned storage.  Coordinate, normal,
+  topology, and name-key values are copied into aligned fixed-width objects
+  before typed access, removing undefined behavior found by ASan/UBSan.
+* The old duplicate SegmentPopLod and TrianglePopLod simplifiers, legacy
+  display/full-detail callback routes, fixed-level APIs, and their competing
+  tests have been removed.  SoCADAssembly consumes producer-authored cut
+  vectors and does not implement a second simplification policy.
+* The quality-probe state machine is no longer capped at ordinal 15.  A
+  regression case proves probing past cut 20 with a larger active hierarchy.
+
+Focused Obol CAD tests, the libBObol cache/realization/service/coordinator/
+update tests, and ASan+UBSan cache, realization, and coordinator runs pass with
+this design.  The Generic Twin graphical qualification matrix also passes for
+System GL and OSMesa, shaded and wireframe, from both cold and warm caches.
+The Hubble selection/erase/subpath-redraw qualification passes cold and warm
+on OSMesa; deferred sources inherit semantic selection before their first
+streamed occurrence, and complete instance-record updates preserve newer
+selection style.  Content-identical meshes under different database names now
+reuse a fully validated open hierarchy rather than mistaking a cache marker
+for initialized state.  Runtime prioritization, diagnostics, interaction
+backoff, and the Lucy graphical gate consume certified per-cut error/count
+metadata; none synthesizes quality or population growth from a cut ordinal.
+Cold task identity is also distinct from selected quality: a request without a
+resident hierarchy keeps `requestedCut == -1`, the provider reports its
+certified selection as `resolvedCut`, and local shared-asset reuse performs the
+same error-based resolution without cache work.  This preserves asynchronous
+deduplication/result matching while eliminating the last need to invent an
+ordinal before producer metadata exists.
+The larger model matrix below remains a continuing production gate rather than
+a compatibility requirement for the removed intermediate format.
+
+The first post-redesign scale qualification also found and removed an
+accidental O(scene size x bounded planning windows) controller path.  A
+retained allocation now takes one effective-population census at the start of
+the complete pass and freezes that currency across all 2,048-entry windows.
+The 150,000-part perf profile no longer contains the former dominant
+per-occurrence validity/hash census; its remaining work is renderer atlas
+submission plus parallel cache suffix realization.  A focused coordinator
+test proves that the snapshot survives a duplicate begin-pass and is released
+by reset.
+
+The 2026-08-11 System GL scale evidence is now:
+
+* 50,000 distinct meshes pass cold and warm with all 50,000 mesh payloads,
+  zero terminal structural boxes, approximately 9.73 million faces, 328.5 MB
+  resident PoP data, and no prominent-object quality-floor violations.
+* The 150,000-distinct-mesh cold run passes its complete interaction,
+  selection, subpath erase/redraw, and terminal checks in 264 seconds.  Its
+  final state has all 150,000 mesh payloads, zero structural boxes, 6.54
+  million faces, 797.6 MB resident data, no pending work, and no prominent
+  quality-floor violations.
+* The corresponding warm run reaches an idle, view-ready 150,000-mesh state
+  in 196 seconds for the full scripted interaction sequence.  Its terminal
+  20.2-million-face logical population exceeds the configured 512 MB triangle
+  atlas, so the exact renderer admits parts in projected-importance order and
+  represents the least-important 18,399 eligible occurrences as aggregate
+  points.  The corrected qualification contract accepts those points only
+  with simultaneous memory-pressure, complete-convergence, zero-box, and
+  zero-pending-work proofs; ordinary scenes still require none.
+
+
 Current review status (2026-08-09)
 ----------------------------------
 
@@ -159,14 +245,14 @@ resource accounting—dominating the instrumented harness.
 The remaining major design gaps, in priority order, are:
 
 1. Production qualification remains larger than the current green matrix.
-   The final release gate still needs cold/partial/warm multi-gigabyte scenes,
-   the generated 150k distinct-asset fixture, repeated-instance visibility
-   turnover, adaptive BREP bands, hierarchy edit/erase/selection stress,
-   explicit memory ceilings, and p95/max input latency on both render
-   backends.  The 50k cold/warm System GL fixture now reaches 50,000 mesh
-   payloads, zero boxes, no pending work, and a coherent terminal
-   memory-limited state; the harness no longer incorrectly requires genuine
-   persistent renderer admission pressure to disappear.
+   The 50k and 150k distinct-asset System GL gates now cover cold/warm cache,
+   bounded interaction, explicit CPU/GPU limits, selection, and subpath
+   erase/redraw without terminal boxes or pending work.  The final release
+   gate still needs independent real multi-gigabyte vehicle scenes,
+   repeated-instance visibility turnover at equivalent scale, adaptive BREP
+   bands, p95/max input latency, and the large OSMesa matrix.  Persistent atlas
+   pressure is legal only with the explicit importance-ordered aggregate-point
+   and terminal memory-limited proof described above.
 
 2. Source/client code ownership is correct at the service boundary but remains
    physically concentrated.  Detached realization, worker admission,
@@ -185,9 +271,9 @@ The remaining major design gaps, in priority order, are:
    never replace them with per-occurrence scene nodes or whole-scene replay.
 
 4. Renderer semantics now have one allocation-free resolved-draw contract.
-   Every current executor calls it for sparse liveness and PoP-level
+   Every current executor calls it for sparse liveness and PoP-cut
    resolution, and an independent oracle checks 27,615,232 ownership,
-   hidden/proxy/channel/range and complete serialized-level cases.  Deep GL
+   hidden/proxy/channel/range and complete serialized-cut cases.  Deep GL
    state sentinels pass the System GL and OSMesa cold/warm shaded/wire matrix.
    The remaining conformance work is broader image-tolerance qualification of
    every less-common style/culling route, not another packet model.
@@ -207,7 +293,7 @@ parallel lifecycle latch.
    ceiling or a correctness/interaction blocker.  The retained provider
    now reads only activation chunks in (resident, requested] after compaction,
    extends the existing immutable population, and atomically publishes the
-   replacement while the old frame remains drawable.  Lucy level 10->11 fell
+   replacement while the old frame remains drawable.  Lucy cut 10->11 fell
    from roughly 650 ms cache I/O plus 350 ms generation construction to about
    250-275 ms total and becomes visible during a held zoom gesture.  Exact-size
    down-trims also release the richer vector capacity instead of retaining it.
@@ -217,12 +303,13 @@ parallel lifecycle latch.
    immutable generations they keep the GPU prefix, upload only the CPU suffix,
    and use glCopyBufferSubData for device-local migration when capacity grows.
    Lucy GUI telemetry proves cumulative full uploads remain unchanged through
-   an active 10->11->12 zoom while suffix/copy/reuse counters advance.
+   an active three-cut zoom progression while suffix/copy/reuse counters
+   advance.
 
    Zoom residency is now independent of the calibrated draw allowance.  A
    missing pixel-demanded suffix may load under worker/resident byte admission
    while its result keeps the previously affordable presentation cut.  Only
-   one growth task is active per asset occurrence; successive wheel levels
+   one growth task is active per asset occurrence; successive wheel cuts
    coalesce and the newest demand is reconsidered after completion.  Each
    completed scale frame may then expose one richer population under a
    bounded 10 Hz quality-frame allowance without waiting for input to stop.
@@ -234,7 +321,7 @@ parallel lifecycle latch.
    camera stamp which continuous input can legitimately outrun.
 
    The real qged cold/warm Lucy matrix now proves this contract on both
-   System GL and OSMesa: residency grows and a richer effective level is
+   System GL and OSMesa: residency grows and a richer effective cut is
    visible while the zoom gesture is still active.  System GL additionally
    proves cumulative full uploads remain flat while suffix upload, lineage
    reuse, and device-local copy counters grow.  Stable pauses compact the
@@ -243,14 +330,14 @@ parallel lifecycle latch.
    Stable overload recovery now also starts from the currently displayed PoP
    population.  It reserves minimum coverage for all visible occurrences,
    then retains the richest already-active cuts which fit the reduced scene
-   allowance in screen-priority order.  It no longer resets a level-7 asset to
-   level 0 and visibly rebuilds upward.  Fixed widget/readback overhead on a
+   allowance in screen-priority order.  It no longer resets a richer asset to
+   its minimum cut and visibly rebuilds upward.  Fixed widget/readback overhead on a
    tiny cut cannot poison faces-per-second calibration, and unchanged retained
    ordinary VBOs are reusable capacity witnesses on OSMesa even though that
    renderer does not use System GL's prepared multi-draw tier.  A camera/
    policy/current-budget witness permits one late calibrated-headroom rescan
    at each enlarged allowance, preventing both premature coarse convergence
-   and impossible-next-level repaint loops.  That witness is now an explicit
+   and impossible-next-cut repaint loops.  That witness is now an explicit
    requested replay and appears in the convergence pending state.  It must be
    consumed or canceled before STABLE; an unrelated later selection, HUD, or
    checkpoint repaint cannot reopen LoD work after convergence.  Its

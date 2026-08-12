@@ -34,7 +34,7 @@
 #include "bu/units.h"
 #include "rt/geom.h"
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -214,7 +214,7 @@ ged_bb_core(struct ged *gedp, int argc, const char *argv[])
 	    new_intern.idb_meth = &OBJ[ID_ARB8];
 	    new_intern.idb_ptr = (void *)arb;
 
-	    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
 	    dp = db_diradd(gedp->dbip, bbname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&new_intern.idb_type);
 	    if (dp == RT_DIR_NULL) {
@@ -328,7 +328,7 @@ ged_bb_core(struct ged *gedp, int argc, const char *argv[])
 	    rt_db_free_internal(&new_intern);
 	} else {
 
-	    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
 	    dp = db_diradd(gedp->dbip, bbname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&new_intern.idb_type);
 	    if (dp == RT_DIR_NULL) {

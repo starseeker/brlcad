@@ -60,7 +60,6 @@ struct ged_view_edit_transaction {
     enum ged_view_edit_preview_event event;
     ged_view_edit_ref feature;
     const char *feature_name;
-    const void *owner;
     const char *source_path;
     const char *edit_intent_id;
     const char *edit_intent_role;
@@ -77,11 +76,6 @@ struct ged_view_edit_transaction {
     int color_valid;
     unsigned char color[3];
 };
-
-#define GED_VIEW_EDIT_TRANSACTION_INIT { \
-    GED_VIEW_EDIT_PREVIEW_UPDATE, GED_VIEW_EDIT_REF_NULL, \
-    NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, \
-    NULL, 0, 0, 0, {255, 255, 255} }
 
 __END_DECLS
 

@@ -51,7 +51,7 @@
 #include "rt/conv.h"
 #include "rt/search.h"
 #include "raytrace.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "analyze.h"
 #include "wdb.h"
 #include "../ged_private.h"

@@ -323,10 +323,15 @@ test_input_context(void)
     semantic_state.result = BOBOL_INPUT_RESULT_DEFERRED;
     const BObolInputActionLayer semantic_layer = {"test-selection",
 	&semantic_binding, 1, test_input_action};
+    BObolInputBinding background_binding = semantic_binding;
+    background_binding.priority = -1;
+    const BObolInputActionLayer background_layer = {"test-background",
+	&background_binding, 1, test_input_action};
     CHECK(first.setActionLayer(&semantic_layer, &semantic_state,
 	  &semantic_state) &&
-	  !first.setActionLayer(&semantic_layer, &secondState, &secondState),
-	  "application action layers have one guarded owner");
+	  first.setActionLayer(&background_layer, &secondState, &secondState) &&
+	  first.clearActionLayerIf(&secondState),
+	  "application action layers coexist and tear down by guarded owner");
     event.type = BOBOL_INPUT_POINTER_RELEASE;
     event.button = 0;
     event.modifiers = BOBOL_INPUT_MOD_NONE;

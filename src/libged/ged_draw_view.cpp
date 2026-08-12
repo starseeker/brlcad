@@ -57,6 +57,63 @@ struct ged_bobol_feature_lookup {
     BObolFeatureHandle handle;
 };
 
+
+void
+ged_view_feature_style_init(struct ged_view_feature_style *style)
+{
+    if (!style)
+	return;
+    memset(style, 0, sizeof(*style));
+    style->visible = -1;
+    style->selectable = -1;
+    style->line_width = -1;
+    style->line_style = -1;
+    style->arrow = -1;
+    style->arrow_tip_length = -1.0;
+    style->arrow_tip_width = -1.0;
+}
+
+
+void
+ged_view_feature_summary_init(struct ged_view_feature_summary *summary)
+{
+    if (!summary)
+	return;
+    memset(summary, 0, sizeof(*summary));
+    summary->kind = GED_VIEW_FEATURE_KIND_UNKNOWN;
+    summary->scope = GED_VIEW_FEATURE_SCOPE_UNKNOWN;
+    summary->overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_UNKNOWN;
+    summary->lifecycle = GED_VIEW_FEATURE_LIFECYCLE_UNKNOWN;
+}
+
+
+void
+ged_pick_detail_init(struct ged_pick_detail *detail)
+{
+    if (!detail)
+	return;
+    memset(detail, 0, sizeof(*detail));
+    detail->primitive_index = -1;
+    detail->face_vertex_index[0] = -1;
+    detail->face_vertex_index[1] = -1;
+    detail->face_vertex_index[2] = -1;
+    detail->nearest_face_vertex_index = -1;
+}
+
+
+void
+ged_view_edit_transaction_init(struct ged_view_edit_transaction *transaction)
+{
+    if (!transaction)
+	return;
+    memset(transaction, 0, sizeof(*transaction));
+    transaction->event = GED_VIEW_EDIT_PREVIEW_UPDATE;
+    transaction->feature = GED_VIEW_EDIT_REF_NULL;
+    transaction->color[0] = 255;
+    transaction->color[1] = 255;
+    transaction->color[2] = 255;
+}
+
 static BObolFeatureOwner
 ged_bobol_feature_owner(struct ged_view_context *view_ctx)
 {
@@ -72,8 +129,7 @@ ged_bobol_feature_owner(struct ged_view_context *view_ctx)
 static BObolViewController *
 ged_bobol_shared_feature_controller(struct ged_view_context *view_ctx)
 {
-    struct ged *gedp = view_ctx ? static_cast<struct ged *>(
-	ged_view_context_user_data_get(view_ctx)) : nullptr;
+    struct ged *gedp = ged_view_context_owner(view_ctx);
     return gedp ? ged_draw_obol_controller(gedp) : nullptr;
 }
 
@@ -90,6 +146,14 @@ ged_bobol_feature_find(struct ged_view_context *view_ctx, const char *name)
 	const BObolFeatureOwner owner = ged_bobol_feature_owner(view_ctx);
 	lookup.handle = view_controller->features().findOwned(name,
 	    BOBOL_FEATURE_SCOPE_LOCAL, &owner);
+	/* Public named feature queries address the retained object in this view,
+	 * independent of which command producer owns its lifecycle.  Requiring
+	 * the synthetic view owner here made batch-published local features
+	 * readable by the export adapter but invisible to the public style and
+	 * existence APIs. */
+	if (!lookup.handle.isValid())
+	    lookup.handle = view_controller->features().find(name,
+		BOBOL_FEATURE_SCOPE_LOCAL);
 	if (!lookup.handle.isValid())
 	    lookup.handle = view_controller->features().find(name,
 		BOBOL_FEATURE_SCOPE_SHARED);
@@ -180,7 +244,7 @@ static void
 ged_bobol_feature_style_to_ged(struct ged_view_feature_style *dst,
     const BObolFeatureStyle &src)
 {
-    struct ged_view_feature_style init = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style init = ged_view_feature_style_default();
     *dst = init;
     if (src.hasVisible)
 	dst->visible = src.visible ? 1 : 0;
@@ -299,13 +363,6 @@ ged_bobol_overlay_lifecycle_to_ged(BObolOverlayLifecycle lifecycle)
 	default:
 	    return GED_VIEW_FEATURE_LIFECYCLE_UNKNOWN;
     }
-}
-
-static struct ged_pick_detail
-ged_pick_detail_default(void)
-{
-    struct ged_pick_detail detail = GED_PICK_DETAIL_INIT;
-    return detail;
 }
 
 static int
@@ -964,8 +1021,7 @@ ged_view_edit_transaction_apply(
 
     if (ged_view_edit_ref_is_null(feature))
 	feature = ged_view_edit_overlay_ensure(view_ctx,
-	    transaction->feature_name, transaction->owner,
-	    transaction->source_path);
+	    transaction->feature_name, transaction->source_path);
     if (ged_view_edit_ref_is_null(feature))
 	return 0;
 
@@ -1035,21 +1091,18 @@ ged_view_edit_ref
 ged_view_edit_overlay_ensure(
 	struct ged_view_context *view_ctx,
 	const char *name,
-	const void *owner,
 	const char *source_path)
 {
     return ged_draw_obol_view_context_feature_overlay_ensure(view_ctx, name,
-	    owner, source_path);
+	    source_path);
 }
 
 
 ged_view_edit_ref
 ged_view_edit_label_ensure(struct ged_view_context *view_ctx,
-					   const char *name,
-					   const void *owner)
+					   const char *name)
 {
-    return ged_draw_obol_view_context_feature_label_ensure(view_ctx, name,
-	    owner);
+    return ged_draw_obol_view_context_feature_label_ensure(view_ctx, name);
 }
 
 
@@ -1140,11 +1193,9 @@ ged_view_feature_remove_prefix(struct ged_view_context *view_ctx, const char *pr
     size_t removed = 0;
     BObolViewController *view_controller =
 	ged_bobol_view_controller(view_ctx);
-    if (view_controller) {
-	const BObolFeatureOwner owner = ged_bobol_feature_owner(view_ctx);
+    if (view_controller)
 	removed += view_controller->features().removePrefix(prefix,
-	    BOBOL_FEATURE_SCOPE_LOCAL, &owner);
-    }
+	    BOBOL_FEATURE_SCOPE_LOCAL, nullptr);
     BObolViewController *shared_controller =
 	ged_bobol_shared_feature_controller(view_ctx);
     if (shared_controller)

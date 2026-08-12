@@ -189,7 +189,7 @@ public:
 	SbString editIntentRole;
 	uint32_t lodPolicy;
 	int lodAvailable;
-	int lodActiveLevel;
+	int lodActiveCut;
 	uint32_t lodFaceCount;
 	uint32_t lodPointCount;
 	uint32_t lodOriginalPointCount;
@@ -399,7 +399,7 @@ private:
 	    const SbString &editIntentId,
 	    const SbString &editIntentRole,
 	    uint32_t lodPolicy,
-	    int lodAvailable, int lodActiveLevel, uint32_t lodFaceCount,
+	    int lodAvailable, int lodActiveCut, uint32_t lodFaceCount,
 	    uint32_t lodPointCount, uint32_t lodOriginalPointCount,
 	    uint32_t lodNormalCount, int lodHasSnappedPoints,
 	    int lodHasNormals, const SbVec3f &lodBoundsMin,

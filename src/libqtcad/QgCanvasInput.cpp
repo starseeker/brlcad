@@ -314,7 +314,7 @@ QgCanvasInput::mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_pre
 	QMouseEvent *event, int mode)
 {
     QTCAD_EVENT("mouseMove", 2);
-	if (!view_ctx || !event || !event->buttons().testFlag(Qt::LeftButton))
+    if (!view_ctx || !event)
 	return 0;
 
     /* An application-layer gesture must see its first drag event.  View
@@ -326,7 +326,8 @@ QgCanvasInput::mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_pre
     qgcanvasinput_position(event, input.x, input.y);
     input.dx = first_motion ? 0 : input.x - x_prev;
     input.dy = first_motion ? 0 : input.y - y_prev;
-    input.button = 0;
+    input.button = event->buttons().testFlag(Qt::LeftButton) ? 0 :
+	BOBOL_INPUT_ANY;
     input.buttons = qgcanvasinput_buttons(event->buttons());
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
     m->dispatch_view = view_ctx;

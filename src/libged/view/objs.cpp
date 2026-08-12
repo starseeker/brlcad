@@ -118,8 +118,7 @@ _view_obj_list(struct bu_vls *out, struct ged_view_context *view_ctx,
 
     struct view_obj_list_state ctx;
     ctx.glob = glob;
-    struct ged *gedp = static_cast<struct ged *>(
-	ged_view_context_user_data_get(view_ctx));
+    struct ged *gedp = ged_view_context_owner(view_ctx);
 
     if (list_view) {
 	BObolViewController *local = ged_bobol_view_controller(view_ctx);
@@ -354,8 +353,7 @@ _view_obj_record_find(struct ged_view_context *view_ctx,
     }
     if (!view_ctx || !name || !name[0] || !out)
 	return 0;
-    struct ged *gedp = static_cast<struct ged *>(
-	ged_view_context_user_data_get(view_ctx));
+    struct ged *gedp = ged_view_context_owner(view_ctx);
     unsigned int domains = 0;
     if (list_view)
 	domains |= GED_VIEW_MANAGED_FEATURES;
@@ -505,7 +503,7 @@ static void
 _view_obj_style_to_ged(struct ged_view_feature_style *dst,
     const BObolFeatureStyle &src)
 {
-    struct ged_view_feature_style init = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style init = ged_view_feature_style_default();
     *dst = init;
     if (src.hasVisible)
 	dst->visible = src.visible ? 1 : 0;
@@ -645,7 +643,7 @@ _view_obj_database_style_get(const GedViewManagedFeatureRef &ref,
 {
     SoBRLSceneGroup *group = _view_obj_database_group(ref);
     if (group) {
-	const struct ged_view_feature_style init = GED_VIEW_FEATURE_STYLE_INIT;
+	const struct ged_view_feature_style init = ged_view_feature_style_default();
 	*style = init;
 	style->visible = group->visible.getValue() ? 1 : 0;
 	style->color_valid = 1;
@@ -667,7 +665,7 @@ _view_obj_database_style_get(const GedViewManagedFeatureRef &ref,
 	return false;
     const BObolDatabaseSourceSummary &summary = ref.source;
 
-    const struct ged_view_feature_style init = GED_VIEW_FEATURE_STYLE_INIT;
+    const struct ged_view_feature_style init = ged_view_feature_style_default();
     *style = init;
     style->visible = summary.visible ? 1 : 0;
     style->color_valid = 1;
@@ -887,7 +885,7 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
 	    visible = polygon_visible ? 1 : 0;
 	} else {
 	    struct ged_view_feature_style style =
-		GED_VIEW_FEATURE_STYLE_INIT;
+		ged_view_feature_style_default();
 	    if (!_view_obj_database_style_get(ref, &style))
 		return BRLCAD_ERROR;
 	    visible = style.visible > 0 ? 1 : 0;
@@ -903,7 +901,7 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
 	if (ref.kind == GedViewManagedFeatureKind::Polygon)
 	    return ref.view->polygons().setVisible(ref.polygon,
 		FALSE) ? BRLCAD_OK : BRLCAD_ERROR;
-	struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+	struct ged_view_feature_style style = ged_view_feature_style_default();
 	style.visible = 0;
 	return _view_obj_database_style_apply(ref, &style, false) ?
 	    BRLCAD_OK : BRLCAD_ERROR;
@@ -915,7 +913,7 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
 	if (ref.kind == GedViewManagedFeatureKind::Polygon)
 	    return ref.view->polygons().setVisible(ref.polygon,
 		TRUE) ? BRLCAD_OK : BRLCAD_ERROR;
-	struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+	struct ged_view_feature_style style = ged_view_feature_style_default();
 	style.visible = 1;
 	return _view_obj_database_style_apply(ref, &style, false) ?
 	    BRLCAD_OK : BRLCAD_ERROR;
@@ -982,7 +980,7 @@ _objs_cmd_color(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
 
     struct ged_view_feature_style style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
 
     if (ac == 0) {
 	if (!_view_obj_feature_style_get(ref, &style) &&
@@ -1028,7 +1026,7 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
 
     struct ged_view_feature_style style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     if (!_view_obj_feature_style_get(ref, &style) &&
 	!_view_obj_database_style_get(ref, &style))
 	return BRLCAD_ERROR;

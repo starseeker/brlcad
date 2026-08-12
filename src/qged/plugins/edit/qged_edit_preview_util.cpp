@@ -112,7 +112,7 @@ qged_edit_preview_publish_event(const QgPluginContext *ctx,
 				const char *source_path)
 {
     struct ged_view_edit_transaction transaction =
-	GED_VIEW_EDIT_TRANSACTION_INIT;
+	ged_view_edit_transaction_default();
     transaction.event = qged_edit_preview_event_to_ged(event);
     transaction.feature = qged_edit_feature_ref_to_ged(feature);
     transaction.feature_name = feature_name;
@@ -125,26 +125,23 @@ qged_edit_preview_publish_event(const QgPluginContext *ctx,
 struct qged_edit_feature_ref
 qged_edit_feature_overlay_ensure(const QgPluginContext *ctx,
 				 const char *name,
-				 const void *owner,
 				 const char *source_path)
 {
 	struct ged_view_context *view_ctx = qged_edit_ged_view_context(ctx);
     return qged_edit_feature_ref_from_ged(view_ctx,
 	    ged_view_edit_overlay_ensure(
 		view_ctx,
-		name, owner, source_path));
+		name, source_path));
 }
 
 
 struct qged_edit_feature_ref
 qged_edit_feature_label_ensure(const QgPluginContext *ctx,
-			       const char *name,
-			       const void *owner)
+			       const char *name)
 {
 	struct ged_view_context *view_ctx = qged_edit_ged_view_context(ctx);
     return qged_edit_feature_ref_from_ged(view_ctx,
-	    ged_view_edit_label_ensure(view_ctx,
-		name, owner));
+	    ged_view_edit_label_ensure(view_ctx, name));
 }
 
 

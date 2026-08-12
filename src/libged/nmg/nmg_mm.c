@@ -29,7 +29,7 @@
 
 #include "bu/cmd.h"
 #include "bu/interrupt.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/geom.h"
 
 #include "../ged_private.h"
@@ -69,7 +69,7 @@ ged_nmg_mm_core(struct ged *gedp, int argc, const char *argv[])
     (void)signal(SIGINT, SIG_IGN);
 
     /* add model to database */
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     dp = db_diradd(gedp->dbip, name, RT_DIR_PHONY_ADDR, 0,
 	    RT_DIR_SOLID, (void *)&internal.idb_type);
     if (dp == RT_DIR_NULL) {

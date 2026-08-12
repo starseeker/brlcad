@@ -29,7 +29,7 @@
 
 #include "bu/cmd.h"
 #include "bu/getopt.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/geom.h"
 #include "raytrace.h"
 
@@ -526,7 +526,7 @@ set_material(struct ged *gedp, int argc, const char *argv[])
     }
 
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     int ret = wdb_put_internal(wdbp, argv[2], &intern, mk_conv2mm);
     if (ret < 0) {
 	if (event_batch_opened)
@@ -591,7 +591,7 @@ remove_material(struct ged *gedp, int argc, const char *argv[])
     }
 
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     int ret = wdb_put_internal(wdbp, argv[2], &intern, mk_conv2mm);
     if (ret < 0) {
 	if (event_batch_opened)

@@ -175,7 +175,7 @@ mged_hud_builder_publish(struct mged_hud_builder *builder)
 	return 0;
 
     struct bu_vls name = BU_VLS_INIT_ZERO;
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "mged-hud";
     desc.owner_role = "faceplate";
     desc.local = 1;
@@ -196,8 +196,7 @@ mged_hud_builder_publish(struct mged_hud_builder *builder)
 	layers[i].points = (const point_t *)builder->layers[i].points;
 	layers[i].commands = builder->layers[i].commands;
 	layers[i].point_count = builder->layers[i].point_count;
-	layers[i].style = (struct ged_view_feature_style)
-	    GED_VIEW_FEATURE_STYLE_INIT;
+	layers[i].style = ged_view_feature_style_default();
 	layers[i].style.visible = 1;
 	layers[i].style.selectable = 0;
 	layers[i].style.color_valid = 1;

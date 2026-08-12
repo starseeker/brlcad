@@ -269,7 +269,7 @@ ged_obol_pick_result_from_candidates(
 	return NULL;
 
     for (size_t i = 0; i < candidates.size(); i++) {
-	struct ged_pick_detail detail = GED_PICK_DETAIL_INIT;
+	struct ged_pick_detail detail = ged_pick_detail_default();
 	detail.source_id = candidates[i].source_id;
 	detail.primitive_kind = candidates[i].primitive_kind;
 	detail.primitive_index = candidates[i].primitive_index;

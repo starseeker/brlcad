@@ -1715,15 +1715,15 @@ exercise_brep_lod_contract(struct db_i *dbip)
     if (wireValid) {
 	const Obol::WireRep &wire = *wireOccurrence.geometry->wire;
 	for (uint8_t level = 0; level < 16; ++level) {
-	    const size_t first = wire.segmentFirstAtLevel(level);
-	    const size_t count = wire.segmentCountAtLevel(level);
+	    const size_t first = wire.segmentFirstAtCut(level);
+	    const size_t count = wire.segmentCountAtCut(level);
 	    if (first > wire.segmentCount() ||
 		count > wire.segmentCount() - first) {
 		wireValid = false;
 		break;
 	    }
 	}
-	wireValid = wireValid && wire.segmentCountAtLevel(15) > 0;
+	wireValid = wireValid && wire.segmentCountAtCut(15) > 0;
     }
     wireRoot->unref();
     if (!wireValid)
@@ -1800,8 +1800,8 @@ exercise_brep_lod_contract(struct db_i *dbip)
     /* The fine variant is the current named payload.  Reopening the older
      * coarse key proves provider routing is exact rather than latest-by-name. */
     provider.meshAssetContentHash = coarseKey;
-    provider.useForcedLevel = TRUE;
-    provider.forcedLevel = 0;
+    provider.useForcedCut = TRUE;
+    provider.forcedCut = 0;
     provider.refreshMissing = FALSE;
     BObolLodRequest request;
     request.objectPath = "/brep.s";
@@ -3190,6 +3190,22 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    viewController.isRenderRequested() ||
 	    viewController.consumeRenderRequest(NULL))
 	    FAIL("view controller should consume render requests atomically");
+	SbBool lodCapacityRelevant = TRUE;
+	viewController.requestPresentationRender("selection-style");
+	if (!viewController.consumeRenderRequest(&renderReason,
+		&lodCapacityRelevant) || lodCapacityRelevant ||
+	    bu_strcmp(renderReason.getString(), "selection-style") != 0)
+	    FAIL("presentation-only requests should not become LoD capacity samples");
+	viewController.requestPresentationRender("selection-style");
+	viewController.requestRender("lod-cut");
+	if (!viewController.consumeRenderRequest(NULL,
+		&lodCapacityRelevant) || !lodCapacityRelevant)
+	    FAIL("a coalesced LoD request should preserve capacity relevance");
+	viewController.requestRender("lod-cut");
+	viewController.requestPresentationRender("selection-style");
+	if (!viewController.consumeRenderRequest(NULL,
+		&lodCapacityRelevant) || !lodCapacityRelevant)
+	    FAIL("a presentation repaint should not mask pending LoD work");
 	if (viewController.renderPending(FALSE, FALSE, NULL) ||
 	    viewController.isRenderRequested())
 	    FAIL("view controller renderPending should be a no-op without queued work");
@@ -3706,7 +3722,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	tri.vertexIndexC != 2)
 	FAIL("mesh export should preserve triangle identity");
     if (tri.lodAvailable ||
-	tri.lodActiveLevel != -1 ||
+	tri.lodActiveCut != -1 ||
 	tri.lodFaceCount != 0 ||
 	tri.lodPointCount != 0 ||
 	tri.lodOriginalPointCount != 0 ||
@@ -5878,7 +5894,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     meshResult.resultKind = BOBOL_LOD_RESULT_MESH;
     meshResult.qualityTier = BOBOL_LOD_QUALITY_FAST_DISPLAY;
     meshResult.providerStatus = BOBOL_LOD_PROVIDER_READY;
-    meshResult.geometry.activeLevel = 3;
+    meshResult.geometry.activeCut = 3;
     meshResult.mesh.points.push_back(SbVec3f(-1.0f, -1.0f, 0.0f));
     meshResult.mesh.points.push_back(SbVec3f(1.0f, -1.0f, 0.0f));
     meshResult.mesh.points.push_back(SbVec3f(0.0f, 1.0f, 0.0f));

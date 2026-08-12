@@ -38,9 +38,9 @@
 #include "rt/edit.h"
 #include "wdb.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "brep/util.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 
 #include "../../ged_private.h"
 #include "../../edit/uri.hh"
@@ -78,7 +78,7 @@ static void
 edit_event_cb(struct ged *UNUSED(gedp),
 	      const struct ged_event *events,
 	      size_t event_count,
-	      const struct ged_event_txn_result *UNUSED(result),
+	      const struct ged_event_result *UNUSED(result),
 	      void *client_data)
 {
     struct edit_event_observer *obs = (struct edit_event_observer *)client_data;

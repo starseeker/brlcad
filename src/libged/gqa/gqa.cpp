@@ -490,14 +490,14 @@ gqa_publish_result_visuals(struct ged *gedp,
 
     if (active_view) {
 	struct ged_view_feature_batch_desc desc =
-	    GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	    ged_view_feature_batch_desc_default();
 	desc.owner_id = "gqa";
 	desc.owner_role = "command-result";
 	struct ged_view_feature_batch *scene =
 	    ged_view_feature_batch_begin(active_view, &desc);
 	if (scene) {
 	    struct ged_view_feature_style style =
-		GED_VIEW_FEATURE_STYLE_INIT;
+		ged_view_feature_style_default();
 	    style.visible = 1;
 	    style.selectable = 1;
 	    for (i = 0; i < GQA_RESULT_COUNT; i++) {
@@ -668,7 +668,7 @@ gqa_publish_overlap_label(struct ged *gedp,
 
     if (active_view) {
 	struct ged_view_feature_batch_desc desc =
-	    GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	    ged_view_feature_batch_desc_default();
 	desc.owner_id = "gqa";
 	desc.owner_role = "command-result";
 	struct ged_view_feature_batch *scene =

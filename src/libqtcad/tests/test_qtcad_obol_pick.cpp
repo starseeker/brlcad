@@ -131,7 +131,7 @@ qtcad_source_pick_result(const BObolLodRequest &request,
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = result.cacheKey;
-    result.geometry.activeLevel = resultKind == BOBOL_LOD_RESULT_MESH ? 1 : -1;
+    result.geometry.activeCut = resultKind == BOBOL_LOD_RESULT_MESH ? 1 : -1;
     result.geometry.borrowed = FALSE;
 
     result.mesh.points.push_back(SbVec3f(-1.0f, -1.0f, 0.0f));

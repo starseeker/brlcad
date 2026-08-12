@@ -35,7 +35,7 @@
 
 #include "bu.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "raytrace.h"
 #include "rt/db_attr.h"
 #include "wdb.h"
@@ -239,7 +239,7 @@ static void
 tire_event_observer_cb(struct ged *UNUSED(gedp),
 		       const struct ged_event *events,
 		       size_t event_count,
-		       const struct ged_event_txn_result *result,
+		       const struct ged_event_result *result,
 		       void *client_data)
 {
     auto *obs = static_cast<TireEventObserver *>(client_data);
@@ -254,11 +254,14 @@ tire_event_observer_cb(struct ged *UNUSED(gedp),
 	    obs->attr_events++;
     }
 
-    if (result && BU_VLS_IS_INITIALIZED(&result->affected_names) &&
-	    bu_vls_strlen(&result->affected_names)) {
+    const size_t path_count = ged_event_result_path_count(result);
+    for (size_t i = 0; i < path_count; i++) {
+	const char *path = ged_event_result_path_at(result, i);
+	if (!path)
+	    continue;
 	if (!obs->affected_names.empty())
-	    obs->affected_names.append(" ");
-	obs->affected_names.append(bu_vls_cstr(&result->affected_names));
+	    obs->affected_names.append("\n");
+	obs->affected_names.append(path);
     }
 }
 

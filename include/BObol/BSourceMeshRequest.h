@@ -132,7 +132,7 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
     SbString editIntentRole;
     uint32_t lodPolicy;
     int lodAvailable;
-    int lodActiveLevel;
+    int lodActiveCut;
     uint32_t lodFaceCount;
     uint32_t lodPointCount;
     uint32_t lodOriginalPointCount;
@@ -206,7 +206,7 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
 	editIntentRole = "";
 	lodPolicy = 0;
 	lodAvailable = 0;
-	lodActiveLevel = -1;
+	lodActiveCut = -1;
 	lodFaceCount = 0;
 	lodPointCount = 0;
 	lodOriginalPointCount = 0;

@@ -7,7 +7,7 @@ set(
   defines.h
   display.h
   draw.h
-  event_txn.h
+  event.h
   objects.h
   view_polygon.h
   view_polygon_types.h
@@ -20,7 +20,6 @@ set(
   scene_types.h
   selection.h
   selection_types.h
-  selection_state.h
   version.h
   view.h
   view_feature.h
@@ -28,6 +27,7 @@ set(
   view_types.h
 )
 brlcad_manage_files(ged_headers ${INCLUDE_DIR}/brlcad/ged REQUIRED libged)
+add_subdirectory(plugin)
 
 # Deliberately not installed: concrete retained-render host adapter.
 cmakefiles(

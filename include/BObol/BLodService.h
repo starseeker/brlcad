@@ -45,7 +45,7 @@ private:
 
 /* A view-required refinement no larger than these aggregate-admitted deltas
  * is cheaper to load and publish directly than to manufacture intermediate
- * per-level tasks.  Larger discontinuities (Lucy is the canonical example)
+ * per-cut tasks.  Larger discontinuities (Lucy is the canonical example)
  * remain staged.  The submit action charges the complete selected delta to
  * its scene budget before the provider is allowed to make this jump. */
 static constexpr uint64_t BOBOL_LOD_DIRECT_REFINEMENT_FACE_LIMIT = 16384;
@@ -76,40 +76,38 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
     double brepTessellationRelTol;
     double brepTessellationNormTol;
     SbBool brepVariantMemoryLimited;
-    struct bv_view_info view;
-    SbBool useView;
     SbBool refreshMissing;
-    SbBool useForcedLevel;
+    SbBool useForcedCut;
     SbBool shrinkAfterCopy;
     SbBool compactResident;
     /* Pace a cold/warm retained asset toward the view-selected target instead
      * of making the first visible replacement an unbounded prefix.  These are
      * delivery budgets, not terminal-quality caps: subsequent rendered frames
-     * continue until requestedLevel is resident. */
+     * continue until requestedCut is resident. */
     SbBool progressiveDelivery;
     uint64_t initialRefinementFaceBudget;
     uint64_t initialRefinementPointBudget;
     double refinementGrowthFactor;
-    SbBool useCurrentDrawLevel;
-    int currentDrawLevel;
+    SbBool useCurrentDrawCut;
+    int currentDrawCut;
     /* Aggregate scene admission may allow less than the provider's local
      * per-asset growth rule.  Clamp this task's publication to the exact
-     * level whose complete delta was reserved by the submit action. */
-    SbBool useDeliveryLevelLimit;
-    int deliveryLevelLimit;
+     * cut whose complete delta was reserved by the submit action. */
+    SbBool useDeliveryCutLimit;
+    int deliveryCutLimit;
     /* A zoom may need a richer resident prefix even when the measured frame
      * budget cannot present that complete prefix yet.  In that case the
      * delivery limit governs cache residency and this independent limit
      * governs the active draw cut published with the result. */
-    SbBool usePresentationLevelLimit;
-    int presentationLevelLimit;
+    SbBool usePresentationCutLimit;
+    int presentationCutLimit;
     /* When the first retained publication reopens an already complete
      * persistent hierarchy, make the view-requested prefix resident in that
      * same worker task while still presenting only the minimum useful cut.
      * Cold cache construction deliberately keeps the ordinary minimum-first
      * path so expensive new PoP work cannot delay first content. */
     SbBool prefetchCachedTargetOnFirstPublication;
-    int forcedLevel;
+    int forcedCut;
     int reset;
 
     BObolMeshLodProvider(void);
@@ -334,6 +332,7 @@ public:
     void unsubscribeResultReady(BObolLodSubscriberId id);
 
     size_t inFlightCount(void) const;
+    size_t resultReservationCountForDiagnostics(void) const;
     size_t pendingTaskCountForDiagnostics(void) const;
     size_t queuedResultCountForDiagnostics(void) const;
     size_t queuedCacheWriteCountForDiagnostics(void) const;
@@ -379,7 +378,7 @@ public:
      * memory-bounded background trims against the aggregate demand.  This
      * call never reads or rewrites mesh arrays on its caller.  Assets absent
      * from all complete snapshots retain only their minimum useful prefix;
-     * richer levels remain in the on-disk cache.  Returns the number of
+     * richer cuts remain in the on-disk cache.  Returns the number of
      * newly queued assets.  planningComplete reports whether the bounded
      * resident-asset scan completed in this call; callers keep pumping quiet
      * work when it is FALSE. */

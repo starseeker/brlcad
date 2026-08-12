@@ -267,8 +267,12 @@ main(int ac, char *av[])
     (void)bu_mem(BU_MEM_ALL, &all_mem2);
     if (all_mem2 != (size_t)all_mem)
 	return -4;
-    (void)bu_mem(BU_MEM_AVAIL, &avail_mem2);
-    if (avail_mem2 != (size_t)avail_mem)
+    ssize_t avail_mem_ret = bu_mem(BU_MEM_AVAIL, &avail_mem2);
+    /* Available memory is a live pressure measurement and may legitimately
+     * change between the two calls above.  Verify the return/output contract
+     * atomically instead of requiring the machine to remain quiescent. */
+    if (avail_mem_ret < 0 || avail_mem2 != (size_t)avail_mem_ret ||
+	avail_mem2 == 0 || avail_mem2 > all_mem2)
 	return -5;
     (void)bu_mem(BU_MEM_PAGE_SIZE, &page_mem2);
     if (page_mem2 != (size_t)page_mem)

@@ -56,9 +56,9 @@
 #include "bu/vls.h"
 #include "ged/db_index.h"
 #include "ged/draw.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "ged/scene.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 #include "raytrace.h"
 #define ALPHANUM_IMPL
 #include "../libged/alphanum.h"
@@ -85,29 +85,6 @@ qgmodel_append_unique_path(std::vector<std::string> &paths, const char *path)
 	std::string spath(path);
 	if (std::find(paths.begin(), paths.end(), spath) == paths.end())
 		paths.push_back(spath);
-}
-
-static void
-qgmodel_append_unique_paths_from_words(std::vector<std::string> &paths,
-				       const char *words)
-{
-	if (!words || !words[0])
-		return;
-
-	std::string names(words);
-	size_t pos = 0;
-	while (pos < names.size()) {
-		pos = names.find_first_not_of(" \t\r\n", pos);
-		if (pos == std::string::npos)
-			break;
-		size_t end = names.find_first_of(" \t\r\n", pos);
-		std::string path = names.substr(pos,
-			(end == std::string::npos) ? std::string::npos : end - pos);
-		qgmodel_append_unique_path(paths, path.c_str());
-		if (end == std::string::npos)
-			break;
-		pos = end + 1;
-	}
 }
 
 static std::string
@@ -146,10 +123,6 @@ qgmodel_path_has_queued_ancestor(const std::vector<std::string> &paths,
 	return false;
 }
 
-static std::unordered_map<const QgModel *, QgModel::DrawTimingStats>
-qgmodel_draw_timing_stats;
-static std::unordered_set<const QgModel *> qgmodel_draw_timing_enabled;
-
 static struct ged_view_context *
 qgmodel_active_view_context(const QgModel *model)
 {
@@ -187,21 +160,8 @@ qgmodel_apply_scene_erase(struct ged *gedp,
 	return status;
 }
 
-static bool
-qgmodel_draw_timing_is_enabled(const QgModel *model)
-{
-	return model && qgmodel_draw_timing_enabled.find(model) !=
-		qgmodel_draw_timing_enabled.end();
-}
-
-static QgModel::DrawTimingStats &
-qgmodel_draw_timing_stats_for(const QgModel *model)
-{
-	return qgmodel_draw_timing_stats[model];
-}
-
 static int
-qgmodel_event_affects_hierarchy(ged_event_kind kind)
+qgmodel_event_affects_hierarchy(enum ged_event_kind kind)
 {
 	switch (kind) {
 	case GED_EVENT_OBJECT_ADDED:
@@ -224,7 +184,7 @@ qgmodel_event_affects_hierarchy(ged_event_kind kind)
 }
 
 static int
-qgmodel_event_requires_model_reset(ged_event_kind kind)
+qgmodel_event_requires_model_reset(enum ged_event_kind kind)
 {
 	switch (kind) {
 	case GED_EVENT_BATCH_REBUILD:
@@ -468,9 +428,6 @@ QgModel::QgModel(QObject *p, const char *npath)
 
 QgModel::~QgModel()
 {
-	qgmodel_draw_timing_enabled.erase(this);
-	qgmodel_draw_timing_stats.erase(this);
-
 	if (m_session && m_session->ged() && draw_observer_token) {
 		ged_scene_observer_remove(m_session->ged(),
 			draw_observer_token);
@@ -501,27 +458,19 @@ QgModel::~QgModel()
 QgModel::DrawTimingStats
 QgModel::drawTimingStats() const
 {
-	auto it = qgmodel_draw_timing_stats.find(this);
-	if (it == qgmodel_draw_timing_stats.end())
-		return DrawTimingStats();
-	return it->second;
+	return draw_timing_stats;
 }
 
 void
 QgModel::resetDrawTimingStats()
 {
-	qgmodel_draw_timing_stats[this] = DrawTimingStats();
+	draw_timing_stats = DrawTimingStats();
 }
 
 void
 QgModel::setDrawTimingStatsEnabled(bool enabled)
 {
-	if (enabled) {
-		qgmodel_draw_timing_enabled.insert(this);
-		(void)qgmodel_draw_timing_stats_for(this);
-	} else {
-		qgmodel_draw_timing_enabled.erase(this);
-	}
+	draw_timing_stats_enabled = enabled;
 }
 
 // Note - this is a private method and must be run from within g_update's
@@ -2148,11 +2097,11 @@ QgModel::notifyDrawnItemsChanged()
 {
 	QVector<int> roles;
 	roles << DrawnDisplayRole;
-	bool timing_enabled = qgmodel_draw_timing_is_enabled(this);
+	bool timing_enabled = draw_timing_stats_enabled;
 	int64_t start_us = timing_enabled ? bu_gettime() : 0;
 	notifyItemsChanged(roles);
 	if (timing_enabled)
-		qgmodel_draw_timing_stats_for(this).notify_all_us +=
+		draw_timing_stats.notify_all_us +=
 			(uint64_t)(bu_gettime() - start_us);
 }
 
@@ -2267,11 +2216,11 @@ QgModel::notifyDrawnPathChanged(const char *path)
 {
 	QVector<int> roles;
 	roles << DrawnDisplayRole;
-	bool timing_enabled = qgmodel_draw_timing_is_enabled(this);
+	bool timing_enabled = draw_timing_stats_enabled;
 	int64_t start_us = timing_enabled ? bu_gettime() : 0;
 	notifyPathItemsChanged(path, roles);
 	if (timing_enabled)
-		qgmodel_draw_timing_stats_for(this).notify_path_us +=
+		draw_timing_stats.notify_path_us +=
 			(uint64_t)(bu_gettime() - start_us);
 }
 
@@ -2350,14 +2299,12 @@ QgModel::handleDrawTransactionEvent(
 
 
 void
-QgModel::recordPendingDatabaseEventPaths(const struct ged_event_txn_result *result)
+QgModel::recordPendingDatabaseEventPaths(const struct ged_event_result *result)
 {
-	if (!result || !BU_VLS_IS_INITIALIZED(&result->affected_names) ||
-		!bu_vls_strlen(&result->affected_names))
-		return;
-
-	qgmodel_append_unique_paths_from_words(pending_db_event_paths,
-		bu_vls_cstr(&result->affected_names));
+	const size_t path_count = ged_event_result_path_count(result);
+	for (size_t i = 0; i < path_count; i++)
+		qgmodel_append_unique_path(pending_db_event_paths,
+			ged_event_result_path_at(result, i));
 }
 
 
@@ -2453,9 +2400,9 @@ QgModel::flushPendingDatabaseEventNotifications()
 
 
 void
-QgModel::handleDatabaseEventTxn(const struct ged_event *events,
+QgModel::handleDatabaseEvents(const struct ged_event *events,
 				size_t event_count,
-				const struct ged_event_txn_result *result)
+				const struct ged_event_result *result)
 {
 	event_observer_event_count++;
 
@@ -2513,12 +2460,12 @@ QgModelDrawObserverAccess::callback(struct ged *gedp,
 
 	QgModel *model = (QgModel *)client_data;
 	if (model) {
-		bool timing_enabled = qgmodel_draw_timing_is_enabled(model);
+		bool timing_enabled = model->draw_timing_stats_enabled;
 		int64_t start_us = timing_enabled ?
 			bu_gettime() : 0;
 		model->handleDrawTransactionEvent(delta);
 		if (timing_enabled)
-			qgmodel_draw_timing_stats_for(model).observer_callback_us +=
+			model->draw_timing_stats.observer_callback_us +=
 				(uint64_t)(bu_gettime() - start_us);
 	}
 }
@@ -2528,14 +2475,14 @@ void
 QgModel::eventObserverCallback(struct ged *gedp,
 			       const struct ged_event *events,
 			       size_t event_count,
-			       const struct ged_event_txn_result *result,
+			       const struct ged_event_result *result,
 			       void *client_data)
 {
 	(void)gedp;
 
 	QgModel *model = (QgModel *)client_data;
 	if (model)
-		model->handleDatabaseEventTxn(events, event_count, result);
+	model->handleDatabaseEvents(events, event_count, result);
 }
 
 QVariant
@@ -2722,15 +2669,15 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 	if (draw_paths.empty())
 		return BRLCAD_ERROR;
 
-	bool timing_enabled = qgmodel_draw_timing_is_enabled(this);
+	bool timing_enabled = draw_timing_stats_enabled;
 	if (timing_enabled)
-		qgmodel_draw_timing_stats_for(this).draw_calls++;
+		draw_timing_stats.draw_calls++;
 	int64_t blank_slate_start_us = timing_enabled ?
 		bu_gettime() : 0;
 	int blank_slate = !ged_scene_has_paths(gedp, view_ctx,
 		GED_SCENE_DRAW_DEFAULT);
 	if (timing_enabled)
-		qgmodel_draw_timing_stats_for(this).blank_slate_check_us +=
+		draw_timing_stats.blank_slate_check_us +=
 			(uint64_t)(bu_gettime() - blank_slate_start_us);
 
 	uint64_t draw_rev_before = ged_scene_revision(gedp);
@@ -2754,7 +2701,7 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 	enum ged_scene_status status = qgmodel_apply_scene_draw(gedp,
 		&request, &result_changed);
 	if (timing_enabled)
-		qgmodel_draw_timing_stats_for(this).transaction_us +=
+		draw_timing_stats.transaction_us +=
 			(uint64_t)(bu_gettime() - transaction_start_us);
 	draw_observer_defer_depth--;
 
@@ -2772,14 +2719,14 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 			bu_gettime() : 0;
 		emit view_changed(QG_VIEW_DRAWN);
 		if (timing_enabled)
-			qgmodel_draw_timing_stats_for(this).view_signal_us +=
+			draw_timing_stats.view_signal_us +=
 				(uint64_t)(bu_gettime() - view_signal_start_us);
 	}
 	if (status != GED_SCENE_OK) {
 		return BRLCAD_ERROR;
 	}
 	if (timing_enabled)
-		qgmodel_draw_timing_stats_for(this).successful_draw_calls++;
+		draw_timing_stats.successful_draw_calls++;
 	return BRLCAD_OK;
 }
 

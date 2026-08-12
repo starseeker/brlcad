@@ -147,7 +147,7 @@ struct BOBOL_EXPORT BObolLodCacheKey {
 
 struct BOBOL_EXPORT BObolLodResidentDemand {
     SbString assetKey;
-    int level;
+    int cut;
     /* Renderer channels which retain this asset in the consumer.  Bit 0 is
      * wire geometry and bit 1 is shaded geometry.  Stable compaction uses the
      * aggregate mask to prepare one replacement immutable renderer object on
@@ -163,7 +163,7 @@ struct BOBOL_EXPORT BObolLodGeometryHandle {
     SbString providerVersion;
     BObolLodCacheKey cacheKey;
     uint64_t providerToken;
-    int activeLevel;
+    int activeCut;
     SbBool borrowed;
 
     BObolLodGeometryHandle(void);
@@ -190,7 +190,7 @@ typedef std::shared_ptr<const BObolLodProgressiveMeshTrim>
 
 /* One thread-safe retained PoP asset shared by every occurrence and view that
  * resolves to the same source geometry.  The resident arrays are exact,
- * activation-ordered cumulative prefixes.  active/draw level deliberately
+ * activation-ordered cumulative prefixes.  The active draw cut deliberately
  * does not live here: each occurrence may draw a different prefix. */
 class BOBOL_EXPORT BObolLodProgressiveMesh {
 public:
@@ -199,8 +199,8 @@ public:
 
     SbBool update(const struct BObolMeshLodData &data,
 	const struct BObolMeshLodHierarchyInfo &hierarchy,
-	int residentLevel, SbBool shadedCullBackfaces);
-    /* Extend an existing immutable generation by reading only cache levels
+	int residentCut, SbBool shadedCullBackfaces);
+    /* Extend an existing immutable generation by reading only cache cuts
      * above its published resident frontier.  The old generation remains
      * drawable until the completed replacement is atomically published.
      * Authored corner-normal meshes currently return FALSE and use update(),
@@ -208,34 +208,40 @@ public:
      * alone. */
     SbBool extendFromCache(struct BObolMeshLod *lod,
 	const struct BObolMeshLodHierarchyInfo &hierarchy,
-	int residentLevel, SbBool shadedCullBackfaces);
+	int residentCut, SbBool shadedCullBackfaces);
     /* Build a shorter immutable generation without publishing it.  Stable
      * resident-memory maintenance uses this two-phase form so a newer view or
      * provider use can invalidate an old trim before it changes the shared
      * mesh.  commitTrim succeeds only while the exact source generation used
      * by prepareTrim is still current. */
-    BObolLodProgressiveMeshTrimPtr prepareTrim(int residentLevel) const;
+    BObolLodProgressiveMeshTrimPtr prepareTrim(int residentCut) const;
     SbBool commitTrim(const BObolLodProgressiveMeshTrimPtr &trim);
-    SbBool trim(int residentLevel);
-    SbBool copyLevel(BObolLodMeshPayload &payload, int level) const;
+    SbBool trim(int residentCut);
+    SbBool copyCut(BObolLodMeshPayload &payload, int cut) const;
     SbBool isValid(void) const;
     /* True when the retained prefix already contains every point and face
-     * needed by level.  This may be true above residentLevel() when adjacent
-     * PoP levels differ only in coordinate quantization: exact coordinates
+     * needed by cut.  This may be true above residentCut() when adjacent
+     * PoP cuts differ only in coordinate quantization: exact coordinates
      * are retained once and the renderer can select the finer snap without
      * loading or rebuilding geometry. */
-    SbBool canDrawLevel(int level) const;
-    int minimumLevel(void) const;
-    int maximumLevel(void) const;
-    int residentLevel(void) const;
+    SbBool canDrawCut(int cut) const;
+    int minimumCut(void) const;
+    int maximumCut(void) const;
+    int residentCut(void) const;
     uint64_t revision(void) const;
-    size_t pointCount(int level) const;
-    size_t faceCount(int level) const;
-    /* Immutable hierarchy population, including levels above the currently
+    size_t pointCount(int cut) const;
+    size_t faceCount(int cut) const;
+    /* Immutable hierarchy population, including cuts above the currently
      * resident prefix.  pointCount()/faceCount() retain their drawable-cut
-     * semantics and clamp to residentLevel(). */
-    size_t hierarchyPointCount(int level) const;
-    size_t hierarchyFaceCount(int level) const;
+     * semantics and clamp to residentCut(). */
+    size_t hierarchyPointCountAtCut(int cut) const;
+    size_t hierarchyFaceCountAtCut(int cut) const;
+    /* Copy immutable selection metadata for one producer-defined cut. */
+    SbBool cutInfo(int cut, struct BObolMeshLodCutInfo *info) const;
+    int cutForScreenError(double projectedPixelDiameter,
+	double targetPixelError) const;
+    double projectedErrorAtCut(int cut,
+	double projectedPixelDiameter) const;
     size_t estimateBytes(void) const;
     SbBox3f bounds(void) const;
     SbVec3f quantizationMinimum(void) const;
@@ -259,12 +265,22 @@ private:
 typedef std::shared_ptr<BObolLodProgressiveMesh>
     BObolLodProgressiveMeshPtr;
 
+/* Construct the complete renderer-cost population for one cumulative PoP
+ * cut.  All scene admission paths must use this helper rather than partially
+ * initializing BObolLodCounts: omitting authored normals from a predicted cut
+ * while charging them to the active payload makes an apparently feasible
+ * scene allocation exceed its budget as soon as it is published. */
+BOBOL_EXPORT BObolLodCounts
+bobol_lod_progressive_counts(
+    const BObolLodProgressiveMeshPtr &progressiveMesh, int cut,
+    SbBool hasNormals);
+
 struct BOBOL_EXPORT BObolLodResidentCompaction {
     SbString assetKey;
     BObolLodProgressiveMeshPtr progressiveMesh;
     std::shared_ptr<const Obol::PartGeometry> preparedCadGeometry;
     uint64_t preparedCadGeometryRevision;
-    int residentLevel;
+    int residentCut;
     unsigned int channelMask;
     size_t priorBytes;
     size_t residentBytes;
@@ -313,10 +329,11 @@ struct BOBOL_EXPORT BObolLodRequest {
     SbString providerId;
     SbString providerVersion;
     int qualityTier;
-    /* View-derived display demand.  requestedLevel is a PoP quantization
-     * level, never an exact/full-detail request.  A negative value means the
-     * producer did not have a projectable view and the provider should use its
-     * conservative legacy view estimate. */
+    /* View-derived display demand.  requestedCut is an admissible PoP cut.
+     * A negative value means no producer hierarchy was available when the
+     * request was projected.  The provider must select from its certified cut
+     * metadata using projectedPixelDiameter and targetPixelError; if the view
+     * is not projectable it uses the hierarchy's minimum useful cut. */
     float projectedPixelDiameter;
     /* Projected convex-hull footprint of the occurrence bound.  Diameter is
      * the conservative geometric-error scale; area and perimeter distinguish
@@ -325,7 +342,7 @@ struct BOBOL_EXPORT BObolLodRequest {
     float projectedPixelArea;
     float projectedPixelPerimeter;
     float targetPixelError;
-    int requestedLevel;
+    int requestedCut;
     SbBox3f bounds;
     BObolLodCounts sourceCounts;
     std::vector<BObolLodProviderParam> providerParams;
@@ -344,7 +361,12 @@ struct BOBOL_EXPORT BObolLodResult {
     BObolLodProgressiveMeshPtr progressiveMesh;
     std::shared_ptr<const Obol::PartGeometry> preparedCadGeometry;
     uint64_t preparedCadGeometryRevision;
-    int residentLevel;
+    /* Producer-resolved display demand.  A cold request may carry
+     * request.requestedCut == -1 because no hierarchy existed at submission;
+     * the provider selects from certified metadata and reports that cut here
+     * without mutating the task identity copied into request. */
+    int resolvedCut;
+    int residentCut;
     /* The service could publish a useful retained mesh, but deliberately
      * withheld a richer suffix to honor its stable resident-byte target.
      * residentAdmissionRevision identifies the capacity epoch which made
@@ -388,13 +410,13 @@ BOBOL_EXPORT BObolLodCacheKey
 bobol_lod_cache_key(const BObolLodRequest &request);
 
 /* Stable identity of provider geometry.  Unlike bobol_lod_cache_key this does
- * not contain occurrence or camera epochs, so an unchanged level remains the
+ * not contain occurrence or camera epochs, so an unchanged cut remains the
  * same display asset across view changes. */
 BOBOL_EXPORT BObolLodCacheKey
 bobol_lod_geometry_cache_key(const BObolLodRequest &request);
 
 /* Stable source-asset identity.  It excludes occurrence, camera, requested
- * level, and draw mode, so all consumers share one residency high-water mark. */
+ * cut, and draw mode, so all consumers share one residency high-water mark. */
 BOBOL_EXPORT BObolLodCacheKey
 bobol_lod_asset_cache_key(const BObolLodRequest &request);
 
@@ -409,9 +431,11 @@ bobol_lod_result_matches_request(const BObolLodResult &result,
 /**
  * Allocation-free equality of the complete structured request key.
  *
- * Projected diameter and target pixel error are demand diagnostics; the
- * selected requestedLevel is the provider identity.  Provider parameters are
- * compared as an order-independent multiset, matching cache serialization.
+ * Projected diameter and target pixel error are demand diagnostics.  A
+ * nonnegative requestedCut is part of provider identity; a cold request may
+ * retain -1 while its result reports the producer selection separately in
+ * resolvedCut.  Provider parameters are compared as an order-independent
+ * multiset, matching cache serialization.
  */
 BOBOL_EXPORT SbBool
 bobol_lod_request_keys_equal(const BObolLodRequest &lhs,

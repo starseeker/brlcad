@@ -103,7 +103,7 @@ wait_for_progressive_draw(struct ged *gedp, struct ged_view_context *view_ctx)
 static struct ged_view_feature_batch *
 faceplate_feature_batch(struct ged_view_context *view_ctx)
 {
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "faceplate-test";
     desc.owner_role = "test";
     desc.generation = 1;
@@ -423,7 +423,7 @@ main(int ac, char *av[]) {
     point_t hud_points[2] = {{-0.25, -0.25, 0.0}, {0.25, 0.25, 0.0}};
     int hud_cmds[2] = {GED_DRAW_VIEW_LINE_MOVE, GED_DRAW_VIEW_LINE_DRAW};
     struct ged_view_feature_style hud_style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     hud_style.visible = 1;
     hud_style.color_valid = 1;
     VSET(hud_style.color, 32, 192, 255);
@@ -453,8 +453,8 @@ main(int ac, char *av[]) {
 	bu_exit(EXIT_FAILURE, "retained HUD label removal failed\n");
 
     struct ged_view_feature_line_layer hud_layers[2] = {
-	GED_VIEW_FEATURE_LINE_LAYER_INIT,
-	GED_VIEW_FEATURE_LINE_LAYER_INIT
+	ged_view_feature_line_layer_default(),
+	ged_view_feature_line_layer_default()
     };
     hud_layers[0].name = "first";
     hud_layers[0].points = (const point_t *)hud_points;

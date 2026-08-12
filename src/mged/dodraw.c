@@ -113,10 +113,9 @@ mged_edit_preview_publish_view(
 	return 0;
 
     struct ged_view_edit_transaction transaction =
-	GED_VIEW_EDIT_TRANSACTION_INIT;
+	ged_view_edit_transaction_default();
     transaction.event = GED_VIEW_EDIT_PREVIEW_UPDATE;
     transaction.feature_name = name;
-    transaction.owner = (const void *)s;
     transaction.source_path = source_path;
     transaction.edit_intent_id = source_path;
     transaction.edit_intent_role = "primitive-edit";
@@ -194,7 +193,7 @@ mged_edit_preview_clear_view(struct mged_state *s,
 	return 0;
 
     struct ged_view_edit_transaction transaction =
-	GED_VIEW_EDIT_TRANSACTION_INIT;
+	ged_view_edit_transaction_default();
     transaction.event = GED_VIEW_EDIT_PREVIEW_CANCEL;
     transaction.feature_name = name;
     removed = ged_view_edit_transaction_apply(view_ctx,

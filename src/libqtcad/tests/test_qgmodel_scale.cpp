@@ -46,7 +46,7 @@
 #include "bu/str.h"
 #include "bu/datetime.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "qtcad/QgModel.h"
 #include "vmath.h"
 #include "wdb.h"
@@ -65,6 +65,21 @@ static const int default_draw_batch_count = 8;
 	    bu_log("OK   %s\n", (msg)); \
 	} \
     } while (0)
+
+static bool
+event_result_mentions(const struct ged_event_result *result,
+		      const char *name)
+{
+    if (!name)
+	return false;
+    const size_t count = ged_event_result_path_count(result);
+    for (size_t i = 0; i < count; i++) {
+	const char *path = ged_event_result_path_at(result, i);
+	if (path && std::string(path).find(name) != std::string::npos)
+	    return true;
+    }
+    return false;
+}
 
 static QModelIndex
 find_top_level_item(QAbstractItemModel *model, const char *name)
@@ -273,7 +288,7 @@ main(int argc, char *argv[])
 
     int64_t setup_start_us = bu_gettime();
     if (!using_cached_fixture) {
-	TCHECK(gedp && ged_event_batch_begin(gedp) > 0,
+	TCHECK(gedp && ged_event_batch_begin(gedp) == GED_EVENT_OK,
 		"scale test starts child setup batch");
 	int create_count = 0;
 	for (int i = 0; i < scale_child_count; i++) {
@@ -339,11 +354,10 @@ main(int argc, char *argv[])
 		    NULL, 0, 0, 0, 0, 0, 0, 0) == 0,
 		    "scale test creates draw fixture comb");
 	}
-	struct ged_event_txn_result setup_result;
-	ged_event_txn_result_init(&setup_result);
-	TCHECK(gedp && ged_event_batch_end(gedp, &setup_result) >= 0,
+	struct ged_event_result *setup_result = ged_event_result_create();
+	TCHECK(gedp && ged_event_batch_end(gedp, setup_result) == GED_EVENT_OK,
 		"scale test ends child setup batch");
-	ged_event_txn_result_free(&setup_result);
+	ged_event_result_destroy(setup_result);
 	QCoreApplication::processEvents();
 	QTest::qWait(1);
 	QByteArray save_fixture_env =
@@ -435,21 +449,19 @@ main(int argc, char *argv[])
 	    (unsigned long long)model.allItems().size());
 
     model.resetNotificationStats();
-    struct ged_event_txn_result material_result;
-    ged_event_txn_result_init(&material_result);
+    struct ged_event_result *material_result = ged_event_result_create();
     int before_material_reset = reset_spy.count();
     int before_material_insert = rows_inserted_spy.count();
     int before_material_remove = rows_removed_spy.count();
     int before_material_data = data_changed_spy.count();
     int64_t material_start_us = bu_gettime();
     TCHECK(gedp && ged_event_notify_object_material_changed(gedp,
-	    scale_parent, &material_result) >= 0,
+	    scale_parent, material_result) == GED_EVENT_OK,
 	    "scale test publishes named material change for loaded scale comb");
     int64_t material_wall_us = bu_gettime() - material_start_us;
-    TCHECK(std::string(bu_vls_cstr(&material_result.affected_names)).
-	    find(scale_parent) != std::string::npos,
+    TCHECK(event_result_mentions(material_result, scale_parent),
 	    "scale material event reports affected path names");
-    ged_event_txn_result_free(&material_result);
+    ged_event_result_destroy(material_result);
     QCoreApplication::processEvents();
     QTest::qWait(1);
 

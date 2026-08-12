@@ -15,7 +15,7 @@
 
 QgGedEventBatch::QgGedEventBatch(struct ged *gedp) :
     m_gedp(gedp),
-    m_started(gedp && ged_event_batch_begin(gedp) > 0)
+    m_started(gedp && ged_event_batch_begin(gedp) == GED_EVENT_OK)
 {
 }
 
@@ -30,11 +30,11 @@ QgGedEventBatch::started() const
     return m_started;
 }
 
-int
-QgGedEventBatch::end(struct ged_event_txn_result *result)
+enum ged_event_status
+QgGedEventBatch::end(struct ged_event_result *result)
 {
     if (!m_started)
-	return 0;
+	return GED_EVENT_OK;
     m_started = false;
     return ged_event_batch_end(m_gedp, result);
 }

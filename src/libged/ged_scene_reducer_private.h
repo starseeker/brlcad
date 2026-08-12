@@ -77,7 +77,9 @@ struct ged_draw_transaction_result {
     int progressive_data_complete;
     uint64_t scene_revision_before;
     uint64_t scene_revision_after;
-    struct bu_vls names;
+    char **paths;
+    size_t path_count;
+    size_t path_capacity;
     struct bu_vls errors;
 };
 

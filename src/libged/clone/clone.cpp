@@ -64,7 +64,7 @@
 #include "bu/opt.h"
 #include "bu/str.h"
 #include "bu/vls.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "bn/mat.h"
 #include "vmath.h"
 #include "rt/db4.h"
@@ -227,7 +227,7 @@ class ged_event_batch_guard {
 public:
     explicit ged_event_batch_guard(struct ged *g) : gedp(g)
     {
-	started = (ged_event_batch_begin(gedp) > 0);
+	started = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     }
 
     ~ged_event_batch_guard()
@@ -249,7 +249,7 @@ class ged_librt_callback_guard {
 public:
     explicit ged_librt_callback_guard(struct ged *g) : gedp(g)
     {
-	disabled = ged_event_librt_callbacks_disable(gedp);
+	disabled = ged_event_librt_callbacks_disable(gedp) == GED_EVENT_OK;
     }
 
     ~ged_librt_callback_guard()

@@ -1,0 +1,24 @@
+# In-tree dynamic GED command/backend drawing ABI.
+#
+# These symbols are not installed public API.  They exist only because GED
+# command modules and renderer adapters are separate shared libraries.  Keep
+# this list small and audit it independently from ged_draw_api.symbols.
+
+_ged_uplot_stream_create
+_ged_uplot_stream_free
+_ged_uplot_stream_process
+_ged_view_feature_batch_publish_indexed_face_set
+_ged_view_feature_batch_publish_line_layer_builder
+_ged_view_feature_batch_publish_line_set
+_ged_view_feature_batch_publish_uplot
+_ged_view_feature_batch_publish_uplot_files
+_ged_view_feature_batch_publish_uplot_stream
+_ged_view_feature_batch_remove_prefix
+ged_edit_buf_abandon
+ged_edit_buf_flush
+ged_edit_buf_get
+ged_edit_buf_promote
+ged_edit_buf_set
+ged_scene_backend_set_private
+ged_view_data_lines
+ged_view_feature_gobject_create

@@ -43,6 +43,7 @@
 #include "./ged_scene_record_api_private.h"
 #include "include/plugin.h"
 #include "./ged_draw_private.h"
+#include "./ged_draw_plugin_private.h"
 
 #ifdef __cplusplus
 
@@ -68,7 +69,7 @@ struct ged_qray_fmt {
 };
 
 struct ged_db_index;
-struct ged_event_txn_state;
+struct ged_event_service;
 struct ged_selection_state;
 
 struct ged_scene_edit_internal_result {
@@ -158,9 +159,6 @@ struct ged_drawable {
 
 __BEGIN_DECLS
 
-GED_EXPORT extern int ged_view_feature_gobject_create(
-    struct ged *gedp, struct ged_view_context *view_ctx,
-    const char *db_path, const char *gobject_name, struct bu_vls *result);
 ged_draw_group_ref ged_scene_root_group_ref(struct ged *gedp);
 void ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root);
 void ged_scene_root_ref_clear(struct ged *gedp);
@@ -232,7 +230,7 @@ struct ged_impl {
     void *ged_view_state_ctx;
 
     struct ged_db_index *ged_db_indexp;
-    struct ged_event_txn_state *ged_event_txnp;
+    struct ged_event_service *ged_event_servicep;
     struct ged_selection_state *ged_selection_statep;
     struct ged_drawable *ged_gdp;
 };
@@ -241,10 +239,11 @@ __BEGIN_DECLS
 
 struct ged_db_index *ged_db_index_create(struct ged *gedp);
 void ged_db_index_destroy(struct ged_db_index *index);
-struct ged_event_txn_state *ged_event_txn_state_create(struct ged *gedp);
-void ged_event_txn_state_destroy(struct ged_event_txn_state *state);
+struct ged_event_service *ged_event_service_create(struct ged *gedp);
+void ged_event_service_destroy(struct ged_event_service *state);
 struct ged_selection_state *ged_selection_state_create(struct ged *gedp);
 void ged_selection_state_destroy(struct ged_selection_state *state);
+int ged_selection_present_private(struct ged *gedp);
 
 #ifndef FALSE
 #  define FALSE 0
@@ -313,8 +312,8 @@ GED_EXPORT extern int _ged_external_rt_to_endpoint(
 	const char *argv[],
 	const char *program,
 	const char *callback_command);
-GED_EXPORT extern void ged_draw_registry_free(struct ged *gedp);
-GED_EXPORT extern void ged_scene_observers_free(struct ged *gedp);
+extern void ged_draw_registry_free(struct ged *gedp);
+extern void ged_scene_observers_free(struct ged *gedp);
 
 /* Data for tree walk */
 struct draw_data_t {
@@ -369,90 +368,6 @@ GED_EXPORT extern int _ged_combadd2(struct ged *gedp,
 			 int air,
 			 matp_t m,
 			 int validate);
-
-/* Internal command-plugin ABI for typed retained feature publication.  These
- * helpers are exported only because libged command modules are shared
- * libraries; they are not part of the installed libged API. */
-
-GED_EXPORT extern int _ged_view_feature_batch_publish_uplot(struct ged *gedp,
-				       FILE *fp,
-				       const char *name,
-				       double char_size,
-				       int mode,
-				       const char *owner_id,
-				       const char *owner_role,
-				       const char *remove_prefix,
-				       const char *result_kind,
-				       uint64_t generation);
-GED_EXPORT extern int _ged_view_feature_batch_publish_uplot_files(
-				       struct ged *gedp,
-				       const char * const *files,
-				       size_t file_count,
-				       const char *name,
-				       double char_size,
-				       int mode,
-				       const char *owner_id,
-				       const char *owner_role,
-				       const char *remove_prefix,
-				       const char *result_kind,
-				       uint64_t generation);
-struct ged_uplot_stream;
-GED_EXPORT extern struct ged_uplot_stream *_ged_uplot_stream_create(double char_size,
-				       int mode);
-GED_EXPORT extern int _ged_uplot_stream_process(struct ged_uplot_stream *stream,
-				       FILE *fp,
-				       int command);
-GED_EXPORT extern int _ged_view_feature_batch_publish_uplot_stream(struct ged *gedp,
-				       struct ged_uplot_stream *stream,
-				       const char *name,
-				       const char *owner_id,
-				       const char *owner_role,
-				       const char *remove_prefix,
-				       const char *result_kind,
-				       uint64_t generation);
-GED_EXPORT extern void _ged_uplot_stream_free(struct ged_uplot_stream *stream);
-GED_EXPORT extern int _ged_view_feature_batch_publish_line_layer_builder(
-				       struct ged *gedp,
-				       const char *name,
-				       const struct bg_line_layer_builder *builder,
-				       const char *owner_id,
-				       const char *owner_role,
-				       const char *remove_prefix,
-				       const char *result_kind,
-				       uint64_t generation);
-GED_EXPORT extern int _ged_view_feature_batch_publish_line_set(
-				       struct ged *gedp,
-				       const char *name,
-				       const point_t *points,
-				       const int *cmds,
-				       size_t point_count,
-				       const struct ged_view_feature_style *style,
-				       const char *owner_id,
-				       const char *owner_role,
-				       const char *remove_prefix,
-				       const char *result_kind,
-				       uint64_t generation);
-GED_EXPORT extern int _ged_view_feature_batch_publish_indexed_face_set(
-				       struct ged *gedp,
-				       const char *name,
-				       const point_t *points,
-				       size_t point_count,
-				       const vect_t *normals,
-				       size_t normal_count,
-				       const int *indices,
-				       size_t index_count,
-				       const struct ged_view_feature_style *style,
-				       const char *owner_id,
-				       const char *owner_role,
-				       const char *remove_prefix,
-				       const char *result_kind,
-				       uint64_t generation);
-GED_EXPORT extern int _ged_view_feature_batch_remove_prefix(
-				       struct ged *gedp,
-				       const char *prefix,
-				       const char *owner_id,
-				       const char *owner_role,
-				       uint64_t generation);
 
 /* defined in editit.c */
 GED_EXPORT extern int _ged_editit(struct ged *gedp,
@@ -637,8 +552,6 @@ GED_EXPORT extern int
 _ged_sort_existing_objs(struct db_i *dbip, int argc, const char *argv[], struct directory **dpa);
 
 
-GED_EXPORT extern int ged_view_data_lines(struct ged *gedp, int argc, const char *argv[]);
-
 GED_EXPORT extern int ged_repair(struct ged *gedp, int argc, const char **argv);
 
 
@@ -652,6 +565,21 @@ GED_EXPORT extern int
 _ged_subcmd_exec(struct ged *gedp, struct bu_opt_desc *gopts, const struct bu_cmdtab *cmds,
 	const char *cmdname, const char *cmdargs, void *gd, int argc, const char **argv,
        	int help, int cmd_pos);
+
+/* Dynamic plugins may register a qualified command such as
+ * view.mytool.control.  Namespace dispatchers use these helpers to expose it
+ * as `view mytool control` without adding implementation keys to GED's
+ * top-level command namespace.  The longest registered argv prefix wins. */
+GED_EXPORT extern int
+_ged_cmd_namespace_has_child(const char *namespace_path, const char *child);
+
+GED_EXPORT extern int
+_ged_cmd_namespace_exec(struct ged *gedp, const char *namespace_path,
+	int argc, const char **argv, int *result);
+
+GED_EXPORT extern void
+_ged_cmd_namespace_help(struct ged *gedp, const char *namespace_path,
+	const struct bu_cmdtab *builtins);
 
 
 // TODO:  alternative approach to the command structure supported by
@@ -690,12 +618,6 @@ _ged_subcmd2_help(struct ged *gedp, struct bu_opt_desc *gopts, std::map<std::str
  * ged_edit_buf_abandon- call rt_edit_destroy(), remove entry (no disk write)
  * ged_edit_buf_flush  - promote ALL entries to disk (call before db close)
  */
-GED_EXPORT extern struct rt_edit *ged_edit_buf_get(struct ged *gedp, const struct db_full_path *dfp);
-GED_EXPORT extern void            ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edit *s);
-GED_EXPORT extern int             ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp);
-GED_EXPORT extern void            ged_edit_buf_abandon(struct ged *gedp, const struct db_full_path *dfp);
-GED_EXPORT extern void            ged_edit_buf_flush(struct ged *gedp);
-
 /* Draw-frontier internals (ged_draw_frontier.cpp). */
 struct ged_draw_frontier_root_record {
     const char *path;
@@ -736,7 +658,7 @@ typedef int (*ged_draw_frontier_presentation_cb)(
     const struct ged_draw_frontier_presentation_record *record,
     void *userdata);
 
-GED_EXPORT extern void ged_draw_frontier_state_destroy(struct ged *gedp);
+extern void ged_draw_frontier_state_destroy(struct ged *gedp);
 extern void ged_scene_edit_internal_result_init(
 	struct ged_scene_edit_internal_result *result);
 extern void ged_scene_edit_internal_result_free(
@@ -767,21 +689,21 @@ extern int ged_draw_frontier_presentation_set(
 	struct ged *gedp, const struct ged_draw_transaction *txn,
 	const char *resolved_path);
 extern int ged_draw_frontier_highlights_clear(struct ged *gedp);
-GED_EXPORT extern int ged_draw_frontier_erase_path(
+extern int ged_draw_frontier_erase_path(
 	struct ged *gedp, const char *path, struct ged_view_context *view_ctx,
 	int mode, int prefix, struct ged_draw_transaction_result *result);
-GED_EXPORT extern int ged_draw_frontier_list_paths(
+extern int ged_draw_frontier_list_paths(
 	struct ged *gedp, struct ged_view_context *view_ctx, int mode,
 	struct bu_vls *result, size_t result_start);
 /* Returns -1 when no retained frontier owns path, otherwise the public
  * ged_draw_path_state value: 0 hidden, 1 fully visible, 2 partially visible. */
-GED_EXPORT extern int ged_draw_frontier_path_state(
+extern int ged_draw_frontier_path_state(
 	struct ged *gedp, struct ged_view_context *view_ctx,
 	const char *path, int mode);
-GED_EXPORT extern int ged_draw_frontier_absorb_draw(
+extern int ged_draw_frontier_absorb_draw(
 	struct ged *gedp, const struct ged_draw_transaction *txn,
 	const char *resolved_path, struct ged_draw_transaction_result *result);
-GED_EXPORT extern void ged_draw_frontier_note_transaction(
+extern void ged_draw_frontier_note_transaction(
 	struct ged *gedp, const struct ged_draw_transaction *txn,
 	const char *resolved_path);
 

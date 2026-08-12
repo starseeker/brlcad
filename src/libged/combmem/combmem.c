@@ -30,7 +30,7 @@
 #include <string.h>
 
 #include "bu/getopt.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 
 enum etypes {
@@ -1052,7 +1052,7 @@ ged_combmem_core(struct ged *gedp, int argc, const char *argv[])
 	    return combmem_get(gedp, argc, argv, iflag);
 
 	/* Remove all members */
-	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	int ret = combmem_set_empty(gedp, argc, argv);
 	return combmem_finish_mutation(gedp, argv[1], ret, event_batch_opened);
     }
@@ -1062,7 +1062,7 @@ ged_combmem_core(struct ged *gedp, int argc, const char *argv[])
 	case ETYPES_ABS:
 	case ETYPES_REL:
 	    if (argc > 16 && !((argc-2)%15)) {
-		int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+		int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 		int ret = combmem_set(gedp, argc, argv, rflag);
 		return combmem_finish_mutation(gedp, argv[1], ret, event_batch_opened);
 	    }
@@ -1070,28 +1070,28 @@ ged_combmem_core(struct ged *gedp, int argc, const char *argv[])
 	case ETYPES_ROT_AET:
 	case ETYPES_ROT_XYZ:
 	    if (argc > 9 && !((argc-2)%8)) {
-		int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+		int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 		int ret = combmem_set_rot(gedp, argc, argv, rflag);
 		return combmem_finish_mutation(gedp, argv[1], ret, event_batch_opened);
 	    }
 	    break;
 	case ETYPES_ROT_ARBITRARY_AXIS:
 	    if (argc > 10 && !((argc-2)%9)) {
-		int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+		int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 		int ret = combmem_set_arb_rot(gedp, argc, argv, rflag);
 		return combmem_finish_mutation(gedp, argv[1], ret, event_batch_opened);
 	    }
 	    break;
 	case ETYPES_TRA:
 	    if (argc > 6 && !((argc-2)%5)) {
-		int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+		int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 		int ret = combmem_set_tra(gedp, argc, argv, rflag);
 		return combmem_finish_mutation(gedp, argv[1], ret, event_batch_opened);
 	    }
 	    break;
 	case ETYPES_SCA:
 	    if (argc > 10 && !((argc-2)%9)) {
-		int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+		int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 		int ret = combmem_set_sca(gedp, argc, argv, rflag);
 		return combmem_finish_mutation(gedp, argv[1], ret, event_batch_opened);
 	    }
@@ -1099,7 +1099,7 @@ ged_combmem_core(struct ged *gedp, int argc, const char *argv[])
 	case ETYPES_NULL:
 	default:
 	    if (argc > 16 && !((argc-2)%15)) {
-		int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+		int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 		int ret = combmem_set(gedp, argc, argv, ETYPES_ABS);
 		return combmem_finish_mutation(gedp, argv[1], ret, event_batch_opened);
 	    }

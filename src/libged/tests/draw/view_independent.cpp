@@ -35,6 +35,7 @@
 #include <rt/view.h>
 #include "view_test_util.h"
 #include "ged/draw.h"
+#include "ged/plugin/obol.h"
 #include "../../ged_draw_view_private.h"
 
 #define ASSERT(cond) do { \
@@ -193,6 +194,10 @@ main(int argc, const char **argv)
 	ASSERT(bv_name_set(DRAW_TEST_BV(views[i]), view_name));
 	ASSERT(ged_view_set_context_add(view_set_ctx, views[i]));
 	ged_view_context_owned_add(gedp, views[i]);
+	ASSERT(ged_plugin_obol_endpoint_get(views[i]) == NULL);
+	ASSERT(ged_view_context_display_endpoint_ensure(views[i]));
+	ASSERT(ged_plugin_obol_endpoint_get(views[i]) != NULL);
+	ASSERT(ged_plugin_obol_view_controller(views[i]) != NULL);
 	if (!i)
 	    ged_view_active_ctx_set(gedp, views[i]);
     }

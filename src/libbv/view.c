@@ -40,6 +40,11 @@ struct bv_context_callback_record {
     void *client_data;
 };
 
+struct bv_context_owner_data_record {
+    const void *key;
+    void *data;
+};
+
 static void
 bv_mat_aet(struct bv *v)
 {
@@ -2262,6 +2267,7 @@ bv_context_init(struct bv_context *ctx, struct bv *view)
 	ctx->owns_view = 1;
     }
     BU_PTBL_INIT(&ctx->callbacks);
+    BU_PTBL_INIT(&ctx->owner_data);
 }
 
 void
@@ -2274,6 +2280,14 @@ bv_context_free(struct bv_context *ctx)
 	bv_context_set_remove(ctx->view_set, ctx);
     bv_context_callbacks_clear(ctx);
     bu_ptbl_free(&ctx->callbacks);
+    for (size_t i = 0; i < BU_PTBL_LEN(&ctx->owner_data); i++) {
+	struct bv_context_owner_data_record *record =
+	    (struct bv_context_owner_data_record *)BU_PTBL_GET(
+		&ctx->owner_data, i);
+	if (record)
+	    BU_PUT(record, struct bv_context_owner_data_record);
+    }
+    bu_ptbl_free(&ctx->owner_data);
     if (ctx->owns_view && ctx->view_ptr == &ctx->view)
 	bv_free(&ctx->view);
     ctx->view_ptr = NULL;
@@ -2323,6 +2337,55 @@ void *
 bv_context_user_data_get(const struct bv_context *ctx)
 {
     return bv_user_data_get(bv_context_view_const(ctx));
+}
+
+int
+bv_context_owner_data_set(struct bv_context *ctx, const void *owner_key,
+	void *data)
+{
+    if (!bv_context_is_valid(ctx) || !owner_key)
+	return 0;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&ctx->owner_data); i++) {
+	struct bv_context_owner_data_record *record =
+	    (struct bv_context_owner_data_record *)BU_PTBL_GET(
+		&ctx->owner_data, i);
+	if (!record || record->key != owner_key)
+	    continue;
+	if (data) {
+	    record->data = data;
+	    return 1;
+	}
+	bu_ptbl_rm(&ctx->owner_data, (long *)record);
+	BU_PUT(record, struct bv_context_owner_data_record);
+	return 1;
+    }
+
+    if (!data)
+	return 0;
+
+    struct bv_context_owner_data_record *record;
+    BU_GET(record, struct bv_context_owner_data_record);
+    record->key = owner_key;
+    record->data = data;
+    bu_ptbl_ins(&ctx->owner_data, (long *)record);
+    return 1;
+}
+
+void *
+bv_context_owner_data_get(const struct bv_context *ctx,
+	const void *owner_key)
+{
+    if (!bv_context_is_valid(ctx) || !owner_key)
+	return NULL;
+    for (size_t i = 0; i < BU_PTBL_LEN(&ctx->owner_data); i++) {
+	const struct bv_context_owner_data_record *record =
+	    (const struct bv_context_owner_data_record *)BU_PTBL_GET(
+		&ctx->owner_data, i);
+	if (record && record->key == owner_key)
+	    return record->data;
+    }
+    return NULL;
 }
 
 int

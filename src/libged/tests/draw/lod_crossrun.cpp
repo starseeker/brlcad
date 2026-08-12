@@ -68,7 +68,7 @@
 #include <ged/draw.h>
 #include <ged/display.h>
 #include <ged/db_index.h>
-#include <ged/event_txn.h>
+#include <ged/event.h>
 #include <icv.h>
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);

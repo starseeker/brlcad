@@ -33,7 +33,7 @@
 #include "bu/cmd.h"
 #include "bu/getopt.h"
 #include "bn.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -266,7 +266,7 @@ ged_pull_core(struct ged *gedp, int argc, const char *argv[])
      * All new changes are immediately written to database
      */
     MAT_IDN(mat);
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     db_treewalk_basic(gedp->dbip, dp, pull_comb, pull_leaf, &mat);
     if (event_batch_opened)
 	(void)ged_event_batch_end(gedp, NULL);

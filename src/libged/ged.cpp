@@ -51,7 +51,7 @@
 
 #include "ged/draw.h"
 #include "ged/display.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "./ged_draw_private.h"
 #include "./ged_private.h"
 #include "./include/plugin.h"
@@ -207,7 +207,7 @@ ged_init(struct ged *gedp)
     gedp->i->i->gedp = gedp;
     gedp->i->ged_view_state_ctx = NULL;
     gedp->i->ged_db_indexp = ged_db_index_create(gedp);
-    gedp->i->ged_event_txnp = ged_event_txn_state_create(gedp);
+    gedp->i->ged_event_servicep = ged_event_service_create(gedp);
     gedp->i->ged_selection_statep = ged_selection_state_create(gedp);
 
     gedp->dbip = NULL;
@@ -432,9 +432,9 @@ ged_free(struct ged *gedp)
 	ged_db_index_destroy(gedp->i->ged_db_indexp);
 	gedp->i->ged_db_indexp = NULL;
     }
-    if (gedp->i && gedp->i->ged_event_txnp) {
-	ged_event_txn_state_destroy(gedp->i->ged_event_txnp);
-	gedp->i->ged_event_txnp = NULL;
+    if (gedp->i && gedp->i->ged_event_servicep) {
+	ged_event_service_destroy(gedp->i->ged_event_servicep);
+	gedp->i->ged_event_servicep = NULL;
     }
     if (gedp->i && gedp->i->ged_selection_statep) {
 	ged_selection_state_destroy(gedp->i->ged_selection_statep);

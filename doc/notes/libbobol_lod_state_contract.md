@@ -42,7 +42,7 @@ The model distinguishes four identities which must never be conflated:
 | presentation | retained part/GPU buffers plus instance records; Obol | one per source/view presentation |
 
 One asset may serve many occurrences.  Each occurrence has an independent
-active level.  A presentation references assets and occurrences; it does not
+active cut.  A presentation references assets and occurrences; it does not
 own BRL-CAD source truth or choose LoD.
 
 For a view `v`, occurrence `o`, and asset `a`:
@@ -50,15 +50,48 @@ For a view `v`, occurrence `o`, and asset `a`:
 ```text
 visible[v,o]          boolean from the renderer-contract frustum test
 pixel_extent[v,o]     projected screen extent in pixels
-demand[v,o]           clamp(ceil(log2(pixel_extent / pixel_error)), 0, 15)
-active[v,o]           currently presented PoP level, or NONE
+error[a,c]            producer-certified object-space error at cut c
+screen_error[v,o,c]   error[a,c] * pixel_extent[v,o] / asset_extent[a]
+demand[v,o]           least admissible cut c with screen_error <= target
+active[v,o]           currently presented PoP cut, or NONE
 resident[a]           richest retained array prefix
 resident_target[v,a]  richest visible pixel demand for asset a in view v
-drawable[a,l]         resident arrays contain all entries required by l
-faces[a,l]            cumulative face prefix for l
-scene_budget[v]       calibrated aggregate submitted-face allowance
-render_ceiling[v]     temporary O(1) interaction-only maximum level, or NONE
+drawable[a,c]         resident arrays contain all entries required by cut c
+faces[a,c]            cumulative face prefix for cut c
+scene_budget[v]       calibrated aggregate submitted-work allowance
+render_ceiling[v]     temporary O(1) interaction-only maximum cut, or NONE
 ```
+
+Cut ordinals have no geometric meaning.  The producer may define any monotone
+sequence of cumulative prefixes up to the explicit implementation limit, and
+every cut carries its own face count, point count, resident byte estimate,
+per-axis quantization precision, conservative object-space error, and exact
+flag.  Selection binary-searches that metadata.  No scheduler or renderer may
+reconstruct quality with `2^-cut`, assume a fixed cut count, or treat a
+particular ordinal as full detail.
+
+Asynchronous request identity and producer-selected demand are deliberately
+separate.  `BObolLodRequest::requestedCut` is immutable task-key input.  It is
+an admissible cut when a retained hierarchy was available during projection,
+or `-1` when the cold submitter could express only projected diameter and
+target pixel error.  The provider resolves that physical demand against its
+certified hierarchy and reports it in `BObolLodResult::resolvedCut` without
+rewriting the copied request.  `geometry.activeCut` is the cut in the returned
+presentation and `residentCut` is the retained-array frontier; neither is a
+substitute for resolved demand.  Result matching, cancellation, coalescing,
+and duplicate suppression use the original request, while presentation,
+terminal-state, and refinement decisions use `resolvedCut`.  A local reuse
+path which already owns the hierarchy performs the same resolution before it
+binds a second occurrence.
+
+The canonical libBObol mesh producer uses 16-bit source quantization and one
+axis refinement per cut.  It begins at one bit on every nondegenerate axis,
+then increments the axis with the largest remaining object-space error until
+all axes are exact.  Thus a fully three-dimensional mesh has 46 cuts; planar
+or linear meshes have fewer.  This is a producer policy, not an Obol renderer
+assumption.  Obol accepts any producer-certified monotone cut vector within
+its explicit limit.  The named unspecified-cut value means “richest resident”
+and is outside the valid cut range; no valid ordinal is a sentinel.
 
 In an orthographic view, equal projected extents have equal LoD value
 regardless of depth.  In a perspective view, distance matters only through
@@ -88,7 +121,11 @@ measurement of whichever fallback or PoP cut happens to be visible.
 
 The initial blank/default frame to exact-model fit can remain visible on a
 slow backend.  It is one intentional transition; a partial-fit/exact-fit pair
-is a contract violation.
+is a contract violation.  A transient blank presentation is not an idle
+endpoint: if source or progressive work is pending, every backend must arm its
+provider timer before returning from that paint.  In particular, the software
+canvas may not make image availability a prerequisite for the wakeup which
+will produce its first image.
 
 ## State machine
 
@@ -135,7 +172,7 @@ is a contract violation.
   debounce or button release.  A successfully presented quality ceiling is
   retained across later scale epochs.  A deadline miss or a frame slower than
   100 ms lowers only the O(1) render ceiling; it never rewrites a retained
-  occurrence to its minimum level or discards the richer resident prefix.
+  occurrence to its minimum cut or discards the richer resident prefix.
   System GL motion decisions use the slower of completed endpoint traversal
   and asynchronous CAD GPU time; OSMesa supplies the same evidence through
   completed traversal time.  An aborted Coin traversal has no exact submitted
@@ -158,14 +195,18 @@ is a contract violation.
   enter a witnessed handoff; it cannot report ready with that ceiling stuck.
 
 `STABLE`
-: Refinement proceeds one drawable prefix step per presented frame.  Candidate
-  steps are ordered by user emphasis and estimated screen-error reduction per
-  added face.  Stable cuts do not regress within an unchanged view epoch.  If
+: Refinement proceeds in bounded publication waves.  Candidate marginal
+  transitions are ordered by user emphasis and estimated screen-error
+  reduction per added face, but an occurrence may jump across several authored
+  cuts when its richest affordable drawable prefix is already resident.  It
+  must not pay one frame or worker round trip per cut merely because the
+  producer supplied a denser quality schedule.  Stable cuts do not regress
+  within an unchanged view epoch.  If
   a newly attempted discrete cut proves too expensive, overload recovery
   begins from the current presentation: minimum coverage is reserved for all
   visible occurrences and the richest already-active cuts which fit are kept
   in screen-priority order.  Recovery must not reset every occurrence to its
-  minimum and then replay initial level walking.
+  minimum and then replay initial cut walking.
 
 `COMPACTING`
 : After a longer quiet interval, aggregate consumer demand may trim resident
@@ -176,7 +217,7 @@ is a contract violation.
   source reload.  Consolidation is permitted only after resident demand has
   been quiet long enough to make the current cuts a stable witness.
 
-Persistent PoP cache records are activation-level chunks.  Growing a retained
+Persistent PoP cache records are activation-cut chunks.  Growing a retained
 asset after compaction reads only `(resident, requested]`; it must not recreate
 a cache-reader copy of `[minimum, resident]`.  The worker constructs and
 atomically publishes a replacement immutable renderer snapshot while the old
@@ -188,7 +229,7 @@ vertex splitting is not derivable from an unannotated suffix.
 Each ordinary coordinate/index stream also carries a nonzero process-local
 lineage token.  Equal lineage across immutable geometry generations certifies
 that the preceding position, normal, and index values are an exact prefix and
-that quantization domains and level tables are unchanged.  Obol may then keep
+that quantization domains and cut tables are unchanged.  Obol may then keep
 the existing GPU prefix, submit only the newly published CPU suffix, and use a
 device-local buffer copy when reserved capacity must grow.  A zero or changed
 token requires conservative complete replacement.  GPU compaction may retain
@@ -198,7 +239,7 @@ counts still clamp to the active/resident cut, so that retention is invisible.
 Only one resident-growth task may be active for a given asset occurrence.
 Wheel epochs with successively richer demands coalesce behind that task; its
 completion wakes planning, which submits the newest still-missing target.
-Serialized levels must not queue as independent work because they cannot grow
+Serialized cuts must not queue as independent work because they cannot grow
 the same asset in parallel and their obsolete result epochs create publication
 churn.
 
@@ -237,6 +278,17 @@ than an endless COMPACTING loop.  A later pressure edge creates a new revision
 and a new recovery opportunity.  If pressure is first observed while recovery
 is disabled, enabling recovery consumes that still-current unhandled revision
 once; the system must not wait for pressure to clear and recur.
+
+The System GL atlas has an additional bounded-presentation response.  Exact
+preparation orders visible unique parts by projected importance, reserves a
+coherent minimum prefix before enrichment, and replaces only the
+least-important eligible tail with one-point occurrence records when the
+configured atlas cannot hold every minimum.  Those records are a terminal
+memory-limited representation, not structural boxes and not unfinished LoD
+work.  Selected/highlighted importance participates in the same ordering.
+They are legal only while the completed-frame pressure sample, convergence
+proof, and idle service state agree; clearing the pressure observation is not
+a liveness requirement for an oversized visible working set.
 
 Coverage necessity is part of the coverage policy, not a separate controller
 latch.  LoD-disabled or service-detached views are vacuously covered.  When
@@ -295,7 +347,7 @@ the scale epoch and returns whether stable policy revision must preserve its
 demand refresh.  Clearing the last completed-frame barrier explicitly wakes
 the host even when the generic progressive latch is already set; a subsequent
 scale event therefore cannot starve a now-safe probe by consuming the only
-notification edge.  The controller supplies active-level and frame
+notification edge.  The controller supplies active-cut and frame
 observations and applies the returned renderer ceiling, but it has no parallel
 pending, active, presented, quality-budget, or scale-refresh latches.
 
@@ -305,7 +357,7 @@ PoP ceiling.  It is scene-pointer-free, sanitizes non-finite inputs, applies
 repeat overload correction relative to the cut which actually produced the
 frame, and rounds toward a known-safe coarser PoP population.  The controller
 may supply measurements and apply those values, but it cannot maintain a
-second version of their clamps, thresholds, or level arithmetic.
+second version of their clamps, thresholds, or cut arithmetic.
 
 Every batch of applied immutable results retains its first-unpresented deadline
 until the publication policy replaces that timer with exactly one requested-
@@ -363,16 +415,21 @@ no source callback capable of advancing state
 
 That is a scheduler deadlock even if the GUI remains responsive.
 
-For a retained asset, refinement is incremental:
+For a retained asset, refinement is cumulative and budget bounded:
 
 ```text
-next(v,o) = minimum level l such that
-            active[v,o] < l <= demand[v,o] and drawable[asset(o),l]
+admit(v,o) = richest cut c such that
+             active[v,o] < c <= demand[v,o]
+             && drawable[asset(o),c]
+             && marginal_cost(active[v,o],c) <= remaining_scene_budget
 ```
 
-The allocator must try `next`, not jump directly to `resident`.  If `next`
-does not fit, it may grow the probed allowance toward calibrated capacity or
-declare the cut budget-limited.  It must not retry the same unaffordable jump
+The allocator may jump directly to `admit`; it must not jump directly to
+`resident` when the view does not demand or the scene cannot afford that cut.
+Under contention, fairness ordering may deliberately admit only the next
+marginal transition before reconsidering peers.  If no richer cut fits, the
+allocator may grow the probed allowance toward calibrated capacity or declare
+the cut budget-limited.  It must not retry the same unaffordable transition
 forever.
 
 When a probe does not change geometry because the next prefix is discrete,
@@ -394,7 +451,7 @@ These must hold after every owner-thread transition:
    transaction which removes newly off-frustum bindings.
 2. `active[v,o] <= resident[asset(o)]`, or `drawable[asset(o),active[v,o]]`
    for a coordinate-only plateau.
-3. Shaded, wireframe, bounds, and picking use the same effective active level,
+3. Shaded, wireframe, bounds, and picking use the same effective active cut,
    including the temporary interaction ceiling.
 4. An occurrence binding references the current source, view, policy, and
    occurrence revisions.  Stale results cannot replace current data.  A
@@ -420,9 +477,9 @@ These must hold after every owner-thread transition:
 12. Scene render-cost admission governs `active`, never `resident_target`.
     Zoom residency is bounded by worker and resident-memory admission, and a
     prefetched result may not raise `active` above its independently reserved
-    presentation level.
+    presentation cut.
 13. Active camera input never rewrites retained occurrence cuts downward.
-    Responsiveness pressure changes the renderer-wide effective level; quiet
+    Responsiveness pressure changes the renderer-wide effective cut; quiet
     admission and memory maintenance are the only cut/retention authorities.
 14. A progressive autoview is fulfilled only from the acknowledged exact
     path-scoped coverage extent.  That certified source-local extent remains
@@ -436,10 +493,12 @@ These must hold after every owner-thread transition:
     terminal state until a new view, resource, or residency edge arrives.
 16. A renderer may report persistent atlas-admission pressure in a terminal
     memory-limited state.  That state is legal only with complete coverage, a
-    view-ready convergence proof, no pressure replacement proxies, no pending
-    visual work, and a coherent drawable cut; clearing the observation is not
-    a liveness requirement when the visible working set genuinely exceeds the
-    allowance.
+    view-ready convergence proof, no pending visual work, and a coherent
+    drawable cut.  Pressure replacement points are permitted only for the
+    renderer's least-important eligible tail and only while that same terminal
+    proof is true; structural fallback boxes are never permitted.  Clearing
+    the observation is not a liveness requirement when the visible working
+    set genuinely exceeds the allowance.
 17. Duplicate suppression spans worker execution and queued publication.  A
     result waiting for owner-thread drain owns the same request identity as its
     producer; coalescing may replace its payload but may not make that request
@@ -447,6 +506,17 @@ These must hold after every owner-thread transition:
 18. A current resident-admission denial is excluded from the actionable
     unsatisfied frontier.  An identical render-budget retarget preserves that
     witness, and a new resident-admission revision reopens it.
+19. Worker result identity is immutable.  A cold request with
+    `requestedCut == -1` remains byte-for-byte matchable after the provider
+    selects a cut; the selected demand is carried only in `resolvedCut`.
+    Progressive ready results must use that resolved demand for terminal and
+    active-cut decisions.
+20. A bounded retained-allocation pass takes one complete population census.
+    Its active and minimum render-cost currencies are frozen until every
+    bounded source window in that pass has been consumed.  A presentation,
+    result wave, or window boundary may reset per-frame work allowance but may
+    not rescan the whole population or change the pass currency.  Completing,
+    cancelling, or invalidating the pass clears the snapshot.
 ## Liveness properties
 
 Using `[]` for “always” and `<>` for “eventually,” the implementation must
@@ -460,7 +530,7 @@ satisfy:
     -> <> (resident increases || memory_limited || definitive_failure))
 
 [] (scale_interaction && richer_drawable && quality_headroom
-    -> <> (effective_level increases before quiet))
+    -> <> (effective_cut increases before quiet))
 
 [] (pending && affordable_next && host_running
     -> <> presented_next)
@@ -485,8 +555,8 @@ The target demand is per occurrence; admission is per scene.
 ```text
 stable demand:       pixel_error = 1
 interactive demand:  adaptive pixel_error >= 1
-scene face cost:     sum(faces[asset(o), effective_level(v,o)])
-effective level:     min(active[v,o], render_ceiling[v]) when ceiling is set
+scene render cost:   sum(cost[asset(o), effective_cut(v,o)])
+effective cut:       min(active[v,o], render_ceiling[v]) when ceiling is set
 ```
 
 The calibrated stable and interactive capacities are separate.  A quiet
@@ -539,9 +609,9 @@ Refinement priority is lexicographic:
 The analytical PoP score is:
 
 ```text
-error(l) ~= pixel_extent / 2^l
-benefit(l -> l+1) =
-    affected_screen_span * max(0, error(l) - error(l+1))
+error(c) = producer_error(c) * pixel_extent / asset_extent
+benefit(c -> c+1) =
+    affected_screen_span * max(0, error(c) - error(c+1))
 value = benefit / added_faces
 ```
 
@@ -553,7 +623,7 @@ ordering without per-frame triangle scans.
 
 | Operation | Required bound |
 |---|---|
-| interaction emergency coarsen | `O(number of presentations)`, not occurrences |
+| adaptive interaction ceiling | `O(number of presentations)`, not occurrences |
 | one compact scheduling wave | `O(wave_size)` projection plus bounded sorting |
 | sparse active-cut update | `O(changed occurrences)` |
 | draw submission | `O(visible occurrences + draw groups)` |
@@ -577,16 +647,16 @@ GPU upload, and memory pressure.  Passing one does not imply passing the other.
 | resident retarget | unit test proving no provider/cache work |
 | resident suffix/trim | cache test proving suffix-only reads leave no reader prefix, realization test proving exact-capacity trim, and Lucy zoom memory telemetry |
 | continuous zoom refinement | cold/warm Lucy held-gesture checkpoints proving resident growth and a richer effective cut before release on System GL and OSMesa |
-| discrete prefix progress | unit test with active level below a richer resident prefix and an unaffordable direct jump |
+| discrete prefix progress | unit test with an active cut below a richer resident prefix and an unaffordable direct jump |
 | view working-set turnover | close multi-instance occurrence hashes and images across view directions |
 | unique asset fan-out | thousands-of-distinct-mesh cold/warm stress, worker/cache telemetry, and perf |
 | saturated residency | hard-cap cold/warm stress proving a quiet memory-limited terminal cut, bounded task count, and resubmission only after an admission revision edge |
 | queued-result ownership | service test proving duplicate rejection before result drain and readmission after drain; warm stress proving bounded task fan-out |
 | scene budget | held-motion and stable face/FPS telemetry |
 | tail/silhouette quality | Generic Twin multi-angle image comparison |
-| renderer packet semantics | independent exhaustive oracle over sparse ownership, hidden/proxy channel rules, retained ranges, and all serialized progressive-level inputs |
+| renderer packet semantics | independent exhaustive oracle over sparse ownership, hidden/proxy channel rules, retained ranges, and the full explicit-cut input domain |
 | GL state | deep before/after state sentinel on every exercised System GL and OSMesa route, with apitrace for any failure |
-| wire parity | shaded/wire active-level and image matrix |
+| wire parity | shaded/wire active-cut and image matrix |
 | selection/edit | hierarchy selection, erase/redraw, promotion/demotion, and picking tests |
 | liveness | exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness or stable-with-affordable-next states |
 

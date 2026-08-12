@@ -273,13 +273,14 @@ SoBRLLodUpdateAction::databaseSourceAction(SoAction *action, SoNode *node)
 		static unsigned int sourceRejectTraceCount = 0;
 		if (sourceRejectTraceCount++ < 64)
 		    bu_log("BObol LoD rejection reason=traversal-source "
-			   "object=%s occurrence=%s level=%d requested=%d "
+			   "object=%s occurrence=%s cut=%d requested=%d "
 			   "status=%d kind=%d progressive=%d valid=%d "
 			   "route=%llu source=%p diagnostic=%s\n",
 			   result.request.objectName.getString(),
 			   result.request.occurrenceKey.getString(),
-			   result.geometry.activeLevel,
-			   result.request.requestedLevel,
+			   result.geometry.activeCut,
+			   result.resolvedCut >= 0 ? result.resolvedCut :
+			       result.request.requestedCut,
 			   result.providerStatus, result.resultKind,
 			   result.progressiveMesh ? 1 : 0,
 			   result.progressiveMesh &&

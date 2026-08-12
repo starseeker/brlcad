@@ -29,7 +29,7 @@
 
 #include "bu/cmd.h"
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -140,7 +140,7 @@ ged_copyeval_core(struct ged *gedp, int argc, const char *argv[])
     /* should call GED_DB_DIRADD() but need to deal with freeing the
      * internals on failure.
      */
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     dp = db_diradd(gedp->dbip, argv[2], RT_DIR_PHONY_ADDR, 0, gtd.gtd_obj[endpos-1]->d_flags, (void *)&ip->idb_type);
     if (dp == RT_DIR_NULL) {

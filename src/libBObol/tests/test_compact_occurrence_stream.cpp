@@ -48,28 +48,27 @@ test_priority_and_state(void)
 	!stream.getCoverageBounds(publishedBounds) ||
 	publishedBounds != exactBounds ||
 	stream.hasCoverageBoundsDrained() ||
-	stream.isCancelled() || stream.size() != 5) {
+	stream.isCancelled() || stream.size() != 4) {
 	std::fprintf(stderr, "FAIL: stream state\n");
 	return 1;
     }
 
     std::vector<BObolCompactOccurrence> first;
     if (stream.drain(first, 3) != 3 || first.size() != 3 ||
-	first[0].occurrenceIndex != 1 ||
-	first[1].occurrenceIndex != 2 ||
-	first[2].occurrenceIndex != 10 ||
+	first[0].occurrenceIndex != 2 ||
+	first[1].occurrenceIndex != 10 ||
+	first[2].occurrenceIndex != 11 ||
 	!stream.hasCoverageBoundsDrained() ||
 	!stream.getCoverageBounds(publishedBounds) ||
 	publishedBounds != exactBounds ||
-	stream.size() != 2) {
+	stream.size() != 1) {
 	std::fprintf(stderr, "FAIL: priority drain order\n");
 	return 1;
     }
 
     std::vector<BObolCompactOccurrence> second;
-    if (stream.drain(second, 0) != 2 || second.size() != 2 ||
-	second[0].occurrenceIndex != 11 ||
-	second[1].occurrenceIndex != 12 ||
+    if (stream.drain(second, 0) != 1 || second.size() != 1 ||
+	second[0].occurrenceIndex != 12 ||
 	stream.size() != 0) {
 	std::fprintf(stderr, "FAIL: pending drain order\n");
 	return 1;

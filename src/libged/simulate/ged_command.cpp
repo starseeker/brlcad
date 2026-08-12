@@ -56,7 +56,7 @@ ged_simulate_core(ged * const gedp, const int argc, const char ** const argv)
 
 #include "bu/opt.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include <iomanip>
 #include <sstream>
@@ -333,7 +333,7 @@ ged_simulate_core(ged * const gedp, const int argc, const char ** const argv)
 	}
 
 	if (!tree_change_names.empty() || !state_attr_names.empty()) {
-	    int event_depth = ged_event_batch_begin(gedp);
+	    int event_depth = ged_event_batch_begin(gedp) == GED_EVENT_OK;
 	    for (const std::string &name : tree_change_names)
 		(void)ged_event_notify_comb_tree_changed(gedp, name.c_str(),
 			1, NULL);

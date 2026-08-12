@@ -32,7 +32,7 @@
 #include "bu/str.h"
 #include "bu/getopt.h"
 #include "rt/geom.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -232,7 +232,7 @@ move_all_file(struct ged *gedp, int nflag, const char *file)
     }
 
     if (!nflag)
-	event_depth = ged_event_batch_begin(gedp);
+	event_depth = ged_event_batch_begin(gedp) == GED_EVENT_OK;
 
     while (bu_fgets(line, sizeof(line), fp) != NULL) {
 	char *cp = NULL;
