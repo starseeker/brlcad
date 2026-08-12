@@ -36,7 +36,29 @@ struct rt_bot_internal;
 
 /* Display-provider contract version.  Bump this whenever the meaning or
  * completeness of a selected PoP cut changes. */
-#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-pop-cuts-v10"
+#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-clustered-pop-v1"
+
+/* Spatial subresources are deliberately not display objects.  These fixed
+ * sized records describe triangle-list ranges within the one activation-
+ * ordered PoP stream owned by a logical leaf. */
+#define BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION 8
+#define BOBOL_MESH_LOD_CLUSTER_COUNT \
+    (BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION * \
+     BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION * \
+     BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION)
+
+struct BObolMeshLodClusterRange {
+    uint32_t first_index;
+    uint32_t index_count;
+    uint8_t activation_cut;
+};
+
+struct BObolMeshLodClusterInfo {
+    point_t bmin;
+    point_t bmax;
+    const struct BObolMeshLodClusterRange *ranges;
+    uint32_t range_count;
+};
 
 /* Borrowed active LoD arrays; valid until the LoD is reloaded or destroyed. */
 struct BObolMeshLodData {
@@ -113,6 +135,10 @@ struct BObolMeshLodHierarchyInfo {
      * zero-extent axis is left unsnapped. */
     point_t quantization_min;
     point_t quantization_max;
+    uint16_t cluster_grid_resolution;
+    uint32_t cluster_count;
+    /* Borrowed from the opened immutable cache handle. */
+    const struct BObolMeshLodClusterInfo *clusters;
     struct BObolMeshLodCutInfo cuts[BOBOL_MESH_LOD_CUT_COUNT_MAX];
 };
 
@@ -130,7 +156,7 @@ struct BObolMeshLodCacheStatus {
 };
 
 #define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
-#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, {{0, 0, 0, 0.0, {0, 0, 0}, 0}} }
+#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, 0, 0, NULL, {{0, 0, 0, 0.0, {0, 0, 0}, 0}} }
 #define BOBOL_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 BOBOL_EXPORT void

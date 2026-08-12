@@ -14,6 +14,7 @@
 #include "BObol/BMeshLodCache.h"
 
 #include <Inventor/SbBox.h>
+#include <Inventor/SbMatrix.h>
 #include <Inventor/SbString.h>
 #include <Inventor/SbVec3f.h>
 #include <memory>
@@ -236,6 +237,15 @@ public:
      * semantics and clamp to residentCut(). */
     size_t hierarchyPointCountAtCut(int cut) const;
     size_t hierarchyFaceCountAtCut(int cut) const;
+    SbBool hasSpatialClusters(void) const;
+    /* Compute the submitted population for every cut when this occurrence
+     * straddles the render frustum.  Spatial clusters remain private pieces
+     * of one logical CAD leaf; this query is scheduling metadata only.  It
+     * returns FALSE for unclustered or wholly-contained occurrences, in
+     * which case callers must use the ordinary whole-prefix counts. */
+    SbBool visibleCountsAtCuts(const SbMatrix &localToRoot,
+	const SbMatrix &viewProjection, SbBool hasNormals,
+	BObolLodCounts *counts, size_t count) const;
     /* Copy immutable selection metadata for one producer-defined cut. */
     SbBool cutInfo(int cut, struct BObolMeshLodCutInfo *info) const;
     int cutForScreenError(double projectedPixelDiameter,

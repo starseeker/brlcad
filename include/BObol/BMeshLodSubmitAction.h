@@ -46,6 +46,20 @@ public:
     const struct bv_view_info &getViewInfo(void) const;
     void setViewVolume(const SbViewVolume *volume,
 	float targetPixelError = 1.0f);
+    /* Mirror SoCADAssembly's current aggregate-point threshold during source
+     * admission.  An unselected structural leaf already below this projected
+     * size is a complete pixel-appropriate presentation; opening/building its
+     * PoP asset cannot improve the current frame. */
+    void setPointProxyPixelThreshold(float pixels);
+    /* During an initial/current-inventory coverage census, the standing leaf
+     * proxy is already useful data.  Count it as coverage without opening a
+     * PoP hierarchy; the following quality pass promotes view-significant
+     * leaves under the aggregate scene budget. */
+    void setStructuralCoverageOnly(SbBool coverageOnly);
+    /* In a very large cold inventory, defer opening an otherwise valid PoP
+     * asset until its projected footprint is visually significant.  Zero
+     * disables this source-preparation admission floor. */
+    void setFirstMeshMinimumVisualFootprint(float pixels);
     void setGeneration(uint64_t generation);
     uint64_t getGeneration(void) const;
     void setRevisions(uint64_t viewRevision, uint64_t policyRevision);
@@ -202,6 +216,9 @@ private:
     SbViewVolume viewVolume;
     SbBool useViewVolume;
     float targetPixelError;
+    float pointProxyPixelThreshold;
+    SbBool structuralCoverageOnly;
+    float firstMeshMinimumVisualFootprint;
     uint64_t generation;
     uint64_t viewRevision;
     uint64_t policyRevision;

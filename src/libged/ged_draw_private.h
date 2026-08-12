@@ -39,7 +39,7 @@
 #include "BObol/BMeshLodCache.h"
 #include "ged/draw.h"
 #include "./ged_draw_source_private.h"
-#include "ged/draw_scene.h"
+#include "ged_draw_scene_private.h"
 #include "ged/display.h"
 #include "ged/scene.h"
 #include "ged/selection.h"

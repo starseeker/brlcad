@@ -44,15 +44,10 @@
 
 #include "bv.h"
 
-#include <set>
-#include <string>
-
 #include <QGridLayout>
 #include <QMouseEvent>
 #include <QtGlobal>
 
-#include "BObol/BExportAction.h"
-#include "BObol/BViewController.h"
 #include "bu/str.h"
 #include "ged.h"
 #include "ged/defines.h"
@@ -62,8 +57,6 @@
 #include "qtcad/QgQuadView.h"
 #include "qtcad/QgSession.h"
 #include "qtcad/QgView.h"
-
-#include <Inventor/SoViewport.h>
 
 static const char *VIEW_NAMES[] = {"Q1", "Q2", "Q3", "Q4"};
 
@@ -143,40 +136,6 @@ qg_quad_attach_endpoint(struct ged *gedp, QgView *view)
 	ged_view_context_from_bv(view->viewContext());
     return ged_view_context_obol_endpoint_set(view_ctx,
 	view->displayEndpoint(), 0);
-}
-
-static void
-qg_quad_insert_obol_path(std::set<std::string> &paths, const SbString &path)
-{
-	const char *cpath = path.getString();
-	if (cpath && cpath[0])
-		paths.insert(std::string(cpath));
-}
-
-static std::set<std::string>
-qg_quad_obol_visible_paths(QgView *view)
-{
-	std::set<std::string> paths;
-	if (!view)
-		return paths;
-
-	BObolViewController *controller = view->obolViewController();
-	if (!controller || !controller->getViewport() ||
-			!controller->getViewport()->getRoot())
-		return paths;
-
-	SoBRLExportAction exportAction;
-	exportAction.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-	exportAction.apply(controller->getViewport()->getRoot());
-
-	for (int i = 0; i < exportAction.getLineCount(); i++)
-		qg_quad_insert_obol_path(paths, exportAction.getLine(i).path);
-	for (int i = 0; i < exportAction.getPointCount(); i++)
-		qg_quad_insert_obol_path(paths, exportAction.getPoint(i).path);
-	for (int i = 0; i < exportAction.getTriangleCount(); i++)
-		qg_quad_insert_obol_path(paths, exportAction.getTriangle(i).path);
-
-	return paths;
 }
 
 /**
@@ -434,32 +393,15 @@ QgQuadView::changeToQuadFrame()
 
 	default_views(0);
 
-	// Not sure if this is the right way to do this but need to autoset each of the views
-	// and make sure the common geometry visible in the first quadrant is also drawn in the
-	// others.  This happens more or less automatically when we're not doing per-view
-	// adaptive drawing, but it's a different story when each view needs its own view
-	// specific version of the object.  The refresh cycle will populate this eventually,
-	// but if we don't do it here we'll start out with blank windows until something notifies
-	// the draw logic it needs to do updates.
+	/* Every non-independent view is attached to GED's shared semantic scene
+	 * root when its endpoint is registered.  Updating the view bounds is
+	 * sufficient to seed each pane's independent LoD policy; reconstructing
+	 * semantic draw intent from rendered geometry would be both incorrect and
+	 * O(number of realized primitives). */
 	for (int i = kUpperRightQuadrant + 1; i < kLowerRightQuadrant + 1; i++) {
 		struct ged_view_context *view_ctx =
 		    ged_view_context_from_bv(views[i]->viewContext());
 		ged_view_lod_bounds_update(view_ctx);
-	}
-	{
-	std::set<std::string> paths =
-			qg_quad_obol_visible_paths(views[kUpperRightQuadrant]);
-		if (gedp && m_session && !paths.empty()) {
-			struct bv_context *saved_view = m_session->activeViewContext();
-			for (int j = kUpperRightQuadrant + 1; j < kLowerRightQuadrant + 1; j++) {
-				m_session->setActiveViewContext(views[j]->viewContext());
-				for (const std::string &path : paths) {
-					const char *draw_av[] = {"draw", path.c_str(), nullptr};
-					(void)ged_exec(gedp, 2, draw_av);
-				}
-			}
-			m_session->setActiveViewContext(saved_view);
-		}
 	}
 
 	const struct bv_context *layout_view_ctx =

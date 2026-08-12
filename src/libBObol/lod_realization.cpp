@@ -391,7 +391,13 @@ bobol_lod_hierarchy_valid(
 	hierarchy.resident_cut != residentCut ||
 	!bobol_lod_valid_bounds(data.bmin, data.bmax) ||
 	!bobol_lod_valid_bounds(hierarchy.quantization_min,
-	    hierarchy.quantization_max))
+	    hierarchy.quantization_max) ||
+	((hierarchy.cluster_grid_resolution != 0 ||
+	  hierarchy.cluster_count != 0 || hierarchy.clusters != NULL) &&
+	 (hierarchy.cluster_grid_resolution !=
+	      BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION ||
+	  hierarchy.cluster_count != BOBOL_MESH_LOD_CLUSTER_COUNT ||
+	  !hierarchy.clusters)))
 	return false;
 
     uint64_t priorPoints = 0;
@@ -423,6 +429,29 @@ bobol_lod_hierarchy_valid(
     }
     if (!hierarchy.cuts[hierarchy.max_cut].exact ||
 	hierarchy.cuts[hierarchy.max_cut].object_error > 0.0)
+	return false;
+    uint64_t clusteredIndices = 0;
+    for (uint32_t cluster = 0; cluster < hierarchy.cluster_count;
+	 cluster++) {
+	const BObolMeshLodClusterInfo &info = hierarchy.clusters[cluster];
+	if (info.range_count &&
+	    (!info.ranges || !bobol_lod_valid_bounds(info.bmin, info.bmax)))
+	    return false;
+	for (uint32_t rangeIndex = 0; rangeIndex < info.range_count;
+	     ++rangeIndex) {
+	    const BObolMeshLodClusterRange &range = info.ranges[rangeIndex];
+	    if (range.activation_cut >= hierarchy.cut_count ||
+		range.first_index % 3 || range.index_count < 3 ||
+		range.index_count % 3 ||
+		static_cast<uint64_t>(range.first_index) +
+		    range.index_count >
+		    hierarchy.cuts[range.activation_cut].face_count * 3)
+		return false;
+	    clusteredIndices += range.index_count;
+	}
+    }
+    if (hierarchy.cluster_count && clusteredIndices !=
+	hierarchy.cuts[hierarchy.max_cut].face_count * 3)
 	return false;
     return hierarchy.cuts[residentCut].point_count ==
 	data.point_orig_count &&
@@ -566,6 +595,30 @@ progressive_generation_from_data(
 	generation->quantizationMinimum;
     mesh.progressiveQuantizationMaximum =
 	generation->quantizationMaximum;
+    mesh.progressiveClusterGridResolution =
+	hierarchy.cluster_grid_resolution;
+    mesh.progressiveClusters.resize(hierarchy.cluster_count);
+    for (uint32_t cluster = 0; cluster < hierarchy.cluster_count;
+	 cluster++) {
+	const BObolMeshLodClusterInfo &source = hierarchy.clusters[cluster];
+	Obol::ProgressiveTriangleCluster &target =
+	    mesh.progressiveClusters[cluster];
+	target.bounds = SbBox3f(
+	    SbVec3f(static_cast<float>(source.bmin[X]),
+		static_cast<float>(source.bmin[Y]),
+		static_cast<float>(source.bmin[Z])),
+	    SbVec3f(static_cast<float>(source.bmax[X]),
+		static_cast<float>(source.bmax[Y]),
+		static_cast<float>(source.bmax[Z])));
+	target.ranges.reserve(source.range_count);
+	for (uint32_t range = 0; range < source.range_count; ++range) {
+	    target.ranges.push_back({
+		source.ranges[range].first_index,
+		source.ranges[range].index_count,
+		source.ranges[range].activation_cut
+	    });
+	}
+    }
     /* Authored corner-normal canonicalization may globally split and reorder
      * vertices when a richer prefix arrives.  It cannot certify append-only
      * identity yet, so only the ordinary coordinate/index PoP path exposes
@@ -645,6 +698,9 @@ progressive_generation_prefix(
     mesh.progressiveQuantizationMaximum =
 	sourceMesh->progressiveQuantizationMaximum;
     mesh.progressiveLineage = sourceMesh->progressiveLineage;
+    mesh.progressiveClusters = sourceMesh->progressiveClusters;
+    mesh.progressiveClusterGridResolution =
+	sourceMesh->progressiveClusterGridResolution;
     /* Construct directly at the retained size.  Copying the rich vector and
      * then assigning a short range preserves its old capacity, which made a
      * successful quiet compaction report (and actually retain) almost all of
@@ -869,6 +925,9 @@ BObolLodProgressiveMesh::extendFromCache(
     mesh.progressiveQuantizationMaximum =
 	priorMesh->progressiveQuantizationMaximum;
     mesh.progressiveLineage = priorMesh->progressiveLineage;
+    mesh.progressiveClusters = priorMesh->progressiveClusters;
+    mesh.progressiveClusterGridResolution =
+	priorMesh->progressiveClusterGridResolution;
     mesh.positions.reserve(hierarchy.cuts[residentCut].point_count);
     mesh.positions.insert(mesh.positions.end(),
 	priorMesh->positions.begin(), priorMesh->positions.end());
@@ -1166,6 +1225,134 @@ BObolLodProgressiveMesh::hierarchyFaceCountAtCut(int requestedCut) const
 	requestedCut = generation->maximumCut;
     return requestedCut >= 0 ?
 	generation->faceCount[requestedCut] : 0;
+}
+
+SbBool
+BObolLodProgressiveMesh::hasSpatialClusters(void) const
+{
+    if (!this->p)
+	return FALSE;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    const Obol::TriMesh *mesh = generation && generation->shadedGeometry &&
+	generation->shadedGeometry->shaded ?
+	    &*generation->shadedGeometry->shaded : NULL;
+    return mesh && mesh->hasProgressiveClusters() ? TRUE : FALSE;
+}
+
+static void
+bobol_lod_transform_bounds(const SbBox3f &local, const SbMatrix &transform,
+    SbBox3f &world)
+{
+    world.makeEmpty();
+    if (local.isEmpty())
+	return;
+    const SbVec3f minimum = local.getMin();
+    const SbVec3f maximum = local.getMax();
+    for (unsigned int corner = 0; corner < 8; ++corner) {
+	const SbVec3f point(
+	    corner & 1u ? maximum[0] : minimum[0],
+	    corner & 2u ? maximum[1] : minimum[1],
+	    corner & 4u ? maximum[2] : minimum[2]);
+	SbVec3f transformed;
+	transform.multVecMatrix(point, transformed);
+	world.extendBy(transformed);
+    }
+}
+
+static int
+bobol_lod_bounds_frustum_relation(const SbBox3f &bounds,
+    const SbMatrix &viewProjection)
+{
+    if (bounds.isEmpty())
+	return 0;
+    const SbVec3f minimum = bounds.getMin();
+    const SbVec3f maximum = bounds.getMax();
+    bool whollyInside = true;
+    for (int column = 0; column < 3; ++column) {
+	for (int signIndex = 0; signIndex < 2; ++signIndex) {
+	    const float sign = signIndex == 0 ? 1.0f : -1.0f;
+	    const float a = sign * viewProjection[0][column] +
+		viewProjection[0][3];
+	    const float b = sign * viewProjection[1][column] +
+		viewProjection[1][3];
+	    const float c = sign * viewProjection[2][column] +
+		viewProjection[2][3];
+	    const float d = sign * viewProjection[3][column] +
+		viewProjection[3][3];
+	    const float positiveX = a < 0.0f ? minimum[0] : maximum[0];
+	    const float positiveY = b < 0.0f ? minimum[1] : maximum[1];
+	    const float positiveZ = c < 0.0f ? minimum[2] : maximum[2];
+	    if (a * positiveX + b * positiveY + c * positiveZ + d < 0.0f)
+		return -1;
+	    const float negativeX = a < 0.0f ? maximum[0] : minimum[0];
+	    const float negativeY = b < 0.0f ? maximum[1] : minimum[1];
+	    const float negativeZ = c < 0.0f ? maximum[2] : minimum[2];
+	    if (a * negativeX + b * negativeY + c * negativeZ + d < 0.0f)
+		whollyInside = false;
+	}
+    }
+    return whollyInside ? 1 : 0;
+}
+
+SbBool
+BObolLodProgressiveMesh::visibleCountsAtCuts(
+    const SbMatrix &localToRoot, const SbMatrix &viewProjection,
+    SbBool hasNormals, BObolLodCounts *counts, size_t count) const
+{
+    if (!this->p || !counts || count < BOBOL_MESH_LOD_CUT_COUNT_MAX)
+	return FALSE;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    const Obol::TriMesh *mesh = generation && generation->shadedGeometry &&
+	generation->shadedGeometry->shaded ?
+	    &*generation->shadedGeometry->shaded : NULL;
+    if (!mesh || !mesh->hasProgressiveClusters())
+	return FALSE;
+
+    SbBox3f worldBounds;
+    bobol_lod_transform_bounds(generation->bounds, localToRoot, worldBounds);
+    if (bobol_lod_bounds_frustum_relation(
+	    worldBounds, viewProjection) != 0)
+	return FALSE;
+
+    for (size_t cut = 0; cut < count; ++cut)
+	counts[cut].clear();
+    std::array<uint64_t, BOBOL_MESH_LOD_CUT_COUNT_MAX> indexDeltas = {};
+    for (const Obol::ProgressiveTriangleCluster &cluster :
+	 mesh->progressiveClusters) {
+	if (cluster.ranges.empty())
+	    continue;
+	SbBox3f worldCluster;
+	bobol_lod_transform_bounds(
+	    cluster.bounds, localToRoot, worldCluster);
+	if (bobol_lod_bounds_frustum_relation(
+		worldCluster, viewProjection) < 0)
+	    continue;
+	for (const Obol::ProgressiveTriangleClusterRange &range :
+	     cluster.ranges) {
+	    if (range.activationCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
+		continue;
+	    const uint64_t prior = indexDeltas[range.activationCut];
+	    indexDeltas[range.activationCut] =
+		range.indexCount > UINT64_MAX - prior ? UINT64_MAX :
+		prior + range.indexCount;
+	}
+    }
+    uint64_t visibleIndices = 0;
+    for (size_t cut = 0; cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut) {
+	visibleIndices = indexDeltas[cut] > UINT64_MAX - visibleIndices ?
+	    UINT64_MAX : visibleIndices + indexDeltas[cut];
+	counts[cut].faceCount = visibleIndices / 3;
+	/* Partial-cluster draws reference the shared global vertex array, but
+	 * their vertex-processing work is one position per submitted index.
+	 * Charging that expanded stream matches both the fixed and shader paths
+	 * without an O(triangles) unique-index census in the camera hot path. */
+	counts[cut].pointCount = visibleIndices;
+	counts[cut].originalPointCount = visibleIndices;
+	counts[cut].normalCount = hasNormals ? visibleIndices : 0;
+    }
+    return TRUE;
 }
 
 SbBool

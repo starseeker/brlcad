@@ -526,6 +526,7 @@ set_target_properties(ged_obol_plugin_api_check PROPERTIES
   FOLDER "BRL-CAD Libraries")
 
 cmakefiles(
+  ged_draw_scene_private.h
   ged_draw_types_private.h
   ged_draw_source_private.h
   ged_scene_record_api_private.h

@@ -25,6 +25,7 @@
 #include "bu/malloc.h"
 #include "bu/file.h"
 #include "ged.h"
+#include "ged/scene.h"
 #include "ged/view.h"
 #include "wdb.h"
 
@@ -717,7 +718,20 @@ test_qtcad_gl_vsync_policy(void)
 static int
 test_qtcad_quad_view_endpoint_association(void)
 {
+    const char *dbpath = "qtcad_quad_shared_scene.g";
+    bu_file_delete(dbpath);
+    struct rt_wdb *wdbp = wdb_fopen(dbpath);
+    point_t bmin = {-1.0, -1.0, -1.0};
+    point_t bmax = {1.0, 1.0, 1.0};
+    CHECK(wdbp && mk_id(wdbp, "Qt shared quad scene test") == 0 &&
+	mk_rpp(wdbp, "box.s", bmin, bmax) == 0,
+	"qtcad quad test creates a populated database");
+    wdb_close(wdbp);
+
     QgSession session;
+    const char *open_av[] = {"opendb", dbpath, NULL};
+    CHECK(ged_exec_opendb(session.ged(), 2, open_av) == BRLCAD_OK,
+	"qtcad quad test opens its populated database through the session");
     QgQuadView quad(NULL, &session, QgViewType::SW);
     QgView *view = quad.curr_view();
     CHECK(view && view->displayEndpoint(),
@@ -732,6 +746,13 @@ test_qtcad_quad_view_endpoint_association(void)
     CHECK(bobol_display_endpoint_controller(view->displayEndpoint()) ==
 	view->obolViewController(),
 	"qtcad GED view and visible canvas share one endpoint controller");
+
+    const char *draw_av[] = {"draw", "box.s", NULL};
+    CHECK(ged_exec_draw(session.ged(), 2, draw_av) == BRLCAD_OK &&
+	ged_scene_path_state_get(session.ged(), NULL, "box.s",
+	    GED_SCENE_DRAW_DEFAULT) == GED_SCENE_PATH_DRAWN,
+	"qtcad quad test establishes one shared semantic draw intent");
+    const uint64_t revision_before_quad = ged_scene_revision(session.ged());
 
     quad.changeToQuadFrame();
     const QgQuadrantId quadrants[] = {
@@ -752,7 +773,14 @@ test_qtcad_quad_view_endpoint_association(void)
 	    quadrant_view->displayEndpoint()) ==
 	    quadrant_view->obolViewController(),
 	    "qtcad lazy quad pane shares its endpoint controller with its canvas");
+	CHECK(ged_view_context_scene_attached(ged_view_context_from_bv(
+	    quadrant_view->viewContext())),
+	    "qtcad lazy quad pane attaches the shared retained scene root");
     }
+    CHECK(ged_scene_revision(session.ged()) == revision_before_quad &&
+	ged_scene_path_state_get(session.ged(), NULL, "box.s",
+	    GED_SCENE_DRAW_DEFAULT) == GED_SCENE_PATH_DRAWN,
+	"qtcad quad creation shares presentation without replaying draw intent");
 
     QgView *upper_right = quad.get(QgQuadrantId::UpperRight);
     QgView *upper_left = quad.get(QgQuadrantId::UpperLeft);
@@ -778,6 +806,9 @@ test_qtcad_quad_view_endpoint_association(void)
 	    quadrant_view->displayEndpoint(),
 	    "qtcad lazy quad recreation restores one endpoint per pane");
     }
+    CHECK(ged_scene_revision(session.ged()) == revision_before_quad,
+	"qtcad quad recreation remains a presentation-only operation");
+    bu_file_delete(dbpath);
     return 0;
 }
 

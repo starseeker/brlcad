@@ -688,6 +688,9 @@ function(_bobol_guard_check_display_endpoint_boundary)
     _bobol_guard_fail(
       "QgQuadView no longer associates visible endpoints with GED view records")
   endif()
+  _bobol_guard_forbid_regexes("src/libqtcad/QgQuadView.cpp" "${_qg_quad}"
+    [[SoBRLExportAction]]
+    [[(^|[^A-Za-z0-9_])ged_exec[A-Za-z0-9_]*[ \t\r\n]*\(]])
 
   _bobol_guard_read_rel(_qged_fbserv "src/qged/fbserv.cpp")
   foreach(_needle
@@ -1062,16 +1065,14 @@ function(_bobol_guard_check_rtwizard_host_boundary)
   _bobol_guard_forbid_regexes("src/tclscripts/rtwizard/lib/FbPage.itk"
     "${_rtwizard_fb_page}"
     [[/dev/(oglsp|wglsp)]])
-  string(REGEX MATCH [[exec.*fbserv.*-A.*-F[ \t]+\$fbType]]
-    _rtwizard_obol_fbserv "${_rtwizard_fb_page}")
-  string(REGEX MATCH [[set[ \t]+fbType[ \t]+"/dev/ogl"]]
-    _rtwizard_system_gl "${_rtwizard_fb_page}")
-  string(REGEX MATCH [[set[ \t]+fbType[ \t]+"/dev/wgl"]]
-    _rtwizard_windows_gl "${_rtwizard_fb_page}")
+  string(REGEX MATCH [[exec.*fbserv.*-A.*\/dev\/mem]]
+    _rtwizard_memory_fbserv "${_rtwizard_fb_page}")
   string(FIND "${_rtwizard_fb_page}" [[FBSERV_TOKEN]]
     _rtwizard_token_idx)
-  if(NOT _rtwizard_obol_fbserv OR NOT _rtwizard_system_gl OR
-     NOT _rtwizard_windows_gl OR _rtwizard_token_idx EQUAL -1)
+  string(FIND "${_rtwizard_fb_page}" [[pane_listen $pane ipc]]
+    _rtwizard_obol_ipc_idx)
+  if(NOT _rtwizard_memory_fbserv OR _rtwizard_token_idx EQUAL -1 OR
+     _rtwizard_obol_ipc_idx EQUAL -1)
     _bobol_guard_fail(
       "rtwizard fixed-size preview must use a token-isolated Obol fbserv surface")
   endif()

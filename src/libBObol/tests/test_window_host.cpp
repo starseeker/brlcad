@@ -239,6 +239,18 @@ test_pending_progress_provider(BObolViewController *controller,
     return 1;
 }
 
+struct FrameRequestCount {
+    int calls = 0;
+};
+
+static void
+count_frame_request(void *data, const char *UNUSED(reason))
+{
+    FrameRequestCount *state = static_cast<FrameRequestCount *>(data);
+    if (state)
+	state->calls++;
+}
+
 static int
 test_input_context(void)
 {
@@ -601,6 +613,46 @@ test_progressive_status_contract(void)
 	  "pending progressive work does not claim a published scene change");
     controller.unregisterProgressiveProvider(token);
     controller.clearProgressiveWorkPending();
+    return 0;
+}
+
+static int
+test_progressive_frame_wakeup_contract(void)
+{
+    /* A host which attaches after work was raised must receive the standing
+     * level immediately; otherwise an initially hidden/disabled widget can
+     * leave the source pending until unrelated user input. */
+    BObolViewController attachController;
+    attachController.clearRenderRequest();
+    attachController.markProgressiveWorkPending();
+    FrameRequestCount attachState;
+    attachController.setFrameRequestCallback(count_frame_request,
+	&attachState);
+    CHECK(attachState.calls == 1,
+	"late host attachment replays standing progressive work");
+    attachController.clearFrameRequestCallback(&attachState);
+    attachController.clearProgressiveWorkPending();
+
+    /* Provider registration is its own producer edge.  Startup often already
+     * has both render/progressive levels asserted, so edge-coalesced aggregate
+     * setters alone cannot announce that a newly installed provider exists. */
+    BObolViewController providerController;
+    FrameRequestCount providerState;
+    providerController.setFrameRequestCallback(count_frame_request,
+	&providerState);
+    providerController.clearRenderRequest();
+    providerController.markProgressiveWorkPending();
+    providerController.requestRender("test-standing-render");
+    const int beforeRegistration = providerState.calls;
+    PendingProgressState progressState;
+    const uint64_t token = providerController.registerProgressiveProvider(
+	test_pending_progress_provider, &progressState);
+    CHECK(token != 0 && providerState.calls == beforeRegistration + 1,
+	"new progressive provider wakes an already-pending host");
+    providerController.unregisterProgressiveProvider(token);
+    providerController.clearProgressiveWorkPending();
+    providerController.clearRenderRequest();
+    providerController.clearFrameRequestCallback(&providerState);
     return 0;
 }
 
@@ -2641,6 +2693,8 @@ main(int ac, char **av)
     if (test_input_context())
 	return 1;
     if (test_progressive_status_contract())
+	return 1;
+    if (test_progressive_frame_wakeup_contract())
 	return 1;
     if (test_window_host_contract())
 	return 1;

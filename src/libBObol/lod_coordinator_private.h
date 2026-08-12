@@ -285,7 +285,7 @@ private:
 };
 
 /*
- * Current-view minimum-mesh coverage proof.  Large compact sources are
+ * Current-view useful-presentation coverage proof.  Large compact sources are
  * visited in bounded owner-thread windows, but their counters describe one
  * logical pass and must therefore survive between windows.  Completing a
  * pass atomically publishes its visible denominator and retires the counters;
@@ -309,7 +309,7 @@ public:
 	    this->coverageCompleteValue = false;
     }
 
-    /* The semantic view policy owns whether minimum-mesh coverage is a
+    /* The semantic view policy owns whether useful source coverage is a
      * prerequisite at all.  Keep that fact beside the coverage proof instead
      * of adding a second controller latch: LoD-disabled and detached-service
      * views are vacuously covered, while a stale compaction cursor may never
@@ -475,6 +475,12 @@ public:
 	bool progressiveWorkPending = false;
 	bool gpuMemoryPressure = false;
 	bool stableBudgetLimited = false;
+	/* The retained occurrence population may be richer than the completed
+	 * framebuffer when a renderer-only PoP ceiling or point-proxy threshold
+	 * protects the presentation deadline.  This is a valid terminal view, but
+	 * it is still explicitly performance limited and must be reported as such
+	 * to progress/HUD consumers. */
+	bool presentationLimited = false;
     };
 
     struct Decision {
@@ -509,7 +515,8 @@ public:
 	    (inputs.residentMeshLimitBytes != SIZE_MAX &&
 	     inputs.stableResidentMeshBytes > inputs.residentMeshLimitBytes);
 	decision.performanceLimited = decision.viewReady &&
-	    (inputs.stableBudgetLimited || decision.memoryLimited ||
+	    (inputs.stableBudgetLimited || inputs.presentationLimited ||
+	     decision.memoryLimited ||
 	     (inputs.visibleTargetCount > 0 &&
 	      (inputs.activePayloadCount < inputs.visibleTargetCount ||
 	       inputs.satisfiedPayloadCount < inputs.visibleTargetCount)));
@@ -1313,6 +1320,7 @@ public:
     struct QualityProbeInputs {
 	int activeMaximum = -1;
 	int presentationCeiling = -1;
+	uint64_t presentedWork = 0;
 	bool refinementFramePending = false;
 	bool publicationFramePending = false;
 	bool motionFramePending = false;
@@ -1352,6 +1360,8 @@ public:
 	if (newInteractionEpoch) {
 	    this->interactionScaleChangedValue = false;
 	    this->qualityFloorValue = -1;
+	    this->qualityCeilingLimitValue = -1;
+	    this->qualityCeilingFailedWorkValue = 0;
 	}
 	this->viewScaleChangingValue = false;
 	this->qualityProbeActiveValue = false;
@@ -1366,6 +1376,8 @@ public:
 	if (newInteractionEpoch) {
 	    this->interactionScaleChangedValue = false;
 	    this->qualityFloorValue = -1;
+	    this->qualityCeilingLimitValue = -1;
+	    this->qualityCeilingFailedWorkValue = 0;
 	}
 	if (scaleChanged)
 	    this->interactionScaleChangedValue = true;
@@ -1392,7 +1404,7 @@ public:
 		    BOBOL_MESH_LOD_CUT_COUNT_MAX - 1));
     }
 
-    void noteQualityMiss(int correctedCeiling)
+    void noteQualityMiss(int correctedCeiling, uint64_t failedWork = 0)
     {
 	if (correctedCeiling < 0)
 	    return;
@@ -1401,6 +1413,20 @@ public:
 	else
 	    this->qualityFloorValue = std::min(
 		this->qualityFloorValue, correctedCeiling);
+	/* A hard deadline is direct evidence that the next richer population is
+	 * not sustainable in this interaction epoch.  Retain the corrected
+	 * renderer ceiling across subsequent camera samples.  Otherwise every
+	 * wheel event rearms the same +1 quality probe, producing a visible
+	 * rich/coarse cycle and repeatedly spending one long software frame on a
+	 * result already known to miss its contract.  A still coarser correction
+	 * tightens this bound; a new gesture/quiet epoch clears it. */
+	if (this->qualityCeilingLimitValue < 0)
+	    this->qualityCeilingLimitValue = correctedCeiling;
+	else
+	    this->qualityCeilingLimitValue = std::min(
+		this->qualityCeilingLimitValue, correctedCeiling);
+	if (failedWork)
+	    this->qualityCeilingFailedWorkValue = failedWork;
 	this->qualityProbePresentedValue = false;
     }
 
@@ -1460,7 +1486,6 @@ public:
 	this->qualityProbeActiveValue = true;
 	this->qualityProbePresentedValue = false;
 	this->qualityBudgetActiveValue = true;
-	decision.begin = true;
 	/* Residency may advance several populations while a render-only ceiling
 	 * protects interaction.  Probe from the cut actually being presented,
 	 * not from that hidden resident/occurrence maximum; jumping back to the
@@ -1481,6 +1506,35 @@ public:
 	    decision.progressiveCeiling = std::max(
 		decision.progressiveCeiling,
 		std::min(inputs.activeMaximum, this->qualityFloorValue));
+	/* Consume a rearmed edge at the proven motion ceiling without starting a
+	 * presentation attempt.  Resident suffix growth changes availability, not
+	 * the measured cost of the already-failed next prefix, and therefore is not
+	 * by itself capacity evidence. */
+	if (this->qualityCeilingLimitValue >= 0 &&
+	    decision.progressiveCeiling > this->qualityCeilingLimitValue) {
+	    /* The limit records the cost of a failed presentation, not a
+	     * view-independent property of that global cut.  Spatially clustered
+	     * leaves may expose only a small fraction of the same prefix after a
+	     * zoom or pan.  Permit a new bounded probe once exact visible work has
+	     * fallen materially below the failed population; the hard presentation
+	     * deadline still protects the endpoint if the estimate is optimistic. */
+	    const bool materiallyCheaperView =
+		this->qualityCeilingFailedWorkValue > 0 &&
+		inputs.presentedWork > 0 &&
+		inputs.presentedWork <=
+		    this->qualityCeilingFailedWorkValue / 2;
+	    if (!materiallyCheaperView) {
+		this->qualityProbeActiveValue = false;
+		return decision;
+	    }
+	    /* This is a new, substantially cheaper presentation population.  The
+	     * old ceiling is no longer evidence about it.  Retire that witness so
+	     * a successful probe may continue through successively richer cuts;
+	     * any new miss immediately installs a view-appropriate bound. */
+	    this->qualityCeilingLimitValue = -1;
+	    this->qualityCeilingFailedWorkValue = 0;
+	}
+	decision.begin = true;
 	return decision;
     }
 
@@ -1513,6 +1567,8 @@ public:
 	this->qualityProbePresentedValue = false;
 	this->qualityBudgetActiveValue = false;
 	this->qualityFloorValue = -1;
+	this->qualityCeilingLimitValue = -1;
+	this->qualityCeilingFailedWorkValue = 0;
 	return completedScaleInteraction;
     }
 
@@ -1546,6 +1602,8 @@ public:
 	this->qualityProbePresentedValue = false;
 	this->qualityBudgetActiveValue = false;
 	this->qualityFloorValue = -1;
+	this->qualityCeilingLimitValue = -1;
+	this->qualityCeilingFailedWorkValue = 0;
     }
 
     bool scaleDemandRefreshActive(void) const
@@ -1580,6 +1638,14 @@ public:
     {
 	return this->qualityFloorValue;
     }
+    int qualityCeilingLimit(void) const
+    {
+	return this->qualityCeilingLimitValue;
+    }
+    uint64_t qualityCeilingFailedWork(void) const
+    {
+	return this->qualityCeilingFailedWorkValue;
+    }
     bool scaleChangingInteraction(bool interactive) const
     {
 	/* interactionScaleChangedValue intentionally survives a mixed wheel and
@@ -1599,6 +1665,8 @@ private:
     bool qualityProbePresentedValue = false;
     bool qualityBudgetActiveValue = false;
     int qualityFloorValue = -1;
+    int qualityCeilingLimitValue = -1;
+    uint64_t qualityCeilingFailedWorkValue = 0;
 };
 
 /*

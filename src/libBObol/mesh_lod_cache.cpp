@@ -28,6 +28,8 @@
 #include "bu/vls.h"
 #include "raytrace.h"
 
+#include <algorithm>
+#include <array>
 #include <cfloat>
 #include <charconv>
 #include <climits>
@@ -48,7 +50,7 @@
 
 #define POP_CUT_COUNT_MAX BOBOL_MESH_LOD_CUT_COUNT_MAX
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 15
+#define CACHE_CURRENT_FORMAT 17
 
 #define CACHE_POP_MAX_CUT "max"
 #define CACHE_POP_MIN_CUT "min"
@@ -61,6 +63,23 @@
 #define CACHE_VERT_CUT "v"
 #define CACHE_VERTNORM_CUT "vn"
 #define CACHE_TRI_CUT "t"
+#define CACHE_CLUSTER_GRID "cg"
+#define CACHE_CLUSTER_BOUNDS "gb"
+#define CACHE_CLUSTER_RANGE_OFFSETS "go"
+#define CACHE_CLUSTER_RANGES "gr"
+
+/* Serialized cache records must not inherit compiler ABI padding or size_t
+ * width.  Keep this format explicitly fixed so a hierarchy produced on one
+ * supported host cannot turn a range offset into a wild mesh index on
+ * another. */
+struct BObolMeshLodClusterRangeDisk {
+    uint32_t firstIndex;
+    uint32_t indexCount;
+    uint8_t activationCut;
+    uint8_t reserved[3];
+};
+static_assert(sizeof(BObolMeshLodClusterRangeDisk) == 12,
+    "cluster range cache record must have a fixed width");
 
 struct BObolMeshLodContextInternal {
     struct bu_cache *lodCache;
@@ -702,6 +721,7 @@ public:
 private:
     void buildCutSchedule(void);
     void triProcess(void);
+    bool buildClusters(void);
     fastf_t snap(fastf_t value, fastf_t min, fastf_t max, uint8_t bits);
     void cache(void);
     bool cacheTri(void);
@@ -737,6 +757,8 @@ private:
     std::vector<uint8_t> vertexTriMinCut;
     std::vector<std::vector<uint32_t>> cutTriVerts;
     std::vector<std::vector<uint32_t>> cutTris;
+    std::vector<struct BObolMeshLodClusterInfo> clusterInfos;
+    std::vector<struct BObolMeshLodClusterRange> clusterRanges;
 
     size_t vertexCount = 0;
     const point_t *vertexArray = NULL;
@@ -998,6 +1020,154 @@ BObolPopState::triProcess(void)
     minPopCut = firstPopulatedCut >= 0 ? firstPopulatedCut : 0;
 }
 
+bool
+BObolPopState::buildClusters(void)
+{
+    constexpr size_t side = BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
+    constexpr size_t clusterCount = BOBOL_MESH_LOD_CLUSTER_COUNT;
+    static_assert(side > 1 && side * side * side == clusterCount,
+	"invalid fixed PoP cluster grid");
+
+    clusterInfos.clear();
+    clusterRanges.clear();
+    if (!vertexArray || !faceArray || !faceCount ||
+	faceCount > UINT32_MAX / 3 || cutTris.size() != cutCount)
+	return false;
+
+    struct ClusterBounds {
+	double minimum[3] = {
+	    std::numeric_limits<double>::infinity(),
+	    std::numeric_limits<double>::infinity(),
+	    std::numeric_limits<double>::infinity()
+	};
+	double maximum[3] = {
+	    -std::numeric_limits<double>::infinity(),
+	    -std::numeric_limits<double>::infinity(),
+	    -std::numeric_limits<double>::infinity()
+	};
+    };
+    std::array<ClusterBounds, clusterCount> bounds;
+    std::array<std::vector<BObolMeshLodClusterRange>, clusterCount>
+	rangesByCluster;
+    const double minimum[3] = {minx, miny, minz};
+    const double extent[3] = {maxx - minx, maxy - miny, maxz - minz};
+
+    const auto faceCluster = [this, &minimum, &extent](
+	    uint32_t sourceFace) -> size_t {
+	size_t cell[3] = {0, 0, 0};
+	for (int axis = 0; axis < 3; ++axis) {
+	    double centroid = 0.0;
+	    for (size_t corner = 0; corner < 3; ++corner) {
+		const int vertex = faceArray[
+		    3 * static_cast<size_t>(sourceFace) + corner];
+		centroid += static_cast<double>(vertexArray[vertex][axis]);
+	    }
+	    centroid /= 3.0;
+	    if (extent[axis] > 0.0) {
+		const double normalized =
+		    (centroid - minimum[axis]) / extent[axis];
+		const double scaled = floor(normalized * side);
+		cell[axis] = scaled <= 0.0 ? 0 :
+		    static_cast<size_t>(std::min<double>(side - 1, scaled));
+	    }
+	}
+	return cell[X] + side * (cell[Y] + side * cell[Z]);
+    };
+
+    uint64_t cumulativeFaces = 0;
+    for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	std::vector<uint32_t> &sourceFaces = cutTris[cut];
+	std::array<size_t, clusterCount> counts = {};
+	for (uint32_t sourceFace : sourceFaces) {
+	    if (sourceFace >= faceCount)
+		return false;
+	    const size_t cluster = faceCluster(sourceFace);
+	    ++counts[cluster];
+	    for (size_t corner = 0; corner < 3; ++corner) {
+		const int vertex = faceArray[
+		    3 * static_cast<size_t>(sourceFace) + corner];
+		if (vertex < 0 || static_cast<size_t>(vertex) >= vertexCount)
+		    return false;
+		for (int axis = 0; axis < 3; ++axis) {
+		    const double value = vertexArray[vertex][axis];
+		    bounds[cluster].minimum[axis] =
+			std::min(bounds[cluster].minimum[axis], value);
+		    bounds[cluster].maximum[axis] =
+			std::max(bounds[cluster].maximum[axis], value);
+		}
+	    }
+	}
+
+	std::array<size_t, clusterCount> offsets = {};
+	size_t next = 0;
+	for (size_t cluster = 0; cluster < clusterCount; ++cluster) {
+	    offsets[cluster] = next;
+	    if (counts[cluster]) {
+		const uint64_t first = (cumulativeFaces + next) * 3;
+		const uint64_t count = counts[cluster] * 3;
+		if (first > UINT32_MAX || count > UINT32_MAX ||
+		    first + count > UINT32_MAX)
+		    return false;
+		rangesByCluster[cluster].push_back({
+		    static_cast<uint32_t>(first),
+		    static_cast<uint32_t>(count),
+		    static_cast<uint8_t>(cut)
+		});
+	    }
+	    next += counts[cluster];
+	}
+	if (next != sourceFaces.size())
+	    return false;
+
+	/* Counting-sort by cell within this activation cut.  Cut order, point
+	 * activation order, and every cumulative prefix remain unchanged. */
+	std::vector<uint32_t> ordered(sourceFaces.size());
+	std::array<size_t, clusterCount> cursor = offsets;
+	for (uint32_t sourceFace : sourceFaces) {
+	    const size_t cluster = faceCluster(sourceFace);
+	    ordered[cursor[cluster]++] = sourceFace;
+	}
+	sourceFaces.swap(ordered);
+	cumulativeFaces += sourceFaces.size();
+    }
+
+    size_t totalRangeCount = 0;
+    for (const auto &ranges : rangesByCluster)
+	totalRangeCount += ranges.size();
+    if (!totalRangeCount || totalRangeCount > clusterCount * cutCount)
+	return false;
+    clusterRanges.reserve(totalRangeCount);
+    clusterInfos.resize(clusterCount);
+    for (size_t cluster = 0; cluster < clusterCount; ++cluster) {
+	BObolMeshLodClusterInfo &info = clusterInfos[cluster];
+	const size_t firstRange = clusterRanges.size();
+	clusterRanges.insert(clusterRanges.end(),
+	    rangesByCluster[cluster].begin(), rangesByCluster[cluster].end());
+	info.range_count = static_cast<uint32_t>(
+	    clusterRanges.size() - firstRange);
+	if (!info.range_count) {
+	    VSETALL(info.bmin, 0.0);
+	    VSETALL(info.bmax, 0.0);
+	    info.ranges = NULL;
+	    continue;
+	}
+	VSET(info.bmin, bounds[cluster].minimum[X],
+	    bounds[cluster].minimum[Y], bounds[cluster].minimum[Z]);
+	VSET(info.bmax, bounds[cluster].maximum[X],
+	    bounds[cluster].maximum[Y], bounds[cluster].maximum[Z]);
+    }
+    /* Assign borrowed pointers only after the flat vector has reached its
+	 * final capacity. */
+    size_t rangeOffset = 0;
+    for (BObolMeshLodClusterInfo &info : clusterInfos) {
+	if (info.range_count) {
+	    info.ranges = clusterRanges.data() + rangeOffset;
+	    rangeOffset += info.range_count;
+	}
+    }
+    return rangeOffset == clusterRanges.size();
+}
+
 BObolPopState::BObolPopState(
     struct BObolMeshLodContext *ctx,
     const point_t *vertices,
@@ -1014,7 +1184,7 @@ BObolPopState::BObolPopState(
 
     if (!userKey) {
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char semantics[] = "BObol-PoP3D-cuts-format-15";
+	static const char semantics[] = "BObol-clustered-PoP-format-17";
 	bu_data_hash_update(state, semantics, sizeof(semantics));
 	bu_data_hash_update(state, vertices, inputVertexCount * sizeof(point_t));
 	bu_data_hash_update(state, faces, 3 * inputFaceCount * sizeof(int));
@@ -1083,6 +1253,8 @@ BObolPopState::BObolPopState(
     buildCutSchedule();
     currCut = maxPopCut;
     triProcess();
+    if (!buildClusters())
+	return;
     const int64_t cacheStarted = bu_gettime();
 
     isValid = true;
@@ -1227,7 +1399,7 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	    return false;
 	}
 
-	/* Format 15 has one canonical anisotropic schedule.  Rebuild it from
+	/* Format 16 has one canonical anisotropic schedule.  Rebuild it from
 	 * the validated quantization domain and require the stored cut records
 	 * to match exactly.  This rejects truncated, stale, or corrupt metadata
 	 * before any ordinal can index fixed-size storage. */
@@ -1268,6 +1440,115 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 		std::numeric_limits<int>::max())) {
 	    cacheDone();
 	    return false;
+	}
+    }
+    {
+	uint16_t diskGrid = 0;
+	if (!readMetadata(CACHE_CLUSTER_GRID, &diskGrid,
+		sizeof(diskGrid)) ||
+	    diskGrid != BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION) {
+	    cacheDone();
+	    return false;
+	}
+
+	void *boundsBytes = NULL;
+	void *offsetBytes = NULL;
+	void *rangeBytes = NULL;
+	const size_t clusterCount = BOBOL_MESH_LOD_CLUSTER_COUNT;
+	const size_t boundsSize = cacheGet(&boundsBytes,
+	    CACHE_CLUSTER_BOUNDS);
+	const size_t offsetsSize = cacheGet(&offsetBytes,
+	    CACHE_CLUSTER_RANGE_OFFSETS);
+	const size_t rangesSize = cacheGet(&rangeBytes,
+	    CACHE_CLUSTER_RANGES);
+	if (!boundsBytes || !offsetBytes || !rangeBytes ||
+	    boundsSize != clusterCount * 6 * sizeof(double) ||
+	    offsetsSize != (clusterCount + 1) * sizeof(uint32_t) ||
+	    rangesSize == 0 ||
+	    rangesSize % sizeof(BObolMeshLodClusterRangeDisk) != 0) {
+	    cacheDone();
+	    return false;
+	}
+	const size_t rangeCount =
+	    rangesSize / sizeof(BObolMeshLodClusterRangeDisk);
+	if (rangeCount > clusterCount * cutCount) {
+	    cacheDone();
+	    return false;
+	}
+
+	std::vector<uint32_t> offsets(clusterCount + 1);
+	memcpy(offsets.data(), offsetBytes, offsetsSize);
+	if (offsets[0] != 0 || offsets.back() != rangeCount) {
+	    cacheDone();
+	    return false;
+	}
+	for (size_t cluster = 0; cluster < clusterCount; ++cluster) {
+	    if (offsets[cluster] > offsets[cluster + 1]) {
+		cacheDone();
+		return false;
+	    }
+	}
+
+	size_t totalFaces = 0;
+	std::array<uint64_t, POP_CUT_COUNT_MAX + 1> cutEnds = {};
+	for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	    totalFaces += cutTriangleCount[cut];
+	    cutEnds[cut + 1] = static_cast<uint64_t>(totalFaces) * 3;
+	}
+	const uint64_t totalIndices = static_cast<uint64_t>(totalFaces) * 3;
+	clusterRanges.resize(rangeCount);
+	const unsigned char *diskRanges =
+	    static_cast<const unsigned char *>(rangeBytes);
+	for (size_t range = 0; range < rangeCount; ++range) {
+	    BObolMeshLodClusterRangeDisk disk = {};
+	    memcpy(&disk,
+		diskRanges + range * sizeof(disk), sizeof(disk));
+	    const uint64_t end = static_cast<uint64_t>(disk.firstIndex) +
+		disk.indexCount;
+	    if (disk.reserved[0] || disk.reserved[1] || disk.reserved[2] ||
+		disk.activationCut >= cutCount ||
+		disk.firstIndex % 3 || disk.indexCount < 3 ||
+		disk.indexCount % 3 || end > totalIndices ||
+		disk.firstIndex < cutEnds[disk.activationCut] ||
+		end > cutEnds[disk.activationCut + 1]) {
+		cacheDone();
+		return false;
+	    }
+	    clusterRanges[range] = {
+		disk.firstIndex, disk.indexCount, disk.activationCut
+	    };
+	}
+
+	clusterInfos.resize(clusterCount);
+	const unsigned char *diskBounds =
+	    static_cast<const unsigned char *>(boundsBytes);
+	for (size_t cluster = 0; cluster < clusterCount; ++cluster) {
+	    double values[6] = {};
+	    memcpy(values, diskBounds + cluster * sizeof(values),
+		sizeof(values));
+	    BObolMeshLodClusterInfo &info = clusterInfos[cluster];
+	    info.range_count = offsets[cluster + 1] - offsets[cluster];
+	    info.ranges = info.range_count ?
+		clusterRanges.data() + offsets[cluster] : NULL;
+	    if (!info.range_count) {
+		VSETALL(info.bmin, 0.0);
+		VSETALL(info.bmax, 0.0);
+		continue;
+	    }
+	    bool valid = true;
+	    for (double value : values)
+		valid = valid && std::isfinite(value);
+	    valid = valid && values[0] <= values[3] &&
+		values[1] <= values[4] && values[2] <= values[5] &&
+		values[0] >= minx && values[1] >= miny &&
+		values[2] >= minz && values[3] <= maxx &&
+		values[4] <= maxy && values[5] <= maxz;
+	    if (!valid) {
+		cacheDone();
+		return false;
+	    }
+	    VSET(info.bmin, values[0], values[1], values[2]);
+	    VSET(info.bmax, values[3], values[4], values[5]);
 	}
     }
     /*
@@ -1695,6 +1976,10 @@ BObolPopState::residentBytes(void) const
 	bytes, cutTriVerts.capacity(), sizeof(cutTriVerts[0]));
     bytes = mesh_lod_saturating_bytes_add(
 	bytes, cutTris.capacity(), sizeof(cutTris[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, clusterInfos.capacity(), sizeof(clusterInfos[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, clusterRanges.capacity(), sizeof(clusterRanges[0]));
     for (const std::vector<uint32_t> &cut : cutTriVerts)
 	bytes = mesh_lod_saturating_bytes_add(
 	    bytes, cut.capacity(), sizeof(cut[0]));
@@ -1742,6 +2027,10 @@ BObolPopState::hierarchyInfo(struct BObolMeshLodHierarchyInfo *info) const
     info->shaded_cull_backfaces = shadedCullBackfaces ? 1 : 0;
     VSET(info->quantization_min, minx, miny, minz);
     VSET(info->quantization_max, maxx, maxy, maxz);
+    info->cluster_grid_resolution = clusterInfos.empty() ? 0 :
+	BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
+    info->cluster_count = static_cast<uint32_t>(clusterInfos.size());
+    info->clusters = clusterInfos.empty() ? NULL : clusterInfos.data();
     uint64_t points = 0;
     uint64_t faces = 0;
     for (uint32_t cut = 0; cut < cutCount; ++cut) {
@@ -1943,6 +2232,62 @@ BObolPopState::cacheTri(void)
 	    return false;
     }
 
+    if (clusterInfos.size() != BOBOL_MESH_LOD_CLUSTER_COUNT ||
+	clusterRanges.empty())
+	return false;
+    {
+	const uint16_t diskGrid = BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
+	if (!cacheWriteData(CACHE_CLUSTER_GRID, &diskGrid,
+		sizeof(diskGrid)))
+	    return false;
+    }
+    {
+	std::vector<double> diskBounds(clusterInfos.size() * 6, 0.0);
+	for (size_t cluster = 0; cluster < clusterInfos.size(); ++cluster) {
+	    const BObolMeshLodClusterInfo &info = clusterInfos[cluster];
+	    if (!info.range_count)
+		continue;
+	    diskBounds[cluster * 6 + 0] = info.bmin[X];
+	    diskBounds[cluster * 6 + 1] = info.bmin[Y];
+	    diskBounds[cluster * 6 + 2] = info.bmin[Z];
+	    diskBounds[cluster * 6 + 3] = info.bmax[X];
+	    diskBounds[cluster * 6 + 4] = info.bmax[Y];
+	    diskBounds[cluster * 6 + 5] = info.bmax[Z];
+	}
+	if (!cacheWriteData(CACHE_CLUSTER_BOUNDS, diskBounds.data(),
+		diskBounds.size() * sizeof(diskBounds[0])))
+	    return false;
+    }
+    {
+	std::vector<uint32_t> offsets(clusterInfos.size() + 1, 0);
+	for (size_t cluster = 0; cluster < clusterInfos.size(); ++cluster) {
+	    const uint64_t next = static_cast<uint64_t>(offsets[cluster]) +
+		clusterInfos[cluster].range_count;
+	    if (next > UINT32_MAX)
+		return false;
+	    offsets[cluster + 1] = static_cast<uint32_t>(next);
+	}
+	if (offsets.back() != clusterRanges.size() ||
+	    !cacheWriteData(CACHE_CLUSTER_RANGE_OFFSETS, offsets.data(),
+		offsets.size() * sizeof(offsets[0])))
+	    return false;
+    }
+    {
+	std::vector<BObolMeshLodClusterRangeDisk> diskRanges(
+	    clusterRanges.size());
+	for (size_t range = 0; range < clusterRanges.size(); ++range) {
+	    diskRanges[range].firstIndex = clusterRanges[range].first_index;
+	    diskRanges[range].indexCount = clusterRanges[range].index_count;
+	    diskRanges[range].activationCut =
+		clusterRanges[range].activation_cut;
+	    memset(diskRanges[range].reserved, 0,
+		sizeof(diskRanges[range].reserved));
+	}
+	if (!cacheWriteData(CACHE_CLUSTER_RANGES, diskRanges.data(),
+		diskRanges.size() * sizeof(diskRanges[0])))
+	    return false;
+    }
+
     {
 	std::stringstream stream;
 	for (size_t cutIndex = 0; cutIndex <= POP_CUT_COUNT_MAX; ++cutIndex) {
@@ -2122,15 +2467,21 @@ BObolPopState::snap(fastf_t value, fastf_t min, fastf_t max, uint8_t bits)
     const double mask = std::ldexp(
 	1.0, BOBOL_MESH_LOD_QUANTIZATION_BITS -
 	    std::min<int>(BOBOL_MESH_LOD_QUANTIZATION_BITS, bits));
-    unsigned int vf = static_cast<unsigned int>(
-			  floor((value - min) / (max - min) * USHRT_MAX));
-    int lv = static_cast<int>(floor(vf / mask));
-    unsigned int vc = static_cast<unsigned int>(
-			  ceil((value - min) / (max - min) * USHRT_MAX));
-    int hc = static_cast<int>(ceil(vc / mask));
-    fastf_t snapped =
-	(static_cast<fastf_t>(lv) + static_cast<fastf_t>(hc)) * 0.5 *
-	mask;
+    const double scaled = std::max(0.0, std::min(
+	static_cast<double>(USHRT_MAX),
+	(static_cast<double>(value) - min) /
+	    (static_cast<double>(max) - min) * USHRT_MAX));
+    /* triProcess assigns activation from the high-bit prefix of the floored
+     * 16-bit code.  Render exactly that cell's representative.  The former
+     * floor/ceil average selected a cell boundary when a source coordinate
+     * lay exactly on one; the activation classifier selected the upper cell,
+     * so an omitted face could nevertheless have distinct displayed
+     * vertices.  That disagreement produced transient cracks at coarse
+     * cuts. */
+    const double code = floor(scaled);
+    const double cell = floor(code / mask);
+    const double snapped = std::min(
+	static_cast<double>(USHRT_MAX), (cell + 0.5) * mask);
     return ((snapped / USHRT_MAX) * (max - min)) + min;
 }
 

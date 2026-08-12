@@ -33,7 +33,6 @@ add_subdirectory(plugin)
 cmakefiles(
   CMakeLists.txt
   display_obol_private.h
-  draw_scene.h
 )
 
 # Local Variables:

@@ -17115,6 +17115,12 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
 	    view_controller->getViewAttachment()))
 	return 0;
 
+    /* Keep the renderer-neutral view record synchronized with the retained
+     * root it now renders.  This is an identity attachment only: all
+     * non-independent views continue to share the same source nodes and
+     * geometry repository. */
+    (void)ged_draw_source_root_attach_view_contexts(gedp, view_ctx, NULL);
+
     /* The shared controller may itself be a single-view endpoint.  Its scene
      * root already is the shared composition, so replacing it with a local
      * render composition would make the shared scene self-referential. */
