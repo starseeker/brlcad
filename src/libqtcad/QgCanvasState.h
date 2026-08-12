@@ -198,6 +198,9 @@ qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 	s.obol->requestPresentationRender(reason);
 }
 
+static inline void qgcanvas_queue_obol_progressive_update(
+    QgCanvasState &s, QWidget *w);
+
 /* LoD completion may be reported by a worker thread after Qt's last paint.
  * Marshal the controller's frame request back to the canvas event loop so a
  * completed payload cannot remain hidden behind its startup proxy until the
@@ -217,6 +220,13 @@ qgcanvas_obol_frame_requested(void *user_data, const char *UNUSED(reason))
      * Its Coin traversal still owns the controller's hard abort deadline. */
 
     QMetaObject::invokeMethod(w, [s, w, softwareBackend]() {
+	/* Frame callbacks are the producer-to-host wake edge.  Service one
+	 * bounded provider slice directly on the widget thread and explicitly
+	 * arm the continuing timer; relying on repaint() to do both is not
+	 * sufficient when Qt suppresses a paint for an obscured/initializing
+	 * widget or while a parent temporarily disables updates. */
+	if (s->obol && s->obol->hasProgressiveWorkPending())
+	    (void)s->obol->advanceProgressiveWork(NULL, NULL);
 	/* update() is only a hint and may be folded into the paint whose
 	 * completion raised this request.  A refinement barrier is a stronger
 	 * contract: the controller cannot admit its successor cut until a new
@@ -228,6 +238,7 @@ qgcanvas_obol_frame_requested(void *user_data, const char *UNUSED(reason))
 	    w->repaint();
 	else
 	    w->update();
+	qgcanvas_queue_obol_progressive_update(*s, w);
     }, Qt::QueuedConnection);
 }
 

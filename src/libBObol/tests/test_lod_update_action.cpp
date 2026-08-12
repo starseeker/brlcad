@@ -8197,7 +8197,10 @@ test_view_controller_compact_append_preserves_submission_cursor(void)
 	 * controller's authoritative coverage proof.  It is possible for older
 	 * structural ranges to have missed an earlier scan while the registry
 	 * was growing.  The delta is followed by one bounded full-inventory pass
-	 * before the controller may report idle.
+	 * before the controller may report idle.  Useful structural coverage and
+	 * budgeted mesh quality are deliberately separate passes: this fixture is
+	 * subpixel, so the second pass validates the source requests without
+	 * launching provider work.
 	 */
 	size_t fullRescanVisited = 0;
 	for (size_t attempt = 0;
@@ -8215,11 +8218,11 @@ test_view_controller_compact_append_preserves_submission_cursor(void)
 	    initialCount + deltaCount + 1;
 	if (!ret &&
 	    (controller.hasPendingLodSubmissions() ||
-	     fullRescanVisited != completeInventory)) {
-	    printf("FAIL: compact append delta did not finish one complete "
-		   "coverage rescan (visited=%zu expected=%zu pending=%d "
+	     fullRescanVisited != completeInventory * 2)) {
+	    printf("FAIL: compact append delta did not finish distinct "
+		   "coverage and quality rescans (visited=%zu expected=%zu pending=%d "
 		   "diagnostics=%s)\n",
-		   fullRescanVisited, completeInventory,
+		   fullRescanVisited, completeInventory * 2,
 		   controller.hasPendingLodSubmissions() ? 1 : 0,
 		   controller.getLastLodDiagnostics().getString());
 	    ret = 1;
@@ -10614,8 +10617,15 @@ test_allocated_presentation_allows_resident_prefetch(void)
 	prefetchSubmit.setViewInfo(&view);
 	prefetchSubmit.setViewVolume(&volume, 0.05f);
 	prefetchSubmit.setGeneration(service.beginGeneration());
-	prefetchSubmit.setRevisions(31, 41);
-	prefetchSubmit.setAllowResidentPrefetch(TRUE);
+		prefetchSubmit.setRevisions(31, 41);
+		prefetchSubmit.setAllowResidentPrefetch(TRUE);
+		/* Exercise the controller's retained minimax allocation route.  Its
+		 * presentation decision must not suppress independent immutable suffix
+		 * residency when zoom demand exceeds the current prefix. */
+		prefetchSubmit.setRetainedSceneUpgradeCostBudget(0);
+		/* Active zoom must publish a bounded resident band instead of hiding one
+		 * monolithic jump to the final pixel-demanded prefix. */
+	prefetchSubmit.setTransitionLimitedRefinement(TRUE);
 	prefetchSubmit.setRefinementCostBudget(0);
 	prefetchSubmit.apply(root);
 	std::vector<BObolLodResult> prefetchResults;
@@ -10628,11 +10638,16 @@ test_allocated_presentation_allows_resident_prefetch(void)
 		prefetchResults[0].request.requestedCut ||
 	    prefetchResults[0].geometry.activeCut != presentationCut ||
 	    !prefetchResults[0].progressiveMesh ||
+	    prefetchResults[0].residentCut <= presentationCut ||
+	    prefetchResults[0].residentCut >=
+		prefetchResults[0].request.requestedCut ||
 	    !prefetchResults[0].progressiveMesh->canDrawCut(
+		prefetchResults[0].residentCut) ||
+	    prefetchResults[0].progressiveMesh->canDrawCut(
 		prefetchResults[0].request.requestedCut) ||
 	    !viewState.applySourceResult(source, prefetchResults[0])) {
-	    printf("FAIL: allocated presentation cut suppressed quiet "
-		   "resident suffix prefetch (tasks=%u results=%zu)\n",
+	    printf("FAIL: allocated presentation cut suppressed bounded "
+		   "interactive resident suffix prefetch (tasks=%u results=%zu)\n",
 		   prefetchSubmit.getSubmittedTaskCount(),
 		   prefetchResults.size());
 	    ret = 1;
@@ -10645,6 +10660,37 @@ test_allocated_presentation_allows_resident_prefetch(void)
 		       "presentation cut\n");
 		ret = 1;
 	    }
+		}
+	    }
+
+	    if (!ret) {
+		/* Quiet convergence may now fetch the remaining demanded suffix in
+		 * one task, still without changing the allocated draw cut. */
+		SoBRLMeshLodSubmitAction completePrefetch;
+		completePrefetch.setService(&service);
+		completePrefetch.setViewLodState(&viewState);
+		completePrefetch.setDatabase(dbip,
+		    "db://allocated-prefetch-test", 2026);
+		completePrefetch.setViewInfo(&view);
+		completePrefetch.setViewVolume(&volume, 0.05f);
+		completePrefetch.setGeneration(service.beginGeneration());
+		completePrefetch.setRevisions(31, 41);
+		completePrefetch.setAllowResidentPrefetch(TRUE);
+		completePrefetch.setRefinementCostBudget(0);
+		completePrefetch.apply(root);
+		std::vector<BObolLodResult> completeResults;
+		if (completePrefetch.getSubmittedTaskCount() != 1 ||
+		    wait_for_service(service) ||
+		    service.drainResults(completeResults) != 1 ||
+		    completeResults.size() != 1 ||
+		    completeResults[0].geometry.activeCut != presentationCut ||
+		    !completeResults[0].progressiveMesh ||
+		    !completeResults[0].progressiveMesh->canDrawCut(
+			completeResults[0].request.requestedCut) ||
+		    !viewState.applySourceResult(source, completeResults[0])) {
+		    printf("FAIL: quiet resident prefetch did not complete the "
+			   "pixel-demanded suffix\n");
+		    ret = 1;
 		}
 	    }
 

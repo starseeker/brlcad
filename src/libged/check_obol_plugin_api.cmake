@@ -1,6 +1,8 @@
 # Verify the deliberately opt-in Obol extension separately from GED's
 # renderer-neutral draw/view API.
 
+cmake_policy(SET CMP0007 NEW)
+
 if(NOT DEFINED SOURCE_ROOT OR NOT DEFINED MANIFEST)
   message(FATAL_ERROR
     "check_obol_plugin_api.cmake requires SOURCE_ROOT and MANIFEST")

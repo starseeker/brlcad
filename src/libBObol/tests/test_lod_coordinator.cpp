@@ -1090,6 +1090,21 @@ test_convergence_policy(void)
 	return 1;
     }
 
+    input = baseInput();
+    input.viewEpoch.set(70);
+    input.visibleTargetCount = 1;
+    input.activePayloadCount = 1;
+    input.satisfiedPayloadCount = 1;
+    input.presentationLimited = true;
+    decision = policy.evaluate(input);
+    if (!decision.viewReady || decision.memoryLimited ||
+	!decision.performanceLimited ||
+	decision.phase != Policy::Phase::IDLE) {
+	std::fprintf(stderr,
+	    "FAIL: presentation-limited terminal convergence\n");
+	return 1;
+    }
+
     input.failedSourceCount = 1;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::CONVERROR) {
@@ -1893,7 +1908,8 @@ test_view_demand_policy(void)
     if (policy.scaleDemandRefreshActive() || policy.viewScaleChanging() ||
 	policy.interactionScaleChanged() || policy.qualityProbeActive() ||
 	policy.qualityProbePending() || policy.qualityProbePresented() ||
-	policy.qualityBudgetActive() ||
+	policy.qualityBudgetActive() || policy.qualityCeilingLimit() != -1 ||
+	policy.qualityCeilingFailedWork() != 0 ||
 	policy.scaleChangingInteraction(true)) {
 	std::fprintf(stderr, "FAIL: initial view-demand state\n");
 	return 1;
@@ -1953,8 +1969,9 @@ test_view_demand_policy(void)
 	return 1;
     }
 
-    policy.noteQualityMiss(6);
-    if (policy.qualityFloor() != 6) {
+    policy.noteQualityMiss(6, 1000);
+    if (policy.qualityFloor() != 6 || policy.qualityCeilingLimit() != 6 ||
+	policy.qualityCeilingFailedWork() != 1000) {
 	std::fprintf(stderr, "FAIL: slow quality floor correction\n");
 	return 1;
     }
@@ -1969,16 +1986,40 @@ test_view_demand_policy(void)
     probeInput.activeMaximum = 15;
     probeInput.presentationCeiling = 6;
     probe = policy.beginQualityProbe(probeInput);
-    if (!probe.begin || probe.progressiveCeiling != 7) {
-	std::fprintf(stderr, "FAIL: quality probe bypassed presented cut\n");
+    if (!probe.consumed || probe.begin ||
+	probe.progressiveCeiling != 7 || policy.qualityProbeActive()) {
+	std::fprintf(stderr,
+	    "FAIL: known-bad quality population was reprobed\n");
 	return 1;
     }
 
-    policy.seedQualityFloor(9);
-    policy.endGesture();
-    policy.beginGesture(false);
+    /* A cut is known-bad only for the population which missed its deadline.
+     * Spatial culling after a zoom can make the same immutable prefix much
+     * cheaper, in which case one deadline-bounded retry is valid. */
+    if (!policy.rearmAfterResidentGrowth(true)) {
+	std::fprintf(stderr, "FAIL: cheaper-view quality rearm\n");
+	return 1;
+    }
+    probeInput.presentedWork = 400;
+    probe = policy.beginQualityProbe(probeInput);
+    if (!probe.consumed || !probe.begin ||
+	probe.progressiveCeiling != 7 ||
+	policy.qualityCeilingLimit() != -1 ||
+	policy.qualityCeilingFailedWork() != 0) {
+	std::fprintf(stderr, "FAIL: cheaper visible population stayed capped\n");
+	return 1;
+    }
+
+    if (!policy.finishQuietInteraction() ||
+	policy.qualityCeilingLimit() != -1 ||
+	policy.qualityCeilingFailedWork() != 0) {
+	std::fprintf(stderr, "FAIL: quiet epoch retained motion miss\n");
+	return 1;
+    }
+    policy.beginGesture(true);
     (void)policy.observeCameraChange(true, 10000000ULL);
-    policy.beginCameraInteraction(false, true);
+    policy.beginCameraInteraction(true, true);
+    policy.seedQualityFloor(9);
     if (!policy.noteMotionFrameSettled()) {
 	std::fprintf(stderr, "FAIL: quality-floor probe was not armed\n");
 	return 1;
@@ -2074,7 +2115,8 @@ test_view_demand_policy(void)
     }
     policy.reset();
     if (policy.scaleDemandRefreshActive() || policy.viewScaleChanging() ||
-	policy.interactionScaleChanged() || policy.qualityBudgetActive()) {
+	policy.interactionScaleChanged() || policy.qualityBudgetActive() ||
+	policy.qualityCeilingLimit() != -1) {
 	std::fprintf(stderr, "FAIL: view-demand reset\n");
 	return 1;
     }

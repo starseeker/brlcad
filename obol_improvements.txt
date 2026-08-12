@@ -559,6 +559,27 @@ Behavior that must be preserved:
 * early aggregate extent followed by leaf extents and meshes;
 * cancellation without exposing partially mutated Coin state.
 
+Additional librt hardening needed:
+
+* Add an immutable database-directory generation/lease API.  Progressive
+  realization currently uses librt's established db_clone_dbi additional-client
+  contract, as rt_i and LoD database leases do.  That avoids an O(database
+  object count) db_open/db_dirbuild before the first coverage box and keeps
+  file reads serialized, while draw/source revisions reject superseded
+  results.  It does not, however, give a worker a distinct directory generation
+  if an editor mutates the live db_i concurrently.
+* The new librt API should retain the mapped file plus an immutable directory,
+  material, unit, filepath, and combination-instance lookup snapshot in O(1)
+  or O(requested closure) setup time.  A mutation should publish a successor
+  generation rather than changing records visible to existing readers.
+* Do not emulate this in libBObol by shallow-copying struct directory or db_i
+  internals.  Directory names, in-memory records, freelists, callbacks, and
+  mapped-file ownership make that unsafe without librt participation.
+* Until that API exists, editing a source must cancel its realization and the
+  immutable source/input revision stamp must continue to reject every stale
+  streamed merge and final adoption.  Keep erase/edit-during-realization in the
+  graphical and ThreadSanitizer qualification matrix.
+
 
 Priority 4: Restore a renderer-neutral public GED boundary
 ----------------------------------------------------------

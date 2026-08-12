@@ -1,19 +1,19 @@
-/*                    D R A W _ S C E N E . H
+/*         G E D _ D R A W _ S C E N E _ P R I V A T E . H
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
  * the U.S. Army Research Laboratory.
  */
-/** @file ged/draw_scene.h
+/** @file ged_draw_scene_private.h
  *
- * Lightweight GED draw-scene handles.
- *
- * These handles identify GED draw-scene objects without exposing the concrete
- * Obol/Coin or transitional GED-internal storage used to realize them.
+ * Private, lightweight handles for libged draw-scene objects.  The handles
+ * keep concrete retained-render storage out of renderer-neutral public GED
+ * records while allowing the draw registry and its backend adapter to share
+ * identity without copying geometry.
  */
 
-#ifndef GED_DRAW_SCENE_H
-#define GED_DRAW_SCENE_H
+#ifndef GED_DRAW_SCENE_PRIVATE_H
+#define GED_DRAW_SCENE_PRIVATE_H
 
 #include "common.h"
 
@@ -78,4 +78,4 @@ ged_draw_scene_handle_backend(ged_draw_scene_handle ref)
     return ref.opaque ? ref.backend : (unsigned int)GED_DRAW_SCENE_BACKEND_NONE;
 }
 
-#endif /* GED_DRAW_SCENE_H */
+#endif /* GED_DRAW_SCENE_PRIVATE_H */

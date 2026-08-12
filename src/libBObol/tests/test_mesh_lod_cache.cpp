@@ -44,6 +44,32 @@ fastf_equal(fastf_t a, fastf_t b)
     return std::fabs(a - b) <= SMALL_FASTF;
 }
 
+static fastf_t
+mesh_pop_expected_snap(fastf_t value, fastf_t minimum, fastf_t maximum,
+	uint8_t bits)
+{
+    if (!(maximum > minimum) || !bits)
+	return value;
+    const double mask = std::ldexp(1.0,
+	BOBOL_MESH_LOD_QUANTIZATION_BITS -
+	    std::min<int>(BOBOL_MESH_LOD_QUANTIZATION_BITS, bits));
+    const double scaled = std::max(0.0, std::min(65535.0,
+	(static_cast<double>(value) - minimum) /
+	    (static_cast<double>(maximum) - minimum) * 65535.0));
+    const double code = std::floor(scaled);
+    const double cell = std::floor(code / mask);
+    const double snapped = std::min(65535.0, (cell + 0.5) * mask);
+    return static_cast<fastf_t>(
+	(snapped / 65535.0) * (maximum - minimum) + minimum);
+}
+
+static int
+mesh_pop_points_equal(const point_t a, const point_t b)
+{
+    return fastf_equal(a[X], b[X]) && fastf_equal(a[Y], b[Y]) &&
+	fastf_equal(a[Z], b[Z]);
+}
+
 struct mesh_lod_suffix_test_data {
     const struct BObolMeshLodHierarchyInfo *hierarchy = NULL;
     int nextCut = -1;
@@ -608,6 +634,100 @@ main(int argc, char *argv[])
 	    terminal.point_count != static_cast<uint64_t>(vertexCount) ||
 	    terminal.object_error > 0.0) {
 	    printf("FAIL: mesh lod admissible cut schedule contract\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	/* Face activation and vertex presentation are one contract: a face may
+	 * remain absent only while at least two of its vertices share a floored
+	 * 16-bit prefix cell.  In particular, exact cell boundaries (including
+	 * the domain minimum used throughout this grid) must not be snapped by a
+	 * different floor/ceil rule. */
+	for (int cut = lodHierarchy.min_cut;
+		cut <= lodHierarchy.max_cut; ++cut) {
+	    struct BObolMeshLodData cutData;
+	    if (bobol_mesh_lod_load_cut(lod, cut, 0) != cut ||
+		!bobol_mesh_lod_data_get(lod, &cutData) ||
+		cutData.face_count != lodHierarchy.cuts[cut].face_count ||
+		cutData.point_count != lodHierarchy.cuts[cut].point_count) {
+		printf("FAIL: PoP quantization contract cut %d unavailable\n", cut);
+		ret = 1;
+		goto cleanup;
+	    }
+	    for (size_t pointIndex = 0;
+		    pointIndex < cutData.point_count; ++pointIndex) {
+		for (int axis = 0; axis < 3; ++axis) {
+		    const fastf_t expected = cut == lodHierarchy.max_cut ?
+			cutData.points_orig[pointIndex][axis] :
+			mesh_pop_expected_snap(
+			    cutData.points_orig[pointIndex][axis],
+			    lodHierarchy.quantization_min[axis],
+			    lodHierarchy.quantization_max[axis],
+			    lodHierarchy.cuts[cut].quantization_bits[axis]);
+		    if (!fastf_equal(cutData.points[pointIndex][axis], expected)) {
+			printf("FAIL: PoP displayed coordinate disagrees with "
+			       "activation prefix (cut=%d point=%zu axis=%d)\n",
+			       cut, pointIndex, axis);
+			ret = 1;
+			goto cleanup;
+		    }
+		}
+	    }
+	    if (cut == lodHierarchy.max_cut)
+		continue;
+	    for (size_t faceIndex = 0; faceIndex < cutData.face_count;
+		    ++faceIndex) {
+		const point_t &a = cutData.points[cutData.faces[3 * faceIndex]];
+		const point_t &b = cutData.points[cutData.faces[3 * faceIndex + 1]];
+		const point_t &c = cutData.points[cutData.faces[3 * faceIndex + 2]];
+		if (mesh_pop_points_equal(a, b) ||
+		    mesh_pop_points_equal(b, c) ||
+		    mesh_pop_points_equal(a, c)) {
+		    printf("FAIL: PoP activated a face before its prefix vertices "
+			   "were distinct (cut=%d face=%zu)\n", cut, faceIndex);
+		    ret = 1;
+		    goto cleanup;
+		}
+	    }
+	}
+
+	bool validClusters = lodHierarchy.cluster_grid_resolution ==
+		BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION &&
+	    lodHierarchy.cluster_count == BOBOL_MESH_LOD_CLUSTER_COUNT &&
+	    lodHierarchy.clusters != NULL;
+	uint64_t clusteredIndices = 0;
+	std::vector<uint64_t> cutIndices(lodHierarchy.cut_count, 0);
+	for (uint32_t cluster = 0; validClusters &&
+		cluster < lodHierarchy.cluster_count; ++cluster) {
+	    const BObolMeshLodClusterInfo &cell =
+		lodHierarchy.clusters[cluster];
+	    if (cell.range_count && !cell.ranges)
+		validClusters = false;
+	    for (uint32_t rangeIndex = 0; validClusters &&
+		    rangeIndex < cell.range_count; ++rangeIndex) {
+		const BObolMeshLodClusterRange &range =
+		    cell.ranges[rangeIndex];
+		if (range.activation_cut >= lodHierarchy.cut_count ||
+		    range.first_index % 3 || range.index_count < 3 ||
+		    range.index_count % 3)
+		    validClusters = false;
+		else
+		    cutIndices[range.activation_cut] += range.index_count;
+		clusteredIndices += range.index_count;
+	    }
+	}
+	uint64_t priorCutIndices = 0;
+	for (uint32_t cut = 0; validClusters &&
+		cut < lodHierarchy.cut_count; ++cut) {
+	    const uint64_t cumulative =
+		lodHierarchy.cuts[cut].face_count * 3;
+	    if (cutIndices[cut] != cumulative - priorCutIndices)
+		validClusters = false;
+	    priorCutIndices = cumulative;
+	}
+	if (!validClusters || clusteredIndices !=
+		static_cast<uint64_t>(faceCount) * 3) {
+	    printf("FAIL: mesh lod clustered range contract\n");
 	    ret = 1;
 	    goto cleanup;
 	}

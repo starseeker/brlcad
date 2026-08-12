@@ -236,6 +236,9 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     viewVolume(),
     useViewVolume(FALSE),
     targetPixelError(1.0f),
+    pointProxyPixelThreshold(1.0f),
+    structuralCoverageOnly(FALSE),
+    firstMeshMinimumVisualFootprint(0.0f),
     generation(0),
     viewRevision(0),
     policyRevision(0),
@@ -372,6 +375,26 @@ SoBRLMeshLodSubmitAction::setViewVolume(const SbViewVolume *volume,
     this->targetPixelError =
 	(std::isfinite(newTargetPixelError) && newTargetPixelError > 0.0f) ?
 	newTargetPixelError : 1.0f;
+}
+
+void
+SoBRLMeshLodSubmitAction::setPointProxyPixelThreshold(float pixels)
+{
+    this->pointProxyPixelThreshold =
+	std::isfinite(pixels) && pixels > 0.0f ? pixels : 1.0f;
+}
+
+void
+SoBRLMeshLodSubmitAction::setStructuralCoverageOnly(SbBool coverageOnly)
+{
+    this->structuralCoverageOnly = coverageOnly ? TRUE : FALSE;
+}
+
+void
+SoBRLMeshLodSubmitAction::setFirstMeshMinimumVisualFootprint(float pixels)
+{
+    this->firstMeshMinimumVisualFootprint =
+	std::isfinite(pixels) && pixels > 0.0f ? pixels : 0.0f;
 }
 
 void
@@ -605,6 +628,33 @@ mesh_lod_next_population_cut(
     return preferredCut;
 }
 
+/* Active zoom has two independent obligations: keep the current frame inside
+ * its measured presentation allowance, and make newly demanded data resident
+ * soon enough for a later quality frame to use it.  Loading the complete
+ * requested suffix in one task satisfies the second obligation eventually,
+ * but a single large asset (Lucy is the canonical example) may then publish
+ * nothing for several seconds.  Advance residency by one population-bearing
+ * band while the quality-frame state machine is active.  Quantization-only
+ * cuts are folded into that band, so this is bounded by actual array growth
+ * rather than by an arbitrary ordinal step.
+ *
+ * Quiet convergence deliberately does not use this helper: once input has
+ * stopped, a direct admitted prefetch avoids whole-scene level walking. */
+static int
+mesh_lod_bounded_resident_prefetch_cut(
+    const BObolLodProgressiveMeshPtr &progressiveMesh,
+    int requestedCut, SbBool transitionLimited)
+{
+    if (!progressiveMesh || requestedCut < 0 || !transitionLimited)
+	return requestedCut;
+    const int residentCut = progressiveMesh->residentCut();
+    if (residentCut < progressiveMesh->minimumCut() ||
+	requestedCut <= residentCut)
+	return requestedCut;
+    return mesh_lod_next_population_cut(
+	progressiveMesh, residentCut, requestedCut);
+}
+
 SbBool
 SoBRLMeshLodSubmitAction::reserveRefinementCost(
     const BObolLodProgressiveMeshPtr &progressiveMesh,
@@ -794,16 +844,15 @@ SoBRLMeshLodSubmitAction::reserveInitialCost(
      * multi-hundred-millisecond upload frame.
      *
      * Mark the blocked wave so the controller presents and calibrates what it
-     * admitted, then resumes with a larger measured allowance.  A controller
-     * may explicitly preserve the minimum visible mesh floor; bounded entry
-     * windows and service capacity still prevent an all-at-once cliff.
+     * admitted, then resumes with a larger measured allowance.  Preserving an
+     * already active mesh never grants permission to create a new mesh beyond
+     * this budget.
      */
     if (this->refinementCostBudgetUsed > this->refinementCostBudget ||
 	reserveCost >
 	    this->refinementCostBudget - this->refinementCostBudgetUsed) {
 	this->refinementBudgetBlockedCount++;
-	if (!this->preserveMeshCoverage)
-	    return FALSE;
+	return FALSE;
     }
 
     this->refinementCostBudgetUsed =
@@ -829,8 +878,7 @@ SoBRLMeshLodSubmitAction::reserveInitialCost(
 	 cost >
 	    this->refinementCostBudget - this->refinementCostBudgetUsed)) {
 	this->refinementBudgetBlockedCount++;
-	if (!this->preserveMeshCoverage)
-	    return FALSE;
+	return FALSE;
     }
     this->refinementCostBudgetUsed =
 	cost > SIZE_MAX - this->refinementCostBudgetUsed ?
@@ -2073,7 +2121,26 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->viewState ?
 		    submitAction->viewState->findCadForOccurrence(
 			source, summary.sourceInstanceKey) : NULL;
-		candidate.needsCoverage = active == NULL;
+		/* The standing AABB participates in SoCADAssembly's aggregate point
+		 * channel.  At the renderer's conservative new-collapse boundary it is
+		 * already pixel exact for this view, so class it as coverage rather than
+		 * eagerly opening a distinct PoP hierarchy which cannot change a pixel.
+		 * Selection/highlight always promotes the real mesh path immediately. */
+		const bool pressureDeferredCoverage = !active &&
+		    !summary.meshGeometry && !summary.selected &&
+		    !summary.highlighted &&
+		    submitAction->firstMeshMinimumVisualFootprint > 0.0f &&
+		    candidate.visualFootprint <
+			submitAction->firstMeshMinimumVisualFootprint;
+		const bool structuralPointCoverage = !active &&
+		    !summary.meshGeometry && !summary.selected &&
+		    !summary.highlighted &&
+		    (submitAction->structuralCoverageOnly ||
+		     pressureDeferredCoverage ||
+		     (std::isfinite(candidate.projectedPixels) &&
+		      candidate.projectedPixels <=
+			submitAction->pointProxyPixelThreshold * 0.75f));
+		candidate.needsCoverage = !active && !structuralPointCoverage;
 		candidate.projectedErrorPixels = active &&
 		    active->activeCut >= 0 && active->progressiveMesh ?
 		    active->progressiveMesh->projectedErrorAtCut(
@@ -2344,6 +2411,27 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			source, request.objectPath) : NULL;
 	    }
 	    submitAction->visibleMeshCount++;
+	    const double projectedVisualFootprint = std::max(
+		std::sqrt(std::max(0.0,
+		    static_cast<double>(request.projectedPixelArea))),
+		std::max(
+		    static_cast<double>(request.projectedPixelPerimeter) * 0.25,
+		    static_cast<double>(request.projectedPixelDiameter) * 0.25));
+	    const SbBool pressureDeferredCoverage =
+		!activePayload && !summary.meshGeometry &&
+		!summary.selected && !summary.highlighted &&
+		submitAction->firstMeshMinimumVisualFootprint > 0.0f &&
+		projectedVisualFootprint <
+		    submitAction->firstMeshMinimumVisualFootprint ? TRUE : FALSE;
+	    const SbBool structuralPointCoverage =
+		!activePayload && !summary.meshGeometry &&
+		!summary.selected && !summary.highlighted &&
+		(submitAction->structuralCoverageOnly ||
+		 pressureDeferredCoverage ||
+		 (std::isfinite(request.projectedPixelDiameter) &&
+		  request.projectedPixelDiameter <=
+		    submitAction->pointProxyPixelThreshold * 0.75f)) ?
+		TRUE : FALSE;
 	    if (submitAction->useForcedCut)
 		request.requestedCut = submitAction->forcedCut;
 	else if (activePayload)
@@ -2362,8 +2450,24 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		submitAction->viewState &&
 		submitAction->viewState->
 		    hasCadOccurrenceTerminalFailure(source, request);
-	    if (activePayload || terminalFailure)
+	    if (activePayload || terminalFailure || structuralPointCoverage)
 		submitAction->coveredVisibleMeshCount++;
+	    if (structuralPointCoverage) {
+		/* Retain the source-mesh request on the compact occurrence.  A later
+		 * zoom, selection, or highlight makes this same record multi-pixel and
+		 * the ordinary view-demand pass promotes it without rediscovery. */
+		if (pressureDeferredCoverage &&
+		    !submitAction->structuralCoverageOnly) {
+		    /* This is a deliberate scene-pressure limit, not pixel-exact
+		     * subpixel coverage.  Preserve a convergence witness so the HUD
+		     * reports a stable performance-limited presentation rather than
+		     * falsely claiming that every requested mesh was realized. */
+		    submitAction->pendingRetainedRefinementCount++;
+		    submitAction->refinementBudgetBlockedCount++;
+		}
+		submitAction->skippedMeshCount++;
+		continue;
+	    }
 	    if (terminalFailure) {
 		/* The source's structural occurrence remains the useful fallback.
 		 * A different demand epoch or cut is intentionally not suppressed. */
@@ -2394,8 +2498,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		activePayload->progressiveMesh->minimumCut();
 	    const int allocatedCut = mesh_lod_cad_allocated_cut(
 		activePayload, request);
+	    const SbBool stampedAllocation =
+		allocatedCut >= minimumCut ? TRUE : FALSE;
 	    int desiredCut = request.requestedCut;
-	    if (allocatedCut >= minimumCut)
+	    if (stampedAllocation)
 		desiredCut = std::min(desiredCut, allocatedCut);
 	    else
 		desiredCut = mesh_lod_error_ceiling_cut(
@@ -2409,7 +2515,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		desiredCut < request.requestedCut ? TRUE : FALSE;
 	    const int availableCut = std::max(activePayload->activeCut,
 		activePayload->residentCut);
-	    if (desiredCut > availableCut)
+	    /* desiredCut is the scene-budgeted presentation target.  Residency is
+	     * driven by the independent physical pixel demand: a stamped allocation
+	     * may deliberately clamp desiredCut to the current draw cut without
+	     * making the missing immutable suffix unnecessary. */
+	    if (request.requestedCut > availableCut)
 		submitAction->pendingResidentRefinementCount++;
 	    const int targetCut = std::max(minimumCut,
 		std::min(desiredCut, availableCut));
@@ -2432,6 +2542,25 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    admittedCounts = activePayload->counts;
 		    admittedCost = bobol_lod_render_cost_units(
 			admittedCounts, request.drawMode, 1);
+		} else if (stampedAllocation) {
+		    /* The controller's occurrence stamp is the result of one
+		     * complete scene allocation in the renderer's exact view-local
+		     * currency.  Spatially clustered leaves may submit only a small
+		     * fraction of their global PoP prefix, so recharging the stamp
+		     * here with whole-leaf counts can reject a cut which the global
+		     * allocation already proved fits.  Resolve only residency here;
+		     * the allocation transaction has already spent the budget. */
+		    for (int cut = targetCut; cut >= minimumCut; --cut) {
+			if (!activePayload->progressiveMesh->canDrawCut(cut))
+			    continue;
+			admittedCut = cut;
+			admittedCounts = bobol_lod_progressive_counts(
+			    activePayload->progressiveMesh, cut,
+			    activePayload->hasNormals);
+			admittedCost = bobol_lod_render_cost_units(
+			    admittedCounts, request.drawMode, 1);
+			break;
+		    }
 		} else {
 		    for (int cut = targetCut; cut >= minimumCut; --cut) {
 			if (!activePayload->progressiveMesh->canDrawCut(cut))
@@ -2452,8 +2581,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			break;
 		    }
 		}
-		const size_t upgradeCost = admittedCost > minimumCost ?
+	    const size_t upgradeCost = admittedCost > minimumCost ?
 		    admittedCost - minimumCost : 0;
+	    const size_t chargedUpgradeCost = stampedAllocation ? 0 :
+		upgradeCost;
 		const char *retainedTrace = getenv("BOBOL_LOD_TRACE_OBJECT");
 		if (retainedTrace && retainedTrace[0] &&
 		    (strstr(request.objectName.getString(), retainedTrace) ||
@@ -2474,17 +2605,17 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			   remainingUpgrade,
 			   submitAction->retainedSceneUpgradeCostBudgetUsed,
 			   submitAction->retainedSceneUpgradeCostBudget);
-		if (upgradeCost > remainingUpgrade) {
-		    submitAction->pendingRetainedRefinementCount++;
-		    submitAction->refinementBudgetBlockedCount++;
-		    submitAction->retainedAdmissionBlockedCount++;
-		} else {
-		    submitAction->retainedSceneUpgradeCostBudgetUsed =
-			upgradeCost > SIZE_MAX -
-				submitAction->retainedSceneUpgradeCostBudgetUsed ?
+	    if (chargedUpgradeCost > remainingUpgrade) {
+		submitAction->pendingRetainedRefinementCount++;
+		submitAction->refinementBudgetBlockedCount++;
+		submitAction->retainedAdmissionBlockedCount++;
+	    } else {
+		submitAction->retainedSceneUpgradeCostBudgetUsed =
+		    chargedUpgradeCost > SIZE_MAX -
+			submitAction->retainedSceneUpgradeCostBudgetUsed ?
 			    SIZE_MAX :
 			    submitAction->retainedSceneUpgradeCostBudgetUsed +
-				upgradeCost;
+				chargedUpgradeCost;
 		    submitAction->retainedRecoveredOccurrences.insert(
 			request.occurrenceKey.getString());
 		    const int retainedRequestedCut = std::max(
@@ -2520,8 +2651,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			mesh_lod_trace_projected_request(
 			    request, summary.localBounds, localToRoot,
 			    priorCut);
-			submitAction->skippedMeshCount++;
-			continue;
+			/* Retained allocation owns the draw cut, not immutable
+			 * residency.  When the allocated/pixel-demanded cut is still
+			 * beyond the resident prefix, continue into the ordinary provider
+			 * path so active zoom can fetch its next bounded population band.
+			 * Returning here made minimax admission suppress independent
+			 * prefetch; whether a large mesh refined during a gesture then
+			 * depended on a quality-probe timing race. */
+			if (!(submitAction->allowResidentPrefetch &&
+			      request.requestedCut > availableCut)) {
+			    submitAction->skippedMeshCount++;
+			    continue;
+			}
 		    }
 		}
 	    }
@@ -2716,9 +2857,19 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		 * current projected demand is still the input to the subsequent
 		 * scene-wide importance allocation.  Updating this metadata changes
 		 * neither the immutable mesh nor the prepared cut.
+		 *
+		 * Coverage-first passes also enter this route deliberately: an
+		 * already covered early occurrence must not consume draw or resident
+		 * growth before later leaves receive their minimum mesh.  In that
+		 * case the richer demand is deferred work, not a satisfied skip.  Keep
+		 * it on the retained frontier so the controller starts one quality
+		 * pass after the complete coverage census.  Omitting this witness let
+		 * a single large cold mesh publish its first partial prefix and then
+		 * report Stable until an unrelated camera event restarted submission.
 		 */
 		mesh_lod_retarget_cad_demand_if_changed(
 		    submitAction->viewState, activePayload, request);
+		submitAction->pendingRetainedRefinementCount++;
 		submitAction->skippedMeshCount++;
 		continue;
 	    }
@@ -2894,8 +3045,17 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    mesh_lod_retarget_cad_demand_if_changed(
 			submitAction->viewState, activePayload, request);
 		    submitAction->pendingRetainedRefinementCount++;
-		    submitAction->skippedMeshCount++;
-		    continue;
+		    /* A renderer ceiling or finite draw allowance may reject an
+		     * already-resident richer presentation.  It has no authority over
+		     * immutable residency: active zoom must still fetch the next bounded
+		     * suffix when the physical pixel target is not drawable yet. */
+		    if (!submitAction->allowResidentPrefetch ||
+			!activePayload->progressiveMesh ||
+			activePayload->progressiveMesh->canDrawCut(
+			    request.requestedCut)) {
+			submitAction->skippedMeshCount++;
+			continue;
+		    }
 		}
 	    }
 	    if (submitAction->reset == 0 && activePayload &&
@@ -2961,7 +3121,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    activePayload->progressiveMesh->canDrawCut(
 			request.requestedCut);
 		if (submitAction->allowResidentPrefetch && !requestedResident)
-		    providerDeliveryCut = request.requestedCut;
+		    providerDeliveryCut =
+			mesh_lod_bounded_resident_prefetch_cut(
+			    activePayload->progressiveMesh,
+			    request.requestedCut,
+			    submitAction->transitionLimitedRefinement);
 		else if (providerPresentationCut > activePayload->activeCut)
 		    providerDeliveryCut = providerPresentationCut;
 		else {
@@ -3255,9 +3419,14 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    mesh_lod_retarget_cad_demand_if_changed(
 		submitAction->viewState, activePayload, request);
 	    submitAction->pendingRetainedRefinementCount++;
-	    submitAction->skippedMeshCount++;
-	    source->doAction(action);
-	    return;
+	    if (!submitAction->allowResidentPrefetch ||
+		!activePayload->progressiveMesh ||
+		activePayload->progressiveMesh->canDrawCut(
+		    request.requestedCut)) {
+		submitAction->skippedMeshCount++;
+		source->doAction(action);
+		return;
+	    }
 	}
     }
     if (submitAction->reset == 0 && activePayload &&
@@ -3319,7 +3488,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    providerPresentationCut = activePayload->activeCut;
 	}
 	    providerDeliveryCut = submitAction->allowResidentPrefetch ?
-		request.requestedCut : providerPresentationCut;
+		mesh_lod_bounded_resident_prefetch_cut(
+		    activePayload->progressiveMesh,
+		    request.requestedCut,
+		    submitAction->transitionLimitedRefinement) :
+		providerPresentationCut;
 	}
 	if (!submitAction->useForcedCut && activePayload &&
 	    mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
@@ -3508,8 +3681,12 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 		viewPayload->activeCut, request.requestedCut,
 		request.viewRevision.value(), request.policyRevision.value());
 	    submitAction->pendingRetainedRefinementCount++;
-	    submitAction->skippedMeshCount++;
-	    return;
+	    if (!submitAction->allowResidentPrefetch ||
+		!viewPayload->progressiveMesh ||
+		viewPayload->progressiveMesh->canDrawCut(request.requestedCut)) {
+		submitAction->skippedMeshCount++;
+		return;
+	    }
 	}
     }
     if (submitAction->reset == 0 && viewPayload &&
@@ -3573,7 +3750,11 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    providerPresentationCut = viewPayload->activeCut;
 	}
 	    providerDeliveryCut = submitAction->allowResidentPrefetch ?
-		request.requestedCut : providerPresentationCut;
+		mesh_lod_bounded_resident_prefetch_cut(
+		    viewPayload->progressiveMesh,
+		    request.requestedCut,
+		    submitAction->transitionLimitedRefinement) :
+		providerPresentationCut;
 	}
 	if (!submitAction->useForcedCut && viewPayload &&
 	    mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&

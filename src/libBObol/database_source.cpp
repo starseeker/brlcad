@@ -14516,31 +14516,26 @@ SoBRLDatabaseSource::initializeDetachedRealizationDatabase(
 	return FALSE;
 
     /*
-     * A file-backed database is already the serialized input needed by
-     * realization.  Give the worker its own read-only directory/file handle
-     * instead of copying a multi-gigabyte draw closure into an in-memory DB
-     * before it may publish one box.  Scene/source revisions still gate every
-     * streamed merge and final adoption, so an edit that races this reader
-     * invalidates its result.  Independent FILE state also avoids sharing the
-     * live handle's seek cursor.
+     * A file-backed database already has an immutable directory index and a
+     * librt-managed, serialized I/O path.  Retain that database instance for
+     * the worker instead of reopening the file and rebuilding its complete
+     * directory before the first coverage box can be published.  The latter
+     * made every cold draw O(database object count), even when the requested
+     * closure was small, and dominated time-to-first-pixel on vehicle-scale
+     * databases.
      *
-     * In-memory databases and unusual file-open failures retain the closure
-     * snapshot fallback: there is no separately reopenable serialized source
-     * in those cases.
+     * db_clone_dbi() is librt's ordinary additional-client contract (also
+     * used by rt_i and the LoD database leases).  It retains the indexed
+     * database while db_read() serializes access to shared file state.  This
+     * detached source is read-only by contract; source/input revisions still
+     * reject streamed or final results if an edit supersedes the request.
+     *
+     * An in-memory database still needs a closure snapshot: its records can
+     * be replaced in place and there is no persistent file/index to retain.
      */
     struct db_i *database = NULL;
-    if (sourceDatabase->dbi_filename &&
-	sourceDatabase->dbi_filename[0]) {
-	database = db_open(sourceDatabase->dbi_filename, DB_OPEN_READONLY);
-	if (database && db_dirbuild(database) < 0) {
-	    db_close(database);
-	    database = NULL;
-	}
-	if (database) {
-	    (void)db_comb_instance_ids_set(database, 1);
-	    database->dbi_read_only = 1;
-	}
-    }
+    if (sourceDatabase->dbi_filename && sourceDatabase->dbi_filename[0])
+	database = db_clone_dbi(sourceDatabase, NULL);
     if (!database)
 	database = database_snapshot_create(sourceDatabase,
 	    this->path.getValue(), snapshotPathOut);
@@ -15929,8 +15924,11 @@ compact_stream_publish_parallel_coverage(
 	BObolDatabaseSourceRealizationCache *cache,
 	const char *treeName,
 	BObolCompactOccurrenceStream *stream,
-	uint32_t revision)
+	uint32_t revision,
+	bool *authoritativeStreamOut)
 {
+    if (authoritativeStreamOut)
+	*authoritativeStreamOut = false;
     if (!source || !cache || !treeName || !treeName[0] || !stream ||
 	!source->getDatabase() || source->lodBotThreshold.getValue() == 0)
 	return 0;
@@ -16014,6 +16012,36 @@ compact_stream_publish_parallel_coverage(
 			asset.coverageBounds, asset.proxyGeometryTransform);
 		    asset.coverageReady =
 			asset.coverageGeometry ? true : false;
+		    /*
+		     * A BoT's compact leaf contract needs identity, tight bounds and
+		     * counts; it does not need the full authored arrays.  Publish that
+		     * contract with the standing leaf box as soon as the v5 coverage
+		     * decoder has supplied those facts.  The view-LoD provider can then
+		     * open a warm PoP payload, or import/generate a cold one, only after
+		     * projection and the scene allocator have admitted this occurrence.
+		     *
+		     * The previous second phase unconditionally decoded every BoT before
+		     * any view decision.  On a 150k-part scene that made subpixel and
+		     * offscreen leaves consume the same CPU, cache I/O and resident-memory
+		     * path as prominent visible parts, preventing convergence even with a
+		     * theoretically warm cache.
+		     */
+		    if (asset.coverageReady && asset.lodEligible && asset.dp &&
+			asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
+			asset.sourceMeshRequest.clear();
+			asset.sourceMeshRequest.meshAssetPath =
+			    asset.assetPath.c_str();
+			asset.sourceMeshRequest.meshAssetName =
+			    asset.dp->d_namep ? asset.dp->d_namep : "";
+			asset.sourceMeshRequest.meshAssetBounds =
+			    asset.coverageBounds;
+			asset.sourceMeshRequest.bounds = asset.coverageBounds;
+			asset.sourceMeshRequest.faceCount = asset.faceCount;
+			asset.sourceMeshRequest.pointCount = asset.vertexCount;
+			asset.sourceMeshRequest.meshAssetTransform =
+			    SbMatrix::identity();
+			asset.sourceMeshReady = true;
+		    }
 		}
 		bobol_lod_working_set_release(coverageWorkingSet);
 	    });
@@ -16057,12 +16085,20 @@ compact_stream_publish_parallel_coverage(
 		    asset.proxyGeometryTransform;
 		occurrence.localTransform = item.occurrence.localTransform;
 		occurrence.lodBacked = asset.lodEligible ? TRUE : FALSE;
-		occurrence.sourceMeshRequestValid = FALSE;
+		occurrence.summary = item.occurrence.summary;
+		occurrence.sourceMeshRequestValid = asset.sourceMeshReady ?
+		    TRUE : FALSE;
+		if (occurrence.sourceMeshRequestValid) {
+		    occurrence.sourceMeshRequest = asset.sourceMeshRequest;
+		    compact_source_mesh_request_sync(
+			occurrence.sourceMeshRequest, occurrence.summary);
+		    compact_summary_lod_from_source_mesh_request(
+			occurrence.summary, occurrence.sourceMeshRequest);
+		}
 		occurrence.occurrenceIndex =
 		    item.occurrence.occurrenceIndex;
 		occurrence.booleanOperation =
 		    item.occurrence.booleanOperation;
-		occurrence.summary = item.occurrence.summary;
 		occurrence.summary.lodAvailable =
 		    asset.lodEligible ? TRUE : FALSE;
 		occurrence.summary.lodActiveCut =
@@ -16075,14 +16111,35 @@ compact_stream_publish_parallel_coverage(
 		    asset.coverageBounds.getMin();
 		occurrence.summary.lodBoundsMax =
 		    asset.coverageBounds.getMax();
+		/* Keep the already-synchronized lazy contract authoritative after
+		 * coverage metadata has filled the summary. */
+		if (occurrence.sourceMeshRequestValid) {
+		    occurrence.sourceMeshRequest.lodAvailable = 1;
+		    occurrence.sourceMeshRequest.lodActiveCut =
+			BOBOL_LOD_QUALITY_PROXY;
+		    occurrence.sourceMeshRequest.lodFaceCount =
+			asset.faceCount > UINT32_MAX ? UINT32_MAX :
+			static_cast<uint32_t>(asset.faceCount);
+		    occurrence.sourceMeshRequest.lodPointCount =
+			asset.vertexCount > UINT32_MAX ? UINT32_MAX :
+			static_cast<uint32_t>(asset.vertexCount);
+		    occurrence.sourceMeshRequest.lodOriginalPointCount =
+			occurrence.sourceMeshRequest.lodPointCount;
+		    occurrence.sourceMeshRequest.lodBoundsMin =
+			asset.coverageBounds.getMin();
+		    occurrence.sourceMeshRequest.lodBoundsMax =
+			asset.coverageBounds.getMax();
+		}
 		occurrence.summary.boundsValid = TRUE;
 		occurrence.summary.bounds = asset.coverageBounds;
 		stream->push(std::move(occurrence));
 		publishedBoxes.fetch_add(1);
 	    }
 
-	    /* Full source import is deliberately a second phase. */
-	    {
+	    /* Only representations which cannot publish a complete lazy contract
+	     * from coverage metadata need the deferred realization phase. */
+	    if (item.asset && item.asset->dp &&
+		item.asset->dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
 		std::lock_guard<std::mutex> guard(collect.workMutex);
 		collect.detailWork.push_back(std::move(item));
 	    }
@@ -16103,6 +16160,13 @@ compact_stream_publish_parallel_coverage(
 		continue;
 	    compact_coverage_asset &asset = *item.asset;
 	    if (!asset.lodEligible)
+		continue;
+	    /* Authored BoTs already published a complete lazy source contract in
+	     * the coverage phase.  Their arrays and PoP hierarchy are view-demand
+	     * work and must not be imported merely because the leaf exists.  BREP
+	     * wire/tessellation still needs representation generation here. */
+	    if (asset.dp &&
+		asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
 		continue;
 	    std::call_once(asset.realizeOnce, [&]() {
 		bobol_lod_working_set_acquire(
@@ -16438,6 +16502,35 @@ compact_stream_publish_parallel_coverage(
 	       publishedBoxes.load(), publishedContracts.load(), seeded,
 	       bobol_lod_working_set_global_peak_bytes(),
 	       bobol_lod_working_set_global_peak_tasks());
+
+    /*
+     * Coverage is the complete compact realization for an authored BoT scene
+     * only when every occurrence has a standing box and every distinct asset
+     * has a valid lazy source-mesh contract.  In that case a second serial
+     * db_walk_tree_leaf_instances(realize_mesh_leaf) cannot add semantics: it
+     * merely reopens every BoT, builds eager geometry/PCA state, and duplicates
+     * a registry which the GUI has already received from this stream.
+     *
+     * Keep this certification deliberately narrow.  A below-threshold BoT,
+     * BREP, analytic primitive, failed bounds decode, or missing publication
+     * still needs the ordinary authoritative realization below.  The caller
+     * may therefore complete directly only when this producer proves the
+     * entire root has the lazy all-BoT contract.
+     */
+    bool authoritativeStream = collect.occurrenceCount > 0 &&
+	publishedBoxes.load() == collect.occurrenceCount;
+    for (const std::unique_ptr<compact_coverage_asset> &asset :
+	 collect.assets) {
+	if (!asset || !asset->dp ||
+	    asset->dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT ||
+	    !asset->coverageReady || !asset->lodEligible ||
+	    !asset->sourceMeshReady) {
+	    authoritativeStream = false;
+	    break;
+	}
+    }
+    if (authoritativeStreamOut)
+	*authoritativeStreamOut = authoritativeStream;
     return publishedBoxes.load() > static_cast<size_t>(INT_MAX) ? INT_MAX :
 	static_cast<int>(publishedBoxes.load());
 }
@@ -16546,16 +16639,38 @@ bobol_database_source_realize_mesh_compact_with_cache(
 	return -1;
     }
 
+    bool authoritativeStream = false;
+    int streamedCoverage = 0;
     if (stream && source->lodBotThreshold.getValue() > 0 &&
-	!stream->hasWarmCoverageComplete() &&
-	compact_stream_publish_parallel_coverage(source, cache, treeName,
-	    stream, revision) < 0) {
+	!stream->hasWarmCoverageComplete()) {
+	streamedCoverage = compact_stream_publish_parallel_coverage(source,
+	    cache, treeName, stream, revision, &authoritativeStream);
+    }
+    if (streamedCoverage < 0) {
 	if (!cache->preserveCompactSourceOnFailure) {
 	    remove_non_auxiliary_children(source);
 	    source->discardCompactInstanceHistory();
 	    source->realizationIdentity = "";
 	}
 	return -1;
+    }
+
+    if (authoritativeStream) {
+	/* The detached worker has no reason to retain a second copy of the
+	 * streamed compact registry.  Publish only its terminal source contract;
+	 * adoptDetachedCompactRealization(..., TRUE) will certify the drained live
+	 * registry and retire the temporary whole-target overview in place. */
+	SbBox3f bounds;
+	if (stream->getCoverageBounds(bounds) && !bounds.isEmpty()) {
+	    (void)source->setSourceBoundsState(TRUE, bounds.getMin(),
+		bounds.getMax());
+	    (void)source->setSourceBoundsExactState(TRUE);
+	}
+	mark_source_realized_current(source);
+	bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
+	bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,
+	    static_cast<uint64_t>(streamedCoverage));
+	return streamedCoverage;
     }
 
     struct db_tree_state init_state;
