@@ -38,6 +38,7 @@
 #include "bu/file.h"
 #include "bu/hash.h"
 #include "bu/list.h"
+#include "bu/mapped_file.h"
 #include "bu/parallel.h"
 #include "bu/str.h"
 #include "bu/datetime.h"
@@ -15464,6 +15465,7 @@ struct compact_coverage_asset {
     size_t faceCount = 0;
     unsigned char mode = 0;
     unsigned char orientation = 0;
+    unsigned char flags = 0;
     bool coverageReady = false;
     bool lodEligible = false;
     /* True only when geometry is the standing proxy for a source-backed
@@ -15471,6 +15473,11 @@ struct compact_coverage_asset {
      * progressive line representation and must not also submit the shaded
      * tessellation as a wire overlay. */
     bool sourceMeshReady = false;
+    /* A later asset with the same cheap rigid-invariant signature must not
+     * launch its own potentially enormous PoP build until exact serialized
+     * comparison has either proved reuse or rejected it. */
+    bool deferSourceMeshContract = false;
+    std::vector<compact_coverage_occurrence> deferredOccurrences;
     bool ready = false;
     std::once_flag coverageOnce;
     std::once_flag realizeOnce;
@@ -15499,6 +15506,9 @@ struct compact_coverage_collect {
      * records here, then import full BoTs only after every leaf box and the
      * exact target extent have been published. */
     std::deque<compact_coverage_work_item> detailWork;
+    std::mutex reuseMutex;
+    std::unordered_map<std::string,
+	std::vector<compact_coverage_asset *>> reuseGroups;
     bool producerDone = false;
 };
 
@@ -15558,13 +15568,18 @@ compact_coverage_working_set_estimate(const struct db_i *dbip,
 static bool
 compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 	SbBox3f &bounds, size_t &vertexCount, size_t &faceCount,
-	unsigned char &mode, unsigned char &orientation)
+	unsigned char &mode, unsigned char &orientation, unsigned char &flags,
+	uint64_t &sampleFingerprint, bool &sampleFingerprintValid,
+	const struct bu_mapped_file *mappedFile = NULL)
 {
     bounds.makeEmpty();
     vertexCount = 0;
     faceCount = 0;
     mode = 0;
     orientation = 0;
+    flags = 0;
+    sampleFingerprint = 0;
+    sampleFingerprintValid = false;
     if (!dbip || !dp ||
 	dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
 	return false;
@@ -15586,6 +15601,10 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 		faceCount = bot->num_faces;
 		mode = bot->mode;
 		orientation = bot->orientation;
+		flags = bot->bot_flags;
+		sampleFingerprintValid =
+		    compact_stream_lod_sample_fingerprint(
+			sampleFingerprint, bot);
 	    }
 	}
 	rt_db_free_internal(&intern);
@@ -15597,7 +15616,15 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     size_t serializedBytes = 0;
     const unsigned char *serialized = db_external_view(
 	dbip, dp, &serializedBytes);
-    const bool borrowed = serialized != NULL;
+    bool borrowed = serialized != NULL;
+    if (!serialized && mappedFile && mappedFile->buf && dp->d_addr >= 0 &&
+	static_cast<size_t>(dp->d_addr) <= mappedFile->buflen &&
+	dp->d_len <= mappedFile->buflen - static_cast<size_t>(dp->d_addr)) {
+	serialized = static_cast<const unsigned char *>(mappedFile->buf) +
+	    static_cast<size_t>(dp->d_addr);
+	serializedBytes = dp->d_len;
+	borrowed = true;
+    }
     if (!borrowed) {
 	if (db_get_external(&external, dp, dbip) < 0)
 	    return false;
@@ -15657,8 +15684,11 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     const size_t fixedBytes = 2 * SIZEOF_NETWORK_LONG + 3;
     const size_t vertexStride =
 	SIZEOF_NETWORK_DOUBLE * ELEMENTS_PER_POINT;
+    const size_t faceStride = 3 * SIZEOF_NETWORK_LONG;
     if (!vertices || vertices > (SIZE_MAX - fixedBytes) / vertexStride ||
-	fixedBytes + vertices * vertexStride > raw.body.ext_nbytes) {
+	fixedBytes + vertices * vertexStride > raw.body.ext_nbytes ||
+	faces > (raw.body.ext_nbytes -
+	    (fixedBytes + vertices * vertexStride)) / faceStride) {
 	if (!borrowed)
 	    bu_free_external(&external);
 	return false;
@@ -15666,7 +15696,11 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 
     orientation = body[2 * SIZEOF_NETWORK_LONG];
     mode = body[2 * SIZEOF_NETWORK_LONG + 1];
-    const unsigned char *point = body + fixedBytes;
+    flags = body[2 * SIZEOF_NETWORK_LONG + 2];
+    const unsigned char *verticesBody = body + fixedBytes;
+    const unsigned char *facesBody =
+	verticesBody + vertices * vertexStride;
+    const unsigned char *point = verticesBody;
     point_t minimum = {INFINITY, INFINITY, INFINITY};
     point_t maximum = {-INFINITY, -INFINITY, -INFINITY};
     size_t finiteVertices = 0;
@@ -15693,6 +15727,71 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 	    finiteVertices++;
 	}
     }
+    if (finiteVertices && faces) {
+	const size_t sampleCount = std::min<size_t>(32, faces);
+	uint64_t hash = 1469598103934665603ULL;
+	const auto mix = [&hash](uint64_t word) {
+	    hash ^= word;
+	    hash *= 1099511628211ULL;
+	};
+	mix(static_cast<uint64_t>(vertices));
+	mix(static_cast<uint64_t>(faces));
+	bool valid = true;
+	for (size_t sample = 0; sample < sampleCount && valid; ++sample) {
+	    const size_t face = sampleCount > 1 ?
+		sample * (faces - 1) / (sampleCount - 1) : 0;
+	    const unsigned char *indices = facesBody + face * faceStride;
+	    uint32_t vertex[3] = {
+		static_cast<uint32_t>(BU_GLONG(indices)),
+		static_cast<uint32_t>(BU_GLONG(
+		    indices + SIZEOF_NETWORK_LONG)),
+		static_cast<uint32_t>(BU_GLONG(
+		    indices + 2 * SIZEOF_NETWORK_LONG))
+	    };
+	    for (size_t edge = 0; edge < 3; ++edge) {
+		const size_t first = vertex[edge];
+		const size_t second = vertex[(edge + 1) % 3];
+		if (first >= vertices || second >= vertices) {
+		    valid = false;
+		    break;
+		}
+		double a[ELEMENTS_PER_POINT];
+		double b[ELEMENTS_PER_POINT];
+		bu_cv_ntohd(reinterpret_cast<unsigned char *>(a),
+		    verticesBody + first * vertexStride,
+		    ELEMENTS_PER_POINT);
+		bu_cv_ntohd(reinterpret_cast<unsigned char *>(b),
+		    verticesBody + second * vertexStride,
+		    ELEMENTS_PER_POINT);
+		const double dx = a[X] - b[X];
+		const double dy = a[Y] - b[Y];
+		const double dz = a[Z] - b[Z];
+		const double lengthSquared = dx * dx + dy * dy + dz * dz;
+		if (!std::isfinite(lengthSquared) || lengthSquared < 0.0) {
+		    valid = false;
+		    break;
+		}
+		int64_t quantized = std::numeric_limits<int64_t>::min();
+		if (lengthSquared > SMALL_FASTF) {
+		    const double scaled = log2(lengthSquared) * 262144.0;
+		    if (!std::isfinite(scaled) ||
+			scaled > static_cast<double>(
+			    std::numeric_limits<int64_t>::max()) ||
+			scaled < static_cast<double>(
+			    std::numeric_limits<int64_t>::min())) {
+			valid = false;
+			break;
+		    }
+		    quantized = static_cast<int64_t>(llround(scaled));
+		}
+		mix(static_cast<uint64_t>(quantized));
+	    }
+	}
+	if (valid) {
+	    sampleFingerprint = hash;
+	    sampleFingerprintValid = true;
+	}
+    }
     if (!borrowed)
 	bu_free_external(&external);
     if (!finiteVertices)
@@ -15708,6 +15807,290 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     vertexCount = vertices;
     faceCount = faces;
     return !bounds.isEmpty();
+}
+
+struct compact_coverage_serialized_bot {
+    const unsigned char *vertices = NULL;
+    const unsigned char *faces = NULL;
+    size_t vertexCount = 0;
+    size_t faceCount = 0;
+    size_t vertexStride = SIZEOF_NETWORK_DOUBLE * ELEMENTS_PER_POINT;
+    size_t faceStride = 3 * SIZEOF_NETWORK_LONG;
+};
+
+struct compact_coverage_mapped_database {
+    struct bu_mapped_file *file = NULL;
+    ~compact_coverage_mapped_database(void)
+    {
+	if (file)
+	    bu_close_mapped_file(file);
+    }
+};
+
+/* Return a borrowed view of the fixed v5 BoT arrays.  This deliberately has
+ * no allocating fallback: transformed reuse is an optimization and an
+ * unprovable candidate must simply retain its own source contract. */
+static bool
+compact_coverage_serialized_bot_view(struct db_i *dbip,
+	struct directory *dp, compact_coverage_serialized_bot &view,
+	const struct bu_mapped_file *mappedFile = NULL)
+{
+    view = compact_coverage_serialized_bot();
+    if (!dbip || !dp || db_version(dbip) != 5 ||
+	dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
+	return false;
+
+    size_t serializedBytes = 0;
+    const unsigned char *serialized = db_external_view(
+	dbip, dp, &serializedBytes);
+    if (!serialized && mappedFile && mappedFile->buf && dp->d_addr >= 0 &&
+	static_cast<size_t>(dp->d_addr) <= mappedFile->buflen &&
+	dp->d_len <= mappedFile->buflen - static_cast<size_t>(dp->d_addr)) {
+	serialized = static_cast<const unsigned char *>(mappedFile->buf) +
+	    static_cast<size_t>(dp->d_addr);
+	serializedBytes = dp->d_len;
+    }
+    const size_t headerBytes = sizeof(struct db5_ondisk_header);
+    if (!serialized || serializedBytes < headerBytes)
+	return false;
+    const int width = (serialized[1] & DB5HDR_HFLAGS_OBJECT_WIDTH_MASK) >>
+	DB5HDR_HFLAGS_OBJECT_WIDTH_SHIFT;
+    if (width < DB5HDR_WIDTHCODE_8BIT || width > DB5HDR_WIDTHCODE_64BIT)
+	return false;
+    const size_t widthBytes = static_cast<size_t>(1) << width;
+    if (widthBytes > serializedBytes - headerBytes)
+	return false;
+    size_t encodedObjectUnits = 0;
+    (void)db5_decode_length(&encodedObjectUnits,
+	serialized + headerBytes, width);
+    if (encodedObjectUnits > SIZE_MAX / 8)
+	return false;
+    const size_t objectLengthBytes = encodedObjectUnits * 8;
+    if (objectLengthBytes < headerBytes ||
+	objectLengthBytes > serializedBytes)
+	return false;
+
+    struct db5_raw_internal raw;
+    if (!db5_get_raw_internal_ptr(&raw, serialized) ||
+	raw.object_length != objectLengthBytes ||
+	raw.major_type != DB5_MAJORTYPE_BRLCAD ||
+	raw.minor_type != DB5_MINORTYPE_BRLCAD_BOT ||
+	!raw.body.ext_buf ||
+	raw.body.ext_nbytes < 2 * SIZEOF_NETWORK_LONG + 3)
+	return false;
+    if (raw.body.ext_buf < serialized)
+	return false;
+    const size_t bodyOffset =
+	static_cast<size_t>(raw.body.ext_buf - serialized);
+    if (bodyOffset >= raw.object_length ||
+	raw.body.ext_nbytes > raw.object_length - bodyOffset - 1)
+	return false;
+
+    const unsigned char *body = raw.body.ext_buf;
+    const size_t vertices = static_cast<size_t>(BU_GLONG(body));
+    const size_t faces = static_cast<size_t>(
+	BU_GLONG(body + SIZEOF_NETWORK_LONG));
+    const size_t fixedBytes = 2 * SIZEOF_NETWORK_LONG + 3;
+    if (!vertices || !faces ||
+	vertices > (SIZE_MAX - fixedBytes) / view.vertexStride)
+	return false;
+    const size_t vertexEnd = fixedBytes + vertices * view.vertexStride;
+    if (vertexEnd > raw.body.ext_nbytes ||
+	faces > (raw.body.ext_nbytes - vertexEnd) / view.faceStride)
+	return false;
+    view.vertices = body + fixedBytes;
+    view.faces = body + vertexEnd;
+    view.vertexCount = vertices;
+    view.faceCount = faces;
+    return true;
+}
+
+static bool
+compact_coverage_serialized_point(
+	const compact_coverage_serialized_bot &view, size_t index,
+	point_t point)
+{
+    if (!view.vertices || index >= view.vertexCount)
+	return false;
+    double decoded[ELEMENTS_PER_POINT];
+    bu_cv_ntohd(reinterpret_cast<unsigned char *>(decoded),
+	view.vertices + index * view.vertexStride, ELEMENTS_PER_POINT);
+    if (!std::isfinite(decoded[X]) || !std::isfinite(decoded[Y]) ||
+	!std::isfinite(decoded[Z]))
+	return false;
+    VMOVE(point, decoded);
+    return true;
+}
+
+/* Prove that candidate is a rigid transform of representative without
+ * allocating either authored mesh.  Xpush preserves vertex and face order,
+ * so corresponding well-separated vertices define the candidate transform;
+ * every vertex and the complete topology must then verify.  A reordered or
+ * numerically ambiguous mesh is a safe false negative and loads independently.
+ */
+static bool
+compact_coverage_serialized_rigid_match(struct db_i *dbip,
+	struct directory *representativeDp, struct directory *candidateDp,
+	SbMatrix &representativeToCandidate,
+	const struct bu_mapped_file *mappedFile)
+{
+    const bool verbose = getenv("BOBOL_DRAW_TIMING_VERBOSE") != NULL;
+    const char *representativeName = representativeDp &&
+	representativeDp->d_namep ? representativeDp->d_namep : "?";
+    const char *candidateName = candidateDp && candidateDp->d_namep ?
+	candidateDp->d_namep : "?";
+#define COVERAGE_REUSE_REJECT(reason) do { \
+    if (verbose) \
+        bu_log("[obol-timing] serialized reuse reject: %s -> %s: %s\n", \
+            candidateName, representativeName, reason); \
+    return false; \
+} while (0)
+    representativeToCandidate = SbMatrix::identity();
+    compact_coverage_serialized_bot representative;
+    compact_coverage_serialized_bot candidate;
+    if (!compact_coverage_serialized_bot_view(dbip, representativeDp,
+	representative, mappedFile) ||
+	!compact_coverage_serialized_bot_view(dbip, candidateDp, candidate,
+	    mappedFile))
+	COVERAGE_REUSE_REJECT("serialized view");
+    if (representative.vertexCount != candidate.vertexCount ||
+	representative.faceCount != candidate.faceCount)
+	COVERAGE_REUSE_REJECT("count mismatch");
+    if (memcmp(representative.faces, candidate.faces,
+	representative.faceCount * representative.faceStride) != 0)
+	COVERAGE_REUSE_REJECT("topology mismatch");
+
+    point_t rp0;
+    point_t cp0;
+    if (!compact_coverage_serialized_point(representative, 0, rp0) ||
+	!compact_coverage_serialized_point(candidate, 0, cp0))
+	COVERAGE_REUSE_REJECT("invalid first point");
+
+    size_t p1Index = 0;
+    double farthestSquared = 0.0;
+    for (size_t i = 1; i < representative.vertexCount; ++i) {
+	point_t point;
+	if (!compact_coverage_serialized_point(representative, i, point))
+	    COVERAGE_REUSE_REJECT("invalid representative point");
+	vect_t delta;
+	VSUB2(delta, point, rp0);
+	const double lengthSquared = MAGSQ(delta);
+	if (lengthSquared > farthestSquared) {
+	    farthestSquared = lengthSquared;
+	    p1Index = i;
+	}
+    }
+    if (p1Index == 0 || farthestSquared <= SMALL_FASTF)
+	COVERAGE_REUSE_REJECT("degenerate primary axis");
+
+    point_t rp1;
+    point_t cp1;
+    if (!compact_coverage_serialized_point(representative, p1Index, rp1) ||
+	!compact_coverage_serialized_point(candidate, p1Index, cp1))
+	COVERAGE_REUSE_REJECT("invalid primary correspondence");
+    vect_t rx;
+    vect_t cx;
+    VSUB2(rx, rp1, rp0);
+    VSUB2(cx, cp1, cp0);
+    const double characteristicExtent = MAGNITUDE(rx);
+    const double candidateExtent = MAGNITUDE(cx);
+    const double tolerance = std::max(static_cast<double>(VUNITIZE_TOL),
+	characteristicExtent * 1.0e-9);
+    if (fabs(characteristicExtent - candidateExtent) > tolerance)
+	COVERAGE_REUSE_REJECT("primary extent mismatch");
+    VUNITIZE(rx);
+    VUNITIZE(cx);
+
+    size_t p2Index = 0;
+    double farthestNormalSquared = 0.0;
+    for (size_t i = 1; i < representative.vertexCount; ++i) {
+	point_t point;
+	if (!compact_coverage_serialized_point(representative, i, point))
+	    COVERAGE_REUSE_REJECT("invalid normal search point");
+	vect_t delta;
+	vect_t normal;
+	VSUB2(delta, point, rp0);
+	VCROSS(normal, rx, delta);
+	const double lengthSquared = MAGSQ(normal);
+	if (lengthSquared > farthestNormalSquared) {
+	    farthestNormalSquared = lengthSquared;
+	    p2Index = i;
+	}
+    }
+    if (p2Index == 0 ||
+	farthestNormalSquared <= tolerance * tolerance)
+	COVERAGE_REUSE_REJECT("degenerate secondary axis");
+
+    point_t rp2;
+    point_t cp2;
+    if (!compact_coverage_serialized_point(representative, p2Index, rp2) ||
+	!compact_coverage_serialized_point(candidate, p2Index, cp2))
+	COVERAGE_REUSE_REJECT("invalid secondary correspondence");
+    vect_t rdelta;
+    vect_t cdelta;
+    vect_t rz;
+    vect_t cz;
+    vect_t ry;
+    vect_t cy;
+    VSUB2(rdelta, rp2, rp0);
+    VSUB2(cdelta, cp2, cp0);
+    VCROSS(rz, rx, rdelta);
+    VCROSS(cz, cx, cdelta);
+    if (MAGNITUDE(rz) <= tolerance || MAGNITUDE(cz) <= tolerance)
+	COVERAGE_REUSE_REJECT("secondary extent mismatch");
+    VUNITIZE(rz);
+    VUNITIZE(cz);
+    VCROSS(ry, rz, rx);
+    VCROSS(cy, cz, cx);
+    VUNITIZE(ry);
+    VUNITIZE(cy);
+
+    struct bg_pca_frame sourceFrame = {};
+    struct bg_pca_frame targetFrame = {};
+    VMOVE(sourceFrame.center, rp0);
+    VMOVE(sourceFrame.xaxis, rx);
+    VMOVE(sourceFrame.yaxis, ry);
+    VMOVE(sourceFrame.zaxis, rz);
+    VMOVE(targetFrame.center, cp0);
+    VMOVE(targetFrame.xaxis, cx);
+    VMOVE(targetFrame.yaxis, cy);
+    VMOVE(targetFrame.zaxis, cz);
+    VSETALL(sourceFrame.singular_values, 1.0);
+    VSETALL(targetFrame.singular_values, 1.0);
+    mat_t relative;
+    if (bg_pca_frame_relative_matrix(relative, &sourceFrame,
+	&targetFrame) != BRLCAD_OK)
+	COVERAGE_REUSE_REJECT("relative matrix");
+
+    static const size_t vertexBlock = 256;
+    double sourcePoints[vertexBlock * ELEMENTS_PER_POINT];
+    double targetPoints[vertexBlock * ELEMENTS_PER_POINT];
+    for (size_t first = 0; first < representative.vertexCount;
+	 first += vertexBlock) {
+	const size_t count = std::min(vertexBlock,
+	    representative.vertexCount - first);
+	bu_cv_ntohd(reinterpret_cast<unsigned char *>(sourcePoints),
+	    representative.vertices + first * representative.vertexStride,
+	    count * ELEMENTS_PER_POINT);
+	bu_cv_ntohd(reinterpret_cast<unsigned char *>(targetPoints),
+	    candidate.vertices + first * candidate.vertexStride,
+	    count * ELEMENTS_PER_POINT);
+	for (size_t i = 0; i < count; ++i) {
+	    point_t transformed;
+	    MAT4X3PNT(transformed, relative,
+		sourcePoints + i * ELEMENTS_PER_POINT);
+	    const double *target = targetPoints + i * ELEMENTS_PER_POINT;
+	    if (!std::isfinite(target[X]) || !std::isfinite(target[Y]) ||
+		!std::isfinite(target[Z]) ||
+		fabs(transformed[X] - target[X]) > tolerance ||
+		fabs(transformed[Y] - target[Y]) > tolerance ||
+		fabs(transformed[Z] - target[Z]) > tolerance)
+		COVERAGE_REUSE_REJECT("all-vertex verification");
+	}
+    }
+    representativeToCandidate = mat_to_sbmatrix(relative);
+#undef COVERAGE_REUSE_REJECT
+    return true;
 }
 
 static bool
@@ -15842,13 +16225,16 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 static std::string
 compact_coverage_broad_key(const compact_coverage_asset &asset)
 {
-    if (!asset.ready || !asset.sampleFingerprintValid)
+    if (!asset.coverageReady || !asset.sampleFingerprintValid ||
+	asset.flags != 0 || asset.mode == RT_BOT_PLATE ||
+	asset.mode == RT_BOT_PLATE_NOCOS)
 	return std::string();
     char key[192] = {0};
-    snprintf(key, sizeof(key), "%zu:%zu:%u:%u:%016llx",
+	snprintf(key, sizeof(key), "%zu:%zu:%u:%u:%u:%016llx",
 	asset.vertexCount, asset.faceCount,
 	static_cast<unsigned int>(asset.mode),
 	static_cast<unsigned int>(asset.orientation),
+	static_cast<unsigned int>(asset.flags),
 	static_cast<unsigned long long>(asset.sampleFingerprint));
     return std::string(key);
 }
@@ -15918,6 +16304,57 @@ compact_coverage_overview_occurrence(SoBRLDatabaseSource *source,
     return overview;
 }
 
+static BObolCompactOccurrence
+compact_coverage_leaf_occurrence(const compact_coverage_asset &asset,
+	const compact_coverage_occurrence &leaf, bool includeSourceRequest)
+{
+    BObolCompactOccurrence occurrence;
+    occurrence.geometry = asset.coverageGeometry;
+    occurrence.geometryTransform = asset.proxyGeometryTransform;
+    occurrence.localTransform = leaf.localTransform;
+    occurrence.lodBacked = asset.lodEligible ? TRUE : FALSE;
+    occurrence.summary = leaf.summary;
+    occurrence.sourceMeshRequestValid =
+	includeSourceRequest && asset.sourceMeshReady ? TRUE : FALSE;
+    if (occurrence.sourceMeshRequestValid) {
+	occurrence.sourceMeshRequest = asset.sourceMeshRequest;
+	compact_source_mesh_request_sync(
+	    occurrence.sourceMeshRequest, occurrence.summary);
+	compact_summary_lod_from_source_mesh_request(
+	    occurrence.summary, occurrence.sourceMeshRequest);
+    }
+    occurrence.occurrenceIndex = leaf.occurrenceIndex;
+    occurrence.booleanOperation = leaf.booleanOperation;
+    occurrence.summary.lodAvailable = asset.lodEligible ? TRUE : FALSE;
+    occurrence.summary.lodActiveCut = BOBOL_LOD_QUALITY_PROXY;
+    occurrence.summary.lodFaceCount = asset.faceCount;
+    occurrence.summary.lodPointCount = asset.vertexCount;
+    occurrence.summary.lodOriginalPointCount = asset.vertexCount;
+    occurrence.summary.lodBoundsMin = asset.coverageBounds.getMin();
+    occurrence.summary.lodBoundsMax = asset.coverageBounds.getMax();
+    /* Keep the already-synchronized lazy contract authoritative after
+     * coverage metadata has filled the summary. */
+    if (occurrence.sourceMeshRequestValid) {
+	occurrence.sourceMeshRequest.lodAvailable = 1;
+	occurrence.sourceMeshRequest.lodActiveCut = BOBOL_LOD_QUALITY_PROXY;
+	occurrence.sourceMeshRequest.lodFaceCount =
+	    asset.faceCount > UINT32_MAX ? UINT32_MAX :
+	    static_cast<uint32_t>(asset.faceCount);
+	occurrence.sourceMeshRequest.lodPointCount =
+	    asset.vertexCount > UINT32_MAX ? UINT32_MAX :
+	    static_cast<uint32_t>(asset.vertexCount);
+	occurrence.sourceMeshRequest.lodOriginalPointCount =
+	    occurrence.sourceMeshRequest.lodPointCount;
+	occurrence.sourceMeshRequest.lodBoundsMin =
+	    asset.coverageBounds.getMin();
+	occurrence.sourceMeshRequest.lodBoundsMax =
+	    asset.coverageBounds.getMax();
+    }
+    occurrence.summary.boundsValid = TRUE;
+    occurrence.summary.bounds = asset.coverageBounds;
+    return occurrence;
+}
+
 static int
 compact_stream_publish_parallel_coverage(
 	SoBRLDatabaseSource *source,
@@ -15941,6 +16378,13 @@ compact_stream_publish_parallel_coverage(
     collect.stream = stream;
     collect.materialSweep = &materialSweep;
     collect.revision = revision;
+    compact_coverage_mapped_database mappedDatabase;
+    if (source->getDatabase()->dbi_filename &&
+	source->getDatabase()->dbi_filename[0]) {
+	mappedDatabase.file = bu_open_mapped_file(
+	    source->getDatabase()->dbi_filename,
+	    "obol-coverage-reuse-v1");
+    }
     std::atomic<size_t> publishedBoxes(0);
     std::atomic<size_t> publishedContracts(0);
     std::mutex aggregateMutex;
@@ -15981,7 +16425,7 @@ compact_stream_publish_parallel_coverage(
 		    asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
 		    const size_t fixedBytes = 1024ULL * 1024ULL;
 		    size_t borrowedBytes = 0;
-		    const bool zeroCopy = db_external_view(
+		    const bool zeroCopy = mappedDatabase.file || db_external_view(
 			source->getDatabase(), asset.dp,
 			&borrowedBytes) != NULL;
 		    const size_t encodedBytes = zeroCopy ? 0 : asset.dp->d_len;
@@ -15995,7 +16439,10 @@ compact_stream_publish_parallel_coverage(
 		    asset.coverageReady = compact_coverage_bot_bounds(
 			source->getDatabase(), asset.dp,
 			asset.coverageBounds, asset.vertexCount,
-			asset.faceCount, asset.mode, asset.orientation);
+			asset.faceCount, asset.mode, asset.orientation,
+			asset.flags, asset.sampleFingerprint,
+			asset.sampleFingerprintValid,
+			mappedDatabase.file);
 		    asset.lodEligible = asset.coverageReady &&
 			asset.faceCount >=
 			    source->lodBotThreshold.getValue();
@@ -16041,6 +16488,53 @@ compact_stream_publish_parallel_coverage(
 			asset.sourceMeshRequest.meshAssetTransform =
 			    SbMatrix::identity();
 			asset.sourceMeshReady = true;
+			/* Exact transformed mappings are validated against both database
+			 * objects by the draw cache.  Reapply one here so a warm draw can
+			 * publish the canonical contract immediately and skip both the
+			 * all-vertex proof and a duplicate PoP request. */
+			BObolDrawLodAssetRecord cachedAsset;
+			if (bobol_draw_lod_asset_cache_get(
+				source->getDatabase(), asset.dp->d_namep,
+				&cachedAsset) == BRLCAD_OK &&
+			    cachedAsset.faceCount == asset.faceCount &&
+			    cachedAsset.pointCount == asset.vertexCount) {
+			    struct directory *assetDp = db_lookup(
+				source->getDatabase(), cachedAsset.assetName,
+				LOOKUP_QUIET);
+			    if (assetDp != RT_DIR_NULL) {
+				asset.sourceMeshRequest.meshAssetPath =
+				    cachedAsset.assetName;
+				asset.sourceMeshRequest.meshAssetName =
+				    cachedAsset.assetName;
+				asset.sourceMeshRequest.meshAssetBounds =
+				    SbBox3f(SbVec3f(
+					cachedAsset.assetBoundsMin[X],
+					cachedAsset.assetBoundsMin[Y],
+					cachedAsset.assetBoundsMin[Z]),
+					SbVec3f(cachedAsset.assetBoundsMax[X],
+					    cachedAsset.assetBoundsMax[Y],
+					    cachedAsset.assetBoundsMax[Z]));
+				asset.sourceMeshRequest.meshAssetTransform =
+				    mat_to_sbmatrix(cachedAsset.assetToObject);
+				asset.deferSourceMeshContract = false;
+			    }
+			}
+			/* The first member of a rigid-invariant group may begin loading
+			 * immediately.  Later members publish their boxes now but defer
+			 * their source contracts until the exact serialized proof below,
+			 * preventing duplicate giant PoP builds from racing that proof. */
+			const std::string broadKey =
+			    compact_coverage_broad_key(asset);
+			if (!broadKey.empty()) {
+			    std::lock_guard<std::mutex> guard(
+				collect.reuseMutex);
+			    std::vector<compact_coverage_asset *> &group =
+				collect.reuseGroups[broadKey];
+			    asset.deferSourceMeshContract =
+				asset.sourceMeshRequest.meshAssetName ==
+				    asset.dp->d_namep && !group.empty();
+			    group.push_back(&asset);
+			}
 		    }
 		}
 		bobol_lod_working_set_release(coverageWorkingSet);
@@ -16079,61 +16573,17 @@ compact_stream_publish_parallel_coverage(
 			stream->pushPriority(overview);
 		}
 
-		BObolCompactOccurrence occurrence;
-		occurrence.geometry = asset.coverageGeometry;
-		occurrence.geometryTransform =
-		    asset.proxyGeometryTransform;
-		occurrence.localTransform = item.occurrence.localTransform;
-		occurrence.lodBacked = asset.lodEligible ? TRUE : FALSE;
-		occurrence.summary = item.occurrence.summary;
-		occurrence.sourceMeshRequestValid = asset.sourceMeshReady ?
-		    TRUE : FALSE;
-		if (occurrence.sourceMeshRequestValid) {
-		    occurrence.sourceMeshRequest = asset.sourceMeshRequest;
-		    compact_source_mesh_request_sync(
-			occurrence.sourceMeshRequest, occurrence.summary);
-		    compact_summary_lod_from_source_mesh_request(
-			occurrence.summary, occurrence.sourceMeshRequest);
-		}
-		occurrence.occurrenceIndex =
-		    item.occurrence.occurrenceIndex;
-		occurrence.booleanOperation =
-		    item.occurrence.booleanOperation;
-		occurrence.summary.lodAvailable =
-		    asset.lodEligible ? TRUE : FALSE;
-		occurrence.summary.lodActiveCut =
-		    BOBOL_LOD_QUALITY_PROXY;
-		occurrence.summary.lodFaceCount = asset.faceCount;
-		occurrence.summary.lodPointCount = asset.vertexCount;
-		occurrence.summary.lodOriginalPointCount =
-		    asset.vertexCount;
-		occurrence.summary.lodBoundsMin =
-		    asset.coverageBounds.getMin();
-		occurrence.summary.lodBoundsMax =
-		    asset.coverageBounds.getMax();
-		/* Keep the already-synchronized lazy contract authoritative after
-		 * coverage metadata has filled the summary. */
-		if (occurrence.sourceMeshRequestValid) {
-		    occurrence.sourceMeshRequest.lodAvailable = 1;
-		    occurrence.sourceMeshRequest.lodActiveCut =
-			BOBOL_LOD_QUALITY_PROXY;
-		    occurrence.sourceMeshRequest.lodFaceCount =
-			asset.faceCount > UINT32_MAX ? UINT32_MAX :
-			static_cast<uint32_t>(asset.faceCount);
-		    occurrence.sourceMeshRequest.lodPointCount =
-			asset.vertexCount > UINT32_MAX ? UINT32_MAX :
-			static_cast<uint32_t>(asset.vertexCount);
-		    occurrence.sourceMeshRequest.lodOriginalPointCount =
-			occurrence.sourceMeshRequest.lodPointCount;
-		    occurrence.sourceMeshRequest.lodBoundsMin =
-			asset.coverageBounds.getMin();
-		    occurrence.sourceMeshRequest.lodBoundsMax =
-			asset.coverageBounds.getMax();
-		}
-		occurrence.summary.boundsValid = TRUE;
-		occurrence.summary.bounds = asset.coverageBounds;
+		const bool includeSourceRequest = asset.sourceMeshReady &&
+		    !asset.deferSourceMeshContract;
+		BObolCompactOccurrence occurrence =
+		    compact_coverage_leaf_occurrence(asset, item.occurrence,
+			includeSourceRequest);
 		stream->push(std::move(occurrence));
 		publishedBoxes.fetch_add(1);
+		if (asset.deferSourceMeshContract) {
+		    std::lock_guard<std::mutex> guard(collect.reuseMutex);
+		    asset.deferredOccurrences.push_back(item.occurrence);
+		}
 	    }
 
 	    /* Only representations which cannot publish a complete lazy contract
@@ -16395,6 +16845,133 @@ compact_stream_publish_parallel_coverage(
 	return -1;
     if (collect.assets.empty())
 	return 0;
+
+    /* Resolve only the ambiguous broad groups.  The proof scans borrowed
+     * serialized arrays and therefore has a tiny, bounded working set even
+     * for multi-gigabyte meshes.  Boxes have already reached the GUI, while
+     * only one representative request per plausible group was allowed to
+     * enter the expensive resident/PoP pipeline. */
+    size_t transformedAssets = 0;
+    size_t transformedOccurrences = 0;
+    for (auto &groupEntry : collect.reuseGroups) {
+	std::vector<compact_coverage_asset *> &group = groupEntry.second;
+	if (group.size() < 2)
+	    continue;
+	std::vector<compact_coverage_asset *> representatives;
+	compact_coverage_asset *primary = NULL;
+	for (compact_coverage_asset *candidate : group) {
+	    if (!candidate)
+		continue;
+	    if (!candidate->deferSourceMeshContract) {
+		representatives.push_back(candidate);
+		if (!primary)
+		    primary = candidate;
+	    }
+	}
+	if (!primary)
+	    continue;
+
+	/* The common expanded-instance case has one representative followed by
+	 * many exact copies.  Prove those copies in parallel: each worker scans
+	 * read-only mapped pages and owns only small decode blocks.  Candidates
+	 * which fail the primary proof are resolved serially below, preserving
+	 * correctness for a broad-key collision containing several distinct
+	 * duplicate families. */
+	std::vector<compact_coverage_asset *> candidates;
+	for (compact_coverage_asset *candidate : group) {
+	    if (candidate && candidate->deferSourceMeshContract)
+		candidates.push_back(candidate);
+	}
+	std::vector<SbMatrix> primaryTransforms(candidates.size(),
+	    SbMatrix::identity());
+	std::vector<unsigned char> primaryMatches(candidates.size(), 0);
+	std::atomic<size_t> nextCandidate(0);
+	const size_t proofWorkerCount = std::max<size_t>(1,
+	    std::min(workerCount, candidates.size()));
+	std::vector<std::thread> proofWorkers;
+	proofWorkers.reserve(proofWorkerCount);
+	for (size_t i = 0; i < proofWorkerCount; ++i) {
+	    proofWorkers.push_back(std::thread([&]() {
+		for (;;) {
+		    const size_t candidateIndex =
+			nextCandidate.fetch_add(1);
+		    if (candidateIndex >= candidates.size())
+			break;
+		    primaryMatches[candidateIndex] =
+			compact_coverage_serialized_rigid_match(
+			    source->getDatabase(), primary->dp,
+			    candidates[candidateIndex]->dp,
+			    primaryTransforms[candidateIndex],
+			    mappedDatabase.file) ? 1 : 0;
+		}
+	    }));
+	}
+	for (std::thread &proofWorker : proofWorkers)
+	    proofWorker.join();
+
+	for (size_t candidateIndex = 0;
+	     candidateIndex < candidates.size(); ++candidateIndex) {
+	    compact_coverage_asset *candidate = candidates[candidateIndex];
+	    const BObolSourceMeshRequest objectRequest =
+		candidate->sourceMeshRequest;
+	    bool matched = primaryMatches[candidateIndex] != 0;
+	    compact_coverage_asset *matchedRepresentative =
+		matched ? primary : NULL;
+	    SbMatrix transform = primaryTransforms[candidateIndex];
+	    if (!matched) {
+		for (compact_coverage_asset *representative : representatives) {
+		    if (!representative || representative == primary ||
+			!representative->sourceMeshReady)
+			continue;
+		    if (!compact_coverage_serialized_rigid_match(
+			    source->getDatabase(), representative->dp,
+			    candidate->dp, transform,
+			    mappedDatabase.file))
+			continue;
+		    matchedRepresentative = representative;
+		    matched = true;
+		    break;
+		}
+	    }
+	    if (matched && matchedRepresentative) {
+		candidate->sourceMeshRequest.meshAssetPath =
+		    matchedRepresentative->sourceMeshRequest.meshAssetPath;
+		candidate->sourceMeshRequest.meshAssetName =
+		    matchedRepresentative->sourceMeshRequest.meshAssetName;
+		candidate->sourceMeshRequest.meshAssetBounds =
+		    matchedRepresentative->sourceMeshRequest.meshAssetBounds;
+		candidate->sourceMeshRequest.meshAssetContentHash =
+		    matchedRepresentative->sourceMeshRequest.
+			meshAssetContentHash;
+		candidate->sourceMeshRequest.meshAssetTransform = transform;
+		compact_stream_lod_asset_record_store(source->getDatabase(),
+		    candidate->dp, objectRequest,
+		    matchedRepresentative->sourceMeshRequest, transform);
+		transformedAssets++;
+	    }
+	    if (!matched)
+		representatives.push_back(candidate);
+
+	    /* Whether reused or independently retained, release the source
+	     * contract only after the ambiguity has been resolved.  Merging this
+	     * richer record preserves the already-visible box, placement,
+	     * selection state and semantic identity. */
+	    candidate->deferSourceMeshContract = false;
+	    for (const compact_coverage_occurrence &leaf :
+		 candidate->deferredOccurrences) {
+		BObolCompactOccurrence upgrade =
+		    compact_coverage_leaf_occurrence(*candidate, leaf, true);
+		stream->push(std::move(upgrade));
+		publishedContracts.fetch_add(1);
+		transformedOccurrences++;
+	    }
+	    candidate->deferredOccurrences.clear();
+	}
+    }
+    if (getenv("BOBOL_DRAW_TIMING") && transformedOccurrences)
+	bu_log("[obol-timing] serialized transformed reuse: %zu assets, "
+	       "%zu contracts\n", transformedAssets,
+	       transformedOccurrences);
 
     /*
      * Leaf AABBs may already fill the producer queue faster than the GUI can

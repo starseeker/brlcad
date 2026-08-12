@@ -8967,20 +8967,6 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	action.setStructuralCoverageOnly(
 	    this->d->lodCoveragePolicy.active() &&
 	    !this->d->lodViewDemandPolicy.scaleDemandRefreshActive());
-	/* Cold PoP preparation has a real per-asset cost which triangle throughput
-	 * alone cannot price.  Once an inventory reaches vehicle-scale part counts,
-	 * prepare only leaves with a meaningful current-view footprint.  The floor
-	 * grows smoothly to the existing recognizable-geometry protection boundary;
-	 * zoom and explicit emphasis bypass it without a source rescan. */
-	float firstMeshFootprint = 0.0f;
-	if (sourceMeshRequests > 10000) {
-	    firstMeshFootprint = static_cast<float>(std::sqrt(
-		static_cast<double>(sourceMeshRequests) / 1000.0));
-	    firstMeshFootprint = std::max(1.0f, std::min(
-		static_cast<float>(controller_lod_protected_footprint_pixels),
-		firstMeshFootprint));
-	}
-	action.setFirstMeshMinimumVisualFootprint(firstMeshFootprint);
 	action.setGeneration(generation);
 	action.setRevisions(this->d->lodViewRevision.value(),
 	    this->d->lodPolicyRevision.value());
