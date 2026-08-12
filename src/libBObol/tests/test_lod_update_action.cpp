@@ -8678,6 +8678,37 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
     view.height = 480;
     view.size = 10.0;
 
+    /* A cold coverage census may count the standing leaf box immediately,
+     * but that structural success must retain a distinct mesh-convergence
+     * obligation.  Otherwise an erase/redraw at an unchanged camera can
+     * report stable with the restored occurrence stuck at its box. */
+    if (!ret) {
+	SoBRLMeshLodSubmitAction coverage;
+	coverage.setService(&service);
+	coverage.setDatabase(dbip, "db://compact-projected-test", 2026);
+	coverage.setViewInfo(&view);
+	coverage.setViewVolume(&volume, 1.0f);
+	coverage.setGeneration(service.beginGeneration());
+	coverage.setRevisions(61, 62);
+	coverage.setStructuralCoverageOnly(TRUE);
+	coverage.apply(root);
+	if (coverage.getVisitedMeshCount() != 1 ||
+	    coverage.getVisibleMeshCount() != 1 ||
+	    coverage.getCoveredVisibleMeshCount() != 1 ||
+	    coverage.getSubmittedTaskCount() != 0 ||
+	    coverage.getPendingRetainedRefinementCount() != 1) {
+	    printf("FAIL: compact structural coverage did not retain its "
+		   "mesh convergence obligation (visited=%u visible=%zu "
+		   "covered=%zu tasks=%u pending=%u)\n",
+		   coverage.getVisitedMeshCount(),
+		   coverage.getVisibleMeshCount(),
+		   coverage.getCoveredVisibleMeshCount(),
+		   coverage.getSubmittedTaskCount(),
+		   coverage.getPendingRetainedRefinementCount());
+	    ret = 1;
+	}
+    }
+
     std::vector<BObolLodResult> results;
     if (!ret) {
 	SoBRLMeshLodSubmitAction submit;

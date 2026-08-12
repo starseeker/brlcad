@@ -56,10 +56,6 @@ public:
      * PoP hierarchy; the following quality pass promotes view-significant
      * leaves under the aggregate scene budget. */
     void setStructuralCoverageOnly(SbBool coverageOnly);
-    /* In a very large cold inventory, defer opening an otherwise valid PoP
-     * asset until its projected footprint is visually significant.  Zero
-     * disables this source-preparation admission floor. */
-    void setFirstMeshMinimumVisualFootprint(float pixels);
     void setGeneration(uint64_t generation);
     uint64_t getGeneration(void) const;
     void setRevisions(uint64_t viewRevision, uint64_t policyRevision);
@@ -218,7 +214,6 @@ private:
     float targetPixelError;
     float pointProxyPixelThreshold;
     SbBool structuralCoverageOnly;
-    float firstMeshMinimumVisualFootprint;
     uint64_t generation;
     uint64_t viewRevision;
     uint64_t policyRevision;

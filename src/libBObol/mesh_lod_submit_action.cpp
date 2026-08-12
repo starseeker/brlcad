@@ -238,7 +238,6 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     targetPixelError(1.0f),
     pointProxyPixelThreshold(1.0f),
     structuralCoverageOnly(FALSE),
-    firstMeshMinimumVisualFootprint(0.0f),
     generation(0),
     viewRevision(0),
     policyRevision(0),
@@ -388,13 +387,6 @@ void
 SoBRLMeshLodSubmitAction::setStructuralCoverageOnly(SbBool coverageOnly)
 {
     this->structuralCoverageOnly = coverageOnly ? TRUE : FALSE;
-}
-
-void
-SoBRLMeshLodSubmitAction::setFirstMeshMinimumVisualFootprint(float pixels)
-{
-    this->firstMeshMinimumVisualFootprint =
-	std::isfinite(pixels) && pixels > 0.0f ? pixels : 0.0f;
 }
 
 void
@@ -2126,17 +2118,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		 * already pixel exact for this view, so class it as coverage rather than
 		 * eagerly opening a distinct PoP hierarchy which cannot change a pixel.
 		 * Selection/highlight always promotes the real mesh path immediately. */
-		const bool pressureDeferredCoverage = !active &&
-		    !summary.meshGeometry && !summary.selected &&
-		    !summary.highlighted &&
-		    submitAction->firstMeshMinimumVisualFootprint > 0.0f &&
-		    candidate.visualFootprint <
-			submitAction->firstMeshMinimumVisualFootprint;
 		const bool structuralPointCoverage = !active &&
 		    !summary.meshGeometry && !summary.selected &&
 		    !summary.highlighted &&
 		    (submitAction->structuralCoverageOnly ||
-		     pressureDeferredCoverage ||
 		     (std::isfinite(candidate.projectedPixels) &&
 		      candidate.projectedPixels <=
 			submitAction->pointProxyPixelThreshold * 0.75f));
@@ -2411,23 +2396,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			source, request.objectPath) : NULL;
 	    }
 	    submitAction->visibleMeshCount++;
-	    const double projectedVisualFootprint = std::max(
-		std::sqrt(std::max(0.0,
-		    static_cast<double>(request.projectedPixelArea))),
-		std::max(
-		    static_cast<double>(request.projectedPixelPerimeter) * 0.25,
-		    static_cast<double>(request.projectedPixelDiameter) * 0.25));
-	    const SbBool pressureDeferredCoverage =
-		!activePayload && !summary.meshGeometry &&
-		!summary.selected && !summary.highlighted &&
-		submitAction->firstMeshMinimumVisualFootprint > 0.0f &&
-		projectedVisualFootprint <
-		    submitAction->firstMeshMinimumVisualFootprint ? TRUE : FALSE;
 	    const SbBool structuralPointCoverage =
 		!activePayload && !summary.meshGeometry &&
 		!summary.selected && !summary.highlighted &&
 		(submitAction->structuralCoverageOnly ||
-		 pressureDeferredCoverage ||
 		 (std::isfinite(request.projectedPixelDiameter) &&
 		  request.projectedPixelDiameter <=
 		    submitAction->pointProxyPixelThreshold * 0.75f)) ?
@@ -2455,16 +2427,20 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    if (structuralPointCoverage) {
 		/* Retain the source-mesh request on the compact occurrence.  A later
 		 * zoom, selection, or highlight makes this same record multi-pixel and
-		 * the ordinary view-demand pass promotes it without rediscovery. */
-		if (pressureDeferredCoverage &&
-		    !submitAction->structuralCoverageOnly) {
-		    /* This is a deliberate scene-pressure limit, not pixel-exact
-		     * subpixel coverage.  Preserve a convergence witness so the HUD
-		     * reports a stable performance-limited presentation rather than
-		     * falsely claiming that every requested mesh was realized. */
+		 * the ordinary view-demand pass promotes it without rediscovery.
+		 *
+		 * Structural coverage and mesh convergence are separate obligations.
+		 * A coverage-only census deliberately accepts the already-published leaf
+		 * proxy so a cold scene can establish its complete extent before doing
+		 * expensive mesh work.  It must still report the absent mesh as pending,
+		 * however, or a small source can complete that census and become idle at
+		 * its box forever.  This is especially visible after erase/redraw: the
+		 * source inventory and camera epochs may be unchanged even though the
+		 * occurrence's prior payload was retired while hidden.  True sub-pixel
+		 * aggregation is terminal for the current view and does not arm this
+		 * follow-up. */
+		if (submitAction->structuralCoverageOnly)
 		    submitAction->pendingRetainedRefinementCount++;
-		    submitAction->refinementBudgetBlockedCount++;
-		}
 		submitAction->skippedMeshCount++;
 		continue;
 	    }
