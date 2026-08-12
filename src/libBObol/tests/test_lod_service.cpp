@@ -1845,7 +1845,7 @@ test_active_request_duplicate_suppression(void)
 	return 1;
     }
     BObolLodTask richerTask = task;
-    richerTask.request.requestedLevel = task.request.requestedLevel + 1;
+    richerTask.request.requestedCut = task.request.requestedCut + 1;
     if (!service.hasActiveRequest(richerTask.request) ||
 	service.submitIfNotActive(richerTask) != 0) {
 	printf("FAIL: LoD service queued a superseding level for the same "
@@ -2793,11 +2793,7 @@ test_rt_mesh_provider_task(void)
 
     BObolMeshLodProvider provider;
     provider.setDatabase(dbip);
-    provider.useView = TRUE;
     provider.refreshMissing = TRUE;
-    provider.view.size = 100.0;
-    provider.view.width = 640;
-    provider.view.height = 480;
 
     BObolLodTask task;
     task.generation = 1;
@@ -2848,16 +2844,18 @@ test_rt_mesh_provider_task(void)
 	results[0].geometry.kind != BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE ||
 	results[0].geometry.providerToken == 0 ||
 	!results[0].geometry.isValid() ||
-	results[0].counts.faceCount <= 4 ||
+	results[0].counts.faceCount == 0 ||
 	results[0].counts.faceCount > cachedFaces.size() / 3 ||
-	results[0].counts.pointCount <= 4 ||
+	results[0].counts.pointCount == 0 ||
 	results[0].counts.pointCount > cachedVertices.size() / 3 ||
 	!results[0].mesh.isValid() ||
 	results[0].mesh.points.size() != results[0].counts.pointCount ||
 	results[0].mesh.coordIndex.size() !=
 	    results[0].counts.faceCount * 3 ||
+	results[0].request.requestedCut != task.request.requestedCut ||
+	results[0].resolvedCut < 0 ||
 	!bobol_lod_result_matches_request(results[0], task.request)) {
-	printf("FAIL: LoD Obol mesh provider task did not return cached mesh result (results=%zu kind=%d quality=%d status=%d geometry=%d token=%llu valid=%d faces=%llu points=%llu mesh_valid=%d mesh_points=%zu indices=%zu match=%d level=%d requested=%d)\n",
+	printf("FAIL: LoD Obol mesh provider task did not return cached mesh result (results=%zu kind=%d quality=%d status=%d geometry=%d token=%llu valid=%d faces=%llu points=%llu mesh_valid=%d mesh_points=%zu indices=%zu match=%d cut=%d requested=%d resolved=%d)\n",
 	    results.size(),
 	    results.empty() ? -1 : results[0].resultKind,
 	    results.empty() ? -1 : results[0].qualityTier,
@@ -2875,15 +2873,16 @@ test_rt_mesh_provider_task(void)
 	    results.empty() ? 0 : results[0].mesh.coordIndex.size(),
 	    results.empty() ? 0 :
 		bobol_lod_result_matches_request(results[0], task.request),
-	    results.empty() ? -1 : results[0].geometry.activeLevel,
-	    task.request.requestedLevel);
+	    results.empty() ? -1 : results[0].geometry.activeCut,
+	    task.request.requestedCut,
+	    results.empty() ? -1 : results[0].resolvedCut);
 	ret = 1;
     }
 
     /* The retained provider must publish a bounded first prefix and then make
      * monotonic, budget-bounded progress toward the unchanged view target.
-     * Cheap adjacent levels may be collapsed into one delivery; requiring a
-     * publication per nominal level creates a severe many-asset tail. */
+     * Cheap adjacent cuts may be collapsed into one delivery; requiring a
+     * publication per nominal cut creates a severe many-asset tail. */
     BObolMeshLodProvider stagedProvider;
     stagedProvider.service = &service;
     stagedProvider.setDatabase(dbip);
@@ -2892,7 +2891,7 @@ test_rt_mesh_provider_task(void)
     stagedProvider.initialRefinementPointBudget = 4;
     stagedProvider.refinementGrowthFactor = 2.0;
     BObolLodRequest stagedRequest = task.request;
-    stagedRequest.requestedLevel = 4;
+    stagedRequest.requestedCut = 4;
     BObolLodResult firstStage =
 	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
     const SbBool firstStagePrepared =
@@ -2909,16 +2908,16 @@ test_rt_mesh_provider_task(void)
      * is currently presenting the first stage.  Refinement must grow from
      * that visible prefix, not jump directly to the resident capacity. */
     stagedProvider.progressiveDelivery = TRUE;
-    stagedProvider.useCurrentDrawLevel = TRUE;
-    stagedProvider.currentDrawLevel = firstStage.geometry.activeLevel;
+    stagedProvider.useCurrentDrawCut = TRUE;
+    stagedProvider.currentDrawCut = firstStage.geometry.activeCut;
     BObolLodResult residentAheadStage =
 	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
     BObolMeshLodProvider directProvider;
     directProvider.service = &service;
     directProvider.setDatabase(dbip);
     directProvider.refreshMissing = FALSE;
-    directProvider.useCurrentDrawLevel = TRUE;
-    directProvider.currentDrawLevel = firstStage.geometry.activeLevel;
+    directProvider.useCurrentDrawCut = TRUE;
+    directProvider.currentDrawCut = firstStage.geometry.activeCut;
     BObolLodResult directStage =
 	service.realizeResidentMeshLod(stagedRequest, directProvider);
     /* Zoom residency and presentation are separate contracts.  A worker may
@@ -2927,40 +2926,40 @@ test_rt_mesh_provider_task(void)
      * immutable arrays without another cache read. */
     BObolMeshLodProvider prefetchedProvider = directProvider;
     prefetchedProvider.progressiveDelivery = FALSE;
-    prefetchedProvider.useDeliveryLevelLimit = TRUE;
-    prefetchedProvider.deliveryLevelLimit = stagedRequest.requestedLevel;
-    prefetchedProvider.usePresentationLevelLimit = TRUE;
-    prefetchedProvider.presentationLevelLimit =
-	firstStage.geometry.activeLevel;
+    prefetchedProvider.useDeliveryCutLimit = TRUE;
+    prefetchedProvider.deliveryCutLimit = stagedRequest.requestedCut;
+    prefetchedProvider.usePresentationCutLimit = TRUE;
+    prefetchedProvider.presentationCutLimit =
+	firstStage.geometry.activeCut;
     BObolLodResult prefetchedStage =
 	service.realizeResidentMeshLod(stagedRequest, prefetchedProvider);
     if (firstStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
-	firstStage.geometry.activeLevel < 0 ||
-	firstStage.geometry.activeLevel >= stagedRequest.requestedLevel ||
+	firstStage.geometry.activeCut < 0 ||
+	firstStage.geometry.activeCut >= stagedRequest.requestedCut ||
 	firstStage.terminal ||
 	secondStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
-	secondStage.geometry.activeLevel <= firstStage.geometry.activeLevel ||
-	secondStage.geometry.activeLevel != firstStage.geometry.activeLevel + 1 ||
-	secondStage.geometry.activeLevel >= stagedRequest.requestedLevel ||
+	secondStage.geometry.activeCut <= firstStage.geometry.activeCut ||
+	secondStage.geometry.activeCut != firstStage.geometry.activeCut + 1 ||
+	secondStage.geometry.activeCut >= stagedRequest.requestedCut ||
 	secondStage.terminal ||
 	terminalStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
-	terminalStage.geometry.activeLevel != stagedRequest.requestedLevel ||
+	terminalStage.geometry.activeCut != stagedRequest.requestedCut ||
 	!terminalStage.terminal ||
 	residentAheadStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
-	residentAheadStage.geometry.activeLevel <=
-	    firstStage.geometry.activeLevel ||
-	residentAheadStage.geometry.activeLevel !=
-	    firstStage.geometry.activeLevel + 1 ||
-	residentAheadStage.geometry.activeLevel >=
-	    stagedRequest.requestedLevel ||
+	residentAheadStage.geometry.activeCut <=
+	    firstStage.geometry.activeCut ||
+	residentAheadStage.geometry.activeCut !=
+	    firstStage.geometry.activeCut + 1 ||
+	residentAheadStage.geometry.activeCut >=
+	    stagedRequest.requestedCut ||
 	residentAheadStage.terminal ||
 	directStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
-	directStage.geometry.activeLevel != stagedRequest.requestedLevel ||
+	directStage.geometry.activeCut != stagedRequest.requestedCut ||
 	!directStage.terminal ||
 	prefetchedStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
-	prefetchedStage.geometry.activeLevel !=
-	    firstStage.geometry.activeLevel ||
-	prefetchedStage.residentLevel != stagedRequest.requestedLevel ||
+	prefetchedStage.geometry.activeCut !=
+	    firstStage.geometry.activeCut ||
+	prefetchedStage.residentCut != stagedRequest.requestedCut ||
 	prefetchedStage.terminal ||
 	!firstStage.progressiveMesh ||
 	!firstStagePrepared ||
@@ -2975,12 +2974,12 @@ test_rt_mesh_provider_task(void)
 	    "direct=%d prefetched=%d/%d terminal=%d/%d/%d/%d/%d/%d "
 	    "prepared=%d "
 	    "faces=%llu/%llu/%llu/%llu/%llu)\n",
-	    firstStage.geometry.activeLevel, secondStage.geometry.activeLevel,
-	    terminalStage.geometry.activeLevel,
-	    residentAheadStage.geometry.activeLevel,
-	    directStage.geometry.activeLevel,
-	    prefetchedStage.geometry.activeLevel,
-	    prefetchedStage.residentLevel,
+	    firstStage.geometry.activeCut, secondStage.geometry.activeCut,
+	    terminalStage.geometry.activeCut,
+	    residentAheadStage.geometry.activeCut,
+	    directStage.geometry.activeCut,
+	    prefetchedStage.geometry.activeCut,
+	    prefetchedStage.residentCut,
 	    firstStage.terminal ? 1 : 0,
 	    secondStage.terminal ? 1 : 0, terminalStage.terminal ? 1 : 0,
 	    residentAheadStage.terminal ? 1 : 0,
@@ -3015,7 +3014,7 @@ test_rt_mesh_provider_task(void)
     if (warmFirst.progressiveMesh && warmFirst.geometry.cacheKey.isValid()) {
 	BObolLodResidentDemand demand;
 	demand.assetKey = warmFirst.geometry.cacheKey.value;
-	demand.level = warmFirst.residentLevel;
+	demand.cut = warmFirst.residentCut;
 	demand.channelMask = 2;
 	std::vector<BObolLodResidentDemand> demands(1, demand);
 	warmFirstMaintenance = warmFirstService.scheduleResidentMeshCompaction(
@@ -3023,18 +3022,18 @@ test_rt_mesh_provider_task(void)
     }
     if (warmFirst.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	!warmFirst.progressiveMesh ||
-	warmFirst.geometry.activeLevel !=
-	    warmFirst.progressiveMesh->minimumLevel() ||
-	warmFirst.residentLevel != stagedRequest.requestedLevel ||
+	warmFirst.geometry.activeCut !=
+	    warmFirst.progressiveMesh->minimumCut() ||
+	warmFirst.residentCut != stagedRequest.requestedCut ||
 	warmFirst.terminal || !warmFirstPlanningComplete ||
 	warmFirstMaintenance != 0) {
 	printf("FAIL: warm first publication did not prefetch once and release "
 	       "duplicate backing (status=%d active=%d min=%d resident=%d "
 	       "requested=%d terminal=%d planned=%d maintenance=%zu)\n",
-	       warmFirst.providerStatus, warmFirst.geometry.activeLevel,
+	       warmFirst.providerStatus, warmFirst.geometry.activeCut,
 	       warmFirst.progressiveMesh ?
-		   warmFirst.progressiveMesh->minimumLevel() : -1,
-	       warmFirst.residentLevel, stagedRequest.requestedLevel,
+		   warmFirst.progressiveMesh->minimumCut() : -1,
+	       warmFirst.residentCut, stagedRequest.requestedCut,
 	       warmFirst.terminal ? 1 : 0,
 	       warmFirstPlanningComplete ? 1 : 0,
 	       warmFirstMaintenance);
@@ -3048,14 +3047,14 @@ test_rt_mesh_provider_task(void)
      * same on-disk cache into the same retained mesh identity. */
     if (terminalStage.progressiveMesh &&
 	terminalStage.geometry.cacheKey.isValid() &&
-	terminalStage.progressiveMesh->residentLevel() >
-	    terminalStage.progressiveMesh->minimumLevel()) {
+	terminalStage.progressiveMesh->residentCut() >
+	    terminalStage.progressiveMesh->minimumCut()) {
 	BObolLodResidentDemand demand;
 	demand.assetKey = terminalStage.geometry.cacheKey.value;
-	demand.level = terminalStage.geometry.activeLevel;
+	demand.cut = terminalStage.geometry.activeCut;
 	demand.channelMask = 2;
 	std::vector<BObolLodResidentDemand> demanded(1, demand);
-	const int richLevel = terminalStage.progressiveMesh->residentLevel();
+	const int richLevel = terminalStage.progressiveMesh->residentCut();
 	const size_t richBytes =
 	    service.residentMeshBytesForDiagnostics();
 	const size_t maintenanceQueued =
@@ -3070,13 +3069,13 @@ test_rt_mesh_provider_task(void)
 	    service.residentMeshBytesForDiagnostics();
 	if (maintenanceQueued != 0 || maintenanceWait ||
 	    !maintenanceResults.empty() ||
-	    terminalStage.progressiveMesh->residentLevel() != richLevel ||
+	    terminalStage.progressiveMesh->residentCut() != richLevel ||
 	    maintainedBytes != richBytes) {
 	    printf("FAIL: stable resident PoP demand queued redundant backing "
 		   "cleanup (queued=%zu level=%d/%d "
 		   "bytes=%zu/%zu results=%zu)\n",
 		   maintenanceQueued,
-		   terminalStage.progressiveMesh->residentLevel(), richLevel,
+		   terminalStage.progressiveMesh->residentCut(), richLevel,
 		   maintainedBytes, richBytes, maintenanceResults.size());
 	    ret = 1;
 	}
@@ -3088,14 +3087,14 @@ test_rt_mesh_provider_task(void)
 	const size_t compactBytes =
 	    service.residentMeshBytesForDiagnostics();
 	if (queued != 1 || compactWait ||
-	    terminalStage.progressiveMesh->residentLevel() !=
-		terminalStage.progressiveMesh->minimumLevel() ||
+	    terminalStage.progressiveMesh->residentCut() !=
+		terminalStage.progressiveMesh->minimumCut() ||
 	    compactBytes >= richBytes) {
 	    printf("FAIL: hidden resident PoP prefix did not compact "
 		   "(count=%zu level=%d min=%d bytes=%zu/%zu)\n",
 		   queued,
-		   terminalStage.progressiveMesh->residentLevel(),
-		   terminalStage.progressiveMesh->minimumLevel(),
+		   terminalStage.progressiveMesh->residentCut(),
+		   terminalStage.progressiveMesh->minimumCut(),
 		   compactBytes, richBytes);
 	    ret = 1;
 	}
@@ -3104,25 +3103,25 @@ test_rt_mesh_provider_task(void)
 	    service.residentMeshCacheLoadCountForDiagnostics();
 	BObolMeshLodProvider reloadProvider = stagedProvider;
 	reloadProvider.progressiveDelivery = FALSE;
-	reloadProvider.useCurrentDrawLevel = FALSE;
+	reloadProvider.useCurrentDrawCut = FALSE;
 	BObolLodResult reloaded =
 	    service.realizeResidentMeshLod(stagedRequest, reloadProvider);
 	if (reloaded.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	    !reloaded.terminal ||
-	    reloaded.geometry.activeLevel != stagedRequest.requestedLevel ||
+	    reloaded.geometry.activeCut != stagedRequest.requestedCut ||
 	    reloaded.progressiveMesh != terminalStage.progressiveMesh ||
-	    reloaded.progressiveMesh->residentLevel() !=
-		stagedRequest.requestedLevel ||
+	    reloaded.progressiveMesh->residentCut() !=
+		stagedRequest.requestedCut ||
 	    service.residentMeshCacheLoadCountForDiagnostics() <=
 		loadsBefore) {
 	    printf("FAIL: compacted resident PoP prefix did not reload "
 		   "from cache in place (status=%d terminal=%d active=%d "
 		   "resident=%d requested=%d same=%d loads=%llu/%llu)\n",
 		   reloaded.providerStatus, reloaded.terminal ? 1 : 0,
-		   reloaded.geometry.activeLevel,
+		   reloaded.geometry.activeCut,
 		   reloaded.progressiveMesh ?
-		       reloaded.progressiveMesh->residentLevel() : -1,
-		   stagedRequest.requestedLevel,
+		       reloaded.progressiveMesh->residentCut() : -1,
+		   stagedRequest.requestedCut,
 		   reloaded.progressiveMesh == terminalStage.progressiveMesh ?
 		       1 : 0,
 		   static_cast<unsigned long long>(
@@ -3149,11 +3148,11 @@ test_rt_mesh_provider_task(void)
 	BObolLodResult renewedRich;
 	if (staleRich.providerStatus == BOBOL_LOD_PROVIDER_READY &&
 	    staleRich.progressiveMesh &&
-	    staleRich.progressiveMesh->residentLevel() >
-		staleRich.progressiveMesh->minimumLevel()) {
+	    staleRich.progressiveMesh->residentCut() >
+		staleRich.progressiveMesh->minimumCut()) {
 	    BObolLodResidentDemand staleDemand;
 	    staleDemand.assetKey = staleRich.geometry.cacheKey.value;
-	    staleDemand.level = staleRich.progressiveMesh->minimumLevel();
+	    staleDemand.cut = staleRich.progressiveMesh->minimumCut();
 	    staleDemand.channelMask = 2;
 	    std::vector<BObolLodResidentDemand> staleDemands(1, staleDemand);
 	    staleQueued = staleCompactionService.scheduleResidentMeshCompaction(
@@ -3162,7 +3161,7 @@ test_rt_mesh_provider_task(void)
 		stagedRequest, staleProvider);
 	}
 	const int staleRichLevel = renewedRich.progressiveMesh ?
-	    renewedRich.progressiveMesh->residentLevel() : -1;
+	    renewedRich.progressiveMesh->residentCut() : -1;
 	const SbBool staleStarted =
 	    staleCompactionService.start(1, FALSE);
 	const int staleWait = staleStarted ?
@@ -3176,15 +3175,15 @@ test_rt_mesh_provider_task(void)
 	    renewedRich.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	    renewedRich.progressiveMesh != staleRich.progressiveMesh ||
 	    !staleStarted || staleWait || !staleCompletions.empty() ||
-	    staleRich.progressiveMesh->residentLevel() != staleRichLevel ||
-	    staleRichLevel != stagedRequest.requestedLevel) {
+	    staleRich.progressiveMesh->residentCut() != staleRichLevel ||
+	    staleRichLevel != stagedRequest.requestedCut) {
 	    printf("FAIL: renewed resident use did not cancel a stale queued "
 		   "compaction (queued=%zu started=%d wait=%d status=%d/%d "
 		   "level=%d/%d results=%zu)\n",
 		   staleQueued, staleStarted ? 1 : 0, staleWait,
 		   staleRich.providerStatus, renewedRich.providerStatus,
 		   staleRich.progressiveMesh ?
-		       staleRich.progressiveMesh->residentLevel() : -1,
+		       staleRich.progressiveMesh->residentCut() : -1,
 		   staleRichLevel, staleCompletions.size());
 	    ret = 1;
 	}
@@ -3192,12 +3191,12 @@ test_rt_mesh_provider_task(void)
 
 	if (reloaded.providerStatus == BOBOL_LOD_PROVIDER_READY &&
 	    reloaded.progressiveMesh &&
-	    reloaded.progressiveMesh->residentLevel() >
-		reloaded.progressiveMesh->minimumLevel()) {
+	    reloaded.progressiveMesh->residentCut() >
+		reloaded.progressiveMesh->minimumCut()) {
 	    BObolLodResidentDemand compactDemand;
 	    compactDemand.assetKey = reloaded.geometry.cacheKey.value;
-	    compactDemand.level =
-		reloaded.progressiveMesh->minimumLevel();
+	    compactDemand.cut =
+		reloaded.progressiveMesh->minimumCut();
 	    compactDemand.channelMask = 2;
 	    std::vector<BObolLodResidentDemand> compactDemands(
 		1, compactDemand);
@@ -3212,7 +3211,7 @@ test_rt_mesh_provider_task(void)
 	    if (rendererQueued != 1 || waitResult ||
 		completions.size() != 1 ||
 		completions[0].progressiveMesh != reloaded.progressiveMesh ||
-		completions[0].residentLevel != compactDemand.level ||
+		completions[0].residentCut != compactDemand.cut ||
 		completions[0].channelMask != 2 ||
 		!completions[0].preparedCadGeometry ||
 		completions[0].preparedCadGeometryRevision !=
@@ -3263,8 +3262,8 @@ test_rt_mesh_provider_task(void)
 		priorEvictedMesh ||
 	    restoredAfterEviction.residentAdmissionRevision == 0 ||
 	    restoredAfterEviction.terminal ||
-	    restoredAfterEviction.geometry.activeLevel !=
-		restoredAfterEviction.progressiveMesh->minimumLevel() ||
+	    restoredAfterEviction.geometry.activeCut !=
+		restoredAfterEviction.progressiveMesh->minimumCut() ||
 	    service.reservedResidentMeshGrowthBytesForDiagnostics() != 0) {
 	    printf("FAIL: retained-memory pressure did not evict and "
 		   "restore an undemanded PoP asset "
@@ -3282,9 +3281,9 @@ test_rt_mesh_provider_task(void)
 		   restoredAfterEviction.progressiveMesh !=
 		       priorEvictedMesh ? 1 : 0,
 		   restoredAfterEviction.memoryLimited ? 1 : 0,
-		   restoredAfterEviction.geometry.activeLevel,
+		   restoredAfterEviction.geometry.activeCut,
 		   restoredAfterEviction.progressiveMesh ?
-		       restoredAfterEviction.progressiveMesh->minimumLevel() :
+		       restoredAfterEviction.progressiveMesh->minimumCut() :
 		       -1,
 		   static_cast<unsigned long long>(
 		       restoredAfterEviction.residentAdmissionRevision),
@@ -3325,23 +3324,23 @@ test_rt_mesh_provider_task(void)
 		BOBOL_LOD_PROVIDER_READY ||
 	    !deniedSuffix.memoryLimited ||
 	    deniedSuffix.residentAdmissionRevision == 0 ||
-	    deniedSuffix.geometry.activeLevel !=
-		restoredAfterEviction.geometry.activeLevel ||
+	    deniedSuffix.geometry.activeCut !=
+		restoredAfterEviction.geometry.activeCut ||
 	    loadsAfterDenial != loadsAfterMinimum ||
 	    repeatedDenial.providerStatus !=
 		BOBOL_LOD_PROVIDER_READY ||
 	    !repeatedDenial.memoryLimited ||
 	    repeatedDenial.residentAdmissionRevision != deniedRevision ||
-	    repeatedDenial.geometry.activeLevel !=
-		restoredAfterEviction.geometry.activeLevel ||
+	    repeatedDenial.geometry.activeCut !=
+		restoredAfterEviction.geometry.activeCut ||
 	    loadsAfterRepeat != loadsAfterMinimum ||
 	    revisionAfterRelax == revisionBeforeRelax ||
 	    admittedAfterRelax.providerStatus !=
 		BOBOL_LOD_PROVIDER_READY ||
 	    admittedAfterRelax.memoryLimited ||
 	    !admittedAfterRelax.terminal ||
-	    admittedAfterRelax.geometry.activeLevel !=
-		stagedRequest.requestedLevel) {
+	    admittedAfterRelax.geometry.activeCut !=
+		stagedRequest.requestedCut) {
 	    printf("FAIL: resident byte admission did not suppress/release "
 		   "optional suffix growth (denied=%d/%d repeated=%d/%d "
 		   "levels=%d/%d "
@@ -3350,13 +3349,13 @@ test_rt_mesh_provider_task(void)
 		   deniedSuffix.memoryLimited ? 1 : 0,
 		   repeatedDenial.providerStatus,
 		   repeatedDenial.memoryLimited ? 1 : 0,
-		   repeatedDenial.geometry.activeLevel,
-		   restoredAfterEviction.geometry.activeLevel,
+		   repeatedDenial.geometry.activeCut,
+		   restoredAfterEviction.geometry.activeCut,
 		   static_cast<unsigned long long>(deniedRevision),
 		   static_cast<unsigned long long>(revisionBeforeRelax),
 		   static_cast<unsigned long long>(revisionAfterRelax),
 		   admittedAfterRelax.memoryLimited ? 1 : 0,
-		   admittedAfterRelax.geometry.activeLevel);
+		   admittedAfterRelax.geometry.activeCut);
 	    ret = 1;
 	}
     } else {
@@ -3400,8 +3399,8 @@ test_rt_mesh_provider_task(void)
     genericProvider.setDatabase(dbip);
     genericProvider.refreshMissing = TRUE;
     genericProvider.progressiveDelivery = FALSE;
-    genericProvider.useForcedLevel = TRUE;
-    genericProvider.forcedLevel = 15;
+    genericProvider.useForcedCut = TRUE;
+    genericProvider.forcedCut = 15;
     genericProvider.stagedSource = genericStaged;
     BObolLodRequest genericRequest = make_request("/lod-two-tri.bot");
     genericRequest.objectName = "lod-two-tri.bot";
@@ -3441,8 +3440,8 @@ test_rt_mesh_provider_task(void)
 
     BObolMeshLodProvider cachedNormalProvider;
     cachedNormalProvider.setDatabase(dbip);
-    cachedNormalProvider.useForcedLevel = TRUE;
-    cachedNormalProvider.forcedLevel = 1;
+    cachedNormalProvider.useForcedCut = TRUE;
+    cachedNormalProvider.forcedCut = 1;
     cachedNormalProvider.refreshMissing = FALSE;
     BObolLodResult cachedNormalResult =
 	bobol_mesh_lod_provider_task(task.request, &cachedNormalProvider);
@@ -3453,7 +3452,7 @@ test_rt_mesh_provider_task(void)
     }
     if (cachedNormalResult.resultKind != BOBOL_LOD_RESULT_MESH ||
 	cachedNormalResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
-	cachedNormalResult.geometry.activeLevel != 1 ||
+	cachedNormalResult.geometry.activeCut != 1 ||
 	cachedNormalResult.counts.normalCount == 0 ||
 	cachedNormalResult.counts.normalCount !=
 	cachedNormalResult.mesh.coordIndex.size() ||
@@ -3466,7 +3465,7 @@ test_rt_mesh_provider_task(void)
 					    task.request)) {
 	printf("FAIL: LoD Obol mesh provider did not return cached mesh normals "
 	    "(level=%d normals=%llu has=%d payload=%zu indices=%zu seeded=%d)\n",
-	    cachedNormalResult.geometry.activeLevel,
+	    cachedNormalResult.geometry.activeCut,
 	    static_cast<unsigned long long>(
 		cachedNormalResult.counts.normalCount),
 	    cachedNormalResult.hasNormals ? 1 : 0,
@@ -3478,10 +3477,10 @@ test_rt_mesh_provider_task(void)
 
     BObolMeshLodProvider forcedProvider;
     forcedProvider.setDatabase(dbip);
-    forcedProvider.useForcedLevel = TRUE;
-    forcedProvider.forcedLevel = (results.size() == 1 &&
-				  results[0].geometry.activeLevel >= 0) ?
-				 results[0].geometry.activeLevel : 0;
+    forcedProvider.useForcedCut = TRUE;
+    forcedProvider.forcedCut = (results.size() == 1 &&
+				  results[0].geometry.activeCut >= 0) ?
+				 results[0].geometry.activeCut : 0;
     forcedProvider.refreshMissing = FALSE;
     forcedProvider.shrinkAfterCopy = TRUE;
 
@@ -3492,12 +3491,12 @@ test_rt_mesh_provider_task(void)
     if (forcedResult.resultKind != BOBOL_LOD_RESULT_MESH ||
 	forcedResult.qualityTier != BOBOL_LOD_QUALITY_FULL_DETAIL ||
 	forcedResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
-	forcedResult.geometry.activeLevel != forcedProvider.forcedLevel ||
+	forcedResult.geometry.activeCut != forcedProvider.forcedCut ||
 	!forcedResult.mesh.isValid()) {
 	printf("FAIL: LoD Obol mesh provider forced-level task did not return "
 	    "requested level mesh result (requested=%d active=%d status=%d "
-	    "valid=%d)\n", forcedProvider.forcedLevel,
-	    forcedResult.geometry.activeLevel, forcedResult.providerStatus,
+	    "valid=%d)\n", forcedProvider.forcedCut,
+	    forcedResult.geometry.activeCut, forcedResult.providerStatus,
 	    forcedResult.mesh.isValid() ? 1 : 0);
 	ret = 1;
     }
@@ -3531,9 +3530,7 @@ test_rt_mesh_provider_task(void)
 
     BObolMeshLodProvider refreshProvider;
     refreshProvider.setDatabase(dbip);
-    refreshProvider.useView = TRUE;
     refreshProvider.refreshMissing = TRUE;
-    refreshProvider.view = provider.view;
 
     BObolLodResult refreshResult =
 	bobol_mesh_lod_provider_task(task.request, &refreshProvider);
@@ -4044,63 +4041,85 @@ main(int argc, char **argv)
 	return 1;
     }
     bu_setprogname(argv[0]);
+
+    char processCacheDir[MAXPATHLEN] = {0};
+    bu_dir(processCacheDir, MAXPATHLEN, BU_DIR_CURR,
+	"bobol_lod_service_process_cache", NULL);
+    bu_dirclear(processCacheDir);
+    bu_mkdir(processCacheDir);
+    bu_setenv("BU_DIR_CACHE", processCacheDir, 1);
+    char resolvedCacheDir[MAXPATHLEN] = {0};
+    bu_dir(resolvedCacheDir, MAXPATHLEN, BU_DIR_CACHE, NULL);
+    if (!BU_STR_EQUAL(processCacheDir, resolvedCacheDir)) {
+	printf("FAIL: LoD service test cache isolation (%s != %s)\n",
+	    processCacheDir, resolvedCacheDir);
+	return 1;
+    }
     bobol_init(NULL);
 
-    if (test_dependency_order_and_cache_write())
+    const auto runIsolated = [&processCacheDir](int (*test)(void)) {
+	bu_dirclear(processCacheDir);
+	bu_mkdir(processCacheDir);
+	bu_setenv("BU_DIR_CACHE", processCacheDir, 1);
+	return test();
+    };
+
+    if (runIsolated(test_dependency_order_and_cache_write))
 	return 1;
-    if (test_filtered_result_drain())
+    if (runIsolated(test_filtered_result_drain))
 	return 1;
-    if (test_occurrence_result_coalescing())
+    if (runIsolated(test_occurrence_result_coalescing))
 	return 1;
-    if (test_generation_cancellation())
+    if (runIsolated(test_generation_cancellation))
 	return 1;
-    if (test_destruction_waits_for_in_flight_task())
+    if (runIsolated(test_destruction_waits_for_in_flight_task))
 	return 1;
-    if (test_stop_discards_undrained_state())
+    if (runIsolated(test_stop_discards_undrained_state))
 	return 1;
-    if (test_stale_result_rejection())
+    if (runIsolated(test_stale_result_rejection))
 	return 1;
-    if (test_staged_payload_delivery())
+    if (runIsolated(test_staged_payload_delivery))
 	return 1;
-    if (test_result_ready_subscription())
+    if (runIsolated(test_result_ready_subscription))
 	return 1;
-    if (test_result_ready_self_unsubscribe())
+    if (runIsolated(test_result_ready_self_unsubscribe))
 	return 1;
-    if (test_result_ready_cross_unsubscribe())
+    if (runIsolated(test_result_ready_cross_unsubscribe))
 	return 1;
-    if (test_task_realize_data_cleanup())
+    if (runIsolated(test_task_realize_data_cleanup))
 	return 1;
-    if (test_queue_limits_and_pending_cancellation())
+    if (runIsolated(test_queue_limits_and_pending_cancellation))
 	return 1;
-    if (test_large_pending_cancellation_and_generation_history())
+    if (runIsolated(test_large_pending_cancellation_and_generation_history))
 	return 1;
-    if (test_debug_delay_cancellation())
+    if (runIsolated(test_debug_delay_cancellation))
 	return 1;
-    if (test_cancelled_cache_write_not_persisted())
+    if (runIsolated(test_cancelled_cache_write_not_persisted))
 	return 1;
-    if (test_active_request_duplicate_suppression())
+    if (runIsolated(test_active_request_duplicate_suppression))
 	return 1;
-    if (test_batch_submission())
+    if (runIsolated(test_batch_submission))
 	return 1;
-    if (test_rt_source_full_detail_provider_task())
+    if (runIsolated(test_rt_source_full_detail_provider_task))
 	return 1;
-    if (test_database_lease_outlives_submitter())
+    if (runIsolated(test_database_lease_outlives_submitter))
 	return 1;
-    if (test_rt_mesh_provider_task())
+    if (runIsolated(test_rt_mesh_provider_task))
 	return 1;
-    if (test_detached_database_snapshot())
+    if (runIsolated(test_detached_database_snapshot))
 	return 1;
-    if (test_rt_obb_proxy_provider_request_bounds())
+    if (runIsolated(test_rt_obb_proxy_provider_request_bounds))
 	return 1;
-    if (test_working_set_admission())
+    if (runIsolated(test_working_set_admission))
 	return 1;
-    if (test_process_working_set_admission())
+    if (runIsolated(test_process_working_set_admission))
 	return 1;
-    if (test_generation_scoped_consumers())
+    if (runIsolated(test_generation_scoped_consumers))
 	return 1;
-    if (test_managed_service_is_shared())
+    if (runIsolated(test_managed_service_is_shared))
 	return 1;
 
+    bu_dirclear(processCacheDir);
     return 0;
 }
 

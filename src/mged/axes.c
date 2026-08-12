@@ -43,7 +43,7 @@ static int
 mged_hud_axes_replace(struct ged_view_context *view_ctx, const char *name,
 	const struct bv_axes_state *axes, const mat_t rotation)
 {
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "mged-edit-axes";
     desc.owner_role = "faceplate";
     desc.local = 1;

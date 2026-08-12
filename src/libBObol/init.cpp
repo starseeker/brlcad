@@ -27,6 +27,7 @@
 #include "BObol/BMeshLodSubmitAction.h"
 #include "BObol/BMeshResidencyAction.h"
 #include "BObol/BMeshShape.h"
+#include "BObol/BNavigationGizmo.h"
 #include "BObol/BPickDetail.h"
 #include "BObol/BRealizeAction.h"
 #include "BObol/BSceneGroup.h"
@@ -63,6 +64,7 @@ bobol_init(SoDB::ContextManager *contextManager)
     SoBRLImagePlane::initClass();
     SoBRLLineLayerOverlay::initClass();
     SoBRLMeshShape::initClass();
+    SoBRLNavigationGizmo::initClass();
     SoBRLLodMeshShape::initClass();
     SoBRLMaterialObject::initClass();
     SoBRLSourceMeshPickAction::initClass();

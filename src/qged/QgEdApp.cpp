@@ -39,7 +39,7 @@
 #include "bv.h"
 #include "ged/db_index.h"
 #include "ged/draw.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 #include "qtcad/QgGeomImport.h"
 #include "qtcad/QgObolWindowHost.h"
 #include "qtcad/QgPluginCommands.h"
@@ -581,10 +581,9 @@ QgEdApp::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 	unsigned long long cs_hash = ged_selection_state_hash(gedp, nullptr);
 	if (cs_hash != select_hash) {
 	    view_flags |= QG_VIEW_SELECT;
-	    // This is what notifies currently drawn solids to update
-	    // in response to a command line selection change
-	    if (ged_selection_draw_sync(gedp, nullptr))
-		view_flags |= QG_VIEW_DRAWN;
+	    /* Selection mutations already commit their sparse presentation
+	     * delta before the command returns. */
+	    view_flags |= QG_VIEW_DRAWN;
 	}
 
     }

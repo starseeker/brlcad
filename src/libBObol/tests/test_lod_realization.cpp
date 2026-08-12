@@ -23,6 +23,21 @@
 #include <string.h>
 #include <vector>
 
+static void
+complete_test_hierarchy(struct BObolMeshLodHierarchyInfo &hierarchy)
+{
+    hierarchy.cut_count = static_cast<uint32_t>(hierarchy.max_cut + 1);
+    for (int cut = 0; cut <= hierarchy.max_cut; ++cut) {
+	const bool exact = cut == hierarchy.max_cut;
+	hierarchy.cuts[cut].object_error =
+	    static_cast<double>(hierarchy.max_cut - cut);
+	hierarchy.cuts[cut].quantization_bits[X] = exact ? 16 : 15;
+	hierarchy.cuts[cut].quantization_bits[Y] = exact ? 16 : 15;
+	hierarchy.cuts[cut].quantization_bits[Z] = exact ? 16 : 15;
+	hierarchy.cuts[cut].exact = exact ? 1 : 0;
+    }
+}
+
 static BObolLodRequest
 make_request(void)
 {
@@ -108,7 +123,7 @@ test_rt_mesh_result(void)
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
     struct BObolMeshLodCacheStatus status = BOBOL_MESH_LOD_CACHE_STATUS_INIT;
 
-    info.active_level = 2;
+    info.active_cut = 2;
     info.face_count = 8;
     info.point_count = 9;
     info.point_orig_count = 10;
@@ -135,7 +150,8 @@ test_rt_mesh_result(void)
 	result.qualityTier != BOBOL_LOD_QUALITY_FAST_DISPLAY ||
 	result.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	result.geometry.kind != BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE ||
-	result.geometry.activeLevel != 2 ||
+	result.geometry.activeCut != 2 ||
+	result.resolvedCut != 2 ||
 	result.geometry.providerToken != 0xfeed ||
 	!result.geometry.isValid() ||
 	result.counts.faceCount != 8 ||
@@ -166,7 +182,7 @@ test_rt_mesh_payload_copy(void)
 {
     point_t points[4];
     vect_t normals[6];
-    int faces[6] = {0, 1, 2, 0, 3, 1};
+    uint32_t faces[6] = {0, 1, 2, 0, 3, 1};
     struct BObolMeshLodData data;
     BObolLodMeshPayload payload;
 
@@ -233,7 +249,7 @@ test_worker_prepared_authored_normals(void)
 {
     point_t points[4];
     vect_t normals[6];
-    int faces[6] = {0, 1, 2, 0, 2, 3};
+    uint32_t faces[6] = {0, 1, 2, 0, 2, 3};
     VSET(points[0], 0.0, 0.0, 0.0);
     VSET(points[1], 1.0, 0.0, 0.0);
     VSET(points[2], 1.0, 1.0, 0.0);
@@ -257,15 +273,16 @@ test_worker_prepared_authored_normals(void)
 
     struct BObolMeshLodHierarchyInfo hierarchy =
 	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-    hierarchy.min_level = 0;
-    hierarchy.max_level = 1;
-    hierarchy.resident_level = 1;
-    hierarchy.face_count[0] = 1;
-    hierarchy.face_count[1] = 2;
-    hierarchy.point_count[0] = 3;
-    hierarchy.point_count[1] = 4;
+    hierarchy.min_cut = 0;
+    hierarchy.max_cut = 1;
+    hierarchy.resident_cut = 1;
+    hierarchy.cuts[0].face_count = 1;
+    hierarchy.cuts[1].face_count = 2;
+    hierarchy.cuts[0].point_count = 3;
+    hierarchy.cuts[1].point_count = 4;
     VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
     VSET(hierarchy.quantization_max, 1.0, 1.0, 0.0);
+    complete_test_hierarchy(hierarchy);
 
     BObolLodProgressiveMesh progressive;
     if (!progressive.update(data, hierarchy, 1, FALSE)) {
@@ -282,6 +299,7 @@ test_worker_prepared_authored_normals(void)
 	    BOBOL_LOD_DRAW_SHADED, &cachedRevision);
     const Obol::TriMesh *mesh =
 	prepared && prepared->shaded ? &*prepared->shaded : NULL;
+    BObolMeshLodCutInfo coarseCutInfo = {};
     if (!mesh || revision != progressive.revision() ||
 	cachedRevision != revision || cached != prepared ||
 	mesh->indices.size() != 6 ||
@@ -289,10 +307,17 @@ test_worker_prepared_authored_normals(void)
 	mesh->positions.size() <= 4 ||
 	mesh->progressiveLineage != 0 ||
 	!mesh->isProgressive() ||
-	mesh->indexCountAtLevel(0) != 3 ||
-	mesh->indexCountAtLevel(1) != 6 ||
-	mesh->positionCountAtLevel(0) != 3 ||
-	mesh->positionCountAtLevel(1) != mesh->positions.size()) {
+	mesh->indexCountAtCut(0) != 3 ||
+	mesh->indexCountAtCut(1) != 6 ||
+	mesh->positionCountAtCut(0) != 3 ||
+	mesh->positionCountAtCut(1) != mesh->positions.size() ||
+	!progressive.cutInfo(0, &coarseCutInfo) ||
+	fabs(coarseCutInfo.object_error - 1.0) > 1.0e-12 ||
+	progressive.cutForScreenError(100.0, 80.0) != 0 ||
+	progressive.cutForScreenError(100.0, 10.0) != 1 ||
+	fabs(progressive.projectedErrorAtCut(0, 100.0) -
+	    70.71067811865476) > 1.0e-9 ||
+	fabs(progressive.projectedErrorAtCut(1, 100.0)) > 1.0e-12) {
 	printf("FAIL: authored normals were not canonicalized into a cached "
 	       "worker-owned renderer generation\n");
 	return 1;
@@ -304,7 +329,7 @@ static int
 test_worker_prepared_generation_lifetime(void)
 {
     point_t points[4];
-    int faces[6] = {0, 1, 2, 0, 2, 3};
+    uint32_t faces[6] = {0, 1, 2, 0, 2, 3};
     VSET(points[0], 0.0, 0.0, 0.0);
     VSET(points[1], 1.0, 0.0, 0.0);
     VSET(points[2], 1.0, 1.0, 0.0);
@@ -321,15 +346,16 @@ test_worker_prepared_generation_lifetime(void)
 
     struct BObolMeshLodHierarchyInfo hierarchy =
 	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-    hierarchy.min_level = 0;
-    hierarchy.max_level = 1;
-    hierarchy.resident_level = 0;
-    hierarchy.face_count[0] = 1;
-    hierarchy.face_count[1] = 2;
-    hierarchy.point_count[0] = 3;
-    hierarchy.point_count[1] = 4;
+    hierarchy.min_cut = 0;
+    hierarchy.max_cut = 1;
+    hierarchy.resident_cut = 0;
+    hierarchy.cuts[0].face_count = 1;
+    hierarchy.cuts[1].face_count = 2;
+    hierarchy.cuts[0].point_count = 3;
+    hierarchy.cuts[1].point_count = 4;
     VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
     VSET(hierarchy.quantization_max, 1.0, 1.0, 0.0);
+    complete_test_hierarchy(hierarchy);
 
     BObolLodProgressiveMesh progressive;
     if (!progressive.update(data, hierarchy, 0, FALSE))
@@ -344,7 +370,7 @@ test_worker_prepared_generation_lifetime(void)
     data.face_count = 2;
     data.point_count = 4;
     data.point_orig_count = 4;
-    hierarchy.resident_level = 1;
+    hierarchy.resident_cut = 1;
     if (!progressive.update(data, hierarchy, 1, FALSE))
 	return 1;
     uint64_t richRevision = 0;
@@ -384,11 +410,66 @@ test_worker_prepared_generation_lifetime(void)
 }
 
 static int
+test_compaction_preserves_coordinate_only_frontier(void)
+{
+    point_t points[3];
+    uint32_t faces[3] = {0, 1, 2};
+    VSET(points[0], 0.0, 0.0, 0.0);
+    VSET(points[1], 1.0, 0.0, 0.0);
+    VSET(points[2], 0.0, 1.0, 0.0);
+
+    struct BObolMeshLodData data = {};
+    data.faces = faces;
+    data.face_count = 1;
+    data.points = points;
+    data.point_count = 3;
+    data.points_orig = points;
+    data.point_orig_count = 3;
+    VSET(data.bmin, 0.0, 0.0, 0.0);
+    VSET(data.bmax, 1.0, 1.0, 0.0);
+
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    hierarchy.min_cut = 0;
+    hierarchy.max_cut = 2;
+    hierarchy.resident_cut = 2;
+    for (int cut = 0; cut <= hierarchy.max_cut; ++cut) {
+	hierarchy.cuts[cut].face_count = 1;
+	hierarchy.cuts[cut].point_count = 3;
+    }
+    VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
+    VSET(hierarchy.quantization_max, 1.0, 1.0, 0.0);
+    complete_test_hierarchy(hierarchy);
+
+    BObolLodProgressiveMesh progressive;
+    if (!progressive.update(data, hierarchy, 2, FALSE) ||
+	!progressive.canDrawCut(2) || !progressive.trim(0)) {
+	printf("FAIL: coordinate-only compaction fixture setup\n");
+	return 1;
+    }
+
+    const std::shared_ptr<const Obol::PartGeometry> trimmed =
+	progressive.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED, NULL);
+    if (progressive.residentCut() != 0 ||
+	!progressive.canDrawCut(2) ||
+	progressive.cutForScreenError(100.0, 1.0) != 2 ||
+	!trimmed || !trimmed->shaded ||
+	trimmed->shaded->progressiveResidentCut != 2 ||
+	trimmed->shaded->indices.size() != 3 ||
+	trimmed->shaded->positions.size() != 3) {
+	printf("FAIL: compaction discarded the coordinate-only drawable "
+	       "cut frontier\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_progressive_generation_rejects_corruption(void)
 {
     point_t points[3];
     vect_t normals[3];
-    int faces[3] = {0, 1, 2};
+    uint32_t faces[3] = {0, 1, 2};
     VSET(points[0], 0.0, 0.0, 0.0);
     VSET(points[1], 1.0, 0.0, 0.0);
     VSET(points[2], 0.0, 1.0, 0.0);
@@ -407,15 +488,16 @@ test_progressive_generation_rejects_corruption(void)
 
     struct BObolMeshLodHierarchyInfo hierarchy =
 	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-    hierarchy.min_level = 0;
-    hierarchy.max_level = 0;
-    hierarchy.resident_level = 0;
-    for (size_t level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	hierarchy.face_count[level] = 1;
-	hierarchy.point_count[level] = 3;
+    hierarchy.min_cut = 0;
+    hierarchy.max_cut = 0;
+    hierarchy.resident_cut = 0;
+    for (size_t level = 0; level < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++level) {
+	hierarchy.cuts[level].face_count = 1;
+	hierarchy.cuts[level].point_count = 3;
     }
     VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
     VSET(hierarchy.quantization_max, 1.0, 1.0, 0.0);
+    complete_test_hierarchy(hierarchy);
 
     BObolLodProgressiveMesh progressive;
     if (!progressive.update(data, hierarchy, 0, FALSE)) {
@@ -445,14 +527,14 @@ test_progressive_generation_rejects_corruption(void)
 	return 1;
     }
     faces[2] = 2;
-    hierarchy.point_count[0] = 2;
+    hierarchy.cuts[0].point_count = 2;
     if (progressive.update(data, hierarchy, 0, FALSE) ||
 	progressive.revision() != validRevision) {
 	printf("FAIL: progressive generation accepted mismatched hierarchy "
 	       "counts\n");
 	return 1;
     }
-    hierarchy.point_count[0] = 3;
+    hierarchy.cuts[0].point_count = 3;
     data.normals = normals;
     data.normal_count = 3;
     normals[1][Y] = NAN;
@@ -585,6 +667,27 @@ main(int argc, char **argv)
 	return 1;
     }
 
+    /* Dormant shaded attributes are asset residency, not wire-channel work.
+     * They must not change the allocator currency of an otherwise identical
+     * wire cut, while shaded admission still accounts for their bandwidth. */
+    BObolLodCounts normalCostCounts;
+    normalCostCounts.faceCount = 100;
+    normalCostCounts.pointCount = 75;
+    normalCostCounts.normalCount = 300;
+    BObolLodCounts noNormalCostCounts = normalCostCounts;
+    noNormalCostCounts.normalCount = 0;
+    if (bobol_lod_render_cost_units(
+	    normalCostCounts, BOBOL_LOD_DRAW_WIRE) !=
+	bobol_lod_render_cost_units(
+	    noNormalCostCounts, BOBOL_LOD_DRAW_WIRE) ||
+	bobol_lod_render_cost_units(
+	    normalCostCounts, BOBOL_LOD_DRAW_SHADED) <=
+	bobol_lod_render_cost_units(
+	    noNormalCostCounts, BOBOL_LOD_DRAW_SHADED)) {
+	printf("FAIL: LoD render-cost channel accounting\n");
+	return 1;
+    }
+
     if (test_key_determinism())
 	return 1;
     if (test_rt_mesh_result())
@@ -594,6 +697,8 @@ main(int argc, char **argv)
     if (test_worker_prepared_authored_normals())
 	return 1;
     if (test_worker_prepared_generation_lifetime())
+	return 1;
+    if (test_compaction_preserves_coordinate_only_frontier())
 	return 1;
     if (test_progressive_generation_rejects_corruption())
 	return 1;

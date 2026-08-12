@@ -56,7 +56,7 @@ extern "C" {
 #include "wdb.h"
 }
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "./ged_bot.h"
 
 // Default to a maximum of 1% surface area change allowed - if we get more
@@ -288,7 +288,7 @@ _bot_cmd_extrude(void *bs, int argc, const char **argv)
     }
 
     BU_LIST_INIT(&wcomb.l);
-    int event_depth = ged_event_batch_begin(gb->gedp);
+    int event_depth = ged_event_batch_begin(gb->gedp) == GED_EVENT_OK;
 
     // For each face, define an arb6 using shifted vertices.  For each face
     // vertex two new points will be constructed - an inner and outer - based

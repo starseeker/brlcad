@@ -88,7 +88,7 @@ struct db_i;
 struct directory;
 struct ged;
 struct ged_event;
-struct ged_event_txn_result;
+struct ged_event_result;
 
 // QgItems correspond to the actual Qt entries displayed in the view.  If a
 // comb is reused in multiple places in the tree the same comb child instance
@@ -485,16 +485,16 @@ private:
 	void notifyDrawnTransactionChanged(const void *delta_ctx);
 	void flushPendingDrawNotifications();
 	void handleDrawTransactionEvent(const void *delta_ctx);
-	void recordPendingDatabaseEventPaths(const struct ged_event_txn_result *result);
+	void recordPendingDatabaseEventPaths(const struct ged_event_result *result);
 	void notifyPendingDatabaseEventItemsChanged();
 	void flushPendingDatabaseEventNotifications();
-	void handleDatabaseEventTxn(const struct ged_event *events,
+	void handleDatabaseEvents(const struct ged_event *events,
 				    size_t event_count,
-				    const struct ged_event_txn_result *result);
+				    const struct ged_event_result *result);
 	static void eventObserverCallback(struct ged *gedp,
 					  const struct ged_event *events,
 					  size_t event_count,
-					  const struct ged_event_txn_result *result,
+					  const struct ged_event_result *result,
 					  void *client_data);
 	static const std::unordered_set<QgItem *> &emptyItems()
 	{
@@ -517,6 +517,8 @@ private:
 	std::set<std::string> selection_display_paths;
 	int selection_display_mode = -1;
 	NotificationStats notification_stats;
+	DrawTimingStats draw_timing_stats;
+	bool draw_timing_stats_enabled = false;
 	FetchMoreStats fetch_more_stats;
 	HierarchyDeltaStats hierarchy_delta_stats;
 

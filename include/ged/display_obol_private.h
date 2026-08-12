@@ -27,6 +27,16 @@
 
 __BEGIN_DECLS
 
+struct ged_display_endpoint;
+typedef struct ged_display_endpoint ged_display_endpoint_t;
+
+GED_EXPORT ged_display_endpoint_t *
+ged_view_context_display_endpoint_get(const struct ged_view_context *view);
+
+GED_EXPORT int
+ged_view_context_display_endpoint_set(struct ged_view_context *view,
+	ged_display_endpoint_t *endpoint, int take_ownership);
+
 static inline bobol_display_endpoint_t *
 ged_view_context_obol_endpoint_get(const struct ged_view_context *view)
 {
@@ -41,6 +51,15 @@ ged_view_context_obol_endpoint_set(struct ged_view_context *view,
     return ged_view_context_display_endpoint_set(
 	view, (ged_display_endpoint_t *)endpoint, take_ownership);
 }
+
+/** In-tree bridge for binding an optional borrowed renderer window host. */
+GED_EXPORT int
+ged_view_framebuffer_backend_install(struct ged *gedp,
+	struct ged_view_context *view_ctx,
+	void *window_host,
+	int width,
+	int height,
+	int present_on_flush);
 
 __END_DECLS
 

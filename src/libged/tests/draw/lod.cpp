@@ -32,7 +32,7 @@
 #include "view_test_util.h"
 #include <ged.h>
 #include <ged/db_index.h>
-#include <ged/event_txn.h>
+#include <ged/event.h>
 
 /* These legacy controls predate the retained software renderer and the
  * view-limited PoP display contract.  Keep them as spatial/image sanity

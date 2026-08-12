@@ -47,7 +47,7 @@
 #include "rt/search.h"
 #include "raytrace.h"
 #include "wdb.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 #include "./ged_facetize.h"
 
@@ -1176,7 +1176,7 @@ _ged_facetize_regions(struct _ged_facetize_state *s, int argc, const char **argv
     }
     affix = (use_prefix) ? bu_vls_cstr(&prefix_str) : bu_vls_cstr(&suffix_str);
 
-    int final_event_batch_opened = (ged_event_batch_begin(s->gedp) > 0);
+    int final_event_batch_opened = (ged_event_batch_begin(s->gedp) == GED_EVENT_OK);
 
     // dbconcat output .g into original .g - either using -O to overwrite
     // or allowing dbconcat to suffix the names depending on whether we're

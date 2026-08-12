@@ -53,14 +53,14 @@ public:
     void setQualityTier(int qualityTier);
     void setRefreshMissing(SbBool refreshMissing);
     void setReset(int reset);
-    void setForcedLevel(int level);
-    void clearForcedLevel(void);
-    SbBool hasForcedLevel(void) const;
-    int getForcedLevel(void) const;
+    void setForcedCut(int cut);
+    void clearForcedCut(void);
+    SbBool hasForcedCut(void) const;
+    int getForcedCut(void) const;
     void setRequireLodBacked(SbBool requireLodBacked);
     SbBool getRequireLodBacked(void) const;
-    void setAllowLevelDowngrade(SbBool allow);
-    SbBool getAllowLevelDowngrade(void) const;
+    void setAllowCutDowngrade(SbBool allow);
+    SbBool getAllowCutDowngrade(void) const;
     void setAllowRetainedRefinement(SbBool allow);
     SbBool getAllowRetainedRefinement(void) const;
     /* Permit a zoom-in pass to request a missing pixel-demanded cache suffix
@@ -72,8 +72,8 @@ public:
     /* Bound upward occurrence-cut admission to the renderer's current
      * presentation ceiling.  Existing richer cuts are retained and hidden by
      * the renderer; a negative value disables the bound. */
-    void setRefinementLevelCeiling(int level);
-    int getRefinementLevelCeiling(void) const;
+    void setRefinementCutCeiling(int cut);
+    int getRefinementCutCeiling(void) const;
     /* Source representation generation (currently adaptive BREP
      * tessellation) is quiet-view work.  It is independent of inexpensive
      * resident PoP cut changes, which may continue during zoom interaction. */
@@ -88,11 +88,17 @@ public:
     SbBool getPreserveMeshCoverage(void) const;
     /* Bound aggregate upward PoP growth selected by this traversal.  The
      * budget applies equally to an already-resident cut change and to a
-     * provider request for the next missing level. */
+     * provider request for the next missing cut. */
     void setRefinementCostBudget(size_t additionalCost);
     size_t getRefinementCostBudget(void) const;
     size_t getRefinementCostBudgetUsed(void) const;
     unsigned int getRefinementBudgetBlockedCount(void) const;
+    /* Split retained minimax observations into a deliberately coarser
+     * scene-quality ceiling and failure to reach the cut allocated by that
+     * ceiling.  Explicit recovery terminates at the former but must retry the
+     * latter. */
+    unsigned int getRetainedQualityLimitedCount(void) const;
+    unsigned int getRetainedAdmissionBlockedCount(void) const;
     /* Permit exactly one next-population transition whose marginal cost may
      * exceed the remaining ordinary refinement budget by at most this amount.
      * The complete marginal cost is still reported as budget used.  A
@@ -133,6 +139,18 @@ public:
      * order.  The budget limits refinement above the mesh-coverage floor. */
     void setRetainedSceneCostBudget(size_t totalCost);
     size_t getRetainedSceneCostBudgetUsed(void) const;
+    /* Large-scene recovery already guarantees one minimum drawable mesh per
+     * retained occurrence.  This allowance is only for PoP detail above that
+     * floor and is therefore safely carried across bounded planning windows
+     * without charging the coverage population repeatedly. */
+    void setRetainedSceneUpgradeCostBudget(size_t additionalCost);
+    size_t getRetainedSceneUpgradeCostBudgetUsed(void) const;
+    /* A retained importance pass uses one scene-wide normalized screen-error
+     * ceiling.  Each occurrence selects the cheapest resident PoP cut which
+     * meets that ceiling; the aggregate upgrade budget remains the hard
+     * discrete-cost safety check.  Non-finite values disable the ceiling. */
+    void setRetainedSceneMaximumNormalizedError(double error);
+    double getRetainedSceneMaximumNormalizedError(void) const;
     size_t getCompactEntryNext(void) const;
     size_t getCompactEntryTotal(void) const;
     SbBool hasDeferredCompactEntries(void) const;
@@ -141,6 +159,10 @@ public:
     unsigned int getSubmittedTaskCount(void) const;
     unsigned int getUpdatedCutCount(void) const;
     unsigned int getPendingRetainedRefinementCount(void) const;
+    /* Retained allocation found a pixel-demanded cut whose immutable PoP
+     * suffix is not resident yet.  Unlike a budget-limited richer-cut
+     * observation, this is an actionable provider-work witness. */
+    unsigned int getPendingResidentRefinementCount(void) const;
     unsigned int getSkippedMeshCount(void) const;
     /* Projected compact occurrences visited by this bounded window, and the
      * subset which already had a drawable payload when visited.  Controllers
@@ -160,10 +182,10 @@ private:
     void appendDiagnostic(const SbString &target, const char *message);
     SbBool reserveRefinementCost(
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
-	int activeLevel, int nextLevel, int drawMode);
-    int reserveRefinementLevel(
+	int activeCut, int nextCut, int drawMode, SbBool hasNormals);
+    int reserveRefinementCut(
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
-	int activeLevel, int preferredLevel, int drawMode);
+	int activeCut, int preferredCut, int drawMode, SbBool hasNormals);
     /* Reserve a conservative first-cut population before its hierarchy has
      * been opened by a worker.  This closes the all-box zero-face blind spot:
      * thousands of independent warm-cache requests must not each interpret
@@ -188,18 +210,20 @@ private:
     int qualityTier;
     SbBool refreshMissing;
     int reset;
-    SbBool useForcedLevel;
-    int forcedLevel;
+    SbBool useForcedCut;
+    int forcedCut;
     SbBool requireLodBacked;
-    SbBool allowLevelDowngrade;
+    SbBool allowCutDowngrade;
     SbBool allowRetainedRefinement;
     SbBool allowResidentPrefetch;
-    int refinementLevelCeiling;
+    int refinementCutCeiling;
     SbBool allowRepresentationRefinement;
     SbBool preserveMeshCoverage;
     size_t refinementCostBudget;
     size_t refinementCostBudgetUsed;
     unsigned int refinementBudgetBlockedCount;
+    unsigned int retainedQualityLimitedCount;
+    unsigned int retainedAdmissionBlockedCount;
     size_t oneOverBudgetRefinementLimit;
     SbBool oneOverBudgetRefinementUsed;
     SbBool transitionLimitedRefinement;
@@ -215,6 +239,9 @@ private:
     uint64_t submissionTimeLimitMicroseconds;
     size_t retainedSceneCostBudget;
     size_t retainedSceneCostBudgetUsed;
+    size_t retainedSceneUpgradeCostBudget;
+    size_t retainedSceneUpgradeCostBudgetUsed;
+    double retainedSceneMaximumNormalizedError;
     /* Occurrences charged by the scene-wide retained recovery pass.  The
      * bounded provider window must not charge them a second time. */
     std::unordered_set<std::string> retainedRecoveredOccurrences;
@@ -223,6 +250,7 @@ private:
     unsigned int submittedTaskCount;
     unsigned int updatedCutCount;
     unsigned int pendingRetainedRefinementCount;
+    unsigned int pendingResidentRefinementCount;
     unsigned int skippedMeshCount;
     size_t visibleMeshCount;
     size_t coveredVisibleMeshCount;

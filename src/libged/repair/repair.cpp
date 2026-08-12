@@ -19,7 +19,7 @@
 #include "bu/opt.h"
 #include "rt/geom.h"
 #include "wdb.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 #include "rt/functab.h"
@@ -105,7 +105,7 @@ ged_repair(struct ged *gedp, int argc, const char *argv[])
     int ret = EDOBJ[intern.idb_type].ft_repair(&log_str, &intern, NULL, original_argc, original_argv);
 
     if (ret == 0) {
-	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
         struct directory *out_dp = dp;
         const char *rname = objname;
         if (!in_place_repair) {

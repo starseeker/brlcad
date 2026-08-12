@@ -13,6 +13,7 @@
 #include "common.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -113,6 +114,98 @@ enum class MeshTopology {
     NonManifold
 };
 
+enum class MeshShape : size_t {
+    Body,
+    Cylinder,
+    Boom,
+    Box,
+    Panel,
+    Dish,
+    Irregular,
+    Count
+};
+
+const char *
+mesh_shape_name(MeshShape shape)
+{
+    switch (shape) {
+	case MeshShape::Body: return "body";
+	case MeshShape::Cylinder: return "cylinder";
+	case MeshShape::Boom: return "boom";
+	case MeshShape::Box: return "box";
+	case MeshShape::Panel: return "panel";
+	case MeshShape::Dish: return "dish";
+	case MeshShape::Irregular: return "irregular";
+	case MeshShape::Count: break;
+    }
+    return "unknown";
+}
+
+double
+mesh_profile_unit(size_t mesh, uint64_t salt)
+{
+    uint64_t value = static_cast<uint64_t>(mesh) + salt;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    value ^= value >> 31;
+    return static_cast<double>((value >> 11) & 0x1fffffffffffffULL) /
+	static_cast<double>(0x1fffffffffffffULL);
+}
+
+MeshShape
+mesh_shape(size_t mesh, MeshTopology topology, size_t physicalBucket)
+{
+    /* Keep related leaves related.  Each 256-leaf run occupies one of twelve
+     * recognizable spacecraft/vehicle assemblies, so the balanced database
+     * hierarchy contains branches with very different visual significance.
+     * A uniformly shuffled fixture can make a prefix-biased scheduler look
+     * representative by accident. */
+    const size_t assembly = (mesh / 256) % 12;
+    const size_t selector = static_cast<size_t>(
+	mesh_profile_unit(mesh, 0x243f6a8885a308d3ULL) * 100.0);
+
+    if (topology == MeshTopology::OpenSurface)
+	return (assembly == 6 || assembly == 7 || selector < 28) ?
+	    MeshShape::Dish : MeshShape::Panel;
+
+    /* Hull-scale parts define the overall silhouette.  Their family follows
+     * their assembly instead of degenerating into a collection of uniformly
+     * scaled ellipsoids. */
+    if (physicalBucket < 10) {
+	if (assembly == 2 || assembly == 3)
+	    return MeshShape::Panel;
+	if (assembly == 4 || assembly == 5)
+	    return MeshShape::Boom;
+	return assembly == 6 ? MeshShape::Cylinder : MeshShape::Body;
+    }
+
+    if (assembly == 2 || assembly == 3) {
+	if (selector < 62) return MeshShape::Panel;
+	if (selector < 82) return MeshShape::Boom;
+	if (selector < 94) return MeshShape::Box;
+	return MeshShape::Cylinder;
+    }
+    if (assembly == 4 || assembly == 5) {
+	if (selector < 58) return MeshShape::Boom;
+	if (selector < 80) return MeshShape::Cylinder;
+	if (selector < 93) return MeshShape::Box;
+	return MeshShape::Irregular;
+    }
+    if (assembly == 6 || assembly == 7) {
+	if (selector < 30) return MeshShape::Cylinder;
+	if (selector < 52) return MeshShape::Body;
+	if (selector < 75) return MeshShape::Box;
+	if (selector < 88) return MeshShape::Boom;
+	return MeshShape::Irregular;
+    }
+    if (selector < 24) return MeshShape::Box;
+    if (selector < 43) return MeshShape::Cylinder;
+    if (selector < 60) return MeshShape::Boom;
+    if (selector < 74) return MeshShape::Panel;
+    if (selector < 92) return MeshShape::Body;
+    return MeshShape::Irregular;
+}
+
 MeshTopology
 mesh_topology(size_t mesh)
 {
@@ -159,7 +252,7 @@ append_outward_face(std::vector<int> &faces,
 void
 generate_closed_mesh(size_t mesh, size_t resolution,
     double spanX, double spanY, double spanZ,
-    bool makeNonManifold, std::vector<fastf_t> &vertices,
+    MeshShape shape, bool makeNonManifold, std::vector<fastf_t> &vertices,
     std::vector<int> &faces)
 {
     /* A latitude/longitude ellipsoid gives us a closed shared-index surface
@@ -205,11 +298,47 @@ generate_closed_mesh(size_t mesh, size_t resolution,
 		    theta * static_cast<double>(2 + mesh % 5) - phase);
 	    const size_t vertex =
 		1 + (latitude - 1) * longitudeSegments + longitude;
-	    vertices[vertex * 3 + X] = radiusX * cosTheta * ripple;
-	    vertices[vertex * 3 + Y] =
-		radiusY * sinTheta * std::cos(phi) * ripple;
-	    vertices[vertex * 3 + Z] =
-		radiusZ * sinTheta * std::sin(phi) * ripple;
+	    const double sphereX = cosTheta;
+	    const double sphereY = sinTheta * std::cos(phi);
+	    const double sphereZ = sinTheta * std::sin(phi);
+	    const auto signedPower = [](double value, double exponent) {
+		return std::copysign(std::pow(std::fabs(value), exponent), value);
+	    };
+	    double shapeX = sphereX;
+	    double shapeY = sphereY;
+	    double shapeZ = sphereZ;
+	    switch (shape) {
+		case MeshShape::Cylinder:
+		case MeshShape::Boom:
+		    /* A low axial exponent produces a long cylindrical middle
+		     * and rounded caps without changing the closed sphere
+		     * topology or introducing coincident seam vertices. */
+		    shapeX = signedPower(sphereX,
+			shape == MeshShape::Boom ? 0.18 : 0.30);
+		    break;
+		case MeshShape::Box:
+		case MeshShape::Panel:
+		    shapeX = signedPower(sphereX, 0.24);
+		    shapeY = signedPower(sphereY, 0.24);
+		    shapeZ = signedPower(sphereZ, 0.24);
+		    break;
+		case MeshShape::Body:
+		    shapeX = signedPower(sphereX, 0.58);
+		    break;
+		case MeshShape::Irregular: {
+		    const double skew = 0.10 * sphereX * sphereY;
+		    shapeY += skew + 0.045 * std::sin(3.0 * phi + phase) *
+			sinTheta * sinTheta;
+		    shapeZ += 0.07 * sphereX * sphereY;
+		    break;
+		}
+		case MeshShape::Dish:
+		case MeshShape::Count:
+		    break;
+	    }
+	    vertices[vertex * 3 + X] = radiusX * shapeX * ripple;
+	    vertices[vertex * 3 + Y] = radiusY * shapeY * ripple;
+	    vertices[vertex * 3 + Z] = radiusZ * shapeZ * ripple;
 	}
     }
 
@@ -258,10 +387,68 @@ generate_closed_mesh(size_t mesh, size_t resolution,
 }
 
 void
-generate_open_mesh(size_t mesh, size_t gridCells,
+generate_open_dish(size_t mesh, size_t resolution,
     double spanX, double spanY, std::vector<fastf_t> &vertices,
     std::vector<int> &faces)
 {
+    const size_t radialSegments = resolution / 2 + 1;
+    const size_t angularSegments = resolution * 2;
+    const size_t vertexCount = 1 + radialSegments * angularSegments;
+    vertices.assign(vertexCount * 3, 0.0);
+    faces.clear();
+    faces.reserve((angularSegments +
+	(radialSegments - 1) * angularSegments * 2) * 3);
+
+    const double pi = std::acos(-1.0);
+    const double phase = static_cast<double>(mesh) * 0.61803398875;
+    const double depth = std::min(spanX, spanY) *
+	(0.10 + 0.08 * mesh_profile_unit(mesh, 0xa4093822299f31d0ULL));
+    for (size_t radial = 1; radial <= radialSegments; ++radial) {
+	const double radius = static_cast<double>(radial) /
+	    static_cast<double>(radialSegments);
+	for (size_t angular = 0; angular < angularSegments; ++angular) {
+	    const double phi = 2.0 * pi * static_cast<double>(angular) /
+		static_cast<double>(angularSegments);
+	    const size_t vertex =
+		1 + (radial - 1) * angularSegments + angular;
+	    vertices[vertex * 3 + X] = spanX * 0.5 * radius * std::cos(phi);
+	    vertices[vertex * 3 + Y] = spanY * 0.5 * radius * std::sin(phi);
+	    vertices[vertex * 3 + Z] = depth * radius * radius +
+		depth * 0.025 * std::sin(5.0 * phi + phase) * radius;
+	}
+    }
+
+    for (size_t angular = 0; angular < angularSegments; ++angular) {
+	const size_t next = (angular + 1) % angularSegments;
+	faces.push_back(0);
+	faces.push_back(static_cast<int>(1 + angular));
+	faces.push_back(static_cast<int>(1 + next));
+    }
+    for (size_t radial = 1; radial < radialSegments; ++radial) {
+	const size_t inner = 1 + (radial - 1) * angularSegments;
+	const size_t outer = inner + angularSegments;
+	for (size_t angular = 0; angular < angularSegments; ++angular) {
+	    const size_t next = (angular + 1) % angularSegments;
+	    faces.push_back(static_cast<int>(inner + angular));
+	    faces.push_back(static_cast<int>(outer + angular));
+	    faces.push_back(static_cast<int>(outer + next));
+	    faces.push_back(static_cast<int>(inner + angular));
+	    faces.push_back(static_cast<int>(outer + next));
+	    faces.push_back(static_cast<int>(inner + next));
+	}
+    }
+}
+
+void
+generate_open_mesh(size_t mesh, size_t gridCells,
+    double spanX, double spanY, MeshShape shape,
+    std::vector<fastf_t> &vertices,
+    std::vector<int> &faces)
+{
+    if (shape == MeshShape::Dish) {
+	generate_open_dish(mesh, gridCells, spanX, spanY, vertices, faces);
+	return;
+    }
     const size_t side = gridCells + 1;
     const size_t vertexCount = side * side;
     const size_t faceCount = gridCells * gridCells * 2;
@@ -424,6 +611,10 @@ main(int argc, char **argv)
     size_t closedManifoldCount = 0;
     size_t openSurfaceCount = 0;
     size_t nonManifoldCount = 0;
+    std::array<size_t, static_cast<size_t>(MeshShape::Count)> shapeCounts = {};
+    double minimumAspectRatio = 1.0;
+    double minimumPhysicalSpan = std::numeric_limits<double>::max();
+    double maximumPhysicalSpan = 0.0;
 
     for (size_t mesh = 0; mesh < meshCount && ok; ++mesh) {
 	const size_t gridCells = mesh_grid_cells(mesh, maxGridCells);
@@ -434,27 +625,81 @@ main(int argc, char **argv)
 	const bool structuralPanel =
 	    physicalBucket >= 10 && physicalBucket < 200;
 	const double profileUnit = mesh_physical_unit(mesh);
-	const double meshSpanX = primarySkin ?
-	    vehicleWidth * (0.22 + profileUnit * 0.14) : meshSpan;
-	const double meshSpanY = primarySkin ?
-	    vehicleBeam * (0.65 + profileUnit * 0.25) :
-	    (structuralPanel ?
-		meshSpan * (0.28 + profileUnit * 0.42) : meshSpan);
-	const double meshSpanZ = primarySkin ?
-	    vehicleHeight * (0.62 + profileUnit * 0.25) :
-	    (structuralPanel ?
-		meshSpan * (0.12 + profileUnit * 0.25) :
-		meshSpan * (0.32 + profileUnit * 0.52));
 	const MeshTopology topology = mesh_topology(mesh);
+	MeshShape shape = mesh_shape(mesh, topology, physicalBucket);
+	/* Preserve the established 5k smooth-zoom target as a detailed body;
+	 * its name, source density, placement, and useful center are harness
+	 * invariants rather than part of the statistical profile. */
+	if (mesh == 199)
+	    shape = MeshShape::Body;
+	const double aspectUnit =
+	    mesh_profile_unit(mesh, 0x13198a2e03707344ULL);
+	double meshSpanX = meshSpan;
+	double meshSpanY = meshSpan * (0.48 + profileUnit * 0.42);
+	double meshSpanZ = meshSpan * (0.36 + aspectUnit * 0.45);
+	switch (shape) {
+	    case MeshShape::Body:
+		if (primarySkin) {
+		    meshSpanX = vehicleWidth * (0.22 + profileUnit * 0.14);
+		    meshSpanY = vehicleBeam * (0.65 + aspectUnit * 0.25);
+		    meshSpanZ = vehicleHeight * (0.62 + profileUnit * 0.25);
+		}
+		break;
+	    case MeshShape::Cylinder:
+		meshSpanY = meshSpan * (0.18 + profileUnit * 0.30);
+		meshSpanZ = meshSpanY * (0.82 + aspectUnit * 0.30);
+		break;
+	    case MeshShape::Boom:
+		meshSpanY = meshSpan * (0.018 + profileUnit * 0.065);
+		meshSpanZ = meshSpan * (0.018 + aspectUnit * 0.065);
+		break;
+	    case MeshShape::Box:
+		meshSpanY = meshSpan * (0.30 + profileUnit * 0.55);
+		meshSpanZ = meshSpan * (0.14 + aspectUnit * 0.46);
+		break;
+	    case MeshShape::Panel:
+		meshSpanY = meshSpan * (0.42 + profileUnit * 0.70);
+		meshSpanZ = meshSpan * (0.006 + aspectUnit * 0.026);
+		break;
+	    case MeshShape::Dish:
+		meshSpanY = meshSpan * (0.68 + profileUnit * 0.34);
+		meshSpanZ = meshSpan * (0.10 + aspectUnit * 0.08);
+		break;
+	    case MeshShape::Irregular:
+		meshSpanY = meshSpan * (0.38 + profileUnit * 0.70);
+		meshSpanZ = meshSpan * (0.28 + aspectUnit * 0.62);
+		break;
+	    case MeshShape::Count:
+		break;
+	}
+	if (structuralPanel && shape != MeshShape::Panel &&
+		shape != MeshShape::Boom) {
+	    meshSpanY *= 0.72;
+	    meshSpanZ *= 0.62;
+	}
+	if (mesh == 199) {
+	    meshSpanX = meshSpan;
+	    meshSpanY = meshSpan;
+	    meshSpanZ = meshSpan * (0.32 + profileUnit * 0.52);
+	}
+	++shapeCounts[static_cast<size_t>(shape)];
+	const double shortestSpan = std::min(meshSpanX,
+	    std::min(meshSpanY, meshSpanZ));
+	const double longestSpan = std::max(meshSpanX,
+	    std::max(meshSpanY, meshSpanZ));
+	minimumAspectRatio = std::min(minimumAspectRatio,
+	    shortestSpan / std::max(0.001, longestSpan));
+	minimumPhysicalSpan = std::min(minimumPhysicalSpan, longestSpan);
+	maximumPhysicalSpan = std::max(maximumPhysicalSpan, longestSpan);
 	std::vector<fastf_t> vertices;
 	std::vector<int> faces;
 	if (topology == MeshTopology::OpenSurface) {
 	    generate_open_mesh(mesh, gridCells,
-		meshSpanX, meshSpanY, vertices, faces);
+		meshSpanX, meshSpanY, shape, vertices, faces);
 	    ++openSurfaceCount;
 	} else {
 	    generate_closed_mesh(mesh, gridCells,
-		meshSpanX, meshSpanY, meshSpanZ,
+		meshSpanX, meshSpanY, meshSpanZ, shape,
 		topology == MeshTopology::NonManifold, vertices, faces);
 	    if (topology == MeshTopology::ClosedManifold)
 		++closedManifoldCount;
@@ -507,11 +752,72 @@ main(int argc, char **argv)
 	 * diagnosable while the smaller population still stresses arbitrary
 	 * placement, hierarchy, and visibility. */
 	const double hullX = (profileUnit - 0.5) * vehicleWidth * 0.48;
-	const double placedX = primarySkin ? hullX : tx;
-	const double placedY = primarySkin ? 0.0 : ty;
-	const double placedZ = primarySkin ? 0.0 :
+	double placedX = primarySkin ? hullX : tx;
+	double placedY = primarySkin ? 0.0 : ty;
+	double placedZ = primarySkin ? 0.0 :
 	    (tz + 6.0 * std::sin(static_cast<double>(column) * 0.47) +
 		4.0 * std::cos(static_cast<double>(row) * 0.53));
+	if (mesh != 199 && !primarySkin) {
+	    /* A dozen authored macro-assemblies replace the old perturbed lattice.
+	     * Consecutive hierarchy branches are spatially and visually coherent,
+	     * while deterministic local coordinates keep all assets distinct. */
+	    const size_t assembly = (mesh / 256) % 12;
+	    const double localX =
+		mesh_profile_unit(mesh, 0x082efa98ec4e6c89ULL) * 2.0 - 1.0;
+	    const double localY =
+		mesh_profile_unit(mesh, 0x452821e638d01377ULL) * 2.0 - 1.0;
+	    const double localZ =
+		mesh_profile_unit(mesh, 0xbe5466cf34e90c6cULL) * 2.0 - 1.0;
+	    switch (assembly) {
+		case 0:
+		case 1: {
+		    const double shellAngle = localY * std::acos(-1.0);
+		    placedX = localX * vehicleWidth * 0.34;
+		    placedY = std::cos(shellAngle) * vehicleBeam * 0.26;
+		    placedZ = std::sin(shellAngle) * vehicleHeight * 0.30;
+		    break;
+		}
+		case 2:
+		case 3: {
+		    const double side = assembly == 2 ? -1.0 : 1.0;
+		    placedX = localX * vehicleWidth * 0.15;
+		    placedY = side * vehicleWidth * (0.22 + 0.28 *
+			(0.5 + 0.5 * localY));
+		    placedZ = localZ * vehicleHeight * 0.10;
+		    break;
+		}
+		case 4:
+		case 5: {
+		    const double side = assembly == 4 ? -1.0 : 1.0;
+		    const double along = 0.5 + 0.5 * localX;
+		    placedX = side * along * vehicleWidth * 0.48;
+		    placedY = localY * vehicleBeam * (0.08 + 0.20 * along);
+		    placedZ = localZ * vehicleHeight * (0.08 + 0.18 * along);
+		    break;
+		}
+		case 6:
+		case 7:
+		    placedX = (assembly == 6 ? -0.18 : 0.18) * vehicleWidth +
+			localX * vehicleWidth * 0.09;
+		    placedY = localY * vehicleBeam * 0.30;
+		    placedZ = vehicleHeight * 0.28 +
+			localZ * vehicleHeight * 0.18;
+		    break;
+		case 8:
+		case 9:
+		    placedX = (assembly == 8 ? -0.31 : 0.31) * vehicleWidth +
+			localX * vehicleWidth * 0.11;
+		    placedY = localY * vehicleBeam * 0.34;
+		    placedZ = -vehicleHeight * 0.20 +
+			localZ * vehicleHeight * 0.20;
+		    break;
+		default:
+		    placedX = localX * vehicleWidth * 0.38;
+		    placedY = localY * vehicleBeam * 0.42;
+		    placedZ = localZ * vehicleHeight * 0.45;
+		    break;
+	    }
+	}
 	/* Exercise projection, PCA, lighting, and culling with panels spanning
 	 * all principal orientations plus a deterministic twist. */
 	double twist = std::fmod(
@@ -522,7 +828,8 @@ main(int argc, char **argv)
 	    twist = 0.0;
 	    rotateX = 0.0;
 	    rotateY = 0.0;
-	} else if (structuralPanel) {
+	} else if (structuralPanel || shape == MeshShape::Panel ||
+		shape == MeshShape::Boom) {
 	    /* Structural members are mostly axis-aligned with a small authored
 	     * cant, as opposed to the fully arbitrary smaller components. */
 	    twist = static_cast<double>((mesh % 3) * 90);
@@ -587,6 +894,22 @@ main(int argc, char **argv)
     wdb_close(wdbp);
     if (!ok)
 	return 1;
+    if (meshCount >= 1000) {
+	bool profileOk = minimumAspectRatio < 0.05 &&
+	    maximumPhysicalSpan > minimumPhysicalSpan * 100.0;
+	const size_t minimumShapePopulation = meshCount / 200;
+	for (size_t shape = 0;
+	     shape < static_cast<size_t>(MeshShape::Count); ++shape) {
+	    profileOk = profileOk &&
+		shapeCounts[shape] >= minimumShapePopulation &&
+		shapeCounts[shape] < meshCount / 2;
+	}
+	if (!profileOk) {
+	    std::fprintf(stderr,
+		"generated profile lacks required size/aspect/shape diversity\n");
+	    return 1;
+	}
+    }
     std::printf("generated %zu distinct meshes "
 	"(%zu closed manifold, %zu open, %zu non-manifold), "
 	"%zu..%zu faces each, %zu aggregate faces in %s\n",
@@ -594,5 +917,13 @@ main(int argc, char **argv)
 	minimumFaces == std::numeric_limits<size_t>::max() ?
 	    0 : minimumFaces,
 	maximumFaces, aggregateFaces, argv[1]);
+    std::printf("shape profile:");
+    for (size_t shape = 0;
+	 shape < static_cast<size_t>(MeshShape::Count); ++shape)
+	std::printf(" %s=%zu", mesh_shape_name(static_cast<MeshShape>(shape)),
+	    shapeCounts[shape]);
+    std::printf(", aspect-min=%.4f, physical-span-ratio=%.1f\n",
+	minimumAspectRatio,
+	maximumPhysicalSpan / std::max(0.001, minimumPhysicalSpan));
     return 0;
 }

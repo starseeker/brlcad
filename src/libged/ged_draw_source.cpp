@@ -4905,7 +4905,7 @@ ged_draw_mesh_lod_publish_current(
     if (!lod || !cb || !bobol_mesh_lod_data_get(lod, &lod_data))
 	return 0;
 
-    const int *faces = lod_data.faces;
+    const uint32_t *faces = lod_data.faces;
     const point_t *points = lod_data.points;
     size_t face_count = lod_data.face_count;
     size_t point_count = lod_data.point_count;
@@ -4913,8 +4913,8 @@ ged_draw_mesh_lod_publish_current(
     for (size_t i = 0; i < face_count; i++) {
 	int valid = 1;
 	for (int j = 0; j < 3; j++) {
-	    int idx = faces[3*i + j];
-	    if (idx < 0 || (size_t)idx >= point_count) {
+	    const uint32_t idx = faces[3*i + j];
+	    if ((size_t)idx >= point_count || idx > (uint32_t)INT_MAX) {
 		valid = 0;
 		break;
 	    }
@@ -4938,8 +4938,8 @@ ged_draw_mesh_lod_publish_current(
     for (size_t i = 0; i < face_count; i++) {
 	int bad_face = 0;
 	for (int j = 0; j < 3; j++) {
-	    int idx = faces[3*i + j];
-	    if (idx < 0 || (size_t)idx >= point_count) {
+	    const uint32_t idx = faces[3*i + j];
+	    if ((size_t)idx >= point_count || idx > (uint32_t)INT_MAX) {
 		bad_face = 1;
 		break;
 	    }
@@ -4954,7 +4954,7 @@ ged_draw_mesh_lod_publish_current(
 	VUNITIZE(face_normal);
 
 	for (int j = 0; j < 3; j++) {
-	    indices[out] = faces[3*i + j];
+	    indices[out] = (int)faces[3*i + j];
 	    if (lod_data.normals && lod_data.normal_count >= (3*i + j + 1)) {
 		VMOVE(normals[normal_out], lod_data.normals[3*i + j]);
 		if (ZERO(MAGNITUDE(normals[normal_out])))
@@ -5116,11 +5116,13 @@ ged_draw_obol_database_source_bot_mesh_lod_realize(
 	}
     }
 
-    struct bv_view_info view_info = BV_VIEW_INFO_INIT;
-    ged_view_feature_info_get(&view_info, view_ctx);
-    int level = bobol_mesh_lod_load_view(mesh_lod, &view_info, 0);
-    if (level < 0)
-	bu_log("Error loading info for initial Obol LoD view\n");
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    const int cut = bobol_mesh_lod_hierarchy_info_get(
+	mesh_lod, &hierarchy) ?
+	bobol_mesh_lod_load_cut(mesh_lod, hierarchy.min_cut, 0) : -1;
+    if (cut < 0)
+	bu_log("Error loading the initial Obol LoD cut\n");
 
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
     if (bobol_mesh_lod_info_get(mesh_lod, &info))

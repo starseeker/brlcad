@@ -121,7 +121,7 @@ SoBRLMeshShape::SoBRLMeshShape(void)
     SO_NODE_ADD_FIELD(editIntentRole, (""));
     SO_NODE_ADD_FIELD(lodPolicy, (0));
     SO_NODE_ADD_FIELD(lodAvailable, (FALSE));
-    SO_NODE_ADD_FIELD(lodActiveLevel, (-1));
+    SO_NODE_ADD_FIELD(lodActiveCut, (-1));
     SO_NODE_ADD_FIELD(lodFaceCount, (0));
     SO_NODE_ADD_FIELD(lodPointCount, (0));
     SO_NODE_ADD_FIELD(lodOriginalPointCount, (0));
@@ -446,7 +446,7 @@ SoBRLMeshShape::makeSourceMeshRequest(BObolSourceMeshRequest &request) const
     request.editIntentRole = this->editIntentRole.getValue();
     request.lodPolicy = this->lodPolicy.getValue();
     request.lodAvailable = this->lodAvailable.getValue();
-    request.lodActiveLevel = this->lodActiveLevel.getValue();
+    request.lodActiveCut = this->lodActiveCut.getValue();
     request.lodFaceCount = this->lodFaceCount.getValue();
     request.lodPointCount = this->lodPointCount.getValue();
     request.lodOriginalPointCount = this->lodOriginalPointCount.getValue();
@@ -838,7 +838,7 @@ SoBRLMeshShape::applyStagedLodResult(const BObolLodResult &result,
     if (result.resultKind == BOBOL_LOD_RESULT_MESH ||
 	result.resultKind == BOBOL_LOD_RESULT_FULL_DETAIL) {
 	this->lodAvailable = TRUE;
-	this->lodActiveLevel = result.geometry.activeLevel;
+	this->lodActiveCut = result.geometry.activeCut;
 	if (result.mesh.isValid() &&
 	    result.mesh.points.size() <=
 	    static_cast<size_t>(std::numeric_limits<int>::max()) &&
@@ -1176,8 +1176,8 @@ mesh_shape_emit_wire_lines(SoBRLMeshShape *shape,
 
 /* Identify which geometry is currently baked into the cached display lists.
  * 'kind' distinguishes the triangle stream (shaded / hidden-line) from the
- * wire stream.  For a view-local LoD payload the cache key + active level +
- * triangle count uniquely name the resident level (the node fields do not
+ * wire stream.  For a view-local LoD payload the cache key + active cut +
+ * triangle count uniquely name the resident cut (the node fields do not
  * change, so notify() cannot see refinement).  For node-owned geometry the
  * triangle/normal counts suffice because notify() already discards the cache
  * whenever a field changes. */
@@ -1190,7 +1190,7 @@ mesh_shape_geometry_signature(SoBRLMeshShape *shape, char kind,
     if (viewPayload) {
 	out << 'V' << '|'
 	    << viewPayload->cacheKey.getString() << '|'
-	    << viewPayload->activeLevel << '|'
+	    << viewPayload->activeCut << '|'
 	    << viewPayload->getTriangleCount() << '|'
 	    << static_cast<uint64_t>(viewPayload->mesh.normals.size());
     } else {

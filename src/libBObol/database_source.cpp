@@ -646,6 +646,7 @@ BObolDatabaseSourceSummary::BObolDatabaseSourceSummary(void) :
     drawSizeValid(FALSE),
     drawSize(0.0f),
     sourceBoundsValid(FALSE),
+    sourceBoundsExact(FALSE),
     sourceBounds(),
     stale(TRUE),
     staleReason(SoBRLDatabaseSource::STALE_SOURCE),
@@ -896,7 +897,7 @@ BObolRealizedShapeSummary::BObolRealizedShapeSummary(void) :
     colorOverride(FALSE),
     color(1.0f, 1.0f, 1.0f),
     lodAvailable(FALSE),
-    lodActiveLevel(-1),
+    lodActiveCut(-1),
     lodFaceCount(0),
     lodPointCount(0),
     lodOriginalPointCount(0),
@@ -3373,7 +3374,7 @@ compact_summary_lod_from_source_mesh_request(
 {
     summary.lodPolicy = request.lodPolicy;
     summary.lodAvailable = request.lodAvailable ? TRUE : FALSE;
-    summary.lodActiveLevel = request.lodActiveLevel;
+    summary.lodActiveCut = request.lodActiveCut;
     summary.lodFaceCount = request.lodFaceCount;
     summary.lodPointCount = request.lodPointCount;
     summary.lodOriginalPointCount = request.lodOriginalPointCount;
@@ -3829,6 +3830,7 @@ cad_progressive_wire_part_geometry_from_provider(
     std::vector<uint32_t> previousIds;
     uint32_t previousFirst = 0;
     uint32_t previousCount = 0;
+	wire.progressiveCuts.resize(16);
     for (uint8_t level = 0; level < 16; ++level) {
 	std::vector<SbVec3f> levelPoints;
 	std::vector<uint32_t> levelIds;
@@ -3856,8 +3858,8 @@ cad_progressive_wire_part_geometry_from_provider(
 	    return 0;
 	if (level > 0 && cad_wire_level_equal(levelPoints, levelIds,
 		previousPoints, previousIds)) {
-	    wire.progressiveSegmentFirst[level] = previousFirst;
-	    wire.progressiveSegmentCount[level] = previousCount;
+	    wire.progressiveCuts[level].segmentFirst = previousFirst;
+	    wire.progressiveCuts[level].segmentCount = previousCount;
 	    continue;
 	}
 	const uint32_t first = static_cast<uint32_t>(wire.segmentCount());
@@ -3866,15 +3868,15 @@ cad_progressive_wire_part_geometry_from_provider(
 	    levelPoints.begin(), levelPoints.end());
 	wire.segmentIds.insert(wire.segmentIds.end(),
 	    levelIds.begin(), levelIds.end());
-	wire.progressiveSegmentFirst[level] = first;
-	wire.progressiveSegmentCount[level] = count;
+	wire.progressiveCuts[level].segmentFirst = first;
+	wire.progressiveCuts[level].segmentCount = count;
 	previousPoints = std::move(levelPoints);
 	previousIds = std::move(levelIds);
 	previousFirst = first;
 	previousCount = count;
     }
-    wire.progressiveMinimumLevel = 0;
-    wire.progressiveResidentLevel = 15;
+    wire.progressiveMinimumCut = 0;
+    wire.progressiveResidentCut = 15;
     wire.progressiveQuantizationMinimum = wire.bounds.getMin();
     wire.progressiveQuantizationMaximum = wire.bounds.getMax();
     geometry.wire = std::move(wire);
@@ -5936,11 +5938,11 @@ publish_lod_mesh_if_available(SoBRLMeshShape *shape,
     if (!lod)
 	return;
 
-    struct bv_view_info viewInfo;
-    source_view_info(&viewInfo, source);
-
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
-    if (bobol_mesh_lod_load_view(lod, &viewInfo, 0) >= 0 &&
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    if (bobol_mesh_lod_hierarchy_info_get(lod, &hierarchy) &&
+	bobol_mesh_lod_load_cut(lod, hierarchy.min_cut, 0) >= 0 &&
 	bobol_mesh_lod_info_get(lod, &info)) {
 	BObolLodRequest request;
 	shape->makeLodRequest(request,
@@ -6899,7 +6901,7 @@ compact_mesh_prefill_import_and_filter(compact_mesh_prefill_collect &collect,
 		job.sourceMeshRequest.meshAssetName =
 		    job.dp && job.dp->d_namep ? job.dp->d_namep : "";
 		/* The compact realization keeps only a box until the managed
-		 * service loads the view-selected PoP level. */
+		 * service loads the view-selected PoP cut. */
 		job.lodBacked = true;
 		job.success = true;
 	    }
@@ -7750,7 +7752,7 @@ realize_direct_leaf_mesh_compact(
 	    BObolRealizedShapeSummary meshSummary;
 	    realized_mesh_shape_summary(sharedMeshShape, meshSummary);
 	    occurrence.summary.lodAvailable = meshSummary.lodAvailable;
-	    occurrence.summary.lodActiveLevel = meshSummary.lodActiveLevel;
+	    occurrence.summary.lodActiveCut = meshSummary.lodActiveCut;
 	    occurrence.summary.lodFaceCount = meshSummary.lodFaceCount;
 	    occurrence.summary.lodPointCount = meshSummary.lodPointCount;
 	    occurrence.summary.lodOriginalPointCount =
@@ -8651,8 +8653,8 @@ static union tree *
 		BObolRealizedShapeSummary meshSummary;
 		realized_mesh_shape_summary(sharedMeshShape, meshSummary);
 		input.occurrence.summary.lodAvailable = meshSummary.lodAvailable;
-		input.occurrence.summary.lodActiveLevel =
-		    meshSummary.lodActiveLevel;
+		input.occurrence.summary.lodActiveCut =
+		    meshSummary.lodActiveCut;
 		input.occurrence.summary.lodFaceCount = meshSummary.lodFaceCount;
 		input.occurrence.summary.lodPointCount = meshSummary.lodPointCount;
 		input.occurrence.summary.lodOriginalPointCount =
@@ -9427,6 +9429,14 @@ cad_mesh_part_geometry(const SoBRLMeshShape *shape,
     if (shape->hiddenLine.getValue() ||
 	shape->drawMode.getValue() == BOBOL_LOD_DRAW_HIDDEN_LINE)
 	(void)cad_mesh_append_hidden_line_edges(geometry);
+    /* Legacy/evaluated CAD mesh records do not necessarily have PoP data,
+     * but their complete vertex bounds are still conservative.  Authorize
+     * the retained assembly to replace the whole occurrence with one
+     * depth-tested point when its projected extent falls below the active
+     * screen-error threshold.  This is the non-progressive escape path for
+     * software rendering under frame pressure; selected occurrences are
+     * promoted by SoCADAssembly and never remain collapsed. */
+    geometry.subpixelProxyEligible = true;
     return 1;
 }
 
@@ -9856,29 +9866,29 @@ cad_progressive_mesh_part_geometry(
 {
     if (!progressive || !progressive->isValid())
 	return 0;
-    const int residentLevel = progressive->residentLevel();
-    /* residentLevel is the highest population prefix loaded from storage,
+    const int residentCut = progressive->residentCut();
+    /* residentCut is the highest population prefix loaded from storage,
      * not necessarily the finest coordinate cut the retained exact arrays
-     * can draw.  Once all points and faces needed by later PoP levels are
-     * resident, those levels differ only in the renderer's coordinate snap
-     * and require no further I/O.  Advertise that drawable frontier to Obol;
-     * otherwise it clamps a correctly requested level (for example 9) back
-     * to the last population-changing level (for example 4), leaving small
+     * can draw.  Once all points and faces needed by later PoP cuts are
+     * resident, those cuts differ only in the renderer's coordinate snap and
+     * require no further I/O.  Advertise that drawable frontier to Obol;
+     * otherwise it clamps a correctly requested cut back to the last
+     * population-changing cut, leaving small
      * meshes visibly blocky forever. */
-    int drawableLevel = residentLevel;
-    for (int level = residentLevel + 1;
-	 level <= progressive->maximumLevel(); ++level) {
-	if (!progressive->canDrawLevel(level))
+    int drawableCut = residentCut;
+    for (int cut = residentCut + 1;
+	 cut <= progressive->maximumCut(); ++cut) {
+	if (!progressive->canDrawCut(cut))
 	    break;
-	drawableLevel = level;
+	drawableCut = cut;
     }
     BObolLodMeshPayload payload;
-    if (!progressive->copyLevel(payload, residentLevel) ||
+    if (!progressive->copyCut(payload, residentCut) ||
 	!cad_mesh_payload_part_geometry(payload, wire, shaded,
 	    shadedCullBackfaces, geometry, normalStyle, normalCreaseAngle))
 	return 0;
 
-    const int minimumLevel = progressive->minimumLevel();
+    const int minimumCut = progressive->minimumCut();
     const SbVec3f quantizationMinimum =
 	progressive->quantizationMinimum();
     const SbVec3f quantizationMaximum =
@@ -9897,17 +9907,28 @@ cad_progressive_mesh_part_geometry(
 	 */
 	if (!conservativeBounds.isEmpty())
 	    mesh.bounds = conservativeBounds;
-	mesh.progressiveMinimumLevel =
-	    static_cast<uint8_t>(std::max(0, minimumLevel));
-	mesh.progressiveResidentLevel =
-	    static_cast<uint8_t>(std::max(0, drawableLevel));
+	mesh.progressiveMinimumCut =
+	    static_cast<uint8_t>(std::max(0, minimumCut));
+	mesh.progressiveResidentCut =
+	    static_cast<uint8_t>(std::max(0, drawableCut));
 	mesh.progressiveQuantizationMinimum = quantizationMinimum;
 	mesh.progressiveQuantizationMaximum = quantizationMaximum;
-	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	    const size_t count = progressive->faceCount(level) * 3;
-	    mesh.progressiveIndexCount[level] = static_cast<uint32_t>(
+	mesh.progressiveCuts.resize(
+	    static_cast<size_t>(progressive->maximumCut()) + 1);
+	for (int cut = 0; cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut) {
+	    if (static_cast<size_t>(cut) >= mesh.progressiveCuts.size())
+		break;
+	    const size_t count = progressive->faceCount(cut) * 3;
+	    mesh.progressiveCuts[cut].indexCount = static_cast<uint32_t>(
 		std::min(count,
 		    static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+	    BObolMeshLodCutInfo cutInfo = {};
+	    if (!progressive->cutInfo(cut, &cutInfo))
+		return 0;
+	    mesh.progressiveCuts[cut].quantization = {
+		cutInfo.quantization_bits[X], cutInfo.quantization_bits[Y],
+		cutInfo.quantization_bits[Z]
+	    };
 	}
 	/* Record the vertex extent of each cumulative index prefix once while
 	 * constructing the geometry.  Recomputing it from every visible part on
@@ -9916,15 +9937,15 @@ cad_progressive_mesh_part_geometry(
 	 * counts because normal canonicalization may split shared vertices. */
 	size_t scannedIndexCount = 0;
 	uint32_t maximumIndex = 0;
-	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
+	for (size_t cut = 0; cut < mesh.progressiveCuts.size(); ++cut) {
 	    const size_t indexCount = std::min<size_t>(
-		mesh.progressiveIndexCount[level], mesh.indices.size());
+		mesh.progressiveCuts[cut].indexCount, mesh.indices.size());
 	    for (; scannedIndexCount < indexCount; ++scannedIndexCount)
 		maximumIndex = std::max(maximumIndex,
 		    mesh.indices[scannedIndexCount]);
 	    const size_t positionCount = indexCount ?
 		static_cast<size_t>(maximumIndex) + 1 : 0;
-	    mesh.progressivePositionCount[level] = static_cast<uint32_t>(
+	    mesh.progressiveCuts[cut].positionCount = static_cast<uint32_t>(
 		std::min(positionCount,
 		    static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
 	}
@@ -9933,17 +9954,27 @@ cad_progressive_mesh_part_geometry(
 	Obol::WireRep &wireRep = *geometry.wire;
 	if (!conservativeBounds.isEmpty())
 	    wireRep.bounds = conservativeBounds;
-	wireRep.progressiveMinimumLevel =
-	    static_cast<uint8_t>(std::max(0, minimumLevel));
-	wireRep.progressiveResidentLevel =
-	    static_cast<uint8_t>(std::max(0, drawableLevel));
+	wireRep.progressiveMinimumCut =
+	    static_cast<uint8_t>(std::max(0, minimumCut));
+	wireRep.progressiveResidentCut =
+	    static_cast<uint8_t>(std::max(0, drawableCut));
 	wireRep.progressiveQuantizationMinimum = quantizationMinimum;
 	wireRep.progressiveQuantizationMaximum = quantizationMaximum;
-	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	    const size_t count = progressive->faceCount(level) * 3;
-	    wireRep.progressiveSegmentCount[level] = static_cast<uint32_t>(
+	wireRep.progressiveCuts.resize(
+	    static_cast<size_t>(progressive->maximumCut()) + 1);
+	for (size_t cut = 0; cut < wireRep.progressiveCuts.size(); ++cut) {
+	    const size_t count = progressive->faceCount(cut) * 3;
+	    wireRep.progressiveCuts[cut].segmentFirst = 0;
+	    wireRep.progressiveCuts[cut].segmentCount = static_cast<uint32_t>(
 		std::min(count,
 		    static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+	    BObolMeshLodCutInfo cutInfo = {};
+	    if (!progressive->cutInfo(static_cast<int>(cut), &cutInfo))
+		return 0;
+	    wireRep.progressiveCuts[cut].quantization = {
+		cutInfo.quantization_bits[X], cutInfo.quantization_bits[Y],
+		cutInfo.quantization_bits[Z]
+	    };
 	}
     }
     return 1;
@@ -9951,22 +9982,22 @@ cad_progressive_mesh_part_geometry(
 
 static bool
 cad_progressive_geometry_can_draw(const Obol::PartGeometry *geometry,
-				  int wire, int shaded, int activeLevel)
+				  int wire, int shaded, int activeCut)
 {
-    if (!geometry || activeLevel < 0)
+    if (!geometry || activeCut < 0)
 	return false;
     if (wire) {
 	if (!geometry->wire.has_value() ||
 	    !geometry->wire->isProgressive() ||
-	    geometry->wire->progressiveResidentLevel <
-		static_cast<uint8_t>(std::min(15, activeLevel)))
+	    activeCut >= static_cast<int>(geometry->wire->progressiveCuts.size()) ||
+	    geometry->wire->progressiveResidentCut < activeCut)
 	    return false;
     }
     if (shaded) {
 	if (!geometry->shaded.has_value() ||
 	    !geometry->shaded->isProgressive() ||
-	    geometry->shaded->progressiveResidentLevel <
-		static_cast<uint8_t>(std::min(15, activeLevel)))
+	    activeCut >= static_cast<int>(geometry->shaded->progressiveCuts.size()) ||
+	    geometry->shaded->progressiveResidentCut < activeCut)
 	    return false;
     }
     return wire || shaded;
@@ -10074,7 +10105,7 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
 		payload->progressiveMesh->revision() &&
 	    cad_progressive_geometry_can_draw(
 		payload->preparedCadGeometry.get(), wire, shaded,
-		payload->activeLevel))
+		payload->activeCut))
 	    preparedGeometry = payload->preparedCadGeometry;
 	if (!preparedGeometry &&
 	    !cad_mesh_payload_part_geometry(payload->mesh, wire, shaded,
@@ -10428,7 +10459,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	}
     }
 
-    /* A camera epoch usually changes only the active PoP level on a bounded
+    /* A camera epoch usually changes only the active PoP cut on a bounded
      * wave of occurrences.  Preserve the compiled assembly and route those
      * changes directly by occurrence key.  Source structure/style revisions
      * still take the authoritative full-scan path. */
@@ -10518,7 +10549,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     std::vector<Obol::SharedPartUpdate> lodSharedParts;
     std::vector<Obol::InstanceUpdate> instances;
     std::vector<Obol::InstanceStyleUpdate> instanceStyles;
-    std::vector<Obol::InstanceLodUpdate> lodLevelUpdates;
+    std::vector<Obol::InstanceLodUpdate> lodCutUpdates;
     std::unordered_set<Obol::PartId, std::hash<Obol::PartId>>
 	progressivePartsUpdated;
     std::unordered_set<Obol::PartId, std::hash<Obol::PartId>> partsToRemove;
@@ -10606,14 +10637,14 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	if (reset) {
 	    presentation.activePart = entry.part;
 	    presentation.channels = assembly->compactPartChannels[entry.part];
-	    presentation.activeLevel = -1;
+	    presentation.activeCut = -1;
 	}
 
     std::string payloadKey;
 	Obol::PartId desiredPart = entry.part;
 	uint8_t desiredChannels = assembly->compactPartChannels[entry.part];
 	bool desiredGeometryValid = false;
-	int desiredActiveLevel = -1;
+	int desiredActiveCut = -1;
 	if (payload) {
 	    payloadKey.reserve(
 		static_cast<size_t>(payload->cacheKey.getLength()) + 128u);
@@ -10628,10 +10659,10 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		payloadKey += "resident-revision=";
 		payloadKey += std::to_string(
 		    payload->progressiveMesh->revision());
-		desiredActiveLevel = payload->activeLevel;
+		desiredActiveCut = payload->activeCut;
 	    } else {
-		payloadKey += "level=";
-		payloadKey += std::to_string(payload->activeLevel);
+		payloadKey += "cut=";
+		payloadKey += std::to_string(payload->activeCut);
 	    }
 	    payloadKey += ':';
 	    payloadKey += std::to_string(sourceDrawMode);
@@ -10676,7 +10707,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 			payload->progressiveMesh->revision() &&
 		    cad_progressive_geometry_can_draw(
 			payload->preparedCadGeometry.get(), wire, shaded,
-			desiredActiveLevel)) {
+			desiredActiveCut)) {
 		    preparedGeometry = payload->preparedCadGeometry;
 		}
 
@@ -10684,13 +10715,13 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		 * A newly resident tail must not force a full CPU/GPU realization
 		 * while the view is asking for a coarser prefix.  Keep presenting
 		 * the older cumulative part when it already covers the active
-		 * level.  Leave presentation.payloadKey at the older resident
+		 * cut.  Leave presentation.payloadKey at the older resident
 		 * revision so a later stable, richer request will install the tail.
 		 */
 		if (progressive && presentation.activePart == desiredPart &&
 		    cad_progressive_geometry_can_draw(
 			assembly->partGeometry(desiredPart), wire, shaded,
-			desiredActiveLevel)) {
+			desiredActiveCut)) {
 		    desiredGeometryValid = true;
 		    reusedProgressivePart = true;
 		    desiredChannels =
@@ -10782,7 +10813,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    payloadKey.clear();
 	    desiredPart = entry.part;
 	    desiredChannels = assembly->compactPartChannels[entry.part];
-	    desiredActiveLevel = -1;
+	    desiredActiveCut = -1;
 	}
 
 	/* Structural proxies and source meshes generally do not share a local
@@ -10794,13 +10825,13 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	 * Choose the transform with the chosen representation and update it in
 	 * the same instance mutation as the part. */
 	const SbMatrix desiredLocalToRoot =
-	    desiredActiveLevel >= 0 && entry.sourceMeshRequestValid ?
+	    desiredActiveCut >= 0 && entry.sourceMeshRequestValid ?
 		compact_mesh_asset_matrix(this, entry) : entry.localToSource;
 
 	const bool partChanged = presentation.activePart != desiredPart ||
 	    presentation.payloadKey != payloadKey;
-	const bool levelChanged =
-	    presentation.activeLevel != desiredActiveLevel;
+	const bool cutChanged =
+	    presentation.activeCut != desiredActiveCut;
 	const bool appearanceChanged = !reset &&
 	    presentation.appearanceRevision != entry.appearanceRevision;
 	const bool selectionChanged = !reset &&
@@ -10835,30 +10866,41 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	if (reset && i < instances.size()) {
 	    instances[i].record.part = desiredPart;
 	    instances[i].record.localToRoot = desiredLocalToRoot;
-	    instances[i].record.lodLevel = desiredActiveLevel >= 0 ?
-		static_cast<uint8_t>(std::min(15, desiredActiveLevel)) : 255;
+	    instances[i].record.style = entry.style;
+	    instances[i].record.lodCut = desiredActiveCut >= 0 ?
+		static_cast<uint8_t>(std::min<int>(
+		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
 	} else if (recordChanged &&
 	    i < this->d->compactIndex->instances.size()) {
 	    Obol::InstanceUpdate update =
 		this->d->compactIndex->instances[i];
 	    update.record.part = desiredPart;
 	    update.record.localToRoot = desiredLocalToRoot;
-	    update.record.lodLevel = desiredActiveLevel >= 0 ?
-		static_cast<uint8_t>(std::min(15, desiredActiveLevel)) : 255;
+	    /* The retained index record is structural storage and may predate a
+	     * selection/highlight delta.  A geometry or placement change publishes
+	     * a complete record, so carry the entry's authoritative effective style
+	     * in that same atomic update.  Otherwise the full record can overwrite a
+	     * newer selected style and the following selection revision is marked as
+	     * consumed without ever reaching the renderer. */
+	    update.record.style = entry.style;
+	    update.record.lodCut = desiredActiveCut >= 0 ?
+		static_cast<uint8_t>(std::min<int>(
+		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
 	    instances.push_back(std::move(update));
 	} else if (appearanceChanged || selectionChanged) {
 	    Obol::InstanceStyleUpdate update;
 	    update.instance = entry.instance;
 	    update.style = entry.style;
 	    instanceStyles.push_back(update);
-	} else if (levelChanged) {
+	} else if (cutChanged) {
 	    Obol::InstanceLodUpdate update;
 	    update.instance = entry.instance;
-	    update.lodLevel = desiredActiveLevel >= 0 ?
-		static_cast<uint8_t>(std::min(15, desiredActiveLevel)) : 255;
-	    lodLevelUpdates.push_back(update);
+	    update.lodCut = desiredActiveCut >= 0 ?
+		static_cast<uint8_t>(std::min<int>(
+		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
+	    lodCutUpdates.push_back(update);
 	}
-	presentation.activeLevel = desiredActiveLevel;
+	presentation.activeCut = desiredActiveCut;
 
 	if (incrementalUpdate) {
 	    const bool previousWire = previousChannels & (1u | 4u);
@@ -10970,8 +11012,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	assembly->pickMode = SoCADAssembly::PICK_AUTO;
 	assembly->endUpdate();
     }
-    if (!lodLevelUpdates.empty())
-	assembly->updateInstanceLodLevels(lodLevelUpdates);
+    if (!lodCutUpdates.empty())
+	assembly->updateInstanceCuts(lodCutUpdates);
 
     /*
      * Compact presentation is intentionally sparse, so an intended active
@@ -11041,7 +11083,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	       structuralLodBacked, structuralSourceRequests,
 	       structuralEntryGeometry, structuralGeometryPointerMismatch,
 	       missingInstances, mismatchedParts, instances.size(),
-	       lodLevelUpdates.size(), reset ? 1 : 0);
+	       lodCutUpdates.size(), reset ? 1 : 0);
 	if (retainedStructural) {
 	    for (const auto &kind : structuralKinds)
 		bu_log("  structural kind=%s count=%zu\n",
@@ -11088,7 +11130,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		   structuralEntryIndices.size(), entryIndices.size(),
 		   payloadInput->size(), lodSharedParts.size(),
 		   instances.size(),
-		   lodLevelUpdates.size());
+		   lodCutUpdates.size());
 	}
     }
     return assembly;
@@ -12767,6 +12809,7 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(drawSizeValid, (FALSE));
     SO_NODE_ADD_FIELD(drawSize, (0.0f));
     SO_NODE_ADD_FIELD(sourceBoundsValid, (FALSE));
+    SO_NODE_ADD_FIELD(sourceBoundsExact, (FALSE));
     SO_NODE_ADD_FIELD(sourceBoundsMin, (SbVec3f(0.0f, 0.0f, 0.0f)));
     SO_NODE_ADD_FIELD(sourceBoundsMax, (SbVec3f(0.0f, 0.0f, 0.0f)));
     SO_NODE_ADD_FIELD(tessellationAbsTol, (0.0f));
@@ -13217,8 +13260,10 @@ SoBRLDatabaseSource::markStale(uint32_t reason)
      */
     const uint32_t sourceContractReasons =
 	STALE_SOURCE | STALE_INPUTS | STALE_DATABASE;
-    if (reason & sourceContractReasons)
+    if (reason & sourceContractReasons) {
 	this->d->displayMeshLodContractRevisionValid = FALSE;
+	(void)this->setSourceBoundsExactState(FALSE);
+    }
     if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT") &&
 	hadCurrentDisplayMeshLodContract &&
 	!this->hasDisplayMeshLodRequests())
@@ -13982,6 +14027,10 @@ SoBRLDatabaseSource::setSourceBoundsState(SbBool nextBoundsValid,
 	this->sourceBoundsValid = nextBoundsValid;
 	changed = 1;
     }
+    if (!nextBoundsValid && this->sourceBoundsExact.getValue()) {
+	this->sourceBoundsExact = FALSE;
+	changed = 1;
+    }
     if (!database_source_vec3f_equal(this->sourceBoundsMin.getValue(),
 				     sanitizedMin)) {
 	this->sourceBoundsMin = sanitizedMin;
@@ -13994,6 +14043,16 @@ SoBRLDatabaseSource::setSourceBoundsState(SbBool nextBoundsValid,
     }
 
     return changed;
+}
+
+int
+SoBRLDatabaseSource::setSourceBoundsExactState(SbBool nextBoundsExact)
+{
+    nextBoundsExact = nextBoundsExact && this->sourceBoundsValid.getValue();
+    if (this->sourceBoundsExact.getValue() == nextBoundsExact)
+	return 0;
+    this->sourceBoundsExact = nextBoundsExact;
+    return 1;
 }
 
 void
@@ -14033,6 +14092,13 @@ SoBRLDatabaseSource::getEffectiveSourceBounds(SbBox3f &bounds) const
     }
 
     return bounds.isEmpty() ? FALSE : TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::hasExactSourceBounds(void) const
+{
+    return this->sourceBoundsValid.getValue() &&
+	this->sourceBoundsExact.getValue();
 }
 
 void
@@ -15846,7 +15912,7 @@ compact_coverage_overview_occurrence(SoBRLDatabaseSource *source,
     overview.summary.recordRole = "lod-overview";
     overview.summary.selectable = FALSE;
     overview.summary.lodAvailable = TRUE;
-    overview.summary.lodActiveLevel = BOBOL_LOD_QUALITY_PROXY;
+    overview.summary.lodActiveCut = BOBOL_LOD_QUALITY_PROXY;
     overview.summary.lodBoundsMin = bounds.getMin();
     overview.summary.lodBoundsMax = bounds.getMax();
     overview.summary.pointCount = 24;
@@ -15999,7 +16065,7 @@ compact_stream_publish_parallel_coverage(
 		occurrence.summary = item.occurrence.summary;
 		occurrence.summary.lodAvailable =
 		    asset.lodEligible ? TRUE : FALSE;
-		occurrence.summary.lodActiveLevel =
+		occurrence.summary.lodActiveCut =
 		    BOBOL_LOD_QUALITY_PROXY;
 		occurrence.summary.lodFaceCount = asset.faceCount;
 		occurrence.summary.lodPointCount = asset.vertexCount;
@@ -20544,7 +20610,7 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 		    summary.hiddenLine, summary.editEmphasis,
 		    summary.editIntentId, summary.editIntentRole,
 		    summary.lodPolicy, summary.lodAvailable,
-		    summary.lodActiveLevel, summary.lodFaceCount,
+		    summary.lodActiveCut, summary.lodFaceCount,
 		    summary.lodPointCount, summary.lodOriginalPointCount,
 		    summary.lodNormalCount, summary.lodHasSnappedPoints,
 		    summary.lodHasNormals, summary.lodBoundsMin,
@@ -21593,7 +21659,7 @@ realized_mesh_shape_summary(const SoBRLMeshShape *shape,
     summary.triangleCount = shape->getTriangleCount();
     realized_shape_summary_bounds(geom->point, summary);
     summary.lodAvailable = shape->lodAvailable.getValue();
-    summary.lodActiveLevel = shape->lodActiveLevel.getValue();
+    summary.lodActiveCut = shape->lodActiveCut.getValue();
     summary.lodFaceCount = shape->lodFaceCount.getValue();
     summary.lodPointCount = shape->lodPointCount.getValue();
     summary.lodOriginalPointCount = shape->lodOriginalPointCount.getValue();
@@ -21758,6 +21824,7 @@ SoBRLDatabaseSource::getSummary(BObolDatabaseSourceSummary &summary) const
     summary.drawSize = this->drawSize.getValue();
     summary.sourceBoundsValid = this->getEffectiveSourceBounds(
 				    summary.sourceBounds);
+    summary.sourceBoundsExact = this->hasExactSourceBounds();
     summary.stale = this->stale.getValue();
     summary.staleReason = this->staleReason.getValue();
     summary.realizedShapeCount = this->getRealizedShapeCount();

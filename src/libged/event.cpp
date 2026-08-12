@@ -1,4 +1,4 @@
-/*                    E V E N T _ T X N . C P P
+/*                         E V E N T . C P P
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -16,7 +16,7 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this file; see the file named COPYING for more information.
  */
-/** @file libged/event_txn.cpp
+/** @file libged/event.cpp
  *
  * GED semantic database mutation/reconciliation events.
  */
@@ -31,15 +31,15 @@
 
 #include "ged/draw.h"
 #include "ged/db_index.h"
-#include "ged/event_txn.h"
-#include "ged/selection_state.h"
+#include "ged/event.h"
+#include "ged/selection.h"
 #include "rt/db5.h"
 
 #include "./ged_private.h"
 
 
 struct ged_event_owned {
-    ged_event_kind kind = GED_EVENT_NONE;
+    enum ged_event_kind kind = GED_EVENT_NONE;
     std::string name;
     std::string new_name;
     std::string parent_name;
@@ -52,14 +52,14 @@ struct ged_event_owned {
 
 struct ged_event_observer_entry {
     ged_event_observer_token token = 0;
-    ged_event_observer_phase phase = GED_EVENT_OBSERVER_POST_RECONCILE;
+    enum ged_event_observer_phase phase = GED_EVENT_OBSERVER_POST_RECONCILE;
     ged_event_observer_func_t func = nullptr;
     void *client_data = nullptr;
     int removed = 0;
 };
 
 
-struct ged_event_txn_state {
+struct ged_event_service {
     struct ged *gedp = nullptr;
     struct db_i *callback_dbip = nullptr;
     ged_event_observer_token next_token = 1;
@@ -76,10 +76,24 @@ struct ged_event_txn_state {
 };
 
 
-static struct ged_event_txn_state *
-ged_event_state(struct ged *gedp)
+struct ged_event_result {
+    enum ged_event_status status = GED_EVENT_OK;
+    size_t event_count = 0;
+    size_t coalesced_count = 0;
+    size_t draw_change_count = 0;
+    size_t db_index_change_count = 0;
+    int selection_changed = 0;
+    uint64_t scene_revision_before = 0;
+    uint64_t scene_revision_after = 0;
+    std::vector<std::string> paths;
+    std::string diagnostic;
+};
+
+
+static struct ged_event_service *
+ged_event_service_get(struct ged *gedp)
 {
-    return (gedp && gedp->i) ? gedp->i->ged_event_txnp : nullptr;
+    return (gedp && gedp->i) ? gedp->i->ged_event_servicep : nullptr;
 }
 
 
@@ -345,34 +359,29 @@ ged_event_views(const std::vector<ged_event_owned> &events)
 
 
 static void
-ged_event_result_note_name(struct ged_event_txn_result *result,
+ged_event_result_note_name(struct ged_event_result *result,
 			   const char *name)
 {
     if (!result || !name || !name[0])
 	return;
-    if (bu_vls_strlen(&result->affected_names))
-	bu_vls_putc(&result->affected_names, ' ');
-    bu_vls_printf(&result->affected_names, "%s", name);
+    if (std::find(result->paths.begin(), result->paths.end(), name) ==
+	    result->paths.end())
+	result->paths.emplace_back(name);
 }
 
 
 static void
-ged_event_result_note_draw(struct ged_event_txn_result *result,
+ged_event_result_note_draw(struct ged_event_result *result,
 			   const struct ged_draw_transaction_result *draw_result)
 {
     if (!result || !draw_result)
 	return;
-    if (bu_vls_strlen(&draw_result->names)) {
-	if (bu_vls_strlen(&result->affected_names))
-	    bu_vls_putc(&result->affected_names, ' ');
-	bu_vls_printf(&result->affected_names, "%s",
-		bu_vls_cstr(&draw_result->names));
-    }
+    for (size_t i = 0; i < draw_result->path_count; i++)
+	ged_event_result_note_name(result, draw_result->paths[i]);
     if (bu_vls_strlen(&draw_result->errors)) {
-	if (bu_vls_strlen(&result->errors))
-	    bu_vls_putc(&result->errors, '\n');
-	bu_vls_printf(&result->errors, "%s",
-		bu_vls_cstr(&draw_result->errors));
+	if (!result->diagnostic.empty())
+	    result->diagnostic.push_back('\n');
+	result->diagnostic.append(bu_vls_cstr(&draw_result->errors));
     }
 }
 
@@ -424,28 +433,24 @@ ged_event_collect_index_affected_paths(struct ged *gedp,
 
 
 static void
-ged_event_result_prepare(struct ged_event_txn_result *result,
+ged_event_result_prepare(struct ged_event_result *result,
 			 struct ged *gedp,
 			 size_t event_count,
 			 size_t coalesced_event_count)
 {
     if (!result)
 	return;
-    result->status = 0;
+    ged_event_result_clear(result);
+    result->status = GED_EVENT_OK;
     result->event_count = event_count;
-    result->coalesced_event_count = coalesced_event_count;
-    result->draw_status = 0;
-    result->db_index_status = 0;
-    result->selection_status = 0;
-    result->draw_scene_revision_before = ged_draw_scene_revision(gedp);
-    result->draw_scene_revision_after = result->draw_scene_revision_before;
-    bu_vls_trunc(&result->affected_names, 0);
-    bu_vls_trunc(&result->errors, 0);
+    result->coalesced_count = coalesced_event_count;
+    result->scene_revision_before = ged_draw_scene_revision(gedp);
+    result->scene_revision_after = result->scene_revision_before;
 }
 
 
 static void
-ged_event_prune_observers(struct ged_event_txn_state *state)
+ged_event_prune_observers(struct ged_event_service *state)
 {
     if (!state || state->dispatch_depth > 0)
 	return;
@@ -459,7 +464,7 @@ ged_event_prune_observers(struct ged_event_txn_state *state)
 
 
 static int
-ged_event_observer_count(struct ged_event_txn_state *state)
+ged_event_observer_count(struct ged_event_service *state)
 {
     if (!state)
 	return 0;
@@ -474,7 +479,7 @@ ged_event_observer_count(struct ged_event_txn_state *state)
 
 
 static int
-ged_event_state_has_live_consumers(struct ged_event_txn_state *state)
+ged_event_service_has_live_consumers(struct ged_event_service *state)
 {
     if (!state || !state->gedp)
 	return 0;
@@ -500,10 +505,10 @@ ged_event_state_has_live_consumers(struct ged_event_txn_state *state)
 
 
 static void
-ged_event_dispatch_phase(struct ged_event_txn_state *state,
-			 ged_event_observer_phase phase,
+ged_event_dispatch_phase(struct ged_event_service *state,
+			 enum ged_event_observer_phase phase,
 			 const std::vector<struct ged_event> &events,
-			 const struct ged_event_txn_result *result)
+			 const struct ged_event_result *result)
 {
     if (!state || events.empty())
 	return;
@@ -522,7 +527,7 @@ ged_event_dispatch_phase(struct ged_event_txn_state *state,
 static int
 ged_event_apply_draw_txn(struct ged *gedp,
 			 struct ged_draw_transaction *txn,
-			 struct ged_event_txn_result *result)
+			 struct ged_event_result *result)
 {
     struct ged_draw_transaction_result draw_result;
     ged_draw_transaction_result_init(&draw_result);
@@ -536,7 +541,7 @@ ged_event_apply_draw_txn(struct ged *gedp,
 static int
 ged_event_reconcile_draw(struct ged *gedp,
 			 const ged_event_owned &event,
-			 struct ged_event_txn_result *result)
+			 struct ged_event_result *result)
 {
     int ret = 0;
 
@@ -697,14 +702,14 @@ ged_event_reconcile_draw(struct ged *gedp,
 
 static void
 ged_event_reconcile_selection(struct ged *gedp,
-			      struct ged_event_txn_result *result)
+			      struct ged_event_result *result)
 {
     if (!result || !ged_selection_state_available(gedp))
 	return;
 
     int recomputed = ged_selection_recompute(gedp, nullptr);
-    int draw_synced = ged_selection_draw_sync(gedp, nullptr);
-    result->selection_status = (recomputed || draw_synced) ? 1 : 0;
+    int draw_synced = ged_selection_present_private(gedp);
+    result->selection_changed = (recomputed || draw_synced) ? 1 : 0;
 }
 
 
@@ -784,20 +789,18 @@ ged_event_reconcile_db_index(struct ged *gedp, const ged_event_owned &event)
 }
 
 
-static int ged_event_process_owned(struct ged_event_txn_state *state,
+static int ged_event_process_owned(struct ged_event_service *state,
 				   const std::vector<ged_event_owned> &events,
-				   struct ged_event_txn_result *result);
+				   struct ged_event_result *result);
 
 
-static int ged_event_publish_impl(struct ged *gedp,
-				  const struct ged_event *events,
-				  size_t event_count,
-				  struct ged_event_txn_result *result,
-				  int librt);
+static enum ged_event_status ged_event_publish_impl(
+    struct ged *gedp, const struct ged_event *events, size_t event_count,
+    struct ged_event_result *result, int librt);
 
 
 static void
-ged_event_process_followups(struct ged_event_txn_state *state)
+ged_event_process_followups(struct ged_event_service *state)
 {
     if (!state || state->batch_depth > 0 || state->dispatch_depth > 0)
 	return;
@@ -812,9 +815,9 @@ ged_event_process_followups(struct ged_event_txn_state *state)
 
 
 static int
-ged_event_process_owned(struct ged_event_txn_state *state,
+ged_event_process_owned(struct ged_event_service *state,
 			const std::vector<ged_event_owned> &events,
-			struct ged_event_txn_result *result)
+			struct ged_event_result *result)
 {
     if (!state || events.empty())
 	return 0;
@@ -822,12 +825,9 @@ ged_event_process_owned(struct ged_event_txn_state *state,
     std::vector<ged_event_owned> coalesced = ged_event_coalesce(events);
     std::vector<struct ged_event> views = ged_event_views(coalesced);
 
-    struct ged_event_txn_result local_result;
-    int use_local_result = 0;
+    struct ged_event_result local_result;
     if (!result) {
-	ged_event_txn_result_init(&local_result);
 	result = &local_result;
-	use_local_result = 1;
     }
 
     ged_event_result_prepare(result, state->gedp, events.size(),
@@ -857,12 +857,11 @@ ged_event_process_owned(struct ged_event_txn_state *state,
 	    ged_event_reconcile_draw(state->gedp, event, result);
 	if (ret < 0) {
 	    status = ret;
-	    if (bu_vls_strlen(&result->errors))
-		bu_vls_putc(&result->errors, '\n');
-	    bu_vls_printf(&result->errors,
-		    "event draw reconciliation failed");
+	    if (!result->diagnostic.empty())
+		result->diagnostic.push_back('\n');
+	    result->diagnostic.append("event draw reconciliation failed");
 	    if (!event.name.empty())
-		bu_vls_printf(&result->errors, ": %s", event.name.c_str());
+		result->diagnostic.append(": ").append(event.name);
 	} else if (status >= 0) {
 	    status += ret;
 	}
@@ -874,13 +873,14 @@ ged_event_process_owned(struct ged_event_txn_state *state,
 	ged_event_result_note_name(result, event.child_name.c_str());
     }
 
-    result->db_index_status = index_status;
-
-    result->draw_status = status;
+    result->db_index_change_count = index_status > 0 ?
+	static_cast<size_t>(index_status) : 0;
+    result->draw_change_count = status > 0 ?
+	static_cast<size_t>(status) : 0;
     if (ged_event_events_affect_selection(coalesced))
 	ged_event_reconcile_selection(state->gedp, result);
-    result->status = status;
-    result->draw_scene_revision_after = ged_draw_scene_revision(state->gedp);
+    result->status = status < 0 ? GED_EVENT_ERROR : GED_EVENT_OK;
+    result->scene_revision_after = ged_draw_scene_revision(state->gedp);
 
     ged_event_dispatch_phase(state, GED_EVENT_OBSERVER_POST_RECONCILE, views,
 	    result);
@@ -895,11 +895,8 @@ ged_event_process_owned(struct ged_event_txn_state *state,
 	    ged_refresh_cb(state->gedp);
     }
 
-    if (use_local_result)
-	ged_event_txn_result_free(&local_result);
-
     ged_event_process_followups(state);
-    return status;
+    return result->status;
 }
 
 
@@ -938,17 +935,17 @@ ged_event_librt_changed_cb(struct db_i *UNUSED(dbip),
 }
 
 
-struct ged_event_txn_state *
-ged_event_txn_state_create(struct ged *gedp)
+struct ged_event_service *
+ged_event_service_create(struct ged *gedp)
 {
-    struct ged_event_txn_state *state = new ged_event_txn_state;
+    struct ged_event_service *state = new ged_event_service;
     state->gedp = gedp;
     return state;
 }
 
 
 void
-ged_event_txn_state_destroy(struct ged_event_txn_state *state)
+ged_event_service_destroy(struct ged_event_service *state)
 {
     if (!state)
 	return;
@@ -960,19 +957,19 @@ ged_event_txn_state_destroy(struct ged_event_txn_state *state)
 
 
 int
-ged_event_txn_available(struct ged *gedp)
+ged_event_available(struct ged *gedp)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     return (state && !state->suspended) ? 1 : 0;
 }
 
 
-int
-ged_event_txn_disable(struct ged *gedp)
+enum ged_event_status
+ged_event_disable(struct ged *gedp)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     if (!state)
-	return 0;
+	return GED_EVENT_UNAVAILABLE;
 
     state->suspended++;
     state->bulk_depth = 0;
@@ -984,16 +981,16 @@ ged_event_txn_disable(struct ged *gedp)
     state->followup_events.clear();
     if (state->callback_dbip)
 	ged_event_librt_callbacks_disable(gedp);
-    return state->suspended;
+    return GED_EVENT_OK;
 }
 
 
-int
+enum ged_event_status
 ged_event_bulk_begin(struct ged *gedp)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     if (!state || state->suspended)
-	return 0;
+	return GED_EVENT_UNAVAILABLE;
 
     if (state->bulk_depth == 0) {
 	state->bulk_callbacks_were_enabled = (state->callback_dbip != nullptr);
@@ -1004,23 +1001,23 @@ ged_event_bulk_begin(struct ged *gedp)
     }
 
     state->bulk_depth++;
-    return state->bulk_depth;
+    return GED_EVENT_OK;
 }
 
 
-int
-ged_event_bulk_end(struct ged *gedp, struct ged_event_txn_result *result)
+enum ged_event_status
+ged_event_bulk_end(struct ged *gedp, struct ged_event_result *result)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     if (!state || state->bulk_depth <= 0)
-	return 0;
+	return state ? GED_EVENT_INVALID : GED_EVENT_UNAVAILABLE;
 
     state->bulk_depth--;
     if (state->bulk_depth > 0)
-	return state->bulk_depth;
+	return GED_EVENT_OK;
 
     int dirty = state->bulk_dirty;
-    int live = ged_event_state_has_live_consumers(state);
+    int live = ged_event_service_has_live_consumers(state);
     int restore_callbacks = state->bulk_callbacks_were_enabled;
 
     state->bulk_dirty = 0;
@@ -1030,7 +1027,7 @@ ged_event_bulk_end(struct ged *gedp, struct ged_event_txn_result *result)
 	ged_event_librt_callbacks_enable(gedp);
 
     if (!dirty || !live)
-	return 0;
+	return GED_EVENT_OK;
 
     if (gedp && gedp->ged_refresh_handler != GED_REFRESH_FUNC_NULL)
 	state->bulk_refresh_pending = 1;
@@ -1042,42 +1039,42 @@ ged_event_bulk_end(struct ged *gedp, struct ged_event_txn_result *result)
 int
 ged_event_bulk_active(struct ged *gedp)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     return (state && !state->suspended && state->bulk_depth > 0) ? 1 : 0;
 }
 
 
 int
-ged_event_txn_has_live_consumers(struct ged *gedp)
+ged_event_has_live_consumers(struct ged *gedp)
 {
-    return ged_event_state_has_live_consumers(ged_event_state(gedp));
+    return ged_event_service_has_live_consumers(ged_event_service_get(gedp));
 }
 
 
-int
-ged_event_txn_enable(struct ged *gedp)
+enum ged_event_status
+ged_event_enable(struct ged *gedp)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     if (!state || state->suspended <= 0)
-	return 0;
+	return state ? GED_EVENT_INVALID : GED_EVENT_UNAVAILABLE;
 
     state->suspended--;
     if (!state->suspended && gedp->dbip)
 	ged_event_librt_callbacks_enable(gedp);
-    return state->suspended;
+    return GED_EVENT_OK;
 }
 
 
-int
+enum ged_event_status
 ged_event_librt_callbacks_enable(struct ged *gedp)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     if (!state || !gedp || !gedp->dbip || state->suspended ||
 	    state->bulk_depth > 0)
-	return 0;
+	return GED_EVENT_UNAVAILABLE;
 
     if (state->callback_dbip == gedp->dbip)
-	return 1;
+	return GED_EVENT_OK;
 
     if (state->callback_dbip)
 	db_rm_changed_clbk(state->callback_dbip, ged_event_librt_changed_cb,
@@ -1086,77 +1083,171 @@ ged_event_librt_callbacks_enable(struct ged *gedp)
     if (db_add_changed_clbk(gedp->dbip, ged_event_librt_changed_cb,
 	    (void *)gedp) != 0) {
 	state->callback_dbip = nullptr;
-	return 0;
+	return GED_EVENT_ERROR;
     }
 
     state->callback_dbip = gedp->dbip;
-    return 1;
+    return GED_EVENT_OK;
 }
 
 
-int
+enum ged_event_status
 ged_event_librt_callbacks_disable(struct ged *gedp)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
-    if (!state || !state->callback_dbip)
-	return 0;
+    struct ged_event_service *state = ged_event_service_get(gedp);
+    if (!state)
+	return GED_EVENT_UNAVAILABLE;
+    if (!state->callback_dbip)
+	return GED_EVENT_OK;
 
     int ret = db_rm_changed_clbk(state->callback_dbip,
 	ged_event_librt_changed_cb, (void *)gedp);
     state->callback_dbip = nullptr;
-    return ret > 0 ? 1 : 0;
+    return ret > 0 ? GED_EVENT_OK : GED_EVENT_ERROR;
 }
 
 
 void
-ged_event_txn_result_init(struct ged_event_txn_result *result)
+ged_event_init(struct ged_event *event)
+{
+    if (!event)
+	return;
+    std::memset(event, 0, sizeof(*event));
+}
+
+
+struct ged_event_result *
+ged_event_result_create(void)
+{
+    return new ged_event_result;
+}
+
+
+void
+ged_event_result_clear(struct ged_event_result *result)
 {
     if (!result)
 	return;
-    result->status = 0;
+    result->status = GED_EVENT_OK;
     result->event_count = 0;
-    result->coalesced_event_count = 0;
-    result->draw_status = 0;
-    result->db_index_status = 0;
-    result->selection_status = 0;
-    result->draw_scene_revision_before = 0;
-    result->draw_scene_revision_after = 0;
-    bu_vls_init(&result->affected_names);
-    bu_vls_init(&result->errors);
+    result->coalesced_count = 0;
+    result->draw_change_count = 0;
+    result->db_index_change_count = 0;
+    result->selection_changed = 0;
+    result->scene_revision_before = 0;
+    result->scene_revision_after = 0;
+    result->paths.clear();
+    result->diagnostic.clear();
 }
 
 
 void
-ged_event_txn_result_free(struct ged_event_txn_result *result)
+ged_event_result_destroy(struct ged_event_result *result)
 {
-    if (!result)
-	return;
-    bu_vls_free(&result->affected_names);
-    bu_vls_free(&result->errors);
+    delete result;
+}
+
+
+enum ged_event_status
+ged_event_result_status(const struct ged_event_result *result)
+{
+    return result ? result->status : GED_EVENT_INVALID;
+}
+
+
+size_t
+ged_event_result_event_count(const struct ged_event_result *result)
+{
+    return result ? result->event_count : 0;
+}
+
+
+size_t
+ged_event_result_coalesced_count(const struct ged_event_result *result)
+{
+    return result ? result->coalesced_count : 0;
+}
+
+
+size_t
+ged_event_result_draw_change_count(const struct ged_event_result *result)
+{
+    return result ? result->draw_change_count : 0;
+}
+
+
+size_t
+ged_event_result_db_index_change_count(
+    const struct ged_event_result *result)
+{
+    return result ? result->db_index_change_count : 0;
 }
 
 
 int
+ged_event_result_selection_changed(const struct ged_event_result *result)
+{
+    return result ? result->selection_changed : 0;
+}
+
+
+uint64_t
+ged_event_result_scene_revision_before(const struct ged_event_result *result)
+{
+    return result ? result->scene_revision_before : 0;
+}
+
+
+uint64_t
+ged_event_result_scene_revision_after(const struct ged_event_result *result)
+{
+    return result ? result->scene_revision_after : 0;
+}
+
+
+size_t
+ged_event_result_path_count(const struct ged_event_result *result)
+{
+    return result ? result->paths.size() : 0;
+}
+
+
+const char *
+ged_event_result_path_at(const struct ged_event_result *result, size_t index)
+{
+    return (result && index < result->paths.size()) ?
+	result->paths[index].c_str() : nullptr;
+}
+
+
+const char *
+ged_event_result_diagnostic(const struct ged_event_result *result)
+{
+    return result ? result->diagnostic.c_str() : "";
+}
+
+
+enum ged_event_status
 ged_event_batch_begin(struct ged *gedp)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     if (!state || state->suspended)
-	return 0;
+	return GED_EVENT_UNAVAILABLE;
     state->batch_depth++;
-    return state->batch_depth;
+    return GED_EVENT_OK;
 }
 
 
-int
-ged_event_batch_end(struct ged *gedp, struct ged_event_txn_result *result)
+enum ged_event_status
+ged_event_batch_end(struct ged *gedp, struct ged_event_result *result)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     if (!state || state->batch_depth <= 0)
-	return 0;
+	return state ? GED_EVENT_INVALID : GED_EVENT_UNAVAILABLE;
 
     state->batch_depth--;
     if (state->batch_depth > 0)
-	return state->batch_depth;
+	return GED_EVENT_OK;
 
     if (state->bulk_depth > 0) {
 	if (!state->queued_events.empty()) {
@@ -1164,65 +1255,73 @@ ged_event_batch_end(struct ged *gedp, struct ged_event_txn_result *result)
 	    state->queued_events.clear();
 	}
 	state->followup_events.clear();
-	return 0;
+	return GED_EVENT_OK;
     }
 
     std::vector<ged_event_owned> events;
     events.swap(state->queued_events);
-    int ret = ged_event_process_owned(state, events, result);
+    enum ged_event_status ret = GED_EVENT_OK;
+    if (!events.empty())
+	ret = static_cast<enum ged_event_status>(
+	    ged_event_process_owned(state, events, result));
+    else if (result)
+	ged_event_result_clear(result);
     ged_event_process_followups(state);
     return ret;
 }
 
 
-static int
+static enum ged_event_status
 ged_event_publish_impl(struct ged *gedp,
 		       const struct ged_event *events,
 		       size_t event_count,
-		       struct ged_event_txn_result *result,
+		       struct ged_event_result *result,
 		       int librt)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
-    if (!state || state->suspended || !events || !event_count)
-	return 0;
+    struct ged_event_service *state = ged_event_service_get(gedp);
+    if (!state || state->suspended)
+	return GED_EVENT_UNAVAILABLE;
+    if (!events || !event_count)
+	return GED_EVENT_INVALID;
 
     if (state->bulk_depth > 0) {
 	state->bulk_dirty = 1;
-	return 0;
+	return GED_EVENT_OK;
     }
 
     if (state->dispatch_depth > 0) {
 	ged_event_queue(state->followup_events, events, event_count, librt);
-	return 0;
+	return GED_EVENT_OK;
     }
 
     if (state->batch_depth > 0) {
 	ged_event_queue(state->queued_events, events, event_count, librt);
-	return 0;
+	return GED_EVENT_OK;
     }
 
     std::vector<ged_event_owned> owned;
     ged_event_queue(owned, events, event_count, librt);
-    int ret = ged_event_process_owned(state, owned, result);
+    enum ged_event_status ret = static_cast<enum ged_event_status>(
+	ged_event_process_owned(state, owned, result));
     ged_event_process_followups(state);
     return ret;
 }
 
 
-int
+enum ged_event_status
 ged_event_publish(struct ged *gedp,
 		  const struct ged_event *events,
 		  size_t event_count,
-		  struct ged_event_txn_result *result)
+		  struct ged_event_result *result)
 {
     return ged_event_publish_impl(gedp, events, event_count, result, 0);
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_object_added(struct ged *gedp,
 			      const char *name,
-			      struct ged_event_txn_result *result)
+			      struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1232,10 +1331,10 @@ ged_event_notify_object_added(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_object_removed(struct ged *gedp,
 				const char *name,
-				struct ged_event_txn_result *result)
+				struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1245,11 +1344,11 @@ ged_event_notify_object_removed(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_object_renamed(struct ged *gedp,
 				const char *old_name,
 				const char *new_name,
-				struct ged_event_txn_result *result)
+				struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1260,11 +1359,11 @@ ged_event_notify_object_renamed(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_object_modified(struct ged *gedp,
 				 const char *name,
 				 int redraw,
-				 struct ged_event_txn_result *result)
+				 struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1275,10 +1374,10 @@ ged_event_notify_object_modified(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_object_visibility_changed(struct ged *gedp,
 					   const char *name,
-					   struct ged_event_txn_result *result)
+					   struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1288,11 +1387,11 @@ ged_event_notify_object_visibility_changed(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_comb_tree_changed(struct ged *gedp,
 				   const char *name,
 				   int redraw,
-				   struct ged_event_txn_result *result)
+				   struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1303,12 +1402,12 @@ ged_event_notify_comb_tree_changed(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_comb_instance_removed(struct ged *gedp,
 				       const char *parent_name,
 				       const char *child_name,
 				       const char *path,
-				       struct ged_event_txn_result *result)
+				       struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1320,22 +1419,22 @@ ged_event_notify_comb_instance_removed(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_object_references_removed(struct ged *gedp,
 					   const char *name,
-					   struct ged_event_txn_result *result)
+					   struct ged_event_result *result)
 {
     return ged_event_notify_object_reference_removed_from_parent(gedp, name,
 	    nullptr, nullptr, result);
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_object_reference_removed_from_parent(struct ged *gedp,
 						      const char *name,
 						      const char *parent_name,
 						      const char *path,
-						      struct ged_event_txn_result *result)
+						      struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1348,11 +1447,11 @@ ged_event_notify_object_reference_removed_from_parent(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_attribute_changed(struct ged *gedp,
 				   const char *name,
 				   int redraw,
-				   struct ged_event_txn_result *result)
+				   struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1363,9 +1462,9 @@ ged_event_notify_attribute_changed(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_material_changed(struct ged *gedp,
-				  struct ged_event_txn_result *result)
+				  struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1374,10 +1473,10 @@ ged_event_notify_material_changed(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_object_material_changed(struct ged *gedp,
 					 const char *name,
-					 struct ged_event_txn_result *result)
+					 struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1387,9 +1486,9 @@ ged_event_notify_object_material_changed(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_batch_rebuild(struct ged *gedp,
-			       struct ged_event_txn_result *result)
+			       struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1398,9 +1497,9 @@ ged_event_notify_batch_rebuild(struct ged *gedp,
 }
 
 
-int
+enum ged_event_status
 ged_event_notify_database_metadata_changed(struct ged *gedp,
-					   struct ged_event_txn_result *result)
+					   struct ged_event_result *result)
 {
     struct ged_event ev;
     std::memset(&ev, 0, sizeof(ev));
@@ -1411,11 +1510,11 @@ ged_event_notify_database_metadata_changed(struct ged *gedp,
 
 ged_event_observer_token
 ged_event_observer_add(struct ged *gedp,
-		       ged_event_observer_phase phase,
+		       enum ged_event_observer_phase phase,
 		       ged_event_observer_func_t func,
 		       void *client_data)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     if (!state || !func)
 	return 0;
     if (phase != GED_EVENT_OBSERVER_INTERNAL &&
@@ -1437,7 +1536,7 @@ ged_event_observer_add(struct ged *gedp,
 int
 ged_event_observer_remove(struct ged *gedp, ged_event_observer_token token)
 {
-    struct ged_event_txn_state *state = ged_event_state(gedp);
+    struct ged_event_service *state = ged_event_service_get(gedp);
     if (!state || !token)
 	return 0;
 

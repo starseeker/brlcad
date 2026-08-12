@@ -33,7 +33,7 @@
 #include "bg/trimesh.h"
 #include "wdb.h"
 #include "analyze.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -544,7 +544,7 @@ comb_decimate(struct ged *gedp, struct directory *dp)
 		bu_log("Unable to create a valid version of %s via decimation\n", bot_dp->d_namep);
 	    } else {
 		struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-		int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+		int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 		if (wdb_put_internal(wdbp, bot_dp->d_namep, &intern, 1.0) < 0) {
 		    if (event_batch_opened)
 			ged_event_batch_end(gedp, NULL);

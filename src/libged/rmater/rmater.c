@@ -24,7 +24,7 @@
  */
 
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 static int
@@ -122,7 +122,7 @@ ged_rmater_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    event_depth = ged_event_batch_begin(gedp);
+    event_depth = ged_event_batch_begin(gedp) == GED_EVENT_OK;
 
     while (bu_fgets(line, LINELEN, fp) != NULL) {
 	if ((extract_mater_from_line(line, name, shader,
@@ -165,11 +165,8 @@ ged_rmater_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (event_depth > 0) {
-	struct ged_event_txn_result result;
-	ged_event_txn_result_init(&result);
-	if (ged_event_batch_end(gedp, &result) < 0 && queued_events)
+	if (ged_event_batch_end(gedp, NULL) != GED_EVENT_OK && queued_events)
 	    status = BRLCAD_ERROR;
-	ged_event_txn_result_free(&result);
     }
 
     (void)fclose(fp);

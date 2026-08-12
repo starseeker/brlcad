@@ -39,7 +39,7 @@
 #include "rt/db_instance.h"
 #include "rt/primitives/bot.h"
 #include "wdb.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 #include "./ged_facetize.h"
 
@@ -649,7 +649,7 @@ facetize_primitives_summary(struct _ged_facetize_state *s)
     // Make combs with the various categories of object that weren't a
     // standard successful NMG ft_tessellate run
     struct bu_vls cname = BU_VLS_INIT_ZERO;
-    int event_batch_opened = (ged_event_batch_begin(s->gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(s->gedp) == GED_EVENT_OK);
     for (m_it = method_sets.begin(); m_it != method_sets.end(); ++m_it) {
 	if (m_it->first == std::string("NMG"))
 	    continue;

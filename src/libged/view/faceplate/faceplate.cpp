@@ -523,6 +523,7 @@ ged_faceplate_core(struct ged *gedp, int argc, const char *argv[])
     if (!ac || help) {
 	_ged_subcmd_help(gedp, (struct bu_opt_desc *)d, (const struct bu_cmdtab *)_fp_cmds,
 	       	"view faceplate", "[options] subcommand [args]", &gd, 0, NULL);
+	_ged_cmd_namespace_help(gedp, "view.faceplate", _fp_cmds);
 	return BRLCAD_OK;
     }
 
@@ -533,13 +534,18 @@ ged_faceplate_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     int ret;
-    if (bu_cmd(_fp_cmds, ac, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
+
+    if (bu_cmd_valid(_fp_cmds, argv[0]) == BRLCAD_OK &&
+	bu_cmd(_fp_cmds, ac, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
 	if (ret == BRLCAD_OK)
 	    (void)ged_view_faceplate_sync(gedp, view_ctx);
 	return ret;
-    } else {
-	bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);
     }
+
+    if (_ged_cmd_namespace_exec(gedp, "view.faceplate", ac, argv, &ret))
+	return ret;
+
+    bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);
 
     return BRLCAD_ERROR;
 }

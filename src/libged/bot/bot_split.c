@@ -30,7 +30,7 @@
 #include <string.h>
 
 #include "bu/path.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/geom.h"	/* for rt_bot_split (in raytrace.h) */
 #include "../ged_private.h"
 
@@ -103,7 +103,7 @@ ged_bot_split_core(struct ged *gedp, int argc, const char *argv[])
 	    ac = 2;
 	    av[2] = NULL;
 
-	    event_depth = ged_event_batch_begin(gedp);
+	    event_depth = ged_event_batch_begin(gedp) == GED_EVENT_OK;
 
 	    for (BU_LIST_FOR(rblp, rt_bot_list, &headRblp->l)) {
 		/* Get a unique name based on the original name */

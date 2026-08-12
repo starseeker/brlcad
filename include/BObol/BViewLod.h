@@ -94,9 +94,9 @@ public:
 	int resultKind;
 	int qualityTier;
 	int providerStatus;
-	int activeLevel;
-	int residentLevel;
-	int requestedLevel;
+	int activeCut;
+	int residentCut;
+	int requestedCut;
 	uint64_t residentAdmissionRevision;
 	uint64_t viewRevision;
 	uint64_t policyRevision;
@@ -165,9 +165,23 @@ public:
 	int qualityTier;
 	int providerStatus;
 	int drawMode;
-	int activeLevel;
-	int residentLevel;
-	int requestedLevel;
+	int activeCut;
+	int residentCut;
+	int requestedCut;
+	/* Exact scene-budget allocation for this occurrence.  requestedCut is
+	 * unconstrained view demand; allocatedCut is the richest cut this
+	 * view/policy/mode may present inside the measured aggregate allowance.
+	 * Keeping the result on the authoritative occurrence makes bounded GUI
+	 * windows and asynchronous resident growth apply one immutable allocation
+	 * rather than reconstructing it from a scalar ceiling. */
+	int allocatedCut;
+	int allocationDrawMode;
+	uint64_t allocationViewRevision;
+	uint64_t allocationPolicyRevision;
+	float projectedPixelDiameter;
+	float projectedPixelArea;
+	float projectedPixelPerimeter;
+	float targetPixelError;
 	uint64_t residentAdmissionRevision;
 	uint64_t viewRevision;
 	uint64_t policyRevision;
@@ -236,10 +250,20 @@ public:
     /* Change only a view-local PoP cut.  No source/cache work is performed;
      * the call succeeds only when the retained progressive asset already
      * contains the requested prefix. */
-    SbBool retargetMeshPayload(const MeshPayload *payload, int activeLevel,
-	int requestedLevel, uint64_t viewRevision, uint64_t policyRevision);
-    SbBool retargetCadPayload(const CadPayload *payload, int activeLevel,
-	int requestedLevel, uint64_t viewRevision, uint64_t policyRevision);
+    SbBool retargetMeshPayload(const MeshPayload *payload, int activeCut,
+	int requestedCut, uint64_t viewRevision, uint64_t policyRevision);
+    /** Retarget one retained CAD occurrence to an already resident cut and
+     * record the exact view demand which selected it.  Keeping the projection
+     * with the payload lets later bounded recovery retain perceptual ordering
+     * without reprojecting or sorting an entire large scene on the owner
+     * thread. */
+    SbBool retargetCadPayload(const CadPayload *payload, int activeCut,
+	const BObolLodRequest &demand);
+    /* Record a metadata-only aggregate render-budget decision.  This neither
+     * changes the active presentation nor journals an occurrence mutation;
+     * later bounded windows consume it when its epochs and draw mode match. */
+    SbBool setCadAllocatedCut(const CadPayload *payload, int allocatedCut,
+	uint64_t viewRevision, uint64_t policyRevision, int drawMode);
     /* Remove one view-local display binding while retaining its shared asset.
      * The source occurrence's structural fallback becomes visible again.
      * Used by scene-budget/frustum admission when an insignificant occurrence
@@ -331,10 +355,10 @@ public:
      * indirect command record or flattened transformed atlas in the most
      * recent frame. */
     SbBool lastCadPresentationUsedPreparedReplay(void) const;
-    int maximumActiveProgressiveLevel(void) const;
+    int maximumActiveProgressiveCut(void) const;
     /* Apply an O(1)-per-assembly render-only ceiling while the precise
      * occurrence allocator catches up with an interactive view. */
-    void setCadPresentationProgressiveLodCeiling(int level) const;
+    void setCadPresentationProgressiveCutCeiling(int cut) const;
     /* Collapse eligible micro-geometry into one point batch using the current
      * view's measured screen-error tolerance.  One pixel is the stable,
      * pixel-exact setting. */
@@ -344,7 +368,7 @@ public:
     void setCadPresentationCameraMotionFrameReuse(SbBool enabled) const;
     size_t estimateDisplayMeshBytes(void) const;
     /* Report the richest already-resident, view-requested prefix of each
-     * retained asset.  Presentation admission may draw a coarser activeLevel
+     * retained asset.  Presentation admission may draw a coarser activeCut
      * to meet the frame budget, but that must not discard useful data which
      * still fits the resident-memory budget.  A lower request after zoom-out
      * and explicit memory-pressure recovery remain valid compaction edges. */
@@ -416,7 +440,7 @@ private:
 	uint64_t sourceContentHash = 0;
 	uint64_t viewRevision = 0;
 	uint64_t policyRevision = 0;
-	int requestedLevel = -1;
+	int requestedCut = -1;
 	int drawMode = BOBOL_LOD_DRAW_UNKNOWN;
 	int qualityTier = BOBOL_LOD_QUALITY_METADATA;
 	int providerStatus = BOBOL_LOD_PROVIDER_UNKNOWN;
@@ -478,7 +502,7 @@ private:
     size_t cadMinimumActiveRenderCost;
     size_t cadDisplayMeshBytes;
     size_t cadProxyKindCounts[5];
-    size_t cadProgressiveLevelCounts[16];
+    size_t cadProgressiveCutCounts[BOBOL_MESH_LOD_CUT_COUNT_MAX];
     /*
      * Retain the resident view-demand aggregate at the same mutation
      * points as the other payload telemetry.  Reconstructing this table from
@@ -486,10 +510,10 @@ private:
      * an otherwise unrelated selection event stall the GUI thread.
      */
     struct CadResidentDemandState {
-	size_t levelCounts[16] = {};
+	size_t cutCounts[BOBOL_MESH_LOD_CUT_COUNT_MAX] = {};
 	size_t channelCounts[4] = {};
 	size_t demandIndex = 0;
-	int maximumLevel = -1;
+	int maximumCut = -1;
 	unsigned int channelMask = 0;
     };
     std::unordered_map<std::string, CadResidentDemandState>

@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -74,7 +74,7 @@ ged_rcodes_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    event_depth = ged_event_batch_begin(gedp);
+    event_depth = ged_event_batch_begin(gedp) == GED_EVENT_OK;
 
     while (bu_fgets(line, RT_MAXLINE, fp) != NULL) {
 	int changed;
@@ -163,13 +163,9 @@ ged_rcodes_core(struct ged *gedp, int argc, const char *argv[])
     fclose(fp);
 
     if (event_depth > 0) {
-	struct ged_event_txn_result result;
-	ged_event_txn_result_init(&result);
-	if (ged_event_batch_end(gedp, &result) < 0 && queued_events) {
-	    ged_event_txn_result_free(&result);
+	if (ged_event_batch_end(gedp, NULL) != GED_EVENT_OK && queued_events) {
 	    return BRLCAD_ERROR;
 	}
-	ged_event_txn_result_free(&result);
     }
 
     if (!found_a_match) {

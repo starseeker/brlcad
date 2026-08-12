@@ -43,7 +43,7 @@
 #include "bu/path.h"
 #include "bu/snooze.h"
 #include "bu/datetime.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 #include "./ged_facetize.h"
 #include "./tess_opts.h"

@@ -32,7 +32,7 @@
 
 #include "bu/opt.h"
 #include "rt/geom.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "wdb.h"
 
 #include "../ged_private.h"
@@ -3415,7 +3415,7 @@ ged_in_core(struct ged *gedp, int argc, const char *argv[])
 	    case GED_MORE:
 		return GED_MORE;
 	}
-	event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	goto do_new_update;
     } else if (BU_STR_EQUAL(argv[2], "bot")) {
 	switch (bot_in(gedp, argc, argv, &internal, &p_bot[0])) {
@@ -3426,7 +3426,7 @@ ged_in_core(struct ged *gedp, int argc, const char *argv[])
 	    case GED_MORE:
 		return GED_MORE;
 	}
-	event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	goto do_new_update;
     } else if (BU_STR_EQUAL(argv[2], "submodel")) {
 	nvals = 3;
@@ -3470,7 +3470,7 @@ ged_in_core(struct ged *gedp, int argc, const char *argv[])
 	    case GED_MORE:
 		return GED_MORE;
 	}
-	event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	goto do_new_update;
     } else if (BU_STR_EQUAL(argv[2], "metaball")) {
 	switch (metaball_in(gedp, argc, argv, &internal, &p_metaball[0])) {
@@ -3481,7 +3481,7 @@ ged_in_core(struct ged *gedp, int argc, const char *argv[])
 	    case GED_MORE:
 		return GED_MORE;
 	}
-	event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	goto do_new_update;
     } else if (BU_STR_EQUAL(argv[2], "ars")) {
 	switch (ars_in(gedp, argc, argv, &internal, &p_ars[0])) {
@@ -3492,7 +3492,7 @@ ged_in_core(struct ged *gedp, int argc, const char *argv[])
 	    case GED_MORE:
 		return GED_MORE;
 	}
-	event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	goto do_new_update;
     } else if (BU_STR_EQUAL(argv[2], "half")) {
 	nvals = 3*1 + 1;
@@ -3649,7 +3649,7 @@ ged_in_core(struct ged *gedp, int argc, const char *argv[])
 		return GED_MORE;
 	}
 
-	event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	goto do_new_update;
     } else if (BU_STR_EQUAL(argv[2], "datum")) {
 	switch (datum_in(gedp, argc, argv, &internal, &p_datum[0])) {
@@ -3660,7 +3660,7 @@ ged_in_core(struct ged *gedp, int argc, const char *argv[])
 	    case GED_MORE:
 		return GED_MORE;
 	}
-	event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	goto do_new_update;
     } else if (BU_STR_EQUAL(argv[2], "cline") ||
 	       BU_STR_EQUAL(argv[2], "grip") ||
@@ -3681,7 +3681,7 @@ ged_in_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_MORE;
     }
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     if (fn_in) {
 	if (fn_in(gedp, argv, &internal) != 0) {

@@ -195,12 +195,12 @@ bobol_display_endpoint_input_action_handler_clear_if(
 	BObolInputActionHandler handler, void *user_data);
 
 /**
- * Atomically install a scoped, application-defined action layer.  Its
- * bindings take precedence over equal-score default bindings, and winning
- * actions dispatch only to the handler stored in the layer.  Action IDs are
- * opaque to libBObol and local to that handler.  An UNHANDLED result falls
- * through to the matching default action.  Only the owner token may replace
- * or clear an installed layer.
+ * Atomically add or replace a scoped, application-defined action layer.
+ * Multiple owners may coexist.  Matching layers are tried by priority until
+ * one consumes the event; equal-score layer bindings precede the default
+ * profile and newer layers precede older layers.  Action IDs are opaque to
+ * libBObol and local to their handler.  Only the owner token may replace or
+ * clear its layer.
  */
 BOBOL_EXPORT int
 bobol_display_endpoint_input_action_layer_set(

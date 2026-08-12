@@ -71,6 +71,11 @@ brlcad_add_test(NAME libBObol_rt_render COMMAND test_bobol_rt_render)
 brlcad_addexec(test_bobol_window_host test_window_host.cpp "libBObol;libimgstream;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_window_host COMMAND test_bobol_window_host)
 
+brlcad_addexec(test_bobol_navigation_gizmo test_navigation_gizmo.cpp
+  "libBObol;libbu;Obol::Obol" TEST ALL_CXX)
+brlcad_add_test(NAME libBObol_navigation_gizmo
+  COMMAND test_bobol_navigation_gizmo)
+
 brlcad_addexec(test_bobol_headless_window_host test_headless_window_host.cpp "libBObol;libimgstream;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_headless_window_host COMMAND test_bobol_headless_window_host)
 
@@ -167,6 +172,7 @@ set(_bobol_headless_tests
   libBObol_compact_edit
   libBObol_rt_render
   libBObol_window_host
+  libBObol_navigation_gizmo
   libBObol_headless_window_host
   libBObol_public_umbrella
   libBObol_public_symbol_contract)
@@ -210,6 +216,7 @@ cmakefiles(
   test_lod_update_action.cpp
   test_mesh_lod_cache.cpp
   test_nanort_render.cpp
+  test_navigation_gizmo.cpp
   test_public_umbrella.cpp
   check_installed_package.cmake
   package_consumer/CMakeLists.txt

@@ -343,10 +343,9 @@ work:
 		    MAT_DELTAS_VEC(translation, xlate);
 		    bn_mat_mul(preview_mat, translation, eye_path_mat);
 		    struct ged_view_edit_transaction transaction =
-			GED_VIEW_EDIT_TRANSACTION_INIT;
+			ged_view_edit_transaction_default();
 		    transaction.event = GED_VIEW_EDIT_PREVIEW_UPDATE;
 		    transaction.feature_name = "_mged_rmats_eye";
-		    transaction.owner = (const void *)s;
 		    transaction.source_path = eye_path_name;
 		    transaction.edit_intent_id = "rmats-eye";
 		    transaction.edit_intent_role = "animation";
@@ -366,10 +365,9 @@ work:
 
     if (eye_preview_active) {
 	struct ged_view_edit_transaction transaction =
-	    GED_VIEW_EDIT_TRANSACTION_INIT;
+	    ged_view_edit_transaction_default();
 	transaction.event = GED_VIEW_EDIT_PREVIEW_CANCEL;
 	transaction.feature_name = "_mged_rmats_eye";
-	transaction.owner = (const void *)s;
 	(void)ged_view_edit_transaction_apply_all(s->gedp, &transaction);
 	struct ged_scene_path_request request;
 	ged_scene_path_request_init(&request);

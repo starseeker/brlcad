@@ -50,7 +50,7 @@ static int
 _axes_publish(struct _ged_view_info *gd,
     const struct ged_view_annotation_axes_state &axes, int local)
 {
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "ged-view-annotation-axes";
     desc.owner_role = "user-annotation";
     desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION;
@@ -62,7 +62,7 @@ _axes_publish(struct _ged_view_info *gd,
     if (!batch)
 	return 0;
 
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     style.visible = 1;
     style.color_valid = 1;
     for (int i = 0; i < 3; i++)
@@ -82,7 +82,7 @@ _axes_state(struct _ged_view_info *gd,
     struct ged_view_annotation_axes_state *axes,
     struct ged_view_feature_summary *summary = nullptr)
 {
-    struct ged_view_feature_summary current = GED_VIEW_FEATURE_SUMMARY_INIT;
+    struct ged_view_feature_summary current = ged_view_feature_summary_default();
     if (!ged_view_feature_get_summary(gd->cv, gd->vobj, &current) ||
 	!current.exists || current.kind != GED_VIEW_FEATURE_KIND_AXES) {
 	bu_vls_printf(gd->gedp->ged_result_str,
@@ -98,7 +98,7 @@ _axes_state(struct _ged_view_info *gd,
 	return 0;
     }
 
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     axes->line_width = 1;
     VSET(axes->color, 255, 255, 255);
     if (ged_view_feature_style_get(gd->cv, gd->vobj, &style)) {
@@ -117,7 +117,7 @@ _axes_replace(struct _ged_view_info *gd,
     const struct ged_view_annotation_axes_state &axes)
 {
     struct ged_view_annotation_axes_state current;
-    struct ged_view_feature_summary summary = GED_VIEW_FEATURE_SUMMARY_INIT;
+    struct ged_view_feature_summary summary = ged_view_feature_summary_default();
     if (!_axes_state(gd, &current, &summary))
 	return 0;
     if (!_axes_publish(gd, axes,

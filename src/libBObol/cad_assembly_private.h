@@ -101,7 +101,7 @@ private:
 	std::string payloadKey;
 	Obol::PartId activePart = Obol::CadIdBuilder::Root();
 	uint8_t channels = 0;
-	int activeLevel = -1;
+	int activeCut = -1;
 	uint64_t geometryRevision = 0;
 	uint64_t appearanceRevision = 0;
 	uint64_t placementRevision = 0;

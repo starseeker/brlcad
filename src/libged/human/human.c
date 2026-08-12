@@ -89,7 +89,7 @@
 #include "raytrace.h"
 #include "wdb.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 /*
  * Default height is 5 feet, 8 inches, arbitrarily
@@ -2212,7 +2212,7 @@ ged_human_core(struct ged *gedp, int ac, const char *av[])
 
     GED_CHECK_EXISTS(gedp, bu_vls_addr(&name), LOOKUP_QUIET, BRLCAD_ERROR);
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     bu_log("Center Location: ");
     bu_log("%.2f %.2f %.2f\n", location[X], location[Y], location[Z]);

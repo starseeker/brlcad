@@ -35,7 +35,7 @@
 #include "../ged_private.h"
 #include "analyze.h"
 #include "wdb.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 struct voxelizeData
@@ -225,7 +225,7 @@ ged_voxelize_core(struct ged *gedp, int argc, const char *argv[])
 
     callBackData = (void*)(&voxDat);
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
    /* voxelize function is called here with rtip(ray trace instance), userParameter and create_boxes function */
     voxelize(rtip, sizeVoxel, levelOfDetail, create_boxes, callBackData);

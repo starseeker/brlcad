@@ -29,6 +29,7 @@
 #include <QTimer>
 
 #include "BObol/BLodService.h"
+#include "BObol/BDatabaseSource.h"
 #include "BObol/BViewController.h"
 #include "BObol/BViewLod.h"
 #include "brlcad_version.h"
@@ -369,6 +370,101 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
     return false;
 }
 
+static bool
+qged_test_wait_progressive_scope_ready(QgEdApp &app,
+    int timeoutMilliseconds, int quietMilliseconds, QString *error)
+{
+    const std::vector<BObolViewController *> controllers =
+	qged_test_all_controllers(app);
+    if (controllers.empty()) {
+	if (error)
+	    *error = QStringLiteral(
+		"wait_progressive_scope_ready requires an Obol view controller");
+	return false;
+    }
+
+    timeoutMilliseconds = std::max(0, timeoutMilliseconds);
+    quietMilliseconds = std::max(0, quietMilliseconds);
+    QElapsedTimer elapsed;
+    QElapsedTimer quiet;
+    std::vector<std::pair<BObolViewController *, uint64_t>>
+	scopePresentationBarriers;
+    elapsed.start();
+
+    while (elapsed.elapsed() <= timeoutMilliseconds) {
+	bool foundVisibleSource = false;
+	bool ready = true;
+	std::vector<BObolViewController *> visibleControllers;
+	for (BObolViewController *controller : controllers) {
+	    bool controllerVisible = false;
+	    const std::vector<SoBRLDatabaseSource *> sources =
+		controller->getRenderDatabaseSources();
+	    for (SoBRLDatabaseSource *source : sources) {
+		if (!source || !source->visible.getValue())
+		    continue;
+		foundVisibleSource = true;
+		controllerVisible = true;
+		SbBox3f bounds;
+		if (!source->hasExactSourceBounds() ||
+		    !source->getSourceBounds(bounds) || bounds.isEmpty()) {
+		    ready = false;
+		    break;
+		}
+	    }
+	    if (controllerVisible)
+		visibleControllers.push_back(controller);
+	    if (!ready)
+		break;
+	}
+	ready = ready && foundVisibleSource;
+
+	if (ready) {
+	    if (scopePresentationBarriers.empty()) {
+		/* Exact source bounds and the one-shot deferred autoview are
+		 * published on the owner thread before the resulting frame is
+		 * necessarily presented.  Capturing immediately produced a stale
+		 * pre-autoview framebuffer on sufficiently large cold scenes.  Ask
+		 * every visible endpoint for one deterministic scope frame and wait
+		 * for its presentation serial before starting the quiet interval. */
+		for (BObolViewController *controller : visibleControllers) {
+		    scopePresentationBarriers.emplace_back(controller,
+			controller->getPresentedFrameSerial());
+		    controller->requestRender("qged-test-scope-ready");
+		}
+		quiet.invalidate();
+	    }
+	    bool scopePresented = !scopePresentationBarriers.empty();
+	    for (const auto &barrier : scopePresentationBarriers) {
+		if (!barrier.first ||
+		    barrier.first->getPresentedFrameSerial() <= barrier.second) {
+		    scopePresented = false;
+		    break;
+		}
+	    }
+	    if (scopePresented && !quiet.isValid())
+		quiet.start();
+	    if (scopePresented && quiet.elapsed() >= quietMilliseconds)
+		return true;
+	} else {
+	    scopePresentationBarriers.clear();
+	    quiet.invalidate();
+	}
+
+	QEventLoop loop;
+	const int remaining = timeoutMilliseconds -
+	    static_cast<int>(elapsed.elapsed());
+	QTimer::singleShot(std::max(1, std::min(16, remaining)),
+	    &loop, &QEventLoop::quit);
+	loop.exec(QEventLoop::AllEvents);
+    }
+
+    if (error)
+	*error = QStringLiteral(
+	    "progressive whole-target scope did not become ready within %1 ms")
+	    .arg(timeoutMilliseconds);
+    return false;
+}
+
 void
 qged_schedule_gui_test(QgEdApp &app, const QString &script,
     const QString &reportFile, bool softwareRenderer)
@@ -384,7 +480,9 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 	    std::shared_ptr<QgedPresentedFrameCapture> frameCapture;
 	    report.insert(QStringLiteral("schema"),
 		QStringLiteral("brlcad.qged.gui-report"));
-	    report.insert(QStringLiteral("version"), 1);
+	    /* Version 2 names producer-authored progressive cuts explicitly and
+	     * removes the former *_level telemetry fields. */
+	    report.insert(QStringLiteral("version"), 2);
 	    report.insert(QStringLiteral("event_script"), script);
 	    report.insert(QStringLiteral("backend"),
 		softwareRenderer ? QStringLiteral("osmesa") :
@@ -511,6 +609,14 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			    QStringLiteral("timeout_ms")).toInt(30000),
 			events[i].arguments.value(
 			    QStringLiteral("quiet_ms")).toInt(100),
+			&error);
+		} else if (events[i].action ==
+		    QLatin1String("wait_progressive_scope_ready")) {
+		    success = qged_test_wait_progressive_scope_ready(app,
+			events[i].arguments.value(
+			    QStringLiteral("timeout_ms")).toInt(30000),
+			events[i].arguments.value(
+			    QStringLiteral("quiet_ms")).toInt(50),
 			&error);
 		} else {
 		    success = player.play(events[i], &error);

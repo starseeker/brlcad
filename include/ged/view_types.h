@@ -43,15 +43,16 @@ typedef struct ged_view_context ged_view_context;
 typedef struct ged_view_set ged_view_set;
 typedef struct bv_lod_policy ged_view_lod_policy;
 
-/**
- * Explicit compatibility boundary between GED's owned view context and its
- * borrowed libbv record.  Returned pointers alias the input, are never owned
- * by the caller, and remain valid only for the GED context's lifetime.  These
- * functions do not accept arbitrary renderer or application data.
- */
+/** Return the mutable borrowed libbv record owned by @p view. */
 GED_EXPORT extern struct bv_context *ged_view_context_bv(struct ged_view_context *view);
+
+/** Return the immutable borrowed libbv record owned by @p view. */
 GED_EXPORT extern const struct bv_context *ged_view_context_bv_const(const struct ged_view_context *view);
+
+/** Return the GED context that owns the borrowed libbv record @p view. */
 GED_EXPORT extern struct ged_view_context *ged_view_context_from_bv(struct bv_context *view);
+
+/** Return the immutable GED context owning the libbv record @p view. */
 GED_EXPORT extern const struct ged_view_context *ged_view_context_from_bv_const(const struct bv_context *view);
 
 __END_DECLS

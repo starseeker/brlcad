@@ -49,8 +49,8 @@
 #include "rt/primitives/tgc.h"
 
 #include "ged/db_index.h"
-#include "ged/event_txn.h"
-#include "ged/selection_state.h"
+#include "ged/event.h"
+#include "ged/selection.h"
 #include "../ged_private.h"
 #include "./ged_edit.h"
 
@@ -1569,7 +1569,7 @@ cmd_perturb::dp_perturb(struct directory *dp)
     }
 
     std::string oname(dp->d_namep);
-    int callbacks_disabled = ged_event_librt_callbacks_disable(ctx->gedp);
+    int callbacks_disabled = ged_event_librt_callbacks_disable(ctx->gedp) == GED_EVENT_OK;
     if (db_delete(dbip, dp) != 0 || db_dirdelete(dbip, dp) != 0) {
 	if (callbacks_disabled)
 	    (void)ged_event_librt_callbacks_enable(ctx->gedp);

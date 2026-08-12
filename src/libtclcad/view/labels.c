@@ -47,7 +47,7 @@ tclcad_data_labels_publish(struct ged_view_context *view_ctx,
     if (!view_ctx || !gdlsp || !name)
 	return 0;
 
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "tclcad-labels";
     desc.owner_role = "tcl-overlay";
     desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_TCL_OVERLAY;
@@ -79,7 +79,7 @@ tclcad_data_labels_publish(struct ged_view_context *view_ctx,
 	labels[i].font_size = gdlsp->gdls_size;
     }
 
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     style.visible = 1;
     style.selectable = 1;
     int ret = ged_view_feature_batch_labels_replace(batch, name, labels,

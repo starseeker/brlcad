@@ -53,7 +53,7 @@
 #include "bu/malloc.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "raytrace.h"
 
 #include "../ged_private.h"

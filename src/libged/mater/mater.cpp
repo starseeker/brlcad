@@ -36,7 +36,7 @@
 #include "bu/path.h"
 #include "analyze.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 
 #include <string.h>
@@ -245,7 +245,7 @@ mater_shader(struct ged *gedp, size_t argc, const char *argv[])
     }
     db5_sync_comb_to_attr(&avs, comb);
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
 	if (event_batch_opened)
 	    ged_event_batch_end(gedp, NULL);
@@ -318,7 +318,7 @@ mater_clear(struct ged *gedp)
 {
     struct directory *dp;
     if ((dp = db_lookup(gedp->dbip, GED_DB_DENSITY_OBJECT, LOOKUP_QUIET)) != RT_DIR_NULL) {
-	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	if (db_delete(gedp->dbip, dp) != 0 || db_dirdelete(gedp->dbip, dp) != 0) {
 	    bu_vls_printf(gedp->ged_result_str, "Error removing density information from database.");
 	    if (event_batch_opened)
@@ -706,7 +706,7 @@ mater_import(struct ged *gedp, size_t argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     if (mater_clear(gedp) != BRLCAD_OK) {
 	if (event_batch_opened)
 	    ged_event_batch_end(gedp, NULL);
@@ -1173,7 +1173,7 @@ mater_set(struct ged *gedp, size_t argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     // Got through parsing, make a buffer and replace the existing density object
     if (mater_clear(gedp) != BRLCAD_OK) {
@@ -1585,7 +1585,7 @@ mater_mat_id(struct ged *gedp, size_t argc, const char *argv[])
 	    if (!oname || !BU_STR_EQUAL(nname, oname)) {
 		(void)bu_avs_add(avs, "material_name", nname);
 		if (!event_batch_started) {
-		    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+		    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 		    event_batch_started = 1;
 		}
 		if (db5_update_attributes(dp, avs, gedp->dbip)) {
@@ -1660,7 +1660,7 @@ mater_mat_id(struct ged *gedp, size_t argc, const char *argv[])
 	if (!mat_id || std::stoi(mat_id) != nid) {
 	    (void)bu_avs_add(avs, "material_id", std::to_string(nid).c_str());
 	    if (!event_batch_started) {
-		event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+		event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 		event_batch_started = 1;
 	    }
 	    if (db5_update_attributes(dp, avs, gedp->dbip)) {

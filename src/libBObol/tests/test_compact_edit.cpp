@@ -123,6 +123,17 @@ main(int argc, char **argv)
     occurrence.localTransform.setTranslate(SbVec3f(2.0f, 3.0f, 4.0f));
     occurrence.lodBacked = TRUE;
     occurrence.occurrenceIndex = 3;
+
+    /* Asynchronous draw roots can be attached after the semantic selection
+     * delta was emitted.  They retain the current path rule while empty, and
+     * every subsequently streamed occurrence must inherit it immediately. */
+    std::vector<SbString> selectedPaths = {
+	SbString("assembly.g/part.s")
+    };
+    if (source->syncCompactInstanceSelectedPaths(selectedPaths) <= 0) {
+	source->unref();
+	FAIL("empty compact source should retain semantic selection paths");
+    }
     if (source->setCompactOccurrence(occurrence) != 1) {
 	source->unref();
 	FAIL("compact occurrence setup should succeed");
@@ -135,11 +146,9 @@ main(int argc, char **argv)
     }
 
     BObolCompactInstanceHandle compact;
-    if (!source->getCompactInstanceHandle(0, compact) ||
-	!source->setCompactInstanceDisplayStateForPath("assembly.g/part.s",
-	    FALSE, 0, FALSE, 1, TRUE, 0, FALSE)) {
+    if (!source->getCompactInstanceHandle(0, compact)) {
 	source->unref();
-	FAIL("compact selection setup should succeed");
+	FAIL("streamed selected compact occurrence should have a handle");
     }
 
     BObolCompactInstanceSummary before;

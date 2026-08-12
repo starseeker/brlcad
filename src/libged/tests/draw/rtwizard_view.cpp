@@ -178,17 +178,12 @@ test_null_view_context(const char *datadir)
     }
 
     struct ged_view_context *active = ged_view_active_ctx(gedp);
-    int tclcad_sentinel = 0;
-    if (ged_view_context_user_data_get(active) != gedp ||
-	    !ged_view_context_tclcad_data_set(active, &tclcad_sentinel) ||
-	    ged_view_context_tclcad_data_get(active) != &tclcad_sentinel ||
-	    ged_view_context_user_data_get(active) != gedp) {
-	bu_log("FAIL: TclCAD data overwrote generic GED view ownership\n");
+    if (ged_view_context_owner(active) != gedp) {
+	bu_log("FAIL: GED view ownership data is not preserved\n");
 	fail = 1;
     } else {
-	bu_log("PASS: TclCAD and generic GED view data are independent\n");
+	bu_log("PASS: GED view ownership data is preserved\n");
     }
-    (void)ged_view_context_tclcad_data_set(active, NULL);
 
     close_gedp(gedp);
     bu_file_delete("rtw_view_t1.g");

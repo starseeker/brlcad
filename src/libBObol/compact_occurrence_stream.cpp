@@ -133,6 +133,19 @@ BObolCompactOccurrenceStream::pushPriority(
     const BObolCompactOccurrence &occurrence)
 {
     std::lock_guard<std::mutex> guard(this->d->mutex);
+
+    /*
+     * This lane is the current whole-target extent for one realization
+     * stream, not an event history.  A bounds worker may publish provisional
+     * snapshots while discovery is running; retaining all of them puts the
+     * final exact overview behind an increasingly stale priority backlog.
+     * The owner would then know the exact source bounds but deliberately
+     * defer autoview until it had merged every obsolete box.  Keep only the
+     * newest undrained snapshot.  An occurrence already moved into a consumer
+     * batch is independent and may finish its merge safely.
+     */
+    this->d->priority.clear();
+    this->d->priorityOffset = 0;
     this->d->priority.push_back(occurrence);
 }
 

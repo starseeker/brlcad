@@ -30,7 +30,7 @@
 #include "ged/db_index.h"
 #include "ged/draw.h"
 #include "ged/display.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "qtcad/QgView.h"
 
 #include <Inventor/SoViewport.h>

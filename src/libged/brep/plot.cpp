@@ -1063,7 +1063,7 @@ brep_plot_publish_indexed_face_set(struct ged *gedp,
     if (!view_ctx)
 	return BRLCAD_ERROR;
 
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     style.color_valid = 1;
     style.color[0] = 255;
     style.color[1] = 255;

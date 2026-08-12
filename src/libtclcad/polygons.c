@@ -37,7 +37,7 @@
 #include "bg/polygon.h"
 #include "bg/lseg.h"
 #include "bv.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "ged/view.h"
 #include "ged/view_feature_batch.h"
 #include "rt/primitives/sketch.h"
@@ -170,7 +170,7 @@ _sync_tcl_polygons_to_draw_view(struct ged_view_context *view_ctx, tclcad_polygo
     if (!view_ctx || !gdpsp || !feature_name)
 	return;
 
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "tclcad-polygons";
     desc.owner_role = "polygon-edit";
     desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_POLYGON_EDIT;
@@ -240,7 +240,7 @@ _sync_tcl_polygons_to_draw_view(struct ged_view_context *view_ctx, tclcad_polygo
 	}
     }
 
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     style.visible = 1;
     style.color_valid = 1;
     style.color[0] = (unsigned char)gdpsp->gdps_color[0];
@@ -921,7 +921,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	data.have_edge_color = bu_color_from_rgb_chars(&data.edge_color,
 	    edge_rgb);
 
-	const int batch_open = ged_event_batch_begin(gedp) > 0;
+	const int batch_open = ged_event_batch_begin(gedp) == GED_EVENT_OK;
 	struct directory *created = db_sketch_polygon_data_to_sketch(
 	    gedp->dbip, argv[3], &data);
 	rt_sketch_polygon_data_free(&data);

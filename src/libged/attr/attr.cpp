@@ -36,7 +36,7 @@
 #include "bu/str.h"
 #include "rt/cmd.h"
 #include "ged/database.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 static int
 attr_subcommand_mutates(const char *subcmd)
@@ -137,7 +137,7 @@ ged_attr_core(struct ged *gedp, int argc, const char *argv[])
 
     int mutation_event_batch_started = 0;
     if (mutation_object_arg >= 0)
-	mutation_event_batch_started = (ged_event_batch_begin(gedp) > 0);
+	mutation_event_batch_started = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     int ret = rt_cmd_attr(gedp->ged_result_str, gedp->dbip, argc, argv);
 
@@ -149,10 +149,7 @@ ged_attr_core(struct ged *gedp, int argc, const char *argv[])
 	ged_attr_queue_mutation_events(gedp, mutation_targets);
 
     if (mutation_event_batch_started) {
-	struct ged_event_txn_result result;
-	ged_event_txn_result_init(&result);
-	(void)ged_event_batch_end(gedp, &result);
-	ged_event_txn_result_free(&result);
+	(void)ged_event_batch_end(gedp, NULL);
     }
 
     if (ret & BRLCAD_ERROR) {

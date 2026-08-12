@@ -35,7 +35,7 @@
 #include "bu/app.h"
 #include "analyze.h"
 #include "ged/commands.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "wdb.h"
 
 namespace
@@ -64,7 +64,7 @@ namespace
 	simulate_event_cb(struct ged *UNUSED(gedp),
 		const struct ged_event *events,
 		size_t event_count,
-		const struct ged_event_txn_result *result,
+		const struct ged_event_result *result,
 		void *client_data)
 	{
 	    SimulateEventObserver *observer =
@@ -73,8 +73,19 @@ namespace
 		return;
 
 	    observer->calls++;
-	    if (result)
-		observer->affected_names = bu_vls_cstr(&result->affected_names);
+	    if (result) {
+		observer->affected_names.clear();
+		const size_t path_count =
+		    ged_event_result_path_count(result);
+		for (size_t i = 0; i < path_count; i++) {
+		    const char *path = ged_event_result_path_at(result, i);
+		    if (!path)
+			continue;
+		    if (!observer->affected_names.empty())
+			observer->affected_names += "\n";
+		    observer->affected_names += path;
+		}
+	    }
 
 	    for (size_t i = 0; i < event_count; ++i) {
 		if (!observer->event_summary.empty())
@@ -177,7 +188,7 @@ namespace
 	    const simulate::AutoPtr<ged, ged_free> autofree_ged_instance(&ged_instance);
 	    ged_init(&ged_instance);
 	    ged_instance.dbip = db_create_inmem();
-	    if (!ged_event_librt_callbacks_enable(&ged_instance))
+	    if (ged_event_librt_callbacks_enable(&ged_instance) != GED_EVENT_OK)
 		bu_bomb("ged_event_librt_callbacks_enable() failed");
 	    struct rt_wdb *wdbp = wdb_dbopen(ged_instance.dbip, RT_WDB_TYPE_DB_INMEM);
 
@@ -252,8 +263,8 @@ namespace
 			falling_before))
 		bu_bomb("initial falling matrix lookup failed");
 
-	    if (!ged_event_txn_available(&ged_instance))
-		bu_bomb("GedEventTxn unavailable");
+	    if (!ged_event_available(&ged_instance))
+		bu_bomb("GED event service unavailable");
 
 	    SimulateEventObserver observer;
 	    ged_event_observer_token observer_token =

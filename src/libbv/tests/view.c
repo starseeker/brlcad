@@ -226,6 +226,26 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!bv_context_user_data_set(owned_ctx, sentinel) ||
 	    bv_context_user_data_get(owned_ctx) != sentinel)
 	return fail("view context user-data helpers failed");
+
+    {
+	int owner_key = 0;
+	int foreign_key = 0;
+	int owner_value = 0;
+	int foreign_value = 0;
+	if (!bv_context_owner_data_set(owned_ctx, &owner_key, &owner_value) ||
+		bv_context_owner_data_get(owned_ctx, &owner_key) != &owner_value ||
+		bv_context_owner_data_get(owned_ctx, &foreign_key) != NULL ||
+		!bv_context_owner_data_set(owned_ctx, &foreign_key,
+		    &foreign_value) ||
+		bv_context_owner_data_get(owned_ctx, &foreign_key) !=
+		    &foreign_value ||
+		bv_context_owner_data_get(owned_ctx, &owner_key) != &owner_value ||
+		!bv_context_owner_data_set(owned_ctx, &foreign_key, NULL) ||
+		bv_context_owner_data_get(owned_ctx, &foreign_key) != NULL ||
+		!bv_context_owner_data_set(owned_ctx, &owner_key, NULL) ||
+		bv_context_owner_data_get(owned_ctx, &owner_key) != NULL)
+	    return fail("view context multi-owner data helpers failed");
+    }
     if (!bv_context_dimensions_set(owned_ctx, 320, 240) ||
 	    bv_context_width_get(owned_ctx) != 320 ||
 	    bv_context_height_get(owned_ctx) != 240)

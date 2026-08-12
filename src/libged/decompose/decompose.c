@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -107,7 +107,7 @@ ged_decompose_core(struct ged *gedp, int argc, const char *argv[])
     kill_s = BU_LIST_FIRST(shell, &tmp_r->s_hd);
     (void)nmg_ks(kill_s);
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     for (BU_LIST_FOR(r, nmgregion, &m->r_hd)) {
 	struct shell *s;

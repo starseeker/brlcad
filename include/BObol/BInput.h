@@ -140,9 +140,9 @@ enum {
 
 /** @ingroup bobol_query
  * One borrowed, immutable event delivered synchronously on the endpoint owner
- * thread.  Pixel coordinates use the bound viewport with its native origin;
- * deltas and resize dimensions are pixels, and timestamp units are supplied by
- * the host adapter.
+ * thread.  Pixel coordinates use a normalized upper-left origin with positive
+ * X rightward and positive Y downward; deltas and resize dimensions are
+ * physical pixels, and timestamp units are supplied by the host adapter.
  */
 typedef struct BOBOL_INPUT_TYPE_EXPORT BObolInputEvent {
 #ifdef __cplusplus
@@ -256,7 +256,9 @@ __END_DECLS
 /**
  * One endpoint- or application-owned binding context.  Neither profiles nor
  * action handlers are process-global, so separate views may safely choose
- * distinct interaction policies.
+ * distinct interaction policies.  Multiple owner-scoped action layers may
+ * coexist; matching handlers run in priority order until one consumes the
+ * event.
  */
 #ifdef __cplusplus
 class BOBOL_EXPORT BObolInputContext {
@@ -272,10 +274,11 @@ public:
 	void *userData);
 
     /**
-     * Atomically install one application-owned action layer.  Its bindings
-     * win score ties with the base profile and dispatch only to the handler
-     * stored in the layer.  An UNHANDLED result falls through to the matching
-     * base action.  The owner token guards replacement and teardown.
+     * Atomically add or replace one owner-scoped action layer.  Matching
+     * layers and the base profile are tried by binding priority; layer
+     * bindings win score ties and newer layers win ties between layers.  An
+     * UNHANDLED result falls through to the next candidate.  The owner token
+     * guards replacement and teardown without displacing other owners.
      */
     int setActionLayer(const BObolInputActionLayer *layer, void *owner,
 	void *userData);
@@ -288,13 +291,22 @@ public:
     static const BObolInputProfile &defaultViewProfile(void);
 
 private:
+    struct ActionLayer {
+	std::vector<BObolInputBinding> bindings;
+	BObolInputActionHandler handler;
+	void *handlerData;
+	void *owner;
+	uint64_t order;
+
+	ActionLayer(void) : bindings(), handler(NULL), handlerData(NULL),
+	    owner(NULL), order(0) {}
+    };
+
     std::vector<BObolInputBinding> bindings;
-    std::vector<BObolInputBinding> layerBindings;
+    std::vector<ActionLayer> actionLayers;
     BObolInputActionHandler handler;
     void *handlerData;
-    BObolInputActionHandler layerHandler;
-    void *layerHandlerData;
-    void *layerOwner;
+    uint64_t nextLayerOrder;
 };
 #endif
 

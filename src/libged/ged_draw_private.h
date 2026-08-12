@@ -528,13 +528,11 @@ extern ged_view_edit_ref
 ged_draw_obol_view_context_feature_overlay_ensure(
 	struct ged_view_context *view_ctx,
 	const char *name,
-	const void *owner,
 	const char *source_path);
 extern ged_view_edit_ref
 ged_draw_obol_view_context_feature_label_ensure(
 	struct ged_view_context *view_ctx,
-	const char *name,
-	const void *owner);
+	const char *name);
 extern int ged_draw_obol_view_feature_set_visible(
 	struct ged_view_context *view_ctx,
 	ged_view_edit_ref ref,

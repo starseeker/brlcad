@@ -10,6 +10,7 @@
 
 #include "common.h"
 #include "BObol/BLodIdentifiers.h"
+#include "BObol/BMeshLodCache.h"
 
 #include <algorithm>
 #include <array>
@@ -122,42 +123,51 @@ private:
 };
 
 /*
- * One-shot proof for a late calibrated-headroom admission retry.  Normal
- * probe counts remain a bounded short-horizon mechanism; this witness covers
- * the ordering where reusable timing becomes available only after those
- * probes ended.  A retry is unique for (view, policy), not for the floating
- * calibrated budget.  The latter necessarily changes after measuring a
- * discrete PoP transition; including it in the identity lets an unaffordable
- * transition alternate forever between its two neighboring cuts.
+ * Bounded proof for a late calibrated-headroom admission retry.  Normal probe
+ * counts remain a short-horizon mechanism; this witness covers the ordering
+ * where reusable timing becomes available only after those probes ended.
+ *
+ * The first retry is unique for (view, policy, active population).  A later
+ * retry for that same immutable population is allowed only when calibration
+ * has raised the finite render budget by more than 25 percent above the
+ * largest budget already witnessed.  The monotonic high-water mark permits a
+ * newly learned capacity result to refine a stranded cut without making the
+ * floating budget itself an oscillating identity.  Consequently repeated
+ * retries for an unchanged population are logarithmically bounded.
  */
 class BObolLodHeadroomPolicy {
 public:
     bool armRetry(BObolLodViewEpoch viewEpoch,
-	BObolLodPolicyEpoch policyEpoch, size_t currentBudget,
-	size_t activePopulationCost)
+	BObolLodPolicyEpoch policyEpoch, size_t activePopulationCost,
+	size_t currentBudget)
     {
+	if (currentBudget == SIZE_MAX)
+	    return false;
 	if ((this->pendingValue &&
 		this->pendingViewRevision == viewEpoch.value() &&
 		this->pendingPolicyRevision == policyEpoch.value() &&
-		this->pendingPopulationCost == activePopulationCost) ||
-	    (this->viewRevision == viewEpoch.value() &&
+		this->pendingPopulationCost == activePopulationCost))
+	    return false;
+	const bool witnessedPopulation =
+	    this->viewRevision == viewEpoch.value() &&
 		this->policyRevision == policyEpoch.value() &&
-		this->populationCost == activePopulationCost))
+		this->populationCost == activePopulationCost;
+	if (witnessedPopulation &&
+	    !materialBudgetGrowth(currentBudget, this->budgetHighWater))
 	    return false;
 	this->pendingValue = true;
 	this->pendingViewRevision = viewEpoch.value();
 	this->pendingPolicyRevision = policyEpoch.value();
-	this->pendingBudget = currentBudget;
 	this->pendingPopulationCost = activePopulationCost;
+	this->pendingBudget = currentBudget;
 	this->pendingTransientReplayCount = 0;
 	return true;
     }
 
     bool deferTransientReplay(BObolLodViewEpoch viewEpoch,
-	BObolLodPolicyEpoch policyEpoch, size_t currentBudget,
-	size_t activePopulationCost)
+	BObolLodPolicyEpoch policyEpoch, size_t activePopulationCost)
     {
-	if (!this->pendingMatches(viewEpoch, policyEpoch, currentBudget,
+	if (!this->pendingMatches(viewEpoch, policyEpoch,
 		activePopulationCost) ||
 	    this->pendingTransientReplayCount >=
 		maxTransientReplayDeferrals())
@@ -182,26 +192,50 @@ public:
 	const bool matchingWitness =
 	    this->pendingViewRevision == viewEpoch.value() &&
 	    this->pendingPolicyRevision == policyEpoch.value() &&
-	    this->pendingBudget == currentBudget &&
 	    this->pendingPopulationCost == activePopulationCost;
+	const size_t witnessedBudget = this->pendingBudget;
 	this->pendingValue = false;
 	this->pendingViewRevision = 0;
 	this->pendingPolicyRevision = 0;
-	this->pendingBudget = SIZE_MAX;
 	this->pendingPopulationCost = SIZE_MAX;
+	this->pendingBudget = 0;
 	this->pendingTransientReplayCount = 0;
 	if (!matchingWitness)
 	    return false;
 	/* Consuming the explicitly requested replay retires this exact witness
 	 * even if the evidence is insufficient.  Otherwise an unchanged discrete
 	 * population can request calibration frames forever. */
+	const bool samePopulation =
+	    this->viewRevision == viewEpoch.value() &&
+	    this->policyRevision == policyEpoch.value() &&
+	    this->populationCost == activePopulationCost;
 	this->viewRevision = viewEpoch.value();
 	this->policyRevision = policyEpoch.value();
-	this->budget = currentBudget;
 	this->populationCost = activePopulationCost;
+	const size_t observedBudget = currentBudget > witnessedBudget ?
+	    currentBudget : witnessedBudget;
+	this->budgetHighWater = samePopulation &&
+	    this->budgetHighWater > observedBudget ?
+	    this->budgetHighWater : observedBudget;
+	/* There are two legitimate reasons to recompute the scene allocation:
+	 * newly measured capacity exceeds its allowance, or the authoritative
+	 * allowance is already much larger than the population stamped into the
+	 * occurrences.  The latter happens when cold result timing changes which
+	 * wave first calibrated throughput.  Requiring demonstratedBudget to beat
+	 * the already-large allowance then strands stale minimum-cut allocation
+	 * stamps even though the unchanged frame proves substantial headroom over
+	 * what is actually drawn. */
+	const long double population =
+	    static_cast<long double>(activePopulationCost);
+	const long double allowance =
+	    static_cast<long double>(currentBudget);
+	const bool measuredAllowanceGrowth =
+	    demonstratedBudget * 20.0L > allowance * 21.0L;
+	const bool staleUnderallocation =
+	    population * 5.0L < allowance * 4.0L &&
+	    demonstratedBudget * 5.0L > population * 6.0L;
 	if (!reusableSample || !targetNanoseconds ||
-	    !(demonstratedBudget * 20.0L >
-		static_cast<long double>(currentBudget) * 21.0L) ||
+	    (!measuredAllowanceGrowth && !staleUnderallocation) ||
 	    static_cast<long double>(elapsedNanoseconds) * 5.0L >=
 		static_cast<long double>(targetNanoseconds) * 6.0L)
 	    return false;
@@ -213,33 +247,40 @@ public:
 	this->pendingValue = false;
 	this->pendingViewRevision = 0;
 	this->pendingPolicyRevision = 0;
-	this->pendingBudget = SIZE_MAX;
 	this->pendingPopulationCost = SIZE_MAX;
+	this->pendingBudget = 0;
 	this->pendingTransientReplayCount = 0;
     }
 
     bool retryPending(void) const { return this->pendingValue; }
     bool pendingMatches(BObolLodViewEpoch viewEpoch,
-	BObolLodPolicyEpoch policyEpoch, size_t currentBudget,
-	size_t activePopulationCost) const
+	BObolLodPolicyEpoch policyEpoch, size_t activePopulationCost) const
     {
 	return this->pendingValue &&
 	    this->pendingViewRevision == viewEpoch.value() &&
 	    this->pendingPolicyRevision == policyEpoch.value() &&
-	    this->pendingBudget == currentBudget &&
 	    this->pendingPopulationCost == activePopulationCost;
     }
 
 private:
+    static bool materialBudgetGrowth(size_t currentBudget,
+	size_t previousBudget)
+    {
+	if (currentBudget <= previousBudget)
+	    return false;
+	/* Subtract before comparing so this remains valid at SIZE_MAX. */
+	return currentBudget - previousBudget > previousBudget / 4;
+    }
+
     uint64_t viewRevision = 0;
     uint64_t policyRevision = 0;
-    size_t budget = SIZE_MAX;
     size_t populationCost = SIZE_MAX;
+    size_t budgetHighWater = 0;
     bool pendingValue = false;
     uint64_t pendingViewRevision = 0;
     uint64_t pendingPolicyRevision = 0;
-    size_t pendingBudget = SIZE_MAX;
     size_t pendingPopulationCost = SIZE_MAX;
+    size_t pendingBudget = 0;
     unsigned int pendingTransientReplayCount = 0;
 };
 
@@ -575,6 +616,7 @@ class BObolLodBudgetPolicy {
 public:
     struct Inputs {
 	size_t activeCost = 0;
+	size_t minimumActiveCost = 0;
 	float targetFps = 0.0f;
 	long double calibratedCostPerSecond = 0.0L;
 	uint64_t observedStableNanoseconds = 0;
@@ -605,6 +647,11 @@ public:
 	bool interactive = false;
 	bool stablePresentationHandoff = false;
 	bool passAdmittedWork = false;
+	/* The blocked cut came from a complete scene-wide minimax allocation.
+	 * If calibration demonstrates a different allowance, its successor must
+	 * recompute that allocation rather than letting ordinary per-occurrence
+	 * refinement consume stale allocation stamps. */
+	bool retainedAllocation = false;
     };
 
     struct CalibrationDecision {
@@ -632,14 +679,14 @@ public:
 	const bool requestedRetainedRecovery =
 	    this->requestedRetainedRecoveryBudgetValue != SIZE_MAX &&
 	    inputs.activeCost > this->requestedRetainedRecoveryBudgetValue;
+	const bool requestedRetainedReallocation =
+	    this->requestedRetainedReallocationValue &&
+	    !inputs.interactive && !inputs.forceTerminal &&
+	    inputs.activeCost > 0;
+	const size_t retainedReallocationBudget = this->currentBudgetValue;
 
 	const long double targetNanoseconds = inputs.targetFps > 0.0f ?
 	    1000000000.0L / static_cast<long double>(inputs.targetFps) : 0.0L;
-	const long double calibratedBudget =
-	    inputs.targetFps > 0.0f &&
-	    inputs.calibratedCostPerSecond > 0.0L ?
-		inputs.calibratedCostPerSecond /
-		    static_cast<long double>(inputs.targetFps) : 0.0L;
 	const long double observedStableNanoseconds =
 	    static_cast<long double>(inputs.observedStableNanoseconds);
 	const bool severeStableOverload =
@@ -653,10 +700,16 @@ public:
 	    (this->probeCountValue >= 3 ||
 	     severeStableOverload) &&
 	    targetNanoseconds > 0.0L &&
-	    observedStableNanoseconds > targetNanoseconds * 1.20L &&
-	    (severeStableOverload ||
-	     (calibratedBudget > 0.0L && calibratedBudget <
-		static_cast<long double>(inputs.activeCost) * 0.95L));
+	    observedStableNanoseconds > targetNanoseconds * 1.20L;
+	/* Three unchanged, exact presentation misses are stronger evidence than
+	 * the triangle-throughput estimator.  The latter cannot represent the
+	 * fixed per-occurrence/classification cost of a many-part scene: Hubble's
+	 * measured triangle rate predicted headroom while three successive 75-85
+	 * ms frames missed the 50 ms stable target.  Requiring both witnesses made
+	 * the controller shave a few cost units, repeat three probes, and take
+	 * tens of seconds to settle.  The probe count already rejects transient
+	 * setup noise; use its direct duration with the safety-scaled recovery
+	 * calculation below. */
 
 	size_t costBudget = this->seedBudgetValue;
 	if (inputs.forceTerminal) {
@@ -754,6 +807,13 @@ public:
 	if (inputs.stablePresentationCostFloor > 0 && costBudget != SIZE_MAX)
 	    costBudget = std::max(
 		costBudget, inputs.stablePresentationCostFloor);
+	/* A view-importance reallocation deliberately changes only which
+	 * occurrences consume the established allowance.  Re-running the
+	 * throughput bootstrap here would replace that allowance with the cold
+	 * seed before the first candidate is considered. */
+	if (requestedRetainedReallocation &&
+	    this->requestedRetainedReallocationPreserveBudgetValue)
+	    costBudget = retainedReallocationBudget;
 	/* Point aggregation is a last-resort population bound, not a substitute
 	 * for PoP triangle allocation.  When the presentation controller is
 	 * returning a temporary multi-pixel point cut to the one-pixel contract,
@@ -770,8 +830,26 @@ public:
 	    this->retainedRecoveryCeilingValue != SIZE_MAX)
 	    costBudget = std::min(
 		costBudget, this->retainedRecoveryCeilingValue);
+	/* Recognizable prominent geometry is a harder quiet-view contract than
+	 * the preferred 20 Hz cadence, provided its measured population remains
+	 * inside the separate hard quality-frame deadline.  Persist that floor
+	 * across overload passes; otherwise every 60-90 ms OSMesa wire frame
+	 * alternates between the 20 Hz recovery budget and the same protected
+	 * allocation forever. */
+	if (!inputs.interactive && !inputs.forceTerminal &&
+	    this->retainedQualityFloorBudgetValue > 0)
+	    costBudget = std::max(
+		costBudget, this->retainedQualityFloorBudgetValue);
 
 	this->currentBudgetValue = costBudget;
+	/* Freeze the exact cost currencies which initialized this bounded pass.
+	 * A 150k-occurrence pass may require hundreds of owner-thread windows;
+	 * rediscovering the complete population before every window turns an O(N)
+	 * allocation into O(N * windows) work and monopolizes the GUI thread.
+	 * Occurrence changes are charged by the carried refinement remainders; a
+	 * completed pass resets this snapshot before another census. */
+	this->passActiveCostValue = inputs.activeCost;
+	this->passMinimumActiveCostValue = inputs.minimumActiveCost;
 	this->refinementRemainingValue = costBudget == SIZE_MAX ? SIZE_MAX :
 	    (costBudget > inputs.activeCost ?
 		costBudget - inputs.activeCost : 0);
@@ -782,17 +860,27 @@ public:
 	 * point-proxy recovery request retained admission explicitly, while a
 	 * completed over-budget quiet frame uses overloadRecovery. */
 	this->retainedAdmissionValue =
-	    (inputs.interactive || overloadRecovery ||
-	     requestedRetainedRecovery) &&
-	    costBudget != SIZE_MAX && inputs.activeCost > costBudget;
+	    (requestedRetainedReallocation && costBudget != SIZE_MAX) ||
+	    ((inputs.interactive || overloadRecovery ||
+	      requestedRetainedRecovery) &&
+	     costBudget != SIZE_MAX && inputs.activeCost > costBudget);
 	if (overloadRecovery) {
 	    this->overloadRecoveryPerformedValue = true;
 	    this->overloadRecoveryActiveCostValue = inputs.activeCost;
 	}
+	/* The retained scene already owns one minimum drawable prefix per active
+	 * occurrence.  Bounded recovery windows therefore consume only detail
+	 * above that irreducible coverage floor.  Charging the complete budget in
+	 * every window drove the whole scene to minimum before a second pass
+	 * rebuilt it, producing visible cycling and destroying importance order. */
 	this->retainedAdmissionRemainingValue =
-	    this->retainedAdmissionValue ? costBudget : SIZE_MAX;
+	    this->retainedAdmissionValue ?
+		(costBudget > inputs.minimumActiveCost ?
+		    costBudget - inputs.minimumActiveCost : 0) : SIZE_MAX;
 	this->passInitializedValue = true;
 	this->requestedRetainedRecoveryBudgetValue = SIZE_MAX;
+	this->requestedRetainedReallocationValue = false;
+	this->requestedRetainedReallocationPreserveBudgetValue = true;
 
 	decision.initialized = true;
 	decision.overloadRecovery = overloadRecovery;
@@ -858,6 +946,8 @@ public:
 	}
 	this->rescanAfterFrameValue =
 	    inputs.passAdmittedWork || decision.calibrationFrame;
+	this->reallocateAfterCalibrationValue =
+	    this->rescanAfterFrameValue && inputs.retainedAllocation;
 	this->stableBudgetLimitedValue = !this->rescanAfterFrameValue;
 	decision.requestFrame = this->rescanAfterFrameValue;
 	return decision;
@@ -875,6 +965,11 @@ public:
 	    return decision;
 	}
 	this->rescanAfterFrameValue = false;
+	if (this->reallocateAfterCalibrationValue) {
+	    this->requestedRetainedReallocationValue = true;
+	    this->requestedRetainedReallocationPreserveBudgetValue = false;
+	}
+	this->reallocateAfterCalibrationValue = false;
 	this->resetPass();
 	decision.restartSubmission = true;
 	return decision;
@@ -915,6 +1010,8 @@ public:
     void resetPass(void)
     {
 	this->passInitializedValue = false;
+	this->passActiveCostValue = 0;
+	this->passMinimumActiveCostValue = 0;
 	this->refinementRemainingValue = SIZE_MAX;
 	this->retainedAdmissionValue = false;
 	this->retainedAdmissionRemainingValue = SIZE_MAX;
@@ -930,7 +1027,14 @@ public:
     {
 	this->currentBudgetValue = this->seedBudgetValue;
 	this->requestedRetainedRecoveryBudgetValue = SIZE_MAX;
+	this->requestedRetainedReallocationValue = false;
+	this->requestedRetainedReallocationPreserveBudgetValue = true;
+	this->reallocateAfterCalibrationValue = false;
 	this->retainedRecoveryCeilingValue = SIZE_MAX;
+	this->retainedQualityFloorBudgetValue = 0;
+	this->retainedQualityFloorSignatureValue = 0;
+	this->retainedQualityFloorRejectedValue = false;
+	this->retainedQualityFloorMissCountValue = 0;
 	this->resetPass();
 	this->resetOverloadRecovery();
 	this->resetCalibration();
@@ -986,6 +1090,113 @@ public:
 	    this->currentBudgetValue, budget);
     }
 
+    /* Reallocate an already resident population within the current measured
+     * scene allowance.  Unlike overload recovery this is not evidence of a
+     * smaller renderer capacity and therefore installs no persistent budget
+     * ceiling.  The request is consumed by exactly one complete admission
+     * pass; a later view census must explicitly request another one. */
+    void requestRetainedReallocation(bool preserveCurrentBudget = true)
+    {
+	this->requestedRetainedReallocationValue = true;
+	this->requestedRetainedReallocationPreserveBudgetValue =
+	    preserveCurrentBudget;
+    }
+
+    /* A view-significance floor may deliberately trade some of the 20 Hz
+     * stable target for recognizable prominent geometry, but only after the
+     * controller proves that population fits its separately bounded hard
+     * quality-frame allowance.  Update all three currencies of the already
+     * initialized retained pass together; changing only currentBudgetValue
+     * would leave its bounded actions consuming the former upgrade limit. */
+    void setRetainedQualityFloorBudget(size_t budget,
+	uint64_t populationSignature, size_t activeCost,
+	size_t minimumActiveCost)
+    {
+	if (this->retainedQualityFloorRejectedValue)
+	    return;
+	const size_t nextBudget = budget == SIZE_MAX ? 0 : budget;
+	const uint64_t nextSignature = nextBudget ? populationSignature : 0;
+	/* Deadline evidence is meaningful only for the exact protected
+	 * occurrence/cut population which produced it.  During cold streaming or
+	 * a retained reallocation, different floors can be attempted before an
+	 * exact frame is presented.  Combining those misses can reject a later,
+	 * affordable floor even though it has never missed once. */
+	if (this->retainedQualityFloorSignatureValue != nextSignature)
+	    this->retainedQualityFloorMissCountValue = 0;
+	this->retainedQualityFloorBudgetValue = nextBudget;
+	this->retainedQualityFloorSignatureValue = nextSignature;
+	if (!this->passInitializedValue || !this->retainedAdmissionValue ||
+	    !budget || budget == SIZE_MAX || budget <= this->currentBudgetValue)
+	    return;
+	this->currentBudgetValue = budget;
+	this->refinementRemainingValue = budget > activeCost ?
+	    budget - activeCost : 0;
+	this->retainedAdmissionRemainingValue =
+	    budget > minimumActiveCost ? budget - minimumActiveCost : 0;
+	if (this->retainedRecoveryCeilingValue != SIZE_MAX &&
+	    this->retainedRecoveryCeilingValue < budget)
+	    this->retainedRecoveryCeilingValue = budget;
+    }
+
+    void clearRetainedQualityFloorBudget(void)
+    {
+	this->retainedQualityFloorBudgetValue = 0;
+	this->retainedQualityFloorSignatureValue = 0;
+	this->retainedQualityFloorRejectedValue = false;
+	this->retainedQualityFloorMissCountValue = 0;
+    }
+
+    bool noteRetainedQualityFloorMiss(void)
+    {
+	if (!this->retainedQualityFloorBudgetValue ||
+	    this->retainedQualityFloorRejectedValue)
+	    return false;
+	if (this->retainedQualityFloorMissCountValue < UINT_MAX)
+	    this->retainedQualityFloorMissCountValue++;
+	/* One cold upload, command-record transition, compositor stall, or
+	 * software JIT event is not renderer-capacity evidence.  Require three
+	 * independent ceiling-free attempts at the same view-local floor before
+	 * allowing the soft allocator to sacrifice protected geometry. */
+	if (this->retainedQualityFloorMissCountValue < 3)
+	    return false;
+	this->retainedQualityFloorBudgetValue = 0;
+	this->retainedQualityFloorSignatureValue = 0;
+	this->retainedQualityFloorRejectedValue = true;
+	return true;
+    }
+
+    void noteRetainedQualityFloorMet(void)
+    {
+	if (this->retainedQualityFloorBudgetValue > 0 &&
+	    !this->retainedQualityFloorRejectedValue)
+	    this->retainedQualityFloorMissCountValue = 0;
+    }
+
+    bool retainedQualityFloorRejected(void) const
+    {
+	return this->retainedQualityFloorRejectedValue;
+    }
+
+    bool retainedQualityFloorActive(void) const
+    {
+	return this->retainedQualityFloorBudgetValue > 0;
+    }
+
+    size_t retainedQualityFloorBudget(void) const
+    {
+	return this->retainedQualityFloorBudgetValue;
+    }
+
+    uint64_t retainedQualityFloorSignature(void) const
+    {
+	return this->retainedQualityFloorSignatureValue;
+    }
+
+    unsigned int retainedQualityFloorMissCount(void) const
+    {
+	return this->retainedQualityFloorMissCountValue;
+    }
+
     void clearRetainedRecoveryCeiling(void)
     {
 	this->requestedRetainedRecoveryBudgetValue = SIZE_MAX;
@@ -1003,6 +1214,11 @@ public:
 
     size_t seedBudget(void) const { return this->seedBudgetValue; }
     size_t currentBudget(void) const { return this->currentBudgetValue; }
+    size_t passActiveCost(void) const { return this->passActiveCostValue; }
+    size_t passMinimumActiveCost(void) const
+    {
+	return this->passMinimumActiveCostValue;
+    }
     bool retainedRecoveryCeilingActive(void) const
     {
 	return this->retainedRecoveryCeilingValue != SIZE_MAX;
@@ -1046,19 +1262,28 @@ public:
 private:
     size_t seedBudgetValue = 50000;
     size_t currentBudgetValue = 50000;
+    size_t passActiveCostValue = 0;
+    size_t passMinimumActiveCostValue = 0;
     size_t refinementRemainingValue = SIZE_MAX;
     size_t retainedAdmissionRemainingValue = SIZE_MAX;
     size_t overloadRecoveryActiveCostValue = 0;
     size_t requestedRetainedRecoveryBudgetValue = SIZE_MAX;
     size_t retainedRecoveryCeilingValue = SIZE_MAX;
+    size_t retainedQualityFloorBudgetValue = 0;
+    uint64_t retainedQualityFloorSignatureValue = 0;
+    unsigned int retainedQualityFloorMissCountValue = 0;
     size_t probeActiveCostValue = 0;
     unsigned int probeCountValue = 0;
     unsigned int calibrationFramesRemainingValue = 0;
     bool passInitializedValue = false;
+    bool requestedRetainedReallocationValue = false;
+    bool requestedRetainedReallocationPreserveBudgetValue = true;
+    bool reallocateAfterCalibrationValue = false;
     bool retainedAdmissionValue = false;
     bool overloadRecoveryPerformedValue = false;
     bool rescanAfterFrameValue = false;
     bool stableBudgetLimitedValue = false;
+    bool retainedQualityFloorRejectedValue = false;
 };
 
 /*
@@ -1118,7 +1343,8 @@ public:
     void seedQualityFloor(int progressiveCeiling)
     {
 	this->qualityFloorValue = progressiveCeiling >= 0 ?
-	    std::min(progressiveCeiling, 15) : -1;
+	    std::min(progressiveCeiling,
+		BOBOL_MESH_LOD_CUT_COUNT_MAX - 1) : -1;
     }
 
     void beginGesture(bool newInteractionEpoch)
@@ -1162,7 +1388,8 @@ public:
 	this->qualityProbePresentedValue = responsive;
 	if (responsive && progressiveCeiling >= 0)
 	    this->qualityFloorValue = std::max(this->qualityFloorValue,
-		std::min(progressiveCeiling, 15));
+		std::min(progressiveCeiling,
+		    BOBOL_MESH_LOD_CUT_COUNT_MAX - 1));
     }
 
     void noteQualityMiss(int correctedCeiling)
@@ -1242,8 +1469,9 @@ public:
 	const int presentedMaximum = inputs.presentationCeiling >= 0 ?
 	    std::min(inputs.activeMaximum, inputs.presentationCeiling) :
 	    inputs.activeMaximum;
-	decision.progressiveCeiling = presentedMaximum >= 15 ?
-	    15 : presentedMaximum + 1;
+	decision.progressiveCeiling =
+	    presentedMaximum >= BOBOL_MESH_LOD_CUT_COUNT_MAX - 1 ?
+		BOBOL_MESH_LOD_CUT_COUNT_MAX - 1 : presentedMaximum + 1;
 	/* A stable cut which was presented within the hard zoom-quality
 	 * deadline is a stronger starting point than the deliberately coarser
 	 * 60 Hz motion cut.  Replaying it does not expose new immutable data and
@@ -1706,7 +1934,8 @@ private:
 	snapshot.viewEpoch = viewEpoch;
 	snapshot.progressiveCeiling =
 	    progressiveCeiling < -1 ? -1 :
-	    std::min(15, progressiveCeiling);
+	    std::min<int>(BOBOL_MESH_LOD_CUT_COUNT_MAX - 1,
+		progressiveCeiling);
 	snapshot.pointProxyPixelThreshold =
 	    sanitizeThreshold(pointProxyPixelThreshold);
 	snapshot.population = population;
@@ -1764,6 +1993,67 @@ public:
 	    static_cast<double>(renderNanoseconds) / targetNanoseconds);
 	return static_cast<float>(std::max(2.0,
 	    std::min(64.0, 2.0 * scale)));
+    }
+
+    /*
+     * One pixel is the fast convergence contract, not necessarily the best
+     * quiet terminal image.  A small scene can otherwise stop with visibly
+     * faceted silhouettes while using a tiny fraction of both its measured
+     * draw allowance and resident-memory allowance.  Admit 0.75- and
+     * 0.5-pixel quality tiers only from an exact, completed quiet-frame
+     * witness.  Surface work scales approximately with inverse squared pixel
+     * error, so a 1.0 -> 0.75 step requires about 1.78 times the work while a
+     * 1.0 -> 0.5 step requires about four times the work.  This lets a software
+     * renderer spend useful twofold headroom without attempting the much more
+     * expensive half-pixel population.  A first-use frame may include buffer
+     * preparation or upload; if that more expensive frame still proves the
+     * required margin it is conservative evidence, not a reason for cold and
+     * warm caches to converge differently.  The test is deliberately
+     * expressed in total scene-cost currency rather than an object count or a
+     * model-specific cut ordinal.
+     *
+     * The caller owns the memory-headroom proof because resident limits and
+     * reservations belong to the service.  Returning a scalar keeps this
+     * policy allocation-free and directly testable.  No further tiers are
+     * generated: 0.5 pixels is a subpixel terminal target, not a route to
+     * unconditionally loading full geometry.
+     */
+    static float stablePixelError(float currentPixelError,
+	size_t activeCost, size_t sceneBudget,
+	uint64_t renderNanoseconds, float targetFps,
+	bool exactCompletedFrame, bool residentMemoryHeadroom)
+    {
+	if (!std::isfinite(currentPixelError) ||
+	    currentPixelError <= 0.5001f || currentPixelError > 1.01f ||
+	    !activeCost || !sceneBudget ||
+	    !renderNanoseconds || !std::isfinite(targetFps) ||
+	    targetFps <= 0.0f || !exactCompletedFrame ||
+	    !residentMemoryHeadroom)
+	    return currentPixelError;
+
+	const long double targetNanoseconds =
+	    1000000000.0L / static_cast<long double>(targetFps);
+	const auto affordable = [&](float candidate) {
+	    if (candidate + 1.0e-6f >= currentPixelError)
+		return false;
+	    const long double ratio =
+		static_cast<long double>(currentPixelError) /
+		static_cast<long double>(candidate);
+	    const long double workMultiplier = ratio * ratio;
+	    const bool timeHeadroom =
+		static_cast<long double>(renderNanoseconds) * workMultiplier <=
+		targetNanoseconds;
+	    const bool costHeadroom = sceneBudget == SIZE_MAX ||
+		static_cast<long double>(activeCost) * workMultiplier <=
+		static_cast<long double>(sceneBudget);
+	    return timeHeadroom && costHeadroom;
+	};
+
+	if (affordable(0.5f))
+	    return 0.5f;
+	if (affordable(0.75f))
+	    return 0.75f;
+	return currentPixelError;
     }
 
     static float pointProxyThreshold(float currentThreshold,
@@ -1920,7 +2210,7 @@ public:
 
     Decision completed(float currentThreshold,
 	uint64_t renderNanoseconds, float targetFps,
-	bool reusableSample, bool relaxationProbe)
+	bool reusableSample)
     {
 	Decision decision;
 	const float current = sanitize(currentThreshold);
@@ -1937,7 +2227,13 @@ public:
 
 	if (this->safeThreshold <= 0.0f || current < this->safeThreshold)
 	    this->safeThreshold = current;
-	if (!relaxationProbe || current <= 1.01f ||
+	/* A coarse presentation cut is never terminal merely because the
+	 * controller's original pressure-probe latch was consumed by an
+	 * intervening publication or plan-preparation frame.  Any unchanged,
+	 * reusable frame with material headroom is fresh proof that a finer cut
+	 * should be tried.  The remembered safe/unsafe bracket still makes the
+	 * search bounded and prevents threshold chatter near the deadline. */
+	if (current <= 1.01f ||
 	    static_cast<long double>(renderNanoseconds) >= target * 0.80L)
 	    return decision;
 
@@ -1966,6 +2262,45 @@ public:
 	decision.changed = std::fabs(next - current) > 0.01f;
 	decision.continueRelaxation = decision.changed && next > 1.01f;
 	return decision;
+    }
+
+    /* A transient exact frame at the one-pixel fidelity floor is already a
+     * terminal quality witness.  Requiring an unchanged reusable replay can
+     * strand an otherwise idle software view when faceplate publication or
+     * retained-plan preparation keeps that replay transient.  Coarser point
+     * cuts still require reusable evidence before they are accepted. */
+    bool requiresReusableConfirmation(float currentThreshold) const
+    {
+	return sanitize(currentThreshold) > 1.01f;
+    }
+
+    /*
+     * Point aggregation and triangle-prefix admission are independent
+     * quality dimensions.  A multi-pixel point cut is not, by itself,
+     * evidence that the retained mesh population is too expensive: it may
+     * be the finest sustainable way to represent thousands of genuinely
+     * sub-pixel occurrences while leaving the triangle budget available for
+     * large, visually prominent parts.  Compact PoP prefixes only when the
+     * exact completed presentation is itself overloaded and those prefixes
+     * can actually reduce its cost.
+     *
+     * Keeping this decision in the policy (rather than open-coding it in the
+     * controller) makes the no-oscillation contract directly testable.
+     */
+    static bool shouldRecoverTriangleDetail(bool reducibleProgressiveDetail,
+	bool stableSampleOverloaded, bool coarsePointCut,
+	bool protectedQualityPolicyOwnsCuts)
+    {
+	(void)coarsePointCut;
+	/* The protected-quality policy owns triangle redistribution both while a
+	 * floor is active and after repeated hard misses reject that floor.  In
+	 * the former state, compacting makes the next allocation restore the same
+	 * cuts; in the latter, a separate recovery would bypass the soft minimax
+	 * allocator and collapse the whole scene to minimum.  Either produces a
+	 * sparse/cycling wire view.  Point aggregation may still calibrate, while
+	 * the ordinary scene allocator alone chooses the retained PoP population. */
+	return reducibleProgressiveDetail && stableSampleOverloaded &&
+	    !protectedQualityPolicyOwnsCuts;
     }
 
 private:
@@ -2100,6 +2435,48 @@ private:
     bool framePendingValue = false;
     size_t unpresentedCountValue = 0;
     int64_t firstUnpresentedMicrosecondsValue = 0;
+};
+
+/* A provider completion can append a richer immutable PoP suffix without
+ * changing the active draw cut.  That is deliberately not a per-result
+ * admission decision: only the scene-wide allocator knows which occurrences
+ * should spend the calibrated render budget.  Coalesce all such completions
+ * into one allocation edge after the worker/result wave becomes idle.
+ *
+ * Keeping this obligation separate from result publication is important.
+ * Publication controls when newly bound arrays become visible; resident
+ * growth controls when the complete occurrence population is rebalanced.
+ * Conflating the two either makes result order the quality policy or runs an
+ * O(scene) allocator once per result batch. */
+class BObolLodResidentGrowthPolicy {
+public:
+    void noteRicherPrefixAvailable(void)
+    {
+	this->pendingValue = true;
+    }
+
+    bool consumeIfReady(bool automatic, bool streamIdle,
+	bool allocationAllowed)
+    {
+	if (!this->pendingValue || !automatic || !streamIdle ||
+	    !allocationAllowed)
+	    return false;
+	this->pendingValue = false;
+	return true;
+    }
+
+    bool pending(void) const
+    {
+	return this->pendingValue;
+    }
+
+    void reset(void)
+    {
+	this->pendingValue = false;
+    }
+
+private:
+    bool pendingValue = false;
 };
 
 /*

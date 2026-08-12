@@ -37,7 +37,7 @@ extern "C" {
 }
 #include "bg/line_layer.h"
 #include "ged/draw.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "./ged_lint.h"
 #include "../ged_private.h"
 
@@ -94,7 +94,7 @@ lint_data::plot_publish(const char *name)
     if (!do_plot || !gedp || !name)
 	return;
 
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     unsigned char rgb[3] = {255, 255, 0};
     if (color)
 	bu_color_to_rgb_chars(color, rgb);
@@ -585,7 +585,7 @@ ged_lint_core(struct ged *gedp, int argc, const char *argv[])
 	    std::set<std::string>::iterator o_it;
 	    for (o_it = onames.begin(); o_it != onames.end(); o_it++)
 		(void)mk_addmember(o_it->c_str(), &(wcomb.l), NULL, DB_OP_UNION);
-	    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	    if (mk_lcomb(wdbp, bu_vls_cstr(&gname), &wcomb, 1, NULL, NULL, NULL, 0) == 0) {
 		(void)ged_event_notify_object_added(gedp, bu_vls_cstr(&gname), NULL);
 	    } else {

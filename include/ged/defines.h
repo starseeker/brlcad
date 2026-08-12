@@ -50,6 +50,16 @@
 #  endif
 #endif
 
+/* Header-only value helpers must not trigger unused-static diagnostics in a
+ * translation unit that includes an API boundary without using every helper. */
+#if defined(__GNUC__) || defined(__clang__)
+#  define GED_HEADER_INLINE static inline __attribute__((unused))
+#elif defined(_MSC_VER)
+#  define GED_HEADER_INLINE static __inline
+#else
+#  define GED_HEADER_INLINE static inline
+#endif
+
 #define GED_NULL ((struct ged *)0)
 /* GED_DISPLAY_LIST_NULL is deprecated — use NULL directly */
 #define GED_DISPLAY_LIST_NULL ((struct display_list *)0)

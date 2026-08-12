@@ -1435,7 +1435,7 @@ ged_draw_view_context_foreach_export_record(
     if (!view_ctx || !cb)
 	return;
 
-    struct ged *gedp = (struct ged *)ged_view_context_user_data_get(view_ctx);
+    struct ged *gedp = ged_view_context_owner(view_ctx);
     if (!ged_draw_obol_scene_controller_is_owned(gedp))
 	return;
 

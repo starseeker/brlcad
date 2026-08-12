@@ -108,7 +108,7 @@
 #include <string.h>
 
 #include "bu/opt.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 #include "../ged_private.h"
 
 struct _ged_select_info {
@@ -191,8 +191,6 @@ _select_cmd_clear(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    ged_selection_draw_sync_matching(gedp, sname);
-
     return BRLCAD_OK;
 }
 
@@ -229,15 +227,17 @@ _select_cmd_add(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
+    (void)ged_selection_batch_begin(gedp);
     for (int i = 0; i < argc; i++) {
 	if (!ged_selection_select_path_matching(gedp, sname, argv[i], 0)) {
 	    bu_vls_printf(gedp->ged_result_str, "Selection set %s: unable to add path: %s", (sname) ? sname : "default", argv[i]);
+	    (void)ged_selection_batch_end(gedp);
 	    return BRLCAD_ERROR;
 	}
     }
 
     ged_selection_recompute_matching(gedp, sname);
-    ged_selection_draw_sync_matching(gedp, sname);
+    (void)ged_selection_batch_end(gedp);
 
     return BRLCAD_OK;
 }
@@ -274,15 +274,17 @@ _select_cmd_rm(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
+    (void)ged_selection_batch_begin(gedp);
     for (int i = 0; i < argc; i++) {
 	if (!ged_selection_deselect_path_matching(gedp, sname, argv[i], 0)) {
 	    bu_vls_printf(gedp->ged_result_str, "Selection set %s: unable to remove path: %s", (sname) ? sname : "default", argv[i]);
+	    (void)ged_selection_batch_end(gedp);
 	    return BRLCAD_ERROR;
 	}
     }
 
     ged_selection_recompute_matching(gedp, sname);
-    ged_selection_draw_sync_matching(gedp, sname);
+    (void)ged_selection_batch_end(gedp);
 
     return BRLCAD_OK;
 }
@@ -315,8 +317,6 @@ _select_cmd_collapse(void *bs, int argc, const char **argv)
 	    bu_vls_printf(gedp->ged_result_str, ": %s does not match any selection sets\n", sname);
 	return BRLCAD_ERROR;
     }
-
-    ged_selection_draw_sync_matching(gedp, sname);
 
     // TODO - for now, printing results - maybe tie this to a verbose option at some point... 
     ged_selection_list_paths(gedp, sname, gedp->ged_result_str);
@@ -353,8 +353,6 @@ _select_cmd_expand(void *bs, int argc, const char **argv)
 	    bu_vls_printf(gedp->ged_result_str, ": %s does not match any selection sets\n", sname);
 	return BRLCAD_ERROR;
     }
-
-    ged_selection_draw_sync_matching(gedp, sname);
 
     // TODO - for now, printing results - maybe tie this to a verbose option at some point...
     ged_selection_list_paths(gedp, sname, gedp->ged_result_str);

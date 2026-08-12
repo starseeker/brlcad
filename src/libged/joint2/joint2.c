@@ -30,7 +30,7 @@
 
 
 #include "raytrace.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/geom.h"
 #include "wdb.h"
 
@@ -230,7 +230,7 @@ ged_joint2_core(struct ged *gedp, int argc, const char *argv[])
     if (BU_STR_EQUAL(argv[2], "selection")) {
 	int ret = joint_selection(gedp, &intern, argc, argv);
 	if (BU_STR_EQUAL(argv[3], "translate") && ret == 0) {
-	    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	    if (rt_db_put_internal(ndp, gedp->dbip, &intern) < 0) {
 		if (event_batch_opened)
 		    ged_event_batch_end(gedp, NULL);

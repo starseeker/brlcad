@@ -852,7 +852,7 @@ ged_scene_occurrence_from_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
     ged_scene_occurrence_ref occurrence = GED_SCENE_OCCURRENCE_REF_NULL;
     if (!gedp || ged_draw_shape_ref_is_null(ref))
 	return occurrence;
-    occurrence.owner = reinterpret_cast<uintptr_t>(gedp);
+    occurrence.owner = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(gedp));
     occurrence.id = static_cast<uint64_t>(ref.token);
     occurrence.generation = 1;
     return occurrence;
@@ -865,7 +865,7 @@ ged_scene_occurrence_to_shape_ref(struct ged *gedp,
 {
     ged_draw_shape_ref ref = GED_DRAW_SHAPE_REF_NULL;
     if (!gedp || !occurrence.owner || !occurrence.id ||
-	occurrence.owner != reinterpret_cast<uintptr_t>(gedp) ||
+	occurrence.owner != static_cast<uint64_t>(reinterpret_cast<uintptr_t>(gedp)) ||
 	occurrence.generation != 1)
 	return ref;
     ref.token = static_cast<uintptr_t>(occurrence.id);

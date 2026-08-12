@@ -30,7 +30,7 @@
 #include "raytrace.h"
 #include "wdb.h"
 #include "bu/cmd.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -73,7 +73,7 @@ ged_cc_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_init(&(con_ip->expression));
     bu_vls_strcat(&(con_ip->expression), argv[2]);
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     dp = db_diradd(gedp->dbip, argv[1], RT_DIR_PHONY_ADDR, 0,
 	    RT_DIR_NON_GEOM, (void *)&internal.idb_type);
     if (dp == RT_DIR_NULL) {

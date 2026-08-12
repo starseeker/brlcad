@@ -21,9 +21,9 @@
  *
  * Logic for drawing arbitrary lines not associated with geometry.
  *
- * Command state is owned by the GED view host and published as a view-local
- * retained feature batch.  Renderer realization is never queried to answer a
- * command getter.
+ * Command state is the view-local retained feature.  Keeping one typed copy
+ * avoids a producer-specific mirror in the GED view host and lets TclCAD
+ * point manipulation use the same public feature contract as other clients.
  *
  * Usage example (Archer / QGED):
  *
@@ -52,23 +52,31 @@
 #include "bv.h"
 #include "ged/view_feature_batch.h"
 #include "../ged_private.h"
-#include "../ged_view_data_line_private.h"
 #include "./ged_view.h"
+
+struct view_data_line_state {
+    int draw;
+    int color[3];
+    int line_width;
+    point_t *points;
+    size_t point_count;
+};
+
+#define VIEW_DATA_LINE_STATE_INIT {0, {255, 255, 0}, 0, NULL, 0}
 
 struct view_dlines_state {
     struct ged *gedp;
     struct ged_view_context *view_ctx;
     const char *feature_name;
-    int staged;
 };
 
 static bool
 _view_dlines_publish(const struct view_dlines_state *vs,
-    const struct ged_view_data_line_state *state)
+    const struct view_data_line_state *state)
 {
     if (!vs || !vs->view_ctx || !vs->feature_name || !state)
 	return false;
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "ged-data-lines";
     desc.owner_role = "user-overlay";
     desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION;
@@ -84,7 +92,7 @@ _view_dlines_publish(const struct view_dlines_state *vs,
 	commands[i] = GED_DRAW_VIEW_LINE_MOVE;
 	commands[i + 1] = GED_DRAW_VIEW_LINE_DRAW;
     }
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     style.visible = state->draw ? 1 : 0;
     style.selectable = 1;
     style.color_valid = 1;
@@ -92,7 +100,7 @@ _view_dlines_publish(const struct view_dlines_state *vs,
     style.color[1] = (unsigned char)state->color[1];
     style.color[2] = (unsigned char)state->color[2];
     style.line_width = state->line_width;
-    const point_t *points = state->draw && state->point_count >= 2 ?
+    const point_t *points = state->point_count >= 2 ?
 	(const point_t *)state->points : NULL;
     const size_t point_count = points ? state->point_count : 0;
     if (!ged_view_feature_batch_line_set_replace(batch, vs->feature_name,
@@ -103,29 +111,53 @@ _view_dlines_publish(const struct view_dlines_state *vs,
     return ged_view_feature_batch_commit(batch) != 0;
 }
 
-static bool
-_view_dlines_update(const struct view_dlines_state *vs,
-    const struct ged_view_data_line_state *state)
+static void
+_view_dlines_state_clear(struct view_data_line_state *state)
 {
-    return vs && state && ged_view_data_line_state_replace(vs->view_ctx,
-	vs->staged, state) && _view_dlines_publish(vs, state);
+    if (!state)
+	return;
+    if (state->points)
+	bu_free(state->points, "GED view data-line state points");
+    struct view_data_line_state init = VIEW_DATA_LINE_STATE_INIT;
+    *state = init;
 }
 
-extern "C" GED_EXPORT int
-ged_view_data_line_state_publish(struct ged_view_context *view_ctx, int staged)
+static bool
+_view_dlines_state_get(const struct view_dlines_state *vs,
+    struct view_data_line_state *state)
 {
-    if (!view_ctx)
-	return 0;
-    struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-    if (!ged_view_data_line_state_get(view_ctx, staged, &state))
-	return 0;
-    struct view_dlines_state vs = {};
-    vs.view_ctx = view_ctx;
-    vs.feature_name = staged ? "_tcl_sdata_lines" : "_tcl_data_lines";
-    vs.staged = staged ? 1 : 0;
-    const int ret = _view_dlines_publish(&vs, &state) ? 1 : 0;
-    ged_view_data_line_state_clear(&state);
-    return ret;
+    if (!vs || !vs->view_ctx || !vs->feature_name || !state)
+	return false;
+
+    struct view_data_line_state init = VIEW_DATA_LINE_STATE_INIT;
+    *state = init;
+    if (!ged_view_feature_exists(vs->view_ctx, vs->feature_name))
+	return true;
+
+    struct ged_view_feature_style style = ged_view_feature_style_default();
+    if (!ged_view_feature_style_get(vs->view_ctx, vs->feature_name, &style))
+	return false;
+    state->draw = style.visible ? 1 : 0;
+    if (style.color_valid) {
+	state->color[0] = style.color[0];
+	state->color[1] = style.color[1];
+	state->color[2] = style.color[2];
+    }
+    state->line_width = style.line_width;
+
+    if (!ged_view_feature_points_copy(vs->view_ctx, vs->feature_name,
+	    &state->points, &state->point_count)) {
+	_view_dlines_state_clear(state);
+	return false;
+    }
+    return true;
+}
+
+static bool
+_view_dlines_update(const struct view_dlines_state *vs,
+    const struct view_data_line_state *state)
+{
+    return vs && state && _view_dlines_publish(vs, state);
 }
 
 static int
@@ -135,11 +167,11 @@ _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
     struct ged *gedp = vs->gedp;
 
     if (argc == 1) {
-	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	struct view_data_line_state state = VIEW_DATA_LINE_STATE_INIT;
+	if (!_view_dlines_state_get(vs, &state))
 	    return BRLCAD_ERROR;
 	bu_vls_printf(gedp->ged_result_str, "%d", state.draw);
-	ged_view_data_line_state_clear(&state);
+	_view_dlines_state_clear(&state);
 	return BRLCAD_OK;
     }
 
@@ -148,12 +180,12 @@ _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
 
 	if (bu_sscanf(argv[1], "%d", &i) != 1) return BRLCAD_ERROR;
 
-	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	struct view_data_line_state state = VIEW_DATA_LINE_STATE_INIT;
+	if (!_view_dlines_state_get(vs, &state))
 	    return BRLCAD_ERROR;
 	state.draw = i ? 1 : 0;
 	const bool updated = _view_dlines_update(vs, &state);
-	ged_view_data_line_state_clear(&state);
+	_view_dlines_state_clear(&state);
 	if (!updated)
 	    return BRLCAD_ERROR;
 
@@ -197,11 +229,11 @@ _view_dlines_cmd_color(void *bs, int argc, const char **argv)
     struct ged *gedp = vs->gedp;
 
     if (argc == 1) {
-	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	struct view_data_line_state state = VIEW_DATA_LINE_STATE_INIT;
+	if (!_view_dlines_state_get(vs, &state))
 	    return BRLCAD_ERROR;
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(state.color));
-	ged_view_data_line_state_clear(&state);
+	_view_dlines_state_clear(&state);
 	return BRLCAD_OK;
     }
 
@@ -220,12 +252,12 @@ _view_dlines_cmd_color(void *bs, int argc, const char **argv)
 		b < 0 || 255 < b)
 	    return BRLCAD_ERROR;
 
-	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	struct view_data_line_state state = VIEW_DATA_LINE_STATE_INIT;
+	if (!_view_dlines_state_get(vs, &state))
 	    return BRLCAD_ERROR;
 	VSET(state.color, r, g, b);
 	const bool updated = _view_dlines_update(vs, &state);
-	ged_view_data_line_state_clear(&state);
+	_view_dlines_state_clear(&state);
 	if (!updated)
 	    return BRLCAD_ERROR;
 
@@ -244,11 +276,11 @@ _view_dlines_cmd_line_width(void *bs, int argc, const char **argv)
     struct ged *gedp = vs->gedp;
 
     if (argc == 1) {
-	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	struct view_data_line_state state = VIEW_DATA_LINE_STATE_INIT;
+	if (!_view_dlines_state_get(vs, &state))
 	    return BRLCAD_ERROR;
 	bu_vls_printf(gedp->ged_result_str, "%d", state.line_width);
-	ged_view_data_line_state_clear(&state);
+	_view_dlines_state_clear(&state);
 	return BRLCAD_OK;
     }
 
@@ -258,12 +290,12 @@ _view_dlines_cmd_line_width(void *bs, int argc, const char **argv)
 	if (bu_sscanf(argv[1], "%d", &line_width) != 1)
 	    return BRLCAD_ERROR;
 
-	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	struct view_data_line_state state = VIEW_DATA_LINE_STATE_INIT;
+	if (!_view_dlines_state_get(vs, &state))
 	    return BRLCAD_ERROR;
 	state.line_width = line_width;
 	const bool updated = _view_dlines_update(vs, &state);
-	ged_view_data_line_state_clear(&state);
+	_view_dlines_state_clear(&state);
 	if (!updated)
 	    return BRLCAD_ERROR;
 
@@ -283,13 +315,13 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
     int i;
 
     if (argc == 1) {
-	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state))
+	struct view_data_line_state state = VIEW_DATA_LINE_STATE_INIT;
+	if (!_view_dlines_state_get(vs, &state))
 	    return BRLCAD_ERROR;
 	for (size_t j = 0; j < state.point_count; j++)
 	    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ",
 		V3ARGS(state.points[j]));
-	ged_view_data_line_state_clear(&state);
+	_view_dlines_state_clear(&state);
 	return BRLCAD_OK;
     }
 
@@ -308,8 +340,8 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 
-	struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-	if (!ged_view_data_line_state_get(vs->view_ctx, vs->staged, &state)) {
+	struct view_data_line_state state = VIEW_DATA_LINE_STATE_INIT;
+	if (!_view_dlines_state_get(vs, &state)) {
 	    bu_free((char *)av, "av");
 	    return BRLCAD_ERROR;
 	}
@@ -320,7 +352,7 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 	    state.points = NULL;
 	    state.point_count = 0;
 	    const bool updated = _view_dlines_update(vs, &state);
-	    ged_view_data_line_state_clear(&state);
+	    _view_dlines_state_clear(&state);
 	    ged_refresh_cb(gedp);
 	    bu_free((char *)av, "av");
 	    return updated ? BRLCAD_OK : BRLCAD_ERROR;
@@ -334,7 +366,7 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 	    if (bu_sscanf(av[i], "%lf %lf %lf", &scan[X], &scan[Y], &scan[Z]) != 3) {
 		bu_vls_printf(gedp->ged_result_str, "bad data point - %s\n", av[i]);
 		bu_free(points, "GED data-lines points");
-		ged_view_data_line_state_clear(&state);
+		_view_dlines_state_clear(&state);
 		ged_refresh_cb(gedp);
 		bu_free((char *)av, "av");
 		return BRLCAD_ERROR;
@@ -348,12 +380,12 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 	state.point_count = (size_t)ac;
 	state.draw = 1;
 	if (!_view_dlines_update(vs, &state)) {
-	    ged_view_data_line_state_clear(&state);
+	    _view_dlines_state_clear(&state);
 	    ged_refresh_cb(gedp);
 	    bu_free((char *)av, "av");
 	    return BRLCAD_ERROR;
 	}
-	ged_view_data_line_state_clear(&state);
+	_view_dlines_state_clear(&state);
 	ged_refresh_cb(gedp);
 	bu_free((char *)av, "av");
 	return BRLCAD_OK;
@@ -398,10 +430,8 @@ ged_view_data_lines(struct ged *gedp, int argc, const char *argv[])
 
     if (argv[0][0] == 's') {
 	vs.feature_name = "_tcl_sdata_lines";
-	vs.staged = 1;
     } else {
 	vs.feature_name = "_tcl_data_lines";
-	vs.staged = 0;
     }
 
     argc--;argv++;

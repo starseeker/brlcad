@@ -25,7 +25,7 @@
 
 #include "bu/getopt.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 int
@@ -188,7 +188,7 @@ ged_mirror_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     /* add the mirrored object to the directory */
     dp = db_diradd(gedp->dbip, argv[bu_optind+1], RT_DIR_PHONY_ADDR, 0, dp->d_flags, (void *)&ip->idb_type);

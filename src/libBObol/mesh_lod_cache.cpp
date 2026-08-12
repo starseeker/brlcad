@@ -46,20 +46,21 @@
 #include <unordered_map>
 #include <vector>
 
-#define POP_MAXLEVEL 16
+#define POP_CUT_COUNT_MAX BOBOL_MESH_LOD_CUT_COUNT_MAX
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 14
+#define CACHE_CURRENT_FORMAT 15
 
-#define CACHE_POP_MAX_LEVEL "max"
-#define CACHE_POP_MIN_LEVEL "min"
+#define CACHE_POP_MAX_CUT "max"
+#define CACHE_POP_MIN_CUT "min"
 #define CACHE_VERTEX_COUNT "vc"
 #define CACHE_TRI_COUNT "tc"
 #define CACHE_OBJ_BOUNDS "bb"
 #define CACHE_SHADED_CULL_BACKFACES "cb"
 #define CACHE_HAS_NORMALS "hn"
-#define CACHE_VERT_LEVEL "v"
-#define CACHE_VERTNORM_LEVEL "vn"
-#define CACHE_TRI_LEVEL "t"
+#define CACHE_CUT_QUANTIZATION "qb"
+#define CACHE_VERT_CUT "v"
+#define CACHE_VERTNORM_CUT "vn"
+#define CACHE_TRI_CUT "t"
 
 struct BObolMeshLodContextInternal {
     struct bu_cache *lodCache;
@@ -83,7 +84,7 @@ struct BObolMeshLod {
     BObolPopState *state;
 
     int fcnt;
-    const int *faces;
+    const uint32_t *faces;
     int pcnt;
     const point_t *points;
     int porig_cnt;
@@ -93,18 +94,17 @@ struct BObolMeshLod {
     point_t bmax;
 };
 
-struct BObolMeshLodBotDetail {
-    struct db_i *dbip;
-    struct directory *dp;
-    struct rt_db_internal *intern;
-};
-
 class BObolPopRec
 {
 public:
     unsigned short x = 0;
     unsigned short y = 0;
     unsigned short z = 0;
+};
+
+struct BObolPopCut {
+    uint8_t bits[3] = {0, 0, 0};
+    double objectError = 0.0;
 };
 
 static int
@@ -602,11 +602,18 @@ mesh_lod_key_get(struct BObolMeshLodContext *context, const char *name)
     size_t dsize = bu_cache_get(&data, keystr,
 				context->i->nameCache, NULL);
     lock.unlock();
-    if (!dsize || !data)
+    if (dsize != sizeof(uint64_t) || !data) {
+	if (data)
+	    bu_free(data, "invalid lod key data");
 	return 0;
+    }
 
-    unsigned long long meshKey = *(unsigned long long *)data;
+    uint64_t diskKey = 0;
+    memcpy(&diskKey, data, sizeof(diskKey));
     bu_free(data, "lod key data");
+
+    const unsigned long long meshKey =
+	static_cast<unsigned long long>(diskKey);
     /*
      * The on-disk name map is authoritative.  Caching a first lookup in the
      * process map is optional; never stall seven other cache readers merely
@@ -631,8 +638,9 @@ mesh_lod_key_put(struct BObolMeshLodContext *context,
     if (!mesh_lod_name_cache_key(keystr, sizeof(keystr), name))
 	return -1;
 
+    const uint64_t diskKey = static_cast<uint64_t>(key);
     std::unique_lock<std::shared_mutex> lock(*context->i->accessMutex);
-    size_t wsize = bu_cache_write((void *)&key, sizeof(key),
+    size_t wsize = bu_cache_write((void *)&diskKey, sizeof(diskKey),
 				  keystr,
 				  context->i->nameCache, NULL);
     if (wsize > 0) {
@@ -662,27 +670,27 @@ public:
 		    bool retainHeaderSnapshot);
     ~BObolPopState();
 
-    int getLevel(fastf_t len);
-    bool setLevel(int level, bool materializeSnapped = true);
-    bool materializeGeneratedPrefix(int level);
+    bool setCut(int cut, bool materializeSnapped = true);
+    bool materializeInitialPrefix(int cut);
     void releaseGenerationScratch(void);
-    bool readSuffix(int residentLevel, int targetLevel,
+    bool readSuffix(int residentCut, int targetCut,
 	BObolMeshLodSuffixCallback callback, void *callbackData);
     void shrinkMemory(void);
     size_t residentBytes(void) const;
     size_t residentPrefixBytes(void) const;
-    void levelPoint(point_t *out, const point_t *point, int level);
+    void cutPoint(point_t *out, const point_t *point, int cut);
     void hierarchyInfo(struct BObolMeshLodHierarchyInfo *info) const;
 
-    std::vector<int> lodTris;
+    std::vector<uint32_t> lodTris;
     std::vector<fastf_t> lodTriPoints;
     std::vector<fastf_t> lodTriPointsSnapped;
     std::vector<fastf_t> lodTriNormals;
 
-    int currLevel = -1;
+    int currCut = -1;
     bool forceUpdate = false;
-    int minPopLevel = 0;
-    int maxPopLevel = 0;
+    int minPopCut = 0;
+    int maxPopCut = 0;
+    uint32_t cutCount = 0;
     bool isValid = false;
     bool shadedCullBackfaces = false;
     bool hasNormals = false;
@@ -691,29 +699,20 @@ public:
     point_t bbmax = VINIT_ZERO;
     struct BObolMeshLod *lod = NULL;
 
-    BObolMeshLodDetailSetupCallback fullDetailSetup = NULL;
-    BObolMeshLodDetailClearCallback fullDetailClear = NULL;
-    BObolMeshLodDetailFreeCallback fullDetailFree = NULL;
-    void *detailData = NULL;
-
 private:
+    void buildCutSchedule(void);
     void triProcess(void);
-    int toLevel(int value, int level);
-    fastf_t snap(fastf_t value, fastf_t min, fastf_t max, int level);
-    bool isEqual(BObolPopRec r1, BObolPopRec r2, int level);
-    bool triDegenerate(BObolPopRec r0, BObolPopRec r1,
-		       BObolPopRec r2, int level);
+    fastf_t snap(fastf_t value, fastf_t min, fastf_t max, uint8_t bits);
     void cache(void);
     bool cacheTri(void);
     bool cacheWrite(const char *component, std::stringstream &stream);
     bool cacheWriteData(const char *component, const void *data, size_t size);
     size_t cacheGet(void **data, const char *component);
     void cacheDone(void);
-    bool triPopLoad(int startLevel, int level, bool materializeSnapped);
-    void triPopTrim(int level, bool materializeSnapped);
-    void updateSnappedPoints(int level);
-    bool setupFullDetail(void);
-    void clearFullDetail(void);
+    bool triPopLoad(int startCut, int cut, bool materializeSnapped);
+    void triPopTrim(int cut, bool materializeSnapped);
+    void updateSnappedPoints(int cut);
+    bool loadCachedHeader(bool retainHeaderSnapshot);
     void initializeCacheKeyPrefix(void);
     bool cacheComponentKey(char *buffer, size_t bufferSize,
 	const char *component) const;
@@ -724,20 +723,20 @@ private:
     fastf_t maxx = -std::numeric_limits<fastf_t>::max();
     fastf_t maxy = -std::numeric_limits<fastf_t>::max();
     fastf_t maxz = -std::numeric_limits<fastf_t>::max();
-    std::vector<unsigned short> precomputedMasks;
-    size_t levelVertexCount[POP_MAXLEVEL + 1] = {0};
-    size_t levelTriangleCount[POP_MAXLEVEL + 1] = {0};
+    BObolPopCut cuts[POP_CUT_COUNT_MAX];
+    size_t cutVertexCount[POP_CUT_COUNT_MAX + 1] = {0};
+    size_t cutTriangleCount[POP_CUT_COUNT_MAX + 1] = {0};
 
-    /* Every source vertex and face belongs to exactly one activation level.
-     * Dense level vectors are substantially cheaper than the old
-     * map<level, unordered_set<vertex>> representation on scan meshes: Lucy's
+    /* Every source vertex and face belongs to exactly one activation cut.
+     * Dense cut vectors are substantially cheaper than the old
+     * map<cut, unordered_set<vertex>> representation on scan meshes: Lucy's
      * 14 million vertices otherwise spent more memory on hash nodes than on
      * the source coordinates themselves.  BoT indices are int-sized by
      * contract, so 32-bit remap entries are sufficient. */
     std::vector<uint32_t> triIndexMap;
-    std::vector<uint8_t> vertexTriMinLevel;
-    std::vector<std::vector<uint32_t>> levelTriVerts;
-    std::vector<std::vector<uint32_t>> levelTris;
+    std::vector<uint8_t> vertexTriMinCut;
+    std::vector<std::vector<uint32_t>> cutTriVerts;
+    std::vector<std::vector<uint32_t>> cutTris;
 
     size_t vertexCount = 0;
     const point_t *vertexArray = NULL;
@@ -754,12 +753,66 @@ private:
 };
 
 void
+BObolPopState::buildCutSchedule(void)
+{
+    const double extent[3] = {
+	static_cast<double>(maxx - minx),
+	static_cast<double>(maxy - miny),
+	static_cast<double>(maxz - minz)
+    };
+    uint8_t bits[3] = {1, 1, 1};
+    for (int axis = 0; axis < 3; ++axis)
+	if (!(extent[axis] > 0.0))
+	    bits[axis] = BOBOL_MESH_LOD_QUANTIZATION_BITS;
+
+    cutCount = 0;
+    while (cutCount < POP_CUT_COUNT_MAX) {
+	BObolPopCut &cut = cuts[cutCount++];
+	for (int axis = 0; axis < 3; ++axis)
+	    cut.bits[axis] = bits[axis];
+	if (bits[0] >= BOBOL_MESH_LOD_QUANTIZATION_BITS &&
+	    bits[1] >= BOBOL_MESH_LOD_QUANTIZATION_BITS &&
+	    bits[2] >= BOBOL_MESH_LOD_QUANTIZATION_BITS) {
+	    cut.objectError = 0.0;
+	    break;
+	}
+
+	double squaredError = 0.0;
+	for (int axis = 0; axis < 3; ++axis) {
+	    const double mask = std::ldexp(1.0,
+		BOBOL_MESH_LOD_QUANTIZATION_BITS - bits[axis]);
+	    const double axisError =
+		0.5 * mask * extent[axis] / 65535.0;
+	    squaredError += axisError * axisError;
+	}
+	cut.objectError = std::sqrt(squaredError);
+
+	int refineAxis = -1;
+	double largestAxisError = -1.0;
+	for (int axis = 0; axis < 3; ++axis) {
+	    if (bits[axis] >= BOBOL_MESH_LOD_QUANTIZATION_BITS)
+		continue;
+	    const double axisError =
+		extent[axis] / std::ldexp(1.0, bits[axis]);
+	    if (axisError > largestAxisError) {
+		largestAxisError = axisError;
+		refineAxis = axis;
+	    }
+	}
+	if (refineAxis < 0)
+	    break;
+	++bits[refineAxis];
+    }
+    maxPopCut = cutCount ? static_cast<int>(cutCount) - 1 : 0;
+}
+
+void
 BObolPopState::triProcess(void)
 {
-    vertexTriMinLevel.assign(vertexCount,
-	static_cast<uint8_t>(POP_MAXLEVEL - 1));
-    levelTriVerts.resize(POP_MAXLEVEL);
-    levelTris.resize(POP_MAXLEVEL);
+    vertexTriMinCut.assign(vertexCount,
+	static_cast<uint8_t>(maxPopCut));
+    cutTriVerts.resize(cutCount);
+    cutTris.resize(cutCount);
 
     /* Face activation is independent for every triangle.  The old loop did
      * nine floating-point divisions and all activation work serially before
@@ -767,7 +820,7 @@ BObolPopState::triProcess(void)
      * disjoint ranges, recording only one byte per source face.  The merge
      * below remains serial and source ordered, preserving byte-for-byte
      * deterministic cache topology regardless of worker count. */
-    std::vector<uint8_t> faceLevels(faceCount, UINT8_MAX);
+    std::vector<uint8_t> faceCuts(faceCount, UINT8_MAX);
     const fastf_t extent[3] = {
 	maxx - minx, maxy - miny, maxz - minz
     };
@@ -789,14 +842,21 @@ BObolPopState::triProcess(void)
 	return static_cast<unsigned short>(
 	    floor((value - minimum[axis]) * quantizeScale[axis]));
     };
-    const auto pairLevel = [](const BObolPopRec &a,
-	    const BObolPopRec &b) -> int {
-	const unsigned int differing =
-	    static_cast<unsigned int>(a.x ^ b.x) |
-	    static_cast<unsigned int>(a.y ^ b.y) |
-	    static_cast<unsigned int>(a.z ^ b.z);
+    uint8_t firstCutForBits[3][BOBOL_MESH_LOD_QUANTIZATION_BITS + 1];
+    memset(firstCutForBits, UINT8_MAX, sizeof(firstCutForBits));
+    for (int axis = 0; axis < 3; ++axis) {
+	firstCutForBits[axis][0] = 0;
+	for (uint32_t cut = 0; cut < cutCount; ++cut)
+	    for (int bits = 1;
+		    bits <= cuts[cut].bits[axis]; ++bits)
+		if (firstCutForBits[axis][bits] == UINT8_MAX)
+		    firstCutForBits[axis][bits] = static_cast<uint8_t>(cut);
+    }
+    const auto differingBits = [](unsigned short a,
+	    unsigned short b) -> int {
+	const unsigned int differing = static_cast<unsigned int>(a ^ b);
 	if (!differing)
-	    return POP_MAXLEVEL - 1;
+	    return 0;
 #if defined(__GNUC__) || defined(__clang__)
 	const int mostSignificantBit = 31 - __builtin_clz(differing);
 #else
@@ -804,9 +864,25 @@ BObolPopState::triProcess(void)
 	for (unsigned int bits = differing; bits >>= 1;)
 	    ++mostSignificantBit;
 #endif
-	return (POP_MAXLEVEL - 1) - mostSignificantBit;
+	return BOBOL_MESH_LOD_QUANTIZATION_BITS - mostSignificantBit;
     };
-    const auto classifyRange = [this, &faceLevels, &quantize, &pairLevel](
+    const auto pairCut = [this, &firstCutForBits, &differingBits](
+	    const BObolPopRec &a, const BObolPopRec &b) -> int {
+	const unsigned short av[3] = {a.x, a.y, a.z};
+	const unsigned short bv[3] = {b.x, b.y, b.z};
+	int cut = maxPopCut;
+	bool distinguishable = false;
+	for (int axis = 0; axis < 3; ++axis) {
+	    const int bits = differingBits(av[axis], bv[axis]);
+	    if (!bits)
+		continue;
+	    distinguishable = true;
+	    cut = std::min(cut,
+		static_cast<int>(firstCutForBits[axis][bits]));
+	}
+	return distinguishable ? cut : maxPopCut;
+    };
+    const auto classifyRange = [this, &faceCuts, &quantize, &pairCut](
 	    size_t begin, size_t end) {
 	for (size_t faceIndex = begin; faceIndex < end; ++faceIndex) {
 	BObolPopRec triangle[3];
@@ -827,10 +903,10 @@ BObolPopState::triProcess(void)
 	if (badFace)
 	    continue;
 
-	const int level = std::max(pairLevel(triangle[0], triangle[1]),
-	    std::max(pairLevel(triangle[1], triangle[2]),
-		     pairLevel(triangle[0], triangle[2])));
-	faceLevels[faceIndex] = static_cast<uint8_t>(level);
+	const int cut = std::max(pairCut(triangle[0], triangle[1]),
+	    std::max(pairCut(triangle[1], triangle[2]),
+		     pairCut(triangle[0], triangle[2])));
+	faceCuts[faceIndex] = static_cast<uint8_t>(cut);
 	}
     };
 
@@ -858,71 +934,68 @@ BObolPopState::triProcess(void)
 	    worker.join();
     }
 
-    size_t levelFaceCounts[POP_MAXLEVEL] = {0};
+    size_t cutFaceCounts[POP_CUT_COUNT_MAX] = {0};
     size_t badFaceCount = 0;
-    for (uint8_t level : faceLevels) {
-	if (level >= POP_MAXLEVEL)
+    for (uint8_t cut : faceCuts) {
+	if (cut >= cutCount)
 	    badFaceCount++;
 	else
-	    levelFaceCounts[level]++;
+	    cutFaceCounts[cut]++;
     }
-    for (int level = 0; level < POP_MAXLEVEL; ++level)
-	levelTris[level].reserve(levelFaceCounts[level]);
+    for (uint32_t cut = 0; cut < cutCount; ++cut)
+	cutTris[cut].reserve(cutFaceCounts[cut]);
 
     for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
-	const uint8_t level = faceLevels[faceIndex];
-	if (level >= POP_MAXLEVEL)
+	const uint8_t cut = faceCuts[faceIndex];
+	if (cut >= cutCount)
 	    continue;
-	levelTris[level].push_back(static_cast<uint32_t>(faceIndex));
+	cutTris[cut].push_back(static_cast<uint32_t>(faceIndex));
 	for (size_t cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
 	    int faceVertex = faceArray[3 * faceIndex + cornerIndex];
-	    if (vertexTriMinLevel[faceVertex] > level)
-		vertexTriMinLevel[faceVertex] = level;
+	    if (vertexTriMinCut[faceVertex] > cut)
+		vertexTriMinCut[faceVertex] = cut;
 	}
     }
     if (badFaceCount)
 	bu_log("%zu invalid mesh faces skipped during PoP classification\n",
 	       badFaceCount);
 
-    for (size_t vertexIndex = 0; vertexIndex < vertexTriMinLevel.size();
+    for (size_t vertexIndex = 0; vertexIndex < vertexTriMinCut.size();
 	 vertexIndex++)
-	levelTriVerts[vertexTriMinLevel[vertexIndex]].push_back(
+	cutTriVerts[vertexTriMinCut[vertexIndex]].push_back(
 	    static_cast<uint32_t>(vertexIndex));
 
-    for (int level = 0; level < POP_MAXLEVEL; ++level) {
-	levelVertexCount[level] = levelTriVerts[level].size();
-	levelTriangleCount[level] = levelTris[level].size();
+    for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	cutVertexCount[cut] = cutTriVerts[cut].size();
+	cutTriangleCount[cut] = cutTris[cut].size();
     }
 
     triIndexMap.resize(vertexCount);
 
     uint32_t outputVertexIndex = 0;
-    for (const std::vector<uint32_t> &levelVertices : levelTriVerts) {
-	for (uint32_t sourceVertexIndex : levelVertices) {
+    for (const std::vector<uint32_t> &cutVertices : cutTriVerts) {
+	for (uint32_t sourceVertexIndex : cutVertices) {
 	    triIndexMap[sourceVertexIndex] = outputVertexIndex;
 	    ++outputVertexIndex;
 	}
     }
 
-    int firstPopulatedLevel = -1;
-    int lastPopulatedLevel = -1;
-    for (size_t levelIndex = 0; levelIndex < levelTris.size(); levelIndex++) {
-	if (levelTris[levelIndex].size()) {
-	    if (firstPopulatedLevel < 0)
-		firstPopulatedLevel = static_cast<int>(levelIndex);
-	    lastPopulatedLevel = static_cast<int>(levelIndex);
+    int firstPopulatedCut = -1;
+    for (size_t cut = 0; cut < cutTris.size(); ++cut) {
+	if (!cutTris[cut].empty()) {
+	    if (firstPopulatedCut < 0)
+		firstPopulatedCut = static_cast<int>(cut);
 	}
     }
 
     /* Face activation and coordinate precision are independent progress axes.
-     * A mesh may have every face active at a low level while its vertices are
-     * still snapped to a visibly coarse grid.  The last triangle-pop level is
+     * A mesh may have every face active at a low cut while its vertices are
+     * still snapped to a visibly coarse grid.  The last topology cut is
      * therefore not a valid display terminal.  Persist the cumulative
-     * topology through the full 16-bit precision range; levels with no new
+     * topology through the full 16-bit precision range; cuts with no new
      * faces or vertices are cheap and still re-snap the resident coordinates
      * to a finer grid. */
-    minPopLevel = firstPopulatedLevel >= 0 ? firstPopulatedLevel : 0;
-    maxPopLevel = lastPopulatedLevel >= 0 ? POP_MAXLEVEL - 1 : minPopLevel;
+    minPopCut = firstPopulatedCut >= 0 ? firstPopulatedCut : 0;
 }
 
 BObolPopState::BObolPopState(
@@ -941,7 +1014,7 @@ BObolPopState::BObolPopState(
 
     if (!userKey) {
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char semantics[] = "BObol-PoP3D-format-14";
+	static const char semantics[] = "BObol-PoP3D-cuts-format-15";
 	bu_data_hash_update(state, semantics, sizeof(semantics));
 	bu_data_hash_update(state, vertices, inputVertexCount * sizeof(point_t));
 	bu_data_hash_update(state, faces, 3 * inputFaceCount * sizeof(int));
@@ -959,19 +1032,28 @@ BObolPopState::BObolPopState(
     }
     initializeCacheKeyPrefix();
 
+    /* A content-identical hierarchy may already have been generated for a
+     * different database name.  A marker proves only that some record is
+     * present; it is not a usable hierarchy state.  Validate the complete
+     * immutable header before reusing it so generate-and-open can materialize
+     * its first prefix without reclassifying the mesh or publishing an
+     * uninitialized shell. */
     void *cacheData = NULL;
-    size_t cacheSize = cacheGet(&cacheData, CACHE_POP_MAX_LEVEL);
-    if (cacheSize && cacheData) {
-	cacheDone();
-	isValid = true;
-	return;
-    }
+    const size_t cacheSize = cacheGet(&cacheData, CACHE_POP_MAX_CUT);
+    const bool cachedMarkerPresent = cacheSize && cacheData;
     cacheDone();
+    if (cachedMarkerPresent && loadCachedHeader(false))
+	return;
 
-    currLevel = POP_MAXLEVEL - 1;
-    for (int levelIndex = 0; levelIndex < POP_MAXLEVEL; levelIndex++)
-	precomputedMasks.push_back(static_cast<unsigned short>(
-				       pow(2, (POP_MAXLEVEL - levelIndex - 1))));
+    /* A partial same-key cache must not leak metadata into the new producer
+     * run.  Complete generation below rewrites the immutable records. */
+    isValid = false;
+    currCut = -1;
+    minPopCut = 0;
+    maxPopCut = 0;
+    cutCount = 0;
+    memset(cutVertexCount, 0, sizeof(cutVertexCount));
+    memset(cutTriangleCount, 0, sizeof(cutTriangleCount));
 
     vertexCount = inputVertexCount;
     vertexArray = vertices;
@@ -993,7 +1075,13 @@ BObolPopState::BObolPopState(
 	maxz = (vertices[vertexIndex][Z] > maxz) ? vertices[vertexIndex][Z] : maxz;
     }
 
+    if (!std::isfinite(maxx - minx) || !std::isfinite(maxy - miny) ||
+	!std::isfinite(maxz - minz))
+	return;
+
     const int64_t classifyStarted = bu_gettime();
+    buildCutSchedule();
+    currCut = maxPopCut;
     triProcess();
     const int64_t cacheStarted = bu_gettime();
 
@@ -1026,12 +1114,17 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
     if (!key)
 	return;
 
-    currLevel = -1;
-    for (int levelIndex = 0; levelIndex < POP_MAXLEVEL; levelIndex++)
-	precomputedMasks.push_back(static_cast<unsigned short>(
-				       pow(2, (POP_MAXLEVEL - levelIndex - 1))));
+    currCut = -1;
     hash = key;
     initializeCacheKeyPrefix();
+
+    loadCachedHeader(retainHeaderSnapshot);
+}
+
+bool
+BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
+{
+    isValid = false;
 
     /* These records form one immutable hierarchy header.  Read them through
      * one LMDB snapshot: besides cutting transaction churn, this prevents a
@@ -1046,51 +1139,54 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 	memcpy(output, buffer, expected);
 	return true;
     };
-    const auto readLevelCounts = [this](const char *component,
+    const auto readCutCounts = [this](const char *component,
 	size_t *output) -> bool {
 	void *buffer = NULL;
 	const size_t size = cacheGet(&buffer, component);
 	if (!buffer || !output)
 	    return false;
-	const size_t count = POP_MAXLEVEL + 1;
+	const size_t count = POP_CUT_COUNT_MAX + 1;
 	if (size == count * sizeof(uint64_t)) {
 	    const unsigned char *bytes =
 		static_cast<const unsigned char *>(buffer);
-	    for (size_t level = 0; level < count; ++level) {
+	    for (size_t cut = 0; cut < count; ++cut) {
 		uint64_t diskCount = 0;
-		memcpy(&diskCount, bytes + level * sizeof(diskCount),
+		memcpy(&diskCount, bytes + cut * sizeof(diskCount),
 		    sizeof(diskCount));
 		if (diskCount > static_cast<uint64_t>(SIZE_MAX))
 		    return false;
-		output[level] = static_cast<size_t>(diskCount);
+		output[cut] = static_cast<size_t>(diskCount);
 	    }
 	    return true;
 	}
 	return false;
     };
-    int32_t diskMaxLevel = -1;
-    int32_t diskMinLevel = -1;
+    int32_t diskMaxCut = -1;
+    int32_t diskMinCut = -1;
+    uint8_t diskCutBits[POP_CUT_COUNT_MAX][3] = {{0}};
     uint8_t diskCullBackfaces = 0;
     uint8_t diskHasNormals = 0;
-    if (!readMetadata(CACHE_POP_MAX_LEVEL, &diskMaxLevel,
-	    sizeof(diskMaxLevel)) ||
-	!readMetadata(CACHE_POP_MIN_LEVEL, &diskMinLevel,
-	    sizeof(diskMinLevel)) ||
+    if (!readMetadata(CACHE_POP_MAX_CUT, &diskMaxCut,
+	    sizeof(diskMaxCut)) ||
+	!readMetadata(CACHE_POP_MIN_CUT, &diskMinCut,
+	    sizeof(diskMinCut)) ||
+	!readMetadata(CACHE_CUT_QUANTIZATION, diskCutBits,
+	    sizeof(diskCutBits)) ||
 	!readMetadata(CACHE_SHADED_CULL_BACKFACES,
 	    &diskCullBackfaces, sizeof(diskCullBackfaces)) ||
 	!readMetadata(CACHE_HAS_NORMALS,
 	    &diskHasNormals, sizeof(diskHasNormals)) ||
-	!readLevelCounts(CACHE_VERTEX_COUNT, levelVertexCount) ||
-	!readLevelCounts(CACHE_TRI_COUNT, levelTriangleCount)) {
+	!readCutCounts(CACHE_VERTEX_COUNT, cutVertexCount) ||
+	!readCutCounts(CACHE_TRI_COUNT, cutTriangleCount)) {
 	cacheDone();
-	return;
+	return false;
     }
-    if (diskCullBackfaces > 1 || diskHasNormals > 1) {
+    if (diskCullBackfaces > 1 || diskHasNormals > 1 ||
+	diskMaxCut < 0 || diskMaxCut >= POP_CUT_COUNT_MAX ||
+	diskMinCut < 0 || diskMinCut > diskMaxCut) {
 	cacheDone();
-	return;
+	return false;
     }
-    maxPopLevel = static_cast<int>(diskMaxLevel);
-    minPopLevel = static_cast<int>(diskMinLevel);
     shadedCullBackfaces = diskCullBackfaces != 0;
     hasNormals = diskHasNormals != 0;
 
@@ -1100,7 +1196,7 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 	size_t bufferSize = cacheGet(&buffer, CACHE_OBJ_BOUNDS);
 	if (bufferSize != sizeof(diskBounds) || !buffer) {
 	    cacheDone();
-	    return;
+	    return false;
 	}
 	memcpy(diskBounds, buffer, sizeof(diskBounds));
 	VSET(bbmin, diskBounds[0], diskBounds[1], diskBounds[2]);
@@ -1113,8 +1209,6 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 	maxz = static_cast<fastf_t>(diskBounds[11]);
     }
     {
-	const bool validLevels = minPopLevel >= 0 &&
-	    maxPopLevel >= minPopLevel && maxPopLevel < POP_MAXLEVEL;
 	const bool validBounds =
 	    std::isfinite(minx) && std::isfinite(miny) &&
 	    std::isfinite(minz) && std::isfinite(maxx) &&
@@ -1124,31 +1218,56 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 	    std::isfinite(bbmin[Z]) && std::isfinite(bbmax[X]) &&
 	    std::isfinite(bbmax[Y]) && std::isfinite(bbmax[Z]) &&
 	    bbmin[X] <= bbmax[X] && bbmin[Y] <= bbmax[Y] &&
-	    bbmin[Z] <= bbmax[Z];
+	    bbmin[Z] <= bbmax[Z] &&
+	    std::isfinite(maxx - minx) &&
+	    std::isfinite(maxy - miny) &&
+	    std::isfinite(maxz - minz);
+	if (!validBounds) {
+	    cacheDone();
+	    return false;
+	}
+
+	/* Format 15 has one canonical anisotropic schedule.  Rebuild it from
+	 * the validated quantization domain and require the stored cut records
+	 * to match exactly.  This rejects truncated, stale, or corrupt metadata
+	 * before any ordinal can index fixed-size storage. */
+	buildCutSchedule();
+	bool validCuts = maxPopCut == static_cast<int>(diskMaxCut) &&
+	    cutCount == static_cast<uint32_t>(diskMaxCut + 1);
+	for (uint32_t cut = 0; validCuts && cut < cutCount; ++cut)
+	    for (int axis = 0; axis < 3; ++axis)
+		if (cuts[cut].bits[axis] != diskCutBits[cut][axis])
+		    validCuts = false;
+	minPopCut = static_cast<int>(diskMinCut);
+
 	size_t totalPoints = 0;
 	size_t totalFaces = 0;
-	bool validCounts = levelVertexCount[POP_MAXLEVEL] == 0 &&
-	    levelTriangleCount[POP_MAXLEVEL] == 0;
-	for (int level = 0; validCounts && level < POP_MAXLEVEL; ++level) {
-	    if (levelVertexCount[level] > SIZE_MAX - totalPoints ||
-		levelTriangleCount[level] > SIZE_MAX - totalFaces) {
+	bool validCounts = cutVertexCount[POP_CUT_COUNT_MAX] == 0 &&
+	    cutTriangleCount[POP_CUT_COUNT_MAX] == 0;
+	for (int cut = 0; validCounts && cut < POP_CUT_COUNT_MAX; ++cut) {
+	    if (cutVertexCount[cut] > SIZE_MAX - totalPoints ||
+		cutTriangleCount[cut] > SIZE_MAX - totalFaces) {
 		validCounts = false;
 		break;
 	    }
-	    totalPoints += levelVertexCount[level];
-	    totalFaces += levelTriangleCount[level];
-	    if (level > maxPopLevel &&
-		(levelVertexCount[level] || levelTriangleCount[level]))
+	    totalPoints += cutVertexCount[cut];
+	    totalFaces += cutTriangleCount[cut];
+	    if (cut < minPopCut &&
+		(cutVertexCount[cut] || cutTriangleCount[cut]))
+		validCounts = false;
+	    if (cut > maxPopCut &&
+		(cutVertexCount[cut] || cutTriangleCount[cut]))
 		validCounts = false;
 	}
-	if (!validLevels || !validBounds || !validCounts ||
+	if (!validCuts || !validCounts ||
 	    !totalPoints || !totalFaces ||
+	    !cutVertexCount[minPopCut] || !cutTriangleCount[minPopCut] ||
 	    totalPoints > static_cast<size_t>(
 		std::numeric_limits<int>::max()) ||
 	    totalFaces > static_cast<size_t>(
 		std::numeric_limits<int>::max())) {
 	    cacheDone();
-	    return;
+	    return false;
 	}
     }
     /*
@@ -1165,35 +1284,34 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
      * eagerly loading the minimum cut here doubled cache I/O for every
      * request above that cut. */
     isValid = true;
+    return true;
 }
 
 BObolPopState::~BObolPopState()
 {
     if (readTxn || readLock.owns_lock())
 	cacheDone();
-    if (fullDetailFree) {
-	fullDetailFree(detailData);
-	detailData = NULL;
-    } else if (fullDetailClear) {
-	fullDetailClear(detailData);
-	detailData = NULL;
-    }
 }
 
 bool
-BObolPopState::materializeGeneratedPrefix(int level)
+BObolPopState::materializeInitialPrefix(int cut)
 {
-    if (!isValid || !vertexArray || !faceArray ||
-	levelTriVerts.empty() || levelTris.empty() ||
-	triIndexMap.size() != vertexCount)
+    if (!isValid)
 	return false;
-    level = std::max(minPopLevel, std::min(maxPopLevel, level));
+    /* Generate-and-open may discover an immutable hierarchy already produced
+     * for identical content under another source name.  Reuse its cache;
+     * only a genuinely new hierarchy has producer scratch for direct
+     * materialization. */
+    if (!vertexArray || !faceArray || cutTriVerts.empty() ||
+	cutTris.empty() || triIndexMap.size() != vertexCount)
+	return setCut(cut);
+    cut = std::max(minPopCut, std::min(maxPopCut, cut));
 
     size_t pointCount = 0;
     size_t triangleCount = 0;
-    for (int levelIndex = 0; levelIndex <= level; ++levelIndex) {
-	pointCount += levelVertexCount[levelIndex];
-	triangleCount += levelTriangleCount[levelIndex];
+    for (int cutIndex = 0; cutIndex <= cut; ++cutIndex) {
+	pointCount += cutVertexCount[cutIndex];
+	triangleCount += cutTriangleCount[cutIndex];
     }
     if (!pointCount || !triangleCount ||
 	pointCount > SIZE_MAX / 3 || triangleCount > SIZE_MAX / 3)
@@ -1201,8 +1319,8 @@ BObolPopState::materializeGeneratedPrefix(int level)
 
     lodTriPoints.clear();
     lodTriPoints.reserve(pointCount * 3);
-    for (int levelIndex = 0; levelIndex <= level; ++levelIndex) {
-	for (uint32_t sourceVertex : levelTriVerts[levelIndex]) {
+    for (int cutIndex = 0; cutIndex <= cut; ++cutIndex) {
+	for (uint32_t sourceVertex : cutTriVerts[cutIndex]) {
 	    if (sourceVertex >= vertexCount)
 		return false;
 	    lodTriPoints.push_back(vertexArray[sourceVertex][X]);
@@ -1219,8 +1337,8 @@ BObolPopState::materializeGeneratedPrefix(int level)
 	lodTriNormals.clear();
 	lodTriNormals.reserve(triangleCount * 9);
     }
-    for (int levelIndex = 0; levelIndex <= level; ++levelIndex) {
-	for (uint32_t sourceFace : levelTris[levelIndex]) {
+    for (int cutIndex = 0; cutIndex <= cut; ++cutIndex) {
+	for (uint32_t sourceFace : cutTris[cutIndex]) {
 	    if (sourceFace >= faceCount)
 		return false;
 	    for (size_t corner = 0; corner < 3; ++corner) {
@@ -1230,11 +1348,7 @@ BObolPopState::materializeGeneratedPrefix(int level)
 		    static_cast<size_t>(sourceVertex) >=
 			triIndexMap.size())
 		    return false;
-		const uint32_t targetVertex = triIndexMap[sourceVertex];
-		if (targetVertex >
-		    static_cast<uint32_t>(std::numeric_limits<int>::max()))
-		    return false;
-		lodTris.push_back(static_cast<int>(targetVertex));
+		lodTris.push_back(triIndexMap[sourceVertex]);
 		if (normalArray) {
 		    const size_t normalIndex =
 			3 * static_cast<size_t>(sourceFace) + corner;
@@ -1246,7 +1360,7 @@ BObolPopState::materializeGeneratedPrefix(int level)
 	}
     }
     lodTriPointsSnapped.clear();
-    currLevel = level;
+    currCut = cut;
     return true;
 }
 
@@ -1255,12 +1369,12 @@ BObolPopState::releaseGenerationScratch(void)
 {
     triIndexMap.clear();
     triIndexMap.shrink_to_fit();
-    vertexTriMinLevel.clear();
-    vertexTriMinLevel.shrink_to_fit();
-    levelTriVerts.clear();
-    levelTriVerts.shrink_to_fit();
-    levelTris.clear();
-    levelTris.shrink_to_fit();
+    vertexTriMinCut.clear();
+    vertexTriMinCut.shrink_to_fit();
+    cutTriVerts.clear();
+    cutTriVerts.shrink_to_fit();
+    cutTris.clear();
+    cutTris.shrink_to_fit();
     vertexCount = 0;
     vertexArray = NULL;
     normalArray = NULL;
@@ -1269,7 +1383,7 @@ BObolPopState::releaseGenerationScratch(void)
 }
 
 void
-BObolPopState::updateSnappedPoints(int level)
+BObolPopState::updateSnappedPoints(int cut)
 {
     lodTriPointsSnapped.clear();
     lodTriPointsSnapped.reserve(lodTriPoints.size());
@@ -1280,25 +1394,25 @@ BObolPopState::updateSnappedPoints(int level)
 	VSET(point, lodTriPoints[3 * pointIndex + 0],
 	     lodTriPoints[3 * pointIndex + 1],
 	     lodTriPoints[3 * pointIndex + 2]);
-	levelPoint(&snapped, &point, level);
+	cutPoint(&snapped, &point, cut);
 	for (int coordIndex = 0; coordIndex < 3; coordIndex++)
 	    lodTriPointsSnapped.push_back(snapped[coordIndex]);
     }
 }
 
 bool
-BObolPopState::triPopLoad(int startLevel, int level,
+BObolPopState::triPopLoad(int startCut, int cut,
 			  bool materializeSnapped)
 {
     char component[8] = {0};
-    const auto levelComponent = [&component](const char *prefix,
-	    int levelIndex) -> const char * {
+    const auto cutComponent = [&component](const char *prefix,
+	    int cutIndex) -> const char * {
 	char *out = component;
 	const size_t prefixLength = strlen(prefix);
 	memcpy(out, prefix, prefixLength);
 	out += prefixLength;
 	const std::to_chars_result converted =
-	    std::to_chars(out, component + sizeof(component) - 1, levelIndex);
+	    std::to_chars(out, component + sizeof(component) - 1, cutIndex);
 	if (converted.ec != std::errc()) {
 	    component[0] = '\0';
 	    return component;
@@ -1313,53 +1427,88 @@ BObolPopState::triPopLoad(int startLevel, int level,
      * made a 50k-asset warm scene perform hundreds of thousands of tiny read
      * transactions and reduced an otherwise memory-resident cache to roughly
      * a hundred meshes per second. */
-    for (int levelIndex = startLevel + 1; levelIndex <= level; levelIndex++) {
-	if (!levelVertexCount[levelIndex])
+    for (int cutIndex = startCut + 1; cutIndex <= cut; ++cutIndex) {
+	if (!cutVertexCount[cutIndex])
 	    continue;
-	fastf_t *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer,
-	    levelComponent(CACHE_VERT_LEVEL, levelIndex));
-	if (bufferSize != levelVertexCount[levelIndex] * sizeof(point_t)) {
+	void *buffer = NULL;
+	const size_t bufferSize = cacheGet(&buffer,
+	    cutComponent(CACHE_VERT_CUT, cutIndex));
+	const size_t scalarCount = cutVertexCount[cutIndex] * 3;
+	if (bufferSize != scalarCount * sizeof(fastf_t) || !buffer ||
+	    scalarCount > lodTriPoints.max_size() - lodTriPoints.size()) {
 	    cacheDone();
 	    return false;
 	}
-	lodTriPoints.insert(lodTriPoints.end(), &buffer[0],
-			    &buffer[levelVertexCount[levelIndex] * 3]);
+	const size_t offset = lodTriPoints.size();
+	lodTriPoints.resize(offset + scalarCount);
+	memcpy(lodTriPoints.data() + offset, buffer, bufferSize);
+	const fastf_t minimum[3] = {minx, miny, minz};
+	const fastf_t maximum[3] = {maxx, maxy, maxz};
+	for (size_t scalar = offset; scalar < offset + scalarCount; ++scalar) {
+	    const int axis = static_cast<int>(scalar % 3);
+	    if (!std::isfinite(lodTriPoints[scalar]) ||
+		lodTriPoints[scalar] < minimum[axis] ||
+		lodTriPoints[scalar] > maximum[axis]) {
+		cacheDone();
+		return false;
+	    }
+	}
     }
 
     if (materializeSnapped)
-	updateSnappedPoints(level);
+	updateSnappedPoints(cut);
     else
 	lodTriPointsSnapped.clear();
 
-    for (int levelIndex = startLevel + 1; levelIndex <= level; levelIndex++) {
-	if (!levelTriangleCount[levelIndex])
+    for (int cutIndex = startCut + 1; cutIndex <= cut; ++cutIndex) {
+	if (!cutTriangleCount[cutIndex])
 	    continue;
-	int *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer,
-	    levelComponent(CACHE_TRI_LEVEL, levelIndex));
-	if (bufferSize != levelTriangleCount[levelIndex] * 3 * sizeof(int)) {
+	void *buffer = NULL;
+	const size_t bufferSize = cacheGet(&buffer,
+	    cutComponent(CACHE_TRI_CUT, cutIndex));
+	const size_t indexCount = cutTriangleCount[cutIndex] * 3;
+	if (bufferSize != indexCount * sizeof(uint32_t) || !buffer ||
+	    indexCount > lodTris.max_size() - lodTris.size()) {
 	    cacheDone();
 	    return false;
 	}
-	lodTris.insert(lodTris.end(), &buffer[0],
-		       &buffer[levelTriangleCount[levelIndex] * 3]);
+	const size_t offset = lodTris.size();
+	lodTris.resize(offset + indexCount);
+	memcpy(lodTris.data() + offset, buffer, bufferSize);
+	const size_t cumulativePointCount = lodTriPoints.size() / 3;
+	for (size_t index = offset; index < offset + indexCount; ++index) {
+	    if (static_cast<size_t>(lodTris[index]) >= cumulativePointCount) {
+		cacheDone();
+		return false;
+	    }
+	}
     }
 
-    for (int levelIndex = startLevel + 1; levelIndex <= level; levelIndex++) {
-	if (!levelTriangleCount[levelIndex])
+    for (int cutIndex = startCut + 1; cutIndex <= cut; ++cutIndex) {
+	if (!cutTriangleCount[cutIndex])
 	    continue;
-	fastf_t *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer,
-	    levelComponent(CACHE_VERTNORM_LEVEL, levelIndex));
-	if (bufferSize > 0 &&
-	    bufferSize != levelTriangleCount[levelIndex] * sizeof(vect_t) * 3) {
+	void *buffer = NULL;
+	const size_t bufferSize = cacheGet(&buffer,
+	    cutComponent(CACHE_VERTNORM_CUT, cutIndex));
+	const size_t scalarCount = cutTriangleCount[cutIndex] * 9;
+	const size_t expectedSize = hasNormals ?
+	    scalarCount * sizeof(fastf_t) : 0;
+	if (bufferSize != expectedSize ||
+	    (expectedSize && (!buffer || scalarCount >
+		lodTriNormals.max_size() - lodTriNormals.size()))) {
 	    cacheDone();
 	    return false;
 	}
 	if (bufferSize) {
-	    lodTriNormals.insert(lodTriNormals.end(), &buffer[0],
-				 &buffer[levelTriangleCount[levelIndex] * 3 * 3]);
+	    const size_t offset = lodTriNormals.size();
+	    lodTriNormals.resize(offset + scalarCount);
+	    memcpy(lodTriNormals.data() + offset, buffer, bufferSize);
+	    for (size_t scalar = offset; scalar < offset + scalarCount; ++scalar) {
+		if (!std::isfinite(lodTriNormals[scalar])) {
+		    cacheDone();
+		    return false;
+		}
+	    }
 	}
     }
 
@@ -1368,16 +1517,16 @@ BObolPopState::triPopLoad(int startLevel, int level,
 }
 
 bool
-BObolPopState::readSuffix(int residentLevel, int targetLevel,
+BObolPopState::readSuffix(int residentCut, int targetCut,
 	BObolMeshLodSuffixCallback callback, void *callbackData)
 {
-    if (!isValid || !callback || residentLevel < minPopLevel ||
-	targetLevel <= residentLevel || targetLevel > maxPopLevel)
+    if (!isValid || !callback || residentCut < minPopCut ||
+	targetCut <= residentCut || targetCut > maxPopCut)
 	return false;
 
     char component[16] = {0};
-    const auto levelComponent = [&component](const char *prefix,
-	int levelIndex) -> const char * {
+    const auto cutComponent = [&component](const char *prefix,
+	int cutIndex) -> const char * {
 	const size_t prefixLength = strlen(prefix);
 	if (prefixLength >= sizeof(component)) {
 	    component[0] = '\0';
@@ -1386,7 +1535,7 @@ BObolPopState::readSuffix(int residentLevel, int targetLevel,
 	memcpy(component, prefix, prefixLength);
 	char *out = component + prefixLength;
 	const std::to_chars_result converted =
-	    std::to_chars(out, component + sizeof(component) - 1, levelIndex);
+	    std::to_chars(out, component + sizeof(component) - 1, cutIndex);
 	if (converted.ec != std::errc()) {
 	    component[0] = '\0';
 	    return component;
@@ -1395,49 +1544,98 @@ BObolPopState::readSuffix(int residentLevel, int targetLevel,
 	return component;
     };
 
-    /* All borrowed records belong to one immutable cache snapshot.  The
-     * callback consumes each level before cacheDone releases that snapshot;
-     * no cumulative reader-owned vectors are allocated here. */
-    for (int levelIndex = residentLevel + 1;
-	 levelIndex <= targetLevel; ++levelIndex) {
-	const point_t *points = NULL;
-	const int *faces = NULL;
-	const vect_t *normals = NULL;
-	const size_t pointCount = levelVertexCount[levelIndex];
-	const size_t chunkFaceCount = levelTriangleCount[levelIndex];
+    /* LMDB values are byte records and need not satisfy point_t, vect_t, or
+     * uint32_t alignment.  Copy one cut at a time into reusable aligned
+     * scratch before exposing typed callback pointers.  This keeps transient
+     * memory bounded by the largest activation chunk rather than the whole
+     * cumulative prefix. */
+    std::vector<fastf_t> pointStorage;
+    std::vector<uint32_t> faceStorage;
+    std::vector<fastf_t> normalStorage;
+    const fastf_t minimum[3] = {minx, miny, minz};
+    const fastf_t maximum[3] = {maxx, maxy, maxz};
+    for (int cutIndex = residentCut + 1;
+	 cutIndex <= targetCut; ++cutIndex) {
+	const size_t pointCount = cutVertexCount[cutIndex];
+	const size_t chunkFaceCount = cutTriangleCount[cutIndex];
 	if (pointCount > SIZE_MAX / sizeof(point_t) ||
 	    chunkFaceCount > SIZE_MAX / 3 ||
-	    chunkFaceCount * 3 > SIZE_MAX / sizeof(int) ||
+	    chunkFaceCount * 3 > SIZE_MAX / sizeof(uint32_t) ||
 	    (hasNormals &&
 	     chunkFaceCount * 3 > SIZE_MAX / sizeof(vect_t))) {
 	    cacheDone();
 	    return false;
 	}
+	pointStorage.resize(pointCount * 3);
+	faceStorage.resize(chunkFaceCount * 3);
+	normalStorage.resize(hasNormals ? chunkFaceCount * 9 : 0);
 	if (pointCount) {
-	    size_t bytes = cacheGet((void **)&points,
-		levelComponent(CACHE_VERT_LEVEL, levelIndex));
-	    if (bytes != pointCount * sizeof(point_t) || !points) {
+	    void *bytesData = NULL;
+	    const size_t bytes = cacheGet(&bytesData,
+		cutComponent(CACHE_VERT_CUT, cutIndex));
+	    if (bytes != pointStorage.size() * sizeof(fastf_t) ||
+		!bytesData) {
 		cacheDone();
 		return false;
+	    }
+	    memcpy(pointStorage.data(), bytesData, bytes);
+	    for (size_t point = 0; point < pointCount; ++point) {
+		for (int axis = 0; axis < 3; ++axis) {
+		    const fastf_t value = pointStorage[point * 3 + axis];
+		    if (!std::isfinite(value) || value < minimum[axis] ||
+			value > maximum[axis]) {
+			cacheDone();
+			return false;
+		    }
+		}
 	    }
 	}
 	if (chunkFaceCount) {
-	    size_t bytes = cacheGet((void **)&faces,
-		levelComponent(CACHE_TRI_LEVEL, levelIndex));
-	    if (bytes != chunkFaceCount * 3 * sizeof(int) || !faces) {
+	    void *bytesData = NULL;
+	    size_t bytes = cacheGet(&bytesData,
+		cutComponent(CACHE_TRI_CUT, cutIndex));
+	    if (bytes != faceStorage.size() * sizeof(uint32_t) ||
+		!bytesData) {
 		cacheDone();
 		return false;
 	    }
-	    if (hasNormals) {
-		bytes = cacheGet((void **)&normals,
-		    levelComponent(CACHE_VERTNORM_LEVEL, levelIndex));
-		if (bytes != chunkFaceCount * 3 * sizeof(vect_t) || !normals) {
+	    memcpy(faceStorage.data(), bytesData, bytes);
+	    const size_t finalPointCount =
+		static_cast<size_t>(cutVertexCount[0]);
+	    size_t cumulativePointCount = finalPointCount;
+	    for (int priorCut = 1; priorCut <= cutIndex; ++priorCut)
+		cumulativePointCount += cutVertexCount[priorCut];
+	    for (uint32_t index : faceStorage) {
+		if (static_cast<size_t>(index) >= cumulativePointCount) {
 		    cacheDone();
 		    return false;
 		}
 	    }
+	    if (hasNormals) {
+		bytesData = NULL;
+		bytes = cacheGet(&bytesData,
+		    cutComponent(CACHE_VERTNORM_CUT, cutIndex));
+		if (bytes != normalStorage.size() * sizeof(fastf_t) ||
+		    !bytesData) {
+		    cacheDone();
+		    return false;
+		}
+		memcpy(normalStorage.data(), bytesData, bytes);
+		for (fastf_t value : normalStorage) {
+		    if (!std::isfinite(value)) {
+			cacheDone();
+			return false;
+		    }
+		}
+	    }
 	}
-	if (!callback(levelIndex, points, pointCount, faces, chunkFaceCount,
+	const point_t *points = pointStorage.empty() ? NULL :
+	    reinterpret_cast<const point_t *>(pointStorage.data());
+	const uint32_t *faces = faceStorage.empty() ? NULL :
+	    faceStorage.data();
+	const vect_t *normals = normalStorage.empty() ? NULL :
+	    reinterpret_cast<const vect_t *>(normalStorage.data());
+	if (!callback(cutIndex, points, pointCount, faces, chunkFaceCount,
 		normals, normals ? chunkFaceCount * 3 : 0, callbackData)) {
 	    cacheDone();
 	    return false;
@@ -1490,34 +1688,32 @@ BObolPopState::residentBytes(void) const
 {
     size_t bytes = sizeof(*this);
     bytes = mesh_lod_saturating_bytes_add(
-	bytes, precomputedMasks.capacity(), sizeof(precomputedMasks[0]));
-    bytes = mesh_lod_saturating_bytes_add(
 	bytes, triIndexMap.capacity(), sizeof(triIndexMap[0]));
     bytes = mesh_lod_saturating_bytes_add(
-	bytes, vertexTriMinLevel.capacity(), sizeof(vertexTriMinLevel[0]));
+	bytes, vertexTriMinCut.capacity(), sizeof(vertexTriMinCut[0]));
     bytes = mesh_lod_saturating_bytes_add(
-	bytes, levelTriVerts.capacity(), sizeof(levelTriVerts[0]));
+	bytes, cutTriVerts.capacity(), sizeof(cutTriVerts[0]));
     bytes = mesh_lod_saturating_bytes_add(
-	bytes, levelTris.capacity(), sizeof(levelTris[0]));
-    for (const std::vector<uint32_t> &level : levelTriVerts)
+	bytes, cutTris.capacity(), sizeof(cutTris[0]));
+    for (const std::vector<uint32_t> &cut : cutTriVerts)
 	bytes = mesh_lod_saturating_bytes_add(
-	    bytes, level.capacity(), sizeof(level[0]));
-    for (const std::vector<uint32_t> &level : levelTris)
+	    bytes, cut.capacity(), sizeof(cut[0]));
+    for (const std::vector<uint32_t> &cut : cutTris)
 	bytes = mesh_lod_saturating_bytes_add(
-	    bytes, level.capacity(), sizeof(level[0]));
+	    bytes, cut.capacity(), sizeof(cut[0]));
     const size_t prefix = residentPrefixBytes();
     return prefix > SIZE_MAX - bytes ? SIZE_MAX : bytes + prefix;
 }
 
 void
-BObolPopState::triPopTrim(int level, bool materializeSnapped)
+BObolPopState::triPopTrim(int cut, bool materializeSnapped)
 {
     size_t keepVertexCount = 0;
     size_t keepFaceCount = 0;
-    for (size_t levelIndex = 0; levelIndex <= static_cast<size_t>(level);
-	 levelIndex++) {
-	keepVertexCount += levelVertexCount[levelIndex];
-	keepFaceCount += levelTriangleCount[levelIndex];
+    for (size_t cutIndex = 0; cutIndex <= static_cast<size_t>(cut);
+	 ++cutIndex) {
+	keepVertexCount += cutVertexCount[cutIndex];
+	keepFaceCount += cutTriangleCount[cutIndex];
     }
 
     lodTriPoints.resize(keepVertexCount * 3);
@@ -1528,27 +1724,9 @@ BObolPopState::triPopTrim(int level, bool materializeSnapped)
     lodTris.shrink_to_fit();
 
     if (materializeSnapped)
-	updateSnappedPoints(level);
+	updateSnappedPoints(cut);
     else
 	lodTriPointsSnapped.clear();
-}
-
-int
-BObolPopState::getLevel(fastf_t viewLength)
-{
-    fastf_t delta = 0.01 * viewLength;
-    point_t bmin;
-    point_t bmax;
-    VSET(bmin, minx, miny, minz);
-    VSET(bmax, maxx, maxy, maxz);
-    fastf_t bboxDiagonal = DIST_PNT_PNT(bmin, bmax);
-
-    for (int levelIndex = 0; levelIndex < POP_MAXLEVEL; levelIndex++) {
-	fastf_t diagSlice = bboxDiagonal / pow(2, levelIndex);
-	if (diagSlice < delta)
-	    return levelIndex;
-    }
-    return POP_MAXLEVEL - 1;
 }
 
 void
@@ -1556,139 +1734,89 @@ BObolPopState::hierarchyInfo(struct BObolMeshLodHierarchyInfo *info) const
 {
     if (!info)
 	return;
-    info->min_level = minPopLevel;
-    info->max_level = maxPopLevel;
-    info->resident_level = currLevel;
+    info->min_cut = minPopCut;
+    info->max_cut = maxPopCut;
+    info->resident_cut = currCut;
+    info->cut_count = cutCount;
     info->has_normals = hasNormals ? 1 : 0;
     info->shaded_cull_backfaces = shadedCullBackfaces ? 1 : 0;
     VSET(info->quantization_min, minx, miny, minz);
     VSET(info->quantization_max, maxx, maxy, maxz);
-    size_t points = 0;
-    size_t faces = 0;
-    for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	points += levelVertexCount[level];
-	faces += levelTriangleCount[level];
-	info->point_count[level] = points;
-	info->face_count[level] = faces;
+    uint64_t points = 0;
+    uint64_t faces = 0;
+    for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	points += static_cast<uint64_t>(cutVertexCount[cut]);
+	faces += static_cast<uint64_t>(cutTriangleCount[cut]);
+	struct BObolMeshLodCutInfo &cutInfo = info->cuts[cut];
+	cutInfo.point_count = points;
+	cutInfo.face_count = faces;
+	uint64_t bytes = points > UINT64_MAX / sizeof(point_t) ? UINT64_MAX :
+	    points * sizeof(point_t);
+	const uint64_t indexBytes = faces >
+	    UINT64_MAX / (3 * sizeof(uint32_t)) ? UINT64_MAX :
+	    faces * 3 * sizeof(uint32_t);
+	bytes = indexBytes > UINT64_MAX - bytes ? UINT64_MAX :
+	    bytes + indexBytes;
+	if (hasNormals) {
+	    const uint64_t normalBytes = faces >
+		UINT64_MAX / (3 * sizeof(vect_t)) ? UINT64_MAX :
+		faces * 3 * sizeof(vect_t);
+	    bytes = normalBytes > UINT64_MAX - bytes ? UINT64_MAX :
+		bytes + normalBytes;
+	}
+	cutInfo.resident_bytes = bytes;
+	cutInfo.object_error = cuts[cut].objectError;
+	for (int axis = 0; axis < 3; ++axis)
+	    cutInfo.quantization_bits[axis] = cuts[cut].bits[axis];
+	cutInfo.exact = cut == static_cast<uint32_t>(maxPopCut) ? 1 : 0;
     }
 }
 
 bool
-BObolPopState::setupFullDetail(void)
+BObolPopState::setCut(int cut, bool materializeSnapped)
 {
-    if (!lod || !fullDetailSetup)
-	return false;
+    cut = std::max(minPopCut, std::min(maxPopCut, cut));
 
-    struct BObolMeshLodDetail detail;
-    bobol_mesh_lod_detail_init(&detail);
-    if (fullDetailSetup(&detail, detailData) != 0)
-	return false;
-
-    if (!mesh_lod_arrays_validate(detail.faces, detail.face_count,
-				  detail.points, detail.point_count,
-				  detail.points_orig, detail.point_orig_count,
-				  NULL, NULL, NULL)) {
-	if (fullDetailClear)
-	    fullDetailClear(detailData);
-	return false;
-    }
-
-    const size_t indexCount = detail.face_count * 3;
-    if ((detail.normals && detail.normal_count != indexCount) ||
-	(!detail.normals && detail.normal_count != 0)) {
-	if (fullDetailClear)
-	    fullDetailClear(detailData);
-	return false;
-    }
-
-    lod->faces = detail.faces;
-    lod->fcnt = static_cast<int>(detail.face_count);
-    lod->points = detail.points;
-    lod->pcnt = static_cast<int>(detail.point_count);
-    lod->points_orig = detail.points_orig;
-    lod->porig_cnt = static_cast<int>(detail.point_orig_count);
-    lod->normals = detail.normals;
-    return true;
-}
-
-void
-BObolPopState::clearFullDetail(void)
-{
-    if (fullDetailClear)
-	fullDetailClear(detailData);
-    mesh_lod_active_data_clear(lod);
-}
-
-bool
-BObolPopState::setLevel(int level, bool materializeSnapped)
-{
-    if (level > maxPopLevel && !fullDetailSetup)
-	level = maxPopLevel;
-
-    if (level == currLevel && !forceUpdate) {
+    if (cut == currCut && !forceUpdate) {
 	if (materializeSnapped && lodTriPointsSnapped.empty() &&
 	    !lodTriPoints.empty())
-	    updateSnappedPoints(level);
+	    updateSnappedPoints(cut);
 	return true;
     }
 
     if (forceUpdate) {
 	forceUpdate = false;
-	clearFullDetail();
+	mesh_lod_active_data_clear(lod);
 	shrinkMemory();
-	currLevel = -1;
-	return setLevel(level, materializeSnapped);
+	currCut = -1;
+	return setCut(cut, materializeSnapped);
     }
 
-    if (level > currLevel && level <= maxPopLevel) {
+    if (cut > currCut && cut <= maxPopCut) {
 	if (!lodTriPoints.size()) {
-	    if (!triPopLoad(-1, level, materializeSnapped))
+	    if (!triPopLoad(-1, cut, materializeSnapped))
 		return false;
-	} else if (!triPopLoad(currLevel, level, materializeSnapped)) {
+	} else if (!triPopLoad(currCut, cut, materializeSnapped)) {
 	    return false;
 	}
-	/* A retained exact-only load may be followed by a legacy snapped load at
-	 * the same or a higher level.  Populate that derived array on demand
+	/* A retained exact-coordinate load may be followed by a snapped-display
+	 * request at the same or a higher cut.  Populate that derived array on demand
 	 * without reopening any cache chunks. */
 	if (materializeSnapped && lodTriPointsSnapped.empty())
-	    updateSnappedPoints(level);
+	    updateSnappedPoints(cut);
     }
 
-    if (level < currLevel && level <= maxPopLevel &&
-	currLevel <= maxPopLevel) {
+    if (cut < currCut && cut <= maxPopCut &&
+	currCut <= maxPopCut) {
 	if (!lodTriPoints.size()) {
-	    if (!triPopLoad(-1, level, materializeSnapped))
+	    if (!triPopLoad(-1, cut, materializeSnapped))
 		return false;
 	} else {
-	    triPopTrim(level, materializeSnapped);
+	    triPopTrim(cut, materializeSnapped);
 	}
     }
 
-    if (level < currLevel && level <= maxPopLevel &&
-	currLevel > maxPopLevel) {
-	clearFullDetail();
-	if (!triPopLoad(-1, level, materializeSnapped))
-	    return false;
-    }
-
-    if (level > currLevel && level > maxPopLevel &&
-	currLevel <= maxPopLevel) {
-	lodTriPointsSnapped.clear();
-	lodTriPointsSnapped.shrink_to_fit();
-	lodTriPoints.clear();
-	lodTriPoints.shrink_to_fit();
-	lodTriNormals.clear();
-	lodTriNormals.shrink_to_fit();
-	lodTris.clear();
-	lodTris.shrink_to_fit();
-
-	if (!setupFullDetail()) {
-	    currLevel = -1;
-	    return false;
-	}
-    }
-
-    currLevel = level;
+    currCut = cut;
     return true;
 }
 
@@ -1770,20 +1898,30 @@ bool
 BObolPopState::cacheTri(void)
 {
     {
-	const int32_t diskMaxLevel = static_cast<int32_t>(maxPopLevel);
+	const int32_t diskMaxCut = static_cast<int32_t>(maxPopCut);
 	std::stringstream stream;
-	stream.write(reinterpret_cast<const char *>(&diskMaxLevel),
-		     sizeof(diskMaxLevel));
-	if (!cacheWrite(CACHE_POP_MAX_LEVEL, stream))
+	stream.write(reinterpret_cast<const char *>(&diskMaxCut),
+		     sizeof(diskMaxCut));
+	if (!cacheWrite(CACHE_POP_MAX_CUT, stream))
 	    return false;
     }
 
     {
-	const int32_t diskMinLevel = static_cast<int32_t>(minPopLevel);
+	const int32_t diskMinCut = static_cast<int32_t>(minPopCut);
 	std::stringstream stream;
-	stream.write(reinterpret_cast<const char *>(&diskMinLevel),
-		     sizeof(diskMinLevel));
-	if (!cacheWrite(CACHE_POP_MIN_LEVEL, stream))
+	stream.write(reinterpret_cast<const char *>(&diskMinCut),
+		     sizeof(diskMinCut));
+	if (!cacheWrite(CACHE_POP_MIN_CUT, stream))
+	    return false;
+    }
+
+    {
+	uint8_t diskCutBits[POP_CUT_COUNT_MAX][3] = {{0}};
+	for (uint32_t cut = 0; cut < cutCount; ++cut)
+	    for (int axis = 0; axis < 3; ++axis)
+		diskCutBits[cut][axis] = cuts[cut].bits[axis];
+	if (!cacheWriteData(CACHE_CUT_QUANTIZATION, diskCutBits,
+		sizeof(diskCutBits)))
 	    return false;
     }
 
@@ -1807,20 +1945,20 @@ BObolPopState::cacheTri(void)
 
     {
 	std::stringstream stream;
-	for (size_t levelIndex = 0; levelIndex <= POP_MAXLEVEL; levelIndex++) {
+	for (size_t cutIndex = 0; cutIndex <= POP_CUT_COUNT_MAX; ++cutIndex) {
 	    uint64_t count = 0;
-	    if (levelIndex >= levelTriVerts.size()) {
+	    if (cutIndex >= cutTriVerts.size()) {
 		stream.write(reinterpret_cast<const char *>(&count),
 			     sizeof(count));
 		continue;
 	    }
-	    if (static_cast<int>(levelIndex) > maxPopLevel ||
-		levelTriVerts[levelIndex].empty()) {
+	    if (static_cast<int>(cutIndex) > maxPopCut ||
+		cutTriVerts[cutIndex].empty()) {
 		stream.write(reinterpret_cast<const char *>(&count),
 			     sizeof(count));
 		continue;
 	    }
-	    count = static_cast<uint64_t>(levelTriVerts[levelIndex].size());
+	    count = static_cast<uint64_t>(cutTriVerts[cutIndex].size());
 	    stream.write(reinterpret_cast<const char *>(&count), sizeof(count));
 	}
 	if (!cacheWrite(CACHE_VERTEX_COUNT, stream))
@@ -1829,15 +1967,16 @@ BObolPopState::cacheTri(void)
 
     {
 	std::stringstream stream;
-	for (size_t levelIndex = 0; levelIndex <= POP_MAXLEVEL; levelIndex++) {
+	for (size_t cutIndex = 0; cutIndex <= POP_CUT_COUNT_MAX; ++cutIndex) {
 	    uint64_t count = 0;
-	    if (static_cast<int>(levelIndex) > maxPopLevel ||
-		!levelTris[levelIndex].size()) {
+	    if (cutIndex >= cutTris.size() ||
+		static_cast<int>(cutIndex) > maxPopCut ||
+		!cutTris[cutIndex].size()) {
 		stream.write(reinterpret_cast<const char *>(&count),
 			     sizeof(count));
 		continue;
 	    }
-	    count = static_cast<uint64_t>(levelTris[levelIndex].size());
+	    count = static_cast<uint64_t>(cutTris[cutIndex].size());
 	    stream.write(reinterpret_cast<const char *>(&count), sizeof(count));
 	}
 	if (!cacheWrite(CACHE_TRI_COUNT, stream))
@@ -1846,20 +1985,19 @@ BObolPopState::cacheTri(void)
 
     struct bu_vls keyBuffer = BU_VLS_INIT_ZERO;
 
-    for (int levelIndex = 0; levelIndex <= maxPopLevel;
-	 levelIndex++) {
-	if (levelIndex >= static_cast<int>(levelTriVerts.size()) ||
-	    levelTriVerts[levelIndex].empty())
+    for (int cutIndex = 0; cutIndex <= maxPopCut; ++cutIndex) {
+	if (cutIndex >= static_cast<int>(cutTriVerts.size()) ||
+	    cutTriVerts[cutIndex].empty())
 	    continue;
 	std::vector<fastf_t> points;
-	points.resize(levelTriVerts[levelIndex].size() * 3);
+	points.resize(cutTriVerts[cutIndex].size() * 3);
 	size_t outputIndex = 0;
-	for (uint32_t sourceVertexIndex : levelTriVerts[levelIndex]) {
+	for (uint32_t sourceVertexIndex : cutTriVerts[cutIndex]) {
 	    points[outputIndex++] = vertexArray[sourceVertexIndex][X];
 	    points[outputIndex++] = vertexArray[sourceVertexIndex][Y];
 	    points[outputIndex++] = vertexArray[sourceVertexIndex][Z];
 	}
-	bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_VERT_LEVEL, levelIndex);
+	bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_VERT_CUT, cutIndex);
 	if (!cacheWriteData(bu_vls_cstr(&keyBuffer), points.data(),
 		points.size() * sizeof(fastf_t))) {
 	    bu_vls_free(&keyBuffer);
@@ -1867,38 +2005,36 @@ BObolPopState::cacheTri(void)
 	}
     }
 
-    for (int levelIndex = 0; levelIndex <= maxPopLevel;
-	 levelIndex++) {
-	if (levelTris[levelIndex].empty())
+    for (int cutIndex = 0; cutIndex <= maxPopCut; ++cutIndex) {
+	if (cutTris[cutIndex].empty())
 	    continue;
-	std::vector<int> triangles;
-	triangles.resize(levelTris[levelIndex].size() * 3);
+	std::vector<uint32_t> triangles;
+	triangles.resize(cutTris[cutIndex].size() * 3);
 	size_t outputIndex = 0;
-	for (uint32_t sourceFaceIndex : levelTris[levelIndex]) {
-	    triangles[outputIndex++] = static_cast<int>(
-		triIndexMap[faceArray[3 * sourceFaceIndex + 0]]);
-	    triangles[outputIndex++] = static_cast<int>(
-		triIndexMap[faceArray[3 * sourceFaceIndex + 1]]);
-	    triangles[outputIndex++] = static_cast<int>(
-		triIndexMap[faceArray[3 * sourceFaceIndex + 2]]);
+	for (uint32_t sourceFaceIndex : cutTris[cutIndex]) {
+	    triangles[outputIndex++] =
+		triIndexMap[faceArray[3 * sourceFaceIndex + 0]];
+	    triangles[outputIndex++] =
+		triIndexMap[faceArray[3 * sourceFaceIndex + 1]];
+	    triangles[outputIndex++] =
+		triIndexMap[faceArray[3 * sourceFaceIndex + 2]];
 	}
-	bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_TRI_LEVEL, levelIndex);
+	bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_TRI_CUT, cutIndex);
 	if (!cacheWriteData(bu_vls_cstr(&keyBuffer), triangles.data(),
-		triangles.size() * sizeof(int))) {
+		triangles.size() * sizeof(uint32_t))) {
 	    bu_vls_free(&keyBuffer);
 	    return false;
 	}
     }
 
     if (normalArray) {
-	for (int levelIndex = 0; levelIndex <= maxPopLevel;
-	     levelIndex++) {
-	    if (levelTris[levelIndex].empty())
+	for (int cutIndex = 0; cutIndex <= maxPopCut; ++cutIndex) {
+	    if (cutTris[cutIndex].empty())
 		continue;
 	    std::vector<fastf_t> normals;
-	    normals.resize(levelTris[levelIndex].size() * 9);
+	    normals.resize(cutTris[cutIndex].size() * 9);
 	    size_t outputIndex = 0;
-	    for (uint32_t sourceFaceIndex : levelTris[levelIndex]) {
+	    for (uint32_t sourceFaceIndex : cutTris[cutIndex]) {
 		for (int cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
 		    const size_t normalIndex =
 			3 * static_cast<size_t>(sourceFaceIndex) + cornerIndex;
@@ -1907,8 +2043,8 @@ BObolPopState::cacheTri(void)
 		    normals[outputIndex++] = normalArray[normalIndex][Z];
 		}
 	    }
-	    bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_VERTNORM_LEVEL,
-			   levelIndex);
+	    bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_VERTNORM_CUT,
+			   cutIndex);
 	    if (!cacheWriteData(bu_vls_cstr(&keyBuffer), normals.data(),
 		    normals.size() * sizeof(fastf_t))) {
 		bu_vls_free(&keyBuffer);
@@ -1978,63 +2114,42 @@ BObolPopState::cache(void)
     bu_semaphore_release(writeSem);
 }
 
-int
-BObolPopState::toLevel(int value, int level)
-{
-    return static_cast<int>(floor(value / double(precomputedMasks[level])));
-}
-
 fastf_t
-BObolPopState::snap(fastf_t value, fastf_t min, fastf_t max, int level)
+BObolPopState::snap(fastf_t value, fastf_t min, fastf_t max, uint8_t bits)
 {
-    if (!(max > min))
+    if (!(max > min) || !bits)
 	return value;
+    const double mask = std::ldexp(
+	1.0, BOBOL_MESH_LOD_QUANTIZATION_BITS -
+	    std::min<int>(BOBOL_MESH_LOD_QUANTIZATION_BITS, bits));
     unsigned int vf = static_cast<unsigned int>(
 			  floor((value - min) / (max - min) * USHRT_MAX));
-    int lv = static_cast<int>(floor(vf / double(precomputedMasks[level])));
+    int lv = static_cast<int>(floor(vf / mask));
     unsigned int vc = static_cast<unsigned int>(
 			  ceil((value - min) / (max - min) * USHRT_MAX));
-    int hc = static_cast<int>(ceil(vc / double(precomputedMasks[level])));
+    int hc = static_cast<int>(ceil(vc / mask));
     fastf_t snapped =
 	(static_cast<fastf_t>(lv) + static_cast<fastf_t>(hc)) * 0.5 *
-	double(precomputedMasks[level]);
+	mask;
     return ((snapped / USHRT_MAX) * (max - min)) + min;
 }
 
 void
-BObolPopState::levelPoint(point_t *out, const point_t *point, int level)
+BObolPopState::cutPoint(point_t *out, const point_t *point, int cut)
 {
     /* The terminal cut is the stable exact state.  All source vertices and
      * faces are already present in the cumulative cache at this point, so
      * retaining the original coordinate costs no additional I/O and avoids
      * imposing a permanent 16-bit quantization error on very large extents. */
-    if (level >= POP_MAXLEVEL - 1) {
+    if (cut >= maxPopCut) {
 	VMOVE(*out, *point);
 	return;
     }
-    fastf_t nx = snap((*point)[X], minx, maxx, level);
-    fastf_t ny = snap((*point)[Y], miny, maxy, level);
-    fastf_t nz = snap((*point)[Z], minz, maxz, level);
+    cut = std::max(0, std::min(maxPopCut, cut));
+    fastf_t nx = snap((*point)[X], minx, maxx, cuts[cut].bits[X]);
+    fastf_t ny = snap((*point)[Y], miny, maxy, cuts[cut].bits[Y]);
+    fastf_t nz = snap((*point)[Z], minz, maxz, cuts[cut].bits[Z]);
     VSET(*out, nx, ny, nz);
-}
-
-bool
-BObolPopState::isEqual(BObolPopRec r1, BObolPopRec r2, int level)
-{
-    bool equalX = (toLevel(r1.x, level) == toLevel(r2.x, level));
-    bool equalY = (toLevel(r1.y, level) == toLevel(r2.y, level));
-    bool equalZ = (toLevel(r1.z, level) == toLevel(r2.z, level));
-    return (equalX && equalY && equalZ);
-}
-
-bool
-BObolPopState::triDegenerate(BObolPopRec r0,
-			       BObolPopRec r1,
-			       BObolPopRec r2,
-			       int level)
-{
-    return isEqual(r0, r1, level) || isEqual(r1, r2, level) ||
-	   isEqual(r0, r2, level);
 }
 
 static void
@@ -2124,26 +2239,26 @@ mesh_lod_adopt_generated_state(struct BObolMeshLodContext *context,
 }
 
 static int
-mesh_lod_level(struct BObolMeshLod *lod, int level, int reset,
+mesh_lod_cut(struct BObolMeshLod *lod, int cut, int reset,
 	       bool materializeSnapped = true)
 {
     if (!lod || !lod->state)
 	return -1;
     BObolPopState *state = lod->state;
-    if (level < 0)
-	return state->currLevel;
+    if (cut < 0)
+	return state->currCut;
 
     if (reset)
 	state->forceUpdate = true;
-    if (!state->setLevel(level, materializeSnapped)) {
+    if (!state->setCut(cut, materializeSnapped)) {
 	mesh_lod_active_data_clear(lod);
 	return -1;
     }
 
-    if (state->currLevel <= state->maxPopLevel)
+    if (state->currCut <= state->maxPopCut)
 	mesh_lod_active_pop_data_publish(lod, state);
 
-    return state->currLevel;
+    return state->currCut;
 }
 
 static int
@@ -2218,7 +2333,7 @@ mesh_lod_cache_clear_context(struct BObolMeshLodContext *context,
     }
 
     if (context && key) {
-	mesh_lod_cache_del(context, key, CACHE_POP_MAX_LEVEL);
+	mesh_lod_cache_del(context, key, CACHE_POP_MAX_CUT);
 	mesh_lod_cache_del(context, key, CACHE_VERTEX_COUNT);
 	mesh_lod_cache_del(context, key, CACHE_TRI_COUNT);
 	mesh_lod_cache_del(context, key, CACHE_OBJ_BOUNDS);
@@ -2281,97 +2396,6 @@ mesh_lod_cache_clear_context(struct BObolMeshLodContext *context,
 
     bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, POP_CACHEDIR, NULL);
     bu_dirclear((const char *)dir);
-}
-
-static int
-mesh_lod_bot_detail_setup(struct BObolMeshLodDetail *detail, void *cbData)
-{
-    if (!detail || !cbData)
-	return -1;
-
-    struct BObolMeshLodBotDetail *callbackData =
-	    static_cast<struct BObolMeshLodBotDetail *>(cbData);
-    if (!callbackData->dbip || !callbackData->dp)
-	return -1;
-
-    if (callbackData->intern)
-	return 0;
-
-    BU_GET(callbackData->intern, struct rt_db_internal);
-    RT_DB_INTERNAL_INIT(callbackData->intern);
-    if (rt_db_get_internal(callbackData->intern, callbackData->dp,
-			   callbackData->dbip, NULL) < 0) {
-	BU_PUT(callbackData->intern, struct rt_db_internal);
-	callbackData->intern = NULL;
-	return -1;
-    }
-
-    if (callbackData->intern->idb_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
-	rt_db_free_internal(callbackData->intern);
-	BU_PUT(callbackData->intern, struct rt_db_internal);
-	callbackData->intern = NULL;
-	return -1;
-    }
-
-    struct rt_bot_internal *bot =
-	    static_cast<struct rt_bot_internal *>(callbackData->intern->idb_ptr);
-    RT_BOT_CK_MAGIC(bot);
-
-    int faceCount = 0;
-    int pointCount = 0;
-    int pointOrigCount = 0;
-    if (!mesh_lod_arrays_validate(bot->faces, bot->num_faces,
-				  reinterpret_cast<const point_t *>(bot->vertices),
-				  bot->num_vertices,
-				  reinterpret_cast<const point_t *>(bot->vertices),
-				  bot->num_vertices,
-				  &faceCount,
-				  &pointCount,
-				  &pointOrigCount)) {
-	rt_db_free_internal(callbackData->intern);
-	BU_PUT(callbackData->intern, struct rt_db_internal);
-	callbackData->intern = NULL;
-	return -1;
-    }
-
-    detail->faces = bot->faces;
-    detail->face_count = static_cast<size_t>(faceCount);
-    detail->points = reinterpret_cast<const point_t *>(bot->vertices);
-    detail->point_count = static_cast<size_t>(pointCount);
-    detail->points_orig = reinterpret_cast<const point_t *>(bot->vertices);
-    detail->point_orig_count = static_cast<size_t>(pointOrigCount);
-    detail->normals = NULL;
-    detail->normal_count = 0;
-
-    return 0;
-}
-
-static int
-mesh_lod_bot_detail_clear(void *cbData)
-{
-    struct BObolMeshLodBotDetail *callbackData =
-	    static_cast<struct BObolMeshLodBotDetail *>(cbData);
-
-    if (callbackData && callbackData->intern) {
-	rt_db_free_internal(callbackData->intern);
-	BU_PUT(callbackData->intern, struct rt_db_internal);
-	callbackData->intern = NULL;
-    }
-
-    return 0;
-}
-
-static int
-mesh_lod_bot_detail_free(void *cbData)
-{
-    mesh_lod_bot_detail_clear(cbData);
-    if (cbData) {
-	struct BObolMeshLodBotDetail *callbackData =
-		static_cast<struct BObolMeshLodBotDetail *>(cbData);
-	BU_PUT(callbackData, struct BObolMeshLodBotDetail);
-    }
-
-    return 0;
 }
 
 void
@@ -2669,8 +2693,8 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	struct BObolMeshLod *lod =
 	    mesh_lod_adopt_generated_state(context, generatedState);
 	if (!lod ||
-	    !generatedState->materializeGeneratedPrefix(
-		generatedState->minPopLevel)) {
+	    !generatedState->materializeInitialPrefix(
+		generatedState->minPopCut)) {
 	    if (lod) {
 		lod->context = NULL;
 		bobol_mesh_lod_destroy(lod);
@@ -2897,18 +2921,6 @@ bobol_mesh_lod_get(struct db_i *dbip, const char *name)
 	return NULL;
     }
 
-    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
-	struct BObolMeshLodBotDetail *callbackData;
-	BU_GET(callbackData, struct BObolMeshLodBotDetail);
-	memset(callbackData, 0, sizeof(*callbackData));
-	callbackData->dbip = dbip;
-	callbackData->dp = dp;
-	if (!bobol_mesh_lod_detail_callbacks_set(
-		lod, mesh_lod_bot_detail_setup, mesh_lod_bot_detail_clear,
-		mesh_lod_bot_detail_free, callbackData))
-	    mesh_lod_bot_detail_free(callbackData);
-    }
-
     return lod;
 }
 
@@ -2966,86 +2978,41 @@ bobol_mesh_lod_cache_key_get(const struct BObolMeshLod *lod)
 }
 
 int
-bobol_mesh_lod_load_level(struct BObolMeshLod *lod, int level, int reset)
+bobol_mesh_lod_load_cut(struct BObolMeshLod *lod, int cut, int reset)
 {
-    return mesh_lod_level(lod, level, reset);
+    if (!lod || !lod->state || cut < lod->state->minPopCut ||
+	cut > lod->state->maxPopCut)
+	return -1;
+    return mesh_lod_cut(lod, cut, reset);
 }
 
 int
-bobol_mesh_lod_load_display_level(struct BObolMeshLod *lod, int level,
+bobol_mesh_lod_load_resident_cut(struct BObolMeshLod *lod, int cut,
 	int reset)
 {
-    if (!lod || !lod->state)
+    if (!lod || !lod->state || cut < lod->state->minPopCut ||
+	cut > lod->state->maxPopCut)
 	return -1;
-    if (level < 0)
-	level = lod->state->minPopLevel;
-    level = std::max(level, lod->state->minPopLevel);
-    level = std::min(level, lod->state->maxPopLevel);
-    return mesh_lod_level(lod, level, reset);
-}
-
-int
-bobol_mesh_lod_load_resident_level(struct BObolMeshLod *lod, int level,
-	int reset)
-{
-    if (!lod || !lod->state)
-	return -1;
-    if (level < 0)
-	level = lod->state->minPopLevel;
-    level = std::max(level, lod->state->minPopLevel);
-    level = std::min(level, lod->state->maxPopLevel);
-    return mesh_lod_level(lod, level, reset, false);
+    return mesh_lod_cut(lod, cut, reset, false);
 }
 
 int
 bobol_mesh_lod_read_resident_suffix(struct BObolMeshLod *lod,
-	int residentLevel, int targetLevel,
+	int residentCut, int targetCut,
 	BObolMeshLodSuffixCallback callback, void *callbackData)
 {
     if (!lod || !lod->state || !callback)
 	return 0;
-    residentLevel = std::max(residentLevel, lod->state->minPopLevel);
-    targetLevel = std::min(targetLevel, lod->state->maxPopLevel);
+    residentCut = std::max(residentCut, lod->state->minPopCut);
+    targetCut = std::min(targetCut, lod->state->maxPopCut);
     return lod->state->readSuffix(
-	residentLevel, targetLevel, callback, callbackData) ? 1 : 0;
+	residentCut, targetCut, callback, callbackData) ? 1 : 0;
 }
 
 int
-bobol_mesh_lod_load_view(struct BObolMeshLod *lod,
-			   const struct bv_view_info *info,
-			   int reset)
+bobol_mesh_lod_current_cut(const struct BObolMeshLod *lod)
 {
-    if (!lod || !lod->state)
-	return -1;
-
-    struct bv_view_info sanitized = BV_VIEW_INFO_INIT;
-    if (info)
-	sanitized = *info;
-    bv_view_info_sanitize(&sanitized);
-
-    fastf_t policyScale = sanitized.lod.scale;
-    if (sanitized.size <= SMALL_FASTF)
-	sanitized.size = 1.0;
-    if (policyScale <= SMALL_FASTF)
-	policyScale = 1.0;
-
-    BObolPopState *state = lod->state;
-    int viewLevel = static_cast<int>(
-			static_cast<double>(state->getLevel(sanitized.size)) * policyScale);
-    viewLevel = (viewLevel < 0) ? 0 : viewLevel;
-    viewLevel = (viewLevel >= POP_MAXLEVEL) ? POP_MAXLEVEL - 1 : viewLevel;
-    /* A view/display request loads only a cumulative PoP cut.  The complete
-     * source arrays remain behind the explicit exact/full-detail API. */
-    viewLevel = std::max(viewLevel, state->minPopLevel);
-    viewLevel = std::min(viewLevel, state->maxPopLevel);
-
-    return mesh_lod_level(lod, viewLevel, reset);
-}
-
-int
-bobol_mesh_lod_current_level(const struct BObolMeshLod *lod)
-{
-    return (lod && lod->state) ? lod->state->currLevel : -1;
+    return (lod && lod->state) ? lod->state->currCut : -1;
 }
 
 int
@@ -3102,7 +3069,7 @@ bobol_mesh_lod_info_get(const struct BObolMeshLod *lod,
     if (!lod || !lod->state)
 	return 0;
 
-    info->active_level = lod->state->currLevel;
+    info->active_cut = lod->state->currCut;
     info->face_count = (lod->fcnt > 0) ? static_cast<size_t>(lod->fcnt) : 0;
     info->point_count = (lod->pcnt > 0) ? static_cast<size_t>(lod->pcnt) : 0;
     info->point_orig_count = (lod->porig_cnt > 0) ?
@@ -3119,7 +3086,7 @@ bobol_mesh_lod_info_get(const struct BObolMeshLod *lod,
     info->has_normals = (lod->normals && info->normal_count) ? 1 : 0;
     info->shaded_cull_backfaces =
 	(lod->state->shadedCullBackfaces &&
-	 lod->state->currLevel <= lod->state->maxPopLevel) ? 1 : 0;
+	 lod->state->currCut <= lod->state->maxPopCut) ? 1 : 0;
     VMOVE(info->bmin, lod->bmin);
     VMOVE(info->bmax, lod->bmax);
 
@@ -3148,73 +3115,46 @@ bobol_mesh_lod_hierarchy_info_get(
 	return 0;
 
     lod->state->hierarchyInfo(info);
-    return info->min_level >= 0 && info->max_level >= info->min_level;
-}
-
-void
-bobol_mesh_lod_detail_init(struct BObolMeshLodDetail *detail)
-{
-    if (detail)
-	memset(detail, 0, sizeof(*detail));
+    return info->min_cut >= 0 && info->max_cut >= info->min_cut;
 }
 
 int
-bobol_mesh_lod_detail_callbacks_set(
-    struct BObolMeshLod *lod,
-    BObolMeshLodDetailSetupCallback setupCallback,
-    BObolMeshLodDetailClearCallback clearCallback,
-    BObolMeshLodDetailFreeCallback freeCallback,
-    void *cbData)
+bobol_mesh_lod_select_cut(
+    const struct BObolMeshLodHierarchyInfo *hierarchy,
+    double projectedPixelDiameter,
+    double targetPixelError)
 {
-    if (!lod || !lod->state || !setupCallback)
-	return 0;
-
-    BObolPopState *state = lod->state;
-    const int hadCallbacks =
-	(state->fullDetailSetup || state->fullDetailClear ||
-	 state->fullDetailFree) ? 1 : 0;
-    if (state->fullDetailFree)
-	state->fullDetailFree(state->detailData);
-    else if (state->fullDetailClear)
-	state->fullDetailClear(state->detailData);
-
-    if (hadCallbacks) {
-	if (state->currLevel < 0) {
-	    mesh_lod_active_data_clear(lod);
-	} else if (state->currLevel > state->maxPopLevel) {
-	    state->currLevel = -1;
-	    mesh_lod_active_data_clear(lod);
-	} else {
-	    mesh_lod_active_pop_data_publish(lod, state);
-	}
+    if (!hierarchy || hierarchy->min_cut < 0 ||
+	hierarchy->max_cut < hierarchy->min_cut ||
+	hierarchy->cut_count !=
+	    static_cast<uint32_t>(hierarchy->max_cut + 1) ||
+	!std::isfinite(projectedPixelDiameter) ||
+	!std::isfinite(targetPixelError) ||
+	projectedPixelDiameter <= 0.0 || targetPixelError <= 0.0)
+	return -1;
+    double extentSquared = 0.0;
+    for (int axis = 0; axis < 3; ++axis) {
+	const double extent = hierarchy->quantization_max[axis] -
+	    hierarchy->quantization_min[axis];
+	if (!std::isfinite(extent) || extent < 0.0)
+	    return -1;
+	extentSquared += extent * extent;
     }
-
-    state->fullDetailSetup = setupCallback;
-    state->fullDetailClear = clearCallback;
-    state->fullDetailFree = freeCallback;
-    state->detailData = cbData;
-    return 1;
-}
-
-void
-bobol_mesh_lod_detail_callbacks_clear(struct BObolMeshLod *lod)
-{
-    if (!lod || !lod->state)
-	return;
-
-    BObolPopState *state = lod->state;
-    if (state->fullDetailFree)
-	state->fullDetailFree(state->detailData);
-    else if (state->fullDetailClear)
-	state->fullDetailClear(state->detailData);
-    state->fullDetailSetup = NULL;
-    state->fullDetailClear = NULL;
-    state->fullDetailFree = NULL;
-    state->detailData = NULL;
-    if (state->currLevel > state->maxPopLevel) {
-	state->currLevel = -1;
-	mesh_lod_active_data_clear(lod);
+    const double extent = std::sqrt(extentSquared);
+    if (!(extent > 0.0))
+	return hierarchy->max_cut;
+    const double maximumObjectError =
+	targetPixelError * extent / projectedPixelDiameter;
+    int low = hierarchy->min_cut;
+    int high = hierarchy->max_cut;
+    while (low < high) {
+	const int middle = low + (high - low) / 2;
+	if (hierarchy->cuts[middle].object_error <= maximumObjectError)
+	    high = middle;
+	else
+	    low = middle + 1;
     }
+    return low;
 }
 
 void
@@ -3223,7 +3163,7 @@ bobol_mesh_lod_memshrink(struct BObolMeshLod *lod)
     if (!lod || !lod->state)
 	return;
 
-    if (lod->state->currLevel > lod->state->maxPopLevel)
+    if (lod->state->currCut > lod->state->maxPopCut)
 	return;
 
     lod->state->shrinkMemory();

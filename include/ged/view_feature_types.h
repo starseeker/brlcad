@@ -44,8 +44,6 @@ struct ged_view_feature_style {
     fastf_t arrow_tip_width;
 };
 
-#define GED_VIEW_FEATURE_STYLE_INIT { -1, -1, 0, {0, 0, 0}, -1, -1, -1, -1.0, -1.0 }
-
 struct ged_view_feature_label {
     const char *text;
     point_t point;
@@ -67,8 +65,6 @@ struct ged_view_feature_line_layer {
     struct ged_view_feature_style style;
 };
 
-#define GED_VIEW_FEATURE_LINE_LAYER_INIT { NULL, NULL, NULL, 0, GED_VIEW_FEATURE_STYLE_INIT }
-
 struct ged_view_feature_batch;
 
 enum ged_view_feature_batch_status {
@@ -88,8 +84,6 @@ struct ged_view_feature_batch_event {
     uint64_t feature_revision;
 };
 
-#define GED_VIEW_FEATURE_BATCH_EVENT_INIT { GED_VIEW_FEATURE_BATCH_NONE, NULL, NULL, NULL, 0, 0 }
-
 typedef void (*ged_view_feature_batch_callback)(
     const struct ged_view_feature_batch_event *result,
     void *data);
@@ -107,14 +101,10 @@ struct ged_view_feature_batch_desc {
     void *event_cb_data;
 };
 
-#define GED_VIEW_FEATURE_BATCH_DESC_INIT { NULL, NULL, NULL, 0, 0, GED_VIEW_FEATURE_OVERLAY_CLASS_COMMAND_RESULT, GED_VIEW_FEATURE_LIFECYCLE_PER_COMMAND, GED_VIEW_FEATURE_OVERLAY_ORDER_POST_TRANSPARENT, NULL, NULL }
-
 struct ged_view_feature_metadata {
     const char *key;
     const char *value;
 };
-
-#define GED_VIEW_FEATURE_METADATA_INIT { NULL, NULL }
 
 /** Renderer-neutral commands associated with retained line-set points. */
 enum ged_draw_view_line_command {
@@ -206,8 +196,6 @@ struct ged_view_feature_summary {
     char owner_id[GED_VIEW_FEATURE_OWNER_ID_MAX];
     char owner_role[GED_VIEW_FEATURE_OWNER_ROLE_MAX];
 };
-
-#define GED_VIEW_FEATURE_SUMMARY_INIT { 0, 0, 0, 0, 0, 0, GED_VIEW_FEATURE_KIND_UNKNOWN, GED_VIEW_FEATURE_SCOPE_UNKNOWN, GED_VIEW_FEATURE_OVERLAY_CLASS_UNKNOWN, GED_VIEW_FEATURE_LIFECYCLE_UNKNOWN, {0, 0, 0}, 0, 0, 0, 0, 0, 0, 0, {'\0'}, {'\0'} }
 
 __END_DECLS
 

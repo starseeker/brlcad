@@ -35,7 +35,7 @@ extern "C" {
 extern "C" {
 #include "rt/geom.h"
 #include "analyze.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 }
 #include "../ged_private.h"
 #include "../pnts_util.h"
@@ -402,7 +402,7 @@ op_pnts_vol(
 
     if (output_pnts_obj) {
 	opnts->count = pntcnt;
-	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 	dp = db_diradd(gedp->dbip, output_pnts_obj, RT_DIR_PHONY_ADDR, 0,
 		RT_DIR_SOLID, (void *)&internal.idb_type);
 	if (dp == RT_DIR_NULL) {

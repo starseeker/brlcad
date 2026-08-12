@@ -30,7 +30,7 @@
 #include <string.h>
 
 #include "rt/geom.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "ged/objects.h"
 
 #include "../ged_private.h"
@@ -249,7 +249,7 @@ ged_3ptarb_core(struct ged *gedp, int argc, const char *argv[])
 	VJOIN1(aip->pt[i+4], aip->pt[i], thick, norm);
     }
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     dp = db_diradd(gedp->dbip, argv[1], RT_DIR_PHONY_ADDR, 0,
 	    RT_DIR_SOLID, (void *)&internal.idb_type);
     if (dp == RT_DIR_NULL) {

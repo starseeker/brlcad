@@ -91,24 +91,22 @@ BObolMeshLodProvider::clear(void)
     brepTessellationRelTol = 0.0;
     brepTessellationNormTol = 0.0;
     brepVariantMemoryLimited = FALSE;
-    bv_view_info_init(&view);
-    useView = FALSE;
     refreshMissing = TRUE;
-    useForcedLevel = FALSE;
+    useForcedCut = FALSE;
     shrinkAfterCopy = TRUE;
     compactResident = FALSE;
     progressiveDelivery = TRUE;
     initialRefinementFaceBudget = 250000;
     initialRefinementPointBudget = 500000;
     refinementGrowthFactor = 4.0;
-    useCurrentDrawLevel = FALSE;
-    currentDrawLevel = -1;
-    useDeliveryLevelLimit = FALSE;
-    deliveryLevelLimit = -1;
-    usePresentationLevelLimit = FALSE;
-    presentationLevelLimit = -1;
+    useCurrentDrawCut = FALSE;
+    currentDrawCut = -1;
+    useDeliveryCutLimit = FALSE;
+    deliveryCutLimit = -1;
+    usePresentationCutLimit = FALSE;
+    presentationCutLimit = -1;
     prefetchCachedTargetOnFirstPublication = FALSE;
-    forcedLevel = 0;
+    forcedCut = 0;
     reset = 0;
 }
 
@@ -755,7 +753,7 @@ lod_source_full_detail_payload_result(const BObolLodRequest &request,
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = result.cacheKey;
-    result.geometry.activeLevel = -1;
+    result.geometry.activeCut = -1;
     result.geometry.borrowed = FALSE;
 
     result.bounds.makeEmpty();
@@ -1141,19 +1139,31 @@ bobol_mesh_lod_provider_task(const BObolLodRequest &request,
 					  diagnostic.str().c_str());
     }
 
-    int load_ret = provider->useForcedLevel ?
-		   bobol_mesh_lod_load_level(lod, provider->forcedLevel, provider->reset) :
-		   (request.requestedLevel >= 0 ?
-		    bobol_mesh_lod_load_display_level(lod,
-			request.requestedLevel, provider->reset) :
-		    (provider->useView ?
-		     bobol_mesh_lod_load_view(lod, &provider->view, provider->reset) :
-		     bobol_mesh_lod_load_view(lod, NULL, provider->reset)));
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    if (!bobol_mesh_lod_hierarchy_info_get(lod, &hierarchy)) {
+	bobol_mesh_lod_destroy(lod);
+	return lod_provider_status_result(request,
+	    BOBOL_LOD_PROVIDER_CACHE_MISS,
+	    "Obol mesh LoD provider loaded no hierarchy metadata");
+    }
+    int requestedCut = provider->useForcedCut ?
+	provider->forcedCut : request.requestedCut;
+    if (!provider->useForcedCut && request.projectedPixelDiameter > 0.0f &&
+	request.targetPixelError > 0.0f)
+	requestedCut = bobol_mesh_lod_select_cut(&hierarchy,
+	    request.projectedPixelDiameter, request.targetPixelError);
+    if (requestedCut < hierarchy.min_cut)
+	requestedCut = hierarchy.min_cut;
+    if (requestedCut > hierarchy.max_cut)
+	requestedCut = hierarchy.max_cut;
+    const int load_ret = bobol_mesh_lod_load_cut(
+	lod, requestedCut, provider->reset);
     if (load_ret < 0) {
 	bobol_mesh_lod_destroy(lod);
 	return lod_provider_status_result(request,
 					  BOBOL_LOD_PROVIDER_CACHE_MISS,
-					  "Obol mesh LoD provider could not load a view level");
+					  "Obol mesh LoD provider could not load the requested cut");
     }
 
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
@@ -1163,10 +1173,10 @@ bobol_mesh_lod_provider_task(const BObolLodRequest &request,
 	((name && strstr(name, traceFilter)) ||
 	 (request.objectPath.getLength() > 0 &&
 	  strstr(request.objectPath.getString(), traceFilter)))) {
-	bu_log("BObol LoD provider trace object=%s request_level=%d "
-	       "loaded_level=%d faces=%zu points=%zu have_info=%d "
+	bu_log("BObol LoD provider trace object=%s request_cut=%d "
+	       "loaded_cut=%d faces=%zu points=%zu have_info=%d "
 	       "view_revision=%llu policy_revision=%llu\n",
-	       name ? name : "", request.requestedLevel, load_ret,
+	       name ? name : "", request.requestedCut, load_ret,
 	       info.face_count, info.point_count, have_info,
 	       static_cast<unsigned long long>(request.viewRevision.value()),
 	       static_cast<unsigned long long>(request.policyRevision.value()));
@@ -1188,6 +1198,13 @@ bobol_mesh_lod_provider_task(const BObolLodRequest &request,
 
     BObolLodResult result =
 	bobol_lod_result_from_mesh_lod_info(request, info, &status);
+    result.resolvedCut = requestedCut;
+    {
+	BObolLodRequest resolvedIdentity = request;
+	resolvedIdentity.requestedCut = requestedCut;
+	result.geometry.cacheKey =
+	    bobol_lod_geometry_cache_key(resolvedIdentity);
+    }
     if (result.providerStatus == BOBOL_LOD_PROVIDER_READY) {
 	struct BObolMeshLodData data;
 	if (!bobol_mesh_lod_data_get(lod, &data) ||
@@ -1433,11 +1450,8 @@ lod_default_resident_mesh_limit(void)
 	}
     }
     size_t totalBytes = 0;
-    size_t availableBytes = 0;
     const bool haveTotal = bu_mem(BU_MEM_ALL, &totalBytes) >= 0 &&
 	totalBytes > 0;
-    const bool haveAvailable = bu_mem(BU_MEM_AVAIL, &availableBytes) >= 0 &&
-	availableBytes > 0;
 
     /*
      * Retained CPU geometry coexists with the database, persistent-cache
@@ -1449,9 +1463,13 @@ lod_default_resident_mesh_limit(void)
     if (haveTotal)
 	allowance = std::min(allowance,
 	    std::max(floor, totalBytes / 4));
-    if (haveAvailable)
-	allowance = std::min(allowance,
-	    std::max(floor, availableBytes / 2));
+    /* This is the durable resident ceiling, not the transient admission
+     * governor above.  Base it on machine capacity so loading the database or
+     * constructing cold PoP caches cannot permanently shrink every later
+     * view.  Concurrent topology work remains bounded by the separately
+     * available-memory-aware working-set governor, while the conservative
+     * quarter-RAM share leaves the database, UI, cache mappings, and renderer
+     * the majority of host memory. */
     return std::max(floor, allowance);
 }
 
@@ -1574,8 +1592,8 @@ bobol_lod_working_set_global_peak_tasks(void)
 
 struct BObolResidentMeshAsset {
     BObolResidentMeshAsset(void) :
-	publishedMinimumLevel(-1),
-	publishedResidentLevel(-1),
+	publishedMinimumCut(-1),
+	publishedResidentCut(-1),
 	publishedBytes(0),
 	publishedBackingPrefixBytes(0),
 	useRevision(0),
@@ -1599,8 +1617,8 @@ struct BObolResidentMeshAsset {
 	BOBOL_MESH_LOD_CACHE_STATUS_INIT;
     /* Planner-side summaries avoid retaining every immutable source
      * generation merely to decide whether a stable trim is necessary. */
-    std::atomic<int> publishedMinimumLevel;
-    std::atomic<int> publishedResidentLevel;
+    std::atomic<int> publishedMinimumCut;
+    std::atomic<int> publishedResidentCut;
     /* Total service-owned CPU bytes for this asset: the renderer-neutral
      * immutable prefix plus the opened cache handle and any reloadable cache
      * prefix arrays. */
@@ -1617,7 +1635,7 @@ struct BObolResidentMeshAsset {
 };
 
 struct BObolResidentMeshDemandValue {
-    int level = -1;
+    int cut = -1;
     unsigned int channelMask = 0;
 };
 
@@ -1635,7 +1653,7 @@ struct BObolResidentMeshConsumerDemand {
 };
 
 struct BObolResidentMeshCompactionTarget {
-    int level = -1;
+    int cut = -1;
     unsigned int channelMask = 0;
     SbBool evict = FALSE;
     uint64_t useRevision = 0;
@@ -1879,14 +1897,14 @@ lod_resident_stable_bytes(const BObolLodServicePrivate *p)
 }
 
 static size_t
-lod_resident_level_stable_bytes(
+lod_resident_cut_stable_bytes(
     const BObolResidentMeshAsset &resident,
     const struct BObolMeshLodHierarchyInfo &hierarchy,
-    int level)
+    int cut)
 {
-    if (!resident.lod || level < hierarchy.min_level ||
-	level > hierarchy.max_level ||
-	level >= BOBOL_MESH_LOD_LEVEL_COUNT)
+    if (!resident.lod || cut < hierarchy.min_cut ||
+	cut > hierarchy.max_cut ||
+	cut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
 	return SIZE_MAX;
 
     const size_t cacheBytes =
@@ -1895,8 +1913,8 @@ lod_resident_level_stable_bytes(
 	bobol_mesh_lod_resident_prefix_bytes(resident.lod);
     size_t bytes = prefixBytes >= cacheBytes ?
 	0 : cacheBytes - prefixBytes;
-    const size_t points = hierarchy.point_count[level];
-    const size_t faces = hierarchy.face_count[level];
+    const size_t points = hierarchy.cuts[cut].point_count;
+    const size_t faces = hierarchy.cuts[cut].face_count;
     const auto addScaled = [&bytes](size_t count, size_t stride) {
 	if (bytes == SIZE_MAX || (count && stride > SIZE_MAX / count)) {
 	    bytes = SIZE_MAX;
@@ -1936,24 +1954,24 @@ public:
 
     int admit(const BObolResidentMeshAsset &resident,
 	const struct BObolMeshLodHierarchyInfo &hierarchy,
-	int desiredLevel, int publishedLevel, size_t priorStableBytes,
+	int desiredCut, int publishedCut, size_t priorStableBytes,
 	SbBool &limited)
     {
 	limited = FALSE;
-	if (!p || desiredLevel < hierarchy.min_level)
-	    return desiredLevel;
-	desiredLevel = std::min(desiredLevel, hierarchy.max_level);
-	if (publishedLevel >= desiredLevel)
-	    return desiredLevel;
+	if (!p || desiredCut < hierarchy.min_cut)
+	    return desiredCut;
+	desiredCut = std::min(desiredCut, hierarchy.max_cut);
+	if (publishedCut >= desiredCut)
+	    return desiredCut;
 
-	const int floorLevel = publishedLevel >= hierarchy.min_level ?
-	    publishedLevel : hierarchy.min_level;
-	int admittedLevel = floorLevel;
+	const int floorCut = publishedCut >= hierarchy.min_cut ?
+	    publishedCut : hierarchy.min_cut;
+	int admittedCut = floorCut;
 	size_t admittedEstimate =
-	    publishedLevel >= hierarchy.min_level ?
+	    publishedCut >= hierarchy.min_cut ?
 		priorStableBytes :
-		lod_resident_level_stable_bytes(
-		    resident, hierarchy, floorLevel);
+		lod_resident_cut_stable_bytes(
+		    resident, hierarchy, floorCut);
 
 	std::lock_guard<std::mutex> lock(p->mutex);
 	decisionRevision =
@@ -1966,11 +1984,11 @@ public:
 		SIZE_MAX :
 		stableBytes + p->residentMeshGrowthReservationBytes;
 	const size_t limit = p->maxResidentMeshBytes;
-	for (int level = floorLevel + 1;
-	    level <= desiredLevel; ++level) {
+	for (int cut = floorCut + 1;
+	    cut <= desiredCut; ++cut) {
 	    const size_t estimate =
-		lod_resident_level_stable_bytes(
-		    resident, hierarchy, level);
+		lod_resident_cut_stable_bytes(
+		    resident, hierarchy, cut);
 	    const size_t growth = estimate > priorStableBytes ?
 		estimate - priorStableBytes : 0;
 	    const SbBool fits =
@@ -1978,7 +1996,7 @@ public:
 		(occupied <= limit && growth <= limit - occupied);
 	    if (!fits)
 		break;
-	    admittedLevel = level;
+	    admittedCut = cut;
 	    admittedEstimate = estimate;
 	}
 
@@ -1992,8 +2010,8 @@ public:
 		SIZE_MAX :
 		p->residentMeshGrowthReservationBytes + growth;
 	bytes = growth;
-	limited = admittedLevel < desiredLevel ? TRUE : FALSE;
-	return admittedLevel;
+	limited = admittedCut < desiredCut ? TRUE : FALSE;
+	return admittedCut;
     }
 
     uint64_t revision(void) const
@@ -2806,7 +2824,7 @@ lod_execute_resident_compaction(
 	return found != p->residentMeshCompactionTargets.end() &&
 	    found->second.revision == work.target.revision &&
 	    found->second.useRevision == work.target.useRevision &&
-	    found->second.level == work.target.level &&
+	    found->second.cut == work.target.cut &&
 	    found->second.channelMask == work.target.channelMask &&
 	    found->second.evict == work.target.evict;
     };
@@ -2850,8 +2868,8 @@ lod_execute_resident_compaction(
 	resident->publishedBytes.store(0, std::memory_order_relaxed);
 	resident->publishedBackingPrefixBytes.store(
 	    0, std::memory_order_relaxed);
-	resident->publishedMinimumLevel.store(-1, std::memory_order_relaxed);
-	resident->publishedResidentLevel.store(-1, std::memory_order_relaxed);
+	resident->publishedMinimumCut.store(-1, std::memory_order_relaxed);
+	resident->publishedResidentCut.store(-1, std::memory_order_relaxed);
 	resident->mesh.reset();
 	if (resident->lod)
 	    bobol_mesh_lod_destroy(resident->lod);
@@ -2870,7 +2888,7 @@ lod_execute_resident_compaction(
     BObolLodProgressiveMeshTrimPtr preparedTrim;
     struct BObolMeshLodHierarchyInfo hierarchy =
 	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-    int preparedTargetLevel = -1;
+    int preparedTargetCut = -1;
     {
 	/* Retain an immutable source generation while constructing the shorter
 	 * candidate.  No shared mesh state changes in this phase. */
@@ -2878,23 +2896,23 @@ lod_execute_resident_compaction(
 	if (!resident->lod || !resident->mesh)
 	    return result;
 	mesh = resident->mesh;
-	const int currentLevel = mesh->residentLevel();
-	const int minimumLevel = mesh->minimumLevel();
-	const int maximumLevel = mesh->maximumLevel();
-	if (currentLevel < 0 || minimumLevel < 0 ||
-	    maximumLevel < minimumLevel)
+	const int currentCut = mesh->residentCut();
+	const int minimumCut = mesh->minimumCut();
+	const int maximumCut = mesh->maximumCut();
+	if (currentCut < 0 || minimumCut < 0 ||
+	    maximumCut < minimumCut)
 	    return result;
-	preparedTargetLevel = std::min(currentLevel,
-	    std::max(minimumLevel, std::min(maximumLevel,
-		work.target.level < 0 ? minimumLevel : work.target.level)));
-	if (preparedTargetLevel < currentLevel) {
+	preparedTargetCut = std::min(currentCut,
+	    std::max(minimumCut, std::min(maximumCut,
+		work.target.cut < 0 ? minimumCut : work.target.cut)));
+	if (preparedTargetCut < currentCut) {
 	    if (!bobol_mesh_lod_hierarchy_info_get(
 		    resident->lod, &hierarchy))
 		return result;
 	}
     }
-    if (preparedTargetLevel < mesh->residentLevel()) {
-	preparedTrim = mesh->prepareTrim(preparedTargetLevel);
+    if (preparedTargetCut < mesh->residentCut()) {
+	preparedTrim = mesh->prepareTrim(preparedTargetCut);
 	if (!preparedTrim)
 	    return result;
     }
@@ -2916,16 +2934,16 @@ lod_execute_resident_compaction(
     if (!residentLock.owns_lock() || !resident->lod ||
 	resident->mesh != mesh)
 	return result;
-    const int currentLevel = mesh->residentLevel();
-    const int minimumLevel = mesh->minimumLevel();
-    const int maximumLevel = mesh->maximumLevel();
-    if (currentLevel < 0 || minimumLevel < 0 ||
-	maximumLevel < minimumLevel)
+    const int currentCut = mesh->residentCut();
+    const int minimumCut = mesh->minimumCut();
+    const int maximumCut = mesh->maximumCut();
+    if (currentCut < 0 || minimumCut < 0 ||
+	maximumCut < minimumCut)
 	return result;
-    const int targetLevel = std::min(currentLevel,
-	std::max(minimumLevel, std::min(maximumLevel,
-	    work.target.level < 0 ? minimumLevel : work.target.level)));
-    if (targetLevel != preparedTargetLevel)
+    const int targetCut = std::min(currentCut,
+	std::max(minimumCut, std::min(maximumCut,
+	    work.target.cut < 0 ? minimumCut : work.target.cut)));
+    if (targetCut != preparedTargetCut)
 	return result;
     const size_t priorBytes =
 	resident->publishedBytes.load(std::memory_order_relaxed);
@@ -2933,7 +2951,7 @@ lod_execute_resident_compaction(
 	resident->publishedBackingPrefixBytes.load(
 	    std::memory_order_relaxed);
 
-    if (targetLevel >= currentLevel) {
+    if (targetCut >= currentCut) {
 	/* Stable demand already matches the immutable prefix.  Release only the
 	 * reloadable cache-reader duplicate after the same revision guard. */
 	if (!bobol_mesh_lod_resident_prefix_bytes(resident->lod))
@@ -2958,17 +2976,17 @@ lod_execute_resident_compaction(
     }
 
     if (!preparedTrim || !mesh->commitTrim(preparedTrim) ||
-	mesh->residentLevel() != targetLevel)
+	mesh->residentCut() != targetCut)
 	return BObolLodResidentCompaction();
-    resident->publishedMinimumLevel.store(
-	hierarchy.min_level, std::memory_order_relaxed);
-    resident->publishedResidentLevel.store(
-	targetLevel, std::memory_order_relaxed);
+    resident->publishedMinimumCut.store(
+	hierarchy.min_cut, std::memory_order_relaxed);
+    resident->publishedResidentCut.store(
+	targetCut, std::memory_order_relaxed);
     serviceLock.unlock();
 
     result.assetKey = work.assetKey.c_str();
     result.progressiveMesh = mesh;
-    result.residentLevel = targetLevel;
+    result.residentCut = targetCut;
     result.channelMask = work.target.channelMask & 3u;
     /* The replacement immutable generation is self-contained.  Release the
      * duplicate cache-reader prefix before publishing its byte accounting. */
@@ -3009,7 +3027,7 @@ lod_finish_resident_compaction(
 {
     SbBool notifyResultReady = FALSE;
     const bool completed = result.assetKey.getLength() > 0 &&
-	result.progressiveMesh && result.residentLevel >= 0;
+	result.progressiveMesh && result.residentCut >= 0;
     const bool reclaimedStorage =
 	result.priorBytes > result.residentBytes;
     {
@@ -3064,7 +3082,7 @@ lod_finish_resident_compaction(
 		const auto demand =
 		    consumer->second.assets.find(work.assetKey);
 		if (demand == consumer->second.assets.end() ||
-		    demand->second.level > result.residentLevel)
+		    demand->second.cut > result.residentCut)
 		    continue;
 		p->residentMeshCompactionResults[consumerId].push_back(
 		    result);
@@ -3397,31 +3415,31 @@ lod_refinement_growth_budget(size_t current, uint64_t initial,
     return std::max(initialBudget, growthBudget);
 }
 
-/* Select one bounded presentation step toward the screen-error target.  The
- * target itself remains request.requestedLevel; this helper only prevents a
- * first box->mesh replacement from allocating and uploading an arbitrarily
- * large cumulative prefix. */
+/* Select one bounded presentation step toward the producer-resolved
+ * screen-error target.  This helper only prevents a first box->mesh
+ * replacement from allocating and uploading an arbitrarily large cumulative
+ * prefix; it does not mutate asynchronous request identity. */
 static int
-lod_progressive_delivery_level(
+lod_progressive_delivery_cut(
     const struct BObolMeshLodHierarchyInfo &hierarchy,
-    int requestedLevel, int currentLevel,
+    int requestedCut, int currentCut,
     const BObolMeshLodProvider &provider)
 {
-    int target = std::max(hierarchy.min_level,
-	std::min(hierarchy.max_level, requestedLevel));
-    if (provider.useDeliveryLevelLimit &&
-	provider.deliveryLevelLimit >= hierarchy.min_level)
-	target = std::min(target, provider.deliveryLevelLimit);
-    if (!provider.progressiveDelivery || provider.useForcedLevel ||
-	provider.reset || currentLevel >= target)
+    int target = std::max(hierarchy.min_cut,
+	std::min(hierarchy.max_cut, requestedCut));
+    if (provider.useDeliveryCutLimit &&
+	provider.deliveryCutLimit >= hierarchy.min_cut)
+	target = std::min(target, provider.deliveryCutLimit);
+    if (!provider.progressiveDelivery || provider.useForcedCut ||
+	provider.reset || currentCut >= target)
 	return target;
 
     const size_t currentFaces =
-	currentLevel >= hierarchy.min_level ?
-	hierarchy.face_count[currentLevel] : 0;
+	currentCut >= hierarchy.min_cut ?
+	hierarchy.cuts[currentCut].face_count : 0;
     const size_t currentPoints =
-	currentLevel >= hierarchy.min_level ?
-	hierarchy.point_count[currentLevel] : 0;
+	currentCut >= hierarchy.min_cut ?
+	hierarchy.cuts[currentCut].point_count : 0;
     const size_t faceBudget = lod_refinement_growth_budget(currentFaces,
 	provider.initialRefinementFaceBudget,
 	provider.refinementGrowthFactor);
@@ -3429,22 +3447,22 @@ lod_progressive_delivery_level(
 	provider.initialRefinementPointBudget,
 	provider.refinementGrowthFactor);
 
-    int selected = hierarchy.min_level;
-    for (int level = hierarchy.min_level; level <= target; ++level) {
-	if (hierarchy.face_count[level] > faceBudget ||
-	    hierarchy.point_count[level] > pointBudget)
+    int selected = hierarchy.min_cut;
+    for (int cut = hierarchy.min_cut; cut <= target; ++cut) {
+	if (hierarchy.cuts[cut].face_count > faceBudget ||
+	    hierarchy.cuts[cut].point_count > pointBudget)
 	    break;
-	selected = level;
+	selected = cut;
     }
 
     /*
      * Return the richest population that fits the provider's face/point
-     * growth allowance.  Nominal level adjacency is deliberately irrelevant:
-     * one level may add no arrays while the next adds millions.  The budget
-     * is the bounded work contract, not "+1 level".
+     * growth allowance.  Nominal cut adjacency is deliberately irrelevant:
+     * one cut may add no arrays while the next adds millions.  The budget is
+     * the bounded work contract, not "+1 cut".
      */
-    if (currentLevel >= hierarchy.min_level && selected <= currentLevel)
-	selected = std::min(target, currentLevel + 1);
+    if (currentCut >= hierarchy.min_cut && selected <= currentCut)
+	selected = std::min(target, currentCut + 1);
     return std::min(selected, target);
 }
 
@@ -3642,23 +3660,24 @@ BObolLodService::realizeResidentMeshLod(
 		"resident mesh provider has no cache payload");
     }
 
-    int requestedLevel = provider.useForcedLevel ?
-	provider.forcedLevel : request.requestedLevel;
-    if (requestedLevel < 0 && provider.useView) {
-	requestedLevel = bobol_mesh_lod_load_view(resident->lod,
-	    &provider.view, 0);
-	/* load_view is a legacy fallback.  Its arrays will be converted to the
-	 * retained exact asset below. */
-    }
-
     struct BObolMeshLodHierarchyInfo hierarchy =
 	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
     if (!bobol_mesh_lod_hierarchy_info_get(resident->lod, &hierarchy))
 	return lod_provider_status_result(request,
 	    BOBOL_LOD_PROVIDER_CACHE_MISS,
 	    "resident mesh provider loaded no hierarchy metadata");
-    resident->publishedMinimumLevel.store(
-	hierarchy.min_level, std::memory_order_relaxed);
+    int requestedCut = provider.useForcedCut ?
+	provider.forcedCut : request.requestedCut;
+    if (!provider.useForcedCut && request.projectedPixelDiameter > 0.0f &&
+	request.targetPixelError > 0.0f)
+	requestedCut = bobol_mesh_lod_select_cut(&hierarchy,
+	    request.projectedPixelDiameter, request.targetPixelError);
+    if (requestedCut < hierarchy.min_cut)
+	requestedCut = hierarchy.min_cut;
+    if (requestedCut > hierarchy.max_cut)
+	requestedCut = hierarchy.max_cut;
+    resident->publishedMinimumCut.store(
+	hierarchy.min_cut, std::memory_order_relaxed);
 
     const size_t priorResidentBytes =
 	resident->publishedBytes.load(std::memory_order_relaxed);
@@ -3668,21 +3687,21 @@ BObolLodService::realizeResidentMeshLod(
     const size_t priorStableBytes =
 	priorBackingBytes >= priorResidentBytes ?
 	    0 : priorResidentBytes - priorBackingBytes;
-    int currentLevel = bobol_mesh_lod_current_level(resident->lod);
-    const int publishedLevel =
+    int currentCut = bobol_mesh_lod_current_cut(resident->lod);
+    const int publishedCut =
 	resident->mesh && resident->mesh->isValid() ?
-	    resident->mesh->residentLevel() : -1;
-    const int deliveryLevel = provider.useCurrentDrawLevel ?
-	provider.currentDrawLevel :
-	(publishedLevel >= 0 ? publishedLevel : currentLevel);
-    int residentTarget = requestedLevel;
-    if (requestedLevel >= 0)
-	residentTarget = lod_progressive_delivery_level(hierarchy, requestedLevel,
-	    deliveryLevel, provider);
-    if (residentTarget < hierarchy.min_level)
-	residentTarget = hierarchy.min_level;
-    if (residentTarget > hierarchy.max_level)
-	residentTarget = hierarchy.max_level;
+	    resident->mesh->residentCut() : -1;
+    const int deliveryCut = provider.useCurrentDrawCut ?
+	provider.currentDrawCut :
+	(publishedCut >= 0 ? publishedCut : currentCut);
+    int residentTarget = requestedCut;
+    if (requestedCut >= 0)
+	residentTarget = lod_progressive_delivery_cut(hierarchy, requestedCut,
+	    deliveryCut, provider);
+    if (residentTarget < hierarchy.min_cut)
+	residentTarget = hierarchy.min_cut;
+    if (residentTarget > hierarchy.max_cut)
+	residentTarget = hierarchy.max_cut;
     /*
      * Establish the minimum useful mesh as its own publication.  Besides
      * minimizing time-to-first-content, this prevents early workers from
@@ -3690,43 +3709,43 @@ BObolLodService::realizeResidentMeshLod(
      * visible assets have revealed their mandatory coverage floor.  The next
      * bounded view pass may jump directly to the richest face- and
      * byte-admitted target; this is two-phase coverage, not nominal
-     * level-by-level walking.
+     * cut-by-cut walking.
      */
     const bool warmFirstPrefetch =
-	publishedLevel < hierarchy.min_level &&
+	publishedCut < hierarchy.min_cut &&
 	persistentHierarchyAvailable &&
 	provider.prefetchCachedTargetOnFirstPublication &&
-	!provider.reset && !provider.useForcedLevel &&
-	requestedLevel >= hierarchy.min_level;
+	!provider.reset && !provider.useForcedCut &&
+	requestedCut >= hierarchy.min_cut;
     if (warmFirstPrefetch)
-	residentTarget = std::min(hierarchy.max_level, requestedLevel);
-    else if (publishedLevel < hierarchy.min_level)
-	residentTarget = hierarchy.min_level;
+	residentTarget = std::min(hierarchy.max_cut, requestedCut);
+    else if (publishedCut < hierarchy.min_cut)
+	residentTarget = hierarchy.min_cut;
     /* A warm first task may populate the complete view-demanded immutable
      * prefix, but its publication remains the cheapest useful mesh.  The
      * next presentation pass can select any budget-admitted cut from those
      * already resident arrays without another cache task. */
-    int drawTarget = warmFirstPrefetch ? hierarchy.min_level : residentTarget;
-    if (provider.usePresentationLevelLimit &&
-	provider.presentationLevelLimit >= hierarchy.min_level)
+    int drawTarget = warmFirstPrefetch ? hierarchy.min_cut : residentTarget;
+    if (provider.usePresentationCutLimit &&
+	provider.presentationCutLimit >= hierarchy.min_cut)
 	drawTarget = std::min(drawTarget,
-	    provider.presentationLevelLimit);
+	    provider.presentationCutLimit);
     int loadTarget = residentTarget;
-    if (provider.compactResident && publishedLevel >= 0 &&
-	residentTarget < publishedLevel) {
-	/* A level is not a bounded unit of memory: one Lucy hierarchy step can
+    if (provider.compactResident && publishedCut >= 0 &&
+	residentTarget < publishedCut) {
+	/* A cut is not a bounded unit of memory: one Lucy hierarchy step can
 	 * add millions of faces.  Stable reclamation therefore retains exactly
 	 * the pixel-demanded prefix. */
 	loadTarget = residentTarget;
-    } else if (publishedLevel >= 0 && residentTarget <= publishedLevel &&
+    } else if (publishedCut >= 0 && residentTarget <= publishedCut &&
 	!provider.reset) {
-	loadTarget = publishedLevel;
+	loadTarget = publishedCut;
     }
 
     BObolResidentMeshGrowthReservation growthReservation(this->p);
     SbBool memoryLimited = FALSE;
     loadTarget = growthReservation.admit(*resident, hierarchy,
-	loadTarget, publishedLevel, priorStableBytes, memoryLimited);
+	loadTarget, publishedCut, priorStableBytes, memoryLimited);
     if (drawTarget > loadTarget)
 	drawTarget = loadTarget;
 
@@ -3738,21 +3757,21 @@ BObolLodService::realizeResidentMeshLod(
      */
     const bool retainedTargetDrawable =
 	resident->mesh && resident->mesh->isValid() &&
-	resident->mesh->canDrawLevel(loadTarget);
+	resident->mesh->canDrawCut(loadTarget);
     const bool loadNeeded =
 	provider.reset || !retainedTargetDrawable ||
-	(publishedLevel >= 0 && loadTarget != publishedLevel);
+	(publishedCut >= 0 && loadTarget != publishedCut);
     int64_t prefixLoadMicroseconds = 0;
     int64_t generationBuildMicroseconds = 0;
     int64_t preparedGeometryMicroseconds = 0;
     int64_t legacyPayloadMicroseconds = 0;
-    int residentLevel = publishedLevel;
+    int residentCut = publishedCut;
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
     const auto populateInfoFromRetainedMesh = [&]() {
 	bobol_mesh_lod_info_init(&info);
-	info.active_level = residentLevel;
-	info.face_count = resident->mesh->faceCount(residentLevel);
-	info.point_count = resident->mesh->pointCount(residentLevel);
+	info.active_cut = residentCut;
+	info.face_count = resident->mesh->faceCount(residentCut);
+	info.point_count = resident->mesh->pointCount(residentCut);
 	info.point_orig_count = info.point_count;
 	info.normal_count = hierarchy.has_normals ?
 	    info.face_count * 3 : 0;
@@ -3770,14 +3789,14 @@ BObolLodService::realizeResidentMeshLod(
 	VSET(info.bmax, maximum[0], maximum[1], maximum[2]);
     };
     if (loadNeeded) {
-	/* Persistent PoP records are already split by activation level.  Once a
+	/* Persistent PoP records are already split by activation cut.  Once a
 	 * quiet compaction has released the cache reader's duplicate prefix, grow
 	 * the immutable renderer generation from only the missing cache suffix.
 	 * Corner-normal vertex splitting still needs whole-prefix context and uses
 	 * the conservative cumulative fallback. */
 	SbBool suffixExtended = FALSE;
-	if (!provider.reset && publishedLevel >= hierarchy.min_level &&
-	    loadTarget > publishedLevel && !hierarchy.has_normals &&
+	if (!provider.reset && publishedCut >= hierarchy.min_cut &&
+	    loadTarget > publishedCut && !hierarchy.has_normals &&
 	    resident->mesh && resident->mesh->isValid()) {
 	    const int64_t generationBuildStarted = bu_gettime();
 	    suffixExtended = resident->mesh->extendFromCache(
@@ -3786,29 +3805,29 @@ BObolLodService::realizeResidentMeshLod(
 	    generationBuildMicroseconds = std::max<int64_t>(
 		0, bu_gettime() - generationBuildStarted);
 	    if (suffixExtended) {
-		residentLevel = loadTarget;
+		residentCut = loadTarget;
 		populateInfoFromRetainedMesh();
 	    }
 	}
 	if (!suffixExtended) {
 	    const int64_t prefixLoadStarted = bu_gettime();
-	    residentLevel = bobol_mesh_lod_load_resident_level(
+	    residentCut = bobol_mesh_lod_load_resident_cut(
 		resident->lod, loadTarget, provider.reset);
 	    prefixLoadMicroseconds = std::max<int64_t>(
 		0, bu_gettime() - prefixLoadStarted);
-	    if (residentLevel < 0)
+	    if (residentCut < 0)
 		return lod_provider_status_result(request,
 		    BOBOL_LOD_PROVIDER_CACHE_MISS,
 		    "resident mesh provider could not load the requested prefix");
-	    /* hierarchy_info includes the cache handle's current resident level.
+	    /* hierarchy_info includes the cache handle's current resident cut.
 	     * Loading a cheaper prefix changes that value; retaining the snapshot
 	     * taken before the load makes an otherwise valid immutable generation
-	     * fail its level-consistency check.  This is common when a shared warm
+	     * fail its cut-consistency check.  This is common when a shared warm
 	     * cache handle last served a richer view and a new consumer first asks
 	     * for coverage minimum. */
 	    if (!bobol_mesh_lod_hierarchy_info_get(
 		    resident->lod, &hierarchy) ||
-		hierarchy.resident_level != residentLevel)
+		hierarchy.resident_cut != residentCut)
 		return lod_provider_status_result(request,
 		    BOBOL_LOD_PROVIDER_ERROR,
 		    "resident mesh provider could not refresh loaded hierarchy metadata");
@@ -3819,7 +3838,7 @@ BObolLodService::realizeResidentMeshLod(
 		    BOBOL_LOD_PROVIDER_CACHE_MISS,
 		    "resident mesh provider loaded no mesh data");
 	    const int64_t generationBuildStarted = bu_gettime();
-	    if (!resident->mesh->update(data, hierarchy, residentLevel,
+	    if (!resident->mesh->update(data, hierarchy, residentCut,
 		    hierarchy.shaded_cull_backfaces ? TRUE : FALSE))
 		return lod_provider_status_result(request,
 		    BOBOL_LOD_PROVIDER_ERROR,
@@ -3827,7 +3846,7 @@ BObolLodService::realizeResidentMeshLod(
 	    generationBuildMicroseconds = std::max<int64_t>(
 		0, bu_gettime() - generationBuildStarted);
 	}
-	if (publishedLevel < residentLevel) {
+	if (publishedCut < residentCut) {
 	    std::lock_guard<std::mutex> lock(this->p->mutex);
 	    this->p->residentMeshCacheLoads++;
 	}
@@ -3836,25 +3855,26 @@ BObolLodService::realizeResidentMeshLod(
 	this->p->residentMeshHits++;
 	populateInfoFromRetainedMesh();
     }
-    resident->publishedResidentLevel.store(
-	residentLevel, std::memory_order_relaxed);
+    resident->publishedResidentCut.store(
+	residentCut, std::memory_order_relaxed);
 
-    int drawLevel = drawTarget;
-    if (drawLevel < hierarchy.min_level)
-	drawLevel = hierarchy.min_level;
-    if (drawLevel > residentLevel)
-	drawLevel = residentLevel;
+    int drawCut = drawTarget;
+    if (drawCut < hierarchy.min_cut)
+	drawCut = hierarchy.min_cut;
+    if (drawCut > residentCut)
+	drawCut = residentCut;
 
     BObolLodResult result =
 	bobol_lod_result_from_mesh_lod_info(request, info, &resident->status);
+    result.resolvedCut = requestedCut;
     result.geometry.cacheKey = assetKey;
-    result.geometry.activeLevel = drawLevel;
+    result.geometry.activeCut = drawCut;
     result.progressiveMesh = resident->mesh;
-    result.residentLevel = residentLevel;
+    result.residentCut = residentCut;
     result.residentAdmissionRevision =
 	growthReservation.revision();
-    result.counts.faceCount = resident->mesh->faceCount(drawLevel);
-    result.counts.pointCount = resident->mesh->pointCount(drawLevel);
+    result.counts.faceCount = resident->mesh->faceCount(drawCut);
+    result.counts.pointCount = resident->mesh->pointCount(drawCut);
     result.counts.originalPointCount = result.counts.pointCount;
     result.counts.normalCount = info.has_normals ?
 	result.counts.faceCount * 3 : 0;
@@ -3862,8 +3882,8 @@ BObolLodService::realizeResidentMeshLod(
     result.hasSnappedPoints = FALSE;
     result.hasNormals = hierarchy.has_normals ? TRUE : FALSE;
     result.shadedCullBackfaces = resident->mesh->cullBackfaces();
-    result.terminal = drawLevel >= std::max(hierarchy.min_level,
-	std::min(hierarchy.max_level, requestedLevel)) ? TRUE : FALSE;
+    result.terminal = drawCut >= std::max(hierarchy.min_cut,
+	std::min(hierarchy.max_cut, requestedCut)) ? TRUE : FALSE;
     /* A representation-band admission cap is not a reason to stop walking
      * the admitted band's PoP prefix.  Publish it only on that band's
      * terminal result; treating it as an immediate resident-memory failure
@@ -3923,7 +3943,7 @@ BObolLodService::realizeResidentMeshLod(
 
     if (request.occurrenceKey.getLength() == 0) {
 	const int64_t legacyPayloadStarted = bu_gettime();
-	if (!resident->mesh->copyLevel(result.mesh, drawLevel)) {
+	if (!resident->mesh->copyCut(result.mesh, drawCut)) {
 	    return lod_provider_status_result(request,
 		BOBOL_LOD_PROVIDER_ERROR,
 		"resident mesh provider could not materialize legacy payload");
@@ -3933,10 +3953,10 @@ BObolLodService::realizeResidentMeshLod(
     }
 
     if (loadNeeded && getenv("BOBOL_DRAW_TIMING"))
-	bu_log("[obol-timing] resident prefix %-24s level=%d->%d "
+	bu_log("[obol-timing] resident prefix %-24s cut=%d->%d "
 	       "load=%8.1f ms generation=%8.1f ms prepare=%8.1f ms "
 	       "legacy=%8.1f ms\n",
-	       name, publishedLevel, residentLevel,
+	       name, publishedCut, residentCut,
 	       prefixLoadMicroseconds / 1000.0,
 	       generationBuildMicroseconds / 1000.0,
 	       preparedGeometryMicroseconds / 1000.0,
@@ -3947,22 +3967,24 @@ BObolLodService::realizeResidentMeshLod(
 	(strstr(name, traceFilter) ||
 	 (request.objectPath.getLength() > 0 &&
 	  strstr(request.objectPath.getString(), traceFilter)))) {
-	bu_log("BObol resident LoD trace object=%s request_level=%d "
-	       "draw_level=%d resident_level=%d faces=%zu points=%zu "
+	bu_log("BObol resident LoD trace object=%s submitted_cut=%d "
+	       "resolved_cut=%d draw_cut=%d resident_cut=%d "
+	       "faces=%zu points=%zu "
 	       "asset_revision=%llu load=%d compact=%d terminal=%d\n",
-	       name, request.requestedLevel, drawLevel, residentLevel,
+	       name, request.requestedCut, result.resolvedCut, drawCut,
+	       residentCut,
 	       result.counts.faceCount, result.counts.pointCount,
 	       static_cast<unsigned long long>(resident->mesh->revision()),
 	       loadNeeded ? 1 : 0, provider.compactResident ? 1 : 0,
 	       result.terminal ? 1 : 0);
 	if (getenv("BOBOL_LOD_TRACE_HIERARCHY")) {
-	    for (int level = hierarchy.min_level;
-		 level <= hierarchy.max_level; ++level)
-		bu_log("BObol resident hierarchy object=%s level=%d "
+	    for (int cut = hierarchy.min_cut;
+		 cut <= hierarchy.max_cut; ++cut)
+		bu_log("BObol resident hierarchy object=%s cut=%d "
 		       "faces=%zu points=%zu%s\n",
-		       name, level, hierarchy.face_count[level],
-		       hierarchy.point_count[level],
-		       level == hierarchy.max_level ? " terminal" : "");
+		       name, cut, hierarchy.cuts[cut].face_count,
+		       hierarchy.cuts[cut].point_count,
+		       cut == hierarchy.max_cut ? " terminal" : "");
 	}
     }
     return result;
@@ -4005,11 +4027,11 @@ BObolLodService::scheduleResidentMeshCompaction(
     if (!continuingPlan) {
 	snapshot.revision = demandRevision;
 	for (const BObolLodResidentDemand &demand : demands) {
-	    if (demand.assetKey.getLength() == 0 || demand.level < 0)
+	    if (demand.assetKey.getLength() == 0 || demand.cut < 0)
 		continue;
 	    BObolResidentMeshDemandValue &value =
 		snapshot.assets[demand.assetKey.getString()];
-	    value.level = std::max(value.level, demand.level);
+	    value.cut = std::max(value.cut, demand.cut);
 	    value.channelMask |= demand.channelMask & 3u;
 	}
 	snapshot.planning = TRUE;
@@ -4052,16 +4074,16 @@ BObolLodService::scheduleResidentMeshCompaction(
 		residentEntry.second;
 	    if (!resident)
 		continue;
-	    const int residentLevel =
-		resident->publishedResidentLevel.load(
+	    const int residentCut =
+		resident->publishedResidentCut.load(
 		    std::memory_order_relaxed);
-	    const int minimumLevel =
-		resident->publishedMinimumLevel.load(
+	    const int minimumCut =
+		resident->publishedMinimumCut.load(
 		    std::memory_order_relaxed);
 	    const bool hasReloadableBacking =
 		resident->publishedBackingPrefixBytes.load(
 		    std::memory_order_relaxed) > 0;
-	    if (residentLevel < 0 || minimumLevel < 0)
+	    if (residentCut < 0 || minimumCut < 0)
 		continue;
 	    BObolResidentMeshDemandValue aggregate;
 	    SbBool demanded = FALSE;
@@ -4072,8 +4094,8 @@ BObolLodService::scheduleResidentMeshCompaction(
 		if (demand == consumer.second.assets.end())
 		    continue;
 		demanded = TRUE;
-		aggregate.level = std::max(
-		    aggregate.level, demand->second.level);
+		aggregate.cut = std::max(
+		    aggregate.cut, demand->second.cut);
 		aggregate.channelMask |=
 		    demand->second.channelMask;
 	    }
@@ -4082,10 +4104,10 @@ BObolLodService::scheduleResidentMeshCompaction(
 		this->p->maxResidentMeshBytes != SIZE_MAX &&
 		current.planningProjectedResidentBytes >
 		    this->p->maxResidentMeshBytes ? TRUE : FALSE;
-	    const int targetLevel = aggregate.level < 0 ?
-		minimumLevel : std::max(minimumLevel, aggregate.level);
+	    const int targetCut = aggregate.cut < 0 ?
+		minimumCut : std::max(minimumCut, aggregate.cut);
 	    if (!evict &&
-		targetLevel >= residentLevel && !hasReloadableBacking) {
+		targetCut >= residentCut && !hasReloadableBacking) {
 		this->p->residentMeshCompactionTargets.erase(
 		    residentEntry.first);
 		continue;
@@ -4093,7 +4115,7 @@ BObolLodService::scheduleResidentMeshCompaction(
 	    BObolResidentMeshCompactionTarget &target =
 		this->p->residentMeshCompactionTargets[
 		    residentEntry.first];
-	    target.level = targetLevel;
+	    target.cut = targetCut;
 	    target.channelMask = aggregate.channelMask;
 	    target.evict = evict;
 	    target.useRevision = resident->useRevision.load(
@@ -4774,6 +4796,13 @@ BObolLodService::inFlightCount(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return this->p->inFlight;
+}
+
+size_t
+BObolLodService::resultReservationCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->resultReservations;
 }
 
 size_t

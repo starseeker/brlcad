@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -157,7 +157,7 @@ save_comb(struct ged *gedp, struct directory *dpold)
 	return NULL;
     }
 
-    int callbacks_disabled = ged_event_librt_callbacks_disable(gedp);
+    int callbacks_disabled = ged_event_librt_callbacks_disable(gedp) == GED_EVENT_OK;
     dp = db_diradd(gedp->dbip, name, RT_DIR_PHONY_ADDR, 0, dpold->d_flags, (void *)&intern.idb_type);
     if (dp == RT_DIR_NULL) {
 	bu_vls_printf(gedp->ged_result_str, "save_comb: Cannot save copy of %s, no changed made\n", dpold->d_namep);
@@ -194,7 +194,7 @@ remove_saved_comb(struct ged *gedp, const char *saved_name)
     if (dp == RT_DIR_NULL)
 	return BRLCAD_OK;
 
-    int callbacks_disabled = ged_event_librt_callbacks_disable(gedp);
+    int callbacks_disabled = ged_event_librt_callbacks_disable(gedp) == GED_EVENT_OK;
     if (db_delete(gedp->dbip, dp) != 0 || db_dirdelete(gedp->dbip, dp) != 0) {
 	if (callbacks_disabled)
 	    (void)ged_event_librt_callbacks_enable(gedp);

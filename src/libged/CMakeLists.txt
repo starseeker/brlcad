@@ -324,7 +324,7 @@ set(
   ${GED_STATIC_REGISTRATION_CPP}
   cmd_schemas.cpp
   edit_buf.cpp
-  event_txn.cpp
+  event.cpp
   exec.cpp
   external_rt.cpp
   ged_init.cpp
@@ -441,6 +441,10 @@ set_target_properties(libged PROPERTIES VERSION 20.0.1 SOVERSION 20)
 
 set(GED_DRAW_API_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/ged_draw_api.symbols")
 set(GED_DRAW_API_CHECK "${CMAKE_CURRENT_BINARY_DIR}/ged_draw_api.checked")
+set(GED_OBOL_PLUGIN_API_MANIFEST
+  "${CMAKE_CURRENT_SOURCE_DIR}/ged_obol_plugin_api.symbols")
+set(GED_OBOL_PLUGIN_API_CHECK
+  "${CMAKE_CURRENT_BINARY_DIR}/ged_obol_plugin_api.checked")
 set(GED_DRAW_API_HEADERS
   ${CMAKE_SOURCE_DIR}/include/ged/view_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/view.h
@@ -448,6 +452,8 @@ set(GED_DRAW_API_HEADERS
   ${CMAKE_SOURCE_DIR}/include/ged/scene_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_feature.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_feature_types.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view_edit.h
+  ${CMAKE_SOURCE_DIR}/include/ged/view_edit_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_polygon.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_polygon_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_export.h
@@ -456,6 +462,7 @@ set(GED_DRAW_API_HEADERS
   ${CMAKE_SOURCE_DIR}/include/ged/selection_types.h
   ${CMAKE_SOURCE_DIR}/include/ged/view_feature_batch.h
   ${CMAKE_SOURCE_DIR}/include/ged/display.h
+  ${CMAKE_SOURCE_DIR}/include/ged/event.h
 )
 add_custom_command(
   OUTPUT "${GED_DRAW_API_CHECK}"
@@ -471,6 +478,52 @@ add_custom_command(
 add_custom_target(ged_draw_api_check ALL DEPENDS "${GED_DRAW_API_CHECK}")
 add_dependencies(libged ged_draw_api_check)
 set_target_properties(ged_draw_api_check PROPERTIES FOLDER "BRL-CAD Libraries")
+
+# Each installed drawing header is a supported include boundary for both C and
+# C++ clients.  Compile every header in an otherwise empty translation unit so
+# missing includes cannot be hidden by an application's include order.
+set(GED_DRAW_HEADER_SELF_CONTAINMENT_SOURCES)
+foreach(_ged_draw_header IN LISTS GED_DRAW_API_HEADERS)
+  get_filename_component(_ged_draw_header_name "${_ged_draw_header}" NAME)
+  string(REPLACE ".h" "" _ged_draw_header_stem
+    "${_ged_draw_header_name}")
+  foreach(_ged_draw_language c cpp)
+    set(_ged_draw_header_source
+      "${CMAKE_CURRENT_BINARY_DIR}/header-self-containment/${_ged_draw_header_stem}.${_ged_draw_language}")
+    file(GENERATE OUTPUT "${_ged_draw_header_source}"
+      CONTENT "#include \"ged/${_ged_draw_header_name}\"\n")
+    list(APPEND GED_DRAW_HEADER_SELF_CONTAINMENT_SOURCES
+      "${_ged_draw_header_source}")
+  endforeach()
+endforeach()
+add_library(ged_draw_header_self_containment OBJECT
+  ${GED_DRAW_HEADER_SELF_CONTAINMENT_SOURCES})
+target_compile_definitions(ged_draw_header_self_containment PRIVATE
+  GED_DLL_IMPORTS)
+target_link_libraries(ged_draw_header_self_containment PRIVATE
+  ${GED_PUBLIC_LIBS})
+add_dependencies(libged ged_draw_header_self_containment)
+set_target_properties(ged_draw_header_self_containment PROPERTIES
+  UNITY_BUILD OFF
+  FOLDER "BRL-CAD Libraries")
+
+add_custom_command(
+  OUTPUT "${GED_OBOL_PLUGIN_API_CHECK}"
+  COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}
+    -DMANIFEST=${GED_OBOL_PLUGIN_API_MANIFEST}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/check_obol_plugin_api.cmake
+  COMMAND ${CMAKE_COMMAND} -E touch "${GED_OBOL_PLUGIN_API_CHECK}"
+  DEPENDS ${CMAKE_SOURCE_DIR}/include/ged/plugin/obol.h
+          ${GED_OBOL_PLUGIN_API_MANIFEST}
+          ${CMAKE_CURRENT_SOURCE_DIR}/check_obol_plugin_api.cmake
+  VERBATIM
+)
+add_custom_target(ged_obol_plugin_api_check ALL
+  DEPENDS "${GED_OBOL_PLUGIN_API_CHECK}")
+add_dependencies(libged ged_obol_plugin_api_check)
+set_target_properties(ged_obol_plugin_api_check PROPERTIES
+  FOLDER "BRL-CAD Libraries")
 
 cmakefiles(
   ged_draw_types_private.h
@@ -634,6 +687,7 @@ add_subdirectory(move_all)
 add_subdirectory(move_arb_edge)
 add_subdirectory(move_arb_face)
 add_subdirectory(mrot)
+add_subdirectory(navgizmo)
 add_subdirectory(nirt)
 add_subdirectory(nmg)
 add_subdirectory(npush)
@@ -834,6 +888,10 @@ set(
   ged_ignore_files
   CMakeLists.txt
   check_bobol_private_symbols.cmake
+  check_draw_plugin_symbols.cmake
+  check_obol_plugin_api.cmake
+  ged_draw_plugin_api.symbols
+  ged_obol_plugin_api.symbols
   NOTES
   README
   TODO
@@ -844,6 +902,7 @@ set(
   ged_bobol_private.hpp
   draw_obol_bridge_private.hpp
   ged_draw_private.h
+  ged_draw_plugin_private.h
   ged_draw_view_private.h
   ged_cmd_scanner.cpp
   ged_private.h

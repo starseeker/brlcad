@@ -120,7 +120,7 @@ public:
     SoSFString editIntentRole;
     SoSFUInt32 lodPolicy;
     SoSFBool lodAvailable;
-    SoSFInt32 lodActiveLevel;
+    SoSFInt32 lodActiveCut;
     SoSFUInt32 lodFaceCount;
     SoSFUInt32 lodPointCount;
     SoSFUInt32 lodOriginalPointCount;
@@ -216,7 +216,7 @@ public:
 
     /* Per-GL-context retained geometry (display lists) so a resident mesh is
      * uploaded once and re-called each frame instead of re-submitted in
-     * immediate mode.  renderListSignature identifies which payload/level is
+     * immediate mode.  renderListSignature identifies which payload/cut is
      * currently baked; when it changes (LoD refinement, mode switch) the lists
      * are discarded and rebuilt.  Kept to OpenGL 2.0-safe display lists so the
      * software (osmesa) fallback works.  Public so the file-local render

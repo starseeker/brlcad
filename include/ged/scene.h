@@ -136,7 +136,7 @@ ged_scene_opacity_set(struct ged *gedp,
 		      double opacity,
 		      struct ged_scene_result *result);
 
-/** Set legacy explicit highlight state for a scene path. */
+/** Set explicit highlight state for a semantic scene path. */
 GED_EXPORT extern enum ged_scene_status
 ged_scene_highlight_set(struct ged *gedp,
 			const struct ged_scene_path_request *request,

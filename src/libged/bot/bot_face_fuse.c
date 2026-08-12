@@ -31,7 +31,7 @@
 
 #include "rt/geom.h"
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 
 

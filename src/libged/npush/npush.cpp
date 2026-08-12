@@ -36,7 +36,7 @@
 
 #include "bu/cmd.h"
 #include "bu/opt.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 
@@ -45,7 +45,7 @@ class ged_librt_callback_guard {
 public:
     explicit ged_librt_callback_guard(struct ged *g) : gedp(g)
     {
-	disabled = ged_event_librt_callbacks_disable(gedp);
+	disabled = ged_event_librt_callbacks_disable(gedp) == GED_EVENT_OK;
     }
 
     ~ged_librt_callback_guard()

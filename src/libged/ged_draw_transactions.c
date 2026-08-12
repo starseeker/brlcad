@@ -44,7 +44,7 @@
 #include "ged/display.h"
 #include "rt/calc.h"
 #include "rt/view.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 #include "./ged_private.h"
 #include "./ged_draw_private.h"
 #include "./ged_draw_view_private.h"
@@ -1442,8 +1442,22 @@ ged_draw_transaction_result_init(struct ged_draw_transaction_result *result)
     if (!result)
 	return;
     memset(result, 0, sizeof(*result));
-    BU_VLS_INIT(&result->names);
     BU_VLS_INIT(&result->errors);
+}
+
+
+static void
+_ged_draw_txn_paths_clear(struct ged_draw_transaction_result *result)
+{
+    size_t i;
+
+    if (!result)
+	return;
+    for (i = 0; i < result->path_count; i++) {
+	bu_free(result->paths[i], "draw transaction result path");
+	result->paths[i] = NULL;
+    }
+    result->path_count = 0;
 }
 
 
@@ -1452,8 +1466,9 @@ ged_draw_transaction_result_free(struct ged_draw_transaction_result *result)
 {
     if (!result)
 	return;
-    if (BU_VLS_IS_INITIALIZED(&result->names))
-	bu_vls_free(&result->names);
+    _ged_draw_txn_paths_clear(result);
+    if (result->paths)
+	bu_free(result->paths, "draw transaction result paths");
     if (BU_VLS_IS_INITIALIZED(&result->errors))
 	bu_vls_free(&result->errors);
     memset(result, 0, sizeof(*result));
@@ -1466,11 +1481,7 @@ _ged_draw_txn_result_prepare(struct ged_draw_transaction_result *result,
 {
     if (!result)
 	return;
-    if (!BU_VLS_IS_INITIALIZED(&result->names)) {
-	BU_VLS_INIT(&result->names);
-    } else {
-	bu_vls_trunc(&result->names, 0);
-    }
+    _ged_draw_txn_paths_clear(result);
     if (!BU_VLS_IS_INITIALIZED(&result->errors)) {
 	BU_VLS_INIT(&result->errors);
     } else {
@@ -1514,12 +1525,25 @@ static void
 _ged_draw_txn_note_name(struct ged_draw_transaction_result *result,
 			const char *name)
 {
+    size_t i;
+
     if (!result || !name || !*name)
 	return;
-    if (bu_vls_strlen(&result->names)) {
-	bu_vls_putc(&result->names, ' ');
+    for (i = 0; i < result->path_count; i++) {
+	if (BU_STR_EQUAL(result->paths[i], name))
+	    return;
     }
-    bu_vls_printf(&result->names, "%s", name);
+    if (result->path_count == result->path_capacity) {
+	size_t new_capacity = result->path_capacity ?
+	    result->path_capacity * 2 : 8;
+	result->paths = (char **)bu_realloc(result->paths,
+	    new_capacity * sizeof(char *),
+	    "draw transaction result paths");
+	memset(result->paths + result->path_capacity, 0,
+	    (new_capacity - result->path_capacity) * sizeof(char *));
+	result->path_capacity = new_capacity;
+    }
+    result->paths[result->path_count++] = bu_strdup(name);
 }
 
 
@@ -1816,7 +1840,7 @@ ged_draw_apply_transaction(struct ged *gedp,
 	if (ret > 0)
 	    (void)ged_scene_backend_apply_private(gedp, txn, result);
 	if (ret > 0 && _ged_draw_txn_kind_changes_scene(txn->kind))
-	    (void)ged_selection_draw_sync(gedp, NULL);
+	    (void)ged_selection_present_private(gedp);
 	if (ret > 0 && txn->kind == GED_DRAW_TXN_DRAW && txn->autoview) {
 	    const struct ged_draw_appearance_settings default_appearance =
 		GED_DRAW_APPEARANCE_SETTINGS_INIT;

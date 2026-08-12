@@ -49,7 +49,7 @@
 #include "bu/datetime.h"
 
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "qtcad/QgModel.h"
 #include "qtcad/QgTreeView.h"
 #include "wdb.h"
@@ -65,6 +65,21 @@ static int g_fail = 0;
 	    bu_log("OK   %s\n", (msg)); \
 	} \
     } while (0)
+
+static bool
+event_result_mentions(const struct ged_event_result *result,
+		      const char *name)
+{
+    if (!name)
+	return false;
+    const size_t count = ged_event_result_path_count(result);
+    for (size_t i = 0; i < count; i++) {
+	const char *path = ged_event_result_path_at(result, i);
+	if (path && std::string(path).find(name) != std::string::npos)
+	    return true;
+    }
+    return false;
+}
 
 static QModelIndex
 find_top_level_item(QAbstractItemModel *model, const char *name)
@@ -391,12 +406,11 @@ main(int argc, char *argv[])
 	    int before_box_mod_reset_signals = reset_spy.count();
 	    int before_box_mod_data_signals = event_data_spy.count();
 	    event_model.resetNotificationStats();
-	    struct ged_event_txn_result box_mod_result;
-	    ged_event_txn_result_init(&box_mod_result);
+	    struct ged_event_result *box_mod_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_notify_object_modified(event_gedp,
-		    "box.r", 0, &box_mod_result) >= 0,
+		    "box.r", 0, box_mod_result) == GED_EVENT_OK,
 		    "event bridge direct object modified event succeeds");
-	    ged_event_txn_result_free(&box_mod_result);
+	    ged_event_result_destroy(box_mod_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(db_spy.count() > before_box_mod_db_signals,
@@ -446,15 +460,13 @@ main(int argc, char *argv[])
 	    int before_box_mat_reset_signals = reset_spy.count();
 	    int before_box_mat_data_signals = event_data_spy.count();
 	    event_model.resetNotificationStats();
-	    struct ged_event_txn_result box_mat_result;
-	    ged_event_txn_result_init(&box_mat_result);
+	    struct ged_event_result *box_mat_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_notify_object_material_changed(
-		    event_gedp, "box.r", &box_mat_result) >= 0,
+		    event_gedp, "box.r", box_mat_result) == GED_EVENT_OK,
 		    "event bridge direct object material event succeeds");
-	    TCHECK(std::string(bu_vls_cstr(&box_mat_result.affected_names)).
-		    find("box.r") != std::string::npos,
+	    TCHECK(event_result_mentions(box_mat_result, "box.r"),
 		    "object material event reports affected path names");
-	    ged_event_txn_result_free(&box_mat_result);
+	    ged_event_result_destroy(box_mat_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(db_spy.count() > before_box_mat_db_signals,
@@ -482,19 +494,18 @@ main(int argc, char *argv[])
 	    int before_direct_add_insert_signals = rows_inserted_spy.count();
 	    TCHECK(event_wdbp != RT_WDB_NULL,
 		    "event bridge opens wdb handle for direct librt mutation");
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
-		    "event bridge starts GedEventTxn batch for direct librt mutation");
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
+		    "event bridge starts GED event service batch for direct librt mutation");
 	    TCHECK(event_wdbp && mk_sph(event_wdbp, direct_add_name,
 		    direct_add_center, 1.0) == 0,
 		    "event bridge direct librt add succeeds");
-	    struct ged_event_txn_result direct_add_result;
-	    ged_event_txn_result_init(&direct_add_result);
+	    struct ged_event_result *direct_add_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &direct_add_result) >= 0,
-		    "event bridge ends GedEventTxn batch for direct librt mutation");
-	    TCHECK(direct_add_result.db_index_status > 0,
+		    direct_add_result) == GED_EVENT_OK,
+		    "event bridge ends GED event service batch for direct librt mutation");
+	    TCHECK(ged_event_result_db_index_change_count(direct_add_result) > 0,
 		    "event bridge direct librt add queues db index reconciliation");
-	    ged_event_txn_result_free(&direct_add_result);
+	    ged_event_result_destroy(direct_add_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(db_spy.count() > before_direct_add_db_signals,
@@ -520,7 +531,7 @@ main(int argc, char *argv[])
 	    point_t dup_extra_center = {220.0, 0.0, 0.0};
 	    int before_reuse_setup_reset_signals = reset_spy.count();
 	    int before_reuse_setup_insert_signals = rows_inserted_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts reused/duplicate hierarchy setup batch");
 	    TCHECK(event_wdbp && mk_sph(event_wdbp, reuse_leaf,
 		    reuse_leaf_center, 1.0) == 0,
@@ -572,12 +583,11 @@ main(int argc, char *argv[])
 			NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0) == 0,
 			"event bridge creates duplicate parent comb");
 	    }
-	    struct ged_event_txn_result reuse_setup_result;
-	    ged_event_txn_result_init(&reuse_setup_result);
+	    struct ged_event_result *reuse_setup_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &reuse_setup_result) >= 0,
+		    reuse_setup_result) == GED_EVENT_OK,
 		    "event bridge ends reused/duplicate hierarchy setup batch");
-	    ged_event_txn_result_free(&reuse_setup_result);
+	    ged_event_result_destroy(reuse_setup_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(reset_spy.count() == before_reuse_setup_reset_signals,
@@ -690,17 +700,16 @@ main(int argc, char *argv[])
 		    rows_removed_spy.count();
 		int before_dup_reorder_move_signals =
 		    rows_moved_spy.count();
-		TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+		TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 			"event bridge starts duplicate reorder rewrite batch");
 		TCHECK(event_wdbp && mk_comb(event_wdbp, dup_parent, &wm.l,
 			0, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0) == 0,
 			"event bridge rewrites duplicate reorder parent");
-		struct ged_event_txn_result dup_reorder_result;
-		ged_event_txn_result_init(&dup_reorder_result);
+		struct ged_event_result *dup_reorder_result = ged_event_result_create();
 		TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-			&dup_reorder_result) >= 0,
+			dup_reorder_result) == GED_EVENT_OK,
 			"event bridge ends duplicate reorder rewrite batch");
-		ged_event_txn_result_free(&dup_reorder_result);
+		ged_event_result_destroy(dup_reorder_result);
 		QCoreApplication::processEvents();
 		QTest::qWait(1);
 		QgModel::HierarchyDeltaStats dup_reorder_stats =
@@ -756,7 +765,7 @@ main(int argc, char *argv[])
 	    point_t invalid_extra_center = {224.0, 0.0, 0.0};
 	    int before_invalid_setup_reset_signals = reset_spy.count();
 	    int before_invalid_setup_insert_signals = rows_inserted_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts invalid-reference setup batch");
 	    TCHECK(event_wdbp && mk_sph(event_wdbp, invalid_extra,
 		    invalid_extra_center, 1.0) == 0,
@@ -772,12 +781,11 @@ main(int argc, char *argv[])
 			0) == 0,
 			"event bridge creates invalid-reference parent comb");
 	    }
-	    struct ged_event_txn_result invalid_setup_result;
-	    ged_event_txn_result_init(&invalid_setup_result);
+	    struct ged_event_result *invalid_setup_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &invalid_setup_result) >= 0,
+		    invalid_setup_result) == GED_EVENT_OK,
 		    "event bridge ends invalid-reference setup batch");
-	    ged_event_txn_result_free(&invalid_setup_result);
+	    ged_event_result_destroy(invalid_setup_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(reset_spy.count() == before_invalid_setup_reset_signals,
@@ -870,7 +878,7 @@ main(int argc, char *argv[])
 	    int before_targeted_setup_reset_signals = reset_spy.count();
 	    int before_targeted_setup_insert_signals =
 		rows_inserted_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts targeted-delta setup batch");
 	    for (int i = 0; i < targeted_parent_count; i++) {
 		char parent_name[64];
@@ -917,12 +925,11 @@ main(int argc, char *argv[])
 			0, 0, 0, 0, 0, 0, 0) == 0,
 			"event bridge creates targeted empty parent");
 	    }
-	    struct ged_event_txn_result targeted_setup_result;
-	    ged_event_txn_result_init(&targeted_setup_result);
+	    struct ged_event_result *targeted_setup_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &targeted_setup_result) >= 0,
+		    targeted_setup_result) == GED_EVENT_OK,
 		    "event bridge ends targeted-delta setup batch");
-	    ged_event_txn_result_free(&targeted_setup_result);
+	    ged_event_result_destroy(targeted_setup_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(reset_spy.count() == before_targeted_setup_reset_signals,
@@ -1041,7 +1048,7 @@ main(int argc, char *argv[])
 	    point_t reorder_b_center = {232.0, 0.0, 0.0};
 	    int before_reorder_setup_reset_signals = reset_spy.count();
 	    int before_reorder_setup_insert_signals = rows_inserted_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts reorder row-move setup batch");
 	    TCHECK(event_wdbp && mk_sph(event_wdbp, reorder_a,
 		    reorder_a_center, 1.0) == 0,
@@ -1063,12 +1070,11 @@ main(int argc, char *argv[])
 			0) == 0,
 			"event bridge creates reorder row-move parent");
 	    }
-	    struct ged_event_txn_result reorder_setup_result;
-	    ged_event_txn_result_init(&reorder_setup_result);
+	    struct ged_event_result *reorder_setup_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &reorder_setup_result) >= 0,
+		    reorder_setup_result) == GED_EVENT_OK,
 		    "event bridge ends reorder row-move setup batch");
-	    ged_event_txn_result_free(&reorder_setup_result);
+	    ged_event_result_destroy(reorder_setup_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(reset_spy.count() == before_reorder_setup_reset_signals,
@@ -1108,18 +1114,17 @@ main(int argc, char *argv[])
 		event_model.resetHierarchyDeltaStats();
 		int before_reorder_reset_signals = reset_spy.count();
 		int before_reorder_move_signals = rows_moved_spy.count();
-		TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+		TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 			"event bridge starts reorder row-move rewrite batch");
 		TCHECK(event_wdbp && mk_comb(event_wdbp, reorder_parent,
 			&wm.l, 0, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0,
 			0) == 0,
 			"event bridge rewrites reorder row-move parent");
-		struct ged_event_txn_result reorder_result;
-		ged_event_txn_result_init(&reorder_result);
+		struct ged_event_result *reorder_result = ged_event_result_create();
 		TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-			&reorder_result) >= 0,
+			reorder_result) == GED_EVENT_OK,
 			"event bridge ends reorder row-move rewrite batch");
-		ged_event_txn_result_free(&reorder_result);
+		ged_event_result_destroy(reorder_result);
 		QCoreApplication::processEvents();
 		QTest::qWait(1);
 		QgModel::HierarchyDeltaStats reorder_stats =
@@ -1164,7 +1169,7 @@ main(int argc, char *argv[])
 	    int before_mixed_reorder_setup_reset_signals = reset_spy.count();
 	    int before_mixed_reorder_setup_insert_signals =
 		rows_inserted_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts mixed reorder setup batch");
 	    TCHECK(event_wdbp && mk_sph(event_wdbp, mixed_reorder_a,
 		    mixed_reorder_a_center, 1.0) == 0,
@@ -1195,12 +1200,11 @@ main(int argc, char *argv[])
 			0, 0, 0, 0, 0, 0, 0) == 0,
 			"event bridge creates mixed reorder parent");
 	    }
-	    struct ged_event_txn_result mixed_reorder_setup_result;
-	    ged_event_txn_result_init(&mixed_reorder_setup_result);
+	    struct ged_event_result *mixed_reorder_setup_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &mixed_reorder_setup_result) >= 0,
+		    mixed_reorder_setup_result) == GED_EVENT_OK,
 		    "event bridge ends mixed reorder setup batch");
-	    ged_event_txn_result_free(&mixed_reorder_setup_result);
+	    ged_event_result_destroy(mixed_reorder_setup_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(reset_spy.count() ==
@@ -1255,18 +1259,17 @@ main(int argc, char *argv[])
 		    rows_removed_spy.count();
 		int before_mixed_reorder_move_signals =
 		    rows_moved_spy.count();
-		TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+		TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 			"event bridge starts mixed reorder rewrite batch");
 		TCHECK(event_wdbp && mk_comb(event_wdbp,
 			mixed_reorder_parent, &wm.l, 0, NULL, NULL, NULL,
 			0, 0, 0, 0, 0, 0, 0) == 0,
 			"event bridge rewrites mixed reorder parent");
-		struct ged_event_txn_result mixed_reorder_result;
-		ged_event_txn_result_init(&mixed_reorder_result);
+		struct ged_event_result *mixed_reorder_result = ged_event_result_create();
 		TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-			&mixed_reorder_result) >= 0,
+			mixed_reorder_result) == GED_EVENT_OK,
 			"event bridge ends mixed reorder rewrite batch");
-		ged_event_txn_result_free(&mixed_reorder_result);
+		ged_event_result_destroy(mixed_reorder_result);
 		QCoreApplication::processEvents();
 		QTest::qWait(1);
 		QgModel::HierarchyDeltaStats mixed_reorder_stats =
@@ -1318,7 +1321,7 @@ main(int argc, char *argv[])
 	    int before_cross_parent_setup_reset_signals = reset_spy.count();
 	    int before_cross_parent_setup_insert_signals =
 		rows_inserted_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts cross-parent move setup batch");
 	    TCHECK(event_wdbp && mk_sph(event_wdbp, cross_parent_child,
 		    cross_parent_child_center, 1.0) == 0,
@@ -1355,12 +1358,11 @@ main(int argc, char *argv[])
 			0) == 0,
 			"event bridge creates cross-parent destination");
 	    }
-	    struct ged_event_txn_result cross_parent_setup_result;
-	    ged_event_txn_result_init(&cross_parent_setup_result);
+	    struct ged_event_result *cross_parent_setup_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &cross_parent_setup_result) >= 0,
+		    cross_parent_setup_result) == GED_EVENT_OK,
 		    "event bridge ends cross-parent move setup batch");
-	    ged_event_txn_result_free(&cross_parent_setup_result);
+	    ged_event_result_destroy(cross_parent_setup_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(reset_spy.count() ==
@@ -1420,7 +1422,7 @@ main(int argc, char *argv[])
 		    rows_removed_spy.count();
 		int before_cross_parent_move_signals =
 		    rows_moved_spy.count();
-		TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+		TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 			"event bridge starts cross-parent move rewrite batch");
 		TCHECK(event_wdbp && mk_comb(event_wdbp,
 			cross_parent_source, &source_wm.l, 0, NULL, NULL,
@@ -1430,12 +1432,11 @@ main(int argc, char *argv[])
 			cross_parent_dest, &dest_wm.l, 0, NULL, NULL, NULL,
 			0, 0, 0, 0, 0, 0, 0) == 0,
 			"event bridge rewrites cross-parent destination");
-		struct ged_event_txn_result cross_parent_result;
-		ged_event_txn_result_init(&cross_parent_result);
+		struct ged_event_result *cross_parent_result = ged_event_result_create();
 		TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-			&cross_parent_result) >= 0,
+			cross_parent_result) == GED_EVENT_OK,
 			"event bridge ends cross-parent move rewrite batch");
-		ged_event_txn_result_free(&cross_parent_result);
+		ged_event_result_destroy(cross_parent_result);
 		QCoreApplication::processEvents();
 		QTest::qWait(1);
 		QgModel::HierarchyDeltaStats cross_parent_stats =
@@ -1530,7 +1531,7 @@ main(int argc, char *argv[])
 	    point_t deep_extra_center = {244.0, 0.0, 0.0};
 	    int before_deep_setup_reset_signals = reset_spy.count();
 	    int before_deep_setup_insert_signals = rows_inserted_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts deep expanded path setup batch");
 	    TCHECK(event_wdbp && mk_sph(event_wdbp, deep_leaf,
 		    deep_leaf_center, 1.0) == 0,
@@ -1550,12 +1551,11 @@ main(int argc, char *argv[])
 			NULL, NULL, 0, 0, 0, 0, 0, 0, 0) == 0,
 			"event bridge creates deep expanded path comb");
 	    }
-	    struct ged_event_txn_result deep_setup_result;
-	    ged_event_txn_result_init(&deep_setup_result);
+	    struct ged_event_result *deep_setup_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &deep_setup_result) >= 0,
+		    deep_setup_result) == GED_EVENT_OK,
 		    "event bridge ends deep expanded path setup batch");
-	    ged_event_txn_result_free(&deep_setup_result);
+	    ged_event_result_destroy(deep_setup_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(reset_spy.count() == before_deep_setup_reset_signals,
@@ -1650,7 +1650,7 @@ main(int argc, char *argv[])
 	    event_model.resetFetchMoreStats();
 	    int before_scale_setup_reset_signals = reset_spy.count();
 	    int before_scale_setup_insert_signals = rows_inserted_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts grouped-delta scale setup batch");
 	    int scale_leaf_create_count = 0;
 	    for (int i = 0; i < scale_child_count; i++) {
@@ -1685,12 +1685,11 @@ main(int argc, char *argv[])
 			0, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0) == 0,
 			"event bridge creates grouped-delta scale parent");
 	    }
-	    struct ged_event_txn_result scale_setup_result;
-	    ged_event_txn_result_init(&scale_setup_result);
+	    struct ged_event_result *scale_setup_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &scale_setup_result) >= 0,
+		    scale_setup_result) == GED_EVENT_OK,
 		    "event bridge ends grouped-delta scale setup batch");
-	    ged_event_txn_result_free(&scale_setup_result);
+	    ged_event_result_destroy(scale_setup_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    QgModel::HierarchyDeltaStats scale_setup_stats =
@@ -1856,7 +1855,7 @@ main(int argc, char *argv[])
 	    point_t mixed_rename_center = {432.0, 0.0, 0.0};
 	    int before_mixed_setup_reset_signals = reset_spy.count();
 	    int before_mixed_setup_insert_signals = rows_inserted_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts mixed structural setup batch");
 	    TCHECK(event_wdbp && mk_sph(event_wdbp, mixed_a,
 		    mixed_a_center, 1.0) == 0,
@@ -1884,12 +1883,11 @@ main(int argc, char *argv[])
 			0) == 0,
 			"event bridge creates mixed structural parent");
 	    }
-	    struct ged_event_txn_result mixed_setup_result;
-	    ged_event_txn_result_init(&mixed_setup_result);
+	    struct ged_event_result *mixed_setup_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &mixed_setup_result) >= 0,
+		    mixed_setup_result) == GED_EVENT_OK,
 		    "event bridge ends mixed structural setup batch");
-	    ged_event_txn_result_free(&mixed_setup_result);
+	    ged_event_result_destroy(mixed_setup_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(reset_spy.count() == before_mixed_setup_reset_signals,
@@ -1925,7 +1923,7 @@ main(int argc, char *argv[])
 	    int before_mixed_reset_signals = reset_spy.count();
 	    int before_mixed_insert_signals = rows_inserted_spy.count();
 	    int before_mixed_remove_signals = rows_removed_spy.count();
-	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) > 0,
+	    TCHECK(event_gedp && ged_event_batch_begin(event_gedp) == GED_EVENT_OK,
 		    "event bridge starts mixed structural edit batch");
 	    TCHECK(event_gedp && ged_exec(event_gedp, 3, mixed_add_av) == BRLCAD_OK,
 		    "direct GED add succeeds inside mixed structural batch");
@@ -1933,12 +1931,11 @@ main(int argc, char *argv[])
 		    "direct GED rm succeeds inside mixed structural batch");
 	    TCHECK(event_gedp && ged_exec(event_gedp, 3, mixed_move_av) == BRLCAD_OK,
 		    "direct GED move succeeds inside mixed structural batch");
-	    struct ged_event_txn_result mixed_result;
-	    ged_event_txn_result_init(&mixed_result);
+	    struct ged_event_result *mixed_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
-		    &mixed_result) >= 0,
+		    mixed_result) == GED_EVENT_OK,
 		    "event bridge ends mixed structural edit batch");
-	    ged_event_txn_result_free(&mixed_result);
+	    ged_event_result_destroy(mixed_result);
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    QgModel::HierarchyDeltaStats mixed_stats =
@@ -2012,12 +2009,12 @@ main(int argc, char *argv[])
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(db_spy.count() > before_remove_db_signals,
-		    "QgModel bridges direct GedEventTxn remove into db changed signal");
+		    "QgModel bridges direct GED event service remove into db changed signal");
 	    TCHECK(reset_spy.count() == before_remove_reset_signals,
-		    "QgModel bridges direct GedEventTxn remove without hierarchy reset");
+		    "QgModel bridges direct GED event service remove without hierarchy reset");
 	    TCHECK(rows_inserted_spy.count() > before_remove_insert_signals &&
 		    rows_removed_spy.count() > before_remove_remove_signals,
-		    "QgModel bridges direct GedEventTxn remove into grouped row deltas");
+		    "QgModel bridges direct GED event service remove into grouped row deltas");
 	    QModelIndex all_after_remove_idx = find_top_level_item(event_amodel, "all.g");
 	    TCHECK(all_after_remove_idx.isValid(),
 		    "event bridge model keeps all.g top-level item after child remove");
@@ -2062,11 +2059,11 @@ main(int argc, char *argv[])
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(db_spy.count() > before_kill_db_signals,
-		    "QgModel bridges direct GedEventTxn kill into db changed signal");
+		    "QgModel bridges direct GED event service kill into db changed signal");
 	    TCHECK(reset_spy.count() == before_kill_reset_signals,
-		    "QgModel bridges direct GedEventTxn kill without hierarchy reset");
+		    "QgModel bridges direct GED event service kill without hierarchy reset");
 	    TCHECK(rows_removed_spy.count() > before_kill_remove_signals,
-		    "QgModel bridges direct GedEventTxn kill into targeted row remove");
+		    "QgModel bridges direct GED event service kill into targeted row remove");
 	    TCHECK(rows_inserted_spy.count() > before_kill_insert_signals,
 		    "QgModel exposes newly unreferenced kill child through row insert");
 	    TCHECK(!find_top_level_item(event_amodel, "platform.r").isValid(),
@@ -2086,12 +2083,12 @@ main(int argc, char *argv[])
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
 	    TCHECK(db_spy.count() > before_db_signals,
-		    "QgModel bridges direct GedEventTxn rename into db changed signal");
+		    "QgModel bridges direct GED event service rename into db changed signal");
 	    TCHECK(reset_spy.count() == before_reset_signals,
-		    "QgModel bridges direct GedEventTxn rename without hierarchy reset");
+		    "QgModel bridges direct GED event service rename without hierarchy reset");
 	    TCHECK(rows_inserted_spy.count() > before_move_insert_signals &&
 		    rows_removed_spy.count() > before_move_remove_signals,
-		    "QgModel bridges direct GedEventTxn rename into grouped row deltas");
+		    "QgModel bridges direct GED event service rename into grouped row deltas");
 	    TCHECK(find_top_level_item(event_amodel, "all_qg_event.g").isValid(),
 		    "event bridge model exposes renamed top-level item");
 	    TCHECK(!find_top_level_item(event_amodel, "all.g").isValid(),

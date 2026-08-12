@@ -74,7 +74,7 @@
 #include "rt/seg.h"
 #include "raytrace.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "./ged_bot.h"
 #include "../../libbu/concurrentqueue.h"

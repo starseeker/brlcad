@@ -33,6 +33,7 @@ set(
   mesh_lod_submit_action.cpp
   mesh_residency_action.cpp
   mesh_shape.cpp
+  navigation_gizmo.cpp
   pick_detail.cpp
   performance.cpp
   realize_action.cpp
@@ -125,6 +126,7 @@ cmakefiles(
   mesh_lod_submit_action.cpp
   mesh_residency_action.cpp
   mesh_shape.cpp
+  navigation_gizmo.cpp
   pick_detail.cpp
   performance.cpp
   performance_private.h

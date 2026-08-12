@@ -2956,7 +2956,7 @@ to_mouse_pick_detail(struct ged *gedp,
     const size_t count = ged_pick_result_count(result);
     for (size_t i = 0; i < count; i++) {
 	struct bu_vls path = BU_VLS_INIT_ZERO;
-	struct ged_pick_detail detail = GED_PICK_DETAIL_INIT;
+	struct ged_pick_detail detail = ged_pick_detail_default();
 	if (!ged_pick_result_path(result, i, &path) ||
 	    !tclcad_pick_path_matches(bu_vls_cstr(&path), target) ||
 	    !ged_pick_result_detail(result, i, &detail)) {

@@ -30,7 +30,7 @@
 
 #include "rt/geom.h"
 #include "bu/cmd.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 #include "ged_arb.h"
 
@@ -105,7 +105,7 @@ _arb_cmd_create(void *bs, int argc, const char *argv[])
     for (i = 0; i < 4; i++)
 	VJOIN1(arb->pt[i+4], arb->pt[i], -50.8, norm1);
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     dp = db_diradd(gedp->dbip, argv[1], RT_DIR_PHONY_ADDR, 0,
 	    RT_DIR_SOLID, (void *)&internal.idb_type);
     if (dp == RT_DIR_NULL) {

@@ -39,7 +39,7 @@
 
 #include "ged/commands.h"
 #include "ged/database.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "ged/objects.h"
 #include "./ged_bot.h"
 

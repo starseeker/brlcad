@@ -162,6 +162,9 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     uint32_t coordinatorInvariantMask;
     uint32_t coordinatorInvariantHistoryMask;
     uint64_t viewRevision;
+    uint64_t activeGeneration;
+    size_t submissionSourceIndex;
+    size_t submissionEntryOffset;
     size_t expectedLeafCount;
     size_t availableLeafCount;
     size_t visibleTargetCount;
@@ -216,6 +219,8 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     SbBool budgetCalibrationPending;
     SbBool stablePresentationHandoffPending;
     SbBool pointProxyCalibrationPending;
+    SbBool residentGrowthReallocationPending;
+    SbBool publicationFramePending;
     unsigned int failedSourceCount;
 };
 
@@ -384,7 +389,15 @@ public:
     unsigned int getLastFailedSourceCount(void) const;
     const SbString &getLastDiagnostics(void) const;
 
+    /** Request a frame whose completed CAD traversal is valid evidence for
+     * LoD capacity and deadline control. */
     void requestRender(const char *reason = NULL);
+    /** Request a presentation-only frame.  Selection, highlighting, HUD, and
+     * other style changes must become visible, but their one-time patch cost
+     * is not evidence that the retained geometry cut is unsustainable.  If a
+     * capacity-relevant request is already pending, the combined frame remains
+     * capacity relevant. */
+    void requestPresentationRender(const char *reason = NULL);
     void setFrameRequestCallback(BObolFrameRequestCallback callback,
 	void *userData);
     void clearFrameRequestCallback(void *userData);
@@ -393,7 +406,8 @@ public:
     void clearPresentationSyncCallback(void *userData);
     void synchronizePresentation(void);
     void clearRenderRequest(void);
-    SbBool consumeRenderRequest(SbString *reason = NULL);
+    SbBool consumeRenderRequest(SbString *reason = NULL,
+	SbBool *lodCapacityRelevant = NULL);
     /** Snapshot/retire protocol for hosts which traverse the render root
      * directly instead of using renderPending().  Capture the serial after
      * all state synchronized into a frame, then clear it after presentation
@@ -404,7 +418,8 @@ public:
 			 SbBool clearZBuffer = TRUE,
 			 SbString *reason = NULL);
     uint64_t beginRenderTiming(void) const;
-    void completeRenderTiming(uint64_t startedNanoseconds);
+    void completeRenderTiming(uint64_t startedNanoseconds,
+	SbBool lodCapacityRelevant = TRUE);
     /** Bound a graphical traversal before it can monopolize the endpoint
      * thread.  Zero disables the corresponding deadline.  Interrupted
      * frames are not presentation samples; hosts preserve the last completed
@@ -416,7 +431,8 @@ public:
     uint64_t getCurrentPresentationFrameDeadline(void) const;
     void notePresentationRenderInterrupted(uint64_t elapsedNanoseconds,
 	SbBool cadDrawAttempted = TRUE,
-	SbBool cadPreparationChanged = FALSE);
+	SbBool cadPreparationChanged = FALSE,
+	SbBool lodCapacityRelevant = TRUE);
     uint64_t getInterruptedPresentationFrameCount(void) const;
     uint64_t getLastInterruptedPresentationTimeNanoseconds(void) const;
     uint64_t getLastRenderTimeNanoseconds(void) const;
@@ -436,6 +452,10 @@ public:
     /** Record one completed host/offscreen presentation.  This cadence is
      * intentionally separate from render work duration. */
     void noteFramePresented(void);
+    /** Monotonic count of completed host/offscreen presentations.  Hosts and
+     * test drivers may use it to distinguish published scene/camera state
+     * from a frame which has actually reached the presentation surface. */
+    uint64_t getPresentedFrameSerial(void) const;
     /** Short-horizon presentation cadence used by diagnostic telemetry.  LoD
      * capacity uses measured CPU/GPU work instead: an event-driven host gap
      * is not a renderer cost. */
@@ -493,10 +513,10 @@ public:
     uint64_t beginLodGeneration(void);
     void setLodAutoSubmit(SbBool enabled);
     SbBool isLodAutoSubmitEnabled(void) const;
-    void setLodForcedLevel(int level);
-    void clearLodForcedLevel(void);
-    SbBool hasLodForcedLevel(void) const;
-    int getLodForcedLevel(void) const;
+    void setLodForcedCut(int cut);
+    void clearLodForcedCut(void);
+    SbBool hasLodForcedCut(void) const;
+    int getLodForcedCut(void) const;
     void setExactFullDetailBudget(uint64_t maxFaceCount,
 				  uint64_t maxPointCount);
     uint64_t getMaxExactFullDetailFaceCount(void) const;
@@ -824,6 +844,8 @@ private:
 	SbBool preserveScaleDemandRefresh = FALSE);
     void syncLodViewSignature(SbBool advanceOnChange = TRUE);
     void scheduleLodRefinementFrame(const char *reason);
+    void completePresentationBarrier(uint64_t elapsedNanoseconds);
+    void scheduleResidentGrowthReallocationIfReady(void);
     void armStableLodHeadroomProbeIfReady(void);
     size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BObolLodService *service, void *userData);

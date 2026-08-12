@@ -198,7 +198,7 @@ libBObol owns all BRL-CAD and view-policy decisions:
 * one thread-safe retained exact-coordinate asset shared by occurrences and
   views;
 * projected screen-error demand, hysteresis, interactive versus settled
-  policy, and per-occurrence active levels;
+  policy, and per-occurrence active cuts;
 * background loading, generation cancellation, result publication, aggregate
   consumer demand, and stable-view memory trimming;
 * deciding whether a BoT is closed and consistently oriented, and therefore
@@ -208,10 +208,10 @@ libBObol owns all BRL-CAD and view-policy decisions:
 
 * stable part and instance records;
 * GPU buffers and append-only uploads as a resident prefix grows;
-* a per-instance active PoP level;
+* a per-instance active PoP cut;
 * drawing the corresponding prefix in shaded and wire modes;
-* resnapping retained exact coordinates to the active 16-bit PoP
-  quantization level in the vertex shader (or the software fallback);
+* resnapping retained exact coordinates with the active cut's explicit
+  per-axis quantization in the vertex shader (or the software fallback);
 * using the identical active prefix and snapped coordinates for picking;
 * honoring, but never inferring, the producer's closed/oriented culling
   guarantee;
@@ -229,14 +229,14 @@ Keeping those controls disabled from libBObol was not a sufficient boundary:
 another caller or traversal state could reactivate the second authority.
 `SoCADViewState` now carries only non-geometric presentation policy, while the
 only CAD LoD input is the producer-authored retained prefix plus explicit
-`InstanceRecord::lodLevel`.
+`InstanceRecord::lodCut`.
 
 The resident prefix and active cut are separate state.  A camera change first
-retargets the view-local active level.  If the retained arrays already contain
+retargets the view-local active cut.  If the retained arrays already contain
 the requested point and face counts, this is a metadata-only update: there is
 no worker task, cache read, CPU mesh rebuild, or GPU upload.  This also allows
-a finer quantization level when adjacent hierarchy levels have identical
-prefix counts, because exact retained coordinates can be resnapped without new
+a finer quantization cut when adjacent hierarchy cuts have identical prefix
+counts, because exact retained coordinates can be resnapped without new
 geometry.  Only demand beyond the resident prefix schedules background growth.
 Growth appends array tails and GPU buffer tails; a full replacement is reserved
 for source invalidation or an explicit stable-view trim.
@@ -245,7 +245,7 @@ During interaction the target is deliberately coarse enough to preserve frame
 rate and resident finer cuts are not discarded.  After 150 ms of view
 stability, the controller requests the settled one-pixel-error cut.  After a
 longer stable interval, aggregate demand from every occurrence and view may
-trim CPU and GPU prefix tails with one level of headroom.  A later zoom can
+trim CPU and GPU prefix tails with one cut of headroom.  A later zoom can
 append the missing tail without rebuilding the prefix that remains resident.
 
 An AABB is the mandatory immediate fallback because it is cheap, deterministic,
@@ -452,8 +452,9 @@ tighter than the AABB, but mesh submission never waits for it.
 Mesh POP LoD payloads also live under `.DbDrawCache`, versioned by
 `mesh_lod.format`.  The caller-facing cache/loading API is now
 `bobol_mesh_lod_*`, so libBObol owns status, refresh, invalidation, manual
-mesh storage, view/level loading, active data/info copyout, and detail
-callbacks.  POP generation/loading are direct libBObol responsibilities, not
+mesh storage, strict explicit-cut loading, hierarchy metadata, active
+data/info copyout, and suffix streaming.  POP generation/loading are direct
+libBObol responsibilities, not
 librt responsibilities.  Multiple libBObol LoD handles on the same database
 cache share a per-cache LMDB context so one process does not open duplicate
 environments for the same `.DbDrawCache/mesh_lod.format` store.  Mesh LoD
@@ -476,20 +477,22 @@ Interactive PoP selection is based on transformed occurrence bounds projected
 through the actual camera view volume.  Entirely off-frustum occurrences
 submit no display payload.  Visible occurrences quantize projected diameter
 against a 4-pixel error target while the camera is changing, then refine
-against a 1-pixel target after 150 ms of view stability.  A 25-percent level
-hysteresis band prevents boundary oscillation.  Display loads are clamped to
-the cache's maximum PoP level and can never invoke the full-capacity/detail
-callback.  The terminal PoP cut is nevertheless the exact display mesh: it
+against a 1-pixel target after 150 ms of view stability.  A 25-percent
+screen-error hysteresis band prevents boundary oscillation.  Every cut records
+its cumulative population, resident bytes, per-axis quantization, and
+conservative object-space error.  Selection binary-searches that metadata;
+cut ordinals and cut count have no geometric meaning.  The terminal PoP cut
+is the exact display mesh: it
 draws every source face at the original, unsnapped coordinates.  A second
 "graduate to full mesh" display payload would therefore duplicate memory
-without adding fidelity.  Exact export, measurement, snapping, picking, and
-explicit forced-detail requests use the separate exact-level API because they
-need source-query semantics, not because terminal PoP is geometrically
-incomplete.
+without adding fidelity.  The display loader has no separate full-detail
+callback or magic exact ordinal; terminal exactness is ordinary cut metadata,
+and pixel-exact display policy normally stops before it when the view does not
+warrant every source face.
 
 Warm-cache realization does not synchronously choose a mesh from source-level
 view estimates.  It publishes the same standing box as a cold draw; the actual
-camera controller then issues the display-level request, which a warm cache can
+camera controller then issues the explicit-cut request, which a warm cache can
 satisfy immediately.  Cold and warm paths therefore share one selection rule
 and differ only in request latency.
 

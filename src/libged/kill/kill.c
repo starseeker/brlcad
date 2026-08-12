@@ -29,7 +29,7 @@
 
 #include "bu/cmd.h"
 #include "bu/getopt.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 

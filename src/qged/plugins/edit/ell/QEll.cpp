@@ -30,7 +30,7 @@
 #include <QGroupBox>
 #include "ged.h"
 #include "ged/draw.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 #include "rt/db_io.h"
 #include "rt/directory.h"
 #include "qtcad/QgGedEventBatch.h"
@@ -134,7 +134,7 @@ QEll::clear_labels()
     // can outlive an endpoint/controller replacement, in which case its old
     // value reference correctly becomes stale but the current label feature
     // still needs to be cleared.
-    labels_p = qged_edit_feature_label_ensure(m_ctx, "_ell_edit_labels", this);
+    labels_p = qged_edit_feature_label_ensure(m_ctx, "_ell_edit_labels");
     if (qged_edit_feature_ref_is_null(labels_p))
 	return;
     qged_edit_feature_labels_replace(labels_p, NULL, 0, NULL);
@@ -243,7 +243,7 @@ QEll::update_obj_wireframe()
 
     // Resolve the edit object fresh in case it was removed externally
     // (e.g. by a clear/zap command).
-    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL);
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", NULL);
     if (qged_edit_feature_ref_is_null(p))
 	return;
 
@@ -319,7 +319,7 @@ QEll::update_obj_wireframe()
     if (intern.idb_meth->ft_labels)
 	lcnt = intern.idb_meth->ft_labels(pl, 8, idn_mat, &intern, tol);
 
-    labels_p = qged_edit_feature_label_ensure(m_ctx, "_ell_edit_labels", this);
+    labels_p = qged_edit_feature_label_ensure(m_ctx, "_ell_edit_labels");
     if (!qged_edit_feature_ref_is_null(labels_p)) {
 	const unsigned char label_color[3] = {255, 255, 0};
 	qged_edit_feature_labels_replace(labels_p, pl, lcnt, label_color);
@@ -342,7 +342,7 @@ QEll::update_viewobj_name(const QString &)
 
     // Resolve/create the edit view feature.  Don't trust cached pointers here
     // since clear/zap may have removed it.
-    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL);
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", NULL);
     if (qged_edit_feature_ref_is_null(p))
 	return;
 

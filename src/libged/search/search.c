@@ -41,7 +41,7 @@
 #include "bu/sort.h"
 #include "bu/defines.h"
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../alphanum.h"
 #include "../ged_private.h"
@@ -616,7 +616,7 @@ ged_search_core(struct ged *gedp, int argc, const char *argv_orig[])
     }
 
     if (has_exec && clbk)
-	bulk_started = (ged_event_bulk_begin(gedp) > 0) ? 1 : 0;
+	bulk_started = (ged_event_bulk_begin(gedp) == GED_EVENT_OK) ? 1 : 0;
 
     /* If all searches are local, use all supplied paths in the search to
      * return one unique list of objects.  If one or more paths are non-local,

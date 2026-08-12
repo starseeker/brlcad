@@ -22,7 +22,7 @@
 #include "ged/scene.h"
 #include "ged/display_obol_private.h"
 #include "ged/draw.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "ged/view.h"
 #include "QgSceneSyncPrivate.h"
 #include "qtcad/QgView.h"
@@ -596,7 +596,7 @@ main(int argc, char **argv)
     if (visibleImage.isNull() || nonblack_pixel_count(visibleImage) < 10)
 	FAIL("Obol-synced GED draw should be visible through qtcad capture");
 
-    if (ged_event_notify_object_modified(gedp, "box.s", 1, NULL) < 0)
+    if (ged_event_notify_object_modified(gedp, "box.s", 1, NULL) != GED_EVENT_OK)
 	FAIL("GED stale-source event should refresh Obol source state");
     struct ged_scene_occurrence_info stale_record;
     if (!test_shape_record_by_path(gedp, "box.s", &stale_record))

@@ -35,7 +35,7 @@
 #include "vmath.h"
 
 #include "ged/draw.h"
-#include "../libged/ged_view_data_line_private.h"
+#include "ged/view_feature_batch.h"
 
 __BEGIN_DECLS
 
@@ -59,18 +59,17 @@ _tclcad_draw_view_data_lines_points_copy(struct ged_view_context *view_ctx,
     if (!pts_out)
 	return 0;
     *pts_out = NULL;
-    struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-    const int staged = strstr(feature_name, "_sdata_") ? 1 : 0;
-    if (!ged_view_data_line_state_get(view_ctx, staged, &state))
+    size_t point_count = 0;
+    if (!ged_view_feature_points_copy(view_ctx, feature_name, pts_out,
+	    &point_count))
 	return 0;
-    int count = _tclcad_draw_view_point_count(state.point_count);
-    if (!count || !state.points) {
-	ged_view_data_line_state_clear(&state);
+    int count = _tclcad_draw_view_point_count(point_count);
+    if (!count || !*pts_out) {
+	if (*pts_out)
+	    bu_free(*pts_out, "TclCAD draw-view line points");
+	*pts_out = NULL;
 	return 0;
     }
-    *pts_out = state.points;
-    state.points = NULL;
-    ged_view_data_line_state_clear(&state);
     return count;
 }
 
@@ -141,17 +140,18 @@ _tclcad_draw_view_data_lines_style_read(struct ged_view_context *view_ctx,
     if (visible_out)
 	*visible_out = 1;
 
-    struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-    if (!ged_view_data_line_state_get(view_ctx,
-	    strstr(feature_name, "_sdata_") ? 1 : 0, &state))
+    struct ged_view_feature_style style = ged_view_feature_style_default();
+    if (!ged_view_feature_style_get(view_ctx, feature_name, &style))
 	return;
-    if (color_out)
-	VMOVE(color_out, state.color);
+    if (color_out && style.color_valid) {
+	color_out[0] = style.color[0];
+	color_out[1] = style.color[1];
+	color_out[2] = style.color[2];
+    }
     if (lw_out)
-	*lw_out = state.line_width;
+	*lw_out = style.line_width;
     if (visible_out)
-	*visible_out = state.draw;
-    ged_view_data_line_state_clear(&state);
+	*visible_out = style.visible ? 1 : 0;
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC void
@@ -303,20 +303,43 @@ _tclcad_draw_view_data_lines_replace(struct ged_view_context *view_ctx,
     if (!view_ctx || !feature_name || !pts || npts < 2)
 	return;
 
-    const int staged = strstr(feature_name, "_sdata_") ? 1 : 0;
-    struct ged_view_data_line_state state = GED_VIEW_DATA_LINE_STATE_INIT;
-    state.draw = visible;
-    if (color)
-	VMOVE(state.color, color);
-    state.line_width = line_width;
-    state.points = (point_t *)bu_calloc((size_t)npts, sizeof(point_t),
-	"TclCAD moved line points");
-    state.point_count = (size_t)npts;
-    for (int i = 0; i < npts; i++)
-	VMOVE(state.points[i], pts[i]);
-    if (ged_view_data_line_state_replace(view_ctx, staged, &state))
-	(void)ged_view_data_line_state_publish(view_ctx, staged);
-    ged_view_data_line_state_clear(&state);
+    struct ged_view_feature_batch_desc desc =
+	ged_view_feature_batch_desc_default();
+    desc.owner_id = "ged-data-lines";
+    desc.owner_role = "user-overlay";
+    desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION;
+    desc.lifecycle = GED_VIEW_FEATURE_LIFECYCLE_PERSISTENT;
+    desc.overlay_order = GED_VIEW_FEATURE_OVERLAY_ORDER_MODEL;
+    desc.local = 1;
+    struct ged_view_feature_batch *batch =
+	ged_view_feature_batch_begin(view_ctx, &desc);
+    if (!batch)
+	return;
+
+    int *commands = (int *)bu_calloc((size_t)npts, sizeof(int),
+	"TclCAD moved line commands");
+    for (int i = 0; i + 1 < npts; i += 2) {
+	commands[i] = GED_DRAW_VIEW_LINE_MOVE;
+	commands[i + 1] = GED_DRAW_VIEW_LINE_DRAW;
+    }
+    struct ged_view_feature_style style = ged_view_feature_style_default();
+    style.visible = visible ? 1 : 0;
+    style.selectable = 1;
+    style.color_valid = 1;
+    if (color) {
+	style.color[0] = (unsigned char)color[0];
+	style.color[1] = (unsigned char)color[1];
+	style.color[2] = (unsigned char)color[2];
+    }
+    style.line_width = line_width;
+    if (!ged_view_feature_batch_line_set_replace(batch, feature_name,
+	    (const point_t *)pts, commands, (size_t)npts, &style)) {
+	ged_view_feature_batch_abort(batch);
+	bu_free(commands, "TclCAD moved line commands");
+	return;
+    }
+    bu_free(commands, "TclCAD moved line commands");
+    (void)ged_view_feature_batch_commit(batch);
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC void

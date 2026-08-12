@@ -32,7 +32,7 @@
 #include "bv.h"
 #include "../../librt/librt_private.h"
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 
 extern "C" int

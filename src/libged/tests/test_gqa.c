@@ -106,7 +106,7 @@ require_command_result_label(struct ged_view_context *view_ctx, const char *feat
 	const char *text_fragment)
 {
     struct ged_view_feature_summary feature_summary =
-	GED_VIEW_FEATURE_SUMMARY_INIT;
+	ged_view_feature_summary_default();
     if (!ged_view_feature_get_summary(view_ctx, feature_name,
 	    &feature_summary) ||
 	    !feature_summary.exists ||
@@ -147,7 +147,7 @@ static void
 require_command_result_feature(struct ged_view_context *view_ctx, const char *feature_name)
 {
     struct ged_view_feature_summary feature_summary =
-	GED_VIEW_FEATURE_SUMMARY_INIT;
+	ged_view_feature_summary_default();
     if (!ged_view_feature_get_summary(view_ctx, feature_name,
 	    &feature_summary) ||
 	    !feature_summary.exists ||

@@ -30,7 +30,7 @@
 
 #include "bu/cmd.h"
 #include "bu/str.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 #include "../ged_private.h"
 

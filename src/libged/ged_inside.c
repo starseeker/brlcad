@@ -38,7 +38,7 @@
 #include "raytrace.h"
 #include "rt/db4.h"
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "./ged_private.h"
 
 
@@ -1144,7 +1144,7 @@ ged_inside_internal(struct ged *gedp, struct rt_db_internal *ip, int argc, const
 	    return BRLCAD_ERROR;
     }
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
 
     /* Add to in-core directory */
     dp = db_diradd(gedp->dbip, newname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&ip->idb_type);

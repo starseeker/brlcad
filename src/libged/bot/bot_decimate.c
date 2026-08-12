@@ -32,7 +32,7 @@
 #include "bu/getopt.h"
 #include "rt/geom.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 int

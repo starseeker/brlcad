@@ -48,7 +48,7 @@
 #include "BObol/BViewLod.h"
 #include "bu/vls.h"
 #include "ged/scene.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 #include "qtcad/QgCanvasBase.h"
 
 #include "QgEdApp.h"
@@ -566,6 +566,12 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	convergence.memoryLimited ? true : false);
     sample.insert(QStringLiteral("lod_convergence_refinement_frame_pending"),
 	convergence.refinementFramePending ? true : false);
+    sample.insert(QStringLiteral("lod_active_generation"),
+	static_cast<qint64>(convergence.activeGeneration));
+    sample.insert(QStringLiteral("lod_submission_source_index"),
+	static_cast<qint64>(convergence.submissionSourceIndex));
+    sample.insert(QStringLiteral("lod_submission_entry_offset"),
+	static_cast<qint64>(convergence.submissionEntryOffset));
     sample.insert(QStringLiteral("lod_convergence_budget_calibration_pending"),
 	convergence.budgetCalibrationPending ? true : false);
     sample.insert(QStringLiteral(
@@ -574,6 +580,11 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     sample.insert(QStringLiteral(
 	"lod_convergence_point_proxy_calibration_pending"),
 	convergence.pointProxyCalibrationPending ? true : false);
+    sample.insert(QStringLiteral(
+	"lod_convergence_resident_growth_reallocation_pending"),
+	convergence.residentGrowthReallocationPending ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_publication_frame_pending"),
+	convergence.publicationFramePending ? true : false);
     sample.insert(QStringLiteral("lod_convergence_active_working_set_bytes"),
 	static_cast<qint64>(convergence.activeWorkingSetBytes));
     sample.insert(QStringLiteral("lod_convergence_peak_working_set_bytes"),
@@ -641,6 +652,30 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     double activeProgressiveCadFaces = 0.0;
     double activeProgressiveCadCullFaces = 0.0;
     double activeProgressiveCadPoints = 0.0;
+    qint64 projectedDemandCadPayloads = 0;
+    qint64 prominentCadPayloads = 0;
+    qint64 cadQualityFloorViolations = 0;
+    qint64 prominentCadQualityFloorViolations = 0;
+    double maximumCadProjectedErrorPixels = 0.0;
+    double maximumCadNormalizedError = 0.0;
+    double maximumCadVisualFootprint = 0.0;
+    double cadVisualImportanceDebt = 0.0;
+    struct CadVisualOutlier {
+	std::string sourcePath;
+	std::string sourceName;
+	std::string occurrenceKey;
+	int activeCut;
+	int residentCut;
+	int requestedCut;
+	double diameter;
+	double footprint;
+	double targetError;
+	double projectedError;
+	double normalizedError;
+	uint64_t faces;
+	uint64_t points;
+    };
+    std::vector<CadVisualOutlier> cadVisualOutliers;
     qint64 activeCadSubpixelProxyPoints = 0;
     qint64 visibleStructuralFallbackBoxes = 0;
     qint64 presentedCadFaces = 0;
@@ -663,10 +698,10 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     int cadIndirectStatusMin = INT_MAX;
     int cadIndirectStatusMax = -1;
     std::unordered_set<const SoCADAssembly *> sampledCadPresentations;
-    int activeProgressiveCadLevelMin = -1;
-    int activeProgressiveCadLevelMax = -1;
-    int requestedProgressiveCadLevelMin = -1;
-    int requestedProgressiveCadLevelMax = -1;
+    int activeProgressiveCadCutMin = -1;
+    int activeProgressiveCadCutMax = -1;
+    int requestedProgressiveCadCutMin = -1;
+    int requestedProgressiveCadCutMax = -1;
     uint64_t activeProgressiveCadOccurrenceHash = 0;
     QJsonArray supersededFallbackPaths;
     QJsonArray databaseSourceBounds;
@@ -797,6 +832,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    const bool valid = source->getSourceBounds(bounds) &&
 		!bounds.isEmpty();
 	    boundsSample.insert(QStringLiteral("valid"), valid);
+	    boundsSample.insert(QStringLiteral("exact"),
+		source->hasExactSourceBounds() ? true : false);
 	    if (valid) {
 		const SbVec3f minimum = bounds.getMin();
 		const SbVec3f maximum = bounds.getMax();
@@ -846,16 +883,110 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		static_cast<double>(payload->counts.faceCount);
 	    activeProgressiveCadPoints +=
 		static_cast<double>(payload->counts.pointCount);
-	    if (activeProgressiveCadLevelMin < 0 ||
-		payload->activeLevel < activeProgressiveCadLevelMin)
-		activeProgressiveCadLevelMin = payload->activeLevel;
-	    activeProgressiveCadLevelMax = std::max(
-		activeProgressiveCadLevelMax, payload->activeLevel);
-	    if (requestedProgressiveCadLevelMin < 0 ||
-		payload->requestedLevel < requestedProgressiveCadLevelMin)
-		requestedProgressiveCadLevelMin = payload->requestedLevel;
-	    requestedProgressiveCadLevelMax = std::max(
-		requestedProgressiveCadLevelMax, payload->requestedLevel);
+	    if (payload->activeCut >= 0 &&
+		std::isfinite(payload->projectedPixelDiameter) &&
+		payload->projectedPixelDiameter > 0.0f) {
+		projectedDemandCadPayloads++;
+		const double diameter = payload->projectedPixelDiameter;
+		const double area = std::max(0.0,
+		    static_cast<double>(payload->projectedPixelArea));
+		const double perimeter = std::max(0.0,
+		    static_cast<double>(payload->projectedPixelPerimeter));
+		const double footprint = std::max(std::sqrt(area),
+		    std::max(perimeter * 0.25, diameter * 0.25));
+		/* A cut is an opaque producer-authored schedule position, not an
+		 * isotropic quantization-bit count.  The canonical PoP schedule may
+		 * refine only one object axis at a cut and may retain an unchanged
+		 * topology population solely to improve coordinate precision.  Ask
+		 * the retained hierarchy for its actual object-error projection;
+		 * diameter / 2^cut was an obsolete fixed-level approximation that
+		 * falsely reported converged anisotropic meshes as several pixels
+		 * coarse and consequently corrupted the HUD and matrix oracle. */
+		const double projectedError =
+		    payload->progressiveMesh->projectedErrorAtCut(
+			payload->activeCut, diameter);
+		const double target = std::max(1.0,
+		    static_cast<double>(payload->targetPixelError));
+		const double normalizedError = projectedError / target;
+		const bool prominent = footprint >= 16.0;
+		const bool floorViolation = normalizedError > 3.0;
+		prominentCadPayloads += prominent ? 1 : 0;
+		cadQualityFloorViolations += floorViolation ? 1 : 0;
+		prominentCadQualityFloorViolations +=
+		    prominent && floorViolation ? 1 : 0;
+		maximumCadProjectedErrorPixels = std::max(
+		    maximumCadProjectedErrorPixels, projectedError);
+		maximumCadNormalizedError = std::max(
+		    maximumCadNormalizedError, normalizedError);
+		maximumCadVisualFootprint = std::max(
+		    maximumCadVisualFootprint, footprint);
+		cadVisualImportanceDebt += footprint *
+		    std::max(0.0, normalizedError - 1.0);
+		/* Keep a fixed-size, deterministic witness set for perceptual
+		 * regressions.  Scene aggregates revealed that Hubble wire drawing
+		 * was unfair, but not which occurrence retained a minimum cut.  A
+		 * bounded top-N avoids turning 50k/150k checkpoint telemetry into an
+		 * unbounded JSON or string-allocation workload. */
+		const char *occurrenceKey =
+		    payload->sourceInstanceKey.getString();
+		const auto ranksBefore = [](double errorA, double footprintA,
+			const char *keyA, const CadVisualOutlier &b) {
+		    if (errorA > b.normalizedError)
+			return true;
+		    if (errorA < b.normalizedError)
+			return false;
+		    if (footprintA > b.footprint)
+			return true;
+		    if (footprintA < b.footprint)
+			return false;
+		    return std::string(keyA ? keyA : "") < b.occurrenceKey;
+		};
+		const bool entersOutlierSet = cadVisualOutliers.size() < 16 ||
+		    ranksBefore(normalizedError, footprint, occurrenceKey,
+			cadVisualOutliers.back());
+		if (prominent && normalizedError > 1.0 && entersOutlierSet) {
+		    CadVisualOutlier outlier;
+		    outlier.sourcePath = payload->sourcePath.getString();
+		    outlier.sourceName = payload->sourceName.getString();
+		    outlier.occurrenceKey = occurrenceKey ? occurrenceKey : "";
+		    outlier.activeCut = payload->activeCut;
+		    outlier.residentCut = payload->residentCut;
+		    outlier.requestedCut = payload->requestedCut;
+		    outlier.diameter = diameter;
+		    outlier.footprint = footprint;
+		    outlier.targetError = target;
+		    outlier.projectedError = projectedError;
+		    outlier.normalizedError = normalizedError;
+		    outlier.faces = payload->counts.faceCount;
+		    outlier.points = payload->counts.pointCount;
+		    cadVisualOutliers.push_back(std::move(outlier));
+		    std::sort(cadVisualOutliers.begin(), cadVisualOutliers.end(),
+			[](const CadVisualOutlier &a,
+			    const CadVisualOutlier &b) {
+			    if (a.normalizedError > b.normalizedError)
+				return true;
+			    if (a.normalizedError < b.normalizedError)
+				return false;
+			    if (a.footprint > b.footprint)
+				return true;
+			    if (a.footprint < b.footprint)
+				return false;
+			    return a.occurrenceKey < b.occurrenceKey;
+			});
+		    if (cadVisualOutliers.size() > 16)
+			cadVisualOutliers.resize(16);
+		}
+	    }
+	    if (activeProgressiveCadCutMin < 0 ||
+		payload->activeCut < activeProgressiveCadCutMin)
+		activeProgressiveCadCutMin = payload->activeCut;
+	    activeProgressiveCadCutMax = std::max(
+		activeProgressiveCadCutMax, payload->activeCut);
+	    if (requestedProgressiveCadCutMin < 0 ||
+		payload->requestedCut < requestedProgressiveCadCutMin)
+		requestedProgressiveCadCutMin = payload->requestedCut;
+	    requestedProgressiveCadCutMax = std::max(
+		requestedProgressiveCadCutMax, payload->requestedCut);
 	}
 	if (collectDeepLodDiagnostics) {
 	    std::unordered_set<std::string> payloadKeys;
@@ -1022,6 +1153,55 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     }
     sample.insert(QStringLiteral("active_progressive_cad_payloads"),
 	activeProgressiveCadPayloads);
+    sample.insert(QStringLiteral("lod_projected_demand_cad_payloads"),
+	projectedDemandCadPayloads);
+    sample.insert(QStringLiteral("lod_prominent_cad_payloads"),
+	prominentCadPayloads);
+    sample.insert(QStringLiteral("lod_cad_quality_floor_violations"),
+	cadQualityFloorViolations);
+    sample.insert(
+	QStringLiteral("lod_prominent_cad_quality_floor_violations"),
+	prominentCadQualityFloorViolations);
+    sample.insert(QStringLiteral("lod_max_cad_projected_error_pixels"),
+	maximumCadProjectedErrorPixels);
+    sample.insert(QStringLiteral("lod_max_cad_normalized_error"),
+	maximumCadNormalizedError);
+    sample.insert(QStringLiteral("lod_max_cad_visual_footprint_pixels"),
+	maximumCadVisualFootprint);
+    sample.insert(QStringLiteral("lod_cad_visual_importance_debt"),
+	cadVisualImportanceDebt);
+    QJsonArray cadVisualOutlierSamples;
+    for (const CadVisualOutlier &outlier : cadVisualOutliers) {
+	QJsonObject item;
+	item.insert(QStringLiteral("source_path"),
+	    QString::fromStdString(outlier.sourcePath));
+	item.insert(QStringLiteral("source_name"),
+	    QString::fromStdString(outlier.sourceName));
+	item.insert(QStringLiteral("occurrence_key"),
+	    QString::fromStdString(outlier.occurrenceKey));
+	item.insert(QStringLiteral("active_cut"), outlier.activeCut);
+	item.insert(QStringLiteral("resident_cut"), outlier.residentCut);
+	item.insert(QStringLiteral("requested_cut"), outlier.requestedCut);
+	item.insert(QStringLiteral("projected_diameter_pixels"),
+	    outlier.diameter);
+	item.insert(QStringLiteral("visual_footprint_pixels"),
+	    outlier.footprint);
+	item.insert(QStringLiteral("target_error_pixels"),
+	    outlier.targetError);
+	item.insert(QStringLiteral("projected_error_pixels"),
+	    outlier.projectedError);
+	item.insert(QStringLiteral("normalized_error"),
+	    outlier.normalizedError);
+	item.insert(QStringLiteral("faces"),
+	    static_cast<qint64>(std::min<uint64_t>(outlier.faces,
+		static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+	item.insert(QStringLiteral("points"),
+	    static_cast<qint64>(std::min<uint64_t>(outlier.points,
+		static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+	cadVisualOutlierSamples.append(item);
+    }
+    sample.insert(QStringLiteral("lod_cad_visual_importance_outliers"),
+	cadVisualOutlierSamples);
     sample.insert(QStringLiteral("active_progressive_cad_occurrence_hash"),
 	QString::number(
 	    static_cast<qulonglong>(activeProgressiveCadOccurrenceHash), 16));
@@ -1073,16 +1253,23 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	cadIndirectStatusMin == INT_MAX ? -1 : cadIndirectStatusMin);
     sample.insert(QStringLiteral("cad_indirect_status_max"),
 	cadIndirectStatusMax);
-    sample.insert(QStringLiteral("active_progressive_cad_level_min"),
-	activeProgressiveCadLevelMin);
-    sample.insert(QStringLiteral("active_progressive_cad_level_max"),
-	activeProgressiveCadLevelMax);
-    sample.insert(QStringLiteral("requested_progressive_cad_level_min"),
-	requestedProgressiveCadLevelMin);
-    sample.insert(QStringLiteral("requested_progressive_cad_level_max"),
-	requestedProgressiveCadLevelMax);
+    sample.insert(QStringLiteral("active_progressive_cad_cut_min"),
+	activeProgressiveCadCutMin);
+    sample.insert(QStringLiteral("active_progressive_cad_cut_max"),
+	activeProgressiveCadCutMax);
+    sample.insert(QStringLiteral("requested_progressive_cad_cut_min"),
+	requestedProgressiveCadCutMin);
+    sample.insert(QStringLiteral("requested_progressive_cad_cut_max"),
+	requestedProgressiveCadCutMax);
     BObolLodService *service = controller->getLodService();
     if (service) {
+	sample.insert(QStringLiteral("lod_service_in_flight_tasks"),
+	    static_cast<qint64>(service->inFlightCount()));
+	sample.insert(QStringLiteral("lod_service_result_reservations"),
+	    static_cast<qint64>(
+		service->resultReservationCountForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_available_result_capacity"),
+	    static_cast<qint64>(service->availableResultTaskCapacity()));
 	sample.insert(QStringLiteral("lod_service_pending_tasks"),
 	    static_cast<qint64>(service->pendingTaskCountForDiagnostics()));
 	sample.insert(QStringLiteral("lod_service_active_requests"),

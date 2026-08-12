@@ -1186,7 +1186,7 @@ ged_view_selection_highlight_occurrence_set(
 {
     ged_draw_shape_ref ref = GED_DRAW_SHAPE_REF_NULL;
     if (!ged_scene_occurrence_ref_is_null(occurrence)) {
-	if (!gedp || occurrence.owner != (uintptr_t)gedp ||
+	if (!gedp || occurrence.owner != (uint64_t)(uintptr_t)gedp ||
 		occurrence.generation != 1 || !occurrence.id)
 	    return 0;
 	ref.token = (uintptr_t)occurrence.id;
@@ -1245,7 +1245,7 @@ ged_view_selection_add_occurrence(
 	struct ged_view_context **selection_view_ctx,
 	struct bu_vls *path)
 {
-    if (!gedp || occurrence.owner != (uintptr_t)gedp ||
+    if (!gedp || occurrence.owner != (uint64_t)(uintptr_t)gedp ||
 	occurrence.generation != 1 || !occurrence.id)
 	return 0;
     ged_draw_shape_ref ref;

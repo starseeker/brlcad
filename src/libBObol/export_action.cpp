@@ -1000,7 +1000,7 @@ SoBRLExportAction::appendSourceBackedFullDetailResult(
 			     sourceRequest.ghosted, sourceRequest.hiddenLine,
 			     sourceRequest.editEmphasis, sourceRequest.editIntentId,
 			     sourceRequest.editIntentRole, sourceRequest.lodPolicy,
-			     sourceRequest.lodAvailable, sourceRequest.lodActiveLevel,
+			     sourceRequest.lodAvailable, sourceRequest.lodActiveCut,
 			     result.counts.faceCount > 0 ?
 			     static_cast<uint32_t>(result.counts.faceCount) :
 			     static_cast<uint32_t>(faceCount),
@@ -1299,8 +1299,8 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 
 	const SbBool lodAvailable = useViewPayload ? TRUE :
 				    shape->lodAvailable.getValue();
-	const int lodActiveLevel = useViewPayload ? viewPayload->activeLevel :
-				   shape->lodActiveLevel.getValue();
+	const int lodActiveCut = useViewPayload ? viewPayload->activeCut :
+				 shape->lodActiveCut.getValue();
 	const uint32_t lodFaceCount = useViewPayload ?
 				      static_cast<uint32_t>(viewPayload->counts.faceCount > UINT32_MAX ?
 					  UINT32_MAX : viewPayload->counts.faceCount) :
@@ -1341,7 +1341,7 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 				     shape->editIntentRole.getValue(),
 				     shape->lodPolicy.getValue(),
 				     lodAvailable,
-				     lodActiveLevel,
+				     lodActiveCut,
 				     lodFaceCount,
 				     lodPointCount,
 				     lodOriginalPointCount,
@@ -1652,7 +1652,7 @@ SoBRLExportAction::appendTriangle(const SbString &path,
 				  const SbString &editIntentId,
 				  const SbString &editIntentRole,
 				  uint32_t lodPolicy,
-				  int lodAvailable, int lodActiveLevel, uint32_t lodFaceCount,
+				  int lodAvailable, int lodActiveCut, uint32_t lodFaceCount,
 				  uint32_t lodPointCount, uint32_t lodOriginalPointCount,
 				  uint32_t lodNormalCount, int lodHasSnappedPoints,
 				  int lodHasNormals, const SbVec3f &lodBoundsMin,
@@ -1693,7 +1693,7 @@ SoBRLExportAction::appendTriangle(const SbString &path,
     record.editIntentRole = editIntentRole;
     record.lodPolicy = lodPolicy;
     record.lodAvailable = lodAvailable ? 1 : 0;
-    record.lodActiveLevel = lodActiveLevel;
+    record.lodActiveCut = lodActiveCut;
     record.lodFaceCount = lodFaceCount;
     record.lodPointCount = lodPointCount;
     record.lodOriginalPointCount = lodOriginalPointCount;

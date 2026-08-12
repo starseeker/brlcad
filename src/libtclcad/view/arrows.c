@@ -43,7 +43,7 @@ tclcad_data_arrows_publish(struct ged_view_context *view_ctx,
     if (!view_ctx || !name || !state)
 	return 0;
 
-    struct ged_view_feature_batch_desc desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc desc = ged_view_feature_batch_desc_default();
     desc.owner_id = "tclcad-arrows";
     desc.owner_role = "tcl-overlay";
     desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_TCL_OVERLAY;
@@ -53,7 +53,7 @@ tclcad_data_arrows_publish(struct ged_view_context *view_ctx,
     if (!batch)
 	return 0;
 
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     style.visible = state->gdas_draw ? 1 : 0;
     style.selectable = 1;
     style.color_valid = 1;

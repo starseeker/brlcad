@@ -96,7 +96,7 @@ assert_feature_overlay(struct ged_view_context *view, const char *name,
 {
     nchecks++;
     struct ged_view_feature_summary summary =
-	GED_VIEW_FEATURE_SUMMARY_INIT;
+	ged_view_feature_summary_default();
     int copied = ged_view_feature_get_summary(view, name, &summary);
     if (!copied || !summary.exists || summary.is_overlay != expected) {
 	bu_log("FAIL [%s:%d] %s overlay expected %d, got exists=%d overlay=%d\n",
@@ -804,7 +804,7 @@ main(int argc, const char **argv)
     ASSERT(result_str(gedp).find("No view feature named no_such_feature") !=
 	std::string::npos);
 
-    struct ged_view_feature_batch_desc result_desc = GED_VIEW_FEATURE_BATCH_DESC_INIT;
+    struct ged_view_feature_batch_desc result_desc = ged_view_feature_batch_desc_default();
     result_desc.owner_id = "view-command-test";
     result_desc.owner_role = "command";
     result_desc.run_id = "run-1";
@@ -893,7 +893,21 @@ main(int argc, const char **argv)
     ASSERT(result_str(gedp).find("4") != std::string::npos);
     const char *dl6[] = {"data_lines", "draw", "0", NULL};
     ASSERT_VIEW_OK(gedp, 3, dl6);
-    ASSERT(ged_view_feature_exists(views[0], "_tcl_data_lines") == 0);
+    ASSERT(ged_view_feature_exists(views[0], "_tcl_data_lines") == 1);
+    ASSERT(ged_view_feature_visible(views[0], "_tcl_data_lines") == 0);
+    ASSERT_FEATURE_POINT_COUNT(views[0], "_tcl_data_lines", 2);
+    const char *dl7[] = {"data_lines", "draw", "1", NULL};
+    ASSERT_VIEW_OK(gedp, 3, dl7);
+    ASSERT(ged_view_feature_visible(views[0], "_tcl_data_lines") == 1);
+    ASSERT_FEATURE_POINT_COUNT(views[0], "_tcl_data_lines", 2);
+    const char *dl8[] = {"data_lines", "points", "", NULL};
+    ASSERT_VIEW_OK(gedp, 3, dl8);
+    ASSERT(ged_view_feature_exists(views[0], "_tcl_data_lines") == 1);
+    ASSERT(ged_view_feature_visible(views[0], "_tcl_data_lines") == 1);
+    ASSERT_FEATURE_POINT_COUNT(views[0], "_tcl_data_lines", 0);
+    const char *dl9[] = {"data_lines", "color", NULL};
+    ASSERT_VIEW_OK(gedp, 2, dl9);
+    ASSERT(result_str(gedp).find("11 22 33") != std::string::npos);
 
     const char *a0[] = {"view", "annotation", "axes", "create", "u_axes", "1", "2", "3", NULL};
     ASSERT_VIEW_OK(gedp, 8, a0);

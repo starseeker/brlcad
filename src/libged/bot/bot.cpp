@@ -49,7 +49,7 @@
 #include "bg/pca.h"
 #include "bg/trimesh.h"
 #include "ged/draw.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/geom.h"
 #include "wdb.h"
 
@@ -721,7 +721,7 @@ _bot_cmd_plot(void *bs, int argc, const char **argv)
 
     struct bu_vls nroot = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&nroot, "bot::%s", "_bot_face_plot");
-    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     style.color_valid = 1;
     VSET(style.color, rgb[0], rgb[1], rgb[2]);
     (void)_ged_view_feature_batch_publish_line_set(gb->gedp,
@@ -881,7 +881,7 @@ _bot_cmd_split(void *bs, int argc, const char **argv)
 	goto bot_split_done;
     }
 
-    event_depth = ged_event_batch_begin(gb->gedp);
+    event_depth = ged_event_batch_begin(gb->gedp) == GED_EVENT_OK;
 
     // Two or more triangle sets - time for new bots
     for (int i = 0; i < split_cnt; i++) {

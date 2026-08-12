@@ -62,6 +62,7 @@ set(LIBBOBOL_ADVANCED_HEADERS
   BMeshLodSubmitAction.h
   BMeshResidencyAction.h
   BMeshShape.h
+  BNavigationGizmo.h
   BPerformance.h
   BRealizeAction.h
   BViewAttachment.h

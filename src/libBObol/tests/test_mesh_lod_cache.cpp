@@ -34,6 +34,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -45,42 +46,47 @@ fastf_equal(fastf_t a, fastf_t b)
 
 struct mesh_lod_suffix_test_data {
     const struct BObolMeshLodHierarchyInfo *hierarchy = NULL;
-    int nextLevel = -1;
+    int nextCut = -1;
     size_t cumulativePoints = 0;
     size_t streamedPoints = 0;
     size_t streamedFaces = 0;
 };
 
 static int
-mesh_lod_suffix_test_callback(int level, const point_t *points,
-	size_t pointCount, const int *faces, size_t faceCount,
+mesh_lod_suffix_test_callback(int cut, const point_t *points,
+	size_t pointCount, const uint32_t *faces, size_t faceCount,
 	const vect_t *normals, size_t normalCount, void *callbackData)
 {
     mesh_lod_suffix_test_data *test =
 	static_cast<mesh_lod_suffix_test_data *>(callbackData);
-    if (!test || !test->hierarchy || level != test->nextLevel ||
-	level <= 0 || level >= BOBOL_MESH_LOD_LEVEL_COUNT)
+    if (!test || !test->hierarchy || cut != test->nextCut ||
+	cut <= 0 || cut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
 	return 0;
     const BObolMeshLodHierarchyInfo &hierarchy = *test->hierarchy;
-    if (hierarchy.point_count[level] < hierarchy.point_count[level - 1] ||
-	hierarchy.face_count[level] < hierarchy.face_count[level - 1] ||
-	pointCount != hierarchy.point_count[level] -
-	    hierarchy.point_count[level - 1] ||
-	faceCount != hierarchy.face_count[level] -
-	    hierarchy.face_count[level - 1] ||
+    if (hierarchy.cuts[cut].point_count < hierarchy.cuts[cut - 1].point_count ||
+	hierarchy.cuts[cut].face_count < hierarchy.cuts[cut - 1].face_count ||
+	pointCount != hierarchy.cuts[cut].point_count -
+	    hierarchy.cuts[cut - 1].point_count ||
+	faceCount != hierarchy.cuts[cut].face_count -
+	    hierarchy.cuts[cut - 1].face_count ||
 	(pointCount && !points) || (faceCount && !faces) ||
 	(normalCount && !normals) ||
+	(pointCount && reinterpret_cast<uintptr_t>(points) %
+	    alignof(fastf_t) != 0) ||
+	(faceCount && reinterpret_cast<uintptr_t>(faces) %
+	    alignof(uint32_t) != 0) ||
+	(normalCount && reinterpret_cast<uintptr_t>(normals) %
+	    alignof(fastf_t) != 0) ||
 	normalCount != (hierarchy.has_normals ? faceCount * 3 : 0))
 	return 0;
     test->cumulativePoints += pointCount;
     for (size_t index = 0; index < faceCount * 3; ++index) {
-	if (faces[index] < 0 ||
-	    static_cast<size_t>(faces[index]) >= test->cumulativePoints)
+	if (static_cast<size_t>(faces[index]) >= test->cumulativePoints)
 	    return 0;
     }
     test->streamedPoints += pointCount;
     test->streamedFaces += faceCount;
-    test->nextLevel++;
+    test->nextCut++;
     return 1;
 }
 
@@ -94,7 +100,7 @@ mesh_signed_six_volume(const struct BObolMeshLodData &data)
 	data.points_orig[static_cast<size_t>(data.faces[0])];
     long double volume = 0.0L;
     for (size_t faceIndex = 0; faceIndex < data.face_count; ++faceIndex) {
-	const int *face = &data.faces[faceIndex * 3];
+	const uint32_t *face = &data.faces[faceIndex * 3];
 	long double a[3];
 	long double b[3];
 	long double c[3];
@@ -149,7 +155,7 @@ check_mesh_lod_payload(const char *label,
 
     if (!bobol_mesh_lod_info_get(lod, &info) ||
 	!bobol_mesh_lod_hierarchy_info_get(lod, &hierarchy) ||
-	info.active_level < 0 ||
+	info.active_cut < 0 ||
 	info.face_count != data.face_count ||
 	info.point_count != data.point_count ||
 	info.point_orig_count != data.point_orig_count ||
@@ -175,183 +181,37 @@ check_mesh_lod_payload(const char *label,
     return 0;
 }
 
-struct mesh_lod_detail_test_data {
-    const fastf_t *vertices;
-    const int *faces;
-    const fastf_t *normals;
-    size_t point_count;
-    size_t point_orig_count;
-    size_t face_count;
-    size_t normal_count;
-    int setup_count;
-    int setup_return;
-    int clear_count;
-    int free_count;
-};
-
 static int
-mesh_lod_detail_setup_cb(struct BObolMeshLodDetail *detail, void *cbData)
+first_available_cut(struct BObolMeshLod *lod)
 {
-    struct mesh_lod_detail_test_data *data =
-	    static_cast<struct mesh_lod_detail_test_data *>(cbData);
-
-    if (!detail || !data)
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    if (!bobol_mesh_lod_hierarchy_info_get(lod, &hierarchy))
 	return -1;
-
-    bobol_mesh_lod_detail_init(detail);
-    detail->faces = data->faces;
-    detail->face_count = data->face_count;
-    detail->points = reinterpret_cast<const point_t *>(data->vertices);
-    detail->point_count = data->point_count;
-    detail->points_orig = reinterpret_cast<const point_t *>(data->vertices);
-    detail->point_orig_count =
-	data->point_orig_count ? data->point_orig_count : data->point_count;
-    detail->normals = reinterpret_cast<const vect_t *>(data->normals);
-    detail->normal_count = data->normal_count;
-    data->setup_count++;
-    return data->setup_return;
-}
-
-static int
-mesh_lod_detail_clear_cb(void *cbData)
-{
-    struct mesh_lod_detail_test_data *data =
-	    static_cast<struct mesh_lod_detail_test_data *>(cbData);
-
-    if (data)
-	data->clear_count++;
-    return 0;
-}
-
-static int
-mesh_lod_detail_free_cb(void *cbData)
-{
-    struct mesh_lod_detail_test_data *data =
-	    static_cast<struct mesh_lod_detail_test_data *>(cbData);
-
-    if (data)
-	data->free_count++;
-    return 0;
-}
-
-static int
-first_available_level(struct BObolMeshLod *lod)
-{
-    for (int level = 0; level < 16; level++) {
-	if (bobol_mesh_lod_load_level(lod, level, 0) < 0)
+    for (int cut = hierarchy.min_cut; cut <= hierarchy.max_cut; ++cut) {
+	if (bobol_mesh_lod_load_cut(lod, cut, 0) < 0)
 	    return -1;
 	if (bobol_mesh_lod_has_active_data(lod))
-	    return level;
+	    return cut;
     }
     return -1;
 }
 
 static int
-test_detail_callbacks(struct db_i *dbip,
-		      const char *name,
-		      const fastf_t *vertices,
-		      const int *faces,
-		      const fastf_t *normals,
-		      size_t vertexCount,
-		      size_t faceCount)
+load_terminal_cut(struct BObolMeshLod *lod)
 {
-    struct BObolMeshLodData detailData;
-    struct BObolMeshLodInfo detailInfo = BOBOL_MESH_LOD_INFO_INIT;
-    struct BObolMeshLod *lod = bobol_mesh_lod_get(dbip, name);
-    struct mesh_lod_detail_test_data original;
-    struct mesh_lod_detail_test_data replacement;
-    struct mesh_lod_detail_test_data failing;
-    int ret = 0;
-
-    std::memset(&original, 0, sizeof(original));
-    std::memset(&replacement, 0, sizeof(replacement));
-    std::memset(&failing, 0, sizeof(failing));
-
-    original.vertices = vertices;
-    original.faces = faces;
-    original.normals = normals;
-    original.point_count = vertexCount;
-    original.face_count = faceCount;
-    original.normal_count = faceCount * 3;
-
-    replacement = original;
-    failing = original;
-    failing.setup_return = -1;
-
-    if (!lod || first_available_level(lod) < 0 ||
-	!bobol_mesh_lod_detail_callbacks_set(lod,
-		mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
-		mesh_lod_detail_free_cb, &original) ||
-	!bobol_mesh_lod_detail_callbacks_set(lod,
-		mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
-		mesh_lod_detail_free_cb, &replacement) ||
-	original.free_count != 1 ||
-	!bobol_mesh_lod_has_active_data(lod) ||
-	!bobol_mesh_lod_data_get(lod, &detailData) ||
-	replacement.setup_count != 0) {
-	printf("FAIL: mesh lod detail callback replacement preserved POP data\n");
-	ret = 1;
-	goto cleanup;
-    }
-
-    if (bobol_mesh_lod_load_display_level(lod, 100, 0) < 0 ||
-	!bobol_mesh_lod_has_active_data(lod) ||
-	!bobol_mesh_lod_data_get(lod, &detailData) ||
-	replacement.setup_count != 0) {
-	printf("FAIL: mesh lod display request materialized full-detail payload\n");
-	ret = 1;
-	goto cleanup;
-    }
-
-    if (bobol_mesh_lod_load_level(lod, 100, 0) < 0 ||
-	!bobol_mesh_lod_data_get(lod, &detailData) ||
-	!bobol_mesh_lod_info_get(lod, &detailInfo) ||
-	detailData.normal_count != faceCount * 3 ||
-	detailInfo.normal_count != detailData.normal_count ||
-	!detailInfo.has_normals || !detailData.normals ||
-	replacement.setup_count != 1) {
-	printf("FAIL: mesh lod detail callback full-detail payload\n");
-	ret = 1;
-	goto cleanup;
-    }
-
-    if (!bobol_mesh_lod_detail_callbacks_set(lod,
-	    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
-	    mesh_lod_detail_free_cb, &failing) ||
-	replacement.free_count != 1 ||
-	bobol_mesh_lod_current_level(lod) != -1 ||
-	bobol_mesh_lod_has_active_data(lod) ||
-	bobol_mesh_lod_data_get(lod, &detailData)) {
-	printf("FAIL: mesh lod detail callback replacement invalidation\n");
-	ret = 1;
-	goto cleanup;
-    }
-
-    if (bobol_mesh_lod_load_level(lod, 100, 1) >= 0 ||
-	bobol_mesh_lod_current_level(lod) != -1 ||
-	bobol_mesh_lod_has_active_data(lod) ||
-	bobol_mesh_lod_data_get(lod, &detailData) ||
-	failing.setup_count != 1 ||
-	failing.clear_count < 1) {
-	printf("FAIL: mesh lod detail callback failure clearing\n");
-	ret = 1;
-	goto cleanup;
-    }
-
-cleanup:
-    if (lod)
-	bobol_mesh_lod_destroy(lod);
-    if (!ret && failing.free_count != 1) {
-	printf("FAIL: mesh lod detail callback free\n");
-	ret = 1;
-    }
-    return ret;
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    if (!bobol_mesh_lod_hierarchy_info_get(lod, &hierarchy))
+	return -1;
+    return bobol_mesh_lod_load_cut(lod, hierarchy.max_cut, 0);
 }
 
 int
 main(int argc, char *argv[])
 {
     const char *objname = "bobol_lod_bot";
+    const char *duplicateObjname = "bobol_lod_duplicate_bot";
     const char *solidCwObjname = "bobol_lod_solid_cw_bot";
     const char *solidUnorientedObjname =
 	"bobol_lod_solid_unoriented_bot";
@@ -371,10 +231,13 @@ main(int argc, char *argv[])
     int *faces = NULL;
     struct db_i *dbip = NULL;
     struct BObolMeshLod *lod = NULL;
-    int memshrinkLevel = -1;
+    int memshrinkCut = -1;
+    unsigned long long sharedCacheKey = 0;
     int ret = 0;
     struct BObolMeshLodCacheStatus cacheStatus =
 	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    struct BObolMeshLodHierarchyInfo lodHierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 
     bu_setprogname(argv[0]);
 
@@ -467,6 +330,12 @@ main(int argc, char *argv[])
 	if (mk_bot(wdbp, objname, RT_BOT_SURFACE, RT_BOT_CCW, 0,
 		   vertexCount, faceCount, vertices, faces, NULL, NULL) < 0) {
 	    printf("FAIL: mesh lod mk_bot\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	if (mk_bot(wdbp, duplicateObjname, RT_BOT_SURFACE, RT_BOT_CCW, 0,
+		   vertexCount, faceCount, vertices, faces, NULL, NULL) < 0) {
+	    printf("FAIL: duplicate mesh lod mk_bot\n");
 	    ret = 1;
 	    goto cleanup;
 	}
@@ -579,8 +448,8 @@ main(int argc, char *argv[])
 	    !cacheStatus.generated_cache_entry || !cacheStatus.cache_key ||
 	    !bobol_mesh_lod_hierarchy_info_get(
 		opened, &openedHierarchy) ||
-	    bobol_mesh_lod_current_level(opened) !=
-		openedHierarchy.min_level ||
+	    bobol_mesh_lod_current_cut(opened) !=
+		openedHierarchy.min_cut ||
 	    !bobol_mesh_lod_data_get(opened, &openedData) ||
 	    !openedData.face_count || !openedData.point_count) {
 	    printf("FAIL: mesh lod staged BoT open refresh status\n");
@@ -591,8 +460,10 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
+	sharedCacheKey = cacheStatus.cache_key;
 	rt_db_free_internal(&intern);
-	if (bobol_mesh_lod_load_resident_level(opened, 15, 0) != 15 ||
+	if (bobol_mesh_lod_load_resident_cut(
+		opened, openedHierarchy.max_cut, 0) != openedHierarchy.max_cut ||
 	    !bobol_mesh_lod_data_get(opened, &openedData) ||
 	    openedData.face_count != static_cast<size_t>(faceCount) ||
 	    openedData.point_count != static_cast<size_t>(vertexCount)) {
@@ -601,6 +472,40 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
+	bobol_mesh_lod_destroy(opened);
+    }
+
+    {
+	/* A different source name with identical content must reuse the complete
+	 * immutable hierarchy.  The old marker-only shortcut returned an
+	 * uninitialized state here and made cold generate-and-open fail. */
+	struct directory *dp = db_lookup(dbip, duplicateObjname, LOOKUP_QUIET);
+	struct rt_db_internal intern;
+	struct BObolMeshLod *opened = NULL;
+	struct BObolMeshLodHierarchyInfo hierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	struct BObolMeshLodData data;
+	RT_DB_INTERNAL_INIT(&intern);
+	if (!dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
+	    intern.idb_type != ID_BOT || !intern.idb_ptr ||
+	    !(opened = bobol_mesh_lod_cache_refresh_from_bot_open(
+		dbip, duplicateObjname,
+		static_cast<const struct rt_bot_internal *>(intern.idb_ptr),
+		&cacheStatus)) ||
+	    cacheStatus.cache_key != sharedCacheKey ||
+	    !bobol_mesh_lod_hierarchy_info_get(opened, &hierarchy) ||
+	    bobol_mesh_lod_current_cut(opened) != hierarchy.min_cut ||
+	    !bobol_mesh_lod_data_get(opened, &data) ||
+	    !data.face_count || !data.point_count) {
+	    printf("FAIL: content-identical mesh hierarchy reuse\n");
+	    if (opened)
+		bobol_mesh_lod_destroy(opened);
+	    if (intern.idb_ptr)
+		rt_db_free_internal(&intern);
+	    ret = 1;
+	    goto cleanup;
+	}
+	rt_db_free_internal(&intern);
 	bobol_mesh_lod_destroy(opened);
     }
 
@@ -619,8 +524,14 @@ main(int argc, char *argv[])
 	struct BObolMeshLod *cachedPrefix =
 	    bobol_mesh_lod_get_cached_prefix(dbip, cacheStatus.cache_key);
 	struct BObolMeshLodData cachedData;
+	struct BObolMeshLodHierarchyInfo cachedHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 	if (!cachedPrefix ||
-	    bobol_mesh_lod_load_resident_level(cachedPrefix, 15, 0) != 15 ||
+	    !bobol_mesh_lod_hierarchy_info_get(
+		cachedPrefix, &cachedHierarchy) ||
+	    bobol_mesh_lod_load_resident_cut(
+		cachedPrefix, cachedHierarchy.max_cut, 0) !=
+		cachedHierarchy.max_cut ||
 	    !bobol_mesh_lod_data_get(cachedPrefix, &cachedData) ||
 	    cachedData.face_count != static_cast<size_t>(faceCount) ||
 	    cachedData.point_count != static_cast<size_t>(vertexCount)) {
@@ -638,6 +549,114 @@ main(int argc, char *argv[])
 	printf("FAIL: mesh lod get\n");
 	ret = 1;
 	goto cleanup;
+    }
+
+    if (!bobol_mesh_lod_hierarchy_info_get(lod, &lodHierarchy)) {
+	printf("FAIL: mesh lod hierarchy metadata\n");
+	ret = 1;
+	goto cleanup;
+    }
+    {
+	bool validSchedule = lodHierarchy.cut_count ==
+		BOBOL_MESH_LOD_CUT_COUNT_MAX &&
+	    lodHierarchy.min_cut >= 0 &&
+	    lodHierarchy.max_cut == BOBOL_MESH_LOD_CUT_COUNT_MAX - 1;
+	uint64_t priorFaces = 0;
+	uint64_t priorPoints = 0;
+	uint64_t priorBytes = 0;
+	double priorError = std::numeric_limits<double>::infinity();
+	for (uint32_t cut = 0; validSchedule &&
+		cut < lodHierarchy.cut_count; ++cut) {
+	    const BObolMeshLodCutInfo &info = lodHierarchy.cuts[cut];
+	    int refinedAxes = 0;
+	    for (int axis = 0; axis < 3; ++axis) {
+		const uint8_t bits = info.quantization_bits[axis];
+		if (bits < 1 || bits > BOBOL_MESH_LOD_QUANTIZATION_BITS)
+		    validSchedule = false;
+		if (cut > 0) {
+		    const uint8_t prior = lodHierarchy.cuts[cut - 1].
+			quantization_bits[axis];
+		    if (bits < prior || bits > prior + 1)
+			validSchedule = false;
+		    if (bits == prior + 1)
+			++refinedAxes;
+		}
+	    }
+	    if ((cut > 0 && refinedAxes != 1) ||
+		info.face_count < priorFaces ||
+		info.point_count < priorPoints ||
+		info.resident_bytes < priorBytes ||
+		!std::isfinite(info.object_error) ||
+		info.object_error < 0.0 ||
+		info.object_error > priorError ||
+		(info.exact != 0) !=
+		    (cut + 1 == lodHierarchy.cut_count))
+		validSchedule = false;
+	    priorFaces = info.face_count;
+	    priorPoints = info.point_count;
+	    priorBytes = info.resident_bytes;
+	    priorError = info.object_error;
+	}
+	const BObolMeshLodCutInfo &terminal =
+	    lodHierarchy.cuts[lodHierarchy.max_cut];
+	for (int axis = 0; axis < 3; ++axis)
+	    if (terminal.quantization_bits[axis] !=
+		    BOBOL_MESH_LOD_QUANTIZATION_BITS)
+		validSchedule = false;
+	if (!validSchedule || terminal.face_count !=
+		static_cast<uint64_t>(faceCount) ||
+	    terminal.point_count != static_cast<uint64_t>(vertexCount) ||
+	    terminal.object_error > 0.0) {
+	    printf("FAIL: mesh lod admissible cut schedule contract\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	double extentSquared = 0.0;
+	for (int axis = 0; axis < 3; ++axis) {
+	    const double extent = lodHierarchy.quantization_max[axis] -
+		lodHierarchy.quantization_min[axis];
+	    extentSquared += extent * extent;
+	}
+	const double extent = std::sqrt(extentSquared);
+	const double projectedDiameter = 800.0;
+	for (int cut = lodHierarchy.min_cut;
+	     extent > 0.0 && cut <= lodHierarchy.max_cut; ++cut) {
+	    const double error = lodHierarchy.cuts[cut].object_error;
+	    if (!(error > 0.0))
+		continue;
+	    const double targetPixelError =
+		error * projectedDiameter / extent * 1.0000001;
+	    const int selected = bobol_mesh_lod_select_cut(
+		&lodHierarchy, projectedDiameter, targetPixelError);
+	    if (selected < lodHierarchy.min_cut || selected > cut ||
+		lodHierarchy.cuts[selected].object_error >
+		    error * 1.0000002) {
+		printf("FAIL: PoP cut selector violated error bound "
+		       "(candidate=%d selected=%d)\n", cut, selected);
+		ret = 1;
+		goto cleanup;
+	    }
+	}
+	int priorSelected = lodHierarchy.min_cut;
+	for (double diameter = 1.0; diameter <= 4096.0; diameter *= 2.0) {
+	    const int selected = bobol_mesh_lod_select_cut(
+		&lodHierarchy, diameter, 1.0);
+	    if (selected < priorSelected || selected > lodHierarchy.max_cut) {
+		printf("FAIL: PoP cut selection was not monotonic with projected "
+		       "size (%d -> %d)\n", priorSelected, selected);
+		ret = 1;
+		goto cleanup;
+	    }
+	    priorSelected = selected;
+	}
+	if (bobol_mesh_lod_select_cut(NULL, 1.0, 1.0) >= 0 ||
+	    bobol_mesh_lod_select_cut(&lodHierarchy, 0.0, 1.0) >= 0 ||
+	    bobol_mesh_lod_select_cut(&lodHierarchy, 1.0, 0.0) >= 0) {
+	    printf("FAIL: PoP cut selector accepted invalid input\n");
+	    ret = 1;
+	    goto cleanup;
+	}
     }
 
     {
@@ -664,8 +683,9 @@ main(int argc, char *argv[])
 		    if (!reader) {
 			getFailures.fetch_add(1, std::memory_order_relaxed);
 		    } else {
-			if (bobol_mesh_lod_load_display_level(
-				reader, 100, 0) != 15) {
+			if (bobol_mesh_lod_load_cut(
+				reader, lodHierarchy.max_cut, 0) !=
+				lodHierarchy.max_cut) {
 			    loadFailures.fetch_add(1,
 				std::memory_order_relaxed);
 			} else if (!bobol_mesh_lod_data_get(
@@ -708,26 +728,26 @@ main(int argc, char *argv[])
 
     {
 	struct BObolMeshLodData data;
-	const int minimumLevel =
-	    bobol_mesh_lod_load_display_level(lod, 0, 0);
-	if (minimumLevel < 0 || !bobol_mesh_lod_data_get(lod, &data) ||
+	const int minimumCut =
+	    bobol_mesh_lod_load_cut(lod, lodHierarchy.min_cut, 0);
+	if (minimumCut < 0 || !bobol_mesh_lod_data_get(lod, &data) ||
 	    data.face_count == 0) {
-	    printf("FAIL: mesh lod minimum display level was empty\n");
+	    printf("FAIL: mesh lod minimum display cut was empty\n");
 	    ret = 1;
 	    goto cleanup;
 	}
 
-	const int terminalLevel =
-	    bobol_mesh_lod_load_display_level(lod, 100, 0);
-	if (terminalLevel != 15 ||
+	const int terminalCut =
+	    bobol_mesh_lod_load_cut(lod, lodHierarchy.max_cut, 0);
+	if (terminalCut != lodHierarchy.max_cut ||
 	    !bobol_mesh_lod_data_get(lod, &data) ||
 	    data.face_count != static_cast<size_t>(faceCount) ||
 	    data.point_count != data.point_orig_count ||
 	    memcmp(data.points, data.points_orig,
 		data.point_count * sizeof(point_t)) != 0) {
 	    printf("FAIL: mesh lod terminal PoP cut was not exact and complete "
-		   "(level=%d faces=%zu/%d points=%zu/%zu)\n",
-		   terminalLevel, data.face_count, faceCount,
+		   "(cut=%d faces=%zu/%d points=%zu/%zu)\n",
+		   terminalCut, data.face_count, faceCount,
 		   data.point_count, data.point_orig_count);
 	    ret = 1;
 	    goto cleanup;
@@ -743,34 +763,34 @@ main(int argc, char *argv[])
 	struct BObolMeshLodHierarchyInfo suffixHierarchy =
 	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 	if (!bobol_mesh_lod_hierarchy_info_get(lod, &suffixHierarchy) ||
-	    suffixHierarchy.max_level <= suffixHierarchy.min_level) {
+	    suffixHierarchy.max_cut <= suffixHierarchy.min_cut) {
 	    printf("FAIL: mesh lod suffix hierarchy unavailable\n");
 	    ret = 1;
 	    goto cleanup;
 	}
-	const int levelBeforeSuffix = bobol_mesh_lod_current_level(lod);
+	const int cutBeforeSuffix = bobol_mesh_lod_current_cut(lod);
 	bobol_mesh_lod_memshrink(lod);
 	mesh_lod_suffix_test_data suffixTest;
 	suffixTest.hierarchy = &suffixHierarchy;
-	suffixTest.nextLevel = suffixHierarchy.min_level + 1;
+	suffixTest.nextCut = suffixHierarchy.min_cut + 1;
 	suffixTest.cumulativePoints =
-	    suffixHierarchy.point_count[suffixHierarchy.min_level];
+	    suffixHierarchy.cuts[suffixHierarchy.min_cut].point_count;
 	if (bobol_mesh_lod_resident_prefix_bytes(lod) != 0 ||
 	    !bobol_mesh_lod_read_resident_suffix(lod,
-		suffixHierarchy.min_level, suffixHierarchy.max_level,
+		suffixHierarchy.min_cut, suffixHierarchy.max_cut,
 		mesh_lod_suffix_test_callback, &suffixTest) ||
-	    suffixTest.nextLevel != suffixHierarchy.max_level + 1 ||
+	    suffixTest.nextCut != suffixHierarchy.max_cut + 1 ||
 	    suffixTest.streamedPoints !=
-		suffixHierarchy.point_count[suffixHierarchy.max_level] -
-		    suffixHierarchy.point_count[suffixHierarchy.min_level] ||
+		suffixHierarchy.cuts[suffixHierarchy.max_cut].point_count -
+		    suffixHierarchy.cuts[suffixHierarchy.min_cut].point_count ||
 	    suffixTest.streamedFaces !=
-		suffixHierarchy.face_count[suffixHierarchy.max_level] -
-		    suffixHierarchy.face_count[suffixHierarchy.min_level] ||
-	    bobol_mesh_lod_current_level(lod) != levelBeforeSuffix ||
+		suffixHierarchy.cuts[suffixHierarchy.max_cut].face_count -
+		    suffixHierarchy.cuts[suffixHierarchy.min_cut].face_count ||
+	    bobol_mesh_lod_current_cut(lod) != cutBeforeSuffix ||
 	    bobol_mesh_lod_resident_prefix_bytes(lod) != 0) {
 	    printf("FAIL: mesh lod suffix stream materialized or omitted cache "
-		   "records (levels=%d/%d points=%zu faces=%zu bytes=%zu)\n",
-		   suffixTest.nextLevel, suffixHierarchy.max_level + 1,
+		   "records (cuts=%d/%d points=%zu faces=%zu bytes=%zu)\n",
+		   suffixTest.nextCut, suffixHierarchy.max_cut + 1,
 		   suffixTest.streamedPoints, suffixTest.streamedFaces,
 		   bobol_mesh_lod_resident_prefix_bytes(lod));
 	    ret = 1;
@@ -801,13 +821,13 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
-	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; level++) {
-	    if (baseHierarchy.face_count[level] !=
-		    translatedHierarchy.face_count[level] ||
-		baseHierarchy.point_count[level] !=
-		    translatedHierarchy.point_count[level]) {
+	for (int cut = 0; cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut) {
+	    if (baseHierarchy.cuts[cut].face_count !=
+		    translatedHierarchy.cuts[cut].face_count ||
+		baseHierarchy.cuts[cut].point_count !=
+		    translatedHierarchy.cuts[cut].point_count) {
 		printf("FAIL: PoP hierarchy depends on absolute model coordinates "
-		       "at level %d\n", level);
+		       "at cut %d\n", cut);
 		ret = 1;
 		break;
 	    }
@@ -827,7 +847,9 @@ main(int argc, char *argv[])
 	    }
 	}
 	if (!ret &&
-	    (bobol_mesh_lod_load_display_level(translatedLod, 100, 0) != 15 ||
+	    (bobol_mesh_lod_load_cut(
+		translatedLod, translatedHierarchy.max_cut, 0) !=
+		translatedHierarchy.max_cut ||
 	     !bobol_mesh_lod_data_get(translatedLod, &translatedData) ||
 	     translatedData.face_count != static_cast<size_t>(faceCount) ||
 	     translatedData.point_count !=
@@ -849,7 +871,7 @@ main(int argc, char *argv[])
 	if (bobol_mesh_lod_cache_refresh(dbip, solidCwObjname,
 		&cacheStatus) != BRLCAD_OK ||
 	    !(solidLod = bobol_mesh_lod_get(dbip, solidCwObjname)) ||
-	    bobol_mesh_lod_load_display_level(solidLod, 100, 0) < 0 ||
+	    load_terminal_cut(solidLod) < 0 ||
 	    !bobol_mesh_lod_info_get(solidLod, &solidInfo) ||
 	    !solidInfo.shaded_cull_backfaces ||
 	    solidInfo.face_count != 4) {
@@ -870,7 +892,7 @@ main(int argc, char *argv[])
 		&cacheStatus) != BRLCAD_OK ||
 	    !(solidLod = bobol_mesh_lod_get(
 		dbip, solidUnorientedObjname)) ||
-	    bobol_mesh_lod_load_display_level(solidLod, 100, 0) < 0 ||
+	    load_terminal_cut(solidLod) < 0 ||
 	    !bobol_mesh_lod_info_get(solidLod, &solidInfo) ||
 	    !bobol_mesh_lod_data_get(solidLod, &solidData) ||
 	    solidInfo.shaded_cull_backfaces ||
@@ -897,7 +919,7 @@ main(int argc, char *argv[])
 		&cacheStatus) != BRLCAD_OK ||
 	    !(brokenLod = bobol_mesh_lod_get(
 		dbip, brokenUnorientedObjname)) ||
-	    bobol_mesh_lod_load_display_level(brokenLod, 100, 0) < 0 ||
+	    load_terminal_cut(brokenLod) < 0 ||
 	    !bobol_mesh_lod_info_get(brokenLod, &brokenInfo) ||
 	    brokenInfo.shaded_cull_backfaces) {
 	    printf("FAIL: inconsistently wound unoriented BoT was marked "
@@ -910,18 +932,16 @@ main(int argc, char *argv[])
 	bobol_mesh_lod_destroy(brokenLod);
     }
 
-    memshrinkLevel = first_available_level(lod);
-    if (memshrinkLevel < 0) {
-	printf("FAIL: mesh lod level data\n");
+    memshrinkCut = first_available_cut(lod);
+    if (memshrinkCut < 0) {
+	printf("FAIL: mesh lod cut data\n");
 	ret = 1;
 	goto cleanup;
     }
 
     {
-	struct bv_view_info info = BV_VIEW_INFO_INIT;
-	info.size = 0.01;
-	if (bobol_mesh_lod_load_view(lod, &info, 0) < 0 ||
-	    check_mesh_lod_payload("mesh lod view", lod,
+	if (bobol_mesh_lod_load_cut(lod, lodHierarchy.min_cut, 0) < 0 ||
+	    check_mesh_lod_payload("mesh lod explicit cut", lod,
 				   static_cast<size_t>(faceCount),
 				   static_cast<size_t>(vertexCount), 0)) {
 	    ret = 1;
@@ -947,7 +967,7 @@ main(int argc, char *argv[])
 	    goto cleanup;
 	}
 	meshLod = bobol_mesh_lod_get(dbip, meshObjname);
-	if (!meshLod || first_available_level(meshLod) < 0 ||
+	if (!meshLod || first_available_cut(meshLod) < 0 ||
 	    check_mesh_lod_payload("mesh lod generated mesh", meshLod,
 				   static_cast<size_t>(faceCount),
 				   static_cast<size_t>(vertexCount), 1)) {
@@ -984,8 +1004,8 @@ main(int argc, char *argv[])
 		dbip, 424242ULL)) ||
 	    !(secondVariant = bobol_mesh_lod_get_cached_prefix(
 		dbip, 525252ULL)) ||
-	    bobol_mesh_lod_load_display_level(firstVariant, 100, 0) < 0 ||
-	    bobol_mesh_lod_load_display_level(secondVariant, 100, 0) < 0) {
+	    load_terminal_cut(firstVariant) < 0 ||
+	    load_terminal_cut(secondVariant) < 0) {
 	    printf("FAIL: mesh lod representation variants did not coexist\n");
 	    if (firstVariant)
 		bobol_mesh_lod_destroy(firstVariant);
@@ -998,20 +1018,13 @@ main(int argc, char *argv[])
 	bobol_mesh_lod_destroy(secondVariant);
     }
 
-    if (test_detail_callbacks(dbip, meshObjname, vertices, faces,
-			      detailNormals, static_cast<size_t>(vertexCount),
-			      static_cast<size_t>(faceCount))) {
-	ret = 1;
-	goto cleanup;
-    }
-
     {
-	int activeLevel;
+	int activeCut;
 	struct BObolMeshLodData shrinkData;
 	struct BObolMeshLodInfo shrinkInfo = BOBOL_MESH_LOD_INFO_INIT;
-	if (bobol_mesh_lod_load_level(lod, memshrinkLevel, 0) !=
-	    memshrinkLevel ||
-	    (activeLevel = bobol_mesh_lod_current_level(lod)) < 0 ||
+	if (bobol_mesh_lod_load_cut(lod, memshrinkCut, 0) !=
+	    memshrinkCut ||
+	    (activeCut = bobol_mesh_lod_current_cut(lod)) < 0 ||
 	    !bobol_mesh_lod_has_active_data(lod)) {
 	    printf("FAIL: mesh lod memshrink setup\n");
 	    ret = 1;
@@ -1022,11 +1035,11 @@ main(int argc, char *argv[])
 	const size_t prefixBytesBefore =
 	    bobol_mesh_lod_resident_prefix_bytes(lod);
 	bobol_mesh_lod_memshrink(lod);
-	if (bobol_mesh_lod_current_level(lod) != activeLevel ||
+	if (bobol_mesh_lod_current_cut(lod) != activeCut ||
 	    bobol_mesh_lod_has_active_data(lod) ||
 	    bobol_mesh_lod_data_get(lod, &shrinkData) ||
 	    bobol_mesh_lod_info_get(lod, &shrinkInfo) ||
-	    shrinkInfo.active_level != activeLevel ||
+	    shrinkInfo.active_cut != activeCut ||
 	    !prefixBytesBefore ||
 	    bobol_mesh_lod_resident_prefix_bytes(lod) != 0 ||
 	    bobol_mesh_lod_resident_bytes(lod) >= residentBytesBefore) {
@@ -1034,7 +1047,7 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
-	if (bobol_mesh_lod_load_level(lod, activeLevel, 0) != activeLevel ||
+	if (bobol_mesh_lod_load_cut(lod, activeCut, 0) != activeCut ||
 	    check_mesh_lod_payload("mesh lod reload after memshrink", lod,
 				   static_cast<size_t>(faceCount),
 				   static_cast<size_t>(vertexCount), 0) ||
@@ -1056,7 +1069,7 @@ main(int argc, char *argv[])
     }
 
     lod = bobol_mesh_lod_get(dbip, objname);
-    if (!lod || bobol_mesh_lod_load_view(lod, NULL, 0) < 0 ||
+    if (!lod || first_available_cut(lod) < 0 ||
 	check_mesh_lod_payload("mesh lod reopen", lod,
 			       static_cast<size_t>(faceCount),
 			       static_cast<size_t>(vertexCount), 0)) {
@@ -1093,7 +1106,7 @@ main(int argc, char *argv[])
     }
 
     lod = bobol_mesh_lod_get(dbip, objname);
-    if (!lod || bobol_mesh_lod_load_view(lod, NULL, 0) < 0 ||
+    if (!lod || first_available_cut(lod) < 0 ||
 	check_mesh_lod_payload("mesh lod update after invalidate", lod,
 			       static_cast<size_t>(faceCount),
 			       static_cast<size_t>(vertexCount), 0)) {
@@ -1104,24 +1117,17 @@ main(int argc, char *argv[])
 
     {
 	struct BObolMeshLodData nullData;
-	struct BObolMeshLodDetail nullDetail;
 	struct BObolMeshLodInfo nullInfo;
-	nullInfo.active_level = 7;
-	nullDetail.face_count = 42;
+	nullInfo.active_cut = 7;
 	bobol_mesh_lod_cache_status_init(&cacheStatus);
 	cacheStatus.cache_key = 99;
 	bobol_mesh_lod_cache_status_init(&cacheStatus);
-	bobol_mesh_lod_detail_init(&nullDetail);
-	if (bobol_mesh_lod_load_level(NULL, 0, 0) >= 0 ||
-	    bobol_mesh_lod_load_view(NULL, NULL, 0) >= 0 ||
-	    bobol_mesh_lod_current_level(NULL) >= 0 ||
+	if (bobol_mesh_lod_load_cut(NULL, 0, 0) >= 0 ||
+	    bobol_mesh_lod_current_cut(NULL) >= 0 ||
 	    bobol_mesh_lod_has_active_data(NULL) ||
 	    bobol_mesh_lod_data_get(NULL, &nullData) ||
 	    bobol_mesh_lod_info_get(NULL, &nullInfo) ||
-	    nullDetail.face_count ||
-	    bobol_mesh_lod_detail_callbacks_set(NULL, NULL, NULL, NULL,
-		    NULL) ||
-	    nullInfo.active_level != -1 ||
+	    nullInfo.active_cut != -1 ||
 	    cacheStatus.cache_key ||
 	    bobol_mesh_lod_cache_status(NULL, objname,
 					  &cacheStatus) != BRLCAD_ERROR ||
@@ -1134,7 +1140,6 @@ main(int argc, char *argv[])
 	    printf("FAIL: mesh lod null handling\n");
 	    ret = 1;
 	}
-	bobol_mesh_lod_detail_callbacks_clear(NULL);
 	bobol_mesh_lod_memshrink(NULL);
     }
 

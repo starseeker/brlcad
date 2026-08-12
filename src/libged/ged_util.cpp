@@ -62,7 +62,7 @@
 #include "imgstream/fbserv.h"
 #include "ged.h"
 #include "ged/draw.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BExportAction.h"
 #include "BObol/BSceneController.h"
@@ -70,6 +70,109 @@
 #include <Inventor/SoViewport.h>
 #include "./ged_bobol_private.hpp"
 #include "./ged_private.h"
+
+extern "C" int
+_ged_cmd_namespace_has_child(const char *namespace_path, const char *child)
+{
+    if (!namespace_path || !namespace_path[0] || !child || !child[0])
+	return 0;
+
+    ged_ensure_initialized();
+    const std::string prefix = std::string(namespace_path) + "." + child;
+    struct NamespaceMatch {
+	const std::string *prefix;
+	int found;
+    } match = {&prefix, 0};
+    auto visitor = [](const char *name, bu_plugin_cmd_impl, void *data) -> int {
+	NamespaceMatch *m = static_cast<NamespaceMatch *>(data);
+	if (!name || !m || !m->prefix)
+	    return 0;
+	const size_t length = m->prefix->size();
+	if (strlen(name) >= length &&
+	    bu_strncmp(name, m->prefix->c_str(), length) == 0 &&
+	    (name[length] == '\0' || name[length] == '.')) {
+	    m->found = 1;
+	    return 1;
+	}
+	return 0;
+    };
+    bu_plugin_cmd_foreach(visitor, &match);
+    return match.found;
+}
+
+extern "C" int
+_ged_cmd_namespace_exec(struct ged *gedp, const char *namespace_path,
+	int argc, const char **argv, int *result)
+{
+    if (!gedp || !namespace_path || !namespace_path[0] || argc < 1 ||
+	!argv || !result)
+	return 0;
+
+    std::vector<std::string> candidates(static_cast<size_t>(argc));
+    std::string candidate(namespace_path);
+    for (int i = 0; i < argc; i++) {
+	if (!argv[i] || !argv[i][0])
+	    break;
+	candidate += ".";
+	candidate += argv[i];
+	candidates[static_cast<size_t>(i)] = candidate;
+    }
+
+    for (int consumed = argc; consumed > 0; consumed--) {
+	const std::string &command = candidates[static_cast<size_t>(consumed - 1)];
+	if (command.empty() || !ged_cmd_exists(command.c_str()))
+	    continue;
+	std::vector<const char *> command_argv;
+	command_argv.reserve(static_cast<size_t>(argc - consumed + 1));
+	command_argv.push_back(command.c_str());
+	for (int i = consumed; i < argc; i++)
+	    command_argv.push_back(argv[i]);
+	*result = ged_exec(gedp, static_cast<int>(command_argv.size()),
+	    command_argv.data());
+	return 1;
+    }
+    return 0;
+}
+
+extern "C" void
+_ged_cmd_namespace_help(struct ged *gedp, const char *namespace_path,
+	const struct bu_cmdtab *builtins)
+{
+    if (!gedp || !namespace_path || !namespace_path[0])
+	return;
+
+    ged_ensure_initialized();
+    const std::string prefix = std::string(namespace_path) + ".";
+    struct NamespaceChildren {
+	const std::string *prefix;
+	std::set<std::string> names;
+    } children = {&prefix, std::set<std::string>()};
+    auto visitor = [](const char *name, bu_plugin_cmd_impl, void *data) -> int {
+	NamespaceChildren *c = static_cast<NamespaceChildren *>(data);
+	if (!name || !c || !c->prefix ||
+	    bu_strncmp(name, c->prefix->c_str(), c->prefix->size()) != 0)
+	    return 0;
+	const char *child = name + c->prefix->size();
+	const char *dot = strchr(child, '.');
+	if (child[0])
+	    c->names.insert(dot ? std::string(child, dot - child) :
+		std::string(child));
+	return 0;
+    };
+    bu_plugin_cmd_foreach(visitor, &children);
+
+    int heading = 0;
+    for (std::set<std::string>::const_iterator it = children.names.begin();
+	it != children.names.end(); ++it) {
+	if (builtins && bu_cmd_valid(builtins, it->c_str()) == BRLCAD_OK)
+	    continue;
+	if (!heading) {
+	    bu_vls_printf(gedp->ged_result_str, "\nPlugin subcommands:\n");
+	    heading = 1;
+	}
+	bu_vls_printf(gedp->ged_result_str, "  %s\n", it->c_str());
+    }
+}
 
 extern "C" ged_draw_group_ref
 ged_scene_root_group_ref(struct ged *gedp)
@@ -1725,7 +1828,7 @@ ged_uplot_feature_layers_create(const char *name,
     for (size_t i = 0; i < ctx->layer_count; i++) {
 	if (!ctx->layers[i].count)
 	    continue;
-	struct ged_view_feature_line_layer init = GED_VIEW_FEATURE_LINE_LAYER_INIT;
+	struct ged_view_feature_line_layer init = ged_view_feature_line_layer_default();
 	layers[idx] = init;
 	layers[idx].points = (const point_t *)ctx->layers[i].points;
 	layers[idx].commands = ctx->layers[i].commands;
@@ -1951,7 +2054,7 @@ ged_uplot_publish_view_feature_batch(struct ged *gedp,
 	return BRLCAD_ERROR;
 
     struct ged_view_feature_batch_desc desc =
-	GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	ged_view_feature_batch_desc_default();
     desc.owner_id = owner_id;
     desc.owner_role = owner_role;
     desc.generation = generation;
@@ -2052,7 +2155,7 @@ _ged_view_feature_batch_publish_line_layer_builder(struct ged *gedp,
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (view_ctx) {
 	struct ged_view_feature_batch_desc desc =
-	    GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	    ged_view_feature_batch_desc_default();
 	desc.owner_id = owner_id;
 	desc.owner_role = owner_role;
 	desc.generation = generation;
@@ -2064,7 +2167,7 @@ _ged_view_feature_batch_publish_line_layer_builder(struct ged *gedp,
 			remove_prefix);
 
 	    struct ged_view_feature_style style =
-		GED_VIEW_FEATURE_STYLE_INIT;
+		ged_view_feature_style_default();
 	    style.visible = 1;
 	    style.selectable = 1;
 	    const int published =
@@ -2139,7 +2242,7 @@ _ged_view_feature_batch_publish_line_set(struct ged *gedp,
 	return BRLCAD_ERROR;
 
     struct ged_view_feature_style publish_style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     if (style)
 	publish_style = *style;
     if (publish_style.visible < 0)
@@ -2148,7 +2251,7 @@ _ged_view_feature_batch_publish_line_set(struct ged *gedp,
 	publish_style.selectable = 1;
 
     struct ged_view_feature_batch_desc desc =
-	GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	ged_view_feature_batch_desc_default();
     desc.owner_id = owner_id;
     desc.owner_role = owner_role;
     desc.generation = generation;
@@ -2233,7 +2336,7 @@ _ged_view_feature_batch_publish_indexed_face_set(struct ged *gedp,
 	return BRLCAD_ERROR;
 
     struct ged_view_feature_style publish_style =
-	GED_VIEW_FEATURE_STYLE_INIT;
+	ged_view_feature_style_default();
     if (style)
 	publish_style = *style;
     if (publish_style.visible < 0)
@@ -2242,7 +2345,7 @@ _ged_view_feature_batch_publish_indexed_face_set(struct ged *gedp,
 	publish_style.selectable = 1;
 
     struct ged_view_feature_batch_desc desc =
-	GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	ged_view_feature_batch_desc_default();
     desc.owner_id = owner_id;
     desc.owner_role = owner_role;
     desc.generation = generation;
@@ -2329,7 +2432,7 @@ _ged_view_feature_batch_remove_prefix(struct ged *gedp,
 	return BRLCAD_ERROR;
 
     struct ged_view_feature_batch_desc desc =
-	GED_VIEW_FEATURE_BATCH_DESC_INIT;
+	ged_view_feature_batch_desc_default();
     desc.owner_id = owner_id;
     desc.owner_role = owner_role;
     desc.generation = generation;
@@ -3600,7 +3703,7 @@ addmembers:
     comb->tree = (union tree *)db_mkgift_tree(tree_list, node_count);
 
     /* and finally, write it out */
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
 	bu_vls_printf(gedp->ged_result_str, "Database write failure.");
 	if (event_batch_opened)

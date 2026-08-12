@@ -96,7 +96,12 @@ bobol_lod_render_cost_units(const BObolLodCounts &counts, int drawMode,
      * floor for every occurrence. */
     cost = lod_render_cost_add(cost, occurrenceCount, 64);
     cost = lod_render_cost_add(cost, counts.pointCount, 1, 4);
-    cost = lod_render_cost_add(cost, counts.normalCount, 1, 8);
+    /* A retained asset may own authored normals while a wire-only view never
+     * submits or reads them.  Charge channel work, not dormant asset data. */
+    if (drawMode == BOBOL_LOD_DRAW_SHADED ||
+	drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
+	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE)
+	cost = lod_render_cost_add(cost, counts.normalCount, 1, 8);
 
     const uint64_t lines = counts.lineCount ? counts.lineCount :
 	(counts.faceCount > UINT64_MAX / 3 ? UINT64_MAX :
@@ -172,14 +177,14 @@ BObolLodCacheKey::isValid(void) const
 }
 
 BObolLodResidentDemand::BObolLodResidentDemand(void) :
-    level(-1),
+    cut(-1),
     channelMask(0)
 {
 }
 
 BObolLodResidentCompaction::BObolLodResidentCompaction(void) :
     preparedCadGeometryRevision(0),
-    residentLevel(-1),
+    residentCut(-1),
     channelMask(0),
     priorBytes(0),
     residentBytes(0)
@@ -199,7 +204,7 @@ BObolLodGeometryHandle::clear(void)
     providerVersion = "";
     cacheKey.clear();
     providerToken = 0;
-    activeLevel = -1;
+    activeCut = -1;
     borrowed = FALSE;
 }
 
@@ -244,14 +249,15 @@ struct BObolLodProgressiveMeshGeneration {
      * build it directly from a cache prefix and the scene adopts this exact
      * immutable allocation. */
     std::shared_ptr<const Obol::PartGeometry> shadedGeometry;
-    std::array<size_t, BOBOL_MESH_LOD_LEVEL_COUNT> pointCount = {};
-    std::array<size_t, BOBOL_MESH_LOD_LEVEL_COUNT> faceCount = {};
+    std::array<size_t, BOBOL_MESH_LOD_CUT_COUNT_MAX> pointCount = {};
+    std::array<size_t, BOBOL_MESH_LOD_CUT_COUNT_MAX> faceCount = {};
+    std::vector<BObolMeshLodCutInfo> cuts;
     SbBox3f bounds;
     SbVec3f quantizationMinimum;
     SbVec3f quantizationMaximum;
-    int minimumLevel = -1;
-    int maximumLevel = -1;
-    int residentLevel = -1;
+    int minimumCut = -1;
+    int maximumCut = -1;
+    int residentCut = -1;
     uint64_t revision = 0;
     SbBool shadedCullBackfaces = FALSE;
     /*
@@ -306,16 +312,16 @@ progressive_generation_store(
 }
 
 static int
-progressive_level_clamp(
-    const BObolLodProgressiveMeshGeneration *generation, int level)
+progressive_cut_clamp(
+    const BObolLodProgressiveMeshGeneration *generation, int cut)
 {
-    if (!generation || generation->residentLevel < 0)
+    if (!generation || generation->residentCut < 0)
 	return -1;
-    if (level < generation->minimumLevel)
-	level = generation->minimumLevel;
-    if (level > generation->residentLevel)
-	level = generation->residentLevel;
-    return level;
+    if (cut < generation->minimumCut)
+	cut = generation->minimumCut;
+    if (cut > generation->residentCut)
+	cut = generation->residentCut;
+    return cut;
 }
 
 static bool
@@ -373,25 +379,31 @@ static bool
 bobol_lod_hierarchy_valid(
     const struct BObolMeshLodData &data,
     const struct BObolMeshLodHierarchyInfo &hierarchy,
-    int residentLevel)
+    int residentCut)
 {
-    if (hierarchy.min_level < 0 ||
-	hierarchy.max_level < hierarchy.min_level ||
-	hierarchy.max_level >= BOBOL_MESH_LOD_LEVEL_COUNT ||
-	residentLevel < hierarchy.min_level ||
-	residentLevel > hierarchy.max_level ||
-	hierarchy.resident_level != residentLevel ||
+    if (hierarchy.min_cut < 0 ||
+	hierarchy.max_cut < hierarchy.min_cut ||
+	hierarchy.max_cut >= BOBOL_MESH_LOD_CUT_COUNT_MAX ||
+	hierarchy.cut_count !=
+	    static_cast<uint32_t>(hierarchy.max_cut + 1) ||
+	residentCut < hierarchy.min_cut ||
+	residentCut > hierarchy.max_cut ||
+	hierarchy.resident_cut != residentCut ||
 	!bobol_lod_valid_bounds(data.bmin, data.bmax) ||
 	!bobol_lod_valid_bounds(hierarchy.quantization_min,
 	    hierarchy.quantization_max))
 	return false;
 
-    size_t priorPoints = 0;
-    size_t priorFaces = 0;
-    for (int level = 0; level <= hierarchy.max_level; ++level) {
-	const size_t points = hierarchy.point_count[level];
-	const size_t faces = hierarchy.face_count[level];
+    uint64_t priorPoints = 0;
+    uint64_t priorFaces = 0;
+    double priorError = std::numeric_limits<double>::infinity();
+    for (int cut = 0; cut <= hierarchy.max_cut; ++cut) {
+	const uint64_t points = hierarchy.cuts[cut].point_count;
+	const uint64_t faces = hierarchy.cuts[cut].face_count;
 	if (points < priorPoints || faces < priorFaces ||
+	    !std::isfinite(hierarchy.cuts[cut].object_error) ||
+	    hierarchy.cuts[cut].object_error < 0.0 ||
+	    hierarchy.cuts[cut].object_error > priorError ||
 	    points > static_cast<size_t>(
 		std::numeric_limits<int32_t>::max()) ||
 	    faces > static_cast<size_t>(
@@ -399,21 +411,22 @@ bobol_lod_hierarchy_valid(
 	    return false;
 	priorPoints = points;
 	priorFaces = faces;
+	priorError = hierarchy.cuts[cut].object_error;
+	for (int axis = 0; axis < 3; ++axis) {
+	    const uint8_t bits =
+		hierarchy.cuts[cut].quantization_bits[axis];
+	    if (bits < 1 || bits > BOBOL_MESH_LOD_QUANTIZATION_BITS ||
+		(cut > 0 && bits <
+		 hierarchy.cuts[cut - 1].quantization_bits[axis]))
+		return false;
+	}
     }
-    for (int level = hierarchy.max_level + 1;
-	 level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	const size_t points = hierarchy.point_count[level];
-	const size_t faces = hierarchy.face_count[level];
-	/* Public fixtures historically leave post-terminal entries zero, while
-	 * cache-backed hierarchyInfo reports the final cumulative totals.  Both
-	 * are unambiguous; mixed or changing post-terminal counts are not. */
-	if ((points && points != priorPoints) ||
-	    (faces && faces != priorFaces))
-	    return false;
-    }
-    return hierarchy.point_count[residentLevel] ==
+    if (!hierarchy.cuts[hierarchy.max_cut].exact ||
+	hierarchy.cuts[hierarchy.max_cut].object_error > 0.0)
+	return false;
+    return hierarchy.cuts[residentCut].point_count ==
 	data.point_orig_count &&
-	hierarchy.face_count[residentLevel] == data.face_count &&
+	hierarchy.cuts[residentCut].face_count == data.face_count &&
 	data.point_orig_count > 0 && data.face_count > 0;
 }
 
@@ -421,23 +434,33 @@ static std::shared_ptr<BObolLodProgressiveMeshGeneration>
 progressive_generation_from_data(
     const struct BObolMeshLodData &data,
     const struct BObolMeshLodHierarchyInfo &hierarchy,
-    int residentLevel, SbBool shadedCullBackfaces,
+    int residentCut, SbBool shadedCullBackfaces,
     uint64_t revision, uint64_t progressiveLineage)
 {
-    if (!bobol_lod_hierarchy_valid(data, hierarchy, residentLevel))
+    if (!bobol_lod_hierarchy_valid(data, hierarchy, residentCut))
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
     std::shared_ptr<BObolLodProgressiveMeshGeneration> generation(
 	new BObolLodProgressiveMeshGeneration);
     std::shared_ptr<Obol::PartGeometry> geometry(
 	new Obol::PartGeometry);
     Obol::TriMesh mesh;
-    for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	generation->pointCount[level] = hierarchy.point_count[level];
-	generation->faceCount[level] = hierarchy.face_count[level];
+    generation->cuts.assign(hierarchy.cuts,
+	hierarchy.cuts + hierarchy.cut_count);
+    mesh.progressiveCuts.resize(hierarchy.cut_count);
+    for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
+	generation->pointCount[cut] = static_cast<size_t>(
+	    hierarchy.cuts[cut].point_count);
+	generation->faceCount[cut] = static_cast<size_t>(
+	    hierarchy.cuts[cut].face_count);
+	mesh.progressiveCuts[cut].quantization = {
+	    hierarchy.cuts[cut].quantization_bits[X],
+	    hierarchy.cuts[cut].quantization_bits[Y],
+	    hierarchy.cuts[cut].quantization_bits[Z]
+	};
     }
-    generation->minimumLevel = hierarchy.min_level;
-    generation->maximumLevel = hierarchy.max_level;
-    generation->residentLevel = residentLevel;
+    generation->minimumCut = hierarchy.min_cut;
+    generation->maximumCut = hierarchy.max_cut;
+    generation->residentCut = residentCut;
     generation->bounds = SbBox3f(
 	SbVec3f(static_cast<float>(data.bmin[X]),
 		static_cast<float>(data.bmin[Y]),
@@ -472,35 +495,34 @@ progressive_generation_from_data(
 	    std::numeric_limits<size_t>::max() / 3)
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
     const size_t indexCount = data.face_count * 3;
-    std::array<size_t, BOBOL_MESH_LOD_LEVEL_COUNT> levelIndexCount = {};
-    for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	const size_t count = generation->faceCount[level] >
+    std::array<size_t, BOBOL_MESH_LOD_CUT_COUNT_MAX> cutIndexCount = {};
+    for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
+	const size_t count = generation->faceCount[cut] >
 		std::numeric_limits<size_t>::max() / 3 ? indexCount :
-	    generation->faceCount[level] * 3;
-	levelIndexCount[level] = std::min(count, indexCount);
-	mesh.progressiveIndexCount[level] = static_cast<uint32_t>(
-	    std::min(levelIndexCount[level],
+	    generation->faceCount[cut] * 3;
+	cutIndexCount[cut] = std::min(count, indexCount);
+	mesh.progressiveCuts[cut].indexCount = static_cast<uint32_t>(
+	    std::min(cutIndexCount[cut],
 		static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
     }
     mesh.indices.resize(indexCount);
     uint32_t maximumIndex = 0;
-    int completedLevel = 0;
-    while (completedLevel < BOBOL_MESH_LOD_LEVEL_COUNT &&
-	levelIndexCount[completedLevel] == 0) {
-	mesh.progressivePositionCount[completedLevel] = 0;
-	++completedLevel;
+    int completedCut = 0;
+    while (completedCut < static_cast<int>(hierarchy.cut_count) &&
+	cutIndexCount[completedCut] == 0) {
+	mesh.progressiveCuts[completedCut].positionCount = 0;
+	++completedCut;
     }
     for (size_t i = 0; i < indexCount; ++i) {
-	if (data.faces[i] < 0 ||
-	    static_cast<size_t>(data.faces[i]) >= mesh.positions.size())
+	if (static_cast<size_t>(data.faces[i]) >= mesh.positions.size())
 	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
 	mesh.indices[i] = static_cast<uint32_t>(data.faces[i]);
 	maximumIndex = std::max(maximumIndex, mesh.indices[i]);
-	while (completedLevel < BOBOL_MESH_LOD_LEVEL_COUNT &&
-	    levelIndexCount[completedLevel] <= i + 1) {
-	    mesh.progressivePositionCount[completedLevel] =
+	while (completedCut < static_cast<int>(hierarchy.cut_count) &&
+	    cutIndexCount[completedCut] <= i + 1) {
+	    mesh.progressiveCuts[completedCut].positionCount =
 		maximumIndex + 1;
-	    ++completedLevel;
+	    ++completedCut;
 	}
     }
     if (data.normals) {
@@ -525,21 +547,21 @@ progressive_generation_from_data(
 	 mesh.normals.size() != mesh.positions.size()))
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
     mesh.bounds = generation->bounds;
-    mesh.progressiveMinimumLevel =
-	static_cast<uint8_t>(std::max(0, generation->minimumLevel));
-    int drawableLevel = generation->residentLevel;
-    for (int level = generation->residentLevel + 1;
-	 level <= generation->maximumLevel &&
-	 level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	if (generation->faceCount[level] >
+    mesh.progressiveMinimumCut =
+	static_cast<uint8_t>(std::max(0, generation->minimumCut));
+    int drawableCut = generation->residentCut;
+    for (int cut = generation->residentCut + 1;
+	 cut <= generation->maximumCut &&
+	 cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut) {
+	if (generation->faceCount[cut] >
 		std::numeric_limits<size_t>::max() / 3 ||
-	    generation->faceCount[level] * 3 > mesh.indices.size() ||
-	    generation->pointCount[level] > data.point_orig_count)
+	    generation->faceCount[cut] * 3 > mesh.indices.size() ||
+	    generation->pointCount[cut] > data.point_orig_count)
 	    break;
-	drawableLevel = level;
+	drawableCut = cut;
     }
-    mesh.progressiveResidentLevel =
-	static_cast<uint8_t>(std::max(0, drawableLevel));
+    mesh.progressiveResidentCut =
+	static_cast<uint8_t>(std::max(0, drawableCut));
     mesh.progressiveQuantizationMinimum =
 	generation->quantizationMinimum;
     mesh.progressiveQuantizationMaximum =
@@ -556,13 +578,13 @@ progressive_generation_from_data(
 	 * pass above. */
 	size_t scannedIndices = 0;
 	maximumIndex = 0;
-	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	    for (; scannedIndices < levelIndexCount[level]; ++scannedIndices)
+	for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
+	    for (; scannedIndices < cutIndexCount[cut]; ++scannedIndices)
 		maximumIndex = std::max(
 		    maximumIndex, mesh.indices[scannedIndices]);
-	    const size_t positionCount = levelIndexCount[level] ?
+	    const size_t positionCount = cutIndexCount[cut] ?
 		static_cast<size_t>(maximumIndex) + 1 : 0;
-	    mesh.progressivePositionCount[level] = static_cast<uint32_t>(
+	    mesh.progressiveCuts[cut].positionCount = static_cast<uint32_t>(
 		std::min(positionCount,
 		    static_cast<size_t>(
 			std::numeric_limits<uint32_t>::max())));
@@ -578,19 +600,19 @@ progressive_generation_from_data(
 
 static std::shared_ptr<BObolLodProgressiveMeshGeneration>
 progressive_generation_prefix(
-    const BObolLodProgressiveMeshGeneration &source, int residentLevel)
+    const BObolLodProgressiveMeshGeneration &source, int residentCut)
 {
-    const int level = progressive_level_clamp(&source, residentLevel);
-    if (level < 0)
+    const int cut = progressive_cut_clamp(&source, residentCut);
+    if (cut < 0)
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
-    const size_t indexCount = source.faceCount[level] * 3;
+    const size_t indexCount = source.faceCount[cut] * 3;
     const Obol::TriMesh *sourceMesh =
 	source.shadedGeometry && source.shadedGeometry->shaded ?
 	    &*source.shadedGeometry->shaded : NULL;
     if (!sourceMesh || indexCount > sourceMesh->indices.size())
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
     const size_t positionCount =
-	sourceMesh->positionCountAtLevel(static_cast<uint8_t>(level));
+	sourceMesh->positionCountAtCut(static_cast<uint8_t>(cut));
     if (positionCount > sourceMesh->positions.size() ||
 	(!sourceMesh->normals.empty() &&
 	 positionCount > sourceMesh->normals.size()))
@@ -600,12 +622,13 @@ progressive_generation_prefix(
 	new BObolLodProgressiveMeshGeneration);
     generation->pointCount = source.pointCount;
     generation->faceCount = source.faceCount;
+    generation->cuts = source.cuts;
     generation->bounds = source.bounds;
     generation->quantizationMinimum = source.quantizationMinimum;
     generation->quantizationMaximum = source.quantizationMaximum;
-    generation->minimumLevel = source.minimumLevel;
-    generation->maximumLevel = source.maximumLevel;
-    generation->residentLevel = level;
+    generation->minimumCut = source.minimumCut;
+    generation->maximumCut = source.maximumCut;
+    generation->residentCut = cut;
     generation->revision = source.revision + 1;
     if (!generation->revision)
 	generation->revision = 1;
@@ -614,10 +637,9 @@ progressive_generation_prefix(
 	new Obol::PartGeometry);
     Obol::TriMesh mesh;
     mesh.bounds = sourceMesh->bounds;
-    mesh.progressiveIndexCount = sourceMesh->progressiveIndexCount;
-    mesh.progressivePositionCount = sourceMesh->progressivePositionCount;
-    mesh.progressiveMinimumLevel = sourceMesh->progressiveMinimumLevel;
-    mesh.progressiveResidentLevel = sourceMesh->progressiveResidentLevel;
+    mesh.progressiveCuts = sourceMesh->progressiveCuts;
+    mesh.progressiveMinimumCut = sourceMesh->progressiveMinimumCut;
+    mesh.progressiveResidentCut = sourceMesh->progressiveResidentCut;
     mesh.progressiveQuantizationMinimum =
 	sourceMesh->progressiveQuantizationMinimum;
     mesh.progressiveQuantizationMaximum =
@@ -637,8 +659,26 @@ progressive_generation_prefix(
     mesh.indices.assign(
 	sourceMesh->indices.begin(),
 	sourceMesh->indices.begin() + indexCount);
-    mesh.progressiveResidentLevel =
-	static_cast<uint8_t>(std::max(0, level));
+    /*
+     * residentCut is the persistent-array high-water mark being retained.
+     * It is not necessarily the richest cut those arrays can draw: later
+     * producer cuts may add only quantization precision.  Preserve that
+     * coordinate-only frontier after compaction or a small mesh whose full
+     * topology arrived early becomes permanently stuck on the coarse snap
+     * associated with its last population-bearing cut.
+     */
+    int drawableCut = cut;
+    for (int candidate = cut + 1;
+	 candidate <= source.maximumCut; ++candidate) {
+	if (sourceMesh->positionCountAtCut(
+		static_cast<uint8_t>(candidate)) > mesh.positions.size() ||
+	    sourceMesh->indexCountAtCut(
+		static_cast<uint8_t>(candidate)) > mesh.indices.size())
+	    break;
+	drawableCut = candidate;
+    }
+    mesh.progressiveResidentCut =
+        static_cast<uint8_t>(std::max(0, drawableCut));
     geometry->shaded = std::move(mesh);
     geometry->shadedCullBackfaces =
 	source.shadedCullBackfaces ? true : false;
@@ -668,17 +708,17 @@ SbBool
 BObolLodProgressiveMesh::update(
     const struct BObolMeshLodData &data,
     const struct BObolMeshLodHierarchyInfo &hierarchy,
-    int residentLevel,
+    int residentCut,
     SbBool shadedCullBackfaces)
 {
     if (!this->p || !data.faces || !data.points_orig ||
 	data.face_count == 0 || data.point_orig_count == 0 ||
-	residentLevel < hierarchy.min_level ||
-	residentLevel > hierarchy.max_level ||
-	residentLevel >= BOBOL_MESH_LOD_LEVEL_COUNT)
+	residentCut < hierarchy.min_cut ||
+	residentCut > hierarchy.max_cut ||
+	residentCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
 	return FALSE;
 
-    if (!bobol_lod_hierarchy_valid(data, hierarchy, residentLevel))
+    if (!bobol_lod_hierarchy_valid(data, hierarchy, residentCut))
 	return FALSE;
 
     if (data.point_orig_count >
@@ -697,7 +737,7 @@ BObolLodProgressiveMesh::update(
     if (!revision)
 	revision = 1;
     const std::shared_ptr<BObolLodProgressiveMeshGeneration> generation =
-	progressive_generation_from_data(data, hierarchy, residentLevel,
+	progressive_generation_from_data(data, hierarchy, residentCut,
 	    shadedCullBackfaces, revision, this->p->lineage);
     if (!generation)
 	return FALSE;
@@ -708,28 +748,28 @@ BObolLodProgressiveMesh::update(
 struct BObolProgressiveSuffixBuilder {
     Obol::TriMesh *mesh = NULL;
     const struct BObolMeshLodHierarchyInfo *hierarchy = NULL;
-    int expectedLevel = -1;
+    int expectedCut = -1;
 };
 
 static int
-bobol_progressive_suffix_append(int level, const point_t *points,
-	size_t pointCount, const int *faces, size_t faceCount,
+bobol_progressive_suffix_append(int cut, const point_t *points,
+	size_t pointCount, const uint32_t *faces, size_t faceCount,
 	const vect_t *normals, size_t normalCount, void *callbackData)
 {
     BObolProgressiveSuffixBuilder *builder =
 	static_cast<BObolProgressiveSuffixBuilder *>(callbackData);
     if (!builder || !builder->mesh || !builder->hierarchy ||
-	level != builder->expectedLevel || level <= 0 ||
-	level >= BOBOL_MESH_LOD_LEVEL_COUNT || normals || normalCount)
+        cut != builder->expectedCut || cut <= 0 ||
+        cut >= BOBOL_MESH_LOD_CUT_COUNT_MAX || normals || normalCount)
 	return 0;
     Obol::TriMesh &mesh = *builder->mesh;
     const BObolMeshLodHierarchyInfo &hierarchy = *builder->hierarchy;
-    const size_t priorPointCount = hierarchy.point_count[level - 1];
-    const size_t priorFaceCount = hierarchy.face_count[level - 1];
-    if (hierarchy.point_count[level] < priorPointCount ||
-	hierarchy.face_count[level] < priorFaceCount ||
-	pointCount != hierarchy.point_count[level] - priorPointCount ||
-	faceCount != hierarchy.face_count[level] - priorFaceCount ||
+    const size_t priorPointCount = hierarchy.cuts[cut - 1].point_count;
+    const size_t priorFaceCount = hierarchy.cuts[cut - 1].face_count;
+    if (hierarchy.cuts[cut].point_count < priorPointCount ||
+        hierarchy.cuts[cut].face_count < priorFaceCount ||
+        pointCount != hierarchy.cuts[cut].point_count - priorPointCount ||
+        faceCount != hierarchy.cuts[cut].face_count - priorFaceCount ||
 	mesh.positions.size() != priorPointCount ||
 	mesh.indices.size() != priorFaceCount * 3 ||
 	(pointCount && !points) || (faceCount && !faces))
@@ -743,8 +783,7 @@ bobol_progressive_suffix_append(int level, const point_t *points,
     }
     const size_t finalPointCount = priorPointCount + pointCount;
     for (size_t i = 0; i < faceCount * 3; ++i) {
-	if (faces[i] < 0 ||
-	    static_cast<size_t>(faces[i]) >= finalPointCount)
+	if (static_cast<size_t>(faces[i]) >= finalPointCount)
 	    return 0;
     }
     for (size_t i = 0; i < pointCount; ++i) {
@@ -756,7 +795,7 @@ bobol_progressive_suffix_append(int level, const point_t *points,
     for (size_t i = 0; i < faceCount * 3; ++i) {
 	mesh.indices.push_back(static_cast<uint32_t>(faces[i]));
     }
-    builder->expectedLevel++;
+    builder->expectedCut++;
     return 1;
 }
 
@@ -764,13 +803,13 @@ SbBool
 BObolLodProgressiveMesh::extendFromCache(
     struct BObolMeshLod *lod,
     const struct BObolMeshLodHierarchyInfo &hierarchy,
-    int residentLevel,
+    int residentCut,
     SbBool shadedCullBackfaces)
 {
     if (!this->p || !lod || hierarchy.has_normals ||
-	residentLevel < hierarchy.min_level ||
-	residentLevel > hierarchy.max_level ||
-	residentLevel >= BOBOL_MESH_LOD_LEVEL_COUNT)
+	residentCut < hierarchy.min_cut ||
+	residentCut > hierarchy.max_cut ||
+	residentCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
 	return FALSE;
 
     std::lock_guard<std::mutex> updateLock(this->p->updateMutex);
@@ -780,38 +819,39 @@ BObolLodProgressiveMesh::extendFromCache(
 	prior && prior->shadedGeometry && prior->shadedGeometry->shaded ?
 	    &*prior->shadedGeometry->shaded : NULL;
     if (!prior || !priorMesh || !priorMesh->normals.empty() ||
-	prior->residentLevel < hierarchy.min_level ||
-	residentLevel <= prior->residentLevel ||
-	prior->minimumLevel != hierarchy.min_level ||
-	prior->maximumLevel != hierarchy.max_level ||
+	prior->residentCut < hierarchy.min_cut ||
+	residentCut <= prior->residentCut ||
+	prior->minimumCut != hierarchy.min_cut ||
+	prior->maximumCut != hierarchy.max_cut ||
 	prior->shadedCullBackfaces !=
 	    (shadedCullBackfaces ? TRUE : FALSE))
 	return FALSE;
-    for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	if (prior->pointCount[level] != hierarchy.point_count[level] ||
-	    prior->faceCount[level] != hierarchy.face_count[level])
+    for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
+	if (prior->pointCount[cut] != hierarchy.cuts[cut].point_count ||
+	    prior->faceCount[cut] != hierarchy.cuts[cut].face_count)
 	    return FALSE;
     }
-    if (hierarchy.point_count[residentLevel] >
+    if (hierarchy.cuts[residentCut].point_count >
 	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
-	hierarchy.face_count[residentLevel] >
+	hierarchy.cuts[residentCut].face_count >
 	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) / 3 ||
 	priorMesh->positions.size() !=
-	    hierarchy.point_count[prior->residentLevel] ||
+	    hierarchy.cuts[prior->residentCut].point_count ||
 	priorMesh->indices.size() !=
-	    hierarchy.face_count[prior->residentLevel] * 3)
+	    hierarchy.cuts[prior->residentCut].face_count * 3)
 	return FALSE;
 
     std::shared_ptr<BObolLodProgressiveMeshGeneration> generation(
 	new BObolLodProgressiveMeshGeneration);
     generation->pointCount = prior->pointCount;
     generation->faceCount = prior->faceCount;
+    generation->cuts = prior->cuts;
     generation->bounds = prior->bounds;
     generation->quantizationMinimum = prior->quantizationMinimum;
     generation->quantizationMaximum = prior->quantizationMaximum;
-    generation->minimumLevel = prior->minimumLevel;
-    generation->maximumLevel = prior->maximumLevel;
-    generation->residentLevel = residentLevel;
+    generation->minimumCut = prior->minimumCut;
+    generation->maximumCut = prior->maximumCut;
+    generation->residentCut = residentCut;
     generation->revision = prior->revision + 1;
     if (!generation->revision)
 	generation->revision = 1;
@@ -821,69 +861,69 @@ BObolLodProgressiveMesh::extendFromCache(
 	new Obol::PartGeometry);
     Obol::TriMesh mesh;
     mesh.bounds = priorMesh->bounds;
-    mesh.progressiveIndexCount = priorMesh->progressiveIndexCount;
-    mesh.progressivePositionCount = priorMesh->progressivePositionCount;
-    mesh.progressiveMinimumLevel = priorMesh->progressiveMinimumLevel;
-    mesh.progressiveResidentLevel = priorMesh->progressiveResidentLevel;
+    mesh.progressiveCuts = priorMesh->progressiveCuts;
+    mesh.progressiveMinimumCut = priorMesh->progressiveMinimumCut;
+    mesh.progressiveResidentCut = priorMesh->progressiveResidentCut;
     mesh.progressiveQuantizationMinimum =
 	priorMesh->progressiveQuantizationMinimum;
     mesh.progressiveQuantizationMaximum =
 	priorMesh->progressiveQuantizationMaximum;
     mesh.progressiveLineage = priorMesh->progressiveLineage;
-    mesh.positions.reserve(hierarchy.point_count[residentLevel]);
+    mesh.positions.reserve(hierarchy.cuts[residentCut].point_count);
     mesh.positions.insert(mesh.positions.end(),
 	priorMesh->positions.begin(), priorMesh->positions.end());
-    mesh.indices.reserve(hierarchy.face_count[residentLevel] * 3);
+    mesh.indices.reserve(hierarchy.cuts[residentCut].face_count * 3);
     mesh.indices.insert(mesh.indices.end(),
 	priorMesh->indices.begin(), priorMesh->indices.end());
 
     BObolProgressiveSuffixBuilder builder;
     builder.mesh = &mesh;
     builder.hierarchy = &hierarchy;
-    builder.expectedLevel = prior->residentLevel + 1;
-    if (!bobol_mesh_lod_read_resident_suffix(lod, prior->residentLevel,
-	    residentLevel, bobol_progressive_suffix_append, &builder) ||
-	builder.expectedLevel != residentLevel + 1 ||
-	mesh.positions.size() != hierarchy.point_count[residentLevel] ||
-	mesh.indices.size() != hierarchy.face_count[residentLevel] * 3)
+    builder.expectedCut = prior->residentCut + 1;
+    if (!bobol_mesh_lod_read_resident_suffix(lod, prior->residentCut,
+	    residentCut, bobol_progressive_suffix_append, &builder) ||
+	builder.expectedCut != residentCut + 1 ||
+	mesh.positions.size() != hierarchy.cuts[residentCut].point_count ||
+	mesh.indices.size() != hierarchy.cuts[residentCut].face_count * 3)
 	return FALSE;
 
     size_t scannedIndices =
-	std::min<size_t>(priorMesh->progressiveIndexCount[
-	    std::max(0, prior->residentLevel)], mesh.indices.size());
-    uint32_t maximumIndex = priorMesh->progressivePositionCount[
-	std::max(0, prior->residentLevel)] ?
-	priorMesh->progressivePositionCount[
-	    std::max(0, prior->residentLevel)] - 1 : 0;
-    for (int level = prior->residentLevel + 1;
-	 level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	const size_t levelIndexCount =
-	    hierarchy.face_count[level] >
+	std::min<size_t>(priorMesh->progressiveCuts[
+	    std::max(0, prior->residentCut)].indexCount,
+	    mesh.indices.size());
+    uint32_t maximumIndex = priorMesh->progressiveCuts[
+	std::max(0, prior->residentCut)].positionCount ?
+	priorMesh->progressiveCuts[
+	    std::max(0, prior->residentCut)].positionCount - 1 : 0;
+    for (int cut = prior->residentCut + 1;
+	 cut < static_cast<int>(hierarchy.cut_count); ++cut) {
+	const size_t cutIndexCount =
+	    hierarchy.cuts[cut].face_count >
 		    std::numeric_limits<size_t>::max() / 3 ?
 		mesh.indices.size() :
-		std::min(hierarchy.face_count[level] * 3,
+		std::min(hierarchy.cuts[cut].face_count * 3,
 		    mesh.indices.size());
-	for (; scannedIndices < levelIndexCount; ++scannedIndices)
+	for (; scannedIndices < cutIndexCount; ++scannedIndices)
 	    maximumIndex = std::max(maximumIndex,
 		mesh.indices[scannedIndices]);
-	mesh.progressiveIndexCount[level] = static_cast<uint32_t>(
-	    std::min(levelIndexCount,
+	mesh.progressiveCuts[cut].indexCount = static_cast<uint32_t>(
+	    std::min(cutIndexCount,
 		static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
-	mesh.progressivePositionCount[level] = levelIndexCount ?
+	mesh.progressiveCuts[cut].positionCount = cutIndexCount ?
 	    maximumIndex + 1 : 0;
     }
-    int drawableLevel = residentLevel;
-    for (int level = residentLevel + 1;
-	 level <= hierarchy.max_level &&
-	 level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	if (hierarchy.face_count[level] >
+    int drawableCut = residentCut;
+    for (int cut = residentCut + 1;
+	 cut <= hierarchy.max_cut &&
+	 cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut) {
+	if (hierarchy.cuts[cut].face_count >
 		std::numeric_limits<size_t>::max() / 3 ||
-	    hierarchy.face_count[level] * 3 > mesh.indices.size() ||
-	    hierarchy.point_count[level] > mesh.positions.size())
+	    hierarchy.cuts[cut].face_count * 3 > mesh.indices.size() ||
+	    hierarchy.cuts[cut].point_count > mesh.positions.size())
 	    break;
-	drawableLevel = level;
+	drawableCut = cut;
     }
-    mesh.progressiveResidentLevel = static_cast<uint8_t>(drawableLevel);
+    mesh.progressiveResidentCut = static_cast<uint8_t>(drawableCut);
     geometry->shaded = std::move(mesh);
     geometry->shadedCullBackfaces =
 	shadedCullBackfaces ? true : false;
@@ -910,18 +950,18 @@ BObolLodProgressiveMesh::commitTrim(
 }
 
 BObolLodProgressiveMeshTrimPtr
-BObolLodProgressiveMesh::prepareTrim(int residentLevel) const
+BObolLodProgressiveMesh::prepareTrim(int residentCut) const
 {
     if (!this->p)
 	return BObolLodProgressiveMeshTrimPtr();
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> current =
 	progressive_generation_load(this->p);
-    const int level = progressive_level_clamp(current.get(), residentLevel);
-    if (level < 0)
+    const int cut = progressive_cut_clamp(current.get(), residentCut);
+    if (cut < 0)
 	return BObolLodProgressiveMeshTrimPtr();
     std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
-	level == current->residentLevel ? current :
-	progressive_generation_prefix(*current, level);
+	cut == current->residentCut ? current :
+	progressive_generation_prefix(*current, cut);
     if (!generation)
 	return BObolLodProgressiveMeshTrimPtr();
     std::shared_ptr<BObolLodProgressiveMeshTrim> trim(
@@ -933,25 +973,25 @@ BObolLodProgressiveMesh::prepareTrim(int residentLevel) const
 }
 
 SbBool
-BObolLodProgressiveMesh::trim(int residentLevel)
+BObolLodProgressiveMesh::trim(int residentCut)
 {
     const BObolLodProgressiveMeshTrimPtr trim =
-	this->prepareTrim(residentLevel);
+	this->prepareTrim(residentCut);
     return trim && this->commitTrim(trim) ? TRUE : FALSE;
 }
 
 SbBool
-BObolLodProgressiveMesh::copyLevel(
-    BObolLodMeshPayload &payload, int requestedLevel) const
+BObolLodProgressiveMesh::copyCut(
+    BObolLodMeshPayload &payload, int requestedCut) const
 {
     payload.clear();
     if (!this->p)
 	return FALSE;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-    const int level =
-	progressive_level_clamp(generation.get(), requestedLevel);
-    if (level < 0)
+    const int cut =
+	progressive_cut_clamp(generation.get(), requestedCut);
+    if (cut < 0)
 	return FALSE;
     const Obol::TriMesh *mesh =
 	generation->shadedGeometry && generation->shadedGeometry->shaded ?
@@ -959,9 +999,9 @@ BObolLodProgressiveMesh::copyLevel(
     if (!mesh)
 	return FALSE;
     const size_t points =
-	mesh->positionCountAtLevel(static_cast<uint8_t>(level));
+	mesh->positionCountAtCut(static_cast<uint8_t>(cut));
     const size_t indices =
-	mesh->indexCountAtLevel(static_cast<uint8_t>(level));
+	mesh->indexCountAtCut(static_cast<uint8_t>(cut));
     if (!points || points > mesh->positions.size() ||
 	indices < 3 || indices > mesh->indices.size())
 	return FALSE;
@@ -1001,7 +1041,7 @@ BObolLodProgressiveMesh::isValid(void) const
 	generation && generation->shadedGeometry &&
 	generation->shadedGeometry->shaded ?
 	    &*generation->shadedGeometry->shaded : NULL;
-    return generation && generation->residentLevel >= 0 && mesh &&
+    return generation && generation->residentCut >= 0 && mesh &&
 	!mesh->positions.empty() && mesh->indices.size() >= 3 &&
 	mesh->indices.size() % 3 == 0 &&
 	(mesh->normals.empty() ||
@@ -1009,16 +1049,16 @@ BObolLodProgressiveMesh::isValid(void) const
 }
 
 SbBool
-BObolLodProgressiveMesh::canDrawLevel(int requestedLevel) const
+BObolLodProgressiveMesh::canDrawCut(int requestedCut) const
 {
     if (!this->p)
 	return FALSE;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
     if (!generation ||
-	requestedLevel < generation->minimumLevel ||
-	requestedLevel > generation->maximumLevel ||
-	requestedLevel >= BOBOL_MESH_LOD_LEVEL_COUNT)
+	requestedCut < generation->minimumCut ||
+	requestedCut > generation->maximumCut ||
+	requestedCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
 	return FALSE;
     const Obol::TriMesh *mesh =
 	generation->shadedGeometry && generation->shadedGeometry->shaded ?
@@ -1026,38 +1066,38 @@ BObolLodProgressiveMesh::canDrawLevel(int requestedLevel) const
     if (!mesh)
 	return FALSE;
     return mesh->isProgressive() &&
-	requestedLevel <= static_cast<int>(
-	    mesh->progressiveResidentLevel) ? TRUE : FALSE;
+	requestedCut <= static_cast<int>(
+	    mesh->progressiveResidentCut) ? TRUE : FALSE;
 }
 
 int
-BObolLodProgressiveMesh::minimumLevel(void) const
+BObolLodProgressiveMesh::minimumCut(void) const
 {
     if (!this->p)
 	return -1;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-    return generation ? generation->minimumLevel : -1;
+    return generation ? generation->minimumCut : -1;
 }
 
 int
-BObolLodProgressiveMesh::maximumLevel(void) const
+BObolLodProgressiveMesh::maximumCut(void) const
 {
     if (!this->p)
 	return -1;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-    return generation ? generation->maximumLevel : -1;
+    return generation ? generation->maximumCut : -1;
 }
 
 int
-BObolLodProgressiveMesh::residentLevel(void) const
+BObolLodProgressiveMesh::residentCut(void) const
 {
     if (!this->p)
 	return -1;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-    return generation ? generation->residentLevel : -1;
+    return generation ? generation->residentCut : -1;
 }
 
 uint64_t
@@ -1071,31 +1111,31 @@ BObolLodProgressiveMesh::revision(void) const
 }
 
 size_t
-BObolLodProgressiveMesh::pointCount(int requestedLevel) const
+BObolLodProgressiveMesh::pointCount(int requestedCut) const
 {
     if (!this->p)
 	return 0;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-    const int level =
-	progressive_level_clamp(generation.get(), requestedLevel);
-    return level >= 0 ? generation->pointCount[level] : 0;
+    const int cut =
+	progressive_cut_clamp(generation.get(), requestedCut);
+    return cut >= 0 ? generation->pointCount[cut] : 0;
 }
 
 size_t
-BObolLodProgressiveMesh::faceCount(int requestedLevel) const
+BObolLodProgressiveMesh::faceCount(int requestedCut) const
 {
     if (!this->p)
 	return 0;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-    const int level =
-	progressive_level_clamp(generation.get(), requestedLevel);
-    return level >= 0 ? generation->faceCount[level] : 0;
+    const int cut =
+	progressive_cut_clamp(generation.get(), requestedCut);
+    return cut >= 0 ? generation->faceCount[cut] : 0;
 }
 
 size_t
-BObolLodProgressiveMesh::hierarchyPointCount(int requestedLevel) const
+BObolLodProgressiveMesh::hierarchyPointCountAtCut(int requestedCut) const
 {
     if (!this->p)
 	return 0;
@@ -1103,16 +1143,16 @@ BObolLodProgressiveMesh::hierarchyPointCount(int requestedLevel) const
 	progressive_generation_load(this->p);
     if (!generation)
 	return 0;
-    if (requestedLevel < generation->minimumLevel)
-	requestedLevel = generation->minimumLevel;
-    if (requestedLevel > generation->maximumLevel)
-	requestedLevel = generation->maximumLevel;
-    return requestedLevel >= 0 ?
-	generation->pointCount[requestedLevel] : 0;
+    if (requestedCut < generation->minimumCut)
+	requestedCut = generation->minimumCut;
+    if (requestedCut > generation->maximumCut)
+	requestedCut = generation->maximumCut;
+    return requestedCut >= 0 ?
+	generation->pointCount[requestedCut] : 0;
 }
 
 size_t
-BObolLodProgressiveMesh::hierarchyFaceCount(int requestedLevel) const
+BObolLodProgressiveMesh::hierarchyFaceCountAtCut(int requestedCut) const
 {
     if (!this->p)
 	return 0;
@@ -1120,12 +1160,99 @@ BObolLodProgressiveMesh::hierarchyFaceCount(int requestedLevel) const
 	progressive_generation_load(this->p);
     if (!generation)
 	return 0;
-    if (requestedLevel < generation->minimumLevel)
-	requestedLevel = generation->minimumLevel;
-    if (requestedLevel > generation->maximumLevel)
-	requestedLevel = generation->maximumLevel;
-    return requestedLevel >= 0 ?
-	generation->faceCount[requestedLevel] : 0;
+    if (requestedCut < generation->minimumCut)
+	requestedCut = generation->minimumCut;
+    if (requestedCut > generation->maximumCut)
+	requestedCut = generation->maximumCut;
+    return requestedCut >= 0 ?
+	generation->faceCount[requestedCut] : 0;
+}
+
+SbBool
+BObolLodProgressiveMesh::cutInfo(
+    int requestedCut, struct BObolMeshLodCutInfo *info) const
+{
+    if (!this->p || !info || requestedCut < 0)
+	return FALSE;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation ||
+	static_cast<size_t>(requestedCut) >= generation->cuts.size())
+	return FALSE;
+    *info = generation->cuts[static_cast<size_t>(requestedCut)];
+    return TRUE;
+}
+
+int
+BObolLodProgressiveMesh::cutForScreenError(
+    double projectedPixelDiameter, double targetPixelError) const
+{
+    if (!this->p)
+	return -1;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+	if (!generation || generation->cuts.empty() ||
+	    !std::isfinite(projectedPixelDiameter) ||
+	    !std::isfinite(targetPixelError) ||
+	    projectedPixelDiameter <= 0.0 || targetPixelError <= 0.0)
+	return -1;
+    const SbVec3f extent = generation->quantizationMaximum -
+	generation->quantizationMinimum;
+    const double diagonal = std::sqrt(
+	static_cast<double>(extent.sqrLength()));
+    if (!(diagonal > 0.0))
+	return generation->maximumCut;
+    const double maximumObjectError =
+	targetPixelError * diagonal / projectedPixelDiameter;
+    int low = generation->minimumCut;
+    int high = generation->maximumCut;
+    while (low < high) {
+	const int middle = low + (high - low) / 2;
+	if (generation->cuts[static_cast<size_t>(middle)].object_error <=
+		maximumObjectError)
+	    high = middle;
+	else
+	    low = middle + 1;
+    }
+    return low;
+}
+
+double
+BObolLodProgressiveMesh::projectedErrorAtCut(
+    int cut, double projectedPixelDiameter) const
+{
+    if (!this->p || cut < 0 || !std::isfinite(projectedPixelDiameter) ||
+	projectedPixelDiameter <= 0.0)
+	return std::numeric_limits<double>::infinity();
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation || static_cast<size_t>(cut) >= generation->cuts.size())
+	return std::numeric_limits<double>::infinity();
+    const SbVec3f extent = generation->quantizationMaximum -
+	generation->quantizationMinimum;
+    const double diagonal = std::sqrt(
+	static_cast<double>(extent.sqrLength()));
+    if (!(diagonal > 0.0))
+	return 0.0;
+    return generation->cuts[static_cast<size_t>(cut)].object_error *
+	projectedPixelDiameter / diagonal;
+}
+
+BObolLodCounts
+bobol_lod_progressive_counts(
+    const BObolLodProgressiveMeshPtr &progressiveMesh, int cut,
+    SbBool hasNormals)
+{
+    BObolLodCounts counts;
+    if (!progressiveMesh || !progressiveMesh->isValid())
+	return counts;
+    counts.faceCount = progressiveMesh->hierarchyFaceCountAtCut(cut);
+    counts.pointCount = progressiveMesh->hierarchyPointCountAtCut(cut);
+    counts.originalPointCount = counts.pointCount;
+    counts.normalCount = hasNormals ?
+	(counts.faceCount > UINT64_MAX / 3 ?
+	    UINT64_MAX : counts.faceCount * 3) : 0;
+    return counts;
 }
 
 size_t
@@ -1348,7 +1475,7 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 	generation && generation->shadedGeometry &&
 	generation->shadedGeometry->shaded ?
 	    &*generation->shadedGeometry->shaded : NULL;
-    if (!generation || generation->residentLevel < 0 || !sourceMesh ||
+    if (!generation || generation->residentCut < 0 || !sourceMesh ||
 	sourceMesh->positions.empty() || sourceMesh->indices.size() < 3 ||
 	sourceMesh->indices.size() % 3 != 0)
 	return std::shared_ptr<const Obol::PartGeometry>();
@@ -1379,9 +1506,9 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 	}
     }
 
-    const int drawableLevel = sourceMesh->isProgressive() ?
-	static_cast<int>(sourceMesh->progressiveResidentLevel) :
-	generation->residentLevel;
+    const int drawableCut = sourceMesh->isProgressive() ?
+	static_cast<int>(sourceMesh->progressiveResidentCut) :
+	generation->residentCut;
 
     std::shared_ptr<Obol::PartGeometry> geometry(
 	new Obol::PartGeometry);
@@ -1418,10 +1545,10 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 		wireRep.segmentIds.push_back(edgeId++);
 	    }
 	}
-	wireRep.progressiveMinimumLevel =
-	    static_cast<uint8_t>(std::max(0, generation->minimumLevel));
-	wireRep.progressiveResidentLevel =
-	    static_cast<uint8_t>(std::max(0, drawableLevel));
+	wireRep.progressiveMinimumCut =
+	    static_cast<uint8_t>(std::max(0, generation->minimumCut));
+	wireRep.progressiveResidentCut =
+	    static_cast<uint8_t>(std::max(0, drawableCut));
 	wireRep.progressiveQuantizationMinimum =
 	    generation->quantizationMinimum;
 	wireRep.progressiveQuantizationMaximum =
@@ -1430,13 +1557,17 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 	 * order.  They therefore inherit the source PoP stream's append-only
 	 * identity; native curve LoD records do not make this promise. */
 	wireRep.progressiveLineage = sourceMesh->progressiveLineage;
-	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	    const size_t segments = generation->faceCount[level] * 3;
-	    wireRep.progressiveSegmentCount[level] =
+	wireRep.progressiveCuts.resize(sourceMesh->progressiveCuts.size());
+	for (size_t cut = 0; cut < wireRep.progressiveCuts.size(); ++cut) {
+	    const size_t segments = generation->faceCount[cut] * 3;
+	    wireRep.progressiveCuts[cut].segmentFirst = 0;
+	    wireRep.progressiveCuts[cut].segmentCount =
 		static_cast<uint32_t>(std::min(
 		    segments,
 		    static_cast<size_t>(
 			std::numeric_limits<uint32_t>::max())));
+	    wireRep.progressiveCuts[cut].quantization =
+		sourceMesh->progressiveCuts[cut].quantization;
 	}
 	geometry->wire = std::move(wireRep);
     }
@@ -1485,7 +1616,7 @@ BObolLodRequest::clear(void)
     projectedPixelArea = 0.0f;
     projectedPixelPerimeter = 0.0f;
     targetPixelError = 1.0f;
-    requestedLevel = -1;
+    requestedCut = -1;
     bounds.makeEmpty();
     sourceCounts.clear();
     providerParams.clear();
@@ -1517,7 +1648,8 @@ BObolLodResult::clear(void)
     progressiveMesh.reset();
     preparedCadGeometry.reset();
     preparedCadGeometryRevision = 0;
-    residentLevel = -1;
+    resolvedCut = -1;
+    residentCut = -1;
     residentAdmissionRevision = 0;
     payloadKind = BOBOL_LOD_PAYLOAD_NONE;
     resultKind = BOBOL_LOD_RESULT_NONE;
@@ -1582,7 +1714,8 @@ BObolLodResult::canonicalizePayload(void)
 	progressiveMesh.reset();
 	preparedCadGeometry.reset();
 	preparedCadGeometryRevision = 0;
-	residentLevel = -1;
+	resolvedCut = -1;
+	residentCut = -1;
 	residentAdmissionRevision = 0;
 	hasSnappedPoints = FALSE;
 	hasNormals = FALSE;
@@ -1776,10 +1909,10 @@ bobol_lod_cache_key(const BObolLodRequest &request)
     append_string_field(out, "provider_id", request.providerId);
     append_string_field(out, "provider_version", request.providerVersion);
     append_int_field(out, "quality_tier", request.qualityTier);
-    /* The selected discrete level determines the provider output.  Raw screen
+    /* The selected admissible cut determines the provider output.  Raw screen
      * measurements do not: including them would turn sub-pixel camera jitter
      * into distinct active/cache keys for the same payload. */
-    append_int_field(out, "requested_level", request.requestedLevel);
+    append_int_field(out, "requested_cut", request.requestedCut);
     append_bounds_field(out, "bounds", request.bounds);
     append_uint_field(out, "face_count", request.sourceCounts.faceCount);
     append_uint_field(out, "point_count", request.sourceCounts.pointCount);
@@ -1884,8 +2017,10 @@ bobol_lod_mesh_payload_from_mesh_lod_data(BObolLodMeshPayload &payload,
 
     payload.coordIndex.reserve(index_count);
     for (size_t i = 0; i < index_count; i++) {
-	int idx = data.faces[i];
-	if (idx < 0 || static_cast<size_t>(idx) >= data.point_count) {
+	const uint32_t idx = data.faces[i];
+	if (idx > static_cast<uint32_t>(
+		std::numeric_limits<int32_t>::max()) ||
+	    static_cast<size_t>(idx) >= data.point_count) {
 	    payload.clear();
 	    return FALSE;
 	}
@@ -1926,7 +2061,7 @@ bobol_lod_request_keys_equal(const BObolLodRequest &lhs,
 	bu_strcmp(lhs.providerVersion.getString(),
 	    rhs.providerVersion.getString()) != 0 ||
 	lhs.qualityTier != rhs.qualityTier ||
-	lhs.requestedLevel != rhs.requestedLevel)
+	lhs.requestedCut != rhs.requestedCut)
 	return FALSE;
 
     if (lhs.bounds.isEmpty() != rhs.bounds.isEmpty())
@@ -2023,8 +2158,10 @@ bobol_lod_result_from_mesh_lod_info(
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = bobol_lod_geometry_cache_key(request);
-    result.geometry.activeLevel = info.active_level;
-    result.residentLevel = info.active_level;
+    result.geometry.activeCut = info.active_cut;
+    result.resolvedCut = request.requestedCut >= 0 ?
+	request.requestedCut : info.active_cut;
+    result.residentCut = info.active_cut;
     result.geometry.borrowed = FALSE;
 
     if (status) {

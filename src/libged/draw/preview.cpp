@@ -530,7 +530,7 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
 
     if (draw_eye_path) {
 	struct ged_view_feature_style style =
-	    GED_VIEW_FEATURE_STYLE_INIT;
+	    ged_view_feature_style_default();
 	style.color_valid = 1;
 	VSET(style.color, 255, 255, 0);
 	(void)_ged_view_feature_batch_publish_line_set(gedp,

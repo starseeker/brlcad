@@ -206,7 +206,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t5.g)
 # implementation objects directly so the test can exercise private seams
 # without exporting them from the shared ABI.  Resolve the command entry points
 # from the static command archive.  Mixing these objects with shared libged
-# creates duplicate translation-unit statics (notably the view-host registry).
+# creates duplicate translation-unit statics and owner records.
 # Keep this unusually large white-box executable in sanitizer/debug builds:
 # optimized GCC builds would otherwise perform a second whole-GED LTO link
 # whose peak working set can exceed practical CI and developer-machine limits.
@@ -238,6 +238,15 @@ if(CMAKE_NM AND UNIX AND NOT APPLE)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/../../check_bobol_private_symbols.cmake")
   set_tests_properties(ged_bobol_private_symbol_contract PROPERTIES
     LABELS "bobol_api;bobol_contract;bobol_headless")
+
+  brlcad_add_test(NAME ged_draw_plugin_symbol_contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DNM=${CMAKE_NM}"
+      "-DLIBRARY=$<TARGET_FILE:libged>"
+      "-DMANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/../../ged_draw_plugin_api.symbols"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/../../check_draw_plugin_symbols.cmake")
+  set_tests_properties(ged_draw_plugin_symbol_contract PROPERTIES
+    LABELS "drawing_baseline;ged_api")
 endif()
 
 # Independent-view state is structural scope, not a mode bit.

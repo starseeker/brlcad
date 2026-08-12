@@ -23,7 +23,7 @@
 
 #include "bu/cmd.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 static int

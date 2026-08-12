@@ -1141,7 +1141,7 @@ ged_draw_frontier_absorb_draw(
 	    refresh_roots++;
     }
     if (changed_roots)
-	(void)ged_selection_draw_sync(gedp, nullptr);
+	(void)ged_selection_present_private(gedp);
     if (result && changed_roots && !new_roots && !refresh_roots) {
 	result->affected_groups +=
 	    static_cast<int>(requested_paths.size());
@@ -1322,7 +1322,7 @@ ged_scene_edit_acquire_internal(
 	state->owner, promotion.id, promotion.generation
     };
     *scope = ref;
-    (void)ged_selection_draw_sync(gedp, nullptr);
+    (void)ged_selection_present_private(gedp);
     if (result) {
 	result->status = 1;
 	result->scope = ref;
@@ -1392,7 +1392,7 @@ ged_scene_edit_release_internal(
     }
 
     (void)outcome;
-    (void)ged_selection_draw_sync(gedp, nullptr);
+    (void)ged_selection_present_private(gedp);
     if (result) {
 	result->status = conflicts ? 0 : changed;
 	result->scope = ref;
@@ -1456,7 +1456,7 @@ ged_draw_frontier_erase_path(struct ged *gedp, const char *path,
 	    result->affected_groups += retired_roots;
 	    result->affected_shapes += retired_roots;
 	}
-	(void)ged_selection_draw_sync(gedp, nullptr);
+	(void)ged_selection_present_private(gedp);
 	return retired_roots;
     }
 
@@ -1485,7 +1485,7 @@ ged_draw_frontier_erase_path(struct ged *gedp, const char *path,
 	}
     }
     (void)prefix;
-    (void)ged_selection_draw_sync(gedp, nullptr);
+    (void)ged_selection_present_private(gedp);
     if (result)
 	result->presentation_only = 1;
     return changed;

@@ -36,7 +36,7 @@
 #include "raytrace.h"
 #include "wdb.h"
 #include "ged.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 
 
 #define D2R(x) (x * DEG2RAD)
@@ -586,7 +586,7 @@ ged_coil_core(struct ged *gedp, int argc, const char *argv[])
     endcap_existed = (db_lookup(gedp->dbip, bu_vls_addr(&endcap_name), LOOKUP_QUIET) != RT_DIR_NULL);
     subtractions_existed = (db_lookup(gedp->dbip, bu_vls_addr(&subtractions_name), LOOKUP_QUIET) != RT_DIR_NULL);
 
-    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     make_coil(db_fp, bu_vls_addr(&name), &sections, start_cap_type, end_cap_type);
     coil_notify_object_written(gedp, bu_vls_addr(&core_name), core_existed);
     if (start_cap_type == 2 || start_cap_type == 3)

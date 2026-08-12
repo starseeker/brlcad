@@ -31,7 +31,7 @@
 #include "bu/cmd.h"
 #include "rt/geom.h"
 
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "../ged_private.h"
 
 
@@ -117,7 +117,7 @@ ged_bot_smooth_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     if (dp_new == RT_DIR_NULL) {
 	dp_new = db_diradd(gedp->dbip, new_bot_name, RT_DIR_PHONY_ADDR, 0,
 		RT_DIR_SOLID, (void *)&intern.idb_type);

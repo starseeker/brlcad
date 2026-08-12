@@ -445,6 +445,24 @@ store_attach_node(BObolViewController *controller, SoNode *node)
 }
 
 static void
+store_detach_node(SoGroup *group, SoNode *node)
+{
+    if (!group || !node)
+	return;
+
+    const int index = group->findChild(node);
+    if (index >= 0)
+	group->removeChild(index);
+}
+
+static void
+store_attach_node(SoGroup *group, SoNode *node)
+{
+    if (group && node && group->findChild(node) < 0)
+	group->addChild(node);
+}
+
+static void
 store_release_node(BObolViewController *controller, SoNode *node)
 {
     if (!node)
@@ -739,6 +757,7 @@ struct BObolFeatureStoreRecord {
     SbBool compactEdit;
     BObolCompactInstanceSummary compactSummary;
     SoNode *node;
+    SoGroup *attachmentRoot;
 
     BObolFeatureStoreRecord(void) :
 	id(0),
@@ -768,10 +787,67 @@ struct BObolFeatureStoreRecord {
 	inputsRevision(0),
 	compactEdit(FALSE),
 	compactSummary(),
-	node(NULL)
+	node(NULL),
+	attachmentRoot(NULL)
     {
     }
 };
+
+static SoGroup *
+store_feature_attachment_root(BObolViewController *controller,
+	const BObolFeatureStoreRecord *rec)
+{
+    if (!controller)
+	return NULL;
+
+    /* Screen overlays belong outside the CAD render batch.  Besides giving
+     * them deterministic last-pass ordering, this keeps retained HUD nodes
+     * visible when a compact CAD batch bypasses ordinary source traversal. */
+    if (rec && rec->overlay.isOverlay &&
+	(rec->overlay.role == BObolOverlayRole::Screen ||
+	 rec->overlay.order == BObolOverlayOrder::Screen))
+	return controller->getFramebufferOverlayRoot();
+
+    return store_controller_root_group(controller);
+}
+
+static void
+store_feature_release_node(BObolFeatureStoreRecord *rec)
+{
+    if (!rec || !rec->node)
+	return;
+
+    store_detach_node(rec->attachmentRoot, rec->node);
+    rec->node->unref();
+    rec->node = NULL;
+    rec->attachmentRoot = NULL;
+}
+
+static void
+store_feature_set_node(BObolViewController *controller,
+	BObolFeatureStoreRecord *rec, SoNode *node)
+{
+    if (!rec)
+	return;
+
+    SoGroup *desiredRoot = store_feature_attachment_root(controller, rec);
+    if (rec->node == node) {
+	if (rec->attachmentRoot != desiredRoot) {
+	    store_detach_node(rec->attachmentRoot, rec->node);
+	    store_attach_node(desiredRoot, rec->node);
+	    rec->attachmentRoot = desiredRoot;
+	}
+	return;
+    }
+
+    store_feature_release_node(rec);
+    rec->node = node;
+    if (rec->node) {
+	rec->node->ref();
+	store_attach_node(desiredRoot, rec->node);
+	rec->attachmentRoot = desiredRoot;
+    }
+}
 
 static void
 store_primitive_metadata_for_record(const BObolFeatureStoreRecord *rec,
@@ -816,7 +892,8 @@ struct BObolFeatureStore::Impl {
 	for (std::map<uint64_t, BObolFeatureStoreRecord *>::iterator it =
 		 records.begin(); it != records.end(); ++it) {
 	    if (it->second) {
-		store_release_node(controller, it->second->node);
+		notify(it->second, BObolCommandResultStatus::Removed, "clear");
+		store_feature_release_node(it->second);
 		delete it->second;
 	    }
 	}
@@ -934,11 +1011,9 @@ struct BObolFeatureStore::Impl {
     {
 	if (!rec)
 	    return;
-	if (rec->node == node)
-	    return;
-	store_set_node(controller, rec->node, node);
+	store_feature_set_node(controller, rec, node);
 	if (controller)
-	    controller->requestRender("view-feature-store");
+	    controller->requestPresentationRender("view-feature-store");
     }
 
     void markOwnerGeneration(const BObolFeatureOwner &owner)
@@ -1440,6 +1515,17 @@ BObolFeatureStore::~BObolFeatureStore(void)
 void
 BObolFeatureStore::setController(BObolViewController *controller)
 {
+    if (this->impl->controller == controller)
+	return;
+    for (std::map<uint64_t, BObolFeatureStoreRecord *>::iterator it =
+	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	BObolFeatureStoreRecord *rec = it->second;
+	if (!rec || !rec->node)
+	    continue;
+	store_detach_node(rec->attachmentRoot, rec->node);
+	rec->attachmentRoot = store_feature_attachment_root(controller, rec);
+	store_attach_node(rec->attachmentRoot, rec->node);
+    }
     this->impl->controller = controller;
 }
 
@@ -1500,11 +1586,12 @@ BObolFeatureStore::remove(BObolFeatureHandle handle)
     const std::string key = store_key(rec->scope, rec->name, &rec->owner);
     this->impl->names.erase(key);
     this->impl->notify(rec, BObolCommandResultStatus::Removed, "remove");
-    store_release_node(this->impl->controller, rec->node);
+    store_feature_release_node(rec);
     this->impl->records.erase(rec->id);
     delete rec;
     if (this->impl->controller)
-	this->impl->controller->requestRender("view-feature-remove");
+	this->impl->controller->requestPresentationRender(
+	    "view-feature-remove");
     return TRUE;
 }
 

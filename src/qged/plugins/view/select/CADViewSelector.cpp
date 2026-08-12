@@ -40,7 +40,7 @@
 #include "bg/aabb_ray.h"
 #include "bg/plane.h"
 #include "ged.h"
-#include "ged/selection_state.h"
+#include "ged/selection.h"
 
 #include "qtcad/QgSelectFilter.h"
 #include "qtcad/QgView.h"
@@ -342,13 +342,14 @@ CADViewSelector::select_objs()
     if (paths.empty())
 	return;
 
+    (void)ged_selection_batch_begin(gedp);
     for (size_t i = 0; i < paths.size(); i++) {
 	if (!ged_selection_select_path(gedp, nullptr, paths[i].c_str(), 0))
-	    return;
+	    break;
     }
 
     ged_selection_recompute(gedp, nullptr);
-    ged_selection_draw_sync(gedp, nullptr);
+    (void)ged_selection_batch_end(gedp);
 }
 
 void
@@ -362,13 +363,14 @@ CADViewSelector::deselect_objs()
     if (paths.empty())
 	return;
 
+    (void)ged_selection_batch_begin(gedp);
     for (size_t i = 0; i < paths.size(); i++) {
 	if (!ged_selection_deselect_path(gedp, nullptr, paths[i].c_str(), 0))
-	    return;
+	    break;
     }
 
     ged_selection_recompute(gedp, nullptr);
-    ged_selection_draw_sync(gedp, nullptr);
+    (void)ged_selection_batch_end(gedp);
 }
 
 

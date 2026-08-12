@@ -67,7 +67,7 @@ enum ged_scene_path_listing {
  * individual fields; use ged_scene_occurrence_ref_equal().
  */
 typedef struct ged_scene_occurrence_ref {
-    uintptr_t owner;
+    uint64_t owner;
     uint64_t id;
     uint64_t generation;
 } ged_scene_occurrence_ref;

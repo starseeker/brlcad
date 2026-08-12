@@ -121,6 +121,48 @@ bu_setenv(const char *name, const char *value, int overwrite)
 }
 
 
+/* Linux's _SC_AVPHYS_PAGES and sysinfo.freeram report immediately free
+ * pages, not the memory the kernel can provide after reclaiming filesystem
+ * cache.  That distinction is substantial after reading a multi-gigabyte
+ * database and makes a durable capacity decision depend on cold/warm cache
+ * history.  Prefer the kernel's pressure-aware estimate when available and
+ * retain the portable probes below as fallbacks. */
+static int
+mem_proc_meminfo(int type, size_t *memsz)
+{
+#if defined(__linux__)
+    FILE *fp = NULL;
+    char line[256] = {0};
+    unsigned long long kibibytes = 0;
+
+    if (!memsz)
+	return -1;
+    if (type != BU_MEM_AVAIL)
+	return 1;
+
+    fp = fopen("/proc/meminfo", "rb");
+    if (!fp)
+	return 1;
+    while (fgets(line, sizeof(line), fp)) {
+	if (sscanf(line, "MemAvailable: %llu kB", &kibibytes) == 1)
+	    break;
+    }
+    fclose(fp);
+    if (!kibibytes)
+	return 1;
+    if (kibibytes > (unsigned long long)SIZE_MAX / 1024ULL)
+	*memsz = SIZE_MAX;
+    else
+	*memsz = (size_t)kibibytes * 1024ULL;
+    return 0;
+#else
+    (void)type;
+    (void)memsz;
+    return 1;
+#endif
+}
+
+
 static int
 mem_sysconf(int type, size_t *memsz)
 {
@@ -302,6 +344,13 @@ bu_mem(int type, size_t *sz)
     }
 
     ret = mem_status(type, &subsz);
+    if (ret == 0) {
+	if (sz)
+	    *sz = subsz;
+	return subsz;
+    }
+
+    ret = mem_proc_meminfo(type, &subsz);
     if (ret == 0) {
 	if (sz)
 	    *sz = subsz;

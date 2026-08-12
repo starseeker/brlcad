@@ -16,6 +16,32 @@
 
 __BEGIN_DECLS
 
+/** Initialize a feature style with every optional property unspecified. */
+GED_EXPORT extern void
+ged_view_feature_style_init(struct ged_view_feature_style *style);
+
+/** Return an initialized feature-style value. */
+GED_HEADER_INLINE struct ged_view_feature_style
+ged_view_feature_style_default(void)
+{
+    struct ged_view_feature_style style;
+    ged_view_feature_style_init(&style);
+    return style;
+}
+
+/** Initialize caller-owned feature summary storage. */
+GED_EXPORT extern void
+ged_view_feature_summary_init(struct ged_view_feature_summary *summary);
+
+/** Return initialized feature-summary storage. */
+GED_HEADER_INLINE struct ged_view_feature_summary
+ged_view_feature_summary_default(void)
+{
+    struct ged_view_feature_summary summary;
+    ged_view_feature_summary_init(&summary);
+    return summary;
+}
+
 /** Remove a named retained feature from @p view_ctx. */
 GED_EXPORT extern int
 ged_view_feature_remove(struct ged_view_context *view_ctx, const char *name);

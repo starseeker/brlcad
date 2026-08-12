@@ -45,7 +45,7 @@ extern "C" {
 #include "bu/units.h"
 #include "bg/ballpivot.h"
 #include "bg/spsr.h"
-#include "ged/event_txn.h"
+#include "ged/event.h"
 #include "rt/geom.h"
 #include "wdb.h"
 #include "analyze.h"
@@ -68,7 +68,7 @@ void _pnts_fastf_t_to_vls(struct bu_vls *o, fastf_t d, int p)
 static int
 pnts_put_added(struct ged *gedp, struct directory **dp, const char *name, struct rt_db_internal *intern)
 {
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    int event_batch_opened = (ged_event_batch_begin(gedp) == GED_EVENT_OK);
     *dp = db_diradd(gedp->dbip, name, RT_DIR_PHONY_ADDR, 0,
 	    RT_DIR_SOLID, (void *)&intern->idb_type);
     if (*dp == RT_DIR_NULL) {
