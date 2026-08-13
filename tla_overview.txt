@@ -1,0 +1,316 @@
+BObol LoD TLA+ effort overview
+==============================
+
+Status and purpose
+------------------
+
+This document records the intent and design context for the initial BObol LoD
+TLA+ effort begun against the BRL-CAD source state reviewed on 2026-08-13.  It
+is deliberately more durable than comments tied to one implementation detail.
+There is continuing LoD debugging in another fork, and fixes from that work are
+expected to change some of the contracts described here.  The specifications
+in src/libBObol/tests/tla are therefore a foundation for refinement, not a
+claim that the present design is final or fully correct.
+
+The immediate goal is to use exhaustive finite-state exploration to find
+control-flow and composition defects before they require a large GUI model,
+particular renderer timing, or a manually discovered event ordering.  The
+models are intended to complement the existing unit, seeded lifecycle, GUI,
+visual, memory, FPS, and large-model tests.  They do not replace those tests.
+
+The effort does not modify production LoD behavior.  It supplies two formal
+models, TLC configurations, expected-failure mutation checks, optional CTest
+integration, and documentation linking the abstractions to the C++ code.
+
+
+Why this is feasible now
+------------------------
+
+The current code has already moved much of the LoD control plane into forms
+that are suitable for formal modeling:
+
+* BObolLodStateMachine has named phases, events, canonical inputs, invariant
+  diagnostics, and per-phase progress witnesses.
+* View, policy, inventory, source, routing, occurrence, and asset identities
+  use distinct value domains rather than interchangeable integers.
+* Coverage, convergence, budget, view-demand, presentation, publication,
+  pressure, resident-growth, and compaction rules are deterministic value
+  policies without scene pointers.
+* test_lod_coordinator.cpp already exhausts the scalar state-machine input
+  domain and runs a seeded composed lifecycle.  This is conceptually close to
+  model checking, but it samples compositions rather than enumerating every
+  reachable composition.
+* Request/result handling explicitly identifies stale generations and epochs,
+  while publication and completed-frame barriers provide named asynchronous
+  boundaries.
+
+The remaining difficult bugs tend to arise between those individually tested
+contracts: a camera change while a result is in flight, pressure arriving
+during coverage, publication awaiting a frame while convergence is queried,
+or an allocation becoming stale as residency grows.  TLA+ is a good fit for
+those event-ordering questions.
+
+
+The two-layer approach
+----------------------
+
+The first layer is LodCoordinator.tla.  It is a conformance model of
+BObolLodStateMachine in src/libBObol/lod_coordinator_private.h.  It models:
+
+* FALLBACK, COVERAGE, INTERACTIVE, SETTLING, STABLE, and COMPACTING;
+* all thirteen coordinator events;
+* the ten Boolean input observations;
+* observed versus canonical input and witness state;
+* completed-count clamping;
+* diagnostic invariant accumulation;
+* phase and progress witness updates; and
+* a valid quiet observation following every arbitrary observation.
+
+Its finite input domain intentionally follows the exhaustive C++ coordinator
+test.  This gives us a small specification whose behavior can be compared
+directly with the implementation.  If this layer differs from C++, the first
+question is conformance: did the model mistranscribe the code, did the code
+change, or has a desired contract changed?
+
+The second layer is LodScene.tla.  It is a design model rather than a
+line-for-line implementation.  It composes a deliberately small scene with:
+
+* three visible occurrences and three progressive cuts;
+* active, resident, requested, and allocated cuts;
+* view, policy, inventory, routing, and generation identity;
+* unordered asynchronous tasks and results;
+* minimum coverage and stale-result rejection;
+* screen-importance-weighted scene allocation and a protected floor;
+* render-cost and resident-memory limits;
+* interaction and quiet handoff;
+* publication and completed-frame barriers;
+* discrete renderer-capacity calibration;
+* CPU/GPU pressure recovery and resident compaction; and
+* explicit performance- or memory-limited stable outcomes.
+
+Keeping these layers separate is important.  The coordinator model should
+remain easy to compare with the C++ state machine.  The scene model is allowed
+to abstract implementation detail so it can explore cross-policy design
+properties without making counterexamples unreadable.
+
+
+What the initial models check
+-----------------------------
+
+The principal safety claims are:
+
+* an active cut never exceeds the resident cut;
+* every occurrence counted as covered has a drawable minimum;
+* a stale or cancelled result cannot mutate coverage, cuts, publication, or
+  accounting;
+* optional residency stays within the resident limit;
+* minimum drawable coverage may exceed that soft limit only as an explicitly
+  identified irreducible floor;
+* active render cost stays within the effective scene allowance except during
+  a named bounded recovery;
+* an allocation applies only to its exact current view and policy epochs;
+* a feasible protected quality floor is honored;
+* equivalent lower-importance candidates cannot outrank higher-importance
+  candidates because their scan order changed;
+* no single affordable quality upgrade remains after allocation;
+* compaction starts only after coverage and never discards an active prefix;
+* STABLE has no foreground coverage, service, publication, frame, interaction,
+  calibration, recovery, or compaction witness; and
+* every nonterminal state has a concrete progress witness.
+
+The liveness claim is conditional.  A fair QuiesceEnvironment action
+eventually stops new view, policy, source, pressure, capacity, and interaction
+changes.  With weak fairness for each admitted internal action, the model must
+then reach a stable presentation or a settled fallback, including explicitly
+limited terminal outcomes.  We intentionally do not claim convergence if the
+user moves forever, if work is allowed never to complete, or if the environment
+continues invalidating epochs.
+
+Expected-failure configurations inject two representative defects: stale
+result admission and premature stability before the presentation frame.  A
+test passes only when TLC rejects the mutation for the expected invariant.
+These mutation checks help prevent a vacuous or accidentally unreachable
+safety property from looking trustworthy.
+
+
+Intentional abstraction boundaries
+----------------------------------
+
+The initial scene model is small enough for explicit-state TLC.  Its constants
+are not production tuning values.  In particular:
+
+* Exactly three occurrences and three cuts are modeled.
+* All occurrences share the same finite render and memory cost curve.  Their
+  differing importance makes priority inversions easy to identify.
+* Allocation maximizes a small concave importance-weighted quality score.  It
+  represents the intent of the production protected-floor, minimax, and
+  marginal-upgrade allocator, not its floating-point binary search or heap
+  implementation.
+* FPS behavior is represented by Headroom, NearTarget, and Overloaded states.
+  Wall-clock sampling, smoothing, GPU queries, fixed draw overhead, rational
+  thresholds, overscan, and exact growth/backoff ratios are not yet modeled.
+* Resident memory is one aggregate currency.  CPU stable bytes, transient
+  working-set reservations, GPU buffers, atlas live/allocated bytes, immutable
+  old generations, and suffix construction are not yet separate currencies.
+* One task and one completed result may be retained per occurrence.  Worker
+  pool cardinality, journals containing several generations, cache-write
+  queues, and batch drain quanta are abstracted into nondeterministic ordering.
+* Draw mode is represented by the policy epoch rather than a separate wire,
+  shaded, hidden-line, normals, and prepared-channel cost domain.
+* Point proxies, structural boxes, terminal occurrence failures, spatial
+  visibility clusters, selected/highlighted state changes, and renderer-only
+  progressive ceilings are not yet explicit.
+* Epochs use a small non-wrapping domain.  Environment mutations stop at the
+  bound; the model does not manufacture collisions through modulo arithmetic.
+* One view, source, and service are modeled.  Locks, owner-thread enforcement,
+  source detachment, multiple subscribers, and multi-view shared residency are
+  outside the initial boundary.
+
+These omissions are deliberate state-space controls.  They should be expanded
+when a concrete bug, disputed contract, or cross-fork change requires them,
+not merely to make the model resemble the size of the implementation.
+
+
+Relationship between model and implementation
+---------------------------------------------
+
+The main correspondence is:
+
+* LodCoordinator phase/event logic -> BObolLodStateMachine.
+* CoverageCursor -> BObolLodCoveragePolicy and bounded submission scans.
+* ServiceTask/ServiceResult -> BObolLodService request and result journals.
+* epoch checks -> BLodIdentifiers.h plus service and view result admission.
+* Allocation -> controller_lod_retained_error_ceiling and allocation stamps.
+* Calibration/BudgetRecovery -> BObolLodBudgetPolicy and completed-frame
+  calibration paths.
+* Publication/PresentationFrame -> BObolLodPublicationPolicy and render
+  completion serials.
+* PressureRecovery -> BObolLodResourcePolicy.
+* CompactionCursor -> BObolLodCompactionPolicy and resident service planning.
+* ReportedStable and limitation flags -> BObolLodConvergencePolicy.
+
+The C++ implementation is the source of truth for what currently executes.
+The specification is the source of truth for the formal claims it states.
+Neither should silently overwrite the other when they disagree.  A mismatch
+must be classified as one of:
+
+1. a transcription error in the model;
+2. an intentional implementation change not yet reflected in the model;
+3. implementation behavior that violates the intended design; or
+4. a design decision that was previously ambiguous.
+
+Record that classification in the change which reconciles the artifacts.
+
+
+Reconciling work from the other fork
+------------------------------------
+
+When the ongoing debugging fork becomes available, use this sequence rather
+than broadly rewriting the model from the latest code:
+
+1. Inventory semantic changes.  Look for altered phase gates, new or removed
+   pending witnesses, identity/admission rules, budget exceptions, memory
+   currencies, publication barriers, and terminal-limit classifications.
+   Pure performance refactors need no model change unless they alter ordering
+   or atomicity.
+
+2. Preserve the triggering scenario.  For each bug fix, write down the
+   shortest known sequence of external and internal events, the relevant
+   epochs/costs, the incorrect outcome, and the corrected outcome.  Translate
+   it into a focused initial mode, action, invariant, or small domain extension
+   rather than relying only on the general state search.
+
+3. Decide the layer.  Direct changes to phase priority, canonicalization, or
+   coordinator witnesses belong in LodCoordinator.  Changes involving tasks,
+   occurrences, allocation, residency, publication, or composition normally
+   belong in LodScene.  Some fixes legitimately require both.
+
+4. Update the formal claim before weakening an invariant.  If a prior
+   invariant rejects intended new behavior, document the exact allowed
+   exception and give it an explicit state predicate or witness.  Do not add a
+   broad "recovery in progress" escape without bounding how it is discharged.
+
+5. Add a mutation or regression configuration when practical.  A useful
+   configuration should fail if the old bug is restored and pass with the new
+   rule.  Keep the counterexample short by reducing epochs or initial state,
+   not by removing the property being tested.
+
+6. Re-run coordinator conformance, all positive scene configurations, both
+   liveness configurations, and every expected-failure mutation.  Record the
+   TLC release, tla2tools.jar SHA-256, state count, depth, and runtime with the
+   reconciliation notes.
+
+7. Compare against executable tests.  Add or update a deterministic C++ test
+   for implementation conformance when the formal counterexample identifies a
+   real code path.  The TLA+ trace proves the ordering is possible in the
+   abstraction; the C++ test proves the implementation uses the intended
+   transition.
+
+Useful information to preserve for each imported fix is:
+
+* source commit and affected functions;
+* model actions involved;
+* precondition epochs and budgets;
+* progress witness before and after the fix;
+* safety or liveness property involved;
+* smallest TLC counterexample, if any;
+* matching C++/GUI test; and
+* any abstraction assumption that prevented reproducing the issue.
+
+
+Likely next refinements
+-----------------------
+
+Refinements should be driven by evidence from the other fork and TLC results.
+Probable candidates include:
+
+* separating view demand from resident demand and allowing resident suffix
+  growth independently of the active scene cut;
+* modeling allocation stamps across draw-mode changes and async resident
+  publication;
+* distinguishing soft scene allowance, protected-quality deadline, renderer
+  presentation ceiling, and hard memory admission;
+* adding old-generation plus replacement plus transient memory accounting;
+* modeling headroom replay, calibration-frame bounds, and stable-presentation
+  handoff as explicit one-shot witnesses;
+* representing point-proxy and structural-box coverage without treating a
+  valid terminal proxy as missing geometry;
+* adding multiple outstanding results and adversarial batch drain ordering;
+* modeling failed providers and terminal occurrence failures separately from
+  cancellation/fallback; and
+* checking symmetry/permutation properties for equal-importance occurrences
+  without fixing an arbitrary occurrence identity as the winner.
+
+Each extension should retain a small default configuration.  Larger stress
+configurations can be separate so normal CTest use remains predictable.
+
+
+Tooling and reproducibility
+---------------------------
+
+At the time this initial work was created, the available environment had no
+Java runtime, TLC command, or tla2tools.jar.  Consequently the files could be
+reviewed structurally and integrated with CMake, but SANY parsing and TLC model
+checking could not yet be executed here.
+
+The repository expects an external jar through TLA2TOOLS_JAR and optionally
+pins it with TLA2TOOLS_SHA256.  It does not vendor executable tooling.  Java
+and the jar are detected during configuration; absent tooling disables only
+the bobol_tla CTest label.  The runner prints the jar hash and TLC output so a
+counterexample can be associated with the exact checker.
+
+Before treating the initial models as a validated baseline:
+
+1. provide a Java runtime and tla2tools.jar;
+2. configure with TLA2TOOLS_JAR and preferably TLA2TOOLS_SHA256;
+3. run ctest -L bobol_tla --output-on-failure;
+4. correct any SANY/type/configuration errors without changing the intended
+   claims merely to make TLC pass;
+5. review every positive counterexample as a potential model or design defect;
+6. confirm every expected-failure test is rejected for its named invariant;
+   and
+7. record the first validated tool versions and state statistics here or in a
+   nearby dated validation note.
+
+See src/libBObol/tests/tla/README.md for commands, configuration names, and a
+compact code-to-model map.

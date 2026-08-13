@@ -1,0 +1,11 @@
+The TLA+ toolchain is in Java - if we wanted
+to look at doing an asciiquack style translation
+of it to C++, here are some components that might
+help:
+
+tree-sitter-tlaplus	Parses the TLA+ files into a raw C syntax tree.
+oneTBB			Distributes state generation across all CPU cores.
+immer + Boehm-GC	Provides fast, immutable state-sharing without memory leaks.
+xenium			High-speed, lock-free duplicate state checker.
+LMDB			Spills overflow states to SSD without blocking workers.
+Abseil-cpp		Powers fast native standard module overrides (Sets/Sequences).

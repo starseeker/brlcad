@@ -3093,6 +3093,7 @@ set(
   CMakeLists.txt
   ChangeLog
   TODO
+  tla_overview.txt
 )
 cmakefiles(${toplevel_ignore_files})
 

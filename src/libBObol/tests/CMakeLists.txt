@@ -38,6 +38,76 @@ target_include_directories(test_bobol_lod_coordinator PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/..)
 brlcad_add_test(NAME libBObol_lod_coordinator COMMAND test_bobol_lod_coordinator)
 
+# TLA+ is an optional design-validation tier.  Keep tla2tools external to the
+# source tree and leave normal builds unchanged when Java or the jar is not
+# available.  The runner records the exact jar hash in every result.
+set(TLA2TOOLS_JAR "$ENV{TLA2TOOLS_JAR}" CACHE FILEPATH
+  "Path to an external tla2tools.jar used for BObol LoD model checking")
+set(TLA2TOOLS_SHA256 "$ENV{TLA2TOOLS_SHA256}" CACHE STRING
+  "Optional expected SHA-256 for TLA2TOOLS_JAR")
+find_package(Java QUIET COMPONENTS Runtime)
+
+if(Java_JAVA_EXECUTABLE AND TLA2TOOLS_JAR AND EXISTS "${TLA2TOOLS_JAR}")
+  set(_bobol_tla_dir "${CMAKE_CURRENT_SOURCE_DIR}/tla")
+  set(_bobol_tla_runner "${_bobol_tla_dir}/run_tlc.cmake")
+
+  function(bobol_add_tlc_test test_name module config)
+    set(options EXPECT_FAILURE)
+    set(one_value_args EXPECTED_VIOLATION)
+    cmake_parse_arguments(TLC "${options}" "${one_value_args}" "" ${ARGN})
+    brlcad_add_test(
+      NAME ${test_name}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DJAVA_EXECUTABLE=${Java_JAVA_EXECUTABLE}"
+        "-DTLA2TOOLS_JAR=${TLA2TOOLS_JAR}"
+        "-DTLA2TOOLS_SHA256=${TLA2TOOLS_SHA256}"
+        "-DSPEC_DIR=${_bobol_tla_dir}"
+        "-DMODULE=${module}"
+        "-DCONFIG=${config}"
+        "-DEXPECT_FAILURE=${TLC_EXPECT_FAILURE}"
+        "-DEXPECTED_VIOLATION=${TLC_EXPECTED_VIOLATION}"
+        -P "${_bobol_tla_runner}")
+    set_tests_properties(${test_name} PROPERTIES
+      LABELS bobol_tla
+      TIMEOUT 330)
+  endfunction()
+
+  bobol_add_tlc_test(
+    libBObol_tla_coordinator LodCoordinator LodCoordinator.cfg)
+  bobol_add_tlc_test(
+    libBObol_tla_scene_safety LodScene LodScene_Safety.cfg)
+  bobol_add_tlc_test(
+    libBObol_tla_scene_liveness LodScene LodScene_Liveness.cfg)
+  bobol_add_tlc_test(
+    libBObol_tla_scene_pressure LodScene LodScene_Pressure.cfg)
+  bobol_add_tlc_test(
+    libBObol_tla_scene_resident_floor LodScene LodScene_ResidentFloor.cfg)
+  bobol_add_tlc_test(
+    libBObol_tla_scene_cancelled LodScene LodScene_Cancelled.cfg)
+  bobol_add_tlc_test(
+    libBObol_tla_coordinator_rejects_premature_stable
+    LodCoordinator LodCoordinator_PrematureStable.cfg
+    EXPECT_FAILURE EXPECTED_VIOLATION StableHasNoForeground)
+  bobol_add_tlc_test(
+    libBObol_tla_scene_rejects_stale_admission
+    LodScene LodScene_StaleMutation.cfg
+    EXPECT_FAILURE EXPECTED_VIOLATION NoStaleAdmissions)
+  bobol_add_tlc_test(
+    libBObol_tla_scene_rejects_premature_stable
+    LodScene LodScene_PrematureStable.cfg
+    EXPECT_FAILURE EXPECTED_VIOLATION StableHasNoForeground)
+elseif(NOT Java_JAVA_EXECUTABLE)
+  message(STATUS
+    "BObol LoD TLA+ tests disabled: no Java runtime was found")
+elseif(NOT TLA2TOOLS_JAR)
+  message(STATUS
+    "BObol LoD TLA+ tests disabled: set TLA2TOOLS_JAR to an external TLC jar")
+else()
+  message(STATUS
+    "BObol LoD TLA+ tests disabled: TLA2TOOLS_JAR does not exist: ${TLA2TOOLS_JAR}")
+endif()
+
 brlcad_addexec(test_bobol_compact_occurrence_stream
   test_compact_occurrence_stream.cpp
   "libBObol;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
@@ -212,6 +282,20 @@ cmakefiles(
   test_image_source.cpp
   test_lod_realization.cpp
   test_lod_coordinator.cpp
+  tla/LodCommon.tla
+  tla/LodCoordinator.tla
+  tla/LodCoordinator.cfg
+  tla/LodCoordinator_PrematureStable.cfg
+  tla/LodScene.tla
+  tla/LodScene_Safety.cfg
+  tla/LodScene_Liveness.cfg
+  tla/LodScene_Pressure.cfg
+  tla/LodScene_ResidentFloor.cfg
+  tla/LodScene_Cancelled.cfg
+  tla/LodScene_StaleMutation.cfg
+  tla/LodScene_PrematureStable.cfg
+  tla/README.md
+  tla/run_tlc.cmake
   test_lod_service.cpp
   test_lod_update_action.cpp
   test_mesh_lod_cache.cpp
