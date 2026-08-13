@@ -40,6 +40,8 @@
 #include <Inventor/nodes/SoOrthographicCamera.h>
 #include <Inventor/nodes/SoPerspectiveCamera.h>
 
+#include <Obol/cad/SoCADAssembly.h>
+
 #include <QApplication>
 #include <QCoreApplication>
 #include <QImage>
@@ -405,6 +407,31 @@ qtcad_obol_render_visible_compact_mesh_demand_count(
 	}
     }
     return uniqueOccurrenceKeys ? occurrenceKeys.size() : count;
+}
+
+
+static void
+qtcad_obol_render_compact_proxy_point_counts(
+    BObolViewController *controller, size_t &points, size_t &boxes)
+{
+    points = 0;
+    boxes = 0;
+    if (!controller || !controller->getViewLodState())
+	return;
+
+    BObolSceneController renderScene(controller->getRenderSceneRoot());
+    std::unordered_set<SoCADAssembly *> sampled;
+    for (int i = 0; i < renderScene.getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = renderScene.getDatabaseSource(i);
+	if (!source || !source->hasCompactInstanceIndex())
+	    continue;
+	SoCADAssembly *presentation =
+	    controller->getViewLodState()->findCadPresentation(source);
+	if (!presentation || !sampled.insert(presentation).second)
+	    continue;
+	points += presentation->lastSubpixelProxyCount();
+	boxes += presentation->lastUncollapsedStructuralProxyCount();
+    }
 }
 
 
@@ -1767,6 +1794,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    size_t projected_mesh_demand_after =
 		qtcad_obol_render_visible_compact_mesh_demand_count(
 		    controller, 0, 1, 1);
+	    size_t proxy_point_count_after = 0;
+	    size_t structural_box_count_after = 0;
 	    int lit_auto = 0;
 	    int diff_auto = 0;
 	    QImage frame_auto;
@@ -1810,6 +1839,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		projected_mesh_demand_after =
 		    qtcad_obol_render_visible_compact_mesh_demand_count(
 			controller, 0, 1, 1);
+		qtcad_obol_render_compact_proxy_point_counts(controller,
+		    proxy_point_count_after, structural_box_count_after);
 		(void)qtcad_obol_lod_service_status_get(gedp,
 		    ged_view_context_from_bv(view.viewContext()),
 		    &service_status);
@@ -1830,9 +1861,15 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		const bool otherwise_settled =
 		    compact_after > compact_before &&
 		    projected_mesh_demand_after > 0 &&
-		    lod_mesh_after >= projected_mesh_demand_after &&
+		    lod_mesh_after + proxy_point_count_after >=
+			projected_mesh_demand_after &&
 		    realized_after >= geometry_before &&
 		    service_idle;
+		/* Terminal structural proxies are a correctness failure checked
+		 * below, not evidence that useful background work remains.  Making
+		 * them part of the settle predicate hid that failure behind the full
+		 * timeout and made a two-box lifecycle defect cost 90 seconds per
+		 * case. */
 		/* A hidden software canvas has no automatic paint delivery.
 		 * The production controller deliberately waits for presentation
 		 * feedback before admitting a richer cut.  Present only when that
@@ -1881,6 +1918,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    view.get_viewport_image(frame_auto);
 	    lit_auto = lit_pixel_count(frame_auto);
 	    diff_auto = image_byte_diff(frame0, frame_auto);
+	    qtcad_obol_render_compact_proxy_point_counts(controller,
+		proxy_point_count_after, structural_box_count_after);
 	    (void)qtcad_obol_lod_service_status_get(gedp,
 		ged_view_context_from_bv(view.viewContext()), &service_status);
 	    if (!service_status.auto_submit) {
@@ -1893,18 +1932,22 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    }
 	    if (compact_after <= compact_before ||
 		projected_mesh_demand_after == 0 ||
-		lod_mesh_after < projected_mesh_demand_after ||
+		lod_mesh_after + proxy_point_count_after <
+		    projected_mesh_demand_after ||
+		structural_box_count_after != 0 ||
 		progressive_status.hasMore ||
 		realized_after < geometry_before ||
 		frame_auto.isNull() || lit_auto < 20 ||
 		(diff_auto <= 0 && lit0 < 20)) {
 		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-auto-expand failed: case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu/%zu projected (%zu drawable, %zu unique, %zu all) lit=%d diff=%d feedback_frames=%zu last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu progressive={submitted=%zu cached=%zu expanded=%zu existing=%zu remaining=%zu proxies=%zu changed=%d more=%d}",
+			"qtcad Obol progressive LoD startup-auto-expand failed: case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu point_proxies=%zu boxes=%zu/%zu projected (%zu drawable, %zu unique, %zu all) lit=%d diff=%d feedback_frames=%zu last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu progressive={submitted=%zu cached=%zu expanded=%zu existing=%zu remaining=%zu proxies=%zu changed=%d more=%d}",
 			testCase.name, source_count_before, source_count_after,
 			max_depth_before, max_depth_after,
 			geometry_before, realized_after,
 			compact_before, compact_after,
 			lod_mesh_after,
+			proxy_point_count_after,
+			structural_box_count_after,
 			projected_mesh_demand_after,
 			visible_mesh_demand_after,
 			unique_visible_mesh_demand_after,
@@ -1932,12 +1975,14 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		return 0;
 	    }
 	    fprintf(stderr,
-		    "qtcad_progressive_lod_startup_auto_expand case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu lit=%d diff=%d feedback_frames=%zu last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu",
+		    "qtcad_progressive_lod_startup_auto_expand case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu point_proxies=%zu boxes=%zu lit=%d diff=%d feedback_frames=%zu last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu",
 		    testCase.name, source_count_before, source_count_after,
 		    max_depth_before, max_depth_after,
 		    geometry_before, realized_after,
 		    compact_before, compact_after,
 		    lod_mesh_after,
+		    proxy_point_count_after,
+		    structural_box_count_after,
 		    lit_auto, diff_auto,
 		    feedback_frame_count,
 		    service_status.last_submitted_task_count,

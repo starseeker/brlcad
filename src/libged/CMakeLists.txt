@@ -339,6 +339,8 @@ set(
   draw.cpp
   ged.cpp
   ged_scene_api.cpp
+  ged_scene_backend.cpp
+  ged_scene_backend_obol.cpp
   ged_view_state.cpp
   ged_inside.c
   ged_track.c
@@ -378,6 +380,7 @@ set(
 set(
   GED_OBOL_PRIVATE_BRIDGE_SOURCES
   draw_obol.cpp
+  ged_scene_backend_obol.cpp
   ged_obol_pick_private.cpp
   ged_obol_polygon_private.cpp
   ged_obol_presentation_private.cpp

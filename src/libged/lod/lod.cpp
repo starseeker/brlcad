@@ -32,9 +32,7 @@
 #include "rt/geom.h"
 #include "rt/view.h"
 
-#include "BObol/BViewAttachment.h"
 #include "ged/draw.h"
-#include "../ged_draw_view_private.h"
 #include "../ged_private.h"
 
 extern "C" int
@@ -61,12 +59,9 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
     if (view_ctx == NULL) {
 	return BRLCAD_OK;
     }
-    BObolViewAttachment *attachment =
-	ged_view_context_obol_attachment(view_ctx);
-    if (!attachment)
-	return BRLCAD_ERROR;
     ged_view_lod_policy lod_policy;
-    attachment->getLodPolicy(&lod_policy);
+    if (!ged_view_lod_policy_get(&lod_policy, view_ctx))
+	return BRLCAD_ERROR;
     /* Print current state if no args are supplied */
     if (argc == 1) {
 	if (lod_policy.csg_enabled) {
@@ -88,13 +83,13 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 	/* lod on */
 	lod_policy.csg_enabled = 1;
 	lod_policy.zoom_refresh = 1;
-	attachment->setLodPolicy(&lod_policy);
+	(void)ged_view_lod_policy_apply(view_ctx, &lod_policy);
     } else if (argc == 1 && BU_STR_EQUAL(argv[0], "off")) {
 	/* lod off */
 	lod_policy.csg_enabled = 0;
 	if (!lod_policy.mesh_enabled)
 	    lod_policy.zoom_refresh = 0;
-	attachment->setLodPolicy(&lod_policy);
+	(void)ged_view_lod_policy_apply(view_ctx, &lod_policy);
     } else if (argc == 1 && BU_STR_EQUAL(argv[0], "enabled")) {
 	/* lod enabled - return on state */
 	bu_vls_printf(gedp->ged_result_str, "%d", lod_policy.csg_enabled);
@@ -107,7 +102,7 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 		} else {
 		    /* lod scale points f - set value */
 		    lod_policy.point_scale = atof(argv[2]);
-		    attachment->setLodPolicy(&lod_policy);
+		    (void)ged_view_lod_policy_apply(view_ctx, &lod_policy);
 		}
 	    } else if (BU_STR_EQUAL(argv[1], "curves")) {
 		if (argc == 2) {
@@ -116,7 +111,7 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 		} else {
 		    /* lod scale curves f - set value */
 		    lod_policy.curve_scale = atof(argv[2]);
-		    attachment->setLodPolicy(&lod_policy);
+		    (void)ged_view_lod_policy_apply(view_ctx, &lod_policy);
 		}
 	    } else {
 		printUsage = 1;

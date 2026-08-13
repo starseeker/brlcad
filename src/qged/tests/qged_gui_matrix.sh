@@ -840,7 +840,9 @@ validate_report()
 	.version == 2 and
 	.success == true and
 	(.samples | length) > 0 and
-	(any(.samples[]; (.draw_shape_count // 0) > 0)) and
+	(any(.samples[];
+	    ((.draw_frontier_count // 0) > 0) or
+	    ((.draw_occurrence_count // 0) > 0))) and
 	(all(.samples[]; (.failed_sources // 0) == 0)) and
 	(all(.samples[]; (.cad_payloads_without_entry // 0) == 0)) and
 	# The coordinator is the retained-display authority.  Any rejected event
@@ -1567,13 +1569,13 @@ validate_report()
 		else true end)) and
 	    (any(.samples[];
 		.command? == ("erase " + $path) and
-		(.draw_shape_count // 0) > 0 and
+		((.draw_frontier_count // 0) > 0) and
 		(.draw_frontier_paths | index($object)) != null)) and
 	    (any(.samples[];
 		(.command? | type) == "string" and
 		(.command | endswith(" " + $path)) and
 		(.command | startswith("draw ")) and
-		(.draw_shape_count // 0) > 0 and
+		((.draw_frontier_count // 0) > 0) and
 		(.draw_frontier_paths | index($object)) != null)) and
 	    (all(.samples[];
 		if (.action == "set_expanded" or

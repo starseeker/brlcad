@@ -1802,6 +1802,7 @@ BObolLodRequest::clear(void)
     projectedPixelDiameter = 0.0f;
     projectedPixelArea = 0.0f;
     projectedPixelPerimeter = 0.0f;
+    projectedBoundsContained = FALSE;
     targetPixelError = 1.0f;
     requestedCut = -1;
     bounds.makeEmpty();

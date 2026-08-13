@@ -28,11 +28,16 @@
 static int
 get_arb_type(struct directory *dp, struct db_i *dbip)
 {
-	int type;
+	int type = 0;
+	if (!dp || !dbip || dp->d_major_type != DB5_MAJORTYPE_BRLCAD ||
+		dp->d_minor_type != DB5_MINORTYPE_BRLCAD_ARB8)
+	    return 0;
 	const struct bn_tol arb_tol = BN_TOL_INIT_TOL;
 	struct rt_db_internal intern;
 	if (rt_db_get_internal(&intern, dp, dbip, (fastf_t *)nullptr) < 0) return 0;
-	type = rt_arb_std_type(&intern, &arb_tol);
+	if (intern.idb_major_type == DB5_MAJORTYPE_BRLCAD &&
+		intern.idb_type == ID_ARB8)
+	    type = rt_arb_std_type(&intern, &arb_tol);
 	rt_db_free_internal(&intern);
 	return type;
 }
@@ -112,6 +117,9 @@ db_find_region(int *ret, struct directory *search, struct db_i *dbip, int *depth
 QgCombTypeId
 QgCombType(struct directory *dp, struct db_i *dbip)
 {
+	if (!dp || !dbip || dp->d_major_type != DB5_MAJORTYPE_BRLCAD ||
+		dp->d_minor_type != DB5_MINORTYPE_BRLCAD_COMBINATION)
+	    return QgCombTypeId::StandardObj;
 	struct bu_attribute_value_set avs;
 	int region_flag = 0;
 	int air_flag = 0;
@@ -154,6 +162,10 @@ QgIcon(struct directory *dp, struct db_i *dbip)
 	QgCombTypeId comb_type = QgCombTypeId::StandardObj;
 	QImage raw_type_icon;
 	if (dbip != DBI_NULL && dp != RT_DIR_NULL) {
+		if (dp->d_major_type != DB5_MAJORTYPE_BRLCAD) {
+			raw_type_icon.load(":/images/primitives/other.png");
+			return raw_type_icon;
+		}
 		switch(dp->d_minor_type) {
 		case DB5_MINORTYPE_BRLCAD_TOR:
 			raw_type_icon.load(":/images/primitives/tor.png");

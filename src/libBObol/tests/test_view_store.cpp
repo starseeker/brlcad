@@ -24,6 +24,7 @@
 #include <Inventor/SoType.h>
 #include <Inventor/SoPath.h>
 #include <Inventor/actions/SoSearchAction.h>
+#include <Inventor/annex/HUD/nodekits/SoHUDKit.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoFont.h>
 #include <Inventor/nodes/SoNode.h>
@@ -158,6 +159,56 @@ test_feature_nodes(BObolViewController &view)
 	!NEAR_EQUAL(hud->position.getValue()[1], 58.0f, SMALL_FASTF) ||
 	!NEAR_EQUAL(hud->fontSize.getValue(), 12.0f, SMALL_FASTF))
 	FAIL("HUD label feature should preserve screen position and font size");
+
+    /* A frame-rate/HUD synchronizer republishes its current value on a
+     * periodic cadence.  Equal typed content must retain both node and handle
+     * identity and must not request another frame; otherwise the faceplate can
+     * starve a capacity-relevant LoD confirmation indefinitely. */
+    view.clearRenderRequest();
+    SoNode *hudNode = view.features().node(hudHandle);
+    BObolFeatureHandle unchangedHud = view.features().publishHudLabels(
+	"hud-labels", BObolFeatureScope::Shared, hudLabels);
+    if (unchangedHud != hudHandle || view.features().node(unchangedHud) !=
+	    hudNode || view.isRenderRequested())
+	FAIL("equal HUD publication should be an idempotent retained update");
+    hudLabels[0].text = "changed store hud label";
+    BObolFeatureHandle changedHud = view.features().publishHudLabels(
+	"hud-labels", BObolFeatureScope::Shared, hudLabels);
+    if (changedHud.id != hudHandle.id ||
+	changedHud.revision <= hudHandle.revision ||
+	view.features().node(changedHud) == hudNode ||
+	!view.isRenderRequested())
+	FAIL("changed HUD publication should replace the retained presentation");
+    view.clearRenderRequest();
+
+    /* SoHUDKit updates viewportSize while rendering.  That runtime projection
+     * state must not turn an otherwise identical retained line publication
+     * into a new feature after a canvas resize. */
+    BObolFeatureStyle hudLineStyle;
+    hudLineStyle.hud = TRUE;
+    std::vector<SbVec3f> hudLinePoints;
+    hudLinePoints.push_back(SbVec3f(4.0f, 8.0f, 0.0f));
+    hudLinePoints.push_back(SbVec3f(64.0f, 8.0f, 0.0f));
+    std::vector<int32_t> hudLineCommands;
+    hudLineCommands.push_back(static_cast<int32_t>(BObolLineCommand::Move));
+    hudLineCommands.push_back(static_cast<int32_t>(BObolLineCommand::Draw));
+    BObolFeatureHandle hudLineHandle = view.features().publishLineSet(
+	"hud-line", BObolFeatureScope::Shared, hudLinePoints,
+	hudLineCommands, &hudLineStyle);
+    SoNode *hudLineNode = view.features().node(hudLineHandle);
+    SoHUDKit *hudLine = static_cast<SoHUDKit *>(
+	first_node_of_type(hudLineNode, SoHUDKit::getClassTypeId()));
+    if (!hudLine)
+	FAIL("HUD line feature should realize a SoHUDKit");
+    hudLine->viewportSize = SbVec2f(947.0f, 693.0f);
+    view.clearRenderRequest();
+    BObolFeatureHandle unchangedHudLine = view.features().publishLineSet(
+	"hud-line", BObolFeatureScope::Shared, hudLinePoints,
+	hudLineCommands, &hudLineStyle);
+    if (unchangedHudLine != hudLineHandle ||
+	view.features().node(unchangedHudLine) != hudLineNode ||
+	view.isRenderRequested())
+	FAIL("HUD runtime viewport state should not invalidate equal publication");
 
     std::vector<SbVec3f> points;
     points.push_back(SbVec3f(0.0f, 0.0f, 0.0f));

@@ -106,12 +106,24 @@ int
 main(int argc, char **argv)
 {
     bu_setprogname(argv[0]);
-    if (argc < 3 || argc > 4 ||
-	(argc == 4 && std::string(argv[3]) != "--remove-inputs")) {
+    bool removeInputs = false;
+    bool padToMaximum = false;
+    if (argc < 3 || argc > 5) {
 	std::fprintf(stderr,
-	    "Usage: %s frames.tsv output.apng [--remove-inputs]\n",
+	    "Usage: %s frames.tsv output.apng [--pad-to-max] [--remove-inputs]\n",
 	    argv[0]);
 	return 2;
+    }
+    for (int i = 3; i < argc; ++i) {
+	const std::string option(argv[i]);
+	if (option == "--remove-inputs")
+	    removeInputs = true;
+	else if (option == "--pad-to-max")
+	    padToMaximum = true;
+	else {
+	    std::fprintf(stderr, "Unknown option: %s\n", argv[i]);
+	    return 2;
+	}
     }
 
     std::vector<qged_raw_frame> frames;
@@ -119,13 +131,21 @@ main(int argc, char **argv)
 	std::fprintf(stderr, "Unable to read frame manifest: %s\n", argv[1]);
 	return 1;
     }
-    const size_t width = frames.front().width;
-    const size_t height = frames.front().height;
+    size_t width = frames.front().width;
+    size_t height = frames.front().height;
+    if (padToMaximum) {
+	for (const qged_raw_frame &frame : frames) {
+	    width = std::max(width, frame.width);
+	    height = std::max(height, frame.height);
+	}
+    }
     if (width > std::numeric_limits<uint32_t>::max() ||
-	height > std::numeric_limits<uint32_t>::max())
+	height > std::numeric_limits<uint32_t>::max() ||
+	width > SIZE_MAX / height || width * height > SIZE_MAX / 4)
 	return 1;
     for (const qged_raw_frame &frame : frames) {
-	if (frame.width != width || frame.height != height) {
+	if (!padToMaximum &&
+	    (frame.width != width || frame.height != height)) {
 	    std::fprintf(stderr,
 		"Frame dimensions changed within capture: %s\n",
 		frame.path.c_str());
@@ -133,60 +153,59 @@ main(int argc, char **argv)
 	}
     }
 
-    icv_anim_t *animation = icv_anim_create(ICV_ANIM_APNG,
-	static_cast<uint32_t>(width), static_cast<uint32_t>(height), 60);
+    icv_anim_writer_t *animation = icv_anim_writer_create(argv[2],
+	static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+	frames.size(), 60);
     if (!animation)
 	return 1;
     std::vector<unsigned char> pixels;
+    std::vector<unsigned char> canvas(width * height * 4, 0);
     for (size_t frameIndex = 0; frameIndex < frames.size(); ++frameIndex) {
 	const qged_raw_frame &frame = frames[frameIndex];
 	if (!qged_read_rgba(frame, pixels)) {
 	    std::fprintf(stderr, "Unable to read captured frame: %s\n",
 		frame.path.c_str());
-	    icv_anim_destroy(animation);
+	    (void)icv_anim_writer_close(animation);
 	    return 1;
 	}
-	icv_image_t *image = icv_create_with_channels(
-	    width, height, ICV_COLOR_SPACE_RGB, 4);
-	if (!image) {
-	    icv_anim_destroy(animation);
-	    return 1;
-	}
-	for (size_t y = 0; y < height; ++y) {
-	    const size_t targetY = height - y - 1;
-	    for (size_t x = 0; x < width; ++x) {
-		const size_t source = (y * width + x) * 4;
-		const size_t target = (targetY * width + x) * 4;
+	/* APNG requires a fixed canvas.  A resize capture deliberately changes
+	 * frame dimensions, so center each actual frame without scaling on an
+	 * opaque black maximum-size canvas.  This preserves pixel evidence and
+	 * makes the widget extent change visible rather than distorting it. */
+	std::fill(canvas.begin(), canvas.end(), 0);
+	for (size_t pixel = 0; pixel < width * height; ++pixel)
+	    canvas[pixel * 4 + 3] = 255;
+	const size_t xOffset = (width - frame.width) / 2;
+	const size_t yOffset = (height - frame.height) / 2;
+	for (size_t y = 0; y < frame.height; ++y) {
+	    const size_t targetY = yOffset + y;
+	    for (size_t x = 0; x < frame.width; ++x) {
+		const size_t source = (y * frame.width + x) * 4;
+		const size_t target =
+		    (targetY * width + xOffset + x) * 4;
 		for (size_t channel = 0; channel < 4; ++channel)
-		    image->data[target + channel] =
-			ICV_CONV_8BIT(pixels[source + channel]);
+		    canvas[target + channel] = pixels[source + channel];
 	    }
 	}
-	if (icv_anim_add_frame(animation, image) != 0) {
-	    icv_destroy(image);
-	    icv_anim_destroy(animation);
-	    return 1;
-	}
-	icv_destroy(image);
 	uint64_t delay = 16667;
 	if (frameIndex + 1 < frames.size() &&
 	    frames[frameIndex + 1].elapsedUsec > frame.elapsedUsec)
 	    delay = frames[frameIndex + 1].elapsedUsec - frame.elapsedUsec;
 	delay = std::max<uint64_t>(1, std::min<uint64_t>(delay, 1000000));
-	if (icv_anim_set_frame_delay(animation, frameIndex,
-		static_cast<uint32_t>(delay)) != 0) {
-	    icv_anim_destroy(animation);
+	if (icv_anim_writer_add_rgba8(animation, canvas.data(),
+		static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+		static_cast<uint32_t>(delay), 0, 0) != 0) {
+	    (void)icv_anim_writer_close(animation);
 	    return 1;
 	}
     }
 
-    const int status = icv_anim_write(animation, argv[2]);
-    icv_anim_destroy(animation);
+    const int status = icv_anim_writer_close(animation);
     if (status != 0) {
 	std::fprintf(stderr, "Unable to encode APNG: %s\n", argv[2]);
 	return 1;
     }
-    if (argc == 4) {
+    if (removeInputs) {
 	for (const qged_raw_frame &frame : frames)
 	    (void)std::remove(frame.path.c_str());
     }

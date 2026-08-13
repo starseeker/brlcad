@@ -176,6 +176,65 @@ canonical_path(const char *path)
 
 
 static std::string
+path_last_component(const std::string &path)
+{
+    const size_t slash = path.rfind('/');
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+
+static std::string
+replace_path_component(const std::string &path, const std::string &old_name,
+	const std::string &new_name, bool *changed)
+{
+    if (changed)
+	*changed = false;
+    if (path.empty() || old_name.empty() || new_name.empty())
+	return path;
+
+    std::string result;
+    size_t offset = 0;
+    while (offset < path.size()) {
+	const size_t slash = path.find('/', offset);
+	const size_t end = slash == std::string::npos ? path.size() : slash;
+	const std::string component = path.substr(offset, end - offset);
+	if (!result.empty())
+	    result.push_back('/');
+	if (component == old_name) {
+	    result.append(new_name);
+	    if (changed)
+		*changed = true;
+	} else {
+	    result.append(component);
+	}
+	if (slash == std::string::npos)
+	    break;
+	offset = slash + 1;
+    }
+    return result;
+}
+
+
+static bool
+path_has_component(const std::string &path, const std::string &component)
+{
+    if (path.empty() || component.empty())
+	return false;
+    size_t offset = 0;
+    while (offset < path.size()) {
+	const size_t slash = path.find('/', offset);
+	const size_t end = slash == std::string::npos ? path.size() : slash;
+	if (path.compare(offset, end - offset, component) == 0)
+	    return true;
+	if (slash == std::string::npos)
+	    break;
+	offset = slash + 1;
+    }
+    return false;
+}
+
+
+static std::string
 request_path(const struct ged_scene_edit_request *request)
 {
     if (!request)
@@ -548,6 +607,163 @@ ged_draw_frontier_has_roots(struct ged *gedp,
 
 
 extern "C" int
+ged_draw_frontier_root_count(struct ged *gedp)
+{
+    frontier_state *state = state_get(gedp, false);
+    if (!state)
+	return 0;
+    return state->roots.size() > static_cast<size_t>(INT_MAX) ? INT_MAX :
+	static_cast<int>(state->roots.size());
+}
+
+
+extern "C" int
+ged_draw_frontier_clear(struct ged *gedp,
+	struct ged_view_context *view_ctx, int mode)
+{
+    frontier_state *state = state_get(gedp, false);
+    if (!state)
+	return 0;
+
+    int changed = 0;
+    for (auto it = state->roots.begin(); it != state->roots.end(); ) {
+	if (view_ctx && !root_in_scope(*it, view_ctx, mode)) {
+	    ++it;
+	    continue;
+	}
+	frontier_backend_change_note(state, *it, true);
+	it = state->roots.erase(it);
+	changed++;
+    }
+    return changed;
+}
+
+
+extern "C" int
+ged_draw_frontier_source_affected(
+    struct ged *gedp, const char *path, const char *const *paths,
+    size_t path_count, struct ged_view_context *view_ctx, int mode)
+{
+    frontier_state *state = state_get(gedp, false);
+    if (!state || state->roots.empty())
+	return 0;
+
+    std::vector<std::string> targets;
+    if (path && path[0])
+	targets.push_back(canonical_path(path));
+    for (size_t i = 0; paths && i < path_count; i++) {
+	if (paths[i] && paths[i][0])
+	    targets.push_back(canonical_path(paths[i]));
+    }
+    if (targets.empty())
+	return ged_draw_frontier_root_count(gedp);
+
+    int affected = 0;
+    for (const frontier_root &root : state->roots) {
+	if ((view_ctx || mode >= 0) &&
+	    !root_in_scope(root, view_ctx, mode))
+	    continue;
+	bool match = false;
+	for (const std::string &target : targets) {
+	    if (target.empty())
+		continue;
+	    if (path_prefix(root.path, target) ||
+		path_prefix(target, root.path) ||
+		path_has_component(root.path, path_last_component(target)) ||
+		object_occurs_under_root(gedp, root, target)) {
+		match = true;
+		break;
+	    }
+	}
+	if (match)
+	    affected++;
+    }
+    return affected;
+}
+
+
+static bool
+rename_frontier_root(struct ged *gedp, frontier_root &root,
+	const std::string &old_name, const std::string &new_name)
+{
+    bool root_changed = false;
+    const std::string updated_root = replace_path_component(root.path,
+	old_name, new_name, &root_changed);
+    if (root_changed) {
+	root.path = updated_root;
+	path_ids updated_ids;
+	if (resolve_path(gedp, root.path, updated_ids))
+	    root.ids.swap(updated_ids);
+    }
+
+    std::vector<visibility_rule> updated_rules;
+    updated_rules.reserve(root.rules.size());
+    for (const visibility_rule &rule : root.rules) {
+	const std::string rule_path = print_path(gedp, rule.ids);
+	bool rule_changed = false;
+	const std::string updated_path = replace_path_component(rule_path,
+	    old_name, new_name, &rule_changed);
+	if (!rule_changed) {
+	    updated_rules.push_back(rule);
+	    continue;
+	}
+	path_ids updated_ids;
+	if (resolve_path(gedp, updated_path, updated_ids))
+	    updated_rules.push_back(visibility_rule{updated_ids, rule.visible});
+	root_changed = true;
+    }
+    root.rules.swap(updated_rules);
+    std::stable_sort(root.rules.begin(), root.rules.end(),
+	visibility_rule_less);
+
+    for (presentation_rule &rule : root.presentation) {
+	bool rule_changed = false;
+	rule.path = replace_path_component(rule.path, old_name, new_name,
+	    &rule_changed);
+	root_changed = root_changed || rule_changed;
+    }
+    return root_changed;
+}
+
+
+extern "C" int
+ged_draw_frontier_source_rename(struct ged *gedp, const char *old_path,
+	const char *new_path)
+{
+    frontier_state *state = state_get(gedp, false);
+    if (!state || !old_path || !old_path[0] || !new_path || !new_path[0])
+	return 0;
+
+    const std::string old_name = path_last_component(canonical_path(old_path));
+    const std::string new_name = path_last_component(canonical_path(new_path));
+    int changed = 0;
+    for (frontier_root &root : state->roots) {
+	if (!rename_frontier_root(gedp, root, old_name, new_name))
+	    continue;
+	frontier_backend_change_note(state, root, root.rules.empty());
+	changed++;
+    }
+    for (auto &entry : state->promotions) {
+	promotion_record &promotion = entry.second;
+	for (std::string &occurrence : promotion.occurrences) {
+	    bool occurrence_changed = false;
+	    occurrence = replace_path_component(occurrence, old_name,
+		new_name, &occurrence_changed);
+	    if (occurrence_changed) {
+		for (frontier_root &root : promotion.roots)
+		    root.conflict = true;
+	    }
+	}
+	for (frontier_root &root : promotion.roots) {
+	    if (rename_frontier_root(gedp, root, old_name, new_name))
+		root.conflict = true;
+	}
+    }
+    return changed;
+}
+
+
+extern "C" int
 ged_draw_frontier_foreach_root(struct ged *gedp,
 			       struct ged_view_context *view_ctx,
 			       int mode,
@@ -639,6 +855,15 @@ ged_draw_frontier_visibility_changes_foreach(
 	break;
     }
     return count;
+}
+
+
+extern "C" void
+ged_draw_frontier_visibility_changes_discard(struct ged *gedp)
+{
+    frontier_state *state = state_get(gedp, false);
+    if (state)
+	state->backend_changes.clear();
 }
 
 
@@ -1140,8 +1365,6 @@ ged_draw_frontier_absorb_draw(
 	if (backend_refresh[i])
 	    refresh_roots++;
     }
-    if (changed_roots)
-	(void)ged_selection_present_private(gedp);
     if (result && changed_roots && !new_roots && !refresh_roots) {
 	result->affected_groups +=
 	    static_cast<int>(requested_paths.size());
@@ -1434,7 +1657,10 @@ ged_draw_frontier_erase_path(struct ged *gedp, const char *path,
     int retired_roots = 0;
     if (state) {
 	for (auto it = state->roots.begin(); it != state->roots.end(); ) {
-	    if (!root_in_scope(*it, view_ctx, mode) || it->ids != target) {
+	    const bool owns_exact = it->ids == target;
+	    const bool below_prefix = prefix && ids_prefix(target, it->ids);
+	    if (!root_in_scope(*it, view_ctx, mode) ||
+		(!owns_exact && !below_prefix)) {
 		++it;
 		continue;
 	    }
@@ -1444,19 +1670,10 @@ ged_draw_frontier_erase_path(struct ged *gedp, const char *path,
 	}
     }
     if (retired_roots) {
-	/* During the migration an eager draw may also own lightweight record
-	 * entries.  Remove those inside the same reducer operation without
-	 * making their presence a condition for semantic success. */
-	if (view_ctx || mode >= 0)
-	    (void)ged_draw_erase_path_string_scoped(gedp,
-		target_path.c_str(), view_ctx, mode);
-	else
-	    (void)ged_draw_erase_path_string(gedp, target_path.c_str());
 	if (result) {
 	    result->affected_groups += retired_roots;
 	    result->affected_shapes += retired_roots;
 	}
-	(void)ged_selection_present_private(gedp);
 	return retired_roots;
     }
 
@@ -1485,7 +1702,6 @@ ged_draw_frontier_erase_path(struct ged *gedp, const char *path,
 	}
     }
     (void)prefix;
-    (void)ged_selection_present_private(gedp);
     if (result)
 	result->presentation_only = 1;
     return changed;

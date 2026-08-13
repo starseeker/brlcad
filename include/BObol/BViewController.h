@@ -170,6 +170,9 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t visibleTargetCount;
     size_t activePayloadCount;
     size_t satisfiedPayloadCount;
+    size_t presentedSubpixelOccurrenceCount;
+    size_t presentedStructuralBoxCount;
+    size_t terminalOccurrenceFailureCount;
     size_t pendingTasks;
     size_t inFlight;
     size_t queuedResults;
@@ -456,6 +459,21 @@ public:
      * test drivers may use it to distinguish published scene/camera state
      * from a frame which has actually reached the presentation surface. */
     uint64_t getPresentedFrameSerial(void) const;
+    /** Monotonic controller-side render-request mutation token.  This is
+     * diagnostic/liveness state: it lets a host distinguish an unchanged
+     * pending level from a newer request published while a prior frame was
+     * being consumed. */
+    uint64_t getRenderRequestSerial(void) const;
+    /** Monotonic count of complete CAD presentation barriers.  Unlike
+     * getPresentedFrameSerial(), this advances only for traversals accepted
+     * by the LoD state machine (not retained images from interrupted frames). */
+    uint64_t getRenderCompletionSerial(void) const;
+    /** Completion serial required by the current camera-settle gate, or zero
+     * when no camera frame is outstanding. */
+    uint64_t getLodSettleAfterRenderSerial(void) const;
+    /** Completion serial required before the next progressive cut may be
+     * admitted, or zero when no refinement presentation is outstanding. */
+    uint64_t getLodRefinementResumeAfterRenderSerial(void) const;
     /** Short-horizon presentation cadence used by diagnostic telemetry.  LoD
      * capacity uses measured CPU/GPU work instead: an event-driven host gap
      * is not a renderer cost. */
@@ -847,6 +865,7 @@ private:
     void completePresentationBarrier(uint64_t elapsedNanoseconds);
     void scheduleResidentGrowthReallocationIfReady(void);
     void armStableLodHeadroomProbeIfReady(void);
+    void resumeLodAfterOnePixelRecovery(void);
     size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BObolLodService *service, void *userData);
     /* Rewrite the headlight direction from the last camera orientation so it

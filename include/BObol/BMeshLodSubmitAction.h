@@ -73,6 +73,12 @@ public:
     SbBool getAllowCutDowngrade(void) const;
     void setAllowRetainedRefinement(SbBool allow);
     SbBool getAllowRetainedRefinement(void) const;
+    /* Cut hysteresis is a presentation stabilizer for an actively changing
+     * view, not part of the physical pixel-error demand.  Quiet/final passes
+     * must leave it disabled so requestedCut remains the first producer cut
+     * which actually satisfies targetPixelError. */
+    void setCutHysteresisEnabled(SbBool enabled);
+    SbBool getCutHysteresisEnabled(void) const;
     /* Permit a zoom-in pass to request a missing pixel-demanded cache suffix
      * even when the aggregate render-cost budget cannot expose it yet.
      * Worker working-set and resident-memory admission remain authoritative;
@@ -227,6 +233,7 @@ private:
     SbBool requireLodBacked;
     SbBool allowCutDowngrade;
     SbBool allowRetainedRefinement;
+    SbBool cutHysteresisEnabled;
     SbBool allowResidentPrefetch;
     int refinementCutCeiling;
     SbBool allowRepresentationRefinement;

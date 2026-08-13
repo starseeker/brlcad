@@ -35,6 +35,7 @@
 #include <Inventor/nodes/SoText2.h>
 #include <Inventor/nodes/SoTranslation.h>
 #include <Inventor/annex/HUD/nodekits/SoHUDKit.h>
+#include <Inventor/misc/SoChildList.h>
 
 #include <algorithm>
 #include <atomic>
@@ -144,6 +145,19 @@ store_owner_matches(const BObolFeatureOwner &recordOwner,
     }
 
     return TRUE;
+}
+
+static SbBool
+store_overlay_equal(const BObolOverlayInfo &a, const BObolOverlayInfo &b)
+{
+    return a.isOverlay == b.isOverlay &&
+	a.ownerToken == b.ownerToken &&
+	a.role == b.role &&
+	a.overlayClass == b.overlayClass &&
+	a.lifecycle == b.lifecycle &&
+	a.order == b.order &&
+	a.sortOrder == b.sortOrder &&
+	a.sourcePath == b.sourcePath ? TRUE : FALSE;
 }
 
 static SbBool
@@ -823,12 +837,94 @@ store_feature_release_node(BObolFeatureStoreRecord *rec)
     rec->attachmentRoot = NULL;
 }
 
+/* Rebuilt typed features are immutable presentation values.  Compare their
+ * field trees before replacing the retained node so periodic HUD/faceplate
+ * synchronization is idempotent.  Group children are not Coin fields and
+ * therefore need an explicit recursive comparison.  Custom nodes are opaque
+ * plugin-owned objects and are compared by identity only below. */
+static const SoNode *
+store_feature_first_node_of_type(const SoNode *node, SoType type)
+{
+    if (!node)
+	return NULL;
+    if (node->isOfType(type))
+	return node;
+
+    const SoChildList *children = node->getChildren();
+    if (!children)
+	return NULL;
+    for (int i = 0; i < children->getLength(); i++) {
+	const SoNode *found = store_feature_first_node_of_type(
+	    (*children)[i], type);
+	if (found)
+	    return found;
+    }
+    return NULL;
+}
+
+static SbBool
+store_feature_nodes_equal(const SoNode *a, const SoNode *b)
+{
+    if (a == b)
+	return TRUE;
+    if (!a || !b || a->getTypeId() != b->getTypeId())
+	return FALSE;
+
+    /* Feature-store HUD kits wrap exactly one SoBRLVListShape.  The kit owns
+     * renderer-maintained viewport/camera state, so comparing its fields (or
+     * its complete nodekit child graph) makes identical line geometry look
+     * different after the first render or any widget resize.  Compare the
+     * wrapped immutable feature instead and ignore runtime projection state. */
+    if (a->isOfType(SoHUDKit::getClassTypeId())) {
+	return store_feature_nodes_equal(
+	    store_feature_first_node_of_type(a,
+		SoBRLVListShape::getClassTypeId()),
+	    store_feature_first_node_of_type(b,
+		SoBRLVListShape::getClassTypeId()));
+    }
+    if (!a->fieldsAreEqual(b))
+	return FALSE;
+
+    const SbBool aGroup = a->isOfType(SoGroup::getClassTypeId());
+    const SbBool bGroup = b->isOfType(SoGroup::getClassTypeId());
+    if (aGroup != bGroup)
+	return FALSE;
+    if (!aGroup)
+	return TRUE;
+
+    const SoGroup *ga = static_cast<const SoGroup *>(a);
+    const SoGroup *gb = static_cast<const SoGroup *>(b);
+
+    /* These BRL-CAD adapters expose the complete semantic value in fields and
+     * rebuild renderer/helper children from those fields.  Comparing those
+     * implementation children would make an identical HUD/grid/ADC publish
+     * look different merely because nodekit internals have fresh identities. */
+    if (a->isOfType(SoBRLHUDLabelOverlay::getClassTypeId()))
+	return TRUE;
+    if (ga->getNumChildren() != gb->getNumChildren())
+	return FALSE;
+    for (int i = 0; i < ga->getNumChildren(); i++) {
+	if (!store_feature_nodes_equal(ga->getChild(i), gb->getChild(i)))
+	    return FALSE;
+    }
+    return TRUE;
+}
+
 static void
+store_feature_discard_unattached_node(SoNode *node)
+{
+    if (!node)
+	return;
+    node->ref();
+    node->unref();
+}
+
+static SbBool
 store_feature_set_node(BObolViewController *controller,
 	BObolFeatureStoreRecord *rec, SoNode *node)
 {
     if (!rec)
-	return;
+	return FALSE;
 
     SoGroup *desiredRoot = store_feature_attachment_root(controller, rec);
     if (rec->node == node) {
@@ -836,8 +932,16 @@ store_feature_set_node(BObolViewController *controller,
 	    store_detach_node(rec->attachmentRoot, rec->node);
 	    store_attach_node(desiredRoot, rec->node);
 	    rec->attachmentRoot = desiredRoot;
+	    return TRUE;
 	}
-	return;
+	return FALSE;
+    }
+
+    if (rec->kind != BObolFeatureKind::CustomNode && rec->node && node &&
+	rec->attachmentRoot == desiredRoot &&
+	store_feature_nodes_equal(rec->node, node)) {
+	store_feature_discard_unattached_node(node);
+	return FALSE;
     }
 
     store_feature_release_node(rec);
@@ -847,6 +951,7 @@ store_feature_set_node(BObolViewController *controller,
 	store_attach_node(desiredRoot, rec->node);
 	rec->attachmentRoot = desiredRoot;
     }
+    return TRUE;
 }
 
 static void
@@ -1007,13 +1112,22 @@ struct BObolFeatureStore::Impl {
 	rec->owner.resultCallback(result, rec->owner.callbackUserData);
     }
 
-    void setNode(BObolFeatureStoreRecord *rec, SoNode *node)
+    SbBool setNode(BObolFeatureStoreRecord *rec, SoNode *node,
+	    SbBool rollbackUnchangedPublish = FALSE)
     {
 	if (!rec)
-	    return;
-	store_feature_set_node(controller, rec, node);
-	if (controller)
+	    return FALSE;
+	const SbBool changed = store_feature_set_node(controller, rec, node);
+	/* Existing records advance once in upsert() before rebuilding.  An equal
+	 * retained publication is a no-op and must preserve its handle revision as
+	 * well as avoid a repaint request.  Explicit mutation helpers deliberately
+	 * retain their new revision even when their retained presentation happens
+	 * to compare equal (metadata and custom-node state need not live in fields). */
+	if (!changed && rollbackUnchangedPublish && rec->revision > 1)
+	    rec->revision--;
+	if (changed && controller)
 	    controller->requestPresentationRender("view-feature-store");
+	return changed;
     }
 
     void markOwnerGeneration(const BObolFeatureOwner &owner)
@@ -1721,7 +1835,7 @@ BObolFeatureStore::publishLineSet(const SbString &name,
     rec->points = points;
     rec->commands = commands;
     SoNode *node = store_rebuild_node_for_feature(*rec);
-    this->impl->setNode(rec, node);
+    this->impl->setNode(rec, node, TRUE);
     this->impl->notify(rec, BObolCommandResultStatus::Updated, "publishLineSet");
     return this->impl->handle(rec);
 }
@@ -1757,7 +1871,7 @@ BObolFeatureStore::publishIndexedLineSet(const SbString &name,
     rec->commands = commands;
     rec->indices = indices;
     SoNode *node = store_rebuild_node_for_feature(*rec);
-    this->impl->setNode(rec, node);
+    this->impl->setNode(rec, node, TRUE);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "publishIndexedLineSet");
     return this->impl->handle(rec);
@@ -1779,7 +1893,7 @@ BObolFeatureStore::publishPointSet(const SbString &name,
     rec->points = points;
     rec->commands = commands;
     SoNode *node = store_rebuild_node_for_feature(*rec);
-    this->impl->setNode(rec, node);
+    this->impl->setNode(rec, node, TRUE);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "publishPointSet");
     return this->impl->handle(rec);
@@ -1798,7 +1912,7 @@ BObolFeatureStore::publishLabels(const SbString &name,
 	return BObolFeatureHandle();
     rec->labels = labels;
     SoNode *node = store_rebuild_node_for_feature(*rec);
-    this->impl->setNode(rec, node);
+    this->impl->setNode(rec, node, TRUE);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "publishLabels");
     return this->impl->handle(rec);
@@ -1817,7 +1931,7 @@ BObolFeatureStore::publishHudLabels(const SbString &name,
 	return BObolFeatureHandle();
     rec->labels = labels;
     SoNode *node = store_rebuild_node_for_feature(*rec);
-    this->impl->setNode(rec, node);
+    this->impl->setNode(rec, node, TRUE);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "publishHudLabels");
     return this->impl->handle(rec);
@@ -1842,7 +1956,7 @@ BObolFeatureStore::publishArrow(const SbString &name,
     rec->points = points;
     rec->commands.clear();
     SoNode *node = store_rebuild_node_for_feature(*rec);
-    this->impl->setNode(rec, node);
+    this->impl->setNode(rec, node, TRUE);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "publishArrow");
     return this->impl->handle(rec);
@@ -1863,7 +1977,7 @@ BObolFeatureStore::publishAxes(const SbString &name,
     rec->axesCenters = centers;
     rec->halfAxesSize = halfAxesSize;
     SoNode *node = store_rebuild_node_for_feature(*rec);
-    this->impl->setNode(rec, node);
+    this->impl->setNode(rec, node, TRUE);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "publishAxes");
     return this->impl->handle(rec);
@@ -1890,7 +2004,7 @@ BObolFeatureStore::publishLineLayers(const SbString &name,
 			     layers[i].commands.end());
     }
     SoNode *node = store_rebuild_node_for_feature(*rec);
-    this->impl->setNode(rec, node);
+    this->impl->setNode(rec, node, TRUE);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "publishLineLayers");
     return this->impl->handle(rec);
@@ -1952,7 +2066,7 @@ BObolFeatureStore::publishIndexedFaceSet(const SbString &name,
     rec->indices = indices;
     rec->commands.clear();
     SoNode *node = store_rebuild_node_for_feature(*rec);
-    this->impl->setNode(rec, node);
+    this->impl->setNode(rec, node, TRUE);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 		       "publishIndexedFaceSet");
     return this->impl->handle(rec);
@@ -2417,6 +2531,8 @@ BObolFeatureStore::setOverlayInfo(BObolFeatureHandle handle,
     BObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
 	return FALSE;
+    if (store_overlay_equal(rec->overlay, overlay))
+	return TRUE;
 
     rec->overlay = overlay;
     rec->revision++;
@@ -2434,7 +2550,10 @@ BObolFeatureStore::clearOverlayInfo(BObolFeatureHandle handle)
     if (!rec)
 	return FALSE;
 
-    rec->overlay = BObolOverlayInfo();
+    const BObolOverlayInfo empty;
+    if (store_overlay_equal(rec->overlay, empty))
+	return TRUE;
+    rec->overlay = empty;
     rec->revision++;
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);

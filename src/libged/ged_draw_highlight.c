@@ -60,15 +60,10 @@ ged_draw_highlighted_shape_ref_invalidate(struct ged *gedp)
 
 /*
  * Register @p ref as the single currently highlighted shape.
- * Clears the highlight state of any previously registered shape first.
- * Passing a null ref clears the previously registered shape and deregisters
- * the single-highlight ref.  Operations that set multiple highlighted records
- * use ged_draw_highlighted_shape_ref_invalidate() instead so their highlighted
- * records are not undone while the O(N) clear fallback remains safe.
- *
- * Highlight identity is a draw ref.  Node highlight bits are updated here
- * only as a derived compatibility surface for older callers that still ask
- * appearance directly.
+ * This is semantic bookkeeping only.  The committed transaction adapter owns
+ * all renderer mutations, including clearing the previous realized
+ * occurrence.  Keeping that boundary strict prevents a highlight request from
+ * reaching the renderer once here and again during backend application.
  */
 static int
 _sg_set_highlighted_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
@@ -80,20 +75,16 @@ _sg_set_highlighted_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
     ged_draw_shape_ref old_ref = _sg_highlighted_shape_ref(gdp);
 
     if (old_ref.token == ref.token &&
-	    old_ref.scene_revision == ref.scene_revision) {
-	return !ged_draw_shape_ref_is_null(ref);
-    }
+	old_ref.scene_revision == ref.scene_revision)
+	return 0;
 
-    (void)ged_draw_shape_ref_set_highlighted(gedp, old_ref, 0);
-    int set = !ged_draw_shape_ref_is_null(ref) &&
-	ged_draw_shape_ref_set_highlighted(gedp, ref, 1);
-
+    const int set = !ged_draw_shape_ref_is_null(ref);
     gdp->gd_highlight_token = set ? ref.token : 0;
     gdp->gd_highlight_scene_rev = set ? ref.scene_revision : 0;
 
     /* Every transition is itself a highlight-state change. */
     gdp->gd_highlight_rev++;
-    return set || ged_draw_shape_ref_is_null(ref);
+    return 1;
 }
 
 
@@ -112,17 +103,21 @@ ged_draw_shape_set_highlighted(struct ged *gedp, ged_draw_shape_ref ref, int hig
     if (!gedp || ged_draw_shape_ref_is_null(ref))
 	return 0;
 
-    if (!highlighted) {
-	if (!ged_draw_shape_ref_set_highlighted(gedp, ref, 0))
-	    return 0;
-	struct ged_drawable *gdp = gedp->i ? gedp->i->ged_gdp : NULL;
-	if (gdp && _sg_highlighted_shape_ref(gdp).token == ref.token)
-	    (void)_sg_set_highlighted_shape_ref(gedp,
-		    GED_DRAW_SHAPE_REF_NULL);
-    } else {
-	if (!_sg_set_highlighted_shape_ref(gedp, ref))
-	    return 0;
-    }
+    struct ged_drawable *gdp = gedp->i ? gedp->i->ged_gdp : NULL;
+    if (!gdp)
+	return 0;
+    if (highlighted)
+	return _sg_set_highlighted_shape_ref(gedp, ref);
+
+    ged_draw_shape_ref active = _sg_highlighted_shape_ref(gdp);
+    if (active.token == ref.token)
+	return _sg_set_highlighted_shape_ref(gedp,
+		GED_DRAW_SHAPE_REF_NULL);
+
+    /* The occurrence is valid but not the optional single-highlight cache.
+     * Its backend state may still change, so publish a semantic highlight
+     * revision and allow the adapter to perform the exact mutation. */
+    gdp->gd_highlight_rev++;
     return 1;
 }
 

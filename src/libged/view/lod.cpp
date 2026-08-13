@@ -32,7 +32,6 @@
 #include "BObol/BDrawCache.h"
 #include "BObol/BLodService.h"
 #include "BObol/BMeshLodCache.h"
-#include "BObol/BViewAttachment.h"
 #include "BObol/BViewController.h"
 #include "bu/cmd.h"
 #include "bu/parallel.h"
@@ -46,7 +45,6 @@
 
 #include "../ged_bobol_private.hpp"
 #include "../ged_draw_private.h"
-#include "../ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -139,23 +137,15 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    BObolViewAttachment *attachment =
-	ged_view_context_obol_attachment(view_ctx);
-    if (!attachment) {
+    ged_view_lod_policy lod_policy;
+    if (!ged_view_lod_policy_get(&lod_policy, view_ctx)) {
 	bu_vls_printf(gedp->ged_result_str, "unable to read LoD policy\n");
 	return BRLCAD_ERROR;
     }
-    ged_view_lod_policy lod_policy;
-    attachment->getLodPolicy(&lod_policy);
     BObolViewController *view_controller =
 	ged_bobol_view_controller(view_ctx);
     auto commit_lod_policy = [&]() {
-	attachment->setLodPolicy(&lod_policy);
-	if (!ged_draw_obol_view_lod_policy_changed(gedp, view_ctx)) {
-	    int rac = 1;
-	    const char *rav[1] = {"redraw"};
-	    ged_exec_redraw(gedp, rac, (const char **)rav);
-	}
+	(void)ged_view_lod_policy_apply(view_ctx, &lod_policy);
     };
     auto redraw_view = [&]() {
 	int rac = 1;

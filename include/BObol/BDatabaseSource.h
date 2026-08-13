@@ -31,6 +31,7 @@
 #include <Inventor/nodes/SoSeparator.h>
 
 #include <memory>
+#include <array>
 #include <vector>
 
 class SoBRLVListShape;
@@ -258,6 +259,14 @@ struct BOBOL_EXPORT BObolCompactLodInstanceSummary {
     uint64_t sourcePointCount;
     SbMatrix localToSource;
     SbBox3f localBounds;
+    /* The currently authored/displayed part may be a normalized structural
+     * proxy while localBounds/localToSource describe the canonical mesh
+     * asset.  Point-coverage decisions must use the former, since that is the
+     * geometry SoCADAssembly actually classifies. */
+    SbMatrix presentationLocalToSource;
+    SbBox3f presentationLocalBounds;
+    std::array<SbVec3f, 8> presentationCorners;
+    SbBool presentationCornersValid;
     SbBool meshGeometry;
     SbBool lodBacked;
     SbBool sourceMeshRequestValid;
@@ -276,6 +285,10 @@ struct BOBOL_EXPORT BObolCompactLodPlanningSummary {
     SbString sourceInstanceKey;
     SbMatrix localToSource;
     SbBox3f localBounds;
+    SbMatrix presentationLocalToSource;
+    SbBox3f presentationLocalBounds;
+    std::array<SbVec3f, 8> presentationCorners;
+    SbBool presentationCornersValid;
     SbBool meshGeometry;
     SbBool lodBacked;
     SbBool sourceMeshRequestValid;

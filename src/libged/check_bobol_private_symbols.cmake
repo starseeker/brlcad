@@ -40,7 +40,8 @@ foreach(_private_prefix
     "ged_view_context_reference_owner"
     "ged_scene_backend_apply_private"
     "ged_scene_backend_selection_private"
-    "ged_scene_backend_snapshot_private")
+    "ged_scene_backend_snapshot_private"
+    "ged_scene_backend_detach_private")
   string(FIND "${_symbols}" "${_private_prefix}" _private_position)
   if(NOT _private_position EQUAL -1)
     message(FATAL_ERROR

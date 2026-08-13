@@ -24,9 +24,11 @@
 #include <Inventor/SbString.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
+#include <Obol/cad/CadProjectedProxy.h>
 
 #include <algorithm>
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <errno.h>
 #include <limits>
@@ -34,6 +36,16 @@
 #include <string.h>
 
 SO_ACTION_SOURCE(SoBRLMeshLodSubmitAction);
+
+static SbVec2s
+mesh_lod_viewport_size(const struct bv_view_info &view)
+{
+    return SbVec2s(
+	static_cast<short>(std::min<int>(SHRT_MAX,
+	    std::max(1, view.width))),
+	static_cast<short>(std::min<int>(SHRT_MAX,
+	    std::max(1, view.height))));
+}
 
 static size_t
 mesh_lod_saturating_scaled_add(size_t total, uint64_t count, size_t scale)
@@ -251,6 +263,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     requireLodBacked(TRUE),
     allowCutDowngrade(FALSE),
     allowRetainedRefinement(TRUE),
+    cutHysteresisEnabled(FALSE),
     allowResidentPrefetch(FALSE),
     refinementCutCeiling(-1),
     allowRepresentationRefinement(TRUE),
@@ -495,6 +508,18 @@ SbBool
 SoBRLMeshLodSubmitAction::getAllowRetainedRefinement(void) const
 {
     return this->allowRetainedRefinement;
+}
+
+void
+SoBRLMeshLodSubmitAction::setCutHysteresisEnabled(SbBool enabled)
+{
+    this->cutHysteresisEnabled = enabled ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLMeshLodSubmitAction::getCutHysteresisEnabled(void) const
+{
+    return this->cutHysteresisEnabled;
 }
 
 void
@@ -1204,6 +1229,11 @@ mesh_lod_box_intersects_render_frustum(const SbBox3f &worldBounds,
     return TRUE;
 }
 
+/* Point aggregation has a stricter contract than ordinary visibility.  A
+ * box which merely intersects the clip volume must remain geometry: replacing
+ * its visible sliver with a point chosen from an offscreen corner is neither
+ * spatially conservative nor pixel exact.  Use the renderer's same six
+ * homogeneous half-spaces so scheduling and presentation cannot disagree. */
 /* Convert an occurrence-local bound to a quantized screen-space PoP demand.
  * Returning false means the box is wholly outside the actual render frustum
  * and no display payload should be loaded for this view. */
@@ -1329,6 +1359,22 @@ mesh_lod_apply_projected_demand(BObolLodRequest &request,
     if (worldBounds.isEmpty() ||
 	!mesh_lod_box_intersects_render_frustum(worldBounds, viewProjection))
 	return FALSE;
+    const SbVec2s viewportSize = mesh_lod_viewport_size(view);
+    const SbVec3f localCorners[8] = {
+	SbVec3f(bmin[0], bmin[1], bmin[2]),
+	SbVec3f(bmax[0], bmin[1], bmin[2]),
+	SbVec3f(bmin[0], bmax[1], bmin[2]),
+	SbVec3f(bmax[0], bmax[1], bmin[2]),
+	SbVec3f(bmin[0], bmin[1], bmax[2]),
+	SbVec3f(bmax[0], bmin[1], bmax[2]),
+	SbVec3f(bmin[0], bmax[1], bmax[2]),
+	SbVec3f(bmax[0], bmax[1], bmax[2])
+    };
+    const Obol::CadProjectedProxy rendererProjection =
+	Obol::classifyCadProjectedProxy(localCorners, localToRoot,
+	    viewProjection, viewportSize, FLT_MAX);
+    request.projectedBoundsContained =
+	rendererProjection.fullyContained ? TRUE : FALSE;
 
     for (const SbVec3f &world : worldCorners) {
 	SbVec3f projected;
@@ -1361,7 +1407,10 @@ mesh_lod_apply_projected_demand(BObolLodRequest &request,
     const float heightPixels =
 	std::max(0.0f, projectedMax[1] - projectedMin[1]) *
 	static_cast<float>(std::max(1, view.height));
-    const float diameter = std::max(widthPixels, heightPixels);
+    const float diameter = rendererProjection.fullyContained ?
+	std::max(rendererProjection.pixelWidth,
+	    rendererProjection.pixelHeight) :
+	std::max(widthPixels, heightPixels);
     const float policyScale =
 	(std::isfinite(view.lod.scale) && view.lod.scale > 0.0) ?
 	static_cast<float>(view.lod.scale) : 1.0f;
@@ -1388,7 +1437,7 @@ static void
 mesh_lod_apply_cut_hysteresis(
     BObolLodRequest &request,
     const BObolLodProgressiveMeshPtr &progressiveMesh,
-    int activeCut)
+    int activeCut, SbBool hysteresisEnabled)
 {
     if (progressiveMesh) {
 	const int selectedCut = progressiveMesh->cutForScreenError(
@@ -1396,7 +1445,7 @@ mesh_lod_apply_cut_hysteresis(
 	if (selectedCut >= 0)
 	    request.requestedCut = selectedCut;
     }
-    if (activeCut < 0 || request.requestedCut < 0 ||
+    if (!hysteresisEnabled || activeCut < 0 || request.requestedCut < 0 ||
 	request.requestedCut == activeCut || request.targetPixelError <= 0.0f)
 	return;
     if (!progressiveMesh)
@@ -1864,7 +1913,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    continue;
 		}
 		mesh_lod_apply_cut_hysteresis(projected,
-		    payload->progressiveMesh, payload->activeCut);
+		    payload->progressiveMesh, payload->activeCut,
+		    submitAction->cutHysteresisEnabled);
 		RetainedCandidate candidate;
 		candidate.payload = payload;
 		candidate.occurrenceKey = summary.sourceInstanceKey;
@@ -2113,6 +2163,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->viewState ?
 		    submitAction->viewState->findCadForOccurrence(
 			source, summary.sourceInstanceKey) : NULL;
+		const bool presentationProjectsToPoint =
+		    !active && !summary.meshGeometry &&
+		    !summary.selected && !summary.highlighted &&
+		    compactViewProjectionPtr &&
+		    summary.presentationCornersValid &&
+		    Obol::classifyCadProjectedProxy(
+			summary.presentationCorners.data(),
+			summary.presentationLocalToSource,
+			*compactViewProjectionPtr,
+			mesh_lod_viewport_size(submitAction->view),
+			submitAction->pointProxyPixelThreshold * 0.75f).
+			pointEligible;
 		/* The standing AABB participates in SoCADAssembly's aggregate point
 		 * channel.  At the renderer's conservative new-collapse boundary it is
 		 * already pixel exact for this view, so class it as coverage rather than
@@ -2122,9 +2184,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    !summary.meshGeometry && !summary.selected &&
 		    !summary.highlighted &&
 		    (submitAction->structuralCoverageOnly ||
-		     (std::isfinite(candidate.projectedPixels) &&
-		      candidate.projectedPixels <=
-			submitAction->pointProxyPixelThreshold * 0.75f));
+		     presentationProjectsToPoint);
 		candidate.needsCoverage = !active && !structuralPointCoverage;
 		candidate.projectedErrorPixels = active &&
 		    active->activeCut >= 0 && active->progressiveMesh ?
@@ -2396,20 +2456,31 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			source, request.objectPath) : NULL;
 	    }
 	    submitAction->visibleMeshCount++;
+	    const bool presentationProjectsToPoint =
+		!activePayload && !summary.meshGeometry &&
+		!summary.selected && !summary.highlighted &&
+		compactViewProjectionPtr &&
+		summary.presentationCornersValid &&
+		Obol::classifyCadProjectedProxy(
+		    summary.presentationCorners.data(),
+		    summary.presentationLocalToSource,
+		    *compactViewProjectionPtr,
+		    mesh_lod_viewport_size(submitAction->view),
+		    submitAction->pointProxyPixelThreshold * 0.75f).
+		    pointEligible;
 	    const SbBool structuralPointCoverage =
 		!activePayload && !summary.meshGeometry &&
 		!summary.selected && !summary.highlighted &&
 		(submitAction->structuralCoverageOnly ||
-		 (std::isfinite(request.projectedPixelDiameter) &&
-		  request.projectedPixelDiameter <=
-		    submitAction->pointProxyPixelThreshold * 0.75f)) ?
+		 presentationProjectsToPoint) ?
 		TRUE : FALSE;
 	    if (submitAction->useForcedCut)
 		request.requestedCut = submitAction->forcedCut;
 	else if (activePayload)
 		mesh_lod_apply_cut_hysteresis(request,
 		    activePayload->progressiveMesh,
-		    activePayload->activeCut);
+		    activePayload->activeCut,
+		    submitAction->cutHysteresisEnabled);
 	    const MeshLodBrepVariantDemand brepVariant =
 		haveSourceMeshRequest ? mesh_lod_brep_variant_demand(
 		    sourceMeshRequest, request, activePayload,
@@ -2869,7 +2940,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		     * carrying -1 into prefix arithmetic silently strands repeated
 		     * instances at their structural fallback. */
 		    mesh_lod_apply_cut_hysteresis(request,
-			reusable->progressiveMesh, -1);
+			reusable->progressiveMesh, -1,
+			submitAction->cutHysteresisEnabled);
 		    const int minimumCut =
 			reusable->progressiveMesh->minimumCut();
 		    if (request.requestedCut < 0)
@@ -3179,8 +3251,22 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    provider->useForcedCut = submitAction->useForcedCut;
 	    provider->forcedCut = submitAction->forcedCut;
 	    provider->useCurrentDrawCut = TRUE;
+	    const SbBool atomicBrepHandoff =
+		activePayload && haveSourceMeshRequest &&
+		BU_STR_EQUAL(sourceMeshRequest.sourceType.getString(), "brep") &&
+		activePayload->sourceContentHash != 0 &&
+		request.sourceContentHash != 0 &&
+		activePayload->sourceContentHash != request.sourceContentHash ?
+		    TRUE : FALSE;
+	    provider->atomicRepresentationHandoff = atomicBrepHandoff;
+	    /* Cut numbers belong to one immutable hierarchy.  Carrying the old
+	     * BREP band's active cut into its replacement incorrectly makes the
+	     * new asset look partly resident and can publish its minimum prefix as
+	     * a downgrade.  The old payload remains visible until this task's
+	     * atomic result is applied. */
 	    provider->currentDrawCut =
-		activePayload ? activePayload->activeCut : -1;
+		activePayload && !atomicBrepHandoff ?
+		    activePayload->activeCut : -1;
 	    provider->useDeliveryCutLimit =
 		providerDeliveryCut >= 0 ? TRUE : FALSE;
 	    provider->deliveryCutLimit = providerDeliveryCut;
@@ -3198,6 +3284,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	     * retains the provider's independently bounded first-prefix policy.
 	     */
 	    if (provider->useDeliveryCutLimit)
+		provider->progressiveDelivery = FALSE;
+	    if (atomicBrepHandoff)
 		provider->progressiveDelivery = FALSE;
 	    if (initialFaceAllowance) {
 		provider->initialRefinementFaceBudget =
@@ -3341,7 +3429,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	request.requestedCut = submitAction->forcedCut;
     else if (activePayload)
 	mesh_lod_apply_cut_hysteresis(request,
-	    activePayload->progressiveMesh, activePayload->activeCut);
+	    activePayload->progressiveMesh, activePayload->activeCut,
+	    submitAction->cutHysteresisEnabled);
     if (!submitAction->useForcedCut &&
 	mesh_lod_payload_memory_limited_for_epoch(
 	    activePayload, request, submitAction->service)) {
@@ -3610,7 +3699,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	request.requestedCut = submitAction->forcedCut;
     else if (viewPayload)
 	mesh_lod_apply_cut_hysteresis(request,
-	    viewPayload->progressiveMesh, viewPayload->activeCut);
+	    viewPayload->progressiveMesh, viewPayload->activeCut,
+	    submitAction->cutHysteresisEnabled);
     mesh_lod_trace_projected_request(request, request.bounds,
 	SbMatrix::identity(), viewPayload ? viewPayload->activeCut : -1);
     if (!submitAction->useForcedCut &&

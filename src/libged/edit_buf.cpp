@@ -42,6 +42,7 @@
 #include "ged/event.h"
 #include "ged/scene.h"
 #include "./ged_private.h"
+#include "./ged_scene_backend_private.h"
 
 
 /* ------------------------------------------------------------------ *
@@ -58,6 +59,10 @@ Ged_Internal::~Ged_Internal()
 	db_free_full_path(&kv.second.dfp);
     }
     edit_buf.clear();
+    /* Normal ged_free teardown detaches earlier, while view and scene state
+     * are intact.  Keep this idempotent fallback for partially initialized
+     * owners and exceptional destruction paths. */
+    ged_scene_backend_detach_private(gedp);
     ged_draw_frontier_state_destroy(gedp);
 }
 

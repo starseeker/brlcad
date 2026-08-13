@@ -338,7 +338,28 @@ printf 'autoview
 refresh
 '
 sleep 1
-printf 'puts OBOL_NATIVE_WIDGET_SIZE
+printf 'puts OBOL_RESIZE_CAMERA_BEFORE
+view center
+view size
+view ae
+puts OBOL_RESIZE_WIDGET_BEFORE
+winfo width .mged_direct.__obol
+winfo height .mged_direct.__obol
+wm geometry .mged_direct 520x360
+update idletasks
+wm geometry .mged_direct 410x300
+update idletasks
+wm geometry .mged_direct 600x400
+update idletasks
+wm geometry .mged_direct 470x330
+update idletasks
+'
+sleep 1
+printf 'puts OBOL_RESIZE_CAMERA_AFTER
+view center
+view size
+view ae
+puts OBOL_NATIVE_WIDGET_SIZE
 winfo width .mged_direct.__obol
 winfo height .mged_direct.__obol
 puts OBOL_NATIVE_TOPLEVEL_SIZE
@@ -389,10 +410,18 @@ native_widget_width=$(awk '/^OBOL_NATIVE_WIDGET_SIZE$/ { getline; print; exit }'
 native_widget_height=$(awk '/^OBOL_NATIVE_WIDGET_SIZE$/ { getline; getline; print; exit }' "$LOG")
 native_toplevel_width=$(awk '/^OBOL_NATIVE_TOPLEVEL_SIZE$/ { getline; print; exit }' "$LOG")
 native_toplevel_height=$(awk '/^OBOL_NATIVE_TOPLEVEL_SIZE$/ { getline; getline; print; exit }' "$LOG")
-if [ "$native_widget_width" != "320" ] ||
-    [ "$native_widget_height" != "240" ] ||
-    [ "$native_toplevel_width" != "320" ] ||
-    [ "$native_toplevel_height" != "240" ]; then
+resize_widget_before_width=$(awk '/^OBOL_RESIZE_WIDGET_BEFORE$/ { getline; print; exit }' "$LOG")
+resize_widget_before_height=$(awk '/^OBOL_RESIZE_WIDGET_BEFORE$/ { getline; getline; print; exit }' "$LOG")
+resize_camera_before=$(awk '/^OBOL_RESIZE_CAMERA_BEFORE$/ { getline; c=$0; getline; s=$0; getline; a=$0; print c "|" s "|" a; exit }' "$LOG")
+resize_camera_after=$(awk '/^OBOL_RESIZE_CAMERA_AFTER$/ { getline; c=$0; getline; s=$0; getline; a=$0; print c "|" s "|" a; exit }' "$LOG")
+if [ "$resize_widget_before_width" != "320" ] ||
+    [ "$resize_widget_before_height" != "240" ] ||
+    [ "$native_widget_width" != "470" ] ||
+    [ "$native_widget_height" != "330" ] ||
+    [ "$native_toplevel_width" != "470" ] ||
+    [ "$native_toplevel_height" != "330" ] ||
+    [ -z "$resize_camera_before" ] ||
+    [ "$resize_camera_after" != "$resize_camera_before" ]; then
     echo "MGED direct Tk Obol native window did not follow endpoint resize" 1>&2
     cat "$LOG" 1>&2
     exit 1

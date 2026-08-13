@@ -22,12 +22,6 @@ ged_draw_source_mark_changed(struct ged *gedp,
 			      const char *path,
 			      ged_draw_stale_reason reason);
 
-extern int
-ged_draw_source_apply_update(struct ged *gedp,
-			       const char *path,
-			       int removed,
-			       int redraw);
-
 extern const char *
 ged_draw_source_stale_reason_name(ged_draw_stale_reason reason);
 

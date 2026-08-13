@@ -159,6 +159,9 @@ controller_lod_point_proxy_candidate(
 	payload->projectedPixelDiameter <= 0.0f)
 	return false;
 
+    if (!payload->projectedBoundsContained)
+	return false;
+
     BObolCompactLodPlanningSummary summary;
     if (!source->getCompactLodPlanningSummaryForKey(
 	    payload->sourceInstanceKey.getString(), summary) ||
@@ -1057,6 +1060,9 @@ BObolLodConvergenceStatus::clear(void)
     this->visibleTargetCount = 0;
     this->activePayloadCount = 0;
     this->satisfiedPayloadCount = 0;
+    this->presentedSubpixelOccurrenceCount = 0;
+    this->presentedStructuralBoxCount = 0;
+    this->terminalOccurrenceFailureCount = 0;
     this->pendingTasks = 0;
     this->inFlight = 0;
     this->queuedResults = 0;
@@ -4604,6 +4610,63 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	viewLodState->convergencePayloadCounts(activePayloads,
 	    satisfiedPayloads, memoryLimitedPayloads);
 
+    size_t presentedSubpixelOccurrences = 0;
+    size_t presentedStructuralBoxes = 0;
+    const bool exactOccurrenceCoverage = viewLodState &&
+	viewLodState->lastCadPresentationOccurrenceCoverage(
+	    presentedSubpixelOccurrences, presentedStructuralBoxes);
+    const size_t terminalOccurrenceFailures = viewLodState ?
+	viewLodState->cadOccurrenceTerminalFailureCount() : 0;
+
+    /* Initial structural coverage and terminal presentation coverage are
+     * deliberately different proofs.  The former gets a complete model on
+     * screen quickly; the latter permits only meshes, camera-valid subpixel
+     * points, or an explicit provider failure.  A bounded source scan can
+     * finish its box-first pass and later exhaust a refinement window without
+     * visiting every remaining box.  If an exact quiet frame observes that
+     * state, resume a normal (not structural-only) current-view pass from the
+     * retained population.  No source data or PoP prefix is discarded.
+     *
+     * This is also the resize recovery edge: a resize may change which boxes
+     * are physically subpixel while preserving the view/source epochs.  The
+     * completed framebuffer is the authoritative classification, so it must
+     * be able to re-arm admission without waiting for another mouse event. */
+    const bool unresolvedStructuralPresentation =
+	exactOccurrenceCoverage &&
+	presentedStructuralBoxes > terminalOccurrenceFailures;
+    const bool structuralRepairReady = unresolvedStructuralPresentation &&
+	this->d->lodAutoSubmit && this->d->lodService &&
+	!this->d->lodInteractive && !this->d->lodGestureActive &&
+	this->d->lodCoveragePolicy.coverageComplete() &&
+	!this->d->lodSubmissionPending &&
+	!this->d->lodBudgetPolicy.rescanAfterFrame() &&
+	!this->d->lodRefinementAwaitingFrame &&
+	!this->d->lodRetainedRefinementPending &&
+	!this->d->lodPresentationPolicy.handoffPending() &&
+	!this->d->lodStablePointProxyCalibrationPending &&
+	!this->d->lodPointProxyTriangleRecoveryPending &&
+	this->d->lodResultsPending.load() == 0 && activeTasks == 0 &&
+	queuedResults == 0;
+    if (structuralRepairReady) {
+	this->d->lodSubmissionSourceIndex = 0;
+	this->d->lodSubmissionEntryOffset = 0;
+	this->d->clearLodSubmissionPlan();
+	this->d->lodSubmissionRescanPending = FALSE;
+	this->d->lodSubmissionDeltaActive = FALSE;
+	this->d->lodSubmissionDeltaSources.clear();
+	this->d->lodSubmissionDeltaPlans.clear();
+	this->d->lodSubmissionRefreshMissing = TRUE;
+	this->d->lodSubmissionReset = 0;
+	this->d->lodSubmissionPending = TRUE;
+	this->d->lodPassAdmittedWork = FALSE;
+	this->d->lodBudgetPolicy.clearBudgetLimit();
+	this->d->lodBudgetPolicy.resetPass();
+	this->markProgressiveWorkPending();
+	this->requestRender("lod-structural-presentation-repair");
+	this->notifyFrameRequest("lod-structural-presentation-repair");
+	return;
+    }
+
     /* A complete one-pixel image is the first stable result.  When that exact
      * retained population uses less than one quarter of both the measured
      * scene allowance and resident-memory allowance, continue once to the
@@ -4845,6 +4908,27 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
     this->markProgressiveWorkPending();
     this->requestRender("lod-calibrated-headroom-probe");
     this->notifyFrameRequest("lod-calibrated-headroom-probe");
+}
+
+void
+BObolViewController::resumeLodAfterOnePixelRecovery(void)
+{
+    if (!this->d->lodBudgetPolicy.
+	    confirmRetainedRecoveryPresentation(true))
+	return;
+
+    /* The recovery ceiling is a one-frame guard, not a fidelity policy.  Its
+     * coherent one-pixel successor is now visible, so let measured headroom
+     * grow from the retained population in bounded screen-priority waves. */
+    this->d->lodLastSubmittedViewRevision.reset();
+    this->d->lodLastSubmittedPolicyRevision.reset();
+    this->d->lodSubmissionSourceIndex = 0;
+    this->d->lodSubmissionEntryOffset = 0;
+    this->d->clearLodSubmissionPlan();
+    this->d->lodSubmissionPending = TRUE;
+    this->d->lodSubmissionRescanPending = FALSE;
+    this->markProgressiveWorkPending();
+    this->notifyFrameRequest("lod-recovery-headroom");
 }
 
 void
@@ -5338,10 +5422,14 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	    this->d->viewAttachment->getViewLodState() : NULL;
 	if (presentationState)
 	    presentationState->setCadPresentationPointProxyPixelThreshold(1.0f);
+	(void)this->d->lodBudgetPolicy.
+	    confirmRetainedRecoveryPresentation(true);
     }
     if (this->d->lodStablePointProxyCalibrationPending &&
 	!haveCadPresentationAssemblies) {
 	this->d->lodStablePointProxyCalibrationPending = FALSE;
+	(void)this->d->lodBudgetPolicy.
+	    confirmRetainedRecoveryPresentation(true);
     }
     if (this->d->lodStablePointProxyCalibrationPending) {
 	this->d->lodStablePointProxyCalibrationPending = FALSE;
@@ -5499,6 +5587,14 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	    this->requestRender("lod-stable-point-replay");
 	    this->notifyFrameRequest("lod-stable-point-replay");
 	}
+	/* A triangle-prefix recovery which temporarily used a coarser aggregate
+	 * point cut reaches this branch twice: once to request the one-pixel frame,
+	 * and once after that frame completes.  The latter exact presentation is
+	 * the missing transition which retires the measured recovery ceiling. */
+	if (!scheduledTriangleRecovery && !restoredOnePixelCut &&
+	    exactRetainedPopulation &&
+	    this->d->lodPresentationPointProxyPixelThreshold <= 1.01f)
+	    this->resumeLodAfterOnePixelRecovery();
     }
 
     /* A retained-prefix recovery is complete only after its selected cut has
@@ -5545,17 +5641,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	     * bounded, screen-priority waves.  Keeping the ceiling indefinitely
 	     * made a transient 84 ms Hubble frame settle forever at the 35k-face
 	     * minimum even though subsequent 16 ms frames proved ample headroom. */
-	    this->d->lodBudgetPolicy.clearRetainedRecoveryCeiling();
-	    this->d->lodBudgetPolicy.resetPass();
-	    this->d->lodLastSubmittedViewRevision.reset();
-	    this->d->lodLastSubmittedPolicyRevision.reset();
-	    this->d->lodSubmissionSourceIndex = 0;
-	    this->d->lodSubmissionEntryOffset = 0;
-	    this->d->clearLodSubmissionPlan();
-	    this->d->lodSubmissionPending = TRUE;
-	    this->d->lodSubmissionRescanPending = FALSE;
-	    this->markProgressiveWorkPending();
-	    this->notifyFrameRequest("lod-recovery-headroom");
+	    this->resumeLodAfterOnePixelRecovery();
 	}
     }
 
@@ -6126,6 +6212,31 @@ BObolViewController::getPresentedFrameSerial(void) const
 {
     std::lock_guard<std::mutex> lock(this->d->presentationTimingMutex);
     return this->d->presentedFrameSerial;
+}
+
+uint64_t
+BObolViewController::getRenderRequestSerial(void) const
+{
+    return this->renderRequestSerialGet();
+}
+
+uint64_t
+BObolViewController::getRenderCompletionSerial(void) const
+{
+    return this->d->renderCompletionSerial;
+}
+
+uint64_t
+BObolViewController::getLodSettleAfterRenderSerial(void) const
+{
+    return this->d->lodSettleAfterRenderSerial;
+}
+
+uint64_t
+BObolViewController::getLodRefinementResumeAfterRenderSerial(void) const
+{
+    return this->d->lodRefinementAwaitingFrame ?
+	this->d->lodRefinementResumeAfterRenderSerial : 0;
 }
 
 uint64_t
@@ -9019,6 +9130,13 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    (this->d->forceTerminalLodRefinement ||
 	     !this->d->lodInteractive || scaleDemandChanged) &&
 	    !this->d->lodRefinementAwaitingFrame ? TRUE : FALSE);
+	/* A Schmitt boundary is useful while successive input events perturb the
+	 * projection by fractions of a pixel.  It must not redefine the quiet
+	 * view's convergence target: the first post-gesture pass recomputes the
+	 * exact producer cut and either presents it or records genuine budget /
+	 * residency debt. */
+	action.setCutHysteresisEnabled(
+	    this->d->lodInteractive || this->d->lodGestureActive);
 	/* Once coverage is proven, residency follows pixel demand independently
 	 * of the calibrated draw allowance.  This applies during zoom and during
 	 * quiet warm-cache convergence: one worker read may append the complete
@@ -9875,6 +9993,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	if (this->d->lodStablePointProxyCalibrationPending) {
 	    this->requestRender("lod-stable-point-restore");
 	    this->notifyFrameRequest("lod-stable-point-restore");
+	} else {
+	    this->resumeLodAfterOnePixelRecovery();
 	}
     }
     if (!this->d->lodSubmissionPending &&
@@ -12067,6 +12187,15 @@ BObolViewController::getLodConvergenceStatus(
 	viewState->convergencePayloadCounts(status.activePayloadCount,
 	    status.satisfiedPayloadCount,
 	    status.memoryLimitedPayloadCount);
+	size_t subpixelOccurrences = 0;
+	size_t structuralBoxes = 0;
+	if (viewState->lastCadPresentationOccurrenceCoverage(
+		subpixelOccurrences, structuralBoxes)) {
+	    status.presentedSubpixelOccurrenceCount = subpixelOccurrences;
+	    status.presentedStructuralBoxCount = structuralBoxes;
+	}
+	status.terminalOccurrenceFailureCount =
+	    viewState->cadOccurrenceTerminalFailureCount();
 	BObolViewLodState::CadGpuResourceStatus gpu;
 	if (viewState->cadGpuResourceStatus(gpu)) {
 	    status.gpuTrackedBufferBytes = gpu.trackedBufferBytes;
@@ -12192,6 +12321,12 @@ BObolViewController::getLodConvergenceStatus(
     convergenceInputs.visibleTargetCount = status.visibleTargetCount;
     convergenceInputs.activePayloadCount = status.activePayloadCount;
     convergenceInputs.satisfiedPayloadCount = status.satisfiedPayloadCount;
+    convergenceInputs.presentedSubpixelOccurrenceCount =
+	status.presentedSubpixelOccurrenceCount;
+    convergenceInputs.presentedStructuralBoxCount =
+	status.presentedStructuralBoxCount;
+    convergenceInputs.terminalOccurrenceFailureCount =
+	status.terminalOccurrenceFailureCount;
     convergenceInputs.memoryLimitedPayloadCount =
 	status.memoryLimitedPayloadCount;
     convergenceInputs.pendingTasks = status.pendingTasks;

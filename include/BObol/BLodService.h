@@ -107,6 +107,13 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
      * Cold cache construction deliberately keeps the ordinary minimum-first
      * path so expensive new PoP work cannot delay first content. */
     SbBool prefetchCachedTargetOnFirstPublication;
+    /* A finer adaptive representation must not replace a coherent standing
+     * representation with its own minimum prefix.  Materialize the complete
+     * requested prefix off the presentation path and publish it atomically.
+     * This is deliberately distinct from cold first-content delivery: a cold
+     * object has no useful mesh to preserve and should still expose its
+     * minimum prefix as soon as possible. */
+    SbBool atomicRepresentationHandoff;
     int forcedCut;
     int reset;
 

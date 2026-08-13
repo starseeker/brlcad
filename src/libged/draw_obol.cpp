@@ -16539,8 +16539,10 @@ ged_draw_obol_scene_sync_transaction(
 		      ged_obol_remove_paths(paths, view_ctx, scene, txn->mode) :
 		      ged_obol_remove_instance_keys(matching_instance_keys,
 						scene);
-	    if (!matching_instance_keys.empty())
-		scene->clearRealizationRepository();
+	    /* Removing a presentation owner is not geometry invalidation.  The
+	     * shared repository tracks every source owner and evicts an object's
+	     * payload when its last source is released.  Clearing it here made an
+	     * erase in one view discard geometry still owned by other views. */
 	    if (compact_changed)
 		changed = 1;
 	}
@@ -16549,13 +16551,10 @@ ged_draw_obol_scene_sync_transaction(
 	case GED_DRAW_TXN_CLEAR:
 	case GED_DRAW_TXN_TEARDOWN:
 	    changed = ged_obol_scene_clear_controller(scene);
-	    scene->clearRealizationRepository();
 	    break;
 	case GED_DRAW_TXN_CLEAR_SCOPE:
 	    changed = ged_obol_clear_database_sources_in_scope(scene,
 		      view_ctx);
-	    if (changed)
-		scene->clearRealizationRepository();
 	    if (changed)
 		scene->realizePending();
 	    break;
@@ -16571,8 +16570,14 @@ ged_draw_obol_scene_sync_transaction(
 	    changed = ged_obol_scene_highlight_state_set(scene, 0);
 	    break;
 	case GED_DRAW_TXN_HIGHLIGHT_OCCURRENCE:
-	    /* The generation-checked occurrence mutation already reaches the
-	     * retained record selected by the reducer. */
+	    if (ged_draw_shape_ref_is_null(txn->shape_ref)) {
+		changed = ged_obol_scene_highlight_state_set(scene, 0);
+		break;
+	    }
+	    if (!ZERO(txn->value))
+		(void)ged_obol_scene_highlight_state_set(scene, 0);
+	    changed = ged_draw_shape_ref_set_highlighted(gedp,
+		txn->shape_ref, !ZERO(txn->value));
 	    break;
 	case GED_DRAW_TXN_TRANSPARENCY:
 	    changed = ged_obol_apply_transparency_transaction(txn, result,
@@ -16924,11 +16929,21 @@ ged_draw_obol_backend_apply_transaction(
     const struct ged_draw_transaction *txn,
     const struct ged_draw_transaction_result *result)
 {
-    const int changed = ged_draw_obol_scene_sync_attached_transaction(gedp,
-	txn, result);
+    /* A compact nested draw/erase is already represented by the frontier
+     * change stream.  Applying the ordinary transaction as well briefly
+     * mutates occurrence state before the authoritative frontier arrives,
+     * which can expose a one-frame flicker during resize or refinement. */
+    const int frontier_only = result && result->presentation_only &&
+	(txn->kind == GED_DRAW_TXN_DRAW || txn->kind == GED_DRAW_TXN_ERASE ||
+	 txn->kind == GED_DRAW_TXN_ERASE_PREFIX);
+    const int changed = frontier_only ? 0 :
+	ged_draw_obol_scene_sync_attached_transaction(gedp, txn, result);
     ged_obol_frontier_visibility_changes_apply(gedp);
+    if (txn->kind == GED_DRAW_TXN_CLEAR ||
+	txn->kind == GED_DRAW_TXN_TEARDOWN)
+	ged_draw_registry_free(gedp);
     ged_obol_progressive_autoview_transaction(gedp, txn, result);
-    return changed;
+    return changed || frontier_only;
 }
 
 static int

@@ -67,6 +67,75 @@ qged_test_all_controllers(QgEdApp &app)
     return controllers;
 }
 
+/* A controller render request records renderer intent, but it is deliberately
+ * not a Qt paint primitive.  In particular, a request made while another one
+ * is already latched has no false-to-true callback edge with which to wake a
+ * quiescent canvas.  Test presentation barriers need an actual endpoint frame,
+ * so route the wake through the canvas abstraction without claiming a semantic
+ * camera or scene change. */
+static void
+qged_test_present_controller_frame(QgEdApp &app,
+	BObolViewController *controller)
+{
+    if (!app.w || app.w->isMinimized() || !app.w->isVisible() ||
+	!controller)
+	return;
+
+    /* A quad/switchable display may retain hidden QgView instances which
+     * share the endpoint controller.  update() on such a widget is legally
+     * ignored by Qt, so prefer the active display before considering the
+     * child list. */
+    QgView *current = app.w->CurrentDisplay();
+    if (current && current->isVisible() &&
+	current->obolViewController() == controller) {
+	QgCanvasBase *canvas = current->canvasBase();
+	if (canvas) {
+	    canvas->present_frame();
+	    QWidget *widget = canvas->canvasWidget();
+	    if (widget && widget->isVisible())
+		widget->repaint();
+	    return;
+	}
+    }
+
+    const QList<QgView *> views = app.w->findChildren<QgView *>();
+    for (QgView *view : views) {
+	if (!view || !view->isVisible() ||
+	    view->obolViewController() != controller)
+	    continue;
+	QgCanvasBase *canvas = view->canvasBase();
+	if (canvas) {
+	    canvas->present_frame();
+	    QWidget *widget = canvas->canvasWidget();
+	    if (widget && widget->isVisible())
+		widget->repaint();
+	}
+	return;
+    }
+}
+
+static bool
+qged_test_controller_has_visible_canvas(QgEdApp &app,
+	BObolViewController *controller)
+{
+    if (!app.w || app.w->isMinimized() || !app.w->isVisible() ||
+	!controller)
+	return false;
+
+    QgView *current = app.w->CurrentDisplay();
+    if (current && current->isVisible() &&
+	current->obolViewController() == controller)
+	return true;
+
+    const QList<QgView *> views = app.w->findChildren<QgView *>();
+    for (QgView *view : views) {
+	if (view && view->isVisible() &&
+	    view->obolViewController() == controller)
+	    return true;
+    }
+    return false;
+}
+
 static bool
 qged_write_test_report(const QString &fileName, const QJsonObject &report,
     QString *error)
@@ -341,7 +410,9 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
 	    "across %2 controller(s) "
 	    "(progressive=%3 results=%4 submissions=%5 refinement_frame=%6 "
 	    "render=%7 pending=%8 delayed=%9 in_flight=%10 active=%11 "
-	    "queued=%12 cache_writes=%13)")
+	    "queued=%12 cache_writes=%13 request_serial=%14 "
+	    "completion_serial=%15 presented_serial=%16 settle_after=%17 "
+	    "refinement_after=%18)")
 	    .arg(timeoutMilliseconds)
 	    .arg(controllers.size())
 	    .arg(controller->hasProgressiveWorkPending() ? 1 : 0)
@@ -365,7 +436,17 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
 		    service->queuedResultCountForDiagnostics()) : 0)
 	    .arg(service ?
 		static_cast<qulonglong>(
-		    service->queuedCacheWriteCountForDiagnostics()) : 0);
+		    service->queuedCacheWriteCountForDiagnostics()) : 0)
+	    .arg(static_cast<qulonglong>(
+		controller->getRenderRequestSerial()))
+	    .arg(static_cast<qulonglong>(
+		controller->getRenderCompletionSerial()))
+	    .arg(static_cast<qulonglong>(
+		controller->getPresentedFrameSerial()))
+	    .arg(static_cast<qulonglong>(
+		controller->getLodSettleAfterRenderSerial()))
+	    .arg(static_cast<qulonglong>(
+		controller->getLodRefinementResumeAfterRenderSerial()));
     }
     return false;
 }
@@ -374,14 +455,22 @@ static bool
 qged_test_wait_progressive_scope_ready(QgEdApp &app,
     int timeoutMilliseconds, int quietMilliseconds, QString *error)
 {
-    const std::vector<BObolViewController *> controllers =
-	qged_test_all_controllers(app);
-    if (controllers.empty()) {
+    QgView *currentView = app.w ? app.w->CurrentDisplay() : nullptr;
+    BObolViewController *currentController = currentView ?
+	currentView->obolViewController() : nullptr;
+    if (!currentController) {
 	if (error)
 	    *error = QStringLiteral(
 		"wait_progressive_scope_ready requires an Obol view controller");
 	return false;
     }
+    /* Event targets named "." address the active canvas.  A QgQuadView also
+     * retains inactive controllers whose source-visible flags remain true;
+     * those widgets are intentionally not painted and cannot satisfy a
+     * presentation barrier.  Whole-target readiness here is therefore the
+     * target view's scope, not every dormant view owned by the window. */
+    const std::vector<BObolViewController *> controllers(1,
+	currentController);
 
     timeoutMilliseconds = std::max(0, timeoutMilliseconds);
     quietMilliseconds = std::max(0, quietMilliseconds);
@@ -389,24 +478,48 @@ qged_test_wait_progressive_scope_ready(QgEdApp &app,
     QElapsedTimer quiet;
     std::vector<std::pair<BObolViewController *, uint64_t>>
 	scopePresentationBarriers;
+    size_t lastVisibleSourceCount = 0;
+    size_t lastInexactSourceCount = 0;
+    QString lastInexactSource;
+    int lastInexactSourceStatus = -1;
+    QString lastInexactSourceDiagnostic;
     elapsed.start();
 
     while (elapsed.elapsed() <= timeoutMilliseconds) {
 	bool foundVisibleSource = false;
 	bool ready = true;
+	size_t visibleSourceCount = 0;
+	size_t inexactSourceCount = 0;
+	QString inexactSource;
+	int inexactSourceStatus = -1;
+	QString inexactSourceDiagnostic;
 	std::vector<BObolViewController *> visibleControllers;
 	for (BObolViewController *controller : controllers) {
+	    const bool endpointVisible =
+		qged_test_controller_has_visible_canvas(app, controller);
 	    bool controllerVisible = false;
 	    const std::vector<SoBRLDatabaseSource *> sources =
 		controller->getRenderDatabaseSources();
 	    for (SoBRLDatabaseSource *source : sources) {
-		if (!source || !source->visible.getValue())
+		if (!endpointVisible || !source ||
+		    !source->visible.getValue())
 		    continue;
 		foundVisibleSource = true;
 		controllerVisible = true;
+		visibleSourceCount++;
 		SbBox3f bounds;
 		if (!source->hasExactSourceBounds() ||
 		    !source->getSourceBounds(bounds) || bounds.isEmpty()) {
+		    inexactSourceCount++;
+		    if (inexactSource.isEmpty())
+			inexactSource = QString::fromLocal8Bit(
+			    source->path.getValue().getString());
+		    if (inexactSourceStatus < 0) {
+			inexactSourceStatus =
+			    source->realizationStatus.getValue();
+			inexactSourceDiagnostic = QString::fromLocal8Bit(
+			    source->realizationDiagnostic.getValue().getString());
+		    }
 		    ready = false;
 		    break;
 		}
@@ -417,6 +530,11 @@ qged_test_wait_progressive_scope_ready(QgEdApp &app,
 		break;
 	}
 	ready = ready && foundVisibleSource;
+	lastVisibleSourceCount = visibleSourceCount;
+	lastInexactSourceCount = inexactSourceCount;
+	lastInexactSource = inexactSource;
+	lastInexactSourceStatus = inexactSourceStatus;
+	lastInexactSourceDiagnostic = inexactSourceDiagnostic;
 
 	if (ready) {
 	    if (scopePresentationBarriers.empty()) {
@@ -430,6 +548,7 @@ qged_test_wait_progressive_scope_ready(QgEdApp &app,
 		    scopePresentationBarriers.emplace_back(controller,
 			controller->getPresentedFrameSerial());
 		    controller->requestRender("qged-test-scope-ready");
+		    qged_test_present_controller_frame(app, controller);
 		}
 		quiet.invalidate();
 	    }
@@ -460,8 +579,27 @@ qged_test_wait_progressive_scope_ready(QgEdApp &app,
 
     if (error)
 	*error = QStringLiteral(
-	    "progressive whole-target scope did not become ready within %1 ms")
-	    .arg(timeoutMilliseconds);
+	    "progressive whole-target scope did not become ready within %1 ms "
+	    "(visible_sources=%2 inexact_sources=%3 inexact_source=%4 "
+	    "inexact_status=%5 inexact_diagnostic=%6 request_serial=%7 "
+	    "completion_serial=%8 presented_serial=%9 settle_after=%10 "
+	    "refinement_after=%11)")
+	    .arg(timeoutMilliseconds)
+	    .arg(static_cast<qulonglong>(lastVisibleSourceCount))
+	    .arg(static_cast<qulonglong>(lastInexactSourceCount))
+	    .arg(lastInexactSource)
+	    .arg(lastInexactSourceStatus)
+	    .arg(lastInexactSourceDiagnostic)
+	    .arg(static_cast<qulonglong>(
+		controllers.front()->getRenderRequestSerial()))
+	    .arg(static_cast<qulonglong>(
+		controllers.front()->getRenderCompletionSerial()))
+	    .arg(static_cast<qulonglong>(
+		controllers.front()->getPresentedFrameSerial()))
+	    .arg(static_cast<qulonglong>(
+		controllers.front()->getLodSettleAfterRenderSerial()))
+	    .arg(static_cast<qulonglong>(
+		controllers.front()->getLodRefinementResumeAfterRenderSerial()));
     return false;
 }
 

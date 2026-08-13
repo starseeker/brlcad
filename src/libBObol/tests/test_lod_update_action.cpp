@@ -9255,6 +9255,85 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    const SbViewVolume budgetVolume =
 		budgetCamera->getViewVolume(640.0f / 480.0f);
 
+	    /* A retained cut just inside the interaction Schmitt band is useful
+	     * while the view is moving, but it is not pixel-exact convergence.
+	     * Prove that hysteresis is explicit action policy: an interactive pass
+	     * may retain the preceding cut, while the otherwise identical quiet
+	     * pass records and presents the first cut which meets the target. */
+	    if (!ret) {
+		BObolLodResult hysteresisSeed = budgetResult;
+		hysteresisSeed.progressiveMesh = progressive;
+		hysteresisSeed.geometry.activeCut = 0;
+		hysteresisSeed.residentCut = 1;
+		hysteresisSeed.request.requestedCut = 1;
+		hysteresisSeed.resolvedCut = 1;
+		hysteresisSeed.counts.faceCount = 1;
+		hysteresisSeed.counts.pointCount = 3;
+		hysteresisSeed.counts.originalPointCount = 3;
+		hysteresisSeed.terminal = FALSE;
+		BObolViewLodState interactiveState;
+		BObolViewLodState quietState;
+		if (!interactiveState.applySourceResult(source, hysteresisSeed) ||
+		    !quietState.applySourceResult(source, hysteresisSeed)) {
+		    printf("FAIL: explicit cut hysteresis fixture apply\n");
+		    ret = 1;
+		} else {
+		    SoBRLMeshLodSubmitAction interactiveHysteresis;
+		    interactiveHysteresis.setService(&service);
+		    interactiveHysteresis.setDatabase(
+			dbip, "db://compact-projected-test", 2026);
+		    interactiveHysteresis.setViewInfo(&view);
+		    interactiveHysteresis.setViewVolume(
+			&budgetVolume, 1.5f);
+		    interactiveHysteresis.setGeneration(
+			service.beginGeneration());
+		    interactiveHysteresis.setRevisions(83, 84);
+		    interactiveHysteresis.setViewLodState(&interactiveState);
+		    interactiveHysteresis.setCutHysteresisEnabled(TRUE);
+		    interactiveHysteresis.apply(root);
+		    const BObolViewLodState::CadPayload *interactivePayload =
+			interactiveState.findCadForResult(hysteresisSeed);
+
+		    SoBRLMeshLodSubmitAction quietExact;
+		    quietExact.setService(&service);
+		    quietExact.setDatabase(
+			dbip, "db://compact-projected-test", 2026);
+		    quietExact.setViewInfo(&view);
+		    quietExact.setViewVolume(&budgetVolume, 1.5f);
+		    quietExact.setGeneration(service.beginGeneration());
+		    quietExact.setRevisions(83, 84);
+		    quietExact.setViewLodState(&quietState);
+		    quietExact.apply(root);
+		    const BObolViewLodState::CadPayload *quietPayload =
+			quietState.findCadForResult(hysteresisSeed);
+		    const double interactiveError = interactivePayload ?
+			progressive->projectedErrorAtCut(
+			    interactivePayload->activeCut,
+			    interactivePayload->projectedPixelDiameter) : 0.0;
+		    if (!interactivePayload || !quietPayload ||
+			interactivePayload->activeCut != 0 ||
+			interactivePayload->requestedCut != 0 ||
+			!(interactiveError > 1.5 &&
+			  interactiveError <= 1.5 * 1.25) ||
+			quietPayload->activeCut != 1 ||
+			quietPayload->requestedCut != 1 ||
+			quietExact.getUpdatedCutCount() != 1) {
+			printf("FAIL: cut hysteresis leaked into quiet pixel demand "
+			       "(interactive=%d/%d error=%.9g quiet=%d/%d "
+			       "quiet_cuts=%u)\n",
+			       interactivePayload ?
+				   interactivePayload->activeCut : -1,
+			       interactivePayload ?
+				   interactivePayload->requestedCut : -1,
+			       interactiveError,
+			       quietPayload ? quietPayload->activeCut : -1,
+			       quietPayload ? quietPayload->requestedCut : -1,
+			       quietExact.getUpdatedCutCount());
+			ret = 1;
+		    }
+		}
+	    }
+
 	    SoBRLMeshLodSubmitAction blocked;
 	    blocked.setService(&service);
 	    blocked.setDatabase(dbip, "db://compact-projected-test", 2026);
