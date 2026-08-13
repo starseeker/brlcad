@@ -742,19 +742,36 @@ function(_bobol_guard_check_display_endpoint_boundary)
       "src/libged/draw_obol.cpp uses controller ownership as a scene capability gate")
   endif()
 
-  _bobol_guard_read_rel(_scene_api "src/libged/ged_scene_api.cpp")
+  _bobol_guard_read_rel(_scene_backend "src/libged/ged_scene_backend.cpp")
   foreach(_needle
       [[ged_scene_backend_apply_private]]
       [[scene_backend_ops->apply]]
       [[ged_scene_backend_snapshot_private]]
       [[scene_backend_ops->snapshot]]
+      [[old_operations->detach]]
       [[ged_scene_backend_set_private]])
-    string(FIND "${_scene_api}" "${_needle}" _scene_backend_idx)
+    string(FIND "${_scene_backend}" "${_needle}" _scene_backend_idx)
     if(_scene_backend_idx EQUAL -1)
       _bobol_guard_fail(
 	"libged lost its single semantic scene-backend seam (${_needle})")
     endif()
   endforeach()
+  _bobol_guard_read_rel(_scene_api "src/libged/ged_scene_api.cpp")
+  _bobol_guard_forbid_regexes("src/libged/ged_scene_api.cpp"
+    "${_scene_api}"
+    [[ged_draw_obol_]]
+    [[BObol]]
+    [[SoBRL]])
+  _bobol_guard_read_rel(_scene_reducer
+    "src/libged/ged_draw_transactions.c")
+  _bobol_guard_forbid_regexes("src/libged/ged_draw_transactions.c"
+    "${_scene_reducer}"
+    [[ged_draw_obol_]]
+    [[ged_draw_source_root_]]
+    [[ged_draw_erase_path_string]]
+    [[ged_draw_erase_path_prefix_string]]
+    [[BObol]]
+    [[SoBRL]])
 endfunction()
 
 function(_bobol_guard_check_imgstream_display_host_ownership)

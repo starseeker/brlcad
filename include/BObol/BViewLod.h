@@ -181,6 +181,7 @@ public:
 	float projectedPixelDiameter;
 	float projectedPixelArea;
 	float projectedPixelPerimeter;
+	SbBool projectedBoundsContained;
 	float targetPixelError;
 	uint64_t residentAdmissionRevision;
 	uint64_t viewRevision;
@@ -247,6 +248,13 @@ public:
     SbBool hasCadOccurrenceTerminalFailure(
 	const SoBRLDatabaseSource *source,
 	const BObolLodRequest &request) const;
+    /** Number of occurrence-scoped provider failures retained for the
+     * current demand epochs.  This is diagnostic/error state, not a mesh
+     * payload and not permission to call an ordinary structural box
+     * converged. */
+    size_t cadOccurrenceTerminalFailureCount(void) const;
+    size_t cadOccurrenceTerminalFailureCountForSource(
+	const SoBRLDatabaseSource *source) const;
     /* Change only a view-local PoP cut.  No source/cache work is performed;
      * the call succeeds only when the retained progressive asset already
      * contains the requested prefix. */
@@ -320,6 +328,12 @@ public:
      * for the latest traversal.  Deadline-stopped point/wire-only buffers are
      * coherent GL results, but are not complete presentation frames. */
     SbBool lastCadPresentationFrameExact(void) const;
+    /** Exact presentation classification for the newest completed CAD frame.
+     * Mesh occurrences, subpixel point surrogates, and ordinary structural
+     * boxes are deliberately separate: only the first two can satisfy a
+     * successful current-view coverage proof. */
+    SbBool lastCadPresentationOccurrenceCoverage(
+	size_t &subpixelOccurrences, size_t &structuralBoxes) const;
     /* Latest completed asynchronous GPU timer aggregate.  The serial changes
      * only when at least one retained CAD context publishes a newer result. */
     SbBool lastCadGpuMeasurement(size_t &faces,
@@ -476,6 +490,8 @@ private:
     mutable SbBool cadLastPresentedRenderCostValid;
     mutable size_t cadLastPresentedRenderCost;
     mutable SbBool cadLastPresentationFrameExact;
+    mutable size_t cadLastSubpixelProxyCount;
+    mutable size_t cadLastUncollapsedStructuralProxyCount;
     mutable SbBool cadLastGpuMeasurementValid;
     mutable size_t cadLastGpuFaces;
     mutable uint64_t cadLastGpuNanoseconds;

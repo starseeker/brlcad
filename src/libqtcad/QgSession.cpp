@@ -37,11 +37,12 @@
  * Icon cache helpers
  * ---------------------------------------------------------------------------
  *
- * The cache is keyed by an integer that encodes both the minor DB5 type and,
- * for types whose icon depends on further inspection (ARB8 subtype, comb
- * type), an additional sub-type discriminator:
+ * The cache key includes both DB5 major and minor type.  Binary-uniform minor
+ * values deliberately overlap BRL-CAD primitive minor values, so interpreting
+ * a minor type without its major type can feed a binunif internal to primitive
+ * inspection code.
  *
- *   key = (d_minor_type * 16) + subtype
+ *   key = (d_major_type << 16) | (d_minor_type << 8) | subtype
  *
  * where subtype is:
  *   0   — most primitive types (no further discrimination required)
@@ -58,19 +59,28 @@ session_icon_key(struct directory *dp, struct db_i *dbip)
 	return -1;
 
     int sub = 0;
-    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_ARB8) {
+    if (dp->d_major_type == DB5_MAJORTYPE_BRLCAD &&
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_ARB8) {
 	/* get_arb_type reads the actual geometry to determine ARB4-8 or 0. */
 	const struct bn_tol arb_tol = BN_TOL_INIT_TOL;
 	struct rt_db_internal intern;
-	if (rt_db_get_internal(&intern, dp, dbip, static_cast<fastf_t *>(nullptr)) >= 0) {
+	RT_DB_INTERNAL_INIT(&intern);
+	if (rt_db_get_internal(&intern, dp, dbip,
+		static_cast<fastf_t *>(nullptr)) >= 0 &&
+	    intern.idb_major_type == DB5_MAJORTYPE_BRLCAD &&
+	    intern.idb_type == ID_ARB8) {
 	    sub = rt_arb_std_type(&intern, &arb_tol);
 	    rt_db_free_internal(&intern);
+	} else if (intern.idb_ptr) {
+	    rt_db_free_internal(&intern);
 	}
-    } else if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_COMBINATION) {
-	    sub = static_cast<int>(QgCombType(dp, dbip));
+    } else if (dp->d_major_type == DB5_MAJORTYPE_BRLCAD &&
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_COMBINATION) {
+	sub = static_cast<int>(QgCombType(dp, dbip));
     }
 
-    return (int)dp->d_minor_type * 16 + sub;
+    return (static_cast<int>(dp->d_major_type) << 16) |
+	(static_cast<int>(dp->d_minor_type) << 8) | sub;
 }
 
 

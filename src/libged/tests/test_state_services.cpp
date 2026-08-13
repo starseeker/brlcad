@@ -6126,7 +6126,10 @@ struct recording_scene_backend {
     size_t apply_calls = 0;
     size_t snapshot_calls = 0;
     size_t selection_calls = 0;
+    size_t view_policy_calls = 0;
+    size_t detach_calls = 0;
     std::vector<enum ged_draw_transaction_kind> kinds;
+    std::vector<int> deferred_draws;
     std::vector<std::string> selected_paths;
 };
 
@@ -6143,6 +6146,11 @@ recording_scene_backend_apply(
 	return 0;
     backend->apply_calls++;
     backend->kinds.push_back(transaction->kind);
+    const struct ged_draw_appearance_settings *appearance =
+	static_cast<const struct ged_draw_appearance_settings *>(
+	    transaction->appearance);
+    backend->deferred_draws.push_back(appearance ?
+	appearance->defer_leaf_expansion : -1);
     return 1;
 }
 
@@ -6176,6 +6184,44 @@ recording_scene_backend_selection(
 	    backend->selected_paths.emplace_back(selected_paths[i]);
     }
     return 1;
+}
+
+static void
+recording_scene_backend_detach(struct ged *UNUSED(gedp), void *client_data)
+{
+    recording_scene_backend *backend =
+	static_cast<recording_scene_backend *>(client_data);
+    if (backend)
+	backend->detach_calls++;
+}
+
+static int
+recording_scene_backend_view_policy(
+    struct ged *UNUSED(gedp), struct ged_view_context *UNUSED(view),
+    void *client_data)
+{
+    recording_scene_backend *backend =
+	static_cast<recording_scene_backend *>(client_data);
+    if (!backend)
+	return 0;
+    backend->view_policy_calls++;
+    return 1;
+}
+
+static void
+recording_scene_backend_install(struct ged *gedp,
+	recording_scene_backend *backend)
+{
+    /* Deliberately keep this table on the helper's stack.  The backend seam
+     * promises to copy it, so later dispatch must not depend on this frame. */
+    const struct ged_scene_backend_ops operations = {
+	recording_scene_backend_apply,
+	recording_scene_backend_snapshot,
+	recording_scene_backend_selection,
+	recording_scene_backend_view_policy,
+	recording_scene_backend_detach
+    };
+    ged_scene_backend_set_private(gedp, &operations, backend);
 }
 
 static void
@@ -6224,13 +6270,7 @@ test_draw(struct ged *gedp)
 	return 1;
     }
     recording_scene_backend recording_backend;
-    const struct ged_scene_backend_ops recording_ops = {
-	recording_scene_backend_apply,
-	recording_scene_backend_snapshot,
-	recording_scene_backend_selection
-    };
-    ged_scene_backend_set_private(backend_gedp, &recording_ops,
-	&recording_backend);
+    recording_scene_backend_install(backend_gedp, &recording_backend);
 
     CHECK(recording_backend.snapshot_calls == 1,
 	"backend attachment must consume exactly one semantic snapshot");
@@ -6254,19 +6294,45 @@ test_draw(struct ged *gedp)
 	"clearing one named set must retain other selected-set presentation");
     CHECK(ged_selection_clear(backend_gedp, NULL) == 1,
 	"recording selection cleanup must succeed");
+
+    struct ged_view_context *recording_view =
+	ged_view_active_ctx(backend_gedp);
+    CHECK(recording_view != NULL,
+	"headless GED owner must retain an active semantic view");
+    if (recording_view) {
+	ged_view_lod_policy policy;
+	bv_lod_policy_init(&policy);
+	policy.policy = BV_LOD_AUTO;
+	policy.csg_enabled = 1;
+	policy.mesh_enabled = 1;
+	CHECK(ged_view_lod_policy_apply(recording_view, &policy) == 1,
+	    "headless semantic view must accept an enabled LoD policy");
+	ged_view_lod_policy roundtrip;
+	CHECK(ged_view_lod_policy_get(&roundtrip, recording_view) == 1 &&
+	    roundtrip.policy == BV_LOD_AUTO &&
+	    roundtrip.csg_enabled == 1 && roundtrip.mesh_enabled == 1,
+	    "headless semantic view must retain its renderer-neutral LoD policy");
+	CHECK(recording_backend.view_policy_calls == 0,
+	    "reapplying an unchanged LoD policy must not notify the backend");
+	policy.scale = 1.75;
+	CHECK(ged_view_lod_policy_apply(recording_view, &policy) == 1 &&
+	    recording_backend.view_policy_calls == 1,
+	    "one changed LoD policy must notify the backend exactly once");
+    }
     const char *recording_paths[] = {"all.g"};
     struct ged_scene_draw_request recording_draw;
     ged_scene_draw_request_init(&recording_draw);
     recording_draw.paths = recording_paths;
     recording_draw.path_count = 1;
-    recording_draw.realization.mode = GED_SCENE_REALIZE_EAGER;
     CHECK(ged_scene_draw(backend_gedp, &recording_draw, scene_result) ==
 	GED_SCENE_OK,
-	"recording backend draw must commit");
+	"headless automatic draw must commit compact semantic intent");
     CHECK(recording_backend.apply_calls == 1 &&
 	recording_backend.kinds.size() == 1 &&
-	recording_backend.kinds[0] == GED_DRAW_TXN_DRAW,
-	"one semantic draw commit must reach the backend exactly once");
+	recording_backend.kinds[0] == GED_DRAW_TXN_DRAW &&
+	recording_backend.deferred_draws.size() == 1 &&
+	recording_backend.deferred_draws[0] == 1,
+	"headless automatic draw must reach the backend once with deferred leaf expansion");
     struct ged_scene_erase_request recording_erase;
     ged_scene_erase_request_init(&recording_erase);
     recording_erase.path = "all.g";
@@ -6277,8 +6343,86 @@ test_draw(struct ged *gedp)
 	recording_backend.kinds[0] == GED_DRAW_TXN_DRAW &&
 	recording_backend.kinds[1] == GED_DRAW_TXN_ERASE,
 	"one semantic erase commit must reach the backend exactly once");
+
+    recording_draw.realization.mode = GED_SCENE_REALIZE_EAGER;
+    CHECK(ged_scene_draw(backend_gedp, &recording_draw, scene_result) ==
+	GED_SCENE_OK,
+	"headless eager draw must commit explicit eager intent");
+    CHECK(recording_backend.apply_calls == 3 &&
+	recording_backend.kinds.size() == 3 &&
+	recording_backend.kinds[2] == GED_DRAW_TXN_DRAW &&
+	recording_backend.deferred_draws.size() == 3 &&
+	recording_backend.deferred_draws[2] == 0,
+	"explicit eager draw must disable deferred leaf expansion");
+    CHECK(ged_scene_erase(backend_gedp, &recording_erase, scene_result) ==
+	GED_SCENE_OK,
+	"headless eager draw cleanup must commit");
+    CHECK(recording_backend.apply_calls == 4 &&
+	recording_backend.kinds.size() == 4 &&
+	recording_backend.kinds[3] == GED_DRAW_TXN_ERASE,
+	"headless eager draw cleanup must reach the backend exactly once");
+
+    const char *nested_recording_paths[] = {"all.g/platform.r"};
+    recording_draw.paths = nested_recording_paths;
+    CHECK(ged_scene_draw(backend_gedp, &recording_draw, scene_result) ==
+	GED_SCENE_OK && ged_scene_has_paths(backend_gedp, recording_view,
+	GED_SCENE_DRAW_DEFAULT),
+	"headless nested draw must create semantic intent without a renderer");
+    recording_erase.path = "all.g";
+    recording_erase.match = GED_SCENE_ERASE_SUBTREE;
+    CHECK(ged_scene_erase(backend_gedp, &recording_erase, scene_result) ==
+	GED_SCENE_OK && !ged_scene_has_paths(backend_gedp, recording_view,
+	GED_SCENE_DRAW_DEFAULT),
+	"subtree erase must retire narrower top-level draw intents");
+    CHECK(recording_backend.apply_calls == 6 &&
+	recording_backend.kinds.size() == 6 &&
+	recording_backend.kinds[4] == GED_DRAW_TXN_DRAW &&
+	recording_backend.kinds[5] == GED_DRAW_TXN_ERASE_PREFIX,
+	"nested draw and subtree erase must each reach the backend exactly once");
+
+    recording_draw.paths = recording_paths;
+    CHECK(ged_scene_draw(backend_gedp, &recording_draw, scene_result) ==
+	GED_SCENE_OK, "headless clear fixture draw must commit");
+    struct ged_scene_clear_request recording_clear;
+    ged_scene_clear_request_init(&recording_clear);
+    CHECK(ged_scene_clear(backend_gedp, &recording_clear, scene_result) ==
+	GED_SCENE_OK && !ged_scene_has_paths(backend_gedp, recording_view,
+	GED_SCENE_DRAW_DEFAULT),
+	"headless clear must retire all semantic draw intents");
+    CHECK(recording_backend.apply_calls == 8 &&
+	recording_backend.kinds.size() == 8 &&
+	recording_backend.kinds[6] == GED_DRAW_TXN_DRAW &&
+	recording_backend.kinds[7] == GED_DRAW_TXN_CLEAR,
+	"clear must reach the backend once after semantic retirement");
+
+    recording_scene_backend replacement_backend;
+    recording_scene_backend_install(backend_gedp, &replacement_backend);
+    CHECK(recording_backend.detach_calls == 1,
+	"backend replacement must detach the previous adapter exactly once");
+    CHECK(replacement_backend.snapshot_calls == 1,
+	"backend replacement must give the new adapter one semantic snapshot");
     ged_scene_backend_set_private(backend_gedp, NULL, NULL);
+    CHECK(replacement_backend.detach_calls == 1,
+	"explicit backend detach must release the active adapter exactly once");
+    CHECK(replacement_backend.snapshot_calls == 1,
+	"restoring the default adapter must not re-snapshot the old adapter");
     ged_close(backend_gedp);
+    CHECK(replacement_backend.detach_calls == 1,
+	"owner close must not detach an already detached adapter twice");
+
+    struct ged *close_backend_gedp = ged_open("db",
+	gedp->dbip->dbi_filename, 0);
+    CHECK(close_backend_gedp != NULL,
+	"backend close test must open an isolated headless GED owner");
+    if (close_backend_gedp) {
+	recording_scene_backend close_backend;
+	recording_scene_backend_install(close_backend_gedp, &close_backend);
+	CHECK(close_backend.snapshot_calls == 1,
+	    "backend close test must attach with one snapshot");
+	ged_close(close_backend_gedp);
+	CHECK(close_backend.detach_calls == 1,
+	    "GED owner close must detach the active adapter exactly once");
+    }
 
     const char *scene_paths[] = {"all.g"};
     scene_delta_observer observer;

@@ -337,6 +337,7 @@ BObolViewLodState::CadPayload::CadPayload(void) :
     projectedPixelDiameter(0.0f),
     projectedPixelArea(0.0f),
     projectedPixelPerimeter(0.0f),
+    projectedBoundsContained(FALSE),
     targetPixelError(0.0f),
     residentAdmissionRevision(0),
     viewRevision(0),
@@ -504,6 +505,8 @@ BObolViewLodState::BObolViewLodState(void) :
     cadLastPresentedRenderCostValid(FALSE),
     cadLastPresentedRenderCost(0),
     cadLastPresentationFrameExact(FALSE),
+    cadLastSubpixelProxyCount(0),
+    cadLastUncollapsedStructuralProxyCount(0),
     cadLastGpuMeasurementValid(FALSE),
     cadLastGpuFaces(0),
     cadLastGpuNanoseconds(0),
@@ -1286,6 +1289,8 @@ BObolViewLodState::applySourceResultInternal(
     payload->projectedPixelArea = result.request.projectedPixelArea;
     payload->projectedPixelPerimeter =
 	result.request.projectedPixelPerimeter;
+    payload->projectedBoundsContained =
+	result.request.projectedBoundsContained;
     payload->targetPixelError = result.request.targetPixelError;
     payload->residentAdmissionRevision =
 	result.residentAdmissionRevision;
@@ -1630,6 +1635,28 @@ BObolViewLodState::hasCadOccurrenceTerminalFailure(
 	    failure.providerStatus) ? TRUE : FALSE;
 }
 
+size_t
+BObolViewLodState::cadOccurrenceTerminalFailureCount(void) const
+{
+    size_t count = 0;
+    for (const auto &source : this->cadOccurrenceFailures)
+	count = source.second.size() > SIZE_MAX - count ?
+	    SIZE_MAX : count + source.second.size();
+    return count;
+}
+
+size_t
+BObolViewLodState::cadOccurrenceTerminalFailureCountForSource(
+    const SoBRLDatabaseSource *source) const
+{
+    if (!source)
+	return 0;
+    const auto failures = this->cadOccurrenceFailures.find(
+	view_lod_source_primary_key(source));
+    return failures == this->cadOccurrenceFailures.end() ?
+	0 : failures->second.size();
+}
+
 const BObolViewLodState::CadPayload *
 BObolViewLodState::findCadForResult(
     const BObolLodResult &result) const
@@ -1810,6 +1837,8 @@ BObolViewLodState::retargetCadPayload(
 	    payload->projectedPixelDiameter = demand.projectedPixelDiameter;
 	    payload->projectedPixelArea = demand.projectedPixelArea;
 	    payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
+	    payload->projectedBoundsContained =
+		demand.projectedBoundsContained;
 	    payload->targetPixelError = demand.targetPixelError;
 	    payload->residentAdmissionRevision = 0;
 	    payload->memoryLimited = FALSE;
@@ -1862,6 +1891,7 @@ BObolViewLodState::retargetCadPayload(
 	payload->projectedPixelDiameter = demand.projectedPixelDiameter;
 	payload->projectedPixelArea = demand.projectedPixelArea;
 	payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
+	payload->projectedBoundsContained = demand.projectedBoundsContained;
 	payload->targetPixelError = demand.targetPixelError;
 	this->addCadResidentDemand(payload.get());
 	if (payload->memoryLimited)
@@ -1882,6 +1912,7 @@ BObolViewLodState::retargetCadPayload(
     payload->projectedPixelDiameter = demand.projectedPixelDiameter;
     payload->projectedPixelArea = demand.projectedPixelArea;
     payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
+    payload->projectedBoundsContained = demand.projectedBoundsContained;
     payload->targetPixelError = demand.targetPixelError;
     payload->residentAdmissionRevision = 0;
     payload->memoryLimited = FALSE;
@@ -2274,6 +2305,17 @@ BObolViewLodState::lastCadPresentationFrameExact(void) const
 }
 
 SbBool
+BObolViewLodState::lastCadPresentationOccurrenceCoverage(
+    size_t &subpixelOccurrences, size_t &structuralBoxes) const
+{
+    if (!this->cadPresentationFrameStatusValid)
+	this->refreshCadPresentationFrameStatus();
+    subpixelOccurrences = this->cadLastSubpixelProxyCount;
+    structuralBoxes = this->cadLastUncollapsedStructuralProxyCount;
+    return this->cadLastPresentationFrameExact;
+}
+
+SbBool
 BObolViewLodState::lastCadGpuMeasurement(
 	size_t &faces, uint64_t &nanoseconds, uint64_t &serial,
 	float &pointProxyPixelThreshold) const
@@ -2352,6 +2394,8 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
     this->cadLastGpuSerial = 1469598103934665603ULL;
     this->cadLastGpuPointProxyPixelThreshold = 1.0f;
     this->cadLastPresentationFrameExact = TRUE;
+    this->cadLastSubpixelProxyCount = 0;
+    this->cadLastUncollapsedStructuralProxyCount = 0;
     this->cadGpuResourceStatusValue = CadGpuResourceStatus();
 
     SbBool haveAssembly = FALSE;
@@ -2385,6 +2429,14 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	haveAssembly = TRUE;
 	const int tier = assembly->lastRenderTier();
 	const Obol::CadRenderedWork work = assembly->lastRenderedWork();
+	const size_t subpixel = assembly->lastSubpixelProxyCount();
+	const size_t structural =
+	    assembly->lastUncollapsedStructuralProxyCount();
+	this->cadLastSubpixelProxyCount = view_lod_saturating_add(
+	    this->cadLastSubpixelProxyCount, subpixel);
+	this->cadLastUncollapsedStructuralProxyCount =
+	    view_lod_saturating_add(
+		this->cadLastUncollapsedStructuralProxyCount, structural);
 	if (!work.exact)
 	    this->cadLastPresentationFrameExact = FALSE;
 	const uint64_t presented = work.triangleCount >

@@ -351,6 +351,12 @@ struct BOBOL_EXPORT BObolLodRequest {
      * screen-aligned bounding rectangle. */
     float projectedPixelArea;
     float projectedPixelPerimeter;
+    /* TRUE only when the complete conservative bound is inside the renderer
+     * clip volume.  SoCADAssembly deliberately will not replace a partly
+     * clipped occurrence by one point: doing so can move the visible sliver
+     * or make it disappear.  The scheduler must use the same fact when it
+     * decides whether a structural proxy is already terminal coverage. */
+    SbBool projectedBoundsContained;
     float targetPixelError;
     int requestedCut;
     SbBox3f bounds;

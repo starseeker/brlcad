@@ -486,6 +486,7 @@ main(int argc, char *argv[])
 		    "QgModel direct object material notification visits indexed candidates");
 
 	    const char *direct_add_name = "_qgmodel_librt_event_add.s";
+	    const char *binary_add_name = "_qgmodel_binary_metadata";
 	    struct rt_wdb *event_wdbp = event_gedp ?
 		wdb_dbopen(event_gedp->dbip, RT_WDB_TYPE_DB_DEFAULT) : RT_WDB_NULL;
 	    point_t direct_add_center = {204.0, 0.0, 0.0};
@@ -499,6 +500,10 @@ main(int argc, char *argv[])
 	    TCHECK(event_wdbp && mk_sph(event_wdbp, direct_add_name,
 		    direct_add_center, 1.0) == 0,
 		    "event bridge direct librt add succeeds");
+	    const unsigned char binary_data[4] = {1, 2, 3, 4};
+	    TCHECK(event_wdbp && mk_binunif(event_wdbp, binary_add_name,
+		    binary_data, WDB_BINUNIF_UCHAR, 4) == 0,
+		    "event bridge binary metadata add succeeds");
 	    struct ged_event_result *direct_add_result = ged_event_result_create();
 	    TCHECK(event_gedp && ged_event_batch_end(event_gedp,
 		    direct_add_result) == GED_EVENT_OK,
@@ -516,6 +521,8 @@ main(int argc, char *argv[])
 		    "QgModel bridges batched direct librt add into targeted row insert");
 	    TCHECK(find_top_level_item(event_amodel, direct_add_name).isValid(),
 		    "event bridge model exposes directly added librt object");
+	    TCHECK(find_top_level_item(event_amodel, binary_add_name).isValid(),
+		    "QgModel safely realizes an icon row for binary metadata whose minor type overlaps ARB8");
 
 	    const char *reuse_leaf = "_qgmodel_reuse_leaf.s";
 	    const char *reuse_extra = "_qgmodel_reuse_extra.s";

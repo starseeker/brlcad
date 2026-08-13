@@ -100,6 +100,7 @@ bv_init(struct bv *v)
     v->local2base = 1.0;
     v->base2local = 1.0;
     v->refresh_enabled = 1;
+    bv_lod_policy_init(&v->lod_policy);
     VSET(v->aet, 35.0, 25.0, 0.0);
     VSET(v->eye_pos, 0.0, 0.0, 1.0);
     v->coord_mode = 'v';
@@ -186,6 +187,44 @@ bv_lod_policy_sanitize(struct bv_lod_policy *policy)
 	policy->curve_scale = 1.0;
     if (policy->point_scale <= SMALL_FASTF)
 	policy->point_scale = 1.0;
+}
+
+int
+bv_view_lod_policy_get(struct bv_lod_policy *policy, const struct bv *v)
+{
+    if (!policy || !bv_is_valid(v))
+	return 0;
+
+    *policy = v->lod_policy;
+    bv_lod_policy_sanitize(policy);
+    return 1;
+}
+
+int
+bv_view_lod_policy_set(struct bv *v, const struct bv_lod_policy *policy)
+{
+    struct bv_lod_policy sanitized;
+
+    if (!bv_is_valid(v) || !policy)
+	return 0;
+
+    sanitized = *policy;
+    bv_lod_policy_sanitize(&sanitized);
+    if (v->lod_policy.policy == sanitized.policy &&
+	v->lod_policy.forced_level == sanitized.forced_level &&
+	v->lod_policy.mesh_enabled == sanitized.mesh_enabled &&
+	v->lod_policy.csg_enabled == sanitized.csg_enabled &&
+	v->lod_policy.zoom_refresh == sanitized.zoom_refresh &&
+	v->lod_policy.bot_threshold == sanitized.bot_threshold &&
+	EQUAL(v->lod_policy.scale, sanitized.scale) &&
+	EQUAL(v->lod_policy.curve_scale, sanitized.curve_scale) &&
+	EQUAL(v->lod_policy.point_scale, sanitized.point_scale))
+	return 1;
+
+    v->lod_policy = sanitized;
+    v->frame_revision++;
+    (void)bv_refresh_request(v, BV_REFRESH_DRAW);
+    return 1;
 }
 
 static struct bv_lod_settings
@@ -306,6 +345,7 @@ bv_copy(struct bv *dst, const struct bv *src)
     dst->zclip = src->zclip;
     dst->framebuffer_mode = src->framebuffer_mode;
     dst->cleared = src->cleared;
+    dst->lod_policy = src->lod_policy;
     VMOVE(dst->aet, src->aet);
     VMOVE(dst->eye_pos, src->eye_pos);
     VMOVE(dst->keypoint, src->keypoint);
@@ -677,6 +717,15 @@ bv_hash(const struct bv *v)
     bu_data_hash_update(state, &v->rotation, sizeof(v->rotation));
     bu_data_hash_update(state, &v->center, sizeof(v->center));
     bu_data_hash_update(state, &v->model2view, sizeof(v->model2view));
+    bu_data_hash_update(state, &v->lod_policy.policy, sizeof(v->lod_policy.policy));
+    bu_data_hash_update(state, &v->lod_policy.forced_level, sizeof(v->lod_policy.forced_level));
+    bu_data_hash_update(state, &v->lod_policy.mesh_enabled, sizeof(v->lod_policy.mesh_enabled));
+    bu_data_hash_update(state, &v->lod_policy.csg_enabled, sizeof(v->lod_policy.csg_enabled));
+    bu_data_hash_update(state, &v->lod_policy.zoom_refresh, sizeof(v->lod_policy.zoom_refresh));
+    bu_data_hash_update(state, &v->lod_policy.bot_threshold, sizeof(v->lod_policy.bot_threshold));
+    bu_data_hash_update(state, &v->lod_policy.scale, sizeof(v->lod_policy.scale));
+    bu_data_hash_update(state, &v->lod_policy.curve_scale, sizeof(v->lod_policy.curve_scale));
+    bu_data_hash_update(state, &v->lod_policy.point_scale, sizeof(v->lod_policy.point_scale));
     hv = bu_data_hash_val(state);
     bu_data_hash_destroy(state);
     return hv;

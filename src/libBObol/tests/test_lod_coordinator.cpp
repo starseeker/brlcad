@@ -1091,6 +1091,44 @@ test_convergence_policy(void)
     }
 
     input = baseInput();
+    input.viewEpoch.set(71);
+    input.visibleTargetCount = 10;
+    input.activePayloadCount = 6;
+    input.satisfiedPayloadCount = 6;
+    input.presentedSubpixelOccurrenceCount = 4;
+    decision = policy.evaluate(input);
+    if (!decision.viewReady || decision.visualPending ||
+	decision.performanceLimited || decision.phase != Policy::Phase::IDLE) {
+	std::fprintf(stderr,
+	    "FAIL: subpixel occurrence terminal convergence\n");
+	return 1;
+    }
+
+    input = baseInput();
+    input.viewEpoch.set(72);
+    input.visibleTargetCount = 10;
+    input.activePayloadCount = 6;
+    input.satisfiedPayloadCount = 6;
+    input.presentedSubpixelOccurrenceCount = 3;
+    input.presentedStructuralBoxCount = 1;
+    decision = policy.evaluate(input);
+    if (decision.viewReady || !decision.visualPending ||
+	decision.phase != Policy::Phase::REFINING) {
+	std::fprintf(stderr,
+	    "FAIL: unresolved structural presentation convergence\n");
+	return 1;
+    }
+
+    input.terminalOccurrenceFailureCount = 1;
+    decision = policy.evaluate(input);
+    if (!decision.viewReady || decision.visualPending ||
+	decision.phase != Policy::Phase::CONVERROR) {
+	std::fprintf(stderr,
+	    "FAIL: terminal structural presentation error convergence\n");
+	return 1;
+    }
+
+    input = baseInput();
     input.viewEpoch.set(70);
     input.visibleTargetCount = 1;
     input.activePayloadCount = 1;
@@ -1340,7 +1378,19 @@ test_budget_policy(void)
 	    decision.totalBudget);
 	return 1;
     }
-    policy.clearRetainedRecoveryCeiling();
+    if (policy.confirmRetainedRecoveryPresentation(false) ||
+	!policy.retainedRecoveryCeilingActive()) {
+	std::fprintf(stderr,
+	    "FAIL: unconfirmed one-pixel recovery retired its ceiling\n");
+	return 1;
+    }
+    if (!policy.confirmRetainedRecoveryPresentation(true) ||
+	policy.retainedRecoveryCeilingActive() ||
+	policy.passInitialized()) {
+	std::fprintf(stderr,
+	    "FAIL: confirmed one-pixel recovery retained policy state\n");
+	return 1;
+    }
     policy.raiseCurrentBudget(400000);
     policy.resetPass();
     decision = policy.beginPass(input);

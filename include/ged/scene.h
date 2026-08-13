@@ -205,11 +205,18 @@ ged_scene_paths_append(struct ged *gedp,
 		       enum ged_scene_path_listing listing,
 		       struct bu_vls *result);
 
-/** Return the number of currently realized semantic occurrences. */
+/**
+ * Return the number of currently enumerable realized occurrences.
+ *
+ * This count is exactly the number visited by ged_scene_occurrences_visit.
+ * A compact draw root may have semantic draw paths and a retained backend
+ * source without materializing per-leaf occurrence records; use
+ * ged_scene_has_paths for that state.
+ */
 GED_EXPORT extern size_t
 ged_scene_occurrence_count(struct ged *gedp);
 
-/** Return non-zero when at least one realized occurrence is present. */
+/** Return non-zero when at least one enumerable occurrence is present. */
 GED_EXPORT extern int
 ged_scene_has_occurrences(struct ged *gedp);
 

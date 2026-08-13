@@ -457,6 +457,9 @@ public:
 	size_t visibleTargetCount = 0;
 	size_t activePayloadCount = 0;
 	size_t satisfiedPayloadCount = 0;
+	size_t presentedSubpixelOccurrenceCount = 0;
+	size_t presentedStructuralBoxCount = 0;
+	size_t terminalOccurrenceFailureCount = 0;
 	size_t memoryLimitedPayloadCount = 0;
 	size_t pendingTasks = 0;
 	size_t inFlight = 0;
@@ -499,11 +502,16 @@ public:
 	Decision decision;
 	const bool structuralPending =
 	    inputs.expectedLeafCount > inputs.availableLeafCount;
+	const size_t unresolvedStructuralBoxes =
+	    inputs.presentedStructuralBoxCount >
+		inputs.terminalOccurrenceFailureCount ?
+	    inputs.presentedStructuralBoxCount -
+		inputs.terminalOccurrenceFailureCount : 0;
 	decision.visualPending =
 	    structuralPending || inputs.submissionPending ||
 	    inputs.resultPending || inputs.publicationPending ||
 	    inputs.pendingTasks > 0 || inputs.inFlight > 0 ||
-	    inputs.calibrationPending;
+	    inputs.calibrationPending || unresolvedStructuralBoxes > 0;
 	decision.viewReady =
 	    !decision.visualPending && !inputs.interactive;
 	decision.backgroundPending =
@@ -518,8 +526,12 @@ public:
 	    (inputs.stableBudgetLimited || inputs.presentationLimited ||
 	     decision.memoryLimited ||
 	     (inputs.visibleTargetCount > 0 &&
-	      (inputs.activePayloadCount < inputs.visibleTargetCount ||
-	       inputs.satisfiedPayloadCount < inputs.visibleTargetCount)));
+	      (saturatingAdd(inputs.activePayloadCount,
+		   inputs.presentedSubpixelOccurrenceCount) <
+		   inputs.visibleTargetCount ||
+	       saturatingAdd(inputs.satisfiedPayloadCount,
+		   inputs.presentedSubpixelOccurrenceCount) <
+		   inputs.visibleTargetCount)));
 	decision.hasLodState =
 	    inputs.expectedLeafCount > 0 || inputs.availableLeafCount > 0 ||
 	    inputs.visibleTargetCount > 0 || inputs.activePayloadCount > 0 ||
@@ -543,7 +555,8 @@ public:
 	    } else {
 		const long double quality =
 		    static_cast<long double>(std::min(
-			inputs.satisfiedPayloadCount,
+			saturatingAdd(inputs.satisfiedPayloadCount,
+			    inputs.presentedSubpixelOccurrenceCount),
 			inputs.visibleTargetCount)) /
 		    static_cast<long double>(inputs.visibleTargetCount);
 		decision.fraction = static_cast<float>(
@@ -562,7 +575,9 @@ public:
 	    }
 	    const long double quality =
 		static_cast<long double>(std::min(
-		    inputs.satisfiedPayloadCount, target)) /
+		    saturatingAdd(inputs.satisfiedPayloadCount,
+			inputs.presentedSubpixelOccurrenceCount),
+		    target)) /
 		static_cast<long double>(target);
 	    decision.fraction = static_cast<float>(
 		0.40L + std::min<long double>(0.55L, 0.55L * quality));
@@ -574,7 +589,8 @@ public:
 	    decision.fraction = 1.0f;
 	}
 
-	if (inputs.failedSourceCount > 0)
+	if (inputs.failedSourceCount > 0 ||
+	    inputs.terminalOccurrenceFailureCount > 0)
 	    decision.phase = Phase::CONVERROR;
 	decision.fraction = std::max(0.0f,
 	    std::min(1.0f, decision.fraction));
@@ -1208,6 +1224,22 @@ public:
     {
 	this->requestedRetainedRecoveryBudgetValue = SIZE_MAX;
 	this->retainedRecoveryCeilingValue = SIZE_MAX;
+    }
+
+    /* A measured recovery ceiling protects the first coherent one-pixel
+     * population from immediately re-admitting the cut which just missed its
+     * deadline.  It must end once that population is actually ready for
+     * presentation.  Keep this transition in the scalar policy so callers
+     * cannot accidentally clear only the pass state, or retain the ceiling
+     * forever when returning from a coarser point cut needs an extra frame. */
+    bool confirmRetainedRecoveryPresentation(bool onePixelReady)
+    {
+	if (!onePixelReady ||
+	    this->retainedRecoveryCeilingValue == SIZE_MAX)
+	    return false;
+	this->clearRetainedRecoveryCeiling();
+	this->resetPass();
+	return true;
     }
 
     void raiseCurrentBudget(size_t budget)

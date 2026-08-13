@@ -161,6 +161,19 @@ main(int argc, char **argv)
     CHECK(player.play(resize, &error) && root.size() == QSize(640, 480),
 	"player did not deterministically resize its root widget");
 
+    QgTestEvent windowState;
+    windowState.target = QStringLiteral(".");
+    windowState.action = QStringLiteral("window_state");
+    windowState.arguments.insert(QStringLiteral("state"),
+	QStringLiteral("minimized"));
+    CHECK(player.play(windowState, &error) && root.isMinimized(),
+	"player did not minimize its root widget");
+    windowState.arguments.insert(QStringLiteral("state"),
+	QStringLiteral("normal"));
+    CHECK(player.play(windowState, &error) && !root.isMinimized() &&
+	!root.isMaximized() && !root.isFullScreen(),
+	"player did not restore its root widget");
+
     const QPointF sourcePos(50.0, 25.0);
     QMouseEvent sourcePress(QEvent::MouseButtonPress, sourcePos,
 	canvas.mapToGlobal(sourcePos.toPoint()),

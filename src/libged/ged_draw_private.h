@@ -1069,9 +1069,6 @@ extern int ged_draw_overlay_geometry_insert(struct ged *gedp,
 						       ged_draw_shape_ref *out);
 extern void ged_draw_overlay_erase_name(struct ged *gedp,
 						   const char *name);
-extern int ged_draw_redraw_group_ref(struct ged *gedp,
-						ged_draw_group_ref ref,
-						int skip_subtractions);
 extern int ged_draw_group_ref_redraw_wireframe(struct ged *gedp,
 							  ged_draw_group_ref ref,
 							  struct db_i *dbip,

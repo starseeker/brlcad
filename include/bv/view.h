@@ -406,6 +406,7 @@ struct bv {
     int zclip;
     int framebuffer_mode;
     int cleared;
+    struct bv_lod_policy lod_policy;
 
     vect_t aet;
     point_t eye_pos;
@@ -571,6 +572,10 @@ BV_EXPORT extern void bv_view_info_init(struct bv_view_info *info);
 BV_EXPORT extern void bv_view_info_sanitize(struct bv_view_info *info);
 BV_EXPORT extern void bv_lod_policy_init(struct bv_lod_policy *policy);
 BV_EXPORT extern void bv_lod_policy_sanitize(struct bv_lod_policy *policy);
+/** Copy the complete, sanitized LoD policy retained by a view. */
+BV_EXPORT extern int bv_view_lod_policy_get(struct bv_lod_policy *policy, const struct bv *v);
+/** Sanitize and retain a complete LoD policy on a view. */
+BV_EXPORT extern int bv_view_lod_policy_set(struct bv *v, const struct bv_lod_policy *policy);
 BV_EXPORT extern fastf_t bv_view_lod_curve_scale(const struct bv_view_info *info);
 BV_EXPORT extern size_t bv_view_lod_bot_threshold(const struct bv_view_info *info);
 BV_EXPORT extern fastf_t bv_view_avg_sample_spacing(const struct bv_view_info *info);

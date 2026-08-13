@@ -54,6 +54,7 @@
 #include "ged/event.h"
 #include "./ged_draw_private.h"
 #include "./ged_private.h"
+#include "./ged_scene_backend_private.h"
 #include "./include/plugin.h"
 
 extern "C" void libged_init(void);
@@ -184,6 +185,11 @@ ged_close(struct ged *gedp)
     }
 
     ged_event_librt_callbacks_disable(gedp);
+
+    /* Give an alternative renderer its final owner-lifecycle callback before
+     * database directory pointers become invalid.  ged_free retains an
+     * idempotent fallback for callers that bypass ged_close. */
+    ged_scene_backend_detach_private(gedp);
 
     if (gedp->dbip) {
 	db_close(gedp->dbip);
@@ -381,10 +387,15 @@ ged_free(struct ged *gedp)
 
 	/* Framebuffer bridge teardown can remove retained nodes and request a
 	 * frame, so release it before the endpoint-backed view state. */
-	if (gedp->ged_fbs) {
+    if (gedp->ged_fbs) {
 	    ged_obol_fbserv_release(gedp);
 	    BU_PUT(gedp->ged_fbs, struct fbserv_obj);
 	}
+
+    /* Alternative scene adapters borrow their client data until detach.
+     * Release that contract while the semantic scene and all view resources
+     * it may reference are still valid. */
+    ged_scene_backend_detach_private(gedp);
 
     ged_view_state_free(gedp);
 

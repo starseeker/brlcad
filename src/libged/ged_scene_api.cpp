@@ -344,19 +344,36 @@ ged_scene_draw(struct ged *gedp,
 	ged_view_active_ctx(gedp);
     const int evaluated = draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
 	draw_mode == GED_DRAW_MODE_EVAL_POINTS;
+    ged_view_lod_policy lod_policy;
+    bv_lod_policy_init(&lod_policy);
+    const int lod_policy_available = view &&
+	ged_view_lod_policy_get(&lod_policy, view);
+    int lod_enabled = 0;
+    if (lod_policy_available && lod_policy.policy != BV_LOD_OFF) {
+	switch (draw_mode) {
+	    case GED_DRAW_MODE_SHADED_BOTS:
+	    case GED_DRAW_MODE_SHADED:
+	    case GED_DRAW_MODE_HIDDEN_LINE:
+		lod_enabled = lod_policy.mesh_enabled ? 1 : 0;
+		break;
+	    case GED_DRAW_MODE_WIRE:
+		lod_enabled = (lod_policy.csg_enabled ||
+		    lod_policy.mesh_enabled) ? 1 : 0;
+		break;
+	    default:
+		break;
+	}
+    }
     int progressive = 0;
     switch (request->realization.mode) {
 	case GED_SCENE_REALIZE_AUTO:
-	    progressive = !evaluated && view &&
-		ged_draw_obol_progressive_available(gedp, view) &&
-		ged_draw_obol_view_lod_enabled(gedp, view, draw_mode);
+	    progressive = !evaluated && lod_enabled;
 	    break;
 	case GED_SCENE_REALIZE_EAGER:
 	    progressive = 0;
 	    break;
 	case GED_SCENE_REALIZE_PROGRESSIVE:
-	    if (evaluated || !view ||
-		!ged_draw_obol_progressive_available(gedp, view)) {
+	    if (evaluated || !view || !lod_enabled) {
 		if (result)
 		    result->status = GED_SCENE_ERROR;
 		return GED_SCENE_ERROR;
@@ -692,75 +709,6 @@ ged_scene_revision(const struct ged *gedp)
 
 
 extern "C" int
-ged_scene_backend_apply_private(
-    struct ged *gedp,
-    const struct ged_draw_transaction *transaction,
-    const struct ged_draw_transaction_result *result)
-{
-    if (!gedp || !transaction)
-	return 0;
-    Ged_Internal *state = gedp->i && gedp->i->i ? gedp->i->i : nullptr;
-    if (state && state->scene_backend_ops) {
-	return state->scene_backend_ops->apply ?
-	    state->scene_backend_ops->apply(gedp, transaction, result,
-		state->scene_backend_data) : 0;
-    }
-    return ged_draw_obol_backend_apply_transaction(gedp, transaction, result);
-}
-
-
-extern "C" int
-ged_scene_backend_snapshot_private(struct ged *gedp)
-{
-    if (!gedp || !gedp->i || !gedp->i->i)
-	return 0;
-    Ged_Internal *state = gedp->i->i;
-    if (state->scene_backend_ops) {
-	return state->scene_backend_ops->snapshot ?
-	    state->scene_backend_ops->snapshot(gedp,
-		state->scene_backend_data) : 0;
-    }
-    return ged_draw_obol_scene_sync_full_scene(gedp, nullptr, 0, nullptr);
-}
-
-
-extern "C" int
-ged_scene_backend_selection_private(
-    struct ged *gedp,
-    const char *const *added_paths, size_t added_count,
-    const char *const *removed_paths, size_t removed_count,
-    const char *const *selected_paths, size_t selected_count)
-{
-    if (!gedp || !gedp->i || !gedp->i->i)
-	return 0;
-    Ged_Internal *state = gedp->i->i;
-    if (state->scene_backend_ops) {
-	return state->scene_backend_ops->selection ?
-	    state->scene_backend_ops->selection(gedp, added_paths,
-		added_count, removed_paths, removed_count, selected_paths,
-		selected_count, state->scene_backend_data) : 0;
-    }
-    return ged_draw_obol_database_sources_apply_selection_delta(gedp,
-	added_paths, added_count, removed_paths, removed_count,
-	selected_paths, selected_count);
-}
-
-
-extern "C" void
-ged_scene_backend_set_private(
-    struct ged *gedp,
-    const struct ged_scene_backend_ops *operations,
-    void *client_data)
-{
-    if (!gedp || !gedp->i || !gedp->i->i)
-	return;
-    gedp->i->i->scene_backend_ops = operations;
-    gedp->i->i->scene_backend_data = operations ? client_data : nullptr;
-    (void)ged_scene_backend_snapshot_private(gedp);
-}
-
-
-extern "C" int
 ged_scene_available(const struct ged *gedp)
 {
     return gedp ? ged_draw_scene_available(const_cast<struct ged *>(gedp)) : 0;
@@ -827,15 +775,7 @@ extern "C" size_t
 ged_scene_occurrence_count(struct ged *gedp)
 {
     const int count = gedp ? ged_draw_shape_count(gedp) : 0;
-    if (count > 0)
-	return static_cast<size_t>(count);
-    /* Compact draw roots deliberately do not mirror every streamed leaf into
-     * libged records.  Until the occurrence-query backend contract grows a
-     * cheap compact count, report retained realized sources rather than
-     * incorrectly claiming an attached compact scene is empty. */
-    size_t source_count = 0;
-    return gedp && ged_draw_obol_database_source_count(gedp, 0,
-	&source_count) ? source_count : 0;
+    return count > 0 ? static_cast<size_t>(count) : 0;
 }
 
 

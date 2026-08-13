@@ -111,11 +111,27 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     if (event.action == QLatin1String("checkpoint"))
 	sample.insert(QStringLiteral("checkpoint"),
 	    event.arguments.value(QStringLiteral("name")));
+    if (event.action == QLatin1String("resize")) {
+	sample.insert(QStringLiteral("requested_width"),
+	    event.arguments.value(QStringLiteral("width")));
+	sample.insert(QStringLiteral("requested_height"),
+	    event.arguments.value(QStringLiteral("height")));
+    }
+    if (event.action == QLatin1String("window_state"))
+	sample.insert(QStringLiteral("requested_window_state"),
+	    event.arguments.value(QStringLiteral("state")));
     sample.insert(QStringLiteral("elapsed_ms"), elapsedMilliseconds);
     sample.insert(QStringLiteral("event_duration_us"), eventMicroseconds);
     if (app.w) {
 	sample.insert(QStringLiteral("window_width"), app.w->width());
 	sample.insert(QStringLiteral("window_height"), app.w->height());
+	sample.insert(QStringLiteral("window_minimized"),
+	    app.w->isMinimized());
+	sample.insert(QStringLiteral("window_maximized"),
+	    app.w->isMaximized());
+	sample.insert(QStringLiteral("window_fullscreen"),
+	    app.w->isFullScreen());
+	sample.insert(QStringLiteral("window_visible"), app.w->isVisible());
     }
     if (QgView *view = qged_test_event_view(app, event)) {
 	sample.insert(QStringLiteral("view_width"), view->width());
@@ -251,7 +267,7 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    sample.insert(QStringLiteral("draw_scene_revision"),
 		QString::number(ged_scene_revision(gedp)));
 	    if (collectStructuralDiagnostics) {
-		sample.insert(QStringLiteral("draw_shape_count"),
+		sample.insert(QStringLiteral("draw_occurrence_count"),
 		    static_cast<qint64>(ged_scene_occurrence_count(gedp)));
 		struct bu_vls drawListing = BU_VLS_INIT_ZERO;
 		const size_t drawCount = ged_scene_paths_append(gedp,
@@ -274,6 +290,22 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		bu_vls_free(&drawListing);
 	    }
 	}
+
+	if (QgView *sampleView = qged_test_event_view(app, event)) {
+	    ged_view_lod_policy policy;
+	    if (ged_view_lod_policy_get(&policy,
+		    ged_view_context_from_bv(sampleView->viewContext()))) {
+		sample.insert(QStringLiteral("view_lod_policy"), policy.policy);
+		sample.insert(QStringLiteral("view_lod_mesh_enabled"),
+		    policy.mesh_enabled != 0);
+		sample.insert(QStringLiteral("view_lod_csg_enabled"),
+		    policy.csg_enabled != 0);
+		sample.insert(QStringLiteral("view_lod_zoom_refresh"),
+		    policy.zoom_refresh != 0);
+		sample.insert(QStringLiteral("view_lod_scale"),
+		    static_cast<double>(policy.scale));
+	    }
+	}
     }
 
     BObolViewController *controller =
@@ -284,6 +316,24 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     }
 
     sample.insert(QStringLiteral("controller_available"), true);
+    sample.insert(QStringLiteral("render_request_serial"),
+	static_cast<qint64>(controller->getRenderRequestSerial()));
+    sample.insert(QStringLiteral("render_completion_serial"),
+	static_cast<qint64>(controller->getRenderCompletionSerial()));
+    sample.insert(QStringLiteral("presented_frame_serial"),
+	static_cast<qint64>(controller->getPresentedFrameSerial()));
+    sample.insert(QStringLiteral("lod_settle_after_render_serial"),
+	static_cast<qint64>(controller->getLodSettleAfterRenderSerial()));
+    sample.insert(QStringLiteral("lod_refinement_resume_after_render_serial"),
+	static_cast<qint64>(
+	    controller->getLodRefinementResumeAfterRenderSerial()));
+    struct bv_view_info viewInfo = BV_VIEW_INFO_INIT;
+    if (controller->getViewInfo(&viewInfo)) {
+	sample.insert(QStringLiteral("model_view_size"),
+	    static_cast<double>(viewInfo.size));
+	sample.insert(QStringLiteral("model_view_width"), viewInfo.width);
+	sample.insert(QStringLiteral("model_view_height"), viewInfo.height);
+    }
     const BObolViewController::LightingProfile lightingProfile =
 	controller->getLightingProfile();
     sample.insert(QStringLiteral("lighting_profile"),
@@ -552,6 +602,18 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<qint64>(convergence.activePayloadCount));
     sample.insert(QStringLiteral("lod_convergence_satisfied_payloads"),
 	static_cast<qint64>(convergence.satisfiedPayloadCount));
+    sample.insert(QStringLiteral("lod_convergence_presented_subpixel_occurrences"),
+	static_cast<qint64>(std::min<size_t>(
+	    convergence.presentedSubpixelOccurrenceCount,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_convergence_presented_structural_boxes"),
+	static_cast<qint64>(std::min<size_t>(
+	    convergence.presentedStructuralBoxCount,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_convergence_terminal_occurrence_failures"),
+	static_cast<qint64>(std::min<size_t>(
+	    convergence.terminalOccurrenceFailureCount,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
     sample.insert(QStringLiteral("lod_convergence_resident_mesh_bytes"),
 	static_cast<qint64>(convergence.residentMeshBytes));
     sample.insert(QStringLiteral("lod_convergence_stable_resident_mesh_bytes"),
@@ -678,6 +740,7 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     std::vector<CadVisualOutlier> cadVisualOutliers;
     qint64 activeCadSubpixelProxyPoints = 0;
     qint64 visibleStructuralFallbackBoxes = 0;
+    qint64 cadOccurrenceTerminalFailures = 0;
     qint64 presentedCadFaces = 0;
     qint64 presentedCadLines = 0;
     qint64 presentedCadPositions = 0;
@@ -720,6 +783,12 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	collectDeepLodDiagnostics ||
 	event.action == QLatin1String("checkpoint");
     if (collectPresentationDiagnostics) {
+	if (viewLodState)
+	    cadOccurrenceTerminalFailures = static_cast<qint64>(
+		std::min<size_t>(
+		    viewLodState->cadOccurrenceTerminalFailureCount(),
+		    static_cast<size_t>(
+			std::numeric_limits<qint64>::max())));
 	std::vector<SoBRLDatabaseSource *> renderSources;
 	qged_test_collect_database_source_roots(
 	    controller->getRenderSceneRoot(), renderSources);
@@ -834,6 +903,15 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    boundsSample.insert(QStringLiteral("valid"), valid);
 	    boundsSample.insert(QStringLiteral("exact"),
 		source->hasExactSourceBounds() ? true : false);
+	    boundsSample.insert(QStringLiteral("realization_status"),
+		source->realizationStatus.getValue());
+	    boundsSample.insert(QStringLiteral("stale"),
+		source->stale.getValue() ? true : false);
+	    boundsSample.insert(QStringLiteral("stale_reason"),
+		static_cast<int>(source->staleReason.getValue()));
+	    boundsSample.insert(QStringLiteral("diagnostic"),
+		QString::fromLocal8Bit(
+		    source->realizationDiagnostic.getValue().getString()));
 	    if (valid) {
 		const SbVec3f minimum = bounds.getMin();
 		const SbVec3f maximum = bounds.getMax();
@@ -1219,6 +1297,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	cadPointProxyPixelThresholdMax);
     sample.insert(QStringLiteral("visible_structural_fallback_boxes"),
 	visibleStructuralFallbackBoxes);
+    sample.insert(QStringLiteral("cad_occurrence_terminal_failures"),
+	cadOccurrenceTerminalFailures);
     sample.insert(QStringLiteral("presented_cad_faces"),
 	presentedCadFaces);
     sample.insert(QStringLiteral("presented_cad_lines"),

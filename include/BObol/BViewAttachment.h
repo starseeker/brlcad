@@ -34,8 +34,10 @@ class SoNode;
  * Per-view Obol attachment state for a BRL-CAD view.
  *
  * This object is deliberately independent of GED.  Application-facing GED view
- * records may refer to it, but scene roots, view-local LoD realization state,
- * and passive LoD policy belong to the Obol/libBObol view attachment.
+ * records may refer to it, but scene roots and view-local LoD realization
+ * state belong to the Obol/libBObol view attachment.  The LoD policy stored
+ * here is a synchronized renderer-side copy of the renderer-neutral bv view
+ * policy.
  */
 class BOBOL_EXPORT BObolViewAttachment
 {

@@ -167,6 +167,22 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !near_fastf(lod_policy.curve_scale, 1.0) ||
 	    !near_fastf(lod_policy.point_scale, 1.0))
 	return fail("lod policy defaults failed");
+    if (!bv_view_lod_policy_get(&lod_policy, v) ||
+	lod_policy.policy != BV_LOD_AUTO || !lod_policy.mesh_enabled ||
+	!lod_policy.csg_enabled)
+	return fail("new view lod policy is not the renderer-neutral default");
+    lod_policy.policy = BV_LOD_OFF;
+    lod_policy.mesh_enabled = 0;
+    lod_policy.csg_enabled = 0;
+    lod_policy.zoom_refresh = 0;
+    lod_policy.scale = 2.5;
+    unsigned long long lod_hash_before = bv_hash(v);
+    if (!bv_view_lod_policy_set(v, &lod_policy) ||
+	!bv_view_lod_policy_get(&lod_policy, v) ||
+	lod_policy.policy != BV_LOD_OFF || lod_policy.mesh_enabled ||
+	lod_policy.csg_enabled || !near_fastf(lod_policy.scale, 2.5) ||
+	bv_hash(v) == lod_hash_before)
+	return fail("view lod policy set/get/hash failed");
 
     if (!bv_dimensions_set(v, 800, 400))
 	return fail("failed to set view dimensions");
@@ -403,6 +419,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    bv_framebuffer_mode_get(v2) != 2 ||
 	    !bv_cleared_get(v2))
 	return fail("view copy did not preserve bookkeeping state");
+    if (!bv_view_lod_policy_get(&lod_policy, v2) ||
+	lod_policy.policy != BV_LOD_OFF || lod_policy.mesh_enabled ||
+	lod_policy.csg_enabled || !near_fastf(lod_policy.scale, 2.5))
+	return fail("view copy did not preserve lod policy");
     if (!bv_grid_state_get(&grid, v2) || !near_fastf(grid.res_h, 2.0) ||
 	    grid.res_major_h != 7 ||
 	    !bv_snap_state_get(&snap, v2) ||

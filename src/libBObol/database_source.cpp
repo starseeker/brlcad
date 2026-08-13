@@ -67,6 +67,7 @@
 
 #include <Inventor/nodes/SoMatrixTransform.h>
 #include <Inventor/nodes/SoSeparator.h>
+#include <Obol/cad/CadProjectedProxy.h>
 #include <Inventor/sensors/SoFieldSensor.h>
 
 #include <algorithm>
@@ -731,6 +732,8 @@ BObolCompactLodInstanceSummary::BObolCompactLodInstanceSummary(void) :
     sourceFaceCount(0),
     sourcePointCount(0),
     localToSource(SbMatrix::identity()),
+    presentationLocalToSource(SbMatrix::identity()),
+    presentationCornersValid(FALSE),
     meshGeometry(FALSE),
     lodBacked(FALSE),
     sourceMeshRequestValid(FALSE),
@@ -740,11 +743,14 @@ BObolCompactLodInstanceSummary::BObolCompactLodInstanceSummary(void) :
 {
     meshAssetBounds.makeEmpty();
     localBounds.makeEmpty();
+    presentationLocalBounds.makeEmpty();
 }
 
 BObolCompactLodPlanningSummary::BObolCompactLodPlanningSummary(void) :
     valid(FALSE),
     localToSource(SbMatrix::identity()),
+    presentationLocalToSource(SbMatrix::identity()),
+    presentationCornersValid(FALSE),
     meshGeometry(FALSE),
     lodBacked(FALSE),
     sourceMeshRequestValid(FALSE),
@@ -753,6 +759,7 @@ BObolCompactLodPlanningSummary::BObolCompactLodPlanningSummary(void) :
     highlighted(FALSE)
 {
     localBounds.makeEmpty();
+    presentationLocalBounds.makeEmpty();
 }
 
 BObolExternalLineSet::BObolExternalLineSet(void) :
@@ -4476,7 +4483,8 @@ local_bounds_from_internal(struct rt_db_internal *intern, SbBox3f &bounds)
 
 static void
 set_source_bounds_from_local_box(SoBRLDatabaseSource *source,
-				 const SbBox3f &bounds)
+				 const SbBox3f &bounds,
+				 SbBool exact = TRUE)
 {
     if (!source)
 	return;
@@ -4488,6 +4496,7 @@ set_source_bounds_from_local_box(SoBRLDatabaseSource *source,
 
     (void)source->setSourceBoundsState(TRUE, bounds.getMin(),
 				       bounds.getMax());
+    (void)source->setSourceBoundsExactState(exact);
 }
 
 static int
@@ -8817,7 +8826,8 @@ source_bounds_for_realized_node(const SoNode *node,
 
 
 static void
-update_source_bounds_from_realized_geometry(SoBRLDatabaseSource *source)
+update_source_bounds_from_realized_geometry(SoBRLDatabaseSource *source,
+	SbBool exact = TRUE)
 {
     if (!source)
 	return;
@@ -8838,6 +8848,7 @@ update_source_bounds_from_realized_geometry(SoBRLDatabaseSource *source)
     if (valid && !bounds.isEmpty()) {
 	(void)source->setSourceBoundsState(TRUE, bounds.getMin(),
 					   bounds.getMax());
+	(void)source->setSourceBoundsExactState(exact);
     } else {
 	source->clearSourceBounds();
     }
@@ -15281,6 +15292,7 @@ bobol_database_source_realize_wireframe_compact_with_cache(
 	    data.compact_bounds.getMax());
     else
 	source->clearSourceBounds();
+    (void)source->setSourceBoundsExactState(TRUE);
     mark_source_realized_current(source);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,
@@ -17303,6 +17315,7 @@ bobol_database_source_realize_mesh_compact_with_cache(
 	    data.compact_bounds.getMax());
     else
 	source->clearSourceBounds();
+    (void)source->setSourceBoundsExactState(TRUE);
     mark_source_realized_current(source);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,
@@ -19285,6 +19298,12 @@ SoBRLDatabaseSource::getCompactLodInstanceSummary(
 	!entry.sourceMeshRequest.meshAssetBounds.isEmpty() ?
 	entry.sourceMeshRequest.meshAssetBounds :
 	compact_part_geometry_bounds(entry.geometry);
+    summary.presentationLocalToSource = entry.localToSource;
+    summary.presentationLocalBounds =
+	compact_part_geometry_bounds(entry.geometry);
+    summary.presentationCornersValid =
+	entry.geometry && Obol::cadPartGeometryProxyCorners(
+	    *entry.geometry, summary.presentationCorners.data()) ? TRUE : FALSE;
     summary.meshGeometry = entry.meshGeometry;
     summary.lodBacked = entry.lodBacked;
     summary.sourceMeshRequestValid = entry.sourceMeshRequestValid;
@@ -19329,6 +19348,12 @@ SoBRLDatabaseSource::getCompactLodPlanningSummary(
 	!entry.sourceMeshRequest.meshAssetBounds.isEmpty() ?
 	entry.sourceMeshRequest.meshAssetBounds :
 	compact_part_geometry_bounds(entry.geometry);
+    summary.presentationLocalToSource = entry.localToSource;
+    summary.presentationLocalBounds =
+	compact_part_geometry_bounds(entry.geometry);
+    summary.presentationCornersValid =
+	entry.geometry && Obol::cadPartGeometryProxyCorners(
+	    *entry.geometry, summary.presentationCorners.data()) ? TRUE : FALSE;
     summary.meshGeometry = entry.meshGeometry;
     summary.lodBacked = entry.lodBacked;
     summary.sourceMeshRequestValid = entry.sourceMeshRequestValid;

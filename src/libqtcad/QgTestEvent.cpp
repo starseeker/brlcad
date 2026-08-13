@@ -17,8 +17,10 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QGuiApplication>
 #include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -713,6 +715,107 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	    widget->resize(width, height);
 	    return widget->size() == QSize(width, height);
 	}
+    } else if (event.action == QLatin1String("window_state")) {
+	QWidget *widget = qobject_cast<QWidget *>(target);
+	const QString state = event.arguments.value(
+	    QStringLiteral("state")).toString().toLower();
+	if (!widget) {
+	    qg_event_error(error,
+		QStringLiteral("window_state target is not a widget"));
+	    return false;
+	}
+	if (state != QLatin1String("normal") &&
+	    state != QLatin1String("minimized") &&
+	    state != QLatin1String("maximized") &&
+	    state != QLatin1String("fullscreen")) {
+	    qg_event_error(error,
+		QStringLiteral("unknown window_state: %1").arg(state));
+	    return false;
+	}
+	QWidget *window = widget->window();
+	static const char requestedStateProperty[] =
+	    "qgTestRequestedWindowState";
+	window->setProperty(requestedStateProperty, state);
+	const auto applyState = [window, state]() {
+	    if (state == QLatin1String("normal")) {
+		/* Clear the native state explicitly before showNormal().  On X11 an
+		 * acknowledged minimize request may otherwise remain queued behind
+		 * the local QWidget flag and arrive after the following restore. */
+		window->setWindowState(Qt::WindowNoState);
+		window->showNormal();
+	    } else if (state == QLatin1String("minimized")) {
+		window->showMinimized();
+	    } else if (state == QLatin1String("maximized")) {
+		window->showMaximized();
+	    } else {
+		window->showFullScreen();
+	    }
+	};
+	applyState();
+	/* Treat the event as a desired state until another window_state event
+	 * supersedes it.  A native minimize acknowledgement can arrive seconds
+	 * after Qt's local flag first reported normal when the owner thread starts
+	 * expensive scene work immediately after restore.  Bounded delayed guards
+	 * repair that stale acknowledgement without blocking the event player or
+	 * fighting a later maximize/fullscreen request. */
+	const int guardDelays[] = {250, 500, 1000, 2000, 5000, 10000, 30000};
+	for (int delay : guardDelays) {
+	    QTimer::singleShot(delay, window,
+		[window, state, applyState]() {
+		    if (window->property(
+			    requestedStateProperty).toString() != state)
+			return;
+		    const bool reached = state == QLatin1String("minimized") ?
+			window->isMinimized() :
+			state == QLatin1String("maximized") ?
+			(window->isMaximized() && !window->isMinimized()) :
+			state == QLatin1String("fullscreen") ?
+			(window->isFullScreen() && !window->isMinimized()) :
+			(!window->isMinimized() && !window->isMaximized() &&
+			 !window->isFullScreen());
+		    if (!reached)
+			applyState();
+		});
+	}
+	/* Window-manager state transitions are asynchronous.  Returning as soon
+	 * as showNormal()/showMinimized() queues the request lets a delayed older
+	 * transition overtake the next scripted state; a large-scene test can then
+	 * try to present into a window which became minimized again much later.
+	 * Synchronize with the native window system and require a short stable
+	 * interval, reasserting the requested state if an older acknowledgement
+	 * arrives.  Event processing may also advance ordinary application work;
+	 * that is valid elapsed time inside this explicit semantic barrier. */
+	const auto stateReached = [window, state]() {
+	    if (state == QLatin1String("minimized"))
+		return window->isMinimized();
+	    if (state == QLatin1String("maximized"))
+		return window->isMaximized() && !window->isMinimized();
+	    if (state == QLatin1String("fullscreen"))
+		return window->isFullScreen() && !window->isMinimized();
+	    return !window->isMinimized() && !window->isMaximized() &&
+		!window->isFullScreen();
+	};
+	QElapsedTimer stateWait;
+	QElapsedTimer stableWait;
+	stateWait.start();
+	while (stateWait.elapsed() < 2000) {
+	    QGuiApplication::sync();
+	    if (stateReached()) {
+		if (!stableWait.isValid())
+		    stableWait.start();
+		if (stableWait.elapsed() >= 100)
+		    return true;
+	    } else {
+		stableWait.invalidate();
+		applyState();
+	    }
+	    QEventLoop loop;
+	    QTimer::singleShot(10, &loop, &QEventLoop::quit);
+	    loop.exec(QEventLoop::ExcludeUserInputEvents);
+	}
+	qg_event_error(error,
+	    QStringLiteral("window_state did not remain at %1").arg(state));
+	return false;
     } else if (event.action == QLatin1String("wait")) {
 	QEventLoop loop;
 	QTimer::singleShot(qMax(0, event.arguments.value(QStringLiteral("ms")).toInt()),

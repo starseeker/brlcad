@@ -67,6 +67,24 @@ public:
     void runMouseMoveForTest(QMouseEvent *event) { this->mouseMoveEvent(event); }
     void runPaintGLForTest(void) { this->paintGL(); }
     void runWheelForTest(QWheelEvent *event) { this->wheelEvent(event); }
+    QImage readCurrentFramebufferForTest(void)
+    {
+	const qreal dpr = this->devicePixelRatioF();
+	const int width = std::max(1,
+	    static_cast<int>(std::ceil(this->width() * dpr)));
+	const int height = std::max(1,
+	    static_cast<int>(std::ceil(this->height() * dpr)));
+	QImage image(width, height, QImage::Format_RGBA8888);
+	if (image.isNull())
+	    return image;
+	GLint oldPackAlignment = 4;
+	glGetIntegerv(GL_PACK_ALIGNMENT, &oldPackAlignment);
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE,
+	    image.bits());
+	glPixelStorei(GL_PACK_ALIGNMENT, oldPackAlignment);
+	return image.flipped(Qt::Vertical);
+    }
 };
 #endif
 
@@ -448,6 +466,10 @@ main(int argc, char **argv)
     view.render(&deadlineBaselinePainter);
     deadlineBaselinePainter.end();
     const QImage deadlineBaseline = paintTarget.copy();
+    QImage deadlineBaselineReadback;
+    view.get_viewport_image(deadlineBaselineReadback);
+    if (deadlineBaselineReadback.isNull())
+	FAIL("QgSW completed-frame readback should produce an image");
     const uint64_t interruptedBefore =
 	controller->getInterruptedPresentationFrameCount();
     unsigned int deadlineDelayMilliseconds = 20u;
@@ -470,6 +492,31 @@ main(int argc, char **argv)
 	FAIL("QgSW deadline interruption should schedule a coherent retry");
     if (paintTarget != deadlineBaseline)
 	FAIL("QgSW deadline interruption should preserve the last completed frame");
+    QImage interruptedReadback;
+    view.get_viewport_image(interruptedReadback);
+    if (interruptedReadback != deadlineBaselineReadback)
+	FAIL("QgSW interrupted readback should preserve Qt image orientation");
+
+    /* A completed frame from the old viewport is not a valid resize
+     * fallback.  Force the first traversal at a distinct size to abort and
+     * require a correctly sized, top-down provisional image rather than the
+     * stale retained buffer. */
+    const QSize oldCanvasSize = swWidget->size();
+    swWidget->resize(oldCanvasSize.width() + 37, oldCanvasSize.height() + 29);
+    QImage resizedInterruptedReadback;
+    view.get_viewport_image(resizedInterruptedReadback);
+    const int expectedWidth = qRound(
+	swWidget->width() * swWidget->devicePixelRatioF());
+    const int expectedHeight = qRound(
+	swWidget->height() * swWidget->devicePixelRatioF());
+    if (resizedInterruptedReadback.width() != expectedWidth ||
+	resizedInterruptedReadback.height() != expectedHeight)
+	FAIL("QgSW resize interruption should not reuse old-size pixels");
+    if (resizedInterruptedReadback.pixelColor(2, 2).lightness() <=
+	resizedInterruptedReadback.pixelColor(
+	    2, resizedInterruptedReadback.height() - 3).lightness())
+	FAIL("QgSW resize interruption should preserve top-down gradient orientation");
+    swWidget->resize(oldCanvasSize);
     sceneRoot->removeChild(deadlineNode);
     sceneRoot->removeChild(sceneRoot->getNumChildren() - 1);
     controller->setPresentationFrameDeadlines(
@@ -740,8 +787,9 @@ main(int argc, char **argv)
 	    paintController->requestRender("gl-deadline-baseline");
 	    glCanvas.makeCurrent();
 	    glCanvas.runPaintGLForTest();
+	    const QImage glDeadlineBaseline =
+		glCanvas.readCurrentFramebufferForTest();
 	    glCanvas.doneCurrent();
-	    const QImage glDeadlineBaseline = glCanvas.grabFramebuffer();
 	    const uint64_t glInterruptedBefore =
 		paintController->getInterruptedPresentationFrameCount();
 	    unsigned int glDeadlineDelayMilliseconds = 20u;
@@ -756,8 +804,9 @@ main(int argc, char **argv)
 	    paintController->requestRender("gl-deadline-interrupt");
 	    glCanvas.makeCurrent();
 	    glCanvas.runPaintGLForTest();
+	    const QImage glDeadlineInterrupted =
+		glCanvas.readCurrentFramebufferForTest();
 	    glCanvas.doneCurrent();
-	    const QImage glDeadlineInterrupted = glCanvas.grabFramebuffer();
 	    if (paintController->getInterruptedPresentationFrameCount() !=
 		    glInterruptedBefore + 1u ||
 		!paintController->isRenderRequested() ||

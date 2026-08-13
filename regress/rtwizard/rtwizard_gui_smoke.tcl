@@ -77,6 +77,44 @@ proc rtwizard_gui_smoke_probe {} {
 
     set pane [$::mgedObj gedCmd pane]
 
+    # Resize the actual historical wizard, not a reconstructed test widget.
+    # The embedded view must consume the new physical extent while preserving
+    # its CAD camera and the already-drawn scene.  A short alternating burst
+    # exercises configure-event coalescing before the framebuffer endpoint is
+    # opened, and the capture below proves the resized composition reaches the
+    # user-visible surface.
+    set pane_view [$::mgedObj gedCmd pane_win_name $pane]
+    set camera_before [list \
+	[$::mgedObj gedCmd pane_center $pane] \
+	[$::mgedObj gedCmd pane_size $pane] \
+	[$::mgedObj gedCmd pane_aet $pane]]
+    set size_before [list [winfo width $pane_view] [winfo height $pane_view]]
+    foreach geometry {960x720 760x560 1020x740 820x620 940x700} {
+	wm geometry . $geometry
+	update idletasks
+    }
+    after 100
+    update
+    set size_after [list [winfo width $pane_view] [winfo height $pane_view]]
+    if {$size_after eq $size_before || [lindex $size_after 0] < 100 ||
+	    [lindex $size_after 1] < 100} {
+	rtwizard_gui_smoke_fail \
+	    "embedded view did not consume wizard resize: before=$size_before after=$size_after"
+    }
+    set reported_size [$::mgedObj gedCmd pane_win_size $pane]
+    if {$reported_size ne $size_after} {
+	rtwizard_gui_smoke_fail \
+	    "embedded endpoint retained a stale physical size: actual=$size_after reported=$reported_size"
+    }
+    set camera_after [list \
+	[$::mgedObj gedCmd pane_center $pane] \
+	[$::mgedObj gedCmd pane_size $pane] \
+	[$::mgedObj gedCmd pane_aet $pane]]
+    if {$camera_after ne $camera_before} {
+	rtwizard_gui_smoke_fail \
+	    "wizard resize changed the CAD camera: before=$camera_before after=$camera_after"
+    }
+
     if {[catch {$::fbp getFrameBuffer 64 64} framebuffer] ||
 	    ![string match "ipc:*" $framebuffer]} {
 	rtwizard_gui_smoke_fail \

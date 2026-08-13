@@ -3041,6 +3041,34 @@ test_rt_mesh_provider_task(void)
     }
     warmFirstService.releaseResidentMeshConsumer(0x9876);
 
+    /* Replacing one adaptive representation with another is an atomic
+     * handoff.  Unlike a cold first publication, a replacement must not put
+     * its minimum prefix on screen while the requested prefix is already
+     * available in the persistent hierarchy. */
+    BObolLodService atomicHandoffService;
+    BObolMeshLodProvider atomicHandoffProvider;
+    atomicHandoffProvider.service = &atomicHandoffService;
+    atomicHandoffProvider.setDatabase(dbip);
+    atomicHandoffProvider.refreshMissing = FALSE;
+    atomicHandoffProvider.atomicRepresentationHandoff = TRUE;
+    BObolLodResult atomicHandoff =
+	atomicHandoffService.realizeResidentMeshLod(
+	    stagedRequest, atomicHandoffProvider);
+    if (atomicHandoff.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	!atomicHandoff.progressiveMesh ||
+	atomicHandoff.geometry.activeCut != stagedRequest.requestedCut ||
+	atomicHandoff.residentCut != stagedRequest.requestedCut ||
+	!atomicHandoff.terminal) {
+	printf("FAIL: adaptive representation handoff published a transient "
+	       "minimum prefix (status=%d active=%d resident=%d requested=%d "
+	       "terminal=%d)\n",
+	       atomicHandoff.providerStatus,
+	       atomicHandoff.geometry.activeCut,
+	       atomicHandoff.residentCut, stagedRequest.requestedCut,
+	       atomicHandoff.terminal ? 1 : 0);
+	ret = 1;
+    }
+
     /* A stable demand snapshot protects the presented prefix.  Once the
      * asset disappears from every consumer snapshot, the service must keep
      * only its minimum useful prefix and later restore richer data from the

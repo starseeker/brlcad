@@ -4616,6 +4616,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed realization should realize one source");
     if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	FAIL("database-backed source realization status should be REALIZED");
+    if (!source->hasExactSourceBounds())
+	FAIL("completed direct database realization should certify exact source bounds");
 
     BObolRealizedShapeSummary directWireSummary;
     if (!source->hasCompactInstanceIndex() ||
@@ -5769,6 +5771,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	source->getCompactInstanceCount() != 2 ||
 	source->getRealizedShapeCount() != 0)
 	FAIL("scene controller compact CAD policy should compact eligible realized database sources");
+    if (!source->hasExactSourceBounds())
+	FAIL("completed compact database realization should certify exact source bounds");
 
     root->unref();
 

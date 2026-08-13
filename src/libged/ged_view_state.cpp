@@ -52,6 +52,7 @@
 #include "./ged_draw_private.h"
 #include "./ged_draw_view_private.h"
 #include "./ged_private.h"
+#include "./ged_scene_backend_private.h"
 
 struct ged_view_state_storage {
     struct ged_view_context *active_view_ctx;
@@ -186,6 +187,10 @@ ged_view_host_record_create(struct ged *gedp, struct ged_view_context *view_ctx)
     record->gedp = gedp;
     record->obol_attachment = new BObolViewAttachment;
     record->obol_attachment->ref();
+    ged_view_lod_policy lod_policy;
+    if (bv_view_lod_policy_get(&lod_policy,
+	    bv_context_view_const((const struct bv_context *)view_ctx)))
+	record->obol_attachment->setLodPolicy(&lod_policy);
     record->identity = ged_view_host_next_identity.fetch_add(1);
     if (!record->identity)
 	record->identity = ged_view_host_next_identity.fetch_add(1);
@@ -387,6 +392,10 @@ ged_view_context_obol_attachment_bind(struct ged_view_context *view_ctx,
 	return 1;
 
     attachment->copyHostStateFrom(record->obol_attachment);
+    ged_view_lod_policy lod_policy;
+    if (bv_view_lod_policy_get(&lod_policy,
+	    bv_context_view_const((const struct bv_context *)view_ctx)))
+	attachment->setLodPolicy(&lod_policy);
     attachment->ref();
     record->obol_attachment->unref();
     record->obol_attachment = attachment;
@@ -436,37 +445,44 @@ extern "C" GED_EXPORT int
 ged_view_lod_policy_get(ged_view_lod_policy *policy,
 				     const struct ged_view_context *view_ctx)
 {
-    struct ged_view_host_record *record =
-	ged_view_host_record_find(view_ctx);
-
-    if (record) {
-	if (!policy)
-	    return 0;
-	record->obol_attachment->getLodPolicy(policy);
-	return 1;
-    }
-
-    if (!policy || !view_ctx)
-	return 0;
-    bv_lod_policy_init(policy);
-    return 1;
+    return bv_view_lod_policy_get(policy,
+	bv_context_view_const((const struct bv_context *)view_ctx));
 }
 
 extern "C" GED_EXPORT int
 ged_view_lod_policy_apply(struct ged_view_context *view_ctx,
 			  const ged_view_lod_policy *policy)
 {
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    ged_view_lod_policy old_policy;
     struct ged_view_host_record *record =
 	ged_view_host_record_find(view_ctx);
 
-    if (record) {
-	if (!policy)
-	    return 0;
-	record->obol_attachment->setLodPolicy(policy);
-	return 1;
-    }
+    if (!view || !policy || !bv_view_lod_policy_get(&old_policy, view) ||
+	!bv_view_lod_policy_set(view, policy))
+	return 0;
 
-    return (view_ctx && policy) ? 1 : 0;
+    ged_view_lod_policy applied_policy;
+    if (!bv_view_lod_policy_get(&applied_policy, view))
+	return 0;
+    const bool changed =
+	old_policy.policy != applied_policy.policy ||
+	old_policy.forced_level != applied_policy.forced_level ||
+	old_policy.mesh_enabled != applied_policy.mesh_enabled ||
+	old_policy.csg_enabled != applied_policy.csg_enabled ||
+	old_policy.zoom_refresh != applied_policy.zoom_refresh ||
+	old_policy.bot_threshold != applied_policy.bot_threshold ||
+	!EQUAL(old_policy.scale, applied_policy.scale) ||
+	!EQUAL(old_policy.curve_scale, applied_policy.curve_scale) ||
+	!EQUAL(old_policy.point_scale, applied_policy.point_scale);
+    if (!changed)
+	return 1;
+
+    if (record) {
+	record->obol_attachment->setLodPolicy(&applied_policy);
+	(void)ged_scene_backend_view_policy_private(record->gedp, view_ctx);
+    }
+    return 1;
 }
 
 extern "C" GED_EXPORT int

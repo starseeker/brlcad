@@ -37,6 +37,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <utility>
 #include <QImage>
 #include <QOpenGLContext>
 #include <QOpenGLExtraFunctions>
@@ -112,8 +113,15 @@ struct QgCanvasState {
     bool   software_backend = false;
     QWidget *frame_request_widget = nullptr;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
+    /* Direct GL renders into staging and promotes it only after an exact
+     * traversal.  A deadline-aborted traversal may overwrite staging, but it
+     * can never corrupt the completed framebuffer presented to Qt. */
     QOpenGLFramebufferObject *presentation_fbo = nullptr;
+    QOpenGLFramebufferObject *presentation_staging_fbo = nullptr;
     bool presentation_fbo_has_completed_frame = false;
+    /* Immutable renderer-native (bottom-up) pixels from the last completed
+     * software presentation.  QgSW's paint hot path consumes this orientation
+     * directly; observational Qt image callers must receive a flipped copy. */
     QImage last_completed_software_frame;
     std::chrono::steady_clock::time_point fps_last_publish;
     std::chrono::steady_clock::time_point lod_progress_last_publish;
@@ -481,8 +489,21 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 		cadPreparationAfter != cadPreparationBefore ? TRUE : FALSE,
 		lodCapacityRelevant);
 	}
-	if (!s.last_completed_software_frame.isNull()) {
-	    img = s.last_completed_software_frame;
+	/* A retained frame is useful only for the same physical viewport.  In
+	 * particular, never present pre-resize pixels while an interrupted
+	 * traversal is preparing the first frame at the new dimensions. */
+	const bool retainedFrameMatches =
+	    !s.last_completed_software_frame.isNull() &&
+	    s.last_completed_software_frame.width() == size[0] &&
+	    s.last_completed_software_frame.height() == size[1];
+	if (retainedFrameMatches) {
+	    /* The paint path requests renderer-native bottom-up pixels and applies
+	     * its inverse QPainter transform.  Export/readback callers request the
+	     * normal top-down Qt image contract.  Keeping this distinction here
+	     * avoids adding a full-frame copy to every OSMesa presentation. */
+	    img = borrowRendererBuffer ?
+		s.last_completed_software_frame :
+		s.last_completed_software_frame.flipped(Qt::Vertical);
 	} else if (rendered) {
 	    /* Before the first exact frame exists, a deadline-bounded structural
 	     * prefix is still the fastest useful cold-start presentation.  Show
@@ -576,6 +597,8 @@ qgcanvas_destroy_obol(QgCanvasState &s, QWidget *w)
     s.offscreen_renderer = nullptr;
     delete s.presentation_fbo;
     s.presentation_fbo = nullptr;
+    delete s.presentation_staging_fbo;
+    s.presentation_staging_fbo = nullptr;
     s.last_completed_software_frame = QImage();
     if (s.obol && s.obol->getRenderContextManager() ==
 	    qgcanvas_obol_context_manager(s.software_backend))
@@ -609,6 +632,10 @@ qgcanvas_bind_obol_controller(QgCanvasState &s, QWidget *w,
     s.obol = controller;
     s.owns_obol = false;
     s.obol_paint_initialized = false;
+    /* A completed image belongs to its controller/scene identity.  Never
+     * preserve pixels from the previous endpoint through a borrowed-controller
+     * replacement. */
+    s.presentation_fbo_has_completed_frame = false;
 
     if (!s.obol)
 	return;
@@ -920,42 +947,63 @@ qgcanvas_render_obol_pending(QgCanvasState &s, QOpenGLWidget *widget,
     const QSize renderSize = qgcanvas_render_size(widget);
     if (renderSize.isEmpty())
 	return FALSE;
-    if (!s.presentation_fbo || s.presentation_fbo->size() != renderSize) {
+    if (!s.presentation_fbo || !s.presentation_staging_fbo ||
+	s.presentation_fbo->size() != renderSize ||
+	s.presentation_staging_fbo->size() != renderSize) {
 	delete s.presentation_fbo;
+	delete s.presentation_staging_fbo;
 	s.presentation_fbo_has_completed_frame = false;
 	QOpenGLFramebufferObjectFormat format;
 	format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
 	format.setSamples(0);
 	s.presentation_fbo = new QOpenGLFramebufferObject(renderSize, format);
+	s.presentation_staging_fbo =
+	    new QOpenGLFramebufferObject(renderSize, format);
     }
-    if (!s.presentation_fbo || !s.presentation_fbo->isValid()) {
+    if (!s.presentation_fbo || !s.presentation_fbo->isValid() ||
+	!s.presentation_staging_fbo ||
+	!s.presentation_staging_fbo->isValid()) {
 	delete s.presentation_fbo;
 	s.presentation_fbo = nullptr;
+	delete s.presentation_staging_fbo;
+	s.presentation_staging_fbo = nullptr;
 	s.presentation_fbo_has_completed_frame = false;
 	return s.obol->renderPending(clearWindow, clearZBuffer, NULL);
     }
 
-    s.presentation_fbo->bind();
+    /* Coin is allowed to mutate only staging.  renderPending() returns false
+     * for a deadline abort or an incomplete resumable CAD traversal; in that
+     * case retain and blit the last completed framebuffer instead. */
+    QOpenGLFramebufferObject *renderingFbo =
+	s.presentation_staging_fbo;
+    renderingFbo->bind();
     const SbBool rendered =
 	s.obol->renderPending(clearWindow, clearZBuffer, NULL);
+    if (rendered) {
+	std::swap(s.presentation_fbo, s.presentation_staging_fbo);
+	s.presentation_fbo_has_completed_frame = true;
+    }
     QOpenGLContext *context = QOpenGLContext::currentContext();
     QOpenGLExtraFunctions *gl = context ? context->extraFunctions() : nullptr;
     if (gl) {
+	/* On the first interrupted draw there is no prior frame.  Preserve the
+	 * useful prefix Coin completed before the deadline, as the former single
+	 * FBO path did.  Once an exact frame exists, staging is never observable. */
+	QOpenGLFramebufferObject *source =
+	    s.presentation_fbo_has_completed_frame ? s.presentation_fbo :
+	    s.presentation_staging_fbo;
 	gl->glBindFramebuffer(GL_READ_FRAMEBUFFER,
-	    s.presentation_fbo->handle());
+	    source->handle());
 	gl->glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
 	    widget->defaultFramebufferObject());
-	if (rendered || !s.presentation_fbo_has_completed_frame)
-	    gl->glBlitFramebuffer(0, 0, renderSize.width(), renderSize.height(),
-		0, 0, renderSize.width(), renderSize.height(),
-		GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	gl->glBlitFramebuffer(0, 0, renderSize.width(), renderSize.height(),
+	    0, 0, renderSize.width(), renderSize.height(),
+	    GL_COLOR_BUFFER_BIT, GL_NEAREST);
 	gl->glBindFramebuffer(GL_FRAMEBUFFER,
 	    widget->defaultFramebufferObject());
     } else {
-	s.presentation_fbo->release();
+	renderingFbo->release();
     }
-    if (rendered)
-	s.presentation_fbo_has_completed_frame = true;
     return rendered;
 }
 

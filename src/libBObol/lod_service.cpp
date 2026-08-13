@@ -106,6 +106,7 @@ BObolMeshLodProvider::clear(void)
     usePresentationCutLimit = FALSE;
     presentationCutLimit = -1;
     prefetchCachedTargetOnFirstPublication = FALSE;
+    atomicRepresentationHandoff = FALSE;
     forcedCut = 0;
     reset = 0;
 }
@@ -3711,13 +3712,20 @@ BObolLodService::realizeResidentMeshLod(
      * byte-admitted target; this is two-phase coverage, not nominal
      * cut-by-cut walking.
      */
+    const bool atomicFirstHandoff =
+	provider.atomicRepresentationHandoff &&
+	publishedCut < hierarchy.min_cut &&
+	!provider.reset && !provider.useForcedCut &&
+	requestedCut >= hierarchy.min_cut;
     const bool warmFirstPrefetch =
 	publishedCut < hierarchy.min_cut &&
 	persistentHierarchyAvailable &&
 	provider.prefetchCachedTargetOnFirstPublication &&
 	!provider.reset && !provider.useForcedCut &&
 	requestedCut >= hierarchy.min_cut;
-    if (warmFirstPrefetch)
+    if (atomicFirstHandoff)
+	residentTarget = std::min(hierarchy.max_cut, requestedCut);
+    else if (warmFirstPrefetch)
 	residentTarget = std::min(hierarchy.max_cut, requestedCut);
     else if (publishedCut < hierarchy.min_cut)
 	residentTarget = hierarchy.min_cut;
@@ -3725,7 +3733,8 @@ BObolLodService::realizeResidentMeshLod(
      * prefix, but its publication remains the cheapest useful mesh.  The
      * next presentation pass can select any budget-admitted cut from those
      * already resident arrays without another cache task. */
-    int drawTarget = warmFirstPrefetch ? hierarchy.min_cut : residentTarget;
+    int drawTarget = warmFirstPrefetch && !atomicFirstHandoff ?
+	hierarchy.min_cut : residentTarget;
     if (provider.usePresentationCutLimit &&
 	provider.presentationCutLimit >= hierarchy.min_cut)
 	drawTarget = std::min(drawTarget,

@@ -211,9 +211,12 @@ class Ged_Internal {
 	void *draw_frontier_state = nullptr;
 
 	// Optional owner-scoped backend override used by non-rendering consumers
-	// and reducer contract tests.  Null selects the private Obol adapter.
-	const struct ged_scene_backend_ops *scene_backend_ops = nullptr;
+	// and reducer contract tests.  Null selects the private Obol adapter.  The
+	// operations table is an owned copy; client data is borrowed through the
+	// adapter's detach callback.
+	struct ged_scene_backend_ops *scene_backend_ops = nullptr;
 	void *scene_backend_data = nullptr;
+	bool scene_backend_transition = false;
 };
 
 #else
@@ -660,12 +663,21 @@ extern int ged_scene_edit_release_internal(
 	struct ged_scene_edit_internal_result *result);
 extern int ged_draw_frontier_has_roots(
 	struct ged *gedp, struct ged_view_context *view_ctx, int mode);
+extern int ged_draw_frontier_root_count(struct ged *gedp);
+extern int ged_draw_frontier_clear(struct ged *gedp,
+	struct ged_view_context *view_ctx, int mode);
+extern int ged_draw_frontier_source_affected(
+	struct ged *gedp, const char *path, const char *const *paths,
+	size_t path_count, struct ged_view_context *view_ctx, int mode);
+extern int ged_draw_frontier_source_rename(
+	struct ged *gedp, const char *old_path, const char *new_path);
 extern int ged_draw_frontier_foreach_root(
 	struct ged *gedp, struct ged_view_context *view_ctx, int mode,
 	ged_draw_frontier_root_cb callback, void *userdata);
 extern int ged_draw_frontier_visibility_changes_foreach(
-	struct ged *gedp, ged_draw_frontier_visibility_cb callback,
-	void *userdata);
+    struct ged *gedp, ged_draw_frontier_visibility_cb callback,
+    void *userdata);
+extern void ged_draw_frontier_visibility_changes_discard(struct ged *gedp);
 extern int ged_draw_frontier_visibility_snapshot_foreach(
 	struct ged *gedp, ged_draw_frontier_visibility_cb callback,
 	void *userdata);

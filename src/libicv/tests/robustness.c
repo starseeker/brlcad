@@ -1190,6 +1190,46 @@ test_animation_frame_management(void)
 	bu_file_delete(path);
     }
 
+    char stream_path[MAXPATHLEN] = {0};
+    FILE *stream_fp = bu_temp_file(stream_path, MAXPATHLEN);
+    CHECK(stream_fp != NULL && stream_path[0] != '\0',
+	"bu_temp_file creates path for streaming APNG");
+    if (stream_fp) {
+	fclose(stream_fp);
+	icv_anim_writer_t *stream = icv_anim_writer_create(
+	    stream_path, 2, 2, 2, 20);
+	CHECK(stream != NULL, "icv_anim_writer_create opens streaming APNG");
+	if (stream) {
+	    CHECK(icv_anim_writer_add_frame(stream, a, 10000, 0, 0) == 0,
+		"streaming APNG accepts first frame");
+	    const unsigned char rgba8[16] = {
+		255, 0, 0, 255, 0, 255, 0, 255,
+		0, 0, 255, 255, 255, 255, 255, 255
+	    };
+	    CHECK(icv_anim_writer_add_rgba8(stream, rgba8, 2, 2,
+		20000, 0, 0) == 0,
+		"streaming APNG accepts native RGBA8 frame");
+	    CHECK(icv_anim_writer_close(stream) == 0,
+		"streaming APNG finalizes complete frame count");
+	    icv_anim_t *read_stream = icv_anim_read(stream_path);
+	    CHECK(read_stream != NULL &&
+		icv_anim_num_frames(read_stream) == 2,
+		"streaming APNG round trip preserves frames");
+	    if (read_stream)
+		icv_anim_destroy(read_stream);
+	}
+	bu_file_delete(stream_path);
+    }
+
+    CHECK(icv_anim_writer_create(NULL, 2, 2, 1, 10) == NULL,
+	"streaming APNG rejects null path");
+    CHECK(icv_anim_writer_add_frame(NULL, a, 0, 0, 0) == -1,
+	"streaming APNG rejects null writer");
+    CHECK(icv_anim_writer_add_rgba8(NULL, NULL, 0, 0, 0, 0, 0) == -1,
+	"streaming APNG rejects null RGBA8 input");
+    CHECK(icv_anim_writer_close(NULL) == -1,
+	"streaming APNG rejects null close");
+
     icv_anim_destroy(anim);
 
     anim = icv_anim_create(ICV_ANIM_MJPG, 0, 0, 12);
