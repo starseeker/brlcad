@@ -1010,7 +1010,11 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	switch (status.phase) {
 	case BOBOL_LOD_CONVERGENCE_DISCOVERING:
 	    if (status.expectedLeafCount > status.availableLeafCount) {
-		bu_vls_sprintf(&text, "Discovering model %d%%", percent);
+		/* The bar is whole-view convergence, not just leaf enumeration.
+		 * Say that explicitly: otherwise 65k/150k beside 18% looks like
+		 * broken arithmetic even though later mesh/refinement work owns the
+		 * remainder of the convergence scale. */
+		bu_vls_sprintf(&text, "View %d%%  discovering", percent);
 		bu_vls_printf(&text, "  %s/%s parts",
 		    ged_obol_lod_compact_count(
 			std::min(status.availableLeafCount,
@@ -1116,12 +1120,38 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 
     points.clear();
     commands.clear();
-    const fastf_t fill_top =
-	-0.58 + 1.16 * std::max(0.0f,
+    fastf_t fill_bottom = -0.58;
+    fastf_t fill_top =
+	fill_bottom + 1.16 * std::max(0.0f,
 	    std::min(1.0f, status.fraction));
-    if (fill_top > -0.58) {
+    /*
+     * A cold hierarchy does not know its final leaf cardinality until the
+     * database walk completes.  That is active, useful discovery work, but a
+     * determinate fraction would be fiction and the former zero-length fill
+     * made the HUD look stalled for the entire walk (about 24 seconds for the
+     * 150k stress scene).  Animate a bounded segment from the coordinator's
+     * monotonic dispatch serial until a real denominator is available.  This
+     * is presentation-only state: it neither advances LoD work nor changes
+     * the camera/autoview contract.
+     */
+    const bool indeterminateDiscovery =
+	status.phase == BOBOL_LOD_CONVERGENCE_DISCOVERING &&
+	status.expectedLeafCount <= status.availableLeafCount;
+    if (indeterminateDiscovery) {
+	static const uint64_t sweep_steps = 40;
+	const uint64_t step = status.coordinatorDispatchSerial % sweep_steps;
+	const fastf_t unit = step <= sweep_steps / 2 ?
+	    static_cast<fastf_t>(step) /
+		static_cast<fastf_t>(sweep_steps / 2) :
+	    static_cast<fastf_t>(sweep_steps - step) /
+		static_cast<fastf_t>(sweep_steps / 2);
+	const fastf_t segment = 0.20 * 1.16;
+	fill_bottom = -0.58 + unit * (1.16 - segment);
+	fill_top = fill_bottom + segment;
+    }
+    if (fill_top > fill_bottom) {
 	ged_obol_faceplate_append_line(points, commands, view_ctx,
-	    0.965, -0.58, 0.965, fill_top);
+	    0.965, fill_bottom, 0.965, fill_top);
 	BObolFeatureStyle fill_style = ged_obol_faceplate_style(
 	    color, 96, 220, 255, 7);
 	(void)ged_obol_faceplate_publish_lines(controller, view_ctx,

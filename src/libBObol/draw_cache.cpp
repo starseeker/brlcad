@@ -36,6 +36,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #define BOBOL_DRAW_CACHE_FORMAT_FILE "draw_data.format"
@@ -60,6 +61,13 @@ struct BObolDrawCacheContext {
     char *registryKey;
     db_i *validationDb;
     uint64_t validationFingerprint;
+    std::unordered_set<std::string> *lodAssetKeys;
+    bool lodAssetKeysLoaded;
+};
+
+struct BObolDrawCacheBinding {
+    std::string filename;
+    BObolDrawCacheContext *context;
 };
 
 struct BObolDrawCacheHandle {
@@ -202,6 +210,19 @@ bobol_draw_cache_registry(void)
     return registry;
 }
 
+/* File-backed db_i instances issue large bursts of cache probes from coverage
+ * workers.  Retain the already-resolved cache context for that live database
+ * handle instead of repeating directory creation checks, path normalization,
+ * and registry-key construction for every leaf.  In-memory databases are not
+ * bound because an allocator may reuse their pointer with no filename by
+ * which to distinguish the new database. */
+static std::map<const db_i *, BObolDrawCacheBinding> &
+bobol_draw_cache_bindings(void)
+{
+    static std::map<const db_i *, BObolDrawCacheBinding> bindings;
+    return bindings;
+}
+
 /* A compact assembly may contain thousands of occurrences of one leaf.  The
  * persistent record is shared, but cold-cache refresh used to duplicate its
  * realization for every occurrence. */
@@ -229,6 +250,7 @@ bobol_draw_cache_context_close(BObolDrawCacheContext *context)
 	bu_cache_close(context->cache);
     if (context->registryKey)
 	bu_free(context->registryKey, "bobol draw cache registry key");
+    delete context->lodAssetKeys;
     BU_PUT(context, BObolDrawCacheContext);
 }
 
@@ -240,6 +262,7 @@ bobol_draw_cache_registry_close_all(void)
     {
 	std::lock_guard<std::mutex> guard(bobol_draw_cache_registry_mutex());
 	closeMap.swap(bobol_draw_cache_registry());
+	bobol_draw_cache_bindings().clear();
     }
 
     for (std::map<std::string, BObolDrawCacheContext *>::iterator it =
@@ -608,21 +631,30 @@ bobol_draw_proxy_bbox_valid(const point_t bmin,
 static void
 bobol_draw_cache_key(char *key, const char *name, const char *component)
 {
-    bu_vls keystr = BU_VLS_INIT_ZERO;
-
     if (!key)
 	return;
     key[0] = '\0';
     if (!name || !component)
 	return;
 
-    bu_vls_sprintf(&keystr, "%s", name);
-    if (bu_vls_strlen(&keystr) < 10)
-	bu_vls_printf(&keystr, "GGGGGGGGGGGGG");
-    unsigned long long hash = bu_data_hash(bu_vls_cstr(&keystr),
-					   bu_vls_strlen(&keystr) * sizeof(char));
+    /* This byte sequence is persistent cache-key identity.  Preserve the
+     * historical thirteen-G suffix for short names, but do not allocate and
+     * format a bu_vls for every probe.  Large discovery streams call this
+     * once per leaf and allocator contention was measurable at 150k parts. */
+    const size_t nameLength = strlen(name);
+    const char shortSuffix[] = "GGGGGGGGGGGGG";
+    char shortName[10 + sizeof(shortSuffix)] = {0};
+    const void *hashBytes = name;
+    size_t hashLength = nameLength;
+    if (nameLength < 10) {
+	memcpy(shortName, name, nameLength);
+	memcpy(shortName + nameLength, shortSuffix,
+	    sizeof(shortSuffix) - 1);
+	hashBytes = shortName;
+	hashLength += sizeof(shortSuffix) - 1;
+    }
+    const unsigned long long hash = bu_data_hash(hashBytes, hashLength);
     snprintf(key, BU_CACHE_KEY_MAXLEN, "%llu:%s", hash, component);
-    bu_vls_free(&keystr);
 }
 
 static void
@@ -645,6 +677,28 @@ bobol_draw_cache_key_component_is(const char *key, const char *component)
 
     const char *sep = strrchr(key, ':');
     return (sep && BU_STR_EQUAL(sep + 1, component)) ? 1 : 0;
+}
+
+/* Called with BOBOL_DRAW_CACHE held.  A process-local negative index avoids
+ * opening one LMDB read transaction for every cold leaf.  A concurrent writer
+ * in another process can only make this process conservatively miss a newly
+ * added hint; it can never make an invalid record appear valid. */
+static void
+bobol_draw_cache_load_lod_asset_keys(BObolDrawCacheContext *context)
+{
+    if (!context || !context->cache || context->lodAssetKeysLoaded)
+	return;
+
+    char **keys = NULL;
+    const int nkeys = bu_cache_keys(&keys, context->cache);
+    for (int i = 0; i < nkeys; ++i) {
+	if (keys[i] && bobol_draw_cache_key_component_is(keys[i],
+		BOBOL_DRAW_CACHE_LOD_ASSET))
+	    context->lodAssetKeys->insert(keys[i]);
+    }
+    if (nkeys > 0)
+	bu_argv_free(static_cast<size_t>(nkeys), keys);
+    context->lodAssetKeysLoaded = true;
 }
 
 static int
@@ -803,6 +857,21 @@ bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
     handle->context = NULL;
     handle->cache = NULL;
 
+    const char *filename = dbip->dbi_filename ? dbip->dbi_filename : "";
+    if (filename[0]) {
+	std::lock_guard<std::mutex> guard(bobol_draw_cache_registry_mutex());
+	auto bound = bobol_draw_cache_bindings().find(dbip);
+	if (bound != bobol_draw_cache_bindings().end()) {
+	    if (bound->second.filename == filename &&
+		bound->second.context && bound->second.context->cache) {
+		handle->context = bound->second.context;
+		handle->cache = bound->second.context->cache;
+		return 1;
+	    }
+	    bobol_draw_cache_bindings().erase(bound);
+	}
+    }
+
     if (!bobol_draw_cache_ensure_root())
 	return 0;
     if (!bobol_draw_cache_db_name(&fname, dbip))
@@ -822,6 +891,8 @@ bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
 	if (it != bobol_draw_cache_registry().end()) {
 	    handle->context = it->second;
 	    handle->cache = it->second->cache;
+	    if (filename[0])
+		bobol_draw_cache_bindings()[dbip] = {filename, it->second};
 	    bu_vls_free(&cpath);
 	    bu_vls_free(&fname);
 	    return handle->cache ? 1 : 0;
@@ -833,6 +904,8 @@ bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
 	context->registryKey = bu_strdup(registryKey.c_str());
 	context->validationDb = NULL;
 	context->validationFingerprint = 0;
+	context->lodAssetKeys = new std::unordered_set<std::string>;
+	context->lodAssetKeysLoaded = false;
 	if (!context->cache) {
 	    bobol_draw_cache_context_close(context);
 	    bu_vls_free(&cpath);
@@ -840,6 +913,8 @@ bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
 	    return 0;
 	}
 	bobol_draw_cache_registry()[registryKey] = context;
+	if (filename[0])
+	    bobol_draw_cache_bindings()[dbip] = {filename, context};
 	handle->context = context;
 	handle->cache = context->cache;
     }
@@ -1172,6 +1247,10 @@ bobol_draw_lod_asset_cache_store(db_i *dbip, const char *name,
 		record))
 	    written = bu_cache_write(disk.data(), disk.size(), key,
 		handle.cache, NULL);
+	if (!disk.empty() && written == disk.size()) {
+	    bobol_draw_cache_load_lod_asset_keys(handle.context);
+	    handle.context->lodAssetKeys->insert(key);
+	}
 	bobol_draw_cache_close(&handle);
     }
     bu_semaphore_release(sem);
@@ -1199,13 +1278,34 @@ bobol_draw_lod_asset_cache_get(db_i *dbip, const char *name,
     size_t dataSize = 0;
     int valid = 0;
     if (bobol_draw_cache_open(&handle, dbip)) {
-	bobol_draw_cache_validation_refresh(handle.context, dbip);
-	dataSize = bu_cache_get(&data, key, handle.cache, NULL);
-	db_i *validationDb = handle.context &&
-	    handle.context->validationDb ?
-	    handle.context->validationDb : dbip;
-	valid = bobol_draw_lod_asset_disk_unpack(data, dataSize,
-	    dbip, validationDb, name, record);
+	bobol_draw_cache_load_lod_asset_keys(handle.context);
+	const bool keyPresent = handle.context->lodAssetKeys->find(key) !=
+	    handle.context->lodAssetKeys->end();
+	if (keyPresent)
+	    dataSize = bu_cache_get(&data, key, handle.cache, NULL);
+	/*
+	 * Validation protects a persistent hit from a concurrently edited live
+	 * database by comparing it with a read-only directory snapshot.  A miss
+	 * has no payload to trust and therefore needs no snapshot at all.  Opening
+	 * and directory-building a multi-gigabyte database before testing the
+	 * cache key made the first of 150k cold probes serialize every coverage
+	 * worker behind several seconds of work whose answer was necessarily
+	 * "not cached".
+	 */
+	if (data && dataSize >= sizeof(BObolDrawLodAssetDiskHeader)) {
+	    bobol_draw_cache_validation_refresh(handle.context, dbip);
+	    db_i *validationDb = handle.context &&
+		handle.context->validationDb ?
+		handle.context->validationDb : dbip;
+	    valid = bobol_draw_lod_asset_disk_unpack(data, dataSize,
+		dbip, validationDb, name, record);
+	}
+	/* A key deleted by another process after our snapshot is safe to retire
+	 * locally.  An invalid nonempty payload remains indexed: database edits
+	 * may be followed by undo, and validation must continue rejecting or
+	 * accepting it from authoritative disk identity rather than a miss hint. */
+	if (keyPresent && !dataSize)
+	    handle.context->lodAssetKeys->erase(key);
 	bobol_draw_cache_close(&handle);
     }
     bu_semaphore_release(sem);

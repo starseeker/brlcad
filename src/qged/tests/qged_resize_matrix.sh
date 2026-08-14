@@ -83,6 +83,18 @@ if [[ -e "$artifact_dir" ]]; then
 fi
 mkdir -p "$artifact_dir"/{cases,caches,events}
 printf 'status,run,seconds,reason\n' > "$artifact_dir/results.csv"
+if ! ldd "$qged" > "$artifact_dir/qged-ldd.txt" 2>&1; then
+    echo "ERROR: qged runtime dependency preflight failed; the build may still be linking" >&2
+    sed -n '1,40p' "$artifact_dir/qged-ldd.txt" >&2
+    exit 2
+fi
+if grep -Eq 'not found|file too short|invalid ELF' \
+	"$artifact_dir/qged-ldd.txt"; then
+    echo "ERROR: qged runtime dependency preflight found an incomplete build" >&2
+    grep -E 'not found|file too short|invalid ELF' \
+	"$artifact_dir/qged-ldd.txt" >&2
+    exit 2
+fi
 
 case_spec()
 {
@@ -266,8 +278,15 @@ validate_run()
 	  (1e-4 + (($first.model_view_size | abs) * 1e-6)) and
 	.draw_scene_revision == $first.draw_scene_revision) and
       ([.samples[] | select((.checkpoint? // "") | endswith("/stable.png"))][0]) as $terminal |
-      ($terminal.progressive_pending == false and
-       $terminal.visible_structural_fallback_boxes == 0)
+      (($terminal.lod_convergence_phase != 0 or
+	$terminal.lod_convergence_background_pending == true or
+	$terminal.lod_convergence_performance_limited == true or
+	($terminal.failed_sources // 0) > 0) as $terminal_hud_expected |
+       $terminal.progressive_pending == false and
+	$terminal.lod_progress_track_present == $terminal_hud_expected and
+	$terminal.lod_progress_fill_present == $terminal_hud_expected and
+	$terminal.lod_progress_label_present == $terminal_hud_expected and
+	$terminal.visible_structural_fallback_boxes == 0)
     ' "$report" >>"$log" 2>&1 || return 1
     if [[ "$lod" == auto &&
 	("$case_name" == generic_twin || "$case_name" == lucy) &&

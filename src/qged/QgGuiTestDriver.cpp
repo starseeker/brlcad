@@ -603,6 +603,71 @@ qged_test_wait_progressive_scope_ready(QgEdApp &app,
     return false;
 }
 
+static bool
+qged_test_wait_progressive_discovery_complete(QgEdApp &app,
+    int timeoutMilliseconds, int quietMilliseconds, QString *error)
+{
+    QgView *currentView = app.w ? app.w->CurrentDisplay() : nullptr;
+    BObolViewController *controller = currentView ?
+	currentView->obolViewController() : nullptr;
+    if (!controller) {
+	if (error)
+	    *error = QStringLiteral(
+		"wait_progressive_discovery_complete requires an Obol view controller");
+	return false;
+    }
+
+    timeoutMilliseconds = std::max(0, timeoutMilliseconds);
+    quietMilliseconds = std::max(0, quietMilliseconds);
+    QElapsedTimer elapsed;
+    QElapsedTimer quiet;
+    size_t lastAvailable = 0;
+    size_t lastExpected = 0;
+    int lastPhase = -1;
+    elapsed.start();
+    while (elapsed.elapsed() <= timeoutMilliseconds) {
+	BObolLodConvergenceStatus status;
+	controller->getLodConvergenceStatus(status);
+	lastAvailable = status.availableLeafCount;
+	lastExpected = status.expectedLeafCount;
+	lastPhase = status.phase;
+	const bool complete = lastExpected > 0 &&
+	    lastAvailable >= lastExpected;
+	if (complete) {
+	    if (!quiet.isValid())
+		quiet.start();
+	    if (quiet.elapsed() >= quietMilliseconds)
+		return true;
+	} else {
+	    quiet.invalidate();
+	}
+
+	QEventLoop loop;
+	const int remaining = timeoutMilliseconds -
+	    static_cast<int>(elapsed.elapsed());
+	QTimer::singleShot(std::max(1, std::min(16, remaining)),
+	    &loop, &QEventLoop::quit);
+	loop.exec(QEventLoop::AllEvents);
+    }
+
+    if (error)
+	*error = QStringLiteral(
+	    "progressive discovery did not publish all leaves within %1 ms "
+	    "(available=%2 expected=%3 phase=%4 request_serial=%5 "
+	    "completion_serial=%6 presented_serial=%7)")
+	    .arg(timeoutMilliseconds)
+	    .arg(static_cast<qulonglong>(lastAvailable))
+	    .arg(static_cast<qulonglong>(lastExpected))
+	    .arg(lastPhase)
+	    .arg(static_cast<qulonglong>(
+		controller->getRenderRequestSerial()))
+	    .arg(static_cast<qulonglong>(
+		controller->getRenderCompletionSerial()))
+	    .arg(static_cast<qulonglong>(
+		controller->getPresentedFrameSerial()));
+    return false;
+}
+
 void
 qged_schedule_gui_test(QgEdApp &app, const QString &script,
     const QString &reportFile, bool softwareRenderer)
@@ -751,6 +816,14 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		} else if (events[i].action ==
 		    QLatin1String("wait_progressive_scope_ready")) {
 		    success = qged_test_wait_progressive_scope_ready(app,
+			events[i].arguments.value(
+			    QStringLiteral("timeout_ms")).toInt(30000),
+			events[i].arguments.value(
+			    QStringLiteral("quiet_ms")).toInt(50),
+			&error);
+		} else if (events[i].action ==
+		    QLatin1String("wait_progressive_discovery_complete")) {
+		    success = qged_test_wait_progressive_discovery_complete(app,
 			events[i].arguments.value(
 			    QStringLiteral("timeout_ms")).toInt(30000),
 			events[i].arguments.value(

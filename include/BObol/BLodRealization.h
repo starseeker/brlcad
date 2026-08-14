@@ -154,6 +154,9 @@ struct BOBOL_EXPORT BObolLodResidentDemand {
      * aggregate mask to prepare one replacement immutable renderer object on
      * a worker rather than rebuilding it on the presentation thread. */
     unsigned int channelMask;
+    /* Sorted union of private spatial subresources needed by this consumer.
+     * Empty means the asset is not chunked, never "all chunks". */
+    std::vector<uint32_t> chunkIds;
 
     BObolLodResidentDemand(void);
 };
@@ -189,10 +192,24 @@ struct BObolLodProgressiveMeshTrim;
 typedef std::shared_ptr<const BObolLodProgressiveMeshTrim>
     BObolLodProgressiveMeshTrimPtr;
 
+/* Population frontier of one private spatial page.  Records are always
+ * sorted by chunkId when exchanged with BObolLodProgressiveMesh. */
+struct BOBOL_EXPORT BObolLodChunkCut {
+    uint32_t chunkId = 0;
+    int cut = -1;
+
+    bool operator==(const BObolLodChunkCut &other) const
+    {
+	return chunkId == other.chunkId && cut == other.cut;
+    }
+};
+
 /* One thread-safe retained PoP asset shared by every occurrence and view that
- * resolves to the same source geometry.  The resident arrays are exact,
- * activation-ordered cumulative prefixes.  The active draw cut deliberately
- * does not live here: each occurrence may draw a different prefix. */
+ * resolves to the same source geometry.  A small leaf uses one exact,
+ * activation-ordered cumulative prefix.  A large leaf uses independently
+ * resident private page prefixes packed behind one logical CAD identity.
+ * The active draw cut deliberately does not live here: each occurrence may
+ * draw a different cut from the pages its view requires. */
 class BOBOL_EXPORT BObolLodProgressiveMesh {
 public:
     BObolLodProgressiveMesh(void);
@@ -201,6 +218,13 @@ public:
     SbBool update(const struct BObolMeshLodData &data,
 	const struct BObolMeshLodHierarchyInfo &hierarchy,
 	int residentCut, SbBool shadedCullBackfaces);
+    /* Populate only the selected private spatial pages.  Existing immutable
+     * pages are shared into the replacement generation; missing/richer pages
+     * are read independently from the cache. */
+    SbBool updateChunksFromCache(struct BObolMeshLod *lod,
+	const struct BObolMeshLodHierarchyInfo &hierarchy,
+	const std::vector<uint32_t> &chunkIds, int residentCut,
+	SbBool shadedCullBackfaces);
     /* Extend an existing immutable generation by reading only cache cuts
      * above its published resident frontier.  The old generation remains
      * drawable until the completed replacement is atomically published.
@@ -216,6 +240,13 @@ public:
      * mesh.  commitTrim succeeds only while the exact source generation used
      * by prepareTrim is still current. */
     BObolLodProgressiveMeshTrimPtr prepareTrim(int residentCut) const;
+    BObolLodProgressiveMeshTrimPtr prepareTrim(
+	int residentCut, const std::vector<uint32_t> &chunkIds) const;
+    /* Dense-repack the exact page/cut working set.  This is the stable-memory
+     * operation used after multiple views have contributed different detail
+     * demands for different pages of one logical leaf. */
+    BObolLodProgressiveMeshTrimPtr prepareTrim(
+	const std::vector<BObolLodChunkCut> &chunkCuts) const;
     SbBool commitTrim(const BObolLodProgressiveMeshTrimPtr &trim);
     SbBool trim(int residentCut);
     SbBool copyCut(BObolLodMeshPayload &payload, int cut) const;
@@ -226,6 +257,16 @@ public:
      * are retained once and the renderer can select the finer snap without
      * loading or rebuilding geometry. */
     SbBool canDrawCut(int cut) const;
+    SbBool canDrawChunksAtCut(const std::vector<uint32_t> &chunkIds,
+	int cut) const;
+    SbBool countsForChunksAtCut(const std::vector<uint32_t> &chunkIds,
+	int cut, SbBool hasNormals, BObolLodCounts *counts) const;
+    SbBool hierarchyCountsForChunksAtCut(
+	const std::vector<uint32_t> &chunkIds, int cut,
+	SbBool hasNormals, BObolLodCounts *counts) const;
+    int residentCutForChunks(const std::vector<uint32_t> &chunkIds) const;
+    void residentChunkIds(std::vector<uint32_t> &chunkIds) const;
+    void residentChunkCuts(std::vector<BObolLodChunkCut> &chunkCuts) const;
     int minimumCut(void) const;
     int maximumCut(void) const;
     int residentCut(void) const;
@@ -246,6 +287,9 @@ public:
     SbBool visibleCountsAtCuts(const SbMatrix &localToRoot,
 	const SbMatrix &viewProjection, SbBool hasNormals,
 	BObolLodCounts *counts, size_t count) const;
+    SbBool visibleChunkIds(const SbMatrix &localToRoot,
+	const SbMatrix &viewProjection,
+	std::vector<uint32_t> &chunkIds) const;
     /* Copy immutable selection metadata for one producer-defined cut. */
     SbBool cutInfo(int cut, struct BObolMeshLodCutInfo *info) const;
     int cutForScreenError(double projectedPixelDiameter,
@@ -284,6 +328,15 @@ BOBOL_EXPORT BObolLodCounts
 bobol_lod_progressive_counts(
     const BObolLodProgressiveMeshPtr &progressiveMesh, int cut,
     SbBool hasNormals);
+
+/* Resolve the private chunk set intersecting one occurrence's render
+ * frustum.  Returns FALSE for an unchunked hierarchy or invalid projection. */
+BOBOL_EXPORT SbBool
+bobol_lod_visible_chunks(
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    const SbMatrix &localToRoot,
+    const SbMatrix &viewProjection,
+    std::vector<uint32_t> &chunkIds);
 
 struct BOBOL_EXPORT BObolLodResidentCompaction {
     SbString assetKey;
@@ -359,6 +412,12 @@ struct BOBOL_EXPORT BObolLodRequest {
     SbBool projectedBoundsContained;
     float targetPixelError;
     int requestedCut;
+    /* Exact projection state used to resolve a cold chunked hierarchy.  It is
+     * request-local scheduling data, not asset identity. */
+    SbMatrix localToRoot;
+    SbMatrix viewProjection;
+    SbBool spatialProjectionValid;
+    std::vector<uint32_t> requiredChunks;
     SbBox3f bounds;
     BObolLodCounts sourceCounts;
     std::vector<BObolLodProviderParam> providerParams;

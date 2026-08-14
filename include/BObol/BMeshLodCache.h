@@ -36,7 +36,11 @@ struct rt_bot_internal;
 
 /* Display-provider contract version.  Bump this whenever the meaning or
  * completeness of a selected PoP cut changes. */
-#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-clustered-pop-v1"
+#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-chunked-pop-v2"
+
+/* Large logical leaves are divided into deterministic private cache pages.
+ * This is a latency/working-set bound, not a visible tessellation rule. */
+#define BOBOL_MESH_LOD_CHUNK_FACE_TARGET 65536
 
 /* Spatial subresources are deliberately not display objects.  These fixed
  * sized records describe triangle-list ranges within the one activation-
@@ -59,6 +63,39 @@ struct BObolMeshLodClusterInfo {
     const struct BObolMeshLodClusterRange *ranges;
     uint32_t range_count;
 };
+
+/* One independently resident private render subresource.  Chunks retain the
+ * logical leaf's common cut schedule and quantization domain.  Counts are
+ * cumulative within the chunk.  The records are borrowed from an opened
+ * immutable cache handle. */
+struct BObolMeshLodChunkCutInfo {
+    uint32_t face_count;
+    uint32_t point_count;
+    uint64_t resident_bytes;
+};
+
+struct BObolMeshLodChunkInfo {
+    uint32_t chunk_id;
+    int min_cut;
+    int max_cut;
+    point_t bmin;
+    point_t bmax;
+    struct BObolMeshLodChunkCutInfo cuts[BOBOL_MESH_LOD_CUT_COUNT_MAX];
+};
+
+/* One borrowed chunk prefix.  Face indices are local to points and normals,
+ * when present, contain three authored corner normals per face.  The pointers
+ * are valid only for the duration of the callback. */
+typedef int (*BObolMeshLodChunkCallback)(
+	uint32_t chunk_id,
+	int cut,
+	const point_t *points,
+	size_t point_count,
+	const uint32_t *faces,
+	size_t face_count,
+	const vect_t *normals,
+	size_t normal_count,
+	void *cb_data);
 
 /* Borrowed active LoD arrays; valid until the LoD is reloaded or destroyed. */
 struct BObolMeshLodData {
@@ -139,6 +176,10 @@ struct BObolMeshLodHierarchyInfo {
     uint32_t cluster_count;
     /* Borrowed from the opened immutable cache handle. */
     const struct BObolMeshLodClusterInfo *clusters;
+    uint32_t chunk_count;
+    /* Borrowed from the opened immutable cache handle.  Unlike clusters,
+     * these records describe independently readable storage. */
+    const struct BObolMeshLodChunkInfo *chunks;
     struct BObolMeshLodCutInfo cuts[BOBOL_MESH_LOD_CUT_COUNT_MAX];
 };
 
@@ -156,7 +197,7 @@ struct BObolMeshLodCacheStatus {
 };
 
 #define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
-#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, 0, 0, NULL, {{0, 0, 0, 0.0, {0, 0, 0}, 0}} }
+#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, 0, 0, NULL, 0, NULL, {{0, 0, 0, 0.0, {0, 0, 0}, 0}} }
 #define BOBOL_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 BOBOL_EXPORT void
@@ -296,6 +337,18 @@ bobol_mesh_lod_read_resident_suffix(struct BObolMeshLod *lod,
 	int resident_cut,
 	int target_cut,
 	BObolMeshLodSuffixCallback callback,
+	void *cb_data);
+
+/* Read independently resident prefixes for the requested private chunks.
+ * No unrequested chunk arrays are materialized.  chunk_ids must be strictly
+ * increasing and each requested cut must be in the logical hierarchy range.
+ * The callback is invoked once per chunk in input order. */
+BOBOL_EXPORT int
+bobol_mesh_lod_read_chunk_prefixes(struct BObolMeshLod *lod,
+	const uint32_t *chunk_ids,
+	size_t chunk_count,
+	int cut,
+	BObolMeshLodChunkCallback callback,
 	void *cb_data);
 
 BOBOL_EXPORT int

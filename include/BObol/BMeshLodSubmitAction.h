@@ -56,6 +56,11 @@ public:
      * PoP hierarchy; the following quality pass promotes view-significant
      * leaves under the aggregate scene budget. */
     void setStructuralCoverageOnly(SbBool coverageOnly);
+    /* A completed renderer frame may prove that one or more predicted
+     * subpixel structural proxies did not actually collapse.  During the
+     * resulting repair pass, require those otherwise eligible fallbacks to
+     * enter the mesh provider path. */
+    void setStructuralPresentationRepair(SbBool repair);
     void setGeneration(uint64_t generation);
     uint64_t getGeneration(void) const;
     void setRevisions(uint64_t viewRevision, uint64_t policyRevision);
@@ -198,10 +203,12 @@ private:
     void appendDiagnostic(const SbString &target, const char *message);
     SbBool reserveRefinementCost(
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
-	int activeCut, int nextCut, int drawMode, SbBool hasNormals);
+	const std::vector<uint32_t> &chunkIds, int activeCut, int nextCut,
+	int drawMode, SbBool hasNormals);
     int reserveRefinementCut(
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
-	int activeCut, int preferredCut, int drawMode, SbBool hasNormals);
+	const std::vector<uint32_t> &chunkIds, int activeCut, int preferredCut,
+	int drawMode, SbBool hasNormals);
     /* Reserve a conservative first-cut population before its hierarchy has
      * been opened by a worker.  This closes the all-box zero-face blind spot:
      * thousands of independent warm-cache requests must not each interpret
@@ -220,6 +227,7 @@ private:
     float targetPixelError;
     float pointProxyPixelThreshold;
     SbBool structuralCoverageOnly;
+    SbBool structuralPresentationRepair;
     uint64_t generation;
     uint64_t viewRevision;
     uint64_t policyRevision;

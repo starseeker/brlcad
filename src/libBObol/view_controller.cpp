@@ -252,12 +252,23 @@ controller_lod_effective_population_cost(
 		const int minimumCut =
 		    payload->progressiveMesh->minimumCut();
 		if (minimumCut >= 0 &&
-		    payload->progressiveMesh->canDrawCut(minimumCut))
-		    minimumCounts = haveVisibleCounts ?
-			visibleCounts[static_cast<size_t>(minimumCut)] :
-			bobol_lod_progressive_counts(
+		    (payload->requiredChunks.empty() ?
+			payload->progressiveMesh->canDrawCut(minimumCut) :
+			payload->progressiveMesh->canDrawChunksAtCut(
+			    payload->requiredChunks, minimumCut))) {
+		    if (haveVisibleCounts) {
+			minimumCounts =
+			    visibleCounts[static_cast<size_t>(minimumCut)];
+		    } else if (!payload->requiredChunks.empty()) {
+			(void)payload->progressiveMesh->countsForChunksAtCut(
+			    payload->requiredChunks, minimumCut,
+			    payload->hasNormals, &minimumCounts);
+		    } else {
+			minimumCounts = bobol_lod_progressive_counts(
 			    payload->progressiveMesh, minimumCut,
 			    payload->hasNormals);
+		    }
+		}
 	    }
 	    minimumCost = add(minimumCost, bobol_lod_render_cost_units(
 		minimumCounts, drawMode, 1));
@@ -2404,6 +2415,10 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * resident.  This is provider work, not a performance-limited quality
      * observation, and must survive the coherent cut presentation barrier. */
     SbBool lodRetainedResidencyPending = FALSE;
+    /* The last exact renderer frame observed structural boxes which the
+     * predictive point classifier expected to collapse.  One bounded pass
+     * must bypass that prediction and obtain their mesh presentations. */
+    SbBool lodStructuralPresentationRepairPending = FALSE;
     SbBool lodRetainedRefinementCutAdvanced = FALSE;
     SbBool lodRetainedRefinementBudgetBlocked = FALSE;
     SbBool lodPassAdmittedWork = FALSE;
@@ -4657,6 +4672,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	this->d->lodSubmissionDeltaPlans.clear();
 	this->d->lodSubmissionRefreshMissing = TRUE;
 	this->d->lodSubmissionReset = 0;
+	this->d->lodStructuralPresentationRepairPending = TRUE;
 	this->d->lodSubmissionPending = TRUE;
 	this->d->lodPassAdmittedWork = FALSE;
 	this->d->lodBudgetPolicy.clearBudgetLimit();
@@ -7453,6 +7469,7 @@ BObolViewController::setLodService(BObolLodService *service)
 	this->d->lodCoveragePolicy.activate(true);
     this->d->lodRetainedRefinementPending = FALSE;
     this->d->lodRetainedResidencyPending = FALSE;
+    this->d->lodStructuralPresentationRepairPending = FALSE;
     this->d->lodRetainedRefinementCutAdvanced = FALSE;
     this->d->lodRetainedRefinementBudgetBlocked = FALSE;
     this->d->lodBudgetPolicy.resetCalibration();
@@ -7516,6 +7533,7 @@ BObolViewController::cancelActiveLodGeneration(void)
     this->d->lodResidentGrowthPolicy.reset();
     this->d->lodRetainedRefinementPending = FALSE;
     this->d->lodRetainedResidencyPending = FALSE;
+    this->d->lodStructuralPresentationRepairPending = FALSE;
     this->d->lodRetainedRefinementCutAdvanced = FALSE;
     this->d->lodRetainedRefinementBudgetBlocked = FALSE;
     this->d->lodBudgetPolicy.resetCalibration();
@@ -9078,6 +9096,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	action.setStructuralCoverageOnly(
 	    this->d->lodCoveragePolicy.active() &&
 	    !this->d->lodViewDemandPolicy.scaleDemandRefreshActive());
+	action.setStructuralPresentationRepair(
+	    this->d->lodStructuralPresentationRepairPending);
 	action.setGeneration(generation);
 	action.setRevisions(this->d->lodViewRevision.value(),
 	    this->d->lodPolicyRevision.value());
@@ -9444,6 +9464,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 
     const bool completedPass =
 	this->d->lodSubmissionSourceIndex >= sources.size();
+    if (completedPass && this->d->lodStructuralPresentationRepairPending)
+	this->d->lodStructuralPresentationRepairPending = FALSE;
     const bool completedPassRetainedAllocation =
 	completedPass &&
 	this->d->lodSubmissionRetainedAdmissionMode;
@@ -10224,7 +10246,10 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	    residentCadBefore->drawMode == drained[i].request.drawMode;
 	const bool extendsCumulativeCadAsset =
 	    sameCumulativeCadAsset &&
-	    drained[i].residentCut > residentCadBefore->residentCut;
+	    (drained[i].residentCut > residentCadBefore->residentCut ||
+	     (drained[i].preparedCadGeometryRevision &&
+	      drained[i].preparedCadGeometryRevision >
+		residentCadBefore->preparedCadGeometryRevision));
 	/* A worker completion publishes residency, not a coarsening decision.
 	 * The current aggregate allocator may already have selected a richer cut
 	 * from the same cumulative asset while this suffix was in flight.  Keep
@@ -10233,18 +10258,30 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	 * older drawable prefix. */
 	if (extendsCumulativeCadAsset &&
 	    drained[i].geometry.activeCut < residentCadBefore->activeCut &&
-	    drained[i].progressiveMesh->canDrawCut(
-		residentCadBefore->activeCut)) {
+	    (residentCadBefore->requiredChunks.empty() ?
+		drained[i].progressiveMesh->canDrawCut(
+		    residentCadBefore->activeCut) :
+		drained[i].progressiveMesh->canDrawChunksAtCut(
+		    residentCadBefore->requiredChunks,
+		    residentCadBefore->activeCut))) {
 	    drained[i].geometry.activeCut = residentCadBefore->activeCut;
-	    drained[i].counts.faceCount =
-		drained[i].progressiveMesh->faceCount(
-		    drained[i].geometry.activeCut);
-	    drained[i].counts.pointCount =
-		drained[i].progressiveMesh->pointCount(
-		    drained[i].geometry.activeCut);
-	    drained[i].counts.originalPointCount = drained[i].counts.pointCount;
-	    drained[i].counts.normalCount = drained[i].hasNormals ?
-		drained[i].counts.faceCount * 3 : 0;
+	    if (residentCadBefore->requiredChunks.empty()) {
+		drained[i].counts.faceCount =
+		    drained[i].progressiveMesh->faceCount(
+			drained[i].geometry.activeCut);
+		drained[i].counts.pointCount =
+		    drained[i].progressiveMesh->pointCount(
+			drained[i].geometry.activeCut);
+		drained[i].counts.originalPointCount =
+		    drained[i].counts.pointCount;
+		drained[i].counts.normalCount = drained[i].hasNormals ?
+		    drained[i].counts.faceCount * 3 : 0;
+	    } else {
+		(void)drained[i].progressiveMesh->countsForChunksAtCut(
+		    residentCadBefore->requiredChunks,
+		    drained[i].geometry.activeCut, drained[i].hasNormals,
+		    &drained[i].counts);
+	    }
 	}
 	const bool staleViewOrPolicy =
 	    drained[i].request.viewRevision !=
@@ -10294,7 +10331,10 @@ BObolViewController::applyLodResults(BObolLodService *service,
 			this->d->lodInteractiveProgressiveCeiling);
 		activeCut = std::max(activeCut, admittedCut);
 	    }
-	    if (!drained[i].progressiveMesh->canDrawCut(activeCut))
+	    if (!(residentCadBefore->requiredChunks.empty() ?
+		drained[i].progressiveMesh->canDrawCut(activeCut) :
+		drained[i].progressiveMesh->canDrawChunksAtCut(
+		    residentCadBefore->requiredChunks, activeCut)))
 		activeCut = residentCadBefore->activeCut;
 
 	    drained[i].request.viewRevision =
@@ -10303,15 +10343,25 @@ BObolViewController::applyLodResults(BObolLodService *service,
 		this->d->lodPolicyRevision.value();
 	    drained[i].request.requestedCut =
 		residentCadBefore->requestedCut;
+	    drained[i].request.requiredChunks =
+		residentCadBefore->requiredChunks;
 	    drained[i].resolvedCut = residentCadBefore->requestedCut;
 	    drained[i].cacheKey = bobol_lod_cache_key(drained[i].request);
 	    drained[i].geometry.activeCut = activeCut;
-	    drained[i].counts.faceCount =
-		drained[i].progressiveMesh->faceCount(activeCut);
-	    drained[i].counts.pointCount =
-		drained[i].progressiveMesh->pointCount(activeCut);
-	    drained[i].counts.originalPointCount =
-		drained[i].counts.pointCount;
+	    if (drained[i].request.requiredChunks.empty()) {
+		drained[i].counts.faceCount =
+		    drained[i].progressiveMesh->faceCount(activeCut);
+		drained[i].counts.pointCount =
+		    drained[i].progressiveMesh->pointCount(activeCut);
+		drained[i].counts.originalPointCount =
+		    drained[i].counts.pointCount;
+		drained[i].counts.normalCount = drained[i].hasNormals ?
+		    drained[i].counts.faceCount * 3 : 0;
+	    } else {
+		(void)drained[i].progressiveMesh->countsForChunksAtCut(
+		    drained[i].request.requiredChunks, activeCut,
+		    drained[i].hasNormals, &drained[i].counts);
+	    }
 	    drained[i].counts.normalCount = drained[i].hasNormals ?
 		drained[i].counts.faceCount * 3 : 0;
 	    drained[i].terminal =

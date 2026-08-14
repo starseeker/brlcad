@@ -208,6 +208,7 @@ qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 
 static inline void qgcanvas_queue_obol_progressive_update(
     QgCanvasState &s, QWidget *w);
+static inline bool qgcanvas_sync_obol_lod_progress(QgCanvasState &s);
 
 /* LoD completion may be reported by a worker thread after Qt's last paint.
  * Marshal the controller's frame request back to the canvas event loop so a
@@ -377,6 +378,13 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
      * scripted idle barrier and leave the supposedly final report pending. */
     if (recordPresentationTiming)
 	qgcanvas_advance_obol_progressive(s);
+    /* The progressive pump may have crossed into or out of convergence since
+     * the last endpoint paint.  Synchronize that transition before traversing
+     * the retained faceplate so the first frame in the new state does not
+     * present the previous progress indicator and merely queue a corrective
+     * second frame. */
+    if (recordPresentationTiming)
+	(void)qgcanvas_sync_obol_lod_progress(s);
     /* Endpoint-owned image producers, including the retained librt engine,
      * publish completed worker frames through this host-thread hook.  The Qt
      * canvases render directly instead of using
@@ -866,6 +874,40 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     qgcanvas_sync_obol_adc(s, group, adc);
 }
 
+/**
+ * Publish the retained LoD progress faceplate on state transitions and at a
+ * bounded cadence while work is active.  This helper is deliberately usable
+ * both immediately before a presentation and after its timing feedback: the
+ * pre-render call prevents a stale terminal HUD frame, while the post-render
+ * call catches a transition caused by completion/calibration of that frame.
+ */
+static inline bool
+qgcanvas_sync_obol_lod_progress(QgCanvasState &s)
+{
+    if (!s.v || !s.obol)
+	return false;
+
+    const auto now = std::chrono::steady_clock::now();
+    const bool lod_pending =
+	s.obol->hasProgressiveWorkPending() ||
+	s.obol->isLodInteractionActive();
+    const bool lod_state_changed =
+	lod_pending != s.lod_progress_last_pending;
+    const bool lod_first =
+	s.lod_progress_last_publish.time_since_epoch().count() == 0;
+    const bool lod_publish = lod_state_changed ||
+	(lod_pending && (lod_first ||
+	    std::chrono::duration_cast<std::chrono::milliseconds>(
+		now - s.lod_progress_last_publish).count() >= 100));
+    if (!lod_publish)
+	return false;
+
+    s.lod_progress_last_pending = lod_pending;
+    s.lod_progress_last_publish = now;
+    qgcanvas_sync_obol_faceplate(s);
+    return true;
+}
+
 /** Record actual Qt presentation cadence and refresh the label sparingly. */
 static inline void
 qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
@@ -880,23 +922,8 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
     if (presentation_interval)
 	(void)bv_frametime_set(view, presentation_interval);
 
+    const bool lod_publish = qgcanvas_sync_obol_lod_progress(s);
     const auto now = std::chrono::steady_clock::now();
-    const bool lod_pending =
-	s.obol->hasProgressiveWorkPending() ||
-	s.obol->isLodInteractionActive();
-    const bool lod_state_changed =
-	lod_pending != s.lod_progress_last_pending;
-    const bool lod_first =
-	s.lod_progress_last_publish.time_since_epoch().count() == 0;
-    const bool lod_publish = lod_state_changed ||
-	(lod_pending && (lod_first ||
-	    std::chrono::duration_cast<std::chrono::milliseconds>(
-		now - s.lod_progress_last_publish).count() >= 100));
-    if (lod_publish) {
-	s.lod_progress_last_pending = lod_pending;
-	s.lod_progress_last_publish = now;
-	qgcanvas_sync_obol_faceplate(s);
-    }
 
     /*
      * completeRenderTiming() may install an unchanged calibration replay

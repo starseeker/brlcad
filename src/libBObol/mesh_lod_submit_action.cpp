@@ -250,6 +250,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     targetPixelError(1.0f),
     pointProxyPixelThreshold(1.0f),
     structuralCoverageOnly(FALSE),
+    structuralPresentationRepair(FALSE),
     generation(0),
     viewRevision(0),
     policyRevision(0),
@@ -400,6 +401,12 @@ void
 SoBRLMeshLodSubmitAction::setStructuralCoverageOnly(SbBool coverageOnly)
 {
     this->structuralCoverageOnly = coverageOnly ? TRUE : FALSE;
+}
+
+void
+SoBRLMeshLodSubmitAction::setStructuralPresentationRepair(SbBool repair)
+{
+    this->structuralPresentationRepair = repair ? TRUE : FALSE;
 }
 
 void
@@ -624,6 +631,39 @@ SoBRLMeshLodSubmitAction::getTransitionLimitedRefinement(void) const
     return this->transitionLimitedRefinement;
 }
 
+static SbBool
+mesh_lod_can_draw_chunks(
+    const BObolLodProgressiveMeshPtr &progressiveMesh,
+    const std::vector<uint32_t> &chunkIds, int cut)
+{
+    if (!progressiveMesh)
+	return FALSE;
+    return chunkIds.empty() ? progressiveMesh->canDrawCut(cut) :
+	progressiveMesh->canDrawChunksAtCut(chunkIds, cut);
+}
+
+static BObolLodCounts
+mesh_lod_chunk_counts(
+    const BObolLodProgressiveMeshPtr &progressiveMesh,
+    const std::vector<uint32_t> &chunkIds, int cut, SbBool hasNormals,
+    bool hierarchy)
+{
+    BObolLodCounts counts;
+    if (!progressiveMesh)
+	return counts;
+    if (!chunkIds.empty()) {
+	const SbBool available = hierarchy ?
+	    progressiveMesh->hierarchyCountsForChunksAtCut(
+		chunkIds, cut, hasNormals, &counts) :
+	    progressiveMesh->countsForChunksAtCut(
+		chunkIds, cut, hasNormals, &counts);
+	if (available)
+	    return counts;
+    }
+    return bobol_lod_progressive_counts(
+	progressiveMesh, cut, hasNormals);
+}
+
 /* Return the next transition which changes the cumulative face population.
  * Quantization-only cuts preceding that transition are free and are folded
  * into it.  If no later population exists, the richest requested snap cut
@@ -631,16 +671,18 @@ SoBRLMeshLodSubmitAction::getTransitionLimitedRefinement(void) const
 static int
 mesh_lod_next_population_cut(
     const BObolLodProgressiveMeshPtr &progressiveMesh,
-    int activeCut, int preferredCut)
+    const std::vector<uint32_t> &chunkIds, int activeCut, int preferredCut)
 {
     if (!progressiveMesh || preferredCut <= activeCut)
 	return activeCut;
     preferredCut = std::min(preferredCut,
 	progressiveMesh->maximumCut());
     const size_t activeFaces = activeCut >= 0 ?
-	progressiveMesh->hierarchyFaceCountAtCut(activeCut) : 0;
+	mesh_lod_chunk_counts(progressiveMesh, chunkIds,
+	    activeCut, FALSE, true).faceCount : 0;
     for (int cut = activeCut + 1; cut <= preferredCut; ++cut)
-	if (progressiveMesh->hierarchyFaceCountAtCut(cut) > activeFaces)
+	if (mesh_lod_chunk_counts(progressiveMesh, chunkIds,
+		cut, FALSE, true).faceCount > activeFaces)
 	    return cut;
     return preferredCut;
 }
@@ -660,7 +702,8 @@ mesh_lod_next_population_cut(
 static int
 mesh_lod_bounded_resident_prefetch_cut(
     const BObolLodProgressiveMeshPtr &progressiveMesh,
-    int requestedCut, SbBool transitionLimited)
+    const std::vector<uint32_t> &chunkIds, int requestedCut,
+    SbBool transitionLimited)
 {
     if (!progressiveMesh || requestedCut < 0 || !transitionLimited)
 	return requestedCut;
@@ -669,22 +712,23 @@ mesh_lod_bounded_resident_prefetch_cut(
 	requestedCut <= residentCut)
 	return requestedCut;
     return mesh_lod_next_population_cut(
-	progressiveMesh, residentCut, requestedCut);
+	progressiveMesh, chunkIds, residentCut, requestedCut);
 }
 
 SbBool
 SoBRLMeshLodSubmitAction::reserveRefinementCost(
     const BObolLodProgressiveMeshPtr &progressiveMesh,
-    int activeCut, int nextCut, int drawMode, SbBool hasNormals)
+    const std::vector<uint32_t> &chunkIds, int activeCut, int nextCut,
+    int drawMode, SbBool hasNormals)
 {
     if (!progressiveMesh || nextCut <= activeCut)
 	return TRUE;
 
     const BObolLodCounts activeCounts = activeCut >= 0 ?
-	bobol_lod_progressive_counts(
-	    progressiveMesh, activeCut, hasNormals) : BObolLodCounts();
-    const BObolLodCounts nextCounts = bobol_lod_progressive_counts(
-	progressiveMesh, nextCut, hasNormals);
+	mesh_lod_chunk_counts(progressiveMesh, chunkIds, activeCut,
+	    hasNormals, false) : BObolLodCounts();
+    const BObolLodCounts nextCounts = mesh_lod_chunk_counts(
+	progressiveMesh, chunkIds, nextCut, hasNormals, false);
     const size_t activeCost = bobol_lod_render_cost_units(
 	activeCounts, drawMode, 0);
     const size_t nextCost = bobol_lod_render_cost_units(
@@ -721,7 +765,8 @@ SoBRLMeshLodSubmitAction::reserveRefinementCost(
 int
 SoBRLMeshLodSubmitAction::reserveRefinementCut(
     const BObolLodProgressiveMeshPtr &progressiveMesh,
-    int activeCut, int preferredCut, int drawMode, SbBool hasNormals)
+    const std::vector<uint32_t> &chunkIds, int activeCut, int preferredCut,
+    int drawMode, SbBool hasNormals)
 {
     if (preferredCut <= activeCut)
 	return activeCut;
@@ -752,15 +797,15 @@ SoBRLMeshLodSubmitAction::reserveRefinementCut(
     if (this->transitionLimitedRefinement &&
 	this->refinementCostBudget != SIZE_MAX)
 	preferredCut = mesh_lod_next_population_cut(
-	    progressiveMesh, activeCut, preferredCut);
+	    progressiveMesh, chunkIds, activeCut, preferredCut);
     const BObolLodCounts activeCounts = activeCut >= 0 ?
-	bobol_lod_progressive_counts(
-	    progressiveMesh, activeCut, hasNormals) : BObolLodCounts();
+	mesh_lod_chunk_counts(progressiveMesh, chunkIds, activeCut,
+	    hasNormals, false) : BObolLodCounts();
     const size_t activeCost = bobol_lod_render_cost_units(
 	activeCounts, drawMode, 0);
     if (this->refinementCostBudget == SIZE_MAX) {
 	(void)this->reserveRefinementCost(
-	    progressiveMesh, activeCut, preferredCut, drawMode,
+	    progressiveMesh, chunkIds, activeCut, preferredCut, drawMode,
 	    hasNormals);
 	return preferredCut;
     }
@@ -769,8 +814,8 @@ SoBRLMeshLodSubmitAction::reserveRefinementCut(
 	    0 : this->refinementCostBudget -
 		this->refinementCostBudgetUsed;
     for (int cut = preferredCut; cut > activeCut; --cut) {
-	const BObolLodCounts cutCounts = bobol_lod_progressive_counts(
-	    progressiveMesh, cut, hasNormals);
+	const BObolLodCounts cutCounts = mesh_lod_chunk_counts(
+	    progressiveMesh, chunkIds, cut, hasNormals, false);
 	const size_t cutCost = bobol_lod_render_cost_units(
 	    cutCounts, drawMode, 0);
 	const size_t additionalCost = cutCost > activeCost ?
@@ -795,10 +840,10 @@ SoBRLMeshLodSubmitAction::reserveRefinementCut(
     if (this->oneOverBudgetRefinementLimit > 0 &&
 	!this->oneOverBudgetRefinementUsed) {
 	const int trialCut = mesh_lod_next_population_cut(
-	    progressiveMesh, activeCut, preferredCut);
+	    progressiveMesh, chunkIds, activeCut, preferredCut);
 	if (trialCut > activeCut) {
-	    const BObolLodCounts trialCounts = bobol_lod_progressive_counts(
-		progressiveMesh, trialCut, hasNormals);
+	    const BObolLodCounts trialCounts = mesh_lod_chunk_counts(
+		progressiveMesh, chunkIds, trialCut, hasNormals, false);
 	    const size_t trialCost = bobol_lod_render_cost_units(
 		trialCounts, drawMode, 0);
 	    const size_t additionalCost = trialCost > activeCost ?
@@ -836,7 +881,12 @@ SoBRLMeshLodSubmitAction::reserveInitialCost(
      * scheduling every mesh at once or walking only a handful of leaves per
      * frame.  The result's exact face count becomes the next frame's measured
      * active population. */
-    static const size_t provisionalFirstCutFaces = 512;
+    /* A first PoP mesh must be recognizable, not merely nonempty.  About
+     * eight thousand faces corresponds to a deliberately coarse screen-error
+     * band for a prominent large mesh such as Lucy, while the aggregate scene
+     * reservation below limits how many such prefixes may enter one wave.
+     * Small assets are still charged at their exact source population. */
+    static const size_t provisionalFirstCutFaces = 8192;
     const size_t knownFaces =
 	sourceFaces > static_cast<uint64_t>(SIZE_MAX) ? SIZE_MAX :
 	static_cast<size_t>(sourceFaces);
@@ -1338,6 +1388,10 @@ mesh_lod_apply_projected_demand(BObolLodRequest &request,
 	cachedViewProjection ? SbMatrix() : viewVolume.getMatrix();
     const SbMatrix &viewProjection =
 	cachedViewProjection ? *cachedViewProjection : localViewProjection;
+    request.localToRoot = localToRoot;
+    request.viewProjection = viewProjection;
+    request.spatialProjectionValid = TRUE;
+    request.requiredChunks.clear();
     SbBox3f worldBounds;
     worldBounds.makeEmpty();
     SbVec3f projectedMin(FLT_MAX, FLT_MAX, FLT_MAX);
@@ -1444,6 +1498,9 @@ mesh_lod_apply_cut_hysteresis(
 	    request.projectedPixelDiameter, request.targetPixelError);
 	if (selectedCut >= 0)
 	    request.requestedCut = selectedCut;
+	if (request.spatialProjectionValid)
+	    progressiveMesh->visibleChunkIds(request.localToRoot,
+		request.viewProjection, request.requiredChunks);
     }
     if (!hysteresisEnabled || activeCut < 0 || request.requestedCut < 0 ||
 	request.requestedCut == activeCut || request.targetPixelError <= 0.0f)
@@ -1529,10 +1586,43 @@ mesh_lod_geometry_key_matches(const SbString &payloadKey,
 }
 
 static SbBool
+mesh_lod_cad_payload_has_presentable_spatial_demand(
+    const BObolViewLodState::CadPayload *payload,
+    const BObolLodRequest &request)
+{
+    /*
+     * An ordinal PoP cut is not a complete residency witness for a spatially
+     * paged leaf.  Camera motion can reveal a different page set without
+     * changing the requested cut.  Treating that occurrence as resident
+     * updates its expected face counts but suppresses the provider request,
+     * leaving holes until a later view happens to load the missing pages.
+     *
+     * The shared asset says whether the required pages are drawable.  If the
+     * page set changed after another worker grew that asset, also require the
+     * renderer snapshot installed for this occurrence to name the current
+     * immutable generation.  Otherwise the provider must publish that
+     * already-resident generation to SoCADAssembly before this fast path may
+     * declare the view satisfied.
+     */
+    if (payload->progressiveMesh) {
+	if (!mesh_lod_can_draw_chunks(payload->progressiveMesh,
+		request.requiredChunks, request.requestedCut))
+	    return FALSE;
+	if (payload->requiredChunks != request.requiredChunks &&
+	    (!payload->preparedCadGeometry ||
+	     payload->preparedCadGeometryRevision !=
+		 payload->progressiveMesh->revision()))
+	    return FALSE;
+    }
+
+    return TRUE;
+}
+
+static SbBool
 mesh_lod_cad_payload_is_resident(
-	const BObolViewLodState::CadPayload *payload,
-	const BObolLodRequest &request,
-	const SbString *cachedGeometryKey = NULL)
+    const BObolViewLodState::CadPayload *payload,
+    const BObolLodRequest &request,
+    const SbString *cachedGeometryKey = NULL)
 {
     return payload && payload->isValid() &&
 	(payload->resultKind == BOBOL_LOD_RESULT_MESH ||
@@ -1540,7 +1630,9 @@ mesh_lod_cad_payload_is_resident(
 	payload->providerStatus == BOBOL_LOD_PROVIDER_READY &&
 	mesh_lod_geometry_key_matches(payload->cacheKey, request,
 	    cachedGeometryKey) &&
-	payload->activeCut == request.requestedCut;
+	payload->activeCut == request.requestedCut &&
+	mesh_lod_cad_payload_has_presentable_spatial_demand(
+	    payload, request);
 }
 
 /*
@@ -1568,7 +1660,21 @@ mesh_lod_cad_payload_matches_asset_epoch(
 	payload->sourceRevision != request.sourceRevision ||
 	payload->sourceContentHash != request.sourceContentHash ||
 	payload->qualityTier != request.qualityTier)
-	return FALSE;
+	{
+	    if (getenv("BOBOL_LOD_TRACE_BUDGET") && payload)
+		bu_log("BObol asset epoch mismatch valid=%d kind=%d status=%d "
+		    "db=%llu/%llu source=%llu/%llu hash=%llu/%llu tier=%d/%d\n",
+		    payload->isValid() ? 1 : 0, payload->resultKind,
+		    payload->providerStatus,
+		    static_cast<unsigned long long>(payload->databaseRevision),
+		    static_cast<unsigned long long>(request.databaseRevision.value()),
+		    static_cast<unsigned long long>(payload->sourceRevision),
+		    static_cast<unsigned long long>(request.sourceRevision.value()),
+		    static_cast<unsigned long long>(payload->sourceContentHash),
+		    static_cast<unsigned long long>(request.sourceContentHash),
+		    payload->qualityTier, request.qualityTier);
+	    return FALSE;
+	}
 
     /*
      * A retained PoP generation is representation-neutral: shaded and wire
@@ -1730,12 +1836,14 @@ mesh_lod_available_cad_retarget_cut(
      * actually draw before scheduling more I/O. */
     for (int cut = request.requestedCut;
 	 cut > payload->activeCut; --cut) {
-	if (!payload->progressiveMesh->canDrawCut(cut))
+	if (!mesh_lod_can_draw_chunks(
+		payload->progressiveMesh, request.requiredChunks, cut))
 	    continue;
 	const int delivery = incrementalRefinement ?
 	    mesh_lod_bounded_delivery_cut(payload->progressiveMesh,
 		payload->activeCut, cut) : cut;
-	return payload->progressiveMesh->canDrawCut(delivery) ?
+	return mesh_lod_can_draw_chunks(
+	    payload->progressiveMesh, request.requiredChunks, delivery) ?
 	    delivery : payload->activeCut;
     }
     return payload->activeCut;
@@ -1755,12 +1863,14 @@ mesh_lod_available_mesh_retarget_cut(
 	return request.requestedCut;
     for (int cut = request.requestedCut;
 	 cut > payload->activeCut; --cut) {
-	if (!payload->progressiveMesh->canDrawCut(cut))
+	if (!mesh_lod_can_draw_chunks(
+		payload->progressiveMesh, request.requiredChunks, cut))
 	    continue;
 	const int delivery = incrementalRefinement ?
 	    mesh_lod_bounded_delivery_cut(payload->progressiveMesh,
 		payload->activeCut, cut) : cut;
-	return payload->progressiveMesh->canDrawCut(delivery) ?
+	return mesh_lod_can_draw_chunks(
+	    payload->progressiveMesh, request.requiredChunks, delivery) ?
 	    delivery : payload->activeCut;
     }
     return payload->activeCut;
@@ -1936,17 +2046,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		if (payload->progressiveMesh) {
 		    candidate.minimumCut =
 			payload->progressiveMesh->minimumCut();
-		    if (!payload->progressiveMesh->canDrawCut(
+		    if (!mesh_lod_can_draw_chunks(
+			    payload->progressiveMesh,
+			    candidate.demand.requiredChunks,
 			    candidate.minimumCut)) {
 			if (submitAction->viewState->removeCadPayload(payload))
 			    submitAction->updatedCutCount++;
 			continue;
 		    }
 		    const BObolLodCounts minimumCounts =
-			bobol_lod_progressive_counts(
-			    payload->progressiveMesh,
-			    candidate.minimumCut,
-			    payload->hasNormals);
+			mesh_lod_chunk_counts(payload->progressiveMesh,
+			    candidate.demand.requiredChunks,
+			    candidate.minimumCut, payload->hasNormals, false);
 		    candidate.minimumFaces = minimumCounts.faceCount;
 		    candidate.minimumCost = bobol_lod_render_cost_units(
 			minimumCounts, payload->drawMode, 1);
@@ -1994,10 +2105,16 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		     * own in the preceding view.  Newly prominent parts must be able
 		     * to reclaim budget from newly insignificant ones without loading
 		     * or rebuilding geometry. */
+		    const int residentCut =
+			candidate.demand.requiredChunks.empty() ?
+			    candidate.payload->progressiveMesh->residentCut() :
+			    candidate.payload->progressiveMesh->
+				residentCutForChunks(
+				    candidate.demand.requiredChunks);
 		    int targetCut = std::min(
 			candidate.requestedCut,
 			std::max(candidate.payload->activeCut,
-			    candidate.payload->residentCut));
+			    residentCut));
 		    targetCut = mesh_lod_error_ceiling_cut(
 			candidate.demand,
 			candidate.payload->progressiveMesh,
@@ -2006,12 +2123,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			submitAction->retainedSceneMaximumNormalizedError);
 		    for (int cut = targetCut;
 			 cut >= candidate.minimumCut; --cut) {
-			if (!candidate.payload->progressiveMesh->canDrawCut(cut))
+			if (!mesh_lod_can_draw_chunks(
+				candidate.payload->progressiveMesh,
+				candidate.demand.requiredChunks, cut))
 			    continue;
 			const BObolLodCounts counts =
-			    bobol_lod_progressive_counts(
-				candidate.payload->progressiveMesh, cut,
-				candidate.payload->hasNormals);
+			    mesh_lod_chunk_counts(
+				candidate.payload->progressiveMesh,
+				candidate.demand.requiredChunks, cut,
+				candidate.payload->hasNormals, false);
 			const size_t cost = bobol_lod_render_cost_units(
 			    counts, candidate.payload->drawMode, 1);
 			const size_t extra = cost > candidate.minimumCost ?
@@ -2180,7 +2300,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		 * already pixel exact for this view, so class it as coverage rather than
 		 * eagerly opening a distinct PoP hierarchy which cannot change a pixel.
 		 * Selection/highlight always promotes the real mesh path immediately. */
-		const bool structuralPointCoverage = !active &&
+		const bool structuralPointCoverage =
+		    !submitAction->structuralPresentationRepair && !active &&
 		    !summary.meshGeometry && !summary.selected &&
 		    !summary.highlighted &&
 		    (submitAction->structuralCoverageOnly ||
@@ -2213,16 +2334,17 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    active->activeCut >= 0 &&
 		    projected.requestedCut > active->activeCut) {
 		    const int nextCut = mesh_lod_next_population_cut(
-			active->progressiveMesh, active->activeCut,
+			active->progressiveMesh, projected.requiredChunks,
+			active->activeCut,
 			projected.requestedCut);
 		    const BObolLodCounts activeCounts =
-			bobol_lod_progressive_counts(
-			    active->progressiveMesh, active->activeCut,
-			    active->hasNormals);
+			mesh_lod_chunk_counts(active->progressiveMesh,
+			    projected.requiredChunks, active->activeCut,
+			    active->hasNormals, false);
 		    const BObolLodCounts nextCounts =
-			bobol_lod_progressive_counts(
-			    active->progressiveMesh, nextCut,
-			    active->hasNormals);
+			mesh_lod_chunk_counts(active->progressiveMesh,
+			    projected.requiredChunks, nextCut,
+			    active->hasNormals, false);
 		    const size_t activeCost = bobol_lod_render_cost_units(
 			activeCounts, sourceDrawMode, 0);
 		    const size_t nextCost = bobol_lod_render_cost_units(
@@ -2469,14 +2591,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->pointProxyPixelThreshold * 0.75f).
 		    pointEligible;
 	    const SbBool structuralPointCoverage =
+		!submitAction->structuralPresentationRepair &&
 		!activePayload && !summary.meshGeometry &&
 		!summary.selected && !summary.highlighted &&
 		(submitAction->structuralCoverageOnly ||
 		 presentationProjectsToPoint) ?
-		TRUE : FALSE;
+		    TRUE : FALSE;
 	    if (submitAction->useForcedCut)
 		request.requestedCut = submitAction->forcedCut;
-	else if (activePayload)
+	    else if (activePayload)
 		mesh_lod_apply_cut_hysteresis(request,
 		    activePayload->progressiveMesh,
 		    activePayload->activeCut,
@@ -2560,20 +2683,47 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    desiredCut = std::max(minimumCut, desiredCut);
 	    const SbBool sceneQualityLimited =
 		desiredCut < request.requestedCut ? TRUE : FALSE;
-	    const int availableCut = std::max(activePayload->activeCut,
-		activePayload->residentCut);
+	    /* The progressive mesh is shared by every occurrence of an asset and
+	     * grows in place.  CadPayload::residentCut records the prefix observed
+	     * when that particular occurrence last consumed a result; it is not the
+	     * current residency authority.  Comparing demand to that snapshot makes
+	     * a sibling occurrence report missing residency after another sibling
+	     * has already extended the shared asset.  No provider task is then
+	     * possible (the asset can draw the cut), so the controller repeats a
+	     * zero-work complete-scene pass forever.
+	     *
+	     * Use the shared asset's live population frontier for allocation and
+	     * canDrawCut() for the exact residency witness.  The later retarget path
+	     * still validates the immutable prepared renderer channel before exposing
+	     * a richer cut, so this does not publish unprepared geometry. */
+	    const int residentCut = request.requiredChunks.empty() ?
+		activePayload->progressiveMesh->residentCut() :
+		activePayload->progressiveMesh->residentCutForChunks(
+		    request.requiredChunks);
+	    /* The prepared occurrence may remain richer than the common frontier
+	     * of a newly expanded visible-page set.  That is a temporary residency
+	     * gap, not permission to demote the existing presentation. */
+	    const int availableCut = residentCut;
 	    /* desiredCut is the scene-budgeted presentation target.  Residency is
 	     * driven by the independent physical pixel demand: a stamped allocation
 	     * may deliberately clamp desiredCut to the current draw cut without
 	     * making the missing immutable suffix unnecessary. */
-	    if (request.requestedCut > availableCut)
+	    if (request.requestedCut > activePayload->activeCut &&
+		!mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
+		    request.requiredChunks, request.requestedCut))
 		submitAction->pendingResidentRefinementCount++;
 	    const int targetCut = std::max(minimumCut,
 		std::min(desiredCut, availableCut));
-	    const BObolLodCounts minimumCounts =
-		    bobol_lod_progressive_counts(
-			activePayload->progressiveMesh, minimumCut,
-			activePayload->hasNormals);
+	    const int presentationContinuityCut = std::min(
+		activePayload->activeCut, desiredCut);
+	    const SbBool pageSetTransitionPending =
+		presentationContinuityCut >= minimumCut &&
+		!mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
+		    request.requiredChunks, presentationContinuityCut) ?
+		    TRUE : FALSE;
+	    const BObolLodCounts minimumCounts = mesh_lod_chunk_counts(
+		activePayload->progressiveMesh, request.requiredChunks,
+		minimumCut, activePayload->hasNormals, false);
 	    const size_t minimumCost = bobol_lod_render_cost_units(
 		    minimumCounts, request.drawMode, 1);
 	    const size_t remainingUpgrade =
@@ -2584,7 +2734,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    int admittedCut = minimumCut;
 	    BObolLodCounts admittedCounts = minimumCounts;
 	    size_t admittedCost = minimumCost;
-	    if (!submitAction->allowCutDowngrade) {
+	    if (pageSetTransitionPending ||
+		!submitAction->allowCutDowngrade) {
 		    admittedCut = activePayload->activeCut;
 		    admittedCounts = activePayload->counts;
 		    admittedCost = bobol_lod_render_cost_units(
@@ -2598,24 +2749,29 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		     * allocation already proved fits.  Resolve only residency here;
 		     * the allocation transaction has already spent the budget. */
 		    for (int cut = targetCut; cut >= minimumCut; --cut) {
-			if (!activePayload->progressiveMesh->canDrawCut(cut))
+			if (!mesh_lod_can_draw_chunks(
+				activePayload->progressiveMesh,
+				request.requiredChunks, cut))
 			    continue;
 			admittedCut = cut;
-			admittedCounts = bobol_lod_progressive_counts(
-			    activePayload->progressiveMesh, cut,
-			    activePayload->hasNormals);
+			admittedCounts = mesh_lod_chunk_counts(
+			    activePayload->progressiveMesh,
+			    request.requiredChunks, cut,
+			    activePayload->hasNormals, false);
 			admittedCost = bobol_lod_render_cost_units(
 			    admittedCounts, request.drawMode, 1);
 			break;
 		    }
 		} else {
 		    for (int cut = targetCut; cut >= minimumCut; --cut) {
-			if (!activePayload->progressiveMesh->canDrawCut(cut))
+			if (!mesh_lod_can_draw_chunks(
+				activePayload->progressiveMesh,
+				request.requiredChunks, cut))
 			    continue;
-			const BObolLodCounts counts =
-			    bobol_lod_progressive_counts(
-				activePayload->progressiveMesh, cut,
-				activePayload->hasNormals);
+			const BObolLodCounts counts = mesh_lod_chunk_counts(
+			    activePayload->progressiveMesh,
+			    request.requiredChunks, cut,
+			    activePayload->hasNormals, false);
 			const size_t cost = bobol_lod_render_cost_units(
 			    counts, request.drawMode, 1);
 			const size_t extra = cost > minimumCost ?
@@ -2706,7 +2862,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			 * prefetch; whether a large mesh refined during a gesture then
 			 * depended on a quality-probe timing race. */
 			if (!(submitAction->allowResidentPrefetch &&
-			      request.requestedCut > availableCut)) {
+			      !mesh_lod_can_draw_chunks(
+				  activePayload->progressiveMesh,
+				  request.requiredChunks,
+				  request.requestedCut))) {
 			    submitAction->skippedMeshCount++;
 			    continue;
 			}
@@ -2845,7 +3004,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    presentationDemand.requestedCut,
 		    allocatedPresentationCut);
 	    if (!submitAction->useForcedCut && activeAssetMatches &&
-		activePayload->activeCut == request.requestedCut) {
+		activePayload->activeCut == request.requestedCut &&
+		mesh_lod_cad_payload_has_presentable_spatial_demand(
+		    activePayload, request)) {
 		mesh_lod_retarget_cad_demand_if_changed(
 		    submitAction->viewState, activePayload, request);
 		submitAction->skippedMeshCount++;
@@ -2855,10 +3016,12 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		allocatedPresentationCut >= 0 &&
 		activePayload->activeCut >=
 		    presentationDemand.requestedCut &&
+		mesh_lod_cad_payload_has_presentable_spatial_demand(
+		    activePayload, request) &&
 		(!submitAction->allowResidentPrefetch ||
 		 !activePayload->progressiveMesh ||
-		 activePayload->progressiveMesh->canDrawCut(
-		     request.requestedCut))) {
+		 mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
+		     request.requiredChunks, request.requestedCut))) {
 		/* View demand remains recorded at requestedCut, but this occurrence
 		 * has reached its exact scene-budget allocation.  Do not let a later
 		 * ordinary presentation pass spend another occurrence's share.  Quiet
@@ -2889,7 +3052,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    }
 	    if (!submitAction->useForcedCut &&
 		!submitAction->allowCutDowngrade && activeAssetMatches &&
-		activePayload->activeCut > request.requestedCut) {
+		activePayload->activeCut > request.requestedCut &&
+		mesh_lod_cad_payload_has_presentable_spatial_demand(
+		    activePayload, request)) {
 		mesh_lod_retarget_cad_demand_if_changed(
 		    submitAction->viewState, activePayload, request);
 		submitAction->skippedMeshCount++;
@@ -2898,7 +3063,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    if (!submitAction->useForcedCut &&
 		!submitAction->allowRetainedRefinement &&
 		activeAssetMatches &&
-		request.requestedCut > activePayload->activeCut) {
+		request.requestedCut > activePayload->activeCut &&
+		mesh_lod_cad_payload_has_presentable_spatial_demand(
+		    activePayload, request)) {
 		/*
 		 * Pose-only presentation retains the existing draw cut, but the
 		 * current projected demand is still the input to the subsequent
@@ -2963,13 +3130,14 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			submitAction->retainedSceneUpgradeCostBudget != SIZE_MAX)
 			reusedCut = minimumCut;
 		    while (reusedCut >= minimumCut &&
-			!reusable->progressiveMesh->canDrawCut(reusedCut))
+			!mesh_lod_can_draw_chunks(reusable->progressiveMesh,
+			    request.requiredChunks, reusedCut))
 			reusedCut--;
 		    if (reusedCut >= minimumCut) {
-			const BObolLodCounts reusedCounts =
-			    bobol_lod_progressive_counts(
-				reusable->progressiveMesh, reusedCut,
-				reusable->hasNormals);
+			const BObolLodCounts reusedCounts = mesh_lod_chunk_counts(
+			    reusable->progressiveMesh,
+			    request.requiredChunks, reusedCut,
+			    reusable->hasNormals, false);
 			const size_t reusedFaces = reusedCounts.faceCount;
 			const size_t reusedCost = bobol_lod_render_cost_units(
 			    reusedCounts, request.drawMode, 1);
@@ -3076,19 +3244,37 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		!submitAction->useForcedCut && activePayload &&
 		activePayload->progressiveMesh &&
 		presentationDemand.requestedCut > activePayload->activeCut &&
-		activePayload->progressiveMesh->canDrawCut(
+		mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
+		    presentationDemand.requiredChunks,
 		    presentationDemand.requestedCut);
 	    int retargetCut =
 		mesh_lod_available_cad_retarget_cut(activePayload,
 		    presentationDemand,
 		    TRUE);
+	    if (getenv("BOBOL_LOD_TRACE_BUDGET") && activePayload)
+		bu_log("BObol retained retarget candidate active=%d requested=%d "
+		    "presentation=%d available=%d can_draw=%d asset_match=%d "
+		    "reset=%d\n", activePayload->activeCut,
+		    request.requestedCut, presentationDemand.requestedCut,
+		    retargetCut,
+		    activePayload->progressiveMesh ?
+			mesh_lod_can_draw_chunks(
+			    activePayload->progressiveMesh,
+			    presentationDemand.requiredChunks,
+			    presentationDemand.requestedCut) : 0,
+		    activeAssetMatches ? 1 : 0, submitAction->reset);
 	    if (submitAction->reset == 0 && activePayload &&
 		activeAssetMatches &&
 		retargetCut > activePayload->activeCut) {
 		retargetCut = submitAction->reserveRefinementCut(
 		    activePayload->progressiveMesh,
+		    presentationDemand.requiredChunks,
 		    activePayload->activeCut, retargetCut,
 		    request.drawMode, activePayload->hasNormals);
+		if (getenv("BOBOL_LOD_TRACE_BUDGET"))
+		    bu_log("BObol retained retarget reserved=%d budget=%zu/%zu\n",
+			retargetCut, submitAction->refinementCostBudgetUsed,
+			submitAction->refinementCostBudget);
 		if (retargetCut <= activePayload->activeCut) {
 		    mesh_lod_retarget_cad_demand_if_changed(
 			submitAction->viewState, activePayload, request);
@@ -3099,8 +3285,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		     * suffix when the physical pixel target is not drawable yet. */
 		    if (!submitAction->allowResidentPrefetch ||
 			!activePayload->progressiveMesh ||
-			activePayload->progressiveMesh->canDrawCut(
-			    request.requestedCut)) {
+			mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
+			    request.requiredChunks, request.requestedCut)) {
 			submitAction->skippedMeshCount++;
 			continue;
 		    }
@@ -3156,6 +3342,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    providerPresentationCut =
 			submitAction->reserveRefinementCut(
 			    activePayload->progressiveMesh,
+			    presentationDemand.requiredChunks,
 			    activePayload->activeCut, preferredCut,
 			    request.drawMode, activePayload->hasNormals);
 		}
@@ -3165,13 +3352,14 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->pendingRetainedRefinementCount++;
 		    providerPresentationCut = activePayload->activeCut;
 		}
-		const SbBool requestedResident =
-		    activePayload->progressiveMesh->canDrawCut(
-			request.requestedCut);
+		const SbBool requestedResident = mesh_lod_can_draw_chunks(
+		    activePayload->progressiveMesh, request.requiredChunks,
+		    request.requestedCut);
 		if (submitAction->allowResidentPrefetch && !requestedResident)
 		    providerDeliveryCut =
 			mesh_lod_bounded_resident_prefetch_cut(
 			    activePayload->progressiveMesh,
+			    request.requiredChunks,
 			    request.requestedCut,
 			    submitAction->transitionLimitedRefinement);
 		else if (providerPresentationCut > activePayload->activeCut)
@@ -3274,8 +3462,6 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		providerPresentationCut >= 0 && providerDeliveryCut >
 		    providerPresentationCut ? TRUE : FALSE;
 	    provider->presentationCutLimit = providerPresentationCut;
-	    provider->prefetchCachedTargetOnFirstPublication =
-		!activePayload ? TRUE : FALSE;
 	    /*
 	     * The scene allocator has already charged the complete marginal
 	     * population of this exact cut.  Do not apply a second per-asset
@@ -3449,7 +3635,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     if (!submitAction->useForcedCut &&
 	!submitAction->allowCutDowngrade && activePayload &&
 	activePayload->activeCut > request.requestedCut &&
-	mesh_lod_cad_payload_has_same_source(activePayload, request)) {
+	mesh_lod_cad_payload_has_same_source(activePayload, request) &&
+	mesh_lod_cad_payload_has_presentable_spatial_demand(
+	    activePayload, request)) {
 	mesh_lod_retarget_cad_demand_if_changed(
 	    submitAction->viewState, activePayload, request);
 	submitAction->skippedMeshCount++;
@@ -3459,7 +3647,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     if (!submitAction->useForcedCut &&
 	!submitAction->allowRetainedRefinement && activePayload &&
 	request.requestedCut > activePayload->activeCut &&
-	mesh_lod_geometry_key_matches(activePayload->cacheKey, request)) {
+	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
+	mesh_lod_cad_payload_has_presentable_spatial_demand(
+	    activePayload, request)) {
 	mesh_lod_retarget_cad_demand_if_changed(
 	    submitAction->viewState, activePayload, request);
 	submitAction->skippedMeshCount++;
@@ -3470,7 +3660,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	!submitAction->useForcedCut && activePayload &&
 	activePayload->progressiveMesh &&
 	request.requestedCut > activePayload->activeCut &&
-	activePayload->progressiveMesh->canDrawCut(request.requestedCut);
+	mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
+	    request.requiredChunks, request.requestedCut);
     int retargetCut =
 	mesh_lod_available_cad_retarget_cut(activePayload, request,
 	    retainedTargetDrawable);
@@ -3478,7 +3669,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
 	retargetCut > activePayload->activeCut) {
 	retargetCut = submitAction->reserveRefinementCut(
-	    activePayload->progressiveMesh, activePayload->activeCut,
+	    activePayload->progressiveMesh, request.requiredChunks,
+	    activePayload->activeCut,
 	    retargetCut, request.drawMode, activePayload->hasNormals);
 	if (retargetCut <= activePayload->activeCut) {
 	    mesh_lod_retarget_cad_demand_if_changed(
@@ -3486,8 +3678,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    submitAction->pendingRetainedRefinementCount++;
 	    if (!submitAction->allowResidentPrefetch ||
 		!activePayload->progressiveMesh ||
-		activePayload->progressiveMesh->canDrawCut(
-		    request.requestedCut)) {
+		mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
+		    request.requiredChunks, request.requestedCut)) {
 		submitAction->skippedMeshCount++;
 		source->doAction(action);
 		return;
@@ -3537,15 +3729,16 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    activePayload->progressiveMesh,
 	    activePayload->activeCut, request.requestedCut);
 	providerPresentationCut = submitAction->reserveRefinementCut(
-	    activePayload->progressiveMesh, activePayload->activeCut,
+	    activePayload->progressiveMesh, request.requiredChunks,
+	    activePayload->activeCut,
 	    preferredCut, request.drawMode, activePayload->hasNormals);
 	if (providerPresentationCut <= activePayload->activeCut) {
 	    mesh_lod_retarget_cad_demand_if_changed(
 		submitAction->viewState, activePayload, request);
 	    submitAction->pendingRetainedRefinementCount++;
 	    if (!submitAction->allowResidentPrefetch ||
-		activePayload->progressiveMesh->canDrawCut(
-		    request.requestedCut)) {
+		mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
+		    request.requiredChunks, request.requestedCut)) {
 		submitAction->skippedMeshCount++;
 		source->doAction(action);
 		return;
@@ -3555,6 +3748,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    providerDeliveryCut = submitAction->allowResidentPrefetch ?
 		mesh_lod_bounded_resident_prefetch_cut(
 		    activePayload->progressiveMesh,
+		    request.requiredChunks,
 		    request.requestedCut,
 		    submitAction->transitionLimitedRefinement) :
 		providerPresentationCut;
@@ -3598,8 +3792,6 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	providerPresentationCut >= 0 && providerDeliveryCut >
 	    providerPresentationCut ? TRUE : FALSE;
     provider->presentationCutLimit = providerPresentationCut;
-    provider->prefetchCachedTargetOnFirstPublication =
-	!activePayload ? TRUE : FALSE;
     if (provider->useDeliveryCutLimit)
 	provider->progressiveDelivery = FALSE;
     if (initialFaceAllowance) {
@@ -3732,7 +3924,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	!submitAction->useForcedCut && viewPayload &&
 	viewPayload->progressiveMesh &&
 	request.requestedCut > viewPayload->activeCut &&
-	viewPayload->progressiveMesh->canDrawCut(request.requestedCut);
+	mesh_lod_can_draw_chunks(viewPayload->progressiveMesh,
+	    request.requiredChunks, request.requestedCut);
     int retargetCut =
 	mesh_lod_available_mesh_retarget_cut(viewPayload, request,
 	    retainedTargetDrawable);
@@ -3740,7 +3933,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&
 	retargetCut > viewPayload->activeCut) {
 	retargetCut = submitAction->reserveRefinementCut(
-	    viewPayload->progressiveMesh, viewPayload->activeCut,
+	    viewPayload->progressiveMesh, request.requiredChunks,
+	    viewPayload->activeCut,
 	    retargetCut, request.drawMode, viewPayload->hasNormals);
 	if (retargetCut <= viewPayload->activeCut) {
 	    (void)submitAction->viewState->retargetMeshPayload(viewPayload,
@@ -3749,7 +3943,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    submitAction->pendingRetainedRefinementCount++;
 	    if (!submitAction->allowResidentPrefetch ||
 		!viewPayload->progressiveMesh ||
-		viewPayload->progressiveMesh->canDrawCut(request.requestedCut)) {
+		mesh_lod_can_draw_chunks(viewPayload->progressiveMesh,
+		    request.requiredChunks, request.requestedCut)) {
 		submitAction->skippedMeshCount++;
 		return;
 	    }
@@ -3800,7 +3995,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    viewPayload->progressiveMesh,
 	    viewPayload->activeCut, request.requestedCut);
 	providerPresentationCut = submitAction->reserveRefinementCut(
-	    viewPayload->progressiveMesh, viewPayload->activeCut,
+	    viewPayload->progressiveMesh, request.requiredChunks,
+	    viewPayload->activeCut,
 	    preferredCut, request.drawMode, viewPayload->hasNormals);
 	if (providerPresentationCut <= viewPayload->activeCut) {
 	    (void)submitAction->viewState->retargetMeshPayload(viewPayload,
@@ -3808,8 +4004,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 		request.viewRevision.value(), request.policyRevision.value());
 	    submitAction->pendingRetainedRefinementCount++;
 	    if (!submitAction->allowResidentPrefetch ||
-		viewPayload->progressiveMesh->canDrawCut(
-		    request.requestedCut)) {
+		mesh_lod_can_draw_chunks(viewPayload->progressiveMesh,
+		    request.requiredChunks, request.requestedCut)) {
 		submitAction->skippedMeshCount++;
 		return;
 	    }
@@ -3818,6 +4014,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    providerDeliveryCut = submitAction->allowResidentPrefetch ?
 		mesh_lod_bounded_resident_prefetch_cut(
 		    viewPayload->progressiveMesh,
+		    request.requiredChunks,
 		    request.requestedCut,
 		    submitAction->transitionLimitedRefinement) :
 		providerPresentationCut;
@@ -3859,8 +4056,6 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	providerPresentationCut >= 0 && providerDeliveryCut >
 	    providerPresentationCut ? TRUE : FALSE;
     provider->presentationCutLimit = providerPresentationCut;
-    provider->prefetchCachedTargetOnFirstPublication =
-	!viewPayload ? TRUE : FALSE;
     if (provider->useDeliveryCutLimit)
 	provider->progressiveDelivery = FALSE;
     if (initialFaceAllowance) {

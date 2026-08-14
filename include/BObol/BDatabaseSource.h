@@ -537,6 +537,11 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
 
     void push(const BObolCompactOccurrence &occurrence);
     void push(BObolCompactOccurrence &&occurrence);
+    /* Publish a producer-local batch with one queue lock and one amortized
+     * capacity change.  Ordering within the batch is preserved; ordering
+     * between concurrent producers is intentionally unspecified, just as it
+     * is for repeated push() calls. */
+    void pushBatch(std::vector<BObolCompactOccurrence> &&occurrences);
     /* Priority occurrences describe the current whole draw target rather than
      * one leaf.  The newest undrained occurrence supersedes its predecessor;
      * drain it before an already queued leaf backlog so a completed aggregate

@@ -14408,6 +14408,20 @@ ged_obol_drain_streamed_realizations(
 			item->streamMergeMicrosecondsPerItem;
 		    const size_t timedCap = std::max<size_t>(
 			1, static_cast<size_t>(estimatedItems));
+		    /* Once this pump has made useful progress, do not spend the
+		     * tail of its allowance on a geometric series of tiny atomic
+		     * scene mutations.  The former 65,41,...,1 tail produced more
+		     * than a thousand sub-16-record mutations in one 150k draw.
+		     * Their fixed journal/notification cost bought almost no visual
+		     * coverage and made the per-item estimate increasingly noisy.
+		     * Yield to the host and begin the next slice at a useful quantum.
+		     * The first batch of a slice still admits at least one record, so
+		     * an unusually expensive occurrence cannot prevent progress. */
+		    if (drained_count > 0 && timedCap < 16) {
+			if (has_more)
+			    *has_more = 1;
+			return merged;
+		    }
 		    batch_cap = std::min(batch_cap, timedCap);
 		}
 		std::vector<BObolCompactOccurrence> batch;
@@ -14434,10 +14448,19 @@ ged_obol_drain_streamed_realizations(
 		    const double observed =
 			static_cast<double>(mergeElapsed) /
 			static_cast<double>(batch.size());
-		    if (item->streamMergeMicrosecondsPerItem <= 0.0 ||
-			observed > item->streamMergeMicrosecondsPerItem) {
-			/* React to worsening costs in one sample. */
+		    if (item->streamMergeMicrosecondsPerItem <= 0.0) {
 			item->streamMergeMicrosecondsPerItem = observed;
+		    } else if (observed >
+			item->streamMergeMicrosecondsPerItem) {
+			/* Hash-table growth and allocator consolidation are atomic
+			 * outliers, not a new per-record slope.  Installing one such
+			 * sample verbatim can reduce hundreds of subsequent batches
+			 * to 16 records.  Bound upward adaptation so a sustained cost
+			 * increase is learned within a few samples while an isolated
+			 * rehash does not poison the rest of the stream. */
+			item->streamMergeMicrosecondsPerItem = std::min(
+			    observed,
+			    2.0 * item->streamMergeMicrosecondsPerItem);
 		    } else {
 			/* Permit gradual recovery when later batches are cheaper. */
 			item->streamMergeMicrosecondsPerItem =

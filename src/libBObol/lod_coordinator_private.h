@@ -2099,24 +2099,34 @@ public:
      * One pixel is the fast convergence contract, not necessarily the best
      * quiet terminal image.  A small scene can otherwise stop with visibly
      * faceted silhouettes while using a tiny fraction of both its measured
-     * draw allowance and resident-memory allowance.  Admit 0.75- and
-     * 0.5-pixel quality tiers only from an exact, completed quiet-frame
+     * draw allowance and resident-memory allowance.  Admit 0.75-, 0.5-, and
+     * 0.25-pixel quality tiers only from an exact, completed quiet-frame
      * witness.  Surface work scales approximately with inverse squared pixel
      * error, so a 1.0 -> 0.75 step requires about 1.78 times the work while a
-     * 1.0 -> 0.5 step requires about four times the work.  This lets a software
-     * renderer spend useful twofold headroom without attempting the much more
-     * expensive half-pixel population.  A first-use frame may include buffer
-     * preparation or upload; if that more expensive frame still proves the
-     * required margin it is conservative evidence, not a reason for cold and
-     * warm caches to converge differently.  The test is deliberately
-     * expressed in total scene-cost currency rather than an object count or a
-     * model-specific cut ordinal.
+     * 1.0 -> 0.5 step requires about four times the work.
+     *
+     * The quarter-pixel tier addresses a different failure mode than ordinary
+     * faceting.  A PoP vertex displacement can be subpixel while a long,
+     * skinny triangle collapses across its short axis, producing a conspicuous
+     * one-pixel slit along a silhouette.  It is considered only after a
+     * completed half-pixel frame.  That separate pass re-proves both measured
+     * rendering capacity and the caller's one-quarter resident-memory
+     * headroom, so its estimated fourfold growth fits the same bounded scene
+     * and memory allowances.  We deliberately do not jump directly from one
+     * pixel to one quarter pixel: the intermediate resident population is the
+     * capacity witness.
+     *
+     * A first-use frame may include buffer preparation or upload; if that more
+     * expensive frame still proves the required margin it is conservative
+     * evidence, not a reason for cold and warm caches to converge differently.
+     * The test is deliberately expressed in total scene-cost currency rather
+     * than an object count or a model-specific cut ordinal.
      *
      * The caller owns the memory-headroom proof because resident limits and
      * reservations belong to the service.  Returning a scalar keeps this
      * policy allocation-free and directly testable.  No further tiers are
-     * generated: 0.5 pixels is a subpixel terminal target, not a route to
-     * unconditionally loading full geometry.
+     * generated: 0.25 pixels is a raster-stable terminal target, not a route
+     * to unconditionally loading full geometry.
      */
     static float stablePixelError(float currentPixelError,
 	size_t activeCost, size_t sceneBudget,
@@ -2124,7 +2134,7 @@ public:
 	bool exactCompletedFrame, bool residentMemoryHeadroom)
     {
 	if (!std::isfinite(currentPixelError) ||
-	    currentPixelError <= 0.5001f || currentPixelError > 1.01f ||
+	    currentPixelError <= 0.2501f || currentPixelError > 1.01f ||
 	    !activeCost || !sceneBudget ||
 	    !renderNanoseconds || !std::isfinite(targetFps) ||
 	    targetFps <= 0.0f || !exactCompletedFrame ||
@@ -2149,6 +2159,12 @@ public:
 	    return timeHeadroom && costHeadroom;
 	};
 
+	/* Require a separate completed half-pixel witness before attempting the
+	 * fourfold quarter-pixel population.  Besides making the draw estimate
+	 * current, this lets the caller re-evaluate resident-memory headroom after
+	 * the half-pixel suffix has actually arrived. */
+	if (currentPixelError <= 0.5001f)
+	    return affordable(0.25f) ? 0.25f : currentPixelError;
 	if (affordable(0.5f))
 	    return 0.5f;
 	if (affordable(0.75f))
@@ -2616,9 +2632,15 @@ public:
 
     void requestAfter(int64_t nowMicroseconds, int64_t delayMicroseconds)
     {
+	/* This is an admission edge, not a debounce timer.  Camera settling,
+	 * coverage, realization, and submission are independent gates in
+	 * decide().  Sliding the deadline on every equivalent retained-demand
+	 * pass can postpone stable reclamation forever when an idempotent
+	 * retarget continues to report an updated cut. */
+	if (!this->pendingValue)
+	    this->deadlineValue = deadlineAfter(
+		nowMicroseconds, delayMicroseconds);
 	this->pendingValue = true;
-	this->deadlineValue = deadlineAfter(
-	    nowMicroseconds, delayMicroseconds);
     }
 
     void requestImmediate(int64_t nowMicroseconds)

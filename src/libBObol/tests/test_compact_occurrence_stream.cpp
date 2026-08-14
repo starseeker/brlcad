@@ -10,6 +10,7 @@
 #include "BObol/BDatabaseSource.h"
 #include "bu/app.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <thread>
@@ -35,9 +36,13 @@ test_priority_and_state(void)
 
     stream.push(occurrence(10));
     stream.push(occurrence(11));
+    std::vector<BObolCompactOccurrence> pushedBatch;
+    pushedBatch.push_back(occurrence(12));
+    pushedBatch.push_back(occurrence(13));
+    stream.pushBatch(std::move(pushedBatch));
     stream.pushPriority(occurrence(1));
     stream.pushPriority(occurrence(2));
-    stream.push(occurrence(12));
+    stream.push(occurrence(14));
     stream.setCoverageBoundsComplete(true);
 
     SbBox3f publishedBounds;
@@ -48,7 +53,7 @@ test_priority_and_state(void)
 	!stream.getCoverageBounds(publishedBounds) ||
 	publishedBounds != exactBounds ||
 	stream.hasCoverageBoundsDrained() ||
-	stream.isCancelled() || stream.size() != 4) {
+	stream.isCancelled() || stream.size() != 6) {
 	std::fprintf(stderr, "FAIL: stream state\n");
 	return 1;
     }
@@ -61,14 +66,16 @@ test_priority_and_state(void)
 	!stream.hasCoverageBoundsDrained() ||
 	!stream.getCoverageBounds(publishedBounds) ||
 	publishedBounds != exactBounds ||
-	stream.size() != 1) {
+	stream.size() != 3) {
 	std::fprintf(stderr, "FAIL: priority drain order\n");
 	return 1;
     }
 
     std::vector<BObolCompactOccurrence> second;
-    if (stream.drain(second, 0) != 1 || second.size() != 1 ||
+    if (stream.drain(second, 0) != 3 || second.size() != 3 ||
 	second[0].occurrenceIndex != 12 ||
+	second[1].occurrenceIndex != 13 ||
+	second[2].occurrenceIndex != 14 ||
 	stream.size() != 0) {
 	std::fprintf(stderr, "FAIL: pending drain order\n");
 	return 1;
@@ -96,10 +103,19 @@ test_concurrent_producers(void)
     producers.reserve(producerCount);
     for (size_t producer = 0; producer < producerCount; producer++) {
 	producers.emplace_back([producer, itemsPerProducer, &stream,
-				   &producersDone]() {
+			   &producersDone]() {
 	    const size_t base = producer * itemsPerProducer;
-	    for (size_t i = 0; i < itemsPerProducer; i++)
-		stream.push(occurrence(base + i));
+	    const size_t batchSize = 31;
+	    for (size_t first = 0; first < itemsPerProducer;
+		 first += batchSize) {
+		std::vector<BObolCompactOccurrence> batch;
+		const size_t count = std::min(batchSize,
+		    itemsPerProducer - first);
+		batch.reserve(count);
+		for (size_t i = 0; i < count; ++i)
+		    batch.push_back(occurrence(base + first + i));
+		stream.pushBatch(std::move(batch));
+	    }
 	    producersDone.fetch_add(1, std::memory_order_release);
 	});
     }

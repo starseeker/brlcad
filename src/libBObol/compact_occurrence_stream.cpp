@@ -23,8 +23,13 @@ struct BObolCompactOccurrenceStream::Impl {
     std::mutex mutex;
     std::vector<BObolCompactOccurrence> priority;
     size_t priorityOffset = 0;
-    std::vector<BObolCompactOccurrence> pending;
-    size_t pendingOffset = 0;
+    /* Producer-local vectors become queue nodes without moving their rich
+     * occurrence values.  The former monolithic vector repeatedly relocated
+     * every live record as a 150k-leaf cold stream grew concurrently with
+     * GUI drains. */
+    std::deque<std::vector<BObolCompactOccurrence>> pendingBatches;
+    size_t pendingBatchOffset = 0;
+    size_t pendingCount = 0;
     std::deque<std::shared_ptr<const BObolStagedSourceMesh>> stagedSources;
     size_t stagedSourceBytes = 0;
     /* A persisted leaf manifest already supplied every leaf AABB and immutable
@@ -118,14 +123,34 @@ BObolCompactOccurrenceStream::push(
     const BObolCompactOccurrence &occurrence)
 {
     std::lock_guard<std::mutex> guard(this->d->mutex);
-    this->d->pending.push_back(occurrence);
+    if (this->d->pendingBatches.empty() ||
+	this->d->pendingBatches.back().size() >= 64)
+	this->d->pendingBatches.emplace_back();
+    this->d->pendingBatches.back().push_back(occurrence);
+    this->d->pendingCount++;
 }
 
 void
 BObolCompactOccurrenceStream::push(BObolCompactOccurrence &&occurrence)
 {
     std::lock_guard<std::mutex> guard(this->d->mutex);
-    this->d->pending.push_back(std::move(occurrence));
+    if (this->d->pendingBatches.empty() ||
+	this->d->pendingBatches.back().size() >= 64)
+	this->d->pendingBatches.emplace_back();
+    this->d->pendingBatches.back().push_back(std::move(occurrence));
+    this->d->pendingCount++;
+}
+
+void
+BObolCompactOccurrenceStream::pushBatch(
+    std::vector<BObolCompactOccurrence> &&occurrences)
+{
+    if (occurrences.empty())
+	return;
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    const size_t count = occurrences.size();
+    this->d->pendingCount += count;
+    this->d->pendingBatches.push_back(std::move(occurrences));
 }
 
 void
@@ -199,8 +224,7 @@ BObolCompactOccurrenceStream::drain(
     std::lock_guard<std::mutex> guard(this->d->mutex);
     const size_t priorityAvailable =
 	this->d->priority.size() - this->d->priorityOffset;
-    const size_t pendingAvailable =
-	this->d->pending.size() - this->d->pendingOffset;
+    const size_t pendingAvailable = this->d->pendingCount;
     const size_t available = priorityAvailable + pendingAvailable;
     const size_t count =
 	(cap == 0 || cap >= available) ? available : cap;
@@ -212,16 +236,29 @@ BObolCompactOccurrenceStream::drain(
 	out.push_back(std::move(
 	    this->d->priority[this->d->priorityOffset + i]));
     this->d->priorityOffset += priorityCount;
-    const size_t pendingCount = count - priorityCount;
-    for (size_t i = 0; i < pendingCount; i++)
-	out.push_back(std::move(
-	    this->d->pending[this->d->pendingOffset + i]));
-    this->d->pendingOffset += pendingCount;
+    size_t pendingToDrain = count - priorityCount;
+    while (pendingToDrain && !this->d->pendingBatches.empty()) {
+	std::vector<BObolCompactOccurrence> &batch =
+	    this->d->pendingBatches.front();
+	const size_t batchAvailable = batch.size() -
+	    this->d->pendingBatchOffset;
+	const size_t batchCount = std::min(pendingToDrain, batchAvailable);
+	for (size_t i = 0; i < batchCount; ++i)
+	    out.push_back(std::move(
+		batch[this->d->pendingBatchOffset + i]));
+	this->d->pendingBatchOffset += batchCount;
+	pendingToDrain -= batchCount;
+	this->d->pendingCount = batchCount > this->d->pendingCount ?
+	    0 : this->d->pendingCount - batchCount;
+	if (this->d->pendingBatchOffset == batch.size()) {
+	    this->d->pendingBatches.pop_front();
+	    this->d->pendingBatchOffset = 0;
+	}
+    }
 
-    /* Erasing the front of a vector on every 64-occurrence GUI pump moved
-     * nearly the entire remaining 50k stream every frame.  Retain a read
-     * cursor and compact only occasionally, making producer/consumer handoff
-     * amortized linear while preserving the contiguous producer buffer. */
+    /* Priority contains at most the newest aggregate extent in normal use.
+     * Keep its cursor logic independent of the queued leaf batches so replacing
+     * an overview never disturbs producer-owned occurrence storage. */
     if (this->d->priorityOffset == this->d->priority.size()) {
 	this->d->priority.clear();
 	this->d->priorityOffset = 0;
@@ -230,15 +267,6 @@ BObolCompactOccurrenceStream::drain(
 	this->d->priority.erase(this->d->priority.begin(),
 	    this->d->priority.begin() + this->d->priorityOffset);
 	this->d->priorityOffset = 0;
-    }
-    if (this->d->pendingOffset == this->d->pending.size()) {
-	this->d->pending.clear();
-	this->d->pendingOffset = 0;
-    } else if (this->d->pendingOffset >= 4096 &&
-	this->d->pendingOffset >= this->d->pending.size() / 2) {
-	this->d->pending.erase(this->d->pending.begin(),
-	    this->d->pending.begin() + this->d->pendingOffset);
-	this->d->pendingOffset = 0;
     }
     return count;
 }
@@ -249,29 +277,18 @@ BObolCompactOccurrenceStream::size(void)
     std::lock_guard<std::mutex> guard(this->d->mutex);
     return
 	(this->d->priority.size() - this->d->priorityOffset) +
-	(this->d->pending.size() - this->d->pendingOffset);
+	this->d->pendingCount;
 }
 
 void
 BObolCompactOccurrenceStream::setExpectedCount(size_t count)
 {
-    /*
-     * Warm manifests know their complete population before publishing the
-     * first leaf.  Reserve the producer buffer once so streaming 100k+
-     * immutable records does not repeatedly copy every previously queued
-     * value while the GUI drains concurrently.
-     */
-    {
-	std::lock_guard<std::mutex> guard(this->d->mutex);
-	const size_t alreadyConsumed =
-	    this->d->pendingOffset <= this->d->pending.size() ?
-	    this->d->pendingOffset : 0;
-	const size_t desired =
-	    count > SIZE_MAX - alreadyConsumed ?
-	    SIZE_MAX : count + alreadyConsumed;
-	if (desired > this->d->pending.capacity())
-	    this->d->pending.reserve(desired);
-    }
+    /* Expected population is progress metadata, not a queue-capacity demand.
+     * A cold producer learns this value only after its hierarchy walk, while
+     * the owner is already draining completed leaves.  Reserving the total at
+     * that point copies the entire live backlog and allocates space for tens
+     * of thousands of records which will never coexist.  pushBatch() queues
+     * only the actual producer/consumer backlog. */
     this->d->expectedCount.store(count, std::memory_order_release);
 }
 

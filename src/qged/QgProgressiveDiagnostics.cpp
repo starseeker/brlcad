@@ -49,6 +49,7 @@
 #include "bu/vls.h"
 #include "ged/scene.h"
 #include "ged/selection.h"
+#include "ged/view_feature.h"
 #include "qtcad/QgCanvasBase.h"
 
 #include "QgEdApp.h"
@@ -136,6 +137,19 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     if (QgView *view = qged_test_event_view(app, event)) {
 	sample.insert(QStringLiteral("view_width"), view->width());
 	sample.insert(QStringLiteral("view_height"), view->height());
+	struct ged_view_context *sampleViewContext =
+	    ged_view_context_from_bv(view->viewContext());
+	if (sampleViewContext) {
+	    sample.insert(QStringLiteral("lod_progress_track_present"),
+		ged_view_feature_exists(sampleViewContext,
+		    "_faceplate/lod_progress_track") != 0);
+	    sample.insert(QStringLiteral("lod_progress_fill_present"),
+		ged_view_feature_exists(sampleViewContext,
+		    "_faceplate/lod_progress_fill") != 0);
+	    sample.insert(QStringLiteral("lod_progress_label_present"),
+		ged_view_feature_exists(sampleViewContext,
+		    "_faceplate/lod_progress_label") != 0);
+	}
 	if (QgCanvasBase *canvas = view->canvasBase()) {
 	    if (QWidget *widget = canvas->canvasWidget()) {
 		sample.insert(QStringLiteral("canvas_width"), widget->width());

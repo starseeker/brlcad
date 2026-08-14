@@ -555,6 +555,29 @@ view_lod_cad_payload_is_satisfied(
 	payload->activeCut >= payload->requestedCut);
 }
 
+static SbBool
+view_lod_progressive_can_draw(
+    const BObolLodProgressiveMeshPtr &mesh,
+    const std::vector<uint32_t> &chunkIds, int cut)
+{
+    if (!mesh)
+	return FALSE;
+    return chunkIds.empty() ? mesh->canDrawCut(cut) :
+	mesh->canDrawChunksAtCut(chunkIds, cut);
+}
+
+static BObolLodCounts
+view_lod_progressive_counts(
+    const BObolLodProgressiveMeshPtr &mesh,
+    const std::vector<uint32_t> &chunkIds, int cut, SbBool hasNormals)
+{
+    BObolLodCounts counts;
+    if (mesh && !chunkIds.empty() &&
+	mesh->countsForChunksAtCut(chunkIds, cut, hasNormals, &counts))
+	return counts;
+    return bobol_lod_progressive_counts(mesh, cut, hasNormals);
+}
+
 static size_t
 view_lod_minimum_cad_payload_render_cost(
     const BObolViewLodState::CadPayload *payload)
@@ -566,10 +589,11 @@ view_lod_minimum_cad_payload_render_cost(
     if (payload->progressiveMesh && payload->progressiveMesh->isValid()) {
 	const int minimumCut = payload->progressiveMesh->minimumCut();
 	if (minimumCut >= 0 &&
-	    payload->progressiveMesh->canDrawCut(minimumCut))
-	    counts = bobol_lod_progressive_counts(
-		payload->progressiveMesh, minimumCut,
-		payload->hasNormals);
+	    view_lod_progressive_can_draw(payload->progressiveMesh,
+		payload->requiredChunks, minimumCut))
+	    counts = view_lod_progressive_counts(
+		payload->progressiveMesh, payload->requiredChunks,
+		minimumCut, payload->hasNormals);
     }
     return bobol_lod_render_cost_units(counts, payload->drawMode, 1);
 }
@@ -655,6 +679,7 @@ BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
 	demand.assetKey = payload->cacheKey;
 	demand.cut = demandCut;
 	demand.channelMask = channelMask;
+	demand.chunkIds = payload->requiredChunks;
 	this->cadResidentDemands.push_back(demand);
     }
     state.cutCounts[demandCut]++;
@@ -667,6 +692,19 @@ BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
     state.channelMask |= channelMask;
     this->cadResidentDemands[state.demandIndex].channelMask =
 	state.channelMask;
+    if (!inserted.second) {
+	std::vector<uint32_t> &chunks =
+	    this->cadResidentDemands[state.demandIndex].chunkIds;
+	for (uint32_t chunk : payload->requiredChunks) {
+	    size_t &refs = state.chunkCounts[chunk];
+	    if (refs++ == 0)
+		chunks.insert(std::lower_bound(
+		    chunks.begin(), chunks.end(), chunk), chunk);
+	}
+    } else {
+	for (uint32_t chunk : payload->requiredChunks)
+	    state.chunkCounts[chunk] = 1;
+    }
 }
 
 void
@@ -690,6 +728,22 @@ BObolViewLodState::removeCadResidentDemand(const CadPayload *payload)
 	state.cutCounts[demandCut]--;
     if (state.channelCounts[channelMask])
 	state.channelCounts[channelMask]--;
+    std::vector<uint32_t> &chunks =
+	this->cadResidentDemands[state.demandIndex].chunkIds;
+    for (uint32_t chunk : payload->requiredChunks) {
+	const auto foundChunk = state.chunkCounts.find(chunk);
+	if (foundChunk == state.chunkCounts.end())
+	    continue;
+	if (foundChunk->second > 1) {
+	    --foundChunk->second;
+	    continue;
+	}
+	state.chunkCounts.erase(foundChunk);
+	const auto visible = std::lower_bound(
+	    chunks.begin(), chunks.end(), chunk);
+	if (visible != chunks.end() && *visible == chunk)
+	    chunks.erase(visible);
+    }
     state.channelMask = 0;
     for (unsigned int mask = 0; mask < 4; ++mask) {
 	if (state.channelCounts[mask])
@@ -1042,6 +1096,7 @@ BObolViewLodState::applyMeshResultInternal(const SoBRLMeshShape *shape,
     payload->residentCut = result.residentCut;
     payload->requestedCut = result.resolvedCut >= 0 ?
 	result.resolvedCut : result.request.requestedCut;
+    payload->requiredChunks = result.request.requiredChunks;
     payload->residentAdmissionRevision =
 	result.residentAdmissionRevision;
     payload->viewRevision = result.request.viewRevision.value();
@@ -1284,6 +1339,7 @@ BObolViewLodState::applySourceResultInternal(
     payload->residentCut = result.residentCut;
     payload->requestedCut = result.resolvedCut >= 0 ?
 	result.resolvedCut : result.request.requestedCut;
+    payload->requiredChunks = result.request.requiredChunks;
     payload->projectedPixelDiameter =
 	result.request.projectedPixelDiameter;
     payload->projectedPixelArea = result.request.projectedPixelArea;
@@ -1623,16 +1679,41 @@ BObolViewLodState::hasCadOccurrenceTerminalFailure(
     if (failed == sourceFailures->second.end())
 	return FALSE;
     const CadOccurrenceFailure &failure = failed->second;
-    return failure.databaseRevision == request.databaseRevision &&
+    const SbBool matches = failure.databaseRevision == request.databaseRevision &&
 	failure.sourceRevision == request.sourceRevision &&
 	failure.sourceContentHash == request.sourceContentHash &&
 	failure.viewRevision == request.viewRevision &&
 	failure.policyRevision == request.policyRevision &&
-	failure.requestedCut == request.requestedCut &&
+	/* A cold traversal intentionally carries -1 until the provider resolves
+	 * physical pixel demand against the retained hierarchy.  The failure
+	 * stores that resolved ordinal.  Equal view/policy/source epochs make the
+	 * unresolved request the same demand; requiring -1 == resolvedCut caused
+	 * an otherwise terminal miss to be resubmitted every quiet frame. */
+	(request.requestedCut < 0 ||
+	 failure.requestedCut == request.requestedCut) &&
 	failure.drawMode == request.drawMode &&
 	failure.qualityTier == request.qualityTier &&
 	view_lod_provider_status_is_terminal_failure(
 	    failure.providerStatus) ? TRUE : FALSE;
+    if (!matches && getenv("BOBOL_CHUNK_DEBUG"))
+	bu_log("BObol terminal failure mismatch db=%llu/%llu source=%llu/%llu "
+	    "hash=%llu/%llu view=%llu/%llu policy=%llu/%llu cut=%d/%d "
+	    "mode=%d/%d tier=%d/%d status=%d\n",
+	    static_cast<unsigned long long>(failure.databaseRevision),
+	    static_cast<unsigned long long>(request.databaseRevision.value()),
+	    static_cast<unsigned long long>(failure.sourceRevision),
+	    static_cast<unsigned long long>(request.sourceRevision.value()),
+	    static_cast<unsigned long long>(failure.sourceContentHash),
+	    static_cast<unsigned long long>(request.sourceContentHash),
+	    static_cast<unsigned long long>(failure.viewRevision),
+	    static_cast<unsigned long long>(request.viewRevision.value()),
+	    static_cast<unsigned long long>(failure.policyRevision),
+	    static_cast<unsigned long long>(request.policyRevision.value()),
+	    failure.requestedCut, request.requestedCut,
+	    failure.drawMode, request.drawMode,
+	    failure.qualityTier, request.qualityTier,
+	    failure.providerStatus);
+    return matches;
 }
 
 size_t
@@ -1697,7 +1778,8 @@ BObolViewLodState::retargetMeshPayload(
     uint64_t policyRevision)
 {
     if (!target || !target->progressiveMesh ||
-	!target->progressiveMesh->canDrawCut(activeCut) ||
+	!view_lod_progressive_can_draw(target->progressiveMesh,
+	    target->requiredChunks, activeCut) ||
 	requestedCut < 0)
 	return FALSE;
 
@@ -1721,8 +1803,9 @@ BObolViewLodState::retargetMeshPayload(
     payload->memoryLimited = FALSE;
     payload->viewRevision = viewRevision;
     payload->policyRevision = policyRevision;
-    payload->counts = bobol_lod_progressive_counts(
-	payload->progressiveMesh, activeCut, payload->hasNormals);
+    payload->counts = view_lod_progressive_counts(
+	payload->progressiveMesh, payload->requiredChunks,
+	activeCut, payload->hasNormals);
     return TRUE;
 }
 
@@ -1733,6 +1816,9 @@ BObolViewLodState::retargetCadPayload(
     const BObolLodRequest &demand)
 {
     const int requestedCut = demand.requestedCut;
+    const bool spatialPageSetChanged = target &&
+	!demand.requiredChunks.empty() &&
+	target->requiredChunks != demand.requiredChunks;
     /* The shared progressive asset may already contain a worker-built
      * generation whose result has not reached this view.  The immutable
      * prepared PartGeometry is the authoritative presentation snapshot; its
@@ -1788,6 +1874,12 @@ BObolViewLodState::retargetCadPayload(
 	 * channel.  Require a prepared frontier only when the cut itself advances. */
 	(activeCut != target->activeCut &&
 	 activeCut > preparedDrawableCut) ||
+	!view_lod_progressive_can_draw(target->progressiveMesh,
+	    demand.requiredChunks, activeCut) ||
+	(spatialPageSetChanged &&
+	 (!target->preparedCadGeometry ||
+	  target->preparedCadGeometryRevision !=
+	      target->progressiveMesh->revision())) ||
 	requestedCut < 0)
 	return FALSE;
 
@@ -1834,6 +1926,7 @@ BObolViewLodState::retargetCadPayload(
 	    this->removeCadPayloadMetrics(payload.get());
 	    payload->drawMode = demand.drawMode;
 	    payload->requestedCut = requestedCut;
+	    payload->requiredChunks = demand.requiredChunks;
 	    payload->projectedPixelDiameter = demand.projectedPixelDiameter;
 	    payload->projectedPixelArea = demand.projectedPixelArea;
 	    payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
@@ -1844,6 +1937,14 @@ BObolViewLodState::retargetCadPayload(
 	    payload->memoryLimited = FALSE;
 	    payload->viewRevision = demand.viewRevision.value();
 	    payload->policyRevision = demand.policyRevision.value();
+	    std::array<BObolLodCounts,
+		BOBOL_MESH_LOD_CUT_COUNT_MAX> visibleCounts;
+	    if (demand.spatialProjectionValid &&
+		payload->progressiveMesh->visibleCountsAtCuts(
+		    demand.localToRoot, demand.viewProjection,
+		    payload->hasNormals, visibleCounts.data(),
+		    visibleCounts.size()))
+		payload->counts = visibleCounts[activeCut];
 	    this->addCadPayloadMetrics(payload.get());
 	    return TRUE;
 	}
@@ -1886,14 +1987,32 @@ BObolViewLodState::retargetCadPayload(
 	}
 	/* requestedCut contributes to the retained view demand even when the
 	 * presented cut is unchanged.  Update that O(1) aggregate in place. */
-	this->removeCadResidentDemand(payload.get());
+	const bool chunkSetChanged =
+	    payload->requiredChunks != demand.requiredChunks;
+	if (chunkSetChanged)
+	    this->removeCadPayloadMetrics(payload.get());
+	else
+	    this->removeCadResidentDemand(payload.get());
 	payload->requestedCut = requestedCut;
+	payload->requiredChunks = demand.requiredChunks;
 	payload->projectedPixelDiameter = demand.projectedPixelDiameter;
 	payload->projectedPixelArea = demand.projectedPixelArea;
 	payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
 	payload->projectedBoundsContained = demand.projectedBoundsContained;
 	payload->targetPixelError = demand.targetPixelError;
-	this->addCadResidentDemand(payload.get());
+	if (chunkSetChanged) {
+	    std::array<BObolLodCounts,
+		BOBOL_MESH_LOD_CUT_COUNT_MAX> visibleCounts;
+	    if (demand.spatialProjectionValid &&
+		payload->progressiveMesh->visibleCountsAtCuts(
+		    demand.localToRoot, demand.viewProjection,
+		    payload->hasNormals, visibleCounts.data(),
+		    visibleCounts.size()))
+		payload->counts = visibleCounts[activeCut];
+	    this->addCadPayloadMetrics(payload.get());
+	} else {
+	    this->addCadResidentDemand(payload.get());
+	}
 	if (payload->memoryLimited)
 	    this->cadMemoryLimitedMeshPayloadCount =
 		view_lod_saturating_subtract(
@@ -1909,6 +2028,7 @@ BObolViewLodState::retargetCadPayload(
     payload->activeCut = activeCut;
     payload->drawMode = demand.drawMode;
     payload->requestedCut = requestedCut;
+    payload->requiredChunks = demand.requiredChunks;
     payload->projectedPixelDiameter = demand.projectedPixelDiameter;
     payload->projectedPixelArea = demand.projectedPixelArea;
     payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
@@ -1918,8 +2038,15 @@ BObolViewLodState::retargetCadPayload(
     payload->memoryLimited = FALSE;
     payload->viewRevision = demand.viewRevision.value();
     payload->policyRevision = demand.policyRevision.value();
-    payload->counts = bobol_lod_progressive_counts(
-	payload->progressiveMesh, activeCut, payload->hasNormals);
+    std::array<BObolLodCounts, BOBOL_MESH_LOD_CUT_COUNT_MAX> visibleCounts;
+    if (demand.spatialProjectionValid &&
+	payload->progressiveMesh->visibleCountsAtCuts(
+	    demand.localToRoot, demand.viewProjection, payload->hasNormals,
+	    visibleCounts.data(), visibleCounts.size()))
+	payload->counts = visibleCounts[activeCut];
+    else
+	payload->counts = bobol_lod_progressive_counts(
+	    payload->progressiveMesh, activeCut, payload->hasNormals);
     this->addCadPayloadMetrics(payload.get());
     this->noteCadOccurrenceChanged(
 	payload->sourceBindingKey.getString(), payload->sourceInstanceKey);
@@ -2264,10 +2391,11 @@ BObolViewLodState::minimumActiveRenderCost(void) const
 	    const int minimumCut =
 		payload->progressiveMesh->minimumCut();
 	    if (minimumCut >= 0 &&
-		payload->progressiveMesh->canDrawCut(minimumCut)) {
-		counts = bobol_lod_progressive_counts(
-		    payload->progressiveMesh, minimumCut,
-		    payload->hasNormals);
+		view_lod_progressive_can_draw(payload->progressiveMesh,
+		    payload->requiredChunks, minimumCut)) {
+		counts = view_lod_progressive_counts(
+		    payload->progressiveMesh, payload->requiredChunks,
+		    minimumCut, payload->hasNormals);
 	    }
 	}
 	cost = view_lod_saturating_add(cost,
@@ -2729,6 +2857,7 @@ BObolViewLodState::residentMeshDemands(
     struct DemandAggregate {
 	int cut = -1;
 	unsigned int channelMask = 0;
+	std::vector<uint32_t> chunkIds;
     };
     std::unordered_map<std::string, DemandAggregate> richestCuts;
     richestCuts.reserve(
@@ -2738,6 +2867,12 @@ BObolViewLodState::residentMeshDemands(
 	    richestCuts[demand.assetKey.getString()];
 	aggregate.cut = std::max(aggregate.cut, demand.cut);
 	aggregate.channelMask |= demand.channelMask;
+	std::vector<uint32_t> merged;
+	merged.reserve(aggregate.chunkIds.size() + demand.chunkIds.size());
+	std::set_union(aggregate.chunkIds.begin(), aggregate.chunkIds.end(),
+	    demand.chunkIds.begin(), demand.chunkIds.end(),
+	    std::back_inserter(merged));
+	aggregate.chunkIds.swap(merged);
     }
 
     std::vector<MeshPayloadPtr> meshPayloads =
@@ -2755,6 +2890,13 @@ BObolViewLodState::residentMeshDemands(
 	DemandAggregate &aggregate =
 	    richestCuts[payload->cacheKey.getString()];
 	aggregate.cut = std::max(aggregate.cut, demandCut);
+	std::vector<uint32_t> merged;
+	merged.reserve(aggregate.chunkIds.size() +
+	    payload->requiredChunks.size());
+	std::set_union(aggregate.chunkIds.begin(), aggregate.chunkIds.end(),
+	    payload->requiredChunks.begin(), payload->requiredChunks.end(),
+	    std::back_inserter(merged));
+	aggregate.chunkIds.swap(merged);
     }
 
     demands.clear();
@@ -2764,6 +2906,7 @@ BObolViewLodState::residentMeshDemands(
 	demand.assetKey = entry.first.c_str();
 	demand.cut = entry.second.cut;
 	demand.channelMask = entry.second.channelMask;
+	demand.chunkIds = entry.second.chunkIds;
 	demands.push_back(demand);
     }
 }
