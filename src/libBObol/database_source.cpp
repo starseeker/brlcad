@@ -2550,6 +2550,7 @@ struct realize_walk_data {
 	compact_ordinal(0),
 	compact_unsupported(0),
 	compact_bounds_valid(FALSE),
+	compact_bounds_semantic_exact(TRUE),
 	stream_sink(NULL),
 	material_sweep(NULL),
 	stream_lod_cached_representative_dp(NULL),
@@ -2580,6 +2581,10 @@ struct realize_walk_data {
     int compact_unsupported;
     SbBox3f compact_bounds;
     SbBool compact_bounds_valid;
+    /* A union-only occurrence walk may use its complete drawable union as a
+     * semantic fallback when librt cannot bound the root (for example an
+     * air-only assembly).  Subtraction/intersection revoke that proof. */
+    SbBool compact_bounds_semantic_exact;
     BObolCompactOccurrenceStream *stream_sink;
     /* One cached path/material resolver per database walk.  Region-table
      * fallback must not re-import every combination for every occurrence. */
@@ -2605,6 +2610,22 @@ struct realize_walk_data {
     bool stream_lod_cached_representative_valid;
     size_t stream_lod_representative_imports = 0;
 };
+
+static void
+realize_walk_extend_bounds(realize_walk_data *data,
+	const struct db_tree_state *tsp, const SbBox3f &bounds)
+{
+    if (!data)
+	return;
+
+    if (tsp && (tsp->ts_sofar & (TS_SOFAR_MINUS | TS_SOFAR_INTER)))
+	data->compact_bounds_semantic_exact = FALSE;
+    if (bounds.isEmpty())
+	return;
+
+    data->compact_bounds.extendBy(bounds);
+    data->compact_bounds_valid = TRUE;
+}
 
 static int cad_vlist_part_geometry(const SoBRLVListShape *shape,
 	Obol::PartGeometry &geometry);
@@ -4214,10 +4235,7 @@ static union tree *
 	SbBox3f bounds = database_source_transform_bounds(
 	    compact_part_geometry_bounds(cadGeometry),
 	    input.occurrence.localTransform);
-	if (!bounds.isEmpty()) {
-	    data->compact_bounds.extendBy(bounds);
-	    data->compact_bounds_valid = TRUE;
-	}
+	realize_walk_extend_bounds(data, tsp, bounds);
 	data->realized_shapes++;
 	if (path)
 	    bu_free(path, "db_path_to_string");
@@ -4361,10 +4379,7 @@ static union tree *
 	    SbBox3f bounds = database_source_transform_bounds(
 		compact_part_geometry_bounds(cadGeometry),
 		input.occurrence.localTransform);
-	    if (!bounds.isEmpty()) {
-		data->compact_bounds.extendBy(bounds);
-		data->compact_bounds_valid = TRUE;
-	    }
+	    realize_walk_extend_bounds(data, tsp, bounds);
 	}
     } else {
 	BObolPerformanceTimer timer(BOBOL_PERF_REALIZED_INSTANCE_NODE_US);
@@ -4518,6 +4533,37 @@ local_bounds_from_internal(struct rt_db_internal *intern, SbBox3f &bounds)
     return bounds.isEmpty() ? FALSE : TRUE;
 }
 
+/* Obtain the representation-independent librt bound for one database path.
+ * This is deliberately called by detached realization workers after their
+ * ordinary geometry walk, never by the GUI's coarse-first publication path.
+ * Display unions cannot certify this fact: CSG construction geometry may
+ * include subtractive tools, sampled plots, or tessellation overshoot. */
+static SbBool
+source_bounds_from_database_path(SoBRLDatabaseSource *source,
+	const char *path, SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    struct db_i *dbip = source ? source->getDatabase() : NULL;
+    if (!dbip || !path || !path[0])
+	return FALSE;
+
+    point_t bmin;
+    point_t bmax;
+    struct bu_vls messages = BU_VLS_INIT_ZERO;
+    const char *paths[1] = {path};
+    const int ret = rt_obj_bounds(&messages, dbip, 1, paths, 0, bmin, bmax);
+    bu_vls_free(&messages);
+    if (ret != BRLCAD_OK || !point_bbox_valid(bmin, bmax))
+	return FALSE;
+
+    bounds = database_source_box_from_minmax(
+	SbVec3f(static_cast<float>(bmin[X]), static_cast<float>(bmin[Y]),
+	    static_cast<float>(bmin[Z])),
+	SbVec3f(static_cast<float>(bmax[X]), static_cast<float>(bmax[Y]),
+	    static_cast<float>(bmax[Z])));
+    return bounds.isEmpty() ? FALSE : TRUE;
+}
+
 static void
 set_source_bounds_from_local_box(SoBRLDatabaseSource *source,
 				 const SbBox3f &bounds,
@@ -4532,8 +4578,7 @@ set_source_bounds_from_local_box(SoBRLDatabaseSource *source,
     }
 
     (void)source->setSourceBoundsState(TRUE, bounds.getMin(),
-				       bounds.getMax());
-    (void)source->setSourceBoundsExactState(exact);
+				       bounds.getMax(), exact);
 }
 
 static int
@@ -7152,8 +7197,10 @@ vlist_from_evaluated_wire_path(SoBRLDatabaseSource *source)
 }
 
 static SoBRLMeshShape *
-mesh_from_evaluated_points_path(SoBRLDatabaseSource *source)
+mesh_from_evaluated_points_path(SoBRLDatabaseSource *source,
+	SbBox3f &sourceBounds)
 {
+    sourceBounds.makeEmpty();
     struct db_i *dbip = source ? source->getDatabase() : NULL;
     if (!source || !dbip)
 	return NULL;
@@ -7168,6 +7215,16 @@ mesh_from_evaluated_points_path(SoBRLDatabaseSource *source)
 			dbip, path.c_str(), &faceSet);
     if (ret != BRLCAD_OK)
 	return NULL;
+
+    if (faceSet.source_bounds_valid) {
+	sourceBounds = database_source_box_from_minmax(
+	    SbVec3f(static_cast<float>(faceSet.source_bounds_min[X]),
+		    static_cast<float>(faceSet.source_bounds_min[Y]),
+		    static_cast<float>(faceSet.source_bounds_min[Z])),
+	    SbVec3f(static_cast<float>(faceSet.source_bounds_max[X]),
+		    static_cast<float>(faceSet.source_bounds_max[Y]),
+		    static_cast<float>(faceSet.source_bounds_max[Z])));
+    }
 
     SoBRLMeshShape *shape = mesh_from_indexed_face_set(&faceSet, source);
     bobol_evaluated_points_face_set_free(&faceSet);
@@ -7218,7 +7275,9 @@ realize_evaluated_points_source(SoBRLDatabaseSource *source, uint32_t revision)
     if (!source)
 	return -1;
 
-    SoBRLMeshShape *shape = mesh_from_evaluated_points_path(source);
+    SbBox3f sourceBounds;
+    SoBRLMeshShape *shape = mesh_from_evaluated_points_path(source,
+						    sourceBounds);
     if (!shape) {
 	source->realizationDiagnostic =
 	    "evaluated-points provider produced no drawable geometry";
@@ -7237,6 +7296,8 @@ realize_evaluated_points_source(SoBRLDatabaseSource *source, uint32_t revision)
 	SoBRLDatabaseSource::REALIZATION_ROLE_CSG |
 	SoBRLDatabaseSource::REALIZATION_ROLE_MESH);
     database_source_add_realized_child(source, shape);
+    if (!sourceBounds.isEmpty())
+	set_source_bounds_from_local_box(source, sourceBounds, TRUE);
     return 1;
 }
 
@@ -8461,10 +8522,7 @@ static union tree *
 	    SbBox3f bounds = database_source_transform_bounds(
 		compact_part_geometry_bounds(cachedWire->geometry),
 		input.occurrence.localTransform);
-	    if (!bounds.isEmpty()) {
-		data->compact_bounds.extendBy(bounds);
-		data->compact_bounds_valid = TRUE;
-	    }
+	    realize_walk_extend_bounds(data, tsp, bounds);
 	    data->realized_shapes++;
 	    if (path)
 		bu_free(path, "db_path_to_string");
@@ -8749,10 +8807,7 @@ static union tree *
 		compact_part_geometry_bounds(entry->geometry),
 		entry->localTransform) :
 	    SbBox3f();
-	if (!bounds.isEmpty()) {
-	    data->compact_bounds.extendBy(bounds);
-	    data->compact_bounds_valid = TRUE;
-	}
+	realize_walk_extend_bounds(data, tsp, bounds);
     } else {
 	SoSeparator *leaf = realize_instance_leaf_separator(tsp);
 	if (sharedVListShape) {
@@ -8866,9 +8921,11 @@ source_bounds_for_realized_node(const SoNode *node,
 
 static void
 update_source_bounds_from_realized_geometry(SoBRLDatabaseSource *source,
-	SbBool exact = TRUE)
+	SbBool exact = FALSE)
 {
     if (!source)
+	return;
+    if (!exact && source->hasExactSourceBounds())
 	return;
 
     SbBox3f bounds;
@@ -8886,8 +8943,7 @@ update_source_bounds_from_realized_geometry(SoBRLDatabaseSource *source,
 
     if (valid && !bounds.isEmpty()) {
 	(void)source->setSourceBoundsState(TRUE, bounds.getMin(),
-					   bounds.getMax());
-	(void)source->setSourceBoundsExactState(exact);
+					   bounds.getMax(), exact);
     } else {
 	source->clearSourceBounds();
     }
@@ -11797,9 +11853,12 @@ SoBRLDatabaseSource::setCompactOccurrence(
     geometryToSource.multRight(occurrence.localTransform);
     const SbBox3f bounds = database_source_transform_bounds(
 	compact_part_geometry_bounds(occurrence.geometry), geometryToSource);
-    if (!bounds.isEmpty())
-	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
-    else
+
+    const SbBool preserveExact = this->hasExactSourceBounds();
+    if (!bounds.isEmpty() && !preserveExact)
+	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax(),
+	    FALSE);
+    else if (!preserveExact && bounds.isEmpty())
 	this->clearSourceBounds();
 
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
@@ -11852,10 +11911,12 @@ SoBRLDatabaseSource::setCompactOccurrenceRegistry(
     (void)this->reapplyCompactInstancePresentationOverrides(0);
     remove_non_auxiliary_children(this);
     this->markCompiledAssemblyDirty();
-    if (!aggregateBounds.isEmpty())
+
+    const SbBool preserveExact = this->hasExactSourceBounds();
+    if (!aggregateBounds.isEmpty() && !preserveExact)
 	(void)this->setSourceBoundsState(TRUE, aggregateBounds.getMin(),
-	    aggregateBounds.getMax());
-    else
+	    aggregateBounds.getMax(), FALSE);
+    else if (!preserveExact && aggregateBounds.isEmpty())
 	this->clearSourceBounds();
 
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
@@ -12221,9 +12282,10 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
     }
 
     SbBox3f bounds;
-    if (compact_index_source_bounds(index, bounds) && !bounds.isEmpty())
+    if (!this->hasExactSourceBounds() &&
+	compact_index_source_bounds(index, bounds) && !bounds.isEmpty())
 	(void)this->setSourceBoundsState(TRUE, bounds.getMin(),
-	    bounds.getMax());
+	    bounds.getMax(), FALSE);
     return changed;
 }
 
@@ -14108,7 +14170,8 @@ SoBRLDatabaseSource::setPlacementState(SbBool nextDrawMatrixValid,
 int
 SoBRLDatabaseSource::setSourceBoundsState(SbBool nextBoundsValid,
 	const SbVec3f &nextBoundsMin,
-	const SbVec3f &nextBoundsMax)
+	const SbVec3f &nextBoundsMax,
+	SbBool nextBoundsExact)
 {
     SbVec3f sanitizedMin(0.0f, 0.0f, 0.0f);
     SbVec3f sanitizedMax(0.0f, 0.0f, 0.0f);
@@ -14124,8 +14187,9 @@ SoBRLDatabaseSource::setSourceBoundsState(SbBool nextBoundsValid,
 	this->sourceBoundsValid = nextBoundsValid;
 	changed = 1;
     }
-    if (!nextBoundsValid && this->sourceBoundsExact.getValue()) {
-	this->sourceBoundsExact = FALSE;
+    nextBoundsExact = nextBoundsValid && nextBoundsExact;
+    if (this->sourceBoundsExact.getValue() != nextBoundsExact) {
+	this->sourceBoundsExact = nextBoundsExact;
 	changed = 1;
     }
     if (!database_source_vec3f_equal(this->sourceBoundsMin.getValue(),
@@ -14157,7 +14221,7 @@ SoBRLDatabaseSource::clearSourceBounds(void)
 {
     (void)this->setSourceBoundsState(FALSE,
 				     SbVec3f(0.0f, 0.0f, 0.0f),
-				     SbVec3f(0.0f, 0.0f, 0.0f));
+				     SbVec3f(0.0f, 0.0f, 0.0f), FALSE);
 }
 
 SbBool
@@ -14781,10 +14845,19 @@ SoBRLDatabaseSource::adoptDetachedCompactRealization(
 	remove_non_auxiliary_children(this);
 
 	SbBox3f bounds;
-	if ((detached->getSourceBounds(bounds) ||
-		this->getSourceBounds(bounds)) && !bounds.isEmpty())
+	SbBool boundsExact = FALSE;
+	/* The live source may already carry producer-certified stream coverage.
+	 * Never replace that immutable target extent with the detached worker's
+	 * display-derived occurrence union during terminal adoption. */
+	if (this->hasExactSourceBounds() && this->getSourceBounds(bounds))
+	    boundsExact = TRUE;
+	else if (detached->getSourceBounds(bounds))
+	    boundsExact = detached->hasExactSourceBounds();
+	else if (this->getSourceBounds(bounds))
+	    boundsExact = this->hasExactSourceBounds();
+	if (!bounds.isEmpty())
 	    (void)this->setSourceBoundsState(TRUE, bounds.getMin(),
-		bounds.getMax());
+		bounds.getMax(), boundsExact);
 	else
 	    this->clearSourceBounds();
 
@@ -14874,8 +14947,14 @@ SoBRLDatabaseSource::adoptDetachedCompactRealization(
     this->markCadBatchDirty();
 
     SbBox3f bounds;
-    if (detached->getSourceBounds(bounds) && !bounds.isEmpty())
-	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
+    SbBool boundsExact = FALSE;
+    if (this->hasExactSourceBounds() && this->getSourceBounds(bounds))
+	boundsExact = TRUE;
+    else if (detached->getSourceBounds(bounds))
+	boundsExact = detached->hasExactSourceBounds();
+    if (!bounds.isEmpty())
+	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax(),
+	    boundsExact);
     else
 	this->clearSourceBounds();
 
@@ -15314,6 +15393,10 @@ bobol_database_source_realize_wireframe_compact_with_cache(
     }
 
     if (directRealized > 0) {
+	SbBox3f semanticBounds;
+	if (source_bounds_from_database_path(source, treeName, semanticBounds))
+	    (void)source->setSourceBoundsState(TRUE, semanticBounds.getMin(),
+		semanticBounds.getMax(), TRUE);
 	mark_source_realized_current(source);
 	return 1;
     }
@@ -15372,12 +15455,22 @@ bobol_database_source_realize_wireframe_compact_with_cache(
 
     source->installCompactInstanceIndex(data.compact_index, TRUE);
     source->markCompiledAssemblyDirty();
-    if (data.compact_bounds_valid && !data.compact_bounds.isEmpty())
+
+    const SbBool preserveExact = source->hasExactSourceBounds();
+
+    SbBox3f semanticBounds;
+    if (!preserveExact && source_bounds_from_database_path(source, treeName,
+	    semanticBounds))
+	(void)source->setSourceBoundsState(TRUE, semanticBounds.getMin(),
+	    semanticBounds.getMax(), TRUE);
+    else if (data.compact_bounds_valid && !data.compact_bounds.isEmpty() &&
+	!preserveExact)
 	(void)source->setSourceBoundsState(TRUE, data.compact_bounds.getMin(),
-	    data.compact_bounds.getMax());
-    else
+	    data.compact_bounds.getMax(),
+	    data.compact_bounds_semantic_exact);
+    else if (!preserveExact &&
+	(!data.compact_bounds_valid || data.compact_bounds.isEmpty()))
 	source->clearSourceBounds();
-    (void)source->setSourceBoundsExactState(TRUE);
     mark_source_realized_current(source);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,
@@ -15423,7 +15516,20 @@ bobol_database_source_realize_wireframe_with_cache(
     if (source_uses_evaluated_wire_realization(source)) {
 	if (realize_evaluated_wire_source(source, revision) > 0) {
 	    mark_source_realized_current(source);
-	    update_source_bounds_from_realized_geometry(source);
+	    /* Evaluated wire is a terminal representation, not a construction
+	     * geometry union.  Prefer librt's representation-independent path
+	     * bound so progressive and explicit autoview share one camera.  Some
+	     * valid evaluated paths (for example air-only assemblies) are omitted
+	     * by rt_obj_bounds' ordinary solid policy; in that case the evaluated
+	     * result itself is the authoritative representation and its bound can
+	     * safely close the readiness contract. */
+	    SbBox3f semanticBounds;
+	    if (source_bounds_from_database_path(source, treeName,
+		    semanticBounds))
+		(void)source->setSourceBoundsState(TRUE,
+		    semanticBounds.getMin(), semanticBounds.getMax(), TRUE);
+	    else
+		update_source_bounds_from_realized_geometry(source, TRUE);
 	    source->syncRealizedShapeOwnerState();
 	    return TRUE;
 	}
@@ -15452,6 +15558,10 @@ bobol_database_source_realize_wireframe_with_cache(
 	}
     }
     if (directRealized > 0) {
+	SbBox3f semanticBounds;
+	if (source_bounds_from_database_path(source, treeName, semanticBounds))
+	    (void)source->setSourceBoundsState(TRUE, semanticBounds.getMin(),
+		semanticBounds.getMax(), TRUE);
 	source->realizedRevision = source->sourceRevision.getValue();
 	source->realizedSourceRevision = source->sourceRevision.getValue();
 	source->realizedInputsRevision = source->inputsRevision.getValue();
@@ -15606,6 +15716,13 @@ struct compact_coverage_collect {
     std::unordered_set<std::string> seenInstances;
     std::unordered_map<std::string, uint32_t> occurrenceCounts;
     size_t occurrenceCount = 0;
+    /* A complete union of leaf boxes is an exact source bound only when each
+     * leaf bbox is itself tight and Boolean evaluation cannot shrink it.
+     * BRep GetBBox may include untrimmed surface extent, while subtract and
+     * intersect operations may remove an extremum.  Keep publishing the
+     * conservative aggregate for immediate visual feedback, but require a
+     * semantic librt bound before releasing the autoview/cache contract. */
+    bool aggregateBoundsExact = true;
     std::mutex workMutex;
     std::condition_variable workReady;
     std::deque<compact_coverage_work_item> work;
@@ -16320,6 +16437,10 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	((tsp->ts_sofar & TS_SOFAR_INTER) ?
 	 SoBRLDatabaseSource::BOOLEAN_INTERSECT :
 	 SoBRLDatabaseSource::BOOLEAN_UNION);
+    if (occurrence.booleanOperation !=
+	    SoBRLDatabaseSource::BOOLEAN_UNION ||
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP)
+	collect->aggregateBoundsExact = false;
     compact_coverage_work_item work;
     work.asset = collect->assets[assetIndex].get();
     work.occurrence = std::move(occurrence);
@@ -17128,18 +17249,38 @@ compact_stream_publish_parallel_coverage(
      * are present.
      */
     if (!aggregateBounds.isEmpty()) {
+	/* The aggregate overview remains useful even when it is conservative:
+	 * it is the earliest complete visual scope of the draw target. */
 	stream->setCoverageBounds(aggregateBounds);
 	BObolCompactOccurrence overview =
 	    compact_coverage_overview_occurrence(source, treeName,
 		aggregateBounds, revision);
-	if (overview.geometry) {
+	if (overview.geometry)
 	    stream->pushPriority(overview);
-	    /*
-	     * The priority lane is drained before ordinary leaves.  Publishing
-	     * this release flag after enqueue therefore guarantees that the next
-	     * provider tick which observes it has already merged the exact
-	     * extent and may perform one stable deferred autoview.
-	     */
+
+	SbBox3f terminalBounds = aggregateBounds;
+	bool terminalBoundsExact = collect.aggregateBoundsExact;
+	if (!terminalBoundsExact) {
+	    SbBox3f semanticBounds;
+	    if (source_bounds_from_database_path(source, treeName,
+		    semanticBounds)) {
+		terminalBounds = semanticBounds;
+		terminalBoundsExact = true;
+	    }
+	}
+	if (terminalBoundsExact) {
+	    stream->setCoverageBounds(terminalBounds);
+	    if (terminalBounds != aggregateBounds) {
+		BObolCompactOccurrence exactOverview =
+		    compact_coverage_overview_occurrence(source, treeName,
+			terminalBounds, revision);
+		if (exactOverview.geometry)
+		    stream->pushPriority(exactOverview);
+	}
+	    /* Completion means semantic exactness, not merely that every leaf
+	     * contributed to a conservative aggregate.  The priority lane is
+	     * drained first, so a consumer observing this flag will publish the
+	     * terminal overview before applying the one-shot autoview. */
 	    stream->setCoverageBoundsComplete(true);
 	}
     }
@@ -17335,6 +17476,10 @@ bobol_database_source_realize_mesh_compact_with_cache(
     }
 
     if (directRealized > 0) {
+	SbBox3f semanticBounds;
+	if (source_bounds_from_database_path(source, treeName, semanticBounds))
+	    (void)source->setSourceBoundsState(TRUE, semanticBounds.getMin(),
+		semanticBounds.getMax(), TRUE);
 	mark_source_realized_current(source);
 	return 1;
     }
@@ -17386,8 +17531,7 @@ bobol_database_source_realize_mesh_compact_with_cache(
 	SbBox3f bounds;
 	if (stream->getCoverageBounds(bounds) && !bounds.isEmpty()) {
 	    (void)source->setSourceBoundsState(TRUE, bounds.getMin(),
-		bounds.getMax());
-	    (void)source->setSourceBoundsExactState(TRUE);
+		bounds.getMax(), TRUE);
 	}
 	mark_source_realized_current(source);
 	bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
@@ -17444,12 +17588,22 @@ bobol_database_source_realize_mesh_compact_with_cache(
 
     source->installCompactInstanceIndex(data.compact_index, TRUE);
     source->markCompiledAssemblyDirty();
-    if (data.compact_bounds_valid && !data.compact_bounds.isEmpty())
+
+    const SbBool preserveExact = source->hasExactSourceBounds();
+
+    SbBox3f semanticBounds;
+    if (!preserveExact && source_bounds_from_database_path(source, treeName,
+	    semanticBounds))
+	(void)source->setSourceBoundsState(TRUE, semanticBounds.getMin(),
+	    semanticBounds.getMax(), TRUE);
+    else if (data.compact_bounds_valid && !data.compact_bounds.isEmpty() &&
+	!preserveExact)
 	(void)source->setSourceBoundsState(TRUE, data.compact_bounds.getMin(),
-	    data.compact_bounds.getMax());
-    else
+	    data.compact_bounds.getMax(),
+	    data.compact_bounds_semantic_exact);
+    else if (!preserveExact &&
+	(!data.compact_bounds_valid || data.compact_bounds.isEmpty()))
 	source->clearSourceBounds();
-    (void)source->setSourceBoundsExactState(TRUE);
     mark_source_realized_current(source);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,
@@ -17495,7 +17649,9 @@ bobol_database_source_realize_mesh_with_cache(
     if (source_uses_evaluated_points_realization(source)) {
 	if (realize_evaluated_points_source(source, revision) > 0) {
 	    mark_source_realized_current(source);
-	    update_source_bounds_from_realized_geometry(source);
+	    SbBox3f sourceBounds;
+	    if (!source->getSourceBounds(sourceBounds))
+		update_source_bounds_from_realized_geometry(source, FALSE);
 	    source->syncRealizedShapeOwnerState();
 	    return TRUE;
 	}
@@ -17524,6 +17680,10 @@ bobol_database_source_realize_mesh_with_cache(
 	}
     }
     if (directRealized > 0) {
+	SbBox3f semanticBounds;
+	if (source_bounds_from_database_path(source, treeName, semanticBounds))
+	    (void)source->setSourceBoundsState(TRUE, semanticBounds.getMin(),
+		semanticBounds.getMax(), TRUE);
 	source->realizedRevision = source->sourceRevision.getValue();
 	source->realizedSourceRevision = source->sourceRevision.getValue();
 	source->realizedInputsRevision = source->inputsRevision.getValue();
@@ -17739,7 +17899,7 @@ set_external_bounds_from_points(SoBRLDatabaseSource *source,
     SbVec3f boundsMin;
     SbVec3f boundsMax;
     if (external_bounds_from_points(points, count, boundsMin, boundsMax))
-	(void)source->setSourceBoundsState(TRUE, boundsMin, boundsMax);
+	(void)source->setSourceBoundsState(TRUE, boundsMin, boundsMax, TRUE);
     else
 	source->clearSourceBounds();
 }
@@ -18248,7 +18408,7 @@ set_external_bounds_from_vlist_shape(
 	return;
     }
 
-    source->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
+    source->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax(), TRUE);
 }
 
 struct primitive_submodel_publish_ctx {

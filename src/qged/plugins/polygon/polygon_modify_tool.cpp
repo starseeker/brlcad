@@ -41,8 +41,6 @@ PolygonModifyTool::paletteElement()
 			 el, &QgToolPaletteElement::element_view_changed);
 	QObject::connect(m_modify, &QPolyMod::view_updated,
 			 el, &QgToolPaletteElement::element_view_changed);
-	QObject::connect(m_modify, &QPolyMod::view_updated,
-			 m_modify, &QPolyMod::mod_names_reset);
 	QObject::connect(el, &QgToolPaletteElement::element_unhide,
 			 m_modify, &QPolyMod::mod_names_reset);
 	m_extra_wired = true;

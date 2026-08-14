@@ -725,6 +725,33 @@ test_polygon_nodes_and_sketch(BObolViewController &view)
 	FAIL("constrained square outline should remain closed while editing");
     if (!view.polygons().setAllContoursOpen(handle, FALSE))
 	FAIL("square polygon close restore should succeed");
+
+    BObolPolygonHandle duplicateSource = view.polygons().create(
+	"duplicate-source", BObolFeatureScope::Shared,
+	BObolPolygonType::Rectangle, SbVec3f(-3.0f, -2.0f, 0.0f),
+	viewPlane, 0.0f);
+    if (!duplicateSource.isValid() ||
+	!view.polygons().updateModelPoint(duplicateSource,
+	    SbVec3f(-1.0f, 1.0f, 0.0f), BObolPolygonUpdate::Default))
+	FAIL("polygon duplicate source setup should succeed");
+    BObolPolygonHandle duplicate = view.polygons().duplicate(
+	duplicateSource, "duplicate-survivor");
+    SoNode *sourceNode = view.polygons().node(duplicateSource);
+    SoNode *duplicateNode = view.polygons().node(duplicate);
+    if (!duplicate.isValid() || !sourceNode || !duplicateNode ||
+	sourceNode == duplicateNode)
+	FAIL("polygon duplicate should realize independent scene nodes");
+    if (!view.polygons().remove(duplicateSource))
+	FAIL("polygon duplicate source removal should succeed");
+    BObolPolygonRecord duplicateRecord;
+    SoGroup *sceneRoot = static_cast<SoGroup *>(view.getSceneRoot());
+    if (!view.polygons().record(duplicate, duplicateRecord) ||
+	view.polygons().node(duplicate) != duplicateNode || !sceneRoot ||
+	sceneRoot->findChild(duplicateNode) < 0)
+	FAIL("removing a polygon must leave its duplicate attached and valid");
+    if (!view.polygons().remove(duplicate))
+	FAIL("polygon duplicate cleanup should succeed");
+
     if (!view.polygons().setFillFlags(handle,
 				      BOBOL_POLYGON_FILL_HATCH | BOBOL_POLYGON_FILL_MESH))
 	FAIL("polygon setFillFlags should succeed");

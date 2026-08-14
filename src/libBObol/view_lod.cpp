@@ -981,6 +981,12 @@ BObolViewLodState::setCadPresentation(
     const std::string key = view_lod_source_primary_key(source);
     CadPresentation &presentation = this->cadPresentations[key];
     if (presentation.assembly != assembly) {
+	/* A frame-start observation contains non-owning assembly pointers.  A
+	 * presentation replacement may release the last owning reference below,
+	 * so retire the observation before changing ownership.  The next render
+	 * traversal will arm a new coherent snapshot. */
+	this->cadPresentationFrameStartExecutionSerials.clear();
+	this->cadPresentationFrameObservationArmed = FALSE;
 	if (assembly) {
 	    assembly->ref();
 	    this->cadPresentationAssemblyUseCounts[assembly]++;
@@ -1016,6 +1022,12 @@ BObolViewLodState::setCadPresentation(
 void
 BObolViewLodState::clearCadPresentations(void) const
 {
+    /* Invalidate the non-owning frame-start snapshot before unref'ing any
+     * assemblies.  LoD policy changes can clear presentations between a GL
+     * traversal and the following HUD/status query; retaining these pointers
+     * made that query dereference deleted SoCADAssembly objects. */
+    this->cadPresentationFrameStartExecutionSerials.clear();
+    this->cadPresentationFrameObservationArmed = FALSE;
     for (auto &binding : this->cadPresentations) {
 	if (binding.second.assembly)
 	    binding.second.assembly->unref();
@@ -1217,6 +1229,13 @@ BObolViewLodState::applySourceResultInternal(
 	view_lod_cad_occurrence_key(result.request.occurrenceKey);
     if (view_lod_provider_status_is_terminal_failure(
 	    result.providerStatus)) {
+	if (getenv("BOBOL_LOD_TRACE_FAILURES"))
+	    bu_log("BObol LoD terminal failure occurrence=%s object=%s "
+		   "status=%d cut=%d diagnostic=%s\n",
+		   result.request.occurrenceKey.getString(),
+		   result.request.objectPath.getString(),
+		   result.providerStatus, result.request.requestedCut,
+		   result.diagnostic.getString());
 	CadOccurrenceFailure &failure =
 	    this->cadOccurrenceFailures[sourceBindingKey][occurrenceKey];
 	failure.databaseRevision = result.request.databaseRevision.value();
@@ -2288,6 +2307,39 @@ BObolViewLodState::unsatisfiedCadOccurrenceKeys(
     }
 }
 
+void
+BObolViewLodState::retriableMemoryLimitedCadOccurrenceKeys(
+    const SoBRLDatabaseSource *source,
+    uint64_t residentAdmissionRevision,
+    std::vector<SbString> &occurrenceKeys) const
+{
+    occurrenceKeys.clear();
+    if (!source)
+	return;
+    const std::string sourceKey = view_lod_source_primary_key(source);
+    const auto unsatisfied = this->cadUnsatisfiedOccurrencesBySource.find(
+	sourceKey);
+    const auto sourcePayloads = this->cadSourceBindings.find(sourceKey);
+    if (unsatisfied == this->cadUnsatisfiedOccurrencesBySource.end() ||
+	sourcePayloads == this->cadSourceBindings.end())
+	return;
+
+    occurrenceKeys.reserve(unsatisfied->second.size());
+    for (const std::string &key : unsatisfied->second) {
+	const auto payload = sourcePayloads->second.find(key);
+	if (payload == sourcePayloads->second.end() || !payload->second ||
+	    !payload->second->memoryLimited)
+	    continue;
+	/* A denial from this exact capacity epoch is terminal until the service
+	 * reports another genuine reclamation/limit-growth edge. */
+	if (residentAdmissionRevision &&
+	    payload->second->residentAdmissionRevision ==
+		residentAdmissionRevision)
+	    continue;
+	occurrenceKeys.push_back(key.c_str());
+    }
+}
+
 size_t
 BObolViewLodState::cadProxyPayloadCount(int proxyKind) const
 {
@@ -2791,6 +2843,52 @@ BObolViewLodState::maximumActiveProgressiveCut(void) const
 	if (this->cadProgressiveCutCounts[cut])
 	    return cut;
     return -1;
+}
+
+int
+BObolViewLodState::singleCadProgressiveCutWithinPrimitiveCount(
+	size_t primitives) const
+{
+    if (!primitives || this->cadMeshPayloadCountValue != 1)
+	return -1;
+
+    const CadPayload *payload = NULL;
+    for (const auto &source : this->cadSourceBindings) {
+	for (const auto &occurrence : source.second) {
+	    const CadPayload *candidate = occurrence.second.get();
+	    if (!view_lod_cad_payload_is_mesh(candidate))
+		continue;
+	    if (payload && payload != candidate)
+		return -1;
+	    payload = candidate;
+	}
+    }
+    if (!payload || !payload->progressiveMesh ||
+	!payload->progressiveMesh->isValid() || payload->activeCut < 0)
+	return -1;
+
+    const int minimumCut = payload->progressiveMesh->minimumCut();
+    const int maximumCut = std::min(payload->activeCut,
+	payload->progressiveMesh->maximumCut());
+    int result = -1;
+    for (int cut = minimumCut; cut <= maximumCut; ++cut) {
+	if (!view_lod_progressive_can_draw(payload->progressiveMesh,
+		payload->requiredChunks, cut))
+	    continue;
+	const BObolLodCounts counts = view_lod_progressive_counts(
+	    payload->progressiveMesh, payload->requiredChunks, cut,
+	    payload->hasNormals);
+	uint64_t primitiveCount = counts.faceCount;
+	if (payload->drawMode == BOBOL_LOD_DRAW_WIRE)
+	    primitiveCount = counts.lineCount;
+	else if (payload->drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE)
+	    primitiveCount = counts.faceCount >
+		UINT64_MAX - counts.lineCount ? UINT64_MAX :
+		counts.faceCount + counts.lineCount;
+	if (primitiveCount <= static_cast<uint64_t>(primitives))
+	    result = cut;
+    }
+    return result;
 }
 
 void

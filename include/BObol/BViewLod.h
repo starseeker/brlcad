@@ -296,6 +296,14 @@ public:
         const SoBRLDatabaseSource *source,
         uint64_t residentAdmissionRevision,
         std::vector<SbString> &occurrenceKeys) const;
+    /** Copy only resident-memory denials made actionable by a newer service
+     * admission epoch.  This is the capacity-recovery frontier: ordinary
+     * scene-budget quality debt is deliberately excluded so one reclaimed
+     * asset cannot restart a complete large-scene demand pass. */
+    void retriableMemoryLimitedCadOccurrenceKeys(
+        const SoBRLDatabaseSource *source,
+        uint64_t residentAdmissionRevision,
+        std::vector<SbString> &occurrenceKeys) const;
     size_t cadProxyPayloadCount(int proxyKind = BOBOL_LOD_PROXY_NONE) const;
     /** Count current display payloads and those which have reached their
      * recorded view target.  This is telemetry only and does not mutate or
@@ -372,6 +380,12 @@ public:
      * recent frame. */
     SbBool lastCadPresentationUsedPreparedReplay(void) const;
     int maximumActiveProgressiveCut(void) const;
+    /** For exactly one retained progressive CAD occurrence, return the
+     * richest active cut whose cached submitted population fits primitives.
+     * The query is O(cuts), performs no realization or allocation, and
+     * returns -1 when the scene is not the single-occurrence case. */
+    int singleCadProgressiveCutWithinPrimitiveCount(
+	size_t primitives) const;
     /* Apply an O(1)-per-assembly render-only ceiling while the precise
      * occurrence allocator catches up with an interactive view. */
     void setCadPresentationProgressiveCutCeiling(int cut) const;

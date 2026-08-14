@@ -2895,8 +2895,7 @@ test_rt_mesh_provider_task(void)
     stagedProvider.service = &service;
     stagedProvider.setDatabase(dbip);
     stagedProvider.refreshMissing = FALSE;
-    stagedProvider.initialRefinementFaceBudget = 2;
-    stagedProvider.initialRefinementPointBudget = 4;
+    stagedProvider.initialRefinementCostBudget = 4;
     stagedProvider.refinementGrowthFactor = 2.0;
     BObolLodRequest stagedRequest = task.request;
     stagedRequest.requestedCut = 4;
@@ -3118,11 +3117,41 @@ test_rt_mesh_provider_task(void)
 	    std::vector<uint32_t> restored;
 	    if (restoredUnion.progressiveMesh)
 		restoredUnion.progressiveMesh->residentChunkIds(restored);
+	    /* Healthy memory above deliberately preserves page 1 as a latency
+	     * cache.  Once an explicit resident limit is exceeded, the same demand
+	     * may compact that off-screen page to the documented coverage floor
+	     * while preserving the demanded page at full quality. */
+	    int pressureCoverageCut = std::max(
+		unionHierarchy.min_cut,
+		unionRich.progressiveMesh->cutForScreenError(128.0, 1.0));
+	    pressureCoverageCut = std::min(
+		unionHierarchy.max_cut, pressureCoverageCut);
+	    while (pressureCoverageCut < unionHierarchy.max_cut &&
+		!unionHierarchy.chunks[1].cuts[pressureCoverageCut].face_count)
+		pressureCoverageCut++;
+	    const int expectedPressurePageCut = std::min(
+		unionHierarchy.max_cut, pressureCoverageCut);
+	    unionService.setResidentMeshLimit(1);
+	    const size_t pressureQueued =
+		unionService.scheduleResidentMeshCompaction(
+		    0xa001, 3, {firstView});
+	    const int pressureWait = started ?
+		wait_for_resident_compaction(unionService) : 1;
+	    std::vector<BObolLodChunkCut> pressureCuts;
+	    if (unionRich.progressiveMesh)
+		unionRich.progressiveMesh->residentChunkCuts(pressureCuts);
+	    const bool pressureTrimmed =
+		pressureCuts.size() == unionHierarchy.chunk_count &&
+		pressureCuts[0] ==
+		    BObolLodChunkCut{0, unionHierarchy.max_cut} &&
+		pressureCuts[1] ==
+		    BObolLodChunkCut{1, expectedPressurePageCut};
 	    if (unionRich.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 		!unionRich.progressiveMesh || allQueued || firstQueued ||
 		!secondQueued || !started || unionWait || !retainedBoth ||
 		!retainedIndependentCuts ||
-		trimQueued || trimWait || !retainedWarmPages ||
+		trimQueued ||
+		trimWait || !retainedWarmPages ||
 		continuityResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 		continuityResult.geometry.activeCut !=
 		    continuityRequest.requestedCut ||
@@ -3130,19 +3159,26 @@ test_rt_mesh_provider_task(void)
 		    continuityRequest.requestedCut ||
 		restoredUnion.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 		restoredUnion.progressiveMesh != unionRich.progressiveMesh ||
-		restored.size() != unionHierarchy.chunk_count) {
+		restored.size() != unionHierarchy.chunk_count ||
+		pressureQueued !=
+		    (expectedPressurePageCut < unionHierarchy.max_cut ? 1u : 0u) ||
+		pressureWait || !pressureTrimmed) {
 		printf("FAIL: multi-view resident page union/trim/continuity/restore "
-		       "(queued=%zu/%zu/%zu trim=%zu started=%d wait=%d/%d "
+		       "(queued=%zu/%zu/%zu trim=%zu pressure=%zu "
+		       "started=%d wait=%d/%d/%d "
 		       "both=%d cuts=%d first=%d continuity=%d/%d restored=%zu/%u "
-		       "status=%d/%d/%d)\n",
+		       "pressure-cut=%d/%d status=%d/%d/%d)\n",
 		       allQueued, firstQueued, secondQueued, trimQueued,
-		       started ? 1 : 0, unionWait, trimWait,
+		       pressureQueued, started ? 1 : 0, unionWait, trimWait,
+		       pressureWait,
 		       retainedBoth ? 1 : 0,
 		       retainedIndependentCuts ? 1 : 0,
 		       retainedWarmPages ? 1 : 0,
 		       continuityResult.geometry.activeCut,
 		       continuityRequest.requestedCut,
 		       restored.size(), unionHierarchy.chunk_count,
+		       pressureCuts.size() > 1 ? pressureCuts[1].cut : -1,
+		       expectedPressurePageCut,
 		       unionRich.providerStatus,
 		       continuityResult.providerStatus,
 		       restoredUnion.providerStatus);
@@ -3155,9 +3191,15 @@ test_rt_mesh_provider_task(void)
 		printf("\n  pages trimmed:");
 		for (uint32_t page : retained)
 		    printf(" %u", page);
+		printf("\n  trimmed cuts:");
+		for (const BObolLodChunkCut &entry : coverageFloorCuts)
+		    printf(" %u:%d", entry.chunkId, entry.cut);
 		printf("\n  pages restored:");
 		for (uint32_t page : restored)
 		    printf(" %u", page);
+		printf("\n  pressure cuts:");
+		for (const BObolLodChunkCut &entry : pressureCuts)
+		    printf(" %u:%d", entry.chunkId, entry.cut);
 		printf("\n");
 		ret = 1;
 	    }

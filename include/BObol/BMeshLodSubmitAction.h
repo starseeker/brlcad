@@ -113,6 +113,11 @@ public:
     void setRefinementCostBudget(size_t additionalCost);
     size_t getRefinementCostBudget(void) const;
     size_t getRefinementCostBudgetUsed(void) const;
+    /* Override the ordinary many-object first-prefix quantum for a provider
+     * created by this action.  Controllers use this only when one uncovered
+     * visible occurrence owns the complete scene allowance. */
+    void setInitialProviderCostBudget(size_t cost);
+    size_t getInitialProviderCostBudget(void) const;
     unsigned int getRefinementBudgetBlockedCount(void) const;
     /* Split retained minimax observations into a deliberately coarser
      * scene-quality ceiling and failure to reach the cut allocated by that
@@ -214,7 +219,7 @@ private:
      * thousands of independent warm-cache requests must not each interpret
      * an aggregate scene budget as their own private allowance. */
     SbBool reserveInitialCost(uint64_t sourceFaces, uint64_t sourcePoints,
-	int drawMode, size_t &providerFaceAllowance);
+	int drawMode, size_t &providerCostAllowance);
     SbBool reserveInitialCost(const BObolLodCounts &counts, int drawMode);
 
     BObolLodService *service;
@@ -248,6 +253,7 @@ private:
     SbBool preserveMeshCoverage;
     size_t refinementCostBudget;
     size_t refinementCostBudgetUsed;
+    size_t initialProviderCostBudget;
     unsigned int refinementBudgetBlockedCount;
     unsigned int retainedQualityLimitedCount;
     unsigned int retainedAdmissionBlockedCount;

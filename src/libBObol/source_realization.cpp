@@ -191,7 +191,8 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
 	    !source_job_cancelled(job.get()))
 	    realized = source->realizeDatabaseWireframe(stream);
 	success = realized ? true : false;
-	if (success && stream && !stream->hasCoverageBoundsComplete()) {
+	if (success && stream && !stream->hasCoverageBoundsComplete() &&
+	    source->hasExactSourceBounds()) {
 	    SbBox3f finalBounds;
 	    if (source->getSourceBounds(finalBounds) &&
 		!finalBounds.isEmpty()) {

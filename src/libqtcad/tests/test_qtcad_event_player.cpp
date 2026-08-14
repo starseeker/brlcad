@@ -102,6 +102,9 @@ main(int argc, char **argv)
     CHECK(buttonPath.contains(QLatin1String("i:apply-action")) &&
 	QgEventRecorder::resolveObject(&root, buttonPath) == &button,
 	"stable QObject path did not round-trip");
+    CHECK(QgEventRecorder::resolveObject(&root,
+	QStringLiteral("i:apply-action")) == &button,
+	"unique global test-id lookup did not resolve the control");
 
     QTemporaryDir temporary;
     CHECK(temporary.isValid(), "could not create temporary event directory");
@@ -126,6 +129,26 @@ main(int argc, char **argv)
 	"player did not restore line-edit text");
     CHECK(combo.currentIndex() == 2, "player did not restore combo index");
     CHECK(tree.currentIndex() == wheel, "player did not restore tree current item");
+
+    QgTestEvent assertCombo;
+    assertCombo.target = QgEventRecorder::objectPath(&root, &combo);
+    assertCombo.action = QStringLiteral("assert_state");
+    assertCombo.arguments.insert(QStringLiteral("text"),
+	QStringLiteral("Hidden line"));
+    assertCombo.arguments.insert(QStringLiteral("index"), 2);
+    assertCombo.arguments.insert(QStringLiteral("count"), 3);
+    assertCombo.arguments.insert(QStringLiteral("enabled"), true);
+    assertCombo.arguments.insert(QStringLiteral("items"), QJsonArray{
+	QStringLiteral("Wire"), QStringLiteral("Shaded"),
+	QStringLiteral("Hidden line")});
+    CHECK(player.play(assertCombo, &error), error.toLocal8Bit().constData());
+
+    QgTestEvent assertEdit;
+    assertEdit.target = QgEventRecorder::objectPath(&root, &edit);
+    assertEdit.action = QStringLiteral("assert_state");
+    assertEdit.arguments.insert(QStringLiteral("text"),
+	QStringLiteral("Generic_Twin"));
+    CHECK(player.play(assertEdit, &error), error.toLocal8Bit().constData());
 
     const QString treePath = QgEventRecorder::objectPath(&root, &tree);
     QgTestEvent collapse;

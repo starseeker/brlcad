@@ -348,6 +348,17 @@ test_view_controller_presentation_deadline_contract(void)
 	}
 
 	controller.setPresentationFrameDeadlines(5000000ULL, 9000000ULL);
+	struct bv_lod_policy completePolicy;
+	bv_lod_policy_init(&completePolicy);
+	completePolicy.policy = BV_LOD_OFF;
+	controller.getViewAttachment()->setLodPolicy(&completePolicy);
+	if (!ret && controller.getCurrentPresentationFrameDeadline() != 0) {
+	    printf("FAIL: force-realize presentation retained an LoD deadline\n");
+	    ret = 1;
+	}
+	completePolicy.policy = BV_LOD_AUTO;
+	completePolicy.mesh_enabled = 1;
+	controller.getViewAttachment()->setLodPolicy(&completePolicy);
 	controller.setLodAutoSubmit(TRUE);
 	controller.beginLodInteraction();
 	if (!ret &&
@@ -7154,6 +7165,52 @@ compact_native_triangle_geometry(void)
 }
 
 static int
+test_cad_presentation_frame_retirement(void)
+{
+    BObolViewLodState viewState;
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->ref();
+    source->path = "frame-retirement.c";
+    source->instanceKey = "frame-retirement-instance";
+
+    SoCADAssembly *assembly = new SoCADAssembly;
+    const Obol::PartId part =
+	Obol::CadIdBuilder::hash128("frame-retirement-part");
+    Obol::SharedPartUpdate partUpdate;
+    partUpdate.part = part;
+    partUpdate.geometry = compact_native_triangle_geometry();
+    assembly->upsertSharedParts(
+	std::vector<Obol::SharedPartUpdate>(1, partUpdate));
+
+    Obol::InstanceUpdate instanceUpdate;
+    instanceUpdate.instance =
+	Obol::CadIdBuilder::hash128("frame-retirement-instance");
+    instanceUpdate.record.part = part;
+    instanceUpdate.record.localToRoot = SbMatrix::identity();
+    assembly->upsertInstances(
+	std::vector<Obol::InstanceUpdate>(1, instanceUpdate));
+    viewState.setCadPresentation(source, assembly);
+    viewState.beginCadPresentationFrame();
+
+    /* Simulate a view lod policy change after frame observation was armed but
+     * before the faceplate queried completed-work status.  clear() releases
+     * the presentation's owning reference; the retired frame snapshot must
+     * not retain or inspect its raw pointer. */
+    viewState.clear();
+    size_t subpixel = 1;
+    size_t structural = 1;
+    (void)viewState.lastCadPresentationOccurrenceCoverage(
+						   subpixel, structural);
+    const int ret = subpixel != 0 || structural != 0 ||
+	viewState.hasCadPresentationAssemblies() ? 1 : 0;
+    if (ret)
+	printf("FAIL: retired CAD presentation remained in frame observation\n");
+
+    source->unref();
+    return ret;
+}
+
+static int
 test_compact_many_leaf_scene_admission(void)
 {
     char dbpath[MAXPATHLEN] = {0};
@@ -8024,6 +8081,7 @@ test_view_controller_compact_append_preserves_submission_cursor(void)
 {
     static const size_t initialCount = 512;
     static const size_t deltaCount = 2500;
+    static const size_t trailingCount = 2;
     static const size_t quietWave = 2048;
     char dbpath[MAXPATHLEN] = {0};
     struct db_i *dbip = NULL;
@@ -8093,6 +8151,8 @@ test_view_controller_compact_append_preserves_submission_cursor(void)
 	printf("FAIL: compact append cursor fixture registry setup\n");
 	ret = 1;
     }
+    source->reserveCompactOccurrenceCapacity(
+	initialCount + deltaCount + trailingCount);
     BObolCompactLodInstanceSummary firstSummary;
     size_t firstEntryIndex = SIZE_MAX;
     if (!ret &&
@@ -8207,11 +8267,35 @@ test_view_controller_compact_append_preserves_submission_cursor(void)
 	}
 	if (!ret &&
 	    (deltaVisited != completeDelta ||
-	     !controller.hasPendingLodSubmissions())) {
+	     controller.hasPendingLodSubmissions())) {
 	    printf("FAIL: compact append inventory did not complete its exact "
-		   "extended delta (visited=%zu expected=%zu pending=%d "
+		   "extended delta or defer its full rescan while the advertised "
+		   "population was incomplete (visited=%zu expected=%zu pending=%d "
 		   "diagnostics=%s)\n",
 		   deltaVisited, completeDelta,
+		   controller.hasPendingLodSubmissions() ? 1 : 0,
+		   controller.getLastLodDiagnostics().getString());
+	    ret = 1;
+	}
+
+	BObolCompactOccurrence finalOccurrence = prototype;
+	finalOccurrence.summary.path = "streaming-root.c/final.bot";
+	finalOccurrence.sourceMeshRequest.path = finalOccurrence.summary.path;
+	finalOccurrence.occurrenceIndex =
+	    static_cast<uint32_t>(initialCount + deltaCount + 1);
+	if (!ret && source->mergeCompactOccurrences(
+		std::vector<BObolCompactOccurrence>(1, finalOccurrence)) != 1) {
+	    printf("FAIL: compact append cursor could not publish final inventory\n");
+	    ret = 1;
+	}
+	if (!ret &&
+	    (controller.submitLodRequestsIfNeeded() != 0 ||
+	     controller.getLastLodVisitedMeshCount() != 1 ||
+	     !controller.hasPendingLodSubmissions())) {
+	    printf("FAIL: completed compact population did not consume its final "
+		   "delta and arm one authoritative rescan (visited=%u pending=%d "
+		   "diagnostics=%s)\n",
+		   controller.getLastLodVisitedMeshCount(),
 		   controller.hasPendingLodSubmissions() ? 1 : 0,
 		   controller.getLastLodDiagnostics().getString());
 	    ret = 1;
@@ -8239,7 +8323,7 @@ test_view_controller_compact_append_preserves_submission_cursor(void)
 	    fullRescanVisited += controller.getLastLodVisitedMeshCount();
 	}
 	const size_t completeInventory =
-	    initialCount + deltaCount + 1;
+	    initialCount + deltaCount + trailingCount;
 	if (!ret &&
 	    (controller.hasPendingLodSubmissions() ||
 	     fullRescanVisited != completeInventory * 2)) {
@@ -9687,6 +9771,13 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    limitedState.unsatisfiedCadOccurrenceKeys(
 			source, service.residentMeshAdmissionRevision(),
 			reopenedFrontier);
+		    std::vector<SbString> blockedCapacityFrontier;
+		    limitedState.retriableMemoryLimitedCadOccurrenceKeys(
+			source, denialRevision, blockedCapacityFrontier);
+		    std::vector<SbString> reopenedCapacityFrontier;
+		    limitedState.retriableMemoryLimitedCadOccurrenceKeys(
+			source, service.residentMeshAdmissionRevision(),
+			reopenedCapacityFrontier);
 		    SoBRLMeshLodSubmitAction repeatedDenial;
 		    repeatedDenial.setService(&service);
 		    repeatedDenial.setDatabase(
@@ -9701,7 +9792,10 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    const BObolViewLodState::CadPayload *limitedPayload =
 			limitedState.findCadForResult(limitedResult);
 		    if (!blockedFrontier.empty() ||
-			reopenedFrontier.size() != 1 || !limitedPayload ||
+			reopenedFrontier.size() != 1 ||
+			!blockedCapacityFrontier.empty() ||
+			reopenedCapacityFrontier.size() != 1 ||
+			!limitedPayload ||
 			repeatedDenial.getSubmittedTaskCount() != 0 ||
 			repeatedDenial.getPendingRetainedRefinementCount() != 1 ||
 			repeatedDenial.getRefinementBudgetBlockedCount() != 1 ||
@@ -9710,9 +9804,12 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    denialRevision) {
 			printf("FAIL: repeated budget denial lost or rescanned its "
 			       "memory-capacity witness (blocked=%zu reopened=%zu "
+			       "capacity=%zu/%zu "
 			       "tasks=%u pending=%u budget_blocked=%u "
 			       "limited=%d admission=%llu/%llu)\n",
 			       blockedFrontier.size(), reopenedFrontier.size(),
+			       blockedCapacityFrontier.size(),
+			       reopenedCapacityFrontier.size(),
 			       repeatedDenial.getSubmittedTaskCount(),
 			       repeatedDenial.
 				   getPendingRetainedRefinementCount(),
@@ -10583,6 +10680,26 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		ret = 1;
 	    }
 	}
+	if (!ret) {
+	    const BObolViewLodState::CadPayload *restored =
+		viewState.findCadForResult(results[0]);
+	    size_t activePrimitives = restored ?
+		static_cast<size_t>(restored->counts.faceCount) : 0;
+	    if (restored && restored->drawMode == BOBOL_LOD_DRAW_WIRE)
+		activePrimitives = static_cast<size_t>(
+		    restored->counts.lineCount);
+	    if (!restored || restored->activeCut < 0 || !activePrimitives ||
+		viewState.singleCadProgressiveCutWithinPrimitiveCount(
+		    activePrimitives) != restored->activeCut ||
+		viewState.singleCadProgressiveCutWithinPrimitiveCount(0) != -1) {
+		printf("FAIL: single-occurrence PoP primitive cut prediction "
+		       "(active=%d primitives=%zu predicted=%d)\n",
+		       restored ? restored->activeCut : -1, activePrimitives,
+		       viewState.singleCadProgressiveCutWithinPrimitiveCount(
+			   activePrimitives));
+		ret = 1;
+	    }
+	}
     }
 
     /* Normal selection is presentation policy, not LoD residency policy.
@@ -11004,6 +11121,11 @@ test_allocated_presentation_allows_resident_prefetch(void)
 
 	    if (!ret) {
 		SoBRLMeshLodSubmitAction prefetchSubmit;
+	/* Force the resident prefetch quantum below even this tiny fixture.  The
+	 * production policy may span several cheap population cuts, but must
+	 * retain guaranteed forward progress when pressure permits only the next
+	 * populated band. */
+	service.setWorkingSetLimit(1);
 	prefetchSubmit.setService(&service);
 	prefetchSubmit.setViewLodState(&viewState);
 	prefetchSubmit.setDatabase(dbip, "db://allocated-prefetch-test", 2026);
@@ -11585,6 +11707,8 @@ main(int argc, char **argv)
     if (runIsolated(test_view_lod_mesh_eviction_preserves_proxy))
 	return 1;
     if (runIsolated(test_mesh_lod_submit_action))
+	return 1;
+    if (runIsolated(test_cad_presentation_frame_retirement))
 	return 1;
     if (runIsolated(test_compact_many_leaf_scene_admission))
 	return 1;

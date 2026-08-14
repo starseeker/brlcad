@@ -647,6 +647,16 @@ public:
 	uint64_t smoothedRenderNanoseconds = 0;
 	bool interactive = false;
 	bool scaleQualityProbe = false;
+	/* A quiet, event-driven view containing one visible occurrence may use
+	 * the complete hard-frame allowance immediately.  There is no fairness
+	 * peer to starve and the endpoint deadline can abort an optimistic trial,
+	 * so imposing the ordinary 4x/1.25x many-object growth ladder only creates
+	 * visible intermediate PoP stages. */
+	bool directStaticPresentation = false;
+	/* With exactly one visible occurrence and no retained presentation, a
+	 * conservative many-object seed manufactures several blocky calibration
+	 * frames.  Permit one larger, still deadline-protected bootstrap. */
+	bool coldSingleOccurrence = false;
 	bool forceTerminal = false;
 	bool releaseCutFloor = false;
 	bool stablePresentationHandoff = false;
@@ -699,6 +709,9 @@ public:
 	    this->retainedAdmissionRemainingValue;
 	if (this->passInitializedValue)
 	    return decision;
+	this->singleOccurrenceBootstrapValue =
+	    inputs.coldSingleOccurrence && inputs.activeCost == 0 &&
+	    inputs.calibratedCostPerSecond <= 0.0L;
 	const bool requestedRetainedRecovery =
 	    this->requestedRetainedRecoveryBudgetValue != SIZE_MAX &&
 	    inputs.activeCost > this->requestedRetainedRecoveryBudgetValue;
@@ -734,7 +747,12 @@ public:
 	 * setup noise; use its direct duration with the safety-scaled recovery
 	 * calculation below. */
 
-	size_t costBudget = this->seedBudgetValue;
+	size_t costBudget = inputs.coldSingleOccurrence &&
+	    inputs.activeCost == 0 &&
+	    inputs.calibratedCostPerSecond <= 0.0L ?
+		std::max(this->seedBudgetValue,
+		    this->singleOccurrenceBootstrapBudget()) :
+		this->seedBudgetValue;
 	if (inputs.forceTerminal) {
 	    costBudget = SIZE_MAX;
 	} else if (inputs.targetFps > 0.0f &&
@@ -745,7 +763,8 @@ public:
 	    costBudget = affordable >= static_cast<long double>(SIZE_MAX) ?
 		SIZE_MAX : std::max<size_t>(
 		    1, static_cast<size_t>(affordable));
-	    if (inputs.activeCost > 0 && costBudget > inputs.activeCost) {
+	    if (inputs.activeCost > 0 && costBudget > inputs.activeCost &&
+		!inputs.directStaticPresentation) {
 		size_t growthNumerator = 4;
 		size_t growthDenominator = 1;
 		if (!inputs.interactive || inputs.scaleQualityProbe) {
@@ -1033,6 +1052,7 @@ public:
     void resetPass(void)
     {
 	this->passInitializedValue = false;
+	this->singleOccurrenceBootstrapValue = false;
 	this->passActiveCostValue = 0;
 	this->passMinimumActiveCostValue = 0;
 	this->refinementRemainingValue = SIZE_MAX;
@@ -1252,6 +1272,14 @@ public:
     }
 
     size_t seedBudget(void) const { return this->seedBudgetValue; }
+    static constexpr size_t singleOccurrenceBootstrapBudget(void)
+    {
+	/* About one medium software-rendered mesh frame.  The endpoint's 100 ms
+	 * hard deadline and normal completed-frame calibration remain the actual
+	 * safety contract; this value only avoids 50k-face level walking before
+	 * the first useful timing sample exists. */
+	return 500000;
+    }
     size_t currentBudget(void) const { return this->currentBudgetValue; }
     size_t passActiveCost(void) const { return this->passActiveCostValue; }
     size_t passMinimumActiveCost(void) const
@@ -1263,6 +1291,10 @@ public:
 	return this->retainedRecoveryCeilingValue != SIZE_MAX;
     }
     bool passInitialized(void) const { return this->passInitializedValue; }
+    bool singleOccurrenceBootstrap(void) const
+    {
+	return this->singleOccurrenceBootstrapValue;
+    }
     size_t refinementRemaining(void) const
     {
 	return this->refinementRemainingValue;
@@ -1315,6 +1347,7 @@ private:
     unsigned int probeCountValue = 0;
     unsigned int calibrationFramesRemainingValue = 0;
     bool passInitializedValue = false;
+    bool singleOccurrenceBootstrapValue = false;
     bool requestedRetainedReallocationValue = false;
     bool requestedRetainedReallocationPreserveBudgetValue = true;
     bool reallocateAfterCalibrationValue = false;
@@ -1527,8 +1560,8 @@ public:
 	    std::min(inputs.activeMaximum, inputs.presentationCeiling) :
 	    inputs.activeMaximum;
 	decision.progressiveCeiling =
-	    presentedMaximum >= BOBOL_MESH_LOD_CUT_COUNT_MAX - 1 ?
-		BOBOL_MESH_LOD_CUT_COUNT_MAX - 1 : presentedMaximum + 1;
+	    (presentedMaximum >= BOBOL_MESH_LOD_CUT_COUNT_MAX - 1 ?
+		BOBOL_MESH_LOD_CUT_COUNT_MAX - 1 : presentedMaximum + 1);
 	/* A stable cut which was presented within the hard zoom-quality
 	 * deadline is a stronger starting point than the deliberately coarser
 	 * 60 Hz motion cut.  Replaying it does not expose new immutable data and

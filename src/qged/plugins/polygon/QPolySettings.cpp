@@ -195,6 +195,35 @@ QPolySettings::~QPolySettings()
 {
 }
 
+void
+QPolySettings::setTestIdPrefix(const QString &prefix)
+{
+    setProperty("qgTestId", prefix + QStringLiteral(".settings"));
+    edge_color->setProperty(
+	"qgTestId", prefix + QStringLiteral(".edge-color"));
+    fill_poly->setProperty(
+	"qgTestId", prefix + QStringLiteral(".fill-enabled"));
+    fill_color->setProperty(
+	"qgTestId", prefix + QStringLiteral(".fill-color"));
+    fill_slope_x->setProperty(
+	"qgTestId", prefix + QStringLiteral(".fill-slope-x"));
+    fill_slope_y->setProperty(
+	"qgTestId", prefix + QStringLiteral(".fill-slope-y"));
+    fill_density->setProperty(
+	"qgTestId", prefix + QStringLiteral(".fill-spacing"));
+    view_name->setProperty(
+	"qgTestId", prefix + QStringLiteral(".view-name"));
+    sketch_name->setProperty(
+	"qgTestId", prefix + QStringLiteral(".sketch-name"));
+    sketch_sync->setProperty(
+	"qgTestId", prefix + QStringLiteral(".sketch-sync"));
+    vZ->setProperty("qgTestId", prefix + QStringLiteral(".view-z"));
+    line_snapping->setProperty(
+	"qgTestId", prefix + QStringLiteral(".line-snapping"));
+    grid_snapping->setProperty(
+	"qgTestId", prefix + QStringLiteral(".grid-snapping"));
+}
+
 bool
 QPolySettings::uniq_obj_name(struct bu_vls *oname, const QgPluginContext *ctx)
 {

@@ -390,11 +390,13 @@ public:
     int setDatabaseSourceBoundsState(const char *sourcePath,
 	SbBool boundsValid,
 	const SbVec3f &boundsMin,
-	const SbVec3f &boundsMax);
+	const SbVec3f &boundsMax,
+	SbBool boundsExact = FALSE);
     int setDatabaseSourceInstanceBoundsState(const char *sourceInstanceKey,
 	SbBool boundsValid,
 	const SbVec3f &boundsMin,
-	const SbVec3f &boundsMax);
+	const SbVec3f &boundsMax,
+	SbBool boundsExact = FALSE);
     int markDatabaseSourceStale(const char *sourcePath,
 	uint32_t staleReason);
     int markDatabaseSourceInstanceStale(const char *sourceInstanceKey,

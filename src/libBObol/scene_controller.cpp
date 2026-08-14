@@ -3289,7 +3289,8 @@ int
 BObolSceneController::setDatabaseSourceBoundsState(const char *sourcePath,
 	SbBool boundsValid,
 	const SbVec3f &boundsMin,
-	const SbVec3f &boundsMax)
+	const SbVec3f &boundsMax,
+	SbBool boundsExact)
 {
     if (!this->d->root || !this->d->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
@@ -3301,7 +3302,7 @@ BObolSceneController::setDatabaseSourceBoundsState(const char *sourcePath,
 
     return this->setDatabaseSourceInstanceBoundsState(
 	       sourceInstanceKey.getString(), boundsValid,
-	       boundsMin, boundsMax);
+	       boundsMin, boundsMax, boundsExact);
 }
 
 int
@@ -3309,7 +3310,8 @@ BObolSceneController::setDatabaseSourceInstanceBoundsState(
     const char *sourceInstanceKey,
     SbBool boundsValid,
     const SbVec3f &boundsMin,
-    const SbVec3f &boundsMax)
+    const SbVec3f &boundsMax,
+    SbBool boundsExact)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -3317,7 +3319,7 @@ BObolSceneController::setDatabaseSourceInstanceBoundsState(
 	return -1;
 
     const int changed = source->setSourceBoundsState(boundsValid,
-			boundsMin, boundsMax);
+			boundsMin, boundsMax, boundsExact);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;

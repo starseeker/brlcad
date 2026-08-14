@@ -42,16 +42,7 @@ void
 bobol_evaluated_points_face_set_free(
     struct rt_primitive_indexed_face_set *face_set)
 {
-    if (!face_set)
-	return;
-
-    if (face_set->points)
-	bu_free(face_set->points, "evaluated-points face-set points");
-    if (face_set->normals)
-	bu_free(face_set->normals, "evaluated-points face-set normals");
-    if (face_set->indices)
-	bu_free(face_set->indices, "evaluated-points face-set indices");
-    memset(face_set, 0, sizeof(*face_set));
+    rt_primitive_indexed_face_set_free(face_set);
 }
 
 
@@ -69,6 +60,35 @@ bobol_evaluated_points_transform_face_set(
 	point_t transformed;
 	MAT4X3PNT(transformed, matrix, face_set->points[i]);
 	VMOVE(face_set->points[i], transformed);
+    }
+
+    if (face_set->source_bounds_valid) {
+	const point_t local_min = {
+	    face_set->source_bounds_min[X],
+	    face_set->source_bounds_min[Y],
+	    face_set->source_bounds_min[Z]
+	};
+	const point_t local_max = {
+	    face_set->source_bounds_max[X],
+	    face_set->source_bounds_max[Y],
+	    face_set->source_bounds_max[Z]
+	};
+	point_t transformed_min;
+	point_t transformed_max;
+	VSETALL(transformed_min, INFINITY);
+	VSETALL(transformed_max, -INFINITY);
+	for (int corner = 0; corner < 8; corner++) {
+	    point_t local;
+	    point_t transformed;
+	    VSET(local,
+		(corner & 1) ? local_max[X] : local_min[X],
+		(corner & 2) ? local_max[Y] : local_min[Y],
+		(corner & 4) ? local_max[Z] : local_min[Z]);
+	    MAT4X3PNT(transformed, matrix, local);
+	    VMINMAX(transformed_min, transformed_max, transformed);
+	}
+	VMOVE(face_set->source_bounds_min, transformed_min);
+	VMOVE(face_set->source_bounds_max, transformed_max);
     }
 
     if (!face_set->normals || !face_set->normal_count)

@@ -271,6 +271,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     preserveMeshCoverage(FALSE),
     refinementCostBudget(SIZE_MAX),
     refinementCostBudgetUsed(0),
+    initialProviderCostBudget(0),
     refinementBudgetBlockedCount(0),
     retainedQualityLimitedCount(0),
     retainedAdmissionBlockedCount(0),
@@ -583,6 +584,18 @@ SoBRLMeshLodSubmitAction::getRefinementCostBudgetUsed(void) const
     return this->refinementCostBudgetUsed;
 }
 
+void
+SoBRLMeshLodSubmitAction::setInitialProviderCostBudget(size_t cost)
+{
+    this->initialProviderCostBudget = cost;
+}
+
+size_t
+SoBRLMeshLodSubmitAction::getInitialProviderCostBudget(void) const
+{
+    return this->initialProviderCostBudget;
+}
+
 unsigned int
 SoBRLMeshLodSubmitAction::getRefinementBudgetBlockedCount(void) const
 {
@@ -692,10 +705,14 @@ mesh_lod_next_population_cut(
  * soon enough for a later quality frame to use it.  Loading the complete
  * requested suffix in one task satisfies the second obligation eventually,
  * but a single large asset (Lucy is the canonical example) may then publish
- * nothing for several seconds.  Advance residency by one population-bearing
- * band while the quality-frame state machine is active.  Quantization-only
- * cuts are folded into that band, so this is bounded by actual array growth
- * rather than by an arbitrary ordinal step.
+ * nothing for several seconds.  Conversely, advancing exactly one populated
+ * cut at a time makes a modest suffix walk through several visibly blocky
+ * frames even when it fits comfortably in the worker memory allowance.
+ *
+ * Admit the richest prefix whose complete preparation working set fits one
+ * bounded prefetch quantum.  If the current population already exceeds that
+ * quantum, the next population-bearing cut is still allowed so exceptional
+ * assets cannot deadlock.  Quantization-only cuts remain free.
  *
  * Quiet convergence deliberately does not use this helper: once input has
  * stopped, a direct admitted prefetch avoids whole-scene level walking. */
@@ -703,6 +720,7 @@ static int
 mesh_lod_bounded_resident_prefetch_cut(
     const BObolLodProgressiveMeshPtr &progressiveMesh,
     const std::vector<uint32_t> &chunkIds, int requestedCut,
+    SbBool hasNormals, int drawMode, BObolLodService *service,
     SbBool transitionLimited)
 {
     if (!progressiveMesh || requestedCut < 0 || !transitionLimited)
@@ -711,6 +729,26 @@ mesh_lod_bounded_resident_prefetch_cut(
     if (residentCut < progressiveMesh->minimumCut() ||
 	requestedCut <= residentCut)
 	return requestedCut;
+
+    constexpr size_t minimumQuantum = 64ULL * 1024ULL * 1024ULL;
+    constexpr size_t maximumQuantum = 512ULL * 1024ULL * 1024ULL;
+    size_t quantum = maximumQuantum;
+    if (service) {
+	const size_t workingLimit = service->getWorkingSetLimit();
+	if (workingLimit != SIZE_MAX) {
+	    const size_t half = workingLimit / 2;
+	    quantum = std::min(maximumQuantum,
+		std::max(half, std::min(workingLimit, minimumQuantum)));
+	}
+    }
+    for (int cut = requestedCut; cut > residentCut; --cut) {
+	const BObolLodCounts counts = mesh_lod_chunk_counts(
+	    progressiveMesh, chunkIds, cut, hasNormals, true);
+	const size_t estimate = mesh_lod_resident_working_set_estimate(
+	    counts.pointCount, counts.faceCount, hasNormals, drawMode);
+	if (estimate <= quantum)
+	    return cut;
+    }
     return mesh_lod_next_population_cut(
 	progressiveMesh, chunkIds, residentCut, requestedCut);
 }
@@ -869,9 +907,9 @@ SoBRLMeshLodSubmitAction::reserveRefinementCut(
 SbBool
 SoBRLMeshLodSubmitAction::reserveInitialCost(
     uint64_t sourceFaces, uint64_t sourcePoints, int drawMode,
-    size_t &providerFaceAllowance)
+    size_t &providerCostAllowance)
 {
-    providerFaceAllowance = 0;
+    providerCostAllowance = 0;
     if (this->refinementCostBudget == SIZE_MAX)
 	return TRUE;
 
@@ -922,16 +960,29 @@ SoBRLMeshLodSubmitAction::reserveInitialCost(
 	return FALSE;
     }
 
+    size_t admittedCost = reserveCost;
+    if (this->initialProviderCostBudget) {
+	/* One uncovered visible occurrence may use the renderer's complete
+	 * first-pass allowance.  Cap it at an estimated full source cost so a
+	 * modest mesh does not consume budget which later sources can use.  PoP
+	 * hierarchy metadata is the final authority in the worker. */
+	BObolLodCounts sourceCounts;
+	sourceCounts.faceCount = knownFaces;
+	sourceCounts.pointCount = knownPoints;
+	sourceCounts.normalCount = knownPoints;
+	const size_t sourceCost = bobol_lod_render_cost_units(
+	    sourceCounts, drawMode, 1);
+	const size_t remaining = this->refinementCostBudgetUsed >=
+		this->refinementCostBudget ? 0 :
+	    this->refinementCostBudget - this->refinementCostBudgetUsed;
+	admittedCost = std::max(reserveCost,
+	    std::min(this->initialProviderCostBudget,
+		std::min(sourceCost, remaining)));
+    }
     this->refinementCostBudgetUsed =
-	reserveCost > SIZE_MAX - this->refinementCostBudgetUsed ?
-	SIZE_MAX : this->refinementCostBudgetUsed + reserveCost;
-    /* The reservation may use an exact small source count, while a legacy
-     * cache's hierarchy metadata can conservatively report a slightly larger
-     * populated minimum.  Keep the provider's local first-cut ceiling at the
-     * provisional quantum; aggregate admission is still charged by the
-     * source count. */
-    providerFaceAllowance = std::max(reserveFaces,
-	provisionalFirstCutFaces);
+	admittedCost > SIZE_MAX - this->refinementCostBudgetUsed ?
+	    SIZE_MAX : this->refinementCostBudgetUsed + admittedCost;
+    providerCostAllowance = admittedCost;
     return TRUE;
 }
 
@@ -3251,6 +3302,26 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		mesh_lod_available_cad_retarget_cut(activePayload,
 		    presentationDemand,
 		    TRUE);
+	    /*
+	     * presentationDemand may be lower than the physical request because a
+	     * transient scene allocation was stamped after this occurrence had
+	     * already presented a richer prefix.  The ordinary no-downgrade guard
+	     * above compares against request.requestedCut and therefore does not
+	     * cover that case.  Honor the action contract here as well: during a
+	     * scale interaction the renderer-wide ceiling is the reversible FPS
+	     * control, while the retained occurrence stays at its useful cut.
+	     *
+	     * A spatial page-set expansion is the one exception.  If newly visible
+	     * chunks cannot draw the retained cut yet, the common drawable prefix
+	     * is required for a complete, uniform mesh; the independent resident
+	     * prefetch below will grow those pages without rebuilding the asset.
+	     */
+	    if (!submitAction->allowCutDowngrade && activePayload &&
+		activeAssetMatches &&
+		retargetCut < activePayload->activeCut &&
+		mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
+		    request.requiredChunks, activePayload->activeCut))
+		retargetCut = activePayload->activeCut;
 	    if (getenv("BOBOL_LOD_TRACE_BUDGET") && activePayload)
 		bu_log("BObol retained retarget candidate active=%d requested=%d "
 		    "presentation=%d available=%d can_draw=%d asset_match=%d "
@@ -3361,6 +3432,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			    activePayload->progressiveMesh,
 			    request.requiredChunks,
 			    request.requestedCut,
+			    activePayload->hasNormals, request.drawMode,
+			    submitAction->service,
 			    submitAction->transitionLimitedRefinement);
 		else if (providerPresentationCut > activePayload->activeCut)
 		    providerDeliveryCut = providerPresentationCut;
@@ -3407,12 +3480,12 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		break;
 	    }
 
-	    size_t initialFaceAllowance = 0;
+	    size_t initialCostAllowance = 0;
 	    if (!activePayload &&
 		!submitAction->reserveInitialCost(
 		    request.sourceCounts.faceCount,
 		    request.sourceCounts.pointCount, request.drawMode,
-		    initialFaceAllowance)) {
+		    initialCostAllowance)) {
 		submitAction->pendingRetainedRefinementCount++;
 		submitAction->skippedMeshCount++;
 		continue;
@@ -3473,13 +3546,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		provider->progressiveDelivery = FALSE;
 	    if (atomicBrepHandoff)
 		provider->progressiveDelivery = FALSE;
-	    if (initialFaceAllowance) {
-		provider->initialRefinementFaceBudget =
-		    initialFaceAllowance;
-		provider->initialRefinementPointBudget =
-		    initialFaceAllowance > SIZE_MAX / 2 ?
-			SIZE_MAX : initialFaceAllowance * 2;
-	    }
+	    if (initialCostAllowance)
+		provider->initialRefinementCostBudget = initialCostAllowance;
 	    provider->shrinkAfterCopy = TRUE;
 		    /* A shared source asset may serve many occurrences at
 		     * different levels.  Trimming is therefore a post-generation
@@ -3750,6 +3818,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    activePayload->progressiveMesh,
 		    request.requiredChunks,
 		    request.requestedCut,
+		    activePayload->hasNormals, request.drawMode,
+		    submitAction->service,
 		    submitAction->transitionLimitedRefinement) :
 		providerPresentationCut;
 	}
@@ -3759,12 +3829,12 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    mesh_lod_retarget_cad_demand_if_changed(
 		submitAction->viewState, activePayload, request);
 
-	size_t initialFaceAllowance = 0;
-    if (!activePayload &&
-	!submitAction->reserveInitialCost(
-	    request.sourceCounts.faceCount,
-	    request.sourceCounts.pointCount, request.drawMode,
-	    initialFaceAllowance)) {
+	size_t initialCostAllowance = 0;
+	if (!activePayload &&
+	    !submitAction->reserveInitialCost(
+		request.sourceCounts.faceCount,
+		request.sourceCounts.pointCount, request.drawMode,
+		initialCostAllowance)) {
 	submitAction->pendingRetainedRefinementCount++;
 	submitAction->skippedMeshCount++;
 	source->doAction(action);
@@ -3794,12 +3864,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     provider->presentationCutLimit = providerPresentationCut;
     if (provider->useDeliveryCutLimit)
 	provider->progressiveDelivery = FALSE;
-    if (initialFaceAllowance) {
-	provider->initialRefinementFaceBudget = initialFaceAllowance;
-	provider->initialRefinementPointBudget =
-	    initialFaceAllowance > SIZE_MAX / 2 ?
-		SIZE_MAX : initialFaceAllowance * 2;
-    }
+    if (initialCostAllowance)
+	provider->initialRefinementCostBudget = initialCostAllowance;
     provider->shrinkAfterCopy = TRUE;
 	    provider->compactResident = FALSE;
     provider->reset = submitAction->reset;
@@ -4016,6 +4082,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 		    viewPayload->progressiveMesh,
 		    request.requiredChunks,
 		    request.requestedCut,
+		    viewPayload->hasNormals, request.drawMode,
+		    submitAction->service,
 		    submitAction->transitionLimitedRefinement) :
 		providerPresentationCut;
 	}
@@ -4025,12 +4093,12 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    mesh_lod_retarget_mesh_demand_if_changed(
 		submitAction->viewState, viewPayload, request);
 
-	size_t initialFaceAllowance = 0;
-    if (!viewPayload &&
-	!submitAction->reserveInitialCost(
-	    request.sourceCounts.faceCount,
-	    request.sourceCounts.pointCount, request.drawMode,
-	    initialFaceAllowance)) {
+	size_t initialCostAllowance = 0;
+	if (!viewPayload &&
+	    !submitAction->reserveInitialCost(
+		request.sourceCounts.faceCount,
+		request.sourceCounts.pointCount, request.drawMode,
+		initialCostAllowance)) {
 	submitAction->pendingRetainedRefinementCount++;
 	submitAction->skippedMeshCount++;
 	return;
@@ -4058,12 +4126,8 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     provider->presentationCutLimit = providerPresentationCut;
     if (provider->useDeliveryCutLimit)
 	provider->progressiveDelivery = FALSE;
-    if (initialFaceAllowance) {
-	provider->initialRefinementFaceBudget = initialFaceAllowance;
-	provider->initialRefinementPointBudget =
-	    initialFaceAllowance > SIZE_MAX / 2 ?
-		SIZE_MAX : initialFaceAllowance * 2;
-    }
+    if (initialCostAllowance)
+	provider->initialRefinementCostBudget = initialCostAllowance;
     provider->shrinkAfterCopy = TRUE;
 	    provider->compactResident = FALSE;
     provider->reset = submitAction->reset;

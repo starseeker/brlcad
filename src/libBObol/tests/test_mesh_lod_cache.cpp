@@ -291,6 +291,7 @@ main(int argc, char *argv[])
     const char *meshObjname = "bobol_lod_mesh_payload";
     const char *translatedMeshObjname = "bobol_lod_translated_mesh_payload";
     const char *invalidBotObjname = "bobol_invalid_lod_bot";
+    const char *degenerateBotObjname = "bobol_degenerate_lod_bot";
     /* Slightly exceed one private chunk so every cache run exercises
      * independent page serialization and selective reads. */
     const int grid = 190;
@@ -463,6 +464,24 @@ main(int argc, char *argv[])
 	}
 
 	{
+	    /* Repeated-index triangles occur in otherwise drawable legacy BoTs.
+	     * They have no visible area and must not poison the complete PoP
+	     * hierarchy for the valid neighboring faces. */
+	    int degenerateFaces[9] = {
+		0, 1, grid + 1,
+		0, 0, 1,
+		0, grid + 1, grid + 2
+	    };
+	    if (mk_bot(wdbp, degenerateBotObjname, RT_BOT_SURFACE,
+		    RT_BOT_CCW, 0, vertexCount, 3, vertices,
+		    degenerateFaces, NULL, NULL) < 0) {
+		printf("FAIL: mesh lod degenerate mk_bot\n");
+		ret = 1;
+		goto cleanup;
+	    }
+	}
+
+	{
 	    point_t center = VINIT_ZERO;
 	    if (mk_sph(wdbp, meshObjname, center, 1.0) < 0) {
 		printf("FAIL: mesh lod mk_sph\n");
@@ -495,6 +514,35 @@ main(int argc, char *argv[])
 	printf("FAIL: mesh lod invalid BoT cache rejection\n");
 	ret = 1;
 	goto cleanup;
+    }
+
+    {
+	struct BObolMeshLod *degenerate = NULL;
+	struct BObolMeshLodHierarchyInfo hierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	struct BObolMeshLodData data = {};
+	const int refreshStatus = bobol_mesh_lod_cache_refresh(
+	    dbip, degenerateBotObjname, &cacheStatus);
+	if (refreshStatus != BRLCAD_OK ||
+	    !(degenerate = bobol_mesh_lod_get(dbip, degenerateBotObjname)) ||
+	    !bobol_mesh_lod_hierarchy_info_get(degenerate, &hierarchy) ||
+	    bobol_mesh_lod_load_resident_cut(
+		degenerate, hierarchy.max_cut, 0) != hierarchy.max_cut ||
+	    !bobol_mesh_lod_data_get(degenerate, &data) ||
+	    data.face_count != 2) {
+	    printf("FAIL: mesh lod repeated-index face sanitization "
+		   "refresh=%d lod=%p min=%d max=%d current=%d "
+		   "faces=%zu points=%zu\n", refreshStatus,
+		   static_cast<void *>(degenerate), hierarchy.min_cut,
+		   hierarchy.max_cut,
+		   degenerate ? bobol_mesh_lod_current_cut(degenerate) : -1,
+		   data.face_count, data.point_count);
+	    if (degenerate)
+		bobol_mesh_lod_destroy(degenerate);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(degenerate);
     }
 
     {

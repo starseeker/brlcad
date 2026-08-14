@@ -1235,12 +1235,51 @@ test_budget_policy(void)
 	return 1;
     }
 
+    /* Once a single-occurrence view becomes quiet, the event-driven hard
+     * deadline is a stronger and more useful bound than the many-object
+     * growth ladder.  Use the complete calibrated allowance in one atomic
+     * presentation trial; an endpoint abort supplies recovery if the
+     * prediction is optimistic. */
+    policy.reset();
+    input = Policy::Inputs();
+    input.activeCost = 100000;
+    input.targetFps = 10.0f;
+    input.calibratedCostPerSecond = 10000000.0L;
+    input.observedStableNanoseconds = 40000000ULL;
+    input.directStaticPresentation = true;
+    decision = policy.beginPass(input);
+    if (!decision.initialized || decision.totalBudget != 1000000 ||
+	decision.refinementBudget != 900000 ||
+	decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: direct single-occurrence static presentation budget\n");
+	return 1;
+    }
+
+    /* Once coverage proves a single visible occurrence, an empty retained
+     * population may start at a useful medium-mesh allowance.  This removes
+     * several warm-cache blocky frames without changing the conservative seed
+     * for an unknown/many-object population. */
+    policy.reset();
+    input = Policy::Inputs();
+    input.coldSingleOccurrence = true;
+    decision = policy.beginPass(input);
+    if (!decision.initialized ||
+	decision.totalBudget != Policy::singleOccurrenceBootstrapBudget() ||
+	decision.refinementBudget !=
+	    Policy::singleOccurrenceBootstrapBudget()) {
+	std::fprintf(stderr, "FAIL: single-occurrence bootstrap budget\n");
+	return 1;
+    }
+
     /* A hard-deadline handoff may replace a stale, optimistic allowance, but
      * its renderer-only ceiling must not rewrite the retained occurrence
      * population.  An exact over-budget frame or an explicit recovery
      * request supplies that separate authority. */
-    policy.resetPass();
+    policy.reset();
+    input = Policy::Inputs();
     input.activeCost = 400000;
+    input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 2000000.0L;
     input.observedStableNanoseconds = 40000000ULL;
     input.stablePresentationHandoff = true;
@@ -2101,6 +2140,20 @@ test_view_demand_policy(void)
 	policy.rearmAfterQualityFrame(
 	    true, 11, 10, true, 100000001ULL)) {
 	std::fprintf(stderr, "FAIL: quality successor deadline bound\n");
+	return 1;
+    }
+
+    /* Resident growth rearms exactly one measured presentation step.  It may
+     * not reopen the complete hidden prefix: a missed software frame would
+     * then back down through every ordinal and later repaint edges could
+     * repeat that same staircase. */
+    if (!policy.rearmAfterResidentGrowth(true)) {
+	std::fprintf(stderr, "FAIL: measured quality probe rearm\n");
+	return 1;
+    }
+    probe = policy.beginQualityProbe(probeInput);
+    if (!probe.begin || probe.progressiveCeiling != 10) {
+	std::fprintf(stderr, "FAIL: resident quality probe skipped witness\n");
 	return 1;
     }
     policy.endGesture();

@@ -1,0 +1,479 @@
+{
+  "schema": "brlcad.qtcad.events",
+  "version": 1,
+  "events": [
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": { "width": 1100, "height": 760 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": { "commands": ["view clear", "ae 0 90", "autoview"] }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.rectangle",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.view-name",
+      "action": "set_text",
+      "arguments": { "text": "mouse_rectangle" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.25, "y": 0.25, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.45, "y": 0.45, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.45, "y": 0.45, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_rectangle",
+        "numeric_gt": 0,
+        "capture": "rectangle_created_area"
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "assert_state",
+      "arguments": {
+        "text": "mouse_rectangle",
+        "index": 0,
+        "count": 1,
+        "items": ["mouse_rectangle"]
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.view-name",
+      "action": "assert_state",
+      "arguments": { "text": "mouse_rectangle" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.select",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.update",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.45, "y": 0.45, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.58, "y": 0.55, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.58, "y": 0.55, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_rectangle",
+        "numeric_gt_capture": "rectangle_created_area",
+        "capture": "rectangle_resized_area"
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "assert_state",
+      "arguments": { "text": "mouse_rectangle", "index": 0, "count": 1 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.move",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.41, "y": 0.40, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.61, "y": 0.40, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.61, "y": 0.40, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_rectangle",
+        "numeric_near_capture": "rectangle_resized_area",
+        "numeric_tolerance": 0.001
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.boolean-mode",
+      "action": "set_index",
+      "arguments": { "index": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.rectangle",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.view-name",
+      "action": "set_text",
+      "arguments": { "text": "mouse_probe" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.25, "y": 0.27, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.38, "y": 0.39, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.38, "y": 0.39, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon overlap mouse_rectangle mouse_probe", "contains": "0" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "assert_state",
+      "arguments": {
+        "text": "mouse_rectangle",
+        "index": 0,
+        "count": 2,
+        "items": ["mouse_rectangle", "mouse_probe"]
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.move",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.61, "y": 0.40, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.39, "y": 0.40, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.39, "y": 0.40, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon overlap mouse_rectangle mouse_probe", "contains": "1" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "set_index",
+      "arguments": { "index": 1 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.delete",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "assert_state",
+      "arguments": {
+        "text": "mouse_rectangle",
+        "index": 0,
+        "count": 1,
+        "items": ["mouse_rectangle"]
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.view-name",
+      "action": "assert_state",
+      "arguments": { "text": "mouse_rectangle" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view feature list mouse_probe", "not_contains": "mouse_probe" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.boolean-mode",
+      "action": "set_index",
+      "arguments": { "index": 2 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.rectangle",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.view-name",
+      "action": "set_text",
+      "arguments": { "text": "mouse_subtract_stencil" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.31, "y": 0.32, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.42, "y": 0.44, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.42, "y": 0.44, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view feature list mouse_subtract_stencil", "not_contains": "mouse_subtract_stencil" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_rectangle",
+        "numeric_gt": 0,
+        "numeric_lt_capture": "rectangle_resized_area"
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.boolean-mode",
+      "action": "set_index",
+      "arguments": { "index": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.general",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.view-name",
+      "action": "set_text",
+      "arguments": { "text": "mouse_general" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.68, "y": 0.68, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.68, "y": 0.68, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.85, "y": 0.68, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.85, "y": 0.68, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.78, "y": 0.86, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.78, "y": 0.86, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.78, "y": 0.86, "button": 2, "buttons": 2, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.78, "y": 0.86, "button": 2, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_general",
+        "numeric_gt": 0,
+        "capture": "general_created_area"
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.select",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.68, "y": 0.68, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.68, "y": 0.68, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "assert_state",
+      "arguments": { "text": "mouse_general", "index": 1, "count": 2 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.view-name",
+      "action": "assert_state",
+      "arguments": { "text": "mouse_general" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.update",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.select-point",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.68, "y": 0.68, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.62, "y": 0.60, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.62, "y": 0.60, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_general",
+        "numeric_gt_capture": "general_created_area",
+        "capture": "general_edited_area"
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.move",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.75, "y": 0.72, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.72, "y": 0.55, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.72, "y": 0.55, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_general",
+        "numeric_near_capture": "general_edited_area",
+        "numeric_tolerance": 0.001
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.delete",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "assert_state",
+      "arguments": {
+        "text": "mouse_rectangle",
+        "index": 0,
+        "count": 1,
+        "items": ["mouse_rectangle"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view feature list mouse_general", "not_contains": "mouse_general" }
+    }
+  ]
+}

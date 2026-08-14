@@ -986,6 +986,23 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
     static const char track_name[] = "_faceplate/lod_progress_track";
     static const char fill_name[] = "_faceplate/lod_progress_fill";
     static const char label_name[] = "_faceplate/lod_progress_label";
+    struct bv_lod_policy policy;
+    bv_lod_policy_init(&policy);
+    BObolViewAttachment *attachment = controller->getViewAttachment();
+    if (attachment)
+	attachment->getLodPolicy(&policy);
+    const bool enabled = attachment && policy.policy != BV_LOD_OFF &&
+	(policy.mesh_enabled || policy.csg_enabled);
+    if (!enabled) {
+	/* Convergence telemetry may intentionally retain historical calibration
+	 * and resident-memory statistics across a policy transition.  It does not
+	 * make an inactive LoD system user-visible: remove all three retained HUD
+	 * records immediately when the view policy is disabled. */
+	ged_obol_faceplate_remove(controller, view_ctx, track_name);
+	ged_obol_faceplate_remove(controller, view_ctx, fill_name);
+	ged_obol_faceplate_remove(controller, view_ctx, label_name);
+	return;
+    }
     BObolLodConvergenceStatus status;
     controller->getLodConvergenceStatus(status);
 

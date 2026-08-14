@@ -364,6 +364,29 @@ QgEventRecorder::resolveObject(QObject *root, const QString &path)
 	return nullptr;
     if (path == QLatin1String("."))
 	return root;
+    /* Stable test ids are application contracts, whereas the QObject parent
+     * chain below is an implementation detail which legitimately changes as
+     * tool palettes, docks, and scroll areas are reorganized.  Permit a
+     * unique descendant lookup for hand-authored production scripts.  A
+     * duplicate is rejected rather than making event replay depend on child
+     * construction order.  Recorder-authored streams continue to use their
+     * explicit ./ hierarchy paths. */
+    if (path.startsWith(QLatin1String("i:"))) {
+	const QString testId = qg_event_decode(path.mid(2));
+	QObject *match = root->property("qgTestId").toString() == testId ?
+	    root : nullptr;
+	const QObjectList descendants =
+	    root->findChildren<QObject *>(QString(),
+		Qt::FindChildrenRecursively);
+	for (QObject *candidate : descendants) {
+	    if (candidate->property("qgTestId").toString() != testId)
+		continue;
+	    if (match)
+		return nullptr;
+	    match = candidate;
+	}
+	return match;
+    }
     if (!path.startsWith(QLatin1String("./")))
 	return nullptr;
 
@@ -663,6 +686,71 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	    slider->setValue(static_cast<int>(value));
 	    return true;
 	}
+    } else if (event.action == QLatin1String("assert_state")) {
+	/* Semantic GUI tests need to verify that editor state follows scene
+	 * state, not only that an input event was accepted.  Keep these
+	 * assertions widget-generic so plugin tests do not depend on QObject
+	 * construction paths or private implementation types. */
+	const auto fail = [error](const QString &message) {
+	    qg_event_error(error, message);
+	    return false;
+	};
+	if (event.arguments.contains(QStringLiteral("enabled")) &&
+	    target->isWidgetType() &&
+	    static_cast<QWidget *>(target)->isEnabled() !=
+		event.arguments.value(QStringLiteral("enabled")).toBool())
+	    return fail(QStringLiteral("assert_state enabled mismatch"));
+	if (event.arguments.contains(QStringLiteral("checked"))) {
+	    QAbstractButton *button = qobject_cast<QAbstractButton *>(target);
+	    if (!button || button->isChecked() !=
+		event.arguments.value(QStringLiteral("checked")).toBool())
+		return fail(QStringLiteral("assert_state checked mismatch"));
+	}
+	QString text;
+	bool hasText = false;
+	if (QLineEdit *edit = qobject_cast<QLineEdit *>(target)) {
+	    text = edit->text();
+	    hasText = true;
+	} else if (QComboBox *combo = qobject_cast<QComboBox *>(target)) {
+	    text = combo->currentText();
+	    hasText = true;
+	} else if (QAbstractButton *button =
+		qobject_cast<QAbstractButton *>(target)) {
+	    text = button->text();
+	    hasText = true;
+	}
+	if (event.arguments.contains(QStringLiteral("text")) &&
+	    (!hasText || text !=
+		event.arguments.value(QStringLiteral("text")).toString()))
+	    return fail(QStringLiteral("assert_state text mismatch: '%1'")
+		.arg(text));
+	if (QComboBox *combo = qobject_cast<QComboBox *>(target)) {
+	    if (event.arguments.contains(QStringLiteral("count")) &&
+		combo->count() !=
+		event.arguments.value(QStringLiteral("count")).toInt())
+		return fail(QStringLiteral("assert_state count mismatch: %1")
+		    .arg(combo->count()));
+	    if (event.arguments.contains(QStringLiteral("index")) &&
+		combo->currentIndex() !=
+		event.arguments.value(QStringLiteral("index")).toInt())
+		return fail(QStringLiteral("assert_state index mismatch: %1")
+		    .arg(combo->currentIndex()));
+	    const QJsonArray expectedItems =
+		event.arguments.value(QStringLiteral("items")).toArray();
+	    if (!expectedItems.isEmpty()) {
+		if (expectedItems.size() != combo->count())
+		    return fail(QStringLiteral(
+			"assert_state item count mismatch: %1")
+			.arg(combo->count()));
+		for (int i = 0; i < combo->count(); ++i) {
+		    if (combo->itemText(i) != expectedItems.at(i).toString())
+			return fail(QStringLiteral(
+			    "assert_state item %1 mismatch: '%2'")
+			    .arg(i).arg(combo->itemText(i)));
+		}
+	    }
+	}
+	return true;
     } else if (event.action == QLatin1String("set_current")) {
 	QAbstractItemView *view = qobject_cast<QAbstractItemView *>(target);
 	const QModelIndex index = qg_event_resolve_index(view, event.arguments);

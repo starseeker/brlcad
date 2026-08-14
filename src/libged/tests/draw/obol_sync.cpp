@@ -2193,7 +2193,8 @@ exercise_evaluated_wire_shape_ref_realize_context(struct ged *gedp,
     if (!source || !source->getSummary(summary) || !summary.valid ||
 	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
 	    summary.realizedShapeCount <= 0 ||
-	    summary.instanceKey.getLength() == 0)
+	    summary.instanceKey.getLength() == 0 ||
+	    !summary.sourceBoundsValid || !summary.sourceBoundsExact)
 	FAIL("evaluated-wire realize-context setup should create a realized mode source");
 
     const std::string instance_key(summary.instanceKey.getString());
@@ -2227,7 +2228,8 @@ exercise_evaluated_wire_shape_ref_realize_context(struct ged *gedp,
     if (!source->getSummary(summary) || !summary.valid ||
 	    summary.stale ||
 	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
-	    summary.realizedShapeCount <= 0)
+	    summary.realizedShapeCount <= 0 ||
+	    !summary.sourceBoundsValid || !summary.sourceBoundsExact)
 	FAIL("evaluated-wire shape-ref realize-context should refresh the mode source");
 
     (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,

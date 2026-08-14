@@ -30,9 +30,19 @@ test_priority_and_state(void)
     BObolCompactOccurrenceStream stream;
     stream.setExpectedCount(100000);
     stream.setWarmCoverageComplete(true);
+    const SbBox3f conservativeBounds(SbVec3f(-20.0f, -30.0f, -40.0f),
+	SbVec3f(50.0f, 60.0f, 70.0f));
     const SbBox3f exactBounds(SbVec3f(-10.0f, -20.0f, -30.0f),
 	SbVec3f(40.0f, 50.0f, 60.0f));
-    stream.setCoverageBounds(exactBounds);
+    stream.setCoverageBounds(conservativeBounds);
+    SbBox3f publishedBounds;
+    if (stream.hasCoverageBoundsComplete() ||
+	!stream.getCoverageBounds(publishedBounds) ||
+	publishedBounds != conservativeBounds) {
+	std::fprintf(stderr,
+	    "FAIL: conservative coverage was incorrectly terminal\n");
+	return 1;
+    }
 
     stream.push(occurrence(10));
     stream.push(occurrence(11));
@@ -43,9 +53,8 @@ test_priority_and_state(void)
     stream.pushPriority(occurrence(1));
     stream.pushPriority(occurrence(2));
     stream.push(occurrence(14));
+    stream.setCoverageBounds(exactBounds);
     stream.setCoverageBoundsComplete(true);
-
-    SbBox3f publishedBounds;
 
     if (stream.getExpectedCount() != 100000 ||
 	!stream.hasWarmCoverageComplete() ||

@@ -67,6 +67,8 @@ test_parent_path_matrix(void)
     char dbpath[MAXPATHLEN] = {0};
     db_i *dbip = NULL;
     struct rt_primitive_indexed_face_set face_set;
+    const point_t expected_min = {49.0, -1.0, -1.0};
+    const point_t expected_max = {51.0, 1.0, 1.0};
     memset(&face_set, 0, sizeof(face_set));
 
     FILE *fp = bu_temp_file(dbpath, MAXPATHLEN);
@@ -104,6 +106,13 @@ test_parent_path_matrix(void)
 	    ret = 1;
 	    break;
 	}
+    }
+
+    if (!ret && (!face_set.source_bounds_valid ||
+	!VNEAR_EQUAL(face_set.source_bounds_min, expected_min, 0.000001) ||
+	!VNEAR_EQUAL(face_set.source_bounds_max, expected_max, 0.000001))) {
+	std::printf("FAIL: evaluated-points authoritative bounds not transformed\n");
+	ret = 1;
     }
 
 cleanup_db:

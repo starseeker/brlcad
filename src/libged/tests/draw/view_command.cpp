@@ -721,6 +721,62 @@ test_shading_policy_command(struct ged *gedp,
     ASSERT(run_view(gedp, 4, default_crease) == BRLCAD_OK);
 }
 
+static void
+test_lod_policy_command(struct ged *gedp, struct ged_view_context *view)
+{
+    ged_view_lod_policy policy = BV_LOD_POLICY_INIT;
+    const char *enable[] = {"view", "lod", "1", NULL};
+    ASSERT(run_view(gedp, 3, enable) == BRLCAD_OK);
+    ASSERT(ged_view_lod_policy_get(&policy, view));
+    ASSERT(policy.policy == BV_LOD_AUTO);
+    ASSERT(policy.mesh_enabled == 1);
+    ASSERT(policy.csg_enabled == 1);
+    ASSERT(policy.zoom_refresh == 1);
+
+    /* The two representation families are independent.  Disabling CSG LoD
+     * while mesh LoD remains enabled must retain zoom-driven PoP demand. */
+    const char *csg_off[] = {"view", "lod", "csg", "0", NULL};
+    ASSERT(run_view(gedp, 4, csg_off) == BRLCAD_OK);
+    ASSERT(ged_view_lod_policy_get(&policy, view));
+    ASSERT(policy.policy == BV_LOD_AUTO);
+    ASSERT(policy.mesh_enabled == 1);
+    ASSERT(policy.csg_enabled == 0);
+    ASSERT(policy.zoom_refresh == 1);
+
+    const char *csg_on[] = {"view", "lod", "csg", "1", NULL};
+    const char *mesh_off[] = {"view", "lod", "mesh", "0", NULL};
+    ASSERT(run_view(gedp, 4, csg_on) == BRLCAD_OK);
+    ASSERT(run_view(gedp, 4, mesh_off) == BRLCAD_OK);
+    ASSERT(ged_view_lod_policy_get(&policy, view));
+    ASSERT(policy.policy == BV_LOD_AUTO);
+    ASSERT(policy.mesh_enabled == 0);
+    ASSERT(policy.csg_enabled == 1);
+    ASSERT(policy.zoom_refresh == 1);
+
+    const char *disable[] = {"view", "lod", "0", NULL};
+    ASSERT(run_view(gedp, 3, disable) == BRLCAD_OK);
+    ASSERT(ged_view_lod_policy_get(&policy, view));
+    ASSERT(policy.policy == BV_LOD_OFF);
+    ASSERT(policy.mesh_enabled == 0);
+    ASSERT(policy.csg_enabled == 0);
+    ASSERT(policy.zoom_refresh == 0);
+
+    /* Enabling either family from the fully-off state restores automatic
+     * zoom refresh without silently enabling the other family. */
+    const char *mesh_on[] = {"view", "lod", "mesh", "1", NULL};
+    ASSERT(run_view(gedp, 4, mesh_on) == BRLCAD_OK);
+    ASSERT(ged_view_lod_policy_get(&policy, view));
+    ASSERT(policy.policy == BV_LOD_AUTO);
+    ASSERT(policy.mesh_enabled == 1);
+    ASSERT(policy.csg_enabled == 0);
+    ASSERT(policy.zoom_refresh == 1);
+
+    ASSERT(run_view(gedp, 4, csg_on) == BRLCAD_OK);
+    ASSERT(ged_view_lod_policy_get(&policy, view));
+    ASSERT(policy.mesh_enabled == 1 && policy.csg_enabled == 1);
+    ASSERT(policy.zoom_refresh == 1);
+}
+
 int
 main(int argc, const char **argv)
 {
@@ -754,6 +810,7 @@ main(int argc, const char **argv)
 
     test_display_endpoint_slot(gedp, views[0]);
     test_shading_policy_command(gedp, views[0], views[1]);
+    test_lod_policy_command(gedp, views[0]);
     test_command_report_record_consistency(gedp, views[0]);
 
     const char *c0[] = {"view", "annotation", "line", "create", "u_line", "0", "0", "0", "1", "0", "0", NULL};

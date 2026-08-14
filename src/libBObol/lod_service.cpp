@@ -96,8 +96,7 @@ BObolMeshLodProvider::clear(void)
     shrinkAfterCopy = TRUE;
     compactResident = FALSE;
     progressiveDelivery = TRUE;
-    initialRefinementFaceBudget = 250000;
-    initialRefinementPointBudget = 500000;
+    initialRefinementCostBudget = 500000;
     refinementGrowthFactor = 4.0;
     useCurrentDrawCut = FALSE;
     currentDrawCut = -1;
@@ -3470,14 +3469,11 @@ BObolLodService::workerCountForDiagnostics(void) const
 }
 
 static size_t
-lod_refinement_growth_budget(size_t current, uint64_t initial,
+lod_refinement_growth_budget(size_t current, size_t initial,
 			     double growth)
 {
-    const size_t initialBudget = initial >
-	static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ?
-	std::numeric_limits<size_t>::max() : static_cast<size_t>(initial);
     if (!current)
-	return initialBudget;
+	return initial;
     if (!std::isfinite(growth) || growth <= 1.0)
 	growth = 1.0;
     const long double grown =
@@ -3487,7 +3483,7 @@ lod_refinement_growth_budget(size_t current, uint64_t initial,
 	    std::numeric_limits<size_t>::max()) ?
 	std::numeric_limits<size_t>::max() :
 	static_cast<size_t>(std::ceil(grown));
-    return std::max(initialBudget, growthBudget);
+    return std::max(initial, growthBudget);
 }
 
 /* Select one bounded presentation step toward the producer-resolved
@@ -3497,7 +3493,7 @@ lod_refinement_growth_budget(size_t current, uint64_t initial,
 static int
 lod_progressive_delivery_cut(
     const struct BObolMeshLodHierarchyInfo &hierarchy,
-    int requestedCut, int currentCut,
+    int requestedCut, int currentCut, int drawMode,
     const BObolMeshLodProvider &provider)
 {
     int target = std::max(hierarchy.min_cut,
@@ -3509,29 +3505,33 @@ lod_progressive_delivery_cut(
 	provider.reset || currentCut >= target)
 	return target;
 
-    const size_t currentFaces =
-	currentCut >= hierarchy.min_cut ?
-	hierarchy.cuts[currentCut].face_count : 0;
-    const size_t currentPoints =
-	currentCut >= hierarchy.min_cut ?
-	hierarchy.cuts[currentCut].point_count : 0;
-    const size_t faceBudget = lod_refinement_growth_budget(currentFaces,
-	provider.initialRefinementFaceBudget,
-	provider.refinementGrowthFactor);
-    const size_t pointBudget = lod_refinement_growth_budget(currentPoints,
-	provider.initialRefinementPointBudget,
+    BObolLodCounts currentCounts;
+    if (currentCut >= hierarchy.min_cut) {
+	currentCounts.faceCount = hierarchy.cuts[currentCut].face_count;
+	currentCounts.pointCount = hierarchy.cuts[currentCut].point_count;
+	currentCounts.normalCount = hierarchy.has_normals ?
+	    currentCounts.pointCount : 0;
+    }
+    const size_t currentCost = bobol_lod_render_cost_units(
+	currentCounts, drawMode, 1);
+    const size_t costBudget = lod_refinement_growth_budget(currentCost,
+	provider.initialRefinementCostBudget,
 	provider.refinementGrowthFactor);
 
     int selected = hierarchy.min_cut;
     for (int cut = hierarchy.min_cut; cut <= target; ++cut) {
-	if (hierarchy.cuts[cut].face_count > faceBudget ||
-	    hierarchy.cuts[cut].point_count > pointBudget)
+	BObolLodCounts counts;
+	counts.faceCount = hierarchy.cuts[cut].face_count;
+	counts.pointCount = hierarchy.cuts[cut].point_count;
+	counts.normalCount = hierarchy.has_normals ? counts.pointCount : 0;
+	if (bobol_lod_render_cost_units(counts, drawMode, 1) >
+	    costBudget)
 	    break;
 	selected = cut;
     }
 
     /*
-     * Return the richest population that fits the provider's face/point
+     * Return the richest population that fits the provider's render-cost
      * growth allowance.  Nominal cut adjacency is deliberately irrelevant:
      * one cut may add no arrays while the next adds millions.  The budget is
      * the bounded work contract, not "+1 cut".
@@ -3794,7 +3794,7 @@ BObolLodService::realizeResidentMeshLod(
     int residentTarget = requestedCut;
     if (requestedCut >= 0)
 	residentTarget = lod_progressive_delivery_cut(hierarchy, requestedCut,
-	    deliveryCut, provider);
+	    deliveryCut, request.drawMode, provider);
     if (residentTarget < hierarchy.min_cut)
 	residentTarget = hierarchy.min_cut;
     if (residentTarget > hierarchy.max_cut)
@@ -4319,17 +4319,22 @@ BObolLodService::scheduleResidentMeshCompaction(
 			aggregateChunkCuts[residentChunk.chunkId] =
 			    residentChunk.cut;
 		} else {
-		    /* Healthy memory is a latency cache: retain the last useful
-		     * representation of an off-screen page so widening the view can
-		     * draw it immediately.  Under actual pressure, reduce it to a
-		     * producer-error floor representative of a roughly 128-pixel
-		     * object.  This is intentionally richer than the mathematical
-		     * minimum, whose isolated spatial cells may be slab-like rather
-		     * than a recognizable whole-surface approximation. */
-		    static const double coverageReferencePixels = 128.0;
+		    /* Healthy resident memory is also a latency cache.  Preserve the
+		     * last useful prefix of an off-screen page so ordinary zoom-out can
+		     * immediately reuse the previously presented representation.  Only
+		     * actual memory pressure authorizes reducing that page to a compact
+		     * coverage floor.  Applying the floor unconditionally made every
+		     * zoom-out reset a large leaf to a visibly blocky common cut even
+		     * though its richer data had already been loaded and admitted.
+		     *
+		     * The pressure floor is intentionally richer than the mathematical
+		     * minimum, whose isolated spatial cells may be slab-like rather than
+		     * a recognizable whole-surface approximation. */
+		    static const double pressureCoverageReferencePixels = 128.0;
 		    static const double coverageTargetPixelError = 1.0;
 		    int coverageFloorCut = resident->mesh->cutForScreenError(
-			coverageReferencePixels, coverageTargetPixelError);
+			pressureCoverageReferencePixels,
+			coverageTargetPixelError);
 		    coverageFloorCut = std::max(minimumCut,
 			coverageFloorCut < 0 ? minimumCut : coverageFloorCut);
 		    for (const BObolLodChunkCut &residentChunk :
