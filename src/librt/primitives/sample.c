@@ -130,6 +130,9 @@ rt_obj_sampled_face_set(struct rt_primitive_indexed_face_set *face_set,
     }
     VMINMAX(rpp_min, rpp_max, (double *)obj_min);
     VMINMAX(rpp_min, rpp_max, (double *)obj_max);
+    face_set->source_bounds_valid = 1;
+    VMOVE(face_set->source_bounds_min, obj_min);
+    VMOVE(face_set->source_bounds_max, obj_max);
     struct bn_tol btol = BN_TOL_INIT_TOL;
     btol.dist = DIST_PNT_PNT(rpp_max, rpp_min) * 0.01;
 

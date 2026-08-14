@@ -57,6 +57,7 @@ class QPolySettings : public QWidget
 	QCheckBox *line_snapping;
 	QCheckBox *grid_snapping;
 
+	void setTestIdPrefix(const QString &prefix);
 	bool uniq_obj_name(struct bu_vls *oname, const QgPluginContext *ctx);
 
     signals:

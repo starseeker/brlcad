@@ -86,6 +86,13 @@ struct rt_primitive_indexed_face_set {
     size_t normal_count;
     int *indices;
     size_t index_count;
+    /* Optional authoritative bounds of the represented source object.  These
+     * are deliberately distinct from the bounds of the emitted vertices:
+     * sampled, clipped, or otherwise approximate display geometry need not
+     * contain every source extremum. */
+    int source_bounds_valid;
+    point_t source_bounds_min;
+    point_t source_bounds_max;
     uint64_t source_identity;
     uint64_t geometry_revision;
 };

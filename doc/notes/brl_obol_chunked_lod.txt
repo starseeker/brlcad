@@ -53,6 +53,25 @@ Publication and continuity
 * Camera motion may retain the preceding cut.  Pan/rotation changes only the
   required chunk set; orthographic zoom changes both the set and pixel-error
   cut.  Existing resident chunks are reused in either direction.
+* Resident preparation and presentation are separate controls.  During active
+  zoom, residency follows at least the ordinary one-pixel physical demand,
+  independently of the coarser motion-time presentation error.  Missing
+  suffixes may span several PoP populations in one worker request when their
+  complete preparation fits the bounded working-set quantum.  The scene
+  allocator and renderer ceiling still choose what the next frame can afford;
+  loading a richer immutable prefix never grants permission to draw it.
+* A scale-quality frame which completes inside the hard responsiveness
+  deadline establishes a presentation floor for that interaction epoch.  A
+  later camera sample may lower it only after a real deadline miss, not merely
+  because the ordinary motion-FPS heuristic prefers a coarser cut.  The floor
+  is renderer-only and does not prevent stable memory compaction.
+* When exactly one visible occurrence competes for the scene allowance, its
+  first provider request receives the complete bounded bootstrap allowance in
+  the same render-cost currency as later scene allocation and opens directly
+  to the richest fitting cut.  Walking one nominal PoP ordinal per frame
+  provides no fairness in that case and only magnifies blocky intermediate
+  states.  Multi-occurrence scenes keep their conservative coverage quantum
+  and marginal-transition fairness so one asset cannot starve its peers.
 
 Residency and reclamation
 -------------------------
@@ -65,9 +84,13 @@ Residency and reclamation
   page/cut vector; it does not promote every retained page to one global
   maximum cut.
 * Active and immediately preceding coherent working sets are protected from
-  eviction.  After a stable grace interval, unreferenced chunks are released;
-  referenced chunks may be trimmed to their demanded cut.  Persistent cache
-  data remains reloadable.
+  eviction.  When resident memory is healthy, an already loaded off-screen
+  chunk remains a latency cache at its last useful cut: ordinary zoom-out and
+  rotation reuse that data instead of restarting coarse convergence.  After a
+  stable grace interval under actual resident-memory pressure, off-screen
+  chunks are trimmed to a bounded whole-surface coverage floor and demanded
+  chunks to their requested cut.  Assets with no consumer may be evicted.
+  Persistent cache data remains reloadable in every case.
 * Transient build memory is bounded.  Cache generation and cache-to-renderer
   realization process chunks in bounded batches and participate in the global
   LoD working-set governor.
@@ -93,8 +116,10 @@ Required verification
 2. Every source face occurs in exactly one chunk and terminal chunks reproduce
    the source surface; all indices address the chunk-local vertex prefix.
 3. Mixed visibility never draws adjacent chunks at different logical cuts.
-4. Close Lucy loads/refines only intersecting chunks, visibly gains detail,
-   and releases non-visible chunk memory after the stable grace period.
+4. Close Lucy loads/refines only intersecting rich chunks and visibly gains
+   detail.  Healthy memory retains previously loaded off-screen prefixes for
+   zoom continuity; a constrained resident-memory run proves that the same
+   prefixes compact after the stable grace period and reload on demand.
 5. Zoom-out and rotation reuse resident chunks and never revert the whole leaf
    to boxes; a missing newly visible set uses one coherent atomic fallback.
 6. Wire and shaded modes use the same chunk/cut residency and preserve one

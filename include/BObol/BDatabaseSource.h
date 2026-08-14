@@ -559,14 +559,14 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
     size_t getExpectedCount(void) const;
     void setWarmCoverageComplete(bool complete);
     bool hasWarmCoverageComplete(void) const;
-    /* Publish/query the immutable source-local extent of the complete draw
-     * target.  The value remains available after its priority presentation
-     * occurrence has been drained, allowing the cache writer and autoview
-     * follower to consume exactly the same producer fact. */
+    /* Publish/query the source-local extent of the draw target.  An early
+     * value may be a conservative, monotonically growing overview.  Once
+     * hasCoverageBoundsComplete() is true the value is immutable and
+     * semantically exact. */
     void setCoverageBounds(const SbBox3f &bounds);
     bool getCoverageBounds(SbBox3f &bounds);
     /*
-     * True once an exact whole-target bound has been queued in the priority
+     * True once a semantically exact whole-target bound has been queued in the priority
      * lane.  Progressive autoview must not chase the append-only union of
      * partial leaf coverage: doing so recenters the camera on every streamed
      * batch and makes an otherwise monotonic cold draw appear to flicker.
@@ -980,7 +980,8 @@ public:
 	float drawSize);
     int setSourceBoundsState(SbBool boundsValid,
 	const SbVec3f &boundsMin,
-	const SbVec3f &boundsMax);
+	const SbVec3f &boundsMax,
+	SbBool boundsExact = FALSE);
     int setSourceBoundsExactState(SbBool boundsExact);
     void clearSourceBounds(void);
     SbBool getSourceBounds(SbBox3f &bounds) const;

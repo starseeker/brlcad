@@ -402,6 +402,8 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     SbBool lodCapacityRelevant = TRUE;
     if (recordPresentationTiming && consumeRenderRequest)
 	(void)s.obol->consumeRenderRequest(NULL, &lodCapacityRelevant);
+    if (s.obol->isForceRealizeDisplay())
+	lodCapacityRelevant = FALSE;
 
     const SbViewportRegion &region = s.obol->getViewportRegion();
     SbVec2s size = region.getViewportSizePixels();

@@ -5312,13 +5312,11 @@ ged_draw_obol_scene_database_autoview_bounds(
 	    !source.visible)
 	    continue;
 
-	/* Prefer the source's own already-computed AABB (from the coarse proxy
-	 * occurrence union or realized geometry): it is essentially free.  Only
-	 * fall back to the expensive per-child rt_obj_bounds member walk when the
-	 * cheap bounds are unavailable or non-finite (e.g. a halfspace-dominated
-	 * aggregate the member walk deliberately skips).  Framing the view must
-	 * never prep the whole assembly synchronously -- that was ~11s of the
-	 * first-draw stall on large models. */
+	/* Prefer an authoritative source AABB when one is already available.  A
+	 * finite display-derived union remains a useful non-blocking estimate, but
+	 * explicit autoview must replace it with semantic member bounds.  Framing
+	 * the progressive first view must never prep the whole assembly
+	 * synchronously -- that was ~11s of the first-draw stall on large models. */
 	const SbBool cheap_bounds_usable = source.sourceBoundsValid &&
 	    !source.sourceBounds.isEmpty() &&
 	    isfinite(source.sourceBounds.getMin()[0]) &&
@@ -5328,25 +5326,35 @@ ged_draw_obol_scene_database_autoview_bounds(
 	    isfinite(source.sourceBounds.getMax()[1]) &&
 	    isfinite(source.sourceBounds.getMax()[2]);
 
-	if (!cheap_bounds_usable) {
-	    /* The only remaining bound is the expensive per-child rt_obj_bounds
-	     * walk.  Skip it on the coarse-first / progressive path (caller passes
-	     * allow_member_bounds=0): framing there is refined progressively as
-	     * cheap proxy bounds stream in, and prepping the whole assembly just to
-	     * frame the first frame was ~11s of stall.  Explicit autoview commands
-	     * pass 1 for precise framing. */
-	    if (!allow_member_bounds)
-		continue;
-	    vect_t member_min;
-	    vect_t member_max;
-	    if (source.path.getLength() > 0 &&
-		ged_database_path_member_autoview_bounds(gedp,
-		    source.path.getString(), &member_min, &member_max)) {
-		VMIN(*min, member_min);
-		VMAX(*max, member_max);
-		have_source_bounds = 1;
+	if (!cheap_bounds_usable ||
+	    (allow_member_bounds && !source.sourceBoundsExact)) {
+	    /* Explicit autoview requires representation-independent semantic
+	     * bounds.  A realized primitive/mesh union is useful as a progressive
+	     * first-frame estimate, but may include subtractive tools or sampled
+	     * display geometry and is therefore not an exact CSG extent.
+	     *
+	     * The expensive per-child rt_obj_bounds walk remains forbidden on the
+	     * coarse-first path (allow_member_bounds=0): doing it synchronously was
+	     * an ~11s first-draw stall on large assemblies.  That path may use any
+	     * finite conservative estimate and later applies producer-certified
+	     * coverage bounds exactly once. */
+	    if (!allow_member_bounds) {
+		if (!cheap_bounds_usable)
+		    continue;
+	    } else {
+		vect_t member_min;
+		vect_t member_max;
+		if (source.path.getLength() > 0 &&
+		    ged_database_path_member_autoview_bounds(gedp,
+			source.path.getString(), &member_min, &member_max)) {
+		    VMIN(*min, member_min);
+		    VMAX(*max, member_max);
+		    have_source_bounds = 1;
+		    continue;
+		}
+		if (!cheap_bounds_usable)
+		    continue;
 	    }
-	    continue;
 	}
 
 	const SbVec3f source_min = source.sourceBounds.getMin();
@@ -11814,7 +11822,7 @@ ged_obol_publish_aabb_bounds_for_instance(
 	    static_cast<float>(bmin[Z])),
 	SbVec3f(static_cast<float>(bmax[X]),
 	    static_cast<float>(bmax[Y]),
-	    static_cast<float>(bmax[Z])));
+	    static_cast<float>(bmax[Z])), TRUE);
     return published;
 }
 
@@ -13038,7 +13046,7 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
 		static_cast<float>(description.coverageBoundsMin[Z])),
 	    SbVec3f(static_cast<float>(description.coverageBoundsMax[X]),
 		static_cast<float>(description.coverageBoundsMax[Y]),
-		static_cast<float>(description.coverageBoundsMax[Z])));
+		static_cast<float>(description.coverageBoundsMax[Z])), TRUE);
 	return ged_obol_database_source_mark_published_current(scene, root) ?
 	    1 : 0;
     }
@@ -14302,8 +14310,8 @@ ged_obol_apply_stream_coverage_bounds(
     if (!stream->getCoverageBounds(bounds) || bounds.isEmpty())
 	return 0;
 
-    (void)source->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
-    (void)source->setSourceBoundsExactState(TRUE);
+    (void)source->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax(),
+	TRUE);
     return 1;
 }
 
@@ -14706,7 +14714,7 @@ ged_draw_obol_database_source_set_bounds_for_path(
 					static_cast<float>(bmin[2])),
 				SbVec3f(static_cast<float>(bmax[0]),
 					static_cast<float>(bmax[1]),
-					static_cast<float>(bmax[2])));
+					static_cast<float>(bmax[2])), TRUE);
 	if (changed < 0)
 	    return 0;
 	applied = 1;
@@ -16837,7 +16845,8 @@ ged_obol_progressive_autoview_apply_exact_proxy_bounds(
 	    !summary.visible)
 	    continue;
 	visible_sources++;
-	if (!summary.sourceBoundsValid || summary.sourceBounds.isEmpty() ||
+	if (!summary.sourceBoundsValid || !summary.sourceBoundsExact ||
+	    summary.sourceBounds.isEmpty() ||
 	    !isfinite(summary.sourceBounds.getMin()[0]) ||
 	    !isfinite(summary.sourceBounds.getMin()[1]) ||
 	    !isfinite(summary.sourceBounds.getMin()[2]) ||

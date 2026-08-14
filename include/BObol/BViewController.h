@@ -810,13 +810,15 @@ public:
     int setDatabaseSourceInstanceDisplayName(const char *sourceInstanceKey,
 	    const char *displayName);
     int setDatabaseSourceBoundsState(const char *sourcePath,
-				     SbBool boundsValid,
-				     const SbVec3f &boundsMin,
-				     const SbVec3f &boundsMax);
+			     SbBool boundsValid,
+			     const SbVec3f &boundsMin,
+			     const SbVec3f &boundsMax,
+			     SbBool boundsExact = FALSE);
     int setDatabaseSourceInstanceBoundsState(const char *sourceInstanceKey,
 	    SbBool boundsValid,
 	    const SbVec3f &boundsMin,
-	    const SbVec3f &boundsMax);
+	    const SbVec3f &boundsMax,
+	    SbBool boundsExact = FALSE);
     int setDatabaseSourceMaterialPolicy(const char *sourcePath,
 					int materialPolicy);
     int setDatabaseSourceInstanceMaterialPolicy(const char *sourceInstanceKey,

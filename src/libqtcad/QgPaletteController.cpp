@@ -73,6 +73,18 @@ QgPaletteController::populate()
 	    m_tools.remove(d.id);
 	    continue;
 	}
+	/* Tool palettes are intentionally free to change their layout.  Give the
+	 * semantic tool, activation button, and controls stable ids so recorded
+	 * GUI workflows do not depend on QScrollArea's private QObject hierarchy
+	 * or plugin discovery order. */
+	tool->setProperty("qgTestId", d.id + QStringLiteral(".tool"));
+	el->setProperty("qgTestId", d.id + QStringLiteral(".element"));
+	if (el->buttonWidget())
+	    el->buttonWidget()->setProperty(
+		"qgTestId", d.id + QStringLiteral(".activate"));
+	if (el->controlsWidget())
+	    el->controlsWidget()->setProperty(
+		"qgTestId", d.id + QStringLiteral(".controls"));
 	m_elementToId.insert(el, d.id);
 	m_palette->addElement(el);
     }

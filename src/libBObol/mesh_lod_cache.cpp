@@ -783,6 +783,13 @@ private:
     const vect_t *normalArray = NULL;
     size_t faceCount = 0;
     const int *faceArray = NULL;
+    /* Authored BoTs may contain zero-area faces with a repeated vertex
+     * index.  They contribute no pixels, but retaining them in a progressive
+     * prefix can make the immutable mesh payload reject its own index stream.
+     * Allocate normalized storage only for that exceptional input; ordinary
+     * production meshes continue to borrow the staged arrays directly. */
+    std::vector<int> normalizedFaceArray;
+    std::vector<fastf_t> normalizedNormalArray;
 
     struct BObolMeshLodContext *context = NULL;
     struct bu_cache_txn *readTxn = NULL;
@@ -850,7 +857,7 @@ void
 BObolPopState::triProcess(void)
 {
     vertexTriMinCut.assign(vertexCount,
-	static_cast<uint8_t>(maxPopCut));
+	UINT8_MAX);
     cutTriVerts.resize(cutCount);
     cutTris.resize(cutCount);
 
@@ -1001,9 +1008,16 @@ BObolPopState::triProcess(void)
 	       badFaceCount);
 
     for (size_t vertexIndex = 0; vertexIndex < vertexTriMinCut.size();
-	 vertexIndex++)
-	cutTriVerts[vertexTriMinCut[vertexIndex]].push_back(
-	    static_cast<uint32_t>(vertexIndex));
+	 vertexIndex++) {
+	const uint8_t activation = vertexTriMinCut[vertexIndex];
+	/* Unreferenced vertices do not participate in any rendered triangle.
+	 * Assigning them to the terminal global prefix while spatial chunks omit
+	 * them violates the cache population conservation proof and wastes memory
+	 * on authored construction debris. */
+	if (activation < cutCount)
+	    cutTriVerts[activation].push_back(
+		static_cast<uint32_t>(vertexIndex));
+    }
 
     for (uint32_t cut = 0; cut < cutCount; ++cut) {
 	cutVertexCount[cut] = cutTriVerts[cut].size();
@@ -1316,17 +1330,67 @@ BObolPopState::BObolPopState(
     shadedCullBackfaces = cullBackfaces;
     hasNormals = normals != NULL;
 
+    vertexCount = inputVertexCount;
+    vertexArray = vertices;
+    normalArray = normals;
+    faceCount = inputFaceCount;
+    faceArray = faces;
+
+    size_t drawableFaceCount = 0;
+    for (size_t faceIndex = 0; faces && faceIndex < inputFaceCount;
+	 faceIndex++) {
+	const int a = faces[3 * faceIndex];
+	const int b = faces[3 * faceIndex + 1];
+	const int c = faces[3 * faceIndex + 2];
+	if (a != b && b != c && a != c)
+	    drawableFaceCount++;
+    }
+    if (faces && drawableFaceCount != inputFaceCount) {
+	normalizedFaceArray.reserve(drawableFaceCount * 3);
+	if (normals)
+	    normalizedNormalArray.reserve(drawableFaceCount * 9);
+	for (size_t faceIndex = 0; faceIndex < inputFaceCount; faceIndex++) {
+	    const int a = faces[3 * faceIndex];
+	    const int b = faces[3 * faceIndex + 1];
+	    const int c = faces[3 * faceIndex + 2];
+	    if (a == b || b == c || a == c)
+		continue;
+	    normalizedFaceArray.push_back(a);
+	    normalizedFaceArray.push_back(b);
+	    normalizedFaceArray.push_back(c);
+	    if (normals) {
+		for (size_t corner = 0; corner < 3; corner++)
+		    for (size_t axis = 0; axis < 3; axis++)
+			normalizedNormalArray.push_back(
+			    normals[3 * faceIndex + corner][axis]);
+	    }
+	}
+	faceCount = drawableFaceCount;
+	faceArray = normalizedFaceArray.empty() ? NULL :
+	    normalizedFaceArray.data();
+	if (normals)
+	    normalArray = normalizedNormalArray.empty() ? NULL :
+		reinterpret_cast<const vect_t *>(
+		    normalizedNormalArray.data());
+	if (getenv("BOBOL_DRAW_TIMING"))
+	    bu_log("[obol-timing] pop cache: discarded %zu "
+		   "topologically degenerate faces\n",
+		   inputFaceCount - drawableFaceCount);
+    }
+    if (!vertexArray || !vertexCount || !faceArray || !faceCount)
+	return;
+
     if (!userKey) {
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char semantics[] = "BObol-chunked-PoP-format-18";
+	static const char semantics[] = "BObol-chunked-PoP-format-19";
 	bu_data_hash_update(state, semantics, sizeof(semantics));
-	bu_data_hash_update(state, vertices, inputVertexCount * sizeof(point_t));
-	bu_data_hash_update(state, faces, 3 * inputFaceCount * sizeof(int));
+	bu_data_hash_update(state, vertexArray, vertexCount * sizeof(point_t));
+	bu_data_hash_update(state, faceArray, 3 * faceCount * sizeof(int));
 	const unsigned char normalFlag = normals ? 1u : 0u;
 	bu_data_hash_update(state, &normalFlag, sizeof(normalFlag));
-	if (normals)
-	    bu_data_hash_update(state, normals,
-		3 * inputFaceCount * sizeof(vect_t));
+	if (normalArray)
+	    bu_data_hash_update(state, normalArray,
+		3 * faceCount * sizeof(vect_t));
 	const unsigned char cullFlag = cullBackfaces ? 1u : 0u;
 	bu_data_hash_update(state, &cullFlag, sizeof(cullFlag));
 	hash = bu_data_hash_val(state);
@@ -1358,13 +1422,6 @@ BObolPopState::BObolPopState(
     cutCount = 0;
     memset(cutVertexCount, 0, sizeof(cutVertexCount));
     memset(cutTriangleCount, 0, sizeof(cutTriangleCount));
-
-    vertexCount = inputVertexCount;
-    vertexArray = vertices;
-    normalArray = normals;
-    faceCount = inputFaceCount;
-    faceArray = faces;
-
     const int64_t buildStarted = bu_gettime();
     bg_trimesh_aabb(&bbmin, &bbmax, const_cast<int *>(faceArray), faceCount,
 		    vertexArray, vertexCount);

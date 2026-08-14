@@ -83,16 +83,22 @@ qpolymod_view_widget(const QgPluginContext *ctx)
 QPolyMod::QPolyMod()
     : QWidget()
 {
+    const QString testPrefix =
+	QStringLiteral("org.brlcad.qged.polygon.modify");
     QVBoxLayout *l = new QVBoxLayout;
 
     QButtonGroup *t_grp = new QButtonGroup();
 
     select_mode = new QRadioButton("Select");
+    select_mode->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".select"));
     t_grp->addButton(select_mode);
     l->addWidget(select_mode);
     QLabel *cs_label = new QLabel("Currently selected polygon:");
     l->addWidget(cs_label);
     mod_names = new QComboBox(this);
+    mod_names->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".polygon-name"));
     QObject::connect(mod_names, &QComboBox::currentTextChanged, this, &QPolyMod::select);
     l->addWidget(mod_names);
 
@@ -101,6 +107,7 @@ QPolyMod::QPolyMod()
     QVBoxLayout *default_gl = new QVBoxLayout;
     default_gl->setAlignment(Qt::AlignTop);
     ps = new QPolySettings();
+    ps->setTestIdPrefix(testPrefix);
     default_gl->addWidget(ps);
     defaultBox->setLayout(default_gl);
     l->addWidget(defaultBox);
@@ -121,12 +128,18 @@ QPolyMod::QPolyMod()
     QVBoxLayout *mod_poly_gl = new QVBoxLayout;
 
     move_mode = new QRadioButton("Move");
+    move_mode->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".move"));
     QObject::connect(move_mode, &QRadioButton::toggled, this, &QPolyMod::toplevel_config);
     t_grp->addButton(move_mode);
     update_mode = new QRadioButton("Update geometry");
+    update_mode->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".update"));
     t_grp->addButton(update_mode);
 
     close_general_poly = new QCheckBox("Close polygon");
+    close_general_poly->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".close"));
     // Disabled if we're not a general polygon
     close_general_poly->setChecked(true);
     close_general_poly->setDisabled(true);
@@ -143,10 +156,14 @@ QPolyMod::QPolyMod()
 
     QButtonGroup *gm_box = new QButtonGroup();
     append_pnt = new QRadioButton("Append polygon pnt");
+    append_pnt->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".append-point"));
     append_pnt->setChecked(true);
     gm_box->addButton(append_pnt);
     go_l->addWidget(append_pnt);
     select_pnt = new QRadioButton("Select polygon pnt");
+    select_pnt->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".select-point"));
     QObject::connect(select_pnt, &QRadioButton::toggled, this, &QPolyMod::clear_pnt_selection);
     gm_box->addButton(select_pnt);
     go_l->addWidget(select_pnt);
@@ -169,12 +186,16 @@ QPolyMod::QPolyMod()
     QLabel *csg_modes_label = new QLabel("Current Operation:");
     bool_gl->addWidget(csg_modes_label);
     csg_modes = new QComboBox();
+    csg_modes->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".boolean-mode"));
     csg_modes->addItem("Union");
     csg_modes->addItem("Subtraction");
     csg_modes->addItem("Intersection");
     csg_modes->setCurrentIndex(0);
     bool_gl->addWidget(csg_modes);
     apply_bool = new QPushButton("Apply");
+    apply_bool->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".boolean-apply"));
     bool_gl->addWidget(apply_bool);
     QObject::connect(apply_bool, &QPushButton::released, this, &QPolyMod::apply_bool_op);
     boolBox->setLayout(bool_gl);
@@ -185,6 +206,8 @@ QPolyMod::QPolyMod()
     QVBoxLayout *viewsnap_gl = new QVBoxLayout;
     viewsnap_gl->setAlignment(Qt::AlignTop);
     viewsnap_poly = new QPushButton("Align");
+    viewsnap_poly->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".align"));
     viewsnap_gl->addWidget(viewsnap_poly);
     QObject::connect(viewsnap_poly, &QPushButton::released, this, &QPolyMod::align_to_poly);
     viewsnapBox->setLayout(viewsnap_gl);
@@ -195,6 +218,8 @@ QPolyMod::QPolyMod()
     QVBoxLayout *remove_gl = new QVBoxLayout;
     remove_gl->setAlignment(Qt::AlignTop);
     remove_poly = new QPushButton("Delete");
+    remove_poly->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".delete"));
     remove_poly->setStyleSheet("QPushButton {color: red;}");
     remove_gl->addWidget(remove_poly);
     QObject::connect(remove_poly, &QPushButton::released, this, &QPolyMod::delete_poly);
@@ -242,7 +267,19 @@ QPolyMod::mod_names_reset()
     if (!v)
 	return;
 
-    // Make sure the Combo box list is current.
+    /* Geometry-only updates must not call this routine: rebuilding the combo
+     * box during every drag perturbs editor selection and adds work to the
+     * latency-sensitive mouse path.  Membership/name changes and tool
+     * activation call it explicitly.  Preserve the selected scene handle
+     * when it still exists; otherwise select the first live record. */
+    QString selected_name;
+    if (!ged_view_polygon_ref_is_null(p)) {
+	qg_polygon_record selected_rec;
+	if (ged_view_polygon_record_get(qpolymod_current_ged_view(m_ctx), p,
+		&selected_rec) && selected_rec.name)
+	    selected_name = QString::fromLocal8Bit(selected_rec.name);
+    }
+
     mod_names->blockSignals(true);
     mod_names->clear();
     if (gedp) {
@@ -258,17 +295,16 @@ QPolyMod::mod_names_reset()
 		mod_names->addItem(rec.name);
 	}
     }
-    if (!ged_view_polygon_ref_is_null(p)) {
-	qg_polygon_record rec;
-	ged_view_polygon_record_get(qpolymod_current_ged_view(m_ctx), p, &rec);
-	int cind = mod_names->findText(rec.name ? rec.name : "");
-	mod_names->setCurrentIndex(cind);
-    } else {
-	mod_names->setCurrentIndex(0);
-
-    }
-    if (mod_names->currentText().length()) {
+    int selected_index = selected_name.isEmpty() ? -1 :
+	mod_names->findText(selected_name);
+    if (selected_index < 0 && mod_names->count() > 0)
+	selected_index = 0;
+    mod_names->setCurrentIndex(selected_index);
+    if (selected_index >= 0) {
 	select(mod_names->currentText());
+    } else {
+	p = GED_VIEW_POLYGON_REF_NULL;
+	ps->view_name->clear();
     }
     mod_names->blockSignals(false);
 }
@@ -579,6 +615,7 @@ QPolyMod::apply_bool_op()
 	ged_view_polygon_remove(qpolymod_current_ged_view(m_ctx), cleanup[i]);
     }
 
+    mod_names_reset();
     emit view_updated(QG_VIEW_REFRESH);
 }
 
@@ -623,12 +660,8 @@ QPolyMod::delete_poly()
 	return;
 
     ged_view_polygon_remove(qpolymod_current_ged_view(m_ctx), p);
-    mod_names->setCurrentIndex(0);
-    if (mod_names->currentText().length()) {
-	select(mod_names->currentText());
-    } else {
-	p = GED_VIEW_POLYGON_REF_NULL;
-    }
+    p = GED_VIEW_POLYGON_REF_NULL;
+    mod_names_reset();
 
     emit view_updated(QG_VIEW_REFRESH);
 }
@@ -835,6 +868,7 @@ QPolyMod::view_name_update()
 
     ged_view_polygon_set_name(qpolymod_current_ged_view(m_ctx), p, bu_vls_cstr(&vname));
     bu_vls_free(&vname);
+    mod_names_reset();
     emit view_updated(QG_VIEW_REFRESH);
 }
 

@@ -143,7 +143,15 @@ write_events()
     local lod_value=1
     local hierarchy_select_events=""
     local hierarchy_clear_events=""
+    local opposite_lod_value=0
+    local opposite_lod_name="disabled"
+    local restored_lod_name="reenabled"
     [[ "$lod" == off ]] && lod_value=0
+    if [[ "$lod" == off ]]; then
+	opposite_lod_value=1
+	opposite_lod_name="enabled"
+	restored_lod_name="restored-off"
+    fi
     if [[ -n "$hierarchy_path" ]]; then
 	local -a hierarchy_labels=()
 	local hierarchy_selection_labels=""
@@ -218,7 +226,13 @@ ${hierarchy_select_events}
   {"target":"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas","action":"checkpoint","arguments":{"name":"${image_dir}/storm.png"}},
 ${hierarchy_clear_events}
   {"target":".","action":"wait_progressive_idle","arguments":{"timeout_ms":${settle_timeout_ms},"quiet_ms":100}},
-  {"target":"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas","action":"checkpoint","arguments":{"name":"${image_dir}/stable.png"}}
+  {"target":"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas","action":"checkpoint","arguments":{"name":"${image_dir}/stable.png"}},
+  {"target":".","action":"qged_command_batch","arguments":{"commands":["view lod ${opposite_lod_value}"]}},
+  {"target":".","action":"wait_progressive_idle","arguments":{"timeout_ms":${settle_timeout_ms},"quiet_ms":100}},
+  {"target":"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas","action":"checkpoint","arguments":{"name":"${image_dir}/lod-${opposite_lod_name}.png"}},
+  {"target":".","action":"qged_command_batch","arguments":{"commands":["view lod ${lod_value}"]}},
+  {"target":".","action":"wait_progressive_idle","arguments":{"timeout_ms":${settle_timeout_ms},"quiet_ms":100}},
+  {"target":"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas","action":"checkpoint","arguments":{"name":"${image_dir}/lod-${restored_lod_name}.png"}}
  ]
 }
 EOF
@@ -258,10 +272,26 @@ validate_run()
 	end) and
       all(.samples[] | select(.action == "checkpoint");
 	okdims and
-	(if $lod == "off" then
+	(if ((.checkpoint? // "") | endswith("/lod-disabled.png") or
+	    endswith("/lod-restored-off.png")) then
 	  .view_lod_policy == 0 and
 	  .view_lod_mesh_enabled == false and
-	  .view_lod_csg_enabled == false
+	  .view_lod_csg_enabled == false and
+	  .lod_progress_track_present == false and
+	  .lod_progress_fill_present == false and
+	  .lod_progress_label_present == false
+	elif ((.checkpoint? // "") | endswith("/lod-enabled.png") or
+	      endswith("/lod-reenabled.png")) then
+	  .view_lod_policy == 1 and
+	  .view_lod_mesh_enabled == true and
+	  .view_lod_csg_enabled == true
+	elif $lod == "off" then
+	  .view_lod_policy == 0 and
+	  .view_lod_mesh_enabled == false and
+	  .view_lod_csg_enabled == false and
+	  .lod_progress_track_present == false and
+	  .lod_progress_fill_present == false and
+	  .lod_progress_label_present == false
 	 else
 	  .view_lod_policy == 1 and
 	  .view_lod_mesh_enabled == true and
@@ -287,6 +317,61 @@ validate_run()
 	$terminal.lod_progress_fill_present == $terminal_hud_expected and
 	$terminal.lod_progress_label_present == $terminal_hud_expected and
 	$terminal.visible_structural_fallback_boxes == 0)
+    ' "$report" >>"$log" 2>&1 || return 1
+    # Policy changes operate on the retained draw; they must not duplicate or
+    # replace its semantic root, move the camera, or strand startup proxies.
+    # This covers both managed -> full -> managed and full -> managed -> full
+    # transitions using the same initially drawn scene.
+    jq -e --arg lod "$lod" '
+      ([.samples[] | select((.checkpoint? // "") |
+	endswith("/stable.png"))][0]) as $stable |
+      (first(.samples[] | select(.action == "qged_command_batch" and
+	any((.commands // [])[]; startswith("draw -m"))))) as $draw |
+      ([.samples[] | select(.action == "qged_command_batch" and
+	((.commands // []) | length) == 1 and
+	((.commands[0] // "") | startswith("view lod ")))][0]) as $opposite_command |
+      ([.samples[] | select(.action == "qged_command_batch" and
+	((.commands // []) | length) == 1 and
+	((.commands[0] // "") | startswith("view lod ")))][-1]) as $restored_command |
+      ([.samples[] | select((.checkpoint? // "") |
+	test("/lod-(disabled|enabled)\\.png$"))][0]) as $opposite |
+      ([.samples[] | select((.checkpoint? // "") |
+	test("/lod-(reenabled|restored-off)\\.png$"))][0]) as $restored |
+      def same_camera($a; $b):
+	(($a.camera_position_x - $b.camera_position_x) | abs) < 1e-4 and
+	(($a.camera_position_y - $b.camera_position_y) | abs) < 1e-4 and
+	(($a.camera_position_z - $b.camera_position_z) | abs) < 1e-4 and
+	(($a.model_view_size - $b.model_view_size) | abs) <
+	  (1e-4 + (($a.model_view_size | abs) * 1e-6));
+      ($draw.draw_frontier_count > 0) and
+      ($opposite_command.draw_frontier_count == $draw.draw_frontier_count) and
+      ($restored_command.draw_frontier_count == $draw.draw_frontier_count) and
+      ($opposite_command.draw_frontier_paths == $draw.draw_frontier_paths) and
+      ($restored_command.draw_frontier_paths == $draw.draw_frontier_paths) and
+      ($opposite_command.draw_scene_revision == $draw.draw_scene_revision) and
+      ($restored_command.draw_scene_revision == $draw.draw_scene_revision) and
+      ($opposite.draw_scene_revision == $stable.draw_scene_revision) and
+      ($restored.draw_scene_revision == $stable.draw_scene_revision) and
+      same_camera($stable; $opposite) and same_camera($stable; $restored) and
+      ($opposite.visible_structural_fallback_boxes == 0) and
+      ($restored.visible_structural_fallback_boxes == 0) and
+      (($opposite.failed_sources // 0) == 0) and
+      (($restored.failed_sources // 0) == 0) and
+      (if $opposite.view_lod_policy == 0 then
+	$opposite.lod_progress_track_present == false and
+	$opposite.lod_progress_fill_present == false and
+	$opposite.lod_progress_label_present == false
+       else true end) and
+      (if $restored.view_lod_policy == 0 then
+	$restored.lod_progress_track_present == false and
+	$restored.lod_progress_fill_present == false and
+	$restored.lod_progress_label_present == false
+       else true end) and
+      (if $lod == "off" then
+	$opposite.view_lod_policy == 1 and $restored.view_lod_policy == 0
+       else
+	$opposite.view_lod_policy == 0 and $restored.view_lod_policy == 1
+       end)
     ' "$report" >>"$log" 2>&1 || return 1
     if [[ "$lod" == auto &&
 	("$case_name" == generic_twin || "$case_name" == lucy) &&
@@ -325,6 +410,21 @@ validate_run()
 	  ($terminal.lod_prominent_cad_quality_floor_violations == 0)
 	' "$report" >>"$log" 2>&1 || return 1
     fi
+    # The evaluated-points display is intentionally a randomized sample, but
+    # its camera is not.  Autoview must use scene.g's authoritative 73.3892 mm
+    # maximum object extent (the retained framing contract reports twice that
+    # extent), never the accidental bounds of whichever samples were emitted.
+    # The old sample-bounds bug produced size 96.7, an offset center, and a
+    # visibly clipped rook while every generic resize invariant still passed.
+    if [[ "$case_name" == rook && "$mode" == 5 ]]; then
+	jq -e '
+	  ([.samples[] | select((.checkpoint? // "") |
+	    endswith("/stable.png"))][0]) as $terminal |
+	  (($terminal.model_view_size - 146.7784) | abs) < 0.02 and
+	  (($terminal.camera_position_x // 999) | abs) < 0.02 and
+	  (($terminal.camera_position_z - 32.3958) | abs) < 0.02
+	' "$report" >>"$log" 2>&1 || return 1
+    fi
     if [[ -n "$hierarchy_path" ]]; then
 	jq -e --arg path "$hierarchy_path" '
 	  (. as $root |
@@ -348,8 +448,10 @@ validate_run()
 	    ((.cad_selected_instances // 0) == 0)))
 	' "$report" >>"$log" 2>&1 || return 1
     fi
+    local transition_images="lod-disabled lod-reenabled"
+    [[ "$lod" == off ]] && transition_images="lod-enabled lod-restored-off"
     for image in initial small large restored_early settled_base maximized \
-	restored_max fullscreen restored_full storm stable; do
+	restored_max fullscreen restored_full storm stable $transition_images; do
 	local file="$image_dir/$image.png"
 	[[ -s "$file" ]] || { echo "missing $file" >>"$log"; return 1; }
 	identify "$file" >>"$log" 2>&1 || return 1
@@ -430,5 +532,54 @@ for case_name in "${cases[@]}"; do
 	done
     done
 done
+
+# The camera is a property of the draw target, not of its current display
+# representation.  When both policies are requested, compare the terminal
+# stable checkpoints so a display-derived union cannot silently make LoD-off
+# frame a different model extent than managed LoD.  Position tolerance is
+# scaled to the view size to accommodate float camera storage; the size itself
+# is held to a much tighter relative tolerance.
+if [[ ",$lod_list," == *,auto,* && ",$lod_list," == *,off,* ]]; then
+    for case_name in "${cases[@]}"; do
+	for backend in "${backends[@]}"; do
+	    for mode in "${modes[@]}"; do
+		auto_report="$artifact_dir/cases/${case_name}-${backend}-m${mode}-lodauto/report.json"
+		off_report="$artifact_dir/cases/${case_name}-${backend}-m${mode}-lodoff/report.json"
+		[[ -s "$auto_report" && -s "$off_report" ]] || continue
+		if ! jq -e -n --slurpfile auto "$auto_report" \
+			--slurpfile off "$off_report" '
+                  def stable($r):
+                    first($r[0].samples[] |
+                      select(.action == "checkpoint" and
+                        ((.checkpoint // "") | endswith("/stable.png"))));
+                  def finite: type == "number" and . == . and
+                    (. > -1.0e300 and . < 1.0e300);
+                  stable($auto) as $a | stable($off) as $b |
+                  ($a != null and $b != null) and
+                  ($a.model_view_size | finite) and
+                  ($b.model_view_size | finite) and
+                  (($a.model_view_size - $b.model_view_size) | fabs) <=
+                    (1.0e-6 * ([1.0, ($a.model_view_size | fabs),
+                      ($b.model_view_size | fabs)] | max)) and
+                  ([$a.camera_position_x, $a.camera_position_y,
+                    $a.camera_position_z, $b.camera_position_x,
+                    $b.camera_position_y, $b.camera_position_z] |
+                    all(finite)) and
+                  ([($a.camera_position_x - $b.camera_position_x) | fabs,
+                    ($a.camera_position_y - $b.camera_position_y) | fabs,
+                    ($a.camera_position_z - $b.camera_position_z) | fabs] |
+                    max) <= (1.0e-6 *
+                      ([1.0, ($a.model_view_size | fabs)] | max))
+                ' >"$artifact_dir/cases/${case_name}-${backend}-m${mode}-policy-camera.log" \
+			2>&1; then
+		    run="${case_name}-${backend}-m${mode}-policy-camera"
+		    printf 'FAIL,%s,0,LoD policy changed stable camera\n' "$run" \
+			>>"$artifact_dir/results.csv"
+		    failures=$((failures+1))
+		fi
+	    done
+	done
+    done
+fi
 
 exit "$failures"

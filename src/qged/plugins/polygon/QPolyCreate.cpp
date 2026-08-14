@@ -77,6 +77,8 @@ qpolycreate_view_widget(const QgPluginContext *ctx)
 QPolyCreate::QPolyCreate()
     : QWidget()
 {
+    const QString testPrefix =
+	QStringLiteral("org.brlcad.qged.polygon.create");
     QVBoxLayout *l = new QVBoxLayout;
 
     QButtonGroup *t_grp = new QButtonGroup();
@@ -88,6 +90,8 @@ QPolyCreate::QPolyCreate()
     QLabel *csg_modes_label = new QLabel("Boolean Operation:");
     add_poly_gl->addWidget(csg_modes_label);
     csg_modes = new QComboBox();
+    csg_modes->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".boolean-mode"));
     csg_modes->addItem("None");
     csg_modes->addItem("Union");
     csg_modes->addItem("Subtraction");
@@ -96,22 +100,32 @@ QPolyCreate::QPolyCreate()
     add_poly_gl->addWidget(csg_modes);
 
     circle_mode = new QRadioButton("Circle");
+    circle_mode->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".circle"));
     circle_mode->setIcon(QIcon(QPixmap(":circle.svg")));
     QObject::connect(circle_mode, &QCheckBox::toggled, this, &QPolyCreate::toplevel_config);
     t_grp->addButton(circle_mode);
     ellipse_mode = new QRadioButton("Ellipse");
+    ellipse_mode->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".ellipse"));
     ellipse_mode->setIcon(QIcon(QPixmap(":ellipse.svg")));
     QObject::connect(ellipse_mode, &QCheckBox::toggled, this, &QPolyCreate::toplevel_config);
     t_grp->addButton(ellipse_mode);
     square_mode = new QRadioButton("Square");
+    square_mode->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".square"));
     square_mode->setIcon(QIcon(QPixmap(":square.svg")));
     QObject::connect(square_mode, &QCheckBox::toggled, this, &QPolyCreate::toplevel_config);
     t_grp->addButton(square_mode);
     rectangle_mode = new QRadioButton("Rectangle");
+    rectangle_mode->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".rectangle"));
     rectangle_mode->setIcon(QIcon(QPixmap(":rectangle.svg")));
     QObject::connect(rectangle_mode, &QCheckBox::toggled, this, &QPolyCreate::toplevel_config);
     t_grp->addButton(rectangle_mode);
     general_mode = new QRadioButton("General");
+    general_mode->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".general"));
     general_mode->setIcon(QIcon(QPixmap(":polygon.svg")));
     QObject::connect(general_mode, &QCheckBox::toggled, this, &QPolyCreate::toplevel_config);
     t_grp->addButton(general_mode);
@@ -126,6 +140,8 @@ QPolyCreate::QPolyCreate()
     l->addWidget(addpolyBox);
 
     close_general_poly = new QCheckBox("Close polygon");
+    close_general_poly->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".close"));
     // Disabled if we're not a general polygon
     close_general_poly->setChecked(true);
     close_general_poly->setDisabled(true);
@@ -136,6 +152,7 @@ QPolyCreate::QPolyCreate()
     QVBoxLayout *default_gl = new QVBoxLayout;
     default_gl->setAlignment(Qt::AlignTop);
     ps = new QPolySettings();
+    ps->setTestIdPrefix(testPrefix);
     // Set an initial name (user can change, but we need something if they
     // don't have a specific name in mind.)
     struct bu_vls pname = BU_VLS_INIT_ZERO;
@@ -167,7 +184,11 @@ QPolyCreate::QPolyCreate()
 
     QLabel *vpoly_label = new QLabel("Copy view polygon:");
     vpoly_name = new QLineEdit();
+    vpoly_name->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".copy-name"));
     vpoly_copy = new QPushButton("Copy");
+    vpoly_copy->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".copy"));
     QObject::connect(vpoly_copy, &QPushButton::released, this, &QPolyCreate::do_vpoly_copy);
     copy_gl->addWidget(vpoly_label);
     copy_gl->addWidget(vpoly_name);
@@ -175,7 +196,11 @@ QPolyCreate::QPolyCreate()
 
     QLabel *import_label = new QLabel("Import from sketch:");
     import_name = new QLineEdit();
+    import_name->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".import-name"));
     import_sketch = new QPushButton("Import");
+    import_sketch->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".import"));
     QObject::connect(import_sketch, &QPushButton::released, this, &QPolyCreate::do_import_sketch);
     copy_gl->addWidget(import_label);
     copy_gl->addWidget(import_name);

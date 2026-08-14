@@ -646,7 +646,6 @@ _poly_cmd_overlap(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     const char *usage_string = "view polygon overlap <obj1> <obj2>";
     const char *purpose_string = "report if two polygons overlap";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
@@ -679,12 +678,13 @@ _poly_cmd_overlap(void *bs, int argc, const char **argv)
 	binding.controller->polygons().find(argv[0]) : BObolPolygonHandle();
     const struct bv *view = gd->cv ?
 	bv_context_view_const(ged_view_context_bv_const(gd->cv)) : nullptr;
-    if (!binding.controller || !other_handle.isValid() || !view || !wdbp) {
+    if (!binding.controller || !other_handle.isValid() || !view) {
 	bu_vls_printf(gedp->ged_result_str, "%s is not a view polygon.\n", argv[0]);
 	return BRLCAD_ERROR;
     }
+    const struct bn_tol tol = BN_TOL_INIT_TOL;
     const int ovlp = binding.controller->polygons().overlaps(
-	binding.handle, other_handle, wdbp->wdb_tol,
+	binding.handle, other_handle, tol,
 	bv_scale_get(view)) ? 1 : 0;
 
     bu_vls_printf(gedp->ged_result_str, "%d", ovlp);

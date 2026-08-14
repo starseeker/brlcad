@@ -85,8 +85,11 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
      * delivery budgets, not terminal-quality caps: subsequent rendered frames
      * continue until requestedCut is resident. */
     SbBool progressiveDelivery;
-    uint64_t initialRefinementFaceBudget;
-    uint64_t initialRefinementPointBudget;
+    /* Render-cost allowance for the first cumulative prefix.  A single cost
+     * currency avoids contradictory face/point ceilings and lets the worker
+     * select the richest hierarchy cut which the scene allocator actually
+     * admitted. */
+    size_t initialRefinementCostBudget;
     double refinementGrowthFactor;
     SbBool useCurrentDrawCut;
     int currentDrawCut;

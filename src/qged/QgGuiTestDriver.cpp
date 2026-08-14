@@ -20,6 +20,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QHash>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -34,6 +35,8 @@
 #include "BObol/BViewLod.h"
 #include "brlcad_version.h"
 #include "bu/log.h"
+#include "bu/str.h"
+#include "bu/vls.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgGL.h"
 #include "qtcad/QgSW.h"
@@ -155,6 +158,158 @@ qged_write_test_report(const QString &fileName, const QJsonObject &report,
 	    *error = file.errorString();
 	return false;
     }
+    return true;
+}
+
+static bool
+qged_test_command_expect(QgEdApp &app, const QJsonObject &arguments,
+    QHash<QString, QString> *captures, QString *actualOutput, QString *error)
+{
+    const QString command =
+	arguments.value(QStringLiteral("command")).toString();
+    if (command.isEmpty()) {
+	if (error)
+	    *error = QStringLiteral(
+		"qged_command_expect requires a command argument");
+	return false;
+    }
+
+    const QByteArray encoded = command.toLocal8Bit();
+    std::vector<char> input(static_cast<size_t>(encoded.size()) + 1, '\0');
+    if (!encoded.isEmpty())
+	std::copy(encoded.constBegin(), encoded.constEnd(), input.begin());
+    std::vector<char *> argv(input.size() + 1, nullptr);
+    const int argc = static_cast<int>(bu_argv_from_string(
+	argv.data(), input.size(), input.data()));
+    if (argc <= 0) {
+	if (error)
+	    *error = QStringLiteral("qged_command_expect could not parse: %1")
+		.arg(command);
+	return false;
+    }
+    std::vector<const char *> commandArgv(static_cast<size_t>(argc), nullptr);
+    for (int i = 0; i < argc; ++i)
+	commandArgv[static_cast<size_t>(i)] = argv[static_cast<size_t>(i)];
+
+    struct bu_vls result = BU_VLS_INIT_ZERO;
+    const int ret = app.run_cmd(&result, argc,
+	commandArgv.data());
+    const QString output = QString::fromLocal8Bit(bu_vls_cstr(&result));
+    bu_vls_free(&result);
+    if (actualOutput)
+	*actualOutput = output;
+    if (ret & BRLCAD_ERROR) {
+	if (error)
+	    *error = QStringLiteral("qged command failed: %1 (%2)")
+		.arg(command, output);
+	return false;
+    }
+
+    const auto checkTerms = [&](const QString &key, bool wanted) {
+	const QJsonValue value = arguments.value(key);
+	QJsonArray terms;
+	if (value.isString())
+	    terms.append(value);
+	else
+	    terms = value.toArray();
+	for (const QJsonValue &termValue : terms) {
+	    const QString term = termValue.toString();
+	    if (term.isEmpty())
+		continue;
+	    if (output.contains(term) != wanted) {
+		if (error)
+		    *error = wanted ?
+			QStringLiteral(
+			    "qged command output did not contain '%1': %2")
+			    .arg(term, output) :
+			QStringLiteral(
+			    "qged command output unexpectedly contained '%1': %2")
+			    .arg(term, output);
+		return false;
+	    }
+	}
+	return true;
+    };
+    if (!checkTerms(QStringLiteral("contains"), true) ||
+	!checkTerms(QStringLiteral("not_contains"), false))
+	return false;
+
+    const QString numericKeys[] = {
+	QStringLiteral("numeric_gt"), QStringLiteral("numeric_ge"),
+	QStringLiteral("numeric_lt"), QStringLiteral("numeric_le")
+    };
+    bool numericOk = false;
+    const double numericOutput = output.trimmed().toDouble(&numericOk);
+    for (const QString &key : numericKeys) {
+	if (!arguments.contains(key))
+	    continue;
+	if (!numericOk) {
+	    if (error)
+		*error = QStringLiteral(
+		    "qged command output is not numeric for %1: %2")
+		    .arg(key, output);
+	    return false;
+	}
+	const double limit = arguments.value(key).toDouble();
+	const bool pass = key == QLatin1String("numeric_gt") ?
+	    numericOutput > limit : key == QLatin1String("numeric_ge") ?
+	    numericOutput >= limit : key == QLatin1String("numeric_lt") ?
+	    numericOutput < limit : numericOutput <= limit;
+	if (!pass) {
+	    if (error)
+		*error = QStringLiteral(
+		    "qged command numeric assertion %1 %2 failed: %3")
+		    .arg(key).arg(limit, 0, 'g', 17)
+		    .arg(numericOutput, 0, 'g', 17);
+	    return false;
+	}
+    }
+
+    const QString captureKeys[] = {
+	QStringLiteral("numeric_gt_capture"),
+	QStringLiteral("numeric_lt_capture"),
+	QStringLiteral("numeric_near_capture")
+    };
+    for (const QString &key : captureKeys) {
+	if (!arguments.contains(key))
+	    continue;
+	const QString captureName = arguments.value(key).toString();
+	if (!captures || !captures->contains(captureName)) {
+	    if (error)
+		*error = QStringLiteral("unknown qged command capture: %1")
+		    .arg(captureName);
+	    return false;
+	}
+	bool capturedOk = false;
+	const double captured = captures->value(captureName).trimmed().toDouble(
+	    &capturedOk);
+	if (!numericOk || !capturedOk) {
+	    if (error)
+		*error = QStringLiteral(
+		    "non-numeric qged command capture comparison: %1")
+		    .arg(captureName);
+	    return false;
+	}
+	bool pass = key == QLatin1String("numeric_gt_capture") ?
+	    numericOutput > captured : key == QLatin1String("numeric_lt_capture") ?
+	    numericOutput < captured :
+	    qAbs(numericOutput - captured) <=
+		arguments.value(QStringLiteral("numeric_tolerance")).toDouble(1.0e-6);
+	if (!pass) {
+	    if (error)
+		*error = QStringLiteral(
+		    "qged command capture assertion %1 %2 failed: %3 versus %4")
+		    .arg(key, captureName)
+		    .arg(numericOutput, 0, 'g', 17)
+		    .arg(captured, 0, 'g', 17);
+	    return false;
+	}
+    }
+
+    const QString captureName =
+	arguments.value(QStringLiteral("capture")).toString();
+    if (!captureName.isEmpty() && captures)
+	captures->insert(captureName, output);
     return true;
 }
 
@@ -507,6 +662,19 @@ qged_test_wait_progressive_scope_ready(QgEdApp &app,
 		foundVisibleSource = true;
 		controllerVisible = true;
 		visibleSourceCount++;
+		if (source->realizationStatus.getValue() ==
+			SoBRLDatabaseSource::FAILED) {
+		    if (error)
+			*error = QStringLiteral(
+			    "progressive whole-target source failed "
+			    "(source=%1 diagnostic=%2)")
+			    .arg(QString::fromLocal8Bit(
+				source->path.getValue().getString()))
+			    .arg(QString::fromLocal8Bit(
+				source->realizationDiagnostic.getValue().
+				getString()));
+		    return false;
+		}
 		SbBox3f bounds;
 		if (!source->hasExactSourceBounds() ||
 		    !source->getSourceBounds(bounds) || bounds.isEmpty()) {
@@ -679,6 +847,7 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 	    QgEventPlayer player(app.w);
 	    QElapsedTimer elapsed;
 	    QJsonArray samples;
+	    QHash<QString, QString> commandCaptures;
 	    QJsonObject report;
 	    std::shared_ptr<QgedPresentedFrameCapture> frameCapture;
 	    report.insert(QStringLiteral("schema"),
@@ -763,7 +932,13 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 	    for (int i = 0; success && i < events.size(); ++i) {
 		QElapsedTimer eventElapsed;
 		eventElapsed.start();
-		if (events[i].action == QLatin1String("qged_command")) {
+		QString commandOutput;
+		if (events[i].action ==
+		    QLatin1String("qged_command_expect")) {
+		    success = qged_test_command_expect(
+			app, events[i].arguments, &commandCaptures,
+			&commandOutput, &error);
+		} else if (events[i].action == QLatin1String("qged_command")) {
 		    const QString command = events[i].arguments.value(
 			QStringLiteral("command")).toString();
 		    if (command.isEmpty()) {
@@ -857,6 +1032,9 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		QJsonObject sample = qged_collect_progressive_sample(
 		    app, i, events[i], elapsed.elapsed(), eventMicroseconds,
 		    deepLodDiagnostics);
+		if (!commandOutput.isNull())
+		    sample.insert(QStringLiteral("command_output"),
+			commandOutput);
 		sample.insert(QStringLiteral("sample_duration_us"),
 		    sampleElapsed.nsecsElapsed() / 1000);
 		samples.append(sample);

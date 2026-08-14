@@ -88,6 +88,14 @@ if(BRLCAD_ENABLE_QT)
     BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
   set_property(TEST qged_event_script_replay APPEND PROPERTY LABELS drawing_baseline)
 
+  brlcad_add_test(NAME qged_polygon_ui_replay
+    COMMAND qged --swrast --test-script
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_qged_polygon_ui.json"
+    "${CMAKE_BINARY_DIR}/share/db/moss.g")
+  set_property(TEST qged_polygon_ui_replay APPEND PROPERTY ENVIRONMENT
+    BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
+  set_property(TEST qged_polygon_ui_replay APPEND PROPERTY LABELS drawing_baseline)
+
   # qged's view and embedded framebuffer paths are Obol/libBObol based.
   # GED plugins are still loaded at runtime; legacy display-manager plugins are
   # not a qged build prerequisite.  qged's own Qt plugins are added below and
@@ -181,6 +189,7 @@ set(
   main.cpp
   test_qged_obol_fbserv.cpp
   test_qged_event_script.json
+  test_qged_polygon_ui.json
   tests/README.md
   tests/generate_many_lucy_stress.tcl
   tests/generate_unique_mesh_stress.cpp
