@@ -11,6 +11,7 @@
 #include "BObol/BDatabaseSource.h"
 #include "cad_assembly_private.h"
 
+#include <deque>
 #include <map>
 #include <memory>
 #include <string>
@@ -136,7 +137,11 @@ struct BObolCompactInstanceIndex {
     std::vector<Obol::InstanceId> hiddenInstances;
     std::vector<Obol::InstanceId> selectedInstances;
     std::vector<Obol::InstanceId> unpickableInstances;
-    std::vector<BObolCompactInstanceEntry> entries;
+    /* This heavy append-only, index-addressed array may learn its final
+     * population only after a long hierarchy walk.  Segmented storage keeps
+     * existing records stable as it grows; reserving a 150k tail in
+     * std::vector otherwise relocates half a live scene on the GUI thread. */
+    std::deque<BObolCompactInstanceEntry> entries;
     std::unordered_map<Obol::InstanceId, size_t,
 	std::hash<Obol::InstanceId>> entryIndex;
     std::unordered_map<std::string, size_t> entryIndexByKey;

@@ -23,10 +23,12 @@
 #include <Inventor/SbBox.h>
 #include <Inventor/SbVec3f.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <numeric>
 #include <stdio.h>
 #include <string.h>
 #include <thread>
@@ -2742,7 +2744,10 @@ test_rt_mesh_provider_task(void)
 	return 1;
     }
 
-    const int cachedGrid = 8;
+    /* Exceed one private-page target so the service test exercises view
+	* unions and page-selective compaction rather than only the legacy-shaped
+	* one-prefix case. */
+    const int cachedGrid = 190;
     cachedVertices.reserve((cachedGrid + 1) * (cachedGrid + 1) * 3);
     for (int y = 0; y <= cachedGrid; y++) {
 	for (int x = 0; x <= cachedGrid; x++) {
@@ -2783,7 +2788,10 @@ test_rt_mesh_provider_task(void)
 					  &storeStatus) != BRLCAD_OK ||
 	!storeStatus.has_cache_key ||
 	!storeStatus.has_cached_payload) {
-	printf("FAIL: LoD Obol mesh provider did not store cached mesh normals\n");
+	printf("FAIL: LoD Obol mesh provider did not store cached mesh normals "
+	       "(key=%d payload=%d generated=%d stale=%d)\n",
+	       storeStatus.has_cache_key, storeStatus.has_cached_payload,
+	       storeStatus.generated_cache_entry, storeStatus.stale_cache_entry);
 	bobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
@@ -2973,7 +2981,7 @@ test_rt_mesh_provider_task(void)
 	    "collapse a cheap target (levels=%d/%d/%d resident-ahead=%d "
 	    "direct=%d prefetched=%d/%d terminal=%d/%d/%d/%d/%d/%d "
 	    "prepared=%d "
-	    "faces=%llu/%llu/%llu/%llu/%llu)\n",
+	    "faces=%llu/%llu/%llu/%llu/%llu diagnostic=%s)\n",
 	    firstStage.geometry.activeCut, secondStage.geometry.activeCut,
 	    terminalStage.geometry.activeCut,
 	    residentAheadStage.geometry.activeCut,
@@ -2991,21 +2999,182 @@ test_rt_mesh_provider_task(void)
 	    static_cast<unsigned long long>(terminalStage.counts.faceCount),
 	    static_cast<unsigned long long>(
 		residentAheadStage.counts.faceCount),
-	    static_cast<unsigned long long>(directStage.counts.faceCount));
+	    static_cast<unsigned long long>(directStage.counts.faceCount),
+	    firstStage.diagnostic.getString());
 	ret = 1;
     }
 
-    /* A new view reopening a complete persistent hierarchy should pay one
-     * cache task: make the view target resident, publish the minimum useful
-     * cut, and discard the cache reader's duplicate arrays.  Presentation
-     * can subsequently retarget the immutable prefix under its frame budget
-     * without a second provider task or a cleanup-only compaction. */
+    /* Two views of one large logical leaf retain the union of their private
+	 * pages.  Establish both snapshots before starting this isolated worker so
+	 * the first view's now-stale trim is also exercised deterministically. */
+    {
+	struct BObolMeshLod *unionLod =
+	    bobol_mesh_lod_get(dbip, "lod-provider.bot");
+	BObolMeshLodHierarchyInfo unionHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	BObolLodService unionService;
+	BObolMeshLodProvider unionProvider;
+	unionProvider.service = &unionService;
+	unionProvider.setDatabase(dbip);
+	unionProvider.refreshMissing = FALSE;
+	unionProvider.progressiveDelivery = FALSE;
+	unionProvider.atomicRepresentationHandoff = TRUE;
+	unionProvider.shrinkAfterCopy = TRUE;
+	BObolLodRequest unionRequest = stagedRequest;
+	if (!unionLod ||
+	    !bobol_mesh_lod_hierarchy_info_get(unionLod, &unionHierarchy) ||
+	    unionHierarchy.chunk_count < 2) {
+	    printf("FAIL: resident page-union fixture is not chunked\n");
+	    ret = 1;
+	} else {
+	    unionRequest.requestedCut = unionHierarchy.max_cut;
+	    unionRequest.requiredChunks.resize(unionHierarchy.chunk_count);
+	    std::iota(unionRequest.requiredChunks.begin(),
+		unionRequest.requiredChunks.end(), 0u);
+	    BObolLodResult unionRich = unionService.realizeResidentMeshLod(
+		unionRequest, unionProvider);
+	    std::vector<uint32_t> initiallyResident;
+	    if (unionRich.progressiveMesh)
+		unionRich.progressiveMesh->residentChunkIds(initiallyResident);
+	    BObolLodResidentDemand firstView;
+	    firstView.assetKey = unionRich.geometry.cacheKey.value;
+	    firstView.cut = unionHierarchy.max_cut;
+	    firstView.channelMask = 2;
+	    firstView.chunkIds = {0};
+	    BObolLodResidentDemand secondView = firstView;
+	    secondView.chunkIds = {1};
+	    secondView.cut = std::max(
+		unionHierarchy.chunks[1].min_cut,
+		unionHierarchy.max_cut - 1);
+	    BObolLodResidentDemand allView = firstView;
+	    allView.chunkIds.resize(unionHierarchy.chunk_count);
+	    std::iota(allView.chunkIds.begin(), allView.chunkIds.end(), 0u);
+	    const SbBool started = unionService.start(1, FALSE);
+	    const size_t allQueued =
+		unionService.scheduleResidentMeshCompaction(
+		    0xa002, 1, {allView});
+	    const size_t firstQueued =
+		unionService.scheduleResidentMeshCompaction(
+		    0xa001, 1, {firstView});
+	    const size_t secondQueued =
+		unionService.scheduleResidentMeshCompaction(
+		    0xa002, 2, {secondView});
+	    const int unionWait = started ?
+		wait_for_resident_compaction(unionService) : 1;
+	    std::vector<uint32_t> retained;
+	    if (unionRich.progressiveMesh)
+		unionRich.progressiveMesh->residentChunkIds(retained);
+	    std::vector<BObolLodChunkCut> retainedCuts;
+	    if (unionRich.progressiveMesh)
+		unionRich.progressiveMesh->residentChunkCuts(retainedCuts);
+	    const bool retainedBoth =
+		std::binary_search(retained.begin(), retained.end(), 0u) &&
+		std::binary_search(retained.begin(), retained.end(), 1u);
+	    const bool retainedIndependentCuts = retainedCuts.size() == 2 &&
+		retainedCuts[0] == BObolLodChunkCut{0, unionHierarchy.max_cut} &&
+		retainedCuts[1] == BObolLodChunkCut{1, secondView.cut};
+	    const std::vector<uint32_t> unionRetained = retained;
+	    unionService.releaseResidentMeshConsumer(0xa002);
+	    const size_t trimQueued =
+		unionService.scheduleResidentMeshCompaction(
+		    0xa001, 2, {firstView});
+	    const int trimWait = started ?
+		wait_for_resident_compaction(unionService) : 1;
+	    retained.clear();
+	    if (unionRich.progressiveMesh)
+		unionRich.progressiveMesh->residentChunkIds(retained);
+	    std::vector<BObolLodChunkCut> coverageFloorCuts;
+	    if (unionRich.progressiveMesh)
+		unionRich.progressiveMesh->residentChunkCuts(coverageFloorCuts);
+	    const bool retainedWarmPages =
+		coverageFloorCuts.size() == unionHierarchy.chunk_count &&
+		coverageFloorCuts[0] ==
+		    BObolLodChunkCut{0, unionHierarchy.max_cut} &&
+		coverageFloorCuts[1] ==
+		    BObolLodChunkCut{1, secondView.cut};
+	    /* Expanding the visible page set while zooming out must be an atomic
+	     * transition from the incumbent presentation to the new view target.
+	     * A stale bounded-delivery stamp may ask for the absolute minimum, but
+	     * publishing that page population would make the whole occurrence flash
+	     * as a few coarse slabs. */
+	    BObolMeshLodProvider continuityProvider = unionProvider;
+	    continuityProvider.atomicRepresentationHandoff = FALSE;
+	    continuityProvider.useCurrentDrawCut = TRUE;
+	    continuityProvider.currentDrawCut = unionHierarchy.max_cut;
+	    continuityProvider.useDeliveryCutLimit = TRUE;
+	    continuityProvider.deliveryCutLimit = unionHierarchy.min_cut;
+	    continuityProvider.usePresentationCutLimit = TRUE;
+	    continuityProvider.presentationCutLimit = unionHierarchy.min_cut;
+	    BObolLodRequest continuityRequest = unionRequest;
+	    continuityRequest.requiredChunks = {0, 1};
+	    continuityRequest.requestedCut = std::max(
+		unionHierarchy.min_cut, unionHierarchy.max_cut - 1);
+	    BObolLodResult continuityResult =
+		unionService.realizeResidentMeshLod(
+		    continuityRequest, continuityProvider);
+	    BObolLodResult restoredUnion =
+		unionService.realizeResidentMeshLod(
+		    unionRequest, unionProvider);
+	    std::vector<uint32_t> restored;
+	    if (restoredUnion.progressiveMesh)
+		restoredUnion.progressiveMesh->residentChunkIds(restored);
+	    if (unionRich.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+		!unionRich.progressiveMesh || allQueued || firstQueued ||
+		!secondQueued || !started || unionWait || !retainedBoth ||
+		!retainedIndependentCuts ||
+		trimQueued || trimWait || !retainedWarmPages ||
+		continuityResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+		continuityResult.geometry.activeCut !=
+		    continuityRequest.requestedCut ||
+		continuityResult.residentCut <
+		    continuityRequest.requestedCut ||
+		restoredUnion.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+		restoredUnion.progressiveMesh != unionRich.progressiveMesh ||
+		restored.size() != unionHierarchy.chunk_count) {
+		printf("FAIL: multi-view resident page union/trim/continuity/restore "
+		       "(queued=%zu/%zu/%zu trim=%zu started=%d wait=%d/%d "
+		       "both=%d cuts=%d first=%d continuity=%d/%d restored=%zu/%u "
+		       "status=%d/%d/%d)\n",
+		       allQueued, firstQueued, secondQueued, trimQueued,
+		       started ? 1 : 0, unionWait, trimWait,
+		       retainedBoth ? 1 : 0,
+		       retainedIndependentCuts ? 1 : 0,
+		       retainedWarmPages ? 1 : 0,
+		       continuityResult.geometry.activeCut,
+		       continuityRequest.requestedCut,
+		       restored.size(), unionHierarchy.chunk_count,
+		       unionRich.providerStatus,
+		       continuityResult.providerStatus,
+		       restoredUnion.providerStatus);
+		printf("  pages initial:");
+		for (uint32_t page : initiallyResident)
+		    printf(" %u", page);
+		printf("\n  pages union:");
+		for (uint32_t page : unionRetained)
+		    printf(" %u", page);
+		printf("\n  pages trimmed:");
+		for (uint32_t page : retained)
+		    printf(" %u", page);
+		printf("\n  pages restored:");
+		for (uint32_t page : restored)
+		    printf(" %u", page);
+		printf("\n");
+		ret = 1;
+	    }
+	    unionService.stop();
+	}
+	if (unionLod)
+	    bobol_mesh_lod_destroy(unionLod);
+    }
+
+    /* A new view reopening a complete persistent hierarchy must publish the
+     * exact prefix selected by its bounded delivery policy and discard the
+     * cache reader's duplicate arrays. */
     BObolLodService warmFirstService;
     BObolMeshLodProvider warmFirstProvider;
     warmFirstProvider.service = &warmFirstService;
     warmFirstProvider.setDatabase(dbip);
     warmFirstProvider.refreshMissing = FALSE;
-    warmFirstProvider.prefetchCachedTargetOnFirstPublication = TRUE;
     warmFirstProvider.shrinkAfterCopy = TRUE;
     BObolLodResult warmFirst = warmFirstService.realizeResidentMeshLod(
 	stagedRequest, warmFirstProvider);
@@ -3016,18 +3185,18 @@ test_rt_mesh_provider_task(void)
 	demand.assetKey = warmFirst.geometry.cacheKey.value;
 	demand.cut = warmFirst.residentCut;
 	demand.channelMask = 2;
+	demand.chunkIds = warmFirst.request.requiredChunks;
 	std::vector<BObolLodResidentDemand> demands(1, demand);
 	warmFirstMaintenance = warmFirstService.scheduleResidentMeshCompaction(
 	    0x9876, 1, demands, &warmFirstPlanningComplete);
     }
     if (warmFirst.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	!warmFirst.progressiveMesh ||
-	warmFirst.geometry.activeCut !=
-	    warmFirst.progressiveMesh->minimumCut() ||
+	warmFirst.geometry.activeCut != stagedRequest.requestedCut ||
 	warmFirst.residentCut != stagedRequest.requestedCut ||
-	warmFirst.terminal || !warmFirstPlanningComplete ||
+	!warmFirst.terminal || !warmFirstPlanningComplete ||
 	warmFirstMaintenance != 0) {
-	printf("FAIL: warm first publication did not prefetch once and release "
+	printf("FAIL: warm first publication did not load once and release "
 	       "duplicate backing (status=%d active=%d min=%d resident=%d "
 	       "requested=%d terminal=%d planned=%d maintenance=%zu)\n",
 	       warmFirst.providerStatus, warmFirst.geometry.activeCut,
@@ -3081,8 +3250,11 @@ test_rt_mesh_provider_task(void)
 	demand.assetKey = terminalStage.geometry.cacheKey.value;
 	demand.cut = terminalStage.geometry.activeCut;
 	demand.channelMask = 2;
+	demand.chunkIds = terminalStage.request.requiredChunks;
 	std::vector<BObolLodResidentDemand> demanded(1, demand);
 	const int richLevel = terminalStage.progressiveMesh->residentCut();
+	std::vector<BObolLodChunkCut> richChunkCuts;
+	terminalStage.progressiveMesh->residentChunkCuts(richChunkCuts);
 	const size_t richBytes =
 	    service.residentMeshBytesForDiagnostics();
 	const size_t maintenanceQueued =
@@ -3114,15 +3286,23 @@ test_rt_mesh_provider_task(void)
 	const int compactWait = wait_for_resident_compaction(service);
 	const size_t compactBytes =
 	    service.residentMeshBytesForDiagnostics();
+	std::vector<uint32_t> coverageFloorPages;
+	terminalStage.progressiveMesh->residentChunkIds(coverageFloorPages);
+	std::vector<BObolLodChunkCut> coverageFloorCuts;
+	terminalStage.progressiveMesh->residentChunkCuts(coverageFloorCuts);
+	const int coverageFloorLevel =
+	    terminalStage.progressiveMesh->residentCut();
 	if (queued != 1 || compactWait ||
-	    terminalStage.progressiveMesh->residentCut() !=
-		terminalStage.progressiveMesh->minimumCut() ||
+	    coverageFloorPages != terminalStage.request.requiredChunks ||
+	    coverageFloorCuts == richChunkCuts ||
 	    compactBytes >= richBytes) {
 	    printf("FAIL: hidden resident PoP prefix did not compact "
-		   "(count=%zu level=%d min=%d bytes=%zu/%zu)\n",
+		   "(count=%zu level=%d min=%d pages=%zu/%zu bytes=%zu/%zu)\n",
 		   queued,
-		   terminalStage.progressiveMesh->residentCut(),
+		   coverageFloorLevel,
 		   terminalStage.progressiveMesh->minimumCut(),
+		   coverageFloorPages.size(),
+		   terminalStage.request.requiredChunks.size(),
 		   compactBytes, richBytes);
 	    ret = 1;
 	}
@@ -3182,6 +3362,7 @@ test_rt_mesh_provider_task(void)
 	    staleDemand.assetKey = staleRich.geometry.cacheKey.value;
 	    staleDemand.cut = staleRich.progressiveMesh->minimumCut();
 	    staleDemand.channelMask = 2;
+	    staleDemand.chunkIds = staleRich.request.requiredChunks;
 	    std::vector<BObolLodResidentDemand> staleDemands(1, staleDemand);
 	    staleQueued = staleCompactionService.scheduleResidentMeshCompaction(
 		0x5678, 1, staleDemands);
@@ -3226,8 +3407,10 @@ test_rt_mesh_provider_task(void)
 	    compactDemand.cut =
 		reloaded.progressiveMesh->minimumCut();
 	    compactDemand.channelMask = 2;
+	    compactDemand.chunkIds = reloaded.request.requiredChunks;
 	    std::vector<BObolLodResidentDemand> compactDemands(
 		1, compactDemand);
+	    const int rendererRichCut = reloaded.progressiveMesh->residentCut();
 	    const size_t rendererQueued =
 		service.scheduleResidentMeshCompaction(
 		    0x1234, 3, compactDemands);
@@ -3236,10 +3419,15 @@ test_rt_mesh_provider_task(void)
 	    std::vector<BObolLodResidentCompaction> completions;
 	    service.drainResidentMeshCompactions(
 		0x1234, completions);
+	    std::vector<uint32_t> rendererFloorPages;
+	    reloaded.progressiveMesh->residentChunkIds(rendererFloorPages);
 	    if (rendererQueued != 1 || waitResult ||
 		completions.size() != 1 ||
 		completions[0].progressiveMesh != reloaded.progressiveMesh ||
-		completions[0].residentCut != compactDemand.cut ||
+		completions[0].residentCut !=
+		    reloaded.progressiveMesh->residentCut() ||
+		completions[0].residentCut > rendererRichCut ||
+		rendererFloorPages != compactDemand.chunkIds ||
 		completions[0].channelMask != 2 ||
 		!completions[0].preparedCadGeometry ||
 		completions[0].preparedCadGeometryRevision !=

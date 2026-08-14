@@ -125,6 +125,10 @@ return;
     qgcanvas_sync_obol_camera(*d);
     initializeOpenGLFunctions();
     qgcanvas_request_obol_render_if_idle(*d, "qtgl-paint");
+    /* A provider/idle transition may have occurred since the preceding
+     * frame.  Apply its retained HUD delta before rendering this frame so a
+     * completed view never presents one final stale progress indicator. */
+    (void)qgcanvas_sync_obol_lod_progress(*d);
 
     const SbBool rendered =
 	qgcanvas_render_obol_pending(*d, this, TRUE, TRUE);

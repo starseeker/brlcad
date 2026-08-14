@@ -50,7 +50,7 @@
 
 #define POP_CUT_COUNT_MAX BOBOL_MESH_LOD_CUT_COUNT_MAX
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 17
+#define CACHE_CURRENT_FORMAT 18
 
 #define CACHE_POP_MAX_CUT "max"
 #define CACHE_POP_MIN_CUT "min"
@@ -67,6 +67,17 @@
 #define CACHE_CLUSTER_BOUNDS "gb"
 #define CACHE_CLUSTER_RANGE_OFFSETS "go"
 #define CACHE_CLUSTER_RANGES "gr"
+#define CACHE_CHUNK_COUNT "kc"
+#define CACHE_CHUNK_BOUNDS "kb"
+#define CACHE_CHUNK_MINMAX "km"
+#define CACHE_CHUNK_FACE_COUNTS "kf"
+#define CACHE_CHUNK_POINT_COUNTS "kp"
+#define CACHE_CHUNK_RESIDENT_BYTES "kx"
+#define CACHE_CHUNK_DATA_PREFIX "k"
+
+static const uint8_t meshLodChunkMagic[8] = {
+    'B', 'O', 'B', 'C', 'H', 'N', 'K', '1'
+};
 
 /* Serialized cache records must not inherit compiler ABI padding or size_t
  * width.  Keep this format explicitly fixed so a hierarchy produced on one
@@ -694,6 +705,8 @@ public:
     void releaseGenerationScratch(void);
     bool readSuffix(int residentCut, int targetCut,
 	BObolMeshLodSuffixCallback callback, void *callbackData);
+    bool readChunks(const uint32_t *chunkIds, size_t chunkCount, int cut,
+	BObolMeshLodChunkCallback callback, void *callbackData);
     void shrinkMemory(void);
     size_t residentBytes(void) const;
     size_t residentPrefixBytes(void) const;
@@ -722,6 +735,8 @@ private:
     void buildCutSchedule(void);
     void triProcess(void);
     bool buildClusters(void);
+    bool buildChunks(void);
+    bool cacheChunks(void);
     fastf_t snap(fastf_t value, fastf_t min, fastf_t max, uint8_t bits);
     void cache(void);
     bool cacheTri(void);
@@ -755,10 +770,13 @@ private:
      * contract, so 32-bit remap entries are sufficient. */
     std::vector<uint32_t> triIndexMap;
     std::vector<uint8_t> vertexTriMinCut;
+    std::vector<uint8_t> faceActivationCut;
     std::vector<std::vector<uint32_t>> cutTriVerts;
     std::vector<std::vector<uint32_t>> cutTris;
     std::vector<struct BObolMeshLodClusterInfo> clusterInfos;
     std::vector<struct BObolMeshLodClusterRange> clusterRanges;
+    std::vector<std::vector<uint32_t>> chunkFaces;
+    std::vector<struct BObolMeshLodChunkInfo> chunkInfos;
 
     size_t vertexCount = 0;
     const point_t *vertexArray = NULL;
@@ -842,7 +860,7 @@ BObolPopState::triProcess(void)
      * disjoint ranges, recording only one byte per source face.  The merge
      * below remains serial and source ordered, preserving byte-for-byte
      * deterministic cache topology regardless of worker count. */
-    std::vector<uint8_t> faceCuts(faceCount, UINT8_MAX);
+    faceActivationCut.assign(faceCount, UINT8_MAX);
     const fastf_t extent[3] = {
 	maxx - minx, maxy - miny, maxz - minz
     };
@@ -904,7 +922,7 @@ BObolPopState::triProcess(void)
 	}
 	return distinguishable ? cut : maxPopCut;
     };
-    const auto classifyRange = [this, &faceCuts, &quantize, &pairCut](
+    const auto classifyRange = [this, &quantize, &pairCut](
 	    size_t begin, size_t end) {
 	for (size_t faceIndex = begin; faceIndex < end; ++faceIndex) {
 	BObolPopRec triangle[3];
@@ -928,7 +946,7 @@ BObolPopState::triProcess(void)
 	const int cut = std::max(pairCut(triangle[0], triangle[1]),
 	    std::max(pairCut(triangle[1], triangle[2]),
 		     pairCut(triangle[0], triangle[2])));
-	faceCuts[faceIndex] = static_cast<uint8_t>(cut);
+	faceActivationCut[faceIndex] = static_cast<uint8_t>(cut);
 	}
     };
 
@@ -958,7 +976,7 @@ BObolPopState::triProcess(void)
 
     size_t cutFaceCounts[POP_CUT_COUNT_MAX] = {0};
     size_t badFaceCount = 0;
-    for (uint8_t cut : faceCuts) {
+    for (uint8_t cut : faceActivationCut) {
 	if (cut >= cutCount)
 	    badFaceCount++;
 	else
@@ -968,7 +986,7 @@ BObolPopState::triProcess(void)
 	cutTris[cut].reserve(cutFaceCounts[cut]);
 
     for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
-	const uint8_t cut = faceCuts[faceIndex];
+	const uint8_t cut = faceActivationCut[faceIndex];
 	if (cut >= cutCount)
 	    continue;
 	cutTris[cut].push_back(static_cast<uint32_t>(faceIndex));
@@ -1168,6 +1186,122 @@ BObolPopState::buildClusters(void)
     return rangeOffset == clusterRanges.size();
 }
 
+bool
+BObolPopState::buildChunks(void)
+{
+    constexpr size_t side = BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
+    constexpr size_t cellCount = BOBOL_MESH_LOD_CLUSTER_COUNT;
+    constexpr size_t faceTarget = BOBOL_MESH_LOD_CHUNK_FACE_TARGET;
+
+    chunkFaces.clear();
+    chunkInfos.clear();
+    if (!vertexArray || !faceArray || !faceCount || !faceTarget ||
+	faceActivationCut.size() != faceCount || cutCount == 0)
+	return false;
+
+    const double minimum[3] = {minx, miny, minz};
+    const double extent[3] = {maxx - minx, maxy - miny, maxz - minz};
+    const auto faceCell = [this, &minimum, &extent](
+	    uint32_t sourceFace) -> size_t {
+	size_t cell[3] = {0, 0, 0};
+	for (int axis = 0; axis < 3; ++axis) {
+	    double centroid = 0.0;
+	    for (size_t corner = 0; corner < 3; ++corner) {
+		const int vertex = faceArray[
+		    3 * static_cast<size_t>(sourceFace) + corner];
+		centroid += static_cast<double>(vertexArray[vertex][axis]);
+	    }
+	    centroid /= 3.0;
+	    if (extent[axis] > 0.0) {
+		const double normalized =
+		    (centroid - minimum[axis]) / extent[axis];
+		const double scaled = floor(normalized * side);
+		cell[axis] = scaled <= 0.0 ? 0 :
+		    static_cast<size_t>(std::min<double>(side - 1, scaled));
+	    }
+	}
+	return cell[X] + side * (cell[Y] + side * cell[Z]);
+    };
+
+    std::array<std::vector<uint32_t>, cellCount> cells;
+    size_t validFaces = 0;
+    for (size_t face = 0; face < faceCount; ++face) {
+	if (faceActivationCut[face] >= cutCount)
+	    continue;
+	const uint32_t sourceFace = static_cast<uint32_t>(face);
+	cells[faceCell(sourceFace)].push_back(sourceFace);
+	++validFaces;
+    }
+    if (!validFaces)
+	return false;
+
+    /* Preserve spatial cell order while packing bounded pages.  A fixed
+     * grid alone creates one enormous page for a scan concentrated in one
+     * cell; one page per nonempty cell creates hundreds of tiny pages for a
+     * modest mesh.  Packing and splitting by face count provides both a
+     * deterministic spatial order and a hard preparation/IO bound. */
+    for (std::vector<uint32_t> &cell : cells) {
+	size_t offset = 0;
+	while (offset < cell.size()) {
+	    if (chunkFaces.empty() ||
+		chunkFaces.back().size() >= faceTarget)
+		chunkFaces.emplace_back();
+	    std::vector<uint32_t> &chunk = chunkFaces.back();
+	    const size_t available = faceTarget - chunk.size();
+	    const size_t take = std::min(available, cell.size() - offset);
+	    chunk.insert(chunk.end(), cell.begin() + offset,
+		cell.begin() + offset + take);
+	    offset += take;
+	}
+	std::vector<uint32_t>().swap(cell);
+    }
+    if (chunkFaces.empty() || chunkFaces.size() > UINT32_MAX)
+	return false;
+
+    chunkInfos.resize(chunkFaces.size());
+    for (size_t chunkIndex = 0; chunkIndex < chunkFaces.size();
+	 chunkIndex++) {
+	BObolMeshLodChunkInfo &info = chunkInfos[chunkIndex];
+	memset(&info, 0, sizeof(info));
+	info.chunk_id = static_cast<uint32_t>(chunkIndex);
+	info.min_cut = maxPopCut;
+	info.max_cut = maxPopCut;
+	double chunkMin[3] = {
+	    std::numeric_limits<double>::infinity(),
+	    std::numeric_limits<double>::infinity(),
+	    std::numeric_limits<double>::infinity()
+	};
+	double chunkMax[3] = {
+	    -std::numeric_limits<double>::infinity(),
+	    -std::numeric_limits<double>::infinity(),
+	    -std::numeric_limits<double>::infinity()
+	};
+	for (uint32_t sourceFace : chunkFaces[chunkIndex]) {
+	    if (sourceFace >= faceCount ||
+		faceActivationCut[sourceFace] >= cutCount)
+		return false;
+	    info.min_cut = std::min(info.min_cut,
+		static_cast<int>(faceActivationCut[sourceFace]));
+	    for (size_t corner = 0; corner < 3; ++corner) {
+		const int vertex = faceArray[
+		    3 * static_cast<size_t>(sourceFace) + corner];
+		if (vertex < 0 || static_cast<size_t>(vertex) >= vertexCount)
+		    return false;
+		for (int axis = 0; axis < 3; ++axis) {
+		    const double value = vertexArray[vertex][axis];
+		    chunkMin[axis] = std::min(chunkMin[axis], value);
+		    chunkMax[axis] = std::max(chunkMax[axis], value);
+		}
+	    }
+	}
+	if (!std::isfinite(chunkMin[X]) || !std::isfinite(chunkMax[X]))
+	    return false;
+	VSET(info.bmin, chunkMin[X], chunkMin[Y], chunkMin[Z]);
+	VSET(info.bmax, chunkMax[X], chunkMax[Y], chunkMax[Z]);
+    }
+    return true;
+}
+
 BObolPopState::BObolPopState(
     struct BObolMeshLodContext *ctx,
     const point_t *vertices,
@@ -1184,7 +1318,7 @@ BObolPopState::BObolPopState(
 
     if (!userKey) {
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char semantics[] = "BObol-clustered-PoP-format-17";
+	static const char semantics[] = "BObol-chunked-PoP-format-18";
 	bu_data_hash_update(state, semantics, sizeof(semantics));
 	bu_data_hash_update(state, vertices, inputVertexCount * sizeof(point_t));
 	bu_data_hash_update(state, faces, 3 * inputFaceCount * sizeof(int));
@@ -1254,6 +1388,8 @@ BObolPopState::BObolPopState(
     currCut = maxPopCut;
     triProcess();
     if (!buildClusters())
+	return;
+    if (!buildChunks())
 	return;
     const int64_t cacheStarted = bu_gettime();
 
@@ -1399,7 +1535,7 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	    return false;
 	}
 
-	/* Format 16 has one canonical anisotropic schedule.  Rebuild it from
+	/* This format has one canonical anisotropic schedule.  Rebuild it from
 	 * the validated quantization domain and require the stored cut records
 	 * to match exactly.  This rejects truncated, stale, or corrupt metadata
 	 * before any ordinal can index fixed-size storage. */
@@ -1551,6 +1687,136 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	    VSET(info.bmax, values[3], values[4], values[5]);
 	}
     }
+    {
+	const auto chunkHeaderFailure = [this](const char *reason) {
+	    if (getenv("BOBOL_CHUNK_DEBUG"))
+		bu_log("BObol chunk header validation failed: %s\n", reason);
+	    cacheDone();
+	    return false;
+	};
+	uint32_t diskChunkCount = 0;
+	if (!readMetadata(CACHE_CHUNK_COUNT, &diskChunkCount,
+		sizeof(diskChunkCount)) || !diskChunkCount ||
+	    diskChunkCount > static_cast<uint32_t>(
+		std::numeric_limits<int>::max())) {
+	    return chunkHeaderFailure("count");
+	}
+	void *boundsBytes = NULL;
+	void *minmaxBytes = NULL;
+	void *faceBytes = NULL;
+	void *pointBytes = NULL;
+	void *residentBytes = NULL;
+	const size_t chunkCount = diskChunkCount;
+	if (chunkCount > SIZE_MAX / (POP_CUT_COUNT_MAX * sizeof(uint64_t)) ||
+	    cacheGet(&boundsBytes, CACHE_CHUNK_BOUNDS) !=
+		chunkCount * 6 * sizeof(double) ||
+	    cacheGet(&minmaxBytes, CACHE_CHUNK_MINMAX) !=
+		chunkCount * 2 * sizeof(uint8_t) ||
+	    cacheGet(&faceBytes, CACHE_CHUNK_FACE_COUNTS) !=
+		chunkCount * POP_CUT_COUNT_MAX * sizeof(uint32_t) ||
+	    cacheGet(&pointBytes, CACHE_CHUNK_POINT_COUNTS) !=
+		chunkCount * POP_CUT_COUNT_MAX * sizeof(uint32_t) ||
+	    cacheGet(&residentBytes, CACHE_CHUNK_RESIDENT_BYTES) !=
+		chunkCount * POP_CUT_COUNT_MAX * sizeof(uint64_t) ||
+	    !boundsBytes || !minmaxBytes || !faceBytes || !pointBytes ||
+	    !residentBytes) {
+	    return chunkHeaderFailure("arrays");
+	}
+	chunkInfos.resize(chunkCount);
+	std::array<uint64_t, POP_CUT_COUNT_MAX> summedFaces = {};
+	std::array<uint64_t, POP_CUT_COUNT_MAX> summedPoints = {};
+	const unsigned char *diskBounds =
+	    static_cast<const unsigned char *>(boundsBytes);
+	const uint8_t *diskMinmax = static_cast<const uint8_t *>(minmaxBytes);
+	const unsigned char *diskFaces =
+	    static_cast<const unsigned char *>(faceBytes);
+	const unsigned char *diskPoints =
+	    static_cast<const unsigned char *>(pointBytes);
+	const unsigned char *diskResident =
+	    static_cast<const unsigned char *>(residentBytes);
+	for (size_t chunk = 0; chunk < chunkCount; ++chunk) {
+	    BObolMeshLodChunkInfo &info = chunkInfos[chunk];
+	    memset(&info, 0, sizeof(info));
+	    info.chunk_id = static_cast<uint32_t>(chunk);
+	    info.min_cut = diskMinmax[chunk * 2 + 0];
+	    info.max_cut = diskMinmax[chunk * 2 + 1];
+	    double values[6] = {};
+	    memcpy(values, diskBounds + chunk * sizeof(values),
+		sizeof(values));
+	    bool valid = info.min_cut >= minPopCut &&
+		info.min_cut <= info.max_cut && info.max_cut == maxPopCut;
+	    for (double value : values)
+		valid = valid && std::isfinite(value);
+	    valid = valid && values[0] <= values[3] &&
+		values[1] <= values[4] && values[2] <= values[5] &&
+		values[0] >= minx && values[1] >= miny &&
+		values[2] >= minz && values[3] <= maxx &&
+		values[4] <= maxy && values[5] <= maxz;
+	    if (!valid) {
+		return chunkHeaderFailure("bounds");
+	    }
+	    VSET(info.bmin, values[0], values[1], values[2]);
+	    VSET(info.bmax, values[3], values[4], values[5]);
+	    uint32_t priorFaces = 0;
+	    uint32_t priorPoints = 0;
+	    uint64_t priorResident = 0;
+	    for (uint32_t cut = 0; cut < POP_CUT_COUNT_MAX; ++cut) {
+		const size_t offset = chunk * POP_CUT_COUNT_MAX + cut;
+		uint32_t faces = 0;
+		uint32_t points = 0;
+		uint64_t resident = 0;
+		memcpy(&faces, diskFaces + offset * sizeof(faces),
+		    sizeof(faces));
+		memcpy(&points, diskPoints + offset * sizeof(points),
+		    sizeof(points));
+		memcpy(&resident, diskResident + offset * sizeof(resident),
+		    sizeof(resident));
+		if ((cut <= static_cast<uint32_t>(info.max_cut) &&
+		     (faces < priorFaces || points < priorPoints ||
+		      resident < priorResident)) ||
+		    (cut < static_cast<uint32_t>(info.min_cut) &&
+		     (faces || points || resident)) ||
+		    (cut > static_cast<uint32_t>(info.max_cut) &&
+		     (faces || points || resident))) {
+		    if (getenv("BOBOL_CHUNK_DEBUG"))
+			bu_log("chunk=%zu cut=%u min=%d max=%d "
+			       "faces=%u/%u points=%u/%u bytes=%llu/%llu\n",
+			       chunk, cut, info.min_cut, info.max_cut,
+			       faces, priorFaces, points, priorPoints,
+			       static_cast<unsigned long long>(resident),
+			       static_cast<unsigned long long>(priorResident));
+		    return chunkHeaderFailure("monotonic counts");
+		}
+		info.cuts[cut].face_count = faces;
+		info.cuts[cut].point_count = points;
+		info.cuts[cut].resident_bytes = resident;
+		if (cut <= static_cast<uint32_t>(info.max_cut)) {
+		    priorFaces = faces;
+		    priorPoints = points;
+		    priorResident = resident;
+		}
+		if (cut < cutCount) {
+		    summedFaces[cut] += faces;
+		    summedPoints[cut] += points;
+		}
+	    }
+	    if (!priorFaces || !priorPoints) {
+		return chunkHeaderFailure("empty terminal");
+	    }
+	}
+	uint64_t globalFaces = 0;
+	uint64_t globalPoints = 0;
+	for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	    globalFaces += cutTriangleCount[cut];
+	    globalPoints += cutVertexCount[cut];
+	    /* Vertices shared by chunks are duplicated by design, so only the
+	     * face population is conserved exactly. */
+	    if (summedFaces[cut] != globalFaces ||
+		summedPoints[cut] < globalPoints) {
+		return chunkHeaderFailure("global population sums");
+	    }
+	}
+    }
     /*
      * Retained drawing loads its first cumulative prefix immediately.  Let
      * that explicit path reuse this immutable header snapshot; ordinary
@@ -1652,10 +1918,14 @@ BObolPopState::releaseGenerationScratch(void)
     triIndexMap.shrink_to_fit();
     vertexTriMinCut.clear();
     vertexTriMinCut.shrink_to_fit();
+    faceActivationCut.clear();
+    faceActivationCut.shrink_to_fit();
     cutTriVerts.clear();
     cutTriVerts.shrink_to_fit();
     cutTris.clear();
     cutTris.shrink_to_fit();
+    chunkFaces.clear();
+    chunkFaces.shrink_to_fit();
     vertexCount = 0;
     vertexArray = NULL;
     normalArray = NULL;
@@ -1926,6 +2196,165 @@ BObolPopState::readSuffix(int residentCut, int targetCut,
     return true;
 }
 
+bool
+BObolPopState::readChunks(const uint32_t *chunkIds, size_t requestedCount,
+	int cut, BObolMeshLodChunkCallback callback, void *callbackData)
+{
+    if (!isValid || !chunkIds || !requestedCount || !callback ||
+	cut < minPopCut || cut > maxPopCut || chunkInfos.empty())
+	return false;
+    for (size_t i = 0; i < requestedCount; ++i) {
+	if (chunkIds[i] >= chunkInfos.size() ||
+	    (i && chunkIds[i] <= chunkIds[i - 1]))
+	    return false;
+    }
+
+    std::vector<fastf_t> pointStorage;
+    std::vector<uint32_t> faceStorage;
+    std::vector<fastf_t> normalStorage;
+    for (size_t requested = 0; requested < requestedCount; ++requested) {
+	const uint32_t chunkId = chunkIds[requested];
+	const BObolMeshLodChunkInfo &info = chunkInfos[chunkId];
+	if (cut < info.min_cut) {
+	    if (!callback(chunkId, cut, NULL, 0, NULL, 0, NULL, 0,
+		    callbackData)) {
+		cacheDone();
+		return false;
+	    }
+	    continue;
+	}
+	const BObolMeshLodChunkCutInfo &selected = info.cuts[cut];
+	const BObolMeshLodChunkCutInfo &terminal = info.cuts[info.max_cut];
+	if (!selected.point_count || !selected.face_count ||
+	    selected.point_count > terminal.point_count ||
+	    selected.face_count > terminal.face_count)
+	    return false;
+
+	char component[32] = {0};
+	snprintf(component, sizeof(component), "%s%08x",
+	    CACHE_CHUNK_DATA_PREFIX, chunkId);
+	void *recordData = NULL;
+	const size_t recordSize = cacheGet(&recordData, component);
+	if (!recordData || recordSize < 88u +
+		POP_CUT_COUNT_MAX * 2u * sizeof(uint32_t)) {
+	    cacheDone();
+	    return false;
+	}
+	const unsigned char *record =
+	    static_cast<const unsigned char *>(recordData);
+	size_t offset = 0;
+	const auto read = [&record, recordSize, &offset](void *value,
+		size_t size) -> bool {
+	    if (!value || size > recordSize - std::min(recordSize, offset))
+		return false;
+	    memcpy(value, record + offset, size);
+	    offset += size;
+	    return true;
+	};
+	uint8_t magic[8] = {};
+	uint32_t version = 0;
+	uint32_t diskChunk = UINT32_MAX;
+	uint32_t diskCutCount = 0;
+	uint32_t flags = 0;
+	uint32_t fullPoints = 0;
+	uint32_t fullFaces = 0;
+	uint32_t reservedA = 1;
+	uint32_t reservedB = 1;
+	double bounds[6] = {};
+	if (!read(magic, sizeof(magic)) ||
+	    !read(&version, sizeof(version)) ||
+	    !read(&diskChunk, sizeof(diskChunk)) ||
+	    !read(&diskCutCount, sizeof(diskCutCount)) ||
+	    !read(&flags, sizeof(flags)) ||
+	    !read(&fullPoints, sizeof(fullPoints)) ||
+	    !read(&fullFaces, sizeof(fullFaces)) ||
+	    !read(&reservedA, sizeof(reservedA)) ||
+	    !read(&reservedB, sizeof(reservedB)) ||
+	    !read(bounds, sizeof(bounds)) ||
+	    memcmp(magic, meshLodChunkMagic, sizeof(magic)) != 0 ||
+	    version != 1 || diskChunk != chunkId ||
+	    diskCutCount != cutCount || flags > 1 ||
+	    (flags != 0) != hasNormals || reservedA || reservedB ||
+	    fullPoints != terminal.point_count ||
+	    fullFaces != terminal.face_count)
+	    goto chunk_read_failed;
+	{
+	    uint32_t diskPoints[POP_CUT_COUNT_MAX] = {};
+	    uint32_t diskFaces[POP_CUT_COUNT_MAX] = {};
+	    if (!read(diskPoints, sizeof(diskPoints)) ||
+		!read(diskFaces, sizeof(diskFaces)))
+		goto chunk_read_failed;
+	    for (uint32_t c = 0; c < POP_CUT_COUNT_MAX; ++c) {
+		if (diskPoints[c] != info.cuts[c].point_count ||
+		    diskFaces[c] != info.cuts[c].face_count)
+		    goto chunk_read_failed;
+	    }
+	}
+	{
+	    const uint64_t pointBytes =
+		static_cast<uint64_t>(fullPoints) * 3u * sizeof(double);
+	    const uint64_t indexBytes =
+		static_cast<uint64_t>(fullFaces) * 3u * sizeof(uint32_t);
+	    const uint64_t normalBytes = hasNormals ?
+		static_cast<uint64_t>(fullFaces) * 9u * sizeof(double) : 0;
+	    const uint64_t expected = static_cast<uint64_t>(offset) +
+		pointBytes + indexBytes + normalBytes;
+	    if (expected != recordSize || expected > SIZE_MAX)
+		goto chunk_read_failed;
+	    const size_t pointOffset = offset;
+	    const size_t indexOffset = pointOffset +
+		static_cast<size_t>(pointBytes);
+	    const size_t normalOffset = indexOffset +
+		static_cast<size_t>(indexBytes);
+	    pointStorage.resize(static_cast<size_t>(selected.point_count) * 3);
+	    faceStorage.resize(static_cast<size_t>(selected.face_count) * 3);
+	    normalStorage.resize(hasNormals ?
+		static_cast<size_t>(selected.face_count) * 9 : 0);
+	    for (size_t scalar = 0; scalar < pointStorage.size(); ++scalar) {
+		double value = 0.0;
+		memcpy(&value, record + pointOffset + scalar * sizeof(value),
+		    sizeof(value));
+		const int axis = static_cast<int>(scalar % 3);
+		if (!std::isfinite(value) || value < info.bmin[axis] ||
+		    value > info.bmax[axis])
+		    goto chunk_read_failed;
+		pointStorage[scalar] = static_cast<fastf_t>(value);
+	    }
+	    memcpy(faceStorage.data(), record + indexOffset,
+		faceStorage.size() * sizeof(faceStorage[0]));
+	    for (uint32_t index : faceStorage)
+		if (index >= selected.point_count)
+		    goto chunk_read_failed;
+	    for (size_t scalar = 0; scalar < normalStorage.size(); ++scalar) {
+		double value = 0.0;
+		memcpy(&value, record + normalOffset +
+		    scalar * sizeof(value), sizeof(value));
+		if (!std::isfinite(value))
+		    goto chunk_read_failed;
+		normalStorage[scalar] = static_cast<fastf_t>(value);
+	    }
+	}
+	if (!callback(chunkId, cut,
+		reinterpret_cast<const point_t *>(pointStorage.data()),
+		selected.point_count, faceStorage.data(), selected.face_count,
+		normalStorage.empty() ? NULL :
+		    reinterpret_cast<const vect_t *>(normalStorage.data()),
+		normalStorage.empty() ? 0 :
+		    static_cast<size_t>(selected.face_count) * 3,
+		callbackData)) {
+	    cacheDone();
+	    return false;
+	}
+	continue;
+
+chunk_read_failed:
+	cacheDone();
+	return false;
+    }
+    cacheDone();
+    return true;
+}
+
 void
 BObolPopState::shrinkMemory(void)
 {
@@ -1973,6 +2402,8 @@ BObolPopState::residentBytes(void) const
     bytes = mesh_lod_saturating_bytes_add(
 	bytes, vertexTriMinCut.capacity(), sizeof(vertexTriMinCut[0]));
     bytes = mesh_lod_saturating_bytes_add(
+	bytes, faceActivationCut.capacity(), sizeof(faceActivationCut[0]));
+    bytes = mesh_lod_saturating_bytes_add(
 	bytes, cutTriVerts.capacity(), sizeof(cutTriVerts[0]));
     bytes = mesh_lod_saturating_bytes_add(
 	bytes, cutTris.capacity(), sizeof(cutTris[0]));
@@ -1980,12 +2411,19 @@ BObolPopState::residentBytes(void) const
 	bytes, clusterInfos.capacity(), sizeof(clusterInfos[0]));
     bytes = mesh_lod_saturating_bytes_add(
 	bytes, clusterRanges.capacity(), sizeof(clusterRanges[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, chunkInfos.capacity(), sizeof(chunkInfos[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, chunkFaces.capacity(), sizeof(chunkFaces[0]));
     for (const std::vector<uint32_t> &cut : cutTriVerts)
 	bytes = mesh_lod_saturating_bytes_add(
 	    bytes, cut.capacity(), sizeof(cut[0]));
     for (const std::vector<uint32_t> &cut : cutTris)
 	bytes = mesh_lod_saturating_bytes_add(
 	    bytes, cut.capacity(), sizeof(cut[0]));
+    for (const std::vector<uint32_t> &chunk : chunkFaces)
+	bytes = mesh_lod_saturating_bytes_add(
+	    bytes, chunk.capacity(), sizeof(chunk[0]));
     const size_t prefix = residentPrefixBytes();
     return prefix > SIZE_MAX - bytes ? SIZE_MAX : bytes + prefix;
 }
@@ -2031,6 +2469,8 @@ BObolPopState::hierarchyInfo(struct BObolMeshLodHierarchyInfo *info) const
 	BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
     info->cluster_count = static_cast<uint32_t>(clusterInfos.size());
     info->clusters = clusterInfos.empty() ? NULL : clusterInfos.data();
+    info->chunk_count = static_cast<uint32_t>(chunkInfos.size());
+    info->chunks = chunkInfos.empty() ? NULL : chunkInfos.data();
     uint64_t points = 0;
     uint64_t faces = 0;
     for (uint32_t cut = 0; cut < cutCount; ++cut) {
@@ -2181,6 +2621,243 @@ BObolPopState::cacheDone(void)
     bu_cache_get_done(&readTxn);
     if (readLock.owns_lock())
 	readLock.unlock();
+}
+
+static bool
+mesh_lod_chunk_append(std::vector<unsigned char> &bytes,
+	const void *data, size_t size)
+{
+    if (!data || !size || size > SIZE_MAX - bytes.size())
+	return false;
+    const size_t offset = bytes.size();
+    bytes.resize(offset + size);
+    memcpy(bytes.data() + offset, data, size);
+    return true;
+}
+
+bool
+BObolPopState::cacheChunks(void)
+{
+    if (chunkFaces.empty() || chunkFaces.size() != chunkInfos.size() ||
+	faceActivationCut.size() != faceCount)
+	return false;
+
+    std::vector<uint8_t> localVertexCut(vertexCount, UINT8_MAX);
+    std::vector<uint32_t> localVertexIndex(vertexCount, UINT32_MAX);
+    std::vector<uint32_t> touchedVertices;
+    std::array<std::vector<uint32_t>, POP_CUT_COUNT_MAX> cutVertices;
+    std::array<std::vector<uint32_t>, POP_CUT_COUNT_MAX> chunkCutFaces;
+
+    for (size_t chunkIndex = 0; chunkIndex < chunkFaces.size();
+	 chunkIndex++) {
+	BObolMeshLodChunkInfo &info = chunkInfos[chunkIndex];
+	for (std::vector<uint32_t> &values : cutVertices)
+	    values.clear();
+	for (std::vector<uint32_t> &values : chunkCutFaces)
+	    values.clear();
+	touchedVertices.clear();
+
+	for (uint32_t sourceFace : chunkFaces[chunkIndex]) {
+	    if (sourceFace >= faceCount)
+		return false;
+	    const uint8_t activation = faceActivationCut[sourceFace];
+	    if (activation >= cutCount)
+		return false;
+	    chunkCutFaces[activation].push_back(sourceFace);
+	    for (size_t corner = 0; corner < 3; ++corner) {
+		const int vertex = faceArray[
+		    3 * static_cast<size_t>(sourceFace) + corner];
+		if (vertex < 0 || static_cast<size_t>(vertex) >= vertexCount)
+		    return false;
+		const size_t sourceVertex = static_cast<size_t>(vertex);
+		if (localVertexCut[sourceVertex] == UINT8_MAX) {
+		    localVertexCut[sourceVertex] = activation;
+		    touchedVertices.push_back(static_cast<uint32_t>(sourceVertex));
+		} else {
+		    localVertexCut[sourceVertex] = std::min(
+			localVertexCut[sourceVertex], activation);
+		}
+	    }
+	}
+	for (uint32_t sourceVertex : touchedVertices)
+	    cutVertices[localVertexCut[sourceVertex]].push_back(sourceVertex);
+
+	uint64_t cumulativePoints = 0;
+	uint64_t cumulativeFaces = 0;
+	uint32_t nextLocalVertex = 0;
+	for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	    for (uint32_t sourceVertex : cutVertices[cut])
+		localVertexIndex[sourceVertex] = nextLocalVertex++;
+	    cumulativePoints += cutVertices[cut].size();
+	    cumulativeFaces += chunkCutFaces[cut].size();
+	    if (cumulativePoints > UINT32_MAX || cumulativeFaces > UINT32_MAX)
+		return false;
+	    BObolMeshLodChunkCutInfo &cutInfo = info.cuts[cut];
+	    cutInfo.point_count = static_cast<uint32_t>(cumulativePoints);
+	    cutInfo.face_count = static_cast<uint32_t>(cumulativeFaces);
+	    uint64_t bytes = cumulativePoints * 3u * sizeof(float) +
+		cumulativeFaces * 3u * sizeof(uint32_t);
+	    if (hasNormals)
+		bytes += cumulativeFaces * 9u * sizeof(float);
+	    cutInfo.resident_bytes = bytes;
+	}
+	if (!cumulativePoints || !cumulativeFaces ||
+	    cumulativePoints != touchedVertices.size() ||
+	    cumulativeFaces != chunkFaces[chunkIndex].size())
+	    return false;
+
+	/* Fixed-width record.  Header size is deliberately a multiple of eight:
+	 * cache readers may validate/copy the IEEE doubles without relying on
+	 * compiler packing or size_t width. */
+	std::vector<unsigned char> bytes;
+	const uint64_t pointScalarCount = cumulativePoints * 3u;
+	const uint64_t indexCount = cumulativeFaces * 3u;
+	const uint64_t normalScalarCount = hasNormals ? cumulativeFaces * 9u : 0;
+	const uint64_t expected = 88u +
+	    static_cast<uint64_t>(POP_CUT_COUNT_MAX) * 2u * sizeof(uint32_t) +
+	    pointScalarCount * sizeof(double) + indexCount * sizeof(uint32_t) +
+	    normalScalarCount * sizeof(double);
+	if (expected > SIZE_MAX)
+	    return false;
+	bytes.reserve(static_cast<size_t>(expected));
+	const uint32_t diskVersion = 1;
+	const uint32_t diskChunk = static_cast<uint32_t>(chunkIndex);
+	const uint32_t diskCutCount = cutCount;
+	const uint32_t diskFlags = hasNormals ? 1u : 0u;
+	const uint32_t diskPointCount = static_cast<uint32_t>(cumulativePoints);
+	const uint32_t diskFaceCount = static_cast<uint32_t>(cumulativeFaces);
+	const uint32_t reserved = 0;
+	const double bounds[6] = {
+	    static_cast<double>(info.bmin[X]),
+	    static_cast<double>(info.bmin[Y]),
+	    static_cast<double>(info.bmin[Z]),
+	    static_cast<double>(info.bmax[X]),
+	    static_cast<double>(info.bmax[Y]),
+	    static_cast<double>(info.bmax[Z])
+	};
+	if (!mesh_lod_chunk_append(bytes, meshLodChunkMagic,
+		sizeof(meshLodChunkMagic)) ||
+	    !mesh_lod_chunk_append(bytes, &diskVersion, sizeof(diskVersion)) ||
+	    !mesh_lod_chunk_append(bytes, &diskChunk, sizeof(diskChunk)) ||
+	    !mesh_lod_chunk_append(bytes, &diskCutCount, sizeof(diskCutCount)) ||
+	    !mesh_lod_chunk_append(bytes, &diskFlags, sizeof(diskFlags)) ||
+	    !mesh_lod_chunk_append(bytes, &diskPointCount,
+		sizeof(diskPointCount)) ||
+	    !mesh_lod_chunk_append(bytes, &diskFaceCount,
+		sizeof(diskFaceCount)) ||
+	    !mesh_lod_chunk_append(bytes, &reserved, sizeof(reserved)) ||
+	    !mesh_lod_chunk_append(bytes, &reserved, sizeof(reserved)) ||
+	    !mesh_lod_chunk_append(bytes, bounds, sizeof(bounds)))
+	    return false;
+	for (uint32_t cut = 0; cut < POP_CUT_COUNT_MAX; ++cut) {
+	    const uint32_t value = info.cuts[cut].point_count;
+	    if (!mesh_lod_chunk_append(bytes, &value, sizeof(value)))
+		return false;
+	}
+	for (uint32_t cut = 0; cut < POP_CUT_COUNT_MAX; ++cut) {
+	    const uint32_t value = info.cuts[cut].face_count;
+	    if (!mesh_lod_chunk_append(bytes, &value, sizeof(value)))
+		return false;
+	}
+	for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	    for (uint32_t sourceVertex : cutVertices[cut]) {
+		const double point[3] = {
+		    static_cast<double>(vertexArray[sourceVertex][X]),
+		    static_cast<double>(vertexArray[sourceVertex][Y]),
+		    static_cast<double>(vertexArray[sourceVertex][Z])
+		};
+		if (!mesh_lod_chunk_append(bytes, point, sizeof(point)))
+		    return false;
+	    }
+	}
+	for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	    for (uint32_t sourceFace : chunkCutFaces[cut]) {
+		uint32_t indices[3] = {};
+		for (size_t corner = 0; corner < 3; ++corner) {
+		    const int sourceVertex = faceArray[
+			3 * static_cast<size_t>(sourceFace) + corner];
+		    indices[corner] = localVertexIndex[sourceVertex];
+		    if (indices[corner] >= cumulativePoints)
+			return false;
+		}
+		if (!mesh_lod_chunk_append(bytes, indices, sizeof(indices)))
+		    return false;
+	    }
+	}
+	if (hasNormals) {
+	    if (!normalArray)
+		return false;
+	    for (uint32_t cut = 0; cut < cutCount; ++cut) {
+		for (uint32_t sourceFace : chunkCutFaces[cut]) {
+		    for (size_t corner = 0; corner < 3; ++corner) {
+			const vect_t &source = normalArray[
+			    3 * static_cast<size_t>(sourceFace) + corner];
+			const double normal[3] = {
+			    static_cast<double>(source[X]),
+			    static_cast<double>(source[Y]),
+			    static_cast<double>(source[Z])
+			};
+			if (!mesh_lod_chunk_append(bytes, normal,
+				sizeof(normal)))
+			    return false;
+		    }
+		}
+	    }
+	}
+	if (bytes.size() != expected)
+	    return false;
+
+	char component[32] = {0};
+	snprintf(component, sizeof(component), "%s%08x",
+	    CACHE_CHUNK_DATA_PREFIX, diskChunk);
+	if (!cacheWriteData(component, bytes.data(), bytes.size()))
+	    return false;
+
+	for (uint32_t sourceVertex : touchedVertices) {
+	    localVertexCut[sourceVertex] = UINT8_MAX;
+	    localVertexIndex[sourceVertex] = UINT32_MAX;
+	}
+    }
+
+    const uint32_t diskChunkCount = static_cast<uint32_t>(chunkInfos.size());
+    if (!cacheWriteData(CACHE_CHUNK_COUNT, &diskChunkCount,
+	    sizeof(diskChunkCount)))
+	return false;
+    std::vector<double> bounds(chunkInfos.size() * 6);
+    std::vector<uint8_t> minmax(chunkInfos.size() * 2);
+    std::vector<uint32_t> faceCounts(
+	chunkInfos.size() * POP_CUT_COUNT_MAX);
+    std::vector<uint32_t> pointCounts(
+	chunkInfos.size() * POP_CUT_COUNT_MAX);
+    std::vector<uint64_t> residentBytes(
+	chunkInfos.size() * POP_CUT_COUNT_MAX);
+    for (size_t chunk = 0; chunk < chunkInfos.size(); ++chunk) {
+	const BObolMeshLodChunkInfo &info = chunkInfos[chunk];
+	bounds[chunk * 6 + 0] = info.bmin[X];
+	bounds[chunk * 6 + 1] = info.bmin[Y];
+	bounds[chunk * 6 + 2] = info.bmin[Z];
+	bounds[chunk * 6 + 3] = info.bmax[X];
+	bounds[chunk * 6 + 4] = info.bmax[Y];
+	bounds[chunk * 6 + 5] = info.bmax[Z];
+	minmax[chunk * 2 + 0] = static_cast<uint8_t>(info.min_cut);
+	minmax[chunk * 2 + 1] = static_cast<uint8_t>(info.max_cut);
+	for (uint32_t cut = 0; cut < POP_CUT_COUNT_MAX; ++cut) {
+	    const size_t offset = chunk * POP_CUT_COUNT_MAX + cut;
+	    faceCounts[offset] = info.cuts[cut].face_count;
+	    pointCounts[offset] = info.cuts[cut].point_count;
+	    residentBytes[offset] = info.cuts[cut].resident_bytes;
+	}
+    }
+    return cacheWriteData(CACHE_CHUNK_BOUNDS, bounds.data(),
+	       bounds.size() * sizeof(bounds[0])) &&
+	cacheWriteData(CACHE_CHUNK_MINMAX, minmax.data(),
+	       minmax.size() * sizeof(minmax[0])) &&
+	cacheWriteData(CACHE_CHUNK_FACE_COUNTS, faceCounts.data(),
+	       faceCounts.size() * sizeof(faceCounts[0])) &&
+	cacheWriteData(CACHE_CHUNK_POINT_COUNTS, pointCounts.data(),
+	       pointCounts.size() * sizeof(pointCounts[0])) &&
+	cacheWriteData(CACHE_CHUNK_RESIDENT_BYTES, residentBytes.data(),
+	       residentBytes.size() * sizeof(residentBytes[0]));
 }
 
 bool
@@ -2399,7 +3076,7 @@ BObolPopState::cacheTri(void)
     }
 
     bu_vls_free(&keyBuffer);
-    return true;
+    return cacheChunks();
 }
 
 void
@@ -3358,6 +4035,18 @@ bobol_mesh_lod_read_resident_suffix(struct BObolMeshLod *lod,
     targetCut = std::min(targetCut, lod->state->maxPopCut);
     return lod->state->readSuffix(
 	residentCut, targetCut, callback, callbackData) ? 1 : 0;
+}
+
+int
+bobol_mesh_lod_read_chunk_prefixes(struct BObolMeshLod *lod,
+	const uint32_t *chunkIds, size_t chunkCount, int cut,
+	BObolMeshLodChunkCallback callback, void *callbackData)
+{
+    if (!lod || !lod->state || !chunkIds || !chunkCount || !callback ||
+	cut < lod->state->minPopCut || cut > lod->state->maxPopCut)
+	return 0;
+    return lod->state->readChunks(
+	chunkIds, chunkCount, cut, callback, callbackData) ? 1 : 0;
 }
 
 int

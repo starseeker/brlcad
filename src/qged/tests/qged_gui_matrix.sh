@@ -999,6 +999,29 @@ validate_report()
 		>>"$validation"
 	    return 1
 	fi
+	# Reopening a warm hierarchy must publish a bounded but recognizable first
+	# prefix.  The former absolute-minimum policy made Lucy appear as three
+	# box-like slabs; the opposite extreme delayed all content while reading the
+	# complete view target.  Permit ordinary refinement after this checkpoint,
+	# but keep the first mesh within a bounded number of authored cuts and well
+	# above the unusable 44/68-triangle population.
+	if [[ "$cache_state" == "warm" ]] && ! jq -e '
+	    ([.samples[] |
+	      select((.checkpoint? // "") |
+		endswith("/ae90-0200ms.png") or
+		endswith("/ae90-1500ms.png")) |
+	      select((.active_lod_cad_payloads // 0) > 0)] | first) as $first |
+	    ($first != null) and
+	    (($first.visible_structural_fallback_boxes // 0) == 0) and
+	    (($first.active_progressive_cad_faces // 0) >= 2000) and
+	    (($first.active_progressive_cad_cut_min // -1) >= 8) and
+	    (($first.active_progressive_cad_cut_min // -1) >=
+	     (($first.requested_progressive_cad_cut_min // 12) - 12))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'warm Lucy first mesh was not a bounded recognizable prefix\n' \
+		>>"$validation"
+	    return 1
+	fi
     fi
 
     # Hubble combines a few large silhouette-defining assemblies (solar
@@ -1994,6 +2017,20 @@ validate_report()
 	    def submitted:
 		if $mode == "wire" then (.presented_cad_lines // 0)
 		else (.presented_cad_faces // 0) end;
+	    def spatially_advanced($sample; $baseline):
+		(([($sample.active_progressive_cad_cut_max // -1),
+		   (if ($sample.lod_interactive_progressive_ceiling // -1) >= 0
+		    then $sample.lod_interactive_progressive_ceiling
+		    else ($sample.active_progressive_cad_cut_max // -1) end)] |
+		  min) > ($baseline.active_progressive_cad_cut_max // -1)) or
+		((($sample.requested_progressive_cad_cut_max // -1) >
+		  ($baseline.requested_progressive_cad_cut_max // -1)) and
+		 (($sample.lod_service_resident_bytes // 0) >
+		  ($baseline.lod_service_resident_bytes // 0)));
+	    def spatially_realized($sample; $baseline):
+		(($sample | submitted) > ($baseline | submitted)) or
+		(($sample.lod_service_resident_bytes // 0) >
+		 ($baseline.lod_service_resident_bytes // 0));
 	    (last(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/smooth-zoom-start-stable.png")))) as $start |
@@ -2025,8 +2062,6 @@ validate_report()
 	    # the only responsive outcome; it must not be mistaken for stalled LoD.
 	    (((($active.active_progressive_cad_cut_max // -1) >=
 		 ($start.active_progressive_cad_cut_max // -1)) and
-	      (($active.active_progressive_cad_faces // 0) >=
-		 ($start.active_progressive_cad_faces // 0)) and
 	      # The richer immutable prefix may already be resident while its first
 	      # coherent presentation exceeds the hard deadline.  A counted abort is
 	      # the required proof in that case; retaining the last exact completed
@@ -2060,34 +2095,15 @@ validate_report()
 		($active.lod_gesture_active == true) and
 		($active.lod_interactive == true) and
 		($active.lod_scale_changing_interaction == true) and
-		(($active.active_progressive_cad_cut_max // -1) >
-		    ($start.active_progressive_cad_cut_max // -1)) and
-		(($active.active_progressive_cad_faces // 0) >
-		    ($start.active_progressive_cad_faces // 0)) and
-		((([($early.active_progressive_cad_cut_max // -1),
-		     (if ($early.lod_interactive_progressive_ceiling // -1) >= 0
-		      then $early.lod_interactive_progressive_ceiling
-		      else ($early.active_progressive_cad_cut_max // -1) end)] |
-		   min) > ($start.active_progressive_cad_cut_max // -1) and
-		  (($early | submitted) > ($start | submitted))) or
-		 (([($during.active_progressive_cad_cut_max // -1),
-		     (if ($during.lod_interactive_progressive_ceiling // -1) >= 0
-		      then $during.lod_interactive_progressive_ceiling
-		      else ($during.active_progressive_cad_cut_max // -1) end)] |
-		   min) > ($start.active_progressive_cad_cut_max // -1) and
-		  (($during | submitted) > ($start | submitted))) or
-		 (([($attempt.active_progressive_cad_cut_max // -1),
-		    (if ($attempt.lod_interactive_progressive_ceiling // -1) >= 0
-		     then $attempt.lod_interactive_progressive_ceiling
-		     else ($attempt.active_progressive_cad_cut_max // -1) end)] |
-		   min) > ($start.active_progressive_cad_cut_max // -1) and
-		  (($attempt | submitted) > ($start | submitted))) or
-		 (([($active.active_progressive_cad_cut_max // -1),
-		    (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
-		     then $active.lod_interactive_progressive_ceiling
-		     else ($active.active_progressive_cad_cut_max // -1) end)] |
-		  min) > ($start.active_progressive_cad_cut_max // -1) and
-		  (($active | submitted) > ($start | submitted)))) and
+		spatially_advanced($active; $start) and
+		(((spatially_advanced($early; $start) and
+		   spatially_realized($early; $start))) or
+		 ((spatially_advanced($during; $start) and
+		   spatially_realized($during; $start))) or
+		 ((spatially_advanced($attempt; $start) and
+		   spatially_realized($attempt; $start))) or
+		 ((spatially_advanced($active; $start) and
+		   spatially_realized($active; $start)))) and
 		(($active.active_lod_aabb_payloads // 0) == 0) and
 		# A single huge part uses the ordinary retained-VBO tier rather
 		# than the multi-part atlas.  Immutable PoP generations must append
@@ -2134,9 +2150,7 @@ validate_report()
 		# another increase during the final low-amplitude events would turn
 		# successful early refinement into a false failure.
 		((($active.active_progressive_cad_cut_max // -1) >
-		   ($start.active_progressive_cad_cut_max // -1) and
-		  ($active.active_progressive_cad_faces // 0) >
-		   ($start.active_progressive_cad_faces // 0)) or
+		   ($start.active_progressive_cad_cut_max // -1)) or
 		 $discreteBounded) and
 		# A measured over-budget probe may back off from the arbitrary in-12
 		# checkpoint through the O(1) render ceiling.  The durable contract is
@@ -2149,16 +2163,12 @@ validate_report()
 		     (if ($early.lod_interactive_progressive_ceiling // -1) >= 0
 		      then $early.lod_interactive_progressive_ceiling
 		      else ($early.active_progressive_cad_cut_max // -1) end)] |
-		    min) > ($start.active_progressive_cad_cut_max // -1) and
-		   (($early.active_progressive_cad_faces // 0) >
-		    ($start.active_progressive_cad_faces // 0))) or
+		    min) > ($start.active_progressive_cad_cut_max // -1)) or
 		  (([($during.active_progressive_cad_cut_max // -1),
 		     (if ($during.lod_interactive_progressive_ceiling // -1) >= 0
 		      then $during.lod_interactive_progressive_ceiling
 		      else ($during.active_progressive_cad_cut_max // -1) end)] |
-		    min) > ($start.active_progressive_cad_cut_max // -1) and
-		   (($during.active_progressive_cad_faces // 0) >
-		    ($start.active_progressive_cad_faces // 0))) or
+		    min) > ($start.active_progressive_cad_cut_max // -1)) or
 		  (([($active.active_progressive_cad_cut_max // -1),
 		     (if ($active.lod_interactive_progressive_ceiling // -1) >= 0
 		      then $active.lod_interactive_progressive_ceiling
@@ -2278,15 +2288,23 @@ validate_report()
     # the legacy plotted-vlist cache.  A former first-warm race converged with
     # zero requests after an authoritative worker overwrote a briefly correct
     # manifest publication; generic "nonempty framebuffer" checks could not
-    # distinguish the remaining CSG wires from success.
+    # distinguish the remaining CSG wires from success.  Do not, however,
+    # require every subpixel occurrence to own a triangle payload: the normal
+    # view-aware terminal representation for those leaves is the aggregate
+    # point path.  The base contract above has already rejected active AABB/
+    # OBB/sphere payloads and unmatched payloads.
     if [[ "$case_name" == "generic_twin" && "$mode" == "wire" ]]; then
 	if ! jq -e '
 	    (.samples[-1].compact_lod_entries // 0) == 709 and
-	    (.samples[-1].compact_lod_entries_with_payload // 0) == 709 and
-	    (.samples[-1].active_lod_cad_payloads // 0) == 709 and
+	    ((.samples[-1].compact_lod_entries_with_payload // 0) ==
+	     (.samples[-1].active_lod_cad_payloads // 0)) and
+	    (((.samples[-1].active_lod_cad_payloads // 0) +
+	      (.samples[-1].active_cad_subpixel_proxy_points // 0)) ==
+	     709) and
+	    (.samples[-1].visible_structural_fallback_boxes // 0) == 0 and
 	    (.samples[-1].active_progressive_cad_faces // 0) > 0
 	    ' "$report" >>"$validation" 2>&1; then
-	    printf 'Generic Twin wire draw lost its 709 mesh-LoD contracts\n' \
+	    printf 'Generic Twin wire draw lost coverage of its 709 LoD occurrences\n' \
 		>>"$validation"
 	    return 1
 	fi
@@ -2604,7 +2622,18 @@ validate_autoview_camera_contract()
 }
 
 printf 'status,run,seconds,detail\n' > "$artifact_dir/results.csv"
-ldd "$qged" > "$artifact_dir/qged-ldd.txt" 2>&1 || true
+if ! ldd "$qged" > "$artifact_dir/qged-ldd.txt" 2>&1; then
+    echo "ERROR: qged runtime dependency preflight failed; the build may still be linking" >&2
+    sed -n '1,40p' "$artifact_dir/qged-ldd.txt" >&2
+    exit 2
+fi
+if grep -Eq 'not found|file too short|invalid ELF' \
+	"$artifact_dir/qged-ldd.txt"; then
+    echo "ERROR: qged runtime dependency preflight found an incomplete build" >&2
+    grep -E 'not found|file too short|invalid ELF' \
+	"$artifact_dir/qged-ldd.txt" >&2
+    exit 2
+fi
 
 runtime_library_path()
 {

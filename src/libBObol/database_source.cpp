@@ -431,7 +431,41 @@ public:
 	return true;
     }
 
+    bool resolve(const struct db_full_path *sourcePath,
+	BObolMaterialPathState &resolved)
+    {
+	if (!this->dbip || !sourcePath || sourcePath->fp_len == 0 ||
+	    !sourcePath->fp_names)
+	    return false;
+
+	BObolMaterialPathNode *node = &this->pathRoot;
+	for (size_t i = 0; i < sourcePath->fp_len; ++i) {
+	    struct directory *dp = sourcePath->fp_names[i];
+	    if (!dp)
+		return false;
+	    std::unique_ptr<BObolMaterialPathNode> &child =
+		node->children[dp];
+	    if (!child) {
+		child.reset(new BObolMaterialPathNode);
+		child->state = node->state;
+		this->applyCombination(child->state, dp);
+	    }
+	    node = child.get();
+	}
+
+	resolved = node->state;
+	if (!resolved.explicitColorValid && resolved.regionId >= 0)
+	    resolved.color = this->regionColor(resolved.regionId);
+	return true;
+    }
+
 private:
+    struct BObolMaterialPathNode {
+	BObolMaterialPathState state;
+	std::unordered_map<struct directory *,
+	    std::unique_ptr<BObolMaterialPathNode>> children;
+    };
+
     const BObolMaterialCombState &combinationState(struct directory *dp)
     {
 	std::unordered_map<struct directory *,
@@ -523,6 +557,7 @@ private:
 	combStates;
     std::unordered_map<std::string, BObolMaterialPathState> pathStates;
     std::unordered_map<int, SbColor> regionColors;
+    BObolMaterialPathNode pathRoot;
 };
 
 } // namespace
@@ -3276,7 +3311,8 @@ compact_occurrence_summary(const SoBRLDatabaseSource *source,
 
 static BObolRealizedShapeSummary
 compact_occurrence_tree_summary(const SoBRLDatabaseSource *source,
-	const struct db_tree_state *tsp, const char *path,
+	const struct db_tree_state *tsp, const struct db_full_path *fullPath,
+	const char *path,
 	const char *sourceName, const char *sourceType,
 	const char *geometryKind, uint32_t sourceId, int shapeKind,
 	BObolMaterialColorSweep *materialSweep)
@@ -3308,7 +3344,8 @@ compact_occurrence_tree_summary(const SoBRLDatabaseSource *source,
 	BObolMaterialPathState resolved;
 	SbColor databaseColor;
 	const bool haveColor = materialSweep ?
-	    materialSweep->resolve(path, resolved) :
+	    (fullPath ? materialSweep->resolve(fullPath, resolved) :
+		materialSweep->resolve(path, resolved)) :
 	    bobol_database_source_path_material_color(source->getDatabase(),
 		path, databaseColor);
 	if (haveColor) {
@@ -4154,7 +4191,7 @@ static union tree *
 	input.occurrence.geometry = cadGeometry;
 	input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
 	input.occurrence.summary = compact_occurrence_tree_summary(
-	    data->source, tsp, path, dp->d_namep,
+	    data->source, tsp, pathp, path, dp->d_namep,
 	    geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
 	    "annotation" : typeLabel,
 	    geometryKind, data->revision,
@@ -4299,7 +4336,7 @@ static union tree *
 	    input.occurrence.geometry = cadGeometry;
 	    input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
 	    input.occurrence.summary = compact_occurrence_tree_summary(
-		data->source, tsp, path, dp->d_namep,
+		data->source, tsp, pathp, path, dp->d_namep,
 		geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
 		"annotation" : typeLabel,
 		geometryKind, data->revision,
@@ -8339,9 +8376,10 @@ static union tree *
 				duplicateOrdinal);
 			    provisionalPath += suffix;
 			}
-			provisional.summary =
+		    provisional.summary =
 			    compact_occurrence_tree_summary(
-				data->source, tsp, provisionalPath.c_str(),
+				data->source, tsp, pathp,
+				provisionalPath.c_str(),
 				dp->d_namep, primitive_type_label(localIntern),
 				"aabb", data->revision,
 				BObolRealizedShapeSummary::SHAPE_MESH,
@@ -8399,7 +8437,7 @@ static union tree *
 	    input.occurrence.geometry = cachedWire->geometry;
 	    input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
 	    input.occurrence.summary = compact_occurrence_tree_summary(
-		data->source, tsp, path, dp->d_namep,
+		data->source, tsp, pathp, path, dp->d_namep,
 		geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
 		"annotation" : typeLabel,
 		geometryKind, data->revision,
@@ -8609,7 +8647,7 @@ static union tree *
 			    std::move(generated), typeLabel, geometryKind);
 	    }
 	    input.occurrence.summary = compact_occurrence_tree_summary(
-		data->source, tsp, path, dp->d_namep,
+		data->source, tsp, pathp, path, dp->d_namep,
 		geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
 		"annotation" : typeLabel,
 		geometryKind, data->revision,
@@ -8656,7 +8694,8 @@ static union tree *
 		    cachedMesh->sourceMeshRequest;
 	    }
 	    input.occurrence.summary = compact_occurrence_tree_summary(
-		data->source, tsp, path, dp->d_namep, typeLabel, geometryKind,
+		data->source, tsp, pathp, path, dp->d_namep, typeLabel,
+		geometryKind,
 		data->revision, BObolRealizedShapeSummary::SHAPE_MESH,
 		static_cast<BObolMaterialColorSweep *>(data->material_sweep));
 	    if (sharedMeshShape) {
@@ -10724,15 +10763,23 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		}
 
 		/*
-		 * A newly resident tail must not force a full CPU/GPU realization
-		 * while the view is asking for a coarser prefix.  Keep presenting
-		 * the older cumulative part when it already covers the active
-		 * cut.  Leave presentation.payloadKey at the older resident
-		 * revision so a later stable, richer request will install the tail.
+		 * A result without a newly prepared renderer generation need not
+		 * force a full CPU/GPU realization while the view is asking for a
+		 * coarser prefix: keep the older cumulative part when it covers the
+		 * active cut.  A different prepared geometry pointer is an
+		 * authoritative immutable-generation handoff, however.  Its ordinal
+		 * cut may match the old part while its spatial page population does
+		 * not; retaining the old part in that case leaves visible holes until
+		 * an unrelated richer cut happens to replace it.
 		 */
-		if (progressive && presentation.activePart == desiredPart &&
+		const Obol::PartGeometry *presentedGeometry =
+		    assembly->partGeometry(desiredPart);
+		const bool preparedGenerationChanged = preparedGeometry &&
+		    preparedGeometry.get() != presentedGeometry;
+		if (progressive && !preparedGenerationChanged &&
+		    presentation.activePart == desiredPart &&
 		    cad_progressive_geometry_can_draw(
-			assembly->partGeometry(desiredPart), wire, shaded,
+			presentedGeometry, wire, shaded,
 			desiredActiveCut)) {
 		    desiredGeometryValid = true;
 		    reusedProgressivePart = true;
@@ -10848,9 +10895,17 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    presentation.appearanceRevision != entry.appearanceRevision;
 	const bool selectionChanged = !reset &&
 	    presentation.selectionRevision != entry.selectionRevision;
+	/* Replacing immutable arrays behind the same part is wholly described by
+	 * the shared-part geometry journal.  Re-publishing its unchanged instance
+	 * record would mix a same-part update into an otherwise append-only leaf
+	 * batch and force the complete growing frame plan to be rebuilt. */
+	const bool overviewGeometryOnly = !partChanged &&
+	    BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
+		"lod-overview");
 	const bool recordChanged = !reset &&
 	    (partChanged ||
-	     presentation.geometryRevision != entry.geometryRevision ||
+	     (!overviewGeometryOnly &&
+		presentation.geometryRevision != entry.geometryRevision) ||
 	     presentation.placementRevision != entry.placementRevision);
 	if (partChanged) {
 	    if (presentation.activePart != entry.part &&
@@ -11402,18 +11457,27 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
 	return;
     }
 
+    const char *path = input.occurrence.summary.path.getString();
+    if (!path || !path[0])
+	path = source->path.getValue().getString();
     const char *partKind = geometry->shaded ? "mesh" :
 	(geometry->points && !geometry->wire ? "point" : "wire");
     Obol::PartId partId;
-    if (!compact_add_geometry_part_if_needed(index,
+    if (BU_STR_EQUAL(input.occurrence.summary.recordRole.getString(),
+	    "lod-overview")) {
+	/* Never deduplicate the evolving whole-target extent with a leaf AABB.
+	 * Its arrays are replaced under this stable source-local identity while
+	 * leaf proxies continue sharing the normalized box part. */
+	std::string partKey("compact-lod-overview:");
+	partKey += path;
+	compact_add_part_if_needed(index, partKey, geometry, partId);
+	index.partIdByGeometry[geometry.get()] = partId;
+    } else if (!compact_add_geometry_part_if_needed(index,
 	    partKind, geometry, partId)) {
 	unsupported = 1;
 	return;
     }
 
-    const char *path = input.occurrence.summary.path.getString();
-    if (!path || !path[0])
-	path = source->path.getValue().getString();
     SbMatrix geometryToSource = input.occurrence.geometryTransform;
     geometryToSource.multRight(input.occurrence.localTransform);
     const SbMatrix matrix = cad_instance_matrix(source, geometryToSource);
@@ -11868,15 +11932,44 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 	entryIdx >= index.instances.size())
 	return false;
 
+    BObolCompactInstanceEntry &entry = index.entries[entryIdx];
+    Obol::InstanceUpdate &update = index.instances[entryIdx];
+    const bool evolvingOverview =
+	BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
+	    "lod-overview") &&
+	BU_STR_EQUAL(occurrence.summary.recordRole.getString(),
+	    "lod-overview");
+
     const char *partKind = geometry->shaded ? "mesh" :
 	(geometry->points && !geometry->wire ? "point" : "wire");
     Obol::PartId newPartId;
-    if (!compact_add_geometry_part_if_needed(index, partKind, geometry,
-	    newPartId))
+    if (evolvingOverview) {
+	/* The whole-draw extent is one stable presentation object whose wire
+	 * coordinates grow as coverage is discovered.  Keep its private part id
+	 * and replace only that part's immutable arrays.  Re-hashing every extent
+	 * into a new part turns each publication into an instance rebind and leaves
+	 * a growing trail of renderer tombstones alongside the leaf stream. */
+	newPartId = entry.part;
+	bool partFound = false;
+	for (BObolCompactPartReference &part : index.parts) {
+	    if (!(part.part == newPartId))
+		continue;
+	    part.geometry = geometry;
+	    partFound = true;
+	    break;
+	}
+	if (!partFound)
+	    return false;
+	const auto oldGeometry = index.partIdByGeometry.find(
+	    entry.geometry.get());
+	if (oldGeometry != index.partIdByGeometry.end() &&
+	    oldGeometry->second == newPartId)
+	    index.partIdByGeometry.erase(oldGeometry);
+	index.partIdByGeometry[geometry.get()] = newPartId;
+    } else if (!compact_add_geometry_part_if_needed(index, partKind,
+	    geometry, newPartId)) {
 	return false;
-
-    BObolCompactInstanceEntry &entry = index.entries[entryIdx];
-    Obol::InstanceUpdate &update = index.instances[entryIdx];
+    }
 
     /* Drop the outgoing entry's bounds/part-ref/kind-count contribution before
      * mutating it, then re-add for the replacement. */
@@ -12146,21 +12239,13 @@ SoBRLDatabaseSource::reserveCompactOccurrenceCapacity(size_t expectedCount)
 	this->d->compactIndexActive = TRUE;
 	this->d->compactOccurrenceRegistry = TRUE;
     }
-    BObolCompactInstanceIndex &index = *this->d->compactIndex;
-    const size_t capacity = expectedCount < SIZE_MAX ?
-	expectedCount + 1 : expectedCount;
-    if (capacity <= index.entries.capacity())
-	return;
-
-    index.entries.reserve(capacity);
-    index.instances.reserve(capacity);
-    index.parts.reserve(capacity);
     /*
-     * Do not eagerly allocate every hash table to the full manifest count.
-     * Ten 50k bucket arrays produced a 70+ ms UI-thread pause before the first
-     * batch.  Reserving the relocation-sensitive contiguous records prevents
-     * the observed late-stream copy spike; the associative indices then grow
-     * with the bounded publication batches.
+     * The heavy occurrence records use segmented, index-addressed storage, so
+     * learning a final 150k count requires no owner-thread relocation.  Do not
+     * eagerly allocate the compact instance/part vectors or hash tables to the
+     * full manifest count: those structures grow with bounded publication
+     * batches and a partial subpath draw must not pay for the containing
+     * database.
      */
 }
 
@@ -15500,6 +15585,11 @@ struct compact_coverage_work_item {
     compact_coverage_occurrence occurrence;
 };
 
+/* Amortize the producer/consumer mutex without delaying useful feedback by
+ * more than a tiny fraction of one frame.  Discovery order is not a rendering
+ * contract; semantic identity is assigned before an item enters this queue. */
+static const size_t compact_coverage_work_batch_size = 16;
+
 struct compact_coverage_collect {
     SoBRLDatabaseSource *source = NULL;
     BObolDatabaseSourceRealizationCache *cache = NULL;
@@ -15507,13 +15597,21 @@ struct compact_coverage_collect {
     BObolMaterialColorSweep *materialSweep = NULL;
     uint32_t revision = 0;
     std::vector<std::unique_ptr<compact_coverage_asset>> assets;
-    std::unordered_map<std::string, size_t> assetIndices;
+    /* A directory entry is the canonical object identity for the lifetime of
+     * this detached realization database.  Hashing the complete persistent
+     * cache key again for every occurrence duplicated librt's name lookup and
+     * string work on the serial discovery path.  Assets retain cacheKey for
+     * persistence; only this walk-local index uses the stable pointer. */
+    std::unordered_map<struct directory *, size_t> assetIndices;
     std::unordered_set<std::string> seenInstances;
     std::unordered_map<std::string, uint32_t> occurrenceCounts;
     size_t occurrenceCount = 0;
     std::mutex workMutex;
     std::condition_variable workReady;
     std::deque<compact_coverage_work_item> work;
+    /* Written only by the hierarchy-walk producer, then transferred as one
+     * bounded queue operation. */
+    std::vector<compact_coverage_work_item> producerWork;
     /* Coverage is the latency-critical phase.  Retain its completed work
      * records here, then import full BoTs only after every leaf box and the
      * exact target extent have been published. */
@@ -16180,7 +16278,7 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
     source_lod_cache_key_append(cacheKey, collect->source, unusedBounds,
 	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP);
     size_t assetIndex = 0;
-    auto foundAsset = collect->assetIndices.find(cacheKey);
+    auto foundAsset = collect->assetIndices.find(dp);
     if (foundAsset == collect->assetIndices.end()) {
 	assetIndex = collect->assets.size();
 	std::unique_ptr<compact_coverage_asset> asset(
@@ -16191,7 +16289,7 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	asset->estimatedWorkingSetBytes =
 	    compact_coverage_working_set_estimate(tsp->ts_dbip, dp);
 	collect->assets.push_back(std::move(asset));
-	collect->assetIndices[cacheKey] = assetIndex;
+	collect->assetIndices[dp] = assetIndex;
     } else {
 	assetIndex = foundAsset->second;
     }
@@ -16210,7 +16308,8 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	(dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT ? "bot" :
 	 "primitive");
     occurrence.summary = compact_occurrence_tree_summary(
-	collect->source, tsp, semanticPath.c_str(), dp->d_namep, sourceType,
+	collect->source, tsp, pathp, semanticPath.c_str(), dp->d_namep,
+	sourceType,
 	"aabb", collect->revision,
 	BObolRealizedShapeSummary::SHAPE_MESH, collect->materialSweep);
     occurrence.occurrenceIndex = pathp->fp_cinst && pathp->fp_len ?
@@ -16224,12 +16323,18 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
     compact_coverage_work_item work;
     work.asset = collect->assets[assetIndex].get();
     work.occurrence = std::move(occurrence);
-    {
-	std::lock_guard<std::mutex> guard(collect->workMutex);
-	collect->work.push_back(std::move(work));
-	collect->occurrenceCount++;
+    collect->producerWork.push_back(std::move(work));
+    collect->occurrenceCount++;
+    if (collect->producerWork.size() >= compact_coverage_work_batch_size) {
+	{
+	    std::lock_guard<std::mutex> guard(collect->workMutex);
+	    collect->work.insert(collect->work.end(),
+		std::make_move_iterator(collect->producerWork.begin()),
+		std::make_move_iterator(collect->producerWork.end()));
+	    collect->producerWork.clear();
+	}
+	collect->workReady.notify_one();
     }
-    collect->workReady.notify_one();
     bu_free(rawPath, "compact coverage path");
     return make_nop_tree();
 }
@@ -16287,6 +16392,19 @@ compact_coverage_aabb_geometry(const SbBox3f &bounds,
 	std::move(geometry));
 }
 
+static std::shared_ptr<const Obol::PartGeometry>
+compact_coverage_overview_geometry(const SbBox3f &bounds)
+{
+    Obol::PartGeometry geometry;
+    if (!cad_wire_part_geometry_from_aabb(bounds, geometry))
+	return std::shared_ptr<const Obol::PartGeometry>();
+    /* The overview is already one aggregate for the complete target.  It must
+     * remain a visible extent, not enter the leaf subpixel-point classifier. */
+    geometry.subpixelProxyEligible = false;
+    geometry.structuralProxy = true;
+    return std::make_shared<const Obol::PartGeometry>(std::move(geometry));
+}
+
 static BObolCompactOccurrence
 compact_coverage_overview_occurrence(SoBRLDatabaseSource *source,
 	const char *treeName, const SbBox3f &bounds, uint32_t revision)
@@ -16295,8 +16413,8 @@ compact_coverage_overview_occurrence(SoBRLDatabaseSource *source,
     if (!source || !treeName || !treeName[0] || bounds.isEmpty())
 	return overview;
 
-    overview.geometry = compact_coverage_aabb_geometry(bounds,
-	overview.geometryTransform);
+    overview.geometry = compact_coverage_overview_geometry(bounds);
+    overview.geometryTransform = SbMatrix::identity();
     if (!overview.geometry)
 	return overview;
     overview.summary = compact_occurrence_summary(source,
@@ -16405,13 +16523,19 @@ compact_stream_publish_parallel_coverage(
     int64_t lastOverviewPublication = 0;
     size_t workerCount = bu_avail_cpus();
     workerCount = std::max<size_t>(1, std::min<size_t>(workerCount, 32));
+    collect.producerWork.reserve(compact_coverage_work_batch_size);
     const auto coverageWorker = [&]() {
 	/* Bounds and the first useful overview are foreground draw latency, not
 	 * speculative refinement.  Lowering these workers' priority let unrelated
 	 * renderer/cache work starve a cold scene into several blank seconds.
 	 * Full-array import below remains niced. */
+	std::vector<compact_coverage_work_item> items;
+	items.reserve(compact_coverage_work_batch_size);
+	std::vector<BObolCompactOccurrence> publications;
+	publications.reserve(compact_coverage_work_batch_size + 1);
 	for (;;) {
-	    compact_coverage_work_item item;
+	    items.clear();
+	    publications.clear();
 	    {
 		std::unique_lock<std::mutex> lock(collect.workMutex);
 		collect.workReady.wait(lock, [&]() {
@@ -16425,9 +16549,14 @@ compact_stream_publish_parallel_coverage(
 			break;
 		    continue;
 		}
-		item = std::move(collect.work.front());
-		collect.work.pop_front();
+		const size_t count = std::min(compact_coverage_work_batch_size,
+		    collect.work.size());
+		for (size_t i = 0; i < count; ++i) {
+		    items.push_back(std::move(collect.work.front()));
+		    collect.work.pop_front();
+		}
 	    }
+	    for (compact_coverage_work_item &item : items) {
 	    if (!item.asset)
 		continue;
 	    compact_coverage_asset &asset = *item.asset;
@@ -16581,8 +16710,8 @@ compact_stream_publish_parallel_coverage(
 		    BObolCompactOccurrence overview =
 			compact_coverage_overview_occurrence(source, treeName,
 			    overviewSnapshot, revision);
-		    if (overview.geometry)
-			stream->pushPriority(overview);
+		if (overview.geometry)
+		    stream->pushPriority(overview);
 		}
 
 		const bool includeSourceRequest = asset.sourceMeshReady &&
@@ -16590,7 +16719,7 @@ compact_stream_publish_parallel_coverage(
 		BObolCompactOccurrence occurrence =
 		    compact_coverage_leaf_occurrence(asset, item.occurrence,
 			includeSourceRequest);
-		stream->push(std::move(occurrence));
+		publications.push_back(std::move(occurrence));
 		publishedBoxes.fetch_add(1);
 		if (asset.deferSourceMeshContract) {
 		    std::lock_guard<std::mutex> guard(collect.reuseMutex);
@@ -16605,6 +16734,9 @@ compact_stream_publish_parallel_coverage(
 		std::lock_guard<std::mutex> guard(collect.workMutex);
 		collect.detailWork.push_back(std::move(item));
 	    }
+	    }
+	    if (!publications.empty())
+		stream->pushBatch(std::move(publications));
 	}
     };
     const auto detailWorker = [&]() {
@@ -16841,13 +16973,15 @@ compact_stream_publish_parallel_coverage(
 	compact_coverage_collect_leaf, &collect);
     db_free_db_tree_state(&initialState);
     /* Publish the final occurrence cardinality as soon as enumeration ends,
-     * while bound workers are still draining.  The GUI can then reserve its
-     * relocation-sensitive compact vectors once instead of repeatedly
-     * growing them during the long tail of a 50k stream. */
+     * while bound workers are still draining. */
     if (walkResult >= 0)
 	stream->setExpectedCount(collect.occurrenceCount);
     {
 	std::lock_guard<std::mutex> guard(collect.workMutex);
+	collect.work.insert(collect.work.end(),
+	    std::make_move_iterator(collect.producerWork.begin()),
+	    std::make_move_iterator(collect.producerWork.end()));
+	collect.producerWork.clear();
 	collect.producerDone = true;
     }
     collect.workReady.notify_all();

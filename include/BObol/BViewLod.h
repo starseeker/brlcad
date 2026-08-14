@@ -97,6 +97,7 @@ public:
 	int activeCut;
 	int residentCut;
 	int requestedCut;
+	std::vector<uint32_t> requiredChunks;
 	uint64_t residentAdmissionRevision;
 	uint64_t viewRevision;
 	uint64_t policyRevision;
@@ -168,6 +169,7 @@ public:
 	int activeCut;
 	int residentCut;
 	int requestedCut;
+	std::vector<uint32_t> requiredChunks;
 	/* Exact scene-budget allocation for this occurrence.  requestedCut is
 	 * unconstrained view demand; allocatedCut is the richest cut this
 	 * view/policy/mode may present inside the measured aggregate allowance.
@@ -528,6 +530,7 @@ private:
     struct CadResidentDemandState {
 	size_t cutCounts[BOBOL_MESH_LOD_CUT_COUNT_MAX] = {};
 	size_t channelCounts[4] = {};
+	std::unordered_map<uint32_t, size_t> chunkCounts;
 	size_t demandIndex = 0;
 	int maximumCut = -1;
 	unsigned int channelMask = 0;

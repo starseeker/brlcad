@@ -20,7 +20,10 @@
 
 #include "common.h"
 
+#include "BObol/BLodRealization.h"
 #include "BObol/BMeshLodCache.h"
+
+#include <Obol/cad/SoCADAssembly.h>
 
 #include "bu/app.h"
 #include "bu/env.h"
@@ -77,6 +80,48 @@ struct mesh_lod_suffix_test_data {
     size_t streamedPoints = 0;
     size_t streamedFaces = 0;
 };
+
+struct mesh_lod_chunk_test_data {
+    const struct BObolMeshLodHierarchyInfo *hierarchy = NULL;
+    std::vector<uint32_t> seen;
+    uint64_t faces = 0;
+    uint64_t points = 0;
+};
+
+static int
+mesh_lod_chunk_test_callback(uint32_t chunkId, int cut,
+	const point_t *points, size_t pointCount,
+	const uint32_t *faces, size_t faceCount,
+	const vect_t *normals, size_t normalCount, void *callbackData)
+{
+    mesh_lod_chunk_test_data *test =
+	static_cast<mesh_lod_chunk_test_data *>(callbackData);
+    if (!test || !test->hierarchy ||
+	chunkId >= test->hierarchy->chunk_count ||
+	cut < test->hierarchy->min_cut || cut > test->hierarchy->max_cut)
+	return 0;
+    const BObolMeshLodChunkInfo &info = test->hierarchy->chunks[chunkId];
+    const BObolMeshLodChunkCutInfo &selected = info.cuts[cut];
+    if (pointCount != selected.point_count ||
+	faceCount != selected.face_count ||
+	(pointCount && !points) || (faceCount && !faces) ||
+	normalCount != (test->hierarchy->has_normals ? faceCount * 3 : 0) ||
+	(normalCount && !normals))
+	return 0;
+    for (size_t index = 0; index < faceCount * 3; ++index)
+	if (faces[index] >= pointCount)
+	    return 0;
+    for (size_t point = 0; point < pointCount; ++point)
+	for (int axis = 0; axis < 3; ++axis)
+	    if (!std::isfinite(points[point][axis]) ||
+		points[point][axis] < info.bmin[axis] ||
+		points[point][axis] > info.bmax[axis])
+		return 0;
+    test->seen.push_back(chunkId);
+    test->faces += faceCount;
+    test->points += pointCount;
+    return 1;
+}
 
 static int
 mesh_lod_suffix_test_callback(int cut, const point_t *points,
@@ -246,7 +291,9 @@ main(int argc, char *argv[])
     const char *meshObjname = "bobol_lod_mesh_payload";
     const char *translatedMeshObjname = "bobol_lod_translated_mesh_payload";
     const char *invalidBotObjname = "bobol_invalid_lod_bot";
-    const int grid = 12;
+    /* Slightly exceed one private chunk so every cache run exercises
+     * independent page serialization and selective reads. */
+    const int grid = 190;
     const int vertexCount = (grid + 1) * (grid + 1);
     const int faceCount = grid * grid * 2;
     char dbpath[MAXPATHLEN] = {0};
@@ -728,6 +775,207 @@ main(int argc, char *argv[])
 	if (!validClusters || clusteredIndices !=
 		static_cast<uint64_t>(faceCount) * 3) {
 	    printf("FAIL: mesh lod clustered range contract\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	bool validChunks = lodHierarchy.chunk_count > 0 &&
+	    lodHierarchy.chunks != NULL;
+	uint64_t chunkFaces = 0;
+	for (uint32_t chunk = 0; validChunks &&
+		chunk < lodHierarchy.chunk_count; ++chunk) {
+	    const BObolMeshLodChunkInfo &info = lodHierarchy.chunks[chunk];
+	    if (info.chunk_id != chunk || info.min_cut < lodHierarchy.min_cut ||
+		info.max_cut != lodHierarchy.max_cut)
+		validChunks = false;
+	    uint32_t priorChunkFaces = 0;
+	    uint32_t priorChunkPoints = 0;
+	    uint64_t priorChunkBytes = 0;
+	    for (uint32_t cut = 0; validChunks &&
+		    cut < lodHierarchy.cut_count; ++cut) {
+		const BObolMeshLodChunkCutInfo &cutInfo = info.cuts[cut];
+		if (cutInfo.face_count < priorChunkFaces ||
+		    cutInfo.point_count < priorChunkPoints ||
+		    cutInfo.resident_bytes < priorChunkBytes)
+		    validChunks = false;
+		priorChunkFaces = cutInfo.face_count;
+		priorChunkPoints = cutInfo.point_count;
+		priorChunkBytes = cutInfo.resident_bytes;
+	    }
+	    chunkFaces += info.cuts[info.max_cut].face_count;
+	}
+	std::vector<uint32_t> chunkIds(lodHierarchy.chunk_count);
+	for (uint32_t chunk = 0; chunk < lodHierarchy.chunk_count; ++chunk)
+	    chunkIds[chunk] = chunk;
+	mesh_lod_chunk_test_data chunkData;
+	chunkData.hierarchy = &lodHierarchy;
+	if (!validChunks || chunkFaces != static_cast<uint64_t>(faceCount) ||
+	    !bobol_mesh_lod_read_chunk_prefixes(lod, chunkIds.data(),
+		chunkIds.size(), lodHierarchy.max_cut,
+		mesh_lod_chunk_test_callback, &chunkData) ||
+	    chunkData.seen != chunkIds ||
+	    chunkData.faces != static_cast<uint64_t>(faceCount) ||
+	    bobol_mesh_lod_read_chunk_prefixes(lod, chunkIds.data(),
+		chunkIds.size(), lodHierarchy.max_cut + 1,
+		mesh_lod_chunk_test_callback, &chunkData)) {
+	    printf("FAIL: mesh lod independent chunk contract\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	/* Private pages are one logical mesh, but they must remain independently
+	 * resident all the way through renderer publication.  A richer page
+	 * appends a replacement range to the certified packed stream; stable
+	 * compaction later drops both unrelated pages and the retired range. */
+	if (lodHierarchy.chunk_count < 2) {
+	    printf("FAIL: mesh lod chunk realization fixture has one page\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	const uint32_t firstChunk = 0;
+	const uint32_t secondChunk = 1;
+	int secondCoarseCut = lodHierarchy.chunks[secondChunk].min_cut;
+	while (secondCoarseCut < lodHierarchy.max_cut &&
+	       lodHierarchy.chunks[secondChunk].cuts[secondCoarseCut].face_count ==
+		   lodHierarchy.chunks[secondChunk].cuts[lodHierarchy.max_cut].face_count &&
+	       lodHierarchy.chunks[secondChunk].cuts[secondCoarseCut].point_count ==
+		   lodHierarchy.chunks[secondChunk].cuts[lodHierarchy.max_cut].point_count)
+	    ++secondCoarseCut;
+	if (secondCoarseCut >= lodHierarchy.max_cut ||
+	    !lodHierarchy.chunks[secondChunk].cuts[secondCoarseCut].face_count) {
+	    printf("FAIL: mesh lod chunk fixture has no partial second page\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	BObolLodProgressiveMesh chunkedMesh;
+	if (!chunkedMesh.updateChunksFromCache(lod, lodHierarchy,
+		{firstChunk}, lodHierarchy.max_cut,
+		lodHierarchy.shaded_cull_backfaces ? TRUE : FALSE)) {
+	    printf("FAIL: mesh lod first private page realization\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	uint64_t firstRevision = 0;
+	const std::shared_ptr<const Obol::PartGeometry> firstGeometry =
+	    chunkedMesh.prepareCadGeometry(
+		BOBOL_LOD_DRAW_SHADED, &firstRevision);
+	const Obol::TriMesh *firstMesh = firstGeometry && firstGeometry->shaded ?
+	    &*firstGeometry->shaded : NULL;
+	if (!firstMesh || !firstMesh->hasAdaptiveProgressiveClusters() ||
+	    firstMesh->progressiveLineage == 0 ||
+	    firstMesh->progressiveClusters.size() != 1 ||
+	    !chunkedMesh.canDrawChunksAtCut(
+		{firstChunk}, lodHierarchy.max_cut)) {
+	    printf("FAIL: mesh lod first page was flattened as a global prefix\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	if (!chunkedMesh.updateChunksFromCache(lod, lodHierarchy,
+		{secondChunk}, secondCoarseCut,
+		lodHierarchy.shaded_cull_backfaces ? TRUE : FALSE)) {
+	    printf("FAIL: mesh lod coarse second private page realization\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	uint64_t coarseRevision = 0;
+	const std::shared_ptr<const Obol::PartGeometry> coarseGeometry =
+	    chunkedMesh.prepareCadGeometry(
+		BOBOL_LOD_DRAW_HIDDEN_LINE, &coarseRevision);
+	const Obol::TriMesh *coarseMesh =
+	    coarseGeometry && coarseGeometry->shaded ?
+		&*coarseGeometry->shaded : NULL;
+	const Obol::WireRep *coarseWire =
+	    coarseGeometry && coarseGeometry->wire ?
+		&*coarseGeometry->wire : NULL;
+	if (!coarseMesh || !coarseWire || coarseRevision <= firstRevision ||
+	    coarseMesh->progressiveLineage != firstMesh->progressiveLineage ||
+	    coarseWire->progressiveLineage != coarseMesh->progressiveLineage ||
+	    coarseMesh->positions.size() <= firstMesh->positions.size() ||
+	    coarseMesh->indices.size() <= firstMesh->indices.size() ||
+	    !std::equal(firstMesh->positions.begin(), firstMesh->positions.end(),
+		coarseMesh->positions.begin()) ||
+	    !std::equal(firstMesh->indices.begin(), firstMesh->indices.end(),
+		coarseMesh->indices.begin()) ||
+	    coarseMesh->progressiveClusters.size() != 2 ||
+	    coarseWire->progressiveClusters.size() != 2 ||
+	    coarseMesh->progressiveClusters[0].residentCut !=
+		lodHierarchy.max_cut ||
+	    coarseWire->progressiveClusters[0].residentCut !=
+		coarseMesh->progressiveClusters[0].residentCut ||
+	    coarseMesh->progressiveClusters[1].residentCut <
+		secondCoarseCut ||
+	    coarseMesh->progressiveClusters[1].residentCut >=
+		lodHierarchy.max_cut ||
+	    coarseWire->progressiveClusters[1].residentCut !=
+		coarseMesh->progressiveClusters[1].residentCut ||
+	    chunkedMesh.canDrawChunksAtCut(
+		{secondChunk}, lodHierarchy.max_cut)) {
+	    printf("FAIL: mesh lod second page did not append independently\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	if (!chunkedMesh.updateChunksFromCache(lod, lodHierarchy,
+		{secondChunk}, lodHierarchy.max_cut,
+		lodHierarchy.shaded_cull_backfaces ? TRUE : FALSE)) {
+	    printf("FAIL: mesh lod second page refinement\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	uint64_t richRevision = 0;
+	const std::shared_ptr<const Obol::PartGeometry> richGeometry =
+	    chunkedMesh.prepareCadGeometry(
+		BOBOL_LOD_DRAW_HIDDEN_LINE, &richRevision);
+	const Obol::TriMesh *richMesh = richGeometry && richGeometry->shaded ?
+	    &*richGeometry->shaded : NULL;
+	const Obol::WireRep *richWire = richGeometry && richGeometry->wire ?
+	    &*richGeometry->wire : NULL;
+	if (!richMesh || !richWire || richRevision <= coarseRevision ||
+	    richMesh->progressiveLineage != coarseMesh->progressiveLineage ||
+	    richWire->progressiveLineage != richMesh->progressiveLineage ||
+	    !richWire->hasAdaptiveProgressiveClusters() ||
+	    richWire->segmentPoints.size() <= coarseWire->segmentPoints.size() ||
+	    !std::equal(coarseWire->segmentPoints.begin(),
+		coarseWire->segmentPoints.end(), richWire->segmentPoints.begin()) ||
+	    richMesh->positions.size() <= coarseMesh->positions.size() ||
+	    richMesh->indices.size() <= coarseMesh->indices.size() ||
+	    !std::equal(coarseMesh->positions.begin(), coarseMesh->positions.end(),
+		richMesh->positions.begin()) ||
+	    !std::equal(coarseMesh->indices.begin(), coarseMesh->indices.end(),
+		richMesh->indices.begin()) ||
+	    !chunkedMesh.canDrawChunksAtCut(
+		{firstChunk, secondChunk}, lodHierarchy.max_cut)) {
+	    printf("FAIL: mesh lod richer page was not a suffix-only publication\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	const size_t richBytes = chunkedMesh.estimateBytes();
+	const BObolLodProgressiveMeshTrimPtr pageTrim =
+	    chunkedMesh.prepareTrim(
+		lodHierarchy.max_cut, {secondChunk});
+	if (!pageTrim || !chunkedMesh.commitTrim(pageTrim)) {
+	    printf("FAIL: mesh lod page-selective compaction commit\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	std::vector<uint32_t> retainedChunks;
+	chunkedMesh.residentChunkIds(retainedChunks);
+	uint64_t compactRevision = 0;
+	const std::shared_ptr<const Obol::PartGeometry> compactGeometry =
+	    chunkedMesh.prepareCadGeometry(
+		BOBOL_LOD_DRAW_SHADED, &compactRevision);
+	const Obol::TriMesh *compactMesh =
+	    compactGeometry && compactGeometry->shaded ?
+		&*compactGeometry->shaded : NULL;
+	if (!compactMesh || retainedChunks != std::vector<uint32_t>{secondChunk} ||
+	    compactRevision <= richRevision ||
+	    compactMesh->progressiveLineage == richMesh->progressiveLineage ||
+	    compactMesh->progressiveClusters.size() != 1 ||
+	    chunkedMesh.estimateBytes() >= richBytes ||
+	    chunkedMesh.canDrawChunksAtCut(
+		{firstChunk}, lodHierarchy.max_cut) ||
+	    !chunkedMesh.canDrawChunksAtCut(
+		{secondChunk}, lodHierarchy.max_cut)) {
+	    printf("FAIL: mesh lod page compaction retained stale ranges/data\n");
 	    ret = 1;
 	    goto cleanup;
 	}

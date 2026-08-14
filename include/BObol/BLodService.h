@@ -101,12 +101,6 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
      * governs the active draw cut published with the result. */
     SbBool usePresentationCutLimit;
     int presentationCutLimit;
-    /* When the first retained publication reopens an already complete
-     * persistent hierarchy, make the view-requested prefix resident in that
-     * same worker task while still presenting only the minimum useful cut.
-     * Cold cache construction deliberately keeps the ordinary minimum-first
-     * path so expensive new PoP work cannot delay first content. */
-    SbBool prefetchCachedTargetOnFirstPublication;
     /* A finer adaptive representation must not replace a coherent standing
      * representation with its own minimum prefix.  Materialize the complete
      * requested prefix off the presentation path and publish it atomically.

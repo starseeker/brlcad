@@ -260,6 +260,32 @@ struct BObolLodProgressiveMeshGeneration {
     int residentCut = -1;
     uint64_t revision = 0;
     SbBool shadedCullBackfaces = FALSE;
+    struct ChunkMetadata {
+	uint32_t chunkId = 0;
+	int minimumCut = -1;
+	int maximumCut = -1;
+	SbBox3f bounds;
+	std::array<BObolMeshLodChunkCutInfo,
+	    BOBOL_MESH_LOD_CUT_COUNT_MAX> cuts = {};
+    };
+    struct ResidentChunk {
+	uint32_t chunkId = 0;
+	int residentCut = -1;
+	SbBox3f bounds;
+	std::vector<SbVec3f> positions;
+	std::vector<uint32_t> indices;
+	std::vector<SbVec3f> cornerNormals;
+    };
+    struct PackedChunk {
+	std::shared_ptr<const ResidentChunk> resident;
+	Obol::ProgressiveTriangleCluster cluster;
+    };
+    std::vector<ChunkMetadata> chunks;
+    std::vector<std::shared_ptr<const ResidentChunk>> residentChunks;
+    /* Live page-to-packed-range map.  Richer page versions append at the
+     * renderer stream tail; replaced ranges become temporary tombstones until
+     * the stable compactor republishes a dense generation. */
+    std::vector<PackedChunk> packedChunks;
     /*
      * Renderer-ready channel combinations are immutable generation products.
      * The cache is weak because the scene is the owner once a result is
@@ -603,6 +629,7 @@ progressive_generation_from_data(
 	const BObolMeshLodClusterInfo &source = hierarchy.clusters[cluster];
 	Obol::ProgressiveTriangleCluster &target =
 	    mesh.progressiveClusters[cluster];
+	target.residentCut = mesh.progressiveResidentCut;
 	target.bounds = SbBox3f(
 	    SbVec3f(static_cast<float>(source.bmin[X]),
 		static_cast<float>(source.bmin[Y]),
@@ -651,13 +678,491 @@ progressive_generation_from_data(
     return generation;
 }
 
+struct BObolChunkReadContext {
+    const BObolMeshLodHierarchyInfo *hierarchy = NULL;
+    std::vector<std::shared_ptr<const
+	BObolLodProgressiveMeshGeneration::ResidentChunk>> *chunks = NULL;
+};
+
+static int
+bobol_progressive_chunk_read(uint32_t chunkId, int cut,
+    const point_t *points, size_t pointCount,
+    const uint32_t *faces, size_t faceCount,
+    const vect_t *normals, size_t normalCount, void *callbackData)
+{
+    BObolChunkReadContext *context =
+	static_cast<BObolChunkReadContext *>(callbackData);
+    if (!context || !context->hierarchy || !context->chunks ||
+	chunkId >= context->hierarchy->chunk_count ||
+	chunkId >= context->chunks->size())
+	return 0;
+    const BObolMeshLodChunkInfo &info =
+	context->hierarchy->chunks[chunkId];
+    if (cut < info.min_cut) {
+	(*context->chunks)[chunkId].reset();
+	return pointCount == 0 && faceCount == 0 && normalCount == 0;
+    }
+    if (!points || !faces || !pointCount || !faceCount ||
+	faceCount > SIZE_MAX / 3 ||
+	normalCount != (context->hierarchy->has_normals ? faceCount * 3 : 0) ||
+	(normalCount && !normals))
+	return 0;
+    std::shared_ptr<BObolLodProgressiveMeshGeneration::ResidentChunk> chunk(
+	new BObolLodProgressiveMeshGeneration::ResidentChunk);
+    chunk->chunkId = chunkId;
+    chunk->residentCut = cut;
+    chunk->bounds = SbBox3f(
+	SbVec3f(static_cast<float>(info.bmin[X]),
+	    static_cast<float>(info.bmin[Y]),
+	    static_cast<float>(info.bmin[Z])),
+	SbVec3f(static_cast<float>(info.bmax[X]),
+	    static_cast<float>(info.bmax[Y]),
+	    static_cast<float>(info.bmax[Z])));
+    chunk->positions.resize(pointCount);
+    for (size_t point = 0; point < pointCount; ++point) {
+	if (!bobol_lod_finite_vector(points[point]))
+	    return 0;
+	chunk->positions[point].setValue(
+	    static_cast<float>(points[point][X]),
+	    static_cast<float>(points[point][Y]),
+	    static_cast<float>(points[point][Z]));
+    }
+    chunk->indices.assign(faces, faces + faceCount * 3);
+    for (uint32_t index : chunk->indices)
+	if (index >= pointCount)
+	    return 0;
+    if (normalCount) {
+	chunk->cornerNormals.resize(normalCount);
+	for (size_t normal = 0; normal < normalCount; ++normal) {
+	    if (!bobol_lod_finite_vector(normals[normal]))
+		return 0;
+	    chunk->cornerNormals[normal].setValue(
+		static_cast<float>(normals[normal][X]),
+		static_cast<float>(normals[normal][Y]),
+		static_cast<float>(normals[normal][Z]));
+	}
+    }
+    (*context->chunks)[chunkId] = chunk;
+    return 1;
+}
+
+static std::shared_ptr<BObolLodProgressiveMeshGeneration>
+progressive_generation_from_chunks(
+    const BObolMeshLodHierarchyInfo &hierarchy,
+    const std::vector<std::shared_ptr<const
+	BObolLodProgressiveMeshGeneration::ResidentChunk>> &residentChunks,
+    SbBool shadedCullBackfaces, uint64_t revision,
+    uint64_t progressiveLineage,
+    const BObolLodProgressiveMeshGeneration *prior = NULL)
+{
+    if (!hierarchy.chunks || !hierarchy.chunk_count ||
+	residentChunks.size() != hierarchy.chunk_count ||
+	hierarchy.cut_count == 0 ||
+	hierarchy.cut_count > BOBOL_MESH_LOD_CUT_COUNT_MAX)
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    std::shared_ptr<BObolLodProgressiveMeshGeneration> generation(
+	new BObolLodProgressiveMeshGeneration);
+    generation->minimumCut = hierarchy.min_cut;
+    generation->maximumCut = hierarchy.max_cut;
+    generation->revision = revision ? revision : 1;
+    generation->shadedCullBackfaces = shadedCullBackfaces;
+    generation->quantizationMinimum.setValue(
+	static_cast<float>(hierarchy.quantization_min[X]),
+	static_cast<float>(hierarchy.quantization_min[Y]),
+	static_cast<float>(hierarchy.quantization_min[Z]));
+    generation->quantizationMaximum.setValue(
+	static_cast<float>(hierarchy.quantization_max[X]),
+	static_cast<float>(hierarchy.quantization_max[Y]),
+	static_cast<float>(hierarchy.quantization_max[Z]));
+    generation->bounds = SbBox3f(
+	generation->quantizationMinimum, generation->quantizationMaximum);
+    generation->cuts.assign(hierarchy.cuts,
+	hierarchy.cuts + hierarchy.cut_count);
+    for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
+	generation->pointCount[cut] = static_cast<size_t>(
+	    hierarchy.cuts[cut].point_count);
+	generation->faceCount[cut] = static_cast<size_t>(
+	    hierarchy.cuts[cut].face_count);
+    }
+    generation->chunks.resize(hierarchy.chunk_count);
+    generation->residentChunks = residentChunks;
+    for (uint32_t chunk = 0; chunk < hierarchy.chunk_count; ++chunk) {
+	const BObolMeshLodChunkInfo &source = hierarchy.chunks[chunk];
+	auto &target = generation->chunks[chunk];
+	if (source.chunk_id != chunk || source.min_cut < hierarchy.min_cut ||
+	    source.max_cut != hierarchy.max_cut)
+	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	target.chunkId = chunk;
+	target.minimumCut = source.min_cut;
+	target.maximumCut = source.max_cut;
+	target.bounds = SbBox3f(
+	    SbVec3f(static_cast<float>(source.bmin[X]),
+		static_cast<float>(source.bmin[Y]),
+		static_cast<float>(source.bmin[Z])),
+	    SbVec3f(static_cast<float>(source.bmax[X]),
+		static_cast<float>(source.bmax[Y]),
+		static_cast<float>(source.bmax[Z])));
+	std::copy(source.cuts,
+	    source.cuts + BOBOL_MESH_LOD_CUT_COUNT_MAX,
+	    target.cuts.begin());
+    }
+
+    /* This scalar is the asset high-water mark, not a promise that every
+     * private page is resident to the same cut.  Occurrence/view consumers
+     * must use residentCutForChunks() for their demanded page set.  Using the
+     * poorest common frontier here stranded a rich visible page whenever an
+     * unrelated retained page was deliberately coarser. */
+    generation->residentCut = hierarchy.min_cut - 1;
+    for (const auto &resident : residentChunks)
+	if (resident)
+	    generation->residentCut = std::max(
+		generation->residentCut, resident->residentCut);
+
+    std::shared_ptr<Obol::PartGeometry> geometry(new Obol::PartGeometry);
+    Obol::TriMesh mesh;
+    mesh.bounds = generation->bounds;
+    mesh.progressiveMinimumCut = static_cast<uint8_t>(
+	std::max(0, generation->minimumCut));
+    int adaptiveDrawableCut = generation->minimumCut - 1;
+    std::vector<uint8_t> chunkDrawableCuts(
+	hierarchy.chunk_count, Obol::ProgressiveCutUnspecified);
+    bool haveResidentChunk = false;
+    for (uint32_t chunk = 0; chunk < hierarchy.chunk_count; ++chunk) {
+	const auto &resident = residentChunks[chunk];
+	if (!resident)
+	    continue;
+	haveResidentChunk = true;
+	/* residentCut records the last population-bearing cut actually read for
+	 * this page.  The same arrays may draw later coordinate-only cuts: PoP
+	 * quantization refines the resident coordinates without appending another
+	 * vertex or triangle.  Advertise that drawable frontier to Obol or a page
+	 * whose topology completed early is needlessly rebuilt (and visually
+	 * remains snapped coarse) whenever the view asks for finer coordinates. */
+	int drawableCut = resident->residentCut;
+	for (int candidate = resident->residentCut + 1;
+		candidate <= hierarchy.max_cut; ++candidate) {
+	    const BObolMeshLodChunkCutInfo &candidateInfo =
+		hierarchy.chunks[chunk].cuts[candidate];
+	    if (candidateInfo.point_count > resident->positions.size() ||
+		static_cast<uint64_t>(candidateInfo.face_count) * 3u >
+		    resident->indices.size())
+		break;
+	    drawableCut = candidate;
+	}
+	adaptiveDrawableCut = std::max(adaptiveDrawableCut, drawableCut);
+	chunkDrawableCuts[chunk] = static_cast<uint8_t>(
+	    std::max(0, drawableCut));
+    }
+    if (!haveResidentChunk)
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    mesh.progressiveResidentCut = static_cast<uint8_t>(
+	std::max(0, adaptiveDrawableCut));
+    mesh.progressiveQuantizationMinimum = generation->quantizationMinimum;
+    mesh.progressiveQuantizationMaximum = generation->quantizationMaximum;
+    mesh.progressiveCuts.resize(hierarchy.cut_count);
+    const bool singleChunkPrefix = hierarchy.chunk_count == 1;
+    const Obol::TriMesh *priorMesh =
+	prior && prior->shadedGeometry && prior->shadedGeometry->shaded ?
+	    &*prior->shadedGeometry->shaded : NULL;
+    bool appendCompatible = !singleChunkPrefix && priorMesh &&
+	priorMesh->progressiveLineage != 0 &&
+	priorMesh->hasAdaptiveProgressiveClusters() &&
+	prior->minimumCut == hierarchy.min_cut &&
+	prior->maximumCut == hierarchy.max_cut &&
+	prior->chunks.size() == hierarchy.chunk_count &&
+	prior->residentChunks.size() == hierarchy.chunk_count &&
+	prior->packedChunks.size() == hierarchy.chunk_count &&
+	prior->shadedCullBackfaces == shadedCullBackfaces &&
+	(priorMesh->normals.empty() == !hierarchy.has_normals);
+    size_t appendedPositionLimit = 0;
+    size_t appendedIndexLimit = 0;
+    for (uint32_t chunkId = 0; appendCompatible &&
+	    chunkId < hierarchy.chunk_count; ++chunkId) {
+	/* Page removal is a compaction operation and deliberately starts a new
+	 * packed lineage.  Ordinary population only preserves or replaces pages. */
+	if (prior->residentChunks[chunkId] && !residentChunks[chunkId]) {
+	    appendCompatible = false;
+	    break;
+	}
+	if (!residentChunks[chunkId])
+	    continue;
+	if (prior->residentChunks[chunkId] == residentChunks[chunkId]) {
+	    if (prior->packedChunks[chunkId].resident !=
+		    residentChunks[chunkId])
+		appendCompatible = false;
+	    continue;
+	}
+	const size_t positionLimit = hierarchy.has_normals ?
+	    residentChunks[chunkId]->indices.size() :
+	    residentChunks[chunkId]->positions.size();
+	if (positionLimit > SIZE_MAX - appendedPositionLimit ||
+	    residentChunks[chunkId]->indices.size() >
+		SIZE_MAX - appendedIndexLimit) {
+	    appendCompatible = false;
+	    break;
+	}
+	appendedPositionLimit += positionLimit;
+	appendedIndexLimit += residentChunks[chunkId]->indices.size();
+    }
+    if (appendCompatible &&
+	(appendedPositionLimit > UINT32_MAX ||
+	 appendedIndexLimit > UINT32_MAX ||
+	 priorMesh->positions.size() > UINT32_MAX - appendedPositionLimit ||
+	 priorMesh->indices.size() > UINT32_MAX - appendedIndexLimit))
+	appendCompatible = false;
+
+    if (appendCompatible) {
+	/* Preserve the prior vectors byte-for-byte.  Obol may then keep the same
+	 * GPU allocation and upload only the suffix certified by the lineage. */
+	mesh.positions = priorMesh->positions;
+	mesh.normals = priorMesh->normals;
+	mesh.indices = priorMesh->indices;
+    } else {
+	size_t totalPositions = 0;
+	size_t totalIndices = 0;
+	for (const auto &chunk : residentChunks) {
+	    if (!chunk)
+		continue;
+	    const size_t positionLimit = hierarchy.has_normals ?
+		chunk->indices.size() : chunk->positions.size();
+	    if (positionLimit > SIZE_MAX - totalPositions ||
+		chunk->indices.size() > SIZE_MAX - totalIndices)
+		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    totalPositions += positionLimit;
+	    totalIndices += chunk->indices.size();
+	}
+	if (!totalPositions || totalIndices < 3 ||
+	    totalPositions > UINT32_MAX || totalIndices > UINT32_MAX)
+	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	mesh.positions.reserve(totalPositions);
+	mesh.indices.reserve(totalIndices);
+	if (hierarchy.has_normals)
+	    mesh.normals.reserve(totalPositions);
+    }
+    generation->packedChunks.resize(hierarchy.chunk_count);
+    for (uint32_t chunkId = 0; chunkId < hierarchy.chunk_count; ++chunkId) {
+	const auto &chunk = residentChunks[chunkId];
+	if (!chunk)
+	    continue;
+	if (appendCompatible &&
+	    prior->residentChunks[chunkId] == chunk &&
+	    prior->packedChunks[chunkId].resident == chunk) {
+	    generation->packedChunks[chunkId] =
+		prior->packedChunks[chunkId];
+	    continue;
+	}
+
+	/* Authored normals are corner records while Obol indexes one normal per
+	 * vertex.  Canonicalize one private page before appending it so a later
+	 * page replacement cannot renumber or rewrite an earlier GPU prefix. */
+	Obol::TriMesh page;
+	page.positions = chunk->positions;
+	page.indices = chunk->indices;
+	if (hierarchy.has_normals) {
+	    if (chunk->cornerNormals.size() != chunk->indices.size() ||
+		!bobol_prepare_authored_corner_normals(
+		    page, chunk->cornerNormals))
+		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	}
+	const size_t vertexBase = mesh.positions.size();
+	const size_t indexBase = mesh.indices.size();
+	if (vertexBase > UINT32_MAX ||
+	    page.positions.size() > UINT32_MAX - vertexBase ||
+	    page.indices.size() > UINT32_MAX - indexBase)
+	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	mesh.positions.insert(mesh.positions.end(),
+	    page.positions.begin(), page.positions.end());
+	if (hierarchy.has_normals)
+	    mesh.normals.insert(mesh.normals.end(),
+		page.normals.begin(), page.normals.end());
+	for (uint32_t index : page.indices) {
+	    const uint64_t rebased = static_cast<uint64_t>(vertexBase) + index;
+	    if (rebased > UINT32_MAX)
+		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    mesh.indices.push_back(static_cast<uint32_t>(rebased));
+	}
+	Obol::ProgressiveTriangleCluster cluster;
+	cluster.bounds = chunk->bounds;
+	cluster.residentCut = chunkDrawableCuts[chunkId];
+	uint32_t priorFaces = 0;
+	for (int cut = hierarchy.min_cut;
+		cut <= chunk->residentCut; ++cut) {
+	    const uint32_t faces = hierarchy.chunks[chunkId].cuts[cut].face_count;
+	    if (faces < priorFaces)
+		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    const uint32_t delta = faces - priorFaces;
+	    if (delta) {
+		const uint64_t first = static_cast<uint64_t>(indexBase) +
+		    static_cast<uint64_t>(priorFaces) * 3u;
+		const uint64_t count = static_cast<uint64_t>(delta) * 3u;
+		if (first > UINT32_MAX || count > UINT32_MAX)
+		    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+		cluster.ranges.push_back({
+		    static_cast<uint32_t>(first),
+		    static_cast<uint32_t>(count),
+		    static_cast<uint8_t>(cut)});
+	    }
+	    priorFaces = faces;
+	}
+	generation->packedChunks[chunkId].resident = chunk;
+	generation->packedChunks[chunkId].cluster = std::move(cluster);
+    }
+    for (const auto &packed : generation->packedChunks)
+	if (packed.resident)
+	    mesh.progressiveClusters.push_back(packed.cluster);
+    for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
+	mesh.progressiveCuts[cut].indexCount = singleChunkPrefix ?
+	    static_cast<uint32_t>(std::min<uint64_t>(
+		hierarchy.chunks[0].cuts[cut].face_count * 3u,
+		mesh.indices.size())) :
+	    static_cast<uint32_t>(mesh.indices.size());
+	mesh.progressiveCuts[cut].positionCount = singleChunkPrefix ?
+	    static_cast<uint32_t>(std::min<uint64_t>(
+		hierarchy.chunks[0].cuts[cut].point_count,
+		mesh.positions.size())) :
+	    static_cast<uint32_t>(mesh.positions.size());
+	mesh.progressiveCuts[cut].quantization = {
+	    hierarchy.cuts[cut].quantization_bits[X],
+	    hierarchy.cuts[cut].quantization_bits[Y],
+	    hierarchy.cuts[cut].quantization_bits[Z]
+	};
+    }
+    if (singleChunkPrefix) {
+	mesh.progressiveClusters.clear();
+	mesh.progressiveClusterGridResolution = 0;
+	mesh.progressiveLineage = progressiveLineage;
+    } else {
+	/* Zero denotes adaptive deterministic pages rather than a uniform grid. */
+	mesh.progressiveClusterGridResolution = 0;
+	mesh.progressiveLineage = appendCompatible ?
+	    priorMesh->progressiveLineage :
+	    (progressiveLineage ? progressiveLineage :
+		bobol_next_progressive_lineage());
+    }
+    if (hierarchy.has_normals && singleChunkPrefix) {
+	/* The one-page path remains an ordinary cumulative prefix.  Page-local
+	 * canonicalization above preserves triangle order; recompute its vertex
+	 * frontier after any authored-normal splits. */
+	size_t scanned = 0;
+	uint32_t maximum = 0;
+	for (Obol::ProgressiveTriangleCut &cut : mesh.progressiveCuts) {
+	    const size_t end = std::min<size_t>(
+		cut.indexCount, mesh.indices.size());
+	    for (; scanned < end; ++scanned)
+		maximum = std::max(maximum, mesh.indices[scanned]);
+	    cut.positionCount = end ? maximum + 1u : 0u;
+	}
+    } else if (hierarchy.has_normals) {
+	for (Obol::ProgressiveTriangleCut &cut : mesh.progressiveCuts)
+	    cut.positionCount = static_cast<uint32_t>(mesh.positions.size());
+    }
+    geometry->shaded = std::move(mesh);
+    geometry->conservativeBounds = generation->bounds;
+    geometry->shadedCullBackfaces = shadedCullBackfaces ? true : false;
+    geometry->subpixelProxyEligible = true;
+    generation->shadedGeometry = geometry;
+    return generation;
+}
+
 static std::shared_ptr<BObolLodProgressiveMeshGeneration>
 progressive_generation_prefix(
-    const BObolLodProgressiveMeshGeneration &source, int residentCut)
+    const BObolLodProgressiveMeshGeneration &source, int residentCut,
+    const std::vector<BObolLodChunkCut> *retainedChunkCuts = NULL)
 {
     const int cut = progressive_cut_clamp(&source, residentCut);
     if (cut < 0)
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    if (!source.chunks.empty()) {
+	if (retainedChunkCuts) {
+	    if (retainedChunkCuts->empty())
+		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    for (size_t i = 0; i < retainedChunkCuts->size(); ++i)
+		if ((*retainedChunkCuts)[i].chunkId >= source.chunks.size() ||
+		    (*retainedChunkCuts)[i].cut < source.minimumCut ||
+		    (*retainedChunkCuts)[i].cut > cut ||
+		    (i && (*retainedChunkCuts)[i].chunkId <=
+			(*retainedChunkCuts)[i - 1].chunkId))
+		    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	}
+	std::vector<BObolMeshLodChunkInfo> chunkInfos(source.chunks.size());
+	std::vector<std::shared_ptr<const
+	    BObolLodProgressiveMeshGeneration::ResidentChunk>> resident(
+	    source.chunks.size());
+	for (size_t chunkId = 0; chunkId < source.chunks.size(); ++chunkId) {
+	    const auto &metadata = source.chunks[chunkId];
+	    BObolMeshLodChunkInfo &info = chunkInfos[chunkId];
+	    memset(&info, 0, sizeof(info));
+	    info.chunk_id = metadata.chunkId;
+	    info.min_cut = metadata.minimumCut;
+	    info.max_cut = metadata.maximumCut;
+	    const SbVec3f minimum = metadata.bounds.getMin();
+	    const SbVec3f maximum = metadata.bounds.getMax();
+	    VSET(info.bmin, minimum[0], minimum[1], minimum[2]);
+	    VSET(info.bmax, maximum[0], maximum[1], maximum[2]);
+	    std::copy(metadata.cuts.begin(), metadata.cuts.end(), info.cuts);
+	    int chunkCut = cut;
+	    if (retainedChunkCuts) {
+		const auto selected = std::lower_bound(
+		    retainedChunkCuts->begin(), retainedChunkCuts->end(),
+		    static_cast<uint32_t>(chunkId),
+		    [](const BObolLodChunkCut &entry, uint32_t id) {
+			return entry.chunkId < id;
+		    });
+		if (selected == retainedChunkCuts->end() ||
+		    selected->chunkId != chunkId)
+		    continue;
+		chunkCut = selected->cut;
+	    }
+	    if (!metadata.cuts[chunkCut].face_count)
+		continue;
+	    if (chunkId >= source.residentChunks.size() ||
+		!source.residentChunks[chunkId])
+		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    const auto &prior = source.residentChunks[chunkId];
+	    const size_t pointCount = metadata.cuts[chunkCut].point_count;
+	    const size_t indexCount =
+		static_cast<size_t>(metadata.cuts[chunkCut].face_count) * 3;
+	    if (pointCount > prior->positions.size() ||
+		indexCount > prior->indices.size() ||
+		(!prior->cornerNormals.empty() &&
+		 indexCount > prior->cornerNormals.size()))
+		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    std::shared_ptr<BObolLodProgressiveMeshGeneration::ResidentChunk>
+		trimmed(new BObolLodProgressiveMeshGeneration::ResidentChunk);
+	    trimmed->chunkId = static_cast<uint32_t>(chunkId);
+	    trimmed->residentCut = chunkCut;
+	    trimmed->bounds = prior->bounds;
+	    trimmed->positions.assign(prior->positions.begin(),
+		prior->positions.begin() + pointCount);
+	    trimmed->indices.assign(prior->indices.begin(),
+		prior->indices.begin() + indexCount);
+	    if (!prior->cornerNormals.empty())
+		trimmed->cornerNormals.assign(prior->cornerNormals.begin(),
+		    prior->cornerNormals.begin() + indexCount);
+	    resident[chunkId] = trimmed;
+	}
+	BObolMeshLodHierarchyInfo hierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	hierarchy.min_cut = source.minimumCut;
+	hierarchy.max_cut = source.maximumCut;
+	hierarchy.resident_cut = cut;
+	hierarchy.cut_count = static_cast<uint32_t>(source.cuts.size());
+	hierarchy.has_normals = source.shadedGeometry &&
+	    source.shadedGeometry->shaded &&
+	    !source.shadedGeometry->shaded->normals.empty();
+	hierarchy.shaded_cull_backfaces = source.shadedCullBackfaces;
+	VSET(hierarchy.quantization_min,
+	    source.quantizationMinimum[0], source.quantizationMinimum[1],
+	    source.quantizationMinimum[2]);
+	VSET(hierarchy.quantization_max,
+	    source.quantizationMaximum[0], source.quantizationMaximum[1],
+	    source.quantizationMaximum[2]);
+	hierarchy.chunk_count = static_cast<uint32_t>(chunkInfos.size());
+	hierarchy.chunks = chunkInfos.data();
+	std::copy(source.cuts.begin(), source.cuts.end(), hierarchy.cuts);
+	return progressive_generation_from_chunks(hierarchy, resident,
+	    source.shadedCullBackfaces, source.revision + 1, 0);
+    }
     const size_t indexCount = source.faceCount[cut] * 3;
     const Obol::TriMesh *sourceMesh =
 	source.shadedGeometry && source.shadedGeometry->shaded ?
@@ -797,6 +1302,80 @@ BObolLodProgressiveMesh::update(
 	    shadedCullBackfaces, revision, this->p->lineage);
     if (!generation)
 	return FALSE;
+    progressive_generation_store(this->p, generation);
+    return TRUE;
+}
+
+SbBool
+BObolLodProgressiveMesh::updateChunksFromCache(
+    struct BObolMeshLod *lod,
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    const std::vector<uint32_t> &chunkIds, int residentCut,
+    SbBool shadedCullBackfaces)
+{
+    const auto fail = [](const char *reason) -> SbBool {
+	if (getenv("BOBOL_CHUNK_DEBUG"))
+	    bu_log("BObol chunk realization failed: %s\n", reason);
+	return FALSE;
+    };
+    if (!this->p || !lod || !hierarchy.chunks || !hierarchy.chunk_count ||
+	chunkIds.empty() || residentCut < hierarchy.min_cut ||
+	residentCut > hierarchy.max_cut)
+	return fail("arguments");
+    for (size_t i = 0; i < chunkIds.size(); ++i)
+	if (chunkIds[i] >= hierarchy.chunk_count ||
+	    (i && chunkIds[i] <= chunkIds[i - 1]))
+	    return fail("chunk set");
+
+    std::lock_guard<std::mutex> updateLock(this->p->updateMutex);
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> prior =
+	progressive_generation_load(this->p);
+    std::vector<std::shared_ptr<const
+	BObolLodProgressiveMeshGeneration::ResidentChunk>> resident(
+	hierarchy.chunk_count);
+    if (prior && prior->residentChunks.size() == resident.size())
+	resident = prior->residentChunks;
+
+    std::vector<uint32_t> toRead;
+    toRead.reserve(chunkIds.size());
+    for (uint32_t chunkId : chunkIds) {
+	const BObolMeshLodChunkInfo &info = hierarchy.chunks[chunkId];
+	if (residentCut < info.min_cut)
+	    continue;
+	if (!resident[chunkId] ||
+	    info.cuts[residentCut].point_count >
+		resident[chunkId]->positions.size() ||
+	    static_cast<uint64_t>(info.cuts[residentCut].face_count) * 3u >
+		resident[chunkId]->indices.size())
+	    toRead.push_back(chunkId);
+    }
+    if (!toRead.empty()) {
+	BObolChunkReadContext context;
+	context.hierarchy = &hierarchy;
+	context.chunks = &resident;
+	if (!bobol_mesh_lod_read_chunk_prefixes(lod, toRead.data(),
+		toRead.size(), residentCut, bobol_progressive_chunk_read,
+		&context))
+	    return fail("cache read");
+    }
+    for (uint32_t chunkId : chunkIds) {
+	const BObolMeshLodChunkInfo &info = hierarchy.chunks[chunkId];
+	if (residentCut >= info.min_cut &&
+	    (!resident[chunkId] ||
+	     info.cuts[residentCut].point_count >
+		 resident[chunkId]->positions.size() ||
+	     static_cast<uint64_t>(info.cuts[residentCut].face_count) * 3u >
+		 resident[chunkId]->indices.size()))
+	    return fail("incomplete cache read");
+    }
+    uint64_t revision = prior ? prior->revision + 1 : 1;
+    if (!revision)
+	revision = 1;
+    const std::shared_ptr<BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_from_chunks(hierarchy, resident,
+	    shadedCullBackfaces, revision, this->p->lineage, prior.get());
+    if (!generation)
+	return fail("renderer generation");
     progressive_generation_store(this->p, generation);
     return TRUE;
 }
@@ -1031,6 +1610,53 @@ BObolLodProgressiveMesh::prepareTrim(int residentCut) const
     return trim;
 }
 
+BObolLodProgressiveMeshTrimPtr
+BObolLodProgressiveMesh::prepareTrim(
+    int residentCut, const std::vector<uint32_t> &chunkIds) const
+{
+    if (!this->p || chunkIds.empty())
+	return BObolLodProgressiveMeshTrimPtr();
+
+    std::vector<BObolLodChunkCut> chunkCuts;
+    chunkCuts.reserve(chunkIds.size());
+    for (size_t i = 0; i < chunkIds.size(); ++i) {
+	if (i && chunkIds[i] <= chunkIds[i - 1])
+	    return BObolLodProgressiveMeshTrimPtr();
+	chunkCuts.push_back({chunkIds[i], residentCut});
+    }
+    return this->prepareTrim(chunkCuts);
+}
+
+BObolLodProgressiveMeshTrimPtr
+BObolLodProgressiveMesh::prepareTrim(
+    const std::vector<BObolLodChunkCut> &chunkCuts) const
+{
+    if (!this->p || chunkCuts.empty())
+	return BObolLodProgressiveMeshTrimPtr();
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> current =
+	progressive_generation_load(this->p);
+    int requestedCut = -1;
+    for (size_t i = 0; i < chunkCuts.size(); ++i) {
+	if (chunkCuts[i].cut < 0 ||
+	    (i && chunkCuts[i].chunkId <= chunkCuts[i - 1].chunkId))
+	    return BObolLodProgressiveMeshTrimPtr();
+	requestedCut = std::max(requestedCut, chunkCuts[i].cut);
+    }
+    const int cut = progressive_cut_clamp(current.get(), requestedCut);
+    if (cut < 0)
+	return BObolLodProgressiveMeshTrimPtr();
+    std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_prefix(*current, cut, &chunkCuts);
+    if (!generation)
+	return BObolLodProgressiveMeshTrimPtr();
+    std::shared_ptr<BObolLodProgressiveMeshTrim> trim(
+	new BObolLodProgressiveMeshTrim);
+    trim->owner = this->p;
+    trim->source = current;
+    trim->generation = generation;
+    return trim;
+}
+
 SbBool
 BObolLodProgressiveMesh::trim(int residentCut)
 {
@@ -1050,20 +1676,92 @@ BObolLodProgressiveMesh::copyCut(
 	progressive_generation_load(this->p);
     const int cut =
 	progressive_cut_clamp(generation.get(), requestedCut);
-    if (cut < 0)
+    if (cut < 0) {
+	if (getenv("BOBOL_CHUNK_DEBUG"))
+	    bu_log("BObol copyCut has no cut requested=%d generation=%d/%d/%d\n",
+		requestedCut, generation ? generation->minimumCut : -99,
+		generation ? generation->residentCut : -99,
+		generation ? generation->maximumCut : -99);
 	return FALSE;
+    }
     const Obol::TriMesh *mesh =
 	generation->shadedGeometry && generation->shadedGeometry->shaded ?
 	    &*generation->shadedGeometry->shaded : NULL;
-    if (!mesh)
+    if (!mesh) {
+	if (getenv("BOBOL_CHUNK_DEBUG"))
+	    bu_log("BObol copyCut has no shaded mesh cut=%d\n", cut);
 	return FALSE;
+    }
+    if (!generation->chunks.empty() &&
+	mesh->hasAdaptiveProgressiveClusters()) {
+	payload.points = mesh->positions;
+	for (const Obol::ProgressiveTriangleCluster &cluster :
+		mesh->progressiveClusters) {
+	    for (const Obol::ProgressiveTriangleClusterRange &range :
+		    cluster.ranges) {
+		if (range.activationCut > cut)
+		    continue;
+		const uint64_t end = static_cast<uint64_t>(range.firstIndex) +
+		    range.indexCount;
+		if (range.firstIndex % 3 || range.indexCount % 3 ||
+		    end > mesh->indices.size()) {
+		    if (getenv("BOBOL_CHUNK_DEBUG"))
+			bu_log("BObol copyCut invalid range cut=%d first=%u "
+			    "count=%u mesh=%zu\n", cut, range.firstIndex,
+			    range.indexCount, mesh->indices.size());
+		    payload.clear();
+		    return FALSE;
+		}
+		for (uint64_t indexOffset = range.firstIndex;
+			indexOffset < end; ++indexOffset) {
+		    const uint32_t index = mesh->indices[indexOffset];
+		    if (index >= payload.points.size() || index > INT32_MAX) {
+			if (getenv("BOBOL_CHUNK_DEBUG"))
+			    bu_log("BObol copyCut invalid index cut=%d index=%u "
+				"points=%zu\n", cut, index,
+				payload.points.size());
+			payload.clear();
+			return FALSE;
+		    }
+		    payload.coordIndex.push_back(static_cast<int32_t>(index));
+		    if (!mesh->normals.empty()) {
+			if (index >= mesh->normals.size()) {
+			    if (getenv("BOBOL_CHUNK_DEBUG"))
+				bu_log("BObol copyCut invalid normal cut=%d "
+				    "index=%u normals=%zu\n", cut, index,
+				    mesh->normals.size());
+			    payload.clear();
+			    return FALSE;
+			}
+			payload.normals.push_back(mesh->normals[index]);
+		    }
+		}
+	    }
+	}
+	const SbBool valid = payload.isValid();
+	if (!valid && getenv("BOBOL_CHUNK_DEBUG"))
+	    bu_log("BObol copyCut adaptive failed cut=%d chunks=%zu "
+		"clusters=%zu positions=%zu indices=%zu output=%zu normals=%zu\n",
+		cut, generation->chunks.size(),
+		mesh->progressiveClusters.size(), mesh->positions.size(),
+		mesh->indices.size(), payload.coordIndex.size(),
+		payload.normals.size());
+	return valid;
+    }
     const size_t points =
 	mesh->positionCountAtCut(static_cast<uint8_t>(cut));
     const size_t indices =
 	mesh->indexCountAtCut(static_cast<uint8_t>(cut));
     if (!points || points > mesh->positions.size() ||
-	indices < 3 || indices > mesh->indices.size())
+	indices < 3 || indices > mesh->indices.size()) {
+	if (getenv("BOBOL_CHUNK_DEBUG"))
+	    bu_log("BObol copyCut prefix failed cut=%d points=%zu/%zu "
+		"indices=%zu/%zu resident=%u chunks=%zu\n", cut,
+		points, mesh->positions.size(), indices, mesh->indices.size(),
+		static_cast<unsigned>(mesh->progressiveResidentCut),
+		generation->chunks.size());
 	return FALSE;
+    }
     payload.points.assign(mesh->positions.begin(),
 	mesh->positions.begin() + points);
     payload.coordIndex.reserve(indices);
@@ -1074,19 +1772,31 @@ BObolLodProgressiveMesh::copyCut(
 	if (index >= points ||
 	    index > static_cast<uint32_t>(
 		std::numeric_limits<int32_t>::max())) {
+	    if (getenv("BOBOL_CHUNK_DEBUG"))
+		bu_log("BObol copyCut prefix invalid index cut=%d "
+		    "index=%u points=%zu\n", cut, index, points);
 	    payload.clear();
 	    return FALSE;
 	}
 	payload.coordIndex.push_back(static_cast<int32_t>(index));
 	if (!mesh->normals.empty()) {
 	    if (index >= mesh->normals.size()) {
+		if (getenv("BOBOL_CHUNK_DEBUG"))
+		    bu_log("BObol copyCut prefix invalid normal cut=%d "
+			"index=%u normals=%zu\n", cut, index,
+			mesh->normals.size());
 		payload.clear();
 		return FALSE;
 	    }
 	    payload.normals.push_back(mesh->normals[index]);
 	}
     }
-    return payload.isValid();
+    const SbBool valid = payload.isValid();
+    if (!valid && getenv("BOBOL_CHUNK_DEBUG"))
+	bu_log("BObol copyCut prefix output invalid cut=%d points=%zu "
+	    "indices=%zu normals=%zu\n", cut, payload.points.size(),
+	    payload.coordIndex.size(), payload.normals.size());
+    return valid;
 }
 
 SbBool
@@ -1100,7 +1810,9 @@ BObolLodProgressiveMesh::isValid(void) const
 	generation && generation->shadedGeometry &&
 	generation->shadedGeometry->shaded ?
 	    &*generation->shadedGeometry->shaded : NULL;
-    return generation && generation->residentCut >= 0 && mesh &&
+    return generation &&
+	(generation->residentCut >= 0 || !generation->residentChunks.empty()) &&
+	mesh &&
 	!mesh->positions.empty() && mesh->indices.size() >= 3 &&
 	mesh->indices.size() % 3 == 0 &&
 	(mesh->normals.empty() ||
@@ -1124,9 +1836,195 @@ BObolLodProgressiveMesh::canDrawCut(int requestedCut) const
 	    &*generation->shadedGeometry->shaded : NULL;
     if (!mesh)
 	return FALSE;
+    if (!generation->chunks.empty()) {
+	/* This whole-leaf query is still used by conservative clients.  Keep it
+	 * allocation-free: it is reachable from per-frame admission and a large
+	 * scene may contain tens of thousands of private pages. */
+	for (size_t chunkId = 0; chunkId < generation->chunks.size(); ++chunkId) {
+	    const auto &metadata = generation->chunks[chunkId];
+	    if (!metadata.cuts[requestedCut].face_count)
+		continue;
+	    if (chunkId >= generation->residentChunks.size() ||
+		!generation->residentChunks[chunkId])
+		return FALSE;
+	    const auto &resident = generation->residentChunks[chunkId];
+	    if (metadata.cuts[requestedCut].point_count >
+		    resident->positions.size() ||
+		static_cast<uint64_t>(metadata.cuts[requestedCut].face_count) *
+		    3u > resident->indices.size())
+		return FALSE;
+	}
+	return TRUE;
+    }
     return mesh->isProgressive() &&
 	requestedCut <= static_cast<int>(
 	    mesh->progressiveResidentCut) ? TRUE : FALSE;
+}
+
+SbBool
+BObolLodProgressiveMesh::countsForChunksAtCut(
+    const std::vector<uint32_t> &chunkIds, int requestedCut,
+    SbBool hasNormals, BObolLodCounts *counts) const
+{
+    if (!counts)
+	return FALSE;
+    if (!canDrawChunksAtCut(chunkIds, requestedCut)) {
+	counts->clear();
+	return FALSE;
+    }
+    return hierarchyCountsForChunksAtCut(
+	chunkIds, requestedCut, hasNormals, counts);
+}
+
+SbBool
+BObolLodProgressiveMesh::hierarchyCountsForChunksAtCut(
+    const std::vector<uint32_t> &chunkIds, int requestedCut,
+    SbBool hasNormals, BObolLodCounts *counts) const
+{
+    if (!counts)
+	return FALSE;
+    counts->clear();
+    if (!this->p)
+	return FALSE;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation || generation->chunks.empty() || chunkIds.empty() ||
+	requestedCut < generation->minimumCut ||
+	requestedCut > generation->maximumCut)
+	return FALSE;
+    for (size_t i = 0; i < chunkIds.size(); ++i) {
+	const uint32_t chunkId = chunkIds[i];
+	if (chunkId >= generation->chunks.size() ||
+	    (i && chunkId <= chunkIds[i - 1])) {
+	    counts->clear();
+	    return FALSE;
+	}
+	const BObolMeshLodChunkCutInfo &cut =
+	    generation->chunks[chunkId].cuts[requestedCut];
+	counts->faceCount = cut.face_count >
+		UINT64_MAX - counts->faceCount ? UINT64_MAX :
+	    counts->faceCount + cut.face_count;
+	counts->pointCount = cut.point_count >
+		UINT64_MAX - counts->pointCount ? UINT64_MAX :
+	    counts->pointCount + cut.point_count;
+    }
+    counts->originalPointCount = counts->pointCount;
+    counts->normalCount = hasNormals ?
+	(counts->faceCount > UINT64_MAX / 3 ? UINT64_MAX :
+	    counts->faceCount * 3) : 0;
+    return TRUE;
+}
+
+SbBool
+BObolLodProgressiveMesh::canDrawChunksAtCut(
+    const std::vector<uint32_t> &chunkIds, int requestedCut) const
+{
+    if (!this->p)
+	return FALSE;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation || generation->chunks.empty())
+	return canDrawCut(requestedCut);
+    if (requestedCut < generation->minimumCut ||
+	requestedCut > generation->maximumCut || chunkIds.empty())
+	return FALSE;
+    for (size_t i = 0; i < chunkIds.size(); ++i) {
+	const uint32_t chunkId = chunkIds[i];
+	if (chunkId >= generation->chunks.size() ||
+	    (i && chunkId <= chunkIds[i - 1]))
+	    return FALSE;
+	const auto &metadata = generation->chunks[chunkId];
+	if (!metadata.cuts[requestedCut].face_count)
+	    continue;
+	if (chunkId >= generation->residentChunks.size() ||
+	    !generation->residentChunks[chunkId])
+	    return FALSE;
+	const auto &resident = generation->residentChunks[chunkId];
+	if (metadata.cuts[requestedCut].point_count >
+		resident->positions.size() ||
+	    static_cast<uint64_t>(metadata.cuts[requestedCut].face_count) * 3u >
+		resident->indices.size())
+	    return FALSE;
+    }
+    return TRUE;
+}
+
+int
+BObolLodProgressiveMesh::residentCutForChunks(
+    const std::vector<uint32_t> &chunkIds) const
+{
+    if (!this->p)
+	return -1;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation)
+	return -1;
+    if (generation->chunks.empty())
+	return chunkIds.empty() ? generation->residentCut : -1;
+    if (chunkIds.empty())
+	return -1;
+    int frontier = generation->minimumCut - 1;
+    for (int cut = generation->minimumCut;
+	 cut <= generation->maximumCut; ++cut) {
+	bool complete = true;
+	for (size_t i = 0; i < chunkIds.size(); ++i) {
+	    const uint32_t chunkId = chunkIds[i];
+	    if (chunkId >= generation->chunks.size() ||
+		(i && chunkId <= chunkIds[i - 1]))
+		return -1;
+	    if (!generation->chunks[chunkId].cuts[cut].face_count)
+		continue;
+	    if (chunkId >= generation->residentChunks.size() ||
+		!generation->residentChunks[chunkId] ||
+		generation->chunks[chunkId].cuts[cut].point_count >
+		    generation->residentChunks[chunkId]->positions.size() ||
+		static_cast<uint64_t>(
+		    generation->chunks[chunkId].cuts[cut].face_count) * 3u >
+		    generation->residentChunks[chunkId]->indices.size()) {
+		complete = false;
+		break;
+	    }
+	}
+	if (!complete)
+	    break;
+	frontier = cut;
+    }
+    return frontier;
+}
+
+void
+BObolLodProgressiveMesh::residentChunkIds(
+    std::vector<uint32_t> &chunkIds) const
+{
+    chunkIds.clear();
+    if (!this->p)
+	return;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation || generation->chunks.empty())
+	return;
+    chunkIds.reserve(generation->residentChunks.size());
+    for (size_t chunk = 0; chunk < generation->residentChunks.size(); ++chunk)
+	if (generation->residentChunks[chunk])
+	    chunkIds.push_back(static_cast<uint32_t>(chunk));
+}
+
+void
+BObolLodProgressiveMesh::residentChunkCuts(
+    std::vector<BObolLodChunkCut> &chunkCuts) const
+{
+    chunkCuts.clear();
+    if (!this->p)
+	return;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation || generation->chunks.empty())
+	return;
+    chunkCuts.reserve(generation->residentChunks.size());
+    for (size_t chunk = 0; chunk < generation->residentChunks.size(); ++chunk)
+	if (generation->residentChunks[chunk])
+	    chunkCuts.push_back({static_cast<uint32_t>(chunk),
+		generation->residentChunks[chunk]->residentCut});
 }
 
 int
@@ -1237,7 +2135,8 @@ BObolLodProgressiveMesh::hasSpatialClusters(void) const
     const Obol::TriMesh *mesh = generation && generation->shadedGeometry &&
 	generation->shadedGeometry->shaded ?
 	    &*generation->shadedGeometry->shaded : NULL;
-    return mesh && mesh->hasProgressiveClusters() ? TRUE : FALSE;
+    return generation && (!generation->chunks.empty() ||
+	(mesh && mesh->hasProgressiveClusters())) ? TRUE : FALSE;
 }
 
 static void
@@ -1296,6 +2195,57 @@ bobol_lod_bounds_frustum_relation(const SbBox3f &bounds,
 }
 
 SbBool
+bobol_lod_visible_chunks(
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    const SbMatrix &localToRoot, const SbMatrix &viewProjection,
+    std::vector<uint32_t> &chunkIds)
+{
+    chunkIds.clear();
+    if (!hierarchy.chunks || !hierarchy.chunk_count)
+	return FALSE;
+    chunkIds.reserve(hierarchy.chunk_count);
+    for (uint32_t chunk = 0; chunk < hierarchy.chunk_count; ++chunk) {
+	const BObolMeshLodChunkInfo &info = hierarchy.chunks[chunk];
+	if (info.chunk_id != chunk)
+	    return FALSE;
+	const SbBox3f local(
+	    SbVec3f(static_cast<float>(info.bmin[X]),
+		static_cast<float>(info.bmin[Y]),
+		static_cast<float>(info.bmin[Z])),
+	    SbVec3f(static_cast<float>(info.bmax[X]),
+		static_cast<float>(info.bmax[Y]),
+		static_cast<float>(info.bmax[Z])));
+	SbBox3f world;
+	bobol_lod_transform_bounds(local, localToRoot, world);
+	if (bobol_lod_bounds_frustum_relation(world, viewProjection) >= 0)
+	    chunkIds.push_back(chunk);
+    }
+    return TRUE;
+}
+
+SbBool
+BObolLodProgressiveMesh::visibleChunkIds(
+    const SbMatrix &localToRoot, const SbMatrix &viewProjection,
+    std::vector<uint32_t> &chunkIds) const
+{
+    chunkIds.clear();
+    if (!this->p)
+	return FALSE;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation || generation->chunks.empty())
+	return FALSE;
+    chunkIds.reserve(generation->chunks.size());
+    for (const auto &chunk : generation->chunks) {
+	SbBox3f world;
+	bobol_lod_transform_bounds(chunk.bounds, localToRoot, world);
+	if (bobol_lod_bounds_frustum_relation(world, viewProjection) >= 0)
+	    chunkIds.push_back(chunk.chunkId);
+    }
+    return TRUE;
+}
+
+SbBool
 BObolLodProgressiveMesh::visibleCountsAtCuts(
     const SbMatrix &localToRoot, const SbMatrix &viewProjection,
     SbBool hasNormals, BObolLodCounts *counts, size_t count) const
@@ -1304,6 +2254,38 @@ BObolLodProgressiveMesh::visibleCountsAtCuts(
 	return FALSE;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
+    if (generation && !generation->chunks.empty()) {
+	for (size_t cut = 0; cut < count; ++cut)
+	    counts[cut].clear();
+	for (const auto &chunk : generation->chunks) {
+	    SbBox3f worldChunk;
+	    bobol_lod_transform_bounds(
+		chunk.bounds, localToRoot, worldChunk);
+	    if (bobol_lod_bounds_frustum_relation(
+		    worldChunk, viewProjection) < 0)
+		continue;
+	    for (size_t cut = 0;
+		    cut < count && cut < generation->cuts.size(); ++cut) {
+		const uint64_t faces = chunk.cuts[cut].face_count;
+		const uint64_t points = chunk.cuts[cut].point_count;
+		counts[cut].faceCount = counts[cut].faceCount >
+		    UINT64_MAX - faces ? UINT64_MAX :
+		    counts[cut].faceCount + faces;
+		counts[cut].pointCount = counts[cut].pointCount >
+		    UINT64_MAX - points ? UINT64_MAX :
+		    counts[cut].pointCount + points;
+		counts[cut].originalPointCount = counts[cut].pointCount;
+		if (hasNormals) {
+		    const uint64_t normals = faces > UINT64_MAX / 3 ?
+			UINT64_MAX : faces * 3;
+		    counts[cut].normalCount = counts[cut].normalCount >
+			UINT64_MAX - normals ? UINT64_MAX :
+			counts[cut].normalCount + normals;
+		}
+	    }
+	}
+	return TRUE;
+    }
     const Obol::TriMesh *mesh = generation && generation->shadedGeometry &&
 	generation->shadedGeometry->shaded ?
 	    &*generation->shadedGeometry->shaded : NULL;
@@ -1746,7 +2728,19 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 	wireRep.progressiveLineage = sourceMesh->progressiveLineage;
 	wireRep.progressiveCuts.resize(sourceMesh->progressiveCuts.size());
 	for (size_t cut = 0; cut < wireRep.progressiveCuts.size(); ++cut) {
-	    const size_t segments = generation->faceCount[cut] * 3;
+	    size_t segments = generation->faceCount[cut] * 3;
+	    if (sourceMesh->hasAdaptiveProgressiveClusters()) {
+		segments = 0;
+		for (const Obol::ProgressiveTriangleCluster &cluster :
+			sourceMesh->progressiveClusters) {
+		    for (const Obol::ProgressiveTriangleClusterRange &range :
+			    cluster.ranges) {
+			if (range.activationCut <= cut)
+			    segments = range.indexCount > SIZE_MAX - segments ?
+				SIZE_MAX : segments + range.indexCount;
+		    }
+		}
+	    }
 	    wireRep.progressiveCuts[cut].segmentFirst = 0;
 	    wireRep.progressiveCuts[cut].segmentCount =
 		static_cast<uint32_t>(std::min(
@@ -1755,6 +2749,30 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 			std::numeric_limits<uint32_t>::max())));
 	    wireRep.progressiveCuts[cut].quantization =
 		sourceMesh->progressiveCuts[cut].quantization;
+	}
+	if (sourceMesh->hasProgressiveClusters()) {
+	    wireRep.progressiveClusters.reserve(
+		sourceMesh->progressiveClusters.size());
+	    for (const Obol::ProgressiveTriangleCluster &sourceCluster :
+		    sourceMesh->progressiveClusters) {
+		Obol::ProgressiveWireCluster targetCluster;
+		targetCluster.bounds = sourceCluster.bounds;
+		targetCluster.residentCut = sourceCluster.residentCut;
+		targetCluster.ranges.reserve(sourceCluster.ranges.size());
+		for (const Obol::ProgressiveTriangleClusterRange &sourceRange :
+			sourceCluster.ranges) {
+		    /* Three triangle indices produce three wire segments, so the
+		     * source index offset and count are numerically identical to
+		     * the corresponding segment offset and count. */
+		    targetCluster.ranges.push_back({
+			sourceRange.firstIndex, sourceRange.indexCount,
+			sourceRange.activationCut});
+		}
+		wireRep.progressiveClusters.push_back(
+		    std::move(targetCluster));
+	    }
+	    wireRep.progressiveClusterGridResolution =
+		sourceMesh->progressiveClusterGridResolution;
 	}
 	geometry->wire = std::move(wireRep);
     }
@@ -1805,6 +2823,10 @@ BObolLodRequest::clear(void)
     projectedBoundsContained = FALSE;
     targetPixelError = 1.0f;
     requestedCut = -1;
+    localToRoot.makeIdentity();
+    viewProjection.makeIdentity();
+    spatialProjectionValid = FALSE;
+    requiredChunks.clear();
     bounds.makeEmpty();
     sourceCounts.clear();
     providerParams.clear();

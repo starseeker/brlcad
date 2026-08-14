@@ -1770,10 +1770,12 @@ test_quality_policy(void)
     }
 
     /* Exact completed frames admit the finest subpixel tier whose inverse-
-     * square work estimate fits both time and scene-cost headroom.  This may
-     * move directly to 0.5, take the intermediate 0.75 rung, or remain at the
-     * fast one-pixel target.  The witness deliberately includes a completed
-     * first-use frame: upload/preparation cost only makes it conservative. */
+     * square work estimate fits both time and scene-cost headroom.  The first
+     * pass may move directly to 0.5, take the intermediate 0.75 rung, or
+     * remain at the fast one-pixel target.  A separate completed 0.5-pixel
+     * witness is required before the raster-stable 0.25 tier.  The witness
+     * deliberately includes a completed first-use frame: upload/preparation
+     * cost only makes it conservative. */
     if (!near(Policy::stablePixelError(
 	    1.0f, 100, 400, 10000000ULL, 20.0f, true, true), 0.5f) ||
 	!near(Policy::stablePixelError(
@@ -1781,7 +1783,11 @@ test_quality_policy(void)
 	!near(Policy::stablePixelError(
 	    0.75f, 100, 225, 10000000ULL, 20.0f, true, true), 0.5f) ||
 	!near(Policy::stablePixelError(
-	    0.5f, 100, 10000, 1000000ULL, 20.0f, true, true), 0.5f) ||
+	    0.5f, 100, 400, 10000000ULL, 20.0f, true, true), 0.25f) ||
+	!near(Policy::stablePixelError(
+	    0.5f, 101, 400, 10000000ULL, 20.0f, true, true), 0.5f) ||
+	!near(Policy::stablePixelError(
+	    0.25f, 100, 10000, 1000000ULL, 20.0f, true, true), 0.25f) ||
 	!near(Policy::stablePixelError(
 	    1.0f, 101, 400, 10000000ULL, 20.0f, true, true), 0.75f) ||
 	!near(Policy::stablePixelError(
@@ -2607,6 +2613,11 @@ test_compaction_policy(void)
     if (!policy.pending() || policy.planning() ||
 	policy.deadlineMicroseconds() != 150) {
 	std::fprintf(stderr, "FAIL: delayed compaction request\n");
+	return 1;
+    }
+    policy.requestAfter(125, 500);
+    if (policy.deadlineMicroseconds() != 150) {
+	std::fprintf(stderr, "FAIL: repeated compaction request slid deadline\n");
 	return 1;
     }
     Policy::Inputs input = readyInput();
