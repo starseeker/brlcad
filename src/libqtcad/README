@@ -121,8 +121,13 @@ Consumers
 Inside the BRL-CAD tree libqtcad is consumed by:
 
 * `src/qged` and its plugins (the primary client)
-* `src/libqtcad/tests` (`qgmodel`, `qgview`, plus GED-level tests that exercise
-  session-backed editing and Obol canvas/controller behavior end-to-end)
+* `src/libqtcad/tests` (focused model/scale tests plus GED-level tests that
+  exercise session-backed editing and Obol canvas/controller behavior
+  end-to-end)
+
+Historical `qgmodel` and `qgview` demonstration executables were removed once
+their useful behavior was covered by qged and deterministic regression tests.
+Test-only executables are not installed as end-user commands.
 
 `archer` and `libtclcad` do not currently depend on libqtcad.
 

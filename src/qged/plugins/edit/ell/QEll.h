@@ -19,6 +19,7 @@
 
 #include "BObol/BInput.h"
 #include "qtcad/QgTypes.h"
+#include "vmath.h"
 
 class QgPluginContext;
 class QgPrimitiveEdit;

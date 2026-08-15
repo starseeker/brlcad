@@ -1721,8 +1721,11 @@ rt_revolve_xform(
     VMOVE(rop->v3d, tmp_vec);
     MAT4X3VEC(tmp_vec, mat, rip->axis3d);
     VMOVE(rop->axis3d, tmp_vec);
+    MAT4X3VEC(tmp_vec, mat, rip->r);
+    VMOVE(rop->r, tmp_vec);
     V2MOVE(rop->v2d, rip->v2d);
     V2MOVE(rop->axis2d, rip->axis2d);
+    rop->ang = rip->ang;
 
     if (release && ip != op) {
 	rop->skt = rip->skt;

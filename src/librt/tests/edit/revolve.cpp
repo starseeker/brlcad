@@ -50,6 +50,7 @@
 #include "bu/vls.h"
 #include "raytrace.h"
 #include "edit_test_view.h"
+#include "rt/calc.h"
 #include "rt/geom.h"
 
 /* ECMD numbers from edrevolve.c */
@@ -244,6 +245,36 @@ main(int argc, char *argv[])
 	    status, vals.strings[0]);
     bu_log("TEST 8 PASS: get_values(SET_SKT) = '%s'\n",
 	vals.strings[0]);
+
+    /* ================================================================
+     * Test 9: occurrence transforms preserve all revolve parameters
+     * ================================================================*/
+    reset_s(s, rip);
+    mat_t transform;
+    MAT_IDN(transform);
+    transform[0] = 0.0;
+    transform[1] = -1.0;
+    transform[4] = 1.0;
+    transform[5] = 0.0;
+    MAT_DELTAS(transform, 10.0, 20.0, 30.0);
+    struct rt_db_internal transformed = RT_DB_INTERNAL_INIT_ZERO;
+    if (rt_matrix_transform(&transformed, transform, &s->es_int, 0,
+	    dbip) != 0)
+	bu_exit(1, "ERROR: revolve occurrence transform failed\n");
+    struct rt_revolve_internal *tr =
+	(struct rt_revolve_internal *)transformed.idb_ptr;
+    point_t expected_v = {10.0, 20.0, 30.0};
+    vect_t expected_axis = {0.0, 0.0, 1.0};
+    vect_t expected_r = {0.0, 1.0, 0.0};
+    if (!tr || !VNEAR_EQUAL(tr->v3d, expected_v, SMALL_FASTF) ||
+	!VNEAR_EQUAL(tr->axis3d, expected_axis, SMALL_FASTF) ||
+	!VNEAR_EQUAL(tr->r, expected_r, SMALL_FASTF) ||
+	!NEAR_EQUAL(tr->ang, M_2PI, SMALL_FASTF)) {
+	rt_db_free_internal(&transformed);
+	bu_exit(1, "ERROR: revolve occurrence transform lost geometry state\n");
+    }
+    rt_db_free_internal(&transformed);
+    bu_log("TEST 9 PASS: occurrence transform preserves r and angle\n");
 
     bu_log("All REVOLVE edit tests PASSED\n");
 
