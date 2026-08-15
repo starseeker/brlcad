@@ -1,7 +1,5 @@
 include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
-set(QGMODEL_SRCS qgmodel.cpp)
-set(QGVIEW_SRCS qgview.cpp)
 set(TEST_QTCAD_PLUGIN_REUSE_SRCS test_qtcad_plugin_reuse.cpp)
 set(TEST_QTCAD_EVENT_PLAYER_SRCS test_qtcad_event_player.cpp)
 set(TEST_QTCAD_PRIMITIVE_EDIT_SRCS test_qtcad_primitive_edit.cpp)
@@ -36,17 +34,6 @@ if(TARGET test_qtcad_primitive_edit)
 endif()
 
 if(TARGET Qt6::Test)
-  add_executable(qgmodel qgmodel.cpp)
-  target_link_libraries(
-    qgmodel
-    libqtcad
-    libged
-    librt
-    libbu
-    Qt6::Widgets
-    Qt6::Test
-    )
-
   add_executable(test_qgmodel_model_tester ${TEST_QGMODEL_MODEL_TESTER_SRCS})
   target_link_libraries(
     test_qgmodel_model_tester
@@ -70,17 +57,6 @@ if(TARGET Qt6::Test)
     )
 endif(TARGET Qt6::Test)
 if(TARGET Qt5::Test)
-  add_executable(qgmodel ${QGMODEL_SRCS})
-  target_link_libraries(
-    qgmodel
-    libqtcad
-    libged
-    librt
-    libbu
-    Qt5::Widgets
-    Qt5::Test
-    )
-
   add_executable(test_qgmodel_model_tester ${TEST_QGMODEL_MODEL_TESTER_SRCS})
   target_link_libraries(
     test_qgmodel_model_tester
@@ -103,17 +79,11 @@ if(TARGET Qt5::Test)
     Qt5::Test
     )
 endif(TARGET Qt5::Test)
-if(TARGET qgmodel)
-  target_compile_definitions(qgmodel PRIVATE BRLCADBUILD HAVE_CONFIG_H)
-  install(TARGETS qgmodel RUNTIME DESTINATION ${BIN_DIR} LIBRARY DESTINATION ${LIB_DIR} ARCHIVE DESTINATION ${LIB_DIR})
-endif(TARGET qgmodel)
 if(TARGET test_qgmodel_model_tester)
   target_compile_definitions(test_qgmodel_model_tester PRIVATE BRLCADBUILD HAVE_CONFIG_H)
-  install(TARGETS test_qgmodel_model_tester RUNTIME DESTINATION ${BIN_DIR} LIBRARY DESTINATION ${LIB_DIR} ARCHIVE DESTINATION ${LIB_DIR})
 endif(TARGET test_qgmodel_model_tester)
 if(TARGET test_qgmodel_scale)
   target_compile_definitions(test_qgmodel_scale PRIVATE BRLCADBUILD HAVE_CONFIG_H)
-  install(TARGETS test_qgmodel_scale RUNTIME DESTINATION ${BIN_DIR} LIBRARY DESTINATION ${LIB_DIR} ARCHIVE DESTINATION ${LIB_DIR})
 endif(TARGET test_qgmodel_scale)
 
 if(TARGET Qt6::Widgets)
@@ -125,31 +95,7 @@ if(TARGET Qt6::Widgets)
     BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
   set_property(TEST test_qtcad_event_player APPEND PROPERTY LABELS drawing_baseline)
 
-  add_executable(qgview ${QGVIEW_SRCS})
-  target_link_libraries(
-    qgview
-    libqtcad
-    libged
-    librt
-    libbu
-    Qt6::Widgets
-    )
 endif(TARGET Qt6::Widgets)
-if(TARGET Qt5::Widgets)
-  add_executable(qgview ${QGVIEW_SRCS})
-  target_link_libraries(
-    qgview
-    libqtcad
-    libged
-    librt
-    libbu
-    Qt5::Widgets
-    )
-endif(TARGET Qt5::Widgets)
-if(TARGET qgview)
-  target_compile_definitions(qgview PRIVATE BRLCADBUILD HAVE_CONFIG_H)
-  install(TARGETS qgview RUNTIME DESTINATION ${BIN_DIR} LIBRARY DESTINATION ${LIB_DIR} ARCHIVE DESTINATION ${LIB_DIR})
-endif(TARGET qgview)
 
 if(TARGET Qt6::Widgets)
   add_executable(test_qtcad_obol_controller ${TEST_QTCAD_OBOL_CONTROLLER_SRCS})
@@ -758,14 +704,10 @@ if(TARGET Qt5::Widgets AND NOT TARGET Qt6::Widgets)
 endif(TARGET Qt5::Widgets AND NOT TARGET Qt6::Widgets)
 
 # On some platforms distclean has additional cleanup to do
-distclean("${CMAKE_BINARY_DIR}/${BIN_DIR}/qgmodel.pdb")
-distclean("${CMAKE_BINARY_DIR}/${BIN_DIR}/qgview.pdb")
 
 cmakefiles(
   CMakeLists.txt
   qtcad_obol_nist_matrix.sh
-  ${QGMODEL_SRCS}
-  ${QGVIEW_SRCS}
   ${TEST_QTCAD_OBOL_CONTROLLER_SRCS}
   ${TEST_QTCAD_EVENT_PLAYER_SRCS}
   ${TEST_QTCAD_OBOL_DRAW_SYNC_SRCS}
@@ -777,9 +719,11 @@ cmakefiles(
   ${TEST_QTCAD_OBOL_REAL_MODELS_SRCS}
   ${TEST_QTCAD_OBOL_SELECTION_SYNC_SRCS}
   ${TEST_QTCAD_OBOL_SNAP_SRCS}
+  ${TEST_QTCAD_OBOL_WINDOW_HOST_SRCS}
   ${TEST_QTCAD_PLUGIN_REUSE_SRCS}
   ${TEST_QTCAD_PRIMITIVE_EDIT_SRCS}
   ${TEST_QGMODEL_MODEL_TESTER_SRCS}
+  ${TEST_QGMODEL_SCALE_SRCS}
   )
 
 # Local Variables:
