@@ -2820,6 +2820,20 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(snapAction.getPoint()[1], 0.2f))
 	FAIL("snap point should lie on the realized vertical segment");
 
+    SoBRLSnapAction excludedSnap;
+    excludedSnap.setExcludedPath(SbString("/prototype/arb8"));
+    excludedSnap.setQueryPoint(SbVec3f(halfExtent, 0.2f, 0.0f));
+    excludedSnap.setTolerance(0.3f);
+    excludedSnap.apply(root);
+    if (excludedSnap.hasCandidate() ||
+	bu_strcmp(excludedSnap.getExcludedPath().getString(),
+	    "/prototype/arb8") != 0)
+	FAIL("snap action should exclude the active source path");
+    excludedSnap.clearExcludedPath();
+    excludedSnap.apply(root);
+    if (!excludedSnap.hasCandidate())
+	FAIL("clearing the excluded path should restore snap candidates");
+
     SoBRLSnapAction midpointSnap;
     midpointSnap.setEnabledKinds(SoBRLSnapAction::MIDPOINT);
     midpointSnap.setQueryPoint(SbVec3f(0.0f, -halfExtent, 0.0f));
@@ -4567,6 +4581,35 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("failed to open prototype test database");
     }
 
+    /* Direct primitive realization is also a progressive producer.  It must
+     * publish its one compact occurrence to the detached-worker handoff just
+     * like the general leaf walk; otherwise a qged draw root reaches COMPLETE
+     * with a private detached registry and an empty live scene. */
+    for (int drawMode : {SoBRLDatabaseSource::WIREFRAME,
+	SoBRLDatabaseSource::SHADED}) {
+	SoBRLDatabaseSource *streamSource = new SoBRLDatabaseSource;
+	streamSource->ref();
+	streamSource->setDatabase(dbip);
+	streamSource->path = "box.s";
+	streamSource->drawMode = drawMode;
+	streamSource->sourceRevision = drawMode ==
+	    SoBRLDatabaseSource::WIREFRAME ? 5 : 6;
+	BObolCompactOccurrenceStream directStream;
+	const SbBool streamRealized = drawMode ==
+	    SoBRLDatabaseSource::WIREFRAME ?
+	    streamSource->realizeDatabaseWireframe(&directStream) :
+	    streamSource->realizeDatabaseMesh(&directStream);
+	std::vector<BObolCompactOccurrence> streamed;
+	(void)directStream.drain(streamed, 4);
+	if (!streamRealized || streamed.size() != 1 ||
+	    !streamed[0].geometry ||
+	    !BU_STR_EQUAL(streamed[0].summary.path.getString(), "/box.s")) {
+	    streamSource->unref();
+	    FAIL("direct primitive realization should stream one compact occurrence");
+	}
+	streamSource->unref();
+    }
+
     root = new SoSeparator;
     root->ref();
 
@@ -5643,17 +5686,23 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     BObolCompactInstanceSummary wireRefreshBefore0;
     BObolCompactInstanceSummary wireRefreshBefore1;
+    BObolCompactOccurrence wireRefreshOccurrenceBefore;
+    BObolDatabaseSourceSummary wireRefreshSourceSummary;
     if (!source->getCompactInstanceSummary(compactHandle0, wireRefreshBefore0) ||
 	!source->getCompactInstanceSummary(compactHandle1, wireRefreshBefore1) ||
+	!source->getCompactOccurrence(0, wireRefreshOccurrenceBefore) ||
+	!source->getSummary(wireRefreshSourceSummary) ||
 	source->refreshCompactObjectGeometry("box.s", 30) != 2 ||
 	source->getRealizedShapeCount() != 0)
 	FAIL("compact wire primitive refresh should replace both occurrences without carriers");
     BObolCompactInstanceSummary wireRefreshAfter0;
     BObolCompactInstanceSummary wireRefreshAfter1;
+    BObolCompactOccurrence wireRefreshOccurrenceAfter;
     if (!source->isCompactInstanceHandleValid(compactHandle0) ||
 	!source->isCompactInstanceHandleValid(compactHandle1) ||
 	!source->getCompactInstanceSummary(compactHandle0, wireRefreshAfter0) ||
-	!source->getCompactInstanceSummary(compactHandle1, wireRefreshAfter1))
+	!source->getCompactInstanceSummary(compactHandle1, wireRefreshAfter1) ||
+	!source->getCompactOccurrence(0, wireRefreshOccurrenceAfter))
 	FAIL("compact wire primitive refresh should preserve stable occurrence handles");
     if (source->getCompactPartCount() != 1 ||
 	source->prepareCompiledAssembly() != 1 ||
@@ -5666,9 +5715,14 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(refreshedCompactBounds.getMin()[0], 8.0f) ||
 	!nearly_equal(refreshedCompactBounds.getMax()[0], 33.0f))
 	FAIL("compact primitive refresh should maintain aggregate source bounds");
-    if (wireRefreshAfter0.geometryIdentity != wireRefreshBefore0.geometryIdentity ||
-	wireRefreshAfter1.geometryIdentity != wireRefreshBefore1.geometryIdentity)
-	FAIL("compact wire primitive refresh should preserve unchanged geometry identity");
+    /* View-dependent CSG is deliberately regenerated; allocator reuse may
+     * still give the successor the same diagnostic address, so its revision
+     * below is the authority.  Only immutable geometry promises pointer
+     * identity across refresh. */
+    if (!wireRefreshSourceSummary.hasViewDependentCsgGeometry &&
+	(wireRefreshAfter0.geometryIdentity != wireRefreshBefore0.geometryIdentity ||
+	 wireRefreshAfter1.geometryIdentity != wireRefreshBefore1.geometryIdentity))
+	FAIL("compact wire primitive refresh should preserve immutable geometry identity");
     if (wireRefreshAfter0.geometryRevision <= wireRefreshBefore0.geometryRevision ||
 	wireRefreshAfter1.geometryRevision <= wireRefreshBefore1.geometryRevision)
 	FAIL("compact wire primitive refresh should advance only geometry revisions");

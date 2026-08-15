@@ -1147,7 +1147,12 @@
 		    catch {$itk_option(-fb_mode_callback) $fb_mode}
 		}
 	    }
-	    return [$itk_option(-ged) pane_listen $dest]
+	    set endpoint [$itk_option(-ged) pane_listen $dest]
+	    if {$endpoint != "" && ![string is integer -strict $endpoint] &&
+		    ![string match "ipc:*" $endpoint]} {
+		return "ipc:$endpoint"
+	    }
+	    return $endpoint
 	}
 	default {
 	    # Already cooked.
@@ -1198,10 +1203,22 @@
 	    ur -
 	    ll -
 	    lr {
-		# Cause the framebuffer to listen for clients on port 0.
-		# If port 0 isn't available, the next available port will
-		# be returned.
-		set cooked_dest [$itk_option(-ged) pane_listen $rtActivePane 0]
+		# Obol views own an imgstream endpoint and use IPC so external
+		# renderers never need a second display/window connection.  Keep
+		# loopback TCP as a compatibility fallback for legacy display
+		# managers which do not provide the IPC transport.
+		if {![catch {
+		    $itk_option(-ged) pane_listen $rtActivePane ipc
+		} ipc_dest] && $ipc_dest != ""} {
+		    if {[string match "ipc:*" $ipc_dest]} {
+			set cooked_dest $ipc_dest
+		    } else {
+			set cooked_dest "ipc:$ipc_dest"
+		    }
+		} else {
+		    set cooked_dest \
+			[$itk_option(-ged) pane_listen $rtActivePane 0]
+		}
 	    }
 	    default {
 		# We should only get here if $dest is -1,

@@ -30,7 +30,7 @@
  *   - ECMD_ARBN_PLANE_ROTATE rotates the normal
  *   - ECMD_ARBN_PLANE_ADD appends a new plane
  *   - ECMD_ARBN_PLANE_DEL removes a plane
- *   - rt_edit_arbn_get_params returns correct values
+ *   - rt_edit_arbn_get_values returns correct values
  *   - Descriptor is accessible and has the right number of commands
  */
 
@@ -242,7 +242,7 @@ main(int argc, char *argv[])
     bu_log("TEST 7 PASS: neqn now %zu (was %zu)\n", aip->neqn, before_del);
 
     /* ================================================================
-     * Test 8: rt_edit_arbn_get_params returns plane index
+     * Test 8: rt_edit_arbn_get_values returns plane index
      * ================================================================*/
     /* Re-select plane 0 so we have something to query */
     (*EDOBJ[dp->d_minor_type].ft_set_edit_mode)(s, ECMD_ARBN_PLANE_SELECT);
@@ -250,11 +250,14 @@ main(int argc, char *argv[])
     s->e_para[0] = 0.0;
     rt_edit_process(s);
 
-    fastf_t vals[4] = {0};
-    int nv = (*EDOBJ[dp->d_minor_type].ft_edit_get_params)(s, ECMD_ARBN_PLANE_SELECT, vals);
-    if (nv != 1 || (int)vals[0] != 0)
-	bu_exit(1, "ERROR: get_params(SELECT): nv=%d vals[0]=%g\n", nv, vals[0]);
-    bu_log("TEST 8 PASS: get_params(SELECT) returns plane_index=%g\n", vals[0]);
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_ARBN_PLANE_SELECT, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 1 ||
+	(int)vals.values[0] != 0)
+	bu_exit(1, "ERROR: get_values(SELECT): status=%d value=%g\n",
+	    status, vals.values[0]);
+    bu_log("TEST 8 PASS: get_values(SELECT) returns plane_index=%g\n",
+	vals.values[0]);
 
     bu_log("All ARBN edit tests PASSED\n");
 

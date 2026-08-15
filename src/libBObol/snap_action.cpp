@@ -226,6 +226,7 @@ SoBRLSnapAction::SoBRLSnapAction(void) :
     queryPoint(0.0f, 0.0f, 0.0f),
     candidatePoint(0.0f, 0.0f, 0.0f),
     candidatePath(""),
+    excludedPath(""),
     candidateEditIntentId(""),
     candidateEditIntentRole(""),
     enabledKinds(ALL_KINDS),
@@ -242,6 +243,7 @@ SoBRLSnapAction::SoBRLSnapAction(void) :
     coordinateSpace(WORLD_SPACE),
     priorityPolicy(NEAREST_DISTANCE),
     geometryPolicy(SoBRLSnapAction::DISPLAY_LEVEL),
+    sourceFilter(ALL_SOURCES),
     skippedLodDisplayMeshCount(0),
     foundCandidate(FALSE),
     constructionPlaneEnabled(FALSE)
@@ -294,6 +296,24 @@ SoBRLSnapAction::getEnabledKinds(void) const
 }
 
 void
+SoBRLSnapAction::setExcludedPath(const SbString &path)
+{
+    this->excludedPath = path;
+}
+
+void
+SoBRLSnapAction::clearExcludedPath(void)
+{
+    this->excludedPath = "";
+}
+
+const SbString &
+SoBRLSnapAction::getExcludedPath(void) const
+{
+    return this->excludedPath;
+}
+
+void
 SoBRLSnapAction::setSelectionFilter(SelectionFilter filter)
 {
     this->selectionFilter = filter;
@@ -340,6 +360,18 @@ SoBRLSnapAction::GeometryPolicy
 SoBRLSnapAction::getGeometryPolicy(void) const
 {
     return this->geometryPolicy;
+}
+
+void
+SoBRLSnapAction::setSourceFilter(uint32_t sources)
+{
+    this->sourceFilter = sources;
+}
+
+uint32_t
+SoBRLSnapAction::getSourceFilter(void) const
+{
+    return this->sourceFilter;
 }
 
 unsigned int
@@ -645,6 +677,9 @@ void
 SoBRLSnapAction::databaseSourceAction(SoAction *action, SoNode *node)
 {
     SoBRLSnapAction *snapAction = static_cast<SoBRLSnapAction *>(action);
+    if (snapAction->sourceFilter != ALL_SOURCES &&
+	!(snapAction->sourceFilter & DATABASE_SOURCES))
+	return;
     SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
     const SbMatrix &parentToWorld =
 	SoModelMatrixElement::get(action->getState());
@@ -659,6 +694,9 @@ SoBRLSnapAction::gridAction(SoAction *action, SoNode *node)
 {
     SoBRLSnapAction *snapAction = static_cast<SoBRLSnapAction *>(action);
     SoBRLGrid *grid = static_cast<SoBRLGrid *>(node);
+    if (snapAction->sourceFilter != ALL_SOURCES &&
+	!(snapAction->sourceFilter & (VIEW_SOURCES | LOCAL_SOURCES)))
+	return;
     if (!grid->snapEnabled.getValue() ||
 	!(snapAction->enabledKinds & static_cast<uint32_t>(GRID)))
 	return;
@@ -704,6 +742,11 @@ SoBRLSnapAction::vlistShapeAction(SoAction *action, SoNode *node)
     SoBRLSnapAction *snapAction = static_cast<SoBRLSnapAction *>(action);
     SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
     if (!shape->visible.getValue() || !shape->selectable.getValue())
+	return;
+    if (!snapAction->sourceAllows(shape->databaseIntent.getValue(),
+	    shape->overlayIntent.getValue(), shape->hudIntent.getValue(),
+	    shape->localSource.getValue(), shape->sharedSource.getValue(),
+	    shape->nonDatabaseSource.getValue()))
 	return;
 
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
@@ -784,6 +827,11 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
     SoBRLSnapAction *snapAction = static_cast<SoBRLSnapAction *>(action);
     SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
     if (!shape->visible.getValue() || !shape->selectable.getValue())
+	return;
+    if (!snapAction->sourceAllows(shape->databaseIntent.getValue(),
+	    shape->overlayIntent.getValue(), shape->hudIntent.getValue(),
+	    shape->localSource.getValue(), shape->sharedSource.getValue(),
+	    shape->nonDatabaseSource.getValue()))
 	return;
     const BObolViewLodState::MeshPayload *viewPayload =
 	bobol_view_lod_mesh_for_action(action, shape);
@@ -908,6 +956,29 @@ SoBRLSnapAction::appendSourceBackedFullDetailRequest(
     }
 }
 
+SbBool
+SoBRLSnapAction::sourceAllows(SbBool databaseIntent, SbBool overlayIntent,
+	SbBool hudIntent, SbBool localSource, SbBool sharedSource,
+	SbBool nonDatabaseSource) const
+{
+    if (this->sourceFilter == ALL_SOURCES)
+	return TRUE;
+    if (databaseIntent && (this->sourceFilter & DATABASE_SOURCES))
+	return TRUE;
+
+    const SbBool viewSource = overlayIntent || hudIntent ||
+	nonDatabaseSource || localSource || sharedSource;
+    if (!viewSource)
+	return FALSE;
+    if (this->sourceFilter & VIEW_SOURCES)
+	return TRUE;
+    if (localSource && (this->sourceFilter & LOCAL_SOURCES))
+	return TRUE;
+    if (sharedSource && (this->sourceFilter & SHARED_SOURCES))
+	return TRUE;
+    return FALSE;
+}
+
 void
 SoBRLSnapAction::consider(SnapKind kind, const SbString &path,
 			  const SbString &editIntentId,
@@ -922,6 +993,8 @@ SoBRLSnapAction::consider(SnapKind kind, const SbString &path,
     const float tieTolerance = 1.0e-6f;
 
     if (!(this->enabledKinds & static_cast<uint32_t>(kind)))
+	return;
+    if (this->excludedPath.getLength() && path == this->excludedPath)
 	return;
 
     float dist = distance_between(query, candidate);

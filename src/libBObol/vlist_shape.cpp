@@ -964,9 +964,14 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
 	}
     }
 
-    glBegin(GL_POINTS);
     for (int i = 0; i < n; i++) {
 	if (geom->command[i] == POINT) {
+	    float point_size = 1.0f;
+	    if (this->getPointScale(i, point_size) && point_size > 0.0f)
+		glPointSize(static_cast<GLfloat>(point_size));
+	    else
+		glPointSize(1.0f);
+	    glBegin(GL_POINTS);
 	    if (!set_vlist_gl_state_color(this, i)) {
 		SbColor attrColor;
 		if (this->getPointColor(i, attrColor))
@@ -975,9 +980,9 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
 		    set_vlist_default_gl_color(this);
 	    }
 	    vlist_gl_vertex_at(this, geom, i);
+	    glEnd();
 	}
     }
-    glEnd();
     glPopAttrib();
 }
 

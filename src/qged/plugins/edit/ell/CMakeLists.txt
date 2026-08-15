@@ -29,6 +29,7 @@ if(BRLCAD_ENABLE_QT)
     target_link_libraries(
       qged_ell
       libqtcad
+      libBObol
       libged
       librt
       libbu
@@ -38,6 +39,7 @@ if(BRLCAD_ENABLE_QT)
     target_link_libraries(
       qged_ell
       libqtcad
+      libBObol
       libged
       librt
       libbu

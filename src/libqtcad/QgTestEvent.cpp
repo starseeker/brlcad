@@ -27,6 +27,7 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
+#include <QRadioButton>
 #include <QSaveFile>
 #include <QSlider>
 #include <QSpinBox>
@@ -637,22 +638,67 @@ QgEventPlayer::setCheckpointHandler(const CheckpointHandler &handler)
 bool
 QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 {
+    /* Descriptor-driven editors replace parameter rows when a command or
+     * primitive type changes.  QWidget row teardown uses deferred deletion;
+     * a replay runs inside one outer call stack and can otherwise observe both
+     * the retired and replacement qgTestId briefly, even after a timed wait.
+     * Real user input returns to the application event loop between actions,
+     * so make that lifecycle boundary explicit before resolving a target. */
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QObject *target = QgEventRecorder::resolveObject(m_root, event.target);
     if (!target) {
-	qg_event_error(error, QStringLiteral("event target not found: %1").arg(event.target));
+	QString detail;
+	if (m_root && event.target.startsWith(QLatin1String("i:"))) {
+	    const QString testId = qg_event_decode(event.target.mid(2));
+	    QStringList matches;
+	    const QObjectList descendants = m_root->findChildren<QObject *>(
+		QString(), Qt::FindChildrenRecursively);
+	    for (QObject *candidate : descendants) {
+		if (candidate->property("qgTestId").toString() != testId)
+		    continue;
+		matches.append(QStringLiteral("%1(%2)")
+		    .arg(QString::fromLatin1(candidate->metaObject()->className()),
+			candidate->objectName()));
+	    }
+	    detail = QStringLiteral(" (%1 matching objects%2)")
+		.arg(matches.size())
+		.arg(matches.isEmpty() ? QString() :
+		    QStringLiteral(": ") + matches.join(QStringLiteral(", ")));
+	}
+	qg_event_error(error,
+	    QStringLiteral("event target not found: %1%2")
+	    .arg(event.target, detail));
 	return false;
     }
 
     if (event.action == QLatin1String("activate")) {
 	if (QAction *action = qobject_cast<QAction *>(target)) {
-	    if (action->isCheckable() && event.arguments.contains(QStringLiteral("checked")))
-		action->setChecked(event.arguments.value(QStringLiteral("checked")).toBool());
+	    if (action->isCheckable() &&
+		event.arguments.contains(QStringLiteral("checked"))) {
+		const bool desired = event.arguments.value(
+		    QStringLiteral("checked")).toBool();
+		/* trigger() toggles a checkable action.  Setting the desired state
+		 * first therefore produced its inverse, making recorded checkbox
+		 * transitions dependent on their starting state. */
+		if (action->isChecked() == desired)
+		    return true;
+	    }
 	    action->trigger();
 	    return true;
 	}
 	if (QAbstractButton *button = qobject_cast<QAbstractButton *>(target)) {
-	    if (button->isCheckable() && event.arguments.contains(QStringLiteral("checked")))
-		button->setChecked(event.arguments.value(QStringLiteral("checked")).toBool());
+	    if (button->isCheckable() &&
+		event.arguments.contains(QStringLiteral("checked"))) {
+		const bool desired = event.arguments.value(
+		    QStringLiteral("checked")).toBool();
+		if (button->isChecked() == desired) {
+		    /* Clicking an already selected radio button is non-toggling and
+		     * may still be the operation a replay requested. */
+		    if (qobject_cast<QRadioButton *>(button))
+			button->click();
+		    return true;
+		}
+	    }
 	    button->click();
 	    return true;
 	}
@@ -724,6 +770,46 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 		event.arguments.value(QStringLiteral("text")).toString()))
 	    return fail(QStringLiteral("assert_state text mismatch: '%1'")
 		.arg(text));
+	const QString valueKeys[] = {
+	    QStringLiteral("value"), QStringLiteral("value_gt"),
+	    QStringLiteral("value_ge"), QStringLiteral("value_lt"),
+	    QStringLiteral("value_le")
+	};
+	bool needsValue = false;
+	for (const QString &key : valueKeys)
+	    needsValue = needsValue || event.arguments.contains(key);
+	if (needsValue) {
+	    double actual = 0.0;
+	    bool hasValue = true;
+	    if (QDoubleSpinBox *doubleSpin = qobject_cast<QDoubleSpinBox *>(target))
+		actual = doubleSpin->value();
+	    else if (QSpinBox *integerSpin = qobject_cast<QSpinBox *>(target))
+		actual = integerSpin->value();
+	    else if (QSlider *slider = qobject_cast<QSlider *>(target))
+		actual = slider->value();
+	    else
+		hasValue = false;
+	    if (!hasValue)
+		return fail(QStringLiteral("assert_state target has no numeric value"));
+	    for (const QString &key : valueKeys) {
+		if (!event.arguments.contains(key))
+		    continue;
+		const double expected = event.arguments.value(key).toDouble();
+		const double tolerance = event.arguments.value(
+		    QStringLiteral("tolerance")).toDouble(1.0e-9);
+		const bool matches = key == QLatin1String("value") ?
+		    qAbs(actual - expected) <= tolerance :
+		    key == QLatin1String("value_gt") ? actual > expected :
+		    key == QLatin1String("value_ge") ? actual >= expected :
+		    key == QLatin1String("value_lt") ? actual < expected :
+		    actual <= expected;
+		if (!matches)
+		    return fail(QStringLiteral(
+			"assert_state %1 mismatch: %2 versus %3")
+			.arg(key).arg(actual, 0, 'g', 17)
+			.arg(expected, 0, 'g', 17));
+	    }
+	}
 	if (QComboBox *combo = qobject_cast<QComboBox *>(target)) {
 	    if (event.arguments.contains(QStringLiteral("count")) &&
 		combo->count() !=

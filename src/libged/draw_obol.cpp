@@ -232,16 +232,73 @@ ged_obol_bv_const(const struct ged_view_context *view_ctx)
 
 struct ged_obol_deferred_realization_job;
 
+/* Immutable description of the view contract used to generate one detached
+ * realization.  Keep this beside the asynchronous job rather than deriving it
+ * later from the live source: camera synchronization is allowed to update the
+ * live source while its old-policy worker is still running. */
+struct ged_obol_view_lod_policy_state {
+    ged_obol_view_lod_policy_state(void) :
+	valid(false),
+	viewDependent(false),
+	csgLodEnabled(false),
+	meshLodEnabled(false),
+	viewScale(0.0f),
+	lodScale(1.0f),
+	viewWidth(0),
+	viewHeight(0),
+	botThreshold(0),
+	curveScale(0.0f),
+	pointScale(0.0f),
+	meshEnabled(false)
+    {
+    }
+
+    bool valid;
+    bool viewDependent;
+    bool csgLodEnabled;
+    bool meshLodEnabled;
+    float viewScale;
+    float lodScale;
+    int viewWidth;
+    int viewHeight;
+    uint32_t botThreshold;
+    float curveScale;
+    float pointScale;
+    bool meshEnabled;
+};
+
+static ged_obol_view_lod_policy_state
+ged_obol_database_source_policy_snapshot(const SoBRLDatabaseSource *source)
+{
+    ged_obol_view_lod_policy_state state;
+    if (!source)
+	return state;
+    state.valid = true;
+    state.viewDependent = source->realizationViewDependent.getValue();
+    state.csgLodEnabled = source->realizationCsgLodEnabled.getValue();
+    state.meshLodEnabled = source->realizationMeshLodEnabled.getValue();
+    state.viewScale = source->realizationViewScale.getValue();
+    state.lodScale = source->realizationLodScale.getValue();
+    state.viewWidth = source->realizationViewWidth.getValue();
+    state.viewHeight = source->realizationViewHeight.getValue();
+    state.botThreshold = source->realizationBotThreshold.getValue();
+    state.curveScale = source->realizationCurveScale.getValue();
+    state.pointScale = source->realizationPointScale.getValue();
+    state.meshEnabled = state.meshLodEnabled;
+    return state;
+}
+
 struct ged_obol_progressive_provider_data {
     ged_obol_progressive_provider_data(void) :
 	gedp(NULL),
 	view_ctx(NULL),
 	pending_autoview(0),
 	pending_autoview_bounds_complete(0),
-	expected_view_revision(0),
+	expected_autoview_size(0.0),
 	autoview_factor(BV_AUTOVIEW_SCALE_DEFAULT),
 	deferred_refine_stage(0)
     {
+	VSETALL(expected_autoview_center, 0.0);
 	deferred_appearance = ged_draw_appearance_settings
 	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
     }
@@ -252,11 +309,19 @@ struct ged_obol_progressive_provider_data {
     struct ged_view_context *view_ctx;
     int pending_autoview;
     int pending_autoview_bounds_complete;
-    uint64_t expected_view_revision;
+    point_t expected_autoview_center;
+    fastf_t expected_autoview_size;
     fastf_t autoview_factor;
     int deferred_refine_stage;
     struct ged_draw_appearance_settings deferred_appearance;
     std::vector<std::string> deferred_paths;
+    /* Exact source owners which were observed at an obsolete CSG view policy
+     * while their current producer was still useful.  Policy fields can be
+     * updated by view synchronization before that producer is adopted, so
+     * this explicit obligation—not a later field comparison—is what proves a
+     * warm successor is still required. */
+    std::vector<struct ged_obol_deferred_source_target>
+	deferred_retarget_targets;
     std::shared_ptr<ged_obol_deferred_realization_job> deferred_job;
     /* Draw modes may be added while a prior root is still being realized.
      * Keep those independent jobs alive rather than leaving their root proxy
@@ -292,6 +357,10 @@ struct ged_obol_deferred_realization_item {
     struct db_i *snapshotSourceDatabase;
     SbBool ownsSource;
     std::string instanceKey;
+    /* Immutable owner-thread snapshot.  Do not inspect source fields after
+     * coordinator submission transfers the detached source to its worker. */
+    std::string sourcePath;
+    uint64_t sourceRoutingId = 0;
     int drawMode = 0;
     /* drawMode is the GED presentation mode passed to manifest callbacks.
      * SoBRLDatabaseSource deliberately has only wire/shaded draw modes, with
@@ -302,6 +371,7 @@ struct ged_obol_deferred_realization_item {
     uint32_t inputsRevision = 0;
     uint32_t viewRevision = 0;
     int representationMode = 0;
+    ged_obol_view_lod_policy_state launchPolicy;
     SbBool primaryScene;
     SbBool allowWireFallback;
     /* GUI-thread adaptive publication quantum. */
@@ -313,6 +383,20 @@ struct ged_obol_deferred_realization_item {
     /* Worker->pump stream of completed per-leaf occurrences.  Shared with the
      * realization service so it outlives every push. */
     std::shared_ptr<BObolCompactOccurrenceStream> stream;
+};
+
+/* A database path is a semantic draw target, not a renderer-owner identity.
+ * The same path can legitimately be resident in the shared scene and in one
+ * or more independent view scenes.  Deferred replacement must therefore keep
+ * the exact scene/source pair selected on the GUI thread all the way to job
+ * construction; reconstructing it later from path+mode can select a sibling
+ * source and leave the intended owner permanently stale. */
+struct ged_obol_deferred_source_target {
+    std::string instanceKey;
+    std::string path;
+    int drawMode = GED_DRAW_MODE_WIRE;
+    SbBool primaryScene = FALSE;
+    uint64_t sourceRoutingId = 0;
 };
 
 struct ged_obol_deferred_realization_job {
@@ -2088,38 +2172,6 @@ ged_obol_shadowed_target_source_paths(
 static int
 ged_obol_database_source_mark_published_current(BObolSceneController *scene,
 	SoBRLDatabaseSource *source);
-
-struct ged_obol_view_lod_policy_state {
-    ged_obol_view_lod_policy_state(void) :
-	valid(false),
-	viewDependent(false),
-	csgLodEnabled(false),
-	meshLodEnabled(false),
-	viewScale(0.0f),
-	lodScale(1.0f),
-	viewWidth(0),
-	viewHeight(0),
-	botThreshold(0),
-	curveScale(0.0f),
-	pointScale(0.0f),
-	meshEnabled(false)
-    {
-    }
-
-    bool valid;
-    bool viewDependent;
-    bool csgLodEnabled;
-    bool meshLodEnabled;
-    float viewScale;
-    float lodScale;
-    int viewWidth;
-    int viewHeight;
-    uint32_t botThreshold;
-    float curveScale;
-    float pointScale;
-    bool meshEnabled;
-};
-
 
 struct ged_obol_preserved_source_display_state {
     std::string instanceKey;
@@ -5231,14 +5283,24 @@ ged_database_path_member_autoview_bounds(
 		halfspace_visiting))
 	    continue;
 
-	const char *child_name = child.record.name;
-	if ((!child_name || !child_name[0]) && child.record.dp)
+	/* Index record names may contain an instance discriminator ("@N") and
+	 * are presentation identifiers, not database path components.  More
+	 * importantly, record.name is borrowed from an index generation.  Bounds
+	 * traversal performs nested index queries, so never retain that borrowed
+	 * pointer across the traversal.  Snapshot the authoritative directory
+	 * name before asking any further service questions. */
+	std::string child_name;
+	if (child.record.dp && child.record.dp->d_namep &&
+	    child.record.dp->d_namep[0])
 	    child_name = child.record.dp->d_namep;
-	if (!child_name || !child_name[0])
+	else if (child.record.name && child.record.name[0] &&
+		 !strchr(child.record.name, '@'))
+	    child_name = child.record.name;
+	if (child_name.empty())
 	    continue;
 
 	struct bu_vls child_path = BU_VLS_INIT_ZERO;
-	bu_vls_printf(&child_path, "%s/%s", normalized, child_name);
+	bu_vls_printf(&child_path, "%s/%s", normalized, child_name.c_str());
 	const char *bounds_path = bu_vls_cstr(&child_path);
 	point_t child_min;
 	point_t child_max;
@@ -12768,6 +12830,54 @@ ged_obol_store_structural_proxy_manifest(
     return stored ? 1 : 0;
 }
 
+static int
+ged_obol_leaf_manifest_record_from_occurrence(
+    BObolCompactManifestOccurrence &record,
+    const BObolCompactOccurrence &occurrence)
+{
+    if (!occurrence.summary.valid || !occurrence.summary.boundsValid ||
+	occurrence.summary.bounds.isEmpty() ||
+	occurrence.summary.path.getLength() == 0 ||
+	BU_STR_EQUAL(occurrence.summary.recordRole.getString(), "lod-overview"))
+	return 0;
+
+    record = BObolCompactManifestOccurrence();
+    record.path = occurrence.summary.path;
+    record.sourceName = occurrence.summary.sourceName;
+    record.localTransform = occurrence.localTransform;
+    record.bounds = occurrence.summary.bounds;
+    record.booleanOperation = occurrence.booleanOperation;
+    record.occurrenceIndex = occurrence.occurrenceIndex;
+    record.regionId = occurrence.summary.regionId;
+    record.airCode = occurrence.summary.airCode;
+    record.materialId = occurrence.summary.materialId;
+    record.los = occurrence.summary.los;
+    record.materialColorValid = occurrence.summary.materialColorValid;
+    record.materialColor = occurrence.summary.materialColor;
+    record.materialShader = occurrence.summary.materialShader;
+    record.sourceMeshRequestValid = occurrence.sourceMeshRequestValid;
+    if (!record.sourceMeshRequestValid)
+	return 1;
+
+    const BObolSourceMeshRequest &request = occurrence.sourceMeshRequest;
+    record.sourceType = request.sourceType;
+    record.meshAssetPath = request.meshAssetPath.getLength() > 0 ?
+	request.meshAssetPath : occurrence.summary.path;
+    record.meshAssetName = request.meshAssetName.getLength() > 0 ?
+	request.meshAssetName : occurrence.summary.sourceName;
+    record.meshAssetContentHash = request.meshAssetContentHash;
+    record.meshAssetTessellationAbsTol = request.meshAssetTessellationAbsTol;
+    record.meshAssetTessellationRelTol = request.meshAssetTessellationRelTol;
+    record.meshAssetTessellationNormTol = request.meshAssetTessellationNormTol;
+    record.meshAssetBounds = !request.meshAssetBounds.isEmpty() ?
+	request.meshAssetBounds :
+	(!request.bounds.isEmpty() ? request.bounds : record.bounds);
+    record.meshAssetTransform = request.meshAssetTransform;
+    record.sourceFaceCount = request.faceCount;
+    record.sourcePointCount = request.pointCount;
+    return 1;
+}
+
 /* Persist the authoritative per-leaf occurrence bounds as one batched warm
  * start record.  Region/root boxes are derivable unions; leaf-local bounds and
  * occurrence transforms are the reusable facts needed by progressive drawing.
@@ -12788,27 +12898,33 @@ ged_obol_store_leaf_proxy_manifest(
     if (rootPath.empty())
 	return 0;
 
-    std::vector<BObolCompactOccurrence> occurrences;
-    const int occurrenceCount = source->getCompactInstanceCount();
-    occurrences.reserve(occurrenceCount > 0 ?
-	static_cast<size_t>(occurrenceCount) : 0);
-    for (int i = 0; i < occurrenceCount; i++) {
-	BObolCompactOccurrence occurrence;
-	if (!source->getCompactOccurrence(i, occurrence) ||
-	    !occurrence.summary.valid || !occurrence.summary.boundsValid ||
-	    occurrence.summary.bounds.isEmpty() ||
-	    occurrence.summary.path.getLength() == 0 ||
-	    BU_STR_EQUAL(occurrence.summary.recordRole.getString(),
-		"lod-overview"))
-	    continue;
-	occurrences.push_back(std::move(occurrence));
+    std::vector<BObolCompactManifestOccurrence> records;
+    /* The scene owner normally drains the producer before detached
+     * realization completes, and the detached source deliberately retains no
+     * duplicate 50k/150k registry.  Persist its geometry-free journal; keep
+     * the source-index fallback for synchronous callers. */
+    if (stream)
+	(void)stream->takeManifest(records);
+    if (records.empty()) {
+	const int occurrenceCount = source->getCompactInstanceCount();
+	records.reserve(occurrenceCount > 0 ?
+	    static_cast<size_t>(occurrenceCount) : 0);
+	for (int i = 0; i < occurrenceCount; i++) {
+	    BObolCompactOccurrence occurrence;
+	    BObolCompactManifestOccurrence record;
+	    if (!source->getCompactOccurrence(i, occurrence) ||
+		!ged_obol_leaf_manifest_record_from_occurrence(
+		    record, occurrence))
+		continue;
+	    records.push_back(std::move(record));
+	}
     }
-    if (occurrences.empty())
+    if (records.empty())
 	return 0;
 
     struct BObolDrawManifest manifest;
     bobol_draw_manifest_init(&manifest);
-    manifest.occurrenceCount = occurrences.size();
+    manifest.occurrenceCount = records.size();
     manifest.occurrences = static_cast<BObolDrawManifestOccurrence *>(
 	bu_calloc(manifest.occurrenceCount, sizeof(*manifest.occurrences),
 	    "Obol leaf proxy manifest"));
@@ -12827,43 +12943,33 @@ ged_obol_store_leaf_proxy_manifest(
     }
 
     int valid = 1;
-    for (size_t i = 0; i < occurrences.size(); i++) {
-	const BObolCompactOccurrence &occurrence = occurrences[i];
+    for (size_t i = 0; i < records.size(); i++) {
+	const BObolCompactManifestOccurrence &record = records[i];
 	struct BObolDrawManifestOccurrence &cached =
 	    manifest.occurrences[i];
-	cached.path = bu_strdup(occurrence.summary.path.getString());
-	cached.sourceName =
-	    bu_strdup(occurrence.summary.sourceName.getString());
+	cached.path = bu_strdup(record.path.getString());
+	cached.sourceName = bu_strdup(record.sourceName.getString());
 	if (!cached.path || !cached.sourceName) {
 	    valid = 0;
 	    break;
 	}
-	ged_obol_mat_from_sbmatrix(occurrence.localTransform,
+	ged_obol_mat_from_sbmatrix(record.localTransform,
 	    cached.localMatrix);
-	const SbVec3f bmin = occurrence.summary.bounds.getMin();
-	const SbVec3f bmax = occurrence.summary.bounds.getMax();
+	const SbVec3f bmin = record.bounds.getMin();
+	const SbVec3f bmax = record.bounds.getMax();
 	VSET(cached.boundsMin, bmin[0], bmin[1], bmin[2]);
 	VSET(cached.boundsMax, bmax[0], bmax[1], bmax[2]);
 	cached.booleanOperation =
-	    occurrence.booleanOperation ==
+	    record.booleanOperation ==
 		SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? DB_OP_SUBTRACT :
-	    (occurrence.booleanOperation ==
+	    (record.booleanOperation ==
 		SoBRLDatabaseSource::BOOLEAN_INTERSECT ? DB_OP_INTERSECT :
 		DB_OP_UNION);
-	cached.occurrenceIndex = occurrence.occurrenceIndex;
-	if (occurrence.sourceMeshRequestValid) {
-	    const BObolSourceMeshRequest &request =
-		occurrence.sourceMeshRequest;
-	    const char *assetPath = request.meshAssetPath.getLength() > 0 ?
-		request.meshAssetPath.getString() :
-		occurrence.summary.path.getString();
-	    const char *assetName = request.meshAssetName.getLength() > 0 ?
-		request.meshAssetName.getString() :
-		occurrence.summary.sourceName.getString();
-	    const SbBox3f assetBounds = !request.meshAssetBounds.isEmpty() ?
-		request.meshAssetBounds :
-		(!request.bounds.isEmpty() ? request.bounds :
-		    occurrence.summary.bounds);
+	cached.occurrenceIndex = record.occurrenceIndex;
+	if (record.sourceMeshRequestValid) {
+	    const char *assetPath = record.meshAssetPath.getString();
+	    const char *assetName = record.meshAssetName.getString();
+	    const SbBox3f assetBounds = record.meshAssetBounds;
 	    if (!assetPath || !assetPath[0] || !assetName ||
 		!assetName[0] || assetBounds.isEmpty()) {
 		valid = 0;
@@ -12871,16 +12977,16 @@ ged_obol_store_leaf_proxy_manifest(
 	    }
 	    cached.sourceMeshRequestValid = 1;
 	    cached.meshAssetKind = BU_STR_EQUAL(
-		request.sourceType.getString(), "brep") ?
+		record.sourceType.getString(), "brep") ?
 		BOBOL_DRAW_CACHE_MESH_ASSET_BREP :
 		BOBOL_DRAW_CACHE_MESH_ASSET_BOT;
-	    cached.meshAssetContentHash = request.meshAssetContentHash;
+	    cached.meshAssetContentHash = record.meshAssetContentHash;
 	    cached.meshAssetTessellationAbsTol =
-		request.meshAssetTessellationAbsTol;
+		record.meshAssetTessellationAbsTol;
 	    cached.meshAssetTessellationRelTol =
-		request.meshAssetTessellationRelTol;
+		record.meshAssetTessellationRelTol;
 	    cached.meshAssetTessellationNormTol =
-		request.meshAssetTessellationNormTol;
+		record.meshAssetTessellationNormTol;
 	    cached.meshAssetPath = bu_strdup(assetPath);
 	    cached.meshAssetName = bu_strdup(assetName);
 	    if (!cached.meshAssetPath || !cached.meshAssetName) {
@@ -12893,9 +12999,9 @@ ged_obol_store_leaf_proxy_manifest(
 		assetMin[0], assetMin[1], assetMin[2]);
 	    VSET(cached.meshAssetBoundsMax,
 		assetMax[0], assetMax[1], assetMax[2]);
-	    cached.sourceFaceCount = request.faceCount;
-	    cached.sourcePointCount = request.pointCount;
-	    ged_obol_mat_from_sbmatrix(request.meshAssetTransform,
+	    cached.sourceFaceCount = record.sourceFaceCount;
+	    cached.sourcePointCount = record.sourcePointCount;
+	    ged_obol_mat_from_sbmatrix(record.meshAssetTransform,
 		cached.meshAssetMatrix);
 	}
 	/*
@@ -12907,15 +13013,15 @@ ged_obol_store_leaf_proxy_manifest(
 	bobol_draw_metadata_record_init(&cached.metadata);
 	cached.metadataValid = 1;
 	cached.metadata.hasRegionId = 1;
-	cached.metadata.regionId = occurrence.summary.regionId;
+	cached.metadata.regionId = record.regionId;
 	cached.metadata.hasAircode = 1;
-	cached.metadata.aircode = occurrence.summary.airCode;
+	cached.metadata.aircode = record.airCode;
 	cached.metadata.hasLos = 1;
-	cached.metadata.los = occurrence.summary.los;
+	cached.metadata.los = record.los;
 	cached.metadata.hasMaterialId = 1;
-	cached.metadata.materialId = occurrence.summary.materialId;
-	if (occurrence.summary.materialColorValid) {
-	    const SbColor color = occurrence.summary.materialColor;
+	cached.metadata.materialId = record.materialId;
+	if (record.materialColorValid) {
+	    const SbColor color = record.materialColor;
 	    cached.metadata.hasColor = 1;
 	    for (size_t channel = 0; channel < 3; channel++) {
 		const float component = std::max(0.0f,
@@ -12924,8 +13030,7 @@ ged_obol_store_leaf_proxy_manifest(
 		    static_cast<unsigned char>(component * 255.0f + 0.5f);
 	    }
 	}
-	const char *shader =
-	    occurrence.summary.materialShader.getString();
+	const char *shader = record.materialShader.getString();
 	if (shader && shader[0]) {
 	    cached.metadata.hasShader = 1;
 	    bu_strlcpy(cached.metadata.shader, shader,
@@ -13827,6 +13932,41 @@ ged_obol_deferred_job_coverage_bounds_complete(
 }
 
 static int
+ged_obol_progressive_autoview_still_owns_frame(
+    const ged_obol_progressive_provider_data *data,
+    const struct bv *view)
+{
+    if (!data || !view)
+	return 0;
+
+    point_t center;
+    if (!bv_center_get(center, view) ||
+	!isfinite(data->expected_autoview_size) ||
+	!isfinite(bv_size_get(view)) ||
+	!NEAR_EQUAL(bv_size_get(view), data->expected_autoview_size,
+	    SMALL_FASTF))
+	return 0;
+
+    /*
+     * A deferred fit owns only the center and scale which autoview changes.
+     * A full bv frame revision also covers orientation, lighting, faceplate,
+     * and other orthogonal state.  Using it as the cancellation token made
+     * the ordinary "autoview; ae" command sequence lose its cold autoview,
+     * although the identical warm sequence fit synchronously.  The strict
+     * library epsilon is intentional: these are snapshots of the same bv
+     * storage, so any meaningful change means a later pan/zoom command owns
+     * the frame.
+     */
+    for (int axis = 0; axis < 3; axis++) {
+	if (!isfinite(center[axis]) ||
+	    !NEAR_EQUAL(center[axis],
+		data->expected_autoview_center[axis], SMALL_FASTF))
+	    return 0;
+    }
+    return 1;
+}
+
+static int
 ged_obol_progressive_autoview_apply(
     ged_obol_progressive_provider_data *data)
 {
@@ -13841,7 +13981,7 @@ ged_obol_progressive_autoview_apply(
 	data->pending_autoview_bounds_complete = 0;
 	return 0;
     }
-    if (bv_frame_revision_get(view) != data->expected_view_revision) {
+    if (!ged_obol_progressive_autoview_still_owns_frame(data, view)) {
 	data->pending_autoview = 0;
 	data->pending_autoview_bounds_complete = 0;
 	return 0;
@@ -13858,7 +13998,6 @@ ged_obol_progressive_autoview_apply(
     if (!bv_autoview_bounds(view, data->autoview_factor, bmin, bmax)) {
 	return 0;
 	}
-    data->expected_view_revision = bv_frame_revision_get(view);
     bv_refresh_request(view, GED_VIEW_REFRESH_DRAW);
     /*
      * Exact coverage bounds are immutable for this source revision.  One
@@ -13886,7 +14025,11 @@ ged_obol_progressive_autoview_arm(
 
     data->pending_autoview = 1;
     data->pending_autoview_bounds_complete = 0;
-    data->expected_view_revision = bv_frame_revision_get(view);
+    if (!bv_center_get(data->expected_autoview_center, view)) {
+	data->pending_autoview = 0;
+	return 0;
+    }
+    data->expected_autoview_size = bv_size_get(view);
     data->autoview_factor = factor;
     return 1;
 }
@@ -13973,28 +14116,6 @@ ged_obol_hold_completed_job(
     data->retired_jobs.push_back(job);
 }
 
-static SoBRLDatabaseSource *
-ged_obol_find_deferred_source(BObolSceneController *scene,
-    const std::string &instanceKey, const std::string &path,
-    int representationMode)
-{
-    if (!scene)
-	return NULL;
-    SoBRLDatabaseSource *source = scene->findDatabaseSourceInstance(
-	instanceKey.c_str());
-    if (source && source->representationMode.getValue() == representationMode)
-	return source;
-    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
-	BObolDatabaseSourceSummary summary;
-	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid ||
-	    summary.representationMode != representationMode ||
-	    !ged_obol_path_equal(summary.path.getString(), path.c_str()))
-	    continue;
-	return scene->getDatabaseSource(i);
-    }
-    return NULL;
-}
-
 /* A deferred source may be attached after the draw transaction's ordinary
  * selection-delta synchronization has completed.  Initialize that new
  * renderer owner from the semantic selection service before any streamed
@@ -14030,11 +14151,35 @@ ged_obol_initialize_deferred_source_selection(struct ged *gedp,
 }
 
 static int
-ged_obol_start_deferred_realization(
-    ged_obol_progressive_provider_data *data,
-    BObolViewController *controller, int drawMode)
+ged_obol_append_deferred_target(
+    std::vector<ged_obol_deferred_source_target> &targets,
+    const ged_obol_deferred_source_target &target)
 {
-    if (!data || !controller || data->deferred_paths.empty())
+    if (target.instanceKey.empty() || target.path.empty())
+	return 0;
+    for (ged_obol_deferred_source_target &existing : targets) {
+	if (existing.primaryScene == target.primaryScene &&
+	    existing.drawMode == target.drawMode &&
+	    existing.instanceKey == target.instanceKey) {
+	    if (existing.sourceRoutingId != target.sourceRoutingId &&
+		target.sourceRoutingId) {
+		existing = target;
+		return 1;
+	    }
+	    return 0;
+	}
+    }
+    targets.push_back(target);
+    return 1;
+}
+
+static int
+ged_obol_start_deferred_realization_targets(
+    ged_obol_progressive_provider_data *data,
+    BObolViewController *controller,
+    const std::vector<ged_obol_deferred_source_target> &targets)
+{
+    if (!data || !controller || targets.empty())
 	return 0;
     BObolSceneController *scene = controller->getSceneController();
     BObolSceneController *primaryScene = ged_draw_obol_scene_controller(
@@ -14046,36 +14191,30 @@ ged_obol_start_deferred_realization(
     if (!scene)
 	scene = primaryScene;
 
-    if (data->deferred_job) {
-	/* A second deferred mode is additive.  Its realization must not cancel
-	 * an earlier mode, otherwise mixed shaded/wire draws get stuck at the
-	 * earlier root proxy. */
-	data->pending_jobs.push_back(data->deferred_job);
-	data->deferred_job.reset();
-    }
     std::shared_ptr<ged_obol_deferred_realization_job> job =
 	std::make_shared<ged_obol_deferred_realization_job>();
-    const int representationMode =
-	ged_obol_database_representation_mode_from_ged(drawMode);
-    for (const std::string &path : data->deferred_paths) {
-	const std::string key = ged_obol_database_source_instance_key_for_mode(
-	    data->view_ctx, path.c_str(), drawMode);
-	SoBRLDatabaseSource *live = NULL;
-	SbBool usePrimaryScene = FALSE;
-	if (primaryScene) {
-	    live = ged_obol_find_deferred_source(primaryScene, key, path,
-		representationMode);
-	    if (live)
-		usePrimaryScene = TRUE;
-	}
+    for (const ged_obol_deferred_source_target &target : targets) {
+	BObolSceneController *owner = target.primaryScene ? primaryScene : scene;
+	if (!owner)
+	    continue;
+	SoBRLDatabaseSource *live = owner->findDatabaseSourceInstance(
+	    target.instanceKey.c_str());
+	const int representationMode =
+	    ged_obol_database_representation_mode_from_ged(target.drawMode);
+	BObolDatabaseSourceSummary liveSummary;
+	if (live && (target.sourceRoutingId &&
+	    live->getCompactSourceRoutingId() != target.sourceRoutingId))
+	    live = NULL;
+	if (live && (!live->getSummary(liveSummary) || !liveSummary.valid ||
+	    liveSummary.representationMode != representationMode ||
+	    !ged_obol_path_equal(liveSummary.path.getString(),
+		target.path.c_str())))
+	    live = NULL;
 	if (!live) {
-	    live = ged_obol_find_deferred_source(scene, key, path,
-		representationMode);
-	}
-	if (!live) {
-	    bu_log("Obol deferred realization source '%s' was not found\n",
-		key.c_str());
-	    return 0;
+	    bu_log("Obol deferred realization source '%s' was not found in "
+		   "its captured %s scene\n", target.instanceKey.c_str(),
+		   target.primaryScene ? "primary" : "view");
+	    continue;
 	}
 	ged_obol_initialize_deferred_source_selection(data->gedp, live);
 	std::unique_ptr<ged_obol_deferred_realization_item> item(
@@ -14087,7 +14226,7 @@ ged_obol_start_deferred_realization(
 	    db_clone_dbi(liveDatabase, NULL) : NULL;
 	if (!item->source || !item->snapshotSourceDatabase) {
 	    bu_log("Obol deferred realization could not capture source '%s'\n",
-		key.c_str());
+		target.instanceKey.c_str());
 	    return 0;
 	}
 	/* These fields are the immutable result-admission stamp.  The detached
@@ -14098,20 +14237,397 @@ ged_obol_start_deferred_realization(
 	item->inputsRevision = item->source->inputsRevision.getValue();
 	item->viewRevision = item->source->viewRevision.getValue();
 	item->representationMode = item->source->representationMode.getValue();
+	item->launchPolicy =
+	    ged_obol_database_source_policy_snapshot(item->source);
+	if (ged_obol_timing_enabled())
+	    bu_log("[obol-timing] launch deferred source: key=%s "
+		"scale=%.9g csg=%d mesh=%d\n",
+		target.instanceKey.c_str(),
+		static_cast<double>(item->launchPolicy.viewScale),
+		item->launchPolicy.csgLodEnabled ? 1 : 0,
+		item->launchPolicy.meshLodEnabled ? 1 : 0);
 	item->instanceKey = live->instanceKey.getValue().getString();
-	item->drawMode = drawMode;
+	item->sourcePath = live->path.getValue().getString();
+	item->sourceRoutingId = live->getCompactSourceRoutingId();
+	item->drawMode = target.drawMode;
 	item->sourceDrawMode = item->source->drawMode.getValue();
-	item->primaryScene = usePrimaryScene;
+	item->primaryScene = target.primaryScene;
 	item->allowWireFallback =
 	    data->deferred_appearance.strict_fallback ? FALSE : TRUE;
 	item->stream = std::make_shared<BObolCompactOccurrenceStream>();
 	job->items.push_back(std::move(item));
     }
+    if (job->items.empty())
+	return 0;
     if (!job->start()) {
 	bu_log("Obol deferred realization worker could not be started\n");
 	return 0;
     }
+    if (data->deferred_job) {
+	/* A second deferred mode or exact scene owner is additive.  Its
+	 * realization must not cancel an earlier job, otherwise a mixed
+	 * shaded/wire or shared/independent draw can remain at its root proxy. */
+	data->pending_jobs.push_back(data->deferred_job);
+    }
     data->deferred_job = job;
+    return 1;
+}
+
+static int
+ged_obol_start_deferred_realization(
+    ged_obol_progressive_provider_data *data,
+    BObolViewController *controller, int drawMode)
+{
+    if (!data || !controller || data->deferred_paths.empty())
+	return 0;
+
+    BObolSceneController *scene = controller->getSceneController();
+    BObolSceneController *primaryScene = ged_draw_obol_scene_controller(
+	data->gedp);
+    if (!scene && !primaryScene)
+	return 0;
+    if (!scene)
+	scene = primaryScene;
+
+    const int independent = ged_obol_view_scope_is_independent(data->view_ctx);
+    std::vector<ged_obol_deferred_source_target> targets;
+    for (const std::string &path : data->deferred_paths) {
+	const std::string key = ged_obol_database_source_instance_key_for_mode(
+	    data->view_ctx, path.c_str(), drawMode);
+	SoBRLDatabaseSource *live = NULL;
+	SbBool primary = FALSE;
+	/* Independent view-local ownership is authoritative when present.  A
+	 * shared endpoint instead prefers the primary scene.  The exact-key-only
+	 * fallback is important: path matching here would alias two owners. */
+	if (independent && scene) {
+	    live = scene->findDatabaseSourceInstance(key.c_str());
+	    primary = live && scene == primaryScene ? TRUE : FALSE;
+	}
+	if (!live && primaryScene) {
+	    live = primaryScene->findDatabaseSourceInstance(key.c_str());
+	    primary = live ? TRUE : FALSE;
+	}
+	if (!live && !independent && scene && scene != primaryScene)
+	    live = scene->findDatabaseSourceInstance(key.c_str());
+	if (!live) {
+	    bu_log("Obol deferred realization source '%s' was not found\n",
+		key.c_str());
+	    continue;
+	}
+	ged_obol_deferred_source_target target;
+	target.instanceKey = live->instanceKey.getValue().getString();
+	target.path = live->path.getValue().getString();
+	target.drawMode = drawMode;
+	target.primaryScene = primary;
+	target.sourceRoutingId = live->getCompactSourceRoutingId();
+	(void)ged_obol_append_deferred_target(targets, target);
+    }
+    return ged_obol_start_deferred_realization_targets(data, controller,
+	targets);
+}
+
+static int
+ged_obol_csg_view_policy_differs(
+    const BObolDatabaseSourceSummary &summary,
+    const ged_obol_view_lod_policy_state &policy)
+{
+    if (!summary.realizationViewDependent ||
+	!summary.realizationCsgLodEnabled || !policy.valid)
+	return 0;
+
+    const auto float_differs = [](float lhs, float rhs) {
+	const float scale = std::max(1.0f,
+	    std::max(static_cast<float>(fabs(lhs)),
+		static_cast<float>(fabs(rhs))));
+	return static_cast<float>(fabs(lhs - rhs)) > 1.0e-6f * scale;
+    };
+
+    return summary.realizationViewDependent !=
+		(policy.viewDependent ? TRUE : FALSE) ||
+	   summary.realizationCsgLodEnabled !=
+		(policy.csgLodEnabled ? TRUE : FALSE) ||
+	   summary.realizationMeshLodEnabled !=
+		(policy.meshLodEnabled ? TRUE : FALSE) ||
+	   float_differs(summary.realizationViewScale, policy.viewScale) ||
+	   float_differs(summary.realizationLodScale, policy.lodScale) ||
+	   summary.realizationViewWidth != policy.viewWidth ||
+	   summary.realizationViewHeight != policy.viewHeight ||
+	   summary.realizationBotThreshold != policy.botThreshold ||
+	   float_differs(summary.realizationCurveScale, policy.curveScale) ||
+	   float_differs(summary.realizationPointScale, policy.pointScale);
+}
+
+static int
+ged_obol_view_policy_differs(
+    const ged_obol_view_lod_policy_state &left,
+    const ged_obol_view_lod_policy_state &right)
+{
+    if (!left.valid || !right.valid)
+	return left.valid != right.valid;
+
+    const auto float_differs = [](float lhs, float rhs) {
+	const float scale = std::max(1.0f,
+	    std::max(static_cast<float>(fabs(lhs)),
+		static_cast<float>(fabs(rhs))));
+	return static_cast<float>(fabs(lhs - rhs)) > 1.0e-6f * scale;
+    };
+
+    return left.viewDependent != right.viewDependent ||
+	left.csgLodEnabled != right.csgLodEnabled ||
+	left.meshLodEnabled != right.meshLodEnabled ||
+	float_differs(left.viewScale, right.viewScale) ||
+	float_differs(left.lodScale, right.lodScale) ||
+	left.viewWidth != right.viewWidth ||
+	left.viewHeight != right.viewHeight ||
+	left.botThreshold != right.botThreshold ||
+	float_differs(left.curveScale, right.curveScale) ||
+	float_differs(left.pointScale, right.pointScale);
+}
+
+/*
+ * CSG curve realization is the one retained source payload whose geometry is
+ * genuinely a function of view scale.  PoP mesh arrays are immutable assets:
+ * their active prefix is selected by the view and must never be rebuilt here.
+ *
+ * A camera can reach its final scale after a cold source worker has started
+ * (deferred autoview is the common case).  Preserve the currently drawable
+ * compact registry, coalesce motion until the quiet-view boundary, and then
+ * replace only sources whose CSG policy snapshot no longer describes the
+ * current view.  An in-flight realization is useful work, especially during
+ * cold PoP population: let it publish before starting a view-policy
+ * successor.  The successor then reuses its immutable mesh assets and only
+ * regenerates genuinely view-dependent CSG.  This is intentionally an
+ * allocation/realization operation, not a scene clear: old geometry remains
+ * valid until streamed replacements arrive.
+ */
+static int
+ged_obol_retarget_quiet_view_csg(
+    ged_obol_progressive_provider_data *data,
+    BObolViewController *controller)
+{
+    if (!data || !data->gedp || !data->view_ctx || !controller)
+	return 0;
+
+    BObolSceneController *view_scene = controller->getSceneController();
+    BObolSceneController *primary_scene =
+	ged_draw_obol_scene_controller(data->gedp);
+    if (!view_scene && !primary_scene)
+	return 0;
+
+    const ged_obol_view_lod_policy_state policy =
+	ged_obol_view_lod_policy_state_for_source(data->gedp, data->view_ctx);
+    if (!policy.valid || !policy.viewDependent || !policy.csgLodEnabled) {
+	data->deferred_retarget_targets.clear();
+	return 0;
+    }
+
+    BObolLodConvergenceStatus convergence;
+    controller->getLodConvergenceStatus(convergence);
+    const bool quiet = convergence.phase !=
+	BOBOL_LOD_CONVERGENCE_INTERACTIVE;
+
+    std::unordered_set<std::string> active_instances;
+    const auto collect_active = [&active_instances, data, view_scene,
+	primary_scene, &policy, quiet](
+	const std::shared_ptr<ged_obol_deferred_realization_job> &job) {
+	if (!job)
+	    return;
+	for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
+	     job->items) {
+	    if (item) {
+		std::string identity(item->primaryScene ? "primary:" : "view:");
+		identity += item->instanceKey;
+		active_instances.insert(identity);
+		if (!ged_obol_view_policy_differs(item->launchPolicy, policy))
+		    continue;
+		BObolSceneController *owner = item->primaryScene ?
+		    primary_scene : view_scene;
+		SoBRLDatabaseSource *source = owner ?
+		    owner->findDatabaseSourceInstance(item->instanceKey.c_str()) :
+		    NULL;
+		if (!source || source->getCompactSourceRoutingId() !=
+			item->sourceRoutingId)
+		    continue;
+		ged_obol_deferred_source_target target;
+		target.instanceKey = item->instanceKey;
+		target.path = item->sourcePath;
+		target.drawMode = item->drawMode;
+		target.primaryScene = item->primaryScene;
+		target.sourceRoutingId = item->sourceRoutingId;
+		const int recorded = ged_obol_append_deferred_target(
+		    data->deferred_retarget_targets, target);
+		if (recorded && ged_obol_timing_enabled())
+		    bu_log("[obol-timing] record active CSG retarget: key=%s "
+			"scale=%.9g->%.9g quiet=%d\n",
+			item->instanceKey.c_str(),
+			static_cast<double>(item->launchPolicy.viewScale),
+			static_cast<double>(policy.viewScale), quiet ? 1 : 0);
+	    }
+	}
+    };
+    collect_active(data->deferred_job);
+    for (const std::shared_ptr<ged_obol_deferred_realization_job> &job :
+	 data->pending_jobs)
+	collect_active(job);
+
+    /* Motion may update the live source policy while an old-policy worker is
+     * running.  Recording the immutable obligation is cheap and must happen
+     * during motion; generation of its successor remains coalesced at the
+     * quiet boundary. */
+    if (!quiet)
+	return 0;
+
+    std::vector<ged_obol_deferred_source_target> targets;
+    /* Fulfill exact retarget obligations recorded before an old-policy
+     * producer was adopted.  The routing ID prevents a same-key replacement
+     * source from inheriting an obligation which belongs to an older object
+     * lifetime. */
+    std::vector<ged_obol_deferred_source_target> waiting_targets;
+    for (ged_obol_deferred_source_target target :
+	 data->deferred_retarget_targets) {
+	BObolSceneController *owner = target.primaryScene ? primary_scene :
+	    view_scene;
+	if (!owner)
+	    continue;
+	SoBRLDatabaseSource *source = owner->findDatabaseSourceInstance(
+	    target.instanceKey.c_str());
+	if (!source || (target.sourceRoutingId &&
+	    source->getCompactSourceRoutingId() != target.sourceRoutingId))
+	    continue;
+	std::string identity(target.primaryScene ? "primary:" : "view:");
+	identity += target.instanceKey;
+	if (active_instances.find(identity) != active_instances.end()) {
+	    (void)ged_obol_append_deferred_target(waiting_targets, target);
+	    continue;
+	}
+	BObolDatabaseSourceSummary summary;
+	if (!source->hasCompactInstanceIndex() ||
+	    !source->getSummary(summary) || !summary.valid ||
+	    !summary.hasViewDependentCsgGeometry ||
+	    summary.representationMode ==
+		SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE ||
+	    summary.representationMode ==
+		SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS ||
+	    !ged_obol_database_source_instance_in_scope(summary,
+		data->view_ctx))
+	{
+	    if (ged_obol_timing_enabled())
+		bu_log("[obol-timing] discard queued CSG retarget: key=%s "
+		    "compact=%d view-csg=%d valid=%d\n",
+		    target.instanceKey.c_str(),
+		    source->hasCompactInstanceIndex() ? 1 : 0,
+		    summary.hasViewDependentCsgGeometry ? 1 : 0,
+		    summary.valid ? 1 : 0);
+	    continue;
+	}
+	const int changed = ged_obol_apply_view_lod_policy(data->gedp,
+	    data->view_ctx, owner, target.instanceKey.c_str());
+	if (changed <= 0)
+	    (void)owner->markDatabaseSourceInstanceStale(
+		target.instanceKey.c_str(), SoBRLDatabaseSource::STALE_VIEW);
+	(void)ged_obol_append_deferred_target(targets, target);
+    }
+    data->deferred_retarget_targets.swap(waiting_targets);
+
+    std::vector<BObolSceneController *> scenes;
+    if (primary_scene)
+	scenes.push_back(primary_scene);
+    if (view_scene && view_scene != primary_scene)
+	scenes.push_back(view_scene);
+    for (BObolSceneController *scene : scenes) {
+	const int source_count = scene->getDatabaseSourceCount();
+	for (int i = 0; i < source_count; i++) {
+	    SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+	    BObolDatabaseSourceSummary summary;
+	    if (!source || !source->hasCompactInstanceIndex() ||
+		!scene->getDatabaseSourceSummary(i, summary) ||
+		!summary.valid || summary.instanceKey.getLength() == 0 ||
+		summary.representationMode ==
+		    SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE ||
+		summary.representationMode ==
+		    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS ||
+		!ged_obol_database_source_instance_in_scope(summary,
+		    data->view_ctx) ||
+		!summary.realizationViewDependent ||
+		!summary.realizationCsgLodEnabled)
+		continue;
+
+	    std::string active_identity(
+		scene == primary_scene ? "primary:" : "view:");
+	    active_identity += summary.instanceKey.getString();
+	    const int active = active_instances.find(active_identity) !=
+		active_instances.end();
+	    if (!active && !summary.hasViewDependentCsgGeometry)
+		continue;
+	    const int differs =
+		ged_obol_csg_view_policy_differs(summary, policy);
+	    const int retry = !differs && summary.stale &&
+		(summary.staleReason & SoBRLDatabaseSource::STALE_VIEW) &&
+		!active;
+	    if (!differs && !retry)
+		continue;
+	/* Do not invalidate the live admission stamp while its detached
+	 * producer is still useful.  Record the exact source lifetime because
+	 * view synchronization may update the policy fields before adoption,
+	 * making a later comparison alone insufficient. */
+	    if (active) {
+		ged_obol_deferred_source_target target;
+		target.instanceKey = summary.instanceKey.getString();
+		target.path = summary.path.getString();
+		target.drawMode =
+		    ged_obol_database_source_summary_ged_mode(summary);
+		target.primaryScene = scene == primary_scene ? TRUE : FALSE;
+		target.sourceRoutingId = source->getCompactSourceRoutingId();
+		const int recorded = ged_obol_append_deferred_target(
+		    data->deferred_retarget_targets, target);
+		if (recorded && ged_obol_timing_enabled())
+		    bu_log("[obol-timing] defer active CSG retarget: key=%s "
+			"view-csg=%d scale=%.9g->%.9g\n",
+			summary.instanceKey.getString(),
+			summary.hasViewDependentCsgGeometry ? 1 : 0,
+			static_cast<double>(summary.realizationViewScale),
+			static_cast<double>(policy.viewScale));
+		continue;
+	    }
+
+	    if (differs) {
+		if (getenv("BOBOL_DRAW_TIMING"))
+		    bu_log("[obol-timing] retarget quiet CSG source: key=%s "
+			   "path=%s mode=%d scale=%.9g->%.9g\n",
+			   summary.instanceKey.getString(),
+			   summary.path.getString(),
+			   summary.representationMode,
+			   static_cast<double>(
+			       summary.realizationViewScale),
+			   static_cast<double>(policy.viewScale));
+		const int changed = ged_obol_apply_view_lod_policy(
+		    data->gedp, data->view_ctx, scene,
+		    summary.instanceKey.getString());
+		if (changed <= 0)
+		    continue;
+	    }
+	    ged_obol_deferred_source_target target;
+	    target.instanceKey = summary.instanceKey.getString();
+	    target.path = summary.path.getString();
+	    target.drawMode = ged_obol_database_source_summary_ged_mode(summary);
+	    target.primaryScene = scene == primary_scene ? TRUE : FALSE;
+	    target.sourceRoutingId = source->getCompactSourceRoutingId();
+	    (void)ged_obol_append_deferred_target(targets, target);
+	}
+    }
+
+    if (targets.empty())
+	return 0;
+
+    data->deferred_refine_stage = 1;
+    if (!ged_obol_start_deferred_realization_targets(data, controller,
+	targets)) {
+	data->deferred_refine_stage = 3;
+	data->deferred_paths.clear();
+	return 0;
+    }
+
+    controller->markProgressiveWorkPending();
     return 1;
 }
 
@@ -14440,7 +14956,11 @@ ged_obol_drain_streamed_realizations(
 		const int64_t mergeStarted = bu_gettime();
 		ged_obol_scene_mutation_batch_scope mutation(itemScene, 1,
 		    batch.size());
-		const int mergedCount = live->mergeCompactOccurrences(batch);
+		/* A realization stream is the authoritative payload for its exact
+		 * source and producer policy.  Same-tier geometry is not necessarily
+		 * equivalent: view-dependent CSG wire data deliberately remains a
+		 * wire payload while its point density changes. */
+		const int mergedCount = live->mergeCompactOccurrences(batch, TRUE);
 		/* mergeCompactOccurrences derives a partial registry union.
 		 * Restore the immutable whole-target extent before any camera
 		 * observer can inspect this atomic scene mutation. */
@@ -14548,8 +15068,7 @@ ged_obol_progressive_advance_provider(
 
     if (data->pending_autoview) {
 	const struct bv *view = ged_obol_bv_const(view_ctx);
-	if (!view ||
-	    bv_frame_revision_get(view) != data->expected_view_revision) {
+	if (!ged_obol_progressive_autoview_still_owns_frame(data, view)) {
 	    data->pending_autoview = 0;
 	    data->pending_autoview_bounds_complete = 0;
 	}
@@ -14561,8 +15080,11 @@ ged_obol_progressive_advance_provider(
     }
 
     /* There is one production progression: compact per-leaf boxes followed by
-     * streamed view-appropriate geometry. */
-    int has_pending_job = 0;
+     * streamed view-appropriate geometry.  A quiet camera-scale transition
+     * may add a retained CSG replacement pass, but it never clears the
+     * existing registry or rebuilds immutable PoP mesh data. */
+    int has_pending_job =
+	ged_obol_retarget_quiet_view_csg(data, controller) > 0 ? 1 : 0;
     ged_obol_cleanup_retired_jobs(data);
 
     /* Drain before retiring completed jobs.  A worker can finish between GUI
@@ -16918,6 +17440,7 @@ ged_obol_progressive_autoview_transaction(
 		data->pending_autoview_bounds_complete = 0;
 		data->deferred_refine_stage = 0;
 		data->deferred_paths.clear();
+		data->deferred_retarget_targets.clear();
 	    }
 	    return 1;
 	}

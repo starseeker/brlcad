@@ -43,6 +43,12 @@ ged_close_core(struct ged *gedp, int UNUSED(argc), const char **UNUSED(argv))
     /* set result while we still have the info */
     bu_vls_sprintf(gedp->ged_result_str, "closed %s", gedp->dbip->dbi_filename);
 
+    /* The GED context survives `closedb`, but an edit session cannot survive
+     * the database or directory pointers it references.  Invalidate all
+     * sessions before either the scene or dbip is dismantled, then permit new
+     * sessions after a subsequent `opendb`. */
+    ged_edit_sessions_database_close_private(gedp);
+
     /* Clear any geometry displayed in application views.
      * TODO - properly speaking, we should only be zapping geometry data here
      * and not clearing all scene objects... */

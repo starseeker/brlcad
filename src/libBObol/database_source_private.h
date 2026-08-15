@@ -66,6 +66,14 @@ struct BObolCompactOccurrenceRegistryState {
 
     struct BObolCompactInstanceIndex *compactIndex = NULL;
     struct BObolCompactInstanceIndex *previousCompactIndex = NULL;
+    /*
+     * Identity of the complete compact population, independent of allocator
+     * addresses and the incremental CAD-batch journal.  Index storage may be
+     * recycled after erase/redraw and source/inputs revisions may repeat for
+     * a newly constructed source.  The presentation bridge consequently
+     * treats (source routing id, population epoch) as its reset token.
+     */
+    uint64_t compactPopulationEpoch = 1;
     size_t compactExpectedInstanceCount = 0;
     uint64_t cadBatchRevision = 1;
     uint64_t cadBatchDeltaFloorRevision = 1;

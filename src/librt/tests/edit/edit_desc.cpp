@@ -82,6 +82,14 @@ check_prim(const char *name, int prim_type_id,
 	return 1;
     }
 
+    if (!strstr(js, "\"name\"") || !strstr(js, "\"symbol\"") ||
+	!strstr(js, "\"control\"")) {
+	bu_log("FAIL [%s]: JSON missing stable command identity or control class\n",
+	    name);
+	bu_vls_free(&json);
+	return 1;
+    }
+
     /* Check expected first cmd_id as a numeric substring.
      * The serialiser emits  "cmd_id": N  so search for that. */
     char needle[64];
@@ -101,6 +109,139 @@ check_prim(const char *name, int prim_type_id,
 }
 
 
+static int
+check_descriptor_audit(void)
+{
+    int failures = 0;
+    int descriptors = 0;
+    int controls[RT_EDIT_CONTROL_UNSUPPORTED + 1] = {0};
+    extern const struct rt_edit_functab EDOBJ[];
+    for (int type = 0; EDOBJ[type].magic == RT_FUNCTAB_MAGIC; type++) {
+	if (!EDOBJ[type].ft_edit_desc)
+	    continue;
+	const struct rt_edit_prim_desc *desc = EDOBJ[type].ft_edit_desc();
+	struct bu_vls diagnostic = BU_VLS_INIT_ZERO;
+	if (rt_edit_prim_desc_validate(&diagnostic, desc) != BRLCAD_OK) {
+	    bu_log("FAIL [type %d]: descriptor invalid: %s\n", type,
+		bu_vls_cstr(&diagnostic));
+	    failures++;
+	} else {
+	    descriptors++;
+	    for (int ci = 0; ci < desc->ncmd; ci++) {
+		const enum rt_edit_control_class control =
+		    rt_edit_cmd_control_class(desc, &desc->cmds[ci]);
+		struct bu_vls name = BU_VLS_INIT_ZERO;
+		if (rt_edit_cmd_name(&name, desc, &desc->cmds[ci]) !=
+			BRLCAD_OK || !bu_vls_strlen(&name)) {
+		    bu_log("FAIL [%s]: command %d has no canonical name\n",
+			desc->prim_type, ci);
+		    failures++;
+		}
+		bu_vls_free(&name);
+		if (control < RT_EDIT_CONTROL_GENERATED ||
+		    control > RT_EDIT_CONTROL_UNSUPPORTED) {
+		    bu_log("FAIL [%s]: command %d is not classified\n",
+			desc->prim_type, ci);
+		    failures++;
+		} else {
+		    controls[control]++;
+		}
+		if (control == RT_EDIT_CONTROL_GENERATED &&
+		    !EDOBJ[type].ft_edit_get_values) {
+		    bu_log("FAIL [%s]: generated command %d has no readback\n",
+			desc->prim_type, desc->cmds[ci].cmd_id);
+		    failures++;
+		}
+	    }
+	}
+	bu_vls_free(&diagnostic);
+    }
+    bu_log("%s: validated %d registered edit descriptors\n",
+	failures ? "FAIL" : "PASS", descriptors);
+    for (int control = RT_EDIT_CONTROL_GENERATED;
+	control <= RT_EDIT_CONTROL_UNSUPPORTED; control++) {
+	if (!controls[control]) {
+	    bu_log("FAIL: no commands use control class %d\n", control);
+	    failures++;
+	}
+    }
+    bu_log("%s: classified commands generated=%d action=%d custom=%d unsupported=%d\n",
+	failures ? "FAIL" : "PASS", controls[RT_EDIT_CONTROL_GENERATED],
+	controls[RT_EDIT_CONTROL_ACTION], controls[RT_EDIT_CONTROL_CUSTOM],
+	controls[RT_EDIT_CONTROL_UNSUPPORTED]);
+
+    const struct rt_edit_prim_desc *ell = EDOBJ[ID_ELL].ft_edit_desc();
+    if (ell && ell->ncmd > 0) {
+	struct rt_edit_cmd_desc invalid_command = ell->cmds[0];
+	invalid_command.name = NULL;
+	struct rt_edit_prim_desc invalid_desc = *ell;
+	invalid_desc.ncmd = 1;
+	invalid_desc.cmds = &invalid_command;
+	struct bu_vls diagnostic = BU_VLS_INIT_ZERO;
+	if (rt_edit_prim_desc_validate(&diagnostic, &invalid_desc) !=
+		BRLCAD_ERROR || !bu_vls_strlen(&diagnostic)) {
+	    bu_log("FAIL: malformed descriptor was not rejected diagnostically\n");
+	    failures++;
+	} else {
+	    bu_log("PASS: malformed descriptor rejected diagnostically\n");
+	}
+	bu_vls_free(&diagnostic);
+    } else {
+	bu_log("FAIL: ELL descriptor unavailable for negative validation test\n");
+	failures++;
+    }
+
+    if (ell && ell->ncmd > 0 && ell->cmds[0].nparam > 0) {
+	struct rt_edit_param_desc invalid_list = ell->cmds[0].params[0];
+	invalid_list.type = RT_EDIT_PARAM_INTEGER_LIST;
+	invalid_list.nenum = 0;
+	struct rt_edit_cmd_desc invalid_command = ell->cmds[0];
+	invalid_command.nparam = 1;
+	invalid_command.params = &invalid_list;
+	struct rt_edit_prim_desc invalid_desc = *ell;
+	invalid_desc.ncmd = 1;
+	invalid_desc.cmds = &invalid_command;
+	struct bu_vls diagnostic = BU_VLS_INIT_ZERO;
+	if (rt_edit_prim_desc_validate(&diagnostic, &invalid_desc) !=
+		BRLCAD_ERROR || !bu_vls_strlen(&diagnostic)) {
+	    bu_log("FAIL: malformed variable-list descriptor was not rejected\n");
+	    failures++;
+	} else {
+	    bu_log("PASS: malformed variable-list descriptor rejected\n");
+	}
+	bu_vls_free(&diagnostic);
+    }
+    return failures;
+}
+
+
+static int
+check_generated_value_providers(void)
+{
+    extern const struct rt_edit_functab EDOBJ[];
+    const int generated_types[] = {
+	ID_TOR, ID_TGC, ID_ELL, ID_EPA, ID_EHY, ID_ETO, ID_HYP,
+	ID_RPC, ID_RHC, ID_PARTICLE, ID_SUPERELL, ID_CLINE, ID_DSP,
+	ID_EBM, ID_VOL, ID_HALF, ID_SPH, ID_REC, ID_EXTRUDE,
+	ID_REVOLVE, ID_ANNOT, ID_HRT, ID_SKETCH
+    };
+    int failures = 0;
+    for (size_t i = 0; i < sizeof(generated_types) / sizeof(generated_types[0]);
+	    i++) {
+	const int type = generated_types[i];
+	if (!EDOBJ[type].ft_edit_desc || !EDOBJ[type].ft_edit_get_values) {
+	    bu_log("FAIL: generated primitive type %d lacks descriptor readback\n",
+		type);
+	    failures++;
+	}
+    }
+    bu_log("%s: %zu generated primitive types provide current-value readback\n",
+	failures ? "FAIL" : "PASS",
+	sizeof(generated_types) / sizeof(generated_types[0]));
+    return failures;
+}
+
+
 int
 main(int argc, char *argv[])
 {
@@ -109,6 +250,9 @@ main(int argc, char *argv[])
 	return BRLCAD_ERROR;
 
     int fail = 0;
+
+    fail += check_descriptor_audit();
+    fail += check_generated_value_providers();
 
     /* ------------------------------------------------------------------
      * Primitives with ft_edit_desc() implementations.
@@ -176,20 +320,62 @@ main(int argc, char *argv[])
     /* REC: ECMD_REC_SET_V = 7001 */
     fail += check_prim("REC",  ID_REC,      "\"rec\"",      7001);
 
-    /* ------------------------------------------------------------------
-     * Verify that primitives without ft_edit_desc return BRLCAD_ERROR.
-     * ------------------------------------------------------------------ */
-    {
-	struct bu_vls json = BU_VLS_INIT_ZERO;
-	/* ARB8 (ID=4) has no ft_edit_desc */
-	int ret = rt_edit_type_to_json(&json, 4 /* ID_ARB8 */);
-	if (ret == BRLCAD_ERROR) {
-	    bu_log("PASS [ARB8-no-desc]: correctly returned BRLCAD_ERROR\n");
-	} else {
-	    bu_log("FAIL [ARB8-no-desc]: expected BRLCAD_ERROR, got BRLCAD_OK\n");
-	    fail++;
-	}
-	bu_vls_free(&json);
+    /* ARB8 now supplies a structured edit descriptor. */
+    fail += check_prim("ARB8", ID_ARB8, "\"arb8\"", 4013);
+
+    /* SKETCH: variable topology lists and true 2-D parameters. */
+    fail += check_prim("SKETCH", ID_SKETCH, "\"sketch\"", 26001);
+    struct bu_vls sketch_json = BU_VLS_INIT_ZERO;
+    if (rt_edit_type_to_json(&sketch_json, ID_SKETCH) != BRLCAD_OK ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"type\": \"integer_list\"") ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"type\": \"scalar_list\"") ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"min_count\"") ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"max_count\"") ||
+	!strstr(bu_vls_cstr(&sketch_json),
+	    "\"selection_domain\": \"segment\"") ||
+	!strstr(bu_vls_cstr(&sketch_json),
+	    "\"coordinate_space\": \"parametric_2d\"") ||
+	!strstr(bu_vls_cstr(&sketch_json),
+	    "\"manipulator\": \"indexed_set\"") ||
+	!strstr(bu_vls_cstr(&sketch_json), "\"semantic\": \"index\"")) {
+	bu_log("FAIL [SKETCH]: JSON missing arity/interaction metadata\n");
+	fail++;
+    }
+    bu_vls_free(&sketch_json);
+
+    const struct rt_edit_prim_desc *ell_desc =
+	EDOBJ[ID_ELL].ft_edit_desc();
+    const struct rt_edit_prim_desc *arb_desc =
+	EDOBJ[ID_ARB8].ft_edit_desc();
+    const struct rt_edit_prim_desc *bot_desc =
+	EDOBJ[ID_BOT].ft_edit_desc();
+    const struct rt_edit_prim_desc *sketch_desc =
+	EDOBJ[ID_SKETCH].ft_edit_desc();
+    const struct rt_edit_interaction_desc ell_interaction =
+	rt_edit_cmd_interaction(ell_desc, &ell_desc->cmds[0]);
+    const struct rt_edit_interaction_desc arb_interaction =
+	rt_edit_cmd_interaction(arb_desc, &arb_desc->cmds[0]);
+    const struct rt_edit_interaction_desc bot_interaction =
+	rt_edit_cmd_interaction(bot_desc, &bot_desc->cmds[6]);
+    const struct rt_edit_interaction_desc sketch_interaction =
+	rt_edit_cmd_interaction(sketch_desc, &sketch_desc->cmds[18]);
+    if (ell_interaction.manipulator != RT_EDIT_MANIPULATOR_AXIS ||
+	ell_interaction.coordinate_space != RT_EDIT_COORDINATE_SCALAR ||
+	rt_edit_param_semantic_get(ell_desc, &ell_desc->cmds[0], 0) !=
+	    RT_EDIT_SEMANTIC_DISTANCE ||
+	arb_interaction.selection_domain != RT_EDIT_SELECTION_VERTEX ||
+	arb_interaction.manipulator != RT_EDIT_MANIPULATOR_INDEXED_SET ||
+	bot_interaction.selection_domain != RT_EDIT_SELECTION_VERTEX ||
+	rt_edit_param_semantic_get(bot_desc, &bot_desc->cmds[6], 1) !=
+	    RT_EDIT_SEMANTIC_INDEX ||
+	sketch_interaction.coordinate_space != RT_EDIT_COORDINATE_OBJECT ||
+	sketch_interaction.manipulator != RT_EDIT_MANIPULATOR_PLANE ||
+	rt_edit_param_semantic_get(sketch_desc, &sketch_desc->cmds[18], 1) !=
+	    RT_EDIT_SEMANTIC_DIRECTION) {
+	bu_log("FAIL: representative interaction descriptors are incomplete\n");
+	fail++;
+    } else {
+	bu_log("PASS: representative interaction descriptors are source-neutral\n");
     }
 
     if (fail)

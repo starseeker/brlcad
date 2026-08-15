@@ -90,11 +90,59 @@ if(BRLCAD_ENABLE_QT)
 
   brlcad_add_test(NAME qged_polygon_ui_replay
     COMMAND qged --swrast --test-script
-    "${CMAKE_CURRENT_SOURCE_DIR}/test_qged_polygon_ui.json"
-    "${CMAKE_BINARY_DIR}/share/db/moss.g")
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_qged_polygon_ui.json")
   set_property(TEST qged_polygon_ui_replay APPEND PROPERTY ENVIRONMENT
     BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
   set_property(TEST qged_polygon_ui_replay APPEND PROPERTY LABELS drawing_baseline)
+
+  brlcad_add_test(NAME qged_polygon_ui_quad_replay
+    COMMAND qged --swrast --quad --test-script
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_qged_polygon_ui.json")
+  set_property(TEST qged_polygon_ui_quad_replay APPEND PROPERTY ENVIRONMENT
+    BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
+  set_property(TEST qged_polygon_ui_quad_replay APPEND PROPERTY LABELS drawing_baseline)
+
+  brlcad_add_test(NAME qged_polygon_sketch_sync_replay
+    COMMAND ${CMAKE_COMMAND}
+    -DBRLCAD_ROOT=${CMAKE_BINARY_DIR}
+    -DMGED=$<TARGET_FILE:mged>
+    -DQGED=$<TARGET_FILE:qged>
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test_qged_polygon_sketch_sync.json
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_polygon_sketch_sync.cmake)
+  set_property(TEST qged_polygon_sketch_sync_replay APPEND PROPERTY LABELS
+    drawing_baseline)
+
+  brlcad_add_test(NAME qged_polygon_sketch_sync_quad_replay
+    COMMAND ${CMAKE_COMMAND}
+    -DBRLCAD_ROOT=${CMAKE_BINARY_DIR}
+    -DMGED=$<TARGET_FILE:mged>
+    -DQGED=$<TARGET_FILE:qged>
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test_qged_polygon_sketch_sync.json
+    -DQUAD=ON
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_polygon_sketch_sync.cmake)
+  set_property(TEST qged_polygon_sketch_sync_quad_replay APPEND PROPERTY LABELS
+    drawing_baseline)
+
+  brlcad_add_test(NAME qged_primitive_edit_ui_replay
+    COMMAND ${CMAKE_COMMAND}
+    -DBRLCAD_ROOT=${CMAKE_BINARY_DIR}
+    -DMGED=$<TARGET_FILE:mged>
+    -DQGED=$<TARGET_FILE:qged>
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test_qged_primitive_edit_ui.json
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_primitive_edit_ui.cmake)
+  set_property(TEST qged_primitive_edit_ui_replay APPEND PROPERTY LABELS
+    drawing_baseline)
+
+  brlcad_add_test(NAME qged_primitive_edit_ui_quad_replay
+    COMMAND ${CMAKE_COMMAND}
+    -DBRLCAD_ROOT=${CMAKE_BINARY_DIR}
+    -DMGED=$<TARGET_FILE:mged>
+    -DQGED=$<TARGET_FILE:qged>
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test_qged_primitive_edit_ui.json
+    -DQUAD=ON
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_primitive_edit_ui.cmake)
+  set_property(TEST qged_primitive_edit_ui_quad_replay APPEND PROPERTY LABELS
+    drawing_baseline)
 
   # qged's view and embedded framebuffer paths are Obol/libBObol based.
   # GED plugins are still loaded at runtime; legacy display-manager plugins are
@@ -190,6 +238,12 @@ set(
   test_qged_obol_fbserv.cpp
   test_qged_event_script.json
   test_qged_polygon_ui.json
+  test_qged_polygon_sketch_sync.cmake
+  test_qged_polygon_sketch_sync.json
+  test_qged_primitive_edit_ui.cmake
+  test_qged_primitive_edit_ui.json
+  tests/qged_framebuffer_matrix.sh
+  tests/qged_polygon_visual_matrix.sh
   tests/README.md
   tests/generate_many_lucy_stress.tcl
   tests/generate_unique_mesh_stress.cpp

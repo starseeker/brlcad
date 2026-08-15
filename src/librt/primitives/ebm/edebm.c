@@ -137,7 +137,7 @@ static const struct rt_edit_param_desc ebm_height_params[] = {
 
 static const struct rt_edit_cmd_desc ebm_cmds[] = {
     {
-	ECMD_EBM_FNAME,       /* cmd_id       */
+	ECMD_EBM_FNAME, RT_EDIT_CMD_NAME(ECMD_EBM_FNAME),       /* cmd_id       */
 	"File Name",          /* label        */
 	"data",               /* category     */
 	1,                    /* nparam       */
@@ -147,7 +147,7 @@ static const struct rt_edit_cmd_desc ebm_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_EBM_FSIZE,       /* cmd_id       */
+	ECMD_EBM_FSIZE, RT_EDIT_CMD_NAME(ECMD_EBM_FSIZE),       /* cmd_id       */
 	"File Size (W N)",    /* label        */
 	"geometry",           /* category     */
 	2,                    /* nparam       */
@@ -157,7 +157,7 @@ static const struct rt_edit_cmd_desc ebm_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_EBM_HEIGHT,      /* cmd_id       */
+	ECMD_EBM_HEIGHT, RT_EDIT_CMD_NAME(ECMD_EBM_HEIGHT),      /* cmd_id       */
 	"Extrude Depth",      /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -174,13 +174,44 @@ static const struct rt_edit_prim_desc ebm_prim_desc = {
     3,                    /* ncmd         */
     ebm_cmds              /* cmds         */,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
 rt_edit_ebm_edit_desc(void)
 {
     return &ebm_prim_desc;
+}
+
+C_DECL int
+rt_edit_ebm_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    struct rt_ebm_internal *ebm =
+	(struct rt_ebm_internal *)s->es_int.idb_ptr;
+    RT_EBM_CK_MAGIC(ebm);
+
+    switch (cmd_id) {
+	case ECMD_EBM_FNAME:
+	    rt_edit_cmd_values_set_string(result, 0, ebm->name);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_EBM_FSIZE:
+	    rt_edit_cmd_values_set_value(result, 0, (fastf_t)ebm->xdim);
+	    rt_edit_cmd_values_set_value(result, 1, (fastf_t)ebm->ydim);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_EBM_HEIGHT:
+	    rt_edit_cmd_values_set_value(result, 0,
+		ebm->tallness * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	default:
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    }
 }
 
 int
@@ -252,11 +283,16 @@ ecmd_ebm_fname(struct rt_edit *s)
 
     RT_EBM_CK_MAGIC(ebm);
 
-    const char *av[2] = {NULL};
-    av[0] = ebm->name;
-    rt_edit_map_clbk_get(&f, &d, s->m, ECMD_GET_FILENAME, BU_CLBK_DURING);
-    if (f)
-	(*f)(1, (const char **)av, d, &fname);
+    if (s->e_nstr > 0) {
+	fname = s->e_str[0];
+    } else {
+	const char *av[2] = {NULL};
+	av[0] = ebm->name;
+	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_GET_FILENAME,
+	    BU_CLBK_DURING);
+	if (f)
+	    (*f)(1, (const char **)av, d, &fname);
+    }
 
     if (fname) {
 	if (stat(fname, &stat_buf)) {

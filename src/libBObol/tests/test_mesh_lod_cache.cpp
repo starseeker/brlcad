@@ -788,7 +788,8 @@ main(int argc, char *argv[])
 
 	bool validClusters = lodHierarchy.cluster_grid_resolution ==
 		BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION &&
-	    lodHierarchy.cluster_count == BOBOL_MESH_LOD_CLUSTER_COUNT &&
+	    lodHierarchy.cluster_count > 0 &&
+	    lodHierarchy.cluster_count <= BOBOL_MESH_LOD_CLUSTER_COUNT &&
 	    lodHierarchy.clusters != NULL;
 	uint64_t clusteredIndices = 0;
 	std::vector<uint64_t> cutIndices(lodHierarchy.cut_count, 0);
@@ -796,7 +797,10 @@ main(int argc, char *argv[])
 		cluster < lodHierarchy.cluster_count; ++cluster) {
 	    const BObolMeshLodClusterInfo &cell =
 		lodHierarchy.clusters[cluster];
-	    if (cell.range_count && !cell.ranges)
+	    if (cell.cluster_id >= BOBOL_MESH_LOD_CLUSTER_COUNT ||
+		(cluster && cell.cluster_id <=
+		 lodHierarchy.clusters[cluster - 1].cluster_id) ||
+		!cell.range_count || !cell.ranges)
 		validClusters = false;
 	    for (uint32_t rangeIndex = 0; validClusters &&
 		    rangeIndex < cell.range_count; ++rangeIndex) {
@@ -1284,13 +1288,22 @@ main(int argc, char *argv[])
     {
 	struct BObolMeshLod *solidLod = NULL;
 	struct BObolMeshLodInfo solidInfo = BOBOL_MESH_LOD_INFO_INIT;
+	struct BObolMeshLodHierarchyInfo solidHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 	if (bobol_mesh_lod_cache_refresh(dbip, solidCwObjname,
 		&cacheStatus) != BRLCAD_OK ||
 	    !(solidLod = bobol_mesh_lod_get(dbip, solidCwObjname)) ||
 	    load_terminal_cut(solidLod) < 0 ||
 	    !bobol_mesh_lod_info_get(solidLod, &solidInfo) ||
+	    !bobol_mesh_lod_hierarchy_info_get(solidLod, &solidHierarchy) ||
 	    !solidInfo.shaded_cull_backfaces ||
-	    solidInfo.face_count != 4) {
+	    solidInfo.face_count != 4 ||
+	    solidHierarchy.cluster_grid_resolution !=
+		BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION ||
+	    !solidHierarchy.cluster_count ||
+	    solidHierarchy.cluster_count >= BOBOL_MESH_LOD_CLUSTER_COUNT ||
+	    !solidHierarchy.clusters ||
+	    solidHierarchy.chunk_count != 1 || !solidHierarchy.chunks) {
 	    printf("FAIL: closed oriented CW BoT culling metadata\n");
 	    if (solidLod)
 		bobol_mesh_lod_destroy(solidLod);

@@ -63,6 +63,14 @@ QTCAD_EXPORT int qg_obol_snap_point(QgView *display,
 				    uint32_t enabledKinds,
 				    QgObolSnapRecord &record);
 
+/** As qg_obol_snap_point, restricted by SoBRLSnapAction::SourceFilter. */
+QTCAD_EXPORT int qg_obol_snap_point_filtered(QgView *display,
+	const SbVec3f &query,
+	float tolerance,
+	uint32_t enabledKinds,
+	uint32_t sourceFilter,
+	QgObolSnapRecord &record);
+
 /**
  * Snap @p query using exact full-detail mesh policy.  LoD-backed meshes with
  * no resident full-detail payload consume matching ready source-backed LoD

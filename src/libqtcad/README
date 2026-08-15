@@ -38,7 +38,13 @@ new file, place it in the category that best matches its responsibility.
     `QgPolyFilter`     (+ five derived classes for create/update/select/point/move)
     `QgSelectFilter`   (+ point / box / ray)
     `QgMeasureFilter`  (+ 2D / 3D)
-    `QgSketchFilter`   (+ several sketch-edit derivations)
+
+* Session-backed primitive editing
+    `QgPrimitiveEdit`  - descriptor-generated controls sharing one GED edit
+                         session with commands and scene manipulators
+    `QgSketchEdit`     - retained sketch topology, occurrence-coordinate
+                         conversion, and typed sketch interactions submitted
+                         through that same GED session
 
 * General-purpose Qt widgets
     `QgAccordion`       - vertical stack of collapsing panels
@@ -115,8 +121,8 @@ Consumers
 Inside the BRL-CAD tree libqtcad is consumed by:
 
 * `src/qged` and its plugins (the primary client)
-* `src/libqtcad/tests` (`qgmodel`, `qgview`, `qsketch`, plus GED-level tests
-  that exercise Obol canvas/controller behavior end-to-end)
+* `src/libqtcad/tests` (`qgmodel`, `qgview`, plus GED-level tests that exercise
+  session-backed editing and Obol canvas/controller behavior end-to-end)
 
 `archer` and `libtclcad` do not currently depend on libqtcad.
 
@@ -130,8 +136,8 @@ will progressively:
 * tighten encapsulation (move public data behind accessors; adopt the pimpl
   idiom for the heaviest classes)
 * unify the `QgGL` / `QgSW` duplication behind a common `QgCanvasBase`
-* unify the polygon / select / measure / sketch filter hierarchies behind a
-  common `QgViewFilter` base
+* unify the polygon / select / measure filter hierarchies behind a common
+  `QgViewFilter` base
 * replace the `unsigned long long` view-flag signals with a `Q_FLAG`
   `enum class`
 * introduce a `QgSession` abstraction so the models no longer talk directly

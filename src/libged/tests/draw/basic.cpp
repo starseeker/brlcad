@@ -483,6 +483,18 @@ main(int ac, char *av[]) {
     s_av[7] = NULL;
     ged_exec_view(gedp, 7, s_av);
 
+    s_av[3] = "get";
+    s_av[4] = "g1";
+    s_av[5] = "color";
+    s_av[6] = NULL;
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    if (ged_exec_view(gedp, 6, s_av) != BRLCAD_OK ||
+	!BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "0/255/0\n")) {
+	bu_log("generic view-feature color did not round-trip polygon state: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	ret++;
+    }
+
     // See if we got what we expected
     ret += img_cmp(10, gedp, lcache, true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
@@ -499,6 +511,28 @@ main(int ac, char *av[]) {
     s_av[6] = "3";
     s_av[7] = NULL;
     ged_exec_view(gedp, 7, s_av);
+
+    s_av[4] = NULL;
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    if (ged_exec_view(gedp, 4, s_av) != BRLCAD_OK) {
+	bu_log("view polygon fill query failed: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	ret++;
+    } else {
+	int enabled = 0;
+	double dx = 0.0;
+	double dy = 0.0;
+	double spacing = 0.0;
+	if (sscanf(bu_vls_cstr(gedp->ged_result_str), "%d %lf %lf %lf",
+		&enabled, &dx, &dy, &spacing) != 4 || !enabled ||
+		!NEAR_EQUAL(dx, 1.0, SMALL_FASTF) ||
+		!NEAR_EQUAL(dy, 10.0, SMALL_FASTF) ||
+		!NEAR_EQUAL(spacing, 3.0, SMALL_FASTF)) {
+	    bu_log("view polygon fill query returned unexpected state: %s\n",
+		    bu_vls_cstr(gedp->ged_result_str));
+	    ret++;
+	}
+    }
 
     // See if we got what we expected
     ret += img_cmp(11, gedp, lcache, true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");

@@ -14,8 +14,7 @@
 #include "BObol/BHUDLabelOverlay.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BVListShape.h"
-#include "BObol/BEditPreview.h"
-#include "BObol/BHUDLabelOverlay.h"
+#include "BObol/BViewQuery.h"
 #include "bu/app.h"
 #include "bu/file.h"
 #include "raytrace.h"
@@ -239,6 +238,33 @@ test_feature_nodes(BObolViewController &view)
     SoBRLMeshShape *mesh = static_cast<SoBRLMeshShape *>(node);
     if (mesh->getTriangleCount() != 2)
 	FAIL("indexed face feature should triangulate to two triangles");
+
+    std::vector<int32_t> patchIndices;
+    patchIndices.push_back(2);
+    std::vector<SbVec3f> patchPoints;
+    patchPoints.push_back(SbVec3f(1.0f, 1.0f, 2.0f));
+    view.clearRenderRequest();
+    if (!view.features().updateIndexedFaceSetPoints(meshHandle,
+	    patchIndices, patchPoints) ||
+	view.features().node(meshHandle) != node ||
+	mesh->point[2] != patchPoints[0] || !view.isRenderRequested())
+	FAIL("indexed face point patch should update the retained node in place");
+
+    std::vector<int32_t> invalidPatchIndices;
+    invalidPatchIndices.push_back(99);
+    patchPoints[0] = SbVec3f(9.0f, 9.0f, 9.0f);
+    if (view.features().updateIndexedFaceSetPoints(meshHandle,
+	    invalidPatchIndices, patchPoints) ||
+	mesh->point[2] != SbVec3f(1.0f, 1.0f, 2.0f))
+	FAIL("invalid indexed face point patch should be atomic");
+
+    std::vector<int32_t> selectedFaces;
+    selectedFaces.push_back(1);
+    if (!view.features().replaceSelectedPrimitives(meshHandle,
+	    selectedFaces) || view.features().node(meshHandle) != node ||
+	mesh->selectedPrimitive.getNum() != 1 ||
+	mesh->selectedPrimitive[0] != 1)
+	FAIL("indexed face selection should update its retained node in place");
 
     BObolFeatureOwner ownerA;
     ownerA.ownerToken = (const void *)0x1;
@@ -552,6 +578,29 @@ test_feature_nodes(BObolViewController &view)
 	view.features().exists("custom-node"))
 	FAIL("custom feature removal should use normal feature-store teardown");
 
+    const SbVec3f customMeshPoints[3] = {
+	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 0.0f, 0.0f),
+	SbVec3f(0.0f, 1.0f, 0.0f)
+    };
+    const int32_t customMeshIndices[3] = {0, 1, 2};
+    SoBRLMeshShape *customMesh = new SoBRLMeshShape;
+    customMesh->setIndexedTriangles(customMeshPoints, 3,
+	customMeshIndices, 3);
+    BObolFeatureHandle customMeshHandle = view.features().publishCustomNode(
+	"custom-mesh", BObolFeatureScope::Local, customMesh);
+    if (!customMeshHandle.isValid() ||
+	!view.features().replaceSelectedPrimitives(customMeshHandle,
+	    selectedPrimitives) ||
+	!view.features().replaceHighlightedPrimitives(customMeshHandle,
+	    highlightedPrimitives) ||
+	customMesh->selectedPrimitive.getNum() != 1 ||
+	customMesh->selectedPrimitive[0] != selectedPrimitives[0] ||
+	customMesh->highlightedPrimitive.getNum() != 1 ||
+	customMesh->highlightedPrimitive[0] != highlightedPrimitives[0])
+	FAIL("custom mesh primitive state should update its retained node in place");
+    if (!view.features().remove(customMeshHandle))
+	FAIL("custom mesh feature removal should succeed");
+
     std::vector<SbVec3f> previewPoints;
     previewPoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
     previewPoints.push_back(SbVec3f(2.0f, 0.0f, 0.0f));
@@ -726,6 +775,63 @@ test_polygon_nodes_and_sketch(BObolViewController &view)
     if (!view.polygons().setAllContoursOpen(handle, FALSE))
 	FAIL("square polygon close restore should succeed");
 
+    BObolPolygonHandle editable = view.polygons().create(
+	"editable-general", BObolFeatureScope::Shared,
+	BObolPolygonType::General, SbVec3f(0.0f, 0.0f, 0.0f),
+	viewPlane, 0.0f);
+    if (!editable.isValid() ||
+	!view.polygons().updateModelPoint(editable, SbVec3f(2.0f, 0.0f, 0.0f),
+	    BObolPolygonUpdate::PointAppend) ||
+	!view.polygons().updateModelPoint(editable, SbVec3f(2.0f, 2.0f, 0.0f),
+	    BObolPolygonUpdate::PointAppend) ||
+	!view.polygons().updateModelPoint(editable, SbVec3f(0.0f, 2.0f, 0.0f),
+	    BObolPolygonUpdate::PointAppend) ||
+	!view.polygons().setAllContoursOpen(editable, FALSE) ||
+	!view.polygons().setCurrent(editable, 0, 1) ||
+	!view.polygons().update(editable, BObolPolygonUpdate::PointDelete))
+	FAIL("general polygon point deletion should succeed above its minimum");
+    BObolPolygonRecord editableRecord;
+    if (!view.polygons().record(editable, editableRecord) ||
+	editableRecord.pointCount != 3 || editableRecord.currentPoint != 1 ||
+	view.polygons().update(editable, BObolPolygonUpdate::PointDelete))
+	FAIL("closed general polygons must retain at least three points");
+    if (!view.polygons().setAllContoursOpen(editable, TRUE) ||
+	!view.polygons().update(editable, BObolPolygonUpdate::PointDelete) ||
+	!view.polygons().record(editable, editableRecord) ||
+	editableRecord.pointCount != 2 ||
+	view.polygons().update(editable, BObolPolygonUpdate::PointDelete))
+	FAIL("open general polygons must retain at least two points");
+    if (!view.polygons().remove(editable))
+	FAIL("editable general polygon cleanup should succeed");
+
+    BObolPolygonHandle snapSource = view.polygons().create(
+	"snap-source", BObolFeatureScope::Shared,
+	BObolPolygonType::General, SbVec3f(50.0f, 50.0f, 0.0f),
+	viewPlane, 0.0f);
+    if (!snapSource.isValid() ||
+	!view.polygons().updateModelPoint(snapSource,
+	    SbVec3f(52.0f, 50.0f, 0.0f), BObolPolygonUpdate::PointAppend) ||
+	!view.polygons().updateModelPoint(snapSource,
+	    SbVec3f(52.0f, 52.0f, 0.0f), BObolPolygonUpdate::PointAppend))
+	FAIL("polygon snap source setup should succeed");
+    BObolViewSnapRecord snapRecord;
+    if (!bobol_view_snap_point(&view, SbVec3f(50.0f, 50.0f, 0.0f),
+	    0.01f, SoBRLSnapAction::ENDPOINT,
+	    SoBRLSnapAction::DISPLAY_LEVEL, false, snapRecord))
+	FAIL("polygon endpoint should be available to common snap queries");
+    if (!view.polygons().setSnapExclude(snapSource) ||
+	bobol_view_snap_point(&view, SbVec3f(50.0f, 50.0f, 0.0f),
+	    0.01f, SoBRLSnapAction::ENDPOINT,
+	    SoBRLSnapAction::DISPLAY_LEVEL, false, snapRecord))
+	FAIL("active polygon exclusion should suppress self snapping");
+    if (!view.polygons().setSnapExclude(BObolPolygonHandle()) ||
+	!bobol_view_snap_point(&view, SbVec3f(50.0f, 50.0f, 0.0f),
+	    0.01f, SoBRLSnapAction::ENDPOINT,
+	    SoBRLSnapAction::DISPLAY_LEVEL, false, snapRecord))
+	FAIL("clearing polygon exclusion should restore snap candidates");
+    if (!view.polygons().remove(snapSource))
+	FAIL("polygon snap source cleanup should succeed");
+
     BObolPolygonHandle duplicateSource = view.polygons().create(
 	"duplicate-source", BObolFeatureScope::Shared,
 	BObolPolygonType::Rectangle, SbVec3f(-3.0f, -2.0f, 0.0f),
@@ -813,6 +919,21 @@ test_polygon_nodes_and_sketch(BObolViewController &view)
 	FAIL("exported sketch should be in the database directory");
     }
 
+    if (!view.polygons().setSketchName(handle, "poly.s") ||
+	!view.polygons().sketchName(handle) ||
+	!BU_STR_EQUAL(view.polygons().sketchName(handle), "poly.s")) {
+	wdb_close(wdbp);
+	bu_file_delete(dbpath);
+	FAIL("polygon sketch linkage should retain a stable name");
+    }
+    if (!view.polygons().updateScreenPoint(handle, 14, 12,
+	    BObolPolygonUpdate::Default) ||
+	!view.polygons().updateSketch(handle, dbip, "poly.s")) {
+	wdb_close(wdbp);
+	bu_file_delete(dbpath);
+	FAIL("polygon updateSketch should replace linked sketch geometry");
+    }
+
     BObolPolygonStore imported;
     BObolPolygonHandle importedHandle = imported.importSketch(
 	    "imported",
@@ -830,6 +951,11 @@ test_polygon_nodes_and_sketch(BObolViewController &view)
 	wdb_close(wdbp);
 	bu_file_delete(dbpath);
 	FAIL("imported polygon record lookup should succeed");
+    }
+    if (!BU_STR_EQUAL(record.sketchName.getString(), "poly.s")) {
+	wdb_close(wdbp);
+	bu_file_delete(dbpath);
+	FAIL("imported polygon should retain its stable sketch link");
     }
     if (record.pointCount != 4 || record.contourCount != 1) {
 	wdb_close(wdbp);

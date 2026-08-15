@@ -178,6 +178,12 @@ main(int argc, char *argv[])
     struct rt_superell_internal *edit_superell =
 	(struct rt_superell_internal *)s->es_int.idb_ptr;
 
+    if (!rt_edit_test_scalar_value(s, ECMD_SUPERELL_SCALE_A, 4.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_SUPERELL_SCALE_B, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_SUPERELL_SCALE_C, 2.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_SUPERELL_SCALE_ABC, 4.0))
+	bu_exit(1, "ERROR: SUPERELL descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================

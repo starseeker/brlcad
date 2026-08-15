@@ -211,17 +211,21 @@ static const struct rt_edit_param_desc bspline_knot_param[] = {
 };
 
 static const struct rt_edit_cmd_desc bspline_cmds[] = {
-    { ECMD_SPLINE_VPICK,      "Pick Vertex",      "selection", 1, bspline_idx_param,   1, 10, NULL },
-    { ECMD_BSPLINE_PICK_CP,   "Pick CP by Index", "selection", 1, bspline_idx_param,   1, 20, NULL },
-    { ECMD_VTRANS,            "Move Vertex",      "movement",  1, bspline_point_param, 1, 30, NULL },
-    { ECMD_BSPLINE_PICK_KNOT, "Pick Knot",        "selection", 1, bspline_idx_param,   1, 40, NULL },
-    { ECMD_BSPLINE_SET_KNOT,  "Set Knot Value",   "topology",  1, bspline_knot_param,  1, 50, NULL }
+    { ECMD_SPLINE_VPICK, RT_EDIT_CMD_NAME(ECMD_SPLINE_VPICK),      "Pick Vertex",      "selection", 1, bspline_idx_param,   1, 10, NULL },
+    { ECMD_BSPLINE_PICK_CP, RT_EDIT_CMD_NAME(ECMD_BSPLINE_PICK_CP),   "Pick CP by Index", "selection", 1, bspline_idx_param,   1, 20, NULL },
+    { ECMD_VTRANS, RT_EDIT_CMD_NAME(ECMD_VTRANS),            "Move Vertex",      "movement",  1, bspline_point_param, 1, 30, NULL },
+    { ECMD_BSPLINE_PICK_KNOT, RT_EDIT_CMD_NAME(ECMD_BSPLINE_PICK_KNOT), "Pick Knot",        "selection", 1, bspline_idx_param,   1, 40, NULL },
+    { ECMD_BSPLINE_SET_KNOT, RT_EDIT_CMD_NAME(ECMD_BSPLINE_SET_KNOT),  "Set Knot Value",   "topology",  1, bspline_knot_param,  1, 50, NULL }
 };
 
 static const struct rt_edit_prim_desc bspline_prim_desc = {
     "bspline", "B-Spline", 5, bspline_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_UNSUPPORTED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *

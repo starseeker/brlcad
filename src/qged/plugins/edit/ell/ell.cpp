@@ -83,7 +83,7 @@ EditEllTool::refresh()
      * view_update handler, so the display will be refreshed by the ongoing
      * update pass without an extra signal. */
     m_ell->blockSignals(true);
-    QMetaObject::invokeMethod(m_ell, "update_obj_wireframe", Qt::DirectConnection);
+    QMetaObject::invokeMethod(m_ell, "refresh_preview", Qt::DirectConnection);
     m_ell->blockSignals(false);
 }
 

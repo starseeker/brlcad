@@ -35,7 +35,7 @@
  *   - ECMD_REVOLVE_SET_R sets start vector
  *   - ECMD_REVOLVE_SET_ANG sets angle (degrees in, radians stored)
  *   - ECMD_REVOLVE_SET_SKT sets sketch name
- *   - rt_edit_revolve_get_params returns correct values
+ *   - rt_edit_revolve_get_values returns correct values
  */
 
 #include "common.h"
@@ -219,14 +219,31 @@ main(int argc, char *argv[])
     bu_log("TEST 6 PASS: sketch_name = '%s'\n", bu_vls_cstr(&rip->sketch_name));
 
     /* ================================================================
-     * Test 7: rt_edit_revolve_get_params returns angle in degrees
+     * Test 7: rt_edit_revolve_get_values returns angle in degrees
      * ================================================================*/
     reset_s(s, rip);   /* ang = M_2PI */
-    fastf_t vals[4] = {0};
-    int nv = (*EDOBJ[dp->d_minor_type].ft_edit_get_params)(s, ECMD_REVOLVE_SET_ANG, vals);
-    if (nv != 1 || !NEAR_EQUAL(vals[0], 360.0, 1e-9))
-	bu_exit(1, "ERROR: get_params(SET_ANG): nv=%d vals[0]=%g\n", nv, vals[0]);
-    bu_log("TEST 7 PASS: get_params(SET_ANG) = %g deg\n", vals[0]);
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_REVOLVE_SET_ANG, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 1 ||
+	!NEAR_EQUAL(vals.values[0], 360.0, 1e-9))
+	bu_exit(1, "ERROR: get_values(SET_ANG): status=%d value=%g\n",
+	    status, vals.values[0]);
+    bu_log("TEST 7 PASS: get_values(SET_ANG) = %g deg\n",
+	vals.values[0]);
+
+    /* ================================================================
+     * Test 8: string current-value readback follows the same contract
+     * ================================================================*/
+    bu_vls_trunc(&rip->sketch_name, 0);
+    bu_vls_strcpy(&rip->sketch_name, "current_sketch");
+    status = rt_edit_cmd_values_get(s, ECMD_REVOLVE_SET_SKT, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.string_count != 1 ||
+	!vals.string_valid[0] ||
+	bu_strcmp(vals.strings[0], "current_sketch") != 0)
+	bu_exit(1, "ERROR: get_values(SET_SKT): status=%d value='%s'\n",
+	    status, vals.strings[0]);
+    bu_log("TEST 8 PASS: get_values(SET_SKT) = '%s'\n",
+	vals.strings[0]);
 
     bu_log("All REVOLVE edit tests PASSED\n");
 

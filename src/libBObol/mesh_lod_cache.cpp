@@ -50,7 +50,7 @@
 
 #define POP_CUT_COUNT_MAX BOBOL_MESH_LOD_CUT_COUNT_MAX
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 18
+#define CACHE_CURRENT_FORMAT 20
 
 #define CACHE_POP_MAX_CUT "max"
 #define CACHE_POP_MIN_CUT "min"
@@ -64,6 +64,7 @@
 #define CACHE_VERTNORM_CUT "vn"
 #define CACHE_TRI_CUT "t"
 #define CACHE_CLUSTER_GRID "cg"
+#define CACHE_CLUSTER_IDS "gi"
 #define CACHE_CLUSTER_BOUNDS "gb"
 #define CACHE_CLUSTER_RANGE_OFFSETS "go"
 #define CACHE_CLUSTER_RANGES "gr"
@@ -771,6 +772,7 @@ private:
     std::vector<uint32_t> triIndexMap;
     std::vector<uint8_t> vertexTriMinCut;
     std::vector<uint8_t> faceActivationCut;
+    std::vector<uint16_t> faceClusterCell;
     std::vector<std::vector<uint32_t>> cutTriVerts;
     std::vector<std::vector<uint32_t>> cutTris;
     std::vector<struct BObolMeshLodClusterInfo> clusterInfos;
@@ -868,6 +870,8 @@ BObolPopState::triProcess(void)
      * below remains serial and source ordered, preserving byte-for-byte
      * deterministic cache topology regardless of worker count. */
     faceActivationCut.assign(faceCount, UINT8_MAX);
+    const bool buildSpatialCells = faceCount != 0;
+    faceClusterCell.assign(faceCount, UINT16_MAX);
     const fastf_t extent[3] = {
 	maxx - minx, maxy - miny, maxz - minz
     };
@@ -929,10 +933,12 @@ BObolPopState::triProcess(void)
 	}
 	return distinguishable ? cut : maxPopCut;
     };
-    const auto classifyRange = [this, &quantize, &pairCut](
+    const auto classifyRange = [this, &quantize, &pairCut, &minimum,
+	    &extent, buildSpatialCells](
 	    size_t begin, size_t end) {
 	for (size_t faceIndex = begin; faceIndex < end; ++faceIndex) {
 	BObolPopRec triangle[3];
+	double centroid[3] = {0.0, 0.0, 0.0};
 	bool badFace = false;
 	for (size_t cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
 	    int faceVertex = faceArray[3 * faceIndex + cornerIndex];
@@ -946,6 +952,9 @@ BObolPopState::triProcess(void)
 		quantize(vertexArray[faceVertex][Y], Y);
 	    triangle[cornerIndex].z =
 		quantize(vertexArray[faceVertex][Z], Z);
+	    for (int axis = 0; axis < 3; ++axis)
+		centroid[axis] += static_cast<double>(
+		    vertexArray[faceVertex][axis]);
 	}
 	if (badFace)
 	    continue;
@@ -954,6 +963,24 @@ BObolPopState::triProcess(void)
 	    std::max(pairCut(triangle[1], triangle[2]),
 		     pairCut(triangle[0], triangle[2])));
 	faceActivationCut[faceIndex] = static_cast<uint8_t>(cut);
+	if (buildSpatialCells) {
+	    constexpr size_t side = BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
+	    size_t cell[3] = {0, 0, 0};
+	    for (int axis = 0; axis < 3; ++axis) {
+		centroid[axis] /= 3.0;
+		if (extent[axis] > 0.0) {
+		    const double scaled = floor(
+			(centroid[axis] - minimum[axis]) /
+			extent[axis] * side);
+		    cell[axis] = scaled <= 0.0 ? 0 :
+			static_cast<size_t>(std::min<double>(side - 1,
+			    scaled));
+		}
+	    }
+	    const size_t cluster = cell[X] +
+		side * (cell[Y] + side * cell[Z]);
+	    faceClusterCell[faceIndex] = static_cast<uint16_t>(cluster);
+	}
 	}
     };
 
@@ -1066,7 +1093,11 @@ BObolPopState::buildClusters(void)
 	faceCount > UINT32_MAX / 3 || cutTris.size() != cutCount)
 	return false;
 
-    struct ClusterBounds {
+    if (faceClusterCell.size() != faceCount)
+	return false;
+
+    struct ClusterBuild {
+	uint32_t id = 0;
 	double minimum[3] = {
 	    std::numeric_limits<double>::infinity(),
 	    std::numeric_limits<double>::infinity(),
@@ -1077,33 +1108,21 @@ BObolPopState::buildClusters(void)
 	    -std::numeric_limits<double>::infinity(),
 	    -std::numeric_limits<double>::infinity()
 	};
+	std::vector<BObolMeshLodClusterRange> ranges;
     };
-    std::array<ClusterBounds, clusterCount> bounds;
-    std::array<std::vector<BObolMeshLodClusterRange>, clusterCount>
-	rangesByCluster;
-    const double minimum[3] = {minx, miny, minz};
-    const double extent[3] = {maxx - minx, maxy - miny, maxz - minz};
-
-    const auto faceCluster = [this, &minimum, &extent](
-	    uint32_t sourceFace) -> size_t {
-	size_t cell[3] = {0, 0, 0};
-	for (int axis = 0; axis < 3; ++axis) {
-	    double centroid = 0.0;
-	    for (size_t corner = 0; corner < 3; ++corner) {
-		const int vertex = faceArray[
-		    3 * static_cast<size_t>(sourceFace) + corner];
-		centroid += static_cast<double>(vertexArray[vertex][axis]);
-	    }
-	    centroid /= 3.0;
-	    if (extent[axis] > 0.0) {
-		const double normalized =
-		    (centroid - minimum[axis]) / extent[axis];
-		const double scaled = floor(normalized * side);
-		cell[axis] = scaled <= 0.0 ? 0 :
-		    static_cast<size_t>(std::min<double>(side - 1, scaled));
-	    }
+    std::array<int, clusterCount> activeIndex;
+    activeIndex.fill(-1);
+    std::vector<ClusterBuild> active;
+    active.reserve(std::min(faceCount, clusterCount));
+    const auto clusterBuild = [&activeIndex, &active](
+	    size_t cluster) -> ClusterBuild & {
+	int &index = activeIndex[cluster];
+	if (index < 0) {
+	    index = static_cast<int>(active.size());
+	    active.emplace_back();
+	    active.back().id = static_cast<uint32_t>(cluster);
 	}
-	return cell[X] + side * (cell[Y] + side * cell[Z]);
+	return active[static_cast<size_t>(index)];
     };
 
     uint64_t cumulativeFaces = 0;
@@ -1113,8 +1132,11 @@ BObolPopState::buildClusters(void)
 	for (uint32_t sourceFace : sourceFaces) {
 	    if (sourceFace >= faceCount)
 		return false;
-	    const size_t cluster = faceCluster(sourceFace);
+	    const size_t cluster = faceClusterCell[sourceFace];
+	    if (cluster >= clusterCount)
+		return false;
 	    ++counts[cluster];
+	    ClusterBuild &build = clusterBuild(cluster);
 	    for (size_t corner = 0; corner < 3; ++corner) {
 		const int vertex = faceArray[
 		    3 * static_cast<size_t>(sourceFace) + corner];
@@ -1122,10 +1144,10 @@ BObolPopState::buildClusters(void)
 		    return false;
 		for (int axis = 0; axis < 3; ++axis) {
 		    const double value = vertexArray[vertex][axis];
-		    bounds[cluster].minimum[axis] =
-			std::min(bounds[cluster].minimum[axis], value);
-		    bounds[cluster].maximum[axis] =
-			std::max(bounds[cluster].maximum[axis], value);
+		    build.minimum[axis] =
+			std::min(build.minimum[axis], value);
+		    build.maximum[axis] =
+			std::max(build.maximum[axis], value);
 		}
 	    }
 	}
@@ -1140,7 +1162,7 @@ BObolPopState::buildClusters(void)
 		if (first > UINT32_MAX || count > UINT32_MAX ||
 		    first + count > UINT32_MAX)
 		    return false;
-		rangesByCluster[cluster].push_back({
+		clusterBuild(cluster).ranges.push_back({
 		    static_cast<uint32_t>(first),
 		    static_cast<uint32_t>(count),
 		    static_cast<uint8_t>(cut)
@@ -1156,37 +1178,38 @@ BObolPopState::buildClusters(void)
 	std::vector<uint32_t> ordered(sourceFaces.size());
 	std::array<size_t, clusterCount> cursor = offsets;
 	for (uint32_t sourceFace : sourceFaces) {
-	    const size_t cluster = faceCluster(sourceFace);
+	    const size_t cluster = faceClusterCell[sourceFace];
 	    ordered[cursor[cluster]++] = sourceFace;
 	}
 	sourceFaces.swap(ordered);
 	cumulativeFaces += sourceFaces.size();
     }
 
+    std::sort(active.begin(), active.end(),
+	[](const ClusterBuild &a, const ClusterBuild &b) {
+	    return a.id < b.id;
+	});
     size_t totalRangeCount = 0;
-    for (const auto &ranges : rangesByCluster)
-	totalRangeCount += ranges.size();
+    for (const ClusterBuild &build : active)
+	totalRangeCount += build.ranges.size();
     if (!totalRangeCount || totalRangeCount > clusterCount * cutCount)
 	return false;
     clusterRanges.reserve(totalRangeCount);
-    clusterInfos.resize(clusterCount);
-    for (size_t cluster = 0; cluster < clusterCount; ++cluster) {
+    clusterInfos.resize(active.size());
+    for (size_t cluster = 0; cluster < active.size(); ++cluster) {
+	const ClusterBuild &build = active[cluster];
 	BObolMeshLodClusterInfo &info = clusterInfos[cluster];
+	info.cluster_id = build.id;
 	const size_t firstRange = clusterRanges.size();
 	clusterRanges.insert(clusterRanges.end(),
-	    rangesByCluster[cluster].begin(), rangesByCluster[cluster].end());
+	    build.ranges.begin(), build.ranges.end());
 	info.range_count = static_cast<uint32_t>(
 	    clusterRanges.size() - firstRange);
-	if (!info.range_count) {
-	    VSETALL(info.bmin, 0.0);
-	    VSETALL(info.bmax, 0.0);
-	    info.ranges = NULL;
-	    continue;
-	}
-	VSET(info.bmin, bounds[cluster].minimum[X],
-	    bounds[cluster].minimum[Y], bounds[cluster].minimum[Z]);
-	VSET(info.bmax, bounds[cluster].maximum[X],
-	    bounds[cluster].maximum[Y], bounds[cluster].maximum[Z]);
+	if (!info.range_count || !std::isfinite(build.minimum[X]) ||
+	    !std::isfinite(build.maximum[X]))
+	    return false;
+	VSET(info.bmin, build.minimum[X], build.minimum[Y], build.minimum[Z]);
+	VSET(info.bmax, build.maximum[X], build.maximum[Y], build.maximum[Z]);
     }
     /* Assign borrowed pointers only after the flat vector has reached its
 	 * final capacity. */
@@ -1203,7 +1226,6 @@ BObolPopState::buildClusters(void)
 bool
 BObolPopState::buildChunks(void)
 {
-    constexpr size_t side = BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
     constexpr size_t cellCount = BOBOL_MESH_LOD_CLUSTER_COUNT;
     constexpr size_t faceTarget = BOBOL_MESH_LOD_CHUNK_FACE_TARGET;
 
@@ -1213,61 +1235,59 @@ BObolPopState::buildChunks(void)
 	faceActivationCut.size() != faceCount || cutCount == 0)
 	return false;
 
-    const double minimum[3] = {minx, miny, minz};
-    const double extent[3] = {maxx - minx, maxy - miny, maxz - minz};
-    const auto faceCell = [this, &minimum, &extent](
-	    uint32_t sourceFace) -> size_t {
-	size_t cell[3] = {0, 0, 0};
-	for (int axis = 0; axis < 3; ++axis) {
-	    double centroid = 0.0;
-	    for (size_t corner = 0; corner < 3; ++corner) {
-		const int vertex = faceArray[
-		    3 * static_cast<size_t>(sourceFace) + corner];
-		centroid += static_cast<double>(vertexArray[vertex][axis]);
-	    }
-	    centroid /= 3.0;
-	    if (extent[axis] > 0.0) {
-		const double normalized =
-		    (centroid - minimum[axis]) / extent[axis];
-		const double scaled = floor(normalized * side);
-		cell[axis] = scaled <= 0.0 ? 0 :
-		    static_cast<size_t>(std::min<double>(side - 1, scaled));
-	    }
-	}
-	return cell[X] + side * (cell[Y] + side * cell[Z]);
-    };
-
-    std::array<std::vector<uint32_t>, cellCount> cells;
     size_t validFaces = 0;
     for (size_t face = 0; face < faceCount; ++face) {
-	if (faceActivationCut[face] >= cutCount)
-	    continue;
-	const uint32_t sourceFace = static_cast<uint32_t>(face);
-	cells[faceCell(sourceFace)].push_back(sourceFace);
-	++validFaces;
+	if (faceActivationCut[face] < cutCount)
+	    ++validFaces;
     }
     if (!validFaces)
 	return false;
 
-    /* Preserve spatial cell order while packing bounded pages.  A fixed
-     * grid alone creates one enormous page for a scan concentrated in one
-     * cell; one page per nonempty cell creates hundreds of tiny pages for a
-     * modest mesh.  Packing and splitting by face count provides both a
-     * deterministic spatial order and a hard preparation/IO bound. */
-    for (std::vector<uint32_t> &cell : cells) {
-	size_t offset = 0;
-	while (offset < cell.size()) {
-	    if (chunkFaces.empty() ||
-		chunkFaces.back().size() >= faceTarget)
-		chunkFaces.emplace_back();
-	    std::vector<uint32_t> &chunk = chunkFaces.back();
-	    const size_t available = faceTarget - chunk.size();
-	    const size_t take = std::min(available, cell.size() - offset);
-	    chunk.insert(chunk.end(), cell.begin() + offset,
-		cell.begin() + offset + take);
-	    offset += take;
+    std::vector<uint32_t> orderedFaces;
+    orderedFaces.reserve(validFaces);
+    if (validFaces <= faceTarget) {
+	/* A one-page leaf needs no 512-way staging structure. */
+	for (size_t face = 0; face < faceCount; ++face)
+	    if (faceActivationCut[face] < cutCount)
+		orderedFaces.push_back(static_cast<uint32_t>(face));
+    } else {
+	if (faceClusterCell.size() != faceCount)
+	    return false;
+	std::array<size_t, cellCount> counts = {};
+	for (size_t face = 0; face < faceCount; ++face) {
+	    if (faceActivationCut[face] >= cutCount)
+		continue;
+	    const size_t cell = faceClusterCell[face];
+	    if (cell >= cellCount)
+		return false;
+	    ++counts[cell];
 	}
-	std::vector<uint32_t>().swap(cell);
+	std::array<size_t, cellCount + 1> offsets = {};
+	for (size_t cell = 0; cell < cellCount; ++cell)
+	    offsets[cell + 1] = offsets[cell] + counts[cell];
+	if (offsets.back() != validFaces)
+	    return false;
+	orderedFaces.resize(validFaces);
+	std::array<size_t, cellCount> cursor = {};
+	std::copy(offsets.begin(), offsets.begin() + cellCount,
+	    cursor.begin());
+	for (size_t face = 0; face < faceCount; ++face) {
+	    if (faceActivationCut[face] >= cutCount)
+		continue;
+	    const size_t cell = faceClusterCell[face];
+	    orderedFaces[cursor[cell]++] = static_cast<uint32_t>(face);
+	}
+    }
+
+    /* Preserve spatial cell order while packing bounded pages.  Page size is
+     * the hard preparation/IO bound; occupied cells need no heap object of
+     * their own. */
+    for (size_t offset = 0; offset < orderedFaces.size();) {
+	const size_t take = std::min(faceTarget,
+	    orderedFaces.size() - offset);
+	chunkFaces.emplace_back(orderedFaces.begin() + offset,
+	    orderedFaces.begin() + offset + take);
+	offset += take;
     }
     if (chunkFaces.empty() || chunkFaces.size() > UINT32_MAX)
 	return false;
@@ -1382,7 +1402,7 @@ BObolPopState::BObolPopState(
 
     if (!userKey) {
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char semantics[] = "BObol-chunked-PoP-format-19";
+	static const char semantics[] = "BObol-chunked-PoP-format-21";
 	bu_data_hash_update(state, semantics, sizeof(semantics));
 	bu_data_hash_update(state, vertexArray, vertexCount * sizeof(point_t));
 	bu_data_hash_update(state, faceArray, 3 * faceCount * sizeof(int));
@@ -1639,22 +1659,33 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	uint16_t diskGrid = 0;
 	if (!readMetadata(CACHE_CLUSTER_GRID, &diskGrid,
 		sizeof(diskGrid)) ||
-	    diskGrid != BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION) {
+	    (diskGrid != 0 &&
+	     diskGrid != BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION)) {
 	    cacheDone();
 	    return false;
 	}
+	clusterInfos.clear();
+	clusterRanges.clear();
+	if (diskGrid != 0) {
+	void *idBytes = NULL;
 
 	void *boundsBytes = NULL;
 	void *offsetBytes = NULL;
 	void *rangeBytes = NULL;
-	const size_t clusterCount = BOBOL_MESH_LOD_CLUSTER_COUNT;
+	const size_t idsSize = cacheGet(&idBytes, CACHE_CLUSTER_IDS);
+	if (!idBytes || !idsSize || idsSize % sizeof(uint16_t) != 0) {
+	    cacheDone();
+	    return false;
+	}
+	const size_t clusterCount = idsSize / sizeof(uint16_t);
 	const size_t boundsSize = cacheGet(&boundsBytes,
 	    CACHE_CLUSTER_BOUNDS);
 	const size_t offsetsSize = cacheGet(&offsetBytes,
 	    CACHE_CLUSTER_RANGE_OFFSETS);
 	const size_t rangesSize = cacheGet(&rangeBytes,
 	    CACHE_CLUSTER_RANGES);
-	if (!boundsBytes || !offsetBytes || !rangeBytes ||
+	if (!clusterCount || clusterCount > BOBOL_MESH_LOD_CLUSTER_COUNT ||
+	    !boundsBytes || !offsetBytes || !rangeBytes ||
 	    boundsSize != clusterCount * 6 * sizeof(double) ||
 	    offsetsSize != (clusterCount + 1) * sizeof(uint32_t) ||
 	    rangesSize == 0 ||
@@ -1713,22 +1744,28 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	}
 
 	clusterInfos.resize(clusterCount);
+	const unsigned char *diskIds =
+	    static_cast<const unsigned char *>(idBytes);
 	const unsigned char *diskBounds =
 	    static_cast<const unsigned char *>(boundsBytes);
 	for (size_t cluster = 0; cluster < clusterCount; ++cluster) {
+	    uint16_t diskId = 0;
+	    memcpy(&diskId, diskIds + cluster * sizeof(diskId),
+		sizeof(diskId));
+	    if (diskId >= BOBOL_MESH_LOD_CLUSTER_COUNT ||
+		(cluster && diskId <= clusterInfos[cluster - 1].cluster_id)) {
+		cacheDone();
+		return false;
+	    }
 	    double values[6] = {};
 	    memcpy(values, diskBounds + cluster * sizeof(values),
-		sizeof(values));
+		 sizeof(values));
 	    BObolMeshLodClusterInfo &info = clusterInfos[cluster];
+	    info.cluster_id = diskId;
 	    info.range_count = offsets[cluster + 1] - offsets[cluster];
 	    info.ranges = info.range_count ?
 		clusterRanges.data() + offsets[cluster] : NULL;
-	    if (!info.range_count) {
-		VSETALL(info.bmin, 0.0);
-		VSETALL(info.bmax, 0.0);
-		continue;
-	    }
-	    bool valid = true;
+	    bool valid = info.range_count != 0;
 	    for (double value : values)
 		valid = valid && std::isfinite(value);
 	    valid = valid && values[0] <= values[3] &&
@@ -1742,6 +1779,7 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	    }
 	    VSET(info.bmin, values[0], values[1], values[2]);
 	    VSET(info.bmax, values[3], values[4], values[5]);
+	}
 	}
     }
     {
@@ -1977,6 +2015,8 @@ BObolPopState::releaseGenerationScratch(void)
     vertexTriMinCut.shrink_to_fit();
     faceActivationCut.clear();
     faceActivationCut.shrink_to_fit();
+    faceClusterCell.clear();
+    faceClusterCell.shrink_to_fit();
     cutTriVerts.clear();
     cutTriVerts.shrink_to_fit();
     cutTris.clear();
@@ -2460,6 +2500,8 @@ BObolPopState::residentBytes(void) const
 	bytes, vertexTriMinCut.capacity(), sizeof(vertexTriMinCut[0]));
     bytes = mesh_lod_saturating_bytes_add(
 	bytes, faceActivationCut.capacity(), sizeof(faceActivationCut[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, faceClusterCell.capacity(), sizeof(faceClusterCell[0]));
     bytes = mesh_lod_saturating_bytes_add(
 	bytes, cutTriVerts.capacity(), sizeof(cutTriVerts[0]));
     bytes = mesh_lod_saturating_bytes_add(
@@ -2966,21 +3008,27 @@ BObolPopState::cacheTri(void)
 	    return false;
     }
 
-    if (clusterInfos.size() != BOBOL_MESH_LOD_CLUSTER_COUNT ||
-	clusterRanges.empty())
+    if (clusterInfos.size() > BOBOL_MESH_LOD_CLUSTER_COUNT ||
+	(clusterInfos.empty() != clusterRanges.empty()))
 	return false;
     {
-	const uint16_t diskGrid = BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
+	const uint16_t diskGrid = clusterInfos.empty() ? 0 :
+	    BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
 	if (!cacheWriteData(CACHE_CLUSTER_GRID, &diskGrid,
 		sizeof(diskGrid)))
 	    return false;
     }
-    {
+    if (!clusterInfos.empty()) {
+	std::vector<uint16_t> diskIds(clusterInfos.size());
 	std::vector<double> diskBounds(clusterInfos.size() * 6, 0.0);
 	for (size_t cluster = 0; cluster < clusterInfos.size(); ++cluster) {
 	    const BObolMeshLodClusterInfo &info = clusterInfos[cluster];
-	    if (!info.range_count)
-		continue;
+	    if (!info.range_count ||
+		info.cluster_id >= BOBOL_MESH_LOD_CLUSTER_COUNT ||
+		(cluster && info.cluster_id <=
+		 clusterInfos[cluster - 1].cluster_id))
+		return false;
+	    diskIds[cluster] = static_cast<uint16_t>(info.cluster_id);
 	    diskBounds[cluster * 6 + 0] = info.bmin[X];
 	    diskBounds[cluster * 6 + 1] = info.bmin[Y];
 	    diskBounds[cluster * 6 + 2] = info.bmin[Z];
@@ -2988,11 +3036,12 @@ BObolPopState::cacheTri(void)
 	    diskBounds[cluster * 6 + 4] = info.bmax[Y];
 	    diskBounds[cluster * 6 + 5] = info.bmax[Z];
 	}
-	if (!cacheWriteData(CACHE_CLUSTER_BOUNDS, diskBounds.data(),
+	if (!cacheWriteData(CACHE_CLUSTER_IDS, diskIds.data(),
+		diskIds.size() * sizeof(diskIds[0])) ||
+	    !cacheWriteData(CACHE_CLUSTER_BOUNDS, diskBounds.data(),
 		diskBounds.size() * sizeof(diskBounds[0])))
 	    return false;
-    }
-    {
+
 	std::vector<uint32_t> offsets(clusterInfos.size() + 1, 0);
 	for (size_t cluster = 0; cluster < clusterInfos.size(); ++cluster) {
 	    const uint64_t next = static_cast<uint64_t>(offsets[cluster]) +
@@ -3005,8 +3054,7 @@ BObolPopState::cacheTri(void)
 	    !cacheWriteData(CACHE_CLUSTER_RANGE_OFFSETS, offsets.data(),
 		offsets.size() * sizeof(offsets[0])))
 	    return false;
-    }
-    {
+
 	std::vector<BObolMeshLodClusterRangeDisk> diskRanges(
 	    clusterRanges.size());
 	for (size_t range = 0; range < clusterRanges.size(); ++range) {

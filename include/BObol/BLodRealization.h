@@ -385,8 +385,17 @@ struct BOBOL_EXPORT BObolLodRequest {
      * submission time.
      */
     BObolSourceRoutingId sourceRoutingId;
+    /* Fixed-width source-local compact-index hint.  UINT32_MAX means the
+     * request is not backed by a compact entry.  The occurrence key remains
+     * authoritative across index rebuilds; owner-thread consumers validate
+     * this hint before using it and fall back to the key on mismatch. */
+    uint32_t sourceEntryIndex;
     BObolViewEpoch viewRevision;
     BObolPolicyEpoch policyRevision;
+    /* View-local presentation emphasis captured by the same bounded compact
+     * census which projected this request: 0 ordinary, 1 highlighted,
+     * 2 selected.  It is scheduling metadata and not cache identity. */
+    uint8_t visualEmphasis;
     int drawMode;
     uint32_t lodPolicy;
     SbString providerId;

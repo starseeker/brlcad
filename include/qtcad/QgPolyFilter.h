@@ -55,6 +55,7 @@ static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PT_SELECT = GED_VIEW_P
 static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PT_SELECT_CLEAR = GED_VIEW_POLYGON_UPDATE_PT_SELECT_CLEAR;
 static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PT_MOVE = GED_VIEW_POLYGON_UPDATE_PT_MOVE;
 static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PT_APPEND = GED_VIEW_POLYGON_UPDATE_PT_APPEND;
+static constexpr qg_polygon_update_mode QG_POLYGON_UPDATE_PT_DELETE = GED_VIEW_POLYGON_UPDATE_PT_DELETE;
 
 typedef ged_view_polygon_ref qg_polygon_ref;
 #define QG_POLYGON_REF_NULL_INIT GED_VIEW_POLYGON_REF_NULL_INIT
@@ -108,6 +109,7 @@ public:
 	void finalize(bool);
 
 	std::vector<qg_polygon_ref> bool_objs;
+	std::vector<qg_polygon_ref> changed_objs;
 };
 
 class QTCAD_EXPORT QgPolyUpdateFilter : public QgPolyFilter {
@@ -140,6 +142,11 @@ class QTCAD_EXPORT QgPolyPointFilter : public QgPolyFilter {
 public:
 	QgPolyPointFilter() = default;
 	bool eventFilter(QObject *, QEvent *e) override;
+
+	/* The modify tool uses one filter for both point insertion and
+	 * persistent point selection/movement. */
+	bool append_point = false;
+	bool last_geometry_changed = false;
 };
 
 class QTCAD_EXPORT QgPolyMoveFilter : public QgPolyFilter {

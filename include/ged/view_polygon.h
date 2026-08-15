@@ -68,6 +68,10 @@ ged_view_polygon_snap_count(struct ged_view_context *view_ctx,
 GED_EXPORT extern int
 ged_view_polygon_clear_point_selection(struct ged_view_context *view_ctx);
 
+/** Clear whole-polygon selection from all polygons in the view. */
+GED_EXPORT extern int
+ged_view_polygon_clear_selection(struct ged_view_context *view_ctx);
+
 /** Exclude @p ref from subsequent polygon snap candidate queries. */
 GED_EXPORT extern int
 ged_view_polygon_snap_exclude_set(struct ged_view_context *view_ctx,
@@ -77,6 +81,27 @@ ged_view_polygon_snap_exclude_set(struct ged_view_context *view_ctx,
 GED_EXPORT extern struct directory *
 ged_view_polygon_export_sketch(struct ged_view_context *view_ctx,
 	struct db_i *dbip, const char *name, ged_view_polygon_ref ref);
+
+/** Replace the linked existing sketch with the current polygon state. */
+GED_EXPORT extern struct directory *
+ged_view_polygon_update_sketch(struct ged_view_context *view_ctx,
+	struct db_i *dbip, ged_view_polygon_ref ref);
+
+/** Set the stable database sketch name synchronized with @p ref. */
+GED_EXPORT extern int
+ged_view_polygon_sketch_name_set(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, const char *name);
+
+/**
+ * Synchronize the database sketch linked to @p ref with its current polygon
+ * state and publish the corresponding GED database event.
+ *
+ * Return -1 on error, 0 when the polygon has no linked sketch, 1 when a
+ * missing sketch was created, and 2 when an existing sketch was updated.
+ */
+GED_EXPORT extern int
+ged_view_polygon_sync_sketch(struct ged *gedp,
+	struct ged_view_context *view_ctx, ged_view_polygon_ref ref);
 
 /** Copy the current immutable state of @p ref into @p record. */
 GED_EXPORT extern int
@@ -97,6 +122,12 @@ ged_view_polygon_update(struct ged_view_context *view_ctx,
 GED_EXPORT extern int
 ged_view_polygon_update_screen_pt(struct ged_view_context *view_ctx,
 	ged_view_polygon_ref ref, int x, int y, enum ged_view_polygon_update op);
+
+/** Apply a model-positioned polygon edit operation. */
+GED_EXPORT extern int
+ged_view_polygon_update_model_pt(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, const point_t model_point,
+	enum ged_view_polygon_update op);
 
 /** Move @p ref by the model-space delta between two sample points. */
 GED_EXPORT extern int
@@ -120,6 +151,11 @@ ged_view_polygon_set_visual(struct ged_view_context *view_ctx,
 GED_EXPORT extern int
 ged_view_polygon_set_current(struct ged_view_context *view_ctx,
 	ged_view_polygon_ref ref, long contour_i, long point_i);
+
+/** Set whole-polygon selection presentation for @p ref. */
+GED_EXPORT extern int
+ged_view_polygon_set_selected(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, int selected);
 
 /** Set whether one contour is open. */
 GED_EXPORT extern int

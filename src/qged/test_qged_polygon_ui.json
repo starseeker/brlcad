@@ -38,6 +38,11 @@
       "arguments": { "x": 0.45, "y": 0.45, "button": 0, "buttons": 1, "modifiers": 0 }
     },
     {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_release",
       "arguments": { "x": 0.45, "y": 0.45, "button": 1, "buttons": 0, "modifiers": 0 }
@@ -92,6 +97,11 @@
       "arguments": { "x": 0.58, "y": 0.55, "button": 0, "buttons": 1, "modifiers": 0 }
     },
     {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_release",
       "arguments": { "x": 0.58, "y": 0.55, "button": 1, "buttons": 0, "modifiers": 0 }
@@ -124,6 +134,11 @@
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_move",
       "arguments": { "x": 0.61, "y": 0.40, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
     },
     {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
@@ -170,6 +185,11 @@
       "arguments": { "x": 0.38, "y": 0.39, "button": 0, "buttons": 1, "modifiers": 0 }
     },
     {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_release",
       "arguments": { "x": 0.38, "y": 0.39, "button": 1, "buttons": 0, "modifiers": 0 }
@@ -210,6 +230,11 @@
       "arguments": { "x": 0.39, "y": 0.40, "button": 0, "buttons": 1, "modifiers": 0 }
     },
     {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_release",
       "arguments": { "x": 0.39, "y": 0.40, "button": 1, "buttons": 0, "modifiers": 0 }
@@ -228,6 +253,11 @@
       "target": "i:org.brlcad.qged.polygon.modify.delete",
       "action": "activate",
       "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
     },
     {
       "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
@@ -278,6 +308,11 @@
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_move",
       "arguments": { "x": 0.42, "y": 0.44, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
     },
     {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
@@ -334,6 +369,11 @@
       "arguments": { "x": 0.85, "y": 0.68, "button": 1, "buttons": 0, "modifiers": 0 }
     },
     {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_press",
       "arguments": { "x": 0.78, "y": 0.86, "button": 1, "buttons": 1, "modifiers": 0 }
@@ -342,6 +382,11 @@
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_release",
       "arguments": { "x": 0.78, "y": 0.86, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
     },
     {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
@@ -398,6 +443,60 @@
       "arguments": { "checked": true }
     },
     {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon point_count mouse_general", "numeric_near": 3, "numeric_tolerance": 0.01 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.close",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.append-point",
+      "action": "assert_state",
+      "arguments": { "checked": true, "enabled": true }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.91, "y": 0.82, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.91, "y": 0.82, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.87, "y": 0.91, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.87, "y": 0.91, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon point_count mouse_general", "numeric_near": 5, "numeric_tolerance": 0.01 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.close",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_general",
+        "numeric_gt": 0,
+        "capture": "general_pre_edit_area"
+      }
+    },
+    {
       "target": "i:org.brlcad.qged.polygon.modify.select-point",
       "action": "activate",
       "arguments": { "checked": true }
@@ -413,6 +512,11 @@
       "arguments": { "x": 0.62, "y": 0.60, "button": 0, "buttons": 1, "modifiers": 0 }
     },
     {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_release",
       "arguments": { "x": 0.62, "y": 0.60, "button": 1, "buttons": 0, "modifiers": 0 }
@@ -422,8 +526,42 @@
       "action": "qged_command_expect",
       "arguments": {
         "command": "view polygon area mouse_general",
-        "numeric_gt_capture": "general_created_area",
+        "numeric_gt_capture": "general_pre_edit_area",
         "capture": "general_edited_area"
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.delete-point",
+      "action": "assert_state",
+      "arguments": { "enabled": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.delete-point",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon point_count mouse_general", "numeric_near": 4, "numeric_tolerance": 0.01 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "key_press",
+      "arguments": { "key": 16777223, "modifiers": 0, "text": "", "autorepeat": false, "count": 1 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon point_count mouse_general", "numeric_near": 3, "numeric_tolerance": 0.01 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_general",
+        "numeric_gt": 0,
+        "capture": "general_deleted_area"
       }
     },
     {
@@ -442,6 +580,11 @@
       "arguments": { "x": 0.72, "y": 0.55, "button": 0, "buttons": 1, "modifiers": 0 }
     },
     {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
       "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
       "action": "mouse_release",
       "arguments": { "x": 0.72, "y": 0.55, "button": 1, "buttons": 0, "modifiers": 0 }
@@ -451,7 +594,7 @@
       "action": "qged_command_expect",
       "arguments": {
         "command": "view polygon area mouse_general",
-        "numeric_near_capture": "general_edited_area",
+        "numeric_near_capture": "general_deleted_area",
         "numeric_tolerance": 0.001
       }
     },
@@ -459,6 +602,11 @@
       "target": "i:org.brlcad.qged.polygon.modify.delete",
       "action": "activate",
       "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
     },
     {
       "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
@@ -474,6 +622,706 @@
       "target": ".",
       "action": "qged_command_expect",
       "arguments": { "command": "view feature list mouse_general", "not_contains": "mouse_general" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.boolean-mode",
+      "action": "set_index",
+      "arguments": { "index": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.circle",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.fill-enabled",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.fill-slope-x",
+      "action": "set_text",
+      "arguments": { "text": "2" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.fill-slope-y",
+      "action": "set_text",
+      "arguments": { "text": "3" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.fill-spacing",
+      "action": "set_text",
+      "arguments": { "text": "7" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.edge-color.text",
+      "action": "set_text",
+      "arguments": { "text": "12/34/56" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.fill-color.text",
+      "action": "set_text",
+      "arguments": { "text": "70/80/90" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.view-name",
+      "action": "set_text",
+      "arguments": { "text": "mouse_circle" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.10, "y": 0.10, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.22, "y": 0.22, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.22, "y": 0.22, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "view polygon area mouse_circle",
+	"numeric_gt": 0,
+	"capture": "circle_area"
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "view feature style get mouse_circle color",
+	"contains": "12/34/56"
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "view polygon fill_color mouse_circle",
+	"contains": "70/80/90"
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "view polygon fill mouse_circle",
+	"contains": "1 2 3 7"
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "set_index",
+      "arguments": { "index": 1 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "assert_state",
+      "arguments": { "text": "mouse_circle", "index": 1, "count": 2 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-enabled",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.edge-color.text",
+      "action": "assert_state",
+      "arguments": { "text": "12/34/56" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-color.text",
+      "action": "assert_state",
+      "arguments": { "text": "70/80/90" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+	"commands": [
+	  "view feature style set mouse_circle color 101/102/103",
+	  "view polygon fill_color mouse_circle 104/105/106",
+	  "view polygon fill mouse_circle 4 5 9"
+	]
+      }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 50 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.edge-color.text",
+      "action": "assert_state",
+      "arguments": { "text": "101/102/103" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-color.text",
+      "action": "assert_state",
+      "arguments": { "text": "104/105/106" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-slope-x",
+      "action": "assert_state",
+      "arguments": { "text": "4" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-slope-y",
+      "action": "assert_state",
+      "arguments": { "text": "5" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-spacing",
+      "action": "assert_state",
+      "arguments": { "text": "9" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.edge-color.text",
+      "action": "set_text",
+      "arguments": { "text": "20/30/40" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-color.text",
+      "action": "set_text",
+      "arguments": { "text": "50/60/70" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-slope-x",
+      "action": "set_text",
+      "arguments": { "text": "6" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-slope-y",
+      "action": "set_text",
+      "arguments": { "text": "7" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.fill-spacing",
+      "action": "set_text",
+      "arguments": { "text": "11" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "view feature style get mouse_circle color",
+	"contains": "20/30/40"
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "view polygon fill_color mouse_circle",
+	"contains": "50/60/70"
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "view polygon fill mouse_circle",
+	"contains": "1 6 7 11"
+      }
+    },
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": { "width": 780, "height": 610 }
+    },
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": { "width": 1320, "height": 860 }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 50 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "view polygon area mouse_circle",
+	"numeric_near_capture": "circle_area",
+	"numeric_tolerance": 0.001
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.fill-enabled",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.ellipse",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.view-name",
+      "action": "set_text",
+      "arguments": { "text": "mouse_ellipse" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.62, "y": 0.12, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.82, "y": 0.25, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.82, "y": 0.25, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon area mouse_ellipse", "numeric_gt": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.square",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.view-name",
+      "action": "set_text",
+      "arguments": { "text": "mouse_square" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.08, "y": 0.72, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_move",
+      "arguments": { "x": 0.20, "y": 0.84, "button": 0, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.20, "y": 0.84, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon area mouse_square", "numeric_gt": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "assert_state",
+      "arguments": {
+	"text": "mouse_circle",
+	"index": 1,
+	"count": 4,
+	"items": ["mouse_rectangle", "mouse_circle", "mouse_ellipse", "mouse_square"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+        "commands": [
+          "view polygon create cli_points 100 100",
+          "view polygon append cli_points 200 100",
+          "view polygon append cli_points 200 200",
+          "view polygon append cli_points 100 200"
+        ]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon point_count cli_points", "numeric_near": 4, "numeric_tolerance": 0.01 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": { "commands": ["view polygon delete_point cli_points 3"] }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon point_count cli_points", "numeric_near": 3, "numeric_tolerance": 0.01 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": { "commands": ["view feature delete cli_points"] }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.general",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.view-name",
+      "action": "set_text",
+      "arguments": { "text": "cancelled_by_button" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.30, "y": 0.70, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.30, "y": 0.70, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.40, "y": 0.75, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.40, "y": 0.75, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.cancel",
+      "action": "assert_state",
+      "arguments": { "enabled": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.cancel",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view feature list _tmp_view_polygon", "not_contains": "_tmp_view_polygon" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.50, "y": 0.70, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.50, "y": 0.70, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "key_press",
+      "arguments": { "key": 16777216, "modifiers": 0, "text": "", "autorepeat": false, "count": 1 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view feature list _tmp_view_polygon", "not_contains": "_tmp_view_polygon" }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_press",
+      "arguments": { "x": 0.60, "y": 0.70, "button": 1, "buttons": 1, "modifiers": 0 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "mouse_release",
+      "arguments": { "x": 0.60, "y": 0.70, "button": 1, "buttons": 0, "modifiers": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view feature list _tmp_view_polygon", "not_contains": "_tmp_view_polygon" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.view-name",
+      "action": "set_text",
+      "arguments": { "text": "mouse_circle_copy" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.copy-name",
+      "action": "set_text",
+      "arguments": { "text": "mouse_circle" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.copy",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view polygon area mouse_circle_copy",
+        "numeric_near_capture": "circle_area",
+        "numeric_tolerance": 0.001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view feature style get mouse_circle_copy color", "contains": "20/30/40" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon fill_color mouse_circle_copy", "contains": "50/60/70" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon fill mouse_circle_copy", "contains": "1 6 7 11" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": { "commands": ["view feature delete mouse_circle_copy"] }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.line-snapping",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.line-snapping",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "data_lines snap", "contains": "1" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view snap -l 0 0 0", "not_contains": "no lines close enough" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.line-snapping",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "data_lines snap", "contains": "0" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.grid-snapping",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.grid-snapping",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view faceplate grid snap", "contains": "1" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.create.grid-snapping",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view faceplate grid snap", "contains": "0" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+        "commands": [
+          "view feature delete mouse_rectangle",
+          "view feature delete mouse_circle",
+          "view feature delete mouse_ellipse",
+          "view feature delete mouse_square",
+          "view clear",
+          "view polygon create bool_target 200 200 rectangle",
+          "view polygon update bool_target 500 500",
+          "view polygon create bool_stencil 350 350 rectangle",
+          "view polygon update bool_stencil 550 550"
+        ]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon area bool_target", "numeric_gt": 0, "capture": "bool_union_base" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "assert_state",
+      "arguments": { "count": 2, "items": ["bool_target", "bool_stencil"] }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "set_index",
+      "arguments": { "index": 1 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.boolean-mode",
+      "action": "set_index",
+      "arguments": { "index": 0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.boolean-apply",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon area bool_target", "numeric_gt_capture": "bool_union_base" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+        "commands": [
+          "view feature delete bool_target",
+          "view feature delete bool_stencil",
+          "view clear",
+          "view polygon create bool_target 200 200 rectangle",
+          "view polygon update bool_target 500 500",
+          "view polygon create bool_stencil 350 350 rectangle",
+          "view polygon update bool_stencil 550 550"
+        ]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon area bool_target", "numeric_gt": 0, "capture": "bool_intersection_base" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "set_index",
+      "arguments": { "index": 1 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.boolean-mode",
+      "action": "set_index",
+      "arguments": { "index": 2 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.boolean-apply",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon area bool_target", "numeric_gt": 0, "numeric_lt_capture": "bool_intersection_base" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+        "commands": [
+          "view feature delete bool_target",
+          "view feature delete bool_stencil",
+          "view clear",
+          "view polygon create bool_target 200 200 rectangle",
+          "view polygon update bool_target 500 500",
+          "view polygon create bool_stencil 350 350 rectangle",
+          "view polygon update bool_stencil 550 550"
+        ]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon area bool_target", "numeric_gt": 0, "capture": "bool_difference_base" }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.polygon-name",
+      "action": "set_index",
+      "arguments": { "index": 1 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.boolean-mode",
+      "action": "set_index",
+      "arguments": { "index": 1 }
+    },
+    {
+      "target": "i:org.brlcad.qged.polygon.modify.boolean-apply",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view polygon area bool_target", "numeric_gt": 0, "numeric_lt_capture": "bool_difference_base" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": { "commands": ["view feature delete bool_target", "view feature delete bool_stencil", "view clear"] }
     }
   ]
 }

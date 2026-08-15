@@ -148,6 +148,11 @@ bu_exit(1, "ERROR: Unable to create database instance\n");
     s->mv_context = 1;
     struct rt_rpc_internal *edit_rpc = (struct rt_rpc_internal *)s->es_int.idb_ptr;
 
+    if (!rt_edit_test_scalar_value(s, ECMD_RPC_B, 5.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_RPC_H, 10.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_RPC_R, 3.0))
+	bu_exit(1, "ERROR: RPC descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================

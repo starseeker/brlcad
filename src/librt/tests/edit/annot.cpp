@@ -30,7 +30,7 @@
  *   - ECMD_ANNOT_SET_POS sets the 3-D anchor V
  *   - ECMD_ANNOT_SET_TSEG_TXT_SIZE changes the text size
  *   - ECMD_ANNOT_VERT_MOVE moves a 2-D control vertex
- *   - rt_edit_annot_get_params returns correct values
+ *   - rt_edit_annot_get_values returns correct values
  */
 
 #include "common.h"
@@ -222,18 +222,37 @@ main(int argc, char *argv[])
     }
 
     /* ================================================================
-     * Test 6: rt_edit_annot_get_params returns anchor position
+     * Test 6: rt_edit_annot_get_values returns anchor position
      * ================================================================*/
     VSET(aip->V, 3, 4, 5);
-    fastf_t vals[4] = {0};
-    int nv = (*EDOBJ[dp->d_minor_type].ft_edit_get_params)(s, ECMD_ANNOT_SET_POS, vals);
-    if (nv != 3 || !NEAR_EQUAL(vals[0], 3.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(vals[1], 4.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(vals[2], 5.0, SMALL_FASTF))
-	bu_exit(1, "ERROR: get_params(SET_POS): nv=%d vals=(%g,%g,%g)\n",
-		nv, vals[0], vals[1], vals[2]);
-    bu_log("TEST 6 PASS: get_params(SET_POS) = (%g,%g,%g)\n",
-	   vals[0], vals[1], vals[2]);
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_ANNOT_SET_POS, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 3 ||
+	!NEAR_EQUAL(vals.values[0], 3.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vals.values[1], 4.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vals.values[2], 5.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: get_values(SET_POS): status=%d values=(%g,%g,%g)\n",
+		status, vals.values[0], vals.values[1], vals.values[2]);
+    bu_log("TEST 6 PASS: get_values(SET_POS) = (%g,%g,%g)\n",
+	   vals.values[0], vals.values[1], vals.values[2]);
+
+    /* ================================================================
+     * Test 7: string current-value readback reports the current label
+     * ================================================================*/
+    {
+	struct txt_seg *tsg = (struct txt_seg *)aip->ant.segments[0];
+	bu_vls_trunc(&tsg->label, 0);
+	bu_vls_strcpy(&tsg->label, "Current label");
+	status = rt_edit_cmd_values_get(s, ECMD_ANNOT_SET_TEXT, &vals);
+	if (status != RT_EDIT_VALUE_OK || vals.string_count != 1 ||
+	    !vals.string_valid[0] ||
+	    bu_strcmp(vals.strings[0], "Current label") != 0)
+	    bu_exit(1,
+		"ERROR: get_values(SET_TEXT): status=%d value='%s'\n",
+		status, vals.strings[0]);
+	bu_log("TEST 7 PASS: get_values(SET_TEXT) = '%s'\n",
+	    vals.strings[0]);
+    }
 
     bu_log("All ANNOT edit tests PASSED\n");
 

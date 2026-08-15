@@ -86,6 +86,10 @@ struct ged_db_index_tree_leaf {
 struct ged_db_index {
     struct ged *gedp = nullptr;
     uint64_t revision = 0;
+    /* Change notification and index dirtiness are deliberately separate.
+     * Clients consume pending_flags to update their own derived state, while
+     * ordinary queries need only reconcile the database snapshot once. */
+    int needs_rebuild = 1;
     unsigned long long pending_flags = 0;
     std::unordered_map<ged_db_index_id, ged_db_index_record_native> records;
     std::unordered_map<ged_db_index_id, std::vector<ged_db_index_child_native>> children;
@@ -492,6 +496,7 @@ ged_db_index_rebuild(struct ged_db_index *index)
 
     ged_db_index_add_removed_names(index);
     index->revision++;
+    index->needs_rebuild = 0;
     return 1;
 }
 
@@ -502,7 +507,7 @@ ged_db_index_ready(struct ged *gedp)
     struct ged_db_index *index = ged_db_index_state(gedp);
     if (!index)
 	return nullptr;
-    if (!index->revision || index->pending_flags)
+    if (!index->revision || index->needs_rebuild)
 	ged_db_index_rebuild(index);
     return index;
 }
@@ -969,6 +974,7 @@ ged_db_index_refresh(struct ged *gedp)
 
     if (!ged_db_index_rebuild(index))
 	return 0;
+    index->needs_rebuild = 0;
     index->pending_flags = 0;
     return index->revision;
 }
@@ -985,8 +991,9 @@ ged_db_index_refresh_flags(struct ged *gedp)
     if (!flags)
 	return 0;
 
-    if (!ged_db_index_rebuild(index))
+    if (index->needs_rebuild && !ged_db_index_rebuild(index))
 	return 0;
+    index->needs_rebuild = 0;
     index->pending_flags = 0;
     return flags;
 }
@@ -1010,6 +1017,7 @@ ged_db_index_note_object_change(struct ged *gedp,
 	return 0;
 
     ged_db_index_note_lod_change(gedp, dp->d_namep);
+    index->needs_rebuild = 1;
     index->pending_flags |= GED_DB_INDEX_REFRESH_DB_CHANGE;
 
     if (change_kind == GED_DB_INDEX_OBJECT_REMOVED) {
@@ -1047,6 +1055,7 @@ ged_db_index_note_object_name_change(struct ged *gedp,
 	    return 0;
 	ged_db_index_note_lod_change(gedp, name);
 	index->removed_names[id] = std::string(name);
+	index->needs_rebuild = 1;
 	index->pending_flags |= GED_DB_INDEX_REFRESH_DB_CHANGE;
 	ged_db_index_record_remove(index, id);
 	return 1;

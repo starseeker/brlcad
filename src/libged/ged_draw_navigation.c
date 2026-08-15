@@ -24,6 +24,8 @@
 
 #include "common.h"
 
+#include <limits.h>
+
 #include "bu/malloc.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
@@ -43,6 +45,20 @@ ged_draw_has_shapes(struct ged *gedp)
 {
     if (!gedp)
 	return 0;
+
+    /* A synchronized Obol scene already owns an authoritative top-level
+     * database-source index.  Walking every compact occurrence to answer a
+     * yes/no question is both semantically unnecessary (all occurrences of
+     * one retained source resolve to the same shape ref) and disastrous for
+     * large scenes: the 150k GUI stress spent measurable wall time allocating
+     * transient path/context records just to rediscover that one draw root
+     * exists.  Keep the traversal as the representation-independent fallback
+     * for mixed/legacy scene backends. */
+    if (ged_draw_obol_scene_controller_full_synced(gedp)) {
+	size_t source_count = 0;
+	if (ged_draw_obol_database_source_count(gedp, 0, &source_count))
+	    return source_count != 0;
+    }
     int found = 0;
     ged_draw_source_root_foreach_shape_ref(gedp, 0, _any_shape_cb, &found);
     return found;
@@ -139,6 +155,17 @@ ged_draw_shape_count(struct ged *gedp)
 {
     if (!gedp)
 	return 0;
+
+    /* Compact source records are leaf-level semantic detail beneath one
+     * top-level shape ref.  The Obol source index therefore supplies the
+     * exact result without materializing and deduplicating every leaf path.
+     * Saturate the historical int return type defensively. */
+    if (ged_draw_obol_scene_controller_full_synced(gedp)) {
+	size_t source_count = 0;
+	if (ged_draw_obol_database_source_count(gedp, 0, &source_count))
+	    return source_count > (size_t)INT_MAX ? INT_MAX :
+		(int)source_count;
+    }
     struct _shape_ref_snapshot snap;
     _sg_build_shape_snapshot(gedp, &snap);
     int n = (int)snap.count;

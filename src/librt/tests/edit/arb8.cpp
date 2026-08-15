@@ -126,6 +126,65 @@ arb8_reset(struct rt_edit *s, struct rt_arb_internal *arb, struct rt_arb8_edit *
 }
 
 
+static void
+check_arb_edit_topology(struct rt_db_internal *ip, struct rt_arb_internal *arb,
+	const struct bn_tol *tol)
+{
+    static const point_t shapes[5][8] = {
+	{{0, 0, 0}, {0, 10, 0}, {0, 10, 10}, {0, 0, 0},
+	 {10, 10, 0}, {10, 10, 0}, {10, 10, 0}, {10, 10, 0}},
+	{{0, 0, 0}, {0, 10, 0}, {0, 10, 10}, {0, 0, 10},
+	 {10, 5, 5}, {10, 5, 5}, {10, 5, 5}, {10, 5, 5}},
+	{{0, 0, 0}, {0, 10, 0}, {0, 10, 10}, {0, 0, 5},
+	 {10, 5, 0}, {10, 5, 0}, {10, 5, 10}, {10, 5, 10}},
+	{{0, 0, 0}, {0, 10, 0}, {0, 10, 10}, {0, 0, 5},
+	 {10, 0, 0}, {10, 10, 0}, {10, 10, 5}, {10, 0, 0}},
+	{{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0},
+	 {0, 0, 10}, {10, 0, 10}, {10, 10, 10}, {0, 10, 10}}
+    };
+    static const int edge_counts[5] = {6, 8, 9, 11, 12};
+    static const int face_counts[5] = {4, 5, 5, 6, 6};
+    static const int movable_edge_counts[5] = {0, 8, 8, 11, 12};
+
+    for (int ti = 0; ti < 5; ti++) {
+	memcpy(arb->pt, shapes[ti], sizeof(shapes[ti]));
+	struct rt_arb_edit_topology topology;
+	if (rt_arb_edit_topology_get(&topology, ip, tol) != BRLCAD_OK ||
+	    topology.arb_type != ti + 4 ||
+	    topology.vertex_count != ti + 4 ||
+	    topology.edge_count != edge_counts[ti] ||
+	    topology.face_count != face_counts[ti])
+	    bu_exit(1, "ERROR: ARB%d edit topology dimensions are invalid\n",
+		ti + 4);
+	int movable_edges = 0;
+	for (int ei = 0; ei < topology.edge_count; ei++) {
+	    const struct rt_arb_edit_edge *edge = &topology.edges[ei];
+	    if (edge->vertices[0] < 0 ||
+		edge->vertices[0] >= topology.vertex_count ||
+		edge->vertices[1] < 0 ||
+		edge->vertices[1] >= topology.vertex_count ||
+		edge->vertices[0] == edge->vertices[1])
+		bu_exit(1, "ERROR: ARB%d edit topology has invalid edge\n",
+		    ti + 4);
+	    if (edge->edit_index >= 0)
+		movable_edges++;
+	}
+	if (movable_edges != movable_edge_counts[ti])
+	    bu_exit(1, "ERROR: ARB%d edit topology has %d movable edges, expected %d\n",
+		ti + 4, movable_edges, movable_edge_counts[ti]);
+	for (int fi = 0; fi < topology.face_count; fi++) {
+	    const struct rt_arb_edit_face *face = &topology.faces[fi];
+	    if (face->vertex_count < 3 ||
+		face->vertex_count > RT_ARB_EDIT_MAX_FACE_VERTICES ||
+		face->edit_index < 0 || !face->rotatable)
+		bu_exit(1, "ERROR: ARB%d edit topology has invalid face\n",
+		    ti + 4);
+	}
+    }
+    bu_log("ARB4-ARB8 edit topology SUCCESS\n");
+}
+
+
 int
 main(int argc, char *argv[])
 {
@@ -155,6 +214,24 @@ main(int argc, char *argv[])
     struct rt_arb_internal *arb =
 	(struct rt_arb_internal *)s->es_int.idb_ptr;
     struct rt_arb8_edit *a = (struct rt_arb8_edit *)s->ipe_ptr;
+
+    check_arb_edit_topology(&s->es_int, arb, &tol);
+    arb8_reset(s, arb, a);
+
+    struct rt_edit_param_bounds vertexBounds = {};
+    struct rt_edit_param_bounds edgeBounds = {};
+    struct rt_edit_param_bounds faceBounds = {};
+    if (rt_edit_param_bounds_get(s, ECMD_ARB_SELECT_VERTEX, 0,
+	    &vertexBounds) != BRLCAD_OK || !vertexBounds.has_maximum ||
+	!NEAR_EQUAL(vertexBounds.maximum, 7.0, SMALL_FASTF) ||
+	rt_edit_param_bounds_get(s, EARB, 0, &edgeBounds) != BRLCAD_OK ||
+	!edgeBounds.has_maximum ||
+	!NEAR_EQUAL(edgeBounds.maximum, 11.0, SMALL_FASTF) ||
+	rt_edit_param_bounds_get(s, ECMD_ARB_MOVE_FACE, 0,
+	    &faceBounds) != BRLCAD_OK || !faceBounds.has_maximum ||
+	!NEAR_EQUAL(faceBounds.maximum, 5.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: ARB current-topology parameter bounds are invalid\n");
+    bu_log("ARB current-topology parameter bounds SUCCESS\n");
 
     vect_t mousevec;
 

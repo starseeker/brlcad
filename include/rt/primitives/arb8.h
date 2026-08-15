@@ -480,6 +480,69 @@ struct rt_edit;
 
 RT_EXPORT extern const short int rt_arb_vertices[5][24];
 
+/** Maximum topology sizes for the standard ARB4 through ARB8 family. */
+#define RT_ARB_EDIT_MAX_VERTICES 8
+#define RT_ARB_EDIT_MAX_EDGES 12
+#define RT_ARB_EDIT_MAX_FACES 6
+#define RT_ARB_EDIT_MAX_FACE_VERTICES 4
+
+/**
+ * One canonical, user-visible ARB vertex.
+ *
+ * topology_index is the dense index used by the topology edge and face
+ * records.  edit_index is the stored rt_arb_internal point index accepted by
+ * the primitive edit command.  They differ for collapsed ARB encodings such
+ * as the fourth vertex of an ARB4.
+ */
+struct rt_arb_edit_vertex {
+    int topology_index;
+    int edit_index;
+    int label;
+};
+
+/** One geometric ARB edge and, when non-negative, its move-edge index. */
+struct rt_arb_edit_edge {
+    int vertices[2];
+    int edit_index;
+};
+
+/** One geometric ARB face and its primitive edit capabilities. */
+struct rt_arb_edit_face {
+    int vertices[RT_ARB_EDIT_MAX_FACE_VERTICES];
+    int vertex_count;
+    int edit_index;
+    int movable;
+    int rotatable;
+};
+
+/**
+ * Canonical edit topology for one ARB instance.
+ *
+ * All vertex references in edges and faces are dense topology indices, never
+ * raw storage slots.  This is the source-neutral contract editors should use;
+ * clients must not reproduce the historical ARB subtype/menu tables.
+ */
+struct rt_arb_edit_topology {
+    int arb_type;
+    int vertex_count;
+    struct rt_arb_edit_vertex vertices[RT_ARB_EDIT_MAX_VERTICES];
+    int edge_count;
+    struct rt_arb_edit_edge edges[RT_ARB_EDIT_MAX_EDGES];
+    int face_count;
+    struct rt_arb_edit_face faces[RT_ARB_EDIT_MAX_FACES];
+};
+
+/**
+ * Query the legal vertex, edge, and face presentation/edit topology for an
+ * ARB4 through ARB8 instance.
+ *
+ * Returns BRLCAD_OK on success and BRLCAD_ERROR for invalid/non-ARB input.
+ */
+RT_EXPORT extern int rt_arb_edit_topology_get(
+    struct rt_arb_edit_topology *topology,
+    const struct rt_db_internal *ip,
+    const struct bn_tol *tol);
+
 
 /* arb8.c */
 

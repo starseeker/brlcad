@@ -171,6 +171,11 @@ main(int argc, char *argv[])
 
     struct rt_eto_internal *edit_eto = (struct rt_eto_internal *)s->es_int.idb_ptr;
 
+    if (!rt_edit_test_scalar_value(s, ECMD_ETO_R, 10.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_ETO_RD, 1.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_ETO_SCALE_C, sqrt(5.0)))
+	bu_exit(1, "ERROR: ETO descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================

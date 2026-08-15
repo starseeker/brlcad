@@ -12,11 +12,13 @@
 #include "common.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <vector>
 
 #include <QDir>
+#include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -24,19 +26,31 @@
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QMouseEvent>
 #include <QOpenGLWidget>
 #include <QPixmap>
 #include <QSaveFile>
 #include <QTimer>
 
+#include <Inventor/actions/SoGetBoundingBoxAction.h>
+#include <Inventor/SbViewVolume.h>
+#include <Inventor/nodes/SoCamera.h>
+
+#include "BObol/BEditManipulator.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "BObol/BLodService.h"
 #include "BObol/BDatabaseSource.h"
+#include "BObol/BInput.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BSourceRealization.h"
 #include "BObol/BViewController.h"
 #include "BObol/BViewLod.h"
+#include "BObol/BViewStore.h"
 #include "brlcad_version.h"
 #include "bu/log.h"
 #include "bu/str.h"
 #include "bu/vls.h"
+#include "ged/edit.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgGL.h"
 #include "qtcad/QgSW.h"
@@ -68,6 +82,787 @@ qged_test_all_controllers(QgEdApp &app)
 	    controllers.end())
 	controllers.push_back(controller);
     return controllers;
+}
+
+/* Resolve a retained Obol edit handle to the exact input pixels used by the
+ * active endpoint, then feed ordinary pointer events through that endpoint.
+ * This avoids backend-, font-, and device-pixel-ratio-specific coordinates in
+ * GUI scripts while still exercising the same input layer as real Qt mouse
+ * events. */
+static bool
+qged_test_drag_obol_edit_handle(QgEdApp &app,
+	const QJsonObject &arguments, QString *error)
+{
+    QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+    BObolViewController *controller = view ? view->obolViewController() :
+	nullptr;
+    bobol_display_endpoint_t *endpoint = view ? view->displayEndpoint() :
+	nullptr;
+    if (!controller || !endpoint) {
+	if (error)
+	    *error = QStringLiteral("no active Obol endpoint for edit drag");
+	return false;
+    }
+    const QString featureName = arguments.value(
+	QStringLiteral("feature")).toString(QStringLiteral(
+	    "_ell_edit_manipulator"));
+    const BObolFeatureHandle feature = controller->features().find(
+	featureName.toUtf8().constData(), BOBOL_FEATURE_SCOPE_LOCAL);
+    SoNode *rawNode = feature.isValid() ?
+	controller->features().node(feature) : nullptr;
+    if (!rawNode ||
+	!rawNode->isOfType(SoBRLEditManipulator::getClassTypeId())) {
+	if (error)
+	    *error = QStringLiteral("Obol edit feature is unavailable: %1")
+		.arg(featureName);
+	return false;
+    }
+    SoBRLEditManipulator *node =
+	static_cast<SoBRLEditManipulator *>(rawNode);
+    const QString handleName = arguments.value(
+	QStringLiteral("handle")).toString().toLower();
+    SoBRLEditManipulator::Handle handle =
+	SoBRLEditManipulator::HANDLE_NONE;
+    if (handleName == QLatin1String("a"))
+	handle = SoBRLEditManipulator::HANDLE_AXIS_A;
+    else if (handleName == QLatin1String("b"))
+	handle = SoBRLEditManipulator::HANDLE_AXIS_B;
+    else if (handleName == QLatin1String("c"))
+	handle = SoBRLEditManipulator::HANDLE_AXIS_C;
+    if (handle == SoBRLEditManipulator::HANDLE_NONE) {
+	if (error)
+	    *error = QStringLiteral("unknown Obol edit handle: %1")
+		.arg(handleName);
+	return false;
+    }
+    const SbVec2s viewport = controller->getViewportRegion().
+	getViewportSizePixels();
+    const int width = static_cast<int>(viewport[0]);
+    const int height = static_cast<int>(viewport[1]);
+    SoCamera *camera = controller->getCamera();
+    const float factor = static_cast<float>(arguments.value(
+	QStringLiteral("factor")).toDouble(1.25));
+    int startX = 0;
+    int startY = 0;
+    int endX = 0;
+    int endY = 0;
+    if (!camera || !node->screenPosition(handle, 1.0f, width, height,
+	    camera, startX, startY) ||
+	!node->screenPosition(handle, factor, width, height, camera,
+	    endX, endY)) {
+	if (error)
+	    *error = QStringLiteral("unable to project the Obol edit handle");
+	return false;
+    }
+
+    BObolInputEvent press;
+    press.type = BOBOL_INPUT_POINTER_PRESS;
+    press.x = startX;
+    press.y = startY;
+    press.button = 0;
+    press.buttons = 1u;
+    BObolInputEvent motion;
+    motion.type = BOBOL_INPUT_POINTER_MOTION;
+    motion.x = endX;
+    motion.y = endY;
+    motion.dx = endX - startX;
+    motion.dy = endY - startY;
+    motion.button = 0;
+    motion.buttons = 1u;
+    BObolInputEvent release;
+    release.type = BOBOL_INPUT_POINTER_RELEASE;
+    release.x = endX;
+    release.y = endY;
+    release.button = 0;
+    release.buttons = 0;
+    const int pressResult = bobol_display_endpoint_input_dispatch(endpoint,
+	&press);
+    const int motionResult = bobol_display_endpoint_input_dispatch(endpoint,
+	&motion);
+    const int releaseResult = bobol_display_endpoint_input_dispatch(endpoint,
+	&release);
+    if (pressResult == BOBOL_INPUT_RESULT_UNHANDLED ||
+	motionResult == BOBOL_INPUT_RESULT_UNHANDLED ||
+	releaseResult == BOBOL_INPUT_RESULT_UNHANDLED) {
+	if (error)
+	    *error = QStringLiteral(
+		"Obol edit drag was not handled (%1/%2/%3)")
+		.arg(pressResult).arg(motionResult).arg(releaseResult);
+	return false;
+    }
+    return true;
+}
+
+
+static SoBRLIndexedEditManipulator::Domain
+qged_test_indexed_domain(const QString &name)
+{
+    if (name.compare(QLatin1String("vertex"), Qt::CaseInsensitive) == 0)
+	return SoBRLIndexedEditManipulator::DOMAIN_VERTEX;
+    if (name.compare(QLatin1String("edge"), Qt::CaseInsensitive) == 0)
+	return SoBRLIndexedEditManipulator::DOMAIN_EDGE;
+    if (name.compare(QLatin1String("face"), Qt::CaseInsensitive) == 0)
+	return SoBRLIndexedEditManipulator::DOMAIN_FACE;
+    return SoBRLIndexedEditManipulator::DOMAIN_NONE;
+}
+
+
+/* Drag one feature from a retained indexed primitive manipulator. */
+static bool
+qged_test_drag_obol_indexed_edit_handle(QgEdApp &app,
+	const QJsonObject &arguments, QString *error)
+{
+    QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+    BObolViewController *controller = view ? view->obolViewController() :
+	nullptr;
+    bobol_display_endpoint_t *endpoint = view ? view->displayEndpoint() :
+	nullptr;
+    if (!controller || !endpoint || !controller->getCamera()) {
+	if (error)
+	    *error = QStringLiteral(
+		"no active Obol endpoint for indexed edit drag");
+	return false;
+    }
+    const QString featureName = arguments.value(
+	QStringLiteral("feature")).toString(QStringLiteral(
+	    "_arb_edit_manipulator"));
+    const BObolFeatureHandle feature = controller->features().find(
+	featureName.toUtf8().constData(), BOBOL_FEATURE_SCOPE_LOCAL);
+    SoNode *rawNode = feature.isValid() ?
+	controller->features().node(feature) : nullptr;
+    if (!rawNode ||
+	!rawNode->isOfType(SoBRLIndexedEditManipulator::getClassTypeId())) {
+	if (error)
+	    *error = QStringLiteral(
+		"Obol indexed edit feature is unavailable: %1")
+		.arg(featureName);
+	return false;
+    }
+    SoBRLIndexedEditManipulator *node =
+	static_cast<SoBRLIndexedEditManipulator *>(rawNode);
+    const SoBRLIndexedEditManipulator::Domain domain =
+	qged_test_indexed_domain(arguments.value(
+	    QStringLiteral("domain")).toString());
+    const int index = arguments.value(QStringLiteral("index")).toInt(-1);
+    const QJsonArray target = arguments.value(
+	QStringLiteral("target_point")).toArray();
+    if (domain == SoBRLIndexedEditManipulator::DOMAIN_NONE || index < 0 ||
+	target.size() != 3) {
+	if (error)
+	    *error = QStringLiteral(
+		"indexed edit drag requires domain, index, and target_point");
+	return false;
+    }
+    const SbVec2s viewport = controller->getViewportRegion().
+	getViewportSizePixels();
+    const int width = static_cast<int>(viewport[0]);
+    const int height = static_cast<int>(viewport[1]);
+    int startX = 0;
+    int startY = 0;
+    if (!node->screenPosition(domain, index, width, height,
+	    controller->getCamera(), startX, startY)) {
+	if (error)
+	    *error = QStringLiteral("unable to project indexed edit handle");
+	return false;
+    }
+    const SbVec3f targetPoint(
+	static_cast<float>(target.at(0).toDouble()),
+	static_cast<float>(target.at(1).toDouble()),
+	static_cast<float>(target.at(2).toDouble()));
+    const SbViewVolume volume = controller->getCamera()->getViewVolume(
+	static_cast<float>(width) / static_cast<float>(height));
+    SbVec3f targetScreen;
+    volume.projectToScreen(targetPoint, targetScreen);
+    const int endX = static_cast<int>(std::lround(targetScreen[0] * width));
+    const int endY = static_cast<int>(std::lround(
+	(1.0f - targetScreen[1]) * height));
+
+    BObolInputEvent press;
+    press.type = BOBOL_INPUT_POINTER_PRESS;
+    press.x = startX;
+    press.y = startY;
+    press.button = 0;
+    press.buttons = 1u;
+    BObolInputEvent motion;
+    motion.type = BOBOL_INPUT_POINTER_MOTION;
+    motion.x = endX;
+    motion.y = endY;
+    motion.dx = endX - startX;
+    motion.dy = endY - startY;
+    motion.button = 0;
+    motion.buttons = 1u;
+    BObolInputEvent release;
+    release.type = BOBOL_INPUT_POINTER_RELEASE;
+    release.x = endX;
+    release.y = endY;
+    release.button = 0;
+    release.buttons = 0;
+    const int pressResult = bobol_display_endpoint_input_dispatch(endpoint,
+	&press);
+    const int motionResult = bobol_display_endpoint_input_dispatch(endpoint,
+	&motion);
+    const int releaseResult = bobol_display_endpoint_input_dispatch(endpoint,
+	&release);
+    if (pressResult == BOBOL_INPUT_RESULT_UNHANDLED ||
+	motionResult == BOBOL_INPUT_RESULT_UNHANDLED ||
+	releaseResult == BOBOL_INPUT_RESULT_UNHANDLED) {
+	if (error)
+	    *error = QStringLiteral(
+		"indexed edit drag was not handled (%1/%2/%3)")
+		.arg(pressResult).arg(motionResult).arg(releaseResult);
+	return false;
+    }
+    return true;
+}
+
+/* Pick and drag a retained edit mesh through ordinary Qt mouse events.  The
+ * coordinates are derived from the live camera and retained points so the
+ * test is independent of backend, widget size, and device pixel ratio. */
+static bool
+qged_test_drag_obol_mesh_vertex(QgEdApp &app,
+	const QJsonObject &arguments, QString *error)
+{
+    QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+    BObolViewController *controller = view ? view->obolViewController() :
+	nullptr;
+    QgCanvasBase *canvas = view ? view->canvasBase() : nullptr;
+    QWidget *widget = canvas ? canvas->canvasWidget() : nullptr;
+    if (!controller || !widget || !controller->getCamera()) {
+	if (error)
+	    *error = QStringLiteral("no active Obol canvas for mesh edit drag");
+	return false;
+    }
+
+    const QString featureName = arguments.value(
+	QStringLiteral("feature")).toString(QStringLiteral(
+	    "_bot_edit_surface"));
+    const BObolFeatureHandle feature = controller->features().find(
+	featureName.toUtf8().constData(), BOBOL_FEATURE_SCOPE_LOCAL);
+    SoNode *rawNode = feature.isValid() ?
+	controller->features().node(feature) : nullptr;
+    if (!rawNode || !rawNode->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	if (error)
+	    *error = QStringLiteral("Obol edit mesh is unavailable: %1")
+		.arg(featureName);
+	return false;
+    }
+    SoBRLMeshShape *mesh = static_cast<SoBRLMeshShape *>(rawNode);
+    SoBRLMeshShape *geometry = mesh->getGeometrySource();
+    const int vertex = arguments.value(QStringLiteral("vertex")).toInt(-1);
+    const QJsonArray targetArray = arguments.value(
+	QStringLiteral("target_point")).toArray();
+
+    if (!geometry || vertex < 0 || vertex >= geometry->point.getNum() ||
+	targetArray.size() != 3) {
+	if (error)
+	    *error = QStringLiteral(
+		"drag_obol_mesh_vertex requires a valid vertex and target_point");
+	return false;
+    }
+
+    int faceVertices[3] = {-1, -1, -1};
+    for (int i = 0; i + 2 < geometry->coordIndex.getNum(); i += 3) {
+	const int a = geometry->coordIndex[i];
+	const int b = geometry->coordIndex[i + 1];
+	const int c = geometry->coordIndex[i + 2];
+	if (a == vertex || b == vertex || c == vertex) {
+	    faceVertices[0] = a;
+	    faceVertices[1] = b;
+	    faceVertices[2] = c;
+	    break;
+	}
+    }
+    if (faceVertices[0] < 0) {
+	if (error)
+	    *error = QStringLiteral("edit mesh vertex is not part of a face");
+	return false;
+    }
+
+    const SbVec3f vertexPoint = geometry->point[vertex];
+    SbVec3f centroid(0.0f, 0.0f, 0.0f);
+    for (int i = 0; i < 3; i++) {
+	if (faceVertices[i] < 0 ||
+	    faceVertices[i] >= geometry->point.getNum()) {
+	    if (error)
+		*error = QStringLiteral("edit mesh has an invalid face index");
+	    return false;
+	}
+	centroid += geometry->point[faceVertices[i]];
+    }
+    centroid /= 3.0f;
+    /* Stay just inside the triangle so the face pick is robust, but remain
+     * closest to the requested vertex for the edit adapter's vertex choice. */
+    const SbVec3f pressPoint = vertexPoint * 0.9f + centroid * 0.1f;
+    const SbVec3f targetPoint(
+	static_cast<float>(targetArray.at(0).toDouble()),
+	static_cast<float>(targetArray.at(1).toDouble()),
+	static_cast<float>(targetArray.at(2).toDouble()));
+    const SbVec3f releasePoint = pressPoint + targetPoint - vertexPoint;
+
+    const SbVec2s viewport = controller->getViewportRegion().
+	getViewportSizePixels();
+    const int width = static_cast<int>(viewport[0]);
+    const int height = static_cast<int>(viewport[1]);
+    if (width <= 0 || height <= 0) {
+	if (error)
+	    *error = QStringLiteral("edit mesh viewport is empty");
+	return false;
+    }
+    const SbViewVolume volume = controller->getCamera()->getViewVolume(
+	static_cast<float>(width) / static_cast<float>(height));
+    const auto project = [&](const SbVec3f &point, int &x, int &y) {
+	SbVec3f screen;
+	volume.projectToScreen(point, screen);
+	if (!std::isfinite(screen[0]) || !std::isfinite(screen[1]))
+	    return false;
+	x = static_cast<int>(std::lround(screen[0] * width));
+	y = static_cast<int>(std::lround((1.0f - screen[1]) * height));
+	return true;
+    };
+    int startX = 0, startY = 0, endX = 0, endY = 0;
+    if (!project(pressPoint, startX, startY) ||
+	!project(releasePoint, endX, endY)) {
+	if (error)
+	    *error = QStringLiteral("unable to project edit mesh drag");
+	return false;
+    }
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    QMouseEvent press(QEvent::MouseButtonPress, QPoint(startX, startY),
+	Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent motion(QEvent::MouseMove, QPoint(endX, endY),
+	Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPoint(endX, endY),
+	Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+#else
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(startX, startY),
+	QPointF(startX, startY), Qt::LeftButton, Qt::LeftButton,
+	Qt::NoModifier);
+    QMouseEvent motion(QEvent::MouseMove, QPointF(endX, endY),
+	QPointF(endX, endY), Qt::NoButton, Qt::LeftButton,
+	Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(endX, endY),
+	QPointF(endX, endY), Qt::LeftButton, Qt::NoButton,
+	Qt::NoModifier);
+#endif
+    const bool pressed = QCoreApplication::sendEvent(widget, &press);
+    const bool moved = QCoreApplication::sendEvent(widget, &motion);
+    const bool released = QCoreApplication::sendEvent(widget, &release);
+    if (!pressed || !moved || !released) {
+	if (error)
+	    *error = QStringLiteral(
+		"edit mesh drag was not consumed (%1/%2/%3)")
+		.arg(pressed).arg(moved).arg(released);
+	return false;
+    }
+    return true;
+}
+
+/* Verify the retained scene representation itself.  CLI and Qt assertions can
+ * agree while a stale manipulator remains on screen, so this is a distinct
+ * cross-frontend synchronization gate rather than another database query. */
+static bool
+qged_test_assert_obol_edit_handle(QgEdApp &app,
+	const QJsonObject &arguments, QString *error)
+{
+    std::vector<BObolViewController *> controllers;
+    if (arguments.value(QStringLiteral("all_views")).toBool())
+	controllers = qged_test_all_controllers(app);
+    else {
+	QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+	BObolViewController *controller = view ? view->obolViewController() :
+	    nullptr;
+	if (controller)
+	    controllers.push_back(controller);
+    }
+    if (controllers.empty()) {
+	if (error)
+	    *error = QStringLiteral("no Obol controller for edit assertion");
+	return false;
+    }
+
+    const QString featureName = arguments.value(
+	QStringLiteral("feature")).toString(QStringLiteral(
+	    "_ell_edit_manipulator"));
+    SoBRLEditManipulator::Handle handle = SoBRLEditManipulator::HANDLE_NONE;
+    const QString handleName = arguments.value(
+	QStringLiteral("handle")).toString().toLower();
+    if (handleName == QLatin1String("a"))
+	handle = SoBRLEditManipulator::HANDLE_AXIS_A;
+    else if (handleName == QLatin1String("b"))
+	handle = SoBRLEditManipulator::HANDLE_AXIS_B;
+    else if (handleName == QLatin1String("c"))
+	handle = SoBRLEditManipulator::HANDLE_AXIS_C;
+    if (handle == SoBRLEditManipulator::HANDLE_NONE ||
+	!arguments.contains(QStringLiteral("length"))) {
+	if (error)
+	    *error = QStringLiteral(
+		"assert_obol_edit_handle requires handle and length");
+	return false;
+    }
+
+    const double expected = arguments.value(QStringLiteral("length")).toDouble();
+    const double tolerance = arguments.value(
+	QStringLiteral("tolerance")).toDouble(1.0e-6);
+    for (size_t ci = 0; ci < controllers.size(); ++ci) {
+	BObolViewController *controller = controllers[ci];
+	const BObolFeatureHandle feature = controller->features().find(
+	    featureName.toUtf8().constData(), BOBOL_FEATURE_SCOPE_LOCAL);
+	SoNode *rawNode = feature.isValid() ?
+	    controller->features().node(feature) : nullptr;
+	if (!rawNode ||
+	    !rawNode->isOfType(SoBRLEditManipulator::getClassTypeId())) {
+	    if (error)
+		*error = QStringLiteral(
+		    "Obol edit feature is unavailable in view %1: %2")
+		    .arg(ci).arg(featureName);
+	    return false;
+	}
+	SoBRLEditManipulator *node =
+	    static_cast<SoBRLEditManipulator *>(rawNode);
+	const SbVec3f axis = node->axis(handle);
+	const double actual = std::sqrt(static_cast<double>(axis.dot(axis)));
+	if (!std::isfinite(actual) ||
+	    std::fabs(actual - expected) > tolerance) {
+	    if (error)
+		*error = QStringLiteral(
+		    "Obol handle %1 in view %2 is %3, expected %4 +/- %5")
+		    .arg(handleName).arg(ci).arg(actual, 0, 'g', 17)
+		    .arg(expected, 0, 'g', 17).arg(tolerance, 0, 'g', 17);
+	    return false;
+	}
+	if (arguments.contains(QStringLiteral("revision"))) {
+	    const uint32_t expectedRevision = static_cast<uint32_t>(
+		arguments.value(QStringLiteral("revision")).toInt());
+	    const uint32_t actualRevision = node->sessionRevision.getValue();
+	    if (actualRevision != expectedRevision) {
+		if (error)
+		    *error = QStringLiteral(
+			"Obol edit revision in view %1 is %2, expected %3")
+			.arg(ci).arg(actualRevision).arg(expectedRevision);
+		return false;
+	    }
+	}
+    }
+    return true;
+}
+
+
+static bool
+qged_test_assert_obol_indexed_edit_handle(QgEdApp &app,
+	const QJsonObject &arguments, QString *error)
+{
+    std::vector<BObolViewController *> controllers;
+    if (arguments.value(QStringLiteral("all_views")).toBool())
+	controllers = qged_test_all_controllers(app);
+    else {
+	QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+	BObolViewController *controller = view ?
+	    view->obolViewController() : nullptr;
+	if (controller)
+	    controllers.push_back(controller);
+    }
+    const QString featureName = arguments.value(
+	QStringLiteral("feature")).toString(QStringLiteral(
+	    "_arb_edit_manipulator"));
+    const SoBRLIndexedEditManipulator::Domain domain =
+	qged_test_indexed_domain(arguments.value(
+	    QStringLiteral("domain")).toString());
+    const int index = arguments.value(QStringLiteral("index")).toInt(-1);
+    const QJsonArray expectedPosition = arguments.value(
+	QStringLiteral("position")).toArray();
+    const double tolerance = arguments.value(
+	QStringLiteral("tolerance")).toDouble(1.0e-6);
+    if (controllers.empty() ||
+	domain == SoBRLIndexedEditManipulator::DOMAIN_NONE || index < 0) {
+	if (error)
+	    *error = QStringLiteral(
+		"indexed edit assertion requires controller, domain, and index");
+	return false;
+    }
+    for (size_t ci = 0; ci < controllers.size(); ci++) {
+	BObolViewController *controller = controllers[ci];
+	const BObolFeatureHandle feature = controller->features().find(
+	    featureName.toUtf8().constData(), BOBOL_FEATURE_SCOPE_LOCAL);
+	SoNode *rawNode = feature.isValid() ?
+	    controller->features().node(feature) : nullptr;
+	if (!rawNode || !rawNode->isOfType(
+		SoBRLIndexedEditManipulator::getClassTypeId())) {
+	    if (error)
+		*error = QStringLiteral(
+		    "indexed edit feature unavailable in view %1: %2")
+		    .arg(ci).arg(featureName);
+	    return false;
+	}
+	SoBRLIndexedEditManipulator *node =
+	    static_cast<SoBRLIndexedEditManipulator *>(rawNode);
+	if (node->selectionDomain.getValue() != static_cast<int>(domain) ||
+	    node->selectedIndex.getValue() != index) {
+	    if (error)
+		*error = QStringLiteral(
+		    "indexed selection in view %1 is domain %2 index %3")
+		    .arg(ci).arg(node->selectionDomain.getValue())
+		    .arg(node->selectedIndex.getValue());
+	    return false;
+	}
+	if (expectedPosition.size() == 3) {
+	    SbVec3f actual;
+	    if (!node->featurePosition(domain, index, actual)) {
+		if (error)
+		    *error = QStringLiteral(
+			"unable to read indexed feature position in view %1")
+			.arg(ci);
+		return false;
+	    }
+	    for (int axis = 0; axis < 3; axis++) {
+		const double expected = expectedPosition.at(axis).toDouble();
+		if (std::fabs(static_cast<double>(actual[axis]) - expected) >
+		    tolerance) {
+		    if (error)
+			*error = QStringLiteral(
+			    "indexed feature position in view %1 axis %2 is %3, expected %4")
+			    .arg(ci).arg(axis).arg(actual[axis], 0, 'g', 17)
+			    .arg(expected, 0, 'g', 17);
+		    return false;
+		}
+	    }
+	}
+    }
+    return true;
+}
+
+static bool
+qged_test_assert_obol_feature_controller(BObolViewController *controller,
+	const QJsonObject &arguments, const QString &featureName,
+	size_t viewIndex, QString *error)
+{
+    const BObolFeatureHandle feature = controller->features().find(
+	featureName.toUtf8().constData(), BOBOL_FEATURE_SCOPE_ALL);
+    const bool expected = arguments.value(
+	QStringLiteral("exists")).toBool(true);
+    if (feature.isValid() != expected) {
+	if (error)
+	    *error = QStringLiteral(
+		"Obol feature %1 in view %2 is %3, expected %4")
+		.arg(featureName).arg(viewIndex)
+		.arg(feature.isValid() ? QStringLiteral("present") :
+		    QStringLiteral("absent"))
+		.arg(expected ? QStringLiteral("present") :
+		    QStringLiteral("absent"));
+	return false;
+    }
+    if (!feature.isValid() ||
+	(!arguments.contains(QStringLiteral("visible")) &&
+	 !arguments.contains(QStringLiteral("bounds_size")) &&
+	 !arguments.contains(QStringLiteral("selected_primitives"))))
+	return true;
+
+    if (arguments.contains(QStringLiteral("visible"))) {
+	BObolFeatureStyle style;
+	if (!controller->features().style(feature, style)) {
+	    if (error)
+		*error = QStringLiteral(
+		    "unable to read Obol feature style in view %1: %2")
+		    .arg(viewIndex).arg(featureName);
+	    return false;
+	}
+	const bool actualVisible = !style.hasVisible || style.visible;
+	const bool expectedVisible = arguments.value(
+	    QStringLiteral("visible")).toBool();
+	if (actualVisible != expectedVisible) {
+	    if (error)
+		*error = QStringLiteral(
+		    "Obol feature %1 visibility in view %2 is %3, expected %4")
+		    .arg(featureName).arg(viewIndex).arg(actualVisible)
+		    .arg(expectedVisible);
+	    return false;
+	}
+    }
+
+    if (arguments.contains(QStringLiteral("bounds_size"))) {
+	const QJsonArray expectedArray = arguments.value(
+	    QStringLiteral("bounds_size")).toArray();
+	SoNode *node = controller->features().node(feature);
+	if (!node || expectedArray.size() != 3) {
+	    if (error)
+		*error = QStringLiteral(
+		    "assert_obol_feature bounds_size requires three values and a node");
+	    return false;
+	}
+	SoGetBoundingBoxAction boundsAction(controller->getViewportRegion());
+	boundsAction.apply(node);
+	const SbBox3f bounds = boundsAction.getBoundingBox();
+	if (bounds.isEmpty()) {
+	    if (error)
+		*error = QStringLiteral(
+		    "Obol feature %1 has empty bounds in view %2")
+		    .arg(featureName).arg(viewIndex);
+	    return false;
+	}
+	float minX = 0.0f, minY = 0.0f, minZ = 0.0f;
+	float maxX = 0.0f, maxY = 0.0f, maxZ = 0.0f;
+	bounds.getBounds(minX, minY, minZ, maxX, maxY, maxZ);
+	const double actual[3] = {
+	    static_cast<double>(maxX - minX),
+	    static_cast<double>(maxY - minY),
+	    static_cast<double>(maxZ - minZ)
+	};
+	const double tolerance = arguments.value(
+	    QStringLiteral("tolerance")).toDouble(1.0e-5);
+	for (int axis = 0; axis < 3; ++axis) {
+	    const double expectedSize = expectedArray.at(axis).toDouble();
+	    if (!std::isfinite(actual[axis]) ||
+		std::fabs(actual[axis] - expectedSize) > tolerance) {
+		if (error)
+		    *error = QStringLiteral(
+			"Obol feature %1 bounds size[%2] in view %3 is %4, expected %5 +/- %6")
+			.arg(featureName).arg(axis).arg(viewIndex)
+			.arg(actual[axis], 0, 'g', 17)
+			.arg(expectedSize, 0, 'g', 17)
+			.arg(tolerance, 0, 'g', 17);
+		return false;
+	    }
+	}
+    }
+    if (arguments.contains(QStringLiteral("selected_primitives"))) {
+	const QJsonArray expectedArray = arguments.value(
+	    QStringLiteral("selected_primitives")).toArray();
+	std::vector<int32_t> actual;
+	if (!controller->features().selectedPrimitives(feature, actual) ||
+	    actual.size() != static_cast<size_t>(expectedArray.size())) {
+	    if (error)
+		*error = QStringLiteral(
+		    "Obol feature %1 selected primitive count mismatch in view %2")
+		    .arg(featureName).arg(viewIndex);
+	    return false;
+	}
+	for (int i = 0; i < expectedArray.size(); i++) {
+	    if (actual[static_cast<size_t>(i)] != expectedArray.at(i).toInt()) {
+		if (error)
+		    *error = QStringLiteral(
+			"Obol feature %1 selected primitive[%2] in view %3 is %4, expected %5")
+			.arg(featureName).arg(i).arg(viewIndex)
+			.arg(actual[static_cast<size_t>(i)])
+			.arg(expectedArray.at(i).toInt());
+		return false;
+	    }
+	}
+    }
+    return true;
+}
+
+static bool
+qged_test_assert_obol_feature(QgEdApp &app,
+	const QJsonObject &arguments, QString *error)
+{
+    std::vector<BObolViewController *> controllers;
+    if (arguments.value(QStringLiteral("all_views")).toBool())
+	controllers = qged_test_all_controllers(app);
+    else {
+	QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+	BObolViewController *controller = view ? view->obolViewController() :
+	    nullptr;
+	if (controller)
+	    controllers.push_back(controller);
+    }
+    const QString featureName = arguments.value(
+	QStringLiteral("feature")).toString();
+    if (controllers.empty() || featureName.isEmpty()) {
+	if (error)
+	    *error = QStringLiteral(
+		"assert_obol_feature requires a view and feature name");
+	return false;
+    }
+
+    for (size_t ci = 0; ci < controllers.size(); ++ci) {
+	if (!qged_test_assert_obol_feature_controller(controllers[ci],
+		arguments, featureName, ci, error))
+	    return false;
+    }
+    if (arguments.value(QStringLiteral("shared_geometry")).toBool()) {
+	SoBRLMeshShape *shared = nullptr;
+	for (size_t ci = 0; ci < controllers.size(); ++ci) {
+	    BObolViewController *controller = controllers[ci];
+	    const BObolFeatureHandle feature = controller->features().find(
+		featureName.toUtf8().constData(), BOBOL_FEATURE_SCOPE_ALL);
+	    SoNode *rawNode = feature.isValid() ?
+		controller->features().node(feature) : nullptr;
+	    if (!rawNode ||
+		!rawNode->isOfType(SoBRLMeshShape::getClassTypeId())) {
+		if (error)
+		    *error = QStringLiteral(
+			"Obol feature %1 in view %2 is not a mesh")
+			.arg(featureName).arg(ci);
+		return false;
+	    }
+	    SoBRLMeshShape *node = static_cast<SoBRLMeshShape *>(rawNode);
+	    SoBRLMeshShape *geometry = node->getSharedGeometrySource();
+	    if (!geometry || geometry == node || (shared && geometry != shared)) {
+		if (error)
+		    *error = QStringLiteral(
+			"Obol feature %1 in view %2 does not use the common shared mesh")
+			.arg(featureName).arg(ci);
+		return false;
+	    }
+	    shared = geometry;
+	}
+    }
+    return true;
+}
+
+
+/* Resolve libged's authoritative edit-session preview without exposing its
+ * generated feature name in GUI replay files.  The path is the public
+ * identity of an edit transaction; owner/id are deliberately opaque and may
+ * differ between runs. */
+static bool
+qged_test_assert_edit_session_preview(QgEdApp &app,
+	const QJsonObject &arguments, QString *error)
+{
+    struct ged *gedp = app.mdl ? app.mdl->ged() : nullptr;
+    const QString path = arguments.value(QStringLiteral("path")).toString();
+    if (!gedp || path.isEmpty()) {
+	if (error)
+	    *error = QStringLiteral(
+		"assert_edit_session_preview requires a GED context and path");
+	return false;
+    }
+
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    const QByteArray pathBytes = path.toUtf8();
+    if (ged_edit_session_find(gedp, pathBytes.constData(), &session) !=
+	    GED_EDIT_OK) {
+	if (error)
+	    *error = QStringLiteral("no active edit session for path: %1")
+		.arg(path);
+	return false;
+    }
+
+    const QString featureName = QString::asprintf(
+	"_ged_edit_preview_%016llx_%016llx",
+	static_cast<unsigned long long>(session.owner),
+	static_cast<unsigned long long>(session.id));
+    std::vector<BObolViewController *> controllers;
+    if (arguments.value(QStringLiteral("all_views")).toBool())
+	controllers = qged_test_all_controllers(app);
+    else {
+	QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+	BObolViewController *controller = view ? view->obolViewController() :
+	    nullptr;
+	if (controller)
+	    controllers.push_back(controller);
+    }
+    if (controllers.empty()) {
+	if (error)
+	    *error = QStringLiteral("no Obol view for edit-session preview");
+	return false;
+    }
+    for (size_t ci = 0; ci < controllers.size(); ++ci) {
+	if (!qged_test_assert_obol_feature_controller(controllers[ci],
+		arguments, featureName, ci, error))
+	    return false;
+    }
+    return true;
 }
 
 /* A controller render request records renderer intent, but it is deliberately
@@ -261,6 +1056,28 @@ qged_test_command_expect(QgEdApp &app, const QJsonObject &arguments,
 		    "qged command numeric assertion %1 %2 failed: %3")
 		    .arg(key).arg(limit, 0, 'g', 17)
 		    .arg(numericOutput, 0, 'g', 17);
+	    return false;
+	}
+    }
+
+    if (arguments.contains(QStringLiteral("numeric_near"))) {
+	if (!numericOk) {
+	    if (error)
+		*error = QStringLiteral(
+		    "qged command output is not numeric for numeric_near: %1")
+		    .arg(output);
+	    return false;
+	}
+	const double expected = arguments.value(
+	    QStringLiteral("numeric_near")).toDouble();
+	const double tolerance = arguments.value(
+	    QStringLiteral("numeric_tolerance")).toDouble(1.0e-6);
+	if (qAbs(numericOutput - expected) > tolerance) {
+	    if (error)
+		*error = QStringLiteral(
+		    "qged command numeric_near assertion failed: %1 versus %2")
+		    .arg(numericOutput, 0, 'g', 17)
+		    .arg(expected, 0, 'g', 17);
 	    return false;
 	}
     }
@@ -791,6 +1608,8 @@ qged_test_wait_progressive_discovery_complete(QgEdApp &app,
     QElapsedTimer quiet;
     size_t lastAvailable = 0;
     size_t lastExpected = 0;
+    size_t lastSourceActive = 0;
+    size_t lastSourceQueued = 0;
     int lastPhase = -1;
     elapsed.start();
     while (elapsed.elapsed() <= timeoutMilliseconds) {
@@ -799,8 +1618,13 @@ qged_test_wait_progressive_discovery_complete(QgEdApp &app,
 	lastAvailable = status.availableLeafCount;
 	lastExpected = status.expectedLeafCount;
 	lastPhase = status.phase;
+	BObolSourceRealizationCoordinator &sourceCoordinator =
+	    BObolSourceRealizationCoordinator::global();
+	lastSourceActive = sourceCoordinator.activeItemCountForDiagnostics();
+	lastSourceQueued = sourceCoordinator.queuedItemCountForDiagnostics();
 	const bool complete = lastExpected > 0 &&
-	    lastAvailable >= lastExpected;
+	    lastAvailable >= lastExpected && lastSourceActive == 0 &&
+	    lastSourceQueued == 0;
 	if (complete) {
 	    if (!quiet.isValid())
 		quiet.start();
@@ -821,12 +1645,15 @@ qged_test_wait_progressive_discovery_complete(QgEdApp &app,
     if (error)
 	*error = QStringLiteral(
 	    "progressive discovery did not publish all leaves within %1 ms "
-	    "(available=%2 expected=%3 phase=%4 request_serial=%5 "
-	    "completion_serial=%6 presented_serial=%7)")
+	    "(available=%2 expected=%3 phase=%4 source_active=%5 "
+	    "source_queued=%6 request_serial=%7 completion_serial=%8 "
+	    "presented_serial=%9)")
 	    .arg(timeoutMilliseconds)
 	    .arg(static_cast<qulonglong>(lastAvailable))
 	    .arg(static_cast<qulonglong>(lastExpected))
 	    .arg(lastPhase)
+	    .arg(static_cast<qulonglong>(lastSourceActive))
+	    .arg(static_cast<qulonglong>(lastSourceQueued))
 	    .arg(static_cast<qulonglong>(
 		controller->getRenderRequestSerial()))
 	    .arg(static_cast<qulonglong>(
@@ -981,6 +1808,34 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			}
 		    }
 		} else if (events[i].action ==
+		    QLatin1String("drag_obol_edit_handle")) {
+		    success = qged_test_drag_obol_edit_handle(app,
+			events[i].arguments, &error);
+		} else if (events[i].action ==
+		    QLatin1String("drag_obol_indexed_edit_handle")) {
+		    success = qged_test_drag_obol_indexed_edit_handle(app,
+			events[i].arguments, &error);
+		} else if (events[i].action ==
+		    QLatin1String("drag_obol_mesh_vertex")) {
+		    success = qged_test_drag_obol_mesh_vertex(app,
+			events[i].arguments, &error);
+		} else if (events[i].action ==
+		    QLatin1String("assert_obol_edit_handle")) {
+		    success = qged_test_assert_obol_edit_handle(app,
+			events[i].arguments, &error);
+		} else if (events[i].action ==
+		    QLatin1String("assert_obol_indexed_edit_handle")) {
+		    success = qged_test_assert_obol_indexed_edit_handle(app,
+			events[i].arguments, &error);
+		} else if (events[i].action ==
+		    QLatin1String("assert_obol_feature")) {
+		    success = qged_test_assert_obol_feature(app,
+			events[i].arguments, &error);
+		} else if (events[i].action ==
+		    QLatin1String("assert_edit_session_preview")) {
+		    success = qged_test_assert_edit_session_preview(app,
+			events[i].arguments, &error);
+		} else if (events[i].action ==
 		    QLatin1String("wait_progressive_idle")) {
 		    success = qged_test_wait_progressive_idle(app,
 			events[i].arguments.value(
@@ -1006,6 +1861,10 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			&error);
 		} else {
 		    success = player.play(events[i], &error);
+		}
+		if (!success) {
+		    error = QStringLiteral("event %1 (%2 on %3): %4")
+			.arg(i).arg(events[i].action, events[i].target, error);
 		}
 
 		/* Commands and synthetic input dispatch synchronously.  Explicit

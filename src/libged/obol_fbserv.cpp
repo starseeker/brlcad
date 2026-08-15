@@ -21,6 +21,7 @@
 #include <climits>
 #include <cerrno>
 #include <cstring>
+#include <exception>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -127,6 +128,7 @@ public:
     explicit GedObolFbservBridge(struct fbserv_obj *fbs_obj) :
 	fbs(fbs_obj),
 	capture_endpoint(NULL),
+	present_pending(false),
 	framebuffer(&default_host)
     {
     }
@@ -405,10 +407,13 @@ public:
     int flush()
     {
 	std::lock_guard<std::mutex> guard(lock);
-	int ret = present_on_flush ?
-	    framebuffer.flush() :
-	    (framebuffer.ensure() == 0 ?
-		imgstream_fb_flush(framebuffer.framebuffer()) : -1);
+	/* This callback is entered by the fbserv transport watcher.  It must
+	 * publish only the thread-safe image stream here: realizing the retained
+	 * Coin texture would race the endpoint owner thread's scene traversal.
+	 * ged_view_framebuffer_present() performs that realization later on the
+	 * owner thread. */
+	int ret = framebuffer.ensure() == 0 ?
+	    imgstream_fb_flush(framebuffer.framebuffer()) : -1;
 	if (ret == 0)
 	    notifyUpdatedLocked();
 	return ret;
@@ -417,8 +422,13 @@ public:
     int present()
     {
 	std::lock_guard<std::mutex> guard(lock);
+	if (!present_pending)
+	    return 0;
 	bindCaptureProviderLocked();
-	return framebuffer.present();
+	int ret = framebuffer.present();
+	if (ret == 0)
+	    present_pending = false;
+	return ret;
     }
 
     int apply(ged_view_framebuffer_operation_t operation,
@@ -433,10 +443,8 @@ public:
 	if (ret != BRLCAD_OK || !publish)
 	    return ret;
 	bindCaptureProviderLocked();
-	/* Publication marks the image stream complete and schedules endpoint
-	 * presentation.  Refresh host-side retained image data now, but tolerate a
-	 * host that can only finish presentation from its normal update thread. */
-	(void)framebuffer.present();
+	/* Publication may originate on a command or transport worker.  Keep Coin
+	 * scene realization exclusively in ged_view_framebuffer_present(). */
 	if (imgstream_fb_flush(framebuffer.framebuffer()) != 0)
 	    return BRLCAD_ERROR;
 	notifyUpdatedLocked();
@@ -455,7 +463,6 @@ public:
 	if (ret != BRLCAD_OK || !publish)
 	    return ret;
 	bindCaptureProviderLocked();
-	(void)framebuffer.present();
 	if (imgstream_fb_flush(framebuffer.framebuffer()) != 0)
 	    return BRLCAD_ERROR;
 	notifyUpdatedLocked();
@@ -538,21 +545,48 @@ public:
 
     void openClient(int slot)
     {
+	/* fbserv deliberately reuses client slots.  A finished watcher still owns
+	 * a joinable std::thread until somebody retires it; overwriting the map
+	 * entry invokes std::terminate even though the underlying thread has
+	 * already returned.  Serialize open transitions and fully retire the old
+	 * generation before publishing one which may observe the reused slot. */
+	std::lock_guard<std::mutex> transition_guard(watcher_open_lock);
+	std::shared_ptr<GedObolFbservWatcher> previous;
+	{
+	    std::lock_guard<std::mutex> guard(watcher_lock);
+	    std::map<int, std::shared_ptr<GedObolFbservWatcher>>::iterator it =
+		watchers.find(slot);
+	    if (it != watchers.end()) {
+		previous = it->second;
+		watchers.erase(it);
+	    }
+	}
+	stopWatcher(previous);
+
 	if (fbs_client_fd(fbs, slot) <= 0)
 	    return;
 
-	std::shared_ptr<GedObolFbservWatcher> watcher =
-	    std::make_shared<GedObolFbservWatcher>();
-	watcher->slot = slot;
-
-	{
+	std::shared_ptr<GedObolFbservWatcher> watcher;
+	try {
+	    watcher = std::make_shared<GedObolFbservWatcher>();
+	    watcher->slot = slot;
 	    std::lock_guard<std::mutex> guard(watcher_lock);
 	    watchers[slot] = watcher;
+	    watcher->thread = std::thread([this, watcher]() {
+		runWatcher(watcher);
+	    });
+	} catch (const std::exception &exception) {
+	    {
+		std::lock_guard<std::mutex> guard(watcher_lock);
+		std::map<int, std::shared_ptr<GedObolFbservWatcher>>::iterator it =
+		    watchers.find(slot);
+		if (it != watchers.end() && it->second == watcher)
+		    watchers.erase(it);
+	    }
+	    stopWatcher(watcher);
+	    bu_log("unable to start Obol fbserv client watcher: %s\n",
+		exception.what());
 	}
-
-	watcher->thread = std::thread([this, watcher]() {
-	    runWatcher(watcher);
-	});
     }
 
     void closeClient(int slot)
@@ -568,13 +602,7 @@ public:
 	    watchers.erase(it);
 	}
 
-	watcher->stop = true;
-	if (watcher->thread.joinable()) {
-	    if (watcher->thread.get_id() == std::this_thread::get_id())
-		watcher->thread.detach();
-	    else
-		watcher->thread.join();
-	}
+	stopWatcher(watcher);
     }
 
     void stopWatchers()
@@ -586,21 +614,25 @@ public:
 	}
 
 	for (std::map<int, std::shared_ptr<GedObolFbservWatcher>>::iterator it =
-		local.begin(); it != local.end(); ++it) {
-	    it->second->stop = true;
-	}
-	for (std::map<int, std::shared_ptr<GedObolFbservWatcher>>::iterator it =
-		local.begin(); it != local.end(); ++it) {
-	    if (it->second->thread.joinable()) {
-		if (it->second->thread.get_id() == std::this_thread::get_id())
-		    it->second->thread.detach();
-		else
-		    it->second->thread.join();
-	    }
-	}
+		local.begin(); it != local.end(); ++it)
+	    stopWatcher(it->second);
     }
 
 private:
+    static void stopWatcher(
+	    const std::shared_ptr<GedObolFbservWatcher> &watcher)
+    {
+	if (!watcher)
+	    return;
+	watcher->stop = true;
+	if (!watcher->thread.joinable())
+	    return;
+	if (watcher->thread.get_id() == std::this_thread::get_id())
+	    watcher->thread.detach();
+	else
+	    watcher->thread.join();
+    }
+
     void bindCaptureProviderLocked()
     {
 	bobol_display_endpoint_t *endpoint = view_ctx ?
@@ -631,6 +663,7 @@ private:
 
     void notifyUpdatedLocked()
     {
+	present_pending = true;
 	if (view_ctx)
 	    (void)bv_refresh_request(bv_context_view((struct bv_context *)view_ctx),
 		    GED_VIEW_REFRESH_FRAMEBUFFER);
@@ -695,9 +728,11 @@ private:
     struct fbserv_obj *fbs = NULL;
     bobol_display_endpoint_t *capture_endpoint;
     int present_on_flush = 0;
+    bool present_pending;
     BObolWindowHost default_host;
     BObolFramebufferStream framebuffer;
     std::mutex lock;
+    std::mutex watcher_open_lock;
     std::mutex watcher_lock;
     std::map<int, std::shared_ptr<GedObolFbservWatcher>> watchers;
 };

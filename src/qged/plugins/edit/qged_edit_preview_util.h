@@ -25,6 +25,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <vector>
 
 #include "bg/defines.h"
 #include "bu/malloc.h"
@@ -32,6 +33,7 @@
 #include "rt/db_internal.h"
 #include "rt/geom.h"
 #include "rt/misc.h"
+#include "ged/view_edit_types.h"
 
 
 #define QGED_EDIT_ELL_PREVIEW_SEGMENTS 64
@@ -46,6 +48,9 @@ struct ged_view_context;
 
 struct bv_context *qged_edit_view_context(const QgPluginContext *ctx);
 struct ged_view_context *qged_edit_ged_view_context(const QgPluginContext *ctx);
+
+std::vector<struct ged_view_context *>
+qged_edit_ged_view_contexts(const QgPluginContext *ctx);
 
 struct qged_edit_feature_ref {
     struct ged_view_context *view_ctx;
@@ -99,6 +104,44 @@ qged_edit_preview_publish_event(const QgPluginContext *ctx,
 				const char *feature_name,
 				enum qged_edit_preview_event event,
 				const char *source_path);
+
+int
+qged_edit_primitive_preview_apply_all(const QgPluginContext *ctx,
+			      const char *feature_name,
+			      enum qged_edit_preview_event event,
+			      const char *source_path,
+			      struct db_i *dbip,
+			      struct rt_db_internal *internal,
+			      const fastf_t *matrix,
+			      const struct bg_tess_tol *ttol,
+			      const struct bn_tol *tol,
+			      int r, int g, int b);
+
+int
+qged_edit_feature_remove_all(const QgPluginContext *ctx, const char *name);
+
+int
+qged_edit_feature_labels_replace_all(const QgPluginContext *ctx,
+				     const char *name,
+				     const struct rt_point_labels *labels,
+				     int label_count,
+				     const unsigned char color[3]);
+
+int
+qged_edit_extrude_preview_apply_all(const QgPluginContext *ctx,
+			    const char *feature_name,
+			    enum qged_edit_preview_event event,
+			    const char *source_path,
+			    const struct rt_extrude_internal *extrude,
+			    const struct bg_tess_tol *ttol);
+
+int
+qged_edit_revolve_preview_apply_all(const QgPluginContext *ctx,
+			    const char *feature_name,
+			    enum qged_edit_preview_event event,
+			    const char *source_path,
+			    const struct rt_revolve_internal *revolve,
+			    const struct bg_tess_tol *ttol);
 
 struct qged_edit_feature_ref
 qged_edit_feature_overlay_ensure(const QgPluginContext *ctx,

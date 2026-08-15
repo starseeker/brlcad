@@ -85,6 +85,20 @@ _poly_exists(struct _ged_view_info *gd)
     return _poly_binding_get(gd).handle.isValid();
 }
 
+/* Keep a database-backed polygon synchronized regardless of whether the
+ * mutation originated in a GUI filter or at the command prompt.  The Obol
+ * record owns the stable name; directory pointers are deliberately never
+ * retained across database mutations. */
+int
+_view_polygon_sync_sketch(struct _ged_view_info *gd)
+{
+    if (!gd || !gd->gedp || !gd->cv)
+	return false;
+    const ged_view_polygon_ref ref = ged_view_polygon_find_scoped(gd->cv,
+	gd->vobj, gd->local_obj);
+    return ged_view_polygon_sync_sketch(gd->gedp, gd->cv, ref) >= 0;
+}
+
 static BObolPolygonType
 _poly_type(int type)
 {
@@ -102,50 +116,26 @@ _poly_type(int type)
     }
 }
 
-static BObolPolygonUpdate
-_poly_update_type(int op)
-{
-    switch (op) {
-	case GED_VIEW_POLYGON_UPDATE_PROPS_ONLY:
-	    return BObolPolygonUpdate::PropsOnly;
-	case GED_VIEW_POLYGON_UPDATE_PT_SELECT:
-	    return BObolPolygonUpdate::PointSelect;
-	case GED_VIEW_POLYGON_UPDATE_PT_SELECT_CLEAR:
-	    return BObolPolygonUpdate::PointSelectClear;
-	case GED_VIEW_POLYGON_UPDATE_PT_MOVE:
-	    return BObolPolygonUpdate::PointMove;
-	case GED_VIEW_POLYGON_UPDATE_PT_APPEND:
-	    return BObolPolygonUpdate::PointAppend;
-	default:
-	    return BObolPolygonUpdate::Default;
-    }
-}
-
 static bool
 _poly_update(struct _ged_view_info *gd, int op)
 {
-    const _poly_binding binding = _poly_binding_get(gd);
-    return binding.controller && binding.controller->polygons().update(
-	binding.handle, _poly_update_type(op));
+    if (!gd || !gd->cv)
+	return false;
+    const ged_view_polygon_ref ref = ged_view_polygon_find(gd->cv, gd->vobj);
+    return !ged_view_polygon_ref_is_null(ref) &&
+	ged_view_polygon_update(gd->cv, ref,
+	    static_cast<enum ged_view_polygon_update>(op));
 }
 
 static bool
 _poly_update_screen(struct _ged_view_info *gd, int x, int y, int op)
 {
-    const _poly_binding binding = _poly_binding_get(gd);
-    if (!binding.controller || !gd || !gd->cv)
+    if (!gd || !gd->cv)
 	return false;
-
-    point_t model_point = VINIT_ZERO;
-    if (!bv_screen_to_model(model_point,
-	bv_context_view_const(ged_view_context_bv_const(gd->cv)),
-	static_cast<fastf_t>(x), static_cast<fastf_t>(y)))
-	return false;
-
-    return binding.controller->polygons().updateModelPoint(binding.handle,
-	SbVec3f(static_cast<float>(model_point[X]),
-	    static_cast<float>(model_point[Y]),
-	    static_cast<float>(model_point[Z])), _poly_update_type(op));
+    const ged_view_polygon_ref ref = ged_view_polygon_find(gd->cv, gd->vobj);
+    return !ged_view_polygon_ref_is_null(ref) &&
+	ged_view_polygon_update_screen_pt(gd->cv, ref, x, y,
+	    static_cast<enum ged_view_polygon_update>(op));
 }
 
 static void
@@ -332,7 +322,52 @@ _poly_cmd_select(void *bs, int argc, const char **argv)
     if (!binding.controller || !binding.controller->polygons().setCurrent(
 	    binding.handle, contour_ind, -1))
 	return BRLCAD_ERROR;
+    (void)binding.controller->polygons().clearSelection();
+    (void)binding.controller->polygons().setSelected(binding.handle, TRUE);
     if (!_poly_update_screen(gd, x, y, GED_VIEW_POLYGON_UPDATE_PT_SELECT))
+	return BRLCAD_ERROR;
+
+    return BRLCAD_OK;
+}
+
+
+int
+_poly_cmd_selected(void *bs, int argc, const char **argv)
+{
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    struct ged *gedp = gd->gedp;
+    const char *usage_string = "view polygon selected <name> [0|1]";
+    const char *purpose_string = "query or set whole-polygon selection";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    argc--; argv++;
+    bu_vls_trunc(gedp->ged_result_str, 0);
+
+    const _poly_binding binding = _poly_binding_get(gd);
+    BObolPolygonRecord rec;
+    if (!binding.controller || !binding.handle.isValid() ||
+	!binding.controller->polygons().record(binding.handle, rec)) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "Specified object is not a view polygon.\n");
+	return BRLCAD_ERROR;
+    }
+
+    if (!argc) {
+	bu_vls_printf(gedp->ged_result_str, "%d", rec.selected ? 1 : 0);
+	return BRLCAD_OK;
+    }
+    if (argc != 1 ||
+	(!BU_STR_EQUAL(argv[0], "0") && !BU_STR_EQUAL(argv[0], "1"))) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+
+    const int selected = BU_STR_EQUAL(argv[0], "1") ? 1 : 0;
+    if (selected)
+	(void)ged_view_polygon_clear_selection(gd->cv);
+    if (!binding.controller->polygons().setSelected(binding.handle,
+	    selected ? TRUE : FALSE))
 	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
@@ -400,6 +435,8 @@ _poly_cmd_append(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     if (!_poly_update_screen(gd, x, y, GED_VIEW_POLYGON_UPDATE_PT_APPEND))
 	return BRLCAD_ERROR;
+    if (!_view_polygon_sync_sketch(gd))
+	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
 }
@@ -450,7 +487,84 @@ _poly_cmd_move(void *bs, int argc, const char **argv)
 
     if (!_poly_update_screen(gd, x, y, GED_VIEW_POLYGON_UPDATE_PT_MOVE))
 	return BRLCAD_ERROR;
+    if (!_view_polygon_sync_sketch(gd))
+	return BRLCAD_ERROR;
 
+    return BRLCAD_OK;
+}
+
+int
+_poly_cmd_delete_point(void *bs, int argc, const char **argv)
+{
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    struct ged *gedp = gd->gedp;
+    const char *usage_string =
+	"view polygon delete_point <name> [contour] point";
+    const char *purpose_string = "delete one point from a general polygon";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    argc--; argv++;
+    bu_vls_trunc(gedp->ged_result_str, 0);
+
+    BObolPolygonRecord rec;
+    if (!_poly_exists(gd) || !_poly_record(gd, &rec) ||
+	rec.type != BObolPolygonType::General) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "Point deletion requires an existing general polygon\n");
+	return BRLCAD_ERROR;
+    }
+    if (argc != 1 && argc != 2) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+
+    int contour = 0;
+    int point = -1;
+    if (argc == 2 && (bu_opt_int(NULL, 1, argv, &contour) != 1 ||
+	contour < 0)) {
+	bu_vls_printf(gedp->ged_result_str, "Invalid contour %s\n", argv[0]);
+	return BRLCAD_ERROR;
+    }
+    const int point_arg = argc - 1;
+    if (bu_opt_int(NULL, 1, &argv[point_arg], &point) != 1 || point < 0) {
+	bu_vls_printf(gedp->ged_result_str, "Invalid point %s\n",
+	    argv[point_arg]);
+	return BRLCAD_ERROR;
+    }
+
+    const _poly_binding binding = _poly_binding_get(gd);
+    if (!binding.controller || !binding.controller->polygons().setCurrent(
+	    binding.handle, contour, point) ||
+	!_poly_update(gd, GED_VIEW_POLYGON_UPDATE_PT_DELETE) ||
+	!_view_polygon_sync_sketch(gd))
+	return BRLCAD_ERROR;
+    return BRLCAD_OK;
+}
+
+int
+_poly_cmd_point_count(void *bs, int argc, const char **argv)
+{
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    struct ged *gedp = gd->gedp;
+    const char *usage_string = "view polygon point_count <name>";
+    const char *purpose_string = "report total polygon point count";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    argc--; argv++;
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    if (argc) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+    BObolPolygonRecord rec;
+    if (!_poly_record(gd, &rec)) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "Specified object is not a view polygon.\n");
+	return BRLCAD_ERROR;
+    }
+    bu_vls_printf(gedp->ged_result_str, "%zu", rec.pointCount);
     return BRLCAD_OK;
 }
 
@@ -479,6 +593,8 @@ _poly_cmd_clear(void *bs, int argc, const char **argv)
 	bu_vls_printf(gedp->ged_result_str, "Specified object is not a view polygon.\n");
 	return BRLCAD_ERROR;
     }
+
+    (void)binding.controller->polygons().setSelected(binding.handle, FALSE);
 
     _poly_update(gd, GED_VIEW_POLYGON_UPDATE_DEFAULT);
 
@@ -779,9 +895,16 @@ _poly_cmd_export(void *bs, int argc, const char **argv)
 
     GED_CHECK_EXISTS(gedp, argv[0], LOOKUP_QUIET, BRLCAD_ERROR);
 
+    const int batch_open = ged_event_batch_begin(gedp) == GED_EVENT_OK;
     const _poly_binding binding = _poly_binding_get(gd);
-    if (!binding.controller || !binding.controller->polygons().exportSketch(
-	    binding.handle, gedp->dbip, argv[0])) {
+    const bool exported = binding.controller &&
+	binding.controller->polygons().exportSketch(binding.handle,
+	    gedp->dbip, argv[0]);
+    if (exported)
+	(void)ged_event_notify_object_added(gedp, argv[0], NULL);
+    if (batch_open)
+	(void)ged_event_batch_end(gedp, NULL);
+    if (!exported) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to create sketch.\n");
 	return BRLCAD_ERROR;
     }
@@ -818,9 +941,19 @@ _poly_cmd_fill(void *bs, int argc, const char **argv)
     if (!binding.controller)
 	return BRLCAD_ERROR;
 
+    if (!argc) {
+	bu_vls_printf(gedp->ged_result_str, "%d %.17g %.17g %.17g\n",
+		rec.fill ? 1 : 0, static_cast<double>(rec.fillSlope[0]),
+		static_cast<double>(rec.fillSlope[1]),
+		static_cast<double>(rec.fillSpacing));
+	return BRLCAD_OK;
+    }
+
     if (argc == 1 && BU_STR_EQUAL(argv[0], "0")) {
 	if (!binding.controller->polygons().setFill(binding.handle, FALSE,
 		rec.fillSlope, rec.fillSpacing))
+	    return BRLCAD_ERROR;
+	if (!_view_polygon_sync_sketch(gd))
 	    return BRLCAD_ERROR;
 	return BRLCAD_OK;
     }
@@ -847,6 +980,8 @@ _poly_cmd_fill(void *bs, int argc, const char **argv)
     if (!binding.controller->polygons().setFill(binding.handle, TRUE,
 	    SbVec2f(static_cast<float>(vdir[0]),
 		static_cast<float>(vdir[1])), static_cast<float>(vdelta)))
+	return BRLCAD_ERROR;
+    if (!_view_polygon_sync_sketch(gd))
 	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
@@ -898,6 +1033,8 @@ _poly_cmd_fill_color(void *bs, int argc, const char **argv)
     const _poly_binding binding = _poly_binding_get(gd);
     if (!binding.controller || !binding.controller->polygons().setFillColor(
 	    binding.handle, _poly_color(&fill_color)))
+	return BRLCAD_ERROR;
+    if (!_view_polygon_sync_sketch(gd))
 	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
@@ -962,6 +1099,8 @@ _poly_cmd_csg(void *bs, int argc, const char **argv)
     if (!target.controller || !stencil.isValid() ||
 	    !target.controller->polygons().csg(target.handle, stencil, op))
 	return BRLCAD_ERROR;
+    if (!_view_polygon_sync_sketch(gd))
+	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
 }
@@ -974,6 +1113,7 @@ const struct bu_cmdtab _poly_cmds[] = {
     { "close",           _poly_cmd_close},
     { "create",          _poly_cmd_create},
     { "csg",             _poly_cmd_csg},
+    { "delete_point",    _poly_cmd_delete_point},
     { "export",          _poly_cmd_export},
     { "fill",            _poly_cmd_fill},
     { "fill_color",      _poly_cmd_fill_color},
@@ -981,7 +1121,9 @@ const struct bu_cmdtab _poly_cmds[] = {
     { "move",            _poly_cmd_move},
     { "open",            _poly_cmd_open},
     { "overlap",         _poly_cmd_overlap},
+    { "point_count",     _poly_cmd_point_count},
     { "select",          _poly_cmd_select},
+    { "selected",        _poly_cmd_selected},
     { (char *)NULL,      NULL}
 };
 

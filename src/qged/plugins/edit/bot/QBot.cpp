@@ -3,352 +3,576 @@
  *
  * Copyright (c) 2026 United States Government as represented by
  * the U.S. Army Research Laboratory.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public License
- * version 2.1 as published by the Free Software Foundation.
- *
- * This library is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this file; see the file named COPYING for more
- * information.
  */
 /** @file QBot.cpp
  *
- * Edit-preview BOT editor.
- *
- * The transient preview and pickable surface route BoT edits through the
- * neutral GED edit transaction and view-feature APIs.
+ * BoT editing adapter.  GED owns the sole mutable primitive; this class keeps
+ * only a revision-tagged retained presentation cache.  Interactive vertex,
+ * edge, and face moves patch the affected retained vertices in place and
+ * never copy or rebuild the full mesh on a pointer-motion event.
  */
 
 #include "common.h"
 
-#include "bv.h"
-#include <QEvent>
-#include <QMouseEvent>
-#include <QLabel>
-#include <QLineEdit>
 #include <QComboBox>
+#include <QEvent>
 #include <QGroupBox>
+#include <QLabel>
+#include <QMouseEvent>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
+
+#include "BObol/BMeshShape.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewStore.h"
+#include "bn/mat.h"
+#include "bu/malloc.h"
+#include "bv.h"
 #include "ged.h"
-#include "ged/draw.h"
+#include "ged/edit.h"
+#include "ged/plugin/obol.h"
+#include "ged/selection.h"
+#include "ged/view_feature.h"
 #include "ged/view_feature_batch.h"
-#include "rt/db_io.h"
-#include "rt/directory.h"
-#include "rt/primitives/bot.h"
-#include "qtcad/QgGedEventBatch.h"
+#include "rt/db_fullpath.h"
+#include "rt/edit.h"
+#include "rt/geom.h"
 #include "qtcad/QgPluginContext.h"
+#include "qtcad/QgPrimitiveEdit.h"
 #include "qtcad/QgSignalFlags.h"
 #include "../qged_edit_preview_util.h"
 #include "QBot.h"
 
 #include <algorithm>
+#include <cmath>
+#include <vector>
 
-/* ---- QBot constructor --------------------------------------------------- */
+
+namespace {
+
+static const char *qbot_surface_name = "_bot_edit_surface";
+static const char *qbot_handle_name = "_bot_edit_handle";
+
+static bool
+same_session(ged_edit_session_ref a, ged_edit_session_ref b)
+{
+    return a.owner == b.owner && a.id == b.id &&
+	a.generation == b.generation;
+}
+
+static fastf_t
+point_segment_distance_sq(const point_t point, const SbVec3f &a,
+	const SbVec3f &b)
+{
+    const SbVec3f p(static_cast<float>(point[X]),
+	static_cast<float>(point[Y]), static_cast<float>(point[Z]));
+    const SbVec3f ab = b - a;
+    const float lengthSq = ab.sqrLength();
+    float t = lengthSq > static_cast<float>(SMALL_FASTF) ?
+	(p - a).dot(ab) / lengthSq : 0.0f;
+    t = std::max(0.0f, std::min(1.0f, t));
+    return static_cast<fastf_t>((p - (a + ab * t)).sqrLength());
+}
+
+}
+
+
+struct QBotPresentationState {
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    uint64_t revision = UINT64_MAX;
+    std::vector<int32_t> faces;
+    std::vector<int> selected_vertices;
+    int selected_face = -1;
+    int pick_commands[3] = {0, 0, 0};
+    int move_commands[3] = {0, 0, 0};
+    mat_t path_matrix = MAT_INIT_IDN;
+    mat_t inverse_path_matrix = MAT_INIT_IDN;
+    bool matrix_valid = false;
+    SoBRLMeshShape *geometry = nullptr;
+    std::vector<struct ged_view_context *> view_contexts;
+    bool dragging = false;
+    struct ged_view_context *drag_view_context = nullptr;
+    point_t drag_start = VINIT_ZERO;
+    point_t drag_anchor = VINIT_ZERO;
+};
+
 
 QBot::QBot()
-    : QWidget()
+    : QWidget(), state(new QBotPresentationState)
 {
-    QVBoxLayout *l = new QVBoxLayout;
+    QVBoxLayout *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
 
-    QLabel *name_label = new QLabel("Object name:");
-    l->addWidget(name_label);
-    bot_name = new QLineEdit();
-    l->addWidget(bot_name);
+    QGroupBox *modeBox = new QGroupBox(tr("Viewport selection"), this);
+    QVBoxLayout *modeLayout = new QVBoxLayout(modeBox);
+    edit_mode = new QComboBox(modeBox);
+    edit_mode->setObjectName(QStringLiteral("bot.editMode"));
+    edit_mode->setProperty("qgTestId", QStringLiteral("bot.editMode"));
+    edit_mode->addItem(tr("Vertex"));
+    edit_mode->addItem(tr("Face"));
+    edit_mode->addItem(tr("Edge"));
+    modeLayout->addWidget(edit_mode);
+    layout->addWidget(modeBox);
 
-    QGroupBox *mode_box = new QGroupBox("Edit mode");
-    QVBoxLayout *mbl = new QVBoxLayout;
-    edit_mode = new QComboBox();
-    edit_mode->addItem("Vertex");
-    edit_mode->addItem("Face");
-    edit_mode->addItem("Edge");
-    mbl->addWidget(edit_mode);
-    mode_box->setLayout(mbl);
-    l->addWidget(mode_box);
+    editor = new QgPrimitiveEdit(this);
+    editor->setObjectName(QStringLiteral("bot.sharedPrimitiveEditor"));
+    layout->addWidget(editor);
 
-    QGroupBox *ac_box = new QGroupBox("Actions");
-    QVBoxLayout *acl = new QVBoxLayout;
-    write_edit = new QPushButton("Apply");
-    acl->addWidget(write_edit);
-    reset_values = new QPushButton("Reset");
-    acl->addWidget(reset_values);
-    ac_box->setLayout(acl);
-    l->addWidget(ac_box);
-
-    l->setAlignment(Qt::AlignTop);
-    this->setLayout(l);
-
-    QObject::connect(bot_name, &QLineEdit::textChanged,
-		     this, &QBot::update_viewobj_name);
-    QObject::connect(write_edit, &QPushButton::clicked,
-		     this, &QBot::write_to_db);
-    QObject::connect(reset_values, &QPushButton::clicked,
-		     this, &QBot::read_from_db);
+    connect(editor, &QgPrimitiveEdit::targetChanged,
+	this, &QBot::target_changed);
+    connect(editor, &QgPrimitiveEdit::sessionEvent,
+	this, &QBot::update_preview);
 }
+
 
 QBot::~QBot()
 {
-    if (!qged_edit_feature_ref_is_null(p))
-	qged_edit_preview_publish_event(m_ctx, p, "_bot_edit",
-	    QGED_EDIT_PREVIEW_CANCEL, bu_vls_cstr(&oname));
-    qged_edit_feature_clear_geometry(p);
-    if (!qged_edit_feature_ref_is_null(p) && m_ctx) {
-	qged_edit_feature_remove(m_ctx, "_bot_edit");
-	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
-	    "_bot_edit_surface");
-	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
-	    "_bot_edit_handle");
-	p = QGED_EDIT_FEATURE_REF_NULL;
-    }
-    clear_edit_state();
-    bu_vls_free(&oname);
+    clear_preview();
+    delete state;
+    state = nullptr;
 }
+
+
+void
+QBot::setContext(QgPluginContext *ctx)
+{
+    m_ctx = ctx;
+    editor->setGed(getGed());
+}
+
 
 struct ged *
 QBot::getGed() const
 {
-    if (!m_ctx)
-	return nullptr;
-    return m_ctx->getGed();
+    return m_ctx ? m_ctx->getGed() : nullptr;
 }
+
+
+int
+QBot::command_id(const char *name) const
+{
+    if (!name || !editor || ged_edit_session_ref_is_null(editor->session()))
+	return 0;
+    const struct rt_edit_prim_desc *descriptor = nullptr;
+    if (ged_edit_session_descriptor_get(getGed(), editor->session(),
+	    &descriptor) != GED_EDIT_OK || !descriptor)
+	return 0;
+    for (int i = 0; i < descriptor->ncmd; i++) {
+	if (descriptor->cmds[i].name &&
+	    BU_STR_EQUAL(descriptor->cmds[i].name, name))
+	    return descriptor->cmds[i].cmd_id;
+    }
+    return 0;
+}
+
 
 void
-QBot::clear_edit_state()
+QBot::clear_view_presentations()
 {
-    if (bot) {
-	struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
-	intern.idb_major_type = DB5_MAJORTYPE_BRLCAD;
-	intern.idb_type = ID_BOT;
-	intern.idb_minor_type = DB5_MINORTYPE_BRLCAD_BOT;
-	intern.idb_ptr = bot;
-	intern.idb_meth = &OBJ[ID_BOT];
-	rt_db_free_internal(&intern);
-	bot = NULL;
+    if (!state)
+	return;
+
+    for (struct ged_view_context *viewContext : state->view_contexts) {
+	if (!viewContext)
+	    continue;
+	(void)ged_view_feature_remove(viewContext, qbot_surface_name);
+	(void)ged_view_feature_remove(viewContext, qbot_handle_name);
     }
-    selected_vertices.clear();
-    drag_vertex_positions.clear();
-    dragging = false;
-    dirty = false;
+    state->view_contexts.clear();
 }
 
+
 bool
-QBot::load_bot()
+QBot::sync_view_presentations(bool replaceAll)
 {
-    struct ged *gedp = getGed();
-    if (!gedp || !gedp->dbip || !bu_vls_strlen(&oname))
+    if (!state || !state->geometry)
 	return false;
 
-    struct directory *next_dp = db_lookup(gedp->dbip,
-	bu_vls_cstr(&oname), LOOKUP_QUIET);
-    if (!next_dp || next_dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
+    const std::vector<struct ged_view_context *> contexts =
+	qged_edit_ged_view_contexts(m_ctx);
+    for (auto it = state->view_contexts.begin();
+	it != state->view_contexts.end();) {
+	struct ged_view_context *viewContext = *it;
+	if (replaceAll || std::find(contexts.begin(), contexts.end(),
+		viewContext) == contexts.end() ||
+	    !ged_plugin_obol_view_controller(viewContext)) {
+	    if (viewContext) {
+		(void)ged_view_feature_remove(viewContext, qbot_surface_name);
+		(void)ged_view_feature_remove(viewContext, qbot_handle_name);
+	    }
+	    it = state->view_contexts.erase(it);
+	    continue;
+	}
+	++it;
+    }
+
+    size_t eligible = 0;
+    for (struct ged_view_context *viewContext : contexts) {
+	BObolViewController *controller =
+	    ged_plugin_obol_view_controller(viewContext);
+	if (!controller)
+	    continue;
+	eligible++;
+	if (std::find(state->view_contexts.begin(),
+		state->view_contexts.end(), viewContext) !=
+		state->view_contexts.end())
+	    continue;
+
+	SoBRLMeshShape *node = new SoBRLMeshShape;
+	node->ref();
+	node->sourcePath = qbot_surface_name;
+	node->sourceName = qbot_surface_name;
+	node->sourceType = "indexed-face-set";
+	node->displayName = qbot_surface_name;
+	node->geometryName = qbot_surface_name;
+	node->sourceIdentity = qbot_surface_name;
+	node->cacheIdentity = qbot_surface_name;
+	node->databaseIntent = FALSE;
+	node->overlayIntent = TRUE;
+	node->localSource = TRUE;
+	node->sharedSource = FALSE;
+	node->nonDatabaseSource = TRUE;
+	node->drawMode = BOBOL_LOD_DRAW_SHADED;
+	node->recordRole = "edit-surface";
+	node->geometryKind = "surface";
+	node->colorOverride = TRUE;
+	node->color = SbColor(72.0f / 255.0f, 126.0f / 255.0f,
+	    168.0f / 255.0f);
+	node->visible = TRUE;
+	node->selectable = TRUE;
+	node->setSharedGeometry(state->geometry);
+
+	BObolFeatureStyle style;
+	style.hasVisible = TRUE;
+	style.visible = TRUE;
+	style.hasSelectable = TRUE;
+	style.selectable = TRUE;
+	style.hasColor = TRUE;
+	style.color = SbColor(72.0f / 255.0f, 126.0f / 255.0f,
+	    168.0f / 255.0f);
+	BObolFeatureOwner owner;
+	owner.ownerToken = this;
+	owner.ownerId = "qged::bot-edit";
+	owner.ownerRole = "edit-surface";
+	const BObolFeatureHandle feature =
+	    controller->features().publishCustomNode(qbot_surface_name,
+		BObolFeatureScope::Local, node, &style, &owner);
+	node->unref();
+	if (!feature.isValid())
+	    continue;
+
+	BObolOverlayInfo overlay;
+	overlay.isOverlay = TRUE;
+	overlay.ownerToken = this;
+	overlay.role = BObolOverlayRole::XRay;
+	overlay.overlayClass = BObolOverlayClass::EditHandle;
+	overlay.lifecycle = BObolOverlayLifecycle::PerTool;
+	overlay.order = BObolOverlayOrder::XRay;
+	overlay.sortOrder = 90;
+	overlay.sourcePath = preview_path.toUtf8().constData();
+	(void)controller->features().setOverlayInfo(feature, overlay);
+	state->view_contexts.push_back(viewContext);
+    }
+    return eligible > 0 && state->view_contexts.size() == eligible;
+}
+
+
+void
+QBot::clear_preview()
+{
+    if (!state)
+	return;
+
+    clear_view_presentations();
+    if (state->geometry) {
+	state->geometry->unref();
+	state->geometry = nullptr;
+    }
+    state->session = GED_EDIT_SESSION_REF_NULL;
+    state->revision = UINT64_MAX;
+    state->faces.clear();
+    state->selected_vertices.clear();
+    state->selected_face = -1;
+    state->matrix_valid = false;
+    state->dragging = false;
+    state->drag_view_context = nullptr;
+    preview_path.clear();
+}
+
+
+void
+QBot::target_changed(const QString &path)
+{
+    if (path != preview_path)
+	clear_preview();
+}
+
+
+bool
+QBot::rebuild_preview(uint64_t revision)
+{
+    struct ged *gedp = getGed();
+    const ged_edit_session_ref session = editor->session();
+    const QString path = editor->targetPath();
+    if (!state || !gedp || !gedp->dbip || path.isEmpty() ||
+	ged_edit_session_ref_is_null(session))
 	return false;
 
     struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
-    if (rt_db_get_internal(&intern, next_dp, gedp->dbip, NULL) < 0)
-	return false;
-    if (intern.idb_minor_type != DB5_MINORTYPE_BRLCAD_BOT ||
-	!intern.idb_ptr) {
+    if (ged_edit_session_internal_copy(gedp, session, &intern) != GED_EDIT_OK ||
+	intern.idb_type != ID_BOT || !intern.idb_ptr) {
 	rt_db_free_internal(&intern);
 	return false;
     }
+    struct rt_bot_internal *bot =
+	static_cast<struct rt_bot_internal *>(intern.idb_ptr);
+    RT_BOT_CK_MAGIC(bot);
 
-    struct rt_bot_internal *next_bot = rt_bot_dup(
-	(const struct rt_bot_internal *)intern.idb_ptr);
-    rt_db_free_internal(&intern);
-    if (!next_bot)
+    struct db_full_path fullPath;
+    db_full_path_init(&fullPath);
+    mat_t pathMatrix;
+    MAT_IDN(pathMatrix);
+    const QByteArray pathBytes = path.toUtf8();
+    const bool pathOk = db_string_to_path(&fullPath, gedp->dbip,
+	pathBytes.constData()) == 0 && db_path_to_mat(gedp->dbip, &fullPath,
+	pathMatrix, static_cast<int>(fullPath.fp_len) - 1);
+    db_free_full_path(&fullPath);
+    if (!pathOk) {
+	rt_db_free_internal(&intern);
 	return false;
+    }
+    std::vector<SbVec3f> displayPoints(bot->num_vertices);
+    for (size_t i = 0; i < bot->num_vertices; i++) {
+	point_t displayPoint;
+	MAT4X3PNT(displayPoint, pathMatrix, &bot->vertices[i * 3]);
+	displayPoints[i] = SbVec3f(
+	    static_cast<float>(displayPoint[X]),
+	    static_cast<float>(displayPoint[Y]),
+	    static_cast<float>(displayPoint[Z]));
+    }
+    state->faces.resize(bot->num_faces * 3);
+    for (size_t i = 0; i < state->faces.size(); i++)
+	state->faces[i] = static_cast<int32_t>(bot->faces[i]);
 
-    clear_edit_state();
-    bot = next_bot;
-    dp = next_dp;
+    clear_view_presentations();
+    if (state->geometry)
+	state->geometry->unref();
+    state->geometry = new SoBRLMeshShape;
+    state->geometry->ref();
+    if (!displayPoints.empty() && !state->faces.empty()) {
+	state->geometry->setIndexedTriangles(displayPoints.data(),
+	    static_cast<int>(displayPoints.size()), state->faces.data(),
+	    static_cast<int>(state->faces.size()));
+    }
+
+    state->session = session;
+    state->revision = revision;
+    MAT_COPY(state->path_matrix, pathMatrix);
+    bn_mat_inv(state->inverse_path_matrix, pathMatrix);
+    state->matrix_valid = true;
+    state->selected_vertices.clear();
+    state->selected_face = -1;
+    state->pick_commands[0] = command_id("ECMD_BOT_PICKV");
+    state->pick_commands[1] = command_id("ECMD_BOT_PICKT");
+    state->pick_commands[2] = command_id("ECMD_BOT_PICKE");
+    state->move_commands[0] = command_id("ECMD_BOT_MOVEV");
+    state->move_commands[1] = command_id("ECMD_BOT_MOVET");
+    state->move_commands[2] = command_id("ECMD_BOT_MOVEE");
+    preview_path = path;
+
+    if (!sync_view_presentations(true)) {
+	rt_db_free_internal(&intern);
+	return false;
+    }
+    struct ged_edit_session_info info = {};
+    if (ged_edit_session_info_get(gedp, session, &info) == GED_EDIT_OK &&
+	info.command_id)
+	(void)sync_session_selection(info.command_id);
+    else
+	publish_selection();
+
+    rt_db_free_internal(&intern);
+    emit view_updated(QG_VIEW_REFRESH);
     return true;
 }
 
-void
-QBot::read_from_db()
+
+bool
+QBot::sync_session_selection(int commandId)
 {
-    struct ged *gedp = getGed();
-    if (!gedp || !gedp->dbip || !bu_vls_strlen(&oname))
-	return;
+    if (!state || ged_edit_session_ref_is_null(editor->session()))
+	return false;
 
-
-    qged_edit_preview_publish_event(m_ctx, p, "_bot_edit",
-	QGED_EDIT_PREVIEW_CANCEL, bu_vls_cstr(&oname));
-    p = QGED_EDIT_FEATURE_REF_NULL;
-    if (!load_bot())
-	return;
-    update_obj_wireframe();
-    emit view_updated(QG_VIEW_REFRESH);
-}
-
-void
-QBot::write_to_db()
-{
-    struct ged *gedp = getGed();
-    if (!gedp || !gedp->dbip || !dp || !bot)
-	return;
-
-    struct rt_bot_internal *write_bot = rt_bot_dup(bot);
-    if (!write_bot)
-	return;
-    struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
-    intern.idb_major_type = DB5_MAJORTYPE_BRLCAD;
-    intern.idb_type = ID_BOT;
-    intern.idb_minor_type = DB5_MINORTYPE_BRLCAD_BOT;
-    intern.idb_ptr = write_bot;
-    intern.idb_meth = &OBJ[ID_BOT];
-    {
-	QgGedEventBatch event_batch(gedp);
-	if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
-	    rt_db_free_internal(&intern);
-	    return;
+    int mode = -1;
+    for (int i = 0; i < 3; i++) {
+	if (commandId == state->pick_commands[i] ||
+	    commandId == state->move_commands[i]) {
+	    mode = i;
+	    break;
 	}
-	(void)ged_event_notify_object_modified(gedp, bu_vls_cstr(&oname),
-	    1, NULL);
     }
-    dirty = false;
-    qged_edit_preview_publish_event(m_ctx, p, "_bot_edit",
-	    QGED_EDIT_PREVIEW_COMMIT,
-	    bu_vls_cstr(&oname));
-    p = QGED_EDIT_FEATURE_REF_NULL;
-    emit view_updated(QG_VIEW_DB);
+    if (mode < 0 || !state->pick_commands[mode])
+	return false;
+
+    struct rt_edit_cmd_values values;
+    if (ged_edit_session_command_values_get(getGed(), editor->session(),
+	    state->pick_commands[mode], &values) != GED_EDIT_OK)
+	return false;
+    const size_t required = mode == 0 ? 1u : mode == 2 ? 2u : 3u;
+    if (values.value_count < required)
+	return false;
+
+    std::vector<int> selected;
+    for (size_t i = 0; i < required; i++) {
+	if (!values.value_valid[i])
+	    return false;
+	const int vertex = static_cast<int>(values.values[i]);
+	if (vertex < 0 || !state->geometry ||
+	    vertex >= state->geometry->point.getNum())
+	    return false;
+	selected.push_back(vertex);
+    }
+    state->selected_vertices = selected;
+    state->selected_face = -1;
+    const size_t faceCount = state->faces.size() / 3;
+    for (size_t fi = 0; fi < faceCount; fi++) {
+	const int32_t *face = &state->faces[fi * 3];
+	bool match = false;
+	if (mode == 0) {
+	    match = face[0] == selected[0] || face[1] == selected[0] ||
+		face[2] == selected[0];
+	} else if (mode == 1) {
+	    match = face[0] == selected[0] && face[1] == selected[1] &&
+		face[2] == selected[2];
+	} else {
+	    for (int edge = 0; edge < 3 && !match; edge++) {
+		const int a = face[edge];
+		const int b = face[(edge + 1) % 3];
+		match = (a == selected[0] && b == selected[1]) ||
+		    (a == selected[1] && b == selected[0]);
+	    }
+	}
+	if (match) {
+	    state->selected_face = static_cast<int>(fi);
+	    break;
+	}
+    }
+
+    {
+	QSignalBlocker blocker(edit_mode);
+	edit_mode->setCurrentIndex(mode);
+    }
+    publish_selection();
+    return true;
 }
 
-void
-QBot::update_obj_wireframe()
+
+bool
+QBot::patch_session_move(int commandId)
 {
-    struct ged *gedp = getGed();
-    if (!gedp)
-	return;
-
-    p = qged_edit_feature_overlay_ensure(m_ctx, "_bot_edit",
-	    bu_vls_cstr(&oname));
-    if (qged_edit_feature_ref_is_null(p))
-	return;
-
-    if (!gedp->dbip || !bu_vls_strlen(&oname)) {
-	qged_edit_feature_clear_geometry(p);
-	qged_edit_feature_set_visible(p, 0);
-	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
-	    "_bot_edit_surface");
-	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
-	    "_bot_edit_handle");
-	return;
+    if (!state || !state->geometry || state->view_contexts.empty() ||
+	!state->matrix_valid)
+	return false;
+    int mode = -1;
+    for (int i = 0; i < 3; i++) {
+	if (commandId == state->move_commands[i]) {
+	    mode = i;
+	    break;
+	}
     }
+    if (mode < 0)
+	return false;
+    const size_t required = mode == 0 ? 1u : mode == 2 ? 2u : 3u;
+    if (state->selected_vertices.size() != required &&
+	!sync_session_selection(commandId))
+	return false;
 
-    dp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
-    if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
-	qged_edit_feature_clear_geometry(p);
-	qged_edit_feature_set_visible(p, 0);
-	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
-	    "_bot_edit_surface");
-	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
-	    "_bot_edit_handle");
-	return;
+    struct rt_edit_cmd_values values;
+    if (ged_edit_session_command_values_get(getGed(), editor->session(),
+	    commandId, &values) != GED_EDIT_OK || values.value_count < 3 ||
+	!values.value_valid[0] || !values.value_valid[1] ||
+	!values.value_valid[2])
+	return false;
+
+    const fastf_t local2base = getGed()->dbip->dbi_local2base;
+    point_t sourceTarget = {
+	values.values[0] * local2base,
+	values.values[1] * local2base,
+	values.values[2] * local2base
+    };
+    point_t displayTarget;
+    MAT4X3PNT(displayTarget, state->path_matrix, sourceTarget);
+
+    point_t currentAnchor = VINIT_ZERO;
+    for (const int vertex : state->selected_vertices) {
+	const SbVec3f &point = state->geometry->point[vertex];
+	currentAnchor[X] += point[0];
+	currentAnchor[Y] += point[1];
+	currentAnchor[Z] += point[2];
     }
+    VSCALE(currentAnchor, currentAnchor,
+	1.0 / static_cast<fastf_t>(state->selected_vertices.size()));
+    vect_t delta;
+    VSUB2(delta, displayTarget, currentAnchor);
 
-    if (!bot && !load_bot())
-	return;
-
-    qged_edit_feature_clear_geometry(p);
-    qged_edit_feature_set_visible(p, 1);
-
-    if (qged_edit_feature_replace_bot_face_lines(p,
-	    QGED_EDIT_FEATURE_TRANSIENT_PREVIEW, bot) &&
-	    !qged_edit_feature_ref_is_null(p)) {
-	qged_edit_preview_publish_event(m_ctx, p, "_bot_edit",
-		QGED_EDIT_PREVIEW_UPDATE,
-		bu_vls_cstr(&oname));
+    int patchIndices[3] = {-1, -1, -1};
+    SbVec3f updatedPoints[3];
+    for (size_t i = 0; i < state->selected_vertices.size(); i++) {
+	const int vertex = state->selected_vertices[i];
+	updatedPoints[i] = state->geometry->point[vertex] +
+	    SbVec3f(static_cast<float>(delta[X]),
+	    static_cast<float>(delta[Y]), static_cast<float>(delta[Z]));
+	patchIndices[i] = vertex;
     }
-
-    struct ged_view_context *view_ctx = qged_edit_ged_view_context(m_ctx);
-    if (view_ctx) {
-	point_t *surface_points = (point_t *)bu_calloc(bot->num_vertices,
-		sizeof(point_t), "BOT edit surface points");
-	for (size_t i = 0; i < bot->num_vertices; i++)
-	    VMOVE(surface_points[i], &bot->vertices[i * 3]);
-	struct ged_view_feature_style surface_style =
-	    ged_view_feature_style_default();
-	surface_style.visible = 1;
-	surface_style.selectable = 1;
-	surface_style.color_valid = 1;
-	surface_style.color[0] = 72;
-	surface_style.color[1] = 126;
-	surface_style.color[2] = 168;
-	struct ged_view_feature_batch_desc desc =
-	    ged_view_feature_batch_desc_default();
-	desc.owner_id = "qged-bot-edit";
-	desc.owner_role = "edit-handle";
-	desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE;
-	desc.lifecycle = GED_VIEW_FEATURE_LIFECYCLE_PER_TOOL;
-	desc.local = 1;
-	struct ged_view_feature_batch *batch =
-	    ged_view_feature_batch_begin(view_ctx, &desc);
-	if (batch && ged_view_feature_batch_indexed_face_set_replace(batch,
-		"_bot_edit_surface", (const point_t *)surface_points,
-		bot->num_vertices, NULL, 0, bot->faces,
-		bot->num_faces * 3, &surface_style))
-	    (void)ged_view_feature_batch_commit(batch);
-	else if (batch)
-	    ged_view_feature_batch_abort(batch);
-	bu_free(surface_points, "BOT edit surface points");
+    const SbBool notify = state->geometry->enableNotify(FALSE);
+    for (size_t i = 0; i < state->selected_vertices.size(); i++) {
+	state->geometry->point.set1Value(patchIndices[i], updatedPoints[i]);
     }
-
-    const char *wcolor = "255/255/255";
-    const char *av[2] = {wcolor, NULL};
-    struct bu_color cval;
-    bu_opt_color(NULL, 1, (const char **)&av[0], (void *)&cval);
-    unsigned char rgb[3] = {0, 0, 0};
-    bu_color_to_rgb_chars(&cval, rgb);
-    qged_edit_feature_set_color(p, rgb[0], rgb[1], rgb[2]);
-
-    qged_edit_feature_touch(p);
-    publish_selection_handle();
+    state->geometry->normal.setNum(0);
+    state->geometry->sourceId = state->geometry->sourceId.getValue() + 1;
+    state->geometry->enableNotify(notify);
+    if (notify)
+	state->geometry->touch();
+    for (struct ged_view_context *viewContext : state->view_contexts) {
+	BObolViewController *controller =
+	    ged_plugin_obol_view_controller(viewContext);
+	if (!controller)
+	    continue;
+	const BObolFeatureHandle feature = controller->features().find(
+	    qbot_surface_name, BOBOL_FEATURE_SCOPE_LOCAL);
+	SoNode *rawNode = feature.isValid() ?
+	    controller->features().node(feature) : nullptr;
+	if (rawNode && rawNode->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	    SoBRLMeshShape *node = static_cast<SoBRLMeshShape *>(rawNode);
+	    node->clearRenderLists();
+	    node->touch();
+	}
+	controller->requestPresentationRender("bot-edit-points");
+    }
+    publish_selection();
+    return true;
 }
 
-void
-QBot::update_viewobj_name(const QString &ostr)
-{
-    bu_vls_sprintf(&oname, "%s", ostr.toLocal8Bit().data());
-    if (!load_bot()) {
-	clear_edit_state();
-	update_obj_wireframe();
-	return;
-    }
-    update_obj_wireframe();
-    emit view_updated(QG_VIEW_REFRESH);
-}
 
 void
-QBot::publish_selection_handle()
+QBot::publish_selection()
 {
-    struct ged_view_context *view_ctx = qged_edit_ged_view_context(m_ctx);
-    if (!view_ctx || !bot || selected_vertices.empty()) {
-	if (view_ctx)
-	    (void)ged_view_feature_remove(view_ctx,
-		"_bot_edit_handle");
+    if (!state || state->view_contexts.empty())
 	return;
-    }
 
-    const size_t count = selected_vertices.size();
-    point_t *points = (point_t *)bu_calloc(count, sizeof(point_t),
-	"BOT edit selection handles");
-    int *commands = (int *)bu_calloc(count, sizeof(int),
-	"BOT edit selection handle commands");
+    point_t points[3] = {VINIT_ZERO, VINIT_ZERO, VINIT_ZERO};
+    const size_t count = std::min(state->selected_vertices.size(),
+	static_cast<size_t>(3));
     for (size_t i = 0; i < count; i++) {
-	const int vertex = selected_vertices[i];
-	if (vertex >= 0 && (size_t)vertex < bot->num_vertices)
-	    VMOVE(points[i], &bot->vertices[(size_t)vertex * 3]);
-	commands[i] = GED_DRAW_VIEW_LINE_POINT_DRAW;
+	const int vertex = state->selected_vertices[i];
+	if (vertex < 0 || !state->geometry ||
+	    vertex >= state->geometry->point.getNum())
+	    return;
+	const SbVec3f &point = state->geometry->point[vertex];
+	VSET(points[i], point[0], point[1], point[2]);
     }
 
-    struct ged_view_feature_style style =
-	ged_view_feature_style_default();
+    struct ged_view_feature_style style = ged_view_feature_style_default();
     style.visible = 1;
     style.selectable = 1;
     style.color_valid = 1;
@@ -362,159 +586,339 @@ QBot::publish_selection_handle()
     desc.overlay_class = GED_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE;
     desc.lifecycle = GED_VIEW_FEATURE_LIFECYCLE_PER_TOOL;
     desc.local = 1;
-    struct ged_view_feature_batch *batch =
-	ged_view_feature_batch_begin(view_ctx, &desc);
-    if (batch && ged_view_feature_batch_line_set_replace(batch,
-	    "_bot_edit_handle", (const point_t *)points, commands, count,
-	    &style))
-	(void)ged_view_feature_batch_commit(batch);
-    else if (batch)
-	ged_view_feature_batch_abort(batch);
-    bu_free(commands, "BOT edit selection handle commands");
-    bu_free(points, "BOT edit selection handles");
+    for (struct ged_view_context *viewContext : state->view_contexts) {
+	if (state->selected_face >= 0)
+	    (void)ged_view_feature_set_selection(viewContext,
+		qbot_surface_name, &state->selected_face, 1);
+	else
+	    (void)ged_view_feature_set_selection(viewContext,
+		qbot_surface_name, nullptr, 0);
+
+	if (state->selected_vertices.empty()) {
+	    (void)ged_view_feature_remove(viewContext, qbot_handle_name);
+	    continue;
+	}
+	struct ged_view_feature_batch *batch =
+	    ged_view_feature_batch_begin(viewContext, &desc);
+	if (batch && ged_view_feature_batch_point_set_replace(batch,
+		qbot_handle_name, points, count, &style))
+	    (void)ged_view_feature_batch_commit(batch);
+	else if (batch)
+	    ged_view_feature_batch_abort(batch);
+    }
 }
 
-static fastf_t
-bot_point_segment_distance_sq(const point_t point, const fastf_t *a,
-	const fastf_t *b)
+
+void
+QBot::update_preview(int kindValue, qulonglong revisionValue)
 {
-    vect_t ab;
-    vect_t ap;
-    VSUB2(ab, b, a);
-    VSUB2(ap, point, a);
-    const fastf_t length_sq = MAGSQ(ab);
-    fastf_t t = length_sq > SMALL_FASTF ? VDOT(ap, ab) / length_sq : 0.0;
-    t = std::max((fastf_t)0.0, std::min((fastf_t)1.0, t));
-    point_t nearest;
-    VJOIN1(nearest, a, t, ab);
-    vect_t delta;
-    VSUB2(delta, point, nearest);
-    return MAGSQ(delta);
+    const enum ged_edit_session_event_kind kind =
+	static_cast<enum ged_edit_session_event_kind>(kindValue);
+    if (kind == GED_EDIT_SESSION_COMMIT || kind == GED_EDIT_SESSION_CANCEL ||
+	kind == GED_EDIT_SESSION_INVALIDATE) {
+	clear_preview();
+	emit view_updated(kind == GED_EDIT_SESSION_COMMIT ?
+	    QG_VIEW_DB : QG_VIEW_REFRESH);
+	return;
+    }
+
+    struct ged *gedp = getGed();
+    const ged_edit_session_ref session = editor->session();
+    if (!state || !gedp || ged_edit_session_ref_is_null(session))
+	return;
+
+    struct ged_edit_session_info info = {};
+    if (ged_edit_session_info_get(gedp, session, &info) != GED_EDIT_OK)
+	return;
+    const uint64_t revision = static_cast<uint64_t>(revisionValue);
+    const bool replacement = !same_session(state->session, session);
+    if (!replacement && state->revision == info.revision &&
+	kind != GED_EDIT_SESSION_REVERT) {
+	if (sync_view_presentations(false))
+	    publish_selection();
+	return;
+    }
+
+    if (replacement || kind == GED_EDIT_SESSION_BEGIN ||
+	kind == GED_EDIT_SESSION_REVERT || !state->geometry ||
+	state->geometry->point.getNum() == 0) {
+	(void)rebuild_preview(info.revision);
+	return;
+    }
+
+    bool handled = false;
+    for (int i = 0; i < 3; i++) {
+	if (info.command_id == state->pick_commands[i]) {
+	    handled = sync_session_selection(info.command_id);
+	    break;
+	}
+	if (info.command_id == state->move_commands[i]) {
+	    handled = patch_session_move(info.command_id);
+	    break;
+	}
+    }
+    if (!handled) {
+	const struct rt_edit_prim_desc *descriptor = nullptr;
+	const struct rt_edit_cmd_desc *command = nullptr;
+	if (ged_edit_session_descriptor_get(gedp, session, &descriptor) ==
+		GED_EDIT_OK && descriptor) {
+	    for (int i = 0; i < descriptor->ncmd; i++) {
+		if (descriptor->cmds[i].cmd_id == info.command_id) {
+		    command = &descriptor->cmds[i];
+		    break;
+		}
+	    }
+	}
+	/* Property changes do not alter vertex/topology presentation.  Unknown
+	 * and topology commands require one full refresh, never one per motion. */
+	if (!command || !command->category ||
+	    !BU_STR_EQUAL(command->category, "properties")) {
+	    (void)rebuild_preview(info.revision);
+	    return;
+	}
+    }
+
+    state->revision = revision ? revision : info.revision;
+    emit view_updated(QG_VIEW_REFRESH);
 }
+
+
+void
+QBot::refresh_preview()
+{
+    editor->refreshFromSession();
+    update_preview(static_cast<int>(GED_EDIT_SESSION_UPDATE), 0);
+}
+
+
+void
+QBot::sync_selection()
+{
+    struct ged *gedp = getGed();
+    if (!gedp || !gedp->dbip)
+	return;
+
+    QString selectedPath;
+    if (ged_selection_count(gedp, nullptr) == 1) {
+	struct bu_vls paths = BU_VLS_INIT_ZERO;
+	(void)ged_selection_list_paths(gedp, nullptr, &paths);
+	selectedPath = QString::fromUtf8(bu_vls_cstr(&paths)).trimmed();
+	bu_vls_free(&paths);
+
+	struct db_full_path fullPath;
+	db_full_path_init(&fullPath);
+	const QByteArray pathBytes = selectedPath.toUtf8();
+	const bool isBot = !selectedPath.isEmpty() &&
+	    db_string_to_path(&fullPath, gedp->dbip,
+		pathBytes.constData()) == 0 &&
+	    DB_FULL_PATH_CUR_DIR(&fullPath) &&
+	    DB_FULL_PATH_CUR_DIR(&fullPath)->d_minor_type ==
+		DB5_MINORTYPE_BRLCAD_BOT;
+	db_free_full_path(&fullPath);
+	if (!isBot)
+	    selectedPath.clear();
+    }
+
+    if (selectedPath.isEmpty()) {
+	if (!selection_path.isEmpty() &&
+	    editor->targetPath() == selection_path)
+	    editor->setTargetPath(QString());
+	selection_path.clear();
+	return;
+    }
+    selection_path = selectedPath;
+    editor->setTargetPath(selectedPath);
+}
+
+
+void
+QBot::reset_for_database()
+{
+    selection_path.clear();
+    clear_preview();
+    editor->setGed(nullptr);
+    editor->setTargetPath(QString());
+    editor->setGed(getGed());
+    emit view_updated(QG_VIEW_REFRESH);
+}
+
 
 bool
 QBot::eventFilter(QObject *, QEvent *event)
 {
-    if (!event || !m_ctx || !bot)
+    if (!event || !state || !m_ctx || !state->geometry ||
+	state->geometry->point.getNum() == 0)
+	return false;
+    const QEvent::Type type = event->type();
+    if (type != QEvent::MouseMove && type != QEvent::MouseButtonPress &&
+	type != QEvent::MouseButtonRelease)
 	return false;
     QMouseEvent *mouse = static_cast<QMouseEvent *>(event);
+    struct ged_view_context *viewContext = qged_edit_ged_view_context(m_ctx);
+    if (!viewContext || std::find(state->view_contexts.begin(),
+	    state->view_contexts.end(), viewContext) ==
+	    state->view_contexts.end())
+	return false;
 
-    if (event->type() == QEvent::MouseMove && dragging) {
+    if (type == QEvent::MouseMove && state->dragging) {
+	if (state->drag_view_context != viewContext)
+	    return false;
 	point_t current;
 	const struct bv *view = bv_context_view_const(
-	    static_cast<const struct bv_context *>(qged_edit_view_context(m_ctx)));
+	    ged_view_context_bv_const(viewContext));
 	if (!view || !bv_screen_to_model(current, view,
-		mouse->pos().x(), mouse->pos().y()))
+		mouse->position().x(), mouse->position().y()))
 	    return true;
 	vect_t delta;
-	VSUB2(delta, current, drag_start);
-	for (size_t i = 0; i < selected_vertices.size(); i++) {
-	    const int vertex = selected_vertices[i];
-	    if (vertex < 0 || (size_t)vertex >= bot->num_vertices)
-		continue;
-	    fastf_t *dst = &bot->vertices[(size_t)vertex * 3];
-	    const fastf_t *src = &drag_vertex_positions[i * 3];
-	    VADD2(dst, src, delta);
+	VSUB2(delta, current, state->drag_start);
+	point_t displayTarget;
+	VADD2(displayTarget, state->drag_anchor, delta);
+	point_t sourceTarget;
+	MAT4X3PNT(sourceTarget, state->inverse_path_matrix, displayTarget);
+	const fastf_t base2local = getGed()->dbip->dbi_base2local;
+	fastf_t values[3] = {
+	    sourceTarget[X] * base2local,
+	    sourceTarget[Y] * base2local,
+	    sourceTarget[Z] * base2local
+	};
+	const int mode = edit_mode->currentIndex();
+	if (mode < 0 || mode >= 3 || !state->move_commands[mode])
+	    return true;
+	struct ged_edit_command_input input = {};
+	input.command_id = state->move_commands[mode];
+	input.values = values;
+	input.value_count = 3;
+	input.view = viewContext;
+	const enum ged_edit_status result = ged_edit_session_apply(getGed(),
+	    editor->session(), &input);
+	if (result != GED_EDIT_OK) {
+	    state->dragging = false;
+	    state->drag_view_context = nullptr;
+	    if (result == GED_EDIT_REJECTED || result == GED_EDIT_ERROR)
+		(void)ged_edit_session_revert(getGed(), editor->session());
+	    else
+		editor->refreshFromSession();
 	}
-	dirty = true;
-	update_obj_wireframe();
-	emit view_updated(QG_VIEW_REFRESH);
 	return true;
     }
 
-    if (event->type() == QEvent::MouseButtonRelease && dragging &&
+    if (type == QEvent::MouseButtonRelease && state->dragging &&
 	mouse->button() == Qt::LeftButton) {
-	dragging = false;
-	qged_edit_preview_publish_event(m_ctx, p, "_bot_edit",
-	    QGED_EDIT_PREVIEW_UPDATE, bu_vls_cstr(&oname));
+	state->dragging = false;
+	state->drag_view_context = nullptr;
 	emit view_updated(QG_VIEW_REFRESH);
 	return true;
     }
 
-    if (event->type() != QEvent::MouseButtonPress ||
+    if (type != QEvent::MouseButtonPress ||
 	mouse->button() != Qt::LeftButton)
 	return false;
 
-    struct ged_view_context *view_ctx = qged_edit_ged_view_context(m_ctx);
-    if (!view_ctx)
-	return false;
-    struct ged_pick_result *result =
-	ged_pick_nearest(view_ctx,
-	    mouse->pos().x(), mouse->pos().y());
+    /* The editable surface deliberately overlaps the promoted database
+     * occurrence.  Ask for all ordered hits and select our retained feature;
+     * using only the globally nearest hit made mesh editing dependent on
+     * coincident-node traversal order. */
+    struct ged_pick_result *result = ged_pick_point(viewContext,
+	static_cast<int>(mouse->position().x()),
+	static_cast<int>(mouse->position().y()), 0);
     struct ged_pick_detail detail = ged_pick_detail_default();
     struct bu_vls path = BU_VLS_INIT_ZERO;
-    const int picked = result && ged_pick_result_count(result) > 0 &&
-	ged_pick_result_path(result, 0, &path) &&
-	ged_pick_result_detail(result, 0, &detail) &&
-	BU_STR_EQUAL(bu_vls_cstr(&path), "_bot_edit_surface") &&
-	detail.primitive_kind == 3 && detail.primitive_index >= 0;
+    bool picked = false;
+    const size_t resultCount = ged_pick_result_count(result);
+    for (size_t i = 0; i < resultCount; i++) {
+	bu_vls_trunc(&path, 0);
+	struct ged_pick_detail candidate = ged_pick_detail_default();
+	if (!ged_pick_result_path(result, i, &path) ||
+	    !BU_STR_EQUAL(bu_vls_cstr(&path), qbot_surface_name) ||
+	    !ged_pick_result_detail(result, i, &candidate) ||
+	    candidate.primitive_kind != 3 ||
+	    candidate.primitive_index < 0)
+	    continue;
+	detail = candidate;
+	picked = true;
+	break;
+    }
     if (!picked) {
 	bu_vls_free(&path);
 	ged_pick_result_free(result);
 	return false;
     }
 
-    const int face = detail.primitive_index;
-    if (face < 0 || (size_t)face >= bot->num_faces) {
+    const int faceIndex = detail.primitive_index;
+    if (static_cast<size_t>(faceIndex) >= state->faces.size() / 3) {
 	bu_vls_free(&path);
 	ged_pick_result_free(result);
 	return false;
     }
-    (void)ged_view_feature_set_selection(
-	view_ctx, "_bot_edit_surface", &face, 1);
-
-    selected_vertices.clear();
-    if (edit_mode->currentIndex() == 0) {
+    const int32_t *face =
+	&state->faces[static_cast<size_t>(faceIndex) * 3];
+    const int mode = edit_mode->currentIndex();
+    fastf_t values[3] = {0.0, 0.0, 0.0};
+    size_t valueCount = 0;
+    if (mode == 0) {
 	int vertex = detail.nearest_face_vertex_index;
 	if (vertex < 0)
-	    vertex = bot->faces[(size_t)face * 3];
-	selected_vertices.push_back(vertex);
-    } else if (edit_mode->currentIndex() == 1) {
-	for (int i = 0; i < 3; i++)
-	    selected_vertices.push_back(bot->faces[(size_t)face * 3 + i]);
-    } else {
+	    vertex = face[0];
+	values[0] = vertex;
+	valueCount = 1;
+    } else if (mode == 1) {
+	values[0] = face[0];
+	values[1] = face[1];
+	values[2] = face[2];
+	valueCount = 3;
+    } else if (mode == 2) {
 	int edge = 0;
 	if (detail.model_point_valid) {
 	    fastf_t best = INFINITY;
 	    for (int i = 0; i < 3; i++) {
-		const int a = bot->faces[(size_t)face * 3 + i];
-		const int b = bot->faces[(size_t)face * 3 + ((i + 1) % 3)];
-		const fastf_t distance = bot_point_segment_distance_sq(
-		    detail.model_point, &bot->vertices[(size_t)a * 3],
-		    &bot->vertices[(size_t)b * 3]);
+		const fastf_t distance = point_segment_distance_sq(
+		    detail.model_point,
+		    state->geometry->point[face[i]],
+		    state->geometry->point[face[(i + 1) % 3]]);
 		if (distance < best) {
 		    best = distance;
 		    edge = i;
 		}
 	    }
 	}
-	selected_vertices.push_back(bot->faces[(size_t)face * 3 + edge]);
-	selected_vertices.push_back(
-	    bot->faces[(size_t)face * 3 + ((edge + 1) % 3)]);
+	values[0] = face[edge];
+	values[1] = face[(edge + 1) % 3];
+	valueCount = 2;
+    } else {
+	bu_vls_free(&path);
+	ged_pick_result_free(result);
+	return false;
     }
 
-    std::sort(selected_vertices.begin(), selected_vertices.end());
-    selected_vertices.erase(std::unique(selected_vertices.begin(),
-	selected_vertices.end()), selected_vertices.end());
-    drag_vertex_positions.clear();
-    drag_vertex_positions.reserve(selected_vertices.size() * 3);
-    for (const int vertex : selected_vertices) {
-	const fastf_t *point = &bot->vertices[(size_t)vertex * 3];
-	drag_vertex_positions.insert(drag_vertex_positions.end(), point,
-	    point + 3);
+    struct ged_edit_command_input input = {};
+    input.command_id = state->pick_commands[mode];
+    input.values = values;
+    input.value_count = valueCount;
+    input.view = viewContext;
+    if (!input.command_id || ged_edit_session_apply(getGed(),
+	editor->session(), &input) != GED_EDIT_OK ||
+	ged_edit_session_checkpoint(getGed(), editor->session()) != GED_EDIT_OK) {
+	bu_vls_free(&path);
+	ged_pick_result_free(result);
+	return true;
     }
 
     const struct bv *view = bv_context_view_const(
-	qged_edit_view_context(m_ctx));
-    if (!view || !bv_screen_to_model(drag_start, view,
-	    mouse->pos().x(), mouse->pos().y())) {
-	const int vertex = selected_vertices.front();
-	VMOVE(drag_start, &bot->vertices[(size_t)vertex * 3]);
+	ged_view_context_bv_const(viewContext));
+    if (!view || !bv_screen_to_model(state->drag_start, view,
+	    mouse->position().x(), mouse->position().y()))
+	VSETALL(state->drag_start, 0.0);
+    VSETALL(state->drag_anchor, 0.0);
+    for (const int vertex : state->selected_vertices) {
+	const SbVec3f &point = state->geometry->point[vertex];
+	state->drag_anchor[X] += point[0];
+	state->drag_anchor[Y] += point[1];
+	state->drag_anchor[Z] += point[2];
     }
-    dragging = true;
-    publish_selection_handle();
-    qged_edit_preview_publish_event(m_ctx, p, "_bot_edit",
-	QGED_EDIT_PREVIEW_BEGIN, bu_vls_cstr(&oname));
+    VSCALE(state->drag_anchor, state->drag_anchor,
+	1.0 / static_cast<fastf_t>(state->selected_vertices.size()));
+    state->dragging = true;
+    state->drag_view_context = viewContext;
 
     bu_vls_free(&path);
     ged_pick_result_free(result);

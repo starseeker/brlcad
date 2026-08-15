@@ -102,4 +102,30 @@ rt_edit_test_view_init(struct rt_edit_view *v)
     rt_edit_test_view_init_size(v, 73.3197);
 }
 
+static inline int
+rt_edit_test_scalar_value(struct rt_edit *s, int command_id,
+	fastf_t expected)
+{
+    struct rt_edit_cmd_values values;
+    return rt_edit_cmd_values_get(s, command_id, &values) ==
+	RT_EDIT_VALUE_OK && values.value_count == 1 &&
+	values.value_valid[0] && NEAR_EQUAL(values.values[0], expected, 1.0e-9);
+}
+
+static inline int
+rt_edit_test_point_value(struct rt_edit *s, int command_id,
+	const point_t expected)
+{
+    struct rt_edit_cmd_values values;
+    if (rt_edit_cmd_values_get(s, command_id, &values) !=
+	    RT_EDIT_VALUE_OK || values.value_count != 3)
+	return 0;
+    for (int i = 0; i < 3; i++) {
+	if (!values.value_valid[i] ||
+		!NEAR_EQUAL(values.values[i], expected[i], 1.0e-9))
+	    return 0;
+    }
+    return 1;
+}
+
 #endif /* LIBRT_TESTS_EDIT_TEST_VIEW_H */

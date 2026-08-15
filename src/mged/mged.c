@@ -2163,36 +2163,99 @@ mged_obol_faceplate_sync(struct mged_state *s, struct mged_display *p)
 	p->display_view_state->vs_gvp);
 }
 
+static const char *
+mged_obol_framebuffer_mode_from_variables(const struct _mged_variables *variables)
+{
+    if (!variables || !variables->mv_fb)
+	return "off";
+    /* MGED's fb_overlay is intentionally not libbv's historic numeric
+     * ordering: 0=underlay, 1=interlay, 2=overlay. */
+    return variables->mv_fb_overlay == 0 ? "underlay" :
+	variables->mv_fb_overlay == 1 ? "interlay" : "overlay";
+}
+
+static int
+mged_obol_framebuffer_variables_from_mode(struct _mged_variables *variables,
+	const char *mode)
+{
+    if (!variables || !mode)
+	return 0;
+    if (BU_STR_EQUAL(mode, "off")) {
+	variables->mv_fb = 0;
+	return 1;
+    }
+    variables->mv_fb = 1;
+    if (BU_STR_EQUAL(mode, "underlay"))
+	variables->mv_fb_overlay = 0;
+    else if (BU_STR_EQUAL(mode, "interlay"))
+	variables->mv_fb_overlay = 1;
+    else if (BU_STR_EQUAL(mode, "overlay"))
+	variables->mv_fb_overlay = 2;
+    else
+	return 0;
+    return 1;
+}
+
 static void
-mged_obol_framebuffer_composition_sync(const struct mged_display *display,
+mged_obol_framebuffer_composition_sync(struct mged_display *display,
 	struct ged_view_context *view_ctx)
 {
 	if (!view_ctx || !display || !display->display_variables)
 	    return;
 
-	const struct _mged_variables *variables = display->display_variables;
-    const char *mode = "off";
-	if (variables->mv_fb) {
-	/* MGED's fb_overlay is intentionally not libbv's historic numeric
-	 * ordering: 0=underlay, 1=interlay, 2=overlay. */
-	mode = variables->mv_fb_overlay == 0 ? "underlay" :
-	       variables->mv_fb_overlay == 1 ? "interlay" : "overlay";
-    }
-
     struct bv_display_property_value current =
 	BV_DISPLAY_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(view_ctx,
-	    "composition.framebuffer.mode", &current) ==
-	BV_DISPLAY_PROPERTY_OK && current.string_value &&
-	BU_STR_EQUAL(current.string_value, mode))
+	    "composition.framebuffer.mode", &current) !=
+	BV_DISPLAY_PROPERTY_OK || !current.string_value)
 	return;
 
-    struct bv_display_property_value next =
-	BV_DISPLAY_PROPERTY_VALUE_INIT;
-    next.type = BV_DISPLAY_PROPERTY_ENUM;
-    next.string_value = mode;
-    (void)ged_view_context_display_property_set(view_ctx,
-	"composition.framebuffer.mode", &next);
+    if (display->display_framebuffer_state_dirty) {
+	/* A legacy MGED variable write was the last operation.  Publish it once
+	 * into the canonical view rather than imposing it on every refresh. */
+	const char *mode = mged_obol_framebuffer_mode_from_variables(
+	    display->display_variables);
+	if (!BU_STR_EQUAL(current.string_value, mode)) {
+	    struct bv_display_property_value next =
+		BV_DISPLAY_PROPERTY_VALUE_INIT;
+	    next.type = BV_DISPLAY_PROPERTY_ENUM;
+	    next.string_value = mode;
+	    if (ged_view_context_display_property_set(view_ctx,
+		    "composition.framebuffer.mode", &next) !=
+		BV_DISPLAY_PROPERTY_OK)
+		return;
+	}
+	display->display_framebuffer_state_dirty = 0;
+	return;
+    }
+
+    /* `ert` and `view faceplate fb` write the canonical view directly.  Keep
+     * MGED's legacy variables as an adapter and propagate the same value to
+     * displays which explicitly share that variable record. */
+    const char *legacyMode = mged_obol_framebuffer_mode_from_variables(
+	display->display_variables);
+    if (BU_STR_EQUAL(current.string_value, legacyMode))
+	return;
+    if (!mged_obol_framebuffer_variables_from_mode(
+	    display->display_variables, current.string_value))
+	return;
+
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *peer = (struct mged_display *)
+	    BU_PTBL_GET(&active_display_set, di);
+	if (!peer || peer == display ||
+	    peer->display_variables != display->display_variables ||
+	    !peer->display_view_state || !peer->display_view_state->vs_gvp)
+	    continue;
+	struct bv_display_property_value next =
+	    BV_DISPLAY_PROPERTY_VALUE_INIT;
+	next.type = BV_DISPLAY_PROPERTY_ENUM;
+	next.string_value = current.string_value;
+	(void)ged_view_context_display_property_set(
+	    peer->display_view_state->vs_gvp,
+	    "composition.framebuffer.mode", &next);
+	peer->display_framebuffer_state_dirty = 0;
+    }
 }
 
 int
@@ -2291,6 +2354,10 @@ refresh(struct mged_state *s)
 	}
 
 	mged_obol_framebuffer_composition_sync(p, view_ctx);
+	/* fbserv writers run on transport threads and publish only imgstream data.
+	 * Realize that data into retained Coin nodes here, on the graphical owner
+	 * thread, before the endpoint traverses the scene. */
+	(void)ged_view_framebuffer_present(s->gedp);
 	mged_obol_faceplate_sync(s, p);
 
 	if (s->dbip != DBI_NULL) {
@@ -3075,6 +3142,7 @@ main(int argc, char *argv[])
     *axes_state = default_axes_state;		/* struct copy */
     s->mged_curr_display->display_axes_state_dirty = 1;
     s->mged_curr_display->display_adc_style_dirty = 1;
+    s->mged_curr_display->display_framebuffer_state_dirty = 1;
 
     BU_ALLOC(menu_state, struct _menu_state);
     menu_state->ms_rc = 1;

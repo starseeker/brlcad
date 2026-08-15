@@ -68,7 +68,7 @@ typedef unsigned long long ged_db_index_id;
 struct ged_db_index_record {
     ged_db_index_id id;        /**< object or unique child-instance id */
     ged_db_index_id object_id; /**< canonical object id for duplicate instances */
-    const char *name;          /**< borrowed display/name string */
+    const char *name;          /**< borrowed display name, stable until a database change or explicit index refresh */
     struct directory *dp;      /**< borrowed directory pointer when valid */
     int valid;                 /**< non-zero when id is known to the index */
     int is_instance;           /**< non-zero when id names a duplicate child instance */
@@ -217,10 +217,11 @@ ged_db_index_valid_id(struct ged *gedp, ged_db_index_id id);
 /**
  * Report whether a database path string is known to the current index.
  *
- * This refreshes the index only when it is uninitialized or has explicit
- * pending change flags.  Unlike ged_db_index_path_resolve(), ordinary misses
- * do not trigger a defensive rebuild, so this is suitable for high-volume
- * speculative existence checks during draw-state reconciliation.
+ * This reconciles an uninitialized or dirty index once per queued database
+ * change.  Change flags remain available to client adapters until consumed by
+ * ged_db_index_refresh_flags().  Unlike ged_db_index_path_resolve(), ordinary
+ * misses do not trigger a defensive rebuild, so this is suitable for
+ * high-volume speculative existence checks during draw-state reconciliation.
  */
 GED_EXPORT extern int
 ged_db_index_path_exists(struct ged *gedp,

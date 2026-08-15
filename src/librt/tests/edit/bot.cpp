@@ -193,6 +193,20 @@ main(int argc, char *argv[])
 	(struct rt_bot_internal *)s->es_int.idb_ptr;
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
 
+    struct rt_edit_param_bounds vertexBounds = {};
+    if (rt_edit_param_bounds_get(s, ECMD_BOT_PICKV, 0,
+	    &vertexBounds) != BRLCAD_OK || !vertexBounds.has_minimum ||
+	!vertexBounds.has_maximum ||
+	!NEAR_EQUAL(vertexBounds.minimum, -1.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vertexBounds.maximum, 3.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: BOT dynamic vertex bounds are incorrect\n");
+    struct rt_edit_param_bounds listBounds = {};
+    if (rt_edit_param_bounds_get(s, ECMD_BOT_MOVEV_LIST, 1,
+	    &listBounds) != BRLCAD_OK || !listBounds.has_maximum ||
+	!NEAR_EQUAL(listBounds.maximum, 3.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: BOT vertex-list bounds are incorrect\n");
+    bu_log("BOT current-topology parameter bounds SUCCESS\n");
+
     vect_t mousevec;
 
     /* ================================================================
@@ -303,6 +317,46 @@ main(int argc, char *argv[])
 	       V3ARGS(&bot->vertices[6]));
     }
 
+    /* The descriptor and readback define edge/face movement by their center,
+     * so setters must use the same absolute anchor semantics. */
+    bot_reset(s, bot, b);
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_MOVEE);
+    s->e_inpara = 3;
+    VSET(s->e_para, 2, 3, 4);
+    b->bot_verts[0] = 0;
+    b->bot_verts[1] = 1;
+    b->bot_verts[2] = -1;
+    if (rt_edit_process_result(s) != BRLCAD_OK)
+	bu_exit(1, "ERROR: ECMD_BOT_MOVEE rejected a valid edge move\n");
+    {
+	point_t midpoint;
+	VADD2SCALE(midpoint, &bot->vertices[0], &bot->vertices[3], 0.5);
+	vect_t expected = {2, 3, 4};
+	if (!VNEAR_EQUAL(midpoint, expected, VUNITIZE_TOL))
+	    bu_exit(1, "ERROR: ECMD_BOT_MOVEE midpoint=%g,%g,%g\n",
+		V3ARGS(midpoint));
+    }
+
+    bot_reset(s, bot, b);
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_MOVET);
+    s->e_inpara = 3;
+    VSET(s->e_para, 3, 4, 5);
+    b->bot_verts[0] = 0;
+    b->bot_verts[1] = 1;
+    b->bot_verts[2] = 2;
+    if (rt_edit_process_result(s) != BRLCAD_OK)
+	bu_exit(1, "ERROR: ECMD_BOT_MOVET rejected a valid face move\n");
+    {
+	point_t centroid;
+	VADD3(centroid, &bot->vertices[0], &bot->vertices[3],
+	    &bot->vertices[6]);
+	VSCALE(centroid, centroid, 1.0 / 3.0);
+	vect_t expected = {3, 4, 5};
+	if (!VNEAR_EQUAL(centroid, expected, VUNITIZE_TOL))
+	    bu_exit(1, "ERROR: ECMD_BOT_MOVET centroid=%g,%g,%g\n",
+		V3ARGS(centroid));
+    }
+
     /* ================================================================
      * ECMD_BOT_MOVEV_LIST: move two vertices by a common delta
      *
@@ -331,6 +385,26 @@ main(int argc, char *argv[])
 	bu_log("ECMD_BOT_MOVEV_LIST SUCCESS: v[0]=(%g,%g,%g) v[1]=(%g,%g,%g)\n",
 	       V3ARGS(&bot->vertices[0]), V3ARGS(&bot->vertices[3]));
     }
+
+    bot_reset(s, bot, b);
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_MOVEV_LIST);
+    s->e_inpara = 5;
+    VSET(s->e_para, 1.0, 0.0, 0.0);
+    s->e_para[3] = 0.0;
+    s->e_para[4] = 99.0;
+    vect_t zero = VINIT_ZERO;
+    if (rt_edit_process_result(s) == BRLCAD_OK ||
+	!VNEAR_EQUAL(&bot->vertices[0], zero, VUNITIZE_TOL))
+	bu_exit(1, "ERROR: invalid BOT vertex list partially changed geometry\n");
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_MOVEV_LIST);
+    s->e_inpara = 5;
+    VSET(s->e_para, 1.0, 0.0, 0.0);
+    s->e_para[3] = 0.0;
+    s->e_para[4] = 0.0;
+    if (rt_edit_process_result(s) != BRLCAD_OK ||
+	!NEAR_EQUAL(bot->vertices[0], 1.0, VUNITIZE_TOL))
+	bu_exit(1, "ERROR: duplicate BOT vertex list moved a vertex twice\n");
+    bu_log("ECMD_BOT_MOVEV_LIST atomic/deduplicated SUCCESS\n");
 
     /* ================================================================
      * ECMD_BOT_ESPLIT: split edge v[0]–v[1] on fresh tetrahedron
@@ -542,6 +616,14 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	      (struct rt_bot_edit *)s->ipe_ptr);
     EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_PICKV);
     s->e_inpara = 1;
+    s->e_para[0] = 99.0;
+    if (rt_edit_process_result(s) == BRLCAD_OK ||
+	((struct rt_bot_edit *)s->ipe_ptr)->bot_verts[0] != -1)
+	bu_exit(1, "ERROR: ECMD_BOT_PICKV accepted an invalid vertex\n");
+    bu_vls_trunc(s->log_str, 0);
+
+    EDOBJ[dp->d_minor_type].ft_set_edit_mode(s, ECMD_BOT_PICKV);
+    s->e_inpara = 1;
     s->e_para[0] = 3.0;
     rt_edit_process(s);
     {
@@ -610,7 +692,7 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
     }
 
     /* ================================================================
-     * rt_edit_bot_get_params: check vertex index and mode
+     * rt_edit_bot_get_values: check vertex index and mode
      * ================================================================*/
     {
 	/* Re-select vertex 3 */
@@ -621,20 +703,20 @@ bu_log("RT_MATRIX_EDIT_TRANS_MODEL_XYZ SUCCESS: "
 	s->e_para[0] = 3.0;
 	rt_edit_process(s);
 
-	fastf_t vals[4] = {0};
-	int nv = (*EDOBJ[dp->d_minor_type].ft_edit_get_params)(
-		s, ECMD_BOT_PICKV, vals);
-	if (nv != 1 || (int)vals[0] != 3)
-	    bu_exit(1, "ERROR: get_params(PICKV): nv=%d vals[0]=%g expected vertex 3\n",
-		    nv, vals[0]);
-	bu_log("get_params(PICKV) SUCCESS: vertex_index=%g\n", vals[0]);
+	struct rt_edit_cmd_values vals;
+	int status = rt_edit_cmd_values_get(s, ECMD_BOT_PICKV, &vals);
+	if (status != RT_EDIT_VALUE_OK || vals.value_count != 1 ||
+	    (int)vals.values[0] != 3)
+	    bu_exit(1, "ERROR: get_values(PICKV): status=%d value=%g expected vertex 3\n",
+		    status, vals.values[0]);
+	bu_log("get_values(PICKV) SUCCESS: vertex_index=%g\n",
+	    vals.values[0]);
 
 	/* Check MODE */
-	nv = (*EDOBJ[dp->d_minor_type].ft_edit_get_params)(
-		s, ECMD_BOT_MODE, vals);
-	if (nv != 1)
-	    bu_exit(1, "ERROR: get_params(MODE): nv=%d\n", nv);
-	bu_log("get_params(MODE) SUCCESS: mode=%g\n", vals[0]);
+	status = rt_edit_cmd_values_get(s, ECMD_BOT_MODE, &vals);
+	if (status != RT_EDIT_VALUE_OK || vals.value_count != 1)
+	    bu_exit(1, "ERROR: get_values(MODE): status=%d\n", status);
+	bu_log("get_values(MODE) SUCCESS: mode=%g\n", vals.values[0]);
     }
 
     bu_log("All BOT descriptor tests PASSED\n");

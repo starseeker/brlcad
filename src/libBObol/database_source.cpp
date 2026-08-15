@@ -685,6 +685,7 @@ BObolDatabaseSourceSummary::BObolDatabaseSourceSummary(void) :
     sourceBoundsValid(FALSE),
     sourceBoundsExact(FALSE),
     sourceBounds(),
+    hasViewDependentCsgGeometry(FALSE),
     stale(TRUE),
     staleReason(SoBRLDatabaseSource::STALE_SOURCE),
     realizedShapeCount(0),
@@ -966,6 +967,7 @@ BObolCompactOccurrence::BObolCompactOccurrence(void) :
     summary(),
     geometryTransform(SbMatrix::identity()),
     localTransform(SbMatrix::identity()),
+    viewDependentCsgGeometry(FALSE),
     lodBacked(FALSE),
     sourceMeshRequestValid(FALSE),
     sourceMeshRequest(),
@@ -2227,7 +2229,8 @@ store_cached_part_geometry(
     std::map<std::string, BObolCachedPartGeometry> &cache,
     const std::string &key, Obol::PartGeometry &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
-    bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest)
+    bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest,
+    bool viewDependentCsgGeometry)
 {
     if (key.empty())
 	return std::shared_ptr<const Obol::PartGeometry>();
@@ -2242,6 +2245,7 @@ store_cached_part_geometry(
     else
 	stored.bounds = compact_part_geometry_bounds(stored.geometry);
     stored.geometryTransform = SbMatrix::identity();
+    stored.viewDependentCsgGeometry = viewDependentCsgGeometry;
     stored.lodBacked = lodBacked;
     stored.sourceMeshRequestValid = sourceMeshRequest != NULL;
     if (sourceMeshRequest)
@@ -2255,7 +2259,8 @@ store_cached_part_geometry_reference(
     const std::string &key, const std::shared_ptr<const Obol::PartGeometry> &geometry,
     const SbMatrix &geometryTransform, const char *sourceType,
     const char *geometryKind, const SbBox3f *bounds, bool lodBacked,
-    const BObolSourceMeshRequest *sourceMeshRequest)
+    const BObolSourceMeshRequest *sourceMeshRequest,
+    bool viewDependentCsgGeometry)
 {
     if (key.empty() || !geometry)
 	return std::shared_ptr<const Obol::PartGeometry>();
@@ -2270,6 +2275,7 @@ store_cached_part_geometry_reference(
 	stored.bounds = database_source_transform_bounds(
 	    compact_part_geometry_bounds(geometry), geometryTransform);
     stored.geometryTransform = geometryTransform;
+    stored.viewDependentCsgGeometry = viewDependentCsgGeometry;
     stored.lodBacked = lodBacked;
     stored.sourceMeshRequestValid = sourceMeshRequest != NULL;
     if (sourceMeshRequest)
@@ -2281,33 +2287,36 @@ std::shared_ptr<const Obol::PartGeometry>
 BObolDatabaseSourceRealizationCache::storeWireCadGeometry(
     const std::string &key, Obol::PartGeometry &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
-    bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest)
+    bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest,
+    bool viewDependentCsgGeometry)
 {
     return store_cached_part_geometry(this->sharedWireCadGeometry, key,
 	std::move(geometry), sourceType, geometryKind, bounds, lodBacked,
-	sourceMeshRequest);
+	sourceMeshRequest, viewDependentCsgGeometry);
 }
 
 std::shared_ptr<const Obol::PartGeometry>
 BObolDatabaseSourceRealizationCache::storeMeshVListCadGeometry(
     const std::string &key, Obol::PartGeometry &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
-    bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest)
+    bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest,
+    bool viewDependentCsgGeometry)
 {
     return store_cached_part_geometry(this->sharedMeshVListCadGeometry, key,
 	std::move(geometry), sourceType, geometryKind, bounds, lodBacked,
-	sourceMeshRequest);
+	sourceMeshRequest, viewDependentCsgGeometry);
 }
 
 std::shared_ptr<const Obol::PartGeometry>
 BObolDatabaseSourceRealizationCache::storeMeshCadGeometry(
     const std::string &key, Obol::PartGeometry &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
-    bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest)
+    bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest,
+    bool viewDependentCsgGeometry)
 {
     return store_cached_part_geometry(this->sharedMeshCadGeometry, key,
 	std::move(geometry), sourceType, geometryKind, bounds, lodBacked,
-	sourceMeshRequest);
+	sourceMeshRequest, viewDependentCsgGeometry);
 }
 
 std::shared_ptr<const Obol::PartGeometry>
@@ -2316,11 +2325,12 @@ BObolDatabaseSourceRealizationCache::storeMeshCadGeometryReference(
     const std::shared_ptr<const Obol::PartGeometry> &geometry,
     const SbMatrix &geometryTransform, const char *sourceType,
     const char *geometryKind, const SbBox3f *bounds, bool lodBacked,
-    const BObolSourceMeshRequest *sourceMeshRequest)
+    const BObolSourceMeshRequest *sourceMeshRequest,
+    bool viewDependentCsgGeometry)
 {
     return store_cached_part_geometry_reference(this->sharedMeshCadGeometry,
 	key, geometry, geometryTransform, sourceType, geometryKind, bounds,
-	lodBacked, sourceMeshRequest);
+	lodBacked, sourceMeshRequest, viewDependentCsgGeometry);
 }
 
 static const BObolCachedPartGeometry *
@@ -2483,6 +2493,13 @@ SoBRLDatabaseSource::seedCompactRealizationCache(
 
     for (const BObolCompactInstanceEntry &entry :
 	 this->d->compactIndex->entries) {
+	/* This entry was produced for the source's realized camera policy.  The
+	 * detached successor builds cache keys from its new policy, so inserting
+	 * the old payload under that key would falsely certify stale CSG geometry
+	 * as current.  Immutable mesh/PoP and ordinary plotted geometry remain
+	 * safe to seed and reuse. */
+	if (entry.viewDependentCsgGeometry)
+	    continue;
 	const char *name = entry.semantic.sourceName.getString();
 	if (!name || !name[0])
 	    continue;
@@ -3988,8 +4005,11 @@ vlist_from_lod_realization_internal(struct rt_db_internal *intern,
 static int
 cad_wire_part_geometry_from_lod_realization_internal(
 	struct rt_db_internal *intern, const SoBRLDatabaseSource *source,
-	const SbBox3f &localBounds, Obol::PartGeometry &geometry)
+	const SbBox3f &localBounds, Obol::PartGeometry &geometry,
+	bool *viewDependentCsgGeometry = NULL)
 {
+    if (viewDependentCsgGeometry)
+	*viewDependentCsgGeometry = false;
     if (cad_progressive_wire_part_geometry_from_provider(
 	    intern, source, geometry))
 	return 1;
@@ -4031,7 +4051,11 @@ cad_wire_part_geometry_from_lod_realization_internal(
 	commands.push_back(command);
     }
     primitive_realization_line_set_free(&realization);
-    return cad_wire_part_geometry_from_line_set(points, commands, geometry);
+    const int converted = cad_wire_part_geometry_from_line_set(points,
+	commands, geometry);
+    if (converted && viewDependentCsgGeometry)
+	*viewDependentCsgGeometry = true;
+    return converted;
 }
 
 /* A wireframe BoT intentionally keeps a mesh/PoP payload so its active prefix
@@ -4138,6 +4162,8 @@ static union tree *
 	    find_wire_cad_geometry_any(data->cache, cacheKey);
 	std::shared_ptr<const Obol::PartGeometry> cadGeometry = cachedCad ?
 	    cachedCad->geometry : std::shared_ptr<const Obol::PartGeometry>();
+	bool viewDependentCsgGeometry = cachedCad ?
+	    cachedCad->viewDependentCsgGeometry : false;
 	bobol_performance_counter_add(cadGeometry ?
 	    BOBOL_PERF_WIRE_CACHE_HITS : BOBOL_PERF_WIRE_CACHE_MISSES, 1);
 	const char *typeLabel = cachedCad && !cachedCad->sourceType.empty() ?
@@ -4181,11 +4207,13 @@ static union tree *
 	    }
 
 	    Obol::PartGeometry generated;
+	    viewDependentCsgGeometry = false;
 	    int generatedGeometry = localIntern->idb_type == ID_BOT ?
 		cad_wire_part_geometry_from_bot(
 		    static_cast<const struct rt_bot_internal *>(localIntern->idb_ptr),
 		    generated) : cad_wire_part_geometry_from_lod_realization_internal(
-			localIntern, data->source, localBounds, generated);
+			localIntern, data->source, localBounds, generated,
+			&viewDependentCsgGeometry);
 	    if (!generatedGeometry)
 		generatedGeometry = cad_wire_part_geometry_from_plot_internal(
 		    localIntern, data->source, generated);
@@ -4204,12 +4232,15 @@ static union tree *
 	    }
 	    cadGeometry = data->cache->storeWireCadGeometry(cacheKey,
 		std::move(generated), typeLabel, geometryKind,
-		localBounds.isEmpty() ? NULL : &localBounds);
+		localBounds.isEmpty() ? NULL : &localBounds, false, NULL,
+		viewDependentCsgGeometry);
 	}
 
 	char *path = db_path_to_string(pathp);
 	compact_occurrence_build input;
 	input.occurrence.geometry = cadGeometry;
+	input.occurrence.viewDependentCsgGeometry =
+	    viewDependentCsgGeometry ? TRUE : FALSE;
 	input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
 	input.occurrence.summary = compact_occurrence_tree_summary(
 	    data->source, tsp, pathp, path, dp->d_namep,
@@ -4758,7 +4789,8 @@ static int
 realize_direct_leaf_wireframe_compact(
     SoBRLDatabaseSource *source,
     BObolDatabaseSourceRealizationCache *cache,
-    uint32_t revision)
+    uint32_t revision,
+    BObolCompactOccurrenceStream *stream)
 {
     struct db_i *dbip = source ? source->getDatabase() : NULL;
     if (!source || !cache || !dbip || source_has_auxiliary_children(source))
@@ -4793,6 +4825,8 @@ realize_direct_leaf_wireframe_compact(
     std::shared_ptr<const Obol::PartGeometry> cadGeometry;
     const BObolCachedPartGeometry *cachedCad =
 	find_wire_cad_geometry_any(cache, cacheKey);
+    bool viewDependentCsgGeometry = cachedCad ?
+	cachedCad->viewDependentCsgGeometry : false;
     if (cachedCad)
 	cadGeometry = cachedCad->geometry;
     bobol_performance_counter_add(
@@ -4861,6 +4895,7 @@ realize_direct_leaf_wireframe_compact(
 
 	if (!cadGeometry) {
 	    Obol::PartGeometry generated;
+	    viewDependentCsgGeometry = false;
 	    int generatedGeometry = 0;
 	    if (validInternal.local.idb_type == ID_BOT)
 		generatedGeometry = cad_wire_part_geometry_from_bot(
@@ -4869,7 +4904,8 @@ realize_direct_leaf_wireframe_compact(
 	    else
 		generatedGeometry =
 		    cad_wire_part_geometry_from_lod_realization_internal(
-			&validInternal.local, source, localBounds, generated);
+			&validInternal.local, source, localBounds, generated,
+			&viewDependentCsgGeometry);
 	    if (!generatedGeometry)
 		generatedGeometry = cad_wire_part_geometry_from_plot_internal(
 		    &validInternal.local, source, generated);
@@ -4881,7 +4917,8 @@ realize_direct_leaf_wireframe_compact(
 		}
 		cadGeometry = cache->storeWireCadGeometry(cacheKey,
 		    std::move(generated), typeLabel, geometryKind,
-		    localBoundsValid ? &localBounds : NULL);
+		    localBoundsValid ? &localBounds : NULL, false, NULL,
+		    viewDependentCsgGeometry);
 	    }
 	}
 	if (!cadGeometry) {
@@ -4896,6 +4933,8 @@ realize_direct_leaf_wireframe_compact(
 
     BObolCompactOccurrence occurrence;
     occurrence.geometry = cadGeometry;
+    occurrence.viewDependentCsgGeometry =
+	viewDependentCsgGeometry ? TRUE : FALSE;
     occurrence.summary = compact_occurrence_summary(source,
 	fullPath.c_str(), dp->d_namep,
 	geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
@@ -4917,6 +4956,13 @@ realize_direct_leaf_wireframe_compact(
 	source->realizationDiagnostic = msg;
 	return -1;
     }
+    /* A direct leaf bypasses realize_leaf(), whose normal compact path hands
+     * every completed occurrence to the progressive stream.  Preserve that
+     * producer contract here: detached realization cannot adopt its private
+     * one-entry registry over an empty live source, and without this handoff a
+     * top-level primitive converges to an empty scene. */
+    if (stream && !stream->isCancelled())
+	stream->push(occurrence);
     return 1;
 }
 
@@ -7556,6 +7602,7 @@ realize_direct_leaf_mesh_compact(
      * below, so the threshold does not require a temporary shape.
      */
     const bool hadCachedCad = cachedWire || cachedMesh;
+    bool generatedViewDependentCsgGeometry = false;
     if (!sharedVListShape && !sharedMeshShape && !hadCachedCad) {
 	owned_leaf_internal validInternal;
 	if (rt_db_get_internal(&validInternal.local, dp, dbip, NULL) < 0 ||
@@ -7613,7 +7660,8 @@ realize_direct_leaf_mesh_compact(
 			validInternal.local.idb_ptr), generated);
 	    } else if (wireGeometry) {
 		generatedGeometry = cad_wire_part_geometry_from_lod_realization_internal(
-		    &validInternal.local, source, localBounds, generated);
+		    &validInternal.local, source, localBounds, generated,
+		    &generatedViewDependentCsgGeometry);
 		if (!generatedGeometry)
 		    generatedGeometry = cad_wire_part_geometry_from_plot_internal(
 			&validInternal.local, source, generated);
@@ -7679,7 +7727,8 @@ realize_direct_leaf_mesh_compact(
 		if (wireGeometry || internalType == ID_PNTS)
 		    cache->storeMeshVListCadGeometry(cacheKey,
 			std::move(generated), directTypeLabel, geometryKind,
-			localBounds.isEmpty() ? NULL : &localBounds);
+			localBounds.isEmpty() ? NULL : &localBounds, false, NULL,
+			generatedViewDependentCsgGeometry);
 		else
 		    cache->storeMeshCadGeometry(cacheKey, std::move(generated),
 			directTypeLabel, geometryKind, NULL, lodBacked,
@@ -7807,6 +7856,9 @@ realize_direct_leaf_mesh_compact(
 	     cachedWire->geometryKind.c_str() : "line");
 	occurrence.geometry = cachedWire ? cachedWire->geometry :
 	    std::shared_ptr<const Obol::PartGeometry>();
+	occurrence.viewDependentCsgGeometry = cachedWire ?
+	    (cachedWire->viewDependentCsgGeometry ? TRUE : FALSE) :
+	    (generatedViewDependentCsgGeometry ? TRUE : FALSE);
 	if (!occurrence.geometry && sharedVListShape) {
 	    Obol::PartGeometry generated;
 	    if (cad_vlist_part_geometry(sharedVListShape, generated))
@@ -7885,7 +7937,10 @@ realize_direct_leaf_mesh_compact(
 
     occurrence.occurrenceIndex = source->occurrenceIndex.getValue();
     occurrence.booleanOperation = source->booleanOperation.getValue();
-    return source->setCompactOccurrence(occurrence) > 0 ? 1 : 0;
+    const int compacted = source->setCompactOccurrence(occurrence);
+    if (compacted > 0 && stream && !stream->isCancelled())
+	stream->push(occurrence);
+    return compacted > 0 ? 1 : 0;
 }
 
 static bool
@@ -8335,6 +8390,8 @@ static union tree *
 	    data->cache->findMeshVListCadGeometry(cacheKey);
 	const BObolCachedPartGeometry *cachedMesh =
 	    data->cache->findMeshCadGeometry(cacheKey);
+	bool generatedViewDependentCsgGeometry = cachedWire ?
+	    cachedWire->viewDependentCsgGeometry : false;
 	if (cachedWire && !source_cached_wire_matches_mesh_presentation(
 		data->source, cachedWire->sourceType.c_str(),
 		cachedWire->geometryKind.c_str()))
@@ -8372,14 +8429,21 @@ static union tree *
 		if (source_view_lod_active(data->source))
 		    (void)local_bounds_from_internal(localIntern, localBounds);
 		Obol::PartGeometry generated;
-		const int generatedGeometry = internalType == ID_PNTS ?
-		    cad_points_part_geometry_from_pnts(
+		int generatedGeometry = 0;
+		if (internalType == ID_PNTS) {
+		    generatedGeometry = cad_points_part_geometry_from_pnts(
 			static_cast<const struct rt_pnts_internal *>(
-			    localIntern->idb_ptr), generated) :
-		    (cad_wire_part_geometry_from_lod_realization_internal(
-			localIntern, data->source, localBounds, generated) ||
-		     cad_wire_part_geometry_from_plot_internal(localIntern,
-			data->source, generated));
+			    localIntern->idb_ptr), generated);
+		} else {
+		    generatedGeometry =
+			cad_wire_part_geometry_from_lod_realization_internal(
+			    localIntern, data->source, localBounds, generated,
+			    &generatedViewDependentCsgGeometry);
+		    if (!generatedGeometry)
+			generatedGeometry =
+			    cad_wire_part_geometry_from_plot_internal(localIntern,
+				data->source, generated);
+		}
 		if (generatedGeometry) {
 		    const char *typeLabel = primitive_type_label(localIntern);
 		    const char *geometryKind = internalType == ID_PNTS ? "point" :
@@ -8390,7 +8454,8 @@ static union tree *
 		    }
 		    data->cache->storeMeshVListCadGeometry(cacheKey,
 			std::move(generated), typeLabel, geometryKind,
-			localBounds.isEmpty() ? NULL : &localBounds);
+			localBounds.isEmpty() ? NULL : &localBounds, false, NULL,
+			generatedViewDependentCsgGeometry);
 		    cachedWire = data->cache->findMeshVListCadGeometry(cacheKey);
 		}
 	    } else if (data->source->lodBotThreshold.getValue() > 0) {
@@ -8496,6 +8561,8 @@ static union tree *
 		cachedWire->geometryKind.c_str();
 	    compact_occurrence_build input;
 	    input.occurrence.geometry = cachedWire->geometry;
+	    input.occurrence.viewDependentCsgGeometry =
+		cachedWire->viewDependentCsgGeometry ? TRUE : FALSE;
 	    input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
 	    input.occurrence.summary = compact_occurrence_tree_summary(
 		data->source, tsp, pathp, path, dp->d_namep,
@@ -8697,6 +8764,8 @@ static union tree *
 	    input.occurrence.geometry =
 		cachedWire ? cachedWire->geometry :
 		std::shared_ptr<const Obol::PartGeometry>();
+	    input.occurrence.viewDependentCsgGeometry = cachedWire &&
+		cachedWire->viewDependentCsgGeometry ? TRUE : FALSE;
 	    if (!input.occurrence.geometry && sharedVListShape) {
 		Obol::PartGeometry generated;
 		if (cad_vlist_part_geometry(sharedVListShape, generated))
@@ -9240,6 +9309,12 @@ public:
 	second = (second ^ value) * 14029467366897019727ULL;
     }
 
+    void appendU64(uint64_t value)
+    {
+	this->appendU32(static_cast<uint32_t>(value));
+	this->appendU32(static_cast<uint32_t>(value >> 32));
+    }
+
     void appendFloat(float value)
     {
 	uint32_t bits = 0;
@@ -9253,6 +9328,22 @@ public:
 	this->appendFloat(value[0]);
 	this->appendFloat(value[1]);
 	this->appendFloat(value[2]);
+    }
+
+    void appendBox(const SbBox3f &value)
+    {
+	this->appendByte(value.isEmpty() ? 0 : 1);
+	if (value.isEmpty())
+	    return;
+	this->appendVec3(value.getMin());
+	this->appendVec3(value.getMax());
+    }
+
+    void appendQuantization(const Obol::ProgressiveQuantization &value)
+    {
+	this->appendByte(value.xBits);
+	this->appendByte(value.yBits);
+	this->appendByte(value.zBits);
     }
 
     void appendString(const char *value)
@@ -9287,6 +9378,18 @@ cad_part_key_for_geometry(const char *kind,
 
     CadGeometryHash hash;
     hash.appendString(kind);
+    /* Part identity covers presentation semantics as well as vertex arrays.
+     * A degenerate AABB around a line can have byte-identical endpoints to
+     * the authored line it temporarily represents.  Deduplicating those two
+     * records under one PartId leaves whichever structuralProxy marker was
+     * inserted first authoritative for every occurrence, so a completed
+     * stream may continue drawing and counting the box forever. */
+    hash.appendByte(geometry.shadedCullBackfaces ? 1 : 0);
+    hash.appendByte(geometry.subpixelProxyEligible ? 1 : 0);
+    hash.appendByte(geometry.structuralProxy ? 1 : 0);
+    hash.appendByte(geometry.conservativeBounds ? 1 : 0);
+    if (geometry.conservativeBounds)
+	hash.appendBox(*geometry.conservativeBounds);
     hash.appendByte(geometry.points ? 1 : 0);
     if (geometry.points) {
 	const Obol::PointRep &points = *geometry.points;
@@ -9322,6 +9425,7 @@ cad_part_key_for_geometry(const char *kind,
 	    static_cast<uint32_t>(points.normals.size()));
 	for (const SbVec3f &normal : points.normals)
 	    hash.appendVec3(normal);
+	hash.appendBox(points.bounds);
     }
     hash.appendByte(geometry.wire ? 1 : 0);
     if (geometry.wire) {
@@ -9343,6 +9447,37 @@ cad_part_key_for_geometry(const char *kind,
 	    for (const SbVec3f &point : polyline.points)
 		hash.appendVec3(point);
 	}
+	hash.appendBox(wire.bounds);
+	const bool progressiveWire = wire.isProgressive();
+	hash.appendByte(progressiveWire ? 1 : 0);
+	if (progressiveWire) {
+	    hash.appendU32(static_cast<uint32_t>(wire.progressiveCuts.size()));
+	    for (const Obol::ProgressiveWireCut &cut : wire.progressiveCuts) {
+		hash.appendU32(cut.segmentFirst);
+		hash.appendU32(cut.segmentCount);
+		hash.appendQuantization(cut.quantization);
+	    }
+	    hash.appendByte(wire.progressiveMinimumCut);
+	    hash.appendByte(wire.progressiveResidentCut);
+	    hash.appendVec3(wire.progressiveQuantizationMinimum);
+	    hash.appendVec3(wire.progressiveQuantizationMaximum);
+	    hash.appendU64(wire.progressiveLineage);
+	    hash.appendU32(static_cast<uint32_t>(
+		wire.progressiveClusters.size()));
+	    hash.appendU32(wire.progressiveClusterGridResolution);
+	    for (const Obol::ProgressiveWireCluster &cluster :
+		 wire.progressiveClusters) {
+		hash.appendBox(cluster.bounds);
+		hash.appendByte(cluster.residentCut);
+		hash.appendU32(static_cast<uint32_t>(cluster.ranges.size()));
+		for (const Obol::ProgressiveWireClusterRange &range :
+		     cluster.ranges) {
+		    hash.appendU32(range.firstSegment);
+		    hash.appendU32(range.segmentCount);
+		    hash.appendByte(range.activationCut);
+		}
+	    }
+	}
     }
     hash.appendByte(geometry.shaded ? 1 : 0);
     if (geometry.shaded) {
@@ -9359,6 +9494,38 @@ cad_part_key_for_geometry(const char *kind,
 	    static_cast<uint32_t>(mesh.indices.size()));
 	for (uint32_t index : mesh.indices)
 	    hash.appendU32(index);
+	hash.appendBox(mesh.bounds);
+	const bool progressiveMesh = mesh.isProgressive();
+	hash.appendByte(progressiveMesh ? 1 : 0);
+	if (progressiveMesh) {
+	    hash.appendU32(static_cast<uint32_t>(mesh.progressiveCuts.size()));
+	    for (const Obol::ProgressiveTriangleCut &cut :
+		 mesh.progressiveCuts) {
+		hash.appendU32(cut.indexCount);
+		hash.appendU32(cut.positionCount);
+		hash.appendQuantization(cut.quantization);
+	    }
+	    hash.appendByte(mesh.progressiveMinimumCut);
+	    hash.appendByte(mesh.progressiveResidentCut);
+	    hash.appendVec3(mesh.progressiveQuantizationMinimum);
+	    hash.appendVec3(mesh.progressiveQuantizationMaximum);
+	    hash.appendU64(mesh.progressiveLineage);
+	    hash.appendU32(static_cast<uint32_t>(
+		mesh.progressiveClusters.size()));
+	    hash.appendU32(mesh.progressiveClusterGridResolution);
+	    for (const Obol::ProgressiveTriangleCluster &cluster :
+		 mesh.progressiveClusters) {
+		hash.appendBox(cluster.bounds);
+		hash.appendByte(cluster.residentCut);
+		hash.appendU32(static_cast<uint32_t>(cluster.ranges.size()));
+		for (const Obol::ProgressiveTriangleClusterRange &range :
+		     cluster.ranges) {
+		    hash.appendU32(range.firstIndex);
+		    hash.appendU32(range.indexCount);
+		    hash.appendByte(range.activationCut);
+		}
+	    }
+	}
     }
     const Obol::PartId contentId = hash.id();
     char digest[96] = {0};
@@ -10338,6 +10505,9 @@ SoBRLDatabaseSource::currentCompactViewLodAssembly(
     SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
 	viewState->findCadPresentation(this));
     if (!assembly || !assembly->compactPresentationInitialized ||
+	assembly->compactPresentationSourceRoutingId != this->d->routingId ||
+	assembly->compactPresentationPopulationEpoch !=
+	    this->d->compactPopulationEpoch ||
 	assembly->compactPresentationIndex != this->d->compactIndex ||
 	assembly->compactPresentationSourceRevision !=
 	    this->sourceRevision.getValue() ||
@@ -10364,6 +10534,9 @@ SoBRLDatabaseSource::getCompactViewLodSupersededFallbackCount(
     SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
 	viewState->findCadPresentation(this));
     if (!assembly || !assembly->compactPresentationInitialized ||
+	assembly->compactPresentationSourceRoutingId != this->d->routingId ||
+	assembly->compactPresentationPopulationEpoch !=
+	    this->d->compactPopulationEpoch ||
 	assembly->compactPresentationIndex != this->d->compactIndex)
 	return 0;
 
@@ -10414,6 +10587,9 @@ SoBRLDatabaseSource::getCompactViewLodActiveFallbackCount(
     SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
 	viewState->findCadPresentation(this));
     if (!assembly || !assembly->compactPresentationInitialized ||
+	assembly->compactPresentationSourceRoutingId != this->d->routingId ||
+	assembly->compactPresentationPopulationEpoch !=
+	    this->d->compactPopulationEpoch ||
 	assembly->compactPresentationIndex != this->d->compactIndex)
 	return 0;
 
@@ -10464,6 +10640,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	viewState->getNormalStyle();
     const float normalCreaseAngle = viewState->getNormalCreaseAngle();
     if (assembly->compactPresentationInitialized &&
+	assembly->compactPresentationSourceRoutingId == this->d->routingId &&
+	assembly->compactPresentationPopulationEpoch ==
+	    this->d->compactPopulationEpoch &&
 	assembly->compactPresentationIndex == this->d->compactIndex &&
 	assembly->compactPresentationSourceRevision ==
 	    this->sourceRevision.getValue() &&
@@ -10476,6 +10655,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	return assembly;
     const bool hiddenLine = sourceDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
     bool reset = !assembly->compactPresentationInitialized ||
+	assembly->compactPresentationSourceRoutingId != this->d->routingId ||
+	assembly->compactPresentationPopulationEpoch !=
+	    this->d->compactPopulationEpoch ||
 	assembly->compactPresentationIndex != this->d->compactIndex ||
 	assembly->compactPresentationSourceRevision !=
 	    this->sourceRevision.getValue() ||
@@ -11219,6 +11401,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 
     assembly->compactPresentationInitialized = TRUE;
     assembly->compactPresentationIndex = this->d->compactIndex;
+    assembly->compactPresentationSourceRoutingId = this->d->routingId;
+    assembly->compactPresentationPopulationEpoch =
+	this->d->compactPopulationEpoch;
     assembly->compactPresentationSourceRevision =
 	this->sourceRevision.getValue();
     assembly->compactPresentationInputsRevision =
@@ -11551,6 +11736,10 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
      * particular, a source-backed progressive mesh begins with a wire AABB
      * and must select a wire draw path until a shaded payload is available. */
     entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
+    entry.viewDependentCsgGeometry =
+	input.occurrence.viewDependentCsgGeometry;
+    if (entry.viewDependentCsgGeometry)
+	index.viewDependentCsgGeometryCount++;
     entry.lodBacked = input.occurrence.lodBacked;
     entry.sourceMeshRequestValid = input.occurrence.sourceMeshRequestValid;
     if (entry.sourceMeshRequestValid) {
@@ -12047,6 +12236,9 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 	index.wireCount > 0) {
 	index.wireCount--;
     }
+    if (entry.viewDependentCsgGeometry &&
+	index.viewDependentCsgGeometryCount > 0)
+	index.viewDependentCsgGeometryCount--;
 
     SbMatrix geometryToSource = occurrence.geometryTransform;
     geometryToSource.multRight(occurrence.localTransform);
@@ -12057,6 +12249,9 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
     entry.wireGeometry = geometry->wire ? TRUE : FALSE;
     entry.pointGeometry = geometry->points ? TRUE : FALSE;
     entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
+    entry.viewDependentCsgGeometry = occurrence.viewDependentCsgGeometry;
+    if (entry.viewDependentCsgGeometry)
+	index.viewDependentCsgGeometryCount++;
     entry.lodBacked = occurrence.lodBacked;
     const SbBool oldSourceMeshRequestValid = entry.sourceMeshRequestValid;
     entry.sourceMeshRequestValid = occurrence.sourceMeshRequestValid;
@@ -12125,6 +12320,12 @@ compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
 
     BObolCompactInstanceEntry &entry = index.entries[entryIdx];
     bool changed = false;
+    if (occurrence.viewDependentCsgGeometry &&
+	!entry.viewDependentCsgGeometry) {
+	entry.viewDependentCsgGeometry = TRUE;
+	index.viewDependentCsgGeometryCount++;
+	changed = true;
+    }
     if (occurrence.lodBacked && !entry.lodBacked) {
 	entry.lodBacked = TRUE;
 	changed = true;
@@ -12159,7 +12360,8 @@ compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
 
 int
 SoBRLDatabaseSource::mergeCompactOccurrences(
-    const std::vector<BObolCompactOccurrence> &occurrences)
+    const std::vector<BObolCompactOccurrence> &occurrences,
+    SbBool authoritativeGeometry)
 {
     if (occurrences.empty())
 	return 0;
@@ -12202,11 +12404,13 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 		((occurrence.sourceMeshRequestValid &&
 		  !existing.sourceMeshRequestValid) ||
 		 (occurrence.lodBacked && !existing.lodBacked) ||
-		 evolvingOverview);
+		 evolvingOverview || authoritativeGeometry);
 	    if (newTier < oldTier ||
 		(newTier == oldTier && !richerDataContract))
 		continue;
-	    const bool merged = newTier == oldTier && !evolvingOverview ?
+	    const bool replaceGeometry = evolvingOverview ||
+		authoritativeGeometry;
+	    const bool merged = newTier == oldTier && !replaceGeometry ?
 		compact_index_merge_source_contract(index, found->second,
 		    occurrence) :
 		compact_index_replace_entry_geometry(this, index,
@@ -12345,6 +12549,7 @@ SoBRLDatabaseSource::adoptCompactOccurrencesFrom(
 	    occurrence.localTransform.multRight(
 		source->drawMatrix.getValue());
 	occurrence.localTransform.multRight(placementInverse);
+	occurrence.viewDependentCsgGeometry = entry.viewDependentCsgGeometry;
 	occurrence.lodBacked = entry.lodBacked;
 	occurrence.sourceMeshRequestValid = entry.sourceMeshRequestValid;
 	occurrence.sourceMeshRequest = entry.sourceMeshRequest;
@@ -12352,7 +12557,7 @@ SoBRLDatabaseSource::adoptCompactOccurrencesFrom(
 	occurrence.booleanOperation = entry.booleanOperation;
 	occurrences.push_back(occurrence);
     }
-    return this->mergeCompactOccurrences(occurrences);
+    return this->mergeCompactOccurrences(occurrences, FALSE);
 }
 
 static bool
@@ -13325,6 +13530,8 @@ SoBRLDatabaseSource::clearCompactInstanceIndex(void)
 	this->d->previousCompactIndex = this->d->compactIndex;
     }
     this->d->compactIndex = NULL;
+    if (++this->d->compactPopulationEpoch == 0)
+	this->d->compactPopulationEpoch = 1;
     this->d->compactExpectedInstanceCount = 0;
     this->d->compactIndexActive = FALSE;
     this->d->compactOccurrenceRegistry = FALSE;
@@ -13339,6 +13546,8 @@ SoBRLDatabaseSource::discardCompactInstanceHistory(void)
 {
     delete this->d->compactIndex;
     this->d->compactIndex = NULL;
+    if (++this->d->compactPopulationEpoch == 0)
+	this->d->compactPopulationEpoch = 1;
     this->d->compactExpectedInstanceCount = 0;
     delete this->d->previousCompactIndex;
     this->d->previousCompactIndex = NULL;
@@ -15377,7 +15586,7 @@ bobol_database_source_realize_wireframe_compact_with_cache(
 	if (directTimer.active())
 	    bobol_performance_counter_add(BOBOL_PERF_DIRECT_LEAF_CALLS, 1);
 	directRealized = realize_direct_leaf_wireframe_compact(source, cache,
-	    revision);
+	    revision, stream);
 	if (directTimer.active()) {
 	    if (directRealized > 0) {
 		bobol_performance_counter_add(
@@ -16840,6 +17049,7 @@ compact_stream_publish_parallel_coverage(
 		BObolCompactOccurrence occurrence =
 		    compact_coverage_leaf_occurrence(asset, item.occurrence,
 			includeSourceRequest);
+		stream->recordManifestOccurrence(occurrence);
 		publications.push_back(std::move(occurrence));
 		publishedBoxes.fetch_add(1);
 		if (asset.deferSourceMeshContract) {
@@ -17069,6 +17279,7 @@ compact_stream_publish_parallel_coverage(
 		occurrence.summary.boundsValid = TRUE;
 		occurrence.summary.bounds = asset.geometry->wire->bounds;
 	    }
+	    stream->recordManifestOccurrence(occurrence);
 	    stream->push(std::move(occurrence));
 	    publishedContracts.fetch_add(1);
 	}
@@ -17228,6 +17439,7 @@ compact_stream_publish_parallel_coverage(
 		 candidate->deferredOccurrences) {
 		BObolCompactOccurrence upgrade =
 		    compact_coverage_leaf_occurrence(*candidate, leaf, true);
+		stream->recordManifestOccurrence(upgrade);
 		stream->push(std::move(upgrade));
 		publishedContracts.fetch_add(1);
 		transformedOccurrences++;
@@ -17395,6 +17607,7 @@ compact_stream_publish_parallel_coverage(
     }
     if (authoritativeStreamOut)
 	*authoritativeStreamOut = authoritativeStream;
+    (void)stream->sealManifest(collect.occurrenceCount);
     return publishedBoxes.load() > static_cast<size_t>(INT_MAX) ? INT_MAX :
 	static_cast<int>(publishedBoxes.load());
 }
@@ -19383,6 +19596,7 @@ SoBRLDatabaseSource::getCompactOccurrence(
     occurrence.summary = entry.shapeSummary;
     occurrence.geometryTransform = entry.geometryTransform;
     occurrence.localTransform = entry.placementTransform;
+    occurrence.viewDependentCsgGeometry = entry.viewDependentCsgGeometry;
     occurrence.lodBacked = entry.lodBacked;
     occurrence.sourceMeshRequestValid = entry.sourceMeshRequestValid;
     occurrence.sourceMeshRequest = entry.sourceMeshRequest;
@@ -19672,6 +19886,7 @@ SoBRLDatabaseSource::getCompactLodPlanningSummaryForKey(
     return this->getCompactLodPlanningSummary(
 	static_cast<int>(found->second), summary);
 }
+
 
 SbBool
 SoBRLDatabaseSource::copyCompactInstanceEditGeometry(
@@ -20874,6 +21089,7 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     bool geometryValid = false;
     bool directWire = false;
     bool directMesh = false;
+    bool replacementViewDependentCsgGeometry = false;
     bool replacementLodBacked = false;
     bool replacementSourceMeshRequestValid = false;
     BObolSourceMeshRequest replacementSourceMeshRequest;
@@ -20886,7 +21102,8 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 		    validInternal.local.idb_ptr), generated) != 0;
 	else
 	    geometryValid = cad_wire_part_geometry_from_lod_realization_internal(
-		&validInternal.local, this, localBounds, generated) != 0;
+		&validInternal.local, this, localBounds, generated,
+		&replacementViewDependentCsgGeometry) != 0;
 	if (!geometryValid)
 	    geometryValid = cad_wire_part_geometry_from_plot_internal(
 		&validInternal.local, this, generated) != 0;
@@ -21050,6 +21267,13 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	entry.wireGeometry = geometry->wire ? TRUE : FALSE;
 	entry.pointGeometry = geometry->points ? TRUE : FALSE;
 	entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
+	if (entry.viewDependentCsgGeometry &&
+	    this->d->compactIndex->viewDependentCsgGeometryCount > 0)
+	    this->d->compactIndex->viewDependentCsgGeometryCount--;
+	entry.viewDependentCsgGeometry =
+	    replacementViewDependentCsgGeometry ? TRUE : FALSE;
+	if (entry.viewDependentCsgGeometry)
+	    this->d->compactIndex->viewDependentCsgGeometryCount++;
 	entry.lodBacked = replacementLodBacked ? TRUE : FALSE;
 	entry.shapeSummary.geometryKind =
 	    replacementLodBacked ? "aabb" :
@@ -22836,6 +23060,8 @@ SoBRLDatabaseSource::getSummary(BObolDatabaseSourceSummary &summary) const
     summary.sourceBoundsValid = this->getEffectiveSourceBounds(
 				    summary.sourceBounds);
     summary.sourceBoundsExact = this->hasExactSourceBounds();
+    summary.hasViewDependentCsgGeometry = this->d->compactIndex &&
+	this->d->compactIndex->viewDependentCsgGeometryCount > 0 ? TRUE : FALSE;
     summary.stale = this->stale.getValue();
     summary.staleReason = this->staleReason.getValue();
     summary.realizedShapeCount = this->getRealizedShapeCount();

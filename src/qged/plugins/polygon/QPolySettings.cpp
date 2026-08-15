@@ -201,10 +201,14 @@ QPolySettings::setTestIdPrefix(const QString &prefix)
     setProperty("qgTestId", prefix + QStringLiteral(".settings"));
     edge_color->setProperty(
 	"qgTestId", prefix + QStringLiteral(".edge-color"));
+    edge_color->rgbtext->setProperty(
+	"qgTestId", prefix + QStringLiteral(".edge-color.text"));
     fill_poly->setProperty(
 	"qgTestId", prefix + QStringLiteral(".fill-enabled"));
     fill_color->setProperty(
 	"qgTestId", prefix + QStringLiteral(".fill-color"));
+    fill_color->rgbtext->setProperty(
+	"qgTestId", prefix + QStringLiteral(".fill-color.text"));
     fill_slope_x->setProperty(
 	"qgTestId", prefix + QStringLiteral(".fill-slope-x"));
     fill_slope_y->setProperty(

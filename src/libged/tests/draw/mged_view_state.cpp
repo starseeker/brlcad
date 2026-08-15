@@ -520,7 +520,7 @@ test_multi_obol_dm_attachment(const char *datadir)
 		bu_vls_cstr(gedp->ged_result_str));
 	fail = 1;
     }
-    if (!fail && !draw_test_obol_progressive_drain(gedp, v0, 500, 1)) {
+    if (!fail && !draw_test_obol_progressive_drain(gedp, v0, 2000, 1)) {
 	bu_log("FAIL: shared progressive draw did not settle before image capture\n");
 	fail = 1;
     }

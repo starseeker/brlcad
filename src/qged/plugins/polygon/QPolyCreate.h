@@ -49,6 +49,7 @@ class QPolyCreate : public QWidget
 	~QPolyCreate();
 
 	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
+	void cancel();
 
 	// Boolean Operation Mode
 	QComboBox *csg_modes;
@@ -66,6 +67,7 @@ class QPolyCreate : public QWidget
 
 	// Modifying polygons
 	QCheckBox *close_general_poly;
+	QPushButton *cancel_poly;
 
 	// Existing view polygon copy
 	QLineEdit *vpoly_name;
@@ -108,7 +110,7 @@ class QPolyCreate : public QWidget
 	bool do_bool = false;
 
 	QgPolyFilter *cf = NULL;
-	QgPolyCreateFilter *pcf;
+	QgPolyCreateFilter *pcf = nullptr;
 	QgPluginContext *m_ctx = nullptr;
 
 	struct ged *getGed() const;

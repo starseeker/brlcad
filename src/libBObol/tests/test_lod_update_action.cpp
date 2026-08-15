@@ -170,6 +170,56 @@ test_compact_staged_source_lease(void)
 }
 
 static int
+test_compact_manifest_journal(void)
+{
+    BObolCompactOccurrenceStream stream;
+    BObolCompactOccurrence occurrence;
+    occurrence.summary.valid = TRUE;
+    occurrence.summary.boundsValid = TRUE;
+    occurrence.summary.bounds = SbBox3f(
+	SbVec3f(-1.0f, -2.0f, -3.0f), SbVec3f(4.0f, 5.0f, 6.0f));
+    occurrence.summary.path = "all/part.r/part.bot";
+    occurrence.summary.sourceName = "part.bot";
+    occurrence.summary.recordRole = "lod-aabb";
+    occurrence.summary.regionId = 17;
+    occurrence.occurrenceIndex = 3;
+    occurrence.localTransform.setTranslate(SbVec3f(10.0f, 0.0f, 0.0f));
+
+    stream.recordManifestOccurrence(occurrence);
+    if (stream.sealManifest(1)) {
+	printf("FAIL: incomplete compact manifest was sealed\n");
+	return 1;
+    }
+
+    occurrence.sourceMeshRequestValid = TRUE;
+    occurrence.sourceMeshRequest.sourceType = "bot";
+    occurrence.sourceMeshRequest.meshAssetPath = "part.bot";
+    occurrence.sourceMeshRequest.meshAssetName = "part.bot";
+    occurrence.sourceMeshRequest.meshAssetBounds = occurrence.summary.bounds;
+    occurrence.sourceMeshRequest.faceCount = 12;
+    occurrence.sourceMeshRequest.pointCount = 8;
+    stream.recordManifestOccurrence(occurrence);
+    if (!stream.sealManifest(1)) {
+	printf("FAIL: complete compact manifest was not sealed\n");
+	return 1;
+    }
+
+    std::vector<BObolCompactManifestOccurrence> records;
+    if (!stream.takeManifest(records) || records.size() != 1 ||
+	!BU_STR_EQUAL(records[0].path.getString(),
+	    "all/part.r/part.bot") ||
+	!records[0].sourceMeshRequestValid ||
+	records[0].sourceFaceCount != 12 || records[0].sourcePointCount != 8 ||
+	records[0].regionId != 17 ||
+	!records[0].localTransform.equals(occurrence.localTransform,
+	    0.000001f)) {
+	printf("FAIL: compact manifest journal lost authoritative metadata\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 find_database_source_summary_by_instance(BObolSceneController &scene,
 	const char *instanceKey,
 	BObolDatabaseSourceSummary &summary)
@@ -8437,6 +8487,150 @@ test_compact_aabb_stream_upgrade(void)
 	ret = 1;
     }
 
+    /* A new camera policy does not change the drawing-data tier of analytic
+     * CSG wire geometry.  Ordinary same-tier merges remain non-destructive,
+     * but an exact realization stream is authoritative and must replace the
+     * previous payload.  Otherwise a completed retarget can be certified
+     * while the retained scene continues displaying the provisional curve. */
+    SoBRLDatabaseSource *viewWireSource = new SoBRLDatabaseSource;
+    viewWireSource->ref();
+    viewWireSource->path = "view-wire-root.c";
+    viewWireSource->instanceKey = "view-wire-root-instance";
+    BObolCompactOccurrence oldViewWire = proxy;
+    oldViewWire.geometry = compact_duplicate_proxy_geometry();
+    oldViewWire.summary.path = "view-wire-root.c/curve.s";
+    oldViewWire.summary.sourceName = "curve.s";
+    oldViewWire.summary.sourceType = "ell";
+    oldViewWire.summary.geometryKind = "line";
+    oldViewWire.viewDependentCsgGeometry = TRUE;
+    BObolCompactOccurrence newViewWire = oldViewWire;
+    newViewWire.geometry = compact_projected_proxy_geometry();
+    BObolCompactOccurrence observedViewWire;
+    BObolDatabaseSourceSummary viewWireSummary;
+    if (!ret &&
+	(viewWireSource->setCompactOccurrenceRegistry({oldViewWire}) != 1 ||
+	 viewWireSource->mergeCompactOccurrences({newViewWire}) != 0 ||
+	 !viewWireSource->getCompactOccurrence(0, observedViewWire) ||
+	 observedViewWire.geometry != oldViewWire.geometry ||
+	 viewWireSource->mergeCompactOccurrences({newViewWire}, TRUE) != 1 ||
+	 !viewWireSource->getCompactOccurrence(0, observedViewWire) ||
+	 observedViewWire.geometry != newViewWire.geometry ||
+	 !observedViewWire.viewDependentCsgGeometry ||
+	 !viewWireSource->getSummary(viewWireSummary) ||
+	 !viewWireSummary.hasViewDependentCsgGeometry)) {
+	printf("FAIL: authoritative same-tier CSG stream did not replace and "
+	       "certify its view-dependent geometry\n");
+	ret = 1;
+    }
+    viewWireSource->unref();
+
+    /* A structural box around a linear primitive is itself degenerate: its
+     * visible segment endpoints may be byte-identical to the authored line.
+     * Part identity must nevertheless keep their presentation semantics
+     * distinct.  Otherwise content deduplication retains the box's
+     * structuralProxy marker after the compact entry has upgraded to the
+     * real line, producing a permanent visible box/repair loop. */
+    SoBRLDatabaseSource *degenerateLineSource = new SoBRLDatabaseSource;
+    degenerateLineSource->ref();
+    degenerateLineSource->path = "degenerate-line-root.c";
+    degenerateLineSource->instanceKey = "degenerate-line-root-instance";
+    std::shared_ptr<Obol::PartGeometry> structuralLineGeometry =
+	std::make_shared<Obol::PartGeometry>();
+    Obol::WireRep lineWire;
+    lineWire.segmentPoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
+    lineWire.segmentPoints.push_back(SbVec3f(1.0f, 0.0f, 0.0f));
+    lineWire.bounds = SbBox3f(
+	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 0.0f, 0.0f));
+    structuralLineGeometry->wire = lineWire;
+    structuralLineGeometry->subpixelProxyEligible = true;
+    structuralLineGeometry->structuralProxy = true;
+    std::shared_ptr<Obol::PartGeometry> authoredLineGeometry =
+	std::make_shared<Obol::PartGeometry>(*structuralLineGeometry);
+    authoredLineGeometry->subpixelProxyEligible = false;
+    authoredLineGeometry->structuralProxy = false;
+
+    BObolCompactOccurrence degenerateLineProxy = proxy;
+    degenerateLineProxy.geometry = structuralLineGeometry;
+    degenerateLineProxy.geometryTransform = SbMatrix::identity();
+    degenerateLineProxy.localTransform = SbMatrix::identity();
+    degenerateLineProxy.summary.path =
+	"degenerate-line-root.c/line.s";
+    degenerateLineProxy.summary.sourceName = "line.s";
+    degenerateLineProxy.summary.sourceType = "primitive";
+    degenerateLineProxy.summary.geometryKind = "aabb";
+    degenerateLineProxy.lodBacked = FALSE;
+    degenerateLineProxy.sourceMeshRequestValid = FALSE;
+    BObolViewLodState degenerateLineViewState;
+    std::vector<const BObolViewLodState::CadPayload *>
+	degenerateNoPayloads;
+    Obol::PartId structuralLinePart;
+    uint64_t structuralLineRevision = 0;
+    if (!ret && degenerateLineSource->setCompactOccurrenceRegistry(
+	    {degenerateLineProxy}) == 1) {
+	(void)degenerateLineSource->compactViewLodAssembly(
+	    degenerateNoPayloads, &degenerateLineViewState);
+	SoCADAssembly *linePresentation =
+	    degenerateLineViewState.findCadPresentation(
+		degenerateLineSource);
+	const std::vector<Obol::InstanceId> ids = linePresentation ?
+	    linePresentation->instanceIds() :
+	    std::vector<Obol::InstanceId>();
+	const std::optional<Obol::InstanceRecord> record =
+	    ids.size() == 1 ? linePresentation->getInstanceRecord(ids[0]) :
+	    std::optional<Obol::InstanceRecord>();
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary summary;
+	if (record)
+	    structuralLinePart = record->part;
+	if (degenerateLineSource->getCompactInstanceHandle(0, handle) &&
+	    degenerateLineSource->getCompactInstanceSummary(handle, summary))
+	    structuralLineRevision = summary.geometryRevision;
+	const Obol::PartGeometry *geometry = record ?
+	    linePresentation->partGeometry(record->part) : NULL;
+	if (!record || !geometry || !geometry->structuralProxy)
+	    ret = 1;
+    } else if (!ret) {
+	ret = 1;
+    }
+    BObolCompactOccurrence degenerateAuthoredLine =
+	degenerateLineProxy;
+    degenerateAuthoredLine.geometry = authoredLineGeometry;
+    degenerateAuthoredLine.summary.geometryKind = "line";
+    degenerateAuthoredLine.summary.sourceId++;
+    if (!ret && degenerateLineSource->mergeCompactOccurrences(
+	    {degenerateAuthoredLine}, TRUE) == 1) {
+	(void)degenerateLineSource->compactViewLodAssembly(
+	    degenerateNoPayloads, &degenerateLineViewState);
+	SoCADAssembly *linePresentation =
+	    degenerateLineViewState.findCadPresentation(
+		degenerateLineSource);
+	const std::vector<Obol::InstanceId> ids = linePresentation ?
+	    linePresentation->instanceIds() :
+	    std::vector<Obol::InstanceId>();
+	const std::optional<Obol::InstanceRecord> record =
+	    ids.size() == 1 ? linePresentation->getInstanceRecord(ids[0]) :
+	    std::optional<Obol::InstanceRecord>();
+	const Obol::PartGeometry *geometry = record ?
+	    linePresentation->partGeometry(record->part) : NULL;
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary summary;
+	const bool haveSummary =
+	    degenerateLineSource->getCompactInstanceHandle(0, handle) &&
+	    degenerateLineSource->getCompactInstanceSummary(handle, summary);
+	if (!record || record->part == structuralLinePart || !geometry ||
+	    geometry != authoredLineGeometry.get() ||
+	    geometry->structuralProxy || !haveSummary ||
+	    summary.geometryRevision == structuralLineRevision) {
+	    printf("FAIL: degenerate structural line identity survived its "
+		   "authored-line upgrade\n");
+	    ret = 1;
+	}
+    } else if (!ret) {
+	printf("FAIL: degenerate structural line did not accept authored upgrade\n");
+	ret = 1;
+    }
+    degenerateLineSource->unref();
+
     /*
      * Initialize the retained view presentation while the structural proxy
      * is current.  The later richer occurrence must update this existing
@@ -8787,6 +8981,62 @@ test_compact_aabb_stream_upgrade(void)
     }
     evolvingSource->unref();
 
+    /*
+     * View-state payload keys intentionally outlive a source node so cached
+     * geometry can be reused after erase/redraw.  Renderer presentations do
+     * not: a new source with the same semantic instance key owns a new compact
+     * population.  Reusing the old assembly here makes identical base parts
+     * look already installed after its renderer records were cleared, which
+     * was observed as boxes/flat parts vanishing on the second draw.
+     */
+    SoBRLDatabaseSource *lifetimeSourceA = new SoBRLDatabaseSource;
+    lifetimeSourceA->ref();
+    lifetimeSourceA->path = "lifetime-root.c";
+    lifetimeSourceA->instanceKey = "lifetime-root-instance";
+    BObolCompactOccurrence lifetimeLeaf = proxy;
+    lifetimeLeaf.summary.path = "lifetime-root.c/leaf.bot";
+    lifetimeLeaf.summary.sourceName = "leaf.bot";
+    lifetimeLeaf.summary.sourceId = 401;
+    BObolViewLodState lifetimeState;
+    SoCADAssembly *lifetimeAssemblyA = NULL;
+    if (!ret &&
+	(lifetimeSourceA->setCompactOccurrenceRegistry({lifetimeLeaf}) != 1 ||
+	 !lifetimeSourceA->compactViewLodAssembly(
+	     noPayloads, &lifetimeState))) {
+	printf("FAIL: compact source-lifetime fixture setup\n");
+	ret = 1;
+    }
+    if (!ret)
+	lifetimeAssemblyA = lifetimeState.findCadPresentation(lifetimeSourceA);
+
+    SoBRLDatabaseSource *lifetimeSourceB = new SoBRLDatabaseSource;
+    lifetimeSourceB->ref();
+    lifetimeSourceB->path = lifetimeSourceA->path.getValue();
+    lifetimeSourceB->instanceKey = lifetimeSourceA->instanceKey.getValue();
+    if (!ret &&
+	(lifetimeSourceB->setCompactOccurrenceRegistry({lifetimeLeaf}) != 1 ||
+	 !lifetimeSourceB->compactViewLodAssembly(
+	     noPayloads, &lifetimeState))) {
+	printf("FAIL: replacement compact source-lifetime fixture setup\n");
+	ret = 1;
+    }
+    if (!ret) {
+	SoCADAssembly *lifetimeAssemblyB =
+	    lifetimeState.findCadPresentation(lifetimeSourceB);
+	if (!lifetimeAssemblyA || !lifetimeAssemblyB ||
+	    lifetimeAssemblyB == lifetimeAssemblyA ||
+	    lifetimeAssemblyB->instanceCount() != 1 ||
+	    lifetimeState.findCadPresentation(lifetimeSourceA) != NULL) {
+	    printf("FAIL: semantic presentation cache crossed database-source "
+		   "lifetimes (old=%p new=%p instances=%zu)\n",
+		   (void *)lifetimeAssemblyA, (void *)lifetimeAssemblyB,
+		   lifetimeAssemblyB ? lifetimeAssemblyB->instanceCount() : 0);
+	    ret = 1;
+	}
+    }
+    lifetimeSourceB->unref();
+    lifetimeSourceA->unref();
+
     source->unref();
     return ret;
 }
@@ -8993,7 +9243,11 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    viewState.findCadForResult(results[0]);
 	if (update.getAppliedResultCount() != 1 || !payload ||
 	    payload->activeCut < 0 ||
-	    payload->counts.faceCount != results[0].counts.faceCount) {
+	    payload->counts.faceCount != results[0].counts.faceCount ||
+	    (payload->progressiveMesh &&
+	     payload->progressiveMesh->hasSpatialClusters() &&
+	     results[0].request.projectedBoundsContained &&
+	     payload->projectedCutCounts)) {
 	    printf("FAIL: compact projected LoD payload was not installed\n");
 	    ret = 1;
 	}
@@ -10865,6 +11119,29 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		printf("FAIL: retained PoP scene allocation could not be recorded\n");
 		ret = 1;
 	    } else {
+		const uint64_t cadRevision = viewState.cadRevision();
+		const uint64_t demandRevision =
+		    viewState.residentMeshDemandRevision();
+		const uint64_t planSerial = viewState.beginCadAllocationPlan();
+		if (!planSerial ||
+		    viewState.stageCadAllocatedCut(wirePayload, allocatedCut,
+			63, 62, BOBOL_LOD_DRAW_WIRE, planSerial + 1) ||
+		    !viewState.stageCadAllocatedCut(wirePayload, allocatedCut,
+			63, 62, BOBOL_LOD_DRAW_WIRE, planSerial) ||
+		    wirePayload->allocationPlanSerial != planSerial ||
+		    viewState.activeCadAllocationPlan() != 0 ||
+		    viewState.commitCadAllocationPlan(
+			planSerial, cadRevision + 1, demandRevision) ||
+		    viewState.activeCadAllocationPlan() != 0 ||
+		    !viewState.commitCadAllocationPlan(
+			planSerial, cadRevision, demandRevision) ||
+		    viewState.activeCadAllocationPlan() != planSerial) {
+		    printf("FAIL: retained PoP allocation plan was not staged and "
+			   "committed atomically\n");
+		    ret = 1;
+		}
+	    }
+	    if (!ret) {
 		/* A worker may publish a richer immutable resident generation after
 		 * the owner-thread allocation has completed.  Replacing the result
 		 * generation must preserve that allocation and pointer-stable
@@ -10888,7 +11165,10 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			afterGrowth->allocatedCut != allocatedCut ||
 			afterGrowth->allocationViewRevision != 63 ||
 			afterGrowth->allocationPolicyRevision != 62 ||
-			afterGrowth->allocationDrawMode != BOBOL_LOD_DRAW_WIRE) {
+			afterGrowth->allocationDrawMode != BOBOL_LOD_DRAW_WIRE ||
+			afterGrowth->allocationPlanSerial == 0 ||
+			afterGrowth->allocationPlanSerial !=
+			    viewState.activeCadAllocationPlan()) {
 			printf("FAIL: resident growth discarded the retained PoP "
 			       "scene allocation\n");
 			ret = 1;
@@ -10906,7 +11186,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    wirePayload, wirePayload->activeCut, nextView) ||
 		wirePayload->allocatedCut >= 0 ||
 		wirePayload->allocationViewRevision != 0 ||
-		wirePayload->allocationPolicyRevision != 0) {
+		wirePayload->allocationPolicyRevision != 0 ||
+		wirePayload->allocationPlanSerial != 0) {
 		printf("FAIL: a new view epoch retained a stale PoP scene allocation\n");
 		ret = 1;
 	    }
@@ -10954,6 +11235,35 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		 partialResults[0].request.projectedPixelDiameter) <=
 		 partialResults[0].request.targetPixelError)) {
 	    printf("FAIL: partially visible mesh demand was clipped to viewport size\n");
+	    ret = 1;
+	}
+	if (!ret &&
+	    !viewState.applySourceResult(source, partialResults[0])) {
+	    printf("FAIL: partially visible mesh demand was not retained\n");
+	    ret = 1;
+	}
+	const BObolViewLodState::CadPayload *partialPayload = !ret ?
+	    viewState.findCadForResult(partialResults[0]) : NULL;
+	const int partialCut = partialPayload ? partialPayload->activeCut : -1;
+	const BObolLodCounts *partialCounts =
+	    partialPayload && partialPayload->projectedCutCounts &&
+	    partialCut >= 0 && static_cast<size_t>(partialCut) <
+		partialPayload->projectedCutCounts->size() ?
+		&(*partialPayload->projectedCutCounts)[
+		    static_cast<size_t>(partialCut)] : NULL;
+	if (!ret && (!partialPayload ||
+		!partialPayload->progressiveMesh ||
+		!partialPayload->progressiveMesh->hasSpatialClusters() ||
+		!partialCounts ||
+		partialPayload->projectedCutCountsViewRevision != 64 ||
+		partialPayload->projectedCutCountsPolicyRevision != 62 ||
+		partialPayload->projectedCutCountsMeshRevision !=
+		    partialPayload->progressiveMesh->revision() ||
+		partialPayload->counts.faceCount != partialCounts->faceCount ||
+		partialPayload->counts.pointCount != partialCounts->pointCount ||
+		partialPayload->counts.normalCount != partialCounts->normalCount)) {
+	    printf("FAIL: bounded partial-frustum census was not retained on "
+		   "the occurrence\n");
 	    ret = 1;
 	}
     }
@@ -11378,6 +11688,7 @@ test_view_controller_compact_direct_result_route(void)
 	request.sourceRevision = source->sourceRevision.getValue();
 	request.sourceRoutingId = source->getCompactSourceRoutingId();
 	request.occurrenceKey = summary.sourceInstanceKey;
+	request.sourceEntryIndex = 0;
 	request.viewRevision = controller.getLodViewRevision();
 	request.policyRevision = controller.getLodPolicyRevision();
 	request.drawMode = BOBOL_LOD_DRAW_WIRE;
@@ -11404,7 +11715,8 @@ test_view_controller_compact_direct_result_route(void)
 	    controller.getLastLodRejectedResultCount() != 0 ||
 	    controller.getLastLodUnmatchedResultCount() != 0 ||
 	    !payload || payload->resultKind != BOBOL_LOD_RESULT_AABB ||
-	    payload->proxy.kind != BOBOL_LOD_PROXY_AABB)) {
+	    payload->proxy.kind != BOBOL_LOD_PROXY_AABB ||
+	    payload->sourceEntryIndex != 0)) {
 	    printf("FAIL: compact result did not use direct indexed routing "
 		"(matched=%u applied=%u rejected=%u unmatched=%u payload=%d "
 		"kind=%d proxy=%d diagnostics=%s)\n",
@@ -11683,6 +11995,8 @@ main(int argc, char **argv)
     };
 
     if (runIsolated(test_compact_staged_source_lease))
+	return 1;
+    if (runIsolated(test_compact_manifest_journal))
 	return 1;
     if (runIsolated(test_view_controller_fixed_gl_light_order))
 	return 1;

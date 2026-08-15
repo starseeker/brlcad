@@ -17,6 +17,7 @@
 #include "BObol/BMeshShape.h"
 #include "BObol/BSnapAction.h"
 #include "BObol/BViewController.h"
+#include "BObol/BViewStore.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -24,6 +25,7 @@
 #include "ged/draw.h"
 #include "QgSceneSyncPrivate.h"
 #include "qtcad/QgObolSnap.h"
+#include "qtcad/QgPolyFilter.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
 #include "raytrace.h"
@@ -35,6 +37,7 @@
 #include <QApplication>
 #include <QMouseEvent>
 
+#include <algorithm>
 #include <chrono>
 #include <math.h>
 #include <stdio.h>
@@ -229,16 +232,48 @@ left_move_at(int x, int y)
 #endif
 }
 
+static QMouseEvent
+left_press_at(int x, int y)
+{
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    return QMouseEvent(QEvent::MouseButtonPress, QPoint(x, y),
+	    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+#else
+    return QMouseEvent(QEvent::MouseButtonPress, QPointF(x, y),
+	    QPointF(x, y), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+#endif
+}
+
+static QMouseEvent
+left_drag_at(int x, int y)
+{
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    return QMouseEvent(QEvent::MouseMove, QPoint(x, y),
+	    Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+#else
+    return QMouseEvent(QEvent::MouseMove, QPointF(x, y),
+	    QPointF(x, y), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+#endif
+}
+
 static void
 set_center_query(void *view, fastf_t x, fastf_t y, fastf_t z)
 {
     mat_t view2model;
+    mat_t model2view;
+    mat_t rotation;
     (void)bv_context_dimensions_set(
 	static_cast<struct bv_context *>(view), 200, 200);
     bv_size_set(bv_context_view(static_cast<struct bv_context *>(view)), 2.0);
+    MAT_IDN(rotation);
+    bv_rotation_set(bv_context_view(static_cast<struct bv_context *>(view)),
+	rotation);
     MAT_IDN(view2model);
     MAT_DELTAS(view2model, x, y, z);
     bv_view2model_set(bv_context_view(static_cast<struct bv_context *>(view)), view2model);
+    MAT_IDN(model2view);
+    MAT_DELTAS(model2view, -x, -y, -z);
+    bv_model2view_set(bv_context_view(static_cast<struct bv_context *>(view)), model2view);
 }
 
 int
@@ -315,6 +350,155 @@ main(int argc, char **argv)
 	    nearly_equal((float)snapped_point[Y], 11.0f) &&
 	    nearly_equal((float)snapped_point[Z], 11.0f))
 	FAIL("qtcad view-scoped snapping should not apply database refinement");
+
+    /* Exercise polygon filters end-to-end.  The shared view filter owns raw
+     * screen conversion and snapping; polygon filters must consume its model
+     * point rather than converting the original Qt coordinates again. */
+    set_center_query(view.viewContext(), 0.0, 0.0, 0.0);
+    struct bv *bv_view = bv_context_view(
+	static_cast<struct bv_context *>(view.viewContext()));
+    bv_snap_source_flags_set(bv_view, BV_SNAP_VIEW);
+    bv_snap_lines_set(bv_view, 0);
+    struct bv_grid_state grid = BV_GRID_STATE_INIT;
+    grid.snap = 1;
+    grid.res_h = 0.5;
+    grid.res_v = 0.5;
+    if (!bv_grid_state_set(bv_view, &grid))
+	FAIL("polygon snap test should configure a model grid");
+
+    QgPolyCreateFilter gridCreate;
+    gridCreate.set_view_widget(&view);
+    gridCreate.ptype = QG_POLYGON_CIRCLE;
+    QMouseEvent gridPress = left_press_at(106, 94);
+    if (!gridCreate.eventFilter(NULL, &gridPress) ||
+	ged_view_polygon_ref_is_null(gridCreate.polygon))
+	FAIL("polygon create filter should accept a grid-snap press");
+    struct ged_view_polygon_record polygonRecord;
+    if (!ged_view_polygon_record_get(view_ctx, gridCreate.polygon,
+	    &polygonRecord) ||
+	!nearly_equal((float)polygonRecord.origin_point[X], 0.0f) ||
+	!nearly_equal((float)polygonRecord.origin_point[Y], 0.0f))
+	FAIL("polygon creation should use the snapped grid model point");
+    if (!ged_view_polygon_set_selected(view_ctx, gridCreate.polygon, 1) ||
+	!ged_view_polygon_record_get(view_ctx, gridCreate.polygon,
+	    &polygonRecord) || !polygonRecord.selected)
+	FAIL("polygon selection should be retained in the shared scene record");
+    if (!ged_view_polygon_clear_selection(view_ctx) ||
+	!ged_view_polygon_record_get(view_ctx, gridCreate.polygon,
+	    &polygonRecord) || polygonRecord.selected)
+	FAIL("polygon selection clearing should update the shared scene record");
+
+    QMouseEvent gridDrag = left_drag_at(146, 100);
+    if (!gridCreate.eventFilter(NULL, &gridDrag))
+	FAIL("polygon create filter should accept a snapped shape drag");
+    struct bg_polygon gridGeometry = BG_POLYGON_INIT_ZERO;
+    if (!controller->polygons().copyGeometry(
+	    BObolPolygonHandle(gridCreate.polygon.id, 1), &gridGeometry) ||
+	gridGeometry.num_contours != 1 ||
+	gridGeometry.contour[0].num_points < 4)
+	FAIL("polygon grid-snap drag should produce constrained geometry");
+    point_t dragPoint = VINIT_ZERO;
+    if (!bv_current_point_get(dragPoint, bv_view) ||
+	!nearly_equal((float)dragPoint[X], 0.5f) ||
+	!nearly_equal((float)dragPoint[Y], 0.0f))
+	FAIL("polygon shape drag should retain the snapped model point");
+    ged_view_polygon_ref control = ged_view_polygon_create(view_ctx,
+	"polygon-grid-control", 1, GED_VIEW_POLYGON_CIRCLE,
+	polygonRecord.origin_point);
+    struct bg_polygon controlGeometry = BG_POLYGON_INIT_ZERO;
+    if (ged_view_polygon_ref_is_null(control) ||
+	!ged_view_polygon_update_model_pt(view_ctx, control, dragPoint,
+	    GED_VIEW_POLYGON_UPDATE_DEFAULT) ||
+	!controller->polygons().copyGeometry(BObolPolygonHandle(control.id, 1),
+	    &controlGeometry) ||
+	controlGeometry.num_contours != gridGeometry.num_contours ||
+	controlGeometry.contour[0].num_points !=
+	    gridGeometry.contour[0].num_points)
+	FAIL("polygon grid-snap control geometry should be available");
+    for (size_t i = 0; i < gridGeometry.contour[0].num_points; i++) {
+	if (!VNEAR_EQUAL(gridGeometry.contour[0].point[i],
+		controlGeometry.contour[0].point[i], 0.0001))
+	    FAIL("polygon update should use the snapped grid model point");
+    }
+    bg_polygon_clear(&gridGeometry);
+    bg_polygon_clear(&controlGeometry);
+    if (!ged_view_polygon_remove(view_ctx, control))
+	FAIL("polygon grid-snap control should be removable");
+
+    QgPolyMoveFilter gridMove;
+    gridMove.set_view_widget(&view);
+    gridMove.polygon = gridCreate.polygon;
+    QMouseEvent movePress = left_press_at(100, 100);
+    QMouseEvent moveDrag = left_drag_at(146, 100);
+    const bool movePressHandled = gridMove.eventFilter(NULL, &movePress);
+    point_t moveStart = VINIT_ZERO;
+    if (!movePressHandled || !bv_current_point_get(moveStart, bv_view))
+	FAIL("polygon move should retain its snapped start point");
+    ged_view_polygon_ref moveControl = ged_view_polygon_create(view_ctx,
+	"polygon-grid-move-control", 1, GED_VIEW_POLYGON_CIRCLE,
+	polygonRecord.origin_point);
+    if (ged_view_polygon_ref_is_null(moveControl) ||
+	!ged_view_polygon_update_model_pt(view_ctx, moveControl, dragPoint,
+	    GED_VIEW_POLYGON_UPDATE_DEFAULT) ||
+	!ged_view_polygon_move(view_ctx, moveControl, dragPoint, moveStart))
+	FAIL("polygon move control should accept snapped model points");
+    struct ged_view_polygon_record moveControlRecord;
+    if (!ged_view_polygon_record_get(view_ctx, moveControl,
+	    &moveControlRecord))
+	FAIL("polygon move control record should be available");
+    const bool moveDragHandled = gridMove.eventFilter(NULL, &moveDrag);
+    const int moveRecord = ged_view_polygon_record_get(view_ctx,
+	gridCreate.polygon, &polygonRecord);
+    if (!movePressHandled || !moveDragHandled || !moveRecord ||
+	!VNEAR_EQUAL(polygonRecord.origin_point,
+	    moveControlRecord.origin_point, 0.0001))
+	FAIL("polygon move should use snapped current and previous model points");
+    if (!ged_view_polygon_remove(view_ctx, moveControl))
+	FAIL("polygon move control should be removable");
+    if (!ged_view_polygon_remove(view_ctx, gridCreate.polygon))
+	FAIL("polygon grid-snap fixture should be removable");
+
+    grid.snap = 0;
+    if (!bv_grid_state_set(bv_view, &grid))
+	FAIL("polygon line-snap test should disable grid snapping");
+    point_t lineStart = {-0.5, 0.0, 0.0};
+    point_t lineEnd = {0.5, 0.0, 0.0};
+    ged_view_polygon_ref snapLine = ged_view_polygon_create(view_ctx,
+	"polygon-snap-line", 1, GED_VIEW_POLYGON_GENERAL, lineStart);
+    if (ged_view_polygon_ref_is_null(snapLine) ||
+	!ged_view_polygon_update_model_pt(view_ctx, snapLine, lineEnd,
+	    GED_VIEW_POLYGON_UPDATE_PT_APPEND))
+	FAIL("polygon line-snap fixture should be created through the public API");
+    bv_snap_lines_set(bv_view, 1);
+    ged_view_polygon_snap_exclude_set(view_ctx, GED_VIEW_POLYGON_REF_NULL);
+
+    QgObolSnapRecord lineProbe;
+    const int lineProbeFound = qg_obol_snap_point_filtered(&view,
+	SbVec3f(0.2f, 0.05f, 0.0f), 0.1f,
+	QgObolSnapRecord::ENDPOINT | QgObolSnapRecord::MIDPOINT |
+	QgObolSnapRecord::LINE_NEAREST,
+	SoBRLSnapAction::VIEW_SOURCES, lineProbe);
+    if (!lineProbeFound || lineProbe.path != "polygon-snap-line" ||
+	lineProbe.kind != QgObolSnapRecord::LINE_NEAREST ||
+	!nearly_equal(lineProbe.point[0], 0.2f) ||
+	!nearly_equal(lineProbe.point[1], 0.0f))
+	FAIL("Obol source filtering should retain view-polygon line candidates");
+
+    QgPolyCreateFilter lineCreate;
+    lineCreate.set_view_widget(&view);
+    lineCreate.ptype = QG_POLYGON_CIRCLE;
+    QMouseEvent linePress = left_press_at(120, 95);
+    if (!lineCreate.eventFilter(NULL, &linePress) ||
+	ged_view_polygon_ref_is_null(lineCreate.polygon) ||
+	!ged_view_polygon_record_get(view_ctx, lineCreate.polygon,
+	    &polygonRecord) ||
+	!nearly_equal((float)polygonRecord.origin_point[X], 0.2f) ||
+	!nearly_equal((float)polygonRecord.origin_point[Y], 0.0f))
+	FAIL("polygon creation should snap to view-polygon segments");
+    if (!ged_view_polygon_remove(view_ctx, lineCreate.polygon) ||
+	!ged_view_polygon_remove(view_ctx, snapLine))
+	FAIL("polygon line-snap fixtures should be removable");
+    bv_snap_lines_set(bv_view, 0);
 
     SoSeparator *lodRoot = new SoSeparator;
     lodRoot->ref();

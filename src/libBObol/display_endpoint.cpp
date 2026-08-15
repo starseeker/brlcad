@@ -105,6 +105,12 @@ struct bobol_display_endpoint {
 	    this->controller->setEndpointGraphicalRenderingEnabled(
 		enabled ? TRUE : FALSE);
     }
+
+    void rendererPerformanceChanged(void)
+    {
+	if (this->controller)
+	    this->controller->invalidateRendererPerformanceHistory();
+    }
 };
 
 /* librt owns no Coin or GUI state.  The worker stores complete RGB frames
@@ -1648,6 +1654,9 @@ bobol_display_endpoint_resize(bobol_display_endpoint_t *endpoint,
     if (!endpoint || !endpoint->controller || !width || !height ||
 	device_pixel_ratio <= 0.0)
 	return 0;
+    const bool devicePixelRatioChanged =
+	std::fabs(endpoint->device_pixel_ratio - device_pixel_ratio) >
+	    std::numeric_limits<double>::epsilon();
     if (endpoint->factory && !bobol_host_factory_instance_resize(
 	endpoint->factory, endpoint->factory_instance, width, height,
 	device_pixel_ratio))
@@ -1656,6 +1665,8 @@ bobol_display_endpoint_resize(bobol_display_endpoint_t *endpoint,
     endpoint->width = width;
     endpoint->height = height;
     endpoint->device_pixel_ratio = device_pixel_ratio;
+	if (devicePixelRatioChanged)
+	    endpoint->rendererPerformanceChanged();
 	if (endpoint->engine == BOBOL_RENDER_ENGINE_NONE) {
 	    endpoint->controller->clearRenderRequest();
 	    return 1;
@@ -1912,9 +1923,10 @@ bobol_display_endpoint_render_engine_set(
 	endpoint_rt_destroy(endpoint);
 
     endpoint->engine = engine;
-	endpoint->graphicalRenderingSet(
-	    engine != BOBOL_RENDER_ENGINE_NONE &&
-	    engine != BOBOL_RENDER_ENGINE_DIAGNOSTIC);
+    endpoint->rendererPerformanceChanged();
+    endpoint->graphicalRenderingSet(
+	engine != BOBOL_RENDER_ENGINE_NONE &&
+	engine != BOBOL_RENDER_ENGINE_DIAGNOSTIC);
     if (engine == BOBOL_RENDER_ENGINE_RT) {
 	if (!endpoint->rt)
 	    endpoint->rt = new (std::nothrow) EndpointRtState;
@@ -1925,6 +1937,7 @@ bobol_display_endpoint_render_engine_set(
 	if (!endpoint->rt || !endpoint_rt_start(endpoint)) {
 	    endpoint_rt_destroy(endpoint);
 	    endpoint->engine = previous;
+	    endpoint->rendererPerformanceChanged();
 	    endpoint->graphicalRenderingSet(
 		previous != BOBOL_RENDER_ENGINE_NONE &&
 		previous != BOBOL_RENDER_ENGINE_DIAGNOSTIC);
@@ -2227,10 +2240,13 @@ bobol_display_endpoint_property_set(
 	    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 	endpoint->visible = value->bool_value != 0;
     } else if (bu_strcmp(name, "endpoint.vsync") == 0) {
+	const bool changed = endpoint->vsync != (value->bool_value != 0);
 	if (!bobol_host_factory_instance_set_vsync(endpoint->factory,
 	    endpoint->factory_instance, value->bool_value))
 	    return BV_DISPLAY_PROPERTY_UNSUPPORTED;
 	endpoint->vsync = value->bool_value != 0;
+	if (changed)
+	    endpoint->rendererPerformanceChanged();
     } else if (bu_strcmp(name, "controller.background.bottom") == 0 ||
 	bu_strcmp(name, "controller.background.top") == 0) {
 	if (!valid_color3(value->color3))
@@ -2357,13 +2373,15 @@ bobol_display_endpoint_property_set(
     } else if (endpoint->property_set_callback) {
 	const int ret = endpoint->property_set_callback(
 	    endpoint->property_user_data, name, value);
-	if (ret == BV_DISPLAY_PROPERTY_OK)
+	if (ret == BV_DISPLAY_PROPERTY_OK) {
+	    if (bu_strncmp(name, "renderer.", 9) == 0)
+		endpoint->rendererPerformanceChanged();
 	    endpoint->controller->requestRender("external property");
+	}
 	return ret;
     } else {
 	return BV_DISPLAY_PROPERTY_UNSUPPORTED;
     }
-
     if (endpoint->engine == BOBOL_RENDER_ENGINE_RT &&
 	!endpoint_rt_start(endpoint))
 	return BV_DISPLAY_PROPERTY_UNSUPPORTED;

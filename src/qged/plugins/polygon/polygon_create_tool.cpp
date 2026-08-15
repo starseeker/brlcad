@@ -78,6 +78,8 @@ PolygonCreateTool::attachToView(QgView *view)
 void
 PolygonCreateTool::detachFromView(QgView *view)
 {
+    if (m_create)
+	m_create->cancel();
     if (m_create && view)
 	view->clear_event_filter(m_create);
 }

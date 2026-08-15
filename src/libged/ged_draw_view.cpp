@@ -36,6 +36,8 @@
 #include "bu/vls.h"
 #include "BObol/BViewController.h"
 #include "BObol/BViewStore.h"
+#include "ged/event.h"
+#include "rt/db_io.h"
 #include "./ged_bobol_private.hpp"
 #include "./ged_draw_private.h"
 #include "./ged_draw_view_private.h"
@@ -1338,6 +1340,41 @@ ged_view_feature_points_copy(struct ged_view_context *view_ctx,
 	    points, point_count);
 }
 
+int
+ged_view_feature_indexed_face_points_update(
+	struct ged_view_context *view_ctx,
+	const char *name,
+	const int *point_indices,
+	const point_t *points,
+	size_t point_count)
+{
+    if (!view_ctx || !name || !name[0] || !point_indices || !points ||
+	!point_count)
+	return 0;
+
+    const struct ged_bobol_feature_lookup lookup =
+	ged_bobol_feature_find(view_ctx, name);
+    if (!lookup.controller || !lookup.handle.isValid())
+	return 0;
+
+    std::vector<int32_t> indices;
+    std::vector<SbVec3f> updatedPoints;
+    indices.reserve(point_count);
+    updatedPoints.reserve(point_count);
+    for (size_t i = 0; i < point_count; i++) {
+	if (point_indices[i] < 0)
+	    return 0;
+	indices.push_back(static_cast<int32_t>(point_indices[i]));
+	updatedPoints.push_back(SbVec3f(
+	    static_cast<float>(points[i][X]),
+	    static_cast<float>(points[i][Y]),
+	    static_cast<float>(points[i][Z])));
+    }
+
+    return lookup.controller->features().updateIndexedFaceSetPoints(
+	lookup.handle, indices, updatedPoints) ? 1 : 0;
+}
+
 
 int
 ged_view_feature_line_command_at(
@@ -1449,6 +1486,13 @@ ged_view_polygon_clear_point_selection(struct ged_view_context *view_ctx)
 
 
 int
+ged_view_polygon_clear_selection(struct ged_view_context *view_ctx)
+{
+    return ged_draw_obol_view_context_polygon_clear_selection(view_ctx);
+}
+
+
+int
 ged_view_polygon_snap_exclude_set(
 	struct ged_view_context *view_ctx,
 	ged_view_polygon_ref ref)
@@ -1463,6 +1507,53 @@ ged_view_polygon_export_sketch(struct ged_view_context *view_ctx,
 {
     return ged_draw_obol_view_polygon_export_sketch(view_ctx, dbip, name,
 	    ref);
+}
+
+
+struct directory *
+ged_view_polygon_update_sketch(struct ged_view_context *view_ctx,
+	struct db_i *dbip, ged_view_polygon_ref ref)
+{
+    return ged_draw_obol_view_polygon_update_sketch(view_ctx, dbip, ref);
+}
+
+
+int
+ged_view_polygon_sketch_name_set(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, const char *name)
+{
+    return ged_draw_obol_view_polygon_sketch_name_set(view_ctx, ref, name);
+}
+
+
+int
+ged_view_polygon_sync_sketch(struct ged *gedp,
+	struct ged_view_context *view_ctx, ged_view_polygon_ref ref)
+{
+    struct ged_view_polygon_record record;
+    if (!view_ctx || ged_view_polygon_ref_is_null(ref) ||
+	!ged_view_polygon_record_get(view_ctx, ref, &record))
+	return -1;
+
+    const char *name = record.sketch_name;
+    if (!name || !name[0])
+	return 0;
+    if (!gedp || !gedp->dbip)
+	return -1;
+
+    const bool create = db_lookup(gedp->dbip, name, LOOKUP_QUIET) ==
+	RT_DIR_NULL;
+    struct directory *dp = create ?
+	ged_view_polygon_export_sketch(view_ctx, gedp->dbip, name, ref) :
+	ged_view_polygon_update_sketch(view_ctx, gedp->dbip, ref);
+    if (!dp)
+	return -1;
+
+    if (create)
+	(void)ged_event_notify_object_added(gedp, name, NULL);
+    else
+	(void)ged_event_notify_object_modified(gedp, name, 1, NULL);
+    return create ? 1 : 2;
 }
 
 
@@ -1500,6 +1591,16 @@ ged_view_polygon_update_screen_pt(struct ged_view_context *view_ctx,
 {
     return ged_draw_obol_view_context_polygon_update_screen_pt(ref,
 	    view_ctx, x, y, op);
+}
+
+
+int
+ged_view_polygon_update_model_pt(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, const point_t model_point,
+	enum ged_view_polygon_update op)
+{
+    return ged_draw_obol_view_context_polygon_update_model_pt(ref,
+	    view_ctx, model_point, op);
 }
 
 
@@ -1544,6 +1645,14 @@ ged_view_polygon_set_current(struct ged_view_context *view_ctx,
 {
     return ged_draw_obol_view_context_polygon_set_current(view_ctx, ref,
 	    contour_i, point_i);
+}
+
+
+int
+ged_view_polygon_set_selected(struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref, int selected)
+{
+    return ged_draw_obol_view_polygon_set_selected(view_ctx, ref, selected);
 }
 
 

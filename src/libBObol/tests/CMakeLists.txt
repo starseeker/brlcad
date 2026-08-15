@@ -65,6 +65,11 @@ brlcad_add_test(NAME libBObol_view_store COMMAND test_bobol_view_store)
 brlcad_addexec(test_bobol_compact_edit test_compact_edit.cpp "libBObol;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_compact_edit COMMAND test_bobol_compact_edit)
 
+brlcad_addexec(test_bobol_edit_manipulator test_edit_manipulator.cpp
+  "libBObol;libbu;Obol::Obol" TEST ALL_CXX)
+brlcad_add_test(NAME libBObol_edit_manipulator
+  COMMAND test_bobol_edit_manipulator)
+
 brlcad_addexec(test_bobol_rt_render test_rt_render.cpp "libBObol;libwdb;librt;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_rt_render COMMAND test_bobol_rt_render)
 
@@ -170,6 +175,7 @@ set(_bobol_headless_tests
   libBObol_mesh_lod_cache
   libBObol_view_store
   libBObol_compact_edit
+  libBObol_edit_manipulator
   libBObol_rt_render
   libBObol_window_host
   libBObol_navigation_gizmo
@@ -195,6 +201,7 @@ set(_bobol_sanitizer_tests
   libBObol_source_realization
   libBObol_view_store
   libBObol_compact_edit
+  libBObol_edit_manipulator
   libBObol_rt_render
   libBObol_headless_window_host)
 foreach(_bobol_test IN LISTS _bobol_sanitizer_tests)
@@ -208,6 +215,7 @@ cmakefiles(
   test_headless_window_host.cpp
   test_draw_cache.cpp
   test_evaluated_points.cpp
+  test_edit_manipulator.cpp
   test_image_display.cpp
   test_image_source.cpp
   test_lod_realization.cpp

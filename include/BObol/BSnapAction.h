@@ -70,6 +70,14 @@ public:
 	DISPLAY_LEVEL = 1
     };
 
+    enum SourceFilter {
+	ALL_SOURCES = 0,
+	DATABASE_SOURCES = 1,
+	VIEW_SOURCES = 2,
+	LOCAL_SOURCES = 4,
+	SHARED_SOURCES = 8
+    };
+
     SoBRLSnapAction(void);
     virtual ~SoBRLSnapAction(void);
     static void initClass(void);
@@ -78,6 +86,10 @@ public:
     void setTolerance(float tolerance);
     void setEnabledKinds(uint32_t kinds);
     uint32_t getEnabledKinds(void) const;
+    /** Ignore candidates whose stable source path exactly matches @p path. */
+    void setExcludedPath(const SbString &path);
+    void clearExcludedPath(void);
+    const SbString &getExcludedPath(void) const;
     void setSelectionFilter(SelectionFilter filter);
     SelectionFilter getSelectionFilter(void) const;
     void setCoordinateSpace(CoordinateSpace space);
@@ -86,6 +98,9 @@ public:
     PriorityPolicy getPriorityPolicy(void) const;
     void setGeometryPolicy(GeometryPolicy policy);
     GeometryPolicy getGeometryPolicy(void) const;
+    /** Restrict candidates by semantic source; zero preserves all sources. */
+    void setSourceFilter(uint32_t sources);
+    uint32_t getSourceFilter(void) const;
     unsigned int getSkippedLodDisplayMeshCount(void) const;
     int getSourceBackedFullDetailRequestCount(void) const;
     const BObolSourceMeshRequest &getSourceBackedFullDetailRequest(int index) const;
@@ -135,6 +150,9 @@ private:
 
     void appendSourceBackedFullDetailRequest(const SoBRLMeshShape *shape,
 	    const SbMatrix &localToWorld);
+    SbBool sourceAllows(SbBool databaseIntent, SbBool overlayIntent,
+	    SbBool hudIntent, SbBool localSource, SbBool sharedSource,
+	    SbBool nonDatabaseSource) const;
     void consider(SnapKind kind, const SbString &path,
 		  const SbString &editIntentId,
 		  const SbString &editIntentRole,
@@ -151,6 +169,7 @@ private:
     SbVec3f queryPoint;
     SbVec3f candidatePoint;
     SbString candidatePath;
+    SbString excludedPath;
     SbString candidateEditIntentId;
     SbString candidateEditIntentRole;
     uint32_t enabledKinds;
@@ -168,6 +187,7 @@ private:
     CoordinateSpace coordinateSpace;
     PriorityPolicy priorityPolicy;
     GeometryPolicy geometryPolicy;
+    uint32_t sourceFilter;
     unsigned int skippedLodDisplayMeshCount;
     std::vector<BObolSourceMeshRequest> sourceBackedFullDetailRequests;
     SbBool foundCandidate;

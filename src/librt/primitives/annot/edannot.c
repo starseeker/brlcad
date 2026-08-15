@@ -283,7 +283,7 @@ rt_edit_annot_edit_xy(struct rt_edit *s, const vect_t mousevec)
 
 static const struct rt_edit_param_desc annot_text_param[] = {
     { "text", "Label text", RT_EDIT_PARAM_STRING, 0,
-      0.0, 0.0, "", 0, NULL, NULL, NULL }
+      0.0, 0.0, "", 0, NULL, NULL, "ant.segments[0].label" }
 };
 
 static const struct rt_edit_param_desc annot_pos_param[] = {
@@ -306,16 +306,29 @@ static const struct rt_edit_param_desc annot_vert_move_params[] = {
 };
 
 static const struct rt_edit_cmd_desc annot_cmds[] = {
-    { ECMD_ANNOT_SET_TEXT,          "Set Text",            "text",   1, annot_text_param,        1, 10, NULL },
-    { ECMD_ANNOT_SET_POS,           "Set Anchor Position", "layout", 1, annot_pos_param,          1, 20, NULL },
-    { ECMD_ANNOT_SET_TSEG_TXT_SIZE, "Set Text Size",       "text",   1, annot_txtsize_param,      1, 30, NULL },
-    { ECMD_ANNOT_VERT_MOVE,         "Move Vertex",         "layout", 2, annot_vert_move_params,   1, 40, NULL }
+    { ECMD_ANNOT_SET_TEXT, RT_EDIT_CMD_NAME(ECMD_ANNOT_SET_TEXT),          "Set Text",            "text",   1, annot_text_param,        1, 10, NULL },
+    { ECMD_ANNOT_SET_POS, RT_EDIT_CMD_NAME(ECMD_ANNOT_SET_POS),           "Set Anchor Position", "layout", 1, annot_pos_param,          1, 20, NULL },
+    { ECMD_ANNOT_SET_TSEG_TXT_SIZE, RT_EDIT_CMD_NAME(ECMD_ANNOT_SET_TSEG_TXT_SIZE), "Set Text Size",       "text",   1, annot_txtsize_param,      1, 30, NULL },
+    { ECMD_ANNOT_VERT_MOVE, RT_EDIT_CMD_NAME(ECMD_ANNOT_VERT_MOVE),         "Move Vertex",         "layout", 2, annot_vert_move_params,   1, 40, NULL }
 };
+
+static const enum rt_edit_control_class annot_command_controls[] = {
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_CUSTOM
+};
+_Static_assert(sizeof(annot_command_controls) / sizeof(annot_command_controls[0]) ==
+    sizeof(annot_cmds) / sizeof(annot_cmds[0]), "annot command controls");
 
 static const struct rt_edit_prim_desc annot_prim_desc = {
     "annot", "Annotation", 4, annot_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    annot_command_controls,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -326,29 +339,41 @@ rt_edit_annot_edit_desc(void)
 
 
 C_DECL int
-rt_edit_annot_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
+rt_edit_annot_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
 {
-    if (!s || !vals) return 0;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
 
     struct rt_annot_internal *aip =
 	(struct rt_annot_internal *)s->es_int.idb_ptr;
 
     switch (cmd_id) {
+	case ECMD_ANNOT_SET_TEXT: {
+	    struct txt_seg *tsg = _annot_first_tseg(aip);
+	    if (!tsg)
+		return RT_EDIT_VALUE_UNAVAILABLE;
+	    rt_edit_cmd_values_set_string(result, 0,
+		bu_vls_cstr(&tsg->label));
+	    return RT_EDIT_VALUE_OK;
+	}
+
 	case ECMD_ANNOT_SET_POS:
-	    vals[0] = aip->V[0] * s->base2local;
-	    vals[1] = aip->V[1] * s->base2local;
-	    vals[2] = aip->V[2] * s->base2local;
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    aip->V[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 
 	case ECMD_ANNOT_SET_TSEG_TXT_SIZE: {
 	    struct txt_seg *tsg = _annot_first_tseg(aip);
-	    if (!tsg) return 0;
-	    vals[0] = tsg->txt_size;
-	    return 1;
+	    if (!tsg)
+		return RT_EDIT_VALUE_UNAVAILABLE;
+	    rt_edit_cmd_values_set_value(result, 0, tsg->txt_size);
+	    return RT_EDIT_VALUE_OK;
 	}
 
 	default:
-	    return 0;
+	    return RT_EDIT_VALUE_UNAVAILABLE;
     }
 }
 

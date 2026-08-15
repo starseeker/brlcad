@@ -10,6 +10,7 @@
 #include "ged/display_obol_private.h"
 
 #include "BObol/BExportAction.h"
+#include "BObol/BLodService.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BSceneController.h"
 #include "BObol/BViewController.h"
@@ -247,6 +248,12 @@ system_gl_enabled()
     return BU_STR_EQUAL(getenv("BOBOL_QTCAD_REAL_MODEL_GL"), "1");
 }
 
+static int
+lod_enabled()
+{
+    return !BU_STR_EQUAL(getenv("BOBOL_QTCAD_REAL_MODEL_LOD"), "off");
+}
+
 static BObolViewController::SoftwareWireMode
 software_wire_mode()
 {
@@ -445,6 +452,16 @@ all_source_materials_match_db_colors(struct ged *gedp,
 		    !source->getCompactInstanceSummary(handle, instance) ||
 		    !summary_from_compact_instance(source, instance, summary))
 		    return 0;
+		/* The synthetic whole-target extent is presentation feedback, not
+		 * an authored database occurrence.  Its path is deliberately the
+		 * draw root, whose own default color may differ from descendant
+		 * region materials.  Warm compact startup retains this hidden record
+		 * until terminal adoption; including it made the fallback verifier
+		 * reject correct leaf colors while the cold triangle-export path
+		 * passed the identical scene. */
+		if (BU_STR_EQUAL(instance.geometryKind.getString(),
+			"overview-aabb"))
+		    continue;
 		SbColor expected;
 		if (!bobol_database_source_path_material_color(gedp->dbip,
 			summary.path.getString(), expected) ||
@@ -611,6 +628,7 @@ realized_geometry_counts(BObolSceneController *scene,
     if (!counts.segmentCount && !counts.triangleCount &&
 	controller->getViewport() && controller->getViewport()->getRoot()) {
 	SoBRLExportAction export_action;
+	export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
 	export_action.apply(controller->getViewport()->getRoot());
 	std::set<std::string> line_paths;
 	std::set<std::string> triangle_paths;
@@ -629,7 +647,80 @@ realized_geometry_counts(BObolSceneController *scene,
 	counts.triangleCount = export_action.getTriangleCount();
     }
 
+    /* Compact PoP payloads are view-local retained CAD-assembly state rather
+     * than child shape nodes.  DISPLAY_LEVEL export still reports the
+     * structural occurrence records, so use the controller's authoritative
+     * accounting for the geometry actually presented by that path. */
+    const size_t activeCadPayloads = controller->getActiveLodCadPayloadCount();
+    const size_t activeFaces = controller->getActiveLodFaceCount();
+    if (activeCadPayloads > 0 && activeFaces > 0) {
+	const int payloadCount = static_cast<int>(std::min<size_t>(
+	    activeCadPayloads, static_cast<size_t>(INT_MAX)));
+	const int faceCount = static_cast<int>(std::min<size_t>(
+	    activeFaces, static_cast<size_t>(INT_MAX)));
+	if (expectedDrawMode == SoBRLDatabaseSource::SHADED) {
+	    counts.meshCount = payloadCount;
+	    counts.triangleCount = faceCount;
+	} else if (expectedDrawMode == SoBRLDatabaseSource::WIREFRAME) {
+	    counts.shapeCount = payloadCount;
+	    counts.segmentCount = faceCount > INT_MAX / 3 ?
+		INT_MAX : faceCount * 3;
+	}
+    }
+
     return counts;
+}
+
+static int
+wait_for_view_lod_idle(QgView &view, BObolViewController *controller,
+	int timeoutMilliseconds)
+{
+    if (!controller)
+	return 0;
+    const int64_t deadline = bu_gettime() +
+	static_cast<int64_t>(timeoutMilliseconds) * 1000;
+    int64_t quietSince = 0;
+    while (bu_gettime() < deadline) {
+	QCoreApplication::processEvents();
+	(void)controller->advanceProgressiveWork(NULL, NULL);
+	if (controller->hasPendingLodRefinementFrame() ||
+	    controller->isRenderRequested()) {
+	    view.need_update(QG_VIEW_REFRESH);
+	    controller->requestRender("real-model-lod-settle");
+	    QCoreApplication::processEvents();
+	    QImage feedback;
+	    const uint64_t renderStarted = controller->beginRenderTiming();
+	    view.get_viewport_image(feedback);
+	    controller->completeRenderTiming(renderStarted);
+	    if (!feedback.isNull() && controller->isRenderRequested())
+		(void)controller->consumeRenderRequest(NULL);
+	}
+
+	BObolLodService *service = controller->getLodService();
+	const bool serviceIdle = !service ||
+	    (service->pendingTaskCountForDiagnostics() == 0 &&
+	     service->delayedTaskCountForDiagnostics() == 0 &&
+	     service->inFlightCount() == 0 &&
+	     service->activeRequestCountForDiagnostics() == 0 &&
+	     service->queuedResultCountForDiagnostics() == 0 &&
+	     service->queuedCacheWriteCountForDiagnostics() == 0);
+	const bool idle = !controller->hasProgressiveWorkPending() &&
+	    !controller->hasPendingLodResults() &&
+	    !controller->hasPendingLodSubmissions() &&
+	    !controller->hasPendingLodRefinementFrame() &&
+	    !controller->isRenderRequested() && serviceIdle;
+	const int64_t now = bu_gettime();
+	if (idle) {
+	    if (!quietSince)
+		quietSince = now;
+	    if (now - quietSince >= 100000)
+		return 1;
+	} else {
+	    quietSince = 0;
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return 0;
 }
 
 static int
@@ -641,9 +732,13 @@ nist_database_materials_are_correct(struct ged *gedp,
 	return 0;
 
     SoBRLExportAction exportAction;
+    exportAction.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
     exportAction.apply(controller->getViewport()->getRoot());
-    if (exportAction.getTriangleCount() <= 0)
-	return 0;
+    if (exportAction.getTriangleCount() <= 0) {
+	BObolSceneController scene(controller->getRenderSceneRoot());
+	return controller->getActiveLodCadPayloadCount() > 0 ?
+	    all_source_materials_match_db_colors(gedp, &scene) : 0;
+    }
 
     for (int i = 0; i < exportAction.getTriangleCount(); i++) {
 	const SoBRLExportAction::TriangleRecord &triangle =
@@ -683,6 +778,7 @@ nist_pmi7_10_materials_are_correct(BObolViewController *controller)
     };
     int seen = 0;
     SoBRLExportAction exportAction;
+    exportAction.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
     exportAction.apply(controller->getViewport()->getRoot());
     for (int i = 0; i < exportAction.getTriangleCount(); i++) {
 	const SoBRLExportAction::TriangleRecord &triangle =
@@ -707,6 +803,38 @@ nist_pmi7_10_materials_are_correct(BObolViewController *controller)
 	    return 0;
 	}
 	seen |= 1 << match;
+    }
+    if (seen == 0 && controller->getActiveLodCadPayloadCount() > 0) {
+	BObolSceneController scene(controller->getRenderSceneRoot());
+	const int sourceCount = scene.getDatabaseSourceCount();
+	for (int i = 0; i < sourceCount; i++) {
+	    SoBRLDatabaseSource *source = scene.getDatabaseSource(i);
+	    if (!source || !source->hasCompactInstanceIndex())
+		continue;
+	    for (int j = 0; j < source->getCompactInstanceCount(); j++) {
+		BObolCompactInstanceHandle handle;
+		BObolCompactInstanceSummary instance;
+		if (!source->getCompactInstanceHandle(j, handle) ||
+		    !source->getCompactInstanceSummary(handle, instance) ||
+		    !instance.appearanceColorValid)
+		    return 0;
+		int match = -1;
+		for (int color = 0; color < 4; color++) {
+		    if (fabsf(instance.appearanceColor[0] -
+			    expected[color][0] / 255.0f) < 1.0e-5f &&
+			fabsf(instance.appearanceColor[1] -
+			    expected[color][1] / 255.0f) < 1.0e-5f &&
+			fabsf(instance.appearanceColor[2] -
+			    expected[color][2] / 255.0f) < 1.0e-5f) {
+			match = color;
+			break;
+		    }
+		}
+		if (match < 0)
+		    return 0;
+		seen |= 1 << match;
+	    }
+	}
     }
     return seen == 0xf;
 }
@@ -890,11 +1018,27 @@ sync_draw_case(const struct model_case &testCase)
     }
     const BObolViewController::SoftwareWireMode wireMode =
 	software_wire_mode();
+    const int lodEnabled = lod_enabled();
+    ged_view_lod_policy lodPolicy;
+    if (!ged_view_lod_policy_get(&lodPolicy, view_ctx)) {
+	ged_close(gedp);
+	return 0;
+    }
+    lodPolicy.policy = lodEnabled ? BV_LOD_AUTO : BV_LOD_OFF;
+    lodPolicy.mesh_enabled = lodEnabled;
+    lodPolicy.csg_enabled = lodEnabled;
+    lodPolicy.zoom_refresh = lodEnabled;
+    if (!ged_view_lod_policy_apply(view_ctx, &lodPolicy)) {
+	ged_close(gedp);
+	return 0;
+    }
+    const int progressiveDraw = testCase.deferLeafExpansion && lodEnabled;
     controller->setSoftwareWireMode(wireMode);
     if (timing_enabled()) {
-	fprintf(stderr, "CONFIG %s renderer=%s software_wire=%s size=%dx%d\n",
+	fprintf(stderr, "CONFIG %s renderer=%s lod=%s software_wire=%s size=%dx%d\n",
 	    testCase.name, system_gl_enabled() ? "system-gl" : "osmesa",
-	    software_wire_mode_name(wireMode), viewportWidth, viewportHeight);
+	    lodEnabled ? "auto" : "off", software_wire_mode_name(wireMode),
+	    viewportWidth, viewportHeight);
     }
     controller->setViewportSize(viewportWidth, viewportHeight);
     controller->clearDatabaseSources();
@@ -911,7 +1055,7 @@ sync_draw_case(const struct model_case &testCase)
     draw_request.path_count = 1;
     draw_request.style.draw_mode =
 	static_cast<enum ged_scene_draw_mode>(testCase.gedDrawMode);
-    draw_request.realization.mode = testCase.deferLeafExpansion ?
+    draw_request.realization.mode = progressiveDraw ?
 	GED_SCENE_REALIZE_PROGRESSIVE : GED_SCENE_REALIZE_EAGER;
     draw_request.realization.strict = testCase.strictFallback;
 
@@ -962,7 +1106,7 @@ sync_draw_case(const struct model_case &testCase)
 	return 0;
     }
 
-    if (testCase.deferLeafExpansion) {
+    if (progressiveDraw) {
 	/* The bounded startup proxy is intentionally line geometry regardless
 	 * of the requested final representation.  Its final detail is checked
 	 * after progressive work settles below. */
@@ -989,7 +1133,11 @@ sync_draw_case(const struct model_case &testCase)
     }
     print_timing(testCase, "geometry-count-check", phaseStart);
 
-    controller->getViewport()->viewAll();
+    /* The BRL-CAD bv camera is authoritative and is reapplied before each
+     * endpoint paint.  Coin's local viewAll alone is therefore transient and
+     * leaves eager/LoD-off runs at the default 1000-unit view size. */
+    const char *initialAutoviewCommand[1] = {"autoview"};
+    (void)ged_exec_autoview(gedp, 1, initialAutoviewCommand);
     controller->requestRender("real-model-visible");
     QCoreApplication::processEvents();
     phaseStart = bu_gettime();
@@ -1008,7 +1156,7 @@ sync_draw_case(const struct model_case &testCase)
      * aggregate/leaf bounds arrive on the occurrence stream.  Wait only for
      * the first useful visual here; the separate settling check below proves
      * that boxes are replaced by the requested BREP meshes. */
-    if (testCase.deferLeafExpansion &&
+    if (progressiveDraw &&
 	(visibleImage.isNull() || litPixels < 20 || visibleByteDiff < 100 ||
 	 visibleSsim >= 0.9999)) {
 	for (int attempt = 0; attempt < 2000; attempt++) {
@@ -1047,7 +1195,7 @@ sync_draw_case(const struct model_case &testCase)
 	BU_STR_EQUAL(testCase.root, "Document") &&
 	strstr(testCase.file, "nist/NIST_MBE_PMI_");
 
-    if (nistSingleMaterialCase && !testCase.deferLeafExpansion &&
+    if (nistSingleMaterialCase && !progressiveDraw &&
 	!nist_database_materials_are_correct(gedp, controller, testCase.file)) {
 	fprintf(stderr,
 	    "%s:%s did not preserve the BREP region's database material\n",
@@ -1057,7 +1205,7 @@ sync_draw_case(const struct model_case &testCase)
     }
 
     if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
-	!testCase.deferLeafExpansion &&
+	!progressiveDraw &&
 	!nist_pmi7_10_materials_are_correct(controller)) {
 	fprintf(stderr,
 	    "%s:%s did not preserve all four region materials\n",
@@ -1076,7 +1224,7 @@ sync_draw_case(const struct model_case &testCase)
 	}
     }
     if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
-	!testCase.deferLeafExpansion) {
+	!progressiveDraw) {
 	const int colorMask = nist_pmi7_10_color_mask(visibleImage);
 	if (colorMask != 7) {
 	    fprintf(stderr,
@@ -1090,7 +1238,7 @@ sync_draw_case(const struct model_case &testCase)
     /* A deferred draw first publishes a bounded proxy.  Drain its background
      * realization and verify that the requested final representation replaces
      * the proxy without losing the database material color. */
-    if (testCase.deferLeafExpansion) {
+    if (progressiveDraw) {
 	BObolProgressiveStatus progressiveStatus;
 	int settled = 0;
 	const int64_t settleDeadline = bu_gettime() + 30000000;
@@ -1300,6 +1448,18 @@ sync_draw_case(const struct model_case &testCase)
      * races legitimate follow-up requests from presentation synchronization
      * and contradicts the canvas-controller contract. */
 
+    /* Eager source realization and view-dependent LoD are independent.  The
+     * autoview above may legitimately start a short render-budget calibration
+     * even though no provider work remains.  Compare explicit redraws only
+     * after that camera epoch is quiet; comparing them to the pre-autoview
+     * full-capacity source confused expected LoD activation with lost geometry. */
+    if (lodEnabled && !wait_for_view_lod_idle(view, controller, 10000)) {
+	fprintf(stderr, "%s:%s eager view LoD did not become idle\n",
+	    testCase.file, testCase.root);
+	ged_close(gedp);
+	return 0;
+    }
+
     struct ged_scene_redraw_request redraw_request;
     ged_scene_redraw_request_init(&redraw_request);
     redraw_request.view = view_ctx;
@@ -1315,6 +1475,9 @@ sync_draw_case(const struct model_case &testCase)
     QCoreApplication::processEvents();
     QImage redrawnImage;
     view.get_viewport_image(redrawnImage);
+    BObolSceneController firstRedrawScene(controller->getRenderSceneRoot());
+    struct geometry_counts firstRedrawCounts = realized_geometry_counts(
+	&firstRedrawScene, controller, testCase.obolDrawMode, NULL, NULL);
     if (capturePath && capturePath[0] != '\0')
 	(void)redrawnImage.save(
 	    QString::fromUtf8(capturePath) + QStringLiteral(".redraw1.png"));
@@ -1343,24 +1506,28 @@ sync_draw_case(const struct model_case &testCase)
 	controller, testCase.obolDrawMode, NULL, NULL);
     if (redrawRet < 0 || secondRedrawRet < 0 ||
 	redrawUs > 10000000 || secondRedrawUs > 10000000 ||
+	firstRedrawScene.getDatabaseSourceCount() != sourceCount ||
 	redrawScene.getDatabaseSourceCount() != sourceCount ||
 	redrawByteDiff < 0 || redrawByteDiff > maxRasterDiff ||
-	redrawCounts.shapeCount != counts.shapeCount ||
-	redrawCounts.segmentCount != counts.segmentCount ||
-	redrawCounts.meshCount != counts.meshCount ||
-	redrawCounts.triangleCount != counts.triangleCount) {
+	redrawCounts.shapeCount != firstRedrawCounts.shapeCount ||
+	redrawCounts.segmentCount != firstRedrawCounts.segmentCount ||
+	redrawCounts.meshCount != firstRedrawCounts.meshCount ||
+	redrawCounts.triangleCount != firstRedrawCounts.triangleCount) {
 	fprintf(stderr,
-		"%s:%s retained Obol redraw failed: ret=%d/%d elapsed=%.3f/%.3f sec sources=%d/%d image_diff=%d/%d ssim=%.9g lit=%d/%d geometry=%d,%d,%d,%d/%d,%d,%d,%d\n",
+		"%s:%s retained Obol redraw failed: ret=%d/%d elapsed=%.3f/%.3f sec sources=%d/%d/%d image_diff=%d/%d ssim=%.9g lit=%d/%d geometry=%d,%d,%d,%d/%d,%d,%d,%d (initial=%d,%d,%d,%d)\n",
 		testCase.file, testCase.root, redrawRet, secondRedrawRet,
 		(double)redrawUs / 1000000.0,
 		(double)secondRedrawUs / 1000000.0,
-	redrawScene.getDatabaseSourceCount(), sourceCount,
+		firstRedrawScene.getDatabaseSourceCount(),
+		redrawScene.getDatabaseSourceCount(), sourceCount,
 		redrawByteDiff, maxRasterDiff, redrawSsim,
 		redrawLitPixels, lit_pixel_count(redrawnImage),
 		redrawCounts.shapeCount, redrawCounts.segmentCount,
 		redrawCounts.meshCount, redrawCounts.triangleCount,
-		counts.shapeCount, counts.segmentCount,
-		counts.meshCount, counts.triangleCount);
+		firstRedrawCounts.shapeCount, firstRedrawCounts.segmentCount,
+		firstRedrawCounts.meshCount, firstRedrawCounts.triangleCount,
+		counts.shapeCount, counts.segmentCount, counts.meshCount,
+		counts.triangleCount);
 	ged_close(gedp);
 	return 0;
     }

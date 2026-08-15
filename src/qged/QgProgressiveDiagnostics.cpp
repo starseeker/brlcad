@@ -598,6 +598,12 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<qint64>(convergence.coordinatorInvariantMask));
     sample.insert(QStringLiteral("lod_coordinator_invariant_history_mask"),
 	static_cast<qint64>(convergence.coordinatorInvariantHistoryMask));
+    sample.insert(QStringLiteral("lod_view_quality_history_entries"),
+	static_cast<qint64>(convergence.viewQualityHistoryEntryCount));
+    sample.insert(QStringLiteral("lod_view_quality_history_remembers"),
+	static_cast<qint64>(convergence.viewQualityHistoryRememberCount));
+    sample.insert(QStringLiteral("lod_view_quality_history_recalls"),
+	static_cast<qint64>(convergence.viewQualityHistoryRecallCount));
     sample.insert(QStringLiteral("lod_convergence_fraction"),
 	static_cast<double>(convergence.fraction));
     sample.insert(QStringLiteral("lod_convergence_view_ready"),
@@ -696,6 +702,9 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<qint64>(convergence.gpuOrdinaryPartGpuCopyBytes));
     sample.insert(QStringLiteral("lod_gpu_ordinary_lineage_reuses"),
 	static_cast<qint64>(convergence.gpuOrdinaryPartLineageReuseCount));
+    sample.insert(QStringLiteral("lod_gpu_ordinary_lineage_replacements"),
+	static_cast<qint64>(
+	    convergence.gpuOrdinaryPartLineageReplacementCount));
     sample.insert(QStringLiteral("lod_gpu_atlas_full_upload_bytes"),
 	static_cast<qint64>(convergence.gpuTriangleAtlasFullUploadBytes));
     sample.insert(QStringLiteral("lod_gpu_atlas_suffix_upload_bytes"),

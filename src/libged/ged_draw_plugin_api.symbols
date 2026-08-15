@@ -17,6 +17,9 @@ _ged_view_feature_batch_remove_prefix
 ged_edit_buf_abandon
 ged_edit_buf_flush
 ged_edit_buf_get
+ged_edit_buf_notify_checkpoint
+ged_edit_buf_notify_revert
+ged_edit_buf_notify_update
 ged_edit_buf_promote
 ged_edit_buf_set
 ged_scene_backend_set_private

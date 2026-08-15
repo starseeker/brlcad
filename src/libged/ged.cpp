@@ -174,6 +174,11 @@ ged_close(struct ged *gedp)
      * resources or the database they reference are dismantled. */
     ged_subprocesses_terminate(gedp);
 
+    /* Edit sessions retain path directory pointers and a database-backed
+     * librt edit context.  Invalidate them while both the database and scene
+     * still exist; ged_free's later call is an idempotent teardown guard. */
+    ged_edit_sessions_close_private(gedp);
+
     /* Clear all displayed geometry BEFORE closing the database.
      * Scene objects hold directory pointers that are only valid while dbip is
      * open; closing dbip first causes use-after-free during draw-scene
@@ -392,6 +397,12 @@ ged_free(struct ged *gedp)
 	    BU_PUT(gedp->ged_fbs, struct fbserv_obj);
 	}
 
+    /* Cancel path-scoped edits while their retained edit scopes, view state,
+     * backend, and draw registry are all still valid.  Committing an
+     * unfinished edit implicitly during application/database close would be
+     * surprising, so shutdown always cancels. */
+    ged_edit_sessions_close_private(gedp);
+
     /* Alternative scene adapters borrow their client data until detach.
      * Release that contract while the semantic scene and all view resources
      * it may reference are still valid. */
@@ -420,6 +431,7 @@ ged_free(struct ged *gedp)
 		ged_scene_observers_free(gedp);
 		ged_draw_registry_free(gedp);
 		BU_PUT(gedp->i->ged_gdp, struct ged_drawable);
+		gedp->i->ged_gdp = GED_DRAWABLE_NULL;
 	    }
 
     if (gedp->ged_log) {

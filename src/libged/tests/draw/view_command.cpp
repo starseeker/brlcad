@@ -1016,6 +1016,21 @@ main(int argc, const char **argv)
     ASSERT(poly_rec.point_count == 4);
     ASSERT(poly_rec.first_contour_open == 0);
     ASSERT(poly_rec.fill_flag == 1);
+    ASSERT(poly_rec.selected == 0);
+    const char *p8[] = {"view", "polygon", "selected", "u_poly", NULL};
+    ASSERT_VIEW_OK(gedp, 4, p8);
+    ASSERT(result_str(gedp) == "0");
+    const char *p9[] = {"view", "polygon", "selected", "u_poly", "1", NULL};
+    ASSERT_VIEW_OK(gedp, 5, p9);
+    ASSERT(ged_view_polygon_record_get(views[0], poly_ref, &poly_rec));
+    ASSERT(poly_rec.selected == 1);
+    const char *p10[] = {"view", "polygon", "selected", "u_poly", NULL};
+    ASSERT_VIEW_OK(gedp, 4, p10);
+    ASSERT(result_str(gedp) == "1");
+    const char *p11[] = {"view", "polygon", "selected", "u_poly", "0", NULL};
+    ASSERT_VIEW_OK(gedp, 5, p11);
+    ASSERT(ged_view_polygon_record_get(views[0], poly_ref, &poly_rec));
+    ASSERT(poly_rec.selected == 0);
 
     const char *c6[] = {"view", "-V", "V0", "annotation", "-L", "line", "create", "l_line", "0", "0", "0", NULL};
     ASSERT(run_view(gedp, 11, c6) == BRLCAD_OK);

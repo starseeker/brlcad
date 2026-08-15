@@ -148,6 +148,11 @@ main(int argc, char *argv[])
     s->mv_context = 1;
     struct rt_part_internal *edit_part = (struct rt_part_internal *)s->es_int.idb_ptr;
 
+    if (!rt_edit_test_scalar_value(s, ECMD_PART_H, 10.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_PART_VRAD, 4.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_PART_HRAD, 2.0))
+	bu_exit(1, "ERROR: PART descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================

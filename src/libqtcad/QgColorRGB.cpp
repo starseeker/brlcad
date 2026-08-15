@@ -63,7 +63,10 @@ QgColorRGB::QgColorRGB(QWidget *p, QString lstr, QColor dcolor) : QWidget(p)
 	this->setLayout(mlayout);
 
 	QObject::connect(rgbcolor, &QPushButton::clicked, this, &QgColorRGB::set_color_from_button);
-	QObject::connect(rgbtext, &QLineEdit::returnPressed, this, &QgColorRGB::set_color_from_text);
+	/* Commit typed colors on focus loss as well as Return.  QLineEdit emits
+	 * editingFinished for both paths, which keeps command, widget, and scene
+	 * state synchronized when the user tabs or clicks into another control. */
+	QObject::connect(rgbtext, &QLineEdit::editingFinished, this, &QgColorRGB::set_color_from_text);
 }
 
 QgColorRGB::~QgColorRGB()
@@ -138,5 +141,4 @@ QgColorRGB::set_color_from_text()
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
 

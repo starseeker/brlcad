@@ -7,8 +7,17 @@ if {$argc != 2} {
     exit 1
 }
 
+set ::smoke_start [clock milliseconds]
+proc smoke_checkpoint {name} {
+    if {[info exists ::env(TKOBOL_SMOKE_TRACE)] &&
+            $::env(TKOBOL_SMOKE_TRACE) ne ""} {
+        puts stderr "TKOBOL_SMOKE [expr {[clock milliseconds] - $::smoke_start}]ms $name"
+        flush stderr
+    }
+}
 package require Tk
 go_open g db [lindex $argv 0]
+smoke_checkpoint ged-open
 
 if {[g dm open --host tk-photo --renderer sw] ne "tk-photo" ||
         [g dm host] ne "tk-photo"} {
@@ -26,11 +35,13 @@ if {[g dm host] ne "unbound"} {
     puts stderr "GED dm close did not release the Tk endpoint host"
     exit 1
 }
+smoke_checkpoint top-level-endpoint-close
 
 g new_view v1 tkobol
 g draw all.g
 g autoview v1
 update
+smoke_checkpoint primary-view-drawn
 
 set dm_diagnostics [g dm diagnostics -V v1]
 if {![regexp {host\.capabilities=0x([0-9a-fA-F]+)} $dm_diagnostics -> host_caps]} {
@@ -261,6 +272,7 @@ if {[g dm get -V v1 renderer.clip.minimum] ne "0.25" ||
     puts stderr "GED dm command did not round-trip retained clip planes"
     exit 1
 }
+smoke_checkpoint endpoint-properties
 set ray [g mouse_ray v1 100 100]
 if {[llength $ray] != 2 || [lindex $ray 0] eq [lindex $ray 1]} {
     puts stderr "TclCAD mouse_ray did not produce an independent model ray"
@@ -286,6 +298,7 @@ if {$pick eq "" || [lsearch -exact $pick primitive_index] < 0} {
     puts stderr "TclCAD mouse_pick_detail did not return retained pick identity"
     exit 1
 }
+smoke_checkpoint primary-pick
 
 if {![winfo exists .v1] || ![winfo ismapped .v1] ||
         [winfo width .v1] < 100 || [winfo height .v1] < 100 ||
@@ -313,12 +326,14 @@ if {$framebuffer_ipc eq ""} {
     puts stderr "TclCAD did not provide an Obol framebuffer IPC endpoint"
     exit 1
 }
+smoke_checkpoint framebuffer-listen
 if {[catch {
     exec [file join [bu_dir bin] fbclear] -F "ipc:$framebuffer_ipc" 23 45 67
 } framebuffer_error]} {
     puts stderr "TclCAD Obol framebuffer IPC write failed: $framebuffer_error"
     exit 1
 }
+smoke_checkpoint framebuffer-write
 after 100
 g refresh v1
 update
@@ -338,6 +353,7 @@ foreach actual $framebuffer_pixel expected {23 45 67} {
         exit 1
     }
 }
+smoke_checkpoint framebuffer-capture
 g set_fb_mode v1 0
 g refresh v1
 update
@@ -354,13 +370,17 @@ if {![file exists $pix_output] || [file size $pix_output] < 1000} {
     puts stderr "Tk Obol view did not produce a non-empty PIX image"
     exit 1
 }
+smoke_checkpoint primary-capture
 
 # Keep a software pane alive while deleting the active hardware pane.  This
 # exercises context promotion and the session framebuffer-provider handoff.
 set handoff_output "[file rootname $output]_handoff[file extension $output]"
 g new_view v2 tkobol sw
+smoke_checkpoint handoff-view-opened
 g refresh v2
+smoke_checkpoint handoff-view-refreshed
 update
+smoke_checkpoint handoff-view-updated
 if {![winfo exists .v2] || ![winfo ismapped .v2] ||
         ![winfo exists .v2.__obol] ||
         [winfo class .v2.__obol] ne "Label" ||
@@ -368,8 +388,10 @@ if {![winfo exists .v2] || ![winfo ismapped .v2] ||
     puts stderr "Surviving software Tk Obol view was not mapped at a usable size"
     exit 1
 }
+smoke_checkpoint handoff-view-created
 
 g delete_view v1
+smoke_checkpoint primary-view-deleted
 update
 if {[winfo exists .v1]} {
     puts stderr "Tk Obol view survived delete_view"
@@ -383,7 +405,9 @@ if {![file exists $handoff_output] || [file size $handoff_output] < 1000} {
     puts stderr "Surviving Tk Obol view did not capture after active-pane deletion"
     exit 1
 }
+smoke_checkpoint handoff-capture
 g delete_view v2
+smoke_checkpoint handoff-view-deleted
 update
 if {[winfo exists .v2]} {
     puts stderr "Surviving Tk Obol view was not released after active-pane deletion"
@@ -392,17 +416,25 @@ if {[winfo exists .v2]} {
 
 frame .host -width 320 -height 240
 pack .host -expand true -fill both
+smoke_checkpoint embedded-view-opening
 g new_view .host.v2 tkobol -t 0
+smoke_checkpoint embedded-view-opened
 pack .host.v2 -expand true -fill both
+smoke_checkpoint embedded-view-packed
 g autoview .host.v2
+smoke_checkpoint embedded-view-autoviewed
 g refresh .host.v2
+smoke_checkpoint embedded-view-refreshed
 update
+smoke_checkpoint embedded-view-updated
 if {![winfo exists .host.v2] || ![winfo ismapped .host.v2] ||
         [winfo width .host.v2] < 100 || [winfo height .host.v2] < 100} {
     puts stderr "Embedded Tk Obol view was not mapped at a usable size"
     exit 1
 }
+smoke_checkpoint embedded-view-created
 g delete_view .host.v2
+smoke_checkpoint embedded-view-deleted
 update
 if {[winfo exists .host.v2]} {
     puts stderr "Embedded Tk Obol view survived delete_view"
@@ -411,11 +443,17 @@ if {[winfo exists .host.v2]} {
 destroy .host
 
 set sw_output "[file rootname $output]_sw[file extension $output]"
+smoke_checkpoint software-view-opening
 g new_view vsw tkobol sw
+smoke_checkpoint software-view-opened
 g draw all.g
+smoke_checkpoint software-view-drawn
 g autoview vsw
+smoke_checkpoint software-view-autoviewed
 g refresh vsw
+smoke_checkpoint software-view-refreshed
 update
+smoke_checkpoint software-view-updated
 if {![winfo exists .vsw] || ![winfo ismapped .vsw] ||
         ![winfo exists .vsw.__obol] ||
         [winfo class .vsw.__obol] ne "Label" ||
@@ -434,7 +472,9 @@ if {![file exists $sw_pix_output] || [file size $sw_pix_output] < 1000} {
     puts stderr "Software Tk Obol view did not produce a non-empty PIX image"
     exit 1
 }
+smoke_checkpoint software-capture
 g delete_view vsw
+smoke_checkpoint software-view-deleted
 update
 if {[winfo exists .vsw]} {
     puts stderr "Software Tk Obol view survived delete_view"
@@ -442,5 +482,6 @@ if {[winfo exists .vsw]} {
 }
 
 rename g {}
+smoke_checkpoint ged-close
 puts "TclCAD Tk Obol widget smoke passed"
 exit 0

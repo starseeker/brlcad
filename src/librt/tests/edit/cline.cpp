@@ -162,6 +162,13 @@ main(int argc, char *argv[])
     struct rt_cline_internal *edit_cline =
 	(struct rt_cline_internal *)s->es_int.idb_ptr;
 
+    point_t cline_endpoint = {0.0, 0.0, 5.0};
+    if (!rt_edit_test_scalar_value(s, ECMD_CLINE_SCALE_H, 5.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_CLINE_SCALE_R, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_CLINE_SCALE_T, 0.5) ||
+	!rt_edit_test_point_value(s, ECMD_CLINE_MOVE_H, cline_endpoint))
+	bu_exit(1, "ERROR: CLINE descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================

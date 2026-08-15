@@ -177,6 +177,7 @@ public:
 	interp(new_interp), owner_thread(Tcl_GetCurrentThread()), software(use_software),
 	controller(NULL), tkwin(NULL), container(NULL), photo(NULL), opened(false),
 	closing(false), toplevel(false), visible(false), event_queued(false),
+	progressive_timer(NULL),
 	input_dispatch(NULL),
 	input_dispatch_data(NULL), last_motion_x(0), last_motion_y(0),
 	last_motion_valid(false), width(1), height(1)
@@ -351,6 +352,10 @@ public:
 	if (Tcl_GetCurrentThread() == this->owner_thread)
 	Tcl_DeleteEvents(delete_event, this);
 	this->event_queued.store(false);
+	if (this->progressive_timer) {
+	    Tcl_DeleteTimerHandler(this->progressive_timer);
+	    this->progressive_timer = NULL;
+	}
 	this->teardown_request_notifier();
 	this->clear_input_bindings();
 	this->input_dispatch = NULL;
@@ -385,7 +390,11 @@ public:
 	    return 0;
 	if (!this->visible)
 	    return 1;
-	this->controller->requestRender(reason);
+	/* The controller's frame callback is a host wake edge, not permission to
+	 * turn every progressive-work notification into a presentation request.
+	 * Explicit endpoint requests already set the controller latch, while
+	 * markProgressiveWorkPending() deliberately does not. */
+	(void)reason;
 	bool expected = false;
 	if (!this->event_queued.compare_exchange_strong(expected, true))
 	    return 1;
@@ -458,6 +467,35 @@ public:
 	 * motion (e.g. a `view lighting` toggle) never reached the screen.
 	 * Rendering directly here presents the requested frame immediately. */
 	(void)this->render();
+	}
+
+    void schedule_progressive_timer(void)
+    {
+	if (this->progressive_timer || !this->opened || this->closing ||
+	    !this->visible || !this->controller)
+	    return;
+	/* Match the Qt host's bounded background pump.  An immediate file-event
+	 * chain keeps Tcl_Update() nonempty forever and repaints unchanged pixels;
+	 * a timer yields to the application after every cooperative slice. */
+	this->progressive_timer = Tcl_CreateTimerHandler(16,
+	    progressive_timer_proc, this);
+	}
+
+    void dispatch_progressive_timer(void)
+    {
+	this->progressive_timer = NULL;
+	if (!this->opened || this->closing || !this->visible || !this->controller)
+	    return;
+	if (this->controller->hasProgressiveWorkPending())
+	    (void)this->controller->advanceProgressiveWork(NULL, NULL);
+	if (this->controller->isRenderRequested()) {
+	    bool expected = false;
+	    if (this->event_queued.compare_exchange_strong(expected, true))
+		(void)this->queue_frame_event();
+	}
+	if (this->controller->hasProgressiveWorkPending() ||
+	    this->controller->isRenderRequested())
+	    this->schedule_progressive_timer();
 	}
 
     bool setup_request_notifier(void)
@@ -788,7 +826,7 @@ private:
 #endif
 	bu_free(pixels, "Tk endpoint software frame");
 	if (progressive.hasMore || this->controller->hasProgressiveWorkPending())
-	    (void)this->request("Tk endpoint progressive");
+	    this->schedule_progressive_timer();
 	return true;
     }
 
@@ -830,7 +868,7 @@ private:
 	 * user input to wake the Tk event loop. */
 	if (progressive.hasMore ||
 	    this->controller->hasProgressiveWorkPending())
-	    (void)this->request("Tk endpoint progressive");
+	    this->schedule_progressive_timer();
 	return true;
     }
 
@@ -1080,7 +1118,14 @@ input_usage:
 	    return 1;
 	host->dispatch_frame_event();
 	return 1;
-    }
+	}
+
+    static void progressive_timer_proc(ClientData data)
+    {
+	TkObolEndpointHost *host = static_cast<TkObolEndpointHost *>(data);
+	if (host)
+	    host->dispatch_progressive_timer();
+	}
 
 #ifdef TKOBOL_X11
     static void request_pipe_handler(ClientData data, int UNUSED(mask))
@@ -1114,6 +1159,7 @@ input_usage:
     bool toplevel;
     bool visible;
     std::atomic<bool> event_queued;
+	Tcl_TimerToken progressive_timer;
 	BObolInputEventHandler input_dispatch;
     void *input_dispatch_data;
     int last_motion_x;

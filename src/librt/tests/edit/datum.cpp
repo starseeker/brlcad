@@ -29,7 +29,7 @@
  *   - ECMD_DATUM_SET_PNT sets the position
  *   - ECMD_DATUM_SET_DIR sets the direction
  *   - ECMD_DATUM_SET_W sets the scale factor
- *   - rt_edit_datum_get_params returns correct values
+ *   - rt_edit_datum_get_values returns correct values
  */
 
 #include "common.h"
@@ -209,20 +209,21 @@ main(int argc, char *argv[])
     bu_log("TEST 6 PASS: w = %g\n", dp->w);
 
     /* ================================================================
-     * Test 7: rt_edit_datum_get_params returns correct pnt
+     * Test 7: rt_edit_datum_get_values returns correct pnt
      * ================================================================*/
     reset_s(s, dp);
     VSET(dp->pnt, 5, 6, 7);
 
-    fastf_t vals[4] = {0};
-    int nv = (*EDOBJ[dir->d_minor_type].ft_edit_get_params)(s, ECMD_DATUM_SET_PNT, vals);
-    if (nv != 3 || !NEAR_EQUAL(vals[0], 5.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(vals[1], 6.0, SMALL_FASTF) ||
-	!NEAR_EQUAL(vals[2], 7.0, SMALL_FASTF))
-	bu_exit(1, "ERROR: get_params(SET_PNT): nv=%d vals=(%g,%g,%g)\n",
-		nv, vals[0], vals[1], vals[2]);
-    bu_log("TEST 7 PASS: get_params(SET_PNT) = (%g,%g,%g)\n",
-	   vals[0], vals[1], vals[2]);
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_DATUM_SET_PNT, &vals);
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 3 ||
+	!NEAR_EQUAL(vals.values[0], 5.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vals.values[1], 6.0, SMALL_FASTF) ||
+	!NEAR_EQUAL(vals.values[2], 7.0, SMALL_FASTF))
+	bu_exit(1, "ERROR: get_values(SET_PNT): status=%d values=(%g,%g,%g)\n",
+		status, vals.values[0], vals.values[1], vals.values[2]);
+    bu_log("TEST 7 PASS: get_values(SET_PNT) = (%g,%g,%g)\n",
+	   vals.values[0], vals.values[1], vals.values[2]);
 
     bu_log("All DATUM edit tests PASSED\n");
 

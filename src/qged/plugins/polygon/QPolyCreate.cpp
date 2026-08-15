@@ -28,6 +28,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QButtonGroup>
+#include <QKeyEvent>
 #include <QGroupBox>
 #include <QtGlobal>
 #include "qtcad/QgPluginContext.h"
@@ -148,6 +149,14 @@ QPolyCreate::QPolyCreate()
     QObject::connect(close_general_poly, &QCheckBox::toggled, this, &QPolyCreate::finalize);
     l->addWidget(close_general_poly);
 
+    cancel_poly = new QPushButton("Cancel active polygon");
+    cancel_poly->setProperty(
+	"qgTestId", testPrefix + QStringLiteral(".cancel"));
+    cancel_poly->setEnabled(false);
+    QObject::connect(cancel_poly, &QPushButton::released, this,
+	&QPolyCreate::cancel);
+    l->addWidget(cancel_poly);
+
     QGroupBox *defaultBox = new QGroupBox("Settings");
     QVBoxLayout *default_gl = new QVBoxLayout;
     default_gl->setAlignment(Qt::AlignTop);
@@ -223,6 +232,33 @@ QPolyCreate::~QPolyCreate()
 {
 }
 
+void
+QPolyCreate::cancel()
+{
+    void *v = qpolycreate_view(m_ctx);
+    struct ged_view_context *view_ctx = v ? qpolycreate_ged_view(v) : nullptr;
+    ged_view_polygon_ref active = p;
+    if (ged_view_polygon_ref_is_null(active) && pcf)
+	active = pcf->polygon;
+    const bool had_active = !ged_view_polygon_ref_is_null(active);
+    if (view_ctx && had_active)
+	(void)ged_view_polygon_remove(view_ctx, active);
+
+    p = GED_VIEW_POLYGON_REF_NULL;
+    if (pcf) {
+	pcf->polygon = GED_VIEW_POLYGON_REF_NULL;
+	pcf->bool_objs.clear();
+	pcf->changed_objs.clear();
+    }
+    close_general_poly->blockSignals(true);
+    close_general_poly->setChecked(true);
+    close_general_poly->blockSignals(false);
+    close_general_poly->setEnabled(false);
+    cancel_poly->setEnabled(false);
+    if (view_ctx && had_active)
+	emit view_updated(QG_VIEW_REFRESH);
+}
+
 struct ged *
 QPolyCreate::getGed() const
 {
@@ -230,7 +266,7 @@ QPolyCreate::getGed() const
 }
 
 void
-QPolyCreate::finalize(bool)
+QPolyCreate::finalize(bool had_intersections)
 {
     struct ged *gedp = getGed();
     if (!gedp)
@@ -240,15 +276,32 @@ QPolyCreate::finalize(bool)
 	return;
     struct ged_view_context *view_ctx = qpolycreate_ged_view(v);
 
+    // The creation filter applies booleans directly to existing polygons.
+    // Persist every linked target it changed before it releases the temporary
+    // stencil.  This keeps mouse-originated booleans on the same authority
+    // path as command and modify-widget mutations.
+    bool db_changed = false;
+    if (had_intersections) {
+	QgGedEventBatch event_batch(gedp);
+	for (auto target : pcf->changed_objs) {
+	    db_changed = ged_view_polygon_sync_sketch(gedp, view_ctx,
+		target) > 0 || db_changed;
+	}
+    }
+
     close_general_poly->blockSignals(true);
     close_general_poly->setChecked(true);
     close_general_poly->blockSignals(false);
     close_general_poly->setDisabled(true);
+    cancel_poly->setEnabled(false);
 
     // If we're not keeping the polygon due to its being
     // used for previous boolean ops, we're done
-    if (ged_view_polygon_ref_is_null(p))
+    if (ged_view_polygon_ref_is_null(p)) {
+	if (db_changed)
+	    emit view_updated(QG_VIEW_DB);
 	return;
+    }
 
     // If we're keeping the object, there are some housekeeping
     // steps to complete
@@ -275,9 +328,13 @@ QPolyCreate::finalize(bool)
 		QgGedEventBatch event_batch(gedp);
 		sk_dp = ged_view_polygon_export_sketch(view_ctx, gedp->dbip,
 			sk_name, p);
+		if (sk_dp) {
+		    (void)ged_view_polygon_sketch_name_set(view_ctx, p, sk_name);
+		    (void)ged_event_notify_object_added(gedp, sk_name, NULL);
+		}
 	    }
-	    ged_view_polygon_user_data_set(view_ctx, p, (void *)sk_dp);
-	    emit view_updated(QG_VIEW_DB);
+	    if (sk_dp)
+		emit view_updated(QG_VIEW_DB);
 	}
 	bu_free(sk_name, "name cpy");
     }
@@ -288,7 +345,7 @@ QPolyCreate::finalize(bool)
     sketch_sync();
 
     p = GED_VIEW_POLYGON_REF_NULL;
-    emit view_updated(QG_VIEW_REFRESH);
+    emit view_updated(db_changed ? QG_VIEW_DB : QG_VIEW_REFRESH);
 }
 
 void
@@ -453,12 +510,14 @@ QPolyCreate::toggle_line_snapping(bool s)
 {
     void *v = qpolycreate_view(m_ctx);
     qg_polygon_ref co = (cf) ? cf->polygon : GED_VIEW_POLYGON_REF_NULL;
-    if (!v || ged_view_polygon_ref_is_null(co))
+    if (!v)
 	return;
 
     struct bv *view = bv_context_view(static_cast<struct bv_context *>(v));
     bv_snap_source_flags_set(view, BV_SNAP_VIEW);
     if (!s) {
+	ged_view_polygon_snap_exclude_set(qpolycreate_ged_view(v),
+	    GED_VIEW_POLYGON_REF_NULL);
 	bv_snap_lines_set(view, 0);
     } else {
 	ged_view_polygon_snap_exclude_set(qpolycreate_ged_view(v), co);
@@ -548,7 +607,7 @@ QPolyCreate::toplevel_config(bool)
 	return;
 
     if (!ged_view_polygon_ref_is_null(p)) {
-	finalize(true);
+	cancel();
     }
 
     bool draw_change = false;
@@ -582,6 +641,12 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
     if (!display)
 	return false;
 
+    if (e->type() == QEvent::KeyPress &&
+	static_cast<QKeyEvent *>(e)->key() == Qt::Key_Escape) {
+	cancel();
+	return true;
+    }
+
     cf = pcf;
 
     // If we're mid-creation, keep processing the polygon from the last event.
@@ -606,6 +671,9 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
 	if (ged_view_polygon_record_get(qpolycreate_ged_view(v), p, &rec))
 	    cf->ptype = rec.type;
     } else {
+	if (circle_mode->isChecked()) {
+	    cf->ptype = QG_POLYGON_CIRCLE;
+	}
 	if (ellipse_mode->isChecked()) {
 	    cf->ptype = QG_POLYGON_ELLIPSE;
 	}
@@ -666,6 +734,12 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
 
     // Retrieve the polygon ref from the libqtcad data container.
     p = cf->polygon;
+    cancel_poly->setEnabled(!ged_view_polygon_ref_is_null(p));
+    if (ps->line_snapping->isChecked()) {
+	ged_view_polygon_snap_exclude_set(qpolycreate_ged_view(v), p);
+	bv_snap_lines_set(bv_context_view(static_cast<struct bv_context *>(v)),
+	    ged_view_polygon_snap_count(qpolycreate_ged_view(v), p) ? 1 : 0);
+    }
 
     if (cf->ptype == QG_POLYGON_GENERAL) {
 	close_general_poly->setEnabled(true);

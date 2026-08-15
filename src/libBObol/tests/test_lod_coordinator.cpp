@@ -41,6 +41,9 @@ static_assert(std::is_trivially_copyable<BObolLodViewDemandPolicy>::value,
     "view-demand policy must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<BObolLodPresentationPolicy>::value,
     "presentation policy must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<
+    BObolLodViewQualityHistory>::value,
+    "view quality history must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<BObolLodQualityPolicy>::value,
     "quality policy must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<BObolLodPublicationPolicy>::value,
@@ -1808,6 +1811,15 @@ test_quality_policy(void)
 	return 1;
     }
 
+    if (!near(Policy::staticFrameTargetFps(
+	    20.0f, 100000000ULL), 10.0f) ||
+	!near(Policy::staticFrameTargetFps(
+	    5.0f, 100000000ULL), 5.0f) ||
+	!near(Policy::staticFrameTargetFps(20.0f, 0), 20.0f)) {
+	std::fprintf(stderr, "FAIL: static frame deadline cadence\n");
+	return 1;
+    }
+
     /* Exact completed frames admit the finest subpixel tier whose inverse-
      * square work estimate fits both time and scene-cost headroom.  The first
      * pass may move directly to 0.5, take the intermediate 0.75 rung, or
@@ -1833,6 +1845,10 @@ test_quality_policy(void)
 	    1.0f, 100, 200, 20000000ULL, 20.0f, true, true), 0.75f) ||
 	!near(Policy::stablePixelError(
 	    1.0f, 113, 200, 29000000ULL, 20.0f, true, true), 1.0f) ||
+	!near(Policy::stablePixelError(
+	    1.0f, 110, 200, 29000000ULL,
+	    Policy::staticFrameTargetFps(20.0f, 100000000ULL),
+	    true, true), 0.75f) ||
 	!near(Policy::stablePixelError(
 	    1.0f, 100, 400, 10000000ULL, 20.0f, false, true), 1.0f) ||
 	!near(Policy::stablePixelError(
@@ -2477,6 +2493,280 @@ test_presentation_policy(void)
 	std::fabs(restore.pointProxyPixelThreshold - 1.0f) > 0.0001f ||
 	policy.handoffPending()) {
 	std::fprintf(stderr, "FAIL: payload-free presentation reset\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_view_quality_history(void)
+{
+    using History = BObolLodViewQualityHistory;
+    History history;
+    History::RememberInputs input;
+    input.view.haveCamera = 1;
+    input.view.width = 1024;
+    input.view.height = 768;
+    input.view.size = 42.0;
+    input.view.lodScale = 1.0;
+    input.view.curveScale = 1.0;
+    input.view.pointScale = 1.0;
+    input.view.botThreshold = 1;
+    input.view.viewVolumeMatrix[0] = 1.0f;
+    input.view.viewVolumeMatrix[5] = 1.0f;
+    input.view.viewVolumeMatrix[10] = 1.0f;
+    input.view.viewVolumeMatrix[15] = 1.0f;
+    input.domainRevision = 7;
+    input.sceneAvailable = true;
+    input.quality.targetPixelError = 0.5f;
+    input.quality.progressiveCeiling = 12;
+    input.quality.pointProxyPixelThreshold = 1.5f;
+    input.quality.presentedRenderCost = 24000;
+    input.exactCompletedFrame = true;
+    input.terminalPresentationComplete = true;
+    input.producersSettled = true;
+    input.presentationDeadlineMet = true;
+
+    if (!history.remember(input) || history.size() != 1 ||
+	history.rememberCount() != 1 || history.recallCount() != 0) {
+	std::fprintf(stderr, "FAIL: exact view quality was not remembered\n");
+	return 1;
+    }
+
+    History::RecallInputs recall;
+    recall.view = input.view;
+    recall.domainRevision = input.domainRevision;
+    recall.sceneAvailable = true;
+    History::Quality quality;
+    if (!history.recall(recall, quality) ||
+	std::fabs(quality.targetPixelError - 0.5f) > 0.0001f ||
+	quality.progressiveCeiling != 12 ||
+	std::fabs(quality.pointProxyPixelThreshold - 1.5f) > 0.0001f ||
+	quality.presentedRenderCost != 24000 ||
+	quality.provenRenderCostCapacity != 24000 ||
+	history.recallCount() != 1) {
+	std::fprintf(stderr, "FAIL: exact view quality recall\n");
+	return 1;
+    }
+
+    History::RecallInputs mismatch = recall;
+    mismatch.view.width++;
+    if (history.recall(mismatch, quality)) {
+	std::fprintf(stderr, "FAIL: viewport mismatch recalled quality\n");
+	return 1;
+    }
+    mismatch = recall;
+    mismatch.view.viewVolumeMatrix[12] = 1.0f;
+    if (history.recall(mismatch, quality)) {
+	std::fprintf(stderr, "FAIL: camera mismatch recalled quality\n");
+	return 1;
+    }
+    mismatch = recall;
+    mismatch.view.viewVolumeMatrix[1] = -0.0f;
+    if (!history.recall(mismatch, quality)) {
+	std::fprintf(stderr, "FAIL: signed-zero camera missed exact history\n");
+	return 1;
+    }
+    mismatch = recall;
+    mismatch.view.size = std::numeric_limits<double>::quiet_NaN();
+    if (history.recall(mismatch, quality)) {
+	std::fprintf(stderr, "FAIL: nonfinite camera recalled quality\n");
+	return 1;
+    }
+    mismatch = recall;
+    mismatch.domainRevision++;
+    if (history.recall(mismatch, quality)) {
+	std::fprintf(stderr, "FAIL: scene domain mismatch recalled quality\n");
+	return 1;
+    }
+    mismatch = recall;
+    mismatch.resourcePressure = true;
+    if (history.recall(mismatch, quality)) {
+	std::fprintf(stderr, "FAIL: resource pressure recalled quality\n");
+	return 1;
+    }
+
+    /* A preliminary one-pixel frame on a revisit must not erase the richer
+     * proof which that same exact view established earlier. */
+    History::RememberInputs coarse = input;
+    coarse.quality.targetPixelError = 1.0f;
+    coarse.quality.presentedRenderCost = 6000;
+    if (history.remember(coarse) ||
+	!history.recall(recall, quality) ||
+	std::fabs(quality.targetPixelError - 0.5f) > 0.0001f) {
+	std::fprintf(stderr, "FAIL: preliminary frame erased rich history\n");
+	return 1;
+    }
+
+    /* Rendering more total work proves throughput, not visual superiority.
+     * A costly coarse distribution may raise the capacity seed without
+     * replacing the exact view's better fidelity controls. */
+    History::RememberInputs costlyCoarse = input;
+    costlyCoarse.quality.targetPixelError = 1.0f;
+    costlyCoarse.quality.progressiveCeiling = 2;
+    costlyCoarse.quality.pointProxyPixelThreshold = 8.0f;
+    costlyCoarse.quality.presentedRenderCost = 100000;
+    if (history.remember(costlyCoarse) ||
+	!history.recall(recall, quality) ||
+	std::fabs(quality.targetPixelError - 0.5f) > 0.0001f ||
+	quality.progressiveCeiling != 12 ||
+	quality.presentedRenderCost != 24000 ||
+	quality.provenRenderCostCapacity != 100000) {
+	std::fprintf(stderr,
+	    "FAIL: renderer capacity overwrote exact-view fidelity\n");
+	return 1;
+    }
+
+    History::RememberInputs richer = input;
+    richer.quality.targetPixelError = 0.25f;
+    richer.quality.progressiveCeiling = -1;
+    richer.quality.pointProxyPixelThreshold = 1.0f;
+    richer.quality.presentedRenderCost = 48000;
+    if (!history.remember(richer) ||
+	!history.recall(recall, quality) ||
+	std::fabs(quality.targetPixelError - 0.25f) > 0.0001f ||
+	quality.progressiveCeiling != -1 ||
+	quality.provenRenderCostCapacity != 100000) {
+	std::fprintf(stderr, "FAIL: richer exact proof did not replace history\n");
+	return 1;
+    }
+
+    /* The retained allocator's projected-error witness may enrich an
+     * otherwise identical fidelity snapshot without using triangle count as
+     * a visual metric. */
+    History::RememberInputs measured = richer;
+    measured.quality.maximumProjectedErrorPixels = 2.0;
+    measured.quality.presentedRenderCost = 36000;
+    if (!history.remember(measured) ||
+	!history.recall(recall, quality) ||
+	!std::isfinite(quality.maximumProjectedErrorPixels) ||
+	std::fabs(quality.maximumProjectedErrorPixels - 2.0) > 1.0e-9 ||
+	quality.progressiveCeiling != -1 ||
+	quality.provenRenderCostCapacity != 100000) {
+	std::fprintf(stderr,
+	    "FAIL: measured screen-error proof was not retained\n");
+	return 1;
+    }
+
+    /* Once both frames carry directly comparable pixel-error evidence, the
+     * lower observed bound wins even when the global control vectors alone
+     * are incomparable. */
+    History::RememberInputs measuredBetter = measured;
+    measuredBetter.quality.targetPixelError = 0.5f;
+    measuredBetter.quality.progressiveCeiling = 10;
+    measuredBetter.quality.pointProxyPixelThreshold = 1.25f;
+    measuredBetter.quality.maximumProjectedErrorPixels = 0.75;
+    measuredBetter.quality.presentedRenderCost = 40000;
+    if (!history.remember(measuredBetter) ||
+	!history.recall(recall, quality) ||
+	std::fabs(quality.maximumProjectedErrorPixels - 0.75) > 1.0e-9 ||
+	quality.progressiveCeiling != 10 ||
+	quality.presentedRenderCost != 40000 ||
+	quality.provenRenderCostCapacity != 100000) {
+	std::fprintf(stderr,
+	    "FAIL: lower measured projected error was not preferred\n");
+	return 1;
+    }
+
+    History::RememberInputs invalid = input;
+    invalid.exactCompletedFrame = false;
+    if (history.remember(invalid)) {
+	std::fprintf(stderr, "FAIL: inexact frame entered history\n");
+	return 1;
+    }
+    invalid = input;
+    invalid.resourcePressure = true;
+    if (history.remember(invalid)) {
+	std::fprintf(stderr, "FAIL: pressure-limited frame entered history\n");
+	return 1;
+    }
+    invalid = input;
+    invalid.terminalPresentationComplete = false;
+    if (history.remember(invalid)) {
+	std::fprintf(stderr,
+	    "FAIL: structural/failure presentation entered history\n");
+	return 1;
+    }
+    invalid = input;
+    invalid.producersSettled = false;
+    if (history.remember(invalid)) {
+	std::fprintf(stderr,
+	    "FAIL: frame with an unsettled geometry producer entered history\n");
+	return 1;
+    }
+    invalid = input;
+    invalid.presentationDeadlineMet = false;
+    if (history.remember(invalid)) {
+	std::fprintf(stderr, "FAIL: missed frame entered history\n");
+	return 1;
+    }
+    invalid = input;
+    invalid.quality.maximumProjectedErrorPixels =
+	std::numeric_limits<double>::quiet_NaN();
+    if (history.remember(invalid)) {
+	std::fprintf(stderr, "FAIL: invalid pixel-error proof entered history\n");
+	return 1;
+    }
+    invalid = input;
+    invalid.quality.progressiveCeiling =
+	BOBOL_MESH_LOD_CUT_COUNT_MAX;
+    if (history.remember(invalid)) {
+	std::fprintf(stderr, "FAIL: invalid PoP ceiling entered history\n");
+	return 1;
+    }
+
+    /* Quality is multidimensional.  Without a comparable measured error
+     * bound, neither a lower PoP ceiling nor a larger point-proxy threshold
+     * may replace an established fidelity proof. */
+    History::RememberInputs lowerCost = input;
+    lowerCost.quality.progressiveCeiling = 3;
+    lowerCost.quality.pointProxyPixelThreshold = 8.0f;
+    lowerCost.quality.presentedRenderCost = 12000;
+    if (history.remember(lowerCost) || !history.recall(recall, quality) ||
+	quality.presentedRenderCost != 40000 ||
+	quality.progressiveCeiling != 10 ||
+	std::fabs(quality.pointProxyPixelThreshold - 1.25f) > 0.0001f ||
+	quality.provenRenderCostCapacity != 100000) {
+	std::fprintf(stderr, "FAIL: lower-cost frame erased richer proof\n");
+	return 1;
+    }
+
+    /* Fixed-size move-to-front behavior must be deterministic: touching the
+     * oldest entry protects it while the next insertion evicts the true LRU. */
+    history.reset();
+    for (size_t i = 0; i < History::capacity(); ++i) {
+	History::RememberInputs entry = input;
+	entry.view.width = static_cast<int32_t>(100 + i);
+	if (!history.remember(entry)) {
+	    std::fprintf(stderr, "FAIL: view history fill\n");
+	    return 1;
+	}
+    }
+    History::RecallInputs oldest = recall;
+    oldest.view.width = 100;
+    if (!history.recall(oldest, quality)) {
+	std::fprintf(stderr, "FAIL: view history LRU promotion\n");
+	return 1;
+    }
+    History::RememberInputs next = input;
+    next.view.width = 999;
+    if (!history.remember(next) ||
+	history.size() != History::capacity()) {
+	std::fprintf(stderr, "FAIL: bounded view history insertion\n");
+	return 1;
+    }
+    History::RecallInputs evicted = recall;
+    evicted.view.width = 101;
+    if (history.recall(evicted, quality) ||
+	!history.recall(oldest, quality)) {
+	std::fprintf(stderr, "FAIL: view history LRU eviction\n");
+	return 1;
+    }
+
+    history.reset();
+    if (history.size() != 0 || history.rememberCount() != 0 ||
+	history.recallCount() != 0 || history.recall(recall, quality)) {
+	std::fprintf(stderr, "FAIL: view history reset\n");
 	return 1;
     }
     return 0;
@@ -3405,6 +3695,8 @@ main(int argc, char **argv)
     if (test_view_demand_policy())
 	return 1;
     if (test_presentation_policy())
+	return 1;
+    if (test_view_quality_history())
 	return 1;
     if (test_publication_policy())
 	return 1;

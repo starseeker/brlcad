@@ -2,9 +2,9 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CM
 
 set(QGMODEL_SRCS qgmodel.cpp)
 set(QGVIEW_SRCS qgview.cpp)
-set(QSKETCH_SRCS qsketch.cpp)
 set(TEST_QTCAD_PLUGIN_REUSE_SRCS test_qtcad_plugin_reuse.cpp)
 set(TEST_QTCAD_EVENT_PLAYER_SRCS test_qtcad_event_player.cpp)
+set(TEST_QTCAD_PRIMITIVE_EDIT_SRCS test_qtcad_primitive_edit.cpp)
 set(TEST_QTCAD_OBOL_CONTROLLER_SRCS test_qtcad_obol_controller.cpp)
 set(TEST_QTCAD_OBOL_DRAW_SYNC_SRCS test_qtcad_obol_draw_sync.cpp)
 set(TEST_QTCAD_OBOL_EDIT_PREVIEW_SRCS test_qtcad_obol_edit_preview.cpp)
@@ -19,6 +19,21 @@ set(TEST_QTCAD_OBOL_SNAP_SRCS test_qtcad_obol_snap.cpp)
 set(TEST_QTCAD_OBOL_WINDOW_HOST_SRCS test_qtcad_obol_window_host.cpp)
 set(TEST_QGMODEL_MODEL_TESTER_SRCS test_qgmodel_model_tester.cpp)
 set(TEST_QGMODEL_SCALE_SRCS test_qgmodel_scale.cpp)
+
+if(TARGET Qt6::Widgets)
+  add_executable(test_qtcad_primitive_edit ${TEST_QTCAD_PRIMITIVE_EDIT_SRCS})
+  target_link_libraries(test_qtcad_primitive_edit libqtcad libged libwdb librt libbu Qt6::Widgets)
+elseif(TARGET Qt5::Widgets)
+  add_executable(test_qtcad_primitive_edit ${TEST_QTCAD_PRIMITIVE_EDIT_SRCS})
+  target_link_libraries(test_qtcad_primitive_edit libqtcad libged libwdb librt libbu Qt5::Widgets)
+endif()
+if(TARGET test_qtcad_primitive_edit)
+  target_compile_definitions(test_qtcad_primitive_edit PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+  brlcad_add_test(NAME test_qtcad_primitive_edit COMMAND test_qtcad_primitive_edit)
+  set_property(TEST test_qtcad_primitive_edit APPEND PROPERTY ENVIRONMENT
+    BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_primitive_edit APPEND PROPERTY LABELS drawing_baseline)
+endif()
 
 if(TARGET Qt6::Test)
   add_executable(qgmodel qgmodel.cpp)
@@ -558,6 +573,13 @@ if(TARGET test_qtcad_obol_real_models)
       APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
     set_property(TEST test_qtcad_obol_real_models_${_qtcad_real_model_case}
       APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+    # These rows intentionally validate the software/OSMesa endpoint.  Do not
+    # let a developer's graphical DISPLAY leak into Qt/Obol backend discovery;
+    # System-GL behavior has its own explicit graphical matrix.
+    set_property(TEST test_qtcad_obol_real_models_${_qtcad_real_model_case}
+      APPEND PROPERTY ENVIRONMENT DISPLAY=)
+    set_property(TEST test_qtcad_obol_real_models_${_qtcad_real_model_case}
+      APPEND PROPERTY ENVIRONMENT XAUTHORITY=)
     set_property(TEST test_qtcad_obol_real_models_${_qtcad_real_model_case}
       APPEND PROPERTY LABELS drawing_baseline)
   endforeach()
@@ -652,19 +674,6 @@ endforeach()
 
 if(TARGET Qt6::Widgets)
   set(QGMODEL_TEST_DATA_G "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g")
-  # qsketch - standalone .g sketch editing demo
-  # qsketch.cpp defines QSketchEditWindow inline and uses #include "qsketch.moc"
-  # at the bottom, so we need AUTOMOC ON rather than qt6_wrap_cpp.
-  add_executable(qsketch ${QSKETCH_SRCS})
-  set_target_properties(qsketch PROPERTIES AUTOMOC ON)
-  target_link_libraries(
-    qsketch
-    libqtcad
-    librt
-    libbu
-    Qt6::Widgets
-    )
-
   # Phase 8: standalone libqtcad plugin reuse test.
   # Deliberately links only libqtcad + Qt6::Widgets (NOT libged/qged) to
   # prove the plugin framework is host-agnostic.
@@ -746,31 +755,17 @@ if(TARGET Qt5::Widgets AND NOT TARGET Qt6::Widgets)
     BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
   set_property(TEST test_qtcad_event_player APPEND PROPERTY LABELS drawing_baseline)
 
-  add_executable(qsketch ${QSKETCH_SRCS})
-  set_target_properties(qsketch PROPERTIES AUTOMOC ON)
-  target_link_libraries(
-    qsketch
-    libqtcad
-    librt
-    libbu
-    Qt5::Widgets
-    )
 endif(TARGET Qt5::Widgets AND NOT TARGET Qt6::Widgets)
-if(TARGET qsketch)
-  target_compile_definitions(qsketch PRIVATE BRLCADBUILD HAVE_CONFIG_H)
-  install(TARGETS qsketch RUNTIME DESTINATION ${BIN_DIR} LIBRARY DESTINATION ${LIB_DIR} ARCHIVE DESTINATION ${LIB_DIR})
-endif(TARGET qsketch)
 
 # On some platforms distclean has additional cleanup to do
 distclean("${CMAKE_BINARY_DIR}/${BIN_DIR}/qgmodel.pdb")
 distclean("${CMAKE_BINARY_DIR}/${BIN_DIR}/qgview.pdb")
-distclean("${CMAKE_BINARY_DIR}/${BIN_DIR}/qsketch.pdb")
 
 cmakefiles(
   CMakeLists.txt
+  qtcad_obol_nist_matrix.sh
   ${QGMODEL_SRCS}
   ${QGVIEW_SRCS}
-  ${QSKETCH_SRCS}
   ${TEST_QTCAD_OBOL_CONTROLLER_SRCS}
   ${TEST_QTCAD_EVENT_PLAYER_SRCS}
   ${TEST_QTCAD_OBOL_DRAW_SYNC_SRCS}
@@ -783,6 +778,7 @@ cmakefiles(
   ${TEST_QTCAD_OBOL_SELECTION_SYNC_SRCS}
   ${TEST_QTCAD_OBOL_SNAP_SRCS}
   ${TEST_QTCAD_PLUGIN_REUSE_SRCS}
+  ${TEST_QTCAD_PRIMITIVE_EDIT_SRCS}
   ${TEST_QGMODEL_MODEL_TESTER_SRCS}
   )
 

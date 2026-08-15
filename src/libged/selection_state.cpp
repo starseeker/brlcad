@@ -33,6 +33,7 @@
 #include "bu/hash.h"
 #include "bu/path.h"
 #include "bu/vls.h"
+#include "ged/db_index.h"
 #include "ged/draw.h"
 #include "ged/selection.h"
 
@@ -899,11 +900,12 @@ ged_selection_path_is_valid_or_drawn(struct ged *gedp,
     if (!gedp || path.empty())
 	return 0;
 
-    struct db_full_path dfp;
-    db_full_path_init(&dfp);
-    int valid = (db_string_to_path(&dfp, gedp->dbip, path.c_str()) == 0);
-    db_free_full_path(&dfp);
-    if (valid)
+    /* The database index answers speculative path-existence questions without
+     * logging or rebuilding on an ordinary miss.  Selection reconciliation
+     * routinely asks about paths invalidated by erase/remove, so the verbose
+     * db_string_to_path() parser is both noisy and unnecessarily expensive
+     * here. */
+    if (ged_db_index_path_exists(gedp, path.c_str()))
 	return 1;
 
     std::vector<ged_selection_source_record_info> records;
@@ -915,6 +917,26 @@ ged_selection_path_is_valid_or_drawn(struct ged *gedp,
 	    return 1;
     }
     return 0;
+}
+
+
+static int
+ged_selection_native_prune_invalid(struct ged *gedp,
+				   ged_native_selection_set *set)
+{
+    if (!gedp || !set || set->selected_paths.empty())
+	return 0;
+
+    std::vector<std::string> invalid;
+    for (const std::string &path : set->selected_paths) {
+	if (!ged_selection_path_is_valid_or_drawn(gedp, path))
+	    invalid.push_back(path);
+    }
+    for (const std::string &path : invalid)
+	set->selected_paths.erase(path);
+    if (!invalid.empty())
+	ged_selection_native_index_invalidate(set);
+    return invalid.empty() ? 0 : 1;
 }
 
 
@@ -1356,7 +1378,12 @@ ged_selection_recompute(struct ged *gedp, const char *set_name)
 	ged_selection_native_set(state, set_name, 0);
     if (!native_set)
 	return 0;
+    const int changed = ged_selection_native_prune_invalid(gedp, native_set);
     ged_selection_native_index_invalidate(native_set);
+    if (changed) {
+	ged_selection_revision_bump(gedp);
+	ged_selection_dirty_mark(gedp, set_name);
+    }
     return 1;
 }
 
@@ -1367,11 +1394,23 @@ ged_selection_recompute_matching(struct ged *gedp, const char *set_pattern)
     struct ged_selection_state *state = ged_selection_native_state(gedp);
     std::vector<std::string> keys =
 	ged_selection_native_set_keys(state, set_pattern, 0);
+    const int own_batch = state && !state->batch_depth;
+    if (own_batch)
+	(void)ged_selection_batch_begin(gedp);
+    int changed = 0;
     for (const std::string &key : keys) {
 	ged_native_selection_set *native_set =
 	    ged_selection_native_set(state, key.c_str(), 0);
+	if (ged_selection_native_prune_invalid(gedp, native_set)) {
+	    changed = 1;
+	    ged_selection_dirty_mark(gedp, key.c_str());
+	}
 	ged_selection_native_index_invalidate(native_set);
     }
+    if (changed)
+	ged_selection_revision_bump(gedp);
+    if (own_batch)
+	(void)ged_selection_batch_end(gedp);
     return (int)keys.size();
 }
 

@@ -1588,7 +1588,6 @@ static int
 test_factory_endpoint_close_during_frame_request(void)
 {
     FactoryTestState state;
-    state.block_frames = true;
     struct bobol_host_factory factory = factory_test_desc(
 	"endpoint-test-close-during-frame",
 	10, BOBOL_HOST_CAP_PIXEL_PRESENT, &state);
@@ -1615,6 +1614,11 @@ test_factory_endpoint_close_during_frame_request(void)
     CHECK(bobol_display_endpoint_host_open(endpoint,
 	  "endpoint-test-close-during-frame", &desc),
 	  "active-frame endpoint opens its factory host");
+
+    /* Opening a host may synchronously request its first presentation.  Arm
+     * the deliberate block only after that startup contract completes; this
+     * test is about teardown racing a later frame, not deadlocking open. */
+    state.block_frames = true;
 
     std::thread frame_request([controller]() {
 	controller->markProgressiveWorkPending();

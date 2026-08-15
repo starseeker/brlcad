@@ -20,6 +20,7 @@
 #include <Inventor/elements/SoSubElement.h>
 #include <Inventor/nodes/SoGroup.h>
 
+#include <array>
 #include <memory>
 #include <stddef.h>
 #include <string>
@@ -66,6 +67,7 @@ public:
         uint64_t ordinaryPartSuffixUploadBytes = 0;
         uint64_t ordinaryPartGpuCopyBytes = 0;
         uint64_t ordinaryPartLineageReuseCount = 0;
+        uint64_t ordinaryPartLineageReplacementCount = 0;
         uint64_t triangleAtlasFullUploadBytes = 0;
         uint64_t triangleAtlasSuffixUploadBytes = 0;
         uint64_t triangleAtlasLineageReuseCount = 0;
@@ -147,6 +149,9 @@ public:
     typedef std::shared_ptr<ProxyPayload> ProxyPayloadPtr;
 
     struct BOBOL_EXPORT CadPayload {
+	typedef std::array<BObolLodCounts,
+	    BOBOL_MESH_LOD_CUT_COUNT_MAX> ProjectedCutCounts;
+
 	BObolLodMeshPayload mesh;
 	BObolLodProgressiveMeshPtr progressiveMesh;
 	std::shared_ptr<const Obol::PartGeometry> preparedCadGeometry;
@@ -157,6 +162,10 @@ public:
 	SbString sourceIdentity;
 	SbString sourceInstanceKey;
 	SbString sourceBindingKey;
+	/* Validated source-local compact index, or UINT32_MAX for a noncompact
+	 * binding.  This avoids repeated string hashing in 50k/150k retained
+	 * allocation passes without making an index the semantic identity. */
+	uint32_t sourceEntryIndex;
 	SbString cacheIdentity;
 	SbString cacheKey;
 	uint64_t sourceContentHash;
@@ -180,14 +189,30 @@ public:
 	int allocationDrawMode;
 	uint64_t allocationViewRevision;
 	uint64_t allocationPolicyRevision;
+	/* Nonzero values belong to an owner-state allocation transaction.  The
+	 * fields above are visible to consumers only after this serial becomes
+	 * the state's active serial; serial zero is an immediate single-payload
+	 * update used by small/offline paths. */
+	uint64_t allocationPlanSerial;
 	float projectedPixelDiameter;
 	float projectedPixelArea;
 	float projectedPixelPerimeter;
 	SbBool projectedBoundsContained;
 	float targetPixelError;
+	/* A bounded demand window already classifies the spatial ranges visible
+	 * for this occurrence.  Retain that immutable per-cut population only
+	 * when the occurrence straddles the frustum; the quiet scene allocator
+	 * can then consume the exact census without traversing the mesh hierarchy
+	 * again on the owner thread.  Fully contained and unclustered occurrences
+	 * deliberately keep this null and use ordinary whole-prefix counts. */
+	std::shared_ptr<const ProjectedCutCounts> projectedCutCounts;
+	uint64_t projectedCutCountsViewRevision;
+	uint64_t projectedCutCountsPolicyRevision;
+	uint64_t projectedCutCountsMeshRevision;
 	uint64_t residentAdmissionRevision;
 	uint64_t viewRevision;
 	uint64_t policyRevision;
+	uint8_t visualEmphasis;
 	BObolLodCounts counts;
 	SbBox3f bounds;
 	SbBool hasSnappedPoints;
@@ -195,6 +220,10 @@ public:
 	SbBool shadedCullBackfaces;
 	SbBool memoryLimited;
 	SbString diagnostic;
+	/* Non-owning provenance for O(1) validation of metadata-only hot-path
+	 * updates.  A CadPayload is never published independently of its view
+	 * state; raw payload handles have the same lifetime contract. */
+	const BObolViewLodState *ownerState;
 
 	CadPayload(void);
 	SbBool isValid(void) const;
@@ -274,6 +303,19 @@ public:
      * later bounded windows consume it when its epochs and draw mode match. */
     SbBool setCadAllocatedCut(const CadPayload *payload, int allocatedCut,
 	uint64_t viewRevision, uint64_t policyRevision, int drawMode);
+    /** Reserve an unpublished allocation serial for a resumable plan. */
+    uint64_t beginCadAllocationPlan(void);
+    /** Stage one allocation inside an unpublished resumable plan.  Staged
+     * metadata is ignored by presentation consumers until the matching plan
+     * is committed. */
+    SbBool stageCadAllocatedCut(const CadPayload *payload, int allocatedCut,
+	uint64_t viewRevision, uint64_t policyRevision, int drawMode,
+	uint64_t planSerial);
+    /** Atomically expose all payload fields staged with @p planSerial. */
+    SbBool commitCadAllocationPlan(uint64_t planSerial,
+	uint64_t cadRevision, uint64_t residentDemandRevision);
+    /** Serial against which consumers validate staged allocation metadata. */
+    uint64_t activeCadAllocationPlan(void) const;
     /* Remove one view-local display binding while retaining its shared asset.
      * The source occurrence's structural fallback becomes visible again.
      * Used by scene-budget/frustum admission when an insignificant occurrence
@@ -285,6 +327,10 @@ public:
     size_t meshPayloadCount(void) const;
     size_t proxyPayloadCount(int proxyKind = BOBOL_LOD_PROXY_NONE) const;
     size_t cadPayloadCount(void) const;
+    /** Return the number of retained occurrence bindings owned by one source
+     * without copying or walking the source's payload table. */
+    size_t cadPayloadCountForSource(
+	const SoBRLDatabaseSource *source) const;
     size_t cadMeshPayloadCount(void) const;
     size_t cadMeshPayloadCountForSource(
 	const SoBRLDatabaseSource *source) const;
@@ -319,6 +365,8 @@ public:
     size_t activeFaceCount(void) const;
     /* Multi-cost scheduler population in shaded-triangle equivalents. */
     size_t activeRenderCost(void) const;
+    /** O(1) CAD-only portion of activeRenderCost(). */
+    size_t activeCadRenderCost(void) const;
     /* Irreducible retained PoP population in the same weighted units as
      * activeRenderCost().  This is the cost after every currently displayed
      * progressive occurrence has been retargeted to its minimum drawable
@@ -326,6 +374,8 @@ public:
      * from a genuine per-visible-object floor before aggregating objects into
      * point proxies. */
     size_t minimumActiveRenderCost(void) const;
+    /** O(1) CAD-only portion of minimumActiveRenderCost(). */
+    size_t minimumActiveCadRenderCost(void) const;
     /* Actual retained CAD primitive submissions from the most recently
      * completed render.  Returns FALSE when any active CAD presentation did
      * not publish an exact completed-frame work record. */
@@ -439,9 +489,14 @@ public:
 
 private:
     struct CadPresentation {
-	CadPresentation(void) : assembly(NULL), contentKey("") {}
+	CadPresentation(void) : assembly(NULL), contentKey(""), sourceRoutingId(0) {}
 	SoCADAssembly *assembly;
 	SbString contentKey;
+	/* Presentation nodes are reusable across view epochs, but never across
+	 * database-source object lifetimes.  Semantic keys deliberately survive
+	 * erase/redraw for payload reuse, so pointer/revision equality is not a
+	 * sufficient lifetime test. */
+	uint64_t sourceRoutingId;
     };
 
     void clearCadPresentations(void) const;
@@ -553,6 +608,8 @@ private:
 	cadResidentDemandStates;
     std::vector<BObolLodResidentDemand> cadResidentDemands;
     uint64_t cadResidentDemandRevision;
+    uint64_t cadActiveAllocationPlanSerial;
+    uint64_t cadNextAllocationPlanSerial;
     void clearCadPayloadMetrics(void);
     void addCadPayloadMetrics(const CadPayload *payload);
     void removeCadPayloadMetrics(const CadPayload *payload);

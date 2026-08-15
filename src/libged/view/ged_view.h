@@ -53,6 +53,7 @@ extern int _view_cmd_feature(void *bs, int argc, const char **argv);
 extern int _view_cmd_annotation(void *bs, int argc, const char **argv);
 extern int _view_cmd_polygon(void *bs, int argc, const char **argv);
 extern int _view_cmd_db_objects(void *bs, int argc, const char **argv);
+extern int _view_polygon_sync_sketch(struct _ged_view_info *gd);
 
 extern int ged_aet_core(struct ged *gedp, int argc, const char **argv);
 extern int ged_align_core(struct ged *gedp, int argc, const char **argv);

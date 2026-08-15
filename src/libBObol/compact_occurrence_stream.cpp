@@ -16,6 +16,8 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -32,6 +34,12 @@ struct BObolCompactOccurrenceStream::Impl {
     size_t pendingCount = 0;
     std::deque<std::shared_ptr<const BObolStagedSourceMesh>> stagedSources;
     size_t stagedSourceBytes = 0;
+    /* Geometry-free journal used only to create the next warm-start manifest.
+     * The GUI may drain pendingBatches before realization completes, so the
+     * queue itself cannot be the persistence authority. */
+    std::vector<BObolCompactManifestOccurrence> manifestOccurrences;
+    std::unordered_map<std::string, size_t> manifestIndexByPath;
+    bool manifestComplete = false;
     /* A persisted leaf manifest already supplied every leaf AABB and immutable
      * source-mesh request.  The authoritative semantics walk may therefore
      * skip its otherwise redundant full-BoT coverage import pass. */
@@ -118,6 +126,20 @@ BObolCompactOccurrenceStream::~BObolCompactOccurrenceStream(void)
     this->d->stagedSources.clear();
 }
 
+BObolCompactManifestOccurrence::BObolCompactManifestOccurrence(void) :
+    booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION), occurrenceIndex(0),
+    sourceMeshRequestValid(FALSE), meshAssetContentHash(0),
+    meshAssetTessellationAbsTol(0.0), meshAssetTessellationRelTol(0.0),
+    meshAssetTessellationNormTol(0.0), sourceFaceCount(0), sourcePointCount(0),
+    regionId(0), airCode(0), materialId(0), los(0),
+    materialColorValid(FALSE), materialColor(0.0f, 0.0f, 0.0f)
+{
+    localTransform.makeIdentity();
+    bounds.makeEmpty();
+    meshAssetBounds.makeEmpty();
+    meshAssetTransform.makeIdentity();
+}
+
 void
 BObolCompactOccurrenceStream::push(
     const BObolCompactOccurrence &occurrence)
@@ -172,6 +194,102 @@ BObolCompactOccurrenceStream::pushPriority(
     this->d->priority.clear();
     this->d->priorityOffset = 0;
     this->d->priority.push_back(occurrence);
+}
+
+void
+BObolCompactOccurrenceStream::recordManifestOccurrence(
+    const BObolCompactOccurrence &occurrence)
+{
+    if (!occurrence.summary.valid || !occurrence.summary.boundsValid ||
+	occurrence.summary.bounds.isEmpty() ||
+	occurrence.summary.path.getLength() == 0 ||
+	BU_STR_EQUAL(occurrence.summary.recordRole.getString(), "lod-overview"))
+	return;
+
+    BObolCompactManifestOccurrence record;
+    record.path = occurrence.summary.path;
+    record.sourceName = occurrence.summary.sourceName;
+    record.localTransform = occurrence.localTransform;
+    record.bounds = occurrence.summary.bounds;
+    record.booleanOperation = occurrence.booleanOperation;
+    record.occurrenceIndex = occurrence.occurrenceIndex;
+    record.regionId = occurrence.summary.regionId;
+    record.airCode = occurrence.summary.airCode;
+    record.materialId = occurrence.summary.materialId;
+    record.los = occurrence.summary.los;
+    record.materialColorValid = occurrence.summary.materialColorValid;
+    record.materialColor = occurrence.summary.materialColor;
+    record.materialShader = occurrence.summary.materialShader;
+    record.sourceMeshRequestValid = occurrence.sourceMeshRequestValid;
+    if (record.sourceMeshRequestValid) {
+	const BObolSourceMeshRequest &request = occurrence.sourceMeshRequest;
+	record.sourceType = request.sourceType;
+	record.meshAssetPath = request.meshAssetPath.getLength() > 0 ?
+	    request.meshAssetPath : occurrence.summary.path;
+	record.meshAssetName = request.meshAssetName.getLength() > 0 ?
+	    request.meshAssetName : occurrence.summary.sourceName;
+	record.meshAssetContentHash = request.meshAssetContentHash;
+	record.meshAssetTessellationAbsTol =
+	    request.meshAssetTessellationAbsTol;
+	record.meshAssetTessellationRelTol =
+	    request.meshAssetTessellationRelTol;
+	record.meshAssetTessellationNormTol =
+	    request.meshAssetTessellationNormTol;
+	record.meshAssetBounds = !request.meshAssetBounds.isEmpty() ?
+	    request.meshAssetBounds :
+	    (!request.bounds.isEmpty() ? request.bounds : record.bounds);
+	record.meshAssetTransform = request.meshAssetTransform;
+	record.sourceFaceCount = request.faceCount;
+	record.sourcePointCount = request.pointCount;
+    }
+
+    const std::string key = record.path.getString();
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    if (this->d->manifestComplete)
+	return;
+    const auto found = this->d->manifestIndexByPath.find(key);
+    if (found == this->d->manifestIndexByPath.end()) {
+	const size_t index = this->d->manifestOccurrences.size();
+	this->d->manifestOccurrences.push_back(std::move(record));
+	this->d->manifestIndexByPath.emplace(key, index);
+    } else if (found->second < this->d->manifestOccurrences.size()) {
+	this->d->manifestOccurrences[found->second] = std::move(record);
+    }
+}
+
+bool
+BObolCompactOccurrenceStream::sealManifest(size_t expectedCount)
+{
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    bool complete = expectedCount > 0 &&
+	this->d->manifestOccurrences.size() == expectedCount;
+    for (const BObolCompactManifestOccurrence &record :
+	 this->d->manifestOccurrences) {
+	if (!complete)
+	    break;
+	complete = record.path.getLength() > 0 &&
+	    record.sourceName.getLength() > 0 && !record.bounds.isEmpty() &&
+	    record.sourceMeshRequestValid &&
+	    record.meshAssetPath.getLength() > 0 &&
+	    record.meshAssetName.getLength() > 0 &&
+	    !record.meshAssetBounds.isEmpty();
+    }
+    this->d->manifestComplete = complete;
+    return complete;
+}
+
+bool
+BObolCompactOccurrenceStream::takeManifest(
+    std::vector<BObolCompactManifestOccurrence> &occurrences)
+{
+    occurrences.clear();
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    if (!this->d->manifestComplete)
+	return false;
+    occurrences.swap(this->d->manifestOccurrences);
+    this->d->manifestIndexByPath.clear();
+    this->d->manifestComplete = false;
+    return !occurrences.empty();
 }
 
 SbBool

@@ -115,6 +115,8 @@ private:
 	std::hash<Obol::InstanceId>> semantics;
     SbBool compactPresentationInitialized = FALSE;
     const void *compactPresentationIndex = NULL;
+    uint64_t compactPresentationSourceRoutingId = 0;
+    uint64_t compactPresentationPopulationEpoch = 0;
     uint32_t compactPresentationSourceRevision = 0;
     uint32_t compactPresentationInputsRevision = 0;
     uint64_t compactPresentationCadBatchRevision = 0;

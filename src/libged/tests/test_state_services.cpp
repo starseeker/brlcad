@@ -235,8 +235,33 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
     CHECK(all_dp != RT_DIR_NULL, "db_lookup must find all.g");
     if (all_dp) {
 	CHECK(ged_db_index_note_object_change(gedp, all_dp,
-					      GED_DB_INDEX_OBJECT_CHANGED) == 1,
+				      GED_DB_INDEX_OBJECT_CHANGED) == 1,
 	      "note_object_change must accept known objects");
+	/* A queued notification is both an index-dirty bit and an unconsumed
+	 * client notification.  The first query may reconcile the index, but the
+	 * retained notification must not make every nested query rebuild it and
+	 * invalidate an earlier result's borrowed name. */
+	struct ged_db_index_child pending_box = {};
+	for (size_t row = 0; row < allg_rec.child_count; row++) {
+	    struct ged_db_index_child child = {};
+	    if (ged_db_index_child_at(gedp, allg_id, row, &child) &&
+		child.record.dp && child.record.dp->d_namep &&
+		BU_STR_EQUAL(child.record.dp->d_namep, "box.r")) {
+		pending_box = child;
+		break;
+	    }
+	}
+	CHECK(pending_box.record.name != NULL,
+	      "dirty-index query must resolve box.r before flags are consumed");
+	std::string pending_box_name = pending_box.record.name ?
+	    pending_box.record.name : "";
+	(void)ged_db_index_child_count(gedp, pending_box.record.id);
+	struct ged_db_index_child pending_box_leaf = {};
+	(void)ged_db_index_child_at(gedp, pending_box.record.id, 0,
+				    &pending_box_leaf);
+	CHECK(pending_box.record.name &&
+	      pending_box_name == pending_box.record.name,
+	      "nested dirty-index queries must not invalidate borrowed record names");
 	CHECK((ged_db_index_refresh_flags(gedp) &
 	       GED_DB_INDEX_REFRESH_DB_CHANGE) != 0,
 	      "refresh_flags must report queued DB changes");
@@ -5363,6 +5388,13 @@ test_events(struct ged *gedp)
     CHECK(ged_event_observer_remove(gedp, comb_add_post_token) == 1,
 	  "comb add observer removal must succeed");
 
+    std::string removed_selection_path = std::string("all.g/") +
+	comb_event_child;
+    CHECK(ged_selection_select_path(gedp, NULL,
+	removed_selection_path.c_str(), 0) == 1 &&
+	ged_selection_count(gedp, NULL) == 1,
+	"remove child fixture path must be selected before removal");
+
     event_order_observer remove_child_post;
     ged_event_observer_token remove_child_post_token =
 	ged_event_observer_add(gedp, GED_EVENT_OBSERVER_POST_RECONCILE,
@@ -5386,6 +5418,8 @@ test_events(struct ged *gedp)
 		    remove_child_post.all_kinds.end(),
 		    GED_EVENT_OBJECT_MODIFIED) == remove_child_post.all_kinds.end(),
 	  "remove command comb-instance semantic event must cover librt fallback");
+    CHECK(ged_selection_count(gedp, NULL) == 0,
+	  "comb-instance removal must prune the now-invalid selected path");
     CHECK(ged_event_observer_remove(gedp, remove_child_post_token) == 1,
 	  "remove child observer removal must succeed");
 
