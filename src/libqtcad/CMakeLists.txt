@@ -39,7 +39,6 @@ add_subdirectory(images)
 set(
   qtcad_srcs
   QgCanvasInput.cpp
-  QgAccordion.cpp
   QgAppExecDialog.cpp
   QgAttributesModel.cpp
   QgColorRGB.cpp

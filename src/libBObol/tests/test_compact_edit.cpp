@@ -13,6 +13,7 @@
 #include "BObol/BVListShape.h"
 #include "Obol/cad/SoCADAssembly.h"
 #include "bu/app.h"
+#include "bu/str.h"
 
 #include <Inventor/nodes/SoGroup.h>
 
@@ -139,6 +140,33 @@ main(int argc, char **argv)
 	FAIL("compact occurrence setup should succeed");
     }
 
+    BObolCompactInstanceHandle pathHandle;
+    BObolCompactInstanceSummary pathSummary;
+    if (!source->getCompactInstanceForPath("assembly.g/part.s", FALSE,
+	    TRUE, pathHandle, pathSummary) || !pathSummary.valid ||
+	!BU_STR_EQUAL(pathSummary.path.getString(), "assembly.g/part.s") ||
+	source->getCompactInstanceForPath("assembly.g/missing.s", FALSE,
+	    TRUE, pathHandle, pathSummary)) {
+	source->unref();
+	FAIL("compact semantic paths should resolve without materialization");
+    }
+
+    SoGroup *sceneRoot = new SoGroup;
+    sceneRoot->ref();
+    sceneRoot->addChild(source);
+    BObolSceneController scene(sceneRoot);
+    BObolSceneTreeSummary treeSummary;
+    if (!scene.getSceneTreeSummaryForPath("assembly.g/part.s",
+	    treeSummary) || !treeSummary.valid ||
+	!treeSummary.isDatabaseSource ||
+	!BU_STR_EQUAL(treeSummary.path.getString(), "assembly.g/part.s") ||
+	!BU_STR_EQUAL(treeSummary.ownerSourcePath.getString(), "assembly.g") ||
+	treeSummary.ownerSourceInstanceKey.getLength() == 0) {
+	sceneRoot->unref();
+	source->unref();
+	FAIL("scene paths should address compact occurrences without leaf nodes");
+    }
+
     if (count_nodes_of_type(source, SoBRLVListShape::getClassTypeId()) != 0 ||
 	count_nodes_of_type(source, SoBRLMeshShape::getClassTypeId()) != 0) {
 	source->unref();
@@ -149,6 +177,20 @@ main(int argc, char **argv)
     if (!source->getCompactInstanceHandle(0, compact)) {
 	source->unref();
 	FAIL("streamed selected compact occurrence should have a handle");
+    }
+
+    BObolCompactInstanceSummary visibilitySummary;
+    if (source->setCompactInstanceVisibilityOverrideForPathMatch(
+	    "/assembly.g/part.s", BOBOL_COMPACT_PATH_EXACT, FALSE) <= 0 ||
+	!source->getCompactInstanceSummary(compact, visibilitySummary) ||
+	visibilitySummary.visible ||
+	source->setCompactInstanceVisibilityOverrideForPathMatch(
+	    "assembly.g/part.s", BOBOL_COMPACT_PATH_EXACT, TRUE) <= 0 ||
+	!source->getCompactInstanceSummary(compact, visibilitySummary) ||
+	!visibilitySummary.visible) {
+	sceneRoot->unref();
+	source->unref();
+	FAIL("compact presentation paths should normalize leading slashes");
     }
 
     BObolCompactInstanceSummary before;
@@ -260,6 +302,7 @@ main(int argc, char **argv)
 	FAIL("demotion should retain compact identity, appearance, placement, selection, and LoD");
     }
 
+    sceneRoot->unref();
     source->unref();
     return 0;
 }

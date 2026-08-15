@@ -60,6 +60,8 @@ mged_edit_preview_name(struct bu_vls *name, const char *source_path)
 {
     if (!name)
 	return;
+    while (source_path && *source_path == '/')
+	source_path++;
     bu_vls_sprintf(name, "%s%s", MGED_EDIT_PREVIEW_PREFIX,
 	    source_path ? source_path : "");
 }
@@ -239,33 +241,48 @@ mged_edit_preview_clear_all(struct mged_state *s, const char *name)
  * 0 OK
  */
 int
+replot_original_path(struct mged_state *s, const char *source_path,
+    enum ged_scene_draw_mode mode)
+{
+    if (!s || s->dbip == DBI_NULL || !source_path || !source_path[0])
+	return 0;
+
+    struct bu_vls feature_name = BU_VLS_INIT_ZERO;
+    mged_edit_preview_name(&feature_name, source_path);
+    (void)mged_edit_preview_clear_all(s, bu_vls_cstr(&feature_name));
+
+    /* The path was visible when its edit scope was acquired.  Restore that
+     * semantic state unconditionally: a visible-only traversal may already
+     * have missed the hidden occurrence, and another callback may have
+     * removed the preview before this scope-level restoration runs. */
+    struct ged_scene_path_request request;
+    ged_scene_path_request_init(&request);
+    request.path = source_path;
+    request.draw_mode = mode;
+    (void)ged_scene_visibility_set(s->gedp, &request, 1, NULL);
+
+    bu_vls_free(&feature_name);
+    return 0;
+}
+
+
+int
 replot_original_solid(struct mged_state *s, ged_scene_occurrence_ref ref)
 {
-    if (s->dbip == DBI_NULL)
+    if (!s || s->dbip == DBI_NULL)
 	return 0;
 
     struct ged_scene_occurrence_info rec;
-    if (!ged_scene_occurrence_get(s->gedp, ref, &rec))
-	return 0;
-    if (!rec.fullpath || rec.fullpath->fp_len <= 0)
+    if (!ged_scene_occurrence_get(s->gedp, ref, &rec) ||
+	!rec.fullpath || rec.fullpath->fp_len <= 0)
 	return 0;
     char *source_path = db_path_to_string(rec.fullpath);
     if (!source_path)
 	return -1;
-
-    struct bu_vls feature_name = BU_VLS_INIT_ZERO;
-    mged_edit_preview_name(&feature_name, source_path);
-    if (mged_edit_preview_clear_all(s, bu_vls_cstr(&feature_name))) {
-	struct ged_scene_path_request request;
-	ged_scene_path_request_init(&request);
-	request.path = source_path;
-	request.draw_mode = (enum ged_scene_draw_mode)rec.draw_mode;
-	(void)ged_scene_visibility_set(s->gedp, &request, 1, NULL);
-    }
-
-    bu_vls_free(&feature_name);
+    const int ret = replot_original_path(s, source_path,
+	(enum ged_scene_draw_mode)rec.draw_mode);
     bu_free(source_path, "MGED edit-preview source path");
-    return 0;
+    return ret;
 }
 
 

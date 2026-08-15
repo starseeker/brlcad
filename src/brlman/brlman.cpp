@@ -51,7 +51,7 @@
 #include <QTextBrowser>
 #include <QSplitter>
 #include <QDialogButtonBox>
-#include "qtcad/QgAccordion.h"
+#include <QToolBox>
 #endif
 
 #include "bu/app.h"
@@ -854,7 +854,7 @@ class ManViewer : public QDialog
 
     private:
 	struct bu_vls mlang = BU_VLS_INIT_ZERO;
-	QgAccordion *lists;
+	QToolBox *lists;
 	QTextBrowser *browser;
 	QDialogButtonBox *buttons;
 };
@@ -923,52 +923,48 @@ ManViewer::ManViewer(QWidget *pparent, const char *man_name, char man_section, c
     connect(buttons, &QDialogButtonBox::accepted, this, &ManViewer::accept);
 
     QSplitter *s = new QSplitter(Qt::Horizontal, this);
-    lists = new QgAccordion();
+    lists = new QToolBox(s);
     s->addWidget(lists);
 
     l1 = new QListWidget(this);
     list_man_files(l1, bu_vls_cstr(&mlang), '1', 1);
     l1->setSizeAdjustPolicy(QListWidget::AdjustToContents);
-    QgAccordionObject *a1 = new QgAccordionObject(lists, l1, "Programs (man1)");
-    lists->addObject(a1);
+    const int man1_index = lists->addItem(l1, "Programs (man1)");
     QObject::connect(l1, &QListWidget::currentItemChanged, this, &ManViewer::do_man1);
 
     l3 = new QListWidget(this);
     list_man_files(l3, bu_vls_cstr(&mlang), '3', 1);
     l3->setSizeAdjustPolicy(QListWidget::AdjustToContents);
-    QgAccordionObject *a3 = new QgAccordionObject(lists, l3, "Libraries (man3)");
-    lists->addObject(a3);
+    const int man3_index = lists->addItem(l3, "Libraries (man3)");
     QObject::connect(l3, &QListWidget::currentItemChanged, this, &ManViewer::do_man3);
 
     l5 = new QListWidget(this);
     list_man_files(l5, bu_vls_cstr(&mlang), '5', 1);
     l5->setSizeAdjustPolicy(QListWidget::AdjustToContents);
-    QgAccordionObject *a5 = new QgAccordionObject(lists, l5, "Conventions (man5)");
-    lists->addObject(a5);
+    const int man5_index = lists->addItem(l5, "Conventions (man5)");
     QObject::connect(l5, &QListWidget::currentItemChanged, this, &ManViewer::do_man5);
 
     ln = new QListWidget(this);
     list_man_files(ln, bu_vls_cstr(&mlang), 'n', 1);
     ln->setSizeAdjustPolicy(QListWidget::AdjustToContents);
-    QgAccordionObject *an = new QgAccordionObject(lists, ln, "GED (mann)");
-    lists->addObject(an);
+    const int mann_index = lists->addItem(ln, "GED (mann)");
     QObject::connect(ln, &QListWidget::currentItemChanged, this, &ManViewer::do_mann);
 
     switch (man_section) {
 	case '1':
-	    emit a1->select(a1);
+	    lists->setCurrentIndex(man1_index);
 	    break;
 	case '3':
-	    emit a3->select(a3);
+	    lists->setCurrentIndex(man3_index);
 	    break;
 	case '5':
-	    emit a5->select(a5);
+	    lists->setCurrentIndex(man5_index);
 	    break;
 	case 'n':
-	    emit an->select(an);
+	    lists->setCurrentIndex(mann_index);
 	    break;
 	default:
-	    emit a1->select(a1);
+	    lists->setCurrentIndex(man1_index);
 	    break;
     }
 

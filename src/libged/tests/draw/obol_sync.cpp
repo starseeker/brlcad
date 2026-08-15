@@ -2523,6 +2523,56 @@ exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
 	FAIL("broad source adoption should preserve semantic selection visuals");
     }
 
+    /* Compact roots do not manufacture one libged record per leaf.  A client
+     * that genuinely needs an addressable occurrence (MGED sed/oed, for
+     * example) must nevertheless resolve an exact or first-descendant path
+     * without expanding siblings or duplicating the retained source. */
+    struct ged_scene_path_request occurrence_request;
+    ged_scene_path_request_init(&occurrence_request);
+    occurrence_request.view = ged_view_active_ctx(gedp);
+    occurrence_request.path = nested_target;
+    occurrence_request.match = GED_SCENE_PATH_MATCH_EXACT;
+    ged_scene_occurrence_ref exact_occurrence =
+	ged_scene_occurrence_resolve(gedp, &occurrence_request);
+    struct ged_scene_occurrence_info occurrence_info;
+    if (ged_scene_occurrence_ref_is_null(exact_occurrence) ||
+	!ged_scene_occurrence_get(gedp, exact_occurrence, &occurrence_info) ||
+	!occurrence_info.fullpath || scene->getDatabaseSourceCount() != 1)
+	FAIL("exact compact occurrence resolution should retain one owning source");
+    char *resolved_occurrence_path = db_path_to_string(
+	(struct db_full_path *)occurrence_info.fullpath);
+    if (!resolved_occurrence_path ||
+	!BU_STR_EQUAL(resolved_occurrence_path, nested_target)) {
+	if (resolved_occurrence_path)
+	    bu_free(resolved_occurrence_path, "resolved compact occurrence path");
+	FAIL("exact compact occurrence resolution should preserve semantic path identity");
+    }
+    bu_free(resolved_occurrence_path, "resolved compact occurrence path");
+
+    occurrence_request.path = "nested_parent.c/nested_child.c";
+    occurrence_request.match = GED_SCENE_PATH_MATCH_SUBTREE;
+    ged_scene_occurrence_ref descendant_occurrence =
+	ged_scene_occurrence_resolve(gedp, &occurrence_request);
+    if (ged_scene_occurrence_ref_is_null(descendant_occurrence) ||
+	!ged_scene_occurrence_get(gedp, descendant_occurrence,
+	    &occurrence_info) || !occurrence_info.fullpath)
+	FAIL("compact subtree occurrence resolution should find one visible descendant");
+    resolved_occurrence_path = db_path_to_string(
+	(struct db_full_path *)occurrence_info.fullpath);
+    if (!resolved_occurrence_path ||
+	!BU_STR_EQUAL(resolved_occurrence_path, nested_target)) {
+	if (resolved_occurrence_path)
+	    bu_free(resolved_occurrence_path, "resolved compact subtree path");
+	FAIL("compact subtree occurrence resolution should use deterministic scene order");
+    }
+    bu_free(resolved_occurrence_path, "resolved compact subtree path");
+
+    occurrence_request.path = "nested_parent.c/missing.s";
+    occurrence_request.match = GED_SCENE_PATH_MATCH_EXACT;
+    if (!ged_scene_occurrence_ref_is_null(
+	    ged_scene_occurrence_resolve(gedp, &occurrence_request)))
+	FAIL("missing compact semantic paths must not create occurrence records");
+
     if (frontier_draw_one(gedp, nested_target) != BRLCAD_OK ||
 	scene->getDatabaseSourceCount() != 1 ||
 	!source_for_path(scene, nested_root))

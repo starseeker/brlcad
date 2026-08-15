@@ -1,6 +1,5 @@
 set(
   qtcad_headers
-  QgAccordion.h
   QgAppExecDialog.h
   QgAttributesModel.h
   QgCanvasBase.h

@@ -166,6 +166,25 @@ mged_edit_scope_acquire(struct mged_state *s,
     bu_free(path, "MGED edit scope path");
     if (status == GED_SCENE_OK &&
 	!ged_scene_edit_scope_ref_is_null(scope)) {
+	/* Compact retained roots intentionally avoid manufacturing one scene
+	 * record per leaf.  MGED's rt_edit bridge still needs an occurrence ref
+	 * for the primitive being edited, so resolve only the paths owned by this
+	 * semantic edit scope.  This does not expand the root or duplicate its
+	 * geometry; the resulting record remains backed by the compact source. */
+	const size_t path_count = ged_scene_result_path_count(result);
+	for (size_t i = 0; i < path_count; i++) {
+	    const char *edit_path = ged_scene_result_path_at(result, i);
+	    if (!edit_path || !edit_path[0])
+		continue;
+	    struct ged_scene_path_request occurrence_request;
+	    ged_scene_path_request_init(&occurrence_request);
+	    occurrence_request.view = request.view;
+	    occurrence_request.path = edit_path;
+	    occurrence_request.draw_mode = request.draw_mode;
+	    occurrence_request.match = GED_SCENE_PATH_MATCH_EXACT;
+	    (void)ged_scene_occurrence_resolve(s->gedp,
+		&occurrence_request);
+	}
 	s->edit_scope.ref = scope;
 	s->edit_scope.active = 1;
 	mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
@@ -194,6 +213,15 @@ mged_edit_scope_release(struct mged_state *s,
     struct ged_scene_result *result = ged_scene_result_create();
     enum ged_scene_status status = ged_scene_edit_release(s->gedp, ref,
 	outcome, result);
+    if (status == GED_SCENE_OK) {
+	const size_t path_count = ged_scene_result_path_count(result);
+	for (size_t i = 0; i < path_count; i++) {
+	    const char *edit_path = ged_scene_result_path_at(result, i);
+	    if (edit_path && edit_path[0])
+		(void)replot_original_path(s, edit_path,
+		    ged_scene_default_draw_mode(s->gedp));
+	}
+    }
     if (status != GED_SCENE_OK && ged_scene_result_diagnostic(result)[0])
 	Tcl_AppendResult(s->interp, ged_scene_result_diagnostic(result), "\n",
 	    (char *)NULL);

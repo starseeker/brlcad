@@ -746,7 +746,6 @@ be_accept(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	(void)ged_scene_highlights_clear(s->gedp, NULL);
 
 	mged_highlight_clear(s);
-	mged_color_soltab(s);
 	(void)chg_state(s, ST_S_EDIT, ST_VIEW, "Edit Accept");
     }  else if (s->global_editing_state == ST_O_EDIT) {
 	/* Accept an object edit */
@@ -759,7 +758,6 @@ be_accept(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	mmenu_set_all(s, MENU_L2, NULL);
 
 	mged_highlight_clear(s);
-	mged_color_soltab(s);
 	(void)chg_state(s, ST_O_EDIT, ST_VIEW, "Edit Accept");
     } else {
 	if (not_state(s, ST_S_EDIT, "Edit Accept"))
@@ -835,7 +833,6 @@ be_reject(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
     /* Clear illumination flags */
     (void)ged_scene_highlights_clear(s->gedp, NULL);
 
-    mged_color_soltab(s);
     (void)chg_state(s, s->global_editing_state, ST_VIEW, "Edit Reject");
 
     for (size_t i = 0; i < BU_PTBL_LEN(&active_display_set); i++) {

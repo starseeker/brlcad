@@ -952,6 +952,123 @@ ged_scene_occurrence_candidate_resolve(
 }
 
 
+static std::string
+ged_scene_normalized_path(const char *path)
+{
+    if (!path)
+	return std::string();
+    while (*path == '/')
+	path++;
+    std::string normalized(path);
+    while (!normalized.empty() && normalized.back() == '/')
+	normalized.pop_back();
+    return normalized;
+}
+
+
+static bool
+ged_scene_occurrence_path_matches(const char *candidate, const char *target,
+	bool include_descendants)
+{
+    const std::string candidate_path = ged_scene_normalized_path(candidate);
+    const std::string target_path = ged_scene_normalized_path(target);
+    if (candidate_path.empty() || target_path.empty())
+	return false;
+    if (candidate_path == target_path)
+	return true;
+    return include_descendants &&
+	candidate_path.size() > target_path.size() &&
+	candidate_path.compare(0, target_path.size(), target_path) == 0 &&
+	candidate_path[target_path.size()] == '/';
+}
+
+
+struct ged_scene_occurrence_resolve_context {
+    struct ged_scene_path_request request;
+    int draw_mode;
+    ged_scene_occurrence_ref result;
+};
+
+
+static int
+ged_scene_occurrence_resolve_cb(
+    const struct ged_scene_occurrence_info *occurrence, void *client_data)
+{
+    struct ged_scene_occurrence_resolve_context *context =
+	static_cast<struct ged_scene_occurrence_resolve_context *>(client_data);
+    if (!context || !occurrence ||
+	!ged_scene_occurrence_ref_is_null(context->result))
+	return 1;
+    if (!occurrence->visible)
+	return 0;
+    if (context->request.view && occurrence->view != context->request.view)
+	return 0;
+    if (static_cast<int>(occurrence->draw_mode) != context->draw_mode)
+	return 0;
+
+    char *fullpath = occurrence->fullpath ?
+	db_path_to_string(
+	    const_cast<struct db_full_path *>(occurrence->fullpath)) : NULL;
+    const char *candidate = fullpath ? fullpath : occurrence->path;
+    const bool matched = ged_scene_occurrence_path_matches(candidate,
+	context->request.path,
+	context->request.match == GED_SCENE_PATH_MATCH_SUBTREE);
+    if (fullpath)
+	bu_free(fullpath, "semantic occurrence resolution path");
+    if (!matched)
+	return 0;
+
+    context->result = occurrence->ref;
+    return 1;
+}
+
+
+extern "C" ged_scene_occurrence_ref
+ged_scene_occurrence_resolve(struct ged *gedp,
+	const struct ged_scene_path_request *request)
+{
+    if (!gedp || !request || !request->path || !request->path[0] ||
+	(request->match != GED_SCENE_PATH_MATCH_EXACT &&
+	 request->match != GED_SCENE_PATH_MATCH_SUBTREE))
+	return GED_SCENE_OCCURRENCE_REF_NULL;
+
+    struct ged_draw_obol_scene_context_info info;
+    memset(&info, 0, sizeof(info));
+    const int draw_mode = request->draw_mode == GED_SCENE_DRAW_DEFAULT ?
+	ged_draw_default_mode(gedp) :
+	ged_scene_draw_mode_internal(gedp, request->draw_mode);
+    if (draw_mode < 0)
+	return GED_SCENE_OCCURRENCE_REF_NULL;
+
+    /* The compact registry owns current visibility and deterministic order.
+     * Resolve it before any older materialized record that may still exist
+     * after an interactive promotion. */
+    if (ged_draw_obol_scene_context_info_for_path_match(gedp,
+	    request->view, draw_mode, request->path,
+	    request->match == GED_SCENE_PATH_MATCH_SUBTREE, &info)) {
+	struct ged_scene_occurrence_candidate candidate;
+	candidate.path = info.path;
+	candidate.instance_key = info.instance_key;
+	candidate.draw_mode = static_cast<enum ged_scene_draw_mode>(draw_mode);
+	ged_scene_occurrence_ref resolved =
+	    ged_scene_occurrence_candidate_resolve(gedp, &candidate);
+	ged_draw_obol_scene_context_info_free(&info);
+	if (!ged_scene_occurrence_ref_is_null(resolved))
+	    return resolved;
+    }
+
+    /* Eager and non-compact draws already have addressable occurrences. */
+    struct ged_scene_occurrence_resolve_context context = {
+	*request, draw_mode, GED_SCENE_OCCURRENCE_REF_NULL
+    };
+    (void)ged_scene_occurrences_visit(gedp,
+	ged_scene_occurrence_resolve_cb, &context);
+    if (!ged_scene_occurrence_ref_is_null(context.result))
+	return context.result;
+    return GED_SCENE_OCCURRENCE_REF_NULL;
+}
+
+
 extern "C" int
 ged_scene_occurrence_get(struct ged *gedp,
 	ged_scene_occurrence_ref occurrence,

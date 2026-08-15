@@ -445,6 +445,40 @@ main(int argc, char **argv)
 	    headless_ball.summary.transparency);
 	FAIL("delayed endpoint snapshot should preserve compact highlight and opacity");
     }
+
+    /* Addressing one compact occurrence must remain available to editing and
+     * picking clients without realizing sibling scene records. */
+    struct ged_scene_path_request occurrence_request;
+    ged_scene_path_request_init(&occurrence_request);
+    occurrence_request.view = headless_view;
+    occurrence_request.path = "pair.c/ball.s";
+    occurrence_request.match = GED_SCENE_PATH_MATCH_EXACT;
+    ged_scene_occurrence_ref occurrence = ged_scene_occurrence_resolve(gedp,
+	&occurrence_request);
+    struct ged_scene_occurrence_info occurrence_info;
+    if (ged_scene_occurrence_ref_is_null(occurrence) ||
+	!ged_scene_occurrence_get(gedp, occurrence, &occurrence_info) ||
+	!occurrence_info.path ||
+	!BU_STR_EQUAL(test_skip_leading_slash(occurrence_info.path),
+	    "pair.c/ball.s") || render_source_count(controller) != 1)
+	FAIL("exact compact occurrence resolution should retain one source and one semantic path");
+
+    occurrence_request.path = "pair.c";
+    occurrence_request.match = GED_SCENE_PATH_MATCH_SUBTREE;
+    occurrence = ged_scene_occurrence_resolve(gedp, &occurrence_request);
+    if (ged_scene_occurrence_ref_is_null(occurrence) ||
+	!ged_scene_occurrence_get(gedp, occurrence, &occurrence_info) ||
+	!occurrence_info.path ||
+	!BU_STR_EQUAL(test_skip_leading_slash(occurrence_info.path),
+	    "pair.c/ball.s"))
+	FAIL("compact subtree occurrence resolution should skip hidden children in deterministic order");
+
+    occurrence_request.path = "pair.c/missing.s";
+    occurrence_request.match = GED_SCENE_PATH_MATCH_EXACT;
+    if (!ged_scene_occurrence_ref_is_null(
+	    ged_scene_occurrence_resolve(gedp, &occurrence_request)))
+	FAIL("missing compact paths must not manufacture occurrence records");
+
     ged_scene_path_request_init(&headless_path);
     headless_path.view = headless_view;
     headless_path.path = "pair.c/ball.s";

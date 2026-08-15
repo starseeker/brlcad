@@ -47,7 +47,6 @@ new file, place it in the category that best matches its responsibility.
                          through that same GED session
 
 * General-purpose Qt widgets
-    `QgAccordion`       - vertical stack of collapsing panels
     `QgToolPalette`     - palette of icon-buttons that toggle docked control
                           widgets (`QgToolPaletteElement` / `QgToolPaletteButton`)
     `QgFlowLayout`      - flow layout (from Qt examples; BSD-licensed)
@@ -95,8 +94,9 @@ Briefly:
    `view_changed`, to avoid loops.
 
 The `flags` parameter is currently a bitmask of the `QG_VIEW_*` `#define`s in
-`QgSignalFlags.h`.  A future cleanup will replace it with a `Q_FLAG`-decorated
-`enum class`.
+`QgSignalFlags.h`.  The public signal type is the `Q_FLAG`-decorated
+`QgViewUpdateFlags` declared by `QgTypes.h`; `QgSignalFlags.h` documents the
+application-level fan-out convention and includes the canonical types.
 
 Threading model
 ---------------
@@ -126,31 +126,42 @@ Inside the BRL-CAD tree libqtcad is consumed by:
   end-to-end)
 
 Historical `qgmodel` and `qgview` demonstration executables were removed once
-their useful behavior was covered by qged and deterministic regression tests.
-Test-only executables are not installed as end-user commands.
+their useful behavior was covered by qged/tests.  The old `QgAccordion` helper
+was removed after its sole consumer, brlman, moved to Qt's maintained
+`QToolBox`.  Test-only executables are retained as regression coverage but are
+not installed as end-user commands.
 
 `archer` and `libtclcad` do not currently depend on libqtcad.
 
-Modernization plan
-------------------
+Retention rule
+--------------
 
-The library is the subject of a longer-running modernization effort tracked
-in the project plan that originally introduced this README.  Subsequent PRs
-will progressively:
+A public libqtcad class must have either a production consumer or a focused,
+documented reusable contract that is exercised by a regression test.  A test
+executable is not an application demo and remains build-only.  Experimental
+front ends, duplicate state adapters, and convenience widgets superseded by Qt
+or by the `QgSession` / `QgPrimitiveEdit` / `QgViewFilter` contracts should be
+removed instead of preserved behind compatibility wrappers.  There is no
+libqtcad ABI or API compatibility requirement for such obsolete experiments.
 
-* tighten encapsulation (move public data behind accessors; adopt the pimpl
-  idiom for the heaviest classes)
-* unify the `QgGL` / `QgSW` duplication behind a common `QgCanvasBase`
-* unify the polygon / select / measure filter hierarchies behind a common
-  `QgViewFilter` base
-* replace the `unsigned long long` view-flag signals with a `Q_FLAG`
-  `enum class`
-* introduce a `QgSession` abstraction so the models no longer talk directly
-  to `struct ged` / `struct db_i`
-* wrap the public API in a `qtcad::` namespace
-* expand the test suite to use `QSignalSpy` / `QAbstractItemModelTester`
+In particular, `QgSketchEdit` is not a demonstration widget: it is qged's
+production, renderer-neutral sketch topology and coordinate adapter.  It must
+remain independent of the qged-specific retained manipulator so command-line,
+Qt, and scene input all update the same GED edit session.
 
-Each phase is intended to land independently while keeping `libqtcad`, `qged`,
-and relevant application consumers building.  Normal qtcad canvas presentation
-is Obol-only; legacy display-manager plugins are compatibility debt rather than
-the primary qtcad rendering path.
+Current architecture and remaining cleanup
+------------------------------------------
+
+The canvas, interaction, flag, and session migrations are active code, not
+future plans: `QgCanvasBase` unifies the System-GL/software canvases,
+`QgViewFilter` is the common interaction base, `QgViewUpdateFlags` is typed,
+and `QgSession` owns application GED state.  New work should extend these
+contracts instead of introducing parallel helpers or standalone demonstration
+programs.
+
+Remaining cleanup is deliberately evidence-driven: tighten encapsulation of
+the heaviest models, reduce direct `struct ged`/`struct db_i` use where a
+`QgSession` contract is sufficient, and expand `QSignalSpy` and
+`QAbstractItemModelTester` coverage.  A namespace migration is worthwhile only
+as one coherent source-tree change; there is no ABI compatibility requirement
+for obsolete libqtcad experiments.  Normal canvas presentation is Obol-only.

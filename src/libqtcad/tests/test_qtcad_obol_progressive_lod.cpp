@@ -1873,16 +1873,17 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		/* A hidden software canvas has no automatic paint delivery.
 		 * The production controller deliberately waits for presentation
 		 * feedback before admitting a richer cut.  Present only when that
-		 * gate is explicit, or when an otherwise idle provider has made no
-		 * structural progress for 100 ms.  This exercises the real contract
-		 * without turning every 5 ms polling iteration into an OSMesa
-		 * render/readback. */
+		 * gate is explicit, including an ordinary render request, or when an
+		 * otherwise idle provider has made no structural progress for 100 ms.
+		 * This exercises the real host contract without turning every 5 ms
+		 * polling iteration into an OSMesa render/readback. */
 		const bool progress_stalled =
 		    settle_now - last_progress_time >= 100000;
 		const bool feedback_rate_limited =
 		    last_feedback_frame_time > 0 &&
 		    settle_now - last_feedback_frame_time < 100000;
 		const bool presentation_gate =
+		    controller->isRenderRequested() ||
 		    controller->hasPendingLodRefinementFrame() ||
 		    controller->isLodInteractionActive();
 		/*
@@ -1893,11 +1894,11 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		 * Requiring service_idle here made the harness wait forever on
 		 * the very result queue whose publication was waiting for a frame.
 		 */
-		if (progressive_status.hasMore &&
+		if ((progressive_status.hasMore ||
+		     controller->isRenderRequested()) &&
 		    !feedback_rate_limited &&
-		    (controller->hasPendingLodRefinementFrame() ||
-		     (progress_stalled &&
-		      (service_idle || presentation_gate)))) {
+		    (presentation_gate ||
+		     (progress_stalled && service_idle))) {
 		    QImage feedback_frame;
 		    qtcad_obol_request_view_frame(view, controller,
 			"progressive-lod-feedback-frame");
@@ -1907,7 +1908,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		    last_progress_time = last_feedback_frame_time;
 		    feedback_frame_count++;
 		}
-		if (otherwise_settled && !progressive_status.hasMore)
+		if (otherwise_settled && !progressive_status.hasMore &&
+		    !controller->isRenderRequested())
 		    break;
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	    }

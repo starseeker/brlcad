@@ -93,6 +93,7 @@ ged_scene_opacity_set
 ged_scene_occurrence_count
 ged_scene_occurrence_advance
 ged_scene_occurrence_candidate_resolve
+ged_scene_occurrence_resolve
 ged_scene_occurrence_candidates_visit
 ged_scene_occurrence_first
 ged_scene_occurrence_get

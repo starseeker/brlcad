@@ -1198,6 +1198,13 @@ extern int ged_draw_obol_scene_context_info_for_path(
 	struct ged *gedp,
 	const char *path,
 	struct ged_draw_obol_scene_context_info *out);
+extern int ged_draw_obol_scene_context_info_for_path_match(
+	struct ged *gedp,
+	struct ged_view_context *view_ctx,
+	int draw_mode,
+	const char *path,
+	int include_descendants,
+	struct ged_draw_obol_scene_context_info *out);
 extern int ged_draw_obol_scene_child_context_info_for_path(
 	struct ged *gedp,
 	const char *path,
