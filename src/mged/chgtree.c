@@ -196,7 +196,21 @@ find_solid_ref_with_path(struct mged_state *s, struct db_full_path *pathp)
 
     if (!ged_scene_occurrence_ref_is_null(d.ret))
 	return d.ret;
-    return d.leaf_count == 1 ? d.leaf_ret : GED_SCENE_OCCURRENCE_REF_NULL;
+    if (d.leaf_count == 1)
+	return d.leaf_ret;
+
+    char *path = db_path_to_string(pathp);
+    if (!path)
+	return GED_SCENE_OCCURRENCE_REF_NULL;
+    struct ged_scene_path_request request;
+    ged_scene_path_request_init(&request);
+    request.view = ged_view_active_ctx(s->gedp);
+    request.path = path;
+    request.match = GED_SCENE_PATH_MATCH_EXACT;
+    ged_scene_occurrence_ref resolved =
+	ged_scene_occurrence_resolve(s->gedp, &request);
+    bu_free(path, "MGED occurrence lookup path");
+    return resolved;
 }
 
 
@@ -225,7 +239,28 @@ find_path_below(struct mged_state *s, const struct db_full_path *prefix,
 {
     struct _fbp_data d = {prefix, result, 0};
     ged_scene_occurrences_visit(s->gedp, _find_path_below_cb, &d);
-    return d.found;
+    if (d.found)
+	return 1;
+
+    char *path = db_path_to_string(prefix);
+    if (!path)
+	return 0;
+    struct ged_scene_path_request request;
+    ged_scene_path_request_init(&request);
+    request.view = ged_view_active_ctx(s->gedp);
+    request.path = path;
+    request.match = GED_SCENE_PATH_MATCH_SUBTREE;
+    ged_scene_occurrence_ref resolved =
+	ged_scene_occurrence_resolve(s->gedp, &request);
+    bu_free(path, "MGED path-below lookup path");
+
+    struct ged_scene_occurrence_info occurrence;
+    if (ged_scene_occurrence_ref_is_null(resolved) ||
+	!ged_scene_occurrence_get(s->gedp, resolved, &occurrence) ||
+	!occurrence.fullpath || occurrence.fullpath->fp_len <= 0)
+	return 0;
+    db_dup_full_path(result, occurrence.fullpath);
+    return 1;
 }
 
 
@@ -321,14 +356,26 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     MEDIT(s)->acc_sc[0] = MEDIT(s)->acc_sc[1] = MEDIT(s)->acc_sc[2] = 1.0;
     new_mats(s);
 
-    /* Find the matching displayed shape and make its draw ref the highlighted edit target. */
-    ged_scene_occurrence_ref highlighted_shape = find_solid_ref_with_path(s, &both);
-    if (ged_scene_occurrence_ref_is_null(highlighted_shape) &&
-	mged_edit_scope_acquire(s, &both, GED_SCENE_EDIT_EXACT_OCCURRENCE)) {
-	/* Target is a sub-object of a drawn comb: libged promoted its exact
-	 * occurrence to the draw frontier. */
-	highlighted_shape = find_solid_ref_with_path(s, &both);
+    /* Every object edit owns an explicit semantic scope, including targets
+     * that happen to have a previously resolved occurrence record.  Basing
+     * scope acquisition on record-cache state made restoration depend on the
+     * order of earlier sed/oed operations. */
+    if (!mged_edit_scope_acquire(s, &both,
+	GED_SCENE_EDIT_EXACT_OCCURRENCE)) {
+	db_free_full_path(&lhs);
+	db_free_full_path(&rhs);
+	db_free_full_path(&both);
+	Tcl_AppendResult(interp, "Unable to acquire object edit scope",
+	    (char *)NULL);
+	mged_highlight_clear(s);
+	(void)chg_state(s, ST_O_PICK, ST_VIEW, "error recovery");
+	return TCL_ERROR;
     }
+
+    /* Find the matching displayed shape and make its draw ref the highlighted
+     * edit target.  Compact sources resolve only this occurrence. */
+    ged_scene_occurrence_ref highlighted_shape =
+	find_solid_ref_with_path(s, &both);
     mged_highlight_set_shape_ref(s, highlighted_shape);
     if (ged_scene_occurrence_ref_is_null(highlighted_shape)) {
 	db_free_full_path(&lhs);

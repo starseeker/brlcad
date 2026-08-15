@@ -5598,6 +5598,9 @@ ged_obol_scene_context_info_from_summary(
 			     ged_obol_context_leaf_name_from_path(path);
 
     out->path = bu_strdup(path);
+    if (summary.ownerSourceInstanceKey.getLength() > 0)
+	out->instance_key = bu_strdup(
+	    summary.ownerSourceInstanceKey.getString());
     out->name = bu_strdup(name.c_str());
     out->node_kind = summary.nodeKind;
     out->is_group = summary.isGroup ? 1 : 0;
@@ -5639,6 +5642,64 @@ ged_draw_obol_scene_context_info_for_path(
     if (!scene->getSceneTreeSummaryForPath(path, summary))
 	return 0;
     return ged_obol_scene_context_info_from_summary(summary, out);
+}
+
+extern "C" int
+ged_draw_obol_scene_context_info_for_path_match(
+    struct ged *gedp, struct ged_view_context *viewCtx, int drawMode,
+    const char *path, int includeDescendants,
+    struct ged_draw_obol_scene_context_info *out)
+{
+    if (!out)
+	return 0;
+    memset(out, 0, sizeof(*out));
+    if (!gedp || !path || !path[0] ||
+	!ged_draw_obol_scene_controller_attached(gedp))
+	return 0;
+
+    BObolSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return 0;
+
+    /* The same database path may be drawn in multiple independent views and
+     * representation modes.  Resolve through the owning compact source so a
+     * lightweight occurrence never binds to a sibling view/mode merely
+     * because that source happens to occur first in scene traversal order. */
+    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+	BObolDatabaseSourceSummary sourceSummary;
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary compactSummary;
+	if (!source || !source->visible.getValue() ||
+	    !source->getSummary(sourceSummary) || !sourceSummary.valid ||
+	    !ged_obol_database_source_instance_in_scope(sourceSummary, viewCtx) ||
+	    !ged_obol_database_source_summary_matches_mode(sourceSummary,
+		drawMode) ||
+	    !source->getCompactInstanceForPath(path,
+		includeDescendants ? TRUE : FALSE, TRUE, handle,
+		compactSummary) ||
+	    !compactSummary.valid || !compactSummary.visible)
+	    continue;
+
+	out->path = bu_strdup(compactSummary.path.getString());
+	out->instance_key = bu_strdup(sourceSummary.instanceKey.getString());
+	out->name = bu_strdup(compactSummary.sourceName.getString());
+	out->node_kind = BObolSceneTreeSummary::NODE_DATABASE_SOURCE;
+	out->is_database_source = 1;
+	out->has_parent = 1;
+	const char *component = compactSummary.path.getString();
+	while (component && *component) {
+	    while (*component == '/')
+		component++;
+	    if (!*component)
+		break;
+	    out->draw_tree_depth++;
+	    while (*component && *component != '/')
+		component++;
+	}
+	return 1;
+    }
+    return 0;
 }
 
 extern "C" int

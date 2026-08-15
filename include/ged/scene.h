@@ -252,6 +252,18 @@ ged_scene_occurrence_candidate_resolve(
     const struct ged_scene_occurrence_candidate *candidate);
 
 /**
+ * Resolve one visible semantic path to an addressable occurrence.
+ *
+ * Compact retained sources perform an indexed lookup and create only the
+ * lightweight occurrence record required by the caller.  No sibling paths or
+ * per-leaf render nodes are materialized.  EXACT and SUBTREE matches are
+ * supported; a null reference reports that no visible occurrence matched.
+ */
+GED_EXPORT extern ged_scene_occurrence_ref
+ged_scene_occurrence_resolve(struct ged *gedp,
+			     const struct ged_scene_path_request *request);
+
+/**
  * Copy a semantic snapshot for an occurrence reference.
  *
  * Borrowed strings and full paths in @p out remain valid until the next scene

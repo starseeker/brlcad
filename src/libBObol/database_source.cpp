@@ -20076,6 +20076,37 @@ SoBRLDatabaseSource::getCompactInstanceCountForPath(const char *queryPath,
 }
 
 SbBool
+SoBRLDatabaseSource::getCompactInstanceForPath(const char *queryPath,
+    SbBool includeDescendants, SbBool visibleOnly,
+    BObolCompactInstanceHandle &handle,
+    BObolCompactInstanceSummary &summary) const
+{
+    handle = BObolCompactInstanceHandle();
+    summary = BObolCompactInstanceSummary();
+    if (!this->d->compactIndex)
+	return FALSE;
+
+    size_t matchIndex = this->d->compactIndex->entries.size();
+    compact_visit_entries_for_path(this->d->compactIndex, queryPath,
+	includeDescendants, [this, visibleOnly, &matchIndex](size_t entryIndex) {
+	    if (visibleOnly &&
+		!this->d->compactIndex->entries[entryIndex].visible)
+		return;
+	    if (entryIndex < matchIndex)
+		matchIndex = entryIndex;
+	});
+    if (matchIndex >= this->d->compactIndex->entries.size() ||
+	matchIndex > static_cast<size_t>(INT_MAX) ||
+	!this->getCompactInstanceHandle(static_cast<int>(matchIndex), handle) ||
+	!this->getCompactInstanceSummary(handle, summary)) {
+	handle = BObolCompactInstanceHandle();
+	summary = BObolCompactInstanceSummary();
+	return FALSE;
+    }
+    return TRUE;
+}
+
+SbBool
 SoBRLDatabaseSource::getCompactInstanceBoundsForPath(const char *queryPath,
     SbBool includeDescendants, SbBox3f &bounds) const
 {
@@ -20410,7 +20441,8 @@ SoBRLDatabaseSource::setCompactInstanceVisibilityOverrideForPathMatch(
 	return 0;
     BObolCompactOccurrenceRegistryState::PresentationOverride rule;
     rule.property = BObolCompactOccurrenceRegistryState::PresentationOverride::VISIBILITY;
-    rule.path = queryPath ? queryPath : "";
+    rule.path = database_source_skip_leading_slash(
+	queryPath ? queryPath : "");
     rule.match = match;
     rule.state = nextVisible;
     const int stored = compact_presentation_override_store(
@@ -20431,7 +20463,8 @@ SoBRLDatabaseSource::setCompactInstanceHighlightOverrideForPathMatch(
 	return 0;
     BObolCompactOccurrenceRegistryState::PresentationOverride rule;
     rule.property = BObolCompactOccurrenceRegistryState::PresentationOverride::HIGHLIGHT;
-    rule.path = queryPath ? queryPath : "";
+    rule.path = database_source_skip_leading_slash(
+	queryPath ? queryPath : "");
     rule.match = match;
     rule.state = nextHighlighted;
     const int stored = compact_presentation_override_store(
@@ -20453,7 +20486,8 @@ SoBRLDatabaseSource::setCompactInstanceTransparencyOverrideForPathMatch(
 	return 0;
     BObolCompactOccurrenceRegistryState::PresentationOverride rule;
     rule.property = BObolCompactOccurrenceRegistryState::PresentationOverride::TRANSPARENCY;
-    rule.path = queryPath ? queryPath : "";
+    rule.path = database_source_skip_leading_slash(
+	queryPath ? queryPath : "");
     rule.match = match;
     rule.transparency = std::max(0.0f,
 	std::min(1.0f, nextTransparency));

@@ -473,6 +473,10 @@ public:
 	BObolSceneTreeSummary &summary) const;
     SbBool getSceneTreeSummaryForPath(const char *nodePath,
 	BObolSceneTreeSummary &summary) const;
+    /** Resolve a compact occurrence without creating a per-leaf scene node. */
+    SbBool getCompactSceneTreeSummaryForPath(const char *nodePath,
+	SbBool includeDescendants,
+	BObolSceneTreeSummary &summary) const;
     SbBool getSceneChildTreeSummary(const char *nodePath,
 	int childIndex,
 	BObolSceneTreeSummary &summary) const;

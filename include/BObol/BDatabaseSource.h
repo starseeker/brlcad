@@ -1195,6 +1195,19 @@ public:
     SbBool hasCompactInstanceKey(const char *occurrenceKey) const;
     /* Stable in-process owner token copied into compact LoD requests. */
     uint64_t getCompactSourceRoutingId(void) const;
+    /**
+     * Resolve the first compact occurrence matching a semantic path.
+     *
+     * This is the bounded, allocation-free lookup used when an interactive
+     * operation must promote one occurrence from a compact source.  It does
+     * not create a Coin node or change compact presentation state.
+     * visibleOnly skips occurrences suppressed by the presentation frontier.
+     */
+    SbBool getCompactInstanceForPath(const char *path,
+	SbBool includeDescendants,
+	SbBool visibleOnly,
+	BObolCompactInstanceHandle &handle,
+	BObolCompactInstanceSummary &summary) const;
     int getCompactInstanceCountForPath(const char *path,
 	SbBool includeDescendants = TRUE) const;
     SbBool getCompactInstanceBoundsForPath(const char *path,

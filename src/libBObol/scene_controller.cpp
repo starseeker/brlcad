@@ -4312,6 +4312,9 @@ BObolSceneController::getSceneTreeSummaryForPath(const char *nodePath,
 	return summary.valid;
     }
 
+    if (this->getCompactSceneTreeSummaryForPath(nodePath, FALSE, summary))
+	return TRUE;
+
     BObolSceneTreeSummary candidate;
     BObolSceneTreeSummary fallback;
     const int count = this->getSceneTreeSummaryCount();
@@ -4331,6 +4334,52 @@ BObolSceneController::getSceneTreeSummaryForPath(const char *nodePath,
 
     if (fallback.valid) {
 	summary = fallback;
+	return TRUE;
+    }
+
+    return FALSE;
+}
+
+SbBool
+BObolSceneController::getCompactSceneTreeSummaryForPath(
+    const char *nodePath, SbBool includeDescendants,
+    BObolSceneTreeSummary &summary) const
+{
+    summary = BObolSceneTreeSummary();
+    if (!this->d->root || !nodePath || !nodePath[0])
+	return FALSE;
+
+    /* Compact occurrences deliberately have no per-leaf Coin node, but they
+     * are still semantic scene entities that selection and edit clients must
+     * be able to address.  Resolve one through each source's ordered compact
+     * path index without materializing geometry or a permanent scene node. */
+    for (int sourceIndex = 0; sourceIndex < this->getDatabaseSourceCount();
+	sourceIndex++) {
+	SoBRLDatabaseSource *compactSource =
+	    this->getDatabaseSource(sourceIndex);
+	BObolCompactInstanceHandle compactHandle;
+	BObolCompactInstanceSummary compactSummary;
+	if (!compactSource || !compactSource->visible.getValue() ||
+	    !compactSource->getCompactInstanceForPath(nodePath,
+		includeDescendants, TRUE, compactHandle, compactSummary) ||
+	    !compactSummary.valid || !compactSummary.visible)
+	    continue;
+
+	summary.valid = TRUE;
+	summary.nodeKind = BObolSceneTreeSummary::NODE_DATABASE_SOURCE;
+	summary.isDatabaseSource = TRUE;
+	summary.hasParent = TRUE;
+	summary.drawTreeDepth = scene_path_component_count(
+	    compactSummary.path.getString());
+	summary.ownerSourceIndex = sourceIndex;
+	summary.ownerSourcePath = compactSource->path.getValue();
+	summary.ownerSourceInstanceKey =
+	    database_source_effective_instance_key(compactSource);
+	summary.path = compactSummary.path;
+	summary.sourceName = compactSummary.sourceName;
+	summary.sourceType = compactSummary.geometryKind;
+	summary.displayName = compactSummary.sourceName;
+	summary.geometryName = compactSummary.sourceName;
 	return TRUE;
     }
 

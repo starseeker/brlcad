@@ -500,6 +500,8 @@ void vls_col_eol(struct bu_vls *str);
 /* dodraw.c */
 int replot_modified_solid(struct mged_state *s, ged_scene_occurrence_ref ref, struct rt_db_internal *ip, const mat_t mat);
 int replot_original_solid(struct mged_state *s, ged_scene_occurrence_ref ref);
+int replot_original_path(struct mged_state *s, const char *path,
+	enum ged_scene_draw_mode mode);
 void add_solid_record_path_to_result(Tcl_Interp *interpreter, const struct ged_scene_occurrence_info *rec);
 int redraw_visible_objects(struct mged_state *s);
 
