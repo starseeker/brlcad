@@ -123,30 +123,87 @@ static const struct rt_edit_param_desc extr_b_params[] = {
 static const struct rt_edit_param_desc extr_skt_name_params[] = {
     { "sketch", "Referenced Sketch Name", RT_EDIT_PARAM_STRING, 0,
       RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT,
-      "", 0, NULL, NULL, NULL }
+      "", 0, NULL, NULL, "sketch_name" }
 };
 
 static const struct rt_edit_cmd_desc extr_cmds[] = {
-    { ECMD_EXTR_SCALE_H, "Set H",              "geometry", 1, extr_h_params,        1, 10, NULL },
-    { ECMD_EXTR_MOV_H,   "Move End H",         "move",     1, extr_endpoint_params, 1, 20, NULL },
-    { ECMD_EXTR_ROT_H,   "Rotate H",           "rotation", 1, extr_rot_deg_params,  1, 30, NULL },
-    { ECMD_EXTR_SCALE_A, "Set A",              "geometry", 1, extr_a_params,        1, 40, NULL },
-    { ECMD_EXTR_ROT_A,   "Rotate A",           "rotation", 1, extr_rot_deg_params,  1, 50, NULL },
-    { ECMD_EXTR_SCALE_B, "Set B",              "geometry", 1, extr_b_params,        1, 60, NULL },
-    { ECMD_EXTR_ROT_B,   "Rotate B",           "rotation", 1, extr_rot_deg_params,  1, 70, NULL },
-    { ECMD_EXTR_SKT_NAME, "Referenced Sketch", "reference",1, extr_skt_name_params, 1, 80, NULL },
+    { ECMD_EXTR_SCALE_H, RT_EDIT_CMD_NAME(ECMD_EXTR_SCALE_H), "Set H",              "geometry", 1, extr_h_params,        1, 10, NULL },
+    { ECMD_EXTR_MOV_H, RT_EDIT_CMD_NAME(ECMD_EXTR_MOV_H),   "Move End H",         "move",     1, extr_endpoint_params, 1, 20, NULL },
+    { ECMD_EXTR_ROT_H, RT_EDIT_CMD_NAME(ECMD_EXTR_ROT_H),   "Rotate H",           "rotation", 1, extr_rot_deg_params,  1, 30, NULL },
+    { ECMD_EXTR_SCALE_A, RT_EDIT_CMD_NAME(ECMD_EXTR_SCALE_A), "Set A",              "geometry", 1, extr_a_params,        1, 40, NULL },
+    { ECMD_EXTR_ROT_A, RT_EDIT_CMD_NAME(ECMD_EXTR_ROT_A),   "Rotate A",           "rotation", 1, extr_rot_deg_params,  1, 50, NULL },
+    { ECMD_EXTR_SCALE_B, RT_EDIT_CMD_NAME(ECMD_EXTR_SCALE_B), "Set B",              "geometry", 1, extr_b_params,        1, 60, NULL },
+    { ECMD_EXTR_ROT_B, RT_EDIT_CMD_NAME(ECMD_EXTR_ROT_B),   "Rotate B",           "rotation", 1, extr_rot_deg_params,  1, 70, NULL },
+    { ECMD_EXTR_SKT_NAME, RT_EDIT_CMD_NAME(ECMD_EXTR_SKT_NAME), "Referenced Sketch", "reference",1, extr_skt_name_params, 1, 80, NULL },
 };
+
+static const enum rt_edit_control_class extr_command_controls[] = {
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_ACTION,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_ACTION,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_ACTION,
+    RT_EDIT_CONTROL_INHERIT
+};
+_Static_assert(sizeof(extr_command_controls) / sizeof(extr_command_controls[0]) ==
+    sizeof(extr_cmds) / sizeof(extr_cmds[0]), "extrude command controls");
 
 static const struct rt_edit_prim_desc extr_prim_desc = {
     "extrude", "Extrusion", 8, extr_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    extr_command_controls,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
 rt_edit_extrude_edit_desc(void)
 {
     return &extr_prim_desc;
+}
+
+C_DECL int
+rt_edit_extrude_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    struct rt_extrude_internal *extr =
+	(struct rt_extrude_internal *)s->es_int.idb_ptr;
+    RT_EXTRUDE_CK_MAGIC(extr);
+
+    switch (cmd_id) {
+	case ECMD_EXTR_SCALE_H:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(extr->h) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_EXTR_MOV_H: {
+	    point_t endpoint;
+	    VADD2(endpoint, extr->V, extr->h);
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    endpoint[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	}
+	case ECMD_EXTR_SCALE_A:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(extr->u_vec) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_EXTR_SCALE_B:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(extr->v_vec) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_EXTR_SKT_NAME:
+	    rt_edit_cmd_values_set_string(result, 0,
+		extr->sketch_name ? extr->sketch_name : "");
+	    return RT_EDIT_VALUE_OK;
+	default:
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    }
 }
 
 
@@ -192,7 +249,7 @@ rt_edit_extrude_e_axes_pos(
     }
 }
 
-void
+int
 ecmd_extr_skt_name(struct rt_edit *s)
 {
     struct rt_extrude_internal *extr = (struct rt_extrude_internal *)s->es_int.idb_ptr;
@@ -200,8 +257,44 @@ ecmd_extr_skt_name(struct rt_edit *s)
 
     RT_EXTRUDE_CK_MAGIC(extr);
 
+    if (s->e_nstr > 0) {
+	const char *name = s->e_str[0];
+	if (!name[0] || !s->dbip) {
+	    bu_vls_printf(s->log_str,
+		"ECMD_EXTR_SKT_NAME: a database sketch name is required\n");
+	    return BRLCAD_ERROR;
+	}
+	struct directory *dp = db_lookup(s->dbip, name, LOOKUP_QUIET);
+	if (!dp) {
+	    bu_vls_printf(s->log_str,
+		"ECMD_EXTR_SKT_NAME: sketch '%s' was not found\n", name);
+	    return BRLCAD_ERROR;
+	}
+	RT_DB_INTERNAL_INIT(&tmp_ip);
+	if (rt_db_get_internal(&tmp_ip, dp, s->dbip, bn_mat_identity) !=
+	    ID_SKETCH) {
+	    if (tmp_ip.idb_ptr)
+		rt_db_free_internal(&tmp_ip);
+	    bu_vls_printf(s->log_str,
+		"ECMD_EXTR_SKT_NAME: '%s' is not a sketch\n", name);
+	    return BRLCAD_ERROR;
+	}
+	if (extr->skt) {
+	    struct rt_db_internal old_ip = RT_DB_INTERNAL_INIT_ZERO;
+	    old_ip.idb_major_type = DB5_MAJORTYPE_BRLCAD;
+	    old_ip.idb_type = ID_SKETCH;
+	    old_ip.idb_ptr = (void *)extr->skt;
+	    old_ip.idb_meth = &OBJ[ID_SKETCH];
+	    rt_db_free_internal(&old_ip);
+	}
+	if (extr->sketch_name)
+	    bu_free(extr->sketch_name, "extrude sketch name");
+	extr->skt = (struct rt_sketch_internal *)tmp_ip.idb_ptr;
+	extr->sketch_name = bu_strdup(name);
+	return BRLCAD_OK;
+    }
+
     if (extr->skt) {
-	/* free the old sketch */
 	RT_DB_INTERNAL_INIT(&tmp_ip);
 	tmp_ip.idb_major_type = DB5_MAJORTYPE_BRLCAD;
 	tmp_ip.idb_type = ID_SKETCH;
@@ -209,12 +302,12 @@ ecmd_extr_skt_name(struct rt_edit *s)
 	tmp_ip.idb_meth = &OBJ[ID_SKETCH];
 	rt_db_free_internal(&tmp_ip);
     }
-
     bu_clbk_t f = NULL;
     void *d = NULL;
     rt_edit_map_clbk_get(&f, &d, s->m, ECMD_EXTR_SKT_NAME, BU_CLBK_DURING);
     if (f)
 	(*f)(0, NULL, d, s);
+    return f ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -582,8 +675,7 @@ rt_edit_extrude_edit(struct rt_edit *s)
 	    edit_srot(s);
 	    break;
 	case ECMD_EXTR_SKT_NAME:
-	    ecmd_extr_skt_name(s);
-	    break;
+	    return ecmd_extr_skt_name(s);
 	case ECMD_EXTR_MOV_H:
 	    return ecmd_extr_mov_h(s);
 	case ECMD_EXTR_SCALE_H:

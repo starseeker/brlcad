@@ -161,6 +161,9 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     uint64_t coordinatorInvariantViolationCount;
     uint32_t coordinatorInvariantMask;
     uint32_t coordinatorInvariantHistoryMask;
+    size_t viewQualityHistoryEntryCount;
+    size_t viewQualityHistoryRememberCount;
+    size_t viewQualityHistoryRecallCount;
     uint64_t viewRevision;
     uint64_t activeGeneration;
     size_t submissionSourceIndex;
@@ -202,6 +205,7 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     uint64_t gpuOrdinaryPartSuffixUploadBytes;
     uint64_t gpuOrdinaryPartGpuCopyBytes;
     uint64_t gpuOrdinaryPartLineageReuseCount;
+    uint64_t gpuOrdinaryPartLineageReplacementCount;
     uint64_t gpuTriangleAtlasFullUploadBytes;
     uint64_t gpuTriangleAtlasSuffixUploadBytes;
     uint64_t gpuTriangleAtlasLineageReuseCount;
@@ -854,6 +858,7 @@ private:
      * path (including direct toolkit repaints) from treating NONE or
      * DIAGNOSTIC as a graphical renderer. */
     void setEndpointGraphicalRenderingEnabled(SbBool enabled);
+    void invalidateRendererPerformanceHistory(void);
     void notifyFrameRequest(const char *reason);
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);

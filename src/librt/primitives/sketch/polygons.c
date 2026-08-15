@@ -274,7 +274,7 @@ end:
     fastf_t dmax = 0.0;
     while (BU_LIST_NON_EMPTY(&HeadContourNodes)) {
 	size_t k = 0;
-	size_t npoints = 0;
+	size_t nsegments = 0;
 	struct line_seg *curr_lsg = NULL;
 
 	curr_cnode = BU_LIST_FIRST(contour_node, &HeadContourNodes);
@@ -282,10 +282,19 @@ end:
 
 	/* Count the number of segments in this contour */
 	for (BU_LIST_FOR(curr_snode, segment_node, &curr_cnode->head))
-	    ++npoints;
+	    ++nsegments;
+
+	struct segment_node *first_snode =
+	    BU_LIST_FIRST(segment_node, &curr_cnode->head);
+	struct segment_node *last_snode =
+	    BU_LIST_LAST(segment_node, &curr_cnode->head);
+	struct line_seg *first_lsg = (struct line_seg *)first_snode->segment;
+	struct line_seg *last_lsg = (struct line_seg *)last_snode->segment;
+	const int open = first_lsg->start != last_lsg->end;
+	const size_t npoints = nsegments + (open ? 1 : 0);
 
 	poly->polygon.contour[j].num_points = npoints;
-	poly->polygon.contour[j].open = 0;
+	poly->polygon.contour[j].open = open;
 	poly->polygon.contour[j].point = (point_t *)bu_calloc(npoints, sizeof(point_t), "gpc_point");
 
 	while (BU_LIST_NON_EMPTY(&curr_cnode->head)) {
@@ -302,6 +311,15 @@ end:
 	    if (dtmp > dmax)
 		dmax = dtmp;
 	    ++k;
+	}
+	if (open) {
+	    VJOIN2(poly->polygon.contour[j].point[k], sketch_ip->V,
+		    sketch_ip->verts[last_lsg->end][0], sketch_ip->u_vec,
+		    sketch_ip->verts[last_lsg->end][1], sketch_ip->v_vec);
+	    fastf_t dtmp = DIST_PNT_PNT(sketch_ip->V,
+		    poly->polygon.contour[j].point[k]);
+	    if (dtmp > dmax)
+		dmax = dtmp;
 	}
 
 	/* free contour node */
@@ -369,6 +387,22 @@ end:
 	if (val && BU_STR_EQUAL(val, "GENERAL")) {
 	    poly->type = RT_SKETCH_POLYGON_GENERAL;
 	}
+	val = bu_avs_get(&lavs, "POLYGON_CONTOUR_HOLES");
+	if (val) {
+	    const char *cp = val;
+	    for (size_t i = 0; i < poly->polygon.num_contours; i++) {
+		while (*cp && (isspace((unsigned char)*cp) || *cp == ','))
+		    cp++;
+		if (!*cp)
+		    break;
+		char *endp = NULL;
+		long hval = strtol(cp, &endp, 10);
+		if (endp == cp)
+		    break;
+		poly->polygon.hole[i] = hval ? 1 : 0;
+		cp = endp;
+	    }
+	}
     }
     bu_avs_free(&lavs);
 
@@ -421,27 +455,44 @@ rt_sketch_polygon_destroy(struct rt_sketch_polygon *poly)
 }
 
 static struct directory *
-db_polygon_data_to_sketch(struct db_i *dbip, const char *sname, const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3])
+db_polygon_data_to_sketch(struct db_i *dbip, const char *sname,
+	const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3],
+	int update)
 {
-    if (!poly)
+    if (!dbip || !sname || !sname[0] || !poly)
 	return NULL;
 
-    if (db_lookup(dbip, sname, LOOKUP_QUIET) != RT_DIR_NULL) {
+    struct directory *dp = db_lookup(dbip, sname, LOOKUP_QUIET);
+    if (!update && dp != RT_DIR_NULL) {
 	bu_log("Object %s already exists\n", sname);
+	return NULL;
+    }
+    if (update && dp == RT_DIR_NULL) {
+	bu_log("Sketch %s does not exist\n", sname);
+	return NULL;
+    }
+    if (update && (dp->d_flags & RT_DIR_COMB || dp->d_minor_type != ID_SKETCH)) {
+	bu_log("Object %s is not a sketch\n", sname);
 	return NULL;
     }
 
     size_t num_verts = 0;
+    size_t num_segments = 0;
     struct rt_db_internal internal;
     struct rt_sketch_internal *sketch_ip;
     struct line_seg *lsg;
     plane_t vp;
     HMOVE(vp, poly->vp);
 
-    for (size_t j = 0; j < poly->polygon.num_contours; ++j)
-	num_verts += poly->polygon.contour[j].num_points;
+    for (size_t j = 0; j < poly->polygon.num_contours; ++j) {
+	const size_t npoints = poly->polygon.contour[j].num_points;
+	num_verts += npoints;
+	if (npoints > 1)
+	    num_segments += npoints -
+		(poly->polygon.contour[j].open ? 1 : 0);
+    }
 
-    if (num_verts < 3) {
+    if (num_verts < 3 || !num_segments) {
 	return NULL;
     }
 
@@ -455,7 +506,7 @@ db_polygon_data_to_sketch(struct db_i *dbip, const char *sname, const struct rt_
     sketch_ip->magic = RT_SKETCH_INTERNAL_MAGIC;
     sketch_ip->vert_count = num_verts;
     sketch_ip->verts = (point2d_t *)bu_calloc(sketch_ip->vert_count, sizeof(point2d_t), "sketch_ip->verts");
-    sketch_ip->curve.count = num_verts;
+    sketch_ip->curve.count = num_segments;
     sketch_ip->curve.reverse = (int *)bu_calloc(sketch_ip->curve.count, sizeof(int), "sketch_ip->curve.reverse");
     sketch_ip->curve.segment = (void **)bu_calloc(sketch_ip->curve.count, sizeof(void *), "sketch_ip->curve.segment");
 
@@ -469,6 +520,7 @@ db_polygon_data_to_sketch(struct db_i *dbip, const char *sname, const struct rt_
     VSUB2(sketch_ip->v_vec, v_end, sketch_ip->V);
 
     int n = 0;
+    int s = 0;
     for (size_t j = 0; j < poly->polygon.num_contours; ++j) {
 	size_t cstart = n;
 	size_t k = 0;
@@ -477,7 +529,7 @@ db_polygon_data_to_sketch(struct db_i *dbip, const char *sname, const struct rt_
 
 	    if (k) {
 		BU_ALLOC(lsg, struct line_seg);
-		sketch_ip->curve.segment[n-1] = (void *)lsg;
+		sketch_ip->curve.segment[s++] = (void *)lsg;
 		lsg->magic = CURVE_LSEG_MAGIC;
 		lsg->start = n-1;
 		lsg->end = n;
@@ -486,9 +538,9 @@ db_polygon_data_to_sketch(struct db_i *dbip, const char *sname, const struct rt_
 	    ++n;
 	}
 
-	if (k) {
+	if (k > 1 && !poly->polygon.contour[j].open) {
 	    BU_ALLOC(lsg, struct line_seg);
-	    sketch_ip->curve.segment[n-1] = (void *)lsg;
+	    sketch_ip->curve.segment[s++] = (void *)lsg;
 	    lsg->magic = CURVE_LSEG_MAGIC;
 	    lsg->start = n-1;
 	    lsg->end = cstart;
@@ -496,11 +548,20 @@ db_polygon_data_to_sketch(struct db_i *dbip, const char *sname, const struct rt_
     }
 
 
-    struct directory *dp = db_diradd(dbip, sname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&internal.idb_type);
-    if (dp == RT_DIR_NULL)
-	return NULL;
+    int created = 0;
+    if (dp == RT_DIR_NULL) {
+	dp = db_diradd(dbip, sname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID,
+		(void *)&internal.idb_type);
+	if (dp == RT_DIR_NULL) {
+	    rt_db_free_internal(&internal);
+	    return NULL;
+	}
+	created = 1;
+    }
 
     if (rt_db_put_internal(dp, dbip, &internal) < 0) {
+	if (created)
+	    db_dirdelete(dbip, dp);
 	return NULL;
     }
 
@@ -550,6 +611,12 @@ db_polygon_data_to_sketch(struct db_i *dbip, const char *sname, const struct rt_
 		break;
 	}
 	bu_avs_add(&lavs, "POLYGON_TYPE", bu_vls_cstr(&val));
+	bu_vls_trunc(&val, 0);
+	for (size_t j = 0; j < poly->polygon.num_contours; j++) {
+	    bu_vls_printf(&val, "%s%d", j ? "," : "",
+		    (poly->polygon.hole && poly->polygon.hole[j]) ? 1 : 0);
+	}
+	bu_avs_add(&lavs, "POLYGON_CONTOUR_HOLES", bu_vls_cstr(&val));
     }
     db5_update_attributes(dp, &lavs, dbip);
     bu_avs_free(&lavs);
@@ -560,7 +627,7 @@ db_polygon_data_to_sketch(struct db_i *dbip, const char *sname, const struct rt_
 struct directory *
 db_sketch_polygon_to_sketch(struct db_i *dbip, const char *sname, const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3])
 {
-    return db_polygon_data_to_sketch(dbip, sname, poly, edge_rgb);
+    return db_polygon_data_to_sketch(dbip, sname, poly, edge_rgb, 0);
 }
 
 struct directory *
@@ -573,7 +640,20 @@ db_sketch_polygon_data_to_sketch(struct db_i *dbip,
 
     struct rt_sketch_polygon poly;
     rt_sketch_polygon_from_data(&poly, data);
-    return db_polygon_data_to_sketch(dbip, sname, &poly, NULL);
+    return db_polygon_data_to_sketch(dbip, sname, &poly, NULL, 0);
+}
+
+struct directory *
+db_sketch_polygon_data_update_sketch(struct db_i *dbip,
+	const char *sname,
+	const struct rt_sketch_polygon_data *data)
+{
+    if (!data)
+	return NULL;
+
+    struct rt_sketch_polygon poly;
+    rt_sketch_polygon_from_data(&poly, data);
+    return db_polygon_data_to_sketch(dbip, sname, &poly, NULL, 1);
 }
 
 /*

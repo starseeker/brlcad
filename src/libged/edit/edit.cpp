@@ -46,13 +46,19 @@
 #include "rt/db4.h"
 #include "rt/edit.h"
 #include "rt/primitives/arb8.h"
+#include "rt/primitives/ell.h"
 #include "rt/primitives/tgc.h"
 
 #include "ged/db_index.h"
+#include "ged/edit.h"
 #include "ged/event.h"
 #include "ged/selection.h"
 #include "../ged_private.h"
 #include "./ged_edit.h"
+
+
+static const struct rt_edit_cmd_desc *_find_desc_cmd(
+    const struct rt_edit_prim_desc *, const char *);
 
 
 /* ------------------------------------------------------------------ *
@@ -119,15 +125,15 @@ _resolve_geom_spec(ged_edit_geom_spec &spec, const char *token,
 	(void)ged_db_index_path_resolve(gedp, path_str.c_str(),
 	    spec.hashes.data(), spec.hashes.size());
 
-	/* Single-element path - get the head dp. */
-	if (spec.hashes.size() == 1) {
-	    struct ged_db_index_record rec;
-	    if (ged_db_index_record_get(gedp, spec.hashes[0], &rec))
-		spec.dp = rec.dp;
-	}
+	/* A path edit operates on its terminal database object while retaining
+	 * the complete occurrence path for transform and scene presentation
+	 * context.  Resolve the leaf for type/descriptor dispatch even when the
+	 * target is nested beneath one or more combinations. */
+	struct ged_db_index_record rec;
+	if (ged_db_index_record_get(gedp, spec.hashes.back(), &rec))
+	    spec.dp = rec.dp;
 
-	/* Multi-element path (comb instance) - dp stays RT_DIR_NULL. */
-	return (spec.hashes.size() > 1) || (spec.dp != RT_DIR_NULL);
+	return spec.dp != RT_DIR_NULL;
     }
 
     /* No index backend: plain directory lookup against gedp->dbip.
@@ -267,32 +273,54 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
 
     struct db_full_path dfp;
     db_full_path_init(&dfp);
-    db_add_node_to_full_path(&dfp, dp);
-
-    /* Re-use existing buffer entry, or create a fresh one */
-    struct rt_edit *s = ged_edit_buf_get(gedp, &dfp);
-    bool is_new = (s == NULL);
-
-    /*
-     * tol must have function scope: rt_edit_create stores &tol in s->tol,
-     * so if tol were declared inside the if(is_new) block it would become a
-     * dangling pointer the moment that block's } was reached — causing any
-     * handler that calls BN_CK_TOL(s->tol) (e.g. arb8's rt_arb_std_type)
-     * to abort.  For reused buffer entries we refresh s->tol here so it
-     * always points to a valid object for the duration of do_edit(s).
-     */
-    struct bn_tol tol = BN_TOL_INIT_TOL;
-
-    if (is_new) {
-	s = rt_edit_create(&dfp, gedp->dbip, &tol, NULL);
-	if (!s) {
+    if (!ctx->geom_specs.empty() && !ctx->geom_specs[0].path.empty()) {
+	if (db_string_to_path(&dfp, gedp->dbip,
+		ctx->geom_specs[0].path.c_str()) < 0) {
 	    db_free_full_path(&dfp);
 	    return BRLCAD_ERROR;
 	}
     } else {
-	/* Refresh the tolerance pointer on reused entries so that any
-	 * handler that dereferences s->tol gets a valid object.       */
-	s->tol = &tol;
+	db_add_node_to_full_path(&dfp, dp);
+    }
+
+    char *path_string = db_path_to_string(&dfp);
+    const std::string session_path = path_string ? path_string : "";
+    if (path_string)
+	bu_free(path_string, "edit session path");
+    if (session_path.empty()) {
+	db_free_full_path(&dfp);
+	return BRLCAD_ERROR;
+    }
+
+    /* Re-use the authoritative path session, or create it through the public
+     * contract.  In particular, begin rejects a second occurrence path to an
+     * already edited terminal object instead of creating a divergent copy. */
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    const enum ged_edit_status prior = ged_edit_session_find(gedp,
+	session_path.c_str(), &session);
+    const bool is_new = prior == GED_EDIT_NOT_FOUND;
+    if (prior != GED_EDIT_OK && !is_new) {
+	db_free_full_path(&dfp);
+	return BRLCAD_ERROR;
+    }
+    if (is_new) {
+	const enum ged_edit_status begun = ged_edit_session_begin(gedp,
+	    session_path.c_str(), NULL, &session);
+	if (begun != GED_EDIT_OK) {
+	    if (begun == GED_EDIT_CONFLICT)
+		bu_vls_printf(gedp->ged_result_str,
+		    "edit: another occurrence of this object is already being edited\n");
+	    db_free_full_path(&dfp);
+	    return BRLCAD_ERROR;
+	}
+    }
+
+    struct rt_edit *s = ged_edit_buf_get(gedp, &dfp);
+    if (!s) {
+	if (is_new)
+	    (void)ged_edit_session_cancel(gedp, session);
+	db_free_full_path(&dfp);
+	return BRLCAD_ERROR;
     }
 
     /* Apply any dynamic options passed from the command line */
@@ -315,22 +343,19 @@ _edit_xform_apply(struct ged_edit_ctx *ctx,
 
     if (ret != BRLCAD_OK) {
 	if (is_new)
-	    rt_edit_destroy(s);
+	    (void)ged_edit_session_cancel(gedp, session);
 	db_free_full_path(&dfp);
 	return BRLCAD_ERROR;
     }
 
-    if (is_new) {
-	/* Transfer ownership to the buffer */
-	ged_edit_buf_set(gedp, &dfp, s);
-    }
-    /* s is now in the buffer */
+    ged_edit_buf_notify_update(gedp, &dfp, s->edit_flag);
 
     int result;
     if (flag_i) {
 	result = BRLCAD_OK;                       /* leave in buffer */
     } else {
-	result = ged_edit_buf_promote(gedp, &dfp); /* write to disk  */
+	result = ged_edit_session_commit(gedp, session) == GED_EDIT_OK ?
+	    BRLCAD_OK : BRLCAD_ERROR;
     }
 
     db_free_full_path(&dfp);
@@ -1376,29 +1401,14 @@ cmd_checkpoint::exec(struct ged *gedp, void *u_data, int argc, const char **argv
 	return BRLCAD_ERROR;
 
     struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
-    if (ctx->dp == RT_DIR_NULL)
+    if (ctx->geom_specs.empty() || ctx->geom_specs[0].path.empty())
 	return BRLCAD_ERROR;
-
-    struct db_full_path dfp;
-    db_full_path_init(&dfp);
-    db_add_node_to_full_path(&dfp, ctx->dp);
-
-    /* Use existing buffer entry or create a new one */
-    struct rt_edit *s = ged_edit_buf_get(gedp, &dfp);
-    bool is_new = (s == NULL);
-    if (is_new) {
-	struct bn_tol tol = BN_TOL_INIT_TOL;
-	s = rt_edit_create(&dfp, gedp->dbip, &tol, NULL);
-	if (!s) {
-	    db_free_full_path(&dfp);
-	    return BRLCAD_ERROR;
-	}
-	ged_edit_buf_set(gedp, &dfp, s);
-    }
-
-    int ret = rt_edit_checkpoint(s);
-    db_free_full_path(&dfp);
-    return ret;
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    if (ged_edit_session_begin(gedp, ctx->geom_specs[0].path.c_str(),
+	    NULL, &session) != GED_EDIT_OK)
+	return BRLCAD_ERROR;
+    return ged_edit_session_checkpoint(gedp, session) == GED_EDIT_OK ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 
@@ -1420,27 +1430,22 @@ cmd_revert::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
 	return BRLCAD_ERROR;
 
     struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
-    if (ctx->dp == RT_DIR_NULL)
+    if (ctx->geom_specs.empty() || ctx->geom_specs[0].path.empty())
 	return BRLCAD_ERROR;
 
-    struct db_full_path dfp;
-    db_full_path_init(&dfp);
-    db_add_node_to_full_path(&dfp, ctx->dp);
-
-    struct rt_edit *s = ged_edit_buf_get(gedp, &dfp);
-    if (!s) {
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    if (ged_edit_session_find(gedp, ctx->geom_specs[0].path.c_str(),
+	    &session) != GED_EDIT_OK) {
 	bu_vls_printf(gedp->ged_result_str,
-	    "revert: no active edit session for '%s'\n", ctx->dp->d_namep);
-	db_free_full_path(&dfp);
+	    "revert: no active edit session for '%s'\n",
+	    ctx->geom_specs[0].path.c_str());
 	return BRLCAD_ERROR;
     }
-
-    int ret = rt_edit_revert(s);
-    if (ret == BRLCAD_OK && !ctx->flag_i)
-	ret = ged_edit_buf_promote(gedp, &dfp);
-
-    db_free_full_path(&dfp);
-    return ret;
+    if (ged_edit_session_revert(gedp, session) != GED_EDIT_OK)
+	return BRLCAD_ERROR;
+    if (!ctx->flag_i && ged_edit_session_commit(gedp, session) != GED_EDIT_OK)
+	return BRLCAD_ERROR;
+    return BRLCAD_OK;
 }
 
 
@@ -1462,16 +1467,208 @@ cmd_reset::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
 	return BRLCAD_ERROR;
 
     struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
-    if (ctx->dp == RT_DIR_NULL)
+    if (ctx->geom_specs.empty() || ctx->geom_specs[0].path.empty())
 	return BRLCAD_ERROR;
 
-    struct db_full_path dfp;
-    db_full_path_init(&dfp);
-    db_add_node_to_full_path(&dfp, ctx->dp);
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    enum ged_edit_status found = ged_edit_session_find(gedp,
+	ctx->geom_specs[0].path.c_str(), &session);
+    if (found == GED_EDIT_NOT_FOUND)
+	return BRLCAD_OK;
+    if (found != GED_EDIT_OK)
+	return BRLCAD_ERROR;
+    return ged_edit_session_cancel(gedp, session) == GED_EDIT_OK ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
 
-    ged_edit_buf_abandon(gedp, &dfp);
-    db_free_full_path(&dfp);
+
+/* ------------------------------------------------------------------ *
+ * Shared edit-session inspection and lifecycle commands
+ * ------------------------------------------------------------------ */
+
+static enum ged_edit_status
+_edit_ctx_session(struct ged_edit_ctx *ctx, ged_edit_session_ref *session)
+{
+    if (session)
+	*session = GED_EDIT_SESSION_REF_NULL;
+    if (!ctx || !ctx->gedp || !session || ctx->geom_specs.empty() ||
+	ctx->geom_specs[0].path.empty())
+	return GED_EDIT_INVALID;
+    return ged_edit_session_find(ctx->gedp,
+	ctx->geom_specs[0].path.c_str(), session);
+}
+
+
+class cmd_status : public ged_subcmd {
+    public:
+	std::string usage()   { return std::string("edit [geometry] status"); }
+	std::string purpose() { return std::string("report the current shared intermediate edit state"); }
+	int exec(struct ged *, void *, int, const char **);
+};
+static cmd_status edit_status_cmd;
+
+
+int
+cmd_status::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
+{
+    if (!gedp || !u_data || argc != 1 || !argv)
+	return BRLCAD_ERROR;
+    struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    if (_edit_ctx_session(ctx, &session) != GED_EDIT_OK) {
+	bu_vls_printf(gedp->ged_result_str, "inactive %s\n",
+	    ctx->geom_specs.empty() ? "" : ctx->geom_specs[0].path.c_str());
+	return BRLCAD_ERROR;
+    }
+
+    struct ged_edit_session_info info;
+    const struct rt_edit_prim_desc *descriptor = NULL;
+    struct bu_vls path = BU_VLS_INIT_ZERO;
+    if (ged_edit_session_info_get(gedp, session, &info) != GED_EDIT_OK ||
+	ged_edit_session_path_get(gedp, session, &path) != GED_EDIT_OK) {
+	bu_vls_free(&path);
+	return BRLCAD_ERROR;
+    }
+    (void)ged_edit_session_descriptor_get(gedp, session, &descriptor);
+    bu_vls_printf(gedp->ged_result_str,
+	"active path=%s type=%s revision=%llu dirty=%d command=%d\n",
+	bu_vls_cstr(&path), descriptor && descriptor->prim_type ?
+	descriptor->prim_type : "unknown",
+	(unsigned long long)info.revision, info.dirty, info.command_id);
+    bu_vls_free(&path);
     return BRLCAD_OK;
+}
+
+
+class cmd_get : public ged_subcmd {
+    public:
+	std::string usage()   { return std::string("edit [geometry] get operation"); }
+	std::string purpose() { return std::string("read operation values from the shared intermediate state"); }
+	int exec(struct ged *, void *, int, const char **);
+};
+static cmd_get edit_get_cmd;
+
+
+int
+cmd_get::exec(struct ged *gedp, void *u_data, int argc, const char **argv)
+{
+    if (!gedp || !u_data || argc != 2 || !argv || !argv[1])
+	return BRLCAD_ERROR;
+    struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    if (_edit_ctx_session(ctx, &session) != GED_EDIT_OK) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "get: no active edit session for '%s'\n",
+	    ctx->geom_specs.empty() ? "" : ctx->geom_specs[0].path.c_str());
+	return BRLCAD_ERROR;
+    }
+
+    const struct rt_edit_prim_desc *descriptor = NULL;
+    if (ged_edit_session_descriptor_get(gedp, session, &descriptor) !=
+	GED_EDIT_OK || !descriptor)
+	return BRLCAD_ERROR;
+    const struct rt_edit_cmd_desc *command = _find_desc_cmd(descriptor, argv[1]);
+    if (!command) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "get: unknown operation '%s' for %s\n", argv[1],
+	    descriptor->prim_label ? descriptor->prim_label : "primitive");
+	return BRLCAD_ERROR;
+    }
+
+    struct rt_edit_cmd_values values;
+    enum ged_edit_status result = ged_edit_session_command_values_get(gedp,
+	session, command->cmd_id, &values);
+    if (result != GED_EDIT_OK) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "get: operation '%s' does not provide current-value readback\n",
+	    argv[1]);
+	return BRLCAD_ERROR;
+    }
+    bu_vls_printf(gedp->ged_result_str, "%s", argv[1]);
+    for (int pi = 0; pi < command->nparam; pi++) {
+	const struct rt_edit_param_desc *param = &command->params[pi];
+	if (param->type == RT_EDIT_PARAM_STRING) {
+	    if (param->index >= 0 && param->index < RT_EDIT_MAXSTR &&
+		values.string_valid[param->index]) {
+		struct bu_vls encoded = BU_VLS_INIT_ZERO;
+		bu_vls_encode(&encoded, values.strings[param->index]);
+		bu_vls_printf(gedp->ged_result_str, " %s",
+		    bu_vls_cstr(&encoded));
+		bu_vls_free(&encoded);
+	    }
+	    continue;
+	}
+	int width = 1;
+	if (param->type == RT_EDIT_PARAM_SCALAR_LIST ||
+	    param->type == RT_EDIT_PARAM_INTEGER_LIST)
+	    width = (int)values.value_count - param->index;
+	else if (param->type == RT_EDIT_PARAM_POINT2 ||
+	    param->type == RT_EDIT_PARAM_VECTOR2)
+	    width = 2;
+	else if (param->type == RT_EDIT_PARAM_POINT ||
+	    param->type == RT_EDIT_PARAM_VECTOR ||
+	    param->type == RT_EDIT_PARAM_COLOR)
+	    width = 3;
+	else if (param->type == RT_EDIT_PARAM_MATRIX)
+	    width = 16;
+	for (int vi = 0; vi < width; vi++) {
+	    const int index = param->index + vi;
+	    if (index >= 0 && index < RT_EDIT_MAXPARA &&
+		values.value_valid[index])
+		bu_vls_printf(gedp->ged_result_str, " %.17g",
+		    values.values[index]);
+	}
+    }
+    bu_vls_putc(gedp->ged_result_str, '\n');
+    return BRLCAD_OK;
+}
+
+
+class cmd_commit : public ged_subcmd {
+    public:
+	std::string usage()   { return std::string("edit [geometry] commit"); }
+	std::string purpose() { return std::string("commit and close the shared edit session"); }
+	int exec(struct ged *, void *, int, const char **);
+};
+static cmd_commit edit_commit_cmd;
+
+
+int
+cmd_commit::exec(struct ged *UNUSED(gedp), void *u_data, int argc,
+    const char **argv)
+{
+    if (!u_data || argc != 1 || !argv)
+	return BRLCAD_ERROR;
+    struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    if (_edit_ctx_session(ctx, &session) != GED_EDIT_OK)
+	return BRLCAD_ERROR;
+    return ged_edit_session_commit(ctx->gedp, session) == GED_EDIT_OK ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
+
+
+class cmd_cancel : public ged_subcmd {
+    public:
+	std::string usage()   { return std::string("edit [geometry] cancel"); }
+	std::string purpose() { return std::string("discard and close the shared edit session"); }
+	int exec(struct ged *, void *, int, const char **);
+};
+static cmd_cancel edit_cancel_cmd;
+
+
+int
+cmd_cancel::exec(struct ged *UNUSED(gedp), void *u_data, int argc,
+    const char **argv)
+{
+    if (!u_data || argc != 1 || !argv)
+	return BRLCAD_ERROR;
+    struct ged_edit_ctx *ctx = (struct ged_edit_ctx *)u_data;
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    if (_edit_ctx_session(ctx, &session) != GED_EDIT_OK)
+	return BRLCAD_ERROR;
+    return ged_edit_session_cancel(ctx->gedp, session) == GED_EDIT_OK ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 
@@ -1675,6 +1872,20 @@ _prim_cmd_slug(const char *label)
     return slug;
 }
 
+static std::string
+_prim_cmd_name(const struct rt_edit_prim_desc *desc,
+	const struct rt_edit_cmd_desc *cmd)
+{
+    struct bu_vls name = BU_VLS_INIT_ZERO;
+    if (rt_edit_cmd_name(&name, desc, cmd) != BRLCAD_OK) {
+	bu_vls_free(&name);
+	return std::string();
+    }
+    const std::string result(bu_vls_cstr(&name));
+    bu_vls_free(&name);
+    return result;
+}
+
 
 /**
  * Get the DB5 minor type ID for a directory entry by briefly reading the
@@ -1696,10 +1907,9 @@ _get_prim_type_for_dp(struct directory *dp, struct db_i *dbip)
 
 
 /**
- * Find a command descriptor in desc->cmds[] by CLI name.  Tries, in order:
- *   1. Label slug: _prim_cmd_slug(cmd->label)
- *   2. First param name for single-param commands (e.g. "r1" for "Set Radius 1")
- *   3. Label itself (case-insensitive, for forward-compatibility)
+ * Find a command descriptor in desc->cmds[] by CLI name.  The canonical name
+ * is derived only from the descriptor's stable ECMD symbol.  Display-label and
+ * single-parameter spellings remain user conveniences, never identities.
  * Returns the matching rt_edit_cmd_desc pointer, or NULL if not found.
  */
 static const struct rt_edit_cmd_desc *
@@ -1709,14 +1919,17 @@ _find_desc_cmd(const struct rt_edit_prim_desc *desc, const char *name)
 	return NULL;
     for (int i = 0; i < desc->ncmd; i++) {
 	const struct rt_edit_cmd_desc *cmd = &desc->cmds[i];
-	/* 1. Label slug */
+	/* Stable symbolic and canonical names. */
+	if (cmd->name && bu_strcasecmp(cmd->name, name) == 0)
+	    return cmd;
+	if (_prim_cmd_name(desc, cmd) == name)
+	    return cmd;
+	/* Friendly aliases. */
 	if (_prim_cmd_slug(cmd->label) == name)
 	    return cmd;
-	/* 2. First param name (single-param shorthand) */
 	if (cmd->nparam == 1 && cmd->params && cmd->params[0].name &&
 	    BU_STR_EQUAL(cmd->params[0].name, name))
 	    return cmd;
-	/* 3. Label itself (case-insensitive) */
 	if (bu_strcasecmp(cmd->label, name) == 0)
 	    return cmd;
     }
@@ -1792,7 +2005,7 @@ _print_prim_help(struct ged *gedp, const struct rt_edit_prim_desc *desc, const c
 		if (req.find(rt) == std::string::npos)
 		    continue;
 	    }
-	    std::string slug = _prim_cmd_slug(cmd->label);
+	    std::string slug = _prim_cmd_name(desc, cmd);
 	    bu_vls_printf(gedp->ged_result_str, "    %-24s %s",
 		slug.c_str(), cmd->label);
 	    if (cmd->nparam > 0) {
@@ -1809,20 +2022,32 @@ _print_prim_help(struct ged *gedp, const struct rt_edit_prim_desc *desc, const c
 			cmd->params[0].units);
 	    }
 	    bu_vls_putc(gedp->ged_result_str, '\n');
-	    if (cmd->nparam == 1 && cmd->params && cmd->params[0].name &&
-		!BU_STR_EQUAL(cmd->params[0].name, slug.c_str())) {
+	    auto print_alias = [&](const char *alias) {
+		if (!alias || !alias[0] || BU_STR_EQUAL(alias, slug.c_str()))
+		    return;
 		bu_vls_printf(gedp->ged_result_str, "    %-24s %s",
-		    cmd->params[0].name, "(alias)");
+		    alias, "(alias)");
 		if (cmd->nparam > 0) {
 		    bu_vls_strcat(gedp->ged_result_str, " <");
-		    const struct rt_edit_param_desc *p = &cmd->params[0];
-		    bu_vls_strcat(gedp->ged_result_str, p->name ? p->name : "value");
+		    for (int pi = 0; pi < cmd->nparam; pi++) {
+			if (pi)
+			    bu_vls_strcat(gedp->ged_result_str, "> <");
+			const struct rt_edit_param_desc *p = &cmd->params[pi];
+			bu_vls_strcat(gedp->ged_result_str,
+			    p->name ? p->name : "value");
+		    }
 		    bu_vls_putc(gedp->ged_result_str, '>');
-		    if (p->units)
-			bu_vls_printf(gedp->ged_result_str, " [%s]", p->units);
+		    if (cmd->nparam == 1 && cmd->params[0].units)
+			bu_vls_printf(gedp->ged_result_str, " [%s]",
+			    cmd->params[0].units);
 		}
 		bu_vls_putc(gedp->ged_result_str, '\n');
-	    }
+	    };
+	    const std::string label_alias = _prim_cmd_slug(cmd->label);
+	    print_alias(label_alias.c_str());
+	    if (cmd->nparam == 1 && cmd->params && cmd->params[0].name &&
+		label_alias != cmd->params[0].name)
+		print_alias(cmd->params[0].name);
 	}
 	bu_vls_putc(gedp->ged_result_str, '\n');
     }
@@ -1880,7 +2105,13 @@ _desc_cmd_inpara(const struct rt_edit_cmd_desc *cmd)
 	if (p->type == RT_EDIT_PARAM_STRING)
 	    continue;
 	int stride = 1;
-	if (p->type == RT_EDIT_PARAM_POINT ||
+	if (p->type == RT_EDIT_PARAM_SCALAR_LIST ||
+	    p->type == RT_EDIT_PARAM_INTEGER_LIST)
+	    stride = p->nenum;
+	else if (p->type == RT_EDIT_PARAM_POINT2 ||
+	    p->type == RT_EDIT_PARAM_VECTOR2)
+	    stride = 2;
+	else if (p->type == RT_EDIT_PARAM_POINT ||
 	    p->type == RT_EDIT_PARAM_VECTOR ||
 	    p->type == RT_EDIT_PARAM_COLOR)
 	    stride = 3;
@@ -1895,57 +2126,27 @@ _desc_cmd_inpara(const struct rt_edit_cmd_desc *cmd)
 
 
 /**
- * Parse the CLI arguments for a descriptor-driven command and run it on
- * the already-initialised rt_edit struct @a s.
+ * Parse CLI arguments for a descriptor-driven command into the same typed
+ * representation used by graphical edit clients.
  *
  * argv[0] is the subcommand name (consumed here); parsing begins at argv[1].
- * Returns BRLCAD_OK on success, BRLCAD_ERROR on parse or execution failure.
+ * Returns BRLCAD_OK on success or BRLCAD_ERROR on a parse failure.
  */
 static int
-_exec_desc_cmd_on_edit(struct rt_edit *s, struct ged *gedp,
-		       const struct rt_edit_cmd_desc *cmd_desc,
-		       int argc, const char **argv)
+_parse_desc_cmd_input(struct ged *gedp,
+		      const struct rt_edit_cmd_desc *cmd_desc,
+		      int argc, const char **argv,
+		      fastf_t values[RT_EDIT_MAXPARA],
+		      const char *strings[RT_EDIT_MAXSTR],
+		      size_t *value_count, size_t *string_count)
 {
-    if (cmd_desc->req_types) {
-        const char *type_opt = rt_edit_get_opt(s, "type");
-        std::string t;
-        if (type_opt) {
-            t = type_opt;
-        } else {
-            struct bn_tol tol = BN_TOL_INIT_TOL;
-            if (s->es_int.idb_type == ID_ARB8) {
-                int nat = rt_arb_std_type(&s->es_int, &tol);
-                switch(nat) {
-                    case ARB8: t = "arb8"; break;
-                    case ARB7: t = "arb7"; break;
-                    case ARB6: t = "arb6"; break;
-                    case ARB5: t = "arb5"; break;
-                    case ARB4: t = "arb4"; break;
-                }
-            } else if (s->es_int.idb_type == ID_TGC || s->es_int.idb_type == ID_REC) {
-                int nat = rt_tgc_std_type(&s->es_int, &tol);
-                switch(nat) {
-                    case TGC: t = "tgc"; break;
-                    case TRC: t = "trc"; break;
-                    case RCC: t = "rcc"; break;
-                    case REC: t = "rec"; break;
-                    case TEC: t = "tec"; break;
-                }
-            }
-        }
-        
-        if (!t.empty()) {
-            std::string req(cmd_desc->req_types);
-            /* simple substring check works because types are distinct (sph, ell, etc.) */
-            if (req.find(t) == std::string::npos) {
-                if (gedp)
-                    bu_vls_printf(gedp->ged_result_str,
-                        "edit: command '%s' is not valid for geometry type '%s'\n",
-                        cmd_desc->label, t.c_str());
-                return BRLCAD_ERROR;
-            }
-        }
-    }
+    if (!cmd_desc || !argc || !argv || !values || !strings ||
+	!value_count || !string_count)
+	return BRLCAD_ERROR;
+    memset(values, 0, RT_EDIT_MAXPARA * sizeof(fastf_t));
+    memset(strings, 0, RT_EDIT_MAXSTR * sizeof(const char *));
+    *value_count = (size_t)_desc_cmd_inpara(cmd_desc);
+    *string_count = 0;
 
     /* skip the subcommand name */
     argc--; argv++;
@@ -1976,8 +2177,34 @@ _exec_desc_cmd_on_edit(struct rt_edit *s, struct ged *gedp,
 			    argv[argi], p->name ? p->name : "value");
 		    return BRLCAD_ERROR;
 		}
-		s->e_para[p->index] = val;
+		values[p->index] = val;
 		argi++;
+		break;
+	    }
+
+	    case RT_EDIT_PARAM_POINT2:
+	    case RT_EDIT_PARAM_VECTOR2:
+	    {
+		if (argi + 1 >= argc) {
+		    if (gedp)
+			bu_vls_printf(gedp->ged_result_str,
+			    "edit: '%s' requires U V for parameter '%s'\n",
+			    cmd_desc->label,
+			    p->name ? p->name : "point");
+		    return BRLCAD_ERROR;
+		}
+		for (int ci = 0; ci < 2; ci++) {
+		    fastf_t val;
+		    if (bu_opt_fastf_t(NULL, 1, argv + argi, &val) < 0) {
+			if (gedp)
+			    bu_vls_printf(gedp->ged_result_str,
+				"edit: cannot parse '%s' as a number\n",
+				argv[argi]);
+			return BRLCAD_ERROR;
+		    }
+		    values[p->index + ci] = val;
+		    argi++;
+		}
 		break;
 	    }
 
@@ -2001,7 +2228,7 @@ _exec_desc_cmd_on_edit(struct rt_edit *s, struct ged *gedp,
 				argv[argi]);
 			return BRLCAD_ERROR;
 		    }
-		    s->e_para[p->index + ci] = val;
+		    values[p->index + ci] = val;
 		    argi++;
 		}
 		break;
@@ -2027,7 +2254,7 @@ _exec_desc_cmd_on_edit(struct rt_edit *s, struct ged *gedp,
 				argv[argi]);
 			return BRLCAD_ERROR;
 		    }
-		    s->e_para[p->index + ci] = val;
+		    values[p->index + ci] = val;
 		    argi++;
 		}
 		break;
@@ -2052,7 +2279,7 @@ _exec_desc_cmd_on_edit(struct rt_edit *s, struct ged *gedp,
 				argv[argi]);
 			return BRLCAD_ERROR;
 		    }
-		    s->e_para[p->index + ci] = val;
+		    values[p->index + ci] = val;
 		    argi++;
 		}
 		break;
@@ -2068,9 +2295,42 @@ _exec_desc_cmd_on_edit(struct rt_edit *s, struct ged *gedp,
 			    p->name ? p->name : "string");
 		    return BRLCAD_ERROR;
 		}
-		rt_edit_set_str(s, p->index, argv[argi]);
-		s->e_nstr = p->index + 1;
+		if (p->index < 0 || p->index >= RT_EDIT_MAXSTR)
+		    return BRLCAD_ERROR;
+		strings[p->index] = argv[argi];
+		if ((size_t)(p->index + 1) > *string_count)
+		    *string_count = (size_t)p->index + 1;
 		argi++;
+		break;
+	    }
+
+	    case RT_EDIT_PARAM_SCALAR_LIST:
+	    case RT_EDIT_PARAM_INTEGER_LIST:
+	    {
+		const int count = argc - argi;
+		const int max_count = RT_EDIT_MAXPARA - p->index;
+		if (count < p->nenum || count > max_count) {
+		    if (gedp)
+			bu_vls_printf(gedp->ged_result_str,
+			    "edit: '%s' requires %d..%d values for '%s'\n",
+			    cmd_desc->label, p->nenum, max_count,
+			    p->name ? p->name : "values");
+		    return BRLCAD_ERROR;
+		}
+		for (int li = 0; li < count; li++) {
+		    fastf_t val;
+		    if (bu_opt_fastf_t(NULL, 1, argv + argi, &val) < 0) {
+			if (gedp)
+			    bu_vls_printf(gedp->ged_result_str,
+				"edit: cannot parse '%s' as a number for '%s'\n",
+				argv[argi], p->name ? p->name : "values");
+			return BRLCAD_ERROR;
+		    }
+		    values[p->index + li] = val;
+		    argi++;
+		}
+		*value_count = std::max(*value_count,
+		    (size_t)(p->index + count));
 		break;
 	    }
 
@@ -2078,16 +2338,11 @@ _exec_desc_cmd_on_edit(struct rt_edit *s, struct ged *gedp,
 		break;
 	}
     }
-
-    s->e_inpara = _desc_cmd_inpara(cmd_desc);
-    rt_edit_set_edflag(s, cmd_desc->cmd_id);
-    rt_edit_process(s);
-
-    /* Forward any error message logged by the edit handler */
-    if (s->log_str && bu_vls_strlen(s->log_str) > 0) {
+    if (argi != argc) {
 	if (gedp)
-	    bu_vls_printf(gedp->ged_result_str, "%s", bu_vls_cstr(s->log_str));
-	bu_vls_trunc(s->log_str, 0);
+	    bu_vls_printf(gedp->ged_result_str,
+		"edit: '%s' received %d unexpected argument%s\n",
+		cmd_desc->label, argc - argi, argc - argi == 1 ? "" : "s");
 	return BRLCAD_ERROR;
     }
 
@@ -2095,10 +2350,74 @@ _exec_desc_cmd_on_edit(struct rt_edit *s, struct ged *gedp,
 }
 
 
+static std::string
+_desc_geometry_type(struct ged_edit_ctx *ctx)
+{
+    if (!ctx)
+	return std::string();
+    for (const auto &opt : ctx->options) {
+	if (opt.first == "type")
+	    return opt.second;
+    }
+    if (!ctx->gedp || ctx->dp == RT_DIR_NULL)
+	return std::string();
+
+    struct rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    if (rt_db_get_internal(&intern, ctx->dp, ctx->gedp->dbip, NULL) < 0)
+	return std::string();
+    std::string type;
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+    if (intern.idb_type == ID_ARB8) {
+	switch (rt_arb_std_type(&intern, &tol)) {
+	    case ARB8: type = "arb8"; break;
+	    case ARB7: type = "arb7"; break;
+	    case ARB6: type = "arb6"; break;
+	    case ARB5: type = "arb5"; break;
+	    case ARB4: type = "arb4"; break;
+	}
+    } else if (intern.idb_type == ID_TGC || intern.idb_type == ID_REC) {
+	switch (rt_tgc_std_type(&intern, &tol)) {
+	    case TGC: type = "tgc"; break;
+	    case TRC: type = "trc"; break;
+	    case RCC: type = "rcc"; break;
+	    case REC: type = "rec"; break;
+	    case TEC: type = "tec"; break;
+	}
+    } else if (intern.idb_type == ID_ELL) {
+	/* The ELL edit table also represents the SPH specialization. */
+	type = rt_ell_is_sph(&intern) ? "sph" : "ell";
+    }
+    rt_db_free_internal(&intern);
+    return type;
+}
+
+
+static bool
+_desc_type_allowed(const char *required, const std::string &type)
+{
+    if (!required || type.empty())
+	return true;
+    const std::string types(required);
+    size_t begin = 0;
+    while (begin <= types.size()) {
+	const size_t end = types.find(',', begin);
+	const size_t length = end == std::string::npos ?
+	    types.size() - begin : end - begin;
+	if (types.compare(begin, length, type) == 0)
+	    return true;
+	if (end == std::string::npos)
+	    break;
+	begin = end + 1;
+    }
+    return false;
+}
+
+
 /**
- * Descriptor-driven subcommand dispatch: look up the primitive type of
- * ctx->dp, find the matching rt_edit_cmd_desc, and execute it via
- * _edit_xform_apply (which manages the temp edit buffer and disk promotion).
+ * Descriptor-driven subcommand dispatch.  Commands, generated widgets, and
+ * scene manipulators all enter through ged_edit_session_apply so observers
+ * see one revision stream and every frontend reads the same intermediate.
  */
 static int
 _exec_desc_cmd(struct ged *gedp, struct ged_edit_ctx *ctx,
@@ -2107,11 +2426,82 @@ _exec_desc_cmd(struct ged *gedp, struct ged_edit_ctx *ctx,
 {
     if (!gedp || !ctx || !cmd_desc || ctx->dp == RT_DIR_NULL)
 	return BRLCAD_ERROR;
+    if (ctx->geom_specs.empty() || ctx->geom_specs[0].path.empty())
+	return BRLCAD_ERROR;
 
-    return _edit_xform_apply(ctx,
-	[&](struct rt_edit *s) -> int {
-	    return _exec_desc_cmd_on_edit(s, gedp, cmd_desc, argc, argv);
-	});
+    const std::string type = _desc_geometry_type(ctx);
+    if (!_desc_type_allowed(cmd_desc->req_types, type)) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "edit: command '%s' is not valid for geometry type '%s'\n",
+	    cmd_desc->label, type.c_str());
+	return BRLCAD_ERROR;
+    }
+
+    fastf_t values[RT_EDIT_MAXPARA];
+    const char *strings[RT_EDIT_MAXSTR];
+    size_t value_count = 0;
+    size_t string_count = 0;
+    if (_parse_desc_cmd_input(gedp, cmd_desc, argc, argv, values, strings,
+	&value_count, &string_count) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    const enum ged_edit_status prior = ged_edit_session_find(gedp,
+	ctx->geom_specs[0].path.c_str(), &session);
+    const bool created = prior == GED_EDIT_NOT_FOUND;
+    if (prior != GED_EDIT_OK && !created)
+	return BRLCAD_ERROR;
+    if (created) {
+	const enum ged_edit_status begun = ged_edit_session_begin(gedp,
+	    ctx->geom_specs[0].path.c_str(), NULL, &session);
+	if (begun != GED_EDIT_OK) {
+	    if (begun == GED_EDIT_CONFLICT)
+		bu_vls_printf(gedp->ged_result_str,
+		    "edit: another occurrence of this object is already being edited\n");
+	    return BRLCAD_ERROR;
+	}
+    }
+
+    /* Dynamic options configure librt interpretation (notably ARB subtype)
+     * and deliberately live on the shared session. */
+    struct db_full_path dfp;
+    db_full_path_init(&dfp);
+    if (db_string_to_path(&dfp, gedp->dbip,
+	ctx->geom_specs[0].path.c_str()) < 0) {
+	if (created)
+	    (void)ged_edit_session_cancel(gedp, session);
+	db_free_full_path(&dfp);
+	return BRLCAD_ERROR;
+    }
+    struct rt_edit *state = ged_edit_buf_get(gedp, &dfp);
+    for (const auto &opt : ctx->options) {
+	if (state)
+	    (void)rt_edit_set_opt(state, opt.first.c_str(), opt.second.c_str());
+    }
+    db_free_full_path(&dfp);
+
+    struct ged_edit_command_input input = {};
+    input.command_id = cmd_desc->cmd_id;
+    input.values = values;
+    input.value_count = value_count;
+    input.strings = strings;
+    input.string_count = string_count;
+    const enum ged_edit_status applied = ged_edit_session_apply(gedp,
+	session, &input);
+    if (applied != GED_EDIT_OK) {
+	if (created)
+	    (void)ged_edit_session_cancel(gedp, session);
+	if (!bu_vls_strlen(gedp->ged_result_str))
+	    bu_vls_printf(gedp->ged_result_str,
+		"edit: command '%s' was rejected (%d)\n",
+		cmd_desc->label, (int)applied);
+	return BRLCAD_ERROR;
+    }
+
+    if (ctx->flag_i)
+	return BRLCAD_OK;
+    return ged_edit_session_commit(gedp, session) == GED_EDIT_OK ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 
@@ -2160,6 +2550,10 @@ ged_edit_core(struct ged *gedp, int argc, const char *argv[])
     edit_cmds["checkpoint"] = &edit_checkpoint_cmd;
     edit_cmds["revert"]     = &edit_revert_cmd;
     edit_cmds["reset"]      = &edit_reset_cmd;
+    edit_cmds["status"]     = &edit_status_cmd;
+    edit_cmds["get"]        = &edit_get_cmd;
+    edit_cmds["commit"]     = &edit_commit_cmd;
+    edit_cmds["cancel"]     = &edit_cancel_cmd;
     edit_cmds["mat"]        = &edit_mat_cmd;
 
     /* ---- Global option descriptors --------------------------------- */

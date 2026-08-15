@@ -1970,6 +1970,10 @@ mesh_lod_cad_allocated_cut(
     const BObolLodRequest &request)
 {
     if (!payload || payload->allocatedCut < 0 ||
+	(payload->allocationPlanSerial != 0 &&
+	 (!payload->ownerState ||
+	  payload->allocationPlanSerial !=
+	      payload->ownerState->activeCadAllocationPlan())) ||
 	payload->allocationViewRevision != request.viewRevision.value() ||
 	payload->allocationPolicyRevision != request.policyRevision.value() ||
 	payload->allocationDrawMode != request.drawMode)
@@ -2044,10 +2048,26 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		size_t admittedFaces;
 		size_t admittedCost;
 	    };
+	    /* Query the indexed source population before materializing its
+	     * payload vector.  In the large-source alias case that copy is itself
+	     * an unbounded, cache-unfriendly GUI-thread traversal and was measured
+	     * at over 100 ms after an erase/redraw transaction. */
+	    static const size_t localRetainedRecoveryLimit = 2048;
+	    if (submitAction->viewState->cadPayloadCountForSource(source) <=
+		localRetainedRecoveryLimit) {
 	    std::vector<const BObolViewLodState::CadPayload *> activePayloads;
 	    std::vector<RetainedCandidate> retainedCandidates;
 	    submitAction->viewState->findCadPayloadsUnordered(
 		source, activePayloads);
+	    /* Source-subset views may share a routing identity with a much larger
+	     * retained population.  Their own compact frontier is small, so the
+	     * caller legitimately invokes this action without a bounded entry
+	     * range; applying a source-wide recovery through that alias would then
+	     * project and sort tens of thousands of unrelated retained peers before
+	     * the action's time limit begins.  Large retained reallocations belong
+	     * to the controller's explicit, pinned recovery plan.  Keep this local
+	     * fallback proportional to the unbounded source frontier it was meant
+	     * to serve. */
 	    retainedCandidates.reserve(activePayloads.size());
 	    for (const BObolViewLodState::CadPayload *payload :
 		activePayloads) {
@@ -2238,6 +2258,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		if (candidate.admittedCut < candidate.requestedCut)
 		    submitAction->pendingRetainedRefinementCount++;
 	    }
+	    }
 	}
 	struct CompactCandidate {
 	    size_t index;
@@ -2250,6 +2271,29 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    bool qualityFloorViolation;
 	};
 	if (!submitAction->compactEntryPlanSupplied) {
+	    /* A controller normally pins an explicit bounded plan for a large
+	     * compact source, including its perceptual ordering when retained
+	     * quality is being reallocated.  Keep this action safe for every other
+	     * caller and for transient controller/source-delta handoffs: building
+	     * and sorting a complete 50k/150k projection here happens before the
+	     * per-entry time limit below and can block the presentation owner for
+	     * hundreds of milliseconds.
+	     *
+	     * Index order has no semantic effect on eventual coverage.  Use it as
+	     * the allocation-free-to-evaluate fallback for a large unplanned
+	     * source; the ordinary bounded range then projects current-view demand
+	     * incrementally.  Small sources retain the local perceptual sort, while
+	     * a large caller which needs global ordering must supply that plan
+	     * explicitly. */
+	    static const int localPriorityPlanLimit = 2048;
+	    if (count > localPriorityPlanLimit) {
+		submitAction->compactEntryPlan.resize(
+		    static_cast<size_t>(count));
+		for (size_t planIndex = 0;
+		     planIndex < submitAction->compactEntryPlan.size();
+		     ++planIndex)
+		    submitAction->compactEntryPlan[planIndex] = planIndex;
+	    } else {
 	    /* This traversal owns the perceptual order.  Coverage has already
 	     * established one mesh per visible occurrence; visit the strongest
 	     * deficits first and let each choose its richest budget-fitting
@@ -2456,6 +2500,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		if (submitAction->viewState->removeCadPayload(payload))
 		    submitAction->updatedCutCount++;
 	    }
+	    }
 	}
 	const std::vector<size_t> &entryPlan =
 	    submitAction->compactEntryPlanView ?
@@ -2573,10 +2618,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		summary.meshAssetName : summary.sourceName;
 	    request.occurrenceKey = summary.sourceInstanceKey;
 	    request.sourceRoutingId = source->getCompactSourceRoutingId();
+	    request.sourceEntryIndex = i <=
+		static_cast<size_t>(UINT32_MAX) ?
+		static_cast<uint32_t>(i) : UINT32_MAX;
 	    if (request.objectName.getLength() == 0)
 		request.objectName = mesh_lod_source_leaf_name(source);
 	    request.viewRevision = submitAction->viewRevision;
 	    request.policyRevision = submitAction->policyRevision;
+	    request.visualEmphasis = summary.selected ? 2 :
+		(summary.highlighted ? 1 : 0);
 	    request.drawMode = sourceDrawMode;
 	    request.providerId = submitAction->providerId;
 	    request.providerVersion = submitAction->providerVersion;

@@ -169,6 +169,11 @@ main(int argc, char *argv[])
 
     struct rt_epa_internal *edit_epa = (struct rt_epa_internal *)s->es_int.idb_ptr;
 
+    if (!rt_edit_test_scalar_value(s, ECMD_EPA_H, 20.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_EPA_R1, 5.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_EPA_R2, 3.0))
+	bu_exit(1, "ERROR: EPA descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================

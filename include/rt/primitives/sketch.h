@@ -77,7 +77,49 @@ struct rt_sketch_edit {
     /* Mouse-proximity pick: ft_edit_xy stores cursor here; ft_edit reads it */
     point_t v_pos;      /* view-space cursor position set by ft_edit_xy */
     int v_pos_valid;    /* non-zero when v_pos holds a pending proximity query */
+    vect2d_t last_segment_delta; /* last applied segment motion, base units */
+    int last_segment_delta_valid;
 };
+
+/** Stable semantic kinds reported for edit-display sketch segments. */
+enum rt_sketch_edit_segment_type {
+    RT_SKETCH_EDIT_SEGMENT_UNKNOWN = 0,
+    RT_SKETCH_EDIT_SEGMENT_LINE,
+    RT_SKETCH_EDIT_SEGMENT_ARC,
+    RT_SKETCH_EDIT_SEGMENT_BEZIER,
+    RT_SKETCH_EDIT_SEGMENT_NURB
+};
+
+/**
+ * Caller-owned retained edit geometry for a sketch.
+ *
+ * vertices contains the exact 3-D model-space position of every sketch
+ * vertex.  line_points/line_commands contain a tessellated presentation of
+ * all curve segments.  line_segments maps every line command to its stable
+ * source segment index, allowing a renderer to present many line pieces as
+ * one selectable feature.  segment_types has segment_count entries.
+ *
+ * Initialize to zero, populate with rt_sketch_edit_geometry_get, and release
+ * with rt_sketch_edit_geometry_free.  Memory is allocated and released by
+ * librt so the contract is safe across Windows CRT boundaries.
+ */
+struct rt_sketch_edit_geometry {
+    point_t *vertices;
+    size_t vertex_count;
+    point_t *line_points;
+    int *line_commands;
+    int *line_segments;
+    size_t line_count;
+    int *segment_types;
+    size_t segment_count;
+};
+
+RT_EXPORT extern void
+rt_sketch_edit_geometry_free(struct rt_sketch_edit_geometry *geometry);
+
+RT_EXPORT extern int
+rt_sketch_edit_geometry_get(struct rt_sketch_edit_geometry *geometry,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol);
 
 RT_EXPORT extern int rt_check_curve(const struct rt_curve *crv,
 				    const struct rt_sketch_internal *skt,
@@ -113,6 +155,18 @@ RT_EXPORT extern struct directory *
 db_sketch_polygon_data_to_sketch(struct db_i *dbip,
 				 const char *sname,
 				 const struct rt_sketch_polygon_data *poly);
+
+/**
+ * Replace an existing sketch with polygon data.
+ *
+ * Unlike db_sketch_polygon_data_to_sketch(), this routine requires @p sname
+ * to identify an existing sketch.  It will not replace an object of another
+ * type and it will not create a missing object.
+ */
+RT_EXPORT extern struct directory *
+db_sketch_polygon_data_update_sketch(struct db_i *dbip,
+				     const char *sname,
+				     const struct rt_sketch_polygon_data *poly);
 
 RT_EXPORT extern struct directory *
 db_sketch_polygon_to_sketch(struct db_i *dbip, const char *sname, const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3]);

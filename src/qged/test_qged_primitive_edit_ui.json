@@ -1,0 +1,1288 @@
+{
+  "schema": "brlcad.qtcad.events",
+  "version": 1,
+  "events": [
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": { "width": 1050, "height": 760 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+        "commands": ["draw group.c", "ae 0 90", "center 0 0 0", "size 6"]
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.ell.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "set_text",
+      "arguments": { "text": "group.c/ell.s" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": {
+        "text": "Set A",
+        "index": 0,
+        "count": 4,
+        "items": ["Set A", "Set B", "Set C", "Set A,B,C"]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.param.a.0",
+      "action": "assert_state",
+      "arguments": { "value": 2.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "set_index",
+      "arguments": { "index": 1 }
+    },
+    {
+      "target": "i:primitiveEdit.param.b.0",
+      "action": "assert_state",
+      "arguments": { "value": 1.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/ell.s get b",
+	"contains": "b 1"
+      }
+    },
+    {
+	"target": ".",
+	"action": "drag_obol_edit_handle",
+	"arguments": {
+	  "feature": "_ell_edit_manipulator",
+	  "handle": "b",
+	  "factor": 1.5
+	}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/ell.s get b",
+	"contains": "b 1."
+      }
+    },
+    {
+	"target": ".",
+	"action": "assert_obol_edit_handle",
+	"arguments": {
+	  "feature": "_ell_edit_manipulator",
+	  "handle": "b",
+	  "length": 1.5,
+	  "all_views": true,
+	  "tolerance": 0.05
+	}
+    },
+    {
+	"target": "i:primitiveEdit.param.b.0",
+      "action": "assert_state",
+	"arguments": { "value_gt": 1.0 }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "set_index",
+      "arguments": { "index": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/ell.s a 7" }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": { "width": 760, "height": 620 }
+    },
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": { "width": 1420, "height": 900 }
+    },
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": { "width": 821, "height": 577 }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 50 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/ell.s status",
+	"contains": ["active", "dirty=1"]
+      }
+    },
+    {
+      "target": "./n:Hierarchy/i:hierarchy-tree",
+      "action": "set_expanded",
+      "arguments": { "labels": ["group.c"], "expanded": true }
+    },
+    {
+      "target": "./n:Hierarchy/i:hierarchy-tree",
+      "action": "set_current",
+      "arguments": { "labels": ["group.c", "bot.s"] }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 50 }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "assert_state",
+      "arguments": { "text": "group.c/ell.s" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/ell.s status",
+	"contains": ["active", "dirty=1"]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.param.a.0",
+      "action": "assert_state",
+      "arguments": { "value": 7.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "a",
+	"length": 7.0,
+	"all_views": true,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": "./n:Hierarchy/i:hierarchy-tree",
+      "action": "clear_selection",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": { "width": 1120, "height": 810 }
+    },
+    {
+      "target": "i:primitiveEdit.param.a.0",
+      "action": "assert_state",
+      "arguments": { "value": 7.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "a",
+	"length": 7.0,
+	"all_views": true,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.param.a.0",
+      "action": "set_value",
+      "arguments": { "value": 9.0 }
+    },
+    {
+      "target": "i:primitiveEdit.apply",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "edit group.c/ell.s get a",
+        "contains": "9"
+      }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "a",
+	"length": 9.0,
+	"all_views": true,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.checkpoint",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/ell.s a 11" }
+    },
+    {
+      "target": "i:primitiveEdit.param.a.0",
+      "action": "assert_state",
+      "arguments": { "value": 11.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": "i:primitiveEdit.revert",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:primitiveEdit.param.a.0",
+      "action": "assert_state",
+      "arguments": { "value": 9.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "a",
+	"length": 9.0,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.commit",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 50 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "edit group.c/ell.s status",
+        "contains": ["active", "revision=0"]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.param.a.0",
+      "action": "assert_state",
+      "arguments": { "value": 9.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "a",
+	"length": 9.0,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "adjust ell.s A \"12 0 0\"" }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 50 }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "assert_state",
+      "arguments": { "text": "group.c/ell.s" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Set A", "index": 0, "count": 4 }
+    },
+    {
+      "target": "i:primitiveEdit.param.a.0",
+      "action": "assert_state",
+      "arguments": { "value": 12.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "a",
+	"length": 12.0,
+	"all_views": true,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/ell.s get a",
+	"contains": "12"
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/ell.s b 4" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Set B", "index": 1, "count": 4 }
+    },
+    {
+      "target": "i:primitiveEdit.param.b.0",
+      "action": "assert_state",
+      "arguments": { "value": 4.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "b",
+	"length": 4.0,
+	"all_views": true,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "set_text",
+      "arguments": { "text": "rename_ell.s" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "get ell.s B",
+	"contains": "1.5"
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "set_index",
+      "arguments": { "index": 0 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "a",
+	"length": 3.0,
+	"all_views": true,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "move rename_ell.s renamed_ell.s" }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 50 }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "assert_state",
+      "arguments": { "text": "/renamed_ell.s" }
+    },
+    {
+      "target": "i:primitiveEdit.param.a.0",
+      "action": "assert_state",
+      "arguments": { "value": 3.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "a",
+	"length": 3.0,
+	"all_views": true,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit renamed_ell.s get a",
+	"contains": "3"
+      }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "set_text",
+      "arguments": { "text": "remove_group.c/remove_ell.s" }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_edit_handle",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"handle": "a",
+	"length": 4.0,
+	"tolerance": 0.000001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "rm remove_group.c/remove_ell.s" }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 20 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": {
+	"feature": "_ell_edit_manipulator",
+	"all_views": true,
+	"exists": false
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "count": 0, "enabled": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.ell.activate",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.extrude.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "set_text",
+      "arguments": { "text": "group.c/extrude.s" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": {
+	"text": "Set H",
+	"index": 0,
+	"count": 8,
+	"items": ["Set H", "Move End H", "Rotate H", "Set A", "Rotate A", "Set B", "Rotate B", "Referenced Sketch"]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.param.h.0",
+      "action": "assert_state",
+      "arguments": { "value": 2.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_edit_session_preview",
+      "arguments": {
+	"path": "group.c/extrude.s",
+	"exists": true,
+	"all_views": true,
+	"visible": true,
+	"bounds_size": [1.0, 1.0, 2.0],
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/extrude.s h 3" }
+    },
+    {
+      "target": "i:primitiveEdit.param.h.0",
+      "action": "assert_state",
+      "arguments": { "value": 3.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_edit_session_preview",
+      "arguments": {
+	"path": "group.c/extrude.s",
+	"all_views": true,
+	"bounds_size": [1.0, 1.0, 3.0],
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.param.h.0",
+      "action": "set_value",
+      "arguments": { "value": 4.0 }
+    },
+    {
+      "target": "i:primitiveEdit.apply",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/extrude.s get h",
+	"contains": "4"
+      }
+    },
+    {
+      "target": ".",
+      "action": "assert_edit_session_preview",
+      "arguments": {
+	"path": "group.c/extrude.s",
+	"all_views": true,
+	"bounds_size": [1.0, 1.0, 4.0],
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.cancel",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.extrude.activate",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.revolve.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "set_text",
+      "arguments": { "text": "group.c/revolve.s" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": {
+	"text": "Set Vertex",
+	"index": 0,
+	"count": 5,
+	"items": ["Set Vertex", "Set Axis", "Set Start Vector", "Set Sweep Angle", "Set Sketch Name"]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "set_index",
+      "arguments": { "index": 3 }
+    },
+    {
+      "target": "i:primitiveEdit.param.ang.0",
+      "action": "assert_state",
+      "arguments": { "value": 180.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_edit_session_preview",
+      "arguments": {
+	"path": "group.c/revolve.s",
+	"exists": true,
+	"all_views": true,
+	"visible": true,
+	"bounds_size": [2.0, 1.0, 1.0],
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/revolve.s ang 90" }
+    },
+    {
+      "target": "i:primitiveEdit.param.ang.0",
+      "action": "assert_state",
+      "arguments": { "value": 90.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_edit_session_preview",
+      "arguments": {
+	"path": "group.c/revolve.s",
+	"all_views": true,
+	"bounds_size": [1.0, 1.0, 1.0],
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.param.ang.0",
+      "action": "set_value",
+      "arguments": { "value": 120.0 }
+    },
+    {
+      "target": "i:primitiveEdit.apply",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/revolve.s get ang",
+	"contains": "119.999"
+      }
+    },
+    {
+      "target": ".",
+      "action": "assert_edit_session_preview",
+      "arguments": {
+	"path": "group.c/revolve.s",
+	"all_views": true,
+	"bounds_size": [1.5, 1.0, 1.0],
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.cancel",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.revolve.activate",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.arb.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "set_text",
+      "arguments": { "text": "group.c/arb.s" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": {
+	"text": "Select Vertex",
+	"index": 0,
+	"count": 7,
+	"items": ["Select Vertex", "Select Edge", "Select Face", "Move Face", "Move Edge", "Move Vertex", "Rotate Face"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/arb.s select_vertex 5" }
+    },
+    {
+      "target": "i:arb.editMode",
+      "action": "assert_state",
+      "arguments": { "text": "Vertex", "index": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/arb.s status",
+	"contains": ["revision=1", "dirty=0"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_arb_edit_manipulator",
+	"domain": "vertex",
+	"index": 5,
+	"position": [2.0, 0.0, 2.0],
+	"all_views": true,
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/arb.s select_face 0" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Select Face", "index": 2 }
+    },
+    {
+      "target": "i:arb.editMode",
+      "action": "assert_state",
+      "arguments": { "text": "Face", "index": 2 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_arb_edit_manipulator",
+	"domain": "face",
+	"index": 0,
+	"all_views": true
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/arb.s select_vertex 5" }
+    },
+    {
+      "target": ".",
+      "action": "drag_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_arb_edit_manipulator",
+	"domain": "vertex",
+	"index": 5,
+	"target_point": [3.0, 0.0, 2.0]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Move Vertex", "index": 5 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/arb.s get move_vertex",
+	"contains": ["5", "3"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_arb_edit_manipulator",
+	"domain": "vertex",
+	"index": 5,
+	"position": [3.0, 0.0, 2.0],
+	"all_views": true,
+	"tolerance": 0.05
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/arb.s move_vertex 5 4 0 2" }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_arb_edit_manipulator",
+	"domain": "vertex",
+	"index": 5,
+	"position": [4.0, 0.0, 2.0],
+	"all_views": true,
+	"tolerance": 0.05
+      }
+    },
+    {
+      "target": "i:primitiveEdit.cancel",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.arb.activate",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.sketch.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "set_text",
+      "arguments": { "text": "group.c/sketch.s" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": {
+	"text": "Pick Vertex",
+	"index": 0,
+	"count": 20,
+	"items": ["Pick Vertex", "Move Vertex", "Pick Segment", "Move Segment", "Append Line", "Append Arc", "Append Bezier", "Delete Vertex", "Delete Segment", "Move Vertex List", "Split Segment", "Append NURB", "NURB Edit KV", "NURB Edit Weights", "Add Vertex", "Toggle Arc Orient", "Set Arc Radius", "Set Arc Tangency", "Set Sketch Plane", "Toggle Seg Reverse"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/sketch.s pick_vertex 2" }
+    },
+    {
+      "target": "i:sketch.editMode",
+      "action": "assert_state",
+      "arguments": { "text": "Vertex", "index": 0 }
+    },
+    {
+      "target": "i:primitiveEdit.param.index.0",
+      "action": "assert_state",
+      "arguments": { "value": 2 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/sketch.s status",
+	"contains": ["revision=1", "dirty=0"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_sketch_edit_manipulator",
+	"domain": "vertex",
+	"index": 2,
+	"position": [0.0, 1.0, 0.0],
+	"all_views": true,
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": ".",
+      "action": "drag_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_sketch_edit_manipulator",
+	"domain": "vertex",
+	"index": 2,
+	"target_point": [0.25, 1.5, 0.0]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Move Vertex", "index": 1 }
+    },
+    {
+      "target": "i:primitiveEdit.param.point.0",
+      "action": "assert_state",
+      "arguments": { "value": 0.25, "tolerance": 0.05 }
+    },
+    {
+      "target": "i:primitiveEdit.param.point.1",
+      "action": "assert_state",
+      "arguments": { "value": 1.5, "tolerance": 0.05 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/sketch.s get move_vertex",
+	"contains": ["move_vertex", "0.2", "1."]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/sketch.s move_vertex 0.5 1.25" }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_sketch_edit_manipulator",
+	"domain": "vertex",
+	"index": 2,
+	"position": [0.5, 1.25, 0.0],
+	"all_views": true,
+	"tolerance": 0.05
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/sketch.s pick_segment 0" }
+    },
+    {
+      "target": "i:sketch.editMode",
+      "action": "assert_state",
+      "arguments": { "text": "Segment", "index": 1 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_sketch_edit_manipulator",
+	"domain": "edge",
+	"index": 0,
+	"position": [1.0, 0.5, 0.0],
+	"all_views": true,
+	"tolerance": 0.05
+      }
+    },
+    {
+      "target": ".",
+      "action": "drag_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_sketch_edit_manipulator",
+	"domain": "edge",
+	"index": 0,
+	"target_point": [1.5, 0.75, 0.0]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Move Segment", "index": 3 }
+    },
+    {
+      "target": "i:primitiveEdit.param.delta.0",
+      "action": "assert_state",
+      "arguments": { "value": 0.5, "tolerance": 0.05 }
+    },
+    {
+      "target": "i:primitiveEdit.param.delta.1",
+      "action": "assert_state",
+      "arguments": { "value": 0.25, "tolerance": 0.05 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/sketch.s pick_vertex 0" }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_sketch_edit_manipulator",
+	"domain": "vertex",
+	"index": 0,
+	"position": [1.5, 0.25, 0.0],
+	"all_views": true,
+	"tolerance": 0.05
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "set_index",
+      "arguments": { "index": 14 }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Add Vertex", "index": 14 }
+    },
+    {
+      "target": "i:primitiveEdit.param.point.0",
+      "action": "set_value",
+      "arguments": { "value": 2.25 }
+    },
+    {
+      "target": "i:primitiveEdit.param.point.1",
+      "action": "set_value",
+      "arguments": { "value": 0.75 }
+    },
+    {
+      "target": "i:primitiveEdit.apply",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/sketch.s pick_vertex 4" }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_sketch_edit_manipulator",
+	"domain": "vertex",
+	"index": 4,
+	"position": [2.25, 0.75, 0.0],
+	"all_views": true,
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit -i group.c/sketch.s set_plane 0 0 1 1 0 0 0 1 0"
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Set Sketch Plane", "index": 18 }
+    },
+    {
+      "target": "i:primitiveEdit.param.origin.2",
+      "action": "assert_state",
+      "arguments": { "value": 1.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_sketch_edit_manipulator",
+	"domain": "vertex",
+	"index": 4,
+	"position": [2.25, 0.75, 1.0],
+	"all_views": true,
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.param.origin.2",
+      "action": "set_value",
+      "arguments": { "value": 2.0 }
+    },
+    {
+      "target": "i:primitiveEdit.apply",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/sketch.s get set_plane",
+	"contains": ["set_plane", "0 0 2"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_indexed_edit_handle",
+      "arguments": {
+	"feature": "_sketch_edit_manipulator",
+	"domain": "vertex",
+	"index": 4,
+	"position": [2.25, 0.75, 2.0],
+	"all_views": true,
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.cancel",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.sketch.activate",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "lt group.c",
+	"contains": "bot.s"
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.bot.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "set_text",
+      "arguments": { "text": "group.c/bot.s" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": {
+	"text": "Select Vertex",
+	"index": 0,
+	"count": 17,
+	"items": ["Select Vertex", "Select Edge", "Select Face", "Move Vertex", "Move Edge", "Move Face", "Move Vertex List", "Split Edge", "Split Face", "Delete Face", "Fuse Vertices", "Fuse Faces", "Set Mode", "Set Orientation", "Set Face Thickness", "Set Face Mode", "Set Flags"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": {
+	"feature": "_bot_edit_surface",
+	"exists": true,
+	"all_views": true,
+	"shared_geometry": true,
+	"visible": true,
+	"bounds_size": [2.0, 2.0, 2.0],
+	"selected_primitives": [],
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.param.vertex_index.0",
+      "action": "assert_state",
+      "arguments": { "value": -1 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/bot.s pickv 1" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Select Vertex", "index": 0 }
+    },
+    {
+      "target": "i:primitiveEdit.param.vertex_index.0",
+      "action": "assert_state",
+      "arguments": { "value": 1 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/bot.s status",
+	"contains": ["revision=1", "dirty=0"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "drag_obol_mesh_vertex",
+      "arguments": {
+	"feature": "_bot_edit_surface",
+	"vertex": 1,
+	"target_point": [3.0, 0.0, 0.0]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Move Vertex", "index": 3 }
+    },
+    {
+      "target": "i:primitiveEdit.param.pos.0",
+      "action": "assert_state",
+      "arguments": { "value": 3.0, "tolerance": 0.05 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": {
+	"feature": "_bot_edit_surface",
+	"all_views": true,
+	"bounds_size": [3.0, 2.0, 2.0],
+	"tolerance": 0.05
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/bot.s status",
+	"contains": "dirty=1"
+      }
+    },
+    {
+      "target": ".",
+      "action": "drag_obol_mesh_vertex",
+      "arguments": {
+	"feature": "_bot_edit_surface",
+	"vertex": 1,
+	"target_point": [4.0, 0.0, 0.0]
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+	"command": "edit group.c/bot.s get movev",
+	"contains": "4"
+      }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": {
+	"feature": "_bot_edit_surface",
+	"all_views": true,
+	"bounds_size": [4.0, 2.0, 2.0],
+	"tolerance": 0.05
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "edit -i group.c/bot.s pickt 0 2 1" }
+    },
+    {
+      "target": "i:primitiveEdit.operation",
+      "action": "assert_state",
+      "arguments": { "text": "Select Face", "index": 2 }
+    },
+    {
+      "target": "i:bot.editMode",
+      "action": "assert_state",
+      "arguments": { "text": "Face", "index": 1 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": {
+	"feature": "_bot_edit_surface",
+	"all_views": true,
+	"selected_primitives": [0]
+      }
+    },
+    {
+      "target": "i:primitiveEdit.cancel",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 50 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": {
+	"feature": "_bot_edit_surface",
+	"exists": true,
+	"all_views": true,
+	"visible": true,
+	"bounds_size": [2.0, 2.0, 2.0],
+	"tolerance": 0.00001
+      }
+    },
+    {
+      "target": "i:primitiveEdit.cancel",
+      "action": "activate",
+      "arguments": {}
+    }
+  ]
+}

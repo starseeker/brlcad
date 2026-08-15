@@ -100,7 +100,7 @@ static const struct rt_edit_param_desc half_d_params[] = {
 
 static const struct rt_edit_cmd_desc half_cmds[] = {
     {
-	ECMD_HALF_SET_D,        /* cmd_id */
+	ECMD_HALF_SET_D, RT_EDIT_CMD_NAME(ECMD_HALF_SET_D),        /* cmd_id */
 	"Set D",                /* label */
 	"geometry",             /* category */
 	1,                      /* nparam */
@@ -117,7 +117,11 @@ static const struct rt_edit_prim_desc half_prim_desc = {
     1,                          /* ncmd */
     half_cmds                   /* cmds */,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -156,18 +160,20 @@ rt_edit_hlf_edit_xy(struct rt_edit *s, const vect_t mousevec)
 }
 
 C_DECL int
-rt_edit_hlf_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
+rt_edit_hlf_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
 {
     struct rt_half_internal *haf;
-    if (!s || !vals)
-	return BRLCAD_ERROR;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
     haf = (struct rt_half_internal *)s->es_int.idb_ptr;
     RT_HALF_CK_MAGIC(haf);
     if (cmd_id == ECMD_HALF_SET_D) {
-	vals[0] = haf->eqn[W] * s->base2local;
-	return BRLCAD_OK;
+	rt_edit_cmd_values_set_value(result, 0,
+	    haf->eqn[W] * s->base2local);
+	return RT_EDIT_VALUE_OK;
     }
-    return BRLCAD_ERROR;
+    return RT_EDIT_VALUE_UNAVAILABLE;
 }
 
 /*

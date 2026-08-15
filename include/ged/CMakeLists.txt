@@ -7,6 +7,7 @@ set(
   defines.h
   display.h
   draw.h
+  edit.h
   event.h
   objects.h
   view_polygon.h

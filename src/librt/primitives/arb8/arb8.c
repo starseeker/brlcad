@@ -359,6 +359,175 @@ rt_arb_std_type(const struct rt_db_internal *ip, const struct bn_tol *tol)
 }
 
 
+int
+rt_arb_edit_topology_get(struct rt_arb_edit_topology *topology,
+	const struct rt_db_internal *ip, const struct bn_tol *tol)
+{
+    static const int vertex_storage[5][RT_ARB_EDIT_MAX_VERTICES] = {
+	{0, 1, 2, 4, -1, -1, -1, -1},
+	{0, 1, 2, 3, 4, -1, -1, -1},
+	{0, 1, 2, 3, 4, 6, -1, -1},
+	{0, 1, 2, 3, 4, 5, 6, -1},
+	{0, 1, 2, 3, 4, 5, 6, 7}
+    };
+    static const int vertex_counts[5] = {4, 5, 6, 7, 8};
+    static const int movable_faces[5][RT_ARB_EDIT_MAX_FACES] = {
+	{1, 1, 1, 1, 0, 0},
+	{1, 1, 1, 1, 1, 0},
+	{1, 1, 1, 1, 1, 0},
+	{1, 0, 0, 1, 0, 0},
+	{1, 1, 1, 1, 1, 1}
+    };
+    static const short arb8_evm[12][2] = arb8_edge_vertex_mapping;
+    static const short arb7_evm[12][2] = arb7_edge_vertex_mapping;
+    static const short arb5_evm[9][2] = arb5_edge_vertex_mapping;
+    const short (*edit_edges)[2] = NULL;
+    int edit_edge_count = 0;
+    int storage_to_topology[8];
+    const int local_arb_faces[5][24] = rt_arb_faces;
+
+    if (!topology || !ip || !tol || ip->idb_type != ID_ARB8 ||
+	!ip->idb_ptr)
+	return BRLCAD_ERROR;
+    RT_CK_DB_INTERNAL(ip);
+    BN_CK_TOL(tol);
+    struct rt_arb_internal *arb = (struct rt_arb_internal *)ip->idb_ptr;
+    RT_ARB_CK_MAGIC(arb);
+
+    memset(topology, 0, sizeof(*topology));
+    topology->arb_type = rt_arb_std_type(ip, tol);
+    if (topology->arb_type < ARB4 || topology->arb_type > ARB8)
+	return BRLCAD_ERROR;
+    const int type_index = topology->arb_type - ARB4;
+    topology->vertex_count = vertex_counts[type_index];
+    for (int i = 0; i < 8; i++)
+	storage_to_topology[i] = -1;
+    for (int i = 0; i < topology->vertex_count; i++) {
+	const int storage = vertex_storage[type_index][i];
+	topology->vertices[i].topology_index = i;
+	topology->vertices[i].edit_index = storage;
+	topology->vertices[i].label = i + 1;
+	storage_to_topology[storage] = i;
+    }
+    /* Collapsed storage positions must resolve to the same dense vertex as
+	* their canonical counterpart.  Use the supplied geometric tolerance so
+	* this remains correct for valid non-bit-identical legacy encodings. */
+    for (int storage = 0; storage < 8; storage++) {
+	if (storage_to_topology[storage] >= 0)
+	    continue;
+	for (int vertex = 0; vertex < topology->vertex_count; vertex++) {
+	    const int canonical = topology->vertices[vertex].edit_index;
+	    if (VNEAR_EQUAL(arb->pt[storage], arb->pt[canonical], tol->dist)) {
+		storage_to_topology[storage] = vertex;
+		break;
+	    }
+	}
+    }
+
+    for (int fi = 0; fi < RT_ARB_EDIT_MAX_FACES; fi++) {
+	const int *raw = &local_arb_faces[type_index][fi * 4];
+	if (raw[0] < 0)
+	    continue;
+	struct rt_arb_edit_face *face =
+	    &topology->faces[topology->face_count];
+	face->edit_index = fi;
+	face->movable = movable_faces[type_index][fi];
+	face->rotatable = 1;
+	for (int vi = 0; vi < RT_ARB_EDIT_MAX_FACE_VERTICES; vi++) {
+	    const int dense = raw[vi] >= 0 && raw[vi] < 8 ?
+		storage_to_topology[raw[vi]] : -1;
+	    if (dense < 0)
+		continue;
+	    int duplicate = 0;
+	    for (int pi = 0; pi < face->vertex_count; pi++) {
+		if (face->vertices[pi] == dense) {
+		    duplicate = 1;
+		    break;
+		}
+	    }
+	    if (!duplicate)
+		face->vertices[face->vertex_count++] = dense;
+	}
+	if (face->vertex_count >= 3)
+	    topology->face_count++;
+    }
+
+    /* Derive the geometric edge set from the canonical faces.  This keeps
+	* presentation complete even where a historical subtype does not support
+	* moving every edge. */
+    for (int fi = 0; fi < topology->face_count; fi++) {
+	const struct rt_arb_edit_face *face = &topology->faces[fi];
+	for (int vi = 0; vi < face->vertex_count; vi++) {
+	    int v0 = face->vertices[vi];
+	    int v1 = face->vertices[(vi + 1) % face->vertex_count];
+	    if (v0 == v1)
+		continue;
+	    if (v0 > v1) {
+		const int swap = v0;
+		v0 = v1;
+		v1 = swap;
+	    }
+	    int found = 0;
+	    for (int ei = 0; ei < topology->edge_count; ei++) {
+		if (topology->edges[ei].vertices[0] == v0 &&
+		    topology->edges[ei].vertices[1] == v1) {
+		    found = 1;
+		    break;
+		}
+	    }
+	    if (found || topology->edge_count >= RT_ARB_EDIT_MAX_EDGES)
+		continue;
+	    struct rt_arb_edit_edge *edge =
+		&topology->edges[topology->edge_count++];
+	    edge->vertices[0] = v0;
+	    edge->vertices[1] = v1;
+	    edge->edit_index = -1;
+	}
+    }
+
+    switch (topology->arb_type) {
+	case ARB8:
+	    edit_edges = arb8_evm;
+	    edit_edge_count = 12;
+	    break;
+	case ARB7:
+	    edit_edges = arb7_evm;
+	    edit_edge_count = 11;
+	    break;
+	case ARB6:
+	    edit_edges = local_arb6_edge_vertex_mapping;
+	    edit_edge_count = 8;
+	    break;
+	case ARB5:
+	    edit_edges = arb5_evm;
+	    edit_edge_count = 8;
+	    break;
+	default:
+	    break;
+    }
+    for (int edit_index = 0; edit_index < edit_edge_count; edit_index++) {
+	int v0 = storage_to_topology[edit_edges[edit_index][0]];
+	int v1 = storage_to_topology[edit_edges[edit_index][1]];
+	if (v0 < 0 || v1 < 0 || v0 == v1)
+	    continue;
+	if (v0 > v1) {
+	    const int swap = v0;
+	    v0 = v1;
+	    v1 = swap;
+	}
+	for (int ei = 0; ei < topology->edge_count; ei++) {
+	    if (topology->edges[ei].vertices[0] == v0 &&
+		topology->edges[ei].vertices[1] == v1) {
+		topology->edges[ei].edit_index = edit_index;
+		break;
+	    }
+	}
+    }
+
+    return BRLCAD_OK;
+}
+
+
 void
 rt_arb_centroid(point_t *cent, const struct rt_db_internal *ip)
 {

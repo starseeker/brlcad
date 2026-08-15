@@ -173,6 +173,7 @@ namespace eval ArcherCore {
 	method rtcntrl             {args}
 	method setStatusString     {_str}
 	method getSelectedTreePaths {}
+	method syncTreeSelection {}
 
 	# Commands exposed to the user via the command line.
 	# More to be added later...
@@ -3711,7 +3712,18 @@ namespace eval ArcherCore {
 }
 
 ::itcl::body ArcherCore::gedCmd {args} {
-    return [eval $itk_component(ged) $args]
+    set ret [eval $itk_component(ged) $args]
+
+    # The GED selection service is the authoritative selection state shared
+    # by command-line editing and retained scene presentation.  Commands
+    # entered through Archer must be reflected by the hierarchy widget too,
+    # but selection is intentionally the only command that pays this cost.
+    if {!$mNoTree && [llength $args] &&
+	    [lindex $args 0] == "select"} {
+	syncTreeSelection
+    }
+
+    return $ret
 }
 
 
@@ -4811,6 +4823,30 @@ namespace eval ArcherCore {
     return [getTreePath [$itk_component(newtree) selection]]
 }
 
+::itcl::body ArcherCore::syncTreeSelection {} {
+    if {$mNoTree || ![info exists itk_component(newtree)]} {
+	return
+    }
+
+    # A ttk treeview has one active row while the GED default selection set
+    # may contain many paths.  Preserve the active row when it is still in
+    # the set; otherwise make the first selected path active.  Scene
+    # highlighting continues to represent the complete GED set.
+    set selected [string trim [$itk_component(ged) select list default]]
+    if {$selected == ""} {
+	$itk_component(newtree) selection set {}
+	return
+    }
+
+    set paths [split $selected "\n"]
+    set active [getSelectedTreePaths]
+    if {[lsearch -exact $paths $active] != -1} {
+	return
+    }
+
+    selectTreePath [lindex $paths 0]
+}
+
 ::itcl::body ArcherCore::handleTreeClose {} {
 }
 
@@ -4964,6 +5000,11 @@ namespace eval ArcherCore {
     set snode [$itk_component(newtree) selection]
 
     if {$snode == ""} {
+	set mPrevSelectedObjPath $mSelectedObjPath
+	set mPrevSelectedObj $mSelectedObj
+	set mSelectedObjPath ""
+	set mSelectedObj ""
+	$itk_component(ged) select clear
 	return 1
     }
 
@@ -4971,6 +5012,17 @@ namespace eval ArcherCore {
     set mPrevSelectedObj $mSelectedObj
     set mSelectedObjPath [getTreePath $snode]
     set mSelectedObj $mNode2Text($snode)
+
+    # Selecting a hierarchy row replaces Archer's active/default semantic
+    # selection.  Avoid republishing when syncTreeSelection is merely
+    # reflecting an already-selected command-line path (including one member
+    # of a multi-path set).
+    set shared_paths [split \
+	[string trim [$itk_component(ged) select list default]] "\n"]
+    if {[lsearch -exact $shared_paths $mSelectedObjPath] == -1} {
+	$itk_component(ged) select clear
+	$itk_component(ged) select add $mSelectedObjPath
+    }
 
     # label the object if it's being drawn
     set mRenderMode [gedCmd how $mSelectedObjPath]

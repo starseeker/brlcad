@@ -817,6 +817,8 @@ extern size_t ged_draw_obol_view_context_polygon_snap_count(
 	ged_view_polygon_ref exclude);
 extern int ged_draw_obol_view_context_polygon_clear_point_selection(
 	struct ged_view_context *view_ctx);
+extern int ged_draw_obol_view_context_polygon_clear_selection(
+	struct ged_view_context *view_ctx);
 extern int ged_draw_obol_view_context_polygon_snap_exclude_set(
 	struct ged_view_context *view_ctx,
 	ged_view_polygon_ref ref);
@@ -825,6 +827,14 @@ extern struct directory *ged_draw_obol_view_polygon_export_sketch(
 	struct db_i *dbip,
 	const char *name,
 	ged_view_polygon_ref ref);
+extern struct directory *ged_draw_obol_view_polygon_update_sketch(
+	struct ged_view_context *view_ctx,
+	struct db_i *dbip,
+	ged_view_polygon_ref ref);
+extern int ged_draw_obol_view_polygon_sketch_name_set(
+	struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref,
+	const char *name);
 extern int ged_draw_obol_view_polygon_record_get(
 	struct ged_view_context *view_ctx,
 	ged_view_polygon_ref ref,
@@ -839,6 +849,11 @@ extern int ged_draw_obol_view_context_polygon_update_screen_pt(
 	int x,
 	int y,
 	int op);
+extern int ged_draw_obol_view_context_polygon_update_model_pt(
+	ged_view_polygon_ref ref,
+	struct ged_view_context *view_ctx,
+	const point_t model_point,
+	int op);
 extern int ged_draw_obol_view_polygon_move(
 	struct ged_view_context *view_ctx,
 	ged_view_polygon_ref ref,
@@ -848,6 +863,10 @@ extern int ged_draw_obol_view_polygon_set_name(
 	struct ged_view_context *view_ctx,
 	ged_view_polygon_ref ref,
 	const char *name);
+extern int ged_draw_obol_view_polygon_set_selected(
+	struct ged_view_context *view_ctx,
+	ged_view_polygon_ref ref,
+	int selected);
 extern int ged_draw_obol_view_polygon_set_visual(
 	struct ged_view_context *view_ctx,
 	ged_view_polygon_ref ref,

@@ -347,6 +347,9 @@ struct mged_display {
     struct _axes_state	*display_axes_state;
     int			display_axes_state_dirty;
     int			display_adc_style_dirty;
+    /* One-shot adapter dirtiness for the legacy fb/fb_overlay variables.
+     * The canonical composition mode lives in the GED view context. */
+    int			display_framebuffer_state_dirty;
 
     /* Hooks */
     int			(*display_command_hook)(int, const char **, void *);

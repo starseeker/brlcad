@@ -714,6 +714,7 @@ BObolPolygonRecord::BObolPolygonRecord(void) :
     name(""),
     scope(BObolFeatureScope::Shared),
     type(BObolPolygonType::General),
+    selected(FALSE),
     fill(FALSE),
     fillFlags(BOBOL_POLYGON_FILL_NONE),
     fillSlope(1.0f, 0.0f),
@@ -727,6 +728,7 @@ BObolPolygonRecord::BObolPolygonRecord(void) :
     pointCount(0),
     originPoint(0.0f, 0.0f, 0.0f),
     viewZ(0.0f),
+    sketchName(""),
     userData(NULL)
 {
     HSET(this->viewPlane, 0.0, 0.0, 1.0, 0.0);
@@ -2072,6 +2074,57 @@ BObolFeatureStore::publishIndexedFaceSet(const SbString &name,
     return this->impl->handle(rec);
 }
 
+SbBool
+BObolFeatureStore::updateIndexedFaceSetPoints(
+    BObolFeatureHandle handle,
+    const std::vector<int32_t> &pointIndices,
+    const std::vector<SbVec3f> &points)
+{
+    BObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec || rec->kind != BObolFeatureKind::IndexedFaceSet ||
+	pointIndices.empty() || pointIndices.size() != points.size() ||
+	!rec->node ||
+	!rec->node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	return FALSE;
+
+    /* Validate the complete patch before changing either the record or its
+     * retained node.  A rejected edit presentation update must be atomic. */
+    for (size_t i = 0; i < pointIndices.size(); i++) {
+	if (pointIndices[i] < 0 ||
+	    static_cast<size_t>(pointIndices[i]) >= rec->points.size())
+	    return FALSE;
+    }
+
+    SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(rec->node);
+    if (shape->point.getNum() != static_cast<int>(rec->points.size()))
+	return FALSE;
+
+    for (size_t i = 0; i < pointIndices.size(); i++)
+	rec->points[static_cast<size_t>(pointIndices[i])] = points[i];
+
+    /* A vertex edit invalidates supplied normals.  Feature meshes normally
+     * omit them and let SoBRLMeshShape derive face normals, but clearing here
+     * keeps the generic patch API correct for callers that did supply them. */
+    rec->normals.clear();
+
+    const SbBool notify = shape->enableNotify(FALSE);
+    for (size_t i = 0; i < pointIndices.size(); i++)
+	shape->point.set1Value(pointIndices[i], points[i]);
+    shape->normal.setNum(0);
+    rec->revision++;
+    shape->sourceId = static_cast<uint32_t>(rec->revision);
+    shape->enableNotify(notify);
+    if (notify)
+	shape->touch();
+
+    this->impl->notify(rec, BObolCommandResultStatus::Updated,
+	"updateIndexedFaceSetPoints");
+    if (this->impl->controller)
+	this->impl->controller->requestPresentationRender(
+	    "view-feature-indexed-face-points");
+    return TRUE;
+}
+
 BObolFeatureHandle
 BObolFeatureStore::publishCustomNode(const SbString &name,
 				       BObolFeatureScope scope,
@@ -2734,6 +2787,23 @@ BObolFeatureStore::replaceSelectedPrimitives(BObolFeatureHandle handle,
 
     rec->selectedPrimitives = primitives;
     rec->revision++;
+    if (rec->node &&
+	rec->node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(rec->node);
+	const SbBool notify = shape->enableNotify(FALSE);
+	store_apply_vlist_primitive_field(shape->selectedPrimitive,
+	    rec->selectedPrimitives);
+	shape->sourceId = static_cast<uint32_t>(rec->revision);
+	shape->enableNotify(notify);
+	if (notify)
+	    shape->touch();
+	this->impl->notify(rec, BObolCommandResultStatus::Updated,
+	    "replaceSelectedPrimitives");
+	if (this->impl->controller)
+	    this->impl->controller->requestPresentationRender(
+		"view-feature-selected-primitives");
+	return TRUE;
+    }
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
@@ -2751,6 +2821,23 @@ BObolFeatureStore::replaceHighlightedPrimitives(BObolFeatureHandle handle,
 
     rec->highlightedPrimitives = primitives;
     rec->revision++;
+    if (rec->node &&
+	rec->node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(rec->node);
+	const SbBool notify = shape->enableNotify(FALSE);
+	store_apply_vlist_primitive_field(shape->highlightedPrimitive,
+	    rec->highlightedPrimitives);
+	shape->sourceId = static_cast<uint32_t>(rec->revision);
+	shape->enableNotify(notify);
+	if (notify)
+	    shape->touch();
+	this->impl->notify(rec, BObolCommandResultStatus::Updated,
+	    "replaceHighlightedPrimitives");
+	if (this->impl->controller)
+	    this->impl->controller->requestPresentationRender(
+		"view-feature-highlighted-primitives");
+	return TRUE;
+    }
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
@@ -2915,12 +3002,14 @@ struct BObolPolygonStoreRecord {
     SbString name;
     BObolFeatureScope scope;
     BObolPolygonType type;
+    SbBool selected;
     SbBool visible;
     BObolPolygonVisual visual;
     long currentContour;
     long currentPoint;
     SbVec3f originPoint;
     plane_t viewPlane;
+    SbString sketchName;
     void *userData;
     struct bg_polygon polygon;
     SoNode *node;
@@ -2931,11 +3020,13 @@ struct BObolPolygonStoreRecord {
 	name(""),
 	scope(BObolFeatureScope::Shared),
 	type(BObolPolygonType::General),
+	selected(FALSE),
 	visible(TRUE),
 	visual(),
 	currentContour(-1),
 	currentPoint(-1),
 	originPoint(0.0f, 0.0f, 0.0f),
+	sketchName(""),
 	userData(NULL),
 	polygon(),
 	node(NULL)
@@ -3468,6 +3559,64 @@ store_polygon_node(const BObolPolygonStoreRecord &rec)
 			    precisePoints.data(), static_cast<int>(points.size()));
     shape->sourceType = "view-polygon-edge";
     shape->geometryKind = "line";
+    shape->selected = rec.selected;
+
+    SoBRLVListShape *handles = NULL;
+    if (rec.type == BObolPolygonType::General &&
+	(rec.selected || (rec.currentContour >= 0 && rec.currentPoint >= 0))) {
+	std::vector<SbVec3f> handlePoints;
+	std::vector<double> preciseHandlePoints;
+	std::vector<int32_t> handleCommands;
+	std::vector<int> colorValid;
+	std::vector<SbColor> colors;
+	std::vector<int> scaleValid;
+	std::vector<float> scales;
+	std::vector<int> normalValid;
+	std::vector<SbVec3f> normals;
+	for (size_t i = 0; i < rec.polygon.num_contours; i++) {
+	    const struct bg_poly_contour &contour = rec.polygon.contour[i];
+	    for (size_t j = 0; j < contour.num_points; j++) {
+		const bool active = rec.currentContour == static_cast<long>(i) &&
+		    rec.currentPoint == static_cast<long>(j);
+		handlePoints.push_back(store_vec3(contour.point[j]));
+		preciseHandlePoints.push_back(contour.point[j][X]);
+		preciseHandlePoints.push_back(contour.point[j][Y]);
+		preciseHandlePoints.push_back(contour.point[j][Z]);
+		handleCommands.push_back(SoBRLVListShape::POINT);
+		colorValid.push_back(1);
+		colors.push_back(active ? SbColor(1.0f, 1.0f, 0.0f) :
+		    SbColor(1.0f, 1.0f, 1.0f));
+		scaleValid.push_back(1);
+		scales.push_back(active ? 8.0f : 4.0f);
+		normalValid.push_back(0);
+		normals.push_back(SbVec3f(0.0f, 0.0f, 1.0f));
+	    }
+	}
+	if (!handlePoints.empty()) {
+	    handles = new SoBRLVListShape;
+	    handles->setLineSet(handlePoints.data(), handleCommands.data(),
+		static_cast<int>(handlePoints.size()));
+	    handles->setPrecisePoints(preciseHandlePoints.data(),
+		static_cast<int>(handlePoints.size()));
+	    handles->setPointAttributes(colorValid.data(), colors.data(),
+		scaleValid.data(), scales.data(), normalValid.data(),
+		normals.data(), static_cast<int>(handlePoints.size()));
+	    handles->sourcePath = rec.name;
+	    handles->sourceName = rec.name;
+	    handles->sourceType = "view-polygon-handle";
+	    handles->displayName = rec.name;
+	    handles->geometryName = rec.name;
+	    handles->sourceIdentity = rec.name;
+	    handles->cacheIdentity = rec.name;
+	    handles->overlayIntent = TRUE;
+	    handles->nonDatabaseSource = TRUE;
+	    handles->localSource = rec.scope == BObolFeatureScope::Local;
+	    handles->sharedSource = rec.scope == BObolFeatureScope::Shared;
+	    handles->recordRole = "view-polygon";
+	    handles->geometryKind = "point";
+	    handles->sourceId = static_cast<uint32_t>(rec.revision);
+	}
+    }
 
     SoSeparator *sep = new SoSeparator;
     SoNode *meshFillNode = store_polygon_mesh_fill_node(rec);
@@ -3477,6 +3626,8 @@ store_polygon_node(const BObolPolygonStoreRecord &rec)
     if (hatchFillNode)
 	sep->addChild(hatchFillNode);
     sep->addChild(shape);
+    if (handles)
+	sep->addChild(handles);
     return sep;
 }
 
@@ -3703,6 +3854,29 @@ BObolPolygonStore::update(BObolPolygonHandle handle,
     if (update == BObolPolygonUpdate::PointSelectClear) {
 	rec->currentContour = -1;
 	rec->currentPoint = -1;
+    } else if (update == BObolPolygonUpdate::PointDelete) {
+	if (rec->type != BObolPolygonType::General ||
+	    rec->currentContour < 0 || rec->currentPoint < 0 ||
+	    static_cast<size_t>(rec->currentContour) >=
+		rec->polygon.num_contours)
+	    return FALSE;
+	struct bg_poly_contour &contour =
+	    rec->polygon.contour[rec->currentContour];
+	if (static_cast<size_t>(rec->currentPoint) >= contour.num_points)
+	    return FALSE;
+	/* Keep every interactive contour valid: an open contour represents at
+	 * least one line segment, and a closed contour at least one triangle. */
+	const size_t minimum = contour.open ? 2 : 3;
+	if (contour.num_points <= minimum)
+	    return FALSE;
+	const size_t oldPoint = static_cast<size_t>(rec->currentPoint);
+	if (bg_polygon_remove_point(&rec->polygon,
+		static_cast<size_t>(rec->currentContour), oldPoint))
+	    return FALSE;
+	const struct bg_poly_contour &updated =
+	    rec->polygon.contour[rec->currentContour];
+	rec->currentPoint = static_cast<long>(
+	    oldPoint < updated.num_points ? oldPoint : updated.num_points - 1);
     }
     rec->revision++;
     this->impl->realize(rec);
@@ -3837,6 +4011,10 @@ BObolPolygonStore::remove(BObolPolygonHandle handle)
     if (!rec)
 	return FALSE;
 
+    if (this->impl->snapExclude.isValid() &&
+	this->impl->snapExclude.id == handle.id)
+	this->impl->snapExclude = BObolPolygonHandle();
+
     this->impl->names.erase(store_key(rec->scope, rec->name));
     store_release_node(this->impl->controller, rec->node);
     bg_polygon_clear(&rec->polygon);
@@ -3880,6 +4058,7 @@ BObolPolygonStore::record(BObolPolygonHandle handle,
     recordOut.name = rec->name;
     recordOut.scope = rec->scope;
     recordOut.type = rec->type;
+    recordOut.selected = rec->selected;
     recordOut.fillFlags = store_polygon_fill_flags(rec->visual);
     recordOut.fill = (recordOut.fillFlags & BOBOL_POLYGON_FILL_HATCH) ?
 		     TRUE : FALSE;
@@ -3894,6 +4073,7 @@ BObolPolygonStore::record(BObolPolygonHandle handle,
     recordOut.originPoint = rec->originPoint;
     HMOVE(recordOut.viewPlane, rec->viewPlane);
     recordOut.viewZ = rec->visual.viewZ;
+    recordOut.sketchName = rec->sketchName;
     recordOut.userData = rec->userData;
     if (rec->polygon.num_contours > 0)
 	recordOut.firstContourOpen = rec->polygon.contour[0].open ? TRUE : FALSE;
@@ -3930,10 +4110,45 @@ BObolPolygonStore::setCurrent(BObolPolygonHandle handle,
 	if (point >= static_cast<long>(c.num_points))
 	    return FALSE;
     }
+    const SbBool presentationChanged = rec->currentPoint >= 0 || point >= 0;
     rec->currentContour = contour;
     rec->currentPoint = point;
     rec->revision++;
+    if (presentationChanged)
+	this->impl->realize(rec);
     return TRUE;
+}
+
+SbBool
+BObolPolygonStore::setSelected(BObolPolygonHandle handle, SbBool selected)
+{
+    BObolPolygonStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+    const SbBool normalized = selected ? TRUE : FALSE;
+    if (rec->selected == normalized)
+	return TRUE;
+    rec->selected = normalized;
+    rec->revision++;
+    this->impl->realize(rec);
+    return TRUE;
+}
+
+SbBool
+BObolPolygonStore::clearSelection(void)
+{
+    SbBool changed = FALSE;
+    for (std::map<uint64_t, BObolPolygonStoreRecord *>::iterator it =
+	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	BObolPolygonStoreRecord *rec = it->second;
+	if (!rec || !rec->selected)
+	    continue;
+	rec->selected = FALSE;
+	rec->revision++;
+	this->impl->realize(rec);
+	changed = TRUE;
+    }
+    return changed;
 }
 
 SbBool
@@ -3973,9 +4188,12 @@ BObolPolygonStore::clearSelectedPoint(BObolPolygonHandle handle)
     BObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
 	return FALSE;
+    if (rec->currentContour < 0 && rec->currentPoint < 0)
+	return TRUE;
     rec->currentContour = -1;
     rec->currentPoint = -1;
     rec->revision++;
+    this->impl->realize(rec);
     return TRUE;
 }
 
@@ -3985,9 +4203,13 @@ BObolPolygonStore::clearAllPointSelections(void)
     for (std::map<uint64_t, BObolPolygonStoreRecord *>::iterator it =
 	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	if (it->second) {
+	    if (it->second->currentContour < 0 &&
+		it->second->currentPoint < 0)
+		continue;
 	    it->second->currentContour = -1;
 	    it->second->currentPoint = -1;
 	    it->second->revision++;
+	    this->impl->realize(it->second);
 	}
     }
     return TRUE;
@@ -4145,6 +4367,25 @@ BObolPolygonStore::geometry(BObolPolygonHandle handle) const {
 }
 
 SbBool
+BObolPolygonStore::setSketchName(BObolPolygonHandle handle,
+	const SbString &sketchName)
+{
+    BObolPolygonStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+    rec->sketchName = sketchName;
+    rec->revision++;
+    return TRUE;
+}
+
+const char *
+BObolPolygonStore::sketchName(BObolPolygonHandle handle) const
+{
+    BObolPolygonStoreRecord *rec = this->impl->record(handle);
+    return rec ? rec->sketchName.getString() : NULL;
+}
+
+SbBool
 BObolPolygonStore::copyGeometry(BObolPolygonHandle handle,
 				  struct bg_polygon *polygonOut) const
 {
@@ -4286,6 +4527,7 @@ BObolPolygonStore::importSketch(const SbString &name,
     if (data.have_edge_color)
 	rec->visual.edgeColor = store_bu_to_sbcolor(data.edge_color);
     rec->visual.viewZ = static_cast<float>(data.vZ);
+    rec->sketchName = dp->d_namep;
     (void)bg_polygon_copy(&rec->polygon, &data.polygon);
 
     rt_sketch_polygon_data_free(&data);
@@ -4327,6 +4569,37 @@ BObolPolygonStore::exportSketch(BObolPolygonHandle handle,
     return dp ? TRUE : FALSE;
 }
 
+SbBool
+BObolPolygonStore::updateSketch(BObolPolygonHandle handle,
+	struct db_i *dbip,
+	const SbString &name) const
+{
+    BObolPolygonStoreRecord *rec = this->impl->record(handle);
+    if (!rec || !dbip || store_string(name).empty())
+	return FALSE;
+
+    struct rt_sketch_polygon_data data;
+    rt_sketch_polygon_data_init(&data);
+    data.type = store_polygon_type_to_rt(rec->type);
+    data.fill_flag =
+	(store_polygon_fill_flags(rec->visual) & BOBOL_POLYGON_FILL_HATCH) ?
+	1 : 0;
+    V2SET(data.fill_dir, rec->visual.fillSlope[0], rec->visual.fillSlope[1]);
+    data.fill_delta = rec->visual.fillSpacing;
+    store_sbcolor_to_bu(rec->visual.fillColor, &data.fill_color);
+    store_point(data.origin_point, rec->originPoint);
+    HMOVE(data.vp, rec->viewPlane);
+    data.vZ = rec->visual.viewZ;
+    data.have_edge_color = 1;
+    store_sbcolor_to_bu(rec->visual.edgeColor, &data.edge_color);
+    (void)bg_polygon_copy(&data.polygon, &rec->polygon);
+
+    struct directory *dp = db_sketch_polygon_data_update_sketch(dbip,
+			   store_string(name).c_str(), &data);
+    rt_sketch_polygon_data_free(&data);
+    return dp ? TRUE : FALSE;
+}
+
 size_t
 BObolPolygonStore::snapCount(BObolPolygonHandle exclude) const
 {
@@ -4346,6 +4619,10 @@ BObolPolygonStore::snapCount(BObolPolygonHandle exclude) const
 SbBool
 BObolPolygonStore::setSnapExclude(BObolPolygonHandle handle)
 {
+    if (!handle.isValid()) {
+	this->impl->snapExclude = BObolPolygonHandle();
+	return TRUE;
+    }
     BObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
 	return FALSE;

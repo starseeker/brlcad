@@ -51,9 +51,12 @@
 #include <stack>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "rt/edit.h"
 #include "rt/db_fullpath.h"
+#include "ged/edit.h"
+#include "ged/event.h"
 
 #endif
 
@@ -200,10 +203,43 @@ class Ged_Internal {
 	struct ged_edit_buf_entry {
 	    struct db_full_path dfp;
 	    struct rt_edit *s;
+	    /* Immutable path identity retained independently of directory
+	     * pointers.  Database remove/rename notifications arrive after librt
+	     * has mutated the directory, so invalidation must not dereference the
+	     * db_full_path while handling those events. */
+	    std::vector<std::string> path_names;
+	    std::vector<int> path_instances;
+	    uint64_t id = 0;
+	    uint64_t generation = 1;
+	    uint64_t revision = 0;
+	    int last_cmd = 0;
+	    bool dirty = false;
+	    bool checkpoint_dirty = false;
+	    bool committing = false;
 	    ged_scene_edit_scope_ref edit_scope =
 		GED_SCENE_EDIT_SCOPE_REF_NULL;
 	};
 	std::unordered_map<std::string, ged_edit_buf_entry> edit_buf;
+
+	struct ged_edit_pending_event {
+	    enum ged_edit_session_event_kind kind;
+	    ged_edit_session_ref session;
+	    std::string path;
+	    std::string replacement_path;
+	    enum ged_edit_session_invalidation_reason invalidation_reason =
+		GED_EDIT_INVALIDATION_NONE;
+	    uint64_t revision;
+	    int command_id;
+	};
+	uint64_t edit_owner = 0;
+	uint64_t edit_next_id = 1;
+	uint64_t edit_next_observer = 1;
+	int edit_dispatch_depth = 0;
+	std::map<ged_edit_observer_token,
+	    std::pair<ged_edit_observer_func_t, void *> > edit_observers;
+	std::vector<ged_edit_pending_event> edit_pending_events;
+	ged_event_observer_token edit_event_observer = 0;
+	bool edit_closing = false;
 
 	// Backend-neutral semantic edit scopes.  The concrete C++ state is
 	// private to ged_draw_frontier.cpp so renderer and application headers do
@@ -317,6 +353,8 @@ GED_EXPORT extern int _ged_external_rt_to_endpoint(
 	const char *callback_command);
 extern void ged_draw_registry_free(struct ged *gedp);
 extern void ged_scene_observers_free(struct ged *gedp);
+extern void ged_edit_sessions_close_private(struct ged *gedp);
+extern void ged_edit_sessions_database_close_private(struct ged *gedp);
 
 /* Data for tree walk */
 struct draw_data_t {

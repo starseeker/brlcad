@@ -3055,6 +3055,28 @@ main(int argc, char **argv)
 	    !owned_controller->features().exists("cap2::mesh"))
 	FAIL("GED indexed-face replacement should publish into the owned Obol feature store");
 
+    BObolFeatureHandle patch_mesh_handle =
+	owned_controller->features().find("cap2::mesh");
+    SoNode *patch_mesh_node = owned_controller->features().node(
+	patch_mesh_handle);
+    int patch_index = 2;
+    point_t patch_point = {1.0, 1.0, 2.0};
+    if (!patch_mesh_node ||
+	!patch_mesh_node->isOfType(SoBRLMeshShape::getClassTypeId()) ||
+	!ged_view_feature_indexed_face_points_update(feature_view_ctx,
+	    "cap2::mesh", &patch_index, &patch_point, 1) ||
+	owned_controller->features().node(patch_mesh_handle) != patch_mesh_node ||
+	static_cast<SoBRLMeshShape *>(patch_mesh_node)->point[2] !=
+	    SbVec3f(1.0f, 1.0f, 2.0f))
+	FAIL("GED indexed-face point patch should update retained geometry in place");
+    patch_index = 99;
+    VSET(patch_point, 9.0, 9.0, 9.0);
+    if (ged_view_feature_indexed_face_points_update(feature_view_ctx,
+	    "cap2::mesh", &patch_index, &patch_point, 1) ||
+	static_cast<SoBRLMeshShape *>(patch_mesh_node)->point[2] !=
+	    SbVec3f(1.0f, 1.0f, 2.0f))
+	FAIL("GED invalid indexed-face point patch should be atomic");
+
     struct bg_line_layer_builder *diagnostic_builder =
 	bg_line_layer_builder_create();
     if (!diagnostic_builder)

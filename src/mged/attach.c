@@ -1843,6 +1843,7 @@ mged_display_var_init(struct mged_state *s, struct mged_display *target_display)
     axes_state->ax_rc = 1;
     s->mged_curr_display->display_axes_state_dirty = 1;
     s->mged_curr_display->display_adc_style_dirty = 1;
+    s->mged_curr_display->display_framebuffer_state_dirty = 1;
 
     BU_ALLOC(view_state, struct _view_state);
     *view_state = *target_display->display_view_state;			/* struct copy */

@@ -173,6 +173,8 @@ ged_obol_polygon_update_from_ged(int op)
 	    return BObolPolygonUpdate::PointMove;
 	case GED_VIEW_POLYGON_UPDATE_PT_APPEND:
 	    return BObolPolygonUpdate::PointAppend;
+	case GED_VIEW_POLYGON_UPDATE_PT_DELETE:
+	    return BObolPolygonUpdate::PointDelete;
 	default:
 	    return BObolPolygonUpdate::Default;
     }
@@ -317,6 +319,7 @@ ged_obol_polygon_record_to_ged(
     dst->name = name;
     dst->type = static_cast<enum ged_view_polygon_type>(
 	static_cast<int>(src.type));
+    dst->selected = src.selected ? 1 : 0;
     dst->fill_flag = src.fill ? 1 : 0;
     V2SET(dst->fill_dir, src.fillSlope[0], src.fillSlope[1]);
     dst->fill_delta = src.fillSpacing;
@@ -331,6 +334,7 @@ ged_obol_polygon_record_to_ged(
 	 src.originPoint[2]);
     HMOVE(dst->vp, src.viewPlane);
     dst->vZ = src.viewZ;
+    dst->sketch_name = controller->polygons().sketchName(src.handle);
     dst->user_data = src.userData;
     return 1;
 }
@@ -551,10 +555,31 @@ ged_draw_obol_polygon_clear_point_selection(
     struct ged_view_context *view_ctx,
     void *UNUSED(data))
 {
-    BObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    return controller ?
-	   (controller->polygons().clearAllPointSelections() ? 1 : 0) : 0;
+    BObolViewController *local = ged_obol_view_controller_for_context(view_ctx);
+    BObolViewController *shared =
+	ged_obol_shared_view_controller_for_context(view_ctx);
+    int changed = 0;
+    if (local)
+	changed |= local->polygons().clearAllPointSelections() ? 1 : 0;
+    if (shared && shared != local)
+	changed |= shared->polygons().clearAllPointSelections() ? 1 : 0;
+    return changed;
+}
+
+static int
+ged_draw_obol_polygon_clear_selection(
+    struct ged_view_context *view_ctx,
+    void *UNUSED(data))
+{
+    BObolViewController *local = ged_obol_view_controller_for_context(view_ctx);
+    BObolViewController *shared =
+	ged_obol_shared_view_controller_for_context(view_ctx);
+    int changed = 0;
+    if (local)
+	changed |= local->polygons().clearSelection() ? 1 : 0;
+    if (shared && shared != local)
+	changed |= shared->polygons().clearSelection() ? 1 : 0;
+    return changed;
 }
 
 static int
@@ -601,6 +626,27 @@ ged_draw_obol_polygon_update_screen_pt(
 }
 
 static int
+ged_draw_obol_polygon_update_model_pt(
+    ged_view_polygon_ref ref,
+    struct ged_view_context *view_ctx,
+    const point_t model_point,
+    int utype,
+    void *UNUSED(data))
+{
+    BObolViewController *controller =
+	ged_obol_polygon_controller_from_ged_ref(view_ctx, ref);
+    if (!controller || !model_point)
+	return 0;
+
+    return controller->polygons().updateModelPoint(
+	       ged_obol_polygon_handle_from_ged_ref(ref),
+	       SbVec3f(static_cast<float>(model_point[X]),
+		       static_cast<float>(model_point[Y]),
+		       static_cast<float>(model_point[Z])),
+	       ged_obol_polygon_update_from_ged(utype)) ? 1 : 0;
+}
+
+static int
 ged_draw_obol_polygon_move(
     struct ged_view_context *view_ctx,
     ged_view_polygon_ref ref,
@@ -635,6 +681,19 @@ ged_draw_obol_polygon_set_name(
 	return 0;
     return controller->polygons().rename(
 	       ged_obol_polygon_handle_from_ged_ref(ref), name) ? 1 : 0;
+}
+
+static int
+ged_draw_obol_polygon_set_selected(
+    struct ged_view_context *view_ctx,
+    ged_view_polygon_ref ref,
+    int selected,
+    void *UNUSED(data))
+{
+    BObolViewController *controller =
+	ged_obol_polygon_controller_from_ged_ref(view_ctx, ref);
+    return controller ? controller->polygons().setSelected(
+	ged_obol_polygon_handle_from_ged_ref(ref), selected ? TRUE : FALSE) : 0;
 }
 
 static int
@@ -794,6 +853,40 @@ ged_draw_obol_polygon_export_sketch(
 	   db_lookup(dbip, name, LOOKUP_QUIET) : NULL;
 }
 
+static struct directory *
+ged_draw_obol_polygon_update_sketch(
+    struct ged_view_context *view_ctx,
+    struct db_i *dbip,
+    ged_view_polygon_ref ref,
+    void *UNUSED(data))
+{
+    BObolViewController *controller =
+	ged_obol_polygon_controller_from_ged_ref(view_ctx, ref);
+    if (!controller || !dbip)
+	return NULL;
+    BObolPolygonHandle handle = ged_obol_polygon_handle_from_ged_ref(ref);
+    const char *name = controller->polygons().sketchName(handle);
+    if (!name || !name[0])
+	return NULL;
+    return controller->polygons().updateSketch(handle, dbip, name) ?
+	db_lookup(dbip, name, LOOKUP_QUIET) : NULL;
+}
+
+static int
+ged_draw_obol_polygon_sketch_name_set(
+    struct ged_view_context *view_ctx,
+    ged_view_polygon_ref ref,
+    const char *name,
+    void *UNUSED(data))
+{
+    BObolViewController *controller =
+	ged_obol_polygon_controller_from_ged_ref(view_ctx, ref);
+    if (!controller)
+	return 0;
+    return controller->polygons().setSketchName(
+	ged_obol_polygon_handle_from_ged_ref(ref), name ? name : "") ? 1 : 0;
+}
+
 static int
 ged_draw_obol_polygon_snap_exclude_set(
     struct ged_view_context *view_ctx,
@@ -802,8 +895,12 @@ ged_draw_obol_polygon_snap_exclude_set(
 {
     BObolViewController *controller =
 	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller ||
-	ged_obol_polygon_controller_from_ged_ref(view_ctx, ref) != controller)
+    if (!controller)
+	return 0;
+    if (ged_view_polygon_ref_is_null(ref))
+	return controller->polygons().setSnapExclude(
+	    BObolPolygonHandle()) ? 1 : 0;
+    if (ged_obol_polygon_controller_from_ged_ref(view_ctx, ref) != controller)
 	return 0;
     return controller->polygons().setSnapExclude(
 	       ged_obol_polygon_handle_from_ged_ref(ref)) ? 1 : 0;
@@ -937,6 +1034,12 @@ ged_draw_obol_view_context_polygon_clear_point_selection(struct ged_view_context
 }
 
 extern "C" int
+ged_draw_obol_view_context_polygon_clear_selection(struct ged_view_context *view_ctx)
+{
+    return ged_draw_obol_polygon_clear_selection(view_ctx, NULL);
+}
+
+extern "C" int
 ged_draw_obol_view_context_polygon_snap_exclude_set(
     struct ged_view_context *view_ctx,
     ged_view_polygon_ref ref)
@@ -954,6 +1057,24 @@ ged_draw_obol_view_polygon_export_sketch(
 {
     return ged_draw_obol_polygon_export_sketch(view_ctx, dbip, name,
 	    ref, NULL);
+}
+
+extern "C" struct directory *
+ged_draw_obol_view_polygon_update_sketch(
+    struct ged_view_context *view_ctx,
+    struct db_i *dbip,
+    ged_view_polygon_ref ref)
+{
+    return ged_draw_obol_polygon_update_sketch(view_ctx, dbip, ref, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_sketch_name_set(
+    struct ged_view_context *view_ctx,
+    ged_view_polygon_ref ref,
+    const char *name)
+{
+    return ged_draw_obol_polygon_sketch_name_set(view_ctx, ref, name, NULL);
 }
 
 extern "C" int
@@ -979,6 +1100,17 @@ ged_draw_obol_view_context_polygon_update_screen_pt(
 }
 
 extern "C" int
+ged_draw_obol_view_context_polygon_update_model_pt(
+    ged_view_polygon_ref ref,
+    struct ged_view_context *view_ctx,
+    const point_t model_point,
+    int op)
+{
+    return ged_draw_obol_polygon_update_model_pt(
+	    ref, view_ctx, model_point, op, NULL);
+}
+
+extern "C" int
 ged_draw_obol_view_polygon_move(
     struct ged_view_context *view_ctx,
     ged_view_polygon_ref ref,
@@ -997,6 +1129,15 @@ ged_draw_obol_view_polygon_set_name(
     const char *name)
 {
     return ged_draw_obol_polygon_set_name(view_ctx, ref, name, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_set_selected(
+    struct ged_view_context *view_ctx,
+    ged_view_polygon_ref ref,
+    int selected)
+{
+    return ged_draw_obol_polygon_set_selected(view_ctx, ref, selected, NULL);
 }
 
 extern "C" int

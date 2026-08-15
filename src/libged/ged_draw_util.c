@@ -103,7 +103,7 @@ ged_draw_default_mode(const struct ged *gedp)
 uint64_t
 ged_draw_scene_revision(struct ged *gedp)
 {
-    if (!gedp)
+    if (!gedp || !gedp->i || !gedp->i->ged_gdp)
         return 0;
     return gedp->i->ged_gdp->gd_draw_rev;
 }

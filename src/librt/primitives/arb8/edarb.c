@@ -46,6 +46,9 @@
 #define ECMD_ARB_SETUP_ROTFACE	4014
 #define ECMD_ARB_ROTATE_FACE	4015
 #define ECMD_ARB_MOVE_EDGE	4036
+#define ECMD_ARB_SELECT_VERTEX	4037
+#define ECMD_ARB_SELECT_EDGE	4038
+#define ECMD_ARB_SELECT_FACE	4039
 
 /* ------------------------------------------------------------------ */
 /* ft_edit_desc descriptor for the ARB8 primitive                     */
@@ -176,19 +179,55 @@ static const struct rt_edit_param_desc arb_rotate_face_params[] = {
     }
 };
 
+static const struct rt_edit_param_desc arb_select_vertex_params[] = {
+    {
+	"vtx", "Vertex Index", RT_EDIT_PARAM_INTEGER, 0,
+	0.0, 7.0, NULL, 0, NULL, NULL, NULL
+    }
+};
+
+static const struct rt_edit_param_desc arb_select_edge_params[] = {
+    {
+	"edge", "Edge Index", RT_EDIT_PARAM_INTEGER, 0,
+	0.0, 11.0, NULL, 0, NULL, NULL, NULL
+    }
+};
+
+static const struct rt_edit_param_desc arb_select_face_params[] = {
+    {
+	"face", "Face Index", RT_EDIT_PARAM_INTEGER, 0,
+	0.0, 5.0, NULL, 0, NULL, NULL, NULL
+    }
+};
+
 static const struct rt_edit_cmd_desc arb_cmds[] = {
     {
-	ECMD_ARB_MOVE_FACE,   /* cmd_id       */
+	ECMD_ARB_SELECT_VERTEX, RT_EDIT_CMD_NAME(ECMD_ARB_SELECT_VERTEX),
+	"Select Vertex", "selection", 1, arb_select_vertex_params,
+	1, 1, "arb8,arb7,arb6,arb5,arb4"
+    },
+    {
+	ECMD_ARB_SELECT_EDGE, RT_EDIT_CMD_NAME(ECMD_ARB_SELECT_EDGE),
+	"Select Edge", "selection", 1, arb_select_edge_params,
+	1, 2, "arb8,arb7,arb6,arb5"
+    },
+    {
+	ECMD_ARB_SELECT_FACE, RT_EDIT_CMD_NAME(ECMD_ARB_SELECT_FACE),
+	"Select Face", "selection", 1, arb_select_face_params,
+	1, 3, "arb8,arb7,arb6,arb5,arb4"
+    },
+    {
+	ECMD_ARB_MOVE_FACE, RT_EDIT_CMD_NAME(ECMD_ARB_MOVE_FACE),   /* cmd_id       */
 	"Move Face",          /* label        */
 	"geometry",           /* category     */
 	2,                    /* nparam       */
 	arb_move_face_params, /* params       */
 	1,                    /* interactive  */
 	10                    /* display_order */,
-	"arb8"                /* req_types */
+	"arb8,arb7,arb6,arb5,arb4" /* req_types */
     },
     {
-	EARB,                 /* cmd_id       */
+	EARB, "ECMD_ARB_MOVE_EDGE", /* cmd_id, stable name */
 	"Move Edge",          /* label        */
 	"geometry",           /* category     */
 	2,                    /* nparam       */
@@ -198,7 +237,7 @@ static const struct rt_edit_cmd_desc arb_cmds[] = {
 	"arb8,arb7,arb6,arb5" /* req_types */
     },
     {
-	PTARB,                /* cmd_id       */
+	PTARB, "ECMD_ARB_MOVE_VERTEX", /* cmd_id, stable name */
 	"Move Vertex",        /* label        */
 	"geometry",           /* category     */
 	2,                    /* nparam       */
@@ -208,16 +247,91 @@ static const struct rt_edit_cmd_desc arb_cmds[] = {
 	"arb8,arb7,arb6,arb5,arb4" /* req_types */
     },
     {
-	ECMD_ARB_ROTATE_FACE, /* cmd_id       */
+	ECMD_ARB_ROTATE_FACE, RT_EDIT_CMD_NAME(ECMD_ARB_ROTATE_FACE), /* cmd_id       */
 	"Rotate Face",        /* label        */
 	"geometry",           /* category     */
 	3,                    /* nparam       */
 	arb_rotate_face_params, /* params     */
 	1,                    /* interactive  */
 	40                    /* display_order */,
-	"arb8"                /* req_types */
+	"arb8,arb7,arb6,arb5,arb4" /* req_types */
     }
 };
+
+static const enum rt_edit_param_semantic arb_index_semantics[] = {
+    RT_EDIT_SEMANTIC_INDEX
+};
+static const enum rt_edit_param_semantic arb_move_semantics[] = {
+    RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_POSITION
+};
+static const enum rt_edit_param_semantic arb_rotate_semantics[] = {
+    RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_INDEX,
+    RT_EDIT_SEMANTIC_ANGLE
+};
+
+static const struct rt_edit_interaction_desc arb_interactions[] = {
+    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, arb_index_semantics, 1 },
+    { RT_EDIT_SELECTION_EDGE, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, arb_index_semantics, 1 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, arb_index_semantics, 1 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_OBJECT,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, arb_move_semantics, 2 },
+    { RT_EDIT_SELECTION_EDGE, RT_EDIT_COORDINATE_OBJECT,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, arb_move_semantics, 2 },
+    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_OBJECT,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, arb_move_semantics, 2 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_OBJECT,
+      RT_EDIT_MANIPULATOR_ROTATION_RING, arb_rotate_semantics, 3 }
+};
+_Static_assert(sizeof(arb_interactions) / sizeof(arb_interactions[0]) ==
+    sizeof(arb_cmds) / sizeof(arb_cmds[0]), "arb command interactions");
+
+static int
+arb_parameter_bounds(struct rt_edit_param_bounds *bounds,
+	const struct rt_edit *edit, int command_id, int parameter_index)
+{
+    if (!bounds || !edit)
+	return BRLCAD_ERROR;
+    struct rt_arb_edit_topology topology;
+    if (rt_arb_edit_topology_get(&topology, &edit->es_int, edit->tol) !=
+	    BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    enum rt_edit_selection_domain domain = RT_EDIT_SELECTION_NONE;
+    if (command_id == ECMD_ARB_SELECT_VERTEX || command_id == PTARB ||
+	(command_id == ECMD_ARB_ROTATE_FACE && parameter_index == 1))
+	domain = RT_EDIT_SELECTION_VERTEX;
+    else if (command_id == ECMD_ARB_SELECT_EDGE || command_id == EARB)
+	domain = RT_EDIT_SELECTION_EDGE;
+    else if (command_id == ECMD_ARB_SELECT_FACE ||
+	command_id == ECMD_ARB_MOVE_FACE ||
+	(command_id == ECMD_ARB_ROTATE_FACE && parameter_index == 0))
+	domain = RT_EDIT_SELECTION_FACE;
+    if (domain == RT_EDIT_SELECTION_NONE)
+	return BRLCAD_OK;
+
+    int maximum = -1;
+    if (domain == RT_EDIT_SELECTION_VERTEX) {
+	for (int i = 0; i < topology.vertex_count; i++)
+	    if (topology.vertices[i].edit_index > maximum)
+		maximum = topology.vertices[i].edit_index;
+    } else if (domain == RT_EDIT_SELECTION_EDGE) {
+	for (int i = 0; i < topology.edge_count; i++)
+	    if (topology.edges[i].edit_index > maximum)
+		maximum = topology.edges[i].edit_index;
+    } else {
+	for (int i = 0; i < topology.face_count; i++)
+	    if (topology.faces[i].edit_index > maximum)
+		maximum = topology.faces[i].edit_index;
+    }
+    if (maximum < 0)
+	return BRLCAD_ERROR;
+    bounds->maximum = maximum;
+    bounds->has_maximum = 1;
+    return BRLCAD_OK;
+}
 
 static const struct rt_edit_opt_desc arb_opts[] = {
     {
@@ -231,16 +345,106 @@ static const struct rt_edit_opt_desc arb_opts[] = {
 static const struct rt_edit_prim_desc arb_prim_desc = {
     "arb8",               /* prim_type    */
     "ARB",                /* prim_label   */
-    4,                    /* ncmd         */
+    7,                    /* ncmd         */
     arb_cmds,             /* cmds         */
     1,                    /* nopt         */
-    arb_opts              /* opts         */
+    arb_opts,             /* opts         */
+    RT_EDIT_CONTROL_CUSTOM,
+    NULL,
+    arb_interactions,
+    arb_parameter_bounds
 };
 
 C_DECL const struct rt_edit_prim_desc *
 rt_edit_arb_edit_desc(void)
 {
     return &arb_prim_desc;
+}
+
+C_DECL int
+rt_edit_arb_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result || !s->es_int.idb_ptr)
+	return RT_EDIT_VALUE_ERROR;
+    struct rt_arb_internal *arb =
+	(struct rt_arb_internal *)s->es_int.idb_ptr;
+    struct rt_arb8_edit *edit = (struct rt_arb8_edit *)s->ipe_ptr;
+    RT_ARB_CK_MAGIC(arb);
+    if (!edit)
+	return RT_EDIT_VALUE_UNAVAILABLE;
+
+    struct rt_arb_edit_topology topology;
+    if (rt_arb_edit_topology_get(&topology, &s->es_int, s->tol) !=
+	BRLCAD_OK)
+	return RT_EDIT_VALUE_ERROR;
+
+    point_t anchor = VINIT_ZERO;
+    int index = edit->edit_menu;
+    if (cmd_id == ECMD_ARB_SELECT_VERTEX ||
+	cmd_id == ECMD_ARB_SELECT_EDGE || cmd_id == ECMD_ARB_SELECT_FACE) {
+	rt_edit_cmd_values_set_value(result, 0, index);
+	return RT_EDIT_VALUE_OK;
+    } else if (cmd_id == PTARB) {
+	int found = 0;
+	for (int vi = 0; vi < topology.vertex_count; vi++) {
+	    if (topology.vertices[vi].edit_index != index)
+		continue;
+	    VMOVE(anchor, arb->pt[topology.vertices[vi].edit_index]);
+	    found = 1;
+	    break;
+	}
+	if (!found)
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    } else if (cmd_id == EARB) {
+	int found = 0;
+	for (int ei = 0; ei < topology.edge_count; ei++) {
+	    const struct rt_arb_edit_edge *edge = &topology.edges[ei];
+	    if (edge->edit_index != index)
+		continue;
+	    const int s0 = topology.vertices[edge->vertices[0]].edit_index;
+	    const int s1 = topology.vertices[edge->vertices[1]].edit_index;
+	    VADD2(anchor, arb->pt[s0], arb->pt[s1]);
+	    VSCALE(anchor, anchor, 0.5);
+	    found = 1;
+	    break;
+	}
+	if (!found)
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    } else if (cmd_id == ECMD_ARB_MOVE_FACE ||
+	cmd_id == ECMD_ARB_ROTATE_FACE) {
+	int found = 0;
+	for (int fi = 0; fi < topology.face_count; fi++) {
+	    const struct rt_arb_edit_face *face = &topology.faces[fi];
+	    if (face->edit_index != index)
+		continue;
+	    for (int vi = 0; vi < face->vertex_count; vi++) {
+		const int storage =
+		    topology.vertices[face->vertices[vi]].edit_index;
+		VADD2(anchor, anchor, arb->pt[storage]);
+	    }
+	    VSCALE(anchor, anchor, 1.0 / (fastf_t)face->vertex_count);
+	    found = 1;
+	    break;
+	}
+	if (!found)
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    } else {
+	return RT_EDIT_VALUE_UNAVAILABLE;
+    }
+
+    rt_edit_cmd_values_set_value(result, 0, index);
+    if (cmd_id == ECMD_ARB_ROTATE_FACE) {
+	rt_edit_cmd_values_set_value(result, 1, edit->fixv);
+	rt_edit_cmd_values_set_value(result, 2, 0.0);
+	rt_edit_cmd_values_set_value(result, 3, 0.0);
+	rt_edit_cmd_values_set_value(result, 4, 0.0);
+    } else {
+	rt_edit_cmd_values_set_value(result, 1, anchor[X] * s->base2local);
+	rt_edit_cmd_values_set_value(result, 2, anchor[Y] * s->base2local);
+	rt_edit_cmd_values_set_value(result, 3, anchor[Z] * s->base2local);
+    }
+    return RT_EDIT_VALUE_OK;
 }
 
 C_DECL void *
@@ -1811,6 +2015,55 @@ edit_arb_element(struct rt_edit *s)
     return 0;
 }
 
+
+static int
+edarb_select_element(struct rt_edit *s, int domain)
+{
+    struct rt_arb8_edit *edit = (struct rt_arb8_edit *)s->ipe_ptr;
+    if (!edit || s->e_inpara != 1) {
+	bu_vls_printf(s->log_str, "ERROR: one element index is required\n");
+	return BRLCAD_ERROR;
+    }
+    const int requested = (int)s->e_para[0];
+    struct rt_arb_edit_topology topology;
+    if (rt_arb_edit_topology_get(&topology, &s->es_int, s->tol) !=
+	BRLCAD_OK)
+	return BRLCAD_ERROR;
+    int valid = 0;
+    if (domain == ECMD_ARB_SELECT_VERTEX) {
+	for (int i = 0; i < topology.vertex_count; i++) {
+	    if (topology.vertices[i].edit_index == requested) {
+		valid = 1;
+		break;
+	    }
+	}
+    } else if (domain == ECMD_ARB_SELECT_EDGE) {
+	for (int i = 0; i < topology.edge_count; i++) {
+	    if (topology.edges[i].edit_index == requested) {
+		valid = 1;
+		break;
+	    }
+	}
+    } else if (domain == ECMD_ARB_SELECT_FACE) {
+	for (int i = 0; i < topology.face_count; i++) {
+	    if (topology.faces[i].edit_index == requested &&
+		topology.faces[i].movable) {
+		valid = 1;
+		break;
+	    }
+	}
+    }
+    if (!valid) {
+	bu_vls_printf(s->log_str, "ERROR: ARB element index %d is not editable\n",
+	    requested);
+	return BRLCAD_ERROR;
+    }
+    edit->edit_menu = requested;
+    s->e_inpara = 0;
+    s->edit_mode = RT_PARAMS_EDIT_PICK;
+    return BRLCAD_OK;
+}
+
 void
 arb_mv_pnt_to(struct rt_edit *s, const vect_t mousevec)
 {
@@ -1928,6 +2181,10 @@ rt_edit_arb_edit(struct rt_edit *s)
 	     * return 1 to signal rt_edit_process to skip its post-dispatch
 	     * switch (avoiding a redundant arb_planecalc and replot). */
 	    return 1;
+	case ECMD_ARB_SELECT_VERTEX:
+	case ECMD_ARB_SELECT_EDGE:
+	case ECMD_ARB_SELECT_FACE:
+	    return edarb_select_element(s, s->edit_flag);
 	case PTARB:     /* move an ARB point */
 	case EARB:      /* edit an ARB edge */
 	    return edit_arb_element(s);

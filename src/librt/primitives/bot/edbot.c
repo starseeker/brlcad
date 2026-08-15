@@ -533,6 +533,25 @@ ecmd_bot_movev_list(struct rt_edit *s)
 	    s->e_inpara = 0;
 	    return BRLCAD_ERROR;
 	}
+	if (fabs(s->e_para[3 + i] - (fastf_t)vi) > SMALL_FASTF) {
+	    bu_vls_printf(s->log_str,
+		    "ERROR: vertex index %g is not an integer\n",
+		    s->e_para[3 + i]);
+	    s->e_inpara = 0;
+	    return BRLCAD_ERROR;
+	}
+    }
+    for (int i = 0; i < n_verts; i++) {
+	int vi = (int)s->e_para[3 + i];
+	int duplicate = 0;
+	for (int previous = 0; previous < i; previous++) {
+	    if ((int)s->e_para[3 + previous] == vi) {
+		duplicate = 1;
+		break;
+	    }
+	}
+	if (duplicate)
+	    continue;
 	VADD2(&bot->vertices[vi * 3], &bot->vertices[vi * 3], delta);
     }
 
@@ -772,7 +791,7 @@ ecmd_bot_face_fuse(struct rt_edit *s)
     return BRLCAD_OK;
 }
 
-void
+static int
 ecmd_bot_movev(struct rt_edit *s)
 {
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
@@ -785,21 +804,28 @@ ecmd_bot_movev(struct rt_edit *s)
     RT_BOT_CK_MAGIC(bot);
 
     if (b->bot_verts[0] < 0) {
-	bu_log("No BOT point selected\n");
-	return;
+	bu_vls_printf(s->log_str, "No BOT point selected\n");
+	return BRLCAD_ERROR;
     }
 
     if (b->bot_verts[1] >= 0 && b->bot_verts[2] >= 0) {
-	bu_log("A triangle is selected, not a BOT point!\n");
-	return;
+	bu_vls_printf(s->log_str,
+	    "A triangle is selected, not a BOT point!\n");
+	return BRLCAD_ERROR;
     }
 
     if (b->bot_verts[1] >= 0) {
-	bu_log("An edge is selected, not a BOT point!\n");
-	return;
+	bu_vls_printf(s->log_str,
+	    "An edge is selected, not a BOT point!\n");
+	return BRLCAD_ERROR;
     }
 
     vert = b->bot_verts[0];
+    if ((size_t)vert >= bot->num_vertices) {
+	bu_vls_printf(s->log_str, "BOT vertex index %d is out of range\n",
+	    vert);
+	return BRLCAD_ERROR;
+    }
     if (s->e_mvalid) {
 	VMOVE(new_pt, s->e_mparam);
     } else if (s->e_inpara == 3) {
@@ -819,15 +845,16 @@ ecmd_bot_movev(struct rt_edit *s)
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f)
 	    (*f)(0, NULL, d, NULL);
-	return;
+	return BRLCAD_ERROR;
     } else if (!s->e_mvalid && !s->e_inpara) {
-	return;
+	return BRLCAD_OK;
     }
 
     VMOVE(&bot->vertices[vert*3], new_pt);
+    return BRLCAD_OK;
 }
 
-void
+static int
 ecmd_bot_movee(struct rt_edit *s)
 {
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
@@ -845,15 +872,22 @@ ecmd_bot_movee(struct rt_edit *s)
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f)
 	    (*f)(0, NULL, d, NULL);
-	return;
+	return BRLCAD_ERROR;
     }
 
     if (b->bot_verts[2] >= 0) {
-	bu_log("A triangle is selected, not a BOT edge!\n");
-	return;
+	bu_vls_printf(s->log_str,
+	    "A triangle is selected, not a BOT edge!\n");
+	return BRLCAD_ERROR;
     }
     v1 = b->bot_verts[0];
     v2 = b->bot_verts[1];
+    if ((size_t)v1 >= bot->num_vertices ||
+	(size_t)v2 >= bot->num_vertices) {
+	bu_vls_printf(s->log_str,
+	    "BOT edge vertex index is out of range\n");
+	return BRLCAD_ERROR;
+    }
     if (s->e_mvalid) {
 	VMOVE(new_pt, s->e_mparam);
     } else if (s->e_inpara == 3) {
@@ -873,18 +907,22 @@ ecmd_bot_movee(struct rt_edit *s)
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f)
 	    (*f)(0, NULL, d, NULL);
-	return;
+	return BRLCAD_ERROR;
     } else if (!s->e_mvalid && !s->e_inpara) {
-	return;
+	return BRLCAD_OK;
     }
 
 
-    VSUB2(diff, new_pt, &bot->vertices[v1*3]);
-    VMOVE(&bot->vertices[v1*3], new_pt);
+    point_t midpoint;
+    VADD2SCALE(midpoint, &bot->vertices[v1*3],
+	&bot->vertices[v2*3], 0.5);
+    VSUB2(diff, new_pt, midpoint);
+    VADD2(&bot->vertices[v1*3], &bot->vertices[v1*3], diff);
     VADD2(&bot->vertices[v2*3], &bot->vertices[v2*3], diff);
+    return BRLCAD_OK;
 }
 
-void
+static int
 ecmd_bot_movet(struct rt_edit *s)
 {
     struct rt_bot_edit *b = (struct rt_bot_edit *)s->ipe_ptr;
@@ -902,11 +940,18 @@ ecmd_bot_movet(struct rt_edit *s)
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f)
 	    (*f)(0, NULL, d, NULL);
-	return;
+	return BRLCAD_ERROR;
     }
     v1 = b->bot_verts[0];
     v2 = b->bot_verts[1];
     v3 = b->bot_verts[2];
+    if ((size_t)v1 >= bot->num_vertices ||
+	(size_t)v2 >= bot->num_vertices ||
+	(size_t)v3 >= bot->num_vertices) {
+	bu_vls_printf(s->log_str,
+	    "BOT face vertex index is out of range\n");
+	return BRLCAD_ERROR;
+    }
 
     if (s->e_mvalid) {
 	VMOVE(new_pt, s->e_mparam);
@@ -927,15 +972,20 @@ ecmd_bot_movet(struct rt_edit *s)
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f)
 	    (*f)(0, NULL, d, NULL);
-	return;
+	return BRLCAD_ERROR;
     } else if (!s->e_mvalid && !s->e_inpara) {
-	return;
+	return BRLCAD_OK;
     }
 
-    VSUB2(diff, new_pt, &bot->vertices[v1*3]);
-    VMOVE(&bot->vertices[v1*3], new_pt);
+    point_t centroid;
+    VADD3(centroid, &bot->vertices[v1*3], &bot->vertices[v2*3],
+	&bot->vertices[v3*3]);
+    VSCALE(centroid, centroid, 1.0 / 3.0);
+    VSUB2(diff, new_pt, centroid);
+    VADD2(&bot->vertices[v1*3], &bot->vertices[v1*3], diff);
     VADD2(&bot->vertices[v2*3], &bot->vertices[v2*3], diff);
     VADD2(&bot->vertices[v3*3], &bot->vertices[v3*3], diff);
+    return BRLCAD_OK;
 }
 
 int
@@ -1134,18 +1184,22 @@ rt_edit_bot_edit(struct rt_edit *s)
 	case ECMD_BOT_FACE_FUSE:
 	    return ecmd_bot_face_fuse(s);
 	case ECMD_BOT_MOVEV:
-	    ecmd_bot_movev(s);
-	    break;
+	    return ecmd_bot_movev(s);
 	case ECMD_BOT_MOVEE:
-	    ecmd_bot_movee(s);
-	    break;
+	    return ecmd_bot_movee(s);
 	case ECMD_BOT_MOVET:
-	    ecmd_bot_movet(s);
-	    break;
+	    return ecmd_bot_movet(s);
 	case ECMD_BOT_PICKV:
 	    /* Descriptor path: select vertex by index from e_para[0] */
 	    if (s->e_inpara >= 1) {
-		b->bot_verts[0] = (int)s->e_para[0];
+		const int vertex = (int)s->e_para[0];
+		if (vertex < 0 || (size_t)vertex >=
+			((struct rt_bot_internal *)s->es_int.idb_ptr)->num_vertices) {
+		    bu_vls_printf(s->log_str,
+			"BOT vertex index %d is out of range\n", vertex);
+		    return BRLCAD_ERROR;
+		}
+		b->bot_verts[0] = vertex;
 		b->bot_verts[1] = -1;
 		b->bot_verts[2] = -1;
 		s->e_inpara = 0;
@@ -1154,8 +1208,36 @@ rt_edit_bot_edit(struct rt_edit *s)
 	case ECMD_BOT_PICKE:
 	    /* Descriptor path: select edge by vertex pair from e_para[0..1] */
 	    if (s->e_inpara >= 2) {
-		b->bot_verts[0] = (int)s->e_para[0];
-		b->bot_verts[1] = (int)s->e_para[1];
+		const int v1 = (int)s->e_para[0];
+		const int v2 = (int)s->e_para[1];
+		struct rt_bot_internal *bot =
+		    (struct rt_bot_internal *)s->es_int.idb_ptr;
+		const size_t vertex_count = bot->num_vertices;
+		if (v1 < 0 || v2 < 0 || v1 == v2 ||
+		    (size_t)v1 >= vertex_count || (size_t)v2 >= vertex_count) {
+		    bu_vls_printf(s->log_str,
+			"BOT edge vertices %d,%d are invalid\n", v1, v2);
+		    return BRLCAD_ERROR;
+		}
+		int found = 0;
+		for (size_t fi = 0; fi < bot->num_faces && !found; fi++) {
+		    const int *face = &bot->faces[fi * 3];
+		    for (int edge = 0; edge < 3; edge++) {
+			const int a = face[edge];
+			const int b2 = face[(edge + 1) % 3];
+			if ((a == v1 && b2 == v2) || (a == v2 && b2 == v1)) {
+			    found = 1;
+			    break;
+			}
+		    }
+		}
+		if (!found) {
+		    bu_vls_printf(s->log_str,
+			"BOT edge %d,%d does not exist\n", v1, v2);
+		    return BRLCAD_ERROR;
+		}
+		b->bot_verts[0] = v1;
+		b->bot_verts[1] = v2;
 		b->bot_verts[2] = -1;
 		s->e_inpara = 0;
 	    }
@@ -1163,9 +1245,35 @@ rt_edit_bot_edit(struct rt_edit *s)
 	case ECMD_BOT_PICKT:
 	    /* Descriptor path: select face by vertex triple from e_para[0..2] */
 	    if (s->e_inpara >= 3) {
-		b->bot_verts[0] = (int)s->e_para[0];
-		b->bot_verts[1] = (int)s->e_para[1];
-		b->bot_verts[2] = (int)s->e_para[2];
+		const int v1 = (int)s->e_para[0];
+		const int v2 = (int)s->e_para[1];
+		const int v3 = (int)s->e_para[2];
+		struct rt_bot_internal *bot =
+		    (struct rt_bot_internal *)s->es_int.idb_ptr;
+		if (v1 < 0 || v2 < 0 || v3 < 0 || v1 == v2 || v2 == v3 ||
+		    v1 == v3 || (size_t)v1 >= bot->num_vertices ||
+		    (size_t)v2 >= bot->num_vertices ||
+		    (size_t)v3 >= bot->num_vertices) {
+		    bu_vls_printf(s->log_str,
+			"BOT face vertices %d,%d,%d are invalid\n", v1, v2, v3);
+		    return BRLCAD_ERROR;
+		}
+		int found = 0;
+		for (size_t fi = 0; fi < bot->num_faces; fi++) {
+		    const int *face = &bot->faces[fi * 3];
+		    if (face[0] == v1 && face[1] == v2 && face[2] == v3) {
+			found = 1;
+			break;
+		    }
+		}
+		if (!found) {
+		    bu_vls_printf(s->log_str,
+			"BOT face %d,%d,%d does not exist\n", v1, v2, v3);
+		    return BRLCAD_ERROR;
+		}
+		b->bot_verts[0] = v1;
+		b->bot_verts[1] = v2;
+		b->bot_verts[2] = v3;
 		s->e_inpara = 0;
 	    }
 	    break;
@@ -1251,23 +1359,23 @@ static const int bot_orient_ids[] = {
 
 static const struct rt_edit_param_desc bot_pickv_params[] = {
     { "vertex_index", "Vertex Index", RT_EDIT_PARAM_INTEGER, 0,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL }
+      -1.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL }
 };
 
 static const struct rt_edit_param_desc bot_picke_params[] = {
     { "v1", "Vertex 1", RT_EDIT_PARAM_INTEGER, 0,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
+      -1.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
     { "v2", "Vertex 2", RT_EDIT_PARAM_INTEGER, 1,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL }
+      -1.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL }
 };
 
 static const struct rt_edit_param_desc bot_pickt_params[] = {
     { "v1", "Vertex 1", RT_EDIT_PARAM_INTEGER, 0,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
+      -1.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
     { "v2", "Vertex 2", RT_EDIT_PARAM_INTEGER, 1,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
+      -1.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL },
     { "v3", "Vertex 3", RT_EDIT_PARAM_INTEGER, 2,
-      0.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL }
+      -1.0, RT_EDIT_PARAM_NO_LIMIT, "count", 0, NULL, NULL, NULL }
 };
 
 static const struct rt_edit_param_desc bot_point_params[] = {
@@ -1277,9 +1385,12 @@ static const struct rt_edit_param_desc bot_point_params[] = {
 };
 
 static const struct rt_edit_param_desc bot_delta_params[] = {
-    { "delta", "Delta (dx dy dz + vertex indices)", RT_EDIT_PARAM_VECTOR, 0,
+    { "delta", "Delta", RT_EDIT_PARAM_VECTOR, 0,
       RT_EDIT_PARAM_NO_LIMIT, RT_EDIT_PARAM_NO_LIMIT, "length",
-      0, NULL, NULL, NULL }
+      0, NULL, NULL, NULL },
+    { "vertices", "Vertices", RT_EDIT_PARAM_INTEGER_LIST, 3,
+      0.0, RT_EDIT_PARAM_NO_LIMIT, "count",
+      1, NULL, NULL, NULL }
 };
 
 static const struct rt_edit_param_desc bot_mode_params[] = {
@@ -1310,29 +1421,143 @@ static const struct rt_edit_param_desc bot_flags_params[] = {
 };
 
 static const struct rt_edit_cmd_desc bot_cmds[] = {
-    { ECMD_BOT_PICKV,       "Select Vertex",       "selection", 1, bot_pickv_params,  0, 10, NULL },
-    { ECMD_BOT_PICKE,       "Select Edge",         "selection", 2, bot_picke_params,  0, 20, NULL },
-    { ECMD_BOT_PICKT,       "Select Face",         "selection", 3, bot_pickt_params,  0, 30, NULL },
-    { ECMD_BOT_MOVEV,       "Move Vertex",         "movement",  1, bot_point_params,  1, 40, NULL },
-    { ECMD_BOT_MOVEE,       "Move Edge",           "movement",  1, bot_point_params,  1, 50, NULL },
-    { ECMD_BOT_MOVET,       "Move Face",           "movement",  1, bot_point_params,  1, 60, NULL },
-    { ECMD_BOT_MOVEV_LIST,  "Move Vertex List",    "movement",  1, bot_delta_params,  1, 70, NULL },
-    { ECMD_BOT_ESPLIT,      "Split Edge",          "topology",  0, NULL,              0, 80, NULL },
-    { ECMD_BOT_FSPLIT,      "Split Face",          "topology",  0, NULL,              0, 90, NULL },
-    { ECMD_BOT_FDEL,        "Delete Face",         "topology",  0, NULL,              0, 100, NULL },
-    { ECMD_BOT_VERTEX_FUSE, "Fuse Vertices",       "topology",  0, NULL,              0, 110, NULL },
-    { ECMD_BOT_FACE_FUSE,   "Fuse Faces",          "topology",  0, NULL,              0, 120, NULL },
-    { ECMD_BOT_MODE,        "Set Mode",            "properties",1, bot_mode_params,   1, 130, NULL },
-    { ECMD_BOT_ORIENT,      "Set Orientation",     "properties",1, bot_orient_params, 1, 140, NULL },
-    { ECMD_BOT_THICK,       "Set Face Thickness",  "properties",1, bot_thick_params,  1, 150, NULL },
-    { ECMD_BOT_FMODE,       "Set Face Mode",       "properties",1, bot_fmode_params,  1, 160, NULL },
-    { ECMD_BOT_FLAGS,       "Set Flags",           "properties",1, bot_flags_params,  1, 170, NULL }
+    { ECMD_BOT_PICKV, RT_EDIT_CMD_NAME(ECMD_BOT_PICKV),       "Select Vertex",       "selection", 1, bot_pickv_params,  0, 10, NULL },
+    { ECMD_BOT_PICKE, RT_EDIT_CMD_NAME(ECMD_BOT_PICKE),       "Select Edge",         "selection", 2, bot_picke_params,  0, 20, NULL },
+    { ECMD_BOT_PICKT, RT_EDIT_CMD_NAME(ECMD_BOT_PICKT),       "Select Face",         "selection", 3, bot_pickt_params,  0, 30, NULL },
+    { ECMD_BOT_MOVEV, RT_EDIT_CMD_NAME(ECMD_BOT_MOVEV),       "Move Vertex",         "movement",  1, bot_point_params,  1, 40, NULL },
+    { ECMD_BOT_MOVEE, RT_EDIT_CMD_NAME(ECMD_BOT_MOVEE),       "Move Edge",           "movement",  1, bot_point_params,  1, 50, NULL },
+    { ECMD_BOT_MOVET, RT_EDIT_CMD_NAME(ECMD_BOT_MOVET),       "Move Face",           "movement",  1, bot_point_params,  1, 60, NULL },
+    { ECMD_BOT_MOVEV_LIST, RT_EDIT_CMD_NAME(ECMD_BOT_MOVEV_LIST),  "Move Vertex List",    "movement",  2, bot_delta_params,  1, 70, NULL },
+    { ECMD_BOT_ESPLIT, RT_EDIT_CMD_NAME(ECMD_BOT_ESPLIT),      "Split Edge",          "topology",  0, NULL,              0, 80, NULL },
+    { ECMD_BOT_FSPLIT, RT_EDIT_CMD_NAME(ECMD_BOT_FSPLIT),      "Split Face",          "topology",  0, NULL,              0, 90, NULL },
+    { ECMD_BOT_FDEL, RT_EDIT_CMD_NAME(ECMD_BOT_FDEL),        "Delete Face",         "topology",  0, NULL,              0, 100, NULL },
+    { ECMD_BOT_VERTEX_FUSE, RT_EDIT_CMD_NAME(ECMD_BOT_VERTEX_FUSE), "Fuse Vertices",       "topology",  0, NULL,              0, 110, NULL },
+    { ECMD_BOT_FACE_FUSE, RT_EDIT_CMD_NAME(ECMD_BOT_FACE_FUSE),   "Fuse Faces",          "topology",  0, NULL,              0, 120, NULL },
+    { ECMD_BOT_MODE, RT_EDIT_CMD_NAME(ECMD_BOT_MODE),        "Set Mode",            "properties",1, bot_mode_params,   1, 130, NULL },
+    { ECMD_BOT_ORIENT, RT_EDIT_CMD_NAME(ECMD_BOT_ORIENT),      "Set Orientation",     "properties",1, bot_orient_params, 1, 140, NULL },
+    { ECMD_BOT_THICK, RT_EDIT_CMD_NAME(ECMD_BOT_THICK),       "Set Face Thickness",  "properties",1, bot_thick_params,  1, 150, NULL },
+    { ECMD_BOT_FMODE, RT_EDIT_CMD_NAME(ECMD_BOT_FMODE),       "Set Face Mode",       "properties",1, bot_fmode_params,  1, 160, NULL },
+    { ECMD_BOT_FLAGS, RT_EDIT_CMD_NAME(ECMD_BOT_FLAGS),       "Set Flags",           "properties",1, bot_flags_params,  1, 170, NULL }
 };
+
+static const enum rt_edit_param_semantic bot_index1_semantics[] = {
+    RT_EDIT_SEMANTIC_INDEX
+};
+static const enum rt_edit_param_semantic bot_index2_semantics[] = {
+    RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_INDEX
+};
+static const enum rt_edit_param_semantic bot_index3_semantics[] = {
+    RT_EDIT_SEMANTIC_INDEX, RT_EDIT_SEMANTIC_INDEX,
+    RT_EDIT_SEMANTIC_INDEX
+};
+static const enum rt_edit_param_semantic bot_position_semantics[] = {
+    RT_EDIT_SEMANTIC_POSITION
+};
+static const enum rt_edit_param_semantic bot_delta_list_semantics[] = {
+    RT_EDIT_SEMANTIC_DELTA, RT_EDIT_SEMANTIC_INDEX
+};
+static const enum rt_edit_param_semantic bot_property_semantics[] = {
+    RT_EDIT_SEMANTIC_PROPERTY
+};
+static const enum rt_edit_param_semantic bot_distance_semantics[] = {
+    RT_EDIT_SEMANTIC_DISTANCE
+};
+
+static const struct rt_edit_interaction_desc bot_interactions[] = {
+    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, bot_index1_semantics, 1 },
+    { RT_EDIT_SELECTION_EDGE, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, bot_index2_semantics, 2 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, bot_index3_semantics, 3 },
+    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_OBJECT,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, bot_position_semantics, 1 },
+    { RT_EDIT_SELECTION_EDGE, RT_EDIT_COORDINATE_OBJECT,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, bot_position_semantics, 1 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_OBJECT,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, bot_position_semantics, 1 },
+    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_OBJECT,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, bot_delta_list_semantics, 2 },
+    { RT_EDIT_SELECTION_EDGE, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
+    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_INFER,
+      RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
+    { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_SCALAR,
+      RT_EDIT_MANIPULATOR_NONE, bot_property_semantics, 1 },
+    { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_SCALAR,
+      RT_EDIT_MANIPULATOR_NONE, bot_property_semantics, 1 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_SCALAR,
+      RT_EDIT_MANIPULATOR_NONE, bot_distance_semantics, 1 },
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_SCALAR,
+      RT_EDIT_MANIPULATOR_NONE, bot_property_semantics, 1 },
+    { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_SCALAR,
+      RT_EDIT_MANIPULATOR_NONE, bot_property_semantics, 1 }
+};
+_Static_assert(sizeof(bot_interactions) / sizeof(bot_interactions[0]) ==
+    sizeof(bot_cmds) / sizeof(bot_cmds[0]), "bot command interactions");
+
+static int
+bot_parameter_bounds(struct rt_edit_param_bounds *bounds,
+	const struct rt_edit *edit, int command_id, int parameter_index)
+{
+    if (!bounds || !edit || !edit->es_int.idb_ptr)
+	return BRLCAD_ERROR;
+    const struct rt_bot_internal *bot =
+	(const struct rt_bot_internal *)edit->es_int.idb_ptr;
+    RT_BOT_CK_MAGIC(bot);
+    int vertex_parameter = 0;
+    if (command_id == ECMD_BOT_PICKV && parameter_index == 0)
+	vertex_parameter = 1;
+    else if ((command_id == ECMD_BOT_PICKE ||
+	command_id == ECMD_BOT_PICKT) && parameter_index >= 0)
+	vertex_parameter = 1;
+    else if (command_id == ECMD_BOT_MOVEV_LIST && parameter_index == 1)
+	vertex_parameter = 1;
+    if (!vertex_parameter)
+	return BRLCAD_OK;
+    if (!bot->num_vertices)
+	return BRLCAD_ERROR;
+    bounds->maximum = (fastf_t)(bot->num_vertices - 1);
+    bounds->has_maximum = 1;
+    return BRLCAD_OK;
+}
+
+static const enum rt_edit_control_class bot_command_controls[] = {
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_INHERIT,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_CUSTOM,
+    RT_EDIT_CONTROL_INHERIT
+};
+_Static_assert(sizeof(bot_command_controls) / sizeof(bot_command_controls[0]) ==
+    sizeof(bot_cmds) / sizeof(bot_cmds[0]), "bot command controls");
 
 static const struct rt_edit_prim_desc bot_prim_desc = {
     "bot", "BOT", 17, bot_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    bot_command_controls,
+    bot_interactions,
+    bot_parameter_bounds
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -1342,8 +1567,8 @@ rt_edit_bot_edit_desc(void)
 }
 
 
-C_DECL int
-rt_edit_bot_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
+static int
+bot_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
 {
     if (!s || !vals) return 0;
 
@@ -1453,6 +1678,21 @@ rt_edit_bot_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
 	default:
 	    return 0;
     }
+}
+
+C_DECL int
+rt_edit_bot_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    fastf_t values[RT_EDIT_MAXPARA] = {0.0};
+    const int count = bot_current_numbers(s, cmd_id, values);
+    if (count <= 0)
+	return RT_EDIT_VALUE_UNAVAILABLE;
+    for (int i = 0; i < count; i++)
+	rt_edit_cmd_values_set_value(result, i, values[i]);
+    return RT_EDIT_VALUE_OK;
 }
 
 int

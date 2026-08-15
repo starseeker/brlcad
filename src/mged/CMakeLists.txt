@@ -143,6 +143,17 @@ if(BRLCAD_ENABLE_TCL)
 		  "${CMAKE_CURRENT_BINARY_DIR}")
 		set_property(TEST mged_tkobol_attach_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 		set_property(TEST mged_tkobol_attach_smoke PROPERTY SKIP_RETURN_CODE 125)
+		brlcad_add_test(NAME mged_tkobol_framebuffer_matrix
+		  COMMAND ${SH_EXEC} ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh
+		  ${MGED_XVFB_RUN_EXECUTABLE} ${SH_EXEC}
+		  "${CMAKE_CURRENT_SOURCE_DIR}/mged_tkobol_framebuffer_matrix.sh"
+		  "$<TARGET_FILE:mged>"
+		  "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g"
+		  "${CMAKE_CURRENT_BINARY_DIR}")
+		set_tests_properties(mged_tkobol_framebuffer_matrix
+		  PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 125)
+		set_property(TEST mged_tkobol_framebuffer_matrix APPEND PROPERTY
+		  ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 	      endif(MGED_XVFB_RUN_EXECUTABLE)
 	    endif(UNIX)
 
@@ -188,6 +199,7 @@ set(
   mged_obol_smoke.sh
   mged_tkobol_attach_smoke.sh
   mged_tkobol_attach_smoke.tcl
+  mged_tkobol_framebuffer_matrix.sh
   mged.h
   mged.ico
   mged.rc

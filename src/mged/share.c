@@ -220,8 +220,11 @@ f_share(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *ar
 	case 'v':
 	case 'V':
 	    if ((argv[1][1] == 'a' || argv[1][1] == 'A') &&
-		(argv[1][2] == 'r' || argv[1][2] == 'R'))
+		(argv[1][2] == 'r' || argv[1][2] == 'R')) {
 		SHARE_RESOURCE(uflag, _mged_variables, display_variables, mv_rc, dlp1, dlp2, vls, "share: mged_variables");
+		if (!uflag)
+		    dlp2->display_framebuffer_state_dirty = 1;
+	    }
 	    else if (argv[1][1] == 'i' || argv[1][1] == 'I') {
 		if (!uflag) {
 		    /* free dlp2's view_state resources if currently not sharing */
@@ -391,6 +394,7 @@ usurp_all_resources(struct mged_display *dlp1, struct mged_display *dlp2)
     dlp1->display_axes_state = dlp2->display_axes_state;
     dlp1->display_axes_state_dirty = 1;
     dlp1->display_adc_style_dirty = 1;
+    dlp1->display_framebuffer_state_dirty = 1;
 
     /* sanity */
     dlp2->display_view_state = (struct _view_state *)NULL;

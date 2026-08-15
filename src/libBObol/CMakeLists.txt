@@ -8,6 +8,7 @@ set(
   display_endpoint.cpp
   display_session.cpp
   draw_cache.cpp
+  edit_manipulator.cpp
   edit_preview.cpp
   evaluated_points.cpp
   export_action.cpp
@@ -23,6 +24,8 @@ set(
   init.cpp
   line_layer_overlay.cpp
   lod_coordinator_private.h
+  retained_allocation_private.cpp
+  retained_allocation_private.h
   lod_realization.cpp
   lod_service.cpp
   lod_mesh_shape.cpp
@@ -101,6 +104,7 @@ cmakefiles(
   display_endpoint.cpp
   display_session.cpp
   draw_cache.cpp
+  edit_manipulator.cpp
   edit_preview.cpp
   evaluated_points.cpp
   export_action.cpp
@@ -130,6 +134,8 @@ cmakefiles(
   pick_detail.cpp
   performance.cpp
   performance_private.h
+  retained_allocation_private.cpp
+  retained_allocation_private.h
   realize_action.cpp
   scene_controller.cpp
   scene_group.cpp

@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include <QKeyEvent>
+
 #include "bv.h"
 
 extern "C" {
@@ -50,47 +52,24 @@ qg_poly_view_context(void *view_ctx)
 		static_cast<struct bv_context *>(view_ctx));
 }
 
-static void
-qg_poly_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
-{
-	if (!m_e || !sx || !sy)
-		return;
-
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	*sx = m_e->x();
-	*sy = m_e->y();
-#else
-	*sx = (int)m_e->position().x();
-	*sy = (int)m_e->position().y();
-#endif
-}
-
-static void
-qg_poly_screen_point(void *v, QMouseEvent *m_e, point_t point)
+static int
+qg_poly_current_point(void *v, point_t point)
 {
 	VSETALL(point, 0.0);
-	if (!v || !m_e)
-		return;
-
-	int sx = 0;
-	int sy = 0;
-	qg_poly_mouse_xy(m_e, &sx, &sy);
-	(void)bv_screen_to_model(point, bv_context_view_const(static_cast<const struct bv_context *>(v)),
-		(fastf_t)sx, (fastf_t)sy);
+	return v ? bv_current_point_get(point,
+		bv_context_view_const(static_cast<const struct bv_context *>(v))) : 0;
 }
 
 static int
-qg_poly_update_from_event(qg_polygon_ref ref, void *v,
-	QMouseEvent *m_e, qg_polygon_update_mode utype)
+qg_poly_update_at_current_point(qg_polygon_ref ref, void *v,
+	qg_polygon_update_mode utype)
 {
-	if (!m_e)
+	point_t current_point = VINIT_ZERO;
+	if (!qg_poly_current_point(v, current_point))
 		return 0;
 
-	int sx = 0;
-	int sy = 0;
-	qg_poly_mouse_xy(m_e, &sx, &sy);
-	return ged_view_polygon_update_screen_pt(qg_poly_view_context(v), ref,
-		sx, sy, static_cast<enum ged_view_polygon_update>(utype));
+	return ged_view_polygon_update_model_pt(qg_poly_view_context(v), ref,
+		current_point, static_cast<enum ged_view_polygon_update>(utype));
 }
 
 bool
@@ -129,7 +108,8 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 		if (ged_view_polygon_ref_is_null(polygon)) {
 
 			point_t current_point = VINIT_ZERO;
-			qg_poly_screen_point(v, m_e, current_point);
+			if (!qg_poly_current_point(v, current_point))
+				return true;
 
 			polygon = ged_view_polygon_create(qg_poly_view_context(v),
 				"_tmp_view_polygon", 1,
@@ -152,7 +132,8 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 		qg_polygon_record rec;
 		if (ged_view_polygon_record_get(qg_poly_view_context(v), polygon,
 			&rec) && rec.type == QG_POLYGON_GENERAL) {
-			qg_poly_update_from_event(polygon, v, m_e, QG_POLYGON_UPDATE_PT_APPEND);
+			qg_poly_update_at_current_point(polygon, v,
+				QG_POLYGON_UPDATE_PT_APPEND);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -200,7 +181,8 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 		// For every other polygon type, call the libbv update routine
 		// with the view's x,y coordinates
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
-			qg_poly_update_from_event(polygon, v, m_e, QG_POLYGON_UPDATE_DEFAULT);
+			qg_poly_update_at_current_point(polygon, v,
+				QG_POLYGON_UPDATE_DEFAULT);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -237,6 +219,7 @@ void
 QgPolyCreateFilter::finalize(bool)
 {
 	int icnt = 0;
+	changed_objs.clear();
 
 	if (ged_view_polygon_ref_is_null(polygon))
 		return;
@@ -253,7 +236,10 @@ QgPolyCreateFilter::finalize(bool)
 	else {
 
 		for (auto target : bool_objs) {
-			icnt += ged_view_polygon_csg(view_ctx, target, polygon, op);
+			if (ged_view_polygon_csg(view_ctx, target, polygon, op)) {
+				icnt++;
+				changed_objs.push_back(target);
+			}
 		}
 
 		// When doing boolean operations, the convention is if there were one
@@ -272,6 +258,10 @@ QgPolyCreateFilter::finalize(bool)
 
 	emit view_updated(QG_VIEW_REFRESH);
 	emit finalized((icnt > 0) ? true : false);
+	/* The owner receives finalized synchronously while the completed handle
+	 * is still available.  Do not let the outer event filter copy that
+	 * completed handle back into its active-creation state. */
+	polygon = GED_VIEW_POLYGON_REF_NULL;
 }
 
 bool
@@ -302,7 +292,7 @@ QgPolyUpdateFilter::eventFilter(QObject *, QEvent *e)
 		// For every other polygon type, call the libbv update routine
 		// with the view's x,y coordinates
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
-			qg_poly_update_from_event(polygon, v, m_e,
+			qg_poly_update_at_current_point(polygon, v,
 				QG_POLYGON_UPDATE_DEFAULT);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
@@ -329,11 +319,15 @@ QgPolySelectFilter::eventFilter(QObject *, QEvent *e)
 		/* Use typed polygon selection records rather than the legacy
 		 * feature-table and ptbl compatibility path. */
 		point_t current_point = VINIT_ZERO;
-		qg_poly_screen_point(v, m_e, current_point);
+		if (!qg_poly_current_point(v, current_point))
+			return true;
 		polygon = ged_view_polygon_select(qg_poly_view_context(v),
 			current_point);
 		if (ged_view_polygon_ref_is_null(polygon))
 			return true;
+		(void)ged_view_polygon_clear_selection(qg_poly_view_context(v));
+		(void)ged_view_polygon_set_selected(qg_poly_view_context(v),
+			polygon, 1);
 		qg_polygon_record rec;
 		if (ged_view_polygon_record_get(qg_poly_view_context(v), polygon,
 			&rec)) {
@@ -354,30 +348,62 @@ QgPolySelectFilter::eventFilter(QObject *, QEvent *e)
 bool
 QgPolyPointFilter::eventFilter(QObject *, QEvent *e)
 {
-	QMouseEvent *m_e = view_sync(e);
-	if (!m_e)
+	last_geometry_changed = false;
+
+	void *v = qg_poly_filter_view(this);
+	if (!v)
 		return false;
 
 	// The point filter needs an active general polygon to operate on
 	if (ged_view_polygon_ref_is_null(polygon) || ptype != QG_POLYGON_GENERAL)
 		return false;
 
+	/* Selection persists after release so point actions remain available.
+	 * Delete and Backspace remove that selected point without requiring an
+	 * additional pointer gesture. */
+	if (!append_point && e->type() == QEvent::KeyPress) {
+		QKeyEvent *k_e = static_cast<QKeyEvent *>(e);
+		if (k_e->key() != Qt::Key_Delete && k_e->key() != Qt::Key_Backspace)
+			return false;
+		last_geometry_changed = ged_view_polygon_update(
+			qg_poly_view_context(v), polygon,
+			QG_POLYGON_UPDATE_PT_DELETE) != 0;
+		if (last_geometry_changed)
+			emit view_updated(QG_VIEW_REFRESH);
+		return true;
+	}
+
+	QMouseEvent *m_e = view_sync(e);
+	if (!m_e)
+		return false;
+
 	qg_polygon_record rec;
-	void *v = qg_poly_filter_view(this);
 	if (!ged_view_polygon_record_get(qg_poly_view_context(v), polygon, &rec))
 		return false;
 
-	// If we have a Left release, clear point selection
+	if (append_point) {
+		if (m_e->type() == QEvent::MouseButtonPress &&
+		    m_e->buttons().testFlag(Qt::LeftButton)) {
+			last_geometry_changed = qg_poly_update_at_current_point(polygon, v,
+				QG_POLYGON_UPDATE_PT_APPEND) != 0;
+			if (last_geometry_changed)
+				emit view_updated(QG_VIEW_REFRESH);
+			return true;
+		}
+		if (m_e->type() == QEvent::MouseButtonPress ||
+		    m_e->type() == QEvent::MouseButtonRelease)
+			return true;
+		return false;
+	}
+
+	// Selection is intentionally retained when the pointer is released.
 	if (m_e->type() == QEvent::MouseButtonRelease) {
-		qg_poly_update_from_event(polygon, v, m_e,
-			QG_POLYGON_UPDATE_PT_SELECT_CLEAR);
-		emit view_updated(QG_VIEW_REFRESH);
 		return true;
 	}
 
 	// Left press selects a point
 	if (m_e->type() == QEvent::MouseButtonPress && m_e->buttons().testFlag(Qt::LeftButton)) {
-		qg_poly_update_from_event(polygon, v, m_e,
+		qg_poly_update_at_current_point(polygon, v,
 			QG_POLYGON_UPDATE_PT_SELECT);
 		emit view_updated(QG_VIEW_REFRESH);
 		return true;
@@ -394,9 +420,10 @@ QgPolyPointFilter::eventFilter(QObject *, QEvent *e)
 			return true;
 		}
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
-			qg_poly_update_from_event(polygon, v, m_e,
-				QG_POLYGON_UPDATE_PT_MOVE);
-			emit view_updated(QG_VIEW_REFRESH);
+			last_geometry_changed = qg_poly_update_at_current_point(polygon, v,
+				QG_POLYGON_UPDATE_PT_MOVE) != 0;
+			if (last_geometry_changed)
+				emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
 
@@ -422,7 +449,8 @@ QgPolyMoveFilter::eventFilter(QObject *, QEvent *e)
 		return false;
 
 	point_t current_point = VINIT_ZERO;
-	qg_poly_screen_point(v, m_e, current_point);
+	if (!qg_poly_current_point(v, current_point))
+		return false;
 
 	// We don't want other stray mouse clicks to do something surprising
 	if (m_e->type() == QEvent::MouseButtonPress || m_e->type() == QEvent::MouseButtonRelease) {

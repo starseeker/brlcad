@@ -77,6 +77,15 @@ BG_EXPORT extern size_t bg_polygon_point_count(const struct bg_polygon *polygon)
 BG_EXPORT extern int bg_polygon_append_point(struct bg_polygon *polygon,
 	size_t contour, const point_t point);
 
+/**
+ * Remove one point from a contour.
+ *
+ * Removing the contour's final point also removes the empty contour and its
+ * corresponding hole flag.  Returns non-zero for invalid input.
+ */
+BG_EXPORT extern int bg_polygon_remove_point(struct bg_polygon *polygon,
+	size_t contour, size_t point_index);
+
 /** Translate every point by @p delta. */
 BG_EXPORT extern int bg_polygon_translate(struct bg_polygon *polygon,
 	const vect_t delta);

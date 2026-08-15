@@ -164,6 +164,16 @@ GED_EXPORT extern int
 ged_view_feature_points_copy(struct ged_view_context *view_ctx,
 	const char *name, point_t **points, size_t *point_count);
 
+/**
+ * Patch vertices in a retained indexed-face feature without replacing its
+ * topology.  All point indices are validated before any retained state is
+ * changed.  This is the interactive edit path for large mesh presenters.
+ */
+GED_EXPORT extern int
+ged_view_feature_indexed_face_points_update(
+	struct ged_view_context *view_ctx, const char *name,
+	const int *point_indices, const point_t *points, size_t point_count);
+
 /** Copy the renderer-neutral line command associated with one point. */
 GED_EXPORT extern int
 ged_view_feature_line_command_at(struct ged_view_context *view_ctx,

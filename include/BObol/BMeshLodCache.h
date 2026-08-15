@@ -42,9 +42,9 @@ struct rt_bot_internal;
  * This is a latency/working-set bound, not a visible tessellation rule. */
 #define BOBOL_MESH_LOD_CHUNK_FACE_TARGET 65536
 
-/* Spatial subresources are deliberately not display objects.  These fixed
- * sized records describe triangle-list ranges within the one activation-
- * ordered PoP stream owned by a logical leaf. */
+/* Spatial subresources are deliberately not display objects.  Sparse
+ * occupied-cell records describe triangle-list ranges within the one
+ * activation-ordered PoP stream owned by a logical leaf. */
 #define BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION 8
 #define BOBOL_MESH_LOD_CLUSTER_COUNT \
     (BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION * \
@@ -58,6 +58,9 @@ struct BObolMeshLodClusterRange {
 };
 
 struct BObolMeshLodClusterInfo {
+    /* Uniform-grid cell number.  Only occupied cells are published, in
+     * ascending order; an empty cell consumes no memory or cache record. */
+    uint32_t cluster_id;
     point_t bmin;
     point_t bmax;
     const struct BObolMeshLodClusterRange *ranges;

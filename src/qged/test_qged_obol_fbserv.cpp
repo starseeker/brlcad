@@ -241,10 +241,15 @@ test_qged_obol_fbserv_backend(void)
     GED_CHECK(fbs_framebuffer_cursor(fbs, 1, 7, 8) == 0,
 	      "qged Obol fbserv backend must record cursor state");
     GED_CHECK(fbs_framebuffer_flush(fbs) == 0,
-	      "qged Obol fbserv backend must present pending stream state");
+	      "qged Obol fbserv backend must publish pending stream state");
 
+    GED_CHECK(source->hasPendingStreamUpdate() == TRUE &&
+	      source->dirtyRevision.getValue() == 0,
+	      "qged transport flush must leave Coin realization to the owner thread");
+    GED_CHECK(ged_view_framebuffer_present(gedp) == BRLCAD_OK,
+	      "qged owner thread must present the published framebuffer state");
     GED_CHECK(source->hasPendingStreamUpdate() == FALSE,
-	      "qged framebuffer flush must consume pending stream updates");
+	      "qged owner presentation must consume pending stream updates");
     GED_CHECK(source->dirtyRevision.getValue() > 0,
 	      "qged framebuffer flush must publish dirty generation to Coin");
     GED_CHECK(viewport->realizedDirtyRevision.getValue() ==
@@ -279,6 +284,7 @@ test_qged_obol_fbserv_backend(void)
 	      info.width * secondBandHeight,
 	      "qged Obol fbserv backend must accept the final scan band");
     GED_CHECK(fbs_framebuffer_flush(fbs) == 0 &&
+	      ged_view_framebuffer_present(gedp) == BRLCAD_OK &&
 	      fbs_framebuffer_poll(fbs) == 1,
 	      "qged must present the completed framebuffer update");
 
@@ -357,7 +363,9 @@ test_qged_obol_fbserv_backend(void)
     }
     GED_CHECK(fbs_framebuffer_writerect(fbs, 0, 0, info.width, info.height,
 		secondPixels.data()) == info.width * info.height &&
-	fbs_framebuffer_flush(fbs) == 0 && fbs_framebuffer_poll(fbs) == 1,
+	fbs_framebuffer_flush(fbs) == 0 &&
+	ged_view_framebuffer_present(gedp) == BRLCAD_OK &&
+	fbs_framebuffer_poll(fbs) == 1,
 	"qged framebuffer switch must publish new pixels through the new endpoint");
     QImage switchedImage;
     secondView.get_obol_viewport_image(switchedImage);

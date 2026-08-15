@@ -124,10 +124,34 @@ test_polygon_value_operations(void)
     point_t appended = {8.0, 8.0, 8.0};
     if (bg_polygon_append_point(&copy, 0, appended) ||
 	bg_polygon_point_count(&copy) != 5 ||
+	bg_polygon_remove_point(&copy, 0, 4) ||
+	bg_polygon_point_count(&copy) != 4 ||
 	bg_polygon_contour_open_set(&copy, 0, 1) ||
 	!copy.contour[0].open ||
 	bg_polygon_contours_open_set(&copy, 0) || copy.contour[0].open)
 	failures++;
+
+    struct bg_polygon removable = BG_POLYGON_INIT_ZERO;
+    removable.num_contours = 2;
+    removable.hole = (int *)bu_calloc(2, sizeof(int),
+	"removable polygon holes");
+    removable.contour = (struct bg_poly_contour *)bu_calloc(2,
+	sizeof(struct bg_poly_contour), "removable polygon contours");
+    removable.hole[1] = 1;
+    for (size_t i = 0; i < 2; i++) {
+	removable.contour[i].num_points = 1;
+	removable.contour[i].point = (point_t *)bu_calloc(1,
+	    sizeof(point_t), "removable polygon point");
+	VSET(removable.contour[i].point[0], (fastf_t)i + 1.0, 0.0, 0.0);
+    }
+    if (bg_polygon_remove_point(&removable, 0, 0) ||
+	removable.num_contours != 1 || !removable.hole ||
+	removable.hole[0] != 1 ||
+	!NEAR_EQUAL(removable.contour[0].point[0][X], 2.0, SMALL_FASTF) ||
+	bg_polygon_remove_point(&removable, 0, 0) ||
+	removable.num_contours || removable.contour || removable.hole)
+	failures++;
+    bg_polygon_clear(&removable);
 
     struct bg_polygon ellipse = BG_POLYGON_INIT_ZERO;
     if (bg_polygon_make_ellipse(&ellipse, plane, first, opposite, 0, 32) ||

@@ -29,12 +29,13 @@ set(
   QgPluginInterfaces.h
   QgPluginManager.h
   QgPolyFilter.h
+  QgPrimitiveEdit.h
   QgQuadView.h
   QgRoles.h
   QgSW.h
   QgSelectFilter.h
   QgSignalFlags.h
-  QgSketchFilter.h
+  QgSketchEdit.h
   QgToolBase.h
   QgToolPalette.h
   QgTreeSelectionModel.h

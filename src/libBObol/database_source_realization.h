@@ -30,6 +30,7 @@ struct BObolCompactOccurrenceStream;
 struct BObolCachedPartGeometry {
     BObolCachedPartGeometry(void) :
 	geometryTransform(SbMatrix::identity()),
+	viewDependentCsgGeometry(false),
 	lodBacked(false),
 	sourceMeshRequestValid(false)
     {
@@ -43,6 +44,7 @@ struct BObolCachedPartGeometry {
     /* Maps the shared geometry's local coordinates into this cache key's
      * object-local coordinates.  Identity for ordinary cache entries. */
     SbMatrix geometryTransform;
+    bool viewDependentCsgGeometry;
     bool lodBacked;
     bool sourceMeshRequestValid;
     BObolSourceMeshRequest sourceMeshRequest;
@@ -65,24 +67,28 @@ struct BObolDatabaseSourceRealizationCache {
 	const std::string &key, Obol::PartGeometry &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
 	const SbBox3f *bounds = NULL, bool lodBacked = false,
-	const BObolSourceMeshRequest *sourceMeshRequest = NULL);
+	const BObolSourceMeshRequest *sourceMeshRequest = NULL,
+	bool viewDependentCsgGeometry = false);
     std::shared_ptr<const Obol::PartGeometry> storeMeshVListCadGeometry(
 	const std::string &key, Obol::PartGeometry &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
 	const SbBox3f *bounds = NULL, bool lodBacked = false,
-	const BObolSourceMeshRequest *sourceMeshRequest = NULL);
+	const BObolSourceMeshRequest *sourceMeshRequest = NULL,
+	bool viewDependentCsgGeometry = false);
     std::shared_ptr<const Obol::PartGeometry> storeMeshCadGeometry(
 	const std::string &key, Obol::PartGeometry &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
 	const SbBox3f *bounds = NULL, bool lodBacked = false,
-	const BObolSourceMeshRequest *sourceMeshRequest = NULL);
+	const BObolSourceMeshRequest *sourceMeshRequest = NULL,
+	bool viewDependentCsgGeometry = false);
     std::shared_ptr<const Obol::PartGeometry> storeMeshCadGeometryReference(
 	const std::string &key,
 	const std::shared_ptr<const Obol::PartGeometry> &geometry,
 	const SbMatrix &geometryTransform, const char *sourceType = NULL,
 	const char *geometryKind = NULL, const SbBox3f *bounds = NULL,
 	bool lodBacked = false,
-	const BObolSourceMeshRequest *sourceMeshRequest = NULL);
+	const BObolSourceMeshRequest *sourceMeshRequest = NULL,
+	bool viewDependentCsgGeometry = false);
     const BObolCachedPartGeometry *findWireCadGeometry(
 	const std::string &key) const;
     const BObolCachedPartGeometry *findMeshVListCadGeometry(

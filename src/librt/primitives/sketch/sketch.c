@@ -1042,6 +1042,130 @@ rt_sketch_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 }
 
 
+void
+rt_sketch_edit_geometry_free(struct rt_sketch_edit_geometry *geometry)
+{
+    if (!geometry)
+	return;
+    if (geometry->vertices)
+	bu_free(geometry->vertices, "sketch edit vertices");
+    if (geometry->line_points)
+	bu_free(geometry->line_points, "sketch edit line points");
+    if (geometry->line_commands)
+	bu_free(geometry->line_commands, "sketch edit line commands");
+    if (geometry->line_segments)
+	bu_free(geometry->line_segments, "sketch edit line segment ids");
+    if (geometry->segment_types)
+	bu_free(geometry->segment_types, "sketch edit segment types");
+    memset(geometry, 0, sizeof(*geometry));
+}
+
+
+int
+rt_sketch_edit_geometry_get(struct rt_sketch_edit_geometry *geometry,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol)
+{
+    if (!geometry || !ip || !ip->idb_ptr || ip->idb_type != ID_SKETCH)
+	return BRLCAD_ERROR;
+    rt_sketch_edit_geometry_free(geometry);
+
+    struct rt_sketch_internal *sketch_ip =
+	(struct rt_sketch_internal *)ip->idb_ptr;
+    RT_SKETCH_CK_MAGIC(sketch_ip);
+    geometry->vertex_count = sketch_ip->vert_count;
+    geometry->segment_count = sketch_ip->curve.count;
+    if (geometry->vertex_count)
+	geometry->vertices = (point_t *)bu_calloc(geometry->vertex_count,
+	    sizeof(point_t), "sketch edit vertices");
+    if (geometry->segment_count)
+	geometry->segment_types = (int *)bu_calloc(geometry->segment_count,
+	    sizeof(int), "sketch edit segment types");
+
+    for (size_t i = 0; i < geometry->vertex_count; i++) {
+	VJOIN2(geometry->vertices[i], sketch_ip->V,
+	    sketch_ip->verts[i][0], sketch_ip->u_vec,
+	    sketch_ip->verts[i][1], sketch_ip->v_vec);
+    }
+
+    size_t *starts = NULL;
+    size_t *ends = NULL;
+    if (geometry->segment_count) {
+	starts = (size_t *)bu_calloc(geometry->segment_count, sizeof(size_t),
+	    "sketch edit line starts");
+	ends = (size_t *)bu_calloc(geometry->segment_count, sizeof(size_t),
+	    "sketch edit line ends");
+    }
+    struct rt_primitive_lod_realization realization = {0};
+    if (!primitive_lod_line_set_begin(&realization))
+	goto fail;
+    struct sketch_line_sink sink;
+    sink.vlfree = NULL;
+    sink.vhead = NULL;
+    sink.realization = &realization;
+    sink.ok = 1;
+
+    for (size_t i = 0; i < geometry->segment_count; i++) {
+	void *segment = sketch_ip->curve.segment[i];
+	starts[i] = realization.line_count;
+	if (!segment)
+	    goto fail;
+	const uint32_t magic = *(uint32_t *)segment;
+	switch (magic) {
+	    case CURVE_LSEG_MAGIC:
+		geometry->segment_types[i] = RT_SKETCH_EDIT_SEGMENT_LINE;
+		break;
+	    case CURVE_CARC_MAGIC:
+		geometry->segment_types[i] = RT_SKETCH_EDIT_SEGMENT_ARC;
+		break;
+	    case CURVE_BEZIER_MAGIC:
+		geometry->segment_types[i] = RT_SKETCH_EDIT_SEGMENT_BEZIER;
+		break;
+	    case CURVE_NURB_MAGIC:
+		geometry->segment_types[i] = RT_SKETCH_EDIT_SEGMENT_NURB;
+		break;
+	    default:
+		goto fail;
+	}
+	if (seg_to_line_sink(&sink, ttol, sketch_ip->V, sketch_ip->u_vec,
+		sketch_ip->v_vec, sketch_ip, segment) != 0 || !sink.ok)
+	    goto fail;
+	ends[i] = realization.line_count;
+    }
+    if (!primitive_lod_line_set_finish(&realization))
+	goto fail;
+
+    geometry->line_points = realization.line_points;
+    geometry->line_commands = realization.line_commands;
+    geometry->line_count = realization.line_count;
+    realization.line_points = NULL;
+    realization.line_commands = NULL;
+    realization.line_count = 0;
+    realization.line_capacity = 0;
+    realization.has_line_set = 0;
+    if (geometry->line_count)
+	geometry->line_segments = (int *)bu_calloc(geometry->line_count,
+	    sizeof(int), "sketch edit line segment ids");
+    for (size_t segment = 0; segment < geometry->segment_count; segment++) {
+	for (size_t line = starts[segment]; line < ends[segment]; line++)
+	    geometry->line_segments[line] = (int)segment;
+    }
+    if (starts)
+	bu_free(starts, "sketch edit line starts");
+    if (ends)
+	bu_free(ends, "sketch edit line ends");
+    return BRLCAD_OK;
+
+fail:
+    if (starts)
+	bu_free(starts, "sketch edit line starts");
+    if (ends)
+	bu_free(ends, "sketch edit line ends");
+    rt_primitive_lod_realization_free(&realization);
+    rt_sketch_edit_geometry_free(geometry);
+    return BRLCAD_ERROR;
+}
+
+
 C_DECL int
 rt_sketch_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {

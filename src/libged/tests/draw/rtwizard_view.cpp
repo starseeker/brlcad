@@ -376,15 +376,33 @@ open_gedp_obol(const char *gfile, int width, int height)
     return gedp;
 }
 
-/* Simple draw-only refresh for a GED's current view. */
-static void
+/* Settle the current retained epoch before capturing it.  A redraw request is
+ * not a completion barrier: cold provider work may still replace the geometry
+ * after that redraw and make two identical camera states capture different
+ * progressive cuts. */
+static int
 do_obol_refresh(struct ged *gedp)
 {
     struct ged_view_context *v = ged_view_active_ctx(gedp);
-    struct ged_scene_redraw_request request;
-    ged_scene_redraw_request_init(&request);
-    request.view = v;
-    (void)ged_scene_redraw(gedp, &request, NULL);
+    /* A redraw may start a fresh view-adaptive realization.  Request it
+     * before the completion barrier; draining first and redrawing afterward
+     * left the capture at the beginning of the next epoch.  A cold deferred
+     * autoview can itself change the camera while that epoch settles, in
+     * which case one more realization is required at the fulfilled camera.
+     * Stop at the camera fixed point rather than assuming warm and cold
+     * command timing select the same curve tessellation by accident. */
+    for (int pass = 0; pass < 3; pass++) {
+	const uint64_t revision = bv_frame_revision_get(DRAW_TEST_BV_CONST(v));
+	struct ged_scene_redraw_request request;
+	ged_scene_redraw_request_init(&request);
+	request.view = v;
+	if (ged_scene_redraw(gedp, &request, NULL) != BRLCAD_OK ||
+	    !draw_test_obol_progressive_drain(gedp, v, 2000, 1))
+	    return 0;
+	if (bv_frame_revision_get(DRAW_TEST_BV_CONST(v)) == revision)
+	    return 1;
+    }
+    return 0;
 }
 
 /* Count non-background (non-black) pixels in a PNG. */
@@ -420,7 +438,29 @@ images_match_rtw(const char *a, const char *b, int adiff_allow)
     icv_destroy(ia);
     icv_destroy(ib);
     int bad = offmany + (off1 > adiff_allow ? off1 - adiff_allow : 0);
+    if (bad)
+	bu_log("image diff: matching=%d off-by-one=%d off-by-many=%d\n",
+	    match, off1, offmany);
     return (bad == 0) ? 1 : 0;
+}
+
+static int
+log_rtw_occurrence(const struct ged_scene_occurrence_info *occurrence,
+	void *UNUSED(client_data))
+{
+    if (occurrence)
+	bu_log("  occurrence path=%s visible=%d mode=%d\n",
+	    occurrence->path ? occurrence->path : "(null)",
+	    occurrence->visible, static_cast<int>(occurrence->draw_mode));
+    return 1;
+}
+
+static void
+log_rtw_occurrences(struct ged *gedp, const char *label)
+{
+    bu_log("%s occurrence count=%zu\n", label,
+	ged_scene_occurrence_count(gedp));
+    (void)ged_scene_occurrences_visit(gedp, log_rtw_occurrence, NULL);
 }
 
 /* ========================================================================== */
@@ -459,19 +499,16 @@ test_gui_obol_render(const char *datadir)
     /* Draw + autoview + ae — mirrors MGEDpage::draw() + refreshDisplay() */
     const char *s_av[4] = {"draw", "all.g", NULL};
     ged_exec_draw(gedp, 2, s_av);
-    if (!draw_test_obol_progressive_drain(gedp,
-	    ged_view_active_ctx(gedp), 500, 1)) {
-	bu_log("FAIL: GUI-mode progressive draw did not settle before capture\n");
-	fail = 1;
-    }
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
     s_av[0] = "ae"; s_av[1] = "35"; s_av[2] = "25"; s_av[3] = NULL;
     ged_exec_ae(gedp, 3, s_av);
 
     /* Render through the active display path. */
-    do_obol_refresh(gedp);
-
+    if (!do_obol_refresh(gedp)) {
+	bu_log("FAIL: GUI-mode progressive draw did not settle before capture\n");
+	fail = 1;
+    }
     /* Capture to PNG via screengrab */
     const char *sg_av[3] = {"screengrab", "rtw_view_t4.png", NULL};
     ged_exec_screengrab(gedp, 2, sg_av);
@@ -517,7 +554,7 @@ test_gui_obol_render(const char *datadir)
 /*   assert: image_A == image_B                                                */
 /* ========================================================================== */
 static int
-test_gui_eyemodel_consistency(const char *datadir)
+test_gui_eyemodel_consistency(const char *datadir, int cleanup)
 {
     bu_log("\n--- Test 5: GUI-mode eye model self-consistency (view A == view B) ---\n");
 
@@ -535,6 +572,7 @@ test_gui_eyemodel_consistency(const char *datadir)
 	bu_file_delete("rtw_view_t5.g");
 	return 1;
     }
+    int fail = 0;
 
     /* === View A === */
     const char *s_av[8] = {NULL};
@@ -546,13 +584,47 @@ test_gui_eyemodel_consistency(const char *datadir)
     s_av[0] = "ae"; s_av[1] = "45"; s_av[2] = "30"; s_av[3] = "0"; s_av[4] = NULL;
     ged_exec_ae(gedp, 4, s_av);
 
-    /* Save the view matrix for comparison */
+    /* Render A */
+    if (!do_obol_refresh(gedp)) {
+	bu_log("FAIL: view A did not settle before image capture\n");
+	fail = 1;
+    }
+    log_rtw_occurrences(gedp, "view A");
+    draw_test_obol_debug_scene(gedp, 501, ged_view_active_ctx(gedp));
+
+    /* Progressive autoview may begin from a useful provisional extent and
+     * publish the exact database extent at the completion barrier above.
+     * Snapshot the same settled phase which the image and eye model describe;
+     * sampling before the barrier compared cold provisional A with warm exact
+     * B and incorrectly blamed the later ae command for the size change. */
     struct ged_view_context *v = ged_view_active_ctx(gedp);
     mat_t saved_m2v;
     bv_model2view_get(saved_m2v, DRAW_TEST_BV_CONST(v));
+    const fastf_t saved_size = bv_size_get(DRAW_TEST_BV_CONST(v));
 
-    /* Render A */
-    do_obol_refresh(gedp);
+    /* Orientation is not an autoview operation.  Reapplying an identical ae
+     * to a settled view must leave both its scale and complete model-to-view
+     * matrix unchanged. */
+    s_av[0] = "ae"; s_av[1] = "45"; s_av[2] = "30"; s_av[3] = "0";
+    s_av[4] = NULL;
+    ged_exec_ae(gedp, 4, s_av);
+    mat_t repeated_ae_m2v;
+    bv_model2view_get(repeated_ae_m2v, DRAW_TEST_BV_CONST(v));
+    fastf_t repeated_ae_max_delta = 0.0;
+    for (int i = 0; i < 16; i++) {
+	const fastf_t delta = fabs(saved_m2v[i] - repeated_ae_m2v[i]);
+	if (delta > repeated_ae_max_delta)
+	    repeated_ae_max_delta = delta;
+    }
+    if (fabs(saved_size - bv_size_get(DRAW_TEST_BV_CONST(v))) >
+	    SMALL_FASTF || repeated_ae_max_delta > 1.0e-6) {
+	bu_log("FAIL: identical settled ae changed size or matrix "
+	       "(size %g -> %g, max delta %g)\n", saved_size,
+	       bv_size_get(DRAW_TEST_BV_CONST(v)), repeated_ae_max_delta);
+	fail = 1;
+    } else {
+	bu_log("PASS: identical settled ae preserves size and view matrix\n");
+    }
     const char *sg_av[3] = {"screengrab", "rtw_view_t5_A.png", NULL};
     ged_exec_screengrab(gedp, 2, sg_av);
     bu_log("Captured image A (az=45 el=30 tw=0)\n");
@@ -575,12 +647,15 @@ test_gui_eyemodel_consistency(const char *datadir)
     ged_exec_ae(gedp, 4, s_av);
 
     /* Render B */
-    do_obol_refresh(gedp);
+    if (!do_obol_refresh(gedp)) {
+	bu_log("FAIL: view B did not settle before image capture\n");
+	fail = 1;
+    }
+    log_rtw_occurrences(gedp, "view B");
+    draw_test_obol_debug_scene(gedp, 502, ged_view_active_ctx(gedp));
     sg_av[1] = "rtw_view_t5_B.png";
     ged_exec_screengrab(gedp, 2, sg_av);
     bu_log("Captured image B (same ae applied fresh)\n");
-
-    int fail = 0;
 
     /* Images A and B must be pixel-identical (same camera, same geometry) */
     if (!images_match_rtw("rtw_view_t5_A.png", "rtw_view_t5_B.png", 10)) {
@@ -626,10 +701,13 @@ test_gui_eyemodel_consistency(const char *datadir)
     }
 
     bu_vls_free(&em_str);
-    bu_file_delete("rtw_view_t5_A.png");
-    bu_file_delete("rtw_view_t5_B.png");
+    if (cleanup) {
+	bu_file_delete("rtw_view_t5_A.png");
+	bu_file_delete("rtw_view_t5_B.png");
+    }
     close_gedp(gedp);
-    bu_file_delete("rtw_view_t5.g");
+    if (cleanup)
+	bu_file_delete("rtw_view_t5.g");
     return fail;
 }
 
@@ -659,7 +737,7 @@ main(int argc, char *argv[])
     failures += test_eyemodel_finite(datadir);
     failures += test_multiple_null_views(datadir);
     failures += test_gui_obol_render(datadir);
-    failures += test_gui_eyemodel_consistency(datadir);
+    failures += test_gui_eyemodel_consistency(datadir, cleanup);
 
     if (failures == 0) {
 	bu_log("\nAll rtwizard view tests PASSED (%d/5)\n", 5);

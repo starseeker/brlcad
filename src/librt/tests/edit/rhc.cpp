@@ -188,6 +188,12 @@ main(int argc, char *argv[])
     s->mv_context = 1;
     struct rt_rhc_internal *edit_rhc = (struct rt_rhc_internal *)s->es_int.idb_ptr;
 
+    if (!rt_edit_test_scalar_value(s, ECMD_RHC_B, 5.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_RHC_H, 10.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_RHC_R, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_RHC_C, 2.0))
+	bu_exit(1, "ERROR: RHC descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================

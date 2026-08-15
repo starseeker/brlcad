@@ -39,7 +39,8 @@ enum ged_view_polygon_update {
     GED_VIEW_POLYGON_UPDATE_PT_SELECT = 2,
     GED_VIEW_POLYGON_UPDATE_PT_SELECT_CLEAR = 3,
     GED_VIEW_POLYGON_UPDATE_PT_MOVE = 4,
-    GED_VIEW_POLYGON_UPDATE_PT_APPEND = 5
+    GED_VIEW_POLYGON_UPDATE_PT_APPEND = 5,
+    GED_VIEW_POLYGON_UPDATE_PT_DELETE = 6
 };
 
 /** Opaque owner/id/generation reference to a managed view polygon. */
@@ -61,6 +62,7 @@ struct ged_view_polygon_record {
     ged_view_polygon_ref ref;
     const char *name;
     enum ged_view_polygon_type type;
+    int selected;
     int fill_flag;
     vect2d_t fill_dir;
     fastf_t fill_delta;
@@ -74,6 +76,8 @@ struct ged_view_polygon_record {
     point_t origin_point;
     plane_t vp;
     fastf_t vZ;
+    /** Borrowed store-owned name of the synchronized database sketch. */
+    const char *sketch_name;
     void *user_data;
 };
 

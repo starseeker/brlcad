@@ -176,6 +176,12 @@ main(int argc, char *argv[])
 
     struct rt_ehy_internal *edit_ehy = (struct rt_ehy_internal *)s->es_int.idb_ptr;
 
+    if (!rt_edit_test_scalar_value(s, ECMD_EHY_H, 10.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_EHY_R1, 8.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_EHY_R2, 5.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_EHY_C, 2.0))
+	bu_exit(1, "ERROR: EHY descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================

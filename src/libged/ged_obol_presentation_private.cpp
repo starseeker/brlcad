@@ -762,7 +762,8 @@ ged_obol_faceplate_sync_grid(BObolViewController *controller,
 {
     static const char name[] = "_faceplate/grid";
     struct bv_grid_state grid = BV_GRID_STATE_INIT;
-    if (!bv_grid_state_get(&grid, ged_obol_bv_const(view_ctx)) || !grid.draw) {
+    if (!bv_grid_state_get(&grid, ged_obol_bv_const(view_ctx)) ||
+	(!grid.draw && !grid.snap)) {
 	ged_obol_faceplate_remove(controller, view_ctx, name);
 	return;
     }
@@ -771,7 +772,7 @@ ged_obol_faceplate_sync_grid(BObolViewController *controller,
     node->ref();
     node->overlayId = name;
     if (!bobol_grid_configure_from_view_context(node, &grid, view_ctx) ||
-	node->getTotalSegmentCount() <= 0) {
+	(grid.draw && node->getTotalSegmentCount() <= 0)) {
 	node->unref();
 	ged_obol_faceplate_remove(controller, view_ctx, name);
 	return;

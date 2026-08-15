@@ -12,6 +12,7 @@
 #include "BObol/BADC.h"
 #include "BObol/BAxes.h"
 #include "BObol/BDatabaseSource.h"
+#include "BObol/BEditManipulator.h"
 #include "BObol/BEditPreview.h"
 #include "BObol/BExportAction.h"
 #include "BObol/BGrid.h"
@@ -54,6 +55,8 @@ bobol_init(SoDB::ContextManager *contextManager)
     SoBRLPickDetail::initClass();
     SoBRLVListShape::initClass();
     SoBRLDatabaseSource::initClass();
+    SoBRLEditManipulator::initClass();
+    SoBRLIndexedEditManipulator::initClass();
     SoBRLEditPreview::initClass();
     SoBRLADC::initClass();
     SoBRLGrid::initClass();

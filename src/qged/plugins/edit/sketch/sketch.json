@@ -1,0 +1,13 @@
+{
+    "id": "org.brlcad.qged.edit.sketch",
+    "displayName": "Sketch Edit",
+    "category": "qged.object",
+    "iconName": ":sketch_edit.svg",
+    "sortKey": 1060,
+    "requiresOpenDb": true,
+    "requiresView": true,
+    "description": "Edit sketch vertices and curve segments through one shared session.",
+    "vendor": "BRL-CAD",
+    "version": "1.0",
+    "apiVersion": 1
+}

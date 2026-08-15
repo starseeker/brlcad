@@ -540,6 +540,14 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
     }
 }
 
+extern "C" void
+draw_test_obol_debug_scene(struct ged *gedp, int id,
+	struct ged_view_context *view_ctx)
+{
+    draw_test_obol_debug_dump(gedp, id,
+	draw_test_endpoint_controller(view_ctx), view_ctx);
+}
+
 static int
 draw_test_obol_screengrab_impl(struct ged *gedp, struct ged_view_context *view_ctx, int id,
 			       const char *filename)

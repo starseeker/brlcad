@@ -3,96 +3,65 @@
  *
  * Copyright (c) 2026 United States Government as represented by
  * the U.S. Army Research Laboratory.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public License
- * version 2.1 as published by the Free Software Foundation.
- *
- * This library is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this file; see the file named COPYING for more
- * information.
  */
-/** @file QExtrude.h
- *
- * stub extrude-solid editor that demonstrates typed edit-preview callbacks
- * for solid-editing plugins.
- *
- * Workflow
- * --------
- * 1. When an extrusion is selected for editing the widget creates an overlay
- *    feature (_extrude_edit) and attaches typed edit-preview callbacks.
- * 2. The update_cb advances the revision whenever the edit parameters change
- *    so that downstream renderers can detect the modification without polling
- *    s_changed directly.
- * 3. On deselection / destructor the edit-preview state is freed with the
- *    feature.
- */
+/** @file QExtrude.h */
 
 #ifndef QEXTRUDE_H
 #define QEXTRUDE_H
 
-#include <QCheckBox>
-#include <QLineEdit>
-#include <QPushButton>
-#include <QGroupBox>
-#include "raytrace.h"
+#include <QString>
+#include <QWidget>
+
 #include "qtcad/QgTypes.h"
-#include "../qged_edit_preview_util.h"
-
 class QgPluginContext;
+class QgPrimitiveEdit;
 
+/**
+ * Extrusion adapter for the shared descriptor-generated primitive editor.
+ *
+ * The widget owns no primitive copy.  Its preview is rebuilt from a copied
+ * snapshot of the path-scoped GED edit session, so CLI and GUI changes share
+ * exactly one transaction and revision stream.
+ */
 class QExtrude : public QWidget
 {
     Q_OBJECT
 
     public:
 	QExtrude();
-	~QExtrude();
+	~QExtrude() override = default;
 
-	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
-
-	/* Extrusion direction length */
-	QLineEdit *h_len;
-	/* Primitive name */
-	QLineEdit *extrude_name;
-	QPushButton *write_edit;
-	QPushButton *reset_values;
+	void setContext(QgPluginContext *ctx);
 
     signals:
 	void view_updated(QgViewUpdateFlags);
 
     private slots:
-	void read_from_db();
-	void write_to_db();
-	void update_obj_wireframe();
-	void update_viewobj_name(const QString &);
+	void sync_selection();
+	void reset_for_database();
+	void refresh_preview();
+	void update_preview(int kind, qulonglong revision);
 
     protected:
-	bool eventFilter(QObject *, QEvent *);
+	bool eventFilter(QObject *, QEvent *) override;
 
     private:
-	struct directory *dp = NULL;
-	struct rt_extrude_internal extr;
-	/* Edit-scope overlay feature. */
-	qged_edit_feature_ref p = QGED_EDIT_FEATURE_REF_NULL;
-	struct bu_vls oname = BU_VLS_INIT_ZERO;
-	QgPluginContext *m_ctx = nullptr;
-
 	struct ged *getGed() const;
+
+	QgPrimitiveEdit *editor = nullptr;
+	QgPluginContext *m_ctx = nullptr;
+	QString selection_path;
 };
 
 #endif /* QEXTRUDE_H */
 
-// Local Variables:
-// tab-width: 8
-// mode: C++
-// c-basic-offset: 4
-// indent-tabs-mode: t
-// c-file-style: "stroustrup"
-// End:
-// ex: shiftwidth=4 tabstop=8
+/*
+ * Local Variables:
+ * mode: C++
+ * tab-width: 8
+ * c-basic-offset: 4
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

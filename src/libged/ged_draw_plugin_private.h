@@ -88,6 +88,12 @@ GED_EXPORT extern int ged_edit_buf_promote(
 GED_EXPORT extern void ged_edit_buf_abandon(
     struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void ged_edit_buf_flush(struct ged *gedp);
+GED_EXPORT extern void ged_edit_buf_notify_update(
+    struct ged *gedp, const struct db_full_path *dfp, int command_id);
+GED_EXPORT extern void ged_edit_buf_notify_checkpoint(
+    struct ged *gedp, const struct db_full_path *dfp);
+GED_EXPORT extern void ged_edit_buf_notify_revert(
+    struct ged *gedp, const struct db_full_path *dfp);
 
 __END_DECLS
 

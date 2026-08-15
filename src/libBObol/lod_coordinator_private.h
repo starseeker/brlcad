@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <type_traits>
 
@@ -29,6 +30,119 @@ using BObolLodViewEpoch = BObolViewEpoch;
 using BObolLodPolicyEpoch = BObolPolicyEpoch;
 using BObolLodInventoryEpoch = BObolInventoryEpoch;
 using BObolLodSourceRoutingId = BObolSourceRoutingId;
+
+static inline bool
+bobol_lod_exact_scalar(double left, double right)
+{
+    if (!std::isfinite(left) || !std::isfinite(right))
+	return false;
+    uint64_t leftBits = 0;
+    uint64_t rightBits = 0;
+    std::memcpy(&leftBits, &left, sizeof(leftBits));
+    std::memcpy(&rightBits, &right, sizeof(rightBits));
+    if ((leftBits << 1) == 0)
+	leftBits = 0;
+    if ((rightBits << 1) == 0)
+	rightBits = 0;
+    return leftBits == rightBits;
+}
+
+static inline bool
+bobol_lod_exact_scalar(float left, float right)
+{
+    if (!std::isfinite(left) || !std::isfinite(right))
+	return false;
+    uint32_t leftBits = 0;
+    uint32_t rightBits = 0;
+    std::memcpy(&leftBits, &left, sizeof(leftBits));
+    std::memcpy(&rightBits, &right, sizeof(rightBits));
+    if ((leftBits << 1) == 0)
+	leftBits = 0;
+    if ((rightBits << 1) == 0)
+	rightBits = 0;
+    return leftBits == rightBits;
+}
+
+/*
+ * Exact camera and camera-scale identities used by the LoD coordinator.
+ * Keep these allocation-free values beside the policies which consume them:
+ * an exact-view quality proof must compare the same semantic inputs as a
+ * camera epoch, rather than a lossy hash or an approximate pose.
+ */
+struct BObolLodViewSnapshot {
+    bool same(const BObolLodViewSnapshot &other) const
+    {
+	/* Exact numeric equality intentionally treats +0 and -0 as the same
+	 * camera while rejecting NaNs.  A byte comparison did the opposite and
+	 * caused semantically identical restored views to miss history. */
+	if (this->haveCamera != other.haveCamera ||
+	    this->width != other.width || this->height != other.height ||
+	    !bobol_lod_exact_scalar(this->size, other.size) ||
+	    !bobol_lod_exact_scalar(this->lodScale, other.lodScale) ||
+	    !bobol_lod_exact_scalar(this->curveScale, other.curveScale) ||
+	    !bobol_lod_exact_scalar(this->pointScale, other.pointScale) ||
+	    this->botThreshold != other.botThreshold)
+	    return false;
+	for (size_t i = 0; i < 16; ++i) {
+	    if (!bobol_lod_exact_scalar(this->viewVolumeMatrix[i],
+		    other.viewVolumeMatrix[i]))
+		return false;
+	}
+	return true;
+    }
+
+    uint8_t haveCamera = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    double size = 0.0;
+    double lodScale = 0.0;
+    double curveScale = 0.0;
+    double pointScale = 0.0;
+    uint32_t botThreshold = 0;
+    float viewVolumeMatrix[16] = {};
+};
+
+struct BObolLodViewScaleSnapshot {
+    bool same(const BObolLodViewScaleSnapshot &other) const
+    {
+	return this->haveCamera == other.haveCamera &&
+	    this->width == other.width &&
+	    this->height == other.height &&
+	    bobol_lod_exact_scalar(this->size, other.size) &&
+	    bobol_lod_exact_scalar(this->lodScale, other.lodScale) &&
+	    bobol_lod_exact_scalar(this->curveScale, other.curveScale) &&
+	    bobol_lod_exact_scalar(this->pointScale, other.pointScale) &&
+	    this->botThreshold == other.botThreshold &&
+	    this->viewportWidth == other.viewportWidth &&
+	    this->viewportHeight == other.viewportHeight &&
+	    this->cameraTypeKey == other.cameraTypeKey &&
+	    bobol_lod_exact_scalar(this->aspectRatio, other.aspectRatio) &&
+	    bobol_lod_exact_scalar(this->focalDistance,
+		other.focalDistance) &&
+	    bobol_lod_exact_scalar(this->projectionScale,
+		other.projectionScale);
+    }
+
+    uint8_t haveCamera = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    double size = 0.0;
+    double lodScale = 0.0;
+    double curveScale = 0.0;
+    double pointScale = 0.0;
+    uint32_t botThreshold = 0;
+    int16_t viewportWidth = 0;
+    int16_t viewportHeight = 0;
+    uint64_t cameraTypeKey = 0;
+    float aspectRatio = 0.0f;
+    float focalDistance = 0.0f;
+    float projectionScale = 0.0f;
+};
+
+static_assert(std::is_trivially_copyable<BObolLodViewSnapshot>::value,
+    "view signatures must remain allocation-free values");
+static_assert(std::is_trivially_copyable<BObolLodViewScaleSnapshot>::value,
+    "view scale signatures must remain allocation-free values");
 
 /*
  * Completed-frame resource-pressure edge policy.  The controller supplies
@@ -2100,6 +2214,284 @@ static_assert(std::is_trivially_copyable<
     "presentation handoff policy must remain an allocation-free value");
 
 /*
+ * Bounded history of exact camera states which have actually produced a
+ * complete, deadline-safe CAD presentation.  This is deliberately separate
+ * from BObolLodPresentationPolicy: that policy owns continuity within one
+ * interaction epoch, while this value recognizes a later return to a proven
+ * view.
+ *
+ * The history is a seed, never an admission authority.  Source inventory and
+ * semantic policy changes advance/reset the controller-owned domain, resource
+ * pressure vetoes recall, and the ordinary visibility, resident-memory, and
+ * frame-deadline policies still validate the resulting frame.  A fixed LRU
+ * avoids allocator work in the GUI/render path and exact snapshots avoid hash
+ * collisions or approximate-pose surprises.
+ */
+class BObolLodViewQualityHistory {
+public:
+    /* A wheel/trackpad session can settle at more than eight useful scales
+     * before returning to its starting view.  Thirty-two exact snapshots are
+     * still only a few KiB, keep lookup bounded, and require no allocator in
+     * the owner/render path. */
+    static constexpr size_t capacityValue = 32;
+    static constexpr size_t capacity(void) { return capacityValue; }
+
+    struct Quality {
+	float targetPixelError = 1.0f;
+	int progressiveCeiling = -1;
+	float pointProxyPixelThreshold = 1.0f;
+	/* Conservative scene-wide projected-pixel error bound produced by the
+	 * retained importance allocator.  Unlike its allocation objective, this
+	 * witness is not divided by the current requested target and can therefore
+	 * compare completed frames.  Infinity means the frame did not carry that
+	 * optional proof; it is not an error. */
+	double maximumProjectedErrorPixels =
+	    std::numeric_limits<double>::infinity();
+	/* Work actually presented by the frame which supplied the fidelity
+	 * controls above. */
+	size_t presentedRenderCost = 0;
+	/* Largest exact terminal workload proved deadline-safe at this same
+	 * view.  This is capacity evidence, not a visual-quality ordering. */
+	size_t provenRenderCostCapacity = 0;
+    };
+
+    struct RememberInputs {
+	BObolLodViewSnapshot view;
+	uint64_t domainRevision = 0;
+	bool sceneAvailable = false;
+	Quality quality;
+	bool exactCompletedFrame = false;
+	bool terminalPresentationComplete = false;
+	/* Database/CSG and other registered geometry producers must have
+	 * completed the exact source-policy epoch represented by this frame.
+	 * Mesh-service idleness alone cannot prove that condition. */
+	bool producersSettled = false;
+	bool presentationDeadlineMet = false;
+	bool resourcePressure = false;
+    };
+
+    struct RecallInputs {
+	BObolLodViewSnapshot view;
+	uint64_t domainRevision = 0;
+	bool sceneAvailable = false;
+	bool resourcePressure = false;
+    };
+
+    bool remember(const RememberInputs &inputs)
+    {
+	if (!inputs.view.haveCamera || !inputs.domainRevision ||
+	    !inputs.sceneAvailable || !inputs.exactCompletedFrame ||
+	    !inputs.terminalPresentationComplete ||
+	    !inputs.producersSettled ||
+	    !inputs.presentationDeadlineMet || inputs.resourcePressure ||
+	    !validQuality(inputs.quality))
+	    return false;
+
+	size_t index = this->entryCount;
+	for (size_t i = 0; i < this->entryCount; ++i) {
+	    if (this->entries[i].domainRevision == inputs.domainRevision &&
+		this->entries[i].view.same(inputs.view)) {
+		index = i;
+		break;
+	    }
+	}
+
+	/* Renderer throughput and visual fidelity are independent evidence.  A
+	 * high-cost frame containing many minor triangles may still leave a wheel
+	 * or blade visibly coarser than a lower-cost importance allocation.  Keep
+	 * the largest completed workload as a capacity proof, but replace the
+	 * complete fidelity snapshot only when screen-error evidence (or the
+	 * conservative control-vector fallback) says it is better. */
+	if (index < this->entryCount) {
+	    Entry &current = this->entries[index];
+	    current.provenRenderCostCapacity = std::max(
+		current.provenRenderCostCapacity,
+		inputs.quality.presentedRenderCost);
+	    if (!preferFidelityCandidate(inputs.quality, current.quality)) {
+		this->promote(index);
+		return false;
+	    }
+	}
+
+	Entry candidate;
+	candidate.valid = true;
+	candidate.view = inputs.view;
+	candidate.domainRevision = inputs.domainRevision;
+	candidate.quality = sanitizeQuality(inputs.quality);
+	candidate.provenRenderCostCapacity =
+	    index < this->entryCount ?
+		this->entries[index].provenRenderCostCapacity :
+		candidate.quality.presentedRenderCost;
+
+	if (index == this->entryCount) {
+	    if (this->entryCount < capacity())
+		this->entryCount++;
+	    index = this->entryCount - 1;
+	}
+	for (size_t i = index; i > 0; --i)
+	    this->entries[i] = this->entries[i - 1];
+	this->entries[0] = candidate;
+	if (this->rememberCountValue != SIZE_MAX)
+	    this->rememberCountValue++;
+	return true;
+    }
+
+    bool recall(const RecallInputs &inputs, Quality &quality)
+    {
+	if (!inputs.view.haveCamera || !inputs.domainRevision ||
+	    !inputs.sceneAvailable || inputs.resourcePressure)
+	    return false;
+	for (size_t i = 0; i < this->entryCount; ++i) {
+	    if (!this->entries[i].valid ||
+		this->entries[i].domainRevision != inputs.domainRevision ||
+		!this->entries[i].view.same(inputs.view))
+		continue;
+	    quality = this->entries[i].quality;
+	    quality.provenRenderCostCapacity =
+		this->entries[i].provenRenderCostCapacity;
+	    this->promote(i);
+	    if (this->recallCountValue != SIZE_MAX)
+		this->recallCountValue++;
+	    return true;
+	}
+	return false;
+    }
+
+    void reset(void)
+    {
+	this->entries = {};
+	this->entryCount = 0;
+	this->rememberCountValue = 0;
+	this->recallCountValue = 0;
+    }
+
+    size_t size(void) const { return this->entryCount; }
+    size_t rememberCount(void) const { return this->rememberCountValue; }
+    size_t recallCount(void) const { return this->recallCountValue; }
+
+private:
+    struct Entry {
+	bool valid = false;
+	BObolLodViewSnapshot view;
+	uint64_t domainRevision = 0;
+	Quality quality;
+	size_t provenRenderCostCapacity = 0;
+    };
+
+    static bool validQuality(const Quality &quality)
+    {
+	return std::isfinite(quality.targetPixelError) &&
+	    quality.targetPixelError >= 0.249f &&
+	    quality.targetPixelError <= 1.01f &&
+	    quality.progressiveCeiling >= -1 &&
+	    quality.progressiveCeiling < BOBOL_MESH_LOD_CUT_COUNT_MAX &&
+	    std::isfinite(quality.pointProxyPixelThreshold) &&
+	    quality.pointProxyPixelThreshold >= 1.0f &&
+	    quality.pointProxyPixelThreshold <= 64.01f &&
+	    (std::isfinite(quality.maximumProjectedErrorPixels) ?
+		quality.maximumProjectedErrorPixels >= 0.0 :
+		std::isinf(quality.maximumProjectedErrorPixels) &&
+		quality.maximumProjectedErrorPixels > 0.0) &&
+	    quality.presentedRenderCost > 0;
+    }
+
+    static Quality sanitizeQuality(const Quality &quality)
+    {
+	Quality result = quality;
+	result.targetPixelError = std::max(0.25f,
+	    std::min(1.0f, result.targetPixelError));
+	result.progressiveCeiling = result.progressiveCeiling < -1 ? -1 :
+	    std::min<int>(BOBOL_MESH_LOD_CUT_COUNT_MAX - 1,
+		result.progressiveCeiling);
+	result.pointProxyPixelThreshold = std::max(1.0f,
+	    std::min(64.0f, result.pointProxyPixelThreshold));
+	if (!std::isfinite(result.maximumProjectedErrorPixels) ||
+	    result.maximumProjectedErrorPixels < 0.0)
+	    result.maximumProjectedErrorPixels =
+		std::numeric_limits<double>::infinity();
+	result.provenRenderCostCapacity = 0;
+	return result;
+    }
+
+    static int progressiveRank(int ceiling)
+    {
+	return ceiling < 0 ? BOBOL_MESH_LOD_CUT_COUNT_MAX : ceiling;
+    }
+
+    static bool controlsDominate(const Quality &candidate,
+	const Quality &current)
+    {
+	const bool pixelNoWorse = candidate.targetPixelError <=
+	    current.targetPixelError + 1.0e-6f;
+	const bool proxyNoWorse = candidate.pointProxyPixelThreshold <=
+	    current.pointProxyPixelThreshold + 1.0e-6f;
+	const bool ceilingNoWorse = progressiveRank(
+	    candidate.progressiveCeiling) >= progressiveRank(
+		current.progressiveCeiling);
+	const bool strictlyBetter = candidate.targetPixelError <
+		current.targetPixelError - 1.0e-6f ||
+	    candidate.pointProxyPixelThreshold <
+		current.pointProxyPixelThreshold - 1.0e-6f ||
+	    progressiveRank(candidate.progressiveCeiling) >
+		progressiveRank(current.progressiveCeiling);
+	return pixelNoWorse && proxyNoWorse && ceilingNoWorse &&
+	    strictlyBetter;
+    }
+
+    static bool controlsEquivalent(const Quality &candidate,
+	const Quality &current)
+    {
+	return std::fabs(candidate.targetPixelError -
+		current.targetPixelError) <= 1.0e-6f &&
+	    std::fabs(candidate.pointProxyPixelThreshold -
+		current.pointProxyPixelThreshold) <= 1.0e-6f &&
+	    progressiveRank(candidate.progressiveCeiling) ==
+		progressiveRank(current.progressiveCeiling);
+    }
+
+    static bool preferFidelityCandidate(const Quality &candidate,
+	const Quality &current)
+    {
+	const bool candidateHasBound =
+	    std::isfinite(candidate.maximumProjectedErrorPixels);
+	const bool currentHasBound =
+	    std::isfinite(current.maximumProjectedErrorPixels);
+	/* A measured candidate is more informative, but not intrinsically more
+	 * detailed than an unmeasured one.  Accept it across that evidence
+	 * boundary only when its controls are identical or conservatively dominate
+	 * the current controls. */
+	if (candidateHasBound != currentHasBound)
+	    return controlsEquivalent(candidate, current) ||
+		controlsDominate(candidate, current);
+	if (candidateHasBound && std::fabs(
+		candidate.maximumProjectedErrorPixels -
+		current.maximumProjectedErrorPixels) > 1.0e-9)
+	    return candidate.maximumProjectedErrorPixels <
+		current.maximumProjectedErrorPixels;
+	return controlsDominate(candidate, current);
+    }
+
+    void promote(size_t index)
+    {
+	if (index == 0 || index >= this->entryCount)
+	    return;
+	const Entry entry = this->entries[index];
+	for (size_t i = index; i > 0; --i)
+	    this->entries[i] = this->entries[i - 1];
+	this->entries[0] = entry;
+    }
+
+    std::array<Entry, capacityValue> entries = {};
+    size_t entryCount = 0;
+    size_t rememberCountValue = 0;
+    size_t recallCountValue = 0;
+};
+
+static_assert(std::is_trivially_copyable<
+    BObolLodViewQualityHistory>::value,
+    "exact-view quality history must remain an allocation-free value");
+
+/*
  * Renderer-independent presentation-quality calculations.  These functions
  * convert completed-frame evidence into a camera-local pixel error, small-
  * occurrence aggregation threshold, and reversible PoP prefix ceiling.  They
@@ -2112,6 +2504,19 @@ public:
 	bool proven = false;
 	long double renderCostPerSecond = 0.0L;
     };
+
+    static float staticFrameTargetFps(float preferredFps,
+	uint64_t hardDeadlineNanoseconds)
+    {
+	if (!std::isfinite(preferredFps) || preferredFps <= 0.0f ||
+	    !hardDeadlineNanoseconds)
+	    return preferredFps;
+	const long double deadlineFps = 1000000000.0L /
+	    static_cast<long double>(hardDeadlineNanoseconds);
+	if (!std::isfinite(deadlineFps) || deadlineFps <= 0.0L)
+	    return preferredFps;
+	return std::min(preferredFps, static_cast<float>(deadlineFps));
+    }
 
     static float interactivePixelError(uint64_t renderNanoseconds,
 	float targetFps)

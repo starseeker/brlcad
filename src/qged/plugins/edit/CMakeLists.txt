@@ -1,5 +1,7 @@
 # Primitives have their own individual editing requirements
 add_subdirectory(ell)
+add_subdirectory(arb)
+add_subdirectory(sketch)
 
 # Primitive editors publish transient feedback through the neutral GED edit
 # transaction and Obol view-feature contract.

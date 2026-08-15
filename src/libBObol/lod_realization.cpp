@@ -422,7 +422,8 @@ bobol_lod_hierarchy_valid(
 	  hierarchy.cluster_count != 0 || hierarchy.clusters != NULL) &&
 	 (hierarchy.cluster_grid_resolution !=
 	      BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION ||
-	  hierarchy.cluster_count != BOBOL_MESH_LOD_CLUSTER_COUNT ||
+	  !hierarchy.cluster_count ||
+	  hierarchy.cluster_count > BOBOL_MESH_LOD_CLUSTER_COUNT ||
 	  !hierarchy.clusters)))
 	return false;
 
@@ -460,8 +461,11 @@ bobol_lod_hierarchy_valid(
     for (uint32_t cluster = 0; cluster < hierarchy.cluster_count;
 	 cluster++) {
 	const BObolMeshLodClusterInfo &info = hierarchy.clusters[cluster];
-	if (info.range_count &&
-	    (!info.ranges || !bobol_lod_valid_bounds(info.bmin, info.bmax)))
+	if (info.cluster_id >= BOBOL_MESH_LOD_CLUSTER_COUNT ||
+	    (cluster && info.cluster_id <=
+	     hierarchy.clusters[cluster - 1].cluster_id) ||
+	    !info.range_count || !info.ranges ||
+	    !bobol_lod_valid_bounds(info.bmin, info.bmax))
 	    return false;
 	for (uint32_t rangeIndex = 0; rangeIndex < info.range_count;
 	     ++rangeIndex) {
@@ -621,6 +625,11 @@ progressive_generation_from_data(
 	generation->quantizationMinimum;
     mesh.progressiveQuantizationMaximum =
 	generation->quantizationMaximum;
+    /* The cache publishes only occupied cells, but these ranges still share
+     * one global uniform-grid prefix and one resident cut.  Preserve that
+     * distinction from independently resident adaptive chunk pages: treating
+     * sparse uniform cells as adaptive changes controller demand semantics
+     * and can multiply refinement work in a many-leaf scene. */
     mesh.progressiveClusterGridResolution =
 	hierarchy.cluster_grid_resolution;
     mesh.progressiveClusters.resize(hierarchy.cluster_count);
@@ -2255,6 +2264,18 @@ BObolLodProgressiveMesh::visibleCountsAtCuts(
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
     if (generation && !generation->chunks.empty()) {
+	/* A complete occurrence uses the ordinary whole-prefix table.  Building
+	 * and retaining a second identical per-cut population for every fully
+	 * visible chunked leaf made the view census scale with scene size rather
+	 * than with the small clipped boundary.  Return a spatial population only
+	 * when the occurrence actually straddles the frustum, matching the public
+	 * contract and the monolithic-cluster path below. */
+	SbBox3f worldBounds;
+	bobol_lod_transform_bounds(
+	    generation->bounds, localToRoot, worldBounds);
+	if (bobol_lod_bounds_frustum_relation(
+		worldBounds, viewProjection) != 0)
+	    return FALSE;
 	for (size_t cut = 0; cut < count; ++cut)
 	    counts[cut].clear();
 	for (const auto &chunk : generation->chunks) {
@@ -2810,8 +2831,10 @@ BObolLodRequest::clear(void)
     objectName = "";
     occurrenceKey = "";
     sourceRoutingId = 0;
+    sourceEntryIndex = UINT32_MAX;
     viewRevision = 0;
     policyRevision = 0;
+    visualEmphasis = 0;
     drawMode = BOBOL_LOD_DRAW_UNKNOWN;
     lodPolicy = 0;
     providerId = "";

@@ -55,6 +55,7 @@ qg_obol_snap_point_with_policy(QgView *display,
 	const SbVec3f &query,
 	float tolerance,
 	uint32_t enabledKinds,
+	uint32_t sourceFilter,
 	SoBRLSnapAction::GeometryPolicy geometryPolicy,
 	QgObolSnapRecord &record)
 {
@@ -64,8 +65,8 @@ qg_obol_snap_point_with_policy(QgView *display,
 
     BObolViewController *controller = display->obolViewController();
     BObolViewSnapRecord snap;
-    const int found = bobol_view_snap_point(controller, query, tolerance,
-	enabledKinds, geometryPolicy,
+    const int found = bobol_view_snap_point_filtered(controller, query,
+	tolerance, enabledKinds, sourceFilter, geometryPolicy,
 	geometryPolicy == SoBRLSnapAction::FULL_DETAIL, snap);
     qg_obol_snap_record(snap, record);
     return found;
@@ -79,7 +80,20 @@ qg_obol_snap_point(QgView *display,
 	QgObolSnapRecord &record)
 {
     return qg_obol_snap_point_with_policy(display, query, tolerance,
-	enabledKinds, SoBRLSnapAction::DISPLAY_LEVEL, record);
+	enabledKinds, SoBRLSnapAction::ALL_SOURCES,
+	SoBRLSnapAction::DISPLAY_LEVEL, record);
+}
+
+int
+qg_obol_snap_point_filtered(QgView *display,
+	const SbVec3f &query,
+	float tolerance,
+	uint32_t enabledKinds,
+	uint32_t sourceFilter,
+	QgObolSnapRecord &record)
+{
+    return qg_obol_snap_point_with_policy(display, query, tolerance,
+	enabledKinds, sourceFilter, SoBRLSnapAction::DISPLAY_LEVEL, record);
 }
 
 int
@@ -90,7 +104,8 @@ qg_obol_snap_point_full_detail(QgView *display,
 	QgObolSnapRecord &record)
 {
     return qg_obol_snap_point_with_policy(display, query, tolerance,
-	enabledKinds, SoBRLSnapAction::FULL_DETAIL, record);
+	enabledKinds, SoBRLSnapAction::ALL_SOURCES,
+	SoBRLSnapAction::FULL_DETAIL, record);
 }
 
 // Local Variables:

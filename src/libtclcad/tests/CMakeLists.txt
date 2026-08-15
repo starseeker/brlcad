@@ -43,6 +43,7 @@ if(BRLCAD_ENABLE_TCL)
                 $<TARGET_FILE:btclsh>
                 ${CMAKE_CURRENT_SOURCE_DIR}/archer_obol_smoke.tcl
                 ${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/moss.g
+                ${CMAKE_CURRENT_BINARY_DIR}/archer_obol_smoke.g
       )
       set_property(TEST tclcad_test_archer_obol_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
       set_property(TEST tclcad_test_archer_obol_smoke PROPERTY SKIP_RETURN_CODE 125)

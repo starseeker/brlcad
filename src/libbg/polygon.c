@@ -21,6 +21,7 @@
 #include "common.h"
 
 #include <bio.h>
+#include <string.h>
 
 #include "bu/malloc.h"
 #include "bu/sort.h"
@@ -418,6 +419,57 @@ bg_polygon_append_point(struct bg_polygon *polygon, size_t contour,
 	    (count + 1) * sizeof(point_t), "polygon contour points");
     VMOVE(c->point[count], point);
     c->num_points++;
+    return 0;
+}
+
+int
+bg_polygon_remove_point(struct bg_polygon *polygon, size_t contour,
+	size_t point_index)
+{
+    if (!polygon || !polygon->contour || contour >= polygon->num_contours)
+	return 1;
+
+    struct bg_poly_contour *c = &polygon->contour[contour];
+    if (!c->point || point_index >= c->num_points)
+	return 1;
+
+    if (c->num_points > 1) {
+	if (point_index + 1 < c->num_points)
+	    memmove(&c->point[point_index], &c->point[point_index + 1],
+		    (c->num_points - point_index - 1) * sizeof(point_t));
+	c->num_points--;
+	c->point = (point_t *)bu_realloc(c->point,
+	    c->num_points * sizeof(point_t), "polygon contour points");
+	return 0;
+    }
+
+    bu_free(c->point, "polygon contour points");
+    if (contour + 1 < polygon->num_contours) {
+	memmove(&polygon->contour[contour], &polygon->contour[contour + 1],
+	    (polygon->num_contours - contour - 1) *
+	    sizeof(struct bg_poly_contour));
+	if (polygon->hole)
+	    memmove(&polygon->hole[contour], &polygon->hole[contour + 1],
+		    (polygon->num_contours - contour - 1) * sizeof(int));
+    }
+    polygon->num_contours--;
+    if (!polygon->num_contours) {
+	bu_free(polygon->contour, "polygon contours");
+	polygon->contour = NULL;
+	if (polygon->hole) {
+	    bu_free(polygon->hole, "polygon holes");
+	    polygon->hole = NULL;
+	}
+	return 0;
+    }
+
+    polygon->contour = (struct bg_poly_contour *)bu_realloc(
+	polygon->contour,
+	polygon->num_contours * sizeof(struct bg_poly_contour),
+	"polygon contours");
+    if (polygon->hole)
+	polygon->hole = (int *)bu_realloc(polygon->hole,
+	    polygon->num_contours * sizeof(int), "polygon holes");
     return 0;
 }
 

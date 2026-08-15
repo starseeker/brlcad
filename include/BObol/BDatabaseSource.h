@@ -168,6 +168,10 @@ struct BOBOL_EXPORT BObolDatabaseSourceSummary {
     SbBool sourceBoundsValid;
     SbBool sourceBoundsExact;
     SbBox3f sourceBounds;
+    /* At least one retained compact payload was produced by a primitive's
+     * view-dependent CSG LoD callback.  Such geometry must not seed a cache
+     * for a different view policy; immutable mesh/PoP payloads remain safe. */
+    SbBool hasViewDependentCsgGeometry;
     SbBool stale;
     uint32_t staleReason;
     int realizedShapeCount;
@@ -511,11 +515,47 @@ struct BOBOL_EXPORT BObolCompactOccurrence {
     /* Maps geometry coordinates into the occurrence's object-local frame. */
     SbMatrix geometryTransform;
     SbMatrix localTransform;
+    SbBool viewDependentCsgGeometry;
     SbBool lodBacked;
     SbBool sourceMeshRequestValid;
     BObolSourceMeshRequest sourceMeshRequest;
     uint32_t occurrenceIndex;
     int booleanOperation;
+};
+
+/** Lightweight, geometry-free persistence record for one authoritative
+ * compact occurrence.  A progressive producer may be drained by the scene
+ * owner before detached realization completes, so the producer retains this
+ * small immutable subset instead of a second occurrence registry or any mesh
+ * buffers. */
+struct BOBOL_EXPORT BObolCompactManifestOccurrence {
+    BObolCompactManifestOccurrence(void);
+
+    SbString path;
+    SbString sourceName;
+    SbMatrix localTransform;
+    SbBox3f bounds;
+    int booleanOperation;
+    uint32_t occurrenceIndex;
+    SbBool sourceMeshRequestValid;
+    SbString sourceType;
+    SbString meshAssetPath;
+    SbString meshAssetName;
+    uint64_t meshAssetContentHash;
+    double meshAssetTessellationAbsTol;
+    double meshAssetTessellationRelTol;
+    double meshAssetTessellationNormTol;
+    SbBox3f meshAssetBounds;
+    SbMatrix meshAssetTransform;
+    uint64_t sourceFaceCount;
+    uint64_t sourcePointCount;
+    int regionId;
+    int airCode;
+    int materialId;
+    int los;
+    SbBool materialColorValid;
+    SbColor materialColor;
+    SbString materialShader;
 };
 
 /** Thread-safe hand-off of completed compact occurrences from a realization
@@ -547,6 +587,16 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
      * drain it before an already queued leaf backlog so a completed aggregate
      * extent can frame a very large cold draw immediately. */
     void pushPriority(const BObolCompactOccurrence &occurrence);
+    /* Retain only the cache-persistent metadata for an authoritative leaf.
+     * Repeated records with the same semantic path update the prior entry, as
+     * happens when transformed-reuse proof enriches an already visible box.
+     * sealManifest succeeds only for one complete, source-backed population;
+     * takeManifest is unavailable until then and transfers the one-shot
+     * journal to its persistence callback without a second large copy. */
+    void recordManifestOccurrence(const BObolCompactOccurrence &occurrence);
+    bool sealManifest(size_t expectedCount);
+    bool takeManifest(
+	std::vector<BObolCompactManifestOccurrence> &occurrences);
     /* Retain a bounded LRU window of full cold imports long enough for the
      * first view-selected LoD task to reuse them.  Occurrences hold weak
      * references, so compact scene state cannot prolong these leases. */
@@ -1066,7 +1116,8 @@ public:
      * geometry onto a standing coarse (box) root during progressive
      * realization so boxes are replaced, not left lingering. */
     int mergeCompactOccurrences(
-	const std::vector<BObolCompactOccurrence> &occurrences);
+	const std::vector<BObolCompactOccurrence> &occurrences,
+	SbBool authoritativeGeometry = FALSE);
     /* Capacity-only hint for a known streaming epoch. */
     void reserveCompactOccurrenceCapacity(size_t expectedCount);
     /** Expected leaf occurrence population for the active streaming epoch.

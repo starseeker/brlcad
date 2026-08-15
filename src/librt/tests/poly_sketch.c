@@ -49,6 +49,12 @@ compare_polygon_data(const struct bg_polygon *op, const struct bg_polygon *rp, c
 	bu_exit(EXIT_FAILURE, "%s: contour count changed\n", msg);
 
     for (size_t i = 0; i < op->num_contours; i++) {
+	if ((op->hole && op->hole[i] ? 1 : 0) !=
+	    (rp->hole && rp->hole[i] ? 1 : 0))
+	    bu_exit(EXIT_FAILURE, "%s: contour %zu hole state changed\n", msg, i);
+	if ((op->contour[i].open ? 1 : 0) !=
+	    (rp->contour[i].open ? 1 : 0))
+	    bu_exit(EXIT_FAILURE, "%s: contour %zu open state changed\n", msg, i);
 	size_t pcnt = op->contour[i].num_points;
 	if (pcnt != rp->contour[i].num_points)
 	    bu_exit(EXIT_FAILURE, "%s: contour point count changed\n", msg);
@@ -135,6 +141,73 @@ test_non_origin_plane_roundtrip(void)
     compare_rt_polygon_data(&p, rtobj, "non-origin plane polygon roundtrip");
 
     rt_sketch_polygon_destroy(rtobj);
+    bg_polygon_clear(&p.polygon);
+    db_close(wfp->dbip);
+    bu_file_delete(ofile);
+}
+
+
+static void
+test_contour_topology_roundtrip(void)
+{
+    char ofile[MAXPATHLEN];
+    bu_dir(ofile, MAXPATHLEN, BU_DIR_CURR,
+	    "poly_sketch_topology.g", NULL);
+    struct rt_wdb *wfp = wdb_fopen_v(ofile, 5);
+    if (!wfp)
+	bu_exit(EXIT_FAILURE, "Failed to create output database %s\n", ofile);
+
+    struct rt_sketch_polygon p;
+    memset(&p, 0, sizeof(p));
+    p.type = RT_SKETCH_POLYGON_GENERAL;
+    p.curr_contour_i = -1;
+    p.curr_point_i = -1;
+    p.polygon.num_contours = 3;
+    p.polygon.hole = (int *)bu_calloc(3, sizeof(int), "gp_hole");
+    p.polygon.contour = (struct bg_poly_contour *)bu_calloc(3,
+	    sizeof(struct bg_poly_contour), "gp_contour");
+    p.polygon.hole[1] = 1;
+
+    p.polygon.contour[0].num_points = 4;
+    p.polygon.contour[0].point = (point_t *)bu_calloc(4,
+	    sizeof(point_t), "outer points");
+    VSET(p.polygon.contour[0].point[0], 0.0, 0.0, 0.0);
+    VSET(p.polygon.contour[0].point[1], 10.0, 0.0, 0.0);
+    VSET(p.polygon.contour[0].point[2], 10.0, 10.0, 0.0);
+    VSET(p.polygon.contour[0].point[3], 0.0, 10.0, 0.0);
+
+    p.polygon.contour[1].num_points = 4;
+    p.polygon.contour[1].point = (point_t *)bu_calloc(4,
+	    sizeof(point_t), "hole points");
+    VSET(p.polygon.contour[1].point[0], 2.0, 2.0, 0.0);
+    VSET(p.polygon.contour[1].point[1], 2.0, 4.0, 0.0);
+    VSET(p.polygon.contour[1].point[2], 4.0, 4.0, 0.0);
+    VSET(p.polygon.contour[1].point[3], 4.0, 2.0, 0.0);
+
+    p.polygon.contour[2].num_points = 3;
+    p.polygon.contour[2].open = 1;
+    p.polygon.contour[2].point = (point_t *)bu_calloc(3,
+	    sizeof(point_t), "open points");
+    VSET(p.polygon.contour[2].point[0], 20.0, 0.0, 0.0);
+    VSET(p.polygon.contour[2].point[1], 22.0, 1.0, 0.0);
+    VSET(p.polygon.contour[2].point[2], 24.0, 0.0, 0.0);
+
+    point_t plane_pt = VINIT_ZERO;
+    vect_t plane_n = {0.0, 0.0, 1.0};
+    bg_plane_pt_nrml(&p.vp, plane_pt, plane_n);
+
+    struct directory *dp = db_sketch_polygon_to_sketch(wfp->dbip,
+	    "topology.s", &p, NULL);
+    if (dp == RT_DIR_NULL)
+	bu_exit(EXIT_FAILURE, "Failed to write topology polygon\n");
+    struct rt_sketch_polygon *roundtrip = db_sketch_to_polygon(
+	    "topology_rt", wfp->dbip, dp);
+    if (!roundtrip)
+	bu_exit(EXIT_FAILURE, "Failed to read topology polygon\n");
+    compare_rt_polygon_data(&p, roundtrip,
+	    "hole and open contour roundtrip");
+
+    rt_sketch_polygon_destroy(roundtrip);
     bg_polygon_clear(&p.polygon);
     db_close(wfp->dbip);
     bu_file_delete(ofile);
@@ -238,6 +311,43 @@ main(int argc, char *argv[])
     compare_rt_polygon_data(pobj, opobj, "imported sketch polygon roundtrip");
 
     rt_sketch_polygon_destroy(opobj);
+
+    /* Updating a synchronized polygon must replace the existing sketch in
+     * place.  Creation deliberately still rejects an existing name. */
+    struct rt_sketch_polygon_data updated;
+    rt_sketch_polygon_data_init(&updated);
+    updated.type = pobj->type;
+    updated.fill_flag = pobj->fill_flag;
+    V2MOVE(updated.fill_dir, pobj->fill_dir);
+    updated.fill_delta = pobj->fill_delta;
+    BU_COLOR_CPY(&updated.fill_color, &pobj->fill_color);
+    VMOVE(updated.origin_point, pobj->origin_point);
+    HMOVE(updated.vp, pobj->vp);
+    updated.vZ = pobj->vZ;
+    updated.have_edge_color = pobj->have_edge_color;
+    BU_COLOR_CPY(&updated.edge_color, &pobj->edge_color);
+    if (bg_polygon_copy(&updated.polygon,
+	    rt_sketch_polygon_bg_polygon(pobj)))
+	bu_exit(EXIT_FAILURE, "Failed to copy synchronized polygon data\n");
+    updated.polygon.contour[0].point[1][X] += 3.0;
+
+    if (db_sketch_polygon_data_to_sketch(wfp->dbip, "poly.s", &updated) !=
+	    RT_DIR_NULL)
+	bu_exit(EXIT_FAILURE, "Sketch creation overwrote an existing object\n");
+    struct directory *updated_dp = db_sketch_polygon_data_update_sketch(
+	    wfp->dbip, "poly.s", &updated);
+    if (updated_dp == RT_DIR_NULL || updated_dp != odp)
+	bu_exit(EXIT_FAILURE, "Failed to update existing synchronized sketch\n");
+    struct rt_sketch_polygon *updated_obj = db_sketch_to_polygon(
+	    "poly_updated", wfp->dbip, updated_dp);
+    if (!updated_obj)
+	bu_exit(EXIT_FAILURE, "Failed to read updated synchronized sketch\n");
+    compare_polygon_data(&updated.polygon,
+	    rt_sketch_polygon_bg_polygon(updated_obj),
+	    "synchronized sketch update");
+    rt_sketch_polygon_destroy(updated_obj);
+    rt_sketch_polygon_data_free(&updated);
+
     rt_sketch_polygon_destroy(pobj);
     db_close(dbip);
     db_close(wfp->dbip);
@@ -246,6 +356,7 @@ main(int argc, char *argv[])
 	bu_file_delete(generated_file);
 
     test_non_origin_plane_roundtrip();
+    test_contour_topology_roundtrip();
 
     return 0;
 }

@@ -29,6 +29,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "bu.h"
 #include "vmath.h"
@@ -38,6 +39,7 @@
 #include "rt/edit.h"
 #include "wdb.h"
 #include "ged.h"
+#include "ged/edit.h"
 #include "ged/event.h"
 #include "brep/util.h"
 #include "ged/selection.h"
@@ -71,7 +73,62 @@ struct edit_event_observer {
     int calls = 0;
     int tor_modified = 0;
     int sph_modified = 0;
+    int bot_modified = 0;
 };
+
+
+struct edit_session_observer {
+    std::vector<enum ged_edit_session_event_kind> kinds;
+    std::vector<uint64_t> revisions;
+    std::vector<int> commands;
+    std::vector<std::string> paths;
+    std::vector<std::string> replacement_paths;
+    std::vector<enum ged_edit_session_invalidation_reason> invalidation_reasons;
+    ged_edit_session_ref first = GED_EDIT_SESSION_REF_NULL;
+};
+
+
+static void
+edit_session_cb(struct ged *UNUSED(gedp),
+	const struct ged_edit_session_event *event, void *client_data)
+{
+    struct edit_session_observer *obs =
+	(struct edit_session_observer *)client_data;
+    if (!obs || !event)
+	return;
+    if (ged_edit_session_ref_is_null(obs->first))
+	obs->first = event->session;
+    obs->kinds.push_back(event->kind);
+    obs->revisions.push_back(event->revision);
+    obs->commands.push_back(event->command_id);
+    obs->paths.emplace_back(event->path ? event->path : "");
+    obs->replacement_paths.emplace_back(event->replacement_path ?
+	event->replacement_path : "");
+    obs->invalidation_reasons.push_back(event->invalidation_reason);
+}
+
+
+struct reentrant_edit_observer {
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    int updates = 0;
+    enum ged_edit_status cancel_status = GED_EDIT_ERROR;
+};
+
+
+static void
+reentrant_edit_cancel_cb(struct ged *gedp,
+	const struct ged_edit_session_event *event, void *client_data)
+{
+    struct reentrant_edit_observer *obs =
+	(struct reentrant_edit_observer *)client_data;
+    if (!obs || !event || event->kind != GED_EDIT_SESSION_UPDATE ||
+	event->session.owner != obs->session.owner ||
+	event->session.id != obs->session.id ||
+	event->session.generation != obs->session.generation)
+	return;
+    obs->updates++;
+    obs->cancel_status = ged_edit_session_cancel(gedp, obs->session);
+}
 
 
 static void
@@ -93,6 +150,8 @@ edit_event_cb(struct ged *UNUSED(gedp),
 	    obs->tor_modified++;
 	if (BU_STR_EQUAL(events[i].name, "sph.s"))
 	    obs->sph_modified++;
+	if (BU_STR_EQUAL(events[i].name, "bot.s"))
+	    obs->bot_modified++;
     }
 }
 
@@ -145,6 +204,9 @@ read_hrt(struct ged *gedp, const char *name, struct rt_hrt_internal *out)
     rt_db_free_internal(&intern);
     return BRLCAD_OK;
 }
+
+static int
+read_tor(struct ged *gedp, const char *name, struct rt_tor_internal *out);
 
 
 /* ------------------------------------------------------------------ *
@@ -483,17 +545,17 @@ test_p0_hrt_descriptor_ops(struct ged *gedp)
     }
 
     {
-        const char *av[] = {"edit", "hrt.s", "set_x_direction", "0", "1", "0", NULL};
+        const char *av[] = {"edit", "hrt.s", "set_x_direction", "1", "0", "0", NULL};
         bu_vls_trunc(gedp->ged_result_str, 0);
         int ret = ged_exec(gedp, 6, av);
-        CHECK(ret == BRLCAD_OK, "edit hrt.s set_x_direction 0 1 0 returns OK");
+        CHECK(ret == BRLCAD_OK, "edit hrt.s set_x_direction 1 0 0 returns OK");
     }
 
     {
-        const char *av[] = {"edit", "hrt.s", "set_y_direction", "1", "0", "0", NULL};
+        const char *av[] = {"edit", "hrt.s", "set_y_direction", "0", "1", "0", NULL};
         bu_vls_trunc(gedp->ged_result_str, 0);
         int ret = ged_exec(gedp, 6, av);
-        CHECK(ret == BRLCAD_OK, "edit hrt.s set_y_direction 1 0 0 returns OK");
+        CHECK(ret == BRLCAD_OK, "edit hrt.s set_y_direction 0 1 0 returns OK");
     }
 
     {
@@ -513,11 +575,18 @@ test_p0_hrt_descriptor_ops(struct ged *gedp)
     }
 
     {
+	struct rt_hrt_internal before = {};
+	CHECK(read_hrt(gedp, "hrt.s", &before) == BRLCAD_OK,
+	      "read hrt.s before rejected edit succeeds");
         const char *av[] = {"edit", "hrt.s", "set_x_direction", "1", "1", "0", NULL};
         bu_vls_trunc(gedp->ged_result_str, 0);
         int ret = ged_exec(gedp, 6, av);
-        CHECK((ret == BRLCAD_OK) || (ret == BRLCAD_ERROR),
-              "edit hrt.s set_x_direction non-orthogonal returns a valid status");
+	CHECK(ret == BRLCAD_ERROR,
+	      "edit hrt.s rejects a semantically invalid non-orthogonal axis");
+	struct rt_hrt_internal after = {};
+	CHECK(read_hrt(gedp, "hrt.s", &after) == BRLCAD_OK &&
+	      VNEAR_EQUAL(before.xdir, after.xdir, NEAR_ENOUGH),
+	      "rejected HRT edit leaves committed geometry unchanged");
     }
 
     {
@@ -525,6 +594,51 @@ test_p0_hrt_descriptor_ops(struct ged *gedp)
         bu_vls_trunc(gedp->ged_result_str, 0);
         int ret = ged_exec(gedp, 4, av);
         CHECK(ret == BRLCAD_ERROR, "edit hrt.s set_d 0 returns error");
+    }
+
+    {
+	struct edit_session_observer obs;
+	ged_edit_observer_token token =
+	    ged_edit_observer_add(gedp, edit_session_cb, &obs);
+	CHECK(token != 0, "HRT typed-rejection observer registers");
+	ged_edit_session_ref ref = GED_EDIT_SESSION_REF_NULL;
+	CHECK(ged_edit_session_begin(gedp, "hrt.s", NULL, &ref) ==
+	    GED_EDIT_OK, "typed API begins an HRT edit session");
+
+	struct ged_edit_session_info before_info = {};
+	CHECK(ged_edit_session_info_get(gedp, ref, &before_info) ==
+	    GED_EDIT_OK, "HRT session reports state before rejected update");
+	struct rt_edit_cmd_values before;
+	CHECK(ged_edit_session_command_values_get(gedp, ref, 43002,
+	    &before) == GED_EDIT_OK && before.value_count == 3,
+	    "HRT session reads the current X direction");
+	const size_t event_count = obs.kinds.size();
+	fastf_t invalid_xdir[RT_EDIT_MAXPARA] = {1.0, 1.0, 0.0};
+	struct ged_edit_command_input input = {};
+	input.command_id = 43002;
+	input.values = invalid_xdir;
+	input.value_count = 3;
+	CHECK(ged_edit_session_apply(gedp, ref, &input) ==
+	    GED_EDIT_REJECTED,
+	    "typed API reports semantic HRT rejection distinctly");
+
+	struct ged_edit_session_info after_info = {};
+	struct rt_edit_cmd_values after;
+	CHECK(ged_edit_session_info_get(gedp, ref, &after_info) ==
+	    GED_EDIT_OK && after_info.revision == before_info.revision &&
+	    after_info.dirty == before_info.dirty,
+	    "rejected typed update changes neither revision nor dirty state");
+	CHECK(ged_edit_session_command_values_get(gedp, ref, 43002,
+	    &after) == GED_EDIT_OK &&
+	    after.value_count == before.value_count &&
+	    VNEAR_EQUAL(before.values, after.values, NEAR_ENOUGH),
+	    "rejected typed update leaves session geometry unchanged");
+	CHECK(obs.kinds.size() == event_count,
+	    "rejected typed update publishes no false update event");
+	CHECK(ged_edit_session_cancel(gedp, ref) == GED_EDIT_OK,
+	    "HRT typed-rejection session cancels cleanly");
+	CHECK(ged_edit_observer_remove(gedp, token) == 1,
+	    "HRT typed-rejection observer removal succeeds");
     }
 }
 
@@ -611,12 +725,31 @@ create_p1_fixture(const char *path)
     point_t sp = {10, 0, 0};
     if (mk_sph(wdbp, "sph.s", sp, 2.0) != 0) { wdb_close(wdbp); return BRLCAD_ERROR; }
 
+    fastf_t bot_vertices[] = {
+	0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 2
+    };
+    int bot_faces[] = {
+	0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3
+    };
+    if (mk_bot(wdbp, "bot.s", RT_BOT_SOLID, RT_BOT_CCW, 0, 4, 4,
+	    bot_vertices, bot_faces, NULL, NULL) != 0) {
+	wdb_close(wdbp);
+	return BRLCAD_ERROR;
+    }
+
     struct wmember wm;
     BU_LIST_INIT(&wm.l);
     mk_addmember("tor.s", &wm.l, NULL, WMOP_UNION);
     if (mk_lcomb(wdbp, "group.c", &wm, 0, NULL, NULL, NULL, 0) != 0) {
         wdb_close(wdbp);
         return BRLCAD_ERROR;
+    }
+
+    BU_LIST_INIT(&wm.l);
+    mk_addmember("tor.s", &wm.l, NULL, WMOP_UNION);
+    if (mk_lcomb(wdbp, "group2.c", &wm, 0, NULL, NULL, NULL, 0) != 0) {
+	wdb_close(wdbp);
+	return BRLCAD_ERROR;
     }
 
     wdb_close(wdbp);
@@ -899,6 +1032,606 @@ test_p1_perturb_regression(struct ged *gedp)
     bu_vls_trunc(gedp->ged_result_str, 0);
     int ret = ged_exec(gedp, 4, av);
     CHECK(ret == BRLCAD_OK, "edit tor.s perturb 0.001 (regression) returns OK");
+}
+
+
+static void
+test_p1_edit_session_api(struct ged *gedp)
+{
+    struct edit_session_observer obs;
+    ged_edit_observer_token token =
+	ged_edit_observer_add(gedp, edit_session_cb, &obs);
+    CHECK(token != 0, "edit-session observer registers");
+
+    const char *set_12[] = {"edit", "-i", "tor.s", "r1", "12.5", NULL};
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 5, set_12) == BRLCAD_OK,
+	"CLI creates and updates an intermediate edit session");
+    CHECK(obs.kinds.size() == 2 &&
+	obs.kinds[0] == GED_EDIT_SESSION_BEGIN &&
+	obs.kinds[1] == GED_EDIT_SESSION_UPDATE,
+	"intermediate CLI edit reports begin followed by update");
+    CHECK(obs.revisions.size() == 2 && obs.revisions[0] == 0 &&
+	obs.revisions[1] == 1,
+	"edit-session revisions start at zero and advance on update");
+
+    ged_edit_session_ref ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_find(gedp, "tor.s", &ref) == GED_EDIT_OK &&
+	!ged_edit_session_ref_is_null(ref),
+	"active edit session is discoverable by canonical path");
+    CHECK(ref.owner == obs.first.owner && ref.id == obs.first.id &&
+	ref.generation == obs.first.generation,
+	"observer and query report the same stable session reference");
+
+    struct ged_edit_session_info info;
+    CHECK(ged_edit_session_info_get(gedp, ref, &info) == GED_EDIT_OK &&
+	info.revision == 1 && info.dirty && info.primitive_type == ID_TOR,
+	"session info reports current revision, dirty state, and primitive type");
+
+    struct bu_vls path = BU_VLS_INIT_ZERO;
+    CHECK(ged_edit_session_path_get(gedp, ref, &path) == GED_EDIT_OK &&
+	BU_STR_EQUAL(bu_vls_cstr(&path), "/tor.s"),
+	"session path query returns the canonical target");
+    bu_vls_free(&path);
+
+    const struct rt_edit_prim_desc *desc = NULL;
+    CHECK(ged_edit_session_descriptor_get(gedp, ref, &desc) == GED_EDIT_OK &&
+	desc && BU_STR_EQUAL(desc->prim_type, "tor"),
+	"session descriptor query reports the librt primitive contract");
+
+    struct rt_edit_cmd_values values;
+    CHECK(ged_edit_session_command_values_get(gedp, ref, 1021,
+	&values) == GED_EDIT_OK && values.value_count == 1 &&
+	values.value_valid[0] && fabs(values.values[0] - 12.5) < NEAR_ENOUGH,
+	"session value query observes the CLI intermediate value");
+    const char *status[] = {"edit", "tor.s", "status", NULL};
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 3, status) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "revision=1") &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "type=tor"),
+	"CLI status reports the shared session revision and primitive type");
+    const char *get_r1[] = {"edit", "tor.s", "get", "r1", NULL};
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 4, get_r1) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "12.5"),
+	"CLI get observes the current shared intermediate value");
+
+    const char *set_15[] = {"edit", "-i", "tor.s", "r1", "15", NULL};
+    CHECK(ged_exec(gedp, 5, set_15) == BRLCAD_OK,
+	"a second CLI operation reuses the active session");
+    ged_edit_session_ref same_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_find(gedp, "tor.s", &same_ref) == GED_EDIT_OK &&
+	same_ref.owner == ref.owner && same_ref.id == ref.id &&
+	same_ref.generation == ref.generation,
+	"successive edits preserve session identity");
+    CHECK(obs.kinds.size() == 3 &&
+	obs.kinds.back() == GED_EDIT_SESSION_UPDATE &&
+	obs.revisions.back() == 2,
+	"successive edit reports one higher-revision update");
+
+    const char *checkpoint[] = {"edit", "tor.s", "checkpoint", NULL};
+    CHECK(ged_exec(gedp, 3, checkpoint) == BRLCAD_OK &&
+	obs.kinds.back() == GED_EDIT_SESSION_CHECKPOINT,
+	"CLI checkpoint reports a session checkpoint event");
+
+    const char *set_20[] = {"edit", "-i", "tor.s", "r1", "20", NULL};
+    CHECK(ged_exec(gedp, 5, set_20) == BRLCAD_OK,
+	"post-checkpoint intermediate update succeeds");
+    const char *revert[] = {"edit", "-i", "tor.s", "revert", NULL};
+    CHECK(ged_exec(gedp, 4, revert) == BRLCAD_OK &&
+	obs.kinds.back() == GED_EDIT_SESSION_REVERT,
+	"CLI revert reports a session revert event");
+    CHECK(ged_edit_session_command_values_get(gedp, ref, 1021,
+	&values) == GED_EDIT_OK &&
+	fabs(values.values[0] - 15.0) < NEAR_ENOUGH,
+	"session readback observes reverted intermediate geometry");
+
+    const char *reset[] = {"edit", "tor.s", "reset", NULL};
+    CHECK(ged_exec(gedp, 3, reset) == BRLCAD_OK &&
+	obs.kinds.back() == GED_EDIT_SESSION_CANCEL,
+	"CLI reset reports session cancellation");
+    CHECK(ged_edit_session_info_get(gedp, ref, &info) == GED_EDIT_STALE,
+	"closed session references are reported as stale");
+
+    ged_edit_session_ref typed_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "tor.s", NULL, &typed_ref) ==
+	GED_EDIT_OK,
+	"typed API begins a new session after CLI cancellation");
+    fastf_t typed_values[RT_EDIT_MAXPARA] = {0.0};
+    typed_values[0] = 17.25;
+    struct ged_edit_command_input input;
+    input.command_id = 1021;
+    input.values = typed_values;
+    input.value_count = 1;
+    input.strings = NULL;
+    input.string_count = 0;
+    input.view = NULL;
+    CHECK(ged_edit_session_apply(gedp, typed_ref, &input) == GED_EDIT_OK,
+	"typed API applies a descriptor command without string parsing");
+    CHECK(ged_edit_session_command_values_get(gedp, typed_ref, 1021,
+	&values) == GED_EDIT_OK &&
+	fabs(values.values[0] - 17.25) < NEAR_ENOUGH,
+	"typed update is visible through shared session readback");
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 4, get_r1) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "17.25"),
+	"CLI get observes an update made through the typed GUI/manipulator API");
+    struct rt_db_internal preview = RT_DB_INTERNAL_INIT_ZERO;
+    CHECK(ged_edit_session_internal_copy(gedp, typed_ref, &preview) ==
+	GED_EDIT_OK && preview.idb_type == ID_TOR,
+	"session produces an independently owned preview snapshot");
+    rt_db_free_internal(&preview);
+    CHECK(ged_edit_session_commit(gedp, typed_ref) == GED_EDIT_OK,
+	"typed API commits and closes its session");
+    struct rt_tor_internal committed;
+    CHECK(read_tor(gedp, "tor.s", &committed) == BRLCAD_OK &&
+	fabs(committed.r_a - 17.25) < NEAR_ENOUGH,
+	"typed commit writes the shared intermediate state to the database");
+
+    const char *nested_set[] = {
+	"edit", "-i", "group.c/tor.s", "r1", "8.5", NULL
+    };
+    CHECK(ged_exec(gedp, 5, nested_set) == BRLCAD_OK,
+	"descriptor CLI dispatch accepts a nested combination path");
+    ged_edit_session_ref nested_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_find(gedp, "group.c/tor.s", &nested_ref) ==
+	GED_EDIT_OK && !ged_edit_session_ref_is_null(nested_ref),
+	"nested CLI edit creates a path-scoped shared session");
+    const char *nested_get[] = {
+	"edit", "group.c/tor.s", "get", "r1", NULL
+    };
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 4, nested_get) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "8.5"),
+	"nested session state is visible through CLI readback");
+    const char *nested_reset[] = {
+	"edit", "group.c/tor.s", "reset", NULL
+    };
+    CHECK(ged_exec(gedp, 3, nested_reset) == BRLCAD_OK &&
+	ged_edit_session_info_get(gedp, nested_ref, &info) == GED_EDIT_STALE,
+	"nested session reset cancels the same shared state");
+
+    auto read_combination = [gedp](int *region, long *los,
+	std::string *shader, std::string *material) -> bool {
+	struct directory *dp = db_lookup(gedp->dbip, "group.c", LOOKUP_QUIET);
+	struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
+	if (!dp || rt_db_get_internal(&intern, dp, gedp->dbip, NULL) < 0)
+	    return false;
+	struct rt_comb_internal *comb =
+	    (struct rt_comb_internal *)intern.idb_ptr;
+	if (!comb || comb->magic != RT_COMB_MAGIC) {
+	    rt_db_free_internal(&intern);
+	    return false;
+	}
+	if (region) *region = comb->region_flag;
+	if (los) *los = comb->los;
+	if (shader) *shader = bu_vls_cstr(&comb->shader);
+	if (material) *material = bu_vls_cstr(&comb->material);
+	rt_db_free_internal(&intern);
+	return true;
+    };
+
+    const char *comb_shader[] = {
+	"edit", "-i", "group.c", "set_shader", "plastic", NULL
+    };
+    const char *comb_region[] = {
+	"edit", "-i", "group.c", "set_region", "1", NULL
+    };
+    const char *comb_los[] = {
+	"edit", "-i", "group.c", "set_los", "80", NULL
+    };
+    const char *comb_material[] = {
+	"edit", "-i", "group.c", "set_material", "air", NULL
+    };
+    CHECK(ged_exec(gedp, 5, comb_shader) == BRLCAD_OK &&
+	ged_exec(gedp, 5, comb_region) == BRLCAD_OK &&
+	ged_exec(gedp, 5, comb_los) == BRLCAD_OK &&
+	ged_exec(gedp, 5, comb_material) == BRLCAD_OK,
+	"combination edits accumulate in one shared intermediate session");
+    int region = -1;
+    long los = -1;
+    std::string shader;
+    std::string material;
+    CHECK(read_combination(&region, &los, &shader, &material) &&
+	!region && los == 0 && shader.empty() && material.empty(),
+	"combination intermediate does not leak into the database");
+    ged_edit_session_ref comb_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_find(gedp, "group.c", &comb_ref) == GED_EDIT_OK,
+	"combination session is discoverable before commit");
+    struct rt_edit_cmd_values comb_values;
+    CHECK(ged_edit_session_command_values_get(gedp, comb_ref, 12007,
+	&comb_values) == GED_EDIT_OK && comb_values.string_valid[0] &&
+	BU_STR_EQUAL(comb_values.strings[0], "plastic"),
+	"combination string readback observes intermediate state");
+    CHECK(ged_edit_session_commit(gedp, comb_ref) == GED_EDIT_OK,
+	"combination shared session commits explicitly");
+    CHECK(read_combination(&region, &los, &shader, &material) &&
+	region && los == 80 && shader == "plastic" && material == "air",
+	"combination commit preserves geometry and v5 attributes");
+    CHECK(ged_edit_observer_remove(gedp, token) == 1,
+	"edit-session observer removal succeeds");
+}
+
+
+static void
+test_p1_alternate_occurrence_session_conflict(struct ged *gedp)
+{
+    ged_edit_session_ref first = GED_EDIT_SESSION_REF_NULL;
+    ged_edit_session_ref same = GED_EDIT_SESSION_REF_NULL;
+    ged_edit_session_ref alternate = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "group.c/tor.s", NULL, &first) ==
+	GED_EDIT_OK, "first occurrence begins its writable session");
+    CHECK(ged_edit_session_begin(gedp, "/group.c/tor.s", NULL, &same) ==
+	GED_EDIT_OK && same.owner == first.owner && same.id == first.id &&
+	same.generation == first.generation,
+	"the same canonical occurrence joins its authoritative session");
+    CHECK(ged_edit_session_begin(gedp, "group2.c/tor.s", NULL,
+	&alternate) == GED_EDIT_CONFLICT &&
+	ged_edit_session_ref_is_null(alternate),
+	"a second occurrence of the writable terminal object reports conflict");
+
+    const char *set_first[] = {
+	"edit", "-i", "group.c/tor.s", "r1", "19", NULL
+    };
+    CHECK(ged_exec(gedp, 5, set_first) == BRLCAD_OK,
+	"the authoritative occurrence remains editable after a conflict");
+    struct ged_edit_session_info info = {};
+    CHECK(ged_edit_session_info_get(gedp, first, &info) == GED_EDIT_OK &&
+	info.revision == 1 && info.dirty,
+	"the authoritative occurrence retains one coherent revision stream");
+
+    const char *bad_value[] = {
+	"edit", "-i", "group.c/tor.s", "r1", "not-a-number", NULL
+    };
+    CHECK(ged_exec(gedp, 5, bad_value) == BRLCAD_ERROR,
+	"failed command parsing rejects an intermediate update");
+    struct ged_edit_session_info after_bad = {};
+    CHECK(ged_edit_session_info_get(gedp, first, &after_bad) == GED_EDIT_OK &&
+	after_bad.revision == info.revision && after_bad.dirty == info.dirty,
+	"failed command parsing leaves session revision and state unchanged");
+
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    const char *set_alternate[] = {
+	"edit", "-i", "group2.c/tor.s", "r1", "23", NULL
+    };
+    CHECK(ged_exec(gedp, 5, set_alternate) == BRLCAD_ERROR &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "already being edited"),
+	"CLI reports an alternate-occurrence session conflict explicitly");
+
+    const char *get_first[] = {
+	"edit", "group.c/tor.s", "get", "r1", NULL
+    };
+    CHECK(ged_exec(gedp, 4, get_first) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "19"),
+	"CLI still reads the authoritative intermediate after a conflict");
+
+    CHECK(ged_edit_session_cancel(gedp, first) == GED_EDIT_OK,
+	"cancelling the first occurrence releases terminal edit authority");
+    CHECK(ged_edit_session_begin(gedp, "group2.c/tor.s", NULL,
+	&alternate) == GED_EDIT_OK,
+	"another occurrence can begin after authority is released");
+    CHECK(ged_edit_session_begin(gedp, "group.c/tor.s", NULL, &first) ==
+	GED_EDIT_CONFLICT,
+	"terminal edit authority is symmetric between occurrence paths");
+    CHECK(ged_edit_session_cancel(gedp, alternate) == GED_EDIT_OK,
+	"alternate occurrence session cancels cleanly");
+}
+
+
+static void
+test_p1_independent_ged_context_sessions(struct ged *gedp,
+	const char *database_path)
+{
+    ged_edit_session_ref first = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "tor.s", NULL, &first) == GED_EDIT_OK,
+	"first GED context begins an edit session");
+
+    struct ged *other = open_fixture(database_path);
+    CHECK(other != NULL, "a second GED context opens the same database");
+    if (!other) {
+	(void)ged_edit_session_cancel(gedp, first);
+	return;
+    }
+
+    ged_edit_session_ref second = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(other, "tor.s", NULL, &second) == GED_EDIT_OK &&
+	second.owner != first.owner,
+	"independent GED contexts have independent session authorities");
+    struct ged_edit_session_info foreign_info = {};
+    CHECK(ged_edit_session_info_get(other, first, &foreign_info) ==
+	GED_EDIT_INVALID && ged_edit_session_info_get(gedp, second,
+	&foreign_info) == GED_EDIT_INVALID,
+	"a session reference cannot cross its GED context boundary");
+
+    fastf_t first_value[1] = {21.0};
+    fastf_t second_value[1] = {22.0};
+    struct ged_edit_command_input input = {};
+    input.command_id = 1021;
+    input.values = first_value;
+    input.value_count = 1;
+    CHECK(ged_edit_session_apply(gedp, first, &input) == GED_EDIT_OK,
+	"first GED context updates its private intermediate");
+    input.values = second_value;
+    CHECK(ged_edit_session_apply(other, second, &input) == GED_EDIT_OK,
+	"second GED context updates its private intermediate");
+
+    struct rt_edit_cmd_values first_read = {};
+    struct rt_edit_cmd_values second_read = {};
+    CHECK(ged_edit_session_command_values_get(gedp, first, 1021,
+	&first_read) == GED_EDIT_OK &&
+	ged_edit_session_command_values_get(other, second, 1021,
+	&second_read) == GED_EDIT_OK &&
+	fabs(first_read.values[0] - 21.0) < NEAR_ENOUGH &&
+	fabs(second_read.values[0] - 22.0) < NEAR_ENOUGH,
+	"independent GED contexts do not leak intermediate values");
+
+    CHECK(ged_edit_session_cancel(other, second) == GED_EDIT_OK,
+	"second GED context cancels its intermediate cleanly");
+    ged_close(other);
+    CHECK(ged_edit_session_cancel(gedp, first) == GED_EDIT_OK,
+	"first GED context remains valid after the second closes");
+}
+
+
+static void
+test_p1_selection_session_state(struct ged *gedp)
+{
+    ged_edit_session_ref ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "bot.s", NULL, &ref) == GED_EDIT_OK,
+	"selection-state test begins a BoT edit session");
+
+    const struct rt_edit_prim_desc *descriptor = NULL;
+    int select_vertex = 0;
+    if (ged_edit_session_descriptor_get(gedp, ref, &descriptor) ==
+	    GED_EDIT_OK && descriptor) {
+	for (int i = 0; i < descriptor->ncmd; i++) {
+	    if (descriptor->cmds[i].name &&
+		BU_STR_EQUAL(descriptor->cmds[i].name, "ECMD_BOT_PICKV")) {
+		select_vertex = descriptor->cmds[i].cmd_id;
+		break;
+	    }
+	}
+    }
+    CHECK(select_vertex != 0,
+	"selection-state test discovers the stable BoT selection operation");
+
+    struct rt_edit_param_bounds bounds = {};
+    CHECK(ged_edit_session_parameter_bounds_get(gedp, ref, select_vertex, 0,
+	&bounds) == GED_EDIT_OK && bounds.has_minimum && bounds.has_maximum &&
+	fabs(bounds.minimum - (-1.0)) < NEAR_ENOUGH &&
+	fabs(bounds.maximum - 3.0) < NEAR_ENOUGH,
+	"BoT session exposes current-topology vertex bounds");
+
+    fastf_t values[1] = {4.0};
+    struct ged_edit_command_input input = {};
+    input.command_id = select_vertex;
+    input.values = values;
+    input.value_count = 1;
+    struct ged_edit_session_info info = {};
+    CHECK(ged_edit_session_apply(gedp, ref, &input) == GED_EDIT_INVALID &&
+	ged_edit_session_info_get(gedp, ref, &info) == GED_EDIT_OK &&
+	info.revision == 0 && !info.dirty,
+	"BoT topology bounds reject an unavailable vertex without changing state");
+    values[0] = 1.0;
+    CHECK(select_vertex && ged_edit_session_apply(gedp, ref, &input) ==
+	GED_EDIT_OK, "typed BoT selection succeeds");
+
+    CHECK(ged_edit_session_info_get(gedp, ref, &info) == GED_EDIT_OK &&
+	info.revision == 1 && !info.dirty,
+	"selection advances revision without marking geometry dirty");
+    CHECK(ged_edit_session_checkpoint(gedp, ref) == GED_EDIT_OK,
+	"clean selection state can be checkpointed");
+    values[0] = 2.0;
+    CHECK(ged_edit_session_apply(gedp, ref, &input) == GED_EDIT_OK &&
+	ged_edit_session_revert(gedp, ref) == GED_EDIT_OK &&
+	ged_edit_session_info_get(gedp, ref, &info) == GED_EDIT_OK &&
+	!info.dirty,
+	"revert restores the checkpoint dirty state as well as edit state");
+
+    struct edit_event_observer obs;
+    ged_event_observer_token token = ged_event_observer_add(gedp,
+	GED_EVENT_OBSERVER_POST_RECONCILE, edit_event_cb, &obs);
+    CHECK(token != 0, "clean selection commit observer registers");
+    CHECK(ged_edit_session_commit(gedp, ref) == GED_EDIT_OK &&
+	ged_edit_session_info_get(gedp, ref, &info) == GED_EDIT_STALE,
+	"clean selection commit closes the session");
+    CHECK(obs.bot_modified == 0,
+	"clean selection commit does not emit a false object-modified event");
+    CHECK(ged_event_observer_remove(gedp, token) == 1,
+	"clean selection commit observer removal succeeds");
+}
+
+
+static void
+test_p1_reentrant_session_observer(struct ged *gedp)
+{
+    struct rt_tor_internal before;
+    CHECK(read_tor(gedp, "tor.s", &before) == BRLCAD_OK,
+	"reentrant observer test reads the committed torus");
+
+    ged_edit_session_ref ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "tor.s", NULL, &ref) == GED_EDIT_OK,
+	"reentrant observer test begins an edit session");
+
+    struct reentrant_edit_observer mutator;
+    mutator.session = ref;
+    struct edit_session_observer recorder;
+    ged_edit_observer_token mutator_token = ged_edit_observer_add(gedp,
+	reentrant_edit_cancel_cb, &mutator);
+    ged_edit_observer_token recorder_token = ged_edit_observer_add(gedp,
+	edit_session_cb, &recorder);
+    CHECK(mutator_token && recorder_token,
+	"reentrant observer test registers both observers");
+
+    fastf_t values[1] = {9.25};
+    struct ged_edit_command_input input = {};
+    input.command_id = 1021;
+    input.values = values;
+    input.value_count = 1;
+    CHECK(ged_edit_session_apply(gedp, ref, &input) == GED_EDIT_OK,
+	"an observer may cancel a session reentrantly during its update");
+    CHECK(mutator.updates == 1 && mutator.cancel_status == GED_EDIT_OK,
+	"the reentrant observer cancels exactly once");
+    CHECK(recorder.kinds.size() == 2 &&
+	recorder.kinds[0] == GED_EDIT_SESSION_UPDATE &&
+	recorder.kinds[1] == GED_EDIT_SESSION_CANCEL,
+	"reentrant cancellation is queued after complete update delivery");
+
+    struct ged_edit_session_info info = {};
+    CHECK(ged_edit_session_info_get(gedp, ref, &info) == GED_EDIT_STALE,
+	"reentrantly canceled session references become stale");
+    struct rt_tor_internal after;
+    CHECK(read_tor(gedp, "tor.s", &after) == BRLCAD_OK &&
+	NEAR_EQUAL(after.r_a, before.r_a, NEAR_ENOUGH),
+	"reentrant cancellation does not leak intermediate geometry");
+    CHECK(ged_edit_observer_remove(gedp, mutator_token) == 1 &&
+	ged_edit_observer_remove(gedp, recorder_token) == 1,
+	"reentrant observer registrations remove cleanly");
+}
+
+
+static void
+test_p1_database_event_invalidation(struct ged *gedp)
+{
+    struct edit_session_observer obs;
+    ged_edit_observer_token token = ged_edit_observer_add(gedp,
+	edit_session_cb, &obs);
+    CHECK(token != 0, "database invalidation observer registers");
+
+    const char *intermediate[] = {
+	"edit", "-i", "sph.s", "translate", "-r", "1", "0", "0", NULL
+    };
+    CHECK(ged_exec(gedp, 8, intermediate) == BRLCAD_OK,
+	"database invalidation test creates a dirty sphere session");
+    ged_edit_session_ref modified_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_find(gedp, "sph.s", &modified_ref) == GED_EDIT_OK,
+	"dirty sphere session is active before an external command");
+
+    const char *adjust[] = {"adjust", "sph.s", "V", "30 0 0", NULL};
+    CHECK(ged_exec(gedp, 4, adjust) == BRLCAD_OK,
+	"an ordinary CLI command modifies the session source object");
+    struct ged_edit_session_info info = {};
+    CHECK(!obs.kinds.empty() &&
+	obs.kinds.back() == GED_EDIT_SESSION_INVALIDATE &&
+	obs.paths.back() == "/sph.s" && obs.replacement_paths.back().empty(),
+	"external modification reports an explicit session invalidation");
+    CHECK(obs.invalidation_reasons.back() ==
+	GED_EDIT_INVALIDATION_SOURCE_CHANGED,
+	"external modification identifies a reloadable source change");
+    CHECK(ged_edit_session_info_get(gedp, modified_ref, &info) ==
+	GED_EDIT_STALE,
+	"external modification makes the old session reference stale");
+    struct rt_ell_internal sphere;
+    CHECK(read_ell(gedp, "sph.s", &sphere) == BRLCAD_OK &&
+	NEAR_EQUAL(sphere.v[X], 30.0, NEAR_ENOUGH) &&
+	NEAR_EQUAL(MAGNITUDE(sphere.a), 2.0, NEAR_ENOUGH),
+	"external geometry wins and stale intermediate geometry is discarded");
+
+    ged_edit_session_ref rename_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "sph.s", NULL, &rename_ref) ==
+	GED_EDIT_OK, "rename invalidation test begins a fresh session");
+    const char *rename[] = {"move", "sph.s", "sph_renamed.s", NULL};
+    CHECK(ged_exec(gedp, 3, rename) == BRLCAD_OK,
+	"an ordinary CLI command renames the session source object");
+    CHECK(!obs.kinds.empty() &&
+	obs.kinds.back() == GED_EDIT_SESSION_INVALIDATE &&
+	obs.paths.back() == "/sph.s" &&
+	obs.replacement_paths.back() == "/sph_renamed.s",
+	"rename invalidation supplies the canonical replacement path");
+    CHECK(obs.invalidation_reasons.back() ==
+	GED_EDIT_INVALIDATION_SOURCE_RENAMED,
+	"rename invalidation is distinguished from removal");
+    CHECK(ged_edit_session_info_get(gedp, rename_ref, &info) == GED_EDIT_STALE,
+	"rename invalidates the old path session");
+
+    ged_edit_session_ref renamed_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "sph_renamed.s", NULL, &renamed_ref) ==
+	GED_EDIT_OK, "a new session attaches to the renamed object");
+    CHECK(ged_edit_session_cancel(gedp, renamed_ref) == GED_EDIT_OK,
+	"renamed object session cancels cleanly");
+
+    ged_edit_session_ref nested_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "group.c/tor.s", NULL, &nested_ref) ==
+	GED_EDIT_OK, "nested invalidation test begins a path session");
+    const char *remove_child[] = {"rm", "group.c/tor.s", NULL};
+    CHECK(ged_exec(gedp, 2, remove_child) == BRLCAD_OK,
+	"an ordinary CLI command removes the edited nested occurrence");
+    CHECK(!obs.kinds.empty() &&
+	obs.kinds.back() == GED_EDIT_SESSION_INVALIDATE &&
+	obs.paths.back() == "/group.c/tor.s" &&
+	obs.replacement_paths.back().empty(),
+	"nested occurrence removal invalidates the affected path session");
+    CHECK(obs.invalidation_reasons.back() == GED_EDIT_INVALIDATION_PATH_REMOVED,
+	"nested occurrence invalidation reports that its path was removed");
+    CHECK(ged_edit_session_info_get(gedp, nested_ref, &info) == GED_EDIT_STALE,
+	"removed nested occurrence leaves no writable stale session");
+
+    ged_edit_session_ref removed_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "sph_renamed.s", NULL, &removed_ref) ==
+	GED_EDIT_OK, "remove invalidation test begins a session");
+    const char *remove_object[] = {"kill", "sph_renamed.s", NULL};
+    CHECK(ged_exec(gedp, 2, remove_object) == BRLCAD_OK,
+	"an ordinary CLI command removes the session source object");
+    CHECK(!obs.kinds.empty() &&
+	obs.kinds.back() == GED_EDIT_SESSION_INVALIDATE &&
+	obs.paths.back() == "/sph_renamed.s" &&
+	obs.replacement_paths.back().empty(),
+	"object removal invalidates without advertising a replacement");
+    CHECK(obs.invalidation_reasons.back() ==
+	GED_EDIT_INVALIDATION_SOURCE_REMOVED,
+	"object removal reports a terminal source removal");
+    CHECK(ged_edit_session_info_get(gedp, removed_ref, &info) == GED_EDIT_STALE &&
+	db_lookup(gedp->dbip, "sph_renamed.s", LOOKUP_QUIET) == RT_DIR_NULL,
+	"removed object cannot be recovered through the stale session");
+
+    CHECK(ged_edit_observer_remove(gedp, token) == 1,
+	"database invalidation observer removes cleanly");
+}
+
+
+static void
+test_p1_closedb_invalidation(struct ged *gedp, const char *db_path)
+{
+    struct rt_tor_internal before;
+    CHECK(read_tor(gedp, "tor.s", &before) == BRLCAD_OK,
+	"closedb invalidation test reads the committed torus");
+    struct edit_session_observer obs;
+    ged_edit_observer_token token = ged_edit_observer_add(gedp,
+	edit_session_cb, &obs);
+    CHECK(token != 0, "closedb invalidation observer registers");
+
+    const char *intermediate[] = {
+	"edit", "-i", "tor.s", "r1", "123.5", NULL
+    };
+    CHECK(ged_exec(gedp, 5, intermediate) == BRLCAD_OK,
+	"closedb invalidation test leaves a dirty session open");
+    ged_edit_session_ref old_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_find(gedp, "tor.s", &old_ref) == GED_EDIT_OK,
+	"closedb invalidation test captures the active session");
+
+    const char *close_cmd[] = {"closedb", NULL};
+    CHECK(ged_exec(gedp, 1, close_cmd) == BRLCAD_OK && !gedp->dbip,
+	"closedb succeeds with an active edit session");
+    struct ged_edit_session_info info = {};
+    CHECK(!obs.kinds.empty() &&
+	obs.kinds.back() == GED_EDIT_SESSION_INVALIDATE &&
+	obs.invalidation_reasons.back() == GED_EDIT_INVALIDATION_DATABASE_CLOSED &&
+	ged_edit_session_info_get(gedp, old_ref, &info) == GED_EDIT_STALE,
+	"closedb invalidates the transaction before destroying its database");
+
+    const char *open_cmd[] = {"opendb", db_path, NULL};
+    CHECK(ged_exec(gedp, 2, open_cmd) == BRLCAD_OK && gedp->dbip,
+	"the same GED context reopens after closedb invalidation");
+    struct rt_tor_internal after;
+    CHECK(read_tor(gedp, "tor.s", &after) == BRLCAD_OK &&
+	NEAR_EQUAL(after.r_a, before.r_a, NEAR_ENOUGH),
+	"closedb invalidation never commits intermediate geometry");
+    ged_edit_session_ref fresh_ref = GED_EDIT_SESSION_REF_NULL;
+    CHECK(ged_edit_session_begin(gedp, "tor.s", NULL, &fresh_ref) ==
+	GED_EDIT_OK && ged_edit_session_cancel(gedp, fresh_ref) == GED_EDIT_OK,
+	"reopened GED context accepts new edit sessions");
+    CHECK(ged_edit_observer_remove(gedp, token) == 1,
+	"closedb invalidation observer removes cleanly");
 }
 
 
@@ -2123,12 +2856,14 @@ test_p3_list_ops_tor_json(struct ged *gedp)
           "edit tor --list-ops=json contains 'prim_type' JSON key");
     CHECK(json && strstr(json, "\"tor\"") != NULL,
           "edit tor --list-ops=json contains '\"tor\"'");
-    CHECK(json && strstr(json, "canonical_name") != NULL,
-          "edit tor --list-ops=json contains canonical_name");
+    CHECK(json && strstr(json, "\"name\": \"r1\"") != NULL,
+          "edit tor --list-ops=json contains stable canonical name");
+    CHECK(json && strstr(json, "\"symbol\": \"ECMD_TOR_R1\"") != NULL,
+          "edit tor --list-ops=json contains stable ECMD symbol");
     CHECK(json && strstr(json, "aliases") != NULL,
           "edit tor --list-ops=json contains aliases");
     CHECK(json && strstr(json, "\"set_radius_1\"") != NULL,
-          "edit tor --list-ops=json includes canonical set_radius_1");
+          "edit tor --list-ops=json includes friendly set_radius_1 alias");
     CHECK(json && strstr(json, "\"r1\"") != NULL,
           "edit tor --list-ops=json includes alias r1");
 }
@@ -2589,20 +3324,21 @@ test_p4_eto_list_ops_complete(struct ged *gedp)
           "edit eto --list-ops lists 'rotate_c'");
 }
 
-/* 4-13: tgc move_end_h_adj_c_d — POINT param (adj C,D variant) */
+/* 4-13: the supported C,D-adjusting height operation is executable. */
 static void
 test_p4_tgc_move_end_h_adj_cd(struct ged *gedp)
 {
-    const char *av[] = { "edit", "tgc.s", "move_end_h_adj_c_d", "20", "0", "8", NULL };
+    const char *av[] = { "edit", "tgc.s", "scale_h_cd", "8", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
-    CHECK(ged_exec(gedp, 6, av) == BRLCAD_OK,
-          "tgc move_end_h_adj_c_d 20 0 8 returns OK");
+    CHECK(ged_exec(gedp, 4, av) == BRLCAD_OK,
+          "tgc scale_h_cd 8 returns OK");
     struct rt_tgc_internal tgc;
     if (read_tgc(gedp, "tgc.s", &tgc) == BRLCAD_OK) {
         double mag = MAGNITUDE(tgc.h);
-        CHECK(mag > 0.1, "tgc: |H| > 0 after move_end_h_adj_c_d");
+        CHECK(NEAR_EQUAL(mag, 8.0, NEAR_ENOUGH),
+	      "tgc: |H| == 8 after scale_h_cd");
     } else {
-        CHECK(0, "tgc: read_tgc succeeded after move_end_h_adj_c_d");
+        CHECK(0, "tgc: read_tgc succeeded after scale_h_cd");
     }
 }
 
@@ -2664,8 +3400,188 @@ create_p5_fixture(const char *dbpath)
         return BRLCAD_ERROR;
     }
 
+    /* --- planar sketch with one line segment ----------------------- */
+    struct rt_sketch_internal *skt;
+    BU_ALLOC(skt, struct rt_sketch_internal);
+    skt->magic = RT_SKETCH_INTERNAL_MAGIC;
+    VSET(skt->V, 0, 0, 0);
+    VSET(skt->u_vec, 1, 0, 0);
+    VSET(skt->v_vec, 0, 1, 0);
+    skt->vert_count = 4;
+    skt->verts = (point2d_t *)bu_malloc(4 * sizeof(point2d_t),
+	"GED edit sketch vertices");
+    V2SET(skt->verts[0], 0, 0);
+    V2SET(skt->verts[1], 10, 0);
+    V2SET(skt->verts[2], 10, 10);
+    V2SET(skt->verts[3], 0, 10);
+    struct line_seg *line;
+    BU_ALLOC(line, struct line_seg);
+    line->magic = CURVE_LSEG_MAGIC;
+    line->start = 0;
+    line->end = 1;
+    skt->curve.count = 1;
+    skt->curve.segment = (void **)bu_malloc(sizeof(void *),
+	"GED edit sketch segments");
+    skt->curve.reverse = (int *)bu_calloc(1, sizeof(int),
+	"GED edit sketch reverse flags");
+    skt->curve.segment[0] = line;
+    if (wdb_export(wdbp, "sketch.s", (void *)skt, ID_SKETCH, 1.0) != 0) {
+	bu_log("wdb_export sketch failed\n");
+	db_close(wdbp->dbip);
+	return BRLCAD_ERROR;
+    }
+
     db_close(wdbp->dbip);
     return BRLCAD_OK;
+}
+
+
+/* ------------------------------------------------------------------ *
+ * sketch: the shared session uses true 2-D UV values and preserves  *
+ * selection state across command, widget, and manipulator clients.  *
+ * ------------------------------------------------------------------ */
+static void
+test_p5_sketch_session_state(struct ged *gedp)
+{
+    const char *json_av[] = {"edit", "sketch", "--list-ops=json", NULL};
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 3, json_av) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "point2") &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "vector2") &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "integer_list") &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "scalar_list") &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "min_count"),
+	"sketch descriptor publishes 2-D and variable-list semantics");
+
+    const char *select_av[] = {
+	"edit", "-i", "sketch.s", "pick_vertex", "2", NULL
+    };
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 5, select_av) == BRLCAD_OK,
+	"sketch CLI selects a vertex in the shared session");
+
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    struct ged_edit_session_info info = {};
+    CHECK(ged_edit_session_find(gedp, "sketch.s", &session) == GED_EDIT_OK &&
+	ged_edit_session_info_get(gedp, session, &info) == GED_EDIT_OK &&
+	info.revision == 1 && !info.dirty,
+	"sketch selection advances revision without dirtying geometry");
+
+    struct rt_edit_param_bounds vertex_bounds = {};
+    CHECK(ged_edit_session_parameter_bounds_get(gedp, session,
+	info.command_id, 0, &vertex_bounds) == GED_EDIT_OK &&
+	vertex_bounds.has_maximum &&
+	fabs(vertex_bounds.maximum - 3.0) < NEAR_ENOUGH,
+	"sketch session exposes current vertex topology to controls");
+    const char *invalid_select_av[] = {
+	"edit", "-i", "sketch.s", "pick_vertex", "4", NULL
+    };
+    CHECK(ged_exec(gedp, 5, invalid_select_av) == BRLCAD_ERROR &&
+	ged_edit_session_info_get(gedp, session, &info) == GED_EDIT_OK &&
+	info.revision == 1 && !info.dirty,
+	"sketch topology bounds reject an unavailable vertex atomically");
+
+    const char *get_select_av[] = {
+	"edit", "sketch.s", "get", "pick_vertex", NULL
+    };
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 4, get_select_av) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "2"),
+	"sketch command readback observes the authoritative selection");
+
+    const char *move_av[] = {
+	"edit", "-i", "sketch.s", "move_vertex", "12.5", "11.5", NULL
+    };
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 6, move_av) == BRLCAD_OK,
+	"sketch move_vertex accepts exactly two UV coordinates");
+
+    struct rt_db_internal preview = RT_DB_INTERNAL_INIT_ZERO;
+    bool moved = false;
+    if (ged_edit_session_internal_copy(gedp, session, &preview) == GED_EDIT_OK &&
+	preview.idb_type == ID_SKETCH && preview.idb_ptr) {
+	struct rt_sketch_internal *working =
+	    (struct rt_sketch_internal *)preview.idb_ptr;
+	moved = NEAR_EQUAL(working->verts[2][0], 12.5, NEAR_ENOUGH) &&
+	    NEAR_EQUAL(working->verts[2][1], 11.5, NEAR_ENOUGH);
+    }
+    rt_db_free_internal(&preview);
+    CHECK(moved,
+	"sketch session snapshot contains the command-side vertex move");
+
+    const char *get_move_av[] = {
+	"edit", "sketch.s", "get", "move_vertex", NULL
+    };
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 4, get_move_av) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "12.5") &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "11.5"),
+	"sketch CLI reads the same moved UV values as graphical clients");
+
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 4, get_select_av) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "2"),
+	"sketch selection remains authoritative after a geometry update");
+
+    const char *extra_move_av[] = {
+	"edit", "-i", "sketch.s", "move_vertex", "1", "2", "3", NULL
+    };
+    CHECK(ged_exec(gedp, 7, extra_move_av) == BRLCAD_ERROR,
+	"fixed-width sketch commands reject surplus typed values");
+
+    const char *short_bezier_av[] = {
+	"edit", "-i", "sketch.s", "append_bezier", "0", NULL
+    };
+    CHECK(ged_exec(gedp, 5, short_bezier_av) == BRLCAD_ERROR,
+	"sketch variable-list commands enforce their minimum arity");
+
+    const char *bezier_av[] = {
+	"edit", "-i", "sketch.s", "append_bezier", "0", "1", "2", NULL
+    };
+    CHECK(ged_exec(gedp, 7, bezier_av) == BRLCAD_OK,
+	"sketch CLI submits a typed variable control-vertex list");
+
+    const char *move_list_av[] = {
+	"edit", "-i", "sketch.s", "move_vertex_list",
+	"1", "-2", "0", "3", NULL
+    };
+    CHECK(ged_exec(gedp, 8, move_list_av) == BRLCAD_OK,
+	"sketch CLI combines a fixed 2-D delta with a variable vertex list");
+
+    struct rt_db_internal topology_preview = RT_DB_INTERNAL_INIT_ZERO;
+    bool topology_changed = false;
+    if (ged_edit_session_internal_copy(gedp, session, &topology_preview) ==
+	    GED_EDIT_OK && topology_preview.idb_type == ID_SKETCH &&
+	topology_preview.idb_ptr) {
+	struct rt_sketch_internal *working =
+	    (struct rt_sketch_internal *)topology_preview.idb_ptr;
+	topology_changed = working->curve.count == 2 &&
+	    NEAR_EQUAL(working->verts[0][0], 1.0, NEAR_ENOUGH) &&
+	    NEAR_EQUAL(working->verts[0][1], -2.0, NEAR_ENOUGH) &&
+	    NEAR_EQUAL(working->verts[3][0], 1.0, NEAR_ENOUGH) &&
+	    NEAR_EQUAL(working->verts[3][1], 8.0, NEAR_ENOUGH);
+    }
+    rt_db_free_internal(&topology_preview);
+    CHECK(topology_changed,
+	"typed sketch list commands update only the shared intermediate");
+
+    const char *reset_av[] = {"edit", "sketch.s", "reset", NULL};
+    CHECK(ged_exec(gedp, 3, reset_av) == BRLCAD_OK,
+	"sketch shared session cancels cleanly");
+
+    struct directory *dp = db_lookup(gedp->dbip, "sketch.s", LOOKUP_QUIET);
+    struct rt_db_internal committed = RT_DB_INTERNAL_INIT_ZERO;
+    bool unchanged = dp && rt_db_get_internal(&committed, dp, gedp->dbip,
+	NULL) >= 0;
+    if (unchanged) {
+	struct rt_sketch_internal *stored =
+	    (struct rt_sketch_internal *)committed.idb_ptr;
+	unchanged = NEAR_EQUAL(stored->verts[2][0], 10.0, NEAR_ENOUGH) &&
+	    NEAR_EQUAL(stored->verts[2][1], 10.0, NEAR_ENOUGH);
+    }
+    rt_db_free_internal(&committed);
+    CHECK(unchanged,
+	"cancel leaves committed sketch geometry unchanged");
 }
 
 /* ------------------------------------------------------------------ *
@@ -2705,27 +3621,33 @@ test_p5_pipe_select_next_prev(struct ged *gedp)
 {
     /* Select the point nearest (0,0,0) */
     {
-        const char *av[] = { "edit", "pipe.s", "select_point", "0", "0", "0", NULL };
+        const char *av[] = { "edit", "-i", "pipe.s", "select_point", "0", "0", "0", NULL };
         bu_vls_trunc(gedp->ged_result_str, 0);
-        int ret = ged_exec(gedp, 6, av);
+        int ret = ged_exec(gedp, 7, av);
         CHECK(ret == BRLCAD_OK,
               "pipe.s select_point 0 0 0 returns OK");
     }
     /* Advance to the next point (0,0,10) */
     {
-        const char *av[] = { "edit", "pipe.s", "next_point", NULL };
+        const char *av[] = { "edit", "-i", "pipe.s", "next_point", NULL };
         bu_vls_trunc(gedp->ged_result_str, 0);
-        int ret = ged_exec(gedp, 3, av);
+        int ret = ged_exec(gedp, 4, av);
         CHECK(ret == BRLCAD_OK,
               "pipe.s next_point returns OK");
     }
     /* Step back to the first point */
     {
-        const char *av[] = { "edit", "pipe.s", "previous_point", NULL };
+        const char *av[] = { "edit", "-i", "pipe.s", "previous_point", NULL };
         bu_vls_trunc(gedp->ged_result_str, 0);
-        int ret = ged_exec(gedp, 3, av);
+        int ret = ged_exec(gedp, 4, av);
         CHECK(ret == BRLCAD_OK,
               "pipe.s previous_point returns OK");
+    }
+    {
+	const char *av[] = { "edit", "pipe.s", "reset", NULL };
+	bu_vls_trunc(gedp->ged_result_str, 0);
+	CHECK(ged_exec(gedp, 3, av) == BRLCAD_OK,
+	      "pipe navigation session resets cleanly");
     }
 }
 
@@ -2807,8 +3729,60 @@ test_p5_arb8_list_ops(struct ged *gedp)
           "edit arb8 --list-ops lists 'move_edge'");
     CHECK(out && strstr(out, "move_vertex") != NULL,
           "edit arb8 --list-ops lists 'move_vertex'");
+    CHECK(out && strstr(out, "select_vertex") != NULL,
+          "edit arb8 --list-ops lists topology selection operations");
     CHECK(out && strstr(out, "rotate_face") != NULL,
           "edit arb8 --list-ops lists 'rotate_face'");
+}
+
+/* ------------------------------------------------------------------ *
+ * arb8: viewport/CLI selection shares revisioned non-dirty state     *
+ * ------------------------------------------------------------------ */
+static void
+test_p5_arb8_selection_state(struct ged *gedp)
+{
+    const char *select_av[] = {
+	"edit", "-i", "arb8.s", "select_vertex", "6", NULL
+    };
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 5, select_av) == BRLCAD_OK,
+	"arb8.s select_vertex records viewport selection through the CLI");
+
+    ged_edit_session_ref session = GED_EDIT_SESSION_REF_NULL;
+    struct ged_edit_session_info info = {};
+    CHECK(ged_edit_session_find(gedp, "arb8.s", &session) == GED_EDIT_OK &&
+	ged_edit_session_info_get(gedp, session, &info) == GED_EDIT_OK &&
+	info.revision == 1 && !info.dirty,
+	"ARB selection advances shared state without marking geometry dirty");
+    const struct rt_edit_prim_desc *descriptor = NULL;
+    int select_command = 0;
+    if (ged_edit_session_descriptor_get(gedp, session, &descriptor) ==
+	GED_EDIT_OK && descriptor) {
+	for (int i = 0; i < descriptor->ncmd; i++) {
+	    if (descriptor->cmds[i].name &&
+		BU_STR_EQUAL(descriptor->cmds[i].name,
+		    "ECMD_ARB_SELECT_VERTEX")) {
+		select_command = descriptor->cmds[i].cmd_id;
+		break;
+	    }
+	}
+    }
+    struct rt_edit_cmd_values values;
+    CHECK(select_command && ged_edit_session_command_values_get(gedp,
+	session, select_command, &values) == GED_EDIT_OK &&
+	values.value_count == 1 && values.value_valid[0] &&
+	(int)values.values[0] == 6,
+	"ARB widget/manipulator readback observes command-side selection");
+    const char *get_av[] = {
+	"edit", "arb8.s", "get", "select_vertex", NULL
+    };
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    CHECK(ged_exec(gedp, 4, get_av) == BRLCAD_OK &&
+	strstr(bu_vls_cstr(gedp->ged_result_str), "6"),
+	"command-line edit reads the same ARB selection state");
+    const char *reset_av[] = {"edit", "arb8.s", "reset", NULL};
+    CHECK(ged_exec(gedp, 3, reset_av) == BRLCAD_OK,
+	"ARB selection-only session closes without a database write");
 }
 
 /* ------------------------------------------------------------------ *
@@ -3188,9 +4162,41 @@ main(int ac, char *av[])
         test_p1_buf_get_missing(gedp);
         test_p1_buf_set_get(gedp);
         test_p1_buf_abandon(gedp);
-        test_p1_buf_flush(gedp);
-        test_p1_perturb_regression(gedp);
+	test_p1_buf_flush(gedp);
+	test_p1_edit_session_api(gedp);
+	test_p1_alternate_occurrence_session_conflict(gedp);
+	test_p1_independent_ged_context_sessions(gedp,
+	    bu_vls_cstr(&p1_path));
+	test_p1_selection_session_state(gedp);
+	test_p1_reentrant_session_observer(gedp);
+	test_p1_database_event_invalidation(gedp);
+	test_p1_closedb_invalidation(gedp, bu_vls_cstr(&p1_path));
+	test_p1_perturb_regression(gedp);
+
+	/* Leave a deliberately dirty session active.  ged_close must cancel it
+	 * before tearing down drawable/view state, and must never turn shutdown
+	 * into an implicit database write. */
+	struct rt_tor_internal shutdown_before;
+	CHECK(read_tor(gedp, "tor.s", &shutdown_before) == BRLCAD_OK,
+	    "active-session shutdown test reads the committed baseline");
+	const char *shutdown_edit[] = {
+	    "edit", "-i", "tor.s", "r1", "123.5", NULL
+	};
+	CHECK(ged_exec(gedp, 5, shutdown_edit) == BRLCAD_OK,
+	    "active-session shutdown test leaves a dirty edit open");
         ged_close(gedp);
+
+	gedp = open_fixture(bu_vls_cstr(&p1_path));
+	CHECK(gedp != NULL,
+	    "database reopens after closing with an active edit session");
+	if (gedp) {
+	    struct rt_tor_internal shutdown_after;
+	    CHECK(read_tor(gedp, "tor.s", &shutdown_after) == BRLCAD_OK &&
+		NEAR_EQUAL(shutdown_after.r_a, shutdown_before.r_a,
+		    NEAR_ENOUGH),
+		"ged_close cancels an active edit without committing it");
+	    ged_close(gedp);
+	}
     }
     bu_vls_free(&p1_path);
 
@@ -3433,9 +4439,12 @@ main(int ac, char *av[])
         test_p5_arb8_list_ops(gedp);
         test_p5_arb8_list_ops_json(gedp);
         test_p5_all_prim_ops_has_arb8(gedp);
+        test_p5_arb8_selection_state(gedp);
         test_p5_arb8_move_face(gedp);
         test_p5_arb8_move_vertex(gedp);
         test_p5_arb8_type_option(gedp);
+	bu_log("--- Section 5: sketch shared editing semantics ---\n");
+	test_p5_sketch_session_state(gedp);
         ged_close(gedp);
     }
     bu_vls_free(&p5_path);

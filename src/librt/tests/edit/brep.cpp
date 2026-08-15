@@ -29,7 +29,7 @@
  *   - ECMD_BREP_SRF_SELECT stores face/i/j correctly
  *   - ECMD_BREP_SRF_CV_MOVE translates the CV by the given delta
  *   - ECMD_BREP_SRF_CV_SET places the CV at the given absolute position
- *   - rt_edit_brep_get_params returns sensible values
+ *   - rt_edit_brep_get_values returns sensible values
  *   - Invalid inputs are rejected gracefully (wrong e_inpara, bad face index)
  */
 
@@ -335,15 +335,17 @@ test_brep_get_params_select(struct rt_edit *s)
     s->e_para[2] = 2.0;
     rt_edit_process(s);
 
-    fastf_t vals[3] = {0, 0, 0};
-    int n = EDOBJ[ID_BREP].ft_edit_get_params(s, ECMD_BREP_SRF_SELECT, vals);
+    struct rt_edit_cmd_values vals;
+    int status = rt_edit_cmd_values_get(s, ECMD_BREP_SRF_SELECT, &vals);
 
-    if (n != 3 || (int)vals[0] != 0 || (int)vals[1] != 1 || (int)vals[2] != 2)
+    if (status != RT_EDIT_VALUE_OK || vals.value_count != 3 ||
+	(int)vals.values[0] != 0 || (int)vals.values[1] != 1 ||
+	(int)vals.values[2] != 2)
 	bu_exit(1,
-		"ERROR: get_params(SELECT) returned n=%d vals=(%.0f,%.0f,%.0f)\n",
-		n, vals[0], vals[1], vals[2]);
+		"ERROR: get_values(SELECT) status=%d values=(%.0f,%.0f,%.0f)\n",
+		status, vals.values[0], vals.values[1], vals.values[2]);
 
-    bu_log("get_params(ECMD_BREP_SRF_SELECT) PASS: (0,1,2)\n");
+    bu_log("get_values(ECMD_BREP_SRF_SELECT) PASS: (0,1,2)\n");
 }
 
 /* 8. Descriptor is well-formed */

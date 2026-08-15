@@ -119,7 +119,7 @@ struct bu_structparse mged_vparse[] = {
 };
 
 static void
-set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
+set_dirty_flag(const struct bu_structparse *sdp,
 	       const char *UNUSED(name),
 	       void *UNUSED(base),
 	       const char *UNUSED(value),
@@ -130,6 +130,10 @@ set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
     for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
 	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
 	if (m_dmp->display_variables == mged_variables) {
+	    if (sdp && sdp->sp_name &&
+		(BU_STR_EQUAL(sdp->sp_name, "fb") ||
+		 BU_STR_EQUAL(sdp->sp_name, "fb_overlay")))
+		m_dmp->display_framebuffer_state_dirty = 1;
 	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
 	}
     }

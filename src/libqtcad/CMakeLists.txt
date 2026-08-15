@@ -65,11 +65,12 @@ set(
   QgPluginContext.cpp
   QgPluginManager.cpp
   QgPolyFilter.cpp
+  QgPrimitiveEdit.cpp
   QgQuadView.cpp
   QgSW.cpp
   QgSelectFilter.cpp
   QgSession.cpp
-  QgSketchFilter.cpp
+  QgSketchEdit.cpp
   QgToolBase.cpp
   QgToolPalette.cpp
   QgTreeSelectionModel.cpp

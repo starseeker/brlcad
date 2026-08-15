@@ -100,6 +100,17 @@ bobol_view_snap_point(BObolViewController *controller,
 	bool consumeSourceFullDetail,
 	BObolViewSnapRecord &record);
 
+/** As bobol_view_snap_point, restricted by SoBRLSnapAction::SourceFilter. */
+BOBOL_EXPORT int
+bobol_view_snap_point_filtered(BObolViewController *controller,
+	const SbVec3f &query,
+	float tolerance,
+	uint32_t enabledKinds,
+	uint32_t sourceFilter,
+	SoBRLSnapAction::GeometryPolicy geometryPolicy,
+	bool consumeSourceFullDetail,
+	BObolViewSnapRecord &record);
+
 #endif /* BOBOL_BVIEWQUERY_H */
 
 // Local Variables:

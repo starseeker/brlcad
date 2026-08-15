@@ -147,7 +147,7 @@ static const struct rt_edit_param_desc rhc_c_params[] = {
 
 static const struct rt_edit_cmd_desc rhc_cmds[] = {
     {
-	ECMD_RHC_B,           /* cmd_id       */
+	ECMD_RHC_B, RT_EDIT_CMD_NAME(ECMD_RHC_B),           /* cmd_id       */
 	"Set B",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -157,7 +157,7 @@ static const struct rt_edit_cmd_desc rhc_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_RHC_H,           /* cmd_id       */
+	ECMD_RHC_H, RT_EDIT_CMD_NAME(ECMD_RHC_H),           /* cmd_id       */
 	"Set H",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -167,7 +167,7 @@ static const struct rt_edit_cmd_desc rhc_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_RHC_R,           /* cmd_id       */
+	ECMD_RHC_R, RT_EDIT_CMD_NAME(ECMD_RHC_R),           /* cmd_id       */
 	"Set r",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -177,7 +177,7 @@ static const struct rt_edit_cmd_desc rhc_cmds[] = {
 	NULL                  /* req_types */
     },
     {
-	ECMD_RHC_C,           /* cmd_id       */
+	ECMD_RHC_C, RT_EDIT_CMD_NAME(ECMD_RHC_C),           /* cmd_id       */
 	"Set c",              /* label        */
 	"geometry",           /* category     */
 	1,                    /* nparam       */
@@ -194,13 +194,49 @@ static const struct rt_edit_prim_desc rhc_prim_desc = {
     4,                    /* ncmd         */
     rhc_cmds              /* cmds         */,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
 rt_edit_rhc_edit_desc(void)
 {
     return &rhc_prim_desc;
+}
+
+C_DECL int
+rt_edit_rhc_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    struct rt_rhc_internal *rhc =
+	(struct rt_rhc_internal *)s->es_int.idb_ptr;
+    RT_RHC_CK_MAGIC(rhc);
+
+    switch (cmd_id) {
+	case ECMD_RHC_B:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(rhc->rhc_B) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_RHC_H:
+	    rt_edit_cmd_values_set_value(result, 0,
+		MAGNITUDE(rhc->rhc_H) * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_RHC_R:
+	    rt_edit_cmd_values_set_value(result, 0,
+		rhc->rhc_r * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	case ECMD_RHC_C:
+	    rt_edit_cmd_values_set_value(result, 0,
+		rhc->rhc_c * s->base2local);
+	    return RT_EDIT_VALUE_OK;
+	default:
+	    return RT_EDIT_VALUE_UNAVAILABLE;
+    }
 }
 
 #define V3BASE2LOCAL(_pt) (_pt)[X]*base2local, (_pt)[Y]*base2local, (_pt)[Z]*base2local

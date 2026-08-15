@@ -47,6 +47,7 @@ struct BObolCompactInstanceEntry {
 	wireGeometry(FALSE),
 	pointGeometry(FALSE),
 	meshGeometry(FALSE),
+	viewDependentCsgGeometry(FALSE),
 	lodBacked(FALSE),
 	sourceMeshRequestValid(FALSE),
 	geometryRevision(1),
@@ -97,6 +98,7 @@ struct BObolCompactInstanceEntry {
     SbBool wireGeometry;
     SbBool pointGeometry;
     SbBool meshGeometry;
+    SbBool viewDependentCsgGeometry;
     SbBool lodBacked;
     SbBool sourceMeshRequestValid;
     BObolSourceMeshRequest sourceMeshRequest;
@@ -124,6 +126,7 @@ struct BObolCompactInstanceIndex {
     BObolCompactInstanceIndex(void) :
 	wireCount(0),
 	shadedCount(0),
+	viewDependentCsgGeometryCount(0),
 	sourceMeshRequestCount(0)
     {
 	sourceBounds.makeEmpty();
@@ -169,6 +172,7 @@ struct BObolCompactInstanceIndex {
     bool sourceBoundsDirty = false;
     int wireCount;
     int shadedCount;
+    size_t viewDependentCsgGeometryCount;
     size_t sourceMeshRequestCount;
 };
 

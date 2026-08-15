@@ -29,6 +29,11 @@ int draw_test_obol_view_init(struct ged *gedp, struct ged_view_context *view_ctx
 int draw_test_obol_progressive_drain(struct ged *gedp, struct ged_view_context *view_ctx,
 	unsigned int max_attempts, unsigned int sleep_milliseconds);
 
+/* Emit the retained Obol scene diagnostics when GED_TEST_DRAW_OBOL_DEBUG is
+ * enabled. */
+void draw_test_obol_debug_scene(struct ged *gedp, int id,
+	struct ged_view_context *view_ctx);
+
 __END_DECLS
 
 static inline struct bv *

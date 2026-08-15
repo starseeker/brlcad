@@ -787,7 +787,7 @@ qgcanvas_sync_obol_grid(QgCanvasState &s,
 {
     const char *overlayId = "faceplate::grid";
     const int childIndex = qgcanvas_find_obol_grid_child(group, overlayId);
-    if (!state.draw) {
+    if (!state.draw && !state.snap) {
 	if (childIndex >= 0) {
 	    group->removeChild(childIndex);
 	    qgcanvas_request_obol_render_if_idle(s, "faceplate");

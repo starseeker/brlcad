@@ -833,23 +833,61 @@ static bool
 _view_obj_feature_style_get(const GedViewManagedFeatureRef &ref,
     struct ged_view_feature_style *style)
 {
-    BObolFeatureStyle obol_style;
-    if (ref.kind != GedViewManagedFeatureKind::Feature || !ref.current() ||
-	!style || !ref.view->features().style(ref.feature, obol_style))
+    if (!ref.current() || !style)
 	return false;
-    _view_obj_style_to_ged(style, obol_style);
-    if (style->arrow < 0)
-	style->arrow = 0;
-    return true;
+    if (ref.kind == GedViewManagedFeatureKind::Feature) {
+	BObolFeatureStyle obol_style;
+	if (!ref.view->features().style(ref.feature, obol_style))
+	    return false;
+	_view_obj_style_to_ged(style, obol_style);
+	if (style->arrow < 0)
+	    style->arrow = 0;
+	return true;
+    }
+    if (ref.kind == GedViewManagedFeatureKind::Polygon) {
+	SbColor edge_color;
+	SbBool visible = FALSE;
+	if (!ref.view->polygons().edgeColor(ref.polygon, edge_color) ||
+	    !ref.view->polygons().isVisible(ref.polygon, visible))
+	    return false;
+	*style = ged_view_feature_style_default();
+	style->visible = visible ? 1 : 0;
+	style->color_valid = 1;
+	style->color[0] = _view_obj_color_channel(edge_color[0]);
+	style->color[1] = _view_obj_color_channel(edge_color[1]);
+	style->color[2] = _view_obj_color_channel(edge_color[2]);
+	return true;
+    }
+    return false;
 }
 
 static bool
 _view_obj_feature_style_apply(const GedViewManagedFeatureRef &ref,
     const struct ged_view_feature_style *style, bool recursive)
 {
-    return ref.kind == GedViewManagedFeatureKind::Feature && ref.current() &&
-	style && ref.view->features().applyStyle(ref.feature,
+    if (!ref.current() || !style)
+	return false;
+    if (ref.kind == GedViewManagedFeatureKind::Feature)
+	return ref.view->features().applyStyle(ref.feature,
 	    _view_obj_style_from_ged(style), recursive ? TRUE : FALSE);
+    if (ref.kind == GedViewManagedFeatureKind::Polygon) {
+	bool requested = false;
+	bool applied = true;
+	if (style->color_valid) {
+	    requested = true;
+	    applied = applied && ref.view->polygons().setEdgeColor(ref.polygon,
+		SbColor(static_cast<float>(style->color[0]) / 255.0f,
+		    static_cast<float>(style->color[1]) / 255.0f,
+		    static_cast<float>(style->color[2]) / 255.0f));
+	}
+	if (style->visible >= 0) {
+	    requested = true;
+	    applied = applied && ref.view->polygons().setVisible(ref.polygon,
+		style->visible ? TRUE : FALSE);
+	}
+	return requested && applied;
+    }
+    return false;
 }
 
 int
@@ -1002,6 +1040,11 @@ _objs_cmd_color(void *bs, int argc, const char **argv)
     if (ref.kind == GedViewManagedFeatureKind::Feature)
 	return _view_obj_feature_style_apply(ref, &style, recurse != 0) ?
 	    BRLCAD_OK : BRLCAD_ERROR;
+    if (ref.kind == GedViewManagedFeatureKind::Polygon) {
+	if (!_view_obj_feature_style_apply(ref, &style, recurse != 0))
+	    return BRLCAD_ERROR;
+	return _view_polygon_sync_sketch(gd) ? BRLCAD_OK : BRLCAD_ERROR;
+    }
     return _view_obj_database_style_apply(ref, &style, recurse != 0) ?
 	BRLCAD_OK : BRLCAD_ERROR;
 }
@@ -1680,7 +1723,11 @@ _view_cmd_polygon(void *bs, int argc, const char **argv)
 	for (int i = 2; i < sub_argc; i++)
 	    uargv.push_back(sub_argv[i]);
 	uargv.push_back(NULL);
-	return _objs_cmd_update(gd, (int)uargv.size() - 1, uargv.data());
+	const int ret = _objs_cmd_update(gd,
+	    (int)uargv.size() - 1, uargv.data());
+	if (ret != BRLCAD_OK)
+	    return ret;
+	return _view_polygon_sync_sketch(gd) ? BRLCAD_OK : BRLCAD_ERROR;
     }
 
     std::vector<const char *> cargv;

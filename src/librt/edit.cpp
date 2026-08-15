@@ -37,8 +37,12 @@
 
 #include "common.h"
 
+#include <cmath>
+#include <cctype>
 #include <map>
 #include <cstring>
+#include <set>
+#include <string>
 
 extern "C" {
 #include "vmath.h"
@@ -307,7 +311,9 @@ rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *tol, 
     s->snap.spacing = 1.0;
     BU_EXTERNAL_INIT(&s->es_ckpt);
     s->edit_mode = RT_EDIT_DEFAULT;
-    s->tol = tol;
+    struct bn_tol default_tol = BN_TOL_INIT_TOL;
+    s->tol_storage = tol ? *tol : default_tol;
+    s->tol = &s->tol_storage;
     s->u_ptr = NULL;
     s->view_update_requested = 0;
     s->vlfree = NULL;
@@ -478,7 +484,9 @@ rt_edit_reinit(struct rt_edit *s, struct db_full_path *dfp, struct db_i *dbip,
     /* Reset to a clean idle state first */
     rt_edit_reset(s);
 
-    s->tol = tol;
+    struct bn_tol default_tol = BN_TOL_INIT_TOL;
+    s->tol_storage = tol ? *tol : default_tol;
+    s->tol = &s->tol_storage;
     if (v)
 	rt_edit_set_view(s, v);
 
@@ -534,6 +542,60 @@ rt_edit_set_str(struct rt_edit *s, int index, const char *str)
     bu_strlcpy(s->e_str[index], str, RT_EDIT_MAXSTR_LEN);
     if (index >= s->e_nstr)
 	s->e_nstr = index + 1;
+}
+
+void
+rt_edit_cmd_values_init(struct rt_edit_cmd_values *result)
+{
+    if (!result)
+	return;
+    memset(result, 0, sizeof(*result));
+}
+
+int
+rt_edit_cmd_values_set_value(struct rt_edit_cmd_values *result, int index,
+	fastf_t value)
+{
+    if (!result || index < 0 || index >= RT_EDIT_MAXPARA)
+	return BRLCAD_ERROR;
+    result->values[index] = value;
+    result->value_valid[index] = 1;
+    if ((size_t)(index + 1) > result->value_count)
+	result->value_count = (size_t)(index + 1);
+    return BRLCAD_OK;
+}
+
+int
+rt_edit_cmd_values_set_string(struct rt_edit_cmd_values *result, int index,
+	const char *value)
+{
+    if (!result || index < 0 || index >= RT_EDIT_MAXSTR || !value)
+	return BRLCAD_ERROR;
+    bu_strlcpy(result->strings[index], value, RT_EDIT_MAXSTR_LEN);
+    result->string_valid[index] = 1;
+    if ((size_t)(index + 1) > result->string_count)
+	result->string_count = (size_t)(index + 1);
+    return BRLCAD_OK;
+}
+
+enum rt_edit_value_status
+rt_edit_cmd_values_get(struct rt_edit *s, int command_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!result)
+	return RT_EDIT_VALUE_ERROR;
+    rt_edit_cmd_values_init(result);
+    if (!s || s->es_int.idb_type < 0 ||
+	EDOBJ[s->es_int.idb_type].magic != RT_FUNCTAB_MAGIC ||
+	!EDOBJ[s->es_int.idb_type].ft_edit_get_values)
+	return RT_EDIT_VALUE_UNAVAILABLE;
+    const int status = EDOBJ[s->es_int.idb_type].ft_edit_get_values(
+	s, command_id, result);
+    if (status != RT_EDIT_VALUE_OK)
+	rt_edit_cmd_values_init(result);
+    if (status < RT_EDIT_VALUE_ERROR || status > RT_EDIT_VALUE_OK)
+	return RT_EDIT_VALUE_ERROR;
+    return (enum rt_edit_value_status)status;
 }
 
 int
@@ -1285,6 +1347,31 @@ rt_knob_edit_sca(struct rt_edit *s, int matrix_edit)
    }
 }
 
+static int
+edit_internal_restore(struct rt_edit *s, const struct bu_external *snapshot,
+	int type)
+{
+    if (!s || !snapshot || !snapshot->ext_buf || type < 0 ||
+	EDOBJ[type].magic != RT_FUNCTAB_MAGIC)
+	return BRLCAD_ERROR;
+
+    if (s->ipe_ptr && EDOBJ[type].ft_prim_edit_destroy)
+	(*EDOBJ[type].ft_prim_edit_destroy)(s->ipe_ptr);
+    s->ipe_ptr = NULL;
+    rt_db_free_internal(&s->es_int);
+    RT_DB_INTERNAL_INIT(&s->es_int);
+    s->es_int.idb_minor_type = type;
+    mat_t identity;
+    MAT_IDN(identity);
+    if (rt_obj_import(&s->es_int, snapshot, identity, s->dbip) < 0)
+	return BRLCAD_ERROR;
+    if (EDOBJ[type].ft_prim_edit_create)
+	s->ipe_ptr = (*EDOBJ[type].ft_prim_edit_create)(s);
+    s->e_keytag = "";
+    rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
+    return BRLCAD_OK;
+}
+
 /*
  * A great deal of magic takes place here, to accomplish solid editing.
  *
@@ -1294,9 +1381,12 @@ rt_knob_edit_sca(struct rt_edit *s, int matrix_edit)
  * A lot of processing is deferred to here, so that the "p" command
  * can operate on an equal footing to mouse events.
  */
-void
-rt_edit_process(struct rt_edit *s)
+int
+rt_edit_process_result(struct rt_edit *s)
 {
+    if (!s)
+	return BRLCAD_ERROR;
+
     bu_clbk_t f = NULL;
     void *d = NULL;
 
@@ -1304,6 +1394,12 @@ rt_edit_process(struct rt_edit *s)
 
     int had_method = 0;
     const struct rt_db_internal *ip = &s->es_int;
+    if (ip->idb_type < 0 || EDOBJ[ip->idb_type].magic != RT_FUNCTAB_MAGIC) {
+	bu_vls_printf(s->log_str,
+	    "rt_edit_process: invalid primitive type %d.\n", ip->idb_type);
+	--s->view_update_requested;
+	return BRLCAD_ERROR;
+    }
     if (EDOBJ[ip->idb_type].ft_edit) {
 	bu_vls_trunc(s->log_str, 0);
 	if ((*EDOBJ[ip->idb_type].ft_edit)(s)) {
@@ -1311,9 +1407,13 @@ rt_edit_process(struct rt_edit *s)
 		rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_STR, BU_CLBK_DURING);
 		if (f)
 		    (*f)(0, NULL, d, NULL);
-		bu_vls_trunc(s->log_str, 0);
 	    }
-	    return;
+	    --s->view_update_requested;
+	    s->e_inpara = 0;
+	    s->e_nstr = 0;
+	    memset(s->e_str, 0, sizeof(s->e_str));
+	    s->e_mvalid = 0;
+	    return BRLCAD_ERROR;
 	}
 	if (bu_vls_strlen(s->log_str)) {
 	    rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_STR, BU_CLBK_DURING);
@@ -1345,6 +1445,12 @@ rt_edit_process(struct rt_edit *s)
 		rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 		if (f)
 		    (*f)(0, NULL, d, NULL);
+		--s->view_update_requested;
+		s->e_inpara = 0;
+		s->e_nstr = 0;
+		memset(s->e_str, 0, sizeof(s->e_str));
+		s->e_mvalid = 0;
+		return BRLCAD_ERROR;
 	    }
     }
 
@@ -1375,7 +1481,16 @@ rt_edit_process(struct rt_edit *s)
 
     // Inputs processed, reset
     s->e_inpara = 0;
+    s->e_nstr = 0;
+    memset(s->e_str, 0, sizeof(s->e_str));
     s->e_mvalid = 0;
+    return BRLCAD_OK;
+}
+
+void
+rt_edit_process(struct rt_edit *s)
+{
+    (void)rt_edit_process_result(s);
 }
 
 void
@@ -1423,24 +1538,10 @@ rt_edit_revert(struct rt_edit *s)
 
     int type = s->es_int.idb_type;
 
-    /* Release current contents */
-    rt_db_free_internal(&s->es_int);
-    RT_DB_INTERNAL_INIT(&s->es_int);
-
-    /* rt_obj_import dispatches on ip->idb_minor_type, which RT_DB_INTERNAL_INIT
-     * resets to -1.  Restore the saved type so the right ft_importN is called. */
-    s->es_int.idb_minor_type = type;
-
-    mat_t identity;
-    MAT_IDN(identity);
-    if (rt_obj_import(&s->es_int, &s->es_ckpt, identity, s->dbip) < 0) {
+    if (edit_internal_restore(s, &s->es_ckpt, type) != BRLCAD_OK) {
 	bu_vls_printf(s->log_str, "rt_edit_revert: import failed\n");
 	return BRLCAD_ERROR;
     }
-
-    /* If the type changed for some reason (shouldn't happen), keep the original */
-    if (s->es_int.idb_type != type)
-	s->es_int.idb_type = type;
 
     return BRLCAD_OK;
 }
@@ -1468,8 +1569,146 @@ edit_param_type_str(int type)
 	case RT_EDIT_PARAM_ENUM:    return "enum";
 	case RT_EDIT_PARAM_COLOR:   return "color";
 	case RT_EDIT_PARAM_MATRIX:  return "matrix";
+	case RT_EDIT_PARAM_POINT2:  return "point2";
+	case RT_EDIT_PARAM_VECTOR2: return "vector2";
+	case RT_EDIT_PARAM_SCALAR_LIST:  return "scalar_list";
+	case RT_EDIT_PARAM_INTEGER_LIST: return "integer_list";
 	default:                    return "unknown";
     }
+}
+
+static const char *
+edit_control_class_str(enum rt_edit_control_class control_class)
+{
+    switch (control_class) {
+	case RT_EDIT_CONTROL_GENERATED:   return "generated";
+	case RT_EDIT_CONTROL_ACTION:      return "action";
+	case RT_EDIT_CONTROL_CUSTOM:      return "custom";
+	case RT_EDIT_CONTROL_UNSUPPORTED: return "unsupported";
+	case RT_EDIT_CONTROL_INHERIT:
+	default:                          return "unclassified";
+    }
+}
+
+static const char *
+edit_selection_domain_str(enum rt_edit_selection_domain domain)
+{
+    switch (domain) {
+	case RT_EDIT_SELECTION_PRIMITIVE:     return "primitive";
+	case RT_EDIT_SELECTION_VERTEX:        return "vertex";
+	case RT_EDIT_SELECTION_EDGE:          return "edge";
+	case RT_EDIT_SELECTION_FACE:          return "face";
+	case RT_EDIT_SELECTION_SEGMENT:       return "segment";
+	case RT_EDIT_SELECTION_CONTROL_POINT: return "control_point";
+	case RT_EDIT_SELECTION_CUSTOM:        return "custom";
+	case RT_EDIT_SELECTION_NONE:
+	default:                              return "none";
+    }
+}
+
+static const char *
+edit_coordinate_space_str(enum rt_edit_coordinate_space space)
+{
+    switch (space) {
+	case RT_EDIT_COORDINATE_SCALAR:        return "scalar";
+	case RT_EDIT_COORDINATE_OBJECT:        return "object";
+	case RT_EDIT_COORDINATE_MODEL:         return "model";
+	case RT_EDIT_COORDINATE_VIEW:          return "view";
+	case RT_EDIT_COORDINATE_PARAMETRIC_2D: return "parametric_2d";
+	case RT_EDIT_COORDINATE_INFER:
+	default:                               return "infer";
+    }
+}
+
+static const char *
+edit_manipulator_hint_str(enum rt_edit_manipulator_hint hint)
+{
+    switch (hint) {
+	case RT_EDIT_MANIPULATOR_POINT:         return "point";
+	case RT_EDIT_MANIPULATOR_AXIS:          return "axis";
+	case RT_EDIT_MANIPULATOR_PLANE:         return "plane";
+	case RT_EDIT_MANIPULATOR_RADIUS:        return "radius";
+	case RT_EDIT_MANIPULATOR_ROTATION_RING: return "rotation_ring";
+	case RT_EDIT_MANIPULATOR_INDEXED_SET:   return "indexed_set";
+	case RT_EDIT_MANIPULATOR_CUSTOM:        return "custom";
+	case RT_EDIT_MANIPULATOR_NONE:
+	default:                                return "none";
+    }
+}
+
+static const char *
+edit_param_semantic_str(enum rt_edit_param_semantic semantic)
+{
+    switch (semantic) {
+	case RT_EDIT_SEMANTIC_INDEX:     return "index";
+	case RT_EDIT_SEMANTIC_POSITION:  return "position";
+	case RT_EDIT_SEMANTIC_DELTA:     return "delta";
+	case RT_EDIT_SEMANTIC_DIRECTION: return "direction";
+	case RT_EDIT_SEMANTIC_DISTANCE:  return "distance";
+	case RT_EDIT_SEMANTIC_ANGLE:     return "angle";
+	case RT_EDIT_SEMANTIC_SCALE:     return "scale";
+	case RT_EDIT_SEMANTIC_FRACTION:  return "fraction";
+	case RT_EDIT_SEMANTIC_COUNT:     return "count";
+	case RT_EDIT_SEMANTIC_PROPERTY:  return "property";
+	case RT_EDIT_SEMANTIC_INFER:
+	default:                         return "infer";
+    }
+}
+
+enum rt_edit_control_class
+rt_edit_cmd_control_class(const struct rt_edit_prim_desc *desc,
+	const struct rt_edit_cmd_desc *command)
+{
+    if (!desc || !command)
+	return RT_EDIT_CONTROL_UNSUPPORTED;
+    int command_index = -1;
+    for (int ci = 0; ci < desc->ncmd; ci++) {
+	if (desc->cmds[ci].cmd_id == command->cmd_id) {
+	    command_index = ci;
+	    break;
+	}
+    }
+    if (command_index < 0)
+	return RT_EDIT_CONTROL_UNSUPPORTED;
+    if (desc->command_controls &&
+	desc->command_controls[command_index] != RT_EDIT_CONTROL_INHERIT)
+	return desc->command_controls[command_index];
+    return desc->control_class;
+}
+
+struct rt_edit_interaction_desc
+rt_edit_cmd_interaction(const struct rt_edit_prim_desc *desc,
+	const struct rt_edit_cmd_desc *command)
+{
+    struct rt_edit_interaction_desc result = {
+	RT_EDIT_SELECTION_NONE,
+	RT_EDIT_COORDINATE_INFER,
+	RT_EDIT_MANIPULATOR_NONE,
+	NULL,
+	0
+    };
+    if (!desc || !command || !desc->command_interactions)
+	return result;
+    for (int ci = 0; ci < desc->ncmd; ci++) {
+	if (desc->cmds[ci].cmd_id == command->cmd_id)
+	    return desc->command_interactions[ci];
+    }
+    return result;
+}
+
+enum rt_edit_param_semantic
+rt_edit_param_semantic_get(const struct rt_edit_prim_desc *desc,
+	const struct rt_edit_cmd_desc *command, int parameter_index)
+{
+    if (!desc || !command || parameter_index < 0 ||
+	parameter_index >= command->nparam)
+	return RT_EDIT_SEMANTIC_INFER;
+    const struct rt_edit_interaction_desc interaction =
+	rt_edit_cmd_interaction(desc, command);
+    if (!interaction.parameter_semantics ||
+	parameter_index >= interaction.parameter_semantic_count)
+	return RT_EDIT_SEMANTIC_INFER;
+    return interaction.parameter_semantics[parameter_index];
 }
 
 static std::string
@@ -1487,6 +1726,318 @@ edit_cmd_slug(const char *label)
     return slug;
 }
 
+static std::string
+edit_cmd_machine_name(const struct rt_edit_prim_desc *desc,
+	const struct rt_edit_cmd_desc *command)
+{
+    if (!desc || !command)
+	return std::string();
+    std::string name = edit_cmd_slug(command->name);
+    const std::string global_prefix("ecmd_");
+    if (name.compare(0, global_prefix.size(), global_prefix) == 0)
+	name.erase(0, global_prefix.size());
+    const std::string primitive_prefix = edit_cmd_slug(desc->prim_type) + "_";
+    if (name.compare(0, primitive_prefix.size(), primitive_prefix) == 0)
+	name.erase(0, primitive_prefix.size());
+    return name;
+}
+
+int
+rt_edit_cmd_name(struct bu_vls *out, const struct rt_edit_prim_desc *desc,
+		 const struct rt_edit_cmd_desc *command)
+{
+    if (!out || !desc || !command)
+	return BRLCAD_ERROR;
+    const std::string name = edit_cmd_machine_name(desc, command);
+    if (name.empty())
+	return BRLCAD_ERROR;
+    bu_vls_strcat(out, name.c_str());
+    return BRLCAD_OK;
+}
+
+static bool
+edit_limit_is_set(fastf_t val)
+{
+    static_assert(sizeof(fastf_t) == sizeof(double),
+	"fastf_t must be double for RT_EDIT_PARAM_NO_LIMIT comparison");
+    static const double sentinel = RT_EDIT_PARAM_NO_LIMIT;
+    const double value = (double)val;
+    return memcmp(&value, &sentinel, sizeof(double)) != 0;
+}
+
+int
+rt_edit_param_bounds_get(const struct rt_edit *edit, int command_id,
+	int parameter_index, struct rt_edit_param_bounds *bounds)
+{
+    if (bounds)
+	memset(bounds, 0, sizeof(*bounds));
+    if (!edit || !bounds || parameter_index < 0 ||
+	edit->es_int.idb_type < 0 ||
+	EDOBJ[edit->es_int.idb_type].magic != RT_FUNCTAB_MAGIC ||
+	!EDOBJ[edit->es_int.idb_type].ft_edit_desc)
+	return BRLCAD_ERROR;
+
+    const struct rt_edit_prim_desc *desc =
+	EDOBJ[edit->es_int.idb_type].ft_edit_desc();
+    const struct rt_edit_cmd_desc *command = NULL;
+    for (int ci = 0; desc && ci < desc->ncmd; ci++) {
+	if (desc->cmds[ci].cmd_id == command_id) {
+	    command = &desc->cmds[ci];
+	    break;
+	}
+    }
+    if (!command || parameter_index >= command->nparam)
+	return BRLCAD_ERROR;
+
+    const struct rt_edit_param_desc *param =
+	&command->params[parameter_index];
+    if (edit_limit_is_set(param->range_min)) {
+	bounds->minimum = param->range_min;
+	bounds->has_minimum = 1;
+    }
+    if (edit_limit_is_set(param->range_max)) {
+	bounds->maximum = param->range_max;
+	bounds->has_maximum = 1;
+    }
+    if (desc->parameter_bounds && desc->parameter_bounds(bounds, edit,
+	    command_id, parameter_index) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+    if (bounds->has_minimum && bounds->has_maximum &&
+	bounds->minimum > bounds->maximum)
+	return BRLCAD_ERROR;
+    return BRLCAD_OK;
+}
+
+static bool
+edit_machine_name_valid(const char *name)
+{
+    if (!name || !name[0])
+	return false;
+    for (const unsigned char *p = (const unsigned char *)name; *p; p++) {
+	if (!(std::isalnum(*p) || *p == '_'))
+	    return false;
+    }
+    return true;
+}
+
+int
+rt_edit_prim_desc_validate(struct bu_vls *msg,
+			   const struct rt_edit_prim_desc *desc)
+{
+#define DESC_FAIL(_fmt, ...) do { \
+    if (msg) bu_vls_printf(msg, (_fmt), __VA_ARGS__); \
+    return BRLCAD_ERROR; \
+} while (0)
+
+    if (!desc) {
+	if (msg)
+	    bu_vls_strcat(msg, "null primitive edit descriptor");
+	return BRLCAD_ERROR;
+    }
+    if (!edit_machine_name_valid(desc->prim_type))
+	DESC_FAIL("invalid primitive machine name '%s'",
+	    desc->prim_type ? desc->prim_type : "(null)");
+    if (!desc->prim_label || !desc->prim_label[0])
+	DESC_FAIL("%s: missing primitive label", desc->prim_type);
+    if (desc->ncmd < 0 || (desc->ncmd && !desc->cmds))
+	DESC_FAIL("%s: invalid command array", desc->prim_type);
+    if (desc->nopt < 0 || (desc->nopt && !desc->opts))
+	DESC_FAIL("%s: invalid option array", desc->prim_type);
+    if (desc->control_class < RT_EDIT_CONTROL_GENERATED ||
+	desc->control_class > RT_EDIT_CONTROL_UNSUPPORTED)
+	DESC_FAIL("%s: invalid default control class %d", desc->prim_type,
+	    (int)desc->control_class);
+
+    std::set<int> command_ids;
+    std::set<std::string> command_names;
+    std::set<std::string> canonical_names;
+    for (int ci = 0; ci < desc->ncmd; ci++) {
+	const struct rt_edit_cmd_desc *cmd = &desc->cmds[ci];
+	if (!command_ids.insert(cmd->cmd_id).second)
+	    DESC_FAIL("%s: duplicate command id %d", desc->prim_type,
+		cmd->cmd_id);
+	if (!edit_machine_name_valid(cmd->name))
+	    DESC_FAIL("%s: command %d has invalid machine name '%s'",
+		desc->prim_type, cmd->cmd_id,
+		cmd->name ? cmd->name : "(null)");
+	if (!command_names.insert(cmd->name).second)
+	    DESC_FAIL("%s: duplicate command name '%s'", desc->prim_type,
+		cmd->name);
+	const std::string canonical_name = edit_cmd_machine_name(desc, cmd);
+	if (canonical_name.empty() ||
+	    !canonical_names.insert(canonical_name).second)
+	    DESC_FAIL("%s: invalid or duplicate canonical command name '%s'",
+		desc->prim_type, canonical_name.c_str());
+	if (!cmd->label || !cmd->label[0])
+	    DESC_FAIL("%s/%s: missing command label", desc->prim_type,
+		cmd->name);
+	if (!cmd->category || !cmd->category[0])
+	    DESC_FAIL("%s/%s: missing command category", desc->prim_type,
+		cmd->name);
+	if (cmd->interactive != 0 && cmd->interactive != 1)
+	    DESC_FAIL("%s/%s: invalid interactive flag %d", desc->prim_type,
+		cmd->name, cmd->interactive);
+	if (cmd->nparam < 0 || (cmd->nparam && !cmd->params))
+	    DESC_FAIL("%s/%s: invalid parameter array", desc->prim_type,
+		cmd->name);
+	if (desc->command_controls &&
+	    (desc->command_controls[ci] < RT_EDIT_CONTROL_INHERIT ||
+	     desc->command_controls[ci] > RT_EDIT_CONTROL_UNSUPPORTED))
+	    DESC_FAIL("%s/%s: invalid control class %d", desc->prim_type,
+		cmd->name, (int)desc->command_controls[ci]);
+	if (desc->command_interactions) {
+	    const struct rt_edit_interaction_desc *interaction =
+		&desc->command_interactions[ci];
+	    if (interaction->selection_domain < RT_EDIT_SELECTION_NONE ||
+		interaction->selection_domain > RT_EDIT_SELECTION_CUSTOM)
+		DESC_FAIL("%s/%s: invalid selection domain %d",
+		    desc->prim_type, cmd->name,
+		    (int)interaction->selection_domain);
+	    if (interaction->coordinate_space < RT_EDIT_COORDINATE_INFER ||
+		interaction->coordinate_space >
+		RT_EDIT_COORDINATE_PARAMETRIC_2D)
+		DESC_FAIL("%s/%s: invalid coordinate space %d",
+		    desc->prim_type, cmd->name,
+		    (int)interaction->coordinate_space);
+	    if (interaction->manipulator < RT_EDIT_MANIPULATOR_NONE ||
+		interaction->manipulator > RT_EDIT_MANIPULATOR_CUSTOM)
+		DESC_FAIL("%s/%s: invalid manipulator hint %d",
+		    desc->prim_type, cmd->name,
+		    (int)interaction->manipulator);
+	    if (interaction->parameter_semantic_count < 0 ||
+		(interaction->parameter_semantic_count &&
+		 !interaction->parameter_semantics) ||
+		interaction->parameter_semantic_count > cmd->nparam)
+		DESC_FAIL("%s/%s: invalid parameter semantic array",
+		    desc->prim_type, cmd->name);
+	    for (int si = 0; si < interaction->parameter_semantic_count; si++) {
+		if (interaction->parameter_semantics[si] <
+			RT_EDIT_SEMANTIC_INFER ||
+		    interaction->parameter_semantics[si] >
+			RT_EDIT_SEMANTIC_PROPERTY)
+		    DESC_FAIL("%s/%s: invalid parameter semantic %d",
+			desc->prim_type, cmd->name,
+			(int)interaction->parameter_semantics[si]);
+	    }
+	}
+
+	std::set<std::string> parameter_names;
+	for (int pi = 0; pi < cmd->nparam; pi++) {
+	    const struct rt_edit_param_desc *param = &cmd->params[pi];
+	    if (!edit_machine_name_valid(param->name))
+		DESC_FAIL("%s/%s: parameter %d has invalid name '%s'",
+		    desc->prim_type, cmd->name, pi,
+		    param->name ? param->name : "(null)");
+	    if (!parameter_names.insert(param->name).second)
+		DESC_FAIL("%s/%s: duplicate parameter name '%s'",
+		    desc->prim_type, cmd->name, param->name);
+	    if (!param->label || !param->label[0])
+		DESC_FAIL("%s/%s/%s: missing parameter label",
+		    desc->prim_type, cmd->name, param->name);
+
+	    int width = 1;
+	    const bool list_param =
+		param->type == RT_EDIT_PARAM_SCALAR_LIST ||
+		param->type == RT_EDIT_PARAM_INTEGER_LIST;
+	    switch (param->type) {
+		case RT_EDIT_PARAM_POINT2:
+		case RT_EDIT_PARAM_VECTOR2:
+		    width = 2;
+		    break;
+		case RT_EDIT_PARAM_POINT:
+		case RT_EDIT_PARAM_VECTOR:
+		case RT_EDIT_PARAM_COLOR:
+		    width = 3;
+		    break;
+		case RT_EDIT_PARAM_MATRIX:
+		    width = 16;
+		    break;
+		case RT_EDIT_PARAM_SCALAR:
+		case RT_EDIT_PARAM_INTEGER:
+		case RT_EDIT_PARAM_BOOLEAN:
+		case RT_EDIT_PARAM_STRING:
+		case RT_EDIT_PARAM_ENUM:
+		    break;
+		case RT_EDIT_PARAM_SCALAR_LIST:
+		case RT_EDIT_PARAM_INTEGER_LIST:
+		    if (pi != cmd->nparam - 1)
+			DESC_FAIL("%s/%s/%s: a variable list must be the final parameter",
+			    desc->prim_type, cmd->name, param->name);
+		    if (param->nenum <= 0 ||
+			param->index + param->nenum > RT_EDIT_MAXPARA)
+			DESC_FAIL("%s/%s/%s: invalid minimum list count %d",
+			    desc->prim_type, cmd->name, param->name,
+			    param->nenum);
+		    width = RT_EDIT_MAXPARA - param->index;
+		    break;
+		default:
+		    DESC_FAIL("%s/%s/%s: invalid parameter type %d",
+			desc->prim_type, cmd->name, param->name, param->type);
+	    }
+
+	    const int limit = param->type == RT_EDIT_PARAM_STRING ?
+		RT_EDIT_MAXSTR : RT_EDIT_MAXPARA;
+	    if (param->index < 0 || param->index + width > limit)
+		DESC_FAIL("%s/%s/%s: parameter slots [%d,%d) exceed %d",
+		    desc->prim_type, cmd->name, param->name, param->index,
+		    param->index + width, limit);
+	    if (edit_limit_is_set(param->range_min) &&
+		!std::isfinite((double)param->range_min))
+		DESC_FAIL("%s/%s/%s: nonfinite minimum", desc->prim_type,
+		    cmd->name, param->name);
+	    if (edit_limit_is_set(param->range_max) &&
+		!std::isfinite((double)param->range_max))
+		DESC_FAIL("%s/%s/%s: nonfinite maximum", desc->prim_type,
+		    cmd->name, param->name);
+	    if (!list_param && param->type != RT_EDIT_PARAM_ENUM && param->nenum)
+		DESC_FAIL("%s/%s/%s: enum/list count on an unrelated parameter",
+		    desc->prim_type, cmd->name, param->name);
+	    if (edit_limit_is_set(param->range_min) &&
+		edit_limit_is_set(param->range_max) &&
+		param->range_min > param->range_max)
+		DESC_FAIL("%s/%s/%s: minimum exceeds maximum",
+		    desc->prim_type, cmd->name, param->name);
+	    if (param->type == RT_EDIT_PARAM_ENUM) {
+		if (param->nenum <= 0 || !param->enum_labels || !param->enum_ids)
+		    DESC_FAIL("%s/%s/%s: incomplete enum metadata",
+			desc->prim_type, cmd->name, param->name);
+		std::set<int> enum_ids;
+		for (int ei = 0; ei < param->nenum; ei++) {
+		    if (!param->enum_labels[ei] || !param->enum_labels[ei][0])
+			DESC_FAIL("%s/%s/%s: empty enum label %d",
+			    desc->prim_type, cmd->name, param->name, ei);
+		    if (!enum_ids.insert(param->enum_ids[ei]).second)
+			DESC_FAIL("%s/%s/%s: duplicate enum id %d",
+			    desc->prim_type, cmd->name, param->name,
+			    param->enum_ids[ei]);
+		}
+	    }
+	    if (param->type == RT_EDIT_PARAM_STRING &&
+		(!param->prim_field || !param->prim_field[0]))
+		DESC_FAIL("%s/%s/%s: missing string primitive field",
+		    desc->prim_type, cmd->name, param->name);
+	}
+    }
+
+    std::set<std::string> option_names;
+    for (int oi = 0; oi < desc->nopt; oi++) {
+	const struct rt_edit_opt_desc *opt = &desc->opts[oi];
+	if (!edit_machine_name_valid(opt->name) ||
+	    !option_names.insert(opt->name).second)
+	    DESC_FAIL("%s: invalid or duplicate option name '%s'",
+		desc->prim_type, opt->name ? opt->name : "(null)");
+	if (!opt->label || !opt->label[0] || !opt->desc || !opt->desc[0])
+	    DESC_FAIL("%s/%s: incomplete option metadata", desc->prim_type,
+		opt->name);
+	if (opt->type < RT_EDIT_PARAM_SCALAR || opt->type > RT_EDIT_PARAM_MATRIX)
+	    DESC_FAIL("%s/%s: invalid option type %d", desc->prim_type,
+		opt->name, opt->type);
+    }
+
+#undef DESC_FAIL
+    return BRLCAD_OK;
+}
+
 /* Emit a fastf_t value as JSON number or "null" for NO_LIMIT */
 static void
 emit_limit(struct bu_vls *out, fastf_t val)
@@ -1496,11 +2047,8 @@ emit_limit(struct bu_vls *out, fastf_t val)
      * fastf_t is always double in BRL-CAD (vmath.h), so sizeof(fastf_t) and
      * sizeof(double) are identical; we assert that here for safety. */
     /* fastf_t is always double in BRL-CAD (vmath.h); assert for safety. */
-    static_assert(sizeof(fastf_t) == sizeof(double),
-                  "fastf_t must be double for RT_EDIT_PARAM_NO_LIMIT sentinel comparison");
-    static const double sentinel = RT_EDIT_PARAM_NO_LIMIT;
     double v = (double)val;
-    if (memcmp(&v, &sentinel, sizeof(double)) == 0)
+    if (!edit_limit_is_set(val))
 	bu_vls_strcat(out, "null");
     else
 	bu_vls_printf(out, "%.17g", v);
@@ -1528,6 +2076,9 @@ rt_edit_prim_desc_to_json(struct bu_vls *out,
     if (!out || !desc)
 	return BRLCAD_ERROR;
 
+    if (rt_edit_prim_desc_validate(NULL, desc) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
     bu_vls_strcat(out, "{\n");
     bu_vls_strcat(out, "  \"prim_type\": ");
     emit_json_str(out, desc->prim_type);
@@ -1543,26 +2094,52 @@ rt_edit_prim_desc_to_json(struct bu_vls *out,
 	const struct rt_edit_cmd_desc *cmd = &desc->cmds[ci];
 	bu_vls_strcat(out, "    {\n");
 	bu_vls_printf(out, "      \"cmd_id\": %d,\n", cmd->cmd_id);
-	std::string cname = edit_cmd_slug(cmd->label);
-	bu_vls_strcat(out, "      \"canonical_name\": ");
-	emit_json_str(out, cname.c_str());
+	const std::string machine_name = edit_cmd_machine_name(desc, cmd);
+	bu_vls_strcat(out, "      \"name\": ");
+	emit_json_str(out, machine_name.c_str());
 	bu_vls_strcat(out, ",\n");
+	bu_vls_strcat(out, "      \"symbol\": ");
+	emit_json_str(out, cmd->name);
+	bu_vls_strcat(out, ",\n");
+	std::string cname = edit_cmd_slug(cmd->label);
 	bu_vls_strcat(out, "      \"aliases\": [");
-	bool first_alias = true;
+	bool have_alias = false;
+	if (cname != machine_name) {
+	    emit_json_str(out, cname.c_str());
+	    have_alias = true;
+	}
 	if (cmd->nparam == 1 && cmd->params && cmd->params[0].name) {
 	    const char *a = cmd->params[0].name;
-	    if (a && !BU_STR_EQUAL(a, cname.c_str())) {
+	    if (a && !BU_STR_EQUAL(a, machine_name.c_str()) &&
+		!BU_STR_EQUAL(a, cname.c_str())) {
+		if (have_alias)
+		    bu_vls_putc(out, ',');
 		emit_json_str(out, a);
-		first_alias = false;
+		have_alias = true;
 	    }
 	}
-	(void)first_alias;
 	bu_vls_strcat(out, "],\n");
 	bu_vls_strcat(out, "      \"label\": ");
 	emit_json_str(out, cmd->label);
 	bu_vls_strcat(out, ",\n");
 	bu_vls_strcat(out, "      \"category\": ");
 	emit_json_str(out, cmd->category);
+	bu_vls_strcat(out, ",\n");
+	bu_vls_strcat(out, "      \"control\": ");
+	emit_json_str(out, edit_control_class_str(
+	    rt_edit_cmd_control_class(desc, cmd)));
+	bu_vls_strcat(out, ",\n");
+	const struct rt_edit_interaction_desc interaction =
+	    rt_edit_cmd_interaction(desc, cmd);
+	bu_vls_strcat(out, "      \"selection_domain\": ");
+	emit_json_str(out, edit_selection_domain_str(
+	    interaction.selection_domain));
+	bu_vls_strcat(out, ",\n      \"coordinate_space\": ");
+	emit_json_str(out, edit_coordinate_space_str(
+	    interaction.coordinate_space));
+	bu_vls_strcat(out, ",\n      \"manipulator\": ");
+	emit_json_str(out, edit_manipulator_hint_str(
+	    interaction.manipulator));
 	bu_vls_strcat(out, ",\n");
 	bu_vls_printf(out, "      \"interactive\": %s,\n",
 		      cmd->interactive ? "true" : "false");
@@ -1579,8 +2156,11 @@ rt_edit_prim_desc_to_json(struct bu_vls *out,
 	    bu_vls_strcat(out, "          \"label\": ");
 	    emit_json_str(out, p->label);
 	    bu_vls_strcat(out, ",\n");
-	    bu_vls_printf(out, "          \"type\": \"%s\"",
+	    bu_vls_printf(out, "          \"type\": \"%s\",\n",
 			 edit_param_type_str(p->type));
+	    bu_vls_strcat(out, "          \"semantic\": ");
+	    emit_json_str(out, edit_param_semantic_str(
+		rt_edit_param_semantic_get(desc, cmd, pi)));
 
 	    /* index — omitted for STRING */
 	    if (p->type != RT_EDIT_PARAM_STRING)
@@ -1590,11 +2170,20 @@ rt_edit_prim_desc_to_json(struct bu_vls *out,
 	    if (p->type == RT_EDIT_PARAM_SCALAR ||
 		p->type == RT_EDIT_PARAM_INTEGER ||
 		p->type == RT_EDIT_PARAM_ENUM   ||
-		p->type == RT_EDIT_PARAM_COLOR) {
+		p->type == RT_EDIT_PARAM_COLOR  ||
+		p->type == RT_EDIT_PARAM_SCALAR_LIST ||
+		p->type == RT_EDIT_PARAM_INTEGER_LIST) {
 		bu_vls_strcat(out, ",\n          \"min\": ");
 		emit_limit(out, p->range_min);
 		bu_vls_strcat(out, ",\n          \"max\": ");
 		emit_limit(out, p->range_max);
+	    }
+
+	    if (p->type == RT_EDIT_PARAM_SCALAR_LIST ||
+		p->type == RT_EDIT_PARAM_INTEGER_LIST) {
+		bu_vls_printf(out,
+		    ",\n          \"min_count\": %d,\n          \"max_count\": %d",
+		    p->nenum, RT_EDIT_MAXPARA - p->index);
 	    }
 
 	    /* units */

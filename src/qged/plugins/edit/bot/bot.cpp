@@ -45,6 +45,14 @@ EditBotTool::paletteElement()
     if (m_bot && el && !m_extra_wired) {
 	QObject::connect(m_bot, &QBot::view_updated,
 			 el, &QgToolPaletteElement::element_view_changed);
+	if (m_ctx && m_ctx->notifier) {
+	    QObject::connect(m_ctx->notifier, &QgPluginNotifier::viewUpdated,
+		this, [this](QgViewUpdateFlags flags) {
+		    if (m_bot && (flags & QG_VIEW_SELECT))
+			QMetaObject::invokeMethod(m_bot, "sync_selection",
+			    Qt::DirectConnection);
+		});
+	}
 	m_extra_wired = true;
     }
     return el;
@@ -71,14 +79,18 @@ EditBotTool::refresh()
     if (!m_bot)
 	return;
     m_bot->blockSignals(true);
-    QMetaObject::invokeMethod(m_bot, "update_obj_wireframe", Qt::DirectConnection);
+    QMetaObject::invokeMethod(m_bot, "refresh_preview", Qt::DirectConnection);
     m_bot->blockSignals(false);
 }
 
 void
 EditBotTool::onDbChanged()
 {
-    refresh();
+    if (!m_bot)
+	return;
+    m_bot->blockSignals(true);
+    QMetaObject::invokeMethod(m_bot, "reset_for_database", Qt::DirectConnection);
+    m_bot->blockSignals(false);
 }
 
 void

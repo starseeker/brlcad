@@ -45,6 +45,14 @@ EditExtrudeTool::paletteElement()
     if (m_extr && el && !m_extra_wired) {
 	QObject::connect(m_extr, &QExtrude::view_updated,
 			 el, &QgToolPaletteElement::element_view_changed);
+	if (m_ctx && m_ctx->notifier) {
+	    QObject::connect(m_ctx->notifier, &QgPluginNotifier::viewUpdated,
+		this, [this](QgViewUpdateFlags flags) {
+		    if (m_extr && (flags & QG_VIEW_SELECT))
+			QMetaObject::invokeMethod(m_extr, "sync_selection",
+			    Qt::DirectConnection);
+		});
+	}
 	m_extra_wired = true;
     }
     return el;
@@ -72,14 +80,19 @@ EditExtrudeTool::refresh()
     if (!m_extr)
 	return;
     m_extr->blockSignals(true);
-    QMetaObject::invokeMethod(m_extr, "update_obj_wireframe", Qt::DirectConnection);
+    QMetaObject::invokeMethod(m_extr, "refresh_preview", Qt::DirectConnection);
     m_extr->blockSignals(false);
 }
 
 void
 EditExtrudeTool::onDbChanged()
 {
-    refresh();
+    if (!m_extr)
+	return;
+    m_extr->blockSignals(true);
+    QMetaObject::invokeMethod(m_extr, "reset_for_database",
+	Qt::DirectConnection);
+    m_extr->blockSignals(false);
 }
 
 void

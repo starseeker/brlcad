@@ -154,6 +154,22 @@ main(int argc, char *argv[])
 
     struct rt_tgc_internal *edit_tgc = (struct rt_tgc_internal *)s->es_int.idb_ptr;
 
+    point_t tgc_endpoint = {5.0, 3.0, 18.0};
+    if (!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_H, 8.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_H_V, 8.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_H_CD, 8.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_H_V_AB, 8.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_A, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_AB, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_ABCD, 3.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_B, 2.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_C, 2.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_CD, 2.0) ||
+	!rt_edit_test_scalar_value(s, ECMD_TGC_SCALE_D, 1.5) ||
+	!rt_edit_test_point_value(s, ECMD_TGC_MV_H, tgc_endpoint) ||
+	!rt_edit_test_point_value(s, ECMD_TGC_MV_HH, tgc_endpoint))
+	bu_exit(1, "ERROR: TGC descriptor current-value readback failed\n");
+
     vect_t mousevec;
 
     /* ================================================================

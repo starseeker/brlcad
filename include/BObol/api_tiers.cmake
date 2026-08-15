@@ -45,6 +45,7 @@ set(LIBBOBOL_ADVANCED_HEADERS
   BADC.h
   BAxes.h
   BDrawCache.h
+  BEditManipulator.h
   BEditPreview.h
   BEvaluatedPoints.h
   BGrid.h

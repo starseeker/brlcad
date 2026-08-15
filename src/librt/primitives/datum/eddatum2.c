@@ -280,7 +280,7 @@ static const int   datum_type_enum_vals[]  = { 0, 1, 2 };
 static const struct rt_edit_param_desc datum_type_param[] = {
     { "type",
       "Type (0=point 1=line 2=plane; lowering order zeroes removed fields)",
-      RT_EDIT_PARAM_SCALAR, 0,
+      RT_EDIT_PARAM_ENUM, 0,
       0.0, 2.0, "enum",
       3, datum_type_enum_names, datum_type_enum_vals,
       NULL }
@@ -306,16 +306,20 @@ static const struct rt_edit_param_desc datum_w_param[] = {
 };
 
 static const struct rt_edit_cmd_desc datum_cmds[] = {
-    { ECMD_DATUM_SET_TYPE, "Set Type",      "datum", 1, datum_type_param, 1, 10, NULL },
-    { ECMD_DATUM_SET_PNT,  "Set Point",     "datum", 1, datum_pnt_param,  1, 20, NULL },
-    { ECMD_DATUM_SET_DIR,  "Set Direction", "datum", 1, datum_dir_param,  1, 30, NULL },
-    { ECMD_DATUM_SET_W,    "Set W",         "datum", 1, datum_w_param,    1, 40, NULL }
+    { ECMD_DATUM_SET_TYPE, RT_EDIT_CMD_NAME(ECMD_DATUM_SET_TYPE), "Set Type",      "datum", 1, datum_type_param, 1, 10, NULL },
+    { ECMD_DATUM_SET_PNT, RT_EDIT_CMD_NAME(ECMD_DATUM_SET_PNT),  "Set Point",     "datum", 1, datum_pnt_param,  1, 20, NULL },
+    { ECMD_DATUM_SET_DIR, RT_EDIT_CMD_NAME(ECMD_DATUM_SET_DIR),  "Set Direction", "datum", 1, datum_dir_param,  1, 30, NULL },
+    { ECMD_DATUM_SET_W, RT_EDIT_CMD_NAME(ECMD_DATUM_SET_W),    "Set W",         "datum", 1, datum_w_param,    1, 40, NULL }
 };
 
 static const struct rt_edit_prim_desc datum_prim_desc = {
     "datum", "Datum", 4, datum_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -325,8 +329,8 @@ rt_edit_datum_edit_desc(void)
 }
 
 
-C_DECL int
-rt_edit_datum_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
+static int
+datum_current_numbers(struct rt_edit *s, int cmd_id, fastf_t *vals)
 {
     if (!s || !vals) return 0;
 
@@ -359,6 +363,21 @@ rt_edit_datum_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
 	default:
 	    return 0;
     }
+}
+
+C_DECL int
+rt_edit_datum_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
+{
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
+    fastf_t values[RT_EDIT_MAXPARA] = {0.0};
+    const int count = datum_current_numbers(s, cmd_id, values);
+    if (count <= 0)
+	return RT_EDIT_VALUE_UNAVAILABLE;
+    for (int i = 0; i < count; i++)
+	rt_edit_cmd_values_set_value(result, i, values[i]);
+    return RT_EDIT_VALUE_OK;
 }
 
 

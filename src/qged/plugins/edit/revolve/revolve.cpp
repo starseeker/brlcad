@@ -45,6 +45,14 @@ EditRevolveTool::paletteElement()
     if (m_rev && el && !m_extra_wired) {
 	QObject::connect(m_rev, &QRevolve::view_updated,
 			 el, &QgToolPaletteElement::element_view_changed);
+	if (m_ctx && m_ctx->notifier) {
+	    QObject::connect(m_ctx->notifier, &QgPluginNotifier::viewUpdated,
+		this, [this](QgViewUpdateFlags flags) {
+		    if (m_rev && (flags & QG_VIEW_SELECT))
+			QMetaObject::invokeMethod(m_rev, "sync_selection",
+			    Qt::DirectConnection);
+		});
+	}
 	m_extra_wired = true;
     }
     return el;
@@ -71,14 +79,19 @@ EditRevolveTool::refresh()
     if (!m_rev)
 	return;
     m_rev->blockSignals(true);
-    QMetaObject::invokeMethod(m_rev, "update_obj_wireframe", Qt::DirectConnection);
+    QMetaObject::invokeMethod(m_rev, "refresh_preview", Qt::DirectConnection);
     m_rev->blockSignals(false);
 }
 
 void
 EditRevolveTool::onDbChanged()
 {
-    refresh();
+    if (!m_rev)
+	return;
+    m_rev->blockSignals(true);
+    QMetaObject::invokeMethod(m_rev, "reset_for_database",
+	Qt::DirectConnection);
+    m_rev->blockSignals(false);
 }
 
 void

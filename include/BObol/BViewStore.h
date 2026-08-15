@@ -133,7 +133,8 @@ enum class BObolPolygonUpdate {
     PointSelect = 2,
     PointSelectClear = 3,
     PointMove = 4,
-    PointAppend = 5
+    PointAppend = 5,
+    PointDelete = 6
 };
 
 enum BObolPolygonFillFlag {
@@ -366,6 +367,7 @@ struct BOBOL_EXPORT BObolPolygonRecord {
     SbString name;
     BObolFeatureScope scope;
     BObolPolygonType type;
+    SbBool selected;
     SbBool fill;
     unsigned int fillFlags;
     SbVec2f fillSlope;
@@ -380,6 +382,7 @@ struct BOBOL_EXPORT BObolPolygonRecord {
     SbVec3f originPoint;
     plane_t viewPlane;
     float viewZ;
+    SbString sketchName;
     void *userData;
 
     BObolPolygonRecord(void);
@@ -502,6 +505,16 @@ public:
 	const std::vector<int32_t> &indices,
 	const BObolFeatureStyle *style = NULL,
 	const BObolFeatureOwner *owner = NULL);
+
+    /**
+     * Patch indexed-face vertices without rebuilding or recopying topology.
+     * Intended for retained edit presenters whose authoritative geometry is
+     * owned elsewhere.  Each entry in pointIndices selects the corresponding
+     * entry in points; all indices are validated before any mutation.
+     */
+    SbBool updateIndexedFaceSetPoints(BObolFeatureHandle handle,
+	const std::vector<int32_t> &pointIndices,
+	const std::vector<SbVec3f> &points);
     BObolFeatureHandle publishCustomNode(const SbString &name,
 	BObolFeatureScope scope,
 	SoNode *node,
@@ -691,6 +704,8 @@ public:
     SbBool setCurrent(BObolPolygonHandle handle,
 	long contour,
 	long point);
+    SbBool setSelected(BObolPolygonHandle handle, SbBool selected);
+    SbBool clearSelection(void);
     SbBool setContourOpen(BObolPolygonHandle handle,
 	long contour,
 	SbBool open);
@@ -725,6 +740,9 @@ public:
     const struct bg_polygon *geometry(BObolPolygonHandle handle) const;
     SbBool copyGeometry(BObolPolygonHandle handle,
 	struct bg_polygon *polygonOut) const;
+    SbBool setSketchName(BObolPolygonHandle handle,
+	const SbString &sketchName);
+    const char *sketchName(BObolPolygonHandle handle) const;
     SbBool setUserData(BObolPolygonHandle handle, void *userData);
     void *userData(BObolPolygonHandle handle) const;
 
@@ -744,8 +762,13 @@ public:
     SbBool exportSketch(BObolPolygonHandle handle,
 	struct db_i *dbip,
 	const SbString &name) const;
+    SbBool updateSketch(BObolPolygonHandle handle,
+	struct db_i *dbip,
+	const SbString &name) const;
 
     size_t snapCount(BObolPolygonHandle exclude = BObolPolygonHandle()) const;
+    /** Exclude one actively edited polygon from snap queries.  An invalid
+     * handle clears the exclusion. */
     SbBool setSnapExclude(BObolPolygonHandle handle);
     BObolPolygonHandle snapExclude(void) const;
     SoNode *node(BObolPolygonHandle handle) const;

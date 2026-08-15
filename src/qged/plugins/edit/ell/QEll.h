@@ -1,4 +1,4 @@
-/*                        Q E L L. H
+/*                        Q E L L . H
  * BRL-CAD
  *
  * Copyright (c) 2022-2026 United States Government as represented by
@@ -7,35 +7,22 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
  * version 2.1 as published by the Free Software Foundation.
- *
- * This library is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this file; see the file named COPYING for more
- * information.
  */
-/** @file QEll.h
- *
- */
+/** @file QEll.h */
 
 #ifndef QELL_H
 #define QELL_H
 
-#include <QCheckBox>
-#include <QComboBox>
-#include <QGroupBox>
-#include <QLineEdit>
-#include <QPushButton>
-#include <QRadioButton>
-#include "raytrace.h"
-#include "qtcad/QgColorRGB.h"
+#include <QString>
+#include <QWidget>
+#include <vector>
+
+#include "BObol/BInput.h"
 #include "qtcad/QgTypes.h"
-#include "../qged_edit_preview_util.h"
 
 class QgPluginContext;
+class QgPrimitiveEdit;
+struct QEllManipulatorState;
 
 class QEll : public QWidget
 {
@@ -43,58 +30,53 @@ class QEll : public QWidget
 
     public:
 	QEll();
-	~QEll();
+	~QEll() override;
 
-	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
-
-	// Ell origin
-	QCheckBox *O_pnt;
-
-	// Select one or more axes to set the length on
-	QCheckBox *A_axis;
-	QCheckBox *B_axis;
-	QCheckBox *C_axis;
-
-	// Primitive name
-	QLineEdit *ell_name;
-	QPushButton *write_edit;
-	QPushButton *make_sph; // ell -> sph
-	QPushButton *reset_values;
+	void setContext(QgPluginContext *ctx);
 
     signals:
 	void view_updated(QgViewUpdateFlags);
 
     private slots:
-	void read_from_db();
-	void write_to_db();
-	void update_obj_wireframe();
-	void update_viewobj_name(const QString &);
 	void sync_selection();
 	void reset_for_database();
+	void refresh_preview();
+	void update_preview(int kind, qulonglong revision);
+	void target_changed(const QString &path);
 
     protected:
-	bool eventFilter(QObject *, QEvent *);
+	bool eventFilter(QObject *, QEvent *) override;
 
     private:
+	void clear_preview();
 	void clear_labels();
-	struct directory *dp = NULL;
-	struct rt_ell_internal ell;
-	qged_edit_feature_ref p = QGED_EDIT_FEATURE_REF_NULL;
-	qged_edit_feature_ref labels_p = QGED_EDIT_FEATURE_REF_NULL;
-	struct bu_vls oname = BU_VLS_INIT_ZERO;
-	QString selection_path;
-	QgPluginContext *m_ctx = nullptr;
-
+	void clear_manipulator();
+	void update_manipulator(const point_t center, const vect_t axis_a,
+	    const vect_t axis_b, const vect_t axis_c,
+	    const fastf_t local_lengths[3], uint64_t revision);
+	int handle_manipulator_input(QEllManipulatorState *,
+	    BObolInputAction action,
+	    const BObolInputEvent *event);
+	static int manipulator_input(void *user_data, BObolInputAction action,
+	    const BObolInputEvent *event);
 	struct ged *getGed() const;
+
+	QgPrimitiveEdit *editor = nullptr;
+	QgPluginContext *m_ctx = nullptr;
+	QString selection_path;
+	QString preview_path;
+	std::vector<QEllManipulatorState *> manipulator_states;
 };
 
-#endif //QELL_H
+#endif /* QELL_H */
 
-// Local Variables:
-// tab-width: 8
-// mode: C++
-// c-basic-offset: 4
-// indent-tabs-mode: t
-// c-file-style: "stroustrup"
-// End:
-// ex: shiftwidth=4 tabstop=8
+/*
+ * Local Variables:
+ * mode: C++
+ * tab-width: 8
+ * c-basic-offset: 4
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

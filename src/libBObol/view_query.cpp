@@ -371,6 +371,21 @@ bobol_view_snap_point(BObolViewController *controller,
 	bool consumeSourceFullDetail,
 	BObolViewSnapRecord &record)
 {
+    return bobol_view_snap_point_filtered(controller, query, tolerance,
+	    enabledKinds, SoBRLSnapAction::ALL_SOURCES, geometryPolicy,
+	    consumeSourceFullDetail, record);
+}
+
+int
+bobol_view_snap_point_filtered(BObolViewController *controller,
+	const SbVec3f &query,
+	float tolerance,
+	uint32_t enabledKinds,
+	uint32_t sourceFilter,
+	SoBRLSnapAction::GeometryPolicy geometryPolicy,
+	bool consumeSourceFullDetail,
+	BObolViewSnapRecord &record)
+{
     record = BObolViewSnapRecord();
     if (!controller || !controller->getViewport() ||
 	!controller->getViewport()->getRoot())
@@ -383,6 +398,12 @@ bobol_view_snap_point(BObolViewController *controller,
 	static_cast<uint32_t>(SoBRLSnapAction::ALL_KINDS));
     action.setPriorityPolicy(SoBRLSnapAction::FEATURE_PRIORITY);
     action.setGeometryPolicy(geometryPolicy);
+    action.setSourceFilter(sourceFilter);
+    BObolPolygonRecord excludedPolygon;
+    const BObolPolygonHandle excluded = controller->polygons().snapExclude();
+    if (excluded.isValid() &&
+	controller->polygons().record(excluded, excludedPolygon))
+	action.setExcludedPath(excludedPolygon.name);
     action.apply(controller->getViewport()->getRoot());
 
     if (geometryPolicy == SoBRLSnapAction::FULL_DETAIL &&

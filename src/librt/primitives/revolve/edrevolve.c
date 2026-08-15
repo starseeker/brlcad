@@ -288,21 +288,25 @@ static const struct rt_edit_param_desc revolve_ang_param[] = {
 
 static const struct rt_edit_param_desc revolve_skt_param[] = {
     { "sketch_name", "Sketch name", RT_EDIT_PARAM_STRING, 0,
-      0.0, 0.0, "", 0, NULL, NULL, NULL }
+      0.0, 0.0, "", 0, NULL, NULL, "sketch_name" }
 };
 
 static const struct rt_edit_cmd_desc revolve_cmds[] = {
-    { ECMD_REVOLVE_SET_V,    "Set Vertex",       "geometry", 1, revolve_v_param,    1, 10, NULL },
-    { ECMD_REVOLVE_SET_AXIS, "Set Axis",         "geometry", 1, revolve_axis_param, 1, 20, NULL },
-    { ECMD_REVOLVE_SET_R,    "Set Start Vector", "geometry", 1, revolve_r_param,    1, 30, NULL },
-    { ECMD_REVOLVE_SET_ANG,  "Set Sweep Angle",  "geometry", 1, revolve_ang_param,  1, 40, NULL },
-    { ECMD_REVOLVE_SET_SKT,  "Set Sketch Name",  "geometry", 1, revolve_skt_param,  1, 50, NULL }
+    { ECMD_REVOLVE_SET_V, RT_EDIT_CMD_NAME(ECMD_REVOLVE_SET_V),    "Set Vertex",       "geometry", 1, revolve_v_param,    1, 10, NULL },
+    { ECMD_REVOLVE_SET_AXIS, RT_EDIT_CMD_NAME(ECMD_REVOLVE_SET_AXIS), "Set Axis",         "geometry", 1, revolve_axis_param, 1, 20, NULL },
+    { ECMD_REVOLVE_SET_R, RT_EDIT_CMD_NAME(ECMD_REVOLVE_SET_R),    "Set Start Vector", "geometry", 1, revolve_r_param,    1, 30, NULL },
+    { ECMD_REVOLVE_SET_ANG, RT_EDIT_CMD_NAME(ECMD_REVOLVE_SET_ANG),  "Set Sweep Angle",  "geometry", 1, revolve_ang_param,  1, 40, NULL },
+    { ECMD_REVOLVE_SET_SKT, RT_EDIT_CMD_NAME(ECMD_REVOLVE_SET_SKT),  "Set Sketch Name",  "geometry", 1, revolve_skt_param,  1, 50, NULL }
 };
 
 static const struct rt_edit_prim_desc revolve_prim_desc = {
     "revolve", "Revolve", 5, revolve_cmds,
     0,                    /* nopt         */
-    NULL                  /* opts         */
+    NULL,                 /* opts         */
+    RT_EDIT_CONTROL_GENERATED,
+    NULL,
+    NULL,
+    NULL
 };
 
 C_DECL const struct rt_edit_prim_desc *
@@ -313,38 +317,45 @@ rt_edit_revolve_edit_desc(void)
 
 
 C_DECL int
-rt_edit_revolve_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
+rt_edit_revolve_get_values(struct rt_edit *s, int cmd_id,
+	struct rt_edit_cmd_values *result)
 {
-    if (!s || !vals) return 0;
+    if (!s || !result)
+	return RT_EDIT_VALUE_ERROR;
 
     struct rt_revolve_internal *rip =
 	(struct rt_revolve_internal *)s->es_int.idb_ptr;
 
     switch (cmd_id) {
 	case ECMD_REVOLVE_SET_V:
-	    vals[0] = rip->v3d[0] * s->base2local;
-	    vals[1] = rip->v3d[1] * s->base2local;
-	    vals[2] = rip->v3d[2] * s->base2local;
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    rip->v3d[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 
 	case ECMD_REVOLVE_SET_AXIS:
-	    vals[0] = rip->axis3d[0] * s->base2local;
-	    vals[1] = rip->axis3d[1] * s->base2local;
-	    vals[2] = rip->axis3d[2] * s->base2local;
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    rip->axis3d[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 
 	case ECMD_REVOLVE_SET_R:
-	    vals[0] = rip->r[0] * s->base2local;
-	    vals[1] = rip->r[1] * s->base2local;
-	    vals[2] = rip->r[2] * s->base2local;
-	    return 3;
+	    for (int i = 0; i < 3; i++)
+		rt_edit_cmd_values_set_value(result, i,
+		    rip->r[i] * s->base2local);
+	    return RT_EDIT_VALUE_OK;
 
 	case ECMD_REVOLVE_SET_ANG:
-	    vals[0] = rip->ang * RAD2DEG;
-	    return 1;
+	    rt_edit_cmd_values_set_value(result, 0, rip->ang * RAD2DEG);
+	    return RT_EDIT_VALUE_OK;
+
+	case ECMD_REVOLVE_SET_SKT:
+	    rt_edit_cmd_values_set_string(result, 0,
+		bu_vls_cstr(&rip->sketch_name));
+	    return RT_EDIT_VALUE_OK;
 
 	default:
-	    return 0;
+	    return RT_EDIT_VALUE_UNAVAILABLE;
     }
 }
 
