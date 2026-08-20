@@ -659,22 +659,16 @@ ged_view_feature_get_summary(
     if (!name || !name[0])
 	return 0;
 
+    const struct ged_bobol_feature_lookup lookup =
+	ged_bobol_feature_find(view_ctx, name);
+    if (!lookup.controller)
+	return 0;
+
     BObolFeatureSummary obol_summary;
-    BObolViewController *view_controller =
-	ged_bobol_view_controller(view_ctx);
-    if (view_controller) {
-	const BObolFeatureOwner owner = ged_bobol_feature_owner(view_ctx);
-	if (!view_controller->features().summaryOwned(name, obol_summary,
-		BOBOL_FEATURE_SCOPE_LOCAL, &owner))
-	    return 0;
-    }
-    if (!obol_summary.exists) {
-	BObolViewController *shared_controller =
-	    ged_bobol_shared_feature_controller(view_ctx);
-	if (!shared_controller || !shared_controller->features().summary(name,
-		obol_summary, BOBOL_FEATURE_SCOPE_SHARED))
-	    return 0;
-    }
+    if (!lookup.handle.isValid())
+	return 1;
+    if (!lookup.controller->features().summary(lookup.handle, obol_summary))
+	return 0;
     if (!obol_summary.exists)
 	return 1;
 
@@ -709,8 +703,6 @@ ged_view_feature_get_summary(
 	snprintf(summary->owner_role, sizeof(summary->owner_role), "%s",
 	    obol_summary.owner.ownerRole.getString());
 
-    const struct ged_bobol_feature_lookup lookup =
-	ged_bobol_feature_find(view_ctx, name);
     BObolFeatureStyle style;
     if (lookup.controller && lookup.handle.isValid() &&
 	lookup.controller->features().style(lookup.handle, style) &&

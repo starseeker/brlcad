@@ -65,6 +65,12 @@ brlcad_add_test(NAME libBObol_view_store COMMAND test_bobol_view_store)
 brlcad_addexec(test_bobol_compact_edit test_compact_edit.cpp "libBObol;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_compact_edit COMMAND test_bobol_compact_edit)
 
+brlcad_addexec(test_bobol_scene_representation_lifecycle
+  test_scene_representation_lifecycle.cpp
+  "libBObol;libwdb;libbu;Obol::Obol" TEST ALL_CXX)
+brlcad_add_test(NAME libBObol_scene_representation_lifecycle
+  COMMAND test_bobol_scene_representation_lifecycle)
+
 brlcad_addexec(test_bobol_edit_manipulator test_edit_manipulator.cpp
   "libBObol;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_edit_manipulator
@@ -175,6 +181,7 @@ set(_bobol_headless_tests
   libBObol_mesh_lod_cache
   libBObol_view_store
   libBObol_compact_edit
+  libBObol_scene_representation_lifecycle
   libBObol_edit_manipulator
   libBObol_rt_render
   libBObol_window_host
@@ -201,6 +208,7 @@ set(_bobol_sanitizer_tests
   libBObol_source_realization
   libBObol_view_store
   libBObol_compact_edit
+  libBObol_scene_representation_lifecycle
   libBObol_edit_manipulator
   libBObol_rt_render
   libBObol_headless_window_host)
@@ -234,6 +242,7 @@ cmakefiles(
   test_render.cpp
   test_view_store.cpp
   test_compact_edit.cpp
+  test_scene_representation_lifecycle.cpp
   test_compact_occurrence_stream.cpp
   test_window_host.cpp
 )

@@ -2362,6 +2362,20 @@ ged_obol_apply_view_lod_policy(struct ged *gedp,
     if (!gedp || !scene || !source_instance_key || !source_instance_key[0])
 	return 0;
 
+    /* Evaluated display modes are a complete CSG result for their root, not
+     * view-cut mesh sources.  Applying a camera/PoP policy to them after
+     * realization immediately marks the otherwise current result STALE_VIEW,
+     * which makes -m3/-m5 appear to redraw forever. */
+    SoBRLDatabaseSource *source =
+	scene->findDatabaseSourceInstance(source_instance_key);
+    BObolDatabaseSourceSummary summary;
+    if (source && source->getSummary(summary) && summary.valid &&
+	(summary.representationMode ==
+	 SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE ||
+	 summary.representationMode ==
+	 SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS))
+	return 0;
+
     ged_obol_view_lod_policy_state policy_state =
 	ged_obol_view_lod_policy_state_for_source(gedp, view_ctx);
     if (!policy_state.valid)
@@ -2658,7 +2672,9 @@ ged_obol_replace_path(struct ged *gedp,
 	    publish_state.roleFlags |=
 		SoBRLDatabaseSource::REALIZATION_ROLE_MESH;
     }
-    if (policy_state.valid && policy_state.viewDependent) {
+    if (draw_mode != GED_DRAW_MODE_EVAL_WIRE &&
+	draw_mode != GED_DRAW_MODE_EVAL_POINTS &&
+	policy_state.valid && policy_state.viewDependent) {
 	publish_state.viewPolicyValid = TRUE;
 	publish_state.viewDependent =
 	    policy_state.viewDependent ? TRUE : FALSE;
@@ -2710,6 +2726,9 @@ ged_obol_replace_path(struct ged *gedp,
     return changed;
 }
 
+static int ged_obol_database_source_realize_for_path_mode(struct ged *gedp,
+	const char *path, int draw_mode);
+
 static int
 ged_obol_replace_path_and_realize(struct ged *gedp,
 				  struct ged_view_context *view_ctx,
@@ -2731,7 +2750,7 @@ ged_obol_replace_path_and_realize(struct ged *gedp,
 
     if ((draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
 	 draw_mode == GED_DRAW_MODE_EVAL_POINTS) &&
-	ged_draw_obol_database_source_realize_for_path(gedp, path))
+	ged_obol_database_source_realize_for_path_mode(gedp, path, draw_mode))
 	return 1;
 
     return changed;
@@ -4068,13 +4087,23 @@ ged_draw_obol_view_lod_policy_changed(struct ged *gedp, struct ged_view_context 
 	    if (independent_view &&
 		!ged_obol_database_source_instance_in_scope(summary, view_ctx))
 		continue;
-	    if (ged_obol_apply_view_lod_policy(gedp, view_ctx, scene,
+	    const int evaluated =
+		summary.representationMode ==
+		SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE ||
+		summary.representationMode ==
+		SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS;
+	    /* Evaluated representations are complete CSG results.  They must not
+	     * enter the view/PoP invalidation path: doing so after a successful
+	     * realization leaves an otherwise current -m3/-m5 source stale forever.
+	     */
+	    if (!evaluated &&
+		ged_obol_apply_view_lod_policy(gedp, view_ctx, scene,
 					       summary.instanceKey.getString()) > 0)
 		changed = 1;
 	    /* A compact registry owns stable occurrence state.  LoD changes only
 	     * its view-local backing payloads; marking it stale would rebuild the
 	     * scene merely to turn LoD off. */
-	    if (policy_state.valid && !policy_state.meshEnabled &&
+	    if (!evaluated && policy_state.valid && !policy_state.meshEnabled &&
 		!scene->getDatabaseSource(i)->isCompactOccurrenceRegistry() &&
 		scene->markDatabaseSourceInstanceStale(
 		    summary.instanceKey.getString(),
@@ -6275,30 +6304,52 @@ ged_draw_obol_database_source_set_realization_view_policy_for_path(
     return applied;
 }
 
+static int
+ged_obol_database_source_realize_for_path_mode(struct ged *gedp,
+	const char *path,
+	int draw_mode)
+{
+    BObolSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene || !path || !path[0])
+	return 0;
+
+    const std::vector<std::string> instance_keys =
+	ged_obol_database_source_instance_keys_for_path(gedp, path, draw_mode,
+	    0);
+    int found = 0;
+    int needs_realization = 0;
+    for (const std::string &instance_key : instance_keys) {
+	SoBRLDatabaseSource *source =
+	    scene->findDatabaseSourceInstance(instance_key.c_str());
+	if (!source)
+	    continue;
+	found = 1;
+	if (source->needsRealization())
+	    needs_realization = 1;
+    }
+    if (!found)
+	return 0;
+
+    if (needs_realization)
+	(void)scene->realizePending();
+
+    for (const std::string &instance_key : instance_keys) {
+	SoBRLDatabaseSource *source =
+	    scene->findDatabaseSourceInstance(instance_key.c_str());
+	BObolDatabaseSourceSummary summary;
+	if (source && source->getSummary(summary) && summary.valid &&
+	    summary.realizationStatus == SoBRLDatabaseSource::REALIZED &&
+	    !source->needsRealization())
+	    return 1;
+    }
+    return 0;
+}
+
 extern "C" int
 ged_draw_obol_database_source_realize_for_path(struct ged *gedp,
 	const char *path)
 {
-    BObolSceneController *scene = ged_draw_obol_scene_controller(gedp);
-    if (!scene)
-	return 0;
-
-    SoBRLDatabaseSource *source =
-	ged_obol_owned_database_source_for_path(gedp, path);
-    if (!source)
-	source = scene->findDatabaseSource(path);
-    if (!source)
-	return 0;
-
-    if (source->needsRealization())
-	(void)scene->realizePending();
-
-    BObolDatabaseSourceSummary summary;
-    if (!source->getSummary(summary) || !summary.valid)
-	return 0;
-
-    return summary.realizationStatus == SoBRLDatabaseSource::REALIZED &&
-	   !source->needsRealization() ? 1 : 0;
+    return ged_obol_database_source_realize_for_path_mode(gedp, path, -1);
 }
 
 extern "C" int
@@ -16572,6 +16623,9 @@ ged_obol_apply_stale_source_transaction(
     if (!txn || !scene)
 	return 0;
 
+    (void)gedp;
+    (void)source_revision;
+
     std::vector<std::string> targets =
 	ged_obol_transaction_paths(txn, result);
     if (targets.empty())
@@ -16579,23 +16633,11 @@ ged_obol_apply_stale_source_transaction(
 
     const ged_draw_stale_reason stale_reason = txn->stale_reason ?
 	txn->stale_reason : GED_DRAW_STALE_SOURCE_CHANGED;
-    if (ged_obol_stale_reason_from_ged(stale_reason) ==
-	SoBRLDatabaseSource::STALE_SOURCE &&
-	ged_obol_refresh_matching_compact_parts(scene, view_ctx, targets,
-	    txn->mode, source_revision) > 0)
-	return 1;
-
-    if (view_ctx) {
-	if (!source_revision)
-	    source_revision =
-		ged_obol_fold_revision(ged_draw_scene_revision(gedp));
-	int refreshed = ged_obol_replace_matching_database_sources(gedp,
-			view_ctx, targets, 0, 1, source_revision, scene,
-			txn->mode);
-	if (refreshed)
-	    return 1;
-    }
-
+    /* STALE_SOURCE is an invalidation boundary, not a redraw request.  In
+     * particular, replacing a still-displayed aggregate here discards its
+     * retained compact/LoD state and makes a simple input notification look
+     * like an erase-and-draw cycle.  GED_DRAW_TXN_REDRAW and a source update
+     * carrying redraw perform the corresponding realization work. */
     int handled = ged_obol_mark_matching_database_sources_stale(view_ctx,
 		  targets, 0, 1,
 		  ged_obol_stale_reason_from_ged(stale_reason), scene,
@@ -16745,6 +16787,15 @@ ged_obol_apply_redraw_transaction(
 	for (const std::string &target : targets)
 	    (void)source->setCompactInstanceDisplayStateForPath(target.c_str(),
 		TRUE, 1, TRUE, 0, FALSE, 0, FALSE);
+    }
+
+    /* Redraw restores the requested source's current realization.  Address
+     * only its representation keys: walking every stale source in a large
+     * scene couples an edit redraw to unrelated progressive work. */
+    if (txn->mode >= 0) {
+	for (const std::string &target : targets)
+	    (void)ged_obol_database_source_realize_for_path_mode(gedp,
+		target.c_str(), txn->mode);
     }
     BObolViewController *controller = ged_draw_obol_controller(gedp);
     if (controller)

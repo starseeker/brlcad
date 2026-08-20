@@ -2892,6 +2892,36 @@ BObolFeatureStore::summary(const SbString &name,
 }
 
 SbBool
+BObolFeatureStore::summary(BObolFeatureHandle handle,
+			     BObolFeatureSummary &summaryOut) const
+{
+    summaryOut = BObolFeatureSummary();
+    BObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+
+    summaryOut.exists = TRUE;
+    summaryOut.visible = rec->style.hasVisible ? rec->style.visible : TRUE;
+    summaryOut.realized = rec->node ? TRUE : FALSE;
+    summaryOut.kind = rec->kind;
+    summaryOut.scope = rec->scope;
+    summaryOut.pointCount = rec->points.size();
+    summaryOut.commandCount = rec->commands.size();
+    summaryOut.metadataCount = rec->metadata.size();
+    summaryOut.primitiveMetadataCount = rec->primitiveMetadata.size();
+    summaryOut.selectedPrimitiveCount = rec->selectedPrimitives.size();
+    summaryOut.highlightedPrimitiveCount = rec->highlightedPrimitives.size();
+    summaryOut.owner = rec->owner;
+    summaryOut.overlay = rec->overlay;
+    if (rec->node && rec->node->isOfType(SoGroup::getClassTypeId()))
+	summaryOut.childCount =
+	    static_cast<size_t>(static_cast<SoGroup *>(rec->node)->getNumChildren());
+    else
+	summaryOut.childCount = rec->node ? 1 : 0;
+    return TRUE;
+}
+
+SbBool
 BObolFeatureStore::summaryOwned(const SbString &name,
 				  BObolFeatureSummary &summaryOut,
 				  unsigned int scopeMask,

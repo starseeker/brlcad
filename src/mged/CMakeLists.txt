@@ -104,6 +104,11 @@ if(BRLCAD_ENABLE_TCL)
   if(TARGET rt)
     add_dependencies(mged rt)
   endif(TARGET rt)
+  # The headless Obol smoke scripts inspect their captures with these built
+  # utilities.  Make a focused `ninja mged` sufficient to run the tests.
+  if(TARGET png-pix AND TARGET pixstat)
+    add_dependencies(mged png-pix pixstat)
+  endif(TARGET png-pix AND TARGET pixstat)
 
   # MGED needs the tclIndex and pkgIndex files set up correctly
 	  add_dependencies(mged TclIndexBld)

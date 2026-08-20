@@ -2542,7 +2542,7 @@ exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
     char *resolved_occurrence_path = db_path_to_string(
 	(struct db_full_path *)occurrence_info.fullpath);
     if (!resolved_occurrence_path ||
-	!BU_STR_EQUAL(resolved_occurrence_path, nested_target)) {
+	!path_equal(resolved_occurrence_path, nested_target)) {
 	if (resolved_occurrence_path)
 	    bu_free(resolved_occurrence_path, "resolved compact occurrence path");
 	FAIL("exact compact occurrence resolution should preserve semantic path identity");
@@ -2560,7 +2560,7 @@ exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
     resolved_occurrence_path = db_path_to_string(
 	(struct db_full_path *)occurrence_info.fullpath);
     if (!resolved_occurrence_path ||
-	!BU_STR_EQUAL(resolved_occurrence_path, nested_target)) {
+	!path_equal(resolved_occurrence_path, nested_target)) {
 	if (resolved_occurrence_path)
 	    bu_free(resolved_occurrence_path, "resolved compact subtree path");
 	FAIL("compact subtree occurrence resolution should use deterministic scene order");
@@ -5277,13 +5277,19 @@ main(int argc, char **argv)
 		    &box_record);
 	    if (!box_record.found)
 		FAIL("GED shape record should refresh after LoD policy test");
-		    if (!ged_scene_internal_shape_geometry_clear(gedp, box_record.ref))
-			FAIL("GED shape geometry clear should clear shaded source realization mesh");
-		    ged_draw_index_stats_reset(gedp);
-		    if (!ged_draw_shape_ref_set_visible(gedp, box_record.ref, 1))
-			FAIL("GED visible setter should succeed");
-    if (ged_scene_occurrence_highlight_set(gedp, box_record.ref, 0, NULL) !=
-	    GED_SCENE_OK)
+	    if (!ged_scene_internal_shape_geometry_clear(gedp, box_record.ref))
+		FAIL("GED shape geometry clear should clear shaded source realization mesh");
+	    ged_draw_index_stats_reset(gedp);
+	    if (!ged_draw_shape_ref_set_visible(gedp, box_record.ref, 1))
+		FAIL("GED visible setter should succeed");
+	    struct ged_scene_path_request highlight_request;
+	    ged_scene_path_request_init(&highlight_request);
+	    highlight_request.path = "box.s";
+	    ged_scene_occurrence_ref box_occurrence =
+		ged_scene_occurrence_resolve(gedp, &highlight_request);
+	    if (ged_scene_occurrence_ref_is_null(box_occurrence) ||
+		ged_scene_occurrence_highlight_set(gedp, box_occurrence, 0,
+		    NULL) != GED_SCENE_OK)
 	FAIL("GED highlighted setter should succeed");
     const unsigned char override_color[3] = {10, 20, 30};
     if (!ged_draw_shape_ref_set_color(gedp, box_record.ref, override_color))

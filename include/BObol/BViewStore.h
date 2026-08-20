@@ -626,6 +626,13 @@ public:
     SbBool summary(const SbString &name,
 	BObolFeatureSummary &summaryOut,
 	unsigned int scopeMask = BOBOL_FEATURE_SCOPE_ALL) const;
+    /**
+     * Summarize one exact retained feature.  Unlike the name-based overload,
+     * this preserves the identity selected by find()/findOwned() when
+     * multiple producers use the same display name.
+     */
+    SbBool summary(BObolFeatureHandle handle,
+	BObolFeatureSummary &summaryOut) const;
     SbBool summaryOwned(const SbString &name,
 	BObolFeatureSummary &summaryOut,
 	unsigned int scopeMask,

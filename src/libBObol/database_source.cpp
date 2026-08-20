@@ -13232,10 +13232,47 @@ SoBRLDatabaseSource::fieldSensorCB(void *data, SoSensor *sensor)
     if (!source)
 	return;
 
-    if (sensor == source->d->inputsRevisionSensor)
-	source->markStale(STALE_INPUTS);
-    else if (sensor == source->d->viewRevisionSensor ||
-	     sensor == source->d->lodBotThresholdSensor)
+    /* Field sensors are delayed.  Once realization has recorded the current
+     * complete identity, a later callback for one of the fields in that
+     * identity can only be the coalesced notification of the same controller
+     * publication.  It is not a new invalidation. */
+    if (!source->stale.getValue() &&
+	source->realizationStatus.getValue() == REALIZED &&
+	BU_STR_EQUAL(source->realizationIdentity.getValue().getString(),
+		source_realization_identity(source).getString()))
+	return;
+
+    const int terminalEvaluated =
+	source->representationMode.getValue() == REPRESENTATION_EVAL_WIRE ||
+	source->representationMode.getValue() == REPRESENTATION_EVAL_POINTS;
+    /* Evaluated sources own a complete terminal CSG result.  The camera and
+     * draw-channel fields which drive progressive source production do not
+     * change that result; configuration notifications for those fields must
+     * not send it back through the view-dependent pipeline. */
+    if (terminalEvaluated &&
+	(sensor == source->d->viewRevisionSensor ||
+	 sensor == source->d->lodBotThresholdSensor ||
+	 sensor == source->d->drawModeSensor ||
+	 sensor == source->d->representationModeSensor))
+	return;
+
+    /* Field sensors are delayed.  A controller may configure a revision,
+     * realize it, and only then receive the coalesced field callback.  A
+     * revision callback is therefore an invalidation only when its epoch no
+     * longer matches the realized epoch; otherwise it must be a no-op. */
+    if (sensor == source->d->inputsRevisionSensor) {
+	if (source->realizedInputsRevision.getValue() !=
+	    source->inputsRevision.getValue())
+	    source->markStale(STALE_INPUTS);
+    } else if (sensor == source->d->sourceRevisionSensor) {
+	if (source->realizedSourceRevision.getValue() !=
+	    source->sourceRevision.getValue())
+	    source->markStale(STALE_SOURCE);
+    } else if (sensor == source->d->viewRevisionSensor) {
+	if (source->realizedViewRevision.getValue() !=
+	    source->viewRevision.getValue())
+	    source->markStale(STALE_VIEW);
+    } else if (sensor == source->d->lodBotThresholdSensor)
 	source->markStale(STALE_VIEW);
     else if (sensor == source->d->drawModeSensor ||
 	     sensor == source->d->representationModeSensor)
@@ -14142,13 +14179,31 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
     int selectedChanged = 0;
     int highlightedChanged = 0;
     const SbBool hadMaterialOverride = this->materialColorValid.getValue();
-    if (sourceRevisionValid &&
-	this->sourceRevision.getValue() != nextSourceRevision) {
-	this->sourceRevision = nextSourceRevision;
-	changed = 1;
-    }
-    if (this->inputsRevision.getValue() != nextInputsRevision) {
-	this->inputsRevision = nextInputsRevision;
+    const SbBool sourceRevisionChanged = sourceRevisionValid &&
+	this->sourceRevision.getValue() != nextSourceRevision;
+    const SbBool inputsRevisionChanged =
+	this->inputsRevision.getValue() != nextInputsRevision;
+    if (sourceRevisionChanged || inputsRevisionChanged) {
+	/* Controller publication owns these revision changes.  Detach their
+	 * asynchronous field sensors while committing them, then invalidate now.
+	 * Otherwise a queued sensor can stale a source after its realization pass
+	 * and leave a fresh draw permanently one frame behind. */
+	if (this->d->sourceRevisionSensor)
+	    this->d->sourceRevisionSensor->detach();
+	if (this->d->inputsRevisionSensor)
+	    this->d->inputsRevisionSensor->detach();
+	if (sourceRevisionChanged)
+	    this->sourceRevision = nextSourceRevision;
+	if (inputsRevisionChanged)
+	    this->inputsRevision = nextInputsRevision;
+	if (this->d->sourceRevisionSensor)
+	    this->d->sourceRevisionSensor->attach(&this->sourceRevision);
+	if (this->d->inputsRevisionSensor)
+	    this->d->inputsRevisionSensor->attach(&this->inputsRevision);
+	if (sourceRevisionChanged)
+	    this->markStale(STALE_SOURCE);
+	if (inputsRevisionChanged)
+	    this->markStale(STALE_INPUTS);
 	changed = 1;
     }
     if (this->visible.getValue() != nextVisible) {

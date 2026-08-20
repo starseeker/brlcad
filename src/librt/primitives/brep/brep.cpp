@@ -2700,6 +2700,13 @@ rt_brep_import5(struct rt_db_internal *ip, const struct bu_external *ep, const f
 
     bi = (struct rt_brep_internal*)ip->idb_ptr;
     bi->magic = RT_BREP_INTERNAL_MAGIC;
+    bi->brep = NULL;
+
+    const auto import_fail = [&]() -> int {
+	bu_free(bi, "rt_brep_internal import failure");
+	ip->idb_ptr = NULL;
+	return -1;
+    };
 
     RT_MemoryArchive archive(ep->ext_buf, ep->ext_nbytes);
     ONX_Model model;
@@ -2709,6 +2716,8 @@ rt_brep_import5(struct rt_db_internal *ip, const struct bu_external *ep, const f
 
     /* grab the first geometry item from the manifest */
     const ON_ComponentManifestItem* geom = model.Manifest().FirstItem(ON_ModelComponent::Type::ModelGeometry);
+    if (!geom)
+	return import_fail();
     /* sanity check */
     if (model.Manifest().NextItem(geom) != nullptr)
 	bu_log("WARNING: geometry may be getting lost\n");
@@ -2716,8 +2725,15 @@ rt_brep_import5(struct rt_db_internal *ip, const struct bu_external *ep, const f
     /* do the necessary API calls to get a usable geometry component from the manifest item */
     ON_ModelComponentReference geom_ref = model.ModelGeometryFromId(geom->Id());
     const ON_ModelGeometryComponent* geom_comp = ON_ModelGeometryComponent::Cast(geom_ref.ModelComponent());
+    if (!geom_comp)
+	return import_fail();
 
-    bi->brep = ON_Brep::New(*ON_Brep::Cast(geom_comp->Geometry(NULL)));
+    const ON_Brep *brep = ON_Brep::Cast(geom_comp->Geometry(NULL));
+    if (!brep)
+	return import_fail();
+    bi->brep = ON_Brep::New(*brep);
+    if (!bi->brep)
+	return import_fail();
 
     /* Apply transform */
     return rt_brep_mat(ip, mat, NULL);

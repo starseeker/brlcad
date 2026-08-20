@@ -2697,13 +2697,11 @@ BObolSceneController::publishDatabaseSourceInstance(
     SoBRLDatabaseSource *source =
 	this->findIndexedDatabaseSourceInstance(sourceInstanceKey);
     const int sourceExisted = source ? 1 : 0;
-    SbBool sourceNotifyEnabled = TRUE;
     SoGroup *sourceParent = NULL;
     int sourceIndex = -1;
     SbBool indexKeysUnchanged = FALSE;
     if (!source) {
 	source = new SoBRLDatabaseSource;
-	sourceNotifyEnabled = source->enableNotify(FALSE);
     } else {
 	sourceParent = this->findIndexedDatabaseSourceInstanceParent(
 			   sourceInstanceKey);
@@ -2809,7 +2807,6 @@ BObolSceneController::publishDatabaseSourceInstance(
 	changed = 1;
 
     if (!sourceExisted) {
-	source->enableNotify(sourceNotifyEnabled);
 	targetGroup->addChild(source);
 	this->indexDatabaseSource(source, targetGroup);
 	this->advanceStructuralRevision();
