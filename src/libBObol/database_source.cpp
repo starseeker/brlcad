@@ -767,6 +767,10 @@ BObolCompactLodInstanceSummary::BObolCompactLodInstanceSummary(void) :
     sourceContentHash(0),
     sourceFaceCount(0),
     sourcePointCount(0),
+    brepSource(FALSE),
+    meshAssetTessellationAbsTol(0.0),
+    meshAssetTessellationRelTol(0.0),
+    meshAssetTessellationNormTol(0.0),
     localToSource(SbMatrix::identity()),
     presentationLocalToSource(SbMatrix::identity()),
     presentationCornersValid(FALSE),
@@ -782,8 +786,25 @@ BObolCompactLodInstanceSummary::BObolCompactLodInstanceSummary(void) :
     presentationLocalBounds.makeEmpty();
 }
 
+BObolCompactLodProviderSummary::BObolCompactLodProviderSummary(void) :
+    stagedSource(),
+    lodAvailable(FALSE),
+    lodActiveCut(-1),
+    lodFaceCount(0),
+    lodPointCount(0),
+    lodHasNormals(FALSE)
+{
+}
+
 BObolCompactLodPlanningSummary::BObolCompactLodPlanningSummary(void) :
     valid(FALSE),
+    sourceContentHash(0),
+    sourceFaceCount(0),
+    sourcePointCount(0),
+    brepSource(FALSE),
+    meshAssetTessellationAbsTol(0.0),
+    meshAssetTessellationRelTol(0.0),
+    meshAssetTessellationNormTol(0.0),
     localToSource(SbMatrix::identity()),
     presentationLocalToSource(SbMatrix::identity()),
     presentationCornersValid(FALSE),
@@ -12526,7 +12547,8 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
     changedEntries.erase(std::unique(changedEntries.begin(),
 	changedEntries.end()), changedEntries.end());
     this->markCadBatchDirty(changedEntries);
-    this->markDisplayMeshLodDirty(changedEntries);
+    this->markDisplayMeshLodDirty(changedEntries,
+	index.entries.size() > firstNew ? TRUE : FALSE);
     if (mergedSourceContract) {
 	this->d->displayMeshLodContractRevisionValid = TRUE;
 	this->d->displayMeshLodContractSourceRevision =
@@ -13561,7 +13583,7 @@ SoBRLDatabaseSource::markDisplayMeshLodDirty(void)
 
 void
 SoBRLDatabaseSource::markDisplayMeshLodDirty(
-    const std::vector<size_t> &entryIndices)
+    const std::vector<size_t> &entryIndices, SbBool coverageInvalidated)
 {
     if (entryIndices.empty())
 	return;
@@ -13571,6 +13593,7 @@ SoBRLDatabaseSource::markDisplayMeshLodDirty(
     Impl::DisplayMeshLodDelta delta;
     delta.revision = this->d->displayMeshLodRevision;
     delta.entryIndices = entryIndices;
+    delta.coverageInvalidated = coverageInvalidated;
     std::sort(delta.entryIndices.begin(), delta.entryIndices.end());
     delta.entryIndices.erase(std::unique(delta.entryIndices.begin(),
 	delta.entryIndices.end()), delta.entryIndices.end());
@@ -19601,9 +19624,12 @@ SoBRLDatabaseSource::getDisplayMeshLodRevision(void) const
 
 SbBool
 SoBRLDatabaseSource::getDisplayMeshLodChangedEntries(
-    uint64_t revision, std::vector<size_t> &entryIndices) const
+    uint64_t revision, std::vector<size_t> &entryIndices,
+    SbBool *coverageInvalidated) const
 {
     entryIndices.clear();
+    if (coverageInvalidated)
+	*coverageInvalidated = FALSE;
     if (revision == this->d->displayMeshLodRevision)
 	return TRUE;
     if (!revision || revision > this->d->displayMeshLodRevision ||
@@ -19616,6 +19642,8 @@ SoBRLDatabaseSource::getDisplayMeshLodChangedEntries(
 	    continue;
 	entryIndices.insert(entryIndices.end(), delta.entryIndices.begin(),
 	    delta.entryIndices.end());
+	if (coverageInvalidated && delta.coverageInvalidated)
+	    *coverageInvalidated = TRUE;
     }
     if (entryIndices.empty())
 	return FALSE;
@@ -19906,6 +19934,15 @@ SoBRLDatabaseSource::getCompactLodInstanceSummary(
 	    entry.sourceMeshRequest.meshAssetContentHash;
 	summary.sourceFaceCount = entry.sourceMeshRequest.faceCount;
 	summary.sourcePointCount = entry.sourceMeshRequest.pointCount;
+	summary.brepSource = BU_STR_EQUAL(
+	    entry.sourceMeshRequest.sourceType.getString(), "brep") ?
+	    TRUE : FALSE;
+	summary.meshAssetTessellationAbsTol =
+	    entry.sourceMeshRequest.meshAssetTessellationAbsTol;
+	summary.meshAssetTessellationRelTol =
+	    entry.sourceMeshRequest.meshAssetTessellationRelTol;
+	summary.meshAssetTessellationNormTol =
+	    entry.sourceMeshRequest.meshAssetTessellationNormTol;
     }
     summary.localToSource = entry.sourceMeshRequestValid ?
 	compact_mesh_asset_matrix(this, entry) : entry.localToSource;
@@ -19929,10 +19966,10 @@ SoBRLDatabaseSource::getCompactLodInstanceSummary(
 }
 
 SbBool
-SoBRLDatabaseSource::getCompactSourceMeshRequest(
-    int index, BObolSourceMeshRequest &request) const
+SoBRLDatabaseSource::getCompactLodProviderSummary(
+    int index, BObolCompactLodProviderSummary &summary) const
 {
-    request.clear();
+    summary = BObolCompactLodProviderSummary();
     if (!this->d->compactIndex || index < 0 ||
 	static_cast<size_t>(index) >= this->d->compactIndex->entries.size())
 	return FALSE;
@@ -19940,7 +19977,14 @@ SoBRLDatabaseSource::getCompactSourceMeshRequest(
 	this->d->compactIndex->entries[static_cast<size_t>(index)];
     if (!entry.sourceMeshRequestValid)
 	return FALSE;
-    request = entry.sourceMeshRequest;
+    summary.stagedSource = entry.sourceMeshRequest.stagedSource;
+    summary.lodAvailable = entry.sourceMeshRequest.lodAvailable ?
+	TRUE : FALSE;
+    summary.lodActiveCut = entry.sourceMeshRequest.lodActiveCut;
+    summary.lodFaceCount = entry.sourceMeshRequest.lodFaceCount;
+    summary.lodPointCount = entry.sourceMeshRequest.lodPointCount;
+    summary.lodHasNormals = entry.sourceMeshRequest.lodHasNormals ?
+	TRUE : FALSE;
     return TRUE;
 }
 
@@ -19957,6 +20001,21 @@ SoBRLDatabaseSource::getCompactLodPlanningSummary(
 	this->d->compactIndex->entries[static_cast<size_t>(index)];
     summary.valid = TRUE;
     summary.sourceInstanceKey = compact_instance_identity(entry);
+    if (entry.sourceMeshRequestValid) {
+	summary.sourceContentHash =
+	    entry.sourceMeshRequest.meshAssetContentHash;
+	summary.sourceFaceCount = entry.sourceMeshRequest.faceCount;
+	summary.sourcePointCount = entry.sourceMeshRequest.pointCount;
+	summary.brepSource = BU_STR_EQUAL(
+	    entry.sourceMeshRequest.sourceType.getString(), "brep") ?
+	    TRUE : FALSE;
+	summary.meshAssetTessellationAbsTol =
+	    entry.sourceMeshRequest.meshAssetTessellationAbsTol;
+	summary.meshAssetTessellationRelTol =
+	    entry.sourceMeshRequest.meshAssetTessellationRelTol;
+	summary.meshAssetTessellationNormTol =
+	    entry.sourceMeshRequest.meshAssetTessellationNormTol;
+    }
     summary.localToSource = entry.sourceMeshRequestValid ?
 	compact_mesh_asset_matrix(this, entry) : entry.localToSource;
     summary.localBounds = entry.sourceMeshRequestValid &&
@@ -20677,16 +20736,24 @@ SoBRLDatabaseSource::reapplyCompactInstanceVisibilityFrontier(
 	 * Rebuilding all display state here needlessly revisits every style and
 	 * instance record and can make a one-occurrence erase look like a scene
 	 * rebuild to the renderer. */
-	if (firstEntry == 0) {
+	if (changedEntries.size() > index.entries.size() / 4) {
 	    index.hiddenInstances.clear();
 	    for (const BObolCompactInstanceEntry &entry : index.entries) {
 		if (!entry.visible)
 		    index.hiddenInstances.push_back(entry.instance);
 	    }
 	} else {
-	    /* Streamed candidates are newly appended and therefore cannot
-	     * already occur in hiddenInstances.  Publish only the hidden
-	     * additions rather than rescanning every earlier occurrence. */
+	    std::unordered_set<Obol::InstanceId, std::hash<Obol::InstanceId>>
+		changedInstances;
+	    changedInstances.reserve(changedEntries.size());
+	    for (const size_t entryIndex : changedEntries)
+		changedInstances.insert(index.entries[entryIndex].instance);
+	    index.hiddenInstances.erase(std::remove_if(
+		index.hiddenInstances.begin(), index.hiddenInstances.end(),
+		[&changedInstances](const Obol::InstanceId &instance) {
+		    return changedInstances.find(instance) !=
+			changedInstances.end();
+		}), index.hiddenInstances.end());
 	    for (const size_t entryIndex : changedEntries) {
 		const BObolCompactInstanceEntry &entry =
 		    index.entries[entryIndex];
@@ -20695,7 +20762,7 @@ SoBRLDatabaseSource::reapplyCompactInstanceVisibilityFrontier(
 	    }
 	}
 	this->markCompiledAssemblyDirty();
-	this->markCadBatchDirty();
+	this->markCadBatchDirty(changedEntries);
 	this->markDisplayMeshLodDirty(changedEntries);
 	this->touch();
     }

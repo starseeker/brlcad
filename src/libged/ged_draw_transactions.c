@@ -1181,26 +1181,48 @@ ged_draw_apply_transaction(struct ged *gedp,
     if (result)
 	_ged_draw_txn_result_prepare(result, gedp);
 
-    int ret = _ged_draw_apply_transaction_inner(gedp, txn, result, path);
-    if (ret > 0)
+    int reducer_ret = _ged_draw_apply_transaction_inner(gedp, txn, result,
+	path);
+    int ret = reducer_ret;
+    if (reducer_ret > 0)
 	ged_draw_frontier_note_transaction(gedp, txn, path);
     if (result) {
-	result->status = ret;
+	/* Give the active scene adapter a chance to handle backend-owned scene
+	 * state even when the renderer-neutral frontier has no matching draw
+	 * intent.  Custom plugin objects and retained Obol-only sources are valid
+	 * scene citizens; requiring the semantic reducer to recognize them first
+	 * made their update/erase transactions unreachable.
+	 *
+	 * A negative reducer result is a malformed/failed semantic transaction,
+	 * not an extension point.  Otherwise the reducer and backend contribute
+	 * independently to one committed result. */
+	result->status = reducer_ret;
 	result->scene_revision_after = ged_draw_scene_revision(gedp);
-	if (ret < 0) {
+	if (reducer_ret < 0) {
 	    result->error_count = 1;
 	    bu_vls_printf(&result->errors, "draw transaction failed");
 	    if (path)
 		bu_vls_printf(&result->errors, ": %s", path);
 	}
-	    if (ret > 0) {
-		(void)ged_scene_backend_apply_private(gedp, txn, result);
+	if (reducer_ret >= 0 && _ged_draw_txn_kind_changes_scene(txn->kind)) {
+	    const int backend_ret =
+		ged_scene_backend_apply_private(gedp, txn, result);
+	    if (backend_ret > 0) {
+		if (ret == 0)
+		    ret = 1;
 		/* Incremental frontier records are an optimization for the active
 		 * adapter, not semantic state.  A late/replacement adapter receives
 		 * the authoritative snapshot, so never replay stale records on its
 		 * first later transaction. */
 		ged_draw_frontier_visibility_changes_discard(gedp);
 	    }
+	}
+	if (ret > 0) {
+	    _ged_draw_txn_bump_revision_if_needed(gedp, txn, ret,
+		result->scene_revision_before);
+	    result->status = ret;
+	    result->scene_revision_after = ged_draw_scene_revision(gedp);
+	}
 	if (ret > 0 && _ged_draw_txn_kind_changes_scene(txn->kind))
 	    (void)ged_selection_present_private(gedp);
 	if (ret > 0 && txn->kind == GED_DRAW_TXN_DRAW && txn->autoview) {

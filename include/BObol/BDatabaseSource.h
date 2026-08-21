@@ -244,6 +244,20 @@ struct BOBOL_EXPORT BObolCompactInstanceSummary {
     SbBool highlighted;
 };
 
+/* Provider-only tail of a compact source request.  This is materialized only
+ * after retained/shared/structural fast paths have proved that an asynchronous
+ * cache task is required. */
+struct BOBOL_EXPORT BObolCompactLodProviderSummary {
+    BObolCompactLodProviderSummary(void);
+
+    std::weak_ptr<const BObolStagedSourceMesh> stagedSource;
+    SbBool lodAvailable;
+    int lodActiveCut;
+    uint32_t lodFaceCount;
+    uint32_t lodPointCount;
+    SbBool lodHasNormals;
+};
+
 /* Minimal immutable occurrence snapshot consumed by the view LoD planner.
  * Keep selection/material/edit metadata out of this hot path: a many-leaf
  * camera epoch should copy only what is needed to cull, prioritize, and
@@ -261,6 +275,13 @@ struct BOBOL_EXPORT BObolCompactLodInstanceSummary {
     uint64_t sourceContentHash;
     uint64_t sourceFaceCount;
     uint64_t sourcePointCount;
+    /* Fixed-size representation facts needed before the planner knows
+     * whether provider work is necessary.  Keeping them here avoids copying
+     * the legacy, string-heavy source request for every retained leaf. */
+    SbBool brepSource;
+    double meshAssetTessellationAbsTol;
+    double meshAssetTessellationRelTol;
+    double meshAssetTessellationNormTol;
     SbMatrix localToSource;
     SbBox3f localBounds;
     /* The currently authored/displayed part may be a normalized structural
@@ -287,6 +308,13 @@ struct BOBOL_EXPORT BObolCompactLodPlanningSummary {
 
     SbBool valid;
     SbString sourceInstanceKey;
+    uint64_t sourceContentHash;
+    uint64_t sourceFaceCount;
+    uint64_t sourcePointCount;
+    SbBool brepSource;
+    double meshAssetTessellationAbsTol;
+    double meshAssetTessellationRelTol;
+    double meshAssetTessellationNormTol;
     SbMatrix localToSource;
     SbBox3f localBounds;
     SbMatrix presentationLocalToSource;
@@ -1097,11 +1125,15 @@ public:
     uint64_t getDisplayMeshLodRevision(void) const;
     /** Return the compact entries whose view-LoD demand changed after
      * @p revision.  FALSE means the bounded delta history cannot prove a
-     * complete answer and the caller must rescan the source.  The journal is
-     * source-owned and non-consuming, so independent views may advance at
-     * different rates. */
+     * complete answer and the caller must rescan the source.  When non-NULL,
+     * @p coverageInvalidated reports whether any returned mutation changed
+     * the occurrence population and therefore invalidated a scene-wide
+     * coverage proof.  An exact visibility or in-place data mutation leaves
+     * it FALSE.  The journal is source-owned and non-consuming, so
+     * independent views may advance at different rates. */
     SbBool getDisplayMeshLodChangedEntries(uint64_t revision,
-	std::vector<size_t> &entryIndices) const;
+	std::vector<size_t> &entryIndices,
+	SbBool *coverageInvalidated = NULL) const;
     SoBRLMaterialObject *getRealizedMaterialObject(void) const;
     SoBRLMaterialObject *getRealizedMaterialObject(int index) const;
     int getRealizedMaterialObjectCount(void) const;
@@ -1180,8 +1212,8 @@ public:
      * epoch and avoids a second instance-id hash lookup. */
     SbBool getCompactLodInstanceSummary(int index,
 	BObolCompactLodInstanceSummary &summary) const;
-    SbBool getCompactSourceMeshRequest(int index,
-	BObolSourceMeshRequest &request) const;
+    SbBool getCompactLodProviderSummary(int index,
+	BObolCompactLodProviderSummary &summary) const;
     SbBool getCompactLodPlanningSummary(int index,
 	BObolCompactLodPlanningSummary &summary) const;
     /* Constant-time occurrence lookup for scene-wide retained-LoD
@@ -1382,7 +1414,8 @@ private:
 	std::vector<size_t> &entryIndices) const;
     void markDisplayMeshLodDirty(void);
     void markDisplayMeshLodDirty(
-	const std::vector<size_t> &entryIndices);
+	const std::vector<size_t> &entryIndices,
+	SbBool coverageInvalidated = FALSE);
     uint64_t cadBatchRevisionGet(void) const;
     void clearCompactInstanceIndex(void);
     void discardCompactInstanceHistory(void);

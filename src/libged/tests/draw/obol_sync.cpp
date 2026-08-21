@@ -1030,9 +1030,14 @@ apply_path_transaction(struct ged *gedp,
     struct ged_draw_transaction_result result;
     ged_draw_transaction_result_init(&result);
     int ret = ged_draw_apply_transaction(gedp, &txn, &result);
+    const int status = result.status;
     ged_draw_transaction_result_free(&result);
-    if (ret <= 0)
+    if (ret <= 0) {
+	fprintf(stderr, "public path transaction failed: %s (kind=%d path=%s mode=%d ret=%d status=%d)\n",
+	    label ? label : "", static_cast<int>(kind), path ? path : "",
+	    mode, ret, status);
 	FAIL("public path transaction should succeed");
+    }
 
     (void)label;
     return 0;
@@ -4188,6 +4193,15 @@ main(int argc, char **argv)
 	    owned_scene->getDatabaseSourceCount() != 2 ||
 	    source_for_path(owned_scene, "brep_owner.brep"))
 	FAIL("GED BREP wireframe erase should restore the owned Obol source baseline");
+    const char *lod_brep_threshold_one[4] = {
+	"view", "lod", "bot_threshold", "1"
+    };
+    if (ged_exec_view(gedp, 4, lod_brep_threshold_one) != BRLCAD_OK)
+	FAIL("GED view LoD threshold should enable adaptive BRep realization");
+    struct ged_view_context *brep_draw_view_ctx = ged_view_active_ctx(gedp);
+    if (!brep_draw_view_ctx ||
+	    !ged_view_context_display_endpoint_ensure(brep_draw_view_ctx))
+	FAIL("GED BREP mesh LoD draw should attach a progressive display endpoint");
     const char *draw_brep_owner[3] = {"draw", "-m1", "brep_owner.brep"};
     if (ged_exec_draw(gedp, 3, draw_brep_owner) != BRLCAD_OK)
 	FAIL("GED BREP mesh LoD draw should succeed for owned Obol mesh update");
@@ -4206,25 +4220,64 @@ main(int argc, char **argv)
     if (!ged_draw_shape_ref_lod_ensure(gedp, brep_record.ref,
 	    brep_lod_view_ctx, brep_lod_view_ctxs, 1))
 	FAIL("GED BREP mesh LoD ensure should succeed for owned Obol mesh update");
-    SoBRLDatabaseSource *brep_source =
-	source_for_path(owned_scene, "brep_owner.brep");
-    SoBRLMeshShape *brep_shape = brep_source ?
-	brep_source->getRealizedMesh() : NULL;
-    SbVec3f brep_lod_bmin;
-    SbVec3f brep_lod_bmax;
-    if (!brep_source || !brep_shape ||
-	    brep_shape->point.getNum() == 0 ||
-	    brep_shape->coordIndex.getNum() == 0)
-	FAIL("GED BREP mesh LoD update should publish owned Obol mesh fields");
-    if (!brep_source->getMeshLod())
-	FAIL("GED Obol BREP mesh LoD draw should store the runtime handle on the owned source");
-    if (!brep_source->getMeshLodBounds(brep_lod_bmin, brep_lod_bmax))
-	FAIL("GED Obol BREP mesh LoD draw should store runtime bounds on the owned source");
+
+    /* Unlike the database BoT path, an adaptive BRep tessellation is a
+     * background provider job.  Pump until its first useful retained mesh is
+     * published before inspecting fields.  Full presentation-gated terminal
+     * refinement is covered by the shared-library NIST image matrix; this
+     * white-box test has no render host and must not pretend that it can
+     * certify a presented frame. */
+    BObolViewController *brep_view_controller =
+	ged_bobol_view_controller(brep_lod_view_ctx);
+    bv_dimensions_set(DRAW_TEST_BV(brep_lod_view_ctx), 512, 512);
+    const char *brep_autoview[1] = {"autoview"};
+    if (!brep_view_controller ||
+	    ged_exec_autoview(gedp, 1, brep_autoview) != BRLCAD_OK ||
+	    !brep_view_controller->syncCameraFromViewContext(
+		brep_lod_view_ctx))
+	FAIL("GED BREP mesh LoD update should establish a visible test camera");
+    SoBRLDatabaseSource *brep_source = NULL;
+    const BObolViewLodState::CadPayload *brep_payload = NULL;
+    BObolProgressiveOptions brep_progressive_options;
+    brep_progressive_options.forceTerminalLodRefinement = TRUE;
+    BObolProgressiveStatus brep_progressive_status;
+    for (int attempt = 0; brep_view_controller && attempt < 10000;
+	    attempt++) {
+	brep_source = source_for_path(owned_scene, "brep_owner.brep");
+	BObolViewLodState *brep_view_state =
+	    brep_view_controller->getViewLodState();
+	std::vector<const BObolViewLodState::CadPayload *> brep_payloads;
+	if (brep_source && brep_view_state)
+	    brep_view_state->findCadPayloadsUnordered(brep_source,
+		brep_payloads);
+	brep_payload = brep_payloads.size() == 1 ? brep_payloads[0] : NULL;
+	if (brep_payload && brep_payload->isValid() &&
+		brep_payload->progressiveMesh &&
+		brep_payload->counts.faceCount > 0)
+	    break;
+	(void)brep_view_controller->advanceProgressiveWork(
+	    &brep_progressive_options, &brep_progressive_status);
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!brep_source || !brep_payload || !brep_payload->isValid() ||
+	    !brep_payload->progressiveMesh ||
+	    !brep_payload->progressiveMesh->isValid() ||
+	    !brep_payload->preparedCadGeometry ||
+	    brep_payload->counts.faceCount == 0 ||
+	    brep_payload->counts.pointCount == 0 ||
+	    brep_payload->activeCut <
+		brep_payload->progressiveMesh->minimumCut() ||
+	    brep_payload->bounds.isEmpty())
+	FAIL("GED BREP mesh LoD update should publish a view-local retained PoP payload");
+    if (brep_source->getRealizedMesh() || brep_source->getMeshLod())
+	FAIL("GED compact BREP LoD should not copy view-local mesh state onto the shared source");
     const char *erase_brep_owner[2] = {"erase", "brep_owner.brep"};
     if (ged_exec_erase(gedp, 2, erase_brep_owner) != BRLCAD_OK ||
 	    owned_scene->getDatabaseSourceCount() != 2 ||
 	    source_for_path(owned_scene, "brep_owner.brep"))
 	FAIL("GED BREP mesh LoD erase should restore the owned Obol source baseline");
+    if (!ged_view_context_obol_endpoint_set(brep_lod_view_ctx, NULL, 0))
+	FAIL("GED BREP mesh LoD test should restore the detached lifecycle fixture");
     const char *draw_rename_source[2] = {"draw", "rename_source.s"};
     if (ged_exec_draw(gedp, 2, draw_rename_source) != BRLCAD_OK)
 	FAIL("GED rename-source draw should succeed");
@@ -6095,12 +6148,41 @@ main(int argc, char **argv)
     nested_sibling_source = source_for_path(owned_scene,
 	    nested_sibling_source_path);
     if (!nested_leaf_source ||
-	    !nested_leaf_source->getSummary(nested_leaf_summary) ||
-	    nested_leaf_summary.stale ||
-	    !nested_sibling_source ||
-	    !nested_sibling_source->getSummary(nested_sibling_summary) ||
-	    nested_sibling_summary.lineWidth != 23)
-	FAIL("GED nested leaf redraw transaction should preserve unrelated owned Obol source state");
+	    !nested_leaf_source->getSummary(nested_leaf_summary))
+	FAIL("GED nested leaf redraw transaction should preserve its owned Obol source");
+    if (nested_leaf_summary.stale) {
+	fprintf(stderr, "nested leaf redraw remained stale: status=%d reason=0x%x source_rev=%u inputs_rev=%u shapes=%d meshes=%d\n",
+	    nested_leaf_summary.realizationStatus,
+	    nested_leaf_summary.staleReason,
+	    nested_leaf_summary.sourceRevision,
+	    nested_leaf_summary.inputsRevision,
+	    nested_leaf_summary.realizedShapeCount,
+	    nested_leaf_summary.realizedMeshCount);
+	for (int source_index = 0;
+	     source_index < owned_scene->getDatabaseSourceCount();
+	     source_index++) {
+	    BObolDatabaseSourceSummary source_summary;
+	    if (!owned_scene->getDatabaseSourceSummary(source_index,
+		    source_summary) || !source_summary.valid ||
+		!path_equal(source_summary.path.getString(),
+		    nested_leaf_source_path))
+		continue;
+	    fprintf(stderr, "nested leaf candidate[%d]: key=%s status=%d stale=%d reason=0x%x source_rev=%u realized_rev=%u shapes=%d meshes=%d\n",
+		source_index, source_summary.instanceKey.getString(),
+		source_summary.realizationStatus,
+		source_summary.stale ? 1 : 0, source_summary.staleReason,
+		source_summary.sourceRevision,
+		source_summary.realizedSourceRevision,
+		source_summary.realizedShapeCount,
+		source_summary.realizedMeshCount);
+	}
+	FAIL("GED nested leaf redraw transaction should realize its owned Obol source");
+    }
+    if (!nested_sibling_source ||
+	    !nested_sibling_source->getSummary(nested_sibling_summary))
+	FAIL("GED nested leaf redraw transaction should retain the unrelated owned Obol source");
+    if (nested_sibling_summary.lineWidth != 23)
+	FAIL("GED nested leaf redraw transaction should preserve unrelated owned Obol source presentation");
     if (apply_path_transaction(gedp, GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED,
 	    "nested_leaf.s", ged_draw_active_view_ctx(gedp), -1,
 	    "public scoped component erase"))

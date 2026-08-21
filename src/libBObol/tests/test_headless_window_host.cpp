@@ -47,7 +47,8 @@ public:
 	lastHeight(0),
 	lastComponents(0),
 	lastScene(NULL),
-	lastBackground(0.0f, 0.0f, 0.0f)
+	lastBackground(0.0f, 0.0f, 0.0f),
+	requestController(NULL)
     {
     }
 
@@ -83,6 +84,11 @@ public:
 	this->lastComponents = nrcomponents;
 	this->lastScene = scene;
 	this->lastBackground.setValue(background_rgb);
+	if (this->requestController) {
+	    BObolViewController *controller = this->requestController;
+	    this->requestController = NULL;
+	    controller->requestRender("during-render");
+	}
 
 	const size_t byteCount = (size_t)width * (size_t)height * (size_t)nrcomponents;
 	for (size_t i = 0; i < byteCount; i += nrcomponents) {
@@ -103,6 +109,7 @@ public:
     unsigned int lastComponents;
     SoNode *lastScene;
     SbColor lastBackground;
+    BObolViewController *requestController;
 };
 
 struct HeadlessProgressiveState {
@@ -226,6 +233,20 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
 	  "headless host records completed-presentation cadence separately from render cost");
     CHECK(host.getController()->getDisplayedPresentationIntervalNanoseconds() > 0,
 	  "headless host records a separately smoothed human-facing presentation cadence");
+
+    /* A result/camera callback can request another frame after the controller
+     * snapshots the current request but before the renderer returns.  The
+     * completed frame retires only the older serial; the newer request must
+     * survive for the next poll. */
+    host.getController()->requestRender("race-start");
+    manager->requestController = host.getController();
+    CHECK(host.renderPending() == 1,
+	  "headless host renders the older request in a request race");
+    CHECK(host.getController()->isRenderRequested(),
+	  "headless host preserves a newer request published during rendering");
+    CHECK(host.renderPending() == 1 &&
+	  !host.getController()->isRenderRequested(),
+	  "headless host drains the preserved request on the following poll");
     host.getController()->unregisterProgressiveProvider(progressiveToken);
     return 0;
 }

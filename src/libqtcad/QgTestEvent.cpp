@@ -972,7 +972,13 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	QElapsedTimer stateWait;
 	QElapsedTimer stableWait;
 	stateWait.start();
-	while (stateWait.elapsed() < 2000) {
+	/* A LoD-off software presentation can legitimately occupy the owner
+	 * thread for several hundred milliseconds.  The old two-second bound
+	 * allowed only a handful of native-state observations and could fail even
+	 * though the final sample was already maximized/fullscreen.  Preserve the
+	 * 100 ms stability proof, but give asynchronous window-manager delivery a
+	 * bounded interval which includes several such complete frames. */
+	while (stateWait.elapsed() < 5000) {
 	    QGuiApplication::sync();
 	    if (stateReached()) {
 		if (!stableWait.isValid())

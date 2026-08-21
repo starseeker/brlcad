@@ -213,7 +213,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t5.g)
 # Smaller black-box GED contract tests remain enabled in optimized builds.
 if(NOT MSVC AND NOT BRLCAD_OPTIMIZED)
   brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp"
-    "libged-static;libBObol;libwdb" TEST)
+    "libged-static;libBObol-static;libwdb-static" TEST)
   if(TARGET ged_test_obol_draw_sync AND TARGET libged-obj)
     set(_ged_obol_private_object_regex
       "/(draw|draw_obol|ged_obol_pick_private|ged_obol_polygon_private|ged_obol_presentation_private|ged_obol_selection_private|ged_view_export_private|ged_view_feature_batch|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")

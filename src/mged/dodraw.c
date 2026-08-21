@@ -231,6 +231,54 @@ mged_edit_preview_clear_all(struct mged_state *s, const char *name)
 }
 
 
+static int
+mged_edit_source_visibility_set_all(struct mged_state *s,
+	const char *source_path, enum ged_scene_draw_mode mode, int visible)
+{
+    int changed = 0;
+    int attempted = 0;
+
+    if (!s || !s->gedp || !source_path || !source_path[0])
+	return 0;
+
+    /* Edit previews are published in every active MGED view.  Apply the
+     * paired source visibility transaction in those same view scopes.  A
+     * null/global request does not match an independently owned compact
+     * source and used to leave the edited occurrence hidden after reject. */
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp =
+	    (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	struct ged_view_context *view_ctx =
+	    (m_dmp && m_dmp->display_view_state) ?
+	    m_dmp->display_view_state->vs_gvp : NULL;
+	if (!view_ctx)
+	    continue;
+	attempted = 1;
+	struct ged_scene_path_request request;
+	ged_scene_path_request_init(&request);
+	request.view = view_ctx;
+	request.path = source_path;
+	request.draw_mode = mode;
+	if (ged_scene_visibility_set(s->gedp, &request, visible, NULL) ==
+		GED_SCENE_OK)
+	    changed = 1;
+    }
+
+    if (!attempted) {
+	struct ged_scene_path_request request;
+	ged_scene_path_request_init(&request);
+	request.view = ged_view_active_ctx(s->gedp);
+	request.path = source_path;
+	request.draw_mode = mode;
+	if (ged_scene_visibility_set(s->gedp, &request, visible, NULL) ==
+		GED_SCENE_OK)
+	    changed = 1;
+    }
+
+    return changed;
+}
+
+
 /*
  * Given an existing solid structure that may have been subjected to
  * solid editing, recompute the vector list, etc., to make the solid
@@ -255,11 +303,7 @@ replot_original_path(struct mged_state *s, const char *source_path,
      * semantic state unconditionally: a visible-only traversal may already
      * have missed the hidden occurrence, and another callback may have
      * removed the preview before this scope-level restoration runs. */
-    struct ged_scene_path_request request;
-    ged_scene_path_request_init(&request);
-    request.path = source_path;
-    request.draw_mode = mode;
-    (void)ged_scene_visibility_set(s->gedp, &request, 1, NULL);
+    (void)mged_edit_source_visibility_set_all(s, source_path, mode, 1);
 
     bu_vls_free(&feature_name);
     return 0;
@@ -349,11 +393,8 @@ replot_modified_solid(
     }
 
     if (preview_status > 0 && rec.visible) {
-	struct ged_scene_path_request request;
-	ged_scene_path_request_init(&request);
-	request.path = source_path;
-	request.draw_mode = (enum ged_scene_draw_mode)rec.draw_mode;
-	(void)ged_scene_visibility_set(s->gedp, &request, 0, NULL);
+	(void)mged_edit_source_visibility_set_all(s, source_path,
+	    (enum ged_scene_draw_mode)rec.draw_mode, 0);
     }
     if (preview_status > 0)
 	(void)ged_scene_occurrence_highlight_set(s->gedp, ref, 1, NULL);

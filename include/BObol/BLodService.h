@@ -62,6 +62,7 @@ typedef void (*BObolLodResultReadyCB)(
 
 struct BOBOL_EXPORT BObolMeshLodProvider {
     BObolLodService *service;
+    uint64_t generation;
     std::shared_ptr<BObolDatabaseLease> databaseLease;
     std::shared_ptr<const BObolStagedSourceMesh> stagedSource;
     /* Exact persistent payload to reopen.  Request::sourceContentHash is a
@@ -302,6 +303,13 @@ public:
     /* Suppress an equivalent request while either its producer is active or
      * its completed result is still awaiting publication. */
     uint64_t submitIfNotActive(const BObolLodTask &task);
+    /* Offer an immutable intermediate result from the active provider for
+     * generation.  This operation never waits for the service lock:
+     * providers may call it while holding a resident-asset lock without
+     * violating the documented lock order.  FALSE means the preview was
+     * safely skipped.  The ordinary task completion remains authoritative. */
+    SbBool tryPublishIntermediateResult(
+	uint64_t generation, BObolLodResult &&result);
     /*
      * Submit a producer wave under one service lock and wake workers once.
      * taskIds is resized to tasks.size(); rejected/duplicate entries are

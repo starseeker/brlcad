@@ -22,6 +22,7 @@
 #include <stddef.h>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 class BObolLodService;
@@ -196,6 +197,14 @@ public:
      * scene budget on richer prefixes. */
     size_t getVisibleMeshCount(void) const;
     size_t getCoveredVisibleMeshCount(void) const;
+    /* Compact-entry visibility observations made by this bounded action.
+     * The entry index is source-stable and the boolean says whether that
+     * occurrence was an on-screen mesh LoD target for this view.  A
+     * controller uses these observations to update a completed visibility
+     * census after an exact source delta without rescanning every unchanged
+     * occurrence. */
+    const std::vector<std::pair<size_t, SbBool>> &
+	getCompactEntryVisibilityObservations(void) const;
     const SbString &getDiagnostics(void) const;
 
 protected:
@@ -287,6 +296,8 @@ private:
     unsigned int skippedMeshCount;
     size_t visibleMeshCount;
     size_t coveredVisibleMeshCount;
+    std::vector<std::pair<size_t, SbBool>>
+	compactEntryVisibilityObservations;
     unsigned int diagnosticCount;
     unsigned int suppressedDiagnosticCount;
     SbString diagnostics;

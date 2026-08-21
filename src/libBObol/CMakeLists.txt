@@ -72,6 +72,22 @@ brlcad_addlib(libBObol "${LIBBOBOL_SRCS}" "" "${BOBOL_LOCAL_INCLUDE_DIRS}"
   PUBLIC_LIBS "librt;libimgstream;libbv;libbg;libbu;Obol::Obol;Threads::Threads"
   ALL_CXX
 )
+
+# libBObol's public headers mark the supported ABI explicitly with
+# BOBOL_EXPORT.  Keep implementation-only C++ entities (in particular PImpl
+# constructors, destructors, and inline helpers) out of the ELF/Mach-O export
+# table.  Besides tightening the ABI, this prevents consumers from binding to
+# compiler-generated implementation symbols whose shape may change freely.
+set_target_properties(libBObol PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES
+)
+if(TARGET libBObol-obj)
+  set_target_properties(libBObol-obj PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+  )
+endif(TARGET libBObol-obj)
 if(BOBOL_OPENGL_INCLUDE_DIRS)
   target_include_directories(libBObol SYSTEM PRIVATE ${BOBOL_OPENGL_INCLUDE_DIRS})
   if(TARGET libBObol-obj)

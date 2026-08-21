@@ -14,8 +14,6 @@
 #include "bu/malloc.h"
 
 #include <Inventor/SoDB.h>
-#include <Inventor/SoOffscreenRenderer.h>
-#include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/actions/SoSearchAction.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoGroup.h>
@@ -127,22 +125,6 @@ ensure_headless_camera(BObolViewController *controller)
     return 0;
 }
 
-static SoOffscreenRenderer::Components
-renderer_components(int components)
-{
-    switch (components) {
-	case 1:
-	    return SoOffscreenRenderer::LUMINANCE;
-	case 2:
-	    return SoOffscreenRenderer::LUMINANCE_TRANSPARENCY;
-	case 4:
-	    return SoOffscreenRenderer::RGB_TRANSPARENCY;
-	case 3:
-	default:
-	    return SoOffscreenRenderer::RGB;
-    }
-}
-
 static int
 valid_components(int components)
 {
@@ -235,55 +217,29 @@ BObolHeadlessWindowHost::renderPending(void)
 
     const SbString requestedReason = controller->getRenderReason();
 
-    /* Mirror the interactive (qged) renderPending policy so a headless capture
-     * shows exactly what the viewer would: LoD off -> force-realize the whole
-     * scene first (classic complete image); LoD on -> progressive coarse-first
-     * (geometry streams in via advanceProgressiveWork).  Driven by the view's
-     * `view lod` setting through isForceRealizeDisplay(); no separate toggle. */
-    if (controller->isForceRealizeDisplay())
-	(void)controller->realizePending();
-    (void)controller->advanceProgressiveWork(NULL, NULL);
-
-    SoNode *root = controller->getRenderRoot();
-    if (!root)
-	root = controller->getSceneRoot();
-    if (!root)
-	return -1;
-
-    const SbViewportRegion &region = controller->getViewportRegion();
-    SbVec2s windowSize = region.getWindowSize();
-    if (windowSize[0] <= 0 || windowSize[1] <= 0)
-	return -1;
-
     SoDB::ContextManager *manager = this->hp->contextManager;
     if (!manager)
 	return -1;
     if (controller->getRenderContextManager() != manager)
 	return -1;
+    const SbViewportRegion &region = controller->getViewportRegion();
+    const SbVec2s windowSize = region.getWindowSize();
+    if (windowSize[0] <= 0 || windowSize[1] <= 0)
+	return -1;
 
-    SoOffscreenRenderer renderer(manager, region);
-    renderer.setComponents(renderer_components(this->hp->outputComponents));
-    SoGLRenderAction *action = renderer.getGLRenderAction();
-    if (action) {
-	action->setSmoothing(controller->isAntialiasingEnabled());
-	action->setNumPasses(1);
+    unsigned char *pixels = NULL;
+    BObolProgressiveStatus progressiveStatus;
+    const int components = valid_components(this->hp->outputComponents);
+    const SbBool alpha = components == 2 || components == 4 ? TRUE : FALSE;
+    if (controller->renderToImage(&pixels, FALSE, alpha,
+	    NULL, manager, &progressiveStatus) != BRLCAD_OK || !pixels) {
+	if (pixels)
+	    bu_free(pixels, "headless endpoint interrupted frame");
+	return -1;
     }
-    const SbColor &backgroundBottom =
-	controller->getBackgroundBottomColor();
-    const SbColor &backgroundTop = controller->getBackgroundTopColor();
-    renderer.setBackgroundColor(backgroundBottom);
-    if (backgroundBottom != backgroundTop)
-	renderer.setBackgroundGradient(backgroundBottom, backgroundTop);
-    if (!renderer.render(root))
-	return -1;
-
-    unsigned char *pixels = renderer.getBuffer();
-    if (!pixels)
-	return -1;
 
     const unsigned int width = (unsigned int)windowSize[0];
     const unsigned int height = (unsigned int)windowSize[1];
-    const int components = valid_components(this->hp->outputComponents);
     const size_t rowPixels = (size_t)width * (size_t)components;
     if (width == 0 || height == 0 || rowPixels / (size_t)components != (size_t)width)
 	return -1;
@@ -291,12 +247,33 @@ BObolHeadlessWindowHost::renderPending(void)
     if (height != 0 && byteCount / (size_t)height != rowPixels)
 	return -1;
 
-    this->hp->frame.assign(pixels, pixels + byteCount);
+    const int sourceComponents = alpha ? 4 : 3;
+    if (components == sourceComponents) {
+	this->hp->frame.assign(pixels, pixels + byteCount);
+    } else {
+	this->hp->frame.resize(byteCount);
+	const size_t pixelCount = (size_t)width * (size_t)height;
+	for (size_t i = 0; i < pixelCount; i++) {
+	    const unsigned char *source = pixels + i * sourceComponents;
+	    /* Match the conventional integer Rec. 601 luminance conversion.
+	     * renderToImage owns the canonical RGB(A) capture; monochrome output
+	     * is a host transport format, not a second scene traversal. */
+	    const unsigned char luminance = (unsigned char)(
+		(77u * source[0] + 150u * source[1] + 29u * source[2] + 128u) >> 8);
+	    unsigned char *target = &this->hp->frame[i * components];
+	    target[0] = luminance;
+	    if (components == 2)
+		target[1] = source[3];
+	}
+    }
+    bu_free(pixels, "headless endpoint frame");
     this->hp->frameWidth = width;
     this->hp->frameHeight = height;
     this->hp->frameComponents = components;
 
-    controller->consumeRenderRequest(NULL);
+    /* renderToImage owns serial-checked request retirement.  Consuming here
+     * would also clear a newer result/frame request published while the image
+     * was rendering, leaving that work invisible until unrelated input. */
     controller->noteFramePresented();
     this->hp->lastRenderReason = requestedReason;
     if (controller->hasProgressiveWorkPending())

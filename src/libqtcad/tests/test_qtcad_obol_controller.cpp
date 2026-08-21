@@ -14,7 +14,10 @@
 #include "bv.h"
 
 #include "BObol/BDisplayEndpoint.h"
+#include "BObol/BLodService.h"
+#include "BObol/BMeshShape.h"
 #include "BObol/BViewController.h"
+#include "BObol/BViewLod.h"
 #ifdef BRLCAD_OPENGL
 #include "qtcad/QgGL.h"
 #endif
@@ -24,6 +27,7 @@
 #include <Inventor/SoDB.h>
 #include <Inventor/SoRenderManager.h>
 #include <Inventor/SoViewport.h>
+#include <Inventor/SbBox.h>
 #include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoCallback.h>
@@ -199,6 +203,71 @@ delay_and_sample_render_deadline(void *data, SoAction *action)
 	std::chrono::milliseconds(delayMilliseconds));
     if (action && action->isOfType(SoGLRenderAction::getClassTypeId()))
 	static_cast<SoGLRenderAction *>(action)->abortNow();
+}
+
+static SoBRLMeshShape *
+seed_managed_deadline_payload(BObolViewController *controller,
+	const char *identity)
+{
+    if (!controller || !identity || !identity[0])
+	return NULL;
+    SoBRLMeshShape *shape = new SoBRLMeshShape;
+    shape->ref();
+    shape->sourcePath = identity;
+    shape->sourceName = identity;
+    const SbVec3f points[3] = {
+	SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 0.0f, 0.0f),
+	SbVec3f(0.0f, 1.0f, 0.0f)
+    };
+    const int32_t indices[3] = {0, 1, 2};
+    shape->setIndexedTriangles(points, 3, indices, 3);
+
+    BObolLodResult result;
+    result.request.databaseId = "db://qtcad-deadline-test";
+    result.request.objectPath = identity;
+    result.request.objectName = identity;
+    result.request.providerId = "qtcad-deadline-test";
+    result.request.providerVersion = "1";
+    result.request.drawMode = BOBOL_LOD_DRAW_SHADED;
+    result.request.requestedCut = 0;
+    result.request.viewRevision = 1;
+    result.request.policyRevision = 1;
+    result.request.bounds = SbBox3f(
+	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f));
+    result.resultKind = BOBOL_LOD_RESULT_MESH;
+    result.qualityTier = BOBOL_LOD_QUALITY_FAST_DISPLAY;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.geometry.kind = BOBOL_LOD_GEOMETRY_OBOL_MESH;
+    result.geometry.providerId = result.request.providerId;
+    result.geometry.providerVersion = result.request.providerVersion;
+    result.geometry.activeCut = 0;
+    result.residentCut = 0;
+    result.resolvedCut = 0;
+    result.counts.faceCount = 1;
+    result.counts.pointCount = 3;
+    result.bounds = result.request.bounds;
+    result.mesh.points.assign(points, points + 3);
+    result.mesh.coordIndex.assign(indices, indices + 3);
+    if (!controller->getViewLodState()->applyMeshResult(shape, result)) {
+	shape->unref();
+	return NULL;
+    }
+    return shape;
+}
+
+static bool
+release_managed_deadline_payload(BObolViewController *controller,
+	SoBRLMeshShape *shape)
+{
+    if (!controller || !shape)
+	return false;
+    const BObolViewLodState::MeshPayload *payload =
+	controller->getViewLodState()->findMesh(shape);
+    const bool removed = payload &&
+	controller->getViewLodState()->removeMeshPayload(payload);
+    shape->unref();
+    return removed;
 }
 
 int
@@ -457,9 +526,11 @@ main(int argc, char **argv)
     sceneRoot->removeChild(followupNode);
 
     /* A traversal which exceeds its presentation deadline must not expose a
-     * partially cleared OSMesa buffer.  Establish a completed frame, then
-     * interrupt a later traversal and require the immutable cached image and
-     * successor render request to survive. */
+     * partially cleared OSMesa buffer.  Seed one small managed payload so the
+     * host has an actual LoD population whose next traversal can be made
+     * cheaper; unmanaged Coin-only scenes deliberately disable this deadline.
+     * Establish a completed frame, then interrupt a later traversal and
+     * require the immutable cached image and successor request to survive. */
     controller->requestRender("sw-deadline-baseline");
     paintTarget.fill(0);
     QPainter deadlineBaselinePainter(&paintTarget);
@@ -470,6 +541,11 @@ main(int argc, char **argv)
     view.get_viewport_image(deadlineBaselineReadback);
     if (deadlineBaselineReadback.isNull())
 	FAIL("QgSW completed-frame readback should produce an image");
+    SoBRLMeshShape *deadlineLodMesh = seed_managed_deadline_payload(
+	controller, "/deadline-managed.mesh");
+    if (!deadlineLodMesh ||
+	!controller->isLodPresentationCapacityRelevant())
+	FAIL("QgSW deadline fixture should expose managed LoD capacity");
     const uint64_t interruptedBefore =
 	controller->getInterruptedPresentationFrameCount();
     unsigned int deadlineDelayMilliseconds = 20u;
@@ -488,8 +564,17 @@ main(int argc, char **argv)
 	    interruptedBefore + 1u ||
 	!controller->isRenderRequested() ||
 	!BU_STR_EQUAL(controller->getRenderReason().getString(),
-	    "render-deadline"))
+	    "render-deadline")) {
+	fprintf(stderr, "QgSW interruption diagnostics: count=%llu/%llu "
+		"requested=%d reason=%s capacity=%d\n",
+		(unsigned long long)
+		    controller->getInterruptedPresentationFrameCount(),
+		(unsigned long long)(interruptedBefore + 1u),
+		controller->isRenderRequested() ? 1 : 0,
+		controller->getRenderReason().getString(),
+		controller->isLodPresentationCapacityRelevant() ? 1 : 0);
 	FAIL("QgSW deadline interruption should schedule a coherent retry");
+	}
     if (paintTarget != deadlineBaseline)
 	FAIL("QgSW deadline interruption should preserve the last completed frame");
     QImage interruptedReadback;
@@ -522,6 +607,8 @@ main(int argc, char **argv)
     controller->setPresentationFrameDeadlines(
 	40000000ULL, 100000000ULL);
     controller->clearRenderRequest();
+    if (!release_managed_deadline_payload(controller, deadlineLodMesh))
+	FAIL("QgSW deadline fixture should release its managed payload");
 
     TestQgSW swCanvas(NULL);
     swCanvas.resize(160, 120);
@@ -790,6 +877,12 @@ main(int argc, char **argv)
 	    const QImage glDeadlineBaseline =
 		glCanvas.readCurrentFramebufferForTest();
 	    glCanvas.doneCurrent();
+	    SoBRLMeshShape *glDeadlineLodMesh =
+		seed_managed_deadline_payload(
+		    paintController, "/gl-deadline-managed.mesh");
+	    if (!glDeadlineLodMesh ||
+		!paintController->isLodPresentationCapacityRelevant())
+		FAIL("QgGL deadline fixture should expose managed LoD capacity");
 	    const uint64_t glInterruptedBefore =
 		paintController->getInterruptedPresentationFrameCount();
 	    unsigned int glDeadlineDelayMilliseconds = 20u;
@@ -811,8 +904,17 @@ main(int argc, char **argv)
 		    glInterruptedBefore + 1u ||
 		!paintController->isRenderRequested() ||
 		!BU_STR_EQUAL(paintController->getRenderReason().getString(),
-		    "render-deadline"))
+		    "render-deadline")) {
+		fprintf(stderr, "QgGL interruption diagnostics: count=%llu/%llu "
+			"requested=%d reason=%s capacity=%d\n",
+			(unsigned long long)
+			    paintController->getInterruptedPresentationFrameCount(),
+			(unsigned long long)(glInterruptedBefore + 1u),
+			paintController->isRenderRequested() ? 1 : 0,
+			paintController->getRenderReason().getString(),
+			paintController->isLodPresentationCapacityRelevant() ? 1 : 0);
 		FAIL("QgGL deadline interruption should schedule a coherent retry");
+		}
 	    if (glDeadlineBaseline.isNull() ||
 		glDeadlineInterrupted != glDeadlineBaseline)
 		FAIL("QgGL deadline interruption should preserve the last completed framebuffer");
@@ -821,6 +923,9 @@ main(int argc, char **argv)
 	    paintController->setPresentationFrameDeadlines(
 		40000000ULL, 100000000ULL);
 	    paintController->clearRenderRequest();
+	    if (!release_managed_deadline_payload(
+		    paintController, glDeadlineLodMesh))
+		FAIL("QgGL deadline fixture should release its managed payload");
 	}
 #endif
     }

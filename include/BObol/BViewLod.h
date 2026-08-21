@@ -162,6 +162,7 @@ public:
 	SbString sourceIdentity;
 	SbString sourceInstanceKey;
 	SbString sourceBindingKey;
+	uint64_t sourceRoutingId;
 	/* Validated source-local compact index, or UINT32_MAX for a noncompact
 	 * binding.  This avoids repeated string hashing in 50k/150k retained
 	 * allocation passes without making an index the semantic identity. */
@@ -178,7 +179,12 @@ public:
 	int activeCut;
 	int residentCut;
 	int requestedCut;
+	/* requiredChunks is the newest owner-thread spatial demand.  The
+	 * immutable renderer generation may temporarily predate it while a
+	 * cumulative suffix/page load is in flight; presentedChunks records the
+	 * page set which that generation can coherently present. */
 	std::vector<uint32_t> requiredChunks;
+	std::vector<uint32_t> presentedChunks;
 	/* Exact scene-budget allocation for this occurrence.  requestedCut is
 	 * unconstrained view demand; allocatedCut is the richest cut this
 	 * view/policy/mode may present inside the measured aggregate allowance.
@@ -262,6 +268,14 @@ public:
 	std::vector<const CadPayload *> &payloads) const;
     const CadPayload *findCadForOccurrence(
 	const SoBRLDatabaseSource *source,
+	const SbString &occurrenceKey) const;
+    /** Resolve a compact occurrence through its validated positional hint.
+     * The index is deliberately not semantic identity: @p occurrenceKey must
+     * match the payload currently occupying that slot.  This gives large
+     * bounded planning passes O(1), allocation-free lookup while remaining
+     * safe across compact-registry replacement and index reassignment. */
+    const CadPayload *findCadForSourceEntry(
+	const SoBRLDatabaseSource *source, uint32_t sourceEntryIndex,
 	const SbString &occurrenceKey) const;
     /* Return a retained progressive asset representative for direct
      * occurrence binding.  Asset residency outlives an individual display
@@ -431,11 +445,11 @@ public:
     SbBool lastCadPresentationUsedPreparedReplay(void) const;
     int maximumActiveProgressiveCut(void) const;
     /** For exactly one retained progressive CAD occurrence, return the
-     * richest active cut whose cached submitted population fits primitives.
-     * The query is O(cuts), performs no realization or allocation, and
-     * returns -1 when the scene is not the single-occurrence case. */
-    int singleCadProgressiveCutWithinPrimitiveCount(
-	size_t primitives) const;
+     * richest active cut whose exact cached submitted population fits the
+     * scheduler's draw-mode-aware render-cost currency.  The query is
+     * O(cuts), performs no realization or allocation, and returns -1 when
+     * the scene is not the single-occurrence case. */
+    int singleCadProgressiveCutWithinRenderCost(size_t renderCost) const;
     /* Apply an O(1)-per-assembly render-only ceiling while the precise
      * occurrence allocator catches up with an interactive view. */
     void setCadPresentationProgressiveCutCeiling(int cut) const;
@@ -514,6 +528,11 @@ private:
      * string-keyed alias. */
     std::unordered_map<std::string,
 	std::unordered_map<std::string, CadPayloadPtr> > cadSourceBindings;
+    /* Non-owning acceleration index for compact planning.  Ownership and
+     * identity remain in cadSourceBindings; every lookup validates the
+     * occurrence key before returning a slot. */
+    std::unordered_map<uint64_t, std::vector<CadPayload *> >
+	cadSourceEntryBindings;
     std::unordered_map<std::string,
 	std::unordered_map<std::string, CadPayloadPtr> > cadAssetBindings;
     std::unordered_map<std::string,

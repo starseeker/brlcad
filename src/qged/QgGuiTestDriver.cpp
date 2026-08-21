@@ -1296,6 +1296,55 @@ private:
 };
 
 static bool
+qged_test_wait_subprocess_idle(QgEdApp &app, int timeoutMilliseconds,
+    int quietMilliseconds, QString *error)
+{
+    struct ged *gedp = app.mdl ? app.mdl->ged() : nullptr;
+    if (!gedp) {
+	if (error)
+	    *error = QStringLiteral(
+		"wait_subprocess_idle requires an active GED context");
+	return false;
+    }
+
+    timeoutMilliseconds = std::max(0, timeoutMilliseconds);
+    quietMilliseconds = std::max(0, quietMilliseconds);
+    QElapsedTimer elapsed;
+    QElapsedTimer quiet;
+    elapsed.start();
+
+    while (elapsed.elapsed() <= timeoutMilliseconds) {
+	/* A subprocess remains in ged_subp until its host-side stream listeners
+	 * have retired it on the owner thread.  This is the authoritative
+	 * asynchronous-command completion edge: a framebuffer mode change, fixed
+	 * delay, or partial image is not evidence that rt has exited and its final
+	 * pixels have been consumed. */
+	if (BU_PTBL_LEN(&gedp->ged_subp) == 0) {
+	    if (!quiet.isValid())
+		quiet.start();
+	    if (quiet.elapsed() >= quietMilliseconds)
+		return true;
+	} else {
+	    quiet.invalidate();
+	}
+
+	QEventLoop loop;
+	const int remaining = timeoutMilliseconds -
+	    static_cast<int>(elapsed.elapsed());
+	QTimer::singleShot(std::max(1, std::min(16, remaining)),
+	    &loop, &QEventLoop::quit);
+	loop.exec(QEventLoop::AllEvents);
+    }
+
+    if (error)
+	*error = QStringLiteral(
+	    "GED subprocesses did not become idle within %1 ms (active=%2)")
+	    .arg(timeoutMilliseconds)
+	    .arg(static_cast<qulonglong>(BU_PTBL_LEN(&gedp->ged_subp)));
+    return false;
+}
+
+static bool
 qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
     int quietMilliseconds, QString *error)
 {
@@ -1835,6 +1884,14 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		    QLatin1String("assert_edit_session_preview")) {
 		    success = qged_test_assert_edit_session_preview(app,
 			events[i].arguments, &error);
+		} else if (events[i].action ==
+		    QLatin1String("wait_subprocess_idle")) {
+		    success = qged_test_wait_subprocess_idle(app,
+			events[i].arguments.value(
+			    QStringLiteral("timeout_ms")).toInt(120000),
+			events[i].arguments.value(
+			    QStringLiteral("quiet_ms")).toInt(100),
+			&error);
 		} else if (events[i].action ==
 		    QLatin1String("wait_progressive_idle")) {
 		    success = qged_test_wait_progressive_idle(app,

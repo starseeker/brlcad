@@ -174,7 +174,12 @@ _ged_draw_registry_init_if_needed(struct ged_drawable *gdp)
 	return;
     BU_PTBL_INIT(&gdp->gd_draw_registry);
     gdp->gd_draw_registry_init = 1;
-    gdp->gd_draw_next_token = 1;
+    /* Registry storage may be torn down and recreated by a scene clear, but
+     * public occurrence handles remain associated with the live GED owner.
+     * Preserve the monotonic id frontier so a later allocation cannot alias
+     * a handle retired by that clear. */
+    if (!gdp->gd_draw_next_token)
+	gdp->gd_draw_next_token = 1;
 }
 
 

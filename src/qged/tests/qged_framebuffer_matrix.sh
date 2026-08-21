@@ -112,7 +112,7 @@ write_events()
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "edit edit.c/edit.s status", "contains": "ell"}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/edit.png"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "ert -P 1 -H 16"}},
-    {"target": ".", "action": "wait", "arguments": {"ms": 5000}},
+    {"target": ".", "action": "wait_subprocess_idle", "arguments": {"timeout_ms": 120000, "quiet_ms": 100}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view faceplate fb", "contains": "2"}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/underlay.png"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view faceplate fb 1"}},
@@ -122,7 +122,7 @@ write_events()
     {"target": ".", "action": "resize", "arguments": {"width": 1100, "height": 760}},
     {"target": ".", "action": "qged_command_batch", "arguments": {"commands": ["ae 35 25", "autoview"]}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "ert -P 1 -H 16"}},
-    {"target": ".", "action": "wait", "arguments": {"ms": 5000}},
+    {"target": ".", "action": "wait_subprocess_idle", "arguments": {"timeout_ms": 120000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/resized.png"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view faceplate fb 0"}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/off.png"}}
@@ -176,8 +176,12 @@ validate_case()
       ($selected.selection_count // 0) == 1 and
       ($selected.active_lod_cad_payloads // 0) > 0 and
       ($selected.visible_structural_fallback_boxes // 0) == 0 and
-      ($resized.canvas_width // 0) == $resized_width and
-      ($resized.canvas_height // 0) == $resized_height and
+      ($resized.viewport_width // 0) == $resized_width and
+      ($resized.viewport_height // 0) == $resized_height and
+      (($resized.viewport_width -
+	($resized.canvas_width * $resized.canvas_device_pixel_ratio)) | abs) <= 2 and
+      (($resized.viewport_height -
+	($resized.canvas_height * $resized.canvas_device_pixel_ratio)) | abs) <= 2 and
       ($resized.active_lod_cad_payloads // 0) > 0 and
       ($resized.visible_structural_fallback_boxes // 0) == 0
     ' "$report" >/dev/null || return 1

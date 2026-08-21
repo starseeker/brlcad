@@ -25,6 +25,7 @@ perf_phase="cold"
 apitrace_case=""
 run_timeout=180
 capture_apng=0
+warm_cache=""
 
 usage()
 {
@@ -45,6 +46,7 @@ Usage: qged_gui_matrix.sh [options]
   --perf-phase PHASE       cold, warm, or both (default: cold)
   --apitrace CASE          Trace one cold System GL case with apitrace
   --capture-apng           Capture every presented frame into an APNG
+  --warm-cache DIR         Run only warm using an existing cache directory
   --timeout SECONDS        Per-process timeout (default: 180)
 
 Cases: generic_twin, lucy, multi_lucy, multi_lucy_xpush, stanford, havoc,
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
 	--perf-phase) perf_phase="$2"; shift 2 ;;
 	--apitrace) apitrace_case="$2"; shift 2 ;;
 	--capture-apng) capture_apng=1; shift ;;
+	--warm-cache) warm_cache="$2"; shift 2 ;;
 	--timeout) run_timeout="$2"; shift 2 ;;
 	--help|-h) usage; exit 0 ;;
 	*) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -96,6 +99,19 @@ case "$profile" in
     *) echo "ERROR: unknown profile '$profile'" >&2; exit 2 ;;
 esac
 [[ -n "$case_list" ]] || case_list="$default_cases"
+
+if [[ -n "$warm_cache" ]]; then
+    if [[ ! -d "$warm_cache" ]]; then
+	echo "ERROR: --warm-cache is not a directory: $warm_cache" >&2
+	exit 2
+    fi
+    if [[ "$case_list" == *,* || "$backend_list" == *,* ||
+	    "$mode_list" == *,* || "$swap_list" == *,* ]]; then
+	echo "ERROR: --warm-cache requires one case, backend, mode, and swap interval" >&2
+	exit 2
+    fi
+    warm_cache="$(realpath -m "$warm_cache")"
+fi
 
 build_dir="$(realpath -m "$build_dir")"
 main_build_dir="$(realpath -m "$main_build_dir")"
@@ -1028,6 +1044,14 @@ validate_report()
 	    (.samples[-1].active_progressive_cad_faces // 0) > 0 and
 	    (.samples[-1].lod_service_resident_assets // 0) >= 1 and
 	    (.samples[-1].lod_service_resident_bytes // 0) > 0 and
+	    # A one-occurrence scene has no per-object dispatch population to
+	    # aggregate.  Raising the point cut can only collapse Lucy itself and
+	    # leaves erase/selection repaints waiting for a sample which an empty
+	    # presentation cannot publish.
+	    (all(.samples[];
+		if (.presented_cad_work_exact // false) then
+		    (.cad_point_proxy_pixel_threshold_max // 1) <= 1.01
+		else true end)) and
 	    (if $mode == "shaded" then
 		(($stable.lod_prominent_cad_payloads // 0) >= 1) and
 		(($stable.lod_prominent_cad_quality_floor_violations // 0) == 0) and
@@ -2296,6 +2320,22 @@ validate_report()
 		    else ($active.active_progressive_cad_cut_max // -1) end),
 		   ($close.requested_progressive_cad_cut_max // -1)] | min))
 	     else true end) and
+	    # Zoom-out is itself a terminal view, not merely a memory-maintenance
+	    # checkpoint.  Its current cut and page census must meet the declared
+	    # pixel target unless a measured aggregate capacity limit is explicitly
+	    # reported.  This catches stale close-view results which were formerly
+	    # rebased with only a new ordinal/epoch and then falsely marked current.
+	    (if ($out.lod_convergence_performance_limited // false) then
+		(($out.active_lod_scene_render_cost // 0) <=
+		 ($out.lod_scene_render_cost_budget // 0)) and
+		(($out.lod_prominent_cad_quality_floor_violations // 0) == 0)
+	     else
+		(($out.active_progressive_cad_cut_max // -1) >=
+		 ($out.requested_progressive_cad_cut_max // -1)) and
+		(($out.lod_max_cad_projected_error_pixels //
+		    9223372036854775807) <=
+		 (($out.lod_target_pixel_error // 1) + 0.002))
+	     end) and
 	    # Stable memory maintenance may reclaim the zoom-prefetched suffix at
 	    # the close-view pause itself or at the later zoom-out pause.  Require
 	# strict byte reclamation when the final cut is coarser.  Compare against
@@ -2900,6 +2940,20 @@ for case_name in "${cases[@]}"; do
 		fi
 		pair="$artifact_dir/caches/${case_name}-${backend}-${mode}-swap${swap//-/_}"
 		mkdir -p "$pair"
+		if [[ -n "$warm_cache" ]]; then
+		    cache="$warm_cache"
+		    if run_current "$case_name" "$db" "$object" "$backend" \
+			    "$mode" "$swap" "warm" "$cache" "$settle_ms" \
+			    "$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
+			validate_autoview_camera_contract "$case_name" "$backend" \
+			    "$mode" "$swap" "warm" || failures=$((failures + 1))
+		    else
+			failures=$((failures + 1))
+		    fi
+		    find "$cache" -type f -printf '%s %T@ %p\n' 2>/dev/null |
+			sort -n > "$pair/cache-files.txt"
+		    continue
+		fi
 		cache="$pair/cache"
 		# BU_DIR_CACHE itself must exist or libbu correctly disables cache
 		# writes.  This is still a completely cold cache: the new directory

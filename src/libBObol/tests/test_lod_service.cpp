@@ -4267,6 +4267,124 @@ test_generation_scoped_consumers(void)
     return 0;
 }
 
+struct IntermediateResultState {
+    BObolLodService *service = NULL;
+    uint64_t generation = 0;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool published = false;
+    bool release = false;
+};
+
+static BObolLodResult
+intermediate_result_task(const BObolLodRequest &request, void *userData)
+{
+    IntermediateResultState *state =
+	static_cast<IntermediateResultState *>(userData);
+    BObolLodResult preview;
+    preview.request = request;
+    preview.cacheKey = bobol_lod_cache_key(request);
+    preview.resultKind = BOBOL_LOD_RESULT_AABB;
+    preview.qualityTier = request.qualityTier;
+    preview.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    preview.terminal = FALSE;
+    preview.counts.faceCount = 11;
+    preview.bounds = request.bounds;
+
+    const bool published = state && state->service &&
+	state->service->tryPublishIntermediateResult(
+	    state->generation, std::move(preview));
+    if (state) {
+	std::unique_lock<std::mutex> lock(state->mutex);
+	state->published = published;
+	state->entered = true;
+	state->cv.notify_all();
+	state->cv.wait(lock, [state] { return state->release; });
+    }
+
+    BObolLodResult result;
+    result.request = request;
+    result.cacheKey = bobol_lod_cache_key(request);
+    result.resultKind = BOBOL_LOD_RESULT_AABB;
+    result.qualityTier = request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.terminal = TRUE;
+    result.counts.faceCount = 22;
+    result.bounds = request.bounds;
+    return result;
+}
+
+static int
+test_intermediate_result_lifecycle(void)
+{
+    BObolLodService service;
+    IntermediateResultState state;
+    if (!service.start(1, FALSE)) {
+	printf("FAIL: intermediate-result service setup\n");
+	return 1;
+    }
+    const uint64_t generation = service.beginGeneration();
+    state.service = &service;
+    state.generation = generation;
+
+    BObolLodTask task;
+    task.generation = generation;
+    task.request = make_request("/intermediate.bot");
+    task.realize = intermediate_result_task;
+    task.realizeData = &state;
+    if (!service.submit(task)) {
+	printf("FAIL: intermediate-result submission\n");
+	return 1;
+    }
+    {
+	std::unique_lock<std::mutex> lock(state.mutex);
+	if (!state.cv.wait_for(lock, std::chrono::seconds(2),
+		[&state] { return state.entered; }) || !state.published) {
+	    printf("FAIL: intermediate result was not published\n");
+	    state.release = true;
+	    lock.unlock();
+	    state.cv.notify_all();
+	    return 1;
+	}
+    }
+
+    std::vector<BObolLodResult> preview;
+    if (service.drainGenerationResults(preview, generation) != 1 ||
+	preview.size() != 1 || preview.front().terminal ||
+	preview.front().counts.faceCount != 11 ||
+	service.activeTaskCountForGeneration(generation) != 1) {
+	printf("FAIL: intermediate result did not preserve active task state\n");
+	{
+	    std::lock_guard<std::mutex> lock(state.mutex);
+	    state.release = true;
+	}
+	state.cv.notify_all();
+	return 1;
+    }
+
+    {
+	std::lock_guard<std::mutex> lock(state.mutex);
+	state.release = true;
+    }
+    state.cv.notify_all();
+    if (wait_for_settled(service, 1))
+	return 1;
+
+    std::vector<BObolLodResult> finalResult;
+    if (service.drainGenerationResults(finalResult, generation) != 1 ||
+	finalResult.size() != 1 || !finalResult.front().terminal ||
+	finalResult.front().counts.faceCount != 22 ||
+	service.activeTaskCountForGeneration(generation) != 0 ||
+	service.queuedResultCountForDiagnostics() != 0) {
+	printf("FAIL: final result did not replace intermediate lifecycle\n");
+	return 1;
+    }
+
+    service.stop();
+    return 0;
+}
+
 static int
 test_managed_service_is_shared(void)
 {
@@ -4373,6 +4491,8 @@ main(int argc, char **argv)
     if (runIsolated(test_process_working_set_admission))
 	return 1;
     if (runIsolated(test_generation_scoped_consumers))
+	return 1;
+    if (runIsolated(test_intermediate_result_lifecycle))
 	return 1;
     if (runIsolated(test_managed_service_is_shared))
 	return 1;

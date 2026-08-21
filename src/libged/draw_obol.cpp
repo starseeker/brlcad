@@ -2114,7 +2114,9 @@ ged_obol_direct_draw_path_modes(
     BObolSceneController *scene,
     int preserve_display_state = 0)
 {
-    if (!gedp || !view_ctx || path_modes.empty() || !scene)
+    /* A null view context denotes the shared scene.  It is a valid scope for
+     * source-change redraws emitted outside an individual display endpoint. */
+    if (!gedp || path_modes.empty() || !scene)
 	return 0;
 
     std::unordered_map<int, std::vector<std::string>> paths_by_mode;
@@ -16202,7 +16204,8 @@ ged_obol_apply_draw_paths_to_scene(
     uint32_t source_revision,
     int preserve_display_state)
 {
-    if (!gedp || !gedp->dbip || !view_ctx || !paths || path_count <= 0 ||
+    /* view_ctx may be null for the shared scene scope. */
+    if (!gedp || !gedp->dbip || !paths || path_count <= 0 ||
 	!settings || !scene || !ged_obol_draw_mode_uses_database_source(
 	    settings->draw_mode))
 	return -1;
@@ -16685,6 +16688,44 @@ ged_obol_remove_groups_by_path_prefix(
 	    continue;
 
 	ged_obol_append_unique_path(group_paths, group_path);
+    }
+
+    int changed = 0;
+    for (const std::string &group_path : group_paths) {
+	if (scene->removeGroup(group_path.c_str()) > 0)
+	    changed = 1;
+    }
+    return changed;
+}
+
+static int
+ged_obol_remove_exact_groups(const std::vector<std::string> &targets,
+	BObolSceneController *scene, int draw_mode)
+{
+    if (!scene || targets.empty())
+	return 0;
+
+    std::vector<std::string> group_paths;
+    for (const std::string &target : targets) {
+	const std::string group_path =
+	    ged_obol_group_path_from_record_path(target.c_str());
+	if (group_path.empty())
+	    continue;
+	SoGroup *group = scene->findGroup(group_path.c_str());
+	if (!group || !group->isOfType(SoBRLSceneGroup::getClassTypeId()))
+	    continue;
+	SoBRLSceneGroup *scene_group = static_cast<SoBRLSceneGroup *>(group);
+	if (scene_group->overlayIntent.getValue())
+	    continue;
+	if (draw_mode >= 0 && scene_group->drawMode.getValue() !=
+		ged_obol_lod_draw_mode_from_ged(draw_mode))
+	    continue;
+	/* Representation-scoped erasure removes only that source channel.  The
+	 * owning group may still contain the shared wire source (or another
+	 * representation) and must survive with it. */
+	if (draw_mode >= 0 && group->getNumChildren() > 0)
+	    continue;
+	ged_obol_append_unique_path(group_paths, group_path.c_str());
     }
 
     int changed = 0;
@@ -17204,6 +17245,16 @@ ged_draw_obol_scene_sync_transaction(
 		      ged_obol_remove_paths(paths, view_ctx, scene, txn->mode) :
 		      ged_obol_remove_instance_keys(matching_instance_keys,
 						scene);
+	    /* A retained edit/frontier group may legitimately have no database
+	     * source children.  It remains a scene-owned object and an exact erase
+	     * must still retire its subtree.  Independent-view groups live in the
+	     * endpoint controller, so never apply their erase to the shared scene. */
+	    BObolSceneController *primary_scene =
+		ged_draw_obol_scene_controller(gedp);
+	    if ((!ged_obol_view_scope_is_independent(view_ctx) ||
+		 scene != primary_scene) &&
+		ged_obol_remove_exact_groups(paths, scene, txn->mode))
+		changed = 1;
 	    /* Removing a presentation owner is not geometry invalidation.  The
 	     * shared repository tracks every source owner and evicts an object's
 	     * payload when its last source is released.  Clearing it here made an

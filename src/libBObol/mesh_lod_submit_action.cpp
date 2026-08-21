@@ -107,24 +107,23 @@ mesh_lod_brep_variant_working_set(uint64_t canonicalFaces,
 
 static MeshLodBrepVariantDemand
 mesh_lod_brep_variant_demand(
-    const BObolSourceMeshRequest &sourceRequest,
+    const BObolCompactLodPlanningSummary &sourceSummary,
     const BObolLodRequest &projectedRequest,
     const BObolViewLodState::CadPayload *activePayload,
     const BObolLodService *service, SbBool allowGeneration)
 {
     MeshLodBrepVariantDemand demand;
-    demand.contentHash = sourceRequest.meshAssetContentHash;
-    demand.absTol = sourceRequest.meshAssetTessellationAbsTol;
-    demand.relTol = sourceRequest.meshAssetTessellationRelTol;
-    demand.normTol = sourceRequest.meshAssetTessellationNormTol;
+    demand.contentHash = sourceSummary.sourceContentHash;
+    demand.absTol = sourceSummary.meshAssetTessellationAbsTol;
+    demand.relTol = sourceSummary.meshAssetTessellationRelTol;
+    demand.normTol = sourceSummary.meshAssetTessellationNormTol;
     const bool validTolerances =
 	std::isfinite(demand.absTol) && demand.absTol >= 0.0 &&
 	std::isfinite(demand.relTol) && demand.relTol >= 0.0 &&
 	std::isfinite(demand.normTol) && demand.normTol >= 0.0 &&
 	(demand.absTol > 0.0 || demand.relTol > 0.0 ||
 	 demand.normTol > 0.0);
-    const bool brep = BU_STR_EQUAL(
-	sourceRequest.sourceType.getString(), "brep") &&
+    const bool brep = sourceSummary.brepSource &&
 	demand.contentHash && validTolerances;
     if (!brep)
 	return demand;
@@ -159,19 +158,19 @@ mesh_lod_brep_variant_demand(
 	workingLimit - workingLimit / 4;
     while (admittedBand > 0 &&
 	mesh_lod_brep_variant_working_set(
-	    sourceRequest.faceCount, admittedBand) > generationLimit)
+	    sourceSummary.sourceFaceCount, admittedBand) > generationLimit)
 	--admittedBand;
     demand.memoryLimited = admittedBand < wantedBand ? TRUE : FALSE;
     demand.band = admittedBand;
     demand.contentHash = mesh_lod_brep_variant_hash(
-	sourceRequest.meshAssetContentHash, admittedBand);
+	sourceSummary.sourceContentHash, admittedBand);
     const double scale = std::ldexp(1.0, -static_cast<int>(admittedBand));
     demand.absTol = demand.absTol > 0.0 ? demand.absTol * scale : 0.0;
     demand.relTol *= scale;
     demand.normTol = demand.normTol > 0.0 ? demand.normTol * scale : 0.0;
     demand.estimatedWorkingSetBytes =
 	mesh_lod_brep_variant_working_set(
-	    sourceRequest.faceCount, admittedBand);
+	    sourceSummary.sourceFaceCount, admittedBand);
     demand.generate = admittedBand > 0 ? TRUE : FALSE;
     return demand;
 }
@@ -218,7 +217,7 @@ mesh_lod_resident_task_estimate(
 
 static size_t
 mesh_lod_warm_source_task_estimate(
-    const BObolSourceMeshRequest &sourceRequest,
+    const BObolCompactLodProviderSummary &sourceRequest,
     const BObolLodRequest &request)
 {
     if (!sourceRequest.lodAvailable ||
@@ -304,6 +303,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     skippedMeshCount(0),
     visibleMeshCount(0),
     coveredVisibleMeshCount(0),
+    compactEntryVisibilityObservations(),
     diagnosticCount(0),
     suppressedDiagnosticCount(0),
     diagnostics("")
@@ -1166,6 +1166,12 @@ SoBRLMeshLodSubmitAction::getCoveredVisibleMeshCount(void) const
     return this->coveredVisibleMeshCount;
 }
 
+const std::vector<std::pair<size_t, SbBool>> &
+SoBRLMeshLodSubmitAction::getCompactEntryVisibilityObservations(void) const
+{
+    return this->compactEntryVisibilityObservations;
+}
+
 const SbString &
 SoBRLMeshLodSubmitAction::getDiagnostics(void) const
 {
@@ -1191,6 +1197,7 @@ SoBRLMeshLodSubmitAction::beginTraversal(SoNode *node)
     this->skippedMeshCount = 0;
     this->visibleMeshCount = 0;
     this->coveredVisibleMeshCount = 0;
+    this->compactEntryVisibilityObservations.clear();
     this->diagnosticCount = 0;
     this->suppressedDiagnosticCount = 0;
     this->diagnostics = "";
@@ -1659,7 +1666,7 @@ mesh_lod_cad_payload_has_presentable_spatial_demand(
 	if (!mesh_lod_can_draw_chunks(payload->progressiveMesh,
 		request.requiredChunks, request.requestedCut))
 	    return FALSE;
-	if (payload->requiredChunks != request.requiredChunks &&
+	if (payload->presentedChunks != request.requiredChunks &&
 	    (!payload->preparedCadGeometry ||
 	     payload->preparedCadGeometryRevision !=
 		 payload->progressiveMesh->revision()))
@@ -1703,13 +1710,21 @@ mesh_lod_cad_payload_matches_asset_epoch(
 	const BObolViewLodState::CadPayload *payload,
 	const BObolLodRequest &request)
 {
+    /* sourceRevision is the source-node transaction epoch.  It advances for
+     * selection, visibility, path expansion, and other presentation-only
+     * changes as well as geometry replacement.  A nonzero immutable content
+     * hash is the stronger asset identity and must survive those semantic
+     * edits; unhashed compatibility payloads still require the broad epoch. */
+    const bool sourceAssetMatches = payload &&
+	payload->sourceContentHash == request.sourceContentHash &&
+	(request.sourceContentHash != 0 ||
+	 payload->sourceRevision == request.sourceRevision);
     if (!payload || !payload->isValid() ||
 	(payload->resultKind != BOBOL_LOD_RESULT_MESH &&
 	 payload->resultKind != BOBOL_LOD_RESULT_FULL_DETAIL) ||
 	payload->providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	payload->databaseRevision != request.databaseRevision ||
-	payload->sourceRevision != request.sourceRevision ||
-	payload->sourceContentHash != request.sourceContentHash ||
+	!sourceAssetMatches ||
 	payload->qualityTier != request.qualityTier)
 	{
 	    if (getenv("BOBOL_LOD_TRACE_BUDGET") && payload)
@@ -1739,14 +1754,11 @@ mesh_lod_cad_payload_matches_asset_epoch(
 	!payload->progressiveMesh)
 	return FALSE;
 
-    if (request.objectName.getLength() > 0)
-	return payload->sourceName.getLength() > 0 &&
-	    bu_strcmp(payload->sourceName.getString(),
-		request.objectName.getString()) == 0 ? TRUE : FALSE;
-    return payload->sourcePath.getLength() > 0 &&
-	request.objectPath.getLength() > 0 &&
-	bu_strcmp(payload->sourcePath.getString(),
-	    request.objectPath.getString()) == 0 ? TRUE : FALSE;
+    /* The authoritative source/occurrence table already resolved this exact
+     * binding.  Repeating leaf name/path comparison is redundant and hostile
+     * to the allocation-light retained path.  Unhashed sources are still
+     * protected by sourceRevision above; hashed assets use content identity. */
+    return TRUE;
 }
 
 static SbBool
@@ -1820,11 +1832,26 @@ mesh_lod_retarget_cad_demand_if_changed(
      * the same sparse frontier forever. */
     if (payload->requestedCut == request.requestedCut &&
 	payload->drawMode == request.drawMode &&
+	payload->requiredChunks == request.requiredChunks &&
 	payload->viewRevision == request.viewRevision &&
 	payload->policyRevision == request.policyRevision)
 	return;
-    (void)state->retargetCadPayload(
+    const int priorRequestedCut = payload->requestedCut;
+    const uint64_t priorViewRevision = payload->viewRevision;
+    const uint64_t priorPolicyRevision = payload->policyRevision;
+    const SbBool retargeted = state->retargetCadPayload(
 	payload, payload->activeCut, request);
+    if (getenv("BOBOL_LOD_TRACE_BUDGET"))
+	bu_log("BObol retained demand retarget object=%s active=%d "
+	       "requested=%d->%d view=%llu->%llu policy=%llu->%llu "
+	       "applied=%d\n",
+	       payload->sourceName.getString(), payload->activeCut,
+	       priorRequestedCut, request.requestedCut,
+	       static_cast<unsigned long long>(priorViewRevision),
+	       static_cast<unsigned long long>(request.viewRevision.value()),
+	       static_cast<unsigned long long>(priorPolicyRevision),
+	       static_cast<unsigned long long>(request.policyRevision.value()),
+	       retargeted ? 1 : 0);
 }
 
 static void
@@ -1995,6 +2022,24 @@ mesh_lod_debug_delay_milliseconds(const char *env_name)
 	return 0;
 
     return (uint32_t)value;
+}
+
+/* Compact results published by current producers carry an entry hint, making
+ * the common 50k/150k retained lookup allocation-free.  Keyed fallback keeps
+ * hand-authored clients and an in-flight registry replacement correct; the
+ * occurrence string, never the positional hint, remains semantic identity. */
+static const BObolViewLodState::CadPayload *
+mesh_lod_find_cad_for_source_entry(
+    const BObolViewLodState *viewState, const SoBRLDatabaseSource *source,
+    uint32_t sourceEntryIndex, const SbString &occurrenceKey)
+{
+    if (!viewState)
+	return NULL;
+    const BObolViewLodState::CadPayload *payload =
+	viewState->findCadForSourceEntry(
+	    source, sourceEntryIndex, occurrenceKey);
+    return payload ? payload :
+	viewState->findCadForOccurrence(source, occurrenceKey);
 }
 
 void
@@ -2176,16 +2221,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		     * own in the preceding view.  Newly prominent parts must be able
 		     * to reclaim budget from newly insignificant ones without loading
 		     * or rebuilding geometry. */
-		    const int residentCut =
-			candidate.demand.requiredChunks.empty() ?
-			    candidate.payload->progressiveMesh->residentCut() :
-			    candidate.payload->progressiveMesh->
-				residentCutForChunks(
-				    candidate.demand.requiredChunks);
-		    int targetCut = std::min(
-			candidate.requestedCut,
-			std::max(candidate.payload->activeCut,
-			    residentCut));
+		    /* residentCutForChunks() is a loaded-population frontier, not
+		     * the richest drawable cut.  A later PoP cut may change only
+		     * coordinate quantization and therefore be drawable from the
+		     * same arrays.  Start from physical demand and let the exact
+		     * canDrawChunksAtCut() test below select the richest resident
+		     * presentation. */
+		    int targetCut = candidate.requestedCut;
 		    targetCut = mesh_lod_error_ceiling_cut(
 			candidate.demand,
 			candidate.payload->progressiveMesh,
@@ -2350,9 +2392,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			       origin[0], origin[1], origin[2]);
 		    }
 		    const BObolViewLodState::CadPayload *active =
-			submitAction->viewState ?
-			submitAction->viewState->findCadForOccurrence(
-			    source, summary.sourceInstanceKey) : NULL;
+			mesh_lod_find_cad_for_source_entry(
+			    submitAction->viewState, source,
+			    static_cast<uint32_t>(candidateIndex),
+			    summary.sourceInstanceKey);
 		    if (active)
 			offscreenPayloads.push_back(active);
 		    if (submitAction->compactEntryFirst == 0) {
@@ -2375,9 +2418,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		candidate.emphasis = summary.selected ? 2 :
 		    (summary.highlighted ? 1 : 0);
 		const BObolViewLodState::CadPayload *active =
-		    submitAction->viewState ?
-		    submitAction->viewState->findCadForOccurrence(
-			source, summary.sourceInstanceKey) : NULL;
+		    mesh_lod_find_cad_for_source_entry(
+			submitAction->viewState, source,
+			static_cast<uint32_t>(candidateIndex),
+			summary.sourceInstanceKey);
 		const bool presentationProjectsToPoint =
 		    !active && !summary.meshGeometry &&
 		    !summary.selected && !summary.highlighted &&
@@ -2547,8 +2591,14 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    }
 	    processedLast = candidateOffset + 1;
 	    const size_t i = entryPlan[candidateOffset];
-	    BObolCompactLodInstanceSummary summary;
-	    if (!source->getCompactLodInstanceSummary(
+	    /* Record every consumed compact entry, including hidden, invalid,
+	     * analytic, and off-screen entries.  Exact visibility/edit deltas need
+	     * a negative observation just as much as a positive one in order to
+	     * update the prior complete census without an O(scene-size) replay. */
+	    submitAction->compactEntryVisibilityObservations.push_back(
+		std::make_pair(i, FALSE));
+	    BObolCompactLodPlanningSummary summary;
+	    if (!source->getCompactLodPlanningSummary(
 		    static_cast<int>(i), summary))
 		continue;
 	    if (!summary.valid || !summary.visible) {
@@ -2557,8 +2607,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->viewState &&
 		    summary.sourceInstanceKey.getLength() > 0) {
 		    const BObolViewLodState::CadPayload *inactive =
-			submitAction->viewState->findCadForOccurrence(
-			    source, summary.sourceInstanceKey);
+			mesh_lod_find_cad_for_source_entry(
+			    submitAction->viewState, source,
+			    static_cast<uint32_t>(i),
+			    summary.sourceInstanceKey);
 		    if (inactive &&
 			submitAction->viewState->removeCadPayload(inactive))
 			submitAction->updatedCutCount++;
@@ -2567,17 +2619,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    }
 
 	    submitAction->visitedMeshCount++;
-	    const SbString &target = summary.path.getLength() > 0 ?
-		summary.path : source->path.getValue();
 	    if (!submitAction->service || !submitAction->service->isRunning()) {
 		submitAction->skippedMeshCount++;
-		submitAction->appendDiagnostic(target,
+		submitAction->appendDiagnostic(source->path.getValue(),
 		    "LoD service is not running");
 		continue;
 	    }
 	    if (!submitAction->dbip) {
 		submitAction->skippedMeshCount++;
-		submitAction->appendDiagnostic(target,
+		submitAction->appendDiagnostic(source->path.getValue(),
 		    "LoD submit action has no database");
 		continue;
 	    }
@@ -2598,11 +2648,6 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		submitAction->skippedMeshCount++;
 		continue;
 	    }
-	    BObolSourceMeshRequest sourceMeshRequest;
-	    const SbBool haveSourceMeshRequest =
-		source->getCompactSourceMeshRequest(
-		    static_cast<int>(i), sourceMeshRequest);
-
 	    BObolLodRequest request;
 	    request.databaseId = submitAction->databaseId;
 	    request.databaseRevision = submitAction->databaseRevision;
@@ -2612,17 +2657,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	     * key is independent of the standing AABB part which the result will
 	     * replace. */
 	    request.sourceContentHash = summary.sourceContentHash;
-	    request.objectPath = summary.meshAssetPath.getLength() > 0 ?
-		summary.meshAssetPath : target;
-	    request.objectName = summary.meshAssetName.getLength() > 0 ?
-		summary.meshAssetName : summary.sourceName;
 	    request.occurrenceKey = summary.sourceInstanceKey;
 	    request.sourceRoutingId = source->getCompactSourceRoutingId();
 	    request.sourceEntryIndex = i <=
 		static_cast<size_t>(UINT32_MAX) ?
 		static_cast<uint32_t>(i) : UINT32_MAX;
-	    if (request.objectName.getLength() == 0)
-		request.objectName = mesh_lod_source_leaf_name(source);
 	    request.viewRevision = submitAction->viewRevision;
 	    request.policyRevision = submitAction->policyRevision;
 	    request.visualEmphasis = summary.selected ? 2 :
@@ -2631,11 +2670,33 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    request.providerId = submitAction->providerId;
 	    request.providerVersion = submitAction->providerVersion;
 	    request.qualityTier = submitAction->qualityTier;
-	    request.bounds = !summary.meshAssetBounds.isEmpty() ?
-		summary.meshAssetBounds : summary.localBounds;
+	    request.bounds = summary.localBounds;
 	    request.sourceCounts.faceCount = summary.sourceFaceCount;
 	    request.sourceCounts.pointCount = summary.sourcePointCount;
 	    request.sourceCounts.originalPointCount = summary.sourcePointCount;
+	    BObolCompactLodInstanceSummary identitySummary;
+	    bool identityMaterialized = false;
+	    const auto materializeIdentity = [&]() {
+		if (identityMaterialized)
+		    return true;
+		if (!source->getCompactLodInstanceSummary(
+			static_cast<int>(i), identitySummary) ||
+		    !identitySummary.valid ||
+		    bu_strcmp(identitySummary.sourceInstanceKey.getString(),
+			summary.sourceInstanceKey.getString()) != 0)
+		    return false;
+		request.objectPath =
+		    identitySummary.meshAssetPath.getLength() > 0 ?
+			identitySummary.meshAssetPath : identitySummary.path;
+		request.objectName =
+		    identitySummary.meshAssetName.getLength() > 0 ?
+			identitySummary.meshAssetName :
+			identitySummary.sourceName;
+		if (request.objectName.getLength() == 0)
+		    request.objectName = mesh_lod_source_leaf_name(source);
+		identityMaterialized = true;
+		return true;
+	    };
 	    /* Compact summaries already report the complete geometry-to-root
 	     * transform, including the source draw matrix.  Applying the source
 	     * matrix again corrupts screen bounds (and can make a visible leaf
@@ -2651,8 +2712,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			 submitAction->retainedSceneUpgradeCostBudget != SIZE_MAX) &&
 			submitAction->viewState) {
 			const BObolViewLodState::CadPayload *offscreen =
-			    submitAction->viewState->findCadForOccurrence(
-				source, summary.sourceInstanceKey);
+			    mesh_lod_find_cad_for_source_entry(
+				submitAction->viewState, source,
+				static_cast<uint32_t>(i),
+				summary.sourceInstanceKey);
 			if (offscreen &&
 			    submitAction->viewState->
 				removeCadPayload(offscreen))
@@ -2663,22 +2726,23 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		}
 	    }
 	    const BObolViewLodState::CadPayload *activePayload =
-		submitAction->viewState ?
-		submitAction->viewState->findCadForOccurrence(
-		    source, request.occurrenceKey) : NULL;
+		mesh_lod_find_cad_for_source_entry(
+		    submitAction->viewState, source,
+		    request.sourceEntryIndex, request.occurrenceKey);
 	    /* A completed xpush/PCA adoption may replace its provisional
 	     * occurrence key while retaining the exact, distinct source BoT.
 	     * Recover that payload only when its asset path is unique in this
 	     * source.  Shared instances deliberately remain occurrence-keyed:
 	     * choosing one of several identical asset paths would couple their
 	     * independent view cuts. */
-	    if (!activePayload && count == 1 &&
+	    if (!activePayload && count == 1 && materializeIdentity() &&
 		request.objectPath.getLength() > 0) {
 		activePayload = submitAction->viewState ?
 		    submitAction->viewState->findCadForAsset(
 			source, request.objectPath) : NULL;
 	    }
 	    submitAction->visibleMeshCount++;
+	    submitAction->compactEntryVisibilityObservations.back().second = TRUE;
 	    const bool presentationProjectsToPoint =
 		!activePayload && !summary.meshGeometry &&
 		!summary.selected && !summary.highlighted &&
@@ -2706,11 +2770,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    activePayload->activeCut,
 		    submitAction->cutHysteresisEnabled);
 	    const MeshLodBrepVariantDemand brepVariant =
-		haveSourceMeshRequest ? mesh_lod_brep_variant_demand(
-		    sourceMeshRequest, request, activePayload,
-		    submitAction->service,
-		    submitAction->allowRepresentationRefinement) :
-		MeshLodBrepVariantDemand();
+		mesh_lod_brep_variant_demand(
+		    summary, request, activePayload, submitAction->service,
+		    submitAction->allowRepresentationRefinement);
 	    if (brepVariant.contentHash)
 		request.sourceContentHash = brepVariant.contentHash;
 	    const SbBool terminalFailure =
@@ -2734,8 +2796,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		 * occurrence's prior payload was retired while hidden.  True sub-pixel
 		 * aggregation is terminal for the current view and does not arm this
 		 * follow-up. */
-		if (submitAction->structuralCoverageOnly)
-		    submitAction->pendingRetainedRefinementCount++;
+	if (submitAction->structuralCoverageOnly)
+	    submitAction->pendingRetainedRefinementCount++;
 		submitAction->skippedMeshCount++;
 		continue;
 	    }
@@ -2784,27 +2846,6 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    desiredCut = std::max(minimumCut, desiredCut);
 	    const SbBool sceneQualityLimited =
 		desiredCut < request.requestedCut ? TRUE : FALSE;
-	    /* The progressive mesh is shared by every occurrence of an asset and
-	     * grows in place.  CadPayload::residentCut records the prefix observed
-	     * when that particular occurrence last consumed a result; it is not the
-	     * current residency authority.  Comparing demand to that snapshot makes
-	     * a sibling occurrence report missing residency after another sibling
-	     * has already extended the shared asset.  No provider task is then
-	     * possible (the asset can draw the cut), so the controller repeats a
-	     * zero-work complete-scene pass forever.
-	     *
-	     * Use the shared asset's live population frontier for allocation and
-	     * canDrawCut() for the exact residency witness.  The later retarget path
-	     * still validates the immutable prepared renderer channel before exposing
-	     * a richer cut, so this does not publish unprepared geometry. */
-	    const int residentCut = request.requiredChunks.empty() ?
-		activePayload->progressiveMesh->residentCut() :
-		activePayload->progressiveMesh->residentCutForChunks(
-		    request.requiredChunks);
-	    /* The prepared occurrence may remain richer than the common frontier
-	     * of a newly expanded visible-page set.  That is a temporary residency
-	     * gap, not permission to demote the existing presentation. */
-	    const int availableCut = residentCut;
 	    /* desiredCut is the scene-budgeted presentation target.  Residency is
 	     * driven by the independent physical pixel demand: a stamped allocation
 	     * may deliberately clamp desiredCut to the current draw cut without
@@ -2813,8 +2854,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		!mesh_lod_can_draw_chunks(activePayload->progressiveMesh,
 		    request.requiredChunks, request.requestedCut))
 		submitAction->pendingResidentRefinementCount++;
-	    const int targetCut = std::max(minimumCut,
-		std::min(desiredCut, availableCut));
+	    /* The resident cut is the last population-bearing prefix loaded for
+	     * the demanded pages.  It is intentionally conservative: higher PoP
+	     * cuts which refine only coordinate snapping need no additional array
+	     * data and can already be drawable.  Do not clamp the presentation to
+	     * that scalar.  The exact chunk-set test in each admission loop below
+	     * is the authority over residency. */
+	    const int targetCut = std::max(minimumCut, desiredCut);
 	    const int presentationContinuityCut = std::min(
 		activePayload->activeCut, desiredCut);
 	    const SbBool pageSetTransitionPending =
@@ -3195,8 +3241,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	     * of scheduling a cache/provider task and result for every instance.
 	     * The exact per-occurrence draw population is still charged to the
 	     * aggregate scene budget. */
-	    if (!activePayload && request.objectPath.getLength() > 0 &&
-		submitAction->viewState) {
+	    if (!activePayload && materializeIdentity() &&
+		request.objectPath.getLength() > 0 && submitAction->viewState) {
 		const BObolViewLodState::CadPayload *reusable =
 		    submitAction->viewState->findCadForAsset(
 			source, request.objectPath);
@@ -3375,7 +3421,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    if (getenv("BOBOL_LOD_TRACE_BUDGET") && activePayload)
 		bu_log("BObol retained retarget candidate active=%d requested=%d "
 		    "presentation=%d available=%d can_draw=%d asset_match=%d "
-		    "reset=%d\n", activePayload->activeCut,
+		    "reset=%d pixels=%.9g target=%.9g selected_error=%.9g "
+		    "chunks=%zu/%zu mesh_revision=%llu prepared_revision=%llu\n",
+		    activePayload->activeCut,
 		    request.requestedCut, presentationDemand.requestedCut,
 		    retargetCut,
 		    activePayload->progressiveMesh ?
@@ -3383,7 +3431,20 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			    activePayload->progressiveMesh,
 			    presentationDemand.requiredChunks,
 			    presentationDemand.requestedCut) : 0,
-		    activeAssetMatches ? 1 : 0, submitAction->reset);
+		    activeAssetMatches ? 1 : 0, submitAction->reset,
+		    request.projectedPixelDiameter,
+		    request.targetPixelError,
+		    activePayload->progressiveMesh ?
+			activePayload->progressiveMesh->projectedErrorAtCut(
+			    request.requestedCut,
+			    request.projectedPixelDiameter) : -1.0,
+		    request.requiredChunks.size(),
+		    activePayload->presentedChunks.size(),
+		    static_cast<unsigned long long>(
+			activePayload->progressiveMesh ?
+			activePayload->progressiveMesh->revision() : 0),
+		    static_cast<unsigned long long>(
+			activePayload->preparedCadGeometryRevision));
 	    if (submitAction->reset == 0 && activePayload &&
 		activeAssetMatches &&
 		retargetCut > activePayload->activeCut) {
@@ -3540,12 +3601,22 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		submitAction->skippedMeshCount++;
 		continue;
 	    }
+	    if (!identityMaterialized && !materializeIdentity()) {
+		submitAction->skippedMeshCount++;
+		submitAction->appendDiagnostic(source->path.getValue(),
+		    "compact LoD identity changed during bounded planning");
+		continue;
+	    }
 
+	    BObolCompactLodProviderSummary providerSummary;
+	    const SbBool haveProviderSummary =
+		source->getCompactLodProviderSummary(
+		    static_cast<int>(i), providerSummary);
 	    BObolMeshLodProvider *provider = new BObolMeshLodProvider;
-	    if (haveSourceMeshRequest &&
+	    if (haveProviderSummary &&
 		request.sourceContentHash ==
-		    sourceMeshRequest.meshAssetContentHash)
-		provider->stagedSource = sourceMeshRequest.stagedSource.lock();
+		    summary.sourceContentHash)
+		provider->stagedSource = providerSummary.stagedSource.lock();
 	    provider->meshAssetContentHash = request.sourceContentHash;
 	    provider->generateBrepVariant = brepVariant.generate;
 	    provider->brepTessellationAbsTol = brepVariant.absTol;
@@ -3553,6 +3624,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    provider->brepTessellationNormTol = brepVariant.normTol;
 	    provider->brepVariantMemoryLimited = brepVariant.memoryLimited;
 	    provider->service = submitAction->service;
+	    provider->generation = submitAction->generation;
 	    if (!provider->setDatabase(submitAction->dbip)) {
 		delete provider;
 		submitAction->skippedMeshCount++;
@@ -3563,8 +3635,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    provider->forcedCut = submitAction->forcedCut;
 	    provider->useCurrentDrawCut = TRUE;
 	    const SbBool atomicBrepHandoff =
-		activePayload && haveSourceMeshRequest &&
-		BU_STR_EQUAL(sourceMeshRequest.sourceType.getString(), "brep") &&
+		activePayload && summary.brepSource &&
 		activePayload->sourceContentHash != 0 &&
 		request.sourceContentHash != 0 &&
 		activePayload->sourceContentHash != request.sourceContentHash ?
@@ -3620,9 +3691,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			mesh_lod_resident_task_estimate(
 			    activePayload->progressiveMesh, workingSetCut,
 			    activePayload->hasNormals, request.drawMode) :
-			(haveSourceMeshRequest ?
+			(haveProviderSummary ?
 			    mesh_lod_warm_source_task_estimate(
-				sourceMeshRequest, request) : 0));
+				providerSummary, request) : 0));
 		    pendingTasks.push_back(std::move(task));
 	}
 
@@ -3893,6 +3964,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 
     BObolMeshLodProvider *provider = new BObolMeshLodProvider;
     provider->service = submitAction->service;
+    provider->generation = submitAction->generation;
     if (!provider->setDatabase(submitAction->dbip)) {
 	delete provider;
 	submitAction->skippedMeshCount++;
@@ -4156,6 +4228,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 
     BObolMeshLodProvider *provider = new BObolMeshLodProvider;
     provider->service = submitAction->service;
+    provider->generation = submitAction->generation;
     if (!provider->setDatabase(submitAction->dbip)) {
 	delete provider;
 	submitAction->skippedMeshCount++;

@@ -62,6 +62,10 @@ struct BObolCompactOccurrenceRegistryState {
     struct DisplayMeshLodDelta {
 	uint64_t revision = 0;
 	std::vector<size_t> entryIndices;
+	/* Appending/removing occurrences invalidates a scene-wide coverage
+	 * proof.  Visibility and in-place geometry/request updates are exact
+	 * local mutations and must not make every view rescan the population. */
+	SbBool coverageInvalidated = FALSE;
     };
 
     struct BObolCompactInstanceIndex *compactIndex = NULL;

@@ -326,6 +326,7 @@ view_lod_progressive_counts(
 
 BObolViewLodState::CadPayload::CadPayload(void) :
     preparedCadGeometryRevision(0),
+    sourceRoutingId(0),
     sourceEntryIndex(UINT32_MAX),
     sourceContentHash(0),
     databaseRevision(0),
@@ -453,6 +454,8 @@ BObolViewLodState::CadPayload::estimateBytes(void) const
 	   this->mesh.coordIndex.size() * sizeof(int32_t) +
 	   this->mesh.faceIndex.size() * sizeof(int32_t) +
 	   this->mesh.vertexIndex.size() * sizeof(int32_t)) +
+	   this->requiredChunks.capacity() * sizeof(uint32_t) +
+	   this->presentedChunks.capacity() * sizeof(uint32_t) +
 	   (this->projectedCutCounts ? sizeof(ProjectedCutCounts) : 0) +
 	   sizeof(*this);
 }
@@ -633,6 +636,7 @@ view_lod_cad_payload_is_satisfied(
     const BObolViewLodState::CadPayload *payload)
 {
     return view_lod_cad_payload_is_mesh(payload) &&
+	payload->presentedChunks == payload->requiredChunks &&
 	(payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
 	 payload->requestedCut < 0 ||
 	payload->activeCut >= payload->requestedCut);
@@ -705,10 +709,7 @@ view_lod_cad_resident_demand_cut(
     const BObolViewLodState::CadPayload *payload)
 {
     return payload ? view_lod_resident_demand_cut(payload->activeCut,
-	payload->requestedCut,
-	payload->progressiveMesh ?
-	    payload->progressiveMesh->residentCut() :
-	    payload->residentCut) : -1;
+	payload->requestedCut, payload->residentCut) : -1;
 }
 
 void
@@ -902,9 +903,7 @@ BObolViewLodState::addCadPayloadMetrics(const CadPayload *payload)
 	this->cadMinimumActiveRenderCost = view_lod_saturating_add(
 	    this->cadMinimumActiveRenderCost,
 	    view_lod_minimum_cad_payload_render_cost(payload));
-	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
-	    payload->requestedCut < 0 ||
-	    payload->activeCut >= payload->requestedCut)
+	if (view_lod_cad_payload_is_satisfied(payload))
 	    this->cadSatisfiedMeshPayloadCount = view_lod_saturating_add(
 		this->cadSatisfiedMeshPayloadCount, 1);
 	if (payload->memoryLimited)
@@ -989,9 +988,7 @@ BObolViewLodState::removeCadPayloadMetrics(const CadPayload *payload)
 	this->cadMinimumActiveRenderCost = view_lod_saturating_subtract(
 	    this->cadMinimumActiveRenderCost,
 	    view_lod_minimum_cad_payload_render_cost(payload));
-	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
-	    payload->requestedCut < 0 ||
-	    payload->activeCut >= payload->requestedCut)
+	if (view_lod_cad_payload_is_satisfied(payload))
 	    this->cadSatisfiedMeshPayloadCount = view_lod_saturating_subtract(
 		this->cadSatisfiedMeshPayloadCount, 1);
 	if (payload->memoryLimited)
@@ -1029,6 +1026,7 @@ BObolViewLodState::clear(void)
     this->meshBindings.clear();
     this->proxyBindings.clear();
     this->cadSourceBindings.clear();
+    this->cadSourceEntryBindings.clear();
     this->cadAssetBindings.clear();
     this->cadBindings.clear();
     this->cadOccurrenceFailures.clear();
@@ -1435,6 +1433,9 @@ BObolViewLodState::applySourceResultInternal(
      * may fall back to a path; a nonempty value must never alias a sibling. */
     payload->sourceInstanceKey = result.request.occurrenceKey;
     payload->sourceBindingKey = sourceBindingKey.c_str();
+    payload->sourceRoutingId = result.request.sourceRoutingId != 0 ?
+	result.request.sourceRoutingId.value() :
+	source->getCompactSourceRoutingId();
     payload->sourceEntryIndex = result.request.sourceEntryIndex;
     payload->cacheIdentity = result.cacheKey.value;
     payload->cacheKey = result.geometry.cacheKey.isValid() ?
@@ -1451,6 +1452,7 @@ BObolViewLodState::applySourceResultInternal(
     payload->requestedCut = result.resolvedCut >= 0 ?
 	result.resolvedCut : result.request.requestedCut;
     payload->requiredChunks = result.request.requiredChunks;
+    payload->presentedChunks = result.request.requiredChunks;
     payload->projectedPixelDiameter =
 	result.request.projectedPixelDiameter;
     payload->projectedPixelArea = result.request.projectedPixelArea;
@@ -1484,6 +1486,90 @@ BObolViewLodState::applySourceResultInternal(
     std::unordered_map<std::string, CadPayloadPtr> &sourcePayloads =
 	this->cadSourceBindings[sourceBindingKey];
     const auto current = sourcePayloads.find(occurrenceKey);
+
+    /*
+     * Provider results publish immutable geometry and residency; they do not
+     * own the mutable view demand.  A wheel/trackpad stream can retarget an
+     * occurrence several times while one cumulative PoP suffix is in flight.
+     * The service deliberately coalesces those requests by asset, so the
+     * completing task can carry an older (or merely less exact) requested
+     * cut even after the controller rebases its camera epochs.  Replacing the
+     * payload wholesale in that state briefly made the older request look
+     * satisfied.  No refinement replay was then required until another input
+     * event happened to wake the planner.
+     *
+     * Preserve the owner-thread demand whenever the retained occurrence is
+     * at least as current and the result extends the same immutable asset.
+     * The newly prepared renderer generation is still installed below.  Its
+     * spatial population census is invalidated because the shared generation
+     * may have grown; the next bounded demand pass recomputes it from the
+     * retained current projection rather than using the worker's stale one.
+     */
+    if (current != sourcePayloads.end() && current->second) {
+	const CadPayload *retained = current->second.get();
+	const bool sameAsset = retained->progressiveMesh &&
+	    retained->progressiveMesh == payload->progressiveMesh &&
+	    retained->databaseRevision == payload->databaseRevision &&
+	    retained->sourceContentHash == payload->sourceContentHash &&
+	    (payload->sourceContentHash != 0 ||
+	     retained->sourceRevision == payload->sourceRevision) &&
+	    retained->drawMode == payload->drawMode;
+	const bool retainedDemandIsNewer =
+	    retained->viewRevision >= payload->viewRevision &&
+	    retained->policyRevision >= payload->policyRevision &&
+	    (retained->viewRevision > payload->viewRevision ||
+	     retained->policyRevision > payload->policyRevision);
+	/* The worker may resolve its hierarchy selection more coarsely than a
+	 * later coalesced request even after the result has been epoch-rebased.
+	 * In an otherwise identical epoch, preserve only that demonstrably richer
+	 * owner demand.  Treating all equal-epoch payloads as stale would suppress
+	 * a legitimate current provider result after a source/spatial update. */
+	const bool retainedCoalescedDemandIsRicher =
+	    retained->viewRevision == payload->viewRevision &&
+	    retained->policyRevision == payload->policyRevision &&
+	    retained->requestedCut > payload->requestedCut;
+	if (sameAsset &&
+	    (retainedDemandIsNewer || retainedCoalescedDemandIsRicher)) {
+	    if (getenv("BOBOL_LOD_TRACE_BUDGET"))
+		bu_log("BObol cumulative result retained current demand "
+		       "object=%s active=%d/%d requested=%d/%d "
+		       "view=%llu/%llu policy=%llu/%llu\n",
+		       retained->sourceName.getString(), retained->activeCut,
+		       payload->activeCut, retained->requestedCut,
+		       payload->requestedCut,
+		       static_cast<unsigned long long>(retained->viewRevision),
+		       static_cast<unsigned long long>(payload->viewRevision),
+		       static_cast<unsigned long long>(retained->policyRevision),
+		       static_cast<unsigned long long>(payload->policyRevision));
+	    payload->requestedCut = retained->requestedCut;
+	    payload->requiredChunks = retained->requiredChunks;
+	    payload->projectedPixelDiameter =
+		retained->projectedPixelDiameter;
+	    payload->projectedPixelArea = retained->projectedPixelArea;
+	    payload->projectedPixelPerimeter =
+		retained->projectedPixelPerimeter;
+	    payload->projectedBoundsContained =
+		retained->projectedBoundsContained;
+	    payload->targetPixelError = retained->targetPixelError;
+	    payload->viewRevision = retained->viewRevision;
+	    payload->policyRevision = retained->policyRevision;
+	    payload->visualEmphasis = retained->visualEmphasis;
+	    payload->projectedCutCounts.reset();
+	    payload->projectedCutCountsViewRevision = 0;
+	    payload->projectedCutCountsPolicyRevision = 0;
+	    payload->projectedCutCountsMeshRevision = 0;
+	    /* The old immutable presentation remains authoritative until the
+	     * richer generation is committed.  Recomputing its counts against a
+	     * concurrently grown/compacted shared asset can observe no common
+	     * chunk frontier and transiently publish a zero-cost scene.  Preserve
+	     * the exact completed-frame census when the cut is unchanged; for a
+	     * genuinely new cut retain the provider's conservative result census.
+	     * The next bounded projection pass replaces either with current
+	     * view-local counts. */
+	    if (payload->activeCut == retained->activeCut)
+		payload->counts = retained->counts;
+	}
+    }
     if (current != sourcePayloads.end() && current->second &&
 	view_lod_cad_payload_rank(*current->second) >
 	    view_lod_cad_payload_rank(*payload))
@@ -1501,6 +1587,16 @@ BObolViewLodState::applySourceResultInternal(
 	    current->second->allocationPolicyRevision;
 	payload->allocationPlanSerial =
 	    current->second->allocationPlanSerial;
+	if (current->second->sourceEntryIndex != UINT32_MAX) {
+	    const auto indexedSource = this->cadSourceEntryBindings.find(
+		current->second->sourceRoutingId);
+	    const size_t oldIndex = static_cast<size_t>(
+		current->second->sourceEntryIndex);
+	    if (indexedSource != this->cadSourceEntryBindings.end() &&
+		oldIndex < indexedSource->second.size() &&
+		indexedSource->second[oldIndex] == current->second.get())
+		indexedSource->second[oldIndex] = NULL;
+	}
 	this->removeCadPayloadMetrics(current->second.get());
 	const bool reuseCompactSlot =
 	    result.request.occurrenceKey.getLength() > 0 &&
@@ -1537,6 +1633,15 @@ BObolViewLodState::applySourceResultInternal(
 	}
     }
     sourcePayloads[occurrenceKey] = publishedPayload;
+    if (payload->sourceEntryIndex != UINT32_MAX) {
+	std::vector<CadPayload *> &indexed =
+	    this->cadSourceEntryBindings[payload->sourceRoutingId];
+	const size_t entryIndex = static_cast<size_t>(
+	    payload->sourceEntryIndex);
+	if (indexed.size() <= entryIndex)
+	    indexed.resize(entryIndex + 1, NULL);
+	indexed[entryIndex] = payload;
+    }
     this->addCadPayloadMetrics(payload);
     if (payload->progressiveMesh && payload->progressiveMesh->isValid() &&
 	payload->sourcePath.getLength() > 0) {
@@ -1735,6 +1840,29 @@ BObolViewLodState::findCadForOccurrence(
 	sourcePayloads->second.find(occurrenceKey.getString());
     return payload != sourcePayloads->second.end() && payload->second ?
 	payload->second.get() : NULL;
+}
+
+const BObolViewLodState::CadPayload *
+BObolViewLodState::findCadForSourceEntry(
+    const SoBRLDatabaseSource *source, uint32_t sourceEntryIndex,
+    const SbString &occurrenceKey) const
+{
+    if (!source || sourceEntryIndex == UINT32_MAX ||
+	occurrenceKey.getLength() == 0 ||
+	this->cadSourceEntryBindings.empty())
+	return NULL;
+    const auto sourceEntries = this->cadSourceEntryBindings.find(
+	source->getCompactSourceRoutingId());
+    if (sourceEntries == this->cadSourceEntryBindings.end() ||
+	static_cast<size_t>(sourceEntryIndex) >= sourceEntries->second.size())
+	return NULL;
+    const CadPayload *payload = sourceEntries->second[
+	static_cast<size_t>(sourceEntryIndex)];
+    if (!payload || payload->sourceEntryIndex != sourceEntryIndex ||
+	bu_strcmp(payload->sourceInstanceKey.getString(),
+	    occurrenceKey.getString()) != 0)
+	return NULL;
+    return payload;
 }
 
 const BObolViewLodState::CadPayload *
@@ -1942,7 +2070,7 @@ BObolViewLodState::retargetCadPayload(
     const int requestedCut = demand.requestedCut;
     const bool spatialPageSetChanged = target &&
 	!demand.requiredChunks.empty() &&
-	target->requiredChunks != demand.requiredChunks;
+	target->presentedChunks != demand.requiredChunks;
     /* The shared progressive asset may already contain a worker-built
      * generation whose result has not reached this view.  The immutable
      * prepared PartGeometry is the authoritative presentation snapshot; its
@@ -1990,6 +2118,17 @@ BObolViewLodState::retargetCadPayload(
 	}
     }
 
+    const bool preparedGenerationCurrent = target &&
+	target->progressiveMesh &&
+	target->preparedCadGeometry &&
+	target->preparedCadGeometryRevision ==
+	    target->progressiveMesh->revision();
+    const bool demandActiveCutDrawable = target &&
+	view_lod_progressive_can_draw(target->progressiveMesh,
+	    demand.requiredChunks, activeCut);
+    const bool canAdoptDemandPageSet = !spatialPageSetChanged ||
+	(preparedGenerationCurrent && demandActiveCutDrawable);
+
     if (!target || !target->progressiveMesh ||
 	/* A representation-only retarget does not expose a new cut.  The CAD
 	 * assembly owns preparation of the newly selected renderer channel and may
@@ -1998,12 +2137,8 @@ BObolViewLodState::retargetCadPayload(
 	 * channel.  Require a prepared frontier only when the cut itself advances. */
 	(activeCut != target->activeCut &&
 	 activeCut > preparedDrawableCut) ||
-	!view_lod_progressive_can_draw(target->progressiveMesh,
-	    demand.requiredChunks, activeCut) ||
-	(spatialPageSetChanged &&
-	 (!target->preparedCadGeometry ||
-	  target->preparedCadGeometryRevision !=
-	      target->progressiveMesh->revision())) ||
+	(activeCut != target->activeCut &&
+	 (!canAdoptDemandPageSet || !demandActiveCutDrawable)) ||
 	requestedCut < 0)
 	return FALSE;
 
@@ -2050,10 +2185,13 @@ BObolViewLodState::retargetCadPayload(
 	 * so update the aggregate metrics in place even when the cut itself is
 	 * unchanged. */
 	if (payload->drawMode != demand.drawMode) {
+	    const BObolLodCounts priorPresentationCounts = payload->counts;
 	    this->removeCadPayloadMetrics(payload.get());
 	    payload->drawMode = demand.drawMode;
 	    payload->requestedCut = requestedCut;
 	    payload->requiredChunks = demand.requiredChunks;
+	    if (canAdoptDemandPageSet)
+		payload->presentedChunks = demand.requiredChunks;
 	    payload->projectedPixelDiameter = demand.projectedPixelDiameter;
 	    payload->projectedPixelArea = demand.projectedPixelArea;
 	    payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
@@ -2065,79 +2203,82 @@ BObolViewLodState::retargetCadPayload(
 	    payload->viewRevision = demand.viewRevision.value();
 	    payload->policyRevision = demand.policyRevision.value();
 	    payload->visualEmphasis = demand.visualEmphasis;
-	    payload->counts = view_lod_cad_counts_at_cut(
-		payload.get(), activeCut);
+	    payload->counts = canAdoptDemandPageSet ?
+		view_lod_cad_counts_at_cut(payload.get(), activeCut) :
+		priorPresentationCounts;
 	    this->addCadPayloadMetrics(payload.get());
 	    return TRUE;
 	}
 	const bool wasSatisfied =
-	    payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
-	    payload->requestedCut < 0 ||
-	    payload->activeCut >= payload->requestedCut;
-	const bool isSatisfied =
-	    payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
-	    requestedCut < 0 || activeCut >= requestedCut;
-	if (wasSatisfied != isSatisfied) {
-	    if (isSatisfied)
-		this->cadSatisfiedMeshPayloadCount =
-		    view_lod_saturating_add(
-			this->cadSatisfiedMeshPayloadCount, 1);
-	    else
-		this->cadSatisfiedMeshPayloadCount =
-		    view_lod_saturating_subtract(
-			this->cadSatisfiedMeshPayloadCount, 1);
-	}
-	if (payload->sourceInstanceKey.getLength() > 0) {
-	    const std::string sourceKey =
-		payload->sourceBindingKey.getString();
-	    const std::string occurrenceKey =
-		payload->sourceInstanceKey.getString();
-	    if (isSatisfied) {
-		const auto unsatisfied =
-		    this->cadUnsatisfiedOccurrencesBySource.find(sourceKey);
-		if (unsatisfied !=
-			this->cadUnsatisfiedOccurrencesBySource.end()) {
-		    unsatisfied->second.erase(occurrenceKey);
-		    if (unsatisfied->second.empty())
-			this->cadUnsatisfiedOccurrencesBySource.erase(
-			    unsatisfied);
-		}
-	    } else {
-		this->cadUnsatisfiedOccurrencesBySource[sourceKey].insert(
-		    occurrenceKey);
-	    }
-	}
+	    view_lod_cad_payload_is_satisfied(payload.get());
+	const bool wasMemoryLimited = payload->memoryLimited;
 	/* requestedCut contributes to the retained view demand even when the
 	 * presented cut is unchanged.  Update that O(1) aggregate in place. */
 	const bool populationChanged = projectedPopulationChanged ||
 	    payload->requiredChunks != demand.requiredChunks;
+	const BObolLodCounts priorPresentationCounts = payload->counts;
 	if (populationChanged)
 	    this->removeCadPayloadMetrics(payload.get());
 	else
 	    this->removeCadResidentDemand(payload.get());
 	payload->requestedCut = requestedCut;
 	payload->requiredChunks = demand.requiredChunks;
+	if (canAdoptDemandPageSet)
+	    payload->presentedChunks = demand.requiredChunks;
 	payload->projectedPixelDiameter = demand.projectedPixelDiameter;
 	payload->projectedPixelArea = demand.projectedPixelArea;
 	payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
 	payload->projectedBoundsContained = demand.projectedBoundsContained;
 	payload->targetPixelError = demand.targetPixelError;
-	if (populationChanged) {
-	    payload->counts = view_lod_cad_counts_at_cut(
-		payload.get(), activeCut);
-	    this->addCadPayloadMetrics(payload.get());
-	} else {
-	    this->addCadResidentDemand(payload.get());
-	}
-	if (payload->memoryLimited)
-	    this->cadMemoryLimitedMeshPayloadCount =
-		view_lod_saturating_subtract(
-		    this->cadMemoryLimitedMeshPayloadCount, 1);
 	payload->residentAdmissionRevision = 0;
 	payload->memoryLimited = FALSE;
 	payload->viewRevision = demand.viewRevision.value();
 	payload->policyRevision = demand.policyRevision.value();
 	payload->visualEmphasis = demand.visualEmphasis;
+	if (populationChanged) {
+	    payload->counts = canAdoptDemandPageSet ?
+		view_lod_cad_counts_at_cut(payload.get(), activeCut) :
+		priorPresentationCounts;
+	    this->addCadPayloadMetrics(payload.get());
+	} else {
+	    const bool isSatisfied =
+		view_lod_cad_payload_is_satisfied(payload.get());
+	    if (wasSatisfied != isSatisfied) {
+		if (isSatisfied)
+		    this->cadSatisfiedMeshPayloadCount =
+			view_lod_saturating_add(
+			    this->cadSatisfiedMeshPayloadCount, 1);
+		else
+		    this->cadSatisfiedMeshPayloadCount =
+			view_lod_saturating_subtract(
+			    this->cadSatisfiedMeshPayloadCount, 1);
+	    }
+	    if (payload->sourceInstanceKey.getLength() > 0) {
+		const std::string sourceKey =
+		    payload->sourceBindingKey.getString();
+		const std::string occurrenceKey =
+		    payload->sourceInstanceKey.getString();
+		if (isSatisfied) {
+		    const auto unsatisfied =
+			this->cadUnsatisfiedOccurrencesBySource.find(sourceKey);
+		    if (unsatisfied !=
+			    this->cadUnsatisfiedOccurrencesBySource.end()) {
+			unsatisfied->second.erase(occurrenceKey);
+			if (unsatisfied->second.empty())
+			    this->cadUnsatisfiedOccurrencesBySource.erase(
+				unsatisfied);
+		    }
+		} else {
+		    this->cadUnsatisfiedOccurrencesBySource[sourceKey].insert(
+			occurrenceKey);
+		}
+	    }
+	    this->addCadResidentDemand(payload.get());
+	}
+	if (!populationChanged && wasMemoryLimited)
+	    this->cadMemoryLimitedMeshPayloadCount =
+		view_lod_saturating_subtract(
+		    this->cadMemoryLimitedMeshPayloadCount, 1);
 	return TRUE;
     }
 
@@ -2146,6 +2287,7 @@ BObolViewLodState::retargetCadPayload(
     payload->drawMode = demand.drawMode;
     payload->requestedCut = requestedCut;
     payload->requiredChunks = demand.requiredChunks;
+    payload->presentedChunks = demand.requiredChunks;
     payload->projectedPixelDiameter = demand.projectedPixelDiameter;
     payload->projectedPixelArea = demand.projectedPixelArea;
     payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
@@ -2251,6 +2393,7 @@ BObolViewLodState::removeCadPayload(
     if (!target)
 	return FALSE;
     SbBool removed = FALSE;
+    CadPayloadPtr removedPayload;
     const std::string sourceKey = target->sourceBindingKey.getString();
     const std::string occurrenceKey =
 	view_lod_cad_occurrence_key(target->sourceInstanceKey);
@@ -2259,27 +2402,43 @@ BObolViewLodState::removeCadPayload(
 	auto occurrence = source->second.find(occurrenceKey);
 	if (occurrence != source->second.end() &&
 	    occurrence->second.get() == target) {
+	    removedPayload = occurrence->second;
+	    if (target->sourceEntryIndex != UINT32_MAX) {
+		auto indexedSource = this->cadSourceEntryBindings.find(
+		    target->sourceRoutingId);
+		const size_t entryIndex = static_cast<size_t>(
+		    target->sourceEntryIndex);
+		if (indexedSource != this->cadSourceEntryBindings.end() &&
+		    entryIndex < indexedSource->second.size() &&
+		    indexedSource->second[entryIndex] == target)
+		    indexedSource->second[entryIndex] = NULL;
+	    }
 	    this->removeCadPayloadMetrics(occurrence->second.get());
 	    source->second.erase(occurrence);
-	    if (source->second.empty())
+	    if (source->second.empty()) {
 		this->cadSourceBindings.erase(source);
+		this->cadSourceEntryBindings.erase(
+		    removedPayload->sourceRoutingId);
+	    }
 	    removed = TRUE;
 	}
     }
 
-    if (target->sourceInstanceKey.getLength() == 0) {
+    const CadPayload *removedTarget = removedPayload ?
+	removedPayload.get() : target;
+    if (removedTarget->sourceInstanceKey.getLength() == 0) {
 	for (auto binding = this->cadBindings.begin();
 	     binding != this->cadBindings.end();) {
-	    if (binding->second && binding->second.get() == target)
+	    if (binding->second && binding->second.get() == removedTarget)
 		binding = this->cadBindings.erase(binding);
 	    else
 		++binding;
 	}
     }
     if (removed) {
-	if (target->sourceInstanceKey.getLength() > 0)
+	if (removedTarget->sourceInstanceKey.getLength() > 0)
 	    this->noteCadOccurrenceChanged(
-		sourceKey, target->sourceInstanceKey);
+		sourceKey, removedTarget->sourceInstanceKey);
 	else {
 	    this->noteResidentMeshesChanged("source-wide-remove");
 	    this->clearCadPresentations();
@@ -2674,7 +2833,7 @@ SbBool
 BObolViewLodState::hasCadPresentationAssemblies(void) const
 {
     for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
-	if (entry.first && entry.second)
+	if (entry.first && entry.second && entry.first->instanceCount())
 	    return TRUE;
     }
     return FALSE;
@@ -2686,7 +2845,7 @@ BObolViewLodState::cadPresentationExecutionSerial(void) const
     uint64_t serial = 0;
     for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
 	const SoCADAssembly *assembly = entry.first;
-	if (!assembly || !entry.second)
+	if (!assembly || !entry.second || !assembly->instanceCount())
 	    continue;
 	const uint64_t value = assembly->renderExecutionSerial();
 	serial = value > UINT64_MAX - serial ? UINT64_MAX : serial + value;
@@ -2700,7 +2859,7 @@ BObolViewLodState::cadPresentationPreparationSerial(void) const
     uint64_t serial = 0;
     for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
 	const SoCADAssembly *assembly = entry.first;
-	if (!assembly || !entry.second)
+	if (!assembly || !entry.second || !assembly->instanceCount())
 	    continue;
 	const uint64_t value = assembly->renderPreparationSerial();
 	serial = value > UINT64_MAX - serial ? UINT64_MAX : serial + value;
@@ -2765,7 +2924,12 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 
     for (const auto &entry : this->cadPresentationAssemblyUseCounts) {
 	const SoCADAssembly *assembly = entry.first;
-	if (!assembly || !entry.second)
+	/* Streaming and edit transactions may retain a presentation object while
+	 * its occurrence set is empty.  Such an assembly is deliberately absent
+	 * from the frame-start execution snapshot above and contributes no draw
+	 * work, resource sample, or exactness requirement here.  Counting it only
+	 * at completion made a valid non-empty frame permanently inexact. */
+	if (!assembly || !entry.second || !assembly->instanceCount())
 	    continue;
 	haveAssembly = TRUE;
 	const int tier = assembly->lastRenderTier();
@@ -3011,10 +3175,10 @@ BObolViewLodState::maximumActiveProgressiveCut(void) const
 }
 
 int
-BObolViewLodState::singleCadProgressiveCutWithinPrimitiveCount(
-	size_t primitives) const
+BObolViewLodState::singleCadProgressiveCutWithinRenderCost(
+	size_t renderCost) const
 {
-    if (!primitives || this->cadMeshPayloadCountValue != 1)
+    if (!renderCost || this->cadMeshPayloadCountValue != 1)
 	return -1;
 
     const CadPayload *payload = NULL;
@@ -3043,14 +3207,9 @@ BObolViewLodState::singleCadProgressiveCutWithinPrimitiveCount(
 	const BObolLodCounts counts = view_lod_progressive_counts(
 	    payload->progressiveMesh, payload->requiredChunks, cut,
 	    payload->hasNormals);
-	uint64_t primitiveCount = counts.faceCount;
-	if (payload->drawMode == BOBOL_LOD_DRAW_WIRE)
-	    primitiveCount = counts.lineCount;
-	else if (payload->drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE)
-	    primitiveCount = counts.faceCount >
-		UINT64_MAX - counts.lineCount ? UINT64_MAX :
-		counts.faceCount + counts.lineCount;
-	if (primitiveCount <= static_cast<uint64_t>(primitives))
+	const size_t cost = bobol_lod_render_cost_units(
+	    counts, payload->drawMode, 1);
+	if (cost <= renderCost)
 	    result = cut;
     }
     return result;
@@ -3212,6 +3371,18 @@ BObolViewLodState::applyResidentMeshCompaction(
     for (CadPayload *payload : indexed->second) {
 	if (!payload || payload->progressiveMesh != result.progressiveMesh)
 	    continue;
+	/*
+	 * The resident-demand table is an incremental index over mutable payload
+	 * state.  The worker has already changed the shared mesh revision/resident
+	 * cut by the time this completion reaches the presentation owner; the
+	 * payload's residentCut is therefore the authoritative installed-generation
+	 * snapshot needed to remove the old contribution.  Remove it before
+	 * adopting the result, otherwise a retired high-water cut can survive in
+	 * cadResidentDemands and schedule another, incoherent trim after a zoom.
+	 */
+	const bool wasSatisfied =
+	    view_lod_cad_payload_is_satisfied(payload);
+	this->removeCadResidentDemand(payload);
 	payload->residentCut = result.residentCut;
 	const unsigned int needed =
 	    view_lod_cad_payload_channel_mask(payload);
@@ -3220,11 +3391,73 @@ BObolViewLodState::applyResidentMeshCompaction(
 	    payload->preparedCadGeometry = result.preparedCadGeometry;
 	    payload->preparedCadGeometryRevision =
 		result.preparedCadGeometryRevision;
+	    if (view_lod_progressive_can_draw(
+		    payload->progressiveMesh, payload->requiredChunks,
+		    payload->activeCut))
+		payload->presentedChunks = payload->requiredChunks;
 	} else {
 	    /* Release the retired generation even when a non-authored normal
 	     * mode must prepare its replacement later. */
 	    payload->preparedCadGeometry.reset();
 	    payload->preparedCadGeometryRevision = 0;
+	}
+	const bool isSatisfied =
+	    view_lod_cad_payload_is_satisfied(payload);
+	if (wasSatisfied != isSatisfied) {
+	    if (isSatisfied)
+		this->cadSatisfiedMeshPayloadCount = view_lod_saturating_add(
+		    this->cadSatisfiedMeshPayloadCount, 1);
+	    else
+		this->cadSatisfiedMeshPayloadCount =
+		    view_lod_saturating_subtract(
+			this->cadSatisfiedMeshPayloadCount, 1);
+	}
+	if (payload->sourceInstanceKey.getLength() > 0) {
+	    const std::string sourceKey =
+		payload->sourceBindingKey.getString();
+	    const std::string occurrenceKey =
+		payload->sourceInstanceKey.getString();
+	    if (isSatisfied) {
+		const auto unsatisfied =
+		    this->cadUnsatisfiedOccurrencesBySource.find(sourceKey);
+		if (unsatisfied !=
+			this->cadUnsatisfiedOccurrencesBySource.end()) {
+		    unsatisfied->second.erase(occurrenceKey);
+		    if (unsatisfied->second.empty())
+			this->cadUnsatisfiedOccurrencesBySource.erase(
+			    unsatisfied);
+		}
+	    } else {
+		this->cadUnsatisfiedOccurrencesBySource[sourceKey].insert(
+		    occurrenceKey);
+	    }
+	}
+	this->addCadResidentDemand(payload);
+	const char *traceFilter = getenv("BOBOL_LOD_TRACE_OBJECT");
+	if (getenv("BOBOL_LOD_TRACE_COMPACTION") && traceFilter &&
+	    traceFilter[0] &&
+	    (strstr(payload->sourceName.getString(), traceFilter) ||
+	     strstr(payload->sourcePath.getString(), traceFilter))) {
+	    const SbVec3f qmin = payload->progressiveMesh->quantizationMinimum();
+	    const SbVec3f qmax = payload->progressiveMesh->quantizationMaximum();
+	    BObolMeshLodCutInfo cutInfo = {};
+	    (void)payload->progressiveMesh->cutInfo(
+		payload->activeCut, &cutInfo);
+	    bu_log("BObol resident compaction adopt object=%s active=%d "
+		   "requested=%d pixels=%.9g target=%.9g error=%.9g "
+		   "object_error=%.17g q=[%.9g %.9g %.9g]-"
+		   "[%.9g %.9g %.9g] revision=%llu chunks=%zu/%zu\n",
+		   payload->sourceName.getString(), payload->activeCut,
+		   payload->requestedCut, payload->projectedPixelDiameter,
+		   payload->targetPixelError,
+		   payload->progressiveMesh->projectedErrorAtCut(
+		       payload->activeCut, payload->projectedPixelDiameter),
+		   cutInfo.object_error,
+		   qmin[0], qmin[1], qmin[2], qmax[0], qmax[1], qmax[2],
+		   static_cast<unsigned long long>(
+		       payload->progressiveMesh->revision()),
+		   payload->requiredChunks.size(),
+		   payload->presentedChunks.size());
 	}
 
 	const std::string sourceKey = payload->sourceBindingKey.getString();
@@ -3357,6 +3590,7 @@ BObolViewLodState::evictDisplayMeshes(unsigned int *evictedMeshCount)
     this->meshBindings.clear();
     this->proxyBindings.clear();
     this->cadSourceBindings.clear();
+    this->cadSourceEntryBindings.clear();
     this->cadAssetBindings.clear();
     this->cadBindings.clear();
     this->clearCadPayloadMetrics();
@@ -3393,6 +3627,7 @@ BObolViewLodState::evictDisplayMeshPayloads(
 	    meshPayloads.size() + cadMeshPayloads.size());
     this->meshBindings.clear();
     this->cadAssetBindings.clear();
+    this->cadSourceEntryBindings.clear();
     for (auto source = this->cadSourceBindings.begin();
 	 source != this->cadSourceBindings.end();) {
 	for (auto binding = source->second.begin();
@@ -3409,6 +3644,23 @@ BObolViewLodState::evictDisplayMeshPayloads(
 	    source = this->cadSourceBindings.erase(source);
 	else
 	    ++source;
+    }
+    for (const auto &source : this->cadSourceBindings) {
+	std::vector<CadPayload *> *indexed = NULL;
+	for (const auto &binding : source.second) {
+	    const CadPayloadPtr &payload = binding.second;
+	    if (!payload || !payload->sourceRoutingId ||
+		payload->sourceEntryIndex == UINT32_MAX)
+		continue;
+	    if (!indexed)
+		indexed = &this->cadSourceEntryBindings[
+		    payload->sourceRoutingId];
+	    const size_t entryIndex = static_cast<size_t>(
+		payload->sourceEntryIndex);
+	    if (indexed->size() <= entryIndex)
+		indexed->resize(entryIndex + 1, NULL);
+	    (*indexed)[entryIndex] = payload.get();
+	}
     }
     for (auto binding = this->cadBindings.begin();
 	 binding != this->cadBindings.end();) {

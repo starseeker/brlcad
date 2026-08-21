@@ -88,6 +88,39 @@ struct mesh_lod_chunk_test_data {
     uint64_t points = 0;
 };
 
+struct mesh_lod_preview_test_data {
+    size_t calls = 0;
+    size_t faces = 0;
+    size_t points = 0;
+    int minCut = -1;
+    int maxCut = -1;
+    bool valid = false;
+};
+
+static void
+mesh_lod_preview_test_callback(unsigned long long cacheKey,
+	const struct BObolMeshLodData *data,
+	const struct BObolMeshLodHierarchyInfo *hierarchy,
+	void *callbackData)
+{
+    mesh_lod_preview_test_data *test =
+	static_cast<mesh_lod_preview_test_data *>(callbackData);
+    if (!test)
+	return;
+    ++test->calls;
+    test->faces = data ? data->face_count : 0;
+    test->points = data ? data->point_count : 0;
+    test->minCut = hierarchy ? hierarchy->min_cut : -1;
+    test->maxCut = hierarchy ? hierarchy->max_cut : -1;
+    test->valid = cacheKey && data && hierarchy && data->faces &&
+	data->points_orig && data->face_count && data->point_orig_count &&
+	hierarchy->min_cut >= 0 &&
+	hierarchy->max_cut >= hierarchy->min_cut &&
+	data->face_count == hierarchy->cuts[hierarchy->min_cut].face_count &&
+	data->point_orig_count ==
+	    hierarchy->cuts[hierarchy->min_cut].point_count;
+}
+
 static int
 mesh_lod_chunk_test_callback(uint32_t chunkId, int cut,
 	const point_t *points, size_t pointCount,
@@ -556,13 +589,15 @@ main(int argc, char *argv[])
 	struct BObolMeshLodHierarchyInfo openedHierarchy =
 	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 	struct BObolMeshLodData openedData;
+	mesh_lod_preview_test_data previewData;
 	RT_DB_INTERNAL_INIT(&intern);
 	if (!dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
 	    intern.idb_type != ID_BOT || !intern.idb_ptr ||
-	    !(opened = bobol_mesh_lod_cache_refresh_from_bot_open(
+	    !(opened = bobol_mesh_lod_cache_refresh_open(
 		dbip, objname,
 		static_cast<const struct rt_bot_internal *>(intern.idb_ptr),
-		&cacheStatus)) ||
+		&cacheStatus, mesh_lod_preview_test_callback, &previewData)) ||
+	    previewData.calls != 1 || !previewData.valid ||
 	    !cacheStatus.directory_found || !cacheStatus.is_bot ||
 	    !cacheStatus.has_cache_key || !cacheStatus.has_cached_payload ||
 	    cacheStatus.stale_cache_entry ||
@@ -609,10 +644,10 @@ main(int argc, char *argv[])
 	RT_DB_INTERNAL_INIT(&intern);
 	if (!dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
 	    intern.idb_type != ID_BOT || !intern.idb_ptr ||
-	    !(opened = bobol_mesh_lod_cache_refresh_from_bot_open(
+	    !(opened = bobol_mesh_lod_cache_refresh_open(
 		dbip, duplicateObjname,
 		static_cast<const struct rt_bot_internal *>(intern.idb_ptr),
-		&cacheStatus)) ||
+		&cacheStatus, NULL, NULL)) ||
 	    cacheStatus.cache_key != sharedCacheKey ||
 	    !bobol_mesh_lod_hierarchy_info_get(opened, &hierarchy) ||
 	    bobol_mesh_lod_current_cut(opened) != hierarchy.min_cut ||

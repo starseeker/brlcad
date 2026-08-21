@@ -85,6 +85,18 @@ src/qged/tests/qged_gui_matrix.sh --profile stress \
   --no-baseline --perf unique_mesh_50k_stress --timeout 900
 ```
 
+Large cache characterizations should reuse that cache for follow-up profiling
+instead of creating another multi-gigabyte copy.  `--warm-cache` deliberately
+accepts only one case/backend/mode/swap combination and skips the cold phase:
+
+```sh
+src/qged/tests/qged_gui_matrix.sh --profile stress \
+  --cases unique_mesh_50k_stress --backends system --modes shaded \
+  --no-baseline --perf unique_mesh_50k_stress --perf-phase warm \
+  --warm-cache /path/to/prior/caches/unique_mesh_50k_stress-system-shaded-swapdefault/cache \
+  --timeout 900
+```
+
 This keeps the source-face population near 50 million so the comparison
 isolates distinct-asset, hierarchy, scheduling, cache-file, and draw-submission
 scaling rather than simply making the mesh construction workload ten times

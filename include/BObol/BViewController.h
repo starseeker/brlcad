@@ -436,6 +436,11 @@ public:
     uint64_t getInteractivePresentationFrameDeadline(void) const;
     uint64_t getStablePresentationFrameDeadline(void) const;
     uint64_t getCurrentPresentationFrameDeadline(void) const;
+    /** TRUE only when the current retained population has nonzero
+     * LoD-managed work which deadline recovery can make cheaper.  Hosts that
+     * traverse the render root directly must use this together with the
+     * capacity-relevance bit returned by consumeRenderRequest(). */
+    SbBool isLodPresentationCapacityRelevant(void) const;
     void notePresentationRenderInterrupted(uint64_t elapsedNanoseconds,
 	SbBool cadDrawAttempted = TRUE,
 	SbBool cadPreparationChanged = FALSE,
@@ -869,7 +874,8 @@ private:
 	SbBool preserveScaleDemandRefresh = FALSE);
     void syncLodViewSignature(SbBool advanceOnChange = TRUE);
     void scheduleLodRefinementFrame(const char *reason);
-    void completePresentationBarrier(uint64_t elapsedNanoseconds);
+    void completePresentationBarrier(uint64_t elapsedNanoseconds,
+	size_t provenRenderCost = 0);
     void scheduleResidentGrowthReallocationIfReady(void);
     void armStableLodHeadroomProbeIfReady(void);
     void resumeLodAfterOnePixelRecovery(void);

@@ -219,7 +219,7 @@ mged_edit_scope_release(struct mged_state *s,
 	    const char *edit_path = ged_scene_result_path_at(result, i);
 	    if (edit_path && edit_path[0])
 		(void)replot_original_path(s, edit_path,
-		    ged_scene_default_draw_mode(s->gedp));
+		    GED_SCENE_DRAW_DEFAULT);
 	}
     }
     if (status != GED_SCENE_OK && ged_scene_result_diagnostic(result)[0])

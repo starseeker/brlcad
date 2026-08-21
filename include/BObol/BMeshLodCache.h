@@ -199,6 +199,18 @@ struct BObolMeshLodCacheStatus {
     unsigned long long cleared_cache_key;
 };
 
+/* A true-cold large mesh may spend substantial time constructing private
+ * spatial pages and persisting them after its ordinary global minimum PoP
+ * prefix is already usable.  This callback borrows that prefix and immutable
+ * hierarchy metadata for the duration of the call, allowing a background
+ * provider to publish useful content without delaying durable cache work.
+ * Implementations must copy any data they retain. */
+typedef void (*BObolMeshLodPreviewCallback)(
+	unsigned long long cache_key,
+	const struct BObolMeshLodData *data,
+	const struct BObolMeshLodHierarchyInfo *hierarchy,
+	void *callback_data);
+
 #define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
 #define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, 0, 0, NULL, 0, NULL, {{0, 0, 0, 0.0, {0, 0, 0}, 0}} }
 #define BOBOL_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
@@ -229,27 +241,18 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 	const char *name,
 	struct BObolMeshLodCacheStatus *status);
 
-/* Populate a missing cache from an already imported immutable BoT.  The
- * caller retains ownership for the duration of this call.  This is the
- * cold-stream handoff path; persistent cache identity still belongs to dbip
- * and name. */
-BOBOL_EXPORT int
-bobol_mesh_lod_cache_refresh_from_bot(struct db_i *dbip,
-	const char *name,
-	const struct rt_bot_internal *bot,
-	struct BObolMeshLodCacheStatus *status);
-
-/* Cold-display variant: generate and persist missing PoP data from the
- * caller-owned BoT, but return an opened handle whose minimum exact prefix
- * was materialized directly from that generation.  The caller owns the
- * returned handle.  This avoids destroying the freshly classified hierarchy
- * only to reopen and reread it before first useful presentation. */
+/* Generate a missing cache from bot when supplied, or import name from dbip
+ * otherwise, and return its opened prefix.  For a multi-page mesh preview is
+ * called once after the global minimum prefix is classified but before page
+ * construction and persistence complete. */
 BOBOL_EXPORT struct BObolMeshLod *
-bobol_mesh_lod_cache_refresh_from_bot_open(
+bobol_mesh_lod_cache_refresh_open(
 	struct db_i *dbip,
 	const char *name,
 	const struct rt_bot_internal *bot,
-	struct BObolMeshLodCacheStatus *status);
+	struct BObolMeshLodCacheStatus *status,
+	BObolMeshLodPreviewCallback preview,
+	void *preview_data);
 
 BOBOL_EXPORT int
 bobol_mesh_lod_cache_invalidate(struct db_i *dbip,

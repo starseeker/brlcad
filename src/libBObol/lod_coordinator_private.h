@@ -20,6 +20,7 @@
 #include <cstring>
 #include <limits>
 #include <type_traits>
+#include <vector>
 
 /*
  * Use the same strong epoch domains as requests and results.  Keeping a
@@ -499,6 +500,16 @@ public:
 	this->completeVisibleCountValidValue = false;
     }
 
+    /* An exact source delta may update the completed projected-visibility
+     * census entry by entry while preserving the unchanged population's
+     * coverage proof.  Publish that revised denominator without pretending a
+     * new all-source coverage pass completed. */
+    void setCompleteVisibleCount(size_t visibleCount)
+    {
+	this->completeVisibleCountValue = visibleCount;
+	this->completeVisibleCountValidValue = true;
+    }
+
     void reset(void)
     {
 	this->activeValue = false;
@@ -541,6 +552,123 @@ private:
     size_t visibleCountValue = 0;
     size_t coveredCountValue = 0;
     size_t completeVisibleCountValue = 0;
+};
+
+/* Projected mesh-target census for exact source deltas.
+ *
+ * A complete camera pass establishes one dense visibility bit per compact
+ * source entry.  Visibility, selection, and in-place edit transactions then
+ * revise only their changed indices.  This is the bridge between a durable
+ * all-scene convergence denominator and O(delta) interactive scene updates:
+ * no source or scene object is owned or dereferenced here. */
+class BObolLodVisibilityCensus {
+public:
+    using SourceKey = uintptr_t;
+
+    void clear(void)
+    {
+	this->sources.clear();
+    }
+
+    void begin(SourceKey source, size_t entryCount)
+    {
+	Source &entry = this->source(source);
+	entry.visibleCount = 0;
+	entry.entryVisible.assign(entryCount, 0);
+	entry.complete = false;
+    }
+
+    void observe(SourceKey source, size_t entryCount, size_t entryIndex,
+	bool visible)
+    {
+	Source &entry = this->source(source);
+	if (entry.entryVisible.size() < entryCount)
+	    entry.entryVisible.resize(entryCount, 0);
+	if (entryIndex >= entry.entryVisible.size())
+	    entry.entryVisible.resize(entryIndex + 1, 0);
+	const unsigned char next = visible ? 1 : 0;
+	unsigned char &prior = entry.entryVisible[entryIndex];
+	if (prior == next)
+	    return;
+	if (next) {
+	    if (entry.visibleCount < SIZE_MAX)
+		entry.visibleCount++;
+	} else if (entry.visibleCount > 0) {
+	    entry.visibleCount--;
+	}
+	prior = next;
+    }
+
+    void complete(SourceKey source, size_t visibleCount)
+    {
+	Source &entry = this->source(source);
+	entry.visibleCount = visibleCount;
+	entry.complete = true;
+    }
+
+    void setCount(SourceKey source, size_t visibleCount)
+    {
+	this->source(source).visibleCount = visibleCount;
+    }
+
+    bool complete(SourceKey source) const
+    {
+	const Source *entry = this->find(source);
+	return entry && entry->complete;
+    }
+
+    size_t sourceCount(SourceKey source) const
+    {
+	const Source *entry = this->find(source);
+	return entry ? entry->visibleCount : 0;
+    }
+
+    size_t total(void) const
+    {
+	size_t total = 0;
+	for (const Source &entry : this->sources)
+	    total = entry.visibleCount > SIZE_MAX - total ?
+		SIZE_MAX : total + entry.visibleCount;
+	return total;
+    }
+
+private:
+    struct Source {
+	SourceKey key = 0;
+	size_t visibleCount = 0;
+	std::vector<unsigned char> entryVisible;
+	bool complete = false;
+    };
+
+    Source *find(SourceKey key)
+    {
+	for (Source &entry : this->sources) {
+	    if (entry.key == key)
+		return &entry;
+	}
+	return NULL;
+    }
+
+    const Source *find(SourceKey key) const
+    {
+	for (const Source &entry : this->sources) {
+	    if (entry.key == key)
+		return &entry;
+	}
+	return NULL;
+    }
+
+    Source &source(SourceKey key)
+    {
+	Source *entry = this->find(key);
+	if (entry)
+	    return *entry;
+	this->sources.push_back(Source());
+	this->sources.back().key = key;
+	return this->sources.back();
+    }
+
+    std::vector<Source> sources;
 };
 
 /*
@@ -761,12 +889,13 @@ public:
 	uint64_t smoothedRenderNanoseconds = 0;
 	bool interactive = false;
 	bool scaleQualityProbe = false;
-	/* A quiet, event-driven view containing one visible occurrence may use
-	 * the complete hard-frame allowance immediately.  There is no fairness
-	 * peer to starve and the endpoint deadline can abort an optimistic trial,
-	 * so imposing the ordinary 4x/1.25x many-object growth ladder only creates
-	 * visible intermediate PoP stages. */
-	bool directStaticPresentation = false;
+	/* A bounded static presentation may use the complete hard-frame allowance
+	 * immediately.  This covers both a single-occurrence quality step and the
+	 * minimum-mesh repair which replaces the last structural boxes in a
+	 * many-part view.  The endpoint deadline can abort an optimistic trial, so
+	 * imposing the ordinary 4x/1.25x refinement ladder here only creates
+	 * visible intermediate stages or a no-progress repair loop. */
+	bool hardDeadlinePresentation = false;
 	/* With exactly one visible occurrence and no retained presentation, a
 	 * conservative many-object seed manufactures several blocky calibration
 	 * frames.  Permit one larger, still deadline-protected bootstrap. */
@@ -878,7 +1007,7 @@ public:
 		SIZE_MAX : std::max<size_t>(
 		    1, static_cast<size_t>(affordable));
 	    if (inputs.activeCost > 0 && costBudget > inputs.activeCost &&
-		!inputs.directStaticPresentation) {
+		!inputs.hardDeadlinePresentation) {
 		size_t growthNumerator = 4;
 		size_t growthDenominator = 1;
 		if (!inputs.interactive || inputs.scaleQualityProbe) {
@@ -956,6 +1085,19 @@ public:
 	}
 	if (inputs.releaseCutFloor && this->currentBudgetValue != SIZE_MAX)
 	    costBudget = std::max(costBudget, this->currentBudgetValue);
+	/* observedStableNanoseconds is supplied only for an exact, reusable CAD
+	 * presentation.  If that completed population met this pass's deadline,
+	 * it is a direct proof that the population is affordable.  A triangle-rate
+	 * estimate cannot contradict that proof: its linear currency omits fixed
+	 * per-occurrence and command-dispatch costs and can otherwise place a
+	 * many-part scene perpetually below its already displayed population. */
+	const bool measuredActivePopulationDeadlineSafe =
+	    !inputs.interactive && !inputs.stablePresentationHandoff &&
+	    inputs.activeCost > 0 &&
+	    targetNanoseconds > 0.0L && observedStableNanoseconds > 0.0L &&
+	    observedStableNanoseconds <= targetNanoseconds;
+	if (measuredActivePopulationDeadlineSafe && costBudget != SIZE_MAX)
+	    costBudget = std::max(costBudget, inputs.activeCost);
 	/* Preserve only work which an exact completed presentation proved could
 	 * meet the stable deadline.  This is deliberately a measured render-cost
 	 * floor, not the previous pass allowance: the latter may include admission
@@ -2090,24 +2232,29 @@ public:
 	return decision;
     }
 
-    void armHandoff(bool presentationRequired)
+    void armHandoff(bool presentationRequired, size_t provenRenderCost = 0)
     {
 	this->handoffActiveValue = true;
 	this->handoffPresentationRequiredValue = presentationRequired;
-	/* A presentation-required handoff is created only by a hard frame
-	 * deadline.  Its first completed constrained frame is already the proof
-	 * of the richest currently sustainable renderer cut; do not immediately
-	 * remove that cut and retry the frame which just exceeded the deadline. */
+	/* A presentation-required handoff follows a hard frame deadline.  Its
+	 * first completed constrained frame supplies the cost proof below; do not
+	 * immediately remove that cut and retry the frame which just exceeded the
+	 * deadline.  A static predictor may instead arm an already-presented
+	 * handoff with its exact cost floor and no additional presentation gate. */
 	this->handoffPreservePresentationLimitsValue = presentationRequired;
 	this->handoffChangedCutValue = false;
-	this->handoffCostFloorValue = 0;
+	this->handoffCostFloorValue = provenRenderCost;
     }
-    bool noteFramePresented(void)
+    bool noteFramePresented(size_t provenRenderCost = 0)
     {
 	const bool released = this->handoffActiveValue &&
 	    this->handoffPresentationRequiredValue;
-	if (this->handoffActiveValue)
+	if (this->handoffActiveValue) {
 	    this->handoffPresentationRequiredValue = false;
+	    if (provenRenderCost)
+		this->handoffCostFloorValue = std::max(
+		    this->handoffCostFloorValue, provenRenderCost);
+	}
 	return released;
     }
     void cancelHandoff(void)
@@ -2518,6 +2665,29 @@ public:
 	return std::min(preferredFps, static_cast<float>(deadlineFps));
     }
 
+    /* Convert one exact completed static presentation into a conservative
+     * upper bound for the next discrete PoP population.  Retain five percent
+     * scheduling headroom so harmless timing jitter does not turn a stable
+     * framebuffer into a speculative deadline miss.  The current completed
+     * work is always affordable by construction; callers use equality as the
+     * proof that no richer cached population should be attempted. */
+    static size_t staticPresentationRenderCostLimit(size_t presentedCost,
+	uint64_t renderNanoseconds, uint64_t hardDeadlineNanoseconds)
+    {
+	if (!presentedCost || !renderNanoseconds ||
+	    !hardDeadlineNanoseconds ||
+	    renderNanoseconds > hardDeadlineNanoseconds)
+	    return 0;
+	const long double predicted =
+	    static_cast<long double>(presentedCost) *
+	    static_cast<long double>(hardDeadlineNanoseconds) * 0.95L /
+	    static_cast<long double>(renderNanoseconds);
+	if (!std::isfinite(predicted) ||
+	    predicted >= static_cast<long double>(SIZE_MAX))
+	    return SIZE_MAX;
+	return std::max(presentedCost, static_cast<size_t>(predicted));
+    }
+
     static float interactivePixelError(uint64_t renderNanoseconds,
 	float targetFps)
     {
@@ -2730,6 +2900,15 @@ public:
 	bool continueRelaxation = false;
     };
 
+    static bool applicable(size_t visibleOccurrenceCount)
+    {
+	/* This controller exists to bound the per-occurrence floor of a
+	 * many-part scene.  One prominent mesh has no dispatch population to
+	 * aggregate; increasing its point threshold cannot help until it destroys
+	 * the very silhouette LoD is required to preserve. */
+	return visibleOccurrenceCount > 1;
+    }
+
     void reset(void)
     {
 	this->unsafeThreshold = 0.0f;
@@ -2866,6 +3045,27 @@ private:
 
     float unsafeThreshold = 0.0f;
     float safeThreshold = 0.0f;
+};
+
+/* Event-driven static quality is a separate presentation phase, not an
+ * annotation which any ordinary quiet-frame failure may retire.  Keep its
+ * two release-critical predicates independent of controller latch ordering so
+ * unit tests (and the formal coordinator model) can enforce that boundary. */
+class BObolLodStaticQualityPolicy {
+public:
+    static bool rejectAfterInterruptedFrame(bool interactive,
+	bool cadDrawAttempted, bool preparationOnlyRetry,
+	bool staticTrialActive)
+    {
+	return !interactive && cadDrawAttempted && !preparationOnlyRetry &&
+	    staticTrialActive;
+    }
+
+    static bool onePixelTrialRequired(float pointProxyPixelThreshold)
+    {
+	return std::isfinite(pointProxyPixelThreshold) &&
+	    pointProxyPixelThreshold > 1.01f;
+    }
 };
 
 /*

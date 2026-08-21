@@ -693,7 +693,9 @@ public:
 		    const int *faces,
 		    size_t faceCount,
 		    unsigned long long userKey,
-		    bool cullBackfaces);
+		    bool cullBackfaces,
+		    BObolMeshLodPreviewCallback preview = NULL,
+		    void *previewData = NULL);
     BObolPopState(struct BObolMeshLodContext *ctx,
 		    unsigned long long key);
     BObolPopState(struct BObolMeshLodContext *ctx,
@@ -1355,7 +1357,9 @@ BObolPopState::BObolPopState(
     const int *faces,
     size_t inputFaceCount,
     unsigned long long userKey,
-    bool cullBackfaces)
+    bool cullBackfaces,
+    BObolMeshLodPreviewCallback preview,
+    void *previewData)
 {
     context = ctx;
     shadedCullBackfaces = cullBackfaces;
@@ -1475,6 +1479,39 @@ BObolPopState::BObolPopState(
     buildCutSchedule();
     currCut = maxPopCut;
     triProcess();
+    /* The global activation order is complete at this point.  Large-mesh
+     * spatial partitioning and persistence may still take many seconds, but
+     * neither can improve the already valid minimum global prefix.  Copying
+     * that bounded prefix through the callback lets a view replace its box
+     * while the same worker continues the authoritative chunk build. */
+    if (preview && faceCount > BOBOL_MESH_LOD_CHUNK_FACE_TARGET) {
+	isValid = true;
+	if (materializeInitialPrefix(minPopCut)) {
+	    struct BObolMeshLodData data = {};
+	    data.faces = lodTris.data();
+	    data.face_count = lodTris.size() / 3;
+	    data.points = reinterpret_cast<const point_t *>(
+		lodTriPoints.data());
+	    data.point_count = lodTriPoints.size() / 3;
+	    data.points_orig = data.points;
+	    data.point_orig_count = data.point_count;
+	    data.normals = lodTriNormals.empty() ? NULL :
+		reinterpret_cast<const vect_t *>(lodTriNormals.data());
+	    data.normal_count = data.normals ? data.face_count * 3 : 0;
+	    VMOVE(data.bmin, bbmin);
+	    VMOVE(data.bmax, bbmax);
+	    struct BObolMeshLodHierarchyInfo hierarchy =
+		BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	    hierarchyInfo(&hierarchy);
+	    preview(hash, &data, &hierarchy, previewData);
+	}
+	std::vector<fastf_t>().swap(lodTriPoints);
+	std::vector<fastf_t>().swap(lodTriPointsSnapped);
+	std::vector<fastf_t>().swap(lodTriNormals);
+	std::vector<uint32_t>().swap(lodTris);
+	currCut = maxPopCut;
+	isValid = false;
+    }
     if (faceCount > BOBOL_MESH_LOD_CHUNK_FACE_TARGET) {
 	if (!buildClusters())
 	    return;
@@ -3343,13 +3380,16 @@ mesh_lod_cache_generate(struct BObolMeshLodContext *context,
 			const int *faces,
 			size_t faceCount,
 			unsigned long long userKey,
-			bool shadedCullBackfaces)
+			bool shadedCullBackfaces,
+			BObolMeshLodPreviewCallback preview = NULL,
+			void *previewData = NULL)
 {
     if (!context || !vertices || !vertexCount || !faces || !faceCount)
 	return 0;
 
     BObolPopState state(context, vertices, vertexCount, normals, faces,
-			  faceCount, userKey, shadedCullBackfaces);
+			  faceCount, userKey, shadedCullBackfaces,
+			  preview, previewData);
     return state.isValid ? state.hash : 0;
 }
 
@@ -3707,7 +3747,9 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 			    const struct rt_bot_internal *stagedBot,
 			    bool forceRefresh,
 			    struct BObolMeshLodCacheStatus *status,
-			    struct BObolMeshLod **generatedLod)
+			    struct BObolMeshLod **generatedLod,
+			    BObolMeshLodPreviewCallback preview,
+			    void *previewData)
 {
     struct BObolMeshLodCacheStatus current =
 	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
@@ -3833,14 +3875,14 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	generatedState = new (std::nothrow) BObolPopState(
 	    context, botVertices, bot->num_vertices,
 	    botNormals, cacheFaces, bot->num_faces, 0,
-	    cullBackfaces);
+	    cullBackfaces, preview, previewData);
 	key = generatedState && generatedState->isValid ?
 	    generatedState->hash : 0;
     } else {
 	key = mesh_lod_cache_generate(
 	    context, botVertices, bot->num_vertices,
 	    botNormals, cacheFaces, bot->num_faces, 0,
-	    cullBackfaces);
+	    cullBackfaces, preview, previewData);
     }
     if (!key || mesh_lod_key_put(context, dp->d_namep, key) != 0) {
 	delete generatedState;
@@ -3895,34 +3937,22 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 			       struct BObolMeshLodCacheStatus *status)
 {
     return mesh_lod_cache_refresh_impl(
-	dbip, name, NULL, true, status, NULL);
-}
-
-int
-bobol_mesh_lod_cache_refresh_from_bot(
-    struct db_i *dbip,
-    const char *name,
-    const struct rt_bot_internal *bot,
-    struct BObolMeshLodCacheStatus *status)
-{
-    if (!bot)
-	return BRLCAD_ERROR;
-    return mesh_lod_cache_refresh_impl(
-	dbip, name, bot, false, status, NULL);
+	dbip, name, NULL, true, status, NULL, NULL, NULL);
 }
 
 struct BObolMeshLod *
-bobol_mesh_lod_cache_refresh_from_bot_open(
+bobol_mesh_lod_cache_refresh_open(
     struct db_i *dbip,
     const char *name,
     const struct rt_bot_internal *bot,
-    struct BObolMeshLodCacheStatus *status)
+    struct BObolMeshLodCacheStatus *status,
+    BObolMeshLodPreviewCallback preview,
+    void *previewData)
 {
-    if (!bot)
-	return NULL;
     struct BObolMeshLod *lod = NULL;
     if (mesh_lod_cache_refresh_impl(
-	    dbip, name, bot, false, status, &lod) != BRLCAD_OK) {
+	    dbip, name, bot, false, status, &lod,
+	    preview, previewData) != BRLCAD_OK) {
 	if (lod)
 	    bobol_mesh_lod_destroy(lod);
 	return NULL;

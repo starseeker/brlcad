@@ -967,6 +967,12 @@ test_coverage_policy(void)
 	std::fprintf(stderr, "FAIL: visible denominator invalidation\n");
 	return 1;
     }
+    policy.setCompleteVisibleCount(17);
+    if (!policy.hasCompleteVisibleCount() ||
+	policy.completeVisibleCount() != 17) {
+	std::fprintf(stderr, "FAIL: exact-delta visible denominator update\n");
+	return 1;
+    }
     policy.reset();
     if (policy.active() || policy.coverageComplete() ||
 	policy.sawBoundedSource() || policy.hasCompleteVisibleCount() ||
@@ -979,6 +985,89 @@ test_coverage_policy(void)
     if (policy.effectiveActive() || !policy.effectiveComplete() ||
 	!policy.compactionAllowed()) {
 	std::fprintf(stderr, "FAIL: optional coverage gate\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_visibility_census(void)
+{
+    BObolLodVisibilityCensus census;
+    static const BObolLodVisibilityCensus::SourceKey sourceA = 101;
+    static const BObolLodVisibilityCensus::SourceKey sourceB = 202;
+
+    census.begin(sourceA, 4);
+    census.observe(sourceA, 4, 0, true);
+    census.observe(sourceA, 4, 1, true);
+    census.observe(sourceA, 4, 2, false);
+    census.observe(sourceA, 4, 3, true);
+    census.complete(sourceA, 3);
+    census.setCount(sourceB, 2);
+    if (!census.complete(sourceA) || census.complete(sourceB) ||
+	census.sourceCount(sourceA) != 3 ||
+	census.sourceCount(sourceB) != 2 || census.total() != 5) {
+	std::fprintf(stderr, "FAIL: completed visibility census\n");
+	return 1;
+    }
+
+    /* Exact deltas must revise, not erase, the complete all-source count.
+	 * Replaying an identical delta is idempotent. */
+    census.observe(sourceA, 4, 1, false);
+    census.observe(sourceA, 4, 1, false);
+    if (census.sourceCount(sourceA) != 2 || census.total() != 4) {
+	std::fprintf(stderr, "FAIL: exact visibility removal census\n");
+	return 1;
+    }
+    census.observe(sourceA, 4, 2, true);
+    if (census.sourceCount(sourceA) != 3 || census.total() != 5) {
+	std::fprintf(stderr, "FAIL: exact visibility restoration census\n");
+	return 1;
+    }
+
+    /* Appended dense indices remain bounded by one byte per entry and retain
+	 * the already completed source count until a population rescan begins. */
+    census.observe(sourceA, 150000, 149999, true);
+    if (census.sourceCount(sourceA) != 4 || census.total() != 6) {
+	std::fprintf(stderr, "FAIL: extended visibility census\n");
+	return 1;
+    }
+    census.begin(sourceA, 150000);
+    if (census.complete(sourceA) || census.sourceCount(sourceA) != 0 ||
+	census.total() != 2) {
+	std::fprintf(stderr, "FAIL: invalidated visibility census\n");
+	return 1;
+    }
+    census.clear();
+    if (census.total() != 0) {
+	std::fprintf(stderr, "FAIL: cleared visibility census\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_static_quality_policy(void)
+{
+    using Policy = BObolLodStaticQualityPolicy;
+    /* A normal quiet recovery miss must not pre-reject the later static
+	 * quality phase.  Only a frame attempted by an active static trial owns
+	 * that terminal evidence. */
+    if (Policy::rejectAfterInterruptedFrame(false, true, false, false) ||
+	Policy::rejectAfterInterruptedFrame(true, true, false, true) ||
+	Policy::rejectAfterInterruptedFrame(false, false, false, true) ||
+	Policy::rejectAfterInterruptedFrame(false, true, true, true) ||
+	!Policy::rejectAfterInterruptedFrame(false, true, false, true)) {
+	std::fprintf(stderr, "FAIL: static quality rejection scope\n");
+	return 1;
+    }
+    if (Policy::onePixelTrialRequired(1.0f) ||
+	Policy::onePixelTrialRequired(1.01f) ||
+	Policy::onePixelTrialRequired(
+	    std::numeric_limits<float>::quiet_NaN()) ||
+	!Policy::onePixelTrialRequired(1.02f) ||
+	!Policy::onePixelTrialRequired(64.0f)) {
+	std::fprintf(stderr, "FAIL: static one-pixel trial predicate\n");
 	return 1;
     }
     return 0;
@@ -1238,24 +1327,65 @@ test_budget_policy(void)
 	return 1;
     }
 
-    /* Once a single-occurrence view becomes quiet, the event-driven hard
-     * deadline is a stronger and more useful bound than the many-object
-     * growth ladder.  Use the complete calibrated allowance in one atomic
-     * presentation trial; an endpoint abort supplies recovery if the
-     * prediction is optimistic. */
+    /* An exact reusable frame is stronger evidence than a linear throughput
+     * estimate.  Many-instance dispatch/classification work is not encoded in
+     * triangle cost, so the estimator may place a population below a budget
+     * even though that exact population was just presented within deadline. */
+    policy.reset();
+    input = Policy::Inputs();
+    input.activeCost = 2070262;
+    input.targetFps = 20.0f;
+    input.calibratedCostPerSecond = 6300000.0L;
+    input.observedStableNanoseconds = 37000000ULL;
+    decision = policy.beginPass(input);
+    if (!decision.initialized || decision.totalBudget != input.activeCost ||
+	decision.refinementBudget != 0 || decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: exact deadline-safe population was placed below budget "
+	    "budget=%zu active=%zu admission=%d\n",
+	    decision.totalBudget, input.activeCost,
+	    decision.retainedAdmission ? 1 : 0);
+	return 1;
+    }
+
+    /* A bounded static presentation uses the event-driven hard deadline
+     * rather than the many-object growth ladder.  This is used both for a
+     * single-occurrence quality step and for terminal structural coverage
+     * repair; an endpoint abort supplies recovery if the prediction is
+     * optimistic. */
     policy.reset();
     input = Policy::Inputs();
     input.activeCost = 100000;
     input.targetFps = 10.0f;
     input.calibratedCostPerSecond = 10000000.0L;
     input.observedStableNanoseconds = 40000000ULL;
-    input.directStaticPresentation = true;
+    input.hardDeadlinePresentation = true;
     decision = policy.beginPass(input);
     if (!decision.initialized || decision.totalBudget != 1000000 ||
 	decision.refinementBudget != 900000 ||
 	decision.retainedAdmission) {
 	std::fprintf(stderr,
-	    "FAIL: direct single-occurrence static presentation budget\n");
+	    "FAIL: hard-deadline static presentation budget\n");
+	return 1;
+    }
+
+    /* Replacing the last boxes in a many-occurrence static view is a terminal
+     * coverage obligation, not ordinary 20 Hz quality refinement.  It must be
+     * able to spend the complete calibrated hard-frame allowance in one pass
+     * instead of repeatedly probing an already saturated preferred budget. */
+    policy.reset();
+    input = Policy::Inputs();
+    input.activeCost = 294000;
+    input.targetFps = 10.0f;
+    input.calibratedCostPerSecond = 6300000.0L;
+    input.observedStableNanoseconds = 50000000ULL;
+    input.hardDeadlinePresentation = true;
+    decision = policy.beginPass(input);
+    if (!decision.initialized || decision.totalBudget != 630000 ||
+	decision.refinementBudget != 336000 ||
+	decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: many-occurrence terminal coverage repair budget\n");
 	return 1;
     }
 
@@ -1819,6 +1949,17 @@ test_quality_policy(void)
 	std::fprintf(stderr, "FAIL: static frame deadline cadence\n");
 	return 1;
     }
+    if (Policy::staticPresentationRenderCostLimit(
+	    1000, 50000000ULL, 100000000ULL) != 1900 ||
+	Policy::staticPresentationRenderCostLimit(
+	    1000, 95000000ULL, 100000000ULL) != 1000 ||
+	Policy::staticPresentationRenderCostLimit(
+	    1000, 100000001ULL, 100000000ULL) != 0 ||
+	Policy::staticPresentationRenderCostLimit(
+	    0, 50000000ULL, 100000000ULL) != 0) {
+	std::fprintf(stderr, "FAIL: static presentation render-cost limit\n");
+	return 1;
+    }
 
     /* Exact completed frames admit the finest subpixel tier whose inverse-
      * square work estimate fits both time and scene-cost headroom.  The first
@@ -1878,6 +2019,13 @@ test_quality_policy(void)
     }
 
     BObolLodPointProxyCalibrationPolicy pointCalibration;
+    if (BObolLodPointProxyCalibrationPolicy::applicable(0) ||
+	BObolLodPointProxyCalibrationPolicy::applicable(1) ||
+	!BObolLodPointProxyCalibrationPolicy::applicable(2)) {
+	std::fprintf(stderr,
+	    "FAIL: point aggregation admitted a single prominent mesh\n");
+	return 1;
+    }
     float threshold = 4.0f;
     bool settled = false;
     for (size_t iteration = 0; iteration < 16; ++iteration) {
@@ -2339,8 +2487,13 @@ test_presentation_policy(void)
 	std::fprintf(stderr, "FAIL: unpresented deadline handoff completed\n");
 	return 1;
     }
-    if (!policy.noteFramePresented()) {
+    if (!policy.noteFramePresented(700)) {
 	std::fprintf(stderr, "FAIL: deadline frame did not release handoff barrier\n");
+	return 1;
+    }
+    if (policy.handoffCostFloor() != 700) {
+	std::fprintf(stderr,
+	    "FAIL: deadline frame did not retain proven cost floor\n");
 	return 1;
     }
     completion = policy.completePass(completed);
@@ -3685,6 +3838,10 @@ main(int argc, char **argv)
     if (test_headroom_policy())
 	return 1;
     if (test_coverage_policy())
+	return 1;
+    if (test_visibility_census())
+	return 1;
+    if (test_static_quality_policy())
 	return 1;
     if (test_convergence_policy())
 	return 1;
