@@ -11372,26 +11372,22 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	}
 	const BObolViewLodState::CadPayload *partialPayload = !ret ?
 	    viewState.findCadForResult(partialResults[0]) : NULL;
-	const int partialCut = partialPayload ? partialPayload->activeCut : -1;
-	const BObolLodCounts *partialCounts =
-	    partialPayload && partialPayload->projectedCutCounts &&
-	    partialCut >= 0 && static_cast<size_t>(partialCut) <
-		partialPayload->projectedCutCounts->size() ?
-		&(*partialPayload->projectedCutCounts)[
-		    static_cast<size_t>(partialCut)] : NULL;
 	if (!ret && (!partialPayload ||
 		!partialPayload->progressiveMesh ||
-		!partialPayload->progressiveMesh->hasSpatialClusters() ||
-		!partialCounts ||
+		partialPayload->progressiveMesh->hasSpatialClusters() ||
+		partialPayload->projectedCutCounts ||
 		partialPayload->projectedCutCountsViewRevision != 64 ||
 		partialPayload->projectedCutCountsPolicyRevision != 62 ||
 		partialPayload->projectedCutCountsMeshRevision !=
 		    partialPayload->progressiveMesh->revision() ||
-		partialPayload->counts.faceCount != partialCounts->faceCount ||
-		partialPayload->counts.pointCount != partialCounts->pointCount ||
-		partialPayload->counts.normalCount != partialCounts->normalCount)) {
-	    printf("FAIL: bounded partial-frustum census was not retained on "
-		   "the occurrence\n");
+		partialPayload->counts.faceCount !=
+		    partialResults[0].counts.faceCount ||
+		partialPayload->counts.pointCount !=
+		    partialResults[0].counts.pointCount ||
+		partialPayload->counts.normalCount !=
+		    partialResults[0].counts.normalCount)) {
+	    printf("FAIL: unchunked partial-frustum demand did not retain "
+		   "whole-prefix accounting\n");
 	    ret = 1;
 	}
     }

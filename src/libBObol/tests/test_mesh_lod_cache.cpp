@@ -1298,12 +1298,9 @@ main(int argc, char *argv[])
 	    !bobol_mesh_lod_hierarchy_info_get(solidLod, &solidHierarchy) ||
 	    !solidInfo.shaded_cull_backfaces ||
 	    solidInfo.face_count != 4 ||
-	    solidHierarchy.cluster_grid_resolution !=
-		BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION ||
-	    !solidHierarchy.cluster_count ||
-	    solidHierarchy.cluster_count >= BOBOL_MESH_LOD_CLUSTER_COUNT ||
-	    !solidHierarchy.clusters ||
-	    solidHierarchy.chunk_count != 1 || !solidHierarchy.chunks) {
+	    solidHierarchy.cluster_grid_resolution != 0 ||
+	    solidHierarchy.cluster_count != 0 || solidHierarchy.clusters ||
+	    solidHierarchy.chunk_count != 0 || solidHierarchy.chunks) {
 	    printf("FAIL: closed oriented CW BoT culling metadata\n");
 	    if (solidLod)
 		bobol_mesh_lod_destroy(solidLod);

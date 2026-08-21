@@ -50,7 +50,7 @@
 
 #define POP_CUT_COUNT_MAX BOBOL_MESH_LOD_CUT_COUNT_MAX
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 20
+#define CACHE_CURRENT_FORMAT 21
 
 #define CACHE_POP_MAX_CUT "max"
 #define CACHE_POP_MIN_CUT "min"
@@ -870,8 +870,19 @@ BObolPopState::triProcess(void)
      * below remains serial and source ordered, preserving byte-for-byte
      * deterministic cache topology regardless of worker count. */
     faceActivationCut.assign(faceCount, UINT8_MAX);
-    const bool buildSpatialCells = faceCount != 0;
-    faceClusterCell.assign(faceCount, UINT16_MAX);
+    /* Spatial pages exist to make one large logical mesh independently
+     * resident and drawable.  A mesh which fits in one page gains no spatial
+     * selectivity from that representation: duplicating its global PoP
+     * records into a one-page chunk instead adds a 512-cell classification,
+     * another complete geometry record, and several cache lookups.  Hubble's
+     * thousands of modest BoTs made that fixed per-asset tax dominate cold
+     * and warm population. */
+    const bool buildSpatialCells =
+	faceCount > BOBOL_MESH_LOD_CHUNK_FACE_TARGET;
+    if (buildSpatialCells)
+	faceClusterCell.assign(faceCount, UINT16_MAX);
+    else
+	faceClusterCell.clear();
     const fastf_t extent[3] = {
 	maxx - minx, maxy - miny, maxz - minz
     };
@@ -1402,7 +1413,7 @@ BObolPopState::BObolPopState(
 
     if (!userKey) {
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char semantics[] = "BObol-chunked-PoP-format-21";
+	static const char semantics[] = "BObol-chunked-PoP-format-22";
 	bu_data_hash_update(state, semantics, sizeof(semantics));
 	bu_data_hash_update(state, vertexArray, vertexCount * sizeof(point_t));
 	bu_data_hash_update(state, faceArray, 3 * faceCount * sizeof(int));
@@ -1464,10 +1475,17 @@ BObolPopState::BObolPopState(
     buildCutSchedule();
     currCut = maxPopCut;
     triProcess();
-    if (!buildClusters())
-	return;
-    if (!buildChunks())
-	return;
+    if (faceCount > BOBOL_MESH_LOD_CHUNK_FACE_TARGET) {
+	if (!buildClusters())
+	    return;
+	if (!buildChunks())
+	    return;
+    } else {
+	clusterInfos.clear();
+	clusterRanges.clear();
+	chunkFaces.clear();
+	chunkInfos.clear();
+    }
     const int64_t cacheStarted = bu_gettime();
 
     isValid = true;
@@ -1791,18 +1809,21 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	};
 	uint32_t diskChunkCount = 0;
 	if (!readMetadata(CACHE_CHUNK_COUNT, &diskChunkCount,
-		sizeof(diskChunkCount)) || !diskChunkCount ||
+		sizeof(diskChunkCount)) ||
 	    diskChunkCount > static_cast<uint32_t>(
 		std::numeric_limits<int>::max())) {
 	    return chunkHeaderFailure("count");
 	}
-	void *boundsBytes = NULL;
-	void *minmaxBytes = NULL;
-	void *faceBytes = NULL;
-	void *pointBytes = NULL;
-	void *residentBytes = NULL;
-	const size_t chunkCount = diskChunkCount;
-	if (chunkCount > SIZE_MAX / (POP_CUT_COUNT_MAX * sizeof(uint64_t)) ||
+	chunkInfos.clear();
+	if (diskChunkCount) {
+	    void *boundsBytes = NULL;
+	    void *minmaxBytes = NULL;
+	    void *faceBytes = NULL;
+	    void *pointBytes = NULL;
+	    void *residentBytes = NULL;
+	    const size_t chunkCount = diskChunkCount;
+	    if (chunkCount > SIZE_MAX /
+		    (POP_CUT_COUNT_MAX * sizeof(uint64_t)) ||
 	    cacheGet(&boundsBytes, CACHE_CHUNK_BOUNDS) !=
 		chunkCount * 6 * sizeof(double) ||
 	    cacheGet(&minmaxBytes, CACHE_CHUNK_MINMAX) !=
@@ -1814,22 +1835,23 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	    cacheGet(&residentBytes, CACHE_CHUNK_RESIDENT_BYTES) !=
 		chunkCount * POP_CUT_COUNT_MAX * sizeof(uint64_t) ||
 	    !boundsBytes || !minmaxBytes || !faceBytes || !pointBytes ||
-	    !residentBytes) {
-	    return chunkHeaderFailure("arrays");
-	}
-	chunkInfos.resize(chunkCount);
-	std::array<uint64_t, POP_CUT_COUNT_MAX> summedFaces = {};
-	std::array<uint64_t, POP_CUT_COUNT_MAX> summedPoints = {};
-	const unsigned char *diskBounds =
-	    static_cast<const unsigned char *>(boundsBytes);
-	const uint8_t *diskMinmax = static_cast<const uint8_t *>(minmaxBytes);
-	const unsigned char *diskFaces =
-	    static_cast<const unsigned char *>(faceBytes);
-	const unsigned char *diskPoints =
-	    static_cast<const unsigned char *>(pointBytes);
-	const unsigned char *diskResident =
-	    static_cast<const unsigned char *>(residentBytes);
-	for (size_t chunk = 0; chunk < chunkCount; ++chunk) {
+		!residentBytes) {
+		return chunkHeaderFailure("arrays");
+	    }
+	    chunkInfos.resize(chunkCount);
+	    std::array<uint64_t, POP_CUT_COUNT_MAX> summedFaces = {};
+	    std::array<uint64_t, POP_CUT_COUNT_MAX> summedPoints = {};
+	    const unsigned char *diskBounds =
+		static_cast<const unsigned char *>(boundsBytes);
+	    const uint8_t *diskMinmax =
+		static_cast<const uint8_t *>(minmaxBytes);
+	    const unsigned char *diskFaces =
+		static_cast<const unsigned char *>(faceBytes);
+	    const unsigned char *diskPoints =
+		static_cast<const unsigned char *>(pointBytes);
+	    const unsigned char *diskResident =
+		static_cast<const unsigned char *>(residentBytes);
+	    for (size_t chunk = 0; chunk < chunkCount; ++chunk) {
 	    BObolMeshLodChunkInfo &info = chunkInfos[chunk];
 	    memset(&info, 0, sizeof(info));
 	    info.chunk_id = static_cast<uint32_t>(chunk);
@@ -1898,17 +1920,18 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	    if (!priorFaces || !priorPoints) {
 		return chunkHeaderFailure("empty terminal");
 	    }
-	}
-	uint64_t globalFaces = 0;
-	uint64_t globalPoints = 0;
-	for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	    }
+	    uint64_t globalFaces = 0;
+	    uint64_t globalPoints = 0;
+	    for (uint32_t cut = 0; cut < cutCount; ++cut) {
 	    globalFaces += cutTriangleCount[cut];
 	    globalPoints += cutVertexCount[cut];
 	    /* Vertices shared by chunks are duplicated by design, so only the
 	     * face population is conserved exactly. */
-	    if (summedFaces[cut] != globalFaces ||
-		summedPoints[cut] < globalPoints) {
-		return chunkHeaderFailure("global population sums");
+		if (summedFaces[cut] != globalFaces ||
+		    summedPoints[cut] < globalPoints) {
+		    return chunkHeaderFailure("global population sums");
+		}
 	    }
 	}
     }
@@ -3181,6 +3204,11 @@ BObolPopState::cacheTri(void)
     }
 
     bu_vls_free(&keyBuffer);
+    if (chunkInfos.empty()) {
+	const uint32_t diskChunkCount = 0;
+	return cacheWriteData(CACHE_CHUNK_COUNT, &diskChunkCount,
+	    sizeof(diskChunkCount));
+    }
     return cacheChunks();
 }
 
