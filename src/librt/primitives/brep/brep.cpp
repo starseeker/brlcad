@@ -2702,9 +2702,12 @@ rt_brep_import5(struct rt_db_internal *ip, const struct bu_external *ep, const f
     bi->magic = RT_BREP_INTERNAL_MAGIC;
     bi->brep = NULL;
 
+    /* The db5 wrapper owns ip cleanup on an import failure.  Leave a valid
+     * internal object for rt_db_free_internal() rather than freeing it here
+     * and making the wrapper free it a second time. */
     const auto import_fail = [&]() -> int {
-	bu_free(bi, "rt_brep_internal import failure");
-	ip->idb_ptr = NULL;
+	delete bi->brep;
+	bi->brep = NULL;
 	return -1;
     };
 
@@ -2712,7 +2715,8 @@ rt_brep_import5(struct rt_db_internal *ip, const struct bu_external *ep, const f
     ONX_Model model;
     ON_TextLog err(stderr);
     unsigned int obj_filter = ON::brep_object;
-    model.Read(archive, 0, obj_filter, &err);
+    if (!model.Read(archive, 0, obj_filter, &err))
+	return import_fail();
 
     /* grab the first geometry item from the manifest */
     const ON_ComponentManifestItem* geom = model.Manifest().FirstItem(ON_ModelComponent::Type::ModelGeometry);

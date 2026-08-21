@@ -1565,6 +1565,7 @@ cad_wire_part_geometry_from_aabb(const SbBox3f &bounds,
     /* This helper is used only for the mesh LoD AABB threshold path. */
     geometry.subpixelProxyEligible = true;
     geometry.structuralProxy = true;
+    geometry.lodStructuralProxy = true;
     return 1;
 }
 
@@ -9387,6 +9388,7 @@ cad_part_key_for_geometry(const char *kind,
     hash.appendByte(geometry.shadedCullBackfaces ? 1 : 0);
     hash.appendByte(geometry.subpixelProxyEligible ? 1 : 0);
     hash.appendByte(geometry.structuralProxy ? 1 : 0);
+    hash.appendByte(geometry.lodStructuralProxy ? 1 : 0);
     hash.appendByte(geometry.conservativeBounds ? 1 : 0);
     if (geometry.conservativeBounds)
 	hash.appendBox(*geometry.conservativeBounds);
@@ -9651,6 +9653,7 @@ cad_vlist_part_geometry(const SoBRLVListShape *shape,
 	 * represented by one depth-tested pixel in this view. */
 	geometry.subpixelProxyEligible = true;
 	geometry.structuralProxy = true;
+	geometry.lodStructuralProxy = false;
     }
     return 1;
 }
@@ -10019,6 +10022,7 @@ cad_proxy_part_geometry(const BObolLodProxy &proxy,
      * collapse it into a view-local point when the entire proxy is subpixel. */
     geometry.subpixelProxyEligible = true;
     geometry.structuralProxy = true;
+    geometry.lodStructuralProxy = true;
     return 1;
 }
 
@@ -10554,6 +10558,12 @@ SoBRLDatabaseSource::getCompactViewLodSupersededFallbackCount(
     int count = 0;
     for (const BObolCompactInstanceEntry &entry :
 	 this->d->compactIndex->entries) {
+	/* Geometry kind alone is not presentation semantics: authored AABB-like
+	 * structure and the root overview remain useful scene content, whereas
+	 * only an explicitly marked temporary LoD leaf fallback is an obligation
+	 * that may request further refinement. */
+	if (!entry.geometry || !entry.geometry->lodStructuralProxy)
+	    continue;
 	const char *kind = entry.shapeSummary.geometryKind.getString();
 	if (!BU_STR_EQUAL(kind, "aabb") && !BU_STR_EQUAL(kind, "obb"))
 	    continue;
@@ -10596,6 +10606,11 @@ SoBRLDatabaseSource::getCompactViewLodActiveFallbackCount(
     int count = 0;
     for (const BObolCompactInstanceEntry &entry :
 	 this->d->compactIndex->entries) {
+	/* See getCompactViewLodSupersededFallbackCount: only temporary LoD
+	 * fallback geometry drives convergence, not arbitrary AABB-like scene
+	 * content. */
+	if (!entry.geometry || !entry.geometry->lodStructuralProxy)
+	    continue;
 	const char *kind = entry.shapeSummary.geometryKind.getString();
 	if (!BU_STR_EQUAL(kind, "aabb") && !BU_STR_EQUAL(kind, "obb"))
 	    continue;
@@ -10702,6 +10717,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		const SoBRLCadAssembly::CompactInstancePresentation &prior =
 		    found->second;
 		if (prior.geometryRevision != entry.geometryRevision ||
+		    prior.activePart != entry.part ||
 		    prior.appearanceRevision != entry.appearanceRevision ||
 		    prior.placementRevision != entry.placementRevision ||
 		    prior.visibilityRevision != entry.visibilityRevision ||
@@ -10738,6 +10754,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    const SoBRLCadAssembly::CompactInstancePresentation &presented =
 		prior->second;
 	    if (presented.geometryRevision == entry.geometryRevision &&
+		presented.activePart == entry.part &&
 		presented.appearanceRevision == entry.appearanceRevision &&
 		presented.placementRevision == entry.placementRevision &&
 		presented.visibilityRevision == entry.visibilityRevision &&
@@ -10875,8 +10892,14 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		this->d->compactIndex->entries[i];
 	    const auto prior =
 		assembly->compactInstancePresentations.find(entry.instance);
+	    /* A producer may keep the numeric geometry revision while changing
+	     * the immutable base part (for example, when a temporary LoD box
+	     * resolves to an authored line with byte-identical coordinates).  That
+	     * replacement still needs the new base part registered before its
+	     * instance record can be republished. */
 	    if (prior != assembly->compactInstancePresentations.end() &&
-		prior->second.geometryRevision == entry.geometryRevision)
+		prior->second.geometryRevision == entry.geometryRevision &&
+		prior->second.activePart == entry.part)
 		continue;
 	    if (!entry.geometry || !addedBaseParts.insert(entry.part).second)
 		continue;
@@ -11270,6 +11293,11 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	!baseParts.empty() || !instances.empty() || !instanceStyles.empty() ||
 	!partsToRemove.empty() ||
 	instanceSetsChanged || drawModeChanged;
+
+    const char *presentationDebug =
+	getenv("BOBOL_COMPACT_PRESENTATION_DEBUG");
+    const bool presentationDebugEnabled = presentationDebug &&
+	presentationDebug[0] && !BU_STR_EQUAL(presentationDebug, "0");
     if (structuralChanged) {
 	assembly->beginUpdate();
 	if (reset) {
@@ -11327,13 +11355,11 @@ SoBRLDatabaseSource::compactViewLodAssembly(
      * validating streaming box-to-mesh waves, but an O(N) scan does not
      * belong in the normal publication path for very large scenes.
      */
-    const char *presentationDebug =
-	getenv("BOBOL_COMPACT_PRESENTATION_DEBUG");
-    if (presentationDebug && presentationDebug[0] &&
-	!BU_STR_EQUAL(presentationDebug, "0")) {
+    if (presentationDebugEnabled) {
 	size_t missingInstances = 0;
 	size_t mismatchedParts = 0;
 	size_t retainedStructural = 0;
+	size_t retainedLodStructural = 0;
 	size_t structuralLodBacked = 0;
 	size_t structuralSourceRequests = 0;
 	size_t structuralEntryGeometry = 0;
@@ -11353,6 +11379,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		assembly->partGeometry(record->part);
 	    if (geometry && geometry->structuralProxy) {
 		retainedStructural++;
+		if (geometry->lodStructuralProxy)
+		    retainedLodStructural++;
 		const auto entryIndex =
 		    this->d->compactIndex->entryIndex.find(item.first);
 		if (entryIndex !=
@@ -11379,16 +11407,20 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	}
 	bu_log("BObol compact presentation invariant presentations=%zu "
 	       "retained_instances=%zu retained_structural=%zu "
+	       "retained_lod_structural=%zu "
 	       "structural_lod=%zu structural_requests=%zu "
 	       "structural_entry_geometry=%zu structural_pointer_mismatch=%zu "
 	       "missing_instances=%zu mismatched_parts=%zu "
-	       "updates=%zu lod_updates=%zu reset=%d\n",
+	       "updates=%zu lod_updates=%zu base_parts=%zu lod_parts=%zu "
+	       "removed_parts=%zu reset=%d\n",
 	       assembly->compactInstancePresentations.size(),
 	       assembly->instanceCount(), retainedStructural,
+	       retainedLodStructural,
 	       structuralLodBacked, structuralSourceRequests,
 	       structuralEntryGeometry, structuralGeometryPointerMismatch,
 	       missingInstances, mismatchedParts, instances.size(),
-	       lodCutUpdates.size(), reset ? 1 : 0);
+	       lodCutUpdates.size(), baseParts.size(), lodSharedParts.size(),
+	       partsToRemove.size(), reset ? 1 : 0);
 	if (retainedStructural) {
 	    for (const auto &kind : structuralKinds)
 		bu_log("  structural kind=%s count=%zu\n",
@@ -11640,17 +11672,29 @@ compact_add_geometry_part_if_needed(BObolCompactInstanceIndex &index,
 {
     if (!geometry)
 	return 0;
-    const auto found = index.partIdByGeometry.find(geometry.get());
+    auto found = index.partIdByGeometry.find(geometry.get());
     if (found != index.partIdByGeometry.end()) {
-	partId = found->second;
-	return 1;
+	const std::shared_ptr<const Obol::PartGeometry> retained =
+	    found->second.geometry.lock();
+	if (retained && retained.get() == geometry.get()) {
+	    partId = found->second.part;
+	    return 1;
+	}
+	/* The allocator reused an address whose content-deduplicated geometry
+	 * was not retained by the compact part library.  Treat this as a new
+	 * identity; using the stale PartId would bind the new occurrence to the
+	 * old geometry (typically making an authored line become an LoD box). */
+	index.partIdByGeometry.erase(found);
     }
 
     std::string partKey;
     if (!cad_part_key_for_geometry(kind, *geometry, partKey))
 	return 0;
     compact_add_part_if_needed(index, partKey, geometry, partId);
-    index.partIdByGeometry[geometry.get()] = partId;
+    BObolCompactGeometryPartIdentity identity;
+    identity.geometry = geometry;
+    identity.part = partId;
+    index.partIdByGeometry[geometry.get()] = std::move(identity);
     return 1;
 }
 
@@ -11712,7 +11756,10 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
 	std::string partKey("compact-lod-overview:");
 	partKey += path;
 	compact_add_part_if_needed(index, partKey, geometry, partId);
-	index.partIdByGeometry[geometry.get()] = partId;
+	BObolCompactGeometryPartIdentity identity;
+	identity.geometry = geometry;
+	identity.part = partId;
+	index.partIdByGeometry[geometry.get()] = std::move(identity);
     } else if (!compact_add_geometry_part_if_needed(index,
 	    partKind, geometry, partId)) {
 	unsupported = 1;
@@ -12213,9 +12260,12 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 	const auto oldGeometry = index.partIdByGeometry.find(
 	    entry.geometry.get());
 	if (oldGeometry != index.partIdByGeometry.end() &&
-	    oldGeometry->second == newPartId)
+	    oldGeometry->second.part == newPartId)
 	    index.partIdByGeometry.erase(oldGeometry);
-	index.partIdByGeometry[geometry.get()] = newPartId;
+	BObolCompactGeometryPartIdentity identity;
+	identity.geometry = geometry;
+	identity.part = newPartId;
+	index.partIdByGeometry[geometry.get()] = std::move(identity);
     } else if (!compact_add_geometry_part_if_needed(index, partKind,
 	    geometry, newPartId)) {
 	return false;
@@ -16761,6 +16811,7 @@ compact_coverage_aabb_geometry(const SbBox3f &bounds,
 		return std::shared_ptr<const Obol::PartGeometry>();
 	    geometry.subpixelProxyEligible = true;
 	    geometry.structuralProxy = true;
+	    geometry.lodStructuralProxy = true;
 	    return std::make_shared<const Obol::PartGeometry>(
 		std::move(geometry));
 	}();
@@ -16787,6 +16838,7 @@ compact_coverage_overview_geometry(const SbBox3f &bounds)
      * remain a visible extent, not enter the leaf subpixel-point classifier. */
     geometry.subpixelProxyEligible = false;
     geometry.structuralProxy = true;
+    geometry.lodStructuralProxy = false;
     return std::make_shared<const Obol::PartGeometry>(std::move(geometry));
 }
 
@@ -21325,7 +21377,11 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    this->d->compactIndex->parts.push_back(partRef);
 	}
 	this->d->compactIndex->partIdByKey[partKey] = partId;
-	this->d->compactIndex->partIdByGeometry[geometry.get()] = partId;
+    BObolCompactGeometryPartIdentity identity;
+    identity.geometry = geometry;
+    identity.part = partId;
+    this->d->compactIndex->partIdByGeometry[geometry.get()] =
+	std::move(identity);
 
     std::unordered_set<Obol::PartId, std::hash<Obol::PartId>> oldParts;
     for (size_t index : matching) {
@@ -21432,7 +21488,7 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     }
     for (auto it = this->d->compactIndex->partIdByGeometry.begin();
 	 it != this->d->compactIndex->partIdByGeometry.end();) {
-	if (releasedParts.find(it->second) != releasedParts.end())
+	if (releasedParts.find(it->second.part) != releasedParts.end())
 	    it = this->d->compactIndex->partIdByGeometry.erase(it);
 	else
 	    ++it;

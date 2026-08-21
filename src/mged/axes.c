@@ -73,7 +73,13 @@ struct _axes_state default_axes_state = {
     /* ax_edit_size1 */		500,
     /* ax_edit_size2 */		500,
     /* ax_edit_linewidth1 */	1,
-    /* ax_edit_linewidth2 */	1
+    /* ax_edit_linewidth2 */	1,
+    /* ax_model_tick_enable */	0,
+    /* ax_model_tick_interval */	100.0,
+    /* ax_model_ticks_per_major */	10,
+    /* ax_model_tick_length */	4,
+    /* ax_model_tick_major_length */	8,
+    /* ax_model_tick_threshold */	8
 };
 
 
@@ -83,6 +89,12 @@ struct bu_structparse axes_vparse[] = {
     {"%d", 1, "model_size",	AX_O(ax_model_size),		ax_set_dirty_flag, NULL, NULL },
     {"%d", 1, "model_linewidth",AX_O(ax_model_linewidth),	ax_set_dirty_flag, NULL, NULL },
     {"%f", 3, "model_pos",	AX_O(ax_model_pos),		ax_set_dirty_flag, NULL, NULL },
+    {"%d", 1, "model_tick_enable", AX_O(ax_model_tick_enable), ax_set_dirty_flag, NULL, NULL },
+    {"%f", 1, "model_tick_interval", AX_O(ax_model_tick_interval), ax_set_dirty_flag, NULL, NULL },
+    {"%d", 1, "model_ticks_per_major", AX_O(ax_model_ticks_per_major), ax_set_dirty_flag, NULL, NULL },
+    {"%d", 1, "model_tick_length", AX_O(ax_model_tick_length), ax_set_dirty_flag, NULL, NULL },
+    {"%d", 1, "model_tick_major_length", AX_O(ax_model_tick_major_length), ax_set_dirty_flag, NULL, NULL },
+    {"%d", 1, "model_tick_threshold", AX_O(ax_model_tick_threshold), ax_set_dirty_flag, NULL, NULL },
     {"%d", 1, "view_draw",	AX_O(ax_view_draw),		ax_set_dirty_flag, NULL, NULL },
     {"%d", 1, "view_size",	AX_O(ax_view_size),		ax_set_dirty_flag, NULL, NULL },
     {"%d", 1, "view_linewidth",	AX_O(ax_view_linewidth),	ax_set_dirty_flag, NULL, NULL },
@@ -106,6 +118,17 @@ ax_set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
     struct mged_state *s = (struct mged_state *)data;
     struct _axes_state *changed_state = (struct _axes_state *)base;
     MGED_CK_STATE(s);
+
+    /* Headless and newly attached Obol displays are not necessarily in the
+     * interactive display set yet.  The current display still owns this
+     * resource, and its retained faceplate must see an rset change on the
+     * next refresh just as a visible MGED window does. */
+    if (s->mged_curr_display &&
+	s->mged_curr_display->display_axes_state == changed_state) {
+	s->mged_curr_display->display_axes_state_dirty = 1;
+	mged_display_repaint_request(s->mged_curr_display,
+		MGED_REPAINT_DEVICE_SETTING);
+    }
     for (size_t i = 0; i < BU_PTBL_LEN(&active_display_set); i++) {
 	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, i);
 	if (m_dmp->display_axes_state == changed_state) {
@@ -113,6 +136,12 @@ ax_set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
 	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
 	}
     }
+
+    /* rset is an explicit MGED-owned policy change.  Publish it now when
+     * this display already has a retained endpoint, rather than relying on a
+     * later native repaint event (which a headless host does not produce).
+     * The normal refresh still presents the resulting state. */
+    mged_obol_faceplate_color_scheme_sync(s, s->mged_curr_display);
 }
 
 

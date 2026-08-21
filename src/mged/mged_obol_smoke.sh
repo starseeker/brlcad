@@ -20,6 +20,10 @@ RT_OUT="${WORKDIR}/mged_obol_smoke_rt.png"
 RT_PIX="${WORKDIR}/mged_obol_smoke_rt.pix"
 RT_MOVED_OUT="${WORKDIR}/mged_obol_smoke_rt_moved.png"
 RT_MOVED_PIX="${WORKDIR}/mged_obol_smoke_rt_moved.pix"
+TICK_BASE_OUT="${WORKDIR}/mged_model_ticks_base.png"
+TICK_OUT="${WORKDIR}/mged_model_ticks.png"
+TICK_BASE_PIX="${WORKDIR}/mged_model_ticks_base.pix"
+TICK_PIX="${WORKDIR}/mged_model_ticks.pix"
 PS_OUT="${WORKDIR}/mged_obol_smoke.ps"
 PLOT_OUT="${WORKDIR}/mged_obol_smoke.plot3"
 LOG="${WORKDIR}/mged_obol_smoke.log"
@@ -30,7 +34,8 @@ fi
 PNG_PIX="${MGED_DIR}/png-pix"
 
 rm -f "$OUT" "$PIX_OUT" "$RT_OUT" "$RT_PIX" "$RT_MOVED_OUT" \
-    "$RT_MOVED_PIX" "$PS_OUT" "$PLOT_OUT" "$LOG"
+    "$RT_MOVED_PIX" "$TICK_BASE_OUT" "$TICK_OUT" "$TICK_BASE_PIX" \
+    "$TICK_PIX" "$PS_OUT" "$PLOT_OUT" "$LOG"
 
 HELP_OUTPUT=$("$MGED" --help 2>&1 || true)
 if ! printf '%s\n' "$HELP_OUTPUT" | grep -q -- '--host'; then
@@ -223,6 +228,31 @@ fi
 if [ ! -s "$PLOT_OUT" ]; then
     echo "MGED retained plot3 export is incomplete: $PLOT_OUT" 1>&2
     cat "$LOG" 1>&2
+    exit 1
+fi
+
+TICK_LOG="${WORKDIR}/mged_model_ticks.log"
+rm -f "$TICK_LOG"
+printf 'dm open --host headless --renderer sw\ndm size 512 512\ndm bg 0 0 0\nrset ax model_draw 1\nrset ax model_tick_enable 0\nrefresh\nscreengrab %s\nrset ax model_tick_enable 1\nrset ax model_tick_interval 25\nrset ax model_ticks_per_major 5\nrset ax model_tick_length 3\nrset ax model_tick_major_length 7\nrset ax model_tick_threshold 11\nrefresh\nscreengrab %s\nputs OBOL_MODEL_TICKS\ndm get view.faceplate.model_axes.ticks.visible\ndm get view.faceplate.model_axes.ticks.interval\ndm get view.faceplate.model_axes.ticks.per_major\ndm get view.faceplate.model_axes.ticks.length\ndm get view.faceplate.model_axes.ticks.major_length\ndm get view.faceplate.model_axes.ticks.threshold\nquit\n' "$TICK_BASE_OUT" "$TICK_OUT" \
+    | "$MGED" -c -a nu -r "$DB" > "$TICK_LOG" 2>&1
+
+if ! grep -A6 -Fx 'OBOL_MODEL_TICKS' "$TICK_LOG" | grep -Fx 'true' >/dev/null ||
+    ! grep -A6 -Fx 'OBOL_MODEL_TICKS' "$TICK_LOG" | grep -Fx '25' >/dev/null ||
+    ! grep -A6 -Fx 'OBOL_MODEL_TICKS' "$TICK_LOG" | grep -Fx '5' >/dev/null ||
+    ! grep -A6 -Fx 'OBOL_MODEL_TICKS' "$TICK_LOG" | grep -Fx '3' >/dev/null ||
+    ! grep -A6 -Fx 'OBOL_MODEL_TICKS' "$TICK_LOG" | grep -Fx '7' >/dev/null ||
+    ! grep -A6 -Fx 'OBOL_MODEL_TICKS' "$TICK_LOG" | grep -Fx '11' >/dev/null; then
+    echo "MGED model-axis tick controls did not reach the Obol faceplate" 1>&2
+    cat "$TICK_LOG" 1>&2
+    exit 1
+fi
+
+if [ ! -s "$TICK_BASE_OUT" ] || [ ! -s "$TICK_OUT" ] || \
+    ! "$PNG_PIX" "$TICK_BASE_OUT" > "$TICK_BASE_PIX" || \
+    ! "$PNG_PIX" "$TICK_OUT" > "$TICK_PIX" || \
+    cmp -s "$TICK_BASE_PIX" "$TICK_PIX"; then
+    echo "MGED model-axis ticks did not change the rendered faceplate" 1>&2
+    cat "$TICK_LOG" 1>&2
     exit 1
 fi
 

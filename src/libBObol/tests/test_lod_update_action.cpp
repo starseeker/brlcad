@@ -51,6 +51,7 @@
 #include <chrono>
 #include <math.h>
 #include <memory>
+#include <new>
 #include <stdio.h>
 #include <string.h>
 #include <thread>
@@ -8119,6 +8120,132 @@ test_compact_native_mesh_not_pop_submitted(void)
 }
 
 /*
+ * Content-equivalent geometry objects share one compact part, but only the
+ * canonical object is retained by the part library.  When a duplicate's last
+ * occurrence is upgraded, its allocation address may immediately be reused
+ * for unrelated geometry.  The pointer fast path must validate object
+ * lifetime before accepting the old address-to-part mapping.
+ */
+static int
+test_compact_geometry_pointer_reuse_identity(void)
+{
+    alignas(Obol::PartGeometry)
+	unsigned char recycledStorage[sizeof(Obol::PartGeometry)];
+    bool proxyDestroyed = false;
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->ref();
+    source->path = "pointer-reuse-root.c";
+    source->instanceKey = "pointer-reuse-root-instance";
+
+    const std::shared_ptr<const Obol::PartGeometry> canonicalProxy =
+	compact_projected_proxy_geometry();
+    Obol::PartGeometry *rawProxy = new (recycledStorage)
+	Obol::PartGeometry(*canonicalProxy);
+    std::shared_ptr<const Obol::PartGeometry> recycledProxy(
+	rawProxy, [&proxyDestroyed](const Obol::PartGeometry *geometry) {
+	    const_cast<Obol::PartGeometry *>(geometry)->~PartGeometry();
+	    proxyDestroyed = true;
+	});
+
+    BObolCompactOccurrence first;
+    first.geometry = canonicalProxy;
+    first.summary.valid = TRUE;
+    first.summary.shapeKind = BObolRealizedShapeSummary::SHAPE_VLIST;
+    first.summary.path = "pointer-reuse-root.c/proxy-a.s";
+    first.summary.sourceName = "proxy-a.s";
+    first.summary.sourceType = "proxy";
+    first.summary.geometryKind = "aabb";
+    first.summary.sourceId = 1;
+    first.summary.visible = TRUE;
+    first.summary.selectable = TRUE;
+
+    BObolCompactOccurrence recycled = first;
+    recycled.geometry = recycledProxy;
+    recycled.summary.path = "pointer-reuse-root.c/proxy-b.s";
+    recycled.summary.sourceName = "proxy-b.s";
+    recycled.summary.sourceId = 2;
+
+    int ret = 0;
+    std::vector<BObolCompactOccurrence> initial = {first, recycled};
+    if (source->setCompactOccurrenceRegistry(initial) != 2) {
+	printf("FAIL: compact pointer-reuse fixture setup\n");
+	ret = 1;
+    }
+
+    /* Replace the second duplicate so the compact registry releases its
+     * noncanonical proxy object while the canonical proxy part remains. */
+    BObolCompactOccurrence replacement = recycled;
+    replacement.geometry = compact_native_triangle_geometry();
+    replacement.summary.shapeKind = BObolRealizedShapeSummary::SHAPE_MESH;
+    replacement.summary.geometryKind = "surface";
+    replacement.summary.sourceType = "primitive";
+    replacement.summary.sourceId = 3;
+    if (!ret && source->mergeCompactOccurrences({replacement}, TRUE) != 1) {
+	printf("FAIL: compact pointer-reuse fixture did not replace duplicate\n");
+	ret = 1;
+    }
+    initial.clear();
+    recycled.geometry.reset();
+    recycledProxy.reset();
+    if (!ret && !proxyDestroyed) {
+	printf("FAIL: compact pointer-reuse duplicate remained strongly owned\n");
+	ret = 1;
+    }
+
+    Obol::PartGeometry *rawLine = new (recycledStorage)
+	Obol::PartGeometry;
+    Obol::WireRep line;
+    line.segmentPoints = {
+	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(2.0f, 0.0f, 0.0f)};
+    line.bounds = SbBox3f(
+	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(2.0f, 0.0f, 0.0f));
+    rawLine->wire = std::move(line);
+    std::shared_ptr<const Obol::PartGeometry> recycledLine(
+	rawLine, [](const Obol::PartGeometry *geometry) {
+	    const_cast<Obol::PartGeometry *>(geometry)->~PartGeometry();
+	});
+
+    BObolCompactOccurrence authored = first;
+    authored.geometry = recycledLine;
+    authored.summary.path = "pointer-reuse-root.c/authored-line.s";
+    authored.summary.sourceName = "authored-line.s";
+    authored.summary.sourceType = "primitive";
+    authored.summary.geometryKind = "line";
+    authored.summary.sourceId = 4;
+    if (!ret && source->mergeCompactOccurrences({authored}, TRUE) != 1) {
+	printf("FAIL: compact pointer-reuse authored line append\n");
+	ret = 1;
+    }
+
+    BObolViewLodState viewState;
+    std::vector<const BObolViewLodState::CadPayload *> noPayloads;
+    SoBRLCadAssembly *assembly = !ret ?
+	source->compactViewLodAssembly(noPayloads, &viewState) : NULL;
+    BObolCompactInstanceHandle handle;
+    const bool haveHandle = !ret &&
+	source->getCompactInstanceHandle(2, handle);
+    Obol::InstanceId instance;
+    if (haveHandle) {
+	instance.w0 = handle.instanceWord0;
+	instance.w1 = handle.instanceWord1;
+    }
+    const std::optional<Obol::InstanceRecord> record =
+	assembly && haveHandle ? assembly->getInstanceRecord(instance) :
+	std::optional<Obol::InstanceRecord>();
+    const Obol::PartGeometry *presented = record ?
+	assembly->partGeometry(record->part) : NULL;
+    if (!ret && (!record || presented != recycledLine.get() ||
+	presented->structuralProxy || presented->lodStructuralProxy)) {
+	printf("FAIL: reused compact geometry address inherited stale proxy part\n");
+	ret = 1;
+    }
+
+    source->unref();
+    return ret;
+}
+
+/*
  * A growing compact registry is one standing source, not a succession of new
  * scenes.  Exercise the subtle transition which production cold streams use:
  * an initial sub-window inventory completes, a large exact delta starts a
@@ -8544,6 +8671,7 @@ test_compact_aabb_stream_upgrade(void)
     structuralLineGeometry->wire = lineWire;
     structuralLineGeometry->subpixelProxyEligible = true;
     structuralLineGeometry->structuralProxy = true;
+    structuralLineGeometry->lodStructuralProxy = true;
     std::shared_ptr<Obol::PartGeometry> authoredLineGeometry =
 	std::make_shared<Obol::PartGeometry>(*structuralLineGeometry);
     authoredLineGeometry->subpixelProxyEligible = false;
@@ -12027,6 +12155,8 @@ main(int argc, char **argv)
     if (runIsolated(test_compact_many_leaf_scene_admission))
 	return 1;
     if (runIsolated(test_compact_native_mesh_not_pop_submitted))
+	return 1;
+    if (runIsolated(test_compact_geometry_pointer_reuse_identity))
 	return 1;
     if (runIsolated(test_view_controller_compact_append_preserves_submission_cursor))
 	return 1;

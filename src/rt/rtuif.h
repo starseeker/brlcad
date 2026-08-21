@@ -48,6 +48,11 @@ typedef void (*rt_framebuffer_flush_callback)(void *data);
 /* Optional application-owned frame runner.  rt uses this only when a visible
  * display session needs the caller thread to pump its native event loop. */
 extern void rt_frame_runner_set(rt_frame_runner_callback callback, void *data);
+/* Invoke one frame through the installed runner, or directly when no display
+ * session owns the frame.  This is internal RTUIF plumbing shared by do.c and
+ * the application setup code. */
+extern int rt_frame_runner_run(rt_frame_execute_callback execute,
+	int framenumber, void *data);
 
 /* The common view code requests a progressive flush after framebuffer writes.
  * Headless consumers retain the default no-op; a visible host registers its

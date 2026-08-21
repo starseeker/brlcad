@@ -46,7 +46,7 @@
 #include "bu/color.h"
 #include "bu/getopt.h"
 #include "bu/exit.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 #define COMMA ','
 #define COLOR_LEVELS 256
@@ -57,11 +57,11 @@ int curchan = 0;	/* 0=r, 1=g, 2=b */
 int col[6] = {128, 128, 128};		/* r, g, b h, s, v */
 
 unsigned char buf[3*2048];
-ColorMap old_map;
-ColorMap cm;
+struct imgstream_fb_colormap old_map;
+struct imgstream_fb_colormap cm;
 
 static char *framebuffer = NULL;
-static struct fb *fbp;
+static imgstream_fb_t *fbp;
 static int scr_height;
 static int scr_width;
 
@@ -112,17 +112,19 @@ main(int argc, char **argv)
 	fprintf(stderr, "Opening a window, waiting for user input:\n");
     }
 
-    if ((fbp = fb_open(framebuffer, scr_width, scr_height)) == FB_NULL) {
-	fprintf(stderr, "fbcolor:  fb_open(%s) failure\n", framebuffer);
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)scr_width,
+	(size_t)scr_height)) == NULL) {
+	fprintf(stderr, "fbcolor:  imgstream_fb_open(%s) failure\n", framebuffer);
 	return 1;
     }
 
     /* Get the actual screen size we were given */
-    scr_width = fb_getwidth(fbp);
-    scr_height = fb_getheight(fbp);
+    scr_width = (int)imgstream_fb_width(fbp);
+    scr_height = (int)imgstream_fb_height(fbp);
 
-    fb_rmap(fbp, &old_map);
-    fb_clear(fbp, RGBPIXEL_NULL);
+    (void)imgstream_fb_rmap(fbp, &old_map);
+    const unsigned char black[3] = {0, 0, 0};
+    (void)imgstream_fb_clear(fbp, black);
 
     rgbhsv(col, &col[3]);
 
@@ -134,7 +136,7 @@ main(int argc, char **argv)
 	buf[3*i+BLU] = 1;
     }
     for (i=0; i<99; i++)
-	fb_write(fbp, 0, i, buf, COLOR_LEVELS);
+	(void)imgstream_fb_write(fbp, 0, i, buf, COLOR_LEVELS);
 
     /* Green */
     memset((char *)buf, 0, sizeof(buf));
@@ -144,7 +146,7 @@ main(int argc, char **argv)
 	buf[3*i+BLU] = 1;
     }
     for (i=100; i<199; i++)
-	fb_write(fbp, 0, i, buf, COLOR_LEVELS);
+	(void)imgstream_fb_write(fbp, 0, i, buf, COLOR_LEVELS);
 
     /* Blue */
     memset((char *)buf, 0, sizeof(buf));
@@ -154,7 +156,7 @@ main(int argc, char **argv)
 	buf[3*i+BLU] = i;
     }
     for (i=200; i<299; i++)
-	fb_write(fbp, 0, i, buf, COLOR_LEVELS);
+	(void)imgstream_fb_write(fbp, 0, i, buf, COLOR_LEVELS);
 
     /* Set RAW mode */
 #ifndef HAVE_CONIO_H
@@ -167,31 +169,31 @@ main(int argc, char **argv)
 	/* Build color map for current value */
 	memset((char *)&cm, 0, sizeof(cm));
 	for (i=0; i<col[RED]; i++)
-	    cm.cm_red[i] = 0xFFFF;
+	    cm.red[i] = 0xFFFF;
 	for (; i < COLOR_LEVELS; i++)
-	    cm.cm_red[i] = 0;
+	    cm.red[i] = 0;
 
 	for (i=0; i<col[GRN]; i++)
-	    cm.cm_green[i] = 0xFFFF;
+	    cm.green[i] = 0xFFFF;
 	for (; i < COLOR_LEVELS; i++)
-	    cm.cm_green[i] = 0;
+	    cm.green[i] = 0;
 
 	for (i=0; i<col[BLU]; i++)
-	    cm.cm_blue[i] = 0xFFFF;
+	    cm.blue[i] = 0xFFFF;
 	for (; i < COLOR_LEVELS; i++)
-	    cm.cm_blue[i] = 0;
+	    cm.blue[i] = 0;
 
 	/* 0, 0, 0 is color chosen */
-	cm.cm_red[0] = col[RED]<<8;
-	cm.cm_green[0] = col[GRN]<<8;
-	cm.cm_blue[0] = col[BLU]<<8;
+	cm.red[0] = col[RED]<<8;
+	cm.green[0] = col[GRN]<<8;
+	cm.blue[0] = col[BLU]<<8;
 
 	/* 1, 1, 1 is for black */
-	cm.cm_red[1] = 0;
-	cm.cm_green[1] = 0;
-	cm.cm_blue[1] = 0;
+	cm.red[1] = 0;
+	cm.green[1] = 0;
+	cm.blue[1] = 0;
 
-	fb_wmap(fbp, &cm);
+	(void)imgstream_fb_wmap(fbp, &cm);
 
 	(void) fprintf(stdout,
 		       "%c rgb=%3d, %3d, %3d hsv=%3d, %3d, %3d   \r",
@@ -201,7 +203,8 @@ main(int argc, char **argv)
 	(void) fflush(stdout);
     } while (doKeyPad());
 
-    fb_wmap(fbp, &old_map);
+    (void)imgstream_fb_wmap(fbp, &old_map);
+    imgstream_fb_close(fbp);
 
 #ifndef HAVE_CONIO_H
     reset_Tty(0);

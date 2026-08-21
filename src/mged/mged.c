@@ -2067,6 +2067,14 @@ mged_obol_faceplate_axes_state_apply(struct mged_display *p)
     model_axes.label_flag = 1;
     VMOVE(model_axes.axes_color, display_scheme->cs_model_axes);
     VMOVE(model_axes.label_color, display_scheme->cs_model_axes_label);
+    model_axes.tick_enabled = display_axes->ax_model_tick_enable;
+    model_axes.tick_interval = display_axes->ax_model_tick_interval;
+    model_axes.ticks_per_major = display_axes->ax_model_ticks_per_major;
+    model_axes.tick_length = display_axes->ax_model_tick_length;
+    model_axes.tick_major_length = display_axes->ax_model_tick_major_length;
+    model_axes.tick_threshold = display_axes->ax_model_tick_threshold;
+    VMOVE(model_axes.tick_color, display_scheme->cs_model_axes);
+    VMOVE(model_axes.tick_major_color, display_scheme->cs_model_axes_label);
     (void)bv_model_axes_state_set(view, &model_axes);
 
     struct bv_axes_state view_axes = BV_AXES_STATE_INIT;

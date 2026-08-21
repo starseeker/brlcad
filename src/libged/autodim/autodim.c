@@ -44,6 +44,7 @@
 #include "bu/malloc.h"
 #include "rt/geom.h"
 #include "wdb.h"
+#include "ged/scene.h"
 
 #include "../ged_private.h"
 
@@ -234,19 +235,18 @@ ged_autodim_core(struct ged *gedp, int argc, const char *argv[])
     argc -= bu_optind;
     argv += bu_optind;
 
-    /* No objects named: fall back to the currently displayed objects,
-     * mirroring the ged_dl() walk used by the who command.
+    /* No objects named: fall back to the current semantic draw intents.
+     *
+     * The former display-list walk was tied to libdm and omitted compact
+     * retained sources until they happened to materialize leaves.  The
+     * renderer-neutral scene API lists the same semantic paths regardless of
+     * realization state, which is both what an annotation should bound and
+     * what the current draw layer presents to clients.
      */
     if (argc == 0) {
-	struct display_list *gdlp;
-	for (BU_LIST_FOR(gdlp, display_list, (struct bu_list *)ged_dl(gedp))) {
-	    if (((struct directory *)gdlp->dl_dp)->d_addr == RT_DIR_PHONY_ADDR)
-		continue;
-	    if (disp_argc)
-		bu_vls_putc(&disp, ' ');
-	    bu_vls_printf(&disp, "%s", bu_vls_addr(&gdlp->dl_path));
-	    disp_argc++;
-	}
+	disp_argc = (int)ged_scene_paths_append(gedp,
+		ged_view_active_ctx(gedp), GED_SCENE_DRAW_DEFAULT,
+		GED_SCENE_PATHS_DRAW_INTENTS, &disp);
 	if (disp_argc == 0) {
 	    bu_vls_printf(gedp->ged_result_str,
 			  "Usage: autodim %s\n(no objects specified and none currently displayed)", usage);

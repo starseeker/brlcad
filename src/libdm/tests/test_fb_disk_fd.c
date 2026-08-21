@@ -25,7 +25,7 @@
 #include "bio.h"
 #include "bu/app.h"
 #include "bu/file.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 int
@@ -33,7 +33,7 @@ main(int argc, char **argv)
 {
     char path[MAXPATHLEN] = {0};
     FILE *fp;
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
 
     bu_setprogname(argv[0]);
     (void)argc;
@@ -48,12 +48,13 @@ main(int argc, char **argv)
 	return 1;
     }
 
-    fbp = fb_open(path, 1, 1);
-    if (fbp == FB_NULL) {
+    fbp = imgstream_fb_open(path, 1, 1);
+    if (fbp == NULL) {
 	fprintf(stderr, "disk framebuffer rejected descriptor zero\n");
 	return 1;
     }
-    if (fb_close(fbp) != 0 || !bu_file_delete(path)) {
+    imgstream_fb_close(fbp);
+    if (!bu_file_delete(path)) {
 	fprintf(stderr, "failed to close or remove descriptor-zero framebuffer\n");
 	return 1;
     }

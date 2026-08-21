@@ -23,7 +23,7 @@
 #include <stdio.h>
 
 #include "bu/app.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 int
@@ -39,15 +39,12 @@ main(int argc, char **argv)
     return 0;
 #else
     for (i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
-	struct fb *fbp = fb_open(paths[i], 1, 1);
-	if (fbp == FB_NULL) {
+	imgstream_fb_t *fbp = imgstream_fb_open(paths[i], 1, 1);
+	if (fbp == NULL) {
 	    fprintf(stderr, "failed to open %s as a framebuffer\n", paths[i]);
 	    return 1;
 	}
-	if (fb_close(fbp) != 0) {
-	    fprintf(stderr, "failed to close %s framebuffer\n", paths[i]);
-	    return 1;
-	}
+	imgstream_fb_close(fbp);
     }
 
     if (fputs("standard output remains open\n", stdout) == EOF || fflush(stdout) == EOF)

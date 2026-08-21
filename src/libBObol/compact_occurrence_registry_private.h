@@ -122,6 +122,20 @@ struct BObolCompactPartReference {
     std::shared_ptr<const Obol::PartGeometry> geometry;
 };
 
+/*
+ * Pointer identity is a useful fast path while the producer-owned immutable
+ * geometry is alive, but a raw pointer alone is not an ownership token.  In
+ * particular, content-deduplicated occurrence geometry need not be retained
+ * by the part library after its occurrence is upgraded.  A later allocation
+ * may reuse that address for unrelated geometry.  Pair the lookup key with a
+ * weak lifetime witness so an expired/reused address can never inherit the
+ * former part identity.
+ */
+struct BObolCompactGeometryPartIdentity {
+    std::weak_ptr<const Obol::PartGeometry> geometry;
+    Obol::PartId part;
+};
+
 struct BObolCompactInstanceIndex {
     BObolCompactInstanceIndex(void) :
 	wireCount(0),
@@ -133,7 +147,8 @@ struct BObolCompactInstanceIndex {
     }
 
     std::map<std::string, Obol::PartId> partIdByKey;
-    std::unordered_map<const Obol::PartGeometry *, Obol::PartId>
+    std::unordered_map<const Obol::PartGeometry *,
+	BObolCompactGeometryPartIdentity>
 	partIdByGeometry;
     std::vector<BObolCompactPartReference> parts;
     std::vector<Obol::InstanceUpdate> instances;
