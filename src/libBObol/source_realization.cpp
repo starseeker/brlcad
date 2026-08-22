@@ -27,6 +27,12 @@
 #include <mutex>
 #include <thread>
 
+/* Internal cache lifetime barriers.  Construct the lazy cache registries
+ * before the process-wide worker coordinator so reverse static destruction
+ * joins every worker before either registry is released. */
+void bobol_draw_cache_runtime_prepare(void);
+void bobol_mesh_lod_cache_runtime_prepare(void);
+
 struct SourceRealizationItem {
     SourceRealizationItem(void) :
 	source(NULL), snapshotSourceDatabase(NULL), database(NULL),
@@ -451,6 +457,8 @@ BObolSourceRealizationCoordinator::global(void)
 BObolSourceRealizationCoordinator::BObolSourceRealizationCoordinator(void) :
     p(new BObolSourceRealizationCoordinatorPrivate)
 {
+    bobol_draw_cache_runtime_prepare();
+    bobol_mesh_lod_cache_runtime_prepare();
     const size_t count = source_realization_worker_count();
     this->p->workers.reserve(count);
     for (size_t i = 0; i < count; i++)

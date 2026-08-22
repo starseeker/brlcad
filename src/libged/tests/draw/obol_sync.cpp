@@ -1771,7 +1771,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     if (draw_ret <= 0)
 	FAIL("progressive autoview deferred draw should succeed");
     if (bv_frame_revision_get(view) != initial_revision)
-	FAIL("deferred draw must not expose a provisional autoview before exact coverage");
+	FAIL("deferred draw must not autoview before a complete target overview");
 
     /* An explicit autoview while the root is still realizing must replace
      * the transaction's initial fit and continue following final bounds. */
@@ -1779,7 +1779,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
 	FAIL("explicit autoview should arm deferred Obol bound tracking");
     if (bv_frame_revision_get(view) != initial_revision)
-	FAIL("explicit progressive autoview must remain atomic until exact coverage");
+	FAIL("explicit progressive autoview must remain atomic until complete coverage");
 
     uint64_t observed_autoview_revision = initial_revision;
     size_t autoview_application_ticks = 0;

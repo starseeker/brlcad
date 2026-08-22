@@ -56,6 +56,10 @@ brlcad_add_test(NAME rt_default_object COMMAND rt_default_object)
 brlcad_addexec(rt_external_view external_view.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_external_view COMMAND rt_external_view)
 
+brlcad_addexec(rt_db_discovery db_discovery.cpp "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_db_discovery COMMAND rt_db_discovery
+  "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g")
+
 brlcad_addexec(rt_bound_internal bound_internal.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_bound_internal COMMAND rt_bound_internal)
 

@@ -199,8 +199,20 @@ struct BObolMeshLodCacheStatus {
     unsigned long long cleared_cache_key;
 };
 
+/* Database-wide cache coverage.  This is intentionally a name-map summary,
+ * not a promise that every payload byte has been audited.  Cache generation
+ * commits an immutable payload before publishing its name mapping, so the
+ * summary is the inexpensive normal-operation readiness test.  Use the
+ * per-object status API when diagnosing corruption or incomplete writes. */
+struct BObolMeshLodCacheSummary {
+    uint64_t database_bot_count;
+    uint64_t mapped_bot_count;
+    uint64_t missing_bot_count;
+    int all_bots_mapped;
+};
+
 /* A true-cold large mesh may spend substantial time constructing private
- * spatial pages and persisting them after its ordinary global minimum PoP
+ * spatial pages and persisting them after a bounded, view-requested PoP
  * prefix is already usable.  This callback borrows that prefix and immutable
  * hierarchy metadata for the duration of the call, allowing a background
  * provider to publish useful content without delaying durable cache work.
@@ -211,9 +223,18 @@ typedef void (*BObolMeshLodPreviewCallback)(
 	const struct BObolMeshLodHierarchyInfo *hierarchy,
 	void *callback_data);
 
+struct BObolMeshLodPreviewRequest {
+    int requested_cut;
+    float projected_pixel_diameter;
+    float target_pixel_error;
+};
+
+#define BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT { -1, 0.0f, 0.0f }
+
 #define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
 #define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, 0, 0, NULL, 0, NULL, {{0, 0, 0, 0.0, {0, 0, 0}, 0}} }
 #define BOBOL_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+#define BOBOL_MESH_LOD_CACHE_SUMMARY_INIT { 0, 0, 0, 0 }
 
 BOBOL_EXPORT void
 bobol_mesh_lod_cache_init(struct db_i *dbip, int verbose);
@@ -236,6 +257,13 @@ bobol_mesh_lod_cache_status(struct db_i *dbip,
 			      const char *name,
 			      struct BObolMeshLodCacheStatus *status);
 
+/* Check all database BoT name mappings using one cache read snapshot.  This
+ * is O(number of BoTs), but avoids one LMDB transaction and full hierarchy
+ * materialization per object. */
+BOBOL_EXPORT int
+bobol_mesh_lod_cache_summary(struct db_i *dbip,
+			       struct BObolMeshLodCacheSummary *summary);
+
 BOBOL_EXPORT int
 bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 	const char *name,
@@ -243,14 +271,18 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 
 /* Generate a missing cache from bot when supplied, or import name from dbip
  * otherwise, and return its opened prefix.  For a multi-page mesh preview is
- * called once after the global minimum prefix is classified but before page
- * construction and persistence complete. */
+ * called once after global prefixes are classified but before page
+ * construction and persistence complete.  preview_request carries the same
+ * ordinal/screen-error demand used by ordinary warm selection; generation
+ * clamps it to the hierarchy and a transient-memory ceiling.
+ */
 BOBOL_EXPORT struct BObolMeshLod *
 bobol_mesh_lod_cache_refresh_open(
 	struct db_i *dbip,
 	const char *name,
 	const struct rt_bot_internal *bot,
 	struct BObolMeshLodCacheStatus *status,
+	const struct BObolMeshLodPreviewRequest *preview_request,
 	BObolMeshLodPreviewCallback preview,
 	void *preview_data);
 

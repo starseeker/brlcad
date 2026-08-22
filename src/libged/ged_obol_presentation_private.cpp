@@ -1055,13 +1055,17 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	     * denominator.  The bar remains whole-view progress, but do not label
 	     * its monotonic fraction as a preparation percentage. */
 	    bu_vls_sprintf(&text, "Preparing LoD data");
-	    if (status.visibleTargetCount > 0)
-		bu_vls_printf(&text, "  %s/%s visible parts ready",
+	    if (status.expectedLeafCount > 0) {
+		const size_t represented = status.activePayloadCount >
+			SIZE_MAX - status.presentedSubpixelOccurrenceCount ?
+		    SIZE_MAX : status.activePayloadCount +
+			status.presentedSubpixelOccurrenceCount;
+		bu_vls_printf(&text, "  %s/%s parts represented",
 		    ged_obol_lod_compact_count(std::min(
-			status.activePayloadCount,
-			status.visibleTargetCount)).c_str(),
+			represented, status.expectedLeafCount)).c_str(),
 		    ged_obol_lod_compact_count(
-			status.visibleTargetCount).c_str());
+			status.expectedLeafCount).c_str());
+	    }
 	    if (status.sourcePreparationProviderCount > 0)
 		bu_vls_printf(&text, "  %s producer%s",
 		    ged_obol_lod_compact_count(
@@ -1086,13 +1090,34 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	    break;
 	case BOBOL_LOD_CONVERGENCE_REFINING:
 	    bu_vls_sprintf(&text, "Refining view %d%%", percent);
-	    if (status.visibleTargetCount > 0)
-		bu_vls_printf(&text, "  %s/%s targets",
-		    ged_obol_lod_compact_count(
-			std::min(status.satisfiedPayloadCount,
-			    status.visibleTargetCount)).c_str(),
+	    if (status.visibleTargetCount > 0) {
+		const size_t represented = status.satisfiedPayloadCount >
+			SIZE_MAX - status.presentedSubpixelOccurrenceCount ?
+		    SIZE_MAX : status.satisfiedPayloadCount +
+			status.presentedSubpixelOccurrenceCount;
+		bu_vls_printf(&text, "  %s/%s targets resolved",
+		    ged_obol_lod_compact_count(std::min(
+			represented, status.visibleTargetCount)).c_str(),
 		    ged_obol_lod_compact_count(
 			status.visibleTargetCount).c_str());
+	    }
+	    {
+		const size_t unresolvedBoxes =
+		    status.presentedStructuralBoxCount >
+			status.terminalOccurrenceFailureCount ?
+		    status.presentedStructuralBoxCount -
+			status.terminalOccurrenceFailureCount : 0;
+		const size_t richTarget = status.activePayloadCount >
+			SIZE_MAX - unresolvedBoxes ?
+		    SIZE_MAX : status.activePayloadCount + unresolvedBoxes;
+		if (richTarget > 0 &&
+		    status.satisfiedPayloadCount < richTarget)
+		    bu_vls_printf(&text, "  %s/%s detailed parts",
+			ged_obol_lod_compact_count(std::min(
+			    status.satisfiedPayloadCount,
+			    richTarget)).c_str(),
+			ged_obol_lod_compact_count(richTarget).c_str());
+	    }
 	    if (pending > 0)
 		bu_vls_printf(&text, "  %s loading",
 		    ged_obol_lod_compact_count(pending).c_str());

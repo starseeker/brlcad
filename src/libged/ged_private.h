@@ -390,6 +390,12 @@ GED_EXPORT void vls_col_eol(struct bu_vls *str);
 /* defined in ged.c */
 GED_EXPORT extern struct db_i *_ged_open_dbip(const char *filename,
 				   int existing_only);
+struct rt_db_hierarchy;
+GED_EXPORT extern struct db_i *_ged_open_dbip_discover(
+	const char *filename, int existing_only,
+	struct rt_db_hierarchy **hierarchy);
+GED_EXPORT extern int ged_db_index_adopt_discovery(
+	struct ged *gedp, const struct rt_db_hierarchy *hierarchy);
 
 /* defined in comb.c */
 GED_EXPORT extern struct directory *_ged_combadd(struct ged *gedp,

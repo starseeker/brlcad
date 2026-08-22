@@ -1466,14 +1466,21 @@ lod_default_resident_mesh_limit(void)
     size_t allowance = 4 * gibibyte;
     if (haveTotal)
 	allowance = std::min(allowance,
-	    std::max(floor, totalBytes / 4));
+	    std::max(floor, totalBytes / 8));
+    size_t availableBytes = 0;
+    if (bu_mem(BU_MEM_AVAIL, &availableBytes) >= 0 && availableBytes > 0)
+	allowance = std::min(allowance,
+	    std::max(floor, availableBytes / 3));
     /* This is the durable resident ceiling, not the transient admission
-     * governor above.  Base it on machine capacity so loading the database or
-     * constructing cold PoP caches cannot permanently shrink every later
-     * view.  Concurrent topology work remains bounded by the separately
-     * available-memory-aware working-set governor, while the conservative
-     * quarter-RAM share leaves the database, UI, cache mappings, and renderer
-     * the majority of host memory. */
+     * governor above.  Installed capacity supplies the normal share, while
+     * the startup available-memory sample prevents concurrent viewers from
+     * each claiming that same share.  Concurrent topology work remains
+     * bounded by the separate working-set governor.  The conservative
+     * one-eighth-RAM capacity share accounts for the fact that one logical
+     * prefix may also be referenced by a prepared renderer record and a GL
+     * driver allocation.  The available-memory cap prevents a second viewer
+     * or another application from independently spending the same physical
+     * headroom. */
     return std::max(floor, allowance);
 }
 
@@ -3574,12 +3581,14 @@ lod_publish_cold_mesh_preview_impl(
 	!data->points_orig || !data->face_count || !data->point_orig_count)
 	return;
     const BObolLodProgressiveMeshPtr &mesh = context->progressiveMesh;
-    if (!mesh || !mesh->update(*data, *hierarchy, hierarchy->min_cut,
+    const int previewCut = hierarchy->resident_cut >= hierarchy->min_cut ?
+	hierarchy->resident_cut : hierarchy->min_cut;
+    if (!mesh || !mesh->update(*data, *hierarchy, previewCut,
 	    hierarchy->shaded_cull_backfaces ? TRUE : FALSE))
 	return;
 
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
-    info.active_cut = hierarchy->min_cut;
+    info.active_cut = previewCut;
     info.face_count = data->face_count;
     info.point_count = data->point_count;
     info.point_orig_count = data->point_orig_count;
@@ -3608,9 +3617,9 @@ lod_publish_cold_mesh_preview_impl(
 	context->request, info, NULL);
     result.geometry.providerToken = cacheKey;
     result.geometry.cacheKey = context->assetKey;
-    result.geometry.activeCut = hierarchy->min_cut;
+    result.geometry.activeCut = previewCut;
     result.resolvedCut = requestedCut;
-    result.residentCut = hierarchy->min_cut;
+    result.residentCut = previewCut;
     result.progressiveMesh = mesh;
     result.counts.faceCount = data->face_count;
     result.counts.pointCount = data->point_count;
@@ -3637,7 +3646,7 @@ lod_publish_cold_mesh_preview_impl(
 	    context->generation, std::move(result));
     if (getenv("BOBOL_DRAW_TIMING"))
 	bu_log("[obol-timing] cold PoP preview: cut=%d faces=%zu "
-	       "points=%zu published=%d\n", hierarchy->min_cut,
+	       "points=%zu published=%d\n", previewCut,
 	       data->face_count, data->point_orig_count, published ? 1 : 0);
 }
 
@@ -3723,6 +3732,12 @@ BObolLodService::realizeResidentMeshLod(
 	previewContext.request = request;
 	previewContext.assetKey = assetKey;
 	previewContext.progressiveMesh = resident->mesh;
+	struct BObolMeshLodPreviewRequest previewRequest =
+	    BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT;
+	previewRequest.requested_cut = request.requestedCut;
+	previewRequest.projected_pixel_diameter =
+	    request.projectedPixelDiameter;
+	previewRequest.target_pixel_error = request.targetPixelError;
 	if (exactVariant)
 	    resident->lod = bobol_mesh_lod_get_cached_prefix(
 		dbip, provider.meshAssetContentHash);
@@ -3807,6 +3822,7 @@ BObolLodService::realizeResidentMeshLod(
 		    resident->lod =
 			bobol_mesh_lod_cache_refresh_open(
 			    dbip, name, staged->bot, &resident->status,
+			    &previewRequest,
 			    lod_publish_cold_mesh_preview,
 			    &previewContext);
 		    refreshResult = resident->lod ?
@@ -3824,6 +3840,7 @@ BObolLodService::realizeResidentMeshLod(
 		} else if (!exactVariant) {
 		    resident->lod = bobol_mesh_lod_cache_refresh_open(
 			dbip, name, NULL, &resident->status,
+			&previewRequest,
 			lod_publish_cold_mesh_preview, &previewContext);
 		    refreshResult = resident->lod ?
 			BRLCAD_OK : BRLCAD_ERROR;

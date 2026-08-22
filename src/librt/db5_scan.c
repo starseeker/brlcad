@@ -367,8 +367,8 @@ db_diradd4(struct db_i *dbi, const char *s, b_off_t o,  size_t st,  int i,  void
     return 1;
 }
 
-int
-db_dirbuild(struct db_i *dbip)
+static int
+db_dirbuild_impl(struct db_i *dbip, int update_nref)
 {
     int version;
 
@@ -403,8 +403,13 @@ db_dirbuild(struct db_i *dbip)
 
 	bu_avs_init_empty(&avs);
 
-	/* File is v5 format */
-	if (db5_scan(dbip, db5_diradd_handler, NULL) < 0) {
+	/* File is v5 format.  Focused hierarchy discovery supplies its own
+	 * header-only directory scan and applies references from the resulting
+	 * inventory; the legacy path retains the complete established scan. */
+	int scan_result = update_nref ?
+	    db5_scan(dbip, db5_diradd_handler, NULL) :
+	    db5_scan_directory_headers(dbip);
+	if (scan_result < 0) {
 	    bu_log("db_dirbuild(%s): db5_scan() failed\n", dbip->dbi_filename);
 	    return -1;
 	}
@@ -416,7 +421,8 @@ db_dirbuild(struct db_i *dbip)
 	    dbip->dbi_title = bu_strdup(DB5_GLOBAL_OBJECT_NAME);
 	    /* Missing _GLOBAL object so create it and set default title and units */
 	    db5_update_ident(dbip, "Untitled BRL-CAD Database", 1.0);
-	    db_update_nref(dbip);
+	    if (update_nref)
+		db_update_nref(dbip);
 	    dbip->i->dbi_dir_built = 1;
 	    return 0;	/* not a fatal error, user may have deleted it */
 	}
@@ -431,7 +437,8 @@ db_dirbuild(struct db_i *dbip)
 	    bu_log("db_dirbuild(%s): improper database, %s exists but is not an attribute-only object\n",
 		   dbip->dbi_filename, DB5_GLOBAL_OBJECT_NAME);
 	    dbip->dbi_title = bu_strdup(DB5_GLOBAL_OBJECT_NAME);
-	    db_update_nref(dbip);
+	    if (update_nref)
+		db_update_nref(dbip);
 	    dbip->i->dbi_dir_built = 1;
 	    return 0;	/* not a fatal error, need to let user proceed to fix it */
 	}
@@ -474,7 +481,8 @@ db_dirbuild(struct db_i *dbip)
 	bu_avs_free(&avs);
 	bu_free_external(&ext);	/* not until after done with avs! */
 
-	db_update_nref(dbip);
+	if (update_nref)
+	    db_update_nref(dbip);
 	dbip->i->dbi_dir_built = 1;
 	return 0;		/* ok */
     }
@@ -485,7 +493,8 @@ db_dirbuild(struct db_i *dbip)
 	    return -1;
 	}
 
-	db_update_nref(dbip);
+	if (update_nref)
+	    db_update_nref(dbip);
 	dbip->i->dbi_dir_built = 1;
 	return 0;		/* ok */
     }
@@ -494,6 +503,18 @@ db_dirbuild(struct db_i *dbip)
 	   dbip->dbi_filename);
 
     return -1;
+}
+
+int
+db_dirbuild(struct db_i *dbip)
+{
+    return db_dirbuild_impl(dbip, 1);
+}
+
+int
+db_dirbuild_without_nref(struct db_i *dbip)
+{
+    return db_dirbuild_impl(dbip, 0);
 }
 
 

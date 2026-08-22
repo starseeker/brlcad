@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "BObol/BDatabaseSource.h"
+#include "BObol/BDrawCache.h"
 #include "BObol/BInit.h"
 #include "BObol/BSourceRealization.h"
 #include "bu/app.h"
@@ -37,6 +38,10 @@ struct CountedProbeGate {
 
 struct CompletionCounter {
     std::atomic<size_t> completed{0};
+};
+
+struct ShutdownCacheProbe {
+    std::atomic<bool> entered{false};
 };
 
 static int
@@ -79,6 +84,24 @@ counting_complete_probe(SoBRLDatabaseSource *, struct db_i *, int, uint32_t,
     CompletionCounter *counter = static_cast<CompletionCounter *>(data);
     if (counter)
 	counter->completed.fetch_add(1, std::memory_order_acq_rel);
+    return 2;
+}
+
+static int
+shutdown_cache_probe(SoBRLDatabaseSource *, struct db_i *database, int,
+    uint32_t, BObolCompactOccurrenceStream *, void *data)
+{
+    ShutdownCacheProbe *probe = static_cast<ShutdownCacheProbe *>(data);
+    if (!probe || !database)
+	return 0;
+    probe->entered.store(true, std::memory_order_release);
+    /* Let main return and static teardown begin before touching the cache.
+     * The coordinator destructor must be the barrier which keeps its lazy
+     * registries alive until this callback has returned. */
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    BObolDrawLodAssetRecord record;
+    (void)bobol_draw_lod_asset_cache_get(database,
+	"__source_realization_shutdown_probe__", &record);
     return 2;
 }
 
@@ -151,6 +174,13 @@ main(int argc, char **argv)
 	std::fprintf(stderr, "FAIL: realization coordinator has no workers\n");
 	failures++;
     }
+
+    /* Construct the cache registry during normal execution.  Without the
+     * coordinator/cache lifetime ordering contract its destructor would run
+     * before an in-flight realization worker at process exit. */
+    BObolDrawLodAssetRecord primingRecord;
+    (void)bobol_draw_lod_asset_cache_get(database,
+	"__source_realization_cache_priming__", &primingRecord);
 
     {
 	/* Batch validation is transactional.  A malformed later item must not
@@ -417,6 +447,30 @@ main(int argc, char **argv)
 			"FAIL: fairness blocker did not drain\n");
 		    failures++;
 		}
+	    }
+	}
+    }
+
+    /* Deliberately leave one callback active across return from main.  Its
+     * request owns an independent database handle, and the coordinator's
+     * process-lifetime destructor must join it before cache static teardown.
+     * This makes the shutdown race an ordinary and sanitizer regression. */
+    {
+	std::shared_ptr<ShutdownCacheProbe> probe =
+	    std::make_shared<ShutdownCacheProbe>();
+	std::vector<BObolSourceRealizationRequest> requests(1);
+	if (!make_request(requests[0], database, shutdown_cache_probe, probe)) {
+	    std::fprintf(stderr, "FAIL: shutdown cache request setup\n");
+	    failures++;
+	} else {
+	    std::shared_ptr<BObolSourceRealizationJob> job =
+		coordinator.submit(requests);
+	    if (!job || !wait_until([&probe]() {
+		    return probe->entered.load(std::memory_order_acquire);
+		}, std::chrono::seconds(2))) {
+		std::fprintf(stderr,
+		    "FAIL: shutdown cache request did not start\n");
+		failures++;
 	    }
 	}
     }

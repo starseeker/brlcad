@@ -41,6 +41,7 @@
 #include "BObol/BMeshLodCache.h"
 #include "bu/hash.h"
 #include "raytrace.h"
+#include "rt/db_discovery.h"
 #include "rt/view.h"
 #include "ged/db_index.h"
 
@@ -98,6 +99,9 @@ struct ged_db_index {
     std::unordered_map<ged_db_index_id, std::vector<ged_db_index_use_native>> parents;
     std::unordered_map<std::string, ged_db_index_id> names;
     std::unordered_map<ged_db_index_id, std::string> removed_names;
+    bool tops_cache_valid = false;
+    std::vector<ged_db_index_id> standard_tops_cache;
+    std::vector<ged_db_index_id> cyclic_tops_cache;
 };
 
 
@@ -357,7 +361,8 @@ ged_db_index_add_child(struct ged_db_index *index,
 		       int bool_op,
 		       unsigned long long instance_count,
 		       bool matrix_valid,
-		       const mat_t matrix)
+		       const mat_t matrix,
+		       struct directory *known_child = nullptr)
 {
     if (!index || !index->gedp || !index->gedp->dbip || !parent_id ||
 	child_name.empty())
@@ -386,13 +391,15 @@ ged_db_index_add_child(struct ged_db_index *index,
      * record with no live directory, matching the service's visibility
      * contract.
      */
-    struct directory *child_dp = nullptr;
-    auto name_it = index->names.find(child_name);
-    if (name_it != index->names.end()) {
-	auto record_it = index->records.find(name_it->second);
-	if (record_it != index->records.end() &&
-	    record_it->second.name == child_name)
-	    child_dp = record_it->second.dp;
+    struct directory *child_dp = known_child;
+    if (!child_dp) {
+	auto name_it = index->names.find(child_name);
+	if (name_it != index->names.end()) {
+	    auto record_it = index->records.find(name_it->second);
+	    if (record_it != index->records.end() &&
+		record_it->second.name == child_name)
+		child_dp = record_it->second.dp;
+	}
     }
 
     if (is_instance || index->records.find(child_id) == index->records.end())
@@ -486,6 +493,9 @@ ged_db_index_rebuild(struct ged_db_index *index)
     index->child_names.clear();
     index->parents.clear();
     index->names.clear();
+    index->tops_cache_valid = false;
+    index->standard_tops_cache.clear();
+    index->cyclic_tops_cache.clear();
 
     struct directory *dp = RT_DIR_NULL;
     FOR_ALL_DIRECTORY_START(dp, index->gedp->dbip) {
@@ -502,6 +512,89 @@ ged_db_index_rebuild(struct ged_db_index *index)
     ged_db_index_add_removed_names(index);
     index->revision++;
     index->needs_rebuild = 0;
+    return 1;
+}
+
+
+int
+ged_db_index_adopt_discovery(struct ged *gedp,
+	const struct rt_db_hierarchy *hierarchy)
+{
+    struct ged_db_index *index = ged_db_index_state(gedp);
+    if (!index || !gedp || !gedp->dbip || !hierarchy)
+	return 0;
+
+    index->records.clear();
+    index->children.clear();
+    index->child_names.clear();
+    index->parents.clear();
+    index->names.clear();
+    index->tops_cache_valid = false;
+    index->standard_tops_cache.clear();
+    index->cyclic_tops_cache.clear();
+
+    const size_t arc_count = rt_db_hierarchy_arc_count(hierarchy);
+    index->records.reserve(arc_count + 1);
+    index->names.reserve(arc_count + 1);
+    index->parents.reserve(arc_count + 1);
+
+    struct directory *dp = RT_DIR_NULL;
+    FOR_ALL_DIRECTORY_START(dp, gedp->dbip) {
+	ged_db_index_add_object(index, dp);
+    } FOR_ALL_DIRECTORY_END;
+
+    struct directory *instance_parent = RT_DIR_NULL;
+    std::unordered_map<ged_db_index_id, unsigned long long> instance_counts;
+    std::unordered_map<ged_db_index_id, size_t> parent_counts;
+    std::unordered_map<ged_db_index_id, size_t> child_use_counts;
+    parent_counts.reserve(std::min<size_t>(arc_count, 16384));
+    child_use_counts.reserve(arc_count + 1);
+    for (size_t i = 0; i < arc_count; ++i) {
+	struct rt_db_hierarchy_arc arc;
+	if (!rt_db_hierarchy_arc_get(hierarchy, i, &arc) ||
+	    !arc.parent || !(arc.parent->d_flags & RT_DIR_COMB) ||
+	    !arc.parent->d_namep || !arc.child_name)
+	    continue;
+	parent_counts[ged_db_index_name_hash(arc.parent->d_namep)]++;
+	child_use_counts[ged_db_index_name_hash(arc.child_name)]++;
+    }
+    index->children.reserve(parent_counts.size());
+    index->child_names.reserve(parent_counts.size());
+    for (const auto &entry : parent_counts) {
+	index->children[entry.first].reserve(entry.second);
+	index->child_names[entry.first].reserve(entry.second);
+    }
+    for (const auto &entry : child_use_counts)
+	index->parents[entry.first].reserve(entry.second);
+
+    for (size_t i = 0; i < arc_count; ++i) {
+	struct rt_db_hierarchy_arc arc;
+	if (!rt_db_hierarchy_arc_get(hierarchy, i, &arc) ||
+	    !arc.parent || !(arc.parent->d_flags & RT_DIR_COMB) ||
+	    !arc.parent->d_namep || !arc.child_name)
+	    continue;
+	if (instance_parent != arc.parent) {
+	    instance_parent = arc.parent;
+	    instance_counts.clear();
+	}
+	const ged_db_index_id parent_id =
+	    ged_db_index_name_hash(arc.parent->d_namep);
+	const ged_db_index_id child_object_id =
+	    ged_db_index_name_hash(arc.child_name);
+	const unsigned long long count = ++instance_counts[child_object_id];
+	int operation = OP_UNION;
+	if (arc.operation == DB_OP_SUBTRACT)
+	    operation = OP_SUBTRACT;
+	else if (arc.operation == DB_OP_INTERSECT)
+	    operation = OP_INTERSECT;
+	ged_db_index_add_child(index, parent_id, arc.child_name, operation,
+	    count, arc.matrix_valid != 0, arc.matrix, arc.child);
+    }
+
+    ged_db_index_add_removed_names(index);
+    index->revision++;
+    index->needs_rebuild = 0;
+    index->pending_flags = 0;
     return 1;
 }
 
@@ -977,7 +1070,9 @@ ged_db_index_refresh(struct ged *gedp)
     if (!index)
 	return 0;
 
-    if (!ged_db_index_rebuild(index))
+
+    if ((!index->revision || index->needs_rebuild) &&
+	!ged_db_index_rebuild(index))
 	return 0;
     index->needs_rebuild = 0;
     index->pending_flags = 0;
@@ -1103,16 +1198,23 @@ ged_db_index_tops(struct ged *gedp,
     if (!index)
 	return 0;
 
-    std::vector<ged_db_index_id> tops = ged_db_index_standard_tops(index);
-    if (include_cyclic) {
-	std::unordered_set<ged_db_index_id> top_set(tops.begin(), tops.end());
+    if (!index->tops_cache_valid) {
+	index->standard_tops_cache = ged_db_index_standard_tops(index);
+	index->cyclic_tops_cache = index->standard_tops_cache;
+	std::unordered_set<ged_db_index_id> top_set(
+	    index->standard_tops_cache.begin(),
+	    index->standard_tops_cache.end());
 	std::unordered_set<ged_db_index_id> cyclic =
 	    ged_db_index_cyclic_objects(index);
 	for (ged_db_index_id id : cyclic) {
 	    if (top_set.insert(id).second)
-		tops.push_back(id);
+		index->cyclic_tops_cache.push_back(id);
 	}
+	index->tops_cache_valid = true;
     }
+
+    const std::vector<ged_db_index_id> &tops = include_cyclic ?
+	index->cyclic_tops_cache : index->standard_tops_cache;
 
     size_t ncopy = std::min(capacity, tops.size());
     if (ids && ncopy)

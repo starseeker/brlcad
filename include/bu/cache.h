@@ -199,6 +199,14 @@ BU_EXPORT void bu_cache_write_abort(struct bu_cache_txn **t);
 BU_EXPORT void bu_cache_clear(const char *key, struct bu_cache *c, struct bu_cache_txn **t);
 
 /**
+ * Clear all key/value pairs from an open cache in one transaction while
+ * preserving the cache database and handle for subsequent use.
+ *
+ * Returns BRLCAD_OK on success and BRLCAD_ERROR on failure.
+ */
+BU_EXPORT int bu_cache_clear_all(struct bu_cache *c);
+
+/**
  * Get an array of keys present in the cache.  Caller is responsible
  * for freeing the keysv output (recommend using bu_argv_free).
  */

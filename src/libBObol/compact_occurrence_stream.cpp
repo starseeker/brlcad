@@ -25,6 +25,8 @@ struct BObolCompactOccurrenceStream::Impl {
     std::mutex mutex;
     std::vector<BObolCompactOccurrence> priority;
     size_t priorityOffset = 0;
+    bool coverageOverviewQueued = false;
+    bool coverageOverviewDrained = false;
     /* Producer-local vectors become queue nodes without moving their rich
      * occurrence values.  The former monolithic vector repeatedly relocated
      * every live record as a 150k-leaf cold stream grew concurrently with
@@ -194,6 +196,8 @@ BObolCompactOccurrenceStream::pushPriority(
     this->d->priority.clear();
     this->d->priorityOffset = 0;
     this->d->priority.push_back(occurrence);
+    this->d->coverageOverviewQueued = true;
+    this->d->coverageOverviewDrained = false;
 }
 
 void
@@ -354,6 +358,9 @@ BObolCompactOccurrenceStream::drain(
 	out.push_back(std::move(
 	    this->d->priority[this->d->priorityOffset + i]));
     this->d->priorityOffset += priorityCount;
+    if (priorityCount &&
+	this->d->priorityOffset == this->d->priority.size())
+	this->d->coverageOverviewDrained = true;
     size_t pendingToDrain = count - priorityCount;
     while (pendingToDrain && !this->d->pendingBatches.empty()) {
 	std::vector<BObolCompactOccurrence> &batch =
@@ -461,10 +468,10 @@ BObolCompactOccurrenceStream::hasCoverageBoundsComplete(void) const
 bool
 BObolCompactOccurrenceStream::hasCoverageBoundsDrained(void)
 {
-    if (!this->d->coverageBoundsComplete.load(std::memory_order_acquire))
-	return false;
     std::lock_guard<std::mutex> guard(this->d->mutex);
-    return this->d->priorityOffset == this->d->priority.size();
+    return !this->d->coverageBounds.isEmpty() &&
+	this->d->coverageOverviewQueued &&
+	this->d->coverageOverviewDrained;
 }
 
 void

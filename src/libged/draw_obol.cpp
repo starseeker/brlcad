@@ -14031,7 +14031,7 @@ ged_draw_obol_database_source_expand_visible_children(
 }
 
 static int
-ged_obol_deferred_job_coverage_bounds_complete(
+ged_obol_deferred_job_coverage_bounds_ready(
     const std::shared_ptr<ged_obol_deferred_realization_job> &job)
 {
     if (!job || job->items.empty())
@@ -14039,7 +14039,7 @@ ged_obol_deferred_job_coverage_bounds_complete(
     for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
 	 job->items) {
 	if (!item || !item->stream ||
-	    !item->stream->hasCoverageBoundsComplete())
+	    !item->stream->hasCoverageBoundsDrained())
 	    return 0;
     }
     return 1;
@@ -14114,10 +14114,11 @@ ged_obol_progressive_autoview_apply(
 	}
     bv_refresh_request(view, GED_VIEW_REFRESH_DRAW);
     /*
-     * Exact coverage bounds are immutable for this source revision.  One
-     * successful application fulfills the deferred request; leaving it armed
-     * made every later leaf/mesh publication rewrite an identical camera and
-     * visibly flash some GL backends.
+     * A drained overview covers the complete target even when its bound is
+     * conservative rather than semantically exact.  One successful fit
+     * fulfills the deferred request.  Chasing the later exact/tighter bound
+     * would produce the very second center/scale jump this one-shot contract
+     * exists to prevent.
      */
     data->pending_autoview = 0;
     data->pending_autoview_bounds_complete = 0;
@@ -14933,7 +14934,7 @@ ged_obol_apply_stream_coverage_bounds(
     SoBRLDatabaseSource *source,
     BObolCompactOccurrenceStream *stream)
 {
-    if (!source || !stream || !stream->hasCoverageBoundsComplete())
+    if (!source || !stream)
 	return 0;
 
     SbBox3f bounds;
@@ -14941,7 +14942,7 @@ ged_obol_apply_stream_coverage_bounds(
 	return 0;
 
     (void)source->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax(),
-	TRUE);
+	stream->hasCoverageBoundsComplete() ? TRUE : FALSE);
     return 1;
 }
 
@@ -15188,7 +15189,7 @@ ged_obol_progressive_advance_provider(
 	}
     }
     if (data->pending_autoview &&
-	ged_obol_deferred_job_coverage_bounds_complete(
+	ged_obol_deferred_job_coverage_bounds_ready(
 	    data->deferred_job)) {
 	data->pending_autoview_bounds_complete = 1;
     }
@@ -15217,7 +15218,7 @@ ged_obol_progressive_advance_provider(
      * overview before autoview is applied at the end of this provider tick.
      * Recheck immediately before a completed job is retired below. */
     if (data->pending_autoview &&
-	ged_obol_deferred_job_coverage_bounds_complete(data->deferred_job))
+	ged_obol_deferred_job_coverage_bounds_ready(data->deferred_job))
 	data->pending_autoview_bounds_complete = 1;
     for (std::vector<std::shared_ptr<ged_obol_deferred_realization_job>>::iterator
 	    it = data->pending_jobs.begin(); it != data->pending_jobs.end();) {
@@ -15260,12 +15261,18 @@ ged_obol_progressive_advance_provider(
 		    ged_obol_deferred_realization_job::COMPLETE &&
 		ged_obol_deferred_streams_pending(data->deferred_job)) {
 		has_pending_job = 1;
-	    } else {
-		if (jobState == ged_obol_deferred_realization_job::COMPLETE) {
-		    refined += ged_obol_publish_deferred_realization(data,
+	} else {
+	    if (jobState == ged_obol_deferred_realization_job::COMPLETE) {
+		refined += ged_obol_publish_deferred_realization(data,
 			controller, data->deferred_job);
-		    ged_obol_hold_completed_job(data, data->deferred_job);
-		}
+		ged_obol_hold_completed_job(data, data->deferred_job);
+		/* Generic/non-PoP streams do not publish a separate coverage
+		 * overview.  Their atomic terminal adoption is itself the exact
+		 * whole-target publication and remains the fallback witness for a
+		 * pending one-shot autoview. */
+		if (data->pending_autoview)
+		    data->pending_autoview_bounds_complete = 1;
+	    }
 		data->deferred_refine_stage = 3;
 		data->deferred_paths.clear();
 		data->deferred_job.reset();

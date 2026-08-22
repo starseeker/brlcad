@@ -4803,43 +4803,6 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	exactStructuralProjection &&
 	structuralProjection.visibleCount > terminalOccurrenceFailures;
 
-    /* During append-only discovery, keep the source cursor and immutable
-     * resident payloads untouched.  The renderer already produced an exact
-     * projected-size histogram for the current prefix, so it can choose a
-     * transient point floor before tens of thousands of tiny leaf boxes make
-     * every publication frame O(the complete discovered population).  At
-     * most the power-of-two histogram boundaries change this value.  Each
-     * change is presented atomically, while provider pumping continues behind
-     * the independent frame barrier. */
-    if (!externalProducersSettled &&
-	haveStructuralProjectionPopulation &&
-	!this->d->lodInteractive && !this->d->lodGestureActive &&
-	BObolLodPointProxyCalibrationPolicy::applicable(
-	    structuralProjection.visibleCount) &&
-	maximumFirstWaveOccurrences != SIZE_MAX) {
-	const BObolLodPointProxyCalibrationPolicy::Decision discoverySeed =
-	    this->d->lodDiscoveryPointProxyPolicy.
-		seedFromStructuralDistribution(
-		    this->d->lodDiscoveryPointProxyPixelThreshold,
-		    structuralProjection.cumulativeCount,
-		    structuralProjection.visibleCount,
-		    maximumFirstWaveOccurrences);
-	if (discoverySeed.changed) {
-	    this->d->lodDiscoveryPointProxyPixelThreshold =
-		discoverySeed.threshold;
-	    BObolViewLodState *presentationState =
-		this->d->viewAttachment->getViewLodState();
-	    if (presentationState)
-		presentationState->
-		    setCadPresentationDiscoveryPointProxyPixelThreshold(
-			discoverySeed.threshold);
-	    this->d->lodDiscoveryPointProxyFramePending = TRUE;
-	    this->requestRender("lod-discovery-point-floor");
-	    this->d->reconcilePhase(
-		BObolLodStateMachine::Event::WORK_SCHEDULED);
-	    return;
-	}
-    }
     /* A framebuffer histogram is exact for the occurrences installed when
      * that frame began, but it is not a whole-scene population proof while a
      * provider is still appending leaves.  Reseeding from each partial
@@ -5609,6 +5572,24 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	    haveCadPresentationAssemblies &&
 	    calibrationState->lastCadPresentationFrameExact() &&
 	    exactOccurrenceClassification;
+	if (controller_lod_trace_enabled("BOBOL_LOD_TRACE_POINT",
+		this->d->lodViewRevision.value())) {
+	    static std::atomic<unsigned int> pointFrameTraceCount(0);
+	    const unsigned int traceIndex = pointFrameTraceCount.fetch_add(1);
+	    if (traceIndex < 256)
+		bu_log("BObol LoD discovery point frame exact=%d "
+		       "assemblies=%d frame_exact=%d occurrence_exact=%d "
+		       "subpixel=%zu boxes=%zu providers=%zu "
+		       "discovery_threshold=%.3f stable_threshold=%.3f\n",
+		       exactDiscoveryClassification ? 1 : 0,
+		       haveCadPresentationAssemblies ? 1 : 0,
+		       calibrationState->lastCadPresentationFrameExact() ? 1 : 0,
+		       exactOccurrenceClassification ? 1 : 0,
+		       presentedSubpixelOccurrences, presentedStructuralBoxes,
+		       this->d->progressiveProviderPendingCount,
+		       this->d->lodDiscoveryPointProxyPixelThreshold,
+		       this->d->lodPresentationPointProxyPixelThreshold);
+	}
 	if (exactDiscoveryClassification) {
 	    this->d->lodDiscoveryPointProxyFramePending = FALSE;
 	} else {
@@ -14494,6 +14475,8 @@ BObolViewController::getLodConvergenceStatus(
 	status.gpuTrackedBufferBytes;
     convergenceInputs.failedSourceCount = status.failedSourceCount;
     convergenceInputs.structuralDiscovery = structuralDiscovery != FALSE;
+    convergenceInputs.visibilityCensusComplete =
+	this->d->lodCoveragePolicy.hasCompleteVisibleCount();
     convergenceInputs.sourcePreparationPending =
 	sourcePreparationPending != FALSE;
     convergenceInputs.submissionPending =

@@ -45,6 +45,7 @@
 #include "vmath.h"
 #include "bn.h"
 #include "rt/geom.h"
+#include "rt/db_discovery.h"
 #include "raytrace.h"
 #include "bg/plot3.h"
 #include "imgstream/fbserv.h"
@@ -495,6 +496,7 @@ ged_open(const char *dbtype, const char *filename, int existing_only)
 {
     struct ged *gedp = NULL;
     struct rt_wdb *wdbp = NULL;
+    struct rt_db_hierarchy *hierarchy = NULL;
 
     if (filename == NULL)
       return GED_NULL;
@@ -502,7 +504,8 @@ ged_open(const char *dbtype, const char *filename, int existing_only)
     if (BU_STR_EQUAL(dbtype, "db")) {
 	struct db_i *dbip;
 
-	if ((dbip = _ged_open_dbip(filename, existing_only)) == DBI_NULL) {
+	if ((dbip = _ged_open_dbip_discover(filename, existing_only,
+		&hierarchy)) == DBI_NULL) {
 	    return GED_NULL;
 	}
 
@@ -546,7 +549,12 @@ ged_open(const char *dbtype, const char *filename, int existing_only)
     gedp->dbip = wdbp->dbip;
     ged_event_librt_callbacks_enable(gedp);
 
-    db_update_nref(gedp->dbip);
+    if (hierarchy) {
+	(void)ged_db_index_adopt_discovery(gedp, hierarchy);
+	rt_db_hierarchy_destroy(hierarchy);
+    } else {
+	db_update_nref(gedp->dbip);
+    }
 
     return gedp;
 }
@@ -559,7 +567,21 @@ ged_open(const char *dbtype, const char *filename, int existing_only)
 struct db_i *
 _ged_open_dbip(const char *filename, int existing_only)
 {
+    struct rt_db_hierarchy *hierarchy = NULL;
+    struct db_i *dbip = _ged_open_dbip_discover(filename, existing_only,
+	&hierarchy);
+    rt_db_hierarchy_destroy(hierarchy);
+    return dbip;
+}
+
+struct db_i *
+_ged_open_dbip_discover(const char *filename, int existing_only,
+	struct rt_db_hierarchy **hierarchy)
+{
     struct db_i *dbip = DBI_NULL;
+
+    if (hierarchy)
+	*hierarchy = NULL;
 
     /* open database */
     if (((dbip = db_open(filename, DB_OPEN_READWRITE)) == DBI_NULL) &&
@@ -587,12 +609,44 @@ _ged_open_dbip(const char *filename, int existing_only)
 	return dbip;
     }
 
-    /* --- Scan geometry database and build in-memory directory --- */
-    if (db_dirbuild(dbip) < 0) {
-	db_close(dbip);
-	bu_log("_ged_open_dbip: db_dirbuild failed on database file %s", filename);
-	dbip = DBI_NULL;
+    /* Scan record envelopes through a temporary read-only view, then decode
+     * referencing objects with bounded scatter/gather.  The live dbip stays
+     * read-write and resumes ordinary editing after discovery returns. */
+    struct rt_db_hierarchy *discovered = NULL;
+    struct rt_db_discovery_options options;
+    struct rt_db_discovery_stats discovery_stats;
+    rt_db_discovery_options_init(&options);
+    const char *worker_override = getenv("LIBRT_DB_DISCOVERY_WORKERS");
+    if (worker_override && worker_override[0]) {
+	char *end = NULL;
+	const unsigned long requested = strtoul(worker_override, &end, 10);
+	if (end && !end[0] && requested > 0)
+	    options.max_workers = requested;
     }
+    if (rt_db_discovery_build(dbip, &options, &discovered,
+	    &discovery_stats) < 0) {
+	db_close(dbip);
+	bu_log("_ged_open_dbip: database discovery failed on file %s", filename);
+	dbip = DBI_NULL;
+	return dbip;
+    }
+    if (getenv("LIBRT_DB_DISCOVERY_REPORT")) {
+	bu_log("db discovery: directory=%llu us decode=%llu us "
+	    "publish=%llu us objects=%llu referencing=%llu arcs=%llu "
+	    "workers=%u mapped=%u\n",
+	    (unsigned long long)discovery_stats.directory_microseconds,
+	    (unsigned long long)discovery_stats.decode_microseconds,
+	    (unsigned long long)discovery_stats.publish_microseconds,
+	    (unsigned long long)discovery_stats.object_count,
+	    (unsigned long long)discovery_stats.referencing_object_count,
+	    (unsigned long long)discovery_stats.reference_count,
+	    discovery_stats.worker_count,
+	    discovery_stats.used_mapped_view);
+    }
+    if (hierarchy)
+	*hierarchy = discovered;
+    else
+	rt_db_hierarchy_destroy(discovered);
 
     return dbip;
 }

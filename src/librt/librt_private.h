@@ -103,6 +103,12 @@ struct db_i_internal {
 struct db_i_internal * db_i_internal_create(void);
 void db_i_internal_destroy(struct db_i_internal *i);
 
+/* Focused hierarchy discovery builds the ordinary directory first and applies
+ * references from its own scatter/gather inventory.  Keep the legacy public
+ * db_dirbuild() behavior unchanged. */
+int db_dirbuild_without_nref(struct db_i *dbip);
+int db5_scan_directory_headers(struct db_i *dbip);
+
 
 /**
  * Private internal state for struct rt_i.  All fields listed under

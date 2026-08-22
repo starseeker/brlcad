@@ -30,6 +30,7 @@
 #include "bu/cmd.h"
 #include "bu/opt.h"
 #include "bv.h"
+#include "rt/db_discovery.h"
 #include "../../librt/librt_private.h"
 
 #include "ged/event.h"
@@ -88,8 +89,10 @@ ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
     /* Before proceeding with the full open logic, see if
      * we can actually open what the caller provided */
     struct db_i *new_dbip = NULL;
+    struct rt_db_hierarchy *hierarchy = NULL;
     int existing_only = (!force_create && open_only);
-    if ((new_dbip = _ged_open_dbip(argv[0], existing_only)) == DBI_NULL) {
+    if ((new_dbip = _ged_open_dbip_discover(argv[0], existing_only,
+	    &hierarchy)) == DBI_NULL) {
 
 	bu_vls_printf(gedp->ged_result_str, "ged_opendb_core: failed to open %s\n", argv[0]);
 
@@ -135,6 +138,10 @@ ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
     /* Set up the new database info in gedp */
     gedp->dbip = new_dbip;
     ged_event_librt_callbacks_enable(gedp);
+    if (hierarchy) {
+	(void)ged_db_index_adopt_discovery(gedp, hierarchy);
+	rt_db_hierarchy_destroy(hierarchy);
+    }
 
     // Set the view units, if we have a view
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);

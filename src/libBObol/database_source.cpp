@@ -16821,7 +16821,14 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
     work.occurrence = std::move(occurrence);
     collect->producerWork.push_back(std::move(work));
     collect->occurrenceCount++;
-    if (collect->producerWork.size() >= compact_coverage_work_batch_size) {
+    /* The first leaf is latency-critical: it can supply both the expanding
+     * scene overview and the first useful leaf box while the hierarchy walk
+     * continues.  Waiting for a full producer batch accidentally made a
+     * one-leaf database (and any slow first branch with fewer than 16 leaves)
+     * wait for the complete walk before a coverage worker could start.  Keep
+     * batching for throughput after that first publication. */
+    if (collect->occurrenceCount == 1 ||
+	collect->producerWork.size() >= compact_coverage_work_batch_size) {
 	{
 	    std::lock_guard<std::mutex> guard(collect->workMutex);
 	    collect->work.insert(collect->work.end(),

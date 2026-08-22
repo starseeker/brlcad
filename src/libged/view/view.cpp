@@ -977,7 +977,13 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
 	gd.cv = ged_view_active_ctx(gedp);
     }
 
-    if (!gd.cv) {
+    /* LoD cache inspection and maintenance are scoped to the open database,
+     * not to a camera.  Permit that one command family in headless clients;
+     * _view_cmd_lod handles it before consulting gd.cv. */
+    const int database_only_lod_cache =
+	argc > 1 && BU_STR_EQUAL(argv[0], "lod") &&
+	BU_STR_EQUAL(argv[1], "cache");
+    if (!gd.cv && !database_only_lod_cache) {
 	bu_vls_printf(gedp->ged_result_str, ": no view specified and no view listed as current in GED");
 	bu_vls_free(&vname);
 	return BRLCAD_ERROR;

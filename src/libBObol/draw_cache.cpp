@@ -223,13 +223,40 @@ bobol_draw_cache_bindings(void)
     return bindings;
 }
 
+static std::array<std::mutex, 127> &
+bobol_draw_proxy_refresh_locks(void)
+{
+    static std::array<std::mutex, 127> refreshLocks;
+    return refreshLocks;
+}
+
+/*
+ * Source-realization workers may be active until the process-wide coordinator
+ * is destroyed.  Its constructor calls this routine before starting workers,
+ * which deliberately constructs every non-trivial function-local static a
+ * cache operation can touch.  C++ then destroys the coordinator (and joins
+ * its workers) before destroying these registries.  Do not make a new lazy
+ * cache-global available to realization workers without adding it here.
+ *
+ * This is an internal lifetime barrier, not part of the public cache API.
+ */
+void
+bobol_draw_cache_runtime_prepare(void)
+{
+    (void)bobol_draw_cache_registry_mutex();
+    (void)bobol_draw_cache_registry();
+    (void)bobol_draw_cache_bindings();
+    (void)bobol_draw_proxy_refresh_locks();
+}
+
 /* A compact assembly may contain thousands of occurrences of one leaf.  The
  * persistent record is shared, but cold-cache refresh used to duplicate its
  * realization for every occurrence. */
 static std::mutex &
 bobol_draw_proxy_refresh_mutex(struct db_i *dbip, const char *name, int kind)
 {
-    static std::array<std::mutex, 127> refreshLocks;
+    std::array<std::mutex, 127> &refreshLocks =
+	bobol_draw_proxy_refresh_locks();
     uint64_t hash = bu_data_hash(name ? name : "", name ? strlen(name) : 0);
 
     hash ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(dbip));
@@ -353,7 +380,12 @@ bobol_draw_cache_database_fingerprint(const db_i *dbip)
     if (!dbip)
 	return 0;
 
+    char canonical[MAXPATHLEN] = {0};
     const char *name = dbip->dbi_filename ? dbip->dbi_filename : "";
+    if (name[0]) {
+	(void)bu_file_realpath(name, canonical);
+	name = canonical;
+    }
     uint64_t fingerprint = 1469598103934665603ULL;
     fingerprint = bobol_draw_cache_mix(fingerprint,
 	bu_data_hash(name, strlen(name)));
@@ -800,10 +832,14 @@ bobol_draw_cache_db_name(bu_vls *fname, db_i *dbip)
 
     const char *ctxName = dbip->dbi_filename;
     char inmemCtxName[128] = {0};
+    char canonicalCtxName[MAXPATHLEN] = {0};
     if (!ctxName || !ctxName[0]) {
 	snprintf(inmemCtxName, sizeof(inmemCtxName),
 		 "bobol_inmem_draw_cache_%p", (void *)dbip);
 	ctxName = inmemCtxName;
+    } else {
+	(void)bu_file_realpath(ctxName, canonicalCtxName);
+	ctxName = canonicalCtxName;
     }
 
     bu_vls_sprintf(fname, "%s", bu_path_normalize(ctxName));
@@ -983,8 +1019,6 @@ extern "C" int
 bobol_draw_cache_clear_database(db_i *dbip)
 {
     BObolDrawCacheHandle handle;
-    char **keys = NULL;
-    int nkeys = 0;
 
     if (!dbip)
 	return BRLCAD_ERROR;
@@ -993,15 +1027,15 @@ bobol_draw_cache_clear_database(db_i *dbip)
     bu_semaphore_acquire(sem);
     int opened = bobol_draw_cache_open(&handle, dbip);
     if (opened) {
-	nkeys = bu_cache_keys(&keys, handle.cache);
-	for (int i = 0; i < nkeys; i++)
-	    bu_cache_clear(keys[i], handle.cache, NULL);
+	opened = bu_cache_clear_all(handle.cache) == BRLCAD_OK ? 1 : 0;
+	if (opened && handle.context) {
+	    handle.context->lodAssetKeys->clear();
+	    handle.context->lodAssetKeysLoaded = true;
+	}
     }
     bobol_draw_cache_close(&handle);
     bu_semaphore_release(sem);
 
-    if (nkeys)
-	bu_argv_free((size_t)nkeys, keys);
     return opened ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
@@ -1020,12 +1054,20 @@ bobol_draw_manifest_cache_invalidate_database(db_i *dbip)
     int opened = bobol_draw_cache_open(&handle, dbip);
     if (opened) {
 	nkeys = bu_cache_keys(&keys, handle.cache);
+	struct bu_cache_txn *writeTxn = NULL;
 	for (int i = 0; i < nkeys; i++) {
 	    if (bobol_draw_cache_key_component_is(keys[i],
 		    BOBOL_DRAW_CACHE_MANIFEST) ||
 		bobol_draw_cache_key_component_is(keys[i],
 		    BOBOL_DRAW_CACHE_LOD_ASSET))
-		bu_cache_clear(keys[i], handle.cache, NULL);
+		bu_cache_clear(keys[i], handle.cache, &writeTxn);
+	}
+	if (writeTxn &&
+	    bu_cache_write_commit(handle.cache, &writeTxn) != BRLCAD_OK)
+	    opened = 0;
+	if (opened && handle.context) {
+	    handle.context->lodAssetKeys->clear();
+	    handle.context->lodAssetKeysLoaded = true;
 	}
     }
     bobol_draw_cache_close(&handle);
@@ -2040,13 +2082,16 @@ bobol_draw_path_metadata_cache_invalidate_object(
     opened = bobol_draw_cache_open(&handle, dbip);
     if (opened) {
 	nkeys = bu_cache_keys(&keys, handle.cache);
+	std::vector<std::string> clearKeys;
+	struct bu_cache_txn *readTxn = NULL;
 	for (int i = 0; i < nkeys; i++) {
 	    if (!bobol_draw_cache_key_component_is(keys[i],
 		BOBOL_DRAW_CACHE_PATH_METADATA_INDEX))
 		continue;
 
 	    void *data = NULL;
-	    size_t dsize = bu_cache_get(&data, keys[i], handle.cache, NULL);
+	    size_t dsize = bu_cache_get(&data, keys[i], handle.cache,
+		&readTxn);
 	    const char *path = (const char *)data;
 	    if (data && dsize > 0 && ((const char *)data)[dsize - 1] == '\0' &&
 		bobol_draw_path_contains_object_name(path, name)) {
@@ -2054,12 +2099,19 @@ bobol_draw_path_metadata_cache_invalidate_object(
 		bobol_draw_cache_key(pathMetadataKey, path,
 				       BOBOL_DRAW_CACHE_PATH_METADATA);
 		if (pathMetadataKey[0])
-		    bu_cache_clear(pathMetadataKey, handle.cache, NULL);
-		bu_cache_clear(keys[i], handle.cache, NULL);
+		    clearKeys.emplace_back(pathMetadataKey);
+		clearKeys.emplace_back(keys[i]);
 		cleared = 1;
 	    }
-	    if (data)
-		bu_free(data, "bobol draw path metadata index data");
+	}
+	bu_cache_get_done(&readTxn);
+	struct bu_cache_txn *writeTxn = NULL;
+	for (const std::string &clearKey : clearKeys)
+	    bu_cache_clear(clearKey.c_str(), handle.cache, &writeTxn);
+	if (writeTxn &&
+	    bu_cache_write_commit(handle.cache, &writeTxn) != BRLCAD_OK) {
+	    opened = 0;
+	    cleared = 0;
 	}
 	bobol_draw_cache_close(&handle);
     }

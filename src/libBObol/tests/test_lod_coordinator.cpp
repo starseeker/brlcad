@@ -1376,11 +1376,29 @@ test_convergence_policy(void)
     input = baseInput();
     input.viewEpoch.set(4);
     input.calibrationPending = true;
+    input.visibleTargetCount = 10;
+    input.activePayloadCount = 10;
+    input.satisfiedPayloadCount = 5;
+    input.visibilityCensusComplete = true;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::CALIBRATING ||
-	decision.viewReady || decision.fraction < 0.949f ||
-	decision.fraction > 0.951f) {
+	decision.viewReady || decision.fraction < 0.869f ||
+	decision.fraction > 0.871f) {
 	std::fprintf(stderr, "FAIL: calibration convergence phase\n");
+	return 1;
+    }
+
+    input = baseInput();
+    input.viewEpoch.set(41);
+    input.calibrationPending = true;
+    input.availableLeafCount = 1000;
+    input.visibleTargetCount = 10;
+    input.activePayloadCount = 10;
+    input.satisfiedPayloadCount = 10;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::CALIBRATING ||
+	decision.fraction < 0.405f || decision.fraction > 0.407f) {
+	std::fprintf(stderr, "FAIL: partial visibility progress denominator\n");
 	return 1;
     }
 
@@ -1390,11 +1408,45 @@ test_convergence_policy(void)
     input.visibleTargetCount = 4;
     input.activePayloadCount = 4;
     input.satisfiedPayloadCount = 2;
+    input.visibilityCensusComplete = true;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::REFINING ||
 	decision.viewReady || !decision.visualPending ||
-	decision.fraction < 0.674f || decision.fraction > 0.676f) {
+	decision.fraction < 0.869f || decision.fraction > 0.871f) {
 	std::fprintf(stderr, "FAIL: refining convergence phase\n");
+	return 1;
+    }
+
+    input = baseInput();
+    input.viewEpoch.set(51);
+    input.resultPending = true;
+    input.visibleTargetCount = 1000;
+    input.activePayloadCount = 980;
+    input.satisfiedPayloadCount = 970;
+    input.presentedSubpixelOccurrenceCount = 20;
+    input.visibilityCensusComplete = true;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::REFINING ||
+	decision.viewReady || decision.fraction < 0.987f ||
+	decision.fraction > 0.989f) {
+	std::fprintf(stderr, "FAIL: late refining work estimate\n");
+	return 1;
+    }
+
+    input = baseInput();
+    input.viewEpoch.set(52);
+    input.resultPending = true;
+    input.visibleTargetCount = 150000;
+    input.activePayloadCount = 44;
+    input.satisfiedPayloadCount = 44;
+    input.presentedSubpixelOccurrenceCount = 149479;
+    input.presentedStructuralBoxCount = 511;
+    input.visibilityCensusComplete = true;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::REFINING ||
+	decision.viewReady || decision.fraction < 0.767f ||
+	decision.fraction > 0.769f) {
+	std::fprintf(stderr, "FAIL: expensive mesh tail work estimate\n");
 	return 1;
     }
 
@@ -1488,7 +1540,7 @@ test_convergence_policy(void)
     input.viewEpoch.set(8);
     input.calibrationPending = true;
     decision = policy.evaluate(input);
-    if (decision.fraction < 0.949f || decision.fraction > 0.951f) {
+	if (decision.fraction < 0.399f || decision.fraction > 0.401f) {
 	std::fprintf(stderr, "FAIL: convergence fraction seed\n");
 	return 1;
     }
@@ -1497,9 +1549,9 @@ test_convergence_policy(void)
     input.availableLeafCount = 1;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::DISCOVERING ||
-	decision.fraction < 0.949f || decision.fraction > 0.951f ||
-	policy.fractionFloor() < 0.949f ||
-	policy.fractionFloor() > 0.951f) {
+	decision.fraction < 0.399f || decision.fraction > 0.401f ||
+	policy.fractionFloor() < 0.399f ||
+	policy.fractionFloor() > 0.401f) {
 	std::fprintf(stderr, "FAIL: monotonic convergence fraction\n");
 	return 1;
     }

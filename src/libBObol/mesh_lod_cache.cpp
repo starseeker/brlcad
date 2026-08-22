@@ -212,6 +212,17 @@ mesh_lod_database_context_hints(void)
     return hints;
 }
 
+/* See bobol_draw_cache_runtime_prepare.  The source-realization coordinator
+ * invokes this internal barrier before it starts workers, guaranteeing that
+ * its destructor joins them before these cache registries are destroyed. */
+void
+bobol_mesh_lod_cache_runtime_prepare(void)
+{
+    (void)mesh_lod_context_registry_mutex();
+    (void)mesh_lod_context_registry();
+    (void)mesh_lod_database_context_hints();
+}
+
 static int
 mesh_lod_size_to_int(size_t count, int *out)
 {
@@ -399,8 +410,7 @@ mesh_lod_context_destroy(struct BObolMeshLodContext *context)
 }
 
 static void
-mesh_lod_cache_clear_context(struct BObolMeshLodContext *context,
-			     unsigned long long key);
+mesh_lod_cache_clear_context(struct BObolMeshLodContext *context);
 
 static struct BObolMeshLodContext *
 mesh_lod_context_create(const char *name)
@@ -489,7 +499,7 @@ mesh_lod_context_create(const char *name)
 	if (diskFormatVersion > 0 && diskFormatVersion != CACHE_CURRENT_FORMAT) {
 	    bu_log("Old mesh lod cache version (%ld) found in format file at %s - clearing\n",
 		   diskFormatVersion, formatPath);
-	    mesh_lod_cache_clear_context(NULL, 0);
+	    mesh_lod_cache_clear_context(NULL);
 	    bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, POP_CACHEDIR, NULL);
 	    if (!bu_file_exists(dir, NULL))
 		bu_mkdir(dir);
@@ -544,7 +554,10 @@ mesh_lod_context_create_for_db(struct db_i *dbip)
 
     char ctxName[MAXPATHLEN] = {0};
     if (dbip->dbi_filename) {
-	bu_strlcpy(ctxName, dbip->dbi_filename, sizeof(ctxName));
+	/* One database file must have one cache namespace regardless of whether
+	 * the client opened it through a relative or absolute spelling.  Path
+	 * normalization alone does not resolve the current directory. */
+	(void)bu_file_realpath(dbip->dbi_filename, ctxName);
     } else {
 	snprintf(ctxName, sizeof(ctxName), "bobol_inmem_mesh_lod_%p",
 		 (void *)dbip);
@@ -694,6 +707,7 @@ public:
 		    size_t faceCount,
 		    unsigned long long userKey,
 		    bool cullBackfaces,
+		    const struct BObolMeshLodPreviewRequest *previewRequest = NULL,
 		    BObolMeshLodPreviewCallback preview = NULL,
 		    void *previewData = NULL);
     BObolPopState(struct BObolMeshLodContext *ctx,
@@ -1358,6 +1372,7 @@ BObolPopState::BObolPopState(
     size_t inputFaceCount,
     unsigned long long userKey,
     bool cullBackfaces,
+    const struct BObolMeshLodPreviewRequest *previewRequest,
     BObolMeshLodPreviewCallback preview,
     void *previewData)
 {
@@ -1481,12 +1496,55 @@ BObolPopState::BObolPopState(
     triProcess();
     /* The global activation order is complete at this point.  Large-mesh
      * spatial partitioning and persistence may still take many seconds, but
-     * neither can improve the already valid minimum global prefix.  Copying
-     * that bounded prefix through the callback lets a view replace its box
-     * while the same worker continues the authoritative chunk build. */
+     * neither can improve an already classified global prefix.  Publish the
+     * cut the view actually requested, subject to a strict transient byte
+     * ceiling.  Always publishing minPopCut made Lucy's cold preview only 44
+     * faces even though its recognizable cut-19 prefix took under 100 ms to
+     * materialize. */
     if (preview && faceCount > BOBOL_MESH_LOD_CHUNK_FACE_TARGET) {
+	int previewCut = minPopCut;
+	int requestedCut = previewRequest ? previewRequest->requested_cut :
+	    minPopCut;
+	if (previewRequest &&
+	    previewRequest->projected_pixel_diameter > 0.0f &&
+	    previewRequest->target_pixel_error > 0.0f) {
+	    struct BObolMeshLodHierarchyInfo selectionHierarchy =
+		BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	    hierarchyInfo(&selectionHierarchy);
+	    requestedCut = bobol_mesh_lod_select_cut(&selectionHierarchy,
+		previewRequest->projected_pixel_diameter,
+		previewRequest->target_pixel_error);
+	}
+	requestedCut = requestedCut < 0 ? minPopCut :
+	    std::max(minPopCut, std::min(maxPopCut, requestedCut));
+	static const uint64_t previewByteLimit = 64ULL * 1024ULL * 1024ULL;
+	uint64_t previewPoints = 0;
+	uint64_t previewFaces = 0;
+	for (int cut = 0; cut <= requestedCut; ++cut) {
+	    previewPoints += static_cast<uint64_t>(cutVertexCount[cut]);
+	    previewFaces += static_cast<uint64_t>(cutTriangleCount[cut]);
+	    uint64_t bytes = previewPoints >
+		    UINT64_MAX / sizeof(point_t) ? UINT64_MAX :
+		previewPoints * sizeof(point_t);
+	    const uint64_t indexBytes = previewFaces >
+		    UINT64_MAX / (3 * sizeof(uint32_t)) ? UINT64_MAX :
+		previewFaces * 3 * sizeof(uint32_t);
+	    bytes = indexBytes > UINT64_MAX - bytes ? UINT64_MAX :
+		bytes + indexBytes;
+	    if (normalArray) {
+		const uint64_t normalBytes = previewFaces >
+			UINT64_MAX / (3 * sizeof(vect_t)) ? UINT64_MAX :
+		    previewFaces * 3 * sizeof(vect_t);
+		bytes = normalBytes > UINT64_MAX - bytes ? UINT64_MAX :
+		    bytes + normalBytes;
+	    }
+	    if (bytes > previewByteLimit)
+		break;
+	    if (cut >= minPopCut)
+		previewCut = cut;
+	}
 	isValid = true;
-	if (materializeInitialPrefix(minPopCut)) {
+	if (materializeInitialPrefix(previewCut)) {
 	    struct BObolMeshLodData data = {};
 	    data.faces = lodTris.data();
 	    data.face_count = lodTris.size() / 3;
@@ -2083,6 +2141,15 @@ BObolPopState::releaseGenerationScratch(void)
     cutTris.shrink_to_fit();
     chunkFaces.clear();
     chunkFaces.shrink_to_fit();
+    /* Degenerate-face normalization is producer scratch too.  The resident
+     * hierarchy has already persisted and materialized its first valid prefix
+     * before this release; retaining these authored-size arrays for every cold
+     * asset made a many-mesh cache population grow independently of the
+     * resident-prefix budget. */
+    normalizedFaceArray.clear();
+    normalizedFaceArray.shrink_to_fit();
+    normalizedNormalArray.clear();
+    normalizedNormalArray.shrink_to_fit();
     vertexCount = 0;
     vertexArray = NULL;
     normalArray = NULL;
@@ -3389,7 +3456,7 @@ mesh_lod_cache_generate(struct BObolMeshLodContext *context,
 
     BObolPopState state(context, vertices, vertexCount, normals, faces,
 			  faceCount, userKey, shadedCullBackfaces,
-			  preview, previewData);
+			  NULL, preview, previewData);
     return state.isValid ? state.hash : 0;
 }
 
@@ -3508,18 +3575,7 @@ mesh_lod_status_current(struct db_i *dbip,
 }
 
 static void
-mesh_lod_cache_del(struct BObolMeshLodContext *context,
-		   unsigned long long hash,
-		   const char *component)
-{
-    std::string keystr = std::to_string(hash) + std::string(":") +
-			 std::string(component);
-    bu_cache_clear(keystr.c_str(), context->i->lodCache, NULL);
-}
-
-static void
-mesh_lod_cache_clear_context(struct BObolMeshLodContext *context,
-			     unsigned long long key)
+mesh_lod_cache_clear_context(struct BObolMeshLodContext *context)
 {
     char dir[MAXPATHLEN];
     std::unique_lock<std::shared_mutex> lock;
@@ -3533,70 +3589,37 @@ mesh_lod_cache_clear_context(struct BObolMeshLodContext *context,
 		std::unique_lock<std::shared_mutex>(*context->i->nameMutex);
     }
 
-    if (context && key) {
-	mesh_lod_cache_del(context, key, CACHE_POP_MAX_CUT);
-	mesh_lod_cache_del(context, key, CACHE_VERTEX_COUNT);
-	mesh_lod_cache_del(context, key, CACHE_TRI_COUNT);
-	mesh_lod_cache_del(context, key, CACHE_OBJ_BOUNDS);
-
-	char **keysv = NULL;
-	int nkeys = bu_cache_keys(&keysv, context->i->lodCache);
-	std::string prefix = std::to_string(key) + std::string(":");
-	for (int keyIndex = 0; keyIndex < nkeys; keyIndex++) {
-	    if (bu_strncmp(keysv[keyIndex], prefix.c_str(),
-			   prefix.length()) == 0)
-		bu_cache_clear(keysv[keyIndex], context->i->lodCache, NULL);
-	}
-	if (nkeys)
-	    bu_argv_free(static_cast<size_t>(nkeys), keysv);
-
-	keysv = NULL;
-	nkeys = bu_cache_keys(&keysv, context->i->nameCache);
-	for (int keyIndex = 0; keyIndex < nkeys; keyIndex++) {
-	    void *data = NULL;
-	    size_t dsize = bu_cache_get(&data, keysv[keyIndex],
-					context->i->nameCache, NULL);
-	    if (dsize == sizeof(unsigned long long) && data) {
-		unsigned long long storedKey = *(unsigned long long *)data;
-		bu_free(data, "name cache data");
-		if (storedKey == key)
-		    bu_cache_clear(keysv[keyIndex], context->i->nameCache, NULL);
-	    } else if (data) {
-		bu_free(data, "name cache data");
-	    }
-	}
-	if (nkeys)
-	    bu_argv_free(static_cast<size_t>(nkeys), keysv);
-	for (auto it = context->i->nameKeys->begin();
-	     it != context->i->nameKeys->end();) {
-	    if (it->second == key)
-		it = context->i->nameKeys->erase(it);
-	    else
-		++it;
-	}
-	return;
-    }
-
-    if (context && !key) {
+    if (context) {
 	context->i->nameKeys->clear();
-	char **keysv = NULL;
-	int nkeys = bu_cache_keys(&keysv, context->i->lodCache);
-	for (int keyIndex = 0; keyIndex < nkeys; keyIndex++)
-	    bu_cache_clear(keysv[keyIndex], context->i->lodCache, NULL);
-	if (nkeys)
-	    bu_argv_free(static_cast<size_t>(nkeys), keysv);
-
-	keysv = NULL;
-	nkeys = bu_cache_keys(&keysv, context->i->nameCache);
-	for (int keyIndex = 0; keyIndex < nkeys; keyIndex++)
-	    bu_cache_clear(keysv[keyIndex], context->i->nameCache, NULL);
-	if (nkeys)
-	    bu_argv_free(static_cast<size_t>(nkeys), keysv);
+	(void)bu_cache_clear_all(context->i->lodCache);
+	(void)bu_cache_clear_all(context->i->nameCache);
 	return;
     }
 
     bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, POP_CACHEDIR, NULL);
     bu_dirclear((const char *)dir);
+}
+
+static void
+mesh_lod_name_cache_del(struct BObolMeshLodContext *context,
+			const char *name)
+{
+    if (!context || !name)
+	return;
+
+    char keystr[32] = {0};
+    if (!mesh_lod_name_cache_key(keystr, sizeof(keystr), name))
+	return;
+
+    /* Payloads are immutable and content-addressed.  Invalidating one edited
+     * database name must therefore remove only its publication mapping: an
+     * identical mesh under another name may still be using the same payload.
+     * The old implementation scanned every payload and name-map key, deleted
+     * the shared hierarchy, and invalidated all aliases. */
+    std::unique_lock<std::shared_mutex> lock(*context->i->accessMutex);
+    std::unique_lock<std::shared_mutex> nameLock(*context->i->nameMutex);
+    bu_cache_clear(keystr, context->i->nameCache, NULL);
+    context->i->nameKeys->erase(name);
 }
 
 void
@@ -3666,14 +3689,14 @@ bobol_mesh_lod_cache_clear_database(struct db_i *dbip)
     struct BObolMeshLodContext *context = mesh_lod_context_create_for_db(dbip);
     if (!context)
 	return;
-    mesh_lod_cache_clear_context(context, 0);
+    mesh_lod_cache_clear_context(context);
     mesh_lod_context_destroy(context);
 }
 
 void
 bobol_mesh_lod_cache_clear_all(void)
 {
-    mesh_lod_cache_clear_context(NULL, 0);
+    mesh_lod_cache_clear_context(NULL);
 }
 
 int
@@ -3709,6 +3732,72 @@ bobol_mesh_lod_cache_status(struct db_i *dbip,
 }
 
 int
+bobol_mesh_lod_cache_summary(struct db_i *dbip,
+			       struct BObolMeshLodCacheSummary *summary)
+{
+    if (summary) {
+	const struct BObolMeshLodCacheSummary defaults =
+	    BOBOL_MESH_LOD_CACHE_SUMMARY_INIT;
+	*summary = defaults;
+    }
+    if (!dbip || !summary)
+	return BRLCAD_ERROR;
+
+    struct BObolMeshLodContext *context =
+	mesh_lod_context_create_for_db(dbip);
+    if (!context) {
+	/* Cache storage may be intentionally disabled or unavailable.  Coverage
+	 * remains a meaningful database query in that state: every BoT is simply
+	 * missing rather than the status operation itself failing. */
+	struct directory *dp = RT_DIR_NULL;
+	FOR_ALL_DIRECTORY_START(dp, dbip)
+	if (dp->d_addr != RT_DIR_PHONY_ADDR &&
+	    dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
+	    summary->database_bot_count++;
+	FOR_ALL_DIRECTORY_END;
+	summary->missing_bot_count = summary->database_bot_count;
+	summary->all_bots_mapped =
+	    summary->database_bot_count == 0 ? 1 : 0;
+	return BRLCAD_OK;
+    }
+
+    /* One immutable LMDB snapshot turns a 150k-object readiness query from
+     * 150k transactions plus 150k hierarchy opens into lightweight indexed
+     * name lookups.  Retain the context access lock so a concurrent database
+     * cache clear cannot invalidate the cache handle under this operation. */
+    struct bu_cache_txn *transaction = NULL;
+    std::shared_lock<std::shared_mutex> lock(*context->i->accessMutex);
+    struct directory *dp = RT_DIR_NULL;
+    FOR_ALL_DIRECTORY_START(dp, dbip)
+    if (dp->d_addr == RT_DIR_PHONY_ADDR ||
+	dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
+	continue;
+
+    summary->database_bot_count++;
+    char keystr[32] = {0};
+    if (!mesh_lod_name_cache_key(keystr, sizeof(keystr), dp->d_namep))
+	continue;
+    void *data = NULL;
+    const size_t dsize = bu_cache_get(&data, keystr,
+	context->i->nameCache, &transaction);
+    if (dsize == sizeof(uint64_t) && data) {
+	uint64_t key = 0;
+	memcpy(&key, data, sizeof(key));
+	if (key)
+	    summary->mapped_bot_count++;
+    }
+    FOR_ALL_DIRECTORY_END;
+    bu_cache_get_done(&transaction);
+    lock.unlock();
+
+    summary->missing_bot_count = summary->database_bot_count -
+	summary->mapped_bot_count;
+    summary->all_bots_mapped = summary->missing_bot_count == 0 ? 1 : 0;
+    mesh_lod_context_destroy(context);
+    return BRLCAD_OK;
+}
+
+int
 bobol_mesh_lod_cache_invalidate(struct db_i *dbip,
 				  const char *name,
 				  struct BObolMeshLodCacheStatus *status)
@@ -3729,7 +3818,7 @@ bobol_mesh_lod_cache_invalidate(struct db_i *dbip,
     if (current.has_cache_key) {
 	current.cleared_cache_entry = 1;
 	current.cleared_cache_key = current.cache_key;
-	mesh_lod_cache_clear_context(context, current.cache_key);
+	mesh_lod_name_cache_del(context, name);
 	current.cache_key = 0;
 	current.has_cache_key = 0;
 	current.has_cached_payload = 0;
@@ -3748,6 +3837,7 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 			    bool forceRefresh,
 			    struct BObolMeshLodCacheStatus *status,
 			    struct BObolMeshLod **generatedLod,
+			    const struct BObolMeshLodPreviewRequest *previewRequest,
 			    BObolMeshLodPreviewCallback preview,
 			    void *previewData)
 {
@@ -3776,7 +3866,7 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
     if (current.has_cache_key) {
 	current.cleared_cache_entry = 1;
 	current.cleared_cache_key = current.cache_key;
-	mesh_lod_cache_clear_context(context, current.cache_key);
+	mesh_lod_name_cache_del(context, name);
 	current.cache_key = 0;
 	current.has_cache_key = 0;
 	current.has_cached_payload = 0;
@@ -3875,7 +3965,7 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	generatedState = new (std::nothrow) BObolPopState(
 	    context, botVertices, bot->num_vertices,
 	    botNormals, cacheFaces, bot->num_faces, 0,
-	    cullBackfaces, preview, previewData);
+	    cullBackfaces, previewRequest, preview, previewData);
 	key = generatedState && generatedState->isValid ?
 	    generatedState->hash : 0;
     } else {
@@ -3937,7 +4027,7 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 			       struct BObolMeshLodCacheStatus *status)
 {
     return mesh_lod_cache_refresh_impl(
-	dbip, name, NULL, true, status, NULL, NULL, NULL);
+	dbip, name, NULL, true, status, NULL, NULL, NULL, NULL);
 }
 
 struct BObolMeshLod *
@@ -3946,13 +4036,14 @@ bobol_mesh_lod_cache_refresh_open(
     const char *name,
     const struct rt_bot_internal *bot,
     struct BObolMeshLodCacheStatus *status,
+    const struct BObolMeshLodPreviewRequest *previewRequest,
     BObolMeshLodPreviewCallback preview,
     void *previewData)
 {
     struct BObolMeshLod *lod = NULL;
     if (mesh_lod_cache_refresh_impl(
 	    dbip, name, bot, false, status, &lod,
-	    preview, previewData) != BRLCAD_OK) {
+	    previewRequest, preview, previewData) != BRLCAD_OK) {
 	if (lod)
 	    bobol_mesh_lod_destroy(lod);
 	return NULL;
@@ -4006,7 +4097,7 @@ mesh_lod_cache_store_mesh_impl(
 	(current.cache_key != userKey || !current.has_cached_payload)) {
 	current.cleared_cache_entry = 1;
 	current.cleared_cache_key = current.cache_key;
-	mesh_lod_cache_clear_context(context, current.cache_key);
+	mesh_lod_name_cache_del(context, name);
 	current.cache_key = 0;
 	current.has_cache_key = 0;
 	current.has_cached_payload = 0;

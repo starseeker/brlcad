@@ -879,6 +879,10 @@ public:
 	size_t gpuTrackedBufferBytes = 0;
 	unsigned int failedSourceCount = 0;
 	bool structuralDiscovery = false;
+	/* TRUE only after the bounded projection scan has visited the complete
+	 * current source population.  Before then visibleTargetCount is a prefix,
+	 * not a safe progress denominator. */
+	bool visibilityCensusComplete = false;
 	/* An append-only source or PoP producer has not closed its immutable
 	 * population.  Published prefixes remain useful, but calibration against
 	 * the partial population is not terminal work. */
@@ -967,16 +971,24 @@ public:
 		std::min<long double>(0.40L, 0.40L * coverage));
 	} else if (inputs.sourcePreparationPending) {
 	    decision.phase = Phase::PREPARING;
-	    if (inputs.visibleTargetCount == 0) {
+	    /* The visibility census may itself still be streaming while source
+	     * preparation is active.  Using that partial census as the denominator
+	     * made the fraction jump to 75 percent as soon as the first batch was
+	     * represented, regardless of how much of a large model remained.  Use
+	     * the known structural population until the producer closes; the exact
+	     * visible denominator takes over in the refining phase. */
+	    const size_t preparationTarget = std::max(
+		inputs.visibleTargetCount, inputs.availableLeafCount);
+	    if (preparationTarget == 0) {
 		decision.fraction = 0.40f;
 	    } else {
 		const size_t prepared = std::min(
 		    saturatingAdd(inputs.activePayloadCount,
 			inputs.presentedSubpixelOccurrenceCount),
-		    inputs.visibleTargetCount);
+		    preparationTarget);
 		const long double coverage =
 		    static_cast<long double>(prepared) /
-		    static_cast<long double>(inputs.visibleTargetCount);
+		    static_cast<long double>(preparationTarget);
 		/* Reserve the final quarter for coherent presentation, allocation,
 		 * and calibration after the producer closes. */
 		decision.fraction = static_cast<float>(
@@ -998,23 +1010,10 @@ public:
 	    }
 	} else if (inputs.calibrationPending) {
 	    decision.phase = Phase::CALIBRATING;
-	    decision.fraction = 0.95f;
+	    decision.fraction = visualWorkFraction(inputs);
 	} else if (decision.visualPending) {
 	    decision.phase = Phase::REFINING;
-	    size_t target = std::max(
-		inputs.visibleTargetCount, inputs.activePayloadCount);
-	    if (!target) {
-		target = saturatingAdd(inputs.pendingTasks, inputs.inFlight);
-		target = std::max<size_t>(1, target);
-	    }
-	    const long double quality =
-		static_cast<long double>(std::min(
-		    saturatingAdd(inputs.satisfiedPayloadCount,
-			inputs.presentedSubpixelOccurrenceCount),
-		    target)) /
-		static_cast<long double>(target);
-	    decision.fraction = static_cast<float>(
-		0.40L + std::min<long double>(0.55L, 0.55L * quality));
+	    decision.fraction = visualWorkFraction(inputs);
 	} else if (decision.backgroundPending) {
 	    decision.phase = Phase::BACKGROUND;
 	    decision.fraction = 1.0f;
@@ -1052,6 +1051,56 @@ public:
     float fractionFloor(void) const { return this->fractionFloorValue; }
 
 private:
+    static float visualWorkFraction(const Inputs &inputs)
+    {
+	size_t target = std::max(
+	    inputs.visibleTargetCount, inputs.activePayloadCount);
+	if (!inputs.visibilityCensusComplete)
+	    target = std::max(target, inputs.availableLeafCount);
+	if (!target) {
+	    target = saturatingAdd(inputs.pendingTasks, inputs.inFlight);
+	    target = std::max<size_t>(1, target);
+	}
+	const size_t represented = std::min(
+	    saturatingAdd(inputs.activePayloadCount,
+		inputs.presentedSubpixelOccurrenceCount), target);
+	const long double representationCoverage =
+	    static_cast<long double>(represented) /
+	    static_cast<long double>(target);
+	const size_t unresolvedStructuralBoxes =
+	    inputs.presentedStructuralBoxCount >
+		inputs.terminalOccurrenceFailureCount ?
+	    inputs.presentedStructuralBoxCount -
+		inputs.terminalOccurrenceFailureCount : 0;
+	const size_t richTarget = saturatingAdd(
+	    inputs.activePayloadCount, unresolvedStructuralBoxes);
+	long double richCoverage = 0.0L;
+	if (richTarget > 0) {
+	    richCoverage =
+		static_cast<long double>(std::min(
+		    inputs.satisfiedPayloadCount, richTarget)) /
+		static_cast<long double>(richTarget);
+	} else if (inputs.visibilityCensusComplete && represented == target) {
+	    /* An exact all-subpixel view has no rich tail to resolve. */
+	    richCoverage = 1.0L;
+	}
+	/* Structural discovery owns the first 40 percent and initial useful
+	 * representations the next 35.  The final visible-mesh tail is weighted
+	 * separately: classifying one terminal subpixel proxy is much cheaper than
+	 * loading, publishing, and validating one mesh, so treating both as equal
+	 * objects made a 150k-part scene jump directly to 99 percent with hundreds
+	 * of expensive mesh replacements still outstanding.  Gate rich progress
+	 * by representation coverage so a partial visibility census cannot claim a
+	 * nearly complete tail.  The last percent remains the coherent-frame
+	 * handoff obligation; only a proven ready view reports 100 percent. */
+	return static_cast<float>(
+	    0.40L +
+	    std::min<long double>(0.35L,
+		0.35L * representationCoverage) +
+	    std::min<long double>(0.24L,
+		0.24L * representationCoverage * richCoverage));
+    }
+
     static size_t saturatingAdd(size_t left, size_t right)
     {
 	return right > SIZE_MAX - left ? SIZE_MAX : left + right;

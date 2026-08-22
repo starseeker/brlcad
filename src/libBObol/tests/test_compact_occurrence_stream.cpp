@@ -37,6 +37,7 @@ test_priority_and_state(void)
     stream.setCoverageBounds(conservativeBounds);
     SbBox3f publishedBounds;
     if (stream.hasCoverageBoundsComplete() ||
+	stream.hasCoverageBoundsDrained() ||
 	!stream.getCoverageBounds(publishedBounds) ||
 	publishedBounds != conservativeBounds) {
 	std::fprintf(stderr,
@@ -53,6 +54,18 @@ test_priority_and_state(void)
     stream.pushPriority(occurrence(1));
     stream.pushPriority(occurrence(2));
     stream.push(occurrence(14));
+
+    std::vector<BObolCompactOccurrence> overview;
+    if (stream.drain(overview, 1) != 1 || overview.size() != 1 ||
+	overview[0].occurrenceIndex != 2 ||
+	!stream.hasCoverageBoundsDrained() ||
+	stream.hasCoverageBoundsComplete()) {
+	std::fprintf(stderr,
+	    "FAIL: conservative whole-target overview publication\n");
+	return 1;
+    }
+
+    stream.pushPriority(occurrence(3));
     stream.setCoverageBounds(exactBounds);
     stream.setCoverageBoundsComplete(true);
 
@@ -69,7 +82,7 @@ test_priority_and_state(void)
 
     std::vector<BObolCompactOccurrence> first;
     if (stream.drain(first, 3) != 3 || first.size() != 3 ||
-	first[0].occurrenceIndex != 2 ||
+	first[0].occurrenceIndex != 3 ||
 	first[1].occurrenceIndex != 10 ||
 	first[2].occurrenceIndex != 11 ||
 	!stream.hasCoverageBoundsDrained() ||

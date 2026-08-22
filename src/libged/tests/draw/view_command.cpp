@@ -775,6 +775,20 @@ test_lod_policy_command(struct ged *gedp, struct ged_view_context *view)
     ASSERT(ged_view_lod_policy_get(&policy, view));
     ASSERT(policy.mesh_enabled == 1 && policy.csg_enabled == 1);
     ASSERT(policy.zoom_refresh == 1);
+
+    /* Cache coverage is a database query.  It must remain non-mutating and
+     * usable by gsh even when no camera is current. */
+    ged_view_active_ctx_set(gedp, NULL);
+    const char *cache_status[] = {
+	"view", "lod", "cache", "status", NULL
+    };
+    const int cache_status_ret = run_view(gedp, 4, cache_status);
+    if (cache_status_ret != BRLCAD_OK)
+	bu_log("LoD cache status result: %s\n", bu_vls_cstr(gedp->ged_result_str));
+    ASSERT(cache_status_ret == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("mapped ") == 0);
+    ASSERT(result_str(gedp).find(" BoTs (") != std::string::npos);
+    ged_view_active_ctx_set(gedp, view);
 }
 
 int

@@ -578,6 +578,32 @@ bu_cache_clear(const char *key, struct bu_cache *c, struct bu_cache_txn **t)
 }
 
 int
+bu_cache_clear_all(struct bu_cache *c)
+{
+    if (!c)
+	return BRLCAD_ERROR;
+
+    MDB_txn *txn = cache_get_write_txn(c, NULL);
+    if (!txn)
+	return BRLCAD_ERROR;
+
+    int rc = mdb_drop(txn, c->i->dbi, 0);
+    if (rc) {
+	mdb_txn_abort(txn);
+    } else {
+	rc = mdb_txn_commit(txn);
+	if (!rc && !c->i->defer_sync)
+	    mdb_env_sync(c->i->env, 0);
+    }
+    {
+	std::lock_guard<std::mutex> guard(c->i->write_txn_mutex);
+	c->i->write_txn_active = 0;
+    }
+
+    return rc ? BRLCAD_ERROR : BRLCAD_OK;
+}
+
+int
 bu_cache_keys(char ***keysv, struct bu_cache *c)
 {
     if (!c || !keysv)

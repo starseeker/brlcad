@@ -77,6 +77,77 @@ lod_service_poll(BObolViewController *controller, size_t max_results)
     return 1;
 }
 
+static int
+lod_cache_summary(struct ged *gedp, int require_complete)
+{
+    if (!gedp || !gedp->dbip)
+	return BRLCAD_ERROR;
+
+    struct BObolMeshLodCacheSummary summary =
+	BOBOL_MESH_LOD_CACHE_SUMMARY_INIT;
+    if (bobol_mesh_lod_cache_summary(gedp->dbip, &summary) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+    bu_vls_printf(gedp->ged_result_str,
+	"mapped %llu of %llu BoTs (%llu missing)\n",
+	(unsigned long long)summary.mapped_bot_count,
+	(unsigned long long)summary.database_bot_count,
+	(unsigned long long)summary.missing_bot_count);
+    return require_complete && !summary.all_bots_mapped ?
+	BRLCAD_ERROR : BRLCAD_OK;
+}
+
+static int
+lod_cache_command(struct ged *gedp, int argc, const char **argv)
+{
+    if (!gedp || !gedp->dbip || argc < 1 || !argv)
+	return BRLCAD_ERROR;
+
+    /* Cache creation belongs to the bounded LoD service.  The historical bare
+     * command first erased the database cache and then regenerated every BoT
+     * synchronously, freezing the UI and defeating view-aware admission. */
+    if (argc == 1)
+	return lod_cache_summary(gedp, 0);
+    if (argc == 2) {
+	if (BU_STR_EQUAL(argv[1], "clear")) {
+	    bobol_mesh_lod_cache_clear_database(gedp->dbip);
+	    (void)bobol_draw_cache_clear_database(gedp->dbip);
+	    return BRLCAD_OK;
+	}
+	if (BU_STR_EQUAL(argv[1], "status") ||
+	    BU_STR_EQUAL(argv[1], "exists"))
+	    return lod_cache_summary(gedp,
+		BU_STR_EQUAL(argv[1], "exists") ? 1 : 0);
+    }
+    if (argc == 3) {
+	if (BU_STR_EQUAL(argv[1], "exists") &&
+	    BU_STR_EQUAL(argv[2], "deep")) {
+	    struct directory *dp;
+	    FOR_ALL_DIRECTORY_START(dp, gedp->dbip)
+	    if (dp->d_addr == RT_DIR_PHONY_ADDR)
+		continue;
+	    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
+		struct BObolMeshLodCacheStatus status =
+			BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+		if (bobol_mesh_lod_cache_status(gedp->dbip, dp->d_namep,
+		    &status) != BRLCAD_OK || !status.has_cache_key ||
+		    !status.has_cached_payload || status.stale_cache_entry)
+		    return BRLCAD_ERROR;
+	    }
+	    FOR_ALL_DIRECTORY_END;
+	    return BRLCAD_OK;
+	}
+
+	if (BU_STR_EQUAL(argv[1], "clear") &&
+	    BU_STR_EQUAL(argv[2], "all_files")) {
+	    bobol_mesh_lod_cache_clear_all();
+	    bobol_draw_cache_clear_all();
+	    return BRLCAD_OK;
+	}
+    }
+    bu_vls_printf(gedp->ged_result_str, "unknown cache argument\n");
+    return BRLCAD_ERROR;
+}
+
 int
 _view_cmd_lod(void *bs, int argc, const char **argv)
 {
@@ -91,7 +162,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
     struct ged_view_context *view_ctx;
     int print_help = 0;
     static const char *usage = "view lod [csg|mesh] [0|1]\n"
-			       "view lod cache [clear [all_files] | exists] \n"
+			       "view lod cache [clear [all_files] | status | exists [deep]] \n"
 			       "view lod service [status|start [workers]|stop|poll [max_results]|wait [timeout_ms] [max_results]|prewarm [all|bot ...]]\n"
 			       "view lod frontier [prewarm|expand] path draw_mode max_sources max_children\n"
 			       "view lod scale [factor]\n"
@@ -130,6 +201,13 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
 	return BRLCAD_ERROR;
     }
+
+    /* Cache inspection and maintenance are database operations, not view
+     * operations.  Keeping them ahead of view lookup makes the cheap status
+     * path usable by headless gsh and avoids constructing a graphical view
+     * merely to inspect an LMDB namespace. */
+    if (argc > 0 && BU_STR_EQUAL(argv[0], "cache"))
+	return lod_cache_command(gedp, argc, argv);
 
     view_ctx = gd->cv;
     if (view_ctx == NULL) {
@@ -296,89 +374,6 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	    static_cast<float>(interactive), static_cast<float>(stable));
 	redraw_view();
 	return BRLCAD_OK;
-    }
-
-    if (BU_STR_EQUAL(argv[0], "cache")) {
-	if (argc == 1) {
-	    int64_t elapsedtime = bu_gettime();
-
-	    if (!gedp || !gedp->dbip)
-		return BRLCAD_ERROR;
-
-	    // Clear any old cache in memory
-	    bobol_mesh_lod_cache_clear_database(gedp->dbip);
-
-	    int done = 0;
-	    int total = 0;
-	    struct directory *dp;
-	    FOR_ALL_DIRECTORY_START(dp, gedp->dbip)
-	    if (dp->d_addr == RT_DIR_PHONY_ADDR)
-		continue;
-	    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
-		total++;
-	    FOR_ALL_DIRECTORY_END;
-
-	    FOR_ALL_DIRECTORY_START(dp, gedp->dbip)
-	    if (dp->d_addr == RT_DIR_PHONY_ADDR)
-		continue;
-
-	    // BREP display assets are tolerance-specific and are populated by the
-	    // owned database-source producer when requested.  This command only
-	    // prewarms source meshes that already exist as database BoTs.
-	    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
-		done++;
-		bu_log("Caching BoT %s (%d of %d)\n", dp->d_namep, done, total);
-		struct BObolMeshLodCacheStatus status =
-			BOBOL_MESH_LOD_CACHE_STATUS_INIT;
-		if (bobol_mesh_lod_cache_refresh(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||
-		    !status.has_cache_key)
-		    continue;
-	    }
-	    FOR_ALL_DIRECTORY_END;
-
-	    elapsedtime = bu_gettime() - elapsedtime;
-	    {
-		int seconds = elapsedtime / 1000000;
-		int minutes = seconds / 60;
-		int hours = minutes / 60;
-
-		minutes = minutes % 60;
-		seconds = seconds %60;
-		bu_vls_printf(gedp->ged_result_str, "Caching complete (Elapsed time: %02d:%02d:%02d)\n", hours, minutes, seconds);
-	    }
-	    return BRLCAD_OK;
-	}
-	if (argc == 2) {
-	    if (BU_STR_EQUAL(argv[1], "clear")) {
-		bobol_mesh_lod_cache_clear_database(gedp->dbip);
-		(void)bobol_draw_cache_clear_database(gedp->dbip);
-		return BRLCAD_OK;
-	    } else if (BU_STR_EQUAL(argv[1], "exists")) {
-		struct directory *dp;
-		FOR_ALL_DIRECTORY_START(dp, gedp->dbip)
-		if (dp->d_addr == RT_DIR_PHONY_ADDR)
-		    continue;
-		if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
-		    struct BObolMeshLodCacheStatus status =
-			    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
-		    if (bobol_mesh_lod_cache_status(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||
-			!status.has_cache_key) {
-			return BRLCAD_ERROR;
-		    }
-		}
-		FOR_ALL_DIRECTORY_END;
-		return BRLCAD_OK;
-	    }
-	}
-	if (argc == 3) {
-	    if (BU_STR_EQUAL(argv[1], "clear") && BU_STR_EQUAL(argv[2], "all_files")) {
-		bobol_mesh_lod_cache_clear_all();
-		bobol_draw_cache_clear_all();
-		return BRLCAD_OK;
-	    }
-	}
-	bu_vls_printf(gedp->ged_result_str, "unknown argument to cache: %s\n", argv[1]);
-	return BRLCAD_ERROR;
     }
 
     if (BU_STR_EQUAL(argv[0], "service")) {

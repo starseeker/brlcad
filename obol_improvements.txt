@@ -1113,3 +1113,16 @@ The Generic_Twin shaded-startup/auto-expand and wireframe progressive-LoD
 tests also passed from those binaries.  These results are a structural
 regression baseline, not a substitute for the cold/warm graphical, visual,
 latency, memory, and perf measurements required above.
+
+
+Implemented identity hardening (2026-08-22)
+-------------------------------------------
+
+Compact population epochs now cross the asynchronous LoD boundary as a typed,
+fixed-width owner-routing identity.  They participate in active-task and result
+slot identity and authenticate dense entry hints at publication, while
+remaining outside persistent mesh/cache identity.  This closes stale result
+binding after draw/erase/edit registry replacement and lets hot positional
+lookups avoid treating a recycled index as semantic identity.  The source
+still falls back to its occurrence-key index when a retained presentation
+legitimately survives a population rebuild.

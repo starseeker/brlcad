@@ -147,8 +147,11 @@ enum BObolLodCoordinatorEvent {
 
 /** User-facing progress for one view epoch.
  *
- * The fraction describes progress toward the current view's terminal,
- * frame-rate-aware presentation.  A value of one never promises that every
+ * The fraction is a cost-weighted estimate of progress toward the current
+ * view's terminal, frame-rate-aware presentation.  Structural discovery,
+ * initial useful representation, and detailed mesh resolution are distinct
+ * work classes: one completed subpixel proxy must not hide a comparatively
+ * expensive outstanding mesh.  A value of one never promises that every
  * source triangle is resident.  Cache writes are reported separately because
  * they may continue after the visible view is ready. */
 struct BOBOL_EXPORT BObolLodConvergenceStatus {

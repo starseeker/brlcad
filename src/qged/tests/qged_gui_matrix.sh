@@ -28,6 +28,45 @@ run_timeout=180
 capture_apng=0
 warm_cache=""
 
+CACHE_READY_MARKER=".qged-gui-cache-ready-v1"
+
+cache_database_signature()
+{
+    local db="$1"
+    local canonical
+    canonical="$(realpath -e "$db")" || return 1
+    printf '%s\n%s\n' "$canonical" "$(stat -c '%d:%i:%s:%Y:%Z' "$canonical")"
+}
+
+cache_mark_ready()
+{
+    local cache="$1"
+    local db="$2"
+    local marker="$cache/$CACHE_READY_MARKER"
+    local temporary
+    temporary="$(mktemp "$cache/.qged-gui-cache-ready.XXXXXX")" || return 1
+    {
+	printf '%s\n' "$CACHE_READY_MARKER"
+	cache_database_signature "$db"
+    } > "$temporary" || {
+	rm -f "$temporary"
+	return 1
+    }
+    mv "$temporary" "$marker"
+}
+
+cache_is_ready()
+{
+    local cache="$1"
+    local db="$2"
+    local marker="$cache/$CACHE_READY_MARKER"
+    [[ -f "$marker" ]] || return 1
+    local expected
+    expected="$CACHE_READY_MARKER"$'\n'"$(cache_database_signature "$db")" ||
+	return 1
+    [[ "$(<"$marker")" == "$expected" ]]
+}
+
 usage()
 {
     cat <<'EOF'
@@ -2947,6 +2986,12 @@ for case_name in "${cases[@]}"; do
 		mkdir -p "$pair"
 		if [[ -n "$warm_cache" ]]; then
 		    cache="$warm_cache"
+		    if ! cache_is_ready "$cache" "$db"; then
+			echo "ERROR: --warm-cache has no validated completion marker for $db" >&2
+			echo "Run the cold/warm pair once; a successful cold run writes $CACHE_READY_MARKER." >&2
+			failures=$((failures + 1))
+			continue
+		    fi
 		    if run_current "$case_name" "$db" "$object" "$backend" \
 			    "$mode" "$swap" "warm" "$cache" "$settle_ms" \
 			    "$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
@@ -2964,13 +3009,24 @@ for case_name in "${cases[@]}"; do
 		# writes.  This is still a completely cold cache: the new directory
 		# contains neither format metadata nor cached payloads.
 		mkdir "$cache"
+		cold_succeeded=0
 		if run_current "$case_name" "$db" "$object" "$backend" \
 			"$mode" "$swap" "cold" "$cache" "$settle_ms" \
 			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
 		    validate_autoview_camera_contract "$case_name" "$backend" \
-			"$mode" "$swap" "cold" || failures=$((failures + 1))
+			"$mode" "$swap" "cold" && cold_succeeded=1 ||
+			failures=$((failures + 1))
 		else
 		    failures=$((failures + 1))
+		fi
+		if [[ "$cold_succeeded" -eq 0 ]]; then
+		    echo "SKIP: warm run requires a validated cold completion" >&2
+		    continue
+		fi
+		if ! cache_mark_ready "$cache" "$db"; then
+		    echo "ERROR: could not mark validated cache ready: $cache" >&2
+		    failures=$((failures + 1))
+		    continue
 		fi
 		if run_current "$case_name" "$db" "$object" "$backend" \
 			"$mode" "$swap" "warm" "$cache" "$settle_ms" \

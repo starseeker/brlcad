@@ -94,6 +94,7 @@ struct mesh_lod_preview_test_data {
     size_t points = 0;
     int minCut = -1;
     int maxCut = -1;
+    int residentCut = -1;
     bool valid = false;
 };
 
@@ -112,13 +113,17 @@ mesh_lod_preview_test_callback(unsigned long long cacheKey,
     test->points = data ? data->point_count : 0;
     test->minCut = hierarchy ? hierarchy->min_cut : -1;
     test->maxCut = hierarchy ? hierarchy->max_cut : -1;
+    test->residentCut = hierarchy ? hierarchy->resident_cut : -1;
     test->valid = cacheKey && data && hierarchy && data->faces &&
 	data->points_orig && data->face_count && data->point_orig_count &&
 	hierarchy->min_cut >= 0 &&
 	hierarchy->max_cut >= hierarchy->min_cut &&
-	data->face_count == hierarchy->cuts[hierarchy->min_cut].face_count &&
+	hierarchy->resident_cut >= hierarchy->min_cut &&
+	hierarchy->resident_cut <= hierarchy->max_cut &&
+	data->face_count ==
+	    hierarchy->cuts[hierarchy->resident_cut].face_count &&
 	data->point_orig_count ==
-	    hierarchy->cuts[hierarchy->min_cut].point_count;
+	    hierarchy->cuts[hierarchy->resident_cut].point_count;
 }
 
 static int
@@ -539,6 +544,22 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
+    {
+	struct BObolMeshLodCacheSummary summary =
+	    BOBOL_MESH_LOD_CACHE_SUMMARY_INIT;
+	if (bobol_mesh_lod_cache_summary(dbip, &summary) != BRLCAD_OK ||
+	    summary.database_bot_count != 7 || summary.mapped_bot_count != 0 ||
+	    summary.missing_bot_count != 7 || summary.all_bots_mapped) {
+	    printf("FAIL: mesh lod initial cache summary %llu/%llu missing=%llu complete=%d\n",
+		(unsigned long long)summary.mapped_bot_count,
+		(unsigned long long)summary.database_bot_count,
+		(unsigned long long)summary.missing_bot_count,
+		summary.all_bots_mapped);
+	    ret = 1;
+	    goto cleanup;
+	}
+    }
+
     if (bobol_mesh_lod_cache_refresh(dbip, invalidBotObjname,
 				       &cacheStatus) != BRLCAD_ERROR ||
 	!cacheStatus.directory_found || !cacheStatus.is_bot ||
@@ -590,14 +611,20 @@ main(int argc, char *argv[])
 	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 	struct BObolMeshLodData openedData;
 	mesh_lod_preview_test_data previewData;
+	struct BObolMeshLodPreviewRequest previewRequest =
+	    BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT;
+	previewRequest.requested_cut = BOBOL_MESH_LOD_CUT_COUNT_MAX - 1;
 	RT_DB_INTERNAL_INIT(&intern);
 	if (!dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
 	    intern.idb_type != ID_BOT || !intern.idb_ptr ||
 	    !(opened = bobol_mesh_lod_cache_refresh_open(
 		dbip, objname,
 		static_cast<const struct rt_bot_internal *>(intern.idb_ptr),
-		&cacheStatus, mesh_lod_preview_test_callback, &previewData)) ||
+		&cacheStatus, &previewRequest,
+		mesh_lod_preview_test_callback,
+		&previewData)) ||
 	    previewData.calls != 1 || !previewData.valid ||
+	    previewData.residentCut <= previewData.minCut ||
 	    !cacheStatus.directory_found || !cacheStatus.is_bot ||
 	    !cacheStatus.has_cache_key || !cacheStatus.has_cached_payload ||
 	    cacheStatus.stale_cache_entry ||
@@ -647,7 +674,7 @@ main(int argc, char *argv[])
 	    !(opened = bobol_mesh_lod_cache_refresh_open(
 		dbip, duplicateObjname,
 		static_cast<const struct rt_bot_internal *>(intern.idb_ptr),
-		&cacheStatus, NULL, NULL)) ||
+		&cacheStatus, NULL, NULL, NULL)) ||
 	    cacheStatus.cache_key != sharedCacheKey ||
 	    !bobol_mesh_lod_hierarchy_info_get(opened, &hierarchy) ||
 	    bobol_mesh_lod_current_cut(opened) != hierarchy.min_cut ||
@@ -674,6 +701,22 @@ main(int argc, char *argv[])
 	printf("FAIL: mesh lod refresh status\n");
 	ret = 1;
 	goto cleanup;
+    }
+
+    {
+	struct BObolMeshLodCacheSummary summary =
+	    BOBOL_MESH_LOD_CACHE_SUMMARY_INIT;
+	if (bobol_mesh_lod_cache_summary(dbip, &summary) != BRLCAD_OK ||
+	    summary.database_bot_count != 7 || summary.mapped_bot_count != 3 ||
+	    summary.missing_bot_count != 4 || summary.all_bots_mapped) {
+	    printf("FAIL: mesh lod populated cache summary %llu/%llu missing=%llu complete=%d\n",
+		(unsigned long long)summary.mapped_bot_count,
+		(unsigned long long)summary.database_bot_count,
+		(unsigned long long)summary.missing_bot_count,
+		summary.all_bots_mapped);
+	    ret = 1;
+	    goto cleanup;
+	}
     }
 
     {
@@ -1669,6 +1712,23 @@ main(int argc, char *argv[])
 	printf("FAIL: mesh lod get after invalidate\n");
 	ret = 1;
 	goto cleanup;
+    }
+
+    {
+	/* Name invalidation must not destroy an immutable content-addressed
+	 * hierarchy still published by an identical database object. */
+	struct BObolMeshLod *duplicate =
+	    bobol_mesh_lod_get(dbip, duplicateObjname);
+	if (!duplicate ||
+	    bobol_mesh_lod_cache_key_get(duplicate) != sharedCacheKey ||
+	    first_available_cut(duplicate) < 0) {
+	    printf("FAIL: mesh lod invalidate destroyed shared payload\n");
+	    if (duplicate)
+		bobol_mesh_lod_destroy(duplicate);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(duplicate);
     }
 
     if (bobol_mesh_lod_cache_update(dbip, objname) != BRLCAD_OK) {

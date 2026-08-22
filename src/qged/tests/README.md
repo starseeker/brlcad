@@ -87,7 +87,10 @@ src/qged/tests/qged_gui_matrix.sh --profile stress \
 
 Large cache characterizations should reuse that cache for follow-up profiling
 instead of creating another multi-gigabyte copy.  `--warm-cache` deliberately
-accepts only one case/backend/mode/swap combination and skips the cold phase:
+accepts only one case/backend/mode/swap combination and skips the cold phase.
+It accepts only a cache marked by a previously validated cold matrix run for
+the same canonical database file and file identity; merely pointing at a
+nonempty cache directory is not proof that this model is warm:
 
 ```sh
 src/qged/tests/qged_gui_matrix.sh --profile stress \
