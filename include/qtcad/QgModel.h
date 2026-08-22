@@ -204,6 +204,8 @@ private:
 	mutable int draw_state = 0;
 	mutable bool draw_state_valid = false;
 	mutable void *draw_state_view_ctx = nullptr;
+	mutable unsigned long long cached_path_hash = 0;
+	mutable bool path_hash_valid = false;
 	//bool select_state = false;
 };
 
@@ -471,6 +473,7 @@ private:
 	void itemIndexRemove(QgItem *item);
 	void itemIndexInsertSubtree(QgItem *item);
 	void itemIndexRemoveSubtree(QgItem *item);
+	void invalidateItemPathHashes(QgItem *item);
 	void itemIndexClear();
 	void itemIndexRebuild();
 	void deleteItemSubtree(QgItem *item);
@@ -514,8 +517,10 @@ private:
 	std::unordered_set<QgItem *> *items = nullptr;
 	std::unordered_map<unsigned long long, std::unordered_set<QgItem *>> items_by_instance_hash;
 	std::unordered_map<unsigned long long, std::unordered_set<QgItem *>> items_by_path_hash;
-	std::set<std::string> selection_display_paths;
-	int selection_display_mode = -1;
+	std::unordered_set<unsigned long long> selection_selected_path_hashes;
+	std::unordered_set<unsigned long long> selection_active_parent_path_hashes;
+	std::unordered_set<unsigned long long> selection_immediate_parent_object_ids;
+	std::unordered_set<unsigned long long> selection_grand_parent_object_ids;
 	NotificationStats notification_stats;
 	DrawTimingStats draw_timing_stats;
 	bool draw_timing_stats_enabled = false;

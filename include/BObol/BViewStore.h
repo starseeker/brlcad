@@ -350,6 +350,12 @@ typedef int (*BObolFeatureRecordCallback)(
 	const BObolFeatureRecord &record,
 	void *userData);
 
+/** Allocation-free retained-node visitor for owner-thread scene queries. */
+typedef int (*BObolFeatureNodeCallback)(
+	BObolFeatureHandle handle,
+	SoNode *node,
+	void *userData);
+
 struct BOBOL_EXPORT BObolPolygonVisual {
     SbColor edgeColor;
     SbColor fillColor;
@@ -643,6 +649,9 @@ public:
 	void *userData = NULL,
 	unsigned int scopeMask = BOBOL_FEATURE_SCOPE_ALL,
 	const BObolFeatureOwner *owner = NULL) const;
+    /** Visit realized feature roots without copying their geometry records. */
+    void visitNodes(BObolFeatureNodeCallback callback,
+	void *userData = NULL) const;
     SoNode *node(BObolFeatureHandle handle) const;
 
 private:
@@ -808,6 +817,13 @@ public:
 	const BObolFeatureOwner *owner = NULL);
     SbBool removePath(const SbString &path,
 	int kind = BOBOL_SELECTION_ALL,
+	const BObolFeatureOwner *owner = NULL);
+    /** Apply a path delta with one linear store pass.  This is the scalable
+     * publication path for large semantic selections; repeated addPath calls
+     * would otherwise perform a growing linear duplicate scan. */
+    SbBool applyPathDelta(const std::vector<SbString> &addedPaths,
+	const std::vector<SbString> &removedPaths,
+	int kind = BOBOL_SELECTION_SELECTED_PATH,
 	const BObolFeatureOwner *owner = NULL);
     const BObolSelectionRecord *record(size_t index) const;
     SbBool addRecord(const BObolSelectionRecord &record);

@@ -44,6 +44,7 @@
 #include <cstring>
 #include <map>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 static std::atomic<uint64_t> store_reference_generation_counter(1);
@@ -3019,6 +3020,22 @@ BObolFeatureStore::visitRecords(BObolFeatureRecordCallback callback,
     }
 }
 
+void
+BObolFeatureStore::visitNodes(BObolFeatureNodeCallback callback,
+	void *userData) const
+{
+    if (!callback)
+	return;
+    for (std::map<uint64_t, BObolFeatureStoreRecord *>::const_iterator it =
+	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	BObolFeatureStoreRecord *rec = it->second;
+	if (!rec || !rec->node)
+	    continue;
+	if (!callback(this->impl->handle(rec), rec->node, userData))
+	    return;
+    }
+}
+
 SoNode *
 BObolFeatureStore::node(BObolFeatureHandle handle) const
 {
@@ -4781,6 +4798,52 @@ BObolSelectionStore::removePath(const SbString &path, int kind,
 	}
     }
     return FALSE;
+}
+
+SbBool
+BObolSelectionStore::applyPathDelta(
+    const std::vector<SbString> &addedPaths,
+    const std::vector<SbString> &removedPaths,
+    int kind,
+    const BObolFeatureOwner *owner)
+{
+    const int recordKind = store_selection_record_kind(kind);
+    std::unordered_set<std::string> removed;
+    removed.reserve(removedPaths.size());
+    for (const SbString &path : removedPaths) {
+	const std::string value = store_string(path);
+	if (!value.empty())
+	    removed.insert(value);
+    }
+
+    std::unordered_set<std::string> existing;
+    existing.reserve(this->impl->records.size() + addedPaths.size());
+    std::vector<BObolSelectionRecord> next;
+    next.reserve(this->impl->records.size() + addedPaths.size());
+    for (const BObolSelectionRecord &record : this->impl->records) {
+	const bool target = store_owner_matches(record.owner, owner) &&
+	    store_selection_kind_matches(record.kind, recordKind);
+	const std::string path = store_string(record.path);
+	if (target && removed.find(path) != removed.end())
+	    continue;
+	if (target && !path.empty())
+	    existing.insert(path);
+	next.push_back(record);
+    }
+
+    for (const SbString &pathValue : addedPaths) {
+	const std::string path = store_string(pathValue);
+	if (path.empty() || !existing.insert(path).second)
+	    continue;
+	BObolSelectionRecord record;
+	record.path = pathValue;
+	record.kind = recordKind;
+	if (owner)
+	    record.owner = *owner;
+	next.push_back(record);
+    }
+    this->impl->records.swap(next);
+    return TRUE;
 }
 
 const BObolSelectionRecord *

@@ -250,6 +250,7 @@ set(
   tests/qged_apng_encode.cpp
   tests/qged_gui_matrix.sh
   tests/qged_resize_matrix.sh
+  tests/qged_selection_ui_matrix.sh
   qged_signals.eps
   qged_signals.dia
   view_update_cycle.odg

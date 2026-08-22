@@ -110,6 +110,10 @@ struct QgCanvasState {
     bool   obol_paint_initialized = false;
     bool   fb_update_queued = false;
     bool   progressive_update_queued = false;
+    int    progressive_update_delay_msec = 16;
+    /* Set only by the built-in camera drag action.  Selection/edit gestures
+     * use the same Qt buttons but must not coarsen or restart scene LoD. */
+    bool   lod_pointer_interaction_active = false;
     bool   lod_progress_idle_tail_pending = false;
     std::atomic<bool> frame_request_dispatch_queued {false};
     bool   lod_progress_last_pending = false;
@@ -325,7 +329,14 @@ qgcanvas_unbind_obol_frame_requests(QgCanvasState &s, QWidget *w)
 static inline void
 qgcanvas_advance_obol_progressive(QgCanvasState &s)
 {
-    if (s.obol)
+    if (!s.obol)
+	return;
+    const BObolHostWorkSnapshot work = s.obol->getHostWorkSnapshot();
+    /* A presentation-only refresh is already complete work: it makes a
+     * retained style/overlay mutation visible.  Advancing an otherwise idle
+     * coordinator here made selection drags reopen LoD policy even though
+     * neither the camera nor the managed population changed. */
+    if (work.pumpPending() || work.capacitySampleRequested())
 	(void)s.obol->advanceProgressiveWork(NULL, NULL);
 }
 
@@ -339,14 +350,22 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	 !s.lod_progress_idle_tail_pending) || s.progressive_update_queued)
 	return;
 
+    /* A controller pump is itself bounded and returns to Qt between slices.
+     * Keep the ordinary 16 ms cadence for worker polling, debounce, and frame
+     * requests, but let measured owner-thread planning resume after a 1 ms
+     * event-loop yield.  Large compact-source scans otherwise paid 16 ms of
+     * idle time after every 8 ms slice and could miss a 60-second liveness
+     * gate despite having no worker, renderer, or cache work outstanding. */
+    const int delay = s.progressive_update_delay_msec <= 1 ? 1 : 16;
     s.progressive_update_queued = true;
-    QTimer::singleShot(16, w, [&s, w]() {
+    QTimer::singleShot(delay, w, [&s, w]() {
 	s.progressive_update_queued = false;
 	BObolHostWorkSnapshot work = s.obol ?
 	    s.obol->getHostWorkSnapshot() : BObolHostWorkSnapshot();
 	if (!s.obol)
 	    return;
 	if (work.flags == BOBOL_HOST_WORK_NONE) {
+	    s.progressive_update_delay_msec = 16;
 	    /* One delayed no-work observation closes the host/HUD race.  The last
 	     * pump may clear its work flag before the coordinator publishes IDLE;
 	     * this tail never advances geometry and never reschedules itself. */
@@ -367,8 +386,22 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	 * expensive duplicate paint.  advanceProgressiveWork() requests a
 	 * render only when presentation data or a retained PoP cut actually
 	 * changes; otherwise keep this lightweight timer pump alive. */
-	if (work.pumpPending())
+	if (work.pumpPending()) {
+	    const std::chrono::steady_clock::time_point pumpStarted =
+		std::chrono::steady_clock::now();
 	    (void)s.obol->advanceProgressiveWork(NULL, NULL);
+	    const std::chrono::microseconds pumpElapsed =
+		std::chrono::duration_cast<std::chrono::microseconds>(
+		    std::chrono::steady_clock::now() - pumpStarted);
+	    /* An expensive bounded slice is positive evidence that immediately
+	     * runnable owner-thread work remains.  Cheap no-progress polling keeps
+	     * the normal cadence so worker waits and time-based debounce cannot
+	     * busy-spin the GUI thread. */
+	    s.progressive_update_delay_msec =
+		pumpElapsed.count() >= 1000 ? 1 : 16;
+	} else {
+	    s.progressive_update_delay_msec = 16;
+	}
 	work = s.obol->getHostWorkSnapshot();
 	/* A bounded pump can publish the terminal convergence transition without
 	 * changing geometry.  Synchronize that user-facing state here, not only
@@ -386,7 +419,7 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	     * test/command layer is running a nested event loop and no unrelated
 	     * expose event occurs.  A direct-GL canvas has Qt's swap machinery as
 	     * an additional wake source; the software canvas does not.  Its
-	     * bounded 16 ms endpoint pump therefore presents synchronously from
+	     * bounded endpoint pump therefore presents synchronously from
 	     * this timer callback.  The callback is outside paintEvent, and each
 	     * traversal retains Obol's hard frame deadline, so this cannot recurse
 	     * or turn an expensive frame into an uninterruptible GUI loop. */

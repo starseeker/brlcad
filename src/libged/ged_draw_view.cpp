@@ -612,6 +612,51 @@ ged_selection_remove_path(
 
 
 int
+ged_selection_apply_path_delta(
+	struct ged_view_context *view_ctx,
+	enum ged_selection_kind kind,
+	const char *const *added_paths,
+	size_t added_count,
+	const char *const *removed_paths,
+	size_t removed_count)
+{
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!controller)
+	return 0;
+
+    int obol_kind = kind == GED_SELECTION_SELECTED_PATH ?
+	BOBOL_SELECTION_SELECTED_PATH :
+	(kind == GED_SELECTION_HIGHLIGHTED_REF ?
+	 BOBOL_SELECTION_HIGHLIGHTED_REF : INT_MIN);
+    if (obol_kind == INT_MIN)
+	return 0;
+
+    std::vector<SbString> added;
+    std::vector<SbString> removed;
+    added.reserve(added_count);
+    removed.reserve(removed_count);
+    for (size_t i = 0; added_paths && i < added_count; ++i) {
+	const char *path = added_paths[i];
+	while (path && *path == '/')
+	    ++path;
+	if (path && path[0])
+	    added.push_back(SbString(path));
+    }
+    for (size_t i = 0; removed_paths && i < removed_count; ++i) {
+	const char *path = removed_paths[i];
+	while (path && *path == '/')
+	    ++path;
+	if (path && path[0])
+	    removed.push_back(SbString(path));
+    }
+
+    BObolFeatureOwner owner = ged_bobol_feature_owner(view_ctx);
+    return controller->selection().applyPathDelta(added, removed,
+	obol_kind, &owner) ? 1 : 0;
+}
+
+
+int
 ged_selection_set_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,

@@ -32,7 +32,17 @@ QgToolBase::QgToolBase(QgPluginContext *ctx, QObject *parent)
 {
 }
 
-QgToolBase::~QgToolBase() = default;
+QgToolBase::~QgToolBase()
+{
+    /* Once adopted, QgToolPalette owns the element and its control widget.
+     * Direct factory users may never add the element to a palette, in which
+     * case retain the documented ownership here.  QPointer makes this safe
+     * when a controller has already removed the element. */
+    if (m_element && !m_element->parentWidget())
+	delete m_element.data();
+    else if (!m_element && m_widget && !m_widget->parentWidget())
+	delete m_widget.data();
+}
 
 QgToolPaletteElement *
 QgToolBase::paletteElement()
@@ -45,6 +55,7 @@ QgToolBase::paletteElement()
     QIcon *icon = createIcon();
 
     QgToolPaletteElement *el = new QgToolPaletteElement(icon, m_widget);
+    delete icon;
     m_element = el;
 
     /* Wire the standard element <-> tool connections that every

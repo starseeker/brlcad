@@ -941,10 +941,33 @@ test_selection(struct ged *gedp)
     CHECK(ged_selection_is_object_parent(gedp, NULL, path_ids[0]) == 1,
 	  "is_object_parent must identify all.g");
 
+    ged_db_index_id selected_hashes[2] = {0, 0};
+    CHECK(ged_selection_hashes(gedp, NULL,
+	      GED_SELECTION_HASH_SELECTED_PATH, NULL, 0) == 1,
+	  "selection hash snapshot must report one explicit path");
+    CHECK(ged_selection_hashes(gedp, NULL,
+	      GED_SELECTION_HASH_SELECTED_PATH, selected_hashes, 2) == 1 &&
+	  selected_hashes[0] == path_hash,
+	  "selection hash snapshot must copy the explicit path identity");
+    CHECK(ged_selection_hashes(gedp, NULL,
+	      GED_SELECTION_HASH_ACTIVE_PARENT_PATH, selected_hashes, 2) == 1 &&
+	  selected_hashes[0] == parent_path_hash,
+	  "selection hash snapshot must copy the selected path ancestor");
+    CHECK(ged_selection_hashes(gedp, NULL,
+	      GED_SELECTION_HASH_IMMEDIATE_PARENT_OBJECT,
+	      selected_hashes, 2) == 1 && selected_hashes[0] == path_ids[0],
+	  "selection hash snapshot must copy the immediate parent object");
+    CHECK(ged_selection_hashes(gedp, NULL,
+	      GED_SELECTION_HASH_GRAND_PARENT_OBJECT, NULL, 0) == 0,
+	  "two-element selection path must have no grand-parent object");
+
     CHECK(ged_selection_deselect_path_ids(gedp, NULL, path_ids, 2, 1) == 1,
 	  "deselect_path_ids must deselect all.g/platform.r");
     CHECK(ged_selection_count(gedp, NULL) == 0,
 	  "selection_count must report zero after deselect");
+    CHECK(ged_selection_hashes(gedp, NULL,
+	      GED_SELECTION_HASH_SELECTED_PATH, NULL, 0) == 0,
+	  "selection hash snapshot must clear with semantic deselection");
     CHECK(ged_selection_is_path_selected(gedp, NULL, path_hash) == 0,
 	  "is_path_selected must clear deselected path");
 

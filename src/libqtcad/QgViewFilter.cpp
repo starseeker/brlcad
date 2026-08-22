@@ -28,9 +28,11 @@
 #include "BObol/BSnapAction.h"
 #include "ged/view_types.h"
 #include "qtcad/QgObolSnap.h"
+#include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
 
+#include <cmath>
 #include <float.h>
 
 static uint32_t
@@ -234,6 +236,42 @@ QgViewFilter::view_widget() const
     return m->display;
 }
 
+bool
+QgViewFilter::input_pixel_position(const QMouseEvent *event, int *x,
+	int *y) const
+{
+    if (!event || !x || !y || !m || !m->display ||
+	!m->display->canvasBase() ||
+	!m->display->canvasBase()->canvasWidget())
+	return false;
+
+    const qreal dpr = m->display->canvasBase()->canvasWidget()->
+	devicePixelRatioF();
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    const double logicalX = event->x();
+    const double logicalY = event->y();
+#else
+    const double logicalX = event->position().x();
+    const double logicalY = event->position().y();
+#endif
+    const double scale = dpr > 0.0 ? static_cast<double>(dpr) : 1.0;
+    *x = static_cast<int>(std::lround(logicalX * scale));
+    *y = static_cast<int>(std::lround(logicalY * scale));
+    return true;
+}
+
+float
+QgViewFilter::input_pixel_radius(float logical_radius) const
+{
+    if (logical_radius <= 0.0f || !m || !m->display ||
+	!m->display->canvasBase() ||
+	!m->display->canvasBase()->canvasWidget())
+	return logical_radius;
+    const qreal dpr = m->display->canvasBase()->canvasWidget()->
+	devicePixelRatioF();
+    return logical_radius * static_cast<float>(dpr > 0.0 ? dpr : 1.0);
+}
+
 QMouseEvent *
 QgViewFilter::view_sync(QEvent *e)
 {
@@ -249,15 +287,9 @@ QgViewFilter::view_sync(QEvent *e)
     if (!m_e)
 	return nullptr;
 
-    /* Capture current mouse coordinates from the Qt event. */
     int e_x = 0, e_y = 0;
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    e_x = m_e->x();
-    e_y = m_e->y();
-#else
-    e_x = (int)m_e->position().x();
-    e_y = (int)m_e->position().y();
-#endif
+    if (!input_pixel_position(m_e, &e_x, &e_y))
+	return nullptr;
 
     /* Keep neutral view state synchronized with the event stream. */
 	bv_mouse_state_set(qg_obol_snap_bv(view_ctx), e_x, e_y);

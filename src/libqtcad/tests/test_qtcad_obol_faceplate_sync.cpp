@@ -137,9 +137,11 @@ main(int argc, char **argv)
 
     controller->clearRenderRequest();
     view.need_update(QG_VIEW_DRAWN);
-    if (!controller->isRenderRequested() ||
-	bu_strcmp(controller->getRenderReason().getString(), "faceplate") != 0)
+    if (!controller->isRenderRequested())
 	FAIL("faceplate sync should request an Obol render");
+    if (bu_strcmp(controller->getRenderReason().getString(),
+	    "qt-semantic-refresh") != 0)
+	FAIL("draw refresh should retain its semantic Obol render reason");
 
     SoBRLGrid *obolGrid = static_cast<SoBRLGrid *>(
 			      find_overlay(root, "faceplate::grid"));

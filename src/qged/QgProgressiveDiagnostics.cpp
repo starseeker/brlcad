@@ -46,6 +46,7 @@
 #include "BObol/BSourceRealization.h"
 #include "BObol/BViewController.h"
 #include "BObol/BViewLod.h"
+#include "bv.h"
 #include "bu/vls.h"
 #include "ged/scene.h"
 #include "ged/selection.h"
@@ -149,6 +150,29 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    sample.insert(QStringLiteral("lod_progress_label_present"),
 		ged_view_feature_exists(sampleViewContext,
 		    "_faceplate/lod_progress_label") != 0);
+	    const struct bv *sampleBv = bv_context_view_const(
+		ged_view_context_bv_const(sampleViewContext));
+	    struct bv_interactive_rect_state rect;
+	    if (sampleBv && bv_interactive_rect_state_get(&rect, sampleBv)) {
+		sample.insert(QStringLiteral("selection_rect_active"),
+		    rect.active != 0);
+		sample.insert(QStringLiteral("selection_rect_draw"),
+		    rect.draw != 0);
+		sample.insert(QStringLiteral("selection_rect_line_width"),
+		    rect.line_width);
+		sample.insert(QStringLiteral("selection_rect_pos_x"), rect.pos[0]);
+		sample.insert(QStringLiteral("selection_rect_pos_y"), rect.pos[1]);
+		sample.insert(QStringLiteral("selection_rect_dim_x"), rect.dim[0]);
+		sample.insert(QStringLiteral("selection_rect_dim_y"), rect.dim[1]);
+		sample.insert(QStringLiteral("selection_rect_canvas_width"),
+		    rect.cdim[0]);
+		sample.insert(QStringLiteral("selection_rect_canvas_height"),
+		    rect.cdim[1]);
+		sample.insert(QStringLiteral("selection_rect_x"), rect.x);
+		sample.insert(QStringLiteral("selection_rect_y"), rect.y);
+		sample.insert(QStringLiteral("selection_rect_width"), rect.width);
+		sample.insert(QStringLiteral("selection_rect_height"), rect.height);
+	    }
 	}
 	if (QgCanvasBase *canvas = view->canvasBase()) {
 	    if (QWidget *widget = canvas->canvasWidget()) {

@@ -93,6 +93,8 @@ struct ged_db_index {
     unsigned long long pending_flags = 0;
     std::unordered_map<ged_db_index_id, ged_db_index_record_native> records;
     std::unordered_map<ged_db_index_id, std::vector<ged_db_index_child_native>> children;
+    std::unordered_map<ged_db_index_id,
+	std::unordered_map<std::string, ged_db_index_id>> child_names;
     std::unordered_map<ged_db_index_id, std::vector<ged_db_index_use_native>> parents;
     std::unordered_map<std::string, ged_db_index_id> names;
     std::unordered_map<ged_db_index_id, std::string> removed_names;
@@ -258,6 +260,7 @@ ged_db_index_record_remove(struct ged_db_index *index, ged_db_index_id id)
 	index->names.erase(record_it->second.name);
     index->records.erase(id);
     index->children.erase(id);
+    index->child_names.erase(id);
 }
 
 
@@ -410,6 +413,7 @@ ged_db_index_add_child(struct ged_db_index *index,
     if (matrix_valid && matrix)
 	MAT_COPY(child.matrix, matrix);
     children.push_back(child);
+    index->child_names[parent_id][instance_name] = child_id;
 
     ged_db_index_use_native use;
     use.parent_id = parent_id;
@@ -479,6 +483,7 @@ ged_db_index_rebuild(struct ged_db_index *index)
 
     index->records.clear();
     index->children.clear();
+    index->child_names.clear();
     index->parents.clear();
     index->names.clear();
 
@@ -1339,23 +1344,14 @@ ged_db_index_path_resolve_native(struct ged_db_index *index,
 	if (!ged_db_index_record_find(index, path_vec.back(), &parent))
 	    return 0;
 
-	auto children_it = index->children.find(parent.object_id);
-	if (children_it == index->children.end())
+	auto child_names_it = index->child_names.find(parent.object_id);
+	if (child_names_it == index->child_names.end())
 	    return 0;
 
-	ged_db_index_id child_id = 0;
-	for (const ged_db_index_child_native &native_child : children_it->second) {
-	    auto record_it = index->records.find(native_child.id);
-	    if (record_it == index->records.end())
-		continue;
-	    if (record_it->second.name == elements[i]) {
-		child_id = native_child.id;
-		break;
-	    }
-	}
-	if (!child_id)
+	auto child_it = child_names_it->second.find(elements[i]);
+	if (child_it == child_names_it->second.end())
 	    return 0;
-	path_vec.push_back(child_id);
+	path_vec.push_back(child_it->second);
     }
 
     if (ged_db_index_path_cyclic(path_vec))

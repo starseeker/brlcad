@@ -31,6 +31,8 @@ struct QgCanvasInput::Impl {
     double press_x = 0.0;
     double press_y = 0.0;
     int mouse_mode = BV_ADJUST_SCALE;
+    double device_pixel_ratio = 1.0;
+    bool view_motion_dispatched = false;
 };
 
 static unsigned int
@@ -97,7 +99,8 @@ qgcanvasinput_buttons(Qt::MouseButtons buttons)
 }
 
 static void
-qgcanvasinput_position(const QMouseEvent *event, int &x, int &y)
+qgcanvasinput_position(const QMouseEvent *event, double devicePixelRatio,
+	int &x, int &y)
 {
     if (!event) {
 	x = 0;
@@ -105,12 +108,15 @@ qgcanvasinput_position(const QMouseEvent *event, int &x, int &y)
 	return;
     }
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    x = event->x();
-    y = event->y();
+    const double logicalX = event->x();
+    const double logicalY = event->y();
 #else
-    x = static_cast<int>(event->position().x());
-    y = static_cast<int>(event->position().y());
+    const double logicalX = event->position().x();
+    const double logicalY = event->position().y();
 #endif
+    const double scale = devicePixelRatio > 0.0 ? devicePixelRatio : 1.0;
+    x = static_cast<int>(std::lround(logicalX * scale));
+    y = static_cast<int>(std::lround(logicalY * scale));
 }
 
 QgCanvasInput::QgCanvasInput() :
@@ -141,6 +147,21 @@ QgCanvasInput::setEndpoint(bobol_display_endpoint_t *endpoint)
 	bobol_input_default_view_profile());
     (void)bobol_display_endpoint_input_action_handler_set(m->endpoint,
 	QgCanvasInput::actionDispatch, this);
+}
+
+void
+QgCanvasInput::setDevicePixelRatio(double device_pixel_ratio)
+{
+    if (!m)
+	return;
+    m->device_pixel_ratio = device_pixel_ratio > 0.0 ?
+	device_pixel_ratio : 1.0;
+}
+
+bool
+QgCanvasInput::lastDispatchWasViewMotion() const
+{
+    return m ? m->view_motion_dispatched : false;
 }
 
 int
@@ -219,6 +240,7 @@ QgCanvasInput::applyAction(BObolInputAction action,
 	case BOBOL_ACTION_VIEW_PAN:
 	case BOBOL_ACTION_VIEW_ZOOM:
 	case BOBOL_ACTION_VIEW_ADJUST: {
+	    m->view_motion_dispatched = true;
 	    if (event->type == BOBOL_INPUT_WHEEL) {
 		const int dx = 100 + event->wheelDelta;
 		point_t origin = VINIT_ZERO;
@@ -239,8 +261,9 @@ QgCanvasInput::applyAction(BObolInputAction action,
 	    mat_t viewCenter;
 	    bv_center_mat_get(viewCenter, cview);
 	    MAT_DELTAS_GET_NEG(center, viewCenter);
-	    return bv_mouse_delta_adjust(view, event->dx, event->dy, center,
-		viewFlags);
+	    const int changed = bv_mouse_delta_adjust(view, event->dx,
+		event->dy, center, viewFlags);
+	    return changed;
 	}
 	default:
 	    return 0;
@@ -254,6 +277,7 @@ QgCanvasInput::keyPressEvent(struct bv_context *view_ctx, int UNUSED(x_prev),
     QTCAD_EVENT("keyPress", 1);
 	if (!view_ctx || !event)
 	return 0;
+    m->view_motion_dispatched = false;
     BObolInputEvent input;
     input.type = BOBOL_INPUT_KEY_PRESS;
     input.key = qgcanvasinput_key(event->key());
@@ -272,9 +296,10 @@ QgCanvasInput::mousePressEvent(struct bv_context *view_ctx, int UNUSED(x_prev),
     QTCAD_EVENT("mousePress", 1);
 	if (!view_ctx || !event)
 	return 0;
+    m->view_motion_dispatched = false;
     BObolInputEvent input;
     input.type = BOBOL_INPUT_POINTER_PRESS;
-    qgcanvasinput_position(event, input.x, input.y);
+    qgcanvasinput_position(event, m->device_pixel_ratio, input.x, input.y);
     input.button = qgcanvasinput_button(event->button());
     input.buttons = qgcanvasinput_buttons(event->buttons());
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
@@ -293,15 +318,16 @@ QgCanvasInput::mouseReleaseEvent(struct bv_context *view_ctx, double x_press,
     QTCAD_EVENT("mouseRelease", 1);
 	if (!view_ctx || !event)
 	return 0;
+    m->view_motion_dispatched = false;
     BObolInputEvent input;
     input.type = BOBOL_INPUT_POINTER_RELEASE;
-    qgcanvasinput_position(event, input.x, input.y);
+    qgcanvasinput_position(event, m->device_pixel_ratio, input.x, input.y);
     input.button = qgcanvasinput_button(event->button());
     input.buttons = qgcanvasinput_buttons(event->buttons());
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
     m->dispatch_view = view_ctx;
-    m->press_x = x_press;
-    m->press_y = y_press;
+    m->press_x = x_press * m->device_pixel_ratio;
+    m->press_y = y_press * m->device_pixel_ratio;
     m->mouse_mode = mode;
     const int ret = m->endpoint ? bobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
@@ -316,6 +342,7 @@ QgCanvasInput::mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_pre
     QTCAD_EVENT("mouseMove", 2);
     if (!view_ctx || !event)
 	return 0;
+    m->view_motion_dispatched = false;
 
     /* An application-layer gesture must see its first drag event.  View
      * navigation can still use a zero delta until the canvas has established
@@ -323,9 +350,13 @@ QgCanvasInput::mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_pre
     const bool first_motion = x_prev == -INT_MAX || y_prev == -INT_MAX;
     BObolInputEvent input;
     input.type = BOBOL_INPUT_POINTER_MOTION;
-    qgcanvasinput_position(event, input.x, input.y);
-    input.dx = first_motion ? 0 : input.x - x_prev;
-    input.dy = first_motion ? 0 : input.y - y_prev;
+    qgcanvasinput_position(event, m->device_pixel_ratio, input.x, input.y);
+    const int physicalPreviousX = static_cast<int>(std::lround(
+	static_cast<double>(x_prev) * m->device_pixel_ratio));
+    const int physicalPreviousY = static_cast<int>(std::lround(
+	static_cast<double>(y_prev) * m->device_pixel_ratio));
+    input.dx = first_motion ? 0 : input.x - physicalPreviousX;
+    input.dy = first_motion ? 0 : input.y - physicalPreviousY;
     input.button = event->buttons().testFlag(Qt::LeftButton) ? 0 :
 	BOBOL_INPUT_ANY;
     input.buttons = qgcanvasinput_buttons(event->buttons());
@@ -344,6 +375,7 @@ QgCanvasInput::wheelEvent(struct bv_context *view_ctx, QWheelEvent *event)
     QTCAD_EVENT("mouseWheel", 1);
 	if (!view_ctx || !event)
 	return 0;
+    m->view_motion_dispatched = false;
     BObolInputEvent input;
     input.type = BOBOL_INPUT_WHEEL;
     input.wheelDelta = -event->angleDelta().y() / 8;

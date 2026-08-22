@@ -1337,6 +1337,7 @@ struct BObolLodResultSlotMapKey {
     std::string providerId;
     uint64_t generation = 0;
     uint64_t sourceRoutingId = 0;
+    uint64_t sourcePopulationEpoch = 0;
     int drawMode = 0;
     int resultKind = 0;
     int proxyKind = 0;
@@ -1345,6 +1346,7 @@ struct BObolLodResultSlotMapKey {
     {
 	return generation == other.generation &&
 	    sourceRoutingId == other.sourceRoutingId &&
+	    sourcePopulationEpoch == other.sourcePopulationEpoch &&
 	    drawMode == other.drawMode &&
 	    resultKind == other.resultKind &&
 	    proxyKind == other.proxyKind &&
@@ -1366,6 +1368,7 @@ struct BObolLodResultSlotMapKeyHash {
 	combine(std::hash<std::string>()(key.providerId));
 	combine(std::hash<uint64_t>()(key.generation));
 	combine(std::hash<uint64_t>()(key.sourceRoutingId));
+	combine(std::hash<uint64_t>()(key.sourcePopulationEpoch));
 	combine(std::hash<int>()(key.drawMode));
 	combine(std::hash<int>()(key.resultKind));
 	combine(std::hash<int>()(key.proxyKind));
@@ -1388,6 +1391,7 @@ lod_result_slot_map_key(const BObolLodResult &result)
     key.providerId = request.providerId.getString();
     key.generation = result.generation;
     key.sourceRoutingId = request.sourceRoutingId.value();
+    key.sourcePopulationEpoch = request.sourcePopulationEpoch.value();
     key.drawMode = request.drawMode;
     key.resultKind = result.resultKind;
     key.proxyKind = result.resultKind == BOBOL_LOD_RESULT_PROXY ?
@@ -2190,6 +2194,11 @@ lod_request_active_key(const BObolLodRequest &request)
     if (request.sourceRoutingId != 0) {
 	key += "|route=";
 	key += SbString(std::to_string(request.sourceRoutingId.value()).c_str());
+    }
+    if (request.sourcePopulationEpoch != 0) {
+	key += "|population=";
+	key += SbString(std::to_string(
+	    request.sourcePopulationEpoch.value()).c_str());
     }
     return key;
 }

@@ -51,6 +51,45 @@ bobol_view_pick_point(BObolViewController *controller,
 	int *submittedSourceRequestCount = NULL);
 
 /**
+ * Pick the currently displayed representation only.  This is the object and
+ * path selection contract: an already visible occurrence must be selectable
+ * immediately without requesting exact mesh data or constructing librt
+ * acceleration state.  Editing and measurement should continue to use
+ * bobol_view_pick_point when exact primitive identity is required.
+ */
+BOBOL_EXPORT int
+bobol_view_pick_display_point(BObolViewController *controller,
+	int x,
+	int y,
+	float radiusPixels,
+	bool pickAll,
+	std::vector<BObolViewPickRecord> &records);
+
+/**
+ * Select displayed occurrence identities whose conservative projected bounds
+ * overlap the top-left-origin viewport rectangle.  Compact CAD sources are
+ * queried directly in O(occurrences), with no triangle export or ray grid.
+ * Returns -1 when the scene has no compact occurrence source and the caller
+ * should use its non-CAD display fallback.
+ */
+BOBOL_EXPORT int
+bobol_view_pick_rectangle(BObolViewController *controller,
+	int x0,
+	int y0,
+	int x1,
+	int y1,
+	std::vector<BObolViewPickRecord> &records);
+
+/** Whole-source bounds fallback for non-mesh/noncompact database nodes. */
+BOBOL_EXPORT int
+bobol_view_pick_source_rectangle(BObolViewController *controller,
+	int x0,
+	int y0,
+	int x1,
+	int y1,
+	std::vector<BObolViewPickRecord> &records);
+
+/**
  * Pick the current Obol view using an explicit model-space ray.  See
  * bobol_view_pick_point for result and deferred-source semantics.
  */

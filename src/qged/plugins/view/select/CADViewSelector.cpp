@@ -28,7 +28,6 @@
 #include "BObol/BDisplayEndpoint.h"
 #include <QVBoxLayout>
 #include <string>
-#include <set>
 #include <vector>
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
@@ -104,6 +103,8 @@ qged_selection_paths(struct ged *gedp)
 
 CADViewSelector::CADViewSelector(QWidget *)
 {
+    const QString testPrefix = QStringLiteral("org.brlcad.qged.view.select");
+    this->setProperty("qgTestId", testPrefix + QStringLiteral(".controls"));
     QVBoxLayout *wl = new QVBoxLayout;
     wl->setAlignment(Qt::AlignTop);
 
@@ -113,18 +114,26 @@ CADViewSelector::CADViewSelector(QWidget *)
     sstyle_gl->setAlignment(Qt::AlignTop);
 
     use_pnt_select_button = new QRadioButton("Select Under Point");
+    use_pnt_select_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".point"));
     use_pnt_select_button->setChecked(true);
     sstyle_grp->addButton(use_pnt_select_button);
     sstyle_gl->addWidget(use_pnt_select_button);
 
     use_rect_select_button = new QRadioButton("Select Under Rectangle");
+    use_rect_select_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".rectangle"));
     sstyle_grp->addButton(use_rect_select_button);
     sstyle_gl->addWidget(use_rect_select_button);
 
     sstyle_box->setLayout(sstyle_gl);
 
     select_all_depth_ckbx = new QCheckBox("Use All Intersections");
+    select_all_depth_ckbx->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".all-intersections"));
     use_ray_test_ckbx = new QCheckBox("Test with Raytracing");
+    use_ray_test_ckbx->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".raytrace"));
 
     QObject::connect(use_pnt_select_button, &QRadioButton::clicked, this, &CADViewSelector::enable_raytrace_opt);
     QObject::connect(use_pnt_select_button, &QRadioButton::clicked, this, &CADViewSelector::enable_useall_opt);
@@ -137,15 +146,21 @@ CADViewSelector::CADViewSelector(QWidget *)
 
     QButtonGroup *smode_grp = new QButtonGroup();
     erase_from_scene_button = new QRadioButton("Erase from Scene");
+    erase_from_scene_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".erase"));
     erase_from_scene_button->setChecked(true);
     smode_grp->addButton(erase_from_scene_button);
     smode_gl->addWidget(erase_from_scene_button);
 
     add_to_group_button = new QRadioButton("Add to Current Set");
+    add_to_group_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".add"));
     smode_grp->addButton(add_to_group_button);
     smode_gl->addWidget(add_to_group_button);
 
     rm_from_group_button = new QRadioButton("Remove from Current Set");
+    rm_from_group_button->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".remove"));
     smode_grp->addButton(rm_from_group_button);
     smode_gl->addWidget(rm_from_group_button);
 
@@ -155,10 +170,14 @@ CADViewSelector::CADViewSelector(QWidget *)
 
 
     draw_selections = new QPushButton("Draw selected");
+    draw_selections->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".draw-selected"));
     sgrp_gl->addWidget(draw_selections);
     QObject::connect(draw_selections, &QPushButton::clicked, this, &CADViewSelector::do_draw_selections);
 
     erase_selections = new QPushButton("Erase selected");
+    erase_selections->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".erase-selected"));
     sgrp_gl->addWidget(erase_selections);
     QObject::connect(erase_selections, &QPushButton::clicked, this, &CADViewSelector::do_erase_selections);
 
@@ -176,6 +195,8 @@ CADViewSelector::CADViewSelector(QWidget *)
     sgrp_gl->addWidget(sgrp);
 
     group_contents = new QListWidget();
+    group_contents->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".selection-list"));
     sgrp_gl->addWidget(group_contents);
 
     disable_groups(false);
@@ -317,17 +338,17 @@ CADViewSelector::do_view_update(QgViewUpdateFlags flags)
 
     unsigned long long chash = ged_selection_state_hash(gedp, nullptr);
     if ((flags & QG_VIEW_SELECT) || chash != ohash) {
+	group_contents->setUpdatesEnabled(false);
 	group_contents->clear();
 	ohash = chash;
 
-	std::set<std::string> ordered_paths;
 	std::vector<std::string> paths = qged_selection_paths(gedp);
-	for (size_t i = 0; i < paths.size(); i++)
-	    ordered_paths.insert(paths[i]);
-	std::set<std::string>::iterator o_it;
-	for (o_it = ordered_paths.begin(); o_it != ordered_paths.end(); o_it++) {
-	    group_contents->addItem(QString(o_it->c_str()));
-	}
+	QStringList items;
+	items.reserve(static_cast<int>(paths.size()));
+	for (const std::string &path : paths)
+	    items.push_back(QString::fromStdString(path));
+	group_contents->addItems(items);
+	group_contents->setUpdatesEnabled(true);
     }
 }
 
@@ -342,14 +363,12 @@ CADViewSelector::select_objs()
     if (paths.empty())
 	return;
 
-    (void)ged_selection_batch_begin(gedp);
-    for (size_t i = 0; i < paths.size(); i++) {
-	if (!ged_selection_select_path(gedp, nullptr, paths[i].c_str(), 0))
-	    break;
-    }
-
-    ged_selection_recompute(gedp, nullptr);
-    (void)ged_selection_batch_end(gedp);
+    std::vector<const char *> path_values;
+    path_values.reserve(paths.size());
+    for (const std::string &path : paths)
+	path_values.push_back(path.c_str());
+    (void)ged_selection_select_paths(gedp, nullptr, path_values.data(),
+	path_values.size(), 0);
 }
 
 void
@@ -363,14 +382,12 @@ CADViewSelector::deselect_objs()
     if (paths.empty())
 	return;
 
-    (void)ged_selection_batch_begin(gedp);
-    for (size_t i = 0; i < paths.size(); i++) {
-	if (!ged_selection_deselect_path(gedp, nullptr, paths[i].c_str(), 0))
-	    break;
-    }
-
-    ged_selection_recompute(gedp, nullptr);
-    (void)ged_selection_batch_end(gedp);
+    std::vector<const char *> path_values;
+    path_values.reserve(paths.size());
+    for (const std::string &path : paths)
+	path_values.push_back(path.c_str());
+    (void)ged_selection_deselect_paths(gedp, nullptr, path_values.data(),
+	path_values.size(), 0);
 }
 
 

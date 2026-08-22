@@ -275,6 +275,7 @@ return;
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
     bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
+    d->input.setDevicePixelRatio(devicePixelRatioF());
 
     if (d->input.mousePressEvent(d->v, d->x_prev,
 	    d->y_prev, e)) {
@@ -297,8 +298,12 @@ emit changed();
 
 void QgSW::mouseReleaseEvent(QMouseEvent *e)
 {
-    if (d->obol && e->button() == Qt::LeftButton)
+
+    if (d->obol && d->lod_pointer_interaction_active &&
+	e->button() == Qt::LeftButton) {
 	d->obol->endLodInteraction();
+        d->lod_pointer_interaction_active = false;
+    }
     if (!d->v) {
 QWidget::mouseReleaseEvent(e);
 return;
@@ -308,6 +313,7 @@ return;
     // started with the mouse, after we release we return to the default state.
     d->x_prev = -INT_MAX;
     d->y_prev = -INT_MAX;
+    d->input.setDevicePixelRatio(devicePixelRatioF());
 
     if (d->input.mouseReleaseEvent(d->v,
 	    d->x_press_pos, d->y_press_pos, d->x_prev, d->y_prev, e,
@@ -332,11 +338,15 @@ return;
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
     bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
+    d->input.setDevicePixelRatio(devicePixelRatioF());
 
-    if (d->obol && e->buttons().testFlag(Qt::LeftButton))
-	d->obol->beginLodInteraction();
     int mret = d->input.mouseMoveEvent(d->v,
 	    d->x_prev, d->y_prev, e, d->lmouse_mode);
+    if (d->obol && e->buttons().testFlag(Qt::LeftButton) &&
+	d->input.lastDispatchWasViewMotion()) {
+	d->obol->beginLodInteraction();
+	d->lod_pointer_interaction_active = true;
+    }
     if (mret > 0) {
 qgcanvas_request_update(*d, BV_REFRESH_VIEW);
 update();

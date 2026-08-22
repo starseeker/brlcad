@@ -38,6 +38,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QObject>
+#include <QSet>
 #include <QSettings>
 #include <QStatusBar>
 #include <QTreeView>
@@ -168,6 +169,7 @@ class QgEdMainWindow : public QMainWindow
 	QgDockWidget *tree_dock = NULL;
 	QHash<QString, QDockWidget *> m_plugin_panels;
 	QHash<QString, QAction *> m_plugin_dialog_actions;
+	QHash<QString, QSet<QDialog *> > m_plugin_dialogs;
 };
 
 #endif /* QGEDMAINWINDOW_H */

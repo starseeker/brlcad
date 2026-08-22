@@ -45,16 +45,9 @@ void
 QgMeasureFilter::update_current_mouse(QMouseEvent *m_e)
 {
 	current_mouse_valid = false;
-	if (!m_e)
+	if (!m_e || !input_pixel_position(m_e, &current_mouse_x,
+		&current_mouse_y))
 		return;
-
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	current_mouse_x = m_e->x();
-	current_mouse_y = m_e->y();
-#else
-	current_mouse_x = (int)m_e->position().x();
-	current_mouse_y = (int)m_e->position().y();
-#endif
 	current_mouse_valid = true;
 }
 

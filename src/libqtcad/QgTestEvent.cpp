@@ -26,6 +26,7 @@
 #include <QJsonDocument>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMouseEvent>
 #include <QRadioButton>
 #include <QSaveFile>
@@ -656,9 +657,20 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	    for (QObject *candidate : descendants) {
 		if (candidate->property("qgTestId").toString() != testId)
 		    continue;
-		matches.append(QStringLiteral("%1(%2)")
+		QStringList parents;
+		for (QObject *parent = candidate->parent(); parent &&
+		    parent != m_root; parent = parent->parent()) {
+		    parents.prepend(QStringLiteral("%1(%2)").arg(
+			QString::fromLatin1(parent->metaObject()->className()),
+			parent->objectName()));
+		}
+		QWidget *widget = qobject_cast<QWidget *>(candidate);
+		matches.append(QStringLiteral("%1(%2, visible=%3, parents=%4)")
 		    .arg(QString::fromLatin1(candidate->metaObject()->className()),
-			candidate->objectName()));
+			candidate->objectName(),
+			widget && widget->isVisible() ? QStringLiteral("true") :
+			QStringLiteral("false"),
+			parents.join(QLatin1Char('/'))));
 	    }
 	    detail = QStringLiteral(" (%1 matching objects%2)")
 		.arg(matches.size())
@@ -744,8 +756,13 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	if (event.arguments.contains(QStringLiteral("enabled")) &&
 	    target->isWidgetType() &&
 	    static_cast<QWidget *>(target)->isEnabled() !=
-		event.arguments.value(QStringLiteral("enabled")).toBool())
+	    event.arguments.value(QStringLiteral("enabled")).toBool())
 	    return fail(QStringLiteral("assert_state enabled mismatch"));
+	if (event.arguments.contains(QStringLiteral("visible")) &&
+	    target->isWidgetType() &&
+	    static_cast<QWidget *>(target)->isVisible() !=
+	    event.arguments.value(QStringLiteral("visible")).toBool())
+	    return fail(QStringLiteral("assert_state visible mismatch"));
 	if (event.arguments.contains(QStringLiteral("checked"))) {
 	    QAbstractButton *button = qobject_cast<QAbstractButton *>(target);
 	    if (!button || button->isChecked() !=
@@ -833,6 +850,29 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 			return fail(QStringLiteral(
 			    "assert_state item %1 mismatch: '%2'")
 			    .arg(i).arg(combo->itemText(i)));
+		}
+	    }
+	}
+	if (QListWidget *list = qobject_cast<QListWidget *>(target)) {
+	    if (event.arguments.contains(QStringLiteral("count")) &&
+		list->count() !=
+		event.arguments.value(QStringLiteral("count")).toInt())
+		return fail(QStringLiteral("assert_state count mismatch: %1")
+		    .arg(list->count()));
+	    const QJsonArray expectedItems =
+		event.arguments.value(QStringLiteral("items")).toArray();
+	    if (!expectedItems.isEmpty()) {
+		if (expectedItems.size() != list->count())
+		    return fail(QStringLiteral(
+			"assert_state item count mismatch: %1")
+			.arg(list->count()));
+		for (int i = 0; i < list->count(); ++i) {
+		    QListWidgetItem *item = list->item(i);
+		    const QString actual = item ? item->text() : QString();
+		    if (actual != expectedItems.at(i).toString())
+			return fail(QStringLiteral(
+			    "assert_state item %1 mismatch: '%2'")
+			    .arg(i).arg(actual));
 		}
 	    }
 	}

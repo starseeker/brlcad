@@ -306,10 +306,15 @@ QgEdMainWindow::ConnectWidgets()
     vc_ctrl->populate();
     oc_ctrl->populate();
     rebuildPluginExtensions();
-    QObject::connect(ap->pluginManager(), &QgPluginManager::factoryRegistered,
-		     this, [this](const QString &) { rebuildPluginExtensions(); });
-    QObject::connect(ap->pluginManager(), &QgPluginManager::factoryUnregistered,
-		     this, [this](const QString &) { rebuildPluginExtensions(); });
+    QObject::connect(ap->pluginManager(),
+	&QgPluginManager::pluginsAboutToUnload, this, [this]() {
+	    /* This connection is deliberately direct: plugin-created widgets must
+	     * be destroyed before QPluginLoader unloads their implementation. */
+	    clearPluginPanels();
+	    clearPluginDialogs();
+	}, Qt::DirectConnection);
+    QObject::connect(ap->pluginManager(), &QgPluginManager::catalogChanged,
+	this, &QgEdMainWindow::rebuildPluginExtensions);
 
     // The tools in the view and edit panels may have consequences for the view.
     // Connect to the palette signals and slots (the individual tool connections
@@ -412,7 +417,9 @@ QgEdMainWindow::clearPluginPanels()
 	if (vm_panels)
 	    vm_panels->removeAction(dock->toggleViewAction());
 	removeDockWidget(dock);
-	dock->deleteLater();
+	/* deleteLater() would leave plugin vtables and callbacks alive across the
+	 * synchronous shared-library unload boundary. */
+	delete dock;
     }
     m_plugin_panels.clear();
 }
@@ -464,6 +471,21 @@ QgEdMainWindow::clearPluginDialogs()
 	delete act;
     }
     m_plugin_dialog_actions.clear();
+
+    QList<QDialog *> dialogs;
+    for (auto it = m_plugin_dialogs.constBegin();
+	it != m_plugin_dialogs.constEnd(); ++it) {
+	for (QDialog *dialog : it.value()) {
+	    if (dialog && !dialogs.contains(dialog))
+		dialogs.append(dialog);
+	}
+    }
+    /* Clear first because deleting a dialog emits destroyed(), whose cleanup
+	 * lambda may otherwise mutate this hash during iteration. */
+    m_plugin_dialogs.clear();
+    for (QDialog *dialog : dialogs)
+	delete dialog;
+
     if (tm_dialogs)
 	tm_dialogs->setEnabled(false);
 }
@@ -483,6 +505,7 @@ QgEdMainWindow::populatePluginDialogs()
 	if (!fac)
 	    continue;
 	QAction *act = new QAction(desc.displayName, tm_dialogs);
+	act->setProperty("qgTestId", desc.id + QStringLiteral(".activate"));
 	if (!desc.description.isEmpty())
 	    act->setToolTip(desc.description);
 	QObject::connect(act, &QAction::triggered,
@@ -522,7 +545,18 @@ QgEdMainWindow::launchPluginDialog(const QString &id)
     QgPluginDescriptor desc = ap->pluginManager()->descriptor(id);
     if (dialog->windowTitle().isEmpty())
 	dialog->setWindowTitle(desc.displayName);
+    dialog->setProperty("qgTestId", id + QStringLiteral(".dialog"));
     dialog->setAttribute(Qt::WA_DeleteOnClose, true);
+    m_plugin_dialogs[id].insert(dialog);
+    QObject::connect(dialog, &QObject::destroyed, this,
+	[this, id, dialog]() {
+	    auto it = m_plugin_dialogs.find(id);
+	    if (it == m_plugin_dialogs.end())
+		return;
+	    it.value().remove(dialog);
+	    if (it.value().isEmpty())
+		m_plugin_dialogs.erase(it);
+	});
     dialog->show();
     dialog->raise();
     dialog->activateWindow();

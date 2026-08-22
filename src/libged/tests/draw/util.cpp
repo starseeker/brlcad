@@ -43,6 +43,7 @@
 #include <BObol/BSceneController.h>
 #include <BObol/BVListShape.h>
 #include <BObol/BViewController.h>
+#include <BObol/BViewStore.h>
 #include <icv.h>
 #include <Inventor/SbColor.h>
 #include <Inventor/SbViewportRegion.h>
@@ -66,6 +67,59 @@ draw_test_endpoint_controller(struct ged_view_context *view_ctx)
 	ged_view_context_obol_endpoint_get(view_ctx);
     return endpoint ? static_cast<BObolViewController *>(
 	bobol_display_endpoint_controller(endpoint)) : NULL;
+}
+
+/* Preserve post-render state without perturbing the transition being
+ * diagnosed.  Stable-frame regressions compare immediately after capture,
+ * so one slot is sufficient and avoids introducing synchronization into the
+ * normal render path. */
+struct draw_test_obol_capture_diagnostic {
+    int id = -1;
+    SbBool rightEdgeOverlay = FALSE;
+    size_t rightEdgePixels = 0;
+    BObolLodConvergenceStatus convergence;
+    BObolHostWorkSnapshot work;
+    SbBool progressTrack = FALSE;
+    SbBool progressFill = FALSE;
+    SbBool progressLabel = FALSE;
+    int overlayChildren = 0;
+};
+
+static draw_test_obol_capture_diagnostic draw_test_last_capture_diagnostic;
+
+static void
+draw_test_obol_log_capture_diagnostic(int id)
+{
+    const draw_test_obol_capture_diagnostic &d =
+	draw_test_last_capture_diagnostic;
+    if (d.id != id)
+	return;
+    bu_log("draw-obol-capture-failure[%03d]: right_overlay=%d pixels=%zu "
+	   "features=%d/%d/%d overlay_children=%d phase=%d ready=%d "
+	   "performance_limited=%d background=%d fraction=%.3f "
+	   "available=%zu expected=%zu "
+	   "targets=%zu active=%zu satisfied=%zu subpixel=%zu boxes=%zu "
+	   "terminal_failures=%zu memory_limited=%zu faces=%zu budget=%zu "
+	   "work=0x%x\n",
+	   id, d.rightEdgeOverlay ? 1 : 0, d.rightEdgePixels,
+	   d.progressTrack ? 1 : 0, d.progressFill ? 1 : 0,
+	   d.progressLabel ? 1 : 0, d.overlayChildren,
+	   d.convergence.phase, d.convergence.viewReady ? 1 : 0,
+	   d.convergence.performanceLimited ? 1 : 0,
+	   d.convergence.backgroundPending ? 1 : 0,
+	   d.convergence.fraction,
+	   d.convergence.availableLeafCount,
+	   d.convergence.expectedLeafCount,
+	   d.convergence.visibleTargetCount,
+	   d.convergence.activePayloadCount,
+	   d.convergence.satisfiedPayloadCount,
+	   d.convergence.presentedSubpixelOccurrenceCount,
+	   d.convergence.presentedStructuralBoxCount,
+	   d.convergence.terminalOccurrenceFailureCount,
+	   d.convergence.memoryLimitedPayloadCount,
+	   d.convergence.activeFaces,
+	   d.convergence.renderCostBudget,
+	   d.work.flags);
 }
 
 // In order to handle changes to .g geometry contents, we need to defined
@@ -204,8 +258,6 @@ draw_test_obol_progressive_drain(struct ged *gedp, struct ged_view_context *view
     for (unsigned int attempt = 0; attempt < max_attempts; attempt++) {
 	status.clear();
 	(void)controller->advanceProgressiveWork(&options, &status);
-	if (!status.hasMore)
-	    return 1;
 
 	/* Retained PoP refinement intentionally will not select another cut
 	 * until the current one has actually been presented.  These image tests
@@ -234,6 +286,20 @@ draw_test_obol_progressive_drain(struct ged *gedp, struct ged_view_context *view
 		bu_free(image, "draw test progressive frame");
 	    controller->noteFramePresented();
 	}
+	/* Provider idleness is not the complete host contract.  A semantic
+	 * change or final convergence transition may leave one presentation
+	 * request after the last work-producing pump; that completed frame can in
+	 * turn release a refinement/calibration barrier.  Returning on hasMore
+	 * before presenting that request made image captures timing-dependent:
+	 * they occasionally recorded the preceding responsiveness-limited cut and
+	 * its stale HUD.  Match the production host's level-triggered contract and
+	 * declare settlement only when both pump and render obligations are gone. */
+	const BObolHostWorkSnapshot remaining =
+	    controller->getHostWorkSnapshot();
+	if (!status.hasMore &&
+	    !(remaining.flags & (BOBOL_HOST_WORK_PUMP | BOBOL_HOST_WORK_RENDER)) &&
+	    !controller->hasPendingLodRefinementFrame())
+	    return 1;
 	if (sleep_milliseconds) {
 	    std::this_thread::sleep_for(std::chrono::milliseconds(
 		sleep_milliseconds));
@@ -355,6 +421,27 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 	   eye[X], eye[Y], eye[Z],
 	   aet[X], aet[Y], aet[Z],
 	   bv_perspective_get(DRAW_TEST_BV_CONST(view_ctx)));
+
+    BObolLodConvergenceStatus convergence;
+    controller->getLodConvergenceStatus(convergence);
+    bu_log("draw-obol-debug[%03d]: convergence phase=%d fraction=%.9g "
+	   "ready=%d background=%d memory_limited=%d performance_limited=%d "
+	   "visible=%zu active=%zu satisfied=%zu faces=%zu render_cost=%zu "
+	   "budget=%zu pending=%zu in_flight=%zu queued=%zu\n",
+	   id, convergence.phase, convergence.fraction,
+	   convergence.viewReady ? 1 : 0,
+	   convergence.backgroundPending ? 1 : 0,
+	   convergence.memoryLimited ? 1 : 0,
+	   convergence.performanceLimited ? 1 : 0,
+	   convergence.visibleTargetCount,
+	   convergence.activePayloadCount,
+	   convergence.satisfiedPayloadCount,
+	   convergence.activeFaces,
+	   convergence.activeRenderCost,
+	   convergence.renderCostBudget,
+	   convergence.pendingTasks,
+	   convergence.inFlight,
+	   convergence.queuedResults);
 
     SoCamera *camera = controller->getCamera();
     if (camera) {
@@ -596,14 +683,43 @@ draw_test_obol_screengrab_impl(struct ged *gedp, struct ged_view_context *view_c
      * test drain render an identical OSMesa frame before capturing again. */
     unsigned char *buffer = NULL;
     const SbColor black(0.0f, 0.0f, 0.0f);
-    BObolProgressiveStatus renderStatus;
     if (controller->renderToImage(&buffer, 0, 0, &black, manager,
-	    &renderStatus) != BRLCAD_OK || !buffer) {
+	    NULL) != BRLCAD_OK || !buffer) {
 	if (buffer)
 	    bu_free(buffer, "draw test capture");
 	return -1;
     }
     controller->noteFramePresented();
+
+    draw_test_last_capture_diagnostic =
+	draw_test_obol_capture_diagnostic();
+    draw_test_last_capture_diagnostic.id = id;
+    const int margin = std::min<int>(16, size[0]);
+    for (int y = 0; y < size[1]; y++) {
+	for (int x = size[0] - margin; x < size[0]; x++) {
+	    const unsigned char *pixel = buffer +
+		(static_cast<size_t>(y) * static_cast<size_t>(size[0]) +
+		 static_cast<size_t>(x)) * 3;
+	    if (pixel[0] > 32 || pixel[1] > 32 || pixel[2] > 32)
+		draw_test_last_capture_diagnostic.rightEdgePixels++;
+	}
+    }
+    draw_test_last_capture_diagnostic.rightEdgeOverlay =
+	draw_test_last_capture_diagnostic.rightEdgePixels >
+	static_cast<size_t>(std::max(1, size[1] / 8)) ? TRUE : FALSE;
+    controller->getLodConvergenceStatus(
+	draw_test_last_capture_diagnostic.convergence);
+    draw_test_last_capture_diagnostic.work =
+	controller->getHostWorkSnapshot();
+    draw_test_last_capture_diagnostic.progressTrack =
+	controller->features().exists("_faceplate/lod_progress_track");
+    draw_test_last_capture_diagnostic.progressFill =
+	controller->features().exists("_faceplate/lod_progress_fill");
+    draw_test_last_capture_diagnostic.progressLabel =
+	controller->features().exists("_faceplate/lod_progress_label");
+    SoGroup *overlayRoot = controller->getFramebufferOverlayRoot();
+    draw_test_last_capture_diagnostic.overlayChildren = overlayRoot ?
+	overlayRoot->getNumChildren() : 0;
 
     const int ret = draw_test_write_rgb_png(filename, buffer, size[0],
 	size[1]) == BRLCAD_OK ? 1 : -1;
@@ -858,6 +974,7 @@ img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear
 	if (iret) {
 
 	    bu_log("%d %s diff failed.  %d matching, %d off by 1, %d off by many\n", id, img_root, matching_cnt, off_by_1_cnt, off_by_many_cnt);
+	    draw_test_obol_log_capture_diagnostic(id);
 
 	    // Generate a diff image for debugging work
 	    icv_image_t *diff_img = icv_diffimg(ctrl, timg);
@@ -868,11 +985,10 @@ img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear
 		bu_vls_free(&diff_name);
 	    }
 
-	    // If we're in soft fail mode, we're not keeping the image unless
-	    // the user requested it. In hard fail, we leave the last image for
-	    // inspection.
-	    if (soft_fail && clear_image)
-		bu_file_delete(bu_vls_cstr(&tname));
+	    /* Preserve the target beside its generated diff on every failure.
+	     * A soft-fail matrix is precisely where the process continues far
+	     * enough to overwrite or delete the only evidence of a transient
+	     * drawing defect.  Successful captures still honor clear_image below. */
 #if 0
 	    // Dump an ascii rendering of the difference image to the log.  In
 	    // scenarios such as CI systems, where we don't have a way to

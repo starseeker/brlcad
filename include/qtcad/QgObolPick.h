@@ -67,9 +67,11 @@ struct QTCAD_EXPORT QgObolPickRecord {
 };
 
 /**
- * Pick BRL-CAD Obol geometry in @p display at Qt widget pixel coordinate
- * (@p x, @p y).  Qt coordinates are top-left based; this helper converts them
- * to the lower-left viewport coordinates expected by SoRayPickAction.
+ * Pick BRL-CAD Obol geometry in @p display at physical framebuffer pixel
+ * coordinate (@p x, @p y).  Coordinates are top-left based; this helper
+ * converts them to the lower-left coordinates expected by SoRayPickAction.
+ * Qt event filters must convert logical widget coordinates and tolerances by
+ * the canvas device-pixel ratio before calling this lower-level query.
  *
  * Returns the number of BRL-CAD Obol pick records appended to @p records.
  */
@@ -80,6 +82,15 @@ QTCAD_EXPORT int qg_obol_pick_point(QgView *display,
 	bool pickAll,
 	std::vector<QgObolPickRecord> &records,
 	int *submittedSourceRequestCount = 0);
+
+/** Immediate displayed-occurrence object/path pick.  Unlike the exact query
+ * above, this never submits source detail or performs a librt query. */
+QTCAD_EXPORT int qg_obol_pick_display_point(QgView *display,
+	int x,
+	int y,
+	float radiusPixels,
+	bool pickAll,
+	std::vector<QgObolPickRecord> &records);
 
 /**
  * Pick BRL-CAD Obol geometry using an explicit model-space ray.  This helper
@@ -97,9 +108,10 @@ QTCAD_EXPORT int qg_obol_pick_ray(QgView *display,
 	int *submittedSourceRequestCount = 0);
 
 /**
- * Pick BRL-CAD Obol geometry intersecting the Qt widget pixel rectangle
- * bounded by (@p x0, @p y0) and (@p x1, @p y1).  This helper samples the
- * rectangle through Obol point picks and returns unique BRL-CAD identities.
+ * Pick BRL-CAD Obol geometry intersecting the physical framebuffer rectangle
+ * bounded by (@p x0, @p y0) and (@p x1, @p y1).  Compact CAD occurrences are
+ * tested using their retained conservative projected bounds; no ray grid or
+ * exact mesh request is performed.
  *
  * Returns the number of BRL-CAD Obol pick records appended to @p records.
  */

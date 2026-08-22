@@ -29,6 +29,7 @@
 #include <QLibrary>
 #include <QPluginLoader>
 #include <QSettings>
+#include <QThread>
 #include <QVariant>
 #include <algorithm>
 
@@ -43,6 +44,7 @@ struct QgPluginManager::Entry {
     QObject *staticInstance = nullptr;
     bool triedLoad = false;
     bool failed = false;
+    bool metadataFailed = false;
     QString failureReason;
 };
 
@@ -131,6 +133,7 @@ QgPluginManager::readMetadata(QPluginLoader *loader, Entry &entry)
     int api = apiVersionFromMetadata(meta);
     if (api != QGTCAD_PLUGIN_API_VERSION) {
 	entry.failed = true;
+	entry.metadataFailed = true;
 	entry.failureReason = QStringLiteral("API version mismatch: plugin=%1, host=%2")
 				.arg(api).arg((int)QGTCAD_PLUGIN_API_VERSION);
     }
@@ -164,6 +167,7 @@ QgPluginManager::rescan()
 	int api = apiVersionFromMetadata(meta);
 	if (api != QGTCAD_PLUGIN_API_VERSION) {
 	    e->failed = true;
+	    e->metadataFailed = true;
 	    e->failureReason = QStringLiteral("API version mismatch: plugin=%1, host=%2")
 				 .arg(api).arg((int)QGTCAD_PLUGIN_API_VERSION);
 	} else {
@@ -202,6 +206,11 @@ QgPluginManager::rescan()
 		continue;
 
 	    QPluginLoader *loader = new QPluginLoader(fi.absoluteFilePath());
+	    /* QPluginLoader normally prevents a loaded library from leaving the
+	     * process.  That defeats an explicit developer/user reload and masks
+	     * stale callback bugs, so make this manager's unload contract real. */
+	    loader->setLoadHints(loader->loadHints() &
+		~QLibrary::PreventUnloadHint);
 	    Entry *e = new Entry;
 	    e->loader = loader;
 	    readMetadata(loader, *e);
@@ -223,8 +232,24 @@ QgPluginManager::rescan()
 	}
     }
 
-    /* Anything still in 'kept' was not rediscovered -- treat as
-     * unregistered. */
+    /* Anything still in 'kept' was not rediscovered.  If any such plugin is
+     * live, give clients one synchronous teardown barrier before unloading
+     * its implementation.  Clearing every plugin-created host object is
+     * intentional: cross-plugin QObject connections make selective teardown
+     * impossible to prove safe. */
+    bool staleLoaded = false;
+    for (auto it = kept.constBegin(); it != kept.constEnd(); ++it) {
+	Entry *e = it.value();
+	if (e->loader && e->loader->isLoaded()) {
+	    staleLoaded = true;
+	    break;
+	}
+    }
+    if (staleLoaded) {
+	m_unloading = true;
+	emit pluginsAboutToUnload();
+    }
+
     for (auto it = kept.constBegin(); it != kept.constEnd(); ++it) {
 	Entry *e = it.value();
 	emit factoryUnregistered(e->desc.id);
@@ -234,6 +259,8 @@ QgPluginManager::rescan()
 	}
 	delete e;
     }
+    if (staleLoaded)
+	m_unloading = false;
 
     /* Deterministic ordering: (sortKey, id). */
     std::sort(m_entries.begin(), m_entries.end(),
@@ -242,24 +269,59 @@ QgPluginManager::rescan()
 		      return a->desc.sortKey < b->desc.sortKey;
 		  return a->desc.id < b->desc.id;
 	      });
+
+    emit catalogChanged();
 }
 
-void
-QgPluginManager::unloadAll()
+bool
+QgPluginManager::unloadAll(QStringList *errors)
 {
-    for (Entry *e : m_entries) {
-	if (e->loader) {
-	    e->loader->unload();
-	}
-	e->triedLoad = false;
+    if (m_unloading || QThread::currentThread() != thread()) {
+	if (errors)
+	    errors->append(QStringLiteral(
+		"plugin unload must run synchronously on the manager thread"));
+	return false;
     }
+
+    bool hasLoadedPlugin = false;
+    for (Entry *e : m_entries) {
+	if (e->loader && e->loader->isLoaded()) {
+	    hasLoadedPlugin = true;
+	    break;
+	}
+    }
+    if (hasLoadedPlugin) {
+	m_unloading = true;
+	emit pluginsAboutToUnload();
+    }
+
+    bool ok = true;
+    for (Entry *e : m_entries) {
+	if (!e->loader)
+	    continue;
+	if (e->loader->isLoaded() && !e->loader->unload()) {
+	    ok = false;
+	    if (errors) {
+		errors->append(QStringLiteral("%1: %2")
+		    .arg(e->desc.id, e->loader->errorString()));
+	    }
+	}
+	e->triedLoad = e->loader->isLoaded();
+	if (!e->metadataFailed) {
+	    e->failed = false;
+	    e->failureReason.clear();
+	}
+    }
+    m_unloading = false;
+    return ok;
 }
 
-void
-QgPluginManager::reload()
+bool
+QgPluginManager::reload(QStringList *errors)
 {
-    unloadAll();
+    const bool ok = unloadAll(errors);
     rescan();
+    return ok;
 }
 
 QList<QgPluginDescriptor>
@@ -315,6 +377,8 @@ QgPluginManager::resolveInstance(Entry &entry)
 QObject *
 QgPluginManager::instance(const QString &id)
 {
+    if (m_unloading)
+	return nullptr;
     if (!isEnabled(id))
 	return nullptr;
     auto it = m_byId.find(id);

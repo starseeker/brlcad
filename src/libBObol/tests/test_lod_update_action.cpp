@@ -7249,6 +7249,142 @@ compact_native_triangle_geometry(void)
 }
 
 static int
+test_compact_selection_edit_promotion(void)
+{
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    if (make_submit_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    SoBRLViewLodGroup *root = new SoBRLViewLodGroup;
+    root->ref();
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "selection-root.c";
+    source->instanceKey = "selection-source";
+    source->sourceRevision = 991;
+    source->lodBotThreshold = 1;
+    source->representationMode =
+	SoBRLDatabaseSource::REPRESENTATION_SHADED;
+    root->addChild(source);
+
+    std::vector<BObolCompactOccurrence> occurrences;
+    for (size_t i = 0; i < 2; ++i) {
+	BObolCompactOccurrence occurrence;
+	occurrence.geometry = compact_projected_proxy_geometry();
+	occurrence.summary.valid = TRUE;
+	occurrence.summary.shapeKind =
+	    BObolRealizedShapeSummary::SHAPE_VLIST;
+	occurrence.summary.path.sprintf(
+	    "selection-root.c/leaf-%zu.bot", i);
+	occurrence.summary.sourceName = "lod-submit.bot";
+	occurrence.summary.sourceType = "bot";
+	occurrence.summary.sourceId = static_cast<uint32_t>(991 + i);
+	occurrence.summary.visible = TRUE;
+	occurrence.summary.selectable = TRUE;
+	occurrence.lodBacked = TRUE;
+	occurrence.sourceMeshRequestValid = TRUE;
+	occurrence.sourceMeshRequest.path = occurrence.summary.path;
+	occurrence.sourceMeshRequest.sourceName = "lod-submit.bot";
+	occurrence.sourceMeshRequest.faceCount = 4;
+	occurrence.sourceMeshRequest.pointCount = 4;
+	occurrence.sourceMeshRequest.bounds = SbBox3f(
+	    SbVec3f(0.0f, 0.0f, 0.0f),
+	    SbVec3f(1.0f, 1.0f, 1.0f));
+	occurrence.sourceMeshRequest.meshAssetBounds =
+	    occurrence.sourceMeshRequest.bounds;
+	occurrence.sourceMeshRequest.meshAssetTransform =
+	    SbMatrix::identity();
+	occurrence.localTransform.setTranslate(
+	    SbVec3f(static_cast<float>(i) * 2.0f, 0.0f, 0.0f));
+	occurrences.push_back(std::move(occurrence));
+    }
+
+    int ret = 0;
+    if (source->setCompactOccurrenceRegistry(occurrences) != 2) {
+	printf("FAIL: compact selection-promotion fixture setup\n");
+	ret = 1;
+    }
+
+    BObolLodService service;
+    if (!ret && !service.start(1, TRUE)) {
+	printf("FAIL: compact selection-promotion service did not start\n");
+	ret = 1;
+    }
+
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->ref();
+    camera->position = SbVec3f(1.5f, 0.5f, 5.0f);
+    camera->height = 1000.0f;
+    const SbViewVolume volume = camera->getViewVolume(640.0f / 480.0f);
+    struct bv_view_info view = BV_VIEW_INFO_INIT;
+    view.width = 640;
+    view.height = 480;
+    view.size = 1000.0;
+
+    const auto coverageForSelection = [&](const std::vector<SbString> &paths,
+	    size_t effectiveSelectionCount) {
+	if (source->syncCompactInstanceSelectedPaths(paths) < 0)
+	    return SIZE_MAX;
+	SoBRLMeshLodSubmitAction submit;
+	submit.setService(&service);
+	submit.setDatabase(dbip, "db://selection-promotion-test", 2026);
+	submit.setViewInfo(&view);
+	submit.setViewVolume(&volume, 1.0f);
+	/* Make point coverage unambiguous; the policy distinction under test is
+	 * selection population, not the projection boundary itself. */
+	submit.setPointProxyPixelThreshold(1000.0f);
+	submit.setStructuralCoverageOnly(TRUE);
+	submit.setGeneration(service.beginGeneration());
+	submit.setRevisions(91, 92);
+	submit.setSelectedOccurrenceCount(effectiveSelectionCount);
+	/* Bulk selection must need no provider work.  Let the sole-selection
+	 * action consume its one edit-promotion request so it can continue to the
+	 * ordinary point-covered peer in the same traversal. */
+	submit.setSubmissionTaskLimit(
+	    effectiveSelectionCount == 1 ? SIZE_MAX : 0);
+	submit.apply(root);
+	return submit.getCoveredVisibleMeshCount();
+    };
+
+    const std::vector<SbString> bulkSelection = {
+	SbString("selection-root.c/leaf-0.bot"),
+	SbString("selection-root.c/leaf-1.bot")
+    };
+    const std::vector<SbString> soleSelection = {
+	SbString("selection-root.c/leaf-0.bot")
+    };
+    const size_t bulkCoverage = !ret ?
+	coverageForSelection(bulkSelection, 2) : SIZE_MAX;
+    /* A source may locally contain one selected occurrence while another
+     * source contains the second one.  The controller supplies the saturated
+     * scene-wide population, so this source must still use bulk-selection
+     * styling without opening an edit-grade mesh path. */
+    const size_t globalBulkCoverage = !ret ?
+	coverageForSelection(soleSelection, 2) : SIZE_MAX;
+    const size_t soleCoverage = !ret ?
+	coverageForSelection(soleSelection, 1) : SIZE_MAX;
+    if (!ret && (bulkCoverage != 2 || globalBulkCoverage != 2 ||
+	    soleCoverage != 1 ||
+	    source->getCompactSelectedInstanceCount() != 1)) {
+	printf("FAIL: selection did not distinguish bulk restyling from sole "
+	       "edit promotion (local-bulk=%zu global-bulk=%zu sole=%zu "
+	       "selected=%d)\n",
+	       bulkCoverage, globalBulkCoverage, soleCoverage,
+	       source->getCompactSelectedInstanceCount());
+	ret = 1;
+    }
+
+    camera->unref();
+    service.stop();
+    root->unref();
+    bobol_mesh_lod_cache_clear_database(dbip);
+    db_close(dbip);
+    bu_file_delete(dbpath);
+    return ret;
+}
+
+static int
 test_cad_presentation_frame_retirement(void)
 {
     BObolViewLodState viewState;
@@ -7614,6 +7750,7 @@ test_compact_many_leaf_scene_admission(void)
 	firstWindow.setDatabase(dbip, "db://many-leaf-test", 2026);
 	firstWindow.setViewInfo(&view);
 	firstWindow.setViewVolume(&volume, 1.0f);
+	firstWindow.setSelectedOccurrenceCount(1);
 	firstWindow.setGeneration(service.beginGeneration());
 	firstWindow.setRevisions(1, 1);
 	/* 8,192 provisional faces plus the proportional 4,096-point share and
@@ -7760,6 +7897,7 @@ test_compact_many_leaf_scene_admission(void)
 	sharedReuse.setDatabase(dbip, "db://many-leaf-test", 2026);
 	sharedReuse.setViewInfo(&view);
 	sharedReuse.setViewVolume(&volume, 1.0f);
+	sharedReuse.setSelectedOccurrenceCount(1);
 	sharedReuse.setGeneration(service.beginGeneration());
 	sharedReuse.setRevisions(1, 1);
 	sharedReuse.setViewLodState(&sharedViewState);
@@ -7796,6 +7934,7 @@ test_compact_many_leaf_scene_admission(void)
 	    dbip, "db://many-leaf-test", 2026);
 	semanticEpochReuse.setViewInfo(&view);
 	semanticEpochReuse.setViewVolume(&volume, 1.0f);
+	semanticEpochReuse.setSelectedOccurrenceCount(1);
 	semanticEpochReuse.setGeneration(service.beginGeneration());
 	semanticEpochReuse.setRevisions(1, 1);
 	semanticEpochReuse.setViewLodState(&sharedViewState);
@@ -7821,6 +7960,7 @@ test_compact_many_leaf_scene_admission(void)
 	secondWindow.setDatabase(dbip, "db://many-leaf-test", 2026);
 	secondWindow.setViewInfo(&view);
 	secondWindow.setViewVolume(&volume, 1.0f);
+	secondWindow.setSelectedOccurrenceCount(1);
 	secondWindow.setGeneration(service.beginGeneration());
 	secondWindow.setRevisions(1, 1);
 	secondWindow.setRefinementCostBudget(0);
@@ -7859,6 +7999,7 @@ test_compact_many_leaf_scene_admission(void)
 	    dbip, "db://many-leaf-test", 2026);
 	retainedAdmission.setViewInfo(&view);
 	retainedAdmission.setViewVolume(&volume, 1.0f);
+	retainedAdmission.setSelectedOccurrenceCount(1);
 	retainedAdmission.setGeneration(service.beginGeneration());
 	retainedAdmission.setRevisions(2, 2);
 	retainedAdmission.setViewLodState(&sharedViewState);
@@ -7896,6 +8037,7 @@ test_compact_many_leaf_scene_admission(void)
 	    dbip, "db://many-leaf-test", 2026);
 	retainedAdmissionTail.setViewInfo(&view);
 	retainedAdmissionTail.setViewVolume(&volume, 1.0f);
+	retainedAdmissionTail.setSelectedOccurrenceCount(1);
 	retainedAdmissionTail.setGeneration(service.beginGeneration());
 	retainedAdmissionTail.setRevisions(2, 2);
 	retainedAdmissionTail.setViewLodState(&sharedViewState);
@@ -7938,6 +8080,7 @@ test_compact_many_leaf_scene_admission(void)
 	    dbip, "db://many-leaf-test", 2026);
 	coverageReadmission.setViewInfo(&view);
 	coverageReadmission.setViewVolume(&volume, 1.0f);
+	coverageReadmission.setSelectedOccurrenceCount(1);
 	coverageReadmission.setGeneration(service.beginGeneration());
 	coverageReadmission.setRevisions(3, 3);
 	coverageReadmission.setViewLodState(&sharedViewState);
@@ -8016,6 +8159,7 @@ test_compact_many_leaf_scene_admission(void)
 		dbip, "db://many-leaf-test", 2026);
 	    memoryRecovery.setViewInfo(&view);
 	    memoryRecovery.setViewVolume(&volume, 1.0f);
+	    memoryRecovery.setSelectedOccurrenceCount(1);
 	    memoryRecovery.setGeneration(service.beginGeneration());
 	    memoryRecovery.setRevisions(4, 4);
 	    memoryRecovery.setViewLodState(&sharedViewState);
@@ -9505,6 +9649,34 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	printf("FAIL: compact projected LoD occurrence setup\n");
 	ret = 1;
     }
+    const auto bindCurrentCompactPopulation =
+	[source](BObolLodResult &result, size_t entryIndex) {
+	    if (entryIndex > static_cast<size_t>(
+		    std::numeric_limits<int>::max()))
+		return false;
+	    BObolCompactInstanceHandle currentHandle;
+	    BObolCompactInstanceSummary currentSummary;
+	    if (!source->getCompactInstanceHandle(
+		    static_cast<int>(entryIndex), currentHandle) ||
+		!source->getCompactInstanceSummary(
+		    currentHandle, currentSummary))
+		return false;
+	    result.request.occurrenceKey = currentSummary.sourceInstanceKey;
+	    result.request.sourceRoutingId =
+		source->getCompactSourceRoutingId();
+	    result.request.sourcePopulationEpoch =
+		source->getCompactPopulationEpoch();
+	    result.request.sourceEntryIndex =
+		static_cast<uint32_t>(entryIndex);
+	    result.request.objectPath =
+		currentSummary.meshAssetPath.getLength() > 0 ?
+		    currentSummary.meshAssetPath : currentSummary.path;
+	    result.request.objectName =
+		currentSummary.meshAssetName.getLength() > 0 ?
+		    currentSummary.meshAssetName : currentSummary.sourceName;
+	    result.cacheKey = bobol_lod_cache_key(result.request);
+	    return true;
+	};
 
     BObolLodService service;
     if (!ret && !service.start(1, TRUE)) {
@@ -9984,7 +10156,6 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		printf("FAIL: retained refinement rekey fixture setup\n");
 		ret = 1;
 	    }
-
 	    /* A cumulative resident suffix remains useful when a newer wheel
 	     * event advances the camera epoch before its worker result is drained.
 	     * Rebase that result to the current occurrence demand instead of
@@ -10041,6 +10212,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			rebaseController.getLodPolicyRevision();
 		    rebaseSeed.request.sourceRoutingId =
 			source->getCompactSourceRoutingId();
+		    rebaseSeed.request.sourcePopulationEpoch =
+			source->getCompactPopulationEpoch();
 		    rebaseSeed.cacheKey =
 			bobol_lod_cache_key(rebaseSeed.request);
 		    const uint64_t staleView =
@@ -10242,7 +10415,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		hysteresisSeed.terminal = FALSE;
 		BObolViewLodState interactiveState;
 		BObolViewLodState quietState;
-		if (!interactiveState.applySourceResult(source, hysteresisSeed) ||
+		if (!bindCurrentCompactPopulation(hysteresisSeed, 0) ||
+		    !interactiveState.applySourceResult(source, hysteresisSeed) ||
 		    !quietState.applySourceResult(source, hysteresisSeed)) {
 		    printf("FAIL: explicit cut hysteresis fixture apply\n");
 		    ret = 1;
@@ -10421,7 +10595,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    sharedGrowthSeed.counts.pointCount = 3;
 		    sharedGrowthSeed.counts.originalPointCount = 3;
 		    sharedGrowthSeed.terminal = FALSE;
-		    if (!sharedGrowthState.applySourceResult(
+		    if (!bindCurrentCompactPopulation(sharedGrowthSeed, 0) ||
+			!sharedGrowthState.applySourceResult(
 			    source, sharedGrowthSeed) ||
 			!sharedGrowth->update(data, hierarchy, 1, FALSE)) {
 			printf("FAIL: shared resident-growth fixture publication\n");
@@ -10516,7 +10691,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    coordinateSeed.counts.originalPointCount = 3;
 		    coordinateSeed.counts.normalCount = 0;
 		    coordinateSeed.terminal = FALSE;
-		    if (!coordinateState.applySourceResult(
+		    if (!bindCurrentCompactPopulation(coordinateSeed, 0) ||
+			!coordinateState.applySourceResult(
 			    source, coordinateSeed)) {
 			printf("FAIL: coordinate-only retained allocation seed\n");
 			ret = 1;
@@ -10583,7 +10759,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    service.residentMeshAdmissionRevision() + 1;
 		limitedResult.residentAdmissionRevision = denialRevision;
 		BObolViewLodState limitedState;
-		if (!limitedState.applySourceResult(source, limitedResult)) {
+		if (!bindCurrentCompactPopulation(limitedResult, 0) ||
+		    !limitedState.applySourceResult(source, limitedResult)) {
 		    printf("FAIL: memory-limited frontier fixture apply\n");
 		    ret = 1;
 		} else {
@@ -10691,7 +10868,9 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    trialSummary.meshAssetPath;
 			trialResult.request.objectName =
 			    trialSummary.meshAssetName;
-			if (!trialState.applySourceResult(source, trialResult)) {
+			if (!bindCurrentCompactPopulation(
+				trialResult, trialIndex) ||
+			    !trialState.applySourceResult(source, trialResult)) {
 			    ret = 1;
 			    break;
 			}
@@ -10762,7 +10941,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			&admittedResult.preparedCadGeometryRevision);
 		admittedResult.residentCut = 1;
 		BObolViewLodState admittedState;
-		if (!admittedState.applySourceResult(source, admittedResult)) {
+		if (!bindCurrentCompactPopulation(admittedResult, 0) ||
+		    !admittedState.applySourceResult(source, admittedResult)) {
 		    printf("FAIL: affordable retained refinement fixture apply\n");
 		    ret = 1;
 		}
@@ -11054,6 +11234,10 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    multiResult.counts.pointCount = 3;
 		    multiResult.counts.originalPointCount = 3;
 		    multiResult.terminal = FALSE;
+		    if (!bindCurrentCompactPopulation(multiResult, 0)) {
+			printf("FAIL: multi-level compact population binding\n");
+			ret = 1;
+		    }
 		    /* A perceptually ordered finite-budget visit is scored for
 		     * one marginal population transition.  Even when the full
 		     * level-2 cut fits, admitting it in one leap would invalidate
@@ -11725,14 +11909,44 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    wirePayload->allocationPlanSerial != planSerial ||
 		    viewState.activeCadAllocationPlan() != 0 ||
 		    viewState.commitCadAllocationPlan(
-			planSerial, cadRevision + 1, demandRevision) ||
+			planSerial, cadRevision + 1, demandRevision,
+			63, 62, 0) ||
 		    viewState.activeCadAllocationPlan() != 0 ||
 		    !viewState.commitCadAllocationPlan(
-			planSerial, cadRevision, demandRevision) ||
-		    viewState.activeCadAllocationPlan() != planSerial) {
+			planSerial, cadRevision, demandRevision,
+			63, 62, 0) ||
+		    viewState.activeCadAllocationPlan() != planSerial ||
+		    !viewState.cadAllocationPlanCoversCurrentPopulation(
+			planSerial, 63, 62, 0)) {
 		    printf("FAIL: retained PoP allocation plan was not staged and "
 			   "committed atomically\n");
 		    ret = 1;
+		}
+		if (!ret) {
+		    BObolLodRequest sameDemand = results[0].request;
+		    sameDemand.drawMode = wirePayload->drawMode;
+		    sameDemand.requestedCut = wirePayload->requestedCut;
+		    sameDemand.requiredChunks = wirePayload->requiredChunks;
+		    sameDemand.projectedPixelDiameter =
+			wirePayload->projectedPixelDiameter;
+		    sameDemand.projectedPixelArea =
+			wirePayload->projectedPixelArea;
+		    sameDemand.projectedPixelPerimeter =
+			wirePayload->projectedPixelPerimeter;
+		    sameDemand.projectedBoundsContained =
+			wirePayload->projectedBoundsContained;
+		    sameDemand.targetPixelError = wirePayload->targetPixelError;
+		    sameDemand.viewRevision = wirePayload->viewRevision;
+		    sameDemand.policyRevision = wirePayload->policyRevision;
+		    sameDemand.visualEmphasis = wirePayload->visualEmphasis;
+		    if (!viewState.retargetCadPayload(
+			    wirePayload, wirePayload->activeCut, sameDemand) ||
+			!viewState.cadAllocationPlanCoversCurrentPopulation(
+			    planSerial, 63, 62, 0)) {
+			printf("FAIL: an active-cut-only retained retarget invalidated "
+			       "its allocation certificate\n");
+			ret = 1;
+		    }
 		}
 	    }
 	    if (!ret) {
@@ -11749,7 +11963,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		residentGrowth.resolvedCut = wirePayload->requestedCut;
 		residentGrowth.geometry.activeCut = wirePayload->activeCut;
 		residentGrowth.counts = wirePayload->counts;
-		if (!viewState.applySourceResult(source, residentGrowth)) {
+		if (!bindCurrentCompactPopulation(residentGrowth, 0) ||
+		    !viewState.applySourceResult(source, residentGrowth)) {
 		    printf("FAIL: retained PoP resident-growth result was rejected\n");
 		    ret = 1;
 		} else {
@@ -11765,6 +11980,13 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			    viewState.activeCadAllocationPlan()) {
 			printf("FAIL: resident growth discarded the retained PoP "
 			       "scene allocation\n");
+			ret = 1;
+		    }
+		    if (!ret &&
+			viewState.cadAllocationPlanCoversCurrentPopulation(
+			    viewState.activeCadAllocationPlan(), 63, 62, 0)) {
+			printf("FAIL: resident generation publication retained a stale "
+			       "allocation population certificate\n");
 			ret = 1;
 		    }
 		    }
@@ -12450,6 +12672,8 @@ test_view_controller_compact_direct_result_route(void)
 	    make_request("direct-route.c/leaf.s", "leaf.s");
 	request.sourceRevision = source->sourceRevision.getValue();
 	request.sourceRoutingId = source->getCompactSourceRoutingId();
+	request.sourcePopulationEpoch =
+	    source->getCompactPopulationEpoch();
 	request.occurrenceKey = summary.sourceInstanceKey;
 	request.sourceEntryIndex = 0;
 	request.viewRevision = controller.getLodViewRevision();
@@ -12573,6 +12797,48 @@ test_view_controller_compact_direct_result_route(void)
 			       "not reassert its host frame request\n");
 			ret = 1;
 		    }
+		}
+	    }
+	}
+	if (!ret) {
+	    /* Reinstall the same semantic occurrence while a result addressed to
+	     * the former dense population is in flight.  The key and entry index
+	     * may both be reused; only the fixed-width population generation can
+	     * prove that the completion belongs to the retired registry. */
+	    const uint64_t retiredPopulationEpoch =
+		request.sourcePopulationEpoch.value();
+	    BObolLodTask stale;
+	    stale.generation = controller.beginLodGeneration();
+	    stale.request = request;
+	    stale.request.bounds = SbBox3f(SbVec3f(-40.0f, -40.0f, -40.0f),
+		SbVec3f(40.0f, 40.0f, 40.0f));
+	    stale.realize = aabb_payload_task;
+	    stale.debugDelayMilliseconds = 50;
+	    if (service.submit(stale) == 0 ||
+		source->setCompactOccurrenceRegistry(occurrences) != 1 ||
+		source->getCompactPopulationEpoch() == retiredPopulationEpoch ||
+		wait_for_service(service)) {
+		printf("FAIL: stale compact population fixture setup\n");
+		ret = 1;
+	    } else {
+		BObolCompactInstanceHandle replacementHandle;
+		BObolCompactInstanceSummary replacementSummary;
+		if (!source->getCompactInstanceHandle(0, replacementHandle) ||
+		    !source->getCompactInstanceSummary(
+			replacementHandle, replacementSummary) ||
+		    bu_strcmp(replacementSummary.sourceInstanceKey.getString(),
+			summary.sourceInstanceKey.getString()) != 0 ||
+		    controller.processPendingLodResults(1, 0) != 1 ||
+		    controller.getLastLodAppliedResultCount() != 0 ||
+		    controller.getLastLodRejectedResultCount() != 1 ||
+		    controller.getViewLodState()->findCadForSourceEntry(
+			source, 0, replacementSummary.sourceInstanceKey) != NULL) {
+		    printf("FAIL: retired compact population result was not "
+			   "rejected (applied=%u rejected=%u diagnostics=%s)\n",
+			controller.getLastLodAppliedResultCount(),
+			controller.getLastLodRejectedResultCount(),
+			controller.getLastLodDiagnostics().getString());
+		    ret = 1;
 		}
 	    }
 	}
@@ -12798,6 +13064,8 @@ main(int argc, char **argv)
     if (runIsolated(test_view_lod_mesh_eviction_preserves_proxy))
 	return 1;
     if (runIsolated(test_mesh_lod_submit_action))
+	return 1;
+    if (runIsolated(test_compact_selection_edit_promotion))
 	return 1;
     if (runIsolated(test_cad_presentation_frame_retirement))
 	return 1;

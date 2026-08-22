@@ -71,10 +71,12 @@ struct BOBOL_EXPORT BObolProgressiveOptions {
      * atomic, so this is checked between bounded batches.  Zero disables the
      * time limit. */
     uint64_t maxProviderMicroseconds;
-    /** Admit the requested pixel-exact PoP cut without the interactive
-     * frame-time/quiet-time ceilings.  Offline captures and deterministic
-     * tests still present every selected cut before advancing, but need not
-     * spend eight seconds emulating a human pause. */
+    /** Admit the raster-stable (at most quarter-pixel error) PoP cut without
+     * interactive frame-time/quiet-time ceilings.  The mode remains active
+     * across controller-owned render pumps until an explicit options call
+     * disables it.  Offline captures and deterministic tests still present
+     * every selected cut before advancing, but need not emulate human pauses
+     * or depend on host rendering speed. */
     SbBool forceTerminalLodRefinement;
 };
 

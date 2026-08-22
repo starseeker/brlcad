@@ -1953,6 +1953,7 @@ test_batch_submission(void)
     TaskData firstData{&context, 1};
     TaskData duplicateData{&context, 2};
     TaskData routedData{&context, 3};
+    TaskData populationData{&context, 4};
 
     if (!service.start(2, TRUE)) {
 	printf("FAIL: LoD service did not start for batch submission test\n");
@@ -1975,11 +1976,17 @@ test_batch_submission(void)
     routed.request.sourceRoutingId = 91;
     routed.realizeData = &routedData;
 
-    std::vector<BObolLodTask> tasks{first, duplicate, routed};
+    BObolLodTask repopulated = routed;
+    repopulated.request.sourcePopulationEpoch = 2;
+    repopulated.realizeData = &populationData;
+
+    std::vector<BObolLodTask> tasks{
+	first, duplicate, routed, repopulated};
     std::vector<uint64_t> taskIds;
-    if (service.submitBatch(tasks, taskIds, TRUE) != 2 ||
+    if (service.submitBatch(tasks, taskIds, TRUE) != 3 ||
 	taskIds.size() != tasks.size() ||
-	taskIds[0] == 0 || taskIds[1] != 0 || taskIds[2] == 0) {
+	taskIds[0] == 0 || taskIds[1] != 0 || taskIds[2] == 0 ||
+	taskIds[3] == 0) {
 	printf("FAIL: LoD batch did not suppress only the duplicate route\n");
 	service.stop();
 	return 1;
@@ -1991,26 +1998,32 @@ test_batch_submission(void)
     }
 
     std::vector<BObolLodResult> results;
-    if (service.drainResults(results) != 2 || results.size() != 2) {
-	printf("FAIL: LoD batch did not publish both distinct routes\n");
+    if (service.drainResults(results) != 3 || results.size() != 3) {
+	printf("FAIL: LoD batch did not publish distinct route generations\n");
 	service.stop();
 	return 1;
     }
 
     bool foundFirst = false;
     bool foundRouted = false;
+    bool foundRepopulated = false;
     for (const BObolLodResult &result : results) {
 	if (result.request.sourceRoutingId == 0 &&
 	    result.counts.faceCount == 1)
 	    foundFirst = true;
 	if (result.request.sourceRoutingId == 91 &&
+	    result.request.sourcePopulationEpoch == 0 &&
 	    result.counts.faceCount == 3)
 	    foundRouted = true;
+	if (result.request.sourceRoutingId == 91 &&
+	    result.request.sourcePopulationEpoch == 2 &&
+	    result.counts.faceCount == 4)
+	    foundRepopulated = true;
     }
     {
 	std::lock_guard<std::mutex> lock(context.mutex);
-	if (!foundFirst || !foundRouted ||
-	    context.executionOrder.size() != 2 ||
+	if (!foundFirst || !foundRouted || !foundRepopulated ||
+	    context.executionOrder.size() != 3 ||
 	    std::find(context.executionOrder.begin(),
 		context.executionOrder.end(), 2) !=
 		context.executionOrder.end()) {

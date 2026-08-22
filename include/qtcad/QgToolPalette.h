@@ -44,6 +44,7 @@
 #include <QPushButton>
 #include <QSet>
 #include <QIcon>
+#include <QPointer>
 #include <QScrollArea>
 #include <QSplitter>
 #include "qtcad/defines.h"
@@ -88,12 +89,12 @@ public:
 	void setControls(QWidget *n_controls);
 	QgToolPaletteButton *buttonWidget() const
 	{
-		return button;
+		return button.data();
 	}
 	/* May be nullptr for placeholder elements constructed without a control widget. */
 	QWidget *controlsWidget() const
 	{
-		return controls;
+		return controls.data();
 	}
 	int scrollPosition() const
 	{
@@ -149,8 +150,8 @@ public:
 	bool use_event_filter = false;
 
 private:
-	QgToolPaletteButton *button = nullptr;
-	QWidget *controls = nullptr;
+	QPointer<QgToolPaletteButton> button;
+	QPointer<QWidget> controls;
 	int scroll_pos = 0;
 };
 
@@ -166,7 +167,8 @@ public:
 	QgToolPalette(QWidget *pparent = 0);
 	~QgToolPalette();
 	void addElement(QgToolPaletteElement *element);
-	void deleteElement(QgToolPaletteElement *element);
+	void deleteElement(QgToolPaletteElement *element,
+		bool selectReplacement = true);
 	void setIconWidth(int iwidth);
 	void setIconHeight(int iheight);
 	void setAlwaysSelected(int iheight);  // If 0 can disable all tools, if 1 some tool is always selected

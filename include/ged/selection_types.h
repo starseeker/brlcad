@@ -31,6 +31,15 @@ enum ged_selection_snap_kind {
     GED_SELECTION_SNAP_ENDPOINT = 2
 };
 
+/** Stable hash collections derived from one semantic selection set. */
+enum ged_selection_hash_kind {
+    GED_SELECTION_HASH_SELECTED_PATH = 1,
+    GED_SELECTION_HASH_ACTIVE_PATH,
+    GED_SELECTION_HASH_ACTIVE_PARENT_PATH,
+    GED_SELECTION_HASH_IMMEDIATE_PARENT_OBJECT,
+    GED_SELECTION_HASH_GRAND_PARENT_OBJECT
+};
+
 typedef int (*ged_view_selection_visit_cb)(
     struct ged_view_context *view_ctx,
     const char *path,

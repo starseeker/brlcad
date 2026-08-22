@@ -183,6 +183,21 @@ struct RenderFollowupRequest {
     bool fired = false;
 };
 
+struct PointerInputCapture {
+    std::vector<BObolInputEvent> events;
+};
+
+static int
+capture_pointer_input(void *data, BObolInputAction,
+	const BObolInputEvent *event)
+{
+    PointerInputCapture *capture = static_cast<PointerInputCapture *>(data);
+    if (!capture || !event)
+	return BOBOL_INPUT_RESULT_ERROR;
+    capture->events.push_back(*event);
+    return BOBOL_INPUT_RESULT_HANDLED;
+}
+
 static void
 request_render_during_traversal(void *data, SoAction *)
 {
@@ -685,6 +700,69 @@ main(int argc, char **argv)
     if (!swEndpoint)
 	FAIL("QgSW input test should create an endpoint");
     swCanvas.setObolInputEndpoint(swEndpoint);
+
+    /* BObol's input contract is expressed in physical viewport pixels while
+     * QMouseEvent positions are logical widget pixels.  Exercise the real Qt
+     * canvas boundary under this test's fractional QT_SCALE_FACTOR so a
+     * selection gesture cannot silently drift away from the pointer. */
+    BObolInputBinding pointerBindings[3];
+    const BObolInputEventType pointerTypes[3] = {
+	BOBOL_INPUT_POINTER_PRESS,
+	BOBOL_INPUT_POINTER_MOTION,
+	BOBOL_INPUT_POINTER_RELEASE
+    };
+    for (int i = 0; i < 3; ++i) {
+	pointerBindings[i].eventType = pointerTypes[i];
+	pointerBindings[i].key = BOBOL_INPUT_ANY;
+	pointerBindings[i].button = BOBOL_INPUT_ANY;
+	pointerBindings[i].requiredModifiers = BOBOL_INPUT_MOD_NONE;
+	pointerBindings[i].forbiddenModifiers = BOBOL_INPUT_MOD_NONE;
+	pointerBindings[i].priority = 100;
+	pointerBindings[i].action = static_cast<BObolInputAction>(100 + i);
+    }
+    PointerInputCapture pointerCapture;
+    const BObolInputActionLayer pointerLayer = {
+	"qtcad-physical-pointer-test", pointerBindings, 3,
+	capture_pointer_input
+    };
+    if (!bobol_display_endpoint_input_action_layer_set(swEndpoint,
+	    &pointerLayer, &pointerCapture, &pointerCapture))
+	FAIL("QgSW input test should install a physical-pixel capture layer");
+    QMouseEvent physicalPress = mouse_button_event(
+	QEvent::MouseButtonPress, 20, 30, Qt::LeftButton, Qt::LeftButton);
+    QMouseEvent physicalMoveStart = mouse_move_event(20, 30,
+	Qt::LeftButton);
+    QMouseEvent physicalMove = mouse_move_event(28, 37, Qt::LeftButton);
+    QMouseEvent physicalRelease = mouse_button_event(
+	QEvent::MouseButtonRelease, 28, 37, Qt::LeftButton, Qt::NoButton);
+    swCanvas.runMousePressForTest(&physicalPress);
+    swCanvas.runMouseMoveForTest(&physicalMoveStart);
+    swCanvas.runMouseMoveForTest(&physicalMove);
+    if (swController->isLodGestureActive())
+	FAIL("QgSW application pointer gestures should not enter camera LoD interaction");
+    swCanvas.runMouseReleaseForTest(&physicalRelease);
+    const double inputDpr = swCanvas.devicePixelRatioF();
+    const int expectedPressX = qRound(20.0 * inputDpr);
+    const int expectedPressY = qRound(30.0 * inputDpr);
+    const int expectedMoveX = qRound(28.0 * inputDpr);
+    const int expectedMoveY = qRound(37.0 * inputDpr);
+    if (pointerCapture.events.size() != 4 ||
+	pointerCapture.events[0].x != expectedPressX ||
+	pointerCapture.events[0].y != expectedPressY ||
+	pointerCapture.events[1].x != expectedPressX ||
+	pointerCapture.events[1].y != expectedPressY ||
+	pointerCapture.events[1].dx != 0 || pointerCapture.events[1].dy != 0 ||
+	pointerCapture.events[2].x != expectedMoveX ||
+	pointerCapture.events[2].y != expectedMoveY ||
+	pointerCapture.events[2].dx != expectedMoveX - expectedPressX ||
+	pointerCapture.events[2].dy != expectedMoveY - expectedPressY ||
+	pointerCapture.events[3].x != expectedMoveX ||
+	pointerCapture.events[3].y != expectedMoveY)
+	FAIL("QgSW should normalize Qt pointer input to physical viewport pixels");
+    if (!bobol_display_endpoint_input_action_layer_clear_if(swEndpoint,
+	    &pointerCapture))
+	FAIL("QgSW input test should clear its physical-pixel capture layer");
+
     struct bv *swView = bv_context_view(swCanvas.viewContext());
     struct bv_adc_state swAdc = BV_ADC_STATE_INIT;
     struct bv_axes_state swModelAxes = BV_AXES_STATE_INIT;

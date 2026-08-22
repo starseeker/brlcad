@@ -28,6 +28,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "bu/hash.h"
@@ -44,6 +45,7 @@
 
 struct ged_native_selection_set {
     std::set<std::string> selected_paths;
+    mutable std::map<std::string, std::vector<ged_db_index_id>> selected_path_ids;
     mutable int index_current = 0;
     mutable std::set<ged_db_index_id> selected_path_hashes;
     mutable std::set<ged_db_index_id> active_path_hashes;
@@ -376,21 +378,6 @@ ged_selection_path_ids_resolve(struct ged *gedp,
 }
 
 
-static ged_db_index_id
-ged_selection_path_hash(struct ged *gedp,
-			const std::string &path,
-			size_t max_len = 0)
-{
-    std::vector<ged_db_index_id> ids;
-    if (ged_selection_path_ids_resolve(gedp, path, ids))
-	return ged_db_index_path_hash(gedp, ids.data(), ids.size(), max_len);
-
-    std::vector<unsigned long long> digest =
-	ged_selection_path_digest_string(path.c_str());
-    return ged_selection_path_hash_ids(digest, max_len);
-}
-
-
 static int
 ged_selection_path_prefix(const std::string &prefix, const std::string &path)
 {
@@ -461,6 +448,75 @@ ged_selection_expand_path(struct ged *gedp,
 }
 
 
+static const std::vector<ged_db_index_id> &
+ged_selection_native_path_ids(struct ged *gedp,
+	const ged_native_selection_set *set,
+	const std::string &path)
+{
+    static const std::vector<ged_db_index_id> empty;
+    if (!set || path.empty())
+	return empty;
+
+    auto cached = set->selected_path_ids.find(path);
+    if (cached != set->selected_path_ids.end())
+	return cached->second;
+
+    std::vector<ged_db_index_id> ids;
+    (void)ged_selection_path_ids_resolve(gedp, path, ids);
+    return set->selected_path_ids.emplace(path, std::move(ids)).first->second;
+}
+
+
+static void
+ged_selection_native_path_ids_prune(ged_native_selection_set *set)
+{
+    if (!set)
+	return;
+
+    for (auto entry = set->selected_path_ids.begin();
+	    entry != set->selected_path_ids.end();) {
+	if (set->selected_paths.find(entry->first) == set->selected_paths.end())
+	    entry = set->selected_path_ids.erase(entry);
+	else
+	    ++entry;
+    }
+}
+
+
+static void
+ged_selection_expand_path_hashes(struct ged *gedp,
+	const std::vector<ged_db_index_id> &path,
+	std::set<ged_db_index_id> &out,
+	std::set<ged_db_index_id> &seen)
+{
+    if (!gedp || path.empty())
+	return;
+
+    const ged_db_index_id leaf = path.back();
+    struct ged_db_index_record rec;
+    const bool repeated = seen.find(leaf) != seen.end();
+    if (repeated || !ged_db_index_record_get(gedp, leaf, &rec) ||
+	!rec.child_count) {
+	const ged_db_index_id path_hash = ged_db_index_path_hash(gedp,
+	    path.data(), path.size(), 0);
+	if (path_hash)
+	    out.insert(path_hash);
+	return;
+    }
+
+    seen.insert(leaf);
+    for (size_t i = 0; i < rec.child_count; ++i) {
+	struct ged_db_index_child child;
+	if (!ged_db_index_child_at(gedp, leaf, i, &child))
+	    continue;
+	std::vector<ged_db_index_id> child_path = path;
+	child_path.push_back(child.record.id);
+	ged_selection_expand_path_hashes(gedp, child_path, out, seen);
+    }
+    seen.erase(leaf);
+}
+
+
 static void
 ged_selection_native_index_clear(const ged_native_selection_set *set)
 {
@@ -492,24 +548,21 @@ ged_selection_native_index_ensure(struct ged *gedp,
 
     ged_selection_native_index_clear(set);
     for (const std::string &path : set->selected_paths) {
-	ged_db_index_id selected_hash = ged_selection_path_hash(gedp, path);
+	const std::vector<ged_db_index_id> &ids =
+	    ged_selection_native_path_ids(gedp, set, path);
+	ged_db_index_id selected_hash = !ids.empty() ?
+	    ged_db_index_path_hash(gedp, ids.data(), ids.size(), 0) :
+	    ged_selection_path_hash_ids(
+		ged_selection_path_digest_string(path.c_str()), 0);
 	if (selected_hash) {
 	    set->selected_path_hashes.insert(selected_hash);
 	    set->active_path_hashes.insert(selected_hash);
 	}
 
-	std::set<std::string> active_paths;
-	ged_selection_expand_path(gedp, path, active_paths);
-	active_paths.insert(path);
-	for (const std::string &active_path : active_paths) {
-	    ged_db_index_id active_hash =
-		ged_selection_path_hash(gedp, active_path);
-	    if (active_hash)
-		set->active_path_hashes.insert(active_hash);
-	}
-
-	std::vector<ged_db_index_id> ids;
-	if (ged_selection_path_ids_resolve(gedp, path, ids)) {
+	if (!ids.empty()) {
+	    std::set<ged_db_index_id> seen;
+	    ged_selection_expand_path_hashes(gedp, ids,
+		set->active_path_hashes, seen);
 	    for (size_t len = ids.size(); len > 1; len--) {
 		ged_db_index_id parent_hash =
 		    ged_db_index_path_hash(gedp, ids.data(), ids.size(),
@@ -517,14 +570,24 @@ ged_selection_native_index_ensure(struct ged *gedp,
 		if (parent_hash)
 		    set->active_parent_path_hashes.insert(parent_hash);
 	    }
+	    if (ids.size() > 1)
+		set->immediate_parent_object_ids.insert(ids[ids.size() - 2]);
+	    for (size_t i = 0; i + 2 < ids.size(); i++)
+		set->grand_parent_object_ids.insert(ids[i]);
+	} else {
+	    const std::vector<unsigned long long> digest =
+		ged_selection_path_digest_string(path.c_str());
+	    for (size_t len = digest.size(); len > 1; --len) {
+		const ged_db_index_id parent_hash =
+		    ged_selection_path_hash_ids(digest, len - 1);
+		if (parent_hash)
+		    set->active_parent_path_hashes.insert(parent_hash);
+	    }
+	    if (digest.size() > 1)
+		set->immediate_parent_object_ids.insert(digest[digest.size() - 2]);
+	    for (size_t i = 0; i + 2 < digest.size(); ++i)
+		set->grand_parent_object_ids.insert(digest[i]);
 	}
-
-	std::vector<unsigned long long> digest =
-	    ged_selection_path_digest_string(path.c_str());
-	if (digest.size() > 1)
-	    set->immediate_parent_object_ids.insert(digest[digest.size() - 2]);
-	for (size_t i = 0; i + 2 < digest.size(); i++)
-	    set->grand_parent_object_ids.insert(digest[i]);
     }
 
     set->index_current = 1;
@@ -541,6 +604,7 @@ ged_selection_native_expand(struct ged *gedp, ged_native_selection_set *set)
     for (const std::string &path : set->selected_paths)
 	ged_selection_expand_path(gedp, path, expanded);
     set->selected_paths.swap(expanded);
+    set->selected_path_ids.clear();
     ged_selection_native_index_invalidate(set);
 }
 
@@ -659,6 +723,7 @@ ged_selection_native_collapse(struct ged *gedp, ged_native_selection_set *set)
     }
 
     set->selected_paths.swap(collapsed);
+    set->selected_path_ids.clear();
     ged_selection_native_index_invalidate(set);
 }
 
@@ -749,7 +814,14 @@ ged_selection_native_path_op(struct ged *gedp,
 	return 0;
 
     std::string cpath = ged_selection_canonical_path(path);
-    if (cpath.empty() || !ged_selection_path_is_valid_or_drawn(gedp, cpath))
+    if (cpath.empty())
+	return 0;
+
+    std::vector<ged_db_index_id> resolved_ids;
+    const bool resolved =
+	ged_selection_path_ids_resolve(gedp, cpath, resolved_ids) != 0;
+    if (select_path && !resolved &&
+	!ged_selection_path_is_valid_or_drawn(gedp, cpath))
 	return 0;
 
     int changed = 0;
@@ -776,10 +848,15 @@ ged_selection_native_path_op(struct ged *gedp,
 	changed = !to_erase.empty();
     }
 
-    if (changed)
+
+    if (changed) {
+	ged_selection_native_path_ids_prune(set);
+	if (select_path && set->selected_paths.find(cpath) !=
+		set->selected_paths.end())
+	    set->selected_path_ids[cpath] = std::move(resolved_ids);
 	ged_selection_revision_bump(gedp);
-    if (changed)
 	ged_selection_native_index_invalidate(set);
+    }
     return 1;
 }
 
@@ -934,8 +1011,11 @@ ged_selection_native_prune_invalid(struct ged *gedp,
     }
     for (const std::string &path : invalid)
 	set->selected_paths.erase(path);
-    if (!invalid.empty())
+
+    if (!invalid.empty()) {
+	ged_selection_native_path_ids_prune(set);
 	ged_selection_native_index_invalidate(set);
+    }
     return invalid.empty() ? 0 : 1;
 }
 
@@ -995,25 +1075,6 @@ ged_selection_native_present(struct ged *gedp)
 	}
     }
 
-    int changed = 0;
-    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-    for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
-	struct ged_view_context *view_ctx =
-	    (struct ged_view_context *)BU_PTBL_GET(views, i);
-	if (!view_ctx)
-	    continue;
-	for (const std::string &path : removed) {
-	    if (ged_selection_remove_path(view_ctx,
-		    GED_SELECTION_SELECTED_PATH, path.c_str()))
-		changed = 1;
-	}
-	for (const std::string &path : added) {
-	    if (ged_selection_add_path(view_ctx,
-		    GED_SELECTION_SELECTED_PATH, path.c_str()))
-		changed = 1;
-	}
-    }
-
     std::vector<const char *> added_paths;
     std::vector<const char *> removed_paths;
     std::vector<const char *> selected_path_views;
@@ -1026,6 +1087,23 @@ ged_selection_native_present(struct ged *gedp)
 	removed_paths.push_back(path.c_str());
     for (const std::string &path : effective_paths)
 	selected_path_views.push_back(path.c_str());
+
+    int changed = 0;
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
+	struct ged_view_context *view_ctx =
+	    (struct ged_view_context *)BU_PTBL_GET(views, i);
+	if (!view_ctx)
+	    continue;
+	if (ged_selection_apply_path_delta(view_ctx,
+		GED_SELECTION_SELECTED_PATH,
+		added_paths.empty() ? NULL : added_paths.data(),
+		added_paths.size(),
+		removed_paths.empty() ? NULL : removed_paths.data(),
+		removed_paths.size()))
+	    changed = 1;
+    }
+
     if ((!added_paths.empty() || !removed_paths.empty()) &&
 	ged_scene_backend_selection_private(gedp,
 	    added_paths.empty() ? NULL : added_paths.data(), added_paths.size(),
@@ -1195,6 +1273,51 @@ ged_selection_state_hash(struct ged *gedp, const char *set_name)
 }
 
 
+size_t
+ged_selection_hashes(struct ged *gedp, const char *set_name,
+	    enum ged_selection_hash_kind kind, ged_db_index_id *hashes,
+	    size_t capacity)
+{
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    const ged_native_selection_set *native_set =
+	ged_selection_native_set(state, set_name, 0);
+    if (!native_set)
+	return 0;
+
+    ged_selection_native_index_ensure(gedp, native_set);
+    const std::set<ged_db_index_id> *values = nullptr;
+    switch (kind) {
+	case GED_SELECTION_HASH_SELECTED_PATH:
+	    values = &native_set->selected_path_hashes;
+	    break;
+	case GED_SELECTION_HASH_ACTIVE_PATH:
+	    values = &native_set->active_path_hashes;
+	    break;
+	case GED_SELECTION_HASH_ACTIVE_PARENT_PATH:
+	    values = &native_set->active_parent_path_hashes;
+	    break;
+	case GED_SELECTION_HASH_IMMEDIATE_PARENT_OBJECT:
+	    values = &native_set->immediate_parent_object_ids;
+	    break;
+	case GED_SELECTION_HASH_GRAND_PARENT_OBJECT:
+	    values = &native_set->grand_parent_object_ids;
+	    break;
+	default:
+	    return 0;
+    }
+
+    if (hashes && capacity) {
+	size_t copied = 0;
+	for (ged_db_index_id value : *values) {
+	    if (copied >= capacity)
+		break;
+	    hashes[copied++] = value;
+	}
+    }
+    return values->size();
+}
+
+
 int
 ged_selection_clear(struct ged *gedp, const char *set_name)
 {
@@ -1205,6 +1328,7 @@ ged_selection_clear(struct ged *gedp, const char *set_name)
 	return 0;
     const int changed = native_set->selected_paths.empty() ? 0 : 1;
     native_set->selected_paths.clear();
+    native_set->selected_path_ids.clear();
     ged_selection_native_index_invalidate(native_set);
     if (changed) {
 	ged_selection_revision_bump(gedp);
@@ -1230,6 +1354,7 @@ ged_selection_clear_matching(struct ged *gedp, const char *set_pattern)
 	if (native_set) {
 	    const int set_changed = native_set->selected_paths.empty() ? 0 : 1;
 	    native_set->selected_paths.clear();
+	    native_set->selected_path_ids.clear();
 	    ged_selection_native_index_invalidate(native_set);
 	    if (set_changed) {
 		changed = 1;
@@ -1296,6 +1421,95 @@ ged_selection_select_path(struct ged *gedp,
 }
 
 
+static int
+ged_selection_paths_op(struct ged *gedp,
+	const char *set_name,
+	const char *const *paths,
+	size_t path_count,
+	int UNUSED(recompute_hierarchy),
+	int select_paths)
+{
+    if (!gedp || (!paths && path_count))
+	return 0;
+
+    struct ged_selection_state *state = ged_selection_native_state(gedp);
+    ged_native_selection_set *native_set =
+	ged_selection_native_set(state, set_name, 1);
+    if (!state || !native_set)
+	return 0;
+
+    std::set<std::string> queries;
+    std::map<std::string, std::vector<ged_db_index_id>> query_ids;
+    for (size_t i = 0; i < path_count; ++i) {
+	const std::string path = ged_selection_canonical_path(paths[i]);
+	if (path.empty())
+	    return 0;
+	if (select_paths) {
+	    std::vector<ged_db_index_id> ids;
+	    const bool resolved =
+		ged_selection_path_ids_resolve(gedp, path, ids) != 0;
+	    if (!resolved && !ged_selection_path_is_valid_or_drawn(gedp, path))
+		return 0;
+	    query_ids[path] = std::move(ids);
+	}
+	queries.insert(path);
+    }
+
+    std::set<std::string> next = native_set->selected_paths;
+    if (select_paths) {
+	next.insert(queries.begin(), queries.end());
+	std::set<std::string> normalized;
+	for (const std::string &path : next) {
+	    bool covered = false;
+	    if (!normalized.empty()) {
+		auto previous = normalized.upper_bound(path);
+		if (previous != normalized.begin()) {
+		    --previous;
+		    covered = ged_selection_path_prefix(*previous, path);
+		}
+	    }
+	    if (!covered)
+		normalized.insert(path);
+	}
+	next.swap(normalized);
+    } else {
+	for (const std::string &query : queries) {
+	    auto path = next.lower_bound(query);
+	    while (path != next.end() &&
+		ged_selection_path_prefix(query, *path))
+		path = next.erase(path);
+	}
+    }
+
+    if (next != native_set->selected_paths) {
+	native_set->selected_paths.swap(next);
+	ged_selection_native_path_ids_prune(native_set);
+	for (auto &entry : query_ids) {
+	    if (native_set->selected_paths.find(entry.first) !=
+		    native_set->selected_paths.end())
+		native_set->selected_path_ids[entry.first] =
+		    std::move(entry.second);
+	}
+	ged_selection_native_index_invalidate(native_set);
+	ged_selection_revision_bump(gedp);
+	ged_selection_dirty_mark(gedp, set_name);
+    }
+    return 1;
+}
+
+
+int
+ged_selection_select_paths(struct ged *gedp,
+	const char *set_name,
+	const char *const *paths,
+	size_t path_count,
+	int recompute_hierarchy)
+{
+    return ged_selection_paths_op(gedp, set_name, paths, path_count,
+	recompute_hierarchy, 1);
+}
+
+
 int
 ged_selection_select_path_matching(struct ged *gedp,
 				   const char *set_pattern,
@@ -1314,6 +1528,18 @@ ged_selection_deselect_path(struct ged *gedp,
 			    int recompute_hierarchy)
 {
     return ged_selection_path_op(gedp, set_name, path, recompute_hierarchy, 0);
+}
+
+
+int
+ged_selection_deselect_paths(struct ged *gedp,
+	const char *set_name,
+	const char *const *paths,
+	size_t path_count,
+	int recompute_hierarchy)
+{
+    return ged_selection_paths_op(gedp, set_name, paths, path_count,
+	recompute_hierarchy, 0);
 }
 
 
@@ -1378,6 +1604,7 @@ ged_selection_recompute(struct ged *gedp, const char *set_name)
 	ged_selection_native_set(state, set_name, 0);
     if (!native_set)
 	return 0;
+    native_set->selected_path_ids.clear();
     const int changed = ged_selection_native_prune_invalid(gedp, native_set);
     ged_selection_native_index_invalidate(native_set);
     if (changed) {
@@ -1401,6 +1628,8 @@ ged_selection_recompute_matching(struct ged *gedp, const char *set_pattern)
     for (const std::string &key : keys) {
 	ged_native_selection_set *native_set =
 	    ged_selection_native_set(state, key.c_str(), 0);
+	if (native_set)
+	    native_set->selected_path_ids.clear();
 	if (ged_selection_native_prune_invalid(gedp, native_set)) {
 	    changed = 1;
 	    ged_selection_dirty_mark(gedp, key.c_str());

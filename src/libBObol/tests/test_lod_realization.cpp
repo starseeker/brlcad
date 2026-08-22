@@ -113,6 +113,22 @@ test_key_determinism(void)
 	return 1;
     }
 
+    /* Owner-local compact routing generations must reject stale results but
+     * must not fragment the persistent geometry cache. */
+    b = a;
+    b.sourceRoutingId = 17;
+    b.sourcePopulationEpoch = 23;
+    if (bu_strcmp(key_a.value.getString(),
+	    bobol_lod_cache_key(b).value.getString()) != 0) {
+	printf("FAIL: compact routing generation polluted geometry cache key\n");
+	return 1;
+    }
+    if (bobol_lod_request_keys_equal(a, b) ||
+	bobol_lod_result_matches_request(result, b)) {
+	printf("FAIL: structured LoD result identity ignored compact routing\n");
+	return 1;
+    }
+
     return 0;
 }
 

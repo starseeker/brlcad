@@ -79,7 +79,13 @@ QgPluginCommands::run(QgPluginManager *manager,
 	return 0;
     }
     if (verb == QLatin1String("reload")) {
-	manager->reload();
+	QStringList failures;
+	if (!manager->reload(&failures)) {
+	    appendStr(err, QStringLiteral("plugins: reload incomplete\n"));
+	    for (const QString &failure : failures)
+		appendStr(err, QStringLiteral("  %1\n").arg(failure));
+	    return 1;
+	}
 	appendStr(out, QStringLiteral("plugins: reloaded\n"));
 	return 0;
     }

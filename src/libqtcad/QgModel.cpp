@@ -385,8 +385,13 @@ QgItem::path_items() const
 unsigned long long
 QgItem::path_hash() const
 {
+	if (path_hash_valid)
+		return cached_path_hash;
 	std::vector<unsigned long long> pitems = path_items();
-	return ged_db_index_path_hash(mdl->ged(), pitems.data(), pitems.size(), 0);
+	cached_path_hash = ged_db_index_path_hash(mdl->ged(), pitems.data(),
+		pitems.size(), 0);
+	path_hash_valid = true;
+	return cached_path_hash;
 }
 
 QgModel::QgModel(QObject *p, const char *npath)
@@ -815,6 +820,18 @@ QgModel::itemIndexRemoveSubtree(QgItem *item)
 
 
 void
+QgModel::invalidateItemPathHashes(QgItem *item)
+{
+	if (!item)
+		return;
+	item->cached_path_hash = 0;
+	item->path_hash_valid = false;
+	for (QgItem *child : item->children)
+		invalidateItemPathHashes(child);
+}
+
+
+void
 QgModel::itemIndexClear()
 {
 	items_by_instance_hash.clear();
@@ -1223,6 +1240,7 @@ QgModel::applyLoadedHierarchyDeltas(const std::vector<std::string> *candidate_pa
 				source_parent->children.begin() + source_row);
 			source_parent->c_count = source_parent->children.size();
 			item->parentItem = dest_parent;
+			invalidateItemPathHashes(item);
 			item->op = move.op;
 			dest_parent->children.insert(dest_parent->children.begin() +
 				dest_row, item);
@@ -1871,7 +1889,8 @@ QgModel::data(const QModelIndex &index, int role) const
 		return QVariant(qi->draw_state);
 	}
 	if (role == SelectDisplayRole) {
-		return QVariant(ged_selection_is_path_selected(gedp, nullptr, qi->path_hash()));
+		return QVariant(selection_selected_path_hashes.find(qi->path_hash()) !=
+			selection_selected_path_hashes.end());
 	}
 
 	if (role == TypeIconDisplayRole)
@@ -1881,17 +1900,23 @@ QgModel::data(const QModelIndex &index, int role) const
 		switch (qi->mdl->interaction_mode) {
 		case 0:
 			if (qi->open_itm == false &&
-				ged_selection_is_path_active_parent(gedp, nullptr, qi->path_hash()))
+					selection_active_parent_path_hashes.find(qi->path_hash()) !=
+					selection_active_parent_path_hashes.end())
 				return QVariant(1);
 			return QVariant(0);
 		case 1:
-			if (ged_selection_is_object_parent(gedp, nullptr, qi->ihash))
+			if (selection_immediate_parent_object_ids.find(qi->ihash) !=
+					selection_immediate_parent_object_ids.end() ||
+				selection_grand_parent_object_ids.find(qi->ihash) !=
+					selection_grand_parent_object_ids.end())
 				return QVariant(2);
 			return QVariant(0);
 		case 2:
-			if (ged_selection_is_object_immediate_parent(gedp, nullptr, qi->ihash))
+			if (selection_immediate_parent_object_ids.find(qi->ihash) !=
+					selection_immediate_parent_object_ids.end())
 				return QVariant(3);
-			if (ged_selection_is_object_grand_parent(gedp, nullptr, qi->ihash))
+			if (selection_grand_parent_object_ids.find(qi->ihash) !=
+					selection_grand_parent_object_ids.end())
 				return QVariant(2);
 			return QVariant(0);
 		default:
@@ -2112,35 +2137,37 @@ QgModel::notifySelectionItemsChanged()
 	QVector<int> roles;
 	roles << SelectDisplayRole << HighlightDisplayRole;
 
-	std::set<std::string> current_paths;
 	struct ged *gedp = m_session ? m_session->ged() : nullptr;
-	if (gedp) {
-		struct bu_vls paths = BU_VLS_INIT_ZERO;
-		(void)ged_selection_list_paths(gedp, nullptr, &paths);
-		const char *start = bu_vls_cstr(&paths);
-		for (const char *cursor = start; ; cursor++) {
-			if (*cursor != '\n' && *cursor != '\r' && *cursor != '\0')
-				continue;
-			if (cursor > start)
-				current_paths.insert(std::string(start,
-					static_cast<size_t>(cursor - start)));
-			if (*cursor == '\0')
-				break;
-			start = cursor + 1;
-		}
-		bu_vls_free(&paths);
-	}
+	using HashSet = std::unordered_set<unsigned long long>;
+	const HashSet old_selected = std::move(selection_selected_path_hashes);
+	const HashSet old_active_parents =
+		std::move(selection_active_parent_path_hashes);
+	const HashSet old_immediate_parents =
+		std::move(selection_immediate_parent_object_ids);
+	const HashSet old_grand_parents =
+		std::move(selection_grand_parent_object_ids);
 
-	std::set<std::string> affected_paths;
-	std::set_symmetric_difference(selection_display_paths.begin(),
-		selection_display_paths.end(), current_paths.begin(),
-		current_paths.end(), std::inserter(affected_paths,
-			affected_paths.end()));
-	if (selection_display_mode != interaction_mode) {
-		affected_paths.insert(selection_display_paths.begin(),
-			selection_display_paths.end());
-		affected_paths.insert(current_paths.begin(), current_paths.end());
-	}
+	const auto load_hashes = [gedp](enum ged_selection_hash_kind kind) {
+		HashSet ret;
+		if (!gedp)
+			return ret;
+		const size_t count = ged_selection_hashes(gedp, nullptr, kind,
+			nullptr, 0);
+		std::vector<ged_db_index_id> values(count);
+		if (count)
+			(void)ged_selection_hashes(gedp, nullptr, kind,
+				values.data(), values.size());
+		ret.insert(values.begin(), values.end());
+		return ret;
+	};
+	selection_selected_path_hashes =
+		load_hashes(GED_SELECTION_HASH_SELECTED_PATH);
+	selection_active_parent_path_hashes =
+		load_hashes(GED_SELECTION_HASH_ACTIVE_PARENT_PATH);
+	selection_immediate_parent_object_ids =
+		load_hashes(GED_SELECTION_HASH_IMMEDIATE_PARENT_OBJECT);
+	selection_grand_parent_object_ids =
+		load_hashes(GED_SELECTION_HASH_GRAND_PARENT_OBJECT);
 
 	std::unordered_set<QgItem *> notified;
 	const auto notify_item = [this, &roles, &notified](QgItem *item) {
@@ -2153,40 +2180,21 @@ QgModel::notifySelectionItemsChanged()
 		notification_stats.items_notified++;
 	};
 
-	for (const std::string &path : affected_paths) {
-		const size_t depth = gedp ?
-			ged_db_index_path_resolve(gedp, path.c_str(), nullptr, 0) : 0;
-		if (!depth)
-			continue;
-		std::vector<unsigned long long> ids(depth);
-		if (ged_db_index_path_resolve(gedp, path.c_str(), ids.data(),
-				ids.size()) != depth)
-			continue;
-
-		for (size_t prefix_len = 1; prefix_len <= ids.size(); prefix_len++) {
-			const unsigned long long path_hash =
-				ged_db_index_path_hash(gedp, ids.data(), ids.size(),
-					prefix_len);
+	const auto notify_path_hashes = [this, &notify_item](const HashSet &hashes) {
+		for (unsigned long long path_hash : hashes) {
 			notification_stats.path_queries++;
 			auto path_it = items_by_path_hash.find(path_hash);
 			if (path_it != items_by_path_hash.end()) {
 				notification_stats.path_candidates += path_it->second.size();
-				for (QgItem *item : path_it->second) {
-					if (!item)
-						continue;
-					const std::vector<unsigned long long> candidate =
-						item->path_items();
-					if (candidate.size() != prefix_len ||
-						!std::equal(candidate.begin(),
-							candidate.end(), ids.begin()))
-						continue;
+				for (QgItem *item : path_it->second)
 					notify_item(item);
-				}
 			}
-
-			/* Parent-impact modes are object based: every loaded occurrence
-			 * of an affected ancestor object may change color. */
-			auto object_it = items_by_instance_hash.find(ids[prefix_len - 1]);
+		}
+	};
+	const auto notify_object_ids = [this, &notify_item](const HashSet &ids) {
+		for (unsigned long long object_id : ids) {
+			notification_stats.path_queries++;
+			auto object_it = items_by_instance_hash.find(object_id);
 			if (object_it != items_by_instance_hash.end()) {
 				notification_stats.path_candidates +=
 					object_it->second.size();
@@ -2194,10 +2202,20 @@ QgModel::notifySelectionItemsChanged()
 					notify_item(item);
 			}
 		}
-	}
+	};
 
-	selection_display_paths.swap(current_paths);
-	selection_display_mode = interaction_mode;
+	/* Notify both sides of the state transition.  Hash-index lookups touch only
+	 * loaded rows and avoid resolving every selected string path in the paint
+	 * path.  Including all four relations also makes mode changes exact. */
+	notify_path_hashes(old_selected);
+	notify_path_hashes(selection_selected_path_hashes);
+	notify_path_hashes(old_active_parents);
+	notify_path_hashes(selection_active_parent_path_hashes);
+	notify_object_ids(old_immediate_parents);
+	notify_object_ids(selection_immediate_parent_object_ids);
+	notify_object_ids(old_grand_parents);
+	notify_object_ids(selection_grand_parent_object_ids);
+
 }
 
 

@@ -395,10 +395,18 @@ struct BOBOL_EXPORT BObolLodRequest {
      * submission time.
      */
     BObolSourceRoutingId sourceRoutingId;
-    /* Fixed-width source-local compact-index hint.  UINT32_MAX means the
-     * request is not backed by a compact entry.  The occurrence key remains
-     * authoritative across index rebuilds; owner-thread consumers validate
-     * this hint before using it and fall back to the key on mismatch. */
+    /* Generation of the dense compact-entry population addressed by
+     * sourceEntryIndex.  This is owner-thread routing metadata, not geometry
+     * or persistent-cache identity.  A compact occurrence request must carry
+     * a nonzero value so a late worker result cannot bind to a recycled entry
+     * after erase/redraw or edit-driven registry replacement. */
+    BObolSourcePopulationEpoch sourcePopulationEpoch;
+    /* Fixed-width source-local compact index.  UINT32_MAX means the request
+     * is not backed by a compact entry.  The occurrence key remains semantic
+     * identity across index rebuilds; owner-thread result publication
+     * validates both values against sourcePopulationEpoch before installing
+     * the dense binding.  Within that epoch an empty slot is authoritative
+     * negative evidence and does not require a string-table fallback. */
     uint32_t sourceEntryIndex;
     BObolViewEpoch viewRevision;
     BObolPolicyEpoch policyRevision;

@@ -416,7 +416,9 @@ public:
 			if (!this->matches(inputs) ||
 			    !this->viewState->commitCadAllocationPlan(
 				this->allocationPlanSerial, this->cadRevision,
-				this->residentDemandRevision)) {
+				this->residentDemandRevision,
+				this->viewRevision, this->policyRevision,
+				this->fixedCadPresentationCost)) {
 			    finishSlice();
 			    return BOBOL_RETAINED_ALLOCATION_STALE;
 			}
@@ -598,7 +600,7 @@ private:
 	    !std::isfinite(payload->projectedPixelDiameter) ||
 	    payload->projectedPixelDiameter <= 0.0f ||
 	    !payload->projectedBoundsContained ||
-	    payload->visualEmphasis > 0 ||
+	    payload->visualEmphasis >= 2 ||
 	    visualFootprint(payload) >= protectedFootprintPixels)
 	    return false;
 	return payload->projectedPixelDiameter <=
@@ -716,10 +718,18 @@ private:
 	}
 	if (std::isfinite(protectedError) && source.assembly) {
 	    BObolCompactInstanceHandle handle;
-	    if (payload->sourceEntryIndex <= static_cast<uint32_t>(
+	    size_t sourceEntryIndex = static_cast<size_t>(
+		payload->sourceEntryIndex);
+	    if ((payload->sourcePopulationEpoch !=
+		    source.source->getCompactPopulationEpoch() ||
+		 payload->sourceEntryIndex == UINT32_MAX) &&
+		!source.source->getCompactInstanceIndex(
+		    payload->sourceInstanceKey.getString(), sourceEntryIndex))
+		sourceEntryIndex = SIZE_MAX;
+	    if (sourceEntryIndex <= static_cast<size_t>(
 		    std::numeric_limits<int>::max()) &&
 		source.source->getCompactInstanceHandle(
-		    static_cast<int>(payload->sourceEntryIndex), handle) &&
+		    static_cast<int>(sourceEntryIndex), handle) &&
 		handle.isValid()) {
 		Obol::InstanceId instance;
 		instance.w0 = handle.instanceWord0;

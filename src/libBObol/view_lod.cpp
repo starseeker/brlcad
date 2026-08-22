@@ -39,6 +39,12 @@
 SO_ELEMENT_SOURCE(SoBRLViewLodElement);
 SO_NODE_SOURCE(SoBRLViewLodGroup);
 
+static bool
+view_lod_float_bits_equal(float a, float b)
+{
+    return memcmp(&a, &b, sizeof(float)) == 0;
+}
+
 static std::string
 view_lod_string_key(const char *prefix, const SbString &value)
 {
@@ -327,6 +333,7 @@ view_lod_progressive_counts(
 BObolViewLodState::CadPayload::CadPayload(void) :
     preparedCadGeometryRevision(0),
     sourceRoutingId(0),
+    sourcePopulationEpoch(0),
     sourceEntryIndex(UINT32_MAX),
     sourceContentHash(0),
     databaseRevision(0),
@@ -342,7 +349,6 @@ BObolViewLodState::CadPayload::CadPayload(void) :
     allocationDrawMode(BOBOL_LOD_DRAW_UNKNOWN),
     allocationViewRevision(0),
     allocationPolicyRevision(0),
-    allocationMeshRevision(0),
     allocationPlanSerial(0),
     projectedPixelDiameter(0.0f),
     projectedPixelArea(0.0f),
@@ -612,7 +618,12 @@ BObolViewLodState::BObolViewLodState(void) :
     cadDisplayMeshBytes(0),
     cadResidentDemandRevision(1),
     cadActiveAllocationPlanSerial(0),
-    cadNextAllocationPlanSerial(0)
+    cadNextAllocationPlanSerial(0),
+    cadAllocationPopulationRevision(1),
+    cadCertifiedAllocationPopulationRevision(0),
+    cadCertifiedAllocationViewRevision(0),
+    cadCertifiedAllocationPolicyRevision(0),
+    cadCertifiedFixedPresentationCost(0)
 {
     memset(this->cadProxyKindCounts, 0,
 	sizeof(this->cadProxyKindCounts));
@@ -1387,6 +1398,36 @@ BObolViewLodState::applySourceResultInternal(
     if (!source)
 	return FALSE;
 
+    /* A compact entry index is meaningful only inside one installed source
+     * population.  Reject stale results before they can update failure maps,
+     * resident aliases, or an occurrence slot which happens to have reused
+     * the same semantic key.  Source-wide/legacy results carry no occurrence
+     * and are intentionally outside this positional routing contract. */
+    if (result.request.occurrenceKey.getLength() > 0 &&
+	result.request.sourceRoutingId != 0 &&
+	(result.request.sourceRoutingId.value() !=
+	    source->getCompactSourceRoutingId() ||
+	 result.request.sourcePopulationEpoch == 0 ||
+	 result.request.sourcePopulationEpoch.value() !=
+	    source->getCompactPopulationEpoch()))
+	return FALSE;
+
+    /* Validate positional and semantic identity together once at the result
+     * boundary.  Downstream bounded planning may then treat an empty current
+     * dense slot as authoritative negative evidence instead of repeating a
+     * string-table fallback for every structural occurrence and every frame.
+     * Source-wide/hand-authored results carry UINT32_MAX and retain their
+     * semantic-key routing contract. */
+    if (result.request.occurrenceKey.getLength() > 0 &&
+	result.request.sourceEntryIndex != UINT32_MAX) {
+	size_t resolvedEntryIndex = 0;
+	if (!source->getCompactInstanceIndex(
+		result.request.occurrenceKey.getString(), resolvedEntryIndex) ||
+	    resolvedEntryIndex != static_cast<size_t>(
+		result.request.sourceEntryIndex))
+	    return FALSE;
+    }
+
     const std::string sourceBindingKey = view_lod_source_primary_key(source);
     const std::string occurrenceKey =
 	view_lod_cad_occurrence_key(result.request.occurrenceKey);
@@ -1510,6 +1551,8 @@ BObolViewLodState::applySourceResultInternal(
     payload->sourceRoutingId = result.request.sourceRoutingId != 0 ?
 	result.request.sourceRoutingId.value() :
 	source->getCompactSourceRoutingId();
+    payload->sourcePopulationEpoch =
+	result.request.sourcePopulationEpoch.value();
     payload->sourceEntryIndex = result.request.sourceEntryIndex;
     payload->cacheIdentity = result.cacheKey.value;
     payload->cacheKey = result.geometry.cacheKey.isValid() ?
@@ -1659,8 +1702,6 @@ BObolViewLodState::applySourceResultInternal(
 	    current->second->allocationViewRevision;
 	payload->allocationPolicyRevision =
 	    current->second->allocationPolicyRevision;
-	payload->allocationMeshRevision =
-	    current->second->allocationMeshRevision;
 	payload->allocationPlanSerial =
 	    current->second->allocationPlanSerial;
 	if (current->second->sourceEntryIndex != UINT32_MAX) {
@@ -1935,6 +1976,8 @@ BObolViewLodState::findCadForSourceEntry(
     const CadPayload *payload = sourceEntries->second[
 	static_cast<size_t>(sourceEntryIndex)];
     if (!payload || payload->sourceEntryIndex != sourceEntryIndex ||
+	payload->sourcePopulationEpoch !=
+	    source->getCompactPopulationEpoch() ||
 	bu_strcmp(payload->sourceInstanceKey.getString(),
 	    occurrenceKey.getString()) != 0)
 	return NULL;
@@ -2218,6 +2261,41 @@ BObolViewLodState::retargetCadPayload(
 	requestedCut < 0)
 	return FALSE;
 
+    /* A bounded scene plan may revisit an already-admitted occurrence in
+     * several quiet-frame windows.  Once every presentation and demand field
+     * already names the same immutable state, do not remove/re-add aggregate
+     * metrics, rebuild string-keyed satisfaction sets, or invalidate a valid
+     * allocation certificate.  In particular, an unchanged retarget must not
+     * clear a current memory-denial witness.  A newly drawable spatial page
+     * set and a grown progressive generation deliberately bypass this fast
+     * path so their population census can be adopted below. */
+    const uint64_t progressiveRevision = target->progressiveMesh ?
+	target->progressiveMesh->revision() : 0;
+    const bool projectedPopulationCurrent =
+	target->projectedCutCountsViewRevision == demand.viewRevision.value() &&
+	target->projectedCutCountsPolicyRevision == demand.policyRevision.value() &&
+	target->projectedCutCountsMeshRevision == progressiveRevision;
+    if (target->activeCut == activeCut &&
+	target->requestedCut == requestedCut &&
+	target->drawMode == demand.drawMode &&
+	target->requiredChunks == demand.requiredChunks &&
+	(!canAdoptDemandPageSet ||
+	 target->presentedChunks == demand.requiredChunks) &&
+	view_lod_float_bits_equal(target->projectedPixelDiameter,
+	    demand.projectedPixelDiameter) &&
+	view_lod_float_bits_equal(target->projectedPixelArea,
+	    demand.projectedPixelArea) &&
+	view_lod_float_bits_equal(target->projectedPixelPerimeter,
+	    demand.projectedPixelPerimeter) &&
+	target->projectedBoundsContained == demand.projectedBoundsContained &&
+	view_lod_float_bits_equal(target->targetPixelError,
+	    demand.targetPixelError) &&
+	target->viewRevision == demand.viewRevision.value() &&
+	target->policyRevision == demand.policyRevision.value() &&
+	target->visualEmphasis == demand.visualEmphasis &&
+	projectedPopulationCurrent)
+	return TRUE;
+
     CadPayloadPtr payload;
     const auto source = this->cadSourceBindings.find(
 	target->sourceBindingKey.getString());
@@ -2231,6 +2309,16 @@ BObolViewLodState::retargetCadPayload(
     if (!payload)
 	return FALSE;
 
+    /* A completed plan owns the view/policy/channel epoch.  Projected demand
+     * and the selected cut are its bounded application data: the source action
+     * refreshes those fields occurrence-by-occurrence while applying one
+     * coherent plan, so treating them as population identity restarts the
+     * allocator at every compact window. */
+    const bool allocationEpochChanged =
+	payload->drawMode != demand.drawMode ||
+	payload->viewRevision != demand.viewRevision.value() ||
+	payload->policyRevision != demand.policyRevision.value();
+
     /* A scene allocation is valid only for the exact demand epoch and
      * renderer channel it priced.  The controller installs a matching new
      * allocation before its bounded application pass; ordinary camera/policy
@@ -2242,7 +2330,6 @@ BObolViewLodState::retargetCadPayload(
 	payload->allocationDrawMode = BOBOL_LOD_DRAW_UNKNOWN;
 	payload->allocationViewRevision = 0;
 	payload->allocationPolicyRevision = 0;
-	payload->allocationMeshRevision = 0;
 	payload->allocationPlanSerial = 0;
     }
     const bool projectedPopulationChanged =
@@ -2284,6 +2371,7 @@ BObolViewLodState::retargetCadPayload(
 		view_lod_cad_counts_at_cut(payload.get(), activeCut) :
 		priorPresentationCounts;
 	    this->addCadPayloadMetrics(payload.get());
+	    this->invalidateCadAllocationCoverage();
 	    return TRUE;
 	}
 	const bool wasSatisfied =
@@ -2356,6 +2444,8 @@ BObolViewLodState::retargetCadPayload(
 	    this->cadMemoryLimitedMeshPayloadCount =
 		view_lod_saturating_subtract(
 		    this->cadMemoryLimitedMeshPayloadCount, 1);
+	if (allocationEpochChanged)
+	    this->invalidateCadAllocationCoverage();
 	return TRUE;
     }
 
@@ -2378,7 +2468,9 @@ BObolViewLodState::retargetCadPayload(
     payload->counts = view_lod_cad_counts_at_cut(payload.get(), activeCut);
     this->addCadPayloadMetrics(payload.get());
     this->noteCadOccurrenceChanged(
-	payload->sourceBindingKey.getString(), payload->sourceInstanceKey);
+	payload->sourceBindingKey.getString(), payload->sourceInstanceKey,
+	allocationEpochChanged ||
+	    !this->cadPayloadCoveredByActiveAllocation(payload.get()));
     return TRUE;
 }
 
@@ -2405,8 +2497,8 @@ BObolViewLodState::setCadAllocatedCut(
     payload->allocationDrawMode = drawMode;
     payload->allocationViewRevision = viewRevision;
     payload->allocationPolicyRevision = policyRevision;
-    payload->allocationMeshRevision = payload->progressiveMesh->revision();
     payload->allocationPlanSerial = 0;
+    this->invalidateCadAllocationCoverage();
     return TRUE;
 }
 
@@ -2441,7 +2533,6 @@ BObolViewLodState::stageCadAllocatedCut(
     payload->allocationDrawMode = drawMode;
     payload->allocationViewRevision = viewRevision;
     payload->allocationPolicyRevision = policyRevision;
-    payload->allocationMeshRevision = payload->progressiveMesh->revision();
     payload->allocationPlanSerial = planSerial;
     return TRUE;
 }
@@ -2449,13 +2540,21 @@ BObolViewLodState::stageCadAllocatedCut(
 SbBool
 BObolViewLodState::commitCadAllocationPlan(
     uint64_t planSerial, uint64_t cadRevision,
-    uint64_t residentDemandRevision)
+    uint64_t residentDemandRevision, uint64_t viewRevision,
+    uint64_t policyRevision,
+    size_t fixedCadPresentationCost)
 {
     if (!planSerial || planSerial != this->cadNextAllocationPlanSerial ||
 	cadRevision != this->cadBindingsRevision ||
-	residentDemandRevision != this->cadResidentDemandRevision)
+	residentDemandRevision != this->cadResidentDemandRevision ||
+	!viewRevision || !policyRevision)
 	return FALSE;
     this->cadActiveAllocationPlanSerial = planSerial;
+    this->cadCertifiedAllocationPopulationRevision =
+	this->cadAllocationPopulationRevision;
+    this->cadCertifiedAllocationViewRevision = viewRevision;
+    this->cadCertifiedAllocationPolicyRevision = policyRevision;
+    this->cadCertifiedFixedPresentationCost = fixedCadPresentationCost;
     return TRUE;
 }
 
@@ -2477,38 +2576,15 @@ BObolViewLodState::cadAllocationPlanCoversCurrentPopulation(
     uint64_t planSerial, uint64_t viewRevision,
     uint64_t policyRevision, size_t fixedCadPresentationCost) const
 {
-    if (!planSerial || !viewRevision || !policyRevision ||
-	planSerial != this->cadActiveAllocationPlanSerial)
-	return FALSE;
-
-    size_t fixedCost = 0;
-    for (const auto &source : this->cadSourceBindings) {
-	for (const auto &occurrence : source.second) {
-	    const CadPayload *payload = occurrence.second.get();
-	    if (!payload || !payload->isValid() ||
-		payload->viewRevision != viewRevision ||
-		payload->policyRevision != policyRevision)
-		continue;
-	    if (!payload->progressiveMesh ||
-		!payload->progressiveMesh->isValid()) {
-		const size_t cost = bobol_lod_render_cost_units(
-		    payload->counts, payload->drawMode, 1);
-		fixedCost = cost > SIZE_MAX - fixedCost ? SIZE_MAX :
-		    fixedCost + cost;
-		continue;
-	    }
-	    if (payload->allocationPlanSerial != planSerial ||
-		payload->allocationViewRevision != viewRevision ||
-		payload->allocationPolicyRevision != policyRevision ||
-		payload->allocationDrawMode != payload->drawMode ||
-		payload->allocationMeshRevision !=
-		    payload->progressiveMesh->revision() ||
-		payload->allocatedCut < payload->progressiveMesh->minimumCut() ||
-		payload->allocatedCut > payload->progressiveMesh->maximumCut())
-		return FALSE;
-	}
-    }
-    return fixedCost == fixedCadPresentationCost ? TRUE : FALSE;
+    return planSerial && viewRevision && policyRevision &&
+	planSerial == this->cadActiveAllocationPlanSerial &&
+	planSerial == this->cadNextAllocationPlanSerial &&
+	this->cadCertifiedAllocationPopulationRevision ==
+	    this->cadAllocationPopulationRevision &&
+	this->cadCertifiedAllocationViewRevision == viewRevision &&
+	this->cadCertifiedAllocationPolicyRevision == policyRevision &&
+	this->cadCertifiedFixedPresentationCost == fixedCadPresentationCost ?
+	TRUE : FALSE;
 }
 
 SbBool
@@ -3750,13 +3826,44 @@ BObolViewLodState::acknowledgeCadOccurrenceChanges(
 }
 
 void
+BObolViewLodState::invalidateCadAllocationCoverage(void)
+{
+    this->cadAllocationPopulationRevision++;
+    if (!this->cadAllocationPopulationRevision)
+	this->cadAllocationPopulationRevision++;
+}
+
+SbBool
+BObolViewLodState::cadPayloadCoveredByActiveAllocation(
+    const BObolViewLodState::CadPayload *payload) const
+{
+    if (!payload || !payload->isValid() || !payload->progressiveMesh ||
+	!payload->progressiveMesh->isValid() ||
+	!this->cadActiveAllocationPlanSerial ||
+	this->cadActiveAllocationPlanSerial !=
+	    this->cadNextAllocationPlanSerial ||
+	payload->allocationPlanSerial !=
+	    this->cadActiveAllocationPlanSerial ||
+	payload->allocationViewRevision != payload->viewRevision ||
+	payload->allocationPolicyRevision != payload->policyRevision ||
+	payload->allocationDrawMode != payload->drawMode ||
+	payload->allocatedCut < payload->progressiveMesh->minimumCut() ||
+	payload->allocatedCut > payload->progressiveMesh->maximumCut())
+	return FALSE;
+    return TRUE;
+}
+
+void
 BObolViewLodState::noteCadOccurrenceChanged(
-    const std::string &sourceBindingKey, const SbString &occurrenceKey)
+    const std::string &sourceBindingKey, const SbString &occurrenceKey,
+    SbBool invalidateAllocation)
 {
     if (sourceBindingKey.empty() || occurrenceKey.getLength() == 0) {
 	this->noteResidentMeshesChanged("invalid-occurrence-change");
 	return;
     }
+    if (invalidateAllocation)
+	this->invalidateCadAllocationCoverage();
     this->cadBindingsRevision++;
     if (!this->cadBindingsRevision) {
 	this->cadBindingsRevision = 1;
@@ -3774,6 +3881,7 @@ BObolViewLodState::noteCadOccurrenceChanged(
 void
 BObolViewLodState::noteResidentMeshesChanged(const char *reason)
 {
+    this->invalidateCadAllocationCoverage();
     this->cadBindingsRevision++;
     if (!this->cadBindingsRevision)
 	this->cadBindingsRevision++;

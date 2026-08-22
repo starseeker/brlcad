@@ -21,6 +21,7 @@
 #include "BObol/BPickDetail.h"
 #include "BObol/BSnapAction.h"
 #include "BObol/BViewLod.h"
+#include "BObol/BViewQuery.h"
 #include "BObol/BVListShape.h"
 #include "cad_assembly_private.h"
 #include "compact_occurrence_registry_private.h"
@@ -73,6 +74,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <inttypes.h>
@@ -134,6 +136,9 @@ compact_part_geometry_bounds(
     bounds.makeEmpty();
     if (!geometry)
 	return bounds;
+    if (geometry->conservativeBounds &&
+	!geometry->conservativeBounds->isEmpty())
+	bounds.extendBy(*geometry->conservativeBounds);
     if (geometry->points)
 	bounds.extendBy(geometry->points->bounds);
     if (geometry->wire)
@@ -19771,6 +19776,213 @@ SoBRLDatabaseSource::getCompactOccurrence(
     return occurrence.geometry ? TRUE : FALSE;
 }
 
+namespace {
+
+struct compact_rectangle_clip_point {
+    double v[4];
+};
+
+static compact_rectangle_clip_point
+compact_rectangle_transform(const SbMatrix &matrix, const SbVec3f &point)
+{
+    const float *m = matrix[0];
+    compact_rectangle_clip_point result;
+    for (int column = 0; column < 4; ++column) {
+	result.v[column] = static_cast<double>(point[0]) * m[column] +
+	    static_cast<double>(point[1]) * m[4 + column] +
+	    static_cast<double>(point[2]) * m[8 + column] + m[12 + column];
+    }
+    return result;
+}
+
+static double
+compact_rectangle_plane_value(const compact_rectangle_clip_point &point,
+	int plane)
+{
+    switch (plane) {
+	case 0: return point.v[3] + point.v[0];
+	case 1: return point.v[3] - point.v[0];
+	case 2: return point.v[3] + point.v[1];
+	case 3: return point.v[3] - point.v[1];
+	case 4: return point.v[3] + point.v[2];
+	default: return point.v[3] - point.v[2];
+    }
+}
+
+static bool
+compact_rectangle_overlaps(const SbBox3f &localBounds,
+	const SbMatrix &localToWorld, const SbMatrix &viewProjection,
+	float minimumX, float minimumY, float maximumX, float maximumY,
+	SbVec3f &worldPoint, float &distance)
+{
+    if (localBounds.isEmpty())
+	return false;
+
+    SbMatrix localToClip = localToWorld;
+    localToClip.multRight(viewProjection);
+    const SbVec3f bmin = localBounds.getMin();
+    const SbVec3f bmax = localBounds.getMax();
+    bool allOutside[6] = {true, true, true, true, true, true};
+    double projectedMinimumX = 0.0;
+    double projectedMinimumY = 0.0;
+    double projectedMaximumX = 0.0;
+    double projectedMaximumY = 0.0;
+    double nearestDepth = 0.0;
+    bool projected = false;
+    for (int z = 0; z < 2; ++z) {
+	for (int y = 0; y < 2; ++y) {
+	    for (int x = 0; x < 2; ++x) {
+		const SbVec3f corner(x ? bmax[0] : bmin[0],
+		    y ? bmax[1] : bmin[1], z ? bmax[2] : bmin[2]);
+		const compact_rectangle_clip_point clip =
+		    compact_rectangle_transform(localToClip, corner);
+		for (int plane = 0; plane < 6; ++plane)
+		    allOutside[plane] = allOutside[plane] &&
+			compact_rectangle_plane_value(clip, plane) < 0.0;
+		if (!std::isfinite(clip.v[3]) ||
+		    std::fabs(clip.v[3]) < 1.0e-20)
+		    continue;
+		const double px = clip.v[0] / clip.v[3];
+		const double py = clip.v[1] / clip.v[3];
+		const double pz = clip.v[2] / clip.v[3];
+		if (!std::isfinite(px) || !std::isfinite(py) ||
+		    !std::isfinite(pz))
+		    continue;
+		if (!projected) {
+		    projectedMinimumX = projectedMaximumX = px;
+		    projectedMinimumY = projectedMaximumY = py;
+		    nearestDepth = pz;
+		    projected = true;
+		} else {
+		    projectedMinimumX = std::min(projectedMinimumX, px);
+		    projectedMinimumY = std::min(projectedMinimumY, py);
+		    projectedMaximumX = std::max(projectedMaximumX, px);
+		    projectedMaximumY = std::max(projectedMaximumY, py);
+		    nearestDepth = std::min(nearestDepth, pz);
+		}
+	    }
+	}
+    }
+    /* Object selection spans the model depth represented by the view, as the
+     * legacy bview selection prism did.  Near/far planes are renderer
+     * precision controls and can lag a direct camera edit; letting them erase
+     * otherwise valid screen-space candidates makes picking depend on an
+     * unrelated clip synchronization detail. */
+    for (int plane = 0; plane < 4; ++plane)
+	if (allOutside[plane])
+	    return false;
+    if (!projected || projectedMaximumX < minimumX ||
+	projectedMinimumX > maximumX || projectedMaximumY < minimumY ||
+	projectedMinimumY > maximumY)
+	return false;
+
+    localToWorld.multVecMatrix(localBounds.getCenter(), worldPoint);
+    distance = static_cast<float>(nearestDepth);
+    return true;
+}
+
+}
+
+int
+SoBRLDatabaseSource::queryCompactRectangle(const SbMatrix &parentToWorld,
+	const SbMatrix &viewProjection,
+	float minimumX, float minimumY, float maximumX, float maximumY,
+	std::vector<BObolViewPickRecord> &records) const
+{
+    if (!this->d->compactIndex || this->d->compactIndex->entries.empty())
+	return -1;
+    if (!this->visible.getValue())
+	return 0;
+
+    const size_t initialCount = records.size();
+    for (const BObolCompactInstanceEntry &entry :
+	 this->d->compactIndex->entries) {
+	if (!entry.visible || !entry.selectable || !entry.geometry)
+	    continue;
+	const SbBox3f localBounds = compact_part_geometry_bounds(entry.geometry);
+	SbMatrix localToWorld = entry.localToSource;
+	localToWorld.multRight(parentToWorld);
+	SbVec3f worldPoint;
+	float distance = FLT_MAX;
+	if (!compact_rectangle_overlaps(localBounds, localToWorld,
+		viewProjection, minimumX, minimumY, maximumX, maximumY,
+		worldPoint, distance))
+	    continue;
+
+	BObolViewPickRecord record;
+	record.point = worldPoint;
+	record.distance = distance;
+	record.detail.setPath(entry.semantic.path);
+	record.detail.setSourceInstanceKey(compact_instance_identity(entry));
+	record.detail.setSourceName(entry.semantic.sourceName);
+	record.detail.setSourceType(entry.semantic.sourceType);
+	record.detail.setSourceId(entry.semantic.sourceId);
+	record.detail.setRegionId(entry.semantic.regionId);
+	record.detail.setAirCode(entry.semantic.airCode);
+	record.detail.setMaterialId(entry.semantic.materialId);
+	record.detail.setLos(entry.semantic.los);
+	record.detail.setMaterialColor(entry.semantic.materialColorValid,
+	    entry.semantic.materialColor);
+	record.detail.setMaterialShader(entry.semantic.materialShader);
+	record.detail.setEditIntent(entry.semantic.editIntentId,
+	    entry.semantic.editIntentRole);
+	record.detail.setModelPoint(worldPoint);
+	record.detail.setPrimitive(SoBRLPickDetail::UNKNOWN, -1);
+	records.push_back(record);
+    }
+    return static_cast<int>(records.size() - initialCount);
+}
+
+int
+SoBRLDatabaseSource::querySourceRectangle(const SbMatrix &parentToWorld,
+	const SbMatrix &viewProjection,
+	float minimumX, float minimumY, float maximumX, float maximumY,
+	std::vector<BObolViewPickRecord> &records) const
+{
+    /* An occurrence registry has more precise identities and bounds.  This
+     * fallback must not add the source root alongside those occurrences. */
+    if (this->d->compactIndex && !this->d->compactIndex->entries.empty())
+	return -1;
+    if (!this->visible.getValue())
+	return 0;
+    SbBox3f localBounds;
+    if (!this->getSourceBounds(localBounds))
+	return -1;
+
+    SbMatrix localToWorld;
+    localToWorld.makeIdentity();
+    if (this->drawMatrixValid.getValue())
+	localToWorld = this->drawMatrix.getValue();
+    localToWorld.multRight(parentToWorld);
+    SbVec3f worldPoint;
+    float distance = FLT_MAX;
+    if (!compact_rectangle_overlaps(localBounds, localToWorld,
+	    viewProjection, minimumX, minimumY, maximumX, maximumY,
+	    worldPoint, distance))
+	return 0;
+
+    BObolViewPickRecord record;
+    record.point = worldPoint;
+    record.distance = distance;
+    record.detail.setPath(this->path.getValue());
+    record.detail.setSourceInstanceKey(this->instanceKey.getValue());
+    record.detail.setSourceName(this->displayName.getValue().getLength() > 0 ?
+	this->displayName.getValue() : this->path.getValue());
+    record.detail.setSourceId(this->sourceRevision.getValue());
+    record.detail.setRegionId(this->databaseRegionId.getValue());
+    record.detail.setAirCode(this->databaseAirCode.getValue());
+    record.detail.setMaterialId(this->databaseMaterialId.getValue());
+    record.detail.setLos(this->databaseLos.getValue());
+    record.detail.setMaterialColor(
+	this->databaseMaterialColorValid.getValue(),
+	this->databaseMaterialColor.getValue());
+    record.detail.setMaterialShader(this->databaseMaterialShader.getValue());
+    record.detail.setModelPoint(worldPoint);
+    record.detail.setPrimitive(SoBRLPickDetail::UNKNOWN, -1);
+    records.push_back(record);
+    return 1;
+}
+
 SbBool
 SoBRLDatabaseSource::copyCompactWireGeometry(
     std::vector<SbVec3f> &points, std::vector<int32_t> &commands) const
@@ -21040,49 +21252,128 @@ SoBRLDatabaseSource::applyCompactInstanceSelectionDelta(
     const std::vector<SbString> &removedPaths)
 {
     int frontierChanged = 0;
-    int displayChanged = 0;
-
+    std::unordered_set<std::string> removedFrontier;
+    removedFrontier.reserve(removedPaths.size());
     for (const SbString &removed : removedPaths) {
-	const char *selectedPath = removed.getString();
-	if (!selectedPath || !selectedPath[0])
-	    continue;
-	for (auto it = this->d->compactSelectedPaths.begin();
-	     it != this->d->compactSelectedPaths.end();) {
-	    if (database_source_string_equal(*it, selectedPath)) {
-		it = this->d->compactSelectedPaths.erase(it);
-		frontierChanged++;
-	    } else {
-		++it;
-	    }
-	}
-	displayChanged += this->setCompactInstanceDisplayStateForPathMatch(
-	    selectedPath, BOBOL_COMPACT_PATH_SUBTREE,
-	    0, FALSE, 1, FALSE, 0, FALSE);
+	const char *selectedPath = database_source_skip_leading_slash(
+	    removed.getString());
+	if (selectedPath && selectedPath[0])
+	    removedFrontier.insert(selectedPath);
     }
 
+    this->d->compactSelectedPaths.erase(std::remove_if(
+	this->d->compactSelectedPaths.begin(),
+	this->d->compactSelectedPaths.end(),
+	[&removedFrontier, &frontierChanged](const SbString &existing) {
+	    const char *selectedPath = database_source_skip_leading_slash(
+		existing.getString());
+	    if (!selectedPath || removedFrontier.find(selectedPath) ==
+		removedFrontier.end())
+		return false;
+	    ++frontierChanged;
+	    return true;
+	}), this->d->compactSelectedPaths.end());
+
+    std::unordered_set<std::string> existingFrontier;
+    existingFrontier.reserve(this->d->compactSelectedPaths.size() +
+	addedPaths.size());
+    for (const SbString &existing : this->d->compactSelectedPaths) {
+	const char *selectedPath = database_source_skip_leading_slash(
+	    existing.getString());
+	if (selectedPath && selectedPath[0])
+	    existingFrontier.insert(selectedPath);
+    }
     for (const SbString &added : addedPaths) {
-	const char *selectedPath = added.getString();
+	const char *selectedPath = database_source_skip_leading_slash(
+	    added.getString());
 	if (!selectedPath || !selectedPath[0])
 	    continue;
-	bool found = false;
-	for (const SbString &existing : this->d->compactSelectedPaths) {
-	    if (database_source_string_equal(existing, selectedPath)) {
-		found = true;
-		break;
-	    }
-	}
-	if (!found) {
+	if (existingFrontier.insert(selectedPath).second) {
 	    this->d->compactSelectedPaths.push_back(added);
 	    frontierChanged++;
 	}
-	displayChanged += this->setCompactInstanceDisplayStateForPathMatch(
-	    selectedPath, BOBOL_COMPACT_PATH_SUBTREE,
-	    0, FALSE, 1, TRUE, 0, FALSE);
     }
 
-    if (frontierChanged && !displayChanged)
+    if (!this->d->compactIndex) {
+	if (frontierChanged)
+	    this->touch();
+	return frontierChanged;
+    }
+    BObolCompactInstanceIndex &index = *this->d->compactIndex;
+
+    /* Resolve every path through the ordered occurrence index, but publish
+     * the resulting style changes once.  Calling the single-path setter in a
+     * loop rebuilt all N display records after each of K selected paths,
+     * making a window selection O(N*K) on the GUI thread. */
+    std::unordered_map<size_t, SbBool> targetStates;
+    targetStates.reserve(addedPaths.size() + removedPaths.size());
+    const auto setTargets = [&index, &targetStates](
+	const std::vector<SbString> &paths, SbBool state) {
+	for (const SbString &pathValue : paths) {
+	    const char *selectedPath = pathValue.getString();
+	    if (!selectedPath || !selectedPath[0])
+		continue;
+	    compact_visit_entries_for_path_match(&index, selectedPath,
+		BOBOL_COMPACT_PATH_SUBTREE,
+		[&targetStates, state](size_t entryIndex) {
+		    targetStates[entryIndex] = state;
+		});
+	}
+    };
+    setTargets(removedPaths, FALSE);
+    setTargets(addedPaths, TRUE);
+
+    std::vector<size_t> changedEntries;
+    changedEntries.reserve(targetStates.size());
+    for (const auto &target : targetStates) {
+	if (target.first >= index.entries.size())
+	    continue;
+	BObolCompactInstanceEntry &entry = index.entries[target.first];
+	if (entry.selected == target.second)
+	    continue;
+	entry.selected = target.second;
+	entry.selectionRevision = compact_next_revision(
+	    entry.selectionRevision);
+	entry.style = compact_effective_style(entry);
+	compact_sync_shape_summary_state(entry);
+	if (target.first < index.instances.size() &&
+	    index.instances[target.first].instance == entry.instance) {
+	    index.instances[target.first].record.style = entry.style;
+	} else {
+	    auto found = std::find_if(index.instances.begin(),
+		index.instances.end(), [&entry](const Obol::InstanceUpdate &update) {
+		    return update.instance == entry.instance;
+		});
+	    if (found != index.instances.end())
+		found->record.style = entry.style;
+	}
+	changedEntries.push_back(target.first);
+    }
+
+    if (!changedEntries.empty()) {
+	std::unordered_set<Obol::InstanceId, std::hash<Obol::InstanceId>>
+	    changedInstances;
+	changedInstances.reserve(changedEntries.size());
+	for (size_t entryIndex : changedEntries)
+	    changedInstances.insert(index.entries[entryIndex].instance);
+	index.selectedInstances.erase(std::remove_if(
+	    index.selectedInstances.begin(), index.selectedInstances.end(),
+	    [&changedInstances](const Obol::InstanceId &instance) {
+		return changedInstances.find(instance) != changedInstances.end();
+	    }), index.selectedInstances.end());
+	for (size_t entryIndex : changedEntries) {
+	    const BObolCompactInstanceEntry &entry = index.entries[entryIndex];
+	    if (entry.selected)
+		index.selectedInstances.push_back(entry.instance);
+	}
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty(changedEntries);
 	this->touch();
-    return displayChanged > 0 ? displayChanged : frontierChanged;
+    } else if (frontierChanged) {
+	this->touch();
+    }
+    return !changedEntries.empty() ?
+	static_cast<int>(changedEntries.size()) : frontierChanged;
 }
 
 

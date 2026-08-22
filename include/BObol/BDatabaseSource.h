@@ -42,6 +42,7 @@ class SoBRLCadRenderBatch;
 class SoBRLExportAction;
 class SoBRLMeasureAction;
 class SoBRLSnapAction;
+struct BObolViewPickRecord;
 class SoFieldSensor;
 class SoCallbackAction;
 class SoGetBoundingBoxAction;
@@ -1198,6 +1199,29 @@ public:
 	BObolCompactInstanceHandle &handle) const;
     SbBool getCompactOccurrence(int index,
 	BObolCompactOccurrence &occurrence) const;
+    /**
+     * Append selectable compact occurrences whose conservative projected
+     * bounds overlap an NDC rectangle.  This is the scalable object/window
+     * selection path: it uses the same retained occurrence bounds as culling
+     * and never scans triangles or performs per-sample raytraces.
+     *
+     * Returns -1 when this source has no compact occurrence registry;
+     * otherwise returns the number of appended records.  Rectangle
+     * coordinates use OpenGL NDC (-1..1, lower-left origin).
+     */
+    int queryCompactRectangle(const SbMatrix &parentToWorld,
+	const SbMatrix &viewProjection,
+	float minimumX, float minimumY,
+	float maximumX, float maximumY,
+	std::vector<BObolViewPickRecord> &records) const;
+    /** Append this source's conservative whole-target bound when it overlaps
+     * an NDC rectangle.  Returns -1 when an occurrence-level registry is
+     * available so callers do not publish both root and leaf identities. */
+    int querySourceRectangle(const SbMatrix &parentToWorld,
+	const SbMatrix &viewProjection,
+	float minimumX, float minimumY,
+	float maximumX, float maximumY,
+	std::vector<BObolViewPickRecord> &records) const;
     /* Flatten visible compact wire instances for non-raster consumers such as
      * vector export without constructing per-occurrence Coin shape nodes. */
     SbBool copyCompactWireGeometry(std::vector<SbVec3f> &points,

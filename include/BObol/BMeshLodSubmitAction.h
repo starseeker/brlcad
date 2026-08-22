@@ -64,6 +64,15 @@ public:
      * resulting repair pass, require those otherwise eligible fallbacks to
      * enter the mesh provider path. */
     void setStructuralPresentationRepair(SbBool repair);
+    /* Exactly one effective selected occurrence may bypass a subpixel proxy
+     * so Coin geometry and edit manipulators can be prepared.  Bulk
+     * selection only restyles valid point/box/mesh presentations and must not
+     * create scene-wide geometry demand.  Callers may saturate counts above
+     * one.  The scene owner must supply its global saturated count; an unset
+     * count deliberately does not promote geometry because a source-local
+     * population cannot prove that the scene has only one selection. */
+    void setSelectedOccurrenceCount(size_t count);
+    size_t getSelectedOccurrenceCount(void) const;
     void setGeneration(uint64_t generation);
     uint64_t getGeneration(void) const;
     void setRevisions(uint64_t viewRevision, uint64_t policyRevision);
@@ -254,6 +263,7 @@ private:
     float pointProxyPixelThreshold;
     SbBool structuralCoverageOnly;
     SbBool structuralPresentationRepair;
+    size_t selectedOccurrenceCount;
     uint64_t generation;
     uint64_t viewRevision;
     uint64_t policyRevision;

@@ -969,6 +969,43 @@ test_coverage_policy(void)
 	std::fprintf(stderr, "FAIL: view invalidation semantics\n");
 	return 1;
     }
+
+    /* A replacement view/inventory epoch must not inherit a partially
+     * consumed pass.  The last completed denominator remains available until
+     * its owner explicitly retires it, but new observations start at zero. */
+    policy.observe(6, 6);
+    policy.markBoundedSource();
+    policy.activate(true);
+    if (!policy.active() || policy.sawBoundedSource() ||
+	policy.visibleCount() != 0 || policy.coveredCount() != 0 ||
+	!policy.hasCompleteVisibleCount() ||
+	policy.completeVisibleCount() != 5) {
+	std::fprintf(stderr, "FAIL: invalidated coverage pass retained counters\n");
+	return 1;
+    }
+    policy.observe(6, 6);
+    completion = policy.completeIfReady(true, false);
+    if (!completion.completed || completion.visibleCount != 6 ||
+	completion.coveredCount != 6 || completion.missing ||
+	policy.completeVisibleCount() != 6) {
+	std::fprintf(stderr, "FAIL: replacement coverage pass denominator\n");
+	return 1;
+    }
+
+    /* Non-invalidating activation is also used to resume a bounded logical
+     * pass, so it must retain observations collected by earlier windows. */
+    policy.activate(false);
+    policy.observe(2, 2);
+    policy.activate(false);
+    policy.observe(3, 3);
+    completion = policy.completeIfReady(true, false);
+    if (!completion.completed || completion.visibleCount != 5 ||
+	completion.coveredCount != 5 || completion.missing) {
+	std::fprintf(stderr, "FAIL: resumed coverage pass lost counters\n");
+	return 1;
+    }
+
+    policy.activate(true);
     policy.clearCompleteVisibleCount();
     if (policy.hasCompleteVisibleCount() ||
 	policy.completeVisibleCount() != 0) {
@@ -1049,15 +1086,67 @@ test_visibility_census(void)
 	std::fprintf(stderr, "FAIL: extended visibility census\n");
 	return 1;
     }
+
+    /* The live source-domain sweep creates placeholders for sources whose
+     * bounded coverage has not reached them yet, is idempotent for an
+     * unchanged domain, and retires stale source totals atomically. */
+    census.beginSourceSetUpdate();
+    const bool sourceAExisting = !census.retainSource(sourceA);
+    const bool sourceBExisting = !census.retainSource(sourceB);
+    const bool unchangedSources = !census.endSourceSetUpdate();
+    if (!sourceAExisting || !sourceBExisting || !unchangedSources ||
+	census.sourceEntryCount() != 2 || census.total() != 6) {
+	std::fprintf(stderr, "FAIL: unchanged visibility source domain\n");
+	return 1;
+    }
+    static const BObolLodVisibilityCensus::SourceKey sourceC = 303;
+    census.beginSourceSetUpdate();
+    const bool sourceCAdded = census.retainSource(sourceC);
+    const bool retiredOldSources = census.endSourceSetUpdate();
+    if (!sourceCAdded || !retiredOldSources ||
+	census.sourceEntryCount() != 1 || census.total() != 0 ||
+	census.sourceCount(sourceA) != 0) {
+	std::fprintf(stderr, "FAIL: replaced visibility source domain\n");
+	return 1;
+    }
+
     census.begin(sourceA, 150000);
     if (census.complete(sourceA) || census.sourceCount(sourceA) != 0 ||
-	census.total() != 2) {
+	census.total() != 0) {
 	std::fprintf(stderr, "FAIL: invalidated visibility census\n");
 	return 1;
     }
     census.clear();
     if (census.total() != 0) {
 	std::fprintf(stderr, "FAIL: cleared visibility census\n");
+	return 1;
+    }
+
+    /* A client may draw many independent top-level roots rather than one
+     * compact hierarchy.  Exercise the fixed-ID index at production scale so
+     * source-domain reconciliation cannot quietly return to linear lookup per
+     * source. */
+    static const size_t sourceScale = 50000;
+    census.beginSourceSetUpdate();
+    size_t addedSources = 0;
+    for (size_t i = 0; i < sourceScale; ++i) {
+	if (census.retainSource(static_cast<uint64_t>(i + 1)))
+	    addedSources++;
+    }
+    if (census.endSourceSetUpdate() || addedSources != sourceScale ||
+	census.sourceEntryCount() != sourceScale) {
+	std::fprintf(stderr, "FAIL: large visibility source-domain creation\n");
+	return 1;
+    }
+    census.beginSourceSetUpdate();
+    addedSources = 0;
+    for (size_t i = 0; i < sourceScale; i += 2) {
+	if (census.retainSource(static_cast<uint64_t>(i + 1)))
+	    addedSources++;
+    }
+    if (!census.endSourceSetUpdate() || addedSources != 0 ||
+	census.sourceEntryCount() != sourceScale / 2) {
+	std::fprintf(stderr, "FAIL: large visibility source-domain retirement\n");
 	return 1;
     }
     return 0;
@@ -2382,6 +2471,20 @@ test_quality_policy(void)
 	    true, true)) {
 	std::fprintf(stderr,
 	    "FAIL: stable point calibration blocked its source prerequisite\n");
+	return 1;
+    }
+    /* A newly armed one-pixel frame must not be replaced by another coarse
+     * structural seed during the completion callback which armed it. */
+    if (!BObolLodPointProxyCalibrationPolicy::
+	    maySeedStructuralDistribution(false, false, false) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    maySeedStructuralDistribution(true, false, false) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    maySeedStructuralDistribution(false, true, false) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    maySeedStructuralDistribution(false, false, true)) {
+	std::fprintf(stderr,
+	    "FAIL: point presentation barrier permits structural reseeding\n");
 	return 1;
     }
     /* Admission is deliberately paused until the changed point population
@@ -3754,6 +3857,22 @@ static int
 test_resident_growth_policy(void)
 {
     BObolLodResidentGrowthPolicy policy;
+    if (!BObolLodResidentGrowthPolicy::canRetainPresentation(
+	    true, true, true, true, true) ||
+	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	    false, true, true, true, true) ||
+	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	    true, false, true, true, true) ||
+	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	    true, true, false, true, true) ||
+	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	    true, true, true, false, true) ||
+	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	    true, true, true, true, false)) {
+	std::fprintf(stderr,
+	    "FAIL: resident-growth presentation-retention contract\n");
+	return 1;
+    }
     if (policy.pending() ||
 	policy.residencyDrainRequired() ||
 	policy.beginResidencyDrainIfReady(true, true, true) ||

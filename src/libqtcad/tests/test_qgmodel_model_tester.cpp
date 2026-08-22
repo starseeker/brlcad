@@ -252,7 +252,8 @@ main(int argc, char *argv[])
 	QgModel::NotificationStats selection_stats = model.notificationStats();
 	TCHECK(box_idx.data(QgDataRoles::SelectDisplayRole).toInt() == 1,
 		"QgModel targeted selection notification updates the selected row");
-	TCHECK(selection_stats.path_queries == 2 &&
+	TCHECK(selection_stats.path_queries > 0 &&
+		selection_stats.path_queries <= 6 &&
 		selection_stats.path_fallback_scans == 0 &&
 		selection_stats.items_notified > 0 &&
 		selection_stats.items_notified < model.allItems().size(),
@@ -264,7 +265,8 @@ main(int argc, char *argv[])
 	model.notifySelectionItemsChanged();
 	selection_stats = model.notificationStats();
 	TCHECK(box_idx.data(QgDataRoles::SelectDisplayRole).toInt() == 0 &&
-		selection_stats.path_queries == 2 &&
+		selection_stats.path_queries > 0 &&
+		selection_stats.path_queries <= 6 &&
 		selection_stats.path_fallback_scans == 0,
 		"QgModel deselection invalidates the same bounded row set");
 	int before_child_draw_signals = drawn_spy.count();

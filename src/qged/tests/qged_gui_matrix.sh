@@ -22,6 +22,7 @@ run_baseline=1
 baseline_only=0
 perf_case=""
 perf_phase="cold"
+perf_frequency=499
 apitrace_case=""
 run_timeout=180
 capture_apng=0
@@ -44,6 +45,7 @@ Usage: qged_gui_matrix.sh [options]
   --baseline-only          Capture production baselines without current runs
   --perf CASE              Record the selected backend case with perf
   --perf-phase PHASE       cold, warm, or both (default: cold)
+  --perf-frequency HZ      Sampling frequency (default: 499)
   --apitrace CASE          Trace one cold System GL case with apitrace
   --capture-apng           Capture every presented frame into an APNG
   --warm-cache DIR         Run only warm using an existing cache directory
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
 	--baseline-only) run_baseline=1; baseline_only=1; shift ;;
 	--perf) perf_case="$2"; shift 2 ;;
 	--perf-phase) perf_phase="$2"; shift 2 ;;
+	--perf-frequency) perf_frequency="$2"; shift 2 ;;
 	--apitrace) apitrace_case="$2"; shift 2 ;;
 	--capture-apng) capture_apng=1; shift ;;
 	--warm-cache) warm_cache="$2"; shift 2 ;;
@@ -84,6 +87,11 @@ done
 if [[ "$perf_phase" != "cold" && "$perf_phase" != "warm" &&
 	"$perf_phase" != "both" ]]; then
     echo "ERROR: --perf-phase must be cold, warm, or both" >&2
+    exit 2
+fi
+if [[ ! "$perf_frequency" =~ ^[1-9][0-9]*$ ]] ||
+    (( perf_frequency > 100000 )); then
+    echo "ERROR: --perf-frequency must be an integer from 1 through 100000" >&2
     exit 2
 fi
 
@@ -230,7 +238,7 @@ case_spec()
 	hubble)
 	    printf '%s|%s|%s|%s|%s\n' \
 		"/home/cyapp/models/NASA/Hubble/Hubble_Space_Telescope.g" \
-		"all.g" "all.g" "c360" "all.g/c360"
+		"all.g" "all.g" "Tube08" "all.g/Tube08"
 	    ;;
 	*) return 1 ;;
     esac
@@ -1730,17 +1738,6 @@ validate_report()
 		"$case_name" == "unique_mesh_150k_stress" ]]; then
 	    minimum_redraw_pixels=1
 	fi
-	# Hubble's deterministic hierarchy child is intentionally representative
-	# of its many tiny vehicle components.  At the all-model view it can cover
-	# only a handful of pixels (five in the warm System-GL qualification run).
-	# The exact source/frontier and retained-selection assertions above prove
-	# which path changed; require a visible pixel for erase and deselection
-	# without imposing a size assumption that the model was selected
-	# specifically to expose.
-	if [[ "$case_name" == "hubble" ]]; then
-	    minimum_erase_pixels=1
-	    minimum_clear_pixels=1
-	fi
 	# In the distinct-mesh fixtures the selected first region is a stack of
 	# overlapping hull skins.  It can be completely depth-occluded at the
 	# all-model view, so a deselection may correctly change zero canvas
@@ -2513,7 +2510,13 @@ run_current()
 	    "$swap" == "default" ]]; then
 	env_args+=("QGED_TEST_DEEP_LOD_REPORT=0")
 	command=(env "${env_args[@]}" "$qged" "${qged_args[@]}")
-	command=(perf record -g -o "$out/perf.data" -- "${command[@]}")
+	# perf's system default may be several kHz.  That rate measurably changes
+	# renderer timing and therefore the adaptive LoD policy on large scenes;
+	# use an explicit, still statistically useful rate so the observer does
+	# not manufacture a different capacity regime.  Callers investigating a
+	# short hot path may opt into a higher value explicitly.
+	command=(perf record -F "$perf_frequency" -g -o "$out/perf.data" --
+	    "${command[@]}")
     fi
     if [[ "$case_name" == "$apitrace_case" && "$backend" == "system" &&
 	    "$cache_state" == "cold" && "$mode" == "shaded" &&
@@ -2834,6 +2837,8 @@ done
 	"$source_root" "$build_dir" "$main_build_dir"
     printf 'profile=%s\ncases=%s\nbackends=%s\nmodes=%s\nswap_intervals=%s\n' \
 	"$profile" "$case_list" "$backend_list" "$mode_list" "$swap_list"
+    printf 'perf_case=%s\nperf_phase=%s\nperf_frequency=%s\n' \
+	"$perf_case" "$perf_phase" "$perf_frequency"
     printf 'display=%s\nsession_type=%s\n' "${DISPLAY:-}" "${XDG_SESSION_TYPE:-}"
     printf 'qged_sha256='
     sha256sum "$qged" | cut -d' ' -f1

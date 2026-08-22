@@ -214,6 +214,7 @@ struct BObolViewEpochTag;
 struct BObolPolicyEpochTag;
 struct BObolInventoryEpochTag;
 struct BObolSourceRoutingIdTag;
+struct BObolSourcePopulationEpochTag;
 struct BObolOccurrenceIdTag;
 struct BObolAssetIdTag;
 
@@ -224,6 +225,8 @@ using BObolPolicyEpoch = BObolLodStrongUInt64<BObolPolicyEpochTag>;
 using BObolInventoryEpoch = BObolLodStrongUInt64<BObolInventoryEpochTag>;
 using BObolSourceRoutingId =
     BObolLodStrongUInt64<BObolSourceRoutingIdTag>;
+using BObolSourcePopulationEpoch =
+    BObolLodStrongUInt64<BObolSourcePopulationEpochTag>;
 using BObolOccurrenceId = BObolLodStrongUInt64<BObolOccurrenceIdTag>;
 using BObolAssetId = BObolLodStrongUInt64<BObolAssetIdTag>;
 
@@ -237,5 +240,7 @@ static_assert(!std::is_assignable<BObolViewEpoch &, BObolPolicyEpoch>::value,
     "different LoD epoch domains must not be assignable");
 static_assert(!std::is_convertible<BObolViewEpoch, BObolPolicyEpoch>::value,
     "different LoD epoch domains must not be convertible");
+static_assert(sizeof(BObolSourcePopulationEpoch) == sizeof(uint64_t),
+    "compact population epochs must remain fixed-width");
 
 #endif /* BOBOL_BLODIDENTIFIERS_H */

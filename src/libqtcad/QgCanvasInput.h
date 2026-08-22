@@ -47,6 +47,9 @@ public:
 	QgCanvasInput();
 	~QgCanvasInput();
 	void setEndpoint(struct bobol_display_endpoint *endpoint);
+	/* Qt pointer positions are logical pixels, while BObolInputEvent and the
+	 * libbv/Obol viewport contract use physical framebuffer pixels. */
+	void setDevicePixelRatio(double device_pixel_ratio);
 
 	int keyPressEvent(struct bv_context *view_ctx, int x_prev, int y_prev,
 	                  QKeyEvent *k);
@@ -61,6 +64,11 @@ public:
 	                   QMouseEvent *e, int mode);
 
 	int wheelEvent(struct bv_context *view_ctx, QWheelEvent *e);
+	/* True only when the most recent dispatch reached a built-in camera
+	 * motion action.  Application semantic
+	 * layers (selection, editing, overlays) may consume the same pointer
+	 * gesture without making it a camera/LoD interaction. */
+	bool lastDispatchWasViewMotion() const;
 
 private:
 	struct Impl;

@@ -203,6 +203,14 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);
+    const double pickDpr = view.devicePixelRatioF() > 0.0 ?
+	view.devicePixelRatioF() : 1.0;
+    const int pickCenterX = qRound(90.0 * pickDpr);
+    const int pickCenterY = qRound(70.0 * pickDpr);
+    const float pickRadius = static_cast<float>(8.0 * pickDpr);
+    const auto physicalPixel = [pickDpr](int logical) {
+	return qRound(static_cast<double>(logical) * pickDpr);
+    };
     /* The selection fixture needs a geometry-only scene.  Interactive views
      * intentionally show parameter/FPS telemetry by default. */
     struct bv_params_state params = BV_PARAMS_STATE_INIT;
@@ -230,7 +238,8 @@ main(int argc, char **argv)
     controller->getViewport()->viewAll();
 
     std::vector<QgObolPickRecord> picks;
-    if (qg_obol_pick_point(&view, 90, 70, 8.0f, false, picks) != 1)
+    if (qg_obol_pick_point(&view, pickCenterX, pickCenterY,
+	    pickRadius, false, picks) != 1)
 	FAIL("qtcad Obol point pick should find the centered box");
     if (picks[0].path != "/box.s" ||
 	    picks[0].primitiveKind != QgObolPickRecord::FACE ||
@@ -342,7 +351,9 @@ main(int argc, char **argv)
     controller->features().remove(command_handle);
 
     std::vector<QgObolPickRecord> rectPicks;
-    if (qg_obol_pick_rect(&view, 70, 50, 110, 90, 8.0f, false, rectPicks) <= 0)
+    if (qg_obol_pick_rect(&view, physicalPixel(70), physicalPixel(50),
+	    physicalPixel(110), physicalPixel(90), pickRadius, false,
+	    rectPicks) <= 0)
 	FAIL("qtcad Obol rectangle pick should find the centered box");
     bool foundRectPath = false;
     for (const QgObolPickRecord &pick : rectPicks) {
@@ -429,9 +440,9 @@ main(int argc, char **argv)
     const SbViewportRegion &pickRegion = controller->getViewportRegion();
     SbVec2s pickSize = pickRegion.getViewportSizePixels();
     SoRayPickAction seededPickAction(pickRegion);
-    seededPickAction.setPoint(SbVec2s(90,
-	    static_cast<short>(pickSize[1] - 1 - 70)));
-    seededPickAction.setRadius(8.0f);
+    seededPickAction.setPoint(SbVec2s(static_cast<short>(pickCenterX),
+	    static_cast<short>(pickSize[1] - 1 - pickCenterY)));
+    seededPickAction.setRadius(pickRadius);
     seededPickAction.setPickAll(FALSE);
     seededPickAction.apply(controller->getViewport()->getRoot());
     SoBRLSourceMeshPickAction seededSourcePickAction;
@@ -463,7 +474,17 @@ main(int argc, char **argv)
     }
 
     std::vector<QgObolPickRecord> lodPicks;
-    if (qg_obol_pick_point(&view, 90, 70, 8.0f, false, lodPicks) != 1) {
+    int lodSubmitted = -1;
+    const int lodPickCount = qg_obol_pick_point(&view, pickCenterX,
+	pickCenterY, pickRadius, false, lodPicks, &lodSubmitted);
+    if (lodPickCount != 1) {
+	fprintf(stderr, "source-backed point pick diagnostics: count=%d "
+		"records=%zu submitted=%d queued=%zu viewport=%d,%d dpr=%g\n",
+		lodPickCount, lodPicks.size(), lodSubmitted,
+		sourceService.queuedResultCountForDiagnostics(),
+		controller->getViewportRegion().getViewportSizePixels()[0],
+		controller->getViewportRegion().getViewportSizePixels()[1],
+		pickDpr);
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad Obol point pick should consume ready source-backed full detail");
@@ -498,7 +519,7 @@ main(int argc, char **argv)
     controller->setExactFullDetailBudget(0, 2);
     std::vector<QgObolPickRecord> overBudgetPicks;
     int overBudgetSubmittedCount = -1;
-    if (qg_obol_pick_point(&view, 90, 70, 8.0f, false,
+    if (qg_obol_pick_point(&view, pickCenterX, pickCenterY, pickRadius, false,
 	    overBudgetPicks, &overBudgetSubmittedCount) != 0) {
 	controller->setExactFullDetailBudget(0, 0);
 	controller->setLodService(NULL);
@@ -541,29 +562,19 @@ main(int argc, char **argv)
 	sourceService.stop();
 	FAIL("qtcad point select filter should consume pending source-backed exact pick");
     }
-    if (!pendingSourcePickFilter.selected_paths().empty()) {
+    if (pendingSourcePickFilter.selected_paths().size() != 1 ||
+	pendingSourcePickFilter.selected_paths()[0] != "lod-pick.bot") {
 	controller->setExactFullDetailBudget(0, 0);
 	controller->setLodService(NULL);
 	sourceService.stop();
-	FAIL("qtcad point select filter should not fall back to legacy selection while exact source pick is pending");
+	FAIL("qtcad point select filter should select displayed source identity immediately");
     }
-    if (wait_for_qtcad_source_pick_result(sourceService)) {
+    if (sourceService.pendingTaskCountForDiagnostics() != 0 ||
+	sourceService.queuedResultCountForDiagnostics() != 0) {
 	controller->setExactFullDetailBudget(0, 0);
 	controller->setLodService(NULL);
 	sourceService.stop();
-	FAIL("qtcad point select filter pending source pick result should become ready");
-    }
-    {
-	std::vector<BObolLodResult> pendingFilterResults;
-	sourceService.drainResults(pendingFilterResults);
-	if (pendingFilterResults.size() != 1 ||
-		pendingFilterResults[0].providerStatus !=
-		    BOBOL_LOD_PROVIDER_FALLBACK) {
-	    controller->setExactFullDetailBudget(0, 0);
-	    controller->setLodService(NULL);
-	    sourceService.stop();
-	    FAIL("qtcad point select filter should submit the pending source-backed exact pick request");
-	}
+	FAIL("qtcad point object selection must not submit exact source work");
     }
 
     QgSelectBoxFilter pendingSourceBoxFilter;
@@ -585,36 +596,20 @@ main(int argc, char **argv)
 	sourceService.stop();
 	FAIL("qtcad box select filter should consume pending source-backed exact pick");
     }
-    if (!pendingSourceBoxFilter.selected_paths().empty()) {
+    if (pendingSourceBoxFilter.selected_paths().size() != 1 ||
+	pendingSourceBoxFilter.selected_paths()[0] != "lod-pick.bot") {
 	controller->setExactFullDetailBudget(0, 0);
 	controller->setLodService(NULL);
 	sourceService.stop();
-	FAIL("qtcad box select filter should not fall back to legacy selection while exact source pick is pending");
+	FAIL("qtcad box select filter should select displayed source identity immediately");
     }
-    if (wait_for_qtcad_source_pick_result(sourceService)) {
+    if (sourceService.pendingTaskCountForDiagnostics() != 0 ||
+	sourceService.queuedResultCountForDiagnostics() != 0) {
 	controller->setExactFullDetailBudget(0, 0);
 	controller->setLodService(NULL);
 	sourceService.stop();
-	FAIL("qtcad box select filter pending source pick result should become ready");
-    }
-    {
-	std::vector<BObolLodResult> pendingBoxResults;
-	sourceService.drainResults(pendingBoxResults);
-	if (pendingBoxResults.empty()) {
-	    controller->setExactFullDetailBudget(0, 0);
-	    controller->setLodService(NULL);
-	    sourceService.stop();
-	    FAIL("qtcad box select filter should submit pending source-backed exact pick requests");
+	FAIL("qtcad box object selection must not submit exact source work");
 	}
-	for (const BObolLodResult &result : pendingBoxResults) {
-	    if (result.providerStatus != BOBOL_LOD_PROVIDER_FALLBACK) {
-		controller->setExactFullDetailBudget(0, 0);
-		controller->setLodService(NULL);
-		sourceService.stop();
-		FAIL("qtcad box select filter pending source pick should honor full-detail budget fallback");
-	    }
-	}
-    }
 
     QgSelectRayFilter pendingSourceRayFilter;
     pendingSourceRayFilter.dbip = gedp->dbip;
@@ -668,6 +663,9 @@ main(int argc, char **argv)
     SoBRLDatabaseSource *implicitDatabase = new SoBRLDatabaseSource;
     implicitDatabase->configureDatabaseSource("implicit.r", gedp->dbip,
 	    SoBRLDatabaseSource::WIREFRAME, 3);
+    implicitDatabase->setSourceBoundsState(TRUE,
+	    SbVec3f(-0.75f, -0.75f, -0.75f),
+	    SbVec3f(0.75f, 0.75f, 0.75f), TRUE);
     implicitRoot->addChild(implicitDatabase);
     controller->setSceneRoot(implicitRoot);
     implicitRoot->unref();
@@ -676,7 +674,7 @@ main(int argc, char **argv)
 	camera->position = SbVec3f(0.0f, 0.0f, 5.0f);
 
     std::vector<QgObolPickRecord> implicitPicks;
-    if (qg_obol_pick_point(&view, 90, 70, 8.0f, false,
+    if (qg_obol_pick_point(&view, pickCenterX, pickCenterY, pickRadius, false,
 	    implicitPicks) != 1) {
 	FAIL("qtcad Obol point pick should use librt exact implicit pick");
     }
@@ -698,19 +696,19 @@ main(int argc, char **argv)
     BObolRtPickCache *implicitRtPickCache = controller->getRtPickCache(0);
 
     std::vector<QgObolPickRecord> implicitRectPicks;
-    if (qg_obol_pick_rect(&view, 80, 60, 100, 80, 8.0f, false,
+    if (qg_obol_pick_rect(&view, physicalPixel(80), physicalPixel(60),
+	    physicalPixel(100), physicalPixel(80), pickRadius, false,
 	    implicitRectPicks) <= 0) {
-	FAIL("qtcad Obol rectangle pick should reuse controller-cached librt exact implicit picks");
+	FAIL("qtcad Obol rectangle pick should use conservative implicit source bounds");
     }
     if (controller->getRtPickCacheCount() != 1 ||
 	    controller->getRtPickCache(0) != implicitRtPickCache)
-	FAIL("qtcad Obol rectangle pick should keep reusing the controller RT pick cache");
+	FAIL("qtcad Obol rectangle pick must not rebuild the controller RT pick cache");
     if (implicitRectPicks[0].path.find("implicit.r") == std::string::npos ||
-	    implicitRectPicks[0].sourceName != "implicit.s" ||
-	    implicitRectPicks[0].primitiveKind !=
-	    QgObolPickRecord::IMPLICIT_SOLID ||
+	    implicitRectPicks[0].sourceName != "implicit.r" ||
+	    implicitRectPicks[0].primitiveKind != QgObolPickRecord::UNKNOWN ||
 	    implicitRectPicks[0].distance <= 0.0f) {
-	FAIL("qtcad Obol cached rectangle librt pick should preserve RT hit identity");
+	FAIL("qtcad Obol bounds rectangle pick should preserve source identity without claiming exact primitive identity");
     }
 
     std::vector<QgObolPickRecord> implicitRayPicks;
@@ -781,7 +779,7 @@ main(int argc, char **argv)
 	camera->position = SbVec3f(0.0f, 0.0f, 5.0f);
 
     std::vector<QgObolPickRecord> mixedNearestPicks;
-    if (qg_obol_pick_point(&view, 90, 70, 8.0f, false,
+    if (qg_obol_pick_point(&view, pickCenterX, pickCenterY, pickRadius, false,
 	    mixedNearestPicks) != 1)
 	FAIL("qtcad mixed Obol/RT point pick should return one nearest hit");
     if (mixedNearestPicks[0].sourceName != "implicit.s" ||
@@ -791,7 +789,7 @@ main(int argc, char **argv)
 	FAIL("qtcad mixed Obol/RT point pick should choose the nearer librt hit");
 
     std::vector<QgObolPickRecord> mixedAllPicks;
-    if (qg_obol_pick_point(&view, 90, 70, 8.0f, true,
+    if (qg_obol_pick_point(&view, pickCenterX, pickCenterY, pickRadius, true,
 	    mixedAllPicks) < 2)
 	FAIL("qtcad mixed Obol/RT pick-all should keep display and librt hits");
     bool foundFarBox = false;

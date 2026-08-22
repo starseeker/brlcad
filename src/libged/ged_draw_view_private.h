@@ -71,6 +71,13 @@ extern int ged_selection_remove_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,
 	const char *path);
+extern int ged_selection_apply_path_delta(
+	struct ged_view_context *view_ctx,
+	enum ged_selection_kind kind,
+	const char *const *added_paths,
+	size_t added_count,
+	const char *const *removed_paths,
+	size_t removed_count);
 extern int ged_selection_set_path(
 	struct ged_view_context *view_ctx,
 	enum ged_selection_kind kind,

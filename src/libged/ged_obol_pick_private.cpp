@@ -325,8 +325,8 @@ ged_obol_pick_point_candidates(
     ged_obol_pick_sync_view_controller(controller, view_ctx);
 
     std::vector<BObolViewPickRecord> records;
-    (void)bobol_view_pick_point(controller, x, y, radius_pixels,
-	pick_all, records, NULL);
+    (void)bobol_view_pick_display_point(controller, x, y, radius_pixels,
+	pick_all, records);
     BObolFeatureOwner owner = ged_obol_pick_view_owner(view_ctx);
     candidates.reserve(records.size());
     for (const BObolViewPickRecord &record : records)
@@ -384,6 +384,33 @@ ged_draw_obol_view_context_pick_rect(struct ged_view_context *view_ctx,
 	max_y = std::max(0, std::min(max_y, height_px - 1));
     }
 
+    BObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (controller) {
+	ged_obol_pick_sync_view_controller(controller, view_ctx);
+	std::vector<BObolViewPickRecord> records;
+	const int bounded = bobol_view_pick_rectangle(controller,
+	    min_x, min_y, max_x, max_y, records);
+	std::vector<BObolViewPickRecord> source_records;
+	const int source_bounded = bobol_view_pick_source_rectangle(controller,
+	    min_x, min_y, max_x, max_y, source_records);
+	records.insert(records.end(), source_records.begin(),
+	    source_records.end());
+	if (bounded >= 0 || source_bounded >= 0) {
+	    BObolFeatureOwner owner = ged_obol_pick_view_owner(view_ctx);
+	    candidates.reserve(records.size());
+	    for (const BObolViewPickRecord &record : records)
+		ged_obol_pick_insert(candidates,
+		    ged_obol_pick_candidate_from_record(controller, &owner,
+			record), true);
+	    ged_obol_pick_sort(candidates);
+	    return ged_obol_pick_result_from_candidates(candidates);
+	}
+    }
+
+    /* Noncompact overlays and standalone nodes retain a bounded display-only
+     * sample fallback.  Do not turn an object-selection rectangle into 49
+     * exact source and librt queries. */
     int width = std::max(1, max_x - min_x);
     int height = std::max(1, max_y - min_y);
     int x_steps = std::max(1, std::min(6, width / 16));

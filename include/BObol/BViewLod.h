@@ -177,6 +177,9 @@ public:
 	SbString sourceInstanceKey;
 	SbString sourceBindingKey;
 	uint64_t sourceRoutingId;
+	/* Compact registry generation which authenticated sourceEntryIndex when
+	 * this payload was published. */
+	uint64_t sourcePopulationEpoch;
 	/* Validated source-local compact index, or UINT32_MAX for a noncompact
 	 * binding.  This avoids repeated string hashing in 50k/150k retained
 	 * allocation passes without making an index the semantic identity. */
@@ -209,7 +212,6 @@ public:
 	int allocationDrawMode;
 	uint64_t allocationViewRevision;
 	uint64_t allocationPolicyRevision;
-	uint64_t allocationMeshRevision;
 	/* Nonzero values belong to an owner-state allocation transaction.  The
 	 * fields above are visible to consumers only after this serial becomes
 	 * the state's active serial; serial zero is an immediate single-payload
@@ -343,16 +345,19 @@ public:
 	uint64_t planSerial);
     /** Atomically expose all payload fields staged with @p planSerial. */
     SbBool commitCadAllocationPlan(uint64_t planSerial,
-	uint64_t cadRevision, uint64_t residentDemandRevision);
+	uint64_t cadRevision, uint64_t residentDemandRevision,
+	uint64_t viewRevision, uint64_t policyRevision,
+	size_t fixedCadPresentationCost);
     /** True while @p planSerial still owns the unpublished staging slot. */
     SbBool isCadAllocationPlanCurrent(uint64_t planSerial) const;
     /** Serial against which consumers validate staged allocation metadata. */
     uint64_t activeCadAllocationPlan(void) const;
-    /* TRUE when every current-epoch progressive CAD occurrence is stamped by
-     * planSerial for its present mesh generation and the unallocated CAD
-     * population still has the certified fixed render cost.  Active-cut
-     * changes made while applying the plan deliberately do not invalidate
-     * this predicate. */
+    /* TRUE when the plan's O(1) population certificate is still current.
+     * Geometry adoption, view/policy epoch, draw mode, and occurrence
+     * population changes invalidate it at their owner-thread mutation points.
+     * Background immutable-generation work is not view state until adopted.
+     * Active-cut-only changes made while applying the plan deliberately
+     * preserve it. */
     SbBool cadAllocationPlanCoversCurrentPopulation(
 	uint64_t planSerial, uint64_t viewRevision,
 	uint64_t policyRevision, size_t fixedCadPresentationCost) const;
@@ -685,13 +690,22 @@ private:
     uint64_t cadResidentDemandRevision;
     uint64_t cadActiveAllocationPlanSerial;
     uint64_t cadNextAllocationPlanSerial;
+    uint64_t cadAllocationPopulationRevision;
+    uint64_t cadCertifiedAllocationPopulationRevision;
+    uint64_t cadCertifiedAllocationViewRevision;
+    uint64_t cadCertifiedAllocationPolicyRevision;
+    size_t cadCertifiedFixedPresentationCost;
     void clearCadPayloadMetrics(void);
     void addCadPayloadMetrics(const CadPayload *payload);
     void removeCadPayloadMetrics(const CadPayload *payload);
     void addCadResidentDemand(const CadPayload *payload);
     void removeCadResidentDemand(const CadPayload *payload);
+    void invalidateCadAllocationCoverage(void);
+    SbBool cadPayloadCoveredByActiveAllocation(
+	const CadPayload *payload) const;
     void noteCadOccurrenceChanged(const std::string &sourceBindingKey,
-	const SbString &occurrenceKey);
+	const SbString &occurrenceKey,
+	SbBool invalidateAllocation = TRUE);
 };
 
 class BOBOL_EXPORT SoBRLViewLodElement : public SoElement

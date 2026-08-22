@@ -20,6 +20,7 @@
 #include <cstring>
 #include <limits>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 /*
@@ -433,8 +434,16 @@ public:
     void activate(bool invalidateCoverage)
     {
 	this->activeValue = true;
-	if (invalidateCoverage)
+	if (invalidateCoverage) {
 	    this->coverageCompleteValue = false;
+	    /* The counters belong to one exact view/inventory pass.  A camera or
+	     * population epoch may begin while the preceding bounded pass is only
+	     * partly consumed; carrying those observations into the replacement
+	     * pass double-counts visible occurrences and can leave an otherwise
+	     * complete scene permanently responsiveness-limited.  Quality-only
+	     * resumptions use activate(false) and deliberately retain them. */
+	    this->clearPassCounters();
+	}
     }
 
     /* The semantic view policy owns whether useful source coverage is a
@@ -688,7 +697,46 @@ private:
  * no source or scene object is owned or dereferenced here. */
 class BObolLodVisibilityCensus {
 public:
-    using SourceKey = uintptr_t;
+    /* Fixed-width, object-lifetime routing identity.  A raw node address can
+     * be recycled without an observable empty scene, causing a replacement
+     * source to inherit the retired source's visibility bits. */
+    using SourceKey = uint64_t;
+
+    /* Reconcile the census identity domain with the controller's current LoD
+     * source contracts.  Scene synchronization may replace one draw-mode
+     * source with another without exposing an intermediate empty scene or a
+     * separately observable source-change callback.  Marking and sweeping at
+     * the already O(source-count) signature boundary prevents retired source
+     * totals from contributing to the current-view denominator. */
+    void beginSourceSetUpdate(void)
+    {
+	for (auto &entry : this->sources)
+	    entry.second.retained = false;
+    }
+
+    bool retainSource(SourceKey source)
+    {
+	Source *entry = this->find(source);
+	if (entry) {
+	    entry->retained = true;
+	    return false;
+	}
+	Source &inserted = this->sources[source];
+	inserted.retained = true;
+	return true;
+    }
+
+    bool endSourceSetUpdate(void)
+    {
+	const size_t priorSize = this->sources.size();
+	for (auto entry = this->sources.begin(); entry != this->sources.end();) {
+	    if (!entry->second.retained)
+		entry = this->sources.erase(entry);
+	    else
+		++entry;
+	}
+	return this->sources.size() != priorSize;
+    }
 
     void clear(void)
     {
@@ -751,49 +799,43 @@ public:
     size_t total(void) const
     {
 	size_t total = 0;
-	for (const Source &entry : this->sources)
-	    total = entry.visibleCount > SIZE_MAX - total ?
-		SIZE_MAX : total + entry.visibleCount;
+	for (const auto &entry : this->sources)
+	    total = entry.second.visibleCount > SIZE_MAX - total ?
+		SIZE_MAX : total + entry.second.visibleCount;
 	return total;
+    }
+
+    size_t sourceEntryCount(void) const
+    {
+	return this->sources.size();
     }
 
 private:
     struct Source {
-	SourceKey key = 0;
 	size_t visibleCount = 0;
 	std::vector<unsigned char> entryVisible;
 	bool complete = false;
+	bool retained = true;
     };
 
     Source *find(SourceKey key)
     {
-	for (Source &entry : this->sources) {
-	    if (entry.key == key)
-		return &entry;
-	}
-	return NULL;
+	auto entry = this->sources.find(key);
+	return entry != this->sources.end() ? &entry->second : NULL;
     }
 
     const Source *find(SourceKey key) const
     {
-	for (const Source &entry : this->sources) {
-	    if (entry.key == key)
-		return &entry;
-	}
-	return NULL;
+	auto entry = this->sources.find(key);
+	return entry != this->sources.end() ? &entry->second : NULL;
     }
 
     Source &source(SourceKey key)
     {
-	Source *entry = this->find(key);
-	if (entry)
-	    return *entry;
-	this->sources.push_back(Source());
-	this->sources.back().key = key;
-	return this->sources.back();
+	return this->sources[key];
     }
 
-    std::vector<Source> sources;
+    std::unordered_map<SourceKey, Source> sources;
 };
 
 /*
@@ -3511,6 +3553,21 @@ public:
 	return discoveryCalibrationPending;
     }
 
+    /* A point-population mutation is a presentation transaction: its next
+     * exact frame must classify the threshold which was actually requested.
+     * In particular, a completed coarse structural seed may arm a one-pixel
+     * static-quality trial.  Reseeding from the just-completed coarse frame
+     * before that trial renders replaces its threshold and creates an
+     * unbounded coarse/one-pixel request loop with no producer work. */
+    static bool maySeedStructuralDistribution(
+	bool discoveryCalibrationPending,
+	bool stableCalibrationPending,
+	bool triangleRecoveryPending)
+    {
+	return !discoveryCalibrationPending &&
+	    !stableCalibrationPending && !triangleRecoveryPending;
+    }
+
     void reset(void)
     {
 	this->unsafeThreshold = 0.0f;
@@ -4004,6 +4061,24 @@ private:
  * O(scene) allocator once per result batch. */
 class BObolLodResidentGrowthPolicy {
 public:
+    /* A quiet residency-drain result may replace the immutable backing
+     * generation without changing the pixels selected by the owner-thread
+     * allocation.  Such a result is not a publication edge: keep the last
+     * coherent framebuffer while the rest of the resident wave drains, then
+     * let the scene-wide allocator publish one complete population.
+     *
+     * Keep every premise explicit.  In particular, ordinary interaction,
+     * first-useful coverage, asset replacement, and a changed active cut must
+     * remain immediately presentable rather than being hidden behind a
+     * background residency transaction. */
+    static bool canRetainPresentation(bool residencyDrainActive,
+	bool retainedPayload, bool sameAsset, bool activeCutPreserved,
+	bool richerResidentPrefix)
+    {
+	return residencyDrainActive && retainedPayload && sameAsset &&
+	    activeCutPreserved && richerResidentPrefix;
+    }
+
     void noteRicherPrefixAvailable(void)
     {
 	this->pendingValue = true;

@@ -78,13 +78,17 @@ class QTCAD_EXPORT QgPluginManager : public QObject
 	 * descriptors of newly-discovered plugins become available. */
 	void rescan();
 
-	/* Unload every plugin and clear caches.  Static plugins
-	 * remain available (they cannot be unloaded). */
-	void unloadAll();
+	/* Unload every dynamic plugin.  Before any plugin code is unloaded,
+	 * pluginsAboutToUnload() is emitted synchronously so hosts can destroy
+	 * every factory-created QObject and detach callbacks.  Static plugins
+	 * remain available (they cannot be unloaded).  Returns false if a
+	 * library could not be unloaded; optional diagnostics are appended to
+	 * @p errors. */
+	bool unloadAll(QStringList *errors = nullptr);
 
 	/* Convenience for hosts that mix the manager with a console:
 	 * a one-shot reload that unloads everything and rescans. */
-	void reload();
+	bool reload(QStringList *errors = nullptr);
 
 	/* All known plugin descriptors, deterministically ordered. */
 	QList<QgPluginDescriptor> descriptors() const;
@@ -119,6 +123,15 @@ class QTCAD_EXPORT QgPluginManager : public QObject
 	QString diagnosticInfo(const QString &id) const;
 
     signals:
+	/* Lifecycle barrier for plugin-created objects.  Receivers must perform
+	 * teardown directly, before returning from this signal.  Queued cleanup
+	 * is too late because the implementing shared library is unloaded next. */
+	void pluginsAboutToUnload();
+
+	/* Emitted once after a complete catalog scan.  Hosts use this to
+	 * reconcile or recreate extension objects after reload. */
+	void catalogChanged();
+
 	void factoryRegistered(const QString &id);
 	void factoryUnregistered(const QString &id);
 
@@ -132,6 +145,7 @@ class QTCAD_EXPORT QgPluginManager : public QObject
 	QString m_settingsGroup;
 	QList<Entry *> m_entries;
 	QHash<QString, Entry *> m_byId;
+	bool m_unloading = false;
 };
 
 /* Inline template implementation -- needs QObject definitions */

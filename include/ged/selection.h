@@ -64,6 +64,19 @@ ged_selection_set_match_count(struct ged *gedp, const char *set_pattern);
 GED_EXPORT extern unsigned long long
 ged_selection_state_hash(struct ged *gedp, const char *set_name);
 
+/**
+ * Copy a renderer-neutral selection identity collection.
+ *
+ * The return value is the total number of identifiers in @p kind.  If
+ * @p hashes is non-NULL, at most @p capacity identifiers are copied.  A
+ * caller may therefore query the required capacity with a NULL buffer and
+ * then copy the collection without parsing or resolving path strings.
+ */
+GED_EXPORT extern size_t
+ged_selection_hashes(struct ged *gedp, const char *set_name,
+	enum ged_selection_hash_kind kind, ged_db_index_id *hashes,
+	size_t capacity);
+
 /** Clear one exact semantic selection set. */
 GED_EXPORT extern int
 ged_selection_clear(struct ged *gedp, const char *set_name);
@@ -77,6 +90,11 @@ GED_EXPORT extern int
 ged_selection_select_path(struct ged *gedp, const char *set_name,
 	const char *path, int recompute_hierarchy);
 
+/** Atomically add multiple canonical database paths to one selection set. */
+GED_EXPORT extern int
+ged_selection_select_paths(struct ged *gedp, const char *set_name,
+	const char *const *paths, size_t path_count, int recompute_hierarchy);
+
 /** Select one path in the single set matching @p set_pattern. */
 GED_EXPORT extern int
 ged_selection_select_path_matching(struct ged *gedp,
@@ -86,6 +104,11 @@ ged_selection_select_path_matching(struct ged *gedp,
 GED_EXPORT extern int
 ged_selection_deselect_path(struct ged *gedp, const char *set_name,
 	const char *path, int recompute_hierarchy);
+
+/** Atomically remove multiple paths and their selected descendants. */
+GED_EXPORT extern int
+ged_selection_deselect_paths(struct ged *gedp, const char *set_name,
+	const char *const *paths, size_t path_count, int recompute_hierarchy);
 
 /** Deselect one path from the single set matching @p set_pattern. */
 GED_EXPORT extern int

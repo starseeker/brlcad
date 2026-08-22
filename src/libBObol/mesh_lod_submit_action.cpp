@@ -252,6 +252,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     pointProxyPixelThreshold(1.0f),
     structuralCoverageOnly(FALSE),
     structuralPresentationRepair(FALSE),
+    selectedOccurrenceCount(0),
     generation(0),
     viewRevision(0),
     policyRevision(0),
@@ -412,6 +413,18 @@ void
 SoBRLMeshLodSubmitAction::setStructuralPresentationRepair(SbBool repair)
 {
     this->structuralPresentationRepair = repair ? TRUE : FALSE;
+}
+
+void
+SoBRLMeshLodSubmitAction::setSelectedOccurrenceCount(size_t count)
+{
+    this->selectedOccurrenceCount = count;
+}
+
+size_t
+SoBRLMeshLodSubmitAction::getSelectedOccurrenceCount(void) const
+{
+    return this->selectedOccurrenceCount;
 }
 
 void
@@ -2164,9 +2177,12 @@ mesh_lod_debug_delay_milliseconds(const char *env_name)
 }
 
 /* Compact results published by current producers carry an entry hint, making
- * the common 50k/150k retained lookup allocation-free.  Keyed fallback keeps
- * hand-authored clients and an in-flight registry replacement correct; the
- * occurrence string, never the positional hint, remains semantic identity. */
+ * the common 50k/150k retained lookup allocation-free.  A current compact
+ * entry index is also authoritative negative evidence: if its validated slot
+ * is empty, there is no active payload for that occurrence.  Falling through
+ * to the semantic string table in that case made every still-structural leaf
+ * pay for a guaranteed failed hash lookup.  Keyed fallback is reserved for
+ * source-wide/hand-authored requests which carry no positional identity. */
 static const BObolViewLodState::CadPayload *
 mesh_lod_find_cad_for_source_entry(
     const BObolViewLodState *viewState, const SoBRLDatabaseSource *source,
@@ -2177,8 +2193,9 @@ mesh_lod_find_cad_for_source_entry(
     const BObolViewLodState::CadPayload *payload =
 	viewState->findCadForSourceEntry(
 	    source, sourceEntryIndex, occurrenceKey);
-    return payload ? payload :
-	viewState->findCadForOccurrence(source, occurrenceKey);
+    if (payload || sourceEntryIndex != UINT32_MAX)
+	return payload;
+    return viewState->findCadForOccurrence(source, occurrenceKey);
 }
 
 void
@@ -2194,6 +2211,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     }
 
     if (source->isCompactOccurrenceRegistry()) {
+	const bool soleSelectedOccurrence =
+	    submitAction->selectedOccurrenceCount == 1;
 	const int sourceDrawMode = source->getEffectiveLodDrawMode();
 	const int count = source->getCompactInstanceCount();
 	BObolLodProjectedDemandCache::Source *projectedDemandCacheSource =
@@ -2294,7 +2313,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		candidate.payload = payload;
 		candidate.occurrenceKey = summary.sourceInstanceKey;
 		candidate.projectedPixels = projected.projectedPixelDiameter;
-		candidate.emphasis = summary.selected ? 2 :
+		candidate.emphasis = summary.selected &&
+		    soleSelectedOccurrence ? 2 :
 		    (summary.highlighted ? 1 : 0);
 		candidate.minimumCut = payload->activeCut;
 		candidate.requestedCut = projected.requestedCut;
@@ -2567,16 +2587,19 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			static_cast<double>(projected.projectedPixelPerimeter) *
 			    0.25,
 			static_cast<double>(candidate.projectedPixels) * 0.25));
-		candidate.emphasis = summary.selected ? 2 :
+		candidate.emphasis = summary.selected &&
+		    soleSelectedOccurrence ? 2 :
 		    (summary.highlighted ? 1 : 0);
 		const BObolViewLodState::CadPayload *active =
 		    mesh_lod_find_cad_for_source_entry(
 			submitAction->viewState, source,
 			static_cast<uint32_t>(candidateIndex),
 			summary.sourceInstanceKey);
+		const bool selectedEditPromotion = summary.selected &&
+		    soleSelectedOccurrence;
 		const bool presentationProjectsToPoint =
 		    !active && !summary.meshGeometry &&
-		    !summary.selected && !summary.highlighted &&
+		    !selectedEditPromotion &&
 		    compactViewProjectionPtr &&
 		    summary.presentationCornersValid &&
 		    mesh_lod_compact_presentation_projects_to_point(
@@ -2590,11 +2613,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		 * channel.  At the renderer's conservative new-collapse boundary it is
 		 * already pixel exact for this view, so class it as coverage rather than
 		 * eagerly opening a distinct PoP hierarchy which cannot change a pixel.
-		 * Selection/highlight always promotes the real mesh path immediately. */
+		 * Bulk selection and highlight restyle this valid representation; they
+		 * do not create geometry demand for an otherwise subpixel occurrence.
+		 * A sole selection is the deliberate exception: it may become an edit
+		 * target and therefore needs the real Coin geometry/manipulator path. */
 		const bool structuralPointCoverage =
 		    !submitAction->structuralPresentationRepair && !active &&
-		    !summary.meshGeometry && !summary.selected &&
-		    !summary.highlighted &&
+		    !summary.meshGeometry && !selectedEditPromotion &&
 		    (submitAction->structuralCoverageOnly ||
 		     presentationProjectsToPoint);
 		candidate.needsCoverage = !active && !structuralPointCoverage;
@@ -2811,12 +2836,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    request.sourceContentHash = summary.sourceContentHash;
 	    request.occurrenceKey = summary.sourceInstanceKey;
 	    request.sourceRoutingId = source->getCompactSourceRoutingId();
+	    request.sourcePopulationEpoch =
+		source->getCompactPopulationEpoch();
 	    request.sourceEntryIndex = i <=
 		static_cast<size_t>(UINT32_MAX) ?
 		static_cast<uint32_t>(i) : UINT32_MAX;
 	    request.viewRevision = submitAction->viewRevision;
 	    request.policyRevision = submitAction->policyRevision;
-	    request.visualEmphasis = summary.selected ? 2 :
+	    request.visualEmphasis = summary.selected &&
+		soleSelectedOccurrence ? 2 :
 		(summary.highlighted ? 1 : 0);
 	    request.drawMode = sourceDrawMode;
 	    request.providerId = submitAction->providerId;
@@ -2896,9 +2924,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    }
 	    submitAction->visibleMeshCount++;
 	    submitAction->compactEntryVisibilityObservations.back().second = TRUE;
+	    const bool selectedEditPromotion = summary.selected &&
+		soleSelectedOccurrence;
 	    const bool presentationProjectsToPoint =
 		!activePayload && !summary.meshGeometry &&
-		!summary.selected && !summary.highlighted &&
+		!selectedEditPromotion &&
 		compactViewProjectionPtr &&
 		summary.presentationCornersValid &&
 		mesh_lod_compact_presentation_projects_to_point(
@@ -2909,7 +2939,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    const SbBool structuralPointCoverage =
 		!submitAction->structuralPresentationRepair &&
 		!activePayload && !summary.meshGeometry &&
-		!summary.selected && !summary.highlighted &&
+		!selectedEditPromotion &&
 		(submitAction->structuralCoverageOnly ||
 		 presentationProjectsToPoint) ?
 		    TRUE : FALSE;
@@ -2990,8 +3020,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    else
 		desiredCut = mesh_lod_error_ceiling_cut(
 		    request, activePayload->progressiveMesh,
-		    summary.selected ? 2 :
-			(summary.highlighted ? 1 : 0),
+		    request.visualEmphasis,
 		    minimumCut, desiredCut,
 		    submitAction->retainedSceneMaximumNormalizedError);
 	    desiredCut = std::max(minimumCut, desiredCut);

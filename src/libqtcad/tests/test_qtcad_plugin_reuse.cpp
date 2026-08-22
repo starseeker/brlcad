@@ -47,6 +47,7 @@
 #include <QApplication>
 #include <QDockWidget>
 #include <QDialog>
+#include <QPointer>
 
 #include "bu/app.h"
 #include "bu/log.h"
@@ -54,7 +55,9 @@
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgPluginInterfaces.h"
 #include "qtcad/QgPluginManager.h"
+#include "qtcad/QgPaletteController.h"
 #include "qtcad/QgToolBase.h"
+#include "qtcad/QgToolPalette.h"
 
 /* ------------------------------------------------------------------ */
 static int g_fail = 0;
@@ -314,14 +317,75 @@ main(int argc, char *argv[])
     }
 
     /* ================================================================
-     * 13. unloadAll: no crash, descriptor list becomes accessible again
-     *     after a rescan.
+     * 13. A reload is a synchronous lifetime barrier.  The palette
+     *     controller must destroy every tool implemented by the old DSO
+     *     before unload, then recreate it from the rescanned catalog.
      * ================================================================ */
     {
-        mgr.unloadAll();
-        mgr.rescan();
-        QList<QgPluginDescriptor> after = mgr.descriptors();
-        TCHECK(!after.isEmpty(), "descriptors accessible again after unloadAll+rescan");
+	QgToolPalette palette;
+	QgPaletteController controller(&palette, &mgr,
+	    QStringLiteral("qged.object"), &ctx);
+	controller.populate();
+	palette.resize(1, 100);
+	palette.button_layout_resize();
+	TCHECK(true, "palette layout accepts a sub-icon-width resize");
+	const QList<QgToolBase *> before =
+	    controller.findChildren<QgToolBase *>(QString(),
+		Qt::FindDirectChildrenOnly);
+	TCHECK(!before.isEmpty(),
+	    "palette controller owns plugin-created tools before reload");
+	TCHECK(controller.currentTool() != nullptr,
+	    "palette has an active tool before reload");
+	QPointer<QgToolBase> oldTool = before.isEmpty() ? nullptr : before.first();
+	int unloadBarriers = 0;
+	int catalogChanges = 0;
+	QObject::connect(&mgr, &QgPluginManager::pluginsAboutToUnload,
+	    [&unloadBarriers]() { unloadBarriers++; });
+	QObject::connect(&mgr, &QgPluginManager::catalogChanged,
+	    [&catalogChanges]() { catalogChanges++; });
+	QStringList unloadErrors;
+	const bool reloaded = mgr.reload(&unloadErrors);
+	TCHECK(reloaded, "plugin libraries unload and reload cleanly");
+	if (!reloaded) {
+	    for (const QString &error : unloadErrors)
+		bu_log("plugin reload error: %s\n", qPrintable(error));
+	}
+	TCHECK(unloadBarriers == 1,
+	    "reload emits exactly one synchronous unload barrier");
+	TCHECK(catalogChanges == 1,
+	    "reload emits exactly one reconciled catalog notification");
+	TCHECK(oldTool.isNull(),
+	    "old factory-created tool is destroyed before library unload");
+	const QList<QgToolBase *> after =
+	    controller.findChildren<QgToolBase *>(QString(),
+		Qt::FindDirectChildrenOnly);
+	TCHECK(!after.isEmpty(),
+	    "palette controller recreates tools from reloaded factories");
+	TCHECK(after.size() == before.size(),
+	    "reload recreates exactly one tool per prior factory");
+	TCHECK(controller.currentTool() != nullptr,
+	    "palette restores a valid active tool after reload");
+	TCHECK(mgr.descriptors().size() == all_descs.size(),
+	    "reload preserves the discovered plugin catalog");
+    }
+
+    /* A host may destroy its palette before the separately owned controller.
+     * The controller must release tools while the palette's child controls
+     * are still alive, not later from dangling adapter widget pointers. */
+    {
+	QgToolPalette *palette = new QgToolPalette;
+	QgPaletteController *controller = new QgPaletteController(palette,
+	    &mgr, QStringLiteral("qged.object"), &ctx);
+	controller->populate();
+	const QList<QgToolBase *> paletteTools =
+	    controller->findChildren<QgToolBase *>(QString(),
+		Qt::FindDirectChildrenOnly);
+	QPointer<QgToolBase> tool = paletteTools.isEmpty() ? nullptr :
+	    paletteTools.first();
+	delete palette;
+	TCHECK(tool.isNull(),
+	    "palette-first host teardown synchronously destroys plugin tools");
+	delete controller;
     }
 
     /* ================================================================

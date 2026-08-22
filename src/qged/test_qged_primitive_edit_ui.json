@@ -1280,6 +1280,57 @@
       }
     },
     {
+      "target": "i:org.brlcad.qged.dialog.host_status.activate",
+      "action": "activate",
+      "arguments": {}
+    },
+    {
+      "target": "i:org.brlcad.qged.dialog.host_status.dialog",
+      "action": "assert_state",
+      "arguments": { "visible": true }
+    },
+    {
+      "target": ".",
+      "action": "qged_command",
+      "arguments": { "command": "plugins reload" }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 50 }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": {
+	"feature": "_bot_edit_surface",
+	"exists": false,
+	"all_views": true
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.edit.bot.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:primitiveEdit.target",
+      "action": "set_text",
+      "arguments": { "text": "group.c/bot.s" }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": {
+	"feature": "_bot_edit_surface",
+	"exists": true,
+	"all_views": true,
+	"visible": true,
+	"bounds_size": [2.0, 2.0, 2.0],
+	"tolerance": 0.00001
+      }
+    },
+    {
       "target": "i:primitiveEdit.cancel",
       "action": "activate",
       "arguments": {}

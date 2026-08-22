@@ -61,6 +61,10 @@ signals:
 	void view_updated(QgViewUpdateFlags);
 
 protected:
+	/* Convert Qt logical pointer coordinates to the physical-pixel space
+	 * shared by libbv and endpoint-routed BObol input. */
+	bool input_pixel_position(const QMouseEvent *event, int *x, int *y) const;
+	float input_pixel_radius(float logical_radius) const;
 	QMouseEvent *view_sync(QEvent *e);
 	/* Normalize endpoint-routed pointer input into the same passive view
 	 * state used by direct Qt filters. */

@@ -41,6 +41,7 @@
 #include <QHash>
 #include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include "qtcad/defines.h"
 
@@ -64,18 +65,23 @@ class QTCAD_EXPORT QgPaletteController : public QObject
 	~QgPaletteController() override;
 
 	QString category() const { return m_category; }
-	QgToolPalette *palette() const { return m_palette; }
+	QgToolPalette *palette() const;
 
 	/* Populate the palette from the manager.  Safe to call again
 	 * after rescans -- elements are reconciled rather than
 	 * duplicated. */
 	void populate();
 
+	/* Synchronously detach and destroy all factory-created tools.  This is
+	 * the plugin-manager unload barrier and is also safe during host
+	 * teardown. */
+	void clear();
+
 	/* Update the active view that event-filter tools should be
 	 * attached to.  May be NULL (no view).  When changed, the
 	 * currently-active tool's filter is migrated. */
 	void setActiveView(QgView *view);
-	QgView *activeView() const { return m_view; }
+	QgView *activeView() const;
 
 	QgToolBase *currentTool() const { return m_currentTool; }
 
@@ -88,16 +94,18 @@ class QTCAD_EXPORT QgPaletteController : public QObject
 	void onElementSelected(QgToolPaletteElement *el);
 	void onFactoryRegistered(const QString &id);
 	void onFactoryUnregistered(const QString &id);
+	void onPluginsAboutToUnload();
+	void onPaletteDestroyed();
 
     private:
 	void attachFilter(QgToolBase *tool);
 	void detachFilter(QgToolBase *tool);
 
-	QgToolPalette  *m_palette = nullptr;
-	QgPluginManager *m_manager = nullptr;
+	QPointer<QgToolPalette> m_palette;
+	QPointer<QgPluginManager> m_manager;
 	QString          m_category;
 	QgPluginContext *m_ctx = nullptr;
-	QgView          *m_view = nullptr;
+	QPointer<QgView> m_view;
 
 	/* Tool instances indexed by plugin id.  Owned via QObject
 	 * parentage (parent is *this*). */

@@ -43,6 +43,7 @@
 #include "common.h"
 
 #include <QObject>
+#include <QPointer>
 #include "qtcad/defines.h"
 #include "qtcad/QgPluginDescriptor.h"
 
@@ -97,8 +98,8 @@ class QTCAD_EXPORT QgToolBase : public QObject
 	QgPluginContext *m_ctx = nullptr;
 
     private:
-	QWidget *m_widget = nullptr;
-	QgToolPaletteElement *m_element = nullptr;
+	QPointer<QWidget> m_widget;
+	QPointer<QgToolPaletteElement> m_element;
 	bool m_signals_wired = false;
 };
 

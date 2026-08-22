@@ -42,16 +42,58 @@ QgPaletteController::QgPaletteController(QgToolPalette *palette,
     if (m_palette) {
 	connect(m_palette, &QgToolPalette::palette_element_selected,
 		this, &QgPaletteController::onElementSelected);
+	connect(m_palette, &QObject::destroyed, this,
+		&QgPaletteController::onPaletteDestroyed,
+		Qt::DirectConnection);
     }
     if (m_manager) {
-	connect(m_manager, &QgPluginManager::factoryRegistered,
-		this, &QgPaletteController::onFactoryRegistered);
-	connect(m_manager, &QgPluginManager::factoryUnregistered,
-		this, &QgPaletteController::onFactoryUnregistered);
+	connect(m_manager, &QgPluginManager::pluginsAboutToUnload,
+		this, &QgPaletteController::onPluginsAboutToUnload,
+		Qt::DirectConnection);
+	connect(m_manager, &QgPluginManager::catalogChanged,
+		this, &QgPaletteController::populate);
     }
 }
 
-QgPaletteController::~QgPaletteController() = default;
+QgPaletteController::~QgPaletteController()
+{
+    clear();
+}
+
+QgToolPalette *
+QgPaletteController::palette() const
+{
+    return m_palette.data();
+}
+
+QgView *
+QgPaletteController::activeView() const
+{
+    return m_view.data();
+}
+
+void
+QgPaletteController::clear()
+{
+    if (m_currentTool)
+	detachFilter(m_currentTool);
+    const bool hadCurrent = m_currentTool != nullptr;
+    m_currentTool = nullptr;
+
+    const QList<QgToolPaletteElement *> elements = m_elementToId.keys();
+    m_elementToId.clear();
+    if (m_palette) {
+	for (QgToolPaletteElement *element : elements)
+	    m_palette->deleteElement(element, false);
+    }
+
+    const QList<QgToolBase *> tools = m_tools.values();
+    m_tools.clear();
+    for (QgToolBase *tool : tools)
+	delete tool;
+    if (hadCurrent)
+	emit currentToolChanged(nullptr);
+}
 
 void
 QgPaletteController::populate()
@@ -175,6 +217,29 @@ QgPaletteController::onFactoryUnregistered(const QString &id)
 	}
     }
     delete tool;
+}
+
+void
+QgPaletteController::onPluginsAboutToUnload()
+{
+    clear();
+}
+
+void
+QgPaletteController::onPaletteDestroyed()
+{
+    /* QObject emits destroyed() before deleting its children.  The QPointer
+     * is already clear, but tool controls and event filters are still alive;
+     * tear down the tools now so no adapter keeps a raw widget pointer after
+     * the palette's child destruction. */
+    if (m_currentTool)
+	detachFilter(m_currentTool);
+    m_currentTool = nullptr;
+    m_elementToId.clear();
+    const QList<QgToolBase *> tools = m_tools.values();
+    m_tools.clear();
+    for (QgToolBase *tool : tools)
+	delete tool;
 }
 
 /*

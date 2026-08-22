@@ -2992,6 +2992,7 @@ BObolLodRequest::clear(void)
     objectName = "";
     occurrenceKey = "";
     sourceRoutingId = 0;
+    sourcePopulationEpoch = 0;
     sourceEntryIndex = UINT32_MAX;
     viewRevision = 0;
     policyRevision = 0;
@@ -3447,6 +3448,8 @@ bobol_lod_request_keys_equal(const BObolLodRequest &lhs,
 	bu_strcmp(lhs.objectName.getString(), rhs.objectName.getString()) != 0 ||
 	bu_strcmp(lhs.occurrenceKey.getString(),
 	    rhs.occurrenceKey.getString()) != 0 ||
+	lhs.sourceRoutingId != rhs.sourceRoutingId ||
+	lhs.sourcePopulationEpoch != rhs.sourcePopulationEpoch ||
 	lhs.viewRevision != rhs.viewRevision ||
 	lhs.policyRevision != rhs.policyRevision ||
 	lhs.drawMode != rhs.drawMode ||

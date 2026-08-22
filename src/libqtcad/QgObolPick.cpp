@@ -305,6 +305,34 @@ qg_obol_pick_point(QgView *display,
 }
 
 int
+qg_obol_pick_display_point(QgView *display,
+	int x,
+	int y,
+	float radiusPixels,
+	bool pickAll,
+	std::vector<QgObolPickRecord> &records)
+{
+    records.clear();
+    if (!display)
+	return 0;
+
+    BObolViewController *controller = display->obolViewController();
+    if (!controller)
+	return 0;
+    int width = 0;
+    int height = 0;
+    if (qg_obol_display_extent(display, width, height))
+	controller->setViewportSize(static_cast<unsigned int>(width),
+	    static_cast<unsigned int>(height));
+
+    std::vector<BObolViewPickRecord> hits;
+    const int count = bobol_view_pick_display_point(controller, x, y,
+	radiusPixels, pickAll, hits);
+    qg_obol_pick_records(qg_obol_pick_view_context(display), hits, records);
+    return count;
+}
+
+int
 qg_obol_pick_ray(QgView *display,
 	const SbVec3f &rayOrigin,
 	const SbVec3f &rayDirection,
@@ -378,6 +406,30 @@ qg_obol_pick_rect(QgView *display,
 	maxY = std::max(0, std::min(maxY, height - 1));
     }
 
+    BObolViewController *controller = display->obolViewController();
+    if (controller) {
+	controller->setViewportSize(static_cast<unsigned int>(width),
+	    static_cast<unsigned int>(height));
+	std::vector<BObolViewPickRecord> bounded;
+	const int boundedCount = bobol_view_pick_rectangle(controller,
+	    minX, minY, maxX, maxY, bounded);
+	std::vector<BObolViewPickRecord> sourceBounded;
+	const int sourceBoundedCount = bobol_view_pick_source_rectangle(
+	    controller, minX, minY, maxX, maxY, sourceBounded);
+	bounded.insert(bounded.end(), sourceBounded.begin(),
+	    sourceBounded.end());
+	if (boundedCount >= 0 || sourceBoundedCount >= 0) {
+	    if (firstOnly && bounded.size() > 1)
+		bounded.resize(1);
+	    qg_obol_pick_records(qg_obol_pick_view_context(display),
+		bounded, records);
+	    return static_cast<int>(records.size());
+	}
+    }
+
+    /* A non-CAD scene has no retained occurrence registry.  Keep a bounded
+     * display-only fallback for view features and small standalone scenes;
+     * exact source/librt work remains exclusive to the explicit ray tool. */
     const int sampleWidth = std::max(1, maxX - minX);
     const int sampleHeight = std::max(1, maxY - minY);
     const int xSteps = std::max(1, std::min(6, sampleWidth / 16));
@@ -388,11 +440,8 @@ qg_obol_pick_rect(QgView *display,
 	for (int xi = 0; xi <= xSteps; xi++) {
 	    const int x = minX + (sampleWidth * xi) / xSteps;
 	    std::vector<QgObolPickRecord> sampled;
-	    int submitted = 0;
-	    qg_obol_pick_point_internal(display, x, y, radiusPixels, !firstOnly,
-		sampled, &submitted);
-	    if (submittedSourceRequestCount)
-		*submittedSourceRequestCount += submitted;
+	    qg_obol_pick_display_point(display, x, y, radiusPixels,
+		!firstOnly, sampled);
 	    for (const QgObolPickRecord &record : sampled) {
 		if (!seen.insert(qg_obol_pick_unique_key(record)).second)
 		    continue;

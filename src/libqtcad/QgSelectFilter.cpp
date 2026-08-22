@@ -200,12 +200,17 @@ _qg_apply_obol_pick_selection(QgView *display,
 	std::vector<std::string> &database_paths)
 {
     std::vector<QgObolPickRecord> feature_picks;
+    std::unordered_set<std::string> seen_paths;
+    seen_paths.reserve(picks.size());
+    database_paths.reserve(database_paths.size() + picks.size());
     for (const QgObolPickRecord &pick : picks) {
 	if (pick.featurePickResolved) {
 	    feature_picks.push_back(pick);
 	    continue;
 	}
-	_qg_append_unique_path(database_paths, pick.path.c_str());
+	const std::string normalized = _qg_normalize_path(pick.path.c_str());
+	if (!normalized.empty() && seen_paths.insert(normalized).second)
+	    database_paths.push_back(normalized);
     }
 
     return qg_obol_pick_apply_feature_states(display, feature_picks, true,
@@ -282,8 +287,14 @@ QgSelectFilter::set_selected_paths(const std::vector<std::string> &paths)
     if (!m)
 	return;
 
-    for (const std::string &path : paths)
-	_qg_append_unique_path(m->selected_path_strings, path.c_str());
+    std::unordered_set<std::string> seen;
+    seen.reserve(paths.size());
+    m->selected_path_strings.reserve(paths.size());
+    for (const std::string &path : paths) {
+	const std::string normalized = _qg_normalize_path(path.c_str());
+	if (!normalized.empty() && seen.insert(normalized).second)
+	    m->selected_path_strings.push_back(normalized);
+    }
 
     struct ged_view_context *v = qg_select_filter_view_context(this);
     if (v)
@@ -295,8 +306,11 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
 {
     BObolInputAction action = BOBOL_ACTION_NONE;
     BObolInputEvent input;
-    return qg_select_semantic_event(e, &action, &input) ?
-	semanticInput(action, &input) : false;
+    if (!qg_select_semantic_event(e, &action, &input) ||
+	!input_pixel_position(static_cast<QMouseEvent *>(e),
+	    &input.x, &input.y))
+	return false;
+    return semanticInput(action, &input);
 }
 
 bool
@@ -318,10 +332,8 @@ QgSelectPntFilter::applySemanticInput(BObolInputAction action,
     const int sy = event->y;
 
     std::vector<QgObolPickRecord> obolPicks;
-    int submittedSourceRequests = 0;
-    if (qg_obol_pick_point(view_widget(), sx, sy,
-	    6.0f, !first_only, obolPicks,
-	    &submittedSourceRequests) > 0) {
+    if (qg_obol_pick_display_point(view_widget(), sx, sy,
+	    input_pixel_radius(6.0f), !first_only, obolPicks) > 0) {
 	std::vector<std::string> paths;
 	int feature_count = _qg_apply_obol_pick_selection(view_widget(),
 		obolPicks, paths);
@@ -330,12 +342,6 @@ QgSelectPntFilter::applySemanticInput(BObolInputAction action,
 	    return true;
 	}
     }
-    if (submittedSourceRequests > 0) {
-	std::vector<std::string> paths;
-	set_selected_paths(paths);
-	return true;
-    }
-
     struct ged_pick_result *res = first_only ?
 	ged_pick_nearest(v,
 		sx, sy) :
@@ -351,8 +357,11 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 {
     BObolInputAction action = BOBOL_ACTION_NONE;
     BObolInputEvent input;
-    return qg_select_semantic_event(e, &action, &input) ?
-	semanticInput(action, &input) : false;
+    if (!qg_select_semantic_event(e, &action, &input) ||
+	!input_pixel_position(static_cast<QMouseEvent *>(e),
+	    &input.x, &input.y))
+	return false;
+    return semanticInput(action, &input);
 }
 
 bool
@@ -434,7 +443,7 @@ QgSelectBoxFilter::applySemanticInput(BObolInputAction action,
 	std::vector<QgObolPickRecord> obolPicks;
 	int submittedSourceRequests = 0;
 	if (qg_obol_pick_rect(view_widget(), ipx, ipy,
-		sx, sy, 6.0f, first_only,
+		sx, sy, input_pixel_radius(6.0f), first_only,
 		obolPicks, &submittedSourceRequests) > 0) {
 	    std::vector<std::string> paths;
 	    int feature_count = _qg_apply_obol_pick_selection(view_widget(),
@@ -633,8 +642,11 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 {
     BObolInputAction action = BOBOL_ACTION_NONE;
     BObolInputEvent input;
-    return qg_select_semantic_event(e, &action, &input) ?
-	semanticInput(action, &input) : false;
+    if (!qg_select_semantic_event(e, &action, &input) ||
+	!input_pixel_position(static_cast<QMouseEvent *>(e),
+	    &input.x, &input.y))
+	return false;
+    return semanticInput(action, &input);
 }
 
 bool
@@ -685,7 +697,7 @@ QgSelectRayFilter::applySemanticInput(BObolInputAction action,
     std::vector<QgObolPickRecord> obolPicks;
     int submittedSourceRequests = 0;
     if (qg_obol_pick_point(view_widget(), sx, sy,
-	    6.0f, !first_only, obolPicks,
+	    input_pixel_radius(6.0f), !first_only, obolPicks,
 	    &submittedSourceRequests) > 0) {
 	std::vector<std::string> paths;
 	int feature_count = _qg_apply_obol_pick_selection(view_widget(),

@@ -2333,6 +2333,18 @@ frontier_draw_one(struct ged *gedp, const char *path)
 }
 
 
+static int
+frontier_draw_one_mode(struct ged *gedp, int mode, const char *path)
+{
+    struct bu_vls mode_arg = BU_VLS_INIT_ZERO;
+    bu_vls_printf(&mode_arg, "-m%d", mode);
+    const char *args[3] = {"draw", bu_vls_cstr(&mode_arg), path};
+    const int ret = ged_exec_draw(gedp, 3, args);
+    bu_vls_free(&mode_arg);
+    return ret;
+}
+
+
 static void
 frontier_clear(struct ged *gedp)
 {
@@ -2634,6 +2646,33 @@ exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
 	frontier_selected_occurrences_for_path(nested_source,
 	    nested_target) <= 0)
 	FAIL("frontier collapse should preserve semantic and visual selection");
+
+    /* Shaded-BOT roots use the same compact occurrence owner but retain a
+     * distinct representation-mode identity.  Exercise the public -m1 path
+     * explicitly: a mode mismatch in the frontier bridge otherwise reports a
+     * successful semantic erase while leaving the shaded occurrence visible. */
+    frontier_clear(gedp);
+    if (frontier_draw_one_mode(gedp, 1, nested_root) != BRLCAD_OK)
+	FAIL("shaded frontier test should draw its nested root");
+    nested_source = source_for_path(scene, nested_root);
+    BObolDatabaseSourceSummary shaded_summary;
+    if (!nested_source || !nested_source->getSummary(shaded_summary) ||
+	!shaded_summary.valid ||
+	shaded_summary.representationMode !=
+	    SoBRLDatabaseSource::REPRESENTATION_SHADED_BOTS ||
+	frontier_visible_occurrences(nested_source) != 3)
+	FAIL("shaded frontier root should retain three compact occurrences");
+    ged_scene_erase_request_init(&erase);
+    erase.path = nested_target;
+    erase.view = ged_view_active_ctx(gedp);
+    erase_result = ged_scene_result_create();
+    if (ged_scene_erase(gedp, &erase, erase_result) != GED_SCENE_OK ||
+	frontier_visible_occurrences(nested_source) != 2)
+	FAIL("shaded nested erase should mask one retained occurrence");
+    ged_scene_result_destroy(erase_result);
+    if (frontier_draw_one_mode(gedp, 1, nested_target) != BRLCAD_OK ||
+	frontier_visible_occurrences(nested_source) != 3)
+	FAIL("shaded nested redraw should restore the retained occurrence");
 
     frontier_clear(gedp);
     if (frontier_draw_one(gedp, "reuse_root.c") != BRLCAD_OK)
