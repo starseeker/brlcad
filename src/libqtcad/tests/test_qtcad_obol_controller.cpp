@@ -388,6 +388,33 @@ main(int argc, char **argv)
     if (!view.diff_hashes())
 	FAIL("qtcad view diffs should honor explicit non-camera refresh requests");
 
+    /* A Qt repaint is allowed to replay the retained framebuffer until a
+     * semantic refresh explicitly invalidates its pixels.  Verify the bridge
+     * requests a presentation-only frame for draw/selection state without
+     * turning that one-time patch cost into LoD capacity evidence. */
+    controller->clearRenderRequest();
+    uint64_t semanticSerial = controller->renderRequestSerialGet();
+    view.need_update(QG_VIEW_DRAWN);
+    SbBool semanticCapacityRelevant = TRUE;
+    if (controller->renderRequestSerialGet() <= semanticSerial ||
+	!controller->consumeRenderRequest(NULL,
+	    &semanticCapacityRelevant) || semanticCapacityRelevant)
+	FAIL("draw-state refresh should request one presentation-only Obol frame");
+
+    semanticSerial = controller->renderRequestSerialGet();
+    view.need_update(QG_VIEW_SELECT);
+    semanticCapacityRelevant = TRUE;
+    if (controller->renderRequestSerialGet() <= semanticSerial ||
+	!controller->consumeRenderRequest(NULL,
+	    &semanticCapacityRelevant) || semanticCapacityRelevant)
+	FAIL("selection refresh should request one presentation-only Obol frame");
+
+    semanticSerial = controller->renderRequestSerialGet();
+    view.need_update(QG_VIEW_REFRESH);
+    if (controller->renderRequestSerialGet() != semanticSerial ||
+	controller->isRenderRequested())
+	FAIL("unchanged camera refresh should retain the completed Obol frame");
+
     controller->clearRenderRequest();
     if (controller->isRenderRequested() ||
 	controller->consumeRenderRequest(NULL))
@@ -499,6 +526,25 @@ main(int argc, char **argv)
     if (controller->getLastRenderTimeNanoseconds() == 0 ||
 	controller->getSmoothedRenderTimeNanoseconds() == 0)
 	FAIL("Obol controller should record rendered frame telemetry");
+    const QImage completedSoftwarePresentation = paintTarget.copy();
+
+    /* Repainting an unchanged QWidget must blit the immutable completed
+     * software frame rather than manufacture another Coin/OSMesa traversal.
+     * Semantic camera, scene, and HUD mutations all publish an explicit
+     * controller request and are exercised below. */
+    const uint64_t idleSoftwareCompletion =
+	controller->getRenderCompletionSerial();
+    paintTarget.fill(0);
+    QPainter idleSoftwarePainter(&paintTarget);
+    view.render(&idleSoftwarePainter);
+    idleSoftwarePainter.end();
+    if (controller->getRenderCompletionSerial() != idleSoftwareCompletion ||
+	controller->isRenderRequested())
+	FAIL("QgSW idle Qt paint should reuse the completed framebuffer");
+    if (lit_pixel_count(paintTarget) < 10)
+	FAIL("QgSW idle completed-frame reuse should preserve visible content");
+    if (paintTarget != completedSoftwarePresentation)
+	FAIL("QgSW idle completed-frame reuse should preserve logical pixel scale");
 
     /*
      * A software traversal may schedule the next refinement/calibration
@@ -870,7 +916,18 @@ main(int argc, char **argv)
 		!paintController->hasProgressiveWorkPending())
 		FAIL("QgGL visible paint should only retain a newly scheduled progressive request");
 
+	    /* An arbitrary Qt/OpenGL paint with no semantic request must blit the
+	     * completed FBO without advancing the CAD presentation barrier. */
 	    paintController->clearRenderRequest();
+	    const uint64_t idleGlCompletion =
+		paintController->getRenderCompletionSerial();
+	    glCanvas.makeCurrent();
+	    glCanvas.runPaintGLForTest();
+	    glCanvas.doneCurrent();
+	    if (paintController->getRenderCompletionSerial() != idleGlCompletion ||
+		paintController->isRenderRequested())
+		FAIL("QgGL idle Qt paint should reuse the completed framebuffer");
+
 	    paintController->requestRender("gl-deadline-baseline");
 	    glCanvas.makeCurrent();
 	    glCanvas.runPaintGLForTest();

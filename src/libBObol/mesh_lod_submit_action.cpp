@@ -19,6 +19,8 @@
 #include "BObol/BMeshShape.h"
 #include "BObol/BViewLod.h"
 
+#include "lod_coordinator_private.h"
+
 #include "raytrace.h"
 
 #include <Inventor/SbString.h>
@@ -272,12 +274,14 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     refinementCostBudgetUsed(0),
     initialProviderCostBudget(0),
     refinementBudgetBlockedCount(0),
+    missingMeshBudgetBlockedCount(0),
     retainedQualityLimitedCount(0),
     retainedAdmissionBlockedCount(0),
     oneOverBudgetRefinementLimit(0),
     oneOverBudgetRefinementUsed(FALSE),
     transitionLimitedRefinement(FALSE),
     viewState(NULL),
+    projectedDemandCache(NULL),
     compactEntryFirst(0),
     compactEntryLimit(SIZE_MAX),
     compactEntryNext(0),
@@ -603,6 +607,12 @@ SoBRLMeshLodSubmitAction::getRefinementBudgetBlockedCount(void) const
 }
 
 unsigned int
+SoBRLMeshLodSubmitAction::getMissingMeshBudgetBlockedCount(void) const
+{
+    return this->missingMeshBudgetBlockedCount;
+}
+
+unsigned int
 SoBRLMeshLodSubmitAction::getRetainedQualityLimitedCount(void) const
 {
     return this->retainedQualityLimitedCount;
@@ -751,6 +761,34 @@ mesh_lod_bounded_resident_prefetch_cut(
     }
     return mesh_lod_next_population_cut(
 	progressiveMesh, chunkIds, residentCut, requestedCut);
+}
+
+/* Publishing an admitted cut before a speculative resident suffix prevents
+ * one exceptional mesh from remaining unchanged for several seconds.  The
+ * same split is actively harmful for a many-leaf scene: it turns one batched
+ * cache wave into two owner-thread results per small object.  Only split a
+ * delivery whose complete prepared generation is large enough to have
+ * material worker latency.  The existing bounded-prefetch helper remains the
+ * memory authority; this threshold only chooses one atomic result or two. */
+static int
+mesh_lod_visible_first_delivery_cut(
+    const BObolLodProgressiveMeshPtr &progressiveMesh,
+    const std::vector<uint32_t> &chunkIds, int currentPresentationCut,
+    int admittedPresentationCut, int desiredResidentCut, SbBool hasNormals,
+    int drawMode)
+{
+    if (!progressiveMesh || desiredResidentCut < 0)
+	return desiredResidentCut;
+
+    constexpr size_t visibleFirstWorkingSetThreshold =
+	64ULL * 1024ULL * 1024ULL;
+    const BObolLodCounts counts = mesh_lod_chunk_counts(
+	progressiveMesh, chunkIds, desiredResidentCut, hasNormals, true);
+    const size_t workingSet = mesh_lod_resident_working_set_estimate(
+	counts.pointCount, counts.faceCount, hasNormals, drawMode);
+    return BObolLodDeliveryPolicy::visibleFirstCut(
+	currentPresentationCut, admittedPresentationCut, desiredResidentCut,
+	workingSet > visibleFirstWorkingSetThreshold);
 }
 
 SbBool
@@ -1011,6 +1049,13 @@ SoBRLMeshLodSubmitAction::setViewLodState(
     this->viewState = newViewState;
 }
 
+void
+SoBRLMeshLodSubmitAction::setProjectedDemandCache(
+    BObolLodProjectedDemandCache *cache)
+{
+    this->projectedDemandCache = cache;
+}
+
 const BObolViewLodState *
 SoBRLMeshLodSubmitAction::getViewLodState(void) const
 {
@@ -1188,6 +1233,7 @@ SoBRLMeshLodSubmitAction::beginTraversal(SoNode *node)
     this->pendingResidentRefinementCount = 0;
     this->refinementCostBudgetUsed = 0;
     this->refinementBudgetBlockedCount = 0;
+    this->missingMeshBudgetBlockedCount = 0;
     this->retainedQualityLimitedCount = 0;
     this->retainedAdmissionBlockedCount = 0;
     this->oneOverBudgetRefinementUsed = FALSE;
@@ -1543,6 +1589,99 @@ mesh_lod_apply_projected_demand(BObolLodRequest &request,
      * diameter/error pair from producer-certified cut metadata. */
     request.requestedCut = -1;
     return TRUE;
+}
+
+/* Reapply policy-dependent fields to camera/geometric evidence.  Cached
+ * projection never owns a cut or pixel target: those can change several
+ * times while the camera remains fixed. */
+static SbBool
+mesh_lod_apply_projected_evidence(BObolLodRequest &request,
+	const BObolLodProjectedDemandCache::Evidence &evidence,
+	const SbMatrix &localToRoot, const SbMatrix &viewProjection,
+	const struct bv_view_info &view, float targetPixelError)
+{
+    request.localToRoot = localToRoot;
+    request.viewProjection = viewProjection;
+    request.spatialProjectionValid = TRUE;
+    request.requiredChunks.clear();
+    if (!evidence.visible)
+	return FALSE;
+
+    request.projectedPixelDiameter = evidence.pixelDiameter;
+    request.projectedPixelArea = evidence.pixelArea;
+    request.projectedPixelPerimeter = evidence.pixelPerimeter;
+    request.projectedBoundsContained =
+	evidence.boundsContained ? TRUE : FALSE;
+    const float policyScale =
+	(std::isfinite(view.lod.scale) && view.lod.scale > 0.0) ?
+	    static_cast<float>(view.lod.scale) : 1.0f;
+    request.targetPixelError =
+	(std::isfinite(targetPixelError) && targetPixelError > 0.0f) ?
+	    targetPixelError / policyScale : 1.0f / policyScale;
+    request.requestedCut = -1;
+    return TRUE;
+}
+
+static SbBool
+mesh_lod_apply_compact_projected_demand(BObolLodRequest &request,
+	const BObolCompactLodPlanningSummary &summary,
+	const SbViewVolume &viewVolume, const struct bv_view_info &view,
+	float targetPixelError, const SbMatrix &viewProjection,
+	BObolLodProjectedDemandCache::Source *cacheSource,
+	size_t entryIndex,
+	BObolLodProjectedDemandCache::Evidence &evidence)
+{
+    if (BObolLodProjectedDemandCache::lookup(cacheSource, entryIndex,
+	    summary.geometryRevision, summary.placementRevision, evidence))
+	return mesh_lod_apply_projected_evidence(request, evidence,
+	    summary.localToSource, viewProjection, view, targetPixelError);
+
+    evidence = BObolLodProjectedDemandCache::Evidence();
+    const SbBool visible = mesh_lod_apply_projected_demand(request,
+	summary.localBounds, summary.localToSource, viewVolume, view,
+	targetPixelError, &viewProjection);
+    evidence.visible = visible != FALSE;
+    if (visible) {
+	evidence.pixelDiameter = request.projectedPixelDiameter;
+	evidence.pixelArea = request.projectedPixelArea;
+	evidence.pixelPerimeter = request.projectedPixelPerimeter;
+	evidence.boundsContained =
+	    request.projectedBoundsContained != FALSE;
+    }
+    BObolLodProjectedDemandCache::store(cacheSource, entryIndex,
+	summary.geometryRevision, summary.placementRevision, evidence);
+    return visible;
+}
+
+static bool
+mesh_lod_compact_presentation_projects_to_point(
+	const BObolCompactLodPlanningSummary &summary,
+	const SbMatrix &viewProjection, const SbVec2s &viewportSize,
+	float pixelLimit,
+	BObolLodProjectedDemandCache::Source *cacheSource,
+	size_t entryIndex,
+	BObolLodProjectedDemandCache::Evidence &evidence)
+{
+    if (!summary.presentationCornersValid)
+	return false;
+    if (!evidence.presentationValid) {
+	const Obol::CadProjectedProxy projected =
+	    Obol::classifyCadProjectedProxy(
+		summary.presentationCorners.data(),
+		summary.presentationLocalToSource, viewProjection,
+		viewportSize, FLT_MAX);
+	evidence.presentationValid = true;
+	evidence.presentationVisible = projected.visible;
+	evidence.presentationContained = projected.fullyContained;
+	evidence.presentationPixelWidth = projected.pixelWidth;
+	evidence.presentationPixelHeight = projected.pixelHeight;
+	BObolLodProjectedDemandCache::store(cacheSource, entryIndex,
+	    summary.geometryRevision, summary.placementRevision, evidence);
+    }
+    return evidence.presentationVisible &&
+	evidence.presentationContained &&
+	evidence.presentationPixelWidth <= pixelLimit &&
+	evidence.presentationPixelHeight <= pixelLimit;
 }
 
 static void
@@ -2057,6 +2196,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     if (source->isCompactOccurrenceRegistry()) {
 	const int sourceDrawMode = source->getEffectiveLodDrawMode();
 	const int count = source->getCompactInstanceCount();
+	BObolLodProjectedDemandCache::Source *projectedDemandCacheSource =
+	    submitAction->projectedDemandCache ?
+		submitAction->projectedDemandCache->bind(
+		    source->getCompactSourceRoutingId(),
+		    source->getCompactPopulationEpoch(),
+		    submitAction->viewRevision,
+		    static_cast<size_t>(std::max(0, count))) : NULL;
 	SbMatrix compactViewProjection;
 	const SbMatrix *compactViewProjectionPtr = NULL;
 	if (submitAction->useViewVolume) {
@@ -2128,12 +2274,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		}
 		BObolLodRequest projected;
 		projected.bounds = summary.localBounds;
+		BObolLodProjectedDemandCache::Evidence projectedEvidence;
 		if (submitAction->useViewVolume &&
-		    !mesh_lod_apply_projected_demand(projected,
-			summary.localBounds, summary.localToSource,
-			submitAction->viewVolume, submitAction->view,
-			submitAction->targetPixelError,
-			compactViewProjectionPtr)) {
+		    !mesh_lod_apply_compact_projected_demand(projected,
+			summary, submitAction->viewVolume,
+			submitAction->view,
+			    submitAction->targetPixelError,
+			    compactViewProjection, projectedDemandCacheSource,
+			    static_cast<size_t>(payload->sourceEntryIndex),
+			    projectedEvidence)) {
 		    if (submitAction->viewState->removeCadPayload(payload))
 			submitAction->updatedCutCount++;
 		    continue;
@@ -2369,12 +2518,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 
 		BObolLodRequest projected;
 		projected.bounds = summary.localBounds;
+		BObolLodProjectedDemandCache::Evidence projectedEvidence;
 		if (submitAction->useViewVolume &&
-		    !mesh_lod_apply_projected_demand(projected,
-			summary.localBounds, summary.localToSource,
-			submitAction->viewVolume, submitAction->view,
+		    !mesh_lod_apply_compact_projected_demand(projected,
+			summary, submitAction->viewVolume,
+			submitAction->view,
 			submitAction->targetPixelError,
-			compactViewProjectionPtr)) {
+			compactViewProjection, projectedDemandCacheSource,
+			static_cast<size_t>(candidateIndex),
+			projectedEvidence)) {
 		    const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
 		    if (filter && filter[0] &&
 			strstr(summary.sourceInstanceKey.getString(), filter)) {
@@ -2427,13 +2579,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    !summary.selected && !summary.highlighted &&
 		    compactViewProjectionPtr &&
 		    summary.presentationCornersValid &&
-		    Obol::classifyCadProjectedProxy(
-			summary.presentationCorners.data(),
-			summary.presentationLocalToSource,
-			*compactViewProjectionPtr,
+		    mesh_lod_compact_presentation_projects_to_point(
+			summary, *compactViewProjectionPtr,
 			mesh_lod_viewport_size(submitAction->view),
-			submitAction->pointProxyPixelThreshold * 0.75f).
-			pointEligible;
+			submitAction->pointProxyPixelThreshold * 0.75f,
+			projectedDemandCacheSource,
+			static_cast<size_t>(candidateIndex),
+			projectedEvidence);
 		/* The standing AABB participates in SoCADAssembly's aggregate point
 		 * channel.  At the renderer's conservative new-collapse boundary it is
 		 * already pixel exact for this view, so class it as coverage rather than
@@ -2702,12 +2854,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	     * matrix again corrupts screen bounds (and can make a visible leaf
 	     * look tiny or off-screen to the LoD selector). */
 	    SbMatrix localToRoot = summary.localToSource;
+	    BObolLodProjectedDemandCache::Evidence projectedEvidence;
 	    if (submitAction->useViewVolume) {
-		if (!mesh_lod_apply_projected_demand(
-		    request, summary.localBounds, localToRoot,
-		    submitAction->viewVolume, submitAction->view,
-		    submitAction->targetPixelError,
-		    compactViewProjectionPtr)) {
+		if (!mesh_lod_apply_compact_projected_demand(
+		    request, summary, submitAction->viewVolume,
+		    submitAction->view, submitAction->targetPixelError,
+		    compactViewProjection, projectedDemandCacheSource, i,
+		    projectedEvidence)) {
 		    if ((submitAction->retainedSceneCostBudget != SIZE_MAX ||
 			 submitAction->retainedSceneUpgradeCostBudget != SIZE_MAX) &&
 			submitAction->viewState) {
@@ -2748,13 +2901,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		!summary.selected && !summary.highlighted &&
 		compactViewProjectionPtr &&
 		summary.presentationCornersValid &&
-		Obol::classifyCadProjectedProxy(
-		    summary.presentationCorners.data(),
-		    summary.presentationLocalToSource,
-		    *compactViewProjectionPtr,
+		mesh_lod_compact_presentation_projects_to_point(
+		    summary, *compactViewProjectionPtr,
 		    mesh_lod_viewport_size(submitAction->view),
-		    submitAction->pointProxyPixelThreshold * 0.75f).
-		    pointEligible;
+		    submitAction->pointProxyPixelThreshold * 0.75f,
+		    projectedDemandCacheSource, i, projectedEvidence);
 	    const SbBool structuralPointCoverage =
 		!submitAction->structuralPresentationRepair &&
 		!activePayload && !summary.meshGeometry &&
@@ -3552,6 +3703,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->skippedMeshCount++;
 		    continue;
 		}
+		providerDeliveryCut = mesh_lod_visible_first_delivery_cut(
+		    activePayload->progressiveMesh, request.requiredChunks,
+		    activePayload->activeCut, providerPresentationCut,
+		    providerDeliveryCut, activePayload->hasNormals,
+		    request.drawMode);
 	    }
 	    if (getenv("BOBOL_LOD_TRACE_BUDGET"))
 		bu_log("BObol LoD provider admission object=%s occurrence=%s "
@@ -3597,6 +3753,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    request.sourceCounts.faceCount,
 		    request.sourceCounts.pointCount, request.drawMode,
 		    initialCostAllowance)) {
+		submitAction->missingMeshBudgetBlockedCount++;
 		submitAction->pendingRetainedRefinementCount++;
 		submitAction->skippedMeshCount++;
 		continue;
@@ -3943,6 +4100,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->service,
 		    submitAction->transitionLimitedRefinement) :
 		providerPresentationCut;
+	    providerDeliveryCut = mesh_lod_visible_first_delivery_cut(
+		activePayload->progressiveMesh, request.requiredChunks,
+		activePayload->activeCut, providerPresentationCut,
+		providerDeliveryCut, activePayload->hasNormals,
+		request.drawMode);
 	}
 	if (!submitAction->useForcedCut && activePayload &&
 	    mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
@@ -4208,6 +4370,11 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 		    submitAction->service,
 		    submitAction->transitionLimitedRefinement) :
 		providerPresentationCut;
+	    providerDeliveryCut = mesh_lod_visible_first_delivery_cut(
+		viewPayload->progressiveMesh, request.requiredChunks,
+		viewPayload->activeCut, providerPresentationCut,
+		providerDeliveryCut, viewPayload->hasNormals,
+		request.drawMode);
 	}
 	if (!submitAction->useForcedCut && viewPayload &&
 	    mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&

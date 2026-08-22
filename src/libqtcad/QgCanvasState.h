@@ -33,6 +33,7 @@
 #include "common.h"
 
 #include "bu/str.h"
+#include <atomic>
 #include <climits>
 #include <chrono>
 #include <cmath>
@@ -109,7 +110,11 @@ struct QgCanvasState {
     bool   obol_paint_initialized = false;
     bool   fb_update_queued = false;
     bool   progressive_update_queued = false;
+    bool   lod_progress_idle_tail_pending = false;
+    std::atomic<bool> frame_request_dispatch_queued {false};
     bool   lod_progress_last_pending = false;
+    bool   lod_progress_last_visible = false;
+    int    lod_progress_last_phase = -1;
     bool   software_backend = false;
     QWidget *frame_request_widget = nullptr;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
@@ -123,7 +128,6 @@ struct QgCanvasState {
      * software presentation.  QgSW's paint hot path consumes this orientation
      * directly; observational Qt image callers must receive a flipped copy. */
     QImage last_completed_software_frame;
-    std::chrono::steady_clock::time_point fps_last_publish;
     std::chrono::steady_clock::time_point lod_progress_last_publish;
 
     /* ---- per-canvas input handler ---- */
@@ -206,9 +210,40 @@ qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 	s.obol->requestPresentationRender(reason);
 }
 
+/** True when the software endpoint can repaint Qt from its immutable last
+ * completed presentation without entering Coin/OSMesa again. */
+static inline bool
+qgcanvas_has_completed_software_frame(const QgCanvasState &s,
+	const QWidget *w)
+{
+    if (!w || s.last_completed_software_frame.isNull())
+	return false;
+    const QSize renderSize = qgcanvas_render_size(w);
+    /* Pixel dimensions alone are insufficient.  A retained image produced
+     * for DPR 1.5 and later painted with Qt's default DPR 1 contract is
+     * interpreted as a logical-size image: the model and faceplate both grow
+     * and the viewport appears to jump.  Treat the scale metadata as part of
+     * the immutable presentation's endpoint identity. */
+    return s.last_completed_software_frame.size() == renderSize &&
+	qFuzzyCompare(s.last_completed_software_frame.devicePixelRatio(),
+	    w->devicePixelRatioF());
+}
+
+/** True when the direct-GL endpoint has a completed presentation for the
+ * current physical viewport. */
+static inline bool
+qgcanvas_has_completed_gl_frame(const QgCanvasState &s, const QWidget *w)
+{
+    if (!w || !s.presentation_fbo_has_completed_frame ||
+	!s.presentation_fbo)
+	return false;
+    return s.presentation_fbo->size() == qgcanvas_render_size(w);
+}
+
 static inline void qgcanvas_queue_obol_progressive_update(
     QgCanvasState &s, QWidget *w);
-static inline bool qgcanvas_sync_obol_lod_progress(QgCanvasState &s);
+static inline bool qgcanvas_sync_obol_lod_progress(
+    QgCanvasState &s, bool allowPeriodic = true);
 
 /* LoD completion may be reported by a worker thread after Qt's last paint.
  * Marshal the controller's frame request back to the canvas event loop so a
@@ -221,32 +256,50 @@ qgcanvas_obol_frame_requested(void *user_data, const char *UNUSED(reason))
     QWidget *w = s ? s->frame_request_widget : nullptr;
     if (!w)
 	return;
+    /* Controller transitions may originate on worker and owner threads, and
+     * one bounded pump can publish several internal obligation edges.  The
+     * callback is only a wake hint for the standing level below: coalesce it
+     * before posting to Qt so a 50k result wave cannot flood the GUI queue
+     * with thousands of stale callbacks. */
+    if (s->frame_request_dispatch_queued.exchange(true,
+	std::memory_order_acq_rel))
+	return;
     const bool softwareBackend = s->software_backend;
-    /* A software canvas has no swap/expose wake source of its own, and Qt may
-     * coalesce update() indefinitely while qged's command/test layer owns a
-     * nested event loop.  Queue the call onto the widget thread in both
-     * cases, but make the OSMesa endpoint synchronous once it gets there.
-     * Its Coin traversal still owns the controller's hard abort deadline. */
+    /* A progressive wake is not necessarily a presentation request.  It may
+     * mean only that another bounded provider/planning slice can run.  Queue
+     * the callback onto the widget thread in both cases; the controller's
+     * explicit render latch below remains the sole authority for repainting.
+     * This distinction is essential for software rendering: one OSMesa
+     * traversal per 2k-entry planning window turned a 50k current-view delta
+     * into hundreds of unchanged 40--80 ms frames. */
 
     QMetaObject::invokeMethod(w, [s, w, softwareBackend]() {
+	s->frame_request_dispatch_queued.store(false,
+	    std::memory_order_release);
 	/* Frame callbacks are the producer-to-host wake edge.  Service one
 	 * bounded provider slice directly on the widget thread and explicitly
 	 * arm the continuing timer; relying on repaint() to do both is not
 	 * sufficient when Qt suppresses a paint for an obscured/initializing
 	 * widget or while a parent temporarily disables updates. */
-	if (s->obol && s->obol->hasProgressiveWorkPending())
+	BObolHostWorkSnapshot work = s->obol ?
+	    s->obol->getHostWorkSnapshot() : BObolHostWorkSnapshot();
+	if (s->obol && work.pumpPending())
 	    (void)s->obol->advanceProgressiveWork(NULL, NULL);
-	/* update() is only a hint and may be folded into the paint whose
-	 * completion raised this request.  A refinement barrier is a stronger
-	 * contract: the controller cannot admit its successor cut until a new
-	 * frame has actually traversed the published population.  Present that
-	 * frame synchronously once this queued callback reaches the widget thread,
-	 * on either backend.  Ordinary System GL refreshes remain coalescible. */
-	if (softwareBackend ||
-	    (s->obol && s->obol->hasPendingLodRefinementFrame()))
-	    w->repaint();
-	else
-	    w->update();
+	/* A partial immutable result may install a refinement barrier while its
+	 * adaptive publication deadline is still accumulating a batch.  The
+	 * barrier deliberately has no render request in that interval.  Once the
+	 * controller replaces the timer witness with an explicit request, present
+	 * synchronously for OSMesa and for a strong refinement barrier; ordinary
+	 * System GL refreshes remain coalescible. */
+	work = s->obol ? s->obol->getHostWorkSnapshot() :
+	    BObolHostWorkSnapshot();
+	if (s->obol && work.renderPending()) {
+	    if (softwareBackend ||
+		s->obol->hasPendingLodRefinementFrame())
+		w->repaint();
+	    else
+		w->update();
+	}
 	qgcanvas_queue_obol_progressive_update(*s, w);
     }, Qt::QueuedConnection);
 }
@@ -279,29 +332,55 @@ qgcanvas_advance_obol_progressive(QgCanvasState &s)
 static inline void
 qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 {
+    const BObolHostWorkSnapshot initialWork = s.obol ?
+	s.obol->getHostWorkSnapshot() : BObolHostWorkSnapshot();
     if (!s.obol || !w ||
-	(!s.obol->hasProgressiveWorkPending() &&
-	 !s.obol->isRenderRequested()) ||
-	s.progressive_update_queued)
+	(initialWork.flags == BOBOL_HOST_WORK_NONE &&
+	 !s.lod_progress_idle_tail_pending) || s.progressive_update_queued)
 	return;
 
     s.progressive_update_queued = true;
     QTimer::singleShot(16, w, [&s, w]() {
 	s.progressive_update_queued = false;
-	if (!s.obol ||
-	    (!s.obol->hasProgressiveWorkPending() &&
-	     !s.obol->isRenderRequested()))
+	BObolHostWorkSnapshot work = s.obol ?
+	    s.obol->getHostWorkSnapshot() : BObolHostWorkSnapshot();
+	if (!s.obol)
 	    return;
+	if (work.flags == BOBOL_HOST_WORK_NONE) {
+	    /* One delayed no-work observation closes the host/HUD race.  The last
+	     * pump may clear its work flag before the coordinator publishes IDLE;
+	     * this tail never advances geometry and never reschedules itself. */
+	    s.lod_progress_idle_tail_pending = false;
+	    const bool lodProgressPublish =
+		qgcanvas_sync_obol_lod_progress(s, false);
+	    if (lodProgressPublish) {
+		qgcanvas_request_obol_render_if_idle(s, "lod-progress-idle");
+		if (s.software_backend)
+		    w->repaint();
+		else
+		    w->update();
+	    }
+	    return;
+	}
 
 	/* Poll background providers and LoD service state without forcing an
 	 * expensive duplicate paint.  advanceProgressiveWork() requests a
 	 * render only when presentation data or a retained PoP cut actually
 	 * changes; otherwise keep this lightweight timer pump alive. */
-	if (s.obol->hasProgressiveWorkPending())
+	if (work.pumpPending())
 	    (void)s.obol->advanceProgressiveWork(NULL, NULL);
-	const bool needsPresentation = s.obol->isRenderRequested() ||
-	    (s.lod_progress_last_pending &&
-	     !s.obol->hasProgressiveWorkPending());
+	work = s.obol->getHostWorkSnapshot();
+	/* A bounded pump can publish the terminal convergence transition without
+	 * changing geometry.  Synchronize that user-facing state here, not only
+	 * after a rendered frame: otherwise the work latch is already empty and
+	 * no future paint exists to remove the last "Refining view" HUD. */
+	const bool lodProgressPublish =
+	    qgcanvas_sync_obol_lod_progress(s, false);
+	if (lodProgressPublish)
+	    qgcanvas_request_obol_render_if_idle(s, "lod-progress-state");
+	work = s.obol->getHostWorkSnapshot();
+	const bool needsPresentation = work.renderPending() ||
+	    lodProgressPublish;
 	if (needsPresentation) {
 	    /* QWidget::update() may remain coalesced indefinitely while the GUI
 	     * test/command layer is running a nested event loop and no unrelated
@@ -317,6 +396,13 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	    } else
 		w->update();
 	}
+	/* A synchronous software paint may consume the last render request and
+	 * publish IDLE before returning here.  Arm the no-work tail from the
+	 * post-presentation snapshot, not the stale pre-paint work record. */
+	work = s.obol->getHostWorkSnapshot();
+	if (work.flags == BOBOL_HOST_WORK_NONE &&
+	    s.lod_progress_last_visible)
+	    s.lod_progress_idle_tail_pending = true;
 	/* Do not depend on Qt delivering that paint to keep either the provider
 	 * pump or an explicit frame request alive.  update() may be coalesced with
 	 * the paint whose completion raised a calibration request.  That request
@@ -503,7 +589,7 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	 * particular, never present pre-resize pixels while an interrupted
 	 * traversal is preparing the first frame at the new dimensions. */
 	const bool retainedFrameMatches =
-	    !s.last_completed_software_frame.isNull() &&
+	    qgcanvas_has_completed_software_frame(s, w) &&
 	    s.last_completed_software_frame.width() == size[0] &&
 	    s.last_completed_software_frame.height() == size[1];
 	if (retainedFrameMatches) {
@@ -553,6 +639,13 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	 * traversal has already overwritten its renderer-owned buffer, so a
 	 * borrowed view cannot preserve the last coherent presentation. */
 	s.last_completed_software_frame = raw.copy();
+	/* Store the endpoint's logical-pixel contract on the retained image,
+	 * rather than only on the temporary return value below.  QImage is
+	 * implicitly shared; setting DPR on img after copying it from this member
+	 * detaches the metadata and leaves idle QgSW repaints at DPR 1. */
+	if (w)
+	    s.last_completed_software_frame.setDevicePixelRatio(
+		w->devicePixelRatioF());
 	img = s.last_completed_software_frame;
     } else {
 	img = QImage(size[0], size[1], QImage::Format_RGBX8888);
@@ -646,6 +739,7 @@ qgcanvas_bind_obol_controller(QgCanvasState &s, QWidget *w,
      * preserve pixels from the previous endpoint through a borrowed-controller
      * replacement. */
     s.presentation_fbo_has_completed_frame = false;
+    s.last_completed_software_frame = QImage();
 
     if (!s.obol)
 	return;
@@ -879,12 +973,14 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
 /**
  * Publish the retained LoD progress faceplate on state transitions and at a
  * bounded cadence while work is active.  This helper is deliberately usable
- * both immediately before a presentation and after its timing feedback: the
- * pre-render call prevents a stale terminal HUD frame, while the post-render
- * call catches a transition caused by completion/calibration of that frame.
+ * both immediately before a presentation and after its timing feedback.  The
+ * pre-render call may publish a periodic progress sample into a frame which
+ * is already required.  The post-render call must permit state transitions
+ * only: a periodic HUD mutation there would request its own next frame and
+ * make a slow software renderer repaint continuously without new geometry.
  */
 static inline bool
-qgcanvas_sync_obol_lod_progress(QgCanvasState &s)
+qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
 {
     if (!s.v || !s.obol)
 	return false;
@@ -893,18 +989,35 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s)
     const bool lod_pending =
 	s.obol->hasProgressiveWorkPending() ||
 	s.obol->isLodInteractionActive();
-    const bool lod_state_changed =
-	lod_pending != s.lod_progress_last_pending;
+    BObolLodConvergenceStatus lod_status;
+    s.obol->getLodConvergenceStatus(lod_status);
+    const bool lod_visible =
+	lod_status.phase != BOBOL_LOD_CONVERGENCE_IDLE ||
+	lod_status.backgroundPending || lod_status.performanceLimited ||
+	lod_status.failedSourceCount > 0;
     const bool lod_first =
 	s.lod_progress_last_publish.time_since_epoch().count() == 0;
+    /* The host-work latch may clear one coordinator transition before the
+     * convergence state machine publishes IDLE.  Keying the HUD solely on
+     * that latch can therefore retain "Refining view" indefinitely in the
+     * completed framebuffer: when IDLE arrives, pending is already false and
+     * no second transition is observed.  Track the user-facing phase and
+     * visibility contract explicitly so the final HUD removal owns a render
+     * request even when no geometry work remains. */
+    const bool lod_state_changed = lod_first ||
+	lod_pending != s.lod_progress_last_pending ||
+	lod_visible != s.lod_progress_last_visible ||
+	static_cast<int>(lod_status.phase) != s.lod_progress_last_phase;
     const bool lod_publish = lod_state_changed ||
-	(lod_pending && (lod_first ||
+	(allowPeriodic && lod_pending && (lod_first ||
 	    std::chrono::duration_cast<std::chrono::milliseconds>(
 		now - s.lod_progress_last_publish).count() >= 100));
     if (!lod_publish)
 	return false;
 
     s.lod_progress_last_pending = lod_pending;
+    s.lod_progress_last_visible = lod_visible;
+    s.lod_progress_last_phase = static_cast<int>(lod_status.phase);
     s.lod_progress_last_publish = now;
     qgcanvas_sync_obol_faceplate(s);
     return true;
@@ -924,9 +1037,11 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
     if (presentation_interval)
 	(void)bv_frametime_set(view, presentation_interval);
 
-    const bool lod_publish = qgcanvas_sync_obol_lod_progress(s);
-    const auto now = std::chrono::steady_clock::now();
-
+    /* completeRenderTiming() may change settling -> ready, which needs one
+     * final HUD frame.  It must not start the next periodic progress frame;
+     * periodic samples are folded into independently requested renders by the
+     * pre-render call above. */
+    const bool lod_publish = qgcanvas_sync_obol_lod_progress(s, false);
     /*
      * completeRenderTiming() may install an unchanged calibration replay
      * after the progressive pump has already transitioned to idle.  Queue it
@@ -938,27 +1053,13 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
 	(lod_publish || s.obol->hasPendingLodRefinementFrame()))
 	w->update();
 
-    struct bv_params_state params = BV_PARAMS_STATE_INIT;
-    if (!bv_params_state_get(&params, view) || !params.draw ||
-	!params.draw_fps)
-	return;
-
-    if (!presentation_interval)
-	return;
-
-    const bool first =
-	s.fps_last_publish.time_since_epoch().count() == 0;
-    const bool publish = first ||
-	std::chrono::duration_cast<std::chrono::milliseconds>(
-	    now - s.fps_last_publish).count() >= 250;
-    if (publish) {
-	s.fps_last_publish = now;
-	qgcanvas_sync_obol_faceplate(s);
-    }
-
-    /* FPS faceplate publication may itself install one final render. */
-    if (s.obol->isRenderRequested())
-	w->update();
+    /* Never make the FPS label a periodic scene-render timer.  The pre-render
+	 * faceplate synchronization folds its newest value into every independently
+	 * requested geometry/HUD frame, and the state-transition publication above
+	 * supplies the final settled label.  Republishing from frame completion
+	 * requested another whole-scene traversal; on OSMesa that feedback loop
+	 * consumed the owner thread while immutable mesh results waited to be
+	 * admitted. */
 
 }
 
@@ -1052,6 +1153,19 @@ qgcanvas_request_update(QgCanvasState &s, uint32_t flags)
     if (requested & BV_REFRESH_VIEW)
 	qgcanvas_sync_obol_camera(s);
     qgcanvas_sync_obol_faceplate(s);
+
+    /* Qt update() only asks the widget to paint.  When a completed Obol
+     * framebuffer is retained, painting without a controller request is an
+     * intentional zero-copy replay of that frame.  Semantic scene, overlay,
+     * and edit changes therefore must latch one presentation render here.
+     * Camera-only refreshes remain excluded: sync_obol_camera requests a
+     * capacity-relevant frame itself when (and only when) the camera changed.
+     * This preserves passive retained-frame repaint without allowing GED
+     * erase/redraw or selection changes to leave obsolete pixels onscreen. */
+    if (s.obol && (requested &
+	    (BV_REFRESH_DRAW | BV_REFRESH_OVERLAY | BV_REFRESH_EDIT)))
+	s.obol->requestPresentationRender("qt-semantic-refresh");
+
     if (s.v)
 	bv_refresh_request(bv_context_view(s.v), requested);
 }

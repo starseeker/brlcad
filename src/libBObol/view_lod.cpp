@@ -342,6 +342,7 @@ BObolViewLodState::CadPayload::CadPayload(void) :
     allocationDrawMode(BOBOL_LOD_DRAW_UNKNOWN),
     allocationViewRevision(0),
     allocationPolicyRevision(0),
+    allocationMeshRevision(0),
     allocationPlanSerial(0),
     projectedPixelDiameter(0.0f),
     projectedPixelArea(0.0f),
@@ -457,6 +458,7 @@ BObolViewLodState::CadPayload::estimateBytes(void) const
 	   this->requiredChunks.capacity() * sizeof(uint32_t) +
 	   this->presentedChunks.capacity() * sizeof(uint32_t) +
 	   (this->projectedCutCounts ? sizeof(ProjectedCutCounts) : 0) +
+	   (this->renderCostMetrics ? sizeof(RenderCostMetrics) : 0) +
 	   sizeof(*this);
 }
 
@@ -581,6 +583,7 @@ BObolViewLodState::BObolViewLodState(void) :
     normalCreaseAngle(60.0f),
     cadPresentationProgressiveLodCeiling(-1),
     cadPresentationPointProxyPixelThreshold(1.0f),
+    cadPresentationDiscoveryPointProxyPixelThreshold(1.0f),
     cadPresentationCameraMotionFrameReuse(FALSE),
     cadPresentationFrameObservationArmed(FALSE),
     cadPresentationFrameStatusValid(FALSE),
@@ -615,6 +618,8 @@ BObolViewLodState::BObolViewLodState(void) :
 	sizeof(this->cadProxyKindCounts));
     memset(this->cadProgressiveCutCounts, 0,
 	sizeof(this->cadProgressiveCutCounts));
+    memset(this->cadProgressiveCeilingRenderCosts, 0,
+	sizeof(this->cadProgressiveCeilingRenderCosts));
 }
 
 BObolViewLodState::~BObolViewLodState(void)
@@ -665,24 +670,55 @@ view_lod_progressive_counts(
     return bobol_lod_progressive_counts(mesh, cut, hasNormals);
 }
 
-static size_t
-view_lod_minimum_cad_payload_render_cost(
-    const BObolViewLodState::CadPayload *payload)
+static void
+view_lod_cad_payload_render_cost_metrics(
+    const BObolViewLodState::CadPayload *payload,
+    BObolViewLodState::CadPayload::RenderCostMetrics &metrics)
 {
-    if (!payload)
-	return 0;
+    metrics.fill(0);
+    if (!payload || !payload->isValid() ||
+	!view_lod_cad_payload_is_mesh(payload))
+	return;
 
-    BObolLodCounts counts = payload->counts;
-    if (payload->progressiveMesh && payload->progressiveMesh->isValid()) {
-	const int minimumCut = payload->progressiveMesh->minimumCut();
-	if (minimumCut >= 0 &&
-	    view_lod_progressive_can_draw(payload->progressiveMesh,
-		payload->requiredChunks, minimumCut))
-	    counts = view_lod_progressive_counts(
-		payload->progressiveMesh, payload->requiredChunks,
-		minimumCut, payload->hasNormals);
+    BObolLodCounts minimumCounts = payload->counts;
+    if (!payload->progressiveMesh || payload->activeCut < 0) {
+	const size_t cost = bobol_lod_render_cost_units(
+	    payload->counts, payload->drawMode, 1);
+	metrics[0] = cost;
+	for (int cut = 0; cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut)
+	    metrics[static_cast<size_t>(cut) + 1] = cost;
+	return;
     }
-    return bobol_lod_render_cost_units(counts, payload->drawMode, 1);
+
+    std::array<BObolLodCounts, BOBOL_MESH_LOD_CUT_COUNT_MAX> populations;
+    int minimumCut = -1;
+    int maximumDrawableCut = -1;
+    if (!payload->progressiveMesh->drawableCountsAtCuts(
+	    payload->requiredChunks, payload->hasNormals,
+	    populations.data(), populations.size(), &minimumCut,
+	    &maximumDrawableCut) || minimumCut < 0 ||
+	maximumDrawableCut < minimumCut) {
+	const size_t cost = bobol_lod_render_cost_units(
+	    payload->counts, payload->drawMode, 1);
+	metrics[0] = cost;
+	for (int cut = 0; cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut)
+	    metrics[static_cast<size_t>(cut) + 1] = cost;
+	return;
+    }
+
+    minimumCounts = populations[static_cast<size_t>(minimumCut)];
+    metrics[0] = bobol_lod_render_cost_units(
+	minimumCounts, payload->drawMode, 1);
+    for (int ceiling = 0; ceiling < BOBOL_MESH_LOD_CUT_COUNT_MAX;
+	    ++ceiling) {
+	int effectiveCut = std::min(payload->activeCut,
+	    std::max(0, ceiling));
+	effectiveCut = std::max(minimumCut, effectiveCut);
+	const BObolLodCounts &counts = effectiveCut <= maximumDrawableCut ?
+	    populations[static_cast<size_t>(effectiveCut)] : payload->counts;
+	metrics[static_cast<size_t>(ceiling) + 1] =
+	    bobol_lod_render_cost_units(counts, payload->drawMode, 1);
+    }
 }
 
 /*
@@ -731,6 +767,8 @@ BObolViewLodState::clearCadPayloadMetrics(void)
 	sizeof(this->cadProxyKindCounts));
     memset(this->cadProgressiveCutCounts, 0,
 	sizeof(this->cadProgressiveCutCounts));
+    memset(this->cadProgressiveCeilingRenderCosts, 0,
+	sizeof(this->cadProgressiveCeilingRenderCosts));
     this->cadMeshPayloadCountsBySource.clear();
     this->cadUnsatisfiedOccurrencesBySource.clear();
     this->cadPayloadsByAssetKey.clear();
@@ -871,6 +909,18 @@ BObolViewLodState::addCadPayloadMetrics(const CadPayload *payload)
     if (!payload || !payload->isValid())
 	return;
 
+    CadPayload *mutablePayload = const_cast<CadPayload *>(payload);
+    CadPayload::RenderCostMetrics renderCostMetrics;
+    if (view_lod_cad_payload_is_mesh(payload)) {
+	view_lod_cad_payload_render_cost_metrics(
+	    payload, renderCostMetrics);
+	if (!mutablePayload->renderCostMetrics)
+	    mutablePayload->renderCostMetrics =
+		std::make_unique<CadPayload::RenderCostMetrics>();
+	*mutablePayload->renderCostMetrics = renderCostMetrics;
+    } else
+	mutablePayload->renderCostMetrics.reset();
+
     this->addCadResidentDemand(payload);
     if (payload->progressiveMesh &&
 	payload->cacheKey.getLength() > 0)
@@ -902,7 +952,7 @@ BObolViewLodState::addCadPayloadMetrics(const CadPayload *payload)
 		payload->counts, payload->drawMode, 1));
 	this->cadMinimumActiveRenderCost = view_lod_saturating_add(
 	    this->cadMinimumActiveRenderCost,
-	    view_lod_minimum_cad_payload_render_cost(payload));
+	    renderCostMetrics[0]);
 	if (view_lod_cad_payload_is_satisfied(payload))
 	    this->cadSatisfiedMeshPayloadCount = view_lod_saturating_add(
 		this->cadSatisfiedMeshPayloadCount, 1);
@@ -917,6 +967,11 @@ BObolViewLodState::addCadPayloadMetrics(const CadPayload *payload)
 	    this->cadProgressiveCutCounts[payload->activeCut] =
 		view_lod_saturating_add(
 		    this->cadProgressiveCutCounts[payload->activeCut], 1);
+	for (int cut = 0; cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut)
+	    this->cadProgressiveCeilingRenderCosts[cut] =
+		view_lod_saturating_add(
+		    this->cadProgressiveCeilingRenderCosts[cut],
+		    renderCostMetrics[static_cast<size_t>(cut) + 1]);
 	return;
     }
 
@@ -938,6 +993,18 @@ BObolViewLodState::removeCadPayloadMetrics(const CadPayload *payload)
 {
     if (!payload || !payload->isValid())
 	return;
+
+    CadPayload::RenderCostMetrics fallbackRenderCostMetrics;
+    const CadPayload::RenderCostMetrics *renderCostMetrics =
+	payload->renderCostMetrics.get();
+    if (view_lod_cad_payload_is_mesh(payload) && !renderCostMetrics) {
+	/* This is a defensive path for payloads installed by older/internal
+	 * callers.  Ordinary insertion always leaves the exact immutable table
+	 * above, so removal performs no shared-generation queries. */
+	view_lod_cad_payload_render_cost_metrics(
+	    payload, fallbackRenderCostMetrics);
+	renderCostMetrics = &fallbackRenderCostMetrics;
+    }
 
     this->removeCadResidentDemand(payload);
     if (payload->cacheKey.getLength() > 0) {
@@ -987,7 +1054,7 @@ BObolViewLodState::removeCadPayloadMetrics(const CadPayload *payload)
 		payload->counts, payload->drawMode, 1));
 	this->cadMinimumActiveRenderCost = view_lod_saturating_subtract(
 	    this->cadMinimumActiveRenderCost,
-	    view_lod_minimum_cad_payload_render_cost(payload));
+	    renderCostMetrics ? (*renderCostMetrics)[0] : 0);
 	if (view_lod_cad_payload_is_satisfied(payload))
 	    this->cadSatisfiedMeshPayloadCount = view_lod_saturating_subtract(
 		this->cadSatisfiedMeshPayloadCount, 1);
@@ -1002,6 +1069,12 @@ BObolViewLodState::removeCadPayloadMetrics(const CadPayload *payload)
 	    this->cadProgressiveCutCounts[payload->activeCut] =
 		view_lod_saturating_subtract(
 		    this->cadProgressiveCutCounts[payload->activeCut], 1);
+	for (int cut = 0; cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut)
+	    this->cadProgressiveCeilingRenderCosts[cut] =
+		view_lod_saturating_subtract(
+		    this->cadProgressiveCeilingRenderCosts[cut],
+		    renderCostMetrics ?
+			(*renderCostMetrics)[static_cast<size_t>(cut) + 1] : 0);
 	return;
     }
 
@@ -1100,7 +1173,8 @@ BObolViewLodState::setCadPresentation(
 	    this->cadPresentationProgressiveLodCeiling;
     if (presentation.assembly)
 	presentation.assembly->pointProxyPixelThreshold =
-	    this->cadPresentationPointProxyPixelThreshold;
+	    std::max(this->cadPresentationPointProxyPixelThreshold,
+		this->cadPresentationDiscoveryPointProxyPixelThreshold);
     if (presentation.assembly)
 	presentation.assembly->cameraMotionFrameReuse =
 	    this->cadPresentationCameraMotionFrameReuse;
@@ -1585,6 +1659,8 @@ BObolViewLodState::applySourceResultInternal(
 	    current->second->allocationViewRevision;
 	payload->allocationPolicyRevision =
 	    current->second->allocationPolicyRevision;
+	payload->allocationMeshRevision =
+	    current->second->allocationMeshRevision;
 	payload->allocationPlanSerial =
 	    current->second->allocationPlanSerial;
 	if (current->second->sourceEntryIndex != UINT32_MAX) {
@@ -2166,6 +2242,7 @@ BObolViewLodState::retargetCadPayload(
 	payload->allocationDrawMode = BOBOL_LOD_DRAW_UNKNOWN;
 	payload->allocationViewRevision = 0;
 	payload->allocationPolicyRevision = 0;
+	payload->allocationMeshRevision = 0;
 	payload->allocationPlanSerial = 0;
     }
     const bool projectedPopulationChanged =
@@ -2328,6 +2405,7 @@ BObolViewLodState::setCadAllocatedCut(
     payload->allocationDrawMode = drawMode;
     payload->allocationViewRevision = viewRevision;
     payload->allocationPolicyRevision = policyRevision;
+    payload->allocationMeshRevision = payload->progressiveMesh->revision();
     payload->allocationPlanSerial = 0;
     return TRUE;
 }
@@ -2363,6 +2441,7 @@ BObolViewLodState::stageCadAllocatedCut(
     payload->allocationDrawMode = drawMode;
     payload->allocationViewRevision = viewRevision;
     payload->allocationPolicyRevision = policyRevision;
+    payload->allocationMeshRevision = payload->progressiveMesh->revision();
     payload->allocationPlanSerial = planSerial;
     return TRUE;
 }
@@ -2380,10 +2459,56 @@ BObolViewLodState::commitCadAllocationPlan(
     return TRUE;
 }
 
+SbBool
+BObolViewLodState::isCadAllocationPlanCurrent(uint64_t planSerial) const
+{
+    return planSerial != 0 &&
+	planSerial == this->cadNextAllocationPlanSerial ? TRUE : FALSE;
+}
+
 uint64_t
 BObolViewLodState::activeCadAllocationPlan(void) const
 {
     return this->cadActiveAllocationPlanSerial;
+}
+
+SbBool
+BObolViewLodState::cadAllocationPlanCoversCurrentPopulation(
+    uint64_t planSerial, uint64_t viewRevision,
+    uint64_t policyRevision, size_t fixedCadPresentationCost) const
+{
+    if (!planSerial || !viewRevision || !policyRevision ||
+	planSerial != this->cadActiveAllocationPlanSerial)
+	return FALSE;
+
+    size_t fixedCost = 0;
+    for (const auto &source : this->cadSourceBindings) {
+	for (const auto &occurrence : source.second) {
+	    const CadPayload *payload = occurrence.second.get();
+	    if (!payload || !payload->isValid() ||
+		payload->viewRevision != viewRevision ||
+		payload->policyRevision != policyRevision)
+		continue;
+	    if (!payload->progressiveMesh ||
+		!payload->progressiveMesh->isValid()) {
+		const size_t cost = bobol_lod_render_cost_units(
+		    payload->counts, payload->drawMode, 1);
+		fixedCost = cost > SIZE_MAX - fixedCost ? SIZE_MAX :
+		    fixedCost + cost;
+		continue;
+	    }
+	    if (payload->allocationPlanSerial != planSerial ||
+		payload->allocationViewRevision != viewRevision ||
+		payload->allocationPolicyRevision != policyRevision ||
+		payload->allocationDrawMode != payload->drawMode ||
+		payload->allocationMeshRevision !=
+		    payload->progressiveMesh->revision() ||
+		payload->allocatedCut < payload->progressiveMesh->minimumCut() ||
+		payload->allocatedCut > payload->progressiveMesh->maximumCut())
+		return FALSE;
+	}
+    }
+    return fixedCost == fixedCadPresentationCost ? TRUE : FALSE;
 }
 
 SbBool
@@ -2816,6 +2941,16 @@ BObolViewLodState::lastCadPresentationOccurrenceCoverage(
 }
 
 SbBool
+BObolViewLodState::lastCadStructuralProjectionHistogram(
+    CadStructuralProjectionHistogram &histogram) const
+{
+    if (!this->cadPresentationFrameStatusValid)
+	this->refreshCadPresentationFrameStatus();
+    histogram = this->cadLastStructuralProjectionHistogram;
+    return histogram.exact;
+}
+
+SbBool
 BObolViewLodState::lastCadGpuMeasurement(
 	size_t &faces, uint64_t &nanoseconds, uint64_t &serial,
 	float &pointProxyPixelThreshold) const
@@ -2896,6 +3031,11 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
     this->cadLastPresentationFrameExact = TRUE;
     this->cadLastSubpixelProxyCount = 0;
     this->cadLastUncollapsedStructuralProxyCount = 0;
+    this->cadLastStructuralProjectionHistogram =
+	CadStructuralProjectionHistogram();
+    this->cadLastStructuralProjectionHistogram.exact = TRUE;
+    this->cadLastStructuralProjectionHistogram.revision =
+	1469598103934665603ULL;
     this->cadGpuResourceStatusValue = CadGpuResourceStatus();
 
     SbBool haveAssembly = FALSE;
@@ -2937,11 +3077,37 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	const size_t subpixel = assembly->lastSubpixelProxyCount();
 	const size_t structural =
 	    assembly->lastUncollapsedStructuralProxyCount();
+	const Obol::CadStructuralProxyProjectionHistogram projection =
+	    assembly->lastStructuralProxyProjectionHistogram();
 	this->cadLastSubpixelProxyCount = view_lod_saturating_add(
 	    this->cadLastSubpixelProxyCount, subpixel);
 	this->cadLastUncollapsedStructuralProxyCount =
 	    view_lod_saturating_add(
-		this->cadLastUncollapsedStructuralProxyCount, structural);
+		    this->cadLastUncollapsedStructuralProxyCount, structural);
+	if (!projection.exact) {
+	    this->cadLastStructuralProjectionHistogram.exact = FALSE;
+	} else {
+	    this->cadLastStructuralProjectionHistogram.visibleCount =
+		view_lod_saturating_add(
+		    this->cadLastStructuralProjectionHistogram.visibleCount,
+		    projection.visibleCount > static_cast<uint64_t>(SIZE_MAX) ?
+			SIZE_MAX : static_cast<size_t>(projection.visibleCount));
+	    for (size_t bucket = 0;
+		    bucket < CadStructuralProjectionHistogram::BucketCount;
+		    ++bucket) {
+		const uint64_t count = projection.cumulativeCount[bucket];
+		this->cadLastStructuralProjectionHistogram.cumulativeCount[bucket] =
+		    view_lod_saturating_add(
+			this->cadLastStructuralProjectionHistogram.
+			    cumulativeCount[bucket],
+			count > static_cast<uint64_t>(SIZE_MAX) ?
+			    SIZE_MAX : static_cast<size_t>(count));
+	    }
+	    this->cadLastStructuralProjectionHistogram.revision ^=
+		projection.revision;
+	    this->cadLastStructuralProjectionHistogram.revision *=
+		1099511628211ULL;
+	}
 	if (!work.exact)
 	    this->cadLastPresentationFrameExact = FALSE;
 	const uint64_t presented = work.triangleCount >
@@ -2975,7 +3141,8 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	}
 	counts.pointCount = work.positionCount;
 	counts.normalCount = work.normalCount;
-	if (!work.exact || (!counts.faceCount && !counts.lineCount)) {
+	if (!work.exact ||
+	    (!counts.faceCount && !counts.lineCount && !counts.pointCount)) {
 	    presentedRenderCostValid = FALSE;
 	} else {
 	    const size_t occurrences = work.occurrenceCount >
@@ -3118,6 +3285,9 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	resourceSampled = TRUE;
     }
 
+    if (!haveAssembly || !this->cadLastPresentationFrameExact)
+	this->cadLastStructuralProjectionHistogram.exact = FALSE;
+
     this->cadLastPresentedPrimitiveCountValid =
 	haveAssembly && presentedValid;
     this->cadLastPresentedRenderCostValid =
@@ -3170,6 +3340,34 @@ BObolViewLodState::maximumActiveProgressiveCut(void) const
 		sizeof(this->cadProgressiveCutCounts[0])) - 1;
 	cut >= 0; --cut)
 	if (this->cadProgressiveCutCounts[cut])
+	    return cut;
+    return -1;
+}
+
+size_t
+BObolViewLodState::cadRenderCostAtProgressiveCutCeiling(int cut) const
+{
+    if (cut < 0)
+	return this->cadActiveRenderCost;
+    const int boundedCut = std::min<int>(
+	BOBOL_MESH_LOD_CUT_COUNT_MAX - 1, cut);
+    return this->cadProgressiveCeilingRenderCosts[boundedCut];
+}
+
+int
+BObolViewLodState::cadProgressiveCutWithinRenderCost(
+    size_t renderCost, int maximumCut) const
+{
+    if (!renderCost || !this->cadMeshPayloadCountValue)
+	return -1;
+
+    int boundedMaximum = maximumCut < 0 ?
+	this->maximumActiveProgressiveCut() :
+	std::min<int>(BOBOL_MESH_LOD_CUT_COUNT_MAX - 1, maximumCut);
+    if (boundedMaximum < 0)
+	return -1;
+    for (int cut = boundedMaximum; cut >= 0; --cut)
+	if (this->cadProgressiveCeilingRenderCosts[cut] <= renderCost)
 	    return cut;
     return -1;
 }
@@ -3232,10 +3430,36 @@ BObolViewLodState::setCadPresentationPointProxyPixelThreshold(
 {
     pixels = std::isfinite(pixels) ?
 	std::max(1.0f, std::min(64.0f, pixels)) : 1.0f;
+    const float oldEffective = std::max(
+	this->cadPresentationPointProxyPixelThreshold,
+	this->cadPresentationDiscoveryPointProxyPixelThreshold);
     this->cadPresentationPointProxyPixelThreshold = pixels;
+    const float effective = std::max(pixels,
+	this->cadPresentationDiscoveryPointProxyPixelThreshold);
+    if (std::fabs(effective - oldEffective) <= 1.0e-6f)
+	return;
     for (const auto &presentation : this->cadPresentations)
 	if (presentation.second.assembly)
-	    presentation.second.assembly->pointProxyPixelThreshold = pixels;
+	    presentation.second.assembly->pointProxyPixelThreshold = effective;
+}
+
+void
+BObolViewLodState::setCadPresentationDiscoveryPointProxyPixelThreshold(
+    float pixels) const
+{
+    pixels = std::isfinite(pixels) ?
+	std::max(1.0f, std::min(64.0f, pixels)) : 1.0f;
+    const float oldEffective = std::max(
+	this->cadPresentationPointProxyPixelThreshold,
+	this->cadPresentationDiscoveryPointProxyPixelThreshold);
+    this->cadPresentationDiscoveryPointProxyPixelThreshold = pixels;
+    const float effective = std::max(
+	this->cadPresentationPointProxyPixelThreshold, pixels);
+    if (std::fabs(effective - oldEffective) <= 1.0e-6f)
+	return;
+    for (const auto &presentation : this->cadPresentations)
+	if (presentation.second.assembly)
+	    presentation.second.assembly->pointProxyPixelThreshold = effective;
 }
 
 void

@@ -50,6 +50,14 @@ class SoCADAssembly;
 class BOBOL_EXPORT BObolViewLodState
 {
 public:
+    struct BOBOL_EXPORT CadStructuralProjectionHistogram {
+        static constexpr size_t BucketCount = 7;
+        std::array<size_t, BucketCount> cumulativeCount = {};
+        size_t visibleCount = 0;
+        uint64_t revision = 0;
+        SbBool exact = FALSE;
+    };
+
     /** Renderer-neutral aggregate of the most recent complete-frame CAD GPU
      * resource snapshots.  Assembly identity is deduplicated before summing. */
     struct BOBOL_EXPORT CadGpuResourceStatus {
@@ -151,6 +159,12 @@ public:
     struct BOBOL_EXPORT CadPayload {
 	typedef std::array<BObolLodCounts,
 	    BOBOL_MESH_LOD_CUT_COUNT_MAX> ProjectedCutCounts;
+	/* Element zero is the minimum drawable cost; element 1 + cut is the
+	 * cost under that renderer-wide progressive ceiling.  This is ephemeral
+	 * view bookkeeping, computed when the payload enters the aggregate and
+	 * consumed when it leaves. */
+	typedef std::array<size_t,
+	    BOBOL_MESH_LOD_CUT_COUNT_MAX + 1> RenderCostMetrics;
 
 	BObolLodMeshPayload mesh;
 	BObolLodProgressiveMeshPtr progressiveMesh;
@@ -195,6 +209,7 @@ public:
 	int allocationDrawMode;
 	uint64_t allocationViewRevision;
 	uint64_t allocationPolicyRevision;
+	uint64_t allocationMeshRevision;
 	/* Nonzero values belong to an owner-state allocation transaction.  The
 	 * fields above are visible to consumers only after this serial becomes
 	 * the state's active serial; serial zero is an immediate single-payload
@@ -212,6 +227,7 @@ public:
 	 * again on the owner thread.  Fully contained and unclustered occurrences
 	 * deliberately keep this null and use ordinary whole-prefix counts. */
 	std::shared_ptr<const ProjectedCutCounts> projectedCutCounts;
+	std::unique_ptr<RenderCostMetrics> renderCostMetrics;
 	uint64_t projectedCutCountsViewRevision;
 	uint64_t projectedCutCountsPolicyRevision;
 	uint64_t projectedCutCountsMeshRevision;
@@ -328,8 +344,18 @@ public:
     /** Atomically expose all payload fields staged with @p planSerial. */
     SbBool commitCadAllocationPlan(uint64_t planSerial,
 	uint64_t cadRevision, uint64_t residentDemandRevision);
+    /** True while @p planSerial still owns the unpublished staging slot. */
+    SbBool isCadAllocationPlanCurrent(uint64_t planSerial) const;
     /** Serial against which consumers validate staged allocation metadata. */
     uint64_t activeCadAllocationPlan(void) const;
+    /* TRUE when every current-epoch progressive CAD occurrence is stamped by
+     * planSerial for its present mesh generation and the unallocated CAD
+     * population still has the certified fixed render cost.  Active-cut
+     * changes made while applying the plan deliberately do not invalidate
+     * this predicate. */
+    SbBool cadAllocationPlanCoversCurrentPopulation(
+	uint64_t planSerial, uint64_t viewRevision,
+	uint64_t policyRevision, size_t fixedCadPresentationCost) const;
     /* Remove one view-local display binding while retaining its shared asset.
      * The source occurrence's structural fallback becomes visible again.
      * Used by scene-budget/frustum admission when an insignificant occurrence
@@ -408,6 +434,10 @@ public:
      * successful current-view coverage proof. */
     SbBool lastCadPresentationOccurrenceCoverage(
 	size_t &subpixelOccurrences, size_t &structuralBoxes) const;
+    /** Aggregate 1/2/4/8/16/32/64-pixel cumulative distribution produced by
+     * the renderer's exact current-view structural proxy classifier. */
+    SbBool lastCadStructuralProjectionHistogram(
+	CadStructuralProjectionHistogram &histogram) const;
     /* Latest completed asynchronous GPU timer aggregate.  The serial changes
      * only when at least one retained CAD context publishes a newer result. */
     SbBool lastCadGpuMeasurement(size_t &faces,
@@ -444,6 +474,16 @@ public:
      * recent frame. */
     SbBool lastCadPresentationUsedPreparedReplay(void) const;
     int maximumActiveProgressiveCut(void) const;
+    /** Estimate the complete retained CAD population at one renderer-wide
+     * progressive ceiling.  The aggregate is maintained at payload mutation
+     * points, so the query is O(1) even for very large occurrence sets. */
+    size_t cadRenderCostAtProgressiveCutCeiling(int cut) const;
+    /** Return the richest renderer-wide progressive ceiling whose retained
+     * CAD population fits @p renderCost.  Restrict the search to
+     * @p maximumCut when it is non-negative.  Returns -1 when even the
+     * minimum progressive population does not fit. */
+    int cadProgressiveCutWithinRenderCost(size_t renderCost,
+	int maximumCut = -1) const;
     /** For exactly one retained progressive CAD occurrence, return the
      * richest active cut whose exact cached submitted population fits the
      * scheduler's draw-mode-aware render-cost currency.  The query is
@@ -457,6 +497,13 @@ public:
      * view's measured screen-error tolerance.  One pixel is the stable,
      * pixel-exact setting. */
     void setCadPresentationPointProxyPixelThreshold(float pixels) const;
+    /** Apply a transient lower-fidelity floor while a large source inventory
+     * is still being discovered.  The effective renderer threshold is the
+     * coarser of this floor and the ordinary measured threshold above; reset
+     * it to one when discovery settles.  Keeping the values separate prevents
+     * streaming pressure from overwriting stable-view calibration. */
+    void setCadPresentationDiscoveryPointProxyPixelThreshold(
+	float pixels) const;
     /* Permit bounded reuse of the last exact camera-dependent CAD submission
      * during rotation/translation.  Zoom and quiet frames must disable it. */
     void setCadPresentationCameraMotionFrameReuse(SbBool enabled) const;
@@ -564,6 +611,7 @@ private:
     float normalCreaseAngle;
     mutable int cadPresentationProgressiveLodCeiling;
     mutable float cadPresentationPointProxyPixelThreshold;
+    mutable float cadPresentationDiscoveryPointProxyPixelThreshold;
     mutable SbBool cadPresentationCameraMotionFrameReuse;
     mutable std::unordered_map<std::string, CadPresentation> cadPresentations;
     /* Multiple semantic source keys may share one retained assembly.  Track
@@ -582,6 +630,8 @@ private:
     mutable SbBool cadLastPresentationFrameExact;
     mutable size_t cadLastSubpixelProxyCount;
     mutable size_t cadLastUncollapsedStructuralProxyCount;
+    mutable CadStructuralProjectionHistogram
+	cadLastStructuralProjectionHistogram;
     mutable SbBool cadLastGpuMeasurementValid;
     mutable size_t cadLastGpuFaces;
     mutable uint64_t cadLastGpuNanoseconds;
@@ -609,6 +659,12 @@ private:
     size_t cadDisplayMeshBytes;
     size_t cadProxyKindCounts[5];
     size_t cadProgressiveCutCounts[BOBOL_MESH_LOD_CUT_COUNT_MAX];
+    /* Exact retained CAD cost after applying each renderer-wide PoP ceiling.
+     * This deliberately prices the whole retained occurrence population;
+     * camera culling and point aggregation can only make the real frame
+     * cheaper. */
+    size_t cadProgressiveCeilingRenderCosts[
+	BOBOL_MESH_LOD_CUT_COUNT_MAX];
     /*
      * Retain the resident view-demand aggregate at the same mutation
      * points as the other payload telemetry.  Reconstructing this table from

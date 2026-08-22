@@ -261,6 +261,16 @@ public:
 	int cut) const;
     SbBool countsForChunksAtCut(const std::vector<uint32_t> &chunkIds,
 	int cut, SbBool hasNormals, BObolLodCounts *counts) const;
+    /* Snapshot the immutable generation once and report the hierarchy
+     * population for every producer cut.  Empty chunkIds means the complete
+     * logical leaf; a nonempty sorted set selects private spatial pages.
+     * maximumDrawableCut is the richest cumulative prefix which the retained
+     * generation can submit coherently.  This bulk form is intended for
+     * scene-budget accounting, where independently querying every cut would
+     * otherwise acquire the same shared generation dozens of times. */
+    SbBool drawableCountsAtCuts(const std::vector<uint32_t> &chunkIds,
+	SbBool hasNormals, BObolLodCounts *counts, size_t count,
+	int *minimumCut, int *maximumDrawableCut) const;
     SbBool hierarchyCountsForChunksAtCut(
 	const std::vector<uint32_t> &chunkIds, int cut,
 	SbBool hasNormals, BObolLodCounts *counts) const;

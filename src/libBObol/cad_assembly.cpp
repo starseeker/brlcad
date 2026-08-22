@@ -95,6 +95,23 @@ SoBRLCadAssembly::setInstanceSemantic(Obol::InstanceId id,
 }
 
 void
+SoBRLCadAssembly::lastUncollapsedStructuralProxyOccurrenceKeys(
+    std::vector<SbString> &occurrenceKeys) const
+{
+    occurrenceKeys.clear();
+    const std::vector<Obol::InstanceId> instances =
+	SoCADAssembly::lastUncollapsedStructuralProxyInstances();
+    occurrenceKeys.reserve(instances.size());
+    for (const Obol::InstanceId instance : instances) {
+	const auto semantic = this->semantics.find(instance);
+	if (semantic == this->semantics.end() ||
+	    semantic->second.sourceInstanceKey.getLength() == 0)
+	    continue;
+	occurrenceKeys.push_back(semantic->second.sourceInstanceKey);
+    }
+}
+
+void
 SoBRLCadAssembly::reserveCompactPresentationCapacity(
     size_t expectedOccurrences)
 {

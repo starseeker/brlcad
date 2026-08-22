@@ -43,10 +43,11 @@ public:
 	    inputs.viewState->residentMeshDemandRevision() : 0;
 	this->allocationPlanSerial = inputs.viewState ?
 	    inputs.viewState->beginCadAllocationPlan() : 0;
+	this->externalPresentationCost = inputs.externalPresentationCost;
+	this->fixedCost = inputs.externalPresentationCost;
 	this->sceneBudget = inputs.sceneBudget;
 	this->allowProtectedFloor = inputs.allowProtectedFloor;
 	this->maximumProtectedBudget = inputs.maximumProtectedBudget;
-	this->progressiveCutCeiling = inputs.progressiveCutCeiling;
 	this->pointProxyPixelThreshold = inputs.pointProxyPixelThreshold;
 	this->wallStartedMicroseconds = bu_gettime();
 	if (!inputs.sources)
@@ -92,10 +93,13 @@ public:
 	    this->cadRevision != inputs.viewState->cadRevision() ||
 	    this->residentDemandRevision !=
 		inputs.viewState->residentMeshDemandRevision() ||
+	    !inputs.viewState->isCadAllocationPlanCurrent(
+	    this->allocationPlanSerial) ||
+	    this->externalPresentationCost !=
+		inputs.externalPresentationCost ||
 	    this->sceneBudget != inputs.sceneBudget ||
 	    this->allowProtectedFloor != inputs.allowProtectedFloor ||
 	    this->maximumProtectedBudget != inputs.maximumProtectedBudget ||
-	    this->progressiveCutCeiling != inputs.progressiveCutCeiling ||
 	    std::memcmp(&this->pointProxyPixelThreshold,
 		&inputs.pointProxyPixelThreshold, sizeof(float)) != 0 ||
 	    this->sources.size() != inputs.sources->size())
@@ -251,6 +255,7 @@ public:
 			}
 			if (this->phase == SEARCH_ONE) {
 			    if (this->populationCost <= this->effectiveBudget) {
+				this->baselineAtMinimum = false;
 				this->ceiling = 1.0;
 				this->beginBaseline();
 				transition(BASELINE);
@@ -262,10 +267,18 @@ public:
 			}
 			if (this->phase == SEARCH_MAXIMUM) {
 			    if (this->populationCost > this->effectiveBudget) {
+				/* No common error ceiling can fit.  The former
+				 * maximum-minimum-error baseline could still select
+				 * richer cuts for many candidates and therefore exceed
+				 * the budget without ever testing the true occurrence
+				 * floor.  Start at every candidate's actual minimum and
+				 * let marginal visual benefit spend any remainder. */
+				this->baselineAtMinimum = true;
 				this->ceiling = this->maximumMinimumError;
 				this->beginBaseline();
 				transition(BASELINE);
 			    } else {
+				this->baselineAtMinimum = false;
 				this->lowLog = 0.0;
 				this->highLog =
 				    std::log2(this->maximumMinimumError);
@@ -282,6 +295,7 @@ public:
 			    this->lowLog = std::log2(this->populationCeiling);
 			this->binaryIteration++;
 			if (this->binaryIteration >= 14) {
+			    this->baselineAtMinimum = false;
 			    this->ceiling = std::exp2(this->highLog) *
 				(1.0 + 1.0e-9);
 			    this->beginBaseline();
@@ -309,7 +323,9 @@ public:
 			while (this->finalCursor < this->candidates.size()) {
 			    const size_t i = this->finalCursor++;
 			    const Candidate &candidate = this->candidates[i];
-			    this->finalCuts[i] =
+			    this->finalCuts[i] = this->baselineAtMinimum ?
+				(this->enforceProtectedFloor ?
+				    candidate.protectedCut : candidate.minimumCut) :
 				this->allocatedCut(candidate, this->ceiling);
 			    this->finalCosts[i] = bobol_lod_render_cost_units(
 				this->countsAtCut(candidate, this->finalCuts[i]),
@@ -432,6 +448,19 @@ public:
 	    std::numeric_limits<double>::infinity();
 	result.protectedFloorBudget = this->allocationBudget;
 	result.protectedFloorSignature = this->protectedFloorSignature;
+	result.selectedPresentationCost = this->finalCost;
+	result.certifiedPresentationBudget = this->effectiveBudget;
+	result.allocationPlanSerial = this->allocationPlanSerial;
+	result.cadRevision = this->cadRevision;
+	result.residentDemandRevision = this->residentDemandRevision;
+	result.viewRevision = this->viewRevision;
+	result.policyRevision = this->policyRevision;
+	result.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
+	result.requestedSceneBudget = this->sceneBudget;
+	result.externalPresentationCost = this->externalPresentationCost;
+	result.fixedCadPresentationCost = this->fixedCadPresentationCost;
+	result.maximumProtectedBudget = this->maximumProtectedBudget;
+	result.allowProtectedFloor = this->allowProtectedFloor;
     }
 
     void trace(void) const
@@ -610,6 +639,9 @@ private:
 	    this->havePresentedErrorProof = true;
 	    const size_t cost = bobol_lod_render_cost_units(
 		payload->counts, source.drawMode, 1);
+	    this->fixedCadPresentationCost = cost >
+		    SIZE_MAX - this->fixedCadPresentationCost ? SIZE_MAX :
+		this->fixedCadPresentationCost + cost;
 	    this->fixedCost = cost > SIZE_MAX - this->fixedCost ?
 		SIZE_MAX : this->fixedCost + cost;
 	    return;
@@ -738,11 +770,8 @@ private:
 
     void observeError(const Candidate &candidate, int cut)
     {
-	const int presentedCut = this->progressiveCutCeiling >= 0 ?
-	    std::max(candidate.minimumCut,
-		std::min(cut, this->progressiveCutCeiling)) : cut;
 	const double error = candidate.mesh->projectedErrorAtCut(
-	    presentedCut, candidate.projectedPixelDiameter);
+	    cut, candidate.projectedPixelDiameter);
 	if (std::isfinite(error)) {
 	    this->havePresentedErrorProof = true;
 	    this->maximumPresentedPixelError = std::max(
@@ -815,6 +844,8 @@ private:
     }
 
     BObolViewLodState *viewState = NULL;
+    size_t externalPresentationCost = 0;
+    size_t fixedCadPresentationCost = 0;
     uint64_t viewRevision = 0;
     uint64_t policyRevision = 0;
     uint64_t cadRevision = 0;
@@ -823,7 +854,6 @@ private:
     size_t sceneBudget = 0;
     bool allowProtectedFloor = false;
     size_t maximumProtectedBudget = 0;
-    int progressiveCutCeiling = -1;
     float pointProxyPixelThreshold = 0.0f;
     std::vector<SourceSnapshot> sources;
     size_t sourceCursor = 0;
@@ -852,6 +882,7 @@ private:
     double highLog = 0.0;
     int binaryIteration = 0;
     double ceiling = 1.0;
+    bool baselineAtMinimum = false;
     std::vector<int> finalCuts;
     std::vector<size_t> finalCosts;
     size_t finalCursor = 0;
@@ -891,6 +922,13 @@ bobol_retained_allocation_advance(
 	transaction->advance(inputs, sliceMicroseconds);
     if (status == BOBOL_RETAINED_ALLOCATION_COMPLETE)
 	transaction->result(result);
+    else if (status == BOBOL_RETAINED_ALLOCATION_STALE ||
+	status == BOBOL_RETAINED_ALLOCATION_FAILED)
+	/* A failed or stale transaction can never make forward progress.  In
+	 * particular, another allocation-plan serial may invalidate COMMIT without
+	 * changing CAD or resident-demand revisions.  Retaining that object makes
+	 * later advances retry the same impossible publication forever. */
+	transaction.reset();
     return status;
 }
 

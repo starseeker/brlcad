@@ -26,6 +26,8 @@
 #include <vector>
 
 class BObolLodService;
+class BObolLodProjectedDemandCache;
+class BObolViewController;
 class BObolViewLodState;
 struct db_i;
 
@@ -120,6 +122,10 @@ public:
     void setInitialProviderCostBudget(size_t cost);
     size_t getInitialProviderCostBudget(void) const;
     unsigned int getRefinementBudgetBlockedCount(void) const;
+    /* Visible occurrences whose structural proxy could not be replaced by a
+     * first mesh because the scene allowance was exhausted.  This excludes
+     * richer-cut debt on occurrences which already own a mesh. */
+    unsigned int getMissingMeshBudgetBlockedCount(void) const;
     /* Split retained minimax observations into a deliberately coarser
      * scene-quality ceiling and failure to reach the cut allocated by that
      * ceiling.  Explicit recovery terminates at the former but must retry the
@@ -211,6 +217,12 @@ protected:
     virtual void beginTraversal(SoNode *node);
 
 private:
+    friend class BObolViewController;
+
+    /* Controller-owned, presentation-thread-only cache.  It is deliberately
+     * private API: projected evidence is an implementation detail of one view
+     * and must not become source-global mutable state. */
+    void setProjectedDemandCache(BObolLodProjectedDemandCache *cache);
     static void nodeAction(SoAction *action, SoNode *node);
     static void databaseSourceAction(SoAction *action, SoNode *node);
     static void meshShapeAction(SoAction *action, SoNode *node);
@@ -264,12 +276,14 @@ private:
     size_t refinementCostBudgetUsed;
     size_t initialProviderCostBudget;
     unsigned int refinementBudgetBlockedCount;
+    unsigned int missingMeshBudgetBlockedCount;
     unsigned int retainedQualityLimitedCount;
     unsigned int retainedAdmissionBlockedCount;
     size_t oneOverBudgetRefinementLimit;
     SbBool oneOverBudgetRefinementUsed;
     SbBool transitionLimitedRefinement;
     BObolViewLodState *viewState;
+    BObolLodProjectedDemandCache *projectedDemandCache;
     size_t compactEntryFirst;
     size_t compactEntryLimit;
     size_t compactEntryNext;

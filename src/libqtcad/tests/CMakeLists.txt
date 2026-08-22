@@ -122,6 +122,11 @@ if(TARGET test_qtcad_obol_controller)
     APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
   set_property(TEST test_qtcad_obol_controller
     APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  # Exercise retained software-frame presentation at a fractional device
+  # scale.  A DPR-1 retained image can have the right physical dimensions yet
+  # make the whole viewport (including the faceplate) grow on an idle repaint.
+  set_property(TEST test_qtcad_obol_controller
+    APPEND PROPERTY ENVIRONMENT QT_SCALE_FACTOR=1.5)
   set_property(TEST test_qtcad_obol_controller
     APPEND PROPERTY LABELS drawing_baseline)
 endif(TARGET test_qtcad_obol_controller)

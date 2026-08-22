@@ -15314,9 +15314,15 @@ ged_obol_progressive_advance_provider(
 	    data->pending_autoview = 0;
 	    data->pending_autoview_bounds_complete = 0;
 	}
-	if (local_status.changed || local_status.hasMore)
-	    controller->requestRender(local_status.changed ?
-		"ged-deferred-full-detail" : "ged-deferred-root-building");
+	/*
+	 * Report mutations and liveness to the controller; do not request a frame
+	 * here.  Provider pumping and scene presentation are separate contracts.
+	 * The controller owns adaptive publication batching, including the first
+	 * standing provider frame and the terminal stream-idle frame.  Requesting
+	 * from every 4 ms merge slice coupled realization throughput to renderer
+	 * speed and made OSMesa repaint an increasingly expensive scene hundreds
+	 * of times while the owner thread could otherwise keep draining records.
+	 */
 	if (status)
 	    *status = local_status;
 	return (local_status.changed || local_status.hasMore) ? 1 : 0;

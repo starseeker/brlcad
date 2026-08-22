@@ -30,7 +30,9 @@ else()
   set_tests_properties(libBObol_lod_service PROPERTIES TIMEOUT 10)
 endif()
 
-brlcad_addexec(test_bobol_lod_update_action test_lod_update_action.cpp "libBObol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
+brlcad_addexec(test_bobol_lod_update_action
+  "test_lod_update_action.cpp;../retained_allocation_private.cpp"
+  "libBObol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_lod_update_action COMMAND test_bobol_lod_update_action)
 
 brlcad_addexec(test_bobol_lod_coordinator test_lod_coordinator.cpp "libbu" TEST ALL_CXX)

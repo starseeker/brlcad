@@ -971,10 +971,34 @@ main(int argc, char *argv[])
 	const Obol::TriMesh *coarseMesh =
 	    coarseGeometry && coarseGeometry->shaded ?
 		&*coarseGeometry->shaded : NULL;
-	const Obol::WireRep *coarseWire =
+    const Obol::WireRep *coarseWire =
 	    coarseGeometry && coarseGeometry->wire ?
 		&*coarseGeometry->wire : NULL;
-	if (!coarseMesh || !coarseWire || coarseRevision <= firstRevision ||
+    std::array<BObolLodCounts, BOBOL_MESH_LOD_CUT_COUNT_MAX>
+	coarseSelectedCounts;
+    int coarseMinimumCut = -1;
+    int coarseMaximumDrawableCut = -1;
+    const bool coarseCensus = chunkedMesh.drawableCountsAtCuts(
+	{firstChunk, secondChunk}, FALSE, coarseSelectedCounts.data(),
+	coarseSelectedCounts.size(), &coarseMinimumCut,
+	&coarseMaximumDrawableCut);
+    int expectedCoarseDrawableCut = lodHierarchy.min_cut - 1;
+    for (int cut = lodHierarchy.min_cut; cut <= lodHierarchy.max_cut;
+	    ++cut) {
+	if (!chunkedMesh.canDrawChunksAtCut(
+		{firstChunk, secondChunk}, cut))
+	    break;
+	expectedCoarseDrawableCut = cut;
+    }
+    const BObolMeshLodChunkCutInfo &firstCoarseCounts =
+	lodHierarchy.chunks[firstChunk].cuts[secondCoarseCut];
+    const BObolMeshLodChunkCutInfo &secondCoarseCounts =
+	lodHierarchy.chunks[secondChunk].cuts[secondCoarseCut];
+    if (!coarseMesh || !coarseWire || coarseRevision <= firstRevision ||
+	    !coarseWire->derivesTriangleEdges() ||
+	    !coarseWire->triangleEdges ||
+	    !coarseWire->segmentPoints.empty() ||
+	    coarseWire->segmentCount() != coarseMesh->indices.size() ||
 	    coarseMesh->progressiveLineage != firstMesh->progressiveLineage ||
 	    coarseWire->progressiveLineage != coarseMesh->progressiveLineage ||
 	    coarseMesh->positions.size() <= firstMesh->positions.size() ||
@@ -995,9 +1019,21 @@ main(int argc, char *argv[])
 		lodHierarchy.max_cut ||
 	    coarseWire->progressiveClusters[1].residentCut !=
 		coarseMesh->progressiveClusters[1].residentCut ||
+	    !coarseCensus ||
+	    coarseMinimumCut != lodHierarchy.min_cut ||
+	    coarseMaximumDrawableCut != expectedCoarseDrawableCut ||
+	    coarseSelectedCounts[secondCoarseCut].faceCount !=
+		static_cast<uint64_t>(firstCoarseCounts.face_count) +
+		secondCoarseCounts.face_count ||
+	    coarseSelectedCounts[secondCoarseCut].pointCount !=
+		static_cast<uint64_t>(firstCoarseCounts.point_count) +
+		secondCoarseCounts.point_count ||
 	    chunkedMesh.canDrawChunksAtCut(
 		{secondChunk}, lodHierarchy.max_cut)) {
-	    printf("FAIL: mesh lod second page did not append independently\n");
+	    printf("FAIL: mesh lod second page did not append independently "
+		   "or bulk census changed its frontier (cuts=%d/%d expected=%d)\n",
+		   coarseMinimumCut, coarseMaximumDrawableCut,
+		   expectedCoarseDrawableCut);
 	    ret = 1;
 	    goto cleanup;
 	}
@@ -1017,12 +1053,18 @@ main(int argc, char *argv[])
 	const Obol::WireRep *richWire = richGeometry && richGeometry->wire ?
 	    &*richGeometry->wire : NULL;
 	if (!richMesh || !richWire || richRevision <= coarseRevision ||
+	    !richWire->derivesTriangleEdges() ||
+	    !richWire->triangleEdges ||
+	    !richWire->segmentPoints.empty() ||
 	    richMesh->progressiveLineage != coarseMesh->progressiveLineage ||
 	    richWire->progressiveLineage != richMesh->progressiveLineage ||
 	    !richWire->hasAdaptiveProgressiveClusters() ||
-	    richWire->segmentPoints.size() <= coarseWire->segmentPoints.size() ||
-	    !std::equal(coarseWire->segmentPoints.begin(),
-		coarseWire->segmentPoints.end(), richWire->segmentPoints.begin()) ||
+	    richWire->segmentCount() <= coarseWire->segmentCount() ||
+	    richWire->segmentCount() != richMesh->indices.size() ||
+	    coarseWire->segmentCount() != coarseMesh->indices.size() ||
+	    !std::equal(coarseWire->triangleEdges->indices.begin(),
+		coarseWire->triangleEdges->indices.end(),
+		richWire->triangleEdges->indices.begin()) ||
 	    richMesh->positions.size() <= coarseMesh->positions.size() ||
 	    richMesh->indices.size() <= coarseMesh->indices.size() ||
 	    !std::equal(coarseMesh->positions.begin(), coarseMesh->positions.end(),
@@ -1032,6 +1074,75 @@ main(int argc, char *argv[])
 	    !chunkedMesh.canDrawChunksAtCut(
 		{firstChunk, secondChunk}, lodHierarchy.max_cut)) {
 	    printf("FAIL: mesh lod richer page was not a suffix-only publication\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	/* Refining every page is a replacement wave, not a useful append-only
+	 * suffix.  It must publish one dense stream under a new lineage; otherwise
+	 * each whole-leaf cut retains its preceding mesh as tombstones and repeated
+	 * Lucy-scale refinement becomes superlinear in both time and memory. */
+	int allPageCoarseCut = lodHierarchy.min_cut;
+	for (uint32_t chunk = 0; chunk < lodHierarchy.chunk_count; ++chunk)
+	    allPageCoarseCut = std::max(
+		allPageCoarseCut, lodHierarchy.chunks[chunk].min_cut);
+	while (allPageCoarseCut < lodHierarchy.max_cut) {
+	    bool allPopulated = true;
+	    bool someRicher = false;
+	    for (uint32_t chunk = 0; chunk < lodHierarchy.chunk_count; ++chunk) {
+		const BObolMeshLodChunkCutInfo &coarse =
+		    lodHierarchy.chunks[chunk].cuts[allPageCoarseCut];
+		const BObolMeshLodChunkCutInfo &terminalPage =
+		    lodHierarchy.chunks[chunk].cuts[lodHierarchy.max_cut];
+		allPopulated = allPopulated && coarse.face_count > 0 &&
+		    coarse.point_count > 0;
+		someRicher = someRicher ||
+		    coarse.face_count < terminalPage.face_count ||
+		    coarse.point_count < terminalPage.point_count;
+	    }
+	    if (allPopulated && someRicher)
+		break;
+	    ++allPageCoarseCut;
+	}
+	BObolLodProgressiveMesh broadWaveMesh;
+	if (allPageCoarseCut >= lodHierarchy.max_cut ||
+	    !broadWaveMesh.updateChunksFromCache(lod, lodHierarchy,
+		chunkIds, allPageCoarseCut,
+		lodHierarchy.shaded_cull_backfaces ? TRUE : FALSE)) {
+	    printf("FAIL: mesh lod broad-wave coarse realization\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	const std::shared_ptr<const Obol::PartGeometry> broadCoarseGeometry =
+	    broadWaveMesh.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED, NULL);
+	const Obol::TriMesh *broadCoarseMesh =
+	    broadCoarseGeometry && broadCoarseGeometry->shaded ?
+		&*broadCoarseGeometry->shaded : NULL;
+	if (!broadCoarseMesh || !broadCoarseMesh->progressiveLineage ||
+	    !broadWaveMesh.updateChunksFromCache(lod, lodHierarchy,
+		chunkIds, lodHierarchy.max_cut,
+		lodHierarchy.shaded_cull_backfaces ? TRUE : FALSE)) {
+	    printf("FAIL: mesh lod broad-wave terminal realization\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	const std::shared_ptr<const Obol::PartGeometry> broadRichGeometry =
+	    broadWaveMesh.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED, NULL);
+	const Obol::TriMesh *broadRichMesh =
+	    broadRichGeometry && broadRichGeometry->shaded ?
+		&*broadRichGeometry->shaded : NULL;
+	size_t terminalPagePoints = 0;
+	for (uint32_t chunk = 0; chunk < lodHierarchy.chunk_count; ++chunk)
+	    terminalPagePoints += lodHierarchy.chunks[chunk].
+		cuts[lodHierarchy.max_cut].point_count;
+	if (!broadRichMesh ||
+	    broadRichMesh->progressiveLineage ==
+		broadCoarseMesh->progressiveLineage ||
+	    broadRichMesh->indices.size() !=
+		static_cast<size_t>(faceCount) * 3 ||
+	    broadRichMesh->positions.size() != terminalPagePoints) {
+	    printf("FAIL: mesh lod broad-wave refinement retained tombstones or "
+		   "reused its lineage\n");
 	    ret = 1;
 	    goto cleanup;
 	}

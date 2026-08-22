@@ -85,6 +85,11 @@ public:
     void setInstanceSemantic(Obol::InstanceId id,
 	const InstanceSemantic &semantic);
 
+    /* Exact source occurrence identities for the visible structural repair
+     * frontier published by the last complete Obol camera classification. */
+    void lastUncollapsedStructuralProxyOccurrenceKeys(
+	std::vector<SbString> &occurrenceKeys) const;
+
     void render(SoGLRenderAction *action);
     void getBounds(SoGetBoundingBoxAction *action);
     void pickRay(SoRayPickAction *action);
@@ -102,6 +107,7 @@ private:
 	Obol::PartId activePart = Obol::CadIdBuilder::Root();
 	uint8_t channels = 0;
 	int activeCut = -1;
+	bool lodStructuralProxy = false;
 	uint64_t geometryRevision = 0;
 	uint64_t appearanceRevision = 0;
 	uint64_t placementRevision = 0;

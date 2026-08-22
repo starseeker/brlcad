@@ -319,7 +319,32 @@ test_worker_prepared_authored_normals(void)
 	    70.71067811865476) > 1.0e-9 ||
 	fabs(progressive.projectedErrorAtCut(1, 100.0)) > 1.0e-12) {
 	printf("FAIL: authored normals were not canonicalized into a cached "
-	       "worker-owned renderer generation\n");
+	       "worker-owned renderer generation "
+	       "(mesh=%d revision=%llu/%llu cached_revision=%llu cached=%d "
+	       "indices=%zu normals=%zu positions=%zu lineage=%llu "
+	       "progressive=%d index_cuts=%zu/%zu position_cuts=%zu/%zu "
+	       "cut_info=%d error=%.17g screen_cuts=%d/%d projected=%.17g/%.17g)\n",
+	       mesh ? 1 : 0,
+	       static_cast<unsigned long long>(revision),
+	       static_cast<unsigned long long>(progressive.revision()),
+	       static_cast<unsigned long long>(cachedRevision),
+	       cached == prepared ? 1 : 0,
+	       mesh ? mesh->indices.size() : 0,
+	       mesh ? mesh->normals.size() : 0,
+	       mesh ? mesh->positions.size() : 0,
+	       static_cast<unsigned long long>(
+		   mesh ? mesh->progressiveLineage : 0),
+	       mesh && mesh->isProgressive() ? 1 : 0,
+	       mesh ? mesh->indexCountAtCut(0) : 0,
+	       mesh ? mesh->indexCountAtCut(1) : 0,
+	       mesh ? mesh->positionCountAtCut(0) : 0,
+	       mesh ? mesh->positionCountAtCut(1) : 0,
+	       progressive.cutInfo(0, &coarseCutInfo) ? 1 : 0,
+	       coarseCutInfo.object_error,
+	       progressive.cutForScreenError(100.0, 80.0),
+	       progressive.cutForScreenError(100.0, 10.0),
+	       progressive.projectedErrorAtCut(0, 100.0),
+	       progressive.projectedErrorAtCut(1, 100.0));
 	return 1;
     }
     return 0;
@@ -450,15 +475,33 @@ test_compaction_preserves_coordinate_only_frontier(void)
 
     const std::shared_ptr<const Obol::PartGeometry> trimmed =
 	progressive.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED, NULL);
+    std::array<BObolLodCounts, BOBOL_MESH_LOD_CUT_COUNT_MAX> populations;
+    int minimumCut = -1;
+    int maximumDrawableCut = -1;
+    const std::vector<uint32_t> wholeLeaf;
     if (progressive.residentCut() != 0 ||
 	!progressive.canDrawCut(2) ||
 	progressive.cutForScreenError(100.0, 1.0) != 2 ||
+	!progressive.drawableCountsAtCuts(wholeLeaf, FALSE,
+	    populations.data(), populations.size(), &minimumCut,
+	    &maximumDrawableCut) ||
+	minimumCut != 0 || maximumDrawableCut != 2 ||
+	populations[0].faceCount != 1 ||
+	populations[1].faceCount != 1 ||
+	populations[2].faceCount != 1 ||
+	populations[0].pointCount != 3 ||
+	populations[1].pointCount != 3 ||
+	populations[2].pointCount != 3 ||
 	!trimmed || !trimmed->shaded ||
 	trimmed->shaded->progressiveResidentCut != 2 ||
 	trimmed->shaded->indices.size() != 3 ||
 	trimmed->shaded->positions.size() != 3) {
-	printf("FAIL: compaction discarded the coordinate-only drawable "
-	       "cut frontier\n");
+	printf("FAIL: compaction or bulk census discarded the coordinate-only "
+	       "drawable cut frontier (cuts=%d/%d faces=%llu/%llu/%llu)\n",
+	       minimumCut, maximumDrawableCut,
+	       static_cast<unsigned long long>(populations[0].faceCount),
+	       static_cast<unsigned long long>(populations[1].faceCount),
+	       static_cast<unsigned long long>(populations[2].faceCount));
 	return 1;
     }
     return 0;

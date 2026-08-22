@@ -239,6 +239,26 @@ test_pending_progress_provider(BObolViewController *controller,
     return 1;
 }
 
+struct PublishedProgressState {
+    int calls = 0;
+    bool remainsPending = true;
+};
+
+static int
+test_published_progress_provider(BObolViewController *controller,
+	void *data, const BObolProgressiveOptions *options,
+	BObolProgressiveStatus *status)
+{
+    PublishedProgressState *state =
+	static_cast<PublishedProgressState *>(data);
+    if (!controller || !state || !options || !status)
+	return -1;
+    state->calls++;
+    status->changed = 1;
+    status->hasMore = state->remainsPending ? 1 : 0;
+    return 1;
+}
+
 struct FrameRequestCount {
     int calls = 0;
 };
@@ -613,6 +633,39 @@ test_progressive_status_contract(void)
 	  "pending progressive work does not claim a published scene change");
     controller.unregisterProgressiveProvider(token);
     controller.clearProgressiveWorkPending();
+
+    /* A continuing provider's bounded owner-thread mutation is not authority
+     * for one full scene traversal per pump.  Keep pumping it behind the
+     * adaptive publication deadline.  Conversely, the final mutation has an
+     * idle-stream liveness witness and must request its terminal frame now. */
+    BObolViewController batchedController;
+    PublishedProgressState batchedState;
+    const uint64_t batchedToken = batchedController.registerProgressiveProvider(
+	test_published_progress_provider, &batchedState);
+    batchedController.clearRenderRequest();
+    status.clear();
+    CHECK(batchedToken != 0 &&
+	batchedController.advanceProgressiveWork(NULL, &status) > 0 &&
+	status.changed && status.hasMore &&
+	batchedController.hasProgressiveWorkPending() &&
+	!batchedController.isRenderRequested(),
+	"continuing provider mutation is publication-batched");
+    batchedController.unregisterProgressiveProvider(batchedToken);
+
+    BObolViewController terminalController;
+    PublishedProgressState terminalState;
+    terminalState.remainsPending = false;
+    const uint64_t terminalToken =
+	terminalController.registerProgressiveProvider(
+	    test_published_progress_provider, &terminalState);
+    terminalController.clearRenderRequest();
+    status.clear();
+    CHECK(terminalToken != 0 &&
+	terminalController.advanceProgressiveWork(NULL, &status) > 0 &&
+	status.changed && status.hasMore &&
+	terminalController.isRenderRequested(),
+	"terminal provider mutation requests its idle-stream frame");
+    terminalController.unregisterProgressiveProvider(terminalToken);
     return 0;
 }
 
@@ -633,9 +686,9 @@ test_progressive_frame_wakeup_contract(void)
     attachController.clearFrameRequestCallback(&attachState);
     attachController.clearProgressiveWorkPending();
 
-    /* Provider registration is its own producer edge.  Startup often already
-     * has both render/progressive levels asserted, so edge-coalesced aggregate
-     * setters alone cannot announce that a newly installed provider exists. */
+    /* Provider registration composes into a standing level.  A conforming
+     * host already owns a loop witness for that level, so publishing another
+     * callback edge would only duplicate queued owner-thread work. */
     BObolViewController providerController;
     FrameRequestCount providerState;
     providerController.setFrameRequestCallback(count_frame_request,
@@ -647,12 +700,65 @@ test_progressive_frame_wakeup_contract(void)
     PendingProgressState progressState;
     const uint64_t token = providerController.registerProgressiveProvider(
 	test_pending_progress_provider, &progressState);
-    CHECK(token != 0 && providerState.calls == beforeRegistration + 1,
-	"new progressive provider wakes an already-pending host");
+    CHECK(token != 0 && providerState.calls == beforeRegistration &&
+	providerController.getHostWorkSnapshot().pumpPending(),
+	"new progressive provider reuses an already-pending host level");
     providerController.unregisterProgressiveProvider(token);
     providerController.clearProgressiveWorkPending();
     providerController.clearRenderRequest();
     providerController.clearFrameRequestCallback(&providerState);
+    return 0;
+}
+
+static int
+test_host_work_snapshot_contract(void)
+{
+    BObolViewController controller;
+    controller.clearRenderRequest();
+    controller.clearProgressiveWorkPending();
+
+    BObolHostWorkSnapshot work = controller.getHostWorkSnapshot();
+    CHECK(work.flags == BOBOL_HOST_WORK_NONE,
+	"cleared controller publishes an empty host-work level");
+    const uint64_t emptyRevision = work.revision;
+
+    controller.markProgressiveWorkPending();
+    work = controller.getHostWorkSnapshot();
+    CHECK(work.pumpPending() && !work.renderPending() &&
+	work.revision != emptyRevision,
+	"progressive work publishes a pump-only host level");
+
+    controller.requestPresentationRender("host-work-presentation");
+    work = controller.getHostWorkSnapshot();
+    CHECK(work.pumpPending() && work.renderPending() &&
+	!work.capacitySampleRequested(),
+	"presentation work composes with a standing pump level");
+
+    controller.requestRender("host-work-capacity");
+    work = controller.getHostWorkSnapshot();
+    CHECK(work.capacitySampleRequested(),
+	"capacity-relevant render dominates a coalesced presentation request");
+    const uint64_t staleRenderRevision = work.renderRevision;
+
+    /* A render published while an older frame is in flight must survive that
+     * frame's serial-checked retirement. */
+    controller.requestPresentationRender("host-work-newer");
+    const BObolHostWorkSnapshot newer = controller.getHostWorkSnapshot();
+    CHECK(newer.renderRevision != staleRenderRevision,
+	"new render request advances its transaction revision");
+    controller.clearRenderRequestIfUnchanged(staleRenderRevision);
+    work = controller.getHostWorkSnapshot();
+    CHECK(work.renderPending() &&
+	work.renderRevision == newer.renderRevision,
+	"stale frame completion cannot clear newer render work");
+
+    controller.clearRenderRequestIfUnchanged(newer.renderRevision);
+    work = controller.getHostWorkSnapshot();
+    CHECK(work.pumpPending() && !work.renderPending(),
+	"render retirement preserves independent pump work");
+    controller.clearProgressiveWorkPending();
+    CHECK(controller.getHostWorkSnapshot().flags == BOBOL_HOST_WORK_NONE,
+	"host levels drain to one observable terminal state");
     return 0;
 }
 
@@ -2699,6 +2805,8 @@ main(int ac, char **av)
     if (test_progressive_status_contract())
 	return 1;
     if (test_progressive_frame_wakeup_contract())
+	return 1;
+    if (test_host_work_snapshot_contract())
 	return 1;
     if (test_window_host_contract())
 	return 1;

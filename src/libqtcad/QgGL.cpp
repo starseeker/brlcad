@@ -124,7 +124,12 @@ return;
     qgcanvas_sync_obol_viewport(*d, this);
     qgcanvas_sync_obol_camera(*d);
     initializeOpenGLFunctions();
-    qgcanvas_request_obol_render_if_idle(*d, "qtgl-paint");
+    /* An expose/compositor paint is not a semantic scene update.  Retain and
+     * blit the completed presentation FBO unless the controller has an
+     * explicit render request; manufacture a request only when this viewport
+     * has no usable completed frame yet. */
+    if (!qgcanvas_has_completed_gl_frame(*d, this))
+	qgcanvas_request_obol_render_if_idle(*d, "qtgl-initial-paint");
     /* A provider/idle transition may have occurred since the preceding
      * frame.  Apply its retained HUD delta before rendering this frame so a
      * completed view never presents one final stale progress indicator. */

@@ -667,6 +667,10 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	convergence.residentGrowthReallocationPending ? true : false);
     sample.insert(QStringLiteral("lod_convergence_publication_frame_pending"),
 	convergence.publicationFramePending ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_source_preparation_pending"),
+	convergence.sourcePreparationPending ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_source_preparation_providers"),
+	static_cast<qint64>(convergence.sourcePreparationProviderCount));
     sample.insert(QStringLiteral("lod_convergence_active_working_set_bytes"),
 	static_cast<qint64>(convergence.activeWorkingSetBytes));
     sample.insert(QStringLiteral("lod_convergence_peak_working_set_bytes"),

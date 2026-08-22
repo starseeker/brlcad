@@ -150,12 +150,31 @@ return;
     bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
     qgcanvas_sync_obol_viewport(*d, this);
     qgcanvas_sync_obol_camera(*d);
-    qgcanvas_request_obol_render_if_idle(*d, "qtsw-paint");
+
+    /* QWidget may repaint because it was exposed, uncovered, or composited;
+     * none of those events changed the CAD presentation.  Re-entering Coin
+     * and OSMesa for every such paint used to manufacture a continuous
+     * render/calibration loop and made a pose-only LoD restore look like a
+     * coarse-to-fine replay.  The controller's render latch is the authority
+     * for semantic changes.  Only cold start (or a size mismatch) needs an
+     * otherwise-idle presentation request. */
+    const bool retainedFrameMatches =
+	qgcanvas_has_completed_software_frame(*d, this);
+    if (!retainedFrameMatches)
+	qgcanvas_request_obol_render_if_idle(*d, "qtsw-initial-paint");
 
     QImage image;
     bool completedPresentation = false;
-    qgcanvas_get_obol_viewport_image(
-	*d, this, image, true, true, true, &completedPresentation);
+    if (retainedFrameMatches && d->obol &&
+	!d->obol->isRenderRequested()) {
+	/* Renderer-native pixels are bottom-up, matching the inverse QPainter
+	 * transform below.  QImage is implicitly shared, so this is a zero-copy
+	 * presentation of the immutable completed frame. */
+	image = d->last_completed_software_frame;
+    } else {
+	qgcanvas_get_obol_viewport_image(
+	    *d, this, image, true, true, true, &completedPresentation);
+    }
     if (image.isNull()) {
 	/* Preserve the opaque-widget contract if an offscreen render fails. */
 	{

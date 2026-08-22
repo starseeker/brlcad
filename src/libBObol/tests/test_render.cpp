@@ -666,6 +666,282 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("FAST software-wire policy should preserve retained HUD composition");
     cadViewState->softwareWireMode = SoCADViewState::SOFTWARE_WIRE_QUALITY;
 
+    /* A direct software-framebuffer executor is still part of the retained
+     * CAD renderer contract.  In particular it must publish exact work and
+     * advance the completed resource-frame token; otherwise the view-LoD
+     * controller observes a successful image as zero work and resubmits it
+     * forever. */
+    SoSeparator *directRoot = new SoSeparator;
+    directRoot->ref();
+    SoOrthographicCamera *directCamera = new SoOrthographicCamera;
+    directCamera->position = SbVec3f(0.0f, 0.0f, 10.0f);
+    directCamera->height = 4.0f;
+    directCamera->nearDistance = 1.0f;
+    directCamera->farDistance = 20.0f;
+    directRoot->addChild(directCamera);
+    SoCADViewState *directViewState = new SoCADViewState;
+    directViewState->softwareWireMode = SoCADViewState::SOFTWARE_WIRE_FAST;
+    directRoot->addChild(directViewState);
+    SoCADAssembly *directAssembly = new SoCADAssembly;
+    Obol::WireRep directWire;
+    directWire.segmentPoints = {
+	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, -1.0f, 0.0f),
+	SbVec3f(1.0f, -1.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f),
+	SbVec3f(1.0f, 1.0f, 0.0f), SbVec3f(-1.0f, 1.0f, 0.0f),
+	SbVec3f(-1.0f, 1.0f, 0.0f), SbVec3f(-1.0f, -1.0f, 0.0f)
+    };
+    directWire.bounds.setBounds(
+	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f));
+    Obol::PartGeometry directGeometry;
+    directGeometry.wire = directWire;
+    const Obol::PartId directPart =
+	Obol::CadIdBuilder::hash128("render-direct-wire");
+    directAssembly->upsertPart(directPart, directGeometry);
+    Obol::InstanceRecord directInstance;
+    directInstance.part = directPart;
+    directInstance.parent = Obol::CadIdBuilder::Root();
+    directInstance.childName = "render-direct-wire";
+    directInstance.localToRoot.makeIdentity();
+    directAssembly->upsertInstanceAuto(directInstance);
+    directRoot->addChild(directAssembly);
+
+    SoOffscreenRenderer directRenderer(&contextManager, viewport);
+    directRenderer.setComponents(SoOffscreenRenderer::RGB);
+    directRenderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+    if (!directRenderer.render(directRoot) ||
+	!directAssembly->lastRenderUsedDirectSoftwareWire())
+	FAIL("FAST retained wire geometry should use the direct OSMesa executor");
+    const Obol::CadRenderedWork directWork =
+	directAssembly->lastRenderedWork();
+    const Obol::CadGpuResourceSnapshot directResources =
+	directAssembly->gpuResourceSnapshot();
+    if (!directWork.exact || directWork.lineCount != 4 ||
+	directWork.positionCount != 8 || directWork.occurrenceCount != 1 ||
+	!directResources.frameSerial)
+	FAIL("direct OSMesa executor should publish exact completed CAD work");
+    const uint64_t directFrameSerial = directResources.frameSerial;
+    if (!directRenderer.render(directRoot) ||
+	directAssembly->gpuResourceSnapshot().frameSerial <= directFrameSerial)
+	FAIL("direct OSMesa executor should advance the completed frame token");
+    directRoot->unref();
+
+    /* A cut's declared positionCount is its complete index domain.  Keeping
+     * richer positions resident must not make a malformed coarse prefix look
+     * valid: a GL implementation is otherwise free to fetch beyond the
+     * uploaded VBO prefix and produce transient vertices far out in space. */
+    SoSeparator *invalidPrefixRoot = new SoSeparator;
+    invalidPrefixRoot->ref();
+    SoOrthographicCamera *invalidPrefixCamera = new SoOrthographicCamera;
+    invalidPrefixCamera->position = SbVec3f(0.0f, 0.0f, 10.0f);
+    invalidPrefixCamera->height = 4.0f;
+    invalidPrefixCamera->nearDistance = 1.0f;
+    invalidPrefixCamera->farDistance = 20.0f;
+    invalidPrefixRoot->addChild(invalidPrefixCamera);
+    SoCADViewState *invalidPrefixViewState = new SoCADViewState;
+    invalidPrefixViewState->softwareWireMode =
+	SoCADViewState::SOFTWARE_WIRE_FAST;
+    invalidPrefixRoot->addChild(invalidPrefixViewState);
+    SoCADAssembly *invalidPrefixAssembly = new SoCADAssembly;
+    std::shared_ptr<Obol::TriMesh> invalidPrefixMesh(
+	new Obol::TriMesh);
+    invalidPrefixMesh->positions = {
+	SbVec3f(-1.0f, -1.0f, 0.0f),
+	SbVec3f(1.0f, -1.0f, 0.0f),
+	SbVec3f(0.0f, 1.0f, 0.0f),
+	SbVec3f(2000.0f, 2000.0f, 0.0f)
+    };
+    invalidPrefixMesh->indices = {0u, 1u, 3u};
+    invalidPrefixMesh->bounds.setBounds(
+	SbVec3f(-1.0f, -1.0f, 0.0f),
+	SbVec3f(2000.0f, 2000.0f, 0.0f));
+    invalidPrefixMesh->progressiveCuts.resize(1);
+    invalidPrefixMesh->progressiveCuts[0].indexCount = 3u;
+    invalidPrefixMesh->progressiveCuts[0].positionCount = 3u;
+    invalidPrefixMesh->progressiveMinimumCut = 0u;
+    invalidPrefixMesh->progressiveResidentCut = 0u;
+    invalidPrefixMesh->progressiveQuantizationMinimum =
+	invalidPrefixMesh->bounds.getMin();
+    invalidPrefixMesh->progressiveQuantizationMaximum =
+	invalidPrefixMesh->bounds.getMax();
+    Obol::WireRep invalidPrefixWire;
+    invalidPrefixWire.triangleEdges = invalidPrefixMesh;
+    invalidPrefixWire.triangleEdgeSegmentCount = 3u;
+    invalidPrefixWire.bounds = invalidPrefixMesh->bounds;
+    invalidPrefixWire.progressiveCuts.resize(1);
+    invalidPrefixWire.progressiveCuts[0].segmentCount = 3u;
+    invalidPrefixWire.progressiveMinimumCut = 0u;
+    invalidPrefixWire.progressiveResidentCut = 0u;
+    Obol::PartGeometry invalidPrefixGeometry;
+    invalidPrefixGeometry.wire = std::move(invalidPrefixWire);
+    const Obol::PartId invalidPrefixPart =
+	Obol::CadIdBuilder::hash128("render-invalid-progressive-prefix");
+    invalidPrefixAssembly->upsertPart(
+	invalidPrefixPart, invalidPrefixGeometry);
+    Obol::InstanceRecord invalidPrefixInstance;
+    invalidPrefixInstance.part = invalidPrefixPart;
+    invalidPrefixInstance.parent = Obol::CadIdBuilder::Root();
+    invalidPrefixInstance.childName = "render-invalid-progressive-prefix";
+    invalidPrefixInstance.localToRoot.makeIdentity();
+    invalidPrefixInstance.lodCut = 0u;
+    invalidPrefixAssembly->upsertInstanceAuto(invalidPrefixInstance);
+    invalidPrefixRoot->addChild(invalidPrefixAssembly);
+
+    SoOffscreenRenderer invalidPrefixRenderer(&contextManager, viewport);
+    invalidPrefixRenderer.setComponents(SoOffscreenRenderer::RGB);
+    invalidPrefixRenderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+    if (!invalidPrefixRenderer.render(invalidPrefixRoot) ||
+	!invalidPrefixAssembly->lastRenderUsedDirectSoftwareWire() ||
+	invalidPrefixAssembly->lastRenderedWork().lineCount != 0)
+	FAIL("direct OSMesa executor accepted an index beyond the active position prefix");
+    invalidPrefixViewState->softwareWireMode =
+	SoCADViewState::SOFTWARE_WIRE_QUALITY;
+    if (!invalidPrefixRenderer.render(invalidPrefixRoot) ||
+	invalidPrefixAssembly->lastRenderUsedDirectSoftwareWire() ||
+	invalidPrefixAssembly->lastRenderedWork().lineCount != 0)
+	FAIL("VBO OSMesa executor accepted an index beyond the active position prefix");
+    invalidPrefixRoot->unref();
+
+    /* The OSMesa quality path needs one compact position/edge-index pair,
+     * not an additional triangle VBO copy which no software wire executor
+     * submits.  This invariant is material for multi-gigabyte wire scenes. */
+    SoSeparator *compactWireRoot = new SoSeparator;
+    compactWireRoot->ref();
+    SoOrthographicCamera *compactWireCamera = new SoOrthographicCamera;
+    compactWireCamera->position = SbVec3f(0.0f, 0.0f, 10.0f);
+    compactWireCamera->height = 4.0f;
+    compactWireCamera->nearDistance = 1.0f;
+    compactWireCamera->farDistance = 20.0f;
+    compactWireRoot->addChild(compactWireCamera);
+    SoCADViewState *compactWireViewState = new SoCADViewState;
+    compactWireViewState->softwareWireMode =
+	SoCADViewState::SOFTWARE_WIRE_QUALITY;
+    compactWireRoot->addChild(compactWireViewState);
+    SoCADAssembly *compactWireAssembly = new SoCADAssembly;
+    std::shared_ptr<Obol::TriMesh> compactWireMesh(new Obol::TriMesh);
+    compactWireMesh->positions = {
+	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, -1.0f, 0.0f),
+	SbVec3f(1.0f, 1.0f, 0.0f), SbVec3f(-1.0f, 1.0f, 0.0f)
+    };
+    compactWireMesh->indices = {0u, 1u, 2u, 0u, 2u, 3u};
+    compactWireMesh->bounds.setBounds(
+	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f));
+    Obol::WireRep compactWire;
+    compactWire.triangleEdges = compactWireMesh;
+    compactWire.triangleEdgeSegmentCount = compactWireMesh->indices.size();
+    compactWire.bounds = compactWireMesh->bounds;
+    Obol::PartGeometry compactWireGeometry;
+    compactWireGeometry.wire = std::move(compactWire);
+    const Obol::PartId compactWirePart =
+	Obol::CadIdBuilder::hash128("render-compact-derived-wire");
+    compactWireAssembly->upsertPart(compactWirePart, compactWireGeometry);
+    Obol::InstanceRecord compactWireInstance;
+    compactWireInstance.part = compactWirePart;
+    compactWireInstance.parent = Obol::CadIdBuilder::Root();
+    compactWireInstance.childName = "render-compact-derived-wire";
+    compactWireInstance.localToRoot.makeIdentity();
+    compactWireAssembly->upsertInstanceAuto(compactWireInstance);
+    compactWireRoot->addChild(compactWireAssembly);
+
+    SoOffscreenRenderer compactWireRenderer(&contextManager, viewport);
+    compactWireRenderer.setComponents(SoOffscreenRenderer::RGB);
+    compactWireRenderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+    if (!compactWireRenderer.render(compactWireRoot) ||
+	compactWireAssembly->lastRenderUsedDirectSoftwareWire() ||
+	compactWireAssembly->lastRenderedWork().lineCount != 6u)
+	FAIL("compact derived-wire OSMesa quality render failed");
+    const Obol::CadGpuResourceSnapshot compactWireResources =
+	compactWireAssembly->gpuResourceSnapshot();
+    const size_t expectedCompactWireBytes =
+	4u * 3u * sizeof(float) + 12u * sizeof(uint32_t);
+    if (compactWireResources.ordinaryPartBufferBytes !=
+	expectedCompactWireBytes)
+	FAIL("OSMesa derived wire retained an unused triangle VBO copy");
+    compactWireRoot->unref();
+
+    /* Wire and shaded streams are independently authored channels.  A
+     * stable shaded lineage must not accidentally certify a changed wire
+     * prefix merely because both live in one PartGeometry generation. */
+    SoSeparator *lineageRoot = new SoSeparator;
+    lineageRoot->ref();
+    SoOrthographicCamera *lineageCamera = new SoOrthographicCamera;
+    lineageCamera->position = SbVec3f(0.0f, 0.0f, 10.0f);
+    lineageCamera->height = 4.0f;
+    lineageCamera->nearDistance = 1.0f;
+    lineageCamera->farDistance = 20.0f;
+    lineageRoot->addChild(lineageCamera);
+    SoCADViewState *lineageViewState = new SoCADViewState;
+    lineageViewState->softwareWireMode =
+	SoCADViewState::SOFTWARE_WIRE_QUALITY;
+    lineageRoot->addChild(lineageViewState);
+    SoCADAssembly *lineageAssembly = new SoCADAssembly;
+    lineageAssembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
+    Obol::PartGeometry lineageGeometry;
+    Obol::TriMesh lineageShaded;
+    lineageShaded.positions = {
+	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, -1.0f, 0.0f),
+	SbVec3f(0.0f, 1.0f, 0.0f)
+    };
+    lineageShaded.indices = {0u, 1u, 2u};
+    lineageShaded.bounds.setBounds(
+	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f));
+    lineageShaded.progressiveCuts.resize(1);
+    lineageShaded.progressiveCuts[0].indexCount = 3u;
+    lineageShaded.progressiveCuts[0].positionCount = 3u;
+    lineageShaded.progressiveMinimumCut = 0u;
+    lineageShaded.progressiveResidentCut = 0u;
+    lineageShaded.progressiveLineage = UINT64_C(0x534841444544);
+    lineageGeometry.shaded = lineageShaded;
+    Obol::WireRep lineageWire;
+    lineageWire.segmentPoints = {
+	SbVec3f(-1.0f, -0.75f, 0.05f), SbVec3f(1.0f, -0.75f, 0.05f)
+    };
+    lineageWire.bounds = lineageShaded.bounds;
+    lineageWire.progressiveCuts.resize(1);
+    lineageWire.progressiveCuts[0].segmentCount = 1u;
+    lineageWire.progressiveMinimumCut = 0u;
+    lineageWire.progressiveResidentCut = 0u;
+    lineageWire.progressiveLineage = UINT64_C(0x574952453031);
+    lineageGeometry.wire = lineageWire;
+    const Obol::PartId lineagePart =
+	Obol::CadIdBuilder::hash128("render-independent-channel-lineage");
+    lineageAssembly->upsertPart(lineagePart, lineageGeometry);
+    Obol::InstanceRecord lineageInstance;
+    lineageInstance.part = lineagePart;
+    lineageInstance.parent = Obol::CadIdBuilder::Root();
+    lineageInstance.childName = "render-independent-channel-lineage";
+    lineageInstance.localToRoot.makeIdentity();
+    lineageInstance.lodCut = 0u;
+    lineageAssembly->upsertInstanceAuto(lineageInstance);
+    lineageRoot->addChild(lineageAssembly);
+
+    SoOffscreenRenderer lineageRenderer(&contextManager, viewport);
+    lineageRenderer.setComponents(SoOffscreenRenderer::RGB);
+    lineageRenderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+    if (!lineageRenderer.render(lineageRoot))
+	FAIL("independent channel lineage setup render failed");
+    const Obol::CadGpuResourceSnapshot coarseLineageResources =
+	lineageAssembly->gpuResourceSnapshot();
+    lineageWire.segmentPoints = {
+	SbVec3f(0.0f, -1.0f, 0.05f), SbVec3f(0.0f, 1.0f, 0.05f),
+	SbVec3f(-1.0f, 0.75f, 0.05f), SbVec3f(1.0f, 0.75f, 0.05f)
+    };
+    lineageWire.progressiveCuts[0].segmentCount = 2u;
+    lineageWire.progressiveLineage = UINT64_C(0x574952453032);
+    lineageGeometry.wire = lineageWire;
+    lineageAssembly->upsertPart(lineagePart, lineageGeometry);
+    if (!lineageRenderer.render(lineageRoot) ||
+	lineageAssembly->lastRenderedWork().lineCount != 2u)
+	FAIL("changed wire lineage did not render its replacement stream");
+    const Obol::CadGpuResourceSnapshot richLineageResources =
+	lineageAssembly->gpuResourceSnapshot();
+    const uint64_t richWireBytes = 4u * 3u * sizeof(float);
+    if (richLineageResources.ordinaryPartFullUploadBytes <
+	    coarseLineageResources.ordinaryPartFullUploadBytes + richWireBytes ||
+	richLineageResources.ordinaryPartLineageReplacementCount <=
+	    coarseLineageResources.ordinaryPartLineageReplacementCount)
+	FAIL("stable shaded lineage incorrectly certified a changed wire prefix");
+    lineageRoot->unref();
+
     SoSeparator *pointRoot = new SoSeparator;
     pointRoot->ref();
     SoOrthographicCamera *pointCamera = new SoOrthographicCamera;

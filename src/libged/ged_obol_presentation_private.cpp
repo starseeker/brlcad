@@ -1047,6 +1047,27 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 			    status.availableLeafCount).c_str());
 	    }
 	    break;
+	case BOBOL_LOD_CONVERGENCE_PREPARING:
+	    color[0] = 96;
+	    color[1] = 190;
+	    color[2] = 255;
+	    /* Producer callbacks do not expose a trustworthy total-work
+	     * denominator.  The bar remains whole-view progress, but do not label
+	     * its monotonic fraction as a preparation percentage. */
+	    bu_vls_sprintf(&text, "Preparing LoD data");
+	    if (status.visibleTargetCount > 0)
+		bu_vls_printf(&text, "  %s/%s visible parts ready",
+		    ged_obol_lod_compact_count(std::min(
+			status.activePayloadCount,
+			status.visibleTargetCount)).c_str(),
+		    ged_obol_lod_compact_count(
+			status.visibleTargetCount).c_str());
+	    if (status.sourcePreparationProviderCount > 0)
+		bu_vls_printf(&text, "  %s producer%s",
+		    ged_obol_lod_compact_count(
+			status.sourcePreparationProviderCount).c_str(),
+		    status.sourcePreparationProviderCount == 1 ? "" : "s");
+	    break;
 	case BOBOL_LOD_CONVERGENCE_INTERACTIVE:
 	    color[0] = 255;
 	    color[1] = 205;
@@ -1152,10 +1173,12 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
      * is presentation-only state: it neither advances LoD work nor changes
      * the camera/autoview contract.
      */
-    const bool indeterminateDiscovery =
-	status.phase == BOBOL_LOD_CONVERGENCE_DISCOVERING &&
-	status.expectedLeafCount <= status.availableLeafCount;
-    if (indeterminateDiscovery) {
+    const bool indeterminateProgress =
+	(status.phase == BOBOL_LOD_CONVERGENCE_DISCOVERING &&
+	 status.expectedLeafCount <= status.availableLeafCount) ||
+	(status.phase == BOBOL_LOD_CONVERGENCE_PREPARING &&
+	 status.visibleTargetCount == 0);
+    if (indeterminateProgress) {
 	static const uint64_t sweep_steps = 40;
 	const uint64_t step = status.coordinatorDispatchSerial % sweep_steps;
 	const fastf_t unit = step <= sweep_steps / 2 ?

@@ -885,6 +885,10 @@ progressive_generation_from_chunks(
 	(priorMesh->normals.empty() == !hierarchy.has_normals);
     size_t appendedPositionLimit = 0;
     size_t appendedIndexLimit = 0;
+    size_t livePositionLimit = 0;
+    size_t liveIndexLimit = 0;
+    size_t residentPageCount = 0;
+    size_t changedPageCount = 0;
     for (uint32_t chunkId = 0; appendCompatible &&
 	    chunkId < hierarchy.chunk_count; ++chunkId) {
 	/* Page removal is a compaction operation and deliberately starts a new
@@ -895,12 +899,25 @@ progressive_generation_from_chunks(
 	}
 	if (!residentChunks[chunkId])
 	    continue;
+	residentPageCount++;
+	const size_t livePositions = hierarchy.has_normals ?
+	    residentChunks[chunkId]->indices.size() :
+	    residentChunks[chunkId]->positions.size();
+	if (livePositions > SIZE_MAX - livePositionLimit ||
+	    residentChunks[chunkId]->indices.size() >
+		SIZE_MAX - liveIndexLimit) {
+	    appendCompatible = false;
+	    break;
+	}
+	livePositionLimit += livePositions;
+	liveIndexLimit += residentChunks[chunkId]->indices.size();
 	if (prior->residentChunks[chunkId] == residentChunks[chunkId]) {
 	    if (prior->packedChunks[chunkId].resident !=
 		    residentChunks[chunkId])
 		appendCompatible = false;
 	    continue;
 	}
+	changedPageCount++;
 	const size_t positionLimit = hierarchy.has_normals ?
 	    residentChunks[chunkId]->indices.size() :
 	    residentChunks[chunkId]->positions.size();
@@ -912,6 +929,37 @@ progressive_generation_from_chunks(
 	}
 	appendedPositionLimit += positionLimit;
 	appendedIndexLimit += residentChunks[chunkId]->indices.size();
+    }
+
+    /*
+     * An append-only packed stream is a latency win when a view adds or
+     * enriches a small number of private pages: the renderer retains its VBO
+     * prefix and uploads only the new tail.  It is pathological when most of
+     * a large leaf advances together.  Every replacement is a complete page,
+     * so appending a broad wave copies the old packed vectors, appends another
+     * nearly complete mesh, and leaves the old pages as tombstones.  A later
+     * wave then copies both generations again.  Lucy's 428-page cut advance
+     * turned this into multi-second superlinear work and hundreds of
+     * megabytes of dead CPU/GPU storage.
+     *
+     * Prefer one dense immutable generation once a meaningful page population
+     * is changing broadly, or the prior stream already retains at least 50%
+     * dead index storage.  Small fixtures and genuinely sparse view-local
+     * updates keep the suffix-only route.  The page-count floor prevents a
+     * two-page leaf from replacing its lineage for every ordinary update.
+     */
+    const bool completeReplacementWave = residentPageCount >= 2 &&
+	changedPageCount == residentPageCount;
+    if (appendCompatible &&
+	(completeReplacementWave || changedPageCount >= 32)) {
+	const bool broadWave = residentPageCount > 0 &&
+	    changedPageCount >= residentPageCount - residentPageCount / 4;
+	const bool largeSuffix = liveIndexLimit > 0 &&
+	    appendedIndexLimit >= liveIndexLimit - liveIndexLimit / 4;
+	const bool tombstoneHeavy = liveIndexLimit <= SIZE_MAX / 2 &&
+	    priorMesh->indices.size() > liveIndexLimit + liveIndexLimit / 2;
+	if (broadWave || largeSuffix || tombstoneHeavy)
+	    appendCompatible = false;
     }
     if (appendCompatible &&
 	(appendedPositionLimit > UINT32_MAX ||
@@ -963,28 +1011,37 @@ progressive_generation_from_chunks(
 
 	/* Authored normals are corner records while Obol indexes one normal per
 	 * vertex.  Canonicalize one private page before appending it so a later
-	 * page replacement cannot renumber or rewrite an earlier GPU prefix. */
-	Obol::TriMesh page;
-	page.positions = chunk->positions;
-	page.indices = chunk->indices;
+	 * page replacement cannot renumber or rewrite an earlier GPU prefix.
+	 * Ordinary PoP pages already have the renderer's indexed layout; consume
+	 * their immutable vectors directly instead of making a temporary copy. */
+	Obol::TriMesh canonicalPage;
+	const std::vector<SbVec3f> *pagePositions = &chunk->positions;
+	const std::vector<SbVec3f> *pageNormals = NULL;
+	const std::vector<uint32_t> *pageIndices = &chunk->indices;
 	if (hierarchy.has_normals) {
-	    if (chunk->cornerNormals.size() != chunk->indices.size() ||
-		!bobol_prepare_authored_corner_normals(
-		    page, chunk->cornerNormals))
+	    if (chunk->cornerNormals.size() != chunk->indices.size())
 		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    canonicalPage.positions = chunk->positions;
+	    canonicalPage.indices = chunk->indices;
+	    if (!bobol_prepare_authored_corner_normals(
+		    canonicalPage, chunk->cornerNormals))
+		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    pagePositions = &canonicalPage.positions;
+	    pageNormals = &canonicalPage.normals;
+	    pageIndices = &canonicalPage.indices;
 	}
 	const size_t vertexBase = mesh.positions.size();
 	const size_t indexBase = mesh.indices.size();
 	if (vertexBase > UINT32_MAX ||
-	    page.positions.size() > UINT32_MAX - vertexBase ||
-	    page.indices.size() > UINT32_MAX - indexBase)
+	    pagePositions->size() > UINT32_MAX - vertexBase ||
+	    pageIndices->size() > UINT32_MAX - indexBase)
 	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
 	mesh.positions.insert(mesh.positions.end(),
-	    page.positions.begin(), page.positions.end());
+	    pagePositions->begin(), pagePositions->end());
 	if (hierarchy.has_normals)
 	    mesh.normals.insert(mesh.normals.end(),
-		page.normals.begin(), page.normals.end());
-	for (uint32_t index : page.indices) {
+		pageNormals->begin(), pageNormals->end());
+	for (uint32_t index : *pageIndices) {
 	    const uint64_t rebased = static_cast<uint64_t>(vertexBase) + index;
 	    if (rebased > UINT32_MAX)
 		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
@@ -1045,8 +1102,9 @@ progressive_generation_from_chunks(
 	mesh.progressiveClusterGridResolution = 0;
 	mesh.progressiveLineage = appendCompatible ?
 	    priorMesh->progressiveLineage :
-	    (progressiveLineage ? progressiveLineage :
-		bobol_next_progressive_lineage());
+	    (priorMesh ? bobol_next_progressive_lineage() :
+		(progressiveLineage ? progressiveLineage :
+		    bobol_next_progressive_lineage()));
     }
     if (hierarchy.has_normals && singleChunkPrefix) {
 	/* The one-page path remains an ordinary cumulative prefix.  Page-local
@@ -1886,6 +1944,129 @@ BObolLodProgressiveMesh::countsForChunksAtCut(
 }
 
 SbBool
+BObolLodProgressiveMesh::drawableCountsAtCuts(
+    const std::vector<uint32_t> &chunkIds, SbBool hasNormals,
+    BObolLodCounts *counts, size_t count, int *minimumCut,
+    int *maximumDrawableCut) const
+{
+    if (minimumCut)
+	*minimumCut = -1;
+    if (maximumDrawableCut)
+	*maximumDrawableCut = -1;
+    if (!counts || count < BOBOL_MESH_LOD_CUT_COUNT_MAX)
+	return FALSE;
+    for (size_t cut = 0; cut < count; ++cut)
+	counts[cut].clear();
+    if (!this->p)
+	return FALSE;
+
+    /* One atomic shared-generation retain is the point of this API.  Do all
+     * population and residency decisions against that exact immutable
+     * snapshot so a concurrent suffix publication cannot mix generations. */
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    const Obol::TriMesh *mesh =
+	generation && generation->shadedGeometry &&
+	generation->shadedGeometry->shaded ?
+	    &*generation->shadedGeometry->shaded : NULL;
+    if (!generation ||
+	(generation->residentCut < 0 && generation->residentChunks.empty()) ||
+	!mesh || mesh->positions.empty() || mesh->indices.size() < 3 ||
+	mesh->indices.size() % 3 != 0 ||
+	(!mesh->normals.empty() &&
+	 mesh->normals.size() != mesh->positions.size()) ||
+	generation->minimumCut < 0 ||
+	generation->maximumCut < generation->minimumCut ||
+	generation->maximumCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
+	return FALSE;
+
+    if (minimumCut)
+	*minimumCut = generation->minimumCut;
+
+    if (generation->chunks.empty()) {
+	for (int cut = generation->minimumCut;
+		cut <= generation->maximumCut; ++cut) {
+	    BObolLodCounts &population = counts[static_cast<size_t>(cut)];
+	    population.faceCount = generation->faceCount[cut];
+	    population.pointCount = generation->pointCount[cut];
+	    population.originalPointCount = population.pointCount;
+	    population.normalCount = hasNormals ?
+		(population.faceCount > UINT64_MAX / 3 ? UINT64_MAX :
+		 population.faceCount * 3) : 0;
+	}
+	const int drawable = mesh->isProgressive() ?
+	    std::min(generation->maximumCut,
+		static_cast<int>(mesh->progressiveResidentCut)) : -1;
+	if (maximumDrawableCut && drawable >= generation->minimumCut)
+	    *maximumDrawableCut = drawable;
+	return drawable >= generation->minimumCut ? TRUE : FALSE;
+    }
+
+    /* Empty selects the complete logical leaf, matching canDrawCut and the
+     * ordinary whole-prefix accounting path.  A nonempty selection must be
+     * canonical so results remain deterministic and no page is double
+     * charged. */
+    if (!chunkIds.empty()) {
+	for (size_t i = 0; i < chunkIds.size(); ++i) {
+	    if (chunkIds[i] >= generation->chunks.size() ||
+		(i && chunkIds[i] <= chunkIds[i - 1]))
+		return FALSE;
+	}
+    }
+
+    int drawable = generation->minimumCut - 1;
+    for (int cut = generation->minimumCut;
+	    cut <= generation->maximumCut; ++cut) {
+	BObolLodCounts &population = counts[static_cast<size_t>(cut)];
+	if (chunkIds.empty()) {
+	    /* Preserve the ordinary whole-prefix contract exactly.  A producer
+	     * may account shared hierarchy vertices differently from a sum of its
+	     * private page metadata. */
+	    population.faceCount = generation->faceCount[cut];
+	    population.pointCount = generation->pointCount[cut];
+	}
+	bool resident = true;
+	const size_t selectedCount = chunkIds.empty() ?
+	    generation->chunks.size() : chunkIds.size();
+	for (size_t selected = 0; selected < selectedCount; ++selected) {
+	    const uint32_t chunkId = chunkIds.empty() ?
+		static_cast<uint32_t>(selected) : chunkIds[selected];
+	    const BObolMeshLodChunkCutInfo &chunkCut =
+		generation->chunks[chunkId].cuts[cut];
+	    if (!chunkIds.empty()) {
+		population.faceCount = chunkCut.face_count >
+			UINT64_MAX - population.faceCount ? UINT64_MAX :
+		    population.faceCount + chunkCut.face_count;
+		population.pointCount = chunkCut.point_count >
+			UINT64_MAX - population.pointCount ? UINT64_MAX :
+		    population.pointCount + chunkCut.point_count;
+	    }
+	    if (!chunkCut.face_count)
+		continue;
+	    if (chunkId >= generation->residentChunks.size() ||
+		!generation->residentChunks[chunkId] ||
+		chunkCut.point_count >
+		    generation->residentChunks[chunkId]->positions.size() ||
+		static_cast<uint64_t>(chunkCut.face_count) * 3u >
+		    generation->residentChunks[chunkId]->indices.size())
+		resident = false;
+	}
+	population.originalPointCount = population.pointCount;
+	population.normalCount = hasNormals ?
+	    (population.faceCount > UINT64_MAX / 3 ? UINT64_MAX :
+	     population.faceCount * 3) : 0;
+	/* Cumulative page prefixes cannot become drawable again above a missing
+	 * resident prefix.  Stop advancing the frontier but retain hierarchy
+	 * counts for diagnostics and future capacity planning. */
+	if (resident && drawable == cut - 1)
+	    drawable = cut;
+    }
+    if (maximumDrawableCut)
+	*maximumDrawableCut = drawable;
+    return drawable >= generation->minimumCut ? TRUE : FALSE;
+}
+
+SbBool
 BObolLodProgressiveMesh::hierarchyCountsForChunksAtCut(
     const std::vector<uint32_t> &chunkIds, int requestedCut,
     SbBool hasNormals, BObolLodCounts *counts) const
@@ -2705,36 +2886,16 @@ BObolLodProgressiveMesh::prepareCadGeometry(
     const SbBox3f bounds(
 	generation->quantizationMinimum,
 	generation->quantizationMaximum);
-    /* Hidden-line requests need both channels.  Build the expanded wire
-     * channel alongside a copy of the canonical shaded channel.  Plain
-     * shaded drawing never takes this composition path. */
+    /* Hidden-line requests need both channels.  Wire drawing aliases the
+     * immutable indexed triangle stream instead of expanding each face into
+     * six copied endpoint positions.  Plain shaded drawing never takes this
+     * composition path. */
     if (wire) {
 	Obol::WireRep wireRep;
 	wireRep.bounds = bounds;
-	if (sourceMesh->indices.size() >
-		std::numeric_limits<size_t>::max() / 2)
-	    return std::shared_ptr<const Obol::PartGeometry>();
-	wireRep.segmentPoints.reserve(sourceMesh->indices.size() * 2);
-	wireRep.segmentIds.reserve(sourceMesh->indices.size());
-	uint32_t edgeId = 0;
-	for (size_t i = 0; i + 2 < sourceMesh->indices.size(); i += 3) {
-	    const uint32_t triangle[3] = {
-		sourceMesh->indices[i],
-		sourceMesh->indices[i + 1],
-		sourceMesh->indices[i + 2]
-	    };
-	    for (size_t edge = 0; edge < 3; ++edge) {
-		const uint32_t a = triangle[edge];
-		const uint32_t b = triangle[(edge + 1) % 3];
-		if (a >= sourceMesh->positions.size() ||
-		    b >= sourceMesh->positions.size() ||
-		    edgeId == std::numeric_limits<uint32_t>::max())
-		    return std::shared_ptr<const Obol::PartGeometry>();
-		wireRep.segmentPoints.push_back(sourceMesh->positions[a]);
-		wireRep.segmentPoints.push_back(sourceMesh->positions[b]);
-		wireRep.segmentIds.push_back(edgeId++);
-	    }
-	}
+	wireRep.triangleEdges = std::shared_ptr<const Obol::TriMesh>(
+	    generation->shadedGeometry, sourceMesh);
+	wireRep.triangleEdgeSegmentCount = sourceMesh->indices.size();
 	wireRep.progressiveMinimumCut =
 	    static_cast<uint8_t>(std::max(0, generation->minimumCut));
 	wireRep.progressiveResidentCut =

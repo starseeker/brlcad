@@ -579,6 +579,77 @@ main(int argc, char **argv)
 	FAIL("real GED erase command should notify and sync qtcad Obol");
     if (render_source_count(controller) != 0)
 	FAIL("observer-synced GED erase should remove Obol database sources");
+
+    /* A nested erase/redraw is a visibility-frontier edit of the retained
+     * top-level source.  It deliberately does not rebuild that source, but it
+     * must invalidate the completed framebuffer or Qt will replay obsolete
+     * pixels forever.  Exercise the actual GED observer bridge used by qged. */
+    const char *observer_pair_paths[] = {"pair.c"};
+    struct ged_scene_draw_request observer_pair_draw;
+    ged_scene_draw_request_init(&observer_pair_draw);
+    observer_pair_draw.view = ged_view_ctx;
+    observer_pair_draw.paths = observer_pair_paths;
+    observer_pair_draw.path_count = 1;
+    observer_pair_draw.realization.mode = GED_SCENE_REALIZE_EAGER;
+    struct ged_scene_result *observer_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_draw(gedp, &observer_pair_draw,
+	    observer_result), observer_result, 1))
+	FAIL("observer retained-frontier setup draw should succeed");
+    SoBRLDatabaseSource *pairSource = source_for_path(controller, "pair.c");
+    if (!pairSource || visible_compact_occurrence_count(pairSource) != 2)
+	FAIL("observer retained-frontier setup should expose both occurrences");
+
+    controller->clearRenderRequest();
+    uint64_t frontierSerial = controller->renderRequestSerialGet();
+    obs.calls = 0;
+    obs.changed = 0;
+    struct ged_scene_erase_request observer_nested_erase;
+    ged_scene_erase_request_init(&observer_nested_erase);
+    observer_nested_erase.view = ged_view_ctx;
+    observer_nested_erase.path = "pair.c/box.s";
+    observer_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_erase(gedp,
+	    &observer_nested_erase, observer_result), observer_result, 1))
+	FAIL("observer nested erase should succeed");
+    SbBool frontierCapacityRelevant = TRUE;
+    if (obs.calls <= 0 || obs.changed <= 0 ||
+	visible_compact_occurrence_count(pairSource) != 1 ||
+	controller->renderRequestSerialGet() <= frontierSerial ||
+	!controller->consumeRenderRequest(NULL,
+	    &frontierCapacityRelevant) || frontierCapacityRelevant)
+	FAIL("observer nested erase should request a presentation-only frame");
+
+    frontierSerial = controller->renderRequestSerialGet();
+    obs.calls = 0;
+    obs.changed = 0;
+    const char *observer_nested_paths[] = {"pair.c/box.s"};
+    struct ged_scene_draw_request observer_nested_draw;
+    ged_scene_draw_request_init(&observer_nested_draw);
+    observer_nested_draw.view = ged_view_ctx;
+    observer_nested_draw.paths = observer_nested_paths;
+    observer_nested_draw.path_count = 1;
+    observer_nested_draw.realization.mode = GED_SCENE_REALIZE_EAGER;
+    observer_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_draw(gedp, &observer_nested_draw,
+	    observer_result), observer_result, 1))
+	FAIL("observer nested redraw should succeed");
+    frontierCapacityRelevant = TRUE;
+    if (obs.calls <= 0 || obs.changed <= 0 ||
+	visible_compact_occurrence_count(pairSource) != 2 ||
+	controller->renderRequestSerialGet() <= frontierSerial ||
+	!controller->consumeRenderRequest(NULL,
+	    &frontierCapacityRelevant) || frontierCapacityRelevant)
+	FAIL("observer nested redraw should request a presentation-only frame");
+
+    struct ged_scene_erase_request observer_pair_erase;
+    ged_scene_erase_request_init(&observer_pair_erase);
+    observer_pair_erase.view = ged_view_ctx;
+    observer_pair_erase.path = "pair.c";
+    observer_result = ged_scene_result_create();
+    if (!scene_result_matches(ged_scene_erase(gedp,
+	    &observer_pair_erase, observer_result), observer_result, 1) ||
+	render_source_count(controller) != 0)
+	FAIL("observer retained-frontier test should cleanly erase its root");
     if (ged_scene_observer_remove(gedp, observerToken) != 1)
 	FAIL("GED draw observer should unregister after qtcad Obol sync test");
     controller->clearDatabaseSources();

@@ -108,7 +108,9 @@ enum BObolLodConvergencePhase {
     BOBOL_LOD_CONVERGENCE_REFINING,
     BOBOL_LOD_CONVERGENCE_CALIBRATING,
     BOBOL_LOD_CONVERGENCE_BACKGROUND,
-    BOBOL_LOD_CONVERGENCE_ERROR
+    BOBOL_LOD_CONVERGENCE_ERROR,
+    /* Keep established diagnostic values stable when adding HUD phases. */
+    BOBOL_LOD_CONVERGENCE_PREPARING
 };
 
 /** Internal coordinator phase at the last owner-thread transition boundary.
@@ -219,15 +221,19 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     SbBool performanceLimited;
     SbBool memoryLimited;
     SbBool gpuMemoryPressure;
-    /* Individual presentation barriers.  These are intentionally exposed in
-     * the aggregate status so hosts and regression reports can distinguish a
-     * pending PoP frame from scene-budget calibration or motion handoff. */
+    /* Individual convergence obligations.  These are intentionally exposed
+     * in the aggregate status so hosts and regression reports can distinguish
+     * a pending PoP presentation frame from nonvisual scene reallocation. */
     SbBool refinementFramePending;
     SbBool budgetCalibrationPending;
     SbBool stablePresentationHandoffPending;
     SbBool pointProxyCalibrationPending;
     SbBool residentGrowthReallocationPending;
     SbBool publicationFramePending;
+    /* Foreground cold-start work which is still publishing the immutable
+     * population against which terminal view allocation will be proved. */
+    SbBool sourcePreparationPending;
+    size_t sourcePreparationProviderCount;
     unsigned int failedSourceCount;
 };
 
@@ -244,6 +250,34 @@ typedef void (*BObolProgressiveUserDataFreeCallback)(void *userData);
 
 typedef void (*BObolFrameRequestCallback)(void *userData,
     const char *reason);
+
+/** Level-triggered work advertised by a view controller to its presentation
+ * host.  Pumping and rendering are independent: background/provider progress
+ * may need bounded owner-thread service without traversing an unchanged
+ * scene, while a render request may be satisfied from already published
+ * retained data. */
+enum BObolHostWorkFlag {
+    BOBOL_HOST_WORK_NONE = 0,
+    BOBOL_HOST_WORK_PUMP = 1u << 0,
+    BOBOL_HOST_WORK_RENDER = 1u << 1,
+    BOBOL_HOST_WORK_CAPACITY_SAMPLE = 1u << 2
+};
+
+/** Immutable observation of the controller/host work boundary.  Revision is
+ * advanced by every level transition; renderRevision identifies the render
+ * transaction and prevents an older completed frame from clearing a request
+ * published while that frame was in flight. */
+struct BOBOL_EXPORT BObolHostWorkSnapshot {
+    BObolHostWorkSnapshot(void);
+
+    uint64_t revision;
+    uint64_t renderRevision;
+    uint32_t flags;
+
+    SbBool pumpPending(void) const;
+    SbBool renderPending(void) const;
+    SbBool capacitySampleRequested(void) const;
+};
 
 /* Runs on the controller/host owner thread immediately before a scene is
  * rendered.  Producers may use it to apply thread-safe image-stream updates
@@ -412,6 +446,10 @@ public:
 	void *userData);
     void clearPresentationSyncCallback(void *userData);
     void synchronizePresentation(void);
+    /** Obtain the complete level-triggered host work contract in one atomic
+     * observation.  Hosts should keep their bounded service loop scheduled
+     * while either PUMP or RENDER remains asserted. */
+    BObolHostWorkSnapshot getHostWorkSnapshot(void) const;
     void clearRenderRequest(void);
     SbBool consumeRenderRequest(SbString *reason = NULL,
 	SbBool *lodCapacityRelevant = NULL);
@@ -867,6 +905,7 @@ private:
     void notifyFrameRequest(const char *reason);
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);
+    void resetDiscoveryPointProxyFloor(SbBool requestFrame);
     void invalidateDatabaseSourceLodState(void);
     void syncRenderManager(void);
     void advanceLodViewRevision(void);

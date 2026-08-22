@@ -798,6 +798,8 @@ BObolCompactLodProviderSummary::BObolCompactLodProviderSummary(void) :
 
 BObolCompactLodPlanningSummary::BObolCompactLodPlanningSummary(void) :
     valid(FALSE),
+    geometryRevision(0),
+    placementRevision(0),
     sourceContentHash(0),
     sourceFaceCount(0),
     sourcePointCount(0),
@@ -1586,7 +1588,6 @@ cad_wire_part_geometry_from_aabb(const SbBox3f &bounds,
     /* This helper is used only for the mesh LoD AABB threshold path. */
     geometry.subpixelProxyEligible = true;
     geometry.structuralProxy = true;
-    geometry.lodStructuralProxy = true;
     return 1;
 }
 
@@ -9409,7 +9410,6 @@ cad_part_key_for_geometry(const char *kind,
     hash.appendByte(geometry.shadedCullBackfaces ? 1 : 0);
     hash.appendByte(geometry.subpixelProxyEligible ? 1 : 0);
     hash.appendByte(geometry.structuralProxy ? 1 : 0);
-    hash.appendByte(geometry.lodStructuralProxy ? 1 : 0);
     hash.appendByte(geometry.conservativeBounds ? 1 : 0);
     if (geometry.conservativeBounds)
 	hash.appendBox(*geometry.conservativeBounds);
@@ -9674,7 +9674,6 @@ cad_vlist_part_geometry(const SoBRLVListShape *shape,
 	 * represented by one depth-tested pixel in this view. */
 	geometry.subpixelProxyEligible = true;
 	geometry.structuralProxy = true;
-	geometry.lodStructuralProxy = false;
     }
     return 1;
 }
@@ -10043,7 +10042,6 @@ cad_proxy_part_geometry(const BObolLodProxy &proxy,
      * collapse it into a view-local point when the entire proxy is subpixel. */
     geometry.subpixelProxyEligible = true;
     geometry.structuralProxy = true;
-    geometry.lodStructuralProxy = true;
     return 1;
 }
 
@@ -10457,6 +10455,9 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
     record.childName = cad_source_leaf_name(source);
     record.occurrenceIndex = source->occurrenceIndex.getValue();
     record.boolOp = cad_source_boolean_operation(source);
+    record.lodStructuralProxy =
+	payload->resultKind == BOBOL_LOD_RESULT_AABB ||
+	payload->resultKind == BOBOL_LOD_RESULT_PROXY;
     record.style = cad_source_style(source);
     Obol::InstanceUpdate update;
     update.instance = instanceId;
@@ -10583,7 +10584,8 @@ SoBRLDatabaseSource::getCompactViewLodSupersededFallbackCount(
 	 * structure and the root overview remain useful scene content, whereas
 	 * only an explicitly marked temporary LoD leaf fallback is an obligation
 	 * that may request further refinement. */
-	if (!entry.geometry || !entry.geometry->lodStructuralProxy)
+	if (!entry.lodBacked || !entry.geometry ||
+	    !entry.geometry->structuralProxy)
 	    continue;
 	const char *kind = entry.shapeSummary.geometryKind.getString();
 	if (!BU_STR_EQUAL(kind, "aabb") && !BU_STR_EQUAL(kind, "obb"))
@@ -10630,7 +10632,8 @@ SoBRLDatabaseSource::getCompactViewLodActiveFallbackCount(
 	/* See getCompactViewLodSupersededFallbackCount: only temporary LoD
 	 * fallback geometry drives convergence, not arbitrary AABB-like scene
 	 * content. */
-	if (!entry.geometry || !entry.geometry->lodStructuralProxy)
+	if (!entry.lodBacked || !entry.geometry ||
+	    !entry.geometry->structuralProxy)
 	    continue;
 	const char *kind = entry.shapeSummary.geometryKind.getString();
 	if (!BU_STR_EQUAL(kind, "aabb") && !BU_STR_EQUAL(kind, "obb"))
@@ -10978,6 +10981,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	uint8_t desiredChannels = assembly->compactPartChannels[entry.part];
 	bool desiredGeometryValid = false;
 	int desiredActiveCut = -1;
+	bool desiredLodStructuralProxy = entry.lodBacked &&
+	    entry.geometry && entry.geometry->structuralProxy;
 	if (payload) {
 	    payloadKey.reserve(
 		static_cast<size_t>(payload->cacheKey.getLength()) + 128u);
@@ -11155,6 +11160,13 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    desiredPart = entry.part;
 	    desiredChannels = assembly->compactPartChannels[entry.part];
 	    desiredActiveCut = -1;
+	    desiredLodStructuralProxy = entry.lodBacked &&
+		entry.geometry && entry.geometry->structuralProxy;
+	}
+	else if (payload) {
+	    desiredLodStructuralProxy =
+		payload->resultKind == BOBOL_LOD_RESULT_AABB ||
+		payload->resultKind == BOBOL_LOD_RESULT_PROXY;
 	}
 
 	/* Structural proxies and source meshes generally do not share a local
@@ -11188,7 +11200,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    (partChanged ||
 	     (!overviewGeometryOnly &&
 		presentation.geometryRevision != entry.geometryRevision) ||
-	     presentation.placementRevision != entry.placementRevision);
+	     presentation.placementRevision != entry.placementRevision ||
+	     presentation.lodStructuralProxy !=
+		desiredLodStructuralProxy);
 	if (partChanged) {
 	    if (presentation.activePart != entry.part &&
 		presentation.activePart != desiredPart)
@@ -11216,6 +11230,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    instances[i].record.part = desiredPart;
 	    instances[i].record.localToRoot = desiredLocalToRoot;
 	    instances[i].record.style = entry.style;
+	    instances[i].record.lodStructuralProxy =
+		desiredLodStructuralProxy;
 	    instances[i].record.lodCut = desiredActiveCut >= 0 ?
 		static_cast<uint8_t>(std::min<int>(
 		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
@@ -11232,6 +11248,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	     * newer selected style and the following selection revision is marked as
 	     * consumed without ever reaching the renderer. */
 	    update.record.style = entry.style;
+	    update.record.lodStructuralProxy =
+		desiredLodStructuralProxy;
 	    update.record.lodCut = desiredActiveCut >= 0 ?
 		static_cast<uint8_t>(std::min<int>(
 		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
@@ -11250,6 +11268,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    lodCutUpdates.push_back(update);
 	}
 	presentation.activeCut = desiredActiveCut;
+	presentation.lodStructuralProxy = desiredLodStructuralProxy;
 
 	if (incrementalUpdate) {
 	    const bool previousWire = previousChannels & (1u | 4u);
@@ -11400,7 +11419,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		assembly->partGeometry(record->part);
 	    if (geometry && geometry->structuralProxy) {
 		retainedStructural++;
-		if (geometry->lodStructuralProxy)
+		if (record->lodStructuralProxy)
 		    retainedLodStructural++;
 		const auto entryIndex =
 		    this->d->compactIndex->entryIndex.find(item.first);
@@ -11855,6 +11874,8 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
     record.boolOp = entry.booleanOperation ==
 	SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? 1 :
 	(entry.booleanOperation == SoBRLDatabaseSource::BOOLEAN_INTERSECT ? 2 : 0);
+    record.lodStructuralProxy = entry.lodBacked &&
+	geometry->structuralProxy;
     record.style = entry.style;
 
     Obol::InstanceUpdate update;
@@ -12048,7 +12069,8 @@ compact_merge_runtime_state(const BObolCompactInstanceIndex *current,
 		previous.presentationTransparencyValid;
 	    entry.presentationTransparency = previous.presentationTransparency;
 	    entry.geometryRevision = previous.geometryRevision;
-	    if (entry.part != previous.part)
+	    if (entry.part != previous.part ||
+		entry.lodBacked != previous.lodBacked)
 		entry.geometryRevision = compact_next_revision(
 		    entry.geometryRevision);
 	    entry.placementRevision = previous.placementRevision;
@@ -12066,7 +12088,12 @@ compact_merge_runtime_state(const BObolCompactInstanceIndex *current,
 	    entry.appearanceRevision = compact_next_revision(
 		entry.appearanceRevision);
 	if (i < next->instances.size())
+	{
 	    next->instances[i].record.style = entry.style;
+	    next->instances[i].record.lodStructuralProxy =
+		entry.lodBacked && entry.geometry &&
+		entry.geometry->structuralProxy;
+	}
 	compact_sync_shape_summary(entry);
 	if (!entry.visible)
 	    next->hiddenInstances.push_back(entry.instance);
@@ -12361,6 +12388,8 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 
     update.record.part = newPartId;
     update.record.localToRoot = matrix;
+    update.record.lodStructuralProxy = entry.lodBacked &&
+	geometry->structuralProxy;
     update.record.style = entry.style;
 
     index.partReferenceCounts[newPartId]++;
@@ -12413,15 +12442,19 @@ compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
 	return false;
 
     /* Source semantics become authoritative with the request, but the
-     * currently drawn geometry, proxy transform, placement, part, and runtime
-     * visibility/selection state remain untouched.
-     *
-     * This is a data-management contract change, not a drawable-geometry
-     * change.  Do not advance geometryRevision: doing so queues a redundant
-     * full InstanceRecord update for every enriched leaf even though the
-     * retained part, transform, bounds, style, and selection state are
-     * byte-for-byte unchanged.  markDisplayMeshLodDirty below independently
-     * makes the submit planner observe the new source request. */
+     * currently drawn arrays, proxy transform, placement, part, and runtime
+     * visibility/selection state remain untouched.  The unresolved-LoD role
+     * is nevertheless an occurrence presentation property: it must reach the
+     * retained assembly so convergence cannot mistake this box for authored
+     * geometry.  Advance the existing sparse record revision and let Obol's
+     * instance-attribute journal patch the one flag without rebuilding the
+     * shared part or frame plan. */
+    if (entryIdx < index.instances.size())
+	index.instances[entryIdx].record.lodStructuralProxy =
+	    entry.lodBacked && entry.geometry &&
+	    entry.geometry->structuralProxy;
+    entry.geometryRevision =
+	compact_next_revision(entry.geometryRevision);
     entry.shapeSummary.shapeKind = occurrence.summary.shapeKind;
     entry.shapeSummary.sourceType = occurrence.summary.sourceType;
     entry.shapeSummary.sourceId = occurrence.summary.sourceId;
@@ -16834,7 +16867,6 @@ compact_coverage_aabb_geometry(const SbBox3f &bounds,
 		return std::shared_ptr<const Obol::PartGeometry>();
 	    geometry.subpixelProxyEligible = true;
 	    geometry.structuralProxy = true;
-	    geometry.lodStructuralProxy = true;
 	    return std::make_shared<const Obol::PartGeometry>(
 		std::move(geometry));
 	}();
@@ -16861,7 +16893,6 @@ compact_coverage_overview_geometry(const SbBox3f &bounds)
      * remain a visible extent, not enter the leaf subpixel-point classifier. */
     geometry.subpixelProxyEligible = false;
     geometry.structuralProxy = true;
-    geometry.lodStructuralProxy = false;
     return std::make_shared<const Obol::PartGeometry>(std::move(geometry));
 }
 
@@ -19843,6 +19874,12 @@ SoBRLDatabaseSource::getCompactSourceRoutingId(void) const
     return this->d->routingId;
 }
 
+uint64_t
+SoBRLDatabaseSource::getCompactPopulationEpoch(void) const
+{
+    return this->d->compactPopulationEpoch;
+}
+
 SbBool
 SoBRLDatabaseSource::getCompactInstanceSummary(
     const BObolCompactInstanceHandle &handle,
@@ -20001,6 +20038,8 @@ SoBRLDatabaseSource::getCompactLodPlanningSummary(
 	this->d->compactIndex->entries[static_cast<size_t>(index)];
     summary.valid = TRUE;
     summary.sourceInstanceKey = compact_instance_identity(entry);
+    summary.geometryRevision = entry.geometryRevision;
+    summary.placementRevision = entry.placementRevision;
     if (entry.sourceMeshRequestValid) {
 	summary.sourceContentHash =
 	    entry.sourceMeshRequest.meshAssetContentHash;
@@ -21521,6 +21560,8 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    this->d->compactIndex->instances[index].record.part = partId;
 	    this->d->compactIndex->instances[index].record.localToRoot =
 		entry.localToSource;
+	    this->d->compactIndex->instances[index].record.lodStructuralProxy =
+		entry.lodBacked && geometry->structuralProxy;
 	}
     }
     this->d->compactIndex->partReferenceCounts[partId] += matching.size();

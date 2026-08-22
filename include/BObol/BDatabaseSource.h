@@ -308,6 +308,12 @@ struct BOBOL_EXPORT BObolCompactLodPlanningSummary {
 
     SbBool valid;
     SbString sourceInstanceKey;
+    /* Projection inputs change only with geometry/placement.  View-local
+     * planners use these fixed-width revisions to reuse projected evidence
+     * across policy-only passes without hashing strings or comparing
+     * matrices for every occurrence. */
+    uint64_t geometryRevision;
+    uint64_t placementRevision;
     uint64_t sourceContentHash;
     uint64_t sourceFaceCount;
     uint64_t sourcePointCount;
@@ -1227,6 +1233,10 @@ public:
     SbBool hasCompactInstanceKey(const char *occurrenceKey) const;
     /* Stable in-process owner token copied into compact LoD requests. */
     uint64_t getCompactSourceRoutingId(void) const;
+    /* Lifetime of the current dense compact-entry index.  Appends preserve
+     * this epoch; replacement/reinstallation advances it.  Together with the
+     * routing id it lets a view-local cache reject recycled entry indices. */
+    uint64_t getCompactPopulationEpoch(void) const;
     /**
      * Resolve the first compact occurrence matching a semantic path.
      *

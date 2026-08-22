@@ -61,8 +61,14 @@ qg_scene_delta_notify(struct ged *gedp, const struct ged_scene_delta *delta,
 	    ged_scene_delta_revision_before(delta) ||
 	ged_scene_delta_group_count(delta) > 0 ||
 	ged_scene_delta_shape_count(delta) > 0;
-    if (changed)
-	display->need_update(QG_VIEW_REFRESH);
+    if (changed) {
+	/* A scene delta changes the pixels represented by the retained scene; it
+	 * is not a camera refresh.  This distinction matters now that the canvas
+	 * may replay an immutable completed framebuffer: DRAWN requests one new
+	 * presentation, while REFRESH alone is allowed to reuse the completed
+	 * frame when camera synchronization finds no transform change. */
+	display->need_update(QG_VIEW_DRAWN);
+    }
     return changed;
 }
 
