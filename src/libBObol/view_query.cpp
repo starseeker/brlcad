@@ -12,6 +12,7 @@
 
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BViewController.h"
+#include "BObol/BViewStore.h"
 
 #include <Inventor/SbLine.h>
 #include <Inventor/SbViewVolume.h>

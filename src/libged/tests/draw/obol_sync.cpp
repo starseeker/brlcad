@@ -1387,7 +1387,13 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
     point_t view_center;
     bv_center_mat_get(view_center_mat, DRAW_TEST_BV_CONST(ged_draw_active_view_ctx(gedp)));
     MAT_DELTAS_GET_NEG(view_center, view_center_mat);
-    if (bv_size_get(DRAW_TEST_BV_CONST(ged_draw_active_view_ctx(gedp))) < 31.9 ||
+
+    /* The two occurrences span 32 model units in X.  A rotation-stable
+     * autoview cube must preserve that diameter, not apply the diameter on
+     * both sides of its center and silently double the view size. */
+    const fastf_t reuse_view_size =
+	bv_size_get(DRAW_TEST_BV_CONST(ged_draw_active_view_ctx(gedp)));
+    if (reuse_view_size < 31.9 || reuse_view_size > 32.1 ||
 	    fabs(view_center[X] - 3.0) > 0.1)
 	FAIL("GED multi-instance autoview should use transformed scene bounds");
 

@@ -331,6 +331,10 @@ set(
   columns.c
   db_index.cpp
   draw_obol.cpp
+  draw_obol_endpoint.cpp
+  draw_obol_geometry.cpp
+  draw_obol_overlay.cpp
+  draw_obol_scene_records.cpp
   ged_obol_pick_private.cpp
   ged_obol_polygon_private.cpp
   ged_obol_presentation_private.cpp
@@ -380,6 +384,10 @@ set(
 set(
   GED_OBOL_PRIVATE_BRIDGE_SOURCES
   draw_obol.cpp
+  draw_obol_endpoint.cpp
+  draw_obol_geometry.cpp
+  draw_obol_overlay.cpp
+  draw_obol_scene_records.cpp
   ged_scene_backend_obol.cpp
   ged_obol_pick_private.cpp
   ged_obol_polygon_private.cpp

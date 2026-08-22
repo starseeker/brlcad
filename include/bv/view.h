@@ -610,6 +610,11 @@ BV_EXPORT extern int bv_keypoint_set(struct bv *v, const point_t keypoint);
 BV_EXPORT extern int bv_current_point_get(point_t current_point, const struct bv *v);
 BV_EXPORT extern int bv_current_point_set(struct bv *v, const point_t current_point);
 
+/** Center on min/max and fit their rotation-invariant bounding sphere.
+ *
+ * The resulting horizontal view span also accounts for the current viewport
+ * aspect ratio, so every orientation of the supplied bounds remains visible.
+ */
 BV_EXPORT extern int bv_autoview_bounds(struct bv *v, fastf_t scale, const point_t min, const point_t max);
 BV_EXPORT extern int bv_screen_to_view(fastf_t *vx, fastf_t *vy, const struct bv *v, fastf_t sx, fastf_t sy);
 BV_EXPORT extern int bv_snap_grid_2d(const struct bv *v, fastf_t *vx, fastf_t *vy);

@@ -4,7 +4,12 @@ set(
   axes.cpp
   cad_assembly.cpp
   compact_occurrence_stream.cpp
+  database_source_cache.cpp
+  database_source_compact_access.cpp
+  database_source_interaction.cpp
   database_source.cpp
+  database_source_summary.cpp
+  database_source_types.cpp
   display_endpoint.cpp
   display_session.cpp
   draw_cache.cpp
@@ -47,12 +52,36 @@ set(
   source_realization.cpp
   view_attachment.cpp
   view_controller.cpp
+  view_controller_lighting.cpp
+  view_controller_progressive.cpp
+  view_controller_render.cpp
+  view_controller_scene.cpp
+  view_controller_private.h
+  view_lod_coordinator_state_private.h
   view_lod.cpp
   view_query.cpp
   view_store.cpp
   viewport_image.cpp
   vlist_shape.cpp
   window_host.cpp
+)
+
+# Keep responsibility-split database source units independently compilable.
+# Unity inclusion can otherwise conceal an accidental private dependency
+# between realization/mutation and read-only inspection.
+set_source_files_properties(
+  database_source_cache.cpp
+  database_source_compact_access.cpp
+  database_source_interaction.cpp
+  database_source.cpp
+  database_source_summary.cpp
+  database_source_types.cpp
+  view_controller.cpp
+  view_controller_lighting.cpp
+  view_controller_progressive.cpp
+  view_controller_render.cpp
+  view_controller_scene.cpp
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON
 )
 
 find_package(Obol CONFIG REQUIRED
@@ -114,9 +143,14 @@ cmakefiles(
   cad_assembly_private.h
   compact_occurrence_stream.cpp
   compact_occurrence_registry_private.h
+  database_source_cache.cpp
+  database_source_compact_access.cpp
+  database_source_interaction.cpp
   database_source.cpp
   database_source_private.h
   database_source_realization.h
+  database_source_summary.cpp
+  database_source_types.cpp
   display_endpoint.cpp
   display_session.cpp
   draw_cache.cpp
@@ -159,6 +193,12 @@ cmakefiles(
   source_realization.cpp
   view_attachment.cpp
   view_controller.cpp
+  view_controller_lighting.cpp
+  view_controller_private.h
+  view_controller_progressive.cpp
+  view_controller_render.cpp
+  view_controller_scene.cpp
+  view_lod_coordinator_state_private.h
   view_lod.cpp
   view_query.cpp
   view_store.cpp

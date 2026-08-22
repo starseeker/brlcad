@@ -4033,7 +4033,7 @@ BObolLodService::realizeResidentMeshLod(
     int64_t prefixLoadMicroseconds = 0;
     int64_t generationBuildMicroseconds = 0;
     int64_t preparedGeometryMicroseconds = 0;
-    int64_t legacyPayloadMicroseconds = 0;
+    int64_t directPayloadMicroseconds = 0;
     int residentCut = publishedCut;
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
     const auto populateInfoFromRetainedMesh = [&]() {
@@ -4205,8 +4205,9 @@ BObolLodService::realizeResidentMeshLod(
      * Prepare the renderer target on this worker for every CAD consumer, not
      * only compact occurrences.  Source-wide database nodes can adopt the
      * same immutable allocation and avoid rebuilding/copying mesh vectors on
-     * the GUI thread.  The legacy shape payload remains populated for the
-     * explicit SoBRLMeshShape route until that renderer is migrated.
+     * the GUI thread.  The vector payload remains populated for direct
+     * SoBRLMeshShape clients, which are a supported custom-scene API rather
+     * than part of the compact CAD occurrence route.
      */
     const int64_t preparedGeometryStarted = bu_gettime();
     result.preparedCadGeometry =
@@ -4252,25 +4253,25 @@ BObolLodService::realizeResidentMeshLod(
     growthReservation.release();
 
     if (request.occurrenceKey.getLength() == 0) {
-	const int64_t legacyPayloadStarted = bu_gettime();
+	const int64_t directPayloadStarted = bu_gettime();
 	if (!resident->mesh->copyCut(result.mesh, drawCut)) {
 	    return lod_provider_status_result(request,
 		BOBOL_LOD_PROVIDER_ERROR,
-		"resident mesh provider could not materialize legacy payload");
+		"resident mesh provider could not materialize direct shape payload");
 	}
-	legacyPayloadMicroseconds = std::max<int64_t>(
-	    0, bu_gettime() - legacyPayloadStarted);
+	directPayloadMicroseconds = std::max<int64_t>(
+	    0, bu_gettime() - directPayloadStarted);
     }
 
     if (loadNeeded && getenv("BOBOL_DRAW_TIMING"))
 	bu_log("[obol-timing] resident prefix %-24s cut=%d->%d "
 	       "load=%8.1f ms generation=%8.1f ms prepare=%8.1f ms "
-	       "legacy=%8.1f ms\n",
+	       "direct=%8.1f ms\n",
 	       name, publishedCut, residentCut,
 	       prefixLoadMicroseconds / 1000.0,
 	       generationBuildMicroseconds / 1000.0,
 	       preparedGeometryMicroseconds / 1000.0,
-	       legacyPayloadMicroseconds / 1000.0);
+	       directPayloadMicroseconds / 1000.0);
 
     const char *traceFilter = getenv("BOBOL_LOD_TRACE_OBJECT");
     if (traceFilter && traceFilter[0] &&

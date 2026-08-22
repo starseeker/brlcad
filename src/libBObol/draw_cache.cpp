@@ -52,7 +52,11 @@
 #define BOBOL_DRAW_PROXY_DISK_MAGIC 0x4f425058u /* OBPX */
 #define BOBOL_DRAW_PROXY_DISK_VERSION 1u
 #define BOBOL_DRAW_LOD_ASSET_DISK_MAGIC 0x4f424c41u /* OBLA */
-#define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 1u
+/* Version 1 mappings may have been poisoned when an already-transformed warm
+ * reference was reused as the representative of another PCA proof without
+ * composing transforms.  The record layout is unchanged, but those proofs
+ * are not trustworthy; invalidate them unconditionally. */
+#define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 2u
 #define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
 #define BOBOL_DRAW_MANIFEST_DISK_VERSION 10u
 
@@ -518,6 +522,20 @@ bobol_draw_lod_asset_disk_pack(std::vector<unsigned char> &buffer,
     if (!nameLength || !assetNameLength ||
 	assetNameLength >= BOBOL_DRAW_CACHE_LOD_ASSET_NAME_MAX)
 	return 0;
+    /* A canonical asset never needs a persisted reference to itself.  More
+     * importantly, a non-identity self mapping is impossible: applying it
+     * moves the authored arrays away from their own database coordinates.
+     * Reject this at the cache boundary so a future reuse-planner regression
+     * cannot poison every subsequent warm draw. */
+    if (nameLength == assetNameLength &&
+	memcmp(name, record->assetName, nameLength) == 0) {
+	for (size_t i = 0; i < 16; ++i) {
+	    const fastf_t expected = (i == 0 || i == 5 || i == 10 ||
+		i == 15) ? 1.0 : 0.0;
+	    if (fabs(record->assetToObject[i] - expected) > VUNITIZE_TOL)
+		return 0;
+	}
+    }
     directory *dp = db_lookup(validationDb, name, LOOKUP_QUIET);
     directory *assetDp = db_lookup(validationDb,
 	record->assetName, LOOKUP_QUIET);

@@ -1060,7 +1060,10 @@ test_visibility_census(void)
     census.setCount(sourceB, 2);
     if (!census.complete(sourceA) || census.complete(sourceB) ||
 	census.sourceCount(sourceA) != 3 ||
-	census.sourceCount(sourceB) != 2 || census.total() != 5) {
+	census.sourceCount(sourceB) != 2 || census.total() != 5 ||
+	!census.visible(sourceA, 0) || !census.visible(sourceA, 1) ||
+	census.visible(sourceA, 2) || !census.visible(sourceA, 3) ||
+	census.visible(sourceA, 4) || census.visible(sourceB, 0)) {
 	std::fprintf(stderr, "FAIL: completed visibility census\n");
 	return 1;
     }
@@ -1069,12 +1072,14 @@ test_visibility_census(void)
 	 * Replaying an identical delta is idempotent. */
     census.observe(sourceA, 4, 1, false);
     census.observe(sourceA, 4, 1, false);
-    if (census.sourceCount(sourceA) != 2 || census.total() != 4) {
+    if (census.sourceCount(sourceA) != 2 || census.total() != 4 ||
+	census.visible(sourceA, 1)) {
 	std::fprintf(stderr, "FAIL: exact visibility removal census\n");
 	return 1;
     }
     census.observe(sourceA, 4, 2, true);
-    if (census.sourceCount(sourceA) != 3 || census.total() != 5) {
+    if (census.sourceCount(sourceA) != 3 || census.total() != 5 ||
+	!census.visible(sourceA, 2)) {
 	std::fprintf(stderr, "FAIL: exact visibility restoration census\n");
 	return 1;
     }

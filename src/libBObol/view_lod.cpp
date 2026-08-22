@@ -1401,7 +1401,7 @@ BObolViewLodState::applySourceResultInternal(
     /* A compact entry index is meaningful only inside one installed source
      * population.  Reject stale results before they can update failure maps,
      * resident aliases, or an occurrence slot which happens to have reused
-     * the same semantic key.  Source-wide/legacy results carry no occurrence
+     * the same semantic key.  Source-wide/direct-node results carry no occurrence
      * and are intentionally outside this positional routing contract. */
     if (result.request.occurrenceKey.getLength() > 0 &&
 	result.request.sourceRoutingId != 0 &&
@@ -1544,7 +1544,7 @@ BObolViewLodState::applySourceResultInternal(
 	source->realizationIdentity.getValue().getLength() > 0 ?
 	source->realizationIdentity.getValue() : source->path.getValue();
     /* This field intentionally means a compact occurrence key, not the
-     * source-node key.  An empty value is a source-wide legacy binding that
+     * source-node key.  An empty value is a source-wide direct-node binding that
      * may fall back to a path; a nonempty value must never alias a sibling. */
     payload->sourceInstanceKey = result.request.occurrenceKey;
     payload->sourceBindingKey = sourceBindingKey.c_str();
@@ -1735,7 +1735,7 @@ BObolViewLodState::applySourceResultInternal(
      * They are resolved directly by every CAD planner and result consumer;
      * adding the same payload to cadBindings used to allocate another long
      * string/hash record per leaf and retained obsolete result aliases across
-     * refinement generations.  Keep aliases only for source-wide legacy
+     * refinement generations.  Keep aliases only for source-wide direct-node
      * results which genuinely need path/name lookup.
      */
     if (payload->sourceInstanceKey.getLength() == 0) {

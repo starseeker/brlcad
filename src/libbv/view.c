@@ -1575,6 +1575,7 @@ bv_autoview_bounds(struct bv *v, fastf_t scale, const point_t min, const point_t
     vect_t center = VINIT_ZERO;
     vect_t radial;
     vect_t sqrt_small;
+    fastf_t aspect;
 
     if (!bv_is_valid(v) || !min || !max)
 	return 0;
@@ -1591,9 +1592,20 @@ bv_autoview_bounds(struct bv *v, fastf_t scale, const point_t min, const point_t
 
     MAT_IDN(v->center);
     MAT_DELTAS_VEC_NEG(v->center, center);
-    v->scale = radial[X];
-    V_MAX(v->scale, radial[Y]);
-    V_MAX(v->scale, radial[Z]);
+
+    /* Autoview is expected to remain valid when the user rotates the view.
+     * Fitting only the largest axis of an AABB is not rotation invariant: a
+     * later oblique view can project the box diagonal outside the viewport.
+     * Historical display-list bounds usually hid this defect by supplying
+     * per-object bounding spheres.  Retained scenes correctly publish tight
+     * bounds, so establish the sphere contract here where all callers receive
+     * it.  Account for the view convention in which size is the horizontal
+     * span and the vertical span is size/aspect. */
+    v->scale = MAGNITUDE(radial);
+    aspect = (v->width > 0 && v->height > 0) ?
+	(fastf_t)v->width / (fastf_t)v->height : 1.0;
+    if (aspect > 1.0)
+	v->scale *= aspect;
     v->size = scale * v->scale;
     v->inverse_size = (v->size > 0.0) ? 1.0 / v->size : 0.0;
     return bv_update(v);

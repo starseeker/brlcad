@@ -1682,9 +1682,10 @@ validate_report()
 	rm -f "$surface_background" "$surface_mask"
 	# Scale the filled-area oracle with the usable canvas.  Fixed pixel counts
 	# became dependent on tool-panel width even when the model framebuffer was
-	# correct.  Generic Twin occupies comfortably more than five percent of
-	# this crop; CSG-only wires remain far below it.
-	local minimum_surface_pixels=$((surface_crop_width * surface_crop_height / 20))
+	# correct.  Rotation-invariant autoview framing keeps the complete target
+	# visible at every pose and leaves Generic Twin's thin side profile just
+	# above four percent of this crop; CSG-only wires remain far below it.
+	local minimum_surface_pixels=$((surface_crop_width * surface_crop_height / 25))
 	if [[ "$case_name" == "lucy" ]]; then
 	    minimum_surface_pixels=5000
 	fi

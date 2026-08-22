@@ -14,6 +14,12 @@
 #include <deque>
 #include <vector>
 
+/* Object-lifetime ids are allocated by database_source.cpp.  Keeping the
+ * allocation function out of line gives every responsibility-specific source
+ * unit one process-wide sequence, while the private Impl constructor remains
+ * inline and cannot become part of libBObol's dynamic ABI. */
+uint64_t database_source_handle_id(void);
+
 /*
  * Private source state is separated by responsibility while retaining direct
  * field storage.  SoBRLDatabaseSource::Impl inherits these non-polymorphic
@@ -133,5 +139,64 @@ struct BObolDatabaseSourceSensorState {
     SoFieldSensor *inputsRevisionSensor = NULL;
     SoFieldSensor *viewRevisionSensor = NULL;
 };
+
+/* Keep the complete source-private state visible to the responsibility-
+ * specific implementation units.  This is still an uninstalled PImpl; the
+ * split avoids accessor layers and extra indirection in compact occurrence
+ * hot paths. */
+struct SoBRLDatabaseSource::Impl :
+    BObolCadSourceState,
+    BObolCompactOccurrenceRegistryState,
+    BObolCadPresentationBridgeState,
+    BObolDatabaseSourceSensorState
+{
+    Impl(void) :
+	BObolCadSourceState(
+	    database_source_handle_id(), database_source_handle_id())
+    {
+    }
+};
+
+/* Shared implementation helpers used by the realization and inspection
+ * units.  They are hidden libBObol symbols, not an installed API. */
+SbString source_effective_instance_key(const SoBRLDatabaseSource *source);
+SbString source_effective_representation_key(
+    const SoBRLDatabaseSource *source);
+SbBox3f compact_part_geometry_bounds(
+    const std::shared_ptr<const Obol::PartGeometry> &geometry);
+SbBox3f database_source_transform_bounds(const SbBox3f &bounds,
+    const SbMatrix &matrix);
+SbString record_identity_with_revision(const char *identity,
+    uint32_t revision);
+const SbString &compact_instance_identity(
+    const BObolCompactInstanceEntry &entry);
+int database_source_float_different(float a, float b);
+int database_source_color_equal(const SbColor &a, const SbColor &b);
+int database_source_string_equal(const SbString &a, const char *b);
+std::string database_source_db_path_without_instance_suffixes(
+    const char *path);
+const char *database_source_skip_leading_slash(const char *path);
+std::string database_source_leaf_component(const SbString &path);
+uint64_t compact_next_revision(uint64_t revision);
+bool compact_style_equal(const Obol::InstanceStyle &a,
+    const Obol::InstanceStyle &b);
+Obol::InstanceStyle compact_effective_style(
+    const BObolCompactInstanceEntry &entry);
+SbBool compact_effective_authored_visibility(
+    const BObolCompactInstanceEntry &entry);
+SbBool compact_effective_highlight(
+    const BObolCompactInstanceEntry &entry);
+void compact_sync_shape_summary_state(BObolCompactInstanceEntry &entry);
+SbMatrix compact_mesh_asset_matrix(const SoBRLDatabaseSource *source,
+    const BObolCompactInstanceEntry &entry);
+Obol::InstanceStyle compact_entry_style_from_source(
+    const SoBRLDatabaseSource *source,
+    const BObolCompactInstanceEntry &entry,
+    SbBool selected, SbBool highlighted);
+SbBool node_is_source_placement_transform(const SoNode *node);
+void realized_vlist_shape_summary(const SoBRLVListShape *shape,
+    BObolRealizedShapeSummary &summary);
+void realized_mesh_shape_summary(const SoBRLMeshShape *shape,
+    BObolRealizedShapeSummary &summary);
 
 #endif /* LIBBOBOL_DATABASE_SOURCE_PRIVATE_H */

@@ -72,13 +72,10 @@ struct BObolCompactInstanceEntry {
     /* Source-local bounds of the retained part after localTransform. */
     SbBox3f sourceBounds;
     SoBRLCadAssembly::InstanceSemantic semantic;
-    /*
-     * The compact occurrence key is immutable after the entry is indexed.
-     * Keep it lazily materialized for the few legacy constructors that only
-     * supplied an InstanceId.  Presentation hot paths can then retain a
-     * reference instead of allocating one SbString copy per occurrence.
-     */
-    mutable SbString instanceKey;
+    /* The compact occurrence key is assigned before the entry is indexed and
+     * is immutable thereafter.  Presentation hot paths retain this value
+     * instead of allocating one SbString copy per occurrence. */
+    SbString instanceKey;
     /* Authored fields are the reusable source baseline.  Semantic scene
      * presentation rules are overlays and must never destroy that baseline:
      * an endpoint snapshot may replace or clear the overlay after a source

@@ -293,7 +293,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	return fail("autoview bounds failed");
     if (!bv_center_get(center, v) || !near_point(center, 1.0, 0.0, -1.0))
 	return fail("autoview center is incorrect");
-    if (!near_fastf(v->scale, 2.0) || !near_fastf(v->size, 4.0))
+    /* This view is 800x400, so its horizontal span must be twice the
+     * rotation-invariant radius in order for the vertical span to contain
+     * the same sphere. */
+    if (!near_fastf(v->scale, 2.0 * sqrt(12.0)) ||
+	!near_fastf(v->size, 4.0 * sqrt(12.0)))
 	return fail("autoview scale/size are incorrect");
     if (!bv_screen_to_model(model, v, 400.0, 200.0) || !near_point(model, 1.0, 0.0, -1.0))
 	return fail("screen center did not map to model center");

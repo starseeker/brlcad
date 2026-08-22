@@ -59,6 +59,7 @@
 
 #include "./ged_bobol_private.hpp"
 #include "./draw_obol_bridge_private.hpp"
+#include "./draw_obol_overlay_private.hpp"
 #include "./ged_draw_view_private.h"
 #include "./ged_private.h"
 
@@ -119,26 +120,6 @@ ged_obol_shared_view_controller_for_context(struct ged_view_context *view_ctx)
 {
     struct ged *gedp = ged_view_context_owner(view_ctx);
     return gedp ? ged_draw_obol_controller(gedp) : NULL;
-}
-
-
-static unsigned char
-ged_obol_rgb_channel(float value)
-{
-    if (value <= 0.0f)
-	return 0;
-    if (value >= 1.0f)
-	return 255;
-    return static_cast<unsigned char>(value * 255.0f + 0.5f);
-}
-
-
-static void
-ged_obol_rgb_from_color(const SbColor &color, unsigned char rgb[3])
-{
-    rgb[0] = ged_obol_rgb_channel(color.getValue()[0]);
-    rgb[1] = ged_obol_rgb_channel(color.getValue()[1]);
-    rgb[2] = ged_obol_rgb_channel(color.getValue()[2]);
 }
 
 

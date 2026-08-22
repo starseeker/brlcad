@@ -38,8 +38,10 @@ set(
   notes/libbobol_active_debt.md
   notes/libbobol_api_contract.md
   notes/libbobol_architecture.md
+  notes/libbobol_engineering_lessons.md
   notes/libbobol_lod_state_contract.md
   notes/libbobol_platform_threading_matrix.md
+  notes/obol_production_readiness.md
   notes/obol_endpoint_lifecycle.md
   notes/obol_framebuffer_protocol.txt
   notes/obol_grid_snap.txt
@@ -47,6 +49,11 @@ set(
   notes/obol_legacy_dependency_inventory.txt
   notes/obol_overlay_coverage.txt
   notes/obol_realization_coverage.txt
+  notes/qged_editing.md
+  notes/ObolHostWork.cfg
+  notes/ObolHostWork.tla
+  notes/obol_lod_control.cfg
+  notes/obol_lod_control.tla
   pre_BRL-CAD.bib
 )
 add_doc(documentation_DATA ".")

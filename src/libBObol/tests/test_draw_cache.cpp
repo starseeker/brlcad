@@ -509,6 +509,23 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
+    {
+	BObolDrawLodAssetRecord invalidSelf = lodAsset;
+	bu_strlcpy(invalidSelf.assetName, lod_copy_name,
+	    sizeof(invalidSelf.assetName));
+	VMOVE(invalidSelf.assetBoundsMin, invalidSelf.boundsMin);
+	VMOVE(invalidSelf.assetBoundsMax, invalidSelf.boundsMax);
+	if (bobol_draw_lod_asset_cache_store(dbip, lod_copy_name,
+		&invalidSelf) != BRLCAD_ERROR ||
+	    bobol_draw_lod_asset_cache_get(dbip, lod_copy_name,
+		&loadedLodAsset) != BRLCAD_OK ||
+	    bu_strcmp(loadedLodAsset.assetName, lod_asset_name) != 0) {
+	    printf("FAIL: transformed LoD self mapping rejection\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+    }
+
     if (bobol_draw_proxy_cache_status(dbip, objname,
 					BOBOL_LOD_PROXY_AABB, &status) != BRLCAD_OK ||
 	!status.directoryFound || status.hasCachedPayload) {

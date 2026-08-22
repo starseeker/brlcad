@@ -790,6 +790,14 @@ public:
 	return entry && entry->complete;
     }
 
+    bool visible(SourceKey source, size_t entryIndex) const
+    {
+	const Source *entry = this->find(source);
+	return entry && entry->complete &&
+	    entryIndex < entry->entryVisible.size() &&
+	    entry->entryVisible[entryIndex] != 0;
+    }
+
     size_t sourceCount(SourceKey source) const
     {
 	const Source *entry = this->find(source);

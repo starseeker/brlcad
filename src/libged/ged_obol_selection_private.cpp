@@ -84,17 +84,6 @@
 #include <utility>
 #include <vector>
 
-static const char *
-ged_obol_skip_leading_slash(const char *path)
-{
-    if (!path)
-	return "";
-    while (*path == '/')
-	path++;
-    return path;
-}
-
-
 static BObolViewController *
 ged_obol_view_controller_for_context(struct ged_view_context *view_ctx)
 {

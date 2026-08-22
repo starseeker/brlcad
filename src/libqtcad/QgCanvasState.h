@@ -378,6 +378,14 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 		    w->repaint();
 		else
 		    w->update();
+		/* Synchronizing the terminal HUD is allowed to create a fresh
+		 * presentation request (normally "view-feature-store").  That is
+		 * new level-triggered host work, so retain one timer witness until
+		 * a paint actually consumes it.  System GL update() can be coalesced
+		 * while a nested command/test event loop is active; retiring the
+		 * idle tail here used to strand both that request and a refinement
+		 * barrier waiting for the following completed frame. */
+		qgcanvas_queue_obol_progressive_update(s, w);
 	    }
 	    return;
 	}
