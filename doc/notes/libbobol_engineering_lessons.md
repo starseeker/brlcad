@@ -296,6 +296,22 @@ until the view/policy/population changes or materially greater capacity is
 proved.  Failures observed before the population closes may constrain that
 attempt, but must not poison the final event-driven static-quality pass.
 
+### Physical quality debt is not resident work
+
+Loading every pixel-demanded suffix helped a single large Lucy mesh refine,
+but made a performance-limited 150k scene repeatedly invalidate its closed
+population: each cache-result wave populated data which the current allocation
+could not draw and triggered another global allocation.  Suppressing all such
+loads instead stranded large meshes during active zoom.
+
+Rule: a quiet view loads only through the allocator-selected presentation cut.
+Keep finer physical demand as explicit quality debt so a later view or capacity
+revision can reconsider it.  Active scale interaction may prefetch one bounded
+transition past a stale allocation, subject to the normal worker and resident-
+memory limits; presentation still stops at the allocated cut.  Model physical
+debt separately from admitted resident work, and never report the former alone
+as a pending progress owner.
+
 ### Resumable rendering requires a closed scene population
 
 A 150k OSMesa frame often spends its deadline preparing the retained point,

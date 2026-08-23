@@ -189,6 +189,18 @@ changes.
   invalidate and rerun the scene allocation, producing the observed
   coarse/fine cycling.  A hard headroom miss is a negative witness, not a
   cancellation which may immediately re-arm the same population.
+- Preserve the allocated-residency boundary.  Quiet views load only through
+  the allocator-selected presentation cut; finer physical demand stays
+  recorded as quality debt until a view or capacity edge changes that
+  allocation.  Active scale interaction alone may prefetch one bounded
+  transition beyond it.  Unconstrained quiet prefetch made each 150k cache
+  result wave invalidate the closed population and rerun scene allocation,
+  while suppressing prefetch entirely stranded Lucy during zoom.  The focused
+  TLA+ model and submit-action test cover both sides of this rule.  Repeat the
+  complete cold/warm 50k/150k shaded/wire lifecycle on System GL and OSMesa
+  after the change.  Focused Lucy and 150k shaded-prefix rows pass, as do the
+  full certified-warm OSMesa 50k shaded and 150k shaded/wire lifecycles; 50k
+  wire, truly cold rows, and current System GL evidence remain outstanding.
 - Preserve the interrupted-presentation transaction boundary.  Once a CAD
   traversal has retained resumable preparation, owner-thread provider, result,
   compaction, and cut publication must remain frozen until the exact successor
@@ -221,20 +233,23 @@ changes.
   compact submission), and 11% to Obol.  Reduce repeated compact planning and
   static allocation transactions without relaxing the bounded owner-thread
   slices or treating the legitimate software raster cost as a logic defect.
-- Replace the current one-visible-occurrence-to-one-subpixel-point stream when
-  its measured cost becomes the limiting overview representation.  At 150k,
-  the terminal OSMesa scene still carries roughly 149k individual proxy points;
-  this is a single draw call, but not a bounded software-raster workload.
-  Add an Obol-owned, camera-local screen-bin proxy stream with deterministic
-  representative depth/color/emphasis, stable visible-occurrence-to-bin
-  bookkeeping, and a hard bin budget.  Semantic occurrence coverage,
-  selection, highlight, exact picking, and mesh-promotion eligibility must
-  remain per occurrence; a bin is presentation-only and may never erase those
-  identities.  Recompute only bins affected by sparse style/visibility deltas,
-  and force a fresh classification on camera/viewport changes.  Qualify dense
-  overlap, selected and highlighted parts, multi-color regions, wire and
-  shaded paths, and high-DPI resizing before enabling it under ordinary scale
-  policy.
+- Completed 2026-08-23: Obol retains the exact one-occurrence logical proxy
+  stream for coverage, selection, highlight, picking, and mesh-promotion
+  decisions, but the software renderer submits a cached camera-local screen-bin
+  stream.  The representative is deterministic (selected/hovered/color
+  emphasis, then nearest depth, then stable instance ID); ordinary GL retains
+  the full-density stream.  The software path uses one native screen pixel
+  where possible and expands bins only to honor its 32,768-point cap.  A 150k
+  OSMesa shaded warm interaction/selection/erase/redraw qualification passed
+  in 49 seconds with 148,619 logical proxies, 3,457 submitted proxy points,
+  zero boxes, convergence fraction 1, and a 97.0 ms terminal frame.  The 50k
+  OSMesa shaded cold/warm rows also pass in 51/40 seconds with roughly
+  46.7k/46.9k logical proxies, roughly 3.29k submitted points, zero boxes, and
+  convergence fraction 1.  The qged scale matrix now rejects
+  a high-cardinality OSMesa row unless its physical proxy count is nonzero,
+  lower than its logical coverage, and within the cap.  Repeat the broad
+  real-model, wire, dense-overlap, selected-color, HiDPI, and resize rows after
+  this renderer change before calling it release-qualified.
 - A current 150k OSMesa cold shaded profile records no single liveness hot
   loop: libBObol accounts for 34.4% of samples, libosmesa for 11.8%, and Obol
   for 8.3%.  The largest named source hot spot is parallel compact coverage

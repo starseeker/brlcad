@@ -74,8 +74,16 @@ public:
 		    this->pointProxyAssemblies.push_back(snapshot.assembly);
 		}
 		if (this->viewState)
-		    this->viewState->findCadPayloadsUnordered(
-			source, snapshot.payloads);
+		    /* The marginal allocator uses candidate position as its final
+		     * equal-value tie breaker.  A retained allocation may be retried
+		     * after a measured frame, so unordered-map iteration here would
+		     * select a different but budget-equivalent cut assignment on each
+		     * pass.  That churn is a visible mutation and can keep a static
+		     * large scene perpetually in its handoff cycle.  Allocation itself
+		     * is an intentionally infrequent O(scene) transaction; canonical
+		     * occurrence ordering is therefore the correct trade for a stable,
+		     * reproducible plan. */
+		    this->viewState->findCadPayloads(source, snapshot.payloads);
 		payloadCount = snapshot.payloads.size() >
 			SIZE_MAX - payloadCount ? SIZE_MAX :
 		    payloadCount + snapshot.payloads.size();

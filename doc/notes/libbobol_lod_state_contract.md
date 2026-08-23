@@ -53,9 +53,10 @@ pixel_extent[v,o]     projected screen extent in pixels
 error[a,c]            producer-certified object-space error at cut c
 screen_error[v,o,c]   error[a,c] * pixel_extent[v,o] / asset_extent[a]
 demand[v,o]           least admissible cut c with screen_error <= target
+allocated[v,o]        richest cut admitted by the current scene allocation
 active[v,o]           currently presented PoP cut, or NONE
 resident[a]           richest retained array prefix
-resident_target[v,a]  richest visible pixel demand for asset a in view v
+resident_target[v,a]  richest currently admitted resident cut for asset a
 drawable[a,c]         resident arrays contain all entries required by cut c
 faces[a,c]            cumulative face prefix for cut c
 scene_budget[v]       calibrated aggregate submitted-work allowance
@@ -163,9 +164,12 @@ will produce its first image.
   resident arrays are not evicted.  Pose-only input may hold richer worker
   publications to avoid command churn; zoom must apply them in bounded waves
   and request missing cumulative suffixes without ending the interaction.
-  Render-cost exhaustion does not prohibit a zoom suffix request: residency
-  is admitted by the independent worker working-set and resident-byte limits,
-  while the result publishes the currently affordable presentation cut.  A
+  Active zoom may request one bounded resident transition past a stale scene
+  allocation: worker working-set and resident-byte limits remain authoritative,
+  while the result publishes only the currently affordable presentation cut.
+  Quiet residency stops at `allocated`; physical `demand` remains quality
+  evidence for a later capacity or view revision, not permission to fill
+  memory with suffixes the current allocation cannot present.  A
   completed scale frame may expose one richer population before the next
   input event, using a bounded 10 Hz quality-frame allowance.  This remains
   active while wheel/trackpad events continue; it does not depend on the quiet
@@ -397,7 +401,7 @@ Every pending flag has exactly one progress witness:
 |---|---|---|
 | source realization | provider task or source callback | fallback or source data published |
 | minimum-mesh coverage | bounded compact-index cursor or full-rescan obligation | complete pass publishes visible/covered proof |
-| asset suffix | queued/in-flight/cache task | result applied or definitive failure |
+| admitted asset suffix | queued/in-flight/cache task | result applied or definitive failure |
 | applied result batch | adaptive timer, then exactly one requested frame | completed frame presents the batch |
 | resident retarget | guaranteed requested frame | cut presented |
 | budget blocked with measured headroom | guaranteed calibration frame | allowance grows or capacity is revised |
@@ -474,10 +478,11 @@ These must hold after every owner-thread transition:
 11. Cross-generation GPU prefix reuse requires an equal nonzero producer
     lineage; the ordinary and atlas upload counters must show no cumulative
     CPU re-upload while such a stream grows.
-12. Scene render-cost admission governs `active`, never `resident_target`.
-    Zoom residency is bounded by worker and resident-memory admission, and a
-    prefetched result may not raise `active` above its independently reserved
-    presentation cut.
+12. Scene render-cost admission governs `allocated` and `active`.  Quiet
+    `resident_target` is bounded by `allocated`; active scale interaction may
+    raise it by one bounded transition while the allocation catches up.  Worker
+    and resident-memory admission remain independent authorities, and a
+    prefetched result may not raise `active` above `allocated`.
 13. Active camera input never rewrites retained occurrence cuts downward.
     Responsiveness pressure changes the renderer-wide effective cut; quiet
     admission and memory maintenance are the only cut/retention authorities.
@@ -487,10 +492,12 @@ These must hold after every owner-thread transition:
     adoption; a representation-derived union may be used only before the
     certification exists.  Cache state, publication order, and renderer
     cadence cannot alter the final camera.
-15. Wanting a richer retained cut is not a progress witness.  A pending phase
+15. Wanting a richer physical cut is not a progress witness.  A pending phase
     must name a task, result, bounded cursor, timer, or presentation frame which
-    can discharge it; otherwise the current performance-limited cut is a stable
-    terminal state until a new view, resource, or residency edge arrives.
+    can discharge admitted work; otherwise the current performance-limited cut
+    is a stable terminal state until a new view, resource, or residency edge
+    arrives.  Known physical quality debt may therefore coexist with a quiet,
+    constrained terminal state.
 16. A renderer may report persistent atlas-admission pressure in a terminal
     memory-limited state.  That state is legal only with complete coverage, a
     view-ready convergence proof, no pending visual work, and a coherent
@@ -658,7 +665,7 @@ GPU upload, and memory pressure.  Passing one does not imply passing the other.
 | GL state | deep before/after state sentinel on every exercised System GL and OSMesa route, with apitrace for any failure |
 | wire parity | shaded/wire active-cut and image matrix |
 | selection/edit | hierarchy selection, erase/redraw, promotion/demotion, and picking tests |
-| liveness | exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness or stable-with-affordable-next states |
+| liveness | `ObolHostWork.tla` and `ObolLodConvergence.tla` TLC checks; exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness or stable-with-affordable-next states |
 
 The GUI runner is permitted to use generous wall-clock time for cold asset
 construction, but it must not use that generosity to accept a terminal box,

@@ -12338,7 +12338,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 }
 
 static int
-test_allocated_presentation_allows_resident_prefetch(void)
+test_allocated_presentation_bounds_resident_prefetch(void)
 {
     char cacheDir[MAXPATHLEN] = {0};
     char dbpath[MAXPATHLEN] = {0};
@@ -12502,9 +12502,10 @@ test_allocated_presentation_allows_resident_prefetch(void)
 	prefetchSubmit.setGeneration(service.beginGeneration());
 		prefetchSubmit.setRevisions(31, 41);
 		prefetchSubmit.setAllowResidentPrefetch(TRUE);
+		prefetchSubmit.setAllowResidentPrefetchPastAllocation(TRUE);
 		/* Exercise the controller's retained minimax allocation route.  Its
-		 * presentation decision must not suppress independent immutable suffix
-		 * residency when zoom demand exceeds the current prefix. */
+		 * quiet presentation decision bounds residency, but active zoom may
+		 * fetch one transition beyond it while the allocation catches up. */
 		prefetchSubmit.setRetainedSceneUpgradeCostBudget(0);
 		/* Active zoom must publish a bounded resident band instead of hiding one
 		 * monolithic jump to the final pixel-demanded prefix. */
@@ -12571,8 +12572,11 @@ test_allocated_presentation_allows_resident_prefetch(void)
 	    }
 
 	    if (!ret) {
-		/* Quiet convergence may now fetch the remaining demanded suffix in
-		 * one task, still without changing the allocated draw cut. */
+		/* Quiet convergence records the remaining physical-quality debt but
+		 * must not fetch past the cut selected by the scene allocator.  A
+		 * capacity probe may later enlarge that allocation; until then, loading
+		 * the suffix cannot improve a frame and only restarts population-wide
+		 * convergence. */
 		SoBRLMeshLodSubmitAction completePrefetch;
 		completePrefetch.setService(&service);
 		completePrefetch.setViewLodState(&viewState);
@@ -12586,49 +12590,16 @@ test_allocated_presentation_allows_resident_prefetch(void)
 		completePrefetch.setRefinementCostBudget(0);
 		completePrefetch.apply(root);
 		std::vector<BObolLodResult> completeResults;
-		if (completePrefetch.getSubmittedTaskCount() != 1 ||
-		    wait_for_service(service) ||
-		    service.drainResults(completeResults) != 1 ||
-		    completeResults.size() != 1 ||
-		    completeResults[0].geometry.activeCut != presentationCut ||
-		    !completeResults[0].progressiveMesh ||
-		    !completeResults[0].progressiveMesh->canDrawCut(
-			completeResults[0].request.requestedCut) ||
-		    !viewState.applySourceResult(source, completeResults[0])) {
-		    printf("FAIL: quiet resident prefetch did not complete the "
-			   "pixel-demanded suffix\n");
-		    ret = 1;
-		}
-	    }
-
-	    if (!ret) {
-		/* A resident suffix behind a finite allocation remains actionable
-		 * quality debt.  Treating the allocated cut as fully satisfied strands
-		 * warm-cache views at the conservative bootstrap allowance: there is no
-		 * worker result, cut mutation, or frame barrier left to teach the scene
-		 * allocator about the cheap retained presentation. */
-		SoBRLMeshLodSubmitAction capacitySubmit;
-		capacitySubmit.setService(&service);
-		capacitySubmit.setViewLodState(&viewState);
-		capacitySubmit.setDatabase(dbip,
-		    "db://allocated-prefetch-test", 2026);
-		capacitySubmit.setViewInfo(&view);
-		capacitySubmit.setViewVolume(&volume, 0.001f);
-		capacitySubmit.setGeneration(service.beginGeneration());
-		capacitySubmit.setRevisions(31, 41);
-		capacitySubmit.setAllowResidentPrefetch(TRUE);
-		capacitySubmit.setRefinementCostBudget(0);
-		capacitySubmit.apply(root);
-		if (capacitySubmit.getSubmittedTaskCount() != 0 ||
-		    capacitySubmit.getSkippedMeshCount() != 1 ||
-		    capacitySubmit.getPendingRetainedRefinementCount() != 1 ||
-		    capacitySubmit.getRefinementBudgetBlockedCount() != 1) {
-		    printf("FAIL: resident allocated cut hid actionable capacity debt "
-			   "(tasks=%u skipped=%u pending=%u blocked=%u)\n",
-			   capacitySubmit.getSubmittedTaskCount(),
-			   capacitySubmit.getSkippedMeshCount(),
-			   capacitySubmit.getPendingRetainedRefinementCount(),
-			   capacitySubmit.getRefinementBudgetBlockedCount());
+		if (completePrefetch.getSubmittedTaskCount() != 0 ||
+		    service.drainResults(completeResults) != 0 ||
+		    !completeResults.empty() ||
+		    completePrefetch.getSkippedMeshCount() != 1 ||
+		    completePrefetch.getPendingRetainedRefinementCount() != 1) {
+		    printf("FAIL: allocated quiet cut did not bound resident "
+			   "prefetch (tasks=%u skipped=%u pending=%u)\n",
+			   completePrefetch.getSubmittedTaskCount(),
+			   completePrefetch.getSkippedMeshCount(),
+			   completePrefetch.getPendingRetainedRefinementCount());
 		    ret = 1;
 		}
 	    }
@@ -13158,7 +13129,7 @@ main(int argc, char **argv)
 	return 1;
     if (runIsolated(test_compact_aabb_stream_upgrade))
 	return 1;
-    if (runIsolated(test_allocated_presentation_allows_resident_prefetch))
+    if (runIsolated(test_allocated_presentation_bounds_resident_prefetch))
 	return 1;
     if (runIsolated(test_compact_mesh_lod_projection_and_mode_parity))
 	return 1;

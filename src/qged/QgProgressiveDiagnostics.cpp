@@ -799,6 +799,7 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     };
     std::vector<CadVisualOutlier> cadVisualOutliers;
     qint64 activeCadSubpixelProxyPoints = 0;
+    qint64 activeCadSubpixelProxyDrawPoints = 0;
     qint64 visibleStructuralFallbackBoxes = 0;
     qint64 cadOccurrenceTerminalFailures = 0;
     qint64 presentedCadFaces = 0;
@@ -885,6 +886,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		    presentation->selectedInstanceCount());
 		activeCadSubpixelProxyPoints += static_cast<qint64>(
 		    presentation->lastSubpixelProxyCount());
+		activeCadSubpixelProxyDrawPoints += static_cast<qint64>(
+		    presentation->lastSubpixelProxyDrawPointCount());
 		cadPointProxyPixelThresholdMax = std::max(
 		    cadPointProxyPixelThresholdMax,
 		    static_cast<double>(
@@ -1353,6 +1356,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	activeProgressiveCadPoints);
     sample.insert(QStringLiteral("active_cad_subpixel_proxy_points"),
 	activeCadSubpixelProxyPoints);
+    sample.insert(QStringLiteral("active_cad_subpixel_proxy_draw_points"),
+	activeCadSubpixelProxyDrawPoints);
     sample.insert(QStringLiteral("cad_point_proxy_pixel_threshold_max"),
 	cadPointProxyPixelThresholdMax);
     sample.insert(QStringLiteral("visible_structural_fallback_boxes"),

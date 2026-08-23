@@ -21,6 +21,39 @@ remains open.
 
 Recently completed focused evidence:
 
+- 2026-08-23 Lucy/large-scene convergence ownership: the focused
+  `ObolLodConvergence.tla` model checks two interrupting input epochs for both
+  workload profiles, exclusive progress ownership, pending-work witnesses,
+  constrained quality debt, and eventual quiet stability.  TLC exhaustively
+  generated 562 states (355 distinct) with no safety or liveness failure.  The
+  source-level rule derived from the model caps quiet residency at the current
+  scene allocation while allowing active scale interaction one bounded
+  prefetch transition.  The previously stagnant certified-warm 150k OSMesa
+  shaded prefix now completes in 32.2 seconds with exact 150,001-occurrence
+  classification, 3,402 mesh payloads, 146,599 logical proxies, 228,211 active
+  faces, about 21.2 MiB resident mesh data, zero structural boxes, and no
+  pending work.  The matching Lucy smooth-zoom lifecycle completes in 27.1
+  seconds, refines during active zoom, returns to 559,494 faces, and compacts
+  resident mesh data from about 22.0 to 6.15 MiB while zoomed out before
+  restoring it.  The full certified-warm OSMesa lifecycles also pass for 50k
+  shaded in 60.6 seconds and 150k shaded/wire in 56.8/86.8 seconds, including
+  interaction, selection, exact erase/redraw, exact occurrence coverage, zero
+  boxes, and zero pending/stagnant work.  Repeat 50k wire, truly cold rows, and
+  the complete System GL matrix before release.
+
+- 2026-08-23 bounded software-proxy presentation: logical subpixel-proxy
+  coverage remains per occurrence in `SoCADAssembly`, while the OSMesa
+  renderer caches a deterministic camera-local screen-bin stream for physical
+  submission.  A current 150k shaded warm interaction, selection, erase, and
+  redraw row passed in 49 seconds with 148,619 logical proxies, 3,457 submitted
+  proxy points, zero structural boxes, convergence fraction 1, and a 97.0 ms
+  terminal frame.  The matching 50k OSMesa shaded cold/warm rows passed in
+  51/40 seconds with roughly 46.7k/46.9k logical proxies and roughly 3.29k
+  submitted points.  The new qged metric and scale guard keep semantic coverage
+  distinct from physical draw cost.  This is a focused renderer qualification;
+  rerun the complete OSMesa and System GL real-model/scale matrices, including
+  wire, dense overlap, selected color, HiDPI, and resize, before release.
+
 - 2026-08-23 pending allocator requalification: the scene allocator now admits
   modest point-eligible occurrences jointly with mesh cuts, rather than making
   every 12-pixel part a mandatory mesh before visually dominant parts can
@@ -225,7 +258,8 @@ occupy a meaningful fraction of the overall vehicle extent.
 - shared-stack ASan/UBSan including active worker teardown, cache corruption,
   endpoint replacement, plugin reload, edit cancellation, and rapid view close;
 - TSan/LSan on a compatible native worker;
-- focused TLC checks for host work and occurrence publication.
+- focused TLC checks for host work, occurrence publication, and bounded
+  Lucy/large-scene convergence ownership.
 
 ## qged graphical control matrix
 

@@ -1,6 +1,6 @@
 # BRL-CAD Obol drawing architecture
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 
 This is the entry point for the production drawing architecture shared by
 qged, MGED, gsh, Archer, rtwizard, and other GED clients.  Intermediate branch
@@ -26,8 +26,9 @@ Read these documents in this order:
 8. `libbobol_engineering_lessons.md` records resolved failures whose causes and
    guards must not be rediscovered.
 
-`ObolHostWork.tla` and `obol_lod_control.tla` are focused control-plane models.
-They do not model mesh arrays, rendering, or numeric resource policy.
+`ObolHostWork.tla`, `obol_lod_control.tla`, and `ObolLodConvergence.tla` are
+focused control-plane models.  They do not model mesh arrays, rendering,
+numeric resource policy, or workload cardinality.
 
 The older `brl_obol_*`, `obol_*_coverage`, and archived TODO documents are
 historical design and migration evidence.  They may explain why a test exists,
@@ -81,6 +82,17 @@ resources, picking primitives, and exact execution of the cut selected by
 libBObol.  `SoCADAssembly` does not independently choose CAD LoD or infer
 quality from a cut number.  It consumes producer-certified populations and
 reports completed-frame cost and resource evidence.
+
+`SoCADAssembly`'s subpixel classifier also remains semantic: it stores one
+logical point record per collapsed occurrence, which preserves exact coverage,
+selection, highlighting, picking, and later mesh promotion.  Only the
+software renderer may replace that immutable logical stream with a cached,
+camera-local screen-bin presentation stream.  Its deterministic representative
+priority is selected/hovered/color-emphasized, nearest depth, then stable
+instance ID; bins start at native-pixel resolution and grow only enough to
+honor the software point cap.  Hardware GL consumes the logical stream
+directly.  The physical submitted-point count is diagnostic-only and must
+never be used as LoD coverage or selection state.
 
 Obol may accept application-provided picking or scene extensions through
 documented capability seams, but must not depend directly on librt types.
@@ -196,6 +208,12 @@ terminal reason, and the exact current frame has been acknowledged.
   witnessed discrete terminal tiers.
 - Non-visible assets may release resident suffixes under memory pressure while
   preserving semantic intent and reusable cache identity.
+- Quiet resident demand stops at the allocator-selected presentation cut.
+  Finer physical pixel demand remains quality evidence, but cannot repeatedly
+  populate suffixes which the current scene allocation cannot present.  Active
+  scale interaction may prefetch one bounded transition past a stale allocation
+  so a large mesh can refine while zooming; the next allocation remains the
+  authority over its visible cut.
 - Structural boxes are unresolved/failure fallbacks, not a routine motion LoD.
 - Subpixel aggregation is a terminal representation only when exact coverage,
   visibility classification, and the applicable performance or memory limit
@@ -237,12 +255,17 @@ terminal reason, and the exact current frame has been acknowledged.
 ## Formal and executable proof boundaries
 
 The complete renderer is intentionally not modeled formally.  The focused
-models cover two concurrency seams that have produced real failures:
+models cover three control seams that have produced real failures:
 
 - `obol_lod_control.tla`: fallback identity, payload publication, repair
   admission, and render acknowledgement;
 - `ObolHostWork.tla`: level-triggered controller work, toolkit notification,
-  frame revision capture, and eventual quiescence.
+  frame revision capture, and eventual quiescence;
+- `ObolLodConvergence.tla`: exclusive progress ownership across bounded
+  coverage, resident loading, allocation, result handoff, and frame
+  acknowledgement for both a large single mesh and a many-occurrence scene.
+  It proves eventual quiescence after finite input, including the valid case
+  where a constrained terminal allocation retains known physical-quality debt.
 
 TLC counterexamples must be converted into source-level invariants and focused
 tests.  ASan/UBSan, fake-clock coordinator exploration, graphical event replay,

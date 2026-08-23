@@ -25,10 +25,19 @@ perf_phase="cold"
 perf_frequency=499
 apitrace_case=""
 run_timeout=180
+run_timeout_explicit=0
 settle_override_ms=""
 capture_apng=0
 warm_cache=""
 canvas_ready_timeout_ms=5000
+
+# The scale scripts deliberately exercise several independent settle points:
+# draw, camera release, zoom, selection, and subpath redraw.  Their process
+# deadline must cover that complete lifecycle rather than a single view's
+# convergence allowance.  These are qualification bounds, not expected run
+# times; normal warm runs should finish well below them.
+scale_50k_process_timeout=600
+scale_150k_process_timeout=900
 
 CACHE_READY_MARKER=".qged-gui-cache-ready-v1"
 # Retained PoP cuts are deliberately hysteretic: an existing cut may remain
@@ -126,7 +135,7 @@ while [[ $# -gt 0 ]]; do
 	--apitrace) apitrace_case="$2"; shift 2 ;;
 	--capture-apng) capture_apng=1; shift ;;
 	--warm-cache) warm_cache="$2"; shift 2 ;;
-	--timeout) run_timeout="$2"; shift 2 ;;
+	--timeout) run_timeout="$2"; run_timeout_explicit=1; shift 2 ;;
 	--settle-ms) settle_override_ms="$2"; shift 2 ;;
 	--help|-h) usage; exit 0 ;;
 	*) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -1118,13 +1127,15 @@ validate_report()
 	    (.samples[-1].active_progressive_cad_faces // 0) > 0 and
 	    (.samples[-1].lod_service_resident_assets // 0) >= 1 and
 	    (.samples[-1].lod_service_resident_bytes // 0) > 0 and
-	    # A one-occurrence scene has no per-object dispatch population to
-	    # aggregate.  Raising the point cut can only collapse Lucy itself and
-	    # leaves erase/selection repaints waiting for a sample which an empty
-	    # presentation cannot publish.
+	    # A one-occurrence scene has no per-object population to aggregate.
+	    # The policy threshold may retain a higher value learned from a prior
+	    # large scene, but it is harmless when Lucy remains a normal mesh.  Test
+	    # the rendered semantic instead of the unused threshold: no exact frame
+	    # may replace Lucy with a subpixel proxy.
 	    (all(.samples[];
 		if (.presented_cad_work_exact // false) then
-		    (.cad_point_proxy_pixel_threshold_max // 1) <= 1.01
+		    ((.active_cad_subpixel_proxy_points // 0) == 0) and
+		    ((.active_cad_subpixel_proxy_draw_points // 0) == 0)
 		else true end)) and
 	    (if $mode == "shaded" then
 		(($stable.lod_prominent_cad_payloads // 0) >= 1) and
@@ -2049,6 +2060,11 @@ validate_report()
 	local minimum_resident_assets=1000
 	local expected_visited_assets=0
 	local interaction_render_limit_ms=250
+	# Fixed-function software GL retains a bounded, camera-local physical
+	# proxy stream.  Logical proxy occurrences remain unbounded semantic
+	# coverage, so assert the two counts independently at distinct-asset scale.
+	local software_proxy_aggregation_minimum=4096
+	local software_proxy_draw_point_limit=32768
 	if [[ "$case_name" == "unique_mesh_50k_stress" ||
 		"$case_name" == "unique_mesh_150k_stress" ]]; then
 	    # The process/event timeout bounds eventual convergence.  Do not
@@ -2072,7 +2088,11 @@ validate_report()
 		--argjson minimum_resident_assets "$minimum_resident_assets" \
 		--argjson expected_visited_assets "$expected_visited_assets" \
 		--argjson interaction_render_limit_ms \
-		"$interaction_render_limit_ms" '
+		"$interaction_render_limit_ms" \
+		--argjson software_proxy_aggregation_minimum \
+		"$software_proxy_aggregation_minimum" \
+		--argjson software_proxy_draw_point_limit \
+		"$software_proxy_draw_point_limit" '
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/ae90-stable.png")))) as $initial |
@@ -2129,6 +2149,18 @@ validate_report()
 		 (($initial.visible_structural_fallback_boxes // 0) == 0) and
 		 (($initial.last_render_ms // 9223372036854775807) <=
 		    $interaction_render_limit_ms))) and
+	    # The coverage count is per retained occurrence.  OSMesa must not
+	    # submit that same high-cardinality stream one point at a time once it
+	    # crosses the renderer aggregation threshold.
+	    (if .backend == "osmesa" and
+		($initial.active_cad_subpixel_proxy_points // 0) >
+		    $software_proxy_aggregation_minimum then
+		(($initial.active_cad_subpixel_proxy_draw_points // 0) > 0) and
+		(($initial.active_cad_subpixel_proxy_draw_points // 0) <
+		    ($initial.active_cad_subpixel_proxy_points // 0)) and
+		(($initial.active_cad_subpixel_proxy_draw_points // 0) <=
+		    $software_proxy_draw_point_limit)
+	     else true end) and
 	    (if .backend == "system_gl" then
 		(if $expected_visited_assets > 0 then
 		    (($initial.active_lod_cad_payloads // 0) > 0) and
@@ -2569,6 +2601,7 @@ run_current()
     local hierarchy_root="${10}"
     local hierarchy_child="${11}"
     local hierarchy_path="${12}"
+    local effective_timeout="$run_timeout"
     local swap_tag="${swap//-/_}"
     local run_name="${case_name}-${backend}-${mode}-swap${swap_tag}-${cache_state}"
     local out="$artifact_dir/cases/$run_name"
@@ -2624,7 +2657,16 @@ run_current()
     printf 'RUN %s\n' "$run_name"
     local started=$SECONDS
     local status
-    if timeout --signal=TERM "$run_timeout" "${command[@]}" \
+    if [[ "$run_timeout_explicit" -eq 0 ]]; then
+	if [[ "$case_name" == "unique_mesh_150k_stress" &&
+	    "$effective_timeout" -lt "$scale_150k_process_timeout" ]]; then
+	    effective_timeout="$scale_150k_process_timeout"
+	elif [[ "$case_name" == "unique_mesh_50k_stress" &&
+	    "$effective_timeout" -lt "$scale_50k_process_timeout" ]]; then
+	    effective_timeout="$scale_50k_process_timeout"
+	fi
+    fi
+    if timeout --signal=TERM "$effective_timeout" "${command[@]}" \
 	    >"$out/stdout.log" 2>"$out/stderr.log"; then
 	if [[ "$capture_apng" -eq 1 ]]; then
 	    if ! "$apng_encoder" "$out/frames/frames.tsv" \

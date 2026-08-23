@@ -4647,6 +4647,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
     action.setAllowResidentPrefetch(
 	    (scaleInteraction || quietCoveredPrefetch) &&
 	    !this->d->lodFrameObligation.pending() ? TRUE : FALSE);
+    action.setAllowResidentPrefetchPastAllocation(scaleInteraction);
 	action.setAllowRepresentationRefinement(
 	    scaleDemandChanged &&
 	    !this->d->lodResidentGrowthResidencyDrainActive &&
@@ -7199,6 +7200,15 @@ BObolViewController::isLodScaleChangingInteraction(void) const
 float
 BObolViewController::getLodTargetPixelError(void) const
 {
+    /* The controller stores the policy's base target.  Projection applies
+     * view.lod.scale to that target before selecting a PoP cut, so callers
+     * reporting the active quality contract must observe the same physical
+     * error rather than the unscaled policy input. */
+    struct bv_view_info view = BV_VIEW_INFO_INIT;
+    if (this->getViewInfo(&view) && std::isfinite(view.lod.scale) &&
+	view.lod.scale > 0.0)
+	return this->d->lodTargetPixelError /
+	    static_cast<float>(view.lod.scale);
     return this->d->lodTargetPixelError;
 }
 

@@ -662,6 +662,8 @@ public:
      * cuts may track scale changes immediately; pose-only interaction keeps
      * its current cuts unless measured frame pressure requires coarsening. */
     SbBool isLodScaleChangingInteraction(void) const;
+    /** Return the current per-object physical pixel-error demand after the
+     * view's user LoD scale has been applied. */
     float getLodTargetPixelError(void) const;
     int getLodInteractiveProgressiveCeiling(void) const;
     /** Configure aggregate scene frame-rate goals.  Projected per-object

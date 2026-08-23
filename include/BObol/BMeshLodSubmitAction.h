@@ -101,12 +101,18 @@ public:
      * which actually satisfies targetPixelError. */
     void setCutHysteresisEnabled(SbBool enabled);
     SbBool getCutHysteresisEnabled(void) const;
-    /* Permit a zoom-in pass to request a missing pixel-demanded cache suffix
-     * even when the aggregate render-cost budget cannot expose it yet.
-     * Worker working-set and resident-memory admission remain authoritative;
-     * this only separates residency from presentation cost. */
+    /* Permit a pass to request a missing suffix up to its current allocated
+     * presentation cut.  Worker working-set and resident-memory admission
+     * remain authoritative. */
     void setAllowResidentPrefetch(SbBool allow);
     SbBool getAllowResidentPrefetch(void) const;
+    /* Active scale interaction may prefetch one bounded transition beyond a
+     * stale/conservative allocation so zoom does not magnify a fixed coarse
+     * prefix.  Quiet views leave this disabled: unconstrained physical demand
+     * remains quality debt, not permission to fill memory with cuts the scene
+     * allocator cannot present. */
+    void setAllowResidentPrefetchPastAllocation(SbBool allow);
+    SbBool getAllowResidentPrefetchPastAllocation(void) const;
     /* Bound upward occurrence-cut admission to the renderer's current
      * presentation ceiling.  Existing richer cuts are retained and hidden by
      * the renderer; a negative value disables the bound. */
@@ -285,6 +291,7 @@ private:
     SbBool allowRetainedRefinement;
     SbBool cutHysteresisEnabled;
     SbBool allowResidentPrefetch;
+    SbBool allowResidentPrefetchPastAllocation;
     int refinementCutCeiling;
     SbBool allowRepresentationRefinement;
     SbBool preserveMeshCoverage;
