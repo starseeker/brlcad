@@ -52,6 +52,8 @@ set(
   notes/qged_editing.md
   notes/ObolHostWork.cfg
   notes/ObolHostWork.tla
+  notes/ObolLodConvergence.cfg
+  notes/ObolLodConvergence.tla
   notes/obol_lod_control.cfg
   notes/obol_lod_control.tla
   pre_BRL-CAD.bib

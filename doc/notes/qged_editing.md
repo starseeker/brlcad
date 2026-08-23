@@ -1,6 +1,6 @@
 # QGED object and primitive editing
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 
 This document defines the remaining production work for qged object, primitive,
 and sketch editing.  It is not a compatibility plan for the early primitive-
@@ -83,6 +83,12 @@ These protections must survive subsequent cleanup.  In particular, do not
 restore per-plugin primitive ownership, command-string submission from Qt,
 whole-mesh rollback on pointer motion, per-element Coin nodes, or duplicated
 previews.
+
+The current focused CTest gate exercises qged polygon and primitive-edit UI
+replay, qtcad preview, selection, picking, measurement, faceplate, and
+multi-view synchronization.  That is substrate evidence, not full interactive
+qualification: a current System GL host, fractional-DPR resize, real mouse
+editing, and the broader operation/rejection matrix below still remain.
 
 ## Remaining primitive contract work
 
@@ -210,4 +216,3 @@ Primitive editing is production-ready only when:
 - commands, controls, retained presentation, selection, database transactions,
   and all views remain one coherent state under invalidation and lifecycle
   stress.
-

@@ -1,7 +1,15 @@
 Obol Hosted Application Ownership Matrix
 ========================================
 
-Last reviewed: 2026-07-18
+Last reviewed: 2026-08-23
+
+Status
+------
+
+This is supporting ownership rationale.  The current public lifetime contract
+is `obol_endpoint_lifecycle.md`; platform qualification status is in
+`libbobol_platform_threading_matrix.md`.  It must not be read as proof that
+the exact current System GL application matrix has passed.
 
 Purpose
 -------

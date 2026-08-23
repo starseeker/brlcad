@@ -1,3 +1,10 @@
+HISTORICAL DISCUSSION -- NOT THE CURRENT SHADED-DISPLAY PLAN
+============================================================
+
+This retained mail-thread summary is useful background only.  Current shaded
+and BREP display qualification is defined by `obol_production_readiness.md`;
+remaining work is in `libbobol_active_debt.md`.
+
 Consolidated from an e-mail thread and several e-mail messages by Sean
 to the BRL-CAD developers list in Jun 2013 which includes this message:
 

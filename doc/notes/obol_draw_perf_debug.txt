@@ -1,3 +1,10 @@
+HISTORICAL DEBUG NOTE -- NOT A CURRENT PERFORMANCE BASELINE
+===========================================================
+
+This file records earlier profiling hypotheses and instrumentation.  Use
+`obol_production_readiness.md` for current measurement requirements and retain
+new perf evidence with its exact binary/cache/event provenance.
+
 BRL-CAD Obol Debug Draw Performance Notes
 =========================================
 

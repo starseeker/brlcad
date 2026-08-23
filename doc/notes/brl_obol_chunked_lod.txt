@@ -1,3 +1,12 @@
+HISTORICAL DESIGN NOTE -- NOT A CURRENT CONTRACT
+===============================================
+
+This document records the chunked-PoP design iteration that led to the current
+implementation.  It may explain cache and regression choices, but some policy
+details (notably resident-demand behavior) predate the allocated-residency
+contract.  Use `libbobol_architecture.md` and `libbobol_lod_state_contract.md`
+for current design authority, and `libbobol_active_debt.md` for remaining work.
+
 BRL-CAD/Obol spatially resident PoP mesh contract
 =================================================
 

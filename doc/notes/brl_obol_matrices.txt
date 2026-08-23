@@ -1,3 +1,10 @@
+HISTORICAL DESIGN NOTE -- NOT A CURRENT CONTRACT
+===============================================
+
+This migration-era matrix/view proposal is retained for rationale only.  The
+current ownership and coordinate contracts are in `libbobol_architecture.md`,
+`libbobol_lod_state_contract.md`, and the installed API notes.
+
 BRL-CAD / Obol Matrix and View Conventions
 ===========================================
 

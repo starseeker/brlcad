@@ -30,9 +30,10 @@ Read these documents in this order:
 focused control-plane models.  They do not model mesh arrays, rendering,
 numeric resource policy, or workload cardinality.
 
-The older `brl_obol_*`, `obol_*_coverage`, and archived TODO documents are
-historical design and migration evidence.  They may explain why a test exists,
-but they do not define alternate supported behavior.
+The `brl_obol_*`, `obol_*_coverage`, `obol_draw_perf_debug.txt`, and old TODO
+notes are historical design and migration evidence.  Their headers point here
+for current authority.  They may explain why a test exists, but they do not
+define alternate supported behavior.
 
 ## Responsibility boundaries
 
@@ -110,6 +111,10 @@ Responsibility-specific translation units are deliberately kept out of unity
 builds.  Independent compilation is a dependency test: a private helper must
 be declared at the owning boundary rather than becoming visible accidentally
 because two implementation files happened to share one compiler invocation.
+The first extraction pass is complete, but it is not a claim that every source
+is now small: `database_source.cpp` remains about 19k lines and `draw_obol.cpp`
+about 13k.  The next split must follow an observed ownership/lifecycle or perf
+seam, never line count alone.
 
 - `database_source.cpp` owns traversal and realization orchestration;
   `database_source_cache.cpp`, `database_source_compact_access.cpp`,
@@ -129,7 +134,10 @@ because two implementation files happened to share one compiler invocation.
 
 The private headers expose only hidden value and lifecycle seams.  They are not
 installed APIs.  Further extraction must keep dependency direction one-way and
-must not replace compact records with per-occurrence scene objects.
+must not replace compact records with per-occurrence scene objects.  Candidate
+seams currently worth measuring are source traversal versus realization
+publication, GED transaction reduction versus backend application, and retained
+assembly planning versus renderer execution.
 
 ## Identity domains
 

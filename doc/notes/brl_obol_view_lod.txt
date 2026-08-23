@@ -1,3 +1,11 @@
+HISTORICAL DESIGN NOTE -- NOT A CURRENT CONTRACT
+===============================================
+
+This is an earlier shared-scene/View-LoD design record.  It remains useful for
+the rationale behind compact occurrence promotion and view-local payloads, but
+does not define current behavior.  Use `libbobol_architecture.md` and
+`libbobol_lod_state_contract.md` as the authoritative replacement.
+
 BRL-CAD Obol Shared Scene and View-LoD Design
 =============================================
 

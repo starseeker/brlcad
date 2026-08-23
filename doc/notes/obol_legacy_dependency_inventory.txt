@@ -1,3 +1,10 @@
+HISTORICAL INVENTORY -- NOT A CURRENT ARCHITECTURE CONTRACT
+===========================================================
+
+This inventory was used to remove migration dependencies.  Current ownership
+and public/private boundaries are in `libbobol_architecture.md`,
+`ged_draw_api.md`, and `libbobol_api_contract.md`.
+
 BRL-CAD Obol Legacy Dependency Inventory
 ========================================
 

@@ -1,6 +1,6 @@
 # libBObol platform and threading matrix
 
-Last reviewed: 2026-07-18
+Last reviewed: 2026-08-23
 
 This is the supported-host statement for the direct libged/libBObol drawing
 path.  “Deferred” means the core API remains portable, but the native host is
@@ -9,8 +9,8 @@ not represented as release-validated.
 | Configuration | Status | Validated contract | Enabling work if deferred |
 |---|---|---|---|
 | Linux, no `DISPLAY` | Supported | Core scene/source, value-handle, LoD worker, retained RT, OSMesa, diagnostic/none endpoint, and headless-host tests | — |
-| Linux/X11, Qt GL and software hosts | Supported | Endpoint create/replace/detach, physical resize, input routing, framebuffer rehost, HW/SW/RT switching, and teardown | — |
-| Linux/X11, Tk GL and photo hosts | Supported | MGED/TclCAD endpoint lifecycle, input routing, framebuffer composition, pane deletion, and teardown | — |
+| Linux/X11, Qt GL and software hosts | Supported architecture; current System GL matrix pending | Endpoint create/replace/detach, physical resize, input routing, framebuffer rehost, HW/SW/RT switching, and teardown | Re-run exact-current graphical matrix on a usable X host |
+| Linux/X11, Tk GL and photo hosts | Supported architecture; current qualification pending | MGED/TclCAD endpoint lifecycle, input routing, framebuffer composition, pane deletion, and teardown | Re-run exact-current MGED/TclCAD matrix on a usable X host |
 | Windows core/headless | Deferred | Source builds retain platform-neutral contracts | Validate OSMesa/headless package, thread and sanitizer jobs on MSVC/clang-cl |
 | Windows WGL/Tk or Qt host | Deferred | WGL bridge is compiled where enabled | Add native CI host, resize/input/capture lifecycle tests, and validate endpoint replacement |
 | macOS core/headless | Deferred | No release-support claim | Add supported Coin/Obol headless context manager and sanitizer CI |

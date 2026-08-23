@@ -1,7 +1,7 @@
 # libBObol progressive display state contract
 
 This document is the compact, proof-aided contract for BRL-CAD progressive
-drawing.  It supplements the ownership design in `brl_obol_view_lod.txt`.
+drawing.  It supplements the ownership design in `libbobol_architecture.md`.
 Implementation details are correct only when they refine this model without
 violating its safety, liveness, or cost properties.
 
@@ -200,8 +200,14 @@ will produce its first image.
 
 `STABLE`
 : Refinement proceeds in bounded publication waves.  Candidate marginal
-  transitions are ordered by user emphasis and estimated screen-error
-  reduction per added face, but an occurrence may jump across several authored
+  transitions are ordered by user emphasis, projected footprint/silhouette
+  significance, and estimated screen-error reduction per added face.  A
+  recognizable visible feature receives a target-aware protected floor when
+  the measured static frame budget can admit the complete floor; otherwise
+  the same feature leads the bounded marginal queue.  Thus failure to admit a
+  complete floor is a capacity witness, not permission to leave a wheel,
+  blade, tail, or other conspicuous feature behind cheaper small parts.  An
+  occurrence may jump across several authored
   cuts when its richest affordable drawable prefix is already resident.  It
   must not pay one frame or worker round trip per cut merely because the
   producer supplied a denser quality schedule.  Stable cuts do not regress
@@ -666,6 +672,12 @@ GPU upload, and memory pressure.  Passing one does not imply passing the other.
 | wire parity | shaded/wire active-cut and image matrix |
 | selection/edit | hierarchy selection, erase/redraw, promotion/demotion, and picking tests |
 | liveness | `ObolHostWork.tla` and `ObolLodConvergence.tla` TLC checks; exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness or stable-with-affordable-next states |
+
+Visual-importance arbitration is a separate planned proof boundary.  A bounded
+model may establish coverage priority, prominent-floor non-starvation, budget
+safety, and termination, while an exact small-scene oracle checks the numeric
+allocation objective.  Neither substitutes for image qualification of actual
+wheels, blades, tails, and hulls.
 
 The GUI runner is permitted to use generous wall-clock time for cold asset
 construction, but it must not use that generosity to accept a terminal box,

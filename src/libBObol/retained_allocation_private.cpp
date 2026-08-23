@@ -557,10 +557,21 @@ public:
     }
 
 private:
-    static constexpr double protectedFootprintPixels = 12.0;
+    /* A feature below this footprint is normally either small hardware or a
+     * thin projected detail.  It still participates in marginal refinement,
+     * but does not make the all-or-nothing prominent-feature floor fail for
+     * an entire vehicle view. */
+    static constexpr double protectedFootprintPixels = 24.0;
     static constexpr size_t protectedFloorTrialDivisor = 4;
-    static constexpr double visualImportanceScale = 2.0;
-    static constexpr double visualImportanceMaximum = 32.0;
+    static constexpr double highlightedFeatureMaximumErrorPixels = 1.5;
+    static constexpr double prominentFeatureMaximumErrorPixels = 2.0;
+    /* At the recognizable-footprint threshold, visual error gets that many
+     * units of weight.  Above it the square-root curve stays sublinear, but
+     * no longer collapses a wheel, blade, tail, or large panel into the same
+     * priority band as a small fastener.  The cap still prevents one hull
+     * from monopolizing a finite static-frame allowance. */
+    static constexpr double visualImportanceAtProtectedFootprint = 24.0;
+    static constexpr double visualImportanceMaximum = 128.0;
 
     struct Candidate {
 	const BObolViewLodState::CadPayload *payload = NULL;
@@ -767,15 +778,16 @@ private:
 	    static_cast<double>(payload->projectedPixelDiameter));
 	const double footprint = std::max(std::sqrt(area),
 	    std::max(perimeter * 0.25, diameter * 0.25));
-	/* Keep the former strength at a small recognizable footprint, but keep
-	 * growing for silhouette-defining parts.  The old linear-at-first then
-	 * hard-eight cap made a 16-pixel screw and a 200-pixel wheel equally
-	 * important to the scene allocator.  Square-root growth is deliberately
-	 * sub-linear: it protects large visual features without allowing one hull
-	 * panel to consume a whole finite static frame. */
+	/* Weight projected error by visible feature scale, not just object count.
+	 * A previous low cap compressed a conspicuous wheel or tail into almost
+	 * the same priority as surrounding hardware.  Square-root growth remains
+	 * deliberately sub-linear, while its reference point makes a recognizable
+	 * feature materially more valuable than a tiny one without letting a hull
+	 * consume the whole finite static-frame allowance. */
 	const double significance = std::max(1.0,
 	    std::min(visualImportanceMaximum,
-		std::sqrt(footprint) * visualImportanceScale));
+		std::sqrt(footprint *
+		    visualImportanceAtProtectedFootprint)));
 	double errorWeight = emphasis * significance / target;
 	if (!std::isfinite(errorWeight) || errorWeight <= 0.0)
 	    errorWeight = 1.0;
@@ -823,9 +835,17 @@ private:
 	    payload->projectedCutCountsPolicyRevision == this->policyRevision &&
 	    payload->projectedCutCountsMeshRevision == candidate.mesh->revision())
 	    candidate.visibleCounts = payload->projectedCutCounts;
-	const double protectedError = payload->visualEmphasis >= 2 ? 1.0 :
-	    (payload->visualEmphasis == 1 ? 2.0 :
-		(footprint >= protectedFootprintPixels ? 3.0 :
+	/* The protected floor is deliberately stricter than the old three-pixel
+	 * fallback for a recognizable feature.  The producer request remains the
+	 * lower bound, so a caller asking for sub-pixel quality never sees its
+	 * intent relaxed by the prominence policy.  This is only an atomic
+	 * candidate floor: the measured frame budget may reject it, after which
+	 * the bounded marginal queue still prioritizes the same feature. */
+	const double protectedError = payload->visualEmphasis >= 2 ? target :
+	    (payload->visualEmphasis == 1 ?
+		std::max(target, highlightedFeatureMaximumErrorPixels) :
+		(footprint >= protectedFootprintPixels ?
+		    std::max(target, prominentFeatureMaximumErrorPixels) :
 		    std::numeric_limits<double>::infinity()));
 	candidate.protectedCut = minimumCut;
 	if (std::isfinite(protectedError) && diameter > 0.0) {

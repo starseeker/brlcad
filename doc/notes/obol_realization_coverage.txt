@@ -1,3 +1,10 @@
+HISTORICAL COVERAGE NOTE -- NOT THE RELEASE MATRIX
+===================================================
+
+This file preserves earlier realization coverage rationale.  The current
+release matrix is `obol_production_readiness.md`; current progressive
+invariants are in `libbobol_lod_state_contract.md`.
+
 BRL-CAD Obol Realization Coverage Matrix
 =========================================
 

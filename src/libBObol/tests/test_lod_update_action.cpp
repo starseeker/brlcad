@@ -8394,6 +8394,18 @@ test_compact_many_leaf_scene_admission(void)
 		priorityResult.request.providerVersion =
 		    BOBOL_MESH_LOD_PROVIDER_VERSION;
 		priorityResult.request.requestedCut = 1;
+		/* The retained allocator receives exact projected evidence from the
+		 * submitter.  Give the transformed second occurrence a conspicuous
+		 * screen footprint so this fixture verifies allocator priority as well
+		 * as compact-submit ordering below. */
+		priorityResult.request.projectedPixelDiameter =
+		    priorityIndex == 0 ? 16.0f : 192.0f;
+		priorityResult.request.projectedPixelArea =
+		    priorityResult.request.projectedPixelDiameter *
+		    priorityResult.request.projectedPixelDiameter;
+		priorityResult.request.projectedPixelPerimeter =
+		    priorityResult.request.projectedPixelDiameter * 4.0f;
+		priorityResult.request.targetPixelError = 1.0f;
 		priorityResult.resolvedCut = 1;
 		priorityResult.request.bounds = priorityMesh->bounds();
 		priorityResult.cacheKey =
@@ -8438,6 +8450,78 @@ test_compact_many_leaf_scene_admission(void)
 			   priorityPlan.empty() ? SIZE_MAX :
 				priorityPlan.front());
 		    ret = 1;
+		}
+		/* With room for one, and only one, richer prefix, the bounded stable
+		 * allocation must spend it on the visually dominant occurrence.  This
+		 * is deliberately independent of compact-entry order. */
+		if (!ret) {
+		    const BObolLodCounts minimumCounts =
+			bobol_lod_progressive_counts(priorityMesh, 0, FALSE);
+		    const BObolLodCounts richCounts =
+			bobol_lod_progressive_counts(priorityMesh, 1, FALSE);
+		    const size_t minimumCost = bobol_lod_render_cost_units(
+			minimumCounts, BOBOL_LOD_DRAW_SHADED, 1);
+		    const size_t richCost = bobol_lod_render_cost_units(
+			richCounts, BOBOL_LOD_DRAW_SHADED, 1);
+		    const size_t oneUpgradeCost = richCost > minimumCost ?
+			richCost - minimumCost : 0;
+		    std::vector<SoBRLDatabaseSource *> prioritySources(1,
+			prioritySource);
+		    BObolRetainedAllocationInputs priorityInputs;
+		    priorityInputs.sources = &prioritySources;
+		    priorityInputs.viewState = &priorityState;
+		    priorityInputs.sceneBudget = minimumCost;
+		    priorityInputs.sceneBudget = priorityInputs.sceneBudget >
+			SIZE_MAX - minimumCost ? SIZE_MAX :
+			priorityInputs.sceneBudget + minimumCost;
+		    priorityInputs.sceneBudget = priorityInputs.sceneBudget >
+			SIZE_MAX - oneUpgradeCost ? SIZE_MAX :
+			priorityInputs.sceneBudget + oneUpgradeCost;
+		    priorityInputs.maximumMarginalBudget =
+			priorityInputs.sceneBudget;
+		    priorityInputs.maximumProtectedBudget =
+			priorityInputs.sceneBudget;
+		    priorityInputs.viewRevision = 6;
+		    priorityInputs.policyRevision = 6;
+		    BObolRetainedAllocationResult priorityAllocation;
+		    std::shared_ptr<BObolRetainedAllocationTransaction>
+			priorityTransaction;
+		    const BObolRetainedAllocationStatus priorityStatus =
+			bobol_retained_allocation_advance(priorityTransaction,
+			    priorityInputs, 0, priorityAllocation);
+		    BObolCompactInstanceHandle smallHandle;
+		    BObolCompactInstanceHandle prominentHandle;
+		    BObolCompactInstanceSummary smallSummary;
+		    BObolCompactInstanceSummary prominentSummary;
+		    const bool havePrioritySummaries =
+			prioritySource->getCompactInstanceHandle(0, smallHandle) &&
+			prioritySource->getCompactInstanceHandle(1, prominentHandle) &&
+			prioritySource->getCompactInstanceSummary(smallHandle,
+			    smallSummary) &&
+			prioritySource->getCompactInstanceSummary(prominentHandle,
+			    prominentSummary);
+		    const BObolViewLodState::CadPayload *smallPayload =
+			havePrioritySummaries ? priorityState.findCadForOccurrence(
+			    prioritySource, smallSummary.sourceInstanceKey) : NULL;
+		    const BObolViewLodState::CadPayload *prominentPayload =
+			havePrioritySummaries ? priorityState.findCadForOccurrence(
+			    prioritySource, prominentSummary.sourceInstanceKey) : NULL;
+		    if (priorityStatus != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+		!havePrioritySummaries || !smallPayload || !prominentPayload ||
+		prominentPayload->allocatedCut != 1 ||
+		smallPayload->allocatedCut != 0 ||
+		priorityAllocation.selectedPresentationCost >
+		    priorityAllocation.certifiedPresentationBudget) {
+			printf("FAIL: retained allocator did not preserve the "
+			       "prominent-prefix priority (status=%d small=%d "
+			       "prominent=%d selected=%zu budget=%zu)\n",
+			       static_cast<int>(priorityStatus),
+			       smallPayload ? smallPayload->allocatedCut : -1,
+			       prominentPayload ? prominentPayload->allocatedCut : -1,
+			       priorityAllocation.selectedPresentationCost,
+			       priorityAllocation.certifiedPresentationBudget);
+			ret = 1;
+		    }
 		}
 	    }
 	}
@@ -12487,8 +12571,8 @@ test_allocated_presentation_bounds_resident_prefetch(void)
 	}
     }
 
-	    if (!ret) {
-		SoBRLMeshLodSubmitAction prefetchSubmit;
+    if (!ret) {
+	SoBRLMeshLodSubmitAction prefetchSubmit;
 	/* Force the resident prefetch quantum below even this tiny fixture.  The
 	 * production policy may span several cheap population cuts, but must
 	 * retain guaranteed forward progress when pressure permits only the next
@@ -12500,15 +12584,15 @@ test_allocated_presentation_bounds_resident_prefetch(void)
 	prefetchSubmit.setViewInfo(&view);
 	prefetchSubmit.setViewVolume(&volume, 0.001f);
 	prefetchSubmit.setGeneration(service.beginGeneration());
-		prefetchSubmit.setRevisions(31, 41);
-		prefetchSubmit.setAllowResidentPrefetch(TRUE);
-		prefetchSubmit.setAllowResidentPrefetchPastAllocation(TRUE);
-		/* Exercise the controller's retained minimax allocation route.  Its
-		 * quiet presentation decision bounds residency, but active zoom may
-		 * fetch one transition beyond it while the allocation catches up. */
-		prefetchSubmit.setRetainedSceneUpgradeCostBudget(0);
-		/* Active zoom must publish a bounded resident band instead of hiding one
-		 * monolithic jump to the final pixel-demanded prefix. */
+	prefetchSubmit.setRevisions(31, 41);
+	prefetchSubmit.setAllowResidentPrefetch(TRUE);
+	prefetchSubmit.setAllowResidentPrefetchPastAllocation(TRUE);
+	/* Exercise the controller's retained minimax allocation route.  Its
+	 * quiet presentation decision bounds residency, but active zoom may
+	 * fetch one transition beyond it while the allocation catches up. */
+	prefetchSubmit.setRetainedSceneUpgradeCostBudget(0);
+	/* Active zoom must publish a bounded resident band instead of hiding one
+	 * monolithic jump to the final pixel-demanded prefix. */
 	prefetchSubmit.setTransitionLimitedRefinement(TRUE);
 	prefetchSubmit.setRefinementCostBudget(0);
 	prefetchSubmit.apply(root);
@@ -12568,43 +12652,43 @@ test_allocated_presentation_bounds_resident_prefetch(void)
 		    ret = 1;
 		}
 	    }
-		}
-	    }
+	}
+    }
 
-	    if (!ret) {
-		/* Quiet convergence records the remaining physical-quality debt but
-		 * must not fetch past the cut selected by the scene allocator.  A
-		 * capacity probe may later enlarge that allocation; until then, loading
-		 * the suffix cannot improve a frame and only restarts population-wide
-		 * convergence. */
-		SoBRLMeshLodSubmitAction completePrefetch;
-		completePrefetch.setService(&service);
-		completePrefetch.setViewLodState(&viewState);
-		completePrefetch.setDatabase(dbip,
-		    "db://allocated-prefetch-test", 2026);
-		completePrefetch.setViewInfo(&view);
-		completePrefetch.setViewVolume(&volume, 0.001f);
-		completePrefetch.setGeneration(service.beginGeneration());
-		completePrefetch.setRevisions(31, 41);
-		completePrefetch.setAllowResidentPrefetch(TRUE);
-		completePrefetch.setRefinementCostBudget(0);
-		completePrefetch.apply(root);
-		std::vector<BObolLodResult> completeResults;
-		if (completePrefetch.getSubmittedTaskCount() != 0 ||
-		    service.drainResults(completeResults) != 0 ||
-		    !completeResults.empty() ||
-		    completePrefetch.getSkippedMeshCount() != 1 ||
-		    completePrefetch.getPendingRetainedRefinementCount() != 1) {
-		    printf("FAIL: allocated quiet cut did not bound resident "
-			   "prefetch (tasks=%u skipped=%u pending=%u)\n",
-			   completePrefetch.getSubmittedTaskCount(),
-			   completePrefetch.getSkippedMeshCount(),
-			   completePrefetch.getPendingRetainedRefinementCount());
-		    ret = 1;
-		}
-	    }
+    if (!ret) {
+	/* Quiet convergence records the remaining physical-quality debt but
+	 * must not fetch past the cut selected by the scene allocator.  A
+	 * capacity probe may later enlarge that allocation; until then, loading
+	 * the suffix cannot improve a frame and only restarts population-wide
+	 * convergence. */
+	SoBRLMeshLodSubmitAction completePrefetch;
+	completePrefetch.setService(&service);
+	completePrefetch.setViewLodState(&viewState);
+	completePrefetch.setDatabase(dbip,
+	    "db://allocated-prefetch-test", 2026);
+	completePrefetch.setViewInfo(&view);
+	completePrefetch.setViewVolume(&volume, 0.001f);
+	completePrefetch.setGeneration(service.beginGeneration());
+	completePrefetch.setRevisions(31, 41);
+	completePrefetch.setAllowResidentPrefetch(TRUE);
+	completePrefetch.setRefinementCostBudget(0);
+	completePrefetch.apply(root);
+	std::vector<BObolLodResult> completeResults;
+	if (completePrefetch.getSubmittedTaskCount() != 0 ||
+	    service.drainResults(completeResults) != 0 ||
+	    !completeResults.empty() ||
+	    completePrefetch.getSkippedMeshCount() != 1 ||
+	    completePrefetch.getPendingRetainedRefinementCount() != 1) {
+	    printf("FAIL: allocated quiet cut did not bound resident "
+		   "prefetch (tasks=%u skipped=%u pending=%u)\n",
+		   completePrefetch.getSubmittedTaskCount(),
+		   completePrefetch.getSkippedMeshCount(),
+		   completePrefetch.getPendingRetainedRefinementCount());
+	    ret = 1;
+	}
+    }
 
-	    camera->unref();
+    camera->unref();
     service.stop();
     root->setViewLodState(NULL);
     root->unref();

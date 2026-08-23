@@ -1,3 +1,10 @@
+HISTORICAL COVERAGE NOTE -- NOT THE RELEASE MATRIX
+===================================================
+
+This file preserves earlier overlay coverage rationale.  The current release
+matrix is `obol_production_readiness.md`; active interaction work is listed in
+`libbobol_active_debt.md`.
+
 BRL-CAD Obol Overlay and Command-Result Coverage
 ================================================
 

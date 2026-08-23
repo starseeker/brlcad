@@ -1,3 +1,10 @@
+HISTORICAL DESIGN NOTE -- NOT A CURRENT CONTRACT
+===============================================
+
+This migration-era operation proposal is retained for rationale.  Current GED
+semantic behavior is specified by `ged_draw_api.md`, with active work in
+`libbobol_active_debt.md` and `qged_editing.md`.
+
 BRL-CAD / Obol View Operation Semantics
 =======================================
 
