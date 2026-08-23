@@ -252,6 +252,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     pointProxyPixelThreshold(1.0f),
     structuralCoverageOnly(FALSE),
     structuralPresentationRepair(FALSE),
+    structuralCoverageCostReservation(0),
     selectedOccurrenceCount(0),
     generation(0),
     viewRevision(0),
@@ -413,6 +414,12 @@ void
 SoBRLMeshLodSubmitAction::setStructuralPresentationRepair(SbBool repair)
 {
     this->structuralPresentationRepair = repair ? TRUE : FALSE;
+}
+
+void
+SoBRLMeshLodSubmitAction::setStructuralCoverageCostReservation(size_t cost)
+{
+    this->structuralCoverageCostReservation = cost;
 }
 
 void
@@ -975,7 +982,8 @@ SoBRLMeshLodSubmitAction::reserveInitialCost(
      * band for a prominent large mesh such as Lucy, while the aggregate scene
      * reservation below limits how many such prefixes may enter one wave.
      * Small assets are still charged at their exact source population. */
-    static const size_t provisionalFirstCutFaces = 8192;
+    static const size_t recognizableBootstrapFaces = 8192;
+    const size_t provisionalFirstCutFaces = recognizableBootstrapFaces;
     const size_t knownFaces =
 	sourceFaces > static_cast<uint64_t>(SIZE_MAX) ? SIZE_MAX :
 	static_cast<size_t>(sourceFaces);
@@ -988,8 +996,22 @@ SoBRLMeshLodSubmitAction::reserveInitialCost(
     provisionalCounts.faceCount = reserveFaces;
     provisionalCounts.pointCount = knownPoints ?
 	std::min(knownPoints, reserveFaces * 2) : reserveFaces;
-    const size_t reserveCost = bobol_lod_render_cost_units(
+    const size_t estimatedReserveCost = bobol_lod_render_cost_units(
 	provisionalCounts, drawMode, 1);
+    /* A structural repair owns an exact, closed occurrence frontier.  Split
+     * the framebuffer-proven marginal allowance across that population
+     * instead of guessing a face count.  Guessing made convergence depend on
+     * producer cut density: an overestimate serialized box replacement while
+     * an underestimate admitted an unbounded wave.  The provider may need to
+     * exceed its share to produce its indivisible minimum prefix; that exact
+     * population is measured by the hard frame deadline after publication. */
+    if (this->structuralPresentationRepair &&
+	!this->structuralCoverageCostReservation) {
+	this->refinementBudgetBlockedCount++;
+	return FALSE;
+    }
+    const size_t reserveCost = this->structuralPresentationRepair ?
+	this->structuralCoverageCostReservation : estimatedReserveCost;
 
     /*
      * Structural leaf proxies are the coverage guarantee.  A minimum PoP
@@ -1004,9 +1026,10 @@ SoBRLMeshLodSubmitAction::reserveInitialCost(
      * already active mesh never grants permission to create a new mesh beyond
      * this budget.
      */
-    if (this->refinementCostBudgetUsed > this->refinementCostBudget ||
-	reserveCost >
-	    this->refinementCostBudget - this->refinementCostBudgetUsed) {
+    const size_t remaining = this->refinementCostBudgetUsed >=
+	this->refinementCostBudget ? 0 :
+	this->refinementCostBudget - this->refinementCostBudgetUsed;
+    if (reserveCost > remaining) {
 	this->refinementBudgetBlockedCount++;
 	return FALSE;
     }
@@ -1023,12 +1046,13 @@ SoBRLMeshLodSubmitAction::reserveInitialCost(
 	sourceCounts.normalCount = knownPoints;
 	const size_t sourceCost = bobol_lod_render_cost_units(
 	    sourceCounts, drawMode, 1);
-	const size_t remaining = this->refinementCostBudgetUsed >=
+	const size_t remainingAfterReservation =
+	    this->refinementCostBudgetUsed >=
 		this->refinementCostBudget ? 0 :
 	    this->refinementCostBudget - this->refinementCostBudgetUsed;
 	admittedCost = std::max(reserveCost,
 	    std::min(this->initialProviderCostBudget,
-		std::min(sourceCost, remaining)));
+		std::min(sourceCost, remainingAfterReservation)));
     }
     this->refinementCostBudgetUsed =
 	admittedCost > SIZE_MAX - this->refinementCostBudgetUsed ?
@@ -2120,7 +2144,12 @@ mesh_lod_error_ceiling_cut(const BObolLodRequest &request,
 	return maximumCut;
     const double emphasisWeight = emphasis >= 2 ? 4.0 :
 	(emphasis == 1 ? 2.0 : 1.0);
-    const double target = std::max(1.0,
+    /* The request target is already validated at its source.  A fractional
+     * pixel target is a real terminal-quality contract; rounding it up here
+     * made retained-allocation error caps choose a visibly coarser cut than
+     * the provider and allocator selected for the same view. */
+    const double target = std::max(
+	static_cast<double>(std::numeric_limits<float>::min()),
 	static_cast<double>(request.targetPixelError));
     if (progressiveMesh) {
 	const double allowedPixelError =

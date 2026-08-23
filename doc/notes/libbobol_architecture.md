@@ -189,12 +189,50 @@ terminal reason, and the exact current frame has been acknowledged.
 - Rotation and translation begin from retained proven cuts and back off only
   when measured interaction cost requires it.  Zoom retargets from current
   resident levels while input remains active.
+- A static view carrying over a coarser-than-one-pixel interaction target uses
+  measured frame-time and scene-cost headroom to choose the finest safe
+  intermediate target.  Coarse interactive targets are not terminal quality
+  tiers; the raster-stable 0.75, 0.5, and 0.25 targets remain separately
+  witnessed discrete terminal tiers.
 - Non-visible assets may release resident suffixes under memory pressure while
   preserving semantic intent and reusable cache identity.
 - Structural boxes are unresolved/failure fallbacks, not a routine motion LoD.
 - Subpixel aggregation is a terminal representation only when exact coverage,
   visibility classification, and the applicable performance or memory limit
   are all proven.
+- A point/box classifier threshold is a presentation transaction.  Its exact
+  framebuffer acknowledgement releases source admission even when no managed
+  mesh exists yet and the frame is therefore ineligible for capacity
+  calibration.  Admission may not depend on the population it is responsible
+  for creating.
+- A hard endpoint abort is capacity evidence outside completed-frame timing
+  jitter.  At the irreducible PoP prefix it must advance the reversible point-
+  aggregation bracket.  A rejected one-pixel static trial remains a terminal
+  capacity witness for its view/capacity epoch; recovery threshold changes do
+  not reopen the identical rejected population.
+- A scene-wide importance/minimax allocation is one closed-population
+  transaction.  Provider-inventory completion does not close it while mesh
+  tasks, queued/results publication, or the coalesced resident-suffix drain
+  can still enlarge the occurrence population.  Keep the last coherent
+  framebuffer during that drain and allocate once on its terminal edge.
+- A failed headroom presentation is a retained negative witness keyed by
+  view, policy, population, and attempted allowance.  Cancelling and
+  forgetting that witness permits the same rich/coarse cycle; only a changed
+  population, new epoch, or materially larger proven allowance may retry.
+- An interrupted retained traversal closes the presentation transaction.
+  Owner-thread scene publication cannot mutate the population while the
+  renderer holds a resumable classifier or command-plan cursor; otherwise
+  every bounded retry invalidates the work completed by its predecessor.
+  Worker execution may continue only through bounded queues.  A completed
+  successor frame is the commit edge which reopens publication.
+
+- Structural fallback points are published best-available representations,
+  not hidden richer geometry.  Their aggregate point threshold is independent
+  of the triangle-prefix recovery controller and remains at its last proven
+  value until mesh publication replaces the fallback population.  Lowering
+  that threshold would reveal boxes and is a visual regression.  Consequently
+  a one-pixel static-quality trial is admissible only when no structural
+  fallback occurrences remain.
 
 ## Formal and executable proof boundaries
 

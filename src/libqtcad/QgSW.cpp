@@ -113,6 +113,12 @@ QgSW::set_current(int active)
     d->current = active;
 }
 
+bool
+QgSW::isPresentationInitialized() const
+{
+    return d->obol_paint_initialized;
+}
+
 void QgSW::request_update(uint32_t refresh_flags)
 {
     uint32_t requested = refresh_flags ? refresh_flags : BV_REFRESH_ALL;

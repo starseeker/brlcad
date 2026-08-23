@@ -61,6 +61,12 @@ void ged_bobol_view_controllers_foreach(
     ged_bobol_view_controller_visit_t callback,
     void *userdata);
 
+/* A shared feature belongs to the GED-wide scene root, while each graphical
+ * view owns its own retained presentation.  Wake every view that renders the
+ * shared root after an already-published shared-content mutation. */
+void ged_bobol_shared_view_presentation_request(struct ged *gedp,
+    const char *reason);
+
 /* Source inventory is GED-wide; instance identities say whether an entry is
  * shared or belongs to an independent view.  Keep that value interpretation
  * beside the borrowed accessors so command queries do not depend on a render

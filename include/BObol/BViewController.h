@@ -233,6 +233,9 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     SbBool budgetCalibrationPending;
     SbBool stablePresentationHandoffPending;
     SbBool pointProxyCalibrationPending;
+    SbBool pointProxyAdmissionFramePending;
+    SbBool stablePointProxyCalibrationPending;
+    SbBool pointProxyTriangleRecoveryPending;
     SbBool residentGrowthReallocationPending;
     SbBool publicationFramePending;
     /* Foreground cold-start work which is still publishing the immutable
@@ -922,7 +925,7 @@ private:
 	size_t provenRenderCost = 0);
     void scheduleResidentGrowthReallocationIfReady(void);
     void armStableLodHeadroomProbeIfReady(void);
-    void resumeLodAfterOnePixelRecovery(void);
+    void resumeLodAfterRetainedRecovery(void);
     size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BObolLodService *service, void *userData);
     /* Rewrite the headlight direction from the last camera orientation so it

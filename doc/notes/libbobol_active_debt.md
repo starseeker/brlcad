@@ -1,6 +1,6 @@
 # libBObol active debt
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 
 This is the only active TODO inventory for the BRL-CAD Obol drawing stack.
 Detailed qualification steps are in `obol_production_readiness.md`; primitive
@@ -32,15 +32,72 @@ history and resolved defects belong in `libbobol_engineering_lessons.md`.
 
 ## P0: final production qualification
 
-- Run the complete current-build `bobol_headless`, `drawing_baseline`, public
-  API/symbol, client, and shared-library lifecycle gates after the last source
-  change.  The 2026-08-22 cleanup build passes the combined 86-test headless/
-  drawing selection (one unavailable X11 capability skip); repeat it after any
-  subsequent production change.
+- The current-source `bobol_headless` and `drawing_baseline` selection passes
+  all 86 tests in 389 seconds, including public API/symbol, client, and
+  shared-library lifecycle coverage; one unavailable X11 capability is skipped
+  as expected.  Repeat after any subsequent production change.
+- Pre-admission-change OSMesa evidence covers Generic Twin, Lucy, Havoc, and
+  Hubble in shaded/wire cold/certified-warm rows, plus 50k and 150k
+  distinct-asset shaded/wire cold/warm rows.  The new joint mesh/point
+  allocator has focused coverage: its 50k OSMesa matrix remains green; a fresh
+  Lucy cold start now publishes one resident compact mesh at the first stable
+  checkpoint (26.3 seconds, 144,976 faces, no point proxy); and the 150k
+  terminal allocation removes more than half of the earlier prominent-floor
+  violations without boxes.  Re-run the complete OSMesa 16-row and scale
+  matrix after this policy change before calling it current qualification.  The
+  current host cannot rerun System GL because `/tmp/.X11-unix` is owned by
+  `nobody:nogroup`, which prevents Xvfb from establishing a local socket.  Do
+  not treat earlier System GL captures as current-binary evidence; rerun that
+  matrix on a valid X host.
 - Run the organized System GL and OSMesa matrices from truly cold and certified
   warm caches.  A partial cache may never be labeled warm.  Generic Twin
-  shaded cold/warm passes on both backends after the current extraction and
-  rotation-safe autoview work; the remaining model/mode rows are still open.
+  shaded/wire cold/warm passes on both backends after the current extraction
+  and rotation-safe autoview work.  Hubble shaded/wire cold/warm passes on both
+  backends with a representative `PANEL_C01` hierarchy target.  The current 50k
+  and 150k distinct-asset fixtures pass System GL shaded cold/warm with exact
+  terminal coverage and no boxes; the 50k warm perf run has no dominant
+  controller/render livelock.  Lucy shaded and wire cold/warm passes on both
+  backends with spatial refinement, exact-view recall, zoom-out compaction,
+  zero boxes, and explicit software-performance limits.  Havoc shaded/wire
+  cold/warm also passes on both backends.  The 50k OSMesa shaded cold/warm rows
+  pass in 35/50 seconds, and a fresh-cache 50k OSMesa wire pair passes in
+  50/75 seconds with zero terminal boxes, explicit software-performance limits,
+  and no stagnant post-rotation dispatches.  The 150k OSMesa shaded cold/warm
+  rows now pass in 98/72 seconds after fixing structural-fallback recovery:
+  both finish at an aggregate point threshold of 64, with zero boxes and zero
+  stagnant dispatches.  The cold/warm terminal populations retain 2,119/2,855
+  mesh occurrences and classify roughly 148k subpixel occurrences.  The 150k
+  OSMesa wire warm interaction/lifecycle row now also passes in 126 seconds
+  with exact 150,001-occurrence classification, zero boxes, no pending work,
+  and no terminal renderer-wide PoP ceiling.  It specifically covers zoom,
+  pose motion, tree selection, exact subpath erase, and redraw.  Cold wire
+  validation and terminal visual-quality consistency remain open: the focused
+  closed-population run spent 98 ms and limited worst projected error to about
+  18 pixels, while the complete row settled near 53 ms and about 60 pixels.
+  Do not promote the row until that unused static allowance is allocated
+  consistently by visual importance.
+- The 2026-08-23 current-source regression fixes two late continuity defects:
+  a completed deadline-safe interactive frame now survives the policy-only
+  quiet handoff for the same camera/source-quality domain, and fractional
+  pixel targets remain fractional in the submit-action scene ceiling.  Lucy
+  shaded passes on both System GL and OSMesa from cold and certified warm
+  caches (51/26 and 55/32 seconds); its return view is cut 21 at 0.645 pixels
+  for the 0.75-pixel request.  Hubble OSMesa shaded/wire cold/warm now passes
+  through an explicit canvas-presentable barrier.  The warm shared-cache 50k
+  and 150k OSMesa shaded rows also pass in 24 and 53 seconds, respectively,
+  with zero boxes.  The latter ends at 2,066 mesh occurrences plus 147,934
+  subpixel points and a 60 ms retained terminal frame.  Repeat cold 50k/150k
+  rows and the full shared-stack gate after the final source change.
+- The current static-quality retry and logical-occurrence fixes pass the full
+  OSMesa graphical matrix again: Generic Twin, Lucy, Havoc, and Hubble in
+  shaded/wire cold/certified-warm (16 rows), followed by 50k and 150k
+  distinct-asset shaded/wire cold/warm rows.  A first static frame may retry
+  once when newly published presentation resources make that frame exceed its
+  deadline; only a second unchanged miss becomes a capacity witness.  A source
+  with one logical occurrence may never use point aggregation merely because
+  its PoP implementation has many internal spatial clusters.  The broad CTest
+  sweep also passes every libBObol, drawing, qged, qtcad/Obol, gsh, and
+  MGED/LoD row.  Re-run these exact rows after any policy change.
 - Qualify Generic Twin, Lucy, multi-Lucy/xpush, Hubble, havoc, NIST BREP,
   Stanford meshes, and the varied 50k/150k fixtures.  Include shaded,
   wireframe, evaluated modes where applicable, LoD auto/off transitions,
@@ -107,12 +164,83 @@ changes.
 
 ## P1: scale and performance
 
-- Improve the 150k distinct-asset post-rotation refinement path, which has
-  terminated correctly but has taken roughly 218 seconds on this host.
-  Profile before changing policy; preserve bounded memory and terminal proof.
-- Complete the large OSMesa matrix.  Continue reducing repeated owner-thread
+- Preserve the current 150k System GL scale result: cold/warm scripted rows
+  complete in 42/39 seconds on this host rather than the former roughly
+  218-second post-rotation path, with exact 150,001-leaf coverage, zero boxes,
+  and bounded transient mesh work.  Re-profile before changing scale policy.
+- Preserve the 50k structural-admission regression: an exact point/box
+  classifier frame is a presentation acknowledgement even before any managed
+  mesh makes the frame capacity-relevant.  It must release the first mesh wave
+  rather than repaint structural coverage indefinitely.
+- Preserve the 50k OSMesa wire deadline regression.  A hard-aborted minimum-
+  prefix frame must advance small-part aggregation even inside the ordinary
+  completed-frame timing deadband, and a rejected one-pixel static trial must
+  remain rejected for the current view/capacity epoch.  Point-threshold
+  recovery cannot reopen the identical one-pixel population.
+- Preserve the 150k OSMesa structural-fallback recovery regression.  Aggregate
+  structural points are not hidden richer meshes: lowering their point
+  threshold exposes boxes.  Triangle-prefix recovery must retain the proven
+  aggregate cut while structural fallbacks remain, and a static one-pixel
+  trial is admissible only after the visible population is fully realized.
+- Preserve the 150k resident-growth transaction boundary.  A minimax
+  occurrence allocation may start only after provider inventory, mesh tasks,
+  queued/result publication, and the coalesced residency drain are all closed.
+  Treating provider inventory alone as settled made every bounded cache wave
+  invalidate and rerun the scene allocation, producing the observed
+  coarse/fine cycling.  A hard headroom miss is a negative witness, not a
+  cancellation which may immediately re-arm the same population.
+- Preserve the interrupted-presentation transaction boundary.  Once a CAD
+  traversal has retained resumable preparation, owner-thread provider, result,
+  compaction, and cut publication must remain frozen until the exact successor
+  frame completes.  Workers may continue only behind their bounded queues.
+  The focused controller regression proves both the freeze and its
+  completed-frame release.
+- Preserve the static first-presentation retry boundary.  An initial static
+  trial can pay immutable-buffer installation, command setup, or software
+  warmup not reflected by the preparation serial.  It gets exactly one
+  unchanged retry; a second miss is the negative capacity witness that bounds
+  the retained allocation.  Do not make every miss retryable, or restore the
+  old coarse/fine loop.
+- Preserve source-logical occurrence semantics.  A spatially paged single mesh
+  is one visual object, not one object per PoP cluster, and cannot be reduced
+  to aggregate point coverage.  For multi-occurrence sources, keep using the
+  current visible-occurrence census so an otherwise large assembly with only
+  one visible part is also not point-aggregated spuriously.
+- The large OSMesa matrix now passes at 50k and 150k in both shaded and wire,
+  cold and certified warm.  Continue reducing repeated owner-thread
   demand/retarget work, but distinguish it from legitimate software triangle
-  setup, lighting, and rasterization.
+  setup, lighting, and rasterization.  Re-run the rows after any policy change.
+- Reduce the remaining 150k OSMesa convergence variance.  Current warm shaded
+  runs reach exact 150,001-occurrence classification with zero boxes and a
+  roughly 82--90 ms terminal frame, but setup-to-idle has ranged from about 16
+  to 45 seconds depending on the number of resumable preparation/deadline
+  slices.  The terminal presentation is viable; repeated closed-population
+  allocation and prepared-command transactions are the remaining target.
+  A current 50k OSMesa profile assigns about 32% of sampled CPU to software
+  rasterization, 31% to libBObol (including roughly 22% inclusive in bounded
+  compact submission), and 11% to Obol.  Reduce repeated compact planning and
+  static allocation transactions without relaxing the bounded owner-thread
+  slices or treating the legitimate software raster cost as a logic defect.
+- Replace the current one-visible-occurrence-to-one-subpixel-point stream when
+  its measured cost becomes the limiting overview representation.  At 150k,
+  the terminal OSMesa scene still carries roughly 149k individual proxy points;
+  this is a single draw call, but not a bounded software-raster workload.
+  Add an Obol-owned, camera-local screen-bin proxy stream with deterministic
+  representative depth/color/emphasis, stable visible-occurrence-to-bin
+  bookkeeping, and a hard bin budget.  Semantic occurrence coverage,
+  selection, highlight, exact picking, and mesh-promotion eligibility must
+  remain per occurrence; a bin is presentation-only and may never erase those
+  identities.  Recompute only bins affected by sparse style/visibility deltas,
+  and force a fresh classification on camera/viewport changes.  Qualify dense
+  overlap, selected and highlighted parts, multi-color regions, wire and
+  shaded paths, and high-DPI resizing before enabling it under ordinary scale
+  policy.
+- A current 150k OSMesa cold shaded profile records no single liveness hot
+  loop: libBObol accounts for 34.4% of samples, libosmesa for 11.8%, and Obol
+  for 8.3%.  The largest named source hot spot is parallel compact coverage
+  bounds (3.2%), alongside expected software triangle rasterization (3.4%).
+  Split discovery/coverage from view-presentation measurements before making a
+  policy change; this whole-run profile includes both phases.
 - Measure the new database-discovery path under cold local storage, warm page
   cache, and slower storage.  Worker count and inflight bytes should respond to
   I/O throughput rather than multiplying contention.
@@ -122,6 +250,24 @@ changes.
   the full NIST corpus and a larger real BREP model.
 - Establish release thresholds for time to first useful representation,
   interactive latency, stable convergence, and peak/resident memory.
+- Redesign and qualify the significance frontier under a performance-limited
+  150k software frame.  The current terminal images are coherent and have no
+  structural boxes, but a certified-warm shaded zoom/rotation sequence still
+  leaves about 1.2k of 2.45k prominent occurrences below the protected visual
+  floor at an 80--97 ms frame.  The immediate defect in that path was fixed:
+  a deadline miss supplied a 95-percent strict ceiling and marginal recovery
+  applied a second 80-percent reduction.  Do not reintroduce that compounded
+  margin.  The remaining problem is not safely solved by promoting every
+  point-to-minimum mesh transition or by treating every point-to-protected
+  transition as atomic; both focused experiments reduced useful coverage on
+  this workload.  Define an explicit, measurable frontier using projected
+  error reduction, screen footprint/silhouette, visual emphasis, complete
+  transition cost, and frame budget.  Validate it with per-occurrence
+  certificates and real wheels/blades/hulls as well as mixed-size 50k/150k
+  fixtures before changing allocator priority again.
+- Harden the `libBObol_lod_service` test deadline.  A focused run completed in
+  9.92 seconds against its exact 10-second timeout after one timeout failure;
+  qualification should not depend on scheduler luck.
 
 ## P1: physical maintainability after extraction
 

@@ -187,6 +187,19 @@ ged_obol_timing_enabled(void)
     return enabled;
 }
 
+/* Per-record logging changes the scheduling a large-model timing run is
+ * trying to inspect.  Keep ordinary timing to stage summaries and require an
+ * explicit opt-in before logging individual streamed records. */
+static int
+ged_obol_timing_verbose_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+	enabled = ged_obol_timing_enabled() &&
+	    getenv("BOBOL_DRAW_TIMING_VERBOSE") ? 1 : 0;
+    return enabled;
+}
+
 static void
 ged_obol_timing_log(const char *label, int64_t start_us, long count)
 {
@@ -337,7 +350,8 @@ struct ged_obol_deferred_realization_item {
 	sourceDrawMode(SoBRLDatabaseSource::WIREFRAME),
 	primaryScene(FALSE), allowWireFallback(FALSE),
 	streamBatchQuantum(256),
-	streamMergeMicrosecondsPerItem(0.0)
+	streamMergeMicrosecondsPerItem(0.0),
+	streamMergedOccurrences(0), streamMergeMicroseconds(0)
     {
     }
 
@@ -378,6 +392,10 @@ struct ged_obol_deferred_realization_item {
      * predictor once retained occurrence maps grow from hundreds to tens of
      * thousands of records. */
     double streamMergeMicrosecondsPerItem;
+    /* Aggregate timing is retained per realization item rather than logged
+     * per GUI pump, keeping a large-model timing run observational. */
+    size_t streamMergedOccurrences;
+    int64_t streamMergeMicroseconds;
     /* Worker->pump stream of completed per-leaf occurrences.  Shared with the
      * realization service so it outlives every push. */
     std::shared_ptr<BObolCompactOccurrenceStream> stream;
@@ -9702,6 +9720,13 @@ ged_obol_publish_deferred_realization(
 	 * autoviews as well as the pending progressive fit. */
 	(void)ged_obol_apply_stream_coverage_bounds(liveSources[i],
 	    job->items[i]->stream.get());
+	if (ged_obol_timing_enabled() &&
+	    job->items[i]->streamMergedOccurrences) {
+	    bu_log("[obol-timing] stream: merged occurrences %8.1f ms "
+		   "(n=%zu)\n",
+		job->items[i]->streamMergeMicroseconds / 1000.0,
+		job->items[i]->streamMergedOccurrences);
+	}
 	if (ged_obol_timing_enabled())
 	    bu_log("[obol-timing] deferred adoption for %s: n=%d\n",
 		job->items[i]->instanceKey.c_str(), adopted_count);
@@ -9746,6 +9771,7 @@ ged_obol_publish_deferred_realization(
  * merges had become more expensive.  Start each stream at 256 and adapt
  * between 64 and this ceiling from its measured atomic merge time. */
 static const size_t GED_OBOL_STREAM_BATCH_QUANTUM_MAX = 2048;
+static const double GED_OBOL_TIMING_STALL_MILLISECONDS = 25.0;
 
 /*
  * A compact registry's derived union is useful while no stronger information
@@ -9808,6 +9834,9 @@ ged_obol_drain_streamed_realizations(
 	jobs.push_back(job);
 
     const int64_t started = bu_gettime();
+    const bool collectTiming = ged_obol_timing_enabled() != 0;
+    const bool verboseTiming = collectTiming &&
+	ged_obol_timing_verbose_enabled();
     size_t drained_count = 0;
     int merged = 0;
     for (const std::shared_ptr<ged_obol_deferred_realization_job> &job : jobs) {
@@ -9914,11 +9943,17 @@ ged_obol_drain_streamed_realizations(
 		    item->stream.get());
 		if (mergedCount > 0) {
 		    merged = 1;
-		    ged_obol_timing_log("stream: merged occurrences",
-			mergeStarted, (long)mergedCount);
+		    if (collectTiming)
+			item->streamMergedOccurrences +=
+			    static_cast<size_t>(mergedCount);
+		    if (verboseTiming)
+			ged_obol_timing_log("stream: merged occurrence batch",
+			    mergeStarted, (long)mergedCount);
 		}
 		const int64_t mergeElapsed = bu_gettime() - mergeStarted;
 		if (mergeElapsed >= 0) {
+		    if (collectTiming)
+			item->streamMergeMicroseconds += mergeElapsed;
 		    const double observed =
 			static_cast<double>(mergeElapsed) /
 			static_cast<double>(batch.size());
@@ -9999,7 +10034,8 @@ ged_obol_progressive_advance_provider(
     /* Idle pumps are expected at frame cadence.  Logging thousands of 0.0 ms
      * samples obscures the stalls timing mode exists to expose and can itself
      * perturb interactive traces. */
-    ged_obol_scoped_timer _pump_timer("provider: pump (total)", 1.0);
+    ged_obol_scoped_timer _pump_timer("provider: pump (total)",
+	GED_OBOL_TIMING_STALL_MILLISECONDS);
     BObolProgressiveStatus local_status;
     if (status)
 	local_status.providerCount = status->providerCount;

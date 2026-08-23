@@ -113,6 +113,12 @@ QgGL::set_current(int active)
     d->current = active;
 }
 
+bool
+QgGL::isPresentationInitialized() const
+{
+    return d->obol_paint_initialized;
+}
+
 void QgGL::paintGL()
 {
     int w = width();

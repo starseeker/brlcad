@@ -382,6 +382,18 @@ test_view_controller_fixed_gl_light_order(void)
 }
 
 static int
+count_progressive_provider_calls(BObolViewController *UNUSED(controller),
+	void *userData,
+	const BObolProgressiveOptions *UNUSED(options),
+	BObolProgressiveStatus *UNUSED(status))
+{
+    int *callCount = static_cast<int *>(userData);
+    if (callCount)
+	(*callCount)++;
+    return 1;
+}
+
+static int
 test_view_controller_presentation_deadline_contract(void)
 {
     SoSeparator *root = new SoSeparator;
@@ -468,6 +480,12 @@ test_view_controller_presentation_deadline_contract(void)
     }
     {
 	BObolViewController controller(root, NULL);
+	int providerCallCount = 0;
+	if (!controller.registerProgressiveProvider(
+		count_progressive_provider_calls, &providerCallCount)) {
+	    printf("FAIL: interrupted replay provider setup\n");
+	    ret = 1;
+	}
 	controller.clearRenderRequest();
 	const size_t budgetBeforePreparation =
 	    controller.getCurrentLodRenderCostBudget();
@@ -496,6 +514,29 @@ test_view_controller_presentation_deadline_contract(void)
 		 budgetBeforePreparation)) {
 	    printf("FAIL: continuing resumable preparation was misclassified "
 		   "as a draw-capacity failure\n");
+	    ret = 1;
+	}
+
+	BObolProgressiveStatus replayStatus;
+	(void)controller.advanceProgressiveWork(NULL, &replayStatus);
+	if (!ret &&
+	    (providerCallCount != 0 || !replayStatus.hasMore ||
+	     !controller.hasProgressiveWorkPending())) {
+	    printf("FAIL: interrupted presentation did not freeze owner-thread "
+		   "provider publication\n");
+	    ret = 1;
+	}
+
+	/* Emulate the successful successor presentation.  The render request is
+	 * consumed before completeRenderTiming() in the real render path. */
+	controller.clearRenderRequest();
+	const uint64_t replayStarted = controller.beginRenderTiming();
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	controller.completeRenderTiming(replayStarted, FALSE);
+	(void)controller.advanceProgressiveWork(NULL, &replayStatus);
+	if (!ret && providerCallCount != 1) {
+	    printf("FAIL: completed presentation did not release queued provider "
+		   "publication\n");
 	    ret = 1;
 	}
     }
@@ -12196,6 +12237,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    inputs.sceneBudget = std::max<size_t>(
 		1, viewState.activeRenderCost() +
 		    inputs.externalPresentationCost);
+	    inputs.maximumMarginalBudget = inputs.sceneBudget;
 	    inputs.maximumProtectedBudget = inputs.sceneBudget;
 	    inputs.viewRevision = 65;
 	    inputs.policyRevision = 62;
@@ -12230,6 +12272,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    allocation.viewRevision, allocation.policyRevision,
 		    allocation.fixedCadPresentationCost) ||
 		allocation.requestedSceneBudget != inputs.sceneBudget ||
+		allocation.maximumMarginalBudget !=
+		    inputs.maximumMarginalBudget ||
 		allocation.maximumProtectedBudget !=
 		    inputs.maximumProtectedBudget ||
 		allocation.allowProtectedFloor != inputs.allowProtectedFloor ||
@@ -12247,8 +12291,37 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		       static_cast<unsigned long long>(
 			   allocation.allocationPlanSerial),
 		       allocation.selectedPresentationCost,
-		       allocation.certifiedPresentationBudget);
+		   allocation.certifiedPresentationBudget);
 		ret = 1;
+	    }
+	    /* A rejected all-or-nothing floor may still spend a separately bounded
+	     * static-frame allowance through marginal occurrence upgrades.  The
+	     * certificate must carry that cap without claiming a protected floor;
+	     * otherwise a subsequent pass can silently retry the failed population. */
+	    if (!ret) {
+		const size_t marginalBudget = inputs.sceneBudget <= SIZE_MAX / 2 ?
+		    inputs.sceneBudget * 2 : SIZE_MAX;
+		inputs.maximumMarginalBudget = marginalBudget;
+		BObolRetainedAllocationResult marginalAllocation;
+		const BObolRetainedAllocationStatus marginal =
+		    bobol_retained_allocation_advance(
+			transaction, inputs, 0, marginalAllocation);
+		if (marginal != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+		    marginalAllocation.maximumMarginalBudget != marginalBudget ||
+		    marginalAllocation.protectedFloorBudget != 0 ||
+		    marginalAllocation.certifiedPresentationBudget !=
+			std::max(inputs.sceneBudget, marginalBudget) ||
+		    marginalAllocation.selectedPresentationCost >
+			marginalAllocation.certifiedPresentationBudget) {
+		    printf("FAIL: static marginal allocation retried a protected "
+			   "floor or lost its bounded certificate (status=%d "
+			   "marginal=%zu protected=%zu selected=%zu certified=%zu)\n",
+			   static_cast<int>(marginal), marginalBudget,
+			   marginalAllocation.protectedFloorBudget,
+			   marginalAllocation.selectedPresentationCost,
+			   marginalAllocation.certifiedPresentationBudget);
+		    ret = 1;
+		}
 	    }
 	}
     }

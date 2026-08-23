@@ -3644,7 +3644,7 @@ lod_publish_cold_mesh_preview_impl(
     const SbBool published =
 	context->service->tryPublishIntermediateResult(
 	    context->generation, std::move(result));
-    if (getenv("BOBOL_DRAW_TIMING"))
+    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
 	bu_log("[obol-timing] cold PoP preview: cut=%d faces=%zu "
 	       "points=%zu published=%d\n", previewCut,
 	       data->face_count, data->point_orig_count, published ? 1 : 0);
@@ -3853,7 +3853,7 @@ BObolLodService::realizeResidentMeshLod(
 		    return lod_provider_status_result(request,
 			BOBOL_LOD_PROVIDER_CACHE_MISS,
 			"resident mesh provider could not refresh cache entry");
-		if (getenv("BOBOL_DRAW_TIMING"))
+		if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
 		    bu_log("[obol-timing] pop cache: refresh %-24s %8.1f ms "
 			   "staged=%d\n", name,
 			   (bu_gettime() - refreshStarted) / 1000.0,
@@ -4263,7 +4263,7 @@ BObolLodService::realizeResidentMeshLod(
 	    0, bu_gettime() - directPayloadStarted);
     }
 
-    if (loadNeeded && getenv("BOBOL_DRAW_TIMING"))
+    if (loadNeeded && getenv("BOBOL_DRAW_TIMING_VERBOSE"))
 	bu_log("[obol-timing] resident prefix %-24s cut=%d->%d "
 	       "load=%8.1f ms generation=%8.1f ms prepare=%8.1f ms "
 	       "direct=%8.1f ms\n",

@@ -25,6 +25,13 @@
  * no allocation, virtual dispatch, or per-occurrence indirection.
  */
 struct BObolLodCoordinator : BObolLodStateMachine {
+    void resetDeadlineSafePresentation(void)
+    {
+	lodDeadlineSafeProgressiveCeiling = -1;
+	lodDeadlineSafeViewRevision = 0;
+	lodDeadlineSafeQualityDomainRevision = 0;
+    }
+
     void resetRetainedAdmissionQualityProof(void)
     {
 	lodRetainedAdmissionMaximumNormalizedError =
@@ -42,6 +49,9 @@ struct BObolLodCoordinator : BObolLodStateMachine {
     {
 	lodViewQualityHistory.reset();
 	resetRetainedAdmissionQualityProof();
+	/* A source, renderer, or user-quality reset changes the population or
+	 * capacity contract behind a previously measured presentation cut. */
+	resetDeadlineSafePresentation();
 	lodViewQualityDomainRevision++;
 	if (!lodViewQualityDomainRevision)
 	    lodViewQualityDomainRevision = 1;
@@ -80,6 +90,7 @@ struct BObolLodCoordinator : BObolLodStateMachine {
 	lodHeadroomPolicy.cancelRetry();
 	lodPresentationPolicy.reset();
 	lodPointProxyCalibrationPolicy.reset();
+	lodStructuralAdmissionPolicy.reset();
 	lodStablePointProxyCalibrationPending =
 	    lodPresentationPointProxyPixelThreshold > 1.01f ? TRUE : FALSE;
 	lodPointProxyTriangleRecoveryPending = FALSE;
@@ -87,12 +98,8 @@ struct BObolLodCoordinator : BObolLodStateMachine {
 	    lodInteractiveProgressiveCeiling >= 0 ? TRUE : FALSE;
 	lodStaticOverscanLeapAvailable = FALSE;
 	lodStaticOverscanRejected = FALSE;
-	lodStaticOverscanRetryAfterPopulationChange = FALSE;
 	lodDiscretePopulationTrialAvailable = FALSE;
 	lodInteractiveCeilingFeedbackRenderSerial = 0;
-	lodDeadlineSafeProgressiveCeiling = -1;
-	lodDeadlineSafeViewRevision = 0;
-	lodDeadlineSafePolicyRevision = 0;
 	lodFrameObligation.reset();
 	lodRefinementNotBeforeMicroseconds = 0;
 	lodPublicationPolicy.reset();
@@ -177,7 +184,7 @@ struct BObolLodCoordinator : BObolLodStateMachine {
 	    lodFrameObligation.pending() ||
 	    lodPublicationPolicy.pending() || pendingCount != 0 ||
 	    lodBudgetPolicy.calibrationFramesRemaining() != 0 ||
-	    lodDiscoveryPointProxyFramePending ||
+	    lodAdmissionPointProxyFramePending ||
 	    lodStablePointProxyCalibrationPending ||
 	    lodPointProxyTriangleRecoveryPending ||
 	    lodHeadroomPolicy.retryPending();
@@ -219,6 +226,12 @@ struct BObolLodCoordinator : BObolLodStateMachine {
     uint64_t interruptedPresentationFrameCount = 0;
     uint64_t consecutiveInterruptedPresentationFrames = 0;
     uint64_t lastInterruptedPresentationTimeNanoseconds = 0;
+    /* An interrupted CAD traversal owns an exact successor presentation.
+     * Keep owner-thread scene publication frozen until that replay completes;
+     * otherwise provider/result pumps can invalidate resumable command-plan
+     * work between deadline slices.  Workers remain free to fill their
+     * bounded queues while the presentation transaction is closed. */
+    SbBool lodInterruptedPresentationReplayPending = FALSE;
     uint64_t renderCompletionSerial = 0;
     mutable std::mutex presentationTimingMutex;
     uint64_t presentedFrameSerial = 0;
@@ -292,6 +305,7 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * entry indices are dense and source-stable, so a 150k-occurrence source
      * costs only 150 kB and an exact edit delta updates it in constant time. */
     BObolLodVisibilityCensus lodConvergenceCandidateCensus;
+    size_t lodSourceLogicalOccurrenceCount = 0;
     /* Camera/geometric projection evidence is denser than the visibility
      * census but still bounded (roughly a few dozen bytes per occurrence).
      * It belongs to this view, never to the shared database source. */
@@ -406,8 +420,23 @@ struct BObolLodCoordinator : BObolLodStateMachine {
     }
     bool pointProxyAggregationApplicable(void) const
     {
+	/* A large mesh may be internally clustered or streamed in multiple
+	 * batches, but it remains one logical CAD occurrence.  Point aggregation
+	 * can only reduce the draw-call floor of multiple occurrences; applying it
+	 * to a single Lucy-like mesh destroys the silhouette it is meant to
+	 * preserve.  A source-wide one-occurrence proof therefore vetoes a
+	 * transient discovery/cluster census.  Multi-occurrence sources still use
+	 * the camera-local visible census, so a mostly off-screen large assembly
+	 * does not collapse its one visible feature. */
+	if (lodSourceLogicalOccurrenceCount == 1)
+	    return false;
 	return BObolLodPointProxyCalibrationPolicy::applicable(
 	    lodConvergenceCandidateCount());
+    }
+    void observeLodSourceLogicalOccurrenceCount(size_t count)
+    {
+	if (count > 0)
+	    lodSourceLogicalOccurrenceCount = count;
     }
     SbBool lodSubmissionPending = FALSE;
     SbBool lodSubmissionRescanPending = FALSE;
@@ -420,10 +449,11 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * predictive point classifier expected to collapse.  One bounded pass
      * must bypass that prediction and obtain their mesh presentations. */
     SbBool lodStructuralPresentationRepairPending = FALSE;
-    /* Exact non-terminal box population which armed the current structural
-     * repair.  Its completed budget witness controls how aggressively the
-     * presentation-only point threshold aggregates the remaining tail. */
-    size_t lodStructuralRepairTargetCount = 0;
+    /* Exact non-terminal box population owned by the current closed repair
+     * transaction.  The per-occurrence share is derived only after beginPass
+     * freezes the active-cost baseline which will actually consume it. */
+    size_t lodStructuralRepairFrontierCount = 0;
+    size_t lodStructuralCoverageCostReservation = 0;
     /* Accumulated across every bounded window of one scene pass.  Unlike the
      * general refinement-debt bit, this counts only visible box-to-first-mesh
      * admissions rejected by the finite scene allowance. */
@@ -572,13 +602,6 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * ordinary repaint cannot reopen the same rejected quality staircase.
      * Genuine camera, user-policy, service, and cadence epochs clear it. */
     SbBool lodStaticOverscanRejected = FALSE;
-    /* A hard-trial miss is valid only for the occurrence population which
-     * produced it.  If point aggregation subsequently removes independent
-     * draws, remember one bounded retry to arm after the current handoff has
-     * finished.  Keeping this separate from the active/rejected bits retains
-     * the 10 Hz reconciliation allowance without making the stale miss
-     * permanent. */
-    SbBool lodStaticOverscanRetryAfterPopulationChange = FALSE;
     BObolLodBudgetPolicy lodBudgetPolicy;
     long double lodInteractiveCalibratedRenderCostPerSecond = 0.0L;
     long double lodStableCalibratedRenderCostPerSecond = 0.0L;
@@ -604,12 +627,14 @@ struct BObolLodCoordinator : BObolLodStateMachine {
     BObolLodHeadroomPolicy lodHeadroomPolicy;
     int lodInteractiveProgressiveCeiling = -1;
     /* Richest renderer-only ceiling which completed inside the hard deadline
-     * for the current view/policy.  If a later allocator handoff probes the
-     * unconstrained retained population and misses, return directly to this
-     * proven cut instead of replaying every intervening PoP ordinal. */
+     * for the current camera and source-quality domain.  An interaction and
+     * its subsequent quiet phase differ only in policy, not in the measured
+     * retained data or endpoint capacity.  If a later quiet probe misses,
+     * return directly to this proven cut instead of replaying every
+     * intervening PoP ordinal. */
     int lodDeadlineSafeProgressiveCeiling = -1;
     uint64_t lodDeadlineSafeViewRevision = 0;
-    uint64_t lodDeadlineSafePolicyRevision = 0;
+    uint64_t lodDeadlineSafeQualityDomainRevision = 0;
     /*
      * Current renderer-side small-occurrence aggregation cut.  Interaction
      * raises it immediately when measured frames miss their target.  A quiet
@@ -619,6 +644,7 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      */
     float lodPresentationPointProxyPixelThreshold = 1.0f;
     BObolLodPointProxyCalibrationPolicy lodPointProxyCalibrationPolicy;
+    BObolLodStructuralAdmissionPolicy lodStructuralAdmissionPolicy;
     /* Streaming discovery may temporarily aggregate tiny structural leaf
      * proxies more aggressively than the measured stable-view policy.  It is
      * renderer-only and is retired as soon as the producer inventory settles;
@@ -626,7 +652,12 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * the terminal point-calibration bracket. */
     float lodDiscoveryPointProxyPixelThreshold = 1.0f;
     BObolLodPointProxyCalibrationPolicy lodDiscoveryPointProxyPolicy;
-    SbBool lodDiscoveryPointProxyFramePending = FALSE;
+    /* A discovery-release or structural-distribution threshold mutation must
+     * be presented exactly before mesh admission may consume its classifier.
+     * This is intentionally distinct from stable point calibration, which
+     * measures an already realized CAD population and never blocks source
+     * work. */
+    SbBool lodAdmissionPointProxyFramePending = FALSE;
     /*
      * A changed quiet aggregation threshold needs one measured presentation
      * before convergence is authoritative.  Keep this distinct from PoP

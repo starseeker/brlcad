@@ -58,6 +58,8 @@
 #include "QgEdApp.h"
 #include "QgGuiTestDriver.h"
 
+static constexpr int qged_test_canvas_ready_timeout_milliseconds = 5000;
+
 static std::vector<BObolViewController *>
 qged_test_all_controllers(QgEdApp &app)
 {
@@ -1473,6 +1475,47 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
 }
 
 static bool
+qged_test_wait_canvas_ready(QgEdApp &app, int timeoutMilliseconds,
+    QString *error)
+{
+    QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+    QgCanvasBase *canvas = view ? view->canvasBase() : nullptr;
+    QWidget *widget = canvas ? canvas->canvasWidget() : nullptr;
+    if (!widget) {
+	if (error)
+	    *error = QStringLiteral(
+		"wait_canvas_ready requires an active CAD canvas");
+	return false;
+    }
+
+    timeoutMilliseconds = std::max(0, timeoutMilliseconds);
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (elapsed.elapsed() <= timeoutMilliseconds) {
+	QgGL *glWidget = qobject_cast<QgGL *>(widget);
+	QgSW *softwareWidget = qobject_cast<QgSW *>(widget);
+	const bool initialized =
+	    (glWidget && glWidget->isPresentationInitialized()) ||
+	    (softwareWidget && softwareWidget->isPresentationInitialized());
+	if (widget->isVisible() && initialized)
+	    return true;
+
+	QEventLoop loop;
+	const int remaining = timeoutMilliseconds -
+	    static_cast<int>(elapsed.elapsed());
+	QTimer::singleShot(std::max(1, std::min(16, remaining)), &loop,
+	    &QEventLoop::quit);
+	loop.exec(QEventLoop::AllEvents);
+    }
+
+    if (error)
+	*error = QStringLiteral(
+	    "CAD canvas did not complete its initial presentation within %1 ms")
+	    .arg(timeoutMilliseconds);
+    return false;
+}
+
+static bool
 qged_test_wait_progressive_scope_ready(QgEdApp &app,
     int timeoutMilliseconds, int quietMilliseconds, QString *error)
 {
@@ -1853,7 +1896,17 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			}
 			if (app.w && updatesEnabled) {
 			    app.w->setUpdatesEnabled(true);
-			    app.w->update();
+			    /* A batch deliberately suppresses intermediate paints.  Updating
+			     * only the top-level window after re-enabling updates can leave a
+			     * QOpenGLWidget's retained framebuffer stale: the frame request
+			     * was queued while its parent was disabled.  Wake the actual
+			     * canvas once, without changing the semantic scene again. */
+			    QgView *view = app.w->CurrentDisplay();
+			    QgCanvasBase *canvas = view ? view->canvasBase() : nullptr;
+			    if (canvas)
+				canvas->present_frame();
+			    else
+				app.w->update();
 			}
 		    }
 		} else if (events[i].action ==
@@ -1899,6 +1952,13 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			    QStringLiteral("timeout_ms")).toInt(30000),
 			events[i].arguments.value(
 			    QStringLiteral("quiet_ms")).toInt(100),
+			&error);
+		} else if (events[i].action ==
+		    QLatin1String("wait_canvas_ready")) {
+		    success = qged_test_wait_canvas_ready(app,
+			events[i].arguments.value(
+			    QStringLiteral("timeout_ms")).toInt(
+				qged_test_canvas_ready_timeout_milliseconds),
 			&error);
 		} else if (events[i].action ==
 		    QLatin1String("wait_progressive_scope_ready")) {

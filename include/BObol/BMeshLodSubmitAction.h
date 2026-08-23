@@ -64,6 +64,11 @@ public:
      * resulting repair pass, require those otherwise eligible fallbacks to
      * enter the mesh provider path. */
     void setStructuralPresentationRepair(SbBool repair);
+    /* Divide one exact-frame structural repair allowance across the complete
+     * unresolved frontier.  The controller supplies a per-occurrence share;
+     * workers still report the exact minimum PoP population and the completed
+     * framebuffer remains the capacity authority. */
+    void setStructuralCoverageCostReservation(size_t cost);
     /* Exactly one effective selected occurrence may bypass a subpixel proxy
      * so Coin geometry and edit manipulators can be prepared.  Bulk
      * selection only restyles valid point/box/mesh presentations and must not
@@ -263,6 +268,7 @@ private:
     float pointProxyPixelThreshold;
     SbBool structuralCoverageOnly;
     SbBool structuralPresentationRepair;
+    size_t structuralCoverageCostReservation;
     size_t selectedOccurrenceCount;
     uint64_t generation;
     uint64_t viewRevision;

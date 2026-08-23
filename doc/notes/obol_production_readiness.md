@@ -1,6 +1,6 @@
 # Obol production-readiness matrix
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 
 This is the executable qualification plan for the BRL-CAD Obol drawing stack.
 It records required rows and current evidence, not a chronological development
@@ -11,18 +11,141 @@ its report, images, and performance data satisfy the common criteria below.
 
 The semantic/API redesign and lower-level architecture gates are complete.
 The exact current build passes the combined `drawing_baseline` and
-`bobol_headless` selection (86 tests, one capability skip), including the full
-NIST BREP corpus, qged polygon and primitive-edit replay, selection, picking,
-measurement, framebuffer, endpoint, and shared-library contracts.  Prior
-current-architecture evidence also includes the larger graphical control
-matrices and System-GL 50k/150k stress runs.  The complete real-model and
-platform release matrix below remains open.
+`bobol_headless` selection (86 tests in 389 seconds, one unavailable X11
+capability skip), including the full NIST BREP corpus, qged polygon and
+primitive-edit replay, selection, picking, measurement, framebuffer,
+endpoint, and shared-library contracts.  Prior current-architecture evidence
+also includes the larger graphical control matrices and System-GL 50k/150k
+stress runs.  The complete real-model and platform release matrix below
+remains open.
 
 Recently completed focused evidence:
 
+- 2026-08-23 pending allocator requalification: the scene allocator now admits
+  modest point-eligible occurrences jointly with mesh cuts, rather than making
+  every 12-pixel part a mandatory mesh before visually dominant parts can
+  refine.  A one-occurrence scene is deliberately excluded: point aggregation
+  cannot reduce its dispatch work and must not hide its only mesh.  A fresh
+  OSMesa Lucy cold start reaches its first stable checkpoint in 26.3 seconds
+  with one compact resident mesh, 144,976 faces, no proxy, and no compact
+  registry gap.  The previous full run found that exact handoff gap before the
+  correction; its other 15 rows passed.  The focused 50k OSMesa matrix passes,
+  while the whole OSMesa matrix and 150k rows must be repeated before release.
+
+- 2026-08-23 static marginal-capacity correction: a hard-deadline miss already
+  records a five-percent-below-failed strict capacity ceiling.  The retained
+  marginal allocator was applying its independent 20-percent throughput margin
+  to that already conservative ceiling a second time, unnecessarily stranding
+  visible detail.  The current source caps the once-margin-derived estimate at
+  the strict ceiling directly; `libBObol_lod_coordinator` exercises that
+  boundary.  Focused certified-warm 150k OSMesa shaded runs reach an idle,
+  zero-box terminal state after initial draw and zoom/rotation (roughly
+  34--71 seconds on this host, with 80--98 ms final frames).  A later full
+  interaction/selection/erase/redraw replay completed in 55 seconds with
+  2,806 mesh payloads and 149,135 subpixel proxies: a useful 150k overview
+  is feasible, while a per-occurrence software-raster presentation does not
+  meet the interactive target on this host.  This validates liveness and the
+  bounded recovery path only: approximately 1.2k of 2.45k prominent
+  occurrences can still miss the visual-quality floor.  Do not mark
+  visual-significance qualification green until the significance-frontier work
+  below has improved a representative real-model result as well as this
+  synthetic stress case.
+
+- 2026-08-23 current-source retry/occurrence qualification: after the static
+  first-presentation retry and source-logical occurrence fixes, the full OSMesa
+  qged matrix passes again for Generic Twin, Lucy, Havoc, and Hubble in
+  shaded/wire cold/certified-warm (16 rows), plus 50k and 150k distinct-asset
+  shaded/wire cold/warm.  The same source passes every selected libBObol,
+  libged drawing, qged interaction/editing, qtcad/Obol, gsh, and MGED/LoD CTest
+  row.  The full CTest invocation still has unrelated environment/reference
+  failures: loopback-network tests are sandbox-blocked, and the pivot/repository
+  guards plus legacy raytrace image references need their own owners.  System
+  GL remains unqualified on this host because no usable X socket is available.
+
+- 2026-08-23 exact-current OSMesa qualification: Generic Twin, Lucy, Havoc,
+  and Hubble pass fresh-cold and certified-warm shaded/wire qged rows (16
+  total), including screenshots, selection/tree transitions, exact erase and
+  redraw, smooth zoom, retained-history return, and zero terminal boxes.  The
+  50k and 150k distinct-asset rows also pass shaded/wire cold/warm.  The 150k
+  final renders are bounded to roughly 34--86 ms and retain exact 150,001
+  occurrence coverage, but report a typed software-performance limit and
+  nonzero prominent-quality-floor debt; this is not release clearance for
+  visual significance.  System GL must be rerun from this binary set on a
+  valid X host: the present host's `/tmp/.X11-unix` owner prevents Xvfb from
+  creating its local socket.
+
+- 2026-08-23 current-source continuity qualification: a completed CAD work
+  record now preserves the richest deadline-safe presentation cut across a
+  policy-only interaction-to-quiet handoff, while camera, renderer, and
+  source-quality-domain changes invalidate it.  Fractional terminal targets
+  remain fractional through submit-action allocation.  Lucy shaded passes
+  cold/warm on System GL (51/26 seconds) and OSMesa (55/32 seconds), with a
+  0.75-pixel return request realized at cut 21 / 0.645 pixels; Hubble OSMesa
+  shaded/wire cold/warm passes after a state-based first-canvas-paint barrier;
+  and shared-cache OSMesa shaded scale rows pass at 50k (24 seconds) and 150k
+  (53 seconds).  The 150k terminal state has zero boxes, 2,066 mesh
+  occurrences, 147,934 subpixel points, and a 60 ms retained frame.  This is
+  focused post-change evidence only: repeat the full shared-stack and truly
+  cold scale rows before release.
+
 - independently compiled controller frame-execution and libged retained-
   geometry bridge extractions, followed by current System GL and OSMesa
-  Generic Twin cold/warm graphical passes;
+  Generic Twin shaded/wire cold/warm graphical passes (all 709 managed
+  occurrences are meshes with zero boxes in the wire rows);
+- current System GL and OSMesa Hubble shaded/wire cold/warm passes, including
+  tree selection and exact erase/redraw through the representative `PANEL_C01`
+  branch;
+- current Lucy shaded and wire cold/warm passes on both renderers.  The
+  graphical smooth-zoom sequence proves in-motion spatial-prefix growth,
+  crack-free close views, bounded wheel dispatch, exact-view history recall,
+  zero terminal boxes, and zoom-out resident compaction.  OSMesa wire
+  correctly reports a hard static-frame performance limit when the next
+  discrete population cannot meet the deadline rather than falsely claiming
+  unconstrained pixel-exact convergence;
+- current Havoc shaded/wire cold/warm passes on both renderers;
+- current 50k distinct-asset System GL shaded cold/warm passes (21/19 seconds
+  wall time for the scripted rows), with 50,001 available leaves, exact
+  terminal coverage, zero boxes, roughly 15.3k retained mesh payloads plus
+  36.6k subpixel occurrences, and a separately passing warm perf capture;
+- current 150k distinct-asset System GL shaded cold/warm passes (42/39 seconds
+  wall time), with exact 150,001-leaf terminal coverage, zero boxes, roughly
+  15--18k retained mesh payloads plus 135--137k subpixel occurrences, and peak
+  transient mesh work below 68 MiB;
+- current 50k distinct-asset OSMesa shaded cold/warm passes (35/50 seconds),
+  and a separately fresh-cache OSMesa wire cold/warm pair (50/75 seconds).
+  The wire rows converge after rotation with exact 50,001-occurrence
+  classification, zero structural boxes, roughly 1.8k retained mesh
+  occurrences plus 48k subpixel occurrences, an explicit software-performance
+  limit, and zero stagnant coordinator dispatches;
+- current 150k distinct-asset OSMesa shaded cold/warm passes (98/72 seconds).
+  Both terminal states have exact occurrence classification, zero boxes, zero
+  stagnant dispatches, an aggregate point threshold of 64, and explicit
+  software-performance limits.  The cold/warm frames retain 2,119/2,855 mesh
+  occurrences plus roughly 148k subpixel occurrences.  A 297-frame APNG
+  diagnostic distinguishes one bounded capacity backoff from the former
+  coarse/fine alternation, and the final stable screenshots are coherent;
+- focused current-build warm revalidation after structural marginal-budget
+  certification and the closed interrupted-replay transaction reaches exact
+  150,001-occurrence classification with zero boxes.  Clean 150k shaded runs
+  completed in 25--26 seconds total (16--18 seconds in the final idle wait),
+  retained roughly 1.6k meshes plus 148k subpixel occurrences, and drew the
+  terminal OSMesa frame in roughly 82--90 ms.  The corresponding System GL row
+  completed in 16 seconds total (8 seconds in the idle wait) with a 25 ms
+  terminal render.  A deliberately traced OSMesa run took 53 seconds and a
+  clean timeline took 68 seconds total while still finishing with zero boxes;
+  this remaining preparation/allocation variance is an open release issue, not
+  evidence that the terminal 150k software presentation is intrinsically
+  undrawable.  A current 50k OSMesa replay also finished in 15 seconds total,
+  with exact coverage, zero boxes, no stagnant dispatches, and an 85 ms
+  terminal frame;
+- current 150k distinct-asset OSMesa wire warm interaction/lifecycle pass
+  (126 seconds), with exact 150,001-occurrence classification, zero structural
+  boxes, no pending work, and a ceiling-free terminal local allocation after
+  zoom, rotation, selection, exact subpath erase, and redraw.  This proves the
+  resident-growth and failed-headroom no-reentry fixes, but is not yet a green
+  release row: cold evidence is outstanding and repeated warm runs have used
+  materially different portions of the 100 ms static allowance (roughly
+  18--60 pixels worst projected error);
 - rotation- and aspect-safe autoview framing, exact retained-scene image
   controls, and matching eager/deferred terminal endpoint images;
 - repeated warm System GL validation of the level-triggered Qt idle-tail
@@ -47,6 +170,9 @@ Recently completed focused evidence:
   completion marker for the same canonical file identity.
 - Fixed sleeps are not completion.  Wait on controller, subprocess, frame, or
   quiet-state predicates with an outer timeout.
+- Keep ordinary timing at stage granularity.  Per-batch and per-asset logging
+  is verbose-only: logging a 50k/150k stream changes the owner-thread schedule
+  that the trace is meant to measure.
 - Preserve small reports and representative failure images.  Reuse one copy of
   large geometry and delete per-run caches, traces, and duplicate captures once
   findings are recorded.

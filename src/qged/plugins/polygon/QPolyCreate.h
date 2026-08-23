@@ -113,6 +113,7 @@ class QPolyCreate : public QWidget
 	QgPolyCreateFilter *pcf = nullptr;
 	QgPluginContext *m_ctx = nullptr;
 
+	void select_created_polygon(void *view);
 	struct ged *getGed() const;
 };
 

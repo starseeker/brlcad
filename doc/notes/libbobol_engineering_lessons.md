@@ -1,6 +1,6 @@
 # libBObol engineering lessons
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 
 This document preserves durable lessons from the Obol drawing migration and
 production shake-down.  It is not a chronological status log.  Each entry
@@ -79,6 +79,100 @@ obligation.  A retry must identify a task, cursor, budget edge, handoff, or
 render acknowledgement that can change state.  Otherwise retire it as terminal
 or error.  Tests must reject mesh-to-box regression and repeated phase cycling.
 
+### Admission acknowledgement is not capacity calibration
+
+The 50k structural scene completed thousands of exact point/box frames but
+submitted no meshes.  The classifier frame correctly contained no managed
+mesh cost and was routed around capacity calibration; its admission latch was
+incorrectly retired only inside that skipped capacity path.  This made the
+absence of meshes prevent the transition whose job was to admit them.
+
+Rule: acknowledge a presentation transaction according to what the exact frame
+proved, independently of whether its work is a reusable throughput sample.
+Changing ownership of an unchanged effective classifier threshold is not a
+framebuffer mutation.  Tests must prove nonzero first-wave submission after
+settled structural coverage, not merely that the renderer keeps presenting.
+
+### A removed recovery ceiling does not erase its capacity proof
+
+OSMesa wire correctly stopped a Lucy return view after the next richer static
+population missed the hard presentation deadline, but reconciliation removed
+the temporary renderer ceiling before convergence status was queried.  The HUD
+therefore called a 1.29-pixel result unconstrained against a one-pixel target.
+
+Rule: the rejected static-quality trial is a view/policy/source-epoch capacity
+witness, not an implementation detail of the temporary ceiling.  Preserve and
+report that typed performance constraint until a genuine camera, policy,
+resource, cadence, or population edge invalidates it.  Qualification compares
+the current exact frame with its current budget and protected-quality result;
+raw work from an earlier view is neither a fidelity ordering nor a valid
+capacity predicate after view-local clustering and recalibration.
+
+### A first static frame is not necessarily steady-state capacity evidence
+
+Lucy could complete an approximately 95 ms static frame after a first attempt
+had exceeded the 100 ms endpoint deadline while newly published resources were
+being installed.  The preparation serial did not capture that renderer-side
+first-use cost, so the controller permanently rejected static quality and
+forced a much coarser 80 ms marginal allocation even though the stable frame
+was valid.
+
+Rule: an explicit static-quality trial gets exactly one unchanged retry.  The
+second unchanged deadline miss is the capacity witness; a changed preparation
+remains forward progress.  This exception is only for a typed static trial,
+never active input, and it must not become an open-ended retry path.
+
+### Hard aborts cannot use a completed-frame deadband
+
+The first warm 50k OSMesa wire replay repeatedly aborted at about 101 ms
+against a 100 ms endpoint deadline.  The small-part controller reused a five-
+percent completed-frame jitter deadband, returned the unchanged one-pixel cut,
+and requested the identical incomplete frame.  Once that was corrected, a
+second legacy path walked the point cut toward safety and then reopened the
+same already rejected one-pixel static trial, producing a larger
+one-pixel/coarse cycle.
+
+Rule: a hard-aborted irreducible frame is typed endpoint evidence, not a noisy
+completed timing sample.  It must advance the remaining reversible population
+control by a bounded step.  A rejected static-quality population remains
+rejected for its view/capacity epoch; changing the recovery point threshold
+does not make the rejected one-pixel population cheaper and cannot invalidate
+that proof.  Camera, user-policy, renderer/resource, or cadence epoch changes
+may start a new trial.  Regression qualification must include a truly fresh
+cold/first-warm pair because later cache and scheduling state can hide this
+class of liveness failure.
+
+### Structural points are not hidden richer geometry
+
+The 150k OSMesa shaded replay exposed a second coarse/fine cycle after the
+hard-abort fix.  Triangle recovery and static-quality headroom paths reset the
+aggregate point threshold to one.  That is valid only when every point stands
+in for an already realized mesh.  During streaming population many points are
+the best published structural fallback; lowering their threshold reveals
+boxes, so the purported quality recovery is actually a visual regression.
+
+Rule: triangle-prefix recovery and point/box aggregation are independent.
+Keep the last proven aggregate cut while any structural fallback occurrences
+remain.  A one-pixel static-quality trial is allowed only for a fully realized
+population.  Mesh publication, rather than a triangle-recovery endpoint,
+removes the structural constraint.  Verify this with frame-sequence evidence:
+one bounded capacity backoff is legitimate, but a return to a previously
+rejected denser population in the same epoch is a control-cycle failure.
+
+### PoP spatial clusters are not scene occurrences
+
+The one-Lucy mesh source carries many spatial PoP clusters so that zoomed views can
+load only needed pages.  A point-aggregation guard used that transient cluster
+census as if it were a scene occurrence count, which let exact Lucy frames
+collapse into points despite there being only one logical object to draw.
+
+Rule: retain a source-wide logical occurrence count separately from the
+view-local spatial census.  A count of one vetoes point aggregation.  For
+multi-occurrence sources, apply the visible census as well, so an assembly with
+only one visible part is not needlessly reduced to a point.  Page/cluster
+partitioning is an implementation detail; occurrence identity is a scene
+semantic.
+
 ### Ready is a semantic proof, not an empty queue
 
 An empty worker queue may still have unpublished results, unacknowledged frames,
@@ -89,6 +183,34 @@ geometry resident.
 Rule: readiness combines exact live-source coverage, visible occurrence
 classification, affordable cut satisfaction, terminal failure/constraint
 reasons, drained publication, and acknowledgement of the current frame.
+
+### A completed frame is capacity evidence even if new work is queued
+
+Lucy could draw a richer in-gesture cut inside the stable 100 ms deadline, but
+the next queued submission changed mutable scene status before quiet handoff
+consulted it.  The controller then forgot that proof and replaced the displayed
+cut with an unnecessarily coarser one.  A second defect rounded a 0.75-pixel
+request to one pixel in the scene error-ceiling helper, even though the
+provider and retained allocator honored the fractional request.
+
+Rule: associate deadline capacity with the immutable completed-work record,
+not later mutable scene status.  The richest completed cut is reusable across
+policy-only transitions for the same camera and source-quality domain; camera,
+renderer, or source-population changes invalidate it.  Preserve the exact
+fractional pixel target at every selection and allocation boundary.  The hard
+deadline still clamps an attempted richer replacement below the cut that
+actually missed.
+
+### First-useful-image timing starts after the canvas is presentable
+
+An OSMesa Hubble row issued `draw` while the Qt software canvas was still
+waiting for its first paint.  The controller later reached an exact zero-box
+frame, but the test attributed canvas startup to source realization.
+
+Rule: GUI qualification waits for the active canvas's explicit first-paint
+state before measuring draw-to-first-useful-image latency.  This is a
+state-based barrier, not a startup sleep; it preserves cold-stream timing once
+a user can actually see the canvas.
 
 ### Progress percentages must reflect remaining cost
 
@@ -158,6 +280,40 @@ emphasis, and the marginal cost of the next cut.  Apply quality floors to
 prominent objects and use a priority frontier.  Perspective distance matters
 only through projection.
 
+### Resident growth and allocation are one transaction
+
+A compact source can finish database inventory while bounded cache/service
+waves are still appending immutable PoP suffixes.  Treating that inventory
+edge as a settled scene ran the global minimax allocator in every momentary
+queue gap; each late result invalidated its certificate, rebalanced all visible
+cuts, and made 150k views alternate coarse and fine for tens of seconds.
+
+Rule: keep the last coherent framebuffer while provider, task, result,
+publication, or resident-drain work owns the population.  Run one scene-wide
+importance allocation only after all of those owners are quiet.  A hard failed
+headroom trial is a negative capacity witness, not a cancellation: remember it
+until the view/policy/population changes or materially greater capacity is
+proved.  Failures observed before the population closes may constrain that
+attempt, but must not poison the final event-driven static-quality pass.
+
+### Resumable rendering requires a closed scene population
+
+A 150k OSMesa frame often spends its deadline preparing the retained point,
+instance, atlas, and command record rather than rasterizing it.  The renderer
+correctly preserved its cursor, but the ordinary owner-thread pump could apply
+another provider or result wave before the successor frame.  Each nominally
+resumable slice then described a different scene and discarded the work just
+completed, amplifying a bounded preparation into long, schedule-sensitive
+convergence.
+
+Rule: after an interrupted CAD traversal, freeze every owner-thread scene
+publication path until the exact successor presentation completes.  Keep
+workers behind their existing byte/result bounds; do not block or discard
+their immutable output.  Release the publication gate on every completed CAD
+frame, including presentation-only frames, before capacity-specific early
+returns.  Test both halves: a provider must not run while replay is pending and
+must run immediately after the completed-frame commit.
+
 ## Camera, view, and presentation
 
 ### Autoview has one owner and one certified extent
@@ -199,6 +355,21 @@ a semantic delta into a presentation request left erase/redraw visually stale.
 Rule: expose/repaint blits the matching completed image/FBO.  Semantic,
 selection, edit, camera, policy, or result publication explicitly requests a
 new frame.  Camera-only refresh with no camera change is passive.
+
+### Shared retained content needs mutation-aware presentation fanout
+
+GED-wide annotations, features, and polygons live under a shared retained
+root, while each graphical view owns a different framebuffer and presentation
+callback.  Updating the shared store correctly requested a render from its
+controller, but that controller has no graphical host.  System GL therefore
+kept an old framebuffer even though an observational OSMesa traversal could
+appear correct.  Conversely, waking every view after every successful `view`
+command made read-only inspection needlessly redraw large scenes.
+
+Rule: a successful shared-store mutation advances the shared controller's
+request serial.  Compare that serial around command execution and fan out one
+presentation-only request to graphical views only when it changed.  Store
+updates remain renderer-neutral; queries remain passive.
 
 ### Every new host-work level needs a retained witness
 
@@ -299,6 +470,19 @@ typed revision events and submit typed operations to the same session.  Plugin
 unload has a synchronous barrier which destroys filters, controls, dialogs,
 and retained presenters before unloading the DSO.
 
+### Tool refresh is not a selection gesture
+
+The polygon editor once treated the combo box's first item as both a display
+default and a scene selection.  A paint, checkpoint, or command readback could
+therefore select a polygon merely by refreshing the widget, altering command
+state and selection appearance without user input.
+
+Rule: the retained selection record is authoritative.  Passive widget refresh
+only mirrors the selected record; mouse selection, an explicit combo change,
+and a creation/deletion gesture are the only transitions allowed to change
+selection.  Creation may establish an initial target only if none exists, and
+editor deletion may deliberately advance to a remaining target.
+
 ### Whole-row tree styling is data, not repaint work
 
 Selection/impact highlighting once depended on expensive per-cell path work.
@@ -315,6 +499,10 @@ the complete row.  Never resolve geometry or traverse the scene during paint.
   event filters, coordinate transforms, focus, control readback, or tool state.
 - Wait on semantic completion, not fixed sleeps.  Raytraces, LoD, and worker
   drain vary by renderer and cache state.
+- Keep ordinary timing observational.  Aggregate streamed-source and resident
+  mesh timing at the completed realization; per-batch or per-asset logs belong
+  behind an explicit verbose switch because synchronous logging changes the
+  schedule and can manufacture a large-model regression.
 - Capture every transient frame with APNG when diagnosing flicker; a final PNG
   can hide a one-frame regression.
 - A test must reject empty geometry and terminal boxes explicitly.  Earlier

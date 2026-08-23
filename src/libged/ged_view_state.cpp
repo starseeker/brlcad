@@ -818,7 +818,38 @@ ged_bobol_view_controllers_foreach(struct ged *gedp,
 	    bobol_display_endpoint_controller(record->display_endpoint));
 	if (controller && !callback(record->view_ctx, controller, userdata))
 	    break;
-    }
+	}
+}
+
+struct ged_view_presentation_request_context {
+    const char *reason;
+};
+
+static int
+ged_bobol_request_shared_presentation(struct ged_view_context *view_ctx,
+    BObolViewController *controller, void *userdata)
+{
+    struct ged_view_presentation_request_context *context =
+	static_cast<struct ged_view_presentation_request_context *>(userdata);
+    if (!view_ctx || !controller || ged_view_context_is_independent(view_ctx))
+	return 1;
+
+    controller->requestPresentationRender(context && context->reason ?
+	context->reason : "ged-shared-presentation");
+    return 1;
+}
+
+void
+ged_bobol_shared_view_presentation_request(struct ged *gedp,
+    const char *reason)
+{
+    if (!gedp)
+	return;
+
+    struct ged_view_presentation_request_context context = {reason};
+    ged_bobol_view_controllers_foreach(gedp,
+	ged_bobol_request_shared_presentation,
+	&context);
 }
 
 extern "C" GED_EXPORT int

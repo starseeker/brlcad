@@ -1422,7 +1422,7 @@ BObolPopState::BObolPopState(
 	    normalArray = normalizedNormalArray.empty() ? NULL :
 		reinterpret_cast<const vect_t *>(
 		    normalizedNormalArray.data());
-	if (getenv("BOBOL_DRAW_TIMING"))
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
 	    bu_log("[obol-timing] pop cache: discarded %zu "
 		   "topologically degenerate faces\n",
 		   inputFaceCount - drawableFaceCount);

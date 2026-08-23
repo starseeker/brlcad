@@ -277,15 +277,10 @@ QPolyMod::mod_names_reset()
     /* Geometry-only updates must not call this routine: rebuilding the combo
      * box during every drag perturbs editor selection and adds work to the
      * latency-sensitive mouse path.  Membership/name changes and tool
-     * activation call it explicitly.  Preserve the selected scene handle
-     * when it still exists; otherwise select the first live record. */
+     * activation call it explicitly.  The scene's selection is authoritative;
+     * merely populating the editor must never select a polygon. */
     QString selected_name;
-    if (!ged_view_polygon_ref_is_null(p)) {
-	qg_polygon_record selected_rec;
-	if (ged_view_polygon_record_get(qpolymod_current_ged_view(m_ctx), p,
-		&selected_rec) && selected_rec.name)
-	    selected_name = QString::fromLocal8Bit(selected_rec.name);
-    }
+    p = GED_VIEW_POLYGON_REF_NULL;
 
     mod_names->blockSignals(true);
     mod_names->clear();
@@ -298,20 +293,22 @@ QPolyMod::mod_names_reset()
 		_qpolymod_poly_collect_cb, &pc);
 	for (auto s : polyvec) {
 	    qg_polygon_record rec;
-	    if (ged_view_polygon_record_get(qpolymod_current_ged_view(m_ctx), s, &rec) && rec.name)
-		mod_names->addItem(rec.name);
+	    if (!ged_view_polygon_record_get(qpolymod_current_ged_view(m_ctx), s,
+		    &rec) || !rec.name)
+		continue;
+	    mod_names->addItem(rec.name);
+	    if (rec.selected) {
+		p = s;
+		selected_name = QString::fromLocal8Bit(rec.name);
+	    }
 	}
     }
     int selected_index = selected_name.isEmpty() ? -1 :
 	mod_names->findText(selected_name);
-    if (selected_index < 0 && mod_names->count() > 0)
-	selected_index = 0;
     mod_names->setCurrentIndex(selected_index);
     if (selected_index >= 0) {
-	select(mod_names->currentText());
+	sync_selected_polygon(selected_name);
     } else {
-	ged_view_polygon_clear_selection(qpolymod_ged_view(v));
-	p = GED_VIEW_POLYGON_REF_NULL;
 	ps->view_name->clear();
     }
     mod_names->blockSignals(false);
@@ -461,6 +458,34 @@ QPolyMod::delete_selected_point()
 }
 
 void
+QPolyMod::sync_selected_polygon(const QString &name)
+{
+    if (ged_view_polygon_ref_is_null(p))
+	return;
+    qg_polygon_record rec;
+    if (!ged_view_polygon_record_get(qpolymod_current_ged_view(m_ctx), p,
+	    &rec))
+	return;
+    poly_type_settings(&rec);
+    ps->settings_sync(&rec);
+    ps->view_name->setText(name);
+    ps->sketch_sync->blockSignals(true);
+    ps->sketch_sync->setChecked(rec.sketch_name && rec.sketch_name[0]);
+    ps->sketch_sync->blockSignals(false);
+    ps->sketch_name->blockSignals(true);
+    if (rec.sketch_name && rec.sketch_name[0]) {
+	ps->sketch_name->setText(rec.sketch_name);
+	ps->sketch_name->setPlaceholderText("");
+    } else {
+	ps->sketch_name->clear();
+    }
+    ps->sketch_name->blockSignals(false);
+    /* Apply collision styling and enabled/placeholder state after both the
+     * selected handle and its sketch controls describe the same record. */
+    sketch_name_edit();
+}
+
+void
 QPolyMod::select(const QString &poly)
 {
     struct ged *gedp = getGed();
@@ -471,34 +496,12 @@ QPolyMod::select(const QString &poly)
 	return;
 
     ged_view_polygon_clear_selection(qpolymod_ged_view(v));
-    p = GED_VIEW_POLYGON_REF_NULL;
     p = ged_view_polygon_find(qpolymod_ged_view(v),
-	    poly.toLocal8Bit().data());
-    if (!ged_view_polygon_ref_is_null(p)) {
-	ged_view_polygon_set_selected(qpolymod_ged_view(v), p, 1);
-	qg_polygon_record rec;
-	if (!ged_view_polygon_record_get(qpolymod_current_ged_view(m_ctx), p, &rec))
-	    return;
-	poly_type_settings(&rec);
-	ps->settings_sync(&rec);
-	ps->view_name->setText(poly);
-	ps->sketch_sync->blockSignals(true);
-	ps->sketch_sync->setChecked(rec.sketch_name && rec.sketch_name[0]);
-	ps->sketch_sync->blockSignals(false);
-	ps->sketch_name->blockSignals(true);
-	if (rec.sketch_name && rec.sketch_name[0]) {
-	    ps->sketch_name->setText(rec.sketch_name);
-	    ps->sketch_name->setPlaceholderText("");
-	} else {
-	    ps->sketch_name->clear();
-	}
-	ps->sketch_name->blockSignals(false);
-	/* Apply collision styling and enabled/placeholder state after both the
-	 * selected handle and its sketch controls describe the same record. */
-	sketch_name_edit();
-
+	poly.toLocal8Bit().data());
+    if (ged_view_polygon_ref_is_null(p))
 	return;
-    }
+    ged_view_polygon_set_selected(qpolymod_ged_view(v), p, 1);
+    sync_selected_polygon(poly);
 }
 
 void
@@ -720,6 +723,12 @@ QPolyMod::delete_poly()
     ged_view_polygon_remove(qpolymod_current_ged_view(m_ctx), p);
     p = GED_VIEW_POLYGON_REF_NULL;
     mod_names_reset();
+
+    /* Deletion is an explicit editor action.  Continue editing the next
+     * available polygon, while passive command-driven removal deliberately
+     * leaves the scene with no polygon selection. */
+    if (mod_names->count() > 0)
+	mod_names->setCurrentIndex(0);
 
     emit view_updated(QG_VIEW_REFRESH);
 }
@@ -1100,8 +1109,13 @@ QPolyMod::eventFilter(QObject *, QEvent *e)
     delete_pnt->setEnabled(have_rec && rec.type == QG_POLYGON_GENERAL &&
 	rec.curr_point_i >= 0);
 
-    // If we need to, update our selected list entry
-    if (select_mode->isChecked() && have_rec) {
+    /* A passive paint, resize, or command-driven scene update must not change
+     * selection.  The old condition reselected the remembered polygon for
+     * every event delivered through this filter, making a framebuffer readback
+     * observably mutate command state.  Selection is a mouse-press transition
+     * owned by QgPolySelectFilter. */
+    if (select_mode->isChecked() && e->type() == QEvent::MouseButtonPress &&
+	ret && have_rec) {
 	int cind = mod_names->findText(rec.name ? rec.name : "");
 	mod_names->blockSignals(true);
 	mod_names->setCurrentIndex(cind);

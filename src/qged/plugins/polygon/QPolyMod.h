@@ -114,6 +114,7 @@ class QPolyMod : public QWidget
 
     private:
 	void poly_type_settings(const struct ged_view_polygon_record *ip);
+	void sync_selected_polygon(const QString &name);
 	bool sketch_update(ged_view_polygon_ref ref);
 	int poly_cnt = 0;
 	ged_view_polygon_ref p = GED_VIEW_POLYGON_REF_NULL_INIT;

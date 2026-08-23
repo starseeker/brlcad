@@ -824,9 +824,13 @@ test_headroom_policy(void)
 	std::fprintf(stderr, "FAIL: monotonic headroom budget high-water\n");
 	return 1;
     }
-    if (!policy.armRetry(view, lodPolicy, 1001, 120) ||
-	!policy.consumeRetry(view, lodPolicy, 120, 1001,
-	    200.0L, 10, 100, true) ||
+    /* A minimax redistribution changes active render cost without creating a
+     * new renderer-capacity epoch.  It must not erase the high-water witness;
+     * only material budget growth may re-arm in the same view/policy. */
+    if (policy.armRetry(view, lodPolicy, 1001, 159) ||
+	!policy.armRetry(view, lodPolicy, 1001, 200) ||
+	!policy.consumeRetry(view, lodPolicy, 200, 1001,
+	    300.0L, 10, 100, true) ||
 	!policy.armRetry(BObolLodViewEpoch(5), lodPolicy, 2000, 120) ||
 	!policy.consumeRetry(BObolLodViewEpoch(5), lodPolicy, 120, 2000,
 	    200.0L, 10, 100, true) ||
@@ -888,6 +892,28 @@ test_headroom_policy(void)
 	    300.0L, 10, 100, true) || policy.retryPending() ||
 	!policy.armRetry(BObolLodViewEpoch(9), lodPolicy, 3000, 200)) {
 	std::fprintf(stderr, "FAIL: stale headroom witness handling\n");
+	return 1;
+    }
+    /* A deadline miss is a consumed negative witness, not a cancellation.
+     * A recovery redistribution may not re-arm the failed allowance merely
+     * because its active cost differs, but material capacity growth and a new
+     * view epoch remain valid progress witnesses. */
+    const BObolLodViewEpoch rejectedView(91);
+    if (!policy.armRetry(rejectedView, lodPolicy, 4000, 300) ||
+	!policy.retryPending()) {
+	std::fprintf(stderr, "FAIL: rejected headroom witness setup\n");
+	return 1;
+    }
+    policy.rejectRetry(rejectedView, lodPolicy, 4000, 320);
+    if (policy.retryPending() ||
+	policy.armRetry(rejectedView, lodPolicy, 3900, 400) ||
+	!policy.armRetry(rejectedView, lodPolicy, 3900, 401)) {
+	std::fprintf(stderr, "FAIL: rejected headroom witness reopened\n");
+	return 1;
+    }
+    policy.rejectRetry(rejectedView, lodPolicy, 4000, 401);
+    if (!policy.armRetry(BObolLodViewEpoch(92), lodPolicy, 4000, 300)) {
+	std::fprintf(stderr, "FAIL: rejected headroom poisoned new view\n");
 	return 1;
     }
     policy.cancelRetry();
@@ -1237,6 +1263,42 @@ test_static_quality_policy(void)
 	std::fprintf(stderr, "FAIL: static quality rejection scope\n");
 	return 1;
     }
+    if (Policy::terminalCapacityMiss(true, true, false, true, false) ||
+	Policy::terminalCapacityMiss(false, false, false, true, false) ||
+	Policy::terminalCapacityMiss(false, true, true, true, false) ||
+	Policy::terminalCapacityMiss(false, true, false, false, false) ||
+	Policy::terminalCapacityMiss(false, true, false, true, true) ||
+	!Policy::terminalCapacityMiss(false, true, false, true, false)) {
+	std::fprintf(stderr,
+	    "FAIL: changing population poisoned static capacity epoch\n");
+	return 1;
+    }
+    if (!Policy::retainAcceptedPhase(true, false) ||
+	Policy::retainAcceptedPhase(false, false) ||
+	Policy::retainAcceptedPhase(true, true) ||
+	Policy::ordinaryHeadroomAllowed(true, false) ||
+	Policy::ordinaryHeadroomAllowed(false, true) ||
+	!Policy::ordinaryHeadroomAllowed(false, false)) {
+	std::fprintf(stderr,
+	    "FAIL: accepted static quality returned to streaming budget\n");
+	return 1;
+    }
+    if (Policy::terminalGlobalCeilingRequiresReconciliation(
+	    false, true, 0, false, false) ||
+	Policy::terminalGlobalCeilingRequiresReconciliation(
+	    true, false, 0, false, false) ||
+	Policy::terminalGlobalCeilingRequiresReconciliation(
+	    true, true, -1, false, false) ||
+	Policy::terminalGlobalCeilingRequiresReconciliation(
+	    true, true, 0, true, false) ||
+	!Policy::terminalGlobalCeilingRequiresReconciliation(
+	    true, true, 0, false, false) ||
+	!Policy::terminalGlobalCeilingRequiresReconciliation(
+	    true, true, 0, true, true)) {
+	std::fprintf(stderr,
+	    "FAIL: terminal renderer ceiling reconciliation scope\n");
+	return 1;
+	}
     if (Policy::onePixelTrialRequired(1.0f) ||
 	Policy::onePixelTrialRequired(1.01f) ||
 	Policy::onePixelTrialRequired(
@@ -1244,6 +1306,31 @@ test_static_quality_policy(void)
 	!Policy::onePixelTrialRequired(1.02f) ||
 	!Policy::onePixelTrialRequired(64.0f)) {
 	std::fprintf(stderr, "FAIL: static one-pixel trial predicate\n");
+	return 1;
+    }
+    if (!Policy::acceptSettledOnePixelFrame(false, true, false, false,
+	    false, false, false, false, -1, 1.0f, true,
+	    60000000ULL, 50000000ULL, 100000000ULL) ||
+	Policy::acceptSettledOnePixelFrame(true, true, false, false,
+	    false, false, false, false, -1, 1.0f, true,
+	    60000000ULL, 50000000ULL, 100000000ULL) ||
+	Policy::acceptSettledOnePixelFrame(false, true, false, false,
+	    false, true, false, false, -1, 1.0f, true,
+	    60000000ULL, 50000000ULL, 100000000ULL) ||
+	Policy::acceptSettledOnePixelFrame(false, true, false, false,
+	    false, false, false, false, 0, 1.0f, true,
+	    60000000ULL, 50000000ULL, 100000000ULL) ||
+	Policy::acceptSettledOnePixelFrame(false, true, false, false,
+	    false, false, false, false, -1, 2.0f, true,
+	    60000000ULL, 50000000ULL, 100000000ULL) ||
+	Policy::acceptSettledOnePixelFrame(false, true, false, false,
+	    false, false, false, false, -1, 1.0f, false,
+	    60000000ULL, 50000000ULL, 100000000ULL) ||
+	Policy::acceptSettledOnePixelFrame(false, true, false, false,
+	    false, false, false, false, -1, 1.0f, true,
+	    101000000ULL, 50000000ULL, 100000000ULL)) {
+	std::fprintf(stderr,
+	    "FAIL: settled one-pixel frame did not enter static phase directly\n");
 	return 1;
     }
     if (Policy::stagedProgressiveCeiling(-1, 10, 8.0f, 100) != -1 ||
@@ -2016,6 +2103,122 @@ test_budget_policy(void)
 	return 1;
     }
 
+    /* An exact-frame structural coverage allowance bypasses the soft
+     * preferred-cadence estimator for one repair pass, without turning that
+     * pass into a retained-cut reallocation or a permanent budget floor. */
+    policy.reset();
+    policy.raiseCurrentBudget(200000);
+    if (policy.requestCoverageCompletion(300000, 450000) != 450000) {
+	std::fprintf(stderr,
+	    "FAIL: structural coverage budget request was rejected\n");
+	return 1;
+    }
+    input = Policy::Inputs();
+    /* Presentation handoff may legitimately change the retained accounting
+     * baseline between certification and consumption.  Preserve the proven
+     * 150k marginal headroom instead of replaying the stale 450k absolute
+     * total. */
+    input.activeCost = 330000;
+    input.minimumActiveCost = 100000;
+    input.structuralCoverageRepair = true;
+    decision = policy.beginPass(input);
+    if (decision.totalBudget != 480000 || decision.retainedAdmission ||
+	decision.refinementBudget != 150000) {
+	std::fprintf(stderr,
+	    "FAIL: structural coverage transaction budget=%zu retained=%d "
+	    "refinement=%zu\n", decision.totalBudget,
+	    decision.retainedAdmission ? 1 : 0, decision.refinementBudget);
+	return 1;
+    }
+    policy.resetPass();
+    decision = policy.beginPass(input);
+    if (decision.totalBudget == 480000) {
+	std::fprintf(stderr,
+	    "FAIL: structural coverage transaction was not one-shot\n");
+	return 1;
+    }
+
+    /* A hard-deadline recovery budget is a one-pass safe handoff, while the
+     * failed attempted population is a persistent unsafe bound.  Ordinary
+     * calibration and a soft prominent-geometry floor may not restore the
+     * identical failed allowance in the same capacity epoch. */
+    policy.reset();
+    policy.raiseCurrentBudget(500000);
+    policy.setRetainedQualityFloorBudget(
+	480000, 0x4444444444444444ULL, 400000, 100000);
+    policy.noteDeadlineCapacityMiss(500000);
+    if (policy.deadlineCapacityCeiling() != 475000 ||
+	policy.currentBudget() != 475000 ||
+	policy.retainedQualityFloorActive() ||
+	!policy.retainedQualityFloorRejected()) {
+	std::fprintf(stderr,
+	    "FAIL: deadline capacity bound did not retire failed floor\n");
+	return 1;
+    }
+    /* The deadline ceiling is already a strict successor below the failed
+     * population.  Marginal recovery may apply its independent throughput
+     * margin before this cap, but must not compound the margin here. */
+    if (BObolLodStaticQualityPolicy::capMarginalBudget(
+	    600000, policy.deadlineCapacityCeiling()) != 475000 ||
+	BObolLodStaticQualityPolicy::capMarginalBudget(
+	    400000, SIZE_MAX) != 400000) {
+	std::fprintf(stderr,
+	    "FAIL: static marginal budget compounded deadline safety margin\n");
+	return 1;
+    }
+    policy.raiseCurrentBudget(600000);
+    if (policy.currentBudget() != 475000) {
+	std::fprintf(stderr,
+	    "FAIL: ordinary budget raise exceeded deadline capacity bound\n");
+	return 1;
+    }
+    policy.requestPresentationReconciliation(400000);
+    input = Policy::Inputs();
+    input.activeCost = 350000;
+    input.minimumActiveCost = 100000;
+    input.stablePresentationHandoff = true;
+    decision = policy.beginPass(input);
+    if (decision.totalBudget != 400000 || !decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: deadline capacity bound blocked safe reconciliation\n");
+	return 1;
+    }
+    policy.resetPass();
+    input.stablePresentationHandoff = false;
+    input.activeCost = 400000;
+    input.calibratedCostPerSecond = 20000000.0L;
+    input.targetFps = 20.0f;
+    decision = policy.beginPass(input);
+    if (decision.totalBudget > 475000) {
+	std::fprintf(stderr,
+	    "FAIL: calibration restored a known failed population\n");
+	return 1;
+    }
+    policy.resetPass();
+    if (policy.requestCoverageCompletion(400000, 600000) != 600000) {
+	std::fprintf(stderr,
+	    "FAIL: exact structural coverage was serialized by an old allocation\n");
+	return 1;
+    }
+    input = Policy::Inputs();
+    input.activeCost = 400000;
+    input.minimumActiveCost = 100000;
+    input.structuralCoverageRepair = true;
+    decision = policy.beginPass(input);
+    if (decision.totalBudget != 600000 ||
+	decision.refinementBudget != 200000) {
+	std::fprintf(stderr,
+	    "FAIL: exact structural coverage did not use certified batch budget\n");
+	return 1;
+    }
+    policy.clearDeadlineCapacityCeiling();
+    policy.raiseCurrentBudget(600000);
+    if (policy.currentBudget() != 600000) {
+	std::fprintf(stderr,
+	    "FAIL: capacity epoch did not release deadline bound\n");
+	return 1;
+    }
+
     /* A late reusable frame may prove a larger allowance after the original
      * allocation became terminal.  Reallocate the whole population using the
      * newly calibrated capacity rather than preserving the smaller allowance
@@ -2082,7 +2285,22 @@ test_budget_policy(void)
 	    "FAIL: distinct quality-floor populations shared misses\n");
 	return 1;
     }
-    policy.noteRetainedQualityFloorMet();
+    if (policy.noteRetainedQualityFloorMet(
+	    false, 0x2222222222222222ULL, 300000) ||
+	policy.retainedQualityFloorMissCount() != 1 ||
+	policy.noteRetainedQualityFloorMet(
+	    true, 0x1111111111111111ULL, 300000) ||
+	policy.retainedQualityFloorMissCount() != 1 ||
+	policy.noteRetainedQualityFloorMet(
+	    true, 0x2222222222222222ULL, 299999) ||
+	policy.retainedQualityFloorMissCount() != 1 ||
+	!policy.noteRetainedQualityFloorMet(
+	    true, 0x2222222222222222ULL, 300000) ||
+	policy.retainedQualityFloorMissCount() != 0) {
+	std::fprintf(stderr,
+	    "FAIL: unproven presentation reset quality-floor misses\n");
+	return 1;
+    }
     if (policy.noteRetainedQualityFloorMiss() ||
 	policy.noteRetainedQualityFloorMiss() ||
 	!policy.noteRetainedQualityFloorMiss()) {
@@ -2407,13 +2625,15 @@ test_quality_policy(void)
 	return 1;
     }
 
-    /* Exact completed frames admit the finest subpixel tier whose inverse-
-     * square work estimate fits both time and scene-cost headroom.  The first
-     * pass may move directly to 0.5, take the intermediate 0.75 rung, or
-     * remain at the fast one-pixel target.  A separate completed 0.5-pixel
-     * witness is required before the raster-stable 0.25 tier.  The witness
-     * deliberately includes a completed first-use frame: upload/preparation
-     * cost only makes it conservative. */
+    /* Exact completed frames turn a coarse interaction carry-over into the
+     * finest measured intermediate target, then admit the raster-stable
+     * subpixel tiers whose inverse-square work estimate fits both time and
+     * scene-cost headroom.  Below one pixel, the first pass may move directly
+     * to 0.5, take the intermediate 0.75 rung, or remain at the fast one-
+     * pixel target.  A separate completed 0.5-pixel witness is required
+     * before the raster-stable 0.25 tier.  The witness deliberately includes
+     * a completed first-use frame: upload/preparation cost only makes it
+     * conservative. */
     if (!near(Policy::stablePixelError(
 	    1.0f, 100, 400, 10000000ULL, 20.0f, true, true), 0.5f) ||
 	!near(Policy::stablePixelError(
@@ -2441,7 +2661,9 @@ test_quality_policy(void)
 	!near(Policy::stablePixelError(
 	    1.0f, 100, 400, 10000000ULL, 20.0f, true, false), 1.0f) ||
 	!near(Policy::stablePixelError(
-	    4.0f, 100, 400, 10000000ULL, 20.0f, true, true), 4.0f)) {
+	    4.0f, 100, 400, 10000000ULL, 20.0f, true, true), 2.0f) ||
+	!near(Policy::stablePixelError(
+	    4.0f, 100, 100, 20000000ULL, 20.0f, true, true), 4.0f)) {
 	std::fprintf(stderr, "FAIL: stable subpixel headroom policy\n");
 	return 1;
     }
@@ -2459,17 +2681,19 @@ test_quality_policy(void)
     }
 
     if (!Policy::retryTransientPresentation(
-	    false, 1, false, true, false, false) ||
+	    false, 1, false, true, false, false, false) ||
 	!Policy::retryTransientPresentation(
-	    false, 1, false, false, true, false) ||
+	    false, 1, false, false, true, false, false) ||
 	!Policy::retryTransientPresentation(
-	    false, 1, false, false, false, true) ||
+	    false, 1, false, false, false, true, false) ||
+	!Policy::retryTransientPresentation(
+	    false, 1, false, false, false, false, true) ||
 	Policy::retryTransientPresentation(
-	    true, 1, false, true, true, true) ||
+	    true, 1, false, true, true, true, true) ||
 	Policy::retryTransientPresentation(
-	    false, 2, false, true, true, true) ||
+	    false, 2, false, true, true, true, true) ||
 	!Policy::retryTransientPresentation(
-	    true, 4, true, false, false, false)) {
+	    true, 4, true, false, false, false, false)) {
 	std::fprintf(stderr,
 	    "FAIL: changed-population deadline retry classification\n");
 	return 1;
@@ -2501,6 +2725,22 @@ test_quality_policy(void)
 	!BObolLodPointProxyCalibrationPolicy::applicable(2)) {
 	std::fprintf(stderr,
 	    "FAIL: point aggregation admitted a single prominent mesh\n");
+	return 1;
+    }
+    if (BObolLodPointProxyCalibrationPolicy::
+	    applicableAcrossCameraInvalidation(false, 1.0f) ||
+	!BObolLodPointProxyCalibrationPolicy::
+	    applicableAcrossCameraInvalidation(true, 1.0f) ||
+	!BObolLodPointProxyCalibrationPolicy::
+	    applicableAcrossCameraInvalidation(false, 64.0f) ||
+	!BObolLodPointProxyCalibrationPolicy::
+	    streamingPopulationWorkPending(false, false, false, 1) ||
+	!BObolLodPointProxyCalibrationPolicy::
+	    streamingPopulationWorkPending(true, false, false, 0) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    streamingPopulationWorkPending(false, false, false, 0)) {
+	std::fprintf(stderr,
+	    "FAIL: point aggregation discarded camera/streaming capacity proof\n");
 	return 1;
     }
     /* Subpixel points are the intended terminal representation at the
@@ -2582,6 +2822,19 @@ test_quality_policy(void)
 	std::fprintf(stderr,
 	    "FAIL: point-proxy bracket did not converge (threshold=%g)\n",
 	    threshold);
+	return 1;
+    }
+
+    /* A hard endpoint abort is not a completed-frame timing sample.  Even if
+     * it falls inside the latter's five-percent jitter deadband, retrying the
+     * unchanged irreducible population would be a no-progress render loop. */
+    pointCalibration.reset();
+    const auto nearDeadlineAbort = pointCalibration.interrupted(
+	1.0f, 101000000ULL, 10.0f);
+    if (!nearDeadlineAbort.changed ||
+	!near(nearDeadlineAbort.threshold, 1.25f)) {
+	std::fprintf(stderr,
+	    "FAIL: hard point deadline retained an unchanged population\n");
 	return 1;
     }
     pointCalibration.reset();
@@ -2696,10 +2949,108 @@ test_quality_policy(void)
     if (pointCalibration.requiresReusableConfirmation(1.0f) ||
 	pointCalibration.requiresReusableConfirmation(
 	    std::numeric_limits<float>::quiet_NaN()) ||
+	pointCalibration.requiresReusableConfirmation(8.0f, 1) ||
 	!pointCalibration.requiresReusableConfirmation(1.02f) ||
 	!pointCalibration.requiresReusableConfirmation(8.0f)) {
 	std::fprintf(stderr,
-	    "FAIL: point-proxy reusable confirmation floor\n");
+	    "FAIL: point confirmation did not yield to structural repair\n");
+	return 1;
+    }
+    if (!BObolLodPointProxyCalibrationPolicy::
+	    calibrationYieldsToStructuralRepair(true, true, 147, false) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    calibrationYieldsToStructuralRepair(false, true, 147, false) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    calibrationYieldsToStructuralRepair(true, false, 147, false) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    calibrationYieldsToStructuralRepair(true, true, 0, false) ||
+	BObolLodPointProxyCalibrationPolicy::
+	    calibrationYieldsToStructuralRepair(true, true, 147, true)) {
+	std::fprintf(stderr,
+	    "FAIL: point calibration did not transfer a quiet structural frontier\n");
+	return 1;
+    }
+
+    /* An exact structural population above the maximum point threshold gets
+     * one hard-deadline-capacity admission, not an unlimited series of
+     * preferred-cadence retries.  A changed population is a new transaction;
+     * an inexact or still-aggregatable frontier remains owned by the point
+     * calibration path. */
+    BObolLodStructuralAdmissionPolicy structuralAdmissionPolicy;
+    const std::array<size_t, 7> structuralCapacityHistogram = {
+	10, 20, 30, 40, 50, 60, 80
+    };
+    if (BObolLodStructuralAdmissionPolicy::unaggregatableCount(
+	    structuralCapacityHistogram, 100) != 20) {
+	std::fprintf(stderr,
+	    "FAIL: structural maximum-threshold census classification\n");
+	return 1;
+    }
+    if (BObolLodStructuralAdmissionPolicy::perOccurrenceReservation(
+	    450000, 300000, 20) != 7500 ||
+	BObolLodStructuralAdmissionPolicy::perOccurrenceReservation(
+	    300000, 300000, 20) != 0 ||
+	BObolLodStructuralAdmissionPolicy::perOccurrenceReservation(
+	    300019, 300000, 20) != 0 ||
+	BObolLodStructuralAdmissionPolicy::perOccurrenceReservation(
+	    450000, 300000, 0) != 0) {
+	std::fprintf(stderr,
+	    "FAIL: structural frontier allowance was not divided exactly\n");
+	return 1;
+    }
+    BObolLodStructuralAdmissionPolicy::Inputs structuralInputs;
+    structuralInputs.viewRevision = 7;
+    structuralInputs.policyRevision = 11;
+    structuralInputs.projectionRevision = 13;
+    structuralInputs.unresolvedCount = 20;
+    structuralInputs.unaggregatableCount = 20;
+    structuralInputs.activeCost = 300000;
+    structuralInputs.currentBudget = 320000;
+    structuralInputs.certifiedBudget = 450000;
+    structuralInputs.exactProjection = true;
+    structuralInputs.maximumThreshold = true;
+    auto structuralAdmission =
+	structuralAdmissionPolicy.evaluate(structuralInputs);
+    if (!structuralAdmission.ownsFrontier ||
+	!structuralAdmission.requestAdmission ||
+	structuralAdmission.duplicateRejected ||
+	structuralAdmission.budget != 450000) {
+	std::fprintf(stderr,
+	    "FAIL: irreducible structural frontier did not receive one trial\n");
+	return 1;
+    }
+    structuralAdmission = structuralAdmissionPolicy.evaluate(structuralInputs);
+    if (!structuralAdmission.ownsFrontier ||
+	structuralAdmission.requestAdmission ||
+	!structuralAdmission.duplicateRejected) {
+	std::fprintf(stderr,
+	    "FAIL: unchanged structural frontier was rearmed\n");
+	return 1;
+    }
+    structuralInputs.unresolvedCount = 12;
+    structuralInputs.unaggregatableCount = 12;
+    structuralAdmission = structuralAdmissionPolicy.evaluate(structuralInputs);
+    if (!structuralAdmission.requestAdmission ||
+	structuralAdmission.duplicateRejected) {
+	std::fprintf(stderr,
+	    "FAIL: changed structural population did not open a new transaction\n");
+	return 1;
+    }
+    structuralInputs.exactProjection = false;
+    structuralAdmission = structuralAdmissionPolicy.evaluate(structuralInputs);
+    if (structuralAdmission.ownsFrontier ||
+	structuralAdmission.requestAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: inexact structural census owned admission\n");
+	return 1;
+    }
+    structuralInputs.exactProjection = true;
+    structuralInputs.maximumThreshold = false;
+    structuralAdmission = structuralAdmissionPolicy.evaluate(structuralInputs);
+    if (structuralAdmission.ownsFrontier ||
+	structuralAdmission.requestAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: aggregatable structural frontier bypassed point policy\n");
 	return 1;
     }
 
@@ -2722,44 +3073,76 @@ test_quality_policy(void)
 	return 1;
     }
 
-    /* A settled event-driven point population goes straight to one pixel
+    /* A settled event-driven mesh population goes straight to one pixel
      * under the hard static deadline.  Producer activity, resource pressure,
-     * inexact/preparation frames, active input, and an already rejected trial
-     * must all retain the conservative convergence path. */
+     * a structural fallback population, inexact/preparation frames, active
+     * input, and an already rejected trial must all retain the conservative
+     * convergence path. */
     if (!BObolLodStaticQualityPolicy::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
-		false, false, 4.0f, 60000000ULL, 50000000ULL,
+		false, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
 	BObolLodStaticQualityPolicy::
 	    startOnePixelTrialFromSettledPointFrame(true, true, false,
-		false, false, 4.0f, 60000000ULL, 50000000ULL,
+		false, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
 	BObolLodStaticQualityPolicy::
 	    startOnePixelTrialFromSettledPointFrame(false, false, false,
-		false, false, 4.0f, 60000000ULL, 50000000ULL,
+		false, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
 	BObolLodStaticQualityPolicy::
 	    startOnePixelTrialFromSettledPointFrame(false, true, true,
-		false, false, 4.0f, 60000000ULL, 50000000ULL,
+		false, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
 	BObolLodStaticQualityPolicy::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
-		true, false, 4.0f, 60000000ULL, 50000000ULL,
+		true, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
 	BObolLodStaticQualityPolicy::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
-		false, true, 4.0f, 60000000ULL, 50000000ULL,
+		false, true, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
 	BObolLodStaticQualityPolicy::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
-		false, false, 1.0f, 60000000ULL, 50000000ULL,
+		false, false, true, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
 	BObolLodStaticQualityPolicy::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
-		false, false, 4.0f, 110000000ULL, 50000000ULL,
+		false, false, false, 1.0f, 60000000ULL, 50000000ULL,
+		100000000ULL) ||
+	BObolLodStaticQualityPolicy::
+	    startOnePixelTrialFromSettledPointFrame(false, true, false,
+		false, false, false, 4.0f, 110000000ULL, 50000000ULL,
 		100000000ULL)) {
 	std::fprintf(stderr,
 	    "FAIL: settled point population static one-pixel trial policy\n");
+	return 1;
+    }
+
+    if (std::fabs(BObolLodPointProxyCalibrationPolicy::
+	    triangleRecoveryPointThreshold(16.0f, true, 4) - 16.0f) >
+		0.001f ||
+	std::fabs(BObolLodPointProxyCalibrationPolicy::
+	    triangleRecoveryPointThreshold(16.0f, false, 0) - 16.0f) >
+		0.001f ||
+	std::fabs(BObolLodPointProxyCalibrationPolicy::
+	    triangleRecoveryPointThreshold(16.0f, true, 0) - 1.0f) >
+		0.001f) {
+	std::fprintf(stderr,
+	    "FAIL: triangle recovery exposed structural fallback boxes\n");
+	return 1;
+    }
+
+    if (!BObolLodStaticQualityPolicy::retainAggregatedPresentation(
+	    -1, 16.0f, 100, true) ||
+	!BObolLodStaticQualityPolicy::retainAggregatedPresentation(
+	    4, 16.0f, 100, false) ||
+	BObolLodStaticQualityPolicy::retainAggregatedPresentation(
+	    -1, 16.0f, 100, false) ||
+	BObolLodStaticQualityPolicy::retainAggregatedPresentation(
+	    -1, 1.0f, 100, true)) {
+	std::fprintf(stderr,
+	    "FAIL: static quality exposed structural fallback boxes\n");
 	return 1;
     }
 
@@ -3914,6 +4297,22 @@ static int
 test_resident_growth_policy(void)
 {
     BObolLodResidentGrowthPolicy policy;
+    if (!BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	    true, true, true, false, false) ||
+	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	    false, true, true, false, false) ||
+	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	    true, false, true, false, false) ||
+	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	    true, true, false, false, false) ||
+	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	    true, true, true, true, false) ||
+	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	    true, true, true, false, true)) {
+	std::fprintf(stderr,
+	    "FAIL: resident-growth allocation population boundary\n");
+	return 1;
+    }
     if (!BObolLodResidentGrowthPolicy::canRetainPresentation(
 	    true, true, true, true, true) ||
 	BObolLodResidentGrowthPolicy::canRetainPresentation(

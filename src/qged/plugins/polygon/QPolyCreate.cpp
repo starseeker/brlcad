@@ -57,6 +57,22 @@ _qpolycreate_poly_collect_cb(qg_polygon_ref ref, const qg_polygon_record *, void
     return 1;
 }
 
+struct _qpolycreate_selection_collect {
+    int found;
+};
+
+extern "C" int
+_qpolycreate_selection_collect_cb(qg_polygon_ref,
+    const qg_polygon_record *record, void *data)
+{
+    struct _qpolycreate_selection_collect *state =
+	(struct _qpolycreate_selection_collect *)data;
+    if (!state || !record)
+	return 0;
+    state->found = record->selected ? 1 : 0;
+    return state->found ? 0 : 1;
+}
+
 static void *
 qpolycreate_view(const QgPluginContext *ctx)
 {
@@ -266,6 +282,26 @@ QPolyCreate::getGed() const
 }
 
 void
+QPolyCreate::select_created_polygon(void *view)
+{
+    if (!view || ged_view_polygon_ref_is_null(p))
+	return;
+    struct ged_view_context *view_ctx = qpolycreate_ged_view(view);
+    if (!view_ctx)
+	return;
+
+    /* A creation gesture establishes the initial edit target, but must not
+     * silently replace an object the user is already editing. */
+    struct _qpolycreate_selection_collect selection = {};
+    (void)ged_view_polygon_visit_records(view_ctx,
+	_qpolycreate_selection_collect_cb, &selection);
+    if (selection.found)
+	return;
+    (void)ged_view_polygon_clear_selection(view_ctx);
+    (void)ged_view_polygon_set_selected(view_ctx, p, 1);
+}
+
+void
 QPolyCreate::finalize(bool had_intersections)
 {
     struct ged *gedp = getGed();
@@ -344,6 +380,10 @@ QPolyCreate::finalize(bool had_intersections)
     ps->sketch_name->setText("");
     sketch_sync();
 
+    /* A retained polygon was created by an explicit tool gesture, so make it
+     * the active edit target.  Passive command and scene refreshes never take
+     * this path and therefore cannot alter polygon selection. */
+    select_created_polygon(v);
     p = GED_VIEW_POLYGON_REF_NULL;
     emit view_updated(db_changed ? QG_VIEW_DB : QG_VIEW_REFRESH);
 }
@@ -388,6 +428,7 @@ QPolyCreate::do_vpoly_copy()
     bu_vls_free(&pname);
 
     do_bool = false;
+    select_created_polygon(v);
     p = GED_VIEW_POLYGON_REF_NULL;
     emit view_updated(QG_VIEW_REFRESH);
 }
@@ -439,6 +480,7 @@ QPolyCreate::do_import_sketch()
     bu_vls_free(&pname);
 
     do_bool = false;
+    select_created_polygon(v);
     p = GED_VIEW_POLYGON_REF_NULL;
     emit view_updated(QG_VIEW_REFRESH);
 }

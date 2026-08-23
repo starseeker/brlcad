@@ -46,6 +46,7 @@ public:
 	this->externalPresentationCost = inputs.externalPresentationCost;
 	this->fixedCost = inputs.externalPresentationCost;
 	this->sceneBudget = inputs.sceneBudget;
+	this->maximumMarginalBudget = inputs.maximumMarginalBudget;
 	this->allowProtectedFloor = inputs.allowProtectedFloor;
 	this->maximumProtectedBudget = inputs.maximumProtectedBudget;
 	this->pointProxyPixelThreshold = inputs.pointProxyPixelThreshold;
@@ -98,6 +99,7 @@ public:
 	    this->externalPresentationCost !=
 		inputs.externalPresentationCost ||
 	    this->sceneBudget != inputs.sceneBudget ||
+	    this->maximumMarginalBudget != inputs.maximumMarginalBudget ||
 	    this->allowProtectedFloor != inputs.allowProtectedFloor ||
 	    this->maximumProtectedBudget != inputs.maximumProtectedBudget ||
 	    std::memcmp(&this->pointProxyPixelThreshold,
@@ -171,7 +173,7 @@ public:
 			    this->payloadCursor = 0;
 			    this->sourceCursor++;
 			}
-			transition(PROTECTION_COMPARE);
+			transition(FLOOR);
 			break;
 		    case PROTECTION_COMPARE:
 			while (this->pointProxyAssemblyCursor <
@@ -196,9 +198,26 @@ public:
 			    }
 			    this->pointProxyAssemblyCursor++;
 			}
-			transition(FLOOR);
+			transition(COMMIT);
 			break;
 		    case FLOOR: {
+			/* A point representation only reduces scene work when there is a
+			 * population to aggregate.  For one terminal occurrence it would
+			 * merely hide the sole mesh while retaining the same draw call, and
+			 * it can force an unnecessary point-to-mesh republish when the
+			 * calibration threshold changes. */
+			this->useOptionalPointCandidates =
+			    this->hasOptionalPointCandidates &&
+			    this->candidates.size() > 1;
+			if (this->useOptionalPointCandidates) {
+			    this->protectedCandidateCost =
+				this->protectedCandidateCost == SIZE_MAX ||
+				this->optionalPointCandidateCost == SIZE_MAX ?
+				    SIZE_MAX : this->protectedCandidateCost -
+				    this->optionalPointCandidateCost;
+			    this->protectedFloorSignature ^=
+				this->optionalPointCandidateSignature;
+			}
 			this->protectedFloorCost =
 			    this->protectedCandidateCost >
 				SIZE_MAX - this->fixedCost ? SIZE_MAX :
@@ -214,17 +233,34 @@ public:
 			const size_t trialBudget =
 			    this->allowProtectedFloor &&
 			    this->maximumProtectedBudget > 0 ?
-			    (protectedBudget > SIZE_MAX - protectedBudget / 4 ?
-				SIZE_MAX : protectedBudget + protectedBudget / 4) :
-			    protectedBudget;
+				(protectedBudget > SIZE_MAX -
+				    protectedBudget / protectedFloorTrialDivisor ?
+				    SIZE_MAX : protectedBudget +
+				    protectedBudget / protectedFloorTrialDivisor) :
+				protectedBudget;
 			this->enforceProtectedFloor = this->allowProtectedFloor &&
 			    this->protectedFloorCost <= trialBudget;
 			this->effectiveBudget = this->enforceProtectedFloor ?
 			    std::max(this->sceneBudget,
-				this->protectedFloorCost) : this->sceneBudget;
+				this->protectedFloorCost) :
+			    std::max(this->sceneBudget,
+				this->maximumMarginalBudget);
 			this->allocationBudget = this->enforceProtectedFloor ?
 			    this->protectedFloorCost : 0;
 			if (this->candidates.empty()) {
+			    this->beginBaseline();
+			    transition(BASELINE);
+			    break;
+			}
+			/* A calibrated coarse point population is not merely a temporary
+			 * renderer switch.  It gives the stable-view allocator a cheap
+			 * representation for modest, non-selected occurrences.  Start those
+			 * occurrences at a point and spend the finite frame allowance on the
+			 * mesh admissions and refinements with the most visual value.  The
+			 * old all-mesh baseline made every modest part mandatory before a
+			 * wheel, blade, or hull panel could receive a richer cut. */
+			if (this->useOptionalPointCandidates) {
+			    this->baselineAtMinimum = true;
 			    this->beginBaseline();
 			    transition(BASELINE);
 			    break;
@@ -323,17 +359,29 @@ public:
 			while (this->finalCursor < this->candidates.size()) {
 			    const size_t i = this->finalCursor++;
 			    const Candidate &candidate = this->candidates[i];
-			    this->finalCuts[i] = this->baselineAtMinimum ?
-				(this->enforceProtectedFloor ?
-				    candidate.protectedCut : candidate.minimumCut) :
-				this->allocatedCut(candidate, this->ceiling);
-			    this->finalCosts[i] = bobol_lod_render_cost_units(
-				this->countsAtCut(candidate, this->finalCuts[i]),
-				candidate.drawMode, 1);
+			    this->finalPointProxies[i] =
+				this->useOptionalPointCandidates &&
+				candidate.pointProxyEligible;
+			    this->finalCuts[i] = this->finalPointProxies[i] ?
+				candidate.minimumCut :
+				(this->baselineAtMinimum ?
+				    (this->enforceProtectedFloor ?
+					candidate.protectedCut : candidate.minimumCut) :
+				    this->allocatedCut(candidate, this->ceiling));
+			    this->finalCosts[i] = this->finalPointProxies[i] ?
+				candidate.pointProxyCost :
+				bobol_lod_render_cost_units(
+				    this->countsAtCut(candidate, this->finalCuts[i]),
+				    candidate.drawMode, 1);
 			    this->finalCost = this->finalCosts[i] >
-				    SIZE_MAX - this->finalCost ? SIZE_MAX :
+				SIZE_MAX - this->finalCost ? SIZE_MAX :
 				this->finalCost + this->finalCosts[i];
-			    this->observeError(candidate, this->finalCuts[i]);
+			    if (this->finalPointProxies[i])
+				this->observePointProxyError(candidate);
+			    else {
+				this->observeError(candidate, this->finalCuts[i]);
+				this->protectPointProxyCandidate(candidate);
+			    }
 			    if (!this->stageAllocation(candidate.payload,
 				    this->finalCuts[i], candidate.drawMode)) {
 				finishSlice();
@@ -349,7 +397,7 @@ public:
 			break;
 		    case MARGINAL_SEED:
 			if (this->finalCost >= this->effectiveBudget) {
-			    transition(COMMIT);
+			    transition(PROTECTION_COMPARE);
 			    break;
 			}
 			while (this->finalCursor < this->candidates.size()) {
@@ -369,6 +417,7 @@ public:
 			    if (upgrade.addedCost <=
 				    this->effectiveBudget - this->finalCost) {
 				this->finalCost += upgrade.addedCost;
+				this->finalPointProxies[upgrade.candidateIndex] = FALSE;
 				this->finalCuts[upgrade.candidateIndex] =
 				    upgrade.nextCut;
 				this->finalCosts[upgrade.candidateIndex] =
@@ -380,6 +429,8 @@ public:
 				    finishSlice();
 				    return BOBOL_RETAINED_ALLOCATION_FAILED;
 				}
+				this->protectPointProxyCandidate(
+				    this->candidates[upgrade.candidateIndex]);
 				this->marginalAccepted = true;
 				this->queueNextUpgrade(upgrade.candidateIndex);
 			    }
@@ -397,20 +448,23 @@ public:
 				this->fixedPresentedErrorProof;
 			    transition(PROOF);
 			} else {
-			    transition(COMMIT);
+			    transition(PROTECTION_COMPARE);
 			}
 			break;
 		    case PROOF:
 			while (this->finalCursor < this->candidates.size()) {
 			    const size_t i = this->finalCursor++;
-			    this->observeError(
-				this->candidates[i], this->finalCuts[i]);
+			    if (this->finalPointProxies[i])
+				this->observePointProxyError(this->candidates[i]);
+			    else
+				this->observeError(
+				    this->candidates[i], this->finalCuts[i]);
 			    if (shouldYield()) {
 				finishSlice();
 				return BOBOL_RETAINED_ALLOCATION_PENDING;
 			    }
 			}
-			transition(COMMIT);
+			transition(PROTECTION_COMPARE);
 			break;
 		    case COMMIT:
 			if (!this->matches(inputs) ||
@@ -461,6 +515,7 @@ public:
 	result.requestedSceneBudget = this->sceneBudget;
 	result.externalPresentationCost = this->externalPresentationCost;
 	result.fixedCadPresentationCost = this->fixedCadPresentationCost;
+	result.maximumMarginalBudget = this->maximumMarginalBudget;
 	result.maximumProtectedBudget = this->maximumProtectedBudget;
 	result.allowProtectedFloor = this->allowProtectedFloor;
     }
@@ -495,6 +550,9 @@ public:
 
 private:
     static constexpr double protectedFootprintPixels = 12.0;
+    static constexpr size_t protectedFloorTrialDivisor = 4;
+    static constexpr double visualImportanceScale = 2.0;
+    static constexpr double visualImportanceMaximum = 32.0;
 
     struct Candidate {
 	const BObolViewLodState::CadPayload *payload = NULL;
@@ -504,8 +562,14 @@ private:
 	int drawMode = BOBOL_LOD_DRAW_UNKNOWN;
 	SbBool hasNormals = FALSE;
 	double projectedPixelDiameter = 0.0;
+	double pointProxyError = 0.0;
+	size_t pointProxyCost = 0;
 	double errorWeight = 1.0;
 	int protectedCut = -1;
+	SoCADAssembly *assembly = NULL;
+	Obol::InstanceId instance;
+	bool hasInstance = false;
+	bool pointProxyEligible = false;
 	std::shared_ptr<const
 	    BObolViewLodState::CadPayload::ProjectedCutCounts> visibleCounts;
     };
@@ -590,7 +654,7 @@ private:
 		static_cast<double>(payload->projectedPixelDiameter) * 0.25));
     }
 
-    bool pointProxyCandidate(const SourceSnapshot &source,
+    bool pointProxyEligible(const SourceSnapshot &source,
 	const BObolViewLodState::CadPayload *payload) const
     {
 	if (!source.source || !payload || !payload->progressiveMesh ||
@@ -600,11 +664,17 @@ private:
 	    !std::isfinite(payload->projectedPixelDiameter) ||
 	    payload->projectedPixelDiameter <= 0.0f ||
 	    !payload->projectedBoundsContained ||
-	    payload->visualEmphasis >= 2 ||
-	    visualFootprint(payload) >= protectedFootprintPixels)
+	    payload->visualEmphasis >= 2 || !source.assembly)
 	    return false;
 	return payload->projectedPixelDiameter <=
 	    this->pointProxyPixelThreshold * 0.75f;
+    }
+
+    bool pointProxyIsPixelExact(const SourceSnapshot &source,
+	const BObolViewLodState::CadPayload *payload) const
+    {
+	return this->pointProxyEligible(source, payload) &&
+	    visualFootprint(payload) <= 1.0;
     }
 
     BObolLodCounts countsAtCut(const Candidate &candidate, int cut) const
@@ -652,7 +722,7 @@ private:
 	const int maximumCut = std::max(minimumCut,
 	    std::min(payload->requestedCut,
 		payload->progressiveMesh->maximumCut()));
-	if (this->pointProxyCandidate(source, payload)) {
+	if (this->pointProxyIsPixelExact(source, payload)) {
 	    this->havePresentedErrorProof = true;
 	    this->maximumPresentedPixelError = std::max(
 		this->maximumPresentedPixelError,
@@ -675,7 +745,11 @@ private:
 
 	const double emphasis = payload->visualEmphasis >= 2 ? 4.0 :
 	    (payload->visualEmphasis == 1 ? 2.0 : 1.0);
-	const double target = std::max(1.0,
+	/* The source request has already sanitized this value.  In particular, a
+	 * fractional target is part of the view contract, not a hint that may be
+	 * rounded up to one pixel by the scene-wide allocator. */
+	const double target = std::max(
+	    static_cast<double>(std::numeric_limits<float>::min()),
 	    static_cast<double>(payload->targetPixelError));
 	const double area = std::max(0.0,
 	    static_cast<double>(payload->projectedPixelArea));
@@ -685,8 +759,15 @@ private:
 	    static_cast<double>(payload->projectedPixelDiameter));
 	const double footprint = std::max(std::sqrt(area),
 	    std::max(perimeter * 0.25, diameter * 0.25));
+	/* Keep the former strength at a small recognizable footprint, but keep
+	 * growing for silhouette-defining parts.  The old linear-at-first then
+	 * hard-eight cap made a 16-pixel screw and a 200-pixel wheel equally
+	 * important to the scene allocator.  Square-root growth is deliberately
+	 * sub-linear: it protects large visual features without allowing one hull
+	 * panel to consume a whole finite static frame. */
 	const double significance = std::max(1.0,
-	    std::min(8.0, footprint * 0.50));
+	    std::min(visualImportanceMaximum,
+		std::sqrt(footprint) * visualImportanceScale));
 	double errorWeight = emphasis * significance / target;
 	if (!std::isfinite(errorWeight) || errorWeight <= 0.0)
 	    errorWeight = 1.0;
@@ -698,7 +779,37 @@ private:
 	candidate.drawMode = source.drawMode;
 	candidate.hasNormals = payload->hasNormals;
 	candidate.projectedPixelDiameter = diameter;
+	candidate.pointProxyError = std::max(footprint, diameter);
+	BObolLodCounts point;
+	point.pointCount = 1;
+	candidate.pointProxyCost = bobol_lod_render_cost_units(
+	    point, source.drawMode, 0);
 	candidate.errorWeight = errorWeight;
+	candidate.assembly = source.assembly;
+	candidate.pointProxyEligible =
+	    this->pointProxyEligible(source, payload);
+	if (source.assembly) {
+	    BObolCompactInstanceHandle handle;
+	    size_t sourceEntryIndex = static_cast<size_t>(
+		payload->sourceEntryIndex);
+	    if ((payload->sourcePopulationEpoch !=
+		    source.source->getCompactPopulationEpoch() ||
+		 payload->sourceEntryIndex == UINT32_MAX) &&
+		!source.source->getCompactInstanceIndex(
+		    payload->sourceInstanceKey.getString(), sourceEntryIndex))
+		sourceEntryIndex = SIZE_MAX;
+	    if (sourceEntryIndex <= static_cast<size_t>(
+		    std::numeric_limits<int>::max()) &&
+		source.source->getCompactInstanceHandle(
+		    static_cast<int>(sourceEntryIndex), handle) &&
+		handle.isValid()) {
+		candidate.instance.w0 = handle.instanceWord0;
+		candidate.instance.w1 = handle.instanceWord1;
+		candidate.hasInstance = true;
+	    }
+	}
+	candidate.pointProxyEligible = candidate.pointProxyEligible &&
+	    candidate.hasInstance;
 	if (payload->projectedCutCounts &&
 	    payload->projectedCutCountsViewRevision == this->viewRevision &&
 	    payload->projectedCutCountsPolicyRevision == this->policyRevision &&
@@ -716,33 +827,11 @@ private:
 		candidate.protectedCut = std::max(minimumCut,
 		    std::min(maximumCut, protectedCut));
 	}
-	if (std::isfinite(protectedError) && source.assembly) {
-	    BObolCompactInstanceHandle handle;
-	    size_t sourceEntryIndex = static_cast<size_t>(
-		payload->sourceEntryIndex);
-	    if ((payload->sourcePopulationEpoch !=
-		    source.source->getCompactPopulationEpoch() ||
-		 payload->sourceEntryIndex == UINT32_MAX) &&
-		!source.source->getCompactInstanceIndex(
-		    payload->sourceInstanceKey.getString(), sourceEntryIndex))
-		sourceEntryIndex = SIZE_MAX;
-	    if (sourceEntryIndex <= static_cast<size_t>(
-		    std::numeric_limits<int>::max()) &&
-		source.source->getCompactInstanceHandle(
-		    static_cast<int>(sourceEntryIndex), handle) &&
-		handle.isValid()) {
-		Obol::InstanceId instance;
-		instance.w0 = handle.instanceWord0;
-		instance.w1 = handle.instanceWord1;
-		this->pointProxyProtectedInstances[source.assembly].next.insert(
-		    instance);
-	    }
-	}
 	const size_t protectedCost = bobol_lod_render_cost_units(
 	    this->countsAtCut(candidate, candidate.protectedCut),
 	    candidate.drawMode, 1);
 	this->protectedCandidateCost = protectedCost >
-		SIZE_MAX - this->protectedCandidateCost ? SIZE_MAX :
+	    SIZE_MAX - this->protectedCandidateCost ? SIZE_MAX :
 	    this->protectedCandidateCost + protectedCost;
 	uint64_t token = static_cast<uint64_t>(
 	    reinterpret_cast<uintptr_t>(candidate.payload));
@@ -756,7 +845,16 @@ private:
 	token = (token ^ (token >> 27)) * 0x94d049bb133111ebULL;
 	token ^= token >> 31;
 	this->protectedFloorSignature ^= token;
+	if (candidate.pointProxyEligible) {
+	    this->optionalPointCandidateCost = protectedCost >
+		SIZE_MAX - this->optionalPointCandidateCost ? SIZE_MAX :
+		this->optionalPointCandidateCost + protectedCost;
+	    this->optionalPointCandidateSignature ^= token;
+	}
 	this->candidates.push_back(std::move(candidate));
+	this->hasOptionalPointCandidates =
+	    this->hasOptionalPointCandidates ||
+	    this->candidates.back().pointProxyEligible;
 	const double minimumError =
 	    payload->progressiveMesh->projectedErrorAtCut(
 		minimumCut, diameter) * errorWeight;
@@ -769,6 +867,7 @@ private:
     {
 	this->finalCuts.assign(this->candidates.size(), -1);
 	this->finalCosts.assign(this->candidates.size(), 0);
+	this->finalPointProxies.assign(this->candidates.size(), false);
 	this->finalCursor = 0;
 	this->fixedStageCursor = 0;
 	this->finalCost = this->fixedCost;
@@ -793,9 +892,53 @@ private:
 		this->realizedCeiling, weightedError);
     }
 
+    void observePointProxyError(const Candidate &candidate)
+    {
+	const double error = candidate.pointProxyError;
+	if (std::isfinite(error)) {
+	    this->havePresentedErrorProof = true;
+	    this->maximumPresentedPixelError = std::max(
+		this->maximumPresentedPixelError, error);
+	}
+	const double weightedError = error * candidate.errorWeight;
+	if (std::isfinite(weightedError))
+	    this->realizedCeiling = std::max(
+		this->realizedCeiling, weightedError);
+    }
+
+    void protectPointProxyCandidate(const Candidate &candidate)
+    {
+	if (candidate.assembly && candidate.hasInstance)
+	    this->pointProxyProtectedInstances[candidate.assembly].next.insert(
+		candidate.instance);
+    }
+
     void queueNextUpgrade(size_t candidateIndex)
     {
 	const Candidate &candidate = this->candidates[candidateIndex];
+	if (this->finalPointProxies[candidateIndex]) {
+	    const size_t nextCost = bobol_lod_render_cost_units(
+		this->countsAtCut(candidate, candidate.minimumCut),
+		candidate.drawMode, 1);
+	    const double nextError = candidate.mesh->projectedErrorAtCut(
+		candidate.minimumCut, candidate.projectedPixelDiameter);
+	    MarginalUpgrade upgrade;
+	    upgrade.candidateIndex = candidateIndex;
+	    upgrade.nextCut = candidate.minimumCut;
+	    upgrade.nextCost = nextCost;
+	    upgrade.addedCost = nextCost > this->finalCosts[candidateIndex] ?
+		nextCost - this->finalCosts[candidateIndex] : 0;
+	    const double weightedError =
+		candidate.pointProxyError * candidate.errorWeight;
+	    upgrade.weightedError = std::isfinite(weightedError) ?
+		weightedError : std::numeric_limits<double>::max();
+	    const double benefit = std::max(0.0,
+		(candidate.pointProxyError - nextError) * candidate.errorWeight);
+	    upgrade.valuePerCost = upgrade.addedCost > 0 ?
+		benefit / static_cast<double>(upgrade.addedCost) : benefit + 1.0;
+	    this->upgrades.push(upgrade);
+	    return;
+	}
 	const int currentCut = this->finalCuts[candidateIndex];
 	if (currentCut < candidate.minimumCut ||
 	    currentCut >= candidate.maximumCut)
@@ -862,6 +1005,7 @@ private:
     uint64_t residentDemandRevision = 0;
     uint64_t allocationPlanSerial = 0;
     size_t sceneBudget = 0;
+    size_t maximumMarginalBudget = 0;
     bool allowProtectedFloor = false;
     size_t maximumProtectedBudget = 0;
     float pointProxyPixelThreshold = 0.0f;
@@ -877,7 +1021,9 @@ private:
     size_t pointProxyAssemblyCursor = 0;
     size_t fixedCost = 0;
     size_t protectedCandidateCost = 0;
+    size_t optionalPointCandidateCost = 0;
     uint64_t protectedFloorSignature = 0;
+    uint64_t optionalPointCandidateSignature = 0;
     double maximumMinimumError = 1.0;
     double maximumPresentedPixelError = 0.0;
     bool havePresentedErrorProof = false;
@@ -893,8 +1039,11 @@ private:
     int binaryIteration = 0;
     double ceiling = 1.0;
     bool baselineAtMinimum = false;
+    bool hasOptionalPointCandidates = false;
+    bool useOptionalPointCandidates = false;
     std::vector<int> finalCuts;
     std::vector<size_t> finalCosts;
+    std::vector<bool> finalPointProxies;
     size_t finalCursor = 0;
     size_t finalCost = 0;
     double fixedMaximumPresentedPixelError = 0.0;

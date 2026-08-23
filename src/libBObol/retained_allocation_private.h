@@ -28,6 +28,12 @@ struct BObolRetainedAllocationInputs {
      * amount and produces repeated allocate/present/recover cycles. */
     size_t externalPresentationCost = 0;
     size_t sceneBudget = 0;
+    /* A static view may spend a separately measured, hard-deadline-limited
+     * remainder through occurrence-local marginal upgrades after an atomic
+     * protected floor has been rejected.  This is deliberately distinct from
+     * maximumProtectedBudget: it never authorizes re-testing the rejected
+     * all-or-nothing floor. */
+    size_t maximumMarginalBudget = 0;
     bool allowProtectedFloor = false;
     size_t maximumProtectedBudget = 0;
     uint64_t viewRevision = 0;
@@ -61,6 +67,7 @@ struct BObolRetainedAllocationResult {
     size_t requestedSceneBudget = 0;
     size_t externalPresentationCost = 0;
     size_t fixedCadPresentationCost = 0;
+    size_t maximumMarginalBudget = 0;
     size_t maximumProtectedBudget = 0;
     bool allowProtectedFloor = false;
 };

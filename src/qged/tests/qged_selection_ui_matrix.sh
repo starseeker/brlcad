@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "${DISPLAY:-}" ]]; then
+if [[ -z "${DISPLAY:-}" && "${QT_QPA_PLATFORM:-}" != "offscreen" ]]; then
     if ! command -v xvfb-run >/dev/null 2>&1; then
 	echo "ERROR: a display or xvfb-run is required" >&2
 	exit 2

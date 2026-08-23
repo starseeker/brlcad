@@ -251,6 +251,24 @@ BObolViewController::advanceProgressiveWork(
     this->d->lastProgressiveProviderTimeNanoseconds = 0;
     this->d->lastLodSubmissionTimeNanoseconds = 0;
 
+    /* A deadline-interrupted CAD traversal is a closed presentation
+     * transaction.  The renderer may have retained a resumable command-plan
+     * cursor, so applying a provider batch, worker result, compaction, or cut
+     * update here would invalidate work between replay slices.  Keep worker
+     * queues bounded by their existing backpressure and let the already
+     * requested successor frame commit before publishing more scene state. */
+    if (this->d->lodInterruptedPresentationReplayPending) {
+	localStatus.hasMore = 1;
+	this->markProgressiveWorkPending();
+	if (status)
+	    *status = localStatus;
+	const uint64_t advanceCompleted = this->beginRenderTiming();
+	this->d->lastProgressiveAdvanceTimeNanoseconds =
+	    advanceCompleted > advanceStarted ?
+		advanceCompleted - advanceStarted : 0;
+	return 1;
+    }
+
     /* Camera motion keeps a responsive aggregate cut.  A completed scale
      * frame may nevertheless spend one bounded quality step immediately;
      * this keeps continuous zoom progressive rather than magnifying one
@@ -541,7 +559,7 @@ BObolViewController::advanceProgressiveWork(
 	    options->maxLodResults : 256;
 	const SbBool submissionPausedByPresentation =
 	    BObolLodPointProxyCalibrationPolicy::blocksSourceAdmission(
-		this->d->lodDiscoveryPointProxyFramePending != FALSE,
+		this->d->lodAdmissionPointProxyFramePending != FALSE,
 		this->d->lodStablePointProxyCalibrationPending != FALSE) ?
 		TRUE : FALSE;
 	const SbBool continuingProducerStream =
@@ -846,7 +864,7 @@ BObolViewController::advanceProgressiveWork(
 	 this->d->lodFrameObligation.pending() ||
 	 this->d->lodPublicationPolicy.pending() ||
 	 this->d->lodBudgetPolicy.calibrationFramesRemaining() != 0 ||
-	 this->d->lodDiscoveryPointProxyFramePending ||
+	 this->d->lodAdmissionPointProxyFramePending ||
 	 this->d->lodStablePointProxyCalibrationPending ||
 	 this->d->lodPointProxyTriangleRecoveryPending ||
 	 this->d->lodResidentGrowthPolicy.pending() ||
@@ -918,7 +936,7 @@ BObolViewController::advanceProgressiveWork(
 	     this->d->lodActiveGeneration) > 0);
     const bool publicationSubmissionPaused =
 	BObolLodPointProxyCalibrationPolicy::blocksSourceAdmission(
-	    this->d->lodDiscoveryPointProxyFramePending != FALSE,
+	    this->d->lodAdmissionPointProxyFramePending != FALSE,
 	    this->d->lodStablePointProxyCalibrationPending != FALSE);
     publicationInputs.streamIdle =
 	!BObolLodProducerPolicy::canProduceGeometry(

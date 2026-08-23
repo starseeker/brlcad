@@ -687,6 +687,15 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	"lod_convergence_point_proxy_calibration_pending"),
 	convergence.pointProxyCalibrationPending ? true : false);
     sample.insert(QStringLiteral(
+	"lod_convergence_point_proxy_admission_frame_pending"),
+	convergence.pointProxyAdmissionFramePending ? true : false);
+    sample.insert(QStringLiteral(
+	"lod_convergence_stable_point_proxy_calibration_pending"),
+	convergence.stablePointProxyCalibrationPending ? true : false);
+    sample.insert(QStringLiteral(
+	"lod_convergence_point_proxy_triangle_recovery_pending"),
+	convergence.pointProxyTriangleRecoveryPending ? true : false);
+    sample.insert(QStringLiteral(
 	"lod_convergence_resident_growth_reallocation_pending"),
 	convergence.residentGrowthReallocationPending ? true : false);
     sample.insert(QStringLiteral("lod_convergence_publication_frame_pending"),

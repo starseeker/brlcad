@@ -889,6 +889,19 @@ const struct bu_cmdtab _view_cmds[] = {
     { (char *)NULL,      NULL}
 };
 
+/* Feature stores are intentionally renderer-neutral.  A successful command
+ * can therefore change a shared scene node without changing the libbv camera
+ * hash that qged traditionally uses to schedule a paint.  Only these command
+ * families can mutate retained view content; mutation itself is detected by
+ * the shared controller's render-request serial. */
+static bool
+_view_cmd_can_mutate_obol_content(const char *command)
+{
+    return command && (BU_STR_EQUAL(command, "annotation") ||
+	BU_STR_EQUAL(command, "feature") || BU_STR_EQUAL(command, "obj") ||
+	BU_STR_EQUAL(command, "objs") || BU_STR_EQUAL(command, "polygon"));
+}
+
 int
 ged_view_core(struct ged *gedp, int argc, const char *argv[])
 {
@@ -989,9 +1002,18 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    BObolViewController *shared_controller =
+	_view_cmd_can_mutate_obol_content(argv[0]) ?
+	ged_bobol_shared_view_controller(gedp) : NULL;
+    const uint64_t shared_request_serial = shared_controller ?
+	shared_controller->getRenderRequestSerial() : 0;
     int ret;
     if (bu_cmd_valid(_view_cmds, argv[0]) == BRLCAD_OK &&
 	bu_cmd(_view_cmds, argc, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
+	if (ret == BRLCAD_OK && shared_controller &&
+	    shared_controller->getRenderRequestSerial() != shared_request_serial)
+	    ged_bobol_shared_view_presentation_request(gedp,
+		"ged-shared-view-content");
 	bu_vls_free(&vname);
 	return ret;
     }

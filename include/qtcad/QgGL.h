@@ -83,6 +83,9 @@ int  lmouseMoveDefault() const     override;
 int  currentView() const     override;
 void set_current(int active) override;
 
+/* True after this endpoint has completed its first presentation paint. */
+bool isPresentationInitialized() const;
+
 signals:
 void changed();
 void init_done();
