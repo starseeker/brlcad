@@ -26,7 +26,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <numeric>
 #include <stdio.h>
@@ -4399,6 +4401,68 @@ test_intermediate_result_lifecycle(void)
 }
 
 static int
+test_resident_memory_percentage_limit(void)
+{
+    BObolLodService service;
+    const double maximumPercent =
+	service.getMaximumResidentMeshAvailableMemoryPercent();
+    if (std::fabs(maximumPercent - 50.0) >
+	std::numeric_limits<double>::epsilon() ||
+	std::fabs(service.getResidentMeshAvailableMemoryPercent()) >
+	    std::numeric_limits<double>::epsilon() ||
+	service.getResidentMeshAvailableMemoryBasisBytes() != 0) {
+	printf("FAIL: resident memory percentage policy did not start in auto mode\n");
+	return 1;
+    }
+
+    if (service.setResidentMeshAvailableMemoryPercent(0.0) ||
+	service.setResidentMeshAvailableMemoryPercent(-1.0) ||
+	service.setResidentMeshAvailableMemoryPercent(maximumPercent + 1.0) ||
+	service.setResidentMeshAvailableMemoryPercent(
+	    std::numeric_limits<double>::quiet_NaN()) ||
+	service.setResidentMeshAvailableMemoryPercent(
+	    std::numeric_limits<double>::infinity())) {
+	printf("FAIL: resident memory percentage policy accepted an invalid value\n");
+	return 1;
+    }
+
+    const double testPercent = 25.0;
+    if (!service.setResidentMeshAvailableMemoryPercent(testPercent)) {
+	printf("FAIL: resident memory percentage policy rejected a valid value\n");
+	return 1;
+    }
+    const size_t basisBytes =
+	service.getResidentMeshAvailableMemoryBasisBytes();
+    const size_t expectedBytes = basisBytes / 4;
+    if (std::fabs(service.getResidentMeshAvailableMemoryPercent() -
+	    testPercent) > std::numeric_limits<double>::epsilon() ||
+	basisBytes == 0 || expectedBytes == 0 ||
+	service.getResidentMeshLimit() != expectedBytes) {
+	printf("FAIL: resident memory percentage policy did not retain its snapshot\n");
+	return 1;
+    }
+
+    const size_t directLimit = 12345;
+    service.setResidentMeshLimit(directLimit);
+    if (service.getResidentMeshLimit() != directLimit ||
+	std::fabs(service.getResidentMeshAvailableMemoryPercent()) >
+	    std::numeric_limits<double>::epsilon() ||
+	service.getResidentMeshAvailableMemoryBasisBytes() != 0) {
+	printf("FAIL: direct resident memory limit did not clear percentage state\n");
+	return 1;
+    }
+    service.setResidentMeshLimit(0);
+    if (service.getResidentMeshLimit() == 0 ||
+	std::fabs(service.getResidentMeshAvailableMemoryPercent()) >
+	    std::numeric_limits<double>::epsilon() ||
+	service.getResidentMeshAvailableMemoryBasisBytes() != 0) {
+	printf("FAIL: automatic resident memory policy was not restored\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_managed_service_is_shared(void)
 {
     BObolViewController first;
@@ -4506,6 +4570,8 @@ main(int argc, char **argv)
     if (runIsolated(test_generation_scoped_consumers))
 	return 1;
     if (runIsolated(test_intermediate_result_lifecycle))
+	return 1;
+    if (runIsolated(test_resident_memory_percentage_limit))
 	return 1;
     if (runIsolated(test_managed_service_is_shared))
 	return 1;

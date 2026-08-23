@@ -27,6 +27,8 @@
 
 #include <stdlib.h>
 #include <ctype.h>
+#include <cmath>
+#include <limits>
 #include <string.h>
 
 #include "BObol/BDrawCache.h"
@@ -47,6 +49,13 @@
 #include "../ged_draw_private.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
+
+static int
+lod_valid_fps_target(fastf_t target)
+{
+    return std::isfinite(target) && target > 0.0 &&
+	target <= static_cast<fastf_t>(std::numeric_limits<float>::max());
+}
 
 static int
 lod_service_has_work(BObolViewController *controller)
@@ -169,6 +178,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 			       "view lod point_scale [factor]\n"
 			       "view lod curve_scale [factor]\n"
 			       "view lod fps [interactive [stable]]\n"
+			       "view lod memory [auto|available_percent]\n"
 			       "view lod bot_threshold [face_cnt]\n";
 
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
@@ -243,6 +253,19 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		"fps(interactive/stable): %g/%g\n",
 		view_controller->getLodInteractiveTargetFps(),
 		view_controller->getLodStableTargetFps());
+	    BObolLodService *service = view_controller->getLodService();
+	    if (service) {
+		const double percent =
+		    service->getResidentMeshAvailableMemoryPercent();
+		if (percent > 0.0)
+		    bu_vls_printf(gedp->ged_result_str,
+			"memory(available_percent/bytes): %g/%zu\n",
+			percent, service->getResidentMeshLimit());
+		else
+		    bu_vls_printf(gedp->ged_result_str,
+			"memory(available_percent/bytes): auto/%zu\n",
+			service->getResidentMeshLimit());
+	    }
 	    bu_vls_printf(gedp->ged_result_str,
 		"scene_faces(active): %zu\n",
 		view_controller->getActiveLodFaceCount());
@@ -355,14 +378,14 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	fastf_t stable = 0.0;
 	if (bu_opt_fastf_t(NULL, 1, (const char **)&argv[1],
 		(void *)&interactive) != 1 ||
-	    interactive <= 0.0) {
+	    !lod_valid_fps_target(interactive)) {
 	    bu_vls_printf(gedp->ged_result_str,
 		"invalid interactive FPS target: %s\n", argv[1]);
 	    return BRLCAD_ERROR;
 	}
 	if (argc == 3) {
 	    if (bu_opt_fastf_t(NULL, 1, (const char **)&argv[2],
-		    (void *)&stable) != 1 || stable <= 0.0) {
+		    (void *)&stable) != 1 || !lod_valid_fps_target(stable)) {
 		bu_vls_printf(gedp->ged_result_str,
 		    "invalid stable FPS target: %s\n", argv[2]);
 		return BRLCAD_ERROR;
@@ -373,6 +396,66 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	view_controller->setLodFrameRateTargets(
 	    static_cast<float>(interactive), static_cast<float>(stable));
 	redraw_view();
+	return BRLCAD_OK;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "memory")) {
+	if (!view_controller || !view_controller->getLodService()) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"no Obol LoD service is attached to the current view\n");
+	    return BRLCAD_ERROR;
+	}
+	if (argc > 2) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
+	    return BRLCAD_ERROR;
+	}
+	BObolLodService *service = view_controller->getLodService();
+	if (argc == 2) {
+	    if (BU_STR_EQUAL(argv[1], "auto")) {
+		service->setResidentMeshLimit(0);
+	    } else {
+		fastf_t percent = 0.0;
+		if (bu_opt_fastf_t(NULL, 1, (const char **)&argv[1],
+			(void *)&percent) != 1 || !std::isfinite(percent) ||
+		    percent <= 0.0 || percent >
+			service->getMaximumResidentMeshAvailableMemoryPercent()) {
+		    bu_vls_printf(gedp->ged_result_str,
+			"invalid available-memory percentage: %s "
+			"(expected > 0 and <= %g)\n", argv[1],
+			service->getMaximumResidentMeshAvailableMemoryPercent());
+		    return BRLCAD_ERROR;
+		}
+		if (!service->setResidentMeshAvailableMemoryPercent(
+			static_cast<double>(percent))) {
+		    bu_vls_printf(gedp->ged_result_str,
+			"unable to query available system memory\n");
+		    return BRLCAD_ERROR;
+		}
+	    }
+	    /* The service admission revision unlocks richer memory-limited
+	     * prefixes after an increase.  A progressive/render edge is also
+	     * needed for a lower ceiling to schedule stable compaction. */
+	    view_controller->markProgressiveWorkPending();
+	    view_controller->requestRender("lod-memory-limit");
+	    redraw_view();
+	}
+	const double percent =
+	    service->getResidentMeshAvailableMemoryPercent();
+	if (percent > 0.0) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"available_percent: %g\n"
+		"available_basis_bytes: %zu\n",
+		percent,
+		service->getResidentMeshAvailableMemoryBasisBytes());
+	} else {
+	    bu_vls_printf(gedp->ged_result_str,
+		"available_percent: auto\n");
+	}
+	bu_vls_printf(gedp->ged_result_str,
+	    "resident_limit_bytes: %zu\n"
+	    "maximum_available_percent: %g\n",
+	    service->getResidentMeshLimit(),
+	    service->getMaximumResidentMeshAvailableMemoryPercent());
 	return BRLCAD_OK;
     }
 
@@ -404,6 +487,23 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	    bu_vls_printf(gedp->ged_result_str,
 		"target_fps_stable: %g\n",
 		view_controller->getLodStableTargetFps());
+	    if (service) {
+		const double percent =
+		    service->getResidentMeshAvailableMemoryPercent();
+		if (percent > 0.0) {
+		    bu_vls_printf(gedp->ged_result_str,
+			"resident_memory_available_percent: %g\n"
+			"resident_memory_available_basis_bytes: %zu\n",
+			percent,
+			service->getResidentMeshAvailableMemoryBasisBytes());
+		} else {
+		    bu_vls_printf(gedp->ged_result_str,
+			"resident_memory_available_percent: auto\n");
+		}
+		bu_vls_printf(gedp->ged_result_str,
+		    "resident_memory_limit_bytes: %zu\n",
+		    service->getResidentMeshLimit());
+	    }
 	    bu_vls_printf(gedp->ged_result_str,
 		"active_scene_faces: %zu\n",
 		view_controller->getActiveLodFaceCount());

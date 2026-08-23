@@ -1484,6 +1484,12 @@ lod_default_resident_mesh_limit(void)
     return std::max(floor, allowance);
 }
 
+/* A retained prefix may coexist with its renderer allocation and, on OSMesa,
+ * software graphics storage in the same physical-memory pool.  Reserving at
+ * least half of the available-memory snapshot for those consumers is the
+ * highest explicit user override we can offer without presenting an OOM knob. */
+static constexpr double LOD_MAX_RESIDENT_AVAILABLE_MEMORY_PERCENT = 50.0;
+
 struct BObolGlobalWorkingSetGovernor {
     BObolGlobalWorkingSetGovernor(void) :
 	limit(lod_default_working_set_limit()),
@@ -1733,6 +1739,8 @@ struct BObolLodServicePrivate {
 	maxQueuedCacheWrites(2048),
 	maxActiveWorkingSetBytes(0),
 	maxResidentMeshBytes(0),
+	residentMeshLimitPercent(0.0),
+	residentMeshLimitBasisBytes(0),
 	activeWorkingSetBytes(0),
 	executingTasks(0),
 	peakWorkingSetBytes(0),
@@ -1789,6 +1797,8 @@ struct BObolLodServicePrivate {
     size_t maxQueuedCacheWrites;
     size_t maxActiveWorkingSetBytes;
     size_t maxResidentMeshBytes;
+    double residentMeshLimitPercent;
+    size_t residentMeshLimitBasisBytes;
     size_t activeWorkingSetBytes;
     size_t executingTasks;
     size_t peakWorkingSetBytes;
@@ -4832,6 +4842,8 @@ BObolLodService::setResidentMeshLimit(size_t maxResidentBytes)
 	const size_t next = maxResidentBytes > 0 ?
 	    maxResidentBytes : lod_default_resident_mesh_limit();
 	this->p->maxResidentMeshBytes = next;
+	this->p->residentMeshLimitPercent = 0.0;
+	this->p->residentMeshLimitBasisBytes = 0;
 	if (next > prior)
 	    lod_resident_mesh_revision_advance(
 		this->p->residentMeshAdmissionRevision);
@@ -4844,6 +4856,58 @@ BObolLodService::getResidentMeshLimit(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return this->p->maxResidentMeshBytes;
+}
+
+SbBool
+BObolLodService::setResidentMeshAvailableMemoryPercent(
+	double availableMemoryPercent)
+{
+    if (!std::isfinite(availableMemoryPercent) ||
+	availableMemoryPercent <= 0.0 ||
+	availableMemoryPercent > LOD_MAX_RESIDENT_AVAILABLE_MEMORY_PERCENT)
+	return FALSE;
+
+    size_t availableBytes = 0;
+    if (bu_mem(BU_MEM_AVAIL, &availableBytes) < 0 || availableBytes == 0)
+	return FALSE;
+
+    const long double scaled =
+	static_cast<long double>(availableBytes) *
+	static_cast<long double>(availableMemoryPercent) / 100.0L;
+    const size_t next = scaled >= static_cast<long double>(SIZE_MAX) ?
+	SIZE_MAX : std::max<size_t>(1, static_cast<size_t>(scaled));
+    {
+	std::lock_guard<std::mutex> lock(this->p->mutex);
+	const size_t prior = this->p->maxResidentMeshBytes;
+	this->p->maxResidentMeshBytes = next;
+	this->p->residentMeshLimitPercent = availableMemoryPercent;
+	this->p->residentMeshLimitBasisBytes = availableBytes;
+	if (next > prior)
+	    lod_resident_mesh_revision_advance(
+		this->p->residentMeshAdmissionRevision);
+    }
+    this->p->workerCv.notify_all();
+    return TRUE;
+}
+
+double
+BObolLodService::getResidentMeshAvailableMemoryPercent(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->residentMeshLimitPercent;
+}
+
+size_t
+BObolLodService::getResidentMeshAvailableMemoryBasisBytes(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->residentMeshLimitBasisBytes;
+}
+
+double
+BObolLodService::getMaximumResidentMeshAvailableMemoryPercent(void)
+{
+    return LOD_MAX_RESIDENT_AVAILABLE_MEMORY_PERCENT;
 }
 
 size_t

@@ -21,6 +21,7 @@
 #include <Inventor/nodes/SoPerspectiveCamera.h>
 #include "bv.h"
 #include "BObol/BDisplayEndpoint.h"
+#include "BObol/BLodService.h"
 #include "BObol/BViewController.h"
 #include <bu.h>
 #include <ged.h>
@@ -722,6 +723,72 @@ test_shading_policy_command(struct ged *gedp,
 }
 
 static void
+test_lod_resource_policy_command(struct ged *gedp,
+	struct ged_view_context *view)
+{
+    ASSERT(ged_view_context_display_endpoint_ensure(view));
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_obol_endpoint_get(view);
+    BObolViewController *controller = endpoint ?
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint)) : NULL;
+    BObolLodService *service = controller ? controller->getLodService() : NULL;
+    ASSERT(controller != NULL);
+    ASSERT(service != NULL);
+    if (!controller || !service) {
+	(void)ged_view_context_obol_endpoint_set(view, NULL, 0);
+	return;
+    }
+
+    const char *fps_set[] = {"view", "lod", "fps", "48", "6", NULL};
+    ASSERT(run_view(gedp, 5, fps_set) == BRLCAD_OK);
+    ASSERT(std::fabs(controller->getLodInteractiveTargetFps() - 48.0) <
+	SMALL_FASTF);
+    ASSERT(std::fabs(controller->getLodStableTargetFps() - 6.0) <
+	SMALL_FASTF);
+    const char *fps_query[] = {"view", "lod", "fps", NULL};
+    ASSERT(run_view(gedp, 3, fps_query) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("48 6") != std::string::npos);
+    const char *fps_invalid[] = {"view", "lod", "fps", "nan", NULL};
+    ASSERT(run_view(gedp, 4, fps_invalid) == BRLCAD_ERROR);
+    const char *fps_overflow[] = {"view", "lod", "fps", "1e100", NULL};
+    ASSERT(run_view(gedp, 4, fps_overflow) == BRLCAD_ERROR);
+
+    const char *memory_set[] = {"view", "lod", "memory", "25", NULL};
+    ASSERT(run_view(gedp, 4, memory_set) == BRLCAD_OK);
+    const size_t basisBytes =
+	service->getResidentMeshAvailableMemoryBasisBytes();
+    ASSERT(std::fabs(service->getResidentMeshAvailableMemoryPercent() - 25.0) <
+	SMALL_FASTF);
+    ASSERT(basisBytes > 0);
+    ASSERT(service->getResidentMeshLimit() == basisBytes / 4);
+    ASSERT(result_str(gedp).find("available_percent: 25") !=
+	std::string::npos);
+    ASSERT(result_str(gedp).find("resident_limit_bytes:") !=
+	std::string::npos);
+
+    const std::string excessiveMemory = std::to_string(
+	service->getMaximumResidentMeshAvailableMemoryPercent() + 1.0);
+    const char *memory_invalid[] = {
+	"view", "lod", "memory", excessiveMemory.c_str(), NULL
+    };
+    ASSERT(run_view(gedp, 4, memory_invalid) == BRLCAD_ERROR);
+    ASSERT(std::fabs(service->getResidentMeshAvailableMemoryPercent() - 25.0) <
+	SMALL_FASTF);
+
+    const char *memory_auto[] = {"view", "lod", "memory", "auto", NULL};
+    ASSERT(run_view(gedp, 4, memory_auto) == BRLCAD_OK);
+    ASSERT(std::fabs(service->getResidentMeshAvailableMemoryPercent()) <
+	SMALL_FASTF);
+    ASSERT(service->getResidentMeshAvailableMemoryBasisBytes() == 0);
+    ASSERT(service->getResidentMeshLimit() > 0);
+
+    const char *fps_restore[] = {"view", "lod", "fps", "60", "20", NULL};
+    ASSERT(run_view(gedp, 5, fps_restore) == BRLCAD_OK);
+    ASSERT(ged_view_context_obol_endpoint_set(view, NULL, 0));
+}
+
+static void
 test_lod_policy_command(struct ged *gedp, struct ged_view_context *view)
 {
     ged_view_lod_policy policy = BV_LOD_POLICY_INIT;
@@ -825,6 +892,7 @@ main(int argc, const char **argv)
     test_display_endpoint_slot(gedp, views[0]);
     test_shading_policy_command(gedp, views[0], views[1]);
     test_lod_policy_command(gedp, views[0]);
+    test_lod_resource_policy_command(gedp, views[0]);
     test_command_report_record_consistency(gedp, views[0]);
 
     const char *c0[] = {"view", "annotation", "line", "create", "u_line", "0", "0", "0", "1", "0", "0", NULL};

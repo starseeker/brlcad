@@ -325,6 +325,33 @@ residency, or normal policy.
 Memory Policy
 -------------
 
+Two outcome-oriented controls let users deliberately trade responsiveness and
+memory for image fidelity without exposing PoP implementation details:
+
+* `view lod fps [interactive [stable]]` reports or sets the minimum frame-rate
+  targets used by the adaptive scene budget.  One value sets both targets; two
+  values permit a responsive motion target and a slower settled-view target.
+  The defaults are 60 FPS while interacting and 20 FPS while progressively
+  refining a stable view.  These are control targets, not guarantees: a single
+  unavoidable draw may still exceed the available frame time.
+* `view lod memory [auto|available_percent]` reports or sets the process-shared
+  resident PoP mesh ceiling.  An explicit percentage is applied to a snapshot
+  of memory currently available to the operating system.  The query reports
+  both that snapshot and the resulting byte ceiling.  `auto` restores the
+  conservative host-derived policy.
+
+The explicit memory setting is capped at 50 percent of available memory.  A
+resident CPU prefix is only one drawing allocation: database and cache
+mappings, transient topology, renderer records, GPU buffers, OSMesa storage,
+the GUI, and the operating system all need the remaining headroom.  The
+snapshot is intentionally not recomputed as memory is consumed; feeding the
+LoD allocation back into its own limit would make a stable policy shrink or
+oscillate.  Because normal views share one LoD service and retained asset pool,
+the memory setting applies to every view in the process.  Lowering it schedules
+stable-view compaction, while raising it permits pending richer prefixes to be
+admitted without restarting discovery or replacing resident meshes with
+boxes.
+
 Full-detail arrays are optional once enough source metrics exist to reconstruct
 source-backed requests.  A LoD-backed shared node may contain only identity,
 source counts, source bounds, and draw/material/selection metadata.  It does
@@ -556,7 +583,8 @@ realization remains a separate, more expensive mode with different scheduling
 requirements.
 
 libged exposes the low-level service controls as
-`view lod service status|start|stop|poll`.  The Obol DM backend also submits
+`view lod service status|start|stop|poll`; normal quality controls are
+`view lod fps` and `view lod memory`.  The Obol DM backend also submits
 requests and drains available results from its render path when view LoD
 auto-submit is enabled.  qged, MGED, and gsh all attach the same GED progressive
 provider and `BObolViewController` pipeline; host code supplies only the frame

@@ -293,6 +293,16 @@ public:
      * undemanded assets when retained bytes exceed this limit. */
     void setResidentMeshLimit(size_t maxResidentBytes);
     size_t getResidentMeshLimit(void) const;
+    /* Set the process-shared resident ceiling to a percentage of currently
+     * available system memory.  The percentage is deliberately capped: the
+     * retained CPU prefix is not the only copy of drawing data, and database
+     * mappings, renderer records, GPU/OSMesa storage, and transient topology
+     * still need headroom.  This is a snapshot-based explicit limit; passing
+     * zero to setResidentMeshLimit() restores the automatic policy. */
+    SbBool setResidentMeshAvailableMemoryPercent(double availableMemoryPercent);
+    double getResidentMeshAvailableMemoryPercent(void) const;
+    size_t getResidentMeshAvailableMemoryBasisBytes(void) const;
+    static double getMaximumResidentMeshAvailableMemoryPercent(void);
     size_t activeWorkingSetBytesForDiagnostics(void) const;
     size_t executingTaskCountForDiagnostics(void) const;
     size_t peakWorkingSetBytesForDiagnostics(void) const;
