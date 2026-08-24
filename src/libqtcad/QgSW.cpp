@@ -132,13 +132,25 @@ return;
 void QgSW::need_update()
 {
     QTCAD_SLOT("QgSW::need_update", 1);
-    request_update(BV_REFRESH_FRAMEBUFFER | BV_REFRESH_FORCE);
+    /* diff_hashes() reaches this path after a GED command.  A framebuffer
+     * repaint alone preserves the previous Obol camera, so an A/E command can
+     * appear to take effect only when later progressive work happens to sync
+     * it.  Match the GL canvas contract: synchronize semantic view state
+     * before presenting the retained framebuffer. */
+    request_update(BV_REFRESH_VIEW | BV_REFRESH_FRAMEBUFFER |
+	BV_REFRESH_FORCE);
 }
 
 void QgSW::present_frame()
 {
     QTCAD_SLOT("QgSW::present_frame", 1);
-    request_update(BV_REFRESH_FRAMEBUFFER | BV_REFRESH_FORCE);
+    /* A software frame can be requested solely by a background realization;
+     * unlike a direct GL expose it may be the first host callback following a
+     * GED command.  Reconcile the authoritative view at that presentation
+     * boundary so a warm realization cannot show the controller's startup
+     * camera until a later mouse event. */
+    request_update(BV_REFRESH_VIEW | BV_REFRESH_FRAMEBUFFER |
+	BV_REFRESH_FORCE);
 }
 
 void QgSW::queued_update()

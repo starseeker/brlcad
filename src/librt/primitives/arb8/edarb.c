@@ -270,11 +270,11 @@ static const enum rt_edit_param_semantic arb_rotate_semantics[] = {
 };
 
 static const struct rt_edit_interaction_desc arb_interactions[] = {
-    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_INFER,
+    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_INDEXED_SET, arb_index_semantics, 1 },
-    { RT_EDIT_SELECTION_EDGE, RT_EDIT_COORDINATE_INFER,
+    { RT_EDIT_SELECTION_EDGE, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_INDEXED_SET, arb_index_semantics, 1 },
-    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_INFER,
+    { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_INDEXED_SET, arb_index_semantics, 1 },
     { RT_EDIT_SELECTION_FACE, RT_EDIT_COORDINATE_OBJECT,
       RT_EDIT_MANIPULATOR_INDEXED_SET, arb_move_semantics, 2 },

@@ -1873,6 +1873,30 @@ test_budget_policy(void)
 	return 1;
     }
 
+    /* The quiet preference is not a hard failure threshold.  A static frame
+     * below the independently enforced presentation deadline keeps its
+     * proven population across a pose-only interaction; reducing it here can
+     * expose structural boxes which were absent before the rotation. */
+    policy.reset();
+    policy.raiseCurrentBudget(400000);
+    input = Policy::Inputs();
+    input.activeCost = 400000;
+    input.targetFps = 20.0f;
+    input.calibratedCostPerSecond = 4000000.0L;
+    input.observedStableNanoseconds = 70000000ULL;
+    input.hardPresentationDeadlineNanoseconds = 100000000ULL;
+    policy.setProbeCount(3);
+    decision = policy.beginPass(input);
+    if (decision.overloadRecovery || decision.totalBudget != 400000 ||
+	decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: hard-deadline-safe static population was coarsened "
+	    "recovery=%d budget=%zu admission=%d\n",
+	    decision.overloadRecovery ? 1 : 0, decision.totalBudget,
+	    decision.retainedAdmission ? 1 : 0);
+	return 1;
+    }
+
     /* A many-occurrence fixed cost is not described by the triangle-rate
      * calibration.  Three exact stable misses must therefore authorize the
      * direct duration-based recovery even when that estimator predicts the

@@ -8323,11 +8323,25 @@ test_compact_many_leaf_scene_admission(void)
 	prominent.sourceMeshRequest.path = prominent.summary.path;
 	prominent.sourceMeshRequest.meshAssetTransform.setScale(
 	    SbVec3f(6.0f, 6.0f, 6.0f));
-	const std::vector<BObolCompactOccurrence> priorityOccurrences = {
-	    small, prominent
-	};
+	/* Exercise the production failure mode: a visually dominant component
+	 * competes with many individually cheap details, not merely one. */
+	static const size_t priorityOrdinaryOccurrenceCount = 16;
+	std::vector<BObolCompactOccurrence> priorityOccurrences;
+	priorityOccurrences.reserve(priorityOrdinaryOccurrenceCount + 1);
+	for (size_t priorityIndex = 0;
+	     priorityIndex < priorityOrdinaryOccurrenceCount; ++priorityIndex) {
+	    BObolCompactOccurrence ordinary = small;
+	    ordinary.summary.path = SbString("priority-root.c/small-") +
+		SbString(static_cast<int>(priorityIndex)) + ".bot";
+	    ordinary.sourceMeshRequest.path = ordinary.summary.path;
+	    priorityOccurrences.push_back(std::move(ordinary));
+	}
+	priorityOccurrences.push_back(prominent);
+	const int prominentPriorityIndex = static_cast<int>(
+	    priorityOccurrences.size() - 1);
 	if (prioritySource->setCompactOccurrenceRegistry(
-		priorityOccurrences) != 2) {
+		priorityOccurrences) != static_cast<int>(
+		    priorityOccurrences.size())) {
 	    printf("FAIL: perceptual priority registry setup\n");
 	    ret = 1;
 	} else {
@@ -8366,7 +8380,8 @@ test_compact_many_leaf_scene_admission(void)
 	    bool priorityReady = priorityMesh->update(
 		priorityData, priorityHierarchy, 1, FALSE) ? true : false;
 	    for (int priorityIndex = 0;
-		 priorityReady && priorityIndex < 2; priorityIndex++) {
+		 priorityReady && priorityIndex < static_cast<int>(
+		     priorityOccurrences.size()); priorityIndex++) {
 		BObolCompactInstanceHandle priorityHandle;
 		BObolCompactInstanceSummary prioritySummary;
 		if (!prioritySource->getCompactInstanceHandle(
@@ -8399,7 +8414,7 @@ test_compact_many_leaf_scene_admission(void)
 		 * screen footprint so this fixture verifies allocator priority as well
 		 * as compact-submit ordering below. */
 		priorityResult.request.projectedPixelDiameter =
-		    priorityIndex == 0 ? 16.0f : 192.0f;
+		    priorityIndex == prominentPriorityIndex ? 192.0f : 16.0f;
 		priorityResult.request.projectedPixelArea =
 		    priorityResult.request.projectedPixelDiameter *
 		    priorityResult.request.projectedPixelDiameter;
@@ -8443,7 +8458,9 @@ test_compact_many_leaf_scene_admission(void)
 		priorityAction.apply(prioritySource);
 		std::vector<size_t> priorityPlan;
 		priorityAction.getCompactEntryPlan(priorityPlan);
-		if (priorityPlan.size() != 2 || priorityPlan.front() != 1) {
+		if (priorityPlan.size() != priorityOccurrences.size() ||
+		    priorityPlan.front() != static_cast<size_t>(
+			prominentPriorityIndex)) {
 		    printf("FAIL: prominent coarse occurrence did not lead the "
 			   "perceptual frontier (plan=%zu first=%zu)\n",
 			   priorityPlan.size(),
@@ -8470,10 +8487,9 @@ test_compact_many_leaf_scene_admission(void)
 		    BObolRetainedAllocationInputs priorityInputs;
 		    priorityInputs.sources = &prioritySources;
 		    priorityInputs.viewState = &priorityState;
-		    priorityInputs.sceneBudget = minimumCost;
-		    priorityInputs.sceneBudget = priorityInputs.sceneBudget >
-			SIZE_MAX - minimumCost ? SIZE_MAX :
-			priorityInputs.sceneBudget + minimumCost;
+		    priorityInputs.sceneBudget = minimumCost > SIZE_MAX /
+			priorityOccurrences.size() ? SIZE_MAX :
+		minimumCost * priorityOccurrences.size();
 		    priorityInputs.sceneBudget = priorityInputs.sceneBudget >
 			SIZE_MAX - oneUpgradeCost ? SIZE_MAX :
 			priorityInputs.sceneBudget + oneUpgradeCost;
@@ -8495,7 +8511,8 @@ test_compact_many_leaf_scene_admission(void)
 		    BObolCompactInstanceSummary prominentSummary;
 		    const bool havePrioritySummaries =
 			prioritySource->getCompactInstanceHandle(0, smallHandle) &&
-			prioritySource->getCompactInstanceHandle(1, prominentHandle) &&
+			prioritySource->getCompactInstanceHandle(
+			    prominentPriorityIndex, prominentHandle) &&
 			prioritySource->getCompactInstanceSummary(smallHandle,
 			    smallSummary) &&
 			prioritySource->getCompactInstanceSummary(prominentHandle,

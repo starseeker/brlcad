@@ -52,8 +52,11 @@ fi
 build_dir="$(realpath -m "$build_dir")"
 qged="$build_dir/bin/qged"
 database_source="$build_dir/share/db/moss.g"
+if [[ ! -f "$database_source" ]]; then
+    database_source="$build_dir/regress/moss/moss.g"
+fi
 if [[ ! -x "$qged" || ! -f "$database_source" ]]; then
-    echo "ERROR: qged and the installed moss.g database are required" >&2
+    echo "ERROR: qged and a moss.g database are required" >&2
     exit 2
 fi
 for required_tool in jq identify compare; do

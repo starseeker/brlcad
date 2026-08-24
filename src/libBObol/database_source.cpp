@@ -28,6 +28,7 @@
 #include "database_source_private.h"
 #include "database_source_realization.h"
 #include "performance_private.h"
+#include "serialized_bot_source_private.h"
 
 #include "bg/line_layer.h"
 #include "bg/pca.h"
@@ -77,6 +78,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <deque>
+#include <exception>
 #include <inttypes.h>
 #include <limits.h>
 #include <limits>
@@ -9958,7 +9960,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 
     std::vector<Obol::SharedPartUpdate> baseParts;
     std::vector<Obol::SharedPartUpdate> lodSharedParts;
-    std::vector<Obol::InstanceUpdate> instances;
+    std::deque<size_t> changedInstanceIndices;
     std::vector<Obol::InstanceStyleUpdate> instanceStyles;
     std::vector<Obol::InstanceLodUpdate> lodCutUpdates;
     std::unordered_set<Obol::PartId, std::hash<Obol::PartId>>
@@ -9982,7 +9984,6 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		(part.geometry->points.has_value() ? 4u : 0u);
 	    baseParts.push_back(std::move(part));
 	}
-	instances = this->d->compactIndex->instances;
 	assembly->compactInstancePresentations.clear();
 	assembly->compactActivePartReferences.clear();
 	assembly->compactLodParts.clear();
@@ -10307,18 +10308,20 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    }
 	    assembly->compactActivePartReferences[desiredPart]++;
 	}
-	if (reset && i < instances.size()) {
-	    instances[i].record.part = desiredPart;
-	    instances[i].record.localToRoot = desiredLocalToRoot;
-	    instances[i].record.style = entry.style;
-	    instances[i].record.lodStructuralProxy =
+	if (reset && i < this->d->compactIndex->instances.size()) {
+	    Obol::InstanceUpdate &update =
+		this->d->compactIndex->instances[i];
+	    update.record.part = desiredPart;
+	    update.record.localToRoot = desiredLocalToRoot;
+	    update.record.style = entry.style;
+	    update.record.lodStructuralProxy =
 		desiredLodStructuralProxy;
-	    instances[i].record.lodCut = desiredActiveCut >= 0 ?
+	    update.record.lodCut = desiredActiveCut >= 0 ?
 		static_cast<uint8_t>(std::min<int>(
 		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
 	} else if (recordChanged &&
 	    i < this->d->compactIndex->instances.size()) {
-	    Obol::InstanceUpdate update =
+	    Obol::InstanceUpdate &update =
 		this->d->compactIndex->instances[i];
 	    update.record.part = desiredPart;
 	    update.record.localToRoot = desiredLocalToRoot;
@@ -10334,7 +10337,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    update.record.lodCut = desiredActiveCut >= 0 ?
 		static_cast<uint8_t>(std::min<int>(
 		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
-	    instances.push_back(std::move(update));
+	    changedInstanceIndices.push_back(i);
 	} else if (appearanceChanged || selectionChanged) {
 	    Obol::InstanceStyleUpdate update;
 	    update.instance = entry.instance;
@@ -10411,7 +10414,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	assembly->drawMode.getValue() != presentationDrawMode;
 
     const bool structuralChanged = reset || !lodSharedParts.empty() ||
-	!baseParts.empty() || !instances.empty() || !instanceStyles.empty() ||
+	!baseParts.empty() || !changedInstanceIndices.empty() ||
+	!instanceStyles.empty() ||
 	!partsToRemove.empty() ||
 	instanceSetsChanged || drawModeChanged;
 
@@ -10433,7 +10437,33 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	}
 	assembly->upsertSharedParts(baseParts);
 	assembly->upsertSharedParts(lodSharedParts);
-	assembly->upsertInstances(instances);
+	/* Do not form a second full 150k-instance population merely to publish a
+	 * sparse representation change.  The retained compact index already owns
+	 * the authoritative records.  Small bounded batches keep transient memory
+	 * proportional to publication work rather than scene population. */
+	const size_t compactInstancePublicationBatchSize = 512;
+	const std::vector<Obol::InstanceUpdate> &compactInstances =
+	    this->d->compactIndex->instances;
+	std::vector<Obol::InstanceUpdate> instanceUpdates;
+	instanceUpdates.reserve(compactInstancePublicationBatchSize);
+	auto publishInstanceUpdates = [&assembly, &compactInstances, &instanceUpdates,
+			       compactInstancePublicationBatchSize](size_t instanceIndex) {
+	    instanceUpdates.push_back(compactInstances[instanceIndex]);
+	    if (instanceUpdates.size() == compactInstancePublicationBatchSize) {
+		assembly->upsertInstances(instanceUpdates);
+		instanceUpdates.clear();
+	    }
+	};
+	if (reset) {
+	    for (size_t i = 0;
+		 i < this->d->compactIndex->instances.size(); ++i)
+		publishInstanceUpdates(i);
+	} else {
+	    for (const size_t i : changedInstanceIndices)
+		publishInstanceUpdates(i);
+	}
+	if (!instanceUpdates.empty())
+	    assembly->upsertInstances(instanceUpdates);
 	assembly->updateInstanceStyles(instanceStyles);
 	std::vector<Obol::PartId> removedParts;
 	removedParts.reserve(partsToRemove.size());
@@ -10539,7 +10569,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	       retainedLodStructural,
 	       structuralLodBacked, structuralSourceRequests,
 	       structuralEntryGeometry, structuralGeometryPointerMismatch,
-	       missingInstances, mismatchedParts, instances.size(),
+	       missingInstances, mismatchedParts,
+	       reset ? this->d->compactIndex->instances.size() :
+	       changedInstanceIndices.size(),
 	       lodCutUpdates.size(), baseParts.size(), lodSharedParts.size(),
 	       partsToRemove.size(), reset ? 1 : 0);
 	if (retainedStructural) {
@@ -10590,7 +10622,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		   changedOccurrenceKeys.size(),
 		   structuralEntryIndices.size(), entryIndices.size(),
 		   payloadInput->size(), lodSharedParts.size(),
-		   instances.size(),
+		   reset ? this->d->compactIndex->instances.size() :
+		   changedInstanceIndices.size(),
 		   lodCutUpdates.size());
 	}
     }
@@ -11691,14 +11724,13 @@ SoBRLDatabaseSource::reserveCompactOccurrenceCapacity(size_t expectedCount)
 	this->d->compactIndexActive = TRUE;
 	this->d->compactOccurrenceRegistry = TRUE;
     }
-    /*
-     * The heavy occurrence records use segmented, index-addressed storage, so
-     * learning a final 150k count requires no owner-thread relocation.  Do not
-     * eagerly allocate the compact instance/part vectors or hash tables to the
-     * full manifest count: those structures grow with bounded publication
-     * batches and a partial subpath draw must not pay for the containing
-     * database.
-     */
+    BObolCompactInstanceIndex &index = *this->d->compactIndex;
+    /* The expected count is for this exact streamed draw target, not its
+     * containing tree root.  Reserving before the first merge avoids a later
+     * vector doubling that temporarily requires both 131k and 262k retained
+     * instance arrays on the GUI thread. */
+    if (index.instances.capacity() < expectedCount)
+	index.instances.reserve(expectedCount);
 }
 
 
@@ -15242,6 +15274,85 @@ compact_coverage_working_set_estimate(const struct db_i *dbip,
     return encodedBytes * copyFactor + fixedBytes;
 }
 
+struct compact_coverage_vertex_bounds {
+    point_t minimum = {INFINITY, INFINITY, INFINITY};
+    point_t maximum = {-INFINITY, -INFINITY, -INFINITY};
+    size_t finiteVertices = 0;
+};
+
+/* Keep nested large-mesh scans from multiplying the ordinary coverage worker
+ * pool.  A small collection of large BoTs still uses otherwise-idle CPUs,
+ * while a 50k/150k collection of ordinary leaves retains outer parallelism. */
+static constexpr size_t compact_coverage_parallel_vertex_threshold =
+    1024 * 1024;
+static constexpr size_t compact_coverage_parallel_vertex_workers = 4;
+static constexpr size_t compact_coverage_parallel_vertex_scans = 2;
+static std::atomic<size_t> compact_coverage_active_vertex_scans(0);
+
+static compact_coverage_vertex_bounds
+compact_coverage_scan_serialized_vertices(const unsigned char *verticesBody,
+	 size_t firstVertex, size_t vertexCount, size_t vertexStride)
+{
+    compact_coverage_vertex_bounds result;
+    if (!verticesBody || !vertexCount)
+	return result;
+
+    static constexpr size_t vertexBlock = 256;
+    double decoded[vertexBlock * ELEMENTS_PER_POINT];
+    const unsigned char *point = verticesBody + firstVertex * vertexStride;
+    for (size_t first = 0; first < vertexCount; first += vertexBlock) {
+	const size_t count = std::min(vertexBlock, vertexCount - first);
+	bu_cv_ntohd(reinterpret_cast<unsigned char *>(decoded), point,
+	    count * ELEMENTS_PER_POINT);
+	point += count * vertexStride;
+	for (size_t i = 0; i < count; ++i) {
+	    const double *value = decoded + i * ELEMENTS_PER_POINT;
+	    if (!std::isfinite(value[X]) || !std::isfinite(value[Y]) ||
+		!std::isfinite(value[Z]))
+		continue;
+	    for (int axis = 0; axis < 3; ++axis) {
+		result.minimum[axis] = std::min(result.minimum[axis],
+		    value[axis]);
+		result.maximum[axis] = std::max(result.maximum[axis],
+		    value[axis]);
+	    }
+	    result.finiteVertices++;
+	}
+    }
+    return result;
+}
+
+static void
+compact_coverage_merge_vertex_bounds(compact_coverage_vertex_bounds &result,
+	const compact_coverage_vertex_bounds &candidate)
+{
+    if (!candidate.finiteVertices)
+	return;
+    if (!result.finiteVertices) {
+	result = candidate;
+	return;
+    }
+    for (int axis = 0; axis < 3; ++axis) {
+	result.minimum[axis] = std::min(result.minimum[axis],
+	    candidate.minimum[axis]);
+	result.maximum[axis] = std::max(result.maximum[axis],
+	    candidate.maximum[axis]);
+    }
+    result.finiteVertices += candidate.finiteVertices;
+}
+
+static bool
+compact_coverage_try_acquire_parallel_vertex_scan(void)
+{
+    size_t active = compact_coverage_active_vertex_scans.load();
+    while (active < compact_coverage_parallel_vertex_scans) {
+	if (compact_coverage_active_vertex_scans.compare_exchange_weak(active,
+		active + 1))
+	    return true;
+    }
+    return false;
+}
+
 /*
  * Decode only the fixed BoT header and vertex array needed for an AABB.
  *
@@ -15394,34 +15505,46 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     const unsigned char *verticesBody = body + fixedBytes;
     const unsigned char *facesBody =
 	verticesBody + vertices * vertexStride;
-    const unsigned char *point = verticesBody;
-    point_t minimum = {INFINITY, INFINITY, INFINITY};
-    point_t maximum = {-INFINITY, -INFINITY, -INFINITY};
-    size_t finiteVertices = 0;
-    /* Convert in cache-sized blocks.  A bu_cv_ntohd call per vertex dominated
-     * cold extent discovery for a 150k-part database even though the source
-     * was already memory mapped; batching also gives the compiler a simple
-     * finite/min/max loop to vectorize. */
-    static const size_t vertexBlock = 256;
-    double decoded[vertexBlock * ELEMENTS_PER_POINT];
-    for (size_t first = 0; first < vertices; first += vertexBlock) {
-	const size_t count = std::min(vertexBlock, vertices - first);
-	bu_cv_ntohd(reinterpret_cast<unsigned char *>(decoded), point,
-	    count * ELEMENTS_PER_POINT);
-	point += count * vertexStride;
-	for (size_t i = 0; i < count; ++i) {
-	    const double *value = decoded + i * ELEMENTS_PER_POINT;
-	    if (!std::isfinite(value[X]) || !std::isfinite(value[Y]) ||
-		!std::isfinite(value[Z]))
-		continue;
-	    for (size_t axis = 0; axis < 3; ++axis) {
-		minimum[axis] = std::min(minimum[axis], value[axis]);
-		maximum[axis] = std::max(maximum[axis], value[axis]);
+    compact_coverage_vertex_bounds vertexBounds;
+    const bool parallelBounds =
+	vertices >= compact_coverage_parallel_vertex_threshold &&
+	compact_coverage_try_acquire_parallel_vertex_scan();
+    if (parallelBounds) {
+	const size_t workerCount = std::min(
+	    compact_coverage_parallel_vertex_workers,
+	    std::max<size_t>(1, bu_avail_cpus()));
+	std::array<compact_coverage_vertex_bounds,
+	    compact_coverage_parallel_vertex_workers> partialBounds;
+	std::array<std::thread, compact_coverage_parallel_vertex_workers> workers;
+	size_t launched = 0;
+	try {
+	    for (size_t worker = 0; worker < workerCount; ++worker) {
+		const size_t first = vertices / workerCount * worker;
+		const size_t last = vertices / workerCount * (worker + 1);
+		workers[worker] = std::thread([&, worker, first, last]() {
+		    partialBounds[worker] = compact_coverage_scan_serialized_vertices(
+			verticesBody, first, last - first, vertexStride);
+		});
+		launched++;
 	    }
-	    finiteVertices++;
+	} catch (const std::exception &) {
 	}
+	for (size_t worker = 0; worker < launched; ++worker)
+	    workers[worker].join();
+	compact_coverage_active_vertex_scans.fetch_sub(1);
+	if (launched == workerCount) {
+	    for (size_t worker = 0; worker < workerCount; ++worker)
+		compact_coverage_merge_vertex_bounds(vertexBounds,
+		    partialBounds[worker]);
+	} else {
+	    vertexBounds = compact_coverage_scan_serialized_vertices(
+		verticesBody, 0, vertices, vertexStride);
+	}
+    } else {
+	vertexBounds = compact_coverage_scan_serialized_vertices(
+	    verticesBody, 0, vertices, vertexStride);
     }
-    if (finiteVertices && faces) {
+    if (vertexBounds.finiteVertices && faces) {
 	const size_t sampleCount = std::min<size_t>(32, faces);
 	uint64_t hash = 1469598103934665603ULL;
 	const auto mix = [&hash](uint64_t word) {
@@ -15488,29 +15611,20 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     }
     if (!borrowed)
 	bu_free_external(&external);
-    if (!finiteVertices)
+    if (!vertexBounds.finiteVertices)
 	return false;
 
     bounds = SbBox3f(
-	SbVec3f(static_cast<float>(minimum[X]),
-	    static_cast<float>(minimum[Y]),
-	    static_cast<float>(minimum[Z])),
-	SbVec3f(static_cast<float>(maximum[X]),
-	    static_cast<float>(maximum[Y]),
-	    static_cast<float>(maximum[Z])));
+	SbVec3f(static_cast<float>(vertexBounds.minimum[X]),
+	    static_cast<float>(vertexBounds.minimum[Y]),
+	    static_cast<float>(vertexBounds.minimum[Z])),
+	SbVec3f(static_cast<float>(vertexBounds.maximum[X]),
+	    static_cast<float>(vertexBounds.maximum[Y]),
+	    static_cast<float>(vertexBounds.maximum[Z])));
     vertexCount = vertices;
     faceCount = faces;
     return !bounds.isEmpty();
 }
-
-struct compact_coverage_serialized_bot {
-    const unsigned char *vertices = NULL;
-    const unsigned char *faces = NULL;
-    size_t vertexCount = 0;
-    size_t faceCount = 0;
-    size_t vertexStride = SIZEOF_NETWORK_DOUBLE * ELEMENTS_PER_POINT;
-    size_t faceStride = 3 * SIZEOF_NETWORK_LONG;
-};
 
 struct compact_coverage_mapped_database {
     struct bu_mapped_file *file = NULL;
@@ -15521,87 +15635,26 @@ struct compact_coverage_mapped_database {
     }
 };
 
-/* Return a borrowed view of the fixed v5 BoT arrays.  This deliberately has
- * no allocating fallback: transformed reuse is an optimization and an
- * unprovable candidate must simply retain its own source contract. */
+/* The mapped coverage path is a latency optimization for ordinary databases,
+ * not a residency contract.  Mapping a multi-gigabyte editable database a
+ * second time during startup competes with the directory, worker, cache, and
+ * renderer working sets.  Large sources already have a bounded per-object
+ * external-view fallback, which is the correct path when whole-file virtual
+ * reservation would make an otherwise cheap coverage pass fail. */
 static bool
-compact_coverage_serialized_bot_view(struct db_i *dbip,
-	struct directory *dp, compact_coverage_serialized_bot &view,
-	const struct bu_mapped_file *mappedFile = NULL)
+compact_coverage_can_map_database(const struct db_i *dbip)
 {
-    view = compact_coverage_serialized_bot();
-    if (!dbip || !dp || db_version(dbip) != 5 ||
-	dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
+    static const int maximumMappedDatabaseBytes = 512 * 1024 * 1024;
+    if (!dbip || !dbip->dbi_filename || !dbip->dbi_filename[0])
 	return false;
-
-    size_t serializedBytes = 0;
-    const unsigned char *serialized = db_external_view(
-	dbip, dp, &serializedBytes);
-    if (!serialized && mappedFile && mappedFile->buf && dp->d_addr >= 0 &&
-	static_cast<size_t>(dp->d_addr) <= mappedFile->buflen &&
-	dp->d_len <= mappedFile->buflen - static_cast<size_t>(dp->d_addr)) {
-	serialized = static_cast<const unsigned char *>(mappedFile->buf) +
-	    static_cast<size_t>(dp->d_addr);
-	serializedBytes = dp->d_len;
-    }
-    const size_t headerBytes = sizeof(struct db5_ondisk_header);
-    if (!serialized || serializedBytes < headerBytes)
-	return false;
-    const int width = (serialized[1] & DB5HDR_HFLAGS_OBJECT_WIDTH_MASK) >>
-	DB5HDR_HFLAGS_OBJECT_WIDTH_SHIFT;
-    if (width < DB5HDR_WIDTHCODE_8BIT || width > DB5HDR_WIDTHCODE_64BIT)
-	return false;
-    const size_t widthBytes = static_cast<size_t>(1) << width;
-    if (widthBytes > serializedBytes - headerBytes)
-	return false;
-    size_t encodedObjectUnits = 0;
-    (void)db5_decode_length(&encodedObjectUnits,
-	serialized + headerBytes, width);
-    if (encodedObjectUnits > SIZE_MAX / 8)
-	return false;
-    const size_t objectLengthBytes = encodedObjectUnits * 8;
-    if (objectLengthBytes < headerBytes ||
-	objectLengthBytes > serializedBytes)
-	return false;
-
-    struct db5_raw_internal raw;
-    if (!db5_get_raw_internal_ptr(&raw, serialized) ||
-	raw.object_length != objectLengthBytes ||
-	raw.major_type != DB5_MAJORTYPE_BRLCAD ||
-	raw.minor_type != DB5_MINORTYPE_BRLCAD_BOT ||
-	!raw.body.ext_buf ||
-	raw.body.ext_nbytes < 2 * SIZEOF_NETWORK_LONG + 3)
-	return false;
-    if (raw.body.ext_buf < serialized)
-	return false;
-    const size_t bodyOffset =
-	static_cast<size_t>(raw.body.ext_buf - serialized);
-    if (bodyOffset >= raw.object_length ||
-	raw.body.ext_nbytes > raw.object_length - bodyOffset - 1)
-	return false;
-
-    const unsigned char *body = raw.body.ext_buf;
-    const size_t vertices = static_cast<size_t>(BU_GLONG(body));
-    const size_t faces = static_cast<size_t>(
-	BU_GLONG(body + SIZEOF_NETWORK_LONG));
-    const size_t fixedBytes = 2 * SIZEOF_NETWORK_LONG + 3;
-    if (!vertices || !faces ||
-	vertices > (SIZE_MAX - fixedBytes) / view.vertexStride)
-	return false;
-    const size_t vertexEnd = fixedBytes + vertices * view.vertexStride;
-    if (vertexEnd > raw.body.ext_nbytes ||
-	faces > (raw.body.ext_nbytes - vertexEnd) / view.faceStride)
-	return false;
-    view.vertices = body + fixedBytes;
-    view.faces = body + vertexEnd;
-    view.vertexCount = vertices;
-    view.faceCount = faces;
-    return true;
+    const int databaseBytes = bu_file_size(dbip->dbi_filename);
+    return databaseBytes >= 0 &&
+	databaseBytes <= maximumMappedDatabaseBytes;
 }
 
 static bool
 compact_coverage_serialized_point(
-	const compact_coverage_serialized_bot &view, size_t index,
+	const BObolSerializedBotView &view, size_t index,
 	point_t point)
 {
     if (!view.vertices || index >= view.vertexCount)
@@ -15640,12 +15693,11 @@ compact_coverage_serialized_rigid_match(struct db_i *dbip,
     return false; \
 } while (0)
     representativeToCandidate = SbMatrix::identity();
-    compact_coverage_serialized_bot representative;
-    compact_coverage_serialized_bot candidate;
-    if (!compact_coverage_serialized_bot_view(dbip, representativeDp,
+    BObolSerializedBotView representative;
+    BObolSerializedBotView candidate;
+    if (!bobol_serialized_bot_view(dbip, representativeDp,
 	representative, mappedFile) ||
-	!compact_coverage_serialized_bot_view(dbip, candidateDp, candidate,
-	    mappedFile))
+	!bobol_serialized_bot_view(dbip, candidateDp, candidate, mappedFile))
 	COVERAGE_REUSE_REJECT("serialized view");
     if (representative.vertexCount != candidate.vertexCount ||
 	representative.faceCount != candidate.faceCount)
@@ -16104,8 +16156,7 @@ compact_stream_publish_parallel_coverage(
     collect.materialSweep = &materialSweep;
     collect.revision = revision;
     compact_coverage_mapped_database mappedDatabase;
-    if (source->getDatabase()->dbi_filename &&
-	source->getDatabase()->dbi_filename[0]) {
+    if (compact_coverage_can_map_database(source->getDatabase())) {
 	mappedDatabase.file = bu_open_mapped_file(
 	    source->getDatabase()->dbi_filename,
 	    "obol-coverage-reuse-v1");

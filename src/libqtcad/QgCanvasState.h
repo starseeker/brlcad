@@ -277,7 +277,7 @@ qgcanvas_obol_frame_requested(void *user_data, const char *UNUSED(reason))
      * traversal per 2k-entry planning window turned a 50k current-view delta
      * into hundreds of unchanged 40--80 ms frames. */
 
-    QMetaObject::invokeMethod(w, [s, w, softwareBackend]() {
+	QMetaObject::invokeMethod(w, [s, w, softwareBackend]() {
 	s->frame_request_dispatch_queued.store(false,
 	    std::memory_order_release);
 	/* Frame callbacks are the producer-to-host wake edge.  Service one

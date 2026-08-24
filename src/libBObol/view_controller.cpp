@@ -108,6 +108,20 @@ controller_lod_trace_enabled(const char *name, uint64_t viewRevision)
     return viewRevision >= static_cast<uint64_t>(parsed);
 }
 
+
+/* The spatial producer is still an opt-in path while its bounded cold-start
+ * contract is qualified.  A single source request has no cross-occurrence
+ * coverage ambiguity, so allow its first immutable page to begin while the
+ * structural census continues.  This is deliberately narrower than changing
+ * the coverage policy itself: a multi-leaf source must still establish its
+ * complete box frontier before competing mesh work is admitted. */
+static bool
+controller_lod_spatial_preview_requested(size_t sourceMeshRequests)
+{
+    const char *requested = getenv("BOBOL_LOD_SPATIAL_LEAVES");
+    return requested && requested[0] && sourceMeshRequests == 1;
+}
+
 static double
 controller_lod_visual_footprint(
     const BObolViewLodState::CadPayload *payload)
@@ -4144,6 +4158,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	budgetInputs.targetFps = targetFps;
 	budgetInputs.calibratedCostPerSecond = calibratedCostPerSecond;
 	budgetInputs.observedStableNanoseconds = observedStableNanoseconds;
+	budgetInputs.hardPresentationDeadlineNanoseconds =
+	    this->d->stablePresentationFrameDeadlineNanoseconds;
 	budgetInputs.lastRenderNanoseconds =
 	    this->d->lastRenderTimeNanoseconds;
 	budgetInputs.smoothedRenderNanoseconds =
@@ -4566,10 +4582,17 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	/* Source/inventory discovery already supplied a leaf proxy.  Complete the
 	 * useful-coverage census without launching one PoP build per visible leaf;
 	 * a fresh budgeted quality pass follows immediately.  A zoom census keeps
-	 * existing cuts and is therefore not structural-only. */
+	 * existing cuts and is therefore not structural-only.  The opt-in spatial
+	 * producer may publish one bounded page for a sole request while that
+	 * census continues.  Its result is nonterminal and cannot stand in for the
+	 * structural coverage witness. */
+	const SbBool spatialColdPreview =
+	    controller_lod_spatial_preview_requested(sourceMeshRequests) ?
+		TRUE : FALSE;
 	action.setStructuralCoverageOnly(
 	    this->d->lodCoveragePolicy.active() &&
-	    !this->d->lodViewDemandPolicy.scaleDemandRefreshActive());
+	    !this->d->lodViewDemandPolicy.scaleDemandRefreshActive() &&
+	    !spatialColdPreview);
 	action.setStructuralPresentationRepair(
 	    this->d->lodStructuralPresentationRepairPending);
 	if (this->d->lodStructuralPresentationRepairPending)

@@ -2792,7 +2792,50 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		localLast - localFirst :
 		std::min(localLast - localFirst,
 		    submitAction->submissionTaskLimit);
-	pendingTasks.reserve(taskCapacity);
+	/* A bounded provider window must not also require one contiguous task
+	 * allocation for that whole window.  Large cold scenes can have a nearly
+	 * full resident address space before work submission begins. */
+	const size_t maximumPendingTaskBatchSize = 64;
+	const size_t pendingTaskBatchSize = std::min(taskCapacity,
+	    maximumPendingTaskBatchSize);
+	pendingTasks.reserve(pendingTaskBatchSize);
+	auto submitPendingTasks = [&]() {
+	    if (pendingTasks.empty())
+		return;
+	    std::vector<uint64_t> taskIds;
+	    (void)submitAction->service->submitBatch(
+		pendingTasks, taskIds, suppressActiveDuplicate);
+	    for (size_t taskIndex = 0;
+		 taskIndex < pendingTasks.size(); ++taskIndex) {
+		BObolLodTask &task = pendingTasks[taskIndex];
+		const uint64_t taskId =
+		    taskIndex < taskIds.size() ? taskIds[taskIndex] : 0;
+		const BObolLodRequest &request = task.request;
+		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+		const bool trace = filter && filter[0] &&
+		    (strstr(request.objectName.getString(), filter) ||
+		     strstr(request.objectPath.getString(), filter));
+		if (!taskId) {
+		    if (trace)
+			bu_log("BObol LoD submit trace object=%s cut=%d "
+			       "rejected=service\n",
+			       request.objectName.getString(),
+			       request.requestedCut);
+		    if (task.realizeDataFree && task.realizeData)
+			(*task.realizeDataFree)(task.realizeData);
+		    task.realizeData = NULL;
+		    submitAction->skippedMeshCount++;
+		} else {
+		    if (trace)
+			bu_log("BObol LoD submit trace object=%s cut=%d task=%llu\n",
+			       request.objectName.getString(),
+			       request.requestedCut,
+			       static_cast<unsigned long long>(taskId));
+		    submitAction->submittedTaskCount++;
+		}
+	    }
+	    pendingTasks.clear();
+	};
 	const int64_t submissionStarted = bu_gettime();
 	for (size_t candidateOffset = localFirst;
 	    candidateOffset < localLast; candidateOffset++) {
@@ -3929,46 +3972,12 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			(haveProviderSummary ?
 			    mesh_lod_warm_source_task_estimate(
 				providerSummary, request) : 0));
-		    pendingTasks.push_back(std::move(task));
+	    pendingTasks.push_back(std::move(task));
+	    if (pendingTasks.size() == pendingTaskBatchSize)
+		submitPendingTasks();
 	}
 
-	if (!pendingTasks.empty()) {
-	    std::vector<uint64_t> taskIds;
-	    (void)submitAction->service->submitBatch(
-		pendingTasks, taskIds, suppressActiveDuplicate);
-	    for (size_t taskIndex = 0;
-		    taskIndex < pendingTasks.size(); ++taskIndex) {
-		BObolLodTask &task = pendingTasks[taskIndex];
-		const uint64_t taskId =
-		    taskIndex < taskIds.size() ? taskIds[taskIndex] : 0;
-		const BObolLodRequest &request = task.request;
-		if (!taskId) {
-		    const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
-		    if (filter && filter[0] &&
-			(strstr(request.objectName.getString(), filter) ||
-			 strstr(request.objectPath.getString(), filter)))
-			bu_log("BObol LoD submit trace object=%s cut=%d "
-			       "rejected=service\n",
-			       request.objectName.getString(),
-			       request.requestedCut);
-		    if (task.realizeDataFree && task.realizeData)
-			(*task.realizeDataFree)(task.realizeData);
-		    task.realizeData = NULL;
-		    submitAction->skippedMeshCount++;
-		} else {
-		    const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
-		    if (filter && filter[0] &&
-			(strstr(request.objectName.getString(), filter) ||
-			 strstr(request.objectPath.getString(), filter)))
-			bu_log("BObol LoD submit trace object=%s cut=%d "
-			       "task=%llu\n",
-			       request.objectName.getString(),
-			       request.requestedCut,
-			       static_cast<unsigned long long>(taskId));
-		    submitAction->submittedTaskCount++;
-		}
-	    }
-	}
+	submitPendingTasks();
 	submitAction->compactEntryNext = std::max(
 	    submitAction->compactEntryNext, sourceFirst + processedLast);
 	/* Auxiliary overlays remain ordinary child nodes and retain their own

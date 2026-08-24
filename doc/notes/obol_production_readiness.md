@@ -12,12 +12,12 @@ performance evidence.  Historical measurements belong in
 
 | Area | Current evidence | Release status |
 |---|---|---|
-| focused CTest gate | `drawing_baseline` + `bobol_headless`: 86/86 passed in 408 s; one unavailable X11 capability skipped | repeat after production changes |
+| focused CTest gate | `drawing_baseline` + `bobol_headless`: 87/87 passed in 209 s; one unavailable X11 capability skipped | repeat after production changes |
 | control-plane models | `obol_lod_control`, `ObolHostWork`, and `ObolLodConvergence` pass TLC; the latter explored 562 states / 355 distinct with two input epochs | focused gate green |
-| Lucy OSMesa | smooth zoom refined during input, returned to roughly 559k faces, and compacted resident data from about 22.0 to 6.15 MiB when zoomed out | focused regression green |
-| 50k OSMesa | certified-warm shaded lifecycle passed in 60.6 s with exact coverage, no boxes, and no pending work | wire and cold rows need current evidence |
-| 150k OSMesa | certified-warm shaded/wire lifecycles passed in 56.8/86.8 s with exact coverage, no boxes, no stagnant dispatches, and explicit software-performance limits | cold rows and visual-significance qualification remain |
-| System GL | prior evidence exists, but this host has no usable X socket for an exact-current rerun | not current-binary qualified |
+| Lucy OSMesa | exact-current GUI matrix passed shaded cold/warm and wire cold/warm; smooth zoom refined during input, compacted resident data, and returned through a clean autoview frame with no structural boxes | focused regression green |
+| 50k OSMesa | exact-current shaded/wire cold/warm lifecycles passed in 72/40/46/45 s, respectively, with camera contracts | focused scale regression green; visual-significance qualification remains |
+| 150k OSMesa | exact-current shaded cold/warm passed in 44/61 s and wire cold/warm in 44/81 s under a 16 GiB address-space cap, with 150001 discovered leaves, zero boxes/failures/pending work, camera contracts, and explicit software-performance limits | rerun production-hardware scale rows and visual-significance qualification |
+| System GL smoke | exact-current Generic Twin and Lucy GUI matrix passed shaded/wire, cold/warm, and camera-history contracts | smoke regression green; complete model matrix remains |
 
 The 150k terminal view may validly be performance-limited.  It is not visually
 qualified until prominent-object quality floors are demonstrated on realistic
@@ -70,8 +70,10 @@ Repeated-instance and distinct-asset cases are separate obligations.
 - `bobol_contract`, `bobol_headless`, `drawing_baseline`, libbg polygon,
   librt discovery/edit, libbu cache, installed-package consumer, public-header,
   and symbol-manifest tests.
-- TLC configurations for occurrence publication, host work, and bounded
-  Lucy/large-scene convergence.
+- TLC configurations for occurrence publication, host work, bounded
+  Lucy/large-scene convergence, and deferred-autoview ownership.  The latter
+  proves control ownership only; real qged cold/warm camera replays remain
+  required for Qt/renderer timing and image behavior.
 - Shared-stack ASan/UBSan: workers active during teardown, cache corruption,
   endpoint replacement, plugin reload, edit cancellation, and rapid close.
 - Native-worker TSan/LSan; do not count a container runtime limitation as a

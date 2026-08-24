@@ -1168,6 +1168,11 @@ public:
 	float targetFps = 0.0f;
 	long double calibratedCostPerSecond = 0.0L;
 	uint64_t observedStableNanoseconds = 0;
+	/* The preferred quiet cadence controls refinement pacing.  A completed
+	 * frame below this separate hard limit is still a valid static
+	 * presentation and must not be destructively coarsened merely for missing
+	 * the preferred cadence. */
+	uint64_t hardPresentationDeadlineNanoseconds = 0;
 	uint64_t lastRenderNanoseconds = 0;
 	uint64_t smoothedRenderNanoseconds = 0;
 	bool interactive = false;
@@ -1273,8 +1278,15 @@ public:
 	const bool severeStableOverload =
 	    !inputs.interactive && targetNanoseconds > 0.0L &&
 	    observedStableNanoseconds > targetNanoseconds * 2.0L;
+	const bool observedWithinHardPresentationDeadline =
+	    !inputs.interactive && inputs.activeCost > 0 &&
+	    inputs.observedStableNanoseconds > 0 &&
+	    inputs.hardPresentationDeadlineNanoseconds > 0 &&
+	    inputs.observedStableNanoseconds <=
+		inputs.hardPresentationDeadlineNanoseconds;
 	const bool overloadRecovery =
 	    !inputs.interactive && !inputs.forceTerminal &&
+	    !observedWithinHardPresentationDeadline &&
 	    (!this->overloadRecoveryPerformedValue ||
 	     this->overloadRecoveryActiveCostValue != inputs.activeCost) &&
 	    inputs.activeCost > 0 &&
@@ -1399,6 +1411,12 @@ public:
 	    targetNanoseconds > 0.0L && observedStableNanoseconds > 0.0L &&
 	    observedStableNanoseconds <= targetNanoseconds;
 	if (measuredActivePopulationDeadlineSafe && costBudget != SIZE_MAX)
+	    costBudget = std::max(costBudget, inputs.activeCost);
+	/* Static presentation is allowed to use the hard deadline.  Preserve an
+	 * exact population which meets it even when the preferred quiet target is
+	 * stricter; otherwise a pose-only rotation can replace a proven mesh view
+	 * with boxes before structural repair has a chance to run. */
+	if (observedWithinHardPresentationDeadline && costBudget != SIZE_MAX)
 	    costBudget = std::max(costBudget, inputs.activeCost);
 	/* A reusable presentation of this exact population is also the strongest
 	 * available headroom estimate for the interruptible static-quality pass.

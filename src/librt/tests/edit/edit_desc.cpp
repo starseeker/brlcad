@@ -152,6 +152,14 @@ check_descriptor_audit(void)
 			desc->prim_type, desc->cmds[ci].cmd_id);
 		    failures++;
 		}
+		const struct rt_edit_interaction_desc interaction =
+		    rt_edit_cmd_interaction(desc, &desc->cmds[ci]);
+		if (desc->command_interactions &&
+		    interaction.coordinate_space == RT_EDIT_COORDINATE_INFER) {
+		    bu_log("FAIL [%s]: command %d has inferred coordinate space\n",
+			desc->prim_type, desc->cmds[ci].cmd_id);
+		    failures++;
+		}
 	    }
 	}
 	bu_vls_free(&diagnostic);

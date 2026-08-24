@@ -167,9 +167,24 @@ bobol_draw_manifest_init(struct BObolDrawManifest *manifest);
 BOBOL_EXPORT void
 bobol_draw_manifest_free(struct BObolDrawManifest *manifest);
 
+/* Supplies one borrowed occurrence for manifest persistence.  The store may
+ * call this provider more than once for an index; pointers are needed only
+ * until the callback returns. */
+typedef int (*BObolDrawManifestOccurrenceProvider)(size_t occurrenceIndex,
+    struct BObolDrawManifestOccurrence *occurrence, void *userData);
+
 BOBOL_EXPORT int
 bobol_draw_manifest_cache_store(struct db_i *dbip, const char *rootPath,
 	const struct BObolDrawManifest *manifest);
+
+/* Store a manifest from a bounded caller-owned occurrence source.  The
+ * manifest supplies only the count and exact coverage extent; occurrences is
+ * not read.  This avoids a second full C occurrence array during cold cache
+ * creation for very large scenes. */
+BOBOL_EXPORT int
+bobol_draw_manifest_cache_store_visit(struct db_i *dbip,
+    const char *rootPath, const struct BObolDrawManifest *manifest,
+    BObolDrawManifestOccurrenceProvider occurrence, void *userData);
 
 /* manifest must first be initialized with bobol_draw_manifest_init.  A
  * successful call replaces its contents; callers release them with free. */

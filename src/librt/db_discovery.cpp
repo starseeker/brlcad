@@ -18,6 +18,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <iterator>
+#include <mutex>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -34,10 +37,18 @@
 struct rt_db_hierarchy_arc_native {
     struct directory *parent = RT_DIR_NULL;
     struct directory *child = RT_DIR_NULL;
+    /* Resolved directories own their names for the database lifetime.  Keep a
+     * private copy only for an unresolved reference, whose source record may
+     * be released before the hierarchy is queried. */
     std::string child_name;
     db_op_t operation = DB_OP_UNION;
     bool matrix_valid = false;
     mat_t matrix = MAT_INIT_IDN;
+
+    const char *childName() const
+    {
+	return child && child->d_namep ? child->d_namep : child_name.c_str();
+    }
 };
 
 
@@ -51,10 +62,6 @@ struct rt_db_discovery_task {
     size_t serialized_bytes = 0;
 };
 
-
-struct rt_db_discovery_task_result {
-    std::vector<rt_db_hierarchy_arc_native> arcs;
-};
 
 enum rt_db_discovery_comb_token {
     RT_DB_DISCOVERY_TOKEN_LEAF = 1,
@@ -412,8 +419,9 @@ rt_db_discovery_collect_comb_tree(struct db_i *dbip,
 		return;
 	    rt_db_hierarchy_arc_native arc;
 	    arc.parent = parent;
-	    arc.child_name = tree->tr_l.tl_name;
 	    arc.child = db_lookup(dbip, tree->tr_l.tl_name, LOOKUP_QUIET);
+	    if (!arc.child)
+		arc.child_name = tree->tr_l.tl_name;
 	    arc.operation = rt_db_discovery_public_op(operation);
 	    if (tree->tr_l.tl_mat) {
 		arc.matrix_valid = true;
@@ -582,8 +590,9 @@ rt_db_discovery_decode_comb(struct db_i *dbip, struct directory *dp,
 
 	rt_db_hierarchy_arc_native arc;
 	arc.parent = dp;
-	arc.child_name = name;
 	arc.child = db_lookup(dbip, name, LOOKUP_QUIET);
+	if (!arc.child)
+	    arc.child_name = name;
 	if (static_cast<ssize_t>(matrix_index) >= 0) {
 	    if (matrix_index >= matrix_count)
 		return SIZE_MAX;
@@ -696,8 +705,9 @@ rt_db_discovery_add_primitive_reference(struct db_i *dbip,
 	return;
     rt_db_hierarchy_arc_native arc;
     arc.parent = parent;
-    arc.child_name = name;
     arc.child = db_lookup(dbip, name, LOOKUP_QUIET);
+	if (!arc.child)
+	    arc.child_name = name;
     arcs.push_back(std::move(arc));
 }
 
@@ -770,8 +780,10 @@ rt_db_discovery_decode_primitive(struct db_i *dbip, struct directory *dp,
 struct rt_db_discovery_worker_state {
     struct db_i *dbip = nullptr;
     const std::vector<rt_db_discovery_task> *tasks = nullptr;
-    std::vector<rt_db_discovery_task_result> *results = nullptr;
+    std::vector<rt_db_hierarchy_arc_native> *arcs = nullptr;
     std::atomic<size_t> next{0};
+    std::atomic<bool> failed{false};
+    std::mutex arcs_mutex;
 };
 
 
@@ -780,20 +792,39 @@ rt_db_discovery_worker(int UNUSED(cpu), void *data)
 {
     rt_db_discovery_worker_state *state =
 	static_cast<rt_db_discovery_worker_state *>(data);
-    if (!state || !state->dbip || !state->tasks || !state->results)
+    if (!state || !state->dbip || !state->tasks || !state->arcs)
 	return;
 
     for (;;) {
+	if (state->failed.load(std::memory_order_relaxed))
+	    return;
 	const size_t index = state->next.fetch_add(1);
 	if (index >= state->tasks->size())
 	    return;
 	const rt_db_discovery_task &task = (*state->tasks)[index];
-	std::vector<rt_db_hierarchy_arc_native> &arcs =
-	    (*state->results)[index].arcs;
-	if (task.dp && (task.dp->d_flags & RT_DIR_COMB))
-	    rt_db_discovery_decode_comb(state->dbip, task.dp, arcs);
-	else if (task.dp)
-	    rt_db_discovery_decode_primitive(state->dbip, task.dp, arcs);
+	std::vector<rt_db_hierarchy_arc_native> task_arcs;
+	try {
+	    if (task.dp && (task.dp->d_flags & RT_DIR_COMB))
+		rt_db_discovery_decode_comb(state->dbip, task.dp, task_arcs);
+	    else if (task.dp)
+		rt_db_discovery_decode_primitive(state->dbip, task.dp, task_arcs);
+	    if (task_arcs.empty())
+		continue;
+
+	    /* Keep one authoritative arc population.  Retaining a vector for
+	     * every task and then building a second final vector doubled the peak
+	     * hierarchy allocation for large databases.  Each append is a complete
+	     * decoded object, so the lock is not on the inner leaf walk. */
+	    std::lock_guard<std::mutex> lock(state->arcs_mutex);
+	    if (state->failed.load(std::memory_order_relaxed))
+		return;
+	    state->arcs->insert(state->arcs->end(),
+		std::make_move_iterator(task_arcs.begin()),
+		std::make_move_iterator(task_arcs.end()));
+	} catch (const std::bad_alloc &) {
+	    state->failed.store(true, std::memory_order_relaxed);
+	    return;
+	}
     }
 }
 
@@ -893,22 +924,21 @@ rt_db_discovery_build(struct db_i *dbip,
 	workers = 1;
 
     const auto decode_begin = std::chrono::steady_clock::now();
-    std::vector<rt_db_discovery_task_result> results(tasks.size());
+    rt_db_hierarchy *discovered = nullptr;
+    try {
+	discovered = new rt_db_hierarchy;
+    } catch (const std::bad_alloc &) {
+	return -1;
+    }
     rt_db_discovery_worker_state worker_state;
     worker_state.dbip = dbip;
     worker_state.tasks = &tasks;
-    worker_state.results = &results;
+    worker_state.arcs = &discovered->arcs;
     if (!tasks.empty())
 	bu_parallel(rt_db_discovery_worker, workers, &worker_state);
-
-    rt_db_hierarchy *discovered = new rt_db_hierarchy;
-    size_t reference_count = 0;
-    for (const rt_db_discovery_task_result &result : results)
-	reference_count += result.arcs.size();
-    discovered->arcs.reserve(reference_count);
-    for (rt_db_discovery_task_result &result : results) {
-	for (rt_db_hierarchy_arc_native &arc : result.arcs)
-	    discovered->arcs.push_back(std::move(arc));
+    if (worker_state.failed.load(std::memory_order_relaxed)) {
+	delete discovered;
+	return -1;
     }
     if (stats)
 	stats->decode_microseconds = rt_db_discovery_elapsed_us(decode_begin);
@@ -923,7 +953,7 @@ rt_db_discovery_build(struct db_i *dbip,
 	if (arc.child)
 	    arc.child->d_nref++;
 	rt_db_discovery_callback(dbip, arc.parent, arc.child,
-	    arc.child_name.c_str(), arc.operation,
+	    arc.childName(), arc.operation,
 	    arc.matrix_valid ? arc.matrix : nullptr);
     }
     rt_db_discovery_callback(dbip, nullptr, nullptr, nullptr,
@@ -965,7 +995,7 @@ rt_db_hierarchy_arc_get(const struct rt_db_hierarchy *hierarchy,
     const rt_db_hierarchy_arc_native &native = hierarchy->arcs[index];
     arc->parent = native.parent;
     arc->child = native.child;
-    arc->child_name = native.child_name.c_str();
+    arc->child_name = native.childName();
     arc->operation = native.operation;
     arc->matrix_valid = native.matrix_valid ? 1 : 0;
     MAT_COPY(arc->matrix, native.matrix);

@@ -43,6 +43,11 @@
 #include <unordered_set>
 #include <vector>
 
+#if !defined(_WIN32)
+#  include <sys/resource.h>
+#  include <unistd.h>
+#endif
+
 BObolDatabaseLease::BObolDatabaseLease(struct db_i *source) :
     database(source ? db_clone_dbi(source, NULL) : NULL)
 {
@@ -2419,6 +2424,62 @@ lod_task_estimated_working_set_bytes(const BObolLodTask &task)
     return estimate;
 }
 
+/* librt's database import API reports allocation failure with bu_bomb.  That
+ * is appropriate for its historical synchronous callers, but a background
+ * display worker must never cross that boundary when an explicit address-space
+ * cap has already made the conservative import estimate impossible. */
+static bool
+lod_raw_import_fits_address_space(const BObolLodRequest &request)
+{
+#if !defined(__linux__)
+    (void)request;
+    return true;
+#else
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_AS, &limit) != 0 ||
+	limit.rlim_cur == RLIM_INFINITY)
+	return true;
+
+    const long pageSize = sysconf(_SC_PAGESIZE);
+    if (pageSize <= 0)
+	return false;
+    FILE *statm = fopen("/proc/self/statm", "r");
+    if (!statm)
+	return false;
+    unsigned long long pages = 0;
+    const int read = fscanf(statm, "%llu", &pages);
+    fclose(statm);
+    if (read != 1 || pages >
+	static_cast<unsigned long long>(SIZE_MAX / pageSize))
+	return false;
+    const size_t used = static_cast<size_t>(pages) *
+	static_cast<size_t>(pageSize);
+    const size_t cap = limit.rlim_cur > SIZE_MAX ? SIZE_MAX :
+	static_cast<size_t>(limit.rlim_cur);
+    if (used >= cap)
+	return false;
+
+    BObolLodTask estimateTask;
+    estimateTask.request = request;
+    const size_t estimate = lod_task_estimated_working_set_bytes(estimateTask);
+    const size_t remaining = cap - used;
+    /* Import holds source arrays beside topology and output state.  Retain
+     * half of the remaining address space for librt, GUI, and renderer state. */
+    return estimate <= remaining / 2;
+#endif
+}
+
+/* The spatial producer is intentionally opt-in while its cold large-model
+ * behavior is qualified.  Its source is the validated serialized V5 stream,
+ * so an explicit request must select that path before native import allocates
+ * the full BoT arrays. */
+static bool
+lod_spatial_leaf_source_requested(void)
+{
+    const char *requested = getenv("BOBOL_LOD_SPATIAL_LEAVES");
+    return requested && requested[0];
+}
+
 static SbBool
 lod_task_working_set_available(const BObolLodServicePrivate *p,
 	const BObolLodTask &task)
@@ -3847,11 +3908,27 @@ BObolLodService::realizeResidentMeshLod(
 			resident->status.has_cache_key)
 			resident->lod = bobol_mesh_lod_get_cached_prefix(
 			    dbip, resident->status.cache_key);
-		} else if (!exactVariant) {
-		    resident->lod = bobol_mesh_lod_cache_refresh_open(
-			dbip, name, NULL, &resident->status,
-			&previewRequest,
-			lod_publish_cold_mesh_preview, &previewContext);
+	} else if (!exactVariant) {
+	    if (lod_spatial_leaf_source_requested() ||
+		!lod_raw_import_fits_address_space(request)) {
+		/* Do not cross librt's bu_bomb allocation boundary merely because
+		 * a cache is cold.  The explicit spatial producer and an address-space
+		 * refusal both require V5's checked serialized source; an unavailable
+		 * source remains a diagnosable constrained fallback rather than a
+		 * provider error. */
+		resident->lod = bobol_mesh_lod_cache_refresh_serialized_open(
+		    dbip, name, &resident->status, &previewRequest,
+		    lod_publish_cold_mesh_preview, &previewContext);
+		if (!resident->lod)
+		    return lod_provider_status_result(request,
+			BOBOL_LOD_PROVIDER_FALLBACK,
+			"resident mesh provider could not admit a checked serialized BoT import");
+	    } else {
+		resident->lod = bobol_mesh_lod_cache_refresh_open(
+		    dbip, name, NULL, &resident->status,
+		    &previewRequest,
+		    lod_publish_cold_mesh_preview, &previewContext);
+	    }
 		    refreshResult = resident->lod ?
 			BRLCAD_OK : BRLCAD_ERROR;
 		} else {
@@ -4209,6 +4286,7 @@ BObolLodService::realizeResidentMeshLod(
      * terminal result; treating it as an immediate resident-memory failure
      * would strand a BREP at its first coarse cut. */
     result.memoryLimited = memoryLimited ||
+	bobol_mesh_lod_source_limited(resident->lod) ||
 	(provider.brepVariantMemoryLimited && result.terminal);
 
     /*

@@ -286,6 +286,20 @@ bobol_mesh_lod_cache_refresh_open(
 	BObolMeshLodPreviewCallback preview,
 	void *preview_data);
 
+/* Generate a missing V5 authored-BoT cache by decoding its serialized point
+ * and face records directly.  This display-specific fallback avoids librt's
+ * bu_bomb allocation semantics, validates all source records, and reports an
+ * ordinary cache miss on capacity refusal.  It is intentionally not a
+ * general replacement for rt_db_get_internal. */
+BOBOL_EXPORT struct BObolMeshLod *
+bobol_mesh_lod_cache_refresh_serialized_open(
+	struct db_i *dbip,
+	const char *name,
+	struct BObolMeshLodCacheStatus *status,
+	const struct BObolMeshLodPreviewRequest *preview_request,
+	BObolMeshLodPreviewCallback preview,
+	void *preview_data);
+
 BOBOL_EXPORT int
 bobol_mesh_lod_cache_invalidate(struct db_i *dbip,
 				  const char *name,
@@ -414,6 +428,13 @@ BOBOL_EXPORT int
 bobol_mesh_lod_hierarchy_info_get(
 	const struct BObolMeshLod *lod,
 	struct BObolMeshLodHierarchyInfo *info);
+
+/* True when this live asset retains only a bounded prefix because durable
+ * cache publication was unavailable in its current capacity epoch.  It is
+ * drawable and terminal at its advertised maximum cut, but the caller must
+ * report the capacity limitation rather than mistake it for exact geometry. */
+BOBOL_EXPORT int
+bobol_mesh_lod_source_limited(const struct BObolMeshLod *lod);
 
 /* Select the coarsest cut whose conservative object-space quantization error
  * projects to no more than target_pixel_error.  projected_pixel_diameter is

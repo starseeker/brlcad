@@ -27,13 +27,24 @@ brlcad_add_test(NAME libBObol_lod_service COMMAND test_bobol_lod_service)
 if(BRLCAD_ENABLE_ADDRESS_SANITIZER OR BRLCAD_ENABLE_UNDEFINED_SANITIZER OR BRLCAD_SANITIZE_THREAD)
   set_tests_properties(libBObol_lod_service PROPERTIES TIMEOUT 60)
 else()
-  set_tests_properties(libBObol_lod_service PROPERTIES TIMEOUT 10)
+  # This integration test performs bounded worker/cache lifecycles.  Its
+  # normal isolated time is already close to ten seconds on a development
+  # build, so that limit turns unrelated parallel test load into a flake.
+  set_tests_properties(libBObol_lod_service PROPERTIES TIMEOUT 30)
 endif()
 
 brlcad_addexec(test_bobol_lod_update_action
   "test_lod_update_action.cpp;../retained_allocation_private.cpp"
   "libBObol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_lod_update_action COMMAND test_bobol_lod_update_action)
+
+brlcad_addexec(test_bobol_retained_allocation_oracle
+  "test_retained_allocation_oracle.cpp;../retained_allocation_private.cpp"
+  "libBObol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
+target_include_directories(test_bobol_retained_allocation_oracle PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/..)
+brlcad_add_test(NAME libBObol_retained_allocation_oracle
+  COMMAND test_bobol_retained_allocation_oracle)
 
 brlcad_addexec(test_bobol_lod_coordinator test_lod_coordinator.cpp "libbu" TEST ALL_CXX)
 target_include_directories(test_bobol_lod_coordinator PRIVATE
@@ -178,6 +189,7 @@ set(_bobol_headless_tests
   libBObol_compact_occurrence_stream
   libBObol_source_realization
   libBObol_lod_update_action
+  libBObol_retained_allocation_oracle
   libBObol_draw_cache
   libBObol_evaluated_points
   libBObol_mesh_lod_cache
@@ -232,6 +244,7 @@ cmakefiles(
   test_lod_coordinator.cpp
   test_lod_service.cpp
   test_lod_update_action.cpp
+  test_retained_allocation_oracle.cpp
   test_mesh_lod_cache.cpp
   test_nanort_render.cpp
   test_navigation_gizmo.cpp

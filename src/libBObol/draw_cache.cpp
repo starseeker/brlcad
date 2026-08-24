@@ -59,6 +59,14 @@
 #define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 2u
 #define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
 #define BOBOL_DRAW_MANIFEST_DISK_VERSION 10u
+#define BOBOL_DRAW_MANIFEST_CHUNKED_DISK_MAGIC 0x4f424d43u /* OBMC */
+#define BOBOL_DRAW_MANIFEST_CHUNK_DISK_MAGIC 0x4f424d4bu /* OBMK */
+#define BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION 1u
+
+/* Keep cache serialization bounded even for assemblies with hundreds of
+ * thousands of leaves.  A descriptor is published only after every chunk has
+ * been written, so an interrupted refresh is simply a cache miss. */
+static const size_t manifestChunkTargetBytes = 8u * 1024u * 1024u;
 
 struct BObolDrawCacheContext {
     bu_cache *cache;
@@ -163,6 +171,27 @@ struct BObolDrawManifestDiskHeader {
     point_t coverageBoundsMin;
     point_t coverageBoundsMax;
     uint32_t reserved;
+};
+
+struct BObolDrawManifestChunkedDiskHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t databaseFingerprint;
+    uint64_t occurrenceCount;
+    uint32_t rootPathLength;
+    uint32_t coverageBoundsValid;
+    point_t coverageBoundsMin;
+    point_t coverageBoundsMax;
+    uint32_t chunkCount;
+    uint32_t reserved;
+};
+
+struct BObolDrawManifestChunkDiskHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t databaseFingerprint;
+    uint32_t chunkIndex;
+    uint32_t occurrenceCount;
 };
 
 struct BObolDrawManifestOccurrenceDiskHeader {
@@ -2201,15 +2230,6 @@ bobol_draw_path_metadata_cache_refresh(db_i *dbip,
 }
 
 static int
-bobol_draw_manifest_add_size(size_t *total, size_t add)
-{
-    if (!total || add > SIZE_MAX - *total)
-	return 0;
-    *total += add;
-    return 1;
-}
-
-static int
 bobol_draw_manifest_matrix_valid(const fastf_t matrix[16])
 {
     if (!matrix)
@@ -2245,31 +2265,35 @@ bobol_draw_manifest_free(BObolDrawManifest *manifest)
 {
     if (!manifest)
 	return;
-    for (size_t i = 0; i < manifest->occurrenceCount; i++) {
-	if (manifest->occurrences[i].path)
-	    bu_free(manifest->occurrences[i].path,
-		"bobol draw manifest path");
-	if (manifest->occurrences[i].sourceName)
-	    bu_free(manifest->occurrences[i].sourceName,
-		"bobol draw manifest source name");
-	if (manifest->occurrences[i].meshAssetPath)
-	    bu_free(manifest->occurrences[i].meshAssetPath,
-		"bobol draw manifest mesh asset path");
-	if (manifest->occurrences[i].meshAssetName)
-	    bu_free(manifest->occurrences[i].meshAssetName,
-		"bobol draw manifest mesh asset name");
+
+    if (manifest->occurrences) {
+	for (size_t i = 0; i < manifest->occurrenceCount; i++) {
+	    if (manifest->occurrences[i].path)
+		bu_free(manifest->occurrences[i].path,
+		    "bobol draw manifest path");
+	    if (manifest->occurrences[i].sourceName)
+		bu_free(manifest->occurrences[i].sourceName,
+		    "bobol draw manifest source name");
+	    if (manifest->occurrences[i].meshAssetPath)
+		bu_free(manifest->occurrences[i].meshAssetPath,
+		    "bobol draw manifest mesh asset path");
+	    if (manifest->occurrences[i].meshAssetName)
+		bu_free(manifest->occurrences[i].meshAssetName,
+		    "bobol draw manifest mesh asset name");
+	}
     }
     if (manifest->occurrences)
 	bu_free(manifest->occurrences, "bobol draw manifest occurrences");
     bobol_draw_manifest_init(manifest);
 }
 
-extern "C" int
-bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
-	const BObolDrawManifest *manifest)
+static int
+bobol_draw_manifest_cache_store_with_provider(db_i *dbip,
+	const char *rootPath, const BObolDrawManifest *manifest,
+	BObolDrawManifestOccurrenceProvider provider, void *userData)
 {
     if (!dbip || !rootPath || !rootPath[0] || !manifest ||
-	!manifest->occurrenceCount || !manifest->occurrences)
+	!manifest->occurrenceCount || !provider)
 	return BRLCAD_ERROR;
 
     if ((manifest->coverageBoundsValid != 0 &&
@@ -2282,12 +2306,11 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
     const size_t rootLength = strlen(rootPath);
     if (rootLength > UINT32_MAX)
 	return BRLCAD_ERROR;
-    size_t size = sizeof(BObolDrawManifestDiskHeader);
-    if (!bobol_draw_manifest_add_size(&size, rootLength))
-	return BRLCAD_ERROR;
     for (size_t i = 0; i < manifest->occurrenceCount; i++) {
-	const BObolDrawManifestOccurrence &occurrence =
-	    manifest->occurrences[i];
+	BObolDrawManifestOccurrence occurrence;
+	memset(&occurrence, 0, sizeof(occurrence));
+	if (!provider(i, &occurrence, userData))
+	    return BRLCAD_ERROR;
 	if (!occurrence.path || !occurrence.path[0] || !occurrence.sourceName)
 	    return BRLCAD_ERROR;
 	const size_t pathLength = strlen(occurrence.path);
@@ -2320,41 +2343,99 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 		  occurrence.meshAssetMatrix) ||
 	      !bobol_draw_proxy_bbox_valid(occurrence.meshAssetBoundsMin,
 		  occurrence.meshAssetBoundsMax))) ||
-	    !bobol_draw_manifest_add_size(&size,
-		sizeof(BObolDrawManifestOccurrenceDiskHeader)) ||
-	    !bobol_draw_manifest_add_size(&size, pathLength) ||
-	    !bobol_draw_manifest_add_size(&size, sourceNameLength) ||
-	    !bobol_draw_manifest_add_size(&size, meshAssetPathLength) ||
-	    !bobol_draw_manifest_add_size(&size, meshAssetNameLength))
+	    pathLength > SIZE_MAX - sizeof(BObolDrawManifestOccurrenceDiskHeader) ||
+	    sourceNameLength > SIZE_MAX - sizeof(BObolDrawManifestOccurrenceDiskHeader) ||
+	    meshAssetPathLength > SIZE_MAX - sizeof(BObolDrawManifestOccurrenceDiskHeader) ||
+	    meshAssetNameLength > SIZE_MAX - sizeof(BObolDrawManifestOccurrenceDiskHeader))
 	    return BRLCAD_ERROR;
     }
 
-    std::vector<unsigned char> disk(size, 0);
-    BObolDrawManifestDiskHeader header;
-    memset(&header, 0, sizeof(header));
-    header.magic = BOBOL_DRAW_MANIFEST_DISK_MAGIC;
-    header.version = BOBOL_DRAW_MANIFEST_DISK_VERSION;
-    header.databaseFingerprint = bobol_draw_cache_database_fingerprint(dbip);
-    header.occurrenceCount = static_cast<uint64_t>(manifest->occurrenceCount);
-    header.rootPathLength = static_cast<uint32_t>(rootLength);
-    header.coverageBoundsValid = manifest->coverageBoundsValid ? 1u : 0u;
-    if (manifest->coverageBoundsValid) {
-	VMOVE(header.coverageBoundsMin, manifest->coverageBoundsMin);
-	VMOVE(header.coverageBoundsMax, manifest->coverageBoundsMax);
+    char key[BU_CACHE_KEY_MAXLEN] = {0};
+    bobol_draw_cache_key(key, rootPath, BOBOL_DRAW_CACHE_MANIFEST);
+    if (!key[0])
+	return BRLCAD_ERROR;
+
+    int sem = bobol_draw_cache_semaphore();
+    bu_semaphore_acquire(sem);
+    BObolDrawCacheHandle handle;
+    if (!bobol_draw_cache_open(&handle, dbip)) {
+	bu_semaphore_release(sem);
+	return BRLCAD_ERROR;
     }
-    memcpy(disk.data(), &header, sizeof(header));
-    size_t offset = sizeof(header);
-    memcpy(disk.data() + offset, rootPath, rootLength);
-    offset += rootLength;
-    for (size_t i = 0; i < manifest->occurrenceCount; i++) {
-	const BObolDrawManifestOccurrence &occurrence =
-	    manifest->occurrences[i];
+
+    const uint64_t fingerprint = bobol_draw_cache_database_fingerprint(dbip);
+    std::vector<unsigned char> chunk;
+    uint32_t chunkIndex = 0;
+    uint32_t chunkOccurrenceCount = 0;
+    int status = BRLCAD_OK;
+    auto startChunk = [&]() {
+	chunk.clear();
+	chunk.resize(sizeof(BObolDrawManifestChunkDiskHeader), 0);
+	chunkOccurrenceCount = 0;
+    };
+    auto finishChunk = [&]() -> int {
+	if (!chunkOccurrenceCount)
+	    return BRLCAD_OK;
+	BObolDrawManifestChunkDiskHeader header;
+	memset(&header, 0, sizeof(header));
+	header.magic = BOBOL_DRAW_MANIFEST_CHUNK_DISK_MAGIC;
+	header.version = BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION;
+	header.databaseFingerprint = fingerprint;
+	header.chunkIndex = chunkIndex;
+	header.occurrenceCount = chunkOccurrenceCount;
+	memcpy(chunk.data(), &header, sizeof(header));
+	std::string chunkIdentity = std::string(rootPath) +
+	    "|manifest-chunk-v1|" + std::to_string(chunkIndex);
+	char chunkKey[BU_CACHE_KEY_MAXLEN] = {0};
+	bobol_draw_cache_key(chunkKey, chunkIdentity.c_str(),
+	    BOBOL_DRAW_CACHE_MANIFEST);
+	if (!chunkKey[0] ||
+	    bu_cache_write(chunk.data(), chunk.size(), chunkKey, handle.cache,
+		NULL) != chunk.size())
+	    return BRLCAD_ERROR;
+	chunkIndex++;
+	return BRLCAD_OK;
+    };
+    try {
+	startChunk();
+    } catch (const std::bad_alloc &) {
+	status = BRLCAD_ERROR;
+    }
+    for (size_t i = 0; status == BRLCAD_OK &&
+	i < manifest->occurrenceCount; i++) {
+	BObolDrawManifestOccurrence occurrence;
+	memset(&occurrence, 0, sizeof(occurrence));
+	if (!provider(i, &occurrence, userData)) {
+	    status = BRLCAD_ERROR;
+	    break;
+	}
 	const size_t pathLength = strlen(occurrence.path);
 	const size_t sourceNameLength = strlen(occurrence.sourceName);
 	const size_t meshAssetPathLength = occurrence.meshAssetPath ?
 	    strlen(occurrence.meshAssetPath) : 0;
 	const size_t meshAssetNameLength = occurrence.meshAssetName ?
 	    strlen(occurrence.meshAssetName) : 0;
+	const size_t occurrenceSize = sizeof(BObolDrawManifestOccurrenceDiskHeader) +
+	    pathLength + sourceNameLength + meshAssetPathLength +
+	    meshAssetNameLength;
+	if (occurrenceSize < pathLength ||
+	    chunk.size() > SIZE_MAX - occurrenceSize) {
+	    status = BRLCAD_ERROR;
+	    break;
+	}
+	if (chunkOccurrenceCount &&
+	    chunk.size() + occurrenceSize > manifestChunkTargetBytes) {
+	    if (finishChunk() != BRLCAD_OK) {
+		status = BRLCAD_ERROR;
+		break;
+	    }
+	    try {
+		startChunk();
+	    } catch (const std::bad_alloc &) {
+		status = BRLCAD_ERROR;
+		break;
+	    }
+	}
 	BObolDrawManifestOccurrenceDiskHeader occurrenceHeader;
 	memset(&occurrenceHeader, 0, sizeof(occurrenceHeader));
 	occurrenceHeader.pathLength = static_cast<uint32_t>(pathLength);
@@ -2397,41 +2478,198 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 	if (occurrence.metadataValid)
 	    bobol_draw_metadata_to_disk(&occurrenceHeader.metadata,
 		&occurrence.metadata);
-	memcpy(disk.data() + offset, &occurrenceHeader,
-	    sizeof(occurrenceHeader));
-	offset += sizeof(occurrenceHeader);
-	memcpy(disk.data() + offset, occurrence.path, pathLength);
-	offset += pathLength;
-	memcpy(disk.data() + offset, occurrence.sourceName, sourceNameLength);
-	offset += sourceNameLength;
+	const size_t appendOffset = chunk.size();
+	try {
+	    chunk.resize(appendOffset + occurrenceSize);
+	} catch (const std::bad_alloc &) {
+	    status = BRLCAD_ERROR;
+	    break;
+	}
+	unsigned char *write = chunk.data() + appendOffset;
+	memcpy(write, &occurrenceHeader, sizeof(occurrenceHeader));
+	write += sizeof(occurrenceHeader);
+	memcpy(write, occurrence.path, pathLength);
+	write += pathLength;
+	memcpy(write, occurrence.sourceName, sourceNameLength);
+	write += sourceNameLength;
 	if (meshAssetPathLength) {
-	    memcpy(disk.data() + offset, occurrence.meshAssetPath,
-		meshAssetPathLength);
-	    offset += meshAssetPathLength;
+	    memcpy(write, occurrence.meshAssetPath, meshAssetPathLength);
+	    write += meshAssetPathLength;
 	}
-	if (meshAssetNameLength) {
-	    memcpy(disk.data() + offset, occurrence.meshAssetName,
-		meshAssetNameLength);
-	    offset += meshAssetNameLength;
-	}
+	if (meshAssetNameLength)
+	    memcpy(write, occurrence.meshAssetName, meshAssetNameLength);
+	chunkOccurrenceCount++;
     }
 
-    char key[BU_CACHE_KEY_MAXLEN] = {0};
-    bobol_draw_cache_key(key, rootPath, BOBOL_DRAW_CACHE_MANIFEST);
-    if (!key[0] || offset != disk.size())
-	return BRLCAD_ERROR;
+    if (status == BRLCAD_OK &&
+	(finishChunk() != BRLCAD_OK || !chunkIndex))
+	status = BRLCAD_ERROR;
 
-    size_t written = 0;
-    int sem = bobol_draw_cache_semaphore();
-    bu_semaphore_acquire(sem);
-    BObolDrawCacheHandle handle;
-    if (bobol_draw_cache_open(&handle, dbip)) {
-	written = bu_cache_write(disk.data(), disk.size(), key, handle.cache,
-	    NULL);
+    BObolDrawManifestChunkedDiskHeader descriptor;
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.magic = BOBOL_DRAW_MANIFEST_CHUNKED_DISK_MAGIC;
+    descriptor.version = BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION;
+    descriptor.databaseFingerprint = fingerprint;
+    descriptor.occurrenceCount = static_cast<uint64_t>(manifest->occurrenceCount);
+    descriptor.rootPathLength = static_cast<uint32_t>(rootLength);
+    descriptor.coverageBoundsValid = manifest->coverageBoundsValid ? 1u : 0u;
+    descriptor.chunkCount = chunkIndex;
+    if (manifest->coverageBoundsValid) {
+	VMOVE(descriptor.coverageBoundsMin, manifest->coverageBoundsMin);
+	VMOVE(descriptor.coverageBoundsMax, manifest->coverageBoundsMax);
+    }
+    if (status == BRLCAD_OK) {
+	std::vector<unsigned char> disk(sizeof(descriptor) + rootLength);
+	memcpy(disk.data(), &descriptor, sizeof(descriptor));
+	memcpy(disk.data() + sizeof(descriptor), rootPath, rootLength);
+	if (bu_cache_write(disk.data(), disk.size(), key, handle.cache, NULL) !=
+	    disk.size())
+	    status = BRLCAD_ERROR;
+    }
 	bobol_draw_cache_close(&handle);
-    }
     bu_semaphore_release(sem);
-    return written == disk.size() ? BRLCAD_OK : BRLCAD_ERROR;
+    return status;
+}
+
+struct BObolDrawManifestArrayProvider {
+    const BObolDrawManifest *manifest = nullptr;
+};
+
+static int
+bobol_draw_manifest_array_provider(size_t occurrenceIndex,
+	BObolDrawManifestOccurrence *occurrence, void *userData)
+{
+    const BObolDrawManifestArrayProvider *provider =
+	static_cast<const BObolDrawManifestArrayProvider *>(userData);
+    if (!provider || !provider->manifest || !occurrence ||
+	!provider->manifest->occurrences ||
+	occurrenceIndex >= provider->manifest->occurrenceCount)
+	return 0;
+    *occurrence = provider->manifest->occurrences[occurrenceIndex];
+    return 1;
+}
+
+extern "C" int
+bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
+	const BObolDrawManifest *manifest)
+{
+    if (!manifest || !manifest->occurrences)
+	return BRLCAD_ERROR;
+    BObolDrawManifestArrayProvider provider;
+    provider.manifest = manifest;
+    return bobol_draw_manifest_cache_store_with_provider(dbip, rootPath,
+	manifest, bobol_draw_manifest_array_provider, &provider);
+}
+
+extern "C" int
+bobol_draw_manifest_cache_store_visit(db_i *dbip, const char *rootPath,
+	const BObolDrawManifest *manifest,
+	BObolDrawManifestOccurrenceProvider occurrence, void *userData)
+{
+	return bobol_draw_manifest_cache_store_with_provider(dbip, rootPath,
+	manifest, occurrence, userData);
+}
+
+static int
+bobol_draw_manifest_stream_chunk(const unsigned char *bytes, size_t dataSize,
+	size_t occurrenceCount, size_t *visited,
+	BObolDrawManifestOccurrenceCallback visit, void *userData)
+{
+    if (!bytes || !visited || !visit)
+	return BRLCAD_ERROR;
+    size_t offset = 0;
+    for (size_t i = 0; i < occurrenceCount; i++) {
+	if (offset > dataSize ||
+	    dataSize - offset < sizeof(BObolDrawManifestOccurrenceDiskHeader))
+	    return BRLCAD_ERROR;
+	BObolDrawManifestOccurrenceDiskHeader header;
+	memcpy(&header, bytes + offset, sizeof(header));
+	offset += sizeof(header);
+	const size_t pathLength = header.pathLength;
+	const size_t sourceNameLength = header.sourceNameLength;
+	const size_t assetPathLength = header.meshAssetPathLength;
+	const size_t assetNameLength = header.meshAssetNameLength;
+	if (!pathLength || pathLength > dataSize - offset ||
+	    sourceNameLength > dataSize - offset - pathLength ||
+	    assetPathLength > dataSize - offset - pathLength - sourceNameLength ||
+	    assetNameLength > dataSize - offset - pathLength - sourceNameLength -
+		assetPathLength || header.metadataValid > 1 ||
+	    header.sourceMeshRequestValid > 1 ||
+	    header.meshAssetKind > BOBOL_DRAW_CACHE_MESH_ASSET_BREP ||
+	    !std::isfinite(header.meshAssetTessellationAbsTol) ||
+	    !std::isfinite(header.meshAssetTessellationRelTol) ||
+	    !std::isfinite(header.meshAssetTessellationNormTol) ||
+	    header.meshAssetTessellationAbsTol < 0.0 ||
+	    header.meshAssetTessellationRelTol < 0.0 ||
+	    header.meshAssetTessellationNormTol < 0.0 ||
+	    (header.sourceMeshRequestValid &&
+	     (!assetPathLength || !assetNameLength ||
+	      !bobol_draw_manifest_matrix_valid(header.meshAssetMatrix) ||
+	      !bobol_draw_proxy_bbox_valid(header.meshAssetBoundsMin,
+		  header.meshAssetBoundsMax))) ||
+	    !bobol_draw_manifest_boolean_valid(header.booleanOperation) ||
+	    !bobol_draw_manifest_matrix_valid(header.localMatrix) ||
+	    !bobol_draw_proxy_bbox_valid(header.boundsMin, header.boundsMax) ||
+	    memchr(bytes + offset, '\0', pathLength) ||
+	    memchr(bytes + offset + pathLength, '\0', sourceNameLength) ||
+	    (assetPathLength && memchr(bytes + offset + pathLength +
+		 sourceNameLength, '\0', assetPathLength)) ||
+	    (assetNameLength && memchr(bytes + offset + pathLength +
+		 sourceNameLength + assetPathLength, '\0', assetNameLength)) ||
+	    (header.metadataValid && !bobol_draw_metadata_disk_valid(
+		&header.metadata, sizeof(header.metadata))))
+	    return BRLCAD_ERROR;
+	std::string path(reinterpret_cast<const char *>(bytes + offset), pathLength);
+	offset += pathLength;
+	std::string sourceName(reinterpret_cast<const char *>(bytes + offset),
+	    sourceNameLength);
+	offset += sourceNameLength;
+	std::string assetPath;
+	std::string assetName;
+	if (assetPathLength) {
+	    assetPath.assign(reinterpret_cast<const char *>(bytes + offset),
+		assetPathLength);
+	    offset += assetPathLength;
+	}
+	if (assetNameLength) {
+	    assetName.assign(reinterpret_cast<const char *>(bytes + offset),
+		assetNameLength);
+	    offset += assetNameLength;
+	}
+	BObolDrawManifestOccurrence occurrence;
+	memset(&occurrence, 0, sizeof(occurrence));
+	occurrence.path = const_cast<char *>(path.c_str());
+	occurrence.sourceName = const_cast<char *>(sourceName.c_str());
+	occurrence.meshAssetPath = assetPathLength ?
+	    const_cast<char *>(assetPath.c_str()) : NULL;
+	occurrence.meshAssetName = assetNameLength ?
+	    const_cast<char *>(assetName.c_str()) : NULL;
+	occurrence.booleanOperation = header.booleanOperation;
+	occurrence.occurrenceIndex = header.occurrenceIndex;
+	occurrence.metadataValid = header.metadataValid ? 1 : 0;
+	occurrence.sourceMeshRequestValid = header.sourceMeshRequestValid ? 1 : 0;
+	occurrence.meshAssetKind = static_cast<int>(header.meshAssetKind);
+	occurrence.meshAssetContentHash = header.meshAssetContentHash;
+	occurrence.sourceFaceCount = header.sourceFaceCount;
+	occurrence.sourcePointCount = header.sourcePointCount;
+	occurrence.meshAssetTessellationAbsTol = header.meshAssetTessellationAbsTol;
+	occurrence.meshAssetTessellationRelTol = header.meshAssetTessellationRelTol;
+	occurrence.meshAssetTessellationNormTol = header.meshAssetTessellationNormTol;
+	memcpy(occurrence.localMatrix, header.localMatrix, sizeof(occurrence.localMatrix));
+	memcpy(occurrence.meshAssetMatrix, header.meshAssetMatrix,
+	    sizeof(occurrence.meshAssetMatrix));
+	VMOVE(occurrence.boundsMin, header.boundsMin);
+	VMOVE(occurrence.boundsMax, header.boundsMax);
+	if (occurrence.sourceMeshRequestValid) {
+	    VMOVE(occurrence.meshAssetBoundsMin, header.meshAssetBoundsMin);
+	    VMOVE(occurrence.meshAssetBoundsMax, header.meshAssetBoundsMax);
+	}
+	bobol_draw_metadata_from_disk(&occurrence.metadata, &header.metadata);
+	if (!visit(&occurrence, *visited, userData))
+	    return BRLCAD_ERROR;
+	(*visited)++;
+    }
+    return offset == dataSize ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 extern "C" int
@@ -2469,6 +2707,96 @@ bobol_draw_manifest_cache_stream(db_i *dbip, const char *rootPath,
 	bobol_draw_cache_close(&handle);
 	bu_semaphore_release(sem);
 	return BRLCAD_ERROR;
+    }
+
+    /* New records are a compact descriptor plus independently mapped,
+     * bounded occurrence chunks.  Do not reassemble them: a 150k assembly
+     * must remain streamable under the same memory policy as its geometry. */
+    if (dataSize >= sizeof(BObolDrawManifestChunkedDiskHeader)) {
+	BObolDrawManifestChunkedDiskHeader descriptor;
+	memcpy(&descriptor, data, sizeof(descriptor));
+	if (descriptor.magic == BOBOL_DRAW_MANIFEST_CHUNKED_DISK_MAGIC) {
+	    const size_t rootLength = strlen(rootPath);
+	    const uint64_t fingerprint = bobol_draw_cache_database_fingerprint(dbip);
+	    const unsigned char *descriptorBytes =
+		static_cast<const unsigned char *>(data);
+	    const int descriptorValid = rootLength <= UINT32_MAX &&
+		descriptor.version == BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION &&
+		descriptor.databaseFingerprint == fingerprint &&
+		descriptor.rootPathLength == rootLength &&
+		descriptor.chunkCount && descriptor.occurrenceCount &&
+		descriptor.coverageBoundsValid <= 1 &&
+		(!descriptor.coverageBoundsValid ||
+		 bobol_draw_proxy_bbox_valid(descriptor.coverageBoundsMin,
+		     descriptor.coverageBoundsMax)) &&
+		dataSize == sizeof(descriptor) + rootLength &&
+		!memcmp(descriptorBytes + sizeof(descriptor), rootPath, rootLength);
+	    if (!descriptorValid) {
+		bu_cache_get_done(&transaction);
+		bobol_draw_cache_close(&handle);
+		bu_semaphore_release(sem);
+		return BRLCAD_ERROR;
+	    }
+	    BObolDrawManifest description;
+	    bobol_draw_manifest_init(&description);
+	    description.coverageBoundsValid = descriptor.coverageBoundsValid ? 1 : 0;
+	    if (description.coverageBoundsValid) {
+		VMOVE(description.coverageBoundsMin, descriptor.coverageBoundsMin);
+		VMOVE(description.coverageBoundsMax, descriptor.coverageBoundsMax);
+	    }
+	    description.occurrenceCount = static_cast<size_t>(descriptor.occurrenceCount);
+	    if (begin && !begin(&description, userData)) {
+		bu_cache_get_done(&transaction);
+		bobol_draw_cache_close(&handle);
+		bu_semaphore_release(sem);
+		return BRLCAD_ERROR;
+	    }
+	    if (!visit) {
+		bu_cache_get_done(&transaction);
+		bobol_draw_cache_close(&handle);
+		bu_semaphore_release(sem);
+		return BRLCAD_OK;
+	    }
+	    bu_cache_get_done(&transaction);
+	    size_t visited = 0;
+	    int valid = 1;
+	    for (uint32_t i = 0; valid && i < descriptor.chunkCount; i++) {
+		std::string chunkIdentity = std::string(rootPath) +
+		    "|manifest-chunk-v1|" + std::to_string(i);
+		char chunkKey[BU_CACHE_KEY_MAXLEN] = {0};
+		bobol_draw_cache_key(chunkKey, chunkIdentity.c_str(),
+		    BOBOL_DRAW_CACHE_MANIFEST);
+		void *chunkData = NULL;
+		size_t chunkSize = 0;
+		bu_cache_txn *chunkTransaction = NULL;
+		if (!chunkKey[0] ||
+		    !(chunkSize = bu_cache_get(&chunkData, chunkKey, handle.cache,
+			&chunkTransaction)) ||
+		    chunkSize < sizeof(BObolDrawManifestChunkDiskHeader)) {
+		    valid = 0;
+		} else {
+		    BObolDrawManifestChunkDiskHeader chunkHeader;
+		    memcpy(&chunkHeader, chunkData, sizeof(chunkHeader));
+		    if (chunkHeader.magic != BOBOL_DRAW_MANIFEST_CHUNK_DISK_MAGIC ||
+			chunkHeader.version != BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION ||
+			chunkHeader.databaseFingerprint != fingerprint ||
+			chunkHeader.chunkIndex != i || !chunkHeader.occurrenceCount ||
+			chunkHeader.occurrenceCount > descriptor.occurrenceCount - visited ||
+			bobol_draw_manifest_stream_chunk(
+			    static_cast<const unsigned char *>(chunkData) +
+				sizeof(chunkHeader),
+			    chunkSize - sizeof(chunkHeader),
+			    chunkHeader.occurrenceCount, &visited, visit,
+			    userData) != BRLCAD_OK)
+			valid = 0;
+		}
+		bu_cache_get_done(&chunkTransaction);
+	    }
+	    bobol_draw_cache_close(&handle);
+	    bu_semaphore_release(sem);
+	    return valid && visited == description.occurrenceCount ?
+		BRLCAD_OK : BRLCAD_ERROR;
+	}
     }
 
     BObolDrawManifestDiskHeader header;

@@ -148,14 +148,19 @@ struct BObolCompactInstanceIndex {
 	BObolCompactGeometryPartIdentity>
 	partIdByGeometry;
     std::vector<BObolCompactPartReference> parts;
+    /* The stream supplies its complete target count before merging.  Reserve
+     * exactly that population once so a 150k discovery never doubles a live
+     * retained instance array on the GUI thread. */
     std::vector<Obol::InstanceUpdate> instances;
     std::vector<Obol::InstanceId> hiddenInstances;
     std::vector<Obol::InstanceId> selectedInstances;
     std::vector<Obol::InstanceId> unpickableInstances;
-    /* This heavy append-only, index-addressed array may learn its final
-     * population only after a long hierarchy walk.  Segmented storage keeps
-     * existing records stable as it grows; reserving a 150k tail in
-     * std::vector otherwise relocates half a live scene on the GUI thread. */
+    /* Entries are deliberately segmented.  Unlike the compact renderer
+     * update array, an entry owns strings, semantic state, and optional
+     * geometry metadata.  Reserving an entire large target before its first
+     * leaf arrives creates a prohibitive one-shot allocation under pressure;
+     * a deque preserves entry addresses and lets progressive discovery retain
+     * useful partial coverage. */
     std::deque<BObolCompactInstanceEntry> entries;
     std::unordered_map<Obol::InstanceId, size_t,
 	std::hash<Obol::InstanceId>> entryIndex;

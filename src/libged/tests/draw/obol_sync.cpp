@@ -1381,6 +1381,18 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	FAIL("GED multi-instance shaded draw should retain transformed mesh occurrences");
 
     const char *autoview_cmd[2] = {"autoview", NULL};
+    point_t autoview_min;
+    point_t autoview_max;
+    int autoview_empty = 1;
+    if (!ged_draw_obol_scene_database_autoview_bounds(gedp,
+	    &autoview_min, &autoview_max, &autoview_empty, 1) ||
+	autoview_empty || fabs(autoview_min[X] + 13.0) > 0.01 ||
+	fabs(autoview_min[Y] + 1.0) > 0.01 ||
+	fabs(autoview_min[Z] + 1.0) > 0.01 ||
+	fabs(autoview_max[X] - 19.0) > 0.01 ||
+	fabs(autoview_max[Y] - 4.0) > 0.01 ||
+	fabs(autoview_max[Z] - 1.0) > 0.01)
+	FAIL("GED multi-instance autoview bounds should retain the raw scene AABB");
     if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
 	FAIL("GED multi-instance autoview should succeed");
     mat_t view_center_mat;
@@ -1388,14 +1400,32 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
     bv_center_mat_get(view_center_mat, DRAW_TEST_BV_CONST(ged_draw_active_view_ctx(gedp)));
     MAT_DELTAS_GET_NEG(view_center, view_center_mat);
 
-    /* The two occurrences span 32 model units in X.  A rotation-stable
-     * autoview cube must preserve that diameter, not apply the diameter on
-     * both sides of its center and silently double the view size. */
-    const fastf_t reuse_view_size =
-	bv_size_get(DRAW_TEST_BV_CONST(ged_draw_active_view_ctx(gedp)));
-    if (reuse_view_size < 31.9 || reuse_view_size > 32.1 ||
-	    fabs(view_center[X] - 3.0) > 0.1)
+    /* bv_autoview_bounds applies one rotation-stable bounding-sphere fit to
+     * the raw scene AABB.  Bounds delivery must not pre-expand another cube,
+     * which would apply diagonal margin twice and over-scale this view by
+     * sqrt(3). */
+    const struct bv *active_view =
+	DRAW_TEST_BV_CONST(ged_draw_active_view_ctx(gedp));
+    point_t expected_center;
+    vect_t half_diagonal;
+    VADD2SCALE(expected_center, autoview_min, autoview_max, 0.5);
+    VSUB2(half_diagonal, autoview_max, expected_center);
+    fastf_t expected_view_size = 2.0 * MAGNITUDE(half_diagonal);
+    const int view_width = bv_width_get(active_view);
+    const int view_height = bv_height_get(active_view);
+    if (view_width > view_height && view_height > 0)
+	expected_view_size *= static_cast<fastf_t>(view_width) / view_height;
+
+    const fastf_t reuse_view_size = bv_size_get(active_view);
+    if (fabs(reuse_view_size - expected_view_size) > 0.1 ||
+	fabs(view_center[X] - expected_center[X]) > 0.1 ||
+	fabs(view_center[Y] - expected_center[Y]) > 0.1 ||
+	fabs(view_center[Z] - expected_center[Z]) > 0.1) {
+	fprintf(stderr,
+	    "multi-instance autoview size=%g center=(%g,%g,%g)\n",
+	    reuse_view_size, view_center[X], view_center[Y], view_center[Z]);
 	FAIL("GED multi-instance autoview should use transformed scene bounds");
+	}
 
     const char *erase_reuse_root[2] = {"erase", "reuse_root.c"};
     if (ged_exec_erase(gedp, 2, erase_reuse_root) != BRLCAD_OK)

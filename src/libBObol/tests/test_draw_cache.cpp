@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 static const char *path_leaf_name = "path_leaf.s";
 static const char *path_region_name = "path_region.r";
@@ -195,6 +196,61 @@ make_manifest(BObolDrawManifest *manifest)
 	bobol_draw_manifest_free(manifest);
 	return 0;
     }
+    return 1;
+}
+
+static int
+manifest_occurrence_provider(size_t occurrenceIndex,
+    BObolDrawManifestOccurrence *occurrence, void *userData)
+{
+    const BObolDrawManifest *manifest =
+	static_cast<const BObolDrawManifest *>(userData);
+    if (!manifest || !occurrence || !manifest->occurrences ||
+	occurrenceIndex >= manifest->occurrenceCount)
+	return 0;
+    *occurrence = manifest->occurrences[occurrenceIndex];
+    return 1;
+}
+
+struct LargeManifestProvider {
+    std::string text;
+};
+
+static int
+large_manifest_provider(size_t occurrenceIndex,
+    BObolDrawManifestOccurrence *occurrence, void *userData)
+{
+    LargeManifestProvider *provider =
+	static_cast<LargeManifestProvider *>(userData);
+    if (!provider || !occurrence || provider->text.empty())
+	return 0;
+    memset(occurrence, 0, sizeof(*occurrence));
+    occurrence->path = const_cast<char *>(provider->text.c_str());
+    occurrence->sourceName = const_cast<char *>(provider->text.c_str());
+    occurrence->booleanOperation = DB_OP_UNION;
+    occurrence->occurrenceIndex = static_cast<uint32_t>(occurrenceIndex);
+    MAT_IDN(occurrence->localMatrix);
+    VSET(occurrence->boundsMin, -1.0, -1.0, -1.0);
+    VSET(occurrence->boundsMax, 1.0, 1.0, 1.0);
+    return 1;
+}
+
+struct LargeManifestStreamContext {
+    size_t expectedCount = 0;
+    size_t visited = 0;
+};
+
+static int
+large_manifest_stream_visit(const BObolDrawManifestOccurrence *occurrence,
+    size_t occurrenceIndex, void *userData)
+{
+    LargeManifestStreamContext *context =
+	static_cast<LargeManifestStreamContext *>(userData);
+    if (!context || !occurrence || !occurrence->path ||
+	!occurrence->sourceName || occurrenceIndex != context->visited ||
+	occurrence->occurrenceIndex != occurrenceIndex)
+	return 0;
+    context->visited++;
     return 1;
 }
 
@@ -639,8 +695,10 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
+
     if (!make_manifest(&manifest) ||
-	bobol_draw_manifest_cache_store(dbip, path_top_name, &manifest) !=
+	bobol_draw_manifest_cache_store_visit(dbip, path_top_name, &manifest,
+	    manifest_occurrence_provider, &manifest) !=
 	BRLCAD_OK ||
 	bobol_draw_manifest_cache_describe(dbip, path_top_name,
 	    &manifestDescription) != BRLCAD_OK ||
@@ -659,6 +717,35 @@ main(int argc, char *argv[])
     }
     bobol_draw_manifest_free(&manifest);
     bobol_draw_manifest_free(&loadedManifest);
+
+    {
+	static const size_t largeManifestOccurrenceCount = 6;
+	static const size_t largeManifestTextBytes = 1024u * 1024u;
+	BObolDrawManifest largeManifest;
+	BObolDrawManifest largeDescription;
+	LargeManifestProvider provider;
+	LargeManifestStreamContext stream;
+	bobol_draw_manifest_init(&largeManifest);
+	bobol_draw_manifest_init(&largeDescription);
+	largeManifest.occurrenceCount = largeManifestOccurrenceCount;
+	provider.text.assign(largeManifestTextBytes, 'a');
+	stream.expectedCount = largeManifestOccurrenceCount;
+	if (bobol_draw_manifest_cache_store_visit(dbip, "large_manifest.c",
+		&largeManifest, large_manifest_provider, &provider) !=
+		BRLCAD_OK ||
+	    bobol_draw_manifest_cache_describe(dbip, "large_manifest.c",
+		&largeDescription) != BRLCAD_OK ||
+	    largeDescription.occurrenceCount != largeManifestOccurrenceCount ||
+	    bobol_draw_manifest_cache_stream(dbip, "large_manifest.c", NULL,
+		large_manifest_stream_visit, &stream) != BRLCAD_OK ||
+	    stream.visited != stream.expectedCount) {
+	    printf("FAIL: chunked draw manifest stream\n");
+	    bobol_draw_manifest_free(&largeDescription);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_draw_manifest_free(&largeDescription);
+    }
 
     db_close(dbip);
     dbip = db_open(dbpath, DB_OPEN_READWRITE);

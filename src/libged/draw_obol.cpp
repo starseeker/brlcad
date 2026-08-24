@@ -79,6 +79,7 @@
 #include <string.h>
 #include <atomic>
 #include <memory>
+#include <new>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -305,6 +306,8 @@ struct ged_obol_progressive_provider_data {
 	view_ctx(NULL),
 	pending_autoview(0),
 	pending_autoview_bounds_complete(0),
+	pending_autoview_width(0),
+	pending_autoview_height(0),
 	expected_autoview_size(0.0),
 	autoview_factor(BV_AUTOVIEW_SCALE_DEFAULT),
 	deferred_refine_stage(0)
@@ -320,6 +323,11 @@ struct ged_obol_progressive_provider_data {
     struct ged_view_context *view_ctx;
     int pending_autoview;
     int pending_autoview_bounds_complete;
+    /* Autoview has command-time viewport semantics.  The progressive
+     * realization may finish after a resize, but that must not make the
+     * deferred command frame a different extent than its synchronous peer. */
+    int pending_autoview_width;
+    int pending_autoview_height;
     point_t expected_autoview_center;
     fastf_t expected_autoview_size;
     fastf_t autoview_factor;
@@ -351,7 +359,8 @@ struct ged_obol_deferred_realization_item {
 	primaryScene(FALSE), allowWireFallback(FALSE),
 	streamBatchQuantum(256),
 	streamMergeMicrosecondsPerItem(0.0),
-	streamMergedOccurrences(0), streamMergeMicroseconds(0)
+	streamMergedOccurrences(0), streamMergeMicroseconds(0),
+	memoryExhausted(FALSE)
     {
     }
 
@@ -396,6 +405,7 @@ struct ged_obol_deferred_realization_item {
      * per GUI pump, keeping a large-model timing run observational. */
     size_t streamMergedOccurrences;
     int64_t streamMergeMicroseconds;
+    SbBool memoryExhausted;
     /* Worker->pump stream of completed per-leaf occurrences.  Shared with the
      * realization service so it outlives every push. */
     std::shared_ptr<BObolCompactOccurrenceStream> stream;
@@ -4914,23 +4924,9 @@ ged_database_path_member_autoview_bounds(
 	have_bounds = 1;
     }
 
-    if (have_bounds) {
-	/* Match the retained-source framing contract: form one rotation-stable
-	 * cube around the completed union.  This keeps a later aet change from
-	 * clipping a long assembly without accumulating per-part padding. */
-	point_t center;
-	VADD2SCALE(center, *min, *max, 0.5);
-	fastf_t half_extent = 0.5 * ((*max)[X] - (*min)[X]);
-	V_MAX(half_extent, 0.5 * ((*max)[Y] - (*min)[Y]));
-	V_MAX(half_extent, 0.5 * ((*max)[Z] - (*min)[Z]));
-	if (half_extent < SQRT_SMALL_FASTF)
-	    half_extent = SQRT_SMALL_FASTF;
-	VSET(*min, center[X] - half_extent, center[Y] - half_extent,
-	    center[Z] - half_extent);
-	VSET(*max, center[X] + half_extent, center[Y] + half_extent,
-	    center[Z] + half_extent);
-    }
-
+    /* Return the conservative raw union.  The common autoview helper owns the
+     * single rotation-stable fit after every source/member contribution has
+     * been combined. */
     return have_bounds;
 }
 
@@ -5012,24 +5008,15 @@ ged_draw_obol_scene_database_autoview_bounds(
 
 	const SbVec3f source_min = source.sourceBounds.getMin();
 	const SbVec3f source_max = source.sourceBounds.getMax();
-	const fastf_t center_x = (source_min[X] + source_max[X]) * 0.5;
-	const fastf_t center_y = (source_min[Y] + source_max[Y]) * 0.5;
-	const fastf_t center_z = (source_min[Z] + source_max[Z]) * 0.5;
-	fastf_t half_extent =
-	    0.5 * static_cast<fastf_t>(source_max[X] - source_min[X]);
-	half_extent = std::max(half_extent,
-		0.5 * static_cast<fastf_t>(source_max[Y] - source_min[Y]));
-	half_extent = std::max(half_extent,
-		0.5 * static_cast<fastf_t>(source_max[Z] - source_min[Z]));
-	if (half_extent < SQRT_SMALL_FASTF)
-	    half_extent = SQRT_SMALL_FASTF;
-
+	/* bv_autoview_bounds owns the rotation-stable bounding-sphere fit for
+	 * every caller.  Keep semantic scene bounds as their conservative raw
+	 * AABB here: turning them into a cube first would make that common fit
+	 * enclose the cube diagonal and over-scale elongated assemblies by sqrt(3).
+	 */
 	vect_t source_bounds_min;
 	vect_t source_bounds_max;
-	VSET(source_bounds_min, center_x - half_extent,
-	     center_y - half_extent, center_z - half_extent);
-	VSET(source_bounds_max, center_x + half_extent,
-	     center_y + half_extent, center_z + half_extent);
+	VSET(source_bounds_min, source_min[X], source_min[Y], source_min[Z]);
+	VSET(source_bounds_max, source_max[X], source_max[Y], source_max[Z]);
 	VMIN(*min, source_bounds_min);
 	VMAX(*max, source_bounds_max);
 	have_source_bounds = 1;
@@ -7841,6 +7828,103 @@ ged_obol_leaf_manifest_record_from_occurrence(
     return 1;
 }
 
+static int
+ged_obol_leaf_manifest_occurrence(
+    const BObolCompactManifestOccurrence &record,
+    BObolDrawManifestOccurrence *cached)
+{
+    if (!cached)
+	return 0;
+    memset(cached, 0, sizeof(*cached));
+    cached->path = const_cast<char *>(record.path.getString());
+    cached->sourceName = const_cast<char *>(record.sourceName.getString());
+    if (!cached->path[0] || !cached->sourceName[0])
+	return 0;
+    ged_obol_mat_from_sbmatrix(record.localTransform, cached->localMatrix);
+    const SbVec3f bmin = record.bounds.getMin();
+    const SbVec3f bmax = record.bounds.getMax();
+    VSET(cached->boundsMin, bmin[0], bmin[1], bmin[2]);
+    VSET(cached->boundsMax, bmax[0], bmax[1], bmax[2]);
+    cached->booleanOperation = record.booleanOperation ==
+	SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? DB_OP_SUBTRACT :
+	(record.booleanOperation == SoBRLDatabaseSource::BOOLEAN_INTERSECT ?
+	 DB_OP_INTERSECT : DB_OP_UNION);
+    cached->occurrenceIndex = record.occurrenceIndex;
+    if (record.sourceMeshRequestValid) {
+	const char *assetPath = record.meshAssetPath.getString();
+	const char *assetName = record.meshAssetName.getString();
+	const SbBox3f assetBounds = record.meshAssetBounds;
+	if (!assetPath || !assetPath[0] || !assetName || !assetName[0] ||
+	    assetBounds.isEmpty())
+	    return 0;
+	cached->sourceMeshRequestValid = 1;
+	cached->meshAssetKind = BU_STR_EQUAL(record.sourceType.getString(),
+	    "brep") ? BOBOL_DRAW_CACHE_MESH_ASSET_BREP :
+	    BOBOL_DRAW_CACHE_MESH_ASSET_BOT;
+	cached->meshAssetContentHash = record.meshAssetContentHash;
+	cached->meshAssetTessellationAbsTol =
+	    record.meshAssetTessellationAbsTol;
+	cached->meshAssetTessellationRelTol =
+	    record.meshAssetTessellationRelTol;
+	cached->meshAssetTessellationNormTol =
+	    record.meshAssetTessellationNormTol;
+	cached->meshAssetPath = const_cast<char *>(assetPath);
+	cached->meshAssetName = const_cast<char *>(assetName);
+	const SbVec3f assetMin = assetBounds.getMin();
+	const SbVec3f assetMax = assetBounds.getMax();
+	VSET(cached->meshAssetBoundsMin, assetMin[0], assetMin[1], assetMin[2]);
+	VSET(cached->meshAssetBoundsMax, assetMax[0], assetMax[1], assetMax[2]);
+	cached->sourceFaceCount = record.sourceFaceCount;
+	cached->sourcePointCount = record.sourcePointCount;
+	ged_obol_mat_from_sbmatrix(record.meshAssetTransform,
+	    cached->meshAssetMatrix);
+    }
+    bobol_draw_metadata_record_init(&cached->metadata);
+    cached->metadataValid = 1;
+    cached->metadata.hasRegionId = 1;
+    cached->metadata.regionId = record.regionId;
+    cached->metadata.hasAircode = 1;
+    cached->metadata.aircode = record.airCode;
+    cached->metadata.hasLos = 1;
+    cached->metadata.los = record.los;
+    cached->metadata.hasMaterialId = 1;
+    cached->metadata.materialId = record.materialId;
+    if (record.materialColorValid) {
+	const SbColor color = record.materialColor;
+	cached->metadata.hasColor = 1;
+	for (size_t channel = 0; channel < 3; channel++) {
+	    const float component = std::max(0.0f,
+		std::min(1.0f, color[static_cast<int>(channel)]));
+	    cached->metadata.color[channel] =
+		static_cast<unsigned char>(component * 255.0f + 0.5f);
+	}
+    }
+    const char *shader = record.materialShader.getString();
+    if (shader && shader[0]) {
+	cached->metadata.hasShader = 1;
+	bu_strlcpy(cached->metadata.shader, shader,
+	    sizeof(cached->metadata.shader));
+    }
+    return 1;
+}
+
+struct ged_obol_leaf_manifest_provider {
+    const std::vector<BObolCompactManifestOccurrence> *records = NULL;
+};
+
+static int
+ged_obol_leaf_manifest_provider_get(size_t occurrenceIndex,
+    BObolDrawManifestOccurrence *occurrence, void *userData)
+{
+    const ged_obol_leaf_manifest_provider *provider =
+	static_cast<const ged_obol_leaf_manifest_provider *>(userData);
+    if (!provider || !provider->records ||
+	occurrenceIndex >= provider->records->size())
+	return 0;
+    return ged_obol_leaf_manifest_occurrence(
+	(*provider->records)[occurrenceIndex], occurrence);
+}
+
 /* Persist the authoritative per-leaf occurrence bounds as one batched warm
  * start record.  Region/root boxes are derivable unions; leaf-local bounds and
  * occurrence transforms are the reusable facts needed by progressive drawing.
@@ -7888,11 +7972,6 @@ ged_obol_store_leaf_proxy_manifest(
     struct BObolDrawManifest manifest;
     bobol_draw_manifest_init(&manifest);
     manifest.occurrenceCount = records.size();
-    manifest.occurrences = static_cast<BObolDrawManifestOccurrence *>(
-	bu_calloc(manifest.occurrenceCount, sizeof(*manifest.occurrences),
-	    "Obol leaf proxy manifest"));
-    if (!manifest.occurrences)
-	return 0;
 
     SbBox3f exactCoverageBounds;
     if (stream && stream->getCoverageBounds(exactCoverageBounds)) {
@@ -7905,108 +7984,14 @@ ged_obol_store_leaf_proxy_manifest(
 	    exactMax[2]);
     }
 
-    int valid = 1;
-    for (size_t i = 0; i < records.size(); i++) {
-	const BObolCompactManifestOccurrence &record = records[i];
-	struct BObolDrawManifestOccurrence &cached =
-	    manifest.occurrences[i];
-	cached.path = bu_strdup(record.path.getString());
-	cached.sourceName = bu_strdup(record.sourceName.getString());
-	if (!cached.path || !cached.sourceName) {
-	    valid = 0;
-	    break;
-	}
-	ged_obol_mat_from_sbmatrix(record.localTransform,
-	    cached.localMatrix);
-	const SbVec3f bmin = record.bounds.getMin();
-	const SbVec3f bmax = record.bounds.getMax();
-	VSET(cached.boundsMin, bmin[0], bmin[1], bmin[2]);
-	VSET(cached.boundsMax, bmax[0], bmax[1], bmax[2]);
-	cached.booleanOperation =
-	    record.booleanOperation ==
-		SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? DB_OP_SUBTRACT :
-	    (record.booleanOperation ==
-		SoBRLDatabaseSource::BOOLEAN_INTERSECT ? DB_OP_INTERSECT :
-		DB_OP_UNION);
-	cached.occurrenceIndex = record.occurrenceIndex;
-	if (record.sourceMeshRequestValid) {
-	    const char *assetPath = record.meshAssetPath.getString();
-	    const char *assetName = record.meshAssetName.getString();
-	    const SbBox3f assetBounds = record.meshAssetBounds;
-	    if (!assetPath || !assetPath[0] || !assetName ||
-		!assetName[0] || assetBounds.isEmpty()) {
-		valid = 0;
-		break;
-	    }
-	    cached.sourceMeshRequestValid = 1;
-	    cached.meshAssetKind = BU_STR_EQUAL(
-		record.sourceType.getString(), "brep") ?
-		BOBOL_DRAW_CACHE_MESH_ASSET_BREP :
-		BOBOL_DRAW_CACHE_MESH_ASSET_BOT;
-	    cached.meshAssetContentHash = record.meshAssetContentHash;
-	    cached.meshAssetTessellationAbsTol =
-		record.meshAssetTessellationAbsTol;
-	    cached.meshAssetTessellationRelTol =
-		record.meshAssetTessellationRelTol;
-	    cached.meshAssetTessellationNormTol =
-		record.meshAssetTessellationNormTol;
-	    cached.meshAssetPath = bu_strdup(assetPath);
-	    cached.meshAssetName = bu_strdup(assetName);
-	    if (!cached.meshAssetPath || !cached.meshAssetName) {
-		valid = 0;
-		break;
-	    }
-	    const SbVec3f assetMin = assetBounds.getMin();
-	    const SbVec3f assetMax = assetBounds.getMax();
-	    VSET(cached.meshAssetBoundsMin,
-		assetMin[0], assetMin[1], assetMin[2]);
-	    VSET(cached.meshAssetBoundsMax,
-		assetMax[0], assetMax[1], assetMax[2]);
-	    cached.sourceFaceCount = record.sourceFaceCount;
-	    cached.sourcePointCount = record.sourcePointCount;
-	    ged_obol_mat_from_sbmatrix(record.meshAssetTransform,
-		cached.meshAssetMatrix);
-	}
-	/*
-	 * A complete leaf manifest is now also the authoritative warm-start
-	 * registry.  Preserve the effective path material values already resolved
-	 * by the cold database walk so the worker need not repeat a full geometry
-	 * import merely to recover colors and region semantics.
-	 */
-	bobol_draw_metadata_record_init(&cached.metadata);
-	cached.metadataValid = 1;
-	cached.metadata.hasRegionId = 1;
-	cached.metadata.regionId = record.regionId;
-	cached.metadata.hasAircode = 1;
-	cached.metadata.aircode = record.airCode;
-	cached.metadata.hasLos = 1;
-	cached.metadata.los = record.los;
-	cached.metadata.hasMaterialId = 1;
-	cached.metadata.materialId = record.materialId;
-	if (record.materialColorValid) {
-	    const SbColor color = record.materialColor;
-	    cached.metadata.hasColor = 1;
-	    for (size_t channel = 0; channel < 3; channel++) {
-		const float component = std::max(0.0f,
-		    std::min(1.0f, color[static_cast<int>(channel)]));
-		cached.metadata.color[channel] =
-		    static_cast<unsigned char>(component * 255.0f + 0.5f);
-	    }
-	}
-	const char *shader = record.materialShader.getString();
-	if (shader && shader[0]) {
-	    cached.metadata.hasShader = 1;
-	    bu_strlcpy(cached.metadata.shader, shader,
-		sizeof(cached.metadata.shader));
-	}
-    }
-
     const std::string manifestIdentity =
 	ged_obol_leaf_manifest_cache_identity(source, rootPath);
-    const int stored = valid && !manifestIdentity.empty() &&
-	bobol_draw_manifest_cache_store(database, manifestIdentity.c_str(),
-	    &manifest) == BRLCAD_OK;
-    bobol_draw_manifest_free(&manifest);
+    ged_obol_leaf_manifest_provider provider;
+    provider.records = &records;
+    const int stored = !manifestIdentity.empty() &&
+	bobol_draw_manifest_cache_store_visit(database,
+	    manifestIdentity.c_str(), &manifest,
+	    ged_obol_leaf_manifest_provider_get, &provider) == BRLCAD_OK;
     return stored ? 1 : 0;
 }
 
@@ -8958,9 +8943,34 @@ ged_obol_progressive_autoview_apply(
 	return 0;
 	}
 
-    if (!bv_autoview_bounds(view, data->autoview_factor, bmin, bmax)) {
+    /* bv_autoview_bounds includes the viewport aspect in its horizontal span.
+     * Preserve the command-time aspect when realization completes after a
+     * resize: normal resize behavior keeps the existing scale, and a deferred
+     * autoview must do the same. */
+    const fastf_t command_aspect =
+	data->pending_autoview_width > 0 &&
+	data->pending_autoview_height > 0 ?
+	static_cast<fastf_t>(data->pending_autoview_width) /
+	static_cast<fastf_t>(data->pending_autoview_height) : 1.0;
+    const fastf_t current_aspect = bv_width_get(view) > 0 &&
+	bv_height_get(view) > 0 ?
+	static_cast<fastf_t>(bv_width_get(view)) /
+	static_cast<fastf_t>(bv_height_get(view)) : 1.0;
+    const fastf_t command_span_factor =
+	command_aspect > 1.0 ? command_aspect : 1.0;
+    const fastf_t current_span_factor =
+	current_aspect > 1.0 ? current_aspect : 1.0;
+    /* Match bv_autoview_bounds' default-scale normalization before adjusting
+     * for aspect.  Its public default is a negative sentinel, not a literal
+     * multiplier. */
+    fastf_t scale = data->autoview_factor;
+    if (scale < SQRT_SMALL_FASTF)
+	scale = 2.0;
+    scale *= command_span_factor / current_span_factor;
+
+    if (!bv_autoview_bounds(view, scale, bmin, bmax)) {
 	return 0;
-	}
+    }
     bv_refresh_request(view, GED_VIEW_REFRESH_DRAW);
     /*
      * A drained overview covers the complete target even when its bound is
@@ -8971,6 +8981,8 @@ ged_obol_progressive_autoview_apply(
      */
     data->pending_autoview = 0;
     data->pending_autoview_bounds_complete = 0;
+    data->pending_autoview_width = 0;
+    data->pending_autoview_height = 0;
     return 1;
 }
 
@@ -8989,6 +9001,8 @@ ged_obol_progressive_autoview_arm(
 
     data->pending_autoview = 1;
     data->pending_autoview_bounds_complete = 0;
+    data->pending_autoview_width = bv_width_get(view);
+    data->pending_autoview_height = bv_height_get(view);
     if (!bv_center_get(data->expected_autoview_center, view)) {
 	data->pending_autoview = 0;
 	return 0;
@@ -9844,7 +9858,7 @@ ged_obol_drain_streamed_realizations(
 	    continue;
 	for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
 	     job->items) {
-	    if (!item || !item->stream)
+	    if (!item || !item->stream || item->memoryExhausted)
 		continue;
 	    BObolSceneController *itemScene = item->primaryScene ?
 		primaryScene : scene;
@@ -9870,8 +9884,17 @@ ged_obol_drain_streamed_realizations(
 	    (void)ged_obol_apply_stream_coverage_bounds(live,
 		item->stream.get());
 	    const size_t expectedCount = item->stream->getExpectedCount();
-	    if (expectedCount)
-		live->reserveCompactOccurrenceCapacity(expectedCount);
+	    if (expectedCount) {
+		try {
+		    live->reserveCompactOccurrenceCapacity(expectedCount);
+		} catch (const std::bad_alloc &) {
+		    item->memoryExhausted = TRUE;
+		    item->stream->requestCancel();
+		    bu_log("Obol draw realization lacks memory for %zu occurrences at %s\n",
+			expectedCount, live->path.getValue().getString());
+		    continue;
+		}
+	    }
 
 	    /* A provider budget is a per-pump contract, not a one-batch limit.
 	     * Consume successive adaptive batches from this root while there is
@@ -9935,7 +9958,20 @@ ged_obol_drain_streamed_realizations(
 		 * source and producer policy.  Same-tier geometry is not necessarily
 		 * equivalent: view-dependent CSG wire data deliberately remains a
 		 * wire payload while its point density changes. */
-		const int mergedCount = live->mergeCompactOccurrences(batch, TRUE);
+		int mergedCount = 0;
+		try {
+		    mergedCount = live->mergeCompactOccurrences(batch, TRUE);
+		} catch (const std::bad_alloc &) {
+		    /* Retain the useful partial population and exact overview rather
+		     * than permitting an allocation failure to escape the GUI event
+		     * loop.  This source is terminally memory-constrained for the
+		     * current draw; a later draw can retry from its fresh stream. */
+		    item->memoryExhausted = TRUE;
+		    item->stream->requestCancel();
+		    bu_log("Obol draw realization stopped after memory exhaustion for %s\n",
+			live->path.getValue().getString());
+		    break;
+		}
 		/* mergeCompactOccurrences derives a partial registry union.
 		 * Restore the immutable whole-target extent before any camera
 		 * observer can inspect this atomic scene mutation. */
@@ -9991,7 +10027,8 @@ ged_obol_drain_streamed_realizations(
 			targetItems, std::max<size_t>(
 			    16, item->streamBatchQuantum * 2));
 		}
-		const bool streamHasMore = item->stream->size() > 0;
+		const bool streamHasMore = !item->memoryExhausted &&
+		    item->stream->size() > 0;
 		if (has_more && streamHasMore)
 		    *has_more = 1;
 		const int64_t elapsed = bu_gettime() - started;
@@ -10018,7 +10055,8 @@ ged_obol_deferred_streams_pending(
 	return false;
     for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
 	 job->items) {
-	if (item && item->stream && item->stream->size() > 0)
+	if (item && item->stream && !item->memoryExhausted &&
+	    item->stream->size() > 0)
 	    return true;
     }
     return false;

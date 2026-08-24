@@ -138,6 +138,23 @@ source_item_cancel(SourceRealizationItem *item)
 }
 
 static void
+source_job_fail(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job,
+	size_t itemIndex)
+{
+    if (!job)
+	return;
+    job->failed.store(true, std::memory_order_release);
+    job->cancelRequested.store(true, std::memory_order_release);
+    for (const std::unique_ptr<SourceRealizationItem> &item : job->items) {
+	if (item && item->stream)
+	    item->stream->requestCancel();
+    }
+    if (itemIndex < job->items.size() && job->items[itemIndex])
+	job->items[itemIndex]->state.store(BOBOL_SOURCE_REALIZATION_FAILED,
+	    std::memory_order_release);
+}
+
+static void
 source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job,
 	size_t itemIndex)
 {
@@ -224,15 +241,7 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
 	return;
     }
     if (!success) {
-	job->failed.store(true, std::memory_order_release);
-	job->cancelRequested.store(true, std::memory_order_release);
-	for (const std::unique_ptr<SourceRealizationItem> &sibling :
-	     job->items) {
-	    if (sibling && sibling->stream)
-		sibling->stream->requestCancel();
-	}
-	item->state.store(BOBOL_SOURCE_REALIZATION_FAILED,
-	    std::memory_order_release);
+	source_job_fail(job, itemIndex);
 	return;
     }
     item->state.store(BOBOL_SOURCE_REALIZATION_COMPLETE,
@@ -339,7 +348,15 @@ source_realization_worker(BObolSourceRealizationCoordinatorPrivate *service)
 		SIZE_MAX : service->activeBytes + admittedBytes;
 	}
 
-	source_realize_item(work.job, work.itemIndex);
+	try {
+	    source_realize_item(work.job, work.itemIndex);
+	} catch (const std::bad_alloc &) {
+	    source_job_fail(work.job, work.itemIndex);
+	    bu_log("BObol source realization ran out of memory\n");
+	} catch (...) {
+	    source_job_fail(work.job, work.itemIndex);
+	    bu_log("BObol source realization failed with an unexpected exception\n");
+	}
 
 	const size_t remaining = work.job ?
 	    work.job->remaining.fetch_sub(1, std::memory_order_acq_rel) : 0;

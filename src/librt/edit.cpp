@@ -1899,6 +1899,9 @@ rt_edit_prim_desc_validate(struct bu_vls *msg,
 		DESC_FAIL("%s/%s: invalid coordinate space %d",
 		    desc->prim_type, cmd->name,
 		    (int)interaction->coordinate_space);
+	    if (interaction->coordinate_space == RT_EDIT_COORDINATE_INFER)
+		DESC_FAIL("%s/%s: interaction coordinate space must be explicit",
+		    desc->prim_type, cmd->name);
 	    if (interaction->manipulator < RT_EDIT_MANIPULATOR_NONE ||
 		interaction->manipulator > RT_EDIT_MANIPULATOR_CUSTOM)
 		DESC_FAIL("%s/%s: invalid manipulator hint %d",

@@ -33,6 +33,9 @@ brlcad_addexec(rt_edit_test_nmg nmg.cpp "librt;libnmg;libwdb" TEST)
 brlcad_addexec(rt_edit_test_comb comb.cpp "librt;libwdb" TEST)
 
 brlcad_addexec(rt_edit_test_edit_desc edit_desc.cpp "librt" TEST)
+brlcad_add_test(NAME rt_edit_descriptor_contract COMMAND rt_edit_test_edit_desc)
+set_property(TEST rt_edit_descriptor_contract APPEND PROPERTY LABELS
+  edit_contract)
 brlcad_addexec(rt_edit_test_str_get_values edit_str_get_params.cpp "librt" TEST)
 
 set(

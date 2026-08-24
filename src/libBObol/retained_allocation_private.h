@@ -79,6 +79,24 @@ enum BObolRetainedAllocationStatus {
     BOBOL_RETAINED_ALLOCATION_FAILED
 };
 
+/* One coherent occurrence-local quality transition.  This lives in the
+ * private interface so the exhaustive policy oracle can test the production
+ * ordering directly rather than reproduce a look-alike comparator. */
+struct BObolRetainedMarginalUpgrade {
+    size_t candidateIndex = 0;
+    int nextCut = -1;
+    size_t nextCost = 0;
+    size_t addedCost = 0;
+    bool qualityFloorViolation = false;
+    double weightedError = 0.0;
+    double valuePerCost = 0.0;
+};
+
+/** True when a ranks below b in the retained allocator's marginal queue. */
+bool bobol_retained_marginal_lower_priority(
+    const BObolRetainedMarginalUpgrade &a,
+    const BObolRetainedMarginalUpgrade &b);
+
 /**
  * Advance one owner-thread retained-allocation transaction.  A zero slice
  * executes synchronously; a nonzero slice preserves its cursor and returns

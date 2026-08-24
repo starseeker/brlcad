@@ -29,6 +29,26 @@
 #include <unordered_map>
 #include <vector>
 
+bool
+bobol_retained_marginal_lower_priority(
+    const BObolRetainedMarginalUpgrade &a,
+    const BObolRetainedMarginalUpgrade &b)
+{
+    if (a.qualityFloorViolation != b.qualityFloorViolation)
+	return !a.qualityFloorViolation;
+    if (a.qualityFloorViolation &&
+	(a.weightedError < b.weightedError ||
+	 a.weightedError > b.weightedError))
+	return a.weightedError < b.weightedError;
+    if (a.valuePerCost < b.valuePerCost ||
+	a.valuePerCost > b.valuePerCost)
+	return a.valuePerCost < b.valuePerCost;
+    if (a.weightedError < b.weightedError ||
+	a.weightedError > b.weightedError)
+	return a.weightedError < b.weightedError;
+    return a.candidateIndex > b.candidateIndex;
+}
+
 class BObolRetainedAllocationTransaction {
 public:
     explicit BObolRetainedAllocationTransaction(
@@ -420,7 +440,8 @@ public:
 		    case MARGINAL_APPLY:
 			while (!this->upgrades.empty() &&
 			    this->finalCost < this->effectiveBudget) {
-			    const MarginalUpgrade upgrade = this->upgrades.top();
+			    const BObolRetainedMarginalUpgrade upgrade =
+				this->upgrades.top();
 			    this->upgrades.pop();
 			    if (upgrade.addedCost <=
 				    this->effectiveBudget - this->finalCost) {
@@ -615,33 +636,11 @@ private:
 	bool changed = false;
     };
 
-    struct MarginalUpgrade {
-	size_t candidateIndex = 0;
-	int nextCut = -1;
-	size_t nextCost = 0;
-	size_t addedCost = 0;
-	bool qualityFloorViolation = false;
-	double weightedError = 0.0;
-	double valuePerCost = 0.0;
-    };
-
     struct MarginalUpgradeLess {
-	bool operator()(const MarginalUpgrade &a,
-		const MarginalUpgrade &b) const
+	bool operator()(const BObolRetainedMarginalUpgrade &a,
+		const BObolRetainedMarginalUpgrade &b) const
 	{
-	    if (a.qualityFloorViolation != b.qualityFloorViolation)
-		return !a.qualityFloorViolation;
-	    if (a.qualityFloorViolation &&
-		(a.weightedError < b.weightedError ||
-		 a.weightedError > b.weightedError))
-		return a.weightedError < b.weightedError;
-	    if (a.valuePerCost < b.valuePerCost ||
-		a.valuePerCost > b.valuePerCost)
-		return a.valuePerCost < b.valuePerCost;
-	    if (a.weightedError < b.weightedError ||
-		a.weightedError > b.weightedError)
-		return a.weightedError < b.weightedError;
-	    return a.candidateIndex > b.candidateIndex;
+	    return bobol_retained_marginal_lower_priority(a, b);
 	}
     };
 
@@ -950,7 +949,7 @@ private:
 		candidate.drawMode, 1);
 	    const double nextError = candidate.mesh->projectedErrorAtCut(
 		candidate.minimumCut, candidate.projectedPixelDiameter);
-	    MarginalUpgrade upgrade;
+	    BObolRetainedMarginalUpgrade upgrade;
 	    upgrade.candidateIndex = candidateIndex;
 	    upgrade.nextCut = candidate.minimumCut;
 	    upgrade.nextCost = nextCost;
@@ -983,7 +982,7 @@ private:
 	    if (nextCost <= this->finalCosts[candidateIndex] &&
 		!(nextError < currentError))
 		continue;
-	    MarginalUpgrade upgrade;
+	    BObolRetainedMarginalUpgrade upgrade;
 	    upgrade.candidateIndex = candidateIndex;
 	    upgrade.nextCut = nextCut;
 	    upgrade.nextCost = nextCost;
@@ -1078,8 +1077,8 @@ private:
     bool fixedPresentedErrorProof = false;
     double realizedCeiling = 1.0;
     bool marginalAccepted = false;
-    std::priority_queue<MarginalUpgrade,
-	std::vector<MarginalUpgrade>, MarginalUpgradeLess> upgrades;
+    std::priority_queue<BObolRetainedMarginalUpgrade,
+	std::vector<BObolRetainedMarginalUpgrade>, MarginalUpgradeLess> upgrades;
     Phase phase = DISCOVERY;
     int64_t phaseMicroseconds[PHASE_COUNT] = {0};
     int64_t wallStartedMicroseconds = 0;

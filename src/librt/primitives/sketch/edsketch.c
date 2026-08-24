@@ -511,11 +511,11 @@ static const enum rt_edit_param_semantic sketch_plane_semantics[] = {
 };
 
 static const struct rt_edit_interaction_desc sketch_interactions[] = {
-    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_INFER,
+    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_index_semantics, 1 },
     { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_PARAMETRIC_2D,
       RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_position_semantics, 1 },
-    { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_INFER,
+    { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_index_semantics, 1 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_PARAMETRIC_2D,
       RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_delta_semantics, 1 },
@@ -525,9 +525,9 @@ static const struct rt_edit_interaction_desc sketch_interactions[] = {
       RT_EDIT_MANIPULATOR_CUSTOM, sketch_arc_semantics, 5 },
     { RT_EDIT_SELECTION_CONTROL_POINT, RT_EDIT_COORDINATE_PARAMETRIC_2D,
       RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_index_semantics, 1 },
-    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_INFER,
+    { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
-    { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_INFER,
+    { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_INDEXED_SET, NULL, 0 },
     { RT_EDIT_SELECTION_VERTEX, RT_EDIT_COORDINATE_PARAMETRIC_2D,
       RT_EDIT_MANIPULATOR_INDEXED_SET, sketch_delta_list_semantics, 2 },
@@ -541,7 +541,7 @@ static const struct rt_edit_interaction_desc sketch_interactions[] = {
       RT_EDIT_MANIPULATOR_CUSTOM, sketch_weight_semantics, 3 },
     { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_PARAMETRIC_2D,
       RT_EDIT_MANIPULATOR_POINT, sketch_position_semantics, 1 },
-    { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_INFER,
+    { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_CUSTOM, NULL, 0 },
     { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_RADIUS, sketch_distance_semantics, 1 },
@@ -549,7 +549,7 @@ static const struct rt_edit_interaction_desc sketch_interactions[] = {
       RT_EDIT_MANIPULATOR_ROTATION_RING, sketch_tangency_semantics, 2 },
     { RT_EDIT_SELECTION_PRIMITIVE, RT_EDIT_COORDINATE_OBJECT,
       RT_EDIT_MANIPULATOR_PLANE, sketch_plane_semantics, 3 },
-    { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_INFER,
+    { RT_EDIT_SELECTION_SEGMENT, RT_EDIT_COORDINATE_SCALAR,
       RT_EDIT_MANIPULATOR_CUSTOM, NULL, 0 }
 };
 _Static_assert(sizeof(sketch_interactions) /

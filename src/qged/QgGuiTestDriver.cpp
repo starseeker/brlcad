@@ -1346,6 +1346,9 @@ qged_test_wait_subprocess_idle(QgEdApp &app, int timeoutMilliseconds,
     return false;
 }
 
+static void qged_test_present_controller_frame(QgEdApp &app,
+	BObolViewController *controller);
+
 static bool
 qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
     int quietMilliseconds, QString *error)
@@ -1395,6 +1398,19 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
 		return true;
 	} else {
 	    quiet.invalidate();
+	}
+
+	/* A GUI-test wait runs its own nested Qt event loop.  Qt may coalesce an
+	 * update() requested by the controller while that loop is active, leaving
+	 * an otherwise runnable presentation barrier without an expose event to
+	 * consume it.  The test driver already presents explicit scope barriers
+	 * through this same visible canvas path.  Do the same for a pending render
+	 * here: this is an endpoint presentation, not a synthetic controller
+	 * completion, so the normal renderer timing and LoD barrier logic still
+	 * decide whether the request is discharged. */
+	for (BObolViewController *controller : controllers) {
+	    if (controller && controller->isRenderRequested())
+		qged_test_present_controller_frame(app, controller);
 	}
 
 	/* Let queued paints, worker wakeups, and the progressive frame pump

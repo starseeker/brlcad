@@ -77,7 +77,10 @@ The following are substrate, not remaining design alternatives:
 - semantic edit invalidation, rename following, alternate-occurrence conflict,
   multi-context isolation, and synchronous plugin lifetime barriers; and
 - command/widget/manipulator replay coverage for the migrated adapters under
-  System GL and OSMesa in single- and four-view layouts.
+  System GL and OSMesa in single- and four-view layouts; and
+- explicit coordinate metadata for every declared ARB, BoT, and sketch
+  interaction.  Descriptor validation rejects inferred coordinate space so a
+  retained manipulator cannot silently acquire ambiguous drag semantics.
 
 These protections must survive subsequent cleanup.  In particular, do not
 restore per-plugin primitive ownership, command-string submission from Qt,
@@ -86,25 +89,46 @@ previews.
 
 The current focused CTest gate exercises qged polygon and primitive-edit UI
 replay, qtcad preview, selection, picking, measurement, faceplate, and
-multi-view synchronization.  That is substrate evidence, not full interactive
-qualification: a current System GL host, fractional-DPR resize, real mouse
-editing, and the broader operation/rejection matrix below still remain.
+multi-view synchronization.  Primitive replay projects live retained handles;
+ELL, ARB, and sketch use the endpoint input path, while the BoT vertex path
+uses ordinary Qt mouse press/move/release events.  That is substrate evidence,
+not full interactive qualification: a current System GL host, fractional-DPR
+resize, real mouse coverage for every retained manipulator family, and the
+broader operation/rejection matrix below still remain.
+
+The current focused gate passed 20/20 tests on 2026-08-23, including the
+single- and quad-view polygon/sketch and primitive-edit replays.  It proves
+that the covered command/widget/retained-scene paths still agree; it does not
+replace the renderer, DPI, operation-classification, or real-user interaction
+qualification listed below.
 
 ## Remaining primitive contract work
 
-### Operation classification
+### Operation classification and behavior audit
 
-Every installed librt edit operation must resolve to exactly one class:
+The descriptor-classification baseline is complete.  On 2026-08-23,
+`rt_edit_descriptor_contract` iterated all 34 registered descriptors and
+validated 109 generated, 24 action, 89 custom, and 5 explicitly unsupported
+commands.  It requires canonical names, generated-operation readback, and an
+explicit coordinate space whenever an interaction descriptor exists.  This is
+the owning-librt gate; qged must not duplicate it with primitive-name tables.
+
+Every installed librt edit operation resolves to exactly one class:
 
 - **generated**: declarative parameters and complete current-value readback;
 - **action**: typed input which intentionally has no persistent current value;
 - **custom**: a specialized adapter is required but state remains observable;
 - **unsupported**: intentionally unavailable with a diagnostic.
 
-Remove all remaining `INFER` interaction metadata before an operation may
-drive a retained manipulator.  Populate selection domain, coordinate space,
-parameter semantic, dynamic legal bounds, and manipulator hints in librt.  Do
-not create primitive-name or topology policy tables in qged.
+No operation with an interaction descriptor may retain `INFER` coordinate
+metadata.  Continue to populate selection domain, coordinate space, parameter
+semantic, dynamic legal bounds, and manipulator hints in librt as new
+operations are exposed.  Do not create primitive-name or topology policy
+tables in qged.
+
+The remaining work is behavioral: verify that every advertised handler's
+descriptor still matches its runtime legality, readback, and retained control
+path, particularly for transitional primitive handlers.
 
 ### Rejection and readback audit
 

@@ -1676,7 +1676,7 @@ main(int argc, char *argv[])
     bobol_mesh_lod_destroy(lod);
     lod = NULL;
     db_close(dbip);
-    dbip = db_open(dbpath, DB_OPEN_READWRITE);
+    dbip = db_open(dbpath, DB_OPEN_READONLY);
     if (!dbip || db_dirbuild(dbip) < 0) {
 	printf("FAIL: mesh lod reopen\n");
 	ret = 1;
@@ -1773,6 +1773,198 @@ main(int argc, char *argv[])
 	    ret = 1;
 	}
 	bobol_mesh_lod_memshrink(NULL);
+    }
+
+    {
+	/* Reopen makes this fixture memory-backed, matching the detached
+	 * read-only database used by compact drawing.  Clear all payloads first:
+	 * this verifies cold hierarchy generation from serialized V5 records, not
+	 * merely recovery of an existing content-addressed payload. */
+	bobol_mesh_lod_cache_clear_database(dbip);
+	struct BObolMeshLod *serialized =
+	    bobol_mesh_lod_cache_refresh_serialized_open(
+		dbip, objname, &cacheStatus, NULL, NULL, NULL);
+	if (!serialized || cacheStatus.cache_key != sharedCacheKey ||
+	    !cacheStatus.has_cache_key ||
+	    !cacheStatus.has_cached_payload ||
+	    check_mesh_lod_payload("serialized authored BoT refresh", serialized,
+		static_cast<size_t>(faceCount),
+		static_cast<size_t>(vertexCount), 0)) {
+	    printf("FAIL: serialized authored BoT cache refresh\n");
+	    if (serialized)
+		bobol_mesh_lod_destroy(serialized);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(serialized);
+
+	/* A completed spatial hierarchy must be independently readable after its
+	 * generating handle is gone.  This covers the durable descriptor/record
+	 * contract separately from the constrained live fallback below. */
+	bobol_mesh_lod_cache_clear_database(dbip);
+	bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "1", 1);
+	bu_setenv("BOBOL_LOD_SPATIAL_FORCE_LIVE", "", 1);
+	mesh_lod_preview_test_data spatialPreview;
+	serialized = bobol_mesh_lod_cache_refresh_serialized_open(
+	    dbip, objname, &cacheStatus, NULL,
+	    mesh_lod_preview_test_callback, &spatialPreview);
+	struct BObolMeshLodHierarchyInfo durableSpatialHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	if (!serialized || !cacheStatus.has_cached_payload ||
+	    cacheStatus.cache_key == sharedCacheKey ||
+	    !bobol_mesh_lod_hierarchy_info_get(serialized, &durableSpatialHierarchy) ||
+	    durableSpatialHierarchy.cluster_count != 0 ||
+	    !durableSpatialHierarchy.chunk_count ||
+	    !durableSpatialHierarchy.chunks ||
+	    bobol_mesh_lod_source_limited(serialized) ||
+	    spatialPreview.calls != 1 || !spatialPreview.valid) {
+	    printf("FAIL: serialized durable spatial leaf hierarchy\n");
+	    if (serialized)
+		bobol_mesh_lod_destroy(serialized);
+	    bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+	    ret = 1;
+	    goto cleanup;
+	}
+	std::vector<uint32_t> durableSpatialChunks(
+	    durableSpatialHierarchy.chunk_count);
+	for (uint32_t chunk = 0;
+	     chunk < durableSpatialHierarchy.chunk_count; ++chunk)
+	    durableSpatialChunks[chunk] = chunk;
+	mesh_lod_chunk_test_data durableSpatialData;
+	durableSpatialData.hierarchy = &durableSpatialHierarchy;
+	if (!bobol_mesh_lod_read_chunk_prefixes(serialized,
+		durableSpatialChunks.data(), durableSpatialChunks.size(),
+		durableSpatialHierarchy.max_cut,
+		mesh_lod_chunk_test_callback, &durableSpatialData) ||
+	    durableSpatialData.seen != durableSpatialChunks ||
+	    durableSpatialData.faces != static_cast<uint64_t>(faceCount)) {
+	    printf("FAIL: serialized durable spatial leaf payload\n");
+	    bobol_mesh_lod_destroy(serialized);
+	    bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(serialized);
+	serialized = bobol_mesh_lod_get(dbip, objname);
+	if (!serialized ||
+	    !bobol_mesh_lod_hierarchy_info_get(serialized, &durableSpatialHierarchy) ||
+	    durableSpatialHierarchy.cluster_count != 0 ||
+	    durableSpatialHierarchy.chunk_count != durableSpatialChunks.size()) {
+	    printf("FAIL: durable spatial leaf hierarchy was not reopenable\n");
+	    if (serialized)
+		bobol_mesh_lod_destroy(serialized);
+	    bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+	    ret = 1;
+	    goto cleanup;
+	}
+	durableSpatialData = {};
+	durableSpatialData.hierarchy = &durableSpatialHierarchy;
+	if (!bobol_mesh_lod_read_chunk_prefixes(serialized,
+		durableSpatialChunks.data(), durableSpatialChunks.size(),
+		durableSpatialHierarchy.max_cut,
+		mesh_lod_chunk_test_callback, &durableSpatialData) ||
+	    durableSpatialData.seen != durableSpatialChunks ||
+	    durableSpatialData.faces != static_cast<uint64_t>(faceCount)) {
+	    printf("FAIL: durable spatial leaf payload was not reopenable\n");
+	    bobol_mesh_lod_destroy(serialized);
+	    bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(serialized);
+
+	/* The bounded producer owns only one spatial page at a time.  Force a
+	 * write failure over this ordinary serialized fixture to prove that an
+	 * incomplete hierarchy remains process-local and undiscoverable. */
+	bobol_mesh_lod_cache_clear_database(dbip);
+	bu_setenv("BOBOL_LOD_SPATIAL_FORCE_LIVE", "1", 1);
+	serialized = bobol_mesh_lod_cache_refresh_serialized_open(
+	    dbip, objname, &cacheStatus, NULL, NULL, NULL);
+	struct BObolMeshLodHierarchyInfo spatialHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	if (!serialized || !cacheStatus.has_cached_payload ||
+	    !bobol_mesh_lod_hierarchy_info_get(serialized, &spatialHierarchy) ||
+	    spatialHierarchy.cluster_count != 0 || !spatialHierarchy.chunk_count ||
+	    !spatialHierarchy.chunks ||
+	    !bobol_mesh_lod_source_limited(serialized)) {
+	    printf("FAIL: serialized constrained spatial leaf hierarchy\n");
+	    if (serialized)
+		bobol_mesh_lod_destroy(serialized);
+	    bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+	    bu_setenv("BOBOL_LOD_SPATIAL_FORCE_LIVE", "", 1);
+	    ret = 1;
+	    goto cleanup;
+	}
+	std::vector<uint32_t> spatialChunks(spatialHierarchy.chunk_count);
+	for (uint32_t chunk = 0; chunk < spatialHierarchy.chunk_count; ++chunk)
+	    spatialChunks[chunk] = chunk;
+	mesh_lod_chunk_test_data spatialData;
+	spatialData.hierarchy = &spatialHierarchy;
+	if (!bobol_mesh_lod_read_chunk_prefixes(serialized, spatialChunks.data(),
+		spatialChunks.size(), spatialHierarchy.max_cut,
+		mesh_lod_chunk_test_callback, &spatialData) ||
+	    spatialData.seen != spatialChunks ||
+	    !spatialData.faces ||
+	    spatialData.faces > static_cast<uint64_t>(faceCount)) {
+	    printf("FAIL: serialized constrained spatial leaf payload\n");
+	    bobol_mesh_lod_destroy(serialized);
+	    bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+	    bu_setenv("BOBOL_LOD_SPATIAL_FORCE_LIVE", "", 1);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(serialized);
+	struct BObolMeshLod *incomplete = bobol_mesh_lod_get(dbip, objname);
+	if (incomplete) {
+	    printf("FAIL: incomplete spatial leaf hierarchy was discoverable\n");
+	    bobol_mesh_lod_destroy(incomplete);
+	    bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+	    bu_setenv("BOBOL_LOD_SPATIAL_FORCE_LIVE", "", 1);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+	bu_setenv("BOBOL_LOD_SPATIAL_FORCE_LIVE", "", 1);
+
+	/* The serialized reader must apply the same repeated-index face
+	 * sanitization as the native import without first walking the complete
+	 * source solely to validate it. */
+	serialized = bobol_mesh_lod_cache_refresh_serialized_open(
+	    dbip, degenerateBotObjname, &cacheStatus, NULL, NULL, NULL);
+	struct BObolMeshLodHierarchyInfo serializedDegenerateHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	struct BObolMeshLodData serializedDegenerateData = {};
+	if (!serialized ||
+	    !bobol_mesh_lod_hierarchy_info_get(
+		serialized, &serializedDegenerateHierarchy) ||
+	    bobol_mesh_lod_load_resident_cut(
+		serialized, serializedDegenerateHierarchy.max_cut, 0) !=
+		serializedDegenerateHierarchy.max_cut ||
+	    !bobol_mesh_lod_data_get(serialized, &serializedDegenerateData) ||
+	    serializedDegenerateData.face_count != 2) {
+	    printf("FAIL: serialized repeated-index face sanitization\n");
+	    if (serialized)
+		bobol_mesh_lod_destroy(serialized);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(serialized);
+
+	/* A serialized CW solid must retain the same exterior-CCW display
+	 * contract as the ordinary import path. */
+	serialized = bobol_mesh_lod_cache_refresh_serialized_open(
+	    dbip, solidCwObjname, &cacheStatus, NULL, NULL, NULL);
+	struct BObolMeshLodInfo serializedInfo = BOBOL_MESH_LOD_INFO_INIT;
+	if (!serialized || !bobol_mesh_lod_info_get(serialized, &serializedInfo) ||
+	    !serializedInfo.shaded_cull_backfaces ||
+	    serializedInfo.face_count != 4) {
+	    printf("FAIL: serialized authored BoT winding/culling\n");
+	    if (serialized)
+		bobol_mesh_lod_destroy(serialized);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(serialized);
     }
 
 cleanup:

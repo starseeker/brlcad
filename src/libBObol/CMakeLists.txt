@@ -48,6 +48,7 @@ set(
   rt_render.cpp
   scene_controller.cpp
   scene_group.cpp
+  serialized_bot_source.cpp
   snap_action.cpp
   source_realization.cpp
   view_attachment.cpp
@@ -76,6 +77,7 @@ set_source_files_properties(
   database_source.cpp
   database_source_summary.cpp
   database_source_types.cpp
+  serialized_bot_source.cpp
   view_controller.cpp
   view_controller_lighting.cpp
   view_controller_progressive.cpp
