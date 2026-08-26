@@ -169,13 +169,24 @@ camera_moved(SoCamera *camera, const SbVec3f &before)
 	fabsf(before[2] - after[2]) >= 0.001f;
 }
 
+static float
+camera_view_extent(SoCamera *camera)
+{
+    if (!camera || !camera->isOfType(
+	SoOrthographicCamera::getClassTypeId()))
+	return 0.0f;
+    return static_cast<SoOrthographicCamera *>(camera)->height.getValue();
+}
+
 static int
 camera_state_changed(SoCamera *camera, const SbVec3f &beforePosition,
-	float beforeFocalDistance)
+	float beforeFocalDistance, float beforeViewExtent)
 {
     if (camera_moved(camera, beforePosition))
 	return 1;
-    return fabsf(camera->focalDistance.getValue() - beforeFocalDistance) >= 0.001f;
+    if (fabsf(camera->focalDistance.getValue() - beforeFocalDistance) >= 0.001f)
+	return 1;
+    return fabsf(camera_view_extent(camera) - beforeViewExtent) >= 0.001f;
 }
 
 struct RenderFollowupRequest {
@@ -607,6 +618,11 @@ main(int argc, char **argv)
     if (!deadlineLodMesh ||
 	!controller->isLodPresentationCapacityRelevant())
 	FAIL("QgSW deadline fixture should expose managed LoD capacity");
+    /* A deadline retry is meaningful only for an active policy transition.
+     * A quiet irreducible frame deliberately has no cheaper successor and is
+     * retained rather than aborted forever. */
+    controller->setLodAutoSubmit(TRUE);
+    controller->beginLodInteraction();
     const uint64_t interruptedBefore =
 	controller->getInterruptedPresentationFrameCount();
     unsigned int deadlineDelayMilliseconds = 20u;
@@ -665,6 +681,7 @@ main(int argc, char **argv)
     swWidget->resize(oldCanvasSize);
     sceneRoot->removeChild(deadlineNode);
     sceneRoot->removeChild(sceneRoot->getNumChildren() - 1);
+    controller->endLodInteraction();
     controller->setPresentationFrameDeadlines(
 	40000000ULL, 100000000ULL);
     controller->clearRenderRequest();
@@ -798,16 +815,19 @@ main(int argc, char **argv)
 
     SbVec3f beforeWheel = swCamera->position.getValue();
     float beforeWheelFocal = swCamera->focalDistance.getValue();
+	float beforeWheelExtent = camera_view_extent(swCamera);
     swController->clearRenderRequest();
     QWheelEvent swWheel = wheel_event(80, 60, 120);
     swCanvas.runWheelForTest(&swWheel);
-    if (!camera_state_changed(swCamera, beforeWheel, beforeWheelFocal))
+	if (!camera_state_changed(swCamera, beforeWheel, beforeWheelFocal,
+	    beforeWheelExtent))
 	FAIL("QgSW wheel navigation should update the Obol camera");
     if (!swController->isRenderRequested())
 	FAIL("QgSW wheel navigation should request an Obol render");
 
     SbVec3f beforeDrag = swCamera->position.getValue();
     float beforeDragFocal = swCamera->focalDistance.getValue();
+	float beforeDragExtent = camera_view_extent(swCamera);
     swController->clearRenderRequest();
     QMouseEvent swPress = mouse_button_event(QEvent::MouseButtonPress, 80, 60,
 	Qt::LeftButton, Qt::LeftButton);
@@ -822,7 +842,8 @@ main(int argc, char **argv)
 	swController->getLodTargetPixelError() < 1.0f)
 	FAIL("QgSW first motion should establish the measured LoD gesture");
     swCanvas.runMouseMoveForTest(&swMoveDrag);
-    if (!camera_state_changed(swCamera, beforeDrag, beforeDragFocal))
+	if (!camera_state_changed(swCamera, beforeDrag, beforeDragFocal,
+	    beforeDragExtent))
 	FAIL("QgSW drag navigation should update the Obol camera");
     if (!swController->isRenderRequested())
 	FAIL("QgSW drag navigation should request an Obol render");
@@ -947,16 +968,19 @@ main(int argc, char **argv)
 
 	    SbVec3f beforeGLWheel = paintCamera->position.getValue();
 	    float beforeGLWheelFocal = paintCamera->focalDistance.getValue();
+	    float beforeGLWheelExtent = camera_view_extent(paintCamera);
 	    paintController->clearRenderRequest();
 	    QWheelEvent glWheel = wheel_event(64, 48, 120);
 	    glCanvas.runWheelForTest(&glWheel);
-	    if (!camera_state_changed(paintCamera, beforeGLWheel, beforeGLWheelFocal))
+	    if (!camera_state_changed(paintCamera, beforeGLWheel,
+		beforeGLWheelFocal, beforeGLWheelExtent))
 		FAIL("QgGL wheel navigation should update the Obol camera");
 	    if (!paintController->isRenderRequested())
 		FAIL("QgGL wheel navigation should request an Obol render");
 
 	    SbVec3f beforeGLDrag = paintCamera->position.getValue();
 	    float beforeGLDragFocal = paintCamera->focalDistance.getValue();
+	    float beforeGLDragExtent = camera_view_extent(paintCamera);
 	    paintController->clearRenderRequest();
 	    QMouseEvent glPress = mouse_button_event(QEvent::MouseButtonPress,
 		64, 48, Qt::LeftButton, Qt::LeftButton);
@@ -971,7 +995,8 @@ main(int argc, char **argv)
 		paintController->getLodTargetPixelError() < 1.0f)
 		FAIL("QgGL first motion should establish the measured LoD gesture");
 	    glCanvas.runMouseMoveForTest(&glMoveDrag);
-	    if (!camera_state_changed(paintCamera, beforeGLDrag, beforeGLDragFocal))
+	    if (!camera_state_changed(paintCamera, beforeGLDrag,
+		beforeGLDragFocal, beforeGLDragExtent))
 		FAIL("QgGL drag navigation should update the Obol camera");
 	    if (!paintController->isRenderRequested())
 		FAIL("QgGL drag navigation should request an Obol render");

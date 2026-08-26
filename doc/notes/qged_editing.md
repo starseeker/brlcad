@@ -1,6 +1,6 @@
 # QGED object and primitive editing
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-24
 
 This document defines the remaining production work for qged object, primitive,
 and sketch editing.  It is not a compatibility plan for the early primitive-
@@ -96,11 +96,19 @@ not full interactive qualification: a current System GL host, fractional-DPR
 resize, real mouse coverage for every retained manipulator family, and the
 broader operation/rejection matrix below still remain.
 
-The current focused gate passed 20/20 tests on 2026-08-23, including the
-single- and quad-view polygon/sketch and primitive-edit replays.  It proves
-that the covered command/widget/retained-scene paths still agree; it does not
-replace the renderer, DPI, operation-classification, or real-user interaction
+The focused gate was rechecked on 2026-08-24: 22/22 tests passed, including
+the single- and quad-view polygon/sketch and primitive-edit replays, direct
+qged synthesized-input paths, selection, faceplate, measurement, framebuffer
+controls, and MGED edit restoration.  It proves that the covered
+command/widget/retained-scene paths still agree; it does not replace the
+renderer, DPI, operation-classification, or real-user interaction
 qualification listed below.
+
+The immediately relevant focused subset was rerun after the composed LoD
+policy model was added: all 35 `edit_runtime` suites and the 10 targeted qged,
+Obol, and MGED edit/selection/polygon/measurement regressions passed in 19.05
+seconds total.  This is regression evidence only; it does not retire the
+real-mouse, fractional-DPR, or lifecycle qualification work below.
 
 ## Remaining primitive contract work
 
@@ -129,6 +137,18 @@ tables in qged.
 The remaining work is behavioral: verify that every advertised handler's
 descriptor still matches its runtime legality, readback, and retained control
 path, particularly for transitional primitive handlers.
+
+The existing per-primitive runtime suites are now registered as the
+`edit_runtime` CTest label instead of being build-only executables.  The gate
+contains ARBN, datum, annotation, revolve, torus, ellipsoid, TGC family,
+EPA/EHY/ETO/HYP/RPC/RHC/particle/REC/superell/cline, extrude, metaball, HRT,
+ARS, pipe, DSP, VOL, EBM, halfspace, sphere, ARB8, BoT, sketch, B-spline,
+BRep, NMG, combination, and generic string/current-value coverage.  REC is
+also included in the generated command-ID header, so the handler, test, and
+clients share its named operations.  On 2026-08-24 the gate passed 35/35 in
+0.35 seconds.  This makes the established valid-operation and selected
+error-path tests a CI contract; it does not claim the exhaustive invalid-input
+matrix below is complete.
 
 ### Rejection and readback audit
 
@@ -216,6 +236,11 @@ editing modes.
 ## MGED and command-line qualification
 
 - Put `sed`, `oed`, the `edit` command, and gsh on the common session semantics.
+- **Rechecked 2026-08-24:** the current MGED regression subset passes for
+  `sed`, `oed`, primitive edit, rejection, knob, rotate, scale, and translate
+  edit paths (8/8).  Together with the Obol edit-restore row this proves the
+  presently covered command surface remains intact; it does not replace the
+  required nested-path, lifecycle, mouse, or gsh qualification below.
 - Prove exact nested-path and subtree promotion/restoration over compact CAD
   sources without expanding the root or rebuilding LoD.
 - Exercise mouse/knob motion, labels, axes and ticks, all applicable primitive

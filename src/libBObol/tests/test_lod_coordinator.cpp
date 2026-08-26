@@ -8,12 +8,15 @@
 #include "common.h"
 
 #include "lod_coordinator_private.h"
+#include "lod_control_private.h"
+#include "presentation_preparation_private.h"
 #include "bu/app.h"
 
 #include <cstdio>
 #include <array>
 #include <cstdint>
 #include <type_traits>
+#include <utility>
 
 static_assert(sizeof(BObolLodViewEpoch) == sizeof(uint64_t),
     "typed LoD epochs must remain zero-overhead");
@@ -27,18 +30,33 @@ static_assert(!std::is_same<BObolLodViewEpoch, BObolLodPolicyEpoch>::value,
     "view and policy epochs must be distinct types");
 static_assert(!std::is_convertible<BObolLodViewEpoch, uint64_t>::value,
     "epoch serialization must be explicit");
-static_assert(std::is_trivially_copyable<BObolLodResourcePolicy>::value,
+static_assert(std::is_trivially_copyable<BObolLodResourceEvidence>::value,
     "resource policy must remain an allocation-free value");
-static_assert(std::is_trivially_copyable<BObolLodHeadroomPolicy>::value,
+static_assert(std::is_trivially_copyable<BObolLodHeadroomEvidence>::value,
     "headroom policy must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<BObolLodCoveragePolicy>::value,
     "coverage policy must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<BObolLodConvergencePolicy>::value,
     "convergence policy must remain an allocation-free value");
-static_assert(std::is_trivially_copyable<BObolLodBudgetPolicy>::value,
-    "budget policy must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<BObolLodCapacityEvidence>::value,
+    "capacity evidence must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<BObolLodAdmissionCursor>::value,
+    "admission cursors must remain allocation-free values");
+static_assert(std::is_trivially_copyable<
+    BObolLodAdmissionRevisionStamp>::value,
+    "admission revision stamps must remain allocation-free values");
+using BObolLodCapacityView = decltype(
+    std::declval<BObolLodAdmissionEvidence &>().capacity());
+static_assert(std::is_const<
+    typename std::remove_reference<BObolLodCapacityView>::type>::value,
+    "controllers must receive only const admission-evidence views");
 static_assert(std::is_trivially_copyable<BObolLodViewDemandPolicy>::value,
     "view-demand policy must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<BObolLodInteractionSession>::value,
+    "interaction sessions must remain allocation-free values");
+static_assert(std::is_trivially_copyable<
+    BObolLodInteractionStartCertificate>::value,
+    "interaction start certificates must remain allocation-free values");
 static_assert(std::is_trivially_copyable<BObolLodPresentationPolicy>::value,
     "presentation policy must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<
@@ -48,61 +66,205 @@ static_assert(std::is_trivially_copyable<BObolLodQualityPolicy>::value,
     "quality policy must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<BObolLodDeliveryPolicy>::value,
     "delivery policy must remain an allocation-free value");
-static_assert(std::is_trivially_copyable<BObolLodPublicationPolicy>::value,
-    "publication policy must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<
-    BObolLodInventoryDeltaPolicy>::value,
-    "inventory-delta policy must remain an allocation-free value");
-static_assert(std::is_trivially_copyable<BObolLodResidentGrowthPolicy>::value,
-    "resident-growth policy must remain an allocation-free value");
+    BObolLodPresentationTransaction>::value,
+    "presentation transactions must remain allocation-free values");
+static_assert(!std::is_copy_constructible<BObolLodAvailabilityLedger>::value,
+    "availability ledger must have one controller owner");
 static_assert(std::is_trivially_copyable<BObolLodCompactionPolicy>::value,
     "compaction policy must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<BObolLodPointQualityPhase>::value,
+    "point-quality phase ownership must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<
-    BObolLodFrameObligation>::value,
-    "frame obligations must remain allocation-free values");
+    BObolLodControlRefinement::Inputs>::value,
+    "control refinement inputs must remain allocation-free values");
+static_assert(std::is_trivially_copyable<
+    BObolLodControlRefinement::Snapshot>::value,
+    "control refinement snapshots must remain allocation-free values");
+static_assert(std::is_trivially_copyable<BObolLodSubmissionPass>::value,
+    "submission-pass ownership must remain an allocation-free value");
 
-using LodMachine = BObolLodStateMachine;
-
-static LodMachine::Inputs
-inputs_for_phase(LodMachine::Phase phase)
+static int
+test_submission_pass(void)
 {
-    LodMachine::Inputs inputs;
-    switch (phase) {
-	case LodMachine::Phase::FALLBACK:
-	    inputs.coverageActive = true;
-	    break;
-	case LodMachine::Phase::COVERAGE:
-	    inputs.coverageActive = true;
-	    inputs.generationActive = true;
-	    break;
-	case LodMachine::Phase::INTERACTIVE:
-	    inputs.interactive = true;
-	    inputs.gestureActive = true;
-	    break;
-	case LodMachine::Phase::SETTLING:
-	    inputs.coverageComplete = true;
-	    inputs.generationActive = true;
-	    inputs.settlingWork = true;
-	    break;
-	case LodMachine::Phase::STABLE:
-	    inputs.coverageComplete = true;
-	    inputs.generationActive = true;
-	    break;
-	case LodMachine::Phase::COMPACTING:
-	    inputs.coverageComplete = true;
-	    inputs.compacting = true;
-	    break;
-	case LodMachine::Phase::COUNT:
-	    break;
+    using Pass = BObolLodSubmissionPass;
+    Pass pass;
+    if (pass.state() != Pass::State::IDLE || pass.active() ||
+	pass.rescanPending()) {
+	std::fprintf(stderr, "FAIL: initial submission-pass state\n");
+	return 1;
     }
-    return inputs;
+
+    pass.activate();
+    pass.requestRescan();
+    if (pass.state() != Pass::State::ACTIVE_RESCAN || !pass.active() ||
+	!pass.rescanPending()) {
+	std::fprintf(stderr, "FAIL: active submission rescan\n");
+	return 1;
+    }
+
+    pass.deactivate();
+    if (pass.state() != Pass::State::IDLE_RESCAN || pass.active() ||
+	!pass.rescanPending()) {
+	std::fprintf(stderr, "FAIL: paused submission rescan\n");
+	return 1;
+    }
+
+    pass.activate();
+    pass.clearRescan();
+    if (pass.state() != Pass::State::ACTIVE || !pass.active() ||
+	pass.rescanPending()) {
+	std::fprintf(stderr, "FAIL: consumed submission rescan\n");
+	return 1;
+    }
+
+    pass.setRescanPending(true);
+    if (pass.state() != Pass::State::ACTIVE_RESCAN || !pass.active() ||
+	!pass.rescanPending()) {
+	std::fprintf(stderr, "FAIL: set submission rescan\n");
+	return 1;
+    }
+    pass.setRescanPending(false);
+    if (pass.state() != Pass::State::ACTIVE || !pass.active() ||
+	pass.rescanPending()) {
+	std::fprintf(stderr, "FAIL: clear submission rescan through setter\n");
+	return 1;
+    }
+
+    pass.setActive(false);
+    pass.requestRescan();
+    pass.reset();
+    if (pass.state() != Pass::State::IDLE || pass.active() ||
+	pass.rescanPending()) {
+	std::fprintf(stderr, "FAIL: reset submission pass\n");
+	return 1;
+    }
+    return 0;
 }
 
-static LodMachine::Transition
-dispatch_phase(LodMachine &machine, LodMachine::Event event,
-    LodMachine::Phase phase, const LodMachine::Witness &witness)
+static int
+test_control_refinement(void)
 {
-    return machine.dispatch(event, inputs_for_phase(phase), witness);
+    using Refinement = BObolLodControlRefinement;
+
+    Refinement::Inputs inputs;
+    Refinement::Snapshot snapshot = Refinement::evaluate(inputs);
+    if (snapshot.obligations != 0 ||
+	snapshot.owner != Refinement::Owner::NONE ||
+	snapshot.foregroundPending() || snapshot.controlPending() ||
+	Refinement::validate(snapshot, true, true, false) != 0) {
+	std::fprintf(stderr, "FAIL: empty control refinement\n");
+	return 1;
+    }
+
+    inputs.compaction = true;
+    inputs.cacheWrite = true;
+    snapshot = Refinement::evaluate(inputs);
+    if (snapshot.foregroundPending() ||
+	snapshot.owner != Refinement::Owner::COMPACTION ||
+	Refinement::validate(snapshot, true, true, false) != 0) {
+	std::fprintf(stderr, "FAIL: background control refinement\n");
+	return 1;
+    }
+
+    inputs = Refinement::Inputs();
+    inputs.result = true;
+    inputs.submission = true;
+    inputs.presentationReplay = true;
+    snapshot = Refinement::evaluate(inputs);
+    if (snapshot.owner != Refinement::Owner::PRESENTATION ||
+	!snapshot.calibrationPending() || !snapshot.controlPending() ||
+	!snapshot.foregroundPending()) {
+	std::fprintf(stderr, "FAIL: interrupted presentation ownership\n");
+	return 1;
+    }
+    const uint32_t terminalViolation =
+	Refinement::validate(snapshot, true, true, false);
+    if (!(terminalViolation & Refinement::bit(
+	    Refinement::Violation::TERMINAL_WITH_WORK))) {
+	std::fprintf(stderr, "FAIL: terminal work refinement violation\n");
+	return 1;
+    }
+
+    inputs.presentationReplay = false;
+    snapshot = Refinement::evaluate(inputs);
+    if (snapshot.owner != Refinement::Owner::PUBLICATION) {
+	std::fprintf(stderr, "FAIL: publication ownership precedence\n");
+	return 1;
+    }
+
+    snapshot = Refinement::Snapshot();
+    const uint32_t readinessViolation =
+	Refinement::validate(snapshot, false, true, true);
+    if (!(readinessViolation & Refinement::bit(
+	    Refinement::Violation::INVALID_READINESS))) {
+	std::fprintf(stderr, "FAIL: invalid readiness refinement violation\n");
+	return 1;
+    }
+
+    bool Refinement::Inputs::*const fields[] = {
+	&Refinement::Inputs::interaction,
+	&Refinement::Inputs::inventory,
+	&Refinement::Inputs::availability,
+	&Refinement::Inputs::result,
+	&Refinement::Inputs::publication,
+	&Refinement::Inputs::submission,
+	&Refinement::Inputs::submissionRescan,
+	&Refinement::Inputs::retainedAllocation,
+	&Refinement::Inputs::residentGrowth,
+	&Refinement::Inputs::pointTriangleRecovery,
+	&Refinement::Inputs::presentationReplay,
+	&Refinement::Inputs::presentationBarrier,
+	&Refinement::Inputs::capacityFrame,
+	&Refinement::Inputs::pointAdmissionFrame,
+	&Refinement::Inputs::pointCalibration,
+	&Refinement::Inputs::capacityCalibration,
+	&Refinement::Inputs::headroomProbe,
+	&Refinement::Inputs::handoff,
+	&Refinement::Inputs::compaction,
+	&Refinement::Inputs::cacheWrite
+    };
+    constexpr size_t fieldCount = sizeof(fields) / sizeof(fields[0]);
+    constexpr uint64_t combinationCount = uint64_t(1) << fieldCount;
+    const uint32_t backgroundMask =
+	Refinement::bit(Refinement::Work::COMPACTION) |
+	Refinement::bit(Refinement::Work::CACHE_WRITE);
+    for (uint64_t combination = 0;
+	combination < combinationCount; ++combination) {
+	inputs = Refinement::Inputs();
+	for (size_t field = 0; field < fieldCount; ++field)
+	    inputs.*fields[field] = (combination & (uint64_t(1) << field)) != 0;
+	snapshot = Refinement::evaluate(inputs);
+	const bool foreground = (snapshot.obligations & ~backgroundMask) != 0;
+	if ((snapshot.obligations == 0) !=
+		(snapshot.owner == Refinement::Owner::NONE) ||
+	    (snapshot.owner != Refinement::Owner::NONE &&
+	     !(snapshot.obligations &
+	       Refinement::ownerObligation(snapshot.owner))) ||
+	    snapshot.foregroundPending() != foreground ||
+	    Refinement::validate(snapshot, false, false, false) != 0) {
+	    std::fprintf(stderr,
+		"FAIL: exhaustive control refinement combination %llu\n",
+		static_cast<unsigned long long>(combination));
+	    return 1;
+	}
+    }
+
+    snapshot = Refinement::Snapshot();
+    snapshot.obligations = Refinement::bit(Refinement::Work::PLANNING);
+    const uint32_t ownerlessViolation =
+	Refinement::validate(snapshot, false, false, false);
+    snapshot.owner = Refinement::Owner::COMPACTION;
+    const uint32_t wrongOwnerViolation =
+	Refinement::validate(snapshot, false, false, false);
+    if (!(ownerlessViolation & Refinement::bit(
+	    Refinement::Violation::OWNERLESS_WORK)) ||
+	!(wrongOwnerViolation & Refinement::bit(
+	    Refinement::Violation::INVALID_OWNER))) {
+	std::fprintf(stderr, "FAIL: invalid control-owner detection\n");
+	return 1;
+    }
+    return 0;
 }
 
 static int
@@ -128,103 +290,67 @@ test_epochs(void)
 }
 
 static int
-test_phase_witnesses(void)
+test_interaction_session(void)
 {
-    LodMachine tracker;
-    using Phase = LodMachine::Phase;
-    using Witness = LodMachine::Witness;
+    using Session = BObolLodInteractionSession;
+    Session session;
+    constexpr int64_t debounce = 150;
 
-    if (tracker.currentPhase() != Phase::FALLBACK ||
-	tracker.phaseTransitionSerial() != 0) {
-	std::fprintf(stderr, "FAIL: initial phase\n");
+    if (session.active() || session.gestureActive() ||
+	session.phase() != Session::Phase::QUIET ||
+	session.settleAfterRenderSerial() != 0 ||
+	session.quietReady(1000, debounce)) {
+	std::fprintf(stderr, "FAIL: initial interaction session\n");
 	return 1;
     }
 
-    Witness fallback;
-    fallback.viewEpoch = 1;
-    fallback.policyEpoch = 1;
-    dispatch_phase(tracker, LodMachine::Event::INITIALIZE,
-	Phase::FALLBACK, fallback);
-    const uint64_t fallbackSequence =
-	tracker.phaseWitness(Phase::FALLBACK).sequence;
-    if (!fallbackSequence || tracker.phaseTransitionSerial() != 0) {
-	std::fprintf(stderr, "FAIL: initial fallback witness\n");
+    session.beginGesture(1000);
+    session.observeCameraChange(1100, 7);
+    if (!session.active() || !session.gestureActive() ||
+	session.phase() != Session::Phase::GESTURE ||
+	session.settleAfterRenderSerial() != 8 ||
+	session.noteMotionFrameCompleted(7, 1200) ||
+	!session.noteMotionFrameCompleted(8, 1300) ||
+	session.settleAfterRenderSerial() != 0 ||
+	session.releaseExpiredMotionFrame(2000, debounce) ||
+	session.quietReady(2000, debounce)) {
+	std::fprintf(stderr, "FAIL: gesture interaction lifecycle\n");
 	return 1;
     }
 
-    /* Reobserving identical state is not false progress. */
-    dispatch_phase(tracker, LodMachine::Event::WORK_PUMPED,
-	Phase::FALLBACK, fallback);
-    if (tracker.phaseWitness(Phase::FALLBACK).sequence !=
-	    fallbackSequence) {
-	std::fprintf(stderr, "FAIL: duplicate witness advanced\n");
+    if (!session.endGesture(3000) || session.endGesture(3000) ||
+	!session.active() || session.gestureActive() ||
+	session.phase() != Session::Phase::DEBOUNCING) {
+	std::fprintf(stderr, "FAIL: gesture release transition\n");
+	return 1;
+    }
+    if (session.quietReady(3149, debounce) ||
+	!session.quietReady(3150, debounce)) {
+	std::fprintf(stderr, "FAIL: quiet debounce boundary\n");
+	return 1;
+    }
+    session.finishQuiet();
+    if (session.active() || session.gestureActive() ||
+	session.phase() != Session::Phase::QUIET ||
+	session.settleAfterRenderSerial() != 0) {
+	std::fprintf(stderr, "FAIL: quiet interaction completion\n");
 	return 1;
     }
 
-    Witness coverage = fallback;
-    coverage.activeGeneration = 41;
-    coverage.visibleCount = 100;
-    coverage.completedCount = 12;
-    coverage.pendingCount = 88;
-    dispatch_phase(tracker, LodMachine::Event::WORK_SCHEDULED,
-	Phase::COVERAGE, coverage);
-    if (tracker.currentPhase() != Phase::COVERAGE ||
-	tracker.phaseTransitionSerial() != 1 ||
-	!tracker.phaseWitness(Phase::COVERAGE).sequence) {
-	std::fprintf(stderr, "FAIL: coverage transition\n");
+    session.observeCameraChange(5000, UINT64_MAX);
+    if (!session.active() || session.gestureActive() ||
+	session.phase() != Session::Phase::DEBOUNCING ||
+	session.settleAfterRenderSerial() != 1 ||
+	session.releaseExpiredMotionFrame(5149, debounce) ||
+	!session.releaseExpiredMotionFrame(5150, debounce) ||
+	!session.quietReady(5150, debounce)) {
+	std::fprintf(stderr, "FAIL: unbracketed motion-frame gate\n");
 	return 1;
     }
 
-    const uint64_t coverageSequence =
-	tracker.phaseWitness(Phase::COVERAGE).sequence;
-    coverage.completedCount = 37;
-    coverage.pendingCount = 63;
-    dispatch_phase(tracker, LodMachine::Event::RESULT_PUBLISHED,
-	Phase::COVERAGE, coverage);
-    if (tracker.phaseTransitionSerial() != 1 ||
-	tracker.phaseWitness(Phase::COVERAGE).sequence <=
-	    coverageSequence) {
-	std::fprintf(stderr, "FAIL: coverage progress witness\n");
-	return 1;
-    }
-
-    Witness interactive = coverage;
-    interactive.viewEpoch = 2;
-    interactive.renderSerial = 7;
-    dispatch_phase(tracker, LodMachine::Event::INTERACTION_STARTED,
-	Phase::INTERACTIVE, interactive);
-    Witness settling = interactive;
-    settling.policyEpoch = 2;
-    settling.pendingCount = 11;
-    dispatch_phase(tracker, LodMachine::Event::INTERACTION_ENDED,
-	Phase::SETTLING, settling);
-    Witness stable = settling;
-    stable.pendingCount = 0;
-    stable.completedCount = stable.visibleCount;
-    dispatch_phase(tracker, LodMachine::Event::FRAME_COMPLETED,
-	Phase::STABLE, stable);
-    Witness compacting = stable;
-    compacting.residentDemandRevision = 83;
-    compacting.pendingCount = 4;
-    dispatch_phase(tracker, LodMachine::Event::WORK_PUMPED,
-	Phase::COMPACTING, compacting);
-
-    if (tracker.currentPhase() != Phase::COMPACTING ||
-	tracker.phaseTransitionSerial() != 5 ||
-	tracker.phaseWitness(Phase::INTERACTIVE).viewEpoch != 2 ||
-	tracker.phaseWitness(Phase::SETTLING).pendingCount != 11 ||
-	tracker.phaseWitness(Phase::STABLE).pendingCount != 0 ||
-	tracker.phaseWitness(Phase::COMPACTING).
-	    residentDemandRevision != 83) {
-	std::fprintf(stderr, "FAIL: retained per-phase witnesses\n");
-	return 1;
-    }
-
-    dispatch_phase(tracker, LodMachine::Event::VIEW_INVALIDATED,
-	Phase::FALLBACK, fallback);
-    if (tracker.currentPhase() != Phase::FALLBACK ||
-	tracker.phaseTransitionSerial() != 6) {
-	std::fprintf(stderr, "FAIL: reset to fallback\n");
+    session.reset();
+    if (session.active() || session.settleAfterRenderSerial() != 0) {
+	std::fprintf(stderr, "FAIL: interaction session reset\n");
 	return 1;
     }
 
@@ -232,493 +358,87 @@ test_phase_witnesses(void)
 }
 
 static int
-test_phase_decision_contract(void)
+test_revision_contract(void)
 {
-    using Tracker = BObolLodStateMachine;
-    using Phase = Tracker::Phase;
+    using Contract = BObolLodRevisionContract;
+    BObolLodAdmissionRevisionStamp stamp;
+    stamp.inventory.set(3);
+    stamp.availability.set(5);
+    stamp.view.set(7);
+    stamp.policy.set(11);
+    stamp.capacity.set(13);
 
-    struct Scenario {
-	const char *name;
-	Tracker::Inputs inputs;
-	Phase expected;
+    const BObolLodAdmissionRevisionDomain domains[] = {
+	BObolLodAdmissionRevisionDomain::INVENTORY,
+	BObolLodAdmissionRevisionDomain::AVAILABILITY,
+	BObolLodAdmissionRevisionDomain::VIEW,
+	BObolLodAdmissionRevisionDomain::POLICY,
+	BObolLodAdmissionRevisionDomain::CAPACITY
     };
-
-    const std::array<Scenario, 14> scenarios = {{
-	{"cold-no-generation", {false, false, true, false, false, false},
-	    Phase::FALLBACK},
-	{"cold-coverage", {false, false, true, false, true, false},
-	    Phase::COVERAGE},
-	{"camera-gesture", {true, false, true, false, true, true},
-	    Phase::INTERACTIVE},
-	{"quiet-refinement", {false, false, false, true, true, true},
-	    Phase::SETTLING},
-	{"stable", {false, false, false, true, true, false},
-	    Phase::STABLE},
-	{"resident-compaction", {false, true, false, true, true, false},
-	    Phase::COMPACTING},
-	/* Interaction always wins: memory reclamation cannot block input. */
-	{"interaction-during-compaction",
-	    {true, true, false, true, true, true}, Phase::INTERACTIVE},
-	/* A stale compaction latch cannot bypass minimum coverage. */
-	{"coverage-preempts-compaction",
-	    {false, true, true, false, true, false}, Phase::COVERAGE},
-	/* Coverage always precedes richer refinement. */
-	{"coverage-before-settling",
-	    {false, false, true, false, true, true}, Phase::COVERAGE},
-	/* An invalidated inventory without a generation returns to fallback. */
-	{"erased-generation", {false, false, false, false, false, true},
-	    Phase::FALLBACK},
-	/* Selection/style-only mutations do not disturb a stable LoD proof. */
-	{"selection-only", {false, false, false, true, true, false},
-	    Phase::STABLE},
-	/* Persistent pressure after one recovery pass is a valid, explicitly
-	 * memory-limited stable terminal state. */
-	{"cpu-pressure-observed",
-	    {false, false, false, true, true, false, false, true, false,
-		false}, Phase::STABLE},
-	{"cpu-pressure-recovery",
-	    {false, false, false, true, true, false, false, true, false,
-		true}, Phase::COMPACTING},
-	/* Input remains preemptive while a safe pressure recovery is pending. */
-	{"gpu-pressure-interaction",
-	    {true, false, false, true, true, false, true, false, true,
-		true}, Phase::INTERACTIVE}
-    }};
-
-    for (const Scenario &scenario : scenarios) {
-	Tracker tracker;
-	Tracker::Witness witness;
-	witness.visibleCount = 1;
-	witness.completedCount = scenario.inputs.coverageComplete ? 1 : 0;
-	tracker.dispatch(Tracker::Event::WORK_PUMPED, scenario.inputs, witness);
-	if (tracker.currentPhase() == scenario.expected)
-	    continue;
-	std::fprintf(stderr, "FAIL: phase decision %s\n", scenario.name);
-	return 1;
-    }
-    return 0;
-}
-
-/*
- * Model the admission edge independently of worker timing.  Only results from
- * the active generation and exact view/policy epochs may advance a witness;
- * reordered stale completion, cancellation, and a source erase are no-ops
- * until a new generation is explicitly begun.
- */
-static int
-test_adversarial_result_order(void)
-{
-    using Phase = LodMachine::Phase;
-    LodMachine tracker;
-    uint64_t generation = 7;
-    uint64_t view = 3;
-    uint64_t policy = 5;
-    size_t completed = 0;
-
-    auto publish = [&](uint64_t resultGeneration, uint64_t resultView,
-		       uint64_t resultPolicy) {
-	if (resultGeneration != generation || resultView != view ||
-	    resultPolicy != policy)
-	    return false;
-	LodMachine::Witness witness;
-	witness.activeGeneration = generation;
-	witness.viewEpoch = view;
-	witness.policyEpoch = policy;
-	witness.visibleCount = 3;
-	witness.completedCount = ++completed;
-	witness.pendingCount = 3 - completed;
-	if (completed == 3)
-	    dispatch_phase(tracker, LodMachine::Event::RESULT_PUBLISHED,
-		Phase::SETTLING, witness);
-	else
-	    dispatch_phase(tracker, LodMachine::Event::RESULT_PUBLISHED,
-		Phase::COVERAGE, witness);
-	return true;
-    };
-
-    if (publish(6, view, policy) ||
-	publish(generation, view - 1, policy) ||
-	publish(generation, view, policy - 1) ||
-	tracker.phaseTransitionSerial() != 0) {
-	std::fprintf(stderr, "FAIL: stale result advanced phase witness\n");
-	return 1;
-    }
-    if (!publish(generation, view, policy) ||
-	tracker.currentPhase() != Phase::COVERAGE) {
-	std::fprintf(stderr, "FAIL: active result did not enter coverage\n");
-	return 1;
-    }
-
-    /* A camera change invalidates completions already in flight. */
-    ++view;
-    if (publish(generation, view - 1, policy) || completed != 1) {
-	std::fprintf(stderr, "FAIL: reordered camera result was admitted\n");
-	return 1;
-    }
-    if (!publish(generation, view, policy) ||
-	!publish(generation, view, policy) ||
-	tracker.currentPhase() != Phase::SETTLING) {
-	std::fprintf(stderr, "FAIL: current results did not settle\n");
-	return 1;
-    }
-
-    /* Cancellation/erase retires the generation before any late callback. */
-    const uint64_t cancelledGeneration = generation;
-    generation = 0;
-    LodMachine::Witness fallback;
-    fallback.viewEpoch = view;
-    fallback.policyEpoch = policy;
-    dispatch_phase(tracker, LodMachine::Event::GENERATION_CANCELLED,
-	Phase::FALLBACK, fallback);
-    const uint64_t fallbackSequence =
-	tracker.phaseWitness(Phase::FALLBACK).sequence;
-    if (publish(cancelledGeneration, view, policy) ||
-	tracker.phaseWitness(Phase::FALLBACK).sequence != fallbackSequence) {
-	std::fprintf(stderr, "FAIL: cancelled result changed fallback proof\n");
-	return 1;
-    }
-
-    return 0;
-}
-
-static bool
-same_machine_inputs(const LodMachine::Inputs &lhs,
-    const LodMachine::Inputs &rhs)
-{
-    return lhs.interactive == rhs.interactive &&
-	lhs.compacting == rhs.compacting &&
-	lhs.coverageActive == rhs.coverageActive &&
-	lhs.coverageComplete == rhs.coverageComplete &&
-	lhs.generationActive == rhs.generationActive &&
-	lhs.settlingWork == rhs.settlingWork &&
-	lhs.gestureActive == rhs.gestureActive &&
-	lhs.cpuMemoryPressure == rhs.cpuMemoryPressure &&
-	lhs.gpuMemoryPressure == rhs.gpuMemoryPressure &&
-	lhs.resourceRecoveryPending == rhs.resourceRecoveryPending;
-}
-
-static LodMachine::Phase
-phase_for_canonical_inputs(const LodMachine::Inputs &inputs,
-    const LodMachine::Witness &witness)
-{
-    if (inputs.interactive || inputs.gestureActive)
-	return LodMachine::Phase::INTERACTIVE;
-    if (inputs.coverageActive || !inputs.coverageComplete)
-	return inputs.generationActive ? LodMachine::Phase::COVERAGE :
-	    LodMachine::Phase::FALLBACK;
-    if (inputs.compacting || inputs.resourceRecoveryPending)
-	return LodMachine::Phase::COMPACTING;
-    if (inputs.settlingWork || witness.pendingCount != 0)
-	return LodMachine::Phase::SETTLING;
-    return LodMachine::Phase::STABLE;
-}
-
-/*
- * Exhaust the complete scalar input domain for every lifecycle event.  This
- * is deliberately deterministic rather than a timing fuzzer: a failing mask
- * is an exact replay token, all contradictory caller observations are
- * covered, and the follow-up valid observation proves that canonicalization
- * never installs a sticky recovery latch.
- */
-static int
-test_exhaustive_state_contract(void)
-{
-    using Event = LodMachine::Event;
-    using Invariant = LodMachine::Invariant;
-    using Phase = LodMachine::Phase;
-    static const size_t inputDomain = 1u << 10;
-    static const size_t witnessDomain = 3;
-
-    for (size_t inputMask = 0; inputMask < inputDomain; ++inputMask) {
-	LodMachine::Inputs observed;
-	observed.interactive = (inputMask & (1u << 0)) != 0;
-	observed.compacting = (inputMask & (1u << 1)) != 0;
-	observed.coverageActive = (inputMask & (1u << 2)) != 0;
-	observed.coverageComplete = (inputMask & (1u << 3)) != 0;
-	observed.generationActive = (inputMask & (1u << 4)) != 0;
-	observed.settlingWork = (inputMask & (1u << 5)) != 0;
-	observed.gestureActive = (inputMask & (1u << 6)) != 0;
-	observed.cpuMemoryPressure = (inputMask & (1u << 7)) != 0;
-	observed.gpuMemoryPressure = (inputMask & (1u << 8)) != 0;
-	observed.resourceRecoveryPending =
-	    (inputMask & (1u << 9)) != 0;
-
-	for (size_t witnessCase = 0; witnessCase < witnessDomain;
-		++witnessCase) {
-	    LodMachine::Witness observedWitness;
-	    observedWitness.viewEpoch = 11;
-	    observedWitness.policyEpoch = 17;
-	    observedWitness.activeGeneration = 23;
-	    observedWitness.visibleCount = witnessCase ? 5 : 0;
-	    observedWitness.completedCount = witnessCase == 1 ? 7 :
-		(witnessCase == 2 ? 3 : 0);
-	    observedWitness.pendingCount = witnessCase == 2 ? 2 : 0;
-
-	    for (size_t eventIndex = 0;
-		    eventIndex < static_cast<size_t>(Event::COUNT);
-		    ++eventIndex) {
-		const Event event = static_cast<Event>(eventIndex);
-		LodMachine::Inputs canonical = observed;
-		if (event == Event::INTERACTION_STARTED) {
-		    canonical.interactive = true;
-		    canonical.gestureActive = true;
-		} else if (event == Event::INTERACTION_ENDED) {
-		    canonical.gestureActive = false;
-		} else if (event == Event::GENERATION_CANCELLED) {
-		    canonical.generationActive = false;
-		}
-		if (!canonical.coverageComplete)
-		    canonical.compacting = false;
-		if (!canonical.cpuMemoryPressure &&
-			!canonical.gpuMemoryPressure)
-		    canonical.resourceRecoveryPending = false;
-		if (observedWitness.pendingCount != 0)
-		    canonical.settlingWork = true;
-
-		LodMachine::Witness canonicalWitness = observedWitness;
-		if (canonicalWitness.completedCount >
-			canonicalWitness.visibleCount)
-		    canonicalWitness.completedCount =
-			canonicalWitness.visibleCount;
-
-		uint32_t expectedInvariant = Invariant::INVARIANT_NONE;
-		if (observedWitness.completedCount >
-			observedWitness.visibleCount)
-		    expectedInvariant |=
-			Invariant::INVARIANT_COMPLETED_EXCEEDS_VISIBLE;
-		if (observed.compacting && !observed.coverageComplete)
-		    expectedInvariant |=
-			Invariant::INVARIANT_COMPACTION_WITHOUT_COVERAGE;
-		if (!observed.interactive && !observed.gestureActive &&
-			!observed.compacting && observed.coverageComplete &&
-			!observed.coverageActive && !observed.settlingWork &&
-			observedWitness.pendingCount != 0)
-		    expectedInvariant |=
-			Invariant::INVARIANT_STABLE_WITH_PENDING_WORK;
-		if (event == Event::INTERACTION_STARTED &&
-			(!observed.interactive || !observed.gestureActive))
-		    expectedInvariant |=
-			Invariant::INVARIANT_INTERACTION_EVENT_WITHOUT_INTERACTION;
-		if (event == Event::INTERACTION_ENDED &&
-			observed.gestureActive)
-		    expectedInvariant |=
-			Invariant::INVARIANT_INTERACTION_END_WITH_GESTURE;
-		if (event == Event::GENERATION_CANCELLED &&
-			observed.generationActive)
-		    expectedInvariant |=
-			Invariant::INVARIANT_CANCEL_EVENT_WITH_GENERATION;
-		if (observed.resourceRecoveryPending &&
-			!observed.cpuMemoryPressure &&
-			!observed.gpuMemoryPressure)
-		    expectedInvariant |=
-			Invariant::INVARIANT_RESOURCE_RECOVERY_WITHOUT_PRESSURE;
-
-		const Phase expectedPhase = phase_for_canonical_inputs(
-		    canonical, canonicalWitness);
-		const bool expectedCanonicalization =
-		    !same_machine_inputs(observed, canonical) ||
-		    observedWitness.completedCount !=
-			canonicalWitness.completedCount;
-
-		LodMachine machine;
-		const LodMachine::Transition transition = machine.dispatch(
-		    event, observed, observedWitness);
-		if (transition.current != expectedPhase ||
-		    transition.invariantMask != expectedInvariant ||
-		    transition.canonicalized != expectedCanonicalization ||
-		    !same_machine_inputs(machine.lastInputs(), canonical) ||
-		    !same_machine_inputs(
-			machine.lastObservedInputs(), observed) ||
-		    machine.phaseWitness(expectedPhase).completedCount !=
-			canonicalWitness.completedCount ||
-		    machine.invariantViolationCount() !=
-			(expectedInvariant ? 1u : 0u)) {
-		    std::fprintf(stderr,
-			"FAIL: exhaustive state contract mask=%zu witness=%zu "
-			"event=%zu phase=%u/%u invariant=0x%x/0x%x\n",
-			inputMask, witnessCase, eventIndex,
-			static_cast<unsigned int>(transition.current),
-			static_cast<unsigned int>(expectedPhase),
-			transition.invariantMask, expectedInvariant);
-		    return 1;
-		}
-
-		/* No contradictory observation may poison the next valid quiet
-		 * proof.  This is the bounded discharge guarantee used after
-		 * cancellation, provider failure, and pressure recovery. */
-		LodMachine::Inputs stable;
-		stable.coverageComplete = true;
-		stable.generationActive = true;
-		LodMachine::Witness stableWitness;
-		stableWitness.viewEpoch = 12;
-		stableWitness.policyEpoch = 18;
-		stableWitness.visibleCount = 5;
-		stableWitness.completedCount = 5;
-		const LodMachine::Transition recovered = machine.dispatch(
-		    Event::VIEW_OBSERVED, stable, stableWitness);
-		if (recovered.current != Phase::STABLE ||
-		    recovered.invariantMask != Invariant::INVARIANT_NONE ||
-		    machine.lastInvariantMask() != Invariant::INVARIANT_NONE ||
-		    !machine.lastInputs().coverageComplete) {
-		    std::fprintf(stderr,
-			"FAIL: exhaustive state recovery mask=%zu witness=%zu "
-			"event=%zu\n", inputMask, witnessCase, eventIndex);
-		    return 1;
-		}
-	    }
+    for (const BObolLodAdmissionRevisionDomain domain : domains) {
+	const BObolLodAdmissionRevisionStamp next =
+	    Contract::advance(stamp, domain);
+	const unsigned int changed =
+	    (next.inventory != stamp.inventory ? 1u : 0u) +
+	    (next.availability != stamp.availability ? 1u : 0u) +
+	    (next.view != stamp.view ? 1u : 0u) +
+	    (next.policy != stamp.policy ? 1u : 0u) +
+	    (next.capacity != stamp.capacity ? 1u : 0u);
+	if (changed != 1u) {
+	    std::fprintf(stderr,
+		"FAIL: revision transition changed %u domains\n", changed);
+	    return 1;
 	}
     }
+
+    const BObolLodAdmissionRevisionStamp policy =
+	Contract::setPolicy(stamp, 17);
+    if (policy.policy.value() != 17 ||
+	policy.inventory != stamp.inventory ||
+	policy.availability != stamp.availability ||
+	policy.view != stamp.view || policy.capacity != stamp.capacity) {
+	std::fprintf(stderr, "FAIL: policy synchronization changed evidence\n");
+	return 1;
+    }
+
+    BObolLodAdmissionRevisionStamp empty;
+    if (Contract::planDisposition(empty, stamp) !=
+	    Contract::PlanDisposition::ADMINISTRATIVE ||
+	Contract::planDisposition(stamp, stamp) !=
+	    Contract::PlanDisposition::CURRENT ||
+	Contract::planDisposition(policy, stamp) !=
+	    Contract::PlanDisposition::STALE) {
+	std::fprintf(stderr, "FAIL: certified plan disposition\n");
+	return 1;
+    }
     return 0;
 }
 
-static int
-test_event_and_invariant_contract(void)
+static BObolLodResourceEvidence::Decision
+apply_resource_observation(BObolLodResourceEvidence &evidence,
+    bool cpuPressure, bool gpuPressure, bool recoveryEnabled)
 {
-    using Event = LodMachine::Event;
-    using Invariant = LodMachine::Invariant;
-    using Phase = LodMachine::Phase;
-    LodMachine machine;
-    LodMachine::Witness witness;
-    witness.viewEpoch = 4;
-    witness.policyEpoch = 9;
-
-    LodMachine::Transition initial = dispatch_phase(machine,
-	Event::INITIALIZE, Phase::FALLBACK, witness);
-    if (initial.changed || !initial.progressed ||
-	machine.dispatchSerial() != 1 ||
-	machine.lastDispatchedEvent() != Event::INITIALIZE ||
-	machine.lastInvariantMask() != Invariant::INVARIANT_NONE) {
-	std::fprintf(stderr, "FAIL: initial dispatch diagnostics\n");
-	return 1;
-    }
-
-    LodMachine::Transition duplicate = dispatch_phase(machine,
-	Event::WORK_PUMPED, Phase::FALLBACK, witness);
-    if (duplicate.progressed || machine.stagnantDispatchCount() != 1 ||
-	machine.dispatchSerial() != 2) {
-	std::fprintf(stderr, "FAIL: stagnant dispatch accounting\n");
-	return 1;
-    }
-
-    LodMachine::Inputs invalidInteraction = inputs_for_phase(Phase::FALLBACK);
-    LodMachine::Transition invalid = machine.dispatch(
-	Event::INTERACTION_STARTED, invalidInteraction, witness);
-    if (!(invalid.invariantMask &
-	    Invariant::INVARIANT_INTERACTION_EVENT_WITHOUT_INTERACTION) ||
-	!invalid.canonicalized || invalid.current != Phase::INTERACTIVE ||
-	!machine.lastInputs().interactive ||
-	!machine.lastInputs().gestureActive ||
-	machine.lastObservedInputs().interactive ||
-	machine.lastObservedInputs().gestureActive ||
-	machine.invariantViolationCount() != 1) {
-	std::fprintf(stderr, "FAIL: interaction invariant\n");
-	return 1;
-    }
-
-    LodMachine::Inputs invalidCompaction =
-	inputs_for_phase(Phase::COMPACTING);
-    invalidCompaction.coverageComplete = false;
-    witness.visibleCount = 2;
-    witness.completedCount = 3;
-    invalid = machine.dispatch(Event::WORK_PUMPED, invalidCompaction,
-	witness);
-    if (!(invalid.invariantMask &
-	    Invariant::INVARIANT_COMPACTION_WITHOUT_COVERAGE) ||
-	!(invalid.invariantMask &
-	    Invariant::INVARIANT_COMPLETED_EXCEEDS_VISIBLE) ||
-	!invalid.canonicalized || invalid.current != Phase::FALLBACK ||
-	machine.lastInputs().compacting ||
-	machine.lastObservedWitness().completedCount != 3 ||
-	machine.phaseWitness(Phase::FALLBACK).completedCount != 2 ||
-	machine.invariantViolationCount() != 2 ||
-	!(machine.invariantHistoryMask() &
-	    Invariant::INVARIANT_INTERACTION_EVENT_WITHOUT_INTERACTION) ||
-	!(machine.invariantHistoryMask() &
-	    Invariant::INVARIANT_COMPACTION_WITHOUT_COVERAGE)) {
-	std::fprintf(stderr, "FAIL: compaction/count invariants\n");
-	return 1;
-    }
-
-    witness.completedCount = witness.visibleCount;
-    LodMachine::Transition recovered = dispatch_phase(machine,
-	Event::INTERACTION_STARTED, Phase::INTERACTIVE, witness);
-    if (recovered.current != Phase::INTERACTIVE ||
-	machine.lastInvariantMask() != Invariant::INVARIANT_NONE ||
-	machine.stagnantDispatchCount() != 0 ||
-	machine.invariantViolationCount() != 2 ||
-	machine.invariantHistoryMask() == Invariant::INVARIANT_NONE) {
-	std::fprintf(stderr, "FAIL: valid transition did not recover diagnostics\n");
-	return 1;
-    }
-
-    LodMachine::Inputs cancelled = inputs_for_phase(Phase::COVERAGE);
-    invalid = machine.dispatch(Event::GENERATION_CANCELLED, cancelled,
-	witness);
-    if (!(invalid.invariantMask &
-	    Invariant::INVARIANT_CANCEL_EVENT_WITH_GENERATION) ||
-	!invalid.canonicalized || invalid.current != Phase::FALLBACK ||
-	machine.lastInputs().generationActive ||
-	machine.invariantViolationCount() != 3) {
-	std::fprintf(stderr, "FAIL: cancellation invariant\n");
-	return 1;
-    }
-
-    LodMachine pendingMachine;
-    LodMachine::Inputs omittedSettling = inputs_for_phase(Phase::STABLE);
-    LodMachine::Witness pendingWitness;
-    pendingWitness.visibleCount = 4;
-    pendingWitness.completedCount = 4;
-    pendingWitness.pendingCount = 1;
-    LodMachine::Transition pending = pendingMachine.dispatch(
-	Event::WORK_SCHEDULED, omittedSettling, pendingWitness);
-    if (pending.current != Phase::SETTLING || !pending.canonicalized ||
-	!pendingMachine.lastInputs().settlingWork ||
-	!(pending.invariantMask &
-	    Invariant::INVARIANT_STABLE_WITH_PENDING_WORK)) {
-	std::fprintf(stderr, "FAIL: pending witness remained stable\n");
-	return 1;
-    }
-
-    LodMachine::Inputs invalidEnd = inputs_for_phase(Phase::INTERACTIVE);
-    invalid = machine.dispatch(Event::INTERACTION_ENDED, invalidEnd, witness);
-    if (!(invalid.invariantMask &
-	    Invariant::INVARIANT_INTERACTION_END_WITH_GESTURE) ||
-	!invalid.canonicalized || invalid.current != Phase::INTERACTIVE ||
-	!machine.lastInputs().interactive ||
-	machine.lastInputs().gestureActive) {
-	std::fprintf(stderr, "FAIL: interaction-end invariant\n");
-	return 1;
-    }
-
-    LodMachine pressureMachine;
-    LodMachine::Inputs invalidRecovery = inputs_for_phase(Phase::STABLE);
-    invalidRecovery.resourceRecoveryPending = true;
-    LodMachine::Transition recovery = pressureMachine.dispatch(
-	Event::WORK_SCHEDULED, invalidRecovery, witness);
-    if (!(recovery.invariantMask &
-	    Invariant::INVARIANT_RESOURCE_RECOVERY_WITHOUT_PRESSURE) ||
-	!recovery.canonicalized || recovery.current != Phase::STABLE ||
-	pressureMachine.lastInputs().resourceRecoveryPending) {
-	std::fprintf(stderr, "FAIL: resource recovery invariant\n");
-	return 1;
-    }
-
-    return 0;
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::planResourceObservation(allEvidence, BObolLodAdmissionCursor(),
+	    cpuPressure, gpuPressure, recoveryEnabled);
+    evidence = plan.nextEvidence.resources();
+    return plan.resourceDecision;
 }
 
 static int
 test_resource_policy(void)
 {
-    BObolLodResourcePolicy policy;
-    BObolLodResourcePolicy::Decision decision =
-	policy.observe(false, false, true);
+    BObolLodResourceEvidence policy;
+    BObolLodResourceEvidence::Decision decision =
+	apply_resource_observation(policy, false, false, true);
     if (decision.changed || decision.queueRecovery || policy.anyPressure() ||
 	policy.recoveryPending() || policy.revision() != 0) {
 	std::fprintf(stderr, "FAIL: initial resource observation\n");
 	return 1;
     }
 
-    decision = policy.observe(true, false, true);
+    decision = apply_resource_observation(policy, true, false, true);
     if (!decision.changed || !decision.queueRecovery ||
 	!policy.cpuPressure() || policy.gpuPressure() ||
 	!policy.recoveryPending() || policy.revision() != 1 ||
@@ -727,7 +447,7 @@ test_resource_policy(void)
 	return 1;
     }
 
-    decision = policy.observe(true, false, true);
+    decision = apply_resource_observation(policy, true, false, true);
     if (decision.changed || decision.queueRecovery || policy.revision() != 1) {
 	std::fprintf(stderr, "FAIL: duplicate pressure edge\n");
 	return 1;
@@ -740,14 +460,14 @@ test_resource_policy(void)
 	return 1;
     }
 
-    decision = policy.observe(true, true, true);
+    decision = apply_resource_observation(policy, true, true, true);
     if (!decision.changed || !decision.queueRecovery ||
 	!policy.recoveryPending() || policy.revision() != 2) {
 	std::fprintf(stderr, "FAIL: GPU pressure edge\n");
 	return 1;
     }
 
-    decision = policy.observe(false, false, true);
+    decision = apply_resource_observation(policy, false, false, true);
     if (!decision.changed || !decision.pressureCleared ||
 	decision.queueRecovery || policy.anyPressure() ||
 	policy.recoveryPending() || policy.revision() != 3 ||
@@ -756,7 +476,7 @@ test_resource_policy(void)
 	return 1;
     }
 
-    (void)policy.observe(true, false, true);
+    (void)apply_resource_observation(policy, true, false, true);
     policy.resetForServiceChange();
     if (policy.anyPressure() || policy.recoveryPending() ||
 	policy.recoveryHandledRevision() != policy.revision()) {
@@ -764,20 +484,20 @@ test_resource_policy(void)
 	return 1;
     }
 
-    decision = policy.observe(true, false, false);
+    decision = apply_resource_observation(policy, true, false, false);
     if (!decision.changed || decision.queueRecovery ||
 	policy.recoveryPending()) {
 	std::fprintf(stderr, "FAIL: disabled recovery pressure edge\n");
 	return 1;
     }
-    decision = policy.observe(true, false, true);
+    decision = apply_resource_observation(policy, true, false, true);
     if (decision.changed || !decision.queueRecovery ||
 	!policy.recoveryPending()) {
 	std::fprintf(stderr, "FAIL: late resource recovery enable\n");
 	return 1;
     }
     policy.markRecoveryHandled();
-    decision = policy.observe(true, false, true);
+    decision = apply_resource_observation(policy, true, false, true);
     if (decision.changed || decision.queueRecovery ||
 	policy.recoveryPending()) {
 	std::fprintf(stderr, "FAIL: handled resource recovery repeated\n");
@@ -786,76 +506,131 @@ test_resource_policy(void)
     return 0;
 }
 
+static bool
+apply_headroom_retry_plan(BObolLodHeadroomEvidence &evidence,
+    BObolLodViewEpoch viewEpoch, BObolLodPolicyEpoch policyEpoch,
+    size_t activePopulationCost, size_t currentBudget)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::planHeadroomRetry(allEvidence, BObolLodAdmissionCursor(), viewEpoch,
+	    policyEpoch, activePopulationCost, currentBudget);
+    evidence = plan.nextEvidence.headroom();
+    return plan.headroomAccepted;
+}
+
+static bool
+apply_headroom_deferral_plan(BObolLodHeadroomEvidence &evidence,
+    BObolLodViewEpoch viewEpoch, BObolLodPolicyEpoch policyEpoch,
+    size_t activePopulationCost)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::planHeadroomTransientDeferral(allEvidence, BObolLodAdmissionCursor(),
+	    viewEpoch, policyEpoch, activePopulationCost);
+    evidence = plan.nextEvidence.headroom();
+    return plan.headroomAccepted;
+}
+
+static bool
+apply_headroom_consumption_plan(BObolLodHeadroomEvidence &evidence,
+    BObolLodViewEpoch viewEpoch, BObolLodPolicyEpoch policyEpoch,
+    size_t currentBudget, size_t activePopulationCost,
+    long double demonstratedBudget, uint64_t elapsedNanoseconds,
+    uint64_t targetNanoseconds, bool reusableSample)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::planHeadroomConsumption(allEvidence, BObolLodAdmissionCursor(),
+	    viewEpoch, policyEpoch, currentBudget, activePopulationCost,
+	    demonstratedBudget, elapsedNanoseconds, targetNanoseconds,
+	    reusableSample);
+    evidence = plan.nextEvidence.headroom();
+    return plan.headroomAccepted;
+}
+
+static void
+apply_headroom_rejection(BObolLodHeadroomEvidence &evidence,
+    BObolLodViewEpoch viewEpoch, BObolLodPolicyEpoch policyEpoch,
+    size_t activePopulationCost, size_t attemptedBudget)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::recordHeadroomRejection(allEvidence, BObolLodAdmissionCursor(),
+	    viewEpoch, policyEpoch, activePopulationCost, attemptedBudget);
+    evidence = plan.nextEvidence.headroom();
+}
+
 static int
 test_headroom_policy(void)
 {
-    BObolLodHeadroomPolicy policy;
+    BObolLodHeadroomEvidence policy;
     const BObolLodViewEpoch view(4);
     const BObolLodPolicyEpoch lodPolicy(9);
     if (policy.retryPending() ||
-	!policy.armRetry(view, lodPolicy, 1000, 100) ||
+	!apply_headroom_retry_plan(policy, view, lodPolicy, 1000, 100) ||
 	!policy.retryPending() ||
 	!policy.pendingMatches(view, lodPolicy, 1000) ||
 	policy.pendingMatches(BObolLodViewEpoch(5), lodPolicy, 1000) ||
 	policy.pendingMatches(view, lodPolicy, 1001) ||
-	policy.armRetry(view, lodPolicy, 1000, 100) ||
+	apply_headroom_retry_plan(policy, view, lodPolicy, 1000, 100) ||
 	/* The measured allowance may legitimately grow between arming the replay
 	 * and consuming its timing sample.  Witness identity is the immutable
 	 * population and camera/policy epoch, not that evolving allowance. */
-	!policy.consumeRetry(view, lodPolicy, 101, 1000, 107.0L, 90, 100,
+	!apply_headroom_consumption_plan(policy, view, lodPolicy, 101, 1000, 107.0L, 90, 100,
 	    true) || policy.retryPending() ||
-	policy.armRetry(view, lodPolicy, 1000, 101)) {
+	apply_headroom_retry_plan(policy, view, lodPolicy, 1000, 101)) {
 	std::fprintf(stderr, "FAIL: explicit headroom witness lifecycle\n");
 	return 1;
     }
     /* Calibration may discover more capacity after the first witness.  Only
      * material growth above the monotonic high-water may revisit the same
      * population, which admits useful refinement without budget jitter. */
-    if (policy.armRetry(view, lodPolicy, 1000, 126) ||
-	!policy.armRetry(view, lodPolicy, 1000, 127) ||
-	policy.armRetry(view, lodPolicy, 1000, 127) ||
-	!policy.consumeRetry(view, lodPolicy, 127, 1000, 140.0L, 90, 100,
+    if (apply_headroom_retry_plan(policy, view, lodPolicy, 1000, 126) ||
+	!apply_headroom_retry_plan(policy, view, lodPolicy, 1000, 127) ||
+	apply_headroom_retry_plan(policy, view, lodPolicy, 1000, 127) ||
+	!apply_headroom_consumption_plan(policy, view, lodPolicy, 127, 1000, 140.0L, 90, 100,
 	    true) ||
-	policy.armRetry(view, lodPolicy, 1000, 158) ||
-	!policy.armRetry(view, lodPolicy, 1000, 159) ||
-	policy.consumeRetry(view, lodPolicy, 159, 1000, 160.0L, 90, 100,
+	apply_headroom_retry_plan(policy, view, lodPolicy, 1000, 158) ||
+	!apply_headroom_retry_plan(policy, view, lodPolicy, 1000, 159) ||
+	apply_headroom_consumption_plan(policy, view, lodPolicy, 159, 1000, 160.0L, 90, 100,
 	    true) ||
-	policy.armRetry(view, lodPolicy, 1000, 159)) {
+	apply_headroom_retry_plan(policy, view, lodPolicy, 1000, 159)) {
 	std::fprintf(stderr, "FAIL: monotonic headroom budget high-water\n");
 	return 1;
     }
     /* A minimax redistribution changes active render cost without creating a
      * new renderer-capacity epoch.  It must not erase the high-water witness;
      * only material budget growth may re-arm in the same view/policy. */
-    if (policy.armRetry(view, lodPolicy, 1001, 159) ||
-	!policy.armRetry(view, lodPolicy, 1001, 200) ||
-	!policy.consumeRetry(view, lodPolicy, 200, 1001,
+    if (apply_headroom_retry_plan(policy, view, lodPolicy, 1001, 159) ||
+	!apply_headroom_retry_plan(policy, view, lodPolicy, 1001, 200) ||
+	!apply_headroom_consumption_plan(policy, view, lodPolicy, 200, 1001,
 	    300.0L, 10, 100, true) ||
-	!policy.armRetry(BObolLodViewEpoch(5), lodPolicy, 2000, 120) ||
-	!policy.consumeRetry(BObolLodViewEpoch(5), lodPolicy, 120, 2000,
+	!apply_headroom_retry_plan(policy, BObolLodViewEpoch(5), lodPolicy, 2000, 120) ||
+	!apply_headroom_consumption_plan(policy, BObolLodViewEpoch(5), lodPolicy, 120, 2000,
 	    200.0L, 10, 100, true) ||
-	!policy.armRetry(BObolLodViewEpoch(5), BObolLodPolicyEpoch(10),
+	!apply_headroom_retry_plan(policy, BObolLodViewEpoch(5), BObolLodPolicyEpoch(10),
 	    2000, 120) ||
-	!policy.consumeRetry(BObolLodViewEpoch(5),
+	!apply_headroom_consumption_plan(policy, BObolLodViewEpoch(5),
 	    BObolLodPolicyEpoch(10), 120, 2000, 200.0L, 10, 100, true)) {
 	std::fprintf(stderr, "FAIL: headroom progress witnesses\n");
 	return 1;
     }
-    if (!policy.armRetry(BObolLodViewEpoch(6), lodPolicy, 3000, 200) ||
-	policy.consumeRetry(BObolLodViewEpoch(6), lodPolicy, 200, 3000,
+    if (!apply_headroom_retry_plan(policy, BObolLodViewEpoch(6), lodPolicy, 3000, 200) ||
+	apply_headroom_consumption_plan(policy, BObolLodViewEpoch(6), lodPolicy, 200, 3000,
 	    210.0L, 10, 100, true) ||
-	policy.armRetry(BObolLodViewEpoch(6), lodPolicy, 3000, 200)) {
+	apply_headroom_retry_plan(policy, BObolLodViewEpoch(6), lodPolicy, 3000, 200)) {
 	std::fprintf(stderr, "FAIL: exact threshold headroom admitted\n");
 	return 1;
     }
-    if (!policy.armRetry(BObolLodViewEpoch(7), lodPolicy, 3000, 200) ||
-	policy.consumeRetry(BObolLodViewEpoch(7), lodPolicy, 200, 3000,
+    if (!apply_headroom_retry_plan(policy, BObolLodViewEpoch(7), lodPolicy, 3000, 200) ||
+	apply_headroom_consumption_plan(policy, BObolLodViewEpoch(7), lodPolicy, 200, 3000,
 	    300.0L, 120, 100, true)) {
 	std::fprintf(stderr, "FAIL: slow headroom sample admitted\n");
 	return 1;
     }
-    if (!policy.armRetry(BObolLodViewEpoch(8), lodPolicy, 3000, 200) ||
-	policy.consumeRetry(BObolLodViewEpoch(8), lodPolicy, 200, 3000,
+    if (!apply_headroom_retry_plan(policy, BObolLodViewEpoch(8), lodPolicy, 3000, 200) ||
+	apply_headroom_consumption_plan(policy, BObolLodViewEpoch(8), lodPolicy, 200, 3000,
 	    300.0L, 10, 100, false)) {
 	std::fprintf(stderr, "FAIL: non-reusable headroom sample admitted\n");
 	return 1;
@@ -865,32 +640,32 @@ test_headroom_policy(void)
      * frame which proves headroom over the drawn population must trigger one
      * recomputation even when it cannot saturate and thereby prove the full
      * (already larger) allowance. */
-    if (!policy.armRetry(BObolLodViewEpoch(80), lodPolicy, 100, 500) ||
-	!policy.consumeRetry(BObolLodViewEpoch(80), lodPolicy, 500, 100,
+    if (!apply_headroom_retry_plan(policy, BObolLodViewEpoch(80), lodPolicy, 100, 500) ||
+	!apply_headroom_consumption_plan(policy, BObolLodViewEpoch(80), lodPolicy, 500, 100,
 	    250.0L, 50, 100, true) ||
-	policy.armRetry(BObolLodViewEpoch(80), lodPolicy, 100, 500)) {
+	apply_headroom_retry_plan(policy, BObolLodViewEpoch(80), lodPolicy, 100, 500)) {
 	std::fprintf(stderr, "FAIL: stale underallocated population witness\n");
 	return 1;
     }
     const BObolLodViewEpoch transientView(81);
-    if (!policy.armRetry(transientView, lodPolicy, 3001, 200) ||
-	!policy.deferTransientReplay(transientView, lodPolicy, 3001) ||
+    if (!apply_headroom_retry_plan(policy, transientView, lodPolicy, 3001, 200) ||
+	!apply_headroom_deferral_plan(policy, transientView, lodPolicy, 3001) ||
 	!policy.retryPending() ||
-	!policy.deferTransientReplay(transientView, lodPolicy, 3001) ||
-	policy.deferTransientReplay(transientView, lodPolicy, 3001) ||
+	!apply_headroom_deferral_plan(policy, transientView, lodPolicy, 3001) ||
+	apply_headroom_deferral_plan(policy, transientView, lodPolicy, 3001) ||
 	!policy.retryPending() ||
-	policy.deferTransientReplay(BObolLodViewEpoch(82), lodPolicy,
+	apply_headroom_deferral_plan(policy, BObolLodViewEpoch(82), lodPolicy,
 	    3001) ||
-	!policy.consumeRetry(transientView, lodPolicy, 200, 3001,
+	!apply_headroom_consumption_plan(policy, transientView, lodPolicy, 200, 3001,
 	    300.0L, 10, 100, true) || policy.retryPending() ||
-	policy.armRetry(transientView, lodPolicy, 3001, 200)) {
+	apply_headroom_retry_plan(policy, transientView, lodPolicy, 3001, 200)) {
 	std::fprintf(stderr, "FAIL: bounded transient headroom replay\n");
 	return 1;
     }
-    if (!policy.armRetry(BObolLodViewEpoch(9), lodPolicy, 3000, 200) ||
-	policy.consumeRetry(BObolLodViewEpoch(10), lodPolicy, 200, 3000,
+    if (!apply_headroom_retry_plan(policy, BObolLodViewEpoch(9), lodPolicy, 3000, 200) ||
+	apply_headroom_consumption_plan(policy, BObolLodViewEpoch(10), lodPolicy, 200, 3000,
 	    300.0L, 10, 100, true) || policy.retryPending() ||
-	!policy.armRetry(BObolLodViewEpoch(9), lodPolicy, 3000, 200)) {
+	!apply_headroom_retry_plan(policy, BObolLodViewEpoch(9), lodPolicy, 3000, 200)) {
 	std::fprintf(stderr, "FAIL: stale headroom witness handling\n");
 	return 1;
     }
@@ -899,20 +674,20 @@ test_headroom_policy(void)
      * because its active cost differs, but material capacity growth and a new
      * view epoch remain valid progress witnesses. */
     const BObolLodViewEpoch rejectedView(91);
-    if (!policy.armRetry(rejectedView, lodPolicy, 4000, 300) ||
+    if (!apply_headroom_retry_plan(policy, rejectedView, lodPolicy, 4000, 300) ||
 	!policy.retryPending()) {
 	std::fprintf(stderr, "FAIL: rejected headroom witness setup\n");
 	return 1;
     }
-    policy.rejectRetry(rejectedView, lodPolicy, 4000, 320);
+    apply_headroom_rejection(policy, rejectedView, lodPolicy, 4000, 320);
     if (policy.retryPending() ||
-	policy.armRetry(rejectedView, lodPolicy, 3900, 400) ||
-	!policy.armRetry(rejectedView, lodPolicy, 3900, 401)) {
+	apply_headroom_retry_plan(policy, rejectedView, lodPolicy, 3900, 400) ||
+	!apply_headroom_retry_plan(policy, rejectedView, lodPolicy, 3900, 401)) {
 	std::fprintf(stderr, "FAIL: rejected headroom witness reopened\n");
 	return 1;
     }
-    policy.rejectRetry(rejectedView, lodPolicy, 4000, 401);
-    if (!policy.armRetry(BObolLodViewEpoch(92), lodPolicy, 4000, 300)) {
+    apply_headroom_rejection(policy, rejectedView, lodPolicy, 4000, 401);
+    if (!apply_headroom_retry_plan(policy, BObolLodViewEpoch(92), lodPolicy, 4000, 300)) {
 	std::fprintf(stderr, "FAIL: rejected headroom poisoned new view\n");
 	return 1;
     }
@@ -975,6 +750,19 @@ test_coverage_policy(void)
 	policy.completeVisibleCount() != 10 || policy.sawBoundedSource() ||
 	policy.visibleCount() != 0 || policy.coveredCount() != 0) {
 	std::fprintf(stderr, "FAIL: missing bounded coverage proof\n");
+	return 1;
+    }
+    if (policy.confirmPresentedCoverage(9) || policy.coverageComplete() ||
+	!policy.confirmPresentedCoverage(10) || !policy.coverageComplete()) {
+	std::fprintf(stderr, "FAIL: renderer-confirmed coverage proof\n");
+	return 1;
+    }
+    policy.activate(false);
+    policy.observe(3, 2);
+    if (!policy.confirmPresentedCoverage(10) || policy.active() ||
+	policy.visibleCount() != 0 || policy.coveredCount() != 0) {
+	std::fprintf(stderr,
+	    "FAIL: renderer proof did not supersede retry census\n");
 	return 1;
     }
 
@@ -1082,7 +870,7 @@ test_visibility_census(void)
     census.observe(sourceA, 4, 1, true);
     census.observe(sourceA, 4, 2, false);
     census.observe(sourceA, 4, 3, true);
-    census.complete(sourceA, 3);
+    census.finish(sourceA);
     census.setCount(sourceB, 2);
     if (!census.complete(sourceA) || census.complete(sourceB) ||
 	census.sourceCount(sourceA) != 3 ||
@@ -1184,6 +972,48 @@ test_visibility_census(void)
 }
 
 static int
+test_source_profile_policy(void)
+{
+    using Policy = BObolLodSourceProfilePolicy;
+    static const uint64_t mebibyte = 1024ULL * 1024ULL;
+    if (!Policy::safeMeshFirstPreview(
+	    true, 2249, 709, 12 * mebibyte, 2 * mebibyte, 709) ||
+	!Policy::safeMeshFirstPreview(
+	    true, 2248, 2242, 4 * mebibyte, 156088, 709) ||
+	Policy::safeMeshFirstPreview(
+	    false, 2249, 709, 12 * mebibyte, 2 * mebibyte, 709) ||
+	Policy::safeMeshFirstPreview(
+	    true, 50000, 709, 12 * mebibyte, 2 * mebibyte, 709) ||
+	Policy::safeMeshFirstPreview(
+	    true, 2249, 709, 128 * mebibyte, 2 * mebibyte, 709) ||
+	Policy::safeMeshFirstPreview(
+	    true, 2249, 709, 12 * mebibyte, 32 * mebibyte, 709) ||
+	Policy::safeMeshFirstPreview(
+	    true, 2249, 709, 12 * mebibyte, 2 * mebibyte, 3000)) {
+	std::fprintf(stderr, "FAIL: source-profile mesh-first admission\n");
+	return 1;
+    }
+    if (!Policy::admitTerminalMesh(
+	    true, true, false, true, true, 4000, 4000) ||
+	Policy::admitTerminalMesh(
+	    false, true, false, true, true, 4000, 8000) ||
+	Policy::admitTerminalMesh(
+	    true, false, false, true, true, 4000, 8000) ||
+	Policy::admitTerminalMesh(
+	    true, true, true, true, true, 4000, 8000) ||
+	Policy::admitTerminalMesh(
+	    true, true, false, false, true, 4000, 8000) ||
+	Policy::admitTerminalMesh(
+	    true, true, false, true, false, 4000, 8000) ||
+	Policy::admitTerminalMesh(
+	    true, true, false, true, true, 8001, 8000)) {
+	std::fprintf(stderr, "FAIL: terminal mesh budget admission\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_projected_demand_cache(void)
 {
     using Cache = BObolLodProjectedDemandCache;
@@ -1249,9 +1079,148 @@ test_projected_demand_cache(void)
 }
 
 static int
+test_interaction_start_certificate(void)
+{
+    BObolLodInteractionStartCertificate certificate;
+    BObolLodViewScaleSnapshot scale;
+    scale.haveCamera = 1;
+    scale.size = 8.0;
+
+    if (certificate.captured() || certificate.exactScale() ||
+	certificate.startedFromReadyView() || certificate.stableBudget() != 0 ||
+	certificate.returnedToScale(scale)) {
+	std::fprintf(stderr, "FAIL: empty interaction certificate\n");
+	return 1;
+    }
+
+    certificate.capture(scale, false, true, 4096);
+    if (!certificate.captured() || certificate.exactScale() ||
+	!certificate.startedFromReadyView() ||
+	certificate.stableBudget() != 4096 ||
+	certificate.returnedToScale(scale)) {
+	std::fprintf(stderr, "FAIL: interaction certificate without scale proof\n");
+	return 1;
+    }
+
+    certificate.capture(scale, true, false, 8192);
+    BObolLodViewScaleSnapshot changed = scale;
+    changed.size = 4.0;
+    if (!certificate.exactScale() ||
+	certificate.startedFromReadyView() ||
+	certificate.stableBudget() != 8192 ||
+	!certificate.returnedToScale(scale) ||
+	certificate.returnedToScale(changed)) {
+	std::fprintf(stderr, "FAIL: exact interaction certificate\n");
+	return 1;
+    }
+
+    certificate.reset();
+    if (certificate.captured() || certificate.exactScale() ||
+	certificate.startedFromReadyView() || certificate.stableBudget() != 0 ||
+	certificate.returnedToScale(scale)) {
+	std::fprintf(stderr, "FAIL: reset interaction certificate\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_static_quality_policy(void)
 {
-    using Policy = BObolLodStaticQualityPolicy;
+    using Policy = BObolLodAdmissionPlanner;
+    BObolLodStaticQualityTrial trial;
+    if (trial.inProgress() || trial.blocksNewTrial() ||
+	trial.capacityRejected() || trial.accepted() ||
+	trial.sampledCeiling() != -1) {
+	std::fprintf(stderr, "FAIL: static quality initial state\n");
+	return 1;
+    }
+    trial.begin();
+    trial.noteSampledCeiling(7);
+
+    BObolLodAdmissionRevisionStamp stamp;
+    stamp.inventory.set(1);
+    stamp.availability.set(1);
+    stamp.view.set(1);
+    stamp.policy.set(1);
+    stamp.capacity.set(1);
+    if (!trial.probing() || !trial.inProgress() ||
+	trial.capacityRejected() ||
+	trial.sampledCeiling() != 7) {
+	std::fprintf(stderr, "FAIL: static quality active trial\n");
+	return 1;
+    }
+    BObolLodStaticQualityTrial::Constraint rejection;
+    rejection.reason = BObolLodStaticQualityTrial::ConstraintReason::
+	PRESENTATION_DEADLINE;
+    rejection.revisionStamp = stamp;
+    rejection.committedCeiling = 7;
+    rejection.candidateCeiling = 8;
+    rejection.committedCost = 800;
+    rejection.candidateCost = 1200;
+    rejection.allowedCost = 1000;
+    if (!trial.reject(rejection) || !trial.inProgress() ||
+	!trial.capacityRejected() || trial.accepted() ||
+	trial.sampledCeiling() != -1) {
+	std::fprintf(stderr, "FAIL: static quality reconciliation state\n");
+	return 1;
+    }
+    if (!trial.completeReconciliation() ||
+	trial.completeReconciliation()) {
+	std::fprintf(stderr,
+	    "FAIL: static quality reconciliation was not consumed once\n");
+	return 1;
+    }
+    if (trial.inProgress() || !trial.capacityRejected() ||
+	!trial.blocksNewTrial() ||
+	!trial.usesStaticDeadline() ||
+	trial.constraint().reason != rejection.reason) {
+	std::fprintf(stderr, "FAIL: static quality constrained state\n");
+	return 1;
+    }
+    trial.begin();
+    if (trial.inProgress() || !trial.capacityRejected()) {
+	std::fprintf(stderr, "FAIL: static quality constraint reopened\n");
+	return 1;
+    }
+
+    trial.deactivate();
+    if (trial.inProgress() || trial.blocksNewTrial() ||
+	trial.capacityRejected() || trial.usesStaticDeadline()) {
+	std::fprintf(stderr,
+	    "FAIL: static quality constraint survived invalidation\n");
+	return 1;
+    }
+
+    trial.reset();
+    trial.begin();
+    BObolLodStaticQualityTrial::Acceptance acceptance;
+    acceptance.revisionStamp = stamp;
+    acceptance.ceiling = 7;
+    acceptance.nextFraction = 0.625f;
+    acceptance.presentedCost = 900;
+    acceptance.allowedCost = 1000;
+    if (!trial.acceptFractionalCeiling(acceptance) || trial.inProgress() ||
+	trial.capacityRejected() || !trial.accepted() ||
+	!trial.blocksNewTrial() || !trial.usesStaticDeadline() ||
+	trial.acceptance().presentedCost != 900) {
+	std::fprintf(stderr, "FAIL: static quality accepted fractional state\n");
+	return 1;
+    }
+    trial.begin();
+    if (!trial.accepted() || trial.inProgress()) {
+	std::fprintf(stderr, "FAIL: accepted static quality reopened\n");
+	return 1;
+    }
+    trial.reset();
+    trial.restoreRendererCeiling(true);
+    if (!trial.probing() || !trial.inProgress() ||
+	trial.capacityRejected()) {
+	std::fprintf(stderr, "FAIL: static quality renderer restoration\n");
+	return 1;
+    }
+    trial.reset();
+
     /* A normal quiet recovery miss must not pre-reject the later static
 	 * quality phase.  Only a frame attempted by an active static trial owns
 	 * that terminal evidence. */
@@ -1273,28 +1242,42 @@ test_static_quality_policy(void)
 	    "FAIL: changing population poisoned static capacity epoch\n");
 	return 1;
     }
-    if (!Policy::retainAcceptedPhase(true, false) ||
-	Policy::retainAcceptedPhase(false, false) ||
-	Policy::retainAcceptedPhase(true, true) ||
-	Policy::ordinaryHeadroomAllowed(true, false) ||
-	Policy::ordinaryHeadroomAllowed(false, true) ||
-	!Policy::ordinaryHeadroomAllowed(false, false)) {
+    if (Policy::ordinaryHeadroomAllowed(true) ||
+	!Policy::ordinaryHeadroomAllowed(false) ||
+	!Policy::marginalStaticCapacityAllowed(true, false, false) ||
+	!Policy::marginalStaticCapacityAllowed(false, true, false) ||
+	!Policy::marginalStaticCapacityAllowed(false, false, true) ||
+	Policy::marginalStaticCapacityAllowed(false, false, false)) {
 	std::fprintf(stderr,
 	    "FAIL: accepted static quality returned to streaming budget\n");
 	return 1;
     }
+    if (!Policy::actionableProgressiveQualityDebt(1, 1, 0, 20, 9) ||
+	!Policy::actionableProgressiveQualityDebt(4, 3, 0, 9, -1) ||
+	Policy::actionableProgressiveQualityDebt(4, 3, 1, 9, -1) ||
+	Policy::actionableProgressiveQualityDebt(1, 1, 0, 9, 9) ||
+	Policy::actionableProgressiveQualityDebt(1, 1, 0, 9, -1) ||
+	!Policy::progressivePresentationQualityDebt(20, 9) ||
+	Policy::progressivePresentationQualityDebt(9, 9) ||
+	Policy::progressivePresentationQualityDebt(9, -1)) {
+	std::fprintf(stderr,
+	    "FAIL: static quality did not distinguish resident and presentation debt\n");
+	return 1;
+    }
     if (Policy::terminalGlobalCeilingRequiresReconciliation(
-	    false, true, 0, false, false) ||
+	    false, true, 0, false, false, 2) ||
 	Policy::terminalGlobalCeilingRequiresReconciliation(
-	    true, false, 0, false, false) ||
+	    true, false, 0, false, false, 2) ||
 	Policy::terminalGlobalCeilingRequiresReconciliation(
-	    true, true, -1, false, false) ||
+	    true, true, -1, false, false, 2) ||
 	Policy::terminalGlobalCeilingRequiresReconciliation(
-	    true, true, 0, true, false) ||
+	    true, true, 0, true, false, 2) ||
+	Policy::terminalGlobalCeilingRequiresReconciliation(
+	    true, true, 0, true, true, 1) ||
 	!Policy::terminalGlobalCeilingRequiresReconciliation(
-	    true, true, 0, false, false) ||
+	    true, true, 0, false, false, 2) ||
 	!Policy::terminalGlobalCeilingRequiresReconciliation(
-	    true, true, 0, true, true)) {
+	    true, true, 0, true, true, 2)) {
 	std::fprintf(stderr,
 	    "FAIL: terminal renderer ceiling reconciliation scope\n");
 	return 1;
@@ -1309,25 +1292,28 @@ test_static_quality_policy(void)
 	return 1;
     }
     if (!Policy::acceptSettledOnePixelFrame(false, true, false, false,
-	    false, false, false, false, -1, 1.0f, true,
+	    false, false, false, -1, 1.0f, true,
 	    60000000ULL, 50000000ULL, 100000000ULL) ||
 	Policy::acceptSettledOnePixelFrame(true, true, false, false,
-	    false, false, false, false, -1, 1.0f, true,
+	    false, false, false, -1, 1.0f, true,
 	    60000000ULL, 50000000ULL, 100000000ULL) ||
 	Policy::acceptSettledOnePixelFrame(false, true, false, false,
-	    false, true, false, false, -1, 1.0f, true,
+	    false, true, false, -1, 1.0f, true,
 	    60000000ULL, 50000000ULL, 100000000ULL) ||
 	Policy::acceptSettledOnePixelFrame(false, true, false, false,
-	    false, false, false, false, 0, 1.0f, true,
+	    false, false, true, -1, 1.0f, true,
 	    60000000ULL, 50000000ULL, 100000000ULL) ||
 	Policy::acceptSettledOnePixelFrame(false, true, false, false,
-	    false, false, false, false, -1, 2.0f, true,
+	    false, false, false, 0, 1.0f, true,
 	    60000000ULL, 50000000ULL, 100000000ULL) ||
 	Policy::acceptSettledOnePixelFrame(false, true, false, false,
-	    false, false, false, false, -1, 1.0f, false,
+	    false, false, false, -1, 2.0f, true,
 	    60000000ULL, 50000000ULL, 100000000ULL) ||
 	Policy::acceptSettledOnePixelFrame(false, true, false, false,
-	    false, false, false, false, -1, 1.0f, true,
+	    false, false, false, -1, 1.0f, false,
+	    60000000ULL, 50000000ULL, 100000000ULL) ||
+	Policy::acceptSettledOnePixelFrame(false, true, false, false,
+	    false, false, false, -1, 1.0f, true,
 	    101000000ULL, 50000000ULL, 100000000ULL)) {
 	std::fprintf(stderr,
 	    "FAIL: settled one-pixel frame did not enter static phase directly\n");
@@ -1340,6 +1326,42 @@ test_static_quality_policy(void)
 	Policy::stagedProgressiveCeiling(3, 10, 8.0f, 1) != 4 ||
 	Policy::stagedProgressiveCeiling(9, 10, 8.0f, 1) != 10) {
 	std::fprintf(stderr, "FAIL: static staged progressive ceiling\n");
+	return 1;
+    }
+    if (Policy::staticProgressiveBaselineCeiling(-1, 10, 1) != 10 ||
+	Policy::staticProgressiveBaselineCeiling(3, 10, 1) != -1 ||
+	Policy::staticProgressiveBaselineCeiling(-1, -1, 1) != -1 ||
+	Policy::staticProgressiveBaselineCeiling(-1, 10, 2) != -1) {
+	std::fprintf(stderr,
+	    "FAIL: static progressive baseline ceiling contract\n");
+	return 1;
+    }
+    if (!Policy::staticOrdinalOverscanApplicable(1) ||
+	Policy::staticOrdinalOverscanApplicable(0) ||
+	Policy::staticOrdinalOverscanApplicable(2)) {
+	std::fprintf(stderr,
+	    "FAIL: static ordinal overscan escaped the single-payload domain\n");
+	return 1;
+    }
+    if (!Policy::retainedPointAggregationApplicable(true, 1) ||
+	Policy::retainedPointAggregationApplicable(false, 1) ||
+	Policy::retainedPointAggregationApplicable(true, 0)) {
+	std::fprintf(stderr,
+	    "FAIL: inert retained point population admitted aggregation\n");
+	return 1;
+    }
+    if (!Policy::structuralPointAggregationRequired(50000, 8192) ||
+	Policy::structuralPointAggregationRequired(8, 512) ||
+	Policy::structuralPointAggregationRequired(50000, SIZE_MAX)) {
+	std::fprintf(stderr,
+	    "FAIL: internal mesh chunks changed structural aggregation regime\n");
+	return 1;
+    }
+    if (Policy::structuralFirstWaveOccurrenceLimit(SIZE_MAX) != SIZE_MAX ||
+	Policy::structuralFirstWaveOccurrenceLimit(50000) != 781 ||
+	Policy::structuralFirstWaveOccurrenceLimit(640000) != 8192) {
+	std::fprintf(stderr,
+	    "FAIL: structural first-wave occurrence limit\n");
 	return 1;
     }
     return 0;
@@ -1396,7 +1418,8 @@ test_convergence_policy(void)
     Policy::Decision decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::IDLE ||
 	decision.fraction < 0.999f || decision.fraction > 1.001f ||
-	!decision.viewReady ||
+	!decision.terminal || decision.terminalError ||
+	decision.outcome != Policy::Outcome::READY || !decision.viewReady ||
 	decision.backgroundPending || decision.visualPending ||
 	decision.hasLodState) {
 	std::fprintf(stderr, "FAIL: empty convergence state\n");
@@ -1408,6 +1431,7 @@ test_convergence_policy(void)
     input.availableLeafCount = 4;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::DISCOVERING ||
+	decision.terminal || decision.outcome != Policy::Outcome::ACTIVE ||
 	decision.viewReady || !decision.visualPending ||
 	decision.fraction < 0.159f || decision.fraction > 0.161f) {
 	std::fprintf(stderr, "FAIL: structural convergence phase\n");
@@ -1510,6 +1534,21 @@ test_convergence_policy(void)
     }
 
     input = baseInput();
+    input.viewEpoch.set(53);
+    input.controlPending = true;
+    input.visibleTargetCount = 1;
+    input.activePayloadCount = 1;
+    input.satisfiedPayloadCount = 1;
+    input.visibilityCensusComplete = true;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::REFINING || decision.terminal ||
+	decision.viewReady || !decision.visualPending) {
+	std::fprintf(stderr,
+	    "FAIL: named control obligation was misreported as terminal\n");
+	return 1;
+    }
+
+    input = baseInput();
     input.viewEpoch.set(51);
     input.resultPending = true;
     input.visibleTargetCount = 1000;
@@ -1548,9 +1587,47 @@ test_convergence_policy(void)
     input.queuedCacheWrites = 1;
     decision = policy.evaluate(input);
     if (decision.phase != Policy::Phase::BACKGROUND ||
+	!decision.terminal || decision.outcome != Policy::Outcome::READY ||
 	!decision.viewReady || !decision.backgroundPending ||
 	decision.fraction < 0.999f || decision.fraction > 1.001f) {
 	std::fprintf(stderr, "FAIL: background convergence phase\n");
+	return 1;
+    }
+
+    input = baseInput();
+    input.viewEpoch.set(61);
+    input.visibleTargetCount = 1;
+    input.activePayloadCount = 1;
+    input.satisfiedPayloadCount = 1;
+    input.inFlight = 1;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::BACKGROUND ||
+	!decision.viewReady || !decision.backgroundPending ||
+	decision.visualPending || decision.fraction < 0.999f ||
+	decision.fraction > 1.001f) {
+	std::fprintf(stderr, "FAIL: reusable cache background task phase\n");
+	return 1;
+    }
+
+    input.satisfiedPayloadCount = 0;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::REFINING || decision.viewReady ||
+	!decision.visualPending) {
+	std::fprintf(stderr, "FAIL: unresolved task remains foreground\n");
+	return 1;
+    }
+
+    input = baseInput();
+    input.viewEpoch.set(62);
+    input.visibilityCensusComplete = true;
+    input.inFlight = 1;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::BACKGROUND ||
+	!decision.viewReady || !decision.backgroundPending ||
+	decision.visualPending || decision.fraction < 0.999f ||
+	decision.fraction > 1.001f) {
+	std::fprintf(stderr,
+	    "FAIL: empty-view reusable task remained foreground\n");
 	return 1;
     }
 
@@ -1563,6 +1640,8 @@ test_convergence_policy(void)
     decision = policy.evaluate(input);
     if (!decision.viewReady || !decision.memoryLimited ||
 	!decision.performanceLimited ||
+	!decision.terminal ||
+	decision.outcome != Policy::Outcome::CONSTRAINED ||
 	decision.phase != Policy::Phase::IDLE) {
 	std::fprintf(stderr, "FAIL: limited terminal convergence\n");
 	return 1;
@@ -1599,7 +1678,9 @@ test_convergence_policy(void)
 
     input.terminalOccurrenceFailureCount = 1;
     decision = policy.evaluate(input);
-    if (!decision.viewReady || decision.visualPending ||
+    if (decision.viewReady || !decision.terminal ||
+	!decision.terminalError || decision.visualPending ||
+	decision.outcome != Policy::Outcome::ERROR ||
 	decision.phase != Policy::Phase::CONVERROR) {
 	std::fprintf(stderr,
 	    "FAIL: terminal structural presentation error convergence\n");
@@ -1623,8 +1704,36 @@ test_convergence_policy(void)
 
     input.failedSourceCount = 1;
     decision = policy.evaluate(input);
-    if (decision.phase != Policy::Phase::CONVERROR) {
+    if (decision.phase != Policy::Phase::CONVERROR ||
+	decision.outcome != Policy::Outcome::ERROR || decision.viewReady ||
+	!decision.terminal || !decision.terminalError) {
 	std::fprintf(stderr, "FAIL: convergence error phase\n");
+	return 1;
+    }
+
+    input = baseInput();
+    input.viewEpoch.set(73);
+    input.expectedLeafCount = 10;
+    input.availableLeafCount = 4;
+    input.failedSourceCount = 1;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::CONVERROR ||
+	decision.outcome != Policy::Outcome::ERROR || decision.viewReady ||
+	!decision.terminal || !decision.terminalError ||
+	decision.visualPending) {
+	std::fprintf(stderr,
+	    "FAIL: failed source left structural discovery live\n");
+	return 1;
+    }
+
+    input.sourcePreparationPending = true;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::CONVERROR ||
+	decision.outcome != Policy::Outcome::ERROR || decision.viewReady ||
+	decision.terminal || decision.terminalError ||
+	!decision.visualPending) {
+	std::fprintf(stderr,
+	    "FAIL: failed source hid remaining preparation work\n");
 	return 1;
     }
 
@@ -1663,54 +1772,263 @@ test_convergence_policy(void)
 }
 
 static int
-test_provider_pacing_policy(void)
+test_availability_scheduler(void)
 {
-    using Policy = BObolLodProviderPacingPolicy;
+    using Policy = BObolLodAvailabilityScheduler;
+    using Successor = Policy::CompletedPassSuccessor;
     if (Policy::effectiveMicroseconds(8000, true, false) != 8000 ||
 	Policy::effectiveMicroseconds(8000, true, true) != 4000 ||
 	Policy::effectiveMicroseconds(8000, false, true) != 8000 ||
 	Policy::effectiveMicroseconds(2500, true, false) != 2500) {
-	std::fprintf(stderr, "FAIL: progressive provider pacing policy\n");
+	std::fprintf(stderr, "FAIL: progressive availability scheduling\n");
+	return 1;
+    }
+    if (Policy::completedPassSuccessor(false, true, true, true) !=
+	    Successor::NONE ||
+	Policy::completedPassSuccessor(true, true, true, true) !=
+	    Successor::COMPLETE_RESIDENCY_DRAIN ||
+	Policy::completedPassSuccessor(true, false, true, true) !=
+	    Successor::YIELD_TO_RESIDENT_GROWTH ||
+	Policy::completedPassSuccessor(true, false, false, true) !=
+	    Successor::CALIBRATE_CAPACITY ||
+	Policy::completedPassSuccessor(true, false, false, false) !=
+	    Successor::NONE) {
+	std::fprintf(stderr,
+	    "FAIL: completed pass availability/capacity ownership\n");
 	return 1;
     }
     return 0;
 }
 
-static int
-test_budget_policy(void)
+static BObolLodAdmissionRevisionStamp
+admission_revision_stamp(uint64_t inventory = 1,
+    uint64_t availability = 1, uint64_t view = 1, uint64_t policy = 1,
+    uint64_t capacity = 1)
 {
-    using Policy = BObolLodBudgetPolicy;
+    BObolLodAdmissionRevisionStamp stamp;
+    stamp.inventory.set(inventory);
+    stamp.availability.set(availability);
+    stamp.view.set(view);
+    stamp.policy.set(policy);
+    stamp.capacity.set(capacity);
+    return stamp;
+}
+
+static BObolLodCapacityEvidence::Decision
+apply_admission_plan(BObolLodCapacityEvidence &evidence,
+	BObolLodAdmissionCursor &cursor,
+    const BObolLodCapacityEvidence::Inputs &inputs)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::plan(allEvidence, cursor,
+	    admission_revision_stamp(), inputs);
+    evidence = plan.nextEvidence.capacity();
+    cursor = plan.nextCursor;
+    return plan.capacityDecision;
+}
+
+static BObolLodCapacityEvidence::CalibrationDecision
+finish_blocked_capacity_plan(BObolLodCapacityEvidence &evidence,
+    BObolLodAdmissionCursor &cursor,
+    const BObolLodCapacityEvidence::CalibrationInputs &inputs)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::finishBlockedCapacityPass(
+	    allEvidence, cursor, inputs);
+    evidence = plan.nextEvidence.capacity();
+    cursor = plan.nextCursor;
+    return plan.calibrationDecision;
+}
+
+static BObolLodCapacityEvidence::CompletedFrameDecision
+complete_capacity_frame_plan(BObolLodCapacityEvidence &evidence,
+    BObolLodAdmissionCursor &cursor)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::completeCapacityCalibrationFrame(
+	    allEvidence, cursor);
+    evidence = plan.nextEvidence.capacity();
+    cursor = plan.nextCursor;
+    return plan.completedFrameDecision;
+}
+
+static BObolLodStructuralAdmissionEvidence::Decision
+apply_structural_admission_plan(
+    BObolLodStructuralAdmissionEvidence &evidence,
+    const BObolLodStructuralAdmissionEvidence::Inputs &inputs)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::planStructural(allEvidence, BObolLodAdmissionCursor(), inputs);
+    evidence = plan.nextEvidence.structural();
+    return plan.structuralDecision;
+}
+
+static BObolLodPointProxyEvidence::Decision
+apply_point_interrupted_plan(BObolLodPointProxyEvidence &evidence,
+    float currentThreshold, uint64_t renderNanoseconds, float targetFps)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::planPointInterrupted(allEvidence, BObolLodAdmissionCursor(),
+	    currentThreshold, renderNanoseconds, targetFps);
+    evidence = plan.nextEvidence.pointProxy();
+    return plan.pointProxyDecision;
+}
+
+static BObolLodPointProxyEvidence::Decision
+apply_point_completed_plan(BObolLodPointProxyEvidence &evidence,
+    float currentThreshold, uint64_t renderNanoseconds, float targetFps,
+    bool reusableSample, size_t unresolvedStructuralCount = 0)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::planPointCompleted(allEvidence, BObolLodAdmissionCursor(),
+	    currentThreshold, renderNanoseconds, targetFps, reusableSample,
+	    unresolvedStructuralCount);
+    evidence = plan.nextEvidence.pointProxy();
+    return plan.pointProxyDecision;
+}
+
+static BObolLodPointProxyEvidence::Decision
+apply_point_structural_distribution_plan(
+    BObolLodPointProxyEvidence &evidence, float currentThreshold,
+    const std::array<size_t, 7> &cumulativeCount, size_t visibleCount,
+    size_t maximumUncollapsedCount)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::planPointStructuralDistribution(allEvidence, BObolLodAdmissionCursor(),
+	    currentThreshold, cumulativeCount, visibleCount,
+	    maximumUncollapsedCount);
+    evidence = plan.nextEvidence.pointProxy();
+    return plan.pointProxyDecision;
+}
+
+static BObolLodPointProxyEvidence::Decision
+apply_point_structural_blocked_plan(BObolLodPointProxyEvidence &evidence,
+    float currentThreshold, size_t unresolvedStructuralCount)
+{
+    BObolLodAdmissionEvidence allEvidence(evidence);
+    const BObolLodAdmissionPlan plan =
+	BObolLodAdmissionPlanner::planPointStructuralCoverageBlocked(allEvidence, BObolLodAdmissionCursor(),
+	    currentThreshold, unresolvedStructuralCount);
+    evidence = plan.nextEvidence.pointProxy();
+    return plan.pointProxyDecision;
+}
+
+static int
+test_admission_capacity(void)
+{
+    using Policy = BObolLodCapacityEvidence;
     Policy policy;
     Policy::Inputs input;
     input.activeCost = 1234;
     input.minimumActiveCost = 321;
-    Policy::Decision decision = policy.beginPass(input);
+    BObolLodAdmissionEvidence initialEvidence(policy);
+    BObolLodAdmissionCursor initialCursor;
+    initialEvidence = BObolLodAdmissionPlanner::planResourceObservation(
+	initialEvidence, initialCursor, true, false, true).nextEvidence;
+    initialEvidence = BObolLodAdmissionPlanner::planHeadroomRetry(
+	initialEvidence, initialCursor, BObolLodViewEpoch(2), BObolLodPolicyEpoch(3),
+	1000, 100).nextEvidence;
+    BObolLodStructuralAdmissionEvidence::Inputs structuralInputs;
+    structuralInputs.viewRevision = 2;
+    structuralInputs.policyRevision = 3;
+    structuralInputs.frontierDigest = 4;
+    structuralInputs.unresolvedCount = 1;
+    structuralInputs.unaggregatableCount = 1;
+    structuralInputs.activeCost = 100;
+    structuralInputs.certifiedBudget = 200;
+    structuralInputs.exactProjection = true;
+    structuralInputs.maximumThreshold = true;
+    initialEvidence = BObolLodAdmissionPlanner::planStructural(
+	initialEvidence, initialCursor, structuralInputs).nextEvidence;
+    const BObolLodAdmissionPlan firstPlan =
+	BObolLodAdmissionPlanner::plan(initialEvidence, initialCursor,
+	    admission_revision_stamp(), input);
+    const BObolLodAdmissionPlan repeatedPlan =
+	BObolLodAdmissionPlanner::plan(initialEvidence, initialCursor,
+	    admission_revision_stamp(), input);
+    const BObolLodAdmissionPlan sameRevisionPlan =
+	BObolLodAdmissionPlanner::plan(firstPlan.nextEvidence,
+	    firstPlan.nextCursor, admission_revision_stamp(), input);
+    const BObolLodAdmissionRevisionStamp nextViewStamp =
+	admission_revision_stamp(1, 1, 2, 1, 1);
+    const BObolLodAdmissionPlan supersedingRevisionPlan =
+	BObolLodAdmissionPlanner::plan(firstPlan.nextEvidence,
+	    firstPlan.nextCursor, nextViewStamp, input);
+    const BObolLodAdmissionPlan unrelatedTransition =
+	BObolLodAdmissionPlanner::planResourceObservation(
+	    firstPlan.nextEvidence, firstPlan.nextCursor, true, false, true);
+    if (initialCursor.initialized() || policy.currentBudget() != 50000 ||
+	firstPlan.capacityDecision.initialized !=
+	    repeatedPlan.capacityDecision.initialized ||
+	firstPlan.capacityDecision.totalBudget !=
+	    repeatedPlan.capacityDecision.totalBudget ||
+	firstPlan.capacityDecision.refinementBudget !=
+	    repeatedPlan.capacityDecision.refinementBudget ||
+	firstPlan.nextEvidence.capacity().currentBudget() !=
+	    repeatedPlan.nextEvidence.capacity().currentBudget() ||
+	firstPlan.nextCursor.activeCost() !=
+	    repeatedPlan.nextCursor.activeCost() ||
+	!firstPlan.certifiedFor(admission_revision_stamp()) ||
+	firstPlan.certifiedFor(nextViewStamp) ||
+	sameRevisionPlan.capacityDecision.initialized ||
+	!sameRevisionPlan.nextCursor.matches(admission_revision_stamp()) ||
+	!supersedingRevisionPlan.capacityDecision.initialized ||
+	!supersedingRevisionPlan.nextCursor.matches(nextViewStamp) ||
+	!supersedingRevisionPlan.certifiedFor(nextViewStamp) ||
+	unrelatedTransition.nextCursor.activeCost() !=
+	    firstPlan.nextCursor.activeCost() ||
+	unrelatedTransition.nextCursor.refinementRemaining() !=
+	    firstPlan.nextCursor.refinementRemaining() ||
+	unrelatedTransition.nextEvidence.capacity().currentBudget() !=
+	    firstPlan.nextEvidence.capacity().currentBudget() ||
+	!firstPlan.nextEvidence.resources().cpuPressure() ||
+	firstPlan.nextEvidence.resources().revision() != 1 ||
+	!firstPlan.nextEvidence.headroom().pendingMatches(
+	    BObolLodViewEpoch(2), BObolLodPolicyEpoch(3), 1000) ||
+	!BObolLodAdmissionPlanner::planStructural(
+	    firstPlan.nextEvidence, firstPlan.nextCursor, structuralInputs).
+	    structuralDecision.duplicateRejected) {
+	std::fprintf(stderr,
+	    "FAIL: admission planner was mutable, nondeterministic, or lost "
+	    "unrelated evidence\n");
+	return 1;
+    }
+    policy = firstPlan.nextEvidence.capacity();
+    BObolLodAdmissionCursor cursor = firstPlan.nextCursor;
+    Policy::Decision decision = firstPlan.capacityDecision;
     if (!decision.initialized || decision.totalBudget != 50000 ||
 	decision.refinementBudget != 48766 || decision.retainedAdmission ||
-	!policy.passInitialized() || policy.currentBudget() != 50000 ||
-	policy.passActiveCost() != 1234 ||
-	policy.passMinimumActiveCost() != 321) {
+	!cursor.initialized() || policy.currentBudget() != 50000 ||
+	cursor.activeCost() != 1234 ||
+	cursor.minimumActiveCost() != 321) {
 	std::fprintf(stderr, "FAIL: seed scene budget\n");
 	return 1;
     }
     input.activeCost = 9999;
     input.minimumActiveCost = 8888;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
 	if (decision.initialized || decision.totalBudget != 50000 ||
-	policy.passActiveCost() != 1234 ||
-	policy.passMinimumActiveCost() != 321) {
+	cursor.activeCost() != 1234 ||
+	cursor.minimumActiveCost() != 321) {
 	std::fprintf(stderr, "FAIL: duplicate scene budget initialization\n");
 	return 1;
     }
-    policy.consumeRefinement(12000);
-    if (policy.refinementRemaining() != 36766) {
+    cursor.consumeRefinement(12000);
+    if (cursor.refinementRemaining() != 36766) {
 	std::fprintf(stderr, "FAIL: refinement budget consumption\n");
 	return 1;
     }
 
-    policy.resetPass();
-    if (policy.passActiveCost() != 0 ||
-	policy.passMinimumActiveCost() != 0) {
+    cursor.reset();
+    if (cursor.activeCost() != 0 ||
+	cursor.minimumActiveCost() != 0) {
 	std::fprintf(stderr, "FAIL: bounded-pass cost snapshot reset\n");
 	return 1;
     }
@@ -1719,7 +2037,7 @@ test_budget_policy(void)
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 10000000.0L;
     input.observedStableNanoseconds = 10000000ULL;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!decision.initialized || decision.totalBudget != 400000 ||
 	decision.refinementBudget != 300000 ||
 	decision.retainedAdmission) {
@@ -1732,12 +2050,13 @@ test_budget_policy(void)
      * triangle cost, so the estimator may place a population below a budget
      * even though that exact population was just presented within deadline. */
     policy.reset();
+    cursor.reset();
     input = Policy::Inputs();
     input.activeCost = 2070262;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 6300000.0L;
     input.observedStableNanoseconds = 37000000ULL;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!decision.initialized || decision.totalBudget != input.activeCost ||
 	decision.refinementBudget != 0 || decision.retainedAdmission) {
 	std::fprintf(stderr,
@@ -1754,13 +2073,14 @@ test_budget_policy(void)
      * repair; an endpoint abort supplies recovery if the prediction is
      * optimistic. */
     policy.reset();
+    cursor.reset();
     input = Policy::Inputs();
     input.activeCost = 100000;
     input.targetFps = 10.0f;
     input.calibratedCostPerSecond = 10000000.0L;
     input.observedStableNanoseconds = 40000000ULL;
     input.hardDeadlinePresentation = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!decision.initialized || decision.totalBudget != 1000000 ||
 	decision.refinementBudget != 900000 ||
 	decision.retainedAdmission) {
@@ -1774,13 +2094,14 @@ test_budget_policy(void)
      * able to spend the complete calibrated hard-frame allowance in one pass
      * instead of repeatedly probing an already saturated preferred budget. */
     policy.reset();
+    cursor.reset();
     input = Policy::Inputs();
     input.activeCost = 294000;
     input.targetFps = 10.0f;
     input.calibratedCostPerSecond = 6300000.0L;
     input.observedStableNanoseconds = 50000000ULL;
     input.hardDeadlinePresentation = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!decision.initialized || decision.totalBudget != 630000 ||
 	decision.refinementBudget != 336000 ||
 	decision.retainedAdmission) {
@@ -1793,13 +2114,14 @@ test_budget_policy(void)
      * supplies bounded static headroom.  This is what lets terminal coverage
      * replace the last structural proxies after a large publication wave. */
     policy.reset();
+    cursor.reset();
     input = Policy::Inputs();
     input.activeCost = 100000;
     input.targetFps = 10.0f;
     input.calibratedCostPerSecond = 1000000.0L;
     input.observedStableNanoseconds = 25000000ULL;
     input.hardDeadlinePresentation = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!decision.initialized || decision.totalBudget != 320000 ||
 	decision.refinementBudget != 220000 ||
 	decision.retainedAdmission) {
@@ -1816,9 +2138,10 @@ test_budget_policy(void)
      * several warm-cache blocky frames without changing the conservative seed
      * for an unknown/many-object population. */
     policy.reset();
+    cursor.reset();
     input = Policy::Inputs();
     input.coldSingleOccurrence = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!decision.initialized ||
 	decision.totalBudget != Policy::singleOccurrenceBootstrapBudget() ||
 	decision.refinementBudget !=
@@ -1832,13 +2155,14 @@ test_budget_policy(void)
      * population.  An exact over-budget frame or an explicit recovery
      * request supplies that separate authority. */
     policy.reset();
+    cursor.reset();
     input = Policy::Inputs();
     input.activeCost = 400000;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 2000000.0L;
     input.observedStableNanoseconds = 40000000ULL;
     input.stablePresentationHandoff = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 100000 ||
 	decision.retainedAdmission ||
 	decision.retainedAdmissionBudget != SIZE_MAX) {
@@ -1850,13 +2174,13 @@ test_budget_policy(void)
     policy.resetOverloadRecovery();
     policy.resetCalibration();
     input = Policy::Inputs();
-    policy.resetPass();
+    cursor.reset();
     input.activeCost = 400000;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 4000000.0L;
     input.observedStableNanoseconds = 70000000ULL;
-    policy.setProbeCount(3);
-    decision = policy.beginPass(input);
+    policy.noteDeadlineCapacityMiss(400000);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!decision.overloadRecovery || decision.totalBudget != 200000 ||
 	!decision.retainedAdmission ||
 	decision.retainedAdmissionBudget != 200000 ||
@@ -1878,6 +2202,7 @@ test_budget_policy(void)
      * proven population across a pose-only interaction; reducing it here can
      * expose structural boxes which were absent before the rotation. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(400000);
     input = Policy::Inputs();
     input.activeCost = 400000;
@@ -1885,8 +2210,7 @@ test_budget_policy(void)
     input.calibratedCostPerSecond = 4000000.0L;
     input.observedStableNanoseconds = 70000000ULL;
     input.hardPresentationDeadlineNanoseconds = 100000000ULL;
-    policy.setProbeCount(3);
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.overloadRecovery || decision.totalBudget != 400000 ||
 	decision.retainedAdmission) {
 	std::fprintf(stderr,
@@ -1898,19 +2222,20 @@ test_budget_policy(void)
     }
 
     /* A many-occurrence fixed cost is not described by the triangle-rate
-     * calibration.  Three exact stable misses must therefore authorize the
-     * direct duration-based recovery even when that estimator predicts the
-     * active cut should fit. */
+	 * calibration.  A typed deadline miss must therefore authorize the direct
+	 * duration-based recovery even when that estimator predicts the active cut
+	 * should fit. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(400000);
-    policy.resetPass();
+    cursor.reset();
     input = Policy::Inputs();
     input.activeCost = 400000;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 20000000.0L;
     input.observedStableNanoseconds = 80000000ULL;
-    policy.setProbeCount(3);
-    decision = policy.beginPass(input);
+    policy.noteDeadlineCapacityMiss(400000);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!decision.overloadRecovery || decision.totalBudget != 200000 ||
 	!decision.retainedAdmission) {
 	std::fprintf(stderr,
@@ -1920,8 +2245,8 @@ test_budget_policy(void)
 	    decision.retainedAdmission ? 1 : 0);
 	return 1;
     }
-    policy.consumeRetainedAdmission(75000);
-    if (policy.retainedAdmissionRemaining() != 125000) {
+    cursor.consumeRetainedAdmission(75000);
+    if (cursor.retainedAdmissionRemaining() != 125000) {
 	std::fprintf(stderr, "FAIL: retained admission consumption\n");
 	return 1;
     }
@@ -1930,13 +2255,14 @@ test_budget_policy(void)
      * upgrade allowance so every slice cannot charge the same floor and
      * normalize the whole scene before refinement restarts. */
     policy.reset();
+    cursor.reset();
     policy.requestRetainedRecovery(200000);
     input = Policy::Inputs();
     input.activeCost = 400000;
     input.minimumActiveCost = 125000;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 4000000.0L;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!decision.retainedAdmission ||
 	decision.totalBudget != 200000 ||
 	decision.retainedAdmissionBudget != 75000) {
@@ -1952,18 +2278,19 @@ test_budget_policy(void)
      * aggregated.  This recovery must not depend on a slow-frame probe: the
      * point cut which hid the population can itself be fast. */
     policy.reset();
+    cursor.reset();
     policy.requestRetainedRecovery(120000);
     if (!policy.retainedRecoveryCeilingActive()) {
 	std::fprintf(stderr, "FAIL: measured recovery ceiling provenance\n");
 	return 1;
     }
-    policy.resetPass();
+    cursor.reset();
     input = Policy::Inputs();
     input.activeCost = 400000;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 20000000.0L;
     input.observedStableNanoseconds = 10000000ULL;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 120000 ||
 	!decision.retainedAdmission ||
 	decision.retainedAdmissionBudget != 120000) {
@@ -1978,9 +2305,9 @@ test_budget_policy(void)
     /* The measured recovery ceiling belongs to the current view/policy
      * epoch, not just the first admission pass.  A cheap coarse frame must
      * not immediately re-admit the rejected discrete cut. */
-    policy.resetPass();
+    cursor.reset();
     input.activeCost = 100000;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 120000) {
 	std::fprintf(stderr,
 	    "FAIL: retained recovery ceiling did not persist budget=%zu\n",
@@ -1988,15 +2315,15 @@ test_budget_policy(void)
 	return 1;
     }
     policy.raiseCurrentBudget(400000);
-    policy.resetPass();
-    decision = policy.beginPass(input);
+    cursor.reset();
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 120000) {
 	std::fprintf(stderr,
 	    "FAIL: retained recovery ceiling did not bound raise budget=%zu\n",
 	    decision.totalBudget);
 	return 1;
     }
-    if (policy.confirmRetainedRecoveryPresentation(false) ||
+    if (policy.confirmRetainedRecoveryPresentation(false, cursor) ||
 	!policy.retainedRecoveryCeilingActive()) {
 	std::fprintf(stderr,
 	    "FAIL: unconfirmed one-pixel recovery retired its ceiling\n");
@@ -2007,7 +2334,7 @@ test_budget_policy(void)
      * cannot strand visible structural boxes.  Terminal coverage repair uses
      * the separately deadline-bounded static allowance for minimum meshes and
      * leaves the ceiling installed for subsequent detail allocation. */
-    policy.resetPass();
+    cursor.reset();
     input = Policy::Inputs();
     input.activeCost = 100000;
     input.targetFps = 10.0f;
@@ -2015,7 +2342,7 @@ test_budget_policy(void)
     input.observedStableNanoseconds = 40000000ULL;
     input.hardDeadlinePresentation = true;
     input.structuralCoverageRepair = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 1000000 ||
 	decision.refinementBudget != 900000 ||
 	decision.retainedAdmission ||
@@ -2028,16 +2355,16 @@ test_budget_policy(void)
 	    policy.retainedRecoveryCeilingActive() ? 1 : 0);
 	return 1;
     }
-    if (!policy.confirmRetainedRecoveryPresentation(true) ||
+    if (!policy.confirmRetainedRecoveryPresentation(true, cursor) ||
 	policy.retainedRecoveryCeilingActive() ||
-	policy.passInitialized()) {
+	cursor.initialized()) {
 	std::fprintf(stderr,
 	    "FAIL: confirmed one-pixel recovery retained policy state\n");
 	return 1;
     }
     policy.raiseCurrentBudget(400000);
-    policy.resetPass();
-    decision = policy.beginPass(input);
+    cursor.reset();
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget <= 120000) {
 	std::fprintf(stderr,
 	    "FAIL: retired recovery ceiling still constrained budget=%zu\n",
@@ -2048,23 +2375,24 @@ test_budget_policy(void)
     /* A handoff normalization is intentionally one-pass.  Its successor may
      * grow from the newly measured coherent baseline. */
     policy.reset();
+    cursor.reset();
     policy.requestRetainedNormalization(120000);
     if (policy.retainedRecoveryCeilingActive()) {
 	std::fprintf(stderr, "FAIL: normalization acquired recovery ceiling\n");
 	return 1;
     }
-    policy.resetPass();
+    cursor.reset();
     input.activeCost = 400000;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 120000 || !decision.retainedAdmission) {
 	std::fprintf(stderr,
 	    "FAIL: retained normalization budget=%zu admission=%d\n",
 	    decision.totalBudget, decision.retainedAdmission ? 1 : 0);
 	return 1;
     }
-    policy.resetPass();
+    cursor.reset();
     input.activeCost = 100000;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget <= 120000) {
 	std::fprintf(stderr,
 	    "FAIL: retained normalization incorrectly persisted budget=%zu\n",
@@ -2077,12 +2405,13 @@ test_budget_policy(void)
      * occurrences.  Authorize one reallocation at the retained budget, then
      * consume the authority so an unchanged view cannot churn its cuts. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(200000);
     policy.requestRetainedReallocation();
     input = Policy::Inputs();
     input.activeCost = 150000;
     input.minimumActiveCost = 50000;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 200000 ||
 	!decision.retainedAdmission ||
 	decision.retainedAdmissionBudget != 150000) {
@@ -2093,8 +2422,8 @@ test_budget_policy(void)
 	    decision.retainedAdmissionBudget);
 	return 1;
     }
-    policy.resetPass();
-    decision = policy.beginPass(input);
+    cursor.reset();
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.retainedAdmission ||
 	decision.retainedAdmissionBudget != SIZE_MAX) {
 	std::fprintf(stderr,
@@ -2107,15 +2436,16 @@ test_budget_policy(void)
      * must nevertheless force one full allocation at the demonstrated
      * allowance, overriding both a stale low seed and a soft protected floor. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(200000);
-    policy.setRetainedQualityFloorBudget(
+    policy.setRetainedQualityFloorBudget(cursor,
 	300000, 0x2222222222222222ULL, 80000, 50000);
     policy.requestPresentationReconciliation(120000);
     input = Policy::Inputs();
     input.activeCost = 80000;
     input.minimumActiveCost = 50000;
     input.stablePresentationHandoff = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 120000 || !decision.retainedAdmission ||
 	decision.retainedAdmissionBudget != 70000 ||
 	policy.currentBudget() != 120000) {
@@ -2131,6 +2461,7 @@ test_budget_policy(void)
      * preferred-cadence estimator for one repair pass, without turning that
      * pass into a retained-cut reallocation or a permanent budget floor. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(200000);
     if (policy.requestCoverageCompletion(300000, 450000) != 450000) {
 	std::fprintf(stderr,
@@ -2145,7 +2476,7 @@ test_budget_policy(void)
     input.activeCost = 330000;
     input.minimumActiveCost = 100000;
     input.structuralCoverageRepair = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 480000 || decision.retainedAdmission ||
 	decision.refinementBudget != 150000) {
 	std::fprintf(stderr,
@@ -2154,8 +2485,8 @@ test_budget_policy(void)
 	    decision.retainedAdmission ? 1 : 0, decision.refinementBudget);
 	return 1;
     }
-    policy.resetPass();
-    decision = policy.beginPass(input);
+    cursor.reset();
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget == 480000) {
 	std::fprintf(stderr,
 	    "FAIL: structural coverage transaction was not one-shot\n");
@@ -2163,28 +2494,49 @@ test_budget_policy(void)
     }
 
     /* A hard-deadline recovery budget is a one-pass safe handoff, while the
-     * failed attempted population is a persistent unsafe bound.  Ordinary
-     * calibration and a soft prominent-geometry floor may not restore the
-     * identical failed allowance in the same capacity epoch. */
+     * failed attempted population is a persistent unsafe bound for that
+     * deadline class.  A preferred-cadence miss must not reject a prominent
+     * floor which is still eligible for the longer static deadline. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(500000);
-    policy.setRetainedQualityFloorBudget(
+    policy.setRetainedQualityFloorBudget(cursor,
 	480000, 0x4444444444444444ULL, 400000, 100000);
     policy.noteDeadlineCapacityMiss(500000);
     if (policy.deadlineCapacityCeiling() != 475000 ||
+	policy.staticDeadlineCapacityCeiling() != SIZE_MAX ||
 	policy.currentBudget() != 475000 ||
-	policy.retainedQualityFloorActive() ||
-	!policy.retainedQualityFloorRejected()) {
+	!policy.retainedQualityFloorActive() ||
+	policy.retainedQualityFloorRejected()) {
 	std::fprintf(stderr,
-	    "FAIL: deadline capacity bound did not retire failed floor\n");
+	    "FAIL: steady deadline capacity bound erased static quality\n");
+	return 1;
+    }
+
+    /* The preferred-cadence miss must not erase the independent static-view
+     * quality domain.  A miss at that longer deadline constrains both goals. */
+	policy.noteDeadlineCapacityMiss(600000, true);
+	if (policy.staticDeadlineCapacityCeiling() != 570000 ||
+	policy.deadlineCapacityCeiling() != 475000 ||
+	!policy.retainedQualityFloorActive()) {
+	std::fprintf(stderr,
+	    "FAIL: deadline capacity evidence mixed steady/static domains\n");
+	return 1;
+    }
+	policy.setRetainedQualityFloorBudget(cursor,
+	    580000, 0x5555555555555555ULL, 400000, 100000);
+	if (policy.retainedQualityFloorActive() ||
+	    !policy.retainedQualityFloorRejected()) {
+	std::fprintf(stderr,
+	    "FAIL: static deadline miss did not reject richer floor\n");
 	return 1;
     }
     /* The deadline ceiling is already a strict successor below the failed
      * population.  Marginal recovery may apply its independent throughput
      * margin before this cap, but must not compound the margin here. */
-    if (BObolLodStaticQualityPolicy::capMarginalBudget(
+    if (BObolLodAdmissionPlanner::capBudgetAtDeadlineCeiling(
 	    600000, policy.deadlineCapacityCeiling()) != 475000 ||
-	BObolLodStaticQualityPolicy::capMarginalBudget(
+	BObolLodAdmissionPlanner::capBudgetAtDeadlineCeiling(
 	    400000, SIZE_MAX) != 400000) {
 	std::fprintf(stderr,
 	    "FAIL: static marginal budget compounded deadline safety margin\n");
@@ -2201,24 +2553,24 @@ test_budget_policy(void)
     input.activeCost = 350000;
     input.minimumActiveCost = 100000;
     input.stablePresentationHandoff = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 400000 || !decision.retainedAdmission) {
 	std::fprintf(stderr,
 	    "FAIL: deadline capacity bound blocked safe reconciliation\n");
 	return 1;
     }
-    policy.resetPass();
+    cursor.reset();
     input.stablePresentationHandoff = false;
     input.activeCost = 400000;
     input.calibratedCostPerSecond = 20000000.0L;
     input.targetFps = 20.0f;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget > 475000) {
 	std::fprintf(stderr,
 	    "FAIL: calibration restored a known failed population\n");
 	return 1;
     }
-    policy.resetPass();
+    cursor.reset();
     if (policy.requestCoverageCompletion(400000, 600000) != 600000) {
 	std::fprintf(stderr,
 	    "FAIL: exact structural coverage was serialized by an old allocation\n");
@@ -2228,7 +2580,7 @@ test_budget_policy(void)
     input.activeCost = 400000;
     input.minimumActiveCost = 100000;
     input.structuralCoverageRepair = true;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 600000 ||
 	decision.refinementBudget != 200000) {
 	std::fprintf(stderr,
@@ -2248,6 +2600,7 @@ test_budget_policy(void)
      * newly calibrated capacity rather than preserving the smaller allowance
      * merely because the current cut is already under it. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(200000);
     policy.requestRetainedReallocation(false);
     input = Policy::Inputs();
@@ -2255,7 +2608,7 @@ test_budget_policy(void)
     input.minimumActiveCost = 50000;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 8000000.0L;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 400000 || !decision.retainedAdmission ||
 	decision.retainedAdmissionBudget != 350000) {
 	std::fprintf(stderr,
@@ -2268,27 +2621,27 @@ test_budget_policy(void)
      * must remain a fixed point across ordinary 20 Hz overload evaluation;
      * an actual hard-deadline miss explicitly rejects the floor. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(200000);
     policy.requestRetainedReallocation();
     input = Policy::Inputs();
     input.activeCost = 150000;
     input.minimumActiveCost = 50000;
-    decision = policy.beginPass(input);
-    policy.setRetainedQualityFloorBudget(
+    decision = apply_admission_plan(policy, cursor, input);
+    policy.setRetainedQualityFloorBudget(cursor,
 	300000, 0x1111111111111111ULL, 150000, 50000);
     if (policy.currentBudget() != 300000 ||
-	policy.retainedAdmissionRemaining() != 250000) {
+	cursor.retainedAdmissionRemaining() != 250000) {
 	std::fprintf(stderr, "FAIL: retained quality-floor admission setup\n");
 	return 1;
     }
-    policy.resetPass();
+    cursor.reset();
     policy.resetOverloadRecovery();
     input.activeCost = 300000;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 4000000.0L;
     input.observedStableNanoseconds = 80000000ULL;
-    policy.setProbeCount(3);
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 300000 || decision.retainedAdmission) {
 	std::fprintf(stderr,
 	    "FAIL: retained quality floor was not a stable fixed point\n");
@@ -2301,7 +2654,7 @@ test_budget_policy(void)
 	    "FAIL: transient deadline miss rejected quality floor\n");
 	return 1;
     }
-    policy.setRetainedQualityFloorBudget(
+    policy.setRetainedQualityFloorBudget(cursor,
 	300000, 0x2222222222222222ULL, 300000, 50000);
     if (policy.noteRetainedQualityFloorMiss() ||
 	policy.retainedQualityFloorRejected()) {
@@ -2332,10 +2685,10 @@ test_budget_policy(void)
 	    "FAIL: repeated deadline misses did not reject quality floor\n");
 	return 1;
     }
-    policy.resetPass();
+    cursor.reset();
     policy.resetOverloadRecovery();
-    policy.setProbeCount(3);
-    decision = policy.beginPass(input);
+    policy.noteDeadlineCapacityMiss(300000);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!policy.retainedQualityFloorRejected() ||
 	decision.totalBudget >= 300000 || !decision.retainedAdmission) {
 	std::fprintf(stderr,
@@ -2348,13 +2701,14 @@ test_budget_policy(void)
      * retire the protected floor immediately or the next recovery pass will
      * restore the exact population which just failed. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(200000);
     policy.requestRetainedReallocation();
     input = Policy::Inputs();
     input.activeCost = 150000;
     input.minimumActiveCost = 50000;
-    decision = policy.beginPass(input);
-    policy.setRetainedQualityFloorBudget(
+    decision = apply_admission_plan(policy, cursor, input);
+    policy.setRetainedQualityFloorBudget(cursor,
 	300000, 0x3333333333333333ULL, 150000, 50000);
     if (!policy.rejectRetainedQualityFloor() ||
 	policy.retainedQualityFloorActive() ||
@@ -2363,14 +2717,14 @@ test_budget_policy(void)
 	    "FAIL: explicit static deadline did not retire quality floor\n");
 	return 1;
     }
-    policy.resetPass();
+    cursor.reset();
     policy.resetOverloadRecovery();
-    policy.setProbeCount(3);
+    policy.noteDeadlineCapacityMiss(300000);
     input.activeCost = 300000;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 4000000.0L;
     input.observedStableNanoseconds = 80000000ULL;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget >= 300000 || !decision.retainedAdmission) {
 	std::fprintf(stderr,
 	    "FAIL: explicit static deadline recovery restored quality floor\n");
@@ -2382,26 +2736,25 @@ test_budget_policy(void)
      * per-occurrence allocation stamps makes the richer budget inert and can
      * leave a warm Hubble view indefinitely coarse. */
     policy.reset();
+    cursor.reset();
     policy.raiseCurrentBudget(200000);
     policy.requestRetainedReallocation();
     input = Policy::Inputs();
     input.activeCost = 150000;
     input.minimumActiveCost = 50000;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     Policy::CalibrationInputs retainedCalibration;
     retainedCalibration.activeCost = 150000;
-    retainedCalibration.targetNanoseconds = 50000000ULL;
     retainedCalibration.observedNanoseconds = 10000000ULL;
-    retainedCalibration.calibratedBudget = 400000.0L;
     retainedCalibration.passAdmittedWork = true;
     retainedCalibration.retainedAllocation = true;
     Policy::CalibrationDecision retainedProbe =
 	policy.finishBlockedPass(retainedCalibration);
     Policy::CompletedFrameDecision retainedFrame =
-	policy.completeCalibrationFrame();
+	policy.completeCalibrationFrame(cursor);
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 8000000.0L;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (!retainedProbe.requestFrame ||
 	!retainedFrame.restartSubmission ||
 	decision.totalBudget != 400000 || !decision.retainedAdmission ||
@@ -2416,12 +2769,13 @@ test_budget_policy(void)
     }
 
     policy.reset();
+    cursor.reset();
     input = Policy::Inputs();
     input.interactive = true;
     input.activeCost = 100000;
     input.targetFps = 60.0f;
     input.lastRenderNanoseconds = 4000000ULL;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget < 332000 || decision.totalBudget > 334000 ||
 	decision.refinementBudget < 232000 ||
 	decision.refinementBudget > 234000) {
@@ -2430,13 +2784,14 @@ test_budget_policy(void)
     }
 
     policy.reset();
+    cursor.reset();
     input = Policy::Inputs();
     input.interactive = true;
     input.scaleQualityProbe = true;
     input.activeCost = 200000;
     input.targetFps = 10.0f;
     input.lastRenderNanoseconds = 40000000ULL;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 800000 ||
 	decision.refinementBudget != 600000) {
 	std::fprintf(stderr, "FAIL: scale-quality discrete probe\n");
@@ -2444,13 +2799,14 @@ test_budget_policy(void)
     }
 
     policy.reset();
+    cursor.reset();
     input = Policy::Inputs();
     input.activeCost = 100000;
     input.targetFps = 20.0f;
     input.calibratedCostPerSecond = 1000000.0L;
     input.stablePresentationHandoff = true;
     input.stablePresentationCostFloor = 90000;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != 90000 ||
 	decision.retainedAdmission ||
 	decision.retainedAdmissionBudget != SIZE_MAX) {
@@ -2458,11 +2814,11 @@ test_budget_policy(void)
 	return 1;
     }
 
-    policy.resetPass();
+    cursor.reset();
     input = Policy::Inputs();
     input.forceTerminal = true;
     input.activeCost = 123;
-    decision = policy.beginPass(input);
+    decision = apply_admission_plan(policy, cursor, input);
     if (decision.totalBudget != SIZE_MAX ||
 	decision.refinementBudget != SIZE_MAX ||
 	decision.retainedAdmission) {
@@ -2489,104 +2845,159 @@ test_budget_policy(void)
     }
 
     policy.reset();
+    cursor.reset();
     Policy::CalibrationInputs calibrationInput;
     calibrationInput.activeCost = 100000;
-    calibrationInput.targetNanoseconds = 50000000ULL;
     calibrationInput.observedNanoseconds = 10000000ULL;
-    calibrationInput.calibratedBudget = 100000.0L;
     Policy::CalibrationDecision calibration =
-	policy.finishBlockedPass(calibrationInput);
-    if (!calibration.probeCandidate || !calibration.probeEligible ||
-	!calibration.requestFrame || !calibration.calibrationFrame ||
-	policy.probeActiveCost() != 100000 || policy.probeCount() != 1 ||
-	policy.calibrationFramesRemaining() != 2 ||
-	!policy.rescanAfterFrame() || policy.stableBudgetLimited()) {
-	std::fprintf(stderr, "FAIL: stable headroom probe admission\n");
+	finish_blocked_capacity_plan(policy, cursor, calibrationInput);
+    if (calibration.candidateReallocation || calibration.searchActive ||
+	calibration.requestFrame || calibration.sampleFrame ||
+	!calibration.restartSubmission || policy.rescanAfterFrame() ||
+	policy.stableBudgetLimited() || cursor.initialized()) {
+	std::fprintf(stderr,
+	    "FAIL: unchanged ordinary pass did not transfer to allocation\n");
 	return 1;
     }
-    for (unsigned int i = 0; i < 2; i++) {
-	Policy::CompletedFrameDecision completed =
-	    policy.completeCalibrationFrame();
-	if (!completed.requestCalibrationFrame ||
-	    completed.restartSubmission) {
-	    std::fprintf(stderr, "FAIL: bounded calibration series\n");
-	    return 1;
-	}
-    }
-    Policy::CompletedFrameDecision completed =
-	policy.completeCalibrationFrame();
-    if (completed.requestCalibrationFrame ||
-	!completed.restartSubmission || policy.rescanAfterFrame() ||
-	policy.probeCount() != 3 || policy.passInitialized()) {
-	std::fprintf(stderr, "FAIL: calibration series completion\n");
+    Policy::Inputs reallocationInputs;
+    reallocationInputs.activeCost = 100000;
+    reallocationInputs.minimumActiveCost = 25000;
+    decision = apply_admission_plan(policy, cursor, reallocationInputs);
+    if (!decision.retainedAdmission ||
+	decision.retainedAdmissionBudget != 25000) {
+	std::fprintf(stderr,
+	    "FAIL: ordinary quality debt bypassed retained allocation\n");
 	return 1;
     }
 
-    policy.resetCalibration();
-    calibrationInput.observedNanoseconds = 46000000ULL;
-    calibrationInput.calibratedBudget = 50000.0L;
-    calibration = policy.finishBlockedPass(calibrationInput);
-    if (calibration.probeCandidate || !calibration.calibrationFrame ||
-	policy.probeCount() != 1 ||
-	policy.calibrationFramesRemaining() != 2) {
-	std::fprintf(stderr, "FAIL: minimum calibration sample series\n");
-	return 1;
-    }
-    for (unsigned int i = 0; i < 2; i++) {
-	completed = policy.completeCalibrationFrame();
-	if (!completed.requestCalibrationFrame ||
-	    completed.restartSubmission) {
-	    std::fprintf(stderr, "FAIL: minimum calibration frame\n");
-	    return 1;
-	}
-    }
-    completed = policy.completeCalibrationFrame();
-    if (!completed.restartSubmission || policy.rescanAfterFrame()) {
-	std::fprintf(stderr, "FAIL: minimum calibration rescan\n");
-	return 1;
-    }
-    calibration = policy.finishBlockedPass(calibrationInput);
-    if (calibration.requestFrame || calibration.calibrationFrame ||
-	!policy.stableBudgetLimited() || policy.probeCount() != 0) {
-	std::fprintf(stderr, "FAIL: stable calibrated terminal cut\n");
-	return 1;
-    }
-
-    policy.resetCalibration();
+    policy.reset();
+    cursor.reset();
+    (void)apply_admission_plan(policy, cursor, reallocationInputs);
     calibrationInput.passAdmittedWork = true;
-    calibration = policy.finishBlockedPass(calibrationInput);
-    if (!calibration.requestFrame || calibration.calibrationFrame ||
-	!policy.rescanAfterFrame() || policy.stableBudgetLimited()) {
-	std::fprintf(stderr, "FAIL: admitted-work frame barrier\n");
+	calibration = finish_blocked_capacity_plan(
+	    policy, cursor, calibrationInput);
+    if (!calibration.requestFrame || calibration.sampleFrame ||
+	calibration.restartSubmission || !policy.rescanAfterFrame() ||
+	policy.stableBudgetLimited()) {
+	std::fprintf(stderr, "FAIL: changed ordinary pass frame barrier\n");
 	return 1;
     }
-    completed = policy.completeCalibrationFrame();
+	Policy::CompletedFrameDecision completed =
+	    complete_capacity_frame_plan(policy, cursor);
     if (!completed.restartSubmission || policy.rescanAfterFrame()) {
-	std::fprintf(stderr, "FAIL: admitted-work rescan\n");
+	std::fprintf(stderr, "FAIL: changed ordinary pass allocation transfer\n");
+	return 1;
+    }
+	decision = apply_admission_plan(policy, cursor, reallocationInputs);
+    if (!decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: presented ordinary population did not enter allocation\n");
 	return 1;
     }
 
-    policy.requestRescanAfterFrame(true);
-    if (!policy.rescanAfterFrame() ||
-	policy.calibrationFramesRemaining() != 0 ||
-	policy.stableBudgetLimited()) {
-	std::fprintf(stderr, "FAIL: explicit calibration frame barrier\n");
+    policy.reset();
+    cursor.reset();
+    policy.requestRescanAfterFrame();
+    if (!policy.rescanAfterFrame() || policy.stableBudgetLimited()) {
+	std::fprintf(stderr, "FAIL: explicit presentation frame barrier\n");
 	return 1;
     }
-    completed = policy.retireUnmeasurableCalibrationFrame();
-    if (completed.requestCalibrationFrame ||
-	!completed.restartSubmission || policy.rescanAfterFrame() ||
-	policy.probeActiveCost() != 0 || policy.probeCount() != 0) {
-	std::fprintf(stderr, "FAIL: unmeasurable calibration retirement\n");
+    completed = policy.retireUnmeasurableCalibrationFrame(cursor);
+    if (completed.requestSampleFrame ||
+	!completed.restartSubmission || policy.rescanAfterFrame()) {
+	std::fprintf(stderr, "FAIL: presentation barrier retirement\n");
 	return 1;
     }
-    policy.requestRescanAfterFrame(true);
+	decision = apply_admission_plan(policy, cursor, reallocationInputs);
+    if (decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: coverage barrier manufactured quality reallocation\n");
+	return 1;
+    }
+    policy.requestRescanAfterFrame();
     policy.resetCalibration();
     if (policy.rescanAfterFrame() || policy.stableBudgetLimited() ||
-	policy.probeActiveCost() != 0 || policy.probeCount() != 0) {
-	std::fprintf(stderr, "FAIL: full calibration reset\n");
+	policy.capacitySearch().phase() !=
+	    BObolLodCapacitySearchCertificate::Phase::INACTIVE) {
+	std::fprintf(stderr, "FAIL: full capacity measurement reset\n");
 	return 1;
     }
+
+    /* The production capacity seam maps a changed retained allocation to one
+     * frozen candidate and exactly three completed-frame samples.  It must
+     * choose a distinct successor directly, without the old extra O(scene)
+     * scan between unchanged calibration frames. */
+    policy.reset();
+    cursor.reset();
+    policy.reduceCurrentBudget(200);
+    BObolLodCapacitySearchKey searchKey;
+    searchKey.inventory.set(1);
+    searchKey.availability.set(2);
+    searchKey.view.set(3);
+    searchKey.policy.set(4);
+    searchKey.preferredTargetNanoseconds = 50000000ULL;
+    searchKey.maximumTargetNanoseconds = 50000000ULL;
+    searchKey.demandedBudget = 800;
+    calibrationInput = Policy::CalibrationInputs();
+    calibrationInput.activeCost = 150;
+    calibrationInput.passAdmittedWork = true;
+    calibrationInput.retainedAllocation = true;
+    calibrationInput.boundedSearch = true;
+    calibrationInput.searchKey = searchKey;
+	calibrationInput.candidateBudget = 200;
+    calibrationInput.demandedBudget = searchKey.demandedBudget;
+    calibration = policy.finishBlockedPass(calibrationInput);
+    if (!calibration.requestFrame || !calibration.sampleFrame ||
+	policy.capacitySearch().candidateBudget() != 200) {
+	std::fprintf(stderr, "FAIL: bounded capacity candidate barrier\n");
+	return 1;
+    }
+    Policy::CompletedFrameInputs frameInput;
+    frameInput.searchKey = searchKey;
+    frameInput.candidateBudget = 200;
+    frameInput.presentedCost = 180;
+    frameInput.observedNanoseconds = 25000000ULL;
+    frameInput.validSample = true;
+    for (unsigned int i = 0;
+	 i < BObolLodCapacitySearchCertificate::sampleLimit(); ++i) {
+	completed = policy.completeCapacitySearchFrame(cursor, frameInput);
+	if (i + 1 < BObolLodCapacitySearchCertificate::sampleLimit() &&
+	    (!completed.requestSampleFrame ||
+	     completed.restartSubmission)) {
+	    std::fprintf(stderr,
+		"FAIL: bounded capacity sample series index=%u\n", i);
+	    return 1;
+	}
+    }
+    if (!completed.restartSubmission ||
+	completed.requestSampleFrame ||
+	policy.currentBudget() <= 200 ||
+	policy.capacitySearch().measuredCandidateCount() != 1 ||
+	policy.capacitySearch().phase() !=
+	    BObolLodCapacitySearchCertificate::Phase::ALLOCATING ||
+	cursor.initialized()) {
+	std::fprintf(stderr,
+	    "FAIL: bounded capacity successor budget=%zu measured=%u\n",
+	    policy.currentBudget(),
+	    policy.capacitySearch().measuredCandidateCount());
+	return 1;
+    }
+	const size_t searchCandidateBudget = policy.currentBudget();
+	Policy::Inputs successorInputs;
+	successorInputs.activeCost = 180;
+	successorInputs.minimumActiveCost = 100;
+	successorInputs.targetFps = 20.0f;
+	successorInputs.calibratedCostPerSecond = 1000000000.0L;
+	decision = apply_admission_plan(policy, cursor, successorInputs);
+	if (!decision.retainedAdmission ||
+	    decision.totalBudget != searchCandidateBudget) {
+	    std::fprintf(stderr,
+		"FAIL: bounded search candidate was not preserved "
+		"candidate=%zu applied=%zu retained=%d\n",
+		searchCandidateBudget, decision.totalBudget,
+		decision.retainedAdmission ? 1 : 0);
+	    return 1;
+	}
     return 0;
 }
 
@@ -2594,9 +3005,41 @@ static int
 test_quality_policy(void)
 {
     using Policy = BObolLodQualityPolicy;
+    using DeadlineSuccessor = Policy::DeadlineSuccessor;
     const auto near = [](float left, float right) {
 	return std::fabs(left - right) <= 0.0001f;
     };
+    if (Policy::deadlineSuccessor(true, true) !=
+	    DeadlineSuccessor::RETRY_TRANSACTION ||
+	Policy::deadlineSuccessor(true, false) !=
+	    DeadlineSuccessor::RETRY_TRANSACTION ||
+	Policy::deadlineSuccessor(false, true) !=
+	    DeadlineSuccessor::CONTINUE_POPULATION ||
+	Policy::deadlineSuccessor(false, false) !=
+	    DeadlineSuccessor::RECOVER_PRESENTATION) {
+	std::fprintf(stderr, "FAIL: presentation deadline successor ownership\n");
+	return 1;
+    }
+    if (BObolLodAdmissionPlanner::canonicalSceneCostAtCadCeiling(
+	    300, 250, 100) != 150 ||
+	BObolLodAdmissionPlanner::canonicalSceneCostAtCadCeiling(
+	    200, 250, 100) != 100 ||
+	BObolLodAdmissionPlanner::canonicalSceneCostAtCadCeiling(
+	    SIZE_MAX, 1, SIZE_MAX) != SIZE_MAX) {
+	std::fprintf(stderr,
+	    "FAIL: canonical renderer-ceiling allocation currency\n");
+	return 1;
+    }
+    if (BObolLodAdmissionPlanner::capacitySearchPresentedCost(
+	    true, 1983470, 1980818) != 1980818 ||
+	BObolLodAdmissionPlanner::capacitySearchPresentedCost(
+	    false, 1983470, 1980818) != 1983470 ||
+	BObolLodAdmissionPlanner::capacitySearchPresentedCost(
+	    true, 1983470, 0) != 1983470) {
+	std::fprintf(stderr,
+	    "FAIL: capacity search did not use its certified population cost\n");
+	return 1;
+    }
     if (!near(Policy::interactivePixelError(0, 60.0f), 4.0f) ||
 	!near(Policy::interactivePixelError(10000000ULL, 60.0f), 1.0f) ||
 	!near(Policy::interactivePixelError(10000000ULL, 0.0f), 1.0f) ||
@@ -2628,6 +3071,17 @@ test_quality_policy(void)
 	Policy::staticPresentationRenderCostLimit(
 	    0, 50000000ULL, 100000000ULL) != 0) {
 	std::fprintf(stderr, "FAIL: static presentation render-cost limit\n");
+	return 1;
+    }
+    if (Policy::staticLocalMinimumRetryBudget(
+	    1000, 1200, 5000, 100000000ULL, 400000000ULL) != 3800 ||
+	Policy::staticLocalMinimumRetryBudget(
+	    1000, 4200, 5000, 100000000ULL, 400000000ULL) != 4200 ||
+	Policy::staticLocalMinimumRetryBudget(
+	    1000, 4200, 4300, 100000000ULL, 400000000ULL) != 4200 ||
+	Policy::staticLocalMinimumRetryBudget(
+	    1000, 0, 5000, 100000000ULL, 400000000ULL) != 0) {
+	std::fprintf(stderr, "FAIL: static local-minimum retry budget\n");
 	return 1;
     }
     if (Policy::pixelErrorRenderCostFloor(1000, 1.0f, 0.5f) != 4000 ||
@@ -2704,6 +3158,69 @@ test_quality_policy(void)
 	return 1;
     }
 
+    if (Policy::staticDeadlineRecoveryCostLimit(
+	    1000, 400000000ULL, 400000000ULL) != 950 ||
+	Policy::staticDeadlineRecoveryCostLimit(
+	    1000, 800000000ULL, 400000000ULL) != 475 ||
+	Policy::staticDeadlineRecoveryCostLimit(
+	    0, 800000000ULL, 400000000ULL) != 0) {
+	std::fprintf(stderr, "FAIL: static deadline cost correction\n");
+	return 1;
+    }
+
+    if (Policy::quietPresentationDeadline(
+	    400000000ULL, 200000000ULL, true, true) != 400000000ULL ||
+	Policy::quietPresentationDeadline(
+	    400000000ULL, 200000000ULL, true, false) != 200000000ULL ||
+	Policy::quietPresentationDeadline(
+	    400000000ULL, 200000000ULL, false, false) != 400000000ULL) {
+	std::fprintf(stderr, "FAIL: quiet deadline owner precedence\n");
+	return 1;
+    }
+
+    {
+	using PreparationState = Obol::CadPresentationPreparationState;
+	Obol::CadPresentationPreparationSnapshot empty;
+	Obol::CadPresentationPreparationSnapshot started;
+	started.target.kind =
+	    Obol::CadPresentationPreparationKind::RetainedIndirect;
+	started.target.obligationRevision = 7;
+	started.target.planRevision = 11;
+	started.state = PreparationState::Preparing;
+	started.totalUnits = 20;
+	if (BObolCadPreparationPolicy::classify(empty, started) !=
+		BOBOL_CAD_PREPARATION_STARTED) {
+	    std::fprintf(stderr, "FAIL: preparation start classification\n");
+	    return 1;
+	}
+	Obol::CadPresentationPreparationSnapshot advanced = started;
+	advanced.completedUnits = 5;
+	if (BObolCadPreparationPolicy::classify(started, advanced) !=
+		BOBOL_CAD_PREPARATION_ADVANCED ||
+	    BObolCadPreparationPolicy::classify(advanced, advanced) !=
+		BOBOL_CAD_PREPARATION_NONE) {
+	    std::fprintf(stderr, "FAIL: strict preparation progress witness\n");
+	    return 1;
+	}
+	Obol::CadPresentationPreparationSnapshot completed = advanced;
+	completed.state = PreparationState::Complete;
+	completed.completedUnits = completed.totalUnits;
+	if (BObolCadPreparationPolicy::classify(advanced, completed) !=
+		BOBOL_CAD_PREPARATION_COMPLETED ||
+	    BObolCadPreparationPolicy::classify(completed, completed) !=
+		BOBOL_CAD_PREPARATION_NONE) {
+	    std::fprintf(stderr, "FAIL: preparation completion edge\n");
+	    return 1;
+	}
+	Obol::CadPresentationPreparationSnapshot regressed = advanced;
+	regressed.completedUnits = 4;
+	if (BObolCadPreparationPolicy::classify(advanced, regressed) !=
+		BOBOL_CAD_PREPARATION_FAILED) {
+	    std::fprintf(stderr, "FAIL: preparation regression rejection\n");
+	    return 1;
+	}
+    }
+
     if (!Policy::retryTransientPresentation(
 	    false, 1, false, true, false, false, false) ||
 	!Policy::retryTransientPresentation(
@@ -2719,7 +3236,7 @@ test_quality_policy(void)
 	!Policy::retryTransientPresentation(
 	    true, 4, true, false, false, false, false)) {
 	std::fprintf(stderr,
-	    "FAIL: changed-population deadline retry classification\n");
+	    "FAIL: certified preparation deadline retry classification\n");
 	return 1;
     }
     const float proxy =
@@ -2729,40 +3246,29 @@ test_quality_policy(void)
 	return 1;
     }
 
-    BObolLodPointProxyCalibrationPolicy pointCalibration;
-    if (!BObolLodPointProxyCalibrationPolicy::
-	    deadlineRequiresPopulationAggregation(1000, 1000, 4, 3, 900) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    deadlineRequiresPopulationAggregation(2000, 1000, 0, 0, 900) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    deadlineRequiresPopulationAggregation(2000, 1000, 4, 0, 900) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    deadlineRequiresPopulationAggregation(2000, 1000, 4, 1, 900) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    deadlineRequiresPopulationAggregation(2000, 1000, 4, 0, 1100)) {
+    BObolLodPointProxyEvidence pointCalibration;
+    if (!BObolLodAdmissionPlanner::pointDeadlineRequiresPopulationAggregation(1000, 1000, 4, 3, 900) ||
+	!BObolLodAdmissionPlanner::pointDeadlineRequiresPopulationAggregation(2000, 1000, 0, 0, 900) ||
+	!BObolLodAdmissionPlanner::pointDeadlineRequiresPopulationAggregation(2000, 1000, 4, 0, 900) ||
+	BObolLodAdmissionPlanner::pointDeadlineRequiresPopulationAggregation(2000, 1000, 4, 1, 900) ||
+	BObolLodAdmissionPlanner::pointDeadlineRequiresPopulationAggregation(2000, 1000, 4, 0, 1100)) {
 	std::fprintf(stderr,
 	    "FAIL: point population deadline floor classification\n");
 	return 1;
     }
-    if (BObolLodPointProxyCalibrationPolicy::applicable(0) ||
-	BObolLodPointProxyCalibrationPolicy::applicable(1) ||
-	!BObolLodPointProxyCalibrationPolicy::applicable(2)) {
+    if (BObolLodAdmissionPlanner::pointAggregationApplicable(0) ||
+	BObolLodAdmissionPlanner::pointAggregationApplicable(1) ||
+	!BObolLodAdmissionPlanner::pointAggregationApplicable(2)) {
 	std::fprintf(stderr,
 	    "FAIL: point aggregation admitted a single prominent mesh\n");
 	return 1;
     }
-    if (BObolLodPointProxyCalibrationPolicy::
-	    applicableAcrossCameraInvalidation(false, 1.0f) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    applicableAcrossCameraInvalidation(true, 1.0f) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    applicableAcrossCameraInvalidation(false, 64.0f) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    streamingPopulationWorkPending(false, false, false, 1) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    streamingPopulationWorkPending(true, false, false, 0) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    streamingPopulationWorkPending(false, false, false, 0)) {
+    if (BObolLodAdmissionPlanner::pointAggregationApplicableAcrossCameraInvalidation(false, 1.0f) ||
+	!BObolLodAdmissionPlanner::pointAggregationApplicableAcrossCameraInvalidation(true, 1.0f) ||
+	!BObolLodAdmissionPlanner::pointAggregationApplicableAcrossCameraInvalidation(false, 64.0f) ||
+	!BObolLodAdmissionPlanner::pointStreamingPopulationWorkPending(false, false, false, 1) ||
+	!BObolLodAdmissionPlanner::pointStreamingPopulationWorkPending(true, false, false, 0) ||
+	BObolLodAdmissionPlanner::pointStreamingPopulationWorkPending(false, false, false, 0)) {
 	std::fprintf(stderr,
 	    "FAIL: point aggregation discarded camera/streaming capacity proof\n");
 	return 1;
@@ -2770,40 +3276,50 @@ test_quality_policy(void)
     /* Subpixel points are the intended terminal representation at the
      * ordinary one-pixel cut.  Requiring this count to be zero retains the
      * recovery budget ceiling forever on Hubble-like many-part scenes. */
-    if (!BObolLodPointProxyCalibrationPolicy::onePixelPresentationReady(
+    if (!BObolLodAdmissionPlanner::onePixelPresentationReady(
 	    true, true, true, 700, 0, -1, 1.0f, 1000) ||
-	BObolLodPointProxyCalibrationPolicy::onePixelPresentationReady(
+	BObolLodAdmissionPlanner::onePixelPresentationReady(
 	    true, true, true, 700, 1, -1, 1.0f, 1000) ||
-	BObolLodPointProxyCalibrationPolicy::onePixelPresentationReady(
+	BObolLodAdmissionPlanner::onePixelPresentationReady(
 	    true, true, true, 700, 0, 4, 1.0f, 1000) ||
-	BObolLodPointProxyCalibrationPolicy::onePixelPresentationReady(
+	BObolLodAdmissionPlanner::onePixelPresentationReady(
 	    true, true, true, 700, 0, -1, 1.02f, 1000) ||
-	BObolLodPointProxyCalibrationPolicy::onePixelPresentationReady(
+	BObolLodAdmissionPlanner::onePixelPresentationReady(
 	    true, false, true, 700, 0, -1, 1.0f, 1000)) {
 	std::fprintf(stderr,
 	    "FAIL: terminal one-pixel point population classification\n");
 	return 1;
     }
-    if (!BObolLodPointProxyCalibrationPolicy::blocksSourceAdmission(
+    if (!BObolLodAdmissionPlanner::pointBlocksSourceAdmission(
 	    true, false) ||
-	BObolLodPointProxyCalibrationPolicy::blocksSourceAdmission(
+	BObolLodAdmissionPlanner::pointBlocksSourceAdmission(
 	    false, true) ||
-	!BObolLodPointProxyCalibrationPolicy::blocksSourceAdmission(
+	!BObolLodAdmissionPlanner::pointBlocksSourceAdmission(
 	    true, true)) {
 	std::fprintf(stderr,
 	    "FAIL: stable point calibration blocked its source prerequisite\n");
 	return 1;
     }
+    if (!BObolLodAdmissionPlanner::presentationPausesSubmission(
+	    true, false, false, false) ||
+	!BObolLodAdmissionPlanner::presentationPausesSubmission(
+	    false, false, true, false) ||
+	!BObolLodAdmissionPlanner::presentationPausesSubmission(
+	    false, true, false, true) ||
+	BObolLodAdmissionPlanner::presentationPausesSubmission(
+	    false, true, false, false) ||
+	BObolLodAdmissionPlanner::presentationPausesSubmission(
+	    false, false, false, true)) {
+	std::fprintf(stderr,
+	    "FAIL: presentation measurement did not own submission pause\n");
+	return 1;
+    }
     /* A newly armed one-pixel frame must not be replaced by another coarse
      * structural seed during the completion callback which armed it. */
-    if (!BObolLodPointProxyCalibrationPolicy::
-	    maySeedStructuralDistribution(false, false, false) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    maySeedStructuralDistribution(true, false, false) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    maySeedStructuralDistribution(false, true, false) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    maySeedStructuralDistribution(false, false, true)) {
+    if (!BObolLodAdmissionPlanner::maySeedPointStructuralDistribution(false, false, false) ||
+	BObolLodAdmissionPlanner::maySeedPointStructuralDistribution(true, false, false) ||
+	BObolLodAdmissionPlanner::maySeedPointStructuralDistribution(false, true, false) ||
+	BObolLodAdmissionPlanner::maySeedPointStructuralDistribution(false, false, true)) {
 	std::fprintf(stderr,
 	    "FAIL: point presentation barrier permits structural reseeding\n");
 	return 1;
@@ -2811,29 +3327,34 @@ test_quality_policy(void)
     /* Admission is deliberately paused until the changed point population
      * has rendered.  That paused cursor cannot also be the producer which is
      * expected to publish the frame, or both transitions wait forever. */
-    if (BObolLodPointProxyCalibrationPolicy::
-	    producerOwnsCalibrationFrame(true, true, false, false, false) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    producerOwnsCalibrationFrame(true, false, false, false, false) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    producerOwnsCalibrationFrame(false, true, true, false, false) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    producerOwnsCalibrationFrame(false, true, false, true, false) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    producerOwnsCalibrationFrame(false, true, false, false, true)) {
+    if (BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(true, true, false, false, false) ||
+	!BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(true, false, false, false, false) ||
+	!BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(false, true, true, false, false) ||
+	!BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(false, true, false, true, false) ||
+	!BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(false, true, false, false, true)) {
 	std::fprintf(stderr,
 	    "FAIL: point-calibration producer ownership permits a closed wait\n");
+	return 1;
+    }
+    if (!BObolLodAdmissionPlanner::pointCalibrationOwnsCompletedFrame(
+	    true, false) ||
+	BObolLodAdmissionPlanner::pointCalibrationOwnsCompletedFrame(
+	    true, true) ||
+	BObolLodAdmissionPlanner::pointCalibrationOwnsCompletedFrame(
+	    false, false)) {
+	std::fprintf(stderr,
+	    "FAIL: point calibration consumed a capacity-owned frame\n");
 	return 1;
     }
     float threshold = 4.0f;
     bool settled = false;
     for (size_t iteration = 0; iteration < 16; ++iteration) {
-	BObolLodPointProxyCalibrationPolicy::Decision decision;
+	BObolLodPointProxyEvidence::Decision decision;
 	if (threshold < 6.0f) {
-	    decision = pointCalibration.interrupted(
+	    decision = apply_point_interrupted_plan(pointCalibration,
 		threshold, 66666668ULL, 60.0f);
 	} else {
-	    decision = pointCalibration.completed(
+	    decision = apply_point_completed_plan(pointCalibration,
 		threshold, 10000000ULL, 60.0f, true);
 	}
 	threshold = decision.threshold;
@@ -2853,7 +3374,7 @@ test_quality_policy(void)
      * it falls inside the latter's five-percent jitter deadband, retrying the
      * unchanged irreducible population would be a no-progress render loop. */
     pointCalibration.reset();
-    const auto nearDeadlineAbort = pointCalibration.interrupted(
+    const auto nearDeadlineAbort = apply_point_interrupted_plan(pointCalibration,
 	1.0f, 101000000ULL, 10.0f);
     if (!nearDeadlineAbort.changed ||
 	!near(nearDeadlineAbort.threshold, 1.25f)) {
@@ -2862,7 +3383,7 @@ test_quality_policy(void)
 	return 1;
     }
     pointCalibration.reset();
-    const auto preparationOnly = pointCalibration.completed(
+    const auto preparationOnly = apply_point_completed_plan(pointCalibration,
 	8.0f, 10000000ULL, 60.0f, false);
     if (preparationOnly.changed || preparationOnly.continueRelaxation ||
 	!near(preparationOnly.threshold, 8.0f)) {
@@ -2879,7 +3400,7 @@ test_quality_policy(void)
     const std::array<size_t, 7> projectedStructural = {
 	100, 800, 3000, 7000, 9000, 9900, 10000
     };
-    const auto structuralSeed = pointCalibration.seedFromStructuralDistribution(
+    const auto structuralSeed = apply_point_structural_distribution_plan(pointCalibration,
 	1.0f, projectedStructural, 10000, 1500);
     if (!structuralSeed.changed ||
 	!near(structuralSeed.threshold, 16.0f)) {
@@ -2888,7 +3409,7 @@ test_quality_policy(void)
 	return 1;
     }
     const auto retainedStructuralSeed =
-	pointCalibration.seedFromStructuralDistribution(
+	apply_point_structural_distribution_plan(pointCalibration,
 	    structuralSeed.threshold, projectedStructural, 10000, 1500);
     if (retainedStructuralSeed.changed ||
 	!near(retainedStructuralSeed.threshold, 16.0f)) {
@@ -2898,7 +3419,7 @@ test_quality_policy(void)
     }
 
     pointCalibration.reset();
-    auto structuralBlocked = pointCalibration.structuralCoverageBlocked(
+    auto structuralBlocked = apply_point_structural_blocked_plan(pointCalibration,
 	1.0f, 5000);
     if (!structuralBlocked.changed ||
 	!near(structuralBlocked.threshold, 2.0f)) {
@@ -2906,7 +3427,7 @@ test_quality_policy(void)
 	    "FAIL: large structural frontier did not aggregate promptly\n");
 	return 1;
     }
-    const auto incompleteStructuralFrame = pointCalibration.completed(
+    const auto incompleteStructuralFrame = apply_point_completed_plan(pointCalibration,
 	structuralBlocked.threshold, 10000000ULL, 60.0f, true, 4000);
     if (incompleteStructuralFrame.changed ||
 	!near(incompleteStructuralFrame.threshold, 2.0f)) {
@@ -2914,7 +3435,7 @@ test_quality_policy(void)
 	    "FAIL: incomplete structural frame polluted safe bracket\n");
 	return 1;
     }
-    structuralBlocked = pointCalibration.structuralCoverageBlocked(
+    structuralBlocked = apply_point_structural_blocked_plan(pointCalibration,
 	structuralBlocked.threshold, 400);
     if (!structuralBlocked.changed ||
 	!near(structuralBlocked.threshold, 2.5f)) {
@@ -2924,9 +3445,9 @@ test_quality_policy(void)
     }
 
     pointCalibration.reset();
-    threshold = pointCalibration.structuralCoverageBlocked(
+    threshold = apply_point_structural_blocked_plan(pointCalibration,
 	1.0f, 5000).threshold;
-    const auto firstStructuralSafe = pointCalibration.completed(
+    const auto firstStructuralSafe = apply_point_completed_plan(pointCalibration,
 	threshold, 10000000ULL, 60.0f, true, 0);
     if (!firstStructuralSafe.changed ||
 	!near(firstStructuralSafe.threshold,
@@ -2938,12 +3459,12 @@ test_quality_policy(void)
     threshold = firstStructuralSafe.threshold;
     settled = false;
     for (size_t iteration = 0; iteration < 16; ++iteration) {
-	BObolLodPointProxyCalibrationPolicy::Decision decision;
+	BObolLodPointProxyEvidence::Decision decision;
 	if (threshold < 1.6f)
-	    decision = pointCalibration.structuralCoverageBlocked(
+	    decision = apply_point_structural_blocked_plan(pointCalibration,
 		threshold, 100);
 	else
-	    decision = pointCalibration.completed(
+	    decision = apply_point_completed_plan(pointCalibration,
 		threshold, 10000000ULL, 60.0f, true, 0);
 	threshold = decision.threshold;
 	if (!decision.changed) {
@@ -2962,7 +3483,7 @@ test_quality_policy(void)
      * results must not strand a coarse point cut.  Reusable headroom alone is
      * the durable continuation witness. */
     pointCalibration.reset();
-    const auto recoveredCoarse = pointCalibration.completed(
+    const auto recoveredCoarse = apply_point_completed_plan(pointCalibration,
 	8.0f, 10000000ULL, 60.0f, true);
     if (!recoveredCoarse.changed || !recoveredCoarse.continueRelaxation ||
 	!(recoveredCoarse.threshold < 8.0f)) {
@@ -2970,26 +3491,21 @@ test_quality_policy(void)
 	    "FAIL: reusable coarse point cut did not recover quality\n");
 	return 1;
     }
-    if (pointCalibration.requiresReusableConfirmation(1.0f) ||
-	pointCalibration.requiresReusableConfirmation(
+    if (BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(1.0f) ||
+	BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(
 	    std::numeric_limits<float>::quiet_NaN()) ||
-	pointCalibration.requiresReusableConfirmation(8.0f, 1) ||
-	!pointCalibration.requiresReusableConfirmation(1.02f) ||
-	!pointCalibration.requiresReusableConfirmation(8.0f)) {
+	BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(8.0f, 1) ||
+	!BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(1.02f) ||
+	!BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(8.0f)) {
 	std::fprintf(stderr,
 	    "FAIL: point confirmation did not yield to structural repair\n");
 	return 1;
     }
-    if (!BObolLodPointProxyCalibrationPolicy::
-	    calibrationYieldsToStructuralRepair(true, true, 147, false) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    calibrationYieldsToStructuralRepair(false, true, 147, false) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    calibrationYieldsToStructuralRepair(true, false, 147, false) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    calibrationYieldsToStructuralRepair(true, true, 0, false) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    calibrationYieldsToStructuralRepair(true, true, 147, true)) {
+    if (!BObolLodAdmissionPlanner::pointCalibrationYieldsToStructuralRepair(true, true, 147, false) ||
+	BObolLodAdmissionPlanner::pointCalibrationYieldsToStructuralRepair(false, true, 147, false) ||
+	BObolLodAdmissionPlanner::pointCalibrationYieldsToStructuralRepair(true, false, 147, false) ||
+	BObolLodAdmissionPlanner::pointCalibrationYieldsToStructuralRepair(true, true, 0, false) ||
+	BObolLodAdmissionPlanner::pointCalibrationYieldsToStructuralRepair(true, true, 147, true)) {
 	std::fprintf(stderr,
 	    "FAIL: point calibration did not transfer a quiet structural frontier\n");
 	return 1;
@@ -3000,32 +3516,32 @@ test_quality_policy(void)
      * preferred-cadence retries.  A changed population is a new transaction;
      * an inexact or still-aggregatable frontier remains owned by the point
      * calibration path. */
-    BObolLodStructuralAdmissionPolicy structuralAdmissionPolicy;
+    BObolLodStructuralAdmissionEvidence structuralAdmissionPolicy;
     const std::array<size_t, 7> structuralCapacityHistogram = {
 	10, 20, 30, 40, 50, 60, 80
     };
-    if (BObolLodStructuralAdmissionPolicy::unaggregatableCount(
+    if (BObolLodAdmissionPlanner::unaggregatableStructuralCount(
 	    structuralCapacityHistogram, 100) != 20) {
 	std::fprintf(stderr,
 	    "FAIL: structural maximum-threshold census classification\n");
 	return 1;
     }
-    if (BObolLodStructuralAdmissionPolicy::perOccurrenceReservation(
+    if (BObolLodAdmissionPlanner::structuralPerOccurrenceReservation(
 	    450000, 300000, 20) != 7500 ||
-	BObolLodStructuralAdmissionPolicy::perOccurrenceReservation(
+	BObolLodAdmissionPlanner::structuralPerOccurrenceReservation(
 	    300000, 300000, 20) != 0 ||
-	BObolLodStructuralAdmissionPolicy::perOccurrenceReservation(
+	BObolLodAdmissionPlanner::structuralPerOccurrenceReservation(
 	    300019, 300000, 20) != 0 ||
-	BObolLodStructuralAdmissionPolicy::perOccurrenceReservation(
+	BObolLodAdmissionPlanner::structuralPerOccurrenceReservation(
 	    450000, 300000, 0) != 0) {
 	std::fprintf(stderr,
 	    "FAIL: structural frontier allowance was not divided exactly\n");
 	return 1;
     }
-    BObolLodStructuralAdmissionPolicy::Inputs structuralInputs;
+    BObolLodStructuralAdmissionEvidence::Inputs structuralInputs;
     structuralInputs.viewRevision = 7;
     structuralInputs.policyRevision = 11;
-    structuralInputs.projectionRevision = 13;
+    structuralInputs.frontierDigest = 13;
     structuralInputs.unresolvedCount = 20;
     structuralInputs.unaggregatableCount = 20;
     structuralInputs.activeCost = 300000;
@@ -3034,7 +3550,7 @@ test_quality_policy(void)
     structuralInputs.exactProjection = true;
     structuralInputs.maximumThreshold = true;
     auto structuralAdmission =
-	structuralAdmissionPolicy.evaluate(structuralInputs);
+	apply_structural_admission_plan(structuralAdmissionPolicy, structuralInputs);
     if (!structuralAdmission.ownsFrontier ||
 	!structuralAdmission.requestAdmission ||
 	structuralAdmission.duplicateRejected ||
@@ -3043,7 +3559,7 @@ test_quality_policy(void)
 	    "FAIL: irreducible structural frontier did not receive one trial\n");
 	return 1;
     }
-    structuralAdmission = structuralAdmissionPolicy.evaluate(structuralInputs);
+    structuralAdmission = apply_structural_admission_plan(structuralAdmissionPolicy, structuralInputs);
     if (!structuralAdmission.ownsFrontier ||
 	structuralAdmission.requestAdmission ||
 	!structuralAdmission.duplicateRejected) {
@@ -3053,15 +3569,24 @@ test_quality_policy(void)
     }
     structuralInputs.unresolvedCount = 12;
     structuralInputs.unaggregatableCount = 12;
-    structuralAdmission = structuralAdmissionPolicy.evaluate(structuralInputs);
+    structuralAdmission = apply_structural_admission_plan(structuralAdmissionPolicy, structuralInputs);
     if (!structuralAdmission.requestAdmission ||
 	structuralAdmission.duplicateRejected) {
 	std::fprintf(stderr,
 	    "FAIL: changed structural population did not open a new transaction\n");
 	return 1;
     }
+    structuralInputs.frontierDigest = 14;
+    structuralAdmission = apply_structural_admission_plan(
+	structuralAdmissionPolicy, structuralInputs);
+    if (!structuralAdmission.requestAdmission ||
+	structuralAdmission.duplicateRejected) {
+	std::fprintf(stderr,
+	    "FAIL: changed structural frontier identity did not open a new transaction\n");
+	return 1;
+    }
     structuralInputs.exactProjection = false;
-    structuralAdmission = structuralAdmissionPolicy.evaluate(structuralInputs);
+    structuralAdmission = apply_structural_admission_plan(structuralAdmissionPolicy, structuralInputs);
     if (structuralAdmission.ownsFrontier ||
 	structuralAdmission.requestAdmission) {
 	std::fprintf(stderr,
@@ -3070,7 +3595,7 @@ test_quality_policy(void)
     }
     structuralInputs.exactProjection = true;
     structuralInputs.maximumThreshold = false;
-    structuralAdmission = structuralAdmissionPolicy.evaluate(structuralInputs);
+    structuralAdmission = apply_structural_admission_plan(structuralAdmissionPolicy, structuralInputs);
     if (structuralAdmission.ownsFrontier ||
 	structuralAdmission.requestAdmission) {
 	std::fprintf(stderr,
@@ -3082,16 +3607,11 @@ test_quality_policy(void)
      * prefixes.  That old coupling made Hubble alternate forever between a
      * one-pixel population and a roughly two-pixel population, starving its
      * large solar arrays of the detail budget. */
-    if (BObolLodPointProxyCalibrationPolicy::
-	    shouldRecoverTriangleDetail(true, false, true, false) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    shouldRecoverTriangleDetail(false, true, true, false) ||
-	BObolLodPointProxyCalibrationPolicy::
-	    shouldRecoverTriangleDetail(true, true, true, true) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    shouldRecoverTriangleDetail(true, true, false, false) ||
-	!BObolLodPointProxyCalibrationPolicy::
-	    shouldRecoverTriangleDetail(true, true, true, false)) {
+    if (BObolLodAdmissionPlanner::shouldRecoverTriangleDetail(true, false, true, false) ||
+	BObolLodAdmissionPlanner::shouldRecoverTriangleDetail(false, true, true, false) ||
+	BObolLodAdmissionPlanner::shouldRecoverTriangleDetail(true, true, true, true) ||
+	!BObolLodAdmissionPlanner::shouldRecoverTriangleDetail(true, true, false, false) ||
+	!BObolLodAdmissionPlanner::shouldRecoverTriangleDetail(true, true, true, false)) {
 	std::fprintf(stderr,
 	    "FAIL: point/triangle recovery ignores protected quality floor\n");
 	return 1;
@@ -3102,39 +3622,39 @@ test_quality_policy(void)
      * a structural fallback population, inexact/preparation frames, active
      * input, and an already rejected trial must all retain the conservative
      * convergence path. */
-    if (!BObolLodStaticQualityPolicy::
+    if (!BObolLodAdmissionPlanner::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
 		false, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
-	BObolLodStaticQualityPolicy::
+	BObolLodAdmissionPlanner::
 	    startOnePixelTrialFromSettledPointFrame(true, true, false,
 		false, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
-	BObolLodStaticQualityPolicy::
+	BObolLodAdmissionPlanner::
 	    startOnePixelTrialFromSettledPointFrame(false, false, false,
 		false, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
-	BObolLodStaticQualityPolicy::
+	BObolLodAdmissionPlanner::
 	    startOnePixelTrialFromSettledPointFrame(false, true, true,
 		false, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
-	BObolLodStaticQualityPolicy::
+	BObolLodAdmissionPlanner::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
 		true, false, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
-	BObolLodStaticQualityPolicy::
+	BObolLodAdmissionPlanner::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
 		false, true, false, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
-	BObolLodStaticQualityPolicy::
+	BObolLodAdmissionPlanner::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
 		false, false, true, 4.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
-	BObolLodStaticQualityPolicy::
+	BObolLodAdmissionPlanner::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
 		false, false, false, 1.0f, 60000000ULL, 50000000ULL,
 		100000000ULL) ||
-	BObolLodStaticQualityPolicy::
+	BObolLodAdmissionPlanner::
 	    startOnePixelTrialFromSettledPointFrame(false, true, false,
 		false, false, false, 4.0f, 110000000ULL, 50000000ULL,
 		100000000ULL)) {
@@ -3143,27 +3663,24 @@ test_quality_policy(void)
 	return 1;
     }
 
-    if (std::fabs(BObolLodPointProxyCalibrationPolicy::
-	    triangleRecoveryPointThreshold(16.0f, true, 4) - 16.0f) >
+    if (std::fabs(BObolLodAdmissionPlanner::triangleRecoveryPointThreshold(16.0f, true, 4) - 16.0f) >
 		0.001f ||
-	std::fabs(BObolLodPointProxyCalibrationPolicy::
-	    triangleRecoveryPointThreshold(16.0f, false, 0) - 16.0f) >
+	std::fabs(BObolLodAdmissionPlanner::triangleRecoveryPointThreshold(16.0f, false, 0) - 16.0f) >
 		0.001f ||
-	std::fabs(BObolLodPointProxyCalibrationPolicy::
-	    triangleRecoveryPointThreshold(16.0f, true, 0) - 1.0f) >
+	std::fabs(BObolLodAdmissionPlanner::triangleRecoveryPointThreshold(16.0f, true, 0) - 1.0f) >
 		0.001f) {
 	std::fprintf(stderr,
 	    "FAIL: triangle recovery exposed structural fallback boxes\n");
 	return 1;
     }
 
-    if (!BObolLodStaticQualityPolicy::retainAggregatedPresentation(
+    if (!BObolLodAdmissionPlanner::retainAggregatedPresentation(
 	    -1, 16.0f, 100, true) ||
-	!BObolLodStaticQualityPolicy::retainAggregatedPresentation(
+	!BObolLodAdmissionPlanner::retainAggregatedPresentation(
 	    4, 16.0f, 100, false) ||
-	BObolLodStaticQualityPolicy::retainAggregatedPresentation(
+	BObolLodAdmissionPlanner::retainAggregatedPresentation(
 	    -1, 16.0f, 100, false) ||
-	BObolLodStaticQualityPolicy::retainAggregatedPresentation(
+	BObolLodAdmissionPlanner::retainAggregatedPresentation(
 	    -1, 1.0f, 100, true)) {
 	std::fprintf(stderr,
 	    "FAIL: static quality exposed structural fallback boxes\n");
@@ -3234,6 +3751,13 @@ test_view_demand_policy(void)
 {
     using Policy = BObolLodViewDemandPolicy;
     Policy policy;
+    if (Policy::staticHistoryDeadlineNanoseconds(0) != 0 ||
+	Policy::staticHistoryDeadlineNanoseconds(100000000ULL) !=
+	120000000ULL ||
+	Policy::staticHistoryDeadlineNanoseconds(UINT64_MAX) != UINT64_MAX) {
+	std::fprintf(stderr, "FAIL: bounded static-history deadline policy\n");
+	return 1;
+    }
     if (policy.scaleDemandRefreshActive() || policy.viewScaleChanging() ||
 	policy.interactionScaleChanged() || policy.qualityProbeActive() ||
 	policy.qualityProbePending() || policy.qualityProbePresented() ||
@@ -3481,6 +4005,79 @@ test_view_demand_policy(void)
 }
 
 static int
+test_quiet_successor_reducer(void)
+{
+    using Reducer = BObolLodQuietSuccessorReducer;
+    Reducer::Inputs inputs;
+    inputs.retainedMeshPayloads = true;
+    inputs.exactView.valid = true;
+    inputs.exactView.targetPixelError = 0.5f;
+    inputs.exactView.progressiveCeiling = 17;
+    inputs.exactView.progressiveNextFraction = 0.625f;
+    inputs.exactView.pointProxyPixelThreshold = 1.25f;
+    inputs.exactView.presentedRenderCost = 7000;
+    inputs.exactView.provenRenderCostCapacity = 9000;
+
+    /* Intermediate publication order may alter the last motion controls, but
+     * it cannot alter the certified quiet successor. */
+    for (int ceiling = -1; ceiling <= 9; ++ceiling) {
+	for (int pixel = 1; pixel <= 16; pixel *= 2) {
+	    inputs.current.valid = true;
+	    inputs.current.targetPixelError = static_cast<float>(pixel);
+	    inputs.current.progressiveCeiling = ceiling;
+	    inputs.current.progressiveNextFraction =
+		ceiling < 0 ? 0.0f : static_cast<float>(ceiling % 4) / 4.0f;
+	    inputs.current.pointProxyPixelThreshold =
+		static_cast<float>(pixel);
+	    const Reducer::Decision decision = Reducer::reduce(inputs);
+	    if (decision.source != Reducer::Source::EXACT_VIEW ||
+		decision.needsHandoff() || decision.clearPresentationLimits ||
+		std::fabs(decision.target.targetPixelError - 0.5f) > 1.0e-6f ||
+		decision.target.progressiveCeiling != 17 ||
+		std::fabs(decision.target.progressiveNextFraction - 0.625f) >
+		    1.0e-6f ||
+		std::fabs(decision.target.pointProxyPixelThreshold - 1.25f) >
+		    1.0e-6f ||
+		decision.target.presentedRenderCost != 7000 ||
+		decision.target.provenRenderCostCapacity != 9000) {
+		std::fprintf(stderr,
+		    "FAIL: quiet successor depended on transient publication\n");
+		return 1;
+	    }
+	}
+    }
+
+    /* With no certificate, motion ceilings survive only as handoff safety
+     * controls.  They cannot retain the motion pixel-error demand. */
+    inputs.exactView = Reducer::Target();
+    inputs.current.targetPixelError = 8.0f;
+    inputs.current.progressiveCeiling = 4;
+    inputs.current.progressiveNextFraction = 0.5f;
+    inputs.current.pointProxyPixelThreshold = 3.0f;
+    Reducer::Decision decision = Reducer::reduce(inputs);
+    if (decision.source != Reducer::Source::STABLE_DEMAND ||
+	decision.handoff != Reducer::Handoff::ALLOCATION || !decision.apply ||
+	std::fabs(decision.target.targetPixelError - 1.0f) > 1.0e-6f ||
+	decision.target.progressiveCeiling != 4 ||
+	std::fabs(decision.target.progressiveNextFraction - 0.5f) > 1.0e-6f ||
+	std::fabs(decision.target.pointProxyPixelThreshold - 3.0f) > 1.0e-6f) {
+	std::fprintf(stderr, "FAIL: quiet stable-demand handoff\n");
+	return 1;
+    }
+
+    inputs.retainedMeshPayloads = false;
+    decision = Reducer::reduce(inputs);
+    if (decision.source != Reducer::Source::STABLE_DEMAND ||
+	decision.needsHandoff() || !decision.clearPresentationLimits ||
+	decision.target.progressiveCeiling != -1 ||
+	std::fabs(decision.target.pointProxyPixelThreshold - 1.0f) > 1.0e-6f) {
+	std::fprintf(stderr, "FAIL: quiet payload-free successor\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_presentation_policy(void)
 {
     using Policy = BObolLodPresentationPolicy;
@@ -3511,39 +4108,58 @@ test_presentation_policy(void)
     input.population = population;
     input.currentTargetPixelError = 2.0f;
     input.currentProgressiveCeiling = 4;
+    input.currentProgressiveNextFraction = 0.25f;
     input.currentPointProxyPixelThreshold = 3.0f;
 
-    policy.capturePrior(0.5f, 8, 2.0f, population,
+    policy.capturePrior(0.5f, 8, 0.625f, 2.0f, population,
 	BObolLodViewEpoch(10));
-    Policy::RestoreDecision restore = policy.restorePrior(input);
-    if (!restore.apply || !restore.restoredPriorStable ||
-	std::fabs(restore.targetPixelError - 0.5f) > 0.0001f ||
-	restore.progressiveCeiling != 8 ||
-	std::fabs(restore.pointProxyPixelThreshold - 2.0f) > 0.0001f ||
-	!policy.priorRestored()) {
-	std::fprintf(stderr, "FAIL: pose-only stable presentation restore\n");
-	return 1;
-    }
-    restore = policy.beginQuiet(input);
+    Policy::RestoreDecision restore = policy.beginQuiet(input);
 	if (!restore.apply || !restore.restoredPriorStable ||
 	std::fabs(restore.targetPixelError - 0.5f) > 0.0001f ||
 	restore.progressiveCeiling != 8 ||
+	std::fabs(restore.progressiveNextFraction - 0.625f) > 0.0001f ||
 	std::fabs(restore.pointProxyPixelThreshold - 2.0f) > 0.0001f ||
-	restore.startHandoff ||
-	policy.handoffPending() || policy.handoffCostFloor() != 0) {
+	restore.handoff != Policy::RestoreDecision::Handoff::PRESENTATION ||
+	!policy.handoffPending() || !policy.handoffPresentationPending() ||
+	policy.handoffCostFloor() != 0) {
 	std::fprintf(stderr,
-	    "FAIL: quiet debounce did not reapply restored presentation\n");
+	    "FAIL: quiet pose restore did not require current-pose proof\n");
 	return 1;
     }
 
     policy.reset();
-    policy.capturePrior(0.5f, 8, 2.0f, population,
+    Policy::QuietInputs exactInputs;
+    exactInputs.presentation = input;
+    exactInputs.exactView.valid = true;
+    exactInputs.exactView.targetPixelError = 0.25f;
+    exactInputs.exactView.progressiveCeiling = 19;
+    exactInputs.exactView.progressiveNextFraction = 0.75f;
+    exactInputs.exactView.pointProxyPixelThreshold = 1.0f;
+    exactInputs.exactView.presentedRenderCost = 8000;
+    exactInputs.exactView.provenRenderCostCapacity = 10000;
+    restore = policy.beginQuiet(exactInputs);
+    if (!restore.apply || !restore.restoredExactView ||
+	restore.restoredPriorStable || restore.restoredProvenQuality ||
+	restore.needsHandoff() || policy.handoffPending() ||
+	std::fabs(restore.targetPixelError - 0.25f) > 0.0001f ||
+	restore.progressiveCeiling != 19 ||
+	std::fabs(restore.progressiveNextFraction - 0.75f) > 0.0001f ||
+	restore.provenRenderCostFloor != 8000 ||
+	restore.provenRenderCostCapacity != 10000) {
+	std::fprintf(stderr, "FAIL: exact-view quiet successor\n");
+	return 1;
+    }
+
+    policy.reset();
+    policy.capturePrior(0.5f, 8, 0.625f, 2.0f, population,
 	BObolLodViewEpoch(10));
     input.population.sceneDomainRevision++;
     restore = policy.beginQuiet(input);
-    if (restore.apply || restore.restoredPriorStable ||
-	!restore.startHandoff || !policy.handoffPending() ||
-	policy.handoffCostFloor() != 0) {
+    if (!restore.apply || restore.restoredPriorStable ||
+	restore.handoff != Policy::RestoreDecision::Handoff::ALLOCATION ||
+	!policy.handoffPending() ||
+	policy.handoffCostFloor() != 0 ||
+	std::fabs(restore.targetPixelError - 1.0f) > 0.0001f) {
 	std::fprintf(stderr, "FAIL: changed population presentation handoff\n");
 	return 1;
     }
@@ -3635,7 +4251,6 @@ test_presentation_policy(void)
     completion = policy.completePass(completed);
     if (!completion.finishHandoff || policy.handoffPending() ||
 	policy.handoffPresentationPending() ||
-	completion.preservePresentationLimits ||
 	completion.requestRetainedRescan) {
 	std::fprintf(stderr, "FAIL: certified deadline handoff not completed\n");
 	return 1;
@@ -3659,7 +4274,7 @@ test_presentation_policy(void)
     completed.populationQuiescent = true;
     completed.presentationLimitsReconciled = true;
     completion = policy.completePass(completed);
-    if (!completion.finishHandoff || completion.preservePresentationLimits ||
+    if (!completion.finishHandoff ||
 	policy.handoffPending() || policy.handoffReconciliationBudget() != 0) {
 	std::fprintf(stderr,
 	    "FAIL: bounded occurrence reconciliation retained global ceiling\n");
@@ -3718,7 +4333,7 @@ test_presentation_policy(void)
 
     completed.presentationLimitsReconciled = true;
     completion = policy.completePass(completed);
-    if (!completion.finishHandoff || completion.preservePresentationLimits ||
+    if (!completion.finishHandoff ||
 	policy.handoffPending()) {
 	std::fprintf(stderr,
 	    "FAIL: reconciled deadline handoff retained renderer ceiling\n");
@@ -3740,7 +4355,7 @@ test_presentation_policy(void)
     }
     completed.changedCut = false;
     completion = policy.completePass(completed);
-    if (!completion.finishHandoff || completion.preservePresentationLimits ||
+    if (!completion.finishHandoff ||
 	policy.handoffPending()) {
 	std::fprintf(stderr,
 	    "FAIL: proven changed deadline reconciliation retained ceiling\n");
@@ -3760,7 +4375,7 @@ test_presentation_policy(void)
     }
     completed.changedCut = false;
     completion = policy.completePass(completed);
-    if (!completion.finishHandoff || completion.preservePresentationLimits ||
+    if (!completion.finishHandoff ||
 	completion.requestRetainedRescan || policy.handoffPending()) {
 	std::fprintf(stderr,
 	    "FAIL: reconciled budget handoff retained global ceiling\n");
@@ -3768,6 +4383,32 @@ test_presentation_policy(void)
     }
     completed.retainedRefinementPending = false;
     completed.retainedRefinementBudgetBlocked = false;
+
+    /* A static staircase has already presented its guarded cut.  Its exact
+	* predicted work allowance must be available to the occurrence allocator
+	* immediately rather than being replaced by the broader scene budget. */
+    policy.reset();
+    policy.armHandoff(false, 700, 1200);
+    if (policy.handoffCostFloor() != 700 ||
+	policy.handoffReconciliationBudget() != 1200 ||
+	policy.handoffPresentationPending()) {
+	std::fprintf(stderr,
+	    "FAIL: presented static handoff lost reconciliation budget\n");
+	return 1;
+    }
+    completed = Policy::CompletedPassInputs();
+    completed.completed = true;
+    completed.retainedAllocationCompleted = true;
+    completed.retainedAllocationCertified = true;
+    completed.populationQuiescent = true;
+    completed.presentationLimitsReconciled = true;
+    completion = policy.completePass(completed);
+    if (!completion.finishHandoff || policy.handoffPending() ||
+	policy.handoffReconciliationBudget() != 0) {
+	std::fprintf(stderr,
+	    "FAIL: presented static reconciliation did not complete\n");
+	return 1;
+    }
 
     /* A richer retained target with no handoff, cut, budget barrier, or
      * rescan is terminal quality state, not self-sustaining background work. */
@@ -3809,10 +4450,94 @@ test_presentation_policy(void)
     completed.presentationLimitsReconciled = true;
     completion = policy.completePass(completed);
     if (!completion.finishHandoff || completion.requestRetainedRescan ||
-	completion.retireRetainedObservation || policy.handoffPending() ||
-	completion.preservePresentationLimits) {
+	completion.retireRetainedObservation || policy.handoffPending()) {
 	std::fprintf(stderr,
 	    "FAIL: budget-limited handoff scheduled another refinement pass\n");
+	return 1;
+    }
+
+    /* A generic capacity successor is speculative.  It must not hide an
+     * already complete occurrence-local handoff proof, but concrete pass
+     * obligations retain precedence. */
+    policy.reset();
+    policy.armHandoff(false);
+    completed = Policy::CompletedPassInputs();
+    completed.completed = true;
+    completed.submissionPending = true;
+    completed.retainedAllocationCompleted = true;
+    completed.retainedAllocationCertified = true;
+    completed.populationQuiescent = true;
+    completed.presentationLimitsReconciled = true;
+    if (!policy.currentHandoffAllocationSupersedesCapacityRestart(
+	    completed, true)) {
+	std::fprintf(stderr,
+	    "FAIL: reconciled handoff did not supersede capacity restart\n");
+	return 1;
+    }
+    completed.presentationLimitsReconciled = false;
+    if (!policy.currentHandoffAllocationSupersedesCapacityRestart(
+	    completed, true)) {
+	std::fprintf(stderr,
+	    "FAIL: over-budget handoff did not supersede capacity restart\n");
+	return 1;
+    }
+    completed.presentationLimitsReconciled = true;
+    completed.changedCut = true;
+    if (policy.currentHandoffAllocationSupersedesCapacityRestart(
+	    completed, true)) {
+	std::fprintf(stderr,
+	    "FAIL: changed handoff cut lost capacity successor\n");
+	return 1;
+    }
+    completed.changedCut = false;
+    completed.rescanAfterFrame = true;
+    if (policy.currentHandoffAllocationSupersedesCapacityRestart(
+	    completed, true)) {
+	std::fprintf(stderr,
+	    "FAIL: handoff rescan lost capacity successor\n");
+	return 1;
+    }
+    completed.rescanAfterFrame = false;
+    policy.reset();
+    if (policy.currentHandoffAllocationSupersedesCapacityRestart(
+	    completed, true)) {
+	std::fprintf(stderr,
+	    "FAIL: inactive handoff consumed capacity successor\n");
+	return 1;
+    }
+
+    /* An exact capacity sample cannot be taken through a renderer-wide
+     * ceiling.  A complete handoff allocation removes that ceiling first,
+     * while incomplete or unproved populations retain normal rescan order. */
+    policy.reset();
+    policy.armHandoff(false);
+    completed = Policy::CompletedPassInputs();
+    completed.completed = true;
+    completed.rescanAfterFrame = true;
+    completed.retainedAllocationCompleted = true;
+    completed.retainedAllocationCertified = true;
+    completed.populationQuiescent = true;
+    completed.presentationLimitsReconciled = true;
+    if (!policy.capacitySampleRequiresCeilingFreeHandoff(
+	    completed, true, 4)) {
+	std::fprintf(stderr,
+	    "FAIL: exact capacity sample did not yield to handoff\n");
+	return 1;
+    }
+    completed.presentationLimitsReconciled = false;
+    if (policy.capacitySampleRequiresCeilingFreeHandoff(
+	    completed, true, 4)) {
+	std::fprintf(stderr,
+	    "FAIL: unproved capacity sample released handoff ceiling\n");
+	return 1;
+    }
+    completed.presentationLimitsReconciled = true;
+    if (policy.capacitySampleRequiresCeilingFreeHandoff(
+	    completed, false, 4) ||
+	policy.capacitySampleRequiresCeilingFreeHandoff(
+	    completed, true, -1)) {
+	std::fprintf(stderr,
+	    "FAIL: absent capacity barrier yielded presentation order\n");
 	return 1;
     }
 
@@ -3822,12 +4547,14 @@ test_presentation_policy(void)
     input.viewEpoch.set(11);
     input.currentProgressiveCeiling = 6;
     input.currentPointProxyPixelThreshold = 2.0f;
-    policy.noteStableQuality(0.75f, 7, 1.5f, population,
+    policy.noteStableQuality(0.75f, 7, 0.375f, 1.5f, population,
 	BObolLodViewEpoch(11), 7000);
     restore = policy.beginQuiet(input);
     if (!restore.apply || !restore.restoredProvenQuality ||
 	std::fabs(restore.targetPixelError - 0.75f) > 0.0001f ||
-	!restore.startHandoff || restore.progressiveCeiling != 7 ||
+	restore.handoff != Policy::RestoreDecision::Handoff::ALLOCATION ||
+	restore.progressiveCeiling != 7 ||
+	std::fabs(restore.progressiveNextFraction - 0.375f) > 0.0001f ||
 	std::fabs(restore.pointProxyPixelThreshold - 1.5f) > 0.0001f ||
 	restore.provenRenderCostFloor != 7000 ||
 	policy.handoffCostFloor() != 7000) {
@@ -3854,12 +4581,14 @@ test_presentation_policy(void)
     }
 
     policy.reset();
-    policy.noteStableQuality(0.75f, 7, 1.5f, population,
+    policy.noteStableQuality(0.75f, 7, 0.375f, 1.5f, population,
 	BObolLodViewEpoch(11), 7000);
     input.viewEpoch.set(12);
     restore = policy.beginQuiet(input);
-    if (restore.apply || restore.restoredProvenQuality ||
-	policy.handoffCostFloor() != 0) {
+    if (!restore.apply || restore.restoredProvenQuality ||
+	restore.handoff != Policy::RestoreDecision::Handoff::ALLOCATION ||
+	policy.handoffCostFloor() != 0 ||
+	std::fabs(restore.targetPixelError - 1.0f) > 0.0001f) {
 	std::fprintf(stderr, "FAIL: stale view reused quality proof\n");
 	return 1;
     }
@@ -3870,6 +4599,7 @@ test_presentation_policy(void)
     if (!restore.apply || !restore.clearPresentationLimits ||
 	std::fabs(restore.targetPixelError - 1.0f) > 0.0001f ||
 	restore.progressiveCeiling != -1 ||
+	std::fabs(restore.progressiveNextFraction) > 0.0001f ||
 	std::fabs(restore.pointProxyPixelThreshold - 1.0f) > 0.0001f ||
 	policy.handoffPending()) {
 	std::fprintf(stderr, "FAIL: payload-free presentation reset\n");
@@ -3900,6 +4630,7 @@ test_view_quality_history(void)
     input.sceneAvailable = true;
     input.quality.targetPixelError = 0.5f;
     input.quality.progressiveCeiling = 12;
+    input.quality.progressiveNextFraction = 0.625f;
     input.quality.pointProxyPixelThreshold = 1.5f;
     input.quality.presentedRenderCost = 24000;
     input.exactCompletedFrame = true;
@@ -3921,6 +4652,7 @@ test_view_quality_history(void)
     if (!history.recall(recall, quality) ||
 	std::fabs(quality.targetPixelError - 0.5f) > 0.0001f ||
 	quality.progressiveCeiling != 12 ||
+	std::fabs(quality.progressiveNextFraction - 0.625f) > 0.0001f ||
 	std::fabs(quality.pointProxyPixelThreshold - 1.5f) > 0.0001f ||
 	quality.presentedRenderCost != 24000 ||
 	quality.provenRenderCostCapacity != 24000 ||
@@ -4000,6 +4732,7 @@ test_view_quality_history(void)
     History::RememberInputs richer = input;
     richer.quality.targetPixelError = 0.25f;
     richer.quality.progressiveCeiling = -1;
+    richer.quality.progressiveNextFraction = 0.0f;
     richer.quality.pointProxyPixelThreshold = 1.0f;
     richer.quality.presentedRenderCost = 48000;
     if (!history.remember(richer) ||
@@ -4034,6 +4767,7 @@ test_view_quality_history(void)
     History::RememberInputs measuredBetter = measured;
     measuredBetter.quality.targetPixelError = 0.5f;
     measuredBetter.quality.progressiveCeiling = 10;
+    measuredBetter.quality.progressiveNextFraction = 0.5f;
     measuredBetter.quality.pointProxyPixelThreshold = 1.25f;
     measuredBetter.quality.maximumProjectedErrorPixels = 0.75;
     measuredBetter.quality.presentedRenderCost = 40000;
@@ -4041,6 +4775,7 @@ test_view_quality_history(void)
 	!history.recall(recall, quality) ||
 	std::fabs(quality.maximumProjectedErrorPixels - 0.75) > 1.0e-9 ||
 	quality.progressiveCeiling != 10 ||
+	std::fabs(quality.progressiveNextFraction - 0.5f) > 0.0001f ||
 	quality.presentedRenderCost != 40000 ||
 	quality.provenRenderCostCapacity != 100000) {
 	std::fprintf(stderr,
@@ -4153,7 +4888,7 @@ test_view_quality_history(void)
 }
 
 static int
-test_publication_policy(void)
+test_availability_and_publication(void)
 {
     using Producer = BObolLodProducerPolicy;
     if (Producer::canProduceGeometry(false, false, false, false) ||
@@ -4162,62 +4897,90 @@ test_publication_policy(void)
 	!Producer::canProduceGeometry(true, true, true, false) ||
 	!Producer::canProduceGeometry(true, true, false, true) ||
 	Producer::ownsFutureFrame(true, true, false, false, false) ||
-	!Producer::ownsFutureFrame(true, true, false, false, true)) {
+	!Producer::ownsFutureFrame(true, true, false, false, true) ||
+	Producer::ownsFutureFrame(false, false, false, false, false)) {
 	std::fprintf(stderr,
 	    "FAIL: geometry producer continuation/paused-frame contract\n");
 	return 1;
     }
 
-    BObolLodInventoryDeltaPolicy inventory;
-    if (inventory.defer(true, true, false, false, false, 100) ||
-	inventory.firstPendingMicroseconds() != 0) {
+    BObolLodAvailabilityLedger availability;
+    if (availability.deferInventoryDelta(
+	    true, true, false, false, false, 100) ||
+	availability.inventoryFirstPendingMicroseconds() != 0) {
 	std::fprintf(stderr,
 	    "FAIL: first source inventory must submit immediately\n");
 	return 1;
     }
-    if (!inventory.defer(true, true, false, true, false, 100) ||
-	inventory.firstPendingMicroseconds() != 100 ||
-	!inventory.defer(true, true, false, true, false, 250099) ||
-	inventory.defer(true, true, false, true, false, 250100)) {
+    if (!availability.deferInventoryDelta(
+	    true, true, false, true, false, 100) ||
+	availability.inventoryFirstPendingMicroseconds() != 100 ||
+	!availability.deferInventoryDelta(
+	    true, true, false, true, false, 250099) ||
+	availability.deferInventoryDelta(
+	    true, true, false, true, false, 250100)) {
 	std::fprintf(stderr,
 	    "FAIL: stable source-inventory delta coalescing bound\n");
 	return 1;
     }
-    inventory.committed();
-    if (!inventory.defer(true, true, false, true, true, 500000) ||
-	inventory.defer(true, true, false, true, true, 600000)) {
+    availability.commitInventoryDelta();
+    if (!availability.deferInventoryDelta(
+	    true, true, false, true, true, 500000) ||
+	availability.deferInventoryDelta(
+	    true, true, false, true, true, 600000)) {
 	std::fprintf(stderr,
 	    "FAIL: interactive source-inventory delta coalescing bound\n");
 	return 1;
     }
-    if (inventory.defer(true, false, false, true, false, 700000) ||
-	inventory.defer(true, true, true, true, false, 700000) ||
-	inventory.defer(false, true, false, true, false, 700000) ||
-	inventory.firstPendingMicroseconds() != 0) {
+    if (availability.deferInventoryDelta(
+	    true, false, false, true, false, 700000) ||
+	availability.deferInventoryDelta(
+	    true, true, true, true, false, 700000) ||
+	availability.deferInventoryDelta(
+	    false, true, false, true, false, 700000) ||
+	availability.inventoryFirstPendingMicroseconds() != 0) {
 	std::fprintf(stderr,
 	    "FAIL: source-inventory semantic/final edge bypass\n");
 	return 1;
     }
 
-    using Policy = BObolLodPublicationPolicy;
+    availability.setProviderPendingCount(7);
+    availability.noteResultsReady(1234);
+    availability.noteResultsReady(5678);
+    if (availability.providerPendingCount() != 7 ||
+	!availability.resultsPending() ||
+	availability.firstResultReadyMicroseconds() != 1234) {
+	std::fprintf(stderr, "FAIL: availability producer/result ledger\n");
+	return 1;
+    }
+    availability.resetResultQueue();
+    if (availability.resultsPending() ||
+	availability.firstResultReadyMicroseconds() != 0) {
+	std::fprintf(stderr, "FAIL: availability result reset\n");
+	return 1;
+    }
+
+    using Policy = BObolLodPresentationTransaction;
     Policy policy;
     Policy::Inputs input;
     input.nowMicroseconds = 100;
     Policy::Decision decision = policy.decide(input);
-    if (decision.keepPumpAlive || decision.requestFrame || policy.pending() ||
-	policy.framePending() || policy.awaitingDeadline() ||
+    if (decision.keepPumpAlive || decision.requestFrame ||
+	policy.publicationPending() ||
+	policy.publicationFramePending() ||
+	policy.publicationAwaitingFrameRequest() ||
 	policy.unpresentedCount() != 0) {
 	std::fprintf(stderr, "FAIL: initial publication policy\n");
 	return 1;
     }
 
-    policy.noteApplied(2, 100);
-    policy.noteApplied(3, 110);
+    policy.noteApplied(2, 100, 3, 7);
+    policy.noteApplied(3, 110, 3, 7);
     input.nowMicroseconds = 50099;
     decision = policy.decide(input);
     if (!decision.keepPumpAlive || decision.requestFrame ||
-	!policy.pending() || policy.framePending() ||
-	!policy.awaitingDeadline() ||
+	!policy.publicationPending() || policy.publicationFramePending() ||
+	!policy.publicationAwaitingFrameRequest() ||
 	policy.unpresentedCount() != 5 ||
 	policy.firstUnpresentedMicroseconds() != 100) {
 	std::fprintf(stderr, "FAIL: bounded publication batch\n");
@@ -4226,47 +4989,60 @@ test_publication_policy(void)
     input.nowMicroseconds = 50100;
     decision = policy.decide(input);
     if (!decision.keepPumpAlive || !decision.requestFrame ||
-	!policy.framePending() || policy.awaitingDeadline()) {
+	!policy.publicationFramePending() ||
+	policy.publicationAwaitingFrameRequest()) {
 	std::fprintf(stderr, "FAIL: stable publication deadline\n");
+	return 1;
+    }
+    /* A batch timer which has not yet requested its frame can own a future
+     * point-calibration presentation.  The requested publication frame is
+     * that presentation obligation, not another producer which may justify
+     * dropping its render edge. */
+    if (BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
+	    false, false, false, false,
+	    policy.publicationAwaitingFrameRequest())) {
+	std::fprintf(stderr,
+	    "FAIL: requested publication frame impersonates a future producer\n");
 	return 1;
     }
     decision = policy.decide(input);
     if (!decision.keepPumpAlive || decision.requestFrame ||
-	!policy.framePending()) {
+	!policy.publicationFramePending()) {
 	std::fprintf(stderr, "FAIL: duplicate publication frame\n");
 	return 1;
     }
-    policy.frameCompleted();
-    if (policy.pending() || policy.framePending() ||
-	policy.awaitingDeadline() ||
+    (void)policy.complete(1, 3, 7);
+    if (policy.publicationPending() ||
+	policy.publicationFramePending() ||
+	policy.publicationAwaitingFrameRequest() ||
 	policy.unpresentedCount() != 0 ||
 	policy.firstUnpresentedMicroseconds() != 0) {
 	std::fprintf(stderr, "FAIL: publication completion\n");
 	return 1;
     }
 
-    policy.noteApplied(1, 200);
+    policy.noteApplied(1, 200, 3, 7);
     input = Policy::Inputs();
     input.nowMicroseconds = 200;
     input.firstUseful = true;
     decision = policy.decide(input);
-    if (!decision.requestFrame || !policy.framePending()) {
+    if (!decision.requestFrame || !policy.publicationFramePending()) {
 	std::fprintf(stderr, "FAIL: first-useful publication\n");
 	return 1;
     }
     policy.reset();
-    policy.noteApplied(1, 300);
+    policy.noteApplied(1, 300, 3, 7);
     input = Policy::Inputs();
     input.nowMicroseconds = 300;
     input.streamIdle = true;
     decision = policy.decide(input);
-    if (!decision.requestFrame || !policy.framePending()) {
+    if (!decision.requestFrame || !policy.publicationFramePending()) {
 	std::fprintf(stderr, "FAIL: idle-stream publication\n");
 	return 1;
     }
 
     policy.reset();
-    policy.noteApplied(1, 1000);
+    policy.noteApplied(1, 1000, 3, 7);
     input = Policy::Inputs();
     input.interactive = true;
     input.nowMicroseconds = 34332;
@@ -4283,7 +5059,7 @@ test_publication_policy(void)
     }
 
     policy.reset();
-    policy.noteApplied(1, 1000);
+    policy.noteApplied(1, 1000, 3, 7);
     input = Policy::Inputs();
     input.observedRenderNanoseconds = 100000000ULL;
     input.nowMicroseconds = 200999;
@@ -4300,8 +5076,8 @@ test_publication_policy(void)
     }
 
     policy.reset();
-    policy.noteApplied(SIZE_MAX - 1, 500);
-    policy.noteApplied(10, 600);
+    policy.noteApplied(SIZE_MAX - 1, 500, 3, 7);
+    policy.noteApplied(10, 600, 3, 7);
     input = Policy::Inputs();
     input.nowMicroseconds = 499;
     decision = policy.decide(input);
@@ -4310,7 +5086,8 @@ test_publication_policy(void)
 	return 1;
     }
     policy.reset();
-    if (policy.pending() || policy.framePending()) {
+    if (policy.publicationPending() ||
+	policy.publicationFramePending()) {
 	std::fprintf(stderr, "FAIL: publication reset\n");
 	return 1;
     }
@@ -4318,95 +5095,143 @@ test_publication_policy(void)
 }
 
 static int
-test_resident_growth_policy(void)
+test_availability_growth(void)
 {
-    BObolLodResidentGrowthPolicy policy;
-    if (!BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+    BObolLodAvailabilityLedger availability;
+    if (!BObolLodAvailabilityScheduler::allocationPopulationSettled(
 	    true, true, true, false, false) ||
-	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	BObolLodAvailabilityScheduler::allocationPopulationSettled(
 	    false, true, true, false, false) ||
-	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	BObolLodAvailabilityScheduler::allocationPopulationSettled(
 	    true, false, true, false, false) ||
-	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	BObolLodAvailabilityScheduler::allocationPopulationSettled(
 	    true, true, false, false, false) ||
-	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	BObolLodAvailabilityScheduler::allocationPopulationSettled(
 	    true, true, true, true, false) ||
-	BObolLodResidentGrowthPolicy::allocationPopulationSettled(
+	BObolLodAvailabilityScheduler::allocationPopulationSettled(
 	    true, true, true, false, true)) {
 	std::fprintf(stderr,
 	    "FAIL: resident-growth allocation population boundary\n");
 	return 1;
     }
-    if (!BObolLodResidentGrowthPolicy::canRetainPresentation(
+    if (!BObolLodAvailabilityScheduler::structuralRepairMayOwn(false, false) ||
+	BObolLodAvailabilityScheduler::structuralRepairMayOwn(true, false) ||
+	BObolLodAvailabilityScheduler::structuralRepairMayOwn(false, true) ||
+	BObolLodAvailabilityScheduler::structuralRepairMayOwn(true, true)) {
+	std::fprintf(stderr,
+	    "FAIL: resident growth did not exclude structural-repair ownership\n");
+	return 1;
+    }
+    if (!BObolLodAvailabilityScheduler::
+	    presentationCutDowngradeAllowed(false, false, true, false, true) ||
+	!BObolLodAvailabilityScheduler::
+	    presentationCutDowngradeAllowed(false, false, false, true, false) ||
+	BObolLodAvailabilityScheduler::
+	    presentationCutDowngradeAllowed(false, false, true, true, false) ||
+	BObolLodAvailabilityScheduler::
+	    presentationCutDowngradeAllowed(true, false, false, true, true) ||
+	BObolLodAvailabilityScheduler::
+	    presentationCutDowngradeAllowed(false, true, false, true, true) ||
+	BObolLodAvailabilityScheduler::
+	    presentationCutDowngradeAllowed(false, false, false, false, false)) {
+	std::fprintf(stderr,
+	    "FAIL: resident-growth presentation-cut ownership boundary\n");
+	return 1;
+    }
+    if (!BObolLodAvailabilityScheduler::canRetainPresentation(
 	    true, true, true, true, true) ||
-	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	BObolLodAvailabilityScheduler::canRetainPresentation(
 	    false, true, true, true, true) ||
-	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	BObolLodAvailabilityScheduler::canRetainPresentation(
 	    true, false, true, true, true) ||
-	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	BObolLodAvailabilityScheduler::canRetainPresentation(
 	    true, true, false, true, true) ||
-	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	BObolLodAvailabilityScheduler::canRetainPresentation(
 	    true, true, true, false, true) ||
-	BObolLodResidentGrowthPolicy::canRetainPresentation(
+	BObolLodAvailabilityScheduler::canRetainPresentation(
 	    true, true, true, true, false)) {
 	std::fprintf(stderr,
 	    "FAIL: resident-growth presentation-retention contract\n");
 	return 1;
     }
-    if (policy.pending() ||
-	policy.residencyDrainRequired() ||
-	policy.beginResidencyDrainIfReady(true, true, true) ||
-	policy.consumeIfReady(true, true, true)) {
-	std::fprintf(stderr, "FAIL: initial resident-growth policy\n");
+    if (availability.residentGrowthPending() ||
+	availability.residencyDrainRequired() ||
+	availability.residencyDrainActive() ||
+	availability.beginResidencyDrainIfReady(true, true, true) ||
+	availability.consumeResidentGrowthIfReady(true, true, true)) {
+	std::fprintf(stderr, "FAIL: initial resident-growth ledger\n");
 	return 1;
     }
 
-    policy.noteRicherPrefixAvailable();
-    policy.noteRicherPrefixAvailable();
+    availability.noteRicherPrefixAvailable();
+    availability.noteRicherPrefixAvailable();
 
-    if (!policy.pending() || !policy.residencyDrainRequired() ||
-	policy.consumeIfReady(false, true, true) ||
-	policy.consumeIfReady(true, false, true) ||
-	policy.consumeIfReady(true, true, false) ||
-	!policy.pending()) {
+    if (!availability.residentGrowthPending() ||
+	!availability.residencyDrainRequired() ||
+	availability.consumeResidentGrowthIfReady(false, true, true) ||
+	availability.consumeResidentGrowthIfReady(true, false, true) ||
+	availability.consumeResidentGrowthIfReady(true, true, false) ||
+	!availability.residentGrowthPending()) {
 	std::fprintf(stderr,
 	    "FAIL: resident growth did not coalesce behind readiness\n");
 	return 1;
     }
-    if (policy.beginResidencyDrainIfReady(false, true, true) ||
-	policy.beginResidencyDrainIfReady(true, false, true) ||
-	policy.beginResidencyDrainIfReady(true, true, false) ||
-	!policy.beginResidencyDrainIfReady(true, true, true) ||
-	policy.residencyDrainRequired() ||
-	policy.beginResidencyDrainIfReady(true, true, true)) {
+    if (availability.beginResidencyDrainIfReady(false, true, true) ||
+	availability.beginResidencyDrainIfReady(true, false, true) ||
+	availability.beginResidencyDrainIfReady(true, true, false) ||
+	!availability.beginResidencyDrainIfReady(true, true, true) ||
+	availability.residencyDrainRequired() ||
+	!availability.residencyDrainActive() ||
+	availability.beginResidencyDrainIfReady(true, true, true)) {
 	std::fprintf(stderr,
 	    "FAIL: resident growth residency drain readiness\n");
 	return 1;
     }
-    if (!policy.consumeIfReady(true, true, true) || policy.pending() ||
-	policy.consumeIfReady(true, true, true)) {
+    if (!availability.completeResidencyDrain() ||
+	availability.residencyDrainActive() ||
+	!availability.consumeResidentGrowthIfReady(true, true, true) ||
+	availability.residentGrowthPending() ||
+	availability.consumeResidentGrowthIfReady(true, true, true)) {
 	std::fprintf(stderr,
 	    "FAIL: resident growth allocation edge was not one-shot\n");
 	return 1;
     }
 
-    policy.noteRicherPrefixAvailable();
-    if (!policy.beginResidencyDrainIfReady(true, true, true)) {
+    availability.noteRicherPrefixAvailable();
+    if (!availability.beginResidencyDrainIfReady(true, true, true)) {
 	std::fprintf(stderr, "FAIL: resident-growth second drain\n");
 	return 1;
     }
-    policy.noteRicherPrefixAvailable();
-    if (!policy.residencyDrainRequired() ||
-	policy.consumeIfReady(true, true, true) ||
-	!policy.beginResidencyDrainIfReady(true, true, true) ||
-	!policy.consumeIfReady(true, true, true)) {
+    availability.noteRicherPrefixAvailable();
+    if (!availability.residencyDrainRequired() ||
+	availability.consumeResidentGrowthIfReady(true, true, true) ||
+	!availability.completeResidencyDrain() ||
+	!availability.beginResidencyDrainIfReady(true, true, true) ||
+	!availability.completeResidencyDrain() ||
+	!availability.consumeResidentGrowthIfReady(true, true, true)) {
 	std::fprintf(stderr,
 	    "FAIL: resident growth during drain was not coalesced\n");
 	return 1;
     }
-    policy.noteRicherPrefixAvailable();
-    policy.reset();
-    if (policy.pending() || policy.residencyDrainRequired()) {
+    availability.noteRicherPrefixAvailable();
+    if (!availability.beginResidencyDrainIfReady(true, true, true)) {
+	std::fprintf(stderr, "FAIL: resident-growth interrupt setup\n");
+	return 1;
+    }
+    availability.interruptResidencyDrain();
+    if (availability.residencyDrainActive() ||
+	!availability.residencyDrainRequired() ||
+	!availability.beginResidencyDrainIfReady(true, true, true) ||
+	!availability.completeResidencyDrain() ||
+	!availability.consumeResidentGrowthIfReady(true, true, true)) {
+	std::fprintf(stderr, "FAIL: resident-growth drain interruption\n");
+	return 1;
+    }
+    availability.noteRicherPrefixAvailable();
+    availability.resetResidentGrowth();
+    if (availability.residentGrowthPending() ||
+	availability.residencyDrainRequired() ||
+	availability.residencyDrainActive()) {
 	std::fprintf(stderr, "FAIL: resident-growth reset\n");
 	return 1;
     }
@@ -4613,7 +5438,6 @@ public:
 	seed(seedValue ? seedValue : 1), randomState(seedValue ? seedValue : 1)
     {
 	coverage.reset();
-	this->reconcile(LodMachine::Event::INITIALIZE);
     }
 
     uint32_t random(void)
@@ -4659,7 +5483,6 @@ public:
 	    interactive = false;
 	    quietTimer = false;
 	    policyEpoch.advance();
-	    this->reconcile(LodMachine::Event::POLICY_CHANGED);
 	    return true;
 	}
 	if (servicePending) {
@@ -4670,20 +5493,18 @@ public:
 	    this->coverageCheckpoint();
 	    return true;
 	}
-	if (publication.framePending()) {
-	    publication.frameCompleted();
-	    renderSerial++;
-	    this->reconcile(LodMachine::Event::FRAME_COMPLETED);
+	if (publication.publicationFramePending()) {
+	    (void)publication.complete(1, viewEpoch.value(),
+		policyEpoch.value());
 	    return true;
 	}
-	if (publication.awaitingDeadline()) {
+	if (publication.publicationAwaitingFrameRequest()) {
 	    nowMicroseconds += 300000;
-	    BObolLodPublicationPolicy::Inputs inputs;
+	    BObolLodPresentationTransaction::Inputs inputs;
 	    inputs.nowMicroseconds = nowMicroseconds;
 	    inputs.interactive = interactive;
 	    inputs.streamIdle = !servicePending;
 	    (void)publication.decide(inputs);
-	    this->reconcile(LodMachine::Event::WORK_PUMPED);
 	    return true;
 	}
 	if (compactionCursor) {
@@ -4692,7 +5513,6 @@ public:
 	    compactionCursor = false;
 	    if (resources.recoveryPending())
 		resources.markRecoveryHandled();
-	    this->reconcile(LodMachine::Event::WORK_PUMPED);
 	    return true;
 	}
 	if (compaction.pending() || resources.recoveryPending()) {
@@ -4719,7 +5539,6 @@ public:
 		/* Its prerequisite must be one of the earlier named witnesses. */
 		return false;
 	    }
-	    this->reconcile(LodMachine::Event::WORK_PUMPED);
 	    return true;
 	}
 	return false;
@@ -4732,9 +5551,9 @@ public:
 	    result |= WITNESS_SERVICE_TASK;
 	if (coverageCursor)
 	    result |= WITNESS_COVERAGE_CURSOR;
-	if (publication.awaitingDeadline())
+	if (publication.publicationAwaitingFrameRequest())
 	    result |= WITNESS_PUBLICATION_DEADLINE;
-	if (publication.framePending())
+	if (publication.publicationFramePending())
 	    result |= WITNESS_PRESENTATION_FRAME;
 	if (gestureActive)
 	    result |= WITNESS_INTERACTION_INPUT;
@@ -4751,41 +5570,43 @@ public:
     {
 	const BObolLodConvergencePolicy::Decision decision =
 	    this->convergenceDecision();
-	if (decision.phase == BObolLodConvergencePolicy::Phase::CONVERROR)
-	    return true;
-	if (this->witnesses() != WITNESS_NONE || decision.visualPending)
-	    return false;
-	return machine.currentPhase() == LodMachine::Phase::STABLE ||
-	    machine.currentPhase() == LodMachine::Phase::FALLBACK;
+	return decision.terminal;
     }
 
     bool valid(void)
     {
-	if (machine.lastInvariantMask() != LodMachine::INVARIANT_NONE)
-	    return false;
 	const BObolLodConvergencePolicy::Decision decision =
 	    this->convergenceDecision();
-	if (!this->terminal() && this->witnesses() == WITNESS_NONE)
-	    return false;
-	if (decision.viewReady && decision.visualPending)
-	    return false;
 	const uint32_t foregroundWitnesses = this->witnesses() &
 	    ~(WITNESS_COMPACTION_DEADLINE | WITNESS_COMPACTION_CURSOR);
-	/* Resident maintenance is explicitly background work: the visible
-	 * coordinator may be STABLE while convergence reports BACKGROUND, but
-	 * every foreground witness must keep it out of the terminal phase. */
-	if (machine.currentPhase() == LodMachine::Phase::STABLE &&
-	    foregroundWitnesses != WITNESS_NONE)
+	if (!decision.terminal && foregroundWitnesses == WITNESS_NONE)
+	    return false;
+	if (decision.terminal && foregroundWitnesses != WITNESS_NONE)
+	    return false;
+	const bool successfulTerminal = decision.terminal &&
+	    (decision.outcome == BObolLodConvergencePolicy::Outcome::READY ||
+	     decision.outcome ==
+		BObolLodConvergencePolicy::Outcome::CONSTRAINED);
+	if (decision.viewReady != successfulTerminal)
+	    return false;
+	if (decision.terminalError !=
+	    (decision.terminal && decision.outcome ==
+		BObolLodConvergencePolicy::Outcome::ERROR))
 	    return false;
 	return true;
     }
 
     uint64_t replaySeed(void) const { return seed; }
-    LodMachine::Phase phase(void) const { return machine.currentPhase(); }
-    uint32_t invariantMask(void) const
+    BObolLodConvergencePolicy::Phase phase(void)
     {
-	return machine.lastInvariantMask();
+	return this->convergenceDecision().phase;
     }
+    bool error(void)
+    {
+	return this->convergenceDecision().outcome ==
+	    BObolLodConvergencePolicy::Outcome::ERROR;
+    }
+    uint32_t invariantMask(void) const { return 0; }
 
 private:
     void startSource(void)
@@ -4797,14 +5618,12 @@ private:
 	sourceActive = true;
 	coverage.setRequired(true);
 	servicePending = true;
-	generationActive = true;
 	visibleCount = 7 + random() % 57;
 	coveredCount = 0;
 	coverage.reset();
 	coverage.activate(true);
 	coverageCursor = true;
 	viewEpoch.advance();
-	this->reconcile(LodMachine::Event::WORK_SCHEDULED);
     }
 
     void coverageCheckpoint(void)
@@ -4818,14 +5637,14 @@ private:
 	coverage.observe(quantum, quantum);
 	coveredCount += quantum;
 	if (quantum)
-	    publication.noteApplied(quantum, nowMicroseconds);
+	    publication.noteApplied(quantum, nowMicroseconds,
+		viewEpoch.value(), policyEpoch.value());
 	if (coveredCount >= visibleCount) {
 	    (void)coverage.completeIfReady(true, false);
 	    coverageCursor = false;
 	}
 	this->publicationDecision(!coveredCount || coveredCount == quantum,
 	    !servicePending && !coverageCursor);
-	this->reconcile(LodMachine::Event::RESULT_PUBLISHED);
     }
 
     void completeProvider(void)
@@ -4834,7 +5653,6 @@ private:
 	    return;
 	servicePending = false;
 	this->publicationDecision(false, true);
-	this->reconcile(LodMachine::Event::RESULT_PUBLISHED);
     }
 
     void startInteraction(void)
@@ -4844,7 +5662,6 @@ private:
 	interactive = true;
 	gestureActive = true;
 	quietTimer = false;
-	this->reconcile(LodMachine::Event::INTERACTION_STARTED);
     }
 
     void endGesture(void)
@@ -4854,18 +5671,16 @@ private:
 	gestureActive = false;
 	interactive = true;
 	quietTimer = true;
-	this->reconcile(LodMachine::Event::INTERACTION_ENDED);
     }
 
     void togglePressure(void)
     {
 	const bool cpu = !resources.cpuPressure();
 	const bool gpu = cpu && ((random() & 1u) != 0);
-	const BObolLodResourcePolicy::Decision decision =
-	    resources.observe(cpu, gpu, true);
+	const BObolLodResourceEvidence::Decision decision =
+	    apply_resource_observation(resources, cpu, gpu, true);
 	if (decision.queueRecovery)
 	    compaction.requestImmediate(nowMicroseconds);
-	this->reconcile(LodMachine::Event::FRAME_COMPLETED);
     }
 
     void cancelGeneration(void)
@@ -4875,13 +5690,11 @@ private:
 	servicePending = false;
 	sourceActive = false;
 	coverage.setRequired(false);
-	generationActive = false;
 	providerCancelled = true;
 	providerFailed = false;
 	coverageCursor = false;
 	coverage.reset();
 	publication.reset();
-	this->reconcile(LodMachine::Event::GENERATION_CANCELLED);
     }
 
     void failProvider(void)
@@ -4891,22 +5704,20 @@ private:
 	servicePending = false;
 	sourceActive = false;
 	coverage.setRequired(false);
-	generationActive = false;
 	providerFailed = true;
 	providerCancelled = false;
 	coverageCursor = false;
 	coverage.reset();
 	publication.reset();
-	this->reconcile(LodMachine::Event::RESULT_PUBLISHED);
     }
 
     void applyResult(void)
     {
 	if (!sourceActive || providerFailed || providerCancelled)
 	    return;
-	publication.noteApplied(1 + random() % 8, nowMicroseconds);
+	publication.noteApplied(1 + random() % 8, nowMicroseconds,
+	    viewEpoch.value(), policyEpoch.value());
 	this->publicationDecision(false, !servicePending);
-	this->reconcile(LodMachine::Event::RESULT_PUBLISHED);
     }
 
     void advanceClock(void)
@@ -4918,13 +5729,11 @@ private:
 	    policyEpoch.advance();
 	}
 	this->publicationDecision(false, !servicePending);
-	this->reconcile(LodMachine::Event::WORK_PUMPED);
     }
 
     void requestCompaction(void)
     {
 	compaction.requestAfter(nowMicroseconds, 50000);
-	this->reconcile(LodMachine::Event::WORK_SCHEDULED);
     }
 
     void invalidateView(void)
@@ -4936,18 +5745,16 @@ private:
 	    coverageCursor = true;
 	    coveredCount = 0;
 	}
-	this->reconcile(LodMachine::Event::VIEW_INVALIDATED);
     }
 
     void changePolicy(void)
     {
 	policyEpoch.advance();
-	this->reconcile(LodMachine::Event::POLICY_CHANGED);
     }
 
     void publicationDecision(bool firstUseful, bool streamIdle)
     {
-	BObolLodPublicationPolicy::Inputs inputs;
+	BObolLodPresentationTransaction::Inputs inputs;
 	inputs.nowMicroseconds = nowMicroseconds;
 	inputs.interactive = interactive;
 	inputs.firstUseful = firstUseful;
@@ -4964,7 +5771,8 @@ private:
 	inputs.coverageComplete =
 	    !sourceActive || coverage.coverageComplete();
 	inputs.coverageProgressPending = coverageCursor;
-	inputs.settlingPending = publication.pending() || quietTimer;
+	inputs.settlingPending =
+	    publication.publicationPending() || quietTimer;
 	inputs.realizationPending = servicePending;
 	inputs.submissionPending = coverageCursor;
 	inputs.serviceAvailable = true;
@@ -4985,7 +5793,7 @@ private:
 	inputs.satisfiedPayloadCount = inputs.activePayloadCount;
 	inputs.pendingTasks = servicePending ? 1 : 0;
 	inputs.submissionPending = coverageCursor;
-	inputs.publicationPending = publication.pending();
+	inputs.publicationPending = publication.publicationPending();
 	inputs.interactive = interactive;
 	inputs.compactionPending =
 	    compaction.pending() || compactionCursor ||
@@ -4995,52 +5803,16 @@ private:
 	inputs.gpuMemoryPressure = resources.gpuPressure();
 	return convergence.evaluate(inputs);
     }
-
-    void reconcile(LodMachine::Event event)
-    {
-	LodMachine::Inputs inputs;
-	inputs.interactive = interactive;
-	inputs.gestureActive = gestureActive;
-	inputs.coverageActive = coverage.effectiveActive();
-	inputs.coverageComplete = coverage.effectiveComplete();
-	inputs.compacting = (compaction.planning() || compactionCursor) &&
-	    coverage.compactionAllowed();
-	inputs.generationActive = generationActive;
-	inputs.cpuMemoryPressure = resources.cpuPressure();
-	inputs.gpuMemoryPressure = resources.gpuPressure();
-	inputs.resourceRecoveryPending = resources.recoveryPending();
-	inputs.settlingWork = servicePending || quietTimer ||
-	    publication.pending();
-
-	LodMachine::Witness witness;
-	witness.viewEpoch = viewEpoch.value();
-	witness.policyEpoch = policyEpoch.value();
-	witness.renderSerial = renderSerial;
-	witness.activeGeneration = generationActive ? 1 : 0;
-	witness.residentDemandRevision = residentDemandRevision;
-	witness.resourcePressureRevision = resources.revision();
-	witness.visibleCount = visibleCount;
-	witness.completedCount = coveredCount;
-	witness.pendingCount =
-	    static_cast<size_t>(servicePending) +
-	    static_cast<size_t>(coverageCursor) +
-	    static_cast<size_t>(publication.pending()) +
-	    static_cast<size_t>(quietTimer);
-	(void)machine.dispatch(event, inputs, witness);
-    }
-
     const uint64_t seed;
     uint64_t randomState;
     int64_t nowMicroseconds = 1;
     BObolLodViewEpoch viewEpoch {1};
     BObolLodPolicyEpoch policyEpoch {1};
-    uint64_t renderSerial = 0;
     uint64_t residentDemandRevision = 0;
     size_t visibleCount = 0;
     size_t coveredCount = 0;
     bool sourceActive = false;
     bool servicePending = false;
-    bool generationActive = false;
     bool coverageCursor = false;
     bool providerFailed = false;
     bool providerCancelled = false;
@@ -5048,10 +5820,9 @@ private:
     bool gestureActive = false;
     bool quietTimer = false;
     bool compactionCursor = false;
-    LodMachine machine;
-    BObolLodResourcePolicy resources;
+    BObolLodResourceEvidence resources;
     BObolLodCoveragePolicy coverage;
-    BObolLodPublicationPolicy publication;
+    BObolLodPresentationTransaction publication;
     BObolLodCompactionPolicy compaction;
     BObolLodConvergencePolicy convergence;
 };
@@ -5107,9 +5878,10 @@ test_seeded_composed_lifecycle(void)
 	failureDuringInput.perturb(0); /* source/service start */
 	failureDuringInput.perturb(3); /* interaction start */
 	failureDuringInput.perturb(7); /* terminal provider failure */
-	if (!failureDuringInput.valid() || !failureDuringInput.terminal()) {
+	if (!failureDuringInput.valid() || !failureDuringInput.error() ||
+	    discharge(failureDuringInput, "failure-during-interaction")) {
 	    std::fprintf(stderr,
-		"FAIL: provider failure during interaction did not terminate\n");
+		"FAIL: provider failure during interaction did not converge\n");
 	    return 1;
 	}
     }
@@ -5147,69 +5919,374 @@ test_seeded_composed_lifecycle(void)
 }
 
 static int
-test_frame_obligation(void)
+test_presentation_transaction(void)
 {
-    BObolLodFrameObligation obligation;
-    if (obligation.pending() || obligation.requiredRenderSerial() != 0) {
+    BObolLodPresentationTransaction transaction;
+    if (transaction.barrierPending() ||
+	transaction.publicationPending() ||
+	transaction.requiredRenderSerial() != 0) {
 	std::fprintf(stderr,
-	    "FAIL: frame obligation does not initialize empty\n");
+	    "FAIL: presentation transaction does not initialize empty\n");
 	return 1;
     }
 
-    if (!obligation.arm(BObolLodFrameObligation::REASON_CUT_PRESENTATION,
-	10, 3, 7) || !obligation.pending() ||
-	obligation.requiredRenderSerial() != 11 ||
-	obligation.viewEpoch() != 3 || obligation.policyEpoch() != 7) {
+    if (!transaction.arm(
+	    BObolLodPresentationTransaction::REASON_CUT_PRESENTATION,
+	    10, 3, 7) || !transaction.barrierPending() ||
+	transaction.requiredRenderSerial() != 11 ||
+	transaction.viewEpoch() != 3 || transaction.policyEpoch() != 7) {
 	std::fprintf(stderr,
-	    "FAIL: frame obligation did not capture its transaction token\n");
+	    "FAIL: frame barrier did not capture its transaction token\n");
 	return 1;
     }
-    const uint64_t sequence = obligation.sequence();
-    if (obligation.arm(
-	    BObolLodFrameObligation::REASON_RESULT_PUBLICATION,
-	    12, 3, 7) || obligation.requiredRenderSerial() != 11 ||
-	obligation.sequence() != sequence ||
-	(obligation.reasons() &
-	 (BObolLodFrameObligation::REASON_CUT_PRESENTATION |
-	  BObolLodFrameObligation::REASON_RESULT_PUBLICATION)) == 0) {
+    const uint64_t sequence = transaction.sequence();
+    transaction.noteApplied(2, 100, 3, 7);
+    if (transaction.arm(
+	    BObolLodPresentationTransaction::REASON_RESULT_PUBLICATION,
+	    12, 3, 7) || transaction.requiredRenderSerial() != 11 ||
+	transaction.sequence() != sequence ||
+	!transaction.publicationPending() ||
+	(transaction.reasons() &
+	 (BObolLodPresentationTransaction::REASON_CUT_PRESENTATION |
+	  BObolLodPresentationTransaction::REASON_RESULT_PUBLICATION)) == 0) {
 	std::fprintf(stderr,
 	    "FAIL: shared frame reasons moved an existing barrier forward\n");
 	return 1;
     }
 
-    BObolLodFrameObligation::Completion completion =
-	obligation.complete(10, 3, 7);
-    if (completion.retired || completion.stale || !obligation.pending()) {
+    BObolLodPresentationTransaction::Completion completion =
+	transaction.complete(10, 3, 7);
+    if (completion.retired || completion.stale ||
+	!transaction.barrierPending() ||
+	!transaction.publicationPending()) {
 	std::fprintf(stderr,
 	    "FAIL: an early frame retired its obligation\n");
 	return 1;
     }
-    completion = obligation.complete(11, 3, 7);
-    if (!completion.retired || completion.stale || obligation.pending() ||
+
+    completion = transaction.complete(11, 3, 7);
+    if (!completion.retired || completion.stale ||
+	transaction.barrierPending() || transaction.publicationPending() ||
 	(completion.reasons &
-	 BObolLodFrameObligation::REASON_RESULT_PUBLICATION) == 0) {
+	 BObolLodPresentationTransaction::REASON_RESULT_PUBLICATION) == 0) {
 	std::fprintf(stderr,
-	    "FAIL: matching frame did not retire all shared reasons\n");
+	    "FAIL: matching frame did not retire the presentation transaction\n");
 	return 1;
     }
 
-    (void)obligation.arm(BObolLodFrameObligation::REASON_HANDOFF,
+
+    transaction.noteApplied(1, 200, 4, 8);
+    (void)transaction.arm(BObolLodPresentationTransaction::REASON_HANDOFF,
 	20, 4, 8);
-    completion = obligation.complete(21, 5, 8);
-    if (completion.retired || !completion.stale || obligation.pending()) {
+    completion = transaction.complete(21, 5, 8);
+    if (completion.retired || !completion.stale ||
+	transaction.barrierPending() || transaction.publicationPending()) {
 	std::fprintf(stderr,
-	    "FAIL: stale camera epoch acknowledged a frame transaction\n");
+	    "FAIL: stale camera epoch acknowledged a presentation transaction\n");
 	return 1;
     }
 
-    (void)obligation.arm(BObolLodFrameObligation::REASON_CALIBRATION,
+
+    (void)transaction.arm(
+	BObolLodPresentationTransaction::REASON_CALIBRATION,
 	UINT64_MAX, 9, 11);
-    if (obligation.requiredRenderSerial() != UINT64_MAX ||
-	!obligation.complete(UINT64_MAX, 9, 11).retired) {
+    if (transaction.requiredRenderSerial() != UINT64_MAX ||
+	!transaction.complete(UINT64_MAX, 9, 11).retired) {
 	std::fprintf(stderr,
-	    "FAIL: frame obligation serial saturation is not deterministic\n");
+	    "FAIL: presentation serial saturation is not deterministic\n");
 	return 1;
     }
+
+    transaction.noteApplied(1, 300, 12, 13);
+    completion = transaction.complete(1, 12, 13);
+    if (completion.retired || completion.stale ||
+	transaction.publicationPending()) {
+	std::fprintf(stderr,
+	    "FAIL: ordinary CAD frame did not publish an unbarriered batch\n");
+	return 1;
+    }
+    return 0;
+}
+
+static BObolLodCapacitySearchKey
+capacity_search_key(size_t demand, uint64_t view = 3,
+    uint64_t maximumNanoseconds = 50000000ULL)
+{
+    BObolLodCapacitySearchKey key;
+    key.inventory.set(1);
+    key.availability.set(2);
+    key.view.set(view);
+    key.policy.set(4);
+    key.preferredTargetNanoseconds = 50000000ULL;
+    key.maximumTargetNanoseconds = maximumNanoseconds;
+    key.demandedBudget = demand;
+    return key;
+}
+
+static int
+test_capacity_search_certificate(void)
+{
+    using Certificate = BObolLodCapacitySearchCertificate;
+    using Result = Certificate::Result;
+    static constexpr size_t demand = 800;
+    static constexpr size_t initialCandidate = 400;
+
+    /* Exhaust the numeric classifier boundary.  The certificate need not
+     * identify every integer budget: each budget denotes one member of the
+     * bounded, complete-allocation candidate set.  It must never repeat a
+     * member, cross the true safe/unsafe boundary, or exceed its finite
+     * measurement rank. */
+    for (size_t trueCapacity = 0; trueCapacity <= demand;
+	 trueCapacity += 25) {
+	Certificate certificate;
+	Certificate::Observation observation;
+	observation.key = capacity_search_key(demand);
+	observation.candidateBudget = initialCandidate;
+	observation.knownSafeBudget = 0;
+	std::array<size_t, Certificate::candidateLimit()> visited {{}};
+	unsigned int visitedCount = 0;
+	Certificate::Decision decision;
+	for (unsigned int step = 0;
+	     step < Certificate::candidateLimit() *
+		Certificate::sampleLimit() + 1; ++step) {
+	    observation.presentedCost = observation.candidateBudget;
+	    observation.validSample = true;
+	    observation.observedNanoseconds =
+		observation.candidateBudget <= trueCapacity ?
+		    certificate.activeTargetNanoseconds() / 2 :
+		    certificate.activeTargetNanoseconds() * 2;
+	    decision = certificate.observe(observation);
+	    if (decision.requestsFrame())
+		continue;
+	    if (decision.requestsReallocation()) {
+		for (unsigned int i = 0; i < visitedCount; ++i) {
+		    if (visited[i] == decision.budget) {
+			std::fprintf(stderr,
+			    "FAIL: capacity search repeated candidate %zu\n",
+			    decision.budget);
+			return 1;
+		    }
+		}
+		visited[visitedCount++] = decision.budget;
+		observation.candidateBudget = decision.budget;
+		continue;
+	    }
+	    break;
+	}
+	if (decision.result != Result::CERTIFIED ||
+	    !decision.terminal() || decision.safeBudget > trueCapacity ||
+	    decision.unsafeBudget <= trueCapacity ||
+	    decision.measuredCandidates > Certificate::candidateLimit()) {
+	    std::fprintf(stderr,
+		"FAIL: capacity search terminal true=%zu result=%u safe=%zu "
+		"unsafe=%zu measured=%u\n", trueCapacity,
+		static_cast<unsigned int>(decision.result),
+		decision.safeBudget, decision.unsafeBudget,
+		decision.measuredCandidates);
+	    return 1;
+	}
+    }
+
+    /* The event-driven static allowance is the second goal of the same
+     * finite certificate, not an independently re-armed trial.  It inherits
+     * the population proven at the preferred cadence, may remeasure a budget
+     * under the longer deadline, and can advance only once. */
+    {
+	static constexpr size_t steadyCapacity = 250;
+	static constexpr size_t staticCapacity = 650;
+	Certificate certificate;
+	Certificate::Observation observation;
+	observation.key = capacity_search_key(demand, 3, 400000000ULL);
+	observation.key.preferredBudgetCeiling = steadyCapacity;
+	observation.key.maximumBudgetCeiling = staticCapacity;
+	observation.candidateBudget = steadyCapacity;
+	observation.knownSafeBudget = 0;
+	bool observedStaticGoal = false;
+	bool observedStaticCandidateAbovePreferred = false;
+	Certificate::Decision decision;
+	for (unsigned int step = 0;
+	     step < 2 * Certificate::candidateLimit() *
+		Certificate::sampleLimit() + 2; ++step) {
+	    const bool staticGoal = certificate.goal() ==
+		Certificate::Goal::STATIC;
+	    observedStaticGoal = observedStaticGoal || staticGoal;
+	    observedStaticCandidateAbovePreferred =
+		observedStaticCandidateAbovePreferred ||
+		(staticGoal && observation.candidateBudget > steadyCapacity);
+	    const size_t trueCapacity = staticGoal ?
+		staticCapacity : steadyCapacity;
+	    observation.presentedCost = observation.candidateBudget;
+	    observation.validSample = true;
+	    observation.observedNanoseconds =
+		observation.candidateBudget <= trueCapacity ?
+		    certificate.activeTargetNanoseconds() / 2 :
+		    certificate.activeTargetNanoseconds() * 2;
+	    decision = certificate.observe(observation);
+	    if (decision.requestsReallocation())
+		observation.candidateBudget = decision.budget;
+	    if (decision.terminal())
+		break;
+	}
+	if (!observedStaticGoal || !observedStaticCandidateAbovePreferred ||
+	    !decision.terminal() ||
+	    decision.result != Result::CERTIFIED ||
+	    certificate.goal() != Certificate::Goal::STATIC ||
+	    decision.safeBudget > staticCapacity ||
+	    decision.unsafeBudget <= staticCapacity) {
+	    std::fprintf(stderr,
+		"FAIL: bounded steady-to-static capacity progression "
+		"goal=%u result=%u safe=%zu unsafe=%zu\n",
+		static_cast<unsigned int>(certificate.goal()),
+		static_cast<unsigned int>(decision.result),
+		decision.safeBudget, decision.unsafeBudget);
+	    return 1;
+	}
+	const Certificate::Decision repeated = certificate.observe(observation);
+	if (!repeated.terminal() || repeated.safeBudget != decision.safeBudget ||
+	    certificate.goal() != Certificate::Goal::STATIC) {
+	    std::fprintf(stderr,
+		"FAIL: terminal static capacity certificate reopened\n");
+	    return 1;
+	}
+    }
+
+    /* The allocator cannot express a candidate below the complete visible
+     * minimum.  Once that floor misses the preferred cadence, the search must
+     * advance to the static goal without requesting an impossible smaller
+     * allocation or repeating the floor. */
+    {
+	Certificate certificate;
+	Certificate::Observation observation;
+	observation.key = capacity_search_key(demand, 3, 400000000ULL);
+	observation.key.minimumBudget = 300;
+	observation.candidateBudget = 400;
+	Certificate::Decision decision;
+	bool observedMinimum = false;
+	bool observedStaticGoal = false;
+	for (unsigned int step = 0;
+	     step < 2 * Certificate::candidateLimit() *
+		Certificate::sampleLimit() + 2; ++step) {
+	    observation.presentedCost = observation.candidateBudget;
+	    observation.validSample = true;
+	    const bool staticGoal = certificate.goal() ==
+		Certificate::Goal::STATIC;
+	    observedStaticGoal = observedStaticGoal || staticGoal;
+	    observation.observedNanoseconds = staticGoal ?
+		certificate.activeTargetNanoseconds() / 2 :
+		certificate.activeTargetNanoseconds() * 2;
+	    decision = certificate.observe(observation);
+	    if (decision.requestsReallocation()) {
+		if (decision.budget < observation.key.minimumBudget) {
+		    std::fprintf(stderr,
+			"FAIL: capacity search crossed allocation floor\n");
+		    return 1;
+		}
+		observedMinimum = observedMinimum ||
+		    decision.budget == observation.key.minimumBudget;
+		observation.candidateBudget = decision.budget;
+	    }
+	    if (decision.terminal())
+		break;
+	}
+	if (!observedMinimum || !observedStaticGoal || !decision.terminal() ||
+	    certificate.goal() != Certificate::Goal::STATIC ||
+	    decision.safeBudget < observation.key.minimumBudget) {
+	    std::fprintf(stderr,
+		"FAIL: irreducible minimum did not advance to static goal\n");
+	    return 1;
+	}
+    }
+
+    /* A semantic input edge starts a new certificate.  The capacity-output
+     * epoch is intentionally absent from the key, but camera/input epochs
+     * and the complete demand are not. */
+    Certificate resetCertificate;
+    Certificate::Observation observation;
+    observation.key = capacity_search_key(demand);
+    observation.candidateBudget = 200;
+    observation.presentedCost = 200;
+    observation.validSample = true;
+    observation.observedNanoseconds = 10000000ULL;
+    Certificate::Decision decision = resetCertificate.observe(observation);
+    if (!decision.requestsFrame() || decision.samplesRemaining != 2)
+	return 1;
+    observation.key = capacity_search_key(demand, 9);
+    decision = resetCertificate.observe(observation);
+    if (!decision.requestsFrame() || decision.samplesRemaining != 2 ||
+	resetCertificate.measuredCandidateCount() != 0) {
+	std::fprintf(stderr,
+	    "FAIL: capacity search did not reset on semantic revision\n");
+	return 1;
+    }
+
+    /* An unchanged candidate cannot silently change its population, and
+     * invalid presentations cannot manufacture an unbounded repaint loop. */
+    Certificate staleCertificate;
+    observation = Certificate::Observation();
+    observation.key = capacity_search_key(demand);
+    observation.candidateBudget = 200;
+    observation.presentedCost = 150;
+    observation.validSample = true;
+    observation.observedNanoseconds = 10000000ULL;
+    (void)staleCertificate.observe(observation);
+    observation.presentedCost = 151;
+    decision = staleCertificate.observe(observation);
+    if (decision.result != Result::STALE_POPULATION || !decision.terminal()) {
+	std::fprintf(stderr,
+	    "FAIL: capacity search accepted a changing candidate population\n");
+	return 1;
+    }
+
+    Certificate invalidCertificate;
+    observation = Certificate::Observation();
+    observation.key = capacity_search_key(demand);
+    observation.candidateBudget = 200;
+    for (unsigned int i = 0; i <= Certificate::invalidSampleLimit(); ++i)
+	decision = invalidCertificate.observe(observation);
+    if (decision.result != Result::UNMEASURABLE || !decision.terminal()) {
+	std::fprintf(stderr,
+	    "FAIL: capacity search invalid samples did not terminate\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_point_quality_phase(void)
+{
+    BObolLodPointQualityPhase phase;
+    if (phase.pending())
+	return 1;
+
+    phase.requestCalibration();
+    if (!phase.calibrationPending() || phase.triangleRecoveryPending())
+	return 1;
+
+    phase.beginTriangleRecovery();
+    phase.requestCalibration();
+    phase.completeCalibration();
+    if (phase.calibrationPending() || !phase.triangleRecoveryPending()) {
+	std::fprintf(stderr,
+	    "FAIL: point calibration displaced active triangle recovery\n");
+	return 1;
+    }
+    if (!phase.requiresRecoveryPresentation(true, true, false, false) ||
+	phase.requiresRecoveryPresentation(false, true, false, false) ||
+	phase.requiresRecoveryPresentation(true, false, false, false) ||
+	phase.requiresRecoveryPresentation(true, true, true, false) ||
+	phase.requiresRecoveryPresentation(true, true, false, true)) {
+	std::fprintf(stderr,
+	    "FAIL: triangle recovery lost its changed-pass presentation owner\n");
+	return 1;
+    }
+
+    phase.completeTriangleRecovery();
+    if (phase.pending())
+	return 1;
+    phase.requestCalibration();
+    phase.completeCalibration();
+    if (phase.pending())
+	return 1;
     return 0;
 }
 
@@ -5218,17 +6295,15 @@ main(int argc, char **argv)
 {
     (void)argc;
     bu_setprogname(argv[0]);
+    if (test_submission_pass())
+	return 1;
+    if (test_control_refinement())
+	return 1;
     if (test_epochs())
 	return 1;
-    if (test_phase_witnesses())
+    if (test_interaction_session())
 	return 1;
-    if (test_phase_decision_contract())
-	return 1;
-    if (test_adversarial_result_order())
-	return 1;
-    if (test_exhaustive_state_contract())
-	return 1;
-    if (test_event_and_invariant_contract())
+    if (test_revision_contract())
 	return 1;
     if (test_resource_policy())
 	return 1;
@@ -5238,7 +6313,11 @@ main(int argc, char **argv)
 	return 1;
     if (test_visibility_census())
 	return 1;
+    if (test_source_profile_policy())
+	return 1;
     if (test_projected_demand_cache())
+	return 1;
+    if (test_interaction_start_certificate())
 	return 1;
     if (test_static_quality_policy())
 	return 1;
@@ -5246,25 +6325,31 @@ main(int argc, char **argv)
 	return 1;
     if (test_convergence_policy())
 	return 1;
-    if (test_provider_pacing_policy())
+    if (test_availability_scheduler())
 	return 1;
-    if (test_budget_policy())
+    if (test_admission_capacity())
+	return 1;
+    if (test_capacity_search_certificate())
+	return 1;
+    if (test_point_quality_phase())
 	return 1;
     if (test_quality_policy())
 	return 1;
     if (test_view_demand_policy())
 	return 1;
+    if (test_quiet_successor_reducer())
+	return 1;
     if (test_presentation_policy())
 	return 1;
     if (test_view_quality_history())
 	return 1;
-    if (test_publication_policy())
+    if (test_availability_and_publication())
 	return 1;
-    if (test_resident_growth_policy())
+    if (test_availability_growth())
 	return 1;
     if (test_compaction_policy())
 	return 1;
-    if (test_frame_obligation())
+    if (test_presentation_transaction())
 	return 1;
     if (test_seeded_composed_lifecycle())
 	return 1;

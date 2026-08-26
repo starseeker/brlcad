@@ -15,6 +15,7 @@
 #include "bu/app.h"
 #include "bu/file.h"
 #include "bu/parallel.h"
+#include "rt/db4.h"
 #include "rt/db_io.h"
 
 #include <Inventor/SbString.h>
@@ -104,6 +105,71 @@ struct SourceRealizationWork {
 };
 
 static const size_t SOURCE_REALIZATION_MAX_MEMORY_BYPASSES = 8;
+static const size_t SOURCE_REALIZATION_UNKNOWN_WORKING_SET_BYTES =
+    256ULL * 1024ULL * 1024ULL;
+static const size_t SOURCE_REALIZATION_LEAF_FIXED_WORKING_SET_BYTES =
+    8ULL * 1024ULL * 1024ULL;
+static const size_t SOURCE_REALIZATION_LEAF_SERIALIZED_COPY_COUNT = 3;
+
+/*
+ * Admission happens before a worker opens/imports a source.  A fixed source
+ * estimate let two independently requested Lucy-scale leaves enter together,
+ * even though each one immediately needs much more than the nominal 256 MiB
+ * reservation.  Use the cheap directory record when the requested path ends
+ * in a leaf.  A combination's record describes only its Boolean tree, not the
+ * descendant imports it will trigger, so reserve the coordinator's complete
+ * finite capacity and let it run alone.
+ */
+static size_t
+source_realization_leaf_working_set_bytes(const struct db_i *dbip,
+	const struct directory *dp)
+{
+    if (!dp)
+	return SOURCE_REALIZATION_UNKNOWN_WORKING_SET_BYTES;
+
+    size_t encodedBytes = dp->d_len;
+    if (dbip && db_version(dbip) < 5) {
+	if (encodedBytes > SIZE_MAX / sizeof(union record))
+	    return SIZE_MAX;
+	encodedBytes *= sizeof(union record);
+    }
+    if (encodedBytes >
+	(SIZE_MAX - SOURCE_REALIZATION_LEAF_FIXED_WORKING_SET_BYTES) /
+	SOURCE_REALIZATION_LEAF_SERIALIZED_COPY_COUNT)
+	return SIZE_MAX;
+    return encodedBytes * SOURCE_REALIZATION_LEAF_SERIALIZED_COPY_COUNT +
+	SOURCE_REALIZATION_LEAF_FIXED_WORKING_SET_BYTES;
+}
+
+static size_t
+source_realization_request_working_set_bytes(
+	const BObolSourceRealizationRequest &request, size_t capacityLimit)
+{
+    if (request.estimatedWorkingSetBytes)
+	return request.estimatedWorkingSetBytes;
+    if (!request.source || !request.snapshotSourceDatabase)
+	return SOURCE_REALIZATION_UNKNOWN_WORKING_SET_BYTES;
+
+    const char *path = request.source->path.getValue().getString();
+    if (!path || !path[0])
+	return SOURCE_REALIZATION_UNKNOWN_WORKING_SET_BYTES;
+
+    struct db_full_path fullPath;
+    db_full_path_init(&fullPath);
+    const int pathValid = db_string_to_path(&fullPath,
+	request.snapshotSourceDatabase, path) == 0;
+    const struct directory *dp = pathValid ?
+	DB_FULL_PATH_CUR_DIR(&fullPath) : NULL;
+    const bool combination = dp && (dp->d_flags & RT_DIR_COMB);
+    db_free_full_path(&fullPath);
+    if (!dp)
+	return SOURCE_REALIZATION_UNKNOWN_WORKING_SET_BYTES;
+    if (combination)
+	return capacityLimit && capacityLimit != SIZE_MAX ? capacityLimit :
+	    SOURCE_REALIZATION_UNKNOWN_WORKING_SET_BYTES;
+    return source_realization_leaf_working_set_bytes(
+	request.snapshotSourceDatabase, dp);
+}
 
 static size_t
 source_work_estimated_bytes(const SourceRealizationWork &work)
@@ -117,7 +183,7 @@ source_work_estimated_bytes(const SourceRealizationWork &work)
      * An unknown root may still open a multi-gigabyte directory and build
      * hierarchy state before mesh-level accounting begins.
      */
-    return estimate ? estimate : 256ULL * 1024ULL * 1024ULL;
+    return estimate ? estimate : SOURCE_REALIZATION_UNKNOWN_WORKING_SET_BYTES;
 }
 
 static bool
@@ -134,6 +200,17 @@ source_item_cancel(SourceRealizationItem *item)
     if (item->stream)
 	item->stream->requestCancel();
     item->state.store(BOBOL_SOURCE_REALIZATION_CANCELLED,
+	std::memory_order_release);
+}
+
+static void
+source_item_constrain(SourceRealizationItem *item)
+{
+    if (!item)
+	return;
+    if (item->stream)
+	item->stream->requestCancel();
+    item->state.store(BOBOL_SOURCE_REALIZATION_CONSTRAINED,
 	std::memory_order_release);
 }
 
@@ -435,7 +512,8 @@ BObolSourceRealizationJob::isTerminal(void) const
     const int current = this->state();
     return current == BOBOL_SOURCE_REALIZATION_COMPLETE ||
 	current == BOBOL_SOURCE_REALIZATION_FAILED ||
-	current == BOBOL_SOURCE_REALIZATION_CANCELLED ? TRUE : FALSE;
+	current == BOBOL_SOURCE_REALIZATION_CANCELLED ||
+	current == BOBOL_SOURCE_REALIZATION_CONSTRAINED ? TRUE : FALSE;
 }
 
 size_t
@@ -530,12 +608,31 @@ BObolSourceRealizationCoordinator::submit(
 	    new SourceRealizationItem);
 	item->stream = request.stream;
 	item->clientToken = request.clientToken;
-	item->estimatedWorkingSetBytes = request.estimatedWorkingSetBytes;
+	item->estimatedWorkingSetBytes =
+	    source_realization_request_working_set_bytes(request,
+		this->p->maxActiveBytes);
 	item->drawMode = request.drawMode;
 	item->allowWireFallback = request.allowWireFallback;
 	item->probeWarmManifest = request.probeWarmManifest;
 	item->storeManifest = request.storeManifest;
 	job->items.push_back(std::move(item));
+    }
+
+    /* A directory-derived estimate is a pre-import admission contract.  The
+     * historical "run one oversized root alone" escape still entered
+     * rt_db_get_internal, whose allocator reports an address-space failure
+     * with bu_bomb.  A display worker must instead leave the existing
+     * structural presentation intact and report an explicit constrained
+     * result.  Do this before any request can enter the worker queue. */
+    bool admissionConstrained = false;
+    if (this->p->maxActiveBytes != SIZE_MAX) {
+	for (const std::unique_ptr<SourceRealizationItem> &item : job->items) {
+	    if (item && item->estimatedWorkingSetBytes >
+		this->p->maxActiveBytes) {
+		admissionConstrained = true;
+		break;
+	    }
+	}
     }
 
     {
@@ -553,6 +650,15 @@ BObolSourceRealizationCoordinator::submit(
 	    item->callbackContext = std::move(request.callbackContext);
 	    request.source = NULL;
 	    request.snapshotSourceDatabase = NULL;
+	}
+	if (admissionConstrained) {
+	    for (const std::unique_ptr<SourceRealizationItem> &item : job->items)
+		source_item_constrain(item.get());
+	    job->remaining.store(0, std::memory_order_release);
+	    job->state.store(BOBOL_SOURCE_REALIZATION_CONSTRAINED,
+		std::memory_order_release);
+	    return std::shared_ptr<BObolSourceRealizationJob>(
+		new BObolSourceRealizationJob(job));
 	}
 	job->remaining.store(job->items.size(), std::memory_order_release);
 	job->state.store(BOBOL_SOURCE_REALIZATION_RUNNING,

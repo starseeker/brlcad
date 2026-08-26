@@ -91,6 +91,17 @@ GED_EXPORT int
 ged_view_faceplate_sync(struct ged *gedp,
 	struct ged_view_context *view_ctx);
 
+/**
+ * Synchronize only the progressive-LoD HUD records.
+ *
+ * This is the bounded telemetry path for render hosts.  Unlike
+ * ged_view_faceplate_sync(), it does not inspect or republish axes, grid,
+ * ADC, framebuffer composition, or other semantic faceplate state.
+ */
+GED_EXPORT int
+ged_view_lod_progress_sync(struct ged *gedp,
+	struct ged_view_context *view_ctx);
+
 /** Synchronize semantic lighting policy into the active presentation. */
 GED_EXPORT int
 ged_view_lighting_sync(struct ged *gedp,

@@ -1353,14 +1353,22 @@ static bool
 qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
     int quietMilliseconds, QString *error)
 {
-    const std::vector<BObolViewController *> controllers =
-	qged_test_all_controllers(app);
-    if (controllers.empty()) {
+    QgView *currentView = app.w ? app.w->CurrentDisplay() : nullptr;
+    BObolViewController *currentController = currentView ?
+	currentView->obolViewController() : nullptr;
+    if (!currentController) {
 	if (error)
 	    *error = QStringLiteral(
 		"wait_progressive_idle requires an Obol view controller");
 	return false;
     }
+    /* The event target is the active canvas.  Quad layouts retain dormant
+     * controllers whose widgets Qt is entitled not to paint; including those
+     * controllers creates an impossible frame barrier and makes a healthy
+     * active view time out.  Multi-view assertions opt in explicitly through
+     * their own all_views contract. */
+    const std::vector<BObolViewController *> controllers(1,
+	currentController);
 
     timeoutMilliseconds = std::max(0, timeoutMilliseconds);
     quietMilliseconds = std::max(0, quietMilliseconds);
@@ -1451,7 +1459,7 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
 	    "render=%7 pending=%8 delayed=%9 in_flight=%10 active=%11 "
 	    "queued=%12 cache_writes=%13 request_serial=%14 "
 	    "completion_serial=%15 presented_serial=%16 settle_after=%17 "
-	    "refinement_after=%18)")
+	    "refinement_after=%18 reason=%19)")
 	    .arg(timeoutMilliseconds)
 	    .arg(controllers.size())
 	    .arg(controller->hasProgressiveWorkPending() ? 1 : 0)
@@ -1485,8 +1493,222 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
 	    .arg(static_cast<qulonglong>(
 		controller->getLodSettleAfterRenderSerial()))
 	    .arg(static_cast<qulonglong>(
-		controller->getLodRefinementResumeAfterRenderSerial()));
+		controller->getLodRefinementResumeAfterRenderSerial()))
+	    .arg(controller->getRenderReason().getString());
     }
+    return false;
+}
+
+/* Wait for the current framebuffer's visual obligations without turning
+ * optional cache construction, persistence, or compaction into a simulated
+ * UI stall.  The convergence coordinator is the authority for classifying
+ * foreground versus background work.  The test driver presents a requested
+ * endpoint frame before sampling that authority, but a later background-only
+ * request cannot make an already terminal visible view unready. */
+static bool
+qged_test_wait_progressive_view_ready(QgEdApp &app,
+    int timeoutMilliseconds, int quietMilliseconds, QString *error)
+{
+    QgView *currentView = app.w ? app.w->CurrentDisplay() : nullptr;
+    BObolViewController *controller = currentView ?
+	currentView->obolViewController() : nullptr;
+    if (!controller) {
+	if (error)
+	    *error = QStringLiteral(
+		"wait_progressive_view_ready requires an Obol view controller");
+	return false;
+    }
+
+    timeoutMilliseconds = std::max(0, timeoutMilliseconds);
+    quietMilliseconds = std::max(0, quietMilliseconds);
+    QElapsedTimer elapsed;
+    QElapsedTimer quiet;
+    BObolLodConvergenceStatus status;
+    elapsed.start();
+
+    while (elapsed.elapsed() <= timeoutMilliseconds) {
+	if (controller->isRenderRequested())
+	    qged_test_present_controller_frame(app, controller);
+	controller->getLodConvergenceStatus(status);
+	if (status.terminalError) {
+	    if (error)
+		*error = QStringLiteral(
+		    "progressive view terminated with an error "
+		    "(phase=%1 failures=%2 occurrence_failures=%3)")
+		    .arg(status.phase)
+		    .arg(status.failedSourceCount)
+		    .arg(static_cast<qulonglong>(
+			status.terminalOccurrenceFailureCount));
+	    return false;
+	}
+	const bool ready = status.viewReady;
+	if (ready) {
+	    if (!quiet.isValid())
+		quiet.start();
+	    if (quiet.elapsed() >= quietMilliseconds)
+		return true;
+	} else {
+	    quiet.invalidate();
+	}
+
+	QEventLoop loop;
+	const int remaining = timeoutMilliseconds -
+	    static_cast<int>(elapsed.elapsed());
+	QTimer::singleShot(std::max(1, std::min(16, remaining)),
+	    &loop, &QEventLoop::quit);
+	loop.exec(QEventLoop::AllEvents);
+    }
+
+    controller->getLodConvergenceStatus(status);
+    if (error)
+	*error = QStringLiteral(
+	    "progressive view did not become ready within %1 ms "
+	    "(phase=%2 fraction=%3 background=%4 pending=%5 in_flight=%6 "
+	    "render=%7 reason=%8)")
+	    .arg(timeoutMilliseconds)
+	    .arg(status.phase)
+	    .arg(status.fraction, 0, 'f', 3)
+	    .arg(status.backgroundPending ? 1 : 0)
+	    .arg(static_cast<qulonglong>(status.pendingTasks))
+	    .arg(static_cast<qulonglong>(status.inFlight))
+	    .arg(controller->isRenderRequested() ? 1 : 0)
+	    .arg(controller->getRenderReason().getString());
+    return false;
+}
+
+/* A useful retained frame and a fully persisted cache are separate user
+ * contracts.  In particular, a cold, large BoT may show a coherent global
+ * PoP prefix while its worker continues constructing cache pages.  Tests
+ * which simulate input must wait for the former, not manufacture a UI stall
+ * by waiting for unrelated background persistence. */
+static bool
+qged_test_wait_progressive_payload_ready(QgEdApp &app,
+    int timeoutMilliseconds, int quietMilliseconds, QString *error)
+{
+    const std::vector<BObolViewController *> controllers =
+	qged_test_all_controllers(app);
+    if (controllers.empty()) {
+	if (error)
+	    *error = QStringLiteral(
+		"wait_progressive_payload_ready requires an Obol view controller");
+	return false;
+    }
+
+    timeoutMilliseconds = std::max(0, timeoutMilliseconds);
+    quietMilliseconds = std::max(0, quietMilliseconds);
+    QElapsedTimer elapsed;
+    QElapsedTimer quiet;
+    elapsed.start();
+
+    while (elapsed.elapsed() <= timeoutMilliseconds) {
+	bool ready = true;
+	for (BObolViewController *controller : controllers) {
+	    if (!controller || controller->getActiveLodCadPayloadCount() == 0) {
+		ready = false;
+		break;
+	    }
+	}
+
+	if (ready) {
+	    for (BObolViewController *controller : controllers) {
+		if (controller && controller->isRenderRequested())
+		    qged_test_present_controller_frame(app, controller);
+	    }
+	    if (!quiet.isValid())
+		quiet.start();
+	    if (quiet.elapsed() >= quietMilliseconds)
+		return true;
+	} else {
+	    quiet.invalidate();
+	}
+
+	QEventLoop loop;
+	const int remaining = timeoutMilliseconds -
+	    static_cast<int>(elapsed.elapsed());
+	QTimer::singleShot(std::max(1, std::min(16, remaining)),
+	    &loop, &QEventLoop::quit);
+	loop.exec(QEventLoop::AllEvents);
+    }
+
+    if (error) {
+	BObolViewController *controller = controllers.front();
+	*error = QStringLiteral(
+	    "progressive payload did not become ready within %1 ms "
+	    "(active_cad_payloads=%2 active_faces=%3 request_serial=%4 "
+	    "presented_serial=%5)")
+	    .arg(timeoutMilliseconds)
+	    .arg(static_cast<qulonglong>(
+		controller ? controller->getActiveLodCadPayloadCount() : 0))
+	    .arg(static_cast<qulonglong>(
+		controller ? controller->getActiveLodFaceCount() : 0))
+	    .arg(static_cast<qulonglong>(
+		controller ? controller->getRenderRequestSerial() : 0))
+	    .arg(static_cast<qulonglong>(
+		controller ? controller->getPresentedFrameSerial() : 0));
+    }
+    return false;
+}
+
+/* Cold structural coverage is intentionally sufficient for the first-useful
+ * deadline above.  View-dependent refinement tests need a stronger barrier:
+ * at least one real progressive CAD mesh must have been adopted. */
+static bool
+qged_test_wait_progressive_cad_mesh_ready(QgEdApp &app,
+    int timeoutMilliseconds, int quietMilliseconds, QString *error)
+{
+    const std::vector<BObolViewController *> controllers =
+	qged_test_all_controllers(app);
+    if (controllers.empty()) {
+	if (error)
+	    *error = QStringLiteral(
+		"wait_progressive_cad_mesh_ready requires an Obol view controller");
+	return false;
+    }
+
+    timeoutMilliseconds = std::max(0, timeoutMilliseconds);
+    quietMilliseconds = std::max(0, quietMilliseconds);
+    QElapsedTimer elapsed;
+    QElapsedTimer quiet;
+    elapsed.start();
+
+    while (elapsed.elapsed() <= timeoutMilliseconds) {
+	bool ready = true;
+	for (BObolViewController *controller : controllers) {
+	    const BObolViewLodState *state = controller ?
+		controller->getViewLodState() : nullptr;
+	    if (!state || !state->hasCadProgressivePayload() ||
+		controller->getActiveLodFaceCount() == 0) {
+		ready = false;
+		break;
+	    }
+	}
+
+	if (ready) {
+	    for (BObolViewController *controller : controllers) {
+		if (controller && controller->isRenderRequested())
+		    qged_test_present_controller_frame(app, controller);
+	    }
+	    if (!quiet.isValid())
+		quiet.start();
+	    if (quiet.elapsed() >= quietMilliseconds)
+		return true;
+	} else {
+	    quiet.invalidate();
+	}
+
+	QEventLoop loop;
+	QTimer::singleShot(10, &loop, &QEventLoop::quit);
+	loop.exec();
+	for (BObolViewController *controller : controllers) {
+	    if (controller && controller->isRenderRequested())
+		qged_test_present_controller_frame(app, controller);
+	}
+    }
+
+    if (error)
+	*error = QStringLiteral(
+	    "progressive CAD mesh did not become ready within %1 ms")
+	    .arg(timeoutMilliseconds);
     return false;
 }
 
@@ -1961,13 +2183,41 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			events[i].arguments.value(
 			    QStringLiteral("quiet_ms")).toInt(100),
 			&error);
-		} else if (events[i].action ==
-		    QLatin1String("wait_progressive_idle")) {
+	} else if (events[i].action ==
+	    QLatin1String("wait_progressive_idle") ||
+	    events[i].action == QLatin1String("wait_progressive_cache_idle")) {
+		    /* wait_progressive_idle is the legacy spelling.  The cache
+		     * spelling makes the stronger contract explicit in scripts
+		     * which also exercise current-view readiness. */
 		    success = qged_test_wait_progressive_idle(app,
 			events[i].arguments.value(
 			    QStringLiteral("timeout_ms")).toInt(30000),
 			events[i].arguments.value(
 			    QStringLiteral("quiet_ms")).toInt(100),
+		    &error);
+	} else if (events[i].action ==
+	    QLatin1String("wait_progressive_view_ready")) {
+	    success = qged_test_wait_progressive_view_ready(app,
+		events[i].arguments.value(
+		    QStringLiteral("timeout_ms")).toInt(30000),
+		events[i].arguments.value(
+		    QStringLiteral("quiet_ms")).toInt(100),
+		&error);
+	} else if (events[i].action ==
+		    QLatin1String("wait_progressive_payload_ready")) {
+		    success = qged_test_wait_progressive_payload_ready(app,
+			events[i].arguments.value(
+			    QStringLiteral("timeout_ms")).toInt(30000),
+			events[i].arguments.value(
+			    QStringLiteral("quiet_ms")).toInt(50),
+			&error);
+		} else if (events[i].action ==
+		    QLatin1String("wait_progressive_cad_mesh_ready")) {
+		    success = qged_test_wait_progressive_cad_mesh_ready(app,
+			events[i].arguments.value(
+			    QStringLiteral("timeout_ms")).toInt(30000),
+			events[i].arguments.value(
+			    QStringLiteral("quiet_ms")).toInt(50),
 			&error);
 		} else if (events[i].action ==
 		    QLatin1String("wait_canvas_ready")) {

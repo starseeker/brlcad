@@ -243,11 +243,13 @@ validate_run()
     local report="$1" image_dir="$2" log="$3" lod="$4" case_name="$5" mode="$6"
     local hierarchy_path="${7:-}"
     : > "$log"
+    echo "validate: report" >>"$log"
     jq -e '.success == true and (.samples | length) >= 20' "$report" \
 	>>"$log" 2>&1 || return 1
     # Every resize must be reflected in the top-level widget immediately; the
     # following wait/checkpoint must have a positive canvas whose controller
     # viewport matches its physical pixel size (within integer DPR rounding).
+    echo "validate: resize-state" >>"$log"
     jq -e --arg lod "$lod" '
       def okdims:
         (.controller_available == true) and
@@ -322,6 +324,7 @@ validate_run()
     # replace its semantic root, move the camera, or strand startup proxies.
     # This covers both managed -> full -> managed and full -> managed -> full
     # transitions using the same initially drawn scene.
+    echo "validate: policy-toggle" >>"$log"
     jq -e --arg lod "$lod" '
       ([.samples[] | select((.checkpoint? // "") |
 	endswith("/stable.png"))][0]) as $stable |
@@ -376,15 +379,32 @@ validate_run()
     if [[ "$lod" == auto &&
 	("$case_name" == generic_twin || "$case_name" == lucy) &&
 	("$mode" == 0 || "$mode" == 1 || "$mode" == 4) ]]; then
-	jq -e 'any(.samples[] | select(.action == "checkpoint" and
-	  ((.checkpoint? // "") | test("/(initial|small|large)\\.png$")));
-	  .progressive_pending == true or
-	  .source_realization_active_items > 0 or
-	  .lod_submissions_pending == true or
-	  .lod_results_pending == true)' "$report" >>"$log" 2>&1 || return 1
+	# A fresh cache normally leaves one of the early checkpoints in a
+	# producer-active state.  Do not make that timing an invariant: fast
+	# hardware or a small source can complete before the first checkpoint.  In
+	# that case the terminal managed population is stronger evidence that this
+	# exercised LoD rather than silently falling back to a synchronous path.
+	echo "validate: generic-early-or-settled" >>"$log"
+	jq -e '
+	  def early_progressive:
+	    any(.samples[] | select(.action == "checkpoint" and
+	      ((.checkpoint? // "") | test("/(initial|small|large)\\.png$")));
+	      .progressive_pending == true or
+	      .source_realization_active_items > 0 or
+	      .lod_submissions_pending == true or
+	      .lod_results_pending == true);
+	  ([.samples[] | select((.checkpoint? // "") |
+	    endswith("/stable.png"))][0]) as $terminal |
+	  early_progressive or
+	  ($terminal.view_lod_policy == 1 and
+	   $terminal.active_lod_cad_payloads > 0 and
+	   $terminal.visible_structural_fallback_boxes == 0 and
+	   $terminal.lod_convergence_view_ready == true)
+	' "$report" >>"$log" 2>&1 || return 1
 	# "Ready" means the physical view request is satisfied, unless a named
 	# resource limit explains why it is not.  In particular, interaction
 	# hysteresis must not silently become the quiet terminal pixel target.
+	echo "validate: generic-pixel-target" >>"$log"
 	jq -e '
 	  ([.samples[] | select((.checkpoint? // "") |
 	    endswith("/stable.png"))][0]) as $terminal |

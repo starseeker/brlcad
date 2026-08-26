@@ -8,6 +8,7 @@ set(
   autoview2.cpp
   axes.cpp
   center.cpp
+  cutting.cpp
   eye.c
   faceplate/faceplate.cpp
   faceplate/faceplate_axes.cpp

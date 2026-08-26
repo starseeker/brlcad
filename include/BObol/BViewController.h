@@ -12,6 +12,7 @@
 #include "BObol/BDefines.h"
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BPickDetail.h"
+#include "BObol/BPresentationPreparation.h"
 
 #include <Inventor/SbBasic.h>
 #include <Inventor/SbColor.h>
@@ -115,34 +116,52 @@ enum BObolLodConvergencePhase {
     BOBOL_LOD_CONVERGENCE_PREPARING
 };
 
-/** Internal coordinator phase at the last owner-thread transition boundary.
- *
- * Unlike BObolLodConvergencePhase, which is a user-facing progress category,
- * this reports the actual retained-display state machine. */
-enum BObolLodCoordinatorPhase {
-    BOBOL_LOD_COORDINATOR_FALLBACK = 0,
-    BOBOL_LOD_COORDINATOR_COVERAGE,
-    BOBOL_LOD_COORDINATOR_INTERACTIVE,
-    BOBOL_LOD_COORDINATOR_SETTLING,
-    BOBOL_LOD_COORDINATOR_STABLE,
-    BOBOL_LOD_COORDINATOR_COMPACTING
+/** Derived result for the current visible presentation.  This is independent
+ * of the user-facing phase: background cache persistence may continue after a
+ * ready or constrained presentation. */
+enum BObolLodPresentationOutcome {
+    BOBOL_LOD_PRESENTATION_ACTIVE = 0,
+    BOBOL_LOD_PRESENTATION_READY,
+    BOBOL_LOD_PRESENTATION_CONSTRAINED,
+    BOBOL_LOD_PRESENTATION_ERROR
 };
 
-/** Owner-thread event which most recently reconciled the LoD coordinator. */
-enum BObolLodCoordinatorEvent {
-    BOBOL_LOD_EVENT_INITIALIZE = 0,
-    BOBOL_LOD_EVENT_FRAME_COMPLETED,
-    BOBOL_LOD_EVENT_WORK_SCHEDULED,
-    BOBOL_LOD_EVENT_WORK_PUMPED,
-    BOBOL_LOD_EVENT_RESULT_PUBLISHED,
-    BOBOL_LOD_EVENT_SERVICE_CHANGED,
-    BOBOL_LOD_EVENT_GENERATION_CANCELLED,
-    BOBOL_LOD_EVENT_AUTO_SUBMIT_CHANGED,
-    BOBOL_LOD_EVENT_VIEW_INVALIDATED,
-    BOBOL_LOD_EVENT_POLICY_CHANGED,
-    BOBOL_LOD_EVENT_INTERACTION_STARTED,
-    BOBOL_LOD_EVENT_INTERACTION_ENDED,
-    BOBOL_LOD_EVENT_VIEW_OBSERVED
+/** Finite work-ledger projection used by convergence diagnostics and the
+ * progressive-control refinement checker.  Several independent obligations
+ * may be present, but exactly one owner-thread class is selected to make the
+ * next bounded transition. */
+enum BObolLodControlObligation {
+    BOBOL_LOD_CONTROL_OBLIGATION_NONE = 0,
+    BOBOL_LOD_CONTROL_OBLIGATION_INTERACTION = 1u << 0,
+    BOBOL_LOD_CONTROL_OBLIGATION_INVENTORY = 1u << 1,
+    BOBOL_LOD_CONTROL_OBLIGATION_AVAILABILITY = 1u << 2,
+    BOBOL_LOD_CONTROL_OBLIGATION_PUBLICATION = 1u << 3,
+    BOBOL_LOD_CONTROL_OBLIGATION_PLANNING = 1u << 4,
+    BOBOL_LOD_CONTROL_OBLIGATION_PRESENTATION = 1u << 5,
+    BOBOL_LOD_CONTROL_OBLIGATION_HANDOFF = 1u << 6,
+    BOBOL_LOD_CONTROL_OBLIGATION_COMPACTION = 1u << 7,
+    BOBOL_LOD_CONTROL_OBLIGATION_CACHE_WRITE = 1u << 8
+};
+
+enum BObolLodControlOwner {
+    BOBOL_LOD_CONTROL_OWNER_NONE = 0,
+    BOBOL_LOD_CONTROL_OWNER_INTERACTION,
+    BOBOL_LOD_CONTROL_OWNER_INVENTORY,
+    BOBOL_LOD_CONTROL_OWNER_AVAILABILITY,
+    BOBOL_LOD_CONTROL_OWNER_PUBLICATION,
+    BOBOL_LOD_CONTROL_OWNER_PLANNING,
+    BOBOL_LOD_CONTROL_OWNER_PRESENTATION,
+    BOBOL_LOD_CONTROL_OWNER_HANDOFF,
+    BOBOL_LOD_CONTROL_OWNER_COMPACTION,
+    BOBOL_LOD_CONTROL_OWNER_CACHE_WRITE
+};
+
+enum BObolLodControlViolation {
+    BOBOL_LOD_CONTROL_VIOLATION_NONE = 0,
+    BOBOL_LOD_CONTROL_VIOLATION_OWNERLESS_WORK = 1u << 0,
+    BOBOL_LOD_CONTROL_VIOLATION_TERMINAL_WITH_WORK = 1u << 1,
+    BOBOL_LOD_CONTROL_VIOLATION_INVALID_READINESS = 1u << 2,
+    BOBOL_LOD_CONTROL_VIOLATION_INVALID_OWNER = 1u << 3
 };
 
 /** User-facing progress for one view epoch.
@@ -159,19 +178,22 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     void clear(void);
 
     int phase;
-    int coordinatorPhase;
-    int coordinatorEvent;
-    uint64_t coordinatorTransitionSerial;
-    uint64_t coordinatorProgressSequence;
-    uint64_t coordinatorDispatchSerial;
-    uint64_t coordinatorStagnantDispatchCount;
-    uint64_t coordinatorInvariantViolationCount;
-    uint32_t coordinatorInvariantMask;
-    uint32_t coordinatorInvariantHistoryMask;
+    int outcome;
+    uint32_t controlObligationMask;
+    int controlOwner;
+    uint32_t controlViolationMask;
     size_t viewQualityHistoryEntryCount;
     size_t viewQualityHistoryRememberCount;
     size_t viewQualityHistoryRecallCount;
+    uint64_t inventoryRevision;
+    uint64_t availabilityRevision;
     uint64_t viewRevision;
+    uint64_t policyRevision;
+    uint64_t capacityRevision;
+    uint64_t allocationPlanSerial;
+    uint64_t presentationTransactionSerial;
+    uint64_t presentationRequiredRenderSerial;
+    uint64_t presentedFrameSerial;
     uint64_t activeGeneration;
     size_t submissionSourceIndex;
     size_t submissionEntryOffset;
@@ -190,6 +212,14 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t activeFaces;
     size_t activeRenderCost;
     size_t renderCostBudget;
+    size_t selectedPresentationCost;
+    size_t certifiedPresentationBudget;
+    size_t pixelDemandPresentationCost;
+    size_t requestedPresentationBudget;
+    size_t maximumMarginalPresentationBudget;
+    size_t maximumProtectedPresentationBudget;
+    size_t pointProxyCandidateCount;
+    uint64_t allocationCertificatePlanSerial;
     size_t residentMeshBytes;
     size_t stableResidentMeshBytes;
     size_t reservedResidentMeshGrowthBytes;
@@ -198,6 +228,9 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t activeWorkingSetBytes;
     size_t peakWorkingSetBytes;
     uint64_t residentCompactionCount;
+    uint64_t residentCompactionPlanRevision;
+    size_t residentCompactionCandidateCount;
+    SbBool residentCompactionPlanCurrent;
     size_t gpuTrackedBufferBytes;
     size_t gpuOrdinaryPartBufferBytes;
     size_t gpuProgressiveCutBufferBytes;
@@ -221,6 +254,12 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     uint64_t gpuTriangleAtlasReclamationCount;
     uint64_t gpuResourceSampleSerial;
     float fraction;
+    /* terminal means the visible presentation has no remaining foreground
+     * obligation.  viewReady includes a truthful constrained terminal view,
+     * but never an error.  Consult outcome to distinguish exact readiness
+     * from a resource-constrained result. */
+    SbBool terminal;
+    SbBool terminalError;
     SbBool viewReady;
     SbBool backgroundPending;
     SbBool performanceLimited;
@@ -272,9 +311,10 @@ enum BObolHostWorkFlag {
 };
 
 /** Immutable observation of the controller/host work boundary.  Revision is
- * advanced by every level transition; renderRevision identifies the render
- * transaction and prevents an older completed frame from clearing a request
- * published while that frame was in flight. */
+ * advanced by every level transition; renderRevision identifies the pending
+ * render transaction.  A host claims that transaction with
+ * consumeRenderRequest() before traversal, so work published during traversal
+ * becomes a distinct pending transaction. */
 struct BOBOL_EXPORT BObolHostWorkSnapshot {
     BObolHostWorkSnapshot(void);
 
@@ -331,9 +371,15 @@ public:
     explicit BObolViewController(SoNode *root, SoCamera *camera = NULL);
     ~BObolViewController(void);
 
-    void setSceneRoot(SoNode *root);
+    /* Replace the modeled scene root.  A host may preserve active LoD only
+     * when installing a view-local presentation root around unchanged shared
+     * model data. */
+    void setSceneRoot(SoNode *root, SbBool preserveLodState = FALSE);
     SoNode *getSceneRoot(void) const;
-    void setRenderSceneRoot(SoNode *root);
+    /* Install a render composition root.  Callers replacing the modeled scene
+     * use the default destructive behavior; a host may preserve an active LoD
+     * generation when it only wraps the same scene with presentation layers. */
+    void setRenderSceneRoot(SoNode *root, SbBool preserveLodState = FALSE);
     SoNode *getRenderSceneRoot(void) const;
     SoNode *getRenderRoot(void) const;
     /** Stable retained framebuffer layers.  Underlay and overlay surround
@@ -412,7 +458,14 @@ public:
     SbBool isAntialiasingEnabled(void) const;
     SbBool setClipBounds(double minimum, double maximum);
     void getClipBounds(double &minimum, double &maximum) const;
-    size_t getActiveClipPlanes(SbPlane planes[2]) const;
+    /** Camera-relative zclip uses two planes.  An optional user section plane
+     * is world-space and remains independent of camera navigation. */
+    static const size_t CLIP_PLANE_CAPACITY = 3;
+    void setCuttingPlaneEnabled(SbBool enabled);
+    SbBool isCuttingPlaneEnabled(void) const;
+    SbBool setCuttingPlane(const SbPlane &plane);
+    SbPlane getCuttingPlane(void) const;
+    size_t getActiveClipPlanes(SbPlane planes[CLIP_PLANE_CAPACITY]) const;
     void setDepthCueEnabled(SbBool enabled);
     SbBool isDepthCueEnabled(void) const;
     void renderBackground(void) const;
@@ -461,12 +514,7 @@ public:
     void clearRenderRequest(void);
     SbBool consumeRenderRequest(SbString *reason = NULL,
 	SbBool *lodCapacityRelevant = NULL);
-    /** Snapshot/retire protocol for hosts which traverse the render root
-     * directly instead of using renderPending().  Capture the serial after
-     * all state synchronized into a frame, then clear it after presentation
-     * only if no newer request was published while rendering. */
     uint64_t renderRequestSerialGet(void) const;
-    void clearRenderRequestIfUnchanged(uint64_t serial);
     SbBool renderPending(SbBool clearWindow = TRUE,
 			 SbBool clearZBuffer = TRUE,
 			 SbString *reason = NULL);
@@ -489,7 +537,8 @@ public:
     SbBool isLodPresentationCapacityRelevant(void) const;
     void notePresentationRenderInterrupted(uint64_t elapsedNanoseconds,
 	SbBool cadDrawAttempted = TRUE,
-	SbBool cadPreparationChanged = FALSE,
+	BObolCadPreparationProgress cadPreparation =
+	    BOBOL_CAD_PREPARATION_NONE,
 	SbBool lodCapacityRelevant = TRUE);
     uint64_t getInterruptedPresentationFrameCount(void) const;
     uint64_t getLastInterruptedPresentationTimeNanoseconds(void) const;
@@ -669,7 +718,10 @@ public:
     /** Configure aggregate scene frame-rate goals.  Projected per-object
      * error remains the quality demand; these targets calibrate a total
      * render-cost budget from measured frames so shaded faces, wire segments,
-     * points, and repeated occurrences compete for one measured resource. */
+     * points, and repeated occurrences compete for one measured resource.
+     * A target slower than the default endpoint deadline also relaxes that
+     * deadline, subject to bounded interactive and stable latency ceilings.
+     * Targets below those ceilings' effective minimum FPS are clamped. */
     void setLodFrameRateTargets(float interactiveFps, float stableFps);
     float getLodInteractiveTargetFps(void) const;
     float getLodStableTargetFps(void) const;
@@ -912,6 +964,7 @@ private:
      * DIAGNOSTIC as a graphical renderer. */
     void setEndpointGraphicalRenderingEnabled(SbBool enabled);
     void invalidateRendererPerformanceHistory(void);
+    void requestRenderImpl(const char *reason, SbBool lodCapacityRelevant);
     void notifyFrameRequest(const char *reason);
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);
@@ -919,14 +972,20 @@ private:
     void invalidateDatabaseSourceLodState(void);
     void syncRenderManager(void);
     void advanceLodViewRevision(void);
+    enum class LodPolicyTransition : uint8_t {
+	ORDINARY = 0,
+	PRESERVE_SCALE_DEMAND,
+	CONTINUE_STATIC_QUALITY
+    };
     void advanceLodPolicyRevision(
-	SbBool preserveScaleDemandRefresh = FALSE);
+	LodPolicyTransition transition = LodPolicyTransition::ORDINARY);
     void syncLodViewSignature(SbBool advanceOnChange = TRUE);
     void scheduleLodRefinementFrame(const char *reason);
     void completePresentationBarrier(uint64_t elapsedNanoseconds,
 	size_t provenRenderCost = 0);
     void scheduleResidentGrowthReallocationIfReady(void);
     void armStableLodHeadroomProbeIfReady(void);
+    SbBool completePointTriangleRecoveryIfReady(void);
     void resumeLodAfterRetainedRecovery(void);
     size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BObolLodService *service, void *userData);

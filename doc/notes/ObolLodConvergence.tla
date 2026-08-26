@@ -237,6 +237,25 @@ MoreOwnerWork ==
     (residencyRemaining > 0) \/
     (~inputOpen /\ qualityRemaining > 0)
 
+\* The implementation exposes several HUD names, but they must reduce to one
+\* controller state.  Keep the mode derived from the work ownership state:
+\* a second mutable mode flag would permit the historical "balancing" /
+\* "refining" report to diverge from the work that can actually run.
+\*
+\* DISCOVERING has priority over settling because source coverage is the
+\* user-visible first obligation.  Interactive input deliberately has highest
+\* priority: retained prefixes remain useful, but no quiet-view quality claim
+\* may be made while a camera epoch is changing.
+ViewMode ==
+    IF inputOpen THEN "interactive"
+    ELSE IF coverageRemaining > 0 THEN "discovering"
+    ELSE IF residencyRemaining > 0 \/ qualityRemaining > 0 \/
+            scanActive \/ workerState # "idle" \/ allocationPending \/
+            framePending \/ handoffPending \/ submissionPending
+         THEN "settling"
+    ELSE IF performanceLimited THEN "constrained"
+    ELSE "stable"
+
 CompleteFrame ==
     /\ framePending
     /\ framePending' = FALSE
@@ -376,6 +395,37 @@ StableIsQuiescent ==
         /\ ~allocationPending
         /\ ~framePending
         /\ ~handoffPending
+
+\* The named behavior modes are a total, disjoint presentation of the
+\* controller state.  They give TLC an explicit check that a terminal HUD
+\* cannot describe background work as visual refinement, nor describe an
+\* unfinished coverage census as stable.
+ModeIsWellDefined ==
+    ViewMode \in {"interactive", "discovering", "settling", "constrained", "stable"}
+
+StableModeIsQuiescent ==
+    ViewMode = "stable" =>
+        /\ ~inputOpen
+        /\ coverageRemaining = 0
+        /\ residencyRemaining = 0
+        /\ qualityRemaining = 0
+        /\ ~scanActive
+        /\ workerState = "idle"
+        /\ ~allocationPending
+        /\ ~framePending
+        /\ ~handoffPending
+        /\ ~submissionPending
+
+ConstrainedModeIsTerminal ==
+    ViewMode = "constrained" =>
+        /\ performanceLimited
+        /\ ~inputOpen
+        /\ coverageRemaining = 0
+        /\ residencyRemaining = 0
+        /\ qualityRemaining = 0
+
+DiscoveringModeHasCoverageWork ==
+    ViewMode = "discovering" => coverageRemaining > 0
 
 \* MaxInputEpoch bounds user input for model checking.  Once that final input
 \* ends, weak fairness of each named progress witness must drain the protocol.

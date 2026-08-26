@@ -149,7 +149,7 @@ ged_obol_bind_view_render_root(struct ged_view_context *view_ctx,
 	std::string group_path("_view/");
 	group_path += ged_obol_view_scope_name(view_ctx);
 	view_group->groupPath = group_path.c_str();
-	view_controller->setSceneRoot(view_group);
+	view_controller->setSceneRoot(view_group, TRUE);
 	local_root = view_group;
     }
 
@@ -164,7 +164,11 @@ ged_obol_bind_view_render_root(struct ged_view_context *view_ctx,
     render_root->addChild(interlay);
     if (local_root && local_root != shared_root)
 	render_root->addChild(local_root);
-    view_controller->setRenderSceneRoot(render_root);
+    /* The shared/interlay/local wrapper changes presentation ownership, not
+     * the modeled source.  Retain an in-flight cold PoP build across this
+     * endpoint composition install; source replacement still uses the normal
+     * destructive render-root API. */
+    view_controller->setRenderSceneRoot(render_root, TRUE);
     return 1;
 }
 

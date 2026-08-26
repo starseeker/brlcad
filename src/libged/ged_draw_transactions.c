@@ -685,7 +685,7 @@ ged_draw_txn_view_array(struct ged *gedp,
 }
 
 
-static int
+int
 ged_draw_autoview_for_transaction(struct ged *gedp,
 				  struct ged_view_context *view_ctx,
 				  const char **draw_paths,

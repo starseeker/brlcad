@@ -431,8 +431,15 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	     * this timer callback.  The callback is outside paintEvent, and each
 	     * traversal retains Obol's hard frame deadline, so this cannot recurse
 	     * or turn an expensive frame into an uninterruptible GUI loop. */
+	    /* A render-only terminal transition has no remaining pump wake.  In a
+	     * nested command/test loop, update() may remain coalesced after the
+	     * producer has gone idle, leaving the final HUD/presentation request
+	     * latched indefinitely.  Present that narrow state synchronously; an
+	     * active progressive pass remains queued and bounded as before. */
+	    const bool terminalPresentation = work.renderPending() &&
+		!work.pumpPending();
 	    if (s.software_backend ||
-		s.obol->hasPendingLodRefinementFrame()) {
+		s.obol->hasPendingLodRefinementFrame() || terminalPresentation) {
 		w->repaint();
 	    } else
 		w->update();
@@ -592,22 +599,28 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	s.obol ? s.obol->getViewLodState() : nullptr;
     const uint64_t cadExecutionBefore = presentationState ?
 	presentationState->cadPresentationExecutionSerial() : 0;
-    const uint64_t cadPreparationBefore = presentationState ?
-	presentationState->cadPresentationPreparationSerial() : 0;
     if (presentationState)
 	presentationState->beginCadPresentationFrame();
     const SbBool rendered = renderer.render(s.obol->getRenderRoot());
     const uint64_t completed = s.obol->beginRenderTiming();
     const uint64_t cadExecutionAfter = presentationState ?
 	presentationState->cadPresentationExecutionSerial() : 0;
-    const uint64_t cadPreparationAfter = presentationState ?
-	presentationState->cadPresentationPreparationSerial() : 0;
     if (presentationState)
 	presentationState->refreshCadPresentationFrameStatus();
+    const BObolCadPreparationProgress cadPreparation = presentationState ?
+	presentationState->cadPresentationPreparationProgress() :
+	BOBOL_CAD_PREPARATION_NONE;
     const SbBool cadFrameIncomplete = presentationState &&
 	!presentationState->lastCadPresentationFrameExact();
-    const SbBool interrupted =
-	(action && action->hasTerminated()) || cadFrameIncomplete;
+    /* The action callback is sampled between Coin nodes.  A callback node or
+     * one large native draw can return after its last sample, so classify a
+     * completed-over-deadline traversal as interrupted as well.  The retained
+     * completed image remains authoritative until a bounded successor frame
+     * replaces it. */
+    const SbBool deadlineExpired = action && deadlineDuration &&
+	completed >= deadlineContext.deadline;
+    const SbBool interrupted = (action && action->hasTerminated()) ||
+	deadlineExpired || cadFrameIncomplete;
     if (action && deadlineDuration)
 	action->setAbortCallback(
 	    deadlineContext.previous, deadlineContext.previousData);
@@ -623,7 +636,7 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	    s.obol->notePresentationRenderInterrupted(
 		completed > started ? completed - started : 1,
 		cadExecutionAfter != cadExecutionBefore ? TRUE : FALSE,
-		cadPreparationAfter != cadPreparationBefore ? TRUE : FALSE,
+		cadPreparation,
 		lodCapacityRelevant);
 	}
 	/* A retained frame is useful only for the same physical viewport.  In
@@ -1060,7 +1073,10 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
     s.lod_progress_last_visible = lod_visible;
     s.lod_progress_last_phase = static_cast<int>(lod_status.phase);
     s.lod_progress_last_publish = now;
-    qgcanvas_sync_obol_faceplate(s);
+    struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
+    struct ged *gedp = ged_view_context_owner(view_ctx);
+    if (gedp)
+	(void)ged_view_lod_progress_sync(gedp, view_ctx);
     return true;
 }
 

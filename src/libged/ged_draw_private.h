@@ -91,6 +91,9 @@ extern size_t ged_draw_list_paths(struct ged *gedp,
 	struct bu_vls *result);
 extern int ged_draw_has_paths(struct ged *gedp,
 	struct ged_view_context *view_ctx, int mode);
+extern int ged_draw_autoview_for_transaction(struct ged *gedp,
+	struct ged_view_context *view_ctx, const char **draw_paths,
+	int draw_count, int allow_database_fallback);
 extern int ged_draw_shape_count(struct ged *gedp);
 extern int ged_draw_has_groups(struct ged *gedp);
 extern void ged_draw_clear(struct ged *gedp);

@@ -11,6 +11,9 @@
 
 #include "BObol/BDefines.h"
 #include "BObol/BLodRealization.h"
+#include "BObol/BPresentationPreparation.h"
+
+#include <Obol/cad/CadPresentationPreparation.h>
 
 #include <Inventor/SbBasic.h>
 #include <Inventor/SbBox.h>
@@ -50,6 +53,14 @@ class SoCADAssembly;
 class BOBOL_EXPORT BObolViewLodState
 {
 public:
+    /** A projected feature at least this many pixels across is visually
+     * prominent enough to receive protected refinement priority. */
+    static constexpr double ProminentFootprintPixels = 16.0;
+
+    /** Largest target-normalized screen error accepted as recognizable for
+     * a prominent, unhighlighted feature. */
+    static constexpr double ProminentMaximumNormalizedError = 3.0;
+
     struct BOBOL_EXPORT CadStructuralProjectionHistogram {
         static constexpr size_t BucketCount = 7;
         std::array<size_t, BucketCount> cumulativeCount = {};
@@ -170,6 +181,7 @@ public:
 	BObolLodProgressiveMeshPtr progressiveMesh;
 	std::shared_ptr<const Obol::PartGeometry> preparedCadGeometry;
 	uint64_t preparedCadGeometryRevision;
+	std::vector<BObolLodPresentationLayer> presentationLayers;
 	BObolLodProxy proxy;
 	SbString sourcePath;
 	SbString sourceName;
@@ -295,9 +307,9 @@ public:
     const CadPayload *findCadForSourceEntry(
 	const SoBRLDatabaseSource *source, uint32_t sourceEntryIndex,
 	const SbString &occurrenceKey) const;
-    /* Return a retained progressive asset representative for direct
-     * occurrence binding.  Asset residency outlives an individual display
-     * occurrence, so off-frustum admission does not force a cache reload. */
+    /* Return a retained progressive or terminal asset representative for
+     * direct occurrence binding.  Asset residency outlives an individual
+     * display occurrence, so off-frustum admission does not force a reload. */
     const CadPayload *findCadForAsset(
 	const SoBRLDatabaseSource *source,
 	const SbString &assetPath) const;
@@ -330,11 +342,24 @@ public:
      * thread. */
     SbBool retargetCadPayload(const CadPayload *payload, int activeCut,
 	const BObolLodRequest &demand);
+    /** Re-publish the retained representation binding for one occurrence.
+     * This is a presentation repair only: it neither changes mesh data nor
+     * invalidates the scene allocation.  Callers use it when an exact render
+     * audit finds a structural fallback even though its view payload is
+     * already drawable. */
+    SbBool refreshCadPayloadPresentation(const CadPayload *payload);
     /* Record a metadata-only aggregate render-budget decision.  This neither
      * changes the active presentation nor journals an occurrence mutation;
      * later bounded windows consume it when its epochs and draw mode match. */
     SbBool setCadAllocatedCut(const CadPayload *payload, int allocatedCut,
 	uint64_t viewRevision, uint64_t policyRevision, int drawMode);
+    /** Return the currently published allocation for one occurrence, or -1
+     * when its plan, view, policy, or renderer channel is stale.  Both the
+     * submission and result-publication paths must use this query so an
+     * asynchronously prepared cut cannot be admitted by one and rejected by
+     * the other. */
+    int currentCadAllocatedCut(const CadPayload *payload,
+	uint64_t viewRevision, uint64_t policyRevision, int drawMode) const;
     /** Reserve an unpublished allocation serial for a resumable plan. */
     uint64_t beginCadAllocationPlan(void);
     /** Stage one allocation inside an unpublished resumable plan.  Staged
@@ -377,6 +402,10 @@ public:
     size_t cadPayloadCountForSource(
 	const SoBRLDatabaseSource *source) const;
     size_t cadMeshPayloadCount(void) const;
+    /** True when at least one CAD payload has a view-refinable progressive
+     * mesh.  A structural or sampled cold preview is useful presentation,
+     * but it does not satisfy tests or clients which require PoP refinement. */
+    SbBool hasCadProgressivePayload(void) const;
     size_t cadMeshPayloadCountForSource(
 	const SoBRLDatabaseSource *source) const;
     /** Copy the exact occurrence identities whose retained mesh cut has not
@@ -456,10 +485,9 @@ public:
      * this value around one render distinguishes deadline spent preparing a
      * resumable plan from deadline spent submitting actual CAD geometry. */
     uint64_t cadPresentationExecutionSerial(void) const;
-    /** Aggregate monotonic token for retained CAD preparation work.  A
-     * deadline abort which changes this token is not a steady draw-capacity
-     * sample. */
-    uint64_t cadPresentationPreparationSerial(void) const;
+    /** Exact finite-work result observed during the most recent frame. */
+    BObolCadPreparationProgress
+        cadPresentationPreparationProgress(void) const;
     /** Snapshot the retained CAD assemblies immediately before one endpoint
      * presentation traversal.  The matching refresh call can then reject a
      * stale exact work record when a deadline stops traversal between CAD
@@ -495,9 +523,17 @@ public:
      * O(cuts), performs no realization or allocation, and returns -1 when
      * the scene is not the single-occurrence case. */
     int singleCadProgressiveCutWithinRenderCost(size_t renderCost) const;
+    /** For one retained progressive CAD occurrence, return the deterministic
+     * fraction of its independently retained parts which may advance from
+     * @p baseCut to the next cut inside @p renderCost.  Returns zero when the
+     * next population has no additional cost or no partial promotion fits. */
+    float singleCadProgressiveNextFractionWithinRenderCost(
+	size_t renderCost, int baseCut) const;
     /* Apply an O(1)-per-assembly render-only ceiling while the precise
      * occurrence allocator catches up with an interactive view. */
-    void setCadPresentationProgressiveCutCeiling(int cut) const;
+    void setCadPresentationProgressiveCutCeiling(
+	int cut, float nextFraction = 0.0f) const;
+    float cadPresentationProgressiveCutNextFraction(void) const;
     /* Collapse eligible micro-geometry into one point batch using the current
      * view's measured screen-error tolerance.  One pixel is the stable,
      * pixel-exact setting. */
@@ -572,6 +608,7 @@ private:
 	BObolLodResult &result, SbBool consume);
     SbBool applySourceResultInternal(const SoBRLDatabaseSource *source,
 	BObolLodResult &result, SbBool consume);
+    size_t adoptSharedCadPresentation(const CadPayload *publisher);
     std::unordered_map<std::string, MeshPayloadPtr> meshBindings;
     std::unordered_map<std::string, ProxyPayloadPtr> proxyBindings;
     /* One authoritative payload per source/occurrence.  cadBindings is only
@@ -615,6 +652,7 @@ private:
     NormalStyle normalStyle;
     float normalCreaseAngle;
     mutable int cadPresentationProgressiveLodCeiling;
+    mutable float cadPresentationProgressiveLodNextFraction;
     mutable float cadPresentationPointProxyPixelThreshold;
     mutable float cadPresentationDiscoveryPointProxyPixelThreshold;
     mutable SbBool cadPresentationCameraMotionFrameReuse;
@@ -626,8 +664,12 @@ private:
 	cadPresentationAssemblyUseCounts;
     mutable std::unordered_map<const SoCADAssembly *, uint64_t>
 	cadPresentationFrameStartExecutionSerials;
+    mutable std::unordered_map<const SoCADAssembly *,
+	Obol::CadPresentationPreparationSnapshot>
+	cadPresentationFrameStartPreparationSnapshots;
     mutable SbBool cadPresentationFrameObservationArmed;
     mutable SbBool cadPresentationFrameStatusValid;
+    mutable BObolCadPreparationProgress cadLastPreparationProgress;
     mutable SbBool cadLastPresentedPrimitiveCountValid;
     mutable size_t cadLastPresentedPrimitiveCount;
     mutable SbBool cadLastPresentedRenderCostValid;
@@ -651,6 +693,7 @@ private:
      * made nominally cheap HUD and scene-budget queries O(scene size). */
     size_t cadValidPayloadCount;
     size_t cadMeshPayloadCountValue;
+    size_t cadLayeredProgressivePayloadCount;
     std::unordered_map<std::string, size_t> cadMeshPayloadCountsBySource;
     std::unordered_map<std::string,
 	std::unordered_set<std::string>>

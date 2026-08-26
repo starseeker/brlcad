@@ -27,16 +27,23 @@
 #include <QLabel>
 #include <QVBoxLayout>
 
+#include <cmath>
+#include <cstdio>
+#include <limits>
+
 #include "bu/opt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "BObol/BDisplayEndpoint.h"
+#include "ged.h"
 #include "ged/draw.h"
 #include "ged/view.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 
 #include "CADViewSettings.h"
+
+static constexpr double qged_cutting_normal_minimum_length = 1.0e-6;
 
 static struct bv_context *
 qged_settings_view(const QgPluginContext *ctx)
@@ -147,6 +154,82 @@ qged_faceplate_checkbox_refresh(const struct ged_view_context *view_ctx, QCheckB
     checkbox->setEnabled(supported ? true : false);
 }
 
+static void
+qged_cutting_spinbox_set(QDoubleSpinBox *spinbox, double value)
+{
+    spinbox->blockSignals(true);
+    spinbox->setValue(value);
+    spinbox->blockSignals(false);
+}
+
+static QDoubleSpinBox *
+qged_cutting_spinbox(QWidget *parent, double value)
+{
+    QDoubleSpinBox *spinbox = new QDoubleSpinBox(parent);
+    spinbox->setRange(-std::numeric_limits<double>::max(),
+	std::numeric_limits<double>::max());
+    spinbox->setDecimals(10);
+    spinbox->setValue(value);
+    return spinbox;
+}
+
+static int
+qged_cutting_plane_get(const QgPluginContext *context, int *enabled,
+    double origin[3], double normal[3])
+{
+    struct ged *gedp = context ? context->getGed() : NULL;
+    if (!gedp || !enabled || !origin || !normal)
+	return 0;
+
+    const char *argv[] = {"view", "cutting"};
+    if (ged_exec(gedp, 2, argv) != BRLCAD_OK)
+	return 0;
+
+    int planeEnabled = 0;
+    if (std::sscanf(bu_vls_cstr(gedp->ged_result_str),
+	"enable %d\norigin %lf %lf %lf\nnormal %lf %lf %lf",
+	&planeEnabled, &origin[0], &origin[1], &origin[2],
+	&normal[0], &normal[1], &normal[2]) != 7)
+	return 0;
+    *enabled = planeEnabled ? 1 : 0;
+    return 1;
+}
+
+static int
+qged_cutting_plane_set(const QgPluginContext *context, int enabled,
+    const double origin[3], const double normal[3])
+{
+    struct ged *gedp = context ? context->getGed() : NULL;
+    if (!gedp || !origin || !normal || !std::isfinite(origin[0]) ||
+	!std::isfinite(origin[1]) || !std::isfinite(origin[2]) ||
+	!std::isfinite(normal[0]) || !std::isfinite(normal[1]) ||
+	!std::isfinite(normal[2]))
+	return 0;
+    const double normalLengthSquared = normal[0] * normal[0] +
+	normal[1] * normal[1] + normal[2] * normal[2];
+    if (normalLengthSquared <= qged_cutting_normal_minimum_length *
+	qged_cutting_normal_minimum_length)
+	return 0;
+
+    char x[3][64] = {};
+    char n[3][64] = {};
+    for (size_t i = 0; i < 3; i++) {
+	std::snprintf(x[i], sizeof(x[i]), "%.17g", origin[i]);
+	std::snprintf(n[i], sizeof(n[i]), "%.17g", normal[i]);
+	if (!x[i][0] || !n[i][0])
+	    return 0;
+	}
+    const char *originArgv[] = {"view", "cutting", "origin",
+	x[0], x[1], x[2]};
+    const char *normalArgv[] = {"view", "cutting", "normal",
+	n[0], n[1], n[2]};
+    const char *enableArgv[] = {"view", "cutting", "enable",
+	enabled ? "1" : "0"};
+    return ged_exec(gedp, 6, originArgv) == BRLCAD_OK &&
+	ged_exec(gedp, 6, normalArgv) == BRLCAD_OK &&
+	ged_exec(gedp, 4, enableArgv) == BRLCAD_OK;
+}
+
 CADViewSettings::CADViewSettings(QWidget *)
 {
     QVBoxLayout *wl = new QVBoxLayout;
@@ -161,6 +244,28 @@ CADViewSettings::CADViewSettings(QWidget *)
     mdlaxes_ckbx = new QCheckBox("Model Axes");
     scale_ckbx = new QCheckBox("Scale");
     viewaxes_ckbx = new QCheckBox("View Axes");
+
+    cutting_grp = new QGroupBox("Cutting Plane");
+    QVBoxLayout *cuttingLayout = new QVBoxLayout;
+    cutting_enabled_ckbx = new QCheckBox("Enable model-space cutting plane");
+    cuttingLayout->addWidget(cutting_enabled_ckbx);
+    const char *const coordinateNames[] = {"X", "Y", "Z"};
+    QHBoxLayout *originLayout = new QHBoxLayout;
+    originLayout->addWidget(new QLabel("Origin:"));
+    QHBoxLayout *normalLayout = new QHBoxLayout;
+    normalLayout->addWidget(new QLabel("Normal:"));
+    for (size_t i = 0; i < 3; i++) {
+	cutting_origin[i] = qged_cutting_spinbox(cutting_grp, 0.0);
+	cutting_normal[i] = qged_cutting_spinbox(cutting_grp,
+	    i == 2 ? 1.0 : 0.0);
+	cutting_origin[i]->setPrefix(QString("%1 ").arg(coordinateNames[i]));
+	cutting_normal[i]->setPrefix(QString("%1 ").arg(coordinateNames[i]));
+	originLayout->addWidget(cutting_origin[i]);
+	normalLayout->addWidget(cutting_normal[i]);
+    }
+    cuttingLayout->addLayout(originLayout);
+    cuttingLayout->addLayout(normalLayout);
+    cutting_grp->setLayout(cuttingLayout);
 
     /* Framebuffer mode selector: Off / Overlay / Underlay / Interlay */
     QHBoxLayout *fbl = new QHBoxLayout;
@@ -233,6 +338,16 @@ CADViewSettings::CADViewSettings(QWidget *)
     QObject::connect(fb_mode_combo,
 		     QOverload<int>::of(&QComboBox::currentIndexChanged),
 		     this, &CADViewSettings::view_update_int);
+    QObject::connect(cutting_enabled_ckbx, &QCheckBox::toggled,
+	this, &CADViewSettings::cutting_update);
+    for (size_t i = 0; i < 3; i++) {
+	QObject::connect(cutting_origin[i],
+	    QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+	    [this](double) { cutting_update(); });
+	QObject::connect(cutting_normal[i],
+	    QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+	    [this](double) { cutting_update(); });
+    }
 
     /* Assemble the top-level layout */
     wl->addWidget(acsg_ckbx);
@@ -243,6 +358,7 @@ CADViewSettings::CADViewSettings(QWidget *)
     wl->addWidget(mdlaxes_ckbx);
     wl->addWidget(scale_ckbx);
     wl->addWidget(viewaxes_ckbx);
+    wl->addWidget(cutting_grp);
     wl->addLayout(fbl);
     wl->addWidget(params_grp);
 
@@ -269,6 +385,26 @@ void
 CADViewSettings::view_update_int(int)
 {
     view_refresh(0);
+}
+
+void
+CADViewSettings::cutting_update()
+{
+    double cuttingOrigin[3] = {};
+    double cuttingNormal[3] = {};
+    for (size_t i = 0; i < 3; i++) {
+	cuttingOrigin[i] = cutting_origin[i]->value();
+	cuttingNormal[i] = cutting_normal[i]->value();
+    }
+    if (!qged_cutting_plane_set(m_ctx, ckbx_val(cutting_enabled_ckbx),
+	cuttingOrigin, cuttingNormal)) {
+	/* Invalid normals must not partially commit a new plane.  Restoring
+	 * authoritative command state also distinguishes this from a detached
+	 * view, for which the group becomes unavailable. */
+	checkbox_refresh(0);
+	return;
+    }
+    emit settings_changed(QG_VIEW_DRAWN);
 }
 
 /* Read current view state and update all widgets to match, without
@@ -323,6 +459,22 @@ CADViewSettings::checkbox_refresh(unsigned long long)
 	"view.faceplate.params.twist");
     qged_faceplate_checkbox_refresh(view_ctx, params_fps_ckbx,
 	"view.faceplate.params.fps");
+
+    int cuttingEnabled = 0;
+    double cuttingOrigin[3] = {};
+    double cuttingNormal[3] = {};
+    const int cuttingSupported = qged_cutting_plane_get(m_ctx,
+	&cuttingEnabled, cuttingOrigin, cuttingNormal);
+    cutting_grp->setEnabled(cuttingSupported ? true : false);
+    cutting_enabled_ckbx->blockSignals(true);
+    cutting_enabled_ckbx->setChecked(cuttingEnabled != 0);
+    cutting_enabled_ckbx->blockSignals(false);
+    if (cuttingSupported) {
+	for (size_t i = 0; i < 3; i++) {
+	    qged_cutting_spinbox_set(cutting_origin[i], cuttingOrigin[i]);
+	    qged_cutting_spinbox_set(cutting_normal[i], cuttingNormal[i]);
+	}
+    }
 }
 
 /* Read all widget states and write them back to the view, then signal

@@ -28,6 +28,7 @@
 #include <QGroupBox>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include "qtcad/QgTypes.h"
 
 class QgPluginContext;
@@ -52,6 +53,13 @@ class CADViewSettings : public QWidget
 	QCheckBox *scale_ckbx;
 	QCheckBox *viewaxes_ckbx;
 
+	/* World-space section plane.  This is deliberately not part of camera
+	 * clipping: it remains disabled until the user explicitly enables it. */
+	QGroupBox *cutting_grp;
+	QCheckBox *cutting_enabled_ckbx;
+	QDoubleSpinBox *cutting_origin[3];
+	QDoubleSpinBox *cutting_normal[3];
+
 	/* Framebuffer mode: index 0=off, 1=overlay, 2=underlay, 3=interlay */
 	QComboBox *fb_mode_combo;
 
@@ -74,6 +82,7 @@ class CADViewSettings : public QWidget
 	void view_refresh(unsigned long long);
 	void view_update_int(int);
 	void view_update();
+	void cutting_update();
 
     private:
 	QgPluginContext *m_ctx = nullptr;

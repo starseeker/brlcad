@@ -415,6 +415,19 @@ ged_scene_draw(struct ged *gedp,
     ged_draw_transaction_result_init(&draw_result);
     const int ret = ged_draw_apply_transaction(gedp, &transaction,
 	&draw_result);
+    /* A compact draw may be configured for progressive realization yet have
+     * already adopted complete source data (for example, a warm source drawn
+     * into another independent view).  The transaction deliberately skips
+     * synchronous bounds work while it owns the database lock; once that
+     * transaction has returned, no progressive provider owns this autoview
+     * request, so complete it here. */
+    if (ret > 0 && request->autoview &&
+	appearance.defer_leaf_expansion &&
+	draw_result.progressive_data_complete) {
+	(void)ged_draw_autoview_for_transaction(gedp, view,
+	    const_cast<const char **>(request->paths),
+	    static_cast<int>(request->path_count), 1);
+    }
     if (result) {
 	ged_scene_result_from_draw_result(result, &draw_result, ret);
 	for (size_t i = 0; i < request->path_count; i++)

@@ -65,6 +65,11 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
     uint64_t generation;
     std::shared_ptr<BObolDatabaseLease> databaseLease;
     std::shared_ptr<const BObolStagedSourceMesh> stagedSource;
+    /* Cold BoTs which exceed practical whole-topology scratch limits use the
+     * validated serialized V5 reader and bounded spatial pages.  This choice
+     * is captured at task submission so an environment/configuration change
+     * cannot alter a queued task's memory contract. */
+    SbBool useSerializedSpatialSource;
     /* Exact persistent payload to reopen.  Request::sourceContentHash is a
      * general realization identity and must not be interpreted as an LMDB
      * key; authored sources and tests legitimately use non-cache hashes. */
@@ -99,6 +104,11 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
      * cut whose complete delta was reserved by the submit action. */
     SbBool useDeliveryCutLimit;
     int deliveryCutLimit;
+    /* The service's bounded transient allocation may be stricter than the
+     * steady renderer/resident budget.  When submission lowers this task's
+     * delivery cut to satisfy that bound, report a terminal constrained
+     * presentation instead of repeatedly requesting an impossible prefix. */
+    SbBool transientMemoryLimited;
     /* A zoom may need a richer resident prefix even when the measured frame
      * budget cannot present that complete prefix yet.  In that case the
      * delivery limit governs cache residency and this independent limit
@@ -209,9 +219,11 @@ bobol_lod_submit_rt_source_full_detail_request(
 /* Process-wide admission for transient LoD preparation memory.  Individual
  * services retain their own (possibly smaller) limits, while this shared
  * governor prevents several views or independent cold-preparation stages from
- * each consuming the full host-derived allowance at the same time.  A request
- * larger than the limit is admitted only when it can run alone. */
-BOBOL_EXPORT void
+ * each consuming the full host-derived allowance at the same time.  FALSE
+ * means the estimate can never fit the configured ceiling; callers must keep
+ * their existing presentation and report a constrained result rather than
+ * entering an allocation-heavy provider. */
+BOBOL_EXPORT SbBool
 bobol_lod_working_set_acquire(size_t estimatedBytes);
 
 BOBOL_EXPORT void
@@ -231,6 +243,17 @@ bobol_lod_working_set_global_active_tasks(void);
 
 BOBOL_EXPORT size_t
 bobol_lod_working_set_global_peak_tasks(void);
+
+/* Select the bounded serialized spatial-page producer when a cold native PoP
+ * build would exceed the service's transient working-set contract.  The
+ * BOBOL_LOD_SPATIAL_LEAVES environment setting remains an explicit 0/1
+ * diagnostic override; normal production selection is automatic. */
+BOBOL_EXPORT SbBool
+bobol_lod_spatial_source_enabled(const BObolLodRequest &request,
+	size_t workingSetLimit);
+
+BOBOL_EXPORT size_t
+bobol_lod_spatial_task_working_set_bytes(void);
 
 struct BObolLodServicePrivate;
 
@@ -390,6 +413,14 @@ public:
     uint64_t residentMeshCompactionCountForDiagnostics(void) const;
     uint64_t residentMeshEvictionCountForDiagnostics(void) const;
     size_t pendingResidentMeshCompactionCountForDiagnostics(void) const;
+    /* Report the last complete demand-aware scan for one view.  TRUE means
+     * the candidate count describes the current demand and resident
+     * generation.  A zero count then certifies that retained bytes are
+     * required by the visible working set (or its reloadable minimum), not
+     * an unserviced reclamation request. */
+    SbBool residentMeshCompactionPlanForDiagnostics(
+	uint64_t consumerId, uint64_t *demandRevision,
+	size_t *candidateCount) const;
     size_t queuedResidentMeshCompactionResultCountForDiagnostics(
 	uint64_t consumerId) const;
 
@@ -416,6 +447,11 @@ public:
 	uint64_t consumerId,
 	std::vector<BObolLodResidentCompaction> &results,
 	size_t maxResults = 0);
+    /* Retire one consumer's complete demand snapshot immediately.  This is
+     * O(1) and invalidates every in-flight aggregate trim before its shared
+     * mesh generation can commit.  The next quiet compaction pass installs a
+     * replacement complete snapshot. */
+    void invalidateResidentMeshConsumer(uint64_t consumerId);
     /* Invalidate an already planned quiet trim before promoting a drawable
      * prefix which is resident in memory.  Provider requests perform the same
      * use notification internally; this form covers zero-I/O retargets. */

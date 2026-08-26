@@ -135,6 +135,13 @@ struct BObolDrawManifest {
     int coverageBoundsValid;
     point_t coverageBoundsMin;
     point_t coverageBoundsMax;
+    /* Complete, geometry-free population proof captured by cold discovery.
+     * A warm consumer may use these aggregate facts to select its bounded
+     * admission policy before occurrence chunks finish streaming.  Zero
+     * values mean that this is a structural-only manifest. */
+    uint64_t uniqueAssetCount;
+    uint64_t encodedSourceBytes;
+    uint64_t largestAssetBytes;
     size_t occurrenceCount;
     struct BObolDrawManifestOccurrence *occurrences;
 };

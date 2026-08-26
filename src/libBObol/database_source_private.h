@@ -47,6 +47,13 @@ struct BObolCadSourceState {
 };
 
 struct BObolCompactOccurrenceRegistryState {
+    enum class OverviewState {
+	Absent,
+	Visible,
+	RetirementPending,
+	Retired
+    };
+
     struct PresentationOverride {
 	enum Property {
 	    VISIBILITY = 0,
@@ -85,6 +92,12 @@ struct BObolCompactOccurrenceRegistryState {
      */
     uint64_t compactPopulationEpoch = 1;
     size_t compactExpectedInstanceCount = 0;
+    /* reserveCompactOccurrenceCapacity receives the producer-certified leaf
+     * count for a streaming epoch.  Index installation also has an exact
+     * current count, but only the streaming count excludes the temporary
+     * whole-target overview and can therefore prove leaf-frontier coverage. */
+    SbBool compactExpectedInstanceCountCertified = FALSE;
+    BObolCompactSourceProfile compactSourceProfile;
     uint64_t cadBatchRevision = 1;
     uint64_t cadBatchDeltaFloorRevision = 1;
     size_t cadBatchDeltaEntryCount = 0;
@@ -104,12 +117,21 @@ struct BObolCompactOccurrenceRegistryState {
     uint32_t displayMeshLodContractInputsRevision = 0;
     SbBool compactIndexActive = FALSE;
     SbBool compactOccurrenceRegistry = FALSE;
+    /* The overview is an early extent cue, not an LoD leaf.  Its explicit
+     * lifecycle prevents a retired overview from being mistaken for missing
+     * leaf geometry or resurrected by a later presentation overlay. */
+    OverviewState compactOverviewState = OverviewState::Absent;
     SbBool compactVisibilityFrontierActive = FALSE;
     SbBool compactVisibilityFrontierDefault = FALSE;
     std::vector<SbString> compactVisibilityFrontier;
     std::vector<SbBool> compactVisibilityFrontierStates;
     std::vector<SbString> compactSelectedPaths;
     std::vector<PresentationOverride> compactPresentationOverrides;
+    /* A completed realization transfers its bounded cold-import window to
+     * the live source.  Provider-tail materialization claims entries from the
+     * stream exactly once, avoiding a timer-dependent lifetime race without
+     * making copied occurrence records own full database geometry. */
+    std::shared_ptr<BObolCompactOccurrenceStream> compactStagedSourceStream;
 };
 
 struct BObolCadPresentationBridgeState {

@@ -193,10 +193,11 @@ will produce its first image.
   records “scale changed at least once” and “the current camera edge changes
   scale”; a later rotation cannot rearm a zoom probe, and a scale round trip is
   tested by its final signature rather than by the presence of wheel events.
-  On entry to quiet state, the last proven stable scene allowance replaces the
-  transient 60 FPS motion allowance.  A post-release frame which installs a
-  new interaction ceiling before debounce must reapply the stable snapshot or
-  enter a witnessed handoff; it cannot report ready with that ceiling stuck.
+  Release retains the responsive motion presentation through the debounce.
+  On entry to quiet state, one reducer restores the prior stable target and
+  replaces the transient 60 FPS allowance.  A pose restore first enters a
+  current-pose presentation-proof handoff; no pre-quiet frame may publish
+  persistent capacity evidence or report the motion ceiling as ready.
 
 `STABLE`
 : Refinement proceeds in bounded publication waves.  Candidate marginal
@@ -211,7 +212,13 @@ will produce its first image.
   cuts when its richest affordable drawable prefix is already resident.  It
   must not pay one frame or worker round trip per cut merely because the
   producer supplied a denser quality schedule.  Stable cuts do not regress
-  within an unchanged view epoch.  If
+  within an unchanged view epoch.  If all provider requests are satisfied but
+  a renderer-wide ceiling remains below the richest active progressive cut,
+  the view still has presentation quality debt.  A single large mesh is not
+  exempt: its resident suffix can be complete while the submitted image
+  remains motion-coarse.  The static quality phase must either expose a richer
+  deadline-safe cut or retain a typed capacity-limit witness before reporting
+  terminal readiness.  If
   a newly attempted discrete cut proves too expensive, overload recovery
   begins from the current presentation: minimum coverage is reserved for all
   visible occurrences and the richest already-active cuts which fit are kept
@@ -270,13 +277,13 @@ asset, view, or policy identity changes.  This makes a genuinely saturated
 scene quiet without preventing progress when eviction or a larger limit later
 creates headroom.
 
-The owner-thread coordinator is the authority for these phases.  Client
-Booleans are observations, not alternate state machines: named gesture and
-cancellation events own their corresponding edges (gesture release retains the
-interactive phase through its quiet debounce), a nonzero pending witness
-cannot produce `STABLE`, and compaction observed before complete coverage is
-canonicalized back to `COVERAGE` or `FALLBACK`.  The raw observation is retained
-for invariant diagnostics, while only the canonical state is published.
+The owner-thread canonical snapshot is the authority for these outcomes.
+There is no imperative phase machine.  Client Booleans are typed observations:
+named gesture and cancellation events own their corresponding edges (gesture
+release retains interaction through its quiet debounce), every nonterminal
+outcome names a progress witness, and the convergence policy derives the sole
+public phase/outcome from the snapshot.  Diagnostics retain evidence and
+invariant failures, not a second mutable answer.
 
 Completed-frame CPU and GPU pressure are coordinator inputs, not merely HUD
 telemetry.  Every unique active CAD assembly is sampled once; all policy and
@@ -311,8 +318,9 @@ unwitnessed background obligation.
 
 Minimum-mesh coverage, user-visible convergence, aggregate scene budgeting,
 view-demand scheduling, renderer-independent quality calculation, resource-
-edge/recovery state, the late calibrated-headroom retry witness, and result-
-publication batching are allocation-free coordinator policies.
+edge/recovery state, and the late calibrated-headroom retry witness use
+allocation-free coordinator values.  Result batching and frame acknowledgement
+are one allocation-free, revision-bound presentation transaction.
 BObolViewController supplies source, worker, completed-frame, and memory
 measurements and executes scheduling decisions, but it does not maintain
 parallel latches or reinterpret their one-shot rules.  The coverage policy
@@ -671,13 +679,14 @@ GPU upload, and memory pressure.  Passing one does not imply passing the other.
 | GL state | deep before/after state sentinel on every exercised System GL and OSMesa route, with apitrace for any failure |
 | wire parity | shaded/wire active-cut and image matrix |
 | selection/edit | hierarchy selection, erase/redraw, promotion/demotion, and picking tests |
-| liveness | `ObolHostWork.tla` and `ObolLodConvergence.tla` TLC checks; exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness or stable-with-affordable-next states |
+| liveness | `ObolHostWork.tla`, `ObolLodConvergence.tla`, `ObolProgressivePipeline.tla`, `ObolLodColdPreview.tla`, and `ObolLiveSpatialPublication.tla` TLC checks; exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness, uncertified-source-sample replacement, incomplete live-page replacement, or stable-with-affordable-next states |
+| admission/arbitration | `ObolLodAdmission.tla`, `ObolLodArbitration.tla`, and the composed-mode TLC check plus `test_bobol_retained_allocation_oracle`; verify safe direct admission, large-scene PoP-only admission, subpixel aggregation, prominent-floor non-starvation, displayable constrained fallback, and explicit terminal constrained debt |
 
-Visual-importance arbitration is a separate planned proof boundary.  A bounded
-model may establish coverage priority, prominent-floor non-starvation, budget
-safety, and termination, while an exact small-scene oracle checks the numeric
-allocation objective.  Neither substitutes for image qualification of actual
-wheels, blades, tails, and hulls.
+Visual-importance arbitration has a bounded proof boundary:
+`ObolLodArbitration.tla` establishes coverage priority, prominent-floor
+non-starvation, budget safety, and termination, while an exact small-scene
+oracle checks the numeric allocation objective.  Neither substitutes for image
+qualification of actual wheels, blades, tails, and hulls.
 
 The GUI runner is permitted to use generous wall-clock time for cold asset
 construction, but it must not use that generosity to accept a terminal box,

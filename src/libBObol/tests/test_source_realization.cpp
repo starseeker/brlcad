@@ -14,6 +14,7 @@
 #include "bu/app.h"
 #include "bu/file.h"
 #include "rt/db_io.h"
+#include "wdb.h"
 
 #include <algorithm>
 #include <atomic>
@@ -25,6 +26,10 @@
 #include <vector>
 
 namespace {
+
+static const size_t source_admission_leaf_copy_count = 3;
+static const size_t source_admission_leaf_fixed_bytes =
+    8ULL * 1024ULL * 1024ULL;
 
 struct ProbeGate {
     std::atomic<bool> entered{false};
@@ -122,12 +127,15 @@ wait_until(const std::function<bool(void)> &predicate,
 static bool
 make_request(BObolSourceRealizationRequest &request,
     struct db_i *database, BObolSourceWarmManifestProbe probe,
-    const std::shared_ptr<void> &context)
+    const std::shared_ptr<void> &context, const char *sourcePath = NULL)
 {
     if (!database)
 	return false;
     SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
     source->ref();
+    source->setDatabase(database);
+    if (sourcePath && sourcePath[0])
+	source->path = sourcePath;
     struct db_i *snapshot = db_clone_dbi(database, NULL);
     if (!snapshot) {
 	source->unref();
@@ -165,6 +173,18 @@ main(int argc, char **argv)
 	std::fprintf(stderr, "FAIL: could not create temporary database\n");
 	(void)bu_file_delete(path);
 	return 1;
+    }
+
+    {
+	struct rt_wdb *wdbp = wdb_dbopen(database, RT_WDB_TYPE_DB_DISK);
+	point_t center = VINIT_ZERO;
+	if (!wdbp || mk_sph(wdbp, "admission.s", center, 1.0) != 0) {
+	    std::fprintf(stderr,
+		"FAIL: could not create source-admission fixture\n");
+	    db_close(database);
+	    (void)bu_file_delete(path);
+	    return 1;
+	}
     }
 
     int failures = 0;
@@ -237,6 +257,46 @@ main(int argc, char **argv)
 			"FAIL: warm request result contract\n");
 		    failures++;
 		}
+	    }
+	}
+    }
+
+    {
+	/* A zero caller estimate must be resolved from the immutable leaf
+	 * directory before worker admission.  This is deliberately a warm probe:
+	 * the test observes the outer reservation without paying unrelated mesh
+	 * realization cost. */
+	std::shared_ptr<ProbeGate> gate = std::make_shared<ProbeGate>();
+	std::vector<BObolSourceRealizationRequest> requests(1);
+	if (!make_request(requests[0], database, blocking_warm_probe, gate,
+		"admission.s")) {
+	    std::fprintf(stderr, "FAIL: automatic admission request setup\n");
+	    failures++;
+	} else {
+	    struct directory *dp = db_lookup(database, "admission.s",
+		LOOKUP_QUIET);
+	    const size_t expectedMinimum = dp && dp->d_len <=
+		(SIZE_MAX - source_admission_leaf_fixed_bytes) /
+		source_admission_leaf_copy_count ?
+		dp->d_len * source_admission_leaf_copy_count +
+		source_admission_leaf_fixed_bytes : 0;
+	    std::shared_ptr<BObolSourceRealizationJob> job =
+		coordinator.submit(requests);
+	    if (!job || !expectedMinimum || !wait_until([&gate]() {
+		    return gate->entered.load(std::memory_order_acquire);
+		}, std::chrono::seconds(2)) ||
+		coordinator.activeWorkingSetBytesForDiagnostics() <
+		expectedMinimum) {
+		std::fprintf(stderr,
+		    "FAIL: automatic leaf admission did not reserve source bytes\n");
+		failures++;
+	    }
+	    gate->release.store(true, std::memory_order_release);
+	    if (job && !wait_until([&job]() { return job->isTerminal(); },
+		std::chrono::seconds(2))) {
+		std::fprintf(stderr,
+		    "FAIL: automatic admission request did not complete\n");
+		failures++;
 	    }
 	}
     }
@@ -445,6 +505,48 @@ main(int argc, char **argv)
 		    }, std::chrono::seconds(2))) {
 		    std::fprintf(stderr,
 			"FAIL: fairness blocker did not drain\n");
+		    failures++;
+		}
+	    }
+	}
+    }
+
+    {
+	/* Admission must refuse an oversized detached import before any worker
+	 * reaches its callback.  This is distinct from ordinary serialization:
+	 * librt import allocation can otherwise terminate a display worker. */
+	const size_t limit =
+	    coordinator.workingSetLimitBytesForDiagnostics();
+	if (limit != SIZE_MAX) {
+	    std::shared_ptr<CompletionCounter> counter =
+		std::make_shared<CompletionCounter>();
+	    std::vector<BObolSourceRealizationRequest> requests(1);
+	    if (!make_request(requests[0], database, counting_complete_probe,
+		counter)) {
+		std::fprintf(stderr, "FAIL: constrained admission setup\n");
+		failures++;
+	    } else {
+		requests[0].estimatedWorkingSetBytes = limit + 1;
+		std::shared_ptr<BObolSourceRealizationJob> job =
+		    coordinator.submit(requests);
+		BObolSourceRealizationItemResult result;
+		if (!job || !job->isTerminal() ||
+		    job->state() != BOBOL_SOURCE_REALIZATION_CONSTRAINED ||
+		    counter->completed.load(std::memory_order_acquire) != 0 ||
+		    !job->itemResult(0, result) ||
+		    result.state != BOBOL_SOURCE_REALIZATION_CONSTRAINED ||
+		    requests[0].source || requests[0].snapshotSourceDatabase ||
+		    coordinator.activeItemCountForDiagnostics() != 0) {
+		    std::fprintf(stderr,
+			"FAIL: oversized source admission entered realization "
+			"(job=%d terminal=%d item=%d callbacks=%zu source=%p db=%p active=%zu)\n",
+			job ? job->state() : -1,
+			job && job->isTerminal() ? 1 : 0,
+			job && job->itemResult(0, result) ? result.state : -1,
+			counter->completed.load(std::memory_order_acquire),
+			static_cast<void *>(requests[0].source),
+			static_cast<void *>(requests[0].snapshotSourceDatabase),
+			coordinator.activeItemCountForDiagnostics());
 		    failures++;
 		}
 	    }

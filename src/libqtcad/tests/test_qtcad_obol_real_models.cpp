@@ -1282,7 +1282,7 @@ sync_draw_case(const struct model_case &testCase)
 		"pending=%zu in_flight=%zu results=%zu writes=%zu "
 		"changed=%d more=%d controller={work=%d results=%d "
 		"submissions=%d refinement_frame=%d render=%d interaction=%d} "
-		"convergence={phase=%d coordinator=%d expected=%zu "
+		"convergence={phase=%d expected=%zu "
 		"available=%zu visible=%zu active=%zu satisfied=%zu "
 		"fraction=%.3g ready=%d background=%d refine=%d "
 		"calibrate=%d handoff=%d point=%d}\n",
@@ -1309,7 +1309,7 @@ sync_draw_case(const struct model_case &testCase)
 		controller->hasPendingLodRefinementFrame() ? 1 : 0,
 		controller->isRenderRequested() ? 1 : 0,
 		controller->isLodInteractionActive() ? 1 : 0,
-		convergence.phase, convergence.coordinatorPhase,
+		convergence.phase,
 		convergence.expectedLeafCount,
 		convergence.availableLeafCount,
 		convergence.visibleTargetCount,

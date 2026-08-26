@@ -52,6 +52,7 @@ ged_view_framebuffer_backend_ensure
 ged_view_framebuffer_present
 ged_view_framebuffer_release
 ged_view_faceplate_sync
+ged_view_lod_progress_sync
 ged_view_lighting_sync
 ged_view_shading_sync
 ged_view_display_image_capture

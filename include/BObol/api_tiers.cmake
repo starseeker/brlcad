@@ -29,6 +29,7 @@ set(LIBBOBOL_STABLE_HEADERS
   BInput.h
   BMeasureAction.h
   BPickDetail.h
+  BPresentationPreparation.h
   BRtRender.h
   BSceneController.h
   BSceneGroup.h

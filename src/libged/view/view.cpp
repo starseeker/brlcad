@@ -343,6 +343,17 @@ _view_cmd_center(void *bs, int argc, const char **argv)
     return _view_call_on_gd_view(gd, ged_center_core, argc, argv);
 }
 
+static int
+_view_cmd_cutting(void *bs, int argc, const char **argv)
+{
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    const char *usage_string = "view [options] cutting [vals]";
+    const char *purpose_string = "control the world-space cutting plane";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+    return _view_call_on_gd_view(gd, ged_cutting_core, argc, argv);
+}
+
 int
 _view_cmd_dir(void *bs, int argc, const char **argv)
 {
@@ -859,6 +870,7 @@ const struct bu_cmdtab _view_cmds[] = {
     { "auto",       _view_cmd_auto},
     { "autoview",   _view_cmd_auto},
     { "center",     _view_cmd_center},
+    { "cutting",    _view_cmd_cutting},
     { "dir",        _view_cmd_dir},
     { "eye",        _view_cmd_eye},
     { "annotation", _view_cmd_annotation},

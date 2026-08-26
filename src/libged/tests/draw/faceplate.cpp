@@ -32,6 +32,8 @@
 
 #include <bu.h>
 #include <BObol/BDisplayEndpoint.h>
+#include <BObol/BViewController.h>
+#include <BObol/BViewStore.h>
 #include <icv.h>
 #include <imgstream/fbserv.h>
 #include "rt/view.h"
@@ -288,6 +290,39 @@ main(int ac, char *av[]) {
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
     ret += img_not_empty(3, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
+
+    /* The render host publishes LoD progress at a bounded cadence.  That
+     * telemetry must not run the general faceplate synchronizer: doing so
+     * rebuilt unrelated grid/axes/ADC records and could turn a label update
+     * into another scene traversal. */
+    BObolViewController *faceplate_controller =
+	static_cast<BObolViewController *>(bobol_display_endpoint_controller(
+	    ged_view_context_obol_endpoint_get(v)));
+    if (!faceplate_controller)
+	bu_exit(EXIT_FAILURE,
+	    "faceplate progress isolation requires an Obol controller\n");
+    const BObolFeatureHandle grid_handle =
+	faceplate_controller->features().find("_faceplate/grid");
+    SoNode *grid_node = faceplate_controller->features().node(grid_handle);
+    if (!grid_handle.isValid() || !grid_node)
+	bu_exit(EXIT_FAILURE,
+	    "faceplate grid was not retained before progress isolation test\n");
+    struct bv_grid_state changed_grid = BV_GRID_STATE_INIT;
+    if (!bv_grid_state_get(&changed_grid, DRAW_TEST_BV_CONST(v)))
+	bu_exit(EXIT_FAILURE, "failed to read faceplate grid state\n");
+    changed_grid.res_h = changed_grid.res_h > SMALL_FASTF ?
+	changed_grid.res_h * 2.0 : 2.0;
+    bv_grid_state_set(DRAW_TEST_BV(v), &changed_grid);
+    if (ged_view_lod_progress_sync(gedp, v) != BRLCAD_OK ||
+	faceplate_controller->features().node(grid_handle) != grid_node)
+	bu_exit(EXIT_FAILURE,
+	    "LoD progress synchronization mutated an unrelated grid feature\n");
+    if (ged_view_faceplate_sync(gedp, v) != BRLCAD_OK ||
+	faceplate_controller->features().node(
+	    faceplate_controller->features().find("_faceplate/grid")) ==
+	    grid_node)
+	bu_exit(EXIT_FAILURE,
+	    "full faceplate synchronization did not apply changed grid state\n");
 
     // Exercise the draw subcommand too: it stages grid state before the
     // endpoint provider applies the visibility property.

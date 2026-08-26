@@ -115,8 +115,11 @@ main(int ac, char *av[]) {
     char runtime_cache[MAXPATHLEN] = {0};
     bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, "ged_lod_test_cache", NULL);
     bu_mkdir(lcache);
-    bu_dir(runtime_cache, MAXPATHLEN, BU_DIR_CURR, "ged_lod_test_cache",
-	   "cache", NULL);
+    /* libbu owns and may clear BU_DIR_CACHE.  Keep it separate from the
+     * extracted APNG controls, otherwise a clean test can erase its own
+     * reference frames before the first comparison. */
+    bu_dir(runtime_cache, MAXPATHLEN, BU_DIR_CURR,
+	   "ged_lod_test_runtime_cache", NULL);
     bu_mkdir(runtime_cache);
     /* LoD cache clears must not erase extracted image controls. */
     bu_setenv("BU_DIR_CACHE", runtime_cache, 1);

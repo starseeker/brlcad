@@ -80,6 +80,9 @@ check_manifest(const BObolDrawManifest *manifest)
 	!fastf_equal(manifest->coverageBoundsMax[X], 400.0) ||
 	!fastf_equal(manifest->coverageBoundsMax[Y], 500.0) ||
 	!fastf_equal(manifest->coverageBoundsMax[Z], 600.0) ||
+	manifest->uniqueAssetCount != 2 ||
+	manifest->encodedSourceBytes != 6ULL * 1024ULL * 1024ULL ||
+	manifest->largestAssetBytes != 4ULL * 1024ULL * 1024ULL ||
 	!manifest->occurrences || !manifest->occurrences[0].path ||
 	!manifest->occurrences[0].sourceName ||
 	!manifest->occurrences[1].path ||
@@ -143,6 +146,9 @@ make_manifest(BObolDrawManifest *manifest)
     manifest->coverageBoundsValid = 1;
     VSET(manifest->coverageBoundsMin, -100.0, -200.0, -300.0);
     VSET(manifest->coverageBoundsMax, 400.0, 500.0, 600.0);
+    manifest->uniqueAssetCount = 2;
+    manifest->encodedSourceBytes = 6ULL * 1024ULL * 1024ULL;
+    manifest->largestAssetBytes = 4ULL * 1024ULL * 1024ULL;
     manifest->occurrenceCount = 2;
     manifest->occurrences = static_cast<BObolDrawManifestOccurrence *>(
 	bu_calloc(manifest->occurrenceCount, sizeof(*manifest->occurrences),
@@ -704,6 +710,9 @@ main(int argc, char *argv[])
 	    &manifestDescription) != BRLCAD_OK ||
 	!manifestDescription.coverageBoundsValid ||
 	manifestDescription.occurrenceCount != manifest.occurrenceCount ||
+	manifestDescription.uniqueAssetCount != manifest.uniqueAssetCount ||
+	manifestDescription.encodedSourceBytes != manifest.encodedSourceBytes ||
+	manifestDescription.largestAssetBytes != manifest.largestAssetBytes ||
 	manifestDescription.occurrences != NULL ||
 	!point_equal(manifestDescription.coverageBoundsMin,
 	    manifest.coverageBoundsMin) ||

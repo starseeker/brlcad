@@ -251,7 +251,10 @@ struct BOBOL_EXPORT BObolCompactInstanceSummary {
 struct BOBOL_EXPORT BObolCompactLodProviderSummary {
     BObolCompactLodProviderSummary(void);
 
-    std::weak_ptr<const BObolStagedSourceMesh> stagedSource;
+    /* One-shot strong handoff from a live source's bounded staging stream.
+     * Materializing this provider-only tail means task submission has already
+     * passed all cheap resident/shared/admission checks. */
+    std::shared_ptr<const BObolStagedSourceMesh> stagedSource;
     SbBool lodAvailable;
     int lodActiveCut;
     uint32_t lodFaceCount;
@@ -318,6 +321,7 @@ struct BOBOL_EXPORT BObolCompactLodPlanningSummary {
     uint64_t sourceContentHash;
     uint64_t sourceFaceCount;
     uint64_t sourcePointCount;
+    SbBool botSource;
     SbBool brepSource;
     double meshAssetTessellationAbsTol;
     double meshAssetTessellationRelTol;
@@ -558,6 +562,20 @@ struct BOBOL_EXPORT BObolCompactOccurrence {
     int booleanOperation;
 };
 
+/* Immutable aggregate metadata for one complete compact-source discovery.
+ * It is geometry-free: consumers may use it to bound planning work, but it
+ * never authorizes allocation or drawing by itself. */
+struct BOBOL_EXPORT BObolCompactSourceProfile {
+    BObolCompactSourceProfile(void);
+
+    SbBool valid;
+    uint64_t occurrenceCount;
+    uint64_t uniqueAssetCount;
+    uint64_t encodedSourceBytes;
+    uint64_t largestAssetBytes;
+    uint64_t reusedOccurrenceCount;
+};
+
 /** Lightweight, geometry-free persistence record for one authoritative
  * compact occurrence.  A progressive producer may be drained by the scene
  * owner before detached realization completes, so the producer retains this
@@ -625,8 +643,10 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
     /* Retain only the cache-persistent metadata for an authoritative leaf.
      * Repeated records with the same semantic path update the prior entry, as
      * happens when transformed-reuse proof enriches an already visible box.
-     * sealManifest succeeds only for one complete, source-backed population;
-     * takeManifest is unavailable until then and transfers the one-shot
+     * sealManifest succeeds only for one complete semantic population.  A
+     * mixed population may contain structural records for non-mesh leaves;
+     * warm consumers independently decide whether that seed is terminal.
+     * takeManifest is unavailable until sealing and transfers the one-shot
      * journal to its persistence callback without a second large copy. */
     void recordManifestOccurrence(const BObolCompactOccurrence &occurrence);
     bool sealManifest(size_t expectedCount);
@@ -634,14 +654,23 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
 	std::vector<BObolCompactManifestOccurrence> &occurrences);
     /* Retain a bounded LRU window of full cold imports long enough for the
      * first view-selected LoD task to reuse them.  Occurrences hold weak
-     * references, so compact scene state cannot prolong these leases. */
+     * references; the live source may retain this stream across terminal
+     * realization adoption until a provider claims the matching import. */
     SbBool retainStagedSource(
 	const std::shared_ptr<const BObolStagedSourceMesh> &source);
+    /* Transfer one retained import into a provider.  The returned shared
+     * pointer is the new owner and the stream's staging-budget charge ends.
+     * A weak request which is absent, stale, or already claimed returns an
+     * empty pointer. */
+    std::shared_ptr<const BObolStagedSourceMesh> claimStagedSource(
+	const std::weak_ptr<const BObolStagedSourceMesh> &source);
     size_t stagedSourceByteCount(void);
     size_t drain(std::vector<BObolCompactOccurrence> &out, size_t cap);
     size_t size(void);
     void setExpectedCount(size_t count);
     size_t getExpectedCount(void) const;
+    void setSourceProfile(const BObolCompactSourceProfile &profile);
+    SbBool getSourceProfile(BObolCompactSourceProfile &profile) const;
     void setWarmCoverageComplete(bool complete);
     bool hasWarmCoverageComplete(void) const;
     /* Publish/query the source-local extent of the draw target.  An early
@@ -984,7 +1013,9 @@ public:
     /* Transfer a completed detached compact registry into this live source.
      * Call only on the live source's owner thread. */
     int adoptDetachedCompactRealization(SoBRLDatabaseSource *detached,
-	SbBool authoritativeStreamDrained = FALSE);
+	SbBool authoritativeStreamDrained = FALSE,
+	const std::shared_ptr<BObolCompactOccurrenceStream> &stagedSourceStream =
+	    std::shared_ptr<BObolCompactOccurrenceStream>());
     int retargetDatabaseSource(const char *sourcePath,
 	uint32_t revision);
     int retargetDatabaseSourceInstance(const char *sourceInstanceKey,
@@ -1158,13 +1189,18 @@ public:
     int mergeCompactOccurrences(
 	const std::vector<BObolCompactOccurrence> &occurrences,
 	SbBool authoritativeGeometry = FALSE);
-    /* Capacity-only hint for a known streaming epoch. */
+    /** Reserve storage and certify the exact leaf count for the active
+     * streaming epoch.  The count excludes any temporary whole-target
+     * overview; reaching it permits that overview to retire after the leaf
+     * frontier has been presented. */
     void reserveCompactOccurrenceCapacity(size_t expectedCount);
     /** Expected leaf occurrence population for the active streaming epoch.
      * This is a progress denominator, not a residency requirement: a
      * view-dependent terminal state may intentionally retain mesh payloads
      * for only a visible subset. */
     size_t getCompactExpectedInstanceCount(void) const;
+    SbBool getCompactSourceProfile(BObolCompactSourceProfile &profile) const;
+    void setCompactSourceProfile(const BObolCompactSourceProfile &profile);
     /** Resolve a stable compact occurrence identity to its source-local entry
      * index in expected O(1) time.  Used by retained view work frontiers; it
      * does not expose or pin the underlying registry storage. */
@@ -1438,6 +1474,7 @@ private:
     int reapplyCompactInstanceSelectedPaths(size_t firstEntry = 0);
     int reapplyCompactInstancePresentationOverrides(size_t firstEntry = 0);
     void syncCompactInstancePlacementState(void);
+    void retireCompactOverviewAfterPresentation(SoBRLCadAssembly *assembly);
     void seedCompactRealizationCache(
 	BObolDatabaseSourceRealizationCache *cache) const;
     void clearCompiledAssembly(void);

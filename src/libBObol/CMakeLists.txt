@@ -28,7 +28,9 @@ set(
   input.cpp
   init.cpp
   line_layer_overlay.cpp
+  lod_control_private.h
   lod_coordinator_private.h
+  lod_quiet_successor_private.h
   retained_allocation_private.cpp
   retained_allocation_private.h
   lod_realization.cpp

@@ -29,6 +29,25 @@ test_priority_and_state(void)
 {
     BObolCompactOccurrenceStream stream;
     stream.setExpectedCount(100000);
+    BObolCompactSourceProfile profile;
+    profile.valid = TRUE;
+    profile.occurrenceCount = 100000;
+    profile.uniqueAssetCount = 25000;
+    profile.encodedSourceBytes = 64ULL * 1024ULL * 1024ULL;
+    profile.largestAssetBytes = 4ULL * 1024ULL * 1024ULL;
+    profile.reusedOccurrenceCount = 75000;
+    stream.setSourceProfile(profile);
+    BObolCompactSourceProfile observedProfile;
+    if (!stream.getSourceProfile(observedProfile) ||
+	observedProfile.occurrenceCount != profile.occurrenceCount ||
+	observedProfile.uniqueAssetCount != profile.uniqueAssetCount ||
+	observedProfile.encodedSourceBytes != profile.encodedSourceBytes ||
+	observedProfile.largestAssetBytes != profile.largestAssetBytes ||
+	observedProfile.reusedOccurrenceCount !=
+	    profile.reusedOccurrenceCount) {
+	std::fprintf(stderr, "FAIL: immutable source profile publication\n");
+	return 1;
+    }
     stream.setWarmCoverageComplete(true);
     const SbBox3f conservativeBounds(SbVec3f(-20.0f, -30.0f, -40.0f),
 	SbVec3f(50.0f, 60.0f, 70.0f));

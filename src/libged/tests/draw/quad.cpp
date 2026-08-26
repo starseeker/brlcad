@@ -587,10 +587,11 @@ main(int ac, char *av[]) {
     s_av[0] = "draw";
     s_av[1] = "-V";
     s_av[2] = "V1";
-    s_av[3] = "-m0";
-    s_av[4] = "all.g";
-    s_av[5] = NULL;
-    ged_exec_draw(gedp, 5, s_av);
+    s_av[3] = "-R";
+    s_av[4] = "-m0";
+    s_av[5] = "all.g";
+    s_av[6] = NULL;
+    ged_exec_draw(gedp, 6, s_av);
 
     ret += img_cmp(0, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 1, gedp, lcache, false, soft_fail);
@@ -601,10 +602,11 @@ main(int ac, char *av[]) {
     s_av[0] = "draw";
     s_av[1] = "-V";
     s_av[2] = "V0";
-    s_av[3] = "-m0";
-    s_av[4] = "all.g";
-    s_av[5] = NULL;
-    ged_exec_draw(gedp, 5, s_av);
+    s_av[3] = "-R";
+    s_av[4] = "-m0";
+    s_av[5] = "all.g";
+    s_av[6] = NULL;
+    ged_exec_draw(gedp, 6, s_av);
 
     ret += img_cmp(0, 1, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 1, gedp, lcache, false, soft_fail);
@@ -615,10 +617,11 @@ main(int ac, char *av[]) {
     s_av[0] = "draw";
     s_av[1] = "-V";
     s_av[2] = "V3";
-    s_av[3] = "-m0";
-    s_av[4] = "all.g";
-    s_av[5] = NULL;
-    ged_exec_draw(gedp, 5, s_av);
+    s_av[3] = "-R";
+    s_av[4] = "-m0";
+    s_av[5] = "all.g";
+    s_av[6] = NULL;
+    ged_exec_draw(gedp, 6, s_av);
 
     ret += img_cmp(0, 1, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 1, gedp, lcache, false, soft_fail);
@@ -629,10 +632,11 @@ main(int ac, char *av[]) {
     s_av[0] = "draw";
     s_av[1] = "-V";
     s_av[2] = "V2";
-    s_av[3] = "-m0";
-    s_av[4] = "all.g";
-    s_av[5] = NULL;
-    ged_exec_draw(gedp, 5, s_av);
+    s_av[3] = "-R";
+    s_av[4] = "-m0";
+    s_av[5] = "all.g";
+    s_av[6] = NULL;
+    ged_exec_draw(gedp, 6, s_av);
 
     ret += img_cmp(0, 1, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 1, gedp, lcache, false, soft_fail);
@@ -1029,10 +1033,11 @@ main(int ac, char *av[]) {
     // This should result in the non-independent views being
     // populated.
     s_av[0] = "draw";
-    s_av[1] = "-m0";
-    s_av[2] = "all.g";
-    s_av[3] = NULL;
-    ged_exec_draw(gedp, 3, s_av);
+    s_av[1] = "-R";
+    s_av[2] = "-m0";
+    s_av[3] = "all.g";
+    s_av[4] = NULL;
+    ged_exec_draw(gedp, 4, s_av);
 
     ret += img_cmp(0, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 1, gedp, lcache, false, soft_fail);
@@ -1043,10 +1048,11 @@ main(int ac, char *av[]) {
     s_av[0] = "draw";
     s_av[1] = "-V";
     s_av[2] = "V0";
-    s_av[3] = "-m0";
-    s_av[4] = "all.g";
-    s_av[5] = NULL;
-    ged_exec_draw(gedp, 5, s_av);
+    s_av[3] = "-R";
+    s_av[4] = "-m0";
+    s_av[5] = "all.g";
+    s_av[6] = NULL;
+    ged_exec_draw(gedp, 6, s_av);
 
     ret += img_cmp(0, 1, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 1, gedp, lcache, false, soft_fail);
@@ -1072,10 +1078,11 @@ main(int ac, char *av[]) {
     s_av[0] = "draw";
     s_av[1] = "-V";
     s_av[2] = "V1";
-    s_av[3] = "-m0";
-    s_av[4] = "all.g";
-    s_av[5] = NULL;
-    ged_exec_draw(gedp, 5, s_av);
+    s_av[3] = "-R";
+    s_av[4] = "-m0";
+    s_av[5] = "all.g";
+    s_av[6] = NULL;
+    ged_exec_draw(gedp, 6, s_av);
 
     ret += img_cmp(0, 1, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, -1, gedp, lcache, false, soft_fail);

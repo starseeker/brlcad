@@ -18,6 +18,7 @@
 #include "BObol/BMeshLodCache.h"
 
 #include "database_source_realization.h"
+#include "lod_coordinator_private.h"
 
 #include "raytrace.h"
 #include "rt/db_io.h"
@@ -91,6 +92,7 @@ BObolMeshLodProvider::clear(void)
     generation = 0;
     databaseLease.reset();
     stagedSource.reset();
+    useSerializedSpatialSource = FALSE;
     meshAssetContentHash = 0;
     generateBrepVariant = FALSE;
     brepTessellationAbsTol = 0.0;
@@ -108,6 +110,7 @@ BObolMeshLodProvider::clear(void)
     currentDrawCut = -1;
     useDeliveryCutLimit = FALSE;
     deliveryCutLimit = -1;
+    transientMemoryLimited = FALSE;
     usePresentationCutLimit = FALSE;
     presentationCutLimit = -1;
     atomicRepresentationHandoff = FALSE;
@@ -537,6 +540,14 @@ lod_provider_param(const BObolLodRequest &request, const char *name)
     return found;
 }
 
+static SbBool
+lod_provider_param_enabled(const BObolLodRequest &request, const char *name)
+{
+    const BObolLodProviderParam *param = lod_provider_param(request, name);
+    return param && BU_STR_EQUAL(param->value.getString(), "1") ?
+	TRUE : FALSE;
+}
+
 static void
 lod_remove_source_query_provider_params(BObolLodRequest &request)
 {
@@ -762,6 +773,45 @@ lod_source_full_detail_payload_result(const BObolLodRequest &request,
     result.geometry.borrowed = FALSE;
 
     result.bounds.makeEmpty();
+    if (!useQueryBounds && !useQueryRay &&
+	lod_provider_param_enabled(request,
+	    BOBOL_LOD_PREPARED_CAD_ONLY_PARAM)) {
+	result.preparedCadGeometry =
+	    bobol_database_bot_part_geometry(bot, request.drawMode);
+	if (!result.preparedCadGeometry) {
+	    result.geometry.clear();
+	    result.resultKind = BOBOL_LOD_RESULT_NONE;
+	    result.providerStatus = BOBOL_LOD_PROVIDER_ERROR;
+	    result.diagnostic =
+		"RT source full-detail provider could not prepare CAD geometry";
+	    return result;
+	}
+	result.preparedCadGeometryRevision = 1;
+	result.geometry.cacheKey = bobol_lod_geometry_cache_key(request);
+	result.cacheKey = bobol_lod_cache_key(request);
+	result.bounds = request.bounds;
+	result.counts.faceCount = bot->num_faces;
+	result.counts.originalPointCount = bot->num_vertices;
+	if (result.preparedCadGeometry->shaded) {
+	    const Obol::TriMesh &mesh =
+		*result.preparedCadGeometry->shaded;
+	    result.bounds = mesh.bounds;
+	    result.counts.pointCount = mesh.positions.size();
+	    result.counts.normalCount = mesh.normals.size();
+	    result.hasNormals = mesh.normals.empty() ? FALSE : TRUE;
+	} else if (result.preparedCadGeometry->wire) {
+	    const Obol::WireRep &wire = *result.preparedCadGeometry->wire;
+	    result.bounds = wire.bounds;
+	    result.counts.pointCount = bot->num_vertices;
+	    result.counts.lineCount = wire.segmentCount();
+	}
+	result.counts.byteCount =
+	    bobol_database_part_geometry_estimate_bytes(
+		*result.preparedCadGeometry);
+	result.shadedCullBackfaces =
+	    result.preparedCadGeometry->shadedCullBackfaces ? TRUE : FALSE;
+	return result;
+    }
     try {
 	std::vector<SbVec3f> sourcePoints;
 	sourcePoints.reserve(bot->num_vertices);
@@ -969,6 +1019,7 @@ bobol_rt_source_full_detail_provider_task(
     BObolLodResult result =
 	lod_source_full_detail_payload_result(request, bot);
     if (result.providerStatus == BOBOL_LOD_PROVIDER_READY &&
+	!result.preparedCadGeometry &&
 	lod_source_full_detail_exceeds_limits(provider,
 		result.counts.faceCount, result.counts.pointCount)) {
 	result.mesh.clear();
@@ -1521,19 +1572,18 @@ lod_global_working_set_governor(void)
     return governor;
 }
 
-void
+SbBool
 bobol_lod_working_set_acquire(size_t estimatedBytes)
 {
     if (!estimatedBytes)
-	return;
+	return TRUE;
     BObolGlobalWorkingSetGovernor &governor =
 	lod_global_working_set_governor();
     std::unique_lock<std::mutex> lock(governor.mutex);
+    if (governor.limit != SIZE_MAX && estimatedBytes > governor.limit)
+	return FALSE;
     governor.cv.wait(lock, [&]() {
 	if (governor.limit == SIZE_MAX)
-	    return true;
-	/* An exceptional single mesh still has to make progress. */
-	if (governor.activeBytes == 0)
 	    return true;
 	const size_t occupied = std::min(governor.activeBytes,
 	    governor.limit);
@@ -1547,6 +1597,7 @@ bobol_lod_working_set_acquire(size_t estimatedBytes)
 	governor.activeBytes);
     governor.peakTasks = std::max(governor.peakTasks,
 	governor.activeTasks);
+    return TRUE;
 }
 
 void
@@ -1637,6 +1688,11 @@ struct BObolResidentMeshAsset {
     BObolLodProgressiveMeshPtr mesh;
     struct BObolMeshLodCacheStatus status =
 	BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    /* A source-limited spatial build owns complete whole-object coverage plus
+     * any locally validated pages here.  The result queue only borrows shared
+     * immutable geometry; retaining ownership at the asset level prevents a
+     * later view request from falling back to an empty page set. */
+    std::vector<BObolLodPresentationLayer> limitedSpatialLayers;
     /* Planner-side summaries avoid retaining every immutable source
      * generation merely to decide whether a stable trim is necessary. */
     std::atomic<int> publishedMinimumCut;
@@ -1660,10 +1716,20 @@ struct BObolResidentMeshDemandValue {
     int cut = -1;
     unsigned int channelMask = 0;
     std::vector<uint32_t> chunkIds;
+
+    bool operator==(const BObolResidentMeshDemandValue &other) const
+    {
+	return cut == other.cut && channelMask == other.channelMask &&
+	    chunkIds == other.chunkIds;
+    }
 };
 
 struct BObolResidentMeshConsumerDemand {
     uint64_t revision = 0;
+    /* assets describe revision only while these values match.  Separating
+     * observed revision from snapshot revision makes invalidation O(1)
+     * without pretending the prior asset map is current. */
+    uint64_t snapshotRevision = 0;
     // Resident-asset mutation epoch for which this snapshot was fully
     // compacted.  Zero means the snapshot was recorded while workers were
     // active and must be retried.
@@ -1671,6 +1737,9 @@ struct BObolResidentMeshConsumerDemand {
     std::unordered_map<std::string, BObolResidentMeshDemandValue> assets;
     size_t planningCursor = 0;
     size_t planningProjectedResidentBytes = 0;
+    size_t planningCandidateCount = 0;
+    size_t completedCandidateCount = 0;
+    uint64_t completedPlanRevision = 0;
     uint64_t planningResidentRevision = 0;
     SbBool planning = FALSE;
 };
@@ -1683,6 +1752,7 @@ struct BObolResidentMeshCompactionTarget {
     std::vector<BObolLodChunkCut> chunkCuts;
     SbBool evict = FALSE;
     uint64_t useRevision = 0;
+    uint64_t demandEpoch = 0;
     uint64_t revision = 0;
 };
 
@@ -1863,6 +1933,7 @@ struct BObolLodServicePrivate {
     std::unordered_set<std::string> residentMeshCompactionQueuedAssets;
     std::unordered_map<std::string, BObolResidentMeshCompactionTarget>
 	residentMeshCompactionTargets;
+    uint64_t residentMeshDemandEpoch = 1;
     uint64_t nextResidentMeshCompactionTargetRevision = 1;
     std::unordered_map<uint64_t,
 	std::deque<BObolLodResidentCompaction>>
@@ -1912,6 +1983,40 @@ lod_resident_mesh_revision_advance(std::atomic<uint64_t> &revision)
     uint64_t next = revision.fetch_add(1, std::memory_order_relaxed) + 1;
     if (!next)
 	revision.store(1, std::memory_order_relaxed);
+}
+
+static bool
+lod_resident_consumer_snapshot_current(
+    const BObolResidentMeshConsumerDemand &consumer)
+{
+    return consumer.revision != 0 &&
+	consumer.snapshotRevision == consumer.revision;
+}
+
+static void
+lod_resident_demand_epoch_advance(BObolLodServicePrivate *p)
+{
+    if (!p)
+	return;
+    p->residentMeshDemandEpoch++;
+    if (!p->residentMeshDemandEpoch)
+	p->residentMeshDemandEpoch++;
+}
+
+static void
+lod_discard_resident_compaction_results_unlocked(
+    BObolLodServicePrivate *p, uint64_t consumerId)
+{
+    if (!p || !consumerId)
+	return;
+    const auto found = p->residentMeshCompactionResults.find(consumerId);
+    if (found == p->residentMeshCompactionResults.end())
+	return;
+    const size_t count = found->second.size();
+    p->residentMeshCompactionResultCount =
+	count >= p->residentMeshCompactionResultCount ?
+	0 : p->residentMeshCompactionResultCount - count;
+    p->residentMeshCompactionResults.erase(found);
 }
 
 static size_t
@@ -1992,8 +2097,17 @@ public:
 	if (!p || desiredCut < hierarchy.min_cut)
 	    return desiredCut;
 	desiredCut = std::min(desiredCut, hierarchy.max_cut);
-	if (publishedCut >= desiredCut)
+	if (publishedCut >= desiredCut) {
+	    /* This is still an admission decision.  A transient working-set cap
+	     * can deliberately present a poorer cut from an already-richer
+	     * immutable resident mesh.  Its terminal result must carry the current
+	     * capacity epoch, or the owner cannot distinguish a durable denial from
+	     * an unstamped result and will resubmit the identical no-load task on
+	     * every pump. */
+	    decisionRevision = p->residentMeshAdmissionRevision.load(
+		std::memory_order_relaxed);
 	    return desiredCut;
+	}
 
 	const int floorCut = publishedCut >= hierarchy.min_cut ?
 	    publishedCut : hierarchy.min_cut;
@@ -2089,8 +2203,20 @@ lod_resident_asset_bytes(const BObolResidentMeshAsset &resident)
 	resident.mesh ? resident.mesh->estimateBytes() : 0;
     const size_t backingBytes =
 	bobol_mesh_lod_resident_bytes(resident.lod);
-    return backingBytes > SIZE_MAX - meshBytes ?
+    size_t bytes = backingBytes > SIZE_MAX - meshBytes ?
 	SIZE_MAX : meshBytes + backingBytes;
+    std::unordered_set<const Obol::PartGeometry *> countedGeometry;
+    for (const BObolLodPresentationLayer &layer :
+	 resident.limitedSpatialLayers) {
+	if (!layer.geometry ||
+	    !countedGeometry.emplace(layer.geometry.get()).second)
+	    continue;
+	const size_t geometryBytes =
+	    bobol_database_part_geometry_estimate_bytes(*layer.geometry);
+	bytes = geometryBytes > SIZE_MAX - bytes ?
+	    SIZE_MAX : bytes + geometryBytes;
+    }
+    return bytes;
 }
 
 static SbBool
@@ -2200,11 +2326,14 @@ lod_request_active_key(const BObolLodRequest &request)
      * completion wakes the bounded planner, which then submits the newest
      * demand if the resident high-water mark is still insufficient.
      *
-     * Compact occurrences remain distinct consumers: until the service has
-     * explicit result fan-out, coalescing siblings here would publish the
-     * shared mesh to only one occurrence and strand the others at boxes. */
+     * Compact occurrences remain distinct consumers.  For an explicitly
+     * asset-coalesced request, the owner-thread planner binds siblings from
+     * the published resident asset (or submits their still-missing spatial
+     * pages) after this producer completes.  This serializes expensive cold
+     * hierarchy construction without conflating occurrence presentation. */
     SbString key = bobol_lod_geometry_cache_key(request).value;
-    if (request.occurrenceKey.getLength() > 0) {
+    if (request.occurrenceKey.getLength() > 0 &&
+	!request.coalesceAssetProducer) {
 	key += "|occurrence=";
 	key += request.occurrenceKey;
     }
@@ -2469,15 +2598,30 @@ lod_raw_import_fits_address_space(const BObolLodRequest &request)
 #endif
 }
 
-/* The spatial producer is intentionally opt-in while its cold large-model
- * behavior is qualified.  Its source is the validated serialized V5 stream,
- * so an explicit request must select that path before native import allocates
- * the full BoT arrays. */
-static bool
-lod_spatial_leaf_source_requested(void)
+SbBool
+bobol_lod_spatial_source_enabled(const BObolLodRequest &request,
+	size_t workingSetLimit)
 {
     const char *requested = getenv("BOBOL_LOD_SPATIAL_LEAVES");
-    return requested && requested[0];
+    if (requested && requested[0])
+	return BU_STR_EQUAL(requested, "0") ? FALSE : TRUE;
+    if (workingSetLimit == SIZE_MAX)
+	return FALSE;
+    BObolLodTask estimateTask;
+    estimateTask.request = request;
+    return lod_task_estimated_working_set_bytes(estimateTask) >
+	workingSetLimit ? TRUE : FALSE;
+}
+
+size_t
+bobol_lod_spatial_task_working_set_bytes(void)
+{
+    /* One 64K-face page owns bounded local vertex maps, cumulative page
+     * arrays, immutable publication geometry, and at most 64 MiB of live
+     * cache spill.  Reserve substantial allocator/hash-table headroom while
+     * remaining well below the ordinary 1 GiB service ceiling. */
+    static const size_t bytes = 256ULL * 1024ULL * 1024ULL;
+    return bytes;
 }
 
 static SbBool
@@ -2489,8 +2633,9 @@ lod_task_working_set_available(const BObolLodServicePrivate *p,
     const size_t estimate = lod_task_estimated_working_set_bytes(task);
     if (!estimate)
 	return TRUE;
-    /* An exceptional task larger than the cap must still make progress, but
-     * it runs alone. */
+    /* Let an oversized task reach the worker only so it can publish the
+     * bounded terminal constraint there.  The worker must not invoke its
+     * provider or charge an impossible reservation. */
     if (p->activeWorkingSetBytes == 0)
 	return TRUE;
     const size_t occupied = std::min(
@@ -2871,6 +3016,8 @@ lod_take_resident_compaction_unlocked(
 
     candidate.consumers.clear();
     for (const auto &consumer : p->residentMeshConsumerDemands) {
+	if (!lod_resident_consumer_snapshot_current(consumer.second))
+	    continue;
 	if (consumer.second.assets.find(candidate.assetKey) !=
 	    consumer.second.assets.end())
 	    candidate.consumers.push_back(consumer.first);
@@ -2886,8 +3033,11 @@ lod_take_resident_compaction_unlocked(
 
     const auto target = p->residentMeshCompactionTargets.find(
 	candidate.assetKey);
-    if (target == p->residentMeshCompactionTargets.end()) {
+    if (target == p->residentMeshCompactionTargets.end() ||
+	target->second.demandEpoch != p->residentMeshDemandEpoch) {
 	p->residentMeshCompactionQueuedAssets.erase(candidate.assetKey);
+	if (target != p->residentMeshCompactionTargets.end())
+	    p->residentMeshCompactionTargets.erase(target);
 	p->residentMeshCompactionWork.pop_front();
 	return FALSE;
     }
@@ -2928,6 +3078,7 @@ lod_execute_resident_compaction(
 	const auto found =
 	    p->residentMeshCompactionTargets.find(work.assetKey);
 	return found != p->residentMeshCompactionTargets.end() &&
+	    found->second.demandEpoch == p->residentMeshDemandEpoch &&
 	    found->second.revision == work.target.revision &&
 	    found->second.useRevision == work.target.useRevision &&
 	    found->second.cut == work.target.cut &&
@@ -2945,10 +3096,13 @@ lod_execute_resident_compaction(
 	    resident->useRevision.load(std::memory_order_relaxed) !=
 		work.target.useRevision)
 	    return result;
-	for (const auto &consumer : p->residentMeshConsumerDemands)
+	for (const auto &consumer : p->residentMeshConsumerDemands) {
+	    if (!lod_resident_consumer_snapshot_current(consumer.second))
+		continue;
 	    if (consumer.second.assets.find(work.assetKey) !=
 		    consumer.second.assets.end())
 		return result;
+	}
 	const auto found = p->residentMeshes.find(work.assetKey);
 	if (found == p->residentMeshes.end() || found->second != resident)
 	    return result;
@@ -3140,16 +3294,31 @@ lod_execute_resident_compaction(
 	    BOBOL_LOD_DRAW_HIDDEN_LINE :
 	    (result.channelMask & 1u ?
 		BOBOL_LOD_DRAW_WIRE : BOBOL_LOD_DRAW_SHADED);
-	result.preparedCadGeometry = mesh->prepareCadGeometry(
-	    drawMode, &result.preparedCadGeometryRevision);
+	if (work.target.chunkCuts.empty()) {
+	    result.preparedCadGeometry = mesh->prepareCadGeometry(
+		drawMode, &result.preparedCadGeometryRevision);
+	} else {
+	    for (const BObolLodChunkCut &chunk : work.target.chunkCuts) {
+		std::vector<BObolLodPresentationLayer> page;
+		if (!mesh->prepareCadPresentationLayers(
+			drawMode, {chunk.chunkId}, chunk.cut, page) ||
+		    page.size() != 1) {
+		    result.presentationLayers.clear();
+		    break;
+		}
+		result.presentationLayers.push_back(std::move(page.front()));
+	    }
+	}
     }
     if (getenv("BOBOL_LOD_TRACE_COMPACTION")) {
 	std::vector<BObolLodChunkCut> retained;
 	mesh->residentChunkCuts(retained);
-	std::vector<uint32_t> demandedChunks;
-	demandedChunks.reserve(work.target.chunkCuts.size());
-	for (const BObolLodChunkCut &chunk : work.target.chunkCuts)
-	    demandedChunks.push_back(chunk.chunkId);
+	SbBool demandedWorkingSetDrawable = TRUE;
+	for (const BObolLodChunkCut &chunk : work.target.chunkCuts) {
+	    const std::vector<uint32_t> oneChunk = {chunk.chunkId};
+	    if (!mesh->canDrawChunksAtCut(oneChunk, chunk.cut))
+		demandedWorkingSetDrawable = FALSE;
+	}
 	size_t preparedFaces = 0;
 	if (result.preparedCadGeometry &&
 	    result.preparedCadGeometry->shaded) {
@@ -3160,13 +3329,18 @@ lod_execute_resident_compaction(
 		    if (range.activationCut <= preparedTargetCut)
 			preparedFaces += range.indexCount / 3;
 	}
+	for (const BObolLodPresentationLayer &layer :
+		result.presentationLayers)
+	    if (layer.geometry && layer.geometry->shaded)
+		preparedFaces += layer.geometry->shaded->indexCountAtCut(
+		    static_cast<uint8_t>(std::max(0, layer.activeCut))) / 3;
 	bu_log("BObol resident compaction publish asset=%s cut=%d "
 	       "target_chunks=%zu retained_chunks=%zu drawable=%d "
 	       "revision=%llu prepared_revision=%llu prepared_faces=%zu\n",
 	       work.assetKey.c_str(), targetCut, work.target.chunkCuts.size(),
 	       retained.size(),
-	       demandedChunks.empty() ? 0 :
-		   (mesh->canDrawChunksAtCut(demandedChunks, targetCut) ? 1 : 0),
+	       work.target.chunkCuts.empty() ? 0 :
+		   (demandedWorkingSetDrawable ? 1 : 0),
 	       static_cast<unsigned long long>(mesh->revision()),
 	       static_cast<unsigned long long>(
 		   result.preparedCadGeometryRevision),
@@ -3230,10 +3404,13 @@ lod_finish_resident_compaction(
 	if (completed && !p->stopping) {
 	    const size_t resultCountBefore =
 		p->residentMeshCompactionResultCount;
-	    for (uint64_t consumerId : work.consumers) {
+	for (uint64_t consumerId : work.consumers) {
 		const auto consumer =
 		    p->residentMeshConsumerDemands.find(consumerId);
 		if (consumer == p->residentMeshConsumerDemands.end())
+		    continue;
+		if (!lod_resident_consumer_snapshot_current(
+			consumer->second))
 		    continue;
 		const auto demand =
 		    consumer->second.assets.find(work.assetKey);
@@ -3246,8 +3423,11 @@ lod_finish_resident_compaction(
 		    (demand->second.cut <= result.residentCut ? TRUE : FALSE);
 		if (!demandDrawable)
 		    continue;
+		BObolLodResidentCompaction consumerResult = result;
+		consumerResult.consumerDemandRevision =
+		    consumer->second.revision;
 		p->residentMeshCompactionResults[consumerId].push_back(
-		    result);
+		    std::move(consumerResult));
 		p->residentMeshCompactionResultCount++;
 	    }
 	    notifyResultReady =
@@ -3308,9 +3488,17 @@ lod_worker_loop(BObolLodServicePrivate *p)
 		    lod_pending_quality_remove(p, qualityTier);
 	    const size_t workingBytes =
 		lod_task_estimated_working_set_bytes(item.task);
+	    /* Let a known-over-limit task leave the queue and publish an explicit
+	     * terminal constraint below.  Charging it to the active tally would
+	     * falsely report an impossible reservation and can block unrelated
+	     * affordable work while no provider has started. */
+	    const bool exceedsServiceLimit =
+		p->maxActiveWorkingSetBytes != SIZE_MAX &&
+		workingBytes > p->maxActiveWorkingSetBytes;
+	    const size_t accountedBytes = exceedsServiceLimit ? 0 : workingBytes;
 	    p->activeWorkingSetBytes =
-		workingBytes > SIZE_MAX - p->activeWorkingSetBytes ?
-		SIZE_MAX : p->activeWorkingSetBytes + workingBytes;
+		accountedBytes > SIZE_MAX - p->activeWorkingSetBytes ?
+		SIZE_MAX : p->activeWorkingSetBytes + accountedBytes;
 	    p->executingTasks++;
 	    p->peakWorkingSetBytes = std::max(
 		p->peakWorkingSetBytes, p->activeWorkingSetBytes);
@@ -3320,22 +3508,36 @@ lod_worker_loop(BObolLodServicePrivate *p)
 	}
 
 	if (runCompaction) {
-	    bobol_lod_working_set_acquire(
+	    const SbBool admitted = bobol_lod_working_set_acquire(
 		compaction.estimatedWorkingSetBytes);
-	    BObolLodResidentCompaction result =
-		lod_execute_resident_compaction(p, compaction);
+	    BObolLodResidentCompaction result;
+	    if (admitted)
+		result = lod_execute_resident_compaction(p, compaction);
 	    lod_finish_resident_compaction(
 		p, compaction, std::move(result));
-	    bobol_lod_working_set_release(
-		compaction.estimatedWorkingSetBytes);
+	    if (admitted)
+		bobol_lod_working_set_release(
+		    compaction.estimatedWorkingSetBytes);
 	    continue;
 	}
 
-	bobol_lod_working_set_acquire(
-	    lod_task_estimated_working_set_bytes(item.task));
-	BObolLodResult result = lod_execute_task(p, item.task);
+	const size_t estimatedBytes =
+	    lod_task_estimated_working_set_bytes(item.task);
+	const bool exceedsServiceLimit =
+	    p->maxActiveWorkingSetBytes != SIZE_MAX &&
+	    estimatedBytes > p->maxActiveWorkingSetBytes;
+	const SbBool admitted = !exceedsServiceLimit &&
+	    bobol_lod_working_set_acquire(estimatedBytes);
+	BObolLodResult result = admitted ?
+	    lod_execute_task(p, item.task) :
+	    lod_service_status_result(item.task, BOBOL_LOD_PROVIDER_ERROR,
+		exceedsServiceLimit ?
+		"LoD task exceeds service transient working-set limit" :
+		"LoD task exceeds process transient working-set limit");
 	lod_finish_task(p, item, std::move(result));
 	lod_task_free_realize_data(item.task);
+	if (admitted)
+	    bobol_lod_working_set_release(estimatedBytes);
     }
 }
 
@@ -3519,6 +3721,7 @@ BObolLodService::stop(void)
 	this->p->residentMeshCompactionWork.clear();
 	this->p->residentMeshCompactionQueuedAssets.clear();
 	this->p->residentMeshCompactionTargets.clear();
+	this->p->residentMeshDemandEpoch = 1;
 	this->p->residentMeshCompactionResults.clear();
 	this->p->residentMeshCompactionsInFlight = 0;
 	this->p->residentMeshCompactionResultCount = 0;
@@ -3635,42 +3838,561 @@ struct BObolColdMeshPreviewContext {
     BObolLodRequest request;
     BObolLodCacheKey assetKey;
     BObolLodProgressiveMeshPtr progressiveMesh;
+    /* The submit action partitions one scene-wide first-pass allowance
+     * between tasks.  A cold cache callback runs before the ordinary result
+     * path, so it must carry that same per-task share explicitly rather than
+     * treating a hierarchy minimum as a free preview. */
+    size_t renderCostAllowance = 0;
+    std::vector<BObolLodPresentationLayer> presentationLayers;
+    size_t presentationRenderCost = 0;
+    size_t publishedPageCount = 0;
+    SbBool spatialLeafProducer = FALSE;
+    SbBool spatialCoverageAdmitted = FALSE;
 };
+
+/* Page callbacks are synchronous on the cold producer worker.  Publishing
+ * every completed page would copy an ever-growing descriptor vector and
+ * wake the owner thread O(page_count) times.  Preserve immediate first-page
+ * feedback, then amortize later publication into bounded waves. */
+static constexpr size_t lod_cold_spatial_publication_page_batch = 8;
+
+static BObolLodCounts
+lod_cad_geometry_counts(const Obol::PartGeometry &geometry)
+{
+    BObolLodCounts counts;
+    if (geometry.shaded) {
+	counts.faceCount = geometry.shaded->indices.size() / 3u;
+	counts.pointCount = geometry.shaded->positions.size();
+	counts.originalPointCount = counts.pointCount;
+	counts.normalCount = geometry.shaded->normals.size();
+    }
+    if (geometry.wire)
+	counts.lineCount = geometry.wire->segmentCount();
+    if (geometry.points)
+	counts.pointCount += geometry.points->positions.size();
+    return counts;
+}
+
+static void
+lod_counts_accumulate(BObolLodCounts &total,
+    const BObolLodCounts &addition)
+{
+    const auto add = [](uint64_t left, uint64_t right) {
+	return right > UINT64_MAX - left ? UINT64_MAX : left + right;
+    };
+    total.faceCount = add(total.faceCount, addition.faceCount);
+    total.pointCount = add(total.pointCount, addition.pointCount);
+    total.originalPointCount = add(total.originalPointCount,
+	addition.originalPointCount);
+    total.normalCount = add(total.normalCount, addition.normalCount);
+    total.lineCount = add(total.lineCount, addition.lineCount);
+    total.byteCount = add(total.byteCount, addition.byteCount);
+}
+
+static void
+lod_use_limited_spatial_layers(BObolLodResult &result,
+    const std::vector<BObolLodPresentationLayer> &layers)
+{
+    result.presentationLayers = layers;
+    result.preparedCadGeometry.reset();
+    result.preparedCadGeometryRevision = 0;
+    result.counts.clear();
+    for (const BObolLodPresentationLayer &layer : result.presentationLayers) {
+	result.geometry.activeCut = std::max(
+	    result.geometry.activeCut, layer.activeCut);
+	result.residentCut = std::max(result.residentCut, layer.activeCut);
+	if (layer.geometry)
+	    lod_counts_accumulate(result.counts,
+		lod_cad_geometry_counts(*layer.geometry));
+    }
+}
+
+static int
+lod_cold_mesh_preview_cancelled(void *callbackData)
+{
+    const BObolColdMeshPreviewContext *context =
+	static_cast<const BObolColdMeshPreviewContext *>(callbackData);
+    return !context || !context->service || !context->generation ||
+	context->service->isGenerationCancelled(context->generation) ? 1 : 0;
+}
+
+static size_t
+lod_cold_preview_render_cost(
+    const struct BObolMeshLodHierarchyInfo &hierarchy, int cut,
+    int drawMode)
+{
+    if (cut < hierarchy.min_cut || cut > hierarchy.max_cut ||
+	cut < 0 || static_cast<uint32_t>(cut) >= hierarchy.cut_count)
+	return SIZE_MAX;
+
+    BObolLodCounts counts;
+    counts.faceCount = hierarchy.cuts[cut].face_count;
+    counts.pointCount = hierarchy.cuts[cut].point_count;
+    counts.normalCount = hierarchy.has_normals ? counts.pointCount : 0;
+    return bobol_lod_render_cost_units(counts, drawMode, 1);
+}
+
+static std::shared_ptr<const Obol::PartGeometry>
+lod_cold_coverage_voxel_geometry(const struct BObolMeshLodData &data,
+	const SbBox3f &bounds, int drawMode)
+{
+    if (!data.points || !data.point_count)
+	return std::shared_ptr<const Obol::PartGeometry>();
+    std::shared_ptr<Obol::PartGeometry> geometry(
+	new Obol::PartGeometry);
+    constexpr size_t cellAxis = BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_AXIS;
+    constexpr size_t cellCount = cellAxis * cellAxis * cellAxis;
+    std::array<bool, cellCount> occupied = {};
+    const SbVec3f sourceMinimum(static_cast<float>(data.bmin[X]),
+	static_cast<float>(data.bmin[Y]), static_cast<float>(data.bmin[Z]));
+    const SbVec3f sourceMaximum(static_cast<float>(data.bmax[X]),
+	static_cast<float>(data.bmax[Y]), static_cast<float>(data.bmax[Z]));
+    const SbVec3f sourceExtent = sourceMaximum - sourceMinimum;
+    if (sourceExtent[0] <= 0.0f || sourceExtent[1] <= 0.0f ||
+	sourceExtent[2] <= 0.0f)
+	return std::shared_ptr<const Obol::PartGeometry>();
+
+    const auto cellCoordinate = [&sourceMinimum, &sourceExtent](
+	const SbVec3f &point, size_t axis) {
+	const float normalized = (point[axis] - sourceMinimum[axis]) /
+	    sourceExtent[axis];
+	return static_cast<size_t>(std::max(0.0f, std::min(
+	    static_cast<float>(cellAxis - 1),
+	    normalized * static_cast<float>(cellAxis))));
+    };
+    for (size_t index = 0; index < data.point_count; ++index) {
+	const point_t &point = data.points[index];
+	const SbVec3f value(static_cast<float>(point[X]),
+	    static_cast<float>(point[Y]), static_cast<float>(point[Z]));
+	const size_t x = cellCoordinate(value, X);
+	const size_t y = cellCoordinate(value, Y);
+	const size_t z = cellCoordinate(value, Z);
+	occupied[x + cellAxis * (y + cellAxis * z)] = true;
+    }
+
+    const bool wire = drawMode == BOBOL_LOD_DRAW_WIRE ||
+	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    const bool shaded = drawMode != BOBOL_LOD_DRAW_WIRE;
+    Obol::WireRep wireRep;
+    Obol::TriMesh mesh;
+    wireRep.bounds.setBounds(sourceMinimum, sourceMaximum);
+    mesh.bounds = wireRep.bounds;
+    std::unordered_set<uint32_t> wireEdges;
+    if (wire)
+	wireEdges.reserve(cellCount * 3u);
+    const int faceAxes[6] = {X, X, Y, Y, Z, Z};
+    const int faceDirections[6] = {-1, 1, -1, 1, -1, 1};
+    const uint8_t faceCorners[6][4] = {
+	{0, 4, 6, 2}, {1, 3, 7, 5}, {0, 1, 5, 4},
+	{2, 6, 7, 3}, {0, 2, 3, 1}, {4, 5, 7, 6}
+    };
+    uint32_t edgeId = 0;
+    for (size_t z = 0; z < cellAxis; ++z) {
+	for (size_t y = 0; y < cellAxis; ++y) {
+	    for (size_t x = 0; x < cellAxis; ++x) {
+		if (!occupied[x + cellAxis * (y + cellAxis * z)])
+		    continue;
+		const SbVec3f cellMinimum = sourceMinimum + SbVec3f(
+		    sourceExtent[0] * static_cast<float>(x) / cellAxis,
+		    sourceExtent[1] * static_cast<float>(y) / cellAxis,
+		    sourceExtent[2] * static_cast<float>(z) / cellAxis);
+		const SbVec3f cellMaximum = sourceMinimum + SbVec3f(
+		    sourceExtent[0] * static_cast<float>(x + 1) / cellAxis,
+		    sourceExtent[1] * static_cast<float>(y + 1) / cellAxis,
+		    sourceExtent[2] * static_cast<float>(z + 1) / cellAxis);
+		const SbVec3f corners[8] = {
+		    SbVec3f(cellMinimum[0], cellMinimum[1], cellMinimum[2]),
+		    SbVec3f(cellMaximum[0], cellMinimum[1], cellMinimum[2]),
+		    SbVec3f(cellMinimum[0], cellMaximum[1], cellMinimum[2]),
+		    SbVec3f(cellMaximum[0], cellMaximum[1], cellMinimum[2]),
+		    SbVec3f(cellMinimum[0], cellMinimum[1], cellMaximum[2]),
+		    SbVec3f(cellMaximum[0], cellMinimum[1], cellMaximum[2]),
+		    SbVec3f(cellMinimum[0], cellMaximum[1], cellMaximum[2]),
+		    SbVec3f(cellMaximum[0], cellMaximum[1], cellMaximum[2])
+		};
+		for (size_t face = 0; face < 6; ++face) {
+		    size_t neighbor[3] = {x, y, z};
+		    const size_t axis = static_cast<size_t>(faceAxes[face]);
+		    const int direction = faceDirections[face];
+		    if ((direction < 0 && neighbor[axis] > 0) ||
+			(direction > 0 && neighbor[axis] + 1 < cellAxis)) {
+			neighbor[axis] = static_cast<size_t>(
+			    static_cast<int>(neighbor[axis]) + direction);
+			if (occupied[neighbor[X] + cellAxis *
+			    (neighbor[Y] + cellAxis * neighbor[Z])])
+			    continue;
+		    }
+		    const uint8_t *faceCorner = faceCorners[face];
+		    if (shaded) {
+			const uint32_t first = static_cast<uint32_t>(
+			    mesh.positions.size());
+			for (size_t corner = 0; corner < 4; ++corner)
+			    mesh.positions.push_back(corners[faceCorner[corner]]);
+			mesh.indices.insert(mesh.indices.end(), {
+			    first, first + 1, first + 2,
+			    first, first + 2, first + 3
+			});
+		    }
+		    if (wire) {
+			for (size_t corner = 0; corner < 4; ++corner) {
+			    const uint8_t firstCorner =
+				faceCorner[corner];
+			    const uint8_t secondCorner =
+				faceCorner[(corner + 1) % 4];
+			    const uint8_t changedAxis =
+				firstCorner ^ secondCorner;
+			    const size_t edgeAxis = changedAxis == 1 ? X :
+				changedAxis == 2 ? Y : Z;
+			    const size_t gridX = x +
+				std::min<size_t>(firstCorner & 1u,
+				    secondCorner & 1u);
+			    const size_t gridY = y +
+				std::min<size_t>((firstCorner >> 1u) & 1u,
+				    (secondCorner >> 1u) & 1u);
+			    const size_t gridZ = z +
+				std::min<size_t>((firstCorner >> 2u) & 1u,
+				    (secondCorner >> 2u) & 1u);
+			    const size_t gridAxis = cellAxis + 1u;
+			    const uint32_t edgeKey = static_cast<uint32_t>(
+				edgeAxis + 3u * (gridX + gridAxis *
+				    (gridY + gridAxis * gridZ)));
+			    /* Adjacent surface faces share this exact grid edge.
+			     * Retaining it once preserves the outline without
+			     * spending first-frame budget on duplicate segments. */
+			    if (!wireEdges.insert(edgeKey).second)
+				continue;
+			    wireRep.segmentPoints.push_back(
+				corners[firstCorner]);
+			    wireRep.segmentPoints.push_back(
+				corners[secondCorner]);
+			    wireRep.segmentIds.push_back(edgeId++);
+			}
+		    }
+		}
+	    }
+	}
+    }
+    if (mesh.indices.empty() && wireRep.segmentPoints.empty())
+	return std::shared_ptr<const Obol::PartGeometry>();
+    if (!mesh.indices.empty())
+	geometry->shaded = std::move(mesh);
+    if (!wireRep.segmentPoints.empty())
+	geometry->wire = std::move(wireRep);
+    if (!bounds.isEmpty())
+	geometry->conservativeBounds = bounds;
+    geometry->subpixelProxyEligible = true;
+    return geometry;
+}
+
+static void
+lod_publish_cold_coverage_preview(
+    unsigned long long cacheKey, const struct BObolMeshLodData *data,
+    const struct BObolMeshLodHierarchyInfo *hierarchy,
+    BObolColdMeshPreviewContext *context)
+{
+    if (!context || !context->service || !context->generation || !data ||
+	!hierarchy || data->faces || data->face_count || !data->points ||
+	!data->point_count)
+	return;
+    const SbBox3f bounds = context->request.bounds.isEmpty() ?
+	SbBox3f(SbVec3f(static_cast<float>(data->bmin[X]),
+		static_cast<float>(data->bmin[Y]),
+		static_cast<float>(data->bmin[Z])),
+	    SbVec3f(static_cast<float>(data->bmax[X]),
+		static_cast<float>(data->bmax[Y]),
+		static_cast<float>(data->bmax[Z]))) : context->request.bounds;
+    const int coverageDrawMode = context->spatialLeafProducer ?
+	BOBOL_LOD_DRAW_WIRE : context->request.drawMode;
+    std::shared_ptr<const Obol::PartGeometry> geometry =
+	lod_cold_coverage_voxel_geometry(*data, bounds,
+	    coverageDrawMode);
+    if (!geometry)
+	return;
+    const BObolLodCounts coverageCounts =
+	lod_cad_geometry_counts(*geometry);
+    const size_t coverageCost = bobol_lod_render_cost_units(
+	coverageCounts, coverageDrawMode, 1);
+    if (context->spatialLeafProducer &&
+	coverageCost > context->renderCostAllowance)
+	return;
+
+    BObolLodResult result;
+    result.request = context->request;
+    result.cacheKey = bobol_lod_cache_key(context->request);
+    result.geometry.kind = BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
+    result.geometry.providerId = context->request.providerId;
+    result.geometry.providerVersion = context->request.providerVersion;
+    result.geometry.cacheKey = context->assetKey;
+    result.geometry.providerToken = cacheKey;
+    result.geometry.activeCut = -1;
+    result.resultKind = BOBOL_LOD_RESULT_MESH;
+    result.qualityTier = context->request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.bounds = bounds;
+    result.counts = coverageCounts;
+    result.preparedCadGeometry = geometry;
+    /* This preview has no mutable progressive generation.  Nonzero revision
+     * identifies an immutable direct PartGeometry handoff without suggesting
+     * that it is a PoP resident-cut revision. */
+    result.preparedCadGeometryRevision = 1;
+    if (context->spatialLeafProducer) {
+	BObolLodPresentationLayer layer;
+	layer.layerKey = "coverage";
+	layer.geometry = std::move(geometry);
+	layer.geometryRevision = 1;
+	layer.coverage = TRUE;
+	context->presentationLayers.clear();
+	context->presentationLayers.push_back(layer);
+	context->presentationRenderCost = coverageCost;
+	context->publishedPageCount = 0;
+	context->spatialCoverageAdmitted = TRUE;
+	result.presentationLayers = context->presentationLayers;
+    }
+    result.terminal = FALSE;
+    result.diagnostic = "cold spatial coverage-voxel preview";
+    result.canonicalizePayload();
+    if (!result.payloadIsConsistent())
+	return;
+    const SbBool published = context->service->tryPublishIntermediateResult(
+	context->generation, std::move(result));
+    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	bu_log("[obol-timing] cold coverage-voxel preview: points=%zu "
+	       "published=%d\n", data->point_count, published ? 1 : 0);
+}
+
+static void
+lod_publish_cold_spatial_page_impl(
+    unsigned long long cacheKey,
+    const struct BObolMeshLodSpatialPage *page, void *callbackData)
+{
+    BObolColdMeshPreviewContext *context =
+	static_cast<BObolColdMeshPreviewContext *>(callbackData);
+    if (!context || !context->service || !context->generation || !page ||
+	!cacheKey || !context->spatialLeafProducer ||
+	!context->spatialCoverageAdmitted ||
+	context->service->isGenerationCancelled(context->generation) ||
+	page->cut < page->hierarchy.min_cut ||
+	page->cut > page->hierarchy.max_cut || !page->data.faces ||
+	!page->data.points_orig || !page->data.face_count ||
+	!page->data.point_orig_count)
+	return;
+
+    const size_t remainingAllowance =
+	context->presentationRenderCost >= context->renderCostAllowance ? 0 :
+	context->renderCostAllowance - context->presentationRenderCost;
+    int selectedCut = -1;
+    size_t selectedCost = SIZE_MAX;
+    for (int cut = page->cut; cut >= page->hierarchy.min_cut; --cut) {
+	const size_t candidateCost = lod_cold_preview_render_cost(
+	    page->hierarchy, cut, context->request.drawMode);
+	if (candidateCost <= remainingAllowance) {
+	    selectedCut = cut;
+	    selectedCost = candidateCost;
+	    break;
+	}
+    }
+    if (selectedCut < page->hierarchy.min_cut || selectedCost == SIZE_MAX) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] cold spatial page deferred: page=%u "
+		   "cut=%d minimum=%d allowance=%zu used=%zu\n",
+		   page->page_id, page->cut, page->hierarchy.min_cut,
+		   context->renderCostAllowance,
+		   context->presentationRenderCost);
+	return;
+    }
+
+    struct BObolMeshLodData selectedData = page->data;
+    struct BObolMeshLodHierarchyInfo selectedHierarchy = page->hierarchy;
+    selectedHierarchy.resident_cut = selectedCut;
+    selectedData.face_count =
+	selectedHierarchy.cuts[selectedCut].face_count;
+    selectedData.point_count =
+	selectedHierarchy.cuts[selectedCut].point_count;
+    selectedData.point_orig_count = selectedData.point_count;
+    if (selectedData.face_count > SIZE_MAX / 3u)
+	return;
+    selectedData.normal_count = selectedData.normals ?
+	selectedData.face_count * 3u : 0;
+
+    BObolLodProgressiveMesh pageMesh;
+    if (!pageMesh.update(selectedData, selectedHierarchy, selectedCut,
+	    selectedHierarchy.shaded_cull_backfaces ? TRUE : FALSE)) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] cold spatial page rejected: page=%u "
+		   "cut=%d faces=%zu points=%zu\n", page->page_id,
+		   selectedCut, selectedData.face_count,
+		   selectedData.point_orig_count);
+	return;
+    }
+    uint64_t geometryRevision = 0;
+    std::shared_ptr<const Obol::PartGeometry> geometry =
+	pageMesh.prepareCadGeometry(
+	    context->request.drawMode, &geometryRevision);
+    if (!geometry || !geometryRevision)
+	return;
+
+    BObolLodPresentationLayer layer;
+    std::string layerKey("page:");
+    layerKey += std::to_string(page->page_id);
+    layer.layerKey = layerKey.c_str();
+    layer.geometry = std::move(geometry);
+    layer.geometryRevision = geometryRevision;
+    layer.activeCut = selectedCut;
+    layer.coverage = FALSE;
+    context->presentationLayers.push_back(std::move(layer));
+    context->presentationRenderCost += selectedCost;
+
+    const size_t pageCount = context->presentationLayers.size() -
+	(context->presentationLayers.front().coverage ? 1u : 0u);
+    if (pageCount != 1 &&
+	pageCount - context->publishedPageCount <
+	    lod_cold_spatial_publication_page_batch)
+	return;
+
+    BObolLodResult result;
+    result.request = context->request;
+    result.cacheKey = bobol_lod_cache_key(context->request);
+    result.geometry.kind = BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
+    result.geometry.providerId = context->request.providerId;
+    result.geometry.providerVersion = context->request.providerVersion;
+    result.geometry.cacheKey = context->assetKey;
+    result.geometry.providerToken = cacheKey;
+    result.geometry.activeCut = selectedCut;
+    result.resultKind = BOBOL_LOD_RESULT_MESH;
+    result.qualityTier = context->request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.bounds = context->request.bounds;
+    for (const BObolLodPresentationLayer &publishedLayer :
+	 context->presentationLayers)
+	lod_counts_accumulate(result.counts,
+	    lod_cad_geometry_counts(*publishedLayer.geometry));
+    result.presentationLayers = context->presentationLayers;
+    result.terminal = FALSE;
+    result.diagnostic =
+	"cold validated spatial pages; cache generation continues";
+    result.canonicalizePayload();
+    if (!result.payloadIsConsistent())
+	return;
+    const SbBool published = context->service->tryPublishIntermediateResult(
+	context->generation, std::move(result));
+    if (published)
+	context->publishedPageCount = pageCount;
+    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	bu_log("[obol-timing] cold spatial page: page=%u cut=%d "
+	       "faces=%zu points=%zu layers=%zu cost=%zu published=%d\n",
+	       page->page_id, selectedCut, selectedData.face_count,
+	       selectedData.point_orig_count,
+	       context->presentationLayers.size(), selectedCost,
+	       published ? 1 : 0);
+}
+
+static void
+lod_publish_cold_spatial_page(
+    unsigned long long cacheKey,
+    const struct BObolMeshLodSpatialPage *page, void *callbackData)
+{
+    try {
+	lod_publish_cold_spatial_page_impl(cacheKey, page, callbackData);
+    } catch (const std::bad_alloc &) {
+	/* Live publication is opportunistic; durable cache generation remains
+	 * authoritative under transient memory pressure. */
+	return;
+    }
+}
 
 static void
 lod_publish_cold_mesh_preview_impl(
-    unsigned long long cacheKey,
+    int previewKind, unsigned long long cacheKey,
     const struct BObolMeshLodData *data,
     const struct BObolMeshLodHierarchyInfo *hierarchy,
     void *callbackData)
 {
-    BObolColdMeshPreviewContext *context =
+	BObolColdMeshPreviewContext *context =
 	static_cast<BObolColdMeshPreviewContext *>(callbackData);
+    if (previewKind == BOBOL_MESH_LOD_PREVIEW_COVERAGE_POINTS) {
+	lod_publish_cold_coverage_preview(cacheKey, data, hierarchy, context);
+	return;
+    }
+    if (previewKind != BOBOL_MESH_LOD_PREVIEW_MESH_PREFIX)
+	return;
     if (!context || !context->service || !context->generation || !data ||
 	!context->progressiveMesh || !hierarchy || hierarchy->min_cut < 0 ||
 	!data->faces ||
 	!data->points_orig || !data->face_count || !data->point_orig_count)
 	return;
     const BObolLodProgressiveMeshPtr &mesh = context->progressiveMesh;
-    const int previewCut = hierarchy->resident_cut >= hierarchy->min_cut ?
+    const int residentPreviewCut =
+	hierarchy->resident_cut >= hierarchy->min_cut ?
 	hierarchy->resident_cut : hierarchy->min_cut;
-    if (!mesh || !mesh->update(*data, *hierarchy, previewCut,
-	    hierarchy->shaded_cull_backfaces ? TRUE : FALSE))
+    int previewCut = -1;
+    size_t previewCost = SIZE_MAX;
+    /* The cache producer materializes one globally ordered prefix before it
+     * knows the renderer's current capacity.  Do not discard that complete
+     * whole-object evidence merely because its richest prepared cut exceeds a
+     * software renderer's first-frame allowance: select the richest contained
+     * cut the same scene reservation can draw.  This is safe because every
+     * lower cut is a prefix of the immutable global PoP order; it is not the
+     * source-order spatial bootstrap, which has incomplete coverage. */
+    for (int cut = residentPreviewCut; cut >= hierarchy->min_cut; --cut) {
+	const size_t candidateCost = lod_cold_preview_render_cost(
+	    *hierarchy, cut, context->request.drawMode);
+	if (candidateCost <= context->renderCostAllowance) {
+	    previewCut = cut;
+	    previewCost = candidateCost;
+	    break;
+	}
+    }
+	if (previewCut < hierarchy->min_cut || previewCost == SIZE_MAX) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] cold PoP preview deferred: resident_cut=%d "
+		   "allowance=%zu\n", residentPreviewCut,
+		   context->renderCostAllowance);
 	return;
+    }
+    /* The callback borrows arrays sized for residentPreviewCut.  A lower
+     * selected cut is still the leading contiguous range of those arrays, but
+     * the progressive-mesh validator deliberately requires the data counts to
+     * match the active hierarchy cut.  Narrow the borrowed view; do not copy
+     * or rebuild the prefix on the worker. */
+    struct BObolMeshLodData previewData = *data;
+    struct BObolMeshLodHierarchyInfo previewHierarchy = *hierarchy;
+    previewHierarchy.resident_cut = previewCut;
+    previewData.face_count = hierarchy->cuts[previewCut].face_count;
+    previewData.point_count = hierarchy->cuts[previewCut].point_count;
+    previewData.point_orig_count = previewData.point_count;
+    if (previewData.normals &&
+	previewData.face_count > std::numeric_limits<size_t>::max() / 3)
+	return;
+    previewData.normal_count = previewData.normals ?
+	previewData.face_count * 3 : 0;
+    if (!previewData.face_count || !previewData.point_count ||
+	(previewData.normals && !previewData.normal_count))
+	return;
+
+    if (!mesh || !mesh->update(previewData, previewHierarchy, previewCut,
+	hierarchy->shaded_cull_backfaces ? TRUE : FALSE)) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] cold PoP preview rejected by mesh "
+		   "materialization: cut=%d faces=%zu points=%zu\n",
+		   previewCut, previewData.face_count,
+		   previewData.point_orig_count);
+	return;
+	}
 
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
     info.active_cut = previewCut;
-    info.face_count = data->face_count;
-    info.point_count = data->point_count;
-    info.point_orig_count = data->point_orig_count;
-    info.normal_count = data->normal_count;
-    info.has_faces = data->faces && data->face_count ? 1 : 0;
-    info.has_points = data->points && data->point_count ? 1 : 0;
+    info.face_count = hierarchy->cuts[previewCut].face_count;
+    info.point_count = hierarchy->cuts[previewCut].point_count;
+    info.point_orig_count = info.point_count;
+    info.normal_count = hierarchy->has_normals ? info.face_count * 3 : 0;
+    info.has_faces = data->faces && info.face_count ? 1 : 0;
+    info.has_points = data->points && info.point_count ? 1 : 0;
     info.has_original_points =
-	data->points_orig && data->point_orig_count ? 1 : 0;
+	previewData.points_orig && previewData.point_orig_count ? 1 : 0;
     info.has_snapped_points =
 	data->points && data->points_orig != data->points ? 1 : 0;
-    info.has_normals = data->normals && data->normal_count ? 1 : 0;
+    info.has_normals =
+	previewData.normals && previewData.normal_count ? 1 : 0;
     info.shaded_cull_backfaces = hierarchy->shaded_cull_backfaces;
     VMOVE(info.bmin, data->bmin);
     VMOVE(info.bmax, data->bmax);
@@ -3692,10 +4414,10 @@ lod_publish_cold_mesh_preview_impl(
     result.resolvedCut = requestedCut;
     result.residentCut = previewCut;
     result.progressiveMesh = mesh;
-    result.counts.faceCount = data->face_count;
-    result.counts.pointCount = data->point_count;
-    result.counts.originalPointCount = data->point_orig_count;
-    result.counts.normalCount = data->normal_count;
+    result.counts.faceCount = info.face_count;
+    result.counts.pointCount = info.point_count;
+    result.counts.originalPointCount = info.point_orig_count;
+    result.counts.normalCount = info.normal_count;
     result.bounds = mesh->bounds();
     result.hasSnappedPoints = FALSE;
     result.hasNormals = hierarchy->has_normals ? TRUE : FALSE;
@@ -3708,29 +4430,34 @@ lod_publish_cold_mesh_preview_impl(
     result.terminal = FALSE;
     result.preparedCadGeometry = mesh->prepareCadGeometry(
 	context->request.drawMode, &result.preparedCadGeometryRevision);
-    if (!result.preparedCadGeometry)
+	if (!result.preparedCadGeometry) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] cold PoP preview could not prepare CAD "
+		   "geometry: cut=%d\n", previewCut);
 	return;
+	}
     result.diagnostic =
 	"cold minimum PoP prefix; spatial cache generation continues";
     const SbBool published =
 	context->service->tryPublishIntermediateResult(
 	    context->generation, std::move(result));
     if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
-	bu_log("[obol-timing] cold PoP preview: cut=%d faces=%zu "
-	       "points=%zu published=%d\n", previewCut,
-	       data->face_count, data->point_orig_count, published ? 1 : 0);
+	bu_log("[obol-timing] cold PoP preview: cut=%d/%d faces=%zu "
+	       "points=%zu cost=%zu published=%d\n", previewCut,
+	       residentPreviewCut, info.face_count, info.point_count,
+	       previewCost, published ? 1 : 0);
 }
 
 static void
 lod_publish_cold_mesh_preview(
-    unsigned long long cacheKey,
+    int previewKind, unsigned long long cacheKey,
     const struct BObolMeshLodData *data,
     const struct BObolMeshLodHierarchyInfo *hierarchy,
     void *callbackData)
 {
     try {
 	lod_publish_cold_mesh_preview_impl(
-	    cacheKey, data, hierarchy, callbackData);
+	    previewKind, cacheKey, data, hierarchy, callbackData);
     } catch (const std::bad_alloc &) {
 	/* The preview is an early-presentation optimization.  Under memory
 	 * pressure, leave its reserved task slot untouched and let the same
@@ -3803,12 +4530,35 @@ BObolLodService::realizeResidentMeshLod(
 	previewContext.request = request;
 	previewContext.assetKey = assetKey;
 	previewContext.progressiveMesh = resident->mesh;
+	previewContext.renderCostAllowance =
+	    provider.initialRefinementCostBudget;
 	struct BObolMeshLodPreviewRequest previewRequest =
 	    BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT;
 	previewRequest.requested_cut = request.requestedCut;
 	previewRequest.projected_pixel_diameter =
 	    request.projectedPixelDiameter;
 	previewRequest.target_pixel_error = request.targetPixelError;
+	previewRequest.cancellation_callback = lod_cold_mesh_preview_cancelled;
+	previewRequest.cancellation_data = &previewContext;
+	const bool spatialLeafProducer =
+	    provider.useSerializedSpatialSource ? true : false;
+	previewRequest.spatial_leaf_producer = spatialLeafProducer ? 1 : 0;
+	previewContext.spatialLeafProducer =
+	    spatialLeafProducer ? TRUE : FALSE;
+	if (spatialLeafProducer) {
+	    previewRequest.spatial_page_callback =
+		lod_publish_cold_spatial_page;
+	    previewRequest.spatial_page_data = &previewContext;
+	}
+	if (!request.bounds.isEmpty()) {
+	    const SbVec3f minimum = request.bounds.getMin();
+	    const SbVec3f maximum = request.bounds.getMax();
+	    for (size_t axis = 0; axis < 3; ++axis) {
+		previewRequest.coverage_bmin[axis] = minimum[axis];
+		previewRequest.coverage_bmax[axis] = maximum[axis];
+	    }
+	    previewRequest.coverage_bounds_valid = 1;
+	}
 	if (exactVariant)
 	    resident->lod = bobol_mesh_lod_get_cached_prefix(
 		dbip, provider.meshAssetContentHash);
@@ -3909,7 +4659,7 @@ BObolLodService::realizeResidentMeshLod(
 			resident->lod = bobol_mesh_lod_get_cached_prefix(
 			    dbip, resident->status.cache_key);
 	} else if (!exactVariant) {
-	    if (lod_spatial_leaf_source_requested() ||
+	    if (spatialLeafProducer ||
 		!lod_raw_import_fits_address_space(request)) {
 		/* Do not cross librt's bu_bomb allocation boundary merely because
 		 * a cache is cold.  The explicit spatial producer and an address-space
@@ -3956,6 +4706,8 @@ BObolLodService::realizeResidentMeshLod(
 	    if (!resident->lod && !exactVariant)
 		resident->lod = bobol_mesh_lod_get_named_cached_prefix(
 		    dbip, name);
+	    resident->limitedSpatialLayers =
+		std::move(previewContext.presentationLayers);
 	}
 	if (!resident->lod)
 	    return lod_provider_status_result(request,
@@ -3981,6 +4733,7 @@ BObolLodService::realizeResidentMeshLod(
 	requestedCut = hierarchy.min_cut;
     if (requestedCut > hierarchy.max_cut)
 	requestedCut = hierarchy.max_cut;
+    const bool sourceLimited = bobol_mesh_lod_source_limited(resident->lod);
     std::vector<uint32_t> requiredChunks = request.requiredChunks;
     const bool chunked = hierarchy.chunks && hierarchy.chunk_count;
     if (chunked && requiredChunks.empty()) {
@@ -4000,10 +4753,39 @@ BObolLodService::realizeResidentMeshLod(
 		BOBOL_LOD_PROVIDER_ERROR,
 		"resident mesh provider received an invalid chunk set");
     }
-    if (chunked && requiredChunks.empty())
+    if (chunked && requiredChunks.empty()) {
+	if (sourceLimited && !resident->limitedSpatialLayers.empty()) {
+	    BObolLodResult result;
+	    result.request = request;
+	    result.cacheKey = bobol_lod_cache_key(request);
+	    result.geometry.kind = BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
+	    result.geometry.providerId = request.providerId;
+	    result.geometry.providerVersion = request.providerVersion;
+	    result.geometry.cacheKey = assetKey;
+	    result.geometry.providerToken =
+		bobol_mesh_lod_cache_key_get(resident->lod);
+	    result.resultKind = BOBOL_LOD_RESULT_MESH;
+	    result.qualityTier = request.qualityTier;
+	    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+	    result.bounds = request.bounds;
+	    result.resolvedCut = requestedCut;
+	    result.residentCut = hierarchy.resident_cut;
+	    result.hasNormals = hierarchy.has_normals ? TRUE : FALSE;
+	    result.shadedCullBackfaces =
+		hierarchy.shaded_cull_backfaces ? TRUE : FALSE;
+	    result.memoryLimited = TRUE;
+	    result.terminal = TRUE;
+	    result.diagnostic =
+		"bounded spatial coverage retained; no resident page is visible";
+	    lod_use_limited_spatial_layers(
+		result, resident->limitedSpatialLayers);
+	    result.canonicalizePayload();
+	    return result;
+	}
 	return lod_provider_status_result(request,
 	    BOBOL_LOD_PROVIDER_CANCELLED,
 	    "resident mesh provider has no visible chunks");
+    }
     resident->publishedMinimumCut.store(
 	hierarchy.min_cut, std::memory_order_relaxed);
 
@@ -4279,15 +5061,23 @@ BObolLodService::realizeResidentMeshLod(
     result.hasSnappedPoints = FALSE;
     result.hasNormals = hierarchy.has_normals ? TRUE : FALSE;
     result.shadedCullBackfaces = resident->mesh->cullBackfaces();
+    const bool transientLimitReached = provider.transientMemoryLimited &&
+	provider.useDeliveryCutLimit &&
+	drawCut >= provider.deliveryCutLimit;
     result.terminal = drawCut >= std::max(hierarchy.min_cut,
-	std::min(hierarchy.max_cut, requestedCut)) ? TRUE : FALSE;
+	std::min(hierarchy.max_cut, requestedCut)) || transientLimitReached ?
+	TRUE : FALSE;
     /* A representation-band admission cap is not a reason to stop walking
      * the admitted band's PoP prefix.  Publish it only on that band's
      * terminal result; treating it as an immediate resident-memory failure
      * would strand a BREP at its first coarse cut. */
-    result.memoryLimited = memoryLimited ||
-	bobol_mesh_lod_source_limited(resident->lod) ||
+
+    result.memoryLimited = memoryLimited || sourceLimited ||
+	provider.transientMemoryLimited ||
 	(provider.brepVariantMemoryLimited && result.terminal);
+    if (transientLimitReached)
+	result.diagnostic =
+	    "view detail constrained by transient working-set limit";
 
     /*
      * Prepare the renderer target on this worker for every CAD consumer, not
@@ -4298,11 +5088,32 @@ BObolLodService::realizeResidentMeshLod(
      * than part of the compact CAD occurrence route.
      */
     const int64_t preparedGeometryStarted = bu_gettime();
-    result.preparedCadGeometry =
-	resident->mesh->prepareCadGeometry(
-	    request.drawMode, &result.preparedCadGeometryRevision);
+    if (chunked) {
+	if (!resident->mesh->prepareCadPresentationLayers(
+		request.drawMode, requiredChunks, drawCut,
+		result.presentationLayers))
+	    return lod_provider_status_result(request,
+		BOBOL_LOD_PROVIDER_ERROR,
+		"resident mesh provider could not prepare spatial renderer pages");
+    } else {
+	result.preparedCadGeometry =
+	    resident->mesh->prepareCadGeometry(
+		request.drawMode, &result.preparedCadGeometryRevision);
+    }
     preparedGeometryMicroseconds = std::max<int64_t>(
 	0, bu_gettime() - preparedGeometryStarted);
+    /* A capacity-limited spatial cache contains independently valid local
+     * pages but not complete source coverage.  Preserve the coverage layer
+     * and every page admitted by this task; replacing them with the resident
+     * seed page alone would turn a recognizable whole-object preview into a
+     * visibly chopped mesh at task completion. */
+    if (sourceLimited && !resident->limitedSpatialLayers.empty()) {
+	lod_use_limited_spatial_layers(
+	    result, resident->limitedSpatialLayers);
+	result.terminal = TRUE;
+	result.diagnostic =
+	    "bounded spatial coverage and validated pages; durable cache capacity limited";
+    }
     /* The renderer generation above is self-contained.  Keeping the cache
      * reader's cumulative arrays duplicates every point/index and previously
      * required one background compaction job per asset merely to release
@@ -4368,11 +5179,14 @@ BObolLodService::realizeResidentMeshLod(
 	  strstr(request.objectPath.getString(), traceFilter)))) {
 	bu_log("BObol resident LoD trace object=%s submitted_cut=%d "
 	       "resolved_cut=%d draw_cut=%d resident_cut=%d "
-	       "faces=%zu points=%zu "
+	       "faces=%zu points=%zu memory_limited=%d admission=%llu "
 	       "asset_revision=%llu load=%d compact=%d terminal=%d\n",
 	       name, request.requestedCut, result.resolvedCut, drawCut,
 	       residentCut,
 	       result.counts.faceCount, result.counts.pointCount,
+	       result.memoryLimited ? 1 : 0,
+	       static_cast<unsigned long long>(
+		   result.residentAdmissionRevision),
 	       static_cast<unsigned long long>(resident->mesh->revision()),
 	       loadNeeded ? 1 : 0, provider.compactResident ? 1 : 0,
 	       result.terminal ? 1 : 0);
@@ -4409,7 +5223,8 @@ BObolLodService::scheduleResidentMeshCompaction(
 	const auto current =
 	    this->p->residentMeshConsumerDemands.find(consumerId);
 	if (current != this->p->residentMeshConsumerDemands.end() &&
-	    current->second.revision == demandRevision) {
+	    current->second.revision == demandRevision &&
+	    lod_resident_consumer_snapshot_current(current->second)) {
 	    if (current->second.planning) {
 		continuingPlan = TRUE;
 	    } else if (current->second.residentRevision != 0 &&
@@ -4425,6 +5240,7 @@ BObolLodService::scheduleResidentMeshCompaction(
     BObolResidentMeshConsumerDemand snapshot;
     if (!continuingPlan) {
 	snapshot.revision = demandRevision;
+	snapshot.snapshotRevision = demandRevision;
 	for (const BObolLodResidentDemand &demand : demands) {
 	    if (demand.assetKey.getLength() == 0 || demand.cut < 0)
 		continue;
@@ -4443,6 +5259,9 @@ BObolLodService::scheduleResidentMeshCompaction(
 	snapshot.planningCursor = 0;
 	snapshot.planningProjectedResidentBytes =
 	    lod_resident_stable_bytes(this->p);
+	snapshot.planningCandidateCount = 0;
+	snapshot.completedCandidateCount = 0;
+	snapshot.completedPlanRevision = 0;
 	snapshot.planningResidentRevision = residentRevisionAtEntry;
     }
 
@@ -4455,8 +5274,14 @@ BObolLodService::scheduleResidentMeshCompaction(
 	    return 0;
 	if (!continuingPlan || current.revision != demandRevision ||
 	    !current.planning) {
+	    const bool snapshotChanged =
+		!lod_resident_consumer_snapshot_current(current) ||
+		current.revision != demandRevision ||
+		current.assets != snapshot.assets;
 	    current = std::move(snapshot);
 	    current.residentRevision = 0;
+	    if (snapshotChanged)
+		lod_resident_demand_epoch_advance(this->p);
 	}
 
 	/* Record the complete demand while refinement is active, but wait to
@@ -4501,6 +5326,8 @@ BObolLodService::scheduleResidentMeshCompaction(
 	    SbBool demanded = FALSE;
 	    for (const auto &consumer :
 		    this->p->residentMeshConsumerDemands) {
+		if (!lod_resident_consumer_snapshot_current(consumer.second))
+		    continue;
 		const auto demand =
 		    consumer.second.assets.find(residentEntry.first);
 		if (demand == consumer.second.assets.end())
@@ -4536,6 +5363,26 @@ BObolLodService::scheduleResidentMeshCompaction(
 		resident->mesh->residentChunkCuts(residentChunkCuts);
 	    std::vector<BObolLodChunkCut> targetChunkCuts;
 	    if (!residentChunkCuts.empty()) {
+		/* A resident-memory trim is admissible only after every currently
+		 * demanded page has reached its requested cut.  Provider growth owns
+		 * missing pages and suffixes.  Compacting the intersection while that
+		 * growth was pending produced an internally valid but non-drawable
+		 * generation, which later replaced a coherent visible frame. */
+		SbBool demandedWorkingSetComplete = TRUE;
+		for (const auto &desired : aggregateChunkCuts) {
+		    const auto residentChunk = std::lower_bound(
+			residentChunkCuts.begin(), residentChunkCuts.end(),
+			desired.first,
+			[](const BObolLodChunkCut &entry, uint32_t id) {
+			    return entry.chunkId < id;
+			});
+		    if (residentChunk == residentChunkCuts.end() ||
+			residentChunk->chunkId != desired.first ||
+			residentChunk->cut < desired.second) {
+			demandedWorkingSetComplete = FALSE;
+			break;
+		    }
+		}
 		/* Compaction can only discard or shorten resident pages; a provider
 		 * request performs growth.  Preserve independently richer pages where
 		 * at least one consumer asks for them, and retain every other page that
@@ -4610,11 +5457,18 @@ BObolLodService::scheduleResidentMeshCompaction(
 		    if (desiredCut > residentChunk->cut ||
 			!resident->mesh->hierarchyCountsForChunksAtCut(
 			    oneChunk, desiredCut, FALSE, &population) ||
-			!population.faceCount)
+			!population.faceCount) {
+			/* Keep the page identity and its prior prefix.  A page which
+			 * contributes no faces at this common cut is still part of the
+			 * coherent spatial working set and may begin at a later cut. */
+			targetChunkCuts.push_back(*residentChunk);
 			continue;
+		    }
 		    targetChunkCuts.push_back({desired.first,
 			std::min(residentChunk->cut, desiredCut)});
 		}
+		if (!demandedWorkingSetComplete)
+		    targetChunkCuts = residentChunkCuts;
 		/* An empty retained set cannot form a drawable immutable generation;
 		 * visibility withdrawal should remove the demand instead. */
 		if (targetChunkCuts.empty())
@@ -4650,6 +5504,8 @@ BObolLodService::scheduleResidentMeshCompaction(
 		    residentEntry.first);
 		continue;
 	    }
+	    if (current.planningCandidateCount != SIZE_MAX)
+		current.planningCandidateCount++;
 	    BObolResidentMeshCompactionTarget &target =
 		this->p->residentMeshCompactionTargets[
 		    residentEntry.first];
@@ -4659,6 +5515,7 @@ BObolLodService::scheduleResidentMeshCompaction(
 	    target.evict = evict;
 	    target.useRevision = resident->useRevision.load(
 		std::memory_order_relaxed);
+	    target.demandEpoch = this->p->residentMeshDemandEpoch;
 	    target.revision =
 		this->p->nextResidentMeshCompactionTargetRevision++;
 	    if (!target.revision)
@@ -4692,6 +5549,8 @@ BObolLodService::scheduleResidentMeshCompaction(
 	if (end >= this->p->residentMeshOrder.size()) {
 	    current.planning = FALSE;
 	    current.residentRevision = current.planningResidentRevision;
+	    current.completedCandidateCount = current.planningCandidateCount;
+	    current.completedPlanRevision = current.revision;
 	    if (planningComplete)
 		*planningComplete = TRUE;
 	}
@@ -4732,6 +5591,32 @@ BObolLodService::drainResidentMeshCompactions(
 }
 
 void
+BObolLodService::invalidateResidentMeshConsumer(uint64_t consumerId)
+{
+    if (!consumerId)
+	return;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const auto consumer =
+	this->p->residentMeshConsumerDemands.find(consumerId);
+    if (consumer == this->p->residentMeshConsumerDemands.end() ||
+	!lod_resident_consumer_snapshot_current(consumer->second))
+	return;
+
+    consumer->second.snapshotRevision = 0;
+    consumer->second.residentRevision = 0;
+    consumer->second.planning = FALSE;
+    consumer->second.planningCursor = 0;
+    consumer->second.planningProjectedResidentBytes = 0;
+    consumer->second.planningCandidateCount = 0;
+    consumer->second.completedCandidateCount = 0;
+    consumer->second.completedPlanRevision = 0;
+    consumer->second.planningResidentRevision = 0;
+    lod_resident_demand_epoch_advance(this->p);
+    lod_discard_resident_compaction_results_unlocked(this->p, consumerId);
+    this->p->workerCv.notify_all();
+}
+
+void
 BObolLodService::noteResidentMeshUse(const BObolLodCacheKey &assetKey)
 {
     if (!assetKey.isValid())
@@ -4750,16 +5635,9 @@ BObolLodService::releaseResidentMeshConsumer(uint64_t consumerId)
     if (!consumerId)
 	return;
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    this->p->residentMeshConsumerDemands.erase(consumerId);
-    const auto results =
-	this->p->residentMeshCompactionResults.find(consumerId);
-    if (results != this->p->residentMeshCompactionResults.end()) {
-	const size_t count = results->second.size();
-	this->p->residentMeshCompactionResultCount =
-	    count >= this->p->residentMeshCompactionResultCount ?
-	    0 : this->p->residentMeshCompactionResultCount - count;
-	this->p->residentMeshCompactionResults.erase(results);
-    }
+    if (this->p->residentMeshConsumerDemands.erase(consumerId))
+	lod_resident_demand_epoch_advance(this->p);
+    lod_discard_resident_compaction_results_unlocked(this->p, consumerId);
     this->p->workerCv.notify_all();
 }
 
@@ -4867,7 +5745,8 @@ SbBool
 BObolLodService::isGenerationCancelled(uint64_t generation) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
-    return lod_generation_cancelled_unlocked(this->p, generation);
+    return this->p->stopping ||
+	lod_generation_cancelled_unlocked(this->p, generation);
 }
 
 void
@@ -5137,7 +6016,9 @@ BObolLodService::tryPublishIntermediateResult(
 	 * optional preview and the authoritative final result still follows. */
 	std::unique_lock<std::mutex> lock(
 	    this->p->mutex, std::try_to_lock);
-	if (!lock.owns_lock() || this->p->stopping ||
+	if (!lock.owns_lock())
+	    return FALSE;
+	if (this->p->stopping ||
 	    lod_generation_cancelled_unlocked(this->p, generation) ||
 	    lod_generation_count_unlocked(
 		this->p->generationExecutingTaskCounts, generation) == 0 ||
@@ -5258,6 +6139,10 @@ lod_result_estimated_presentation_bytes(const BObolLodResult &result)
 	saturatingMultiply(result.mesh.faceIndex.size(), sizeof(int32_t)));
     bytes = saturatingAdd(bytes,
 	saturatingMultiply(result.mesh.vertexIndex.size(), sizeof(int32_t)));
+    if (!result.progressiveMesh && result.preparedCadGeometry)
+	bytes = saturatingAdd(bytes,
+	    bobol_database_part_geometry_estimate_bytes(
+		*result.preparedCadGeometry));
     size_t counted = 0;
     counted = saturatingAdd(counted,
 	saturatingMultiply(static_cast<size_t>(
@@ -5663,6 +6548,45 @@ BObolLodService::pendingResidentMeshCompactionCountForDiagnostics(void) const
 	    planning++;
     return this->p->residentMeshCompactionWork.size() +
 	this->p->residentMeshCompactionsInFlight + planning;
+}
+
+SbBool
+BObolLodService::residentMeshCompactionPlanForDiagnostics(
+    uint64_t consumerId, uint64_t *demandRevision,
+    size_t *candidateCount) const
+{
+    if (demandRevision)
+	*demandRevision = 0;
+    if (candidateCount)
+	*candidateCount = 0;
+    if (!consumerId)
+	return FALSE;
+
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    if (!this->p->residentMeshCompactionWork.empty() ||
+	this->p->residentMeshCompactionsInFlight != 0)
+	return FALSE;
+    const auto queuedResults =
+	this->p->residentMeshCompactionResults.find(consumerId);
+    if (queuedResults != this->p->residentMeshCompactionResults.end() &&
+	!queuedResults->second.empty())
+	return FALSE;
+    const uint64_t residentRevision =
+	this->p->residentMeshRevision.load(std::memory_order_relaxed);
+    const auto consumer =
+	this->p->residentMeshConsumerDemands.find(consumerId);
+    if (consumer == this->p->residentMeshConsumerDemands.end() ||
+	consumer->second.planning ||
+	!lod_resident_consumer_snapshot_current(consumer->second) ||
+	consumer->second.completedPlanRevision != consumer->second.revision ||
+	!consumer->second.residentRevision ||
+	consumer->second.residentRevision != residentRevision)
+	return FALSE;
+    if (demandRevision)
+	*demandRevision = consumer->second.completedPlanRevision;
+    if (candidateCount)
+	*candidateCount = consumer->second.completedCandidateCount;
+    return TRUE;
 }
 
 size_t

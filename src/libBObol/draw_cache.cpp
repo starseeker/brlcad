@@ -58,10 +58,10 @@
  * are not trustworthy; invalidate them unconditionally. */
 #define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 2u
 #define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
-#define BOBOL_DRAW_MANIFEST_DISK_VERSION 10u
+#define BOBOL_DRAW_MANIFEST_DISK_VERSION 11u
 #define BOBOL_DRAW_MANIFEST_CHUNKED_DISK_MAGIC 0x4f424d43u /* OBMC */
 #define BOBOL_DRAW_MANIFEST_CHUNK_DISK_MAGIC 0x4f424d4bu /* OBMK */
-#define BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION 1u
+#define BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION 2u
 
 /* Keep cache serialization bounded even for assemblies with hundreds of
  * thousands of leaves.  A descriptor is published only after every chunk has
@@ -166,6 +166,9 @@ struct BObolDrawManifestDiskHeader {
     uint32_t version;
     uint64_t databaseFingerprint;
     uint64_t occurrenceCount;
+    uint64_t uniqueAssetCount;
+    uint64_t encodedSourceBytes;
+    uint64_t largestAssetBytes;
     uint32_t rootPathLength;
     uint32_t coverageBoundsValid;
     point_t coverageBoundsMin;
@@ -178,6 +181,9 @@ struct BObolDrawManifestChunkedDiskHeader {
     uint32_t version;
     uint64_t databaseFingerprint;
     uint64_t occurrenceCount;
+    uint64_t uniqueAssetCount;
+    uint64_t encodedSourceBytes;
+    uint64_t largestAssetBytes;
     uint32_t rootPathLength;
     uint32_t coverageBoundsValid;
     point_t coverageBoundsMin;
@@ -2248,6 +2254,20 @@ bobol_draw_manifest_boolean_valid(int operation)
 	operation == DB_OP_INTERSECT;
 }
 
+static int
+bobol_draw_manifest_profile_valid_or_empty(uint64_t occurrenceCount,
+	uint64_t uniqueAssetCount, uint64_t encodedSourceBytes,
+	uint64_t largestAssetBytes)
+{
+    const bool empty = !uniqueAssetCount && !encodedSourceBytes &&
+	!largestAssetBytes;
+    if (empty)
+	return 1;
+    return occurrenceCount > 0 && uniqueAssetCount > 0 &&
+	uniqueAssetCount <= occurrenceCount && encodedSourceBytes > 0 &&
+	largestAssetBytes > 0 && largestAssetBytes <= encodedSourceBytes;
+}
+
 extern "C" void
 bobol_draw_manifest_init(BObolDrawManifest *manifest)
 {
@@ -2256,6 +2276,9 @@ bobol_draw_manifest_init(BObolDrawManifest *manifest)
     manifest->coverageBoundsValid = 0;
     VSETALL(manifest->coverageBoundsMin, 0.0);
     VSETALL(manifest->coverageBoundsMax, 0.0);
+    manifest->uniqueAssetCount = 0;
+    manifest->encodedSourceBytes = 0;
+    manifest->largestAssetBytes = 0;
     manifest->occurrenceCount = 0;
     manifest->occurrences = NULL;
 }
@@ -2300,7 +2323,11 @@ bobol_draw_manifest_cache_store_with_provider(db_i *dbip,
 	 manifest->coverageBoundsValid != 1) ||
 	(manifest->coverageBoundsValid &&
 	 !bobol_draw_proxy_bbox_valid(manifest->coverageBoundsMin,
-	     manifest->coverageBoundsMax)))
+	     manifest->coverageBoundsMax)) ||
+	!bobol_draw_manifest_profile_valid_or_empty(
+	    static_cast<uint64_t>(manifest->occurrenceCount),
+	    manifest->uniqueAssetCount, manifest->encodedSourceBytes,
+	    manifest->largestAssetBytes))
 	return BRLCAD_ERROR;
 
     const size_t rootLength = strlen(rootPath);
@@ -2511,6 +2538,9 @@ bobol_draw_manifest_cache_store_with_provider(db_i *dbip,
     descriptor.version = BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION;
     descriptor.databaseFingerprint = fingerprint;
     descriptor.occurrenceCount = static_cast<uint64_t>(manifest->occurrenceCount);
+    descriptor.uniqueAssetCount = manifest->uniqueAssetCount;
+    descriptor.encodedSourceBytes = manifest->encodedSourceBytes;
+    descriptor.largestAssetBytes = manifest->largestAssetBytes;
     descriptor.rootPathLength = static_cast<uint32_t>(rootLength);
     descriptor.coverageBoundsValid = manifest->coverageBoundsValid ? 1u : 0u;
     descriptor.chunkCount = chunkIndex;
@@ -2725,6 +2755,11 @@ bobol_draw_manifest_cache_stream(db_i *dbip, const char *rootPath,
 		descriptor.databaseFingerprint == fingerprint &&
 		descriptor.rootPathLength == rootLength &&
 		descriptor.chunkCount && descriptor.occurrenceCount &&
+		bobol_draw_manifest_profile_valid_or_empty(
+		    descriptor.occurrenceCount,
+		    descriptor.uniqueAssetCount,
+		    descriptor.encodedSourceBytes,
+		    descriptor.largestAssetBytes) &&
 		descriptor.coverageBoundsValid <= 1 &&
 		(!descriptor.coverageBoundsValid ||
 		 bobol_draw_proxy_bbox_valid(descriptor.coverageBoundsMin,
@@ -2745,6 +2780,9 @@ bobol_draw_manifest_cache_stream(db_i *dbip, const char *rootPath,
 		VMOVE(description.coverageBoundsMax, descriptor.coverageBoundsMax);
 	    }
 	    description.occurrenceCount = static_cast<size_t>(descriptor.occurrenceCount);
+	    description.uniqueAssetCount = descriptor.uniqueAssetCount;
+	    description.encodedSourceBytes = descriptor.encodedSourceBytes;
+	    description.largestAssetBytes = descriptor.largestAssetBytes;
 	    if (begin && !begin(&description, userData)) {
 		bu_cache_get_done(&transaction);
 		bobol_draw_cache_close(&handle);
@@ -2809,6 +2847,9 @@ bobol_draw_manifest_cache_stream(db_i *dbip, const char *rootPath,
 	header.version != BOBOL_DRAW_MANIFEST_DISK_VERSION ||
 	header.databaseFingerprint != currentFingerprint ||
 	header.rootPathLength != rootLength || !header.occurrenceCount ||
+	!bobol_draw_manifest_profile_valid_or_empty(
+	    header.occurrenceCount, header.uniqueAssetCount,
+	    header.encodedSourceBytes, header.largestAssetBytes) ||
 	header.coverageBoundsValid > 1 ||
 	(header.coverageBoundsValid &&
 	 (!bobol_draw_proxy_bbox_valid(header.coverageBoundsMin,
@@ -2851,6 +2892,9 @@ bobol_draw_manifest_cache_stream(db_i *dbip, const char *rootPath,
 	VMOVE(description.coverageBoundsMax, header.coverageBoundsMax);
     }
     description.occurrenceCount = static_cast<size_t>(header.occurrenceCount);
+    description.uniqueAssetCount = header.uniqueAssetCount;
+    description.encodedSourceBytes = header.encodedSourceBytes;
+    description.largestAssetBytes = header.largestAssetBytes;
     if (begin && !begin(&description, userData)) {
 	bu_cache_get_done(&transaction);
 	bobol_draw_cache_close(&handle);
@@ -3036,6 +3080,9 @@ bobol_draw_manifest_describe_begin(const BObolDrawManifest *description,
     VMOVE(context->description->coverageBoundsMax,
 	description->coverageBoundsMax);
     context->description->occurrenceCount = description->occurrenceCount;
+    context->description->uniqueAssetCount = description->uniqueAssetCount;
+    context->description->encodedSourceBytes = description->encodedSourceBytes;
+    context->description->largestAssetBytes = description->largestAssetBytes;
     context->description->occurrences = NULL;
     context->captured = 1;
     return 1;
@@ -3075,6 +3122,9 @@ bobol_draw_manifest_collect_begin(const BObolDrawManifest *description,
     VMOVE(collector->manifest.coverageBoundsMax,
 	description->coverageBoundsMax);
     collector->manifest.occurrenceCount = description->occurrenceCount;
+    collector->manifest.uniqueAssetCount = description->uniqueAssetCount;
+    collector->manifest.encodedSourceBytes = description->encodedSourceBytes;
+    collector->manifest.largestAssetBytes = description->largestAssetBytes;
     collector->manifest.occurrences =
 	static_cast<BObolDrawManifestOccurrence *>(bu_calloc(
 	    description->occurrenceCount,

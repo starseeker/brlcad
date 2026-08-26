@@ -616,6 +616,42 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
 }
 
 static void
+test_cutting_plane_command(struct ged *gedp, struct ged_view_context *view)
+{
+    ASSERT(ged_view_context_display_endpoint_ensure(view));
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_obol_endpoint_get(view);
+    BObolViewController *controller = endpoint ?
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint)) : NULL;
+    ASSERT(controller != NULL);
+    if (!controller)
+	return;
+
+    const char *normal[] = {"view", "cutting", "normal", "0", "1", "0", NULL};
+    const char *origin[] = {"view", "cutting", "origin", "1", "2", "3", NULL};
+    const char *enable[] = {"view", "cutting", "enable", "1", NULL};
+    const char *disable[] = {"view", "cutting", "enable", "0", NULL};
+    const char *invalid_normal[] = {"view", "cutting", "normal", "0", "0", "0", NULL};
+
+    ASSERT(run_view(gedp, 6, normal) == BRLCAD_OK);
+    ASSERT(run_view(gedp, 6, origin) == BRLCAD_OK);
+    ASSERT(run_view(gedp, 4, enable) == BRLCAD_OK);
+    ASSERT(controller->isCuttingPlaneEnabled());
+    const SbPlane plane = controller->getCuttingPlane();
+    ASSERT(plane.getNormal().equals(SbVec3f(0.0f, 1.0f, 0.0f), 1.0e-6f));
+    ASSERT(std::fabs(plane.getDistanceFromOrigin() - 2.0f) < 1.0e-6f);
+
+    const char *query[] = {"view", "cutting", NULL};
+    ASSERT(run_view(gedp, 2, query) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("enable 1\norigin 0 2 0\nnormal 0 1 0") == 0);
+    ASSERT(run_view(gedp, 6, invalid_normal) == BRLCAD_ERROR);
+    ASSERT(!result_str(gedp).empty());
+    ASSERT(run_view(gedp, 4, disable) == BRLCAD_OK);
+    ASSERT(!controller->isCuttingPlaneEnabled());
+}
+
+static void
 test_command_report_record_consistency(struct ged *gedp,
     struct ged_view_context *v)
 {
@@ -746,6 +782,10 @@ test_lod_resource_policy_command(struct ged *gedp,
 	SMALL_FASTF);
     ASSERT(std::fabs(controller->getLodStableTargetFps() - 6.0) <
 	SMALL_FASTF);
+    ASSERT(controller->getInteractivePresentationFrameDeadline() ==
+	40000000ULL);
+    ASSERT(controller->getStablePresentationFrameDeadline() ==
+	166666666ULL);
     const char *fps_query[] = {"view", "lod", "fps", NULL};
     ASSERT(run_view(gedp, 3, fps_query) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("48 6") != std::string::npos);
@@ -890,6 +930,7 @@ main(int argc, const char **argv)
     }
 
     test_display_endpoint_slot(gedp, views[0]);
+    test_cutting_plane_command(gedp, views[0]);
     test_shading_policy_command(gedp, views[0], views[1]);
     test_lod_policy_command(gedp, views[0]);
     test_lod_resource_policy_command(gedp, views[0]);

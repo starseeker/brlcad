@@ -477,7 +477,7 @@ struct BObolRtRenderer::Private {
     std::vector<RtLightSnapshot> cameraLights;
     std::vector<RtLightSnapshot> authoredLights;
     SbViewVolume viewVolume;
-    SbPlane clipPlanes[2];
+    SbPlane clipPlanes[BObolViewController::CLIP_PLANE_CAPACITY];
     size_t clipPlaneCount = 0;
     SbColor backgroundBottom = SbColor(0.0f, 0.0f, 0.0f);
     SbColor backgroundTop = SbColor(0.0f, 0.0f, 0.0f);

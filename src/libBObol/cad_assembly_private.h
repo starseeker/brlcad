@@ -115,6 +115,16 @@ private:
 	uint64_t selectionRevision = 0;
     };
 
+    struct CompactLayerPresentation {
+	std::string layerKey;
+	Obol::PartId part = Obol::CadIdBuilder::Root();
+	Obol::InstanceId instance = Obol::CadIdBuilder::Root();
+	uint8_t channels = 0;
+	int activeCut = -1;
+	bool coverage = false;
+	uint64_t geometryRevision = 0;
+    };
+
     void reserveCompactPresentationCapacity(size_t expectedOccurrences);
 
     std::unordered_map<Obol::InstanceId, InstanceSemantic,
@@ -132,6 +142,11 @@ private:
     size_t compactShadedPresentationCount = 0;
     std::unordered_map<Obol::InstanceId, CompactInstancePresentation,
 	std::hash<Obol::InstanceId>> compactInstancePresentations;
+    /* Allocated only for the uncommon large-leaf live publication path.  A
+     * normal many-leaf scene pays no per-occurrence vector overhead. */
+    std::unordered_map<Obol::InstanceId,
+	std::vector<CompactLayerPresentation>,
+	std::hash<Obol::InstanceId>> compactLayerPresentations;
     /* Exact active presentation references make sparse box->mesh swaps
      * independent of total scene size. */
     std::unordered_map<Obol::PartId, size_t, std::hash<Obol::PartId>>
@@ -140,6 +155,12 @@ private:
 	compactPartChannels;
     std::unordered_set<Obol::PartId, std::hash<Obol::PartId>>
 	compactLodParts;
+    /* A spatially paged leaf may have no page intersecting the current view
+     * even when its conservative whole-asset bounds touch the frustum.  Keep
+     * that view-local cull separate from authored/source visibility so a
+     * later camera epoch can restore the occurrence without rediscovery. */
+    std::unordered_set<Obol::InstanceId, std::hash<Obol::InstanceId>>
+	compactSpatiallyCulledInstances;
 };
 
 class SoBRLCadRenderBatch : public SoSeparator {

@@ -192,6 +192,22 @@ struct BObolLodProgressiveMeshTrim;
 typedef std::shared_ptr<const BObolLodProgressiveMeshTrim>
     BObolLodProgressiveMeshTrimPtr;
 
+/* One immutable renderer layer owned by an LoD result.  A layer is a
+ * presentation subresource of one logical occurrence, never a second CAD
+ * occurrence.  layerKey is stable within the source-asset partition and is
+ * used by the retained assembly to derive its private part/instance ids. */
+struct BOBOL_EXPORT BObolLodPresentationLayer {
+    SbString layerKey;
+    std::shared_ptr<const Obol::PartGeometry> geometry;
+    uint64_t geometryRevision;
+    int activeCut;
+    SbBool coverage;
+
+    BObolLodPresentationLayer(void);
+    SbBool isValid(void) const;
+    size_t estimateBytes(void) const;
+};
+
 /* Population frontier of one private spatial page.  Records are always
  * sorted by chunkId when exchanged with BObolLodProgressiveMesh. */
 struct BOBOL_EXPORT BObolLodChunkCut {
@@ -207,7 +223,8 @@ struct BOBOL_EXPORT BObolLodChunkCut {
 /* One thread-safe retained PoP asset shared by every occurrence and view that
  * resolves to the same source geometry.  A small leaf uses one exact,
  * activation-ordered cumulative prefix.  A large leaf uses independently
- * resident private page prefixes packed behind one logical CAD identity.
+ * resident private page prefixes published as immutable renderer layers
+ * behind one logical CAD identity.
  * The active draw cut deliberately does not live here: each occurrence may
  * draw a different cut from the pages its view requires. */
 class BOBOL_EXPORT BObolLodProgressiveMesh {
@@ -274,6 +291,12 @@ public:
     SbBool hierarchyCountsForChunksAtCut(
 	const std::vector<uint32_t> &chunkIds, int cut,
 	SbBool hasNormals, BObolLodCounts *counts) const;
+    /* Return the sorted subset which contributes triangles at cut.  Spatial
+     * pages with no population at a coarse cut deliberately have no renderer
+     * layer; callers use this census to distinguish that valid omission from
+     * an incomplete presentation. */
+    SbBool populatedChunkIdsAtCut(const std::vector<uint32_t> &chunkIds,
+	int cut, std::vector<uint32_t> &populatedChunkIds) const;
     int residentCutForChunks(const std::vector<uint32_t> &chunkIds) const;
     void residentChunkIds(std::vector<uint32_t> &chunkIds) const;
     void residentChunkCuts(std::vector<BObolLodChunkCut> &chunkCuts) const;
@@ -318,6 +341,13 @@ public:
      * representation by that worker before publication. */
     std::shared_ptr<const Obol::PartGeometry> prepareCadGeometry(
 	int drawMode, uint64_t *preparedRevision = NULL) const;
+    /* Publish selected spatial pages without flattening them into one large
+     * allocation.  Every returned layer uses activeCut, so neighboring pages
+     * retain a coherent quantization boundary while their immutable storage
+     * may have different resident high-water marks. */
+    SbBool prepareCadPresentationLayers(int drawMode,
+	const std::vector<uint32_t> &chunkIds, int activeCut,
+	std::vector<BObolLodPresentationLayer> &layers) const;
 
 private:
     BObolLodProgressiveMesh(const BObolLodProgressiveMesh &);
@@ -351,8 +381,16 @@ bobol_lod_visible_chunks(
 struct BOBOL_EXPORT BObolLodResidentCompaction {
     SbString assetKey;
     BObolLodProgressiveMeshPtr progressiveMesh;
+    /* Complete consumer-demand snapshot which authorized this trim.  A view
+     * must reject the completion after any occurrence demand changes: quiet
+     * memory maintenance is not presentation authority. */
+    uint64_t consumerDemandRevision;
     std::shared_ptr<const Obol::PartGeometry> preparedCadGeometry;
     uint64_t preparedCadGeometryRevision;
+    /* Chunked assets retain page geometry rather than rebuilding one packed
+     * mesh.  The owner filters these immutable handles for each occurrence's
+     * current page set and active cut. */
+    std::vector<BObolLodPresentationLayer> presentationLayers;
     int residentCut;
     unsigned int channelMask;
     size_t priorBytes;
@@ -401,6 +439,13 @@ struct BOBOL_EXPORT BObolLodRequest {
      * a nonzero value so a late worker result cannot bind to a recycled entry
      * after erase/redraw or edit-driven registry replacement. */
     BObolSourcePopulationEpoch sourcePopulationEpoch;
+    /* Multiple compact occurrences may consume one immutable source asset.
+     * TRUE lets the service serialize construction/loading of that asset
+     * across those occurrences; the owner-thread planner binds or resubmits
+     * each occurrence after the producer result is published.  Route and
+     * population epochs remain distinct, so separate scene sources cannot
+     * consume one another's results. */
+    SbBool coalesceAssetProducer;
     /* Fixed-width source-local compact index.  UINT32_MAX means the request
      * is not backed by a compact entry.  The occurrence key remains semantic
      * identity across index rebuilds; owner-thread result publication
@@ -463,6 +508,9 @@ struct BOBOL_EXPORT BObolLodResult {
     BObolLodProgressiveMeshPtr progressiveMesh;
     std::shared_ptr<const Obol::PartGeometry> preparedCadGeometry;
     uint64_t preparedCadGeometryRevision;
+    /* Ordered immutable subresources for one logical CAD occurrence.  Empty
+     * retains the ordinary single-geometry representation during migration. */
+    std::vector<BObolLodPresentationLayer> presentationLayers;
     /* Producer-resolved display demand.  A cold request may carry
      * request.requestedCut == -1 because no hierarchy existed at submission;
      * the provider selects from certified metadata and reports that cut here

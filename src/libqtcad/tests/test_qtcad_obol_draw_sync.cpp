@@ -93,6 +93,20 @@ camera_positions_differ(const SbVec3f &a, const SbVec3f &b, float min_delta)
 	fabsf(a[2] - b[2]) > min_delta;
 }
 
+/* The direct camera is placed one focal distance behind the BRL-CAD view
+ * center.  Position therefore includes orientation-dependent depth and is
+ * not a valid assertion for a recenter operation. */
+static SbVec3f
+camera_focal_point(const SoCamera *camera)
+{
+    if (!camera)
+	return SbVec3f(0.0f, 0.0f, 0.0f);
+    SbVec3f forward(0.0f, 0.0f, -1.0f);
+    camera->orientation.getValue().multVec(forward, forward);
+    return camera->position.getValue() +
+	forward * camera->focalDistance.getValue();
+}
+
 static int
 make_draw_sync_db(const char *dbpath)
 {
@@ -550,7 +564,7 @@ main(int argc, char **argv)
     bv_center_set(bv_context_view(static_cast<struct bv_context *>(view.viewContext())), offcenter);
     bv_scale_set(bv_context_view(static_cast<struct bv_context *>(view.viewContext())), 250.0);
     view.need_update(QG_VIEW_REFRESH);
-    SbVec3f offTargetCamera = camera->position.getValue();
+    SbVec3f offTargetCamera = camera_focal_point(camera);
     if (offTargetCamera[0] < 50.0f)
 	FAIL("qtcad refresh should sync Obol camera from GED view state");
 
@@ -558,7 +572,7 @@ main(int argc, char **argv)
     if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
 	FAIL("real GED autoview command should succeed for qtcad Obol view sync");
     view.need_update(QG_VIEW_REFRESH);
-    SbVec3f autoviewCamera = camera->position.getValue();
+    SbVec3f autoviewCamera = camera_focal_point(camera);
     if (!camera_positions_differ(offTargetCamera, autoviewCamera, 10.0f))
 	FAIL("GED autoview should update qtcad Obol camera through view refresh");
     if (fabsf(autoviewCamera[0]) > 25.0f)
@@ -598,6 +612,8 @@ main(int argc, char **argv)
     SoBRLDatabaseSource *pairSource = source_for_path(controller, "pair.c");
     if (!pairSource || visible_compact_occurrence_count(pairSource) != 2)
 	FAIL("observer retained-frontier setup should expose both occurrences");
+    const uint64_t pairMeshInventoryRevision =
+	pairSource->getDisplayMeshLodRevision();
 
     controller->clearRenderRequest();
     uint64_t frontierSerial = controller->renderRequestSerialGet();
@@ -614,6 +630,8 @@ main(int argc, char **argv)
     SbBool frontierCapacityRelevant = TRUE;
     if (obs.calls <= 0 || obs.changed <= 0 ||
 	visible_compact_occurrence_count(pairSource) != 1 ||
+	pairSource->getDisplayMeshLodRevision() !=
+	    pairMeshInventoryRevision ||
 	controller->renderRequestSerialGet() <= frontierSerial ||
 	!controller->consumeRenderRequest(NULL,
 	    &frontierCapacityRelevant) || frontierCapacityRelevant)
@@ -636,6 +654,8 @@ main(int argc, char **argv)
     frontierCapacityRelevant = TRUE;
     if (obs.calls <= 0 || obs.changed <= 0 ||
 	visible_compact_occurrence_count(pairSource) != 2 ||
+	pairSource->getDisplayMeshLodRevision() !=
+	    pairMeshInventoryRevision ||
 	controller->renderRequestSerialGet() <= frontierSerial ||
 	!controller->consumeRenderRequest(NULL,
 	    &frontierCapacityRelevant) || frontierCapacityRelevant)

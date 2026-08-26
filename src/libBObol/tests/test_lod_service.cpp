@@ -20,6 +20,8 @@
 #include "bu/file.h"
 #include "wdb.h"
 
+#include <Obol/cad/SoCADAssembly.h>
+
 #include <Inventor/SbBox.h>
 #include <Inventor/SbVec3f.h>
 
@@ -1948,6 +1950,77 @@ test_active_request_duplicate_suppression(void)
 }
 
 static int
+test_asset_producer_coalescing(void)
+{
+    BObolLodService service;
+    DebugDelayTaskData data;
+
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD service did not start for asset producer test\n");
+	return 1;
+    }
+
+    BObolLodTask first;
+    first.generation = service.beginGeneration();
+    first.request = make_request("/shared-asset.bot");
+    first.request.occurrenceKey = "/assembly/first/shared-asset.bot";
+    first.request.coalesceAssetProducer = TRUE;
+    first.realize = debug_delay_task;
+    first.realizeData = &data;
+    first.debugDelayMilliseconds = 80;
+
+    BObolLodTask sibling = first;
+    sibling.request.occurrenceKey = "/assembly/second/shared-asset.bot";
+    std::vector<BObolLodTask> tasks{first, sibling};
+    std::vector<uint64_t> taskIds;
+    if (service.submitBatch(tasks, taskIds, TRUE) != 1 ||
+	taskIds.size() != 2 || taskIds[0] == 0 || taskIds[1] != 0 ||
+	!service.hasActiveRequest(sibling.request)) {
+	printf("FAIL: LoD service did not coalesce sibling asset producers\n");
+	service.stop();
+	return 1;
+    }
+
+    if (wait_for_settled(service, 1)) {
+	service.stop();
+	return 1;
+    }
+    std::vector<BObolLodResult> results;
+    if (service.drainResults(results) != 1 || results.size() != 1 ||
+	!bobol_lod_result_matches_request(results.front(), first.request) ||
+	service.hasActiveRequest(sibling.request)) {
+	printf("FAIL: LoD service did not release coalesced producer ownership\n");
+	service.stop();
+	return 1;
+    }
+
+    const uint64_t siblingId = service.submitIfNotActive(sibling);
+    if (!siblingId || wait_for_settled(service, 1)) {
+	printf("FAIL: LoD service did not admit sibling after asset publication\n");
+	service.stop();
+	return 1;
+    }
+    results.clear();
+    if (service.drainResults(results) != 1 || results.size() != 1 ||
+	!bobol_lod_result_matches_request(results.front(), sibling.request)) {
+	printf("FAIL: LoD service did not publish the later sibling result\n");
+	service.stop();
+	return 1;
+    }
+    {
+	std::lock_guard<std::mutex> lock(data.mutex);
+	if (data.calls != 2) {
+	    printf("FAIL: LoD service executed duplicate sibling producer work\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+
+    service.stop();
+    return 0;
+}
+
+static int
 test_batch_submission(void)
 {
     BObolLodService service;
@@ -2066,6 +2139,24 @@ test_rt_source_full_detail_provider_task(void)
     if (check_source_full_detail_result(directResult, request,
 					"did not return direct BoT mesh result"))
 	ret = 1;
+
+    BObolLodRequest preparedRequest = request;
+    preparedRequest.addProviderParam("display.prepared_cad_only", "1");
+    BObolLodResult preparedResult =
+	bobol_rt_source_full_detail_provider_task(preparedRequest, &provider);
+    if (preparedResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	preparedResult.resultKind != BOBOL_LOD_RESULT_FULL_DETAIL ||
+	!preparedResult.preparedCadGeometry ||
+	!preparedResult.preparedCadGeometry->shaded ||
+	preparedResult.mesh.isValid() ||
+	preparedResult.preparedCadGeometryRevision == 0 ||
+	preparedResult.counts.faceCount != 4 ||
+	preparedResult.counts.pointCount == 0 ||
+	preparedResult.counts.byteCount == 0 ||
+	!bobol_lod_result_matches_request(preparedResult, preparedRequest)) {
+	printf("FAIL: LoD RT source full-detail provider did not prepare terminal CAD geometry\n");
+	ret = 1;
+    }
 
     BObolLodRequest scopedRequest = request;
     scopedRequest.addProviderParam("source_query.space", "source_local");
@@ -2917,10 +3008,16 @@ test_rt_mesh_provider_task(void)
     BObolLodResult firstStage =
 	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
     const SbBool firstStagePrepared =
-	firstStage.preparedCadGeometry &&
 	firstStage.progressiveMesh &&
-	firstStage.preparedCadGeometryRevision ==
-	    firstStage.progressiveMesh->revision() ? TRUE : FALSE;
+	((firstStage.preparedCadGeometry &&
+	  firstStage.preparedCadGeometryRevision ==
+	      firstStage.progressiveMesh->revision()) ||
+	 (!firstStage.presentationLayers.empty() &&
+	  std::all_of(firstStage.presentationLayers.begin(),
+	      firstStage.presentationLayers.end(),
+	      [](const BObolLodPresentationLayer &layer) {
+		  return layer.isValid() ? true : false;
+	      }))) ? TRUE : FALSE;
     BObolLodResult secondStage =
 	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
     stagedProvider.progressiveDelivery = FALSE;
@@ -3132,6 +3229,19 @@ test_rt_mesh_provider_task(void)
 	    std::vector<uint32_t> restored;
 	    if (restoredUnion.progressiveMesh)
 		restoredUnion.progressiveMesh->residentChunkIds(restored);
+	    BObolLodResidentDemand incompleteView = allView;
+	    incompleteView.chunkIds.push_back(unionHierarchy.chunk_count);
+	    const int beforeIncompleteCut = unionRich.progressiveMesh ?
+		unionRich.progressiveMesh->residentCut() : -1;
+	    const size_t incompleteQueued =
+		unionService.scheduleResidentMeshCompaction(
+		    0xa001, 3, {incompleteView});
+	    const int incompleteWait = started ?
+		wait_for_resident_compaction(unionService) : 1;
+	    const bool incompletePreserved = unionRich.progressiveMesh &&
+		unionRich.progressiveMesh->residentCut() == beforeIncompleteCut;
+	    (void)unionService.scheduleResidentMeshCompaction(
+		0xa001, 4, {firstView});
 	    /* Healthy memory above deliberately preserves page 1 as a latency
 	     * cache.  Once an explicit resident limit is exceeded, the same demand
 	     * may compact that off-screen page to the documented coverage floor
@@ -3149,7 +3259,7 @@ test_rt_mesh_provider_task(void)
 	    unionService.setResidentMeshLimit(1);
 	    const size_t pressureQueued =
 		unionService.scheduleResidentMeshCompaction(
-		    0xa001, 3, {firstView});
+		    0xa001, 5, {firstView});
 	    const int pressureWait = started ?
 		wait_for_resident_compaction(unionService) : 1;
 	    std::vector<BObolLodChunkCut> pressureCuts;
@@ -3175,16 +3285,20 @@ test_rt_mesh_provider_task(void)
 		restoredUnion.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 		restoredUnion.progressiveMesh != unionRich.progressiveMesh ||
 		restored.size() != unionHierarchy.chunk_count ||
+		incompleteQueued != 0 || incompleteWait ||
+		!incompletePreserved ||
 		pressureQueued !=
 		    (expectedPressurePageCut < unionHierarchy.max_cut ? 1u : 0u) ||
 		pressureWait || !pressureTrimmed) {
 		printf("FAIL: multi-view resident page union/trim/continuity/restore "
 		       "(queued=%zu/%zu/%zu trim=%zu pressure=%zu "
-		       "started=%d wait=%d/%d/%d "
+		       "incomplete=%zu/%d/%d started=%d wait=%d/%d/%d "
 		       "both=%d cuts=%d first=%d continuity=%d/%d restored=%zu/%u "
 		       "pressure-cut=%d/%d status=%d/%d/%d)\n",
 		       allQueued, firstQueued, secondQueued, trimQueued,
-		       pressureQueued, started ? 1 : 0, unionWait, trimWait,
+		       pressureQueued, incompleteQueued, incompleteWait,
+		       incompletePreserved ? 1 : 0,
+		       started ? 1 : 0, unionWait, trimWait,
 		       pressureWait,
 		       retainedBoth ? 1 : 0,
 		       retainedIndependentCuts ? 1 : 0,
@@ -3317,6 +3431,11 @@ test_rt_mesh_provider_task(void)
 	const size_t maintenanceQueued =
 	    service.scheduleResidentMeshCompaction(
 		0x1234, 1, demanded);
+	uint64_t maintenancePlanRevision = 0;
+	size_t maintenanceCandidates = SIZE_MAX;
+	const SbBool maintenancePlanCurrent =
+	    service.residentMeshCompactionPlanForDiagnostics(
+		0x1234, &maintenancePlanRevision, &maintenanceCandidates);
 	const int maintenanceWait =
 	    wait_for_resident_compaction(service);
 	std::vector<BObolLodResidentCompaction> maintenanceResults;
@@ -3324,16 +3443,21 @@ test_rt_mesh_provider_task(void)
 	    0x1234, maintenanceResults);
 	const size_t maintainedBytes =
 	    service.residentMeshBytesForDiagnostics();
-	if (maintenanceQueued != 0 || maintenanceWait ||
+	if (maintenanceQueued != 0 || !maintenancePlanCurrent ||
+	    maintenancePlanRevision != 1 || maintenanceCandidates != 0 ||
+	    maintenanceWait ||
 	    !maintenanceResults.empty() ||
 	    terminalStage.progressiveMesh->residentCut() != richLevel ||
 	    maintainedBytes != richBytes) {
 	    printf("FAIL: stable resident PoP demand queued redundant backing "
 		   "cleanup (queued=%zu level=%d/%d "
-		   "bytes=%zu/%zu results=%zu)\n",
+		   "bytes=%zu/%zu results=%zu plan=%d/%llu candidates=%zu)\n",
 		   maintenanceQueued,
 		   terminalStage.progressiveMesh->residentCut(), richLevel,
-		   maintainedBytes, richBytes, maintenanceResults.size());
+		   maintainedBytes, richBytes, maintenanceResults.size(),
+		   maintenancePlanCurrent ? 1 : 0,
+		   static_cast<unsigned long long>(maintenancePlanRevision),
+		   maintenanceCandidates);
 	    ret = 1;
 	}
 
@@ -3455,6 +3579,57 @@ test_rt_mesh_provider_task(void)
 	}
 	staleCompactionService.stop();
 
+	/* A consumer-wide semantic edge must cancel a queued trim even when no
+	 * provider request touches the asset.  Retained allocation can promote an
+	 * already-resident cut without I/O, so per-asset use notification alone is
+	 * not a complete stale-work guard. */
+	BObolLodService invalidatedCompactionService;
+	BObolMeshLodProvider invalidatedProvider = reloadProvider;
+	invalidatedProvider.service = &invalidatedCompactionService;
+	BObolLodResult invalidatedRich =
+	    invalidatedCompactionService.realizeResidentMeshLod(
+		stagedRequest, invalidatedProvider);
+	size_t invalidatedQueued = 0;
+	int invalidatedRichCut = -1;
+	if (invalidatedRich.providerStatus == BOBOL_LOD_PROVIDER_READY &&
+	    invalidatedRich.progressiveMesh) {
+	    invalidatedRichCut = invalidatedRich.progressiveMesh->residentCut();
+	    BObolLodResidentDemand oldDemand;
+	    oldDemand.assetKey = invalidatedRich.geometry.cacheKey.value;
+	    oldDemand.cut = invalidatedRich.progressiveMesh->minimumCut();
+	    oldDemand.channelMask = 2;
+	    oldDemand.chunkIds = invalidatedRich.request.requiredChunks;
+	    invalidatedQueued =
+		invalidatedCompactionService.scheduleResidentMeshCompaction(
+		    0x5679, 17, {oldDemand});
+	    invalidatedCompactionService.invalidateResidentMeshConsumer(
+		0x5679);
+	}
+	const SbBool invalidatedStarted =
+	    invalidatedCompactionService.start(1, FALSE);
+	const int invalidatedWait = invalidatedStarted ?
+	    wait_for_resident_compaction(invalidatedCompactionService) : 1;
+	std::vector<BObolLodResidentCompaction> invalidatedCompletions;
+	invalidatedCompactionService.drainResidentMeshCompactions(
+	    0x5679, invalidatedCompletions);
+	if (invalidatedRich.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	    !invalidatedRich.progressiveMesh || invalidatedQueued != 1 ||
+	    !invalidatedStarted || invalidatedWait ||
+	    !invalidatedCompletions.empty() ||
+	    invalidatedRich.progressiveMesh->residentCut() !=
+		invalidatedRichCut) {
+	    printf("FAIL: consumer demand invalidation did not cancel a queued "
+		   "resident compaction (queued=%zu started=%d wait=%d "
+		   "cut=%d/%d results=%zu)\n",
+		   invalidatedQueued, invalidatedStarted ? 1 : 0,
+		   invalidatedWait,
+		   invalidatedRich.progressiveMesh ?
+		       invalidatedRich.progressiveMesh->residentCut() : -1,
+		   invalidatedRichCut, invalidatedCompletions.size());
+	    ret = 1;
+	}
+	invalidatedCompactionService.stop();
+
 	if (reloaded.providerStatus == BOBOL_LOD_PROVIDER_READY &&
 	    reloaded.progressiveMesh &&
 	    reloaded.progressiveMesh->residentCut() >
@@ -3486,9 +3661,10 @@ test_rt_mesh_provider_task(void)
 		completions[0].residentCut > rendererRichCut ||
 		rendererFloorPages != compactDemand.chunkIds ||
 		completions[0].channelMask != 2 ||
-		!completions[0].preparedCadGeometry ||
-		completions[0].preparedCadGeometryRevision !=
-		    reloaded.progressiveMesh->revision()) {
+		(completions[0].preparedCadGeometry ?
+		    completions[0].preparedCadGeometryRevision !=
+			reloaded.progressiveMesh->revision() :
+		    completions[0].presentationLayers.empty())) {
 		printf("FAIL: resident compaction did not publish one "
 		       "renderer-ready immutable generation\n");
 		ret = 1;
@@ -3593,6 +3769,23 @@ test_rt_mesh_provider_task(void)
 	BObolLodResult admittedAfterRelax =
 	    service.realizeResidentMeshLod(
 		stagedRequest, reloadProvider);
+	/* A per-task working-set cap may select a poorer presentation from an
+	 * already-richer immutable resident mesh.  There is no growth reservation
+	 * in that case, but the terminal capacity witness still needs the current
+	 * admission revision so an unchanged submit pass can suppress retries. */
+	BObolMeshLodProvider transientProvider = reloadProvider;
+	transientProvider.progressiveDelivery = FALSE;
+	transientProvider.useDeliveryCutLimit = TRUE;
+	transientProvider.deliveryCutLimit =
+	    admittedAfterRelax.progressiveMesh ?
+		admittedAfterRelax.progressiveMesh->minimumCut() : 0;
+	transientProvider.transientMemoryLimited = TRUE;
+	BObolLodResult transientLimited =
+	    service.realizeResidentMeshLod(stagedRequest, transientProvider);
+	BObolLodResult repeatedTransientLimited =
+	    service.realizeResidentMeshLod(stagedRequest, transientProvider);
+	const uint64_t transientRevision =
+	    service.residentMeshAdmissionRevision();
 	if (deniedSuffix.providerStatus !=
 		BOBOL_LOD_PROVIDER_READY ||
 	    !deniedSuffix.memoryLimited ||
@@ -3613,11 +3806,25 @@ test_rt_mesh_provider_task(void)
 	    admittedAfterRelax.memoryLimited ||
 	    !admittedAfterRelax.terminal ||
 	    admittedAfterRelax.geometry.activeCut !=
-		stagedRequest.requestedCut) {
+		stagedRequest.requestedCut ||
+	    transientLimited.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	    !transientLimited.memoryLimited || !transientLimited.terminal ||
+	    transientLimited.residentAdmissionRevision == 0 ||
+	    transientLimited.residentAdmissionRevision != transientRevision ||
+	    transientLimited.geometry.activeCut !=
+		transientProvider.deliveryCutLimit ||
+	    repeatedTransientLimited.providerStatus !=
+		BOBOL_LOD_PROVIDER_READY ||
+	    !repeatedTransientLimited.memoryLimited ||
+	    repeatedTransientLimited.residentAdmissionRevision !=
+		transientRevision ||
+	    repeatedTransientLimited.geometry.activeCut !=
+		transientLimited.geometry.activeCut) {
 	    printf("FAIL: resident byte admission did not suppress/release "
 		   "optional suffix growth (denied=%d/%d repeated=%d/%d "
 		   "levels=%d/%d "
-		   "revision=%llu/%llu/%llu admitted=%d/%d)\n",
+		   "revision=%llu/%llu/%llu admitted=%d/%d "
+		   "transient=%d/%d/%llu repeated=%d/%d/%llu)\n",
 		   deniedSuffix.providerStatus,
 		   deniedSuffix.memoryLimited ? 1 : 0,
 		   repeatedDenial.providerStatus,
@@ -3628,7 +3835,15 @@ test_rt_mesh_provider_task(void)
 		   static_cast<unsigned long long>(revisionBeforeRelax),
 		   static_cast<unsigned long long>(revisionAfterRelax),
 		   admittedAfterRelax.memoryLimited ? 1 : 0,
-		   admittedAfterRelax.geometry.activeCut);
+		   admittedAfterRelax.geometry.activeCut,
+		   transientLimited.memoryLimited ? 1 : 0,
+		   transientLimited.geometry.activeCut,
+		   static_cast<unsigned long long>(
+		       transientLimited.residentAdmissionRevision),
+		   repeatedTransientLimited.memoryLimited ? 1 : 0,
+		   repeatedTransientLimited.geometry.activeCut,
+		   static_cast<unsigned long long>(
+		       repeatedTransientLimited.residentAdmissionRevision));
 	    ret = 1;
 	}
     } else {
@@ -4073,15 +4288,31 @@ test_working_set_admission(void)
 	service.peakWorkingSetBytesForDiagnostics();
     const size_t peakTasks =
 	service.peakExecutingTaskCountForDiagnostics();
-    service.stop();
     if (waitResult || maximum != 1 || activeBytes != 0 ||
 	peakBytes != 60 || peakTasks != 1) {
 	printf("FAIL: byte-weighted LoD admission exceeded its working-set "
 	       "limit (maximum=%d active_bytes=%zu peak_bytes=%zu "
 	       "peak_tasks=%zu)\n",
 	       maximum, activeBytes, peakBytes, peakTasks);
+	service.stop();
 	return 1;
     }
+
+    WorkingSetTaskState rejected;
+    BObolLodTask oversized;
+    oversized.request = make_request("/working-set-oversized.bot");
+    oversized.realize = working_set_task;
+    oversized.realizeData = &rejected;
+    oversized.estimatedWorkingSetBytes = 101;
+    if (!service.submit(oversized) || wait_for_settled(service, 1) ||
+	rejected.maximum.load() != 0 ||
+	service.activeWorkingSetBytesForDiagnostics() != 0 ||
+	service.peakWorkingSetBytesForDiagnostics() != 60) {
+	printf("FAIL: service working-set governor entered oversized task\n");
+	service.stop();
+	return 1;
+    }
+    service.stop();
     return 0;
 }
 
@@ -4101,7 +4332,8 @@ test_process_working_set_admission(void)
     std::vector<std::thread> workers;
     for (int i = 0; i < 3; i++) {
 	workers.push_back(std::thread([&]() {
-	    bobol_lod_working_set_acquire(reservation);
+	    if (!bobol_lod_working_set_acquire(reservation))
+		return;
 	    const int active = state.active.fetch_add(1) + 1;
 	    int observed = state.maximum.load();
 	    while (active > observed &&
@@ -4122,6 +4354,22 @@ test_process_working_set_admission(void)
 	bobol_lod_working_set_global_peak_tasks() < 1) {
 	printf("FAIL: process LoD working-set governor admitted overlapping "
 	       "large preparations\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_process_working_set_rejection(void)
+{
+    const size_t limit = bobol_lod_working_set_global_limit();
+    if (limit == SIZE_MAX)
+	return 0;
+    if (limit == SIZE_MAX - 1 ||
+	bobol_lod_working_set_acquire(limit + 1) ||
+	bobol_lod_working_set_global_active_bytes() != 0 ||
+	bobol_lod_working_set_global_active_tasks() != 0) {
+	printf("FAIL: process LoD governor admitted an oversized task\n");
 	return 1;
     }
     return 0;
@@ -4486,6 +4734,39 @@ test_managed_service_is_shared(void)
     return 0;
 }
 
+static int
+test_presentation_layer_validation(void)
+{
+    BObolLodResult result;
+    result.request = make_request("presentation-layer");
+    result.resultKind = BOBOL_LOD_RESULT_MESH;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    BObolLodPresentationLayer coverage;
+    coverage.layerKey = "coverage";
+    coverage.geometry = std::make_shared<Obol::PartGeometry>();
+    coverage.geometryRevision = 1;
+    coverage.coverage = TRUE;
+    result.presentationLayers.push_back(coverage);
+    result.canonicalizePayload();
+    if (!result.payloadIsConsistent()) {
+	printf("FAIL: valid presentation layer rejected\n");
+	return 1;
+    }
+
+    result.presentationLayers.push_back(coverage);
+    if (result.payloadIsConsistent()) {
+	printf("FAIL: duplicate presentation layer accepted\n");
+	return 1;
+    }
+    result.presentationLayers.pop_back();
+    result.presentationLayers[0].geometry.reset();
+    if (result.payloadIsConsistent()) {
+	printf("FAIL: invalid presentation layer accepted\n");
+	return 1;
+    }
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -4551,6 +4832,8 @@ main(int argc, char **argv)
 	return 1;
     if (runIsolated(test_active_request_duplicate_suppression))
 	return 1;
+    if (runIsolated(test_asset_producer_coalescing))
+	return 1;
     if (runIsolated(test_batch_submission))
 	return 1;
     if (runIsolated(test_rt_source_full_detail_provider_task))
@@ -4567,6 +4850,8 @@ main(int argc, char **argv)
 	return 1;
     if (runIsolated(test_process_working_set_admission))
 	return 1;
+    if (runIsolated(test_process_working_set_rejection))
+	return 1;
     if (runIsolated(test_generation_scoped_consumers))
 	return 1;
     if (runIsolated(test_intermediate_result_lifecycle))
@@ -4574,6 +4859,8 @@ main(int argc, char **argv)
     if (runIsolated(test_resident_memory_percentage_limit))
 	return 1;
     if (runIsolated(test_managed_service_is_shared))
+	return 1;
+    if (runIsolated(test_presentation_layer_validation))
 	return 1;
 
     bu_dirclear(processCacheDir);

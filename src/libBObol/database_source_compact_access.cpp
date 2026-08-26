@@ -141,6 +141,21 @@ SoBRLDatabaseSource::getCompactExpectedInstanceCount(void) const
     return std::max(current, this->d->compactExpectedInstanceCount);
 }
 
+SbBool
+SoBRLDatabaseSource::getCompactSourceProfile(
+    BObolCompactSourceProfile &profile) const
+{
+    profile = this->d->compactSourceProfile;
+    return profile.valid;
+}
+
+void
+SoBRLDatabaseSource::setCompactSourceProfile(
+    const BObolCompactSourceProfile &profile)
+{
+    this->d->compactSourceProfile = profile;
+}
+
 int
 SoBRLDatabaseSource::getCompactPartCount(void) const
 {
@@ -640,7 +655,15 @@ SoBRLDatabaseSource::getCompactLodProviderSummary(
 	this->d->compactIndex->entries[static_cast<size_t>(index)];
     if (!entry.sourceMeshRequestValid)
 	return FALSE;
-    summary.stagedSource = entry.sourceMeshRequest.stagedSource;
+    if (this->d->compactStagedSourceStream) {
+	summary.stagedSource =
+	    this->d->compactStagedSourceStream->claimStagedSource(
+		entry.sourceMeshRequest.stagedSource);
+	if (!this->d->compactStagedSourceStream->stagedSourceByteCount())
+	    this->d->compactStagedSourceStream.reset();
+    }
+    if (!summary.stagedSource)
+	summary.stagedSource = entry.sourceMeshRequest.stagedSource.lock();
     summary.lodAvailable = entry.sourceMeshRequest.lodAvailable ?
 	TRUE : FALSE;
     summary.lodActiveCut = entry.sourceMeshRequest.lodActiveCut;
@@ -671,6 +694,9 @@ SoBRLDatabaseSource::getCompactLodPlanningSummary(
 	    entry.sourceMeshRequest.meshAssetContentHash;
 	summary.sourceFaceCount = entry.sourceMeshRequest.faceCount;
 	summary.sourcePointCount = entry.sourceMeshRequest.pointCount;
+	summary.botSource = BU_STR_EQUAL(
+	    entry.sourceMeshRequest.sourceType.getString(), "bot") ?
+	    TRUE : FALSE;
 	summary.brepSource = BU_STR_EQUAL(
 	    entry.sourceMeshRequest.sourceType.getString(), "brep") ?
 	    TRUE : FALSE;
@@ -1428,7 +1454,14 @@ SoBRLDatabaseSource::reapplyCompactInstanceVisibilityFrontier(
 	}
 	this->markCompiledAssemblyDirty();
 	this->markCadBatchDirty(changedEntries);
-	this->markDisplayMeshLodDirty(changedEntries);
+	/* A hierarchy visibility frontier changes which retained instances are
+	 * presented; it does not change mesh inventory or immutable availability.
+	 * Keep the view payload bound so an erase/redraw can hide and restore it in
+	 * one presentation transaction.  Advancing the mesh-inventory revision
+	 * here made the LoD delta pass remove hidden payloads and briefly commit an
+	 * empty frame before an asynchronous redraw reattached the same resident
+	 * asset.  Camera, policy, and resource-pressure revisions still perform the
+	 * normal view allocation and may compact hidden data when warranted. */
 	this->touch();
     }
     return changed;

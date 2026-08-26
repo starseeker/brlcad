@@ -69,6 +69,8 @@ if(TARGET ged_test_lod)
   set_property(TEST ged_test_drawing_lod APPEND PROPERTY ENVIRONMENT GED_TEST_DRAW_OBOL_CAPTURE=1)
 endif(TARGET ged_test_lod)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_lod_tmp.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_lod_test_cache)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_lod_test_runtime_cache)
 
 set(select_test_ctrls select.apng)
 brlcad_addexec(ged_test_select_draw "select.cpp;util.cpp" "libged;libBObol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
@@ -116,6 +118,20 @@ if(TARGET ged_test_aet)
   set_property(TEST ged_test_drawing_aet APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif(TARGET ged_test_aet)
 
+# The image controls and runtime cache are intentionally local to the test
+# binary directory.  CTest's invocation directory is otherwise inherited
+# from the caller, which makes a clean build depend on how ctest was run.
+foreach(_ged_draw_image_test
+    ged_test_drawing_basic
+    ged_test_drawing_faceplate
+    ged_test_drawing_lod
+    ged_test_drawing_select
+    ged_test_drawing_quad
+    ged_test_drawing_aet)
+  set_property(TEST ${_ged_draw_image_test} PROPERTY
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+endforeach()
+
 # Typed selection, snap, and measure semantic records
 brlcad_addexec(ged_test_selection_semantics "selection_semantics.cpp" "libged;libbu" TEST)
 if(TARGET ged_test_selection_semantics)
@@ -133,6 +149,8 @@ if(TARGET ged_test_selection_semantics)
 endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_selection_semantics_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_selection_semantics_cache)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_select_test_controls)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_select_test_runtime_cache)
 
 brlcad_addexec(ged_test_snap_semantics "snap_semantics.cpp" "libbv;libbu" TEST)
 if(TARGET ged_test_snap_semantics)

@@ -2572,6 +2572,14 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 	draw_observer_defer_depth++;
 	event_observer_defer_depth++;
 	int ret = ged_exec(gedp, argc, argv);
+	/* View and database observers below may synchronously issue their own GED
+	 * commands (for example, a faceplate refreshing its state).  Preserve this
+	 * command's result before those notifications can reuse ged_result_str.
+	 * Callers use run_cmd for command readback as well as mutation, so returning
+	 * a later observer's output is a correctness error rather than cosmetic
+	 * logging noise. */
+	struct bu_vls command_result = BU_VLS_INIT_ZERO;
+	bu_vls_printf(&command_result, "%s", bu_vls_cstr(gedp->ged_result_str));
 	event_observer_defer_depth--;
 	draw_observer_defer_depth--;
 
@@ -2595,6 +2603,9 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 		pending_db_event_metadata_only = 0;
 		pending_db_event_paths.clear();
 		pending_db_event_all = 0;
+		if (msg)
+		    bu_vls_printf(msg, "%s", bu_vls_cstr(&command_result));
+		bu_vls_free(&command_result);
 		return ret;
 	}
 
@@ -2629,8 +2640,9 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 
 	model_dbip = gedp->dbip;
 
-	if (msg && gedp)
-		bu_vls_printf(msg, "%s", bu_vls_cstr(gedp->ged_result_str));
+	if (msg)
+		bu_vls_printf(msg, "%s", bu_vls_cstr(&command_result));
+	bu_vls_free(&command_result);
 
 	return ret;
 }

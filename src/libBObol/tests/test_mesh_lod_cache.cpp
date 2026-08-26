@@ -86,20 +86,50 @@ struct mesh_lod_chunk_test_data {
     std::vector<uint32_t> seen;
     uint64_t faces = 0;
     uint64_t points = 0;
+    bool validateDistinctPrefixes = false;
 };
 
 struct mesh_lod_preview_test_data {
     size_t calls = 0;
+    size_t coverageCalls = 0;
     size_t faces = 0;
     size_t points = 0;
     int minCut = -1;
     int maxCut = -1;
     int residentCut = -1;
     bool valid = false;
+    bool coverageValid = false;
+    bool coverageBoundsRecorded = false;
+    point_t coverageMinimum = VINIT_ZERO;
+    point_t coverageMaximum = VINIT_ZERO;
 };
 
+struct mesh_lod_spatial_page_test_data {
+    size_t calls = 0;
+    uint64_t faces = 0;
+    uint64_t points = 0;
+    bool valid = true;
+    std::vector<uint32_t> pageIds;
+};
+
+struct mesh_lod_cancellation_test_data {
+    size_t polls = 0;
+    size_t cancelAfter = 0;
+};
+
+static int
+mesh_lod_cancellation_test_callback(void *callbackData)
+{
+    mesh_lod_cancellation_test_data *test =
+	static_cast<mesh_lod_cancellation_test_data *>(callbackData);
+    if (!test)
+	return 1;
+    test->polls++;
+    return test->polls >= test->cancelAfter ? 1 : 0;
+}
+
 static void
-mesh_lod_preview_test_callback(unsigned long long cacheKey,
+mesh_lod_preview_test_callback(int previewKind, unsigned long long cacheKey,
 	const struct BObolMeshLodData *data,
 	const struct BObolMeshLodHierarchyInfo *hierarchy,
 	void *callbackData)
@@ -114,8 +144,13 @@ mesh_lod_preview_test_callback(unsigned long long cacheKey,
     test->minCut = hierarchy ? hierarchy->min_cut : -1;
     test->maxCut = hierarchy ? hierarchy->max_cut : -1;
     test->residentCut = hierarchy ? hierarchy->resident_cut : -1;
-    test->valid = cacheKey && data && hierarchy && data->faces &&
-	data->points_orig && data->face_count && data->point_orig_count &&
+    const bool valid = cacheKey && data && hierarchy &&
+	((previewKind == BOBOL_MESH_LOD_PREVIEW_COVERAGE_POINTS &&
+	  !data->faces && !data->face_count && data->points_orig &&
+	  data->point_orig_count) ||
+	 (previewKind == BOBOL_MESH_LOD_PREVIEW_MESH_PREFIX &&
+	  data->faces && data->points_orig && data->face_count &&
+	  data->point_orig_count)) &&
 	hierarchy->min_cut >= 0 &&
 	hierarchy->max_cut >= hierarchy->min_cut &&
 	hierarchy->resident_cut >= hierarchy->min_cut &&
@@ -124,6 +159,88 @@ mesh_lod_preview_test_callback(unsigned long long cacheKey,
 	    hierarchy->cuts[hierarchy->resident_cut].face_count &&
 	data->point_orig_count ==
 	    hierarchy->cuts[hierarchy->resident_cut].point_count;
+    test->valid = test->valid || valid;
+    if (previewKind == BOBOL_MESH_LOD_PREVIEW_COVERAGE_POINTS) {
+	++test->coverageCalls;
+	test->coverageValid = test->coverageValid || valid;
+	if (data) {
+	    VMOVE(test->coverageMinimum, data->bmin);
+	    VMOVE(test->coverageMaximum, data->bmax);
+	    test->coverageBoundsRecorded = true;
+	}
+    }
+}
+
+static void
+mesh_lod_spatial_page_test_callback(unsigned long long cacheKey,
+	const struct BObolMeshLodSpatialPage *page, void *callbackData)
+{
+    mesh_lod_spatial_page_test_data *test =
+	static_cast<mesh_lod_spatial_page_test_data *>(callbackData);
+    if (!test)
+	return;
+    ++test->calls;
+    if (!cacheKey || !page || page->cut != page->hierarchy.resident_cut ||
+	page->hierarchy.chunk_count != 1 ||
+	!page->hierarchy.chunks ||
+	page->hierarchy.chunks[0].chunk_id != page->page_id ||
+	page->info.chunk_id != page->page_id ||
+	page->data.face_count != page->info.cuts[page->cut].face_count ||
+	page->data.point_count != page->info.cuts[page->cut].point_count ||
+	page->data.point_orig_count != page->data.point_count ||
+	(page->data.face_count && !page->data.faces) ||
+	(page->data.point_count && (!page->data.points ||
+				     !page->data.points_orig)) ||
+	(page->data.normal_count && !page->data.normals) ||
+	page->data.normal_count !=
+	    (page->hierarchy.has_normals ? page->data.face_count * 3u : 0) ||
+	!page->hierarchy.cuts[page->hierarchy.max_cut].exact ||
+	std::fabs(page->hierarchy.cuts[
+	    page->hierarchy.max_cut].object_error) >
+	    std::numeric_limits<double>::epsilon()) {
+	test->valid = false;
+	return;
+    }
+    double priorError = std::numeric_limits<double>::infinity();
+    for (uint32_t cut = 0; cut < page->hierarchy.cut_count; ++cut) {
+	const BObolMeshLodCutInfo &cutInfo = page->hierarchy.cuts[cut];
+	if (!std::isfinite(cutInfo.object_error) ||
+	    cutInfo.object_error < 0.0 || cutInfo.object_error > priorError ||
+	    cutInfo.quantization_bits[X] < 1 ||
+	    cutInfo.quantization_bits[Y] < 1 ||
+	    cutInfo.quantization_bits[Z] < 1) {
+	    test->valid = false;
+	    return;
+	}
+	priorError = cutInfo.object_error;
+    }
+    for (size_t index = 0; index < page->data.face_count * 3u; ++index) {
+	if (page->data.faces[index] >= page->data.point_count) {
+	    test->valid = false;
+	    return;
+	}
+    }
+    for (size_t point = 0; point < page->data.point_count; ++point) {
+	for (size_t axis = 0; axis < 3; ++axis) {
+	    if (!std::isfinite(page->data.points[point][axis]) ||
+		page->data.points[point][axis] < page->info.bmin[axis] ||
+		page->data.points[point][axis] > page->info.bmax[axis]) {
+		test->valid = false;
+		return;
+	    }
+	}
+    }
+    test->pageIds.push_back(page->page_id);
+    test->faces += page->data.face_count;
+    test->points += page->data.point_count;
+}
+
+static int
+mesh_lod_spatial_page_cancellation_callback(void *callbackData)
+{
+    const mesh_lod_spatial_page_test_data *test =
+	static_cast<const mesh_lod_spatial_page_test_data *>(callbackData);
+    return test && test->calls ? 1 : 0;
 }
 
 static int
@@ -155,6 +272,26 @@ mesh_lod_chunk_test_callback(uint32_t chunkId, int cut,
 		points[point][axis] < info.bmin[axis] ||
 		points[point][axis] > info.bmax[axis])
 		return 0;
+    if (test->validateDistinctPrefixes &&
+	cut < test->hierarchy->max_cut) {
+	for (size_t face = 0; face < faceCount; ++face) {
+	    point_t snapped[3] = {};
+	    for (size_t corner = 0; corner < 3; ++corner) {
+		const point_t &source = points[faces[face * 3 + corner]];
+		for (int axis = 0; axis < 3; ++axis) {
+		    snapped[corner][axis] = mesh_pop_expected_snap(
+			source[axis],
+			test->hierarchy->quantization_min[axis],
+			test->hierarchy->quantization_max[axis],
+			test->hierarchy->cuts[cut].quantization_bits[axis]);
+		}
+	    }
+	    if (mesh_pop_points_equal(snapped[0], snapped[1]) ||
+		mesh_pop_points_equal(snapped[1], snapped[2]) ||
+		mesh_pop_points_equal(snapped[0], snapped[2]))
+		return 0;
+	}
+    }
     test->seen.push_back(chunkId);
     test->faces += faceCount;
     test->points += pointCount;
@@ -337,6 +474,7 @@ main(int argc, char *argv[])
     const int faceCount = grid * grid * 2;
     char dbpath[MAXPATHLEN] = {0};
     char cacheDir[MAXPATHLEN] = {0};
+    int cachePathLength = 0;
     fastf_t *vertices = NULL;
     fastf_t *translatedVertices = NULL;
     fastf_t *detailNormals = NULL;
@@ -357,12 +495,6 @@ main(int argc, char *argv[])
 	printf("Usage: %s\n", argv[0]);
 	return 1;
     }
-
-    bu_dir(cacheDir, MAXPATHLEN, BU_DIR_CURR,
-	   "bobol_mesh_lod_cache_test", NULL);
-    bu_dirclear(cacheDir);
-    bu_mkdir(cacheDir);
-    bu_setenv("BU_DIR_CACHE", cacheDir, 1);
 
     vertices = static_cast<fastf_t *>(bu_calloc(
 					  static_cast<size_t>(vertexCount) * 3, sizeof(fastf_t),
@@ -423,6 +555,17 @@ main(int argc, char *argv[])
 	}
 	fclose(fp);
     }
+
+    cachePathLength = snprintf(cacheDir, sizeof(cacheDir), "%s.lod-cache",
+	dbpath);
+    if (cachePathLength < 0 ||
+	static_cast<size_t>(cachePathLength) >= sizeof(cacheDir)) {
+	printf("FAIL: mesh lod cache path\n");
+	ret = 1;
+	goto cleanup;
+    }
+    bu_mkdir(cacheDir);
+    bu_setenv("BU_DIR_CACHE", cacheDir, 1);
 
     dbip = db_create(dbpath, 5);
     if (!dbip) {
@@ -667,7 +810,7 @@ main(int argc, char *argv[])
 	struct BObolMeshLod *opened = NULL;
 	struct BObolMeshLodHierarchyInfo hierarchy =
 	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-	struct BObolMeshLodData data;
+	struct BObolMeshLodData data = {};
 	RT_DB_INTERNAL_INIT(&intern);
 	if (!dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
 	    intern.idb_type != ID_BOT || !intern.idb_ptr ||
@@ -680,7 +823,14 @@ main(int argc, char *argv[])
 	    bobol_mesh_lod_current_cut(opened) != hierarchy.min_cut ||
 	    !bobol_mesh_lod_data_get(opened, &data) ||
 	    !data.face_count || !data.point_count) {
-	    printf("FAIL: content-identical mesh hierarchy reuse\n");
+	    printf("FAIL: content-identical mesh hierarchy reuse lod=%p "
+		   "key=%llu expected=%llu min=%d current=%d faces=%zu points=%zu\n",
+		   static_cast<void *>(opened),
+		   static_cast<unsigned long long>(cacheStatus.cache_key),
+		   static_cast<unsigned long long>(sharedCacheKey),
+		   hierarchy.min_cut,
+		   opened ? bobol_mesh_lod_current_cut(opened) : -1,
+		   data.face_count, data.point_count);
 	    if (opened)
 		bobol_mesh_lod_destroy(opened);
 	    if (intern.idb_ptr)
@@ -953,6 +1103,27 @@ main(int argc, char *argv[])
 	    goto cleanup;
 	}
 
+	/* Peer readers share immutable hierarchy storage but own independent cache
+	 * transactions.  The spatial realization worker relies on this contract to
+	 * read disjoint page ranges concurrently. */
+	struct BObolMeshLod *peerReader = bobol_mesh_lod_clone_reader(lod);
+	mesh_lod_chunk_test_data peerData;
+	peerData.hierarchy = &lodHierarchy;
+	const uint32_t peerChunk = chunkIds.back();
+	if (!peerReader ||
+	    !bobol_mesh_lod_read_chunk_prefixes(peerReader, &peerChunk, 1,
+		lodHierarchy.max_cut, mesh_lod_chunk_test_callback, &peerData) ||
+	    peerData.seen != std::vector<uint32_t>{peerChunk} ||
+	    peerData.faces != lodHierarchy.chunks[peerChunk].
+		cuts[lodHierarchy.max_cut].face_count) {
+	    if (peerReader)
+		bobol_mesh_lod_destroy(peerReader);
+	    printf("FAIL: mesh lod independent peer reader contract\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(peerReader);
+
 	/* Private pages are one logical mesh, but they must remain independently
 	 * resident all the way through renderer publication.  A richer page
 	 * appends a replacement range to the certified packed stream; stable
@@ -986,17 +1157,24 @@ main(int argc, char *argv[])
 	    goto cleanup;
 	}
 	uint64_t firstRevision = 0;
+	std::vector<BObolLodPresentationLayer> firstLayers;
+	if (!chunkedMesh.prepareCadPresentationLayers(
+		BOBOL_LOD_DRAW_SHADED, {firstChunk}, lodHierarchy.max_cut,
+		firstLayers) || firstLayers.size() != 1) {
+	    printf("FAIL: mesh lod first private page presentation\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	firstRevision = firstLayers.front().geometryRevision;
 	const std::shared_ptr<const Obol::PartGeometry> firstGeometry =
-	    chunkedMesh.prepareCadGeometry(
-		BOBOL_LOD_DRAW_SHADED, &firstRevision);
+	    firstLayers.front().geometry;
 	const Obol::TriMesh *firstMesh = firstGeometry && firstGeometry->shaded ?
 	    &*firstGeometry->shaded : NULL;
-	if (!firstMesh || !firstMesh->hasAdaptiveProgressiveClusters() ||
+	if (!firstMesh || !firstMesh->isProgressive() ||
 	    firstMesh->progressiveLineage == 0 ||
-	    firstMesh->progressiveClusters.size() != 1 ||
 	    !chunkedMesh.canDrawChunksAtCut(
 		{firstChunk}, lodHierarchy.max_cut)) {
-	    printf("FAIL: mesh lod first page was flattened as a global prefix\n");
+	    printf("FAIL: mesh lod first page was not independently retained\n");
 	    ret = 1;
 	    goto cleanup;
 	}
@@ -1008,9 +1186,17 @@ main(int argc, char *argv[])
 	    goto cleanup;
 	}
 	uint64_t coarseRevision = 0;
+	std::vector<BObolLodPresentationLayer> coarseLayers;
+	if (!chunkedMesh.prepareCadPresentationLayers(
+		BOBOL_LOD_DRAW_HIDDEN_LINE, {firstChunk, secondChunk},
+		secondCoarseCut, coarseLayers) || coarseLayers.size() != 2) {
+	    printf("FAIL: mesh lod coarse page presentation\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	coarseRevision = coarseLayers.back().geometryRevision;
 	const std::shared_ptr<const Obol::PartGeometry> coarseGeometry =
-	    chunkedMesh.prepareCadGeometry(
-		BOBOL_LOD_DRAW_HIDDEN_LINE, &coarseRevision);
+	    coarseLayers.back().geometry;
 	const Obol::TriMesh *coarseMesh =
 	    coarseGeometry && coarseGeometry->shaded ?
 		&*coarseGeometry->shaded : NULL;
@@ -1038,30 +1224,19 @@ main(int argc, char *argv[])
     const BObolMeshLodChunkCutInfo &secondCoarseCounts =
 	lodHierarchy.chunks[secondChunk].cuts[secondCoarseCut];
     if (!coarseMesh || !coarseWire || coarseRevision <= firstRevision ||
+	    !coarseLayers.front().geometry ||
+	    !coarseLayers.front().geometry->wire ||
+	    coarseLayers.front().geometry->wire->triangleEdges.get() !=
+		firstMesh ||
 	    !coarseWire->derivesTriangleEdges() ||
 	    !coarseWire->triangleEdges ||
 	    !coarseWire->segmentPoints.empty() ||
 	    coarseWire->segmentCount() != coarseMesh->indices.size() ||
-	    coarseMesh->progressiveLineage != firstMesh->progressiveLineage ||
 	    coarseWire->progressiveLineage != coarseMesh->progressiveLineage ||
-	    coarseMesh->positions.size() <= firstMesh->positions.size() ||
-	    coarseMesh->indices.size() <= firstMesh->indices.size() ||
-	    !std::equal(firstMesh->positions.begin(), firstMesh->positions.end(),
-		coarseMesh->positions.begin()) ||
-	    !std::equal(firstMesh->indices.begin(), firstMesh->indices.end(),
-		coarseMesh->indices.begin()) ||
-	    coarseMesh->progressiveClusters.size() != 2 ||
-	    coarseWire->progressiveClusters.size() != 2 ||
-	    coarseMesh->progressiveClusters[0].residentCut !=
-		lodHierarchy.max_cut ||
-	    coarseWire->progressiveClusters[0].residentCut !=
-		coarseMesh->progressiveClusters[0].residentCut ||
-	    coarseMesh->progressiveClusters[1].residentCut <
-		secondCoarseCut ||
-	    coarseMesh->progressiveClusters[1].residentCut >=
-		lodHierarchy.max_cut ||
-	    coarseWire->progressiveClusters[1].residentCut !=
-		coarseMesh->progressiveClusters[1].residentCut ||
+	    coarseMesh->progressiveResidentCut < secondCoarseCut ||
+	    coarseMesh->progressiveResidentCut >= lodHierarchy.max_cut ||
+	    coarseWire->progressiveResidentCut !=
+		coarseMesh->progressiveResidentCut ||
 	    !coarseCensus ||
 	    coarseMinimumCut != lodHierarchy.min_cut ||
 	    coarseMaximumDrawableCut != expectedCoarseDrawableCut ||
@@ -1073,7 +1248,7 @@ main(int argc, char *argv[])
 		secondCoarseCounts.point_count ||
 	    chunkedMesh.canDrawChunksAtCut(
 		{secondChunk}, lodHierarchy.max_cut)) {
-	    printf("FAIL: mesh lod second page did not append independently "
+	    printf("FAIL: mesh lod second page was not published independently "
 		   "or bulk census changed its frontier (cuts=%d/%d expected=%d)\n",
 		   coarseMinimumCut, coarseMaximumDrawableCut,
 		   expectedCoarseDrawableCut);
@@ -1088,20 +1263,29 @@ main(int argc, char *argv[])
 	    goto cleanup;
 	}
 	uint64_t richRevision = 0;
+	std::vector<BObolLodPresentationLayer> richLayers;
+	if (!chunkedMesh.prepareCadPresentationLayers(
+		BOBOL_LOD_DRAW_HIDDEN_LINE, {firstChunk, secondChunk},
+		lodHierarchy.max_cut, richLayers) || richLayers.size() != 2) {
+	    printf("FAIL: mesh lod rich page presentation\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	richRevision = richLayers.back().geometryRevision;
 	const std::shared_ptr<const Obol::PartGeometry> richGeometry =
-	    chunkedMesh.prepareCadGeometry(
-		BOBOL_LOD_DRAW_HIDDEN_LINE, &richRevision);
+	    richLayers.back().geometry;
 	const Obol::TriMesh *richMesh = richGeometry && richGeometry->shaded ?
 	    &*richGeometry->shaded : NULL;
 	const Obol::WireRep *richWire = richGeometry && richGeometry->wire ?
 	    &*richGeometry->wire : NULL;
 	if (!richMesh || !richWire || richRevision <= coarseRevision ||
+	    richLayers.front().geometry.get() !=
+		coarseLayers.front().geometry.get() ||
 	    !richWire->derivesTriangleEdges() ||
 	    !richWire->triangleEdges ||
 	    !richWire->segmentPoints.empty() ||
 	    richMesh->progressiveLineage != coarseMesh->progressiveLineage ||
 	    richWire->progressiveLineage != richMesh->progressiveLineage ||
-	    !richWire->hasAdaptiveProgressiveClusters() ||
 	    richWire->segmentCount() <= coarseWire->segmentCount() ||
 	    richWire->segmentCount() != richMesh->indices.size() ||
 	    coarseWire->segmentCount() != coarseMesh->indices.size() ||
@@ -1116,15 +1300,13 @@ main(int argc, char *argv[])
 		richMesh->indices.begin()) ||
 	    !chunkedMesh.canDrawChunksAtCut(
 		{firstChunk, secondChunk}, lodHierarchy.max_cut)) {
-	    printf("FAIL: mesh lod richer page was not a suffix-only publication\n");
+	    printf("FAIL: mesh lod richer page was not an isolated prefix update\n");
 	    ret = 1;
 	    goto cleanup;
 	}
 
-	/* Refining every page is a replacement wave, not a useful append-only
-	 * suffix.  It must publish one dense stream under a new lineage; otherwise
-	 * each whole-leaf cut retains its preceding mesh as tombstones and repeated
-	 * Lucy-scale refinement becomes superlinear in both time and memory. */
+	/* Refining every page replaces each page independently.  No whole-leaf
+	 * packed stream or retired-range tombstones may be created. */
 	int allPageCoarseCut = lodHierarchy.min_cut;
 	for (uint32_t chunk = 0; chunk < lodHierarchy.chunk_count; ++chunk)
 	    allPageCoarseCut = std::max(
@@ -1156,12 +1338,54 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
-	const std::shared_ptr<const Obol::PartGeometry> broadCoarseGeometry =
-	    broadWaveMesh.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED, NULL);
-	const Obol::TriMesh *broadCoarseMesh =
-	    broadCoarseGeometry && broadCoarseGeometry->shaded ?
-		&*broadCoarseGeometry->shaded : NULL;
-	if (!broadCoarseMesh || !broadCoarseMesh->progressiveLineage ||
+	int sparsePageCut = -1;
+	std::vector<uint32_t> expectedPopulatedChunks;
+	for (int cut = lodHierarchy.min_cut;
+		cut < allPageCoarseCut; ++cut) {
+	    expectedPopulatedChunks.clear();
+	    for (uint32_t chunk = 0; chunk < lodHierarchy.chunk_count;
+		    ++chunk) {
+		if (lodHierarchy.chunks[chunk].cuts[cut].face_count)
+		    expectedPopulatedChunks.push_back(chunk);
+	    }
+	    if (!expectedPopulatedChunks.empty() &&
+		expectedPopulatedChunks.size() < chunkIds.size()) {
+		sparsePageCut = cut;
+		break;
+	    }
+	}
+	if (sparsePageCut < 0) {
+	    sparsePageCut = allPageCoarseCut;
+	    expectedPopulatedChunks = chunkIds;
+	}
+	std::vector<uint32_t> populatedChunks;
+	std::vector<BObolLodPresentationLayer> sparseLayers;
+	if (!broadWaveMesh.populatedChunkIdsAtCut(
+		chunkIds, sparsePageCut, populatedChunks) ||
+	    populatedChunks != expectedPopulatedChunks ||
+	    !broadWaveMesh.prepareCadPresentationLayers(
+		BOBOL_LOD_DRAW_SHADED, chunkIds, sparsePageCut,
+		sparseLayers) ||
+	    sparseLayers.size() != expectedPopulatedChunks.size()) {
+	    printf("FAIL: mesh lod empty coarse pages were not omitted "
+		   "consistently\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	for (size_t layer = 0; layer < sparseLayers.size(); ++layer) {
+	    const std::string expectedKey = std::string("page:") +
+		std::to_string(expectedPopulatedChunks[layer]);
+	    if (expectedKey != sparseLayers[layer].layerKey.getString()) {
+		printf("FAIL: mesh lod sparse page presentation order\n");
+		ret = 1;
+		goto cleanup;
+	    }
+	}
+	std::vector<BObolLodPresentationLayer> broadCoarseLayers;
+	if (!broadWaveMesh.prepareCadPresentationLayers(
+		BOBOL_LOD_DRAW_SHADED, chunkIds, allPageCoarseCut,
+		broadCoarseLayers) ||
+	    broadCoarseLayers.size() != chunkIds.size() ||
 	    !broadWaveMesh.updateChunksFromCache(lod, lodHierarchy,
 		chunkIds, lodHierarchy.max_cut,
 		lodHierarchy.shaded_cull_backfaces ? TRUE : FALSE)) {
@@ -1169,23 +1393,30 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
-	const std::shared_ptr<const Obol::PartGeometry> broadRichGeometry =
-	    broadWaveMesh.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED, NULL);
-	const Obol::TriMesh *broadRichMesh =
-	    broadRichGeometry && broadRichGeometry->shaded ?
-		&*broadRichGeometry->shaded : NULL;
+	std::vector<BObolLodPresentationLayer> broadRichLayers;
+	if (!broadWaveMesh.prepareCadPresentationLayers(
+		BOBOL_LOD_DRAW_SHADED, chunkIds, lodHierarchy.max_cut,
+		broadRichLayers)) {
+	    printf("FAIL: mesh lod broad-wave rich page presentation\n");
+	    ret = 1;
+	    goto cleanup;
+	}
 	size_t terminalPagePoints = 0;
+	size_t publishedPagePoints = 0;
+	size_t publishedPageIndices = 0;
 	for (uint32_t chunk = 0; chunk < lodHierarchy.chunk_count; ++chunk)
 	    terminalPagePoints += lodHierarchy.chunks[chunk].
 		cuts[lodHierarchy.max_cut].point_count;
-	if (!broadRichMesh ||
-	    broadRichMesh->progressiveLineage ==
-		broadCoarseMesh->progressiveLineage ||
-	    broadRichMesh->indices.size() !=
-		static_cast<size_t>(faceCount) * 3 ||
-	    broadRichMesh->positions.size() != terminalPagePoints) {
-	    printf("FAIL: mesh lod broad-wave refinement retained tombstones or "
-		   "reused its lineage\n");
+	for (const BObolLodPresentationLayer &layer : broadRichLayers) {
+	    if (!layer.geometry || !layer.geometry->shaded)
+		continue;
+	    publishedPagePoints += layer.geometry->shaded->positions.size();
+	    publishedPageIndices += layer.geometry->shaded->indices.size();
+	}
+	if (broadRichLayers.size() != chunkIds.size() ||
+	    publishedPageIndices != static_cast<size_t>(faceCount) * 3 ||
+	    publishedPagePoints != terminalPagePoints) {
+	    printf("FAIL: mesh lod broad-wave refinement lost page data\n");
 	    ret = 1;
 	    goto cleanup;
 	}
@@ -1201,16 +1432,22 @@ main(int argc, char *argv[])
 	std::vector<uint32_t> retainedChunks;
 	chunkedMesh.residentChunkIds(retainedChunks);
 	uint64_t compactRevision = 0;
+	std::vector<BObolLodPresentationLayer> compactLayers;
+	if (!chunkedMesh.prepareCadPresentationLayers(
+		BOBOL_LOD_DRAW_SHADED, {secondChunk}, lodHierarchy.max_cut,
+		compactLayers) || compactLayers.size() != 1) {
+	    printf("FAIL: mesh lod compact page presentation\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+	compactRevision = compactLayers.front().geometryRevision;
 	const std::shared_ptr<const Obol::PartGeometry> compactGeometry =
-	    chunkedMesh.prepareCadGeometry(
-		BOBOL_LOD_DRAW_SHADED, &compactRevision);
+	    compactLayers.front().geometry;
 	const Obol::TriMesh *compactMesh =
 	    compactGeometry && compactGeometry->shaded ?
 		&*compactGeometry->shaded : NULL;
 	if (!compactMesh || retainedChunks != std::vector<uint32_t>{secondChunk} ||
 	    compactRevision <= richRevision ||
-	    compactMesh->progressiveLineage == richMesh->progressiveLineage ||
-	    compactMesh->progressiveClusters.size() != 1 ||
 	    chunkedMesh.estimateBytes() >= richBytes ||
 	    chunkedMesh.canDrawChunksAtCut(
 		{firstChunk}, lodHierarchy.max_cut) ||
@@ -1798,15 +2035,69 @@ main(int argc, char *argv[])
 	}
 	bobol_mesh_lod_destroy(serialized);
 
+	/* A superseded view must stop serialized cold work at a bounded source
+	 * polling point.  It may leave no discoverable cache payload behind. */
+	bobol_mesh_lod_cache_clear_database(dbip);
+	struct BObolMeshLodPreviewRequest cancelledPreviewRequest =
+	    BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT;
+	cancelledPreviewRequest.spatial_leaf_producer = 1;
+	mesh_lod_cancellation_test_data cancellation;
+	cancellation.cancelAfter = 3;
+	cancelledPreviewRequest.cancellation_callback =
+	    mesh_lod_cancellation_test_callback;
+	cancelledPreviewRequest.cancellation_data = &cancellation;
+	serialized = bobol_mesh_lod_cache_refresh_serialized_open(
+	    dbip, objname, &cacheStatus, &cancelledPreviewRequest, NULL, NULL);
+	if (serialized || cancellation.polls < cancellation.cancelAfter ||
+	    cacheStatus.has_cached_payload) {
+	    printf("FAIL: serialized spatial generation cancellation\n");
+	    if (serialized)
+		bobol_mesh_lod_destroy(serialized);
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	/* Once a valid live page has been handed to the presentation path, a
+	 * superseding view may cancel the remaining producer work.  The already
+	 * emitted page is valid, but no incomplete durable hierarchy is allowed to
+	 * become discoverable. */
+	bobol_mesh_lod_cache_clear_database(dbip);
+	struct BObolMeshLodPreviewRequest pageCancelledRequest =
+	    BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT;
+	pageCancelledRequest.spatial_leaf_producer = 1;
+	mesh_lod_spatial_page_test_data cancelledPages;
+	pageCancelledRequest.spatial_page_callback =
+	    mesh_lod_spatial_page_test_callback;
+	pageCancelledRequest.spatial_page_data = &cancelledPages;
+	pageCancelledRequest.cancellation_callback =
+	    mesh_lod_spatial_page_cancellation_callback;
+	pageCancelledRequest.cancellation_data = &cancelledPages;
+	serialized = bobol_mesh_lod_cache_refresh_serialized_open(
+	    dbip, objname, &cacheStatus, &pageCancelledRequest, NULL, NULL);
+	if (serialized || !cancelledPages.calls || !cancelledPages.valid ||
+	    cacheStatus.has_cached_payload) {
+	    printf("FAIL: serialized page-publication cancellation\n");
+	    if (serialized)
+		bobol_mesh_lod_destroy(serialized);
+	    ret = 1;
+	    goto cleanup;
+	}
+
 	/* A completed spatial hierarchy must be independently readable after its
 	 * generating handle is gone.  This covers the durable descriptor/record
 	 * contract separately from the constrained live fallback below. */
 	bobol_mesh_lod_cache_clear_database(dbip);
-	bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "1", 1);
 	bu_setenv("BOBOL_LOD_SPATIAL_FORCE_LIVE", "", 1);
+	struct BObolMeshLodPreviewRequest spatialPreviewRequest =
+	    BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT;
+	spatialPreviewRequest.spatial_leaf_producer = 1;
 	mesh_lod_preview_test_data spatialPreview;
+	mesh_lod_spatial_page_test_data spatialPages;
+	spatialPreviewRequest.spatial_page_callback =
+	    mesh_lod_spatial_page_test_callback;
+	spatialPreviewRequest.spatial_page_data = &spatialPages;
 	serialized = bobol_mesh_lod_cache_refresh_serialized_open(
-	    dbip, objname, &cacheStatus, NULL,
+	    dbip, objname, &cacheStatus, &spatialPreviewRequest,
 	    mesh_lod_preview_test_callback, &spatialPreview);
 	struct BObolMeshLodHierarchyInfo durableSpatialHierarchy =
 	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
@@ -1817,7 +2108,15 @@ main(int argc, char *argv[])
 	    !durableSpatialHierarchy.chunk_count ||
 	    !durableSpatialHierarchy.chunks ||
 	    bobol_mesh_lod_source_limited(serialized) ||
-	    spatialPreview.calls != 1 || !spatialPreview.valid) {
+	    spatialPreview.calls != 1 || !spatialPreview.valid ||
+	    spatialPreview.coverageCalls != 1 ||
+	    !spatialPreview.coverageValid || !spatialPages.calls ||
+	    !spatialPages.valid ||
+	    spatialPages.faces != static_cast<uint64_t>(faceCount) ||
+	    !std::is_sorted(spatialPages.pageIds.begin(),
+		spatialPages.pageIds.end()) ||
+	    std::adjacent_find(spatialPages.pageIds.begin(),
+		spatialPages.pageIds.end()) != spatialPages.pageIds.end()) {
 	    printf("FAIL: serialized durable spatial leaf hierarchy\n");
 	    if (serialized)
 		bobol_mesh_lod_destroy(serialized);
@@ -1825,6 +2124,7 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
+
 	std::vector<uint32_t> durableSpatialChunks(
 	    durableSpatialHierarchy.chunk_count);
 	for (uint32_t chunk = 0;
@@ -1843,6 +2143,28 @@ main(int argc, char *argv[])
 	    bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
 	    ret = 1;
 	    goto cleanup;
+	}
+	/* Spatial and global PoP records must use the same face-activation
+	 * contract.  In particular, no cumulative page prefix may contain a face
+	 * while two of its displayed prefix vertices still coincide.  Activating
+	 * on the first distinguishable edge floods coarse pages with collapsed
+	 * triangles and makes their render cost unrelated to visual detail. */
+	for (int cut = durableSpatialHierarchy.min_cut;
+		cut < durableSpatialHierarchy.max_cut; ++cut) {
+	    mesh_lod_chunk_test_data prefixData;
+	    prefixData.hierarchy = &durableSpatialHierarchy;
+	    prefixData.validateDistinctPrefixes = true;
+	    if (!bobol_mesh_lod_read_chunk_prefixes(serialized,
+		    durableSpatialChunks.data(), durableSpatialChunks.size(), cut,
+		    mesh_lod_chunk_test_callback, &prefixData) ||
+		prefixData.seen != durableSpatialChunks) {
+		printf("FAIL: spatial page activated a collapsed prefix face "
+		       "at cut %d\n", cut);
+		bobol_mesh_lod_destroy(serialized);
+		bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+		ret = 1;
+		goto cleanup;
+	    }
 	}
 	bobol_mesh_lod_destroy(serialized);
 	serialized = bobol_mesh_lod_get(dbip, objname);
@@ -1873,13 +2195,38 @@ main(int argc, char *argv[])
 	}
 	bobol_mesh_lod_destroy(serialized);
 
+	/* A caller may supply bounds from an earlier discovery pass.  Never use
+	 * stale bounds to certify the global cold preview: fall back to the
+	 * serialized source bounds before publishing it. */
+	bobol_mesh_lod_cache_clear_database(dbip);
+	mesh_lod_preview_test_data mismatchedBoundsPreview;
+	spatialPreviewRequest.coverage_bounds_valid = 1;
+	VSET(spatialPreviewRequest.coverage_bmin, 100000.0, 100000.0, 100000.0);
+	VSET(spatialPreviewRequest.coverage_bmax, 100001.0, 100001.0, 100001.0);
+	serialized = bobol_mesh_lod_cache_refresh_serialized_open(
+	    dbip, objname, &cacheStatus, &spatialPreviewRequest,
+	    mesh_lod_preview_test_callback, &mismatchedBoundsPreview);
+	if (!serialized || !mismatchedBoundsPreview.coverageValid ||
+	    !mismatchedBoundsPreview.coverageBoundsRecorded ||
+	    mismatchedBoundsPreview.coverageMinimum[X] >= 1000.0 ||
+	    mismatchedBoundsPreview.coverageMaximum[X] >= 1000.0) {
+	    printf("FAIL: serialized coverage preview bounds validation\n");
+	    if (serialized)
+		bobol_mesh_lod_destroy(serialized);
+	    bu_setenv("BOBOL_LOD_SPATIAL_LEAVES", "", 1);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(serialized);
+	spatialPreviewRequest.coverage_bounds_valid = 0;
+
 	/* The bounded producer owns only one spatial page at a time.  Force a
 	 * write failure over this ordinary serialized fixture to prove that an
 	 * incomplete hierarchy remains process-local and undiscoverable. */
 	bobol_mesh_lod_cache_clear_database(dbip);
 	bu_setenv("BOBOL_LOD_SPATIAL_FORCE_LIVE", "1", 1);
 	serialized = bobol_mesh_lod_cache_refresh_serialized_open(
-	    dbip, objname, &cacheStatus, NULL, NULL, NULL);
+	    dbip, objname, &cacheStatus, &spatialPreviewRequest, NULL, NULL);
 	struct BObolMeshLodHierarchyInfo spatialHierarchy =
 	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 	if (!serialized || !cacheStatus.has_cached_payload ||

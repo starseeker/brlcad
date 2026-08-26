@@ -13,6 +13,7 @@
 #include "BObol/BLodService.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BPickDetail.h"
+#include "BObol/BViewController.h"
 
 #include "raytrace.h"
 
@@ -214,7 +215,7 @@ pick_path_string(const char *name)
 
 struct bobol_rt_pick_state {
     BObolRtPickResult pick;
-    SbPlane clipPlanes[2];
+    SbPlane clipPlanes[BObolViewController::CLIP_PLANE_CAPACITY];
     size_t clipPlaneCount = 0;
     double minimumDistance = 0.0;
 };

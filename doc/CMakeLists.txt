@@ -40,7 +40,9 @@ set(
   notes/libbobol_architecture.md
   notes/libbobol_engineering_lessons.md
   notes/libbobol_lod_state_contract.md
+  notes/live_spatial_publication.md
   notes/libbobol_platform_threading_matrix.md
+  notes/libbobol_progressive_pipeline_contract.md
   notes/obol_production_readiness.md
   notes/obol_endpoint_lifecycle.md
   notes/obol_framebuffer_protocol.txt
@@ -54,8 +56,40 @@ set(
   notes/ObolHostWork.tla
   notes/ObolLodArbitration.cfg
   notes/ObolLodArbitration.tla
+  notes/ObolLodAdmission.cfg
+  notes/ObolLodAdmission.tla
+  notes/ObolColdPresentation.cfg
+  notes/ObolColdPresentation.tla
   notes/ObolLodConvergence.cfg
   notes/ObolLodConvergence.tla
+  notes/ObolProgressivePipeline.cfg
+  notes/ObolProgressivePipeline.tla
+  notes/ObolControlRefinement.cfg
+  notes/ObolControlRefinement.tla
+  notes/ObolSubmissionPass.cfg
+  notes/ObolSubmissionPass.tla
+  notes/ObolResidentGrowth.cfg
+  notes/ObolResidentGrowth.tla
+  notes/ObolInteractionSession.cfg
+  notes/ObolInteractionSession.tla
+  notes/ObolDeadlineOwnership.cfg
+  notes/ObolDeadlineOwnership.tla
+  notes/ObolCapacitySearch.cfg
+  notes/ObolCapacitySearch.tla
+  notes/ObolPointQualityOwnership.cfg
+  notes/ObolPointQualityOwnership.tla
+  notes/ObolQuietSuccessor.cfg
+  notes/ObolQuietSuccessor.tla
+  notes/ObolResidentCompaction.cfg
+  notes/ObolResidentCompaction.tla
+  notes/ObolPresentationPreparation.cfg
+  notes/ObolPresentationPreparation.tla
+  notes/ObolStaticQuality.cfg
+  notes/ObolStaticQuality.tla
+  notes/ObolLodColdPreview.cfg
+  notes/ObolLodColdPreview.tla
+  notes/ObolLiveSpatialPublication.cfg
+  notes/ObolLiveSpatialPublication.tla
   notes/obol_lod_control.cfg
   notes/obol_lod_control.tla
   pre_BRL-CAD.bib

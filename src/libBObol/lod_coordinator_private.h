@@ -11,9 +11,13 @@
 #include "common.h"
 #include "BObol/BLodIdentifiers.h"
 #include "BObol/BMeshLodCache.h"
+#include "lod_capacity_search_private.h"
+#include "lod_quiet_successor_private.h"
+#include "lod_revision_private.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -23,15 +27,10 @@
 #include <unordered_map>
 #include <vector>
 
-/*
- * Use the same strong epoch domains as requests and results.  Keeping a
- * second coordinator-only implementation previously allowed the state
- * machine and service boundary to drift while appearing type safe.
- */
-using BObolLodViewEpoch = BObolViewEpoch;
-using BObolLodPolicyEpoch = BObolPolicyEpoch;
-using BObolLodInventoryEpoch = BObolInventoryEpoch;
-using BObolLodSourceRoutingId = BObolSourceRoutingId;
+/* Private provider parameters for the budgeted terminal-display path.  These
+ * are request behavior, not persistent asset identity or public API. */
+static constexpr const char *BOBOL_LOD_PREPARED_CAD_ONLY_PARAM =
+    "display.prepared_cad_only";
 
 static inline bool
 bobol_lod_exact_scalar(double left, double right)
@@ -146,6 +145,8 @@ static_assert(std::is_trivially_copyable<BObolLodViewSnapshot>::value,
 static_assert(std::is_trivially_copyable<BObolLodViewScaleSnapshot>::value,
     "view scale signatures must remain allocation-free values");
 
+class BObolLodAdmissionPlanner;
+
 /*
  * Completed-frame resource-pressure edge policy.  The controller supplies
  * measurements and executes the resulting compaction request, but it may not
@@ -153,7 +154,7 @@ static_assert(std::is_trivially_copyable<BObolLodViewScaleSnapshot>::value,
  * allocation-free value beside the phase machine makes persistent pressure a
  * provable memory-limited terminal state instead of a collection of latches.
  */
-class BObolLodResourcePolicy {
+class BObolLodResourceEvidence {
 public:
     struct Decision {
 	bool changed = false;
@@ -161,6 +162,9 @@ public:
 	bool pressureCleared = false;
 	uint64_t revision = 0;
     };
+
+private:
+    friend class BObolLodAdmissionPlanner;
 
     Decision observe(bool cpuPressure, bool gpuPressure,
 	bool recoveryEnabled)
@@ -199,6 +203,7 @@ public:
 	return decision;
     }
 
+public:
     void markRecoveryHandled(void)
     {
 	this->handledRevision = this->pressureRevision;
@@ -258,8 +263,10 @@ private:
  * repeated retries are logarithmically bounded without confusing allocation
  * output with a source-population revision.
  */
-class BObolLodHeadroomPolicy {
-public:
+class BObolLodHeadroomEvidence {
+private:
+    friend class BObolLodAdmissionPlanner;
+
     bool armRetry(BObolLodViewEpoch viewEpoch,
 	BObolLodPolicyEpoch policyEpoch, size_t activePopulationCost,
 	size_t currentBudget)
@@ -363,6 +370,7 @@ public:
 	return true;
     }
 
+public:
     void cancelRetry(void)
     {
 	this->pendingValue = false;
@@ -381,6 +389,7 @@ public:
      * occurrence-local redistribution is expected to change it.  Materially
      * larger measured capacity or a new view/policy epoch remains an explicit
      * progress witness accepted by armRetry(). */
+private:
     void rejectRetry(BObolLodViewEpoch viewEpoch,
 	BObolLodPolicyEpoch policyEpoch, size_t activePopulationCost,
 	size_t attemptedBudget)
@@ -402,6 +411,7 @@ public:
 	this->cancelRetry();
     }
 
+public:
     bool retryPending(void) const { return this->pendingValue; }
     bool pendingMatches(BObolLodViewEpoch viewEpoch,
 	BObolLodPolicyEpoch policyEpoch, size_t activePopulationCost) const
@@ -566,6 +576,21 @@ public:
 	this->completeVisibleCountValidValue = true;
     }
 
+    /* A closed structural-repair transaction is confirmed by the renderer,
+     * not by another source scan.  Its exact useful-presentation population
+     * supersedes a partially consumed retry census when it equals the
+     * denominator published by the last complete visibility census. */
+    bool confirmPresentedCoverage(size_t usefulPresentationCount)
+    {
+	if (!this->completeVisibleCountValidValue ||
+	    usefulPresentationCount != this->completeVisibleCountValue)
+	    return false;
+	this->coverageCompleteValue = true;
+	this->activeValue = false;
+	this->clearPassCounters();
+	return true;
+    }
+
     void reset(void)
     {
 	this->activeValue = false;
@@ -608,6 +633,55 @@ private:
     size_t visibleCountValue = 0;
     size_t coveredCountValue = 0;
     size_t completeVisibleCountValue = 0;
+};
+
+/* Conservative source-profile gate for presenting meshes during initial
+ * coverage instead of first completing a box-only pass.  This does not admit
+ * bytes or drawing work: the service working-set governor, resident-memory
+ * limit, scene allocator, and frame deadline remain authoritative.  It only
+ * says the complete known scene is small enough that bounded mesh admission
+ * may compete immediately with its structural proxies. */
+class BObolLodSourceProfilePolicy {
+public:
+    static constexpr uint64_t meshFirstOccurrenceLimit = 4096;
+    /* The profile counts every unique leaf asset, not only terminal-mesh
+     * candidates.  Keep its cardinality bound aligned with the complete
+     * occurrence bound; projection, mesh type, scene cost, service working
+     * set, and resident memory independently gate each direct request. */
+    static constexpr uint64_t meshFirstUniqueAssetLimit =
+	meshFirstOccurrenceLimit;
+    static constexpr uint64_t meshFirstEncodedByteLimit =
+	64ULL * 1024ULL * 1024ULL;
+    static constexpr uint64_t meshFirstLargestAssetByteLimit =
+	16ULL * 1024ULL * 1024ULL;
+
+    static bool safeMeshFirstPreview(bool profileComplete,
+	uint64_t occurrenceCount, uint64_t uniqueAssetCount,
+	uint64_t encodedSourceBytes, uint64_t largestAssetBytes,
+	uint64_t meshRequestCount)
+    {
+	return profileComplete && occurrenceCount > 0 &&
+	    occurrenceCount <= meshFirstOccurrenceLimit &&
+	    uniqueAssetCount > 0 &&
+	    uniqueAssetCount <= meshFirstUniqueAssetLimit &&
+	    encodedSourceBytes > 0 &&
+	    encodedSourceBytes <= meshFirstEncodedByteLimit &&
+	    largestAssetBytes > 0 &&
+	    largestAssetBytes <= meshFirstLargestAssetByteLimit &&
+	    meshRequestCount > 0 && meshRequestCount <= occurrenceCount;
+    }
+
+    /* A safe source profile only enables this decision.  Projection and the
+     * live aggregate draw allowance remain the authoritative per-occurrence
+     * admission checks. */
+    static bool admitTerminalMesh(bool safeScene, bool visible,
+	bool subpixelPresentation, bool botSource, bool supportedDrawMode,
+	size_t terminalCost, size_t remainingCost)
+    {
+	return safeScene && visible && !subpixelPresentation && botSource &&
+	    supportedDrawMode && terminalCost > 0 &&
+	    terminalCost <= remainingCost;
+    }
 };
 
 /* Dense, view-owned projection evidence for compact CAD occurrences.
@@ -806,10 +880,9 @@ public:
 	prior = next;
     }
 
-    void complete(SourceKey source, size_t visibleCount)
+    void finish(SourceKey source)
     {
 	Source &entry = this->source(source);
-	entry.visibleCount = visibleCount;
 	entry.complete = true;
     }
 
@@ -901,6 +974,13 @@ public:
 	PREPARING
     };
 
+    enum class Outcome : uint8_t {
+	ACTIVE = 0,
+	READY,
+	CONSTRAINED,
+	ERROR
+    };
+
     struct Inputs {
 	BObolLodViewEpoch viewEpoch;
 	BObolLodPolicyEpoch policyEpoch;
@@ -933,6 +1013,7 @@ public:
 	bool resultPending = false;
 	bool publicationPending = false;
 	bool calibrationPending = false;
+	bool controlPending = false;
 	bool interactive = false;
 	bool compactionPending = false;
 	bool progressiveWorkPending = false;
@@ -948,7 +1029,10 @@ public:
 
     struct Decision {
 	Phase phase = Phase::IDLE;
+	Outcome outcome = Outcome::READY;
 	float fraction = 1.0f;
+	bool terminal = true;
+	bool terminalError = false;
 	bool viewReady = false;
 	bool backgroundPending = false;
 	bool performanceLimited = false;
@@ -960,24 +1044,62 @@ public:
     Decision evaluate(const Inputs &inputs)
     {
 	Decision decision;
-	const bool structuralPending =
+	/* Once a source reports a terminal failure, its missing inventory has no
+	 * enabled discovery edge.  Other sources remain active through their
+	 * explicit discovery, preparation, and task witnesses below; treating the
+	 * failed source's expected count as pending work would manufacture an
+	 * ERROR state which can never become terminal. */
+	const bool structuralPending = inputs.failedSourceCount == 0 &&
 	    inputs.expectedLeafCount > inputs.availableLeafCount;
 	const size_t unresolvedStructuralBoxes =
 	    inputs.presentedStructuralBoxCount >
 		inputs.terminalOccurrenceFailureCount ?
 	    inputs.presentedStructuralBoxCount -
 		inputs.terminalOccurrenceFailureCount : 0;
-	decision.visualPending =
+	const bool foregroundPending =
 	    structuralPending || inputs.structuralDiscovery ||
 	    inputs.sourcePreparationPending ||
 	    inputs.submissionPending ||
 	    inputs.resultPending || inputs.publicationPending ||
-	    inputs.pendingTasks > 0 || inputs.inFlight > 0 ||
-	    inputs.calibrationPending || unresolvedStructuralBoxes > 0;
-	decision.viewReady =
+	    inputs.calibrationPending || inputs.controlPending ||
+	    unresolvedStructuralBoxes > 0;
+	const size_t representedPayloads = saturatingAdd(
+	    inputs.activePayloadCount, inputs.presentedSubpixelOccurrenceCount);
+	const size_t satisfiedPayloads = saturatingAdd(
+	    inputs.satisfiedPayloadCount,
+	    inputs.presentedSubpixelOccurrenceCount);
+	/* A serialized PoP builder can keep one worker occupied persisting its
+	 * reusable hierarchy after the current view is already completely
+	 * represented.  That work must not make the HUD claim the visible scene is
+	 * still refining.  Conversely, retain task work as foreground until every
+	 * visible target has both a presentation and a current-quality witness. */
+	/* A completed visibility census may legitimately find an empty view after
+	 * a subpath erase or frustum change.  Its retained framebuffer is already
+	 * complete; an asset worker left alive for cache reuse is background work,
+	 * just as it is when all nonempty visible targets are satisfied.  Requiring
+	 * a positive target count made that worker hold an empty view in REFINING. */
+	const bool emptyViewResolved = inputs.visibilityCensusComplete &&
+	    inputs.visibleTargetCount == 0;
+	const bool populatedViewResolved = inputs.visibleTargetCount > 0 &&
+	    representedPayloads >= inputs.visibleTargetCount &&
+	    satisfiedPayloads >= inputs.visibleTargetCount;
+	const bool viewPresentationResolved =
+	    !foregroundPending && !inputs.interactive &&
+	    (emptyViewResolved || populatedViewResolved);
+	const bool backgroundTaskWork = viewPresentationResolved &&
+	    (inputs.pendingTasks > 0 || inputs.inFlight > 0);
+	decision.visualPending = foregroundPending ||
+	    (!backgroundTaskWork &&
+	     (inputs.pendingTasks > 0 || inputs.inFlight > 0));
+	decision.terminal =
 	    !decision.visualPending && !inputs.interactive;
+	const bool hasTerminalError = inputs.failedSourceCount > 0 ||
+	    inputs.terminalOccurrenceFailureCount > 0;
+	decision.terminalError = decision.terminal && hasTerminalError;
+	decision.viewReady = decision.terminal && !hasTerminalError;
 	decision.backgroundPending =
-	    inputs.queuedCacheWrites > 0 || inputs.compactionPending ||
+	    backgroundTaskWork || inputs.queuedCacheWrites > 0 ||
+	    inputs.compactionPending ||
 	    inputs.structuralDiscovery ||
 	    (decision.viewReady && inputs.progressiveWorkPending);
 	decision.memoryLimited =
@@ -995,6 +1117,9 @@ public:
 	       saturatingAdd(inputs.satisfiedPayloadCount,
 		   inputs.presentedSubpixelOccurrenceCount) <
 		   inputs.visibleTargetCount)));
+	decision.outcome = hasTerminalError ? Outcome::ERROR :
+	    !decision.terminal ? Outcome::ACTIVE :
+	    decision.performanceLimited ? Outcome::CONSTRAINED : Outcome::READY;
 	decision.hasLodState =
 	    inputs.expectedLeafCount > 0 || inputs.availableLeafCount > 0 ||
 	    inputs.visibleTargetCount > 0 || inputs.activePayloadCount > 0 ||
@@ -1064,8 +1189,7 @@ public:
 	    decision.fraction = 1.0f;
 	}
 
-	if (inputs.failedSourceCount > 0 ||
-	    inputs.terminalOccurrenceFailureCount > 0)
+	if (hasTerminalError)
 	    decision.phase = Phase::CONVERROR;
 	decision.fraction = std::max(0.0f,
 	    std::min(1.0f, decision.fraction));
@@ -1160,7 +1284,158 @@ private:
  * remainders, retained-cut recovery admission, and the one-shot overload
  * witness.  No occurrence data or renderer objects enter this policy.
  */
-class BObolLodBudgetPolicy {
+class BObolLodCapacityEvidence;
+
+/*
+ * A coverage or publication pass may need exactly one coherent framebuffer
+ * before planning resumes.  That ordering edge is not a renderer-capacity
+ * sample and must not share the bounded search's candidate counters.  A
+ * quality-blocked ordinary pass additionally transfers its successor to the
+ * complete importance allocator, which is the only path allowed to start a
+ * numeric capacity search.
+ */
+class BObolLodCapacityFrameBarrier {
+public:
+    enum class Successor : uint8_t {
+	NONE = 0,
+	REPLAN,
+	REALLOCATE
+    };
+
+    void requestReplan(void)
+    {
+	if (this->successorValue == Successor::NONE)
+	    this->successorValue = Successor::REPLAN;
+    }
+
+    void requestReallocation(void)
+    {
+	this->successorValue = Successor::REALLOCATE;
+    }
+
+    Successor consume(void)
+    {
+	const Successor successor = this->successorValue;
+	this->successorValue = Successor::NONE;
+	return successor;
+    }
+
+    void reset(void)
+    {
+	this->successorValue = Successor::NONE;
+    }
+
+    bool pending(void) const
+    {
+	return this->successorValue != Successor::NONE;
+    }
+
+    Successor successor(void) const
+    {
+	return this->successorValue;
+    }
+
+private:
+    Successor successorValue = Successor::NONE;
+};
+
+static_assert(std::is_trivially_copyable<
+	BObolLodCapacityFrameBarrier>::value,
+    "capacity frame barriers must remain allocation-free values");
+
+/*
+ * Mechanical progress through one bounded admission plan.  This value owns no
+ * renderer-capacity conclusion and survives no explicit reset.  Separating it
+ * from completed-frame evidence lets a large scene resume across owner-thread
+ * windows without making cursor movement look like new planning evidence.
+ */
+class BObolLodAdmissionCursor {
+public:
+    void reset(void)
+    {
+	this->initializedValue = false;
+	this->singleOccurrenceBootstrapValue = false;
+	this->activeCostValue = 0;
+	this->minimumActiveCostValue = 0;
+	this->refinementRemainingValue = SIZE_MAX;
+	this->retainedAdmissionValue = false;
+	this->retainedAdmissionRemainingValue = SIZE_MAX;
+	this->revisionStampValue = BObolLodAdmissionRevisionStamp();
+    }
+
+    void consumeRefinement(size_t cost)
+    {
+	if (this->refinementRemainingValue == SIZE_MAX)
+	    return;
+	this->refinementRemainingValue =
+	    cost >= this->refinementRemainingValue ?
+		0 : this->refinementRemainingValue - cost;
+    }
+
+    void consumeRetainedAdmission(size_t cost)
+    {
+	if (this->retainedAdmissionRemainingValue == SIZE_MAX)
+	    return;
+	this->retainedAdmissionRemainingValue =
+	    cost >= this->retainedAdmissionRemainingValue ?
+		0 : this->retainedAdmissionRemainingValue - cost;
+    }
+
+    bool initialized(void) const { return this->initializedValue; }
+    bool singleOccurrenceBootstrap(void) const
+    {
+	return this->singleOccurrenceBootstrapValue;
+    }
+    size_t activeCost(void) const { return this->activeCostValue; }
+    size_t minimumActiveCost(void) const
+    {
+	return this->minimumActiveCostValue;
+    }
+    size_t refinementRemaining(void) const
+    {
+	return this->refinementRemainingValue;
+    }
+    bool retainedAdmission(void) const
+    {
+	return this->retainedAdmissionValue;
+    }
+    size_t retainedAdmissionRemaining(void) const
+    {
+	return this->retainedAdmissionRemainingValue;
+    }
+    bool matches(const BObolLodAdmissionRevisionStamp &stamp) const
+    {
+	return this->revisionStampValue.same(stamp);
+    }
+    const BObolLodAdmissionRevisionStamp &revisionStamp(void) const
+    {
+	return this->revisionStampValue;
+    }
+
+private:
+    friend class BObolLodCapacityEvidence;
+    friend class BObolLodAdmissionPlanner;
+
+    void resetForRevision(const BObolLodAdmissionRevisionStamp &stamp)
+    {
+	this->reset();
+	this->revisionStampValue = stamp;
+    }
+
+    bool initializedValue = false;
+    bool singleOccurrenceBootstrapValue = false;
+    size_t activeCostValue = 0;
+    size_t minimumActiveCostValue = 0;
+    size_t refinementRemainingValue = SIZE_MAX;
+    bool retainedAdmissionValue = false;
+    size_t retainedAdmissionRemainingValue = SIZE_MAX;
+    BObolLodAdmissionRevisionStamp revisionStampValue;
+};
+
+static_assert(std::is_trivially_copyable<BObolLodAdmissionCursor>::value,
+    "admission cursors must remain allocation-free values");
+
+class BObolLodCapacityEvidence {
 public:
     struct Inputs {
 	size_t activeCost = 0;
@@ -1211,42 +1486,65 @@ public:
 
     struct CalibrationInputs {
 	size_t activeCost = 0;
-	uint64_t targetNanoseconds = 0;
 	uint64_t observedNanoseconds = 0;
-	long double calibratedBudget = 0.0L;
-	bool interactive = false;
-	bool stablePresentationHandoff = false;
 	bool passAdmittedWork = false;
 	/* The blocked cut came from a complete scene-wide minimax allocation.
 	 * If calibration demonstrates a different allowance, its successor must
 	 * recompute that allocation rather than letting ordinary per-occurrence
 	 * refinement consume stale allocation stamps. */
 	bool retainedAllocation = false;
+	/* A complete retained allocation supplies the ordered candidate set and
+	 * its pixel-demand endpoint.  Only this path may use the bounded search;
+	 * structural/provider barriers retain their separate finite contracts. */
+	bool boundedSearch = false;
+	BObolLodCapacitySearchKey searchKey;
+	/* The allocator may raise a requested steady allowance to an atomic
+	 * prominent-feature floor.  Name the actual certified candidate budget;
+	 * it is not necessarily the scalar allowance which initiated the pass. */
+	size_t candidateBudget = 0;
+	size_t demandedBudget = 0;
+	size_t knownSafeBudget = 0;
+    };
+
+    struct CompletedFrameInputs {
+	BObolLodCapacitySearchKey searchKey;
+	size_t candidateBudget = 0;
+	size_t presentedCost = 0;
+	size_t knownSafeBudget = 0;
+	uint64_t observedNanoseconds = 0;
+	bool validSample = false;
     };
 
     struct CalibrationDecision {
-	bool probeCandidate = false;
-	bool probeEligible = false;
+	bool candidateReallocation = false;
+	bool searchActive = false;
 	bool requestFrame = false;
-	bool calibrationFrame = false;
+	bool sampleFrame = false;
+	bool restartSubmission = false;
+	bool searchTerminal = false;
+	BObolLodCapacitySearchCertificate::Result searchResult =
+	    BObolLodCapacitySearchCertificate::Result::NONE;
     };
 
     struct CompletedFrameDecision {
-	bool requestCalibrationFrame = false;
+	bool requestSampleFrame = false;
 	bool restartSubmission = false;
     };
 
-    Decision beginPass(const Inputs &inputs)
+private:
+    friend class BObolLodAdmissionPlanner;
+
+    Decision planPass(const Inputs &inputs, BObolLodAdmissionCursor &cursor)
     {
 	Decision decision;
 	decision.totalBudget = this->currentBudgetValue;
-	decision.refinementBudget = this->refinementRemainingValue;
-	decision.retainedAdmission = this->retainedAdmissionValue;
+	decision.refinementBudget = cursor.refinementRemainingValue;
+	decision.retainedAdmission = cursor.retainedAdmissionValue;
 	decision.retainedAdmissionBudget =
-	    this->retainedAdmissionRemainingValue;
-	if (this->passInitializedValue)
+	    cursor.retainedAdmissionRemainingValue;
+	if (cursor.initializedValue)
 	    return decision;
-	this->singleOccurrenceBootstrapValue =
+	cursor.singleOccurrenceBootstrapValue =
 	    inputs.coldSingleOccurrence && inputs.activeCost == 0 &&
 	    inputs.calibratedCostPerSecond <= 0.0L;
 	const bool requestedRetainedRecovery =
@@ -1284,14 +1582,16 @@ public:
 	    inputs.hardPresentationDeadlineNanoseconds > 0 &&
 	    inputs.observedStableNanoseconds <=
 		inputs.hardPresentationDeadlineNanoseconds;
+	const bool deadlineRecoveryRequested =
+	    this->steadyDeadlineCapacityCeilingValue != SIZE_MAX &&
+	    inputs.activeCost > this->steadyDeadlineCapacityCeilingValue;
 	const bool overloadRecovery =
 	    !inputs.interactive && !inputs.forceTerminal &&
 	    !observedWithinHardPresentationDeadline &&
 	    (!this->overloadRecoveryPerformedValue ||
 	     this->overloadRecoveryActiveCostValue != inputs.activeCost) &&
 	    inputs.activeCost > 0 &&
-	    (this->probeCountValue >= 3 ||
-	     severeStableOverload) &&
+	    (deadlineRecoveryRequested || severeStableOverload) &&
 	    targetNanoseconds > 0.0L &&
 	    observedStableNanoseconds > targetNanoseconds * 1.20L;
 	/* Three unchanged, exact presentation misses are stronger evidence than
@@ -1488,10 +1788,24 @@ public:
 	 * throughput calibration cannot propose the identical failed population
 	 * again.  A later static-quality pass may still try an intermediate budget
 	 * below this bound, preserving useful fidelity without reopening a cycle. */
+	const bool staticCapacitySearch =
+	    this->capacitySearchValue.phase() !=
+		BObolLodCapacitySearchCertificate::Phase::INACTIVE &&
+	    this->capacitySearchValue.goal() ==
+		BObolLodCapacitySearchCertificate::Goal::STATIC;
+	const bool capacitySearchInactive =
+	    this->capacitySearchValue.phase() ==
+		BObolLodCapacitySearchCertificate::Phase::INACTIVE;
+	const bool staticQualityBudget = staticCapacitySearch ||
+	    (capacitySearchInactive &&
+	     this->retainedQualityFloorBudgetValue > 0);
+	const size_t deadlineCapacityCeiling = staticQualityBudget ?
+	    this->staticDeadlineCapacityCeilingValue :
+	    this->steadyDeadlineCapacityCeilingValue;
 	if (!inputs.interactive && !inputs.forceTerminal &&
-	    this->deadlineCapacityCeilingValue != SIZE_MAX)
+	    deadlineCapacityCeiling != SIZE_MAX)
 	    costBudget = std::min(
-		costBudget, this->deadlineCapacityCeilingValue);
+		costBudget, deadlineCapacityCeiling);
 	/* A completed constrained framebuffer is a hard presentation-capacity
 	 * witness, not another soft quality preference.  Reconcile the hidden
 	 * retained prefixes at exactly that scene-wide allowance: a stale
@@ -1515,9 +1829,9 @@ public:
 	 * allocation into O(N * windows) work and monopolizes the GUI thread.
 	 * Occurrence changes are charged by the carried refinement remainders; a
 	 * completed pass resets this snapshot before another census. */
-	this->passActiveCostValue = inputs.activeCost;
-	this->passMinimumActiveCostValue = inputs.minimumActiveCost;
-	this->refinementRemainingValue = costBudget == SIZE_MAX ? SIZE_MAX :
+	cursor.activeCostValue = inputs.activeCost;
+	cursor.minimumActiveCostValue = inputs.minimumActiveCost;
+	cursor.refinementRemainingValue = costBudget == SIZE_MAX ? SIZE_MAX :
 	    (costBudget > inputs.activeCost ?
 		costBudget - inputs.activeCost : 0);
 	/* A presentation handoff removes a reversible renderer ceiling; it does
@@ -1526,7 +1840,7 @@ public:
 	 * of normalizing every occurrence to a cheap baseline.  Cold coverage and
 	 * point-proxy recovery request retained admission explicitly, while a
 	 * completed over-budget quiet frame uses overloadRecovery. */
-	this->retainedAdmissionValue =
+	cursor.retainedAdmissionValue =
 	    (requestedRetainedReallocation && costBudget != SIZE_MAX) ||
 	    ((inputs.interactive || overloadRecovery ||
 	      requestedRetainedRecovery) &&
@@ -1540,11 +1854,11 @@ public:
 	 * above that irreducible coverage floor.  Charging the complete budget in
 	 * every window drove the whole scene to minimum before a second pass
 	 * rebuilt it, producing visible cycling and destroying importance order. */
-	this->retainedAdmissionRemainingValue =
-	    this->retainedAdmissionValue ?
+	cursor.retainedAdmissionRemainingValue =
+	    cursor.retainedAdmissionValue ?
 		(costBudget > inputs.minimumActiveCost ?
 		    costBudget - inputs.minimumActiveCost : 0) : SIZE_MAX;
-	this->passInitializedValue = true;
+	cursor.initializedValue = true;
 	this->requestedRetainedRecoveryBudgetValue = SIZE_MAX;
 	this->requestedRetainedReallocationValue = false;
 	this->requestedRetainedReallocationPreserveBudgetValue = true;
@@ -1554,94 +1868,159 @@ public:
 	decision.initialized = true;
 	decision.overloadRecovery = overloadRecovery;
 	decision.totalBudget = this->currentBudgetValue;
-	decision.refinementBudget = this->refinementRemainingValue;
-	decision.retainedAdmission = this->retainedAdmissionValue;
+	decision.refinementBudget = cursor.refinementRemainingValue;
+	decision.retainedAdmission = cursor.retainedAdmissionValue;
 	decision.retainedAdmissionBudget =
-	    this->retainedAdmissionRemainingValue;
+	    cursor.retainedAdmissionRemainingValue;
 	return decision;
     }
+
+    CompletedFrameDecision applyCapacitySearchDecision(
+	const BObolLodCapacitySearchCertificate::Decision &search,
+	BObolLodAdmissionCursor *cursor)
+    {
+	CompletedFrameDecision decision;
+	if (search.requestsFrame()) {
+	    this->stableBudgetLimitedValue = false;
+	    decision.requestSampleFrame = true;
+	    return decision;
+	}
+
+	if (search.requestsReallocation()) {
+	    this->currentBudgetValue = search.budget;
+	    this->requestedRetainedReallocationValue = true;
+	    /* The search result names the next candidate population exactly.  The
+	     * retained allocator must apply that budget before any throughput EMA,
+	     * deadline floor, or growth heuristic may propose another one.  Letting
+	     * planPass() recompute it makes the following certificate observe a
+	     * different candidate and correctly reject the transition as stale. */
+	    this->requestedRetainedReallocationPreserveBudgetValue = true;
+	    this->stableBudgetLimitedValue = false;
+	    if (cursor)
+		cursor->reset();
+	    decision.restartSubmission = true;
+	    return decision;
+	}
+
+	if (!search.terminal())
+	    return decision;
+	if (search.result ==
+		BObolLodCapacitySearchCertificate::Result::STALE_POPULATION) {
+	    this->capacitySearchValue.reset();
+	    this->stableBudgetLimitedValue = false;
+	    if (cursor)
+		cursor->reset();
+	    decision.restartSubmission = true;
+	    return decision;
+	}
+
+	this->stableBudgetLimitedValue = true;
+	if (search.result ==
+		BObolLodCapacitySearchCertificate::Result::CERTIFIED) {
+	    const size_t certifiedBudget = std::max<size_t>(1, search.budget);
+	    if (certifiedBudget != this->currentBudgetValue) {
+		this->currentBudgetValue = certifiedBudget;
+		this->requestedRetainedReallocationValue = true;
+		this->requestedRetainedReallocationPreserveBudgetValue = true;
+		if (cursor)
+		    cursor->reset();
+		decision.restartSubmission = true;
+	    }
+	}
+	return decision;
+    }
+
+public:
 
     CalibrationDecision finishBlockedPass(
 	const CalibrationInputs &inputs)
     {
 	CalibrationDecision decision;
-	const bool calibratedHeadroom =
-	    inputs.calibratedBudget >
-		static_cast<long double>(this->currentBudgetValue) * 1.05L &&
-	    inputs.observedNanoseconds < static_cast<uint64_t>(
-		static_cast<long double>(inputs.targetNanoseconds) * 1.20L);
-	decision.probeCandidate =
-	    !inputs.interactive && !inputs.stablePresentationHandoff &&
-	    !inputs.passAdmittedWork && inputs.activeCost > 0 &&
-	    this->currentBudgetValue != SIZE_MAX &&
-	    inputs.targetNanoseconds > 0 &&
-	    (inputs.observedNanoseconds < static_cast<uint64_t>(
-		static_cast<long double>(inputs.targetNanoseconds) * 0.90L) ||
-	     calibratedHeadroom);
+	if (inputs.boundedSearch && inputs.searchKey.valid() &&
+	    inputs.candidateBudget > 0 &&
+	    inputs.retainedAllocation && inputs.demandedBudget > 0) {
+	    BObolLodCapacitySearchCertificate::Observation observation;
+	    observation.key = inputs.searchKey;
+	    observation.candidateBudget = inputs.candidateBudget;
+	    /* A changed allocation pass freezes its pre-pass active cost in the
+	     * mechanical cursor.  Bind the new candidate only when its completed
+	     * frame supplies the post-commit population. */
+	    observation.presentedCost = inputs.passAdmittedWork ? 0 :
+		inputs.activeCost;
+	    observation.knownSafeBudget = inputs.knownSafeBudget;
+	    observation.observedNanoseconds = inputs.observedNanoseconds;
+	    observation.validSample = !inputs.passAdmittedWork &&
+		inputs.observedNanoseconds > 0;
+	    const BObolLodCapacitySearchCertificate::Decision search =
+		inputs.passAdmittedWork ?
+		    this->capacitySearchValue.prepare(observation) :
+		    this->capacitySearchValue.observe(observation);
+	    const CompletedFrameDecision transition =
+		this->applyCapacitySearchDecision(search, NULL);
+	    decision.searchActive = true;
+	    decision.candidateReallocation = search.requestsReallocation();
+	    decision.requestFrame = transition.requestSampleFrame;
+	    decision.sampleFrame = transition.requestSampleFrame;
+	    decision.restartSubmission = transition.restartSubmission;
+	    decision.searchTerminal = search.terminal();
+	    decision.searchResult = search.result;
+	    return decision;
+	}
+	/* An ordinary per-occurrence pass does not own the complete ordered demand
+	 * endpoint required by the capacity-search certificate.  If it changed the
+	 * framebuffer, present that population exactly once.  Its successor is a
+	 * complete retained importance allocation; if it changed nothing, begin
+	 * that allocation immediately.  Replaying three untyped frames here was a
+	 * second capacity controller and could alternate with the certified search. */
+	decision.searchActive = false;
+	decision.candidateReallocation = false;
+	decision.sampleFrame = false;
+	this->stableBudgetLimitedValue = false;
 	if (inputs.passAdmittedWork) {
-	    this->resetProbeSeries();
-	} else if (this->probeActiveCostValue != inputs.activeCost) {
-	    this->probeActiveCostValue = inputs.activeCost;
-	    this->probeCountValue = 0;
-	    this->calibrationFramesRemainingValue = 0;
+	    this->frameBarrierValue.requestReallocation();
+	    decision.requestFrame = true;
+	} else {
+	    this->requestedRetainedReallocationValue = true;
+	    this->requestedRetainedReallocationPreserveBudgetValue = false;
+	    decision.restartSubmission = true;
 	}
-	/* Three unchanged presentations are enough to reject a one-frame setup
-	 * or compositor outlier.  Replaying the same cut twelve times does not
-	 * add new capacity information; on very large scenes it needlessly holds
-	 * convergence behind repeated full presentation work.  The resulting
-	 * calibrated budget is retained and the next admission pass supplies the
-	 * next distinct sample. */
-	static constexpr unsigned int minimumProbes = 3;
-	static constexpr unsigned int maximumProbes = minimumProbes;
-	decision.probeEligible =
-	    !inputs.interactive && !inputs.stablePresentationHandoff &&
-	    !inputs.passAdmittedWork && inputs.activeCost > 0 &&
-	    this->currentBudgetValue != SIZE_MAX &&
-	    inputs.targetNanoseconds > 0;
-	decision.calibrationFrame = decision.probeEligible &&
-	    (this->probeCountValue < minimumProbes ||
-	     decision.probeCandidate) &&
-	    this->probeCountValue < maximumProbes;
-	if (decision.calibrationFrame) {
-	    this->probeCountValue++;
-	    const unsigned int targetProbeCount =
-		decision.probeCandidate ? maximumProbes : minimumProbes;
-	    this->calibrationFramesRemainingValue =
-		targetProbeCount > this->probeCountValue ?
-		    targetProbeCount - this->probeCountValue : 0;
-	} else if (!decision.probeCandidate) {
-	    this->probeCountValue = 0;
-	    this->calibrationFramesRemainingValue = 0;
-	}
-	this->rescanAfterFrameValue =
-	    inputs.passAdmittedWork || decision.calibrationFrame;
-	this->reallocateAfterCalibrationValue =
-	    this->rescanAfterFrameValue && inputs.retainedAllocation;
-	this->stableBudgetLimitedValue = !this->rescanAfterFrameValue;
-	decision.requestFrame = this->rescanAfterFrameValue;
 	return decision;
     }
 
-    CompletedFrameDecision completeCalibrationFrame(void)
+    CompletedFrameDecision completeCalibrationFrame(
+	BObolLodAdmissionCursor &cursor)
     {
 	CompletedFrameDecision decision;
-	if (!this->rescanAfterFrameValue)
+	if (!this->frameBarrierValue.pending())
 	    return decision;
-	if (this->calibrationFramesRemainingValue > 0) {
-	    this->calibrationFramesRemainingValue--;
-	    this->probeCountValue++;
-	    decision.requestCalibrationFrame = true;
-	    return decision;
-	}
-	this->rescanAfterFrameValue = false;
-	if (this->reallocateAfterCalibrationValue) {
+	const BObolLodCapacityFrameBarrier::Successor successor =
+	    this->frameBarrierValue.consume();
+	if (successor ==
+		BObolLodCapacityFrameBarrier::Successor::REALLOCATE) {
 	    this->requestedRetainedReallocationValue = true;
 	    this->requestedRetainedReallocationPreserveBudgetValue = false;
 	}
-	this->reallocateAfterCalibrationValue = false;
-	this->resetPass();
+	cursor.reset();
 	decision.restartSubmission = true;
 	return decision;
+    }
+
+    CompletedFrameDecision completeCapacitySearchFrame(
+	BObolLodAdmissionCursor &cursor,
+	const CompletedFrameInputs &inputs)
+    {
+	if (this->capacitySearchValue.phase() !=
+		BObolLodCapacitySearchCertificate::Phase::MEASURING)
+	    return this->completeCalibrationFrame(cursor);
+	BObolLodCapacitySearchCertificate::Observation observation;
+	observation.key = inputs.searchKey;
+	observation.candidateBudget = inputs.candidateBudget;
+	observation.presentedCost = inputs.presentedCost;
+	observation.knownSafeBudget = inputs.knownSafeBudget;
+	observation.observedNanoseconds = inputs.observedNanoseconds;
+	observation.validSample = inputs.validSample;
+	return this->applyCapacitySearchDecision(
+	    this->capacitySearchValue.observe(observation), &cursor);
     }
 
     /* A calibration barrier can outlive the population it was meant to
@@ -1650,23 +2029,24 @@ public:
      * replaying it cannot produce capacity evidence.  Retire the obsolete
      * probe series and return directly to admission instead of waiting on an
      * impossible sample forever. */
-    CompletedFrameDecision retireUnmeasurableCalibrationFrame(void)
+    CompletedFrameDecision retireUnmeasurableCalibrationFrame(
+	BObolLodAdmissionCursor &cursor)
     {
 	CompletedFrameDecision decision;
-	if (!this->rescanAfterFrameValue)
+	if (!this->frameBarrierValue.pending())
 	    return decision;
-	this->calibrationFramesRemainingValue = 0;
-	decision = this->completeCalibrationFrame();
-	this->resetProbeSeries();
+	decision = this->completeCalibrationFrame(cursor);
 	return decision;
     }
 
-    void requestRescanAfterFrame(bool clearCalibrationFrames = false)
+    void requestRescanAfterFrame(void)
     {
-	this->rescanAfterFrameValue = true;
+	/* A coverage/publication edge changes the population being presented.
+	 * Any numeric candidate awaiting a sample is therefore stale; the new
+	 * population must obtain a fresh complete allocation after this barrier. */
+	this->capacitySearchValue.reset();
+	this->frameBarrierValue.requestReplan();
 	this->stableBudgetLimitedValue = false;
-	if (clearCalibrationFrames)
-	    this->calibrationFramesRemainingValue = 0;
     }
 
     void clearBudgetLimit(void)
@@ -1674,34 +2054,11 @@ public:
 	this->stableBudgetLimitedValue = false;
     }
 
-    void resetProbeSeries(void)
-    {
-	this->probeActiveCostValue = 0;
-	this->probeCountValue = 0;
-	this->calibrationFramesRemainingValue = 0;
-    }
-
-    void setProbeCount(unsigned int count)
-    {
-	this->probeCountValue = count;
-    }
-
     void resetCalibration(void)
     {
-	this->resetProbeSeries();
-	this->rescanAfterFrameValue = false;
+	this->frameBarrierValue.reset();
 	this->stableBudgetLimitedValue = false;
-    }
-
-    void resetPass(void)
-    {
-	this->passInitializedValue = false;
-	this->singleOccurrenceBootstrapValue = false;
-	this->passActiveCostValue = 0;
-	this->passMinimumActiveCostValue = 0;
-	this->refinementRemainingValue = SIZE_MAX;
-	this->retainedAdmissionValue = false;
-	this->retainedAdmissionRemainingValue = SIZE_MAX;
+	this->capacitySearchValue.reset();
     }
 
     void resetOverloadRecovery(void)
@@ -1718,34 +2075,15 @@ public:
 	this->requestedRetainedReallocationPreserveBudgetValue = true;
 	this->requestedPresentationReconciliationBudgetValue = SIZE_MAX;
 	this->requestedCoverageCompletionAdditionalCostValue = SIZE_MAX;
-	this->reallocateAfterCalibrationValue = false;
 	this->retainedRecoveryCeilingValue = SIZE_MAX;
-	this->deadlineCapacityCeilingValue = SIZE_MAX;
+	this->steadyDeadlineCapacityCeilingValue = SIZE_MAX;
+	this->staticDeadlineCapacityCeilingValue = SIZE_MAX;
 	this->retainedQualityFloorBudgetValue = 0;
 	this->retainedQualityFloorSignatureValue = 0;
 	this->retainedQualityFloorRejectedValue = false;
 	this->retainedQualityFloorMissCountValue = 0;
-	this->resetPass();
 	this->resetOverloadRecovery();
 	this->resetCalibration();
-    }
-
-    void consumeRefinement(size_t cost)
-    {
-	if (this->refinementRemainingValue == SIZE_MAX)
-	    return;
-	this->refinementRemainingValue =
-	    cost >= this->refinementRemainingValue ?
-		0 : this->refinementRemainingValue - cost;
-    }
-
-    void consumeRetainedAdmission(size_t cost)
-    {
-	if (this->retainedAdmissionRemainingValue == SIZE_MAX)
-	    return;
-	this->retainedAdmissionRemainingValue =
-	    cost >= this->retainedAdmissionRemainingValue ?
-		0 : this->retainedAdmissionRemainingValue - cost;
     }
 
     void reduceCurrentBudget(size_t budget)
@@ -1821,14 +2159,14 @@ public:
 	if (certifiedBudget == SIZE_MAX || certifiedBudget <= activeCost)
 	    return 0;
 	/* The exact frame proves marginal capacity above the population it drew.
-	 * Retained presentation metadata may change before beginPass freezes its
+	 * Retained presentation metadata may change before the admission plan
+	 * freezes its
 	 * accounting baseline, so carrying the old absolute total would either
 	 * over-admit or strand the complete repair frontier. */
 	this->requestedCoverageCompletionAdditionalCostValue =
 	    certifiedBudget - activeCost;
 	this->currentBudgetValue = certifiedBudget;
 	this->stableBudgetLimitedValue = false;
-	this->resetProbeSeries();
 	return certifiedBudget;
     }
 
@@ -1838,21 +2176,38 @@ public:
      * intermediate trial also misses.  The immediate recovery may choose a
      * more conservative budget; this ceiling governs later calibration once
      * that one-shot handoff is complete. */
-    void noteDeadlineCapacityMiss(size_t attemptedBudget)
+    void noteDeadlineCapacityMiss(size_t attemptedBudget,
+	bool staticDeadline = false)
     {
 	if (attemptedBudget <= 1 || attemptedBudget == SIZE_MAX)
 	    return;
+	/* The interrupted frame is a typed unsafe witness owned by deadline
+	 * recovery.  Retire any unchanged-frame candidate so its pending samples
+	 * cannot later overwrite the stricter ceiling with stale safe evidence. */
+	this->capacitySearchValue.reset();
 	const size_t reduction = std::max<size_t>(1, attemptedBudget / 20);
 	const size_t strictCeiling = attemptedBudget - reduction;
-	this->deadlineCapacityCeilingValue = std::min(
-	    this->deadlineCapacityCeilingValue, strictCeiling);
+	if (staticDeadline) {
+	    this->staticDeadlineCapacityCeilingValue = std::min(
+		this->staticDeadlineCapacityCeilingValue, strictCeiling);
+	    /* A population which misses the longer static deadline is also unsafe
+	     * at the preferred cadence. */
+	    this->steadyDeadlineCapacityCeilingValue = std::min(
+		this->steadyDeadlineCapacityCeilingValue, strictCeiling);
+	} else {
+	    this->steadyDeadlineCapacityCeilingValue = std::min(
+		this->steadyDeadlineCapacityCeilingValue, strictCeiling);
+	}
+	const size_t activeCeiling = staticDeadline ?
+	    this->staticDeadlineCapacityCeilingValue :
+	    this->steadyDeadlineCapacityCeilingValue;
 	this->currentBudgetValue = std::min(
-	    this->currentBudgetValue, this->deadlineCapacityCeilingValue);
+	    this->currentBudgetValue, activeCeiling);
 	/* A protected floor above a hard failed-work bound cannot be defended by
 	 * another soft allocation.  Retire it for this capacity epoch while
 	 * keeping every immutable resident suffix available to a later view. */
 	if (this->retainedQualityFloorBudgetValue >
-		this->deadlineCapacityCeilingValue) {
+	    this->staticDeadlineCapacityCeilingValue) {
 	    this->retainedQualityFloorBudgetValue = 0;
 	    this->retainedQualityFloorSignatureValue = 0;
 	    this->retainedQualityFloorMissCountValue = 0;
@@ -1866,7 +2221,8 @@ public:
      * quality-frame allowance.  Update all three currencies of the already
      * initialized retained pass together; changing only currentBudgetValue
      * would leave its bounded actions consuming the former upgrade limit. */
-    void setRetainedQualityFloorBudget(size_t budget,
+    void setRetainedQualityFloorBudget(BObolLodAdmissionCursor &cursor,
+	size_t budget,
 	uint64_t populationSignature, size_t activeCost,
 	size_t minimumActiveCost)
     {
@@ -1874,8 +2230,8 @@ public:
 	    return;
 	const size_t nextBudget = budget == SIZE_MAX ? 0 : budget;
 	if (nextBudget > 0 &&
-	    this->deadlineCapacityCeilingValue != SIZE_MAX &&
-	    nextBudget > this->deadlineCapacityCeilingValue) {
+	    this->staticDeadlineCapacityCeilingValue != SIZE_MAX &&
+	    nextBudget > this->staticDeadlineCapacityCeilingValue) {
 	    this->retainedQualityFloorBudgetValue = 0;
 	    this->retainedQualityFloorSignatureValue = 0;
 	    this->retainedQualityFloorMissCountValue = 0;
@@ -1892,13 +2248,13 @@ public:
 	    this->retainedQualityFloorMissCountValue = 0;
 	this->retainedQualityFloorBudgetValue = nextBudget;
 	this->retainedQualityFloorSignatureValue = nextSignature;
-	if (!this->passInitializedValue || !this->retainedAdmissionValue ||
+	if (!cursor.initializedValue || !cursor.retainedAdmissionValue ||
 	    !budget || budget == SIZE_MAX || budget <= this->currentBudgetValue)
 	    return;
 	this->currentBudgetValue = budget;
-	this->refinementRemainingValue = budget > activeCost ?
+	cursor.refinementRemainingValue = budget > activeCost ?
 	    budget - activeCost : 0;
-	this->retainedAdmissionRemainingValue =
+	cursor.retainedAdmissionRemainingValue =
 	    budget > minimumActiveCost ? budget - minimumActiveCost : 0;
 	if (this->retainedRecoveryCeilingValue != SIZE_MAX &&
 	    this->retainedRecoveryCeilingValue < budget)
@@ -1995,7 +2351,8 @@ public:
 
     void clearDeadlineCapacityCeiling(void)
     {
-	this->deadlineCapacityCeilingValue = SIZE_MAX;
+	this->steadyDeadlineCapacityCeilingValue = SIZE_MAX;
+	this->staticDeadlineCapacityCeilingValue = SIZE_MAX;
     }
 
     /* A measured recovery ceiling protects the first coherent one-pixel
@@ -2004,13 +2361,14 @@ public:
      * presentation.  Keep this transition in the scalar policy so callers
      * cannot accidentally clear only the pass state, or retain the ceiling
      * forever when returning from a coarser point cut needs an extra frame. */
-    bool confirmRetainedRecoveryPresentation(bool onePixelReady)
+    bool confirmRetainedRecoveryPresentation(
+	bool onePixelReady, BObolLodAdmissionCursor &cursor)
     {
 	if (!onePixelReady ||
 	    this->retainedRecoveryCeilingValue == SIZE_MAX)
 	    return false;
 	this->clearRetainedRecoveryCeiling();
-	this->resetPass();
+	cursor.reset();
 	return true;
     }
 
@@ -2020,51 +2378,35 @@ public:
 	if (this->retainedRecoveryCeilingValue != SIZE_MAX)
 	    raisedBudget = std::min(
 		raisedBudget, this->retainedRecoveryCeilingValue);
-	if (this->deadlineCapacityCeilingValue != SIZE_MAX)
+	if (this->steadyDeadlineCapacityCeilingValue != SIZE_MAX)
 	    raisedBudget = std::min(
-		raisedBudget, this->deadlineCapacityCeilingValue);
+		raisedBudget, this->steadyDeadlineCapacityCeilingValue);
 	this->currentBudgetValue = raisedBudget;
     }
 
     size_t seedBudget(void) const { return this->seedBudgetValue; }
     static constexpr size_t singleOccurrenceBootstrapBudget(void)
     {
-	/* About one medium software-rendered mesh frame.  The endpoint's 100 ms
-	 * hard deadline and normal completed-frame calibration remain the actual
-	 * safety contract; this value only avoids 50k-face level walking before
-	 * the first useful timing sample exists. */
-	return 500000;
+	/* A sole cold source has no competing occurrence whose first useful mesh
+	 * could be starved.  Permit one globally classified, byte-capped PoP
+	 * preview rather than rejecting it for a provisional 500k estimate and
+	 * making the user wait for chunk persistence.  The endpoint's 100 ms hard
+	 * deadline and completed-frame calibration remain the safety contract;
+	 * this is only the bounded first-publication allowance. */
+	return 1000000;
     }
     size_t currentBudget(void) const { return this->currentBudgetValue; }
-    size_t passActiveCost(void) const { return this->passActiveCostValue; }
-    size_t passMinimumActiveCost(void) const
-    {
-	return this->passMinimumActiveCostValue;
-    }
     bool retainedRecoveryCeilingActive(void) const
     {
 	return this->retainedRecoveryCeilingValue != SIZE_MAX;
     }
     size_t deadlineCapacityCeiling(void) const
     {
-	return this->deadlineCapacityCeilingValue;
+	return this->steadyDeadlineCapacityCeilingValue;
     }
-    bool passInitialized(void) const { return this->passInitializedValue; }
-    bool singleOccurrenceBootstrap(void) const
+    size_t staticDeadlineCapacityCeiling(void) const
     {
-	return this->singleOccurrenceBootstrapValue;
-    }
-    size_t refinementRemaining(void) const
-    {
-	return this->refinementRemainingValue;
-    }
-    bool retainedAdmission(void) const
-    {
-	return this->retainedAdmissionValue;
-    }
-    size_t retainedAdmissionRemaining(void) const
-    {
-	return this->retainedAdmissionRemainingValue;
+	return this->staticDeadlineCapacityCeilingValue;
     }
     bool overloadRecoveryPerformed(void) const
     {
@@ -2074,51 +2416,44 @@ public:
     {
 	return this->overloadRecoveryActiveCostValue;
     }
-    size_t probeActiveCost(void) const { return this->probeActiveCostValue; }
-    unsigned int probeCount(void) const { return this->probeCountValue; }
-    unsigned int calibrationFramesRemaining(void) const
-    {
-	return this->calibrationFramesRemainingValue;
-    }
     bool rescanAfterFrame(void) const
     {
-	return this->rescanAfterFrameValue;
+	return this->frameBarrierValue.pending() ||
+	    this->capacitySearchValue.awaitingSample();
     }
     bool stableBudgetLimited(void) const
     {
 	return this->stableBudgetLimitedValue;
     }
+    const BObolLodCapacitySearchCertificate &capacitySearch(void) const
+    {
+	return this->capacitySearchValue;
+    }
 
 private:
     size_t seedBudgetValue = 50000;
     size_t currentBudgetValue = 50000;
-    size_t passActiveCostValue = 0;
-    size_t passMinimumActiveCostValue = 0;
-    size_t refinementRemainingValue = SIZE_MAX;
-    size_t retainedAdmissionRemainingValue = SIZE_MAX;
     size_t overloadRecoveryActiveCostValue = 0;
     size_t requestedRetainedRecoveryBudgetValue = SIZE_MAX;
     size_t retainedRecoveryCeilingValue = SIZE_MAX;
-    size_t deadlineCapacityCeilingValue = SIZE_MAX;
+    size_t steadyDeadlineCapacityCeilingValue = SIZE_MAX;
+    size_t staticDeadlineCapacityCeilingValue = SIZE_MAX;
     size_t retainedQualityFloorBudgetValue = 0;
     uint64_t retainedQualityFloorSignatureValue = 0;
     unsigned int retainedQualityFloorMissCountValue = 0;
-    size_t probeActiveCostValue = 0;
-    unsigned int probeCountValue = 0;
-    unsigned int calibrationFramesRemainingValue = 0;
-    bool passInitializedValue = false;
-    bool singleOccurrenceBootstrapValue = false;
     bool requestedRetainedReallocationValue = false;
     bool requestedRetainedReallocationPreserveBudgetValue = true;
     size_t requestedPresentationReconciliationBudgetValue = SIZE_MAX;
     size_t requestedCoverageCompletionAdditionalCostValue = SIZE_MAX;
-    bool reallocateAfterCalibrationValue = false;
-    bool retainedAdmissionValue = false;
     bool overloadRecoveryPerformedValue = false;
-    bool rescanAfterFrameValue = false;
     bool stableBudgetLimitedValue = false;
     bool retainedQualityFloorRejectedValue = false;
+    BObolLodCapacityFrameBarrier frameBarrierValue;
+    BObolLodCapacitySearchCertificate capacitySearchValue;
 };
+
+static_assert(std::is_trivially_copyable<BObolLodCapacityEvidence>::value,
+    "capacity evidence must remain an allocation-free value");
 
 /*
  * Camera-local view-demand scheduling.  A zoom interaction may keep loading
@@ -2130,9 +2465,29 @@ private:
  */
 class BObolLodViewDemandPolicy {
 public:
+    static constexpr int64_t unbracketedQuietDebounceMicroseconds(void)
+    {
+	return 150000;
+    }
+
     static constexpr uint64_t qualityFrameDurationNanoseconds(void)
     {
 	return 100000000ULL;
+    }
+
+    /* A remembered quiet frame is a retained-image seed, not permission to
+     * reuse the same expensive traversal during input.  Allow a small,
+     * bounded scheduling tolerance when recording it: a software renderer
+     * can cross the nominal static deadline by a few milliseconds because of
+     * compositor or readback work even though the completed image remains a
+     * useful immediate restore.  A later input epoch still uses the strict
+     * interactive deadline and ordinary admission must revalidate the seed. */
+    static constexpr uint64_t staticHistoryDeadlineNanoseconds(
+	uint64_t deadline)
+    {
+	return !deadline ? 0 :
+	    deadline > UINT64_MAX / 6 ? UINT64_MAX :
+	    deadline + deadline / 5;
     }
 
     static constexpr float qualityTargetFramesPerSecond(void)
@@ -2497,6 +2852,431 @@ private:
 };
 
 /*
+ * One owner for the camera-interaction lifecycle and its motion-frame gate.
+ * The former interactive/gesture flags admitted an impossible gesture-only
+ * combination, while the separately writable render serial and timestamp
+ * could outlive the interaction they described.  This value names the three
+ * legal phases and owns every transition between them.
+ */
+class BObolLodInteractionSession {
+public:
+    enum class Phase : uint8_t {
+	QUIET = 0,
+	DEBOUNCING,
+	GESTURE
+    };
+
+    bool active(void) const
+    {
+	return this->phaseValue != Phase::QUIET;
+    }
+
+    bool gestureActive(void) const
+    {
+	return this->phaseValue == Phase::GESTURE;
+    }
+
+    Phase phase(void) const
+    {
+	return this->phaseValue;
+    }
+
+    void beginGesture(int64_t nowMicroseconds)
+    {
+	this->phaseValue = Phase::GESTURE;
+	this->lastViewChangeMicrosecondsValue = nowMicroseconds;
+	this->settleAfterRenderSerialValue = 0;
+    }
+
+    bool endGesture(int64_t nowMicroseconds)
+    {
+	if (!this->gestureActive())
+	    return false;
+	this->phaseValue = Phase::DEBOUNCING;
+	this->lastViewChangeMicrosecondsValue = nowMicroseconds;
+	this->settleAfterRenderSerialValue = 0;
+	return true;
+    }
+
+    void clearMotionFrameGate(void)
+    {
+	this->settleAfterRenderSerialValue = 0;
+    }
+
+    void observeCameraChange(int64_t nowMicroseconds,
+	uint64_t renderCompletionSerial)
+    {
+	if (!this->active())
+	    this->phaseValue = Phase::DEBOUNCING;
+	this->lastViewChangeMicrosecondsValue = nowMicroseconds;
+	this->settleAfterRenderSerialValue = renderCompletionSerial + 1;
+	if (this->settleAfterRenderSerialValue == 0)
+	    this->settleAfterRenderSerialValue = 1;
+    }
+
+    bool noteMotionFrameCompleted(uint64_t renderCompletionSerial,
+	int64_t nowMicroseconds)
+    {
+	if (!this->active() || !this->settleAfterRenderSerialValue ||
+	    renderCompletionSerial < this->settleAfterRenderSerialValue)
+	    return false;
+	this->lastViewChangeMicrosecondsValue = nowMicroseconds;
+	this->settleAfterRenderSerialValue = 0;
+	return true;
+    }
+
+    bool releaseExpiredMotionFrame(int64_t nowMicroseconds,
+	int64_t quietDebounceMicroseconds)
+    {
+	if (!this->active() || this->gestureActive() ||
+	    !this->settleAfterRenderSerialValue ||
+	    this->lastViewChangeMicrosecondsValue <= 0 ||
+	    elapsedMicroseconds(nowMicroseconds,
+		this->lastViewChangeMicrosecondsValue) <
+		quietDebounceMicroseconds)
+	    return false;
+	this->settleAfterRenderSerialValue = 0;
+	return true;
+    }
+
+    bool quietReady(int64_t nowMicroseconds,
+	int64_t quietDebounceMicroseconds) const
+    {
+	return this->active() && !this->gestureActive() &&
+	    !this->settleAfterRenderSerialValue &&
+	    this->lastViewChangeMicrosecondsValue > 0 &&
+	    elapsedMicroseconds(nowMicroseconds,
+		this->lastViewChangeMicrosecondsValue) >=
+		quietDebounceMicroseconds;
+    }
+
+    void finishQuiet(void)
+    {
+	this->phaseValue = Phase::QUIET;
+	this->settleAfterRenderSerialValue = 0;
+	this->lastViewChangeMicrosecondsValue = 0;
+    }
+
+    void reset(void)
+    {
+	this->phaseValue = Phase::QUIET;
+	this->settleAfterRenderSerialValue = 0;
+	this->lastViewChangeMicrosecondsValue = 0;
+    }
+
+    uint64_t settleAfterRenderSerial(void) const
+    {
+	return this->settleAfterRenderSerialValue;
+    }
+
+private:
+    static int64_t elapsedMicroseconds(int64_t nowMicroseconds,
+	int64_t thenMicroseconds)
+    {
+	return nowMicroseconds >= thenMicroseconds ?
+	    nowMicroseconds - thenMicroseconds : 0;
+    }
+
+    Phase phaseValue = Phase::QUIET;
+    uint64_t settleAfterRenderSerialValue = 0;
+    int64_t lastViewChangeMicrosecondsValue = 0;
+};
+
+static_assert(std::is_trivially_copyable<
+    BObolLodInteractionSession>::value,
+    "interaction sessions must remain allocation-free values");
+
+/* Evidence captured once at the start of a continuous camera-interaction
+ * epoch.  Scale identity, prior readiness, and the last stable capacity are
+ * one proof: independently clearing their former validity flags admitted
+ * impossible half-captured states during service and renderer resets. */
+class BObolLodInteractionStartCertificate {
+public:
+    void capture(const BObolLodViewScaleSnapshot &scale,
+	bool exactScale, bool startedFromReadyView, size_t stableBudget)
+    {
+	this->stateValue = exactScale ? State::EXACT_SCALE : State::NO_SCALE;
+	this->scaleValue = scale;
+	this->startedFromReadyViewValue = startedFromReadyView;
+	this->stableBudgetValue = stableBudget;
+    }
+
+    void reset(void)
+    {
+	this->stateValue = State::EMPTY;
+	this->scaleValue = BObolLodViewScaleSnapshot();
+	this->startedFromReadyViewValue = false;
+	this->stableBudgetValue = 0;
+    }
+
+    bool captured(void) const
+    {
+	return this->stateValue != State::EMPTY;
+    }
+
+    bool exactScale(void) const
+    {
+	return this->stateValue == State::EXACT_SCALE;
+    }
+
+    bool returnedToScale(const BObolLodViewScaleSnapshot &scale) const
+    {
+	return this->exactScale() && this->scaleValue.same(scale);
+    }
+
+    bool startedFromReadyView(void) const
+    {
+	return this->captured() && this->startedFromReadyViewValue;
+    }
+
+    size_t stableBudget(void) const
+    {
+	return this->captured() ? this->stableBudgetValue : 0;
+    }
+
+private:
+    enum class State : uint8_t {
+	EMPTY = 0,
+	NO_SCALE,
+	EXACT_SCALE
+    };
+
+    State stateValue = State::EMPTY;
+    BObolLodViewScaleSnapshot scaleValue;
+    bool startedFromReadyViewValue = false;
+    size_t stableBudgetValue = 0;
+};
+
+static_assert(std::is_trivially_copyable<
+    BObolLodInteractionStartCertificate>::value,
+    "interaction start certificates must remain allocation-free values");
+
+/*
+ * Lifecycle of one event-driven static-quality trial.  The former active and
+ * rejected booleans admitted four combinations with implicit meanings spread
+ * across the controller.  Name those states here and keep the replay sample
+ * with its sole owner so callers cannot manufacture a fifth combination.
+ */
+class BObolLodStaticQualityTrial {
+public:
+    enum class ConstraintReason : uint8_t {
+	NONE = 0,
+	PRESENTATION_DEADLINE,
+	PREDICTED_NEXT_CUT,
+	PROTECTED_MINIMUM
+    };
+
+    struct Constraint {
+	ConstraintReason reason = ConstraintReason::NONE;
+	BObolLodAdmissionRevisionStamp revisionStamp;
+	int committedCeiling = -1;
+	float committedNextFraction = 0.0f;
+	int candidateCeiling = -1;
+	float candidateNextFraction = 0.0f;
+	size_t committedCost = 0;
+	size_t candidateCost = 0;
+	size_t allowedCost = 0;
+
+	bool valid(void) const
+	{
+	    return this->reason != ConstraintReason::NONE &&
+		!this->revisionStamp.empty() &&
+		validCut(this->committedCeiling,
+		    this->committedNextFraction) &&
+		validCut(this->candidateCeiling,
+		    this->candidateNextFraction) &&
+		this->candidateCost > 0;
+	}
+
+    private:
+	static bool validCut(int ceiling, float nextFraction)
+	{
+	    return ceiling >= -1 &&
+		ceiling < BOBOL_MESH_LOD_CUT_COUNT_MAX &&
+		std::isfinite(nextFraction) && nextFraction >= 0.0f &&
+		nextFraction <= 1.0f &&
+		(ceiling >= 0 || nextFraction <= 1.0e-6f);
+	}
+    };
+
+    struct Acceptance {
+	BObolLodAdmissionRevisionStamp revisionStamp;
+	int ceiling = -1;
+	float nextFraction = 0.0f;
+	size_t presentedCost = 0;
+	size_t allowedCost = 0;
+
+	bool valid(void) const
+	{
+	    return !this->revisionStamp.empty() && this->ceiling >= 0 &&
+		this->ceiling < BOBOL_MESH_LOD_CUT_COUNT_MAX &&
+		std::isfinite(this->nextFraction) &&
+		this->nextFraction > 0.0f && this->nextFraction <= 1.0f &&
+		this->presentedCost > 0 && this->allowedCost > 0 &&
+		this->presentedCost <= this->allowedCost;
+	}
+    };
+
+    void reset(void)
+    {
+	this->stateValue = State::IDLE;
+	this->sampledCeilingValue = -1;
+	this->constraintValue = Constraint();
+	this->acceptanceValue = Acceptance();
+    }
+
+    void begin(void)
+    {
+	if (this->blocksNewTrial())
+	    return;
+	this->stateValue = State::PROBING;
+	this->sampledCeilingValue = -1;
+    }
+
+    void restoreRendererCeiling(bool active)
+    {
+	this->reset();
+	this->stateValue = active ? State::PROBING : State::IDLE;
+    }
+
+    void deactivate(void)
+    {
+	this->reset();
+    }
+
+    /* A rejected static candidate is not terminal until its renderer-wide
+     * safety ceiling has been represented by a certified occurrence-local
+     * allocation.  Keep that successful handoff as the sole transition from
+     * RECONCILING to REJECTED.  Generic policy/view invalidation uses
+     * deactivate(); it must not be able to masquerade as this certificate. */
+    bool completeReconciliation(void)
+    {
+	if (this->stateValue != State::RECONCILING)
+	    return false;
+	this->stateValue = State::REJECTED;
+	this->sampledCeilingValue = -1;
+	return true;
+    }
+
+    bool reject(const Constraint &constraint)
+    {
+	if (!constraint.valid() || !this->inProgress())
+	    return false;
+	this->constraintValue = constraint;
+	this->acceptanceValue = Acceptance();
+	this->stateValue = State::RECONCILING;
+	this->sampledCeilingValue = -1;
+	return true;
+    }
+
+    bool acceptFractionalCeiling(const Acceptance &acceptance)
+    {
+	if (!acceptance.valid() || !this->probing())
+	    return false;
+	this->acceptanceValue = acceptance;
+	this->constraintValue = Constraint();
+	this->stateValue = State::ACCEPTED;
+	this->sampledCeilingValue = -1;
+	return true;
+    }
+
+    bool probing(void) const
+    {
+	return this->stateValue == State::PROBING;
+    }
+
+    bool inProgress(void) const
+    {
+	return this->stateValue == State::PROBING ||
+	    this->stateValue == State::RECONCILING;
+	}
+
+    bool accepted(void) const
+    {
+	return this->stateValue == State::ACCEPTED;
+	}
+
+    bool capacityRejected(void) const
+    {
+	return this->stateValue == State::RECONCILING ||
+	    this->stateValue == State::REJECTED;
+	}
+
+    bool blocksNewTrial(void) const
+    {
+	return this->stateValue != State::IDLE;
+	}
+
+    bool usesStaticDeadline(void) const
+    {
+	return this->stateValue == State::PROBING ||
+	    this->stateValue == State::RECONCILING ||
+	    this->stateValue == State::ACCEPTED ||
+	    this->stateValue == State::REJECTED;
+    }
+
+    const Constraint &constraint(void) const
+    {
+	return this->constraintValue;
+	}
+
+    const Acceptance &acceptance(void) const
+    {
+	return this->acceptanceValue;
+    }
+
+    size_t acceptedPresentationCostFor(
+	const BObolLodAdmissionRevisionStamp &stamp) const
+    {
+	if (!this->accepted() || !this->acceptanceValue.valid())
+	    return 0;
+	const BObolLodAdmissionRevisionStamp &accepted =
+	    this->acceptanceValue.revisionStamp;
+	/* Completed-frame capacity remains valid when the capacity ledger records
+	 * that very frame.  Inventory, availability, view, or policy changes alter
+	 * the submitted population and must obtain a new proof. */
+	return accepted.inventory == stamp.inventory &&
+	    accepted.availability == stamp.availability &&
+	    accepted.view == stamp.view && accepted.policy == stamp.policy ?
+		this->acceptanceValue.presentedCost : 0;
+    }
+
+    int sampledCeiling(void) const
+    {
+	return this->sampledCeilingValue;
+    }
+
+    void noteSampledCeiling(int ceiling)
+    {
+	if (this->stateValue == State::PROBING)
+	    this->sampledCeilingValue = ceiling;
+    }
+
+    void resetSample(void)
+    {
+	this->sampledCeilingValue = -1;
+    }
+
+private:
+    enum class State : uint8_t {
+	IDLE = 0,
+	PROBING,
+	ACCEPTED,
+	RECONCILING,
+	REJECTED
+    };
+
+    State stateValue = State::IDLE;
+    int sampledCeilingValue = -1;
+    Constraint constraintValue;
+    Acceptance acceptanceValue;
+};
+
+static_assert(std::is_trivially_copyable<
+    BObolLodStaticQualityTrial>::value,
+    "static-quality trial state must remain an allocation-free value");
+
+/*
  * Renderer-only presentation continuity across camera interaction.  The
  * retained occurrence cuts and resident PoP arrays remain authoritative; this
  * allocation-free value owns only the reversible global prefix/point-proxy
@@ -2528,6 +3308,7 @@ public:
 	BObolLodViewEpoch viewEpoch;
 	float targetPixelError = 1.0f;
 	int progressiveCeiling = -1;
+	float progressiveNextFraction = 0.0f;
 	float pointProxyPixelThreshold = 1.0f;
 	Population population;
 	size_t presentedRenderCost = 0;
@@ -2541,19 +3322,49 @@ public:
 	Population population;
 	float currentTargetPixelError = 1.0f;
 	int currentProgressiveCeiling = -1;
+	float currentProgressiveNextFraction = 0.0f;
 	float currentPointProxyPixelThreshold = 1.0f;
     };
 
+    /* Exact-view history is validated by its own revision-bound store before
+     * it reaches the quiet successor.  Keeping the complete control vector in
+     * one value prevents a later caller from restoring only an integer cut or
+     * dropping the capacity proof associated with the completed frame. */
+    struct QuietCertificate {
+	bool valid = false;
+	float targetPixelError = 1.0f;
+	int progressiveCeiling = -1;
+	float progressiveNextFraction = 0.0f;
+	float pointProxyPixelThreshold = 1.0f;
+	size_t presentedRenderCost = 0;
+	size_t provenRenderCostCapacity = 0;
+    };
+
+    struct QuietInputs {
+	RestoreInputs presentation;
+	QuietCertificate exactView;
+    };
+
     struct RestoreDecision {
+	using Handoff = BObolLodQuietSuccessorReducer::Handoff;
+
 	bool apply = false;
 	bool restoredPriorStable = false;
 	bool restoredProvenQuality = false;
-	bool startHandoff = false;
+	bool restoredExactView = false;
+	Handoff handoff = Handoff::NONE;
 	bool clearPresentationLimits = false;
 	float targetPixelError = 1.0f;
 	int progressiveCeiling = -1;
+	float progressiveNextFraction = 0.0f;
 	float pointProxyPixelThreshold = 1.0f;
 	size_t provenRenderCostFloor = 0;
+	size_t provenRenderCostCapacity = 0;
+
+	bool needsHandoff(void) const
+	{
+	    return this->handoff != Handoff::NONE;
+	}
     };
 
     struct CompletedPassInputs {
@@ -2596,7 +3407,6 @@ public:
 	bool requestLocalPresentationReduction = false;
 	bool requestRetainedRescan = false;
 	bool retireRetainedObservation = false;
-	bool preservePresentationLimits = false;
     };
 
     /* A retained allocation is an authoritative replacement for a global
@@ -2620,34 +3430,75 @@ public:
 	return selectedPresentationCost <= budget;
     }
 
+    /* Capacity calibration may speculatively schedule another allocation
+     * before the handoff reducer sees the pass which just completed.  Once
+     * that pass supplies a current, quiescent occurrence-local certificate
+     * for the constrained presentation, the speculative successor has no new
+     * evidence to seek.  Let the stronger handoff proof consume it; concrete
+     * cut, rescan, publication, or population work remains authoritative. */
+    bool currentHandoffAllocationSupersedesCapacityRestart(
+	    const CompletedPassInputs &inputs,
+	    bool capacityRestartScheduled) const
+    {
+	/* Once a current, quiescent occurrence allocation exists, the handoff
+	 * reducer owns the next decision.  A fitting allocation completes the
+	 * handoff; an over-budget minimum requests local presentation reduction.
+	 * Letting the generic capacity fallback restart first leaves
+	 * submissionPending set, which prevents either handoff transition and
+	 * creates an unbounded no-op allocation loop. */
+	return capacityRestartScheduled && inputs.completed &&
+	    inputs.submissionPending && !inputs.rescanAfterFrame &&
+	    !inputs.changedCut && this->handoffActive() &&
+	    !this->presentationHandoffPending() &&
+	    inputs.retainedAllocationCompleted &&
+	    inputs.retainedAllocationCertified &&
+	    inputs.populationQuiescent;
+    }
+
+    /* A capacity-search sample must describe the exact occurrence-local
+     * allocation named by its certificate.  A renderer-wide handoff ceiling
+     * makes that sample inexact, while treating the pending sample as a
+     * reason to retain the ceiling creates a circular wait.  Once the
+     * allocation has supplied every other handoff proof, let ceiling removal
+     * precede the sample.  The caller deliberately retains the capacity
+     * search's frame latch, so the next ceiling-free presentation consumes
+     * the same candidate rather than starting another allocation. */
+    bool capacitySampleRequiresCeilingFreeHandoff(
+	    const CompletedPassInputs &inputs, bool capacitySamplePending,
+	    int progressiveCeiling) const
+    {
+	return capacitySamplePending && progressiveCeiling >= 0 &&
+	    inputs.rescanAfterFrame && inputs.completed &&
+	    !inputs.submissionPending && !inputs.changedCut &&
+	    this->handoffActive() && !this->presentationHandoffPending() &&
+	    inputs.retainedAllocationCompleted &&
+	    inputs.retainedAllocationCertified &&
+	    inputs.populationQuiescent &&
+	    inputs.presentationLimitsReconciled;
+    }
+
     void capturePrior(float targetPixelError, int progressiveCeiling,
-	float pointProxyPixelThreshold, const Population &population,
+	float progressiveNextFraction, float pointProxyPixelThreshold,
+	const Population &population,
 	BObolLodViewEpoch viewEpoch)
     {
 	this->priorStableValue = makeSnapshot(
-	    targetPixelError, progressiveCeiling,
+	    targetPixelError, progressiveCeiling, progressiveNextFraction,
 	    pointProxyPixelThreshold, population,
 	    viewEpoch, 0);
-	this->priorRestoredValue = false;
 	this->provenQualityValue = Snapshot();
-	this->handoffActiveValue = false;
-	this->handoffPresentationRequiredValue = false;
-	this->handoffPreservePresentationLimitsValue = false;
-	this->handoffChangedCutValue = false;
-	this->handoffReconciledValue = false;
-	this->handoffReconciliationBudgetValue = 0;
-	this->handoffReconciliationBudgetLimitValue = 0;
-	this->handoffCostFloorValue = 0;
+	this->clearHandoff();
     }
 
     void noteStableQuality(float targetPixelError, int progressiveCeiling,
-	float pointProxyPixelThreshold, const Population &population,
+	float progressiveNextFraction, float pointProxyPixelThreshold,
+	const Population &population,
 	BObolLodViewEpoch viewEpoch, size_t presentedRenderCost)
     {
 	if (!presentedRenderCost)
 	    return;
 	const Snapshot candidate = makeSnapshot(
-	    targetPixelError, progressiveCeiling,
+	    targetPixelError, progressiveCeiling, progressiveNextFraction,
 	    pointProxyPixelThreshold, population,
 	    viewEpoch, presentedRenderCost);
 	if (this->provenQualityValue.valid &&
@@ -2658,141 +3509,112 @@ public:
 	this->provenQualityValue = candidate;
     }
 
-    RestoreDecision restorePrior(const RestoreInputs &inputs)
+    RestoreDecision beginQuiet(const QuietInputs &quietInputs)
     {
-	RestoreDecision decision;
-	decision.targetPixelError = sanitizePixelError(
-	    inputs.currentTargetPixelError);
-	decision.progressiveCeiling = inputs.currentProgressiveCeiling;
-	decision.pointProxyPixelThreshold = sanitizeThreshold(
-	    inputs.currentPointProxyPixelThreshold);
-	if (this->priorRestoredValue) {
-	    if (inputs.orthographic && !inputs.scaleChanged &&
-		this->priorStableValue.valid &&
-		populationMatches(
-		    this->priorStableValue.population, inputs.population)) {
-		decision.restoredPriorStable = true;
-		/* Button-up may restore this snapshot before the 150 ms quiet
-		 * debounce.  A frame which then misses the stricter interactive
-		 * deadline can install another temporary renderer ceiling.  Reapply
-		 * the proven stable limits here; otherwise the prior-restored flag
-		 * suppresses both restoration and handoff, leaving that motion
-		 * ceiling in an apparently ready quiet view. */
-		if (std::fabs(sanitizePixelError(
-			inputs.currentTargetPixelError) -
-			this->priorStableValue.targetPixelError) > 1.0e-6f ||
-		    inputs.currentProgressiveCeiling !=
-			this->priorStableValue.progressiveCeiling ||
-		    std::fabs(sanitizeThreshold(
-			inputs.currentPointProxyPixelThreshold) -
-			this->priorStableValue.pointProxyPixelThreshold) > 1.0e-6f) {
-		    decision.apply = true;
-		    decision.targetPixelError =
-			this->priorStableValue.targetPixelError;
-		    decision.progressiveCeiling =
-			this->priorStableValue.progressiveCeiling;
-		    decision.pointProxyPixelThreshold =
-			this->priorStableValue.pointProxyPixelThreshold;
-		}
-	    } else
-		this->priorRestoredValue = false;
-	    return decision;
+	const RestoreInputs &inputs = quietInputs.presentation;
+	using Reducer = BObolLodQuietSuccessorReducer;
+	Reducer::Inputs successorInputs;
+	successorInputs.retainedMeshPayloads = inputs.retainedMeshPayloads;
+	successorInputs.current.valid = true;
+	successorInputs.current.targetPixelError =
+	    inputs.currentTargetPixelError;
+	successorInputs.current.progressiveCeiling =
+	    inputs.currentProgressiveCeiling;
+	successorInputs.current.progressiveNextFraction =
+	    inputs.currentProgressiveNextFraction;
+	successorInputs.current.pointProxyPixelThreshold =
+	    inputs.currentPointProxyPixelThreshold;
+
+	const bool priorMatches = inputs.orthographic && !inputs.scaleChanged &&
+	    this->priorStableValue.valid && populationMatches(
+		this->priorStableValue.population, inputs.population);
+	if (priorMatches)
+	    successorInputs.priorStable = targetFromSnapshot(
+		this->priorStableValue);
+	const bool provenMatches = !priorMatches && inputs.scaleChanged &&
+	    this->provenQualityValue.valid &&
+	    this->provenQualityValue.viewEpoch == inputs.viewEpoch &&
+	    populationMatches(
+		this->provenQualityValue.population, inputs.population);
+	if (provenMatches)
+	    successorInputs.provenScale = targetFromSnapshot(
+		this->provenQualityValue);
+	if (quietInputs.exactView.valid) {
+	    successorInputs.exactView.valid = true;
+	    successorInputs.exactView.targetPixelError =
+		quietInputs.exactView.targetPixelError;
+	    successorInputs.exactView.progressiveCeiling =
+		quietInputs.exactView.progressiveCeiling;
+	    successorInputs.exactView.progressiveNextFraction =
+		quietInputs.exactView.progressiveNextFraction;
+	    successorInputs.exactView.pointProxyPixelThreshold =
+		quietInputs.exactView.pointProxyPixelThreshold;
+	    successorInputs.exactView.presentedRenderCost =
+		quietInputs.exactView.presentedRenderCost;
+	    successorInputs.exactView.provenRenderCostCapacity =
+		quietInputs.exactView.provenRenderCostCapacity;
 	}
-	if (!inputs.orthographic || inputs.scaleChanged ||
-	    !this->priorStableValue.valid ||
-	    !populationMatches(
-		this->priorStableValue.population, inputs.population))
-	    return decision;
-	decision.apply = true;
-	decision.restoredPriorStable = true;
-	decision.targetPixelError = this->priorStableValue.targetPixelError;
-	decision.progressiveCeiling =
-	    this->priorStableValue.progressiveCeiling;
+
+	const Reducer::Decision successor = Reducer::reduce(successorInputs);
+	RestoreDecision decision;
+	decision.apply = successor.apply;
+	decision.restoredPriorStable =
+	    successor.source == Reducer::Source::PRIOR_STABLE;
+	decision.restoredProvenQuality =
+	    successor.source == Reducer::Source::PROVEN_SCALE;
+	decision.restoredExactView =
+	    successor.source == Reducer::Source::EXACT_VIEW;
+	decision.handoff = successor.handoff;
+	decision.clearPresentationLimits =
+	    successor.clearPresentationLimits;
+	decision.targetPixelError = successor.target.targetPixelError;
+	decision.progressiveCeiling = successor.target.progressiveCeiling;
+	decision.progressiveNextFraction =
+	    successor.target.progressiveNextFraction;
 	decision.pointProxyPixelThreshold =
-	    this->priorStableValue.pointProxyPixelThreshold;
-	this->priorRestoredValue = true;
+	    successor.target.pointProxyPixelThreshold;
+	decision.provenRenderCostFloor =
+	    successor.target.presentedRenderCost;
+	decision.provenRenderCostCapacity =
+	    successor.target.provenRenderCostCapacity;
+
+	this->handoffStateValue = decision.handoff == Reducer::Handoff::PRESENTATION ?
+	    HandoffState::PRESENTATION_REQUIRED :
+	    (decision.handoff == Reducer::Handoff::ALLOCATION ?
+		HandoffState::ALLOCATION_REQUIRED : HandoffState::INACTIVE);
+	this->handoffReconciliationBudgetValue = 0;
+	this->handoffReconciliationBudgetLimitValue = 0;
+	/* A proven scale target carries the exact cost of the completed frame it
+	 * restores.  Other handoffs must establish their cost through normal
+	 * completed-frame evidence. */
+	this->handoffCostFloorValue =
+	    decision.handoff == Reducer::Handoff::ALLOCATION &&
+	    decision.restoredProvenQuality ?
+		decision.provenRenderCostFloor : 0;
+
+	this->priorStableValue = Snapshot();
+	this->provenQualityValue = Snapshot();
 	return decision;
     }
 
     RestoreDecision beginQuiet(const RestoreInputs &inputs)
     {
-	RestoreDecision decision = this->restorePrior(inputs);
-	if (!decision.restoredPriorStable && inputs.scaleChanged &&
-	    this->provenQualityValue.valid &&
-	    this->provenQualityValue.viewEpoch == inputs.viewEpoch &&
-	    populationMatches(
-		this->provenQualityValue.population, inputs.population)) {
-	    decision.apply = true;
-	    decision.restoredProvenQuality = true;
-	    decision.targetPixelError =
-		this->provenQualityValue.targetPixelError;
-	    decision.progressiveCeiling =
-		this->provenQualityValue.progressiveCeiling;
-	    decision.pointProxyPixelThreshold =
-		this->provenQualityValue.pointProxyPixelThreshold;
-	    decision.provenRenderCostFloor =
-		this->provenQualityValue.presentedRenderCost;
-	}
-
-	if (!inputs.retainedMeshPayloads) {
-	    decision.clearPresentationLimits = true;
-	    decision.apply = true;
-	    decision.targetPixelError = 1.0f;
-	    decision.progressiveCeiling = -1;
-	    decision.pointProxyPixelThreshold = 1.0f;
-	    this->handoffActiveValue = false;
-	    this->handoffPresentationRequiredValue = false;
-	    this->handoffPreservePresentationLimitsValue = false;
-	    this->handoffChangedCutValue = false;
-	    this->handoffReconciledValue = false;
-	    this->handoffReconciliationBudgetValue = 0;
-	    this->handoffReconciliationBudgetLimitValue = 0;
-	    this->handoffCostFloorValue = 0;
-	} else {
-	    const bool constrained = decision.progressiveCeiling >= 0 ||
-		decision.pointProxyPixelThreshold > 1.01f;
-	    this->handoffActiveValue =
-		!decision.restoredPriorStable && constrained;
-	    this->handoffPreservePresentationLimitsValue = false;
-	    this->handoffChangedCutValue = false;
-	    this->handoffReconciledValue = false;
-	    this->handoffReconciliationBudgetValue = 0;
-	    this->handoffReconciliationBudgetLimitValue = 0;
-	    /* The constrained interaction cut was already presented before the
-	     * quiet debounce called beginQuiet().  A deadline recovery uses
-	     * armHandoff(true) instead and must prove one successful constrained
-	     * frame before its ceiling can be removed. */
-	    this->handoffPresentationRequiredValue = false;
-	    this->handoffCostFloorValue =
-		this->handoffActiveValue && decision.restoredProvenQuality ?
-		    decision.provenRenderCostFloor : 0;
-	    decision.startHandoff = this->handoffActiveValue;
-	}
-
-	this->priorStableValue = Snapshot();
-	this->provenQualityValue = Snapshot();
-	this->priorRestoredValue = false;
-	return decision;
+	QuietInputs quietInputs;
+	quietInputs.presentation = inputs;
+	return this->beginQuiet(quietInputs);
     }
 
     CompletedPassDecision completePass(const CompletedPassInputs &inputs)
     {
 	CompletedPassDecision decision;
-	if (this->handoffActiveValue && inputs.completed && inputs.changedCut)
-	    this->handoffChangedCutValue = true;
-	if (this->handoffActiveValue && inputs.completed &&
-	    inputs.retainedAllocationCompleted &&
-	    inputs.populationQuiescent &&
-	    inputs.presentationLimitsReconciled)
-	    this->handoffReconciledValue = true;
 	if (!inputs.completed ||
 	    inputs.submissionPending || inputs.rescanAfterFrame ||
 	    inputs.changedCut ||
 	    (inputs.retainedRefinementBudgetBlocked &&
-	     !this->handoffActiveValue) ||
-	    this->handoffPresentationRequiredValue)
+	     !this->handoffActive()) ||
+	    this->presentationHandoffPending())
 	    return decision;
-	if (!this->handoffActiveValue) {
+	if (!this->handoffActive()) {
 	    /* Wanting a richer retained cut is an observation, not a liveness
 	     * witness.  With no admitted cut, budget barrier, handoff, or rescan,
 	     * the current calibrated cut is terminal until a new external edge
@@ -2824,49 +3646,46 @@ public:
 	 * An ordinary quiet handoff has no failed-frame safety witness to retain;
 	 * there, a changed coherent allocation is sufficient and the historical
 	 * budget-blocked/no-change rule remains appropriate. */
-	const bool preservePresentationLimits = false;
-	this->handoffActiveValue = false;
-	this->handoffPresentationRequiredValue = false;
-	this->handoffPreservePresentationLimitsValue = false;
-	this->handoffChangedCutValue = false;
-	this->handoffReconciledValue = false;
-	this->handoffReconciliationBudgetValue = 0;
-	this->handoffReconciliationBudgetLimitValue = 0;
-	this->handoffCostFloorValue = 0;
+	this->clearHandoff();
 	decision.finishHandoff = true;
-	decision.preservePresentationLimits = preservePresentationLimits;
 	decision.requestRetainedRescan =
 	    inputs.retainedRefinementPending &&
-	    !inputs.retainedRefinementBudgetBlocked &&
-	    !preservePresentationLimits;
+	    !inputs.retainedRefinementBudgetBlocked;
 	return decision;
     }
 
     void armHandoff(bool presentationRequired, size_t provenRenderCost = 0,
 	size_t reconciliationBudgetLimit = 0)
     {
-	this->handoffActiveValue = true;
-	this->handoffPresentationRequiredValue = presentationRequired;
+	this->handoffStateValue = presentationRequired ?
+	    HandoffState::PRESENTATION_REQUIRED :
+	    HandoffState::ALLOCATION_REQUIRED;
 	/* A presentation-required handoff follows a hard frame deadline.  Its
 	 * first completed constrained frame supplies the cost proof below; do not
 	 * immediately remove that cut and retry the frame which just exceeded the
 	 * deadline.  A static predictor may instead arm an already-presented
 	 * handoff with its exact cost floor and no additional presentation gate. */
-	this->handoffPreservePresentationLimitsValue = presentationRequired;
-	this->handoffChangedCutValue = false;
-	this->handoffReconciledValue = false;
-	this->handoffReconciliationBudgetValue = 0;
+	/* A deadline recovery must first present its corrected renderer cut, so
+	 * noteFramePresented() derives the final reconciliation allowance while
+	 * respecting this upper bound.  A static staircase has already presented
+	 * the cut it is retaining; its completed-frame prediction is immediately
+	 * usable by the occurrence allocator.  Keeping that value here prevents
+	 * the allocator from falling back to a broader scene budget and selecting
+	 * a hidden population which the renderer ceiling cannot safely release. */
+	this->handoffReconciliationBudgetValue = presentationRequired ? 0 :
+	    reconciliationBudgetLimit;
 	this->handoffReconciliationBudgetLimitValue =
-	    presentationRequired ? reconciliationBudgetLimit : 0;
+	    reconciliationBudgetLimit;
 	this->handoffCostFloorValue = provenRenderCost;
     }
     bool noteFramePresented(size_t provenRenderCost = 0,
 	size_t reconciliationBudget = 0)
     {
-	const bool released = this->handoffActiveValue &&
-	    this->handoffPresentationRequiredValue;
-	if (this->handoffActiveValue) {
-	    this->handoffPresentationRequiredValue = false;
+	const bool released = this->handoffStateValue ==
+	    HandoffState::PRESENTATION_REQUIRED;
+	if (this->handoffActive()) {
+	    if (released)
+		this->handoffStateValue = HandoffState::ALLOCATION_REQUIRED;
 	    if (provenRenderCost)
 		this->handoffCostFloorValue = std::max(
 		    this->handoffCostFloorValue, provenRenderCost);
@@ -2874,8 +3693,7 @@ public:
 	     * after the retained allocator has encoded an equivalent bounded
 	     * presentation in occurrence-local cuts.  Keep this exact-frame
 	     * capacity witness distinct from the affordable-work floor above. */
-	    if (released && this->handoffPreservePresentationLimitsValue &&
-		reconciliationBudget) {
+	    if (released && reconciliationBudget) {
 		/* The constrained frame measures only the renderer-limited cut.  A
 		 * preceding failed full frame may already have computed a stricter
 		 * budget in the retained-population cost domain.  Never let fast
@@ -2892,26 +3710,12 @@ public:
     }
     void cancelHandoff(void)
     {
-	this->handoffActiveValue = false;
-	this->handoffPresentationRequiredValue = false;
-	this->handoffPreservePresentationLimitsValue = false;
-	this->handoffChangedCutValue = false;
-	this->handoffReconciledValue = false;
-	this->handoffReconciliationBudgetValue = 0;
-	this->handoffReconciliationBudgetLimitValue = 0;
-	this->handoffCostFloorValue = 0;
+	this->clearHandoff();
     }
 
     void viewInvalidated(void)
     {
-	this->handoffActiveValue = false;
-	this->handoffPresentationRequiredValue = false;
-	this->handoffPreservePresentationLimitsValue = false;
-	this->handoffChangedCutValue = false;
-	this->handoffReconciledValue = false;
-	this->handoffReconciliationBudgetValue = 0;
-	this->handoffReconciliationBudgetLimitValue = 0;
-	this->handoffCostFloorValue = 0;
+	this->clearHandoff();
 	this->provenQualityValue = Snapshot();
     }
 
@@ -2919,22 +3723,13 @@ public:
     {
 	this->priorStableValue = Snapshot();
 	this->provenQualityValue = Snapshot();
-	this->priorRestoredValue = false;
-	this->handoffActiveValue = false;
-	this->handoffPresentationRequiredValue = false;
-	this->handoffPreservePresentationLimitsValue = false;
-	this->handoffChangedCutValue = false;
-	this->handoffReconciledValue = false;
-	this->handoffReconciliationBudgetValue = 0;
-	this->handoffReconciliationBudgetLimitValue = 0;
-	this->handoffCostFloorValue = 0;
+	this->clearHandoff();
     }
 
-    bool handoffPending(void) const { return this->handoffActiveValue; }
+    bool handoffPending(void) const { return this->handoffActive(); }
     bool handoffPresentationPending(void) const
     {
-	return this->handoffActiveValue &&
-	    this->handoffPresentationRequiredValue;
+	return this->presentationHandoffPending();
     }
     size_t handoffCostFloor(void) const
     {
@@ -2948,7 +3743,6 @@ public:
     {
 	return this->priorStableValue.valid;
     }
-    bool priorRestored(void) const { return this->priorRestoredValue; }
     bool provenQualityValid(void) const
     {
 	return this->provenQualityValue.valid;
@@ -2959,6 +3753,31 @@ public:
     }
 
 private:
+    enum class HandoffState : uint8_t {
+	INACTIVE = 0,
+	ALLOCATION_REQUIRED,
+	PRESENTATION_REQUIRED
+    };
+
+    bool handoffActive(void) const
+    {
+	return this->handoffStateValue != HandoffState::INACTIVE;
+    }
+
+    bool presentationHandoffPending(void) const
+    {
+	return this->handoffStateValue ==
+	    HandoffState::PRESENTATION_REQUIRED;
+    }
+
+    void clearHandoff(void)
+    {
+	this->handoffStateValue = HandoffState::INACTIVE;
+	this->handoffReconciliationBudgetValue = 0;
+	this->handoffReconciliationBudgetLimitValue = 0;
+	this->handoffCostFloorValue = 0;
+    }
+
     static float sanitizePixelError(float pixelError)
     {
 	return std::isfinite(pixelError) ?
@@ -2971,8 +3790,15 @@ private:
 	    std::max(1.0f, std::min(64.0f, threshold)) : 1.0f;
     }
 
+    static float sanitizeFraction(int progressiveCeiling, float fraction)
+    {
+	if (progressiveCeiling < 0 || !std::isfinite(fraction))
+	    return 0.0f;
+	return std::max(0.0f, std::min(1.0f, fraction));
+    }
+
     static Snapshot makeSnapshot(float targetPixelError,
-	int progressiveCeiling,
+	int progressiveCeiling, float progressiveNextFraction,
 	float pointProxyPixelThreshold, const Population &population,
 	BObolLodViewEpoch viewEpoch, size_t presentedRenderCost)
     {
@@ -2984,11 +3810,26 @@ private:
 	    progressiveCeiling < -1 ? -1 :
 	    std::min<int>(BOBOL_MESH_LOD_CUT_COUNT_MAX - 1,
 		progressiveCeiling);
+	snapshot.progressiveNextFraction = sanitizeFraction(
+	    snapshot.progressiveCeiling, progressiveNextFraction);
 	snapshot.pointProxyPixelThreshold =
 	    sanitizeThreshold(pointProxyPixelThreshold);
 	snapshot.population = population;
 	snapshot.presentedRenderCost = presentedRenderCost;
 	return snapshot;
+    }
+
+    static BObolLodQuietSuccessorReducer::Target targetFromSnapshot(
+	const Snapshot &snapshot)
+    {
+	BObolLodQuietSuccessorReducer::Target target;
+	target.valid = snapshot.valid;
+	target.targetPixelError = snapshot.targetPixelError;
+	target.progressiveCeiling = snapshot.progressiveCeiling;
+	target.progressiveNextFraction = snapshot.progressiveNextFraction;
+	target.pointProxyPixelThreshold = snapshot.pointProxyPixelThreshold;
+	target.presentedRenderCost = snapshot.presentedRenderCost;
+	return target;
     }
 
     static bool populationMatches(const Population &snapshot,
@@ -3000,12 +3841,7 @@ private:
 
     Snapshot priorStableValue;
     Snapshot provenQualityValue;
-    bool priorRestoredValue = false;
-    bool handoffActiveValue = false;
-    bool handoffPresentationRequiredValue = false;
-    bool handoffPreservePresentationLimitsValue = false;
-    bool handoffChangedCutValue = false;
-    bool handoffReconciledValue = false;
+    HandoffState handoffStateValue = HandoffState::INACTIVE;
     size_t handoffReconciliationBudgetValue = 0;
     size_t handoffReconciliationBudgetLimitValue = 0;
     size_t handoffCostFloorValue = 0;
@@ -3041,6 +3877,7 @@ public:
     struct Quality {
 	float targetPixelError = 1.0f;
 	int progressiveCeiling = -1;
+	float progressiveNextFraction = 0.0f;
 	float pointProxyPixelThreshold = 1.0f;
 	/* Conservative scene-wide projected-pixel error bound produced by the
 	 * retained importance allocator.  Unlike its allocation objective, this
@@ -3187,6 +4024,11 @@ private:
 	    quality.targetPixelError <= 1.01f &&
 	    quality.progressiveCeiling >= -1 &&
 	    quality.progressiveCeiling < BOBOL_MESH_LOD_CUT_COUNT_MAX &&
+	    std::isfinite(quality.progressiveNextFraction) &&
+	    quality.progressiveNextFraction >= 0.0f &&
+	    quality.progressiveNextFraction <= 1.0001f &&
+	    (quality.progressiveCeiling >= 0 ||
+	     quality.progressiveNextFraction <= 1.0e-6f) &&
 	    std::isfinite(quality.pointProxyPixelThreshold) &&
 	    quality.pointProxyPixelThreshold >= 1.0f &&
 	    quality.pointProxyPixelThreshold <= 64.01f &&
@@ -3205,6 +4047,9 @@ private:
 	result.progressiveCeiling = result.progressiveCeiling < -1 ? -1 :
 	    std::min<int>(BOBOL_MESH_LOD_CUT_COUNT_MAX - 1,
 		result.progressiveCeiling);
+	result.progressiveNextFraction = result.progressiveCeiling < 0 ? 0.0f :
+	    std::max(0.0f, std::min(1.0f,
+		result.progressiveNextFraction));
 	result.pointProxyPixelThreshold = std::max(1.0f,
 	    std::min(64.0f, result.pointProxyPixelThreshold));
 	if (!std::isfinite(result.maximumProjectedErrorPixels) ||
@@ -3215,9 +4060,13 @@ private:
 	return result;
     }
 
-    static int progressiveRank(int ceiling)
+    static double progressiveRank(int ceiling, float nextFraction)
     {
-	return ceiling < 0 ? BOBOL_MESH_LOD_CUT_COUNT_MAX : ceiling;
+	return ceiling < 0 ?
+	    static_cast<double>(BOBOL_MESH_LOD_CUT_COUNT_MAX) :
+	    static_cast<double>(ceiling) +
+		static_cast<double>(std::max(0.0f,
+		    std::min(1.0f, nextFraction)));
     }
 
     static bool controlsDominate(const Quality &candidate,
@@ -3228,14 +4077,18 @@ private:
 	const bool proxyNoWorse = candidate.pointProxyPixelThreshold <=
 	    current.pointProxyPixelThreshold + 1.0e-6f;
 	const bool ceilingNoWorse = progressiveRank(
-	    candidate.progressiveCeiling) >= progressiveRank(
-		current.progressiveCeiling);
+	    candidate.progressiveCeiling,
+	    candidate.progressiveNextFraction) + 1.0e-6 >= progressiveRank(
+		current.progressiveCeiling,
+		current.progressiveNextFraction);
 	const bool strictlyBetter = candidate.targetPixelError <
 		current.targetPixelError - 1.0e-6f ||
 	    candidate.pointProxyPixelThreshold <
 		current.pointProxyPixelThreshold - 1.0e-6f ||
-	    progressiveRank(candidate.progressiveCeiling) >
-		progressiveRank(current.progressiveCeiling);
+	    progressiveRank(candidate.progressiveCeiling,
+		candidate.progressiveNextFraction) > progressiveRank(
+		current.progressiveCeiling,
+		current.progressiveNextFraction) + 1.0e-6;
 	return pixelNoWorse && proxyNoWorse && ceilingNoWorse &&
 	    strictlyBetter;
     }
@@ -3247,8 +4100,10 @@ private:
 		current.targetPixelError) <= 1.0e-6f &&
 	    std::fabs(candidate.pointProxyPixelThreshold -
 		current.pointProxyPixelThreshold) <= 1.0e-6f &&
-	    progressiveRank(candidate.progressiveCeiling) ==
-		progressiveRank(current.progressiveCeiling);
+	    std::fabs(progressiveRank(candidate.progressiveCeiling,
+		candidate.progressiveNextFraction) - progressiveRank(
+		current.progressiveCeiling,
+		current.progressiveNextFraction)) <= 1.0e-6;
     }
 
     static bool preferFidelityCandidate(const Quality &candidate,
@@ -3302,6 +4157,14 @@ static_assert(std::is_trivially_copyable<
  */
 class BObolLodQualityPolicy {
 public:
+    static constexpr long double StaticDeadlineHeadroom = 0.95L;
+
+    enum class DeadlineSuccessor : uint8_t {
+	RETRY_TRANSACTION = 0,
+	CONTINUE_POPULATION,
+	RECOVER_PRESENTATION
+    };
+
     struct StableCapacityEvidence {
 	bool proven = false;
 	long double renderCostPerSecond = 0.0L;
@@ -3309,8 +4172,8 @@ public:
 
     /* The first quiet traversal of a newly published retained population may
      * pay command construction, software-code warmup, or immutable-buffer
-     * installation which is not reflected by the assembly preparation
-     * serial.  A hard abort is still a responsiveness boundary, but it is not
+     * installation which precedes an exact finite-work certificate.  A hard
+     * abort is still a responsiveness boundary, but it is not
      * yet proof that the retained cuts themselves are unsustainable.  Permit
      * exactly one unchanged retry while a typed population/frame obligation
      * or an explicit static-quality trial identifies that first presentation.
@@ -3318,15 +4181,47 @@ public:
      * waits for this retry. */
     static bool retryTransientPresentation(bool interactive,
 	unsigned int consecutiveInterruptedFrames,
-	bool preparationChanged, bool publicationFramePending,
+	bool preparationAdvanced, bool publicationFramePending,
 	bool refinementFramePending, bool pointCalibrationPending,
 	bool staticQualityTrial)
     {
-	if (preparationChanged)
+	if (preparationAdvanced)
 	    return true;
 	return !interactive && consecutiveInterruptedFrames == 1 &&
 	    (publicationFramePending || refinementFramePending ||
 	     pointCalibrationPending || staticQualityTrial);
+    }
+
+    /* A deadline is an observation, not an unconditional retry edge.  A
+     * transaction which reduced its finite preparation obligation owns an
+     * immediate replay.  Otherwise an existing population producer keeps its
+     * cursor and supplies the next presentation edge when that work advances.
+     * Capacity recovery is valid only when neither owner applies. */
+    static DeadlineSuccessor deadlineSuccessor(
+	bool transactionRetry, bool populationWorkPending)
+    {
+	if (transactionRetry)
+	    return DeadlineSuccessor::RETRY_TRANSACTION;
+	if (populationWorkPending)
+	    return DeadlineSuccessor::CONTINUE_POPULATION;
+	return DeadlineSuccessor::RECOVER_PRESENTATION;
+    }
+
+    /* A terminal static-quality certificate owns the allowance under which
+     * its occurrence-local population was selected.  Transitional coverage
+     * work may use a smaller extended quiet deadline only when no static
+     * trial or terminal certificate is active.  Reversing this precedence
+     * makes the smaller deadline reject its already-certified population and
+     * reopens capacity recovery indefinitely. */
+    static uint64_t quietPresentationDeadline(
+	uint64_t staticQualityDeadline,
+	uint64_t structuralRepairDeadline,
+	bool structuralRepairPending,
+	bool staticQualityOwnsDeadline)
+    {
+	if (staticQualityOwnsDeadline || !structuralRepairPending)
+	    return staticQualityDeadline;
+	return structuralRepairDeadline;
     }
 
     static float staticFrameTargetFps(float preferredFps,
@@ -3357,12 +4252,58 @@ public:
 	    return 0;
 	const long double predicted =
 	    static_cast<long double>(presentedCost) *
-	    static_cast<long double>(hardDeadlineNanoseconds) * 0.95L /
+	    static_cast<long double>(hardDeadlineNanoseconds) *
+	    StaticDeadlineHeadroom /
 	    static_cast<long double>(renderNanoseconds);
 	if (!std::isfinite(predicted) ||
 	    predicted >= static_cast<long double>(SIZE_MAX))
 	    return SIZE_MAX;
 	return std::max(presentedCost, static_cast<size_t>(predicted));
+    }
+
+    /* A renderer-wide ceiling may fit the ordinary quiet cadence even though
+     * the cheapest complete occurrence-local population does not.  A static
+     * event-driven view can try that local minimum once under its longer hard
+     * deadline.  Include conservatively extrapolated headroom, but never
+     * exceed current pixel demand.  The endpoint deadline independently
+     * rejects an optimistic estimate. */
+    static size_t staticLocalMinimumRetryBudget(size_t presentedCost,
+	size_t selectedLocalCost, size_t pixelDemandCost,
+	uint64_t renderNanoseconds, uint64_t hardDeadlineNanoseconds)
+    {
+	if (!selectedLocalCost)
+	    return 0;
+	size_t budget = std::max(selectedLocalCost,
+	    staticPresentationRenderCostLimit(presentedCost,
+		renderNanoseconds, hardDeadlineNanoseconds));
+	if (pixelDemandCost >= selectedLocalCost)
+	    budget = std::min(budget, pixelDemandCost);
+	return budget;
+    }
+
+    /* Correct an interrupted static population in one cost-domain step.
+     * The same five-percent scheduling margin used for successful headroom
+     * probes is sufficient here: the elapsed/deadline ratio already supplies
+     * the overload correction.  A second fixed twenty-percent penalty made a
+     * harmless timer-edge miss discard exact-view capacity evidence and
+     * visibly over-coarsen large meshes. */
+    static size_t staticDeadlineRecoveryCostLimit(size_t attemptedCost,
+	uint64_t elapsedNanoseconds, uint64_t hardDeadlineNanoseconds)
+    {
+	if (!attemptedCost || !elapsedNanoseconds ||
+		!hardDeadlineNanoseconds)
+	    return 0;
+	const long double predicted =
+	    static_cast<long double>(attemptedCost) *
+	    static_cast<long double>(hardDeadlineNanoseconds) *
+	    StaticDeadlineHeadroom /
+	    static_cast<long double>(elapsedNanoseconds);
+	if (!std::isfinite(predicted) || predicted <= 0.0L)
+	    return 0;
+	if (predicted >= static_cast<long double>(SIZE_MAX))
+	    return SIZE_MAX;
+	return std::min(attemptedCost,
+	    static_cast<size_t>(predicted));
     }
 
     /* Return the smallest scene-cost allowance which can represent the next
@@ -3646,7 +4587,10 @@ private:
  * Presentation-owned calibration may deliberately pause submission until a
  * changed cut has rendered.  Such a cursor cannot be counted as its own
  * future-frame witness: doing so closes a wait cycle in which publication
- * waits for submission and submission waits for publication.
+ * waits for submission and submission waits for publication.  Likewise, a
+ * publication whose frame has already been requested is the presentation
+ * obligation itself, not an independent producer of a later frame.  Only a
+ * publication batch still waiting to request its frame is a future witness.
  */
 class BObolLodProducerPolicy {
 public:
@@ -3660,64 +4604,221 @@ public:
 
     static bool ownsFutureFrame(bool submissionPending,
 	bool submissionPausedByPresentation, bool providerPending,
-	bool servicePending, bool publicationPending)
+	bool servicePending, bool publicationAwaitingFrameRequest)
     {
-	return publicationPending || canProduceGeometry(
+	return publicationAwaitingFrameRequest || canProduceGeometry(
 	    submissionPending, submissionPausedByPresentation,
 	    providerPending, servicePending);
     }
+
 };
 
 /*
- * Coalesce append-only source-inventory deltas before starting another LoD
- * planning transaction.  The source provider has already installed useful
- * boxes in the retained scene; submitting its first published mesh contract
- * immediately establishes time-to-first-mesh, but running one completed LoD
- * pass for every later 16 ms provider drain serializes a parallel 50k source
- * behind hundreds of owner-thread passes.
+ * Single owner for availability edges arriving from source providers and the
+ * LoD service.  The atomics are the worker-to-owner result notification; all
+ * remaining values are presentation-thread state.  Keeping result age,
+ * provider terminality, inventory coalescing, and resident-growth obligation
+ * together makes the scheduler's progress witness observable in one place.
  *
- * This policy delays only a pure inventory continuation.  A camera/policy or
+ * This ledger delays only a pure inventory continuation.  A camera/policy or
  * source-identity change, an active submission cursor, and the producer's
  * final pending->idle edge all bypass it.  The bounded age means a producer
  * which never fills a large batch still makes progress.
  */
-class BObolLodInventoryDeltaPolicy {
+class BObolLodAvailabilityLedger {
 public:
-    bool defer(bool inventoryChanged, bool providerPending,
+    void noteResultsReady(int64_t nowMicroseconds)
+    {
+	this->resultsPendingValue.store(true);
+	(void)this->ensureFirstResultReady(nowMicroseconds);
+    }
+
+    void setResultsPending(bool pending)
+    {
+	this->resultsPendingValue.store(pending);
+    }
+
+    bool resultsPending(void) const
+    {
+	return this->resultsPendingValue.load();
+    }
+
+    int64_t ensureFirstResultReady(int64_t nowMicroseconds)
+    {
+	const int64_t now = nowMicroseconds > 0 ? nowMicroseconds :
+	    minimumTimestamp();
+	int64_t expected = 0;
+	(void)this->firstResultReadyMicrosecondsValue.
+	    compare_exchange_strong(expected, now);
+	return this->firstResultReadyMicrosecondsValue.load();
+    }
+
+    int64_t firstResultReadyMicroseconds(void) const
+    {
+	return this->firstResultReadyMicrosecondsValue.load();
+    }
+
+    void clearFirstResultReady(void)
+    {
+	this->firstResultReadyMicrosecondsValue.store(0);
+    }
+
+    void resetResultQueue(void)
+    {
+	this->resultsPendingValue.store(false);
+	this->clearFirstResultReady();
+    }
+
+    void setProviderPendingCount(size_t count)
+    {
+	this->providerPendingCountValue = count;
+    }
+
+    size_t providerPendingCount(void) const
+    {
+	return this->providerPendingCountValue;
+    }
+
+    bool deferInventoryDelta(bool inventoryChanged, bool providerPending,
 	bool submissionPending, bool initialSubmissionComplete,
 	bool interactive, int64_t nowMicroseconds)
     {
 	if (!inventoryChanged || !providerPending || submissionPending ||
 	    !initialSubmissionComplete) {
-	    this->firstPendingMicrosecondsValue = 0;
+	    this->inventoryFirstPendingMicrosecondsValue = 0;
 	    return false;
 	}
-	const int64_t now = nowMicroseconds > 0 ? nowMicroseconds : 1;
-	if (this->firstPendingMicrosecondsValue <= 0)
-	    this->firstPendingMicrosecondsValue = now;
-	const int64_t limit = interactive ? 100000 : 250000;
-	const int64_t age = now >= this->firstPendingMicrosecondsValue ?
-	    now - this->firstPendingMicrosecondsValue : limit;
+	const int64_t now = nowMicroseconds > 0 ? nowMicroseconds :
+	    minimumTimestamp();
+	if (this->inventoryFirstPendingMicrosecondsValue <= 0)
+	    this->inventoryFirstPendingMicrosecondsValue = now;
+	const int64_t limit = inventoryCoalescingLimit(interactive);
+	const int64_t age = now >= this->inventoryFirstPendingMicrosecondsValue ?
+	    now - this->inventoryFirstPendingMicrosecondsValue : limit;
 	return age < limit;
     }
 
-    void committed(void)
+    void commitInventoryDelta(void)
     {
-	this->firstPendingMicrosecondsValue = 0;
+	this->inventoryFirstPendingMicrosecondsValue = 0;
     }
 
-    void reset(void)
+    int64_t inventoryFirstPendingMicroseconds(void) const
     {
-	this->committed();
+	return this->inventoryFirstPendingMicrosecondsValue;
     }
 
-    int64_t firstPendingMicroseconds(void) const
+    void noteRicherPrefixAvailable(void)
     {
-	return this->firstPendingMicrosecondsValue;
+	switch (this->residentGrowthPhaseValue) {
+	    case ResidentGrowthPhase::IDLE:
+	    case ResidentGrowthPhase::REALLOCATION_READY:
+		this->residentGrowthPhaseValue =
+		    ResidentGrowthPhase::DRAIN_REQUIRED;
+		break;
+	    case ResidentGrowthPhase::DRAIN_ACTIVE:
+		this->residentGrowthPhaseValue =
+		    ResidentGrowthPhase::DRAIN_ACTIVE_DIRTY;
+		break;
+	    case ResidentGrowthPhase::DRAIN_REQUIRED:
+	    case ResidentGrowthPhase::DRAIN_ACTIVE_DIRTY:
+		break;
+	}
+    }
+
+    bool beginResidencyDrainIfReady(bool automatic, bool streamIdle,
+	bool workAllowed)
+    {
+	if (this->residentGrowthPhaseValue !=
+		ResidentGrowthPhase::DRAIN_REQUIRED ||
+	    !automatic || !streamIdle ||
+	    !workAllowed)
+	    return false;
+	this->residentGrowthPhaseValue = ResidentGrowthPhase::DRAIN_ACTIVE;
+	return true;
+    }
+
+    bool completeResidencyDrain(void)
+    {
+	if (this->residentGrowthPhaseValue ==
+		ResidentGrowthPhase::DRAIN_ACTIVE) {
+	    this->residentGrowthPhaseValue =
+		ResidentGrowthPhase::REALLOCATION_READY;
+	    return true;
+	}
+	if (this->residentGrowthPhaseValue ==
+		ResidentGrowthPhase::DRAIN_ACTIVE_DIRTY) {
+	    this->residentGrowthPhaseValue =
+		ResidentGrowthPhase::DRAIN_REQUIRED;
+	    return true;
+	}
+	return false;
+    }
+
+    void interruptResidencyDrain(void)
+    {
+	if (this->residencyDrainActive())
+	    this->residentGrowthPhaseValue =
+		ResidentGrowthPhase::DRAIN_REQUIRED;
+    }
+
+    bool consumeResidentGrowthIfReady(bool automatic, bool streamIdle,
+	bool allocationAllowed)
+    {
+	if (this->residentGrowthPhaseValue !=
+		ResidentGrowthPhase::REALLOCATION_READY ||
+	    !automatic || !streamIdle || !allocationAllowed)
+	    return false;
+	this->residentGrowthPhaseValue = ResidentGrowthPhase::IDLE;
+	return true;
+    }
+
+    bool residentGrowthPending(void) const
+    {
+	return this->residentGrowthPhaseValue != ResidentGrowthPhase::IDLE;
+    }
+
+    bool residencyDrainRequired(void) const
+    {
+	return this->residentGrowthPhaseValue ==
+		ResidentGrowthPhase::DRAIN_REQUIRED ||
+	    this->residentGrowthPhaseValue ==
+		ResidentGrowthPhase::DRAIN_ACTIVE_DIRTY;
+    }
+
+    bool residencyDrainActive(void) const
+    {
+	return this->residentGrowthPhaseValue ==
+		ResidentGrowthPhase::DRAIN_ACTIVE ||
+	    this->residentGrowthPhaseValue ==
+		ResidentGrowthPhase::DRAIN_ACTIVE_DIRTY;
+    }
+
+    void resetResidentGrowth(void)
+    {
+	this->residentGrowthPhaseValue = ResidentGrowthPhase::IDLE;
     }
 
 private:
-    int64_t firstPendingMicrosecondsValue = 0;
+    enum class ResidentGrowthPhase : uint8_t {
+	IDLE,
+	DRAIN_REQUIRED,
+	DRAIN_ACTIVE,
+	DRAIN_ACTIVE_DIRTY,
+	REALLOCATION_READY
+    };
+
+    static constexpr int64_t minimumTimestamp(void) { return 1; }
+    static constexpr int64_t inventoryCoalescingLimit(bool interactive)
+    {
+	return interactive ? 100000 : 250000;
+    }
+
+    std::atomic<bool> resultsPendingValue {false};
+    std::atomic<int64_t> firstResultReadyMicrosecondsValue {0};
+    size_t providerPendingCountValue = 0;
+    int64_t inventoryFirstPendingMicrosecondsValue = 0;
+    ResidentGrowthPhase residentGrowthPhaseValue = ResidentGrowthPhase::IDLE;
 };
 
 /*
@@ -3729,7 +4830,92 @@ private:
  * safe cut and the coarsest proven unsafe cut turns the same feedback into a
  * convergent geometric search.
  */
-class BObolLodPointProxyCalibrationPolicy {
+/**
+ * Sole owner of the quiet point-presentation quality transition.
+ *
+ * Point calibration pauses retained admission until an exact presentation is
+ * measured.  Triangle recovery needs retained admission to run.  Representing
+ * those phases with independent booleans allowed both to be armed, leaving a
+ * pending controller with no enabled producer.  Recovery has priority because
+ * its coherent retained allocation must finish before a new presentation-only
+ * calibration can be meaningful.
+ */
+class BObolLodPointQualityPhase {
+public:
+    enum class Phase {
+	IDLE,
+	CALIBRATION,
+	TRIANGLE_RECOVERY
+    };
+
+    bool calibrationPending(void) const
+    {
+	return this->phase == Phase::CALIBRATION;
+    }
+
+    bool triangleRecoveryPending(void) const
+    {
+	return this->phase == Phase::TRIANGLE_RECOVERY;
+    }
+
+    bool pending(void) const
+    {
+	return this->phase != Phase::IDLE;
+    }
+
+    bool requiresRecoveryPresentation(bool completedPass, bool changedCut,
+	bool submissionPending, bool presentationPending) const
+    {
+	return this->phase == Phase::TRIANGLE_RECOVERY && completedPass &&
+	    changedCut && !submissionPending && !presentationPending;
+    }
+
+    void requestCalibration(void)
+    {
+	if (this->phase != Phase::TRIANGLE_RECOVERY)
+	    this->phase = Phase::CALIBRATION;
+    }
+
+    void completeCalibration(void)
+    {
+	if (this->phase == Phase::CALIBRATION)
+	    this->phase = Phase::IDLE;
+    }
+
+    void beginTriangleRecovery(void)
+    {
+	this->phase = Phase::TRIANGLE_RECOVERY;
+    }
+
+    void completeTriangleRecovery(void)
+    {
+	if (this->phase == Phase::TRIANGLE_RECOVERY)
+	    this->phase = Phase::IDLE;
+    }
+
+    void reset(void)
+    {
+	this->phase = Phase::IDLE;
+    }
+
+private:
+    Phase phase = Phase::IDLE;
+};
+
+class BObolLodPointProxyEvidence {
+private:
+    friend class BObolLodAdmissionPlanner;
+
+    static constexpr float maximumPixelThreshold(void)
+    {
+	return 64.0f;
+    }
+
+    static bool atMaximumPixelThreshold(float threshold)
+    {
+	return threshold >= maximumPixelThreshold() - 0.01f;
+    }
+
 public:
     struct Decision {
 	float threshold = 1.0f;
@@ -3737,6 +4923,7 @@ public:
 	bool continueRelaxation = false;
     };
 
+private:
     static bool applicable(size_t visibleOccurrenceCount)
     {
 	/* This controller exists to bound the per-occurrence floor of a
@@ -3836,11 +5023,12 @@ public:
      * frame and the frame waits for admission. */
     static bool producerOwnsCalibrationFrame(bool submissionPending,
 	bool submissionPausedByCalibration, bool providerPending,
-	bool servicePending, bool publicationPending)
+	bool servicePending, bool publicationAwaitingFrameRequest)
     {
 	return BObolLodProducerPolicy::ownsFutureFrame(
 	    submissionPending, submissionPausedByCalibration,
-	    providerPending, servicePending, publicationPending);
+	    providerPending, servicePending,
+	    publicationAwaitingFrameRequest);
     }
 
     /* Discovery needs an exact structural-size census before it can bound
@@ -3869,11 +5057,14 @@ public:
 	    !stableCalibrationPending && !triangleRecoveryPending;
     }
 
+public:
     void reset(void)
     {
 	this->unsafeThreshold = 0.0f;
 	this->safeThreshold = 0.0f;
     }
+
+private:
 
     /* Use the renderer's exact projected-size census to bound the number of
      * structural occurrences which may start independent mesh-provider work.
@@ -4083,8 +5274,8 @@ public:
      * strand an otherwise idle software view when faceplate publication or
      * retained-plan preparation keeps that replay transient.  Coarser point
      * cuts still require reusable evidence before they are accepted. */
-    bool requiresReusableConfirmation(float currentThreshold,
-	size_t unresolvedStructuralCount = 0) const
+    static bool requiresReusableConfirmation(float currentThreshold,
+	size_t unresolvedStructuralCount = 0)
     {
 	/* An unchanged box frame measures fallback presentation, not the realized
 	 * CAD population governed by this bracket.  Let source repair consume the
@@ -4155,12 +5346,12 @@ private:
  * The controller supplies a budget certified by the immediately preceding
  * exact frame and this policy grants at most one attempt for an unchanged
  * view/policy/projection population. */
-class BObolLodStructuralAdmissionPolicy {
+class BObolLodStructuralAdmissionEvidence {
 public:
     struct Inputs {
 	uint64_t viewRevision = 0;
 	uint64_t policyRevision = 0;
-	uint64_t projectionRevision = 0;
+	uint64_t frontierDigest = 0;
 	size_t unresolvedCount = 0;
 	size_t unaggregatableCount = 0;
 	size_t activeCost = 0;
@@ -4178,28 +5369,10 @@ public:
 	size_t budget = 0;
     };
 
-    static size_t unaggregatableCount(
-	const std::array<size_t, 7> &cumulativeCount, size_t visibleCount)
-    {
-	const size_t aggregatable = std::min(
-	    visibleCount, cumulativeCount.back());
-	return visibleCount - aggregatable;
-    }
+private:
+    friend class BObolLodAdmissionPlanner;
 
-    /* Divide only proven marginal capacity.  A zero result means the exact
-     * frame did not establish even one scheduling unit per unresolved
-     * occurrence, so the caller must not arm a partial repair transaction. */
-    static size_t perOccurrenceReservation(size_t admittedBudget,
-	size_t activeCost, size_t unresolvedCount)
-    {
-	if (!unresolvedCount || admittedBudget <= activeCost)
-	    return 0;
-	const size_t available = admittedBudget - activeCost;
-	return available >= unresolvedCount ?
-	    available / unresolvedCount : 0;
-    }
-
-    Decision evaluate(const Inputs &inputs)
+    Decision planStructural(const Inputs &inputs)
     {
 	Decision decision;
 	decision.ownsFrontier = inputs.exactProjection &&
@@ -4211,7 +5384,7 @@ public:
 	const bool duplicate = this->validValue &&
 	    this->viewRevisionValue == inputs.viewRevision &&
 	    this->policyRevisionValue == inputs.policyRevision &&
-	    this->projectionRevisionValue == inputs.projectionRevision &&
+	    this->frontierDigestValue == inputs.frontierDigest &&
 	    this->unresolvedCountValue == inputs.unresolvedCount &&
 	    this->activeCostValue == inputs.activeCost;
 	if (duplicate) {
@@ -4224,7 +5397,7 @@ public:
 	this->validValue = true;
 	this->viewRevisionValue = inputs.viewRevision;
 	this->policyRevisionValue = inputs.policyRevision;
-	this->projectionRevisionValue = inputs.projectionRevision;
+	this->frontierDigestValue = inputs.frontierDigest;
 	this->unresolvedCountValue = inputs.unresolvedCount;
 	this->activeCostValue = inputs.activeCost;
 	this->attemptedBudgetValue = inputs.certifiedBudget;
@@ -4237,12 +5410,14 @@ public:
 	return decision;
     }
 
+public:
+
     void reset(void)
     {
 	this->validValue = false;
 	this->viewRevisionValue = 0;
 	this->policyRevisionValue = 0;
-	this->projectionRevisionValue = 0;
+	this->frontierDigestValue = 0;
 	this->unresolvedCountValue = 0;
 	this->activeCostValue = 0;
 	this->attemptedBudgetValue = 0;
@@ -4252,25 +5427,645 @@ private:
     bool validValue = false;
     uint64_t viewRevisionValue = 0;
     uint64_t policyRevisionValue = 0;
-    uint64_t projectionRevisionValue = 0;
+    uint64_t frontierDigestValue = 0;
     size_t unresolvedCountValue = 0;
     size_t activeCostValue = 0;
     size_t attemptedBudgetValue = 0;
 };
 
+/*
+ * All renderer-capacity facts consumed by admission have one owner.  The
+ * component values remain deliberately small and allocation-free; grouping
+ * them prevents a caller from committing one decision while accidentally
+ * retaining stale evidence from another capacity dimension.
+ */
+class BObolLodAdmissionEvidence {
+public:
+    BObolLodAdmissionEvidence(void) = default;
+    explicit BObolLodAdmissionEvidence(
+	const BObolLodCapacityEvidence &value) : capacityValue(value) {}
+    explicit BObolLodAdmissionEvidence(
+	const BObolLodResourceEvidence &value) : resourcesValue(value) {}
+    explicit BObolLodAdmissionEvidence(
+	const BObolLodHeadroomEvidence &value) : headroomValue(value) {}
+    explicit BObolLodAdmissionEvidence(
+	const BObolLodPointProxyEvidence &value) : pointProxyValue(value) {}
+    explicit BObolLodAdmissionEvidence(
+	const BObolLodStructuralAdmissionEvidence &value) :
+	structuralValue(value) {}
+
+    const BObolLodCapacityEvidence &capacity(void) const
+    {
+	return this->capacityValue;
+    }
+    const BObolLodResourceEvidence &resources(void) const
+    {
+	return this->resourcesValue;
+    }
+    const BObolLodHeadroomEvidence &headroom(void) const
+    {
+	return this->headroomValue;
+    }
+    const BObolLodPointProxyEvidence &pointProxy(void) const
+    {
+	return this->pointProxyValue;
+    }
+    const BObolLodStructuralAdmissionEvidence &structural(void) const
+    {
+	return this->structuralValue;
+    }
+
+private:
+    friend class BObolLodAdmissionPlanner;
+
+    BObolLodCapacityEvidence capacityValue;
+    BObolLodResourceEvidence resourcesValue;
+    BObolLodHeadroomEvidence headroomValue;
+    BObolLodPointProxyEvidence pointProxyValue;
+    BObolLodStructuralAdmissionEvidence structuralValue;
+};
+
+/*
+ * One admission calculation consumes an immutable evidence snapshot and
+ * returns both its typed decision and complete successor evidence.  Planning
+ * therefore has no hidden mutation: callers may compare, discard, or commit
+ * the result atomically with the revision tuple which supplied its inputs.
+ */
+struct BObolLodAdmissionPlan {
+    BObolLodAdmissionRevisionStamp revisionStamp;
+    BObolLodCapacityEvidence::Decision capacityDecision;
+    BObolLodResourceEvidence::Decision resourceDecision;
+    BObolLodPointProxyEvidence::Decision pointProxyDecision;
+    BObolLodStructuralAdmissionEvidence::Decision structuralDecision;
+    BObolLodCapacityEvidence::CalibrationDecision calibrationDecision;
+    BObolLodCapacityEvidence::CompletedFrameDecision completedFrameDecision;
+    bool headroomAccepted = false;
+    bool transitionChanged = false;
+    size_t transitionValue = 0;
+    BObolLodAdmissionEvidence nextEvidence;
+    BObolLodAdmissionCursor nextCursor;
+
+    bool certifiedFor(const BObolLodAdmissionRevisionStamp &stamp) const
+    {
+	return !this->revisionStamp.empty() &&
+	    this->revisionStamp.same(stamp);
+    }
+};
+
+static_assert(std::is_trivially_copyable<BObolLodAdmissionEvidence>::value,
+    "admission evidence must remain allocation-free");
+static_assert(std::is_trivially_copyable<BObolLodAdmissionPlan>::value,
+    "admission plans must remain allocation-free");
+
 /* Event-driven static quality is a separate presentation phase, not an
  * annotation which any ordinary quiet-frame failure may retire.  Keep its
  * two release-critical predicates independent of controller latch ordering so
  * unit tests (and the formal coordinator model) can enforce that boundary. */
-class BObolLodStaticQualityPolicy {
+class BObolLodAdmissionPlanner {
 public:
+    enum class EvidenceAction : uint8_t {
+	RESET_CAPACITY = 0,
+	CLEAR_CAPACITY_LIMIT,
+	RESET_CAPACITY_MEASUREMENT,
+	RESET_CAPACITY_OVERLOAD,
+	CLEAR_RETAINED_QUALITY_FLOOR,
+	CLEAR_RETAINED_RECOVERY_CEILING,
+	CLEAR_DEADLINE_CAPACITY_CEILING,
+	CANCEL_HEADROOM_RETRY,
+	RESET_POINT_PROXY,
+	RESET_STRUCTURAL_ADMISSION,
+	RESET_RESOURCE_SERVICE,
+	MARK_RESOURCE_RECOVERY_HANDLED
+    };
+
+    static BObolLodAdmissionPlan applyEvidenceAction(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, EvidenceAction action)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	switch (action) {
+	    case EvidenceAction::RESET_CAPACITY:
+		result.nextEvidence.capacityValue.reset();
+		result.nextCursor.reset();
+		break;
+	    case EvidenceAction::CLEAR_CAPACITY_LIMIT:
+		result.nextEvidence.capacityValue.clearBudgetLimit();
+		break;
+	    case EvidenceAction::RESET_CAPACITY_MEASUREMENT:
+		result.nextEvidence.capacityValue.resetCalibration();
+		break;
+	    case EvidenceAction::RESET_CAPACITY_OVERLOAD:
+		result.nextEvidence.capacityValue.resetOverloadRecovery();
+		break;
+	    case EvidenceAction::CLEAR_RETAINED_QUALITY_FLOOR:
+		result.nextEvidence.capacityValue.clearRetainedQualityFloorBudget();
+		break;
+	    case EvidenceAction::CLEAR_RETAINED_RECOVERY_CEILING:
+		result.nextEvidence.capacityValue.clearRetainedRecoveryCeiling();
+		break;
+	    case EvidenceAction::CLEAR_DEADLINE_CAPACITY_CEILING:
+		result.nextEvidence.capacityValue.clearDeadlineCapacityCeiling();
+		break;
+	    case EvidenceAction::CANCEL_HEADROOM_RETRY:
+		result.nextEvidence.headroomValue.cancelRetry();
+		break;
+	    case EvidenceAction::RESET_POINT_PROXY:
+		result.nextEvidence.pointProxyValue.reset();
+		break;
+	    case EvidenceAction::RESET_STRUCTURAL_ADMISSION:
+		result.nextEvidence.structuralValue.reset();
+		break;
+	    case EvidenceAction::RESET_RESOURCE_SERVICE:
+		result.nextEvidence.resourcesValue.resetForServiceChange();
+		break;
+	    case EvidenceAction::MARK_RESOURCE_RECOVERY_HANDLED:
+		result.nextEvidence.resourcesValue.markRecoveryHandled();
+		break;
+	}
+	return result;
+    }
+
+    static BObolLodAdmissionPlan requestCapacityRescan(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.requestRescanAfterFrame();
+	return result;
+    }
+
+    static BObolLodAdmissionPlan requestRetainedRecovery(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, size_t budget)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.requestRetainedRecovery(budget);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan requestRetainedNormalization(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, size_t budget)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.requestRetainedNormalization(budget);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan requestRetainedReallocation(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	bool preserveCurrentBudget = true)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.requestRetainedReallocation(
+	    preserveCurrentBudget);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan requestPresentationReconciliation(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, size_t budget)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.requestPresentationReconciliation(budget);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan requestCoverageCompletion(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, size_t activeCost,
+	size_t certifiedBudget)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.transitionValue =
+	    result.nextEvidence.capacityValue.requestCoverageCompletion(
+		activeCost, certifiedBudget);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan recordDeadlineCapacityMiss(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, size_t attemptedBudget,
+	bool staticDeadline = false)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.noteDeadlineCapacityMiss(
+	    attemptedBudget, staticDeadline);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan setRetainedQualityFloor(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, size_t budget,
+	uint64_t populationSignature, size_t activeCost,
+	size_t minimumActiveCost)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.setRetainedQualityFloorBudget(
+	    result.nextCursor, budget, populationSignature, activeCost,
+	    minimumActiveCost);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan recordRetainedQualityFloorMiss(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.transitionChanged =
+	    result.nextEvidence.capacityValue.noteRetainedQualityFloorMiss();
+	return result;
+    }
+
+    static BObolLodAdmissionPlan rejectRetainedQualityFloor(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.transitionChanged =
+	    result.nextEvidence.capacityValue.rejectRetainedQualityFloor();
+	return result;
+    }
+
+    static BObolLodAdmissionPlan recordRetainedQualityFloorMet(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, bool exactProtectedPopulation,
+	uint64_t populationSignature, size_t presentedCost)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.transitionChanged =
+	    result.nextEvidence.capacityValue.noteRetainedQualityFloorMet(
+		exactProtectedPopulation, populationSignature, presentedCost);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan confirmRetainedRecoveryPresentation(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, bool onePixelReady)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.transitionChanged = result.nextEvidence.capacityValue.
+	    confirmRetainedRecoveryPresentation(
+		onePixelReady, result.nextCursor);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan raiseCapacityBudget(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, size_t budget)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.raiseCurrentBudget(budget);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan finishBlockedCapacityPass(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	const BObolLodCapacityEvidence::CalibrationInputs &inputs)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.calibrationDecision =
+	    result.nextEvidence.capacityValue.finishBlockedPass(inputs);
+	if (result.calibrationDecision.restartSubmission)
+	    result.nextCursor.reset();
+	return result;
+    }
+
+    static BObolLodAdmissionPlan completeCapacityCalibrationFrame(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.completedFrameDecision = result.nextEvidence.capacityValue.
+	    completeCalibrationFrame(result.nextCursor);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan completeCapacitySearchFrame(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	const BObolLodCapacityEvidence::CompletedFrameInputs &inputs)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.completedFrameDecision = result.nextEvidence.capacityValue.
+	    completeCapacitySearchFrame(result.nextCursor, inputs);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan retireUnmeasurableCapacityFrame(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.completedFrameDecision = result.nextEvidence.capacityValue.
+	    retireUnmeasurableCalibrationFrame(result.nextCursor);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan plan(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	const BObolLodAdmissionRevisionStamp &revisionStamp,
+	const BObolLodCapacityEvidence::Inputs &inputs)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.revisionStamp = revisionStamp;
+	if (!result.nextCursor.matches(revisionStamp))
+	    result.nextCursor.resetForRevision(revisionStamp);
+	result.capacityDecision =
+	    result.nextEvidence.capacityValue.planPass(inputs, result.nextCursor);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan planResourceObservation(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, bool cpuPressure,
+	bool gpuPressure, bool recoveryEnabled)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.resourceDecision = result.nextEvidence.resourcesValue.observe(
+	    cpuPressure, gpuPressure, recoveryEnabled);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan planHeadroomRetry(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodViewEpoch viewEpoch, BObolLodPolicyEpoch policyEpoch,
+	size_t activePopulationCost, size_t currentBudget)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.headroomAccepted = result.nextEvidence.headroomValue.armRetry(
+	    viewEpoch, policyEpoch, activePopulationCost, currentBudget);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan planHeadroomTransientDeferral(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodViewEpoch viewEpoch, BObolLodPolicyEpoch policyEpoch,
+	size_t activePopulationCost)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.headroomAccepted =
+	    result.nextEvidence.headroomValue.deferTransientReplay(
+		viewEpoch, policyEpoch, activePopulationCost);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan planHeadroomConsumption(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodViewEpoch viewEpoch, BObolLodPolicyEpoch policyEpoch,
+	size_t currentBudget, size_t activePopulationCost,
+	long double demonstratedBudget, uint64_t elapsedNanoseconds,
+	uint64_t targetNanoseconds, bool reusableSample)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.headroomAccepted = result.nextEvidence.headroomValue.consumeRetry(
+	    viewEpoch, policyEpoch, currentBudget, activePopulationCost,
+	    demonstratedBudget, elapsedNanoseconds, targetNanoseconds,
+	    reusableSample);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan recordHeadroomRejection(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodViewEpoch viewEpoch, BObolLodPolicyEpoch policyEpoch,
+	size_t activePopulationCost, size_t attemptedBudget)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.headroomValue.rejectRetry(viewEpoch, policyEpoch,
+	    activePopulationCost, attemptedBudget);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan planPointStructuralDistribution(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, float currentThreshold,
+	const std::array<size_t, 7> &cumulativeCount, size_t visibleCount,
+	size_t maximumUncollapsedCount)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.pointProxyDecision =
+	    result.nextEvidence.pointProxyValue.seedFromStructuralDistribution(
+		currentThreshold, cumulativeCount, visibleCount,
+		maximumUncollapsedCount);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan planPointInterrupted(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, float currentThreshold,
+	uint64_t renderNanoseconds, float targetFps)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.pointProxyDecision = result.nextEvidence.pointProxyValue.interrupted(
+	    currentThreshold, renderNanoseconds, targetFps);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan planPointStructuralCoverageBlocked(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, float currentThreshold,
+	size_t unresolvedStructuralCount)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.pointProxyDecision =
+	    result.nextEvidence.pointProxyValue.structuralCoverageBlocked(
+		currentThreshold, unresolvedStructuralCount);
+	return result;
+    }
+
+    static BObolLodAdmissionPlan planPointCompleted(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, float currentThreshold,
+	uint64_t renderNanoseconds, float targetFps, bool reusableSample,
+	size_t unresolvedStructuralCount = 0)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.pointProxyDecision = result.nextEvidence.pointProxyValue.completed(
+	    currentThreshold, renderNanoseconds, targetFps, reusableSample,
+	    unresolvedStructuralCount);
+	return result;
+    }
+
+    static bool pointRequiresReusableConfirmation(float currentThreshold,
+	size_t unresolvedStructuralCount = 0)
+    {
+	return BObolLodPointProxyEvidence::requiresReusableConfirmation(
+	    currentThreshold, unresolvedStructuralCount);
+    }
+
+    static bool pointAggregationApplicable(size_t visibleOccurrenceCount)
+    {
+	return BObolLodPointProxyEvidence::applicable(
+	    visibleOccurrenceCount);
+    }
+
+    static bool pointAggregationApplicableAcrossCameraInvalidation(
+	bool currentCensusApplicable, float retainedThreshold)
+    {
+	return BObolLodPointProxyEvidence::
+	    applicableAcrossCameraInvalidation(
+		currentCensusApplicable, retainedThreshold);
+    }
+
+    static bool pointStreamingPopulationWorkPending(bool submissionPending,
+	bool resultsPending, bool servicePending, size_t providerPending)
+    {
+	return BObolLodPointProxyEvidence::streamingPopulationWorkPending(
+	    submissionPending, resultsPending, servicePending,
+	    providerPending);
+    }
+
+    static bool pointCalibrationYieldsToStructuralRepair(
+	bool calibrationPending, bool exactOccurrenceClassification,
+	size_t unresolvedStructuralCount, bool producerOwnsFutureFrame)
+    {
+	return BObolLodPointProxyEvidence::
+	    calibrationYieldsToStructuralRepair(calibrationPending,
+		exactOccurrenceClassification, unresolvedStructuralCount,
+		producerOwnsFutureFrame);
+    }
+
+    static bool onePixelPresentationReady(bool haveCadAssemblies,
+	bool exactFrame, bool exactOccurrenceClassification,
+	size_t presentedSubpixelOccurrences,
+	size_t presentedStructuralBoxes, int progressiveCeiling,
+	float pointProxyPixelThreshold, size_t managedRenderCost)
+    {
+	return BObolLodPointProxyEvidence::onePixelPresentationReady(
+	    haveCadAssemblies, exactFrame, exactOccurrenceClassification,
+	    presentedSubpixelOccurrences, presentedStructuralBoxes,
+	    progressiveCeiling, pointProxyPixelThreshold, managedRenderCost);
+    }
+
+    static bool pointDeadlineRequiresPopulationAggregation(
+	size_t activeRenderCost, size_t minimumRenderCost,
+	int presentedMaximum, int correctedCeiling,
+	size_t correctedRenderCostBudget)
+    {
+	return BObolLodPointProxyEvidence::
+	    deadlineRequiresPopulationAggregation(activeRenderCost,
+		minimumRenderCost, presentedMaximum, correctedCeiling,
+		correctedRenderCostBudget);
+    }
+
+    static bool pointProducerOwnsCalibrationFrame(bool submissionPending,
+	bool submissionPausedByCalibration, bool providerPending,
+	bool servicePending, bool publicationAwaitingFrameRequest)
+    {
+	return BObolLodPointProxyEvidence::producerOwnsCalibrationFrame(
+	    submissionPending, submissionPausedByCalibration, providerPending,
+	    servicePending, publicationAwaitingFrameRequest);
+    }
+
+    /* One completed framebuffer may advance only one measurement owner.  A
+     * bounded capacity search has already frozen the point/mesh population it
+     * is measuring; consuming point calibration from the same frame would
+     * reset that certificate before it can collect its finite sample set.
+     * The still-pending point phase supplies the successor frame after the
+     * capacity search reaches a terminal decision. */
+    static bool pointCalibrationOwnsCompletedFrame(
+	bool pointCalibrationPending, bool capacitySamplePending)
+    {
+	return pointCalibrationPending && !capacitySamplePending;
+    }
+
+    static bool pointBlocksSourceAdmission(
+	bool discoveryCalibrationPending, bool stableCalibrationPending)
+    {
+	return BObolLodPointProxyEvidence::blocksSourceAdmission(
+	    discoveryCalibrationPending, stableCalibrationPending);
+    }
+
+    /* A presentation-owned measurement freezes the occurrence population it
+     * is measuring.  An unchanged submission cursor must not run, or count as
+     * a future geometry producer, until that frame completes.  Source and
+     * inventory invalidation are handled before callers apply this gate and
+     * explicitly retire stale capacity evidence. */
+    static bool presentationPausesSubmission(
+	bool discoveryCalibrationPending, bool stableCalibrationPending,
+	bool capacitySamplePending, bool stablePresentationAvailable)
+    {
+	return capacitySamplePending || discoveryCalibrationPending ||
+	    (stableCalibrationPending && stablePresentationAvailable);
+    }
+
+    static bool maySeedPointStructuralDistribution(
+	bool discoveryCalibrationPending, bool stableCalibrationPending,
+	bool triangleRecoveryPending)
+    {
+	return BObolLodPointProxyEvidence::maySeedStructuralDistribution(
+	    discoveryCalibrationPending, stableCalibrationPending,
+	    triangleRecoveryPending);
+    }
+
+    static bool pointAtMaximumPixelThreshold(float threshold)
+    {
+	return BObolLodPointProxyEvidence::atMaximumPixelThreshold(threshold);
+    }
+
+    static bool shouldRecoverTriangleDetail(
+	bool reducibleProgressiveDetail, bool stableSampleOverloaded,
+	bool coarsePointCut, bool protectedQualityOwnsCuts)
+    {
+	return BObolLodPointProxyEvidence::shouldRecoverTriangleDetail(
+	    reducibleProgressiveDetail, stableSampleOverloaded, coarsePointCut,
+	    protectedQualityOwnsCuts);
+    }
+
+    static float triangleRecoveryPointThreshold(float currentThreshold,
+	bool exactStructuralPopulation, size_t structuralFallbackCount)
+    {
+	return BObolLodPointProxyEvidence::triangleRecoveryPointThreshold(
+	    currentThreshold, exactStructuralPopulation,
+	    structuralFallbackCount);
+    }
+
+    static BObolLodAdmissionPlan planStructural(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	const BObolLodStructuralAdmissionEvidence::Inputs &inputs)
+    {
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.structuralDecision =
+	    result.nextEvidence.structuralValue.planStructural(inputs);
+	return result;
+    }
+
+    static size_t unaggregatableStructuralCount(
+	const std::array<size_t, 7> &cumulativeCount, size_t visibleCount)
+    {
+	const size_t aggregatable = std::min(
+	    visibleCount, cumulativeCount.back());
+	return visibleCount - aggregatable;
+    }
+
+    /* Divide only proven marginal capacity.  A zero result means the exact
+     * frame did not establish even one scheduling unit per unresolved
+     * occurrence, so the caller must not arm a partial repair transaction. */
+    static size_t structuralPerOccurrenceReservation(size_t admittedBudget,
+	size_t activeCost, size_t unresolvedCount)
+    {
+	if (!unresolvedCount || admittedBudget <= activeCost)
+	    return 0;
+	const size_t available = admittedBudget - activeCost;
+	return available >= unresolvedCount ?
+	    available / unresolvedCount : 0;
+    }
+
     /* noteDeadlineCapacityMiss() records an already strict, view-local upper
      * bound: it is five percent below the population which missed the hard
      * deadline.  Marginal recovery has its own throughput safety factor
      * before reaching this helper.  Applying that factor to this bound again
      * needlessly discards a second fifth of capacity and leaves prominent
      * geometry coarse even though a smaller allocation is still admissible. */
-    static size_t capMarginalBudget(size_t estimatedBudget,
+    static size_t capBudgetAtDeadlineCeiling(size_t estimatedBudget,
 	size_t deadlineCapacityCeiling)
     {
 	return deadlineCapacityCeiling == SIZE_MAX ? estimatedBudget :
@@ -4301,33 +6096,93 @@ public:
 	    !populationWorkPending;
     }
 
-    /* The renderer-wide ceiling is a reversible presentation guard.  Once it
-     * has caught up to the accepted occurrence allocation, removing it must
-     * not return the controller to the lower streaming-cadence budget. */
-    static bool retainAcceptedPhase(bool staticPhaseActive,
-	bool staticPhaseRejected)
+    static bool ordinaryHeadroomAllowed(bool staticPhaseBlocked)
     {
-	return staticPhaseActive && !staticPhaseRejected;
+	return !staticPhaseBlocked;
     }
 
-    static bool ordinaryHeadroomAllowed(bool staticPhaseActive,
-	bool staticPhaseRejected)
+    /* A bounded static phase may improve an unaffordable atomic quality floor
+     * incrementally.  The same marginal path remains available after either
+     * the complete floor or a richer presentation has been rejected, but it
+     * must never leak into ordinary quiet convergence. */
+    static bool marginalStaticCapacityAllowed(bool staticPhaseActive,
+	bool staticPhaseRejected, bool protectedFloorRejected)
     {
-	return !staticPhaseActive && !staticPhaseRejected;
+	return staticPhaseActive || staticPhaseRejected ||
+	    protectedFloorRejected;
     }
 
-    /* A renderer-wide PoP ceiling is a transient capacity guard, never a
-     * terminal scene allocation.  Once no live static staircase owns it (or
-     * that staircase has rejected its next step), an exact quiet frame must
-     * be translated into occurrence-local cuts before readiness. */
+    /* Retained occurrence cuts and the renderer's submitted cut are separate
+     * quality dimensions.  A single progressive object can have every
+     * requested suffix resident while a motion/quiet-cadence ceiling still
+     * hides most of it.  Treat that reversible presentation gap as actionable
+     * static quality debt; otherwise provider satisfaction falsely terminates
+     * the event-driven quality pass after a pose-only interaction. */
+    static bool actionableProgressiveQualityDebt(
+	size_t activePayloadCount, size_t satisfiedPayloadCount,
+	size_t memoryLimitedPayloadCount, int activeMaximumCut,
+	int presentationCeiling)
+    {
+	const size_t unsatisfiedPayloadCount =
+	    activePayloadCount > satisfiedPayloadCount ?
+		activePayloadCount - satisfiedPayloadCount : 0;
+	const bool residentDemandDebt =
+	    unsatisfiedPayloadCount > memoryLimitedPayloadCount;
+	const bool presentationDebt = progressivePresentationQualityDebt(
+	    activeMaximumCut, presentationCeiling);
+	return residentDemandDebt || presentationDebt;
+    }
+
+    static bool progressivePresentationQualityDebt(int activeMaximumCut,
+	int presentationCeiling)
+    {
+	return presentationCeiling >= 0 &&
+	    activeMaximumCut > presentationCeiling;
+    }
+
+    /* A renderer-wide PoP ceiling is a transient capacity guard for a
+	* multi-occurrence scene.  Once no live static staircase owns it (or that
+	* staircase has rejected its next step), an exact quiet frame must be
+	* translated into occurrence-local cuts before readiness.  For exactly one
+	* progressive occurrence the ordinal is already occurrence-local, so the
+	* proven ceiling is a valid terminal representation and avoids a redundant
+	* allocator/repaint transaction. */
     static bool terminalGlobalCeilingRequiresReconciliation(
 	bool stableTerminalContext, bool exactCompletedFrame,
 	int progressiveCeiling, bool staticPhaseActive,
-	bool staticPhaseRejected)
+	bool staticPhaseRejected, size_t progressivePayloadCount)
     {
 	return stableTerminalContext && exactCompletedFrame &&
 	    progressiveCeiling >= 0 &&
+	    progressivePayloadCount != 1 &&
 	    (!staticPhaseActive || staticPhaseRejected);
+    }
+
+    /* Translate a renderer-wide CAD cut into the retained allocator's scene
+     * currency.  Backend submitted-work records may expand indexed vertices,
+     * normals, and triangles differently (OSMesa flat shading is the important
+     * case), so they are not a valid occurrence-allocation budget.  Preserve
+     * the scene's non-CAD floor and replace only its retained CAD component with
+     * the canonical cost table for the exact presented ceiling. */
+    static size_t canonicalSceneCostAtCadCeiling(size_t activeSceneCost,
+	size_t activeCadCost, size_t cadCeilingCost)
+    {
+	const size_t nonCadCost = activeSceneCost > activeCadCost ?
+	    activeSceneCost - activeCadCost : 0;
+	return cadCeilingCost > SIZE_MAX - nonCadCost ? SIZE_MAX :
+	    nonCadCost + cadCeilingCost;
+    }
+
+    /* A retained allocation certificate is the exact post-transaction
+     * population.  The admission cursor deliberately freezes the pre-pass
+     * scene cost for bounded traversal accounting, so using that older value
+     * as the capacity candidate makes the completed frame look stale even
+     * when no cut changed. */
+    static size_t capacitySearchPresentedCost(bool currentAllocation,
+	size_t frozenActiveCost, size_t selectedPresentationCost)
+    {
+	return currentAllocation && selectedPresentationCost > 0 ?
+	    selectedPresentationCost : frozenActiveCost;
     }
 
     static bool onePixelTrialRequired(float pointProxyPixelThreshold)
@@ -4365,14 +6220,14 @@ public:
      * the current view/capacity epoch and must not be repeated. */
     static bool startOnePixelTrialFromSettledPointFrame(bool interactive,
 	bool exactReusableFrame, bool producerWork, bool resourcePressure,
-	bool structuralFallbackPopulation, bool staticTrialRejected,
+	bool structuralFallbackPopulation, bool staticPhaseBlocked,
 	float pointProxyPixelThreshold,
 	uint64_t renderNanoseconds, uint64_t preferredFrameNanoseconds,
 	uint64_t staticDeadlineNanoseconds)
     {
 	return !interactive && exactReusableFrame && !producerWork &&
 	    !resourcePressure && !structuralFallbackPopulation &&
-	    !staticTrialRejected &&
+	    !staticPhaseBlocked &&
 	    onePixelTrialRequired(pointProxyPixelThreshold) &&
 	    renderNanoseconds > 0 && preferredFrameNanoseconds > 0 &&
 	    staticDeadlineNanoseconds > preferredFrameNanoseconds &&
@@ -4394,7 +6249,7 @@ public:
     static bool acceptSettledOnePixelFrame(bool interactive,
 	bool exactReusableFrame, bool producerWork, bool resourcePressure,
 	bool structuralFallbackPopulation, bool handoffPending,
-	bool staticPhaseActive, bool staticPhaseRejected,
+	bool staticPhaseBlocked,
 	int progressiveCeiling, float pointProxyPixelThreshold,
 	bool reducibleProgressiveDetail, uint64_t renderNanoseconds,
 	uint64_t preferredFrameNanoseconds,
@@ -4402,7 +6257,7 @@ public:
     {
 	return !interactive && exactReusableFrame && !producerWork &&
 	    !resourcePressure && !structuralFallbackPopulation &&
-	    !handoffPending && !staticPhaseActive && !staticPhaseRejected &&
+	    !handoffPending && !staticPhaseBlocked &&
 	    progressiveCeiling < 0 &&
 	    std::isfinite(pointProxyPixelThreshold) &&
 	    pointProxyPixelThreshold <= 1.01f &&
@@ -4429,6 +6284,59 @@ public:
 	    pointProxyPixelThreshold <= 0.0f)
 	    return -1;
 	return std::min(activeMaximum, currentCeiling + 1);
+    }
+
+    /* A single progressive occurrence can preserve its last exact cut while
+     * a richer occurrence allocation is prepared behind it.  Without this
+     * baseline ceiling, publication exposes the richest resident cut before
+     * the completed-frame staircase can measure any neighboring cut.  A
+     * global ordinal is not a valid relative-quality policy for multiple
+     * occurrences, so those scenes continue to rely on the allocator. */
+    static int staticProgressiveBaselineCeiling(int currentCeiling,
+	    int activeMaximum, size_t activePayloadCount)
+    {
+	return currentCeiling < 0 && activeMaximum >= 0 &&
+	    activePayloadCount == 1 ? activeMaximum : -1;
+    }
+
+    static bool staticOrdinalOverscanApplicable(size_t activePayloadCount)
+    {
+	return activePayloadCount == 1;
+    }
+
+    static bool retainedPointAggregationApplicable(
+	bool logicalPopulationApplicable, size_t pointProxyCandidateCount)
+    {
+	return logicalPopulationApplicable && pointProxyCandidateCount > 0;
+    }
+
+    static bool structuralPointAggregationRequired(
+	size_t logicalOccurrenceCount, size_t affordableOccurrenceCount)
+    {
+	return affordableOccurrenceCount != SIZE_MAX &&
+	    logicalOccurrenceCount > affordableOccurrenceCount;
+    }
+
+    static size_t structuralFirstWaveOccurrenceLimit(size_t sceneBudget)
+    {
+	static constexpr size_t occurrenceCostFloor = 64;
+	static constexpr size_t minimumOccurrences = 512;
+	static constexpr size_t maximumOccurrences = 8192;
+	if (sceneBudget == SIZE_MAX)
+	    return SIZE_MAX;
+	return std::max(minimumOccurrences,
+	    std::min(maximumOccurrences, sceneBudget / occurrenceCostFloor));
+    }
+
+private:
+    static BObolLodAdmissionPlan beginPlan(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor)
+    {
+	BObolLodAdmissionPlan result;
+	result.nextEvidence = evidence;
+	result.nextCursor = cursor;
+	return result;
     }
 };
 
@@ -4467,27 +6375,114 @@ public:
  * controller-owned quiet default; an 8 ms cooperative slice remains below the
  * host's 16 ms timer even when a software presentation is independently slow.
  */
-class BObolLodProviderPacingPolicy {
+class BObolLodAvailabilityScheduler {
 public:
+    enum class CompletedPassSuccessor : uint8_t {
+	NONE = 0,
+	COMPLETE_RESIDENCY_DRAIN,
+	YIELD_TO_RESIDENT_GROWTH,
+	CALIBRATE_CAPACITY
+    };
+
     static uint64_t effectiveMicroseconds(uint64_t configuredMicroseconds,
 	bool controllerOwnedDefault, bool interactive)
     {
-	if (!controllerOwnedDefault || configuredMicroseconds <= 4000)
+	if (!controllerOwnedDefault ||
+	    configuredMicroseconds <= interactiveSliceMicroseconds())
 	    return configuredMicroseconds;
 	if (interactive)
-	    return std::min<uint64_t>(configuredMicroseconds, 4000);
+	    return std::min(configuredMicroseconds,
+		interactiveSliceMicroseconds());
 	return configuredMicroseconds;
+    }
+
+    static bool canRetainPresentation(bool residencyDrainActive,
+	bool retainedPayload, bool sameAsset, bool activeCutPreserved,
+	bool richerResidentPrefix)
+    {
+	return residencyDrainActive && retainedPayload && sameAsset &&
+	    activeCutPreserved && richerResidentPrefix;
+    }
+
+    static bool allocationPopulationSettled(bool providerInventorySettled,
+	bool serviceStreamIdle, bool resultDeliveryIdle,
+	bool growthTransactionPending, bool residencyDrainActive)
+    {
+	return providerInventorySettled && serviceStreamIdle &&
+	    resultDeliveryIdle && !growthTransactionPending &&
+	    !residencyDrainActive;
+    }
+
+    /* A resident drain owns immutable-prefix availability, not the cut drawn
+     * from an already available prefix.  A completed occurrence-allocation
+     * plan must therefore remain able to reconcile presentation cuts while a
+     * drain is active; otherwise the global renderer ceiling and the
+     * occurrence plan can wait on one another indefinitely.  Ordinary demand
+     * changes still defer downgrades until the drain has retired. */
+    static bool presentationCutDowngradeAllowed(bool interactive,
+	bool gestureActive, bool residencyDrainActive,
+	bool scaleDemandChanged, bool retainedAllocation)
+    {
+	if (interactive || gestureActive)
+	    return false;
+	if (retainedAllocation)
+	    return true;
+	return scaleDemandChanged && !residencyDrainActive;
+    }
+
+    /* Structural repair and resident growth both consume the shared source
+     * cursor.  A newly loaded immutable suffix must first receive its one
+     * occurrence-allocation pass; otherwise structural repair repeatedly
+     * inspects the pre-growth framebuffer while preventing the transaction
+     * capable of making that frontier drawable. */
+    static bool structuralRepairMayOwn(bool residentGrowthPending,
+	bool residencyDrainActive)
+    {
+	return !residentGrowthPending && !residencyDrainActive;
+    }
+
+    /* Resident growth owns availability population before ordinary capacity
+     * calibration may restart the shared submission cursor.  Keeping this
+     * precedence allocation-free and explicit prevents the two schedulers
+     * from repeatedly invalidating one another's readiness condition. */
+    static CompletedPassSuccessor completedPassSuccessor(bool completed,
+	bool residencyDrainActive, bool residentGrowthPending,
+	bool capacityBlocked)
+    {
+	if (!completed)
+	    return CompletedPassSuccessor::NONE;
+	if (residencyDrainActive)
+	    return CompletedPassSuccessor::COMPLETE_RESIDENCY_DRAIN;
+	if (residentGrowthPending)
+	    return CompletedPassSuccessor::YIELD_TO_RESIDENT_GROWTH;
+	if (capacityBlocked)
+	    return CompletedPassSuccessor::CALIBRATE_CAPACITY;
+	return CompletedPassSuccessor::NONE;
+    }
+
+private:
+    static constexpr uint64_t interactiveSliceMicroseconds(void)
+    {
+	return 4000;
     }
 };
 
-/*
- * Owner-thread result-publication batching.  Applied worker results already
- * own immutable CPU bindings, so several drain quanta may be presented by one
- * frame; nevertheless every unpresented batch must retain either its bounded
- * timer or an explicitly requested frame as a liveness witness.
- */
-class BObolLodPublicationPolicy {
+/* Own every mutable fact associated with presenting an applied LoD change.
+ * Applied worker results already own immutable CPU bindings, so several drain
+ * quanta may share one frame.  Result batching and frame barriers nevertheless
+ * name the same revision, retain one timer or requested-frame witness, and
+ * retire on the same completed CAD frame. */
+class BObolLodPresentationTransaction {
 public:
+    enum Reason : uint32_t {
+	REASON_NONE = 0,
+	REASON_CUT_PRESENTATION = 1u << 0,
+	REASON_RESULT_PUBLICATION = 1u << 1,
+	REASON_RESIDENT_REFINEMENT = 1u << 2,
+	REASON_CALIBRATION = 1u << 3,
+	REASON_HANDOFF = 1u << 4
+    };
+
     struct Inputs {
 	int64_t nowMicroseconds = 0;
 	uint64_t observedRenderNanoseconds = 0;
@@ -4501,10 +6496,18 @@ public:
 	bool requestFrame = false;
     };
 
-    void noteApplied(size_t count, int64_t nowMicroseconds)
+    struct Completion {
+	bool retired = false;
+	bool stale = false;
+	uint32_t reasons = REASON_NONE;
+    };
+
+    void noteApplied(size_t count, int64_t nowMicroseconds,
+	uint64_t viewEpoch, uint64_t policyEpoch)
     {
 	if (!count)
 	    return;
+	this->begin(viewEpoch, policyEpoch);
 	this->unpresentedCountValue =
 	    count > SIZE_MAX - this->unpresentedCountValue ?
 		SIZE_MAX : this->unpresentedCountValue + count;
@@ -4519,41 +6522,78 @@ public:
 	if (!this->unpresentedCountValue)
 	    return decision;
 	decision.keepPumpAlive = true;
-	if (this->framePendingValue)
+	if (this->publicationFramePendingValue)
 	    return decision;
 	if (!inputs.firstUseful && !inputs.streamIdle && !due(inputs))
 	    return decision;
-	this->framePendingValue = true;
+	this->publicationFramePendingValue = true;
 	decision.requestFrame = true;
 	return decision;
     }
 
-    void frameCompleted(void)
+    bool arm(Reason reason, uint64_t completedRenderSerial,
+	uint64_t viewEpoch, uint64_t policyEpoch)
     {
-	this->framePendingValue = false;
-	this->unpresentedCountValue = 0;
-	this->firstUnpresentedMicrosecondsValue = 0;
+	if (reason == REASON_NONE)
+	    return false;
+	this->begin(viewEpoch, policyEpoch);
+	this->reasonMask |= static_cast<uint32_t>(reason);
+	if (this->barrierPendingValue)
+	    return false;
+	this->barrierPendingValue = true;
+	this->requiredRenderSerialValue = completedRenderSerial == UINT64_MAX ?
+	    UINT64_MAX : completedRenderSerial + 1;
+	return true;
+    }
+
+    Completion complete(uint64_t completedRenderSerial,
+	uint64_t viewEpoch, uint64_t policyEpoch)
+    {
+	Completion result;
+	if (!this->active())
+	    return result;
+	if (this->viewEpochValue != viewEpoch ||
+	    this->policyEpochValue != policyEpoch) {
+	    result.stale = true;
+	    this->clear();
+	    return result;
+	}
+	if (this->barrierPendingValue &&
+	    completedRenderSerial < this->requiredRenderSerialValue)
+	    return result;
+	result.retired = this->barrierPendingValue;
+	result.reasons = this->reasonMask;
+	this->clear();
+	return result;
     }
 
     void reset(void)
     {
-	this->frameCompleted();
+	this->clear();
     }
 
-    bool pending(void) const
+    bool barrierPending(void) const
+    {
+	return this->barrierPendingValue;
+    }
+
+    bool publicationPending(void) const
     {
 	return this->unpresentedCountValue != 0;
     }
 
-    bool framePending(void) const
+    bool publicationFramePending(void) const
     {
-	return this->framePendingValue;
+	return this->publicationFramePendingValue;
     }
 
-    bool awaitingDeadline(void) const
+    bool publicationAwaitingFrameRequest(void) const
     {
+	/* Once publicationFramePendingValue is true, the render request is the
+	 * only remaining liveness witness.  It must not be classified as a future
+	 * producer which permits that same request to disappear. */
 	return this->unpresentedCountValue != 0 &&
-	    !this->framePendingValue;
+	    !this->publicationFramePendingValue;
     }
 
     size_t unpresentedCount(void) const
@@ -4566,24 +6606,116 @@ public:
 	return this->firstUnpresentedMicrosecondsValue;
     }
 
+    uint32_t reasons(void) const
+    {
+	return this->reasonMask;
+    }
+
+    uint64_t requiredRenderSerial(void) const
+    {
+	return this->barrierPendingValue ?
+	    this->requiredRenderSerialValue : 0;
+    }
+
+    uint64_t viewEpoch(void) const
+    {
+	return this->viewEpochValue;
+    }
+
+    uint64_t policyEpoch(void) const
+    {
+	return this->policyEpochValue;
+    }
+
+    uint64_t sequence(void) const
+    {
+	return this->sequenceValue;
+    }
+
     static int64_t presentationIntervalMicroseconds(
 	uint64_t observedRenderNanoseconds, bool interactive)
     {
-	const int64_t minimum = interactive ? 33333 : 50000;
-	const int64_t maximum = interactive ? 100000 : 250000;
+	const int64_t minimum = interactive ?
+	    interactiveMinimumIntervalMicroseconds() :
+	    quietMinimumIntervalMicroseconds();
+	const int64_t maximum = interactive ?
+	    interactiveMaximumIntervalMicroseconds() :
+	    quietMaximumIntervalMicroseconds();
 	if (!observedRenderNanoseconds)
 	    return minimum;
 	const uint64_t observedMicroseconds =
-	    observedRenderNanoseconds / 1000ULL;
+	    observedRenderNanoseconds / nanosecondsPerMicrosecond();
 	const uint64_t scaled = observedMicroseconds >
-		static_cast<uint64_t>(maximum) / 2ULL ?
-	    static_cast<uint64_t>(maximum) : observedMicroseconds * 2ULL;
+		static_cast<uint64_t>(maximum) / intervalScale() ?
+	    static_cast<uint64_t>(maximum) :
+	    observedMicroseconds * intervalScale();
 	return static_cast<int64_t>(std::max<uint64_t>(
 	    static_cast<uint64_t>(minimum),
 	    std::min<uint64_t>(static_cast<uint64_t>(maximum), scaled)));
     }
 
 private:
+    static constexpr int64_t interactiveMinimumIntervalMicroseconds()
+    {
+	return 33333;
+    }
+
+    static constexpr int64_t quietMinimumIntervalMicroseconds()
+    {
+	return 50000;
+    }
+
+    static constexpr int64_t interactiveMaximumIntervalMicroseconds()
+    {
+	return 100000;
+    }
+
+    static constexpr int64_t quietMaximumIntervalMicroseconds()
+    {
+	return 250000;
+    }
+
+    static constexpr uint64_t intervalScale()
+    {
+	return 2;
+    }
+
+    static constexpr uint64_t nanosecondsPerMicrosecond()
+    {
+	return 1000;
+    }
+
+    bool active(void) const
+    {
+	return this->barrierPendingValue || this->unpresentedCountValue != 0;
+    }
+
+    void begin(uint64_t viewEpoch, uint64_t policyEpoch)
+    {
+	if (this->active() &&
+	    (this->viewEpochValue != viewEpoch ||
+	     this->policyEpochValue != policyEpoch))
+	    this->clear();
+	if (this->active())
+	    return;
+	this->viewEpochValue = viewEpoch;
+	this->policyEpochValue = policyEpoch;
+	if (++this->sequenceValue == 0)
+	    ++this->sequenceValue;
+    }
+
+    void clear(void)
+    {
+	this->barrierPendingValue = false;
+	this->publicationFramePendingValue = false;
+	this->reasonMask = REASON_NONE;
+	this->requiredRenderSerialValue = 0;
+	this->viewEpochValue = 0;
+	this->policyEpochValue = 0;
+	this->unpresentedCountValue = 0;
+	this->firstUnpresentedMicrosecondsValue = 0;
+    }
+
     bool due(const Inputs &inputs) const
     {
 	if (!this->unpresentedCountValue ||
@@ -4597,111 +6729,15 @@ private:
 		    this->firstUnpresentedMicrosecondsValue : interval;
 	return elapsed >= interval;
     }
-
-    bool framePendingValue = false;
+    bool barrierPendingValue = false;
+    bool publicationFramePendingValue = false;
+    uint32_t reasonMask = REASON_NONE;
+    uint64_t requiredRenderSerialValue = 0;
+    uint64_t viewEpochValue = 0;
+    uint64_t policyEpochValue = 0;
+    uint64_t sequenceValue = 0;
     size_t unpresentedCountValue = 0;
     int64_t firstUnpresentedMicrosecondsValue = 0;
-};
-
-/* A provider completion can append a richer immutable PoP suffix without
- * changing the active draw cut.  That is deliberately not a per-result
- * admission decision: only the scene-wide allocator knows which occurrences
- * should spend the calibrated render budget.  Coalesce all such completions
- * into one allocation edge after the worker/result wave becomes idle.
- *
- * Keeping this obligation separate from result publication is important.
- * Publication controls when newly bound arrays become visible; resident
- * growth controls when the complete occurrence population is rebalanced.
- * Conflating the two either makes result order the quality policy or runs an
- * O(scene) allocator once per result batch. */
-class BObolLodResidentGrowthPolicy {
-public:
-    /* A quiet residency-drain result may replace the immutable backing
-     * generation without changing the pixels selected by the owner-thread
-     * allocation.  Such a result is not a publication edge: keep the last
-     * coherent framebuffer while the rest of the resident wave drains, then
-     * let the scene-wide allocator publish one complete population.
-     *
-     * Keep every premise explicit.  In particular, ordinary interaction,
-     * first-useful coverage, asset replacement, and a changed active cut must
-     * remain immediately presentable rather than being hidden behind a
-     * background residency transaction. */
-    static bool canRetainPresentation(bool residencyDrainActive,
-	bool retainedPayload, bool sameAsset, bool activeCutPreserved,
-	bool richerResidentPrefix)
-    {
-	return residencyDrainActive && retainedPayload && sameAsset &&
-	    activeCutPreserved && richerResidentPrefix;
-    }
-
-    /* A scene-wide occurrence allocation is valid only for a closed resident
-     * population.  Provider inventory completion alone is insufficient: a
-     * bounded cache/service wave may still be publishing suffixes, and the
-     * resident-growth transaction may deliberately own another drain pass.
-     * Running minimax in those gaps makes every late batch invalidate the
-     * certificate and visibly redistributes the whole scene over and over.
-     * Keep this predicate scalar so the controller and tests share the exact
-     * transaction boundary. */
-    static bool allocationPopulationSettled(bool providerInventorySettled,
-	bool serviceStreamIdle, bool resultDeliveryIdle,
-	bool growthTransactionPending, bool residencyDrainActive)
-    {
-	return providerInventorySettled && serviceStreamIdle &&
-	    resultDeliveryIdle && !growthTransactionPending &&
-	    !residencyDrainActive;
-    }
-
-    void noteRicherPrefixAvailable(void)
-    {
-	this->pendingValue = true;
-	this->residencyDrainRequiredValue = true;
-    }
-
-    /* A completed resident batch is not necessarily the terminal resident
-     * population.  Before spending O(scene) work on importance allocation,
-     * let one ordinary source pass refill the bounded worker queue without
-     * changing presentation cuts.  Results arriving during that pass re-arm
-     * this edge, so an arbitrary number of cache batches collapse into one
-     * terminal allocation. */
-    bool beginResidencyDrainIfReady(bool automatic, bool streamIdle,
-	bool workAllowed)
-    {
-	if (!this->pendingValue || !this->residencyDrainRequiredValue ||
-	    !automatic || !streamIdle || !workAllowed)
-	    return false;
-	this->residencyDrainRequiredValue = false;
-	return true;
-    }
-
-    bool consumeIfReady(bool automatic, bool streamIdle,
-	bool allocationAllowed)
-    {
-	if (!this->pendingValue || !automatic || !streamIdle ||
-	    !allocationAllowed || this->residencyDrainRequiredValue)
-	    return false;
-	this->pendingValue = false;
-	return true;
-    }
-
-    bool pending(void) const
-    {
-	return this->pendingValue;
-    }
-
-    bool residencyDrainRequired(void) const
-    {
-	return this->residencyDrainRequiredValue;
-    }
-
-    void reset(void)
-    {
-	this->pendingValue = false;
-	this->residencyDrainRequiredValue = false;
-    }
-
-private:
-    bool pendingValue = false;
-    bool residencyDrainRequiredValue = false;
 };
 
 /*
@@ -4848,485 +6884,6 @@ private:
     bool planningValue = false;
     uint64_t demandRevisionValue = 0;
     int64_t deadlineValue = 0;
-};
-
-/*
- * Typed presentation acknowledgement owned by the LoD coordinator.
- *
- * A frame barrier is a transaction, not a pair of loosely related Boolean and
- * serial fields.  Every obligation records the view/policy epoch for which it
- * was created, the first render completion which may satisfy it, and all
- * reasons sharing that frame.  Adding another reason never moves an existing
- * barrier forward; an unrelated HUD/selection frame may satisfy it only when
- * it is a complete CAD presentation in the same epochs.
- */
-class BObolLodFrameObligation {
-public:
-    enum Reason : uint32_t {
-	REASON_NONE = 0,
-	REASON_CUT_PRESENTATION = 1u << 0,
-	REASON_RESULT_PUBLICATION = 1u << 1,
-	REASON_RESIDENT_REFINEMENT = 1u << 2,
-	REASON_CALIBRATION = 1u << 3,
-	REASON_HANDOFF = 1u << 4
-    };
-
-    struct Completion {
-	bool retired = false;
-	bool stale = false;
-	uint32_t reasons = REASON_NONE;
-    };
-
-    bool arm(Reason reason, uint64_t completedRenderSerial,
-	uint64_t viewEpoch, uint64_t policyEpoch)
-    {
-	if (reason == REASON_NONE)
-	    return false;
-	const uint64_t required = completedRenderSerial == UINT64_MAX ?
-	    UINT64_MAX : completedRenderSerial + 1;
-	const bool sameTransaction = this->pendingValue &&
-	    this->viewEpochValue == viewEpoch &&
-	    this->policyEpochValue == policyEpoch;
-	if (sameTransaction) {
-	    this->reasonMask |= static_cast<uint32_t>(reason);
-	    return false;
-	}
-	this->pendingValue = true;
-	this->reasonMask = static_cast<uint32_t>(reason);
-	this->requiredRenderSerialValue = required;
-	this->viewEpochValue = viewEpoch;
-	this->policyEpochValue = policyEpoch;
-	if (++this->sequenceValue == 0)
-	    ++this->sequenceValue;
-	return true;
-    }
-
-    Completion complete(uint64_t completedRenderSerial,
-	uint64_t viewEpoch, uint64_t policyEpoch)
-    {
-	Completion result;
-	if (!this->pendingValue)
-	    return result;
-	if (this->viewEpochValue != viewEpoch ||
-	    this->policyEpochValue != policyEpoch) {
-	    result.stale = true;
-	    this->reset();
-	    return result;
-	}
-	if (completedRenderSerial < this->requiredRenderSerialValue)
-	    return result;
-	result.retired = true;
-	result.reasons = this->reasonMask;
-	this->reset();
-	return result;
-    }
-
-    void reset(void)
-    {
-	this->pendingValue = false;
-	this->reasonMask = REASON_NONE;
-	this->requiredRenderSerialValue = 0;
-	this->viewEpochValue = 0;
-	this->policyEpochValue = 0;
-    }
-
-    bool pending(void) const
-    {
-	return this->pendingValue;
-    }
-
-    uint32_t reasons(void) const
-    {
-	return this->reasonMask;
-    }
-
-    uint64_t requiredRenderSerial(void) const
-    {
-	return this->pendingValue ? this->requiredRenderSerialValue : 0;
-    }
-
-    uint64_t viewEpoch(void) const
-    {
-	return this->viewEpochValue;
-    }
-
-    uint64_t policyEpoch(void) const
-    {
-	return this->policyEpochValue;
-    }
-
-    uint64_t sequence(void) const
-    {
-	return this->sequenceValue;
-    }
-
-private:
-    bool pendingValue = false;
-    uint32_t reasonMask = REASON_NONE;
-    uint64_t requiredRenderSerialValue = 0;
-    uint64_t viewEpochValue = 0;
-    uint64_t policyEpochValue = 0;
-    uint64_t sequenceValue = 0;
-};
-
-/*
- * Owner-thread coordinator state machine.  It stores no strings, allocates no
- * memory, and is never consulted by per-occurrence planning.  Phase mutation
- * has one entry point: dispatch().  Every transition therefore has an explicit
- * cause, a retained input observation, and a progress witness.  This is
- * deliberately stronger than the former phase tracker, whose callers could
- * enter arbitrary phases after independently interpreting a collection of
- * Boolean flags.
- *
- * The view controller owns detailed bounded cursors and renderer policy.  It
- * projects observations into Inputs at named owner-thread boundaries.  The
- * state machine retains both that raw observation and a canonical state:
- * lifecycle events own their edge transitions, pending witnesses cannot be
- * reported as stable, and contradictory compaction/coverage input degrades to
- * coverage or fallback.  Invalid caller combinations are therefore visible in
- * diagnostics without becoming the externally reported state.
- */
-class BObolLodStateMachine {
-public:
-    enum class Phase : uint8_t {
-	FALLBACK = 0,
-	COVERAGE,
-	INTERACTIVE,
-	SETTLING,
-	STABLE,
-	COMPACTING,
-	COUNT
-    };
-
-    enum class Event : uint8_t {
-	INITIALIZE = 0,
-	FRAME_COMPLETED,
-	WORK_SCHEDULED,
-	WORK_PUMPED,
-	RESULT_PUBLISHED,
-	SERVICE_CHANGED,
-	GENERATION_CANCELLED,
-	AUTO_SUBMIT_CHANGED,
-	VIEW_INVALIDATED,
-	POLICY_CHANGED,
-	INTERACTION_STARTED,
-	INTERACTION_ENDED,
-	VIEW_OBSERVED,
-	COUNT
-    };
-
-    enum Invariant : uint32_t {
-	INVARIANT_NONE = 0,
-	INVARIANT_COMPLETED_EXCEEDS_VISIBLE = 1u << 0,
-	INVARIANT_COMPACTION_WITHOUT_COVERAGE = 1u << 1,
-	INVARIANT_STABLE_WITHOUT_COVERAGE = 1u << 2,
-	INVARIANT_STABLE_WITH_PENDING_WORK = 1u << 3,
-	INVARIANT_INTERACTION_EVENT_WITHOUT_INTERACTION = 1u << 4,
-	INVARIANT_CANCEL_EVENT_WITH_GENERATION = 1u << 5,
-	INVARIANT_INTERACTION_END_WITH_GESTURE = 1u << 6,
-	INVARIANT_RESOURCE_RECOVERY_WITHOUT_PRESSURE = 1u << 7
-    };
-
-    /*
-     * Allocation-free phase decision inputs.  The view coordinator projects
-     * its detailed counters and latches into this compact contract; tests can
-     * then exercise the state graph without constructing a GL view or relying
-     * on wall-clock timing.
-     */
-    struct Inputs {
-	bool interactive = false;
-	bool compacting = false;
-	bool coverageActive = false;
-	bool coverageComplete = false;
-	bool generationActive = false;
-	bool settlingWork = false;
-	/* A pointer gesture is narrower than the interaction phase: release ends
-	 * the gesture while the quiet debounce intentionally remains interactive. */
-	bool gestureActive = false;
-	/* Completed-frame CPU/GPU observations are coordinator inputs, not HUD-
-	 * only diagnostics.  Recovery is a one-shot request for the current
-	 * pressure revision; persistent unavoidable pressure may subsequently be
-	 * reported as a stable, memory-limited terminal state. */
-	bool cpuMemoryPressure = false;
-	bool gpuMemoryPressure = false;
-	bool resourceRecoveryPending = false;
-    };
-
-    struct Witness {
-	uint64_t sequence = 0;
-	uint64_t viewEpoch = 0;
-	uint64_t policyEpoch = 0;
-	uint64_t renderSerial = 0;
-	uint64_t activeGeneration = 0;
-	uint64_t residentDemandRevision = 0;
-	uint64_t resourcePressureRevision = 0;
-	size_t visibleCount = 0;
-	size_t completedCount = 0;
-	size_t pendingCount = 0;
-    };
-
-    struct Transition {
-	Phase previous = Phase::FALLBACK;
-	Phase current = Phase::FALLBACK;
-	Event event = Event::INITIALIZE;
-	uint32_t invariantMask = INVARIANT_NONE;
-	bool changed = false;
-	bool progressed = false;
-	bool canonicalized = false;
-    };
-
-    BObolLodStateMachine(void) = default;
-
-    Phase currentPhase(void) const
-    {
-	return this->phase;
-    }
-
-    uint64_t phaseTransitionSerial(void) const
-    {
-	return this->transitionSerial;
-    }
-
-    uint64_t dispatchSerial(void) const
-    {
-	return this->dispatchCount;
-    }
-
-    Event lastDispatchedEvent(void) const
-    {
-	return this->lastEvent;
-    }
-
-    const Inputs &lastInputs(void) const
-    {
-	return this->stateInputsValue;
-    }
-
-    const Inputs &lastObservedInputs(void) const
-    {
-	return this->observedInputsValue;
-    }
-
-    const Witness &lastObservedWitness(void) const
-    {
-	return this->observedWitnessValue;
-    }
-
-    uint32_t lastInvariantMask(void) const
-    {
-	return this->invariantMask;
-    }
-
-    uint32_t invariantHistoryMask(void) const
-    {
-	return this->violationHistoryMask;
-    }
-
-    uint64_t invariantViolationCount(void) const
-    {
-	return this->violationCount;
-    }
-
-    uint64_t stagnantDispatchCount(void) const
-    {
-	return this->stagnantCount;
-    }
-
-    const Witness &phaseWitness(Phase requestedPhase) const
-    {
-	const size_t index = static_cast<size_t>(requestedPhase);
-	return this->witnesses[index < this->witnesses.size() ?
-	    index : static_cast<size_t>(Phase::FALLBACK)];
-    }
-
-    Transition dispatch(Event event, const Inputs &nextInputs,
-	const Witness &nextWitness)
-    {
-	Transition result;
-	result.previous = this->phase;
-	result.event = event;
-	result.invariantMask = validate(event, nextInputs, nextWitness);
-	Inputs authoritativeInputs = canonicalInputs(event, nextInputs,
-	    nextWitness);
-	Witness authoritativeWitness = canonicalWitness(nextWitness);
-	result.canonicalized = !sameInputs(nextInputs, authoritativeInputs) ||
-	    !sameProgress(nextWitness, authoritativeWitness);
-	this->dispatchCount++;
-	if (this->dispatchCount == 0)
-	    this->dispatchCount++;
-	this->lastEvent = event;
-	this->observedInputsValue = nextInputs;
-	this->observedWitnessValue = nextWitness;
-	this->stateInputsValue = authoritativeInputs;
-	this->invariantMask = result.invariantMask;
-	if (result.invariantMask != INVARIANT_NONE) {
-	    this->violationHistoryMask |= result.invariantMask;
-	    this->violationCount++;
-	    if (this->violationCount == 0)
-		this->violationCount++;
-	}
-
-	const Phase nextPhase = phaseFor(
-	    authoritativeInputs, authoritativeWitness);
-	result.changed = this->phase != nextPhase;
-	result.progressed = this->transitionTo(
-	    nextPhase, authoritativeWitness);
-	result.current = this->phase;
-	if (result.progressed)
-	    this->stagnantCount = 0;
-	else if (this->stagnantCount != UINT64_MAX)
-	    this->stagnantCount++;
-	return result;
-    }
-
-private:
-    static Phase phaseFor(const Inputs &inputs, const Witness &witness)
-    {
-	/* Interaction is the only phase which may interrupt every other phase.
-	 * Minimum coverage precedes compaction and richer refinement. */
-	if (inputs.interactive || inputs.gestureActive)
-	    return Phase::INTERACTIVE;
-	if (inputs.coverageActive || !inputs.coverageComplete)
-	    return inputs.generationActive ? Phase::COVERAGE :
-		Phase::FALLBACK;
-	if (inputs.compacting || inputs.resourceRecoveryPending)
-	    return Phase::COMPACTING;
-	if (inputs.settlingWork || witness.pendingCount != 0)
-	    return Phase::SETTLING;
-	return Phase::STABLE;
-    }
-
-    static Inputs canonicalInputs(Event event, const Inputs &observed,
-	const Witness &witness)
-    {
-	Inputs state = observed;
-	/* These named lifecycle edges are commands, not advisory labels. */
-	if (event == Event::INTERACTION_STARTED) {
-	    state.gestureActive = true;
-	    state.interactive = true;
-	} else if (event == Event::INTERACTION_ENDED) {
-	    state.gestureActive = false;
-	}
-	else if (event == Event::GENERATION_CANCELLED)
-	    state.generationActive = false;
-
-	/* Coverage is a safety prerequisite for memory compaction. */
-	if (!state.coverageComplete)
-	    state.compacting = false;
-	if (!state.cpuMemoryPressure && !state.gpuMemoryPressure)
-	    state.resourceRecoveryPending = false;
-	/* A retained progress witness is sufficient proof that the view is not
-	 * stable, even if a caller omitted its redundant settling latch. */
-	if (witness.pendingCount != 0)
-	    state.settlingWork = true;
-	return state;
-    }
-
-    static Witness canonicalWitness(const Witness &observed)
-    {
-	Witness state = observed;
-	if (state.completedCount > state.visibleCount)
-	    state.completedCount = state.visibleCount;
-	return state;
-    }
-
-    static uint32_t validate(Event event, const Inputs &inputs,
-	const Witness &witness)
-    {
-	uint32_t violations = INVARIANT_NONE;
-	if (witness.completedCount > witness.visibleCount)
-	    violations |= INVARIANT_COMPLETED_EXCEEDS_VISIBLE;
-
-	if (inputs.compacting && !inputs.coverageComplete)
-	    violations |= INVARIANT_COMPACTION_WITHOUT_COVERAGE;
-	const Phase target = phaseFor(inputs, witness);
-	if (target == Phase::STABLE && !inputs.coverageComplete)
-	    violations |= INVARIANT_STABLE_WITHOUT_COVERAGE;
-	if (!inputs.interactive && !inputs.gestureActive && !inputs.compacting &&
-	    inputs.coverageComplete && !inputs.coverageActive &&
-	    !inputs.settlingWork && witness.pendingCount != 0)
-	    violations |= INVARIANT_STABLE_WITH_PENDING_WORK;
-	if (event == Event::INTERACTION_STARTED &&
-	    (!inputs.interactive || !inputs.gestureActive))
-	    violations |= INVARIANT_INTERACTION_EVENT_WITHOUT_INTERACTION;
-	if (event == Event::INTERACTION_ENDED && inputs.gestureActive)
-	    violations |= INVARIANT_INTERACTION_END_WITH_GESTURE;
-	if (event == Event::GENERATION_CANCELLED && inputs.generationActive)
-	    violations |= INVARIANT_CANCEL_EVENT_WITH_GENERATION;
-	if (inputs.resourceRecoveryPending &&
-	    !inputs.cpuMemoryPressure && !inputs.gpuMemoryPressure)
-	    violations |= INVARIANT_RESOURCE_RECOVERY_WITHOUT_PRESSURE;
-	return violations;
-    }
-
-    static bool sameProgress(const Witness &lhs, const Witness &rhs)
-    {
-	return lhs.viewEpoch == rhs.viewEpoch &&
-	    lhs.policyEpoch == rhs.policyEpoch &&
-	    lhs.renderSerial == rhs.renderSerial &&
-	    lhs.activeGeneration == rhs.activeGeneration &&
-	    lhs.residentDemandRevision == rhs.residentDemandRevision &&
-	    lhs.resourcePressureRevision == rhs.resourcePressureRevision &&
-	    lhs.visibleCount == rhs.visibleCount &&
-	    lhs.completedCount == rhs.completedCount &&
-	    lhs.pendingCount == rhs.pendingCount;
-    }
-
-    static bool sameInputs(const Inputs &lhs, const Inputs &rhs)
-    {
-	return lhs.interactive == rhs.interactive &&
-	    lhs.compacting == rhs.compacting &&
-	    lhs.coverageActive == rhs.coverageActive &&
-	    lhs.coverageComplete == rhs.coverageComplete &&
-	    lhs.generationActive == rhs.generationActive &&
-	    lhs.settlingWork == rhs.settlingWork &&
-	    lhs.gestureActive == rhs.gestureActive &&
-	    lhs.cpuMemoryPressure == rhs.cpuMemoryPressure &&
-	    lhs.gpuMemoryPressure == rhs.gpuMemoryPressure &&
-	    lhs.resourceRecoveryPending == rhs.resourceRecoveryPending;
-    }
-
-    bool transitionTo(Phase nextPhase, const Witness &nextWitness)
-    {
-	const size_t index = static_cast<size_t>(nextPhase);
-	if (index >= this->witnesses.size())
-	    return false;
-	bool progressed = false;
-
-	if (this->phase != nextPhase) {
-	    this->phase = nextPhase;
-	    this->transitionSerial++;
-	    if (this->transitionSerial == 0)
-		this->transitionSerial++;
-	    progressed = true;
-	}
-
-	Witness &recorded = this->witnesses[index];
-	if (!recorded.sequence ||
-	    !BObolLodStateMachine::sameProgress(recorded, nextWitness)) {
-	    recorded = nextWitness;
-	    this->progressSerial++;
-	    if (this->progressSerial == 0)
-		this->progressSerial++;
-	    recorded.sequence = this->progressSerial;
-	    progressed = true;
-	}
-	return progressed;
-    }
-
-    Phase phase = Phase::FALLBACK;
-    Event lastEvent = Event::INITIALIZE;
-    Inputs observedInputsValue {};
-    Inputs stateInputsValue {};
-    Witness observedWitnessValue {};
-    uint64_t transitionSerial = 0;
-    uint64_t progressSerial = 0;
-    uint64_t dispatchCount = 0;
-    uint64_t violationCount = 0;
-    uint64_t stagnantCount = 0;
-    uint32_t invariantMask = INVARIANT_NONE;
-    uint32_t violationHistoryMask = INVARIANT_NONE;
-    std::array<Witness, static_cast<size_t>(Phase::COUNT)> witnesses {};
 };
 
 #endif /* LIBBOBOL_LOD_COORDINATOR_PRIVATE_H */

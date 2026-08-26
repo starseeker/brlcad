@@ -9,10 +9,15 @@
 #define LIBBOBOL_VIEW_LOD_COORDINATOR_STATE_PRIVATE_H
 
 #include "BObol/BPickDetail.h"
+#include "BObol/BLodService.h"
 #include "BObol/BViewController.h"
+#include "lod_control_private.h"
 #include "lod_coordinator_private.h"
 #include "retained_allocation_private.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -24,7 +29,365 @@
  * the exact field layout and algorithms formerly embedded in Impl; it adds
  * no allocation, virtual dispatch, or per-occurrence indirection.
  */
-struct BObolLodCoordinator : BObolLodStateMachine {
+struct BObolLodCoordinator {
+    uint64_t residentMeshConsumerId(void) const
+    {
+	return static_cast<uint64_t>(
+	    reinterpret_cast<uintptr_t>(this));
+    }
+
+    void invalidateResidentMeshCompactionSnapshot(void)
+    {
+	if (this->lodService)
+	    this->lodService->invalidateResidentMeshConsumer(
+		this->residentMeshConsumerId());
+    }
+
+    BObolLodAdmissionRevisionStamp admissionRevisionStamp(void) const
+    {
+	BObolLodAdmissionRevisionStamp stamp;
+	stamp.inventory = this->lodAdmissionInventoryRevision;
+	stamp.availability = this->lodAdmissionAvailabilityRevision;
+	stamp.view = this->lodViewRevision;
+	stamp.policy = this->lodPolicyRevision;
+	stamp.capacity = this->lodAdmissionCapacityRevision;
+	return stamp;
+    }
+
+    bool retainedAllocationCertificateCurrent(
+	const BObolViewLodState *state) const
+    {
+	const BObolRetainedAllocationResult &allocation =
+	    this->lodRetainedAllocationCertificate;
+	return state && allocation.allocationPlanSerial != 0 &&
+	    allocation.allocationPlanSerial ==
+		state->activeCadAllocationPlan() &&
+	    allocation.viewRevision == this->lodViewRevision.value() &&
+	    allocation.policyRevision == this->lodPolicyRevision.value() &&
+	    std::isfinite(allocation.pointProxyPixelThreshold) &&
+	    std::fabs(allocation.pointProxyPixelThreshold -
+		this->lodPresentationPointProxyPixelThreshold) <= 1.0e-6f &&
+	    state->cadAllocationPlanCoversCurrentPopulation(
+		allocation.allocationPlanSerial, allocation.viewRevision,
+		allocation.policyRevision,
+		allocation.fixedCadPresentationCost);
+    }
+
+    bool retainedAllocationPresentationRealized(
+	const BObolViewLodState *state) const
+    {
+	if (!this->retainedAllocationCertificateCurrent(state))
+	    return false;
+	const BObolRetainedAllocationResult &allocation =
+	    this->lodRetainedAllocationCertificate;
+	return allocation.selectedPresentationCost > 0 &&
+	    state->activeRenderCost() == allocation.selectedPresentationCost;
+    }
+
+    void advanceAdmissionRevision(BObolLodAdmissionRevisionDomain domain)
+    {
+	/* A semantic input edge may retarget resident cuts without provider I/O.
+	 * Cancel old quiet-memory work before exposing that new demand; compaction
+	 * is subordinate to the admission plan, never another presentation owner. */
+	this->invalidateResidentMeshCompactionSnapshot();
+	const BObolLodAdmissionRevisionStamp next =
+	    BObolLodRevisionContract::advance(
+		this->admissionRevisionStamp(), domain);
+	this->lodAdmissionInventoryRevision = next.inventory;
+	this->lodAdmissionAvailabilityRevision = next.availability;
+	this->lodViewRevision = next.view;
+	this->lodPolicyRevision = next.policy;
+	this->lodAdmissionCapacityRevision = next.capacity;
+	/* No caller may observe or consume progress certified by the preceding
+	 * tuple after this semantic edge. */
+	this->lodAdmissionCursor.reset();
+    }
+
+    void setAdmissionPolicyRevision(uint64_t revision)
+    {
+	if (this->lodPolicyRevision.value() != revision)
+	    this->invalidateResidentMeshCompactionSnapshot();
+	const BObolLodAdmissionRevisionStamp next =
+	    BObolLodRevisionContract::setPolicy(
+		this->admissionRevisionStamp(), revision);
+	this->lodPolicyRevision = next.policy;
+	/* An externally supplied policy epoch has the same invalidation contract
+	 * as an incremented one.  Keeping this reset here prevents public policy
+	 * synchronization from becoming a sixth revision owner. */
+	this->lodAdmissionCursor.reset();
+    }
+
+    bool commitAdmissionPlan(const BObolLodAdmissionPlan &plan)
+    {
+	if (BObolLodRevisionContract::planDisposition(
+		plan.revisionStamp, this->admissionRevisionStamp()) ==
+	    BObolLodRevisionContract::PlanDisposition::STALE)
+	    return false;
+	this->lodAdmissionEvidence = plan.nextEvidence;
+	this->lodAdmissionCursor = plan.nextCursor;
+	return true;
+    }
+
+    void applyAdmissionEvidenceAction(
+	BObolLodAdmissionPlanner::EvidenceAction action)
+    {
+	this->commitAdmissionPlan(BObolLodAdmissionPlanner::applyEvidenceAction(
+	    this->lodAdmissionEvidence, this->lodAdmissionCursor, action));
+    }
+
+    void requestCapacityRescan(void)
+    {
+	this->commitAdmissionPlan(BObolLodAdmissionPlanner::requestCapacityRescan(
+	    this->lodAdmissionEvidence, this->lodAdmissionCursor));
+    }
+
+    void requestRetainedRecovery(size_t budget)
+    {
+	this->commitAdmissionPlan(BObolLodAdmissionPlanner::requestRetainedRecovery(
+	    this->lodAdmissionEvidence, this->lodAdmissionCursor, budget));
+    }
+
+    void requestRetainedNormalization(size_t budget)
+    {
+	this->commitAdmissionPlan(
+	    BObolLodAdmissionPlanner::requestRetainedNormalization(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor, budget));
+    }
+
+    void requestRetainedReallocation(bool preserveCurrentBudget = true)
+    {
+	this->commitAdmissionPlan(
+	    BObolLodAdmissionPlanner::requestRetainedReallocation(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor,
+		preserveCurrentBudget));
+    }
+
+    void requestPresentationReconciliation(size_t budget)
+    {
+	this->commitAdmissionPlan(
+	    BObolLodAdmissionPlanner::requestPresentationReconciliation(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor, budget));
+    }
+
+    size_t requestCoverageCompletion(size_t activeCost,
+	size_t certifiedBudget)
+    {
+	const BObolLodAdmissionPlan plan =
+	    BObolLodAdmissionPlanner::requestCoverageCompletion(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor,
+		activeCost, certifiedBudget);
+	this->commitAdmissionPlan(plan);
+	return plan.transitionValue;
+    }
+
+    void recordDeadlineCapacityMiss(size_t attemptedBudget,
+	bool staticDeadline = false)
+    {
+	this->commitAdmissionPlan(
+	    BObolLodAdmissionPlanner::recordDeadlineCapacityMiss(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor,
+		attemptedBudget, staticDeadline));
+    }
+
+    void setRetainedQualityFloor(size_t budget,
+	uint64_t populationSignature, size_t activeCost,
+	size_t minimumActiveCost)
+    {
+	this->commitAdmissionPlan(
+	    BObolLodAdmissionPlanner::setRetainedQualityFloor(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor, budget,
+		populationSignature, activeCost, minimumActiveCost));
+    }
+
+    bool recordRetainedQualityFloorMiss(void)
+    {
+	const BObolLodAdmissionPlan plan =
+	    BObolLodAdmissionPlanner::recordRetainedQualityFloorMiss(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor);
+	this->commitAdmissionPlan(plan);
+	return plan.transitionChanged;
+    }
+
+    bool rejectRetainedQualityFloor(void)
+    {
+	const BObolLodAdmissionPlan plan =
+	    BObolLodAdmissionPlanner::rejectRetainedQualityFloor(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor);
+	this->commitAdmissionPlan(plan);
+	return plan.transitionChanged;
+    }
+
+    void recordRetainedQualityFloorMet(bool exactProtectedPopulation,
+	uint64_t populationSignature, size_t presentedCost)
+    {
+	this->commitAdmissionPlan(
+	    BObolLodAdmissionPlanner::recordRetainedQualityFloorMet(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor,
+		exactProtectedPopulation, populationSignature, presentedCost));
+    }
+
+    bool confirmRetainedRecoveryPresentation(bool onePixelReady)
+    {
+	const BObolLodAdmissionPlan plan =
+	    BObolLodAdmissionPlanner::confirmRetainedRecoveryPresentation(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor,
+		onePixelReady);
+	this->commitAdmissionPlan(plan);
+	return plan.transitionChanged;
+    }
+
+    void raiseCapacityBudget(size_t budget)
+    {
+	this->commitAdmissionPlan(BObolLodAdmissionPlanner::raiseCapacityBudget(
+	    this->lodAdmissionEvidence, this->lodAdmissionCursor, budget));
+    }
+
+    BObolLodCapacityEvidence::CalibrationDecision finishBlockedCapacityPass(
+	const BObolLodCapacityEvidence::CalibrationInputs &inputs)
+    {
+	const BObolLodAdmissionPlan plan =
+	    BObolLodAdmissionPlanner::finishBlockedCapacityPass(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor, inputs);
+	this->commitAdmissionPlan(plan);
+	return plan.calibrationDecision;
+    }
+
+    BObolLodCapacityEvidence::CompletedFrameDecision
+    completeCapacityCalibrationFrame(void)
+    {
+	const BObolLodAdmissionPlan plan =
+	    BObolLodAdmissionPlanner::completeCapacityCalibrationFrame(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor);
+	this->commitAdmissionPlan(plan);
+	return plan.completedFrameDecision;
+    }
+
+    BObolLodCapacityEvidence::CompletedFrameDecision
+    completeCapacitySearchFrame(
+	const BObolLodCapacityEvidence::CompletedFrameInputs &inputs)
+    {
+	const BObolLodAdmissionPlan plan =
+	    BObolLodAdmissionPlanner::completeCapacitySearchFrame(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor, inputs);
+	this->commitAdmissionPlan(plan);
+	return plan.completedFrameDecision;
+    }
+
+    BObolLodCapacityEvidence::CompletedFrameDecision
+    retireUnmeasurableCapacityFrame(void)
+    {
+	const BObolLodAdmissionPlan plan =
+	    BObolLodAdmissionPlanner::retireUnmeasurableCapacityFrame(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor);
+	this->commitAdmissionPlan(plan);
+	return plan.completedFrameDecision;
+    }
+
+    static constexpr uint64_t defaultInteractivePresentationDeadline(void)
+    {
+	return 40000000ULL;
+    }
+
+    static constexpr uint64_t defaultStablePresentationDeadline(void)
+    {
+	return 100000000ULL;
+    }
+
+    static constexpr uint64_t maximumInteractivePresentationDeadline(void)
+    {
+	return 100000000ULL;
+    }
+
+    static constexpr uint64_t maximumStablePresentationDeadline(void)
+    {
+	return 250000000ULL;
+    }
+
+    static constexpr uint64_t defaultProminentQualityDeadline(void)
+    {
+	/* A quiet one-shot frame is cancellable between software submission
+	 * chunks and is retained without redraw.  This allowance lets a prominent
+	 * discrete mesh reach its recognizable neighboring cut without weakening
+	 * the ordinary 250 ms stable-interaction endpoint. */
+	return 400000000ULL;
+    }
+
+    static uint64_t targetPresentationDeadline(float targetFps,
+	uint64_t defaultDeadline, uint64_t maximumDeadline)
+    {
+	if (!std::isfinite(targetFps) || targetFps <= 0.0f)
+	    return defaultDeadline;
+	const long double frameNanoseconds =
+	    1000000000.0L / static_cast<long double>(targetFps);
+	if (!std::isfinite(frameNanoseconds) || frameNanoseconds <= 0.0L)
+	    return defaultDeadline;
+	const uint64_t targetDeadline = frameNanoseconds >=
+		static_cast<long double>(UINT64_MAX) ? UINT64_MAX :
+	    static_cast<uint64_t>(frameNanoseconds);
+	return std::min(maximumDeadline,
+	    std::max(defaultDeadline, targetDeadline));
+    }
+
+    static float boundedPresentationTargetFps(float targetFps,
+	uint64_t maximumDeadline)
+    {
+	if (!maximumDeadline)
+	    return targetFps;
+	const long double minimumFps = 1000000000.0L /
+	    static_cast<long double>(maximumDeadline);
+	return std::max(targetFps, static_cast<float>(minimumFps));
+    }
+
+    uint64_t prominentQualityPresentationDeadline(void) const
+    {
+	return std::max(stablePresentationFrameDeadlineNanoseconds,
+	    prominentQualityFrameDeadlineNanoseconds);
+    }
+
+    float prominentQualityTargetFps(void) const
+    {
+	const uint64_t deadline = prominentQualityPresentationDeadline();
+	if (!deadline)
+	    return lodStableTargetFps;
+	const long double deadlineFps = 1000000000.0L /
+	    static_cast<long double>(deadline);
+	if (!std::isfinite(deadlineFps) || deadlineFps <= 0.0L)
+	    return lodStableTargetFps;
+	const float bounded = static_cast<float>(deadlineFps);
+	return lodStableTargetFps > 0.0f ?
+	    std::min(lodStableTargetFps, bounded) : bounded;
+    }
+
+    uint64_t staticQualityPresentationDeadline(void) const
+    {
+	/* Static overscan is the one-shot proof for quality which exceeds the
+	 * ordinary refinement cadence.  Requiring the allocator's all-or-nothing
+	 * prominent floor to be active here is circular for a discrete mesh: the
+	 * floor cannot become active until its complete cut already fits the very
+	 * trial this deadline enables.  Give the whole bounded static phase the
+	 * longer allowance while the preceding framebuffer remains available.
+	 * A rejected rich cut retains this allowance after its bounded handoff:
+	 * REJECTED is the terminal certificate that the occurrence-local
+	 * population is the richest one proven under this event-driven deadline.
+	 * Returning that same population to the ordinary quiet deadline immediately
+	 * reopens deadline recovery and makes convergence depend on timing jitter.
+	 * A view, policy, renderer, or resource epoch explicitly invalidates the
+	 * certificate and restores the ordinary cadence. */
+	const BObolLodCapacitySearchCertificate &capacitySearch =
+	    lodAdmissionEvidence.capacity().capacitySearch();
+	const bool capacitySearchUsesStaticDeadline =
+	    capacitySearch.phase() !=
+		BObolLodCapacitySearchCertificate::Phase::INACTIVE &&
+	    capacitySearch.goal() ==
+		BObolLodCapacitySearchCertificate::Goal::STATIC &&
+	    capacitySearch.activeTargetNanoseconds() >
+		capacitySearch.key().preferredTargetNanoseconds;
+	if (lodStaticQualityTrial.usesStaticDeadline() ||
+	    capacitySearchUsesStaticDeadline)
+	    return prominentQualityPresentationDeadline();
+	return stablePresentationFrameDeadlineNanoseconds;
+    }
+
     void resetDeadlineSafePresentation(void)
     {
 	lodDeadlineSafeProgressiveCeiling = -1;
@@ -75,8 +438,7 @@ struct BObolLodCoordinator : BObolLodStateMachine {
 	lodLastCadGpuGeometryUploadBytesValid = FALSE;
 	lodLastRenderWasPreparedCadReplay = TRUE;
 	lodLastRenderWasReusableCadPresentation = TRUE;
-	lodStableBudgetBeforeInteraction = 0;
-	lodStableBudgetBeforeInteractionValid = FALSE;
+	lodInteractionStartCertificate.reset();
 	lodPassAdmittedWork = FALSE;
 
 	/* Capacity ceilings, overload witnesses, and handoff proofs were all
@@ -85,24 +447,26 @@ struct BObolLodCoordinator : BObolLodStateMachine {
 	 * cut for the first frame.  Their explicit recovery latches will relax
 	 * those controls using measurements from the new renderer without
 	 * exposing a potentially enormous retained suffix speculatively. */
-	lodBudgetPolicy.reset();
-	lodBudgetPolicy.requestRescanAfterFrame(true);
-	lodHeadroomPolicy.cancelRetry();
+	this->applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::RESET_CAPACITY);
+	this->commitAdmissionPlan(BObolLodAdmissionPlanner::requestCapacityRescan(
+	    this->lodAdmissionEvidence, this->lodAdmissionCursor));
+	this->applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::CANCEL_HEADROOM_RETRY);
 	lodPresentationPolicy.reset();
-	lodPointProxyCalibrationPolicy.reset();
-	lodStructuralAdmissionPolicy.reset();
-	lodStablePointProxyCalibrationPending =
-	    lodPresentationPointProxyPixelThreshold > 1.01f ? TRUE : FALSE;
-	lodPointProxyTriangleRecoveryPending = FALSE;
-	lodStaticOverscanActive =
-	    lodInteractiveProgressiveCeiling >= 0 ? TRUE : FALSE;
-	lodStaticOverscanLeapAvailable = FALSE;
-	lodStaticOverscanRejected = FALSE;
+	this->applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::RESET_POINT_PROXY);
+	this->applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::RESET_STRUCTURAL_ADMISSION);
+	lodPointQualityPhase.reset();
+	if (lodPresentationPointProxyPixelThreshold > 1.01f)
+	    lodPointQualityPhase.requestCalibration();
+	lodStaticQualityTrial.restoreRendererCeiling(
+	    lodInteractiveProgressiveCeiling >= 0);
 	lodDiscretePopulationTrialAvailable = FALSE;
 	lodInteractiveCeilingFeedbackRenderSerial = 0;
-	lodFrameObligation.reset();
+	lodPresentationTransaction.reset();
 	lodRefinementNotBeforeMicroseconds = 0;
-	lodPublicationPolicy.reset();
 
 	/* Delivery-rate telemetry is also renderer-specific.  It is protected
 	 * independently because hosts may sample it while an endpoint property
@@ -124,12 +488,19 @@ struct BObolLodCoordinator : BObolLodStateMachine {
 	 * frame, an event-driven view may spend up to the separate hard static
 	 * presentation deadline on a richer framebuffer which is then retained
 	 * without redraw. */
-	if (!lodStaticOverscanActive ||
-	    !stablePresentationFrameDeadlineNanoseconds)
+	const uint64_t deadline = staticQualityPresentationDeadline();
+	const BObolLodCapacitySearchCertificate &capacitySearch =
+	    lodAdmissionEvidence.capacity().capacitySearch();
+	const bool capacitySearchUsesStaticDeadline =
+	    capacitySearch.phase() !=
+		BObolLodCapacitySearchCertificate::Phase::INACTIVE &&
+	    capacitySearch.goal() ==
+		BObolLodCapacitySearchCertificate::Goal::STATIC;
+	if ((!lodStaticQualityTrial.usesStaticDeadline() &&
+	     !capacitySearchUsesStaticDeadline) || !deadline)
 	    return lodStableTargetFps;
 	const long double deadlineFps = 1000000000.0L /
-	    static_cast<long double>(
-		stablePresentationFrameDeadlineNanoseconds);
+	    static_cast<long double>(deadline);
 	if (!std::isfinite(deadlineFps) || deadlineFps <= 0.0L)
 	    return lodStableTargetFps;
 	const float bounded = static_cast<float>(deadlineFps);
@@ -145,62 +516,16 @@ struct BObolLodCoordinator : BObolLodStateMachine {
 	 * so requiring every such terminal quality step to meet the ordinary 20 Hz
 	 * refinement cadence makes warm-cache convergence depend on one upload or
 	 * command-preparation sample. */
-	if (!stablePresentationFrameDeadlineNanoseconds)
+	const uint64_t deadline = staticQualityPresentationDeadline();
+	if (!deadline)
 	    return lodStableTargetFps;
 	const long double deadlineFps = 1000000000.0L /
-	    static_cast<long double>(
-		stablePresentationFrameDeadlineNanoseconds);
+	    static_cast<long double>(deadline);
 	if (!std::isfinite(deadlineFps) || deadlineFps <= 0.0L)
 	    return lodStableTargetFps;
 	const float bounded = static_cast<float>(deadlineFps);
 	return lodStableTargetFps > 0.0f ?
 	    std::min(lodStableTargetFps, bounded) : bounded;
-    }
-
-    void reconcilePhase(Event event, size_t pendingCount = 0)
-    {
-	Inputs inputs;
-	inputs.interactive = lodInteractive;
-	inputs.gestureActive = lodGestureActive;
-	/* Coverage is a prerequisite only while automatic mesh LoD is an
-	 * active consumer.  A disabled/removed service has no mesh inventory to
-	 * prove, and a planning cursor from the preceding source epoch must not
-	 * be projected as concurrently compacting an invalidated inventory. */
-	inputs.coverageComplete = lodCoveragePolicy.effectiveComplete();
-	inputs.coverageActive = lodCoveragePolicy.effectiveActive();
-	inputs.compacting = lodCompactionPolicy.planning() &&
-	    lodCoveragePolicy.compactionAllowed();
-	inputs.cpuMemoryPressure = lodResourcePolicy.cpuPressure();
-	inputs.gpuMemoryPressure = lodResourcePolicy.gpuPressure();
-	inputs.resourceRecoveryPending =
-	    lodResourcePolicy.recoveryPending();
-	inputs.generationActive = lodActiveGeneration != 0;
-	inputs.settlingWork =
-	    lodSubmissionPending || lodSubmissionRescanPending ||
-	    lodRetainedRefinementPending ||
-	    lodRetainedResidencyPending ||
-	    lodBudgetPolicy.rescanAfterFrame() ||
-	    lodPresentationPolicy.handoffPending() ||
-	    lodFrameObligation.pending() ||
-	    lodPublicationPolicy.pending() || pendingCount != 0 ||
-	    lodBudgetPolicy.calibrationFramesRemaining() != 0 ||
-	    lodAdmissionPointProxyFramePending ||
-	    lodStablePointProxyCalibrationPending ||
-	    lodPointProxyTriangleRecoveryPending ||
-	    lodHeadroomPolicy.retryPending();
-
-	Witness witness;
-	witness.viewEpoch = lodViewRevision.value();
-	witness.policyEpoch = lodPolicyRevision.value();
-	witness.renderSerial = renderCompletionSerial;
-	witness.activeGeneration = lodActiveGeneration;
-	witness.residentDemandRevision =
-	    lodCompactionPolicy.demandRevision();
-	witness.resourcePressureRevision = lodResourcePolicy.revision();
-	witness.visibleCount = lodCoveragePolicy.visibleCount();
-	witness.completedCount = lodCoveragePolicy.coveredCount();
-	witness.pendingCount = pendingCount;
-	(void)this->dispatch(event, inputs, witness);
     }
 
     uint64_t lastRenderTimeNanoseconds = 0;
@@ -221,8 +546,12 @@ struct BObolLodCoordinator : BObolLodStateMachine {
     uint64_t lastProgressiveProviderTimeNanoseconds = 0;
     uint64_t lastLodSubmissionTimeNanoseconds = 0;
     uint64_t lastPresentationSyncTimeNanoseconds = 0;
-    uint64_t interactivePresentationFrameDeadlineNanoseconds = 40000000ULL;
-    uint64_t stablePresentationFrameDeadlineNanoseconds = 100000000ULL;
+    uint64_t interactivePresentationFrameDeadlineNanoseconds =
+	defaultInteractivePresentationDeadline();
+    uint64_t stablePresentationFrameDeadlineNanoseconds =
+	defaultStablePresentationDeadline();
+    uint64_t prominentQualityFrameDeadlineNanoseconds =
+	defaultProminentQualityDeadline();
     uint64_t interruptedPresentationFrameCount = 0;
     uint64_t consecutiveInterruptedPresentationFrames = 0;
     uint64_t lastInterruptedPresentationTimeNanoseconds = 0;
@@ -245,18 +574,12 @@ struct BObolLodCoordinator : BObolLodStateMachine {
     /* Number of registered non-LoD geometry producers which reported work
      * remaining in the most recent complete provider pass.  Registration is
      * conservatively pending until the first pass proves otherwise. */
-    size_t progressiveProviderPendingCount = 0;
+    BObolLodAvailabilityLedger lodAvailabilityLedger;
     BObolProgressiveOptions defaultProgressiveOptions;
     BObolLodService *lodService = NULL;
     std::shared_ptr<BObolLodService> managedLodService;
     size_t managedLodWorkerCount = 0;
     uint64_t lodResultSubscriberId = 0;
-    std::atomic<int> lodResultsPending {0};
-    /* Timestamp the empty->non-empty worker-result edge.  Bulk warm-cache
-     * streams use it to coalesce tiny timer-tick dribbles into bounded-latency
-     * scene updates. */
-    std::atomic<int64_t> lodResultsFirstReadyMicroseconds {0};
-    BObolLodInventoryDeltaPolicy lodInventoryDeltaPolicy;
     SbBool lodAutoSubmit = FALSE;
     uint64_t lodActiveGeneration = 0;
     size_t lodSubmissionSourceIndex = 0;
@@ -305,6 +628,12 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * entry indices are dense and source-stable, so a 150k-occurrence source
      * costs only 150 kB and an exact edit delta updates it in constant time. */
     BObolLodVisibilityCensus lodConvergenceCandidateCensus;
+    /* Pose-only motion may reuse the retained assembly without projecting the
+     * complete source population.  Keep that missing-proof obligation across
+     * progressive pump calls; a function-local flag lets a later empty pump
+     * publish the preceding pose's visibility count as if it described the
+     * new camera. */
+    SbBool lodPoseVisibilityCensusDeferred = FALSE;
     size_t lodSourceLogicalOccurrenceCount = 0;
     /* Camera/geometric projection evidence is denser than the visibility
      * census but still bounded (roughly a few dozen bytes per occurrence).
@@ -332,6 +661,7 @@ struct BObolLodCoordinator : BObolLodStateMachine {
     void clearLodConvergenceCandidates(void)
     {
 	lodConvergenceCandidateCensus.clear();
+	lodPoseVisibilityCensusDeferred = FALSE;
 	lodCoveragePolicy.clearCompleteVisibleCount();
     }
     void resetLodConvergenceFraction(void)
@@ -389,15 +719,17 @@ struct BObolLodCoordinator : BObolLodStateMachine {
 	    publishExactLodConvergenceCandidateCount();
     }
     void completeLodConvergenceCandidateCensus(
-	SoBRLDatabaseSource *source, size_t observedVisibleCount)
+	SoBRLDatabaseSource *source)
     {
 	if (!source)
 	    return;
-	/* The action's accumulated count is the coverage-pass authority.  The
-	 * byte census records the same projection at entry granularity so later
-	 * exact deltas can revise that total without a full traversal. */
-	lodConvergenceCandidateCensus.complete(
-	    lodConvergenceSourceKey(source), observedVisibleCount);
+	/* The dense entry bits are the authority.  A provider result can restart a
+	 * bounded source cursor while retaining the coverage transaction; an
+	 * action-level accumulated scalar can therefore count a replayed prefix
+	 * twice.  Entry observations are idempotent and remain exact across that
+	 * restart, as required by later O(delta) visibility edits. */
+	lodConvergenceCandidateCensus.finish(
+	    lodConvergenceSourceKey(source));
 	publishExactLodConvergenceCandidateCount();
     }
     size_t lodConvergenceCandidateCount(void) const
@@ -430,16 +762,38 @@ struct BObolLodCoordinator : BObolLodStateMachine {
 	 * does not collapse its one visible feature. */
 	if (lodSourceLogicalOccurrenceCount == 1)
 	    return false;
-	return BObolLodPointProxyCalibrationPolicy::applicable(
+	return BObolLodAdmissionPlanner::pointAggregationApplicable(
 	    lodConvergenceCandidateCount());
+    }
+    bool retainedPointProxyAggregationApplicable(void) const
+    {
+	/* Stable/deadline pressure may only tune a representation which the
+	 * current occurrence allocator can actually produce.  Logical occurrence
+	 * count alone is sufficient during structural discovery, but it falsely
+	 * classified a handful of large, internally chunked meshes as a subpixel
+	 * population and repeatedly raised an inert threshold. */
+	return BObolLodAdmissionPlanner::retainedPointAggregationApplicable(
+	    pointProxyAggregationApplicable(),
+	    lodRetainedAllocationCertificate.pointProxyCandidateCount);
     }
     void observeLodSourceLogicalOccurrenceCount(size_t count)
     {
 	if (count > 0)
 	    lodSourceLogicalOccurrenceCount = count;
     }
-    SbBool lodSubmissionPending = FALSE;
-    SbBool lodSubmissionRescanPending = FALSE;
+    bool structuralPointAggregationRequired(
+	size_t affordableOccurrenceCount) const
+    {
+	return BObolLodAdmissionPlanner::structuralPointAggregationRequired(
+	    lodSourceLogicalOccurrenceCount, affordableOccurrenceCount);
+    }
+    bool structuralPointAggregationRequiredForBudget(size_t sceneBudget) const
+    {
+	return structuralPointAggregationRequired(
+	    BObolLodAdmissionPlanner::structuralFirstWaveOccurrenceLimit(
+		sceneBudget));
+    }
+    BObolLodSubmissionPass lodSubmissionPass;
     SbBool lodRetainedRefinementPending = FALSE;
     /* A retained minimax pass selected a level whose PoP suffix is not yet
      * resident.  This is provider work, not a performance-limited quality
@@ -450,8 +804,8 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * must bypass that prediction and obtain their mesh presentations. */
     SbBool lodStructuralPresentationRepairPending = FALSE;
     /* Exact non-terminal box population owned by the current closed repair
-     * transaction.  The per-occurrence share is derived only after beginPass
-     * freezes the active-cost baseline which will actually consume it. */
+     * transaction.  The per-occurrence share is derived only after the
+     * admission plan freezes the active-cost baseline which will consume it. */
     size_t lodStructuralRepairFrontierCount = 0;
     size_t lodStructuralCoverageCostReservation = 0;
     /* Accumulated across every bounded window of one scene pass.  Unlike the
@@ -509,11 +863,7 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * epoch.  A bracketed pose gesture may begin before an unbracketed wheel
      * epoch's debounce expires; in that case these values deliberately keep
      * describing the original stable view. */
-    BObolLodViewScaleSnapshot lodInteractionStartScaleSignature;
-    SbBool lodInteractionStartScaleSignatureValid = FALSE;
-    SbBool lodInteractionStartedFromReadyView = FALSE;
-    size_t lodStableBudgetBeforeInteraction = 0;
-    SbBool lodStableBudgetBeforeInteractionValid = FALSE;
+    BObolLodInteractionStartCertificate lodInteractionStartCertificate;
     /* A completed, fully covered orthographic pose may verify visibility,
      * selection, and resource pressure, but may not rewrite retained PoP
      * cuts merely because the interaction debounce ended. */
@@ -524,14 +874,6 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * prevents stale previous-view metrics and makes the redistribution
      * explicitly one-shot. */
     SbBool lodRetainedImportanceCensusPending = FALSE;
-    /* Worker completions extend immutable residency, but active occurrence
-     * cuts remain an aggregate scene-budget decision.  Coalesce a whole
-     * completion wave before invoking that allocator. */
-    BObolLodResidentGrowthPolicy lodResidentGrowthPolicy;
-    /* While the resident-growth policy drains further cache/provider work,
-     * source actions may request immutable suffixes but must not rewrite the
-     * visible occurrence allocation. */
-    SbBool lodResidentGrowthResidencyDrainActive = FALSE;
     /* A resident-capacity revision reopens only occurrences whose provider
      * was denied by an older admission epoch.  Keep this distinct from the
      * ordinary unsatisfied-quality frontier: reclaimed bytes must not restart
@@ -545,21 +887,7 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * scene.  Individual submit actions are time-sliced and source-local, so
      * uniqueness must live here. */
     SbBool lodDiscretePopulationTrialAvailable = FALSE;
-    int64_t lodLastViewChangeMicroseconds = 0;
-    SbBool lodInteractive = FALSE;
-    SbBool lodGestureActive = FALSE;
-    /* A scale gesture whose camera has paused is still interactive, but it
-     * should not remain a magnified copy of the motion cut until button-up.
-     * One stable-budget quality probe may expose already resident detail;
-     * the next camera event immediately returns to motion calibration. */
-    /* A scale-changing frame may be followed by one bounded quality frame.
-     * This is distinct from quiet/stable refinement: continuous wheel or
-     * trackpad input must be able to expose a newly resident PoP suffix
-     * without first ending the interaction. */
-    /* Keep the complete held-button presentation through button-release
-     * debounce.  This preserves the measured aggregate presentation, not the
-     * richer retained per-occurrence cuts which may be hidden by the
-     * renderer-wide motion ceiling. */
+    BObolLodInteractionSession lodInteractionSession;
     SbBool lodReleaseCutFloorActive = FALSE;
     /* Renderer-only presentation continuity and motion-to-stable handoff.
      * The policy owns its snapshot/latch proof; this coordinator only applies
@@ -571,38 +899,31 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * from accepting evidence belonging to a different scene. */
     BObolLodViewQualityHistory lodViewQualityHistory;
     uint64_t lodViewQualityDomainRevision = 1;
-    uint64_t lodSettleAfterRenderSerial = 0;
     BObolLodCompactionPolicy lodCompactionPolicy;
     /* Complete-frame resource pressure is retained independently of HUD
      * queries.  A pressure edge requests one safe compaction pass; if the
      * current visible working set itself exceeds a renderer limit, that pass
      * may finish in a stable memory-limited presentation rather than loop. */
-    BObolLodResourcePolicy lodResourcePolicy;
+    BObolLodAdmissionEvidence lodAdmissionEvidence;
+    BObolLodAdmissionCursor lodAdmissionCursor;
+    BObolLodInventoryEpoch lodAdmissionInventoryRevision {1};
+    BObolLodAvailabilityEpoch lodAdmissionAvailabilityRevision {1};
+    BObolLodCapacityEpoch lodAdmissionCapacityRevision {1};
     uint64_t lodResidentAdmissionRevision = 0;
-    BObolLodFrameObligation lodFrameObligation;
-    /* A result-publication frame may include one-time CPU/GPU buffer
-     * construction.  It controls refinement pacing, but must not teach the
-     * steady-state face-capacity estimator that every later frame costs the
-     * same amount. */
-    BObolLodPublicationPolicy lodPublicationPolicy;
+    /* Applied results and their frame acknowledgement are one revision-bound
+     * transaction.  A publication frame may include one-time CPU/GPU buffer
+     * construction, so it controls refinement pacing without teaching the
+     * steady-state capacity estimator that later frames cost the same. */
+    BObolLodPresentationTransaction lodPresentationTransaction;
     int64_t lodRefinementNotBeforeMicroseconds = 0;
     float lodTargetPixelError = 1.0f;
     float lodInteractiveTargetFps = 60.0f;
     float lodStableTargetFps = 20.0f;
-    /* A terminal ordinary quiet frame may prove capacity for one or more
-     * bounded static-image overscan allocations.  This never changes motion
-     * calibration and is reset by every camera, policy, service, or input
-     * epoch. */
-    SbBool lodStaticOverscanActive = FALSE;
-    /* A single-occurrence static handoff may combine its first two modest PoP
-     * populations into one presentation.  Every later probe is one cut. */
-    SbBool lodStaticOverscanLeapAvailable = FALSE;
-    /* A hard static-frame miss is a capacity witness for the current view.
-     * Preserve it across internal presentation/policy bookkeeping so an
-     * ordinary repaint cannot reopen the same rejected quality staircase.
-     * Genuine camera, user-policy, service, and cadence epochs clear it. */
-    SbBool lodStaticOverscanRejected = FALSE;
-    BObolLodBudgetPolicy lodBudgetPolicy;
+    /* Event-driven static quality and its terminal capacity witness share one
+     * explicit lifecycle.  Internal policy bookkeeping may deactivate a
+     * trial while preserving its constraint; genuine camera, service, user
+     * policy, and cadence epochs reset the complete value. */
+    BObolLodStaticQualityTrial lodStaticQualityTrial;
     long double lodInteractiveCalibratedRenderCostPerSecond = 0.0L;
     long double lodStableCalibratedRenderCostPerSecond = 0.0L;
     void seedInteractiveCalibrationFromStable(void)
@@ -624,7 +945,6 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * bounded probe series has ended.  Remember the exact camera/policy and
      * budget already retried so each newly enlarged allowance gets one
      * admission pass without permitting an unchanged discrete-cut loop. */
-    BObolLodHeadroomPolicy lodHeadroomPolicy;
     int lodInteractiveProgressiveCeiling = -1;
     /* Richest renderer-only ceiling which completed inside the hard deadline
      * for the current camera and source-quality domain.  An interaction and
@@ -643,15 +963,12 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * exceeds the calibrated scene budget.
      */
     float lodPresentationPointProxyPixelThreshold = 1.0f;
-    BObolLodPointProxyCalibrationPolicy lodPointProxyCalibrationPolicy;
-    BObolLodStructuralAdmissionPolicy lodStructuralAdmissionPolicy;
     /* Streaming discovery may temporarily aggregate tiny structural leaf
      * proxies more aggressively than the measured stable-view policy.  It is
      * renderer-only and is retired as soon as the producer inventory settles;
      * keeping a separate value prevents discovery pacing from contaminating
      * the terminal point-calibration bracket. */
     float lodDiscoveryPointProxyPixelThreshold = 1.0f;
-    BObolLodPointProxyCalibrationPolicy lodDiscoveryPointProxyPolicy;
     /* A discovery-release or structural-distribution threshold mutation must
      * be presented exactly before mesh admission may consume its classifier.
      * This is intentionally distinct from stable point calibration, which
@@ -663,11 +980,10 @@ struct BObolLodCoordinator : BObolLodStateMachine {
      * before convergence is authoritative.  Keep this distinct from PoP
      * admission: no provider scan or retained-array mutation is required.
      */
-    SbBool lodStablePointProxyCalibrationPending = FALSE;
+    BObolLodPointQualityPhase lodPointQualityPhase;
     /* A temporary multi-pixel point cut may be relaxed only after reducible
      * PoP triangle detail has been compacted to the measured scene capacity.
      * This latch keeps convergence behind that retained-prefix pass. */
-    SbBool lodPointProxyTriangleRecoveryPending = FALSE;
     /* A completed retained-recovery pass owns one authoritative triangle
      * allocation plan.  Point-threshold calibration may change only the
      * renderer-side small-occurrence classification afterward; it must not

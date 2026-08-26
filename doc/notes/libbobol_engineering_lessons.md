@@ -1,6 +1,6 @@
 # libBObol engineering lessons
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-25
 
 This document preserves durable lessons from the Obol drawing migration and
 production shake-down.  It is not a chronological status log.  Each entry
@@ -53,7 +53,125 @@ constructed before those workers start.  Reverse destruction must join workers
 first.  Regress with an active cache callback across return from `main`, and
 test the normal shared-library stack rather than a duplicate static harness.
 
+### External node ABI changes require consumer rebuilds
+
+Replacing `libObol` after adding an `SoCADAssembly` field while retaining old
+BRL-CAD test objects made C++ allocate the old class size and the new
+constructor write past it.  The resulting double-free looked like renderer
+ownership corruption; Valgrind identified the first invalid write as the
+constructor boundary.
+
+Rule: after an external Obol header or public node layout changes, install both
+header and library and rebuild every allocating consumer before interpreting
+runtime failures.  Release qualification starts with a dependency-complete
+build.  A shared-library timestamp update alone is not evidence that Ninja
+rebuilt targets which were not requested.
+
 ## State and liveness
+
+### Workload regimes are data, not control modes
+
+Lucy, multi-Lucy, Hubble, Generic Twin, and 150k repeatedly exposed opposite
+ends of the same scheduling contract.  Fixing one with a workload-shaped latch
+or alternate convergence phase made another oscillate, stall, or discard
+useful detail.  The problem was not the number of profiles; it was allowing
+cardinality and shape to select different control ownership.
+
+Rule: every profile feeds the same inventory, availability, demand, admission,
+and presentation pipeline.  Cardinality, projected importance, reuse, bytes,
+and measured frame cost are numeric inputs.  They may alter an allocation but
+must not introduce another event kind, phase, or completion rule.  The bounded
+pipeline TLA+ model varies workload profiles while preserving one transition
+relation; graphical matrices validate the numeric and visual consequences the
+model intentionally omits.
+
+### Capacity evidence is not a plan cursor
+
+The historical budget object accumulated frame measurements, quality-floor
+proofs, retry latches, requested mode changes, and mutable remaining budgets
+for a resumable scene scan.  Grouping related fields reduced drift, but left
+the controller able to edit the supposed evidence from many unrelated paths.
+
+Rule: completed-frame capacity evidence is immutable planner input.  A plan is
+revision stamped and deterministic.  Its bounded execution cursor owns only
+mechanical progress and remaining allowance; it cannot change policy or
+survive a superseding revision.  Typed presentation outcomes are the only
+normal source of new capacity evidence.  Compile-time encapsulation and
+transition tests must enforce this split rather than relying on naming.
+
+### Inactive inputs are not planner identity
+
+A retained-allocation cache compared a raw maximum protected budget even when
+the corresponding feature was disabled.  Changing that dormant value created
+a different transaction key and permitted a numerically identical plan to run
+again.
+
+Rule: define planner identity once as a canonical semantic key.  Normalize
+guarded-off inputs out of it, and use the same key for cache reuse, in-flight
+matching, and result certificates.  Diagnostic fields and inactive policy
+values are never evidence.
+
+### Finite work can still be starved by repeated policy waves
+
+A 150k occurrence cursor was individually bounded, and traced 2,048-entry
+windows could scan the entire scene in under a second.  The view still took
+tens of seconds because completed frames repeatedly reopened capacity
+calibration and scene-wide reallocation.  Optimizing the cursor would not have
+fixed the controlling cost.
+
+Rule: capacity calibration is a finite search for one frozen population.  Each
+event consumes a bounded sample or strictly narrows a safe/unsafe allocation
+bracket, and terminal evidence cannot reopen without a semantic revision.
+Throughput smoothing proposes candidates; it does not own retry or revision
+edges.  Trace both mechanical progress and the number of policy generations.
+
+### A deadline chooses one successor owner
+
+An interrupted frame could both reset an unfinished population cursor and
+advance capacity recovery.  On very large scenes the finite scan therefore
+restarted indefinitely even though every individual window made progress.
+
+Rule: strict same-transaction progress wins, otherwise a live population
+cursor continues unchanged, and only a quiescent producer may yield to
+capacity recovery.  Encode this as one sum-valued decision and exhaustively
+test its input matrix; do not compose independent retry booleans.
+
+The abstract deadline model already cleared render ownership when population
+won, but the first C++ mapping selected the correct enum without retiring an
+older replay latch.  A full 50k GUI run found the resulting pending-without-
+witness state.  Formal safety of the abstraction is therefore necessary but
+not sufficient: every modeled action needs an executable refinement test which
+asserts all production effects, including retirement of the previous owner.
+
+### Diagnostic phase machines become competing authorities
+
+The coordinator maintained an imperative event-driven phase machine alongside
+the convergence policy which actually derived readiness from work witnesses.
+The machine did not control admission or rendering, but every runtime path had
+to reconcile it and public diagnostics exposed both answers.  Roughly twenty
+notification sites, nine diagnostic fields, and hundreds of lines of tests
+therefore preserved a second answer which could drift without changing the
+frame.
+
+Rule: user-visible phase and outcome are pure projections of the canonical
+inventory, availability, demand, transaction, and work-witness snapshot.
+Diagnostics observe that projection; they never own a phase.  A proposed new
+mutable control object must identify the unique fact it owns and delete any
+predecessor owner in the same change.
+
+### Publication and acknowledgement are one transaction
+
+Applied-result batching and the required-frame barrier previously had separate
+reset, pending, deadline, and completion paths.  A completed CAD frame could
+clear one half independently of the other, making stale revisions and
+pending-without-witness states difficult to exclude.
+
+Rule: one allocation-free, revision-bound presentation transaction owns the
+applied-result batch, deadline/request status, reason set, required render
+serial, and atomic retirement.  A frame from another view or policy revision
+invalidates the transaction instead of acknowledging it.  Unit tests cover
+shared reasons, early and stale frames, serial saturation, unbarriered
+publication, and source-failure liveness.
 
 ### Work levels need progress witnesses
 
@@ -62,9 +180,12 @@ levels.  Clearing an edge without retaining a timer, scheduled owner-thread
 loop, in-flight task, cursor, or frame can strand work.  Treating every repaint
 as work hides this defect and wastes frames.
 
-Rule: every nonterminal state names its progress witness.  A completed frame
-acknowledges only the revision it captured and cannot clear a newer request.
-The focused `ObolHostWork.tla` model and window-host tests guard this contract.
+Rule: every nonterminal state names its progress witness.  Pending render
+requests are idempotent levels; a capacity request may upgrade a pending
+presentation request once.  The host claims the transaction before traversal,
+so work published during traversal is a distinct successor rather than a
+duplicate reason which continually advances the serial.  The focused
+`ObolHostWork.tla` model and window-host tests guard this contract.
 
 ### A zero-work repair is a state-machine bug
 
@@ -117,10 +238,29 @@ first-use cost, so the controller permanently rejected static quality and
 forced a much coarser 80 ms marginal allocation even though the stable frame
 was valid.
 
-Rule: an explicit static-quality trial gets exactly one unchanged retry.  The
-second unchanged deadline miss is the capacity witness; a changed preparation
-remains forward progress.  This exception is only for a typed static trial,
-never active input, and it must not become an open-ended retry path.
+Rule: an explicit static-quality trial gets one unchanged first-use retry.  A
+later retry is justified only by a revision-bound preparation obligation whose
+finite remaining work strictly decreased.  A changed diagnostic serial is not
+that proof: uploads may evict one another or advance work for a superseded
+target.  A no-progress interruption is typed capacity evidence.  This rule is
+workload and renderer independent and must not become an open-ended retry path.
+
+### Resident demand and presented quality are independent
+
+A warm single-mesh Lucy view had its complete requested PoP suffix resident,
+so every provider request was classified as satisfied.  After pose-only
+rotation, however, the renderer still submitted through a much coarser global
+ceiling learned at the ordinary quiet cadence.  The convergence controller
+mistook provider completion for visual completion and never entered the
+separate static-quality allowance; timing then decided whether the final image
+showed roughly 500k or 2.5M faces.
+
+Rule: quality debt is the union of unsatisfied resident demand and a
+presentation ceiling below the active progressive population.  The latter is
+actionable even for exactly one progressive occurrence.  Use the reversible
+renderer ceiling during input, then evaluate the hidden resident population
+under the bounded static-frame contract.  Do not reload or rewrite occurrence
+cuts merely to restore data which is already resident.
 
 ### Hard aborts cannot use a completed-frame deadband
 
@@ -429,9 +569,13 @@ Lucy produced a valid minimum prefix after classification but kept the box
 visible while spatial pages and persistence continued for many seconds.
 
 Rule: publish an immutable, bounded, view-requested preview as soon as it is
-valid.  Do not wait for all private metadata or cache writes.  The final result
-extends or replaces it atomically; cancellation and transient bytes remain
-bounded.
+valid.  Its bound is the exact per-task share already reserved by the scene
+allocator: a minimum PoP prefix is not a free exception.  A cold scene of
+distinct large meshes must retain structural coverage for a source whose
+indivisible prefix exceeds that share, rather than publishing one costly
+preview per worker before a completed frame can calibrate the aggregate.  Do
+not wait for all private metadata or cache writes.  The final result extends
+or replaces it atomically; cancellation and transient bytes remain bounded.
 
 ### Concurrency is also a memory policy
 
@@ -442,7 +586,52 @@ Rule: outer source work and inner mesh work have separate bounded pools and
 working-set reservations.  First-fit admission may bypass a blocked item only
 a bounded number of times.  One task larger than the limit may run alone.
 
+### Source size is not screen importance
+
+A tempting cold-start shortcut is to render every small authored BoT directly.
+That fails in a large view: thousands of individually tiny meshes can all be
+subpixel, and direct admission bypasses the aggregate channel precisely when
+it is most useful.
+
+Rule: discovery may classify a whole source population as a conservative
+safe-zone candidate using count, source bytes, and reuse facts, but only the
+view allocator may choose a representation.  It must project each occurrence
+first, aggregate subpixel coverage, and apply the same protected importance
+and draw/memory budgets to direct and PoP candidates.  A source profile is a
+gate, never a per-object entitlement.
+
+### Semantic population counts are not presentation counts
+
+Generic Twin's complete safe-scene profile contained 2,248 leaf occurrences,
+while its compact presentation temporarily contained 2,249 records because
+the synthetic whole-target overview is also a renderer record.  Requiring
+those counts to be equal permanently disabled direct-terminal admission.  A
+second hidden assumption treated all unique primitive leaves as unique mesh
+assets and rejected the same small 4.1 MB scene at an arbitrary 2,048 cutoff.
+
+Rule: a completed source profile authenticates its own semantic population.
+Do not compare it with a renderer/presentation collection that is permitted to
+contain auxiliary records.  Profile limits may conservatively gate a scene,
+but exact projection, type, draw-cost, working-set, and resident-memory checks
+must remain the per-mesh admission authority.  Graphical tests must report and
+assert the selected representation kind; eventual non-box geometry is not
+proof that a direct route ran.
+
 ## Renderer and lighting
+
+### Compatibility-state allocation is transactional
+
+Under a capped 150k OSMesa replay, `_mesa_PushAttrib` dereferenced a failed
+allocation while copying attribute state.  Merely catching later renderer
+buffer allocation could not protect this earlier compatibility-stack boundary.
+
+Rule: OSMesa constructs server and client attribute snapshots completely
+before publishing a stack entry, cleans nested references on failure, and
+reports `GL_OUT_OF_MEMORY`.  Obol verifies that each requested stack depth
+actually advanced, pops only successful pushes, and rejects the candidate CAD
+frame before scene mutation when the guard is incomplete.  Resource-pressure
+tests must cap the address space and exercise both the provider and consumer
+side of an allocation boundary.
 
 ### Renderer equivalence requires explicit state
 
@@ -507,6 +696,100 @@ Rule: expose selection roles from cached model state and let a delegate paint
 the complete row.  Never resolve geometry or traverse the scene during paint.
 
 ## Testing lessons
+
+### Classify a counterexample before changing control state
+
+The same coarse Lucy image arose from three different causes during this
+work: incomplete renderer preparation, an over-conservative numeric deadline
+correction, and overlapping quiet-restoration policy owners.  Treating all
+three as "LoD did not refine" invites another retry latch or model-specific
+threshold and makes the controller less reviewable.
+
+Rule: first classify an observed failure as a contract, numeric policy,
+data-plane, or observation defect.  Contract defects change a finite event or
+typed certificate and its formal model.  Numeric defects change pure functions
+and independent oracles.  Data-plane defects stay below the controller and
+gain boundary/sanitizer/image tests.  Observation defects cannot mutate a LoD
+revision.  If a proposed fix spans classes, split it; if the class is unknown,
+pause implementation and update the ownership design.
+
+### Deadline ratios must not compound unnamed safety penalties
+
+An exact OSMesa frame completed a fraction of a millisecond beyond a 400 ms
+deadline.  Scaling its attempted cost by `deadline / elapsed` was already the
+required overload correction; multiplying that result by another unexplained
+0.80 collapsed the next stable scene by more than twenty percent and made an
+exact zoom return visibly coarse.
+
+Rule: capacity arithmetic is a named pure policy with unit tests at the
+boundary.  A deadline ratio and any headroom margin have separate, documented
+purposes.  Do not stack arbitrary constants in controller effect code.  Timing
+traces are evidence for the pure estimator, not permission to add state.
+
+### A bounded renderer obligation starts before an expired deadline poll
+
+A later CAD assembly may be reached after an earlier scene node has exhausted
+the host frame deadline.  If it checks that deadline before publishing and
+advancing any finite work, the host sees no progress and either starves the
+assembly or mistakes preparation latency for permanent draw capacity.
+
+Rule: publish the exact preparation target first, grant one bounded planning
+quantum, and then honor interruption.  Subsequent retries require strict
+same-target remaining-work reduction.  This is fair admission of an existing
+obligation, not an exception to the frame deadline.
+
+### A broader predicate is not necessarily a common contract
+
+Replacing a single-visible-occurrence condition with a superficially general
+"restored certified presentation" predicate improved Lucy, but made 50k warm
+startup and 150k post-rotation restoration exceed three-minute test bounds.
+The predicate combined two different facts: a target was safe to restore, and
+new static-quality work was affordable.  Object count had only hidden that
+ownership error.
+
+Rule: generalize behavior by reducing it to distinct typed events, not by
+widening an existing condition.  A restored presentation is completed
+evidence.  A successor refinement is a new revision-stamped plan requiring
+current demand and capacity evidence.  If a change helps one qualification
+profile but harms another, revert it and update the common refinement map;
+never retain it behind workload-shaped conditions.
+
+### One completion event may select only one control successor
+
+A completed framebuffer simultaneously satisfied a retained presentation
+barrier and a capacity sample.  Both effect paths reacted: the capacity owner
+requested its next sample while generic presentation cleanup restarted a full
+occurrence pass.  At 150k scale the legal individual transitions composed into
+an expensive refinement/balancing cycle.
+
+Rule: successor ownership is exclusive.  A stronger typed transaction owns its
+whole sequence; weaker observers of the same completion may retire bookkeeping
+but may not start work.  Model and test the effect ordering, not merely the set
+of valid snapshot owners.
+
+### A multi-step availability transaction belongs in one sum type
+
+Resident growth was represented by ledger debt plus a controller drain boolean.
+The drain could finish while the debt still correctly prohibited allocation,
+and generic budget handling restarted the drain indefinitely.
+
+Rule: required, active, dirty-active, and allocation-ready are mutually
+exclusive phases owned by one ledger.  Drain completion has only two successors:
+another drain for a coalesced arrival, or exactly one allocation.  A new view
+interrupts the active drain back to required; it never silently consumes old-view
+work as a current allocation proof.
+
+### Presented evidence needs a level-triggered retirement path
+
+Point-to-triangle recovery once depended on handling its exact completed frame
+in the same callback which retired it.  When a stronger capacity or handoff
+barrier owned that callback, recovery remained pending after every task, cursor,
+and render request had disappeared.
+
+Rule: preserve the fact that the recovery was presented and let the ordinary
+progressive pump retire it idempotently when stronger barriers clear.  A typed
+obligation must always name a producer, a pending frame, or a level-triggered
+completion witness.
 
 - Run actual graphical clients.  Headless scene assertions cannot detect GL
   flashes, camera jumps, wrong lighting, mouse-coordinate errors, or retained

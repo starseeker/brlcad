@@ -30,6 +30,52 @@
 #include <vector>
 
 bool
+BObolRetainedAllocationInputKey::operator==(
+    const BObolRetainedAllocationInputKey &other) const
+{
+    return this->externalPresentationCost == other.externalPresentationCost &&
+	this->sceneBudget == other.sceneBudget &&
+	this->maximumMarginalBudget == other.maximumMarginalBudget &&
+	this->maximumProtectedBudget == other.maximumProtectedBudget &&
+	this->viewRevision == other.viewRevision &&
+	this->policyRevision == other.policyRevision &&
+	std::memcmp(&this->pointProxyPixelThreshold,
+	    &other.pointProxyPixelThreshold, sizeof(float)) == 0 &&
+	this->allowProtectedFloor == other.allowProtectedFloor;
+}
+
+BObolRetainedAllocationInputKey
+BObolRetainedAllocationInputs::inputKey(void) const
+{
+    BObolRetainedAllocationInputKey key;
+    key.externalPresentationCost = this->externalPresentationCost;
+    key.sceneBudget = this->sceneBudget;
+    key.maximumMarginalBudget = this->maximumMarginalBudget;
+    key.maximumProtectedBudget = this->effectiveMaximumProtectedBudget();
+    key.viewRevision = this->viewRevision;
+    key.policyRevision = this->policyRevision;
+    key.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
+    key.allowProtectedFloor = this->allowProtectedFloor;
+    return key;
+}
+
+BObolRetainedAllocationInputKey
+BObolRetainedAllocationResult::inputKey(void) const
+{
+    BObolRetainedAllocationInputKey key;
+    key.externalPresentationCost = this->externalPresentationCost;
+    key.sceneBudget = this->requestedSceneBudget;
+    key.maximumMarginalBudget = this->maximumMarginalBudget;
+    key.maximumProtectedBudget = this->allowProtectedFloor ?
+	this->maximumProtectedBudget : 0;
+    key.viewRevision = this->viewRevision;
+    key.policyRevision = this->policyRevision;
+    key.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
+    key.allowProtectedFloor = this->allowProtectedFloor;
+    return key;
+}
+
+bool
 bobol_retained_marginal_lower_priority(
     const BObolRetainedMarginalUpgrade &a,
     const BObolRetainedMarginalUpgrade &b)
@@ -54,6 +100,7 @@ public:
     explicit BObolRetainedAllocationTransaction(
 	const BObolRetainedAllocationInputs &inputs)
     {
+	this->inputKey = inputs.inputKey();
 	this->viewState = inputs.viewState;
 	this->viewRevision = inputs.viewRevision;
 	this->policyRevision = inputs.policyRevision;
@@ -65,10 +112,12 @@ public:
 	    inputs.viewState->beginCadAllocationPlan() : 0;
 	this->externalPresentationCost = inputs.externalPresentationCost;
 	this->fixedCost = inputs.externalPresentationCost;
+	this->pixelDemandPresentationCost = inputs.externalPresentationCost;
 	this->sceneBudget = inputs.sceneBudget;
 	this->maximumMarginalBudget = inputs.maximumMarginalBudget;
 	this->allowProtectedFloor = inputs.allowProtectedFloor;
-	this->maximumProtectedBudget = inputs.maximumProtectedBudget;
+	this->maximumProtectedBudget =
+	    inputs.effectiveMaximumProtectedBudget();
 	this->pointProxyPixelThreshold = inputs.pointProxyPixelThreshold;
 	this->wallStartedMicroseconds = bu_gettime();
 	if (!inputs.sources)
@@ -124,14 +173,7 @@ public:
 		inputs.viewState->residentMeshDemandRevision() ||
 	    !inputs.viewState->isCadAllocationPlanCurrent(
 	    this->allocationPlanSerial) ||
-	    this->externalPresentationCost !=
-		inputs.externalPresentationCost ||
-	    this->sceneBudget != inputs.sceneBudget ||
-	    this->maximumMarginalBudget != inputs.maximumMarginalBudget ||
-	    this->allowProtectedFloor != inputs.allowProtectedFloor ||
-	    this->maximumProtectedBudget != inputs.maximumProtectedBudget ||
-	    std::memcmp(&this->pointProxyPixelThreshold,
-		&inputs.pointProxyPixelThreshold, sizeof(float)) != 0 ||
+	    this->inputKey != inputs.inputKey() ||
 	    this->sources.size() != inputs.sources->size())
 	    return false;
 	for (size_t i = 0; i < this->sources.size(); ++i) {
@@ -534,6 +576,7 @@ public:
 	result.protectedFloorBudget = this->allocationBudget;
 	result.protectedFloorSignature = this->protectedFloorSignature;
 	result.selectedPresentationCost = this->finalCost;
+	result.pixelDemandPresentationCost = this->pixelDemandPresentationCost;
 	result.certifiedPresentationBudget = this->effectiveBudget;
 	result.allocationPlanSerial = this->allocationPlanSerial;
 	result.cadRevision = this->cadRevision;
@@ -546,6 +589,7 @@ public:
 	result.fixedCadPresentationCost = this->fixedCadPresentationCost;
 	result.maximumMarginalBudget = this->maximumMarginalBudget;
 	result.maximumProtectedBudget = this->maximumProtectedBudget;
+	result.pointProxyCandidateCount = this->pointProxyCandidateCount;
 	result.allowProtectedFloor = this->allowProtectedFloor;
     }
 
@@ -582,10 +626,8 @@ private:
      * thin projected detail.  It still participates in marginal refinement,
      * but does not make the all-or-nothing prominent-feature floor fail for
      * an entire vehicle view. */
-    static constexpr double protectedFootprintPixels = 24.0;
     static constexpr size_t protectedFloorTrialDivisor = 4;
     static constexpr double highlightedFeatureMaximumErrorPixels = 1.5;
-    static constexpr double prominentFeatureMaximumErrorPixels = 2.0;
     /* At the recognizable-footprint threshold, visual error gets that many
      * units of weight.  Above it the square-root curve stays sublinear, but
      * no longer collapses a wheel, blade, tail, or large panel into the same
@@ -734,6 +776,9 @@ private:
 		this->fixedCadPresentationCost + cost;
 	    this->fixedCost = cost > SIZE_MAX - this->fixedCost ?
 		SIZE_MAX : this->fixedCost + cost;
+	    this->pixelDemandPresentationCost = cost >
+		    SIZE_MAX - this->pixelDemandPresentationCost ? SIZE_MAX :
+		this->pixelDemandPresentationCost + cost;
 	    return;
 	}
 	const int minimumCut = payload->progressiveMesh->minimumCut();
@@ -752,6 +797,9 @@ private:
 		point, source.drawMode, 0);
 	    this->fixedCost = cost > SIZE_MAX - this->fixedCost ?
 		SIZE_MAX : this->fixedCost + cost;
+	    this->pixelDemandPresentationCost = cost >
+		    SIZE_MAX - this->pixelDemandPresentationCost ? SIZE_MAX :
+		this->pixelDemandPresentationCost + cost;
 	    FixedAllocation fixed;
 	    fixed.payload = payload;
 	    fixed.mesh = payload->progressiveMesh;
@@ -829,22 +877,32 @@ private:
 	}
 	candidate.pointProxyEligible = candidate.pointProxyEligible &&
 	    candidate.hasInstance;
+	if (candidate.pointProxyEligible)
+	    this->pointProxyCandidateCount++;
 	if (payload->projectedCutCounts &&
 	    payload->projectedCutCountsViewRevision == this->viewRevision &&
 	    payload->projectedCutCountsPolicyRevision == this->policyRevision &&
 	    payload->projectedCutCountsMeshRevision == candidate.mesh->revision())
 	    candidate.visibleCounts = payload->projectedCutCounts;
-	/* The protected floor is deliberately stricter than the old three-pixel
-	 * fallback for a recognizable feature.  The producer request remains the
-	 * lower bound, so a caller asking for sub-pixel quality never sees its
-	 * intent relaxed by the prominence policy.  This is only an atomic
-	 * candidate floor: the measured frame budget may reject it, after which
-	 * the bounded marginal queue still prioritizes the same feature. */
+	const size_t demandedCost = bobol_lod_render_cost_units(
+	    this->countsAtCut(candidate, candidate.maximumCut),
+	    candidate.drawMode, 1);
+	this->pixelDemandPresentationCost = demandedCost >
+		SIZE_MAX - this->pixelDemandPresentationCost ? SIZE_MAX :
+	    this->pixelDemandPresentationCost + demandedCost;
+	/* Use the same recognizable-feature contract as the production
+	 * diagnostics.  Divergent thresholds made the allocator jump over a cut
+	 * which the visual oracle considered complete, reject the richer cut on
+	 * frame cost, and then fall substantially below recognizable quality.  The
+	 * producer request remains the lower bound, and a measured budget may still
+	 * reject this atomic candidate floor; the marginal queue then preserves the
+	 * same feature priority. */
 	const double protectedError = payload->visualEmphasis >= 2 ? target :
 	    (payload->visualEmphasis == 1 ?
 		std::max(target, highlightedFeatureMaximumErrorPixels) :
-		(footprint >= protectedFootprintPixels ?
-		    std::max(target, prominentFeatureMaximumErrorPixels) :
+		(footprint >= BObolViewLodState::ProminentFootprintPixels ?
+		    std::max(1.0, target) *
+			BObolViewLodState::ProminentMaximumNormalizedError :
 		    std::numeric_limits<double>::infinity()));
 	candidate.protectedCut = minimumCut;
 	if (std::isfinite(protectedError) && diameter > 0.0) {
@@ -1024,8 +1082,10 @@ private:
     }
 
     BObolViewLodState *viewState = NULL;
+    BObolRetainedAllocationInputKey inputKey;
     size_t externalPresentationCost = 0;
     size_t fixedCadPresentationCost = 0;
+    size_t pixelDemandPresentationCost = 0;
     uint64_t viewRevision = 0;
     uint64_t policyRevision = 0;
     uint64_t cadRevision = 0;
@@ -1035,6 +1095,7 @@ private:
     size_t maximumMarginalBudget = 0;
     bool allowProtectedFloor = false;
     size_t maximumProtectedBudget = 0;
+    size_t pointProxyCandidateCount = 0;
     float pointProxyPixelThreshold = 0.0f;
     std::vector<SourceSnapshot> sources;
     size_t sourceCursor = 0;

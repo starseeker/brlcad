@@ -38,6 +38,7 @@ set(
   primitives/nmg/ednmg.c
   primitives/part/edpart.c
   primitives/pipe/edpipe.c
+  primitives/rec/edrec.c
   primitives/rhc/edrhc.c
   primitives/rpc/edrpc.c
   primitives/sketch/edsketch.c

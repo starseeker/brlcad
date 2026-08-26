@@ -26,6 +26,7 @@ class SoBRLDatabaseSource;
 class SoBRLVListShape;
 class SoBRLMeshShape;
 struct BObolCompactOccurrenceStream;
+struct rt_bot_internal;
 
 struct BObolCachedPartGeometry {
     BObolCachedPartGeometry(void) :
@@ -126,6 +127,16 @@ int bobol_database_source_realize_mesh_compact_with_cache(
 void bobol_database_source_seed_realization_cache(
 	SoBRLDatabaseSource *source,
 	BObolDatabaseSourceRealizationCache *cache);
+
+/* Build the immutable renderer representation of one terminal BoT on a
+ * worker.  Keeping this conversion beside ordinary database realization
+ * ensures winding, normals, hidden-line edges, and culling certification use
+ * one implementation. */
+std::shared_ptr<const Obol::PartGeometry>
+bobol_database_bot_part_geometry(const struct rt_bot_internal *bot,
+	int drawMode);
+size_t bobol_database_part_geometry_estimate_bytes(
+	const Obol::PartGeometry &geometry);
 
 /* Generate one detached BREP triangle representation.  The caller supplies
  * its deterministic band identity; the returned owner releases all

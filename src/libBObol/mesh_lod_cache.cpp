@@ -32,6 +32,7 @@
 #include "raytrace.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cfloat>
 #include <charconv>
@@ -47,18 +48,53 @@
 #include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
+#if defined(__linux__)
+#  include <sys/resource.h>
+#endif
+
 #define POP_CUT_COUNT_MAX BOBOL_MESH_LOD_CUT_COUNT_MAX
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 21
+#define CACHE_CURRENT_FORMAT 22
 
-/* Cold preview is an interruption-safe first image, not a normal cache leaf.
- * Keep it small enough to arrive before source-wide classification on a large
- * BoT; subsequent spatial records retain the amortized 64K-face target. */
-#define BOBOL_MESH_LOD_COLD_PREVIEW_FACE_TARGET 4096u
+/* A spatial-cache seed page is an interruption-safe local mesh diagnostic,
+ * not a complete source presentation.  Keep it small; the separately
+ * generated coverage-point preview is the whole-object cold representation. */
+#define BOBOL_MESH_LOD_SPATIAL_SEED_FACE_TARGET 4096u
+/* Keep the 24-cells-per-axis preview under the former 16^3 x 32 sampling
+ * envelope.  Occupancy, rather than dense local point retention, determines
+ * the coverage surface, so nine representatives per cell are sufficient. */
+#define BOBOL_MESH_LOD_COVERAGE_PREVIEW_POINTS_PER_CELL 9u
+#define BOBOL_MESH_LOD_COVERAGE_PREVIEW_PARALLEL_VERTEX_THRESHOLD 1000000u
+#define BOBOL_MESH_LOD_COVERAGE_PREVIEW_MAX_WORKERS 8u
+/* Serialized spatial classification uses a bounded scatter/gather batch.
+ * Three compact classification bytes plus the cell-grouped spool records for
+ * one million faces stay well below the task working-set allowance, while a
+ * 128K-face minimum keeps thread setup insignificant for smaller tails. */
+#define BOBOL_MESH_LOD_SPATIAL_CLASSIFICATION_BATCH_FACE_COUNT 1048576u
+#define BOBOL_MESH_LOD_SPATIAL_CLASSIFICATION_FACES_PER_WORKER 131072u
+#define BOBOL_MESH_LOD_SPATIAL_CLASSIFICATION_MAX_WORKERS 8u
+/* Spatial pages are independent once face classification is complete.  Four
+ * concurrent 64K-face preparations keep a typical wave below the service's
+ * 256 MiB transient allowance (including hash tables and encoded records),
+ * while the owner thread retains deterministic, single-writer publication. */
+#define BOBOL_MESH_LOD_SPATIAL_PAGE_MAX_WORKERS 4u
+/* LMDB retains dirty copy-on-write pages until commit.  A 64 MiB spatial
+ * batch amortizes transaction setup and read-back validation without letting
+ * one multi-gigabyte hierarchy become a single unbounded transaction. */
+#define BOBOL_MESH_LOD_SPATIAL_WRITE_TRANSACTION_BYTES (64u * 1024u * 1024u)
+/* Check cooperative cancellation every 16,384 source records: frequent
+ * enough for responsive view replacement, while avoiding a callback/mutex
+ * operation on every decoded point or face. */
+#define BOBOL_MESH_LOD_CANCELLATION_POLL_MASK 0x3fffu
+#define BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_COUNT \
+    (BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_AXIS * \
+     BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_AXIS * \
+     BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_AXIS)
 
 #define CACHE_POP_MAX_CUT "max"
 #define CACHE_POP_MIN_CUT "min"
@@ -109,6 +145,14 @@ struct BObolSpatialFaceDisk {
 static_assert(sizeof(BObolSpatialFaceDisk) == 8,
     "spatial leaf spool record must have a fixed width");
 
+struct BObolPreparedMeshLodChunk {
+    struct BObolMeshLodChunkInfo info = {};
+    std::vector<fastf_t> points;
+    std::vector<uint32_t> faces;
+    std::vector<fastf_t> normals;
+    std::vector<unsigned char> bytes;
+};
+
 struct BObolMeshLodContextInternal {
     struct bu_cache *lodCache;
     struct bu_cache *nameCache;
@@ -126,6 +170,16 @@ struct BObolMeshLodContext {
 
 class BObolPopState;
 class BObolPopSourceReader;
+
+enum class BObolPopPointAccess {
+    Indexed,
+    Sequential
+};
+
+enum class BObolPopFaceAccess {
+    Indexed,
+    Sequential
+};
 
 struct BObolMeshLod {
     struct BObolMeshLodContext *context;
@@ -198,6 +252,22 @@ mesh_lod_cache_max_bytes(void)
 	    return SIZE_MAX - (SIZE_MAX % 4096u);
 	return static_cast<size_t>(defaultGibibytes) * gibibyte;
     }();
+
+#if defined(__linux__)
+    /* An LMDB map is virtual-address space even before it grows on disk.
+     * Respect a caller-imposed process cap before opening the map: otherwise
+     * an apparently harmless cache override can leave too little address
+     * space for the mapped database, source pages, and renderer allocations.
+     * The cache is reconstructible, so under a cap it receives at most one
+     * quarter; the smaller normal retry path below remains available. */
+    struct rlimit addressSpace;
+    if (getrlimit(RLIMIT_AS, &addressSpace) == 0 &&
+	addressSpace.rlim_cur != RLIM_INFINITY) {
+	const size_t cap = addressSpace.rlim_cur > SIZE_MAX ? SIZE_MAX :
+	    static_cast<size_t>(addressSpace.rlim_cur);
+	return std::min(bytes, cap / 4);
+    }
+#endif
     return bytes;
 }
 
@@ -624,9 +694,11 @@ mesh_lod_context_create(const char *name)
      * mapping), serializing an otherwise parallel preparation pipeline.
      */
     const size_t configuredCacheBytes = mesh_lod_cache_max_bytes();
-    internal->lodCache = bu_cache_open_with_options(
-	bu_vls_cstr(&lodCachePath), 1, configuredCacheBytes,
-	BU_CACHE_OPEN_NORDAHEAD | BU_CACHE_OPEN_DEFER_SYNC);
+    if (configuredCacheBytes) {
+	internal->lodCache = bu_cache_open_with_options(
+	    bu_vls_cstr(&lodCachePath), 1, configuredCacheBytes,
+	    BU_CACHE_OPEN_NORDAHEAD | BU_CACHE_OPEN_DEFER_SYNC);
+    }
     if (!internal->lodCache &&
 	configuredCacheBytes > mesh_lod_cache_constrained_map_bytes()) {
 	internal->lodCache = bu_cache_open_with_options(
@@ -881,24 +953,35 @@ private:
 	const struct BObolMeshLodPreviewRequest *previewRequest,
 	BObolMeshLodPreviewCallback preview, void *previewData);
     void buildCutSchedule(void);
-    void triProcess(void);
+    bool triProcess(void);
     bool buildClusters(void);
     bool buildChunks(void);
     bool cacheSpatialLeaves(void);
-    void publishSerializedBootstrapPreview(void);
-    void publishSpatialPreview(void);
+    bool scanSourceBounds(void);
+    bool publishSerializedCoveragePreview(void);
+    int activationCutForTriangle(const BObolPopRec triangle[3]) const;
     bool classifySpatialFace(BObolPopSourceReader &reader,
 	uint32_t sourceFace, uint8_t &activation, uint16_t &cell) const;
     bool cacheChunks(void);
     bool cacheChunk(uint32_t chunkId,
 	const std::vector<uint32_t> &sourceFaces,
 	const std::vector<uint8_t> &activationCuts);
+    bool prepareChunk(uint32_t chunkId,
+	const std::vector<uint32_t> &sourceFaces,
+	const std::vector<uint8_t> &activationCuts,
+	BObolPreparedMeshLodChunk &prepared) const;
+    bool publishChunk(BObolPreparedMeshLodChunk &&prepared);
     bool cacheChunkMetadata(void);
+    bool generationCancelled(void) const;
     fastf_t snap(fastf_t value, fastf_t min, fastf_t max, uint8_t bits);
     bool cache(void);
     bool cacheTri(void);
     bool cacheWrite(const char *component, std::stringstream &stream);
     bool cacheWriteData(const char *component, const void *data, size_t size);
+    bool cacheWriteSpatialData(const char *component, const void *data,
+	size_t size);
+    bool flushSpatialWrites(void);
+    void abortSpatialWrites(void);
     size_t cacheGet(void **data, const char *component);
     void cacheDone(void);
     bool triPopLoad(int startCut, int cut, bool materializeSnapped);
@@ -952,17 +1035,22 @@ private:
     bool sourceLimitedPrefix = false;
     int sourceLimitedCut = -1;
     bool spatialLeafRequested = false;
+    bool sourceBoundsScanned = false;
+    bool coveragePreviewBoundsKnown = false;
+    bool coveragePreviewBoundsMismatch = false;
+    point_t coveragePreviewMinimum = VINIT_ZERO;
+    point_t coveragePreviewMaximum = VINIT_ZERO;
     bool spatialLeafCache = false;
     bool spatialPublicationLimited = false;
-    bool spatialPreviewPublished = false;
     size_t liveSpatialChunkBytes = 0;
     std::unordered_map<uint32_t, std::vector<unsigned char>>
 	liveSpatialChunks;
-    std::vector<fastf_t> spatialPreviewPoints;
-    std::vector<uint32_t> spatialPreviewFaces;
-    std::vector<fastf_t> spatialPreviewNormals;
     BObolMeshLodPreviewCallback previewCallback = NULL;
     void *previewCallbackData = NULL;
+    BObolMeshLodSpatialPageCallback spatialPageCallback = NULL;
+    void *spatialPageCallbackData = NULL;
+    BObolMeshLodCancellationCallback cancellationCallback = NULL;
+    void *cancellationCallbackData = NULL;
     const char *generationFailureReason = "generation was not started";
     /* Authored BoTs may contain zero-area faces with a repeated vertex
      * index.  They contribute no pixels, but retaining them in a progressive
@@ -974,6 +1062,8 @@ private:
 
     struct BObolMeshLodContext *context = NULL;
     struct bu_cache_txn *readTxn = NULL;
+    struct bu_cache_txn *spatialWriteTxn = NULL;
+    size_t spatialWriteBytes = 0;
     std::shared_lock<std::shared_mutex> readLock;
     char cacheKeyPrefix[32] = {0};
     size_t cacheKeyPrefixLength = 0;
@@ -987,7 +1077,11 @@ private:
 class BObolPopSourceReader
 {
 public:
-    explicit BObolPopSourceReader(const BObolPopState &state) : source(state)
+    explicit BObolPopSourceReader(const BObolPopState &state,
+	BObolPopPointAccess pointAccess = BObolPopPointAccess::Indexed,
+	BObolPopFaceAccess faceAccess = BObolPopFaceAccess::Sequential) :
+	source(state), pointAccessPattern(pointAccess),
+	faceAccessPattern(faceAccess)
     {
     }
 
@@ -1000,6 +1094,14 @@ public:
 		return false;
 	    VMOVE(out, source.vertexArray[index]);
 	    return true;
+	}
+	if (pointAccessPattern == BObolPopPointAccess::Indexed) {
+	    const unsigned char *encoded = source.serializedSource.vertices +
+		index * source.serializedSource.vertexStride;
+	    bu_cv_ntohd(reinterpret_cast<unsigned char *>(out), encoded,
+		ELEMENTS_PER_POINT);
+	    return std::isfinite(out[X]) && std::isfinite(out[Y]) &&
+		std::isfinite(out[Z]);
 	}
 	if (!loadPointPage(index))
 	    return false;
@@ -1020,9 +1122,16 @@ public:
 	    out[2] = source.faceArray[index * 3 + 2];
 	    return true;
 	}
-	if (!loadFacePage(index))
-	    return false;
-	const int *values = &facePage[(index - facePageFirst) * 3];
+	int indexedValues[faceCornerCount] = {};
+	const int *values = indexedValues;
+	if (faceAccessPattern == BObolPopFaceAccess::Indexed) {
+	    if (!decodeFace(index, indexedValues))
+		return false;
+	} else {
+	    if (!loadFacePage(index))
+		return false;
+	    values = &facePage[(index - facePageFirst) * faceCornerCount];
+	}
 	out[0] = values[0];
 	out[1] = source.serializedFlipWinding ? values[2] : values[1];
 	out[2] = source.serializedFlipWinding ? values[1] : values[2];
@@ -1040,6 +1149,25 @@ public:
 
 private:
     static constexpr size_t pageRecordCount = 16384;
+    static constexpr size_t faceCornerCount = 3;
+
+    bool decodeFace(size_t index, int out[faceCornerCount]) const
+    {
+	if (!out || index >= source.faceCount)
+	    return false;
+	const unsigned char *encoded = source.serializedSource.faces +
+	    index * source.serializedSource.faceStride;
+	for (size_t corner = 0; corner < faceCornerCount; ++corner) {
+	    const uint32_t value = static_cast<uint32_t>(BU_GLONG(
+		encoded + corner * SIZEOF_NETWORK_LONG));
+	    if (value >= source.vertexCount ||
+		value > static_cast<uint32_t>(
+		    std::numeric_limits<int>::max()))
+		return false;
+	    out[corner] = static_cast<int>(value);
+	}
+	return true;
+    }
 
     bool loadPointPage(size_t index)
     {
@@ -1080,32 +1208,25 @@ private:
 	const size_t count = std::min(pageRecordCount,
 	    source.faceCount - first);
 	try {
-	    facePage.resize(count * 3);
+	    facePage.resize(count * faceCornerCount);
 	} catch (const std::bad_alloc &) {
 	    facePage.clear();
 	    return false;
 	}
-	for (size_t faceIndex = 0; faceIndex < count; ++faceIndex) {
-	    const unsigned char *encoded = source.serializedSource.faces +
-		(first + faceIndex) * source.serializedSource.faceStride;
-	    for (size_t corner = 0; corner < 3; ++corner) {
-		const uint32_t value = static_cast<uint32_t>(BU_GLONG(
-		    encoded + corner * SIZEOF_NETWORK_LONG));
-		if (value >= source.vertexCount ||
-		    value > static_cast<uint32_t>(
-			std::numeric_limits<int>::max())) {
-		    facePage.clear();
-		    return false;
-		}
-		facePage[faceIndex * 3 + corner] = static_cast<int>(value);
+	for (size_t faceIndex = 0; faceIndex < count; ++faceIndex)
+	    if (!decodeFace(first + faceIndex,
+		    &facePage[faceIndex * faceCornerCount])) {
+		facePage.clear();
+		return false;
 	    }
-	}
 	facePageFirst = first;
 	facePageCount = count;
 	return true;
     }
 
     const BObolPopState &source;
+    BObolPopPointAccess pointAccessPattern;
+    BObolPopFaceAccess faceAccessPattern;
     std::vector<fastf_t> pointPage;
     std::vector<int> facePage;
     size_t pointPageFirst = 0;
@@ -1176,6 +1297,50 @@ BObolPopState::buildCutSchedule(void)
     }
 }
 
+int
+BObolPopState::activationCutForTriangle(
+    const BObolPopRec triangle[3]) const
+{
+    if (!triangle || !cutCount)
+	return maxPopCut;
+
+    const auto pairCut = [this](const BObolPopRec &a,
+	const BObolPopRec &b) {
+	const unsigned short av[3] = {a.x, a.y, a.z};
+	const unsigned short bv[3] = {b.x, b.y, b.z};
+	int cut = maxPopCut;
+	bool distinguishable = false;
+	for (int axis = 0; axis < 3; ++axis) {
+	    const unsigned int differing =
+		static_cast<unsigned int>(av[axis] ^ bv[axis]);
+	    if (!differing)
+		continue;
+	    distinguishable = true;
+#if defined(__GNUC__) || defined(__clang__)
+	    const int mostSignificantBit = 31 - __builtin_clz(differing);
+#else
+	    int mostSignificantBit = 0;
+	    for (unsigned int bits = differing; bits >>= 1;)
+		++mostSignificantBit;
+#endif
+	    const int requiredBits =
+		BOBOL_MESH_LOD_QUANTIZATION_BITS - mostSignificantBit;
+	    const uint8_t firstCut = firstCutForBits[axis][requiredBits];
+	    if (firstCut != UINT8_MAX)
+		cut = std::min(cut, static_cast<int>(firstCut));
+	}
+	return distinguishable ? cut : maxPopCut;
+    };
+
+    /* A triangle cannot contribute an area until all three of its vertex
+     * pairs are distinguishable.  Activating at the first distinct edge
+     * floods a coarse spatial cut with collapsed triangles: they consume the
+     * renderer budget while producing only a handful of visible facets. */
+    return std::max(pairCut(triangle[0], triangle[1]),
+	std::max(pairCut(triangle[1], triangle[2]),
+	    pairCut(triangle[0], triangle[2])));
+}
+
 bool
 BObolPopState::classifySpatialFace(BObolPopSourceReader &reader,
 	uint32_t sourceFace,
@@ -1191,7 +1356,7 @@ BObolPopState::classifySpatialFace(BObolPopSourceReader &reader,
 	face[1] == face[2] || face[0] == face[2])
 	return false;
 
-    unsigned short quantized[3][3] = {{0}};
+    BObolPopRec triangle[3];
     double centroid[3] = {0.0, 0.0, 0.0};
     for (size_t corner = 0; corner < 3; ++corner) {
 	if (face[corner] < 0 ||
@@ -1207,39 +1372,19 @@ BObolPopState::classifySpatialFace(BObolPopSourceReader &reader,
 		    (static_cast<double>(point[axis]) -
 		     static_cast<double>(minimum[axis])) /
 		    static_cast<double>(extent[axis]) * USHRT_MAX));
-		quantized[corner][axis] = static_cast<unsigned short>(
-		    floor(scaled));
+		const unsigned short quantized =
+		    static_cast<unsigned short>(floor(scaled));
+		if (axis == X)
+		    triangle[corner].x = quantized;
+		else if (axis == Y)
+		    triangle[corner].y = quantized;
+		else
+		    triangle[corner].z = quantized;
 	    }
 	    centroid[axis] += point[axis];
 	}
     }
-
-    int faceCut = maxPopCut;
-    bool distinguishable = false;
-    for (int edge = 0; edge < 3; ++edge) {
-	const int next = (edge + 1) % 3;
-	for (int axis = 0; axis < 3; ++axis) {
-	    unsigned int differing = quantized[edge][axis] ^
-		quantized[next][axis];
-	    if (!differing)
-		continue;
-	    distinguishable = true;
-#if defined(__GNUC__) || defined(__clang__)
-	    const int mostSignificantBit = 31 - __builtin_clz(differing);
-#else
-	    int mostSignificantBit = 0;
-	    for (unsigned int bits = differing; bits >>= 1;)
-		++mostSignificantBit;
-#endif
-	    const int requiredBits =
-		BOBOL_MESH_LOD_QUANTIZATION_BITS - mostSignificantBit;
-	    const uint8_t cut = firstCutForBits[axis][requiredBits];
-	    if (cut == UINT8_MAX)
-		return false;
-	    faceCut = std::min(faceCut, static_cast<int>(cut));
-	}
-    }
-    activation = static_cast<uint8_t>(distinguishable ? faceCut : maxPopCut);
+    activation = static_cast<uint8_t>(activationCutForTriangle(triangle));
 
     constexpr size_t side = BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
     size_t coordinate[3] = {0, 0, 0};
@@ -1257,7 +1402,7 @@ BObolPopState::classifySpatialFace(BObolPopSourceReader &reader,
     return true;
 }
 
-void
+bool
 BObolPopState::triProcess(void)
 {
     vertexTriMinCut.assign(vertexCount,
@@ -1306,41 +1451,17 @@ BObolPopState::triProcess(void)
 	return static_cast<unsigned short>(
 	    floor((value - minimum[axis]) * quantizeScale[axis]));
     };
-    const auto differingBits = [](unsigned short a,
-	    unsigned short b) -> int {
-	const unsigned int differing = static_cast<unsigned int>(a ^ b);
-	if (!differing)
-	    return 0;
-#if defined(__GNUC__) || defined(__clang__)
-	const int mostSignificantBit = 31 - __builtin_clz(differing);
-#else
-	int mostSignificantBit = 0;
-	for (unsigned int bits = differing; bits >>= 1;)
-	    ++mostSignificantBit;
-#endif
-	return BOBOL_MESH_LOD_QUANTIZATION_BITS - mostSignificantBit;
-    };
-	const auto pairCut = [this, &differingBits](
-	    const BObolPopRec &a, const BObolPopRec &b) -> int {
-	const unsigned short av[3] = {a.x, a.y, a.z};
-	const unsigned short bv[3] = {b.x, b.y, b.z};
-	int cut = maxPopCut;
-	bool distinguishable = false;
-	for (int axis = 0; axis < 3; ++axis) {
-	    const int bits = differingBits(av[axis], bv[axis]);
-	    if (!bits)
-		continue;
-	    distinguishable = true;
-	    cut = std::min(cut,
-		static_cast<int>(this->firstCutForBits[axis][bits]));
-	}
-	return distinguishable ? cut : maxPopCut;
-    };
-    const auto classifyRange = [this, &quantize, &pairCut, &minimum,
-	    &extent, buildSpatialCells](
+	std::atomic_bool cancelled(false);
+    const auto classifyRange = [this, &quantize, &minimum,
+	    &extent, &cancelled, buildSpatialCells](
 	    size_t begin, size_t end) {
 	BObolPopSourceReader reader(*this);
 	for (size_t faceIndex = begin; faceIndex < end; ++faceIndex) {
+	if ((faceIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+	    generationCancelled()) {
+	    cancelled.store(true, std::memory_order_relaxed);
+	    return;
+	}
 	BObolPopRec triangle[3];
 	double centroid[3] = {0.0, 0.0, 0.0};
 	bool badFace = false;
@@ -1374,9 +1495,7 @@ BObolPopState::triProcess(void)
 	if (badFace)
 	    continue;
 
-	const int cut = std::max(pairCut(triangle[0], triangle[1]),
-	    std::max(pairCut(triangle[1], triangle[2]),
-		     pairCut(triangle[0], triangle[2])));
+	const int cut = activationCutForTriangle(triangle);
 	faceActivationCut[faceIndex] = static_cast<uint8_t>(cut);
 	if (buildSpatialCells) {
 	    constexpr size_t side = BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION;
@@ -1422,6 +1541,8 @@ BObolPopState::triProcess(void)
 	for (std::thread &worker : workers)
 	    worker.join();
     }
+    if (cancelled.load(std::memory_order_relaxed))
+	return false;
 
     size_t cutFaceCounts[POP_CUT_COUNT_MAX] = {0};
     size_t badFaceCount = 0;
@@ -1437,6 +1558,9 @@ BObolPopState::triProcess(void)
 
     BObolPopSourceReader mergeReader(*this);
     for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
+	if ((faceIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+	    generationCancelled())
+	    return false;
 	const uint8_t cut = faceActivationCut[faceIndex];
 	if (cut >= cutCount)
 	    continue;
@@ -1464,6 +1588,9 @@ BObolPopState::triProcess(void)
 
     for (size_t vertexIndex = 0; vertexIndex < vertexTriMinCut.size();
 	 vertexIndex++) {
+	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+	    generationCancelled())
+	    return false;
 	const uint8_t activation = vertexTriMinCut[vertexIndex];
 	/* Unreferenced vertices do not participate in any rendered triangle.
 	 * Assigning them to the terminal global prefix while spatial chunks omit
@@ -1484,6 +1611,9 @@ BObolPopState::triProcess(void)
     uint32_t outputVertexIndex = 0;
     for (const std::vector<uint32_t> &cutVertices : cutTriVerts) {
 	for (uint32_t sourceVertexIndex : cutVertices) {
+	    if ((outputVertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+		generationCancelled())
+		return false;
 	    triIndexMap[sourceVertexIndex] = outputVertexIndex;
 	    ++outputVertexIndex;
 	}
@@ -1505,6 +1635,7 @@ BObolPopState::triProcess(void)
      * faces or vertices are cheap and still re-snap the resident coordinates
      * to a finer grid. */
     minPopCut = firstPopulatedCut >= 0 ? firstPopulatedCut : 0;
+    return true;
 }
 
 bool
@@ -1877,136 +2008,215 @@ BObolPopState::BObolPopState(
     initializeGeneration(userKey, previewRequest, preview, previewData);
 }
 
-void
-BObolPopState::publishSerializedBootstrapPreview(void)
+bool
+BObolPopState::scanSourceBounds(void)
 {
-    constexpr size_t previewFaceCount =
-	BOBOL_MESH_LOD_COLD_PREVIEW_FACE_TARGET;
-    if (!previewCallback || !hasSerializedSource || !previewFaceCount ||
-	!faceCount || !vertexCount)
-	return;
+    if (sourceBoundsScanned)
+	return true;
+    BObolPopSourceReader reader(*this, BObolPopPointAccess::Sequential);
+    for (size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
+	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+	    generationCancelled())
+	    return false;
+	point_t point;
+	if (!reader.point(vertexIndex, point))
+	    return false;
+	minx = std::min(minx, point[X]);
+	miny = std::min(miny, point[Y]);
+	minz = std::min(minz, point[Z]);
+	maxx = std::max(maxx, point[X]);
+	maxy = std::max(maxy, point[Y]);
+	maxz = std::max(maxz, point[Z]);
+    }
+    if (!std::isfinite(maxx - minx) || !std::isfinite(maxy - miny) ||
+	!std::isfinite(maxz - minz))
+	return false;
+    VSET(bbmin, minx, miny, minz);
+    VSET(bbmax, maxx, maxy, maxz);
+    sourceBoundsScanned = true;
+    return true;
+}
+
+bool
+BObolPopState::generationCancelled(void) const
+{
+    return cancellationCallback && cancellationCallback(cancellationCallbackData);
+}
+
+bool
+BObolPopState::publishSerializedCoveragePreview(void)
+{
+    if (!previewCallback || !hasSerializedSource ||
+	(!sourceBoundsScanned && !coveragePreviewBoundsKnown) || !vertexCount)
+	return false;
     const int64_t started = bu_gettime();
+    constexpr size_t cellAxis = BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_AXIS;
+    constexpr size_t cellCount = BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_COUNT;
+    constexpr size_t pointsPerCell =
+	BOBOL_MESH_LOD_COVERAGE_PREVIEW_POINTS_PER_CELL;
+    static_assert(cellCount == cellAxis * cellAxis * cellAxis,
+	"coverage preview grid must be cubic");
+    const point_t &previewMinimum = sourceBoundsScanned ?
+	bbmin : coveragePreviewMinimum;
+    const point_t &previewMaximum = sourceBoundsScanned ?
+	bbmax : coveragePreviewMaximum;
+    const fastf_t extent[3] = {
+	previewMaximum[X] - previewMinimum[X],
+	previewMaximum[Y] - previewMinimum[Y],
+	previewMaximum[Z] - previewMinimum[Z]
+    };
+    constexpr fastf_t boundRelativeTolerance = 1.0e-5;
+    const size_t valuesPerCell = pointsPerCell * 3u;
+    if (cellCount > std::numeric_limits<size_t>::max() / valuesPerCell)
+	return false;
+    const size_t sampleValueCount = cellCount * valuesPerCell;
+    struct CoverageWorkerSamples {
+	std::array<uint8_t, cellCount> population = {};
+	std::vector<fastf_t> points;
+	bool sourceValid = true;
+	bool boundsMismatch = false;
+    };
+    size_t workerCount = 1;
+    if (vertexCount >= BOBOL_MESH_LOD_COVERAGE_PREVIEW_PARALLEL_VERTEX_THRESHOLD) {
+	workerCount = std::min<size_t>(
+	    BOBOL_MESH_LOD_COVERAGE_PREVIEW_MAX_WORKERS,
+	    std::max<size_t>(1, bu_avail_cpus()));
+    }
+    std::vector<CoverageWorkerSamples> workers;
+    try {
+	workers.resize(workerCount);
+	for (CoverageWorkerSamples &worker : workers)
+	    worker.points.resize(sampleValueCount);
+    } catch (const std::bad_alloc &) {
+	return false;
+    }
 
-    BObolPopSourceReader reader(*this);
-    std::vector<fastf_t> points;
-    std::vector<uint32_t> faces;
-    std::unordered_map<int, uint32_t> localPoints;
-    const size_t targetFaceCount = std::min(faceCount, previewFaceCount);
-    if (targetFaceCount > points.max_size() / 3 ||
-	targetFaceCount > faces.max_size() / 3)
-	return;
-    points.reserve(targetFaceCount * 3);
-    faces.reserve(targetFaceCount * 3);
-    localPoints.reserve(targetFaceCount * 3);
-
-    point_t bmin = VINIT_ZERO;
-    point_t bmax = VINIT_ZERO;
-    bool haveBounds = false;
-    for (size_t sourceFace = 0; sourceFace < targetFaceCount; sourceFace++) {
-	/* A cold preview must remain bounded in decoded source pages as well as
-	 * output bytes.  A whole-model stride touches nearly every mapped vertex
-	 * page on Lucy and turns a 4k-face handoff into seconds of byte swapping.
-	 * The structural overview remains visible independently; this contiguous
-	 * first page is the prompt local mesh evidence until spatial leaves arrive. */
-	int sourceIndices[3] = {};
-	if (!reader.face(sourceFace, sourceIndices) ||
-	    sourceIndices[0] == sourceIndices[1] ||
-	    sourceIndices[1] == sourceIndices[2] ||
-	    sourceIndices[0] == sourceIndices[2])
-	    continue;
-	uint32_t localIndices[3] = {};
-	bool valid = true;
-	for (int corner = 0; corner < 3; ++corner) {
-	    if (sourceIndices[corner] < 0 ||
-		static_cast<size_t>(sourceIndices[corner]) >= vertexCount) {
-		valid = false;
-		break;
-	    }
-	    const std::unordered_map<int, uint32_t>::const_iterator found =
-		localPoints.find(sourceIndices[corner]);
-	    if (found != localPoints.end()) {
-		localIndices[corner] = found->second;
-		continue;
-	    }
-	    if (points.size() / 3 >= UINT32_MAX) {
-		valid = false;
-		break;
+    const auto sampleRange = [this, &previewMinimum, &previewMaximum,
+	&extent, &workers, valuesPerCell, cellAxis,
+	boundRelativeTolerance](size_t workerIndex, size_t begin, size_t end) {
+	CoverageWorkerSamples &worker = workers[workerIndex];
+	BObolPopSourceReader reader(*this, BObolPopPointAccess::Sequential);
+	for (size_t vertexIndex = begin; vertexIndex < end; ++vertexIndex) {
+	    if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+		generationCancelled()) {
+		worker.sourceValid = false;
+		return;
 	    }
 	    point_t point;
-	    if (!reader.point(static_cast<size_t>(sourceIndices[corner]), point)) {
-		valid = false;
-		break;
+	    if (!reader.point(vertexIndex, point)) {
+		worker.sourceValid = false;
+		return;
 	    }
-	    const uint32_t localIndex = static_cast<uint32_t>(points.size() / 3);
-	    localPoints.emplace(sourceIndices[corner], localIndex);
-	    points.insert(points.end(), point, point + 3);
-	    localIndices[corner] = localIndex;
-	    if (!haveBounds) {
-		VMOVE(bmin, point);
-		VMOVE(bmax, point);
-		haveBounds = true;
-	    } else {
-		for (int axis = 0; axis < 3; ++axis) {
-		    bmin[axis] = std::min(bmin[axis], point[axis]);
-		    bmax[axis] = std::max(bmax[axis], point[axis]);
+	    for (size_t axis = 0; axis < 3; ++axis) {
+		const fastf_t tolerance = SMALL_FASTF +
+		    std::fabs(extent[axis]) * boundRelativeTolerance;
+		if (point[axis] < previewMinimum[axis] - tolerance ||
+		    point[axis] > previewMaximum[axis] + tolerance) {
+		    worker.boundsMismatch = true;
+		    return;
 		}
 	    }
+	    uint32_t coordinate[3] = {};
+	    for (size_t axis = 0; axis < 3; ++axis) {
+		if (extent[axis] <= SMALL_FASTF)
+		    continue;
+		const fastf_t normalized =
+		    (point[axis] - previewMinimum[axis]) / extent[axis];
+		const fastf_t scaled = normalized * static_cast<fastf_t>(cellAxis);
+		coordinate[axis] = static_cast<uint32_t>(std::max<fastf_t>(0.0,
+		    std::min<fastf_t>(static_cast<fastf_t>(cellAxis - 1), scaled)));
+	    }
+	    const size_t cell = coordinate[X] + cellAxis *
+		(coordinate[Y] + cellAxis * coordinate[Z]);
+	    if (cell >= worker.population.size() ||
+		worker.population[cell] >= pointsPerCell)
+		continue;
+	    fastf_t *destination = worker.points.data() +
+		cell * valuesPerCell + worker.population[cell] * 3u;
+	    VMOVE(destination, point);
+	    ++worker.population[cell];
 	}
-	if (!valid)
-	    continue;
-	faces.insert(faces.end(), localIndices, localIndices + 3);
+    };
+    if (workerCount == 1) {
+	sampleRange(0, 0, vertexCount);
+    } else {
+	std::vector<std::thread> sampleWorkers;
+	try {
+	    sampleWorkers.reserve(workerCount);
+	    const size_t chunk = (vertexCount + workerCount - 1) / workerCount;
+	    for (size_t worker = 0; worker < workerCount; ++worker) {
+		const size_t begin = worker * chunk;
+		const size_t end = std::min(vertexCount, begin + chunk);
+		sampleWorkers.emplace_back(sampleRange, worker, begin, end);
+	    }
+	} catch (const std::system_error &) {
+	    for (std::thread &worker : sampleWorkers)
+		worker.join();
+	    return false;
+	}
+	for (std::thread &worker : sampleWorkers)
+	    worker.join();
     }
-    if (faces.empty() || points.empty() || !haveBounds)
-	return;
+
+    std::vector<fastf_t> points;
+    try {
+	points.reserve(sampleValueCount);
+    } catch (const std::bad_alloc &) {
+	return false;
+    }
+    for (const CoverageWorkerSamples &worker : workers) {
+	if (!worker.sourceValid)
+	    return false;
+	if (worker.boundsMismatch) {
+	    coveragePreviewBoundsMismatch = coveragePreviewBoundsKnown;
+	    return false;
+	}
+    }
+    /* The certificate is spatial occupancy.  Merge cell-local samples in
+     * source-range order; their order within an occupied cell is irrelevant. */
+    for (size_t cell = 0; cell < cellCount; ++cell) {
+	size_t retained = 0;
+	for (const CoverageWorkerSamples &worker : workers) {
+	    const size_t available = worker.population[cell];
+	    const size_t count = std::min(pointsPerCell - retained, available);
+	    const fastf_t *source = worker.points.data() + cell * valuesPerCell;
+	    points.insert(points.end(), source, source + count * 3u);
+	    retained += count;
+	    if (retained == pointsPerCell)
+		break;
+	}
+    }
+    if (points.empty())
+	return false;
 
     struct BObolMeshLodData data = {};
-    data.faces = faces.data();
-    data.face_count = faces.size() / 3;
     data.points = reinterpret_cast<const point_t *>(points.data());
     data.point_count = points.size() / 3;
     data.points_orig = data.points;
     data.point_orig_count = data.point_count;
-    VMOVE(data.bmin, bmin);
-    VMOVE(data.bmax, bmax);
+    VMOVE(data.bmin, previewMinimum);
+    VMOVE(data.bmax, previewMaximum);
     struct BObolMeshLodHierarchyInfo hierarchy =
 	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
     hierarchy.min_cut = 0;
     hierarchy.max_cut = 0;
     hierarchy.resident_cut = 0;
     hierarchy.cut_count = 1;
-    hierarchy.shaded_cull_backfaces = shadedCullBackfaces ? 1 : 0;
-    VMOVE(hierarchy.quantization_min, bmin);
-    VMOVE(hierarchy.quantization_max, bmax);
-    hierarchy.cuts[0].face_count = data.face_count;
+    VMOVE(hierarchy.quantization_min, previewMinimum);
+    VMOVE(hierarchy.quantization_max, previewMaximum);
     hierarchy.cuts[0].point_count = data.point_count;
     hierarchy.cuts[0].resident_bytes =
-	data.point_count * sizeof(point_t) + faces.size() * sizeof(uint32_t);
-	/* The bootstrap carries exact source coordinates, so model it as a
-	 * one-cut hierarchy at the full quantization precision.  It is only the
-	 * source coverage that is incomplete; the service marks the resulting
-	 * publication nonterminal until the durable hierarchy arrives. */
-    hierarchy.cuts[0].object_error = 0.0;
-    hierarchy.cuts[0].quantization_bits[X] =
-	BOBOL_MESH_LOD_QUANTIZATION_BITS;
-    hierarchy.cuts[0].quantization_bits[Y] =
-	BOBOL_MESH_LOD_QUANTIZATION_BITS;
-    hierarchy.cuts[0].quantization_bits[Z] =
-	BOBOL_MESH_LOD_QUANTIZATION_BITS;
-    hierarchy.cuts[0].exact = 1;
-    /* This is not the durable content hash (that requires the following
-     * full-source pass), but callbacks require a nonzero provider token to
-     * distinguish valid borrowed geometry from an empty publication.  The
-     * state address is process-local and is never persisted or used as a
-     * cache identity. */
+	data.point_count * sizeof(point_t);
     const unsigned long long previewKey =
 	static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(this));
-    previewCallback(previewKey, &data, &hierarchy, previewCallbackData);
-	spatialPreviewPublished = true;
+    previewCallback(BOBOL_MESH_LOD_PREVIEW_COVERAGE_POINTS, previewKey,
+	&data, &hierarchy, previewCallbackData);
     if (getenv("BOBOL_DRAW_TIMING"))
-	bu_log("[obol-timing] serialized PoP bootstrap: %8.1f ms "
-	       "(faces=%zu points=%zu)\n", (bu_gettime() - started) / 1000.0,
-	       data.face_count,
-	       data.point_count);
+	bu_log("[obol-timing] serialized coverage preview: %8.1f ms "
+	       "(points=%zu workers=%zu)\n",
+	       (bu_gettime() - started) / 1000.0, data.point_count,
+	       workerCount);
+    return true;
 }
 
 void
@@ -2017,30 +2227,68 @@ BObolPopState::initializeGeneration(
 {
     previewCallback = preview;
     previewCallbackData = previewData;
+    spatialPageCallback = previewRequest ?
+	previewRequest->spatial_page_callback : NULL;
+    spatialPageCallbackData = previewRequest ?
+	previewRequest->spatial_page_data : NULL;
+    cancellationCallback = previewRequest ?
+	previewRequest->cancellation_callback : NULL;
+    cancellationCallbackData = previewRequest ?
+	previewRequest->cancellation_data : NULL;
     generationFailureReason = "source validation";
+    if (generationCancelled()) {
+	generationFailureReason = "generation cancelled";
+	return;
+    }
     if ((!vertexArray && !hasSerializedSource) || !vertexCount ||
 	(!faceArray && !hasSerializedSource) || !faceCount) {
 	return;
 	}
-	const char *spatialLeaves = getenv("BOBOL_LOD_SPATIAL_LEAVES");
-	spatialLeafRequested = hasSerializedSource && spatialLeaves &&
-	spatialLeaves[0];
-	/* A serialized spatial source can be hundreds of megabytes.  Its cache
-	 * identity and global quantization domain correctly require full-source
-	 * passes, but neither is a prerequisite for showing a bounded, transient
-	 * subset of the mapped source.  Publish that subset before hashing and the
-	 * bounds pass so a cold view has useful geometry while durable preparation
-	 * proceeds.  This preview is explicitly nonterminal at the service layer;
-	 * the later immutable hierarchy supersedes it. */
-	if (spatialLeafRequested)
-	    publishSerializedBootstrapPreview();
+    spatialLeafRequested = hasSerializedSource && previewRequest &&
+	previewRequest->spatial_leaf_producer != 0;
+    /* A source-order face prefix has no whole-object meaning.  Before the
+     * content hash and spatial page construction, scan the serialized vertex
+     * stream sequentially and publish a bounded spatially stratified point
+     * representation instead.  It has an explicit preview kind and never
+     * claims to be a PoP hierarchy. */
+    if (spatialLeafRequested) {
+	if (previewRequest && previewRequest->coverage_bounds_valid) {
+	    for (size_t axis = 0; axis < 3; ++axis) {
+		coveragePreviewMinimum[axis] =
+		    previewRequest->coverage_bmin[axis];
+		coveragePreviewMaximum[axis] =
+		    previewRequest->coverage_bmax[axis];
+	    }
+	    coveragePreviewBoundsKnown =
+		std::isfinite(coveragePreviewMaximum[X] -
+		    coveragePreviewMinimum[X]) &&
+		std::isfinite(coveragePreviewMaximum[Y] -
+		    coveragePreviewMinimum[Y]) &&
+		std::isfinite(coveragePreviewMaximum[Z] -
+		    coveragePreviewMinimum[Z]);
+	}
+	if (!coveragePreviewBoundsKnown) {
+	    generationFailureReason = "coverage bounds scan";
+	    if (!scanSourceBounds())
+		return;
+	}
+	coveragePreviewBoundsMismatch = false;
+	(void)publishSerializedCoveragePreview();
+	if (coveragePreviewBoundsMismatch) {
+	    coveragePreviewBoundsKnown = false;
+	    generationFailureReason = "coverage bounds validation";
+	    if (!scanSourceBounds())
+		return;
+	    (void)publishSerializedCoveragePreview();
+	}
+    }
 
     if (!userKey) {
 	generationFailureReason = "source hashing";
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char prefixSemantics[] = "BObol-chunked-PoP-format-22";
+	static const char prefixSemantics[] = "BObol-chunked-PoP-format-23";
 	static const char spatialSemantics[] =
-	    "BObol-spatial-leaf-producer-v1";
+	    "BObol-spatial-leaf-producer-v2";
 	bu_data_hash_update(state, prefixSemantics, sizeof(prefixSemantics));
 	if (spatialLeafRequested)
 	    bu_data_hash_update(state, spatialSemantics, sizeof(spatialSemantics));
@@ -2050,8 +2298,15 @@ BObolPopState::initializeGeneration(
 	    bu_data_hash_update(state, faceArray,
 		3 * faceCount * sizeof(int));
 	} else {
-	    BObolPopSourceReader reader(*this);
+	    BObolPopSourceReader reader(*this,
+		BObolPopPointAccess::Sequential);
 	    for (size_t index = 0; index < vertexCount; ++index) {
+		if ((index & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+		    generationCancelled()) {
+		    bu_data_hash_destroy(state);
+		    generationFailureReason = "generation cancelled";
+		    return;
+		}
 		point_t point;
 		if (!reader.point(index, point)) {
 		    bu_data_hash_destroy(state);
@@ -2060,6 +2315,12 @@ BObolPopState::initializeGeneration(
 		bu_data_hash_update(state, point, sizeof(point));
 	    }
 	    for (size_t index = 0; index < faceCount; ++index) {
+		if ((index & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+		    generationCancelled()) {
+		    bu_data_hash_destroy(state);
+		    generationFailureReason = "generation cancelled";
+		    return;
+		}
 		int face[3] = {};
 		if (!reader.face(index, face)) {
 		    bu_data_hash_destroy(state);
@@ -2115,27 +2376,35 @@ BObolPopState::initializeGeneration(
 		    vertexArray, vertexCount);
     }
 
-    BObolPopSourceReader boundsReader(*this);
+    if (!sourceBoundsScanned) {
+	BObolPopSourceReader boundsReader(*this,
+	    BObolPopPointAccess::Sequential);
 	generationFailureReason = "bounds scan";
-    for (size_t vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
-	point_t point;
-	if (!boundsReader.point(vertexIndex, point))
-	    return;
-	minx = (point[X] < minx) ? point[X] : minx;
-	miny = (point[Y] < miny) ? point[Y] : miny;
-	minz = (point[Z] < minz) ? point[Z] : minz;
-	maxx = (point[X] > maxx) ? point[X] : maxx;
-	maxy = (point[Y] > maxy) ? point[Y] : maxy;
-	maxz = (point[Z] > maxz) ? point[Z] : maxz;
-    }
-    if (hasSerializedSource) {
-	VSET(bbmin, minx, miny, minz);
-	VSET(bbmax, maxx, maxy, maxz);
-    }
+	for (size_t vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
+	    if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+		generationCancelled()) {
+		generationFailureReason = "generation cancelled";
+		return;
+	    }
+	    point_t point;
+	    if (!boundsReader.point(vertexIndex, point))
+		return;
+	    minx = (point[X] < minx) ? point[X] : minx;
+	    miny = (point[Y] < miny) ? point[Y] : miny;
+	    minz = (point[Z] < minz) ? point[Z] : minz;
+	    maxx = (point[X] > maxx) ? point[X] : maxx;
+	    maxy = (point[Y] > maxy) ? point[Y] : maxy;
+	    maxz = (point[Z] > maxz) ? point[Z] : maxz;
+	}
+	if (hasSerializedSource) {
+	    VSET(bbmin, minx, miny, minz);
+	    VSET(bbmax, maxx, maxy, maxz);
+	}
 
-    if (!std::isfinite(maxx - minx) || !std::isfinite(maxy - miny) ||
-	!std::isfinite(maxz - minz))
-	return;
+	if (!std::isfinite(maxx - minx) || !std::isfinite(maxy - miny) ||
+	    !std::isfinite(maxz - minz))
+	    return;
+    }
 
     const int64_t classifyStarted = bu_gettime();
 	generationFailureReason = "PoP classification";
@@ -2152,7 +2421,11 @@ BObolPopState::initializeGeneration(
 	    generationFailureReason = isValid ? NULL : generationFailureReason;
 	    return;
 	}
-    triProcess();
+    if (!triProcess()) {
+	generationFailureReason = generationCancelled() ?
+	    "generation cancelled" : generationFailureReason;
+	return;
+    }
     if (getenv("BOBOL_DRAW_TIMING"))
 	bu_log("[obol-timing] pop classify: %8.1f ms (faces=%zu points=%zu)\n",
 	       (bu_gettime() - classifyStarted) / 1000.0,
@@ -2207,6 +2480,11 @@ BObolPopState::initializeGeneration(
 		initialLiveCut = cut;
 	}
 	if (preview) {
+	    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+		bu_log("[obol-timing] global PoP preview: requested_cut=%d "
+		       "materialized_cut=%d faces=%llu callback=1\n",
+		       requestedCut, initialLiveCut,
+		       static_cast<unsigned long long>(previewFaces));
 	isValid = true;
 	if (materializeInitialPrefix(initialLiveCut)) {
 	    struct BObolMeshLodData data = {};
@@ -2225,7 +2503,8 @@ BObolPopState::initializeGeneration(
 	    struct BObolMeshLodHierarchyInfo hierarchy =
 		BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 	    hierarchyInfo(&hierarchy);
-	    preview(hash, &data, &hierarchy, previewData);
+	    preview(BOBOL_MESH_LOD_PREVIEW_MESH_PREFIX, hash, &data,
+		&hierarchy, previewData);
 	}
 	std::vector<fastf_t>().swap(lodTriPoints);
 	std::vector<fastf_t>().swap(lodTriPointsSnapped);
@@ -2718,6 +2997,19 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	}
     }
     spatialLeafCache = clusterInfos.empty() && !chunkInfos.empty();
+    if (getenv("BOBOL_LOD_TRACE_SERIALIZED_SOURCE")) {
+	uint64_t minimumFaces = 0;
+	uint64_t minimumPoints = 0;
+	for (const BObolMeshLodChunkInfo &chunk : chunkInfos) {
+	    minimumFaces += chunk.cuts[minPopCut].face_count;
+	    minimumPoints += chunk.cuts[minPopCut].point_count;
+	}
+	bu_log("BObol PoP hierarchy %llu: pages=%zu cuts=%d..%d "
+	       "minimum=%llu faces/%llu points\n", hash, chunkInfos.size(),
+	       minPopCut, maxPopCut,
+	       static_cast<unsigned long long>(minimumFaces),
+	       static_cast<unsigned long long>(minimumPoints));
+    }
     /*
      * Retained drawing loads its first cumulative prefix immediately.  Let
      * that explicit path reuse this immutable header snapshot; ordinary
@@ -2737,6 +3029,7 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 
 BObolPopState::~BObolPopState()
 {
+    abortSpatialWrites();
     if (readTxn || readLock.owns_lock())
 	cacheDone();
     if (serializedSourceMap)
@@ -3539,6 +3832,50 @@ BObolPopState::cacheWriteData(const char *component, const void *data,
 	BRLCAD_OK;
 }
 
+bool
+BObolPopState::cacheWriteSpatialData(const char *component, const void *data,
+				    size_t size)
+{
+    if (!component || !data || !size || !context || !context->i ||
+	!context->i->lodCache)
+	return false;
+    char keystr[64] = {0};
+    if (!cacheComponentKey(keystr, sizeof(keystr), component))
+	return false;
+    const size_t written = bu_cache_write(const_cast<void *>(data), size,
+	keystr, context->i->lodCache, &spatialWriteTxn);
+    if (written != size || !spatialWriteTxn) {
+	abortSpatialWrites();
+	return false;
+    }
+    spatialWriteBytes = size > SIZE_MAX - spatialWriteBytes ?
+	SIZE_MAX : spatialWriteBytes + size;
+    return spatialWriteBytes <
+	BOBOL_MESH_LOD_SPATIAL_WRITE_TRANSACTION_BYTES ||
+	flushSpatialWrites();
+}
+
+bool
+BObolPopState::flushSpatialWrites(void)
+{
+    if (!spatialWriteTxn) {
+	spatialWriteBytes = 0;
+	return true;
+    }
+    const int committed = bu_cache_write_commit(
+	context->i->lodCache, &spatialWriteTxn);
+    spatialWriteBytes = 0;
+    return committed == BRLCAD_OK;
+}
+
+void
+BObolPopState::abortSpatialWrites(void)
+{
+    if (spatialWriteTxn)
+	bu_cache_write_abort(&spatialWriteTxn);
+    spatialWriteBytes = 0;
+}
+
 void
 BObolPopState::initializeCacheKeyPrefix(void)
 {
@@ -3603,13 +3940,39 @@ mesh_lod_chunk_append(std::vector<unsigned char> &bytes,
     return true;
 }
 
+static bool
+mesh_lod_chunk_append_vectors(std::vector<unsigned char> &bytes,
+	const std::vector<fastf_t> &values)
+{
+    if (values.size() % ELEMENTS_PER_VECT ||
+	values.size() > SIZE_MAX / sizeof(double))
+	return false;
+    const size_t byteCount = values.size() * sizeof(double);
+    if (byteCount > SIZE_MAX - bytes.size())
+	return false;
+    const size_t offset = bytes.size();
+    bytes.resize(offset + byteCount);
+    unsigned char *destination = bytes.data() + offset;
+    for (size_t value = 0; value < values.size();
+	 value += ELEMENTS_PER_VECT) {
+	const double vector[ELEMENTS_PER_VECT] = {
+	    static_cast<double>(values[value + X]),
+	    static_cast<double>(values[value + Y]),
+	    static_cast<double>(values[value + Z])
+	};
+	memcpy(destination + value * sizeof(double), vector,
+	    sizeof(vector));
+    }
+    return true;
+}
+
 bool
 BObolPopState::cacheSpatialLeaves(void)
 {
     constexpr size_t cellCount = BOBOL_MESH_LOD_CLUSTER_COUNT;
     constexpr size_t leafFaceCount = BOBOL_MESH_LOD_CHUNK_FACE_TARGET;
-	constexpr size_t previewFaceCount =
-	BOBOL_MESH_LOD_COLD_PREVIEW_FACE_TARGET;
+	constexpr size_t seedFaceCount =
+	BOBOL_MESH_LOD_SPATIAL_SEED_FACE_TARGET;
     if (!hasSerializedSource || !faceCount || !leafFaceCount ||
 	faceCount > UINT32_MAX || !cutCount)
 	return false;
@@ -3621,8 +3984,9 @@ BObolPopState::cacheSpatialLeaves(void)
 	    if (spool)
 		fclose(spool);
     };
-    const auto fail = [&closeSpools]() {
+    const auto fail = [this, &closeSpools]() {
 	closeSpools();
+	abortSpatialWrites();
 	return false;
     };
 
@@ -3634,61 +3998,38 @@ BObolPopState::cacheSpatialLeaves(void)
     std::vector<BObolSpatialFaceDisk> records;
     records.reserve(leafFaceCount);
 
-    const auto cachePage = [this, &reader, &firstCut, &records]() {
-	if (records.empty() || chunkInfos.size() >= UINT32_MAX)
-	    return false;
-
-	BObolMeshLodChunkInfo info = {};
-	info.chunk_id = static_cast<uint32_t>(chunkInfos.size());
-	info.min_cut = maxPopCut;
-	info.max_cut = maxPopCut;
-	double bmin[3] = {
-	    std::numeric_limits<double>::infinity(),
-	    std::numeric_limits<double>::infinity(),
-	    std::numeric_limits<double>::infinity()
-	};
-	double bmax[3] = {
-	    -std::numeric_limits<double>::infinity(),
-	    -std::numeric_limits<double>::infinity(),
-	    -std::numeric_limits<double>::infinity()
-	};
+    struct SpatialPageWork {
+	uint32_t chunkId = 0;
 	std::vector<uint32_t> sourceFaces;
 	std::vector<uint8_t> activationCuts;
-	sourceFaces.reserve(records.size());
-	activationCuts.reserve(records.size());
-	for (const BObolSpatialFaceDisk &entry : records) {
+	BObolPreparedMeshLodChunk prepared;
+	bool ready = false;
+    };
+
+    const auto makePageWork = [this](
+	const std::vector<BObolSpatialFaceDisk> &pageRecords,
+	uint32_t chunkId, SpatialPageWork &work) {
+	if (pageRecords.empty())
+	    return false;
+	work.chunkId = chunkId;
+	work.sourceFaces.reserve(pageRecords.size());
+	work.activationCuts.reserve(pageRecords.size());
+	for (const BObolSpatialFaceDisk &entry : pageRecords) {
 	    if (entry.sourceFace >= faceCount ||
 		entry.activationCut >= cutCount || entry.reserved[0] ||
 		entry.reserved[1] || entry.reserved[2])
 		return false;
-	    int face[3] = {};
-	    if (!reader.face(entry.sourceFace, face))
-		return false;
-	    for (int corner = 0; corner < 3; ++corner) {
-		if (face[corner] < 0 ||
-		    static_cast<size_t>(face[corner]) >= vertexCount)
-		    return false;
-		point_t point;
-		if (!reader.point(static_cast<size_t>(face[corner]), point))
-		    return false;
-		for (int axis = 0; axis < 3; ++axis) {
-		    bmin[axis] = std::min(bmin[axis],
-			static_cast<double>(point[axis]));
-		    bmax[axis] = std::max(bmax[axis],
-			static_cast<double>(point[axis]));
-		}
-	    }
-	    info.min_cut = std::min(info.min_cut,
-		static_cast<int>(entry.activationCut));
-	    sourceFaces.push_back(entry.sourceFace);
-	    activationCuts.push_back(entry.activationCut);
+	    work.sourceFaces.push_back(entry.sourceFace);
+	    work.activationCuts.push_back(entry.activationCut);
 	}
-	if (!std::isfinite(bmin[X]) || !std::isfinite(bmax[X]))
+	return true;
+    };
+
+    const auto publishPage = [this, &firstCut](SpatialPageWork &work) {
+	if (!work.ready || work.prepared.info.chunk_id != chunkInfos.size())
 	    return false;
-	VSET(info.bmin, bmin[X], bmin[Y], bmin[Z]);
-	VSET(info.bmax, bmax[X], bmax[Y], bmax[Z]);
-	chunkInfos.push_back(info);
-	if (!cacheChunk(info.chunk_id, sourceFaces, activationCuts))
+	chunkInfos.push_back(work.prepared.info);
+	if (!publishChunk(std::move(work.prepared)))
 	    return false;
 	const BObolMeshLodChunkInfo &cached = chunkInfos.back();
 	uint32_t priorPoints = 0;
@@ -3707,13 +4048,67 @@ BObolPopState::cacheSpatialLeaves(void)
 	    priorPoints = current.point_count;
 	    priorFaces = current.face_count;
 	}
-	firstCut = firstCut < 0 ? info.min_cut :
-	    std::min(firstCut, info.min_cut);
+	firstCut = firstCut < 0 ? cached.min_cut :
+	    std::min(firstCut, cached.min_cut);
 	return true;
+    };
+
+    const auto prepareWave = [this, &publishPage](
+	std::vector<SpatialPageWork> &wave) {
+	if (wave.empty())
+	    return true;
+	const size_t workerCount = std::min<size_t>(wave.size(),
+	    std::min<size_t>(BOBOL_MESH_LOD_SPATIAL_PAGE_MAX_WORKERS,
+		std::max<size_t>(1, bu_avail_cpus())));
+	const auto prepareAt = [this, &wave](size_t index) {
+	    try {
+		SpatialPageWork &work = wave[index];
+		work.ready = prepareChunk(work.chunkId, work.sourceFaces,
+		    work.activationCuts, work.prepared);
+	    } catch (const std::bad_alloc &) {
+		wave[index].ready = false;
+	    }
+	};
+	if (workerCount == 1) {
+	    for (size_t index = 0; index < wave.size(); ++index)
+		prepareAt(index);
+	} else {
+	    std::atomic_size_t nextWork(0);
+	    const auto worker = [&nextWork, &prepareAt, &wave]() {
+		for (;;) {
+		    const size_t index = nextWork.fetch_add(
+			1, std::memory_order_relaxed);
+		    if (index >= wave.size())
+			return;
+		    prepareAt(index);
+		}
+	    };
+	    std::vector<std::thread> workers;
+	    workers.reserve(workerCount);
+	    for (size_t index = 0; index < workerCount; ++index)
+		workers.emplace_back(worker);
+	    for (std::thread &thread : workers)
+		thread.join();
+	}
+	for (SpatialPageWork &work : wave)
+	    if (!publishPage(work))
+		return false;
+	return true;
+    };
+
+    const auto cachePage = [this, &records, &makePageWork, &prepareWave]() {
+	if (records.empty() || chunkInfos.size() >= UINT32_MAX)
+	    return false;
+	std::vector<SpatialPageWork> wave(1);
+	if (!makePageWork(records, static_cast<uint32_t>(chunkInfos.size()),
+		wave.front()))
+	    return false;
+	return prepareWave(wave);
     };
 
     const auto constrainedPreview = [this, &closeSpools, started, &firstCut]() {
 	closeSpools();
+	abortSpatialWrites();
 	minPopCut = firstCut;
 	spatialLeafCache = true;
 	sourceLimitedPrefix = true;
@@ -3726,13 +4121,15 @@ BObolPopState::cacheSpatialLeaves(void)
 	return true;
     };
 
-    /* Emit one bounded source-order page before the complete spatial scan.
-     * This is deliberately an interim cold-preview leaf, not the final
-     * spatial partition: it gives the caller useful mesh content while the
-     * remaining face stream is classified into independently drawable cells. */
+    /* Materialize one bounded source-order page before the complete spatial
+     * scan.  This only seeds the resumable spatial cache: a local page cannot
+     * represent the whole source and is therefore never a presentation. */
     uint32_t firstUnclassifiedFace = 0;
     for (; firstUnclassifiedFace < faceCount &&
-	 records.size() < previewFaceCount; ++firstUnclassifiedFace) {
+	 records.size() < seedFaceCount; ++firstUnclassifiedFace) {
+	if ((firstUnclassifiedFace & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+	    generationCancelled())
+	    return fail();
 	uint8_t activation = UINT8_MAX;
 	uint16_t cell = UINT16_MAX;
 	if (!classifySpatialFace(reader, firstUnclassifiedFace, activation, cell))
@@ -3745,41 +4142,117 @@ BObolPopState::cacheSpatialLeaves(void)
 	return fail();
     minPopCut = firstCut;
     spatialLeafCache = true;
-	const bool previewWasPublished = spatialPreviewPublished;
-    publishSpatialPreview();
-	if (!previewWasPublished && spatialPreviewPublished &&
-	    getenv("BOBOL_DRAW_TIMING"))
-	    bu_log("[obol-timing] spatial PoP first page: %8.1f ms "
-		   "(faces=%u)\n", (bu_gettime() - started) / 1000.0,
-		   chunkInfos.front().cuts[maxPopCut].face_count);
     if (spatialPublicationLimited)
 	return constrainedPreview();
 
     /* The spool is bounded to one fixed-width record per valid face and is
      * anonymous: it cannot become another persistent cache format or leave
-     * a test-directory artifact.  Source order within each cell is retained
-     * so cache contents do not depend on worker scheduling. */
-	for (uint32_t sourceFace = firstUnclassifiedFace;
-	 sourceFace < faceCount; ++sourceFace) {
-	uint8_t activation = UINT8_MAX;
-	uint16_t cell = UINT16_MAX;
-	if (!classifySpatialFace(reader, sourceFace, activation, cell))
-	    continue;
-	if (cell >= cellCount || activation >= cutCount)
+     * a test-directory artifact.  Classification is independent per face;
+     * merge each bounded parallel batch in source order so cache contents do
+     * not depend on scheduling.  Grouping writes by cell also avoids one
+     * stdio call per source triangle. */
+    std::vector<uint8_t> batchActivations;
+    std::vector<uint16_t> batchCells;
+    std::array<std::vector<BObolSpatialFaceDisk>, cellCount>
+	batchCellRecords;
+    for (uint32_t batchBegin = firstUnclassifiedFace;
+	 batchBegin < faceCount;) {
+	const uint32_t batchEnd = static_cast<uint32_t>(std::min<uint64_t>(
+	    faceCount, static_cast<uint64_t>(batchBegin) +
+		BOBOL_MESH_LOD_SPATIAL_CLASSIFICATION_BATCH_FACE_COUNT));
+	const size_t batchCount = batchEnd - batchBegin;
+	try {
+	    batchActivations.assign(batchCount, UINT8_MAX);
+	    batchCells.assign(batchCount, UINT16_MAX);
+	} catch (const std::bad_alloc &) {
 	    return fail();
-	if (!spools[cell])
-	    spools[cell] = tmpfile();
-	if (!spools[cell])
-	    return fail();
-	const BObolSpatialFaceDisk record = {sourceFace, activation, {0, 0, 0}};
-	if (fwrite(&record, sizeof(record), 1, spools[cell]) != 1)
-		return fail();
-    }
-	if (getenv("BOBOL_DRAW_TIMING"))
-	    bu_log("[obol-timing] spatial PoP partition: %8.1f ms "
-		   "(faces=%zu)\n", (bu_gettime() - started) / 1000.0,
-		   faceCount);
+	}
 
+	std::atomic_bool batchCancelled(false);
+	const auto classifyRange = [this, batchBegin, &batchActivations,
+		&batchCells, &batchCancelled](size_t begin, size_t end) {
+	    BObolPopSourceReader batchReader(*this);
+	    for (size_t offset = begin; offset < end; ++offset) {
+		if ((offset & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+		    generationCancelled()) {
+		    batchCancelled.store(true, std::memory_order_relaxed);
+		    return;
+		}
+		uint8_t activation = UINT8_MAX;
+		uint16_t cell = UINT16_MAX;
+		if (classifySpatialFace(batchReader,
+			static_cast<uint32_t>(batchBegin + offset),
+			activation, cell)) {
+		    batchActivations[offset] = activation;
+		    batchCells[offset] = cell;
+		}
+	    }
+	};
+	const size_t usefulWorkers = std::max<size_t>(1,
+	    (batchCount +
+		BOBOL_MESH_LOD_SPATIAL_CLASSIFICATION_FACES_PER_WORKER - 1) /
+		BOBOL_MESH_LOD_SPATIAL_CLASSIFICATION_FACES_PER_WORKER);
+	const size_t workerCount = std::min<size_t>(
+	    BOBOL_MESH_LOD_SPATIAL_CLASSIFICATION_MAX_WORKERS,
+	    std::min<size_t>(std::max<size_t>(1, bu_avail_cpus()),
+		usefulWorkers));
+	if (workerCount == 1) {
+	    classifyRange(0, batchCount);
+	} else {
+	    std::vector<std::thread> workers;
+	    workers.reserve(workerCount);
+	    const size_t workerFaces =
+		(batchCount + workerCount - 1) / workerCount;
+	    for (size_t worker = 0; worker < workerCount; ++worker) {
+		const size_t begin = worker * workerFaces;
+		const size_t end = std::min(batchCount, begin + workerFaces);
+		if (begin >= end)
+		    break;
+		workers.emplace_back(classifyRange, begin, end);
+	    }
+	    for (std::thread &worker : workers)
+		worker.join();
+	}
+	if (batchCancelled.load(std::memory_order_relaxed) ||
+	    generationCancelled())
+	    return fail();
+
+	for (std::vector<BObolSpatialFaceDisk> &cellRecords :
+	     batchCellRecords)
+	    cellRecords.clear();
+	for (size_t offset = 0; offset < batchCount; ++offset) {
+	    const uint8_t activation = batchActivations[offset];
+	    const uint16_t cell = batchCells[offset];
+	    if (activation == UINT8_MAX && cell == UINT16_MAX)
+		continue;
+	    if (cell >= cellCount || activation >= cutCount)
+		return fail();
+	    batchCellRecords[cell].push_back({
+		static_cast<uint32_t>(batchBegin + offset), activation,
+		{0, 0, 0}
+	    });
+	}
+	for (size_t cell = 0; cell < cellCount; ++cell) {
+	    const std::vector<BObolSpatialFaceDisk> &cellRecords =
+		batchCellRecords[cell];
+	    if (cellRecords.empty())
+		continue;
+	    if (!spools[cell])
+		spools[cell] = tmpfile();
+	    if (!spools[cell] || fwrite(cellRecords.data(),
+		    sizeof(BObolSpatialFaceDisk), cellRecords.size(),
+		    spools[cell]) != cellRecords.size())
+		return fail();
+	}
+	batchBegin = batchEnd;
+    }
+    if (getenv("BOBOL_DRAW_TIMING"))
+	bu_log("[obol-timing] spatial PoP partition: %8.1f ms "
+	       "(faces=%zu)\n", (bu_gettime() - started) / 1000.0,
+	       faceCount);
+
+    std::vector<SpatialPageWork> pageWave;
+    pageWave.reserve(BOBOL_MESH_LOD_SPATIAL_PAGE_MAX_WORKERS);
     for (size_t cell = 0; cell < cellCount; ++cell) {
 	FILE *spool = spools[cell];
 	if (!spool)
@@ -3789,23 +4262,43 @@ BObolPopState::cacheSpatialLeaves(void)
 	for (;;) {
 	    records.clear();
 	    BObolSpatialFaceDisk record = {};
-		while (records.size() < leafFaceCount &&
-		       fread(&record, sizeof(record), 1, spool) == 1) {
-		    records.push_back(record);
-		}
-		if (ferror(spool))
-		    return fail();
-		if (records.empty())
-		    break;
-		if (!cachePage())
-		    return fail();
-		if (spatialPublicationLimited) {
-		    return constrainedPreview();
-		}
+	    while (records.size() < leafFaceCount &&
+		   fread(&record, sizeof(record), 1, spool) == 1) {
+		records.push_back(record);
 	    }
+	    if (ferror(spool))
+		return fail();
+	    if (records.empty())
+		break;
+	    if (chunkInfos.size() + pageWave.size() >= UINT32_MAX)
+		return fail();
+	    pageWave.emplace_back();
+	    if (!makePageWork(records, static_cast<uint32_t>(
+		    chunkInfos.size() + pageWave.size() - 1u),
+		    pageWave.back()))
+		return fail();
+	    if (pageWave.size() ==
+		    BOBOL_MESH_LOD_SPATIAL_PAGE_MAX_WORKERS) {
+		if (!prepareWave(pageWave))
+		    return fail();
+		pageWave.clear();
+		if (spatialPublicationLimited)
+		    return constrainedPreview();
+	    }
+	}
+    }
+    if (!pageWave.empty()) {
+	if (!prepareWave(pageWave))
+	    return fail();
+	if (spatialPublicationLimited)
+	    return constrainedPreview();
     }
     closeSpools();
-    if (chunkInfos.empty() || firstCut < 0)
+    if (chunkInfos.empty() || firstCut < 0) {
+	abortSpatialWrites();
+	return false;
+    }
+    if (!flushSpatialWrites())
 	return false;
     minPopCut = firstCut;
     spatialLeafCache = true;
@@ -3817,47 +4310,13 @@ BObolPopState::cacheSpatialLeaves(void)
 	return metadataCached;
 }
 
-void
-BObolPopState::publishSpatialPreview(void)
-{
-    if (!previewCallback || spatialPreviewPublished || chunkInfos.empty() ||
-	minPopCut < 0 || maxPopCut < minPopCut ||
-	spatialPreviewPoints.empty() || spatialPreviewFaces.empty() ||
-	spatialPreviewPoints.size() % 3 || spatialPreviewFaces.size() % 3 ||
-	(!spatialPreviewNormals.empty() &&
-	 spatialPreviewNormals.size() != spatialPreviewFaces.size() * 3))
-	return;
-
-    struct BObolMeshLodHierarchyInfo hierarchy =
-	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-    hierarchyInfo(&hierarchy);
-    hierarchy.resident_cut = maxPopCut;
-    struct BObolMeshLodData data = {};
-    data.faces = spatialPreviewFaces.data();
-    data.face_count = spatialPreviewFaces.size() / 3;
-    data.points = reinterpret_cast<const point_t *>(
-	spatialPreviewPoints.data());
-    data.point_count = spatialPreviewPoints.size() / 3;
-    data.points_orig = data.points;
-    data.point_orig_count = data.point_count;
-    data.normals = spatialPreviewNormals.empty() ? NULL :
-	reinterpret_cast<const vect_t *>(spatialPreviewNormals.data());
-    data.normal_count = data.normals ? data.face_count * 3 : 0;
-    VMOVE(data.bmin, hierarchy.quantization_min);
-    VMOVE(data.bmax, hierarchy.quantization_max);
-    previewCallback(hash, &data, &hierarchy, previewCallbackData);
-    spatialPreviewPublished = true;
-    std::vector<fastf_t>().swap(spatialPreviewPoints);
-    std::vector<uint32_t>().swap(spatialPreviewFaces);
-    std::vector<fastf_t>().swap(spatialPreviewNormals);
-}
-
 bool
-BObolPopState::cacheChunk(uint32_t chunkId,
+BObolPopState::prepareChunk(uint32_t chunkId,
 	const std::vector<uint32_t> &sourceFaces,
-	const std::vector<uint8_t> &activationCuts)
+	const std::vector<uint8_t> &activationCuts,
+	BObolPreparedMeshLodChunk &prepared) const
 {
-    if (chunkId >= chunkInfos.size() || sourceFaces.empty() ||
+    if (sourceFaces.empty() ||
 	sourceFaces.size() != activationCuts.size())
 	return false;
 
@@ -3866,40 +4325,52 @@ BObolPopState::cacheChunk(uint32_t chunkId,
      * 14M-point BoT paid the table cost even while writing a 64K-face leaf.
      * The source id is only an implementation detail of this one record, so
      * retain it in a bounded leaf map instead. */
-    std::unordered_map<uint32_t, uint8_t> localVertexCut;
-    std::unordered_map<uint32_t, uint32_t> localVertexIndex;
+    struct LocalVertexState {
+	uint32_t localIndex;
+	uint8_t activationCut;
+    };
+    std::unordered_map<uint32_t, LocalVertexState> localVertices;
     std::vector<uint32_t> touchedVertices;
     std::array<std::vector<uint32_t>, POP_CUT_COUNT_MAX> cutVertices;
     std::array<std::vector<uint32_t>, POP_CUT_COUNT_MAX> chunkCutFaces;
-    BObolPopSourceReader reader(*this);
+    /* Spatial membership deliberately reorders source faces.  A sequential
+     * reader would decode a 16K-face block for almost every lookup, so keep
+     * both face and point access direct and bounded to the requested records. */
+    BObolPopSourceReader reader(*this, BObolPopPointAccess::Indexed,
+	BObolPopFaceAccess::Indexed);
 
-	BObolMeshLodChunkInfo &info = chunkInfos[chunkId];
+	BObolMeshLodChunkInfo info = {};
+	info.chunk_id = chunkId;
+	info.min_cut = maxPopCut;
+	info.max_cut = maxPopCut;
 	for (std::vector<uint32_t> &values : cutVertices)
 	    values.clear();
 	for (std::vector<uint32_t> &values : chunkCutFaces)
 	    values.clear();
 	touchedVertices.clear();
-	localVertexCut.clear();
-	localVertexIndex.clear();
+	localVertices.clear();
 	/* A manifold 64K-face leaf normally has fewer than three unique points
 	 * per face.  Reserving this bounded upper limit avoids repeated hash-table
 	 * growth without reserving against the full authored mesh. */
 	if (sourceFaces.size() > SIZE_MAX / 3)
 	    return false;
 	const size_t leafVertexLimit = sourceFaces.size() * 3;
-	if (leafVertexLimit > localVertexCut.max_size() ||
-	    leafVertexLimit > localVertexIndex.max_size())
+	if (leafVertexLimit > localVertices.max_size())
 	    return false;
-	localVertexCut.reserve(leafVertexLimit);
-	localVertexIndex.reserve(leafVertexLimit);
+	localVertices.reserve(leafVertexLimit);
 
 	for (size_t faceIndex = 0; faceIndex < sourceFaces.size(); ++faceIndex) {
+	    if ((faceIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+		generationCancelled())
+		return false;
 	    const uint32_t sourceFace = sourceFaces[faceIndex];
 	    if (sourceFace >= faceCount)
 		return false;
 	    const uint8_t activation = activationCuts[faceIndex];
 	    if (activation >= cutCount)
 		return false;
+	    info.min_cut = std::min(info.min_cut,
+		static_cast<int>(activation));
 	    chunkCutFaces[activation].push_back(sourceFace);
 	    int face[3] = {};
 	    if (!reader.face(sourceFace, face))
@@ -3909,24 +4380,35 @@ BObolPopState::cacheChunk(uint32_t chunkId,
 		if (vertex < 0 || static_cast<size_t>(vertex) >= vertexCount)
 		    return false;
 		const uint32_t sourceVertex = static_cast<uint32_t>(vertex);
-		auto inserted = localVertexCut.emplace(sourceVertex, activation);
+		auto inserted = localVertices.emplace(sourceVertex,
+		    LocalVertexState{UINT32_MAX, activation});
 		if (inserted.second) {
 		    touchedVertices.push_back(sourceVertex);
 		} else {
-		    inserted.first->second = std::min(inserted.first->second,
-			activation);
+		    inserted.first->second.activationCut = std::min(
+			inserted.first->second.activationCut, activation);
 		}
 	    }
 	}
-	for (uint32_t sourceVertex : touchedVertices)
-	    cutVertices[localVertexCut.at(sourceVertex)].push_back(sourceVertex);
+	for (uint32_t sourceVertex : touchedVertices) {
+	    const auto found = localVertices.find(sourceVertex);
+	    if (found == localVertices.end() ||
+		found->second.activationCut >= cutCount)
+		return false;
+	    cutVertices[found->second.activationCut].push_back(sourceVertex);
+	}
 
 	uint64_t cumulativePoints = 0;
 	uint64_t cumulativeFaces = 0;
 	uint32_t nextLocalVertex = 0;
 	for (uint32_t cut = 0; cut < cutCount; ++cut) {
-	    for (uint32_t sourceVertex : cutVertices[cut])
-		localVertexIndex.emplace(sourceVertex, nextLocalVertex++);
+	    for (uint32_t sourceVertex : cutVertices[cut]) {
+		auto found = localVertices.find(sourceVertex);
+		if (found == localVertices.end() ||
+		    found->second.localIndex != UINT32_MAX)
+		    return false;
+		found->second.localIndex = nextLocalVertex++;
+	    }
 	    cumulativePoints += cutVertices[cut].size();
 	    cumulativeFaces += chunkCutFaces[cut].size();
 	    if (cumulativePoints > UINT32_MAX || cumulativeFaces > UINT32_MAX)
@@ -3945,6 +4427,88 @@ BObolPopState::cacheChunk(uint32_t chunkId,
 	    cumulativeFaces != sourceFaces.size())
 	    return false;
 
+	/* Decode each source record once into the page's cumulative PoP order.
+	 * These same validated arrays supply bounds, fixed-width persistence, and
+	 * the optional live callback.  The former three independent passes were
+	 * the dominant serial cost after spatial classification was parallelized. */
+	std::vector<fastf_t> pagePoints;
+	std::vector<uint32_t> pageFaces;
+	std::vector<fastf_t> pageNormals;
+	if (cumulativePoints > SIZE_MAX / 3u ||
+	    cumulativeFaces > SIZE_MAX / 3u ||
+	    (hasNormals && cumulativeFaces > SIZE_MAX / 9u))
+	    return false;
+	try {
+	    pagePoints.reserve(static_cast<size_t>(cumulativePoints) * 3u);
+	    pageFaces.reserve(static_cast<size_t>(cumulativeFaces) * 3u);
+	    if (hasNormals)
+		pageNormals.reserve(static_cast<size_t>(cumulativeFaces) * 9u);
+	} catch (const std::bad_alloc &) {
+	    return false;
+	}
+	double pageMinimum[3] = {
+	    std::numeric_limits<double>::infinity(),
+	    std::numeric_limits<double>::infinity(),
+	    std::numeric_limits<double>::infinity()
+	};
+	double pageMaximum[3] = {
+	    -std::numeric_limits<double>::infinity(),
+	    -std::numeric_limits<double>::infinity(),
+	    -std::numeric_limits<double>::infinity()
+	};
+	for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	    for (uint32_t sourceVertex : cutVertices[cut]) {
+		point_t point;
+		if (!reader.point(sourceVertex, point))
+		    return false;
+		for (size_t axis = 0; axis < 3; ++axis) {
+		    pageMinimum[axis] = std::min(pageMinimum[axis],
+			static_cast<double>(point[axis]));
+		    pageMaximum[axis] = std::max(pageMaximum[axis],
+			static_cast<double>(point[axis]));
+		    pagePoints.push_back(point[axis]);
+		}
+	    }
+	}
+	if (!std::isfinite(pageMinimum[X]) ||
+	    !std::isfinite(pageMaximum[X]))
+	    return false;
+	VSET(info.bmin, pageMinimum[X], pageMinimum[Y], pageMinimum[Z]);
+	VSET(info.bmax, pageMaximum[X], pageMaximum[Y], pageMaximum[Z]);
+
+	for (uint32_t cut = 0; cut < cutCount; ++cut) {
+	    for (uint32_t sourceFace : chunkCutFaces[cut]) {
+		int face[3] = {};
+		if (!reader.face(sourceFace, face))
+		    return false;
+		for (size_t corner = 0; corner < 3; ++corner) {
+		    const auto localVertex = localVertices.find(
+			static_cast<uint32_t>(face[corner]));
+		    if (localVertex == localVertices.end() ||
+			localVertex->second.localIndex >= cumulativePoints)
+			return false;
+		    pageFaces.push_back(localVertex->second.localIndex);
+		}
+		if (hasNormals) {
+		    if (!normalArray)
+			return false;
+		    for (size_t corner = 0; corner < 3; ++corner) {
+			vect_t normal;
+			if (!reader.normal(sourceFace, corner, normal))
+			    return false;
+			pageNormals.push_back(normal[X]);
+			pageNormals.push_back(normal[Y]);
+			pageNormals.push_back(normal[Z]);
+		    }
+		}
+	    }
+	}
+	if (pagePoints.size() != static_cast<size_t>(cumulativePoints) * 3u ||
+	    pageFaces.size() != static_cast<size_t>(cumulativeFaces) * 3u ||
+	    (hasNormals && pageNormals.size() !=
+		static_cast<size_t>(cumulativeFaces) * 9u))
+	    return false;
+
 	/* Fixed-width record.  Header size is deliberately a multiple of eight:
 	 * cache readers may validate/copy the IEEE doubles without relying on
 	 * compiler packing or size_t width. */
@@ -3958,22 +4522,6 @@ BObolPopState::cacheChunk(uint32_t chunkId,
 	    normalScalarCount * sizeof(double);
 	if (expected > SIZE_MAX)
 	    return false;
-	const bool retainSpatialPreview = spatialLeafRequested && chunkId == 0 &&
-	    previewCallback && !spatialPreviewPublished;
-	if (retainSpatialPreview) {
-	    spatialPreviewPoints.clear();
-	    spatialPreviewFaces.clear();
-	    spatialPreviewNormals.clear();
-	    if (pointScalarCount > spatialPreviewPoints.max_size() ||
-		indexCount > spatialPreviewFaces.max_size() ||
-		normalScalarCount > spatialPreviewNormals.max_size())
-		return false;
-	    spatialPreviewPoints.reserve(static_cast<size_t>(pointScalarCount));
-	    spatialPreviewFaces.reserve(static_cast<size_t>(indexCount));
-	    if (normalScalarCount)
-		spatialPreviewNormals.reserve(
-		    static_cast<size_t>(normalScalarCount));
-	}
 	bytes.reserve(static_cast<size_t>(expected));
 	const uint32_t diskVersion = 1;
 	const uint32_t diskChunk = chunkId;
@@ -4014,72 +4562,36 @@ BObolPopState::cacheChunk(uint32_t chunkId,
 	    if (!mesh_lod_chunk_append(bytes, &value, sizeof(value)))
 		return false;
 	}
-	for (uint32_t cut = 0; cut < cutCount; ++cut) {
-	for (uint32_t sourceVertex : cutVertices[cut]) {
-	    point_t sourcePoint;
-	    if (!reader.point(sourceVertex, sourcePoint))
-		return false;
-	    const double point[3] = {
-		static_cast<double>(sourcePoint[X]),
-		static_cast<double>(sourcePoint[Y]),
-		static_cast<double>(sourcePoint[Z])
-		};
-		if (!mesh_lod_chunk_append(bytes, point, sizeof(point)))
-		    return false;
-		if (retainSpatialPreview)
-		    spatialPreviewPoints.insert(spatialPreviewPoints.end(),
-			 sourcePoint, sourcePoint + 3);
-	    }
-	}
-	for (uint32_t cut = 0; cut < cutCount; ++cut) {
-	for (uint32_t sourceFace : chunkCutFaces[cut]) {
-	    uint32_t indices[3] = {};
-	    int face[3] = {};
-	    if (!reader.face(sourceFace, face))
-		return false;
-	    for (size_t corner = 0; corner < 3; ++corner) {
-		const int sourceVertex = face[corner];
-		    const auto localIndex = localVertexIndex.find(
-			static_cast<uint32_t>(sourceVertex));
-		    if (localIndex == localVertexIndex.end())
-			return false;
-		    indices[corner] = localIndex->second;
-		    if (indices[corner] >= cumulativePoints)
-			return false;
-		}
-		if (!mesh_lod_chunk_append(bytes, indices, sizeof(indices)))
-		    return false;
-		if (retainSpatialPreview)
-		    spatialPreviewFaces.insert(spatialPreviewFaces.end(),
-			 indices, indices + 3);
-	    }
-	}
-	if (hasNormals) {
-	    if (!normalArray)
-		return false;
-	    for (uint32_t cut = 0; cut < cutCount; ++cut) {
-	for (uint32_t sourceFace : chunkCutFaces[cut]) {
-	    for (size_t corner = 0; corner < 3; ++corner) {
-		vect_t sourceNormal;
-		if (!reader.normal(sourceFace, corner, sourceNormal))
-		    return false;
-		const double normal[3] = {
-		    static_cast<double>(sourceNormal[X]),
-		    static_cast<double>(sourceNormal[Y]),
-		    static_cast<double>(sourceNormal[Z])
-			};
-			if (!mesh_lod_chunk_append(bytes, normal,
-				sizeof(normal)))
-			    return false;
-			if (retainSpatialPreview)
-			    spatialPreviewNormals.insert(spatialPreviewNormals.end(),
-				sourceNormal, sourceNormal + 3);
-		    }
-		}
-	    }
-	}
+	if (!mesh_lod_chunk_append_vectors(bytes, pagePoints))
+	    return false;
+	if (!mesh_lod_chunk_append(bytes, pageFaces.data(),
+		pageFaces.size() * sizeof(uint32_t)))
+	    return false;
+	if (!pageNormals.empty() &&
+	    !mesh_lod_chunk_append_vectors(bytes, pageNormals))
+	    return false;
 	if (bytes.size() != expected)
 	    return false;
+
+    prepared.info = info;
+    prepared.points = std::move(pagePoints);
+    prepared.faces = std::move(pageFaces);
+    prepared.normals = std::move(pageNormals);
+    prepared.bytes = std::move(bytes);
+    return true;
+}
+
+bool
+BObolPopState::publishChunk(BObolPreparedMeshLodChunk &&prepared)
+{
+    const uint32_t diskChunk = prepared.info.chunk_id;
+    const size_t pagePointCount = prepared.points.size() / 3u;
+    const size_t pageFaceCount = prepared.faces.size() / 3u;
+    if (!pagePointCount || !pageFaceCount || prepared.points.size() % 3u ||
+	prepared.faces.size() % 3u ||
+	(hasNormals && prepared.normals.size() != pageFaceCount * 9u) ||
+	prepared.bytes.empty())
+	return false;
 
     char component[32] = {0};
     snprintf(component, sizeof(component), "%s%08x",
@@ -4087,14 +4599,19 @@ BObolPopState::cacheChunk(uint32_t chunkId,
 	const char *forceLive = getenv("BOBOL_LOD_SPATIAL_FORCE_LIVE");
 	const bool cacheStored = spatialLeafRequested && forceLive &&
 	    forceLive[0] ? false :
-	    cacheWriteData(component, bytes.data(), bytes.size());
+	    (spatialLeafRequested ?
+		cacheWriteSpatialData(component, prepared.bytes.data(),
+		    prepared.bytes.size()) :
+		cacheWriteData(component, prepared.bytes.data(),
+		    prepared.bytes.size()));
 	if (!cacheStored) {
 	    const size_t liveLimit = mesh_lod_live_spatial_bytes();
-	    if (!spatialLeafRequested || bytes.size() > liveLimit ||
-		liveSpatialChunkBytes > liveLimit - bytes.size())
+	    if (!spatialLeafRequested || prepared.bytes.size() > liveLimit ||
+		liveSpatialChunkBytes > liveLimit - prepared.bytes.size())
 		return false;
 	    try {
-		liveSpatialChunks.emplace(diskChunk, std::move(bytes));
+		liveSpatialChunks.emplace(diskChunk,
+		    std::move(prepared.bytes));
 	    } catch (const std::bad_alloc &) {
 		return false;
 	    }
@@ -4102,7 +4619,74 @@ BObolPopState::cacheChunk(uint32_t chunkId,
 	    spatialPublicationLimited = true;
 	}
 
+	/* A serialized page may become useful before the complete hierarchy is
+	 * durable, but never before its local stream and cumulative counts are
+	 * validated and its record is accepted by the bounded cache transaction.
+	 * The callback is deliberately page-local: coverage remains the only
+	 * whole-object representation until final hierarchy publication. */
+	if (spatialPageCallback) {
+	    if (generationCancelled())
+		return false;
+
+	    struct BObolMeshLodSpatialPage page = {};
+	    page.page_id = diskChunk;
+	    page.cut = maxPopCut;
+	    page.info = prepared.info;
+	    page.data.faces = prepared.faces.data();
+	    page.data.face_count = pageFaceCount;
+	    page.data.points = reinterpret_cast<const point_t *>(
+		prepared.points.data());
+	    page.data.point_count = pagePointCount;
+	    page.data.points_orig = page.data.points;
+	    page.data.point_orig_count = page.data.point_count;
+	    page.data.normals = hasNormals ?
+		reinterpret_cast<const vect_t *>(prepared.normals.data()) : NULL;
+	    page.data.normal_count = hasNormals ? pageFaceCount * 3u : 0;
+	    VMOVE(page.data.bmin, prepared.info.bmin);
+	    VMOVE(page.data.bmax, prepared.info.bmax);
+	    page.hierarchy = BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	    page.hierarchy.min_cut = prepared.info.min_cut;
+	    page.hierarchy.max_cut = prepared.info.max_cut;
+	    page.hierarchy.resident_cut = page.cut;
+	    page.hierarchy.cut_count = cutCount;
+	    page.hierarchy.has_normals = hasNormals ? 1 : 0;
+	    page.hierarchy.shaded_cull_backfaces = shadedCullBackfaces ? 1 : 0;
+	    VMOVE(page.hierarchy.quantization_min, bbmin);
+	    VMOVE(page.hierarchy.quantization_max, bbmax);
+	    page.hierarchy.chunk_count = 1;
+	    page.hierarchy.chunks = &page.info;
+	    for (uint32_t cut = 0; cut < cutCount; ++cut) {
+		page.hierarchy.cuts[cut].face_count =
+		    prepared.info.cuts[cut].face_count;
+		page.hierarchy.cuts[cut].point_count =
+		    prepared.info.cuts[cut].point_count;
+		page.hierarchy.cuts[cut].resident_bytes =
+		    prepared.info.cuts[cut].resident_bytes;
+		page.hierarchy.cuts[cut].object_error = cuts[cut].objectError;
+		for (size_t axis = 0; axis < 3; ++axis)
+		    page.hierarchy.cuts[cut].quantization_bits[axis] =
+			cuts[cut].bits[axis];
+		page.hierarchy.cuts[cut].exact =
+		    cut == static_cast<uint32_t>(maxPopCut) ? 1 : 0;
+	    }
+	    spatialPageCallback(hash, &page, spatialPageCallbackData);
+	}
+
     return true;
+}
+
+bool
+BObolPopState::cacheChunk(uint32_t chunkId,
+	const std::vector<uint32_t> &sourceFaces,
+	const std::vector<uint8_t> &activationCuts)
+{
+    if (chunkId >= chunkInfos.size())
+	return false;
+    BObolPreparedMeshLodChunk prepared;
+    if (!prepareChunk(chunkId, sourceFaces, activationCuts, prepared))
+	return false;
+    chunkInfos[chunkId] = prepared.info;
+    return publishChunk(std::move(prepared));
 }
 
 bool
@@ -5502,6 +6086,30 @@ bobol_mesh_lod_read_chunk_prefixes(struct BObolMeshLod *lod,
 	return 0;
     return lod->state->readChunks(
 	chunkIds, chunkCount, cut, callback, callbackData) ? 1 : 0;
+}
+
+struct BObolMeshLod *
+bobol_mesh_lod_clone_reader(const struct BObolMeshLod *lod)
+{
+    if (!lod || !lod->state || !lod->context || !lod->state->isValid ||
+	!lod->state->hash)
+	return NULL;
+
+    BObolMeshLodContext *context = lod->context;
+    {
+	/* mesh_lod_create() consumes one context reference.  Retain it while the
+	 * source handle is known alive, then perform cache/header I/O outside the
+	 * registry critical section. */
+	std::lock_guard<std::mutex> guard(mesh_lod_context_registry_mutex());
+	if (!context->refs)
+	    return NULL;
+	context->refs++;
+    }
+    BObolMeshLod *reader = mesh_lod_create(
+	context, lod->state->hash, true);
+    if (!reader)
+	mesh_lod_context_destroy(context);
+    return reader;
 }
 
 int

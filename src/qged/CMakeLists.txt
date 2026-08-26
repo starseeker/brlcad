@@ -197,6 +197,22 @@ if(BRLCAD_ENABLE_QT)
 
 endif(BRLCAD_ENABLE_QT)
 
+# The GUI matrix uses jq for its offline, observational progressive-control
+# refinement checker.  Keep jq optional for ordinary qged builds, but exercise
+# the checker itself whenever the qualification dependency is available.
+find_program(QGED_JQ_EXECUTABLE NAMES jq)
+if(QGED_JQ_EXECUTABLE)
+  brlcad_add_test(
+    NAME qged_lod_control_trace_contract
+    COMMAND
+      ${SH_EXEC}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lod_control_trace.sh
+      ${QGED_JQ_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/lod_control_trace.jq
+  )
+  set_property(TEST qged_lod_control_trace_contract APPEND PROPERTY LABELS bobol_contract)
+endif(QGED_JQ_EXECUTABLE)
+
 # Core application is defined, now handle plugins
 add_subdirectory(plugins)
 
@@ -247,10 +263,12 @@ set(
   tests/README.md
   tests/generate_many_lucy_stress.tcl
   tests/generate_unique_mesh_stress.cpp
+  tests/lod_control_trace.jq
   tests/qged_apng_encode.cpp
   tests/qged_gui_matrix.sh
   tests/qged_resize_matrix.sh
   tests/qged_selection_ui_matrix.sh
+  tests/test_lod_control_trace.sh
   qged_signals.eps
   qged_signals.dia
   view_update_cycle.odg

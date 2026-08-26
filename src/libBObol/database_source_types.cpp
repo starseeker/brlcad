@@ -202,6 +202,7 @@ BObolCompactLodPlanningSummary::BObolCompactLodPlanningSummary(void) :
     sourceContentHash(0),
     sourceFaceCount(0),
     sourcePointCount(0),
+    botSource(FALSE),
     brepSource(FALSE),
     meshAssetTessellationAbsTol(0.0),
     meshAssetTessellationRelTol(0.0),
@@ -395,6 +396,12 @@ BObolCompactOccurrence::BObolCompactOccurrence(void) :
     sourceMeshRequest(),
     occurrenceIndex(0),
     booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION)
+{
+}
+
+BObolCompactSourceProfile::BObolCompactSourceProfile(void) :
+    valid(FALSE), occurrenceCount(0), uniqueAssetCount(0),
+    encodedSourceBytes(0), largestAssetBytes(0), reusedOccurrenceCount(0)
 {
 }
 

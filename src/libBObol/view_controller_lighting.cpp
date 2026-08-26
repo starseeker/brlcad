@@ -16,14 +16,19 @@
 #include "view_controller_private.h"
 
 #include <Inventor/SbName.h>
+#include <Inventor/annex/HUD/nodekits/SoHUDKit.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoClipPlane.h>
+#include <Inventor/nodes/SoCoordinate3.h>
 #include <Inventor/nodes/SoDepthBuffer.h>
 #include <Inventor/nodes/SoDirectionalLight.h>
+#include <Inventor/nodes/SoDrawStyle.h>
 #include <Inventor/nodes/SoEnvironment.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoLight.h>
 #include <Inventor/nodes/SoLightModel.h>
+#include <Inventor/nodes/SoLineSet.h>
+#include <Inventor/nodes/SoMaterial.h>
 #include <Inventor/nodes/SoPointLight.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/nodes/SoSpotLight.h>
@@ -31,6 +36,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 /* Camera-rig directions are expressed in eye space (camera looks down -Z,
  * +X right, +Y up).  Directional-light vectors describe photon travel, so a
@@ -105,6 +111,32 @@ static const char *
 controller_clip_plane_name(SbBool minimum)
 {
     return minimum ? "BObolClipMinimum" : "BObolClipMaximum";
+}
+
+static const char *
+controller_cutting_affordance_name(void)
+{
+    return "BObolCuttingPlaneAffordance";
+}
+
+static SoSeparator *
+controller_cutting_affordance(SoGroup *presentationRoot)
+{
+    if (!presentationRoot)
+	return NULL;
+
+    const char *name = controller_cutting_affordance_name();
+    for (int i = 0; i < presentationRoot->getNumChildren(); i++) {
+	SoNode *child = presentationRoot->getChild(i);
+	if (child && child->isOfType(SoSeparator::getClassTypeId()) &&
+	    bu_strcmp(child->getName().getString(), name) == 0)
+	    return static_cast<SoSeparator *>(child);
+    }
+
+    SoSeparator *affordance = new SoSeparator;
+    affordance->setName(SbName(name));
+    presentationRoot->addChild(affordance);
+    return affordance;
 }
 
 static SoGroup *
@@ -233,6 +265,7 @@ controller_configure_render_environment(SoViewport *viewport)
 	int hasLightModel = 0;
 	int hasClipMinimum = 0;
 	int hasClipMaximum = 0;
+	int hasCuttingPlane = 0;
 	for (int i = 0; i < renderEnvironment->getNumChildren(); i++) {
 	    SoNode *child = renderEnvironment->getChild(i);
 	    if (child && child->isOfType(SoDepthBuffer::getClassTypeId())) {
@@ -248,6 +281,8 @@ controller_configure_render_environment(SoViewport *viewport)
 		    controller_clip_plane_name(TRUE)) == 0;
 		hasClipMaximum |= bu_strcmp(name,
 		    controller_clip_plane_name(FALSE)) == 0;
+		hasCuttingPlane |= bu_strcmp(name,
+		    "BObolCuttingPlane") == 0;
 	    }
 	}
 	if (!hasDepthBuffer)
@@ -275,6 +310,12 @@ controller_configure_render_environment(SoViewport *viewport)
 	if (!hasClipMaximum) {
 	    SoClipPlane *plane = new SoClipPlane;
 	    plane->setName(SbName(controller_clip_plane_name(FALSE)));
+	    plane->on = FALSE;
+	    renderEnvironment->addChild(plane);
+	}
+	if (!hasCuttingPlane) {
+	    SoClipPlane *plane = new SoClipPlane;
+	    plane->setName(SbName("BObolCuttingPlane"));
 	    plane->on = FALSE;
 	    renderEnvironment->addChild(plane);
 	}
@@ -322,6 +363,11 @@ controller_configure_render_environment(SoViewport *viewport)
     clipMaximum->on = FALSE;
     renderEnvironment->addChild(clipMaximum);
 
+    SoClipPlane *cuttingPlane = new SoClipPlane;
+    cuttingPlane->setName(SbName("BObolCuttingPlane"));
+    cuttingPlane->on = FALSE;
+    renderEnvironment->addChild(cuttingPlane);
+
     root->insertChild(renderEnvironment, 0);
     controller_ensure_camera_rig(viewport, headlight);
 }
@@ -344,6 +390,139 @@ controller_clip_plane(SoViewport *viewport, SbBool minimum)
 	    return static_cast<SoClipPlane *>(child);
     }
     return NULL;
+}
+
+SoClipPlane *
+controller_cutting_plane(SoViewport *viewport)
+{
+    if (!viewport || !viewport->getRoot())
+	return NULL;
+    controller_configure_render_environment(viewport);
+    SoGroup *environment =
+	controller_find_render_environment(viewport->getRoot());
+    if (!environment)
+	return NULL;
+    for (int i = 0; i < environment->getNumChildren(); i++) {
+	SoNode *child = environment->getChild(i);
+	if (child && child->isOfType(SoClipPlane::getClassTypeId()) &&
+	    bu_strcmp(child->getName().getString(),
+		"BObolCuttingPlane") == 0)
+	    return static_cast<SoClipPlane *>(child);
+    }
+    return NULL;
+}
+
+void
+controller_update_cutting_plane_affordance(SoViewport *viewport,
+	SoGroup *presentationRoot,
+	const SbPlane &plane,
+	SbBool enabled,
+	double horizontalSize,
+	double aspect)
+{
+    if (!viewport || !presentationRoot)
+	return;
+    SoSeparator *affordance = controller_cutting_affordance(presentationRoot);
+    if (!affordance)
+	return;
+
+    affordance->removeAllChildren();
+    if (!enabled || !std::isfinite(horizontalSize) || horizontalSize <= 0.0 ||
+	!std::isfinite(aspect) || aspect <= 0.0)
+	return;
+
+    SbVec3f normal = plane.getNormal();
+    if (normal.length() <= 1.0e-6f)
+	return;
+    normal.normalize();
+    const SbVec3f reference = std::fabs(normal[Z]) < 0.8f ?
+	SbVec3f(0.0f, 0.0f, 1.0f) : SbVec3f(0.0f, 1.0f, 0.0f);
+    SbVec3f axisU = normal.cross(reference);
+    if (axisU.length() <= 1.0e-6f)
+	return;
+    axisU.normalize();
+    SbVec3f axisV = normal.cross(axisU);
+    axisV.normalize();
+
+    constexpr int gridHalfSteps = 3;
+    constexpr float minimumHalfWidth = 1.0e-4f;
+    const float halfWidth = std::max(minimumHalfWidth,
+	static_cast<float>(horizontalSize * 0.30));
+    const float halfHeight = halfWidth / static_cast<float>(aspect);
+    const SbVec3f center = normal * plane.getDistanceFromOrigin();
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> lineCounts;
+    points.reserve(static_cast<size_t>(4 + 2 * (gridHalfSteps * 2 + 1)) * 2);
+    lineCounts.reserve(4 + 2 * (gridHalfSteps * 2 + 1));
+    const auto addLine = [&points, &lineCounts](const SbVec3f &start,
+	const SbVec3f &end) {
+	points.push_back(start);
+	points.push_back(end);
+	lineCounts.push_back(2);
+    };
+    const SbVec3f lowerLeft = center - axisU * halfWidth - axisV * halfHeight;
+    const SbVec3f lowerRight = center + axisU * halfWidth - axisV * halfHeight;
+    const SbVec3f upperLeft = center - axisU * halfWidth + axisV * halfHeight;
+    const SbVec3f upperRight = center + axisU * halfWidth + axisV * halfHeight;
+    addLine(lowerLeft, lowerRight);
+    addLine(lowerRight, upperRight);
+    addLine(upperRight, upperLeft);
+    addLine(upperLeft, lowerLeft);
+    for (int step = -gridHalfSteps; step <= gridHalfSteps; step++) {
+	const float fraction = static_cast<float>(step) /
+	    static_cast<float>(gridHalfSteps);
+	addLine(center + axisU * (fraction * halfWidth) - axisV * halfHeight,
+		center + axisU * (fraction * halfWidth) + axisV * halfHeight);
+	addLine(center - axisU * halfWidth + axisV * (fraction * halfHeight),
+		center + axisU * halfWidth + axisV * (fraction * halfHeight));
+    }
+
+    SoCamera *camera = viewport->getCamera();
+    const SbVec2s viewportSize = viewport->getViewportRegion().getViewportSizePixels();
+    if (!camera || viewportSize[0] <= 0 || viewportSize[1] <= 0)
+	return;
+    std::vector<SbVec3f> screenPoints;
+    screenPoints.reserve(points.size());
+    const SbViewVolume viewVolume = camera->getViewVolume(
+	static_cast<float>(aspect));
+    for (const SbVec3f &point : points) {
+	SbVec3f projected;
+	viewVolume.projectToScreen(point, projected);
+	if (!std::isfinite(projected[0]) || !std::isfinite(projected[1]) ||
+	    !std::isfinite(projected[2]))
+	    return;
+	screenPoints.push_back(SbVec3f(
+	    projected[0] * static_cast<float>(viewportSize[0]),
+	    projected[1] * static_cast<float>(viewportSize[1]), 0.0f));
+    }
+
+    SoHUDKit *hud = new SoHUDKit;
+    SoSeparator *widget = new SoSeparator;
+    SoDepthBuffer *depth = new SoDepthBuffer;
+    depth->test = FALSE;
+    depth->write = FALSE;
+    widget->addChild(depth);
+    SoLightModel *lighting = new SoLightModel;
+    lighting->model = SoLightModel::BASE_COLOR;
+    widget->addChild(lighting);
+    SoMaterial *material = new SoMaterial;
+    material->diffuseColor = SbColor(1.0f, 0.48f, 0.08f);
+    material->emissiveColor = SbColor(0.28f, 0.13f, 0.02f);
+    material->transparency = 0.22f;
+    widget->addChild(material);
+    SoDrawStyle *style = new SoDrawStyle;
+    style->lineWidth = 1.0f;
+    widget->addChild(style);
+    SoCoordinate3 *coordinates = new SoCoordinate3;
+    coordinates->point.setValues(0, static_cast<int>(screenPoints.size()),
+	screenPoints.data());
+    widget->addChild(coordinates);
+    SoLineSet *lines = new SoLineSet;
+    lines->numVertices.setValues(0, static_cast<int>(lineCounts.size()),
+	lineCounts.data());
+    widget->addChild(lines);
+    hud->addWidget(widget);
+    affordance->addChild(hud);
 }
 
 static SoDepthBuffer *
@@ -688,8 +867,63 @@ BObolViewController::getClipBounds(double &minimum, double &maximum) const
     maximum = this->d->clipMaximum;
 }
 
+void
+BObolViewController::setCuttingPlaneEnabled(SbBool enabled)
+{
+    enabled = enabled ? TRUE : FALSE;
+    if (this->d->cuttingPlaneEnabled == enabled)
+	return;
+    this->d->cuttingPlaneEnabled = enabled;
+    SoClipPlane *plane = controller_cutting_plane(this->d->viewport);
+    if (plane) {
+	plane->plane = this->d->cuttingPlane;
+	plane->on = enabled;
+    }
+	controller_update_cutting_plane_affordance(this->d->viewport,
+	this->d->framebufferOverlayRoot,
+	this->d->cuttingPlane, enabled,
+	this->d->cuttingPlaneAffordanceHorizontalSize,
+	this->d->cuttingPlaneAffordanceAspect);
+    this->requestRender("cutting-plane");
+}
+
+SbBool
+BObolViewController::isCuttingPlaneEnabled(void) const
+{
+    return this->d->cuttingPlaneEnabled;
+}
+
+SbBool
+BObolViewController::setCuttingPlane(const SbPlane &plane)
+{
+    const SbVec3f normal = plane.getNormal();
+    const float distance = plane.getDistanceFromOrigin();
+    if (normal.length() <= 1.0e-6f || !std::isfinite(distance))
+	return FALSE;
+    this->d->cuttingPlane = plane;
+    SoClipPlane *node = controller_cutting_plane(this->d->viewport);
+    if (node) {
+	node->plane = plane;
+	node->on = this->d->cuttingPlaneEnabled;
+    }
+	controller_update_cutting_plane_affordance(this->d->viewport,
+	this->d->framebufferOverlayRoot, plane,
+	this->d->cuttingPlaneEnabled,
+	this->d->cuttingPlaneAffordanceHorizontalSize,
+	this->d->cuttingPlaneAffordanceAspect);
+    this->requestRender("cutting-plane");
+    return TRUE;
+}
+
+SbPlane
+BObolViewController::getCuttingPlane(void) const
+{
+    return this->d->cuttingPlane;
+}
+
 size_t
-BObolViewController::getActiveClipPlanes(SbPlane planes[2]) const
+BObolViewController::getActiveClipPlanes(
+    SbPlane planes[CLIP_PLANE_CAPACITY]) const
 {
     if (!planes)
 	return 0;
@@ -700,6 +934,9 @@ BObolViewController::getActiveClipPlanes(SbPlane planes[2]) const
 	planes[count++] = minimum->plane.getValue();
     if (maximum && maximum->on.getValue())
 	planes[count++] = maximum->plane.getValue();
+    SoClipPlane *cutting = controller_cutting_plane(this->d->viewport);
+    if (cutting && cutting->on.getValue())
+	planes[count++] = cutting->plane.getValue();
     return count;
 }
 

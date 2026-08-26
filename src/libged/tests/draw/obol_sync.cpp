@@ -1689,10 +1689,27 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
 	std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     BObolDatabaseSourceSummary root_summary;
+    const auto authoritative_occurrence_count =
+	[](SoBRLDatabaseSource *source) {
+	    size_t count = 0;
+	    if (!source)
+		return count;
+	    for (int i = 0; i < source->getCompactInstanceCount(); ++i) {
+		BObolCompactInstanceHandle handle;
+		BObolCompactInstanceSummary summary;
+		if (!source->getCompactInstanceHandle(i, handle) ||
+		    !source->getCompactInstanceSummary(handle, summary) ||
+		    !summary.valid || BU_STR_EQUAL(summary.geometryKind.getString(),
+			"overview-aabb"))
+		    continue;
+		count++;
+	    }
+	    return count;
+	};
     if (!root_source || !root_source->getSummary(root_summary) ||
 	!root_summary.valid ||
 	!root_source->isCompactOccurrenceRegistry() ||
-	root_source->getCompactInstanceCount() != 4 ||
+	authoritative_occurrence_count(root_source) != 4 ||
 	controller->getDatabaseSourceCount() != initial_source_count + 1)
 	FAIL("deferred progressive draw should initially publish a compact occurrence registry");
 
@@ -4201,10 +4218,23 @@ main(int argc, char **argv)
     if (!ged_draw_shape_ref_lod_ensure(gedp, mesh_record.ref,
 	    mesh_lod_view_ctx, mesh_lod_view_ctxs, 1))
 	FAIL("GED BoT mesh LoD ensure should succeed for owned Obol mesh update");
-    SoBRLDatabaseSource *mesh_source =
-	source_for_path(owned_scene, "mesh_owner.bot");
-    SoBRLMeshShape *mesh_shape = mesh_source ?
-	mesh_source->getRealizedMesh() : NULL;
+    BObolViewController *mesh_view_controller =
+	ged_bobol_view_controller(mesh_lod_view_ctx);
+    SoBRLDatabaseSource *mesh_source = NULL;
+    SoBRLMeshShape *mesh_shape = NULL;
+    BObolProgressiveOptions mesh_progressive_options;
+    BObolProgressiveStatus mesh_progressive_status;
+    for (int attempt = 0; attempt < 2000; ++attempt) {
+	mesh_source = source_for_path(owned_scene, "mesh_owner.bot");
+	mesh_shape = mesh_source ? mesh_source->getRealizedMesh() : NULL;
+	if (mesh_shape && mesh_shape->point.getNum() > 0 &&
+	    mesh_shape->coordIndex.getNum() > 0)
+	    break;
+	if (mesh_view_controller)
+	    (void)mesh_view_controller->advanceProgressiveWork(
+		&mesh_progressive_options, &mesh_progressive_status);
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     SbVec3f mesh_lod_bmin;
     SbVec3f mesh_lod_bmax;
     if (!mesh_source || !mesh_shape ||
@@ -6767,6 +6797,24 @@ main(int argc, char **argv)
 	FAIL("Obol independent view source-owner test view should be registered");
     ged_view_context_owned_add(gedp, independent_view);
 
+    BObolViewController independent_controller(new SoBRLSceneGroup);
+    bobol_display_endpoint_t *independent_endpoint =
+	bobol_display_endpoint_create(&independent_controller, 0);
+    if (!independent_endpoint ||
+	!ged_view_context_host_attach(gedp, independent_view) ||
+	!ged_view_context_obol_endpoint_set(independent_view,
+	    independent_endpoint, 1)) {
+	if (independent_endpoint &&
+	    ged_view_context_obol_endpoint_get(independent_view) !=
+		independent_endpoint)
+	    bobol_display_endpoint_destroy(independent_endpoint);
+	FAIL("Obol independent view should accept a local display endpoint");
+    }
+    BObolSceneController *independent_scene =
+	independent_controller.getSceneController();
+    if (!independent_scene)
+	FAIL("Obol independent view should own a local scene controller");
+
     const char *view_independent_on[5] = {"view", "independent", "V0",
 	"1", NULL};
     if (ged_exec_view(gedp, 4, view_independent_on) != BRLCAD_OK)
@@ -6780,28 +6828,32 @@ main(int argc, char **argv)
 	    ged_exec_draw(gedp, 5, draw_v0_ball) != BRLCAD_OK)
 	FAIL("real GED independent-view draw commands should succeed");
 
-    if (view_scene->getDatabaseSourceCount() != 4 ||
+    if (view_scene->getDatabaseSourceCount() != 2 ||
 	    !source_for_shared_path(view_scene, "box.s") ||
 	    !source_for_shared_path(view_scene, "ball.s") ||
-	    !source_for_view_path(view_scene, "V0", "box.s") ||
-	    !source_for_view_path(view_scene, "V0", "ball.s"))
-	FAIL("Obol independent view setup should create scoped source owners without replacing shared owners");
+	    independent_scene->getDatabaseSourceCount() != 2 ||
+	    !source_for_view_path(independent_scene, "V0", "box.s") ||
+	    !source_for_view_path(independent_scene, "V0", "ball.s"))
+	FAIL("Obol independent view setup should isolate local source owners from shared owners");
 
     const char *erase_v0_box[5] = {"erase", "-V", "V0", "box.s", NULL};
     if (ged_exec_erase(gedp, 4, erase_v0_box) != BRLCAD_OK)
 	FAIL("real GED independent-view erase command should succeed");
-    if (view_scene->getDatabaseSourceCount() != 3 ||
-	    source_for_view_path(view_scene, "V0", "box.s") ||
-	    !source_for_view_path(view_scene, "V0", "ball.s") ||
+
+    if (view_scene->getDatabaseSourceCount() != 2 ||
+	    independent_scene->getDatabaseSourceCount() != 1 ||
+	    source_for_view_path(independent_scene, "V0", "box.s") ||
+	    !source_for_view_path(independent_scene, "V0", "ball.s") ||
 	    !source_for_shared_path(view_scene, "box.s") ||
 	    !source_for_shared_path(view_scene, "ball.s"))
 	FAIL("Obol independent-view erase should remove only the scoped source owner");
 
     if (ged_exec_draw(gedp, 5, draw_v0_box) != BRLCAD_OK)
 	FAIL("real GED independent-view redraw command should succeed");
-    if (view_scene->getDatabaseSourceCount() != 4 ||
-	    !source_for_view_path(view_scene, "V0", "box.s") ||
-	    !source_for_view_path(view_scene, "V0", "ball.s") ||
+    if (view_scene->getDatabaseSourceCount() != 2 ||
+	    independent_scene->getDatabaseSourceCount() != 2 ||
+	    !source_for_view_path(independent_scene, "V0", "box.s") ||
+	    !source_for_view_path(independent_scene, "V0", "ball.s") ||
 	    !source_for_shared_path(view_scene, "box.s") ||
 	    !source_for_shared_path(view_scene, "ball.s"))
 	FAIL("Obol independent-view draw should restore only the scoped source owner");
@@ -6810,8 +6862,9 @@ main(int argc, char **argv)
     if (ged_exec_zap(gedp, 4, zap_v0) != BRLCAD_OK)
 	FAIL("real GED independent-view zap command should succeed");
     if (view_scene->getDatabaseSourceCount() != 2 ||
-	    source_for_view_path(view_scene, "V0", "box.s") ||
-	    source_for_view_path(view_scene, "V0", "ball.s") ||
+	    independent_scene->getDatabaseSourceCount() != 0 ||
+	    source_for_view_path(independent_scene, "V0", "box.s") ||
+	    source_for_view_path(independent_scene, "V0", "ball.s") ||
 	    !source_for_shared_path(view_scene, "box.s") ||
 	    !source_for_shared_path(view_scene, "ball.s"))
 	FAIL("Obol independent-view zap should clear only scoped source owners");

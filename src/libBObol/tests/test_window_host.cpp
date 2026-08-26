@@ -29,6 +29,7 @@
 
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/nodes/SoClipPlane.h>
+#include <Inventor/nodes/SoCoordinate3.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoTexture2.h>
 
@@ -71,6 +72,24 @@ find_clip_plane(SoNode *node, const char *name)
 	SoClipPlane *plane = find_clip_plane(group->getChild(i), name);
 	if (plane)
 	    return plane;
+    }
+    return NULL;
+}
+
+static SoNode *
+find_named_node(SoNode *node, const char *name)
+{
+    if (!node || !name)
+	return NULL;
+    if (bu_strcmp(node->getName().getString(), name) == 0)
+	return node;
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return NULL;
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++) {
+	SoNode *found = find_named_node(group->getChild(i), name);
+	if (found)
+	    return found;
     }
     return NULL;
 }
@@ -738,21 +757,28 @@ test_host_work_snapshot_contract(void)
     work = controller.getHostWorkSnapshot();
     CHECK(work.capacitySampleRequested(),
 	"capacity-relevant render dominates a coalesced presentation request");
-    const uint64_t staleRenderRevision = work.renderRevision;
-
-    /* A render published while an older frame is in flight must survive that
-     * frame's serial-checked retirement. */
-    controller.requestPresentationRender("host-work-newer");
-    const BObolHostWorkSnapshot newer = controller.getHostWorkSnapshot();
-    CHECK(newer.renderRevision != staleRenderRevision,
-	"new render request advances its transaction revision");
-    controller.clearRenderRequestIfUnchanged(staleRenderRevision);
+    const uint64_t coalescedRenderRevision = work.renderRevision;
+    controller.requestPresentationRender("host-work-coalesced");
     work = controller.getHostWorkSnapshot();
-    CHECK(work.renderPending() &&
-	work.renderRevision == newer.renderRevision,
-	"stale frame completion cannot clear newer render work");
+    CHECK(work.renderRevision == coalescedRenderRevision &&
+	work.capacitySampleRequested(),
+	"duplicate pending reasons coalesce into the stronger transaction");
 
-    controller.clearRenderRequestIfUnchanged(newer.renderRevision);
+    /* Claiming the pending level starts the frame.  Work published after the
+     * claim is necessarily a distinct successor transaction. */
+    SbBool capacityRelevant = FALSE;
+    CHECK(controller.consumeRenderRequest(NULL, &capacityRelevant) &&
+	capacityRelevant,
+	"the host claims the capacity transaction before traversal");
+    controller.requestPresentationRender("host-work-during-frame");
+    const BObolHostWorkSnapshot newer = controller.getHostWorkSnapshot();
+    CHECK(newer.renderPending() &&
+	newer.renderRevision != coalescedRenderRevision &&
+	!newer.capacitySampleRequested(),
+	"work published during traversal creates a successor transaction");
+
+    CHECK(controller.consumeRenderRequest(NULL),
+	"the host can claim the successor transaction");
     work = controller.getHostWorkSnapshot();
     CHECK(work.pumpPending() && !work.renderPending(),
 	"render retirement preserves independent pump work");
@@ -2083,6 +2109,37 @@ test_display_endpoint_contract(void)
 	  !clip_minimum_node->on.getValue() &&
 	  !clip_maximum_node->on.getValue(),
 	  "disabling zclip preserves but deactivates retained clip planes");
+    const SbPlane section_plane(SbVec3f(0.0f, 1.0f, 0.0f),
+	SbVec3f(0.0f, 4.0f, 0.0f));
+    CHECK(endpoint_controller->setCuttingPlane(section_plane) &&
+	  endpoint_controller->isCuttingPlaneEnabled() == FALSE,
+	  "world-space cutting plane updates while disabled");
+    endpoint_controller->setCuttingPlaneEnabled(TRUE);
+    SoClipPlane *cutting_plane_node = find_clip_plane(
+	endpoint_controller->getRenderRoot(), "BObolCuttingPlane");
+    SbPlane active_planes[BObolViewController::CLIP_PLANE_CAPACITY];
+    CHECK(cutting_plane_node && cutting_plane_node->on.getValue() &&
+	  cutting_plane_node->plane.getValue().getNormal().equals(
+	    section_plane.getNormal(), 1.0e-6f) &&
+	  endpoint_controller->getActiveClipPlanes(active_planes) == 1 &&
+	  active_planes[0].getNormal().equals(section_plane.getNormal(),
+	    1.0e-6f),
+	  "world-space cutting plane is retained and participates in exact clips");
+    SoNode *cutting_affordance = find_named_node(
+	endpoint_controller->getRenderRoot(), "BObolCuttingPlaneAffordance");
+    CHECK(cutting_affordance &&
+	  cutting_affordance->isOfType(SoGroup::getClassTypeId()) &&
+	  endpoint_controller->getFramebufferOverlayRoot()->findChild(
+	    cutting_affordance) >= 0 &&
+	  static_cast<SoGroup *>(cutting_affordance)->getNumChildren() > 0 &&
+	  endpoint_controller->syncCameraFromViewContext(clip_view) &&
+	  static_cast<SoGroup *>(cutting_affordance)->getNumChildren() > 0,
+	  "enabled cutting plane retains a camera-synchronized post-CAD presentation");
+    endpoint_controller->setCuttingPlaneEnabled(FALSE);
+    CHECK(!cutting_plane_node->on.getValue() &&
+	  endpoint_controller->getActiveClipPlanes(active_planes) == 0 &&
+	  static_cast<SoGroup *>(cutting_affordance)->getNumChildren() == 0,
+	  "disabling world-space cutting plane restores unclipped navigation");
     bv_context_destroy(clip_view);
     property_value_init(&property_value);
     property_value.type = BV_DISPLAY_PROPERTY_BOOL;

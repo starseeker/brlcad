@@ -1095,10 +1095,25 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		    ged_obol_lod_compact_count(pending).c_str());
 	    break;
 	case BOBOL_LOD_CONVERGENCE_BACKGROUND:
-	    color[0] = 112;
-	    color[1] = 235;
-	    color[2] = 135;
-	    bu_vls_sprintf(&text, "View ready  optimizing memory/cache");
+	color[0] = 112;
+	color[1] = 235;
+	color[2] = 135;
+	/* The moving segment below reports indeterminate background work.  Call
+	 * the accepted framebuffer usable, not ready: pairing "ready" with an
+	 * visibly incomplete activity bar gives the two HUD elements conflicting
+	 * completion semantics. */
+	if (pending > 0 || status.queuedCacheWrites > 0) {
+	    bu_vls_sprintf(&text,
+		    "Building reusable LoD cache  view usable");
+		const size_t cacheTasks = pending > SIZE_MAX -
+		    status.queuedCacheWrites ? SIZE_MAX : pending +
+		    status.queuedCacheWrites;
+		bu_vls_printf(&text, "  %s background task%s",
+		    ged_obol_lod_compact_count(cacheTasks).c_str(),
+		    cacheTasks == 1 ? "" : "s");
+	} else {
+	    bu_vls_sprintf(&text, "Optimizing memory/cache  view usable");
+	}
 	    if (status.residentMeshBytes > 0)
 		bu_vls_printf(&text, "  %.0f MB resident",
 		    static_cast<double>(status.residentMeshBytes) /
@@ -1165,19 +1180,22 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
      * database walk completes.  That is active, useful discovery work, but a
      * determinate fraction would be fiction and the former zero-length fill
      * made the HUD look stalled for the entire walk (about 24 seconds for the
-     * 150k stress scene).  Animate a bounded segment from the coordinator's
-     * monotonic dispatch serial until a real denominator is available.  This
-     * is presentation-only state: it neither advances LoD work nor changes
-     * the camera/autoview contract.
+     * 150k stress scene).  Animate a bounded segment from observer time until
+     * a real denominator is available.  This is presentation-only state: it
+     * neither advances LoD work nor changes the camera/autoview contract.
      */
-    const bool indeterminateProgress =
+	const bool indeterminateProgress =
 	(status.phase == BOBOL_LOD_CONVERGENCE_DISCOVERING &&
 	 status.expectedLeafCount <= status.availableLeafCount) ||
 	(status.phase == BOBOL_LOD_CONVERGENCE_PREPARING &&
-	 status.visibleTargetCount == 0);
+	 status.visibleTargetCount == 0) ||
+	(status.phase == BOBOL_LOD_CONVERGENCE_BACKGROUND &&
+	 (pending > 0 || status.queuedCacheWrites > 0));
     if (indeterminateProgress) {
 	static const uint64_t sweep_steps = 40;
-	const uint64_t step = status.coordinatorDispatchSerial % sweep_steps;
+	static const int64_t sweep_interval_microseconds = 100000;
+	const uint64_t step = static_cast<uint64_t>(
+	    bu_gettime() / sweep_interval_microseconds) % sweep_steps;
 	const fastf_t unit = step <= sweep_steps / 2 ?
 	    static_cast<fastf_t>(step) /
 		static_cast<fastf_t>(sweep_steps / 2) :
@@ -1768,6 +1786,19 @@ ged_view_faceplate_sync(struct ged *gedp, struct ged_view_context *view_ctx)
 {
     return ged_obol_view_context_faceplate_sync(gedp, view_ctx,
 	ged_obol_view_controller_for_context(view_ctx));
+}
+
+extern "C" int
+ged_view_lod_progress_sync(struct ged *gedp,
+	struct ged_view_context *view_ctx)
+{
+    BObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!gedp || !view_ctx || !controller)
+	return BRLCAD_OK;
+
+    ged_obol_faceplate_sync_lod_progress(controller, view_ctx);
+    return BRLCAD_OK;
 }
 
 /* First shader token == "light"? */

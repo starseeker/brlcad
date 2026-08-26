@@ -24,7 +24,8 @@
 
 #include <QApplication>
 
-#include <cstring>
+#include <cmath>
+#include <cstdio>
 
 #define CHECK(_expr, _msg) do { \
     if (!(_expr)) { \
@@ -49,6 +50,13 @@ main(int argc, char **argv)
 	struct bv_display_property_value value =
 	    BV_DISPLAY_PROPERTY_VALUE_INIT;
 	struct ged_view_context *view_ctx = NULL;
+	const char *cutting_get[] = {"view", "cutting"};
+	const char *cutting_external[] = {
+	    "view", "cutting", "origin", "-4", "8", "2"
+	};
+	int cuttingEnabled = 0;
+	double cuttingOrigin[3] = {};
+	double cuttingNormal[3] = {};
 	view.resize(160, 120);
 	CHECK(view.viewContext() && view.displayEndpoint(),
 	    "settings test creates an endpoint-backed QgView");
@@ -63,6 +71,7 @@ main(int argc, char **argv)
 	    view.displayEndpoint(), 0),
 	    "settings test binds the QgView endpoint to its GED context");
 
+	context.gedAccessor = [&gedp]() { return gedp; };
 	context.viewWidgetAccessor = [&view]() { return &view; };
 	settings.setContext(&context);
 	settings.checkbox_refresh(0);
@@ -74,6 +83,60 @@ main(int argc, char **argv)
 	    settings.params_fps_ckbx->isEnabled() &&
 	    settings.params_fps_ckbx->checkState() == Qt::Checked,
 	    "parameter telemetry and FPS are effectively visible by default");
+	CHECK(settings.cutting_grp->isEnabled() &&
+	    !settings.cutting_enabled_ckbx->isChecked() &&
+	    std::fabs(settings.cutting_normal[2]->value() - 1.0) < 1.0e-12,
+	    "settings reads the disabled default cutting plane");
+
+	settings.cutting_origin[0]->setValue(12.5);
+	settings.cutting_origin[1]->setValue(-3.0);
+	settings.cutting_origin[2]->setValue(7.25);
+	settings.cutting_normal[0]->setValue(0.0);
+	settings.cutting_normal[1]->setValue(1.0);
+	settings.cutting_normal[2]->setValue(0.0);
+	settings.cutting_enabled_ckbx->setChecked(true);
+	CHECK(ged_exec(gedp, 2, cutting_get) == BRLCAD_OK &&
+	    std::sscanf(bu_vls_cstr(gedp->ged_result_str),
+	    "enable %d\norigin %lf %lf %lf\nnormal %lf %lf %lf",
+	    &cuttingEnabled, &cuttingOrigin[0], &cuttingOrigin[1],
+	    &cuttingOrigin[2], &cuttingNormal[0], &cuttingNormal[1],
+	    &cuttingNormal[2]) == 7 && cuttingEnabled == 1 &&
+	    /* A plane canonically retains normal * distance, so tangential
+	     * components of the input point are intentionally absent on readback. */
+	    std::fabs(cuttingOrigin[0]) < 1.0e-12 &&
+	    std::fabs(cuttingOrigin[1] + 3.0) < 1.0e-12 &&
+	    std::fabs(cuttingOrigin[2]) < 1.0e-12 &&
+	    std::fabs(cuttingNormal[0]) < 1.0e-12 &&
+	    std::fabs(cuttingNormal[1] - 1.0) < 1.0e-12 &&
+	    std::fabs(cuttingNormal[2]) < 1.0e-12,
+	    "settings writes the world-space cutting plane through GED");
+
+	CHECK(ged_exec(gedp, 6, cutting_external) == BRLCAD_OK,
+	    "external cutting origin command succeeds");
+	settings.checkbox_refresh(0);
+	CHECK(std::fabs(settings.cutting_origin[0]->value()) < 1.0e-12 &&
+	    std::fabs(settings.cutting_origin[1]->value() - 8.0) < 1.0e-12 &&
+	    std::fabs(settings.cutting_origin[2]->value()) < 1.0e-12,
+	    "settings reflects command-owned cutting-plane updates");
+	settings.grid_ckbx->setCheckState(Qt::Checked);
+	CHECK(ged_exec(gedp, 2, cutting_get) == BRLCAD_OK &&
+	    std::sscanf(bu_vls_cstr(gedp->ged_result_str),
+	    "enable %d\norigin %lf %lf %lf\nnormal %lf %lf %lf",
+	    &cuttingEnabled, &cuttingOrigin[0], &cuttingOrigin[1],
+	    &cuttingOrigin[2], &cuttingNormal[0], &cuttingNormal[1],
+	    &cuttingNormal[2]) == 7 && cuttingEnabled == 1 &&
+	    std::fabs(cuttingOrigin[1] - 8.0) < 1.0e-12,
+	    "unrelated faceplate settings do not overwrite the cutting plane");
+	settings.cutting_normal[1]->setValue(0.0);
+	CHECK(ged_exec(gedp, 2, cutting_get) == BRLCAD_OK &&
+	    std::sscanf(bu_vls_cstr(gedp->ged_result_str),
+	    "enable %d\norigin %lf %lf %lf\nnormal %lf %lf %lf",
+	    &cuttingEnabled, &cuttingOrigin[0], &cuttingOrigin[1],
+	    &cuttingOrigin[2], &cuttingNormal[0], &cuttingNormal[1],
+	    &cuttingNormal[2]) == 7 && cuttingEnabled == 1 &&
+	    std::fabs(cuttingNormal[1] - 1.0) < 1.0e-12 &&
+	    std::fabs(settings.cutting_normal[1]->value() - 1.0) < 1.0e-12,
+	    "invalid cutting normal restores authoritative plane state");
 
 	settings.fb_mode_combo->setCurrentIndex(2);
 	value = BV_DISPLAY_PROPERTY_VALUE_INIT;

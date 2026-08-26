@@ -59,6 +59,12 @@ public:
      * PoP hierarchy; the following quality pass promotes view-significant
      * leaves under the aggregate scene budget. */
     void setStructuralCoverageOnly(SbBool coverageOnly);
+    /* Permit visible, non-subpixel BoTs from a complete small-scene profile
+     * to request their terminal mesh directly when its exact render cost fits
+     * the aggregate scene allowance.  Service working-set, result, resident,
+     * and frame governors remain authoritative. */
+    void setAllowTerminalMeshAdmission(SbBool allow);
+    SbBool getAllowTerminalMeshAdmission(void) const;
     /* A completed renderer frame may prove that one or more predicted
      * subpixel structural proxies did not actually collapse.  During the
      * resulting repair pass, require those otherwise eligible fallbacks to
@@ -255,6 +261,10 @@ private:
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
 	const std::vector<uint32_t> &chunkIds, int activeCut, int preferredCut,
 	int drawMode, SbBool hasNormals);
+    int admitAllocatedRefinementCut(
+	const BObolLodProgressiveMeshPtr &progressiveMesh,
+	const std::vector<uint32_t> &chunkIds, int activeCut, int preferredCut,
+	int drawMode, SbBool hasNormals, SbBool allocationCoversCut);
     /* Reserve a conservative first-cut population before its hierarchy has
      * been opened by a worker.  This closes the all-box zero-face blind spot:
      * thousands of independent warm-cache requests must not each interpret
@@ -273,6 +283,7 @@ private:
     float targetPixelError;
     float pointProxyPixelThreshold;
     SbBool structuralCoverageOnly;
+    SbBool allowTerminalMeshAdmission;
     SbBool structuralPresentationRepair;
     size_t structuralCoverageCostReservation;
     size_t selectedOccurrenceCount;

@@ -50,6 +50,7 @@ struct BObolCompactOccurrenceStream::Impl {
     SbBox3f coverageBounds;
     std::atomic<bool> cancelled {false};
     std::atomic<size_t> expectedCount {0};
+    BObolCompactSourceProfile sourceProfile;
 };
 
 static size_t
@@ -272,11 +273,12 @@ BObolCompactOccurrenceStream::sealManifest(size_t expectedCount)
 	if (!complete)
 	    break;
 	complete = record.path.getLength() > 0 &&
-	    record.sourceName.getLength() > 0 && !record.bounds.isEmpty() &&
-	    record.sourceMeshRequestValid &&
-	    record.meshAssetPath.getLength() > 0 &&
-	    record.meshAssetName.getLength() > 0 &&
-	    !record.meshAssetBounds.isEmpty();
+	    record.sourceName.getLength() > 0 && !record.bounds.isEmpty();
+	if (complete && record.sourceMeshRequestValid) {
+	    complete = record.meshAssetPath.getLength() > 0 &&
+		record.meshAssetName.getLength() > 0 &&
+		!record.meshAssetBounds.isEmpty();
+	}
     }
     this->d->manifestComplete = complete;
     return complete;
@@ -330,6 +332,35 @@ BObolCompactOccurrenceStream::retainStagedSource(
 	this->d->stagedSourceBytes = SIZE_MAX;
     this->d->stagedSources.push_back(source);
     return TRUE;
+}
+
+std::shared_ptr<const BObolStagedSourceMesh>
+BObolCompactOccurrenceStream::claimStagedSource(
+    const std::weak_ptr<const BObolStagedSourceMesh> &source)
+{
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    const std::shared_ptr<const BObolStagedSourceMesh> requested =
+	source.lock();
+    if (!requested)
+	return std::shared_ptr<const BObolStagedSourceMesh>();
+
+    const auto found = std::find_if(this->d->stagedSources.begin(),
+	this->d->stagedSources.end(),
+	[&requested](
+	    const std::shared_ptr<const BObolStagedSourceMesh> &candidate) {
+	    return candidate.get() == requested.get();
+	});
+    if (found == this->d->stagedSources.end())
+	return std::shared_ptr<const BObolStagedSourceMesh>();
+
+    std::shared_ptr<const BObolStagedSourceMesh> claimed = *found;
+    const size_t bytes = claimed ? claimed->byteCount : 0;
+    this->d->stagedSourceBytes =
+	bytes >= this->d->stagedSourceBytes ?
+	0 : this->d->stagedSourceBytes - bytes;
+    this->d->stagedSources.erase(found);
+    compact_stream_staged_source_release(bytes);
+    return claimed;
 }
 
 size_t
@@ -421,6 +452,25 @@ size_t
 BObolCompactOccurrenceStream::getExpectedCount(void) const
 {
     return this->d->expectedCount.load(std::memory_order_acquire);
+}
+
+void
+BObolCompactOccurrenceStream::setSourceProfile(
+    const BObolCompactSourceProfile &profile)
+{
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    /* A complete profile is monotonic within one stream epoch. */
+    if (!this->d->sourceProfile.valid || profile.valid)
+	this->d->sourceProfile = profile;
+}
+
+SbBool
+BObolCompactOccurrenceStream::getSourceProfile(
+    BObolCompactSourceProfile &profile) const
+{
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    profile = this->d->sourceProfile;
+    return profile.valid;
 }
 
 void

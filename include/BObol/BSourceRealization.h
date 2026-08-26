@@ -62,8 +62,9 @@ struct BOBOL_EXPORT BObolSourceRealizationRequest {
     std::shared_ptr<BObolCompactOccurrenceStream> stream;
     uint64_t clientToken;
     /* Outer source-directory/traversal reservation.  Mesh-local PoP work has
-     * its own finer-grained governor.  Zero uses the coordinator's
-     * conservative unknown-source allowance. */
+     * its own finer-grained governor.  Zero asks the coordinator to derive a
+     * bounded reservation from the immutable source path and snapshot
+     * directory; unknown paths retain its conservative fallback. */
     size_t estimatedWorkingSetBytes;
     int drawMode;
     SbBool allowWireFallback;
@@ -77,7 +78,11 @@ enum BObolSourceRealizationState {
     BOBOL_SOURCE_REALIZATION_RUNNING = 1,
     BOBOL_SOURCE_REALIZATION_COMPLETE = 2,
     BOBOL_SOURCE_REALIZATION_FAILED = 3,
-    BOBOL_SOURCE_REALIZATION_CANCELLED = 4
+    BOBOL_SOURCE_REALIZATION_CANCELLED = 4,
+    /* Admission refused before a worker opens/imports the source.  Existing
+     * structural coverage remains valid and a later capacity epoch may retry
+     * realization. */
+    BOBOL_SOURCE_REALIZATION_CONSTRAINED = 5
 };
 
 /** Borrowed result view.  It remains valid while the job handle is retained. */

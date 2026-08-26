@@ -211,25 +211,82 @@ struct BObolMeshLodCacheSummary {
     int all_bots_mapped;
 };
 
+enum BObolMeshLodPreviewKind {
+    /* A complete cumulative PoP prefix.  Its hierarchy metadata is valid for
+     * normal mesh presentation, although durable cache work may continue. */
+    BOBOL_MESH_LOD_PREVIEW_MESH_PREFIX = 1,
+    /* A bounded point representation stratified over the whole serialized
+     * source extent.  It is an overview representation, not a PoP cut: no
+     * face data or hierarchy-level conclusion may be inferred from it. */
+    BOBOL_MESH_LOD_PREVIEW_COVERAGE_POINTS = 2
+};
+
+enum {
+    /* The coverage preview is a bounded visual occupancy summary.  It is not
+     * cache hierarchy storage and never changes the durable PoP format. */
+    BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_AXIS = 24
+};
+
 /* A true-cold large mesh may spend substantial time constructing private
- * spatial pages and persisting them after a bounded, view-requested PoP
- * prefix is already usable.  This callback borrows that prefix and immutable
- * hierarchy metadata for the duration of the call, allowing a background
- * provider to publish useful content without delaying durable cache work.
- * Implementations must copy any data they retain. */
+ * spatial pages and persisting them.  This callback borrows either a complete
+ * PoP prefix or a separately identified coverage preview for the duration of
+ * the call, allowing a background provider to publish useful content without
+ * delaying durable cache work.  Implementations must copy retained data. */
 typedef void (*BObolMeshLodPreviewCallback)(
+	int preview_kind,
 	unsigned long long cache_key,
 	const struct BObolMeshLodData *data,
 	const struct BObolMeshLodHierarchyInfo *hierarchy,
 	void *callback_data);
 
+/* One complete, independently drawable spatial cache page.  The page arrays
+ * and hierarchy snapshot are borrowed for the duration of the callback.  A
+ * receiver that keeps a page must make an immutable copy before returning;
+ * the producer never exposes a partially written page. */
+struct BObolMeshLodSpatialPage {
+    uint32_t page_id;
+    int cut;
+    struct BObolMeshLodChunkInfo info;
+    struct BObolMeshLodData data;
+    struct BObolMeshLodHierarchyInfo hierarchy;
+};
+
+typedef void (*BObolMeshLodSpatialPageCallback)(
+	unsigned long long cache_key,
+	const struct BObolMeshLodSpatialPage *page,
+	void *callback_data);
+
+/* Cold cache construction can outlive the first useful presentation.  The
+ * producer polls this optional callback at bounded source/page intervals so
+ * an obsolete view may stop its private work without asynchronous teardown.
+ * It runs on the source worker; callback_data must remain valid for the
+ * synchronous refresh call and the callback must not re-enter this API. */
+typedef int (*BObolMeshLodCancellationCallback)(void *callback_data);
+
 struct BObolMeshLodPreviewRequest {
     int requested_cut;
     float projected_pixel_diameter;
     float target_pixel_error;
+    /* Select the bounded serialized spatial producer for a large cold source.
+     * This is request policy, not an environment-controlled cache format. */
+    int spatial_leaf_producer;
+    /* The caller's already-discovered local-space source extent permits a
+     * coverage preview to avoid a duplicate full vertex scan.  Durable cache
+     * generation still validates and persists independently scanned bounds. */
+    int coverage_bounds_valid;
+    point_t coverage_bmin;
+    point_t coverage_bmax;
+    /* Called only for complete, locally validated pages produced by the
+     * serialized spatial-cache path.  It is distinct from the whole-source
+     * preview callback above: a page never claims to cover the logical BoT. */
+    BObolMeshLodSpatialPageCallback spatial_page_callback;
+    void *spatial_page_data;
+    BObolMeshLodCancellationCallback cancellation_callback;
+    void *cancellation_data;
 };
 
-#define BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT { -1, 0.0f, 0.0f }
+#define BOBOL_MESH_LOD_PREVIEW_REQUEST_INIT \
+    { -1, 0.0f, 0.0f, 0, 0, VINIT_ZERO, VINIT_ZERO, NULL, NULL, NULL, NULL }
 
 #define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
 #define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, 0, 0, NULL, 0, NULL, {{0, 0, 0, 0.0, {0, 0, 0}, 0}} }
@@ -402,6 +459,13 @@ bobol_mesh_lod_read_chunk_prefixes(struct BObolMeshLod *lod,
 	int cut,
 	BObolMeshLodChunkCallback callback,
 	void *cb_data);
+
+/* Open an independent read-only handle for the same immutable cached
+ * hierarchy.  The peer owns its cache transaction and active-prefix state,
+ * allowing bounded callers to read disjoint private-page ranges in parallel.
+ * It must be released with bobol_mesh_lod_destroy(). */
+BOBOL_EXPORT struct BObolMeshLod *
+bobol_mesh_lod_clone_reader(const struct BObolMeshLod *lod);
 
 BOBOL_EXPORT int
 bobol_mesh_lod_current_cut(const struct BObolMeshLod *lod);
