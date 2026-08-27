@@ -34,6 +34,7 @@
 #include <Inventor/nodes/SoNode.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <new>
 #include <numeric>
@@ -45,6 +46,16 @@ SO_ELEMENT_SOURCE(SoBRLViewLodElement);
 SO_NODE_SOURCE(SoBRLViewLodGroup);
 
 static size_t view_lod_saturating_add(size_t lhs, size_t rhs);
+
+static uint64_t
+view_lod_next_view_id(void)
+{
+    static std::atomic<uint64_t> nextId(1);
+    uint64_t id = nextId.fetch_add(1, std::memory_order_relaxed);
+    while (!id)
+	id = nextId.fetch_add(1, std::memory_order_relaxed);
+    return id;
+}
 
 static bool
 view_lod_float_bits_equal(float a, float b)
@@ -687,6 +698,7 @@ view_lod_remove_superseded_cad_payloads(
 BObolViewLodState::BObolViewLodState(void) :
     cadFullResyncRevision(1),
     cadBindingsRevision(1),
+    cadViewId(view_lod_next_view_id()),
     normalStyle(NORMAL_AUTHORED),
     normalCreaseAngle(60.0f),
     cadPresentationProgressiveLodCeiling(-1),
@@ -744,6 +756,23 @@ BObolViewLodState::BObolViewLodState(void) :
 BObolViewLodState::~BObolViewLodState(void)
 {
     this->clearCadPresentations();
+}
+
+Obol::CadViewState
+BObolViewLodState::cadPresentationViewState(void) const
+{
+    Obol::CadViewState state;
+    state.viewId = this->cadViewId;
+    state.progressiveCutCeiling =
+	this->cadPresentationProgressiveLodCeiling;
+    state.progressiveCutNextFraction =
+	this->cadPresentationProgressiveLodNextFraction;
+    state.pointProxyPixelThreshold = std::max(
+	this->cadPresentationPointProxyPixelThreshold,
+	this->cadPresentationDiscoveryPointProxyPixelThreshold);
+    state.cameraMotionFrameReuse =
+	this->cadPresentationCameraMotionFrameReuse != FALSE;
+    return state;
 }
 
 static bool
@@ -1345,19 +1374,6 @@ BObolViewLodState::setCadPresentation(
     }
     presentation.sourceRoutingId = sourceRoutingId;
     presentation.contentKey = contentKey;
-    if (presentation.assembly)
-	presentation.assembly->progressiveCutCeiling =
-	    this->cadPresentationProgressiveLodCeiling;
-    if (presentation.assembly)
-	presentation.assembly->progressiveCutNextFraction =
-	    this->cadPresentationProgressiveLodNextFraction;
-    if (presentation.assembly)
-	presentation.assembly->pointProxyPixelThreshold =
-	    std::max(this->cadPresentationPointProxyPixelThreshold,
-		this->cadPresentationDiscoveryPointProxyPixelThreshold);
-    if (presentation.assembly)
-	presentation.assembly->cameraMotionFrameReuse =
-	    this->cadPresentationCameraMotionFrameReuse;
     if (!presentation.assembly)
 	this->cadPresentations.erase(key);
 }
@@ -3619,6 +3635,18 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	haveAssembly = TRUE;
 	const int tier = assembly->lastRenderTier();
 	const Obol::CadRenderedWork work = assembly->lastRenderedWork();
+	/* A retained presentation report is an immutable historical sample.  It
+	 * is usable by this controller only when its traversal-qualified view ID
+	 * matches this exact view; execution-serial checks alone cannot establish
+	 * that fact if an assembly is accidentally traversed from another view. */
+	if (work.viewState.viewId != this->cadViewId) {
+	    this->cadLastPresentationFrameExact = FALSE;
+	    presentedValid = FALSE;
+	    presentedRenderCostValid = FALSE;
+	    gpuMeasurementValid = FALSE;
+	    preparedReplay = FALSE;
+	    continue;
+	}
 	const size_t subpixel = assembly->lastSubpixelProxyCount();
 	const size_t structural =
 	    assembly->lastUncollapsedStructuralProxyCount();
@@ -3668,16 +3696,16 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 		    static_cast<size_t>(presented);
 	}
 
-	const int presentationDrawMode = assembly->drawMode.getValue();
 	BObolLodCounts counts;
 	int costDrawMode = BOBOL_LOD_DRAW_SHADED;
-	if (presentationDrawMode == SoCADAssembly::WIREFRAME) {
+	if (work.viewState.drawMode == Obol::CadDrawMode::Wireframe) {
 	    counts.lineCount = work.lineCount;
 	    costDrawMode = BOBOL_LOD_DRAW_WIRE;
-	} else if (presentationDrawMode == SoCADAssembly::SHADED) {
+	} else if (work.viewState.drawMode == Obol::CadDrawMode::Shaded) {
 	    counts.faceCount = work.triangleCount;
-	} else if (presentationDrawMode == SoCADAssembly::SHADED_WITH_EDGES ||
-		presentationDrawMode == SoCADAssembly::HIDDEN_LINE) {
+	} else if (work.viewState.drawMode ==
+		Obol::CadDrawMode::ShadedWithEdges ||
+		work.viewState.drawMode == Obol::CadDrawMode::HiddenLine) {
 	    counts.faceCount = work.triangleCount;
 	    counts.lineCount = work.lineCount;
 	    costDrawMode = BOBOL_LOD_DRAW_HIDDEN_LINE;
@@ -3974,13 +4002,6 @@ BObolViewLodState::setCadPresentationProgressiveCutCeiling(
 	std::max(0.0f, std::min(1.0f, nextFraction));
     this->cadPresentationProgressiveLodCeiling = cut;
     this->cadPresentationProgressiveLodNextFraction = nextFraction;
-    for (const auto &presentation : this->cadPresentations) {
-	if (presentation.second.assembly) {
-	    presentation.second.assembly->progressiveCutCeiling = cut;
-	    presentation.second.assembly->progressiveCutNextFraction =
-		nextFraction;
-	}
-    }
 }
 
 float
@@ -3995,17 +4016,10 @@ BObolViewLodState::setCadPresentationPointProxyPixelThreshold(
 {
     pixels = std::isfinite(pixels) ?
 	std::max(1.0f, std::min(64.0f, pixels)) : 1.0f;
-    const float oldEffective = std::max(
-	this->cadPresentationPointProxyPixelThreshold,
-	this->cadPresentationDiscoveryPointProxyPixelThreshold);
-    this->cadPresentationPointProxyPixelThreshold = pixels;
-    const float effective = std::max(pixels,
-	this->cadPresentationDiscoveryPointProxyPixelThreshold);
-    if (std::fabs(effective - oldEffective) <= 1.0e-6f)
+    if (std::fabs(this->cadPresentationPointProxyPixelThreshold - pixels) <=
+	    1.0e-6f)
 	return;
-    for (const auto &presentation : this->cadPresentations)
-	if (presentation.second.assembly)
-	    presentation.second.assembly->pointProxyPixelThreshold = effective;
+    this->cadPresentationPointProxyPixelThreshold = pixels;
 }
 
 void
@@ -4014,17 +4028,11 @@ BObolViewLodState::setCadPresentationDiscoveryPointProxyPixelThreshold(
 {
     pixels = std::isfinite(pixels) ?
 	std::max(1.0f, std::min(64.0f, pixels)) : 1.0f;
-    const float oldEffective = std::max(
-	this->cadPresentationPointProxyPixelThreshold,
-	this->cadPresentationDiscoveryPointProxyPixelThreshold);
-    this->cadPresentationDiscoveryPointProxyPixelThreshold = pixels;
-    const float effective = std::max(
-	this->cadPresentationPointProxyPixelThreshold, pixels);
-    if (std::fabs(effective - oldEffective) <= 1.0e-6f)
+    if (std::fabs(
+	    this->cadPresentationDiscoveryPointProxyPixelThreshold - pixels) <=
+	    1.0e-6f)
 	return;
-    for (const auto &presentation : this->cadPresentations)
-	if (presentation.second.assembly)
-	    presentation.second.assembly->pointProxyPixelThreshold = effective;
+    this->cadPresentationDiscoveryPointProxyPixelThreshold = pixels;
 }
 
 void
@@ -4035,11 +4043,6 @@ BObolViewLodState::setCadPresentationCameraMotionFrameReuse(
     if (this->cadPresentationCameraMotionFrameReuse == enabled)
 	return;
     this->cadPresentationCameraMotionFrameReuse = enabled;
-    for (const auto &presentation : this->cadPresentations)
-	if (presentation.second.assembly &&
-	    presentation.second.assembly->cameraMotionFrameReuse.getValue() !=
-		enabled)
-	    presentation.second.assembly->cameraMotionFrameReuse = enabled;
 }
 
 size_t
@@ -4656,7 +4659,8 @@ SoBRLViewLodGroup::pushViewState(SoAction *action)
     SoBRLViewLodElement::set(state, this, this->viewState);
     if (state->isElementEnabled(
 	    SoCADViewStateElement::getClassStackIndex())) {
-	Obol::CadViewState cadState = SoCADViewStateElement::get(state);
+	Obol::CadViewState cadState =
+	    this->viewState->cadPresentationViewState();
 	cadState.softwareWireMode =
 	    static_cast<Obol::CadSoftwareWireMode>(this->softwareWireMode);
 	SoCADViewStateElement::set(state, cadState);

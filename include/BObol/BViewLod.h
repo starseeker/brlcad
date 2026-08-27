@@ -14,6 +14,7 @@
 #include "BObol/BPresentationPreparation.h"
 
 #include <Obol/cad/CadPresentationPreparation.h>
+#include <Obol/cad/CadViewState.h>
 
 #include <Inventor/SbBasic.h>
 #include <Inventor/SbBox.h>
@@ -60,6 +61,16 @@ public:
     /** Largest target-normalized screen error accepted as recognizable for
      * a prominent, unhighlighted feature. */
     static constexpr double ProminentMaximumNormalizedError = 3.0;
+
+    /** Projected-error form of the prominent-feature quality contract.
+     * Keeping this conversion beside the normalized limit prevents view
+     * policy, allocation, and diagnostics from silently applying different
+     * floors to fractional-pixel targets. */
+    static constexpr double prominentMaximumProjectedError(
+	double targetPixelError)
+    {
+	return targetPixelError * ProminentMaximumNormalizedError;
+    }
 
     struct BOBOL_EXPORT CadStructuralProjectionHistogram {
         static constexpr size_t BucketCount = 7;
@@ -269,6 +280,12 @@ public:
 
     BObolViewLodState(void);
     ~BObolViewLodState(void);
+    BObolViewLodState(const BObolViewLodState &) = delete;
+    BObolViewLodState &operator=(const BObolViewLodState &) = delete;
+
+    /** Complete generic Obol policy for this view.  Per-presentation draw
+     * and pick channels are applied by SoBRLCadAssembly at traversal time. */
+    Obol::CadViewState cadPresentationViewState(void) const;
 
     void clear(void);
     SbBool applyMeshResult(const SoBRLMeshShape *shape,
@@ -663,6 +680,7 @@ private:
 	std::vector<CadOccurrenceChange> > cadOccurrenceChanges;
     uint64_t cadFullResyncRevision;
     uint64_t cadBindingsRevision;
+    const uint64_t cadViewId;
     NormalStyle normalStyle;
     float normalCreaseAngle;
     mutable int cadPresentationProgressiveLodCeiling;

@@ -372,7 +372,7 @@ ged_event_result_note_name(struct ged_event_result *result,
 
 static void
 ged_event_result_note_draw(struct ged_event_result *result,
-			   const struct ged_draw_transaction_result *draw_result)
+			   const struct ged_scene_reducer_result *draw_result)
 {
     if (!result || !draw_result)
 	return;
@@ -526,14 +526,14 @@ ged_event_dispatch_phase(struct ged_event_service *state,
 
 static int
 ged_event_apply_draw_txn(struct ged *gedp,
-			 struct ged_draw_transaction *txn,
+			 struct ged_scene_reducer_request *txn,
 			 struct ged_event_result *result)
 {
-    struct ged_draw_transaction_result draw_result;
-    ged_draw_transaction_result_init(&draw_result);
-    int ret = ged_draw_apply_transaction(gedp, txn, &draw_result);
+    struct ged_scene_reducer_result draw_result;
+    ged_scene_reducer_result_init(&draw_result);
+    int ret = ged_scene_reduce(gedp, txn, &draw_result);
     ged_event_result_note_draw(result, &draw_result);
-    ged_draw_transaction_result_free(&draw_result);
+    ged_scene_reducer_result_free(&draw_result);
     return ret;
 }
 
@@ -552,8 +552,8 @@ ged_event_reconcile_draw(struct ged *gedp,
 	case GED_EVENT_OBJECT_REMOVED: {
 	    if (event.name.empty())
 		return 0;
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+	    struct ged_scene_reducer_request txn =
+		ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED,
 			event.name.c_str());
 	    txn.removed = 1;
 	    ret = ged_event_apply_draw_txn(gedp, &txn, result);
@@ -562,8 +562,8 @@ ged_event_reconcile_draw(struct ged *gedp,
 	case GED_EVENT_OBJECT_RENAMED: {
 	    if (event.name.empty() || event.new_name.empty())
 		return 0;
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_RENAMED,
+	    struct ged_scene_reducer_request txn =
+		ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_RENAMED,
 			event.name.c_str());
 	    txn.new_path = event.new_name.c_str();
 	    ret = ged_event_apply_draw_txn(gedp, &txn, result);
@@ -578,8 +578,8 @@ ged_event_reconcile_draw(struct ged *gedp,
 	    std::vector<std::string> affected_paths;
 	    ged_event_collect_index_affected_paths(gedp, event.name,
 		    affected_paths);
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+	    struct ged_scene_reducer_request txn =
+		ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED,
 		    event.name.c_str());
 	    std::vector<const char *> affected_path_views;
 	    affected_path_views.reserve(affected_paths.size());
@@ -602,8 +602,8 @@ ged_event_reconcile_draw(struct ged *gedp,
 	    struct directory *dp = db_lookup(gedp->dbip, event.name.c_str(),
 		    LOOKUP_QUIET);
 	    int visible = (!dp || !(dp->d_flags & RT_DIR_HIDDEN)) ? 1 : 0;
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
+	    struct ged_scene_reducer_request txn =
+		ged_scene_reducer_request_make_value(GED_SCENE_REDUCER_VISIBILITY,
 			event.name.c_str(), visible ? 1.0 : 0.0);
 	    ret = ged_event_apply_draw_txn(gedp, &txn, result);
 	    for (const std::string &affected_path : affected_paths)
@@ -612,14 +612,14 @@ ged_event_reconcile_draw(struct ged *gedp,
 	}
 	case GED_EVENT_COMB_INSTANCE_REMOVED: {
 	    if (!event.path.empty()) {
-		struct ged_draw_transaction erase_txn =
-		    ged_draw_transaction_make(GED_DRAW_TXN_ERASE_PREFIX,
+		struct ged_scene_reducer_request erase_txn =
+		    ged_scene_reducer_request_make(GED_SCENE_REDUCER_ERASE_PREFIX,
 			    event.path.c_str());
 		ret += ged_event_apply_draw_txn(gedp, &erase_txn, result);
 	    }
 	    if (!event.parent_name.empty()) {
-		struct ged_draw_transaction parent_txn =
-		    ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+		struct ged_scene_reducer_request parent_txn =
+		    ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED,
 			    event.parent_name.c_str());
 		parent_txn.redraw = 1;
 		int parent_ret = ged_event_apply_draw_txn(gedp, &parent_txn,
@@ -639,14 +639,14 @@ ged_event_reconcile_draw(struct ged *gedp,
 		if (removed_path.empty() && !event.child_name.empty())
 		    removed_path = event.parent_name + "/" + event.child_name;
 		if (!removed_path.empty()) {
-		    struct ged_draw_transaction erase_txn =
-			ged_draw_transaction_make(GED_DRAW_TXN_ERASE_PREFIX,
+		    struct ged_scene_reducer_request erase_txn =
+			ged_scene_reducer_request_make(GED_SCENE_REDUCER_ERASE_PREFIX,
 				removed_path.c_str());
 		    ret += ged_event_apply_draw_txn(gedp, &erase_txn,
 			    result);
 		}
-		struct ged_draw_transaction parent_txn =
-		    ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+		struct ged_scene_reducer_request parent_txn =
+		    ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED,
 			    event.parent_name.c_str());
 		parent_txn.redraw = 1;
 		int parent_ret = ged_event_apply_draw_txn(gedp, &parent_txn,
@@ -657,8 +657,8 @@ ged_event_reconcile_draw(struct ged *gedp,
 		    ret += parent_ret;
 		break;
 	    }
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED,
+	    struct ged_scene_reducer_request txn =
+		ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_REFERENCES_REMOVED,
 			event.name.c_str());
 	    ret = ged_event_apply_draw_txn(gedp, &txn, result);
 	    break;
@@ -672,8 +672,8 @@ ged_event_reconcile_draw(struct ged *gedp,
 	    affected_path_views.reserve(affected_paths.size());
 	    for (const std::string &affected_path : affected_paths)
 		affected_path_views.push_back(affected_path.c_str());
-	    struct ged_draw_transaction changed =
-		ged_draw_transaction_make(GED_DRAW_TXN_MATERIAL_CHANGED,
+	    struct ged_scene_reducer_request changed =
+		ged_scene_reducer_request_make(GED_SCENE_REDUCER_MATERIAL_CHANGED,
 		    nullptr);
 	    changed.paths = affected_path_views.empty() ? nullptr :
 		affected_path_views.data();
@@ -684,8 +684,8 @@ ged_event_reconcile_draw(struct ged *gedp,
 	    break;
 	}
 	case GED_EVENT_BATCH_REBUILD: {
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, nullptr);
+	    struct ged_scene_reducer_request txn =
+		ged_scene_reducer_request_make(GED_SCENE_REDUCER_REDRAW, nullptr);
 	    ret = ged_event_apply_draw_txn(gedp, &txn, result);
 	    break;
 	}

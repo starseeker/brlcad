@@ -780,7 +780,7 @@ seed_view_lod_probe_payload(BObolViewController *controller,
 static int
 apply_attached_view_lod_invalidation_probe(struct ged *gedp,
 	BObolViewController *controller,
-	struct ged_draw_transaction *txn,
+	struct ged_scene_reducer_request *txn,
 	const char *label)
 {
     if (!gedp || !controller || !txn || !label)
@@ -793,10 +793,10 @@ apply_attached_view_lod_invalidation_probe(struct ged *gedp,
 	return 1;
     }
 
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int ret = ged_draw_apply_transaction(gedp, txn, &result);
-    ged_draw_transaction_result_free(&result);
+    struct ged_scene_reducer_result result;
+    ged_scene_reducer_result_init(&result);
+    int ret = ged_scene_reduce(gedp, txn, &result);
+    ged_scene_reducer_result_free(&result);
     if (ret <= 0) {
 	fprintf(stderr,
 		"FAIL: attached Obol %s transaction should succeed\n",
@@ -974,19 +974,19 @@ verify_mode_source(BObolSceneController *controller,
 
 static int
 apply_mode_value_transaction(struct ged *gedp,
-	ged_draw_transaction_kind kind,
+	ged_scene_reducer_operation kind,
 	const char *path,
 	int mode,
 	fastf_t value,
 	const char *label)
 {
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make_value(kind, path, value);
+    struct ged_scene_reducer_request txn =
+	ged_scene_reducer_request_make_value(kind, path, value);
     txn.mode = mode;
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int ret = ged_draw_apply_transaction(gedp, &txn, &result);
-    ged_draw_transaction_result_free(&result);
+    struct ged_scene_reducer_result result;
+    ged_scene_reducer_result_init(&result);
+    int ret = ged_scene_reduce(gedp, &txn, &result);
+    ged_scene_reducer_result_free(&result);
     if (ret <= 0)
 	FAIL("mode-specific value transaction should succeed");
 
@@ -996,19 +996,19 @@ apply_mode_value_transaction(struct ged *gedp,
 
 static int
 apply_mode_path_transaction(struct ged *gedp,
-	ged_draw_transaction_kind kind,
+	ged_scene_reducer_operation kind,
 	const char *path,
 	int mode,
 	const char *label)
 {
-    struct ged_draw_transaction txn = ged_draw_transaction_make(kind, path);
+    struct ged_scene_reducer_request txn = ged_scene_reducer_request_make(kind, path);
     txn.mode = mode;
-    if (kind == GED_DRAW_TXN_STALE_SOURCE)
+    if (kind == GED_SCENE_REDUCER_STALE_SOURCE)
 	txn.stale_reason = GED_DRAW_STALE_SETTINGS_CHANGED;
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int ret = ged_draw_apply_transaction(gedp, &txn, &result);
-    ged_draw_transaction_result_free(&result);
+    struct ged_scene_reducer_result result;
+    ged_scene_reducer_result_init(&result);
+    int ret = ged_scene_reduce(gedp, &txn, &result);
+    ged_scene_reducer_result_free(&result);
     if (ret <= 0)
 	FAIL("mode-specific path transaction should succeed");
 
@@ -1018,20 +1018,20 @@ apply_mode_path_transaction(struct ged *gedp,
 
 static int
 apply_path_transaction(struct ged *gedp,
-	ged_draw_transaction_kind kind,
+	ged_scene_reducer_operation kind,
 	const char *path,
 	struct ged_view_context *view_ctx,
 	int mode,
 	const char *label)
 {
-    struct ged_draw_transaction txn = ged_draw_transaction_make(kind, path);
+    struct ged_scene_reducer_request txn = ged_scene_reducer_request_make(kind, path);
     txn.view = view_ctx;
     txn.mode = mode;
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int ret = ged_draw_apply_transaction(gedp, &txn, &result);
+    struct ged_scene_reducer_result result;
+    ged_scene_reducer_result_init(&result);
+    int ret = ged_scene_reduce(gedp, &txn, &result);
     const int status = result.status;
-    ged_draw_transaction_result_free(&result);
+    ged_scene_reducer_result_free(&result);
     if (ret <= 0) {
 	fprintf(stderr, "public path transaction failed: %s (kind=%d path=%s mode=%d ret=%d status=%d)\n",
 	    label ? label : "", static_cast<int>(kind), path ? path : "",
@@ -1045,18 +1045,18 @@ apply_path_transaction(struct ged *gedp,
 
 static int
 try_path_transaction(struct ged *gedp,
-	ged_draw_transaction_kind kind,
+	ged_scene_reducer_operation kind,
 	const char *path,
 	struct ged_view_context *view_ctx,
 	int mode)
 {
-    struct ged_draw_transaction txn = ged_draw_transaction_make(kind, path);
+    struct ged_scene_reducer_request txn = ged_scene_reducer_request_make(kind, path);
     txn.view = view_ctx;
     txn.mode = mode;
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int ret = ged_draw_apply_transaction(gedp, &txn, &result);
-    ged_draw_transaction_result_free(&result);
+    struct ged_scene_reducer_result result;
+    ged_scene_reducer_result_init(&result);
+    int ret = ged_scene_reduce(gedp, &txn, &result);
+    ged_scene_reducer_result_free(&result);
     if (ret < 0)
 	FAIL("public path transaction should not fail");
 
@@ -1078,7 +1078,7 @@ exercise_mode_specific_source_lifecycle(struct ged *gedp,
 	FAIL("mode-specific lifecycle test needs GED and Obol scene state");
     (void)expect_direct_provider;
 
-    (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,
+    (void)try_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, path,
 	    ged_draw_active_view_ctx(gedp), mode);
     if (source_representation_count(controller, path, representation_mode))
 	FAIL("mode-specific lifecycle setup should start without target representation");
@@ -1094,24 +1094,24 @@ exercise_mode_specific_source_lifecycle(struct ged *gedp,
 	    expect_vlist, expect_mesh, 1, 0, label))
 	return 1;
 
-    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
+    if (apply_mode_value_transaction(gedp, GED_SCENE_REDUCER_VISIBILITY,
 	    path, mode, 0.0, label))
 	return 1;
     if (verify_mode_source(controller, path, representation_mode,
 	    expect_vlist, expect_mesh, 0, 0, label))
 	return 1;
 
-    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
+    if (apply_mode_value_transaction(gedp, GED_SCENE_REDUCER_VISIBILITY,
 	    path, mode, 1.0, label))
 	return 1;
-    if (apply_mode_path_transaction(gedp, GED_DRAW_TXN_STALE_SOURCE,
+    if (apply_mode_path_transaction(gedp, GED_SCENE_REDUCER_STALE_SOURCE,
 	    path, mode, label))
 	return 1;
     if (verify_mode_source(controller, path, representation_mode,
 	    expect_vlist, expect_mesh, 1, 1, label))
 	return 1;
 
-    if (apply_mode_path_transaction(gedp, GED_DRAW_TXN_REDRAW,
+    if (apply_mode_path_transaction(gedp, GED_SCENE_REDUCER_REDRAW,
 	    path, mode, label))
 	return 1;
     if (verify_mode_source(controller, path, representation_mode,
@@ -1131,7 +1131,7 @@ exercise_mode_specific_source_lifecycle(struct ged *gedp,
     if (source_path_count(controller, path) < 2)
 	FAIL("mode-specific lifecycle should have shared and mode sources before scoped erase");
 
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, path,
 	    ged_draw_active_view_ctx(gedp), mode, "mode-specific erase"))
 	return 1;
     if (source_representation_count(controller, path, representation_mode))
@@ -1149,7 +1149,7 @@ exercise_deferred_mode_replacement(struct ged *gedp,
     if (!gedp || !controller || !path)
 	FAIL("deferred mode replacement test needs GED and Obol scene state");
 
-    (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,
+    (void)try_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, path,
 	ged_draw_active_view_ctx(gedp), -1);
 
     const char *draw_shaded[3] = {"draw", "-m2", path};
@@ -1179,7 +1179,7 @@ exercise_deferred_mode_replacement(struct ged *gedp,
 		SoBRLDatabaseSource::REPRESENTATION_SHADED) != 1)
 	FAIL("deferred add-mode should retain the existing representation");
 
-    (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,
+    (void)try_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, path,
 	ged_draw_active_view_ctx(gedp), -1);
     return 0;
 }
@@ -1299,14 +1299,14 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 		19.0f, 4.0f, 1.0f))
 	FAIL("GED multi-instance root bounds should include both occurrences");
 
-    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
+    if (apply_mode_value_transaction(gedp, GED_SCENE_REDUCER_VISIBILITY,
 	    path_a, GED_DRAW_MODE_WIRE, 0.0, "multi-instance visibility"))
 	return 1;
     if (!wire_source->getCompactInstanceSummary(handle_a, compact_a) ||
 	    !wire_source->getCompactInstanceSummary(handle_b, compact_b) ||
 	    compact_a.visible || !compact_b.visible)
 	FAIL("GED multi-instance visibility should target one occurrence path");
-    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
+    if (apply_mode_value_transaction(gedp, GED_SCENE_REDUCER_VISIBILITY,
 	    path_a, GED_DRAW_MODE_WIRE, 1.0, "multi-instance visibility restore"))
 	return 1;
     if (!wire_source->getCompactInstanceSummary(handle_a, compact_a) ||
@@ -1314,7 +1314,7 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	    !compact_a.visible || !compact_b.visible)
 	FAIL("GED multi-instance visibility restore should update repeated logical instances consistently");
 
-    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_HIGHLIGHT,
+    if (apply_mode_value_transaction(gedp, GED_SCENE_REDUCER_HIGHLIGHT,
 	    "reuse_root.c", GED_DRAW_MODE_WIRE, 1.0,
 	    "multi-instance highlight"))
 	return 1;
@@ -1322,7 +1322,7 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	    !wire_source->getCompactInstanceSummary(handle_b, compact_b) ||
 	    !compact_a.highlighted || !compact_b.highlighted)
 	FAIL("GED multi-instance highlight should update repeated logical instances consistently");
-    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_HIGHLIGHT,
+    if (apply_mode_value_transaction(gedp, GED_SCENE_REDUCER_HIGHLIGHT,
 	    "reuse_root.c", GED_DRAW_MODE_WIRE, 0.0,
 	    "multi-instance highlight restore"))
 	return 1;
@@ -1332,7 +1332,7 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	FAIL("GED multi-instance highlight restore should update repeated logical instances consistently");
 
     ged_draw_index_stats_reset(gedp);
-    if (apply_mode_path_transaction(gedp, GED_DRAW_TXN_REDRAW,
+    if (apply_mode_path_transaction(gedp, GED_SCENE_REDUCER_REDRAW,
 	    path_a, GED_DRAW_MODE_WIRE, "multi-instance redraw"))
 	return 1;
     struct ged_draw_index_stats redraw_stats;
@@ -1663,15 +1663,15 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
     struct ged_draw_appearance_settings appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
     appearance.defer_leaf_expansion = 1;
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "progressive_root.c");
+    struct ged_scene_reducer_request txn =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_DRAW, "progressive_root.c");
     txn.view = view_ctx;
     txn.mode = GED_DRAW_MODE_WIRE;
     txn.appearance = &appearance;
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    const int draw_ret = ged_draw_apply_transaction(gedp, &txn, &result);
-    ged_draw_transaction_result_free(&result);
+    struct ged_scene_reducer_result result;
+    ged_scene_reducer_result_init(&result);
+    const int draw_ret = ged_scene_reduce(gedp, &txn, &result);
+    ged_scene_reducer_result_free(&result);
     if (draw_ret <= 0)
 	FAIL("deferred progressive root draw should succeed");
 
@@ -1787,7 +1787,7 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
 	FAIL("compact proxy occurrences should preserve transforms, boolean identity, and inherited material");
     }
 
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE,
 	    "progressive_root.c", NULL, -1, "progressive identity cleanup"))
 	return 1;
     if (controller->getDatabaseSourceCount() != initial_source_count)
@@ -1811,16 +1811,16 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     struct ged_draw_appearance_settings appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
     appearance.defer_leaf_expansion = 1;
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "progressive_root.c");
+    struct ged_scene_reducer_request txn =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_DRAW, "progressive_root.c");
     txn.view = view_ctx;
     txn.mode = GED_DRAW_MODE_WIRE;
     txn.appearance = &appearance;
     txn.autoview = 1;
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    const int draw_ret = ged_draw_apply_transaction(gedp, &txn, &result);
-    ged_draw_transaction_result_free(&result);
+    struct ged_scene_reducer_result result;
+    ged_scene_reducer_result_init(&result);
+    const int draw_ret = ged_scene_reduce(gedp, &txn, &result);
+    ged_scene_reducer_result_free(&result);
     if (draw_ret <= 0)
 	FAIL("progressive autoview deferred draw should succeed");
     if (bv_frame_revision_get(view) != initial_revision)
@@ -1927,10 +1927,10 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     /* A redraw can advance the aggregate draw revision while this source is
      * realizing.  It must not invalidate an otherwise matching snapshot. */
     const uint64_t revision_before_redraw = ged_draw_scene_revision(gedp);
-    struct ged_draw_transaction redraw_txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, "progressive_root.c");
+    struct ged_scene_reducer_request redraw_txn =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_REDRAW, "progressive_root.c");
     redraw_txn.view = view_ctx;
-    if (ged_draw_apply_transaction(gedp, &redraw_txn, NULL) < 0 ||
+    if (ged_scene_reduce(gedp, &redraw_txn, NULL) < 0 ||
 	ged_draw_scene_revision(gedp) <= revision_before_redraw)
 	FAIL("progressive redraw should advance scene bookkeeping without cancelling refinement");
 
@@ -2037,14 +2037,14 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     if (stable_autoview_ticks < 2)
 	FAIL("settled progressive autoview should stop changing the view");
 
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE,
 	    "progressive_root.c", view_ctx, -1,
 	    "progressive autoview settle cleanup"))
 	return 1;
 
-    ged_draw_transaction_result_init(&result);
-    const int redraw_ret = ged_draw_apply_transaction(gedp, &txn, &result);
-    ged_draw_transaction_result_free(&result);
+    ged_scene_reducer_result_init(&result);
+    const int redraw_ret = ged_scene_reduce(gedp, &txn, &result);
+    ged_scene_reducer_result_free(&result);
     if (redraw_ret <= 0)
 	FAIL("progressive autoview cancellation draw should succeed");
     bv_size_set(view, 1234.0);
@@ -2066,7 +2066,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     };
     if (ged_exec(gedp, 3, restore_progressive) != BRLCAD_OK)
 	FAIL("active background refinement database rename restore should succeed");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE,
 	    "progressive_root.c", view_ctx, -1,
 	    "progressive autoview cancellation cleanup"))
 	return 1;
@@ -2236,7 +2236,7 @@ exercise_evaluated_wire_shape_ref_realize_context(struct ged *gedp,
 
     const int mode = GED_DRAW_MODE_EVAL_WIRE;
     const int representation = SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE;
-    (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,
+    (void)try_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, path,
 	    ged_draw_active_view_ctx(gedp), mode);
 
     char mode_arg[16] = {0};
@@ -2290,7 +2290,7 @@ exercise_evaluated_wire_shape_ref_realize_context(struct ged *gedp,
 	    !summary.sourceBoundsValid || !summary.sourceBoundsExact)
 	FAIL("evaluated-wire shape-ref realize-context should refresh the mode source");
 
-    (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,
+    (void)try_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, path,
 	    ged_draw_active_view_ctx(gedp), mode);
     return 0;
 }
@@ -2401,9 +2401,9 @@ frontier_draw_one_mode(struct ged *gedp, int mode, const char *path)
 static void
 frontier_clear(struct ged *gedp)
 {
-    struct ged_draw_transaction clear =
-	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
-    (void)ged_draw_apply_transaction(gedp, &clear, NULL);
+    struct ged_scene_reducer_request clear =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_CLEAR, NULL);
+    (void)ged_scene_reduce(gedp, &clear, NULL);
 }
 
 
@@ -4094,7 +4094,7 @@ main(int argc, char **argv)
     if (source_representation_count(owned_scene, "box.s",
 	    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS) != 1)
 	FAIL("GED evaluated-points option should create one mode source");
-    (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, "box.s",
+    (void)try_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, "box.s",
 	    ged_draw_active_view_ctx(gedp), -1);
     if (!ged_draw_obol_database_source_ensure_for_path(gedp, "box.s",
 	    gedp->dbip, GED_DRAW_MODE_WIRE, 0))
@@ -5844,16 +5844,16 @@ main(int argc, char **argv)
 	    !source_for_path(owned_scene, "draft_move.s"))
 	FAIL("owned Obol transaction canary source should be created");
     ged_draw_index_stats_reset(gedp);
-    struct ged_draw_transaction obol_index_txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+    struct ged_scene_reducer_request obol_index_txn =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED,
 		"draft_move.s");
     obol_index_txn.redraw = 0;
-    struct ged_draw_transaction_result obol_index_result;
-    ged_draw_transaction_result_init(&obol_index_result);
-    if (ged_draw_apply_transaction(gedp, &obol_index_txn,
+    struct ged_scene_reducer_result obol_index_result;
+    ged_scene_reducer_result_init(&obol_index_result);
+    if (ged_scene_reduce(gedp, &obol_index_txn,
 	    &obol_index_result) <= 0)
 	FAIL("GED Obol component-index stale transaction should succeed");
-    ged_draw_transaction_result_free(&obol_index_result);
+    ged_scene_reducer_result_free(&obol_index_result);
     struct ged_draw_index_stats obol_index_stats;
     memset(&obol_index_stats, 0, sizeof(obol_index_stats));
     ged_draw_index_stats_get(gedp, &obol_index_stats);
@@ -5867,97 +5867,97 @@ main(int argc, char **argv)
 	    !draft_move_source->getSummary(draft_move_summary) ||
 	    !draft_move_summary.stale)
 	FAIL("GED Obol component-index transaction should mark the owned source stale");
-    struct ged_draw_transaction display_txn =
-	ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
+    struct ged_scene_reducer_request display_txn =
+	ged_scene_reducer_request_make_value(GED_SCENE_REDUCER_VISIBILITY,
 		"box.s", 0.0);
-    struct ged_draw_transaction_result display_result;
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
+    struct ged_scene_reducer_result display_result;
+    ged_scene_reducer_result_init(&display_result);
+    if (ged_scene_reduce(gedp, &display_txn,
 	    &display_result) <= 0)
 	FAIL("GED visibility transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
+    ged_scene_reducer_result_free(&display_result);
     box_source = source_for_path(owned_scene, "box.s");
     if (!box_source ||
 	    !box_source->getSummary(box_source_summary) ||
 	    box_source_summary.visible ||
 	    !source_for_path(owned_scene, "draft_move.s"))
 	FAIL("GED visibility transaction should update owned Obol state without full-scene sync");
-    display_txn = ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
+    display_txn = ged_scene_reducer_request_make_value(GED_SCENE_REDUCER_VISIBILITY,
 	    "box.s", 1.0);
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
+    ged_scene_reducer_result_init(&display_result);
+    if (ged_scene_reduce(gedp, &display_txn,
 	    &display_result) <= 0)
 	FAIL("GED visibility restore transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
-    display_txn = ged_draw_transaction_make_value(GED_DRAW_TXN_TRANSPARENCY,
+    ged_scene_reducer_result_free(&display_result);
+    display_txn = ged_scene_reducer_request_make_value(GED_SCENE_REDUCER_TRANSPARENCY,
 	    "box.s", 0.125);
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
+    ged_scene_reducer_result_init(&display_result);
+    if (ged_scene_reduce(gedp, &display_txn,
 	    &display_result) <= 0)
 	FAIL("GED transparency transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
+    ged_scene_reducer_result_free(&display_result);
     if (!box_source->getSummary(box_source_summary) ||
 	    fabs(box_source_summary.transparency - 0.125f) > 0.001f ||
 	    !source_for_path(owned_scene, "draft_move.s"))
 	FAIL("GED transparency transaction should preserve Obol-only sources");
-    display_txn = ged_draw_transaction_make_value(GED_DRAW_TXN_HIGHLIGHT,
+    display_txn = ged_scene_reducer_request_make_value(GED_SCENE_REDUCER_HIGHLIGHT,
 	    "box.s", 1.0);
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
+    ged_scene_reducer_result_init(&display_result);
+    if (ged_scene_reduce(gedp, &display_txn,
 	    &display_result) <= 0)
 	FAIL("GED highlight transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
+    ged_scene_reducer_result_free(&display_result);
     if (!box_source->getSummary(box_source_summary) ||
 	    !box_source_summary.highlighted ||
 	    !source_for_path(owned_scene, "draft_move.s"))
 	FAIL("GED highlight transaction should preserve Obol-only sources");
-    display_txn = ged_draw_transaction_make_value(GED_DRAW_TXN_HIGHLIGHT,
+    display_txn = ged_scene_reducer_request_make_value(GED_SCENE_REDUCER_HIGHLIGHT,
 	    "box.s", 0.0);
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
+    ged_scene_reducer_result_init(&display_result);
+    if (ged_scene_reduce(gedp, &display_txn,
 	    &display_result) <= 0)
 	FAIL("GED highlight restore transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
-    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE,
+    ged_scene_reducer_result_free(&display_result);
+    display_txn = ged_scene_reducer_request_make(GED_SCENE_REDUCER_STALE_SOURCE,
 	    "box.s");
     display_txn.stale_reason = GED_DRAW_STALE_SETTINGS_CHANGED;
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
+    ged_scene_reducer_result_init(&display_result);
+    if (ged_scene_reduce(gedp, &display_txn,
 	    &display_result) <= 0)
 	FAIL("GED stale-source transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
+    ged_scene_reducer_result_free(&display_result);
     if (!box_source->getSummary(box_source_summary) ||
 	    !box_source_summary.stale ||
 	    !(box_source_summary.staleReason &
 		SoBRLDatabaseSource::STALE_DRAW) ||
 	    !source_for_path(owned_scene, "draft_move.s"))
 	FAIL("GED stale-source transaction should target owned Obol state without full-scene sync");
-    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_MATERIAL_CHANGED,
+    display_txn = ged_scene_reducer_request_make(GED_SCENE_REDUCER_MATERIAL_CHANGED,
 	    NULL);
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
+    ged_scene_reducer_result_init(&display_result);
+    if (ged_scene_reduce(gedp, &display_txn,
 	    &display_result) <= 0)
 	FAIL("GED material-changed transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
+    ged_scene_reducer_result_free(&display_result);
     if (!source_for_path(owned_scene, "draft_move.s"))
 	FAIL("GED material-changed transaction should preserve Obol-only sources");
-    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
+    display_txn = ged_scene_reducer_request_make(GED_SCENE_REDUCER_REDRAW, NULL);
+    ged_scene_reducer_result_init(&display_result);
+    if (ged_scene_reduce(gedp, &display_txn,
 	    &display_result) <= 0)
 	FAIL("GED redraw transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
+    ged_scene_reducer_result_free(&display_result);
     if (!source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s") ||
 	    !source_for_path(owned_scene, "draft_move.s"))
 	FAIL("GED redraw transaction should refresh draw sources without clearing Obol-only sources");
-    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_ERASE_PREFIX,
+    display_txn = ged_scene_reducer_request_make(GED_SCENE_REDUCER_ERASE_PREFIX,
 	    "box.s");
-    ged_draw_transaction_result_init(&display_result);
-    if (ged_draw_apply_transaction(gedp, &display_txn,
+    ged_scene_reducer_result_init(&display_result);
+    if (ged_scene_reduce(gedp, &display_txn,
 	    &display_result) <= 0)
 	FAIL("GED erase-prefix transaction should succeed");
-    ged_draw_transaction_result_free(&display_result);
+    ged_scene_reducer_result_free(&display_result);
     if (source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s") ||
 	    !source_for_path(owned_scene, "draft_move.s"))
@@ -5976,7 +5976,7 @@ main(int argc, char **argv)
 	    &ball_record);
     if (!ball_record.found)
 	FAIL("GED ball shape record should be available before public erase");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE, "ball.s", NULL, -1,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, "ball.s", NULL, -1,
 	    "public erase"))
 	return 1;
     if (owned_scene->getDatabaseSourceCount() != 1 ||
@@ -5995,7 +5995,7 @@ main(int argc, char **argv)
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
 	FAIL("owned Obol scene controller should mirror redraw after public erase");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE, "ball.s",
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, "ball.s",
 	    ged_draw_active_view_ctx(gedp), -1, "public active-scope erase"))
 	return 1;
     if (owned_scene->getDatabaseSourceCount() != 1 ||
@@ -6014,7 +6014,7 @@ main(int argc, char **argv)
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
 		FAIL("owned Obol scene controller should mirror redraw after public active-scope erase");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE, "ball.s", NULL, -1,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, "ball.s", NULL, -1,
 	    "public root erase"))
 	return 1;
     if (owned_scene->getDatabaseSourceCount() != 1 ||
@@ -6100,7 +6100,7 @@ main(int argc, char **argv)
 	    0) ||
 	    !owned_scene->findGroup(prefix_only_group_path))
 	FAIL("GED root path-prefix group-only sentinel should be created");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE_PREFIX,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE_PREFIX,
 	    "prefix_owner.c", NULL, -1, "public root path-prefix group-only erase"))
 	return 1;
     if (owned_scene->findGroup("prefix_owner.c") ||
@@ -6112,7 +6112,7 @@ main(int argc, char **argv)
 	    &prefix_group_state);
     if (prefix_group_state.found)
 	FAIL("GED root path-prefix group-only erase should not expose stale group draw records");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE_PREFIX,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE_PREFIX,
 	    "nested_parent.c/nested_child.c", ged_draw_active_view_ctx(gedp),
 	    -1, "public active-scope path-prefix erase"))
 	return 1;
@@ -6148,7 +6148,7 @@ main(int argc, char **argv)
 	    !nested_sibling_source->getSummary(nested_sibling_summary) ||
 	    nested_sibling_summary.lineWidth != 23)
 	FAIL("GED active-scope path-prefix erase redraw restore should preserve sibling owned Obol source state");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE_PREFIX,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE_PREFIX,
 	    "nested_parent.c/nested_child.c", NULL, -1,
 	    "public root path-prefix erase"))
 	return 1;
@@ -6184,32 +6184,32 @@ main(int argc, char **argv)
     if (nested_sibling_summary.realizationStatus !=
 	    SoBRLDatabaseSource::REALIZED || nested_sibling_summary.stale)
 	FAIL("GED root path-prefix erase redraw restore should keep the sibling realization current");
-    struct ged_draw_transaction reexpand_nested_child =
-	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+    struct ged_scene_reducer_request reexpand_nested_child =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED,
 		"nested_child.c");
     reexpand_nested_child.redraw = 1;
-    struct ged_draw_transaction_result nested_result;
-    ged_draw_transaction_result_init(&nested_result);
+    struct ged_scene_reducer_result nested_result;
+    ged_scene_reducer_result_init(&nested_result);
     ged_draw_index_stats_reset(gedp);
-    if (ged_draw_apply_transaction(gedp, &reexpand_nested_child,
+    if (ged_scene_reduce(gedp, &reexpand_nested_child,
 	    &nested_result) <= 0)
 	FAIL("GED nested child reexpand transaction should succeed");
-    ged_draw_transaction_result_free(&nested_result);
+    ged_scene_reducer_result_free(&nested_result);
     struct ged_draw_index_stats nested_reexpand_stats;
     memset(&nested_reexpand_stats, 0, sizeof(nested_reexpand_stats));
     ged_draw_index_stats_get(gedp, &nested_reexpand_stats);
     if (nested_reexpand_stats.slow_path_shape_scans ||
 	    nested_reexpand_stats.slow_path_group_scans)
 	FAIL("GED nested child reexpand should avoid registry/index slow-path scans");
-    struct ged_draw_transaction stale_nested_leaf =
-	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+    struct ged_scene_reducer_request stale_nested_leaf =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED,
 		"nested_leaf.s");
     stale_nested_leaf.redraw = 0;
-    ged_draw_transaction_result_init(&nested_result);
-    if (ged_draw_apply_transaction(gedp, &stale_nested_leaf,
+    ged_scene_reducer_result_init(&nested_result);
+    if (ged_scene_reduce(gedp, &stale_nested_leaf,
 	    &nested_result) <= 0)
 	FAIL("GED nested leaf stale transaction should succeed");
-    ged_draw_transaction_result_free(&nested_result);
+    ged_scene_reducer_result_free(&nested_result);
     BObolDatabaseSourceSummary nested_leaf_summary;
     nested_leaf_source = source_for_path(owned_scene,
 	    nested_leaf_source_path);
@@ -6232,16 +6232,16 @@ main(int argc, char **argv)
 	FAIL("GED nested leaf stale transaction should not stale the sibling source");
     if (nested_sibling_summary.lineWidth != 23)
 	FAIL("GED nested leaf stale transaction should preserve sibling source state");
-    struct ged_draw_transaction redraw_nested_leaf =
-	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+    struct ged_scene_reducer_request redraw_nested_leaf =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED,
 		"nested_leaf.s");
     redraw_nested_leaf.redraw = 1;
-    ged_draw_transaction_result_init(&nested_result);
+    ged_scene_reducer_result_init(&nested_result);
     ged_draw_index_stats_reset(gedp);
-    if (ged_draw_apply_transaction(gedp, &redraw_nested_leaf,
+    if (ged_scene_reduce(gedp, &redraw_nested_leaf,
 	    &nested_result) <= 0)
 	FAIL("GED nested leaf redraw transaction should succeed");
-    ged_draw_transaction_result_free(&nested_result);
+    ged_scene_reducer_result_free(&nested_result);
     struct ged_draw_index_stats nested_redraw_stats;
     memset(&nested_redraw_stats, 0, sizeof(nested_redraw_stats));
     ged_draw_index_stats_get(gedp, &nested_redraw_stats);
@@ -6288,7 +6288,7 @@ main(int argc, char **argv)
 	FAIL("GED nested leaf redraw transaction should retain the unrelated owned Obol source");
     if (nested_sibling_summary.lineWidth != 23)
 	FAIL("GED nested leaf redraw transaction should preserve unrelated owned Obol source presentation");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_SOURCE_REFERENCES_REMOVED,
 	    "nested_leaf.s", ged_draw_active_view_ctx(gedp), -1,
 	    "public scoped component erase"))
 	return 1;
@@ -6333,7 +6333,7 @@ main(int argc, char **argv)
     if (owned_scene->setDatabaseSourceDrawMode(nested_leaf_source_path,
 	    SoBRLDatabaseSource::SHADED) < 0)
 	FAIL("GED scoped component mode-filter sentinel should set shaded owner mode");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_SOURCE_REFERENCES_REMOVED,
 	    "nested_leaf.s", ged_draw_active_view_ctx(gedp),
 	    GED_DRAW_MODE_WIRE, "public scoped component mode-filter erase"))
 	return 1;
@@ -6360,14 +6360,14 @@ main(int argc, char **argv)
     if (owned_scene->setDatabaseSourceDrawMode(nested_leaf_source_path,
 	    SoBRLDatabaseSource::WIREFRAME) < 0)
 	FAIL("GED scoped component mode-filter sentinel should restore wire owner mode");
-    struct ged_draw_transaction remove_nested_leaf_ref =
-	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED,
+    struct ged_scene_reducer_request remove_nested_leaf_ref =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_REFERENCES_REMOVED,
 		"nested_leaf.s");
-    ged_draw_transaction_result_init(&nested_result);
-    if (ged_draw_apply_transaction(gedp, &remove_nested_leaf_ref,
+    ged_scene_reducer_result_init(&nested_result);
+    if (ged_scene_reduce(gedp, &remove_nested_leaf_ref,
 	    &nested_result) <= 0)
 	FAIL("GED nested leaf reference removal transaction should succeed");
-    ged_draw_transaction_result_free(&nested_result);
+    ged_scene_reducer_result_free(&nested_result);
     nested_sibling_source = source_for_path(owned_scene,
 	    nested_sibling_source_path);
     if (source_for_path(owned_scene, nested_leaf_source_path) ||
@@ -6375,15 +6375,15 @@ main(int argc, char **argv)
 	    !nested_sibling_source->getSummary(nested_sibling_summary) ||
 	    nested_sibling_summary.lineWidth != 23)
 	FAIL("GED nested leaf reference removal should remove only non-root owned Obol sources");
-    struct ged_draw_transaction remove_nested_sibling =
-	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+    struct ged_scene_reducer_request remove_nested_sibling =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED,
 		"nested_sibling.s");
     remove_nested_sibling.removed = 1;
-    ged_draw_transaction_result_init(&nested_result);
-    if (ged_draw_apply_transaction(gedp, &remove_nested_sibling,
+    ged_scene_reducer_result_init(&nested_result);
+    if (ged_scene_reduce(gedp, &remove_nested_sibling,
 	    &nested_result) <= 0)
 	FAIL("GED nested sibling source removal transaction should succeed");
-    ged_draw_transaction_result_free(&nested_result);
+    ged_scene_reducer_result_free(&nested_result);
     if (source_for_path(owned_scene, nested_leaf_source_path) ||
 	    source_for_path(owned_scene, nested_sibling_source_path) ||
 	    owned_scene->getDatabaseSourceCount() != 2)
@@ -6443,7 +6443,7 @@ main(int argc, char **argv)
 	    !path_equal(nested_child_record.path,
 		"nested_parent.c/nested_child_renamed.c"))
 	FAIL("GED nested group set-dbpath should expose the owned Obol renamed path");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE,
 	    "nested_parent.c/nested_child_renamed.c",
 	    ged_draw_active_view_ctx(gedp), -1,
 	    "public active-scope nested group path erase"))
@@ -6451,7 +6451,7 @@ main(int argc, char **argv)
     if (!owned_scene->findGroup("nested_parent.c") ||
 	    owned_scene->findGroup("nested_parent.c/nested_child_renamed.c"))
 		FAIL("GED public active-scope nested group path erase should remove the owned Obol nested group");
-    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE, "nested_parent.c",
+    if (apply_path_transaction(gedp, GED_SCENE_REDUCER_ERASE, "nested_parent.c",
 	    ged_draw_active_view_ctx(gedp), -1,
 	    "public active-scope nested group path cleanup"))
 	return 1;
@@ -6640,18 +6640,18 @@ main(int argc, char **argv)
 
     if (!seed_view_lod_probe_payload(&view_controller, "box.s", "box.s"))
 	FAIL("attached Obol view-controller LoD invalidation probe should seed source-update payload");
-    struct ged_draw_transaction attached_source_update =
-	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED, "box.s");
+    struct ged_scene_reducer_request attached_source_update =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_UPDATED, "box.s");
     attached_source_update.redraw = 0;
-    struct ged_draw_transaction_result attached_source_result;
-    ged_draw_transaction_result_init(&attached_source_result);
-    if (ged_draw_apply_transaction(gedp, &attached_source_update,
+    struct ged_scene_reducer_result attached_source_result;
+    ged_scene_reducer_result_init(&attached_source_result);
+    if (ged_scene_reduce(gedp, &attached_source_update,
 	    &attached_source_result) <= 0 ||
 	    view_controller.getViewLodState()->payloadCount() != 0) {
-	ged_draw_transaction_result_free(&attached_source_result);
+	ged_scene_reducer_result_free(&attached_source_result);
 	FAIL("attached Obol source-update transaction should clear view-local LoD state");
     }
-    ged_draw_transaction_result_free(&attached_source_result);
+    ged_scene_reducer_result_free(&attached_source_result);
     const char *attached_redraw_box[2] = {"draw", "box.s"};
     if (ged_exec_draw(gedp, 2, attached_redraw_box) != BRLCAD_OK ||
 	    view_scene->getDatabaseSourceCount() != 2 ||
@@ -6660,16 +6660,16 @@ main(int argc, char **argv)
 
     if (!seed_view_lod_probe_payload(&view_controller, "box.s", "box.s"))
 	FAIL("attached Obol view-controller LoD invalidation probe should seed clear payload");
-    struct ged_draw_transaction attached_clear =
-	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
-    struct ged_draw_transaction_result attached_clear_result;
-    ged_draw_transaction_result_init(&attached_clear_result);
-    if (ged_draw_apply_transaction(gedp, &attached_clear,
+    struct ged_scene_reducer_request attached_clear =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_CLEAR, NULL);
+    struct ged_scene_reducer_result attached_clear_result;
+    ged_scene_reducer_result_init(&attached_clear_result);
+    if (ged_scene_reduce(gedp, &attached_clear,
 	    &attached_clear_result) <= 0) {
-	ged_draw_transaction_result_free(&attached_clear_result);
+	ged_scene_reducer_result_free(&attached_clear_result);
 	FAIL("attached Obol clear transaction should succeed");
     }
-    ged_draw_transaction_result_free(&attached_clear_result);
+    ged_scene_reducer_result_free(&attached_clear_result);
     if (view_controller.getViewLodState()->payloadCount() != 0 ||
 	    view_scene->getDatabaseSourceCount() != 0)
 	FAIL("attached Obol clear transaction should clear view-local LoD state and scene sources");
@@ -6680,8 +6680,8 @@ main(int argc, char **argv)
 	    !source_for_path(view_scene, "ball.s"))
 	FAIL("attached Obol clear transaction redraw should restore current GED draw state");
 
-    struct ged_draw_transaction attached_stale_source =
-	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "box.s");
+    struct ged_scene_reducer_request attached_stale_source =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_STALE_SOURCE, "box.s");
     attached_stale_source.stale_reason = GED_DRAW_STALE_SETTINGS_CHANGED;
     if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
 	    &attached_stale_source, "stale-source"))
@@ -6695,8 +6695,8 @@ main(int argc, char **argv)
 	    view_scene->getDatabaseSourceCount() != 3 ||
 	    !source_for_path(view_scene, "draft_move.s"))
 	FAIL("attached Obol erase-prefix setup should draw draft source");
-    struct ged_draw_transaction attached_erase_prefix =
-	ged_draw_transaction_make(GED_DRAW_TXN_ERASE_PREFIX,
+    struct ged_scene_reducer_request attached_erase_prefix =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_ERASE_PREFIX,
 		"draft_move.s");
     if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
 	    &attached_erase_prefix, "erase-prefix"))
@@ -6713,8 +6713,8 @@ main(int argc, char **argv)
 	    !source_for_path(view_scene,
 		"nested_parent.c/nested_child.c/nested_leaf.s"))
 	FAIL("attached Obol reference-removal setup should draw nested source");
-    struct ged_draw_transaction attached_reference_removal =
-	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED,
+    struct ged_scene_reducer_request attached_reference_removal =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_SOURCE_REFERENCES_REMOVED,
 		"nested_leaf.s");
     if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
 	    &attached_reference_removal, "source-reference removal"))
@@ -6759,8 +6759,8 @@ main(int argc, char **argv)
 	    source_for_path(view_scene, "renamed_source.s"))
 	FAIL("attached Obol source-rename cleanup should restore baseline sources");
 
-    struct ged_draw_transaction attached_clear_scope =
-	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR_SCOPE, NULL);
+    struct ged_scene_reducer_request attached_clear_scope =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_CLEAR_SCOPE, NULL);
     attached_clear_scope.view = ged_draw_active_view_ctx(gedp);
     if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
 	    &attached_clear_scope, "clear-scope"))
@@ -6774,8 +6774,8 @@ main(int argc, char **argv)
 	    !source_for_path(view_scene, "ball.s"))
 	FAIL("attached Obol clear-scope transaction redraw should restore baseline sources");
 
-    struct ged_draw_transaction attached_teardown =
-	ged_draw_transaction_make(GED_DRAW_TXN_TEARDOWN, NULL);
+    struct ged_scene_reducer_request attached_teardown =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_TEARDOWN, NULL);
     if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
 	    &attached_teardown, "teardown"))
 	return 1;

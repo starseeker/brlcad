@@ -921,9 +921,6 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    if (presentation &&
 		sampledCadPresentations.insert(presentation).second) {
 		cadPresentationCount++;
-		cadPreparedReplayAll =
-		    cadPreparedReplayAll &&
-		    presentation->lastRenderUsedPreparedReplay();
 		cadFramePlanBuildCountMax = std::max(
 		    cadFramePlanBuildCountMax,
 		    static_cast<qint64>(std::min<uint64_t>(
@@ -938,18 +935,29 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 			    std::numeric_limits<qint64>::max()))));
 		cadSelectedInstances += static_cast<qint64>(
 		    presentation->selectedInstanceCount());
+		const Obol::CadRenderedWork renderedWork =
+		    presentation->lastRenderedWork();
+		const uint64_t expectedViewId =
+		    viewLodState->cadPresentationViewState().viewId;
+		const bool currentRenderedWork =
+		    renderedWork.viewState.viewId == expectedViewId;
+		if (!currentRenderedWork) {
+		    presentedCadWorkExact = false;
+		    cadPreparedReplayAll = false;
+		    continue;
+		}
+		cadPreparedReplayAll = cadPreparedReplayAll &&
+		    presentation->lastRenderUsedPreparedReplay();
 		activeCadSubpixelProxyPoints += static_cast<qint64>(
 		    presentation->lastSubpixelProxyCount());
 		activeCadSubpixelProxyDrawPoints += static_cast<qint64>(
 		    presentation->lastSubpixelProxyDrawPointCount());
 		cadPointProxyPixelThresholdMax = std::max(
 		    cadPointProxyPixelThresholdMax,
-		    static_cast<double>(
-			presentation->pointProxyPixelThreshold.getValue()));
+		    static_cast<double>(renderedWork.viewState.
+			pointProxyPixelThreshold));
 		visibleStructuralFallbackBoxes += static_cast<qint64>(
 		    presentation->lastUncollapsedStructuralProxyCount());
-		const Obol::CadRenderedWork renderedWork =
-		    presentation->lastRenderedWork();
 		presentedCadWorkExact =
 		    presentedCadWorkExact && renderedWork.exact;
 		const auto addRenderedWork = [](qint64 current, uint64_t value) {
@@ -1126,8 +1134,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		const double normalizedError = projectedError / target;
 		const bool prominent = footprint >=
 		    BObolViewLodState::ProminentFootprintPixels;
-		const bool floorViolation = normalizedError >
-		    BObolViewLodState::ProminentMaximumNormalizedError;
+		const bool floorViolation = projectedError >
+		    BObolViewLodState::prominentMaximumProjectedError(target);
 		prominentCadPayloads += prominent ? 1 : 0;
 		cadQualityFloorViolations += floorViolation ? 1 : 0;
 		prominentCadQualityFloorViolations +=

@@ -83,6 +83,24 @@ static_assert(std::is_trivially_copyable<
     "control refinement snapshots must remain allocation-free values");
 static_assert(std::is_trivially_copyable<BObolLodSubmissionPass>::value,
     "submission-pass ownership must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<BObolLodSubmissionIntent>::value,
+    "submission intent must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<BObolLodPoseContinuity>::value,
+    "pose continuity must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<
+    BObolLodRetainedPassAnnotations>::value,
+    "retained-pass annotations must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<
+    BObolLodInterruptedPresentationReplay>::value,
+    "presentation replay ownership must remain allocation-free");
+static_assert(std::is_trivially_copyable<BObolLodPointAdmissionFrame>::value,
+    "point-admission frame ownership must remain allocation-free");
+static_assert(std::is_trivially_copyable<
+    BObolLodPlanningObligations>::value,
+    "planning obligations must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<
+    BObolLodDiscreteTrialPermit>::value,
+    "discrete trial permits must remain allocation-free values");
 
 static int
 test_submission_pass(void)
@@ -140,6 +158,177 @@ test_submission_pass(void)
 	return 1;
     }
     return 0;
+}
+
+static int
+test_submission_intent(void)
+{
+    using Intent = BObolLodSubmissionIntent;
+    Intent intent;
+    if (intent.mode() != Intent::Mode::ORDINARY ||
+	intent.retainedAdmission() || !intent.refreshMissing() ||
+	intent.resetExisting())
+	return 1;
+
+    intent.configure(false, true);
+    intent.setRetainedAdmission(true);
+    if (intent.mode() != Intent::Mode::RETAINED_ADMISSION ||
+	!intent.retainedAdmission() || intent.refreshMissing() ||
+	!intent.resetExisting()) {
+	std::fprintf(stderr, "FAIL: configured submission intent\n");
+	return 1;
+    }
+
+    intent.reset();
+    if (intent.mode() != Intent::Mode::ORDINARY ||
+	intent.retainedAdmission() || !intent.refreshMissing() ||
+	intent.resetExisting()) {
+	std::fprintf(stderr, "FAIL: reset submission intent\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_pose_continuity(void)
+{
+    BObolLodPoseContinuity continuity;
+    if (continuity.retainOccurrenceCuts() ||
+	continuity.visibilityCensusDeferred())
+	return 1;
+
+    continuity.setRetainOccurrenceCuts(true);
+    continuity.deferVisibilityCensus();
+    if (!continuity.retainOccurrenceCuts() ||
+	!continuity.visibilityCensusDeferred())
+	return 1;
+
+    continuity.completeVisibilityCensus();
+    if (!continuity.retainOccurrenceCuts() ||
+	continuity.visibilityCensusDeferred()) {
+	std::fprintf(stderr,
+	    "FAIL: pose census completion discarded cut continuity\n");
+	return 1;
+    }
+
+    continuity.reset();
+    return continuity.retainOccurrenceCuts() ||
+	continuity.visibilityCensusDeferred() ? 1 : 0;
+}
+
+static int
+test_retained_pass_annotations(void)
+{
+    BObolLodRetainedPassAnnotations pass;
+    if (pass.refinementPending() || pass.residencyPending() ||
+	pass.cutAdvanced() || pass.budgetBlocked() || pass.admittedWork() ||
+	pass.missingMeshBudgetBlockedCount() != 0)
+	return 1;
+
+    pass.noteRefinementPending();
+    pass.noteResidencyPending();
+    pass.noteCutAdvanced();
+    pass.noteBudgetBlocked();
+    pass.noteAdmittedWork();
+    pass.addMissingMeshBudgetBlocked(7);
+    pass.addMissingMeshBudgetBlocked(5);
+    if (!pass.refinementPending() || !pass.residencyPending() ||
+	!pass.cutAdvanced() || !pass.budgetBlocked() || !pass.admittedWork() ||
+	pass.missingMeshBudgetBlockedCount() != 12)
+	return 1;
+
+    pass.retireRefinement();
+    if (pass.refinementPending() || pass.cutAdvanced() ||
+	pass.budgetBlocked() || !pass.residencyPending() ||
+	!pass.admittedWork() || pass.missingMeshBudgetBlockedCount() != 12) {
+	std::fprintf(stderr,
+	    "FAIL: retained-pass refinement retirement changed other facts\n");
+	return 1;
+    }
+
+    pass.reset();
+    if (pass.refinementPending() || pass.residencyPending() ||
+	pass.cutAdvanced() || pass.budgetBlocked() || pass.admittedWork() ||
+	pass.missingMeshBudgetBlockedCount() != 0) {
+	std::fprintf(stderr, "FAIL: retained-pass reset was incomplete\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_interrupted_presentation_replay(void)
+{
+    using Replay = BObolLodInterruptedPresentationReplay;
+    Replay replay;
+    if (replay.pending() || replay.state() != Replay::State::IDLE)
+	return 1;
+    replay.arm();
+    if (!replay.pending() ||
+	replay.state() != Replay::State::AWAITING_FRAME)
+	return 1;
+    replay.retire();
+    if (replay.pending() || replay.state() != Replay::State::IDLE)
+	return 1;
+    replay.arm();
+    replay.reset();
+    return replay.pending() ? 1 : 0;
+}
+
+static int
+test_point_admission_frame(void)
+{
+    using Frame = BObolLodPointAdmissionFrame;
+    Frame frame;
+    if (frame.pending() || frame.state() != Frame::State::IDLE)
+	return 1;
+    frame.request();
+    if (!frame.pending() || frame.state() != Frame::State::AWAITING_FRAME)
+	return 1;
+    frame.setPending(false);
+    if (frame.pending())
+	return 1;
+    frame.setPending(true);
+    frame.retire();
+    return frame.pending() ? 1 : 0;
+}
+
+static int
+test_planning_obligations(void)
+{
+    BObolLodPlanningObligations work;
+    if (work.importanceCensusPending() ||
+	work.residentAdmissionRetryPending())
+	return 1;
+    work.requestImportanceCensus();
+    work.setResidentAdmissionRetry(true);
+    if (!work.importanceCensusPending() ||
+	!work.residentAdmissionRetryPending())
+	return 1;
+    work.retireImportanceCensus();
+    if (work.importanceCensusPending() ||
+	!work.residentAdmissionRetryPending())
+	return 1;
+    work.reset();
+    return work.residentAdmissionRetryPending() ? 1 : 0;
+}
+
+static int
+test_discrete_trial_permit(void)
+{
+    BObolLodDiscreteTrialPermit permit;
+    if (permit.available() ||
+	permit.state() != BObolLodDiscreteTrialPermit::State::UNAVAILABLE)
+	return 1;
+    permit.grant();
+    if (!permit.available())
+	return 1;
+    permit.consume();
+    if (permit.available())
+	return 1;
+    permit.setAvailable(true);
+    permit.reset();
+    return permit.available() ? 1 : 0;
 }
 
 static int
@@ -3140,6 +3329,69 @@ test_admission_capacity(void)
 	    "FAIL: applied hidden capacity candidate consumed a sample\n");
 	return 1;
     }
+
+    /* No ordinary admission policy may change a candidate between its
+     * completed-frame samples.  In particular, a stricter 20 Hz throughput
+     * estimate must not coarsen a candidate being certified against the
+     * static deadline. */
+    if (!cursor.initialized()) {
+	std::fprintf(stderr,
+	    "FAIL: capacity measurement test lost production cursor state\n");
+	return 1;
+    }
+    Policy::Inputs measurementInputs;
+    measurementInputs.activeCost = searchCandidateBudget;
+    measurementInputs.minimumActiveCost = 100;
+    measurementInputs.targetFps = 20.0f;
+    measurementInputs.calibratedCostPerSecond = 1000.0L;
+    decision = apply_admission_plan(policy, cursor, measurementInputs);
+    if (!decision.initialized ||
+	decision.totalBudget != searchCandidateBudget ||
+	decision.refinementBudget != 0 || decision.retainedAdmission ||
+	policy.currentBudget() != searchCandidateBudget) {
+	std::fprintf(stderr,
+	    "FAIL: capacity measurement did not own population "
+	    "candidate=%zu applied=%zu refinement=%zu retained=%d\n",
+	    searchCandidateBudget, decision.totalBudget,
+	    decision.refinementBudget, decision.retainedAdmission ? 1 : 0);
+	return 1;
+    }
+
+    /* A reversible motion ceiling does not authorize destructive retained
+     * coarsening after an orthographic pose-only interaction.  Preserve the
+     * currently useful population until a completed miss records a strict
+     * ceiling; that ceiling must then remain authoritative. */
+    policy.reset();
+    cursor.reset();
+    policy.requestRetainedReallocation(false);
+    Policy::Inputs poseInputs;
+    poseInputs.activeCost = 200000;
+    poseInputs.minimumActiveCost = 100;
+    poseInputs.targetFps = 20.0f;
+    poseInputs.calibratedCostPerSecond = 1000000.0L;
+    poseInputs.preserveActivePopulation = true;
+    decision = apply_admission_plan(policy, cursor, poseInputs);
+    if (decision.totalBudget < poseInputs.activeCost ||
+	!decision.retainedAdmission) {
+	std::fprintf(stderr,
+	    "FAIL: pose continuity discarded an unrefuted population "
+	    "active=%zu budget=%zu retained=%d\n",
+	    poseInputs.activeCost, decision.totalBudget,
+	    decision.retainedAdmission ? 1 : 0);
+	return 1;
+    }
+
+    policy.reset();
+    cursor.reset();
+    policy.noteDeadlineCapacityMiss(100000, true);
+    policy.requestRetainedReallocation(false);
+    decision = apply_admission_plan(policy, cursor, poseInputs);
+    if (decision.totalBudget >= 100000) {
+	std::fprintf(stderr,
+	    "FAIL: pose continuity overrode a completed deadline miss "
+	    "budget=%zu\n", decision.totalBudget);
+	return 1;
+    }
     return 0;
 }
 
@@ -4299,6 +4551,27 @@ test_presentation_policy(void)
 	restore.provenRenderCostFloor != 8000 ||
 	restore.provenRenderCostCapacity != 10000) {
 	std::fprintf(stderr, "FAIL: exact-view quiet successor\n");
+	return 1;
+    }
+
+    /* A late interaction-quiet edge may arrive after an offline caller has
+     * entered unbounded terminal convergence.  It must clear presentation
+     * limits without restoring history or creating a finite allocation
+     * handoff that the terminal allocator cannot satisfy. */
+    policy.armHandoff(true, 4000, 5000);
+    Policy::QuietInputs terminalInputs = exactInputs;
+    terminalInputs.unboundedTerminal = true;
+    terminalInputs.presentation.currentTargetPixelError = 0.25f;
+    restore = policy.beginQuiet(terminalInputs);
+    if (!restore.apply || !restore.clearPresentationLimits ||
+	restore.restoredExactView || restore.restoredPriorStable ||
+	restore.restoredProvenQuality || restore.needsHandoff() ||
+	policy.handoffPending() ||
+	std::fabs(restore.targetPixelError - 0.25f) > 0.0001f ||
+	restore.progressiveCeiling != -1 ||
+	std::fabs(restore.progressiveNextFraction) > 0.0001f ||
+	std::fabs(restore.pointProxyPixelThreshold - 1.0f) > 0.0001f) {
+	std::fprintf(stderr, "FAIL: terminal quiet transition restored capacity policy\n");
 	return 1;
     }
 
@@ -6384,6 +6657,73 @@ test_capacity_search_certificate(void)
 	}
     }
 
+    /* A throughput miss proposes the next candidate directly.  A blind
+     * midpoint is safe but throws away all three completed measurements and
+     * makes a large discrete mesh visibly walk through coarse populations. */
+    {
+	Certificate certificate;
+	Certificate::Observation observation;
+	observation.key = capacity_search_key(demand);
+	observation.candidateBudget = initialCandidate;
+	observation.presentedCost = initialCandidate;
+	observation.validSample = true;
+	observation.observedNanoseconds =
+	    observation.key.preferredTargetNanoseconds * 2;
+	Certificate::Decision decision;
+	for (unsigned int i = 0; i < Certificate::sampleLimit(); ++i)
+	    decision = certificate.observe(observation);
+	const size_t expectedProposal = initialCandidate * 2 / 5;
+	if (!decision.requestsReallocation() ||
+	    decision.budget != expectedProposal) {
+	    std::fprintf(stderr,
+		"FAIL: capacity miss ignored measured proposal: got=%zu "
+		"expected=%zu\n", decision.budget, expectedProposal);
+	    return 1;
+	}
+    }
+
+    /* Pose continuity uses the event-driven deadline as its only goal.  A
+     * retained population which already meets that deadline is a safe lower
+     * bound: the search may enrich it, but must never replace it with a
+     * coarser calibration candidate. */
+    {
+	Certificate certificate;
+	Certificate::Observation observation;
+	observation.key = capacity_search_key(demand, 3, 400000000ULL);
+	observation.key.preferredTargetNanoseconds =
+	    observation.key.maximumTargetNanoseconds;
+	observation.candidateBudget = initialCandidate;
+	observation.knownSafeBudget = initialCandidate;
+	observation.presentedCost = initialCandidate;
+	observation.validSample = true;
+	observation.observedNanoseconds =
+	    observation.key.maximumTargetNanoseconds / 2;
+	Certificate::Decision decision;
+	for (unsigned int step = 0;
+	     step < Certificate::candidateLimit() * Certificate::sampleLimit() + 1;
+	     ++step) {
+	    decision = certificate.observe(observation);
+	    if (decision.requestsReallocation()) {
+		if (decision.budget < initialCandidate) {
+		    std::fprintf(stderr,
+			"FAIL: pose capacity search coarsened a safe retained "
+			"population\n");
+		    return 1;
+		}
+		observation.candidateBudget = decision.budget;
+		observation.presentedCost = decision.budget;
+	    }
+	    if (decision.terminal())
+		break;
+	}
+	if (!decision.terminal() || certificate.goal() != Certificate::Goal::STEADY ||
+	    decision.safeBudget < initialCandidate) {
+	    std::fprintf(stderr,
+		"FAIL: pose capacity search did not retain its static lower bound\n");
+	    return 1;
+	}
+    }
+
     /* The allocator cannot express a candidate below the complete visible
      * minimum.  Once that floor misses the preferred cadence, the search must
      * advance to the static goal without requesting an impossible smaller
@@ -6552,6 +6892,20 @@ main(int argc, char **argv)
     (void)argc;
     bu_setprogname(argv[0]);
     if (test_submission_pass())
+	return 1;
+    if (test_submission_intent())
+	return 1;
+    if (test_pose_continuity())
+	return 1;
+    if (test_retained_pass_annotations())
+	return 1;
+    if (test_interrupted_presentation_replay())
+	return 1;
+    if (test_point_admission_frame())
+	return 1;
+    if (test_planning_obligations())
+	return 1;
+    if (test_discrete_trial_permit())
 	return 1;
     if (test_control_refinement())
 	return 1;

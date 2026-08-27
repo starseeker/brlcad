@@ -25,8 +25,8 @@
 extern "C" int
 ged_scene_backend_apply_private(
     struct ged *gedp,
-    const struct ged_draw_transaction *transaction,
-    const struct ged_draw_transaction_result *result)
+    const struct ged_scene_reducer_request *transaction,
+    const struct ged_scene_reducer_result *result)
 {
     if (!gedp || !transaction)
 	return 0;

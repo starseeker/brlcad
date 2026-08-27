@@ -40,3 +40,7 @@ CMakeLists.txt.user
 
 # Convenience Obol link
 /obol
+
+# TLC model-checker state and fingerprint output
+/doc/notes/states/
+/states/

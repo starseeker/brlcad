@@ -9,9 +9,9 @@
  */
 /** @file ged_scene_api.cpp
  *
- * Typed semantic scene operations.  During the drawing-state consolidation
- * these requests feed the existing internal transaction reducer; clients do
- * not need to construct or interpret that migration representation.
+ * Typed semantic scene operations.  Requests are translated into the private
+ * reducer vocabulary here; clients neither construct nor interpret backend
+ * reducer records.
  */
 
 #include "common.h"
@@ -79,25 +79,25 @@ ged_scene_result_path_note(struct ged_scene_result *result, const char *path)
 
 
 static void
-ged_scene_result_from_draw_result(
+ged_scene_result_from_reducer_result(
     struct ged_scene_result *result,
-    const struct ged_draw_transaction_result *draw_result,
-    int transaction_status)
+    const struct ged_scene_reducer_result *reducer_result,
+    int reducer_status)
 {
-    if (!result || !draw_result)
+    if (!result || !reducer_result)
 	return;
 
-    result->status = transaction_status < 0 ? GED_SCENE_ERROR : GED_SCENE_OK;
-    result->changed = transaction_status > 0 ||
-	draw_result->scene_revision_before != draw_result->scene_revision_after;
-    result->group_count = draw_result->affected_groups > 0 ?
-	static_cast<size_t>(draw_result->affected_groups) : 0;
-    result->shape_count = draw_result->affected_shapes > 0 ?
-	static_cast<size_t>(draw_result->affected_shapes) : 0;
-    result->revision_before = draw_result->scene_revision_before;
-    result->revision_after = draw_result->scene_revision_after;
-    if (bu_vls_strlen(&draw_result->errors))
-	result->diagnostic = bu_vls_cstr(&draw_result->errors);
+    result->status = reducer_status < 0 ? GED_SCENE_ERROR : GED_SCENE_OK;
+    result->changed = reducer_status > 0 ||
+	reducer_result->scene_revision_before != reducer_result->scene_revision_after;
+    result->group_count = reducer_result->affected_groups > 0 ?
+	static_cast<size_t>(reducer_result->affected_groups) : 0;
+    result->shape_count = reducer_result->affected_shapes > 0 ?
+	static_cast<size_t>(reducer_result->affected_shapes) : 0;
+    result->revision_before = reducer_result->scene_revision_before;
+    result->revision_after = reducer_result->scene_revision_after;
+    if (bu_vls_strlen(&reducer_result->errors))
+	result->diagnostic = bu_vls_cstr(&reducer_result->errors);
 }
 
 
@@ -403,18 +403,18 @@ ged_scene_draw(struct ged *gedp,
     appearance.strict_fallback = request->realization.strict ? 1 : 0;
     appearance.defer_leaf_expansion = progressive;
 
-    struct ged_draw_transaction transaction =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
+    struct ged_scene_reducer_request transaction =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_DRAW, NULL);
     transaction.view = view;
     transaction.paths = const_cast<const char **>(request->paths);
     transaction.path_count = static_cast<int>(request->path_count);
     transaction.appearance = &appearance;
     transaction.autoview = request->autoview ? 1 : 0;
 
-    struct ged_draw_transaction_result draw_result;
-    ged_draw_transaction_result_init(&draw_result);
-    const int ret = ged_draw_apply_transaction(gedp, &transaction,
-	&draw_result);
+    struct ged_scene_reducer_result reducer_result;
+    ged_scene_reducer_result_init(&reducer_result);
+    const int ret = ged_scene_reduce(gedp, &transaction,
+	&reducer_result);
     /* A compact draw may be configured for progressive realization yet have
      * already adopted complete source data (for example, a warm source drawn
      * into another independent view).  The transaction deliberately skips
@@ -423,17 +423,17 @@ ged_scene_draw(struct ged *gedp,
      * request, so complete it here. */
     if (ret > 0 && request->autoview &&
 	appearance.defer_leaf_expansion &&
-	draw_result.progressive_data_complete) {
+	reducer_result.progressive_data_complete) {
 	(void)ged_draw_autoview_for_transaction(gedp, view,
 	    const_cast<const char **>(request->paths),
 	    static_cast<int>(request->path_count), 1);
     }
     if (result) {
-	ged_scene_result_from_draw_result(result, &draw_result, ret);
+	ged_scene_result_from_reducer_result(result, &reducer_result, ret);
 	for (size_t i = 0; i < request->path_count; i++)
 	    ged_scene_result_path_note(result, request->paths[i]);
     }
-    ged_draw_transaction_result_free(&draw_result);
+    ged_scene_reducer_result_free(&reducer_result);
     return ret < 0 ? GED_SCENE_ERROR : GED_SCENE_OK;
 }
 
@@ -463,31 +463,31 @@ ged_scene_erase(struct ged *gedp,
 	}
     }
 
-    const ged_draw_transaction_kind kind =
+    const ged_scene_reducer_operation kind =
 	request->match == GED_SCENE_ERASE_SUBTREE ?
-	GED_DRAW_TXN_ERASE_PREFIX : GED_DRAW_TXN_ERASE;
-    struct ged_draw_transaction transaction =
-	ged_draw_transaction_make(kind, request->path);
+	GED_SCENE_REDUCER_ERASE_PREFIX : GED_SCENE_REDUCER_ERASE;
+    struct ged_scene_reducer_request transaction =
+	ged_scene_reducer_request_make(kind, request->path);
     transaction.view = request->view;
     transaction.mode = draw_mode;
 
-    struct ged_draw_transaction_result draw_result;
-    ged_draw_transaction_result_init(&draw_result);
-    const int ret = ged_draw_apply_transaction(gedp, &transaction,
-	&draw_result);
+    struct ged_scene_reducer_result reducer_result;
+    ged_scene_reducer_result_init(&reducer_result);
+    const int ret = ged_scene_reduce(gedp, &transaction,
+	&reducer_result);
     if (result) {
-	ged_scene_result_from_draw_result(result, &draw_result, ret);
+	ged_scene_result_from_reducer_result(result, &reducer_result, ret);
 	ged_scene_result_path_note(result, request->path);
     }
-    ged_draw_transaction_result_free(&draw_result);
+    ged_scene_reducer_result_free(&reducer_result);
     return ret < 0 ? GED_SCENE_ERROR : GED_SCENE_OK;
 }
 
 
 static enum ged_scene_status
-ged_scene_apply_typed_transaction(
+ged_scene_apply_request(
     struct ged *gedp,
-    struct ged_draw_transaction *transaction,
+    struct ged_scene_reducer_request *transaction,
     const char *const *paths,
     size_t path_count,
     struct ged_scene_result *result)
@@ -500,16 +500,16 @@ ged_scene_apply_typed_transaction(
 	return GED_SCENE_INVALID;
     }
 
-    struct ged_draw_transaction_result draw_result;
-    ged_draw_transaction_result_init(&draw_result);
-    const int ret = ged_draw_apply_transaction(gedp, transaction,
-	&draw_result);
+    struct ged_scene_reducer_result reducer_result;
+    ged_scene_reducer_result_init(&reducer_result);
+    const int ret = ged_scene_reduce(gedp, transaction,
+	&reducer_result);
     if (result) {
-	ged_scene_result_from_draw_result(result, &draw_result, ret);
+	ged_scene_result_from_reducer_result(result, &reducer_result, ret);
 	for (size_t i = 0; paths && i < path_count; i++)
 	    ged_scene_result_path_note(result, paths[i]);
     }
-    ged_draw_transaction_result_free(&draw_result);
+    ged_scene_reducer_result_free(&reducer_result);
     return ret < 0 ? GED_SCENE_ERROR : GED_SCENE_OK;
 }
 
@@ -528,12 +528,12 @@ ged_scene_redraw(struct ged *gedp,
 	return GED_SCENE_INVALID;
     }
 
-    struct ged_draw_transaction transaction =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    struct ged_scene_reducer_request transaction =
+	ged_scene_reducer_request_make(GED_SCENE_REDUCER_REDRAW, NULL);
     transaction.view = request->view;
     transaction.paths = const_cast<const char **>(request->paths);
     transaction.path_count = static_cast<int>(request->path_count);
-    return ged_scene_apply_typed_transaction(gedp, &transaction,
+    return ged_scene_apply_request(gedp, &transaction,
 	request->paths, request->path_count, result);
 }
 
@@ -541,7 +541,7 @@ ged_scene_redraw(struct ged *gedp,
 static enum ged_scene_status
 ged_scene_path_value_set(struct ged *gedp,
 			 const struct ged_scene_path_request *request,
-			 enum ged_draw_transaction_kind kind,
+			 enum ged_scene_reducer_operation kind,
 			 double value,
 			 struct ged_scene_result *result)
 {
@@ -568,13 +568,13 @@ ged_scene_path_value_set(struct ged *gedp,
 	}
     }
 
-    struct ged_draw_transaction transaction =
-	ged_draw_transaction_make_value(kind, request->path, value);
+    struct ged_scene_reducer_request transaction =
+	ged_scene_reducer_request_make_value(kind, request->path, value);
     transaction.view = request->view;
     transaction.mode = draw_mode;
     transaction.match = request->match;
     const char *paths[] = {request->path};
-    return ged_scene_apply_typed_transaction(gedp, &transaction, paths, 1,
+    return ged_scene_apply_request(gedp, &transaction, paths, 1,
 	result);
 }
 
@@ -585,7 +585,7 @@ ged_scene_visibility_set(struct ged *gedp,
 			 int visible,
 			 struct ged_scene_result *result)
 {
-    return ged_scene_path_value_set(gedp, request, GED_DRAW_TXN_VISIBILITY,
+    return ged_scene_path_value_set(gedp, request, GED_SCENE_REDUCER_VISIBILITY,
 	visible ? 1.0 : 0.0, result);
 }
 
@@ -603,7 +603,7 @@ ged_scene_opacity_set(struct ged *gedp,
 	}
 	return GED_SCENE_INVALID;
     }
-    return ged_scene_path_value_set(gedp, request, GED_DRAW_TXN_TRANSPARENCY,
+    return ged_scene_path_value_set(gedp, request, GED_SCENE_REDUCER_TRANSPARENCY,
 	1.0 - opacity, result);
 }
 
@@ -614,7 +614,7 @@ ged_scene_highlight_set(struct ged *gedp,
 			int highlighted,
 			struct ged_scene_result *result)
 {
-    return ged_scene_path_value_set(gedp, request, GED_DRAW_TXN_HIGHLIGHT,
+    return ged_scene_path_value_set(gedp, request, GED_SCENE_REDUCER_HIGHLIGHT,
 	highlighted ? 1.0 : 0.0, result);
 }
 
@@ -622,9 +622,9 @@ ged_scene_highlight_set(struct ged *gedp,
 extern "C" enum ged_scene_status
 ged_scene_highlights_clear(struct ged *gedp, struct ged_scene_result *result)
 {
-    struct ged_draw_transaction transaction = ged_draw_transaction_make(
-	GED_DRAW_TXN_HIGHLIGHTS_CLEAR, NULL);
-    return ged_scene_apply_typed_transaction(gedp, &transaction, NULL, 0,
+    struct ged_scene_reducer_request transaction = ged_scene_reducer_request_make(
+	GED_SCENE_REDUCER_HIGHLIGHTS_CLEAR, NULL);
+    return ged_scene_apply_request(gedp, &transaction, NULL, 0,
 	result);
 }
 
@@ -645,10 +645,10 @@ ged_scene_occurrence_highlight_set(struct ged *gedp,
 	}
 	return GED_SCENE_INVALID;
     }
-    struct ged_draw_transaction transaction = ged_draw_transaction_make_value(
-	GED_DRAW_TXN_HIGHLIGHT_OCCURRENCE, NULL, highlighted ? 1.0 : 0.0);
+    struct ged_scene_reducer_request transaction = ged_scene_reducer_request_make_value(
+	GED_SCENE_REDUCER_HIGHLIGHT_OCCURRENCE, NULL, highlighted ? 1.0 : 0.0);
     transaction.shape_ref = shape_ref;
-    return ged_scene_apply_typed_transaction(gedp, &transaction, NULL, 0,
+    return ged_scene_apply_request(gedp, &transaction, NULL, 0,
 	result);
 }
 
@@ -667,11 +667,11 @@ ged_scene_clear(struct ged *gedp,
 	return GED_SCENE_INVALID;
     }
 
-    struct ged_draw_transaction transaction = ged_draw_transaction_make(
-	request->scope == GED_SCENE_CLEAR_ALL ? GED_DRAW_TXN_CLEAR :
-	GED_DRAW_TXN_CLEAR_SCOPE, NULL);
+    struct ged_scene_reducer_request transaction = ged_scene_reducer_request_make(
+	request->scope == GED_SCENE_CLEAR_ALL ? GED_SCENE_REDUCER_CLEAR :
+	GED_SCENE_REDUCER_CLEAR_SCOPE, NULL);
     transaction.view = request->view;
-    return ged_scene_apply_typed_transaction(gedp, &transaction, NULL, 0,
+    return ged_scene_apply_request(gedp, &transaction, NULL, 0,
 	result);
 }
 
@@ -689,9 +689,9 @@ ged_scene_default_draw_mode_set(struct ged *gedp,
 	}
 	return GED_SCENE_INVALID;
     }
-    struct ged_draw_transaction transaction = ged_draw_transaction_make_value(
-	GED_DRAW_TXN_DEFAULT_DRAW_MODE, NULL, static_cast<double>(draw_mode));
-    return ged_scene_apply_typed_transaction(gedp, &transaction, NULL, 0,
+    struct ged_scene_reducer_request transaction = ged_scene_reducer_request_make_value(
+	GED_SCENE_REDUCER_DEFAULT_DRAW_MODE, NULL, static_cast<double>(draw_mode));
+    return ged_scene_apply_request(gedp, &transaction, NULL, 0,
 	result);
 }
 
@@ -700,9 +700,9 @@ extern "C" enum ged_scene_status
 ged_scene_materials_changed(struct ged *gedp,
 			    struct ged_scene_result *result)
 {
-    struct ged_draw_transaction transaction = ged_draw_transaction_make(
-	GED_DRAW_TXN_MATERIAL_CHANGED, NULL);
-    return ged_scene_apply_typed_transaction(gedp, &transaction, NULL, 0,
+    struct ged_scene_reducer_request transaction = ged_scene_reducer_request_make(
+	GED_SCENE_REDUCER_MATERIAL_CHANGED, NULL);
+    return ged_scene_apply_request(gedp, &transaction, NULL, 0,
 	result);
 }
 
@@ -1045,8 +1045,6 @@ ged_scene_occurrence_resolve(struct ged *gedp,
 	 request->match != GED_SCENE_PATH_MATCH_SUBTREE))
 	return GED_SCENE_OCCURRENCE_REF_NULL;
 
-    struct ged_draw_obol_scene_context_info info;
-    memset(&info, 0, sizeof(info));
     const int draw_mode = request->draw_mode == GED_SCENE_DRAW_DEFAULT ?
 	ged_draw_default_mode(gedp) :
 	ged_scene_draw_mode_internal(gedp, request->draw_mode);
@@ -1056,19 +1054,11 @@ ged_scene_occurrence_resolve(struct ged *gedp,
     /* The compact registry owns current visibility and deterministic order.
      * Resolve it before any older materialized record that may still exist
      * after an interactive promotion. */
-    if (ged_draw_obol_scene_context_info_for_path_match(gedp,
-	    request->view, draw_mode, request->path,
-	    request->match == GED_SCENE_PATH_MATCH_SUBTREE, &info)) {
-	struct ged_scene_occurrence_candidate candidate;
-	candidate.path = info.path;
-	candidate.instance_key = info.instance_key;
-	candidate.draw_mode = static_cast<enum ged_scene_draw_mode>(draw_mode);
-	ged_scene_occurrence_ref resolved =
-	    ged_scene_occurrence_candidate_resolve(gedp, &candidate);
-	ged_draw_obol_scene_context_info_free(&info);
-	if (!ged_scene_occurrence_ref_is_null(resolved))
-	    return resolved;
-    }
+    ged_draw_shape_ref compact = ged_draw_shape_ref_for_path_match(gedp,
+	request->view, draw_mode, request->path,
+	request->match == GED_SCENE_PATH_MATCH_SUBTREE);
+    if (!ged_draw_shape_ref_is_null(compact))
+	return ged_scene_occurrence_from_shape_ref(gedp, compact);
 
     /* Eager and non-compact draws already have addressable occurrences. */
     struct ged_scene_occurrence_resolve_context context = {

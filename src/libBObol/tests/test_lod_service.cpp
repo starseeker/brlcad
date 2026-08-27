@@ -4775,7 +4775,13 @@ test_presentation_layer_validation(void)
     result.providerStatus = BOBOL_LOD_PROVIDER_READY;
     BObolLodPresentationLayer coverage;
     coverage.layerKey = "coverage";
-    coverage.geometry = std::make_shared<Obol::PartGeometry>();
+    const Obol::CadGeometryAdmission coverageAdmission =
+	Obol::cadAdmitPartGeometry(Obol::PartGeometryBuilder());
+    if (!coverageAdmission) {
+	printf("FAIL: presentation layer geometry admission\n");
+	return 1;
+    }
+    coverage.geometry = coverageAdmission.geometry.shared();
     coverage.geometryRevision = 1;
     coverage.coverage = TRUE;
     result.presentationLayers.push_back(coverage);

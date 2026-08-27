@@ -46,7 +46,16 @@ target_include_directories(test_bobol_retained_allocation_oracle PRIVATE
 brlcad_add_test(NAME libBObol_retained_allocation_oracle
   COMMAND test_bobol_retained_allocation_oracle)
 
-brlcad_addexec(test_bobol_lod_coordinator test_lod_coordinator.cpp "libbu" TEST ALL_CXX)
+brlcad_addexec(test_bobol_lod_coordinator
+  "test_lod_coordinator.cpp;test_lod_admission_policy_header.cpp;test_lod_capacity_policy_header.cpp;test_lod_delivery_policy_header.cpp;test_lod_scene_evidence_header.cpp;test_lod_view_policy_header.cpp;../lod_admission_policy.cpp;../lod_presentation_policy.cpp;../lod_view_quality_history.cpp"
+  "libbu" TEST ALL_CXX)
+set_source_files_properties(
+  test_lod_admission_policy_header.cpp
+  test_lod_capacity_policy_header.cpp
+  test_lod_delivery_policy_header.cpp
+  test_lod_scene_evidence_header.cpp
+  test_lod_view_policy_header.cpp
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(test_bobol_lod_coordinator PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/..)
 brlcad_add_test(NAME libBObol_lod_coordinator COMMAND test_bobol_lod_coordinator)

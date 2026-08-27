@@ -59,7 +59,7 @@ function(_bobol_guard_forbid_regexes _rel _contents)
     string(REGEX MATCH "${_pat}" _hit "${_contents}")
     if(_hit)
       _bobol_guard_fail(
-        "${_rel}: forbidden dependency/ownership invariant matched '${_hit}'; route drawing through the typed display endpoint and direct libBObol service boundary")
+        "${_rel}: forbidden dependency/ownership invariant matched '${_hit}'. Route drawing through the typed display endpoint and direct libBObol service boundary")
     endif()
   endforeach()
 endfunction()
@@ -284,7 +284,7 @@ endfunction()
 function(_bobol_guard_check_retired_ged_draw_symbols)
   foreach(_rel
       src/libged/ged_draw_source.cpp
-      src/libged/ged_draw_transactions.c
+      src/libged/ged_scene_reducer_requests.c
       src/libged/draw_obol.cpp
       include/ged/draw.h)
     if(EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
@@ -763,8 +763,8 @@ function(_bobol_guard_check_display_endpoint_boundary)
     [[BObol]]
     [[SoBRL]])
   _bobol_guard_read_rel(_scene_reducer
-    "src/libged/ged_draw_transactions.c")
-  _bobol_guard_forbid_regexes("src/libged/ged_draw_transactions.c"
+    "src/libged/ged_scene_reducer_requests.c")
+  _bobol_guard_forbid_regexes("src/libged/ged_scene_reducer_requests.c"
     "${_scene_reducer}"
     [[ged_draw_obol_]]
     [[ged_draw_source_root_]]
@@ -1196,7 +1196,8 @@ function(_bobol_guard_check_tclcad_obol_readback_bridge)
   _bobol_guard_forbid_regexes("src/tclscripts/archer/BotEditFrame.tcl" "${_bot_edit}"
     [[getZClipState]])
 
-  _bobol_guard_read_rel(_controller "src/libBObol/view_controller.cpp")
+  _bobol_guard_read_rel(_controller
+    "src/libBObol/view_controller_lighting.cpp")
   foreach(_needle
       [[SoClipPlane]]
       [[BObolClipMinimum]]

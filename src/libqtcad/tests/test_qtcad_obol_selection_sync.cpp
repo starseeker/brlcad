@@ -32,6 +32,7 @@
 #include <Inventor/nodes/SoSeparator.h>
 
 #include <Obol/cad/SoCADAssembly.h>
+#include <Obol/cad/CadGeometryValidation.h>
 
 #include <QApplication>
 
@@ -459,17 +460,22 @@ test_compact_lod_scale(struct db_i *dbip)
     source->representationMode = SoBRLDatabaseSource::REPRESENTATION_SHADED;
     source->sourceRevision = 1;
 
-    std::shared_ptr<Obol::PartGeometry> geometry =
-	std::make_shared<Obol::PartGeometry>();
-    geometry->shaded.emplace();
-    geometry->shaded->positions = {
+    Obol::PartGeometryBuilder geometryBuilder;
+    geometryBuilder.shaded.emplace();
+    geometryBuilder.shaded->positions = {
 	SbVec3f(-1.0f, -1.0f, 0.0f),
 	SbVec3f(1.0f, -1.0f, 0.0f),
 	SbVec3f(0.0f, 1.0f, 0.0f)
     };
-    geometry->shaded->indices = {0, 1, 2};
-    geometry->shaded->bounds = SbBox3f(SbVec3f(-1.0f, -1.0f, 0.0f),
+    geometryBuilder.shaded->indices = {0, 1, 2};
+    geometryBuilder.shaded->bounds = SbBox3f(SbVec3f(-1.0f, -1.0f, 0.0f),
 	SbVec3f(1.0f, 1.0f, 0.0f));
+    const Obol::CadGeometryAdmission geometryAdmission =
+	Obol::cadAdmitPartGeometry(std::move(geometryBuilder));
+    if (!geometryAdmission)
+	FAIL("typed compact LoD setup requires valid admitted geometry");
+    const std::shared_ptr<const Obol::PartGeometry> geometry =
+	geometryAdmission.geometry.shared();
 
     std::vector<BObolCompactOccurrence> occurrences;
     occurrences.reserve(candidateCount);
@@ -596,20 +602,23 @@ main(int argc, char **argv)
     if (!lateSource->applyCompactInstanceSelectionDelta(lateAdded,
 	lateRemoved))
 	FAIL("backend publication must retain selection before geometry arrives");
-    std::shared_ptr<Obol::PartGeometry> lateGeometry =
-	std::make_shared<Obol::PartGeometry>();
-    lateGeometry->shaded.emplace();
-    lateGeometry->shaded->positions = {
+    Obol::PartGeometryBuilder lateGeometryBuilder;
+    lateGeometryBuilder.shaded.emplace();
+    lateGeometryBuilder.shaded->positions = {
 	SbVec3f(-1.0f, -1.0f, 0.0f),
 	SbVec3f(1.0f, -1.0f, 0.0f),
 	SbVec3f(0.0f, 1.0f, 0.0f)
     };
-    lateGeometry->shaded->indices = {0, 1, 2};
-    lateGeometry->shaded->bounds = SbBox3f(
+    lateGeometryBuilder.shaded->indices = {0, 1, 2};
+    lateGeometryBuilder.shaded->bounds = SbBox3f(
 	SbVec3f(-1.0f, -1.0f, 0.0f),
 	SbVec3f(1.0f, 1.0f, 0.0f));
+    const Obol::CadGeometryAdmission lateGeometryAdmission =
+	Obol::cadAdmitPartGeometry(std::move(lateGeometryBuilder));
+    if (!lateGeometryAdmission)
+	FAIL("late compact publication requires valid admitted geometry");
     BObolCompactOccurrence lateOccurrence;
-    lateOccurrence.geometry = lateGeometry;
+    lateOccurrence.geometry = lateGeometryAdmission.geometry.shared();
     lateOccurrence.summary.valid = TRUE;
     lateOccurrence.summary.path = "box.s";
     lateOccurrence.summary.sourceName = "box.s";

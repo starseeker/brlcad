@@ -7,8 +7,10 @@
 
 #include "common.h"
 
+#include "BObol/BViewLod.h"
 #include "retained_allocation_private.h"
 
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -44,6 +46,25 @@ oracle_winner(const std::vector<BObolRetainedMarginalUpgrade> &upgrades)
 int
 main()
 {
+    struct ErrorContractCase {
+	double target;
+	double projectedLimit;
+    };
+    const ErrorContractCase errorContractCases[] = {
+	{0.25, 0.75},
+	{0.5, 1.5},
+	{1.0, 3.0},
+	{2.0, 6.0}
+    };
+    for (const ErrorContractCase &testCase : errorContractCases) {
+	if (std::fabs(BObolViewLodState::prominentMaximumProjectedError(
+		testCase.target) - testCase.projectedLimit) > 1.0e-12) {
+	    fprintf(stderr,
+		"fractional-pixel prominent error contract mismatch\n");
+	    return 1;
+	}
+    }
+
     const double errors[] = {0.25, 1.0, 4.0};
     const double values[] = {0.25, 1.0, 4.0};
     std::vector<BObolRetainedMarginalUpgrade> domain;

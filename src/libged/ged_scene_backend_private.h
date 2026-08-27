@@ -22,8 +22,8 @@ __BEGIN_DECLS
 
 struct ged_scene_backend_ops {
     int (*apply)(struct ged *gedp,
-	const struct ged_draw_transaction *transaction,
-	const struct ged_draw_transaction_result *result,
+	const struct ged_scene_reducer_request *transaction,
+	const struct ged_scene_reducer_result *result,
 	void *client_data);
     int (*snapshot)(struct ged *gedp, void *client_data);
     int (*selection)(struct ged *gedp,
@@ -38,8 +38,8 @@ struct ged_scene_backend_ops {
 
 extern int ged_scene_backend_apply_private(
     struct ged *gedp,
-    const struct ged_draw_transaction *transaction,
-    const struct ged_draw_transaction_result *result);
+    const struct ged_scene_reducer_request *transaction,
+    const struct ged_scene_reducer_result *result);
 
 extern int ged_scene_backend_snapshot_private(struct ged *gedp);
 

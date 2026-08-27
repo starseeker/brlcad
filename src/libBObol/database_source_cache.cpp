@@ -16,6 +16,7 @@
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BVListShape.h"
+#include "cad_publication_private.h"
 #include "database_source_private.h"
 #include "database_source_realization.h"
 
@@ -308,7 +309,7 @@ BObolDatabaseSourceRealizationCache::storeMeshGeometry(
 static std::shared_ptr<const Obol::PartGeometry>
 store_cached_part_geometry(
     std::map<std::string, BObolCachedPartGeometry> &cache,
-    const std::string &key, Obol::PartGeometry &&geometry,
+    const std::string &key, Obol::PartGeometryBuilder &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
     bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest,
     bool viewDependentCsgGeometry)
@@ -316,9 +317,14 @@ store_cached_part_geometry(
     if (key.empty())
 	return std::shared_ptr<const Obol::PartGeometry>();
 
+    const std::shared_ptr<const Obol::PartGeometry> sharedGeometry =
+	bobol_cad_build_geometry(
+	    std::move(geometry), "realization-cache insertion");
+    if (!sharedGeometry)
+	return std::shared_ptr<const Obol::PartGeometry>();
+
     BObolCachedPartGeometry &stored = cache[key];
-    stored.geometry =
-	std::make_shared<const Obol::PartGeometry>(std::move(geometry));
+    stored.geometry = sharedGeometry;
     stored.sourceType = sourceType ? sourceType : "";
     stored.geometryKind = geometryKind ? geometryKind : "";
     if (bounds)
@@ -366,7 +372,7 @@ store_cached_part_geometry_reference(
 
 std::shared_ptr<const Obol::PartGeometry>
 BObolDatabaseSourceRealizationCache::storeWireCadGeometry(
-    const std::string &key, Obol::PartGeometry &&geometry,
+    const std::string &key, Obol::PartGeometryBuilder &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
     bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest,
     bool viewDependentCsgGeometry)
@@ -378,7 +384,7 @@ BObolDatabaseSourceRealizationCache::storeWireCadGeometry(
 
 std::shared_ptr<const Obol::PartGeometry>
 BObolDatabaseSourceRealizationCache::storeMeshVListCadGeometry(
-    const std::string &key, Obol::PartGeometry &&geometry,
+    const std::string &key, Obol::PartGeometryBuilder &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
     bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest,
     bool viewDependentCsgGeometry)
@@ -390,7 +396,7 @@ BObolDatabaseSourceRealizationCache::storeMeshVListCadGeometry(
 
 std::shared_ptr<const Obol::PartGeometry>
 BObolDatabaseSourceRealizationCache::storeMeshCadGeometry(
-    const std::string &key, Obol::PartGeometry &&geometry,
+    const std::string &key, Obol::PartGeometryBuilder &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
     bool lodBacked, const BObolSourceMeshRequest *sourceMeshRequest,
     bool viewDependentCsgGeometry)
@@ -444,5 +450,3 @@ BObolDatabaseSourceRealizationCache::findMeshCadGeometry(
 {
     return find_cached_part_geometry(this->sharedMeshCadGeometry, key);
 }
-
-

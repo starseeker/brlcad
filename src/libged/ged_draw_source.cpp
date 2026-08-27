@@ -2326,6 +2326,33 @@ ged_draw_shape_ref_for_candidate(
 }
 
 
+ged_draw_shape_ref
+ged_draw_shape_ref_for_path_match(
+    struct ged *gedp,
+    struct ged_view_context *view,
+    int draw_mode,
+    const char *path,
+    int include_descendants)
+{
+    if (!gedp || !path || !path[0])
+	return GED_DRAW_SHAPE_REF_NULL;
+
+    struct ged_draw_obol_scene_context_info info;
+    memset(&info, 0, sizeof(info));
+    if (!ged_draw_obol_scene_context_info_for_path_match(gedp, view,
+	    draw_mode, path, include_descendants, &info))
+	return GED_DRAW_SHAPE_REF_NULL;
+
+    struct ged_draw_shape_candidate candidate = {
+	info.path, info.instance_key, draw_mode
+    };
+    ged_draw_shape_ref result = ged_draw_shape_ref_for_candidate(gedp,
+	&candidate);
+    ged_draw_obol_scene_context_info_free(&info);
+    return result;
+}
+
+
 struct ged_draw_source_root_group_ref_ctx {
     struct ged *gedp;
     ged_draw_group_ref_index_cb cb;

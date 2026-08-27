@@ -23,6 +23,8 @@
 #include "BObol/BViewLod.h"
 #include "BObol/BViewAttachment.h"
 #include "../cad_assembly_private.h"
+#include "../compact_occurrence_registry_private.h"
+#include "../database_source_presentation_private.h"
 #include "../retained_allocation_private.h"
 #include "../view_lod_coordinator_state_private.h"
 #include "bv.h"
@@ -58,6 +60,54 @@
 #include <string.h>
 #include <thread>
 #include <vector>
+
+static int
+test_cad_presentation_mutation_value(void)
+{
+    BObolCadPresentationMutation mutation;
+    if (mutation.publicationRequired()) {
+	printf("FAIL: empty CAD presentation mutation requires publication\n");
+	return 1;
+    }
+
+    /* A cut-only pass is common once PoP data is resident.  It must still
+     * enter the Obol transaction; otherwise local active-cut bookkeeping
+     * advances while the renderer keeps the preceding prefix forever. */
+    mutation.cuts.emplace_back();
+    if (!mutation.publicationRequired()) {
+	printf("FAIL: cut-only CAD presentation mutation was treated as idle\n");
+	return 1;
+    }
+
+    mutation = BObolCadPresentationMutation();
+    mutation.removedLayerSemantics.emplace_back();
+    if (!mutation.publicationRequired()) {
+	printf("FAIL: semantic removal was treated as an idle publication\n");
+	return 1;
+    }
+
+    mutation = BObolCadPresentationMutation();
+    mutation.instanceSetsChanged = true;
+    if (!mutation.publicationRequired()) {
+	printf("FAIL: instance-set mutation was treated as idle\n");
+	return 1;
+    }
+
+    mutation = BObolCadPresentationMutation();
+    mutation.drawModeChanged = true;
+    if (!mutation.publicationRequired()) {
+	printf("FAIL: draw-mode mutation was treated as idle\n");
+	return 1;
+    }
+
+    mutation = BObolCadPresentationMutation();
+    mutation.reset = true;
+    if (!mutation.publicationRequired()) {
+	printf("FAIL: CAD presentation reset was treated as idle\n");
+	return 1;
+    }
+    return 0;
+}
 
 static int
 test_submission_delta_value(void)
@@ -7527,39 +7577,49 @@ test_view_local_lod_only_pick(void)
 }
 
 static std::shared_ptr<const Obol::PartGeometry>
+compact_admit_geometry(Obol::PartGeometryBuilder geometry)
+{
+    const Obol::CadGeometryAdmission admission =
+	Obol::cadAdmitPartGeometry(std::move(geometry));
+    return admission ? admission.geometry.shared() :
+	std::shared_ptr<const Obol::PartGeometry>();
+}
+
+static std::shared_ptr<const Obol::PartGeometry>
 compact_duplicate_proxy_geometry(void)
 {
-    std::shared_ptr<Obol::PartGeometry> geometry(new Obol::PartGeometry);
+    Obol::PartGeometryBuilder geometry;
     Obol::WireRep wire;
     wire.segmentPoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
     wire.segmentPoints.push_back(SbVec3f(1.0f, 0.0f, 0.0f));
     wire.segmentIds.push_back(1);
     wire.bounds = SbBox3f(SbVec3f(0.0f, 0.0f, 0.0f),
 	SbVec3f(1.0f, 0.0f, 0.0f));
-    geometry->wire = std::move(wire);
-    return geometry;
+    geometry.wire = std::move(wire);
+    return compact_admit_geometry(std::move(geometry));
 }
 
 static std::shared_ptr<const Obol::PartGeometry>
 compact_projected_proxy_geometry(void)
 {
-    std::shared_ptr<Obol::PartGeometry> geometry(new Obol::PartGeometry);
+    Obol::PartGeometryBuilder geometry;
     Obol::WireRep wire;
     wire.segmentPoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
     wire.segmentPoints.push_back(SbVec3f(1.0f, 1.0f, 1.0f));
     wire.segmentIds.push_back(1);
     wire.bounds = SbBox3f(SbVec3f(0.0f, 0.0f, 0.0f),
 	SbVec3f(1.0f, 1.0f, 1.0f));
-    geometry->wire = std::move(wire);
-    geometry->subpixelProxyEligible = true;
-    geometry->structuralProxy = true;
-    return geometry;
+    geometry.wire = std::move(wire);
+    geometry.conservativeBounds = geometry.wire->bounds;
+    geometry.subpixelProxyEligible = true;
+    geometry.structuralProxy = true;
+    return compact_admit_geometry(std::move(geometry));
 }
 
 static std::shared_ptr<const Obol::PartGeometry>
 compact_native_triangle_geometry(void)
 {
-    std::shared_ptr<Obol::PartGeometry> geometry(new Obol::PartGeometry);
+    Obol::PartGeometryBuilder geometry;
     Obol::TriMesh mesh;
     mesh.positions.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
     mesh.positions.push_back(SbVec3f(1.0f, 0.0f, 0.0f));
@@ -7569,8 +7629,8 @@ compact_native_triangle_geometry(void)
     mesh.indices.push_back(2);
     mesh.bounds = SbBox3f(SbVec3f(0.0f, 0.0f, 0.0f),
 	SbVec3f(1.0f, 1.0f, 0.0f));
-    geometry->shaded = std::move(mesh);
-    return geometry;
+    geometry.shaded = std::move(mesh);
+    return compact_admit_geometry(std::move(geometry));
 }
 
 static int
@@ -7720,22 +7780,42 @@ test_cad_presentation_frame_retirement(void)
     source->instanceKey = "frame-retirement-instance";
 
     SoCADAssembly *assembly = new SoCADAssembly;
+    assembly->ref();
     const Obol::PartId part =
-	Obol::CadIdBuilder::hash128("frame-retirement-part");
-    Obol::SharedPartUpdate partUpdate;
+	Obol::CadIdBuilder::partId("frame-retirement-part");
+    Obol::PartUpdate partUpdate;
     partUpdate.part = part;
-    partUpdate.geometry = compact_native_triangle_geometry();
-    assembly->upsertSharedParts(
-	std::vector<Obol::SharedPartUpdate>(1, partUpdate));
+    const std::shared_ptr<const Obol::PartGeometry> geometry =
+	compact_native_triangle_geometry();
+    if (!geometry) {
+	printf("FAIL: frame-retirement geometry admission\n");
+	assembly->unref();
+	source->unref();
+	return 1;
+    }
+    partUpdate.geometry = Obol::ValidatedPartGeometry(geometry);
+    if (!assembly->upsertParts(
+	    std::vector<Obol::PartUpdate>(1, partUpdate))) {
+	printf("FAIL: frame-retirement geometry publication\n");
+	assembly->unref();
+	source->unref();
+	return 1;
+    }
 
     Obol::InstanceUpdate instanceUpdate;
     instanceUpdate.instance =
-	Obol::CadIdBuilder::hash128("frame-retirement-instance");
+	Obol::CadIdBuilder::instanceId("frame-retirement-instance");
     instanceUpdate.record.part = part;
     instanceUpdate.record.localToRoot = SbMatrix::identity();
-    assembly->upsertInstances(
-	std::vector<Obol::InstanceUpdate>(1, instanceUpdate));
+    if (!assembly->upsertInstances(
+	    std::vector<Obol::InstanceUpdate>(1, instanceUpdate))) {
+	printf("FAIL: frame-retirement instance publication\n");
+	assembly->unref();
+	source->unref();
+	return 1;
+    }
     viewState.setCadPresentation(source, assembly);
+    assembly->unref();
     viewState.beginCadPresentationFrame();
 
     /* Simulate a view lod policy change after frame observation was armed but
@@ -7796,19 +7876,23 @@ test_cad_presentation_discovery_point_floor(void)
     int ret = 0;
     viewState.setCadPresentationDiscoveryPointProxyPixelThreshold(8.0f);
     viewState.setCadPresentationPointProxyPixelThreshold(4.0f);
-    if (std::fabs(assembly->pointProxyPixelThreshold.getValue() - 8.0f) >
+
+    if (std::fabs(viewState.cadPresentationViewState().
+	    pointProxyPixelThreshold - 8.0f) >
 	    1.0e-6f) {
 	printf("FAIL: discovery point floor did not protect presentation\n");
 	ret = 1;
     }
     viewState.setCadPresentationDiscoveryPointProxyPixelThreshold(1.0f);
-    if (std::fabs(assembly->pointProxyPixelThreshold.getValue() - 4.0f) >
+    if (std::fabs(viewState.cadPresentationViewState().
+	    pointProxyPixelThreshold - 4.0f) >
 	    1.0e-6f) {
 	printf("FAIL: discovery point floor did not restore measured cut\n");
 	ret = 1;
     }
     viewState.setCadPresentationPointProxyPixelThreshold(1.0f);
-    if (std::fabs(assembly->pointProxyPixelThreshold.getValue() - 1.0f) >
+    if (std::fabs(viewState.cadPresentationViewState().
+	    pointProxyPixelThreshold - 1.0f) >
 	    1.0e-6f) {
 	printf("FAIL: point presentation did not return to pixel exactness\n");
 	ret = 1;
@@ -9037,17 +9121,13 @@ test_compact_terminal_mesh_admission(void)
 /*
  * Content-equivalent geometry objects share one compact part, but only the
  * canonical object is retained by the part library.  When a duplicate's last
- * occurrence is upgraded, its allocation address may immediately be reused
- * for unrelated geometry.  The pointer fast path must validate object
- * lifetime before accepting the old address-to-part mapping.
+ * occurrence is upgraded, its weak identity expires.  The pointer fast path
+ * must reject both expired identities and live identities for a different
+ * snapshot before accepting an address-to-part mapping.
  */
 static int
 test_compact_geometry_pointer_reuse_identity(void)
 {
-    alignas(Obol::PartGeometry)
-	unsigned char recycledStorage[sizeof(Obol::PartGeometry)];
-    bool proxyDestroyed = false;
-
     SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
     source->ref();
     source->path = "pointer-reuse-root.c";
@@ -9055,13 +9135,9 @@ test_compact_geometry_pointer_reuse_identity(void)
 
     const std::shared_ptr<const Obol::PartGeometry> canonicalProxy =
 	compact_projected_proxy_geometry();
-    Obol::PartGeometry *rawProxy = new (recycledStorage)
-	Obol::PartGeometry(*canonicalProxy);
-    std::shared_ptr<const Obol::PartGeometry> recycledProxy(
-	rawProxy, [&proxyDestroyed](const Obol::PartGeometry *geometry) {
-	    const_cast<Obol::PartGeometry *>(geometry)->~PartGeometry();
-	    proxyDestroyed = true;
-	});
+    std::shared_ptr<const Obol::PartGeometry> recycledProxy =
+	compact_projected_proxy_geometry();
+    std::weak_ptr<const Obol::PartGeometry> recycledWeak = recycledProxy;
 
     BObolCompactOccurrence first;
     first.geometry = canonicalProxy;
@@ -9103,23 +9179,31 @@ test_compact_geometry_pointer_reuse_identity(void)
     initial.clear();
     recycled.geometry.reset();
     recycledProxy.reset();
-    if (!ret && !proxyDestroyed) {
+    if (!ret && !recycledWeak.expired()) {
 	printf("FAIL: compact pointer-reuse duplicate remained strongly owned\n");
 	ret = 1;
     }
 
-    Obol::PartGeometry *rawLine = new (recycledStorage)
-	Obol::PartGeometry;
+    Obol::PartGeometryBuilder lineBuilder;
     Obol::WireRep line;
     line.segmentPoints = {
 	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(2.0f, 0.0f, 0.0f)};
     line.bounds = SbBox3f(
 	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(2.0f, 0.0f, 0.0f));
-    rawLine->wire = std::move(line);
-    std::shared_ptr<const Obol::PartGeometry> recycledLine(
-	rawLine, [](const Obol::PartGeometry *geometry) {
-	    const_cast<Obol::PartGeometry *>(geometry)->~PartGeometry();
-	});
+	lineBuilder.wire = std::move(line);
+    const std::shared_ptr<const Obol::PartGeometry> recycledLine =
+	compact_admit_geometry(std::move(lineBuilder));
+    BObolCompactGeometryPartIdentity expiredIdentity;
+    expiredIdentity.geometry = recycledWeak;
+    BObolCompactGeometryPartIdentity differentLiveIdentity;
+    differentLiveIdentity.geometry = canonicalProxy;
+    if (!ret && (bobol_compact_geometry_identity_matches(
+	    expiredIdentity, recycledLine) ||
+	bobol_compact_geometry_identity_matches(
+	    differentLiveIdentity, recycledLine))) {
+	printf("FAIL: compact pointer identity accepted a stale snapshot\n");
+	ret = 1;
+    }
 
     BObolCompactOccurrence authored = first;
     authored.geometry = recycledLine;
@@ -9622,20 +9706,27 @@ test_compact_aabb_stream_upgrade(void)
     degenerateLineSource->ref();
     degenerateLineSource->path = "degenerate-line-root.c";
     degenerateLineSource->instanceKey = "degenerate-line-root-instance";
-    std::shared_ptr<Obol::PartGeometry> structuralLineGeometry =
-	std::make_shared<Obol::PartGeometry>();
+    Obol::PartGeometryBuilder structuralLineBuilder;
     Obol::WireRep lineWire;
     lineWire.segmentPoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
     lineWire.segmentPoints.push_back(SbVec3f(1.0f, 0.0f, 0.0f));
     lineWire.bounds = SbBox3f(
 	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 0.0f, 0.0f));
-    structuralLineGeometry->wire = lineWire;
-    structuralLineGeometry->subpixelProxyEligible = true;
-    structuralLineGeometry->structuralProxy = true;
-    std::shared_ptr<Obol::PartGeometry> authoredLineGeometry =
-	std::make_shared<Obol::PartGeometry>(*structuralLineGeometry);
-    authoredLineGeometry->subpixelProxyEligible = false;
-    authoredLineGeometry->structuralProxy = false;
+    structuralLineBuilder.wire = lineWire;
+    structuralLineBuilder.conservativeBounds = lineWire.bounds;
+    structuralLineBuilder.subpixelProxyEligible = true;
+    structuralLineBuilder.structuralProxy = true;
+    Obol::PartGeometryBuilder authoredLineBuilder = structuralLineBuilder;
+    authoredLineBuilder.subpixelProxyEligible = false;
+    authoredLineBuilder.structuralProxy = false;
+    const std::shared_ptr<const Obol::PartGeometry> structuralLineGeometry =
+	compact_admit_geometry(std::move(structuralLineBuilder));
+    const std::shared_ptr<const Obol::PartGeometry> authoredLineGeometry =
+	compact_admit_geometry(std::move(authoredLineBuilder));
+    if (!structuralLineGeometry || !authoredLineGeometry) {
+	printf("FAIL: degenerate line geometry admission\n");
+	ret = 1;
+    }
 
     BObolCompactOccurrence degenerateLineProxy = proxy;
     degenerateLineProxy.geometry = structuralLineGeometry;
@@ -14067,11 +14158,37 @@ test_compact_live_spatial_layers(void)
 	ret = 1;
     }
 
+    /* Compact-layer bookkeeping records logical presentation intent.  The
+     * physical assembly can lose an auxiliary record during a reset/cull
+     * boundary, so a later sparse style or cut pass must repair that record
+     * instead of repeatedly submitting an invalid update. */
+    Obol::InstanceId baseInstance;
+    baseInstance.w0 = handle.instanceWord0;
+    baseInstance.w1 = handle.instanceWord1;
+    const auto auxiliary = std::find_if(secondIds.begin(), secondIds.end(),
+	[baseInstance](Obol::InstanceId instance) {
+	    return instance != baseInstance;
+	});
+    if (!ret && auxiliary == secondIds.end()) {
+	printf("FAIL: spatial-layer fixture has no auxiliary instance\n");
+	ret = 1;
+    }
+    if (!ret) {
+	assembly->removeInstance(*auxiliary);
+	if (assembly->getInstanceRecord(*auxiliary).has_value() ||
+	    assembly->instanceCount() != 2) {
+	    printf("FAIL: spatial-layer physical retirement fixture setup\n");
+	    ret = 1;
+	}
+    }
+
     const std::vector<SbString> selectedPaths = {occurrence.summary.path};
     if (!ret && (source->syncCompactInstanceSelectedPaths(selectedPaths) != 1 ||
 	!source->compactViewLodAssembly(noPayloads, &viewState) ||
-	assembly->selectedInstanceCount() != 3)) {
-	printf("FAIL: logical spatial-layer selection did not cover all render layers\n");
+	assembly->selectedInstanceCount() != 3 ||
+	!assembly->getInstanceRecord(*auxiliary).has_value())) {
+	printf("FAIL: logical spatial-layer selection did not repair and cover "
+	       "all render layers\n");
 	ret = 1;
     }
     for (const Obol::InstanceId id : secondIds) {
@@ -14162,12 +14279,14 @@ test_compact_live_spatial_layers(void)
 		viewState.setCadPresentationProgressiveCutCeiling(0, fraction);
 		(void)source->compactViewLodAssembly(noPayloads, &viewState);
 		if (nextCost <= baseCost || fraction < 0.4f || fraction > 0.6f ||
-		    fabsf(assembly->progressiveCutNextFraction.getValue() -
+		    fabsf(viewState.cadPresentationViewState().
+			progressiveCutNextFraction -
 			fraction) > 1.0e-6f) {
 		    printf("FAIL: compact fractional spatial-layer cost policy "
 			   "(base=%zu next=%zu fraction=%g applied=%g)\n",
 			   baseCost, nextCost, fraction,
-			   assembly->progressiveCutNextFraction.getValue());
+			   viewState.cadPresentationViewState().
+			       progressiveCutNextFraction);
 		    ret = 1;
 		}
 		viewState.setCadPresentationProgressiveCutCeiling(-1);
@@ -14540,6 +14659,8 @@ main(int argc, char **argv)
     }
     bu_setprogname(argv[0]);
 
+    if (test_cad_presentation_mutation_value())
+	return 1;
     if (test_submission_delta_value())
 	return 1;
     if (test_structural_repair_value())

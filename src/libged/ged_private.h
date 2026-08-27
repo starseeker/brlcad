@@ -688,7 +688,7 @@ struct ged_draw_frontier_presentation_record {
     const char *path;
     struct ged_view_context *view;
     int mode;
-    enum ged_draw_transaction_kind kind;
+    enum ged_scene_reducer_operation kind;
     enum ged_scene_path_match match;
     double value;
 };
@@ -742,12 +742,12 @@ extern int ged_draw_frontier_presentation_snapshot_foreach(
 	struct ged *gedp, ged_draw_frontier_presentation_cb callback,
 	void *userdata);
 extern int ged_draw_frontier_presentation_set(
-	struct ged *gedp, const struct ged_draw_transaction *txn,
+	struct ged *gedp, const struct ged_scene_reducer_request *txn,
 	const char *resolved_path);
 extern int ged_draw_frontier_highlights_clear(struct ged *gedp);
 extern int ged_draw_frontier_erase_path(
 	struct ged *gedp, const char *path, struct ged_view_context *view_ctx,
-	int mode, int prefix, struct ged_draw_transaction_result *result);
+	int mode, int prefix, struct ged_scene_reducer_result *result);
 extern int ged_draw_frontier_list_paths(
 	struct ged *gedp, struct ged_view_context *view_ctx, int mode,
 	struct bu_vls *result, size_t result_start);
@@ -757,10 +757,10 @@ extern int ged_draw_frontier_path_state(
 	struct ged *gedp, struct ged_view_context *view_ctx,
 	const char *path, int mode);
 extern int ged_draw_frontier_absorb_draw(
-	struct ged *gedp, const struct ged_draw_transaction *txn,
-	const char *resolved_path, struct ged_draw_transaction_result *result);
+	struct ged *gedp, const struct ged_scene_reducer_request *txn,
+	const char *resolved_path, struct ged_scene_reducer_result *result);
 extern void ged_draw_frontier_note_transaction(
-	struct ged *gedp, const struct ged_draw_transaction *txn,
+	struct ged *gedp, const struct ged_scene_reducer_request *txn,
 	const char *resolved_path);
 
 /* Obol presentation mask for one retained database-source draw root. */

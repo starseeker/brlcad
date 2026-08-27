@@ -21,6 +21,7 @@
 #include <Inventor/SoViewport.h>
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -35,9 +36,12 @@ std::vector<SoBRLDatabaseSource *> controller_render_database_sources(
     const BObolViewController *controller);
 std::vector<SoBRLDatabaseSource *> controller_render_database_source_roots(
     const BObolViewController *controller);
+const char *controller_database_id(const struct db_i *dbip);
 bool controller_lod_trace_enabled(const char *name, uint64_t viewRevision);
 BObolLodPresentationPolicy::Population controller_lod_presentation_population(
     const BObolViewLodState *state, uint64_t sceneDomainRevision);
+std::shared_ptr<BObolLodService> controller_acquire_managed_lod_service(
+    size_t workerCount);
 SbVec3f bobol_headlight_default_offset(void);
 double controller_aspect_from_region(const SbViewportRegion &region);
 void controller_configure_render_environment(SoViewport *viewport);

@@ -1164,7 +1164,7 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		color[1] = 170;
 		color[2] = 64;
 		bu_vls_sprintf(&text,
-		    "View ready  GPU-memory-limited  %s triangles",
+		    "View usable  GPU-memory-limited  %s triangles",
 		    ged_obol_lod_compact_count(status.activeFaces).c_str());
 		if (status.gpuPressureProxyCount > 0)
 		    bu_vls_printf(&text, "  %s pressure proxies",
@@ -1173,7 +1173,7 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	    } else {
 		bu_vls_sprintf(&text,
 		    status.performanceLimited ?
-			"View ready  responsiveness-limited  %s triangles" :
+			"View usable  responsiveness-limited  %s triangles" :
 			"View ready  %s triangles",
 		    ged_obol_lod_compact_count(status.activeFaces).c_str());
 	    }

@@ -8,8 +8,10 @@
 \* narrows the safe/unsafe bracket.  A quiet view searches first for the
 \* preferred steady cadence.  If quality debt remains and the independent
 \* static deadline is available, it may advance exactly once to the static
-\* goal, preserving the steady-safe lower bound.  No timer, repaint, or
-\* throughput-EMA update may reopen either search.
+\* goal, preserving the steady-safe lower bound.  A ready pose-only view may
+\* start at the static goal: its retained presentation is the initial
+\* candidate and may be coarsened only if it misses that hard deadline.  No
+\* timer, repaint, or throughput-EMA update may reopen either search.
 \*
 \* This model proves ownership and termination.  It deliberately does not
 \* model the numeric frame classifier or perceptual ordering of candidates;
@@ -31,6 +33,7 @@ VARIABLES phase,
           trueSteadyCapacity,
           trueStaticCapacity,
           staticEligible,
+          startAtStatic,
           safe,
           unsafe,
           candidate,
@@ -42,6 +45,7 @@ VARIABLES phase,
           goalTransitions
 
 vars == <<phase, goal, trueSteadyCapacity, trueStaticCapacity, staticEligible,
+          startAtStatic,
           safe, unsafe, candidate, samplesRemaining, measured,
           certificateRevision, priorWidth, narrowed, goalTransitions>>
 
@@ -53,6 +57,7 @@ TypeOK ==
     /\ trueSteadyCapacity \in 0..CandidateCount
     /\ trueStaticCapacity \in trueSteadyCapacity..CandidateCount
     /\ staticEligible \in BOOLEAN
+    /\ startAtStatic \in BOOLEAN
     /\ safe \in 0..CandidateCount
     /\ unsafe \in 1..(CandidateCount + 1)
     /\ candidate \in 0..CandidateCount
@@ -83,14 +88,16 @@ TerminalCertificate ==
            \/ safe = CandidateCount
 
 GoalMonotonic ==
-    /\ (goal = "steady" => goalTransitions = 0)
+    /\ (goal = "steady" => /\ ~startAtStatic
+                              /\ goalTransitions = 0)
     /\ (goal = "static" => goalTransitions = 1)
 
 StrictNarrowing == narrowed => unsafe - safe < priorWidth
 
 Init ==
     /\ phase = "choose"
-    /\ goal = "steady"
+    /\ startAtStatic \in BOOLEAN
+    /\ goal = IF startAtStatic THEN "static" ELSE "steady"
     /\ trueSteadyCapacity \in 0..CandidateCount
     /\ trueStaticCapacity \in trueSteadyCapacity..CandidateCount
     /\ staticEligible \in BOOLEAN
@@ -102,7 +109,7 @@ Init ==
     /\ certificateRevision = 0
     /\ priorWidth = CandidateCount + 1
     /\ narrowed = FALSE
-    /\ goalTransitions = 0
+    /\ goalTransitions = IF startAtStatic THEN 1 ELSE 0
 
 ChooseCandidate ==
     /\ phase = "choose"
@@ -112,7 +119,7 @@ ChooseCandidate ==
     /\ phase' = "measure"
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, safe, unsafe, measured,
+                    staticEligible, startAtStatic, safe, unsafe, measured,
                     certificateRevision, priorWidth, goalTransitions>>
 
 ConsumeSample ==
@@ -121,7 +128,7 @@ ConsumeSample ==
     /\ samplesRemaining' = samplesRemaining - 1
     /\ narrowed' = FALSE
     /\ UNCHANGED <<phase, goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, safe, unsafe, candidate, measured,
+                    staticEligible, startAtStatic, safe, unsafe, candidate, measured,
                     certificateRevision, priorWidth, goalTransitions>>
 
 ClassifyCandidate ==
@@ -143,7 +150,7 @@ ClassifyCandidate ==
           ELSE /\ phase' = "choose"
                /\ certificateRevision' = 0
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, goalTransitions>>
+                    staticEligible, startAtStatic, goalTransitions>>
 
 AdvanceToStaticGoal ==
     /\ phase = "goal_done"
@@ -161,6 +168,7 @@ AdvanceToStaticGoal ==
     /\ narrowed' = FALSE
     /\ goalTransitions' = 1
     /\ UNCHANGED <<trueSteadyCapacity, trueStaticCapacity, staticEligible,
+                    startAtStatic,
                     safe>>
 
 PublishTerminalCertificate ==
@@ -172,7 +180,7 @@ PublishTerminalCertificate ==
     /\ certificateRevision' = 1
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, safe, unsafe, candidate,
+                    staticEligible, startAtStatic, safe, unsafe, candidate,
                     samplesRemaining, measured, priorWidth, goalTransitions>>
 
 Next ==

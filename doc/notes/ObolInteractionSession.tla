@@ -5,7 +5,10 @@
 \* may deliver either event, but firing a timer is not itself control evidence.
 \* The model proves that the three legal phases cannot encode the former
 \* gesture-only combination and that a completed or deadline-retired motion
-\* frame cannot strand a closed input session outside quiet state.
+\* frame cannot strand a closed input session outside quiet state.  It also
+\* models the mode edge which caused a real ownerless loop: if deterministic
+\* unbounded terminal convergence is entered before a late quiet transition,
+\* that transition cannot restore a finite presentation handoff.
 
 EXTENDS Naturals, TLC
 
@@ -17,10 +20,12 @@ VARIABLES phase,
           inputClosed,
           renderSerial,
           requiredRenderSerial,
-          debounceExpired
+          debounceExpired,
+          terminalMode,
+          finiteHandoff
 
 vars == <<phase, inputClosed, renderSerial, requiredRenderSerial,
-          debounceExpired>>
+          debounceExpired, terminalMode, finiteHandoff>>
 
 TypeOK ==
     /\ phase \in Phases
@@ -28,6 +33,8 @@ TypeOK ==
     /\ renderSerial \in 0..MaxRenderSerial
     /\ requiredRenderSerial \in 0..MaxRenderSerial
     /\ debounceExpired \in BOOLEAN
+    /\ terminalMode \in BOOLEAN
+    /\ finiteHandoff \in BOOLEAN
 
 Init ==
     /\ phase = "quiet"
@@ -35,6 +42,8 @@ Init ==
     /\ renderSerial = 0
     /\ requiredRenderSerial = 0
     /\ debounceExpired = FALSE
+    /\ terminalMode = FALSE
+    /\ finiteHandoff = FALSE
 
 BeginGesture ==
     /\ ~inputClosed
@@ -42,7 +51,8 @@ BeginGesture ==
     /\ phase' = "gesture"
     /\ requiredRenderSerial' = 0
     /\ debounceExpired' = FALSE
-    /\ UNCHANGED <<inputClosed, renderSerial>>
+    /\ UNCHANGED <<inputClosed, renderSerial, terminalMode,
+                    finiteHandoff>>
 
 CameraChanged ==
     /\ ~inputClosed
@@ -50,14 +60,16 @@ CameraChanged ==
     /\ phase' = IF phase = "gesture" THEN "gesture" ELSE "debouncing"
     /\ requiredRenderSerial' = renderSerial + 1
     /\ debounceExpired' = FALSE
-    /\ UNCHANGED <<inputClosed, renderSerial>>
+    /\ UNCHANGED <<inputClosed, renderSerial, terminalMode,
+                    finiteHandoff>>
 
 EndGesture ==
     /\ phase = "gesture"
     /\ phase' = "debouncing"
     /\ requiredRenderSerial' = 0
     /\ debounceExpired' = FALSE
-    /\ UNCHANGED <<inputClosed, renderSerial>>
+    /\ UNCHANGED <<inputClosed, renderSerial, terminalMode,
+                    finiteHandoff>>
 
 CompleteMotionFrame ==
     /\ phase = "debouncing"
@@ -65,14 +77,15 @@ CompleteMotionFrame ==
     /\ renderSerial' = requiredRenderSerial
     /\ requiredRenderSerial' = 0
     /\ debounceExpired' = FALSE
-    /\ UNCHANGED <<phase, inputClosed>>
+    /\ UNCHANGED <<phase, inputClosed, terminalMode, finiteHandoff>>
 
 RetireExpiredMotionFrame ==
     /\ phase = "debouncing"
     /\ requiredRenderSerial > 0
     /\ requiredRenderSerial' = 0
     /\ debounceExpired' = TRUE
-    /\ UNCHANGED <<phase, inputClosed, renderSerial>>
+    /\ UNCHANGED <<phase, inputClosed, renderSerial, terminalMode,
+                    finiteHandoff>>
 
 ExpireDebounce ==
     /\ phase = "debouncing"
@@ -80,7 +93,7 @@ ExpireDebounce ==
     /\ ~debounceExpired
     /\ debounceExpired' = TRUE
     /\ UNCHANGED <<phase, inputClosed, renderSerial,
-                    requiredRenderSerial>>
+                    requiredRenderSerial, terminalMode, finiteHandoff>>
 
 FinishQuiet ==
     /\ phase = "debouncing"
@@ -88,13 +101,34 @@ FinishQuiet ==
     /\ debounceExpired
     /\ phase' = "quiet"
     /\ debounceExpired' = FALSE
-    /\ UNCHANGED <<inputClosed, renderSerial, requiredRenderSerial>>
+    /\ finiteHandoff' = IF terminalMode THEN FALSE ELSE TRUE
+    /\ UNCHANGED <<inputClosed, renderSerial, requiredRenderSerial,
+                    terminalMode>>
+
+EnterTerminal ==
+    /\ ~terminalMode
+    /\ terminalMode' = TRUE
+    /\ finiteHandoff' = FALSE
+    /\ UNCHANGED <<phase, inputClosed, renderSerial,
+                    requiredRenderSerial, debounceExpired>>
+
+LeaveTerminal ==
+    /\ terminalMode
+    /\ terminalMode' = FALSE
+    /\ UNCHANGED <<phase, inputClosed, renderSerial,
+                    requiredRenderSerial, debounceExpired, finiteHandoff>>
+
+CompleteFiniteHandoff ==
+    /\ finiteHandoff
+    /\ finiteHandoff' = FALSE
+    /\ UNCHANGED <<phase, inputClosed, renderSerial,
+                    requiredRenderSerial, debounceExpired, terminalMode>>
 
 CloseInput ==
     /\ ~inputClosed
     /\ inputClosed' = TRUE
     /\ UNCHANGED <<phase, renderSerial, requiredRenderSerial,
-                    debounceExpired>>
+                    debounceExpired, terminalMode, finiteHandoff>>
 
 Next ==
     \/ BeginGesture
@@ -104,6 +138,9 @@ Next ==
     \/ RetireExpiredMotionFrame
     \/ ExpireDebounce
     \/ FinishQuiet
+    \/ EnterTerminal
+    \/ LeaveTerminal
+    \/ CompleteFiniteHandoff
     \/ CloseInput
 
 Spec ==
@@ -114,6 +151,7 @@ Spec ==
     /\ WF_vars(RetireExpiredMotionFrame)
     /\ WF_vars(ExpireDebounce)
     /\ WF_vars(FinishQuiet)
+    /\ WF_vars(CompleteFiniteHandoff)
 
 QuietHasNoMotionGate ==
     phase = "quiet" =>
@@ -138,7 +176,16 @@ ActiveSessionHasProgressWitness ==
         \/ ENABLED ExpireDebounce
         \/ ENABLED FinishQuiet
 
+TerminalModeHasNoFiniteHandoff ==
+    terminalMode => ~finiteHandoff
+
+FiniteHandoffHasProgressWitness ==
+    finiteHandoff => ENABLED CompleteFiniteHandoff
+
 EventuallyQuietAfterFinalInput ==
     [](inputClosed => <> (phase = "quiet"))
+
+EventuallyDrainedAfterFinalInput ==
+    [](inputClosed => <> (phase = "quiet" /\ ~finiteHandoff))
 
 =============================================================================

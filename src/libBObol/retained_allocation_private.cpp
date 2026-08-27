@@ -920,8 +920,8 @@ private:
 	    (payload->visualEmphasis == 1 ?
 		std::max(target, highlightedFeatureMaximumErrorPixels) :
 		(footprint >= BObolViewLodState::ProminentFootprintPixels ?
-		    std::max(1.0, target) *
-			BObolViewLodState::ProminentMaximumNormalizedError :
+		    BObolViewLodState::prominentMaximumProjectedError(
+			target) :
 		    std::numeric_limits<double>::infinity()));
 	candidate.protectedCut = minimumCut;
 	if (std::isfinite(protectedError) && diameter > 0.0) {

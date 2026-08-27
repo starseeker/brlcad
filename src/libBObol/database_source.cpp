@@ -24,8 +24,12 @@
 #include "BObol/BViewQuery.h"
 #include "BObol/BVListShape.h"
 #include "cad_assembly_private.h"
+#include "cad_normals_private.h"
+#include "cad_publication_private.h"
 #include "compact_occurrence_registry_private.h"
 #include "database_source_private.h"
+#include "database_source_mesh_geometry_private.h"
+#include "database_source_presentation_private.h"
 #include "database_source_realization.h"
 #include "performance_private.h"
 #include "serialized_bot_source_private.h"
@@ -673,7 +677,7 @@ record_identity_with_revision(const char *identity, uint32_t revision)
 
 
 
-static int
+int
 source_record_draw_mode(const SoBRLDatabaseSource *source)
 {
     return source ? source->getEffectiveLodDrawMode() :
@@ -994,7 +998,7 @@ vlist_from_bot_wireframe(const struct rt_bot_internal *bot)
 
 static int
 cad_wire_part_geometry_from_line_set(const std::vector<SbVec3f> &points,
-	const std::vector<int32_t> &commands, Obol::PartGeometry &geometry)
+	const std::vector<int32_t> &commands, Obol::PartGeometryBuilder &geometry)
 {
     const size_t count = std::min(points.size(), commands.size());
     if (!count)
@@ -1053,7 +1057,7 @@ cad_wire_part_geometry_from_line_set(const std::vector<SbVec3f> &points,
 
 static int
 cad_wire_part_geometry_from_aabb(const SbBox3f &bounds,
-	Obol::PartGeometry &geometry)
+	Obol::PartGeometryBuilder &geometry)
 {
     if (bounds.isEmpty())
 	return 0;
@@ -1123,53 +1127,6 @@ cad_source_mesh_request_from_bot(BObolSourceMeshRequest &request,
     return 1;
 }
 
-static int
-cad_wire_part_geometry_from_bot(const struct rt_bot_internal *bot,
-	Obol::PartGeometry &geometry)
-{
-    if (!bot || !bot->vertices || !bot->faces || !bot->num_vertices ||
-	!bot->num_faces ||
-	bot->num_faces > std::numeric_limits<size_t>::max() / 6u ||
-	bot->num_faces > std::numeric_limits<uint32_t>::max() / 3u)
-	return 0;
-    RT_BOT_CK_MAGIC(bot);
-
-    Obol::WireRep wire;
-    wire.bounds.makeEmpty();
-    wire.segmentPoints.reserve(bot->num_faces * 6u);
-    wire.segmentIds.reserve(bot->num_faces * 3u);
-    uint32_t segmentId = 0;
-    for (size_t i = 0; i < bot->num_faces; i++) {
-	const int *face = &bot->faces[i * 3];
-	if (face[0] < 0 || face[1] < 0 || face[2] < 0 ||
-	    static_cast<size_t>(face[0]) >= bot->num_vertices ||
-	    static_cast<size_t>(face[1]) >= bot->num_vertices ||
-	    static_cast<size_t>(face[2]) >= bot->num_vertices)
-	    continue;
-	const int edge[3][2] = {
-	    {face[0], face[1]}, {face[1], face[2]}, {face[2], face[0]}
-	};
-	for (size_t j = 0; j < 3; j++) {
-	    const fastf_t *a = &bot->vertices[edge[j][0] * 3];
-	    const fastf_t *b = &bot->vertices[edge[j][1] * 3];
-	    const SbVec3f start(static_cast<float>(a[X]),
-		static_cast<float>(a[Y]), static_cast<float>(a[Z]));
-	    const SbVec3f end(static_cast<float>(b[X]),
-		static_cast<float>(b[Y]), static_cast<float>(b[Z]));
-	    wire.segmentPoints.push_back(start);
-	    wire.segmentPoints.push_back(end);
-	    wire.segmentIds.push_back(segmentId++);
-	    wire.bounds.extendBy(start);
-	    wire.bounds.extendBy(end);
-	}
-    }
-    if (wire.segmentPoints.empty())
-	return 0;
-    geometry.wire = std::move(wire);
-    bobol_performance_counter_add(BOBOL_PERF_VLIST_POINTS,
-	static_cast<uint64_t>(bot->num_faces) * 4u);
-    return 1;
-}
 
 static double
 nonnegative_or_default(float value, double defaultValue)
@@ -1751,9 +1708,9 @@ realize_walk_extend_bounds(realize_walk_data *data,
 }
 
 static int cad_vlist_part_geometry(const SoBRLVListShape *shape,
-	Obol::PartGeometry &geometry);
+	Obol::PartGeometryBuilder &geometry);
 static int cad_mesh_part_geometry(const SoBRLMeshShape *shape,
-	Obol::PartGeometry &geometry);
+	Obol::PartGeometryBuilder &geometry);
 struct compact_occurrence_build {
     BObolCompactOccurrence occurrence;
     SoBRLCadAssembly::InstanceSemantic semantic;
@@ -1918,7 +1875,7 @@ compact_apply_walk_identity(const SoBRLDatabaseSource *source,
 		    duplicateOrdinal >> (i * 8)));
 	}
 	const Obol::InstanceId instance =
-	    Obol::CadIdBuilder::hash128(occurrenceKey);
+	    Obol::CadIdBuilder::instanceId(occurrenceKey);
 	entry.instance = instance;
 	index.instances.back().instance = instance;
 	/* db_path_to_string omits a direct combination member's occurrence
@@ -2858,7 +2815,7 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
 
 static int
 cad_wire_part_geometry_from_plot_internal(struct rt_db_internal *intern,
-	const SoBRLDatabaseSource *source, Obol::PartGeometry &geometry)
+	const SoBRLDatabaseSource *source, Obol::PartGeometryBuilder &geometry)
 {
     if (!internal_payload_magic_valid(intern) || !intern->idb_meth ||
 	!intern->idb_meth->ft_plot)
@@ -2968,7 +2925,7 @@ cad_wire_level_equal(const std::vector<SbVec3f> &leftPoints,
 static int
 cad_progressive_wire_part_geometry_from_provider(
     struct rt_db_internal *intern, const SoBRLDatabaseSource *source,
-    Obol::PartGeometry &geometry)
+    Obol::PartGeometryBuilder &geometry)
 {
     if (!source_mesh_lod_active(source) ||
 	!internal_payload_magic_valid(intern) || !intern->idb_meth ||
@@ -3111,7 +3068,7 @@ vlist_from_lod_realization_internal(struct rt_db_internal *intern,
 static int
 cad_wire_part_geometry_from_lod_realization_internal(
 	struct rt_db_internal *intern, const SoBRLDatabaseSource *source,
-	const SbBox3f &localBounds, Obol::PartGeometry &geometry,
+	const SbBox3f &localBounds, Obol::PartGeometryBuilder &geometry,
 	bool *viewDependentCsgGeometry = NULL)
 {
     if (viewDependentCsgGeometry)
@@ -3312,7 +3269,7 @@ static union tree *
 		return make_nop_tree();
 	    }
 
-	    Obol::PartGeometry generated;
+	    Obol::PartGeometryBuilder generated;
 	    viewDependentCsgGeometry = false;
 	    int generatedGeometry = localIntern->idb_type == ID_BOT ?
 		cad_wire_part_geometry_from_bot(
@@ -3479,7 +3436,7 @@ static union tree *
 	std::shared_ptr<const Obol::PartGeometry> cadGeometry =
 	    cachedCadGeometry;
 	if (!cadGeometry && sharedShape) {
-	    Obol::PartGeometry generated;
+	    Obol::PartGeometryBuilder generated;
 	    if (cad_vlist_part_geometry(sharedShape, generated))
 		cadGeometry = data->cache->storeWireCadGeometry(cacheKey,
 		    std::move(generated), typeLabel, geometryKind);
@@ -3722,7 +3679,7 @@ static int
 source_has_auxiliary_children(const SoBRLDatabaseSource *source);
 static int
 cad_vlist_part_geometry(const SoBRLVListShape *shape,
-			Obol::PartGeometry &geometry);
+			Obol::PartGeometryBuilder &geometry);
 
 static int
 realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
@@ -3970,7 +3927,7 @@ realize_direct_leaf_wireframe_compact(
 	const int usedLodProxy = bot_lod_proxy_bounds(&validInternal.local,
 	    wireLodThreshold, lodProxyBounds);
 	if (usedLodProxy) {
-	    Obol::PartGeometry generated;
+	    Obol::PartGeometryBuilder generated;
 	    if (cad_wire_part_geometry_from_aabb(lodProxyBounds, generated)) {
 		geometryKind = "aabb";
 		localBounds = lodProxyBounds;
@@ -4000,7 +3957,7 @@ realize_direct_leaf_wireframe_compact(
 	}
 
 	if (!cadGeometry) {
-	    Obol::PartGeometry generated;
+	    Obol::PartGeometryBuilder generated;
 	    viewDependentCsgGeometry = false;
 	    int generatedGeometry = 0;
 	    if (validInternal.local.idb_type == ID_BOT)
@@ -4200,7 +4157,7 @@ vlist_from_pnts(const struct rt_pnts_internal *pnts)
 
 static int
 cad_points_part_geometry_from_pnts(const struct rt_pnts_internal *pnts,
-	Obol::PartGeometry &geometry)
+	Obol::PartGeometryBuilder &geometry)
 {
     if (!pnts || !pnts->point || pnts->count == 0)
 	return 0;
@@ -4322,166 +4279,6 @@ cad_points_part_geometry_from_pnts(const struct rt_pnts_internal *pnts,
     return 1;
 }
 
-static void
-sanitize_triangle_normals(std::vector<SbVec3f> &normals,
-			  const std::vector<SbVec3f> &points,
-			  const std::vector<int32_t> &triangles);
-
-static int
-canonicalize_corner_normal_mesh(Obol::TriMesh &mesh,
-	const std::vector<SbVec3f> &cornerNormals);
-
-/* Missing normals carry no author intent to smooth.  Preserve BRL-CAD's
- * default shaded-BoT semantics by using the geometric normal of each triangle
- * at all three corners.  The separate per-view smooth policy may explicitly
- * synthesize presentation normals later. */
-template <typename Index>
-static void
-generate_flat_triangle_normals(std::vector<SbVec3f> &normals,
-			       const std::vector<SbVec3f> &points,
-			       const std::vector<Index> &triangles)
-{
-    normals.clear();
-    if (points.empty() || triangles.empty() || triangles.size() % 3)
-	return;
-
-    const size_t faceCount = triangles.size() / 3;
-    normals.reserve(triangles.size());
-    for (size_t faceIndex = 0; faceIndex < faceCount; faceIndex++) {
-	const size_t indexBase = faceIndex * 3;
-	const uint64_t ia = static_cast<uint64_t>(triangles[indexBase]);
-	const uint64_t ib = static_cast<uint64_t>(triangles[indexBase + 1]);
-	const uint64_t ic = static_cast<uint64_t>(triangles[indexBase + 2]);
-	if (ia >= points.size() || ib >= points.size() || ic >= points.size()) {
-	    normals.clear();
-	    return;
-	}
-
-	SbVec3f normal =
-	    (points[static_cast<size_t>(ib)] - points[static_cast<size_t>(ia)]).cross(
-		points[static_cast<size_t>(ic)] - points[static_cast<size_t>(ia)]);
-	if (normal.length() > 0.0f)
-	    normal.normalize();
-	else
-	    normal = SbVec3f(0.0f, 0.0f, 1.0f);
-	normals.push_back(normal);
-	normals.push_back(normal);
-	normals.push_back(normal);
-    }
-}
-
-template <typename Index>
-static void
-generate_smooth_triangle_normals(std::vector<SbVec3f> &normals,
-				 const std::vector<SbVec3f> &points,
-				 const std::vector<Index> &triangles,
-				 float creaseAngleDegrees)
-{
-    normals.clear();
-    if (points.empty() || triangles.empty() || triangles.size() % 3)
-	return;
-
-    const size_t faceCount = triangles.size() / 3;
-    std::vector<SbVec3f> faceNormals(faceCount);
-    std::vector<std::vector<size_t>> vertexFaces(points.size());
-    for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
-	const size_t base = faceIndex * 3;
-	const uint64_t ia = static_cast<uint64_t>(triangles[base]);
-	const uint64_t ib = static_cast<uint64_t>(triangles[base + 1]);
-	const uint64_t ic = static_cast<uint64_t>(triangles[base + 2]);
-	if (ia >= points.size() || ib >= points.size() || ic >= points.size()) {
-	    normals.clear();
-	    return;
-	}
-	SbVec3f normal =
-	    (points[static_cast<size_t>(ib)] -
-	     points[static_cast<size_t>(ia)]).cross(
-		points[static_cast<size_t>(ic)] -
-		points[static_cast<size_t>(ia)]);
-	if (normal.sqrLength() > 0.0f)
-	    normal.normalize();
-	else
-	    normal.setValue(0.0f, 0.0f, 1.0f);
-	faceNormals[faceIndex] = normal;
-	vertexFaces[static_cast<size_t>(ia)].push_back(faceIndex);
-	vertexFaces[static_cast<size_t>(ib)].push_back(faceIndex);
-	vertexFaces[static_cast<size_t>(ic)].push_back(faceIndex);
-    }
-
-    const float clampedAngle =
-	std::max(0.0f, std::min(180.0f, creaseAngleDegrees));
-    const float creaseCosine =
-	static_cast<float>(std::cos(clampedAngle * M_PI / 180.0));
-    normals.reserve(triangles.size());
-    for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
-	const SbVec3f &faceNormal = faceNormals[faceIndex];
-	for (size_t corner = 0; corner < 3; ++corner) {
-	    const size_t vertexIndex = static_cast<size_t>(
-		triangles[faceIndex * 3 + corner]);
-	    SbVec3f smoothNormal(0.0f, 0.0f, 0.0f);
-	    for (const size_t adjacentFace : vertexFaces[vertexIndex]) {
-		const SbVec3f &candidate = faceNormals[adjacentFace];
-		if (candidate.dot(faceNormal) >= creaseCosine)
-		    smoothNormal += candidate;
-	    }
-	    if (smoothNormal.sqrLength() > 0.0f)
-		smoothNormal.normalize();
-	    else
-		smoothNormal = faceNormal;
-	    normals.push_back(smoothNormal);
-	}
-    }
-}
-
-static bool
-bot_authored_triangle_normals(std::vector<SbVec3f> &normals,
-			     const struct rt_bot_internal *bot)
-{
-    normals.clear();
-    if (!bot ||
-	(bot->bot_flags &
-	    (RT_BOT_HAS_SURFACE_NORMALS | RT_BOT_USE_NORMALS)) !=
-	    (RT_BOT_HAS_SURFACE_NORMALS | RT_BOT_USE_NORMALS) ||
-	!bot->normals || !bot->face_normals ||
-	bot->num_face_normals < bot->num_faces)
-	return false;
-
-    normals.reserve(bot->num_faces * 3);
-    for (size_t faceIndex = 0; faceIndex < bot->num_faces; faceIndex++) {
-	for (size_t corner = 0; corner < 3; corner++) {
-	    const size_t sourceCorner =
-		(bot->orientation == RT_BOT_CW && corner > 0) ? 3 - corner : corner;
-	    const int normalIndex =
-		bot->face_normals[faceIndex * 3 + sourceCorner];
-	    if (normalIndex < 0 ||
-		static_cast<size_t>(normalIndex) >= bot->num_normals) {
-		normals.clear();
-		return false;
-	    }
-	    const fastf_t *normal = &bot->normals[static_cast<size_t>(normalIndex) * 3];
-	    SbVec3f converted(static_cast<float>(normal[X]),
-		static_cast<float>(normal[Y]), static_cast<float>(normal[Z]));
-	    if (converted.length() <= 0.0f) {
-		normals.clear();
-		return false;
-	    }
-	    converted.normalize();
-	    normals.push_back(converted);
-	}
-    }
-    return true;
-}
-
-template <typename Index>
-static void
-bot_triangle_normals(std::vector<SbVec3f> &normals,
-		     const struct rt_bot_internal *bot,
-		     const std::vector<SbVec3f> &points,
-		     const std::vector<Index> &triangles)
-{
-    if (!bot_authored_triangle_normals(normals, bot))
-	generate_flat_triangle_normals(normals, points, triangles);
-}
 
 static SoBRLMeshShape *
 mesh_from_bot(const struct rt_bot_internal *bot,
@@ -4522,7 +4319,7 @@ mesh_from_bot(const struct rt_bot_internal *bot,
     }
 
     std::vector<SbVec3f> normals;
-    bot_triangle_normals(normals, bot, points, indices);
+    cad_bot_triangle_normals(normals, bot, points, indices);
     sanitize_triangle_normals(normals, points, indices);
 
     uint32_t threshold = source ? source->lodBotThreshold.getValue() : 0;
@@ -4536,62 +4333,6 @@ mesh_from_bot(const struct rt_bot_internal *bot,
     return shape;
 }
 
-static int
-cad_mesh_part_geometry_from_bot(const struct rt_bot_internal *bot,
-	Obol::PartGeometry &geometry)
-{
-    if (!bot || !bot->vertices || !bot->faces ||
-	bot->num_vertices == 0 || bot->num_faces == 0)
-	return 0;
-    RT_BOT_CK_MAGIC(bot);
-
-    Obol::TriMesh mesh;
-    mesh.bounds.makeEmpty();
-    mesh.positions.reserve(bot->num_vertices);
-    for (size_t i = 0; i < bot->num_vertices; i++) {
-	const SbVec3f point(static_cast<float>(bot->vertices[i * 3]),
-	    static_cast<float>(bot->vertices[i * 3 + 1]),
-	    static_cast<float>(bot->vertices[i * 3 + 2]));
-	mesh.positions.push_back(point);
-	mesh.bounds.extendBy(point);
-    }
-
-    if (bot->num_faces > std::numeric_limits<size_t>::max() / 3)
-	return 0;
-    mesh.indices.reserve(bot->num_faces * 3);
-    for (size_t i = 0; i < bot->num_faces; i++) {
-	const int *face = &bot->faces[i * 3];
-	if (face[0] < 0 || face[1] < 0 || face[2] < 0 ||
-	    static_cast<size_t>(face[0]) >= bot->num_vertices ||
-	    static_cast<size_t>(face[1]) >= bot->num_vertices ||
-	    static_cast<size_t>(face[2]) >= bot->num_vertices)
-	    return 0;
-	mesh.indices.push_back(static_cast<uint32_t>(face[0]));
-	if (bot->orientation == RT_BOT_CW) {
-	    mesh.indices.push_back(static_cast<uint32_t>(face[2]));
-	    mesh.indices.push_back(static_cast<uint32_t>(face[1]));
-	} else {
-	    mesh.indices.push_back(static_cast<uint32_t>(face[1]));
-	    mesh.indices.push_back(static_cast<uint32_t>(face[2]));
-	}
-    }
-    if (mesh.bounds.isEmpty() || mesh.indices.empty())
-	return 0;
-    bot_triangle_normals(mesh.normals, bot, mesh.positions, mesh.indices);
-    if (!canonicalize_corner_normal_mesh(mesh, mesh.normals))
-	return 0;
-    geometry.shaded = std::move(mesh);
-    geometry.shadedCullBackfaces =
-	bot->mode == RT_BOT_SOLID &&
-	bot->orientation != RT_BOT_UNORIENTED &&
-	bot->num_vertices <= static_cast<size_t>(INT_MAX) &&
-	bot->num_faces <= static_cast<size_t>(INT_MAX) &&
-	bg_trimesh_solid2(static_cast<int>(bot->num_vertices),
-	    static_cast<int>(bot->num_faces),
-	    const_cast<fastf_t *>(bot->vertices),
-	    const_cast<int *>(bot->faces), NULL) == 0;
-    return 1;
-}
 
 static void
 primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *faceSet)
@@ -4699,139 +4440,11 @@ indexed_faces_to_triangles(const int *indices,
     return faceCount > 0 && !triangles.empty();
 }
 
-static void
-sanitize_triangle_normals(std::vector<SbVec3f> &normals,
-			  const std::vector<SbVec3f> &points,
-			  const std::vector<int32_t> &triangles)
-{
-    if (normals.empty()) {
-	generate_flat_triangle_normals(normals, points, triangles);
-	return;
-    }
-    if (normals.size() != triangles.size())
-	return;
-
-    for (size_t i = 0; i + 2 < triangles.size(); i += 3) {
-	const int32_t ia = triangles[i];
-	const int32_t ib = triangles[i + 1];
-	const int32_t ic = triangles[i + 2];
-	if (ia < 0 || ib < 0 || ic < 0 ||
-	    static_cast<size_t>(ia) >= points.size() ||
-	    static_cast<size_t>(ib) >= points.size() ||
-	    static_cast<size_t>(ic) >= points.size())
-	    continue;
-
-	SbVec3f faceNormal =
-	    (points[static_cast<size_t>(ib)] - points[static_cast<size_t>(ia)]).cross(
-		points[static_cast<size_t>(ic)] - points[static_cast<size_t>(ia)]);
-	if (faceNormal.length() > 0.0f)
-	    faceNormal.normalize();
-	else
-	    continue;
-
-	float normalDot = 0.0f;
-	for (size_t j = 0; j < 3; j++) {
-	    SbVec3f &n = normals[i + j];
-	    if (n.length() > 0.0f) {
-		n.normalize();
-		normalDot += n.dot(faceNormal);
-	}
-}
-
-	if (normalDot < 0.0f) {
-	    for (size_t j = 0; j < 3; j++)
-		normals[i + j].negate();
-	}
-
-	for (size_t j = 0; j < 3; j++) {
-	    if (normals[i + j].length() <= 0.0f)
-		normals[i + j] = faceNormal;
-	}
-    }
-}
-
-static uint32_t
-corner_normal_float_bits(float value)
-{
-    uint32_t bits = 0;
-    memcpy(&bits, &value, sizeof(bits));
-    return bits;
-}
-
-struct CornerNormalVertexKey {
-    uint32_t position;
-    uint32_t normalX;
-    uint32_t normalY;
-    uint32_t normalZ;
-
-    bool operator<(const CornerNormalVertexKey &other) const
-    {
-	if (position != other.position)
-	    return position < other.position;
-	if (normalX != other.normalX)
-	    return normalX < other.normalX;
-	if (normalY != other.normalY)
-	    return normalY < other.normalY;
-	return normalZ < other.normalZ;
-    }
-};
-
-/* Obol's indexed mesh format binds one normal to each vertex.  BRL-CAD mesh
- * producers keep normals per triangle corner, so split only corners whose
- * normal differs instead of losing smooth shading or duplicating every vertex. */
-static int
-canonicalize_corner_normal_mesh(Obol::TriMesh &mesh,
-	const std::vector<SbVec3f> &cornerNormals)
-{
-    if (cornerNormals.empty()) {
-	mesh.normals.clear();
-	return 1;
-    }
-    if (cornerNormals.size() != mesh.indices.size())
-	return 0;
-
-    std::map<CornerNormalVertexKey, uint32_t> vertexByCorner;
-    std::vector<SbVec3f> positions;
-    std::vector<SbVec3f> normals;
-    std::vector<uint32_t> indices;
-    positions.reserve(mesh.indices.size());
-    normals.reserve(mesh.indices.size());
-    indices.reserve(mesh.indices.size());
-    for (size_t i = 0; i < mesh.indices.size(); ++i) {
-	const uint32_t sourceIndex = mesh.indices[i];
-	if (sourceIndex >= mesh.positions.size())
-	    return 0;
-	SbVec3f normal = cornerNormals[i];
-	if (normal.sqrLength() > 0.0f)
-	    normal.normalize();
-	else
-	    normal.setValue(0.0f, 0.0f, 1.0f);
-	const CornerNormalVertexKey key = {
-	    sourceIndex,
-	    corner_normal_float_bits(normal[0]),
-	    corner_normal_float_bits(normal[1]),
-	    corner_normal_float_bits(normal[2])
-	};
-	auto found = vertexByCorner.find(key);
-	if (found == vertexByCorner.end()) {
-	    const uint32_t index = static_cast<uint32_t>(positions.size());
-	    positions.push_back(mesh.positions[sourceIndex]);
-	    normals.push_back(normal);
-	    found = vertexByCorner.emplace(key, index).first;
-	}
-	indices.push_back(found->second);
-    }
-
-    mesh.positions = std::move(positions);
-    mesh.normals = std::move(normals);
-    mesh.indices = std::move(indices);
-    return 1;
-}
 
 static int
 cad_mesh_part_geometry_from_indexed_face_set(
 	const struct rt_primitive_indexed_face_set *faceSet,
-	Obol::PartGeometry &geometry)
+	Obol::PartGeometryBuilder &geometry)
 {
     if (!faceSet || !faceSet->points || !faceSet->point_count ||
 	!faceSet->indices || !faceSet->index_count)
@@ -5051,7 +4664,7 @@ bobol_database_brep_staged_mesh_variant(
 static int
 cad_mesh_part_geometry_from_primitive_face_set(
 	struct rt_db_internal *intern, const struct bg_tess_tol *ttol,
-	const struct bn_tol *tol, Obol::PartGeometry &geometry)
+	const struct bn_tol *tol, Obol::PartGeometryBuilder &geometry)
 {
     if (!internal_payload_magic_valid(intern) ||
 	!intern->idb_meth->ft_indexed_face_set || !ttol || !tol)
@@ -5329,7 +4942,7 @@ struct compact_mesh_prefill_job {
     std::string cacheKey;
     std::string path;
     std::string sourceType;
-    Obol::PartGeometry geometry;
+    Obol::PartGeometryBuilder geometry;
     bool lodBacked;
     BObolSourceMeshRequest sourceMeshRequest;
     /* A non-null representative means this job reuses its immutable geometry
@@ -5859,7 +5472,7 @@ struct compact_mesh_prefill_workers {
 static int
 cad_mesh_part_geometry_from_tessellated_internal(
 	struct rt_db_internal *intern, const struct bg_tess_tol *ttol,
-	const struct bn_tol *tol, Obol::PartGeometry &geometry)
+	const struct bn_tol *tol, Obol::PartGeometryBuilder &geometry)
 {
     if (!internal_payload_magic_valid(intern) || !ttol || !tol)
 	return 0;
@@ -5906,158 +5519,10 @@ cad_mesh_part_geometry_from_tessellated_internal(
     return converted;
 }
 
-static int
-cad_mesh_append_hidden_line_edges(Obol::PartGeometry &geometry)
-{
-    if (!geometry.shaded)
-	return 0;
-    const Obol::TriMesh &mesh = *geometry.shaded;
-    Obol::WireRep wire;
-    wire.bounds = mesh.bounds;
-    std::unordered_set<uint64_t> edges;
-    uint32_t segmentId = 0;
-    auto addEdge = [&](uint32_t a, uint32_t b) {
-	if (a >= mesh.positions.size() || b >= mesh.positions.size())
-	    return;
-	if (a > b)
-	    std::swap(a, b);
-	const uint64_t key = (static_cast<uint64_t>(a) << 32) | b;
-	if (!edges.insert(key).second)
-	    return;
-	wire.segmentPoints.push_back(mesh.positions[a]);
-	wire.segmentPoints.push_back(mesh.positions[b]);
-	wire.segmentIds.push_back(segmentId++);
-    };
-    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
-	addEdge(mesh.indices[i], mesh.indices[i + 1]);
-	addEdge(mesh.indices[i + 1], mesh.indices[i + 2]);
-	addEdge(mesh.indices[i + 2], mesh.indices[i]);
-    }
-    if (wire.segmentPoints.empty())
-	return 0;
-    geometry.wire = std::move(wire);
-    return 1;
-}
-
-static size_t
-cad_geometry_saturating_add(size_t total, size_t count, size_t elementSize)
-{
-    if (!count || !elementSize || total == SIZE_MAX)
-	return total;
-    if (count > SIZE_MAX / elementSize)
-	return SIZE_MAX;
-    const size_t bytes = count * elementSize;
-    return bytes > SIZE_MAX - total ? SIZE_MAX : total + bytes;
-}
-
-size_t
-bobol_database_part_geometry_estimate_bytes(
-    const Obol::PartGeometry &geometry)
-{
-    size_t bytes = sizeof(geometry);
-    const auto addTriangleMesh = [&bytes](const Obol::TriMesh &mesh) {
-	bytes = cad_geometry_saturating_add(bytes,
-	    mesh.positions.capacity(), sizeof(SbVec3f));
-	bytes = cad_geometry_saturating_add(bytes,
-	    mesh.normals.capacity(), sizeof(SbVec3f));
-	bytes = cad_geometry_saturating_add(bytes,
-	    mesh.indices.capacity(), sizeof(uint32_t));
-	bytes = cad_geometry_saturating_add(bytes,
-	    mesh.progressiveCuts.capacity(),
-	    sizeof(Obol::ProgressiveTriangleCut));
-	bytes = cad_geometry_saturating_add(bytes,
-	    mesh.progressiveClusters.capacity(),
-	    sizeof(Obol::ProgressiveTriangleCluster));
-	for (const Obol::ProgressiveTriangleCluster &cluster :
-	     mesh.progressiveClusters)
-	    bytes = cad_geometry_saturating_add(bytes,
-		cluster.ranges.capacity(),
-		sizeof(Obol::ProgressiveTriangleClusterRange));
-    };
-
-    if (geometry.points) {
-	const Obol::PointRep &points = *geometry.points;
-	bytes = cad_geometry_saturating_add(bytes,
-	    points.positions.capacity(), sizeof(SbVec3f));
-	bytes = cad_geometry_saturating_add(bytes,
-	    points.pointIds.capacity(), sizeof(uint32_t));
-	bytes = cad_geometry_saturating_add(bytes,
-	    points.colorValid.capacity(), sizeof(uint8_t));
-	bytes = cad_geometry_saturating_add(bytes,
-	    points.colors.capacity(), sizeof(SbColor));
-	bytes = cad_geometry_saturating_add(bytes,
-	    points.scaleValid.capacity(), sizeof(uint8_t));
-	bytes = cad_geometry_saturating_add(bytes,
-	    points.scales.capacity(), sizeof(float));
-	bytes = cad_geometry_saturating_add(bytes,
-	    points.normalValid.capacity(), sizeof(uint8_t));
-	bytes = cad_geometry_saturating_add(bytes,
-	    points.normals.capacity(), sizeof(SbVec3f));
-    }
-    if (geometry.shaded)
-	addTriangleMesh(*geometry.shaded);
-    if (geometry.wire) {
-	const Obol::WireRep &wire = *geometry.wire;
-	bytes = cad_geometry_saturating_add(bytes,
-	    wire.segmentPoints.capacity(), sizeof(SbVec3f));
-	bytes = cad_geometry_saturating_add(bytes,
-	    wire.segmentIds.capacity(), sizeof(uint32_t));
-	bytes = cad_geometry_saturating_add(bytes,
-	    wire.polylines.capacity(), sizeof(Obol::WirePolyline));
-	for (const Obol::WirePolyline &polyline : wire.polylines)
-	    bytes = cad_geometry_saturating_add(bytes,
-		polyline.points.capacity(), sizeof(SbVec3f));
-	bytes = cad_geometry_saturating_add(bytes,
-	    wire.progressiveCuts.capacity(),
-	    sizeof(Obol::ProgressiveWireCut));
-	bytes = cad_geometry_saturating_add(bytes,
-	    wire.progressiveClusters.capacity(),
-	    sizeof(Obol::ProgressiveWireCluster));
-	for (const Obol::ProgressiveWireCluster &cluster :
-	     wire.progressiveClusters)
-	    bytes = cad_geometry_saturating_add(bytes,
-		cluster.ranges.capacity(),
-		sizeof(Obol::ProgressiveWireClusterRange));
-	/* A triangle-edge alias can own a mesh independently of the shaded
-	 * channel.  Count it once when it is not that channel's storage. */
-	if (wire.triangleEdges &&
-	    (!geometry.shaded ||
-	     wire.triangleEdges.get() != &*geometry.shaded))
-	    addTriangleMesh(*wire.triangleEdges);
-    }
-    return bytes;
-}
-
-std::shared_ptr<const Obol::PartGeometry>
-bobol_database_bot_part_geometry(const struct rt_bot_internal *bot,
-    int drawMode)
-{
-    Obol::PartGeometry geometry;
-    int valid = 0;
-    if (drawMode == BOBOL_LOD_DRAW_WIRE) {
-	valid = cad_wire_part_geometry_from_bot(bot, geometry);
-    } else if (drawMode == BOBOL_LOD_DRAW_SHADED ||
-	drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
-	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE) {
-	valid = cad_mesh_part_geometry_from_bot(bot, geometry);
-	if (valid && drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE)
-	    valid = cad_mesh_append_hidden_line_edges(geometry);
-    }
-    if (!valid)
-	return std::shared_ptr<const Obol::PartGeometry>();
-
-    geometry.subpixelProxyEligible = true;
-    try {
-	return std::make_shared<const Obol::PartGeometry>(
-	    std::move(geometry));
-    } catch (const std::bad_alloc &) {
-	return std::shared_ptr<const Obol::PartGeometry>();
-    }
-}
 
 static int
 cad_mesh_part_geometry_from_internal(struct rt_db_internal *intern,
-	const SoBRLDatabaseSource *source, Obol::PartGeometry &geometry)
+	const SoBRLDatabaseSource *source, Obol::PartGeometryBuilder &geometry)
 {
     if (!internal_payload_magic_valid(intern))
 	return 0;
@@ -6872,7 +6337,7 @@ realize_direct_leaf_mesh_compact(
 	    SbBox3f localBounds;
 	    if (source_view_lod_active(source))
 		(void)local_bounds_from_internal(&validInternal.local, localBounds);
-	    Obol::PartGeometry generated;
+	    Obol::PartGeometryBuilder generated;
 	    int generatedGeometry = 0;
 	    BObolSourceMeshRequest sourceMeshRequest;
 	    bool lodBacked = false;
@@ -7082,7 +6547,7 @@ realize_direct_leaf_mesh_compact(
 	    (cachedWire->viewDependentCsgGeometry ? TRUE : FALSE) :
 	    (generatedViewDependentCsgGeometry ? TRUE : FALSE);
 	if (!occurrence.geometry && sharedVListShape) {
-	    Obol::PartGeometry generated;
+	    Obol::PartGeometryBuilder generated;
 	    if (cad_vlist_part_geometry(sharedVListShape, generated))
 		occurrence.geometry = cache->storeMeshVListCadGeometry(cacheKey,
 		    std::move(generated), typeLabel, geometryKind);
@@ -7110,7 +6575,7 @@ realize_direct_leaf_mesh_compact(
 	occurrence.geometry = cachedMesh ? cachedMesh->geometry :
 	    std::shared_ptr<const Obol::PartGeometry>();
 	if (!occurrence.geometry && sharedMeshShape) {
-	    Obol::PartGeometry generated;
+	    Obol::PartGeometryBuilder generated;
 	    if (cad_mesh_part_geometry(sharedMeshShape, generated))
 		occurrence.geometry = cache->storeMeshCadGeometry(cacheKey,
 		    std::move(generated), typeLabel, geometryKind, NULL,
@@ -7344,7 +6809,7 @@ compact_stream_lod_cached_asset(realize_walk_data *data,
     const BObolCachedPartGeometry *assetGeometry =
 	data->cache->findMeshCadGeometry(assetCacheKey);
     if (!assetGeometry) {
-	Obol::PartGeometry generated;
+	Obol::PartGeometryBuilder generated;
 	if (!cad_wire_part_geometry_from_aabb(assetRequest.bounds, generated))
 	    return NULL;
 	data->cache->storeMeshCadGeometry(assetCacheKey, std::move(generated),
@@ -7650,7 +7115,7 @@ static union tree *
 		SbBox3f localBounds;
 		if (source_view_lod_active(data->source))
 		    (void)local_bounds_from_internal(localIntern, localBounds);
-		Obol::PartGeometry generated;
+		Obol::PartGeometryBuilder generated;
 		int generatedGeometry = 0;
 		if (internalType == ID_PNTS) {
 		    generatedGeometry = cad_points_part_geometry_from_pnts(
@@ -7681,7 +7146,7 @@ static union tree *
 		    cachedWire = data->cache->findMeshVListCadGeometry(cacheKey);
 		}
 	    } else if (data->source->lodBotThreshold.getValue() > 0) {
-		Obol::PartGeometry generated;
+		Obol::PartGeometryBuilder generated;
 		BObolSourceMeshRequest sourceMeshRequest;
 		bool lodBacked = false;
 		bool transformedReuse = false;
@@ -7711,40 +7176,43 @@ static union tree *
 		    if (data->stream_sink &&
 			!data->stream_sink->isCancelled()) {
 			BObolCompactOccurrence provisional;
-			provisional.geometry =
-			    std::make_shared<Obol::PartGeometry>(generated);
-			provisional.localTransform =
-			    mat_to_sbmatrix(tsp->ts_mat);
-			std::string provisionalPath =
-			    assetPath ? assetPath :
-			    (dp->d_namep ? dp->d_namep : "");
-			if (duplicateOrdinal > 0) {
-			    char suffix[32] = {0};
-			    snprintf(suffix, sizeof(suffix), "@%u",
-				duplicateOrdinal);
-			    provisionalPath += suffix;
+			provisional.geometry = bobol_cad_build_geometry(
+			    generated, "provisional large-mesh bounds");
+			if (provisional.geometry) {
+			    provisional.localTransform =
+				mat_to_sbmatrix(tsp->ts_mat);
+			    std::string provisionalPath =
+				assetPath ? assetPath :
+				(dp->d_namep ? dp->d_namep : "");
+			    if (duplicateOrdinal > 0) {
+				char suffix[32] = {0};
+				snprintf(suffix, sizeof(suffix), "@%u",
+				    duplicateOrdinal);
+				provisionalPath += suffix;
+			    }
+			    provisional.summary =
+				compact_occurrence_tree_summary(
+				    data->source, tsp, pathp,
+				    provisionalPath.c_str(),
+				    dp->d_namep,
+				    primitive_type_label(localIntern),
+				    "aabb", data->revision,
+				    BObolRealizedShapeSummary::SHAPE_MESH,
+				    static_cast<BObolMaterialColorSweep *>(
+					data->material_sweep));
+			    provisional.occurrenceIndex =
+				pathp->fp_cinst && pathp->fp_len ?
+				static_cast<uint32_t>(
+				    DB_FULL_PATH_GET_COMB_INST(pathp,
+					pathp->fp_len - 1)) : 0;
+			    provisional.booleanOperation =
+				(tsp->ts_sofar & TS_SOFAR_MINUS) ?
+				SoBRLDatabaseSource::BOOLEAN_SUBTRACT :
+				((tsp->ts_sofar & TS_SOFAR_INTER) ?
+				 SoBRLDatabaseSource::BOOLEAN_INTERSECT :
+				 SoBRLDatabaseSource::BOOLEAN_UNION);
+			    realize_walk_stream_push(data, provisional);
 			}
-		    provisional.summary =
-			    compact_occurrence_tree_summary(
-				data->source, tsp, pathp,
-				provisionalPath.c_str(),
-				dp->d_namep, primitive_type_label(localIntern),
-				"aabb", data->revision,
-				BObolRealizedShapeSummary::SHAPE_MESH,
-				static_cast<BObolMaterialColorSweep *>(
-				    data->material_sweep));
-			provisional.occurrenceIndex =
-			    pathp->fp_cinst && pathp->fp_len ?
-			    static_cast<uint32_t>(
-				DB_FULL_PATH_GET_COMB_INST(pathp,
-				    pathp->fp_len - 1)) : 0;
-			provisional.booleanOperation =
-			    (tsp->ts_sofar & TS_SOFAR_MINUS) ?
-			    SoBRLDatabaseSource::BOOLEAN_SUBTRACT :
-			    ((tsp->ts_sofar & TS_SOFAR_INTER) ?
-			     SoBRLDatabaseSource::BOOLEAN_INTERSECT :
-			     SoBRLDatabaseSource::BOOLEAN_UNION);
-			realize_walk_stream_push(data, provisional);
 		    }
 		    transformedReuse =
 			compact_stream_lod_transformed_reuse(data,
@@ -7989,7 +7457,7 @@ static union tree *
 	    input.occurrence.viewDependentCsgGeometry = cachedWire &&
 		cachedWire->viewDependentCsgGeometry ? TRUE : FALSE;
 	    if (!input.occurrence.geometry && sharedVListShape) {
-		Obol::PartGeometry generated;
+		Obol::PartGeometryBuilder generated;
 		if (cad_vlist_part_geometry(sharedVListShape, generated))
 		    input.occurrence.geometry =
 			data->cache->storeMeshVListCadGeometry(cacheKey,
@@ -8023,7 +7491,7 @@ static union tree *
 	    if (cachedMesh)
 		input.occurrence.geometryTransform = cachedMesh->geometryTransform;
 	    if (!input.occurrence.geometry && sharedMeshShape) {
-		Obol::PartGeometry generated;
+		Obol::PartGeometryBuilder generated;
 		if (cad_mesh_part_geometry(sharedMeshShape, generated))
 		    input.occurrence.geometry =
 			data->cache->storeMeshCadGeometry(cacheKey,
@@ -8590,9 +8058,10 @@ private:
     uint64_t second;
 };
 
+template <typename Geometry>
 static int
 cad_part_key_for_geometry(const char *kind,
-			  const Obol::PartGeometry &geometry,
+			  const Geometry &geometry,
 			  std::string &key)
 {
     if (!kind)
@@ -8786,7 +8255,7 @@ cad_vlist_part_geometry_supported(const SoBRLVListShape *shape,
 
 static int
 cad_vlist_part_geometry(const SoBRLVListShape *shape,
-			Obol::PartGeometry &geometry)
+			Obol::PartGeometryBuilder &geometry)
 {
     const SoBRLVListShape *geom = NULL;
     int n = 0;
@@ -8879,7 +8348,7 @@ cad_vlist_part_geometry(const SoBRLVListShape *shape,
 
 static int
 cad_mesh_part_geometry(const SoBRLMeshShape *shape,
-		       Obol::PartGeometry &geometry)
+		       Obol::PartGeometryBuilder &geometry)
 {
     if (!shape || shape->editEmphasis.getValue() ||
 	shape->selectedPrimitive.getNum() > 0 ||
@@ -8936,7 +8405,7 @@ cad_mesh_part_geometry(const SoBRLMeshShape *shape,
     return 1;
 }
 
-static std::string
+std::string
 cad_instance_key(const SoBRLDatabaseSource *source,
 	const char *path, int ordinal)
 {
@@ -8951,7 +8420,7 @@ cad_instance_key(const SoBRLDatabaseSource *source,
     return key;
 }
 
-static SbMatrix
+SbMatrix
 cad_instance_matrix(const SoBRLDatabaseSource *source,
 		    const SbMatrix &localMatrix)
 {
@@ -8970,12 +8439,18 @@ compact_mesh_asset_matrix(const SoBRLDatabaseSource *source,
     return cad_instance_matrix(source, matrix);
 }
 
+struct cad_pending_part {
+    Obol::PartId part;
+    Obol::PartGeometryBuilder geometry;
+};
+
 struct cad_build_data {
     SoBRLDatabaseSource *source;
-    SoBRLCadAssembly *assembly;
     std::map<std::string, Obol::PartId> partIdByKey;
-    std::vector<Obol::PartUpdate> parts;
+    std::vector<cad_pending_part> parts;
     std::vector<Obol::InstanceUpdate> instances;
+    std::vector<std::pair<Obol::InstanceId,
+	SoBRLCadAssembly::InstanceSemantic>> semantics;
     std::vector<Obol::InstanceId> hiddenInstances;
     std::vector<Obol::InstanceId> selectedInstances;
     std::vector<Obol::InstanceId> unpickableInstances;
@@ -8983,13 +8458,12 @@ struct cad_build_data {
     int unsupported;
     int wireCount;
     int shadedCount;
-    int storeSemantics;
 };
 
 static void
 cad_add_part_if_needed(cad_build_data &data,
 		       const std::string &partKey,
-		       const Obol::PartGeometry &geometry,
+		       const Obol::PartGeometryBuilder &geometry,
 		       Obol::PartId &partId)
 {
     std::map<std::string, Obol::PartId>::iterator found =
@@ -8999,9 +8473,9 @@ cad_add_part_if_needed(cad_build_data &data,
 	return;
     }
 
-    partId = Obol::CadIdBuilder::hash128(partKey);
+    partId = Obol::CadIdBuilder::partId(partKey);
     data.partIdByKey[partKey] = partId;
-    Obol::PartUpdate update;
+    cad_pending_part update;
     update.part = partId;
     update.geometry = geometry;
     data.parts.push_back(update);
@@ -9057,7 +8531,7 @@ cad_mesh_semantic(const SoBRLMeshShape *shape)
     return semantic;
 }
 
-static Obol::InstanceStyle
+Obol::InstanceStyle
 cad_source_style(const SoBRLDatabaseSource *source)
 {
     Obol::InstanceStyle style;
@@ -9087,7 +8561,7 @@ cad_source_style(const SoBRLDatabaseSource *source)
     return style;
 }
 
-static const char *
+const char *
 cad_source_leaf_name(const SoBRLDatabaseSource *source)
 {
     if (!source)
@@ -9099,18 +8573,18 @@ cad_source_leaf_name(const SoBRLDatabaseSource *source)
     return (slash && slash[1]) ? slash + 1 : path;
 }
 
-static Obol::InstanceId
+Obol::InstanceId
 cad_source_parent_instance(const SoBRLDatabaseSource *source)
 {
     if (!source)
-	return Obol::CadIdBuilder::Root();
+	return Obol::CadIdBuilder::rootInstance();
     const char *key = source->parentInstanceKey.getValue().getString();
     if (!key || !key[0])
-	return Obol::CadIdBuilder::Root();
-    return Obol::CadIdBuilder::hash128(key);
+	return Obol::CadIdBuilder::rootInstance();
+    return Obol::CadIdBuilder::instanceId(key);
 }
 
-static uint8_t
+uint8_t
 cad_source_boolean_operation(const SoBRLDatabaseSource *source)
 {
     if (!source)
@@ -9123,7 +8597,7 @@ cad_source_boolean_operation(const SoBRLDatabaseSource *source)
     return 0;
 }
 
-static SoBRLCadAssembly::InstanceSemantic
+SoBRLCadAssembly::InstanceSemantic
 cad_source_semantic(const SoBRLDatabaseSource *source,
 		    SoBRLPickDetail::PrimitiveKind primitiveKind)
 {
@@ -9152,2043 +8626,6 @@ cad_source_semantic(const SoBRLDatabaseSource *source,
     return semantic;
 }
 
-static int
-cad_proxy_corners(const BObolLodProxy &proxy, SbVec3f corners[8])
-{
-    if (!proxy.isValid())
-	return 0;
-
-    if (proxy.kind == BOBOL_LOD_PROXY_AABB) {
-	const SbVec3f bmin = proxy.bounds.getMin();
-	const SbVec3f bmax = proxy.bounds.getMax();
-	corners[0].setValue(bmin[0], bmin[1], bmin[2]);
-	corners[1].setValue(bmax[0], bmin[1], bmin[2]);
-	corners[2].setValue(bmax[0], bmax[1], bmin[2]);
-	corners[3].setValue(bmin[0], bmax[1], bmin[2]);
-	corners[4].setValue(bmin[0], bmin[1], bmax[2]);
-	corners[5].setValue(bmax[0], bmin[1], bmax[2]);
-	corners[6].setValue(bmax[0], bmax[1], bmax[2]);
-	corners[7].setValue(bmin[0], bmax[1], bmax[2]);
-	return 1;
-    }
-
-    if (proxy.kind == BOBOL_LOD_PROXY_OBB) {
-	SbVec3f ax = proxy.axisX;
-	SbVec3f ay = proxy.axisY;
-	SbVec3f az = proxy.axisZ;
-	if (ax.length() > 0.0f)
-	    ax.normalize();
-	if (ay.length() > 0.0f)
-	    ay.normalize();
-	if (az.length() > 0.0f)
-	    az.normalize();
-	ax *= proxy.halfExtents[0];
-	ay *= proxy.halfExtents[1];
-	az *= proxy.halfExtents[2];
-	corners[0] = proxy.center - ax - ay - az;
-	corners[1] = proxy.center + ax - ay - az;
-	corners[2] = proxy.center + ax + ay - az;
-	corners[3] = proxy.center - ax + ay - az;
-	corners[4] = proxy.center - ax - ay + az;
-	corners[5] = proxy.center + ax - ay + az;
-	corners[6] = proxy.center + ax + ay + az;
-	corners[7] = proxy.center - ax + ay + az;
-	return 1;
-    }
-
-    return 0;
-}
-
-static int
-cad_wire_geometry_from_corners(const SbVec3f corners[8],
-			       Obol::PartGeometry &geometry)
-{
-    static const int edges[12][2] = {
-	{0, 1}, {1, 2}, {2, 3}, {3, 0},
-	{4, 5}, {5, 6}, {6, 7}, {7, 4},
-	{0, 4}, {1, 5}, {2, 6}, {3, 7}
-    };
-
-    Obol::WireRep wire;
-    wire.bounds.makeEmpty();
-    wire.segmentPoints.reserve(24);
-    wire.segmentIds.reserve(12);
-    for (size_t i = 0; i < 12; i++) {
-	const SbVec3f &a = corners[edges[i][0]];
-	const SbVec3f &b = corners[edges[i][1]];
-	wire.segmentPoints.push_back(a);
-	wire.segmentPoints.push_back(b);
-	wire.segmentIds.push_back(static_cast<uint32_t>(i));
-	wire.bounds.extendBy(a);
-	wire.bounds.extendBy(b);
-    }
-    if (wire.bounds.isEmpty())
-	return 0;
-    geometry.wire = wire;
-    return 1;
-}
-
-static int
-cad_proxy_part_geometry(const BObolLodProxy &proxy,
-			Obol::PartGeometry &geometry)
-{
-    SbVec3f corners[8];
-    if (!cad_proxy_corners(proxy, corners))
-	return 0;
-    if (!cad_wire_geometry_from_corners(corners, geometry))
-	return 0;
-    /* This is a view-LoD AABB/OBB, not authored wire geometry.  Obol may
-     * collapse it into a view-local point when the entire proxy is subpixel. */
-    geometry.subpixelProxyEligible = true;
-    geometry.structuralProxy = true;
-    return 1;
-}
-
-static int
-cad_mesh_payload_part_geometry(const BObolLodMeshPayload &payload,
-			       int wire,
-			       int shaded,
-			       int shadedCullBackfaces,
-			       Obol::PartGeometry &geometry,
-			       BObolViewLodState::NormalStyle normalStyle =
-				   BObolViewLodState::NORMAL_AUTHORED,
-			       float normalCreaseAngle = 60.0f)
-{
-    if (!payload.isValid() || (!wire && !shaded))
-	return 0;
-
-    SbBox3f bounds;
-    bounds.makeEmpty();
-    for (size_t i = 0; i < payload.points.size(); i++)
-	bounds.extendBy(payload.points[i]);
-    if (bounds.isEmpty())
-	return 0;
-
-    if (shaded) {
-	Obol::TriMesh mesh;
-	mesh.positions = payload.points;
-	mesh.bounds = bounds;
-	mesh.indices.reserve(payload.coordIndex.size());
-	for (size_t i = 0; i < payload.coordIndex.size(); i++) {
-	    const int idx = payload.coordIndex[i];
-	    if (idx < 0 || static_cast<size_t>(idx) >= payload.points.size())
-		return 0;
-	    mesh.indices.push_back(static_cast<uint32_t>(idx));
-	}
-	if (mesh.indices.empty())
-	    return 0;
-	std::vector<int32_t> cornerIndices;
-	cornerIndices.reserve(payload.coordIndex.size());
-	for (const int index : payload.coordIndex)
-	    cornerIndices.push_back(index);
-	std::vector<SbVec3f> cornerNormals;
-	if (normalStyle == BObolViewLodState::NORMAL_FLAT) {
-	    generate_flat_triangle_normals(cornerNormals, mesh.positions,
-		cornerIndices);
-	} else if (normalStyle == BObolViewLodState::NORMAL_SMOOTH) {
-	    generate_smooth_triangle_normals(cornerNormals, mesh.positions,
-		cornerIndices, normalCreaseAngle);
-	} else if (payload.normals.size() == payload.coordIndex.size()) {
-	    cornerNormals = payload.normals;
-	}
-	/* An indexed scan mesh without authored normals must stay indexed.
-	 * Expanding flat corner normals here can turn N shared vertices into
-	 * three vertices per face (tens of millions for Lucy), defeating PoP
-	 * residency and creating multi-gigabyte transient maps.  Obol derives a
-	 * flat face normal in the fragment shader, or per triangle in its
-	 * immediate fallback, when this array remains empty. */
-	if (!cornerNormals.empty()) {
-	    sanitize_triangle_normals(cornerNormals, mesh.positions,
-		cornerIndices);
-	    if (!canonicalize_corner_normal_mesh(mesh, cornerNormals))
-		return 0;
-	}
-	geometry.shaded = mesh;
-	geometry.shadedCullBackfaces = shadedCullBackfaces != 0;
-    }
-
-    if (wire) {
-	Obol::WireRep wireRep;
-	wireRep.bounds = bounds;
-	uint32_t edgeId = 0;
-	wireRep.segmentPoints.reserve(payload.coordIndex.size() * 2);
-	wireRep.segmentIds.reserve(payload.coordIndex.size());
-	for (size_t i = 0; i + 2 < payload.coordIndex.size(); i += 3) {
-	    int tri[3] = {
-		payload.coordIndex[i],
-		payload.coordIndex[i + 1],
-		payload.coordIndex[i + 2]
-	    };
-	    for (int e = 0; e < 3; e++) {
-		int a = tri[e];
-		int b = tri[(e + 1) % 3];
-		if (a < 0 || b < 0 ||
-		    static_cast<size_t>(a) >= payload.points.size() ||
-		    static_cast<size_t>(b) >= payload.points.size())
-		    return 0;
-		wireRep.segmentPoints.push_back(
-		    payload.points[static_cast<size_t>(a)]);
-		wireRep.segmentPoints.push_back(
-		    payload.points[static_cast<size_t>(b)]);
-		wireRep.segmentIds.push_back(edgeId++);
-	    }
-	}
-	if (wireRep.segmentPoints.empty())
-	    return 0;
-	geometry.wire = wireRep;
-    }
-
-    /*
-     * This is view-LoD presentation data with conservative full-mesh bounds.
-     * When that entire extent is below one pixel, Obol may keep the retained
-     * mesh and picking identity while drawing it through the aggregate point
-     * channel.  Promotion is then a camera-local mask change, not a reload or
-     * scene traversal.
-     */
-    geometry.subpixelProxyEligible = true;
-    return 1;
-}
-
-static int
-cad_progressive_mesh_part_geometry(
-    const BObolLodProgressiveMeshPtr &progressive,
-    int wire,
-    int shaded,
-    int shadedCullBackfaces,
-    Obol::PartGeometry &geometry,
-    BObolViewLodState::NormalStyle normalStyle =
-	BObolViewLodState::NORMAL_AUTHORED,
-    float normalCreaseAngle = 60.0f)
-{
-    if (!progressive || !progressive->isValid())
-	return 0;
-    const int residentCut = progressive->residentCut();
-    /* residentCut is the highest population prefix loaded from storage,
-     * not necessarily the finest coordinate cut the retained exact arrays
-     * can draw.  Once all points and faces needed by later PoP cuts are
-     * resident, those cuts differ only in the renderer's coordinate snap and
-     * require no further I/O.  Advertise that drawable frontier to Obol;
-     * otherwise it clamps a correctly requested cut back to the last
-     * population-changing cut, leaving small
-     * meshes visibly blocky forever. */
-    int drawableCut = residentCut;
-    for (int cut = residentCut + 1;
-	 cut <= progressive->maximumCut(); ++cut) {
-	if (!progressive->canDrawCut(cut))
-	    break;
-	drawableCut = cut;
-    }
-    BObolLodMeshPayload payload;
-    if (!progressive->copyCut(payload, residentCut) ||
-	!cad_mesh_payload_part_geometry(payload, wire, shaded,
-	    shadedCullBackfaces, geometry, normalStyle, normalCreaseAngle))
-	return 0;
-
-    const int minimumCut = progressive->minimumCut();
-    const SbVec3f quantizationMinimum =
-	progressive->quantizationMinimum();
-    const SbVec3f quantizationMaximum =
-	progressive->quantizationMaximum();
-    const SbBox3f conservativeBounds(
-	quantizationMinimum, quantizationMaximum);
-    if (geometry.shaded.has_value()) {
-	Obol::TriMesh &mesh = *geometry.shaded;
-	/*
-	 * A resident PoP prefix does not necessarily touch the asset's full
-	 * extent.  Its quantization domain does, and is therefore the stable
-	 * conservative bound required by view culling and the aggregate
-	 * subpixel proxy.  Prefix-derived bounds caused objects to cross the
-	 * proxy threshold as data arrived, repeatedly rebuilding large retained
-	 * submissions at an unchanged camera.
-	 */
-	if (!conservativeBounds.isEmpty())
-	    mesh.bounds = conservativeBounds;
-	mesh.progressiveMinimumCut =
-	    static_cast<uint8_t>(std::max(0, minimumCut));
-	mesh.progressiveResidentCut =
-	    static_cast<uint8_t>(std::max(0, drawableCut));
-	mesh.progressiveQuantizationMinimum = quantizationMinimum;
-	mesh.progressiveQuantizationMaximum = quantizationMaximum;
-	mesh.progressiveCuts.resize(
-	    static_cast<size_t>(progressive->maximumCut()) + 1);
-	for (int cut = 0; cut < BOBOL_MESH_LOD_CUT_COUNT_MAX; ++cut) {
-	    if (static_cast<size_t>(cut) >= mesh.progressiveCuts.size())
-		break;
-	    const size_t count = progressive->faceCount(cut) * 3;
-	    mesh.progressiveCuts[cut].indexCount = static_cast<uint32_t>(
-		std::min(count,
-		    static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
-	    BObolMeshLodCutInfo cutInfo = {};
-	    if (!progressive->cutInfo(cut, &cutInfo))
-		return 0;
-	    mesh.progressiveCuts[cut].quantization = {
-		cutInfo.quantization_bits[X], cutInfo.quantization_bits[Y],
-		cutInfo.quantization_bits[Z]
-	    };
-	}
-	/* Record the vertex extent of each cumulative index prefix once while
-	 * constructing the geometry.  Recomputing it from every visible part on
-	 * every render is quadratic bookkeeping for large distinct-mesh scenes.
-	 * Derive it from the finalized Obol indices rather than the source point
-	 * counts because normal canonicalization may split shared vertices. */
-	size_t scannedIndexCount = 0;
-	uint32_t maximumIndex = 0;
-	for (size_t cut = 0; cut < mesh.progressiveCuts.size(); ++cut) {
-	    const size_t indexCount = std::min<size_t>(
-		mesh.progressiveCuts[cut].indexCount, mesh.indices.size());
-	    for (; scannedIndexCount < indexCount; ++scannedIndexCount)
-		maximumIndex = std::max(maximumIndex,
-		    mesh.indices[scannedIndexCount]);
-	    const size_t positionCount = indexCount ?
-		static_cast<size_t>(maximumIndex) + 1 : 0;
-	    mesh.progressiveCuts[cut].positionCount = static_cast<uint32_t>(
-		std::min(positionCount,
-		    static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
-	}
-    }
-    if (geometry.wire.has_value()) {
-	Obol::WireRep &wireRep = *geometry.wire;
-	if (!conservativeBounds.isEmpty())
-	    wireRep.bounds = conservativeBounds;
-	wireRep.progressiveMinimumCut =
-	    static_cast<uint8_t>(std::max(0, minimumCut));
-	wireRep.progressiveResidentCut =
-	    static_cast<uint8_t>(std::max(0, drawableCut));
-	wireRep.progressiveQuantizationMinimum = quantizationMinimum;
-	wireRep.progressiveQuantizationMaximum = quantizationMaximum;
-	wireRep.progressiveCuts.resize(
-	    static_cast<size_t>(progressive->maximumCut()) + 1);
-	for (size_t cut = 0; cut < wireRep.progressiveCuts.size(); ++cut) {
-	    const size_t count = progressive->faceCount(cut) * 3;
-	    wireRep.progressiveCuts[cut].segmentFirst = 0;
-	    wireRep.progressiveCuts[cut].segmentCount = static_cast<uint32_t>(
-		std::min(count,
-		    static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
-	    BObolMeshLodCutInfo cutInfo = {};
-	    if (!progressive->cutInfo(static_cast<int>(cut), &cutInfo))
-		return 0;
-	    wireRep.progressiveCuts[cut].quantization = {
-		cutInfo.quantization_bits[X], cutInfo.quantization_bits[Y],
-		cutInfo.quantization_bits[Z]
-	    };
-	}
-    }
-    return 1;
-}
-
-static bool
-cad_progressive_geometry_can_draw(const Obol::PartGeometry *geometry,
-				  int wire, int shaded, int activeCut)
-{
-    if (!geometry || activeCut < 0)
-	return false;
-    if (wire) {
-	if (!geometry->wire.has_value() ||
-	    !geometry->wire->isProgressive() ||
-	    activeCut >= static_cast<int>(geometry->wire->progressiveCuts.size()) ||
-	    geometry->wire->progressiveResidentCut < activeCut)
-	    return false;
-    }
-    if (shaded) {
-	if (!geometry->shaded.has_value() ||
-	    !geometry->shaded->isProgressive() ||
-	    activeCut >= static_cast<int>(geometry->shaded->progressiveCuts.size()) ||
-	    geometry->shaded->progressiveResidentCut < activeCut)
-	    return false;
-    }
-    return wire || shaded;
-}
-
-static std::string
-cad_view_lod_assembly_key(const SoBRLDatabaseSource *source,
-			  const BObolViewLodState::CadPayload *payload,
-			  const SbMatrix &matrix)
-{
-    std::string key = source ? source->path.getValue().getString() : "";
-    key += "|";
-    key += source ? source->instanceKey.getValue().getString() : "";
-    key += "|";
-    key += payload ? payload->cacheKey.getString() : "";
-    char buf[256] = {0};
-    snprintf(buf, sizeof(buf), "|%d|%d|%llu|%llu|%u|%u|%d|%d|%d|%d|%d|%d|%d|%g|%d",
-	     payload ? payload->resultKind : 0,
-	     payload ? payload->qualityTier : 0,
-	     payload ? (unsigned long long)payload->viewRevision : 0ULL,
-	     payload ? (unsigned long long)payload->policyRevision : 0ULL,
-	     source ? source->sourceRevision.getValue() : 0,
-	     source ? source->inputsRevision.getValue() : 0,
-	     source ? source->drawMode.getValue() : 0,
-	     source ? source->visible.getValue() : 0,
-	     source ? source->selected.getValue() : 0,
-	     source ? source->highlighted.getValue() : 0,
-	     source ? source->colorOverride.getValue() : 0,
-	     source ? source->materialColorValid.getValue() : 0,
-	     source ? source->lineWidth.getValue() : 0,
-	     source ? source->transparency.getValue() : 0.0f,
-	     source ? source->drawMatrixValid.getValue() : 0);
-    key += buf;
-    const SbColor selectedColor = source ?
-	source->selectedColor.getValue() : SbColor(1.0f, 1.0f, 1.0f);
-    const SbColor highlightedColor = source ?
-	source->highlightedColor.getValue() : SbColor(1.0f, 1.0f, 0.0f);
-    const SbColor ghostedColor = source ?
-	source->ghostedColor.getValue() : SbColor(0.55f, 0.55f, 0.55f);
-    for (int i = 0; i < 3; i++) {
-	char cbuf[128] = {0};
-	snprintf(cbuf, sizeof(cbuf), "|sc=%.9g|hc=%.9g|gc=%.9g",
-		 selectedColor[i], highlightedColor[i], ghostedColor[i]);
-	key += cbuf;
-    }
-    const float *m = matrix[0];
-    for (int i = 0; i < 16; i++) {
-	char mbuf[64] = {0};
-	snprintf(mbuf, sizeof(mbuf), "|%.9g", m[i]);
-	key += mbuf;
-    }
-    return key;
-}
-
-static SoBRLCadAssembly *
-cad_view_lod_assembly(const SoBRLDatabaseSource *source,
-		      const BObolViewLodState::CadPayload *payload,
-		      const BObolViewLodState *viewState)
-{
-    if (!source || !payload || !viewState || !payload->isValid() ||
-	!source->visible.getValue())
-	return NULL;
-
-    const SbMatrix matrix = cad_instance_matrix(source, SbMatrix::identity());
-    const BObolViewLodState::NormalStyle normalStyle =
-	viewState->getNormalStyle();
-    const float normalCreaseAngle = viewState->getNormalCreaseAngle();
-    std::string assemblyKey =
-	cad_view_lod_assembly_key(source, payload, matrix);
-    assemblyKey += "|normal-style=";
-    assemblyKey += std::to_string(static_cast<int>(normalStyle));
-    assemblyKey += "|normal-crease=";
-    assemblyKey += std::to_string(normalCreaseAngle);
-    SbString cachedKey;
-    SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
-	viewState->findCadPresentation(source, &cachedKey));
-    if (assembly &&
-	bu_strcmp(cachedKey.getString(), assemblyKey.c_str()) == 0)
-	return assembly;
-
-    Obol::PartGeometry geometry;
-    std::shared_ptr<const Obol::PartGeometry> preparedGeometry;
-    int shadedCount = 0;
-    int wireCount = 0;
-    SoBRLPickDetail::PrimitiveKind primitiveKind =
-	SoBRLPickDetail::LINE_SEGMENT;
-    const int sourceDrawMode = source_record_draw_mode(source);
-    if (payload->resultKind == BOBOL_LOD_RESULT_AABB ||
-	payload->resultKind == BOBOL_LOD_RESULT_PROXY) {
-	if (!cad_proxy_part_geometry(payload->proxy, geometry))
-	    return NULL;
-	wireCount = 1;
-    } else {
-	const bool hiddenLine =
-	    sourceDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
-	const int wire =
-	    (sourceDrawMode == BOBOL_LOD_DRAW_WIRE ||
-	     hiddenLine ||
-	     payload->drawMode == BOBOL_LOD_DRAW_WIRE) ? 1 : 0;
-	const int shaded = hiddenLine || !wire ? 1 : 0;
-	if (payload->preparedCadGeometry && !payload->progressiveMesh) {
-	    preparedGeometry = payload->preparedCadGeometry;
-	} else if (payload->progressiveMesh &&
-	    normalStyle == BObolViewLodState::NORMAL_AUTHORED &&
-	    payload->preparedCadGeometry &&
-	    payload->preparedCadGeometryRevision ==
-		payload->progressiveMesh->revision() &&
-	    cad_progressive_geometry_can_draw(
-		payload->preparedCadGeometry.get(), wire, shaded,
-		payload->activeCut))
-	    preparedGeometry = payload->preparedCadGeometry;
-	if (!preparedGeometry &&
-	    !cad_mesh_payload_part_geometry(payload->mesh, wire, shaded,
-		payload->shadedCullBackfaces,
-		geometry, normalStyle, normalCreaseAngle))
-	    return NULL;
-	const Obol::PartGeometry *publishedGeometry =
-	    preparedGeometry ? preparedGeometry.get() : &geometry;
-	if (publishedGeometry->wire.has_value())
-	    wireCount = 1;
-	if (publishedGeometry->shaded.has_value()) {
-	    shadedCount = 1;
-	    primitiveKind = SoBRLPickDetail::FACE;
-	}
-    }
-
-    if (!assembly) {
-	assembly = new SoBRLCadAssembly;
-	viewState->setCadPresentation(source, assembly);
-    }
-    assembly->beginUpdate();
-    assembly->clear();
-    assembly->clearSemanticMap();
-
-    std::string partKey = "view-lod:";
-    partKey += source->path.getValue().getString();
-    partKey += ":";
-    partKey += payload->cacheKey.getString();
-    partKey += ":";
-    partKey += payload->resultKind == BOBOL_LOD_RESULT_AABB ? "aabb" :
-	       (payload->resultKind == BOBOL_LOD_RESULT_PROXY ? "proxy" :
-		(wireCount ? "wire-mesh" : "mesh"));
-    Obol::PartId partId = Obol::CadIdBuilder::hash128(partKey);
-    Obol::SharedPartUpdate part;
-    part.part = partId;
-    part.geometry = preparedGeometry ? preparedGeometry :
-	std::make_shared<const Obol::PartGeometry>(std::move(geometry));
-    assembly->upsertSharedParts(
-	std::vector<Obol::SharedPartUpdate>(1, std::move(part)));
-
-    std::string instanceKey =
-	cad_instance_key(source, source->path.getValue().getString(), 0);
-    instanceKey += ":view-lod:";
-    instanceKey += payload->cacheKey.getString();
-    Obol::InstanceId instanceId = Obol::CadIdBuilder::hash128(instanceKey);
-    Obol::InstanceRecord record;
-    record.part = partId;
-    record.localToRoot = matrix;
-    record.parent = cad_source_parent_instance(source);
-    record.childName = cad_source_leaf_name(source);
-    record.occurrenceIndex = source->occurrenceIndex.getValue();
-    record.boolOp = cad_source_boolean_operation(source);
-    record.lodStructuralProxy =
-	payload->resultKind == BOBOL_LOD_RESULT_AABB ||
-	payload->resultKind == BOBOL_LOD_RESULT_PROXY;
-    record.style = cad_source_style(source);
-    Obol::InstanceUpdate update;
-    update.instance = instanceId;
-    update.record = record;
-    assembly->upsertInstances(std::vector<Obol::InstanceUpdate>(1, update));
-    assembly->setInstanceSemantic(instanceId,
-	cad_source_semantic(source, primitiveKind));
-
-    if (source_record_draw_mode(source) == BOBOL_LOD_DRAW_HIDDEN_LINE)
-	assembly->drawMode = SoCADAssembly::HIDDEN_LINE;
-    else if (shadedCount > 0 && wireCount > 0)
-	assembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
-    else if (shadedCount > 0)
-	assembly->drawMode = SoCADAssembly::SHADED;
-    else
-	assembly->drawMode = SoCADAssembly::WIREFRAME;
-    if (payload->resultKind == BOBOL_LOD_RESULT_AABB ||
-	payload->resultKind == BOBOL_LOD_RESULT_PROXY)
-	assembly->pickMode = SoCADAssembly::PICK_BOUNDS;
-    else
-	assembly->pickMode = SoCADAssembly::PICK_AUTO;
-    assembly->endUpdate();
-
-    viewState->setCadPresentation(source, assembly, assemblyKey.c_str());
-    return assembly;
-}
-
-static bool
-cad_lod_path_equal(const SbString &a, const SbString &b)
-{
-    const char *ap = a.getString();
-    const char *bp = b.getString();
-    if (!ap || !bp)
-	return false;
-    if (ap[0] == '/')
-	ap++;
-    if (bp[0] == '/')
-	bp++;
-    return bu_strcmp(ap, bp) == 0;
-}
-
-static const BObolViewLodState::CadPayload *
-cad_compact_payload_for_entry(
-    const std::vector<const BObolViewLodState::CadPayload *> &payloads,
-    const BObolCompactInstanceEntry &entry)
-{
-    const SbString &occurrenceKey = compact_instance_identity(entry);
-    for (const BObolViewLodState::CadPayload *payload : payloads) {
-	if (payload && payload->sourceInstanceKey.getLength() > 0 &&
-	    bu_strcmp(payload->sourceInstanceKey.getString(),
-		occurrenceKey.getString()) == 0)
-	    return payload;
-    }
-    /* Source-wide legacy results deliberately have no occurrence key.  They
-     * may still bind by path, but an occurrence-specific result never aliases
-     * a sibling merely because both paths are textual matches. */
-    for (const BObolViewLodState::CadPayload *payload : payloads) {
-	if (payload && payload->sourceInstanceKey.getLength() == 0 &&
-	    cad_lod_path_equal(payload->sourcePath, entry.semantic.path))
-	    return payload;
-    }
-    return NULL;
-}
-
-SoBRLCadAssembly *
-SoBRLDatabaseSource::currentCompactViewLodAssembly(
-    const BObolViewLodState *viewState) const
-{
-    if (!this->d->compactIndex || !viewState)
-	return NULL;
-    SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
-	viewState->findCadPresentation(this));
-    if (!assembly || !assembly->compactPresentationInitialized ||
-	assembly->compactPresentationSourceRoutingId != this->d->routingId ||
-	assembly->compactPresentationPopulationEpoch !=
-	    this->d->compactPopulationEpoch ||
-	assembly->compactPresentationIndex != this->d->compactIndex ||
-	assembly->compactPresentationSourceRevision !=
-	    this->sourceRevision.getValue() ||
-	assembly->compactPresentationInputsRevision !=
-	    this->inputsRevision.getValue() ||
-	assembly->compactPresentationCadBatchRevision !=
-	    this->cadBatchRevisionGet() ||
-	assembly->compactPresentationDrawMode != source_record_draw_mode(this) ||
-	assembly->compactPresentationPayloadRevision !=
-	    viewState->cadRevision())
-	return NULL;
-    return assembly;
-}
-
-int
-SoBRLDatabaseSource::getCompactViewLodSupersededFallbackCount(
-    const BObolViewLodState *viewState, std::vector<SbString> *paths) const
-{
-    if (paths)
-	paths->clear();
-    if (!this->d->compactIndex || !viewState)
-	return 0;
-
-    SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
-	viewState->findCadPresentation(this));
-    if (!assembly || !assembly->compactPresentationInitialized ||
-	assembly->compactPresentationSourceRoutingId != this->d->routingId ||
-	assembly->compactPresentationPopulationEpoch !=
-	    this->d->compactPopulationEpoch ||
-	assembly->compactPresentationIndex != this->d->compactIndex)
-	return 0;
-
-    std::vector<const BObolViewLodState::CadPayload *> payloads;
-    viewState->findCadPayloads(this, payloads);
-    std::unordered_set<std::string_view> payloadKeys;
-    payloadKeys.reserve(payloads.size());
-    for (const BObolViewLodState::CadPayload *payload : payloads)
-	if (payload && payload->isValid() &&
-	    payload->sourceInstanceKey.getLength() > 0)
-	    payloadKeys.emplace(payload->sourceInstanceKey.getString(),
-		static_cast<size_t>(
-		    payload->sourceInstanceKey.getLength()));
-
-    int count = 0;
-    for (const BObolCompactInstanceEntry &entry :
-	 this->d->compactIndex->entries) {
-	/* Geometry kind alone is not presentation semantics: authored AABB-like
-	 * structure and the root overview remain useful scene content, whereas
-	 * only an explicitly marked temporary LoD leaf fallback is an obligation
-	 * that may request further refinement. */
-	if (!entry.lodBacked || !entry.geometry ||
-	    !entry.geometry->structuralProxy)
-	    continue;
-	const char *kind = entry.shapeSummary.geometryKind.getString();
-	if (!BU_STR_EQUAL(kind, "aabb") && !BU_STR_EQUAL(kind, "obb"))
-	    continue;
-	const SbString &occurrenceKey = compact_instance_identity(entry);
-	const std::string_view occurrenceView(
-	    occurrenceKey.getString(),
-	    static_cast<size_t>(occurrenceKey.getLength()));
-	if (payloadKeys.find(occurrenceView) == payloadKeys.end())
-	    continue;
-	const auto presentation =
-	    assembly->compactInstancePresentations.find(entry.instance);
-	if (presentation == assembly->compactInstancePresentations.end() ||
-	    assembly->compactSpatiallyCulledInstances.find(entry.instance) !=
-		assembly->compactSpatiallyCulledInstances.end() ||
-	    presentation->second.activePart != entry.part)
-	    continue;
-	count++;
-	if (paths)
-	    paths->push_back(entry.semantic.path);
-    }
-    return count;
-}
-
-int
-SoBRLDatabaseSource::getCompactViewLodActiveFallbackCount(
-    const BObolViewLodState *viewState, std::vector<SbString> *paths) const
-{
-    if (paths)
-	paths->clear();
-    if (!this->d->compactIndex || !viewState)
-	return 0;
-
-    SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
-	viewState->findCadPresentation(this));
-    if (!assembly || !assembly->compactPresentationInitialized ||
-	assembly->compactPresentationSourceRoutingId != this->d->routingId ||
-	assembly->compactPresentationPopulationEpoch !=
-	    this->d->compactPopulationEpoch ||
-	assembly->compactPresentationIndex != this->d->compactIndex)
-	return 0;
-
-    int count = 0;
-    for (const BObolCompactInstanceEntry &entry :
-	 this->d->compactIndex->entries) {
-	/* See getCompactViewLodSupersededFallbackCount: only temporary LoD
-	 * fallback geometry drives convergence, not arbitrary AABB-like scene
-	 * content. */
-	if (!entry.lodBacked || !entry.geometry ||
-	    !entry.geometry->structuralProxy)
-	    continue;
-	const char *kind = entry.shapeSummary.geometryKind.getString();
-	if (!BU_STR_EQUAL(kind, "aabb") && !BU_STR_EQUAL(kind, "obb"))
-	    continue;
-	const auto presentation =
-	    assembly->compactInstancePresentations.find(entry.instance);
-	if (presentation == assembly->compactInstancePresentations.end() ||
-	    assembly->compactSpatiallyCulledInstances.find(entry.instance) !=
-		assembly->compactSpatiallyCulledInstances.end() ||
-	    presentation->second.activePart != entry.part)
-	    continue;
-	count++;
-	if (paths)
-	    paths->push_back(entry.semantic.path);
-    }
-    return count;
-}
-
-/* A detached producer can finish its index before a view has committed that
- * index to its retained assembly.  Keep the temporary extent through that
- * gap: otherwise the producer may hide the only visible object one frame
- * before the replacement boxes/meshes exist in the rendered plan. */
-void
-SoBRLDatabaseSource::retireCompactOverviewAfterPresentation(
-	SoBRLCadAssembly *assembly)
-{
-	if (!assembly || !this->d->compactIndex ||
-	this->d->compactOverviewState !=
-	    BObolCompactOccurrenceRegistryState::OverviewState::RetirementPending)
-	return;
-    BObolCompactInstanceIndex &index = *this->d->compactIndex;
-
-    bool replacementPresented = false;
-    for (const BObolCompactInstanceEntry &entry : index.entries) {
-	if (BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
-		"lod-overview") || !entry.visible)
-	    continue;
-	const auto presentation =
-	    assembly->compactInstancePresentations.find(entry.instance);
-	if (presentation == assembly->compactInstancePresentations.end() ||
-	    assembly->isInstanceHidden(entry.instance))
-	    continue;
-	/* The source record deliberately keeps its AABB while view-specific
-	 * PoP geometry lives under a private payload part.  Either a payload
-	 * rebind or a committed leaf part proves that the view now has useful
-	 * per-leaf coverage.  The latter deliberately includes structural leaf
-	 * boxes: the whole-target overview is only an early extent cue and must
-	 * retire once the complete leaf frontier is presented. */
-	const bool payloadGeometryPresented =
-	    !presentation->second.payloadKey.empty() &&
-	    presentation->second.activePart != entry.part;
-	const bool leafGeometryPresented = entry.geometry &&
-	    presentation->second.activePart == entry.part;
-	if (!payloadGeometryPresented && !leafGeometryPresented)
-	    continue;
-	replacementPresented = true;
-	break;
-    }
-    if (!replacementPresented)
-	return;
-
-    std::vector<size_t> retiredEntries;
-    for (size_t i = 0; i < index.entries.size(); ++i) {
-	BObolCompactInstanceEntry &entry = index.entries[i];
-	if (!BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
-		"lod-overview") || !entry.visible)
-	    continue;
-	entry.authoredVisible = FALSE;
-	entry.visible = FALSE;
-	entry.visibilityRevision =
-	    compact_next_revision(entry.visibilityRevision);
-	compact_sync_shape_summary_state(entry);
-	index.hiddenInstances.push_back(entry.instance);
-	retiredEntries.push_back(i);
-    }
-    if (retiredEntries.empty())
-	return;
-
-    std::sort(index.hiddenInstances.begin(), index.hiddenInstances.end());
-    index.hiddenInstances.erase(std::unique(index.hiddenInstances.begin(),
-	index.hiddenInstances.end()), index.hiddenInstances.end());
-    /* This presentation has already atomically installed its replacement
-     * records, so its visibility update may retire the overview in the same
-     * frame.  Other views will build the same replacement records before
-     * observing the shared hidden state. */
-    assembly->setHiddenInstances(index.hiddenInstances);
-    this->d->compactOverviewState =
-	BObolCompactOccurrenceRegistryState::OverviewState::Retired;
-    this->markCompiledAssemblyDirty();
-    this->markCadBatchDirty(retiredEntries);
-}
-
-static Obol::PartId
-cad_compact_shared_lod_part_id(
-    const BObolViewLodState::CadPayload &payload, int drawMode)
-{
-    std::string key(payload.progressiveMesh ?
-	"compact-progressive-asset:" : "compact-terminal-asset:");
-    key += payload.cacheKey.getString();
-    key += ':';
-    key += std::to_string(drawMode);
-    return Obol::CadIdBuilder::hash128(key);
-}
-
-static uint8_t
-cad_compact_geometry_channels(const Obol::PartGeometry *geometry)
-{
-    if (!geometry)
-	return 0;
-    return (geometry->wire.has_value() ? 1u : 0u) |
-	(geometry->shaded.has_value() ? 2u : 0u) |
-	(geometry->points.has_value() ? 4u : 0u);
-}
-
-static Obol::PartId
-cad_compact_layer_part_id(
-    const BObolViewLodState::CadPayload &payload,
-    const BObolLodPresentationLayer &layer, int drawMode)
-{
-    std::string key("compact-layer-part:");
-    key += payload.cacheKey.getString();
-    key += ':';
-    key += layer.layerKey.getString();
-    key += ':';
-    key += std::to_string(drawMode);
-    return Obol::CadIdBuilder::hash128(key);
-}
-
-static Obol::InstanceId
-cad_compact_layer_instance_id(Obol::InstanceId base,
-    const BObolLodPresentationLayer &layer)
-{
-    std::string key("compact-layer-instance:");
-    key += std::to_string(base.w0);
-    key += ':';
-    key += std::to_string(base.w1);
-    key += ':';
-    key += layer.layerKey.getString();
-    return Obol::CadIdBuilder::hash128(key);
-}
-
-static Obol::PartId
-cad_compact_payload_part_id(
-    const BObolViewLodState::CadPayload &payload,
-    const SbString &occurrenceKey, const std::string &payloadKey,
-    int drawMode)
-{
-    if (!payload.presentationLayers.empty())
-	return cad_compact_layer_part_id(
-	    payload, payload.presentationLayers.front(), drawMode);
-    if ((payload.progressiveMesh && payload.progressiveMesh->isValid()) ||
-	(payload.resultKind == BOBOL_LOD_RESULT_FULL_DETAIL &&
-	 payload.preparedCadGeometry))
-	return cad_compact_shared_lod_part_id(payload, drawMode);
-
-    std::string partKey("compact-lod:");
-    partKey.reserve(partKey.size() +
-	static_cast<size_t>(occurrenceKey.getLength()) +
-	payloadKey.size() + 2u);
-    partKey += occurrenceKey.getString();
-    partKey += ':';
-    partKey += payloadKey;
-    return Obol::CadIdBuilder::hash128(partKey);
-}
-
-static uint64_t
-cad_compact_layer_signature(
-    const std::vector<BObolLodPresentationLayer> &layers)
-{
-    uint64_t signature = 1469598103934665603ULL;
-    for (const BObolLodPresentationLayer &layer : layers) {
-	const char *key = layer.layerKey.getString();
-	const size_t length = static_cast<size_t>(layer.layerKey.getLength());
-	for (size_t i = 0; i < length; ++i) {
-	    signature ^= static_cast<unsigned char>(key[i]);
-	    signature *= 1099511628211ULL;
-	}
-	signature ^= layer.geometryRevision;
-	signature *= 1099511628211ULL;
-	signature ^= static_cast<uint64_t>(layer.activeCut + 1);
-	signature *= 1099511628211ULL;
-	signature ^= layer.coverage ? 1u : 0u;
-	signature *= 1099511628211ULL;
-    }
-    return signature ? signature : 1;
-}
-
-static void
-cad_compact_adjust_channel_count(uint8_t channels, bool add,
-    size_t &wireCount, size_t &shadedCount)
-{
-    const bool wire = channels & (1u | 4u);
-    const bool shaded = channels & 2u;
-    if (wire)
-	wireCount = add ? wireCount + 1 : (wireCount ? wireCount - 1 : 0);
-    if (shaded)
-	shadedCount = add ? shadedCount + 1 :
-	    (shadedCount ? shadedCount - 1 : 0);
-}
-
-SoBRLCadAssembly *
-SoBRLDatabaseSource::compactViewLodAssembly(
-    const std::vector<const BObolViewLodState::CadPayload *> &payloads,
-    const BObolViewLodState *viewState)
-    const
-{
-    const bool presentationTiming =
-	getenv("BOBOL_COMPACT_PRESENTATION_TIMING") != NULL;
-    const int64_t presentationStarted =
-	presentationTiming ? bu_gettime() : 0;
-    if (!this->d->compactIndex || !viewState)
-	return NULL;
-
-    SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
-	viewState->findCadPresentation(this));
-    if (!assembly) {
-	assembly = new SoBRLCadAssembly;
-	viewState->setCadPresentation(this, assembly);
-    }
-    assembly->reserveCompactPresentationCapacity(std::max(
-	this->d->compactExpectedInstanceCount,
-	this->d->compactIndex->entries.size()));
-
-    const int sourceDrawMode = source_record_draw_mode(this);
-    const uint64_t payloadRevision = viewState->cadRevision();
-    const BObolViewLodState::NormalStyle normalStyle =
-	viewState->getNormalStyle();
-    const float normalCreaseAngle = viewState->getNormalCreaseAngle();
-    if (assembly->compactPresentationInitialized &&
-	assembly->compactPresentationSourceRoutingId == this->d->routingId &&
-	assembly->compactPresentationPopulationEpoch ==
-	    this->d->compactPopulationEpoch &&
-	assembly->compactPresentationIndex == this->d->compactIndex &&
-	assembly->compactPresentationSourceRevision ==
-	    this->sourceRevision.getValue() &&
-	assembly->compactPresentationInputsRevision ==
-	    this->inputsRevision.getValue() &&
-	assembly->compactPresentationCadBatchRevision ==
-	    this->cadBatchRevisionGet() &&
-	assembly->compactPresentationDrawMode == sourceDrawMode &&
-	assembly->compactPresentationPayloadRevision == payloadRevision) {
-	const_cast<SoBRLDatabaseSource *>(this)->
-	    retireCompactOverviewAfterPresentation(assembly);
-	return assembly;
-    }
-    const bool hiddenLine = sourceDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
-    bool reset = !assembly->compactPresentationInitialized ||
-	assembly->compactPresentationSourceRoutingId != this->d->routingId ||
-	assembly->compactPresentationPopulationEpoch !=
-	    this->d->compactPopulationEpoch ||
-	assembly->compactPresentationIndex != this->d->compactIndex ||
-	assembly->compactPresentationSourceRevision !=
-	    this->sourceRevision.getValue() ||
-	assembly->compactPresentationInputsRevision !=
-	    this->inputsRevision.getValue() ||
-	assembly->compactPresentationDrawMode != sourceDrawMode;
-
-    /*
-     * Streaming a large root appends/replaces a bounded occurrence batch in
-     * the same compact index.  Clearing and reinserting the whole compiled
-     * assembly on every batch made population O(n^2), invalidated every part
-     * generation, and forced the renderer to re-snap every prior PoP cut.
-     * Preserve the assembly when every old occurrence still exists and route
-     * only new or geometry-changed records through the normal upsert path.
-     * A removal or index replacement remains an authoritative full reset.
-     */
-    std::vector<size_t> structuralEntryIndices;
-    const bool cadBatchChanged = !reset &&
-	assembly->compactPresentationCadBatchRevision !=
-	    this->cadBatchRevisionGet();
-    SbBool sparseCadBatchUpdate = FALSE;
-    if (cadBatchChanged)
-	sparseCadBatchUpdate = this->getCadBatchChangedEntries(
-	    assembly->compactPresentationCadBatchRevision,
-	    structuralEntryIndices);
-    if (cadBatchChanged && !sparseCadBatchUpdate) {
-	structuralEntryIndices.reserve(
-	    this->d->compactIndex->entries.size() >
-		assembly->compactInstancePresentations.size() ?
-	    this->d->compactIndex->entries.size() -
-		assembly->compactInstancePresentations.size() : 0);
-	size_t retainedPresentations = 0;
-	for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
-	    const BObolCompactInstanceEntry &entry =
-		this->d->compactIndex->entries[i];
-	    const auto found =
-		assembly->compactInstancePresentations.find(entry.instance);
-	    if (found == assembly->compactInstancePresentations.end()) {
-		structuralEntryIndices.push_back(i);
-	    } else {
-		retainedPresentations++;
-		const SoBRLCadAssembly::CompactInstancePresentation &prior =
-		    found->second;
-		if (prior.geometryRevision != entry.geometryRevision ||
-		    prior.activePart != entry.part ||
-		    prior.appearanceRevision != entry.appearanceRevision ||
-		    prior.placementRevision != entry.placementRevision ||
-		    prior.visibilityRevision != entry.visibilityRevision ||
-		    prior.selectionRevision != entry.selectionRevision)
-		    structuralEntryIndices.push_back(i);
-	    }
-	}
-	if (retainedPresentations !=
-		assembly->compactInstancePresentations.size()) {
-	    reset = true;
-	    structuralEntryIndices.clear();
-	}
-    } else if (sparseCadBatchUpdate) {
-	/*
-	 * The source mutation supplied an exact, non-consuming occurrence
-	 * journal.  Validate only those records; other occurrences are known to
-	 * match the presentation acknowledged at the prior CAD-batch revision.
-	 */
-	for (auto it = structuralEntryIndices.begin();
-	     it != structuralEntryIndices.end();) {
-	    if (*it >= this->d->compactIndex->entries.size()) {
-		reset = true;
-		structuralEntryIndices.clear();
-		break;
-	    }
-	    const BObolCompactInstanceEntry &entry =
-		this->d->compactIndex->entries[*it];
-	    const auto prior =
-		assembly->compactInstancePresentations.find(entry.instance);
-	    if (prior == assembly->compactInstancePresentations.end()) {
-		++it;
-		continue;
-	    }
-	    const SoBRLCadAssembly::CompactInstancePresentation &presented =
-		prior->second;
-	    if (presented.geometryRevision == entry.geometryRevision &&
-		presented.activePart == entry.part &&
-		presented.appearanceRevision == entry.appearanceRevision &&
-		presented.placementRevision == entry.placementRevision &&
-		presented.visibilityRevision == entry.visibilityRevision &&
-		presented.selectionRevision == entry.selectionRevision)
-		it = structuralEntryIndices.erase(it);
-	    else
-		++it;
-	}
-    }
-
-    /* A camera epoch usually changes only the active PoP cut on a bounded
-     * wave of occurrences.  Preserve the compiled assembly and route those
-     * changes directly by occurrence key.  Source structure/style revisions
-     * still take the authoritative full-scan path. */
-    const bool payloadOnlyUpdate = !reset &&
-	assembly->compactPresentationCadBatchRevision ==
-	    this->cadBatchRevisionGet();
-    const bool incrementalStructureUpdate =
-	!reset && !payloadOnlyUpdate;
-    std::vector<SbString> changedOccurrenceKeys;
-    SbBool fullPayloadResync = TRUE;
-    if (!reset)
-	viewState->cadOccurrenceChangesSince(
-	    this, assembly->compactPresentationPayloadRevision,
-	    changedOccurrenceKeys, fullPayloadResync);
-    const bool sparsePayloadUpdate = !reset && !fullPayloadResync;
-    if (sparsePayloadUpdate && changedOccurrenceKeys.empty()) {
-	if (incrementalStructureUpdate && !structuralEntryIndices.empty()) {
-	    /* Continue below with just the compact-index delta. */
-	} else {
-	    if (incrementalStructureUpdate)
-		assembly->compactPresentationCadBatchRevision =
-		    this->cadBatchRevisionGet();
-	    assembly->compactPresentationPayloadRevision = payloadRevision;
-	    viewState->acknowledgeCadOccurrenceChanges(this, payloadRevision);
-	    return assembly;
-	}
-    }
-
-    std::vector<const BObolViewLodState::CadPayload *>
-	authoritativePayloads;
-    const std::vector<const BObolViewLodState::CadPayload *> *
-	payloadInput = &payloads;
-    if (!sparsePayloadUpdate && payloads.empty()) {
-	viewState->findCadPayloadsUnordered(this, authoritativePayloads);
-	payloadInput = &authoritativePayloads;
-    }
-
-    /* Both collections may contain thousands of records.  Route modern
-     * occurrence-specific payloads by key instead of scanning every payload
-     * for every compact leaf.  Retain the small path scan only for legacy
-     * source-wide payloads with no occurrence identity. */
-    std::unordered_map<std::string_view,
-	const BObolViewLodState::CadPayload *> payloadByInstance;
-    std::vector<const BObolViewLodState::CadPayload *> sourceWidePayloads;
-    payloadByInstance.reserve(payloadInput->size());
-    for (const BObolViewLodState::CadPayload *payload : *payloadInput) {
-	/*
-	 * Payload input comes from the validated view-state occurrence table or
-	 * from the caller's result lookup.  It cannot become invalid in place:
-	 * replacement and eviction publish/erase whole shared payload objects.
-	 */
-	if (!payload)
-	    continue;
-	if (payload->sourceInstanceKey.getLength() > 0)
-	    payloadByInstance[std::string_view(
-		payload->sourceInstanceKey.getString(),
-		static_cast<size_t>(
-		    payload->sourceInstanceKey.getLength()))] = payload;
-	else
-	    sourceWidePayloads.push_back(payload);
-    }
-
-    std::vector<size_t> entryIndices;
-    if (sparsePayloadUpdate || incrementalStructureUpdate) {
-	entryIndices = structuralEntryIndices;
-	entryIndices.reserve(entryIndices.size() +
-	    changedOccurrenceKeys.size());
-	for (const SbString &occurrenceKey : changedOccurrenceKeys) {
-	    const auto found =
-		this->d->compactIndex->entryIndexByKey.find(
-		    occurrenceKey.getString());
-	    if (found != this->d->compactIndex->entryIndexByKey.end())
-		entryIndices.push_back(found->second);
-	}
-	std::sort(entryIndices.begin(), entryIndices.end());
-	entryIndices.erase(
-	    std::unique(entryIndices.begin(), entryIndices.end()),
-	entryIndices.end());
-    } else {
-	entryIndices.resize(this->d->compactIndex->entries.size());
-	std::iota(entryIndices.begin(), entryIndices.end(), 0);
-    }
-    const int64_t presentationIndexed =
-	presentationTiming ? bu_gettime() : 0;
-
-    std::vector<Obol::SharedPartUpdate> baseParts;
-    std::vector<Obol::SharedPartUpdate> lodSharedParts;
-    std::deque<size_t> changedInstanceIndices;
-    std::vector<Obol::InstanceStyleUpdate> instanceStyles;
-    std::vector<Obol::InstanceLodUpdate> lodCutUpdates;
-    std::vector<Obol::InstanceUpdate> layerInstanceUpdates;
-    std::vector<Obol::InstanceId> layerInstancesToRemove;
-    std::vector<std::pair<Obol::InstanceId,
-	SoBRLCadAssembly::InstanceSemantic>> layerSemantics;
-    std::vector<Obol::InstanceId> layerSemanticsToRemove;
-    std::unordered_set<Obol::PartId, std::hash<Obol::PartId>>
-	sharedLodPartsUpdated;
-    std::unordered_set<Obol::PartId, std::hash<Obol::PartId>> partsToRemove;
-    bool instanceSetsChanged = reset;
-
-    if (reset) {
-	baseParts.reserve(this->d->compactIndex->parts.size());
-	assembly->compactPartChannels.clear();
-	for (const BObolCompactPartReference &partRef :
-	     this->d->compactIndex->parts) {
-	    if (!partRef.geometry)
-		continue;
-	    Obol::SharedPartUpdate part;
-	    part.part = partRef.part;
-	    part.geometry = partRef.geometry;
-	    assembly->compactPartChannels[part.part] =
-		cad_compact_geometry_channels(part.geometry.get());
-	    baseParts.push_back(std::move(part));
-	}
-	assembly->compactInstancePresentations.clear();
-	assembly->compactLayerPresentations.clear();
-	assembly->compactActivePartReferences.clear();
-	assembly->compactLodParts.clear();
-	assembly->compactSpatiallyCulledInstances.clear();
-    } else if (!structuralEntryIndices.empty()) {
-	std::unordered_set<Obol::PartId, std::hash<Obol::PartId>>
-	    addedBaseParts;
-	addedBaseParts.reserve(structuralEntryIndices.size());
-	for (const size_t i : structuralEntryIndices) {
-	    if (i >= this->d->compactIndex->entries.size())
-		continue;
-	    const BObolCompactInstanceEntry &entry =
-		this->d->compactIndex->entries[i];
-	    const auto prior =
-		assembly->compactInstancePresentations.find(entry.instance);
-	    /* A producer may keep the numeric geometry revision while changing
-	     * the immutable base part (for example, when a temporary LoD box
-	     * resolves to an authored line with byte-identical coordinates).  That
-	     * replacement still needs the new base part registered before its
-	     * instance record can be republished. */
-	    if (prior != assembly->compactInstancePresentations.end() &&
-		prior->second.geometryRevision == entry.geometryRevision &&
-		prior->second.activePart == entry.part)
-		continue;
-	    if (!entry.geometry || !addedBaseParts.insert(entry.part).second)
-		continue;
-	    Obol::SharedPartUpdate part;
-	    part.part = entry.part;
-	    part.geometry = entry.geometry;
-	    baseParts.push_back(std::move(part));
-	    assembly->compactPartChannels[entry.part] =
-		cad_compact_geometry_channels(entry.geometry.get());
-	}
-    }
-
-    const bool incrementalUpdate = !reset;
-    size_t wireCount = incrementalUpdate ?
-	assembly->compactWirePresentationCount : 0;
-    size_t shadedCount = incrementalUpdate ?
-	assembly->compactShadedPresentationCount : 0;
-    for (const size_t i : entryIndices) {
-	const BObolCompactInstanceEntry &entry =
-	    this->d->compactIndex->entries[i];
-	const SbString &occurrenceKey = compact_instance_identity(entry);
-	const BObolViewLodState::CadPayload *payload = NULL;
-	if (sparsePayloadUpdate) {
-	    payload = viewState->findCadForOccurrence(
-		this, occurrenceKey);
-	} else {
-	    const auto payloadIt = payloadByInstance.find(
-		std::string_view(occurrenceKey.getString(),
-		    static_cast<size_t>(occurrenceKey.getLength())));
-	    payload =
-		payloadIt != payloadByInstance.end() ? payloadIt->second :
-		cad_compact_payload_for_entry(sourceWidePayloads, entry);
-	}
-	const bool spatiallyCulled = payload && payload->progressiveMesh &&
-	    payload->progressiveMesh->hasSpatialClusters() &&
-	    payload->requiredChunks.empty();
-	const bool wasSpatiallyCulled =
-	    assembly->compactSpatiallyCulledInstances.find(entry.instance) !=
-	    assembly->compactSpatiallyCulledInstances.end();
-	if (spatiallyCulled)
-	    assembly->compactSpatiallyCulledInstances.insert(entry.instance);
-	else
-	    assembly->compactSpatiallyCulledInstances.erase(entry.instance);
-	if (spatiallyCulled != wasSpatiallyCulled)
-	    instanceSetsChanged = true;
-
-	const auto existingPresentation =
-	    assembly->compactInstancePresentations.find(entry.instance);
-	const bool presentationWasPresent =
-	    existingPresentation !=
-		assembly->compactInstancePresentations.end();
-	SoBRLCadAssembly::CompactInstancePresentation &presentation =
-	    presentationWasPresent ? existingPresentation->second :
-	    assembly->compactInstancePresentations[entry.instance];
-	const uint8_t previousChannels = presentation.channels;
-	const Obol::PartId previousPart = presentation.activePart;
-	if (reset) {
-	    presentation.activePart = entry.part;
-	    presentation.channels = assembly->compactPartChannels[entry.part];
-	    presentation.activeCut = -1;
-	}
-
-	std::string payloadKey;
-	Obol::PartId desiredPart = entry.part;
-	uint8_t desiredChannels = assembly->compactPartChannels[entry.part];
-	bool desiredGeometryValid = false;
-	int desiredActiveCut = -1;
-	bool desiredLodStructuralProxy = entry.geometry &&
-	    entry.geometry->structuralProxy && entry.lodBacked;
-	if (payload) {
-	    payloadKey.reserve(
-		static_cast<size_t>(payload->cacheKey.getLength()) + 128u);
-	    payloadKey.assign(payload->cacheKey.getString(),
-		static_cast<size_t>(payload->cacheKey.getLength()));
-	    payloadKey += ':';
-	    payloadKey += std::to_string(payload->resultKind);
-	    payloadKey += ':';
-	    payloadKey += std::to_string(payload->qualityTier);
-	    payloadKey += ':';
-	    if (payload->progressiveMesh) {
-		payloadKey += "resident-revision=";
-		payloadKey += std::to_string(
-		    payload->progressiveMesh->revision());
-		desiredActiveCut = payload->activeCut;
-	    } else {
-		payloadKey += "cut=";
-		payloadKey += std::to_string(payload->activeCut);
-	    }
-	    payloadKey += ':';
-	    payloadKey += std::to_string(sourceDrawMode);
-	    payloadKey += ":normal-style=";
-	    payloadKey += std::to_string(static_cast<int>(normalStyle));
-	    payloadKey += ":normal-crease=";
-	    payloadKey += std::to_string(normalCreaseAngle);
-	    const bool layeredPresentation =
-		!payload->presentationLayers.empty();
-	    if (layeredPresentation) {
-		payloadKey += ":layers=";
-		payloadKey += std::to_string(
-		    payload->presentationLayers.size());
-		payloadKey += ':';
-		payloadKey += std::to_string(cad_compact_layer_signature(
-		    payload->presentationLayers));
-	    }
-	    const Obol::PartId expectedPayloadPart =
-		cad_compact_payload_part_id(
-		    *payload, occurrenceKey, payloadKey, sourceDrawMode);
-	    /* A payload key describes immutable data, not the retained instance
-	     * binding.  A failed or interrupted sparse rebind may have advanced the
-	     * key while leaving activePart on the source box.  Trust the fast path
-	     * only when both pieces of the presentation transaction agree. */
-	    if (payloadKey == presentation.payloadKey &&
-		presentation.activePart == expectedPayloadPart) {
-		desiredPart = presentation.activePart;
-		desiredChannels = presentation.channels;
-		desiredGeometryValid = true;
-	    } else {
-		Obol::PartGeometry geometry;
-		const bool progressive =
-		    payload->progressiveMesh &&
-		    payload->progressiveMesh->isValid();
-		const bool sharedTerminal = !progressive &&
-		    payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL &&
-		    payload->preparedCadGeometry;
-		const bool sharedLayer = layeredPresentation;
-		bool reusedSharedPart = false;
-		desiredPart = expectedPayloadPart;
-		if (sharedLayer) {
-		    const BObolLodPresentationLayer &baseLayer =
-			payload->presentationLayers.front();
-		    desiredActiveCut = baseLayer.activeCut;
-		}
-		const int wire =
-		    sourceDrawMode == BOBOL_LOD_DRAW_WIRE || hiddenLine;
-		/* SHADED_BOTS creates source-mesh requests only for BoTs.
-		 * Those payloads are shaded just like mode 2 payloads. */
-		const int shaded =
-		    sourceDrawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
-		    sourceDrawMode == BOBOL_LOD_DRAW_SHADED ||
-		    hiddenLine;
-		std::shared_ptr<const Obol::PartGeometry> preparedGeometry;
-		if (sharedLayer) {
-		    preparedGeometry =
-			payload->presentationLayers.front().geometry;
-		} else if (!progressive && payload->preparedCadGeometry) {
-		    preparedGeometry = payload->preparedCadGeometry;
-		} else if (progressive &&
-		    normalStyle == BObolViewLodState::NORMAL_AUTHORED &&
-		    payload->preparedCadGeometry &&
-		    payload->preparedCadGeometryRevision ==
-			payload->progressiveMesh->revision() &&
-		    cad_progressive_geometry_can_draw(
-			payload->preparedCadGeometry.get(), wire, shaded,
-			desiredActiveCut)) {
-		    preparedGeometry = payload->preparedCadGeometry;
-		}
-
-		/*
-		 * A result without a newly prepared renderer generation need not
-		 * force a full CPU/GPU realization while the view is asking for a
-		 * coarser prefix: keep the older cumulative part when it covers the
-		 * active cut.  A different prepared geometry pointer is an
-		 * authoritative immutable-generation handoff, however.  Its ordinal
-		 * cut may match the old part while its spatial page population does
-		 * not; retaining the old part in that case leaves visible holes until
-		 * an unrelated richer cut happens to replace it.
-		 */
-		const Obol::PartGeometry *presentedGeometry =
-		    assembly->partGeometry(desiredPart);
-		const bool preparedGenerationChanged = preparedGeometry &&
-		    preparedGeometry.get() != presentedGeometry;
-		if (progressive && !preparedGenerationChanged &&
-		    presentation.activePart == desiredPart &&
-		    cad_progressive_geometry_can_draw(
-			presentedGeometry, wire, shaded,
-			desiredActiveCut)) {
-		    desiredGeometryValid = true;
-		    reusedSharedPart = true;
-		    desiredChannels =
-			assembly->compactPartChannels[desiredPart];
-		    payloadKey = presentation.payloadKey;
-		} else if ((progressive || sharedTerminal || sharedLayer) &&
-		    sharedLodPartsUpdated.find(desiredPart) !=
-			sharedLodPartsUpdated.end()) {
-		    desiredGeometryValid = true;
-		    reusedSharedPart = true;
-		    desiredChannels =
-			assembly->compactPartChannels[desiredPart];
-		} else if (payload->resultKind == BOBOL_LOD_RESULT_AABB ||
-		    payload->resultKind == BOBOL_LOD_RESULT_PROXY) {
-		    desiredGeometryValid =
-			cad_proxy_part_geometry(payload->proxy, geometry) != 0;
-		} else if (preparedGeometry) {
-		    desiredGeometryValid = true;
-		} else {
-		    desiredGeometryValid = progressive ?
-			cad_progressive_mesh_part_geometry(
-			    payload->progressiveMesh, wire, shaded,
-			    payload->shadedCullBackfaces, geometry,
-			    normalStyle, normalCreaseAngle) != 0 :
-			cad_mesh_payload_part_geometry(payload->mesh,
-			    wire, shaded, payload->shadedCullBackfaces,
-			    geometry, normalStyle, normalCreaseAngle) != 0;
-		}
-		if (desiredGeometryValid && !reusedSharedPart) {
-		    const Obol::PartGeometry *channelGeometry =
-			preparedGeometry ? preparedGeometry.get() : &geometry;
-		    desiredChannels =
-			cad_compact_geometry_channels(channelGeometry);
-		    if ((!progressive && !sharedTerminal && !sharedLayer) ||
-			sharedLodPartsUpdated.insert(desiredPart).second) {
-			if (preparedGeometry) {
-			    Obol::SharedPartUpdate part;
-			    part.part = desiredPart;
-			    part.geometry = std::move(preparedGeometry);
-			    /*
-			     * Every immutable PoP generation carries the same
-			     * full quantization-domain bounds.  Let Obol validate
-			     * and retain occurrence bounds/BVH state while merely
-			     * swapping the renderer geometry handle.
-			     */
-			    part.preservesBounds = true;
-			    lodSharedParts.push_back(std::move(part));
-			} else {
-			    /*
-			     * Publish every compact geometry generation through
-			     * the immutable shared route.  The legacy PartUpdate
-			     * API copies PartGeometry again when it installs the
-			     * record; wrapping this completed private value by
-			     * move keeps even proxy and non-progressive fallback
-			     * publication zero-copy at the assembly boundary.
-			     */
-			    Obol::SharedPartUpdate part;
-			    part.part = desiredPart;
-			    part.geometry =
-				std::make_shared<const Obol::PartGeometry>(
-				    std::move(geometry));
-			    lodSharedParts.push_back(std::move(part));
-			}
-		    }
-		    assembly->compactPartChannels[desiredPart] =
-			desiredChannels;
-		    assembly->compactLodParts.insert(desiredPart);
-		}
-	    }
-	}
-	if (!desiredGeometryValid)
-	{
-	    /* A rejected or stale LoD payload must fall back to the authored
-	     * structural part as one coherent record.  Keeping the hashed LoD
-	     * part id after geometry conversion failed leaves the instance
-	     * referencing a part that was never inserted and makes it vanish. */
-	    payloadKey.clear();
-	    desiredPart = entry.part;
-	    desiredChannels = assembly->compactPartChannels[entry.part];
-	    desiredActiveCut = -1;
-	    desiredLodStructuralProxy = entry.geometry &&
-		entry.geometry->structuralProxy && entry.lodBacked;
-	}
-	else if (payload) {
-	    desiredLodStructuralProxy =
-		payload->resultKind == BOBOL_LOD_RESULT_AABB ||
-		payload->resultKind == BOBOL_LOD_RESULT_PROXY;
-	}
-
-	/* Structural proxies and source meshes generally do not share a local
-	 * coordinate system.  Cold coverage may use one normalized unit box
-	 * transformed by geometryTransform, while the cached PoP arrays remain
-	 * in the BoT asset's original coordinates.  Swapping only the part id
-	 * therefore draws a valid mesh with the proxy transform—often far
-	 * outside the view or collapsed to an apparently empty wireframe.
-	 * Choose the transform with the chosen representation and update it in
-	 * the same instance mutation as the part. */
-	const bool payloadUsesSourceMeshCoordinates = payload &&
-	    (payload->resultKind == BOBOL_LOD_RESULT_MESH ||
-	     payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL) &&
-	    entry.sourceMeshRequestValid;
-	const SbMatrix desiredLocalToRoot =
-	    payloadUsesSourceMeshCoordinates ?
-		compact_mesh_asset_matrix(this, entry) : entry.localToSource;
-
-	/* A live cold result may contain several independently drawable renderer
-	 * layers for this one logical CAD occurrence.  The first layer occupies the
-	 * authored instance record; later layers use private deterministic instance
-	 * IDs which inherit the same transform, style, and semantic identity. */
-	std::vector<SoBRLCadAssembly::CompactLayerPresentation> desiredLayers;
-	const auto previousLayerSet =
-	    assembly->compactLayerPresentations.find(entry.instance);
-	const std::vector<SoBRLCadAssembly::CompactLayerPresentation> *
-	    previousLayers = previousLayerSet ==
-		assembly->compactLayerPresentations.end() ? NULL :
-		&previousLayerSet->second;
-	std::unordered_map<std::string_view,
-	    const SoBRLCadAssembly::CompactLayerPresentation *> previousByKey;
-	if (previousLayers) {
-	    previousByKey.reserve(previousLayers->size());
-	    for (const SoBRLCadAssembly::CompactLayerPresentation &layer :
-		 *previousLayers)
-		previousByKey.emplace(layer.layerKey, &layer);
-	}
-	if (payload && desiredGeometryValid &&
-	    !payload->presentationLayers.empty()) {
-	    desiredLayers.reserve(payload->presentationLayers.size());
-	    for (size_t layerIndex = 0;
-		 layerIndex < payload->presentationLayers.size(); ++layerIndex) {
-		const BObolLodPresentationLayer &sourceLayer =
-		    payload->presentationLayers[layerIndex];
-		SoBRLCadAssembly::CompactLayerPresentation layer;
-		layer.layerKey = sourceLayer.layerKey.getString();
-		layer.part = cad_compact_layer_part_id(
-		    *payload, sourceLayer, sourceDrawMode);
-		layer.instance = layerIndex == 0 ? entry.instance :
-		    cad_compact_layer_instance_id(entry.instance, sourceLayer);
-		layer.channels = cad_compact_geometry_channels(
-		    sourceLayer.geometry.get());
-		layer.activeCut = sourceLayer.activeCut;
-		layer.coverage = sourceLayer.coverage ? true : false;
-		layer.geometryRevision = sourceLayer.geometryRevision;
-
-		const auto prior = previousByKey.find(layer.layerKey);
-		const SoBRLCadAssembly::CompactLayerPresentation *oldLayer =
-		    prior == previousByKey.end() ? NULL : prior->second;
-		const bool geometryChanged = !oldLayer ||
-		    oldLayer->part != layer.part ||
-		    oldLayer->geometryRevision != layer.geometryRevision ||
-		    assembly->partGeometry(layer.part) !=
-			sourceLayer.geometry.get();
-		if (geometryChanged &&
-		    sharedLodPartsUpdated.insert(layer.part).second) {
-		    Obol::SharedPartUpdate part;
-		    part.part = layer.part;
-		    part.geometry = sourceLayer.geometry;
-		    part.preservesBounds = true;
-		    lodSharedParts.push_back(std::move(part));
-		}
-		assembly->compactPartChannels[layer.part] = layer.channels;
-		assembly->compactLodParts.insert(layer.part);
-
-		if (layerIndex > 0) {
-		    const bool recordChanged = !oldLayer ||
-			oldLayer->part != layer.part ||
-			presentation.placementRevision != entry.placementRevision;
-		    if (recordChanged) {
-			Obol::InstanceUpdate update;
-			update.instance = layer.instance;
-			update.record = this->d->compactIndex->instances[i].record;
-			update.record.part = layer.part;
-			update.record.localToRoot = desiredLocalToRoot;
-			update.record.style = entry.style;
-			update.record.lodStructuralProxy = false;
-			update.record.lodCut = layer.activeCut >= 0 ?
-			    static_cast<uint8_t>(std::min<int>(
-				Obol::ProgressiveCutLimit - 1,
-				layer.activeCut)) : 255;
-			layerInstanceUpdates.push_back(std::move(update));
-		    } else if (presentation.appearanceRevision !=
-			    entry.appearanceRevision ||
-			presentation.selectionRevision !=
-			    entry.selectionRevision) {
-			Obol::InstanceStyleUpdate update;
-			update.instance = layer.instance;
-			update.style = entry.style;
-			instanceStyles.push_back(std::move(update));
-		    } else if (oldLayer->activeCut != layer.activeCut) {
-			Obol::InstanceLodUpdate update;
-			update.instance = layer.instance;
-			update.lodCut = layer.activeCut >= 0 ?
-			    static_cast<uint8_t>(std::min<int>(
-				Obol::ProgressiveCutLimit - 1,
-				layer.activeCut)) : 255;
-			lodCutUpdates.push_back(update);
-		    }
-		    if (!oldLayer || incrementalStructureUpdate) {
-			SoBRLCadAssembly::InstanceSemantic semantic =
-			    entry.semantic;
-			semantic.sourceInstanceKey = occurrenceKey;
-			layerSemantics.push_back(
-			    std::make_pair(layer.instance, semantic));
-		    }
-		}
-		desiredLayers.push_back(std::move(layer));
-	    }
-	}
-
-	/* Recompute only the auxiliary physical-instance contributions for this
-	 * logical occurrence.  The base contribution remains handled by the
-	 * ordinary compact presentation accounting below. */
-	if (previousLayers) {
-	    for (size_t layerIndex = 1;
-		 layerIndex < previousLayers->size(); ++layerIndex) {
-		const SoBRLCadAssembly::CompactLayerPresentation &oldLayer =
-		    (*previousLayers)[layerIndex];
-		if (incrementalUpdate)
-		    cad_compact_adjust_channel_count(
-			oldLayer.channels, false, wireCount, shadedCount);
-		const auto reference =
-		    assembly->compactActivePartReferences.find(oldLayer.part);
-		if (reference != assembly->compactActivePartReferences.end()) {
-		    if (reference->second > 1)
-			reference->second--;
-		    else
-			assembly->compactActivePartReferences.erase(reference);
-		}
-		partsToRemove.insert(oldLayer.part);
-		const auto replacement = std::find_if(
-		    desiredLayers.begin(), desiredLayers.end(),
-		    [&oldLayer](const auto &candidate) {
-			return candidate.instance == oldLayer.instance;
-		    });
-		if (replacement == desiredLayers.end()) {
-		    layerInstancesToRemove.push_back(oldLayer.instance);
-		    layerSemanticsToRemove.push_back(oldLayer.instance);
-		}
-	    }
-	}
-	for (size_t layerIndex = 1; layerIndex < desiredLayers.size();
-	     ++layerIndex) {
-	    const SoBRLCadAssembly::CompactLayerPresentation &layer =
-		desiredLayers[layerIndex];
-	    assembly->compactActivePartReferences[layer.part]++;
-	    cad_compact_adjust_channel_count(
-		layer.channels, true, wireCount, shadedCount);
-	}
-	if (desiredLayers.empty())
-	    assembly->compactLayerPresentations.erase(entry.instance);
-	else
-	    assembly->compactLayerPresentations[entry.instance] =
-		std::move(desiredLayers);
-	if ((previousLayers != NULL) !=
-		(assembly->compactLayerPresentations.find(entry.instance) !=
-		 assembly->compactLayerPresentations.end()) ||
-	    !layerInstanceUpdates.empty() || !layerInstancesToRemove.empty())
-	    instanceSetsChanged = true;
-
-	const bool partChanged = presentation.activePart != desiredPart ||
-	    presentation.payloadKey != payloadKey;
-	const bool cutChanged =
-	    presentation.activeCut != desiredActiveCut;
-	const bool appearanceChanged = !reset &&
-	    presentation.appearanceRevision != entry.appearanceRevision;
-	const bool selectionChanged = !reset &&
-	    presentation.selectionRevision != entry.selectionRevision;
-	/* Replacing immutable arrays behind the same part is wholly described by
-	 * the shared-part geometry journal.  Re-publishing its unchanged instance
-	 * record would mix a same-part update into an otherwise append-only leaf
-	 * batch and force the complete growing frame plan to be rebuilt. */
-	const bool overviewGeometryOnly = !partChanged &&
-	    BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
-		"lod-overview");
-	const bool recordChanged = !reset &&
-	    (partChanged ||
-	     (!overviewGeometryOnly &&
-		presentation.geometryRevision != entry.geometryRevision) ||
-	     presentation.placementRevision != entry.placementRevision ||
-	     presentation.lodStructuralProxy !=
-		desiredLodStructuralProxy);
-	if (partChanged) {
-	    if (presentation.activePart != entry.part &&
-		presentation.activePart != desiredPart)
-		partsToRemove.insert(presentation.activePart);
-	    presentation.payloadKey = payloadKey;
-	    presentation.activePart = desiredPart;
-	    presentation.channels = desiredChannels;
-	}
-	if (!presentationWasPresent || partChanged) {
-	    if (presentationWasPresent) {
-		const auto previousReference =
-		    assembly->compactActivePartReferences.find(previousPart);
-		if (previousReference !=
-			assembly->compactActivePartReferences.end()) {
-		    if (previousReference->second > 1)
-			previousReference->second--;
-		    else
-			assembly->compactActivePartReferences.erase(
-			    previousReference);
-		}
-	    }
-	    assembly->compactActivePartReferences[desiredPart]++;
-	}
-	if (reset && i < this->d->compactIndex->instances.size()) {
-	    Obol::InstanceUpdate &update =
-		this->d->compactIndex->instances[i];
-	    update.record.part = desiredPart;
-	    update.record.localToRoot = desiredLocalToRoot;
-	    update.record.style = entry.style;
-	    update.record.lodStructuralProxy =
-		desiredLodStructuralProxy;
-	    update.record.lodCut = desiredActiveCut >= 0 ?
-		static_cast<uint8_t>(std::min<int>(
-		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
-	} else if (recordChanged &&
-	    i < this->d->compactIndex->instances.size()) {
-	    Obol::InstanceUpdate &update =
-		this->d->compactIndex->instances[i];
-	    update.record.part = desiredPart;
-	    update.record.localToRoot = desiredLocalToRoot;
-	    /* The retained index record is structural storage and may predate a
-	     * selection/highlight delta.  A geometry or placement change publishes
-	     * a complete record, so carry the entry's authoritative effective style
-	     * in that same atomic update.  Otherwise the full record can overwrite a
-	     * newer selected style and the following selection revision is marked as
-	     * consumed without ever reaching the renderer. */
-	    update.record.style = entry.style;
-	    update.record.lodStructuralProxy =
-		desiredLodStructuralProxy;
-	    update.record.lodCut = desiredActiveCut >= 0 ?
-		static_cast<uint8_t>(std::min<int>(
-		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
-	    changedInstanceIndices.push_back(i);
-	} else if (appearanceChanged || selectionChanged) {
-	    Obol::InstanceStyleUpdate update;
-	    update.instance = entry.instance;
-	    update.style = entry.style;
-	    instanceStyles.push_back(update);
-	} else if (cutChanged) {
-	    Obol::InstanceLodUpdate update;
-	    update.instance = entry.instance;
-	    update.lodCut = desiredActiveCut >= 0 ?
-		static_cast<uint8_t>(std::min<int>(
-		    Obol::ProgressiveCutLimit - 1, desiredActiveCut)) : 255;
-	    lodCutUpdates.push_back(update);
-	}
-	presentation.activeCut = desiredActiveCut;
-	presentation.lodStructuralProxy = desiredLodStructuralProxy;
-
-	if (incrementalUpdate) {
-	    const bool previousWire = previousChannels & (1u | 4u);
-	    const bool currentWire = presentation.channels & (1u | 4u);
-	    const bool previousShaded = previousChannels & 2u;
-	    const bool currentShaded = presentation.channels & 2u;
-	    if (previousWire != currentWire)
-		wireCount = currentWire ? wireCount + 1 :
-		    (wireCount > 0 ? wireCount - 1 : 0);
-	    if (previousShaded != currentShaded)
-		shadedCount = currentShaded ? shadedCount + 1 :
-		    (shadedCount > 0 ? shadedCount - 1 : 0);
-	} else {
-	    if (presentation.channels & (1u | 4u))
-		wireCount++;
-	    if (presentation.channels & 2u)
-		shadedCount++;
-	}
-
-	if (!reset &&
-	    (presentation.visibilityRevision != entry.visibilityRevision ||
-	     presentation.selectionRevision != entry.selectionRevision)) {
-	    instanceSetsChanged = true;
-	}
-	presentation.geometryRevision = entry.geometryRevision;
-	presentation.appearanceRevision = entry.appearanceRevision;
-	presentation.placementRevision = entry.placementRevision;
-	presentation.visibilityRevision = entry.visibilityRevision;
-	presentation.selectionRevision = entry.selectionRevision;
-    }
-    const int64_t presentationPlanned =
-	presentationTiming ? bu_gettime() : 0;
-
-    /* Progressive assets are shared by every occurrence of the same source
-     * geometry.  One occurrence changing back to its base part must not
-     * remove a retained part that another occurrence still references. */
-    if (!partsToRemove.empty()) {
-	for (auto part = partsToRemove.begin();
-	     part != partsToRemove.end();) {
-	    const auto references =
-		assembly->compactActivePartReferences.find(*part);
-	    if (references !=
-		    assembly->compactActivePartReferences.end() &&
-		references->second > 0)
-		part = partsToRemove.erase(part);
-	    else
-		++part;
-	}
-    }
-
-    int presentationDrawMode = SoCADAssembly::WIREFRAME;
-    if (hiddenLine)
-	presentationDrawMode = SoCADAssembly::HIDDEN_LINE;
-    else if (shadedCount > 0 && wireCount > 0)
-	presentationDrawMode = SoCADAssembly::SHADED_WITH_EDGES;
-    else if (shadedCount > 0)
-	presentationDrawMode = SoCADAssembly::SHADED;
-    const bool drawModeChanged =
-	assembly->drawMode.getValue() != presentationDrawMode;
-
-    const bool structuralChanged = reset || !lodSharedParts.empty() ||
-	!baseParts.empty() || !changedInstanceIndices.empty() ||
-	!layerInstanceUpdates.empty() || !layerInstancesToRemove.empty() ||
-	!instanceStyles.empty() ||
-	!partsToRemove.empty() ||
-	instanceSetsChanged || drawModeChanged;
-
-    const char *presentationDebug =
-	getenv("BOBOL_COMPACT_PRESENTATION_DEBUG");
-    const bool presentationDebugEnabled = presentationDebug &&
-	presentationDebug[0] && !BU_STR_EQUAL(presentationDebug, "0");
-    if (structuralChanged) {
-	assembly->beginUpdate();
-	if (reset) {
-	    assembly->clear();
-	    assembly->clearSemanticMap();
-	    for (const BObolCompactInstanceEntry &entry :
-		 this->d->compactIndex->entries) {
-		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
-		semantic.sourceInstanceKey = compact_instance_identity(entry);
-		assembly->setInstanceSemantic(entry.instance, semantic);
-	    }
-	}
-	assembly->upsertSharedParts(baseParts);
-	assembly->upsertSharedParts(lodSharedParts);
-	/* Do not form a second full 150k-instance population merely to publish a
-	 * sparse representation change.  The retained compact index already owns
-	 * the authoritative records.  Small bounded batches keep transient memory
-	 * proportional to publication work rather than scene population. */
-	const size_t compactInstancePublicationBatchSize = 512;
-	const std::vector<Obol::InstanceUpdate> &compactInstances =
-	    this->d->compactIndex->instances;
-	std::vector<Obol::InstanceUpdate> instanceUpdates;
-	instanceUpdates.reserve(compactInstancePublicationBatchSize);
-	auto publishInstanceUpdates = [&assembly, &compactInstances, &instanceUpdates,
-			       compactInstancePublicationBatchSize](size_t instanceIndex) {
-	    instanceUpdates.push_back(compactInstances[instanceIndex]);
-	    if (instanceUpdates.size() == compactInstancePublicationBatchSize) {
-		assembly->upsertInstances(instanceUpdates);
-		instanceUpdates.clear();
-	    }
-	};
-	if (reset) {
-	    for (size_t i = 0;
-		 i < this->d->compactIndex->instances.size(); ++i)
-		publishInstanceUpdates(i);
-	} else {
-	    for (const size_t i : changedInstanceIndices)
-		publishInstanceUpdates(i);
-	}
-	if (!instanceUpdates.empty())
-	    assembly->upsertInstances(instanceUpdates);
-	for (size_t first = 0; first < layerInstanceUpdates.size();
-	     first += compactInstancePublicationBatchSize) {
-	    const size_t count = std::min(
-		compactInstancePublicationBatchSize,
-		layerInstanceUpdates.size() - first);
-	    std::vector<Obol::InstanceUpdate> batch(
-		layerInstanceUpdates.begin() + first,
-		layerInstanceUpdates.begin() + first + count);
-	    assembly->upsertInstances(batch);
-	}
-	assembly->updateInstanceStyles(instanceStyles);
-	for (const auto &semantic : layerSemantics)
-	    assembly->setInstanceSemantic(semantic.first, semantic.second);
-	for (const Obol::InstanceId instance : layerInstancesToRemove)
-	    assembly->removeInstance(instance);
-	for (const Obol::InstanceId instance : layerSemanticsToRemove)
-	    assembly->semantics.erase(instance);
-	std::vector<Obol::PartId> removedParts;
-	removedParts.reserve(partsToRemove.size());
-	for (const Obol::PartId &part : partsToRemove) {
-	    removedParts.push_back(part);
-	    assembly->compactPartChannels.erase(part);
-	    assembly->compactLodParts.erase(part);
-	}
-	if (!reset) {
-	    for (const size_t i : structuralEntryIndices) {
-		if (i >= this->d->compactIndex->entries.size())
-		    continue;
-		const BObolCompactInstanceEntry &entry =
-		    this->d->compactIndex->entries[i];
-		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
-		semantic.sourceInstanceKey = compact_instance_identity(entry);
-		assembly->setInstanceSemantic(entry.instance, semantic);
-	    }
-	}
-	assembly->removeParts(removedParts);
-	if (instanceSetsChanged) {
-	    std::vector<Obol::InstanceId> hiddenInstances =
-		this->d->compactIndex->hiddenInstances;
-	    hiddenInstances.insert(hiddenInstances.end(),
-		assembly->compactSpatiallyCulledInstances.begin(),
-		assembly->compactSpatiallyCulledInstances.end());
-	    std::sort(hiddenInstances.begin(), hiddenInstances.end());
-	    hiddenInstances.erase(std::unique(hiddenInstances.begin(),
-		hiddenInstances.end()), hiddenInstances.end());
-	    const auto expandedInstanceSet = [&assembly](
-		const std::vector<Obol::InstanceId> &baseSet) {
-		std::vector<Obol::InstanceId> expanded = baseSet;
-		for (const auto &item :
-		     assembly->compactLayerPresentations) {
-		    if (!std::binary_search(
-			    baseSet.begin(), baseSet.end(), item.first))
-			continue;
-		    for (size_t layerIndex = 1;
-			 layerIndex < item.second.size(); ++layerIndex)
-			expanded.push_back(item.second[layerIndex].instance);
-		}
-		std::sort(expanded.begin(), expanded.end());
-		expanded.erase(std::unique(expanded.begin(), expanded.end()),
-		    expanded.end());
-		return expanded;
-	    };
-	    assembly->setHiddenInstances(expandedInstanceSet(hiddenInstances));
-	    assembly->setSelectedInstances(expandedInstanceSet(
-		this->d->compactIndex->selectedInstances));
-	    assembly->setUnpickableInstances(expandedInstanceSet(
-		this->d->compactIndex->unpickableInstances));
-	}
-	assembly->drawMode = presentationDrawMode;
-	assembly->pickMode = SoCADAssembly::PICK_AUTO;
-	assembly->endUpdate();
-    }
-    if (!lodCutUpdates.empty())
-	assembly->updateInstanceCuts(lodCutUpdates);
-
-    /*
-     * Compact presentation is intentionally sparse, so an intended active
-     * part and the retained Obol instance must never drift silently.  Keep
-     * this full invariant audit behind an opt-in diagnostic: it is useful for
-     * validating streaming box-to-mesh waves, but an O(N) scan does not
-     * belong in the normal publication path for very large scenes.
-     */
-    if (presentationDebugEnabled) {
-	size_t missingInstances = 0;
-	size_t mismatchedParts = 0;
-	size_t retainedStructural = 0;
-	size_t retainedLodStructural = 0;
-	size_t structuralLodBacked = 0;
-	size_t structuralSourceRequests = 0;
-	size_t structuralEntryGeometry = 0;
-	size_t structuralGeometryPointerMismatch = 0;
-	std::map<std::string, size_t> structuralKinds;
-	std::map<std::string, size_t> structuralTypes;
-	for (const auto &item : assembly->compactInstancePresentations) {
-	    const std::optional<Obol::InstanceRecord> record =
-		assembly->getInstanceRecord(item.first);
-	    if (!record) {
-		missingInstances++;
-		continue;
-	    }
-	    if (!(record->part == item.second.activePart))
-		mismatchedParts++;
-	    const Obol::PartGeometry *geometry =
-		assembly->partGeometry(record->part);
-	    if (geometry && geometry->structuralProxy) {
-		retainedStructural++;
-		if (record->lodStructuralProxy)
-		    retainedLodStructural++;
-		const auto entryIndex =
-		    this->d->compactIndex->entryIndex.find(item.first);
-		if (entryIndex !=
-			this->d->compactIndex->entryIndex.end() &&
-		    entryIndex->second <
-			this->d->compactIndex->entries.size()) {
-		    const BObolCompactInstanceEntry &entry =
-			this->d->compactIndex->entries[entryIndex->second];
-		    if (entry.geometry && entry.geometry->structuralProxy)
-			structuralEntryGeometry++;
-		    if (!entry.geometry ||
-			entry.geometry.get() != geometry)
-			structuralGeometryPointerMismatch++;
-		    if (entry.lodBacked)
-			structuralLodBacked++;
-		    if (entry.sourceMeshRequestValid)
-			structuralSourceRequests++;
-		    structuralKinds[
-			entry.shapeSummary.geometryKind.getString()]++;
-		    structuralTypes[
-			entry.shapeSummary.sourceType.getString()]++;
-		}
-	    }
-	}
-	bu_log("BObol compact presentation invariant presentations=%zu "
-	       "retained_instances=%zu retained_structural=%zu "
-	       "retained_lod_structural=%zu "
-	       "structural_lod=%zu structural_requests=%zu "
-	       "structural_entry_geometry=%zu structural_pointer_mismatch=%zu "
-	       "missing_instances=%zu mismatched_parts=%zu "
-	       "updates=%zu lod_updates=%zu base_parts=%zu lod_parts=%zu "
-	       "removed_parts=%zu reset=%d\n",
-	       assembly->compactInstancePresentations.size(),
-	       assembly->instanceCount(), retainedStructural,
-	       retainedLodStructural,
-	       structuralLodBacked, structuralSourceRequests,
-	       structuralEntryGeometry, structuralGeometryPointerMismatch,
-	       missingInstances, mismatchedParts,
-	       reset ? this->d->compactIndex->instances.size() :
-	       changedInstanceIndices.size(),
-	       lodCutUpdates.size(), baseParts.size(), lodSharedParts.size(),
-	       partsToRemove.size(), reset ? 1 : 0);
-	if (retainedStructural) {
-	    for (const auto &kind : structuralKinds)
-		bu_log("  structural kind=%s count=%zu\n",
-		    kind.first.c_str(), kind.second);
-	    for (const auto &type : structuralTypes)
-		bu_log("  structural type=%s count=%zu\n",
-		    type.first.c_str(), type.second);
-	}
-    }
-
-    assembly->compactPresentationInitialized = TRUE;
-    assembly->compactPresentationIndex = this->d->compactIndex;
-    assembly->compactPresentationSourceRoutingId = this->d->routingId;
-    assembly->compactPresentationPopulationEpoch =
-	this->d->compactPopulationEpoch;
-    assembly->compactPresentationSourceRevision =
-	this->sourceRevision.getValue();
-    assembly->compactPresentationInputsRevision =
-	this->inputsRevision.getValue();
-    assembly->compactPresentationCadBatchRevision =
-	this->cadBatchRevisionGet();
-    assembly->compactPresentationPayloadRevision = payloadRevision;
-    assembly->compactPresentationDrawMode = sourceDrawMode;
-    assembly->compactWirePresentationCount = wireCount;
-    assembly->compactShadedPresentationCount = shadedCount;
-    viewState->acknowledgeCadOccurrenceChanges(this, payloadRevision);
-    /* A structural leaf box is useful per-object coverage.  Once its retained
-     * presentation is committed, retireCompactOverviewAfterPresentation can
-     * safely replace the whole-target extent cue. */
-    const_cast<SoBRLDatabaseSource *>(this)->
-	retireCompactOverviewAfterPresentation(assembly);
-    if (presentationTiming) {
-	const int64_t presentationCompleted = bu_gettime();
-	const int64_t total =
-	    presentationCompleted - presentationStarted;
-	if (total >= 10000) {
-	    bu_log("BObol compact presentation total=%" PRId64 "us "
-		   "index=%" PRId64 "us plan=%" PRId64 "us "
-		   "publish=%" PRId64 "us reset=%d full_resync=%d "
-		   "sparse_payload=%d cad_batch_changed=%d "
-		   "changed_keys=%zu structural_entries=%zu entries=%zu "
-		   "payload_input=%zu shared_parts=%zu "
-		   "instance_updates=%zu lod_updates=%zu\n",
-		   total,
-		   presentationIndexed - presentationStarted,
-		   presentationPlanned - presentationIndexed,
-		   presentationCompleted - presentationPlanned,
-		   reset ? 1 : 0, fullPayloadResync ? 1 : 0,
-		   sparsePayloadUpdate ? 1 : 0,
-		   cadBatchChanged ? 1 : 0,
-		   changedOccurrenceKeys.size(),
-		   structuralEntryIndices.size(), entryIndices.size(),
-		   payloadInput->size(), lodSharedParts.size(),
-		   reset ? this->d->compactIndex->instances.size() :
-		   changedInstanceIndices.size(),
-		   lodCutUpdates.size());
-	}
-    }
-    return assembly;
-}
-
-static SoBRLCadAssembly *
-cad_view_lod_assembly_for_action(SoAction *action,
-				 const SoBRLDatabaseSource *source)
-{
-    const BObolViewLodState *viewState =
-	bobol_view_lod_state_for_action(action);
-    if (source && source->isCompactOccurrenceRegistry()) {
-	if (viewState) {
-	    SoBRLCadAssembly *current =
-		source->currentCompactViewLodAssembly(viewState);
-	    if (current)
-		return current;
-	    std::vector<const BObolViewLodState::CadPayload *> payloads;
-	    return source->compactViewLodAssembly(payloads, viewState);
-	}
-	/* Aggregate sources require an exact source binding.  The legacy
-	 * path/name lookup may otherwise attach a sibling source's payload. */
-	return NULL;
-    }
-    const BObolViewLodState::CadPayload *payload =
-	bobol_view_lod_cad_for_action(action, source);
-    return cad_view_lod_assembly(source, payload, viewState);
-}
-
 static void
 cad_add_vlist_instance(cad_build_data &data,
 		       SoBRLVListShape *shape,
@@ -11196,7 +8633,7 @@ cad_add_vlist_instance(cad_build_data &data,
 {
     if (!shape)
 	return;
-    Obol::PartGeometry geometry;
+    Obol::PartGeometryBuilder geometry;
     if (!cad_vlist_part_geometry(shape, geometry)) {
 	data.unsupported = 1;
 	return;
@@ -11214,7 +8651,8 @@ cad_add_vlist_instance(cad_build_data &data,
     const std::string instanceKey =
 	cad_instance_key(data.source, shape->sourcePath.getValue().getString(),
 			 data.ordinal++);
-    Obol::InstanceId instanceId = Obol::CadIdBuilder::hash128(instanceKey);
+    Obol::InstanceId instanceId =
+	Obol::CadIdBuilder::instanceId(instanceKey);
     Obol::InstanceRecord record;
     record.part = partId;
     record.localToRoot = matrix;
@@ -11234,8 +8672,7 @@ cad_add_vlist_instance(cad_build_data &data,
 	data.selectedInstances.push_back(instanceId);
     if (!shape->selectable.getValue())
 	data.unpickableInstances.push_back(instanceId);
-    if (data.storeSemantics)
-	data.assembly->setInstanceSemantic(instanceId, cad_vlist_semantic(shape));
+    data.semantics.emplace_back(instanceId, cad_vlist_semantic(shape));
     data.wireCount++;
 }
 
@@ -11246,7 +8683,7 @@ cad_add_mesh_instance(cad_build_data &data,
 {
     if (!shape)
 	return;
-    Obol::PartGeometry geometry;
+    Obol::PartGeometryBuilder geometry;
     if (!cad_mesh_part_geometry(shape, geometry)) {
 	data.unsupported = 1;
 	return;
@@ -11264,7 +8701,8 @@ cad_add_mesh_instance(cad_build_data &data,
     const std::string instanceKey =
 	cad_instance_key(data.source, shape->sourcePath.getValue().getString(),
 			 data.ordinal++);
-    Obol::InstanceId instanceId = Obol::CadIdBuilder::hash128(instanceKey);
+    Obol::InstanceId instanceId =
+	Obol::CadIdBuilder::instanceId(instanceKey);
     Obol::InstanceRecord record;
     record.part = partId;
     record.localToRoot = matrix;
@@ -11284,8 +8722,7 @@ cad_add_mesh_instance(cad_build_data &data,
 	data.selectedInstances.push_back(instanceId);
     if (!shape->selectable.getValue())
 	data.unpickableInstances.push_back(instanceId);
-    if (data.storeSemantics)
-	data.assembly->setInstanceSemantic(instanceId, cad_mesh_semantic(shape));
+    data.semantics.emplace_back(instanceId, cad_mesh_semantic(shape));
     data.shadedCount++;
 }
 
@@ -11345,7 +8782,7 @@ compact_add_part_if_needed(BObolCompactInstanceIndex &index,
 	return;
     }
 
-    partId = Obol::CadIdBuilder::hash128(partKey);
+    partId = Obol::CadIdBuilder::partId(partKey);
     index.partIdByKey[partKey] = partId;
     BObolCompactPartReference part;
     part.part = partId;
@@ -11363,9 +8800,7 @@ compact_add_geometry_part_if_needed(BObolCompactInstanceIndex &index,
 	return 0;
     auto found = index.partIdByGeometry.find(geometry.get());
     if (found != index.partIdByGeometry.end()) {
-	const std::shared_ptr<const Obol::PartGeometry> retained =
-	    found->second.geometry.lock();
-	if (retained && retained.get() == geometry.get()) {
+	if (bobol_compact_geometry_identity_matches(found->second, geometry)) {
 	    partId = found->second.part;
 	    return 1;
 	}
@@ -11460,7 +8895,7 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
     const SbMatrix matrix = cad_instance_matrix(source, geometryToSource);
     const std::string instanceKey = cad_instance_key(source, path, ordinal++);
     const Obol::InstanceId instanceId =
-	Obol::CadIdBuilder::hash128(instanceKey);
+	Obol::CadIdBuilder::instanceId(instanceKey);
 
     BObolCompactInstanceEntry entry;
     entry.instance = instanceId;
@@ -12604,15 +10039,9 @@ compact_assembly_draw_mode(SoBRLCadAssembly *assembly,
 {
     if (!assembly || !source || !index)
 	return;
-    int drawMode = SoCADAssembly::WIREFRAME;
-    if (source_record_draw_mode(source) == BOBOL_LOD_DRAW_HIDDEN_LINE)
-	drawMode = SoCADAssembly::HIDDEN_LINE;
-    else if (index->shadedCount > 0 && index->wireCount > 0)
-	drawMode = SoCADAssembly::SHADED_WITH_EDGES;
-    else if (index->shadedCount > 0)
-	drawMode = SoCADAssembly::SHADED;
-    if (assembly->drawMode.getValue() != drawMode)
-	assembly->drawMode = drawMode;
+    assembly->setPresentationDrawMode(cad_presentation_draw_mode(
+	source_record_draw_mode(source), index->shadedCount,
+	index->wireCount));
 }
 
 uint64_t
@@ -12648,6 +10077,11 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
     if (!this->d->compiledAssemblyDirty &&
 	this->d->compiledAssemblyNodeId == sourceNodeId)
 	return this->d->compiledAssemblyActive ? 1 : 0;
+    const SbBool precedingAssemblyActive = this->d->compiledAssemblyActive;
+    const auto rejectPublication = [this, precedingAssemblyActive]() {
+	this->d->compiledAssemblyActive = precedingAssemblyActive;
+	return precedingAssemblyActive ? 1 : 0;
+    };
     this->d->compiledAssemblyActive = FALSE;
 
     const SbBool hasCompactPayload = this->d->compactIndexActive &&
@@ -12688,14 +10122,18 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	if (this->d->compiledCompactStyleSignature != styleSignature) {
 	    std::vector<Obol::InstanceStyleUpdate> styles;
 	    styles.reserve(this->d->compactIndex->instances.size());
-	    for (const Obol::InstanceUpdate &instance :
+	for (const Obol::InstanceUpdate &instance :
 		 this->d->compactIndex->instances) {
 		Obol::InstanceStyleUpdate style;
 		style.instance = instance.instance;
 		style.style = instance.record.style;
-		styles.push_back(style);
-	    }
-	    this->d->compiledAssembly->updateInstanceStyles(styles);
+	    styles.push_back(style);
+	}
+	    if (!bobol_cad_validate_styles(styles,
+		    "compiled CAD style preflight") ||
+		!bobol_cad_publish_styles(this->d->compiledAssembly, styles,
+		    "compiled CAD style publication"))
+		return rejectPublication();
 	    this->d->compiledCompactStyleSignature = styleSignature;
 	}
 	const uint64_t hiddenSignature = compact_state_signature(
@@ -12737,25 +10175,26 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	return 1;
     }
 
-    this->d->compiledAssembly->beginUpdate();
-    this->d->compiledAssembly->clear();
-    this->d->compiledAssembly->clearSemanticMap();
-
     if (this->d->compactIndexActive && this->d->compactIndex &&
 	!this->d->compactIndex->instances.empty()) {
-	std::vector<Obol::SharedPartUpdate> parts;
+	std::vector<Obol::PartUpdate> parts;
 	parts.reserve(this->d->compactIndex->parts.size());
 	for (const BObolCompactPartReference &partRef :
 	     this->d->compactIndex->parts) {
 	    if (!partRef.geometry)
 		continue;
-	    Obol::SharedPartUpdate part;
+	    Obol::PartUpdate part;
 	    part.part = partRef.part;
-	    part.geometry = partRef.geometry;
+	    if (!bobol_cad_admit_geometry(partRef.geometry, part.geometry,
+		    "compiled compact part staging"))
+		return rejectPublication();
 	    parts.push_back(part);
 	}
-	this->d->compiledAssembly->upsertSharedParts(parts);
-	this->d->compiledAssembly->upsertInstances(this->d->compactIndex->instances);
+	if (!bobol_cad_replace_scene(this->d->compiledAssembly, parts,
+		this->d->compactIndex->instances,
+		"compiled compact replacement"))
+	    return rejectPublication();
+	this->d->compiledAssembly->clearSemanticMap();
 	this->d->compiledAssembly->setHiddenInstances(
 	    this->d->compactIndex->hiddenInstances);
 	this->d->compiledAssembly->setSelectedInstances(
@@ -12781,7 +10220,6 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	this->d->compiledCompactStructureSignature = structureSignature;
 	this->d->compiledCompactStyleSignature = styleSignature;
 	this->d->compiledCompactSemanticSignature = semanticSignature;
-	this->d->compiledAssembly->endUpdate();
 	this->ensureCompiledAssemblyChild();
 	this->d->compiledAssemblyNodeId = this->getNodeId();
 	this->d->compiledAssemblyDirty = FALSE;
@@ -12797,36 +10235,52 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
     this->d->compiledCompactUnpickableSignature = 0;
     cad_build_data data;
     data.source = this;
-    data.assembly = this->d->compiledAssembly;
     data.ordinal = 0;
     data.unsupported = 0;
     data.wireCount = 0;
     data.shadedCount = 0;
-    data.storeSemantics = 1;
 
     const SbMatrix identity = SbMatrix::identity();
     for (int i = 0; i < this->getNumChildren() && !data.unsupported; i++)
 	cad_collect_realized_node(data, this->getChild(i), identity);
 
+    std::vector<Obol::PartUpdate> parts;
     if (!data.unsupported && !data.instances.empty()) {
-	this->d->compiledAssembly->upsertParts(data.parts);
-	this->d->compiledAssembly->upsertInstances(data.instances);
+	parts.reserve(data.parts.size());
+	for (cad_pending_part &partUpdate : data.parts) {
+	    Obol::PartUpdate part;
+	    part.part = partUpdate.part;
+	    const auto geometry =
+		bobol_cad_build_geometry(std::move(partUpdate.geometry),
+		    "compiled realized part staging");
+	    if (!bobol_cad_admit_geometry(geometry, part.geometry,
+		    "compiled realized part staging"))
+		return rejectPublication();
+	    parts.push_back(std::move(part));
+	}
+    }
+
+    const std::vector<Obol::InstanceUpdate> emptyInstances;
+    const std::vector<Obol::InstanceUpdate> &replacementInstances =
+	(!data.unsupported && !data.instances.empty()) ?
+	data.instances : emptyInstances;
+    if (!bobol_cad_replace_scene(this->d->compiledAssembly, parts,
+	    replacementInstances, "compiled realized replacement"))
+	return rejectPublication();
+    this->d->compiledAssembly->clearSemanticMap();
+    if (!data.unsupported && !data.instances.empty()) {
+	for (const auto &semantic : data.semantics)
+	    this->d->compiledAssembly->setInstanceSemantic(
+		semantic.first, semantic.second);
 	this->d->compiledAssembly->setHiddenInstances(data.hiddenInstances);
 	this->d->compiledAssembly->setSelectedInstances(data.selectedInstances);
 	this->d->compiledAssembly->setUnpickableInstances(
 	    data.unpickableInstances);
-	if (source_record_draw_mode(this) == BOBOL_LOD_DRAW_HIDDEN_LINE)
-	    this->d->compiledAssembly->drawMode = SoCADAssembly::HIDDEN_LINE;
-	else if (data.shadedCount > 0 && data.wireCount > 0)
-	    this->d->compiledAssembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
-	else if (data.shadedCount > 0)
-	    this->d->compiledAssembly->drawMode = SoCADAssembly::SHADED;
-	else
-	    this->d->compiledAssembly->drawMode = SoCADAssembly::WIREFRAME;
+	this->d->compiledAssembly->setPresentationDrawMode(
+	    cad_presentation_draw_mode(source_record_draw_mode(this),
+		data.shadedCount, data.wireCount));
 	this->d->compiledAssemblyActive = TRUE;
     }
-
-    this->d->compiledAssembly->endUpdate();
     this->d->compiledAssemblyNodeId = this->getNodeId();
     this->d->compiledAssemblyDirty = FALSE;
     return this->d->compiledAssemblyActive ? 1 : 0;
@@ -12838,7 +10292,7 @@ SoBRLDatabaseSource::appendCadRenderBatch(BObolCadBatchBuildState *state,
 {
     const SbBool hasCompactPayload = this->d->compactIndexActive &&
 	this->d->compactIndex && !this->d->compactIndex->instances.empty();
-    if (!state || !state->assembly || !this->visible.getValue() ||
+    if (!state || !state->valid || !this->visible.getValue() ||
 	this->auxiliarySource.getValue() ||
 	source_record_draw_mode(this) == BOBOL_LOD_DRAW_HIDDEN_LINE ||
 	(!hasCompactPayload &&
@@ -12854,9 +10308,13 @@ SoBRLDatabaseSource::appendCadRenderBatch(BObolCadBatchBuildState *state,
 		if (!partRef.geometry ||
 		    !state->partIds.insert(partRef.part).second)
 		    continue;
-		Obol::SharedPartUpdate part;
+		Obol::PartUpdate part;
 		part.part = partRef.part;
-		part.geometry = partRef.geometry;
+		if (!bobol_cad_admit_geometry(partRef.geometry, part.geometry,
+			"CAD render batch staging")) {
+		    state->valid = false;
+		    return 0;
+		}
 		state->parts.push_back(part);
 	    }
 	}
@@ -12877,7 +10335,7 @@ SoBRLDatabaseSource::appendCadRenderBatch(BObolCadBatchBuildState *state,
 		 this->d->compactIndex->entries) {
 		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
 		semantic.sourceInstanceKey = compact_instance_identity(entry);
-		state->assembly->setInstanceSemantic(entry.instance, semantic);
+		state->semantics.emplace_back(entry.instance, semantic);
 	    }
 	}
 	state->wireCount += this->d->compactIndex->wireCount;
@@ -12887,12 +10345,10 @@ SoBRLDatabaseSource::appendCadRenderBatch(BObolCadBatchBuildState *state,
 
     cad_build_data data;
     data.source = this;
-    data.assembly = state->assembly;
     data.ordinal = 0;
     data.unsupported = 0;
     data.wireCount = 0;
     data.shadedCount = 0;
-    data.storeSemantics = 0;
 
     const SbMatrix identity = SbMatrix::identity();
     for (int i = 0; i < this->getNumChildren() && !data.unsupported; i++)
@@ -12900,17 +10356,26 @@ SoBRLDatabaseSource::appendCadRenderBatch(BObolCadBatchBuildState *state,
     if (data.unsupported || data.instances.empty())
 	return 0;
 
-    for (Obol::PartUpdate &part : data.parts) {
+    for (cad_pending_part &part : data.parts) {
 	if (state->partIds.insert(part.part).second) {
-	    Obol::SharedPartUpdate sharedPart;
+	    Obol::PartUpdate sharedPart;
 	    sharedPart.part = part.part;
-	    sharedPart.geometry =
-		std::make_shared<const Obol::PartGeometry>(std::move(part.geometry));
+	    const auto sharedGeometry =
+		bobol_cad_build_geometry(std::move(part.geometry),
+		    "collected CAD render batch staging");
+	    if (!bobol_cad_admit_geometry(sharedGeometry, sharedPart.geometry,
+		    "collected CAD render batch staging")) {
+		state->valid = false;
+		return 0;
+	    }
 	    state->parts.push_back(std::move(sharedPart));
 	}
     }
     state->instances.insert(state->instances.end(), data.instances.begin(),
 	data.instances.end());
+    if (includeSemantics)
+	state->semantics.insert(state->semantics.end(), data.semantics.begin(),
+	    data.semantics.end());
     state->hiddenInstances.insert(state->hiddenInstances.end(),
 	data.hiddenInstances.begin(), data.hiddenInstances.end());
     state->selectedInstances.insert(state->selectedInstances.end(),
@@ -15403,7 +12868,6 @@ SoBRLDatabaseSource::realizeDatabaseWireframe(void)
 {
     return this->realizeDatabaseWireframe(NULL);
 }
-
 SbBool
 SoBRLDatabaseSource::realizeDatabaseWireframe(
     BObolCompactOccurrenceStream *stream)
@@ -16648,15 +14112,15 @@ compact_coverage_aabb_geometry(const SbBox3f &bounds,
     if (extent[0] > SMALL_FASTF && extent[1] > SMALL_FASTF &&
 	extent[2] > SMALL_FASTF) {
 	static const std::shared_ptr<const Obol::PartGeometry> unitAabb = []() {
-	    Obol::PartGeometry geometry;
+	    Obol::PartGeometryBuilder geometry;
 	    const SbBox3f unitBounds(SbVec3f(0.0f, 0.0f, 0.0f),
 		SbVec3f(1.0f, 1.0f, 1.0f));
 	    if (!cad_wire_part_geometry_from_aabb(unitBounds, geometry))
 		return std::shared_ptr<const Obol::PartGeometry>();
 	    geometry.subpixelProxyEligible = true;
 	    geometry.structuralProxy = true;
-	    return std::make_shared<const Obol::PartGeometry>(
-		std::move(geometry));
+	    return bobol_cad_build_geometry(
+		std::move(geometry), "unit structural bounds");
 	}();
 	geometryTransform.setScale(extent);
 	SbMatrix translation;
@@ -16664,24 +14128,25 @@ compact_coverage_aabb_geometry(const SbBox3f &bounds,
 	geometryTransform.multRight(translation);
 	return unitAabb;
     }
-    Obol::PartGeometry geometry;
+    Obol::PartGeometryBuilder geometry;
     if (!cad_wire_part_geometry_from_aabb(bounds, geometry))
 	return std::shared_ptr<const Obol::PartGeometry>();
-    return std::make_shared<const Obol::PartGeometry>(
-	std::move(geometry));
+    return bobol_cad_build_geometry(
+	std::move(geometry), "structural bounds");
 }
 
 static std::shared_ptr<const Obol::PartGeometry>
 compact_coverage_overview_geometry(const SbBox3f &bounds)
 {
-    Obol::PartGeometry geometry;
+    Obol::PartGeometryBuilder geometry;
     if (!cad_wire_part_geometry_from_aabb(bounds, geometry))
 	return std::shared_ptr<const Obol::PartGeometry>();
     /* The overview is already one aggregate for the complete target.  It must
      * remain a visible extent, not enter the leaf subpixel-point classifier. */
     geometry.subpixelProxyEligible = false;
     geometry.structuralProxy = true;
-    return std::make_shared<const Obol::PartGeometry>(std::move(geometry));
+    return bobol_cad_build_geometry(
+	std::move(geometry), "coverage overview");
 }
 
 static BObolCompactOccurrence
@@ -17128,16 +14593,15 @@ compact_stream_publish_parallel_coverage(
 		 * selects the view cut directly.  Building the shaded face-set PoP
 		 * as well made one BREP appear twice: correct native curves plus a
 		 * coarse triangulation overlay which looked like a lingering box. */
-		Obol::PartGeometry wireGeometry;
+		Obol::PartGeometryBuilder wireGeometry;
 		if (cad_progressive_wire_part_geometry_from_provider(
 			&intern, source, wireGeometry) > 0 &&
 		    wireGeometry.wire) {
 		    asset.vertexCount = wireGeometry.wire->segmentCount() * 2;
 		    asset.faceCount = 0;
 		    asset.proxyGeometryTransform = SbMatrix::identity();
-		    asset.geometry =
-			std::make_shared<const Obol::PartGeometry>(
-			    std::move(wireGeometry));
+		    asset.geometry = bobol_cad_build_geometry(
+			std::move(wireGeometry), "BREP wire asset");
 		    asset.ready = asset.geometry ? true : false;
 		}
 	    } else if (intern.idb_type == ID_BREP && intern.idb_ptr &&
@@ -17186,7 +14650,7 @@ compact_stream_publish_parallel_coverage(
 		 * layer.  Its conversion may reach legacy NMG/plot code, so keep
 		 * that conversion serialized while the detached workers continue
 		 * importing and publishing distinct occurrences concurrently. */
-		Obol::PartGeometry geometry;
+		Obol::PartGeometryBuilder geometry;
 		const int internalType = intern.idb_type;
 		const int drawMode = source_record_draw_mode(source);
 		const bool wireGeometry =
@@ -17232,9 +14696,8 @@ compact_stream_publish_parallel_coverage(
 		    asset.faceCount = geometry.shaded ?
 			geometry.shaded->indices.size() / 3 : 0;
 		    asset.proxyGeometryTransform = SbMatrix::identity();
-		    asset.geometry =
-			std::make_shared<const Obol::PartGeometry>(
-			    std::move(geometry));
+		    asset.geometry = bobol_cad_build_geometry(
+			std::move(geometry), "direct compact asset");
 		    asset.ready = asset.geometry ? true : false;
 		}
 	    }
@@ -18049,7 +15512,6 @@ bobol_database_source_realize_mesh_with_cache(
     source->syncRealizedShapeOwnerState();
     return TRUE;
 }
-
 SbBool
 SoBRLDatabaseSource::realizePrototypeWireframe(void)
 {
@@ -19684,7 +17146,7 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     const bool wantWire = sourceDrawMode == BOBOL_LOD_DRAW_WIRE;
     SoBRLVListShape *sharedWire = NULL;
     SoBRLMeshShape *sharedMesh = NULL;
-    Obol::PartGeometry generated;
+    Obol::PartGeometryBuilder generated;
     bool geometryValid = false;
     bool directWire = false;
     bool directMesh = false;
@@ -19826,9 +17288,11 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    }
 	}
 	if (!geometry) {
-	    partId = Obol::CadIdBuilder::hash128(partKey);
-	    geometry = std::make_shared<const Obol::PartGeometry>(
-		std::move(generated));
+	    partId = Obol::CadIdBuilder::partId(partKey);
+	    geometry = bobol_cad_build_geometry(
+		std::move(generated), "compact occurrence geometry");
+	    if (!geometry)
+		return -1;
 	    BObolCompactPartReference partRef;
 	    partRef.part = partId;
 	    partRef.geometry = geometry;

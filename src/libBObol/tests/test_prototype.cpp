@@ -36,6 +36,7 @@
 #include "BObol/BVListShape.h"
 #include "BObol/BViewLod.h"
 #include "BObol/BViewportImage.h"
+#include "../cad_assembly_private.h"
 
 #include <Obol/cad/SoCADAssembly.h>
 
@@ -5402,8 +5403,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    break;
 	}
     }
-    if (!botProxyAssembly ||
-	botProxyAssembly->drawMode.getValue() != SoCADAssembly::WIREFRAME)
+    SoBRLCadAssembly *brlBotProxyAssembly =
+	static_cast<SoBRLCadAssembly *>(botProxyAssembly);
+    if (!brlBotProxyAssembly || brlBotProxyAssembly->presentationDrawMode() !=
+	    Obol::CadDrawMode::Wireframe)
 	FAIL("database-backed LoD BoT proxy should use a drawable wire presentation until mesh data arrives");
     const SbBox3f botRequestBounds = botOccurrence.sourceMeshRequest.bounds;
     if (botRequestBounds.isEmpty() ||

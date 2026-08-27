@@ -180,6 +180,16 @@ ged_draw_shape_ref_for_candidate(
     struct ged *gedp,
     const struct ged_draw_shape_candidate *candidate);
 
+/* Resolve the compact visible-occurrence index without exposing its concrete
+ * scene backend to semantic API code. */
+extern ged_draw_shape_ref
+ged_draw_shape_ref_for_path_match(
+    struct ged *gedp,
+    struct ged_view_context *view,
+    int draw_mode,
+    const char *path,
+    int include_descendants);
+
 extern ged_draw_shape_ref
 ged_draw_advance_shape_ref(struct ged *gedp, ged_draw_shape_ref ref, int delta);
 

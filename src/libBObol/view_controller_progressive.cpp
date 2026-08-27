@@ -275,7 +275,7 @@ BObolViewController::advanceProgressiveWork(
      * update here would invalidate work between replay slices.  Keep worker
      * queues bounded by their existing backpressure and let the already
      * requested successor frame commit before publishing more scene state. */
-    if (this->d->lodInterruptedPresentationReplayPending) {
+    if (this->d->lodInterruptedPresentationReplay.pending()) {
 	localStatus.hasMore = 1;
 	this->markProgressiveWorkPending();
 	if (status)
@@ -336,7 +336,7 @@ BObolViewController::advanceProgressiveWork(
 		    this->d->lodInteractiveProgressiveCeiling);
 		this->advanceLodPolicyRevision(
 		    LodPolicyTransition::PRESERVE_SCALE_DEMAND);
-		this->d->lodDiscretePopulationTrialAvailable = TRUE;
+		this->d->lodDiscretePopulationTrialPermit.grant();
 		this->markProgressiveWorkPending();
 		this->requestRender("lod-scale-interaction-refine");
 	    }
@@ -397,22 +397,31 @@ BObolViewController::advanceProgressiveWork(
 	     * resource pressure, but a fully covered orthographic population has
 	     * no depth-dependent LoD demand.  Preserve its occurrence cuts unless
 	     * measured FPS/resource admission explicitly requires coarsening. */
-	    this->d->lodRetainPoseOccurrenceCuts =
+	    this->d->lodPoseContinuity.setRetainOccurrenceCuts(
 		restoreInputs.orthographic && !scaleChanged &&
 		this->d->lodInteractionStartCertificate.
 		    startedFromReadyView() &&
-		haveRetainedMeshPayloads ? TRUE : FALSE;
+		haveRetainedMeshPayloads);
 	    /* Orthographic depth is irrelevant, but rotation still changes
 	     * projected area and silhouette.  Perspective pose and scale changes
 	     * can move importance as well.  Finish one exact demand census before
 	     * authorizing a single redistribution of the retained scene budget. */
-	    this->d->lodRetainedImportanceCensusPending =
+	    this->d->lodPlanningObligations.setImportanceCensus(
 		this->d->lodInteractionStartCertificate.
 		    startedFromReadyView() &&
-		haveRetainedMeshPayloads ? TRUE : FALSE;
+		haveRetainedMeshPayloads);
+	    if (this->d->forceTerminalLodRefinement) {
+		this->d->lodTargetPixelError =
+		    std::min(this->d->lodTargetPixelError, 0.25f);
+		restoreInputs.currentTargetPixelError =
+		    this->d->lodTargetPixelError;
+		this->d->lodPlanningObligations.retireImportanceCensus();
+	    }
 	    BObolLodPresentationPolicy::QuietInputs quietInputs;
 	    quietInputs.presentation = restoreInputs;
-	    if (recalledExactView) {
+	    quietInputs.unboundedTerminal =
+		this->d->forceTerminalLodRefinement != FALSE;
+	    if (recalledExactView && !quietInputs.unboundedTerminal) {
 		quietInputs.exactView.valid = true;
 		quietInputs.exactView.targetPixelError =
 		    recalledViewQuality.targetPixelError;
@@ -453,7 +462,8 @@ BObolViewController::advanceProgressiveWork(
 	     * targets 20 FPS; seed its handoff from the last proven stable scene
 	     * budget, not from the transient motion floor.  Genuine quiet-frame
 	     * overload evidence may still reduce this restored value. */
-	    if (this->d->lodInteractionStartCertificate.captured())
+	    if (!this->d->forceTerminalLodRefinement &&
+		this->d->lodInteractionStartCertificate.captured())
 		this->d->commitAdmissionPlan(
 		    BObolLodAdmissionPlanner::raiseCapacityBudget(
 			this->d->lodAdmissionEvidence,
@@ -467,7 +477,7 @@ BObolViewController::advanceProgressiveWork(
 			this->d->lodAdmissionCursor,
 			restore.provenRenderCostCapacity));
 	    this->d->lodInteractionStartCertificate.reset();
-	    this->d->lodDiscretePopulationTrialAvailable = FALSE;
+	    this->d->lodDiscretePopulationTrialPermit.revoke();
 	    /* A motion ceiling also applies to native progressive wire stored in
 	     * the standing CAD assembly.  It has no view-state mesh payload and
 	     * therefore no occurrence pass capable of completing the mesh
@@ -565,7 +575,7 @@ BObolViewController::advanceProgressiveWork(
 	    options->maxLodResults : 256;
 	const SbBool submissionPausedByPresentation =
 	    BObolLodAdmissionPlanner::presentationPausesSubmission(
-		this->d->lodAdmissionPointProxyFramePending != FALSE,
+		this->d->lodPointAdmissionFrame.pending(),
 		this->d->lodPointQualityPhase.presentationPending(),
 		this->d->lodAdmissionEvidence.capacity().rescanAfterFrame(),
 		controller_has_cad_presentation(this->d->viewAttachment)) ?
@@ -736,8 +746,9 @@ BObolViewController::advanceProgressiveWork(
 		    this->d->lodSubmissionEntryOffset = 0;
 		    this->d->clearLodSubmissionPlan();
 		    this->d->lodSubmissionPass.clearRescan();
-		    this->d->lodResidentAdmissionRetryActive =
-			this->d->lodCoveragePolicy.effectiveComplete();
+		    this->d->lodPlanningObligations.
+			setResidentAdmissionRetry(
+			    this->d->lodCoveragePolicy.effectiveComplete());
 		    this->d->lodSubmissionPass.activate();
 		    this->d->lodResidentAdmissionRevision =
 			admissionRevision;
@@ -896,13 +907,13 @@ BObolViewController::advanceProgressiveWork(
 	compactionInputs.coverageRequired &&
 	(this->d->lodCoveragePolicy.active() ||
 	 this->d->lodSubmissionPass.rescanPending() ||
-	 this->d->lodRetainedRefinementPending ||
-	 this->d->lodRetainedResidencyPending ||
+	 this->d->lodRetainedPass.refinementPending() ||
+	 this->d->lodRetainedPass.residencyPending() ||
 	 this->d->lodAdmissionEvidence.capacity().rescanAfterFrame() ||
 	 this->d->lodPresentationPolicy.handoffPending() ||
 	 this->d->lodPresentationTransaction.barrierPending() ||
 	 this->d->lodPresentationTransaction.publicationPending() ||
-	 this->d->lodAdmissionPointProxyFramePending ||
+	 this->d->lodPointAdmissionFrame.pending() ||
 	 this->d->lodPointQualityPhase.pending() ||
 	 this->d->lodAvailabilityLedger.residentGrowthPending() ||
 	 this->d->lodAdmissionEvidence.headroom().retryPending());
@@ -975,7 +986,7 @@ BObolViewController::advanceProgressiveWork(
 	     this->d->lodActiveGeneration) > 0);
     const bool publicationSubmissionPaused =
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
-	    this->d->lodAdmissionPointProxyFramePending != FALSE,
+	    this->d->lodPointAdmissionFrame.pending(),
 	    this->d->lodPointQualityPhase.presentationPending(),
 	    this->d->lodAdmissionEvidence.capacity().rescanAfterFrame(),
 	    controller_has_cad_presentation(this->d->viewAttachment));

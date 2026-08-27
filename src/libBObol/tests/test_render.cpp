@@ -49,6 +49,17 @@
 	return 1; \
     } while (0)
 
+static Obol::CadGeometryValidation
+admitAndUpsertPart(SoCADAssembly *assembly, Obol::PartId part,
+	Obol::PartGeometryBuilder geometry)
+{
+    const Obol::CadGeometryAdmission admission =
+	Obol::cadAdmitPartGeometry(std::move(geometry));
+    if (!admission)
+	return admission.validation;
+    return assembly->upsertParts({{part, admission.geometry}});
+}
+
 class BOBOLRenderContext
 {
 public:
@@ -692,17 +703,19 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     };
     directWire.bounds.setBounds(
 	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f));
-    Obol::PartGeometry directGeometry;
+    Obol::PartGeometryBuilder directGeometry;
     directGeometry.wire = directWire;
     const Obol::PartId directPart =
-	Obol::CadIdBuilder::hash128("render-direct-wire");
-    directAssembly->upsertPart(directPart, directGeometry);
+	Obol::CadIdBuilder::partId("render-direct-wire");
+    if (!admitAndUpsertPart(directAssembly, directPart, directGeometry))
+	FAIL("direct wire geometry publication failed");
     Obol::InstanceRecord directInstance;
     directInstance.part = directPart;
-    directInstance.parent = Obol::CadIdBuilder::Root();
+    directInstance.parent = Obol::CadIdBuilder::rootInstance();
     directInstance.childName = "render-direct-wire";
     directInstance.localToRoot.makeIdentity();
-    directAssembly->upsertInstanceAuto(directInstance);
+    if (!directAssembly->upsertInstanceAuto(directInstance))
+	FAIL("direct wire instance publication failed");
     directRoot->addChild(directAssembly);
 
     SoOffscreenRenderer directRenderer(&contextManager, viewport);
@@ -763,42 +776,18 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	invalidPrefixMesh->bounds.getMin();
     invalidPrefixMesh->progressiveQuantizationMaximum =
 	invalidPrefixMesh->bounds.getMax();
-    Obol::WireRep invalidPrefixWire;
-    invalidPrefixWire.triangleEdges = invalidPrefixMesh;
-    invalidPrefixWire.triangleEdgeSegmentCount = 3u;
-    invalidPrefixWire.bounds = invalidPrefixMesh->bounds;
-    invalidPrefixWire.progressiveCuts.resize(1);
-    invalidPrefixWire.progressiveCuts[0].segmentCount = 3u;
-    invalidPrefixWire.progressiveMinimumCut = 0u;
-    invalidPrefixWire.progressiveResidentCut = 0u;
-    Obol::PartGeometry invalidPrefixGeometry;
-    invalidPrefixGeometry.wire = std::move(invalidPrefixWire);
+    Obol::PartGeometryBuilder invalidPrefixGeometry;
+    invalidPrefixGeometry.shaded = std::move(*invalidPrefixMesh);
     const Obol::PartId invalidPrefixPart =
-	Obol::CadIdBuilder::hash128("render-invalid-progressive-prefix");
-    invalidPrefixAssembly->upsertPart(
-	invalidPrefixPart, invalidPrefixGeometry);
-    Obol::InstanceRecord invalidPrefixInstance;
-    invalidPrefixInstance.part = invalidPrefixPart;
-    invalidPrefixInstance.parent = Obol::CadIdBuilder::Root();
-    invalidPrefixInstance.childName = "render-invalid-progressive-prefix";
-    invalidPrefixInstance.localToRoot.makeIdentity();
-    invalidPrefixInstance.lodCut = 0u;
-    invalidPrefixAssembly->upsertInstanceAuto(invalidPrefixInstance);
+	Obol::CadIdBuilder::partId("render-invalid-progressive-prefix");
+    const Obol::CadGeometryValidation invalidPrefixResult =
+	admitAndUpsertPart(invalidPrefixAssembly,
+	    invalidPrefixPart, invalidPrefixGeometry);
     invalidPrefixRoot->addChild(invalidPrefixAssembly);
-
-    SoOffscreenRenderer invalidPrefixRenderer(&contextManager, viewport);
-    invalidPrefixRenderer.setComponents(SoOffscreenRenderer::RGB);
-    invalidPrefixRenderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
-    if (!invalidPrefixRenderer.render(invalidPrefixRoot) ||
-	!invalidPrefixAssembly->lastRenderUsedDirectSoftwareWire() ||
-	invalidPrefixAssembly->lastRenderedWork().lineCount != 0)
-	FAIL("direct OSMesa executor accepted an index beyond the active position prefix");
-    invalidPrefixViewState->softwareWireMode =
-	SoCADViewState::SOFTWARE_WIRE_QUALITY;
-    if (!invalidPrefixRenderer.render(invalidPrefixRoot) ||
-	invalidPrefixAssembly->lastRenderUsedDirectSoftwareWire() ||
-	invalidPrefixAssembly->lastRenderedWork().lineCount != 0)
-	FAIL("VBO OSMesa executor accepted an index beyond the active position prefix");
+    if (invalidPrefixResult.error !=
+	    Obol::CadGeometryError::InvalidProgressiveCut ||
+	invalidPrefixAssembly->partCount() != 0)
+	FAIL("CAD admission accepted an index beyond the active position prefix");
     invalidPrefixRoot->unref();
 
     /* The OSMesa quality path needs one compact position/edge-index pair,
@@ -817,29 +806,39 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	SoCADViewState::SOFTWARE_WIRE_QUALITY;
     compactWireRoot->addChild(compactWireViewState);
     SoCADAssembly *compactWireAssembly = new SoCADAssembly;
-    std::shared_ptr<Obol::TriMesh> compactWireMesh(new Obol::TriMesh);
-    compactWireMesh->positions = {
+    Obol::TriMesh compactWireMesh;
+    compactWireMesh.positions = {
 	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, -1.0f, 0.0f),
 	SbVec3f(1.0f, 1.0f, 0.0f), SbVec3f(-1.0f, 1.0f, 0.0f)
     };
-    compactWireMesh->indices = {0u, 1u, 2u, 0u, 2u, 3u};
-    compactWireMesh->bounds.setBounds(
+    compactWireMesh.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+    compactWireMesh.bounds.setBounds(
 	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f));
+    Obol::PartGeometryBuilder compactWireSource;
+    compactWireSource.shaded = compactWireMesh;
+    const Obol::CadGeometryAdmission compactWireSourceAdmission =
+	Obol::cadAdmitPartGeometry(std::move(compactWireSource));
+    if (!compactWireSourceAdmission)
+	FAIL("compact wire source admission failed");
     Obol::WireRep compactWire;
-    compactWire.triangleEdges = compactWireMesh;
-    compactWire.triangleEdgeSegmentCount = compactWireMesh->indices.size();
-    compactWire.bounds = compactWireMesh->bounds;
-    Obol::PartGeometry compactWireGeometry;
+    compactWire.triangleEdgeGeometry =
+	compactWireSourceAdmission.geometry.shared();
+    compactWire.triangleEdgeSegmentCount = compactWireMesh.indices.size();
+    compactWire.bounds = compactWireMesh.bounds;
+    Obol::PartGeometryBuilder compactWireGeometry;
     compactWireGeometry.wire = std::move(compactWire);
     const Obol::PartId compactWirePart =
-	Obol::CadIdBuilder::hash128("render-compact-derived-wire");
-    compactWireAssembly->upsertPart(compactWirePart, compactWireGeometry);
+	Obol::CadIdBuilder::partId("render-compact-derived-wire");
+    if (!admitAndUpsertPart(compactWireAssembly,
+	    compactWirePart, compactWireGeometry))
+	FAIL("compact wire geometry publication failed");
     Obol::InstanceRecord compactWireInstance;
     compactWireInstance.part = compactWirePart;
-    compactWireInstance.parent = Obol::CadIdBuilder::Root();
+    compactWireInstance.parent = Obol::CadIdBuilder::rootInstance();
     compactWireInstance.childName = "render-compact-derived-wire";
     compactWireInstance.localToRoot.makeIdentity();
-    compactWireAssembly->upsertInstanceAuto(compactWireInstance);
+    if (!compactWireAssembly->upsertInstanceAuto(compactWireInstance))
+	FAIL("compact wire instance publication failed");
     compactWireRoot->addChild(compactWireAssembly);
 
     SoOffscreenRenderer compactWireRenderer(&contextManager, viewport);
@@ -872,10 +871,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     SoCADViewState *lineageViewState = new SoCADViewState;
     lineageViewState->softwareWireMode =
 	SoCADViewState::SOFTWARE_WIRE_QUALITY;
+    lineageViewState->drawMode = SoCADViewState::SHADED_WITH_EDGES;
     lineageRoot->addChild(lineageViewState);
     SoCADAssembly *lineageAssembly = new SoCADAssembly;
-    lineageAssembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
-    Obol::PartGeometry lineageGeometry;
+    Obol::PartGeometryBuilder lineageGeometry;
     Obol::TriMesh lineageShaded;
     lineageShaded.positions = {
 	SbVec3f(-1.0f, -1.0f, 0.0f), SbVec3f(1.0f, -1.0f, 0.0f),
@@ -895,7 +894,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     lineageWire.segmentPoints = {
 	SbVec3f(-1.0f, -0.75f, 0.05f), SbVec3f(1.0f, -0.75f, 0.05f)
     };
-    lineageWire.bounds = lineageShaded.bounds;
+    lineageWire.bounds.setBounds(
+	SbVec3f(-1.0f, -1.0f, 0.05f), SbVec3f(1.0f, 1.0f, 0.05f));
     lineageWire.progressiveCuts.resize(1);
     lineageWire.progressiveCuts[0].segmentCount = 1u;
     lineageWire.progressiveMinimumCut = 0u;
@@ -903,15 +903,17 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     lineageWire.progressiveLineage = UINT64_C(0x574952453031);
     lineageGeometry.wire = lineageWire;
     const Obol::PartId lineagePart =
-	Obol::CadIdBuilder::hash128("render-independent-channel-lineage");
-    lineageAssembly->upsertPart(lineagePart, lineageGeometry);
+	Obol::CadIdBuilder::partId("render-independent-channel-lineage");
+    if (!admitAndUpsertPart(lineageAssembly, lineagePart, lineageGeometry))
+	FAIL("independent channel geometry publication failed");
     Obol::InstanceRecord lineageInstance;
     lineageInstance.part = lineagePart;
-    lineageInstance.parent = Obol::CadIdBuilder::Root();
+    lineageInstance.parent = Obol::CadIdBuilder::rootInstance();
     lineageInstance.childName = "render-independent-channel-lineage";
     lineageInstance.localToRoot.makeIdentity();
     lineageInstance.lodCut = 0u;
-    lineageAssembly->upsertInstanceAuto(lineageInstance);
+    if (!lineageAssembly->upsertInstanceAuto(lineageInstance))
+	FAIL("independent channel instance publication failed");
     lineageRoot->addChild(lineageAssembly);
 
     SoOffscreenRenderer lineageRenderer(&contextManager, viewport);
@@ -928,7 +930,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     lineageWire.progressiveCuts[0].segmentCount = 2u;
     lineageWire.progressiveLineage = UINT64_C(0x574952453032);
     lineageGeometry.wire = lineageWire;
-    lineageAssembly->upsertPart(lineagePart, lineageGeometry);
+    if (!admitAndUpsertPart(lineageAssembly, lineagePart, lineageGeometry))
+	FAIL("independent channel replacement publication failed");
     if (!lineageRenderer.render(lineageRoot) ||
 	lineageAssembly->lastRenderedWork().lineCount != 2u)
 	FAIL("changed wire lineage did not render its replacement stream");
@@ -951,7 +954,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     pointCamera->farDistance = 20.0f;
     pointRoot->addChild(pointCamera);
     SoCADAssembly *pointAssembly = new SoCADAssembly;
-    Obol::PartGeometry pointGeometry;
+    Obol::PartGeometryBuilder pointGeometry;
     Obol::PointRep points;
     points.positions = {SbVec3f(-1.0f, 0.0f, 0.0f),
 	SbVec3f(1.0f, 0.0f, 0.0f)};
@@ -962,15 +965,17 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     points.bounds.setBounds(SbVec3f(-1.0f, 0.0f, 0.0f),
 	SbVec3f(1.0f, 0.0f, 0.0f));
     pointGeometry.points = points;
-    const Obol::PartId pointPart = Obol::CadIdBuilder::hash128("render-points");
-    pointAssembly->upsertPart(pointPart, pointGeometry);
+    const Obol::PartId pointPart = Obol::CadIdBuilder::partId("render-points");
+    if (!admitAndUpsertPart(pointAssembly, pointPart, pointGeometry))
+	FAIL("point geometry publication failed");
     Obol::InstanceRecord pointInstance;
     pointInstance.part = pointPart;
-    pointInstance.parent = Obol::CadIdBuilder::Root();
+    pointInstance.parent = Obol::CadIdBuilder::rootInstance();
     pointInstance.childName = "render-points";
     pointInstance.localToRoot.makeIdentity();
     pointInstance.style.lineWidth = 9.0f;
-    pointAssembly->upsertInstanceAuto(pointInstance);
+    if (!pointAssembly->upsertInstanceAuto(pointInstance))
+	FAIL("point instance publication failed");
     pointRoot->addChild(pointAssembly);
 
     SoOffscreenRenderer pointRenderer(&contextManager, viewport);

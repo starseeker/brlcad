@@ -35,8 +35,9 @@ must not create rows in the tree, duplicate selection entries, or alter draw /
 erase path semantics.
 
 The source owner thread updates only the affected shared part set.  A producer
-worker builds `PartGeometry` off thread and publishes an immutable result; it
-never touches a Coin node.
+worker builds a `PartGeometryBuilder` off thread, admits it into a validated
+immutable `PartGeometry` snapshot, and publishes only that snapshot; it never
+touches a Coin node.
 
 Camera and policy epochs are presentation demand, not immutable asset identity.
 One coalesced cold producer therefore retains the newest demand for its stable
@@ -56,7 +57,8 @@ after all of the following are true:
 
 - its local source-face stream is complete;
 - every index is validated and the local cumulative cut metadata is complete;
-- its geometry has been copied into an immutable worker-owned page record;
+- its geometry builder has been admitted into an immutable worker-owned page
+  record;
 - its page key and partition version are known; and
 - cancellation has not been requested.
 
@@ -98,7 +100,7 @@ to own a bounded layer set instead:
    metadata)`.  A result with layers replaces its old layer set atomically;
    the legacy single geometry is the one-layer form until it is removed.
 2. In the cold mesh preview context, copy each callback page into a
-   `PartGeometry` off the GUI thread, retain it by deterministic page key,
+   `PartGeometryBuilder` off the GUI thread, admit it, retain the snapshot by deterministic page key,
    and publish bounded snapshots containing the standing coverage layer plus
    currently visible detail pages.  It must not publish a page as the
    occurrence's only geometry.
@@ -112,7 +114,7 @@ to own a bounded layer set instead:
    same update transaction.  Tree and selection sets remain keyed only by the
    base occurrence.  A pick of a page reports the base semantic path.
 5. Add/remove auxiliary parts only after their reference count reaches zero;
-   update page batches through `upsertSharedParts`/`upsertInstances`, never by
+   publish each page batch as one validated `CadSceneMutation`, never by
    rebuilding the entire compact registry or combining page arrays on the GUI
    thread.  Coverage is a retained non-occluding layer until page replacement
    logic can remove its covered cells safely.
@@ -134,7 +136,7 @@ cuts at neighboring page boundaries are not permitted.
   and cancellation after one delivered page without a durable hierarchy
   marker.
 - `BObolLodProgressiveMesh` retains decoded cache pages independently and
-  prepares immutable page-local `PartGeometry` lazily.  Unchanged pages are
+  prepares admitted immutable page-local `PartGeometry` lazily.  Unchanged pages are
   weakly cached and adopted directly by the scene; a view-local update neither
   rebases their indices nor copies their arrays into an aggregate.
 - `BObolLodResult` and `CadPayload` carry an ordered vector of immutable

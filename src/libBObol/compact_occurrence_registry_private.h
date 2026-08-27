@@ -26,8 +26,8 @@
  */
 struct BObolCompactInstanceEntry {
     BObolCompactInstanceEntry(void) :
-	instance(Obol::CadIdBuilder::Root()),
-	part(Obol::CadIdBuilder::Root()),
+	instance(Obol::CadIdBuilder::rootInstance()),
+	part(),
 	localToSource(SbMatrix::identity()),
 	geometryTransform(SbMatrix::identity()),
 	placementTransform(SbMatrix::identity()),
@@ -132,6 +132,16 @@ struct BObolCompactGeometryPartIdentity {
     std::weak_ptr<const Obol::PartGeometry> geometry;
     Obol::PartId part;
 };
+
+inline bool
+bobol_compact_geometry_identity_matches(
+    const BObolCompactGeometryPartIdentity &identity,
+    const std::shared_ptr<const Obol::PartGeometry> &candidate)
+{
+    const std::shared_ptr<const Obol::PartGeometry> retained =
+	identity.geometry.lock();
+    return retained && candidate && retained.get() == candidate.get();
+}
 
 struct BObolCompactInstanceIndex {
     BObolCompactInstanceIndex(void) :

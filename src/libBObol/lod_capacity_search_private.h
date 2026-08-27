@@ -449,13 +449,16 @@ private:
 	    return this->finish(Result::CERTIFIED);
 	}
 
+	/* Every completed sample contributes a conservative throughput proposal.
+	 * Use it in both search directions.  Falling back to a midpoint after a
+	 * miss discarded that evidence and forced a large discrete mesh through a
+	 * visible logarithmic staircase before the independent static goal could
+	 * restore useful quality.  unmeasuredCandidate() still clamps the proposal
+	 * to the proven bracket and supplies a midpoint when rounding names an
+	 * already measured endpoint, so progress and bracket soundness are
+	 * unchanged. */
 	const size_t proposal = median(this->proposalValues);
-	size_t next = 0;
-	if (!safe && this->unsafeBudgetValue > this->safeBudgetValue)
-	    next = this->safeBudgetValue +
-		(this->unsafeBudgetValue - this->safeBudgetValue) / 2;
-	else
-	    next = proposal;
+	size_t next = proposal;
 	next = this->unmeasuredCandidate(next);
 	if (!next)
 	    return this->finish(Result::CERTIFIED);

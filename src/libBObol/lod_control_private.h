@@ -8,7 +8,9 @@
 #ifndef LIBBOBOL_LOD_CONTROL_PRIVATE_H
 #define LIBBOBOL_LOD_CONTROL_PRIVATE_H
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 
 /*
  * One submission cursor may be active while a complete successor rescan is
@@ -89,6 +91,344 @@ public:
 
 private:
     State stateValue = State::IDLE;
+};
+
+/* Immutable-in-meaning configuration retained while a bounded submission
+ * cursor is active.  Mode, refresh behavior, and reset intent used to be
+ * independent fields, allowing a resumed cursor to inherit only part of the
+ * request which created it. */
+class BObolLodSubmissionIntent {
+public:
+    enum class Mode : uint8_t {
+	ORDINARY = 0,
+	RETAINED_ADMISSION
+    };
+
+    void configure(bool refreshMissing, bool resetExisting)
+    {
+	this->refreshMissingValue = refreshMissing;
+	this->resetExistingValue = resetExisting;
+    }
+
+    void setRetainedAdmission(bool enabled)
+    {
+	this->modeValue = enabled ?
+	    Mode::RETAINED_ADMISSION : Mode::ORDINARY;
+    }
+
+    void reset(void)
+    {
+	this->modeValue = Mode::ORDINARY;
+	this->refreshMissingValue = true;
+	this->resetExistingValue = false;
+    }
+
+    bool retainedAdmission(void) const
+    {
+	return this->modeValue == Mode::RETAINED_ADMISSION;
+    }
+
+    bool refreshMissing(void) const
+    {
+	return this->refreshMissingValue;
+    }
+
+    bool resetExisting(void) const
+    {
+	return this->resetExistingValue;
+    }
+
+    Mode mode(void) const
+    {
+	return this->modeValue;
+    }
+
+private:
+    Mode modeValue = Mode::ORDINARY;
+    bool refreshMissingValue = true;
+    bool resetExistingValue = false;
+};
+
+/* Pose-only continuity proof for one interaction handoff.  Cut retention and
+ * its deferred exact-visibility census are related but not interchangeable:
+ * motion may keep a proven presentation immediately, while quiet readiness
+ * still waits for a current-camera census. */
+class BObolLodPoseContinuity {
+public:
+    void setRetainOccurrenceCuts(bool retain)
+    {
+	this->retainOccurrenceCutsValue = retain;
+    }
+
+    void clearRetainOccurrenceCuts(void)
+    {
+	this->retainOccurrenceCutsValue = false;
+    }
+
+    bool retainOccurrenceCuts(void) const
+    {
+	return this->retainOccurrenceCutsValue;
+    }
+
+    void deferVisibilityCensus(void)
+    {
+	this->visibilityCensusDeferredValue = true;
+    }
+
+    void completeVisibilityCensus(void)
+    {
+	this->visibilityCensusDeferredValue = false;
+    }
+
+    bool visibilityCensusDeferred(void) const
+    {
+	return this->visibilityCensusDeferredValue;
+    }
+
+    void reset(void)
+    {
+	this->retainOccurrenceCutsValue = false;
+	this->visibilityCensusDeferredValue = false;
+    }
+
+private:
+    bool retainOccurrenceCutsValue = false;
+    bool visibilityCensusDeferredValue = false;
+};
+
+/* Complete annotations produced by one bounded retained-admission pass.
+ * These facts may coexist, but they share one pass lifetime.  Keeping their
+ * mutation private prevents a successor pass from inheriting a convenient
+ * subset of the preceding pass's cut, residency, or budget evidence. */
+class BObolLodRetainedPassAnnotations {
+public:
+    void reset(void)
+    {
+	this->refinementPendingValue = false;
+	this->residencyPendingValue = false;
+	this->cutAdvancedValue = false;
+	this->budgetBlockedValue = false;
+	this->admittedWorkValue = false;
+	this->missingMeshBudgetBlockedCountValue = 0;
+    }
+
+    void retireRefinement(void)
+    {
+	this->refinementPendingValue = false;
+	this->cutAdvancedValue = false;
+	this->budgetBlockedValue = false;
+    }
+
+    void noteRefinementPending(void) { this->refinementPendingValue = true; }
+    void clearRefinementPending(void)
+    {
+	this->refinementPendingValue = false;
+    }
+    bool refinementPending(void) const { return this->refinementPendingValue; }
+
+    void noteResidencyPending(void) { this->residencyPendingValue = true; }
+    void clearResidencyPending(void) { this->residencyPendingValue = false; }
+    bool residencyPending(void) const { return this->residencyPendingValue; }
+
+    void noteCutAdvanced(void) { this->cutAdvancedValue = true; }
+    bool cutAdvanced(void) const { return this->cutAdvancedValue; }
+
+    void noteBudgetBlocked(void) { this->budgetBlockedValue = true; }
+    bool budgetBlocked(void) const { return this->budgetBlockedValue; }
+
+    void noteAdmittedWork(void) { this->admittedWorkValue = true; }
+    void clearAdmittedWork(void) { this->admittedWorkValue = false; }
+    bool admittedWork(void) const { return this->admittedWorkValue; }
+
+    void addMissingMeshBudgetBlocked(size_t count)
+    {
+	const size_t maximum = (std::numeric_limits<size_t>::max)();
+	this->missingMeshBudgetBlockedCountValue =
+	    count > maximum - this->missingMeshBudgetBlockedCountValue ?
+		maximum : this->missingMeshBudgetBlockedCountValue + count;
+    }
+    void clearMissingMeshBudgetBlocked(void)
+    {
+	this->missingMeshBudgetBlockedCountValue = 0;
+    }
+    size_t missingMeshBudgetBlockedCount(void) const
+    {
+	return this->missingMeshBudgetBlockedCountValue;
+    }
+
+private:
+    bool refinementPendingValue = false;
+    bool residencyPendingValue = false;
+    bool cutAdvancedValue = false;
+    bool budgetBlockedValue = false;
+    bool admittedWorkValue = false;
+    size_t missingMeshBudgetBlockedCountValue = 0;
+};
+
+/* Exclusive owner-thread gate for one interrupted retained traversal.  The
+ * replay is either absent or waiting for its exact successor frame; source
+ * publication cannot infer or clear this state indirectly. */
+class BObolLodInterruptedPresentationReplay {
+public:
+    enum class State : uint8_t {
+	IDLE = 0,
+	AWAITING_FRAME
+    };
+
+    void arm(void) { this->stateValue = State::AWAITING_FRAME; }
+    void retire(void) { this->stateValue = State::IDLE; }
+    void reset(void) { this->retire(); }
+    bool pending(void) const
+    {
+	return this->stateValue == State::AWAITING_FRAME;
+    }
+    State state(void) const { return this->stateValue; }
+
+private:
+    State stateValue = State::IDLE;
+};
+
+/* One classifier-changing point threshold must be presented before source
+ * admission may consume it.  This is a frame obligation, not a free boolean
+ * or a stable point-quality calibration phase. */
+class BObolLodPointAdmissionFrame {
+public:
+    enum class State : uint8_t {
+	IDLE = 0,
+	AWAITING_FRAME
+    };
+
+    void request(void) { this->stateValue = State::AWAITING_FRAME; }
+    void setPending(bool pending)
+    {
+	this->stateValue = pending ? State::AWAITING_FRAME : State::IDLE;
+    }
+    void retire(void) { this->stateValue = State::IDLE; }
+    void reset(void) { this->retire(); }
+    bool pending(void) const
+    {
+	return this->stateValue == State::AWAITING_FRAME;
+    }
+    State state(void) const { return this->stateValue; }
+
+private:
+    State stateValue = State::IDLE;
+};
+
+/* Concurrent one-shot planning obligations owned by the current evidence
+ * epoch.  These are work requests, not outcome flags: each must be explicitly
+ * requested and retired by its sole effect owner. */
+class BObolLodPlanningObligations {
+private:
+    enum class Work : uint8_t {
+	RETAINED_IMPORTANCE_CENSUS = 1u << 0,
+	RESIDENT_ADMISSION_RETRY = 1u << 1
+    };
+
+    static constexpr uint8_t bit(Work work)
+    {
+	return static_cast<uint8_t>(work);
+    }
+
+    void request(Work work)
+    {
+	this->workValue |= bit(work);
+    }
+
+    void retire(Work work)
+    {
+	this->workValue &= static_cast<uint8_t>(~bit(work));
+    }
+
+    void setPending(Work work, bool pending)
+    {
+	if (pending)
+	    this->request(work);
+	else
+	    this->retire(work);
+    }
+
+    void clearAll(void)
+    {
+	this->workValue = 0;
+    }
+
+    bool pending(Work work) const
+    {
+	return (this->workValue & bit(work)) != 0;
+    }
+
+public:
+    void reset(void)
+    {
+	this->clearAll();
+    }
+
+    void requestImportanceCensus(void)
+    {
+	this->request(Work::RETAINED_IMPORTANCE_CENSUS);
+    }
+
+    void retireImportanceCensus(void)
+    {
+	this->retire(Work::RETAINED_IMPORTANCE_CENSUS);
+    }
+
+    void setImportanceCensus(bool pending)
+    {
+	this->setPending(Work::RETAINED_IMPORTANCE_CENSUS, pending);
+    }
+
+    bool importanceCensusPending(void) const
+    {
+	return this->pending(Work::RETAINED_IMPORTANCE_CENSUS);
+    }
+
+    void setResidentAdmissionRetry(bool pending)
+    {
+	this->setPending(Work::RESIDENT_ADMISSION_RETRY, pending);
+    }
+
+    void retireResidentAdmissionRetry(void)
+    {
+	this->retire(Work::RESIDENT_ADMISSION_RETRY);
+    }
+
+    bool residentAdmissionRetryPending(void) const
+    {
+	return this->pending(Work::RESIDENT_ADMISSION_RETRY);
+    }
+
+private:
+    uint8_t workValue = 0;
+};
+
+/* Scene-wide permission to try one otherwise-unaffordable discrete
+ * population.  Granting and consuming the permit are explicit so multiple
+ * time-sliced source actions cannot each infer their own allowance. */
+class BObolLodDiscreteTrialPermit {
+public:
+    enum class State : uint8_t {
+	UNAVAILABLE = 0,
+	AVAILABLE
+    };
+
+    void grant(void) { this->stateValue = State::AVAILABLE; }
+    void revoke(void) { this->stateValue = State::UNAVAILABLE; }
+    void consume(void) { this->revoke(); }
+    void reset(void) { this->revoke(); }
+    void setAvailable(bool available)
+    {
+	this->stateValue = available ? State::AVAILABLE : State::UNAVAILABLE;
+    }
+    bool available(void) const
+    {
+	return this->stateValue == State::AVAILABLE;
+    }
+    State state(void) const { return this->stateValue; }
+
+private:
+    State stateValue = State::UNAVAILABLE;
 };
 
 /*

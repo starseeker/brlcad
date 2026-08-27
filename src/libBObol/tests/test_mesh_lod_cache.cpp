@@ -1226,10 +1226,10 @@ main(int argc, char *argv[])
     if (!coarseMesh || !coarseWire || coarseRevision <= firstRevision ||
 	    !coarseLayers.front().geometry ||
 	    !coarseLayers.front().geometry->wire ||
-	    coarseLayers.front().geometry->wire->triangleEdges.get() !=
+	    coarseLayers.front().geometry->wire->triangleEdges() !=
 		firstMesh ||
 	    !coarseWire->derivesTriangleEdges() ||
-	    !coarseWire->triangleEdges ||
+	    !coarseWire->triangleEdges() ||
 	    !coarseWire->segmentPoints.empty() ||
 	    coarseWire->segmentCount() != coarseMesh->indices.size() ||
 	    coarseWire->progressiveLineage != coarseMesh->progressiveLineage ||
@@ -1280,18 +1280,18 @@ main(int argc, char *argv[])
 	    &*richGeometry->wire : NULL;
 	if (!richMesh || !richWire || richRevision <= coarseRevision ||
 	    richLayers.front().geometry.get() !=
-		coarseLayers.front().geometry.get() ||
+	    coarseLayers.front().geometry.get() ||
 	    !richWire->derivesTriangleEdges() ||
-	    !richWire->triangleEdges ||
+	    !richWire->triangleEdges() ||
 	    !richWire->segmentPoints.empty() ||
 	    richMesh->progressiveLineage != coarseMesh->progressiveLineage ||
 	    richWire->progressiveLineage != richMesh->progressiveLineage ||
 	    richWire->segmentCount() <= coarseWire->segmentCount() ||
 	    richWire->segmentCount() != richMesh->indices.size() ||
 	    coarseWire->segmentCount() != coarseMesh->indices.size() ||
-	    !std::equal(coarseWire->triangleEdges->indices.begin(),
-		coarseWire->triangleEdges->indices.end(),
-		richWire->triangleEdges->indices.begin()) ||
+	    !std::equal(coarseWire->triangleEdges()->indices.begin(),
+		coarseWire->triangleEdges()->indices.end(),
+		richWire->triangleEdges()->indices.begin()) ||
 	    richMesh->positions.size() <= coarseMesh->positions.size() ||
 	    richMesh->indices.size() <= coarseMesh->indices.size() ||
 	    !std::equal(coarseMesh->positions.begin(), coarseMesh->positions.end(),

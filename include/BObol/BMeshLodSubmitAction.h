@@ -90,7 +90,7 @@ public:
     void setProvider(const char *providerId, const char *providerVersion);
     void setQualityTier(int qualityTier);
     void setRefreshMissing(SbBool refreshMissing);
-    void setReset(int reset);
+    void setReset(SbBool newResetExisting);
     void setForcedCut(int cut);
     void clearForcedCut(void);
     SbBool hasForcedCut(void) const;
@@ -294,7 +294,7 @@ private:
     SbString providerVersion;
     int qualityTier;
     SbBool refreshMissing;
-    int reset;
+    SbBool resetExisting;
     SbBool useForcedCut;
     int forcedCut;
     SbBool requireLodBacked;

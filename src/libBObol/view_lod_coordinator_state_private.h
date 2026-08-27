@@ -701,6 +701,20 @@ struct BObolLodCoordinator {
 	    lodViewQualityDomainRevision = 1;
     }
 
+    /* These values are annotations owned by one bounded retained-admission
+     * pass.  Reset them as one transaction; clearing only a convenient subset
+     * has previously carried stale cut/budget evidence into a successor pass
+     * and reopened an otherwise terminal handoff. */
+    void resetRetainedPassAnnotations(void)
+    {
+	lodRetainedPass.reset();
+    }
+
+    void retireRetainedRefinementObservation(void)
+    {
+	lodRetainedPass.retireRefinement();
+    }
+
     void resetRendererPerformanceEvidence(void)
     {
 	/* A renderer epoch owns every timing-derived scalar, not just the
@@ -719,7 +733,7 @@ struct BObolLodCoordinator {
 	lodLastRenderWasPreparedCadReplay = TRUE;
 	lodLastRenderWasReusableCadPresentation = TRUE;
 	lodInteractionStartCertificate.reset();
-	lodPassAdmittedWork = FALSE;
+	resetRetainedPassAnnotations();
 
 	/* Capacity ceilings, overload witnesses, and handoff proofs were all
 	 * established by the previous renderer.  Start a fresh bounded budget
@@ -743,7 +757,7 @@ struct BObolLodCoordinator {
 	    lodPointQualityPhase.requestCalibration();
 	lodStaticQualityTrial.restoreRendererCeiling(
 	    lodInteractiveProgressiveCeiling >= 0);
-	lodDiscretePopulationTrialAvailable = FALSE;
+	lodDiscretePopulationTrialPermit.reset();
 	lodInteractiveCeilingFeedbackRenderSerial = 0;
 	lodPresentationTransaction.reset();
 	lodRefinementNotBeforeMicroseconds = 0;
@@ -839,7 +853,7 @@ struct BObolLodCoordinator {
      * otherwise provider/result pumps can invalidate resumable command-plan
      * work between deadline slices.  Workers remain free to fill their
      * bounded queues while the presentation transaction is closed. */
-    SbBool lodInterruptedPresentationReplayPending = FALSE;
+    BObolLodInterruptedPresentationReplay lodInterruptedPresentationReplay;
     uint64_t renderCompletionSerial = 0;
     mutable std::mutex presentationTimingMutex;
     uint64_t presentedFrameSerial = 0;
@@ -869,7 +883,7 @@ struct BObolLodCoordinator {
      * owner-thread commit. */
     std::shared_ptr<BObolRetainedAllocationTransaction>
 	lodRetainedAllocationTransaction;
-    SbBool lodSubmissionRetainedAdmissionMode = FALSE;
+    BObolLodSubmissionIntent lodSubmissionIntent;
     double lodRetainedAdmissionMaximumNormalizedError =
 	std::numeric_limits<double>::infinity();
     double lodRetainedAdmissionMaximumProjectedErrorPixels =
@@ -908,7 +922,7 @@ struct BObolLodCoordinator {
      * progressive pump calls; a function-local flag lets a later empty pump
      * publish the preceding pose's visibility count as if it described the
      * new camera. */
-    SbBool lodPoseVisibilityCensusDeferred = FALSE;
+    BObolLodPoseContinuity lodPoseContinuity;
     size_t lodSourceLogicalOccurrenceCount = 0;
     /* Camera/geometric projection evidence is denser than the visibility
      * census but still bounded (roughly a few dozen bytes per occurrence).
@@ -932,7 +946,7 @@ struct BObolLodCoordinator {
     void clearLodConvergenceCandidates(void)
     {
 	lodConvergenceCandidateCensus.clear();
-	lodPoseVisibilityCensusDeferred = FALSE;
+	lodPoseContinuity.completeVisibilityCensus();
 	lodCoveragePolicy.clearCompleteVisibleCount();
     }
     void resetLodConvergenceFraction(void)
@@ -1065,11 +1079,9 @@ struct BObolLodCoordinator {
 		sceneBudget));
     }
     BObolLodSubmissionPass lodSubmissionPass;
-    SbBool lodRetainedRefinementPending = FALSE;
     /* A retained minimax pass selected a level whose PoP suffix is not yet
      * resident.  This is provider work, not a performance-limited quality
      * observation, and must survive the coherent cut presentation barrier. */
-    SbBool lodRetainedResidencyPending = FALSE;
     /* The last exact renderer frame observed structural boxes which the
      * predictive point classifier expected to collapse.  One bounded pass
      * must bypass that prediction and obtain their mesh presentations. */
@@ -1080,13 +1092,8 @@ struct BObolLodCoordinator {
     /* Accumulated across every bounded window of one scene pass.  Unlike the
      * general refinement-debt bit, this counts only visible box-to-first-mesh
      * admissions rejected by the finite scene allowance. */
-    size_t lodMissingMeshBudgetBlockedCount = 0;
-    SbBool lodRetainedRefinementCutAdvanced = FALSE;
-    SbBool lodRetainedRefinementBudgetBlocked = FALSE;
-    SbBool lodPassAdmittedWork = FALSE;
+    BObolLodRetainedPassAnnotations lodRetainedPass;
     SbBool forceTerminalLodRefinement = FALSE;
-    SbBool lodSubmissionRefreshMissing = TRUE;
-    int lodSubmissionReset = 0;
     BObolLodViewEpoch lodLastSubmittedViewRevision;
     BObolLodPolicyEpoch lodLastSubmittedPolicyRevision;
     struct LodSourceSnapshot {
@@ -1132,18 +1139,16 @@ struct BObolLodCoordinator {
     /* A completed, fully covered orthographic pose may verify visibility,
      * selection, and resource pressure, but may not rewrite retained PoP
      * cuts merely because the interaction debounce ended. */
-    SbBool lodRetainPoseOccurrenceCuts = FALSE;
     /* A settled retained camera epoch first records exact projected demand
      * for every visible occurrence, then performs one scene-budgeted
      * importance reallocation.  Keeping this as a census-completion latch
      * prevents stale previous-view metrics and makes the redistribution
      * explicitly one-shot. */
-    SbBool lodRetainedImportanceCensusPending = FALSE;
+    BObolLodPlanningObligations lodPlanningObligations;
     /* A resident-capacity revision reopens only occurrences whose provider
      * was denied by an older admission epoch.  Keep this distinct from the
      * ordinary unsatisfied-quality frontier: reclaimed bytes must not restart
      * a 150k-entry view census for a handful of denied assets. */
-    SbBool lodResidentAdmissionRetryActive = FALSE;
     BObolLodViewEpoch lodViewRevision {1};
     BObolLodPolicyEpoch lodPolicyRevision {1};
     BObolLodViewDemandPolicy lodViewDemandPolicy;
@@ -1151,7 +1156,7 @@ struct BObolLodCoordinator {
      * otherwise-unaffordable populated PoP transition across the entire
      * scene.  Individual submit actions are time-sliced and source-local, so
      * uniqueness must live here. */
-    SbBool lodDiscretePopulationTrialAvailable = FALSE;
+    BObolLodDiscreteTrialPermit lodDiscretePopulationTrialPermit;
     BObolLodInteractionSession lodInteractionSession;
     /* Renderer-only presentation continuity and motion-to-stable handoff.
      * The policy owns its snapshot/latch proof; this coordinator only applies
@@ -1238,7 +1243,7 @@ struct BObolLodCoordinator {
      * This is intentionally distinct from stable point calibration, which
      * measures an already realized CAD population and never blocks source
      * work. */
-    SbBool lodAdmissionPointProxyFramePending = FALSE;
+    BObolLodPointAdmissionFrame lodPointAdmissionFrame;
     /*
      * A changed quiet aggregation threshold needs one measured presentation
      * before convergence is authoritative.  Keep this distinct from PoP

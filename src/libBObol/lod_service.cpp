@@ -18,6 +18,7 @@
 #include "BObol/BMeshLodCache.h"
 
 #include "database_source_realization.h"
+#include "cad_publication_private.h"
 #include "lod_coordinator_private.h"
 
 #include "raytrace.h"
@@ -115,7 +116,7 @@ BObolMeshLodProvider::clear(void)
     presentationCutLimit = -1;
     atomicRepresentationHandoff = FALSE;
     forcedCut = 0;
-    reset = 0;
+    resetExisting = FALSE;
 }
 
 SbBool
@@ -1214,7 +1215,7 @@ bobol_mesh_lod_provider_task(const BObolLodRequest &request,
     if (requestedCut > hierarchy.max_cut)
 	requestedCut = hierarchy.max_cut;
     const int load_ret = bobol_mesh_lod_load_cut(
-	lod, requestedCut, provider->reset);
+	lod, requestedCut, provider->resetExisting ? 1 : 0);
     if (load_ret < 0) {
 	bobol_mesh_lod_destroy(lod);
 	return lod_provider_status_result(request,
@@ -3840,7 +3841,7 @@ lod_progressive_delivery_cut(
 	provider.deliveryCutLimit >= hierarchy.min_cut)
 	target = std::min(target, provider.deliveryCutLimit);
     if (!provider.progressiveDelivery || provider.useForcedCut ||
-	provider.reset || currentCut >= target)
+	provider.resetExisting || currentCut >= target)
 	return target;
 
     BObolLodCounts currentCounts;
@@ -4027,8 +4028,8 @@ lod_cold_coverage_voxel_geometry(const struct BObolMeshLodData &data,
 {
     if (!data.points || !data.point_count)
 	return std::shared_ptr<const Obol::PartGeometry>();
-    std::shared_ptr<Obol::PartGeometry> geometry(
-	new Obol::PartGeometry);
+    std::shared_ptr<Obol::PartGeometryBuilder> geometry(
+	new Obol::PartGeometryBuilder);
     constexpr size_t cellAxis = BOBOL_MESH_LOD_COVERAGE_PREVIEW_CELL_AXIS;
     constexpr size_t cellCount = cellAxis * cellAxis * cellAxis;
     std::array<bool, cellCount> occupied = {};
@@ -4170,7 +4171,8 @@ lod_cold_coverage_voxel_geometry(const struct BObolMeshLodData &data,
     if (!bounds.isEmpty())
 	geometry->conservativeBounds = bounds;
     geometry->subpixelProxyEligible = true;
-    return geometry;
+    return bobol_cad_build_geometry(
+	std::move(*geometry), "cold coverage preview");
 }
 
 static void
@@ -4960,7 +4962,7 @@ BObolLodService::realizeResidentMeshLod(
     const bool atomicFirstHandoff =
 	provider.atomicRepresentationHandoff &&
 	publishedCut < hierarchy.min_cut &&
-	!provider.reset && !provider.useForcedCut &&
+	!provider.resetExisting && !provider.useForcedCut &&
 	requestedCut >= hierarchy.min_cut;
     if (atomicFirstHandoff)
 	residentTarget = std::min(hierarchy.max_cut, requestedCut);
@@ -4982,7 +4984,7 @@ BObolLodService::realizeResidentMeshLod(
      * one publication.
      */
     int presentationContinuityCut = hierarchy.min_cut - 1;
-    if (!provider.reset && !provider.useForcedCut &&
+    if (!provider.resetExisting && !provider.useForcedCut &&
 	provider.useCurrentDrawCut &&
 	provider.currentDrawCut >= hierarchy.min_cut) {
 	presentationContinuityCut = std::min(
@@ -5008,7 +5010,7 @@ BObolLodService::realizeResidentMeshLod(
 	 * the pixel-demanded prefix. */
 	loadTarget = residentTarget;
     } else if (publishedCut >= 0 && residentTarget <= publishedCut &&
-	!provider.reset) {
+	!provider.resetExisting) {
 	loadTarget = publishedCut;
     }
 
@@ -5038,7 +5040,7 @@ BObolLodService::realizeResidentMeshLod(
 	    requiredChunks, loadTarget) :
 	    resident->mesh->canDrawCut(loadTarget));
     const bool loadNeeded =
-	provider.reset || !retainedTargetDrawable ||
+	provider.resetExisting || !retainedTargetDrawable ||
 	(publishedCut >= 0 && loadTarget != publishedCut);
     int64_t prefixLoadMicroseconds = 0;
     int64_t generationBuildMicroseconds = 0;
@@ -5104,7 +5106,8 @@ BObolLodService::realizeResidentMeshLod(
 	 * Corner-normal vertex splitting still needs whole-prefix context and uses
 	 * the conservative cumulative fallback. */
 	SbBool suffixExtended = FALSE;
-	if (!chunked && !provider.reset && publishedCut >= hierarchy.min_cut &&
+	if (!chunked && !provider.resetExisting &&
+		publishedCut >= hierarchy.min_cut &&
 	    loadTarget > publishedCut && !hierarchy.has_normals &&
 	    resident->mesh && resident->mesh->isValid()) {
 	    const int64_t generationBuildStarted = bu_gettime();
@@ -5121,7 +5124,8 @@ BObolLodService::realizeResidentMeshLod(
 	if (!chunked && !suffixExtended) {
 	    const int64_t prefixLoadStarted = bu_gettime();
 	    residentCut = bobol_mesh_lod_load_resident_cut(
-		resident->lod, loadTarget, provider.reset);
+		resident->lod, loadTarget,
+		provider.resetExisting ? 1 : 0);
 	    prefixLoadMicroseconds = std::max<int64_t>(
 		0, bu_gettime() - prefixLoadStarted);
 	    if (residentCut < 0)

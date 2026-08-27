@@ -6185,7 +6185,7 @@ struct recording_scene_backend {
     size_t selection_calls = 0;
     size_t view_policy_calls = 0;
     size_t detach_calls = 0;
-    std::vector<enum ged_draw_transaction_kind> kinds;
+    std::vector<enum ged_scene_reducer_operation> kinds;
     std::vector<int> deferred_draws;
     std::vector<std::string> selected_paths;
 };
@@ -6193,8 +6193,8 @@ struct recording_scene_backend {
 static int
 recording_scene_backend_apply(
     struct ged *UNUSED(gedp),
-    const struct ged_draw_transaction *transaction,
-    const struct ged_draw_transaction_result *UNUSED(result),
+    const struct ged_scene_reducer_request *transaction,
+    const struct ged_scene_reducer_result *UNUSED(result),
     void *client_data)
 {
     recording_scene_backend *backend =
@@ -6386,7 +6386,7 @@ test_draw(struct ged *gedp)
 	"headless automatic draw must commit compact semantic intent");
     CHECK(recording_backend.apply_calls == 1 &&
 	recording_backend.kinds.size() == 1 &&
-	recording_backend.kinds[0] == GED_DRAW_TXN_DRAW &&
+	recording_backend.kinds[0] == GED_SCENE_REDUCER_DRAW &&
 	recording_backend.deferred_draws.size() == 1 &&
 	recording_backend.deferred_draws[0] == 1,
 	"headless automatic draw must reach the backend once with deferred leaf expansion");
@@ -6397,8 +6397,8 @@ test_draw(struct ged *gedp)
 	GED_SCENE_OK, "recording backend erase must commit");
     CHECK(recording_backend.apply_calls == 2 &&
 	recording_backend.kinds.size() == 2 &&
-	recording_backend.kinds[0] == GED_DRAW_TXN_DRAW &&
-	recording_backend.kinds[1] == GED_DRAW_TXN_ERASE,
+	recording_backend.kinds[0] == GED_SCENE_REDUCER_DRAW &&
+	recording_backend.kinds[1] == GED_SCENE_REDUCER_ERASE,
 	"one semantic erase commit must reach the backend exactly once");
 
     recording_draw.realization.mode = GED_SCENE_REALIZE_EAGER;
@@ -6407,7 +6407,7 @@ test_draw(struct ged *gedp)
 	"headless eager draw must commit explicit eager intent");
     CHECK(recording_backend.apply_calls == 3 &&
 	recording_backend.kinds.size() == 3 &&
-	recording_backend.kinds[2] == GED_DRAW_TXN_DRAW &&
+	recording_backend.kinds[2] == GED_SCENE_REDUCER_DRAW &&
 	recording_backend.deferred_draws.size() == 3 &&
 	recording_backend.deferred_draws[2] == 0,
 	"explicit eager draw must disable deferred leaf expansion");
@@ -6416,7 +6416,7 @@ test_draw(struct ged *gedp)
 	"headless eager draw cleanup must commit");
     CHECK(recording_backend.apply_calls == 4 &&
 	recording_backend.kinds.size() == 4 &&
-	recording_backend.kinds[3] == GED_DRAW_TXN_ERASE,
+	recording_backend.kinds[3] == GED_SCENE_REDUCER_ERASE,
 	"headless eager draw cleanup must reach the backend exactly once");
 
     const char *nested_recording_paths[] = {"all.g/platform.r"};
@@ -6433,8 +6433,8 @@ test_draw(struct ged *gedp)
 	"subtree erase must retire narrower top-level draw intents");
     CHECK(recording_backend.apply_calls == 6 &&
 	recording_backend.kinds.size() == 6 &&
-	recording_backend.kinds[4] == GED_DRAW_TXN_DRAW &&
-	recording_backend.kinds[5] == GED_DRAW_TXN_ERASE_PREFIX,
+	recording_backend.kinds[4] == GED_SCENE_REDUCER_DRAW &&
+	recording_backend.kinds[5] == GED_SCENE_REDUCER_ERASE_PREFIX,
 	"nested draw and subtree erase must each reach the backend exactly once");
 
     recording_draw.paths = recording_paths;
@@ -6448,8 +6448,8 @@ test_draw(struct ged *gedp)
 	"headless clear must retire all semantic draw intents");
     CHECK(recording_backend.apply_calls == 8 &&
 	recording_backend.kinds.size() == 8 &&
-	recording_backend.kinds[6] == GED_DRAW_TXN_DRAW &&
-	recording_backend.kinds[7] == GED_DRAW_TXN_CLEAR,
+	recording_backend.kinds[6] == GED_SCENE_REDUCER_DRAW &&
+	recording_backend.kinds[7] == GED_SCENE_REDUCER_CLEAR,
 	"clear must reach the backend once after semantic retirement");
 
     recording_scene_backend replacement_backend;

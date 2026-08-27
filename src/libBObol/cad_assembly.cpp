@@ -8,10 +8,12 @@
 #include "common.h"
 
 #include "./cad_assembly_private.h"
+#include "cad_publication_private.h"
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BViewLod.h"
 
 #include <Inventor/actions/SoGLRenderAction.h>
+#include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/SbName.h>
 #include <Inventor/misc/SoState.h>
 #include <Inventor/nodes/SoCamera.h>
@@ -20,6 +22,7 @@
 #include <Obol/cad/SoCADViewState.h>
 
 #include <map>
+#include <optional>
 #include <vector>
 
 SO_NODE_SOURCE(SoBRLCadAssembly);
@@ -27,6 +30,41 @@ SO_NODE_SOURCE(SoBRLCadRenderBatch);
 
 static thread_local const std::unordered_set<const SoBRLDatabaseSource *> *
     activeCadBatchSources = NULL;
+
+namespace {
+
+class CadViewPolicyScope {
+public:
+    CadViewPolicyScope(SoAction *action, Obol::CadDrawMode drawMode,
+	Obol::CadPickMode pickMode) :
+	state(action ? action->getState() : NULL)
+    {
+	if (!this->state)
+	    return;
+	this->state->push();
+	if (!this->state->isElementEnabled(
+		SoCADViewStateElement::getClassStackIndex()))
+	    return;
+	Obol::CadViewState view = SoCADViewStateElement::get(this->state);
+	view.drawMode = drawMode;
+	view.pickMode = pickMode;
+	SoCADViewStateElement::set(this->state, view);
+    }
+
+    ~CadViewPolicyScope()
+    {
+	if (this->state)
+	    this->state->pop();
+    }
+
+    CadViewPolicyScope(const CadViewPolicyScope &) = delete;
+    CadViewPolicyScope &operator=(const CadViewPolicyScope &) = delete;
+
+private:
+    SoState *state;
+};
+
+} // namespace
 
 int
 bobol_cad_batch_source_suppressed(const SoBRLDatabaseSource *source)
@@ -66,7 +104,9 @@ cad_batch_instance_state_signature(const std::vector<Obol::InstanceId> &ids)
     return signature ? signature : 1;
 }
 
-SoBRLCadAssembly::SoBRLCadAssembly(void)
+SoBRLCadAssembly::SoBRLCadAssembly(void) :
+    presentationDrawModeValue(Obol::CadDrawMode::Wireframe),
+    presentationPickModeValue(Obol::CadPickMode::Automatic)
 {
     SO_NODE_CONSTRUCTOR(SoBRLCadAssembly);
 }
@@ -132,6 +172,32 @@ SoBRLCadAssembly::render(SoGLRenderAction *action)
 }
 
 void
+SoBRLCadAssembly::setPresentationDrawMode(Obol::CadDrawMode mode)
+{
+    if (this->presentationDrawModeValue == mode)
+	return;
+    this->presentationDrawModeValue = mode;
+    this->touch();
+}
+
+void
+SoBRLCadAssembly::setPresentationPickMode(Obol::CadPickMode mode)
+{
+    if (this->presentationPickModeValue == mode)
+	return;
+    this->presentationPickModeValue = mode;
+    this->touch();
+}
+
+void
+SoBRLCadAssembly::GLRender(SoGLRenderAction *action)
+{
+    CadViewPolicyScope policy(action, this->presentationDrawModeValue,
+	this->presentationPickModeValue);
+    inherited::GLRender(action);
+}
+
+void
 SoBRLCadAssembly::getBounds(SoGetBoundingBoxAction *action)
 {
     this->getBoundingBox(action);
@@ -141,6 +207,14 @@ void
 SoBRLCadAssembly::pickRay(SoRayPickAction *action)
 {
     this->rayPick(action);
+}
+
+void
+SoBRLCadAssembly::rayPick(SoRayPickAction *action)
+{
+    CadViewPolicyScope policy(action, this->presentationDrawModeValue,
+	this->presentationPickModeValue);
+    inherited::rayPick(action);
 }
 
 SoDetail *
@@ -303,16 +377,10 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
     const SbBool includeSemantics = structureChanged || semanticChanged;
 
     BObolCadBatchBuildState state;
-    state.assembly = this->assembly;
     state.parts.reserve(sources.size());
     state.partIds.reserve(sources.size());
     state.instances.reserve(sources.size());
     this->batchedSources.clear();
-    if (structureChanged) {
-	this->assembly->beginUpdate();
-	this->assembly->clear();
-	this->assembly->clearSemanticMap();
-    }
     for (SoBRLDatabaseSource *source : sources) {
 	if (viewState && viewState->findCad(source))
 	    continue;
@@ -320,11 +388,13 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
 		includeSemantics))
 	    this->batchedSources.insert(source);
     }
-    if (structureChanged) {
-	this->assembly->upsertSharedParts(state.parts);
-	this->assembly->upsertInstances(state.instances);
-    } else if (styleChanged) {
-	std::vector<Obol::InstanceStyleUpdate> styles;
+    if (!state.valid) {
+	this->batchedSources.clear();
+	this->batchValid = FALSE;
+	return FALSE;
+    }
+    std::vector<Obol::InstanceStyleUpdate> styles;
+    if (!structureChanged && styleChanged) {
 	styles.reserve(state.instances.size());
 	for (const Obol::InstanceUpdate &instance : state.instances) {
 	    Obol::InstanceStyleUpdate style;
@@ -332,7 +402,37 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
 	    style.style = instance.record.style;
 	    styles.push_back(style);
 	}
-	this->assembly->updateInstanceStyles(styles);
+    }
+    if ((structureChanged &&
+	    (!bobol_cad_validate_shared_parts(state.parts,
+		"CAD render batch preflight") ||
+	     !bobol_cad_validate_instances(state.instances,
+		"CAD render batch preflight"))) ||
+	(!structureChanged && styleChanged &&
+	 !bobol_cad_validate_styles(styles, "CAD style batch preflight"))) {
+	this->batchedSources.clear();
+	this->batchValid = FALSE;
+	return FALSE;
+    }
+    std::optional<SoCADAssembly::UpdateScope> updateScope;
+    if (structureChanged) {
+	updateScope.emplace(this->assembly->batchUpdate());
+	if (!bobol_cad_replace_scene(this->assembly, state.parts,
+		state.instances, "CAD render batch replacement")) {
+	    this->batchedSources.clear();
+	    this->batchValid = FALSE;
+	    return FALSE;
+	}
+	this->assembly->clearSemanticMap();
+	for (const auto &semantic : state.semantics)
+	    this->assembly->setInstanceSemantic(
+		semantic.first, semantic.second);
+    } else if (styleChanged) {
+	if (!bobol_cad_publish_styles(this->assembly, styles,
+		"CAD style batch publication")) {
+	    this->batchValid = FALSE;
+	    return FALSE;
+	}
     }
     const uint64_t hiddenSignature =
 	cad_batch_instance_state_signature(state.hiddenInstances);
@@ -347,16 +447,14 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
     if (structureChanged ||
 	unpickableSignature != this->cachedUnpickableSignature)
 	this->assembly->setUnpickableInstances(state.unpickableInstances);
-    int drawMode = SoCADAssembly::WIREFRAME;
+    Obol::CadDrawMode drawMode = Obol::CadDrawMode::Wireframe;
     if (state.shadedCount > 0 && state.wireCount > 0)
-	drawMode = SoCADAssembly::SHADED_WITH_EDGES;
+	drawMode = Obol::CadDrawMode::ShadedWithEdges;
     else if (state.shadedCount > 0)
-	drawMode = SoCADAssembly::SHADED;
-    if (this->assembly->drawMode.getValue() != drawMode)
-	this->assembly->drawMode = drawMode;
-    if (structureChanged)
-	this->assembly->endUpdate();
-
+	drawMode = Obol::CadDrawMode::Shaded;
+    this->assembly->setPresentationDrawMode(drawMode);
+    if (updateScope)
+	updateScope->finish();
     this->cachedSourceSignature = signature;
     this->cachedStructureSignature = structureSignature;
     this->cachedStyleSignature = styleSignature;

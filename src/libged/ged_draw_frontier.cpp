@@ -51,7 +51,7 @@ struct visibility_rule {
 };
 
 struct presentation_rule {
-    ged_draw_transaction_kind kind = GED_DRAW_TXN_NONE;
+    ged_scene_reducer_operation kind = GED_SCENE_REDUCER_NONE;
     std::string path;
     struct ged_view_context *view = nullptr;
     int mode = -1;
@@ -929,14 +929,14 @@ ged_draw_frontier_presentation_snapshot_foreach(
 extern "C" int
 ged_draw_frontier_presentation_set(
     struct ged *gedp,
-    const struct ged_draw_transaction *txn,
+    const struct ged_scene_reducer_request *txn,
     const char *resolved_path)
 {
     if (!gedp || !txn || !resolved_path || !resolved_path[0])
 	return 0;
-    if (txn->kind != GED_DRAW_TXN_VISIBILITY &&
-	txn->kind != GED_DRAW_TXN_HIGHLIGHT &&
-	txn->kind != GED_DRAW_TXN_TRANSPARENCY)
+    if (txn->kind != GED_SCENE_REDUCER_VISIBILITY &&
+	txn->kind != GED_SCENE_REDUCER_HIGHLIGHT &&
+	txn->kind != GED_SCENE_REDUCER_TRANSPARENCY)
 	return 0;
 
     frontier_state *state = state_get(gedp, false);
@@ -988,7 +988,7 @@ ged_draw_frontier_highlights_clear(struct ged *gedp)
 	const size_t previous = root.presentation.size();
 	root.presentation.erase(std::remove_if(root.presentation.begin(),
 	    root.presentation.end(), [](const presentation_rule &rule) {
-		return rule.kind == GED_DRAW_TXN_HIGHLIGHT;
+		return rule.kind == GED_SCENE_REDUCER_HIGHLIGHT;
 	    }), root.presentation.end());
 	if (previous != root.presentation.size())
 	    changed++;
@@ -1131,7 +1131,7 @@ ged_draw_frontier_path_state(struct ged *gedp,
 extern "C" void
 ged_draw_frontier_note_transaction(
     struct ged *gedp,
-    const struct ged_draw_transaction *txn,
+    const struct ged_scene_reducer_request *txn,
     const char *resolved_path)
 {
     frontier_state *state = state_get(gedp, false);
@@ -1141,19 +1141,19 @@ ged_draw_frontier_note_transaction(
     bool structural = false;
     bool all_roots = false;
     switch (txn->kind) {
-	case GED_DRAW_TXN_DRAW:
-	case GED_DRAW_TXN_ERASE:
-	case GED_DRAW_TXN_ERASE_PREFIX:
-	case GED_DRAW_TXN_SOURCE_RENAMED:
-	case GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED:
+	case GED_SCENE_REDUCER_DRAW:
+	case GED_SCENE_REDUCER_ERASE:
+	case GED_SCENE_REDUCER_ERASE_PREFIX:
+	case GED_SCENE_REDUCER_SOURCE_RENAMED:
+	case GED_SCENE_REDUCER_SOURCE_REFERENCES_REMOVED:
 	    structural = true;
 	    break;
-	case GED_DRAW_TXN_SOURCE_UPDATED:
+	case GED_SCENE_REDUCER_SOURCE_UPDATED:
 	    structural = txn->removed != 0 || txn->redraw != 0;
 	    break;
-	case GED_DRAW_TXN_CLEAR:
-	case GED_DRAW_TXN_CLEAR_SCOPE:
-	case GED_DRAW_TXN_TEARDOWN:
+	case GED_SCENE_REDUCER_CLEAR:
+	case GED_SCENE_REDUCER_CLEAR_SCOPE:
+	case GED_SCENE_REDUCER_TEARDOWN:
 	    structural = true;
 	    all_roots = true;
 	    break;
@@ -1197,7 +1197,7 @@ ged_draw_frontier_note_transaction(
      * before a source redraw.  In particular, a nested erase issued as part
      * of a combination-member removal must not survive after that occurrence
      * has ceased to exist. */
-    if (txn->kind == GED_DRAW_TXN_SOURCE_UPDATED && txn->redraw) {
+    if (txn->kind == GED_SCENE_REDUCER_SOURCE_UPDATED && txn->redraw) {
 	for (auto it = state->roots.begin(); it != state->roots.end(); ) {
 	    if (!root_in_scope(*it, txn->view, txn->mode)) {
 		++it;
@@ -1234,16 +1234,16 @@ ged_draw_frontier_note_transaction(
 	    continue;
 	}
 	bool retire = all_roots;
-	if (!retire && (txn->kind == GED_DRAW_TXN_ERASE ||
-		txn->kind == GED_DRAW_TXN_ERASE_PREFIX ||
-		txn->kind == GED_DRAW_TXN_DRAW ||
-		(txn->kind == GED_DRAW_TXN_SOURCE_UPDATED &&
+	if (!retire && (txn->kind == GED_SCENE_REDUCER_ERASE ||
+		txn->kind == GED_SCENE_REDUCER_ERASE_PREFIX ||
+		txn->kind == GED_SCENE_REDUCER_DRAW ||
+		(txn->kind == GED_SCENE_REDUCER_SOURCE_UPDATED &&
 		 txn->removed))) {
 	    for (const std::string &path : paths) {
 		/* Erasing an owner, or explicitly drawing a broader owner, retires
 		 * the narrower source's presentation rules.  A descendant draw is
 		 * absorbed by ged_draw_frontier_absorb_draw and keeps the owner. */
-		const bool erase_owner = txn->kind != GED_DRAW_TXN_DRAW &&
+		const bool erase_owner = txn->kind != GED_SCENE_REDUCER_DRAW &&
 		    path == it->path;
 		const bool broader_owner = path != it->path &&
 		    path_prefix(path, it->path);
@@ -1266,11 +1266,11 @@ ged_draw_frontier_note_transaction(
 extern "C" int
 ged_draw_frontier_absorb_draw(
     struct ged *gedp,
-    const struct ged_draw_transaction *txn,
+    const struct ged_scene_reducer_request *txn,
     const char *resolved_path,
-    struct ged_draw_transaction_result *result)
+    struct ged_scene_reducer_result *result)
 {
-    if (!gedp || !txn || txn->kind != GED_DRAW_TXN_DRAW ||
+    if (!gedp || !txn || txn->kind != GED_SCENE_REDUCER_DRAW ||
 	!ged_db_index_available(gedp))
 	return 0;
 
@@ -1638,7 +1638,7 @@ extern "C" int
 ged_draw_frontier_erase_path(struct ged *gedp, const char *path,
 			     struct ged_view_context *view_ctx,
 			     int mode, int prefix,
-			     struct ged_draw_transaction_result *result)
+			     struct ged_scene_reducer_result *result)
 {
     if (!gedp || !path || !path[0] || !ged_db_index_available(gedp))
 	return 0;

@@ -15,6 +15,7 @@
 #include "BObol/BPickDetail.h"
 
 #include <Obol/cad/SoCADAssembly.h>
+#include <Obol/cad/CadViewState.h>
 #include <Inventor/nodes/SoSeparator.h>
 
 #include <cstdint>
@@ -30,18 +31,7 @@ class SoRayPickAction;
 class SoBRLDatabaseSource;
 class BObolViewLodState;
 class SoBRLCadAssembly;
-
-struct BObolCadBatchBuildState {
-    SoBRLCadAssembly *assembly = NULL;
-    std::vector<Obol::SharedPartUpdate> parts;
-    std::unordered_set<Obol::PartId, std::hash<Obol::PartId>> partIds;
-    std::vector<Obol::InstanceUpdate> instances;
-    std::vector<Obol::InstanceId> hiddenInstances;
-    std::vector<Obol::InstanceId> selectedInstances;
-    std::vector<Obol::InstanceId> unpickableInstances;
-    int wireCount = 0;
-    int shadedCount = 0;
-};
+class BObolCompactPresentationStaging;
 
 class SoBRLCadAssembly : public SoCADAssembly {
     typedef SoCADAssembly inherited;
@@ -93,18 +83,34 @@ public:
     void render(SoGLRenderAction *action);
     void getBounds(SoGetBoundingBoxAction *action);
     void pickRay(SoRayPickAction *action);
+    void setPresentationDrawMode(Obol::CadDrawMode mode);
+    Obol::CadDrawMode presentationDrawMode(void) const
+    {
+	return this->presentationDrawModeValue;
+    }
+    void setPresentationPickMode(Obol::CadPickMode mode);
+    Obol::CadPickMode presentationPickMode(void) const
+    {
+	return this->presentationPickModeValue;
+    }
 
 protected:
     ~SoBRLCadAssembly(void) override;
+    void GLRender(SoGLRenderAction *action) override;
+    void rayPick(SoRayPickAction *action) override;
     SoDetail *createPickDetail(
 	const Obol::CadPickDetailRecord &hit) const override;
 
 private:
     friend class SoBRLDatabaseSource;
+    friend class BObolCompactPresentationStaging;
+
+    Obol::CadDrawMode presentationDrawModeValue;
+    Obol::CadPickMode presentationPickModeValue;
 
     struct CompactInstancePresentation {
 	std::string payloadKey;
-	Obol::PartId activePart = Obol::CadIdBuilder::Root();
+	Obol::PartId activePart;
 	uint8_t channels = 0;
 	int activeCut = -1;
 	bool lodStructuralProxy = false;
@@ -117,8 +123,8 @@ private:
 
     struct CompactLayerPresentation {
 	std::string layerKey;
-	Obol::PartId part = Obol::CadIdBuilder::Root();
-	Obol::InstanceId instance = Obol::CadIdBuilder::Root();
+	Obol::PartId part;
+	Obol::InstanceId instance = Obol::CadIdBuilder::rootInstance();
 	uint8_t channels = 0;
 	int activeCut = -1;
 	bool coverage = false;
@@ -161,6 +167,21 @@ private:
      * later camera epoch can restore the occurrence without rediscovery. */
     std::unordered_set<Obol::InstanceId, std::hash<Obol::InstanceId>>
 	compactSpatiallyCulledInstances;
+};
+
+/** Side-effect-free staging state for one retained assembly publication. */
+struct BObolCadBatchBuildState {
+    bool valid = true;
+    std::vector<Obol::PartUpdate> parts;
+    std::unordered_set<Obol::PartId, std::hash<Obol::PartId>> partIds;
+    std::vector<Obol::InstanceUpdate> instances;
+    std::vector<std::pair<Obol::InstanceId,
+	SoBRLCadAssembly::InstanceSemantic>> semantics;
+    std::vector<Obol::InstanceId> hiddenInstances;
+    std::vector<Obol::InstanceId> selectedInstances;
+    std::vector<Obol::InstanceId> unpickableInstances;
+    int wireCount = 0;
+    int shadedCount = 0;
 };
 
 class SoBRLCadRenderBatch : public SoSeparator {

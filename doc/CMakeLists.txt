@@ -39,6 +39,7 @@ set(
   notes/libbobol_api_contract.md
   notes/libbobol_architecture.md
   notes/libbobol_engineering_lessons.md
+  notes/libbobol_formal_models.md
   notes/libbobol_lod_state_contract.md
   notes/live_spatial_publication.md
   notes/libbobol_platform_threading_matrix.md
@@ -58,14 +59,22 @@ set(
   notes/ObolLodArbitration.tla
   notes/ObolLodAdmission.cfg
   notes/ObolLodAdmission.tla
-  notes/ObolColdPresentation.cfg
-  notes/ObolColdPresentation.tla
+  notes/ObolActiveProducerDemand.cfg
+  notes/ObolActiveProducerDemand.tla
+  notes/ObolCadMutation.cfg
+  notes/ObolCadMutation.tla
+  notes/ObolCadViewPublication.cfg
+  notes/ObolCadViewPublication.tla
+  notes/ObolCapacityPresentationHandoff.cfg
+  notes/ObolCapacityPresentationHandoff.tla
   notes/ObolLodConvergence.cfg
   notes/ObolLodConvergence.tla
   notes/ObolProgressivePipeline.cfg
   notes/ObolProgressivePipeline.tla
   notes/ObolControlRefinement.cfg
   notes/ObolControlRefinement.tla
+  notes/ObolDeferredAutoview.cfg
+  notes/ObolDeferredAutoview.tla
   notes/ObolSubmissionPass.cfg
   notes/ObolSubmissionPass.tla
   notes/ObolResidentGrowth.cfg
@@ -90,6 +99,10 @@ set(
   notes/ObolLodColdPreview.tla
   notes/ObolLiveSpatialPublication.cfg
   notes/ObolLiveSpatialPublication.tla
+  notes/ObolSpatialProducer.cfg
+  notes/ObolSpatialProducer.tla
+  notes/ObolStructuralFrontierOwnership.cfg
+  notes/ObolStructuralFrontierOwnership.tla
   notes/obol_lod_control.cfg
   notes/obol_lod_control.tla
   pre_BRL-CAD.bib

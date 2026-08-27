@@ -123,7 +123,7 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
      * minimum prefix as soon as possible. */
     SbBool atomicRepresentationHandoff;
     int forcedCut;
-    int reset;
+    SbBool resetExisting;
 
     BObolMeshLodProvider(void);
     void clear(void);

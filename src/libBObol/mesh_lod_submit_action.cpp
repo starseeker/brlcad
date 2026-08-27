@@ -354,7 +354,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     providerVersion(BOBOL_MESH_LOD_PROVIDER_VERSION),
     qualityTier(BOBOL_LOD_QUALITY_FAST_DISPLAY),
     refreshMissing(TRUE),
-    reset(0),
+    resetExisting(FALSE),
     useForcedCut(FALSE),
     forcedCut(0),
     requireLodBacked(TRUE),
@@ -581,9 +581,9 @@ SoBRLMeshLodSubmitAction::setRefreshMissing(SbBool newRefreshMissing)
 }
 
 void
-SoBRLMeshLodSubmitAction::setReset(int newReset)
+SoBRLMeshLodSubmitAction::setReset(SbBool newResetExisting)
 {
-    this->reset = newReset;
+    this->resetExisting = newResetExisting ? TRUE : FALSE;
 }
 
 void
@@ -2817,8 +2817,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    std::numeric_limits<double>::infinity();
 		candidate.qualityFloorViolation = active &&
 		    candidate.projectedErrorPixels >
-			std::max(1.0, static_cast<double>(
-			    projected.targetPixelError) * 3.0);
+			BObolViewLodState::prominentMaximumProjectedError(
+			    projected.targetPixelError);
 		candidate.refinementValuePerCost =
 		    static_cast<double>(candidate.projectedPixels);
 		/* Rank already-covered leaves by visible PoP error reduction per
@@ -2929,7 +2929,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    candidateCount;
 	size_t processedLast = localFirst;
 	const SbBool suppressActiveDuplicate =
-	    (!submitAction->useForcedCut && submitAction->reset == 0) ?
+	    (!submitAction->useForcedCut && !submitAction->resetExisting) ?
 	    TRUE : FALSE;
 	std::vector<BObolLodTask> pendingTasks;
 	const size_t taskCapacity =
@@ -4139,7 +4139,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			    activePayload->progressiveMesh,
 			    presentationDemand.requiredChunks,
 			    presentationDemand.requestedCut) : 0,
-		    activeAssetMatches ? 1 : 0, submitAction->reset,
+		    activeAssetMatches ? 1 : 0,
+		    submitAction->resetExisting ? 1 : 0,
 		    request.projectedPixelDiameter,
 		    request.targetPixelError,
 		    activePayload->progressiveMesh ?
@@ -4153,7 +4154,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			activePayload->progressiveMesh->revision() : 0),
 		    static_cast<unsigned long long>(
 			activePayload->preparedCadGeometryRevision));
-	    if (submitAction->reset == 0 && activePayload &&
+	    if (!submitAction->resetExisting && activePayload &&
 		activeAssetMatches &&
 		retargetCut > activePayload->activeCut) {
 		retargetCut = submitAction->admitAllocatedRefinementCut(
@@ -4183,7 +4184,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    }
 		}
 	    }
-	    if (submitAction->reset == 0 && activePayload &&
+	    if (!submitAction->resetExisting && activePayload &&
 		activeAssetMatches &&
 		retargetCut >= 0 &&
 		activePayload->activeCut != retargetCut) {
@@ -4418,7 +4419,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		     * different levels.  Trimming is therefore a post-generation
 		     * aggregate operation, never a leaf-request side effect. */
 		    provider->compactResident = FALSE;
-	    provider->reset = submitAction->reset;
+	    provider->resetExisting = submitAction->resetExisting;
 
 	    BObolLodTask task;
 	    task.generation = submitAction->generation;
@@ -4602,7 +4603,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     int retargetCut =
 	mesh_lod_available_cad_retarget_cut(activePayload, presentationDemand,
 	    retainedTargetDrawable);
-    if (submitAction->reset == 0 && activePayload &&
+    if (!submitAction->resetExisting && activePayload &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
 	retargetCut > activePayload->activeCut) {
 	retargetCut = submitAction->admitAllocatedRefinementCut(
@@ -4625,7 +4626,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    }
 	}
     }
-    if (submitAction->reset == 0 && activePayload &&
+    if (!submitAction->resetExisting && activePayload &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
 	retargetCut >= 0 &&
 	activePayload->activeCut != retargetCut) {
@@ -4649,7 +4650,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     }
 
     const SbBool suppressActiveDuplicate =
-	(!submitAction->useForcedCut && submitAction->reset == 0) ?
+	(!submitAction->useForcedCut && !submitAction->resetExisting) ?
 	TRUE : FALSE;
     if (suppressActiveDuplicate &&
 	submitAction->service->updateActiveRequestDemand(request)) {
@@ -4748,7 +4749,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	provider->initialRefinementCostBudget = initialCostAllowance;
     provider->shrinkAfterCopy = TRUE;
 	    provider->compactResident = FALSE;
-    provider->reset = submitAction->reset;
+    provider->resetExisting = submitAction->resetExisting;
 
     BObolLodTask task;
     task.generation = submitAction->generation;
@@ -4876,7 +4877,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     int retargetCut =
 	mesh_lod_available_mesh_retarget_cut(viewPayload, request,
 	    retainedTargetDrawable);
-    if (submitAction->reset == 0 && viewPayload &&
+    if (!submitAction->resetExisting && viewPayload &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&
 	retargetCut > viewPayload->activeCut) {
 	retargetCut = submitAction->reserveRefinementCut(
@@ -4897,7 +4898,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    }
 	}
     }
-    if (submitAction->reset == 0 && viewPayload &&
+    if (!submitAction->resetExisting && viewPayload &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&
 	viewPayload->activeCut != retargetCut &&
 	retargetCut >= 0) {
@@ -4915,7 +4916,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    return;
 	}
     }
-    if (!submitAction->useForcedCut && submitAction->reset == 0 &&
+    if (!submitAction->useForcedCut && !submitAction->resetExisting &&
 	request.requestedCut < 0 && viewPayload &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request)) {
 	submitAction->skippedMeshCount++;
@@ -4923,7 +4924,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     }
 
     const SbBool suppressActiveDuplicate =
-	(!submitAction->useForcedCut && submitAction->reset == 0) ?
+	(!submitAction->useForcedCut && !submitAction->resetExisting) ?
 	TRUE : FALSE;
     if (suppressActiveDuplicate &&
 	submitAction->service->updateActiveRequestDemand(request)) {
@@ -5017,7 +5018,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	provider->initialRefinementCostBudget = initialCostAllowance;
     provider->shrinkAfterCopy = TRUE;
 	    provider->compactResident = FALSE;
-    provider->reset = submitAction->reset;
+    provider->resetExisting = submitAction->resetExisting;
 
     BObolLodTask task;
     task.generation = submitAction->generation;

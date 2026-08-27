@@ -7,10 +7,12 @@
 
 #include "common.h"
 
+#include "bu/datetime.h"
 #include "bu/parallel.h"
 #include "bu/str.h"
 
 #include "BObol/BLodRealization.h"
+#include "cad_publication_private.h"
 
 #include <Obol/cad/SoCADAssembly.h>
 
@@ -500,8 +502,8 @@ progressive_generation_from_data(
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
     std::shared_ptr<BObolLodProgressiveMeshGeneration> generation(
 	new BObolLodProgressiveMeshGeneration);
-    std::shared_ptr<Obol::PartGeometry> geometry(
-	new Obol::PartGeometry);
+    std::shared_ptr<Obol::PartGeometryBuilder> geometry(
+	new Obol::PartGeometryBuilder);
     Obol::TriMesh mesh;
     generation->cuts.assign(hierarchy.cuts,
 	hierarchy.cuts + hierarchy.cut_count);
@@ -683,7 +685,11 @@ progressive_generation_from_data(
     geometry->shadedCullBackfaces =
 	shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = true;
-    generation->shadedGeometry = geometry;
+    const std::shared_ptr<const Obol::PartGeometry> completed =
+	bobol_cad_build_geometry(std::move(*geometry), "PoP generation");
+    if (!completed)
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    generation->shadedGeometry = completed;
     return generation;
 }
 
@@ -890,7 +896,7 @@ progressive_generation_from_chunks(
 	resident->indices.size() < 3 || resident->indices.size() % 3 != 0)
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
 
-    std::shared_ptr<Obol::PartGeometry> geometry(new Obol::PartGeometry);
+    std::shared_ptr<Obol::PartGeometryBuilder> geometry(new Obol::PartGeometryBuilder);
     mesh.positions = resident->positions;
     mesh.indices = resident->indices;
     if (!resident->cornerNormals.empty() &&
@@ -935,7 +941,12 @@ progressive_generation_from_chunks(
     geometry->conservativeBounds = generation->bounds;
     geometry->shadedCullBackfaces = shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = true;
-    generation->shadedGeometry = geometry;
+    const std::shared_ptr<const Obol::PartGeometry> completed =
+	bobol_cad_build_geometry(
+	    std::move(*geometry), "spatial PoP generation");
+    if (!completed)
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    generation->shadedGeometry = completed;
     return generation;
 }
 
@@ -1067,8 +1078,8 @@ progressive_generation_prefix(
     if (!generation->revision)
 	generation->revision = 1;
     generation->shadedCullBackfaces = source.shadedCullBackfaces;
-    std::shared_ptr<Obol::PartGeometry> geometry(
-	new Obol::PartGeometry);
+    std::shared_ptr<Obol::PartGeometryBuilder> geometry(
+	new Obol::PartGeometryBuilder);
     Obol::TriMesh mesh;
     mesh.bounds = sourceMesh->bounds;
     mesh.progressiveCuts = sourceMesh->progressiveCuts;
@@ -1120,7 +1131,12 @@ progressive_generation_prefix(
     geometry->shadedCullBackfaces =
 	source.shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = true;
-    generation->shadedGeometry = geometry;
+    const std::shared_ptr<const Obol::PartGeometry> completed =
+	bobol_cad_build_geometry(
+	    std::move(*geometry), "trimmed PoP generation");
+    if (!completed)
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    generation->shadedGeometry = completed;
     return generation;
 }
 
@@ -1445,8 +1461,8 @@ BObolLodProgressiveMesh::extendFromCache(
 	generation->revision = 1;
     generation->shadedCullBackfaces = prior->shadedCullBackfaces;
 
-    std::shared_ptr<Obol::PartGeometry> geometry(
-	new Obol::PartGeometry);
+    std::shared_ptr<Obol::PartGeometryBuilder> geometry(
+	new Obol::PartGeometryBuilder);
     Obol::TriMesh mesh;
     mesh.bounds = priorMesh->bounds;
     mesh.progressiveCuts = priorMesh->progressiveCuts;
@@ -1519,7 +1535,12 @@ BObolLodProgressiveMesh::extendFromCache(
     geometry->shadedCullBackfaces =
 	shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = true;
-    generation->shadedGeometry = geometry;
+    const std::shared_ptr<const Obol::PartGeometry> completed =
+	bobol_cad_build_geometry(
+	    std::move(*geometry), "extended PoP generation");
+    if (!completed)
+	return FALSE;
+    generation->shadedGeometry = completed;
     progressive_generation_store(this->p, generation);
     return TRUE;
 }
@@ -2842,7 +2863,7 @@ bobol_prepare_spatial_page_shaded(
 	resident.indices.size() % 3 != 0)
 	return std::shared_ptr<const Obol::PartGeometry>();
     const auto &metadata = generation.chunks[resident.chunkId];
-    std::shared_ptr<Obol::PartGeometry> geometry(new Obol::PartGeometry);
+    std::shared_ptr<Obol::PartGeometryBuilder> geometry(new Obol::PartGeometryBuilder);
     Obol::TriMesh mesh;
     mesh.positions = resident.positions;
     mesh.indices = resident.indices;
@@ -2906,7 +2927,11 @@ bobol_prepare_spatial_page_shaded(
      * visible pinhole into an otherwise pixel-exact mesh.  Whole-occurrence
      * aggregation remains responsible for subpixel-object proxies. */
     geometry->subpixelProxyEligible = false;
-    const std::shared_ptr<const Obol::PartGeometry> completed = geometry;
+    const std::shared_ptr<const Obol::PartGeometry> completed =
+	bobol_cad_build_geometry(std::move(*geometry),
+	    "spatial shaded presentation page");
+    if (!completed)
+	return std::shared_ptr<const Obol::PartGeometry>();
     {
 	std::lock_guard<std::mutex> lock(resident.preparedMutex);
 	resident.preparedCadGeometry[shadedChannelKey] = completed;
@@ -2951,11 +2976,10 @@ bobol_prepare_spatial_page_geometry(
     if (!sourceMesh)
 	return std::shared_ptr<const Obol::PartGeometry>();
 
-    std::shared_ptr<Obol::PartGeometry> geometry(new Obol::PartGeometry);
+    std::shared_ptr<Obol::PartGeometryBuilder> geometry(new Obol::PartGeometryBuilder);
     Obol::WireRep wireRep;
     wireRep.bounds = resident.bounds;
-    wireRep.triangleEdges = std::shared_ptr<const Obol::TriMesh>(
-	shadedGeometry, sourceMesh);
+    wireRep.triangleEdgeGeometry = shadedGeometry;
     wireRep.triangleEdgeSegmentCount = sourceMesh->indices.size();
     wireRep.progressiveMinimumCut = sourceMesh->progressiveMinimumCut;
     wireRep.progressiveResidentCut = sourceMesh->progressiveResidentCut;
@@ -2979,7 +3003,11 @@ bobol_prepare_spatial_page_geometry(
     geometry->shadedCullBackfaces =
 	generation.shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = false;
-    const std::shared_ptr<const Obol::PartGeometry> completed = geometry;
+    const std::shared_ptr<const Obol::PartGeometry> completed =
+	bobol_cad_build_geometry(std::move(*geometry),
+	    "spatial wire presentation page");
+    if (!completed)
+	return std::shared_ptr<const Obol::PartGeometry>();
     {
 	std::lock_guard<std::mutex> lock(resident.preparedMutex);
 	resident.preparedCadGeometry[channelKey] = completed;
@@ -3106,8 +3134,8 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 	static_cast<int>(sourceMesh->progressiveResidentCut) :
 	generation->residentCut;
 
-    std::shared_ptr<Obol::PartGeometry> geometry(
-	new Obol::PartGeometry);
+    std::shared_ptr<Obol::PartGeometryBuilder> geometry(
+	new Obol::PartGeometryBuilder);
     const SbBox3f bounds(
 	generation->quantizationMinimum,
 	generation->quantizationMaximum);
@@ -3118,8 +3146,7 @@ BObolLodProgressiveMesh::prepareCadGeometry(
     if (wire) {
 	Obol::WireRep wireRep;
 	wireRep.bounds = bounds;
-	wireRep.triangleEdges = std::shared_ptr<const Obol::TriMesh>(
-	    generation->shadedGeometry, sourceMesh);
+	wireRep.triangleEdgeGeometry = generation->shadedGeometry;
 	wireRep.triangleEdgeSegmentCount = sourceMesh->indices.size();
 	wireRep.progressiveMinimumCut =
 	    static_cast<uint8_t>(std::max(0, generation->minimumCut));
@@ -3191,7 +3218,11 @@ BObolLodProgressiveMesh::prepareCadGeometry(
     }
     geometry->subpixelProxyEligible = true;
 
-    std::shared_ptr<const Obol::PartGeometry> prepared = geometry;
+    std::shared_ptr<const Obol::PartGeometry> prepared =
+	bobol_cad_build_geometry(
+	    std::move(*geometry), "combined PoP presentation");
+    if (!prepared)
+	return std::shared_ptr<const Obol::PartGeometry>();
     {
 	std::lock_guard<std::mutex> lock(generation->preparedMutex);
 	generation->preparedCadGeometry[channelKey] = prepared;

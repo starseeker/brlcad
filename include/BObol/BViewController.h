@@ -694,11 +694,11 @@ public:
     size_t processPendingLodResults(size_t maxResults = 0,
 	uint64_t maxMicroseconds = 0);
     int submitLodRequestsIfNeeded(SbBool refreshMissing = TRUE,
-				  int reset = 0);
+				  SbBool resetExisting = FALSE);
     int submitLodRequests(BObolLodService *service = NULL,
 			  uint64_t generation = 0,
 			  SbBool refreshMissing = TRUE,
-			  int reset = 0);
+			  SbBool resetExisting = FALSE);
     int applyLodResults(BObolLodService *service = NULL,
 			size_t maxResults = 0,
 			size_t maxEstimatedBytes = 0,

@@ -1,6 +1,6 @@
 # BRL-CAD Obol drawing architecture
 
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-27
 
 This is the entry point for the production drawing architecture shared by
 qged, MGED, gsh, Archer, rtwizard, and other GED clients.  Intermediate branch
@@ -27,6 +27,8 @@ Read these documents in this order:
 8. `qged_editing.md` is the detailed primitive/sketch editing workstream.
 9. `libbobol_engineering_lessons.md` records resolved failures whose causes and
    guards must not be rediscovered.
+10. `libbobol_formal_models.md` maps every TLA+ boundary to its sole production
+    owner and defines when each model must change.
 
 `ObolHostWork.tla`, `obol_lod_control.tla`, `ObolLodConvergence.tla`,
 `ObolLodAdmission.tla`, `ObolLodArbitration.tla`,
@@ -36,6 +38,21 @@ control-plane models.  They do not model mesh arrays, rendering, numeric
 resource policy, or workload cardinality.  `ObolProgressivePipeline` replaces
 the earlier mode-composition model: workload labels are model-checking
 profiles, never production control modes.
+
+`ObolCadViewPublication.tla` isolates the renderer boundary: preparation and
+completed-frame evidence carry an exact view identity, view changes cancel
+old preparation, and a consumer cannot accept a stale historical report as a
+current frame.  Geometry sharing is intentionally outside that model because
+it does not transfer presentation ownership.
+
+`ObolCadMutation.tla` isolates retained-scene mutation: invalid or resource-
+denied candidates cannot open an update or change the last valid scene, a
+valid candidate remains invisible while its RAII update is open, bounded
+mechanical sub-batches drain before close, and a stable input eventually
+leaves no staged candidate or open update.  The checked model currently
+reaches 128,904 distinct states at depth five.  `ObolInteractionSession.tla` also
+includes the terminal ownerless-handoff case and reaches 132 distinct states
+at depth eleven.
 
 The `brl_obol_*`, `obol_*_coverage`, `obol_draw_perf_debug.txt`, and old TODO
 notes are historical design and migration evidence.  Their headers point here
@@ -111,10 +128,35 @@ controller ledger records their progress edges rather than copying that asset
 state.  One stateless availability scheduler supplies pacing and
 settled-population predicates.
 
-Workers produce immutable data.  Coin/Obol nodes, view state, result adoption,
-and live presentation remain on the owning presentation thread.  Large arrays
-are shared or moved into their final owner; the owner thread must not copy a
-mesh merely to publish it.
+Workers produce mutable `PartGeometryBuilder` values which are validated and
+admitted before leaving the producer boundary.  Admission constructs the only
+renderer-visible `PartGeometry` form: a non-constructible, non-copyable
+snapshot whose members are const.  Moving a builder transfers its large arrays
+without copying; admitting an intentional lvalue makes an independent copy.
+Cached admitted snapshots recover a lightweight validation token in O(1) and
+are never rescanned.  Coin/Obol nodes, view state, result adoption, and live
+presentation remain on the owning presentation thread.
+
+Publication is a transaction boundary.  The owner thread stages geometry
+tokens, instance records, and semantic records without mutating the live
+assembly.  Whole-journal pure validation completes before opening the update
+window.  Geometry and removals commit once, while large occurrence/style/cut
+journals use bounded mechanical sub-batches under that same observer-visible
+RAII update window; this avoids a second 50k/150k scene vector.  A preflight
+rejection names both field and reason and leaves the preceding scene unchanged.
+Compact presentation bookkeeping uses a bounded copy-on-write overlay and is
+adopted only after Obol accepts the journal.  Every mutation result is consumed
+through the centralized libBObol publication boundary.  Early returns and
+nested batches cannot leave notification or rebuild deferral active.
+
+Complete-scene replacement additionally constructs its retained candidate
+before a no-throw swap and reports resource denial without clearing the live
+scene.  Sparse publication intentionally does not clone the complete scene:
+its strong guarantee covers validation and off-scene staging, while the
+bounded mechanical commit relies on manifest-driven capacity reservation.
+Treating allocator exhaustion during that owner-thread commit as a recoverable
+transaction error would require a second retained-scene population and is not
+part of the scale contract.
 
 A spatial PoP page is a storage/rendering partition, not a CAD occurrence.
 All presented pages for one occurrence use one active cut and retain the base
@@ -131,6 +173,12 @@ resources, picking primitives, and exact execution of the cut selected by
 libBObol.  `SoCADAssembly` does not independently choose CAD LoD or infer
 quality from a cut number.  It consumes producer-certified populations and
 reports completed-frame cost and resource evidence.
+
+One `SoCADAssembly` belongs to one view presentation.  Independent views own
+independent assembly nodes and camera-local preparation/report state.  Their
+assemblies share immutable `PartGeometry` storage rather than sharing a node;
+this prevents one view from invalidating another view's classifier, prepared
+commands, or completed-frame certificate without copying mesh arrays.
 
 `SoCADAssembly`'s subpixel classifier also remains semantic: it stores one
 logical point record per collapsed occurrence, which preserves exact coverage,
@@ -177,24 +225,42 @@ builds.  Independent compilation is a dependency test: a private helper must
 be declared at the owning boundary rather than becoming visible accidentally
 because two implementation files happened to share one compiler invocation.
 The first extraction pass is complete, but it is not a claim that every source
-is now small: `database_source.cpp` remains about 19k lines and `draw_obol.cpp`
-about 13k.  The next split must follow an observed ownership/lifecycle or perf
-seam, never line count alone.
+is now small: `database_source.cpp` remains about 17.4k lines and
+`draw_obol.cpp` about 12.9k.  The next split must follow an observed
+ownership/lifecycle or performance seam, never line count alone.
 
 - `database_source.cpp` owns traversal and realization orchestration;
   `database_source_cache.cpp`, `database_source_compact_access.cpp`,
-  `database_source_interaction.cpp`, `database_source_summary.cpp`, and
-  `database_source_types.cpp` own the named subordinate responsibilities.
-- `view_controller.cpp` owns LoD demand/allocation policy and controller
-  lifetime; `view_controller_progressive.cpp`,
-  `view_controller_render.cpp`, `view_controller_scene.cpp`, and
-  `view_controller_lighting.cpp` own provider pumping, frame execution,
-  forwarding, and lighting respectively.
+  `database_source_interaction.cpp`, `database_source_presentation.cpp`,
+  `database_source_summary.cpp`, and `database_source_types.cpp` own the named
+  subordinate responsibilities.  `database_source_mesh_geometry.cpp` and
+  `cad_normals.cpp` own worker-safe geometry conversion and normal
+  construction.  `compact_presentation_staging.cpp` owns the bounded
+  copy-on-write retained-scene journal.
+- `view_controller.cpp` owns LoD demand/allocation policy;
+  `view_controller_host.cpp` owns controller lifetime, camera synchronization,
+  and host render requests; `view_controller_progressive.cpp`,
+  `view_controller_render.cpp`, `view_controller_scene.cpp`,
+  `view_controller_lighting.cpp`, `view_controller_picking.cpp`, and
+  `view_controller_residency.cpp` own provider pumping, frame execution,
+  forwarding, lighting, exact picking, and memory reclamation respectively.
+  `lod_admission_policy.cpp`, `lod_presentation_policy.cpp`, and
+  `lod_view_quality_history.cpp` own numeric admission planning, the
+  allocation-free handoff, and exact-view history policies.  The formerly
+  monolithic coordinator header is now an umbrella over self-contained
+  admission, capacity, delivery, scene-evidence, presentation, and view-policy
+  boundaries; each focused header is compiled alone by the policy test target.
 - `draw_obol.cpp` owns semantic transaction application and progressive source
   realization; `draw_obol_endpoint.cpp`, `draw_obol_geometry.cpp`,
   `draw_obol_overlay.cpp`, and `draw_obol_scene_records.cpp` own the renderer
   boundary surfaces their names describe.
-- Obol's `SoCADAssembly` owns retained assembly state and frame planning;
+- Obol's presentation-local `SoCADAssembly.cpp` owns the Coin node, retained
+  mutation, picking, and action surface while immutable part geometry may be
+  shared across views.  `CadAssemblyPlan.cpp` owns retained plan/cache
+  maintenance, `CadAssemblyClassification.cpp` owns camera-local subpixel
+  classification, and `CadAssemblyImpl.h` is their state-only private seam.
+  `CadRendererGLIndirect`, `CadRendererGLInstanced`, `CadRendererGLFlat`, and
+  the retained/direct executor unit own distinct GL execution families;
   `CadSoftwareWire` owns the non-GL wire execution path.
 
 The private headers expose only hidden value and lifecycle seams.  They are not
@@ -205,14 +271,22 @@ publication, GED transaction reduction versus backend application, and retained
 assembly planning versus renderer execution.
 
 For progressive control, physical extraction follows the canonical state
-shape rather than the current file boundaries:
+shape rather than workload or renderer names:
 
-- `lod_evidence_private.*` owns the five immutable snapshots and typed
-  certificates;
-- `lod_planner_private.*` is the pure numeric allocation function and its
-  independent test surface;
-- `lod_control_private.*` owns the finite event reducer, work ledger, plan
-  cursor, and presentation transaction;
+- `lod_scene_evidence_private.h` owns coverage, source-profile,
+  projected-demand, visibility, resource, and convergence evidence;
+- `lod_capacity_policy_private.h` owns frame capacity, the bounded admission
+  cursor, and retained-allocation requests;
+- `lod_view_policy_private.h` owns camera interaction and static-quality
+  policy;
+- `lod_admission_policy_private.h` owns point/structural admission and the pure
+  admission planner;
+- `lod_delivery_policy_private.h` owns availability, presentation, and
+  compaction scheduling;
+- `lod_presentation_policy.cpp` owns renderer-ceiling handoff and
+  reconciliation;
+- `lod_control_private.h` owns the finite event reducer, work ledger, plan
+  cursor, and typed obligations;
 - `view_controller_progressive.cpp` is the imperative effect executor and
   provider/host adapter; and
 - render units consume committed plans and return transaction evidence only.
@@ -347,96 +421,15 @@ terminal reason, and the exact current frame has been acknowledged.
 
 ## Formal and executable proof boundaries
 
-The complete renderer is intentionally not modeled formally.  The focused
-models cover three control seams that have produced real failures:
+The complete renderer is intentionally not modeled formally.  The
+authoritative model catalog, implementation ownership map, change routing,
+and TLC invocation rules are in `libbobol_formal_models.md`.  Keep detailed
+transition commentary with the focused model rather than duplicating it here.
 
-- `obol_lod_control.tla`: fallback identity, payload publication, repair
-  admission, and render acknowledgement;
-- `ObolHostWork.tla`: level-triggered controller work, idempotent pending
-  requests, one-way presentation-to-capacity upgrade, pre-traversal transaction
-  claims, and eventual quiescence.  TLC passed the current contract on
-  2026-08-25 (2,007 generated / 714 distinct states, depth 15);
-- `ObolLodConvergence.tla`: exclusive progress ownership across bounded
-  coverage, resident loading, allocation, result handoff, and frame
-  acknowledgement for both a large single mesh and a many-occurrence scene.
-  It proves eventual quiescence after finite input, including the valid case
-  where a constrained terminal allocation retains known physical-quality debt.
-- `ObolLodAdmission.tla`: safe-scene direct admission, large-scene PoP-only
-  admission, subpixel aggregation, and an explicit constrained outcome.
-- `ObolLodArbitration.tla`: protected visual-importance floors, budget-safe
-  arbitration, unchanged-epoch cut monotonicity, and terminal constrained
-  debt.  Pair it with `test_bobol_retained_allocation_oracle` when changing
-  numeric allocation scoring.
-- `ObolProgressivePipeline.tla`: the canonical ownership composition.  It
-  treats few-small, many-small, single-large, distinct multi-large, and
-  shared-large scenes as profiles of one discovery, availability, planning,
-  presentation, and outcome pipeline.  It guards against a workload-specific
-  control mode, repeated planning of identical evidence, ownerless active
-  work, false readiness, and starvation of one of several large assets.
-- `ObolPresentationPreparation.tla`: the renderer/host preparation seam.  An
-  exact target owns an immutable finite total, monotone completed work, and a
-  bounded transient reservation.  Only new-target admission, strict
-  same-target progress, completion, constraint, or failure is an abstract
-  event; renderer activity counters are outside the control refinement map.
-  Obol publishes this certificate for subpixel classification, flat shaded
-  atlas construction, and retained-indirect preparation.  libBObol compares
-  frame-boundary snapshots and has no raw-serial retry path.
-- `ObolLodColdPreview.tla`: the cold serialized-large-mesh seam.  It
-  distinguishes a cheap source-order sample from a coverage-certified preview,
-  requires the standing overview until that certificate exists, bounds producer
-  admission by declared working set, and proves a finite view cannot remain in
-  an ownerless or undisplayable intermediate state.  It intentionally cannot
-  establish whether a particular proxy looks useful or completes within a
-  number of milliseconds; those remain image, perf, and memory qualification.
-  The implementation counterpart is an explicitly typed cache callback:
-  complete PoP prefixes and source-wide coverage previews are distinct payload
-  kinds.  Coverage samples become bounded voxel surface geometry at the
-  service/presentation boundary.  A former partial spatial-leaf callback was
-  removed because no consumer could present it as whole-object coverage
-  without violating that contract.
-- `ObolLiveSpatialPublication.tla`: the additive spatial-page seam used by
-  both cold production and warm cache reads.  Completed immutable pages are
-  adopted as renderer layers without constructing a scene-wide aggregate;
-  every visible page uses one common active cut.  The model proves the
-  required publication ordering: a page is complete before publication,
-  coverage remains through every incomplete page set, cancellation freezes
-  new publication and cannot mark the cache complete, and only final complete
-  geometry may retire coverage.  It is a control-plane guard; retained-page
-  tests and graphical qualification remain the data-plane evidence.
-- `ObolActiveProducerDemand.tla`: the stable-asset/changing-demand seam for a
-  coalesced producer.  It checks that intermediate and final publications are
-  stamped from current demand, an overtaken completion is superseded rather
-  than a provider failure, exact-demand failure state is retired on epoch advance,
-  and finite input reaches either a current presentation or a genuine current
-  terminal failure.
-
-TLC counterexamples must be converted into source-level invariants and focused
-tests.  ASan/UBSan, fake-clock coordinator exploration, graphical event replay,
-image comparison, perf, and large-model runs cover the data-plane properties
-outside those models.
-
-Run the focused LoD models after changing their respective policies:
-
-```
-java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
-  -config doc/notes/ObolLodConvergence.cfg doc/notes/ObolLodConvergence.tla
-java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
-  -config doc/notes/ObolLodAdmission.cfg doc/notes/ObolLodAdmission.tla
-java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
-  -config doc/notes/ObolLodArbitration.cfg doc/notes/ObolLodArbitration.tla
-java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
-  -config doc/notes/ObolProgressivePipeline.cfg \
-  doc/notes/ObolProgressivePipeline.tla
-java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
-  -config doc/notes/ObolLodColdPreview.cfg \
-  doc/notes/ObolLodColdPreview.tla
-java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
-  -config doc/notes/ObolLiveSpatialPublication.cfg \
-  doc/notes/ObolLiveSpatialPublication.tla
-java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
-  -config doc/notes/ObolActiveProducerDemand.cfg \
-  doc/notes/ObolActiveProducerDemand.tla
-```
+Every counterexample must become a source-level invariant and an executable
+regression test.  ASan/UBSan, fake-clock coordinator exploration, graphical
+event replay, image comparison, perf, and large-model runs cover visual,
+numeric, memory, and timing properties outside the formal abstraction.
 
 ## Change rule
 

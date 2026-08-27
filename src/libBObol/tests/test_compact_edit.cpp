@@ -101,8 +101,7 @@ main(int argc, char **argv)
 	FAIL("source placement setup should change state");
     }
 
-    std::shared_ptr<Obol::PartGeometry> geometry =
-	std::make_shared<Obol::PartGeometry>();
+    Obol::PartGeometryBuilder geometry;
     Obol::WireRep wire;
     wire.segmentPoints.push_back(SbVec3f(1.0f, 2.0f, 3.0f));
     wire.segmentPoints.push_back(SbVec3f(4.0f, 2.0f, 3.0f));
@@ -110,10 +109,16 @@ main(int argc, char **argv)
     wire.bounds.makeEmpty();
     wire.bounds.extendBy(wire.segmentPoints[0]);
     wire.bounds.extendBy(wire.segmentPoints[1]);
-    geometry->wire = wire;
+    geometry.wire = wire;
+    const Obol::CadGeometryAdmission geometryAdmission =
+	Obol::cadAdmitPartGeometry(std::move(geometry));
+    if (!geometryAdmission) {
+	source->unref();
+	FAIL("compact occurrence geometry admission should succeed");
+    }
 
     BObolCompactOccurrence occurrence;
-    occurrence.geometry = geometry;
+    occurrence.geometry = geometryAdmission.geometry.shared();
     occurrence.summary.valid = TRUE;
     occurrence.summary.shapeKind = BObolRealizedShapeSummary::SHAPE_VLIST;
     occurrence.summary.path = "assembly.g/part.s";

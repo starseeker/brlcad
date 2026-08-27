@@ -1130,8 +1130,8 @@ extern int ged_draw_erase_component_string_scoped(struct ged *gedp,
 							     struct ged_view_context *view_ctx,
 							     int mode);
 extern int ged_draw_apply_draw_inner(
-	struct ged *gedp, const struct ged_draw_transaction *txn,
-	const char *path, struct ged_draw_transaction_result *result);
+	struct ged *gedp, const struct ged_scene_reducer_request *txn,
+	const char *path, struct ged_scene_reducer_result *result);
 
 extern void ged_draw_highlighted_shape_ref_invalidate(struct ged *gedp);
 
@@ -1663,12 +1663,12 @@ extern int ged_draw_obol_scene_controller_owned_internal(
     struct ged *gedp);
 extern int ged_draw_obol_scene_sync_attached_transaction(
     struct ged *gedp,
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result);
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result);
 extern int ged_draw_obol_backend_apply_transaction(
     struct ged *gedp,
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result);
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result);
 extern uint64_t ged_scene_revision_advance(struct ged *gedp);
 extern void ged_scene_delta_dispatch_internal(
     struct ged *gedp,
@@ -1914,8 +1914,8 @@ BObolSceneController *ged_draw_obol_scene_controller(
     struct ged *gedp);
 int ged_draw_obol_scene_controller_owned(struct ged *gedp);
 int ged_draw_obol_scene_sync_transaction(
-    struct ged *gedp, const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    struct ged *gedp, const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     BObolSceneController *controller = NULL);
 int ged_draw_obol_scene_sync_full_scene(
     struct ged *gedp, struct ged_view_context *view_ctx, uint32_t source_revision = 0,

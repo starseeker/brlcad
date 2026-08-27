@@ -1,6 +1,6 @@
 # libBObol engineering lessons
 
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-27
 
 This document preserves durable lessons from the Obol drawing migration and
 production shake-down.  It is not a chronological status log.  Each entry
@@ -42,6 +42,22 @@ count, range, index, coordinate, normal, and cumulative cut before publication.
 Cache incompatibility invalidates old data rather than invoking compatibility
 logic.
 
+### A const shared pointer is not an immutable snapshot
+
+The first admitted-geometry API accepted a `shared_ptr<const PartGeometry>`,
+but producers could retain a `shared_ptr<PartGeometry>` to the same allocation.
+Validation therefore proved only one instant: a later producer mutation could
+invalidate indices, bounds, or progressive intervals while render and picking
+threads still consumed the object.  Derived wire geometry repeated the alias
+through a shared mutable triangle mesh.
+
+Rule: mutable geometry exists only as `PartGeometryBuilder`.  Admission owns a
+copy or move, validates it, and privately constructs a const-member
+`PartGeometry`; clients cannot construct or copy that renderer-visible type.
+Derived representations retain an admitted parent snapshot, never a mutable
+subobject.  Regress both the type traits and lvalue-builder independence, and
+search the complete consumer tree for direct construction after API changes.
+
 ### Process-wide workers impose destruction ordering
 
 ASan found a source-realization worker reading the draw-cache binding map after
@@ -68,6 +84,58 @@ build.  A shared-library timestamp update alone is not evidence that Ninja
 rebuilt targets which were not requested.
 
 ## State and liveness
+
+### Planning state must not mutate the live presentation
+
+Compact publication originally updated BRL-CAD's retained part/reference and
+layer bookkeeping while it was still constructing an Obol batch.  A late
+validation rejection therefore left the renderer unchanged but poisoned the
+producer's idea of what had been committed; later passes could skip required
+records or retire the wrong parts.
+
+Rule: build sparse presentation deltas in a bounded copy-on-write overlay.
+Validate the complete geometry/occurrence/style/cut/removal journal against
+the live assembly, commit it under one RAII update window, and only then adopt
+the producer bookkeeping.  The overlay stores changed keys and signed
+reference deltas, never a second copy of a 50k/150k scene.
+
+### Similar proxy properties are not the same contract
+
+A strict validator briefly required every structural proxy to be eligible for
+subpixel point aggregation.  Whole-target startup overviews are structural
+wire extents which must remain visible in shaded mode, but deliberately must
+not collapse to one point.  The coupling rejected valid wire drawing and made
+a ready scene empty.
+
+Rule: `structuralProxy` distinguishes temporary extent geometry from authored
+wire; `subpixelProxyEligible` independently authorizes point replacement.  A
+subpixel-eligible part must have finite conservative proxy corners.  A
+structural-only overview is valid and remains unaggregated.  Exercise both
+combinations in Obol validation and the complete GED drawing corpus.
+
+### Unity builds can hide source-boundary defects
+
+Renderer extraction initially left one translation unit using a helper which
+was visible only because the build concatenated implementation files.  A
+nominal file split therefore did not establish a real dependency boundary.
+
+Rule: responsibility-specific renderer and publication units compile outside
+unity builds.  Shared private helpers live in an explicit private header or a
+single owning source, and each extracted unit must compile independently.
+
+### Transaction control is not swappable scene payload
+
+A staged `SoCADAssembly::replaceScene()` swapped the retained database as one
+no-throw commit, but the database base also contained the live update-depth
+counter.  The swap installed the candidate's zero counter while an RAII update
+scope was open.  Scope destruction therefore observed no open update and sent
+no scene notification: queries saw the replacement while render traversal
+could remain unaware of it.
+
+Rule: transaction nesting, publication latches, and producer capacity hints
+belong to the live assembly, never to a swappable scene snapshot.  A successful
+nonempty replacement emits one completion notification; a rejected replacement
+emits none.  Preserve both behaviors with a priority-zero node-sensor test.
 
 ### Workload regimes are data, not control modes
 

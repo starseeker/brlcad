@@ -65,19 +65,19 @@ struct BObolDatabaseSourceRealizationCache {
     void storeMeshVListGeometry(const std::string &key, SoBRLVListShape *shape);
     void storeMeshGeometry(const std::string &key, SoBRLMeshShape *shape);
     std::shared_ptr<const Obol::PartGeometry> storeWireCadGeometry(
-	const std::string &key, Obol::PartGeometry &&geometry,
+	const std::string &key, Obol::PartGeometryBuilder &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
 	const SbBox3f *bounds = NULL, bool lodBacked = false,
 	const BObolSourceMeshRequest *sourceMeshRequest = NULL,
 	bool viewDependentCsgGeometry = false);
     std::shared_ptr<const Obol::PartGeometry> storeMeshVListCadGeometry(
-	const std::string &key, Obol::PartGeometry &&geometry,
+	const std::string &key, Obol::PartGeometryBuilder &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
 	const SbBox3f *bounds = NULL, bool lodBacked = false,
 	const BObolSourceMeshRequest *sourceMeshRequest = NULL,
 	bool viewDependentCsgGeometry = false);
     std::shared_ptr<const Obol::PartGeometry> storeMeshCadGeometry(
-	const std::string &key, Obol::PartGeometry &&geometry,
+	const std::string &key, Obol::PartGeometryBuilder &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
 	const SbBox3f *bounds = NULL, bool lodBacked = false,
 	const BObolSourceMeshRequest *sourceMeshRequest = NULL,
@@ -137,6 +137,8 @@ bobol_database_bot_part_geometry(const struct rt_bot_internal *bot,
 	int drawMode);
 size_t bobol_database_part_geometry_estimate_bytes(
 	const Obol::PartGeometry &geometry);
+size_t bobol_database_part_geometry_estimate_bytes(
+	const Obol::PartGeometryBuilder &geometry);
 
 /* Generate one detached BREP triangle representation.  The caller supplies
  * its deterministic band identity; the returned owner releases all

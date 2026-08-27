@@ -127,7 +127,7 @@ find_dependency(Threads)
 # target.  Resolve it before importing BRLCADTargets so an installed consumer
 # never depends on build-tree target ordering.
 if(@BRLCAD_HAVE_BOBOL@)
-  find_dependency(Obol CONFIG)
+  find_dependency(Obol 2.0 CONFIG)
 endif()
 
 # Bundled-or-system deps that are always used

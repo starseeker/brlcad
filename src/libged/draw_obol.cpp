@@ -170,7 +170,7 @@ static int ged_obol_apply_draw_paths_to_scene(
     const char **paths,
     int path_count,
     const struct ged_draw_appearance_settings *settings,
-    struct ged_draw_transaction_result *result,
+    struct ged_scene_reducer_result *result,
     BObolSceneController *scene,
     uint32_t source_revision,
     int preserve_display_state);
@@ -681,8 +681,8 @@ ged_obol_append_unique_path(std::vector<std::string> &paths, const char *path)
 }
 
 static std::vector<std::string>
-ged_obol_transaction_paths(const struct ged_draw_transaction *txn,
-			   const struct ged_draw_transaction_result *result)
+ged_obol_transaction_paths(const struct ged_scene_reducer_request *txn,
+			   const struct ged_scene_reducer_result *result)
 {
     std::vector<std::string> paths;
     if (result)
@@ -712,7 +712,7 @@ ged_obol_fold_revision(uint64_t revision)
 
 static uint32_t
 ged_obol_transaction_source_revision(
-    const struct ged_draw_transaction_result *result)
+    const struct ged_scene_reducer_result *result)
 {
     return ged_obol_fold_revision(result ? result->scene_revision_after : 0);
 }
@@ -826,14 +826,14 @@ ged_obol_lod_draw_mode_from_database_source(const SoBRLDatabaseSource *source)
 
 static int
 ged_obol_transaction_ged_draw_mode(struct ged *gedp,
-				   const struct ged_draw_transaction *txn)
+				   const struct ged_scene_reducer_request *txn)
 {
     int mode = -1;
     if (txn && txn->appearance) {
 	const struct ged_draw_appearance_settings *appearance =
 	    (const struct ged_draw_appearance_settings *)txn->appearance;
 	mode = appearance->draw_mode;
-    } else if (txn && txn->kind == GED_DRAW_TXN_DRAW && txn->mode >= 0) {
+    } else if (txn && txn->kind == GED_SCENE_REDUCER_DRAW && txn->mode >= 0) {
 	mode = txn->mode;
     }
     if (mode < 0 && gedp)
@@ -843,9 +843,9 @@ ged_obol_transaction_ged_draw_mode(struct ged *gedp,
 
 static int
 ged_obol_transaction_defer_leaf_expansion(
-    const struct ged_draw_transaction *txn)
+    const struct ged_scene_reducer_request *txn)
 {
-    if (!txn || txn->kind != GED_DRAW_TXN_DRAW || !txn->appearance)
+    if (!txn || txn->kind != GED_SCENE_REDUCER_DRAW || !txn->appearance)
 	return 0;
 
     const struct ged_draw_appearance_settings *appearance =
@@ -3434,7 +3434,7 @@ ged_obol_compact_path_match(enum ged_scene_path_match match)
 static int
 ged_obol_database_source_in_transaction_scope(
     SoBRLDatabaseSource *source,
-    const struct ged_draw_transaction *txn)
+    const struct ged_scene_reducer_request *txn)
 {
     if (!source || !txn)
 	return 0;
@@ -3448,7 +3448,7 @@ static void
 ged_obol_collect_transaction_instance_keys(
     std::vector<std::string> &instance_keys,
     BObolSceneController *scene,
-    const struct ged_draw_transaction *txn,
+    const struct ged_scene_reducer_request *txn,
     const char *target)
 {
     if (!scene || !txn || !target)
@@ -3467,8 +3467,8 @@ ged_obol_collect_transaction_instance_keys(
 
 static int
 ged_obol_apply_highlight_transaction(
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     BObolSceneController *scene)
 {
     if (!txn || !scene)
@@ -3526,8 +3526,8 @@ ged_obol_apply_highlight_transaction(
 
 static int
 ged_obol_apply_visibility_transaction(
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     BObolSceneController *scene)
 {
     if (!txn || !scene)
@@ -3584,8 +3584,8 @@ ged_obol_apply_visibility_transaction(
 
 static int
 ged_obol_apply_transparency_transaction(
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     BObolSceneController *scene)
 {
     if (!txn || !scene)
@@ -3660,22 +3660,22 @@ ged_obol_frontier_presentation_apply_cb(
     if (record->view && ctx->view_ctx && record->view != ctx->view_ctx)
 	return 1;
 
-    struct ged_draw_transaction txn = ged_draw_transaction_make(
+    struct ged_scene_reducer_request txn = ged_scene_reducer_request_make(
 	record->kind, record->path);
     txn.view = record->view;
     txn.mode = record->mode;
     txn.match = record->match;
     txn.value = record->value;
     switch (record->kind) {
-	case GED_DRAW_TXN_VISIBILITY:
+	case GED_SCENE_REDUCER_VISIBILITY:
 	    (void)ged_obol_apply_visibility_transaction(&txn, nullptr,
 		ctx->scene);
 	    break;
-	case GED_DRAW_TXN_HIGHLIGHT:
+	case GED_SCENE_REDUCER_HIGHLIGHT:
 	    (void)ged_obol_apply_highlight_transaction(&txn, nullptr,
 		ctx->scene);
 	    break;
-	case GED_DRAW_TXN_TRANSPARENCY:
+	case GED_SCENE_REDUCER_TRANSPARENCY:
 	    (void)ged_obol_apply_transparency_transaction(&txn, nullptr,
 		ctx->scene);
 	    break;
@@ -7213,6 +7213,19 @@ ged_obol_collect_structural_proxy_children(
 }
 
 static std::shared_ptr<const Obol::PartGeometry>
+ged_obol_admit_geometry(Obol::PartGeometryBuilder geometry)
+{
+    Obol::CadGeometryAdmission admission =
+	Obol::cadAdmitPartGeometry(std::move(geometry));
+    if (!admission) {
+	bu_log("libged: rejected structural proxy geometry: %s\n",
+	    Obol::cadGeometryErrorName(admission.validation.error));
+	return std::shared_ptr<const Obol::PartGeometry>();
+    }
+    return admission.geometry.shared();
+}
+
+static std::shared_ptr<const Obol::PartGeometry>
 ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max,
     SbMatrix *geometry_transform)
 {
@@ -7234,8 +7247,7 @@ ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max,
     if (geometry_transform && isfinite(sx) && isfinite(sy) && isfinite(sz) &&
 	sx > SMALL_FASTF && sy > SMALL_FASTF && sz > SMALL_FASTF) {
 	static const std::shared_ptr<const Obol::PartGeometry> unit_geometry = []() {
-	    std::shared_ptr<Obol::PartGeometry> geometry(
-		new Obol::PartGeometry);
+	    Obol::PartGeometryBuilder geometry;
 	    Obol::WireRep wire;
 	    const SbVec3f corners[8] = {
 		SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 0.0f, 0.0f),
@@ -7256,10 +7268,10 @@ ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max,
 		wire.segmentIds.push_back(edge + 1);
 	    }
 	    wire.bounds = SbBox3f(corners[0], corners[7]);
-	    geometry->wire = std::move(wire);
-	    geometry->subpixelProxyEligible = true;
-	    geometry->structuralProxy = true;
-	    return std::shared_ptr<const Obol::PartGeometry>(geometry);
+	    geometry.wire = std::move(wire);
+	    geometry.subpixelProxyEligible = true;
+	    geometry.structuralProxy = true;
+	    return ged_obol_admit_geometry(std::move(geometry));
 	}();
 	geometry_transform->setScale(
 	    SbVec3f(static_cast<float>(sx), static_cast<float>(sy),
@@ -7273,8 +7285,7 @@ ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max,
 	return unit_geometry;
     }
 
-    std::shared_ptr<Obol::PartGeometry> geometry(
-	new Obol::PartGeometry);
+    Obol::PartGeometryBuilder geometry;
     Obol::WireRep wire;
     const SbVec3f corners[8] = {
 	SbVec3f(static_cast<float>(bounds_min[X]),
@@ -7315,13 +7326,13 @@ ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max,
 	wire.segmentIds.push_back(edge + 1);
     }
     wire.bounds = SbBox3f(corners[0], corners[7]);
-    geometry->wire = std::move(wire);
+    geometry.wire = std::move(wire);
     /* Structural bounds are conservative LoD proxies, not authored wire.
      * SoCADAssembly may render a depth-tested point when every AABB corner
      * projects into one pixel, while retaining the box for bounds and picks. */
-    geometry->subpixelProxyEligible = true;
-    geometry->structuralProxy = true;
-    return geometry;
+    geometry.subpixelProxyEligible = true;
+    geometry.structuralProxy = true;
+    return ged_obol_admit_geometry(std::move(geometry));
 }
 
 /* A bounded structural proxy may represent an assembly rather than a region.
@@ -11350,7 +11361,7 @@ ged_obol_apply_draw_paths_to_scene(
     const char **paths,
     int path_count,
     const struct ged_draw_appearance_settings *settings,
-    struct ged_draw_transaction_result *result,
+    struct ged_scene_reducer_result *result,
     BObolSceneController *scene,
     uint32_t source_revision,
     int preserve_display_state)
@@ -11688,8 +11699,8 @@ static int
 ged_obol_apply_source_update_transaction(
     struct ged *gedp,
     struct ged_view_context *view_ctx,
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     uint32_t source_revision,
     BObolSceneController *scene)
 {
@@ -11744,8 +11755,8 @@ ged_obol_apply_source_update_transaction(
 
 static int
 ged_obol_apply_source_references_removed_transaction(
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     BObolSceneController *scene)
 {
     if (!txn || !scene)
@@ -11769,8 +11780,8 @@ static int
 ged_obol_apply_stale_source_transaction(
     struct ged *gedp,
     struct ged_view_context *view_ctx,
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     uint32_t source_revision,
     BObolSceneController *scene)
 {
@@ -11790,7 +11801,7 @@ ged_obol_apply_stale_source_transaction(
     /* STALE_SOURCE is an invalidation boundary, not a redraw request.  In
      * particular, replacing a still-displayed aggregate here discards its
      * retained compact/LoD state and makes a simple input notification look
-     * like an erase-and-draw cycle.  GED_DRAW_TXN_REDRAW and a source update
+     * like an erase-and-draw cycle.  GED_SCENE_REDUCER_REDRAW and a source update
      * carrying redraw perform the corresponding realization work. */
     int handled = ged_obol_mark_matching_database_sources_stale(view_ctx,
 		  targets, 0, 1,
@@ -11910,8 +11921,8 @@ ged_draw_obol_groups_remove_for_path_prefix(
 
 static int
 ged_obol_apply_erase_prefix_transaction(
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     BObolSceneController *scene)
 {
     if (!txn || !scene)
@@ -11957,8 +11968,8 @@ static int
 ged_obol_apply_redraw_transaction(
     struct ged *gedp,
     struct ged_view_context *view_ctx,
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     uint32_t UNUSED(source_revision),
     BObolSceneController *scene)
 {
@@ -12250,8 +12261,8 @@ ged_obol_copy_matching_primary_sources_to_scene(
 int
 ged_draw_obol_scene_sync_transaction(
     struct ged *gedp,
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     BObolSceneController *controller)
 {
     if (!gedp || !txn || (result && result->status < 0))
@@ -12274,7 +12285,7 @@ ged_draw_obol_scene_sync_transaction(
     int changed = 0;
 
     switch (txn->kind) {
-	case GED_DRAW_TXN_DRAW: {
+	case GED_SCENE_REDUCER_DRAW: {
 	    std::vector<std::string> paths =
 		ged_obol_transaction_paths(txn, result);
 	    if (result && result->affected_shapes <= 0 &&
@@ -12344,7 +12355,7 @@ ged_draw_obol_scene_sync_transaction(
 	    }
 	    break;
 	}
-	case GED_DRAW_TXN_ERASE: {
+	case GED_SCENE_REDUCER_ERASE: {
 	    std::vector<std::string> paths =
 		ged_obol_transaction_paths(txn, result);
 	    if (paths.empty()) {
@@ -12415,28 +12426,28 @@ ged_draw_obol_scene_sync_transaction(
 	}
 	    break;
 	}
-	case GED_DRAW_TXN_CLEAR:
-	case GED_DRAW_TXN_TEARDOWN:
+	case GED_SCENE_REDUCER_CLEAR:
+	case GED_SCENE_REDUCER_TEARDOWN:
 	    changed = ged_obol_scene_clear_controller(scene);
 	    break;
-	case GED_DRAW_TXN_CLEAR_SCOPE:
+	case GED_SCENE_REDUCER_CLEAR_SCOPE:
 	    changed = ged_obol_clear_database_sources_in_scope(scene,
 		      view_ctx);
 	    if (changed)
 		scene->realizePending();
 	    break;
-	case GED_DRAW_TXN_VISIBILITY:
+	case GED_SCENE_REDUCER_VISIBILITY:
 	    changed = ged_obol_apply_visibility_transaction(txn, result,
 		      scene);
 	    break;
-	case GED_DRAW_TXN_HIGHLIGHT:
+	case GED_SCENE_REDUCER_HIGHLIGHT:
 	    changed = ged_obol_apply_highlight_transaction(txn, result,
 		      scene);
 	    break;
-	case GED_DRAW_TXN_HIGHLIGHTS_CLEAR:
+	case GED_SCENE_REDUCER_HIGHLIGHTS_CLEAR:
 	    changed = ged_obol_scene_highlight_state_set(scene, 0);
 	    break;
-	case GED_DRAW_TXN_HIGHLIGHT_OCCURRENCE:
+	case GED_SCENE_REDUCER_HIGHLIGHT_OCCURRENCE:
 	    if (ged_draw_shape_ref_is_null(txn->shape_ref)) {
 		changed = ged_obol_scene_highlight_state_set(scene, 0);
 		break;
@@ -12446,11 +12457,11 @@ ged_draw_obol_scene_sync_transaction(
 	    changed = ged_draw_shape_ref_set_highlighted(gedp,
 		txn->shape_ref, !ZERO(txn->value));
 	    break;
-	case GED_DRAW_TXN_TRANSPARENCY:
+	case GED_SCENE_REDUCER_TRANSPARENCY:
 	    changed = ged_obol_apply_transparency_transaction(txn, result,
 		      scene);
 	    break;
-	case GED_DRAW_TXN_MATERIAL_CHANGED: {
+	case GED_SCENE_REDUCER_MATERIAL_CHANGED: {
 	    const int refreshed =
 		scene->refreshDatabaseSourceMaterialColorsFromDatabase(
 		    ged_obol_fold_revision(ged_draw_material_revision(gedp)),
@@ -12458,19 +12469,19 @@ ged_draw_obol_scene_sync_transaction(
 	    changed = refreshed >= 0 ? 1 : 0;
 	    break;
 	}
-	case GED_DRAW_TXN_STALE_SOURCE:
+	case GED_SCENE_REDUCER_STALE_SOURCE:
 	    changed = ged_obol_apply_stale_source_transaction(gedp,
 		      view_ctx, txn, result, source_revision, scene);
 	    break;
-	case GED_DRAW_TXN_ERASE_PREFIX:
+	case GED_SCENE_REDUCER_ERASE_PREFIX:
 	    changed = ged_obol_apply_erase_prefix_transaction(txn, result,
 		      scene);
 	    break;
-	case GED_DRAW_TXN_REDRAW:
+	case GED_SCENE_REDUCER_REDRAW:
 	    changed = ged_obol_apply_redraw_transaction(gedp, view_ctx,
 		      txn, result, source_revision, scene);
 	    break;
-	case GED_DRAW_TXN_SOURCE_UPDATED:
+	case GED_SCENE_REDUCER_SOURCE_UPDATED:
 	    changed = ged_obol_apply_source_update_transaction(gedp,
 		      view_ctx, txn, result, source_revision, scene);
 	    if (changed > 0)
@@ -12478,7 +12489,7 @@ ged_draw_obol_scene_sync_transaction(
 	    changed = ged_draw_obol_scene_sync_full_scene(gedp, view_ctx,
 		      source_revision, scene);
 	    break;
-	case GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED:
+	case GED_SCENE_REDUCER_SOURCE_REFERENCES_REMOVED:
 	    changed = ged_obol_apply_source_references_removed_transaction(
 			  txn, result, scene);
 	    if (changed > 0)
@@ -12486,7 +12497,7 @@ ged_draw_obol_scene_sync_transaction(
 	    changed = ged_draw_obol_scene_sync_full_scene(gedp, view_ctx,
 		      source_revision, scene);
 	    break;
-	case GED_DRAW_TXN_SOURCE_RENAMED:
+	case GED_SCENE_REDUCER_SOURCE_RENAMED:
 	    if (txn->path && txn->new_path) {
 		scene->renameRealizationObject(txn->path, txn->new_path);
 		/* Retarget aggregate occurrence semantics explicitly before
@@ -12521,8 +12532,8 @@ ged_draw_obol_scene_sync_transaction(
 	    changed = ged_draw_obol_scene_sync_full_scene(gedp, view_ctx,
 		      source_revision, scene);
 	    break;
-	case GED_DRAW_TXN_DEFAULT_DRAW_MODE:
-	case GED_DRAW_TXN_NONE:
+	case GED_SCENE_REDUCER_DEFAULT_DRAW_MODE:
+	case GED_SCENE_REDUCER_NONE:
 	default:
 	    break;
     }
@@ -12532,8 +12543,8 @@ ged_draw_obol_scene_sync_transaction(
 
 static int
 ged_obol_transaction_invalidates_view_lod(
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result,
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result,
     int full_sync)
 {
     if (full_sync)
@@ -12544,16 +12555,16 @@ ged_obol_transaction_invalidates_view_lod(
 	return 0;
 
     switch (txn->kind) {
-	case GED_DRAW_TXN_DRAW:
-	case GED_DRAW_TXN_ERASE:
-	case GED_DRAW_TXN_CLEAR:
-	case GED_DRAW_TXN_TEARDOWN:
-	case GED_DRAW_TXN_CLEAR_SCOPE:
-	case GED_DRAW_TXN_STALE_SOURCE:
-	case GED_DRAW_TXN_ERASE_PREFIX:
-	case GED_DRAW_TXN_SOURCE_UPDATED:
-	case GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED:
-	case GED_DRAW_TXN_SOURCE_RENAMED:
+	case GED_SCENE_REDUCER_DRAW:
+	case GED_SCENE_REDUCER_ERASE:
+	case GED_SCENE_REDUCER_CLEAR:
+	case GED_SCENE_REDUCER_TEARDOWN:
+	case GED_SCENE_REDUCER_CLEAR_SCOPE:
+	case GED_SCENE_REDUCER_STALE_SOURCE:
+	case GED_SCENE_REDUCER_ERASE_PREFIX:
+	case GED_SCENE_REDUCER_SOURCE_UPDATED:
+	case GED_SCENE_REDUCER_SOURCE_REFERENCES_REMOVED:
+	case GED_SCENE_REDUCER_SOURCE_RENAMED:
 	    return 1;
 	default:
 	    return 0;
@@ -12567,10 +12578,10 @@ ged_obol_transaction_invalidates_view_lod(
  * invalidation remains conservative. */
 static int
 ged_obol_transaction_preserves_empty_lod_preparation(
-    const struct ged_draw_transaction *txn,
+    const struct ged_scene_reducer_request *txn,
     const BObolViewController *controller)
 {
-    if (!txn || !controller || txn->kind != GED_DRAW_TXN_DRAW)
+    if (!txn || !controller || txn->kind != GED_SCENE_REDUCER_DRAW)
 	return 0;
     const BObolViewLodState *state = controller->getViewLodState();
     return controller->getActiveLodCadPayloadCount() == 0 && state &&
@@ -12580,8 +12591,8 @@ ged_obol_transaction_preserves_empty_lod_preparation(
 extern "C" int
 ged_draw_obol_scene_sync_attached_transaction(
     struct ged *gedp,
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result)
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result)
 {
     if (!gedp || !txn)
 	return 0;
@@ -12598,8 +12609,8 @@ ged_draw_obol_scene_sync_attached_transaction(
 
     struct ged_obol_endpoint_sync_context {
 	struct ged *gedp;
-	const struct ged_draw_transaction *txn;
-	const struct ged_draw_transaction_result *result;
+	const struct ged_scene_reducer_request *txn;
+	const struct ged_scene_reducer_result *result;
 	BObolSceneController *shared_scene;
 	int changed;
     } sync_ctx = {gedp, txn, result, primary_scene, changed};
@@ -12628,8 +12639,8 @@ ged_draw_obol_scene_sync_attached_transaction(
 		controller->clearViewLodState();
 	    return 1;
 	}
-	if (ctx->txn->kind == GED_DRAW_TXN_CLEAR ||
-	    ctx->txn->kind == GED_DRAW_TXN_TEARDOWN)
+	if (ctx->txn->kind == GED_SCENE_REDUCER_CLEAR ||
+	    ctx->txn->kind == GED_SCENE_REDUCER_TEARDOWN)
 	    return 1;
 	if (ged_obol_view_scope_is_independent(ctx->txn->view) &&
 	    ctx->txn->view != view_ctx)
@@ -12638,17 +12649,17 @@ ged_draw_obol_scene_sync_attached_transaction(
 	int full_sync = 0;
 	if (ctx->txn->view != view_ctx) {
 	    switch (ctx->txn->kind) {
-		case GED_DRAW_TXN_SOURCE_UPDATED:
-		case GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED:
-		case GED_DRAW_TXN_SOURCE_RENAMED:
-		case GED_DRAW_TXN_STALE_SOURCE:
-		case GED_DRAW_TXN_MATERIAL_CHANGED:
-		case GED_DRAW_TXN_HIGHLIGHT:
-		case GED_DRAW_TXN_HIGHLIGHTS_CLEAR:
-		case GED_DRAW_TXN_HIGHLIGHT_OCCURRENCE:
+		case GED_SCENE_REDUCER_SOURCE_UPDATED:
+		case GED_SCENE_REDUCER_SOURCE_REFERENCES_REMOVED:
+		case GED_SCENE_REDUCER_SOURCE_RENAMED:
+		case GED_SCENE_REDUCER_STALE_SOURCE:
+		case GED_SCENE_REDUCER_MATERIAL_CHANGED:
+		case GED_SCENE_REDUCER_HIGHLIGHT:
+		case GED_SCENE_REDUCER_HIGHLIGHTS_CLEAR:
+		case GED_SCENE_REDUCER_HIGHLIGHT_OCCURRENCE:
 		    full_sync = 1;
 		    break;
-		case GED_DRAW_TXN_REDRAW:
+		case GED_SCENE_REDUCER_REDRAW:
 		    if (ctx->txn->view)
 			return 1;
 		    full_sync = 1;
@@ -12658,7 +12669,7 @@ ged_draw_obol_scene_sync_attached_transaction(
 	    }
 	}
 
-	struct ged_draw_transaction local_txn = *ctx->txn;
+	struct ged_scene_reducer_request local_txn = *ctx->txn;
 	local_txn.view = view_ctx;
 	BObolSceneController *scene = controller->getSceneController();
 	const int endpoint_changed = full_sync ?
@@ -12731,8 +12742,8 @@ ged_obol_progressive_autoview_apply_exact_proxy_bounds(
 static void
 ged_obol_progressive_autoview_transaction(
     struct ged *gedp,
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result)
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result)
 {
     if (!gedp || !txn)
 	return;
@@ -12741,7 +12752,7 @@ ged_obol_progressive_autoview_transaction(
     const int deferred = successful &&
 	!(result && result->presentation_only) &&
 	!(result && result->progressive_data_complete) &&
-	txn->kind == GED_DRAW_TXN_DRAW &&
+	txn->kind == GED_SCENE_REDUCER_DRAW &&
 	ged_obol_transaction_defer_leaf_expansion(txn);
     const int arm_autoview = deferred && txn->autoview;
     const int invalidate =
@@ -12749,8 +12760,8 @@ ged_obol_progressive_autoview_transaction(
 
     struct ged_obol_progressive_transaction_context {
 	struct ged *gedp;
-	const struct ged_draw_transaction *txn;
-	const struct ged_draw_transaction_result *result;
+	const struct ged_scene_reducer_request *txn;
+	const struct ged_scene_reducer_result *result;
 	int deferred;
 	int arm_autoview;
 	int invalidate;
@@ -12824,21 +12835,21 @@ ged_obol_progressive_autoview_transaction(
 extern "C" int
 ged_draw_obol_backend_apply_transaction(
     struct ged *gedp,
-    const struct ged_draw_transaction *txn,
-    const struct ged_draw_transaction_result *result)
+    const struct ged_scene_reducer_request *txn,
+    const struct ged_scene_reducer_result *result)
 {
     /* A compact nested draw/erase is already represented by the frontier
      * change stream.  Applying the ordinary transaction as well briefly
      * mutates occurrence state before the authoritative frontier arrives,
      * which can expose a one-frame flicker during resize or refinement. */
     const int frontier_only = result && result->presentation_only &&
-	(txn->kind == GED_DRAW_TXN_DRAW || txn->kind == GED_DRAW_TXN_ERASE ||
-	 txn->kind == GED_DRAW_TXN_ERASE_PREFIX);
+	(txn->kind == GED_SCENE_REDUCER_DRAW || txn->kind == GED_SCENE_REDUCER_ERASE ||
+	 txn->kind == GED_SCENE_REDUCER_ERASE_PREFIX);
     const int changed = frontier_only ? 0 :
 	ged_draw_obol_scene_sync_attached_transaction(gedp, txn, result);
     ged_obol_frontier_visibility_changes_apply(gedp);
-    if (txn->kind == GED_DRAW_TXN_CLEAR ||
-	txn->kind == GED_DRAW_TXN_TEARDOWN)
+    if (txn->kind == GED_SCENE_REDUCER_CLEAR ||
+	txn->kind == GED_SCENE_REDUCER_TEARDOWN)
 	ged_draw_registry_free(gedp);
     ged_obol_progressive_autoview_transaction(gedp, txn, result);
     return changed || frontier_only;
