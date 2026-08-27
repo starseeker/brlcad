@@ -6,14 +6,18 @@
 
 EXTENDS Naturals
 
-Phases == {"idle", "calibration", "triangleRecovery"}
+Phases == {"idle", "adaptiveCalibration", "handoffConfirmation",
+           "triangleRecovery"}
 Producers == {"idle", "submission"}
+PointCuts == {"retained", "onePixel"}
 
 VARIABLES phase, producer, framePending, recoveryPresented, pumpPending,
-          terminal
+          allocationCurrent, residualQualityDebt, capacityCalibration,
+          staticTrial, pointCut, rejectionOccurred, terminal
 
 vars == <<phase, producer, framePending, recoveryPresented, pumpPending,
-          terminal>>
+          allocationCurrent, residualQualityDebt, capacityCalibration,
+          staticTrial, pointCut, rejectionOccurred, terminal>>
 
 TypeOK ==
     /\ phase \in Phases
@@ -21,6 +25,12 @@ TypeOK ==
     /\ framePending \in BOOLEAN
     /\ recoveryPresented \in BOOLEAN
     /\ pumpPending \in BOOLEAN
+    /\ allocationCurrent \in BOOLEAN
+    /\ residualQualityDebt \in BOOLEAN
+    /\ capacityCalibration \in BOOLEAN
+    /\ staticTrial \in BOOLEAN
+    /\ pointCut \in PointCuts
+    /\ rejectionOccurred \in BOOLEAN
     /\ terminal \in BOOLEAN
 
 Init ==
@@ -29,6 +39,12 @@ Init ==
     /\ framePending = FALSE
     /\ recoveryPresented = FALSE
     /\ pumpPending = FALSE
+    /\ allocationCurrent = FALSE
+    /\ residualQualityDebt = FALSE
+    /\ capacityCalibration = FALSE
+    /\ staticTrial = FALSE
+    /\ pointCut = "retained"
+    /\ rejectionOccurred = FALSE
     /\ terminal = FALSE
 
 StartCalibration ==
@@ -36,25 +52,139 @@ StartCalibration ==
     /\ phase = "idle"
     /\ producer = "idle"
     /\ ~framePending
-    /\ phase' = "calibration"
+    /\ ~capacityCalibration
+    /\ phase' = "adaptiveCalibration"
     /\ framePending' = TRUE
-    /\ UNCHANGED <<producer, recoveryPresented, pumpPending, terminal>>
+    /\ UNCHANGED <<producer, recoveryPresented, pumpPending,
+                    allocationCurrent, residualQualityDebt,
+                    capacityCalibration, staticTrial, pointCut,
+                    rejectionOccurred, terminal>>
+
+\* A static point-quality trial replaces the completed retained point cut with
+\* an exact one-pixel candidate.  It shares the calibration frame owner; a
+\* deadline rejection must therefore release both owners atomically.
+StartStaticCalibration ==
+    /\ ~terminal
+    /\ phase = "idle"
+    /\ producer = "idle"
+    /\ ~framePending
+    /\ ~capacityCalibration
+    /\ pointCut = "retained"
+    /\ phase' = "adaptiveCalibration"
+    /\ framePending' = TRUE
+    /\ staticTrial' = TRUE
+    /\ pointCut' = "onePixel"
+    /\ UNCHANGED <<producer, recoveryPresented, pumpPending,
+                    allocationCurrent, residualQualityDebt,
+                    capacityCalibration, rejectionOccurred, terminal>>
+
+StartCapacityCalibration ==
+    /\ ~terminal
+    /\ phase = "idle"
+    /\ producer = "idle"
+    /\ ~framePending
+    /\ ~capacityCalibration
+    /\ framePending' = TRUE
+    /\ capacityCalibration' = TRUE
+    /\ UNCHANGED <<phase, producer, recoveryPresented, pumpPending,
+                    allocationCurrent, residualQualityDebt, staticTrial,
+                    pointCut, rejectionOccurred, terminal>>
+
+\* Point quality may change while a finite capacity sample is already in
+\* flight.  The capacity owner consumes that frame, then leaves the same
+\* level-triggered frame witness for point calibration.  No transition may
+\* start a new capacity sample while either calibration phase owns it.
+StartCalibrationDuringCapacity ==
+    /\ ~terminal
+    /\ phase = "idle"
+    /\ producer = "idle"
+    /\ framePending
+    /\ capacityCalibration
+    /\ phase' = "adaptiveCalibration"
+    /\ UNCHANGED <<producer, framePending, recoveryPresented, pumpPending,
+                    allocationCurrent, residualQualityDebt,
+                    capacityCalibration, staticTrial, pointCut,
+                    rejectionOccurred, terminal>>
+
+\* A presentation handoff may supersede an adaptive classification frame.  It
+\* retains that already scheduled framebuffer but changes its semantic owner:
+\* the completed frame confirms the chosen cut and must not run adaptation.
+StartHandoffConfirmation ==
+    /\ ~terminal
+    /\ phase \in {"idle", "adaptiveCalibration"}
+    /\ producer = "idle"
+    /\ ~capacityCalibration
+    /\ ~staticTrial
+    /\ (phase = "idle" => ~framePending)
+    /\ phase' = "handoffConfirmation"
+    /\ framePending' = TRUE
+    /\ UNCHANGED <<producer, recoveryPresented, pumpPending,
+                    allocationCurrent, residualQualityDebt,
+                    capacityCalibration, staticTrial, pointCut,
+                    rejectionOccurred, terminal>>
+
+CompleteCapacityCalibration ==
+    /\ phase = "idle"
+    /\ producer = "idle"
+    /\ framePending
+    /\ capacityCalibration
+    /\ framePending' = FALSE
+    /\ capacityCalibration' = FALSE
+    /\ terminal' = TRUE
+    /\ UNCHANGED <<phase, producer, recoveryPresented, pumpPending,
+                    allocationCurrent, residualQualityDebt, staticTrial,
+                    pointCut, rejectionOccurred>>
+
+CompleteCapacityBeforePoint ==
+    /\ phase = "adaptiveCalibration"
+    /\ producer = "idle"
+    /\ framePending
+    /\ capacityCalibration
+    /\ capacityCalibration' = FALSE
+    /\ UNCHANGED <<phase, producer, framePending, recoveryPresented,
+                    pumpPending, allocationCurrent, residualQualityDebt,
+                    staticTrial, pointCut, rejectionOccurred, terminal>>
 
 \* The exact calibration frame either settles the presentation or determines
 \* that a coherent retained-prefix recovery is required.  The latter transfer
 \* atomically retires calibration and enables its producer.
 CompleteCalibration ==
-    /\ phase = "calibration"
+    /\ phase \in {"adaptiveCalibration", "handoffConfirmation"}
     /\ framePending
+    /\ ~capacityCalibration
     /\ framePending' = FALSE
+    /\ staticTrial' = FALSE
     /\ \/ /\ phase' = "idle"
           /\ terminal' = TRUE
-          /\ UNCHANGED <<producer, recoveryPresented, pumpPending>>
-       \/ /\ phase' = "triangleRecovery"
+          /\ allocationCurrent' = FALSE
+          /\ residualQualityDebt' = FALSE
+          /\ UNCHANGED <<producer, recoveryPresented, pumpPending,
+                          capacityCalibration, pointCut, rejectionOccurred>>
+       \/ /\ phase = "adaptiveCalibration"
+          /\ phase' = "triangleRecovery"
           /\ producer' = "submission"
           /\ recoveryPresented' = FALSE
           /\ pumpPending' = FALSE
-          /\ UNCHANGED terminal
+          /\ allocationCurrent' = FALSE
+          /\ residualQualityDebt' = FALSE
+          /\ UNCHANGED <<capacityCalibration, pointCut,
+                          rejectionOccurred, terminal>>
+
+RejectStaticCalibration ==
+    /\ phase = "adaptiveCalibration"
+    /\ producer = "idle"
+    /\ framePending
+    /\ staticTrial
+    /\ pointCut = "onePixel"
+    /\ phase' = "idle"
+    /\ framePending' = FALSE
+    /\ staticTrial' = FALSE
+    /\ pointCut' = "retained"
+    /\ rejectionOccurred' = TRUE
+    /\ terminal' = TRUE
+    /\ UNCHANGED <<producer, recoveryPresented, pumpPending,
+                    allocationCurrent, residualQualityDebt,
+                    capacityCalibration>>
 
 RunRecovery ==
     /\ phase = "triangleRecovery"
@@ -62,7 +192,27 @@ RunRecovery ==
     /\ ~framePending
     /\ producer' = "idle"
     /\ framePending' = TRUE
-    /\ UNCHANGED <<phase, recoveryPresented, pumpPending, terminal>>
+    /\ allocationCurrent' = TRUE
+    /\ residualQualityDebt' = FALSE
+    /\ UNCHANGED <<phase, recoveryPresented, pumpPending,
+                    capacityCalibration, staticTrial, pointCut,
+                    rejectionOccurred, terminal>>
+
+\* A finite recovery allocation may cover the complete occurrence population
+\* while deliberately leaving richer pixel-target demand.  That annotation is
+\* residual quality debt, not another recovery producer.  Preserve a pump edge
+\* so the owner can retire the phase without reopening the same scene scan.
+CompleteNoOpRecoveryPass ==
+    /\ phase = "triangleRecovery"
+    /\ producer = "submission"
+    /\ ~framePending
+    /\ producer' = "idle"
+    /\ recoveryPresented' = TRUE
+    /\ pumpPending' = TRUE
+    /\ allocationCurrent' = TRUE
+    /\ residualQualityDebt' = TRUE
+    /\ UNCHANGED <<phase, framePending, capacityCalibration, staticTrial,
+                    pointCut, rejectionOccurred, terminal>>
 
 CompleteRecoveryFrame ==
     /\ phase = "triangleRecovery"
@@ -72,8 +222,11 @@ CompleteRecoveryFrame ==
     /\ framePending' = FALSE
     /\ recoveryPresented' = FALSE
     /\ pumpPending' = FALSE
+    /\ allocationCurrent' = FALSE
+    /\ residualQualityDebt' = FALSE
     /\ terminal' = TRUE
-    /\ UNCHANGED producer
+    /\ UNCHANGED <<producer, capacityCalibration, staticTrial, pointCut,
+                    rejectionOccurred>>
 
 \* The recovery frame may also retire a stronger capacity or handoff barrier.
 \* Its pixels remain valid evidence.  Preserve a level-triggered pump witness
@@ -85,7 +238,9 @@ DeferRecoveryCompletion ==
     /\ framePending' = FALSE
     /\ recoveryPresented' = TRUE
     /\ pumpPending' = TRUE
-    /\ UNCHANGED <<phase, producer, terminal>>
+    /\ UNCHANGED <<phase, producer, allocationCurrent,
+                    residualQualityDebt, capacityCalibration, staticTrial,
+                    pointCut, rejectionOccurred, terminal>>
 
 CompleteRecoveryPump ==
     /\ phase = "triangleRecovery"
@@ -93,16 +248,28 @@ CompleteRecoveryPump ==
     /\ ~framePending
     /\ recoveryPresented
     /\ pumpPending
+    /\ (~residualQualityDebt \/ allocationCurrent)
     /\ phase' = "idle"
     /\ recoveryPresented' = FALSE
     /\ pumpPending' = FALSE
+    /\ allocationCurrent' = FALSE
+    /\ residualQualityDebt' = FALSE
     /\ terminal' = TRUE
-    /\ UNCHANGED <<producer, framePending>>
+    /\ UNCHANGED <<producer, framePending, capacityCalibration,
+                    staticTrial, pointCut, rejectionOccurred>>
 
 Next ==
     \/ StartCalibration
+    \/ StartStaticCalibration
+    \/ StartCapacityCalibration
+    \/ StartCalibrationDuringCapacity
+    \/ StartHandoffConfirmation
+    \/ CompleteCapacityCalibration
+    \/ CompleteCapacityBeforePoint
     \/ CompleteCalibration
+    \/ RejectStaticCalibration
     \/ RunRecovery
+    \/ CompleteNoOpRecoveryPass
     \/ CompleteRecoveryFrame
     \/ DeferRecoveryCompletion
     \/ CompleteRecoveryPump
@@ -111,8 +278,16 @@ Spec ==
     /\ Init
     /\ [][Next]_vars
     /\ WF_vars(StartCalibration)
+    /\ WF_vars(StartStaticCalibration)
+    /\ WF_vars(StartCapacityCalibration)
+    /\ WF_vars(StartCalibrationDuringCapacity)
+    /\ WF_vars(StartHandoffConfirmation)
+    /\ WF_vars(CompleteCapacityCalibration)
+    /\ WF_vars(CompleteCapacityBeforePoint)
     /\ WF_vars(CompleteCalibration)
+    /\ WF_vars(RejectStaticCalibration)
     /\ WF_vars(RunRecovery)
+    /\ WF_vars(CompleteNoOpRecoveryPass)
     /\ WF_vars(CompleteRecoveryFrame)
     /\ WF_vars(DeferRecoveryCompletion)
     /\ WF_vars(CompleteRecoveryPump)
@@ -120,7 +295,7 @@ Spec ==
 \* Every active phase has exactly the kind of progress witness it can consume.
 \* In particular, calibration can never coexist with the recovery producer.
 PhaseHasWitness ==
-    /\ (phase = "calibration" =>
+    /\ (phase \in {"adaptiveCalibration", "handoffConfirmation"} =>
            /\ producer = "idle"
            /\ framePending)
     /\ (phase = "triangleRecovery" =>
@@ -133,6 +308,30 @@ PhaseHasWitness ==
                  /\ recoveryPresented
                  /\ pumpPending)
 
+ResidualDebtHasCurrentAllocation ==
+    (phase = "triangleRecovery" /\ producer = "idle" /\
+     residualQualityDebt) => allocationCurrent
+
+PointWaitsForExistingCapacity ==
+    (phase \in {"adaptiveCalibration", "handoffConfirmation"} /\
+     capacityCalibration) =>
+        /\ producer = "idle"
+        /\ framePending
+
+HandoffConfirmationIsNotStatic ==
+    (phase = "handoffConfirmation") => ~staticTrial
+
+StaticTrialOwnsOnePixelFrame ==
+    staticTrial =>
+        /\ phase = "adaptiveCalibration"
+        /\ framePending
+        /\ pointCut = "onePixel"
+
+RejectedTrialRestoresBaseline ==
+    rejectionOccurred =>
+        /\ terminal
+        /\ pointCut = "retained"
+
 TerminalIsQuiescent ==
     terminal =>
         /\ phase = "idle"
@@ -140,6 +339,10 @@ TerminalIsQuiescent ==
         /\ ~framePending
         /\ ~recoveryPresented
         /\ ~pumpPending
+        /\ ~allocationCurrent
+        /\ ~residualQualityDebt
+        /\ ~capacityCalibration
+        /\ ~staticTrial
 
 EventuallyTerminal == <>terminal
 

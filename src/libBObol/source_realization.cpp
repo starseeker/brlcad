@@ -435,6 +435,14 @@ source_realization_worker(BObolSourceRealizationCoordinatorPrivate *service)
 	    bu_log("BObol source realization failed with an unexpected exception\n");
 	}
 
+	{
+	    std::lock_guard<std::mutex> lock(service->mutex);
+	    service->active--;
+	    service->activeBytes =
+		admittedBytes >= service->activeBytes ?
+		0 : service->activeBytes - admittedBytes;
+	}
+
 	const size_t remaining = work.job ?
 	    work.job->remaining.fetch_sub(1, std::memory_order_acq_rel) : 0;
 	if (work.job && remaining == 1) {
@@ -444,19 +452,14 @@ source_realization_worker(BObolSourceRealizationCoordinatorPrivate *service)
 		    BOBOL_SOURCE_REALIZATION_CANCELLED :
 		    BOBOL_SOURCE_REALIZATION_COMPLETE);
 	    /*
-	     * A failed item cancels siblings, but failure remains the aggregate
-	     * result.  Release-store publishes every item/source write to the
-	     * owner-thread result pump.
+	     * Terminal is the externally visible commit point.  Retire the final
+	     * active-work reservation first so a terminal job cannot coexist with
+	     * stale coordinator activity or working-set accounting.  A failed item
+	     * cancels siblings, but failure remains the aggregate result.  The
+	     * release-store also publishes every item/source write to the owner
+	     * thread's result pump.
 	     */
 	    work.job->state.store(terminal, std::memory_order_release);
-	}
-
-	{
-	    std::lock_guard<std::mutex> lock(service->mutex);
-	    service->active--;
-	    service->activeBytes =
-		admittedBytes >= service->activeBytes ?
-		0 : service->activeBytes - admittedBytes;
 	}
 	service->cv.notify_all();
     }

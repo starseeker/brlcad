@@ -795,12 +795,13 @@ SoBRLMeshShape::applyStagedLodResult(const BObolLodResult &result,
     if (expectedRequest && !bobol_lod_result_matches_request(result,
 	    *expectedRequest)) {
 	this->clearStagedLodResult();
-	this->lodProviderStatus = BOBOL_LOD_PROVIDER_STALE;
-	this->lodDiagnostic = "stale staged LoD result rejected";
+	this->lodProviderStatus = BOBOL_LOD_PROVIDER_SUPERSEDED;
+	this->lodDiagnostic = "superseded staged LoD result rejected";
 	return FALSE;
     }
 
     if (result.providerStatus == BOBOL_LOD_PROVIDER_STALE ||
+	result.providerStatus == BOBOL_LOD_PROVIDER_SUPERSEDED ||
 	result.providerStatus == BOBOL_LOD_PROVIDER_CANCELLED ||
 	result.providerStatus == BOBOL_LOD_PROVIDER_CACHE_MISS ||
 	result.providerStatus == BOBOL_LOD_PROVIDER_ERROR) {

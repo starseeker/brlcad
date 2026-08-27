@@ -118,6 +118,7 @@ struct QgCanvasState {
     std::atomic<bool> frame_request_dispatch_queued {false};
     bool   lod_progress_last_pending = false;
     bool   lod_progress_last_visible = false;
+    bool   lod_progress_last_terminal_ready = false;
     int    lod_progress_last_phase = -1;
     bool   software_backend = false;
     QWidget *frame_request_widget = nullptr;
@@ -289,6 +290,16 @@ qgcanvas_obol_frame_requested(void *user_data, const char *UNUSED(reason))
 	    s->obol->getHostWorkSnapshot() : BObolHostWorkSnapshot();
 	if (s->obol && work.pumpPending())
 	    (void)s->obol->advanceProgressiveWork(NULL, NULL);
+	/* The wake itself may be the edge from a terminal retained frame into
+	 * background compaction or a newly opened refinement obligation.  Publish
+	 * that semantic transition before deciding whether geometry needs a paint;
+	 * otherwise the retained faceplate can continue to promise "View ready"
+	 * until the following timer slice even though the progress bar/controller
+	 * has already re-entered active work. */
+	const bool lodProgressPublish =
+	    qgcanvas_sync_obol_lod_progress(*s, false);
+	if (lodProgressPublish)
+	    qgcanvas_request_obol_render_if_idle(*s, "lod-progress-wake");
 	/* A partial immutable result may install a refinement barrier while its
 	 * adaptive publication deadline is still accumulating a batch.  The
 	 * barrier deliberately has no render request in that interval.  Once the
@@ -1045,10 +1056,17 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
 	s.obol->isLodInteractionActive();
     BObolLodConvergenceStatus lod_status;
     s.obol->getLodConvergenceStatus(lod_status);
-    const bool lod_visible =
-	lod_status.phase != BOBOL_LOD_CONVERGENCE_IDLE ||
-	lod_status.backgroundPending || lod_status.performanceLimited ||
-	lod_status.failedSourceCount > 0;
+    const bool terminalReady = lod_status.hasLodState &&
+	lod_status.phase == BOBOL_LOD_CONVERGENCE_IDLE &&
+	lod_status.terminal && lod_status.viewReady &&
+	!lod_status.backgroundPending && lod_status.fraction >= 1.0f;
+    /* Mirror ged_obol_faceplate_sync_lod_progress exactly.  In particular, an
+     * incomplete idle snapshot remains visible as "Finalizing" and a
+     * no-state snapshot removes historical telemetry. */
+    const bool lod_visible = lod_status.hasLodState &&
+	(lod_status.phase != BOBOL_LOD_CONVERGENCE_IDLE ||
+	 lod_status.backgroundPending || lod_status.performanceLimited ||
+	 lod_status.failedSourceCount > 0 || !terminalReady);
     const bool lod_first =
 	s.lod_progress_last_publish.time_since_epoch().count() == 0;
     /* The host-work latch may clear one coordinator transition before the
@@ -1061,6 +1079,7 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
     const bool lod_state_changed = lod_first ||
 	lod_pending != s.lod_progress_last_pending ||
 	lod_visible != s.lod_progress_last_visible ||
+	terminalReady != s.lod_progress_last_terminal_ready ||
 	static_cast<int>(lod_status.phase) != s.lod_progress_last_phase;
     const bool lod_publish = lod_state_changed ||
 	(allowPeriodic && lod_pending && (lod_first ||
@@ -1071,6 +1090,7 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
 
     s.lod_progress_last_pending = lod_pending;
     s.lod_progress_last_visible = lod_visible;
+    s.lod_progress_last_terminal_ready = terminalReady;
     s.lod_progress_last_phase = static_cast<int>(lod_status.phase);
     s.lod_progress_last_publish = now;
     struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
@@ -1078,6 +1098,30 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
     if (gedp)
 	(void)ged_view_lod_progress_sync(gedp, view_ctx);
     return true;
+}
+
+/* Publish the interaction transition synchronously with the input event.
+ * Waiting for the next paint leaves the retained terminal label visible
+ * beside a controller which has already re-entered interactive/refining
+ * state.  The paint itself remains queued and coalescible; only the cheap HUD
+ * record mutation is immediate. */
+static inline void
+qgcanvas_set_obol_pointer_interaction(
+    QgCanvasState &s, QWidget *w, bool active)
+{
+    if (!s.obol || !w || s.lod_pointer_interaction_active == active)
+	return;
+
+    if (active)
+	s.obol->beginLodInteraction();
+    else
+	s.obol->endLodInteraction();
+    s.lod_pointer_interaction_active = active;
+    if (qgcanvas_sync_obol_lod_progress(s, false)) {
+	qgcanvas_request_obol_render_if_idle(s, "lod-interaction-hud");
+	w->update();
+    }
+    qgcanvas_queue_obol_progressive_update(s, w);
 }
 
 /** Record actual Qt presentation cadence and refresh the label sparingly. */

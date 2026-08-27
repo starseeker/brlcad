@@ -638,38 +638,38 @@ test_stop_discards_undrained_state(void)
 }
 
 static BObolLodResult
-stale_task(const BObolLodRequest &request, void *UNUSED(userData))
+superseded_task(const BObolLodRequest &request, void *UNUSED(userData))
 {
-    BObolLodRequest stale = request;
-    stale.viewRevision++;
+    BObolLodRequest supersededRequest = request;
+    supersededRequest.viewRevision++;
 
     BObolLodResult result;
-    result.request = stale;
-    result.cacheKey = bobol_lod_cache_key(stale);
+    result.request = supersededRequest;
+    result.cacheKey = bobol_lod_cache_key(supersededRequest);
     result.resultKind = BOBOL_LOD_RESULT_MESH;
-    result.qualityTier = stale.qualityTier;
+    result.qualityTier = supersededRequest.qualityTier;
     result.providerStatus = BOBOL_LOD_PROVIDER_READY;
     result.counts.faceCount = 11;
     return result;
 }
 
 static int
-test_stale_result_rejection(void)
+test_superseded_result_rejection(void)
 {
     BObolLodService service;
 
     if (!service.start(1, TRUE)) {
-	printf("FAIL: LoD service did not start for stale-result test\n");
+	printf("FAIL: LoD service did not start for superseded-result test\n");
 	return 1;
     }
 
     BObolLodTask task;
     task.generation = service.beginGeneration();
     task.request = make_request("/stale.bot");
-    task.realize = stale_task;
+    task.realize = superseded_task;
 
     if (service.submit(task) == 0) {
-	printf("FAIL: LoD service did not accept stale-result task\n");
+	printf("FAIL: LoD service did not accept superseded-result task\n");
 	return 1;
     }
 
@@ -679,11 +679,11 @@ test_stale_result_rejection(void)
     std::vector<BObolLodResult> results;
     service.drainResults(results);
     if (results.size() != 1 ||
-	results[0].providerStatus != BOBOL_LOD_PROVIDER_STALE ||
+	results[0].providerStatus != BOBOL_LOD_PROVIDER_SUPERSEDED ||
 	!results[0].stale ||
 	!results[0].terminal ||
 	results[0].diagnostic.getLength() == 0) {
-	printf("FAIL: LoD service did not reject stale result\n");
+	printf("FAIL: LoD service did not reject superseded result\n");
 	return 1;
     }
 
@@ -1364,8 +1364,10 @@ test_large_pending_cancellation_and_generation_history(void)
 struct DebugDelayTaskData {
     std::mutex mutex;
     int calls;
+    SbBool overrideResultRequest;
+    BObolLodRequest resultRequest;
 
-    DebugDelayTaskData(void) : calls(0)
+    DebugDelayTaskData(void) : calls(0), overrideResultRequest(FALSE)
     {
     }
 };
@@ -1374,17 +1376,20 @@ static BObolLodResult
 debug_delay_task(const BObolLodRequest &request, void *userData)
 {
     DebugDelayTaskData *data = static_cast<DebugDelayTaskData *>(userData);
+    BObolLodRequest resultRequest = request;
 
     {
 	std::lock_guard<std::mutex> lock(data->mutex);
 	data->calls++;
+	if (data->overrideResultRequest)
+	    resultRequest = data->resultRequest;
     }
 
     BObolLodResult result;
-    result.request = request;
-    result.cacheKey = bobol_lod_cache_key(request);
+    result.request = resultRequest;
+    result.cacheKey = bobol_lod_cache_key(resultRequest);
     result.resultKind = BOBOL_LOD_RESULT_AABB;
-    result.qualityTier = request.qualityTier;
+    result.qualityTier = resultRequest.qualityTier;
     result.providerStatus = BOBOL_LOD_PROVIDER_READY;
     result.terminal = TRUE;
     return result;
@@ -1836,6 +1841,11 @@ test_active_request_duplicate_suppression(void)
     task.realize = debug_delay_task;
     task.realizeData = &data;
     task.debugDelayMilliseconds = 80;
+    BObolLodRequest movedDemand = task.request;
+    movedDemand.viewRevision.advance();
+    movedDemand.policyRevision.advance();
+    data.overrideResultRequest = TRUE;
+    data.resultRequest = movedDemand;
 
     uint64_t firstId = service.submitIfNotActive(task);
     if (firstId == 0 || !service.hasActiveRequest(task.request)) {
@@ -1859,6 +1869,12 @@ test_active_request_duplicate_suppression(void)
 	service.stop();
 	return 1;
     }
+    if (!service.updateActiveRequestDemand(movedDemand)) {
+	printf("FAIL: LoD service did not retain newer demand for active "
+	       "asset producer\n");
+	service.stop();
+	return 1;
+    }
 
     if (wait_for_settled(service, 1)) {
 	service.stop();
@@ -1878,10 +1894,26 @@ test_active_request_duplicate_suppression(void)
 	service.stop();
 	return 1;
     }
+    if (!bobol_lod_result_matches_request(results[0], movedDemand) ||
+	results[0].providerStatus != BOBOL_LOD_PROVIDER_READY) {
+	printf("FAIL: LoD service rejected a result resolved against retained "
+	       "latest producer demand\n");
+	service.stop();
+	return 1;
+    }
     if (service.hasActiveRequest(task.request)) {
 	printf("FAIL: LoD service retained request identity after result drain\n");
 	service.stop();
 	return 1;
+    }
+    if (service.updateActiveRequestDemand(movedDemand)) {
+	printf("FAIL: LoD service accepted demand for an inactive producer\n");
+	service.stop();
+	return 1;
+    }
+    {
+	std::lock_guard<std::mutex> lock(data.mutex);
+	data.overrideResultRequest = FALSE;
     }
 
     uint64_t secondId = service.submitIfNotActive(task);
@@ -4810,7 +4842,7 @@ main(int argc, char **argv)
 	return 1;
     if (runIsolated(test_stop_discards_undrained_state))
 	return 1;
-    if (runIsolated(test_stale_result_rejection))
+    if (runIsolated(test_superseded_result_rejection))
 	return 1;
     if (runIsolated(test_staged_payload_delivery))
 	return 1;

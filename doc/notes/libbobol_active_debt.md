@@ -1,6 +1,6 @@
 # libBObol active debt
 
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-26
 
 This is the authoritative remaining-work list for the Obol drawing stack.
 `obol_production_readiness.md` defines the release matrix; `qged_editing.md`
@@ -46,9 +46,10 @@ here.
   are identified in the same change.  Preserve measured numeric algorithms and
   compact data structures.  Do not add workload-specific control modes for
   Lucy, multi-Lucy, or 50k/150k.
-- **Rechecked 2026-08-25:** after rebuilding every consumer against the current
+- **Rechecked 2026-08-26:** after rebuilding every consumer against the current
   Obol headers, the current binary passes all 28 tests carrying the
-  `bobol_headless` label in 20.7 seconds, including the LoD service,
+  `bobol_headless` label in 6.13 seconds real / 20.31 process-seconds,
+  including the LoD service,
   cache, compact ownership, retained allocation, edit-manipulator, and GED
   draw-sync contracts.  The draw-sync test now exercises a real independent
   endpoint and proves its local source owner remains isolated across
@@ -82,11 +83,23 @@ here.
   quality floor across camera epochs, TLC explored 2,986,118 generated /
   1,427,962 distinct states to depth 42 without an invariant, deadlock, or
   liveness failure.
-- Earlier OSMesa scale evidence included certified-warm 50k and complete 150k
-  shaded/wire lifecycles.  It is historical rather than current release
-  evidence: the exact-current 150k shaded cold replay described below now
-  exposes a terminal liveness defect after the renderer allocation crash was
-  fixed.  Lucy's retained-page quality exception is listed separately below.
+- Exact-current OSMesa shaded interaction lifecycles now pass for true-cold and
+  warm Lucy and for warm 50k/150k after the structural-frontier, release-frame,
+  deadline-recovery, and coalesced-producer demand-ownership corrections
+  described below.  Current warm evidence is the consecutive Lucy pair
+  `/tmp/qged-lucy-superseded-fix-{a,b}-20260826` and the 50k/150k pair
+  `/tmp/qged-{50k,150k}-superseded-fix-20260826`.  All four finish terminal,
+  ready, box-free, and without occurrence failures.  The 150k endpoint is a
+  software-performance constraint result, not visual-significance evidence;
+  remaining cold, wire, and real-vehicle rows are separate release obligations.
+- The coalesced-producer demand contract has a focused formal gate.  On
+  2026-08-26 `ObolActiveProducerDemand.tla` passed temporal model checking in
+  678 generated / 340 distinct states to depth 12.  Keep this model paired
+  with the service/provider regression: the stable asset task, latest demand,
+  superseded-result classification, and exact-demand failure lifetime are one
+  ownership boundary.  `BOBOL_LOD_PROVIDER_SUPERSEDED` is deliberately distinct
+  from genuinely stale cache/source metadata and cannot create an occurrence
+  failure.
 - **Implemented and qualified on System GL 2026-08-25:** warm spatial PoP
   hierarchies now publish immutable page-local renderer layers instead of
   rebuilding one aggregate mesh.  Lucy's close-view page changes prepare in
@@ -505,6 +518,66 @@ quality on real large models remain insufficiently qualified.
   Repeated force-terminal pumping was also made edge-triggered, and structural
   preloading now uses the renderer's full point-proxy threshold rather than a
   second incompatible hysteresis boundary.
+- **Applied-allocation floor ownership 2026-08-26:** the warm 50k OSMesa wire
+  lifecycle exposed a fully current occurrence plan whose selected cost was
+  only 0.14 percent above its certified budget.  The generic capacity fallback
+  nevertheless treated that completed result as missing evidence and rebuilt
+  it indefinitely.  `claimOverBudgetAllocation` now assigns this state to the
+  presentation-reconciliation handoff, whose only successors are local
+  small-occurrence aggregation, one bounded static attempt, or a terminal
+  constraint.  The focused coordinator regression passes and
+  `ObolCapacityPresentationHandoff.tla` checks 178 generated / 138 distinct
+  states, including both reducible and irreducible floors.  The exact-current
+  untraced GUI lifecycle now passes in 74 seconds with no boxes, owner, or
+  obligation, 3,210 mesh payloads, 1.02M faces, 254 capacity revisions, and 53
+  plans.  The prior untraced run took 133 seconds; the diagnostic replay still
+  cycled after 220 seconds.
+- **Timer-edge handoff evidence 2026-08-26:** the warm Lucy OSMesa wire zoom
+  completed its corrected renderer frame at roughly the 100 ms endpoint.  A
+  frame just over that edge correctly supplied no new safe extrapolation, but
+  `noteFramePresented` also discarded the stricter 1.3M-work recovery limit
+  recorded by the interrupted richer frame.  The handoff then accepted a
+  3.38M-work plan, removed its ceiling, and retried the same known deadline
+  miss indefinitely.  Presentation completion now preserves the prior limit
+  when no safer replacement sample exists.  The coordinator regression covers
+  that boundary, and the exact untraced lifecycle passes in 68 seconds through
+  smooth zoom, rotation, hierarchy selection, and subpath erase/redraw.  Its
+  final 2.10M-face view is terminal with no boxes, owner, or obligation and a
+  0.632-pixel error certificate.
+- **Availability-bounded allocation and truthful HUD 2026-08-26:** a warm
+  System-GL Lucy rotation reached a current memory denial at cut 26 while its
+  retained allocator repeatedly certified unavailable cut 27.  The provider
+  correctly suppressed the suffix, but the presentation handoff waited for an
+  impossible assignment at 75 percent.  Retained-allocation identity now
+  includes the resident-admission revision.  A current denial restricts only
+  the allocation endpoint to the active resident cut; the certificate retains
+  the full pixel-demand cost so reclaimed capacity can reopen richer work.
+  Applying that same-or-coarser resident allocation preserves the denial
+  witness and performs no provider I/O.  The focused action test covers this
+  refinement, and `ObolCapacityPresentationHandoff.tla` now requires assigned
+  cuts to become drawable before application (178 generated / 138 distinct
+  states, depth 9).
+
+  The same replay exposed a separate observation race: the controller had
+  entered interactive state, but the retained label still said `View ready`
+  until the next paint.  Beginning and ending a pointer interaction now
+  publishes the cheap progress-record transition synchronously while leaving
+  rendering queued and coalescible.  The GUI report records the actual label
+  text and rejects `View ready` unless convergence has state, is terminal and
+  view-ready, has no background work, and is at 100 percent.  Targeted warm
+  shaded Lucy lifecycles pass this contract on System GL in 16 seconds and
+  OSMesa in 74 seconds at
+  `/tmp/qged-lucy-system-hud-interaction-fix-20260826` and
+  `/tmp/qged-lucy-osmesa-hud-interaction-fix-20260826`.
+
+  A later Lucy checkpoint exposed the corresponding non-pointer edge: a
+  completed terminal frame could schedule background compaction on the host
+  wake while the retained label still described the preceding state.  The Qt
+  frame-request callback now synchronizes the progress-only faceplate
+  immediately after its bounded pump and before deciding whether a geometry
+  frame is required.  `/tmp/qged-hud-wake-lucy-20260826` passes the full warm
+  OSMesa lifecycle in 76 seconds with zero ready-label/state mismatches.  The
+  50k and 150k OSMesa replays below have the same zero-mismatch result.
 - **Observability debt made explicit 2026-08-25:** the GUI matrix contained
   three coordinator-invariant assertions using jq's `// 0` fallback, but qged
   never emitted those fields.  They therefore passed by construction and were
@@ -525,13 +598,15 @@ quality on real large models remain insufficiently qualified.
   7,252 mesh payloads, zero structural boxes, and no foreground owner.  Its
   retained evidence is `/tmp/qged-contract-50k-visible-ready-20260825` for the
   duration of this qualification session.
-- **Renderer reservation conformance:** the new preparation certificate makes
-  finite work and known retained scratch visible, but classifier hash-container
-  allocator overhead is not yet accounted exactly by the reported byte
-  reservation.  The formal contract requires all controller-admitted transient
-  storage to be bounded.  Either move this scratch behind an explicitly
-  bounded allocator/arena or extend its accounting; do not reinterpret the
-  diagnostic byte count as proof until this is complete.
+- **Renderer reservation conformance closed 2026-08-26:** resumable classifier
+  scratch is now dense, capacity-accounted storage; only the sparse published
+  change sets retain hash containers.  Per-part frame-plan bookkeeping shares
+  the same dense index domain instead of allocating several independent hash
+  tables.  Obol reports every retained scratch capacity through
+  `reservedBytes`, and its CAD regression exercises a 131,072-occurrence
+  preparation.  This closes the known unaccounted classifier reservation; any
+  future resumable container must extend the same certificate before it may be
+  admitted.
 - **Closed common-contract counterexample 2026-08-25:** typed preparation alone
   left quiet camera restoration split between the ordinary quiet-capacity
   pass, exact-view history, and a later static-quality trial.  Diagnostic
@@ -568,6 +643,161 @@ quality on real large models remain insufficiently qualified.
   pair passes in 112/21 seconds with cut growth, resident compaction, exact-
   view history recall, zero boxes, and no prominent-floor violations.  Keep
   these four facts separate in clients and the HUD.
+- **Closed recovery/capacity ownership counterexample 2026-08-26:** an exact
+  warm 50k OSMesa interaction replay could remain at 95--99 percent for more
+  than 180 seconds with no worker or result work.  A point-to-triangle
+  recovery allocation had reached its finite certified population, but its
+  intentionally unsatisfied richer pixel demand was mistaken for incomplete
+  admission.  Ordinary capacity calibration then restarted the same compact
+  occurrence scan; failed runs advanced 950--3,017 capacity revisions without
+  a terminal witness.  The availability successor now gives point recovery
+  exclusive capacity ownership after resident growth, and recovery accepts
+  residual quality debt only when the current allocation certificate covers
+  the current population.  The focused coordinator test covers both sides of
+  that proof.  `ObolPointQualityOwnership.tla` checks exclusive capacity/point
+  ownership, changed-frame completion, deferred completion, and certified
+  no-op completion in 13 generated / 8 distinct states.  Three untraced 50k
+  OSMesa replays now terminate at 100 percent in 28--53 seconds with all
+  active payloads satisfied and 112--183 capacity revisions; the same binary
+  terminates the 150k OSMesa rotation replay at 100 percent with no owner,
+  obligation, boxes, or background work.
+- **Point-frame ownership completion 2026-08-26:** a later warm 50k replay
+  exposed three adjacent ambiguities rather than a new workload regime.  A
+  rejected one-pixel static trial retained the point-calibration owner and
+  retried its rejected framebuffer; a point request arriving during an
+  already-active finite capacity search allowed that search to reproduce
+  itself before the point frame; and the one phase named both adaptive
+  point-cut calibration and confirmation of an already chosen handoff cut.
+  Static rejection now restores its recorded retained threshold and releases
+  both trial owners atomically.  Completed-pass scheduling gives a waiting
+  point frame precedence over starting another capacity search.  The point
+  quality sum type now distinguishes `ADAPTIVE_CALIBRATION`,
+  `HANDOFF_CONFIRMATION`, and `TRIANGLE_RECOVERY`, so confirmation cannot
+  immediately undo the cut it was meant to prove.
+
+  The same maintainability pass replaced retained allocation's pending,
+  preserve-budget, and reconciliation-budget field trio with one finite
+  request value; invalid companion-field combinations are no longer
+  representable.  Focused tests cover every alternative and successor edge.
+  `ObolPointQualityOwnership.tla` now covers static rejection, capacity/point
+  overlap, handoff replacement, and recovery in 29 generated / 17 distinct
+  states to depth 5 with no error; TLC found and forced correction of a missing
+  capacity-drain guard before the production change was accepted.  The final
+  headless label passes all 28 tests.  Exact warm OSMesa Lucy and 150k
+  interaction lifecycles pass.  The 50k lifecycle no longer cycles: it either
+  reaches a terminal ownerless view or shows finite advancing plan work.
+
+  **Renderer/deadline follow-up resolved 2026-08-26:** `calibrationPending`
+  still grouped adaptive point census with confirmation of an already chosen
+  handoff cut.  The latter therefore inherited a census-only 400 ms allowance
+  and completed a 342.87 ms post-release OSMesa frame.  The broad predicate is
+  now named `presentationPending`; only `adaptiveCalibrationPending`
+  authorizes that extension.  A handoff may still use the independently
+  justified static-quality deadline when its allocation certificate requires
+  it.  OSMesa's
+  synchronous flat-shaded executor also polls cancellation every 8K rather
+  than 64K triangles; perf showed software lighting and rasterization, not
+  controller work, dominate this endpoint.  At
+  `/tmp/qged-handoff-deadline-50k-20260826` the over-budget post-release
+  candidate is interrupted at 122.39 ms, the previous complete 254K-triangle
+  framebuffer remains visible, and the run passes in 52 seconds before
+  terminating at 1.29M faces with no box or HUD mismatch.  Do not restore the
+  census extension to handoff confirmation merely because it is a point
+  presentation, or enlarge software draw chunks beyond the host's
+  cancellation granularity.
+- **Interactive cost-domain recovery closed 2026-08-26:** the next 50k trace
+  showed that the renderer honored its 100 ms motion deadline, but the
+  controller reduced its ceiling by only one PoP ordinal after every miss.
+  Several over-budget frames could therefore expire without ever presenting
+  the changed camera pose.  Interactive and quiet deadline misses now use the
+  same measured attempted-cost/deadline ratio to choose the next ceiling in
+  render-cost space.  Only quiet recovery may retain the prior-pose
+  deadline-safe floor; changed-pose motion has no such proof.  The current
+  warm OSMesa replay reaches ceiling zero directly, presents the held-motion
+  pose in approximately 65 ms, and then reaches its zero-box 1.52M-face static
+  endpoint in 78 seconds.  This is a common numeric recovery rule, not a 50k
+  mode or object-count threshold.
+- **Structural-frontier liveness and release ownership closed 2026-08-26:**
+  an exact warm 150k OSMesa frame reached 79 percent with 5,160 structural
+  boxes while every provider, task, result, submission, and control owner was
+  idle.  The point-quality model did not include this renderer-owned frontier,
+  so a completed capacity sample could retire without choosing its successor.
+  The derived control mapping now treats an unresolved structural frontier as
+  planning work.  When its exact point distribution has another finite
+  threshold, that frame owns the successor; otherwise ownership transfers to
+  bounded structural repair.  No whole-scene source rescan is introduced.
+  `ObolStructuralFrontierOwnership.tla` exhaustively checks 30 distinct states
+  to depth 14, including the invariant that every ownerless nonempty frontier
+  has an enabled successor and the liveness property that finite work reaches
+  readiness.
+
+  The same full interaction replay found a second, independent release edge.
+  `endLodInteraction()` documented retention of the responsive motion
+  presentation through debounce but immediately disabled renderer camera-frame
+  reuse.  That forced an exact 150k reclassification and completed a 410 ms
+  release frame.  Release now leaves reuse owned by the typed interaction
+  session; the quiet-successor transition disables it and begins exact
+  classification after debounce.  The final warm OSMesa matrices pass for
+  Lucy, 50k, and 150k.  The 150k run retains its 142 ms completed motion frame,
+  records a bounded 114 ms interruption without advancing the completion
+  serial, then reaches a box-free ownerless terminal view in 95 seconds.
+  The GUI validator accepts an interrupted motion witness only when the
+  completion serial is unchanged and the interruption met its deadline; a
+  newly completed over-budget frame still fails.
+- **Submission source ownership reduction 2026-08-26:** the bounded submission
+  cursor formerly kept source identity, entry population, validity, and a
+  write-only retained-admission marker as independent fields.  Its non-compact
+  visibility census likewise kept a source pointer and count which callers had
+  to reset in lockstep.  They are now two small owner-thread values: source
+  identity is the plan's validity witness, and changing the census source
+  atomically starts a new saturating count.  The dead marker and repeated reset
+  code are gone; no planner or scheduling branch was added.  The dependency-
+  complete 28-test headless gate passes.  Exact-current warm OSMesa lifecycle
+  replays also pass at `/tmp/qged-submission-owner-lucy-20260826` and
+  `/tmp/qged-submission-owner-50k-20260826`: Lucy terminates ready with 1.95M
+  presented faces, 0.632-pixel maximum certified error, and no boxes or
+  failures; the 50k compact scene terminates ready at 1.32M faces with no boxes,
+  failures, or pending work.  This is a state-representation improvement, not
+  another workload policy.
+- **Submission delta ownership reduction 2026-08-26:** exact inventory and
+  structural-repair deltas formerly stored an independent active latch, target
+  source vector, and optional selective-plan vector.  Those fields permitted
+  active-without-target, plan-without-target, and stale-plan combinations.
+  One typed value now derives activity from its target population and
+  represents each target as either a full source scan or a selective dense-
+  entry plan.  Widening selective work to a full scan is explicit, and an
+  already-full target cannot accidentally be narrowed by a later append.
+  Repeated reset/search/erase code and the independent active latch are gone.
+  A focused value test covers initial/reset state, duplicate targets,
+  selective-to-full widening, non-narrowing, and replacement-plan merging.
+  All 28 headless tests pass.  The exact-current warm OSMesa Lucy and 50k
+  lifecycles at `/tmp/qged-submission-delta-{lucy,50k}-20260826` also pass:
+  both terminate ready with zero structural boxes, occurrence failures, or
+  pending work; their final certified errors are 1.265 and 3.000 pixels.
+- **Structural-repair transaction ownership 2026-08-26:** the exact fallback
+  frontier was represented by a pending latch plus independently reset
+  frontier-count and cost-reservation fields.  It is now one value whose
+  activity is derived from a nonzero exact frontier.  Beginning or retiring
+  the frontier clears its reservation, a reservation cannot attach to an
+  inactive frontier, and repeated budget evaluation cannot silently replace
+  the first reservation for the transaction.  The stale point-recovery latch
+  comment left behind by an earlier extraction was removed as well.  Focused
+  tests cover inactive admission, begin, one-shot reservation, reservation
+  reset, empty frontier, and retirement; all 28 headless tests pass.  The
+  canonical exact-current warm 150k OSMesa regression at
+  `/tmp/qged-structural-repair-owner-150k-20260826` passes in 101 seconds and
+  terminates ready at 1.74M faces and 1.000-pixel certified error, with zero
+  structural boxes, failures, background work, or other pending control work.
+- **Optional-value cleanup 2026-08-26:** forced PoP cut and exact camera
+  identity each used a value plus an independently mutable validity boolean.
+  Forced cut is now `std::optional<int>` and exact camera identity is an
+  optional snapshot; their absent states cannot expose stale companion data.
+  Existing forced-cut integration coverage and all 28 headless tests pass.
+  The exact-current Generic Twin shaded cold/warm matrix at
+  `/tmp/qged-optional-policy-signature-generic-20260826` passes on System GL
+  in 12/11 seconds and OSMesa in 15/14 seconds.  Every terminal frame is
+  ready and box/failure-free, every lifecycle records one exact-view history
+  recall, and the paired final images have the same camera and scene content.
 - **Spatial residency observation correction 2026-08-25:** a global PoP cut
   does not order memory use for a chunked mesh.  A wide view may need hundreds
   of coarse pages and legitimately retain more bytes than a clipped close view
@@ -861,8 +1091,11 @@ quality on real large models remain insufficiently qualified.
   work remains queued and deadline-bounded.  Once all visible targets have
   current-quality witnesses, an in-flight reusable-cache build is now a
   `BACKGROUND` convergence state rather than false `REFINING`: the HUD says
-  "View ready  building reusable LoD cache", reports task count, and shows an
-  indeterminate active segment.  This proves cache isolation and payload-vs-
+  "Building reusable LoD cache  view usable", reports task count, and shows an
+  indeterminate active segment.  Only a terminal, non-background `IDLE`
+  snapshot with a complete fraction may say "View ready"; the observation
+  boundary falls back to "Finalizing view" if those fields ever disagree.
+  This proves cache isolation and payload-vs-
   idle behavior; it does **not** discharge the required explicit cache-growth/
   admission bound or complete Lucy matrix qualification.
 
@@ -1422,22 +1655,49 @@ quality on real large models remain insufficiently qualified.
   deadline veto; deadline work must correspond to an actionable population
   transition.
 
+- **Resolved 2026-08-26:** multi-occurrence capacity samples no longer consume
+  their bounded invalid-sample allowance while a renderer-wide handoff ceiling
+  is still hiding the allocation being calibrated.  The applied occurrence
+  plan is now sufficient to complete that handoff even when the allocating
+  pass changed cuts; the exact ceiling-free successor frame owns the sample.
+  A ceiling at or above every active cut is classified as inert rather than as
+  a different population.  Focused coordinator tests cover changed-plan
+  handoff, the applied-but-hidden candidate transition, and exact capacity-
+  population classification.  Before the final transition fix, four identical
+  warm OSMesa multi-Lucy/xpush replays split evenly between pixel demand and a
+  premature ordinary-deadline endpoint.  After the fix, six of six early-
+  checkpoint replays reached the identical pixel-demand allocation in
+  4.59--7.04 seconds: approximately 984,100 faces, 1,548,889 render-cost units,
+  0.457-pixel maximum projected error, no presented structural boxes, and no
+  terminal owner or obligation.  The eight progressive payloads expand to
+  4,230 presented spatial occurrences; payload count is therefore not a
+  triangle or draw-count proxy.  The corresponding System GL run reached
+  3,807,054 faces at 0.228 pixels in 2.45 seconds.  This fixes the prior
+  timing-dependent coarse endpoint; cold eight-asset preparation and the full
+  turnover/memory matrix remain open.
+
+- **Resolved 2026-08-26:** the current format-22 warm OSMesa Lucy path no
+  longer reproduces the obsolete rectangular first-candidate slab.  The full
+  196-sample qged lifecycle at `/tmp/qged-current-qualification` presents a
+  recognizable 9,336-face whole silhouette at the 0.2-second checkpoint,
+  reaches coherent detail by 1.5 seconds, and passes zoom, rotation, lighting,
+  hierarchy selection, subpath erase/redraw, camera, quality, and terminal
+  contracts.  It finishes with 2.10M faces, 0.632-pixel certified error, zero
+  boxes, and no owner or obligation.  Retain the visual oracle: this result
+  closes only the warm shaded row; cold and wire qualification remain open.
+
 - Run the exact-current graphical matrix from truly cold and certified warm
   caches.  The exact-current 50k OSMesa shaded/wire rows are green; the 150k
-  150k OSMesa shaded/wire cold/warm rows are green under the bounded
+  OSMesa shaded/wire cold/warm rows are green under the bounded
   diagnostic environment.  Re-run them on production hardware scale rows
   before release.
-  **Current regression 2026-08-24:** after the qged progressive-diagnostics
-  null-key crash was fixed, the OSMesa Generic Twin shaded cold row passed at
-  `/tmp/qged-layer-guard-20260824-rerun` (including camera-contract checks).
-  An independent warm replay using that cache did not crash and settled with
-  709 payloads and zero structural boxes, but failed the exact-view history
-  quality check at `/tmp/qged-layer-guard-20260824-warm`: the returned view
-  recorded one history recall yet its certified maximum projected error rose
-  from 0.750 to 1.396 pixels, beyond the 1.25x + 0.002 tolerance.  Diagnose
-  why a recalled state can retain a materially coarser terminal cut before
-  claiming this current binary qualified.  Do not weaken the image/error
-  contract to mask it.
+  **Resolved regression 2026-08-26:** the current Generic Twin shaded matrix
+  passes cold and warm on System GL and OSMesa at
+  `/tmp/qged-generic-cross-renderer-current-20260826`.  Exact-view return
+  recalls history and improves rather than degrades the maximum projected
+  error on both renderers; every terminal checkpoint is ready, box-free, and
+  occurrence-failure-free.  This retires the 2026-08-24 coarse-return result
+  as historical evidence rather than current debt.
   Re-run representative real-model rows if their cache or policy path changes.
 - Run the complete System GL matrix on a usable X host.  Do not promote older
   System GL captures to current-binary evidence.  Compare semantics and images
@@ -1529,9 +1789,11 @@ quality on real large models remain insufficiently qualified.
   progress with four workers under the 1 GiB aggregate working-set limit, but
   exceeds the current 150-second first-cache deadline.  Two interrupted runs
   grew the resumable cache from 942 MiB to 1.8 GiB and promoted an additional
-  asset without OOM.  Complete that cache, profile the producer cost, then run
-  certified warm System GL and System/OSMesa turnover before closing this row;
-  do not reinterpret the incomplete cold run as a pass.
+  asset without OOM.  Warm initial-view System GL and OSMesa capacity rows now
+  pass with exact occurrence allocations as recorded in the 2026-08-26 visual
+  quality entry above.  Complete and profile the cold cache, then run the
+  System/OSMesa visibility-turnover and memory-recovery scripts before closing
+  this row; do not reinterpret an incomplete cold run as a pass.
 - Qualify adaptive BREP tessellation/LoD growth and zoom-out reclamation over
   the NIST corpus and at least one large real BREP model.
 - Keep extraction ownership-led.  The first extraction pass exists, but

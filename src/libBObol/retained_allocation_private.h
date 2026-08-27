@@ -29,6 +29,10 @@ struct BObolRetainedAllocationInputKey {
     size_t maximumProtectedBudget = 0;
     uint64_t viewRevision = 0;
     uint64_t policyRevision = 0;
+    /* Provider-memory denials are valid only for the admission epoch which
+     * observed them.  Allocation identity must include that epoch so a
+     * reclaimed-capacity edge can reopen richer resident candidates. */
+    uint64_t residentAdmissionRevision = 0;
     float pointProxyPixelThreshold = 0.0f;
     bool allowProtectedFloor = false;
 
@@ -59,6 +63,7 @@ struct BObolRetainedAllocationInputs {
     size_t maximumProtectedBudget = 0;
     uint64_t viewRevision = 0;
     uint64_t policyRevision = 0;
+    uint64_t residentAdmissionRevision = 0;
     float pointProxyPixelThreshold = 0.0f;
 
     /* Inactive policy inputs are not evidence.  Timing calibration may keep
@@ -115,6 +120,7 @@ struct BObolRetainedAllocationResult {
     uint64_t residentDemandRevision = 0;
     uint64_t viewRevision = 0;
     uint64_t policyRevision = 0;
+    uint64_t residentAdmissionRevision = 0;
     float pointProxyPixelThreshold = 0.0f;
     size_t requestedSceneBudget = 0;
     size_t externalPresentationCost = 0;

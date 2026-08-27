@@ -21,8 +21,251 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+/* One pinned dense-entry plan for the source currently owned by the bounded
+ * submission cursor.  Source identity is the validity witness; a separate
+ * boolean can otherwise outlive either the source or its entry vector. */
+class BObolLodSubmissionSourcePlan {
+public:
+    void begin(SoBRLDatabaseSource *source)
+    {
+	this->sourceValue = source;
+	this->entryValues.clear();
+    }
+
+    void assign(SoBRLDatabaseSource *source,
+	const std::vector<size_t> &entries)
+    {
+	this->sourceValue = source;
+	this->entryValues = entries;
+    }
+
+    void reset(void)
+    {
+	this->sourceValue = NULL;
+	this->entryValues.clear();
+    }
+
+    bool valid(void) const
+    {
+	return this->sourceValue != NULL;
+    }
+
+    bool validFor(const SoBRLDatabaseSource *source) const
+    {
+	return source && this->sourceValue == source;
+    }
+
+    std::vector<size_t> &entries(void)
+    {
+	return this->entryValues;
+    }
+
+    const std::vector<size_t> &entries(void) const
+    {
+	return this->entryValues;
+    }
+
+    size_t size(void) const
+    {
+	return this->entryValues.size();
+    }
+
+private:
+    SoBRLDatabaseSource *sourceValue = NULL;
+    std::vector<size_t> entryValues;
+};
+
+/* Accumulator for a possibly time-sliced non-compact visibility census.  The
+ * count and its source identity are one value so a source change cannot reuse
+ * the preceding source's partial count. */
+class BObolLodSubmissionVisibleCount {
+public:
+    void observe(SoBRLDatabaseSource *source, size_t visible)
+    {
+	if (this->sourceValue != source) {
+	    this->sourceValue = source;
+	    this->countValue = 0;
+	}
+	this->countValue = visible > SIZE_MAX - this->countValue ?
+	    SIZE_MAX : this->countValue + visible;
+    }
+
+    void reset(void)
+    {
+	this->sourceValue = NULL;
+	this->countValue = 0;
+    }
+
+    size_t valueFor(const SoBRLDatabaseSource *source) const
+    {
+	return source && source == this->sourceValue ? this->countValue : 0;
+    }
+
+private:
+    SoBRLDatabaseSource *sourceValue = NULL;
+    size_t countValue = 0;
+};
+
+/* Exact source-inventory delta consumed by one bounded submission pass.  A
+ * targeted source without a selective entry plan requests a full source scan;
+ * a targeted source with a plan requests only those dense entries.  Activity
+ * is derived from the target population so it cannot outlive the work it is
+ * supposed to describe. */
+class BObolLodSubmissionDelta {
+public:
+    using SourcePlan =
+	std::pair<SoBRLDatabaseSource *, std::vector<size_t>>;
+
+    void reset(void)
+    {
+	this->sourceValues.clear();
+	this->planValues.clear();
+    }
+
+    bool active(void) const
+    {
+	return !this->sourceValues.empty();
+    }
+
+    bool targets(const SoBRLDatabaseSource *source) const
+    {
+	return source && std::find(this->sourceValues.begin(),
+		this->sourceValues.end(), source) != this->sourceValues.end();
+    }
+
+    bool target(SoBRLDatabaseSource *source)
+    {
+	if (!source || this->targets(source))
+	    return false;
+	this->sourceValues.push_back(source);
+	return true;
+    }
+
+    bool targetSelective(SoBRLDatabaseSource *source,
+	std::vector<size_t> entries)
+    {
+	if (!this->target(source))
+	    return false;
+	this->planValues.emplace_back(source, std::move(entries));
+	return true;
+    }
+
+    void targetFull(SoBRLDatabaseSource *source)
+    {
+	(void)this->target(source);
+	this->removeSelective(source);
+    }
+
+    void replaceSelectivePlans(std::vector<SourcePlan> plans)
+    {
+	this->reset();
+	for (SourcePlan &plan : plans) {
+	    std::vector<size_t> *existing =
+		this->selectiveEntries(plan.first);
+	    if (existing) {
+		existing->insert(existing->end(),
+		    plan.second.begin(), plan.second.end());
+		continue;
+	    }
+	    (void)this->targetSelective(plan.first, std::move(plan.second));
+	}
+    }
+
+    std::vector<size_t> *selectiveEntries(
+	const SoBRLDatabaseSource *source)
+    {
+	auto plan = std::find_if(this->planValues.begin(),
+		this->planValues.end(), [source](const SourcePlan &entry) {
+		    return entry.first == source;
+		});
+	return plan == this->planValues.end() ? NULL : &plan->second;
+    }
+
+    const std::vector<size_t> *selectiveEntries(
+	const SoBRLDatabaseSource *source) const
+    {
+	auto plan = std::find_if(this->planValues.begin(),
+		this->planValues.end(), [source](const SourcePlan &entry) {
+		    return entry.first == source;
+		});
+	return plan == this->planValues.end() ? NULL : &plan->second;
+    }
+
+    void removeSelective(const SoBRLDatabaseSource *source)
+    {
+	this->planValues.erase(std::remove_if(this->planValues.begin(),
+		this->planValues.end(), [source](const SourcePlan &entry) {
+		    return entry.first == source;
+		}), this->planValues.end());
+    }
+
+    const std::vector<SourcePlan> &plans(void) const
+    {
+	return this->planValues;
+    }
+
+    size_t planCount(void) const
+    {
+	return this->planValues.size();
+    }
+
+private:
+    std::vector<SoBRLDatabaseSource *> sourceValues;
+    std::vector<SourcePlan> planValues;
+};
+
+/* One exact non-terminal structural-box frontier and the per-occurrence cost
+ * reservation derived for its bounded repair pass.  A zero frontier is
+ * inactive; beginning or retiring a frontier also retires its reservation. */
+class BObolLodStructuralRepair {
+public:
+    void begin(size_t frontierCount)
+    {
+	this->frontierCountValue = frontierCount;
+	this->coverageCostReservationValue = 0;
+    }
+
+    void reset(void)
+    {
+	this->frontierCountValue = 0;
+	this->coverageCostReservationValue = 0;
+    }
+
+    bool active(void) const
+    {
+	return this->frontierCountValue > 0;
+    }
+
+    size_t frontierCount(void) const
+    {
+	return this->frontierCountValue;
+    }
+
+    size_t coverageCostReservation(void) const
+    {
+	return this->coverageCostReservationValue;
+    }
+
+    void clearCoverageCostReservation(void)
+    {
+	this->coverageCostReservationValue = 0;
+    }
+
+    void reserveCoverageCost(size_t reservation)
+    {
+	if (this->active() && !this->coverageCostReservationValue)
+	    this->coverageCostReservationValue = reservation;
+    }
+
+private:
+    size_t frontierCountValue = 0;
+    size_t coverageCostReservationValue = 0;
+};
 
 /**
  * Owner-thread progressive-display state.  This first extraction preserves
@@ -73,6 +316,21 @@ struct BObolLodCoordinator {
 		allocation.fixedCadPresentationCost);
     }
 
+    bool retainedAllocationCutsApplied(
+	const BObolViewLodState *state) const
+    {
+	if (!this->retainedAllocationCertificateCurrent(state))
+	    return false;
+	const BObolRetainedAllocationResult &allocation =
+	    this->lodRetainedAllocationCertificate;
+	if (!allocation.selectedPresentationCost)
+	    return false;
+	return state->cadAllocationPlanCutsApplied(
+		allocation.allocationPlanSerial, allocation.viewRevision,
+		allocation.policyRevision,
+		allocation.fixedCadPresentationCost);
+    }
+
     bool retainedAllocationPresentationRealized(
 	const BObolViewLodState *state) const
     {
@@ -80,8 +338,31 @@ struct BObolLodCoordinator {
 	    return false;
 	const BObolRetainedAllocationResult &allocation =
 	    this->lodRetainedAllocationCertificate;
-	return allocation.selectedPresentationCost > 0 &&
-	    state->activeRenderCost() == allocation.selectedPresentationCost;
+	if (!allocation.selectedPresentationCost)
+	    return false;
+	if (this->lodInteractiveProgressiveCeiling < 0)
+	    return this->retainedAllocationCutsApplied(state);
+	/* A global cut is occurrence-local only for one progressive payload.
+	 * In that domain the framebuffer contains the canonical ceiling cost,
+	 * while activeRenderCost() intentionally describes the richer retained
+	 * population hidden behind it. */
+	if (this->lodInteractiveProgressiveCeiling >= 0 &&
+	    state->cadProgressivePayloadCount() == 1) {
+	    const size_t ceilingCadCost = state->
+		cadRenderCostAtProgressiveCutCeiling(
+		    this->lodInteractiveProgressiveCeiling);
+	    const size_t presentationCost = BObolLodAdmissionPlanner::
+		canonicalSceneCostAtCadCeiling(
+		state->activeRenderCost(), state->activeCadRenderCost(),
+		ceilingCadCost);
+	    return presentationCost == allocation.selectedPresentationCost;
+	}
+	/* With several independently allocated occurrences, matching aggregate
+	 * cost would not prove matching visual distribution.  Only an inert global
+	 * ceiling may coexist with the applied occurrence-local plan. */
+	return this->retainedAllocationCutsApplied(state) &&
+	    state->maximumActiveProgressiveCut() <=
+		this->lodInteractiveProgressiveCeiling;
     }
 
     void advanceAdmissionRevision(BObolLodAdmissionRevisionDomain domain)
@@ -434,8 +715,7 @@ struct BObolLodCoordinator {
 	smoothedRenderTimeNanoseconds = 0;
 	lodLastCadGpuSampleSerial = 0;
 	lodLastCadGpuTimeNanoseconds = 0;
-	lodLastCadGpuGeometryUploadBytes = 0;
-	lodLastCadGpuGeometryUploadBytesValid = FALSE;
+	lodLastCadGpuGeometryUploadBytes.reset();
 	lodLastRenderWasPreparedCadReplay = TRUE;
 	lodLastRenderWasReusableCadPresentation = TRUE;
 	lodInteractionStartCertificate.reset();
@@ -539,8 +819,7 @@ struct BObolLodCoordinator {
     SbBool lodLastRenderWasReusableCadPresentation = TRUE;
     uint64_t lodLastCadGpuSampleSerial = 0;
     uint64_t lodLastCadGpuTimeNanoseconds = 0;
-    uint64_t lodLastCadGpuGeometryUploadBytes = 0;
-    SbBool lodLastCadGpuGeometryUploadBytesValid = FALSE;
+    std::optional<uint64_t> lodLastCadGpuGeometryUploadBytes;
     uint64_t lastProgressiveAdvanceTimeNanoseconds = 0;
     uint64_t lastLodResultProcessingTimeNanoseconds = 0;
     uint64_t lastProgressiveProviderTimeNanoseconds = 0;
@@ -584,10 +863,7 @@ struct BObolLodCoordinator {
     uint64_t lodActiveGeneration = 0;
     size_t lodSubmissionSourceIndex = 0;
     size_t lodSubmissionEntryOffset = 0;
-    SoBRLDatabaseSource *lodSubmissionPlanSource = NULL;
-    std::vector<size_t> lodSubmissionPlanEntries;
-    SbBool lodSubmissionPlanValid = FALSE;
-    SbBool lodSubmissionPlanRetainedAdmission = FALSE;
+    BObolLodSubmissionSourcePlan lodSubmissionSourcePlan;
     /* Expensive stable-view minimax arithmetic is resumable.  The plan owns
      * no scene geometry and publishes nothing until its final epoch-checked
      * owner-thread commit. */
@@ -603,8 +879,7 @@ struct BObolLodCoordinator {
     float lodRetainedAdmissionQualityPointProxyPixelThreshold =
 	std::numeric_limits<float>::quiet_NaN();
     BObolRetainedAllocationResult lodRetainedAllocationCertificate;
-    SoBRLDatabaseSource *lodSubmissionVisibleCountSource = NULL;
-    size_t lodSubmissionVisibleCount = 0;
+    BObolLodSubmissionVisibleCount lodSubmissionVisibleCount;
     /* Large compact scenes are consumed in bounded GUI-thread windows.  A
      * coverage pass proves that every projected leaf has a useful structural
      * presentation before any of those leaves opens a PoP hierarchy.  The
@@ -650,13 +925,9 @@ struct BObolLodCoordinator {
     mutable BObolLodConvergencePolicy lodConvergencePolicy;
     void clearLodSubmissionPlan(void)
     {
-	lodSubmissionPlanSource = NULL;
-	lodSubmissionPlanEntries.clear();
-	lodSubmissionPlanValid = FALSE;
-	lodSubmissionPlanRetainedAdmission = FALSE;
+	lodSubmissionSourcePlan.reset();
 	lodRetainedAllocationTransaction.reset();
-	lodSubmissionVisibleCountSource = NULL;
-	lodSubmissionVisibleCount = 0;
+	lodSubmissionVisibleCount.reset();
     }
     void clearLodConvergenceCandidates(void)
     {
@@ -802,12 +1073,10 @@ struct BObolLodCoordinator {
     /* The last exact renderer frame observed structural boxes which the
      * predictive point classifier expected to collapse.  One bounded pass
      * must bypass that prediction and obtain their mesh presentations. */
-    SbBool lodStructuralPresentationRepairPending = FALSE;
     /* Exact non-terminal box population owned by the current closed repair
      * transaction.  The per-occurrence share is derived only after the
      * admission plan freezes the active-cost baseline which will consume it. */
-    size_t lodStructuralRepairFrontierCount = 0;
-    size_t lodStructuralCoverageCostReservation = 0;
+    BObolLodStructuralRepair lodStructuralRepair;
     /* Accumulated across every bounded window of one scene pass.  Unlike the
      * general refinement-debt bit, this counts only visible box-to-first-mesh
      * admissions rejected by the finite scene allowance. */
@@ -849,13 +1118,9 @@ struct BObolLodCoordinator {
 	}
     };
     std::vector<LodSourceSnapshot> lodLastSubmittedSources;
-    SbBool lodSubmissionDeltaActive = FALSE;
-    std::vector<SoBRLDatabaseSource *> lodSubmissionDeltaSources;
-    std::vector<std::pair<SoBRLDatabaseSource *, std::vector<size_t>>>
-	lodSubmissionDeltaPlans;
-    BObolLodViewSnapshot lodViewSignature;
+    BObolLodSubmissionDelta lodSubmissionDelta;
+    std::optional<BObolLodViewSnapshot> lodViewSignature;
     BObolLodViewScaleSnapshot lodViewScaleSignature;
-    SbBool lodViewSignatureValid = FALSE;
 
     /* Net scale, not the mere presence of a wheel event, decides whether a
      * quiet orthographic view must retarget every occurrence.  Keep the
@@ -888,7 +1153,6 @@ struct BObolLodCoordinator {
      * uniqueness must live here. */
     SbBool lodDiscretePopulationTrialAvailable = FALSE;
     BObolLodInteractionSession lodInteractionSession;
-    SbBool lodReleaseCutFloorActive = FALSE;
     /* Renderer-only presentation continuity and motion-to-stable handoff.
      * The policy owns its snapshot/latch proof; this coordinator only applies
      * returned ceiling and point-proxy values to the retained view state. */
@@ -981,9 +1245,6 @@ struct BObolLodCoordinator {
      * admission: no provider scan or retained-array mutation is required.
      */
     BObolLodPointQualityPhase lodPointQualityPhase;
-    /* A temporary multi-pixel point cut may be relaxed only after reducible
-     * PoP triangle detail has been compacted to the measured scene capacity.
-     * This latch keeps convergence behind that retained-prefix pass. */
     /* A completed retained-recovery pass owns one authoritative triangle
      * allocation plan.  Point-threshold calibration may change only the
      * renderer-side small-occurrence classification afterward; it must not
@@ -992,8 +1253,7 @@ struct BObolLodCoordinator {
      * automatically on a view, policy, occurrence, or resident-mesh change. */
     uint64_t lodPointProxyTriangleRecoverySaturatedPlanSerial = 0;
     uint64_t lodInteractiveCeilingFeedbackRenderSerial = 0;
-    SbBool lodUseForcedCut = FALSE;
-    int lodForcedCut = 0;
+    std::optional<int> lodForcedCut;
     uint64_t maxExactFullDetailFaceCount = 0;
     uint64_t maxExactFullDetailPointCount = 0;
     std::vector<BObolRtPickCache *> rtPickCaches;

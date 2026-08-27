@@ -86,6 +86,12 @@
 #include <Inventor/nodes/SoSpotLight.h>
 
 static const uint64_t controller_structural_repair_deadline_multiplier = 2;
+/* An exact point census must visit the complete occurrence population before
+ * it can select a safe aggregation threshold.  On a software renderer that
+ * finite, quiet-only traversal can exceed the ordinary presentation deadline
+ * even at the minimum mesh cut.  Bound the one-shot census to 2.5 FPS rather
+ * than restarting it forever at the normal 10 FPS hard limit. */
+static const uint64_t controller_point_census_deadline_multiplier = 4;
 static const uint64_t controller_structural_frontier_hash_offset =
     UINT64_C(1469598103934665603);
 static const uint64_t controller_structural_frontier_hash_prime =
@@ -396,33 +402,39 @@ BObolViewController::getCurrentPresentationFrameDeadline(void) const
      * GUI thread indefinitely.  Deadline recovery preserves the preceding
      * complete framebuffer and reconciles the richest affordable cut. */
 
-    /* Structural repair is a bounded, one-shot coverage transaction.  A
-     * software hidden-line frame can legitimately take longer than the normal
-     * interactive-safe static deadline immediately after that population is
-     * installed.  Give that one state enough time to produce the exact frame
-     * that certifies the repaired population; ordinary static and interactive
-     * frames retain their existing deadlines. */
+    /* Structural repair and point classification are bounded, one-shot
+     * coverage transactions.  A large software frame can legitimately take
+     * longer than the normal interactive-safe static deadline while visiting
+     * its complete occurrence population.  Give those finite transactions
+     * enough time to produce their exact certificate; ordinary static and
+     * interactive frames retain their existing deadlines. */
     const bool completingStructuralCoverage =
 	!this->d->lodInteractionSession.active() &&
-	(this->d->lodStructuralPresentationRepairPending ||
-	 (this->d->lodPointQualityPhase.calibrationPending() &&
+	(this->d->lodStructuralRepair.active() ||
+	 (this->d->lodPointQualityPhase.adaptiveCalibrationPending() &&
 	  BObolLodAdmissionPlanner::pointAtMaximumPixelThreshold(
 	      this->d->lodPresentationPointProxyPixelThreshold)));
+    const bool completingPointCensus =
+	!this->d->lodInteractionSession.active() &&
+	this->d->lodPointQualityPhase.adaptiveCalibrationPending();
     if (!this->d->lodInteractionSession.active()) {
 	const uint64_t staticQualityDeadline =
 	    this->d->staticQualityPresentationDeadline();
-	uint64_t structuralRepairDeadline =
+	const uint64_t finiteCensusMultiplier = completingPointCensus ?
+	    controller_point_census_deadline_multiplier :
+	    controller_structural_repair_deadline_multiplier;
+	uint64_t finiteCensusDeadline =
 	    this->d->stablePresentationFrameDeadlineNanoseconds;
-	if (structuralRepairDeadline > 0)
-	    structuralRepairDeadline =
-		structuralRepairDeadline <= UINT64_MAX /
-		    controller_structural_repair_deadline_multiplier ?
-		structuralRepairDeadline *
-		    controller_structural_repair_deadline_multiplier :
+	if (finiteCensusDeadline > 0)
+	    finiteCensusDeadline =
+		finiteCensusDeadline <= UINT64_MAX /
+		    finiteCensusMultiplier ?
+		finiteCensusDeadline *
+		    finiteCensusMultiplier :
 		UINT64_MAX;
 	return BObolLodQualityPolicy::quietPresentationDeadline(
-	    staticQualityDeadline, structuralRepairDeadline,
-	    completingStructuralCoverage,
+	    staticQualityDeadline, finiteCensusDeadline,
+	    completingStructuralCoverage || completingPointCensus,
 	    this->d->lodStaticQualityTrial.usesStaticDeadline());
     }
 
@@ -502,6 +514,9 @@ BObolViewController::notePresentationRenderInterrupted(
 	    TRUE : FALSE;
     const uint64_t staticQualityDeadline =
 	this->d->staticQualityPresentationDeadline();
+    const uint64_t recoveryDeadline = interactive ?
+	this->d->interactivePresentationFrameDeadlineNanoseconds :
+	staticQualityDeadline;
     const int interruptedActiveMaximum = state ?
 	state->maximumActiveProgressiveCut() : -1;
     const int interruptedPresentedMaximum =
@@ -535,20 +550,22 @@ BObolViewController::notePresentationRenderInterrupted(
      * cache supports dozens of cuts, subtracting one ordinal per missed frame
      * can spend seconds walking past cuts which remove almost no work.  The
      * view state maintains the exact retained cost at every renderer-wide
-     * ceiling.  For a quiet draw-capacity miss, scale the attempted cost by
+     * ceiling.  For a draw-capacity miss, scale the attempted cost by
      * the observed deadline ratio and select the richest prefix which meets
-     * that corrected cost in one step.  Preparation-only retries remain
-     * unchanged below, and the hard deadline still corrects an optimistic
-     * prediction.
+     * that corrected cost in one step.  This is equally important during
+     * input: walking one ordinal at a time can consume several complete
+     * deadlines without presenting a new camera pose.  Preparation-only
+     * retries remain unchanged below, and the hard deadline still corrects
+     * an optimistic prediction.
      *
      * This aggregate includes off-frustum retained occurrences and excludes
      * renderer point collapse, so it is deliberately conservative.  It does
      * not change occurrence cuts or resident data; later completed-frame
      * headroom policy may recover fidelity without cache I/O.
      */
-    if (state && !interactive && !cadPreparationAdvanced &&
+    if (state && !cadPreparationAdvanced &&
 	interruptedPresentedMaximum > 0 && elapsedNanoseconds > 0 &&
-	staticQualityDeadline > 0) {
+	recoveryDeadline > 0) {
 	if (certifiedUnconstrainedPresentation) {
 	    interruptedEstimatedCost =
 		allocationCertificate.selectedPresentationCost;
@@ -562,9 +579,9 @@ BObolViewController::notePresentationRenderInterrupted(
 		    activeCadCost, presentedCadEstimate);
 	}
 	interruptedTargetCost =
-	    BObolLodQualityPolicy::staticDeadlineRecoveryCostLimit(
+	    BObolLodQualityPolicy::deadlineRecoveryCostLimit(
 		interruptedEstimatedCost, elapsedNanoseconds,
-		staticQualityDeadline);
+		recoveryDeadline);
 	const size_t sceneBudget = this->d->lodAdmissionEvidence.capacity().currentBudget();
 	if (sceneBudget != SIZE_MAX)
 	    interruptedTargetCost = std::min(
@@ -579,7 +596,8 @@ BObolViewController::notePresentationRenderInterrupted(
 		cadTarget, interruptedPresentedMaximum - 1);
 	interruptedCorrectedCeiling = predictedCeiling >= 0 ?
 	    predictedCeiling : 0;
-	if (this->d->lodDeadlineSafeProgressiveCeiling >= 0 &&
+	if (!interactive &&
+	    this->d->lodDeadlineSafeProgressiveCeiling >= 0 &&
 	    this->d->lodDeadlineSafeViewRevision ==
 		this->d->lodViewRevision.value() &&
 	    this->d->lodDeadlineSafeQualityDomainRevision ==
@@ -604,7 +622,7 @@ BObolViewController::notePresentationRenderInterrupted(
 	    cadPreparationAdvanced != FALSE,
 	this->d->lodPresentationTransaction.publicationFramePending(),
 	this->d->lodPresentationTransaction.barrierPending(),
-	this->d->lodPointQualityPhase.calibrationPending(),
+	this->d->lodPointQualityPhase.presentationPending(),
 	this->d->lodStaticQualityTrial.inProgress()) ?
 	TRUE : FALSE;
     /* Keep a resumable static-quality traversal on the exact cut whose atlas
@@ -648,7 +666,7 @@ BObolViewController::notePresentationRenderInterrupted(
     const bool deadlineSubmissionPaused =
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
 	    this->d->lodAdmissionPointProxyFramePending != FALSE,
-	    this->d->lodPointQualityPhase.calibrationPending(),
+	    this->d->lodPointQualityPhase.presentationPending(),
 	    this->d->lodAdmissionEvidence.capacity().rescanAfterFrame(),
 	    state && state->hasCadPresentationAssemblies());
     /* Defer capacity recovery only to an owner which can publish a different
@@ -794,7 +812,8 @@ BObolViewController::notePresentationRenderInterrupted(
 		std::min(interruptedPresentedMaximum - 1,
 		    interruptedCorrectedCeiling));
 	    this->d->lodViewDemandPolicy.noteQualityMiss(
-		correctedCeiling, state->activeRenderCost());
+		correctedCeiling, interruptedEstimatedCost > 0 ?
+		    interruptedEstimatedCost : state->activeRenderCost());
 	    this->d->lodInteractiveProgressiveCeiling = correctedCeiling;
 	    presentationState->setCadPresentationProgressiveCutCeiling(
 		correctedCeiling);
@@ -864,7 +883,33 @@ BObolViewController::notePresentationRenderInterrupted(
 	constraint.candidateCost = interruptedEstimatedCost > 0 ?
 	    interruptedEstimatedCost : interruptedActiveCost;
 	constraint.allowedCost = interruptedTargetCost;
-	(void)this->d->lodStaticQualityTrial.reject(constraint);
+	const bool trialRejected =
+	    this->d->lodStaticQualityTrial.reject(constraint);
+	/* A one-pixel point trial and the static-quality trial name the same
+	 * candidate framebuffer.  Reject them atomically.  Leaving point
+	 * calibration pending pauses the allocation cursor and requests the exact
+	 * rejected frame forever, which a near-deadline 50k OSMesa population can
+	 * expose nondeterministically.  Restore the point cut from the completed
+	 * pre-trial framebuffer; the deadline handoff below may then reconcile
+	 * triangle detail without another point-classification owner. */
+	if (BObolLodAdmissionPlanner::
+		rejectedOnePixelTrialReleasesCalibration(
+		    trialRejected,
+		    this->d->lodPointQualityPhase.presentationPending(),
+		    this->d->lodPresentationPointProxyPixelThreshold)) {
+	    const float retainedPointThreshold =
+		this->d->lodStaticQualityTrial.
+		    baselinePointProxyPixelThreshold();
+	    this->d->lodPresentationPointProxyPixelThreshold =
+		retainedPointThreshold;
+	    BObolViewLodState *presentationState =
+		this->d->viewAttachment ?
+		    this->d->viewAttachment->getViewLodState() : NULL;
+	    if (presentationState)
+		presentationState->setCadPresentationPointProxyPixelThreshold(
+		    retainedPointThreshold);
+	    this->d->lodPointQualityPhase.completeCalibration();
+	}
 	/* The protected visual-significance floor is permitted to exceed the
 	 * preferred quiet cadence only under this exact hard-deadline trial.  Once
 	 * that trial fails, retaining the floor makes the recovery allocator
@@ -1002,12 +1047,12 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
      * overwrite the successor trial before it reaches the renderer. */
 
     const bool saturatedPointCalibration =
-	this->d->lodPointQualityPhase.calibrationPending() &&
+	this->d->lodPointQualityPhase.presentationPending() &&
 	BObolLodAdmissionPlanner::pointAtMaximumPixelThreshold(
 	    this->d->lodPresentationPointProxyPixelThreshold);
     if (!BObolLodAdmissionPlanner::maySeedPointStructuralDistribution(
 	    this->d->lodAdmissionPointProxyFramePending != FALSE,
-	    this->d->lodPointQualityPhase.calibrationPending(),
+	    this->d->lodPointQualityPhase.presentationPending(),
 	    this->d->lodPointQualityPhase.triangleRecoveryPending()) &&
 	!saturatedPointCalibration)
 	return;
@@ -1028,6 +1073,8 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
     if (viewLodState)
 	viewLodState->convergencePayloadCounts(activePayloads,
 	    satisfiedPayloads, memoryLimitedPayloads);
+    const size_t progressivePayloads = viewLodState ?
+	viewLodState->cadProgressivePayloadCount() : 0;
 
     size_t presentedSubpixelOccurrences = 0;
     size_t presentedStructuralBoxes = 0;
@@ -1093,6 +1140,12 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
     const bool haveStructuralProjectionPopulation =
 	exactStructuralProjection &&
 	structuralProjection.visibleCount > terminalOccurrenceFailures;
+    const bool pointAggregationOwnsStructuralFrontier =
+	BObolLodAdmissionPlanner::pointAggregationApplicable(
+	    exactStructuralProjection ? structuralProjection.visibleCount : 0) &&
+	this->d->structuralPointAggregationRequired(
+	    maximumFirstWaveOccurrences) &&
+	maximumFirstWaveOccurrences != SIZE_MAX;
 
     /* A framebuffer histogram is exact for the occurrences installed when
      * that frame began, but it is not a whole-scene population proof while a
@@ -1104,11 +1157,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
     if (haveStructuralProjectionPopulation &&
 	externalProducersSettled &&
 	!this->d->lodInteractionSession.active() &&
-	BObolLodAdmissionPlanner::pointAggregationApplicable(
-	    structuralProjection.visibleCount) &&
-	this->d->structuralPointAggregationRequired(
-	    maximumFirstWaveOccurrences) &&
-	maximumFirstWaveOccurrences != SIZE_MAX) {
+	pointAggregationOwnsStructuralFrontier) {
 	const BObolLodAdmissionPlan seedPlan =
 	    BObolLodAdmissionPlanner::planPointStructuralDistribution(
 		this->d->lodAdmissionEvidence, this->d->lodAdmissionCursor,
@@ -1145,9 +1194,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	    this->d->lodSubmissionSourceIndex = 0;
 	    this->d->lodSubmissionEntryOffset = 0;
 	    this->d->clearLodSubmissionPlan();
-	    this->d->lodSubmissionDeltaActive = FALSE;
-	    this->d->lodSubmissionDeltaSources.clear();
-	    this->d->lodSubmissionDeltaPlans.clear();
+	    this->d->lodSubmissionDelta.reset();
 	    this->d->advanceAdmissionRevision(
 	        BObolLodAdmissionRevisionDomain::CAPACITY);
 	    /* This frame classifies which structural occurrences may enter the
@@ -1187,42 +1234,92 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	}
     }
 
-    /* Once the aggregation classifier has reached its maximum threshold,
-     * the remaining boxes cannot be made cheaper by another point-calibration
-     * replay.  Their structural repair is the only successor capable of
-     * changing the population, and its completed frame becomes the next
-     * calibration witness. */
+    /* Structural repair owns an exact fallback frontier once point
+     * aggregation has no useful successor.  This is true at the maximum
+     * threshold, when every remaining proxy projects above that threshold, or
+     * when the complete occurrence population already fits the scene
+     * allowance and therefore should not be aggregated in the first place. */
     const bool maximumPointAggregation =
 	BObolLodAdmissionPlanner::pointAtMaximumPixelThreshold(
 	    this->d->lodPresentationPointProxyPixelThreshold);
-    const bool pointCalibrationBlocksStructuralRepair =
-	this->d->lodPointQualityPhase.calibrationPending() &&
-	!maximumPointAggregation;
-    const bool budgetCalibrationBlocksStructuralRepair =
-	this->d->lodAdmissionEvidence.capacity().rescanAfterFrame() &&
-	!maximumPointAggregation;
-    const bool structuralRepairReady = unresolvedStructuralPresentation &&
+    const size_t unresolvedStructuralCount =
+	presentedStructuralBoxes > terminalOccurrenceFailures ?
+	    presentedStructuralBoxes - terminalOccurrenceFailures : 0;
+    const size_t unaggregatableStructuralCount = exactStructuralProjection ?
+	BObolLodAdmissionPlanner::unaggregatableStructuralCount(
+	    structuralProjection.cumulativeCount,
+	    structuralProjection.visibleCount) : 0;
+    bool pointPolicyExhausted = BObolLodAdmissionPlanner::
+	pointPolicyExhaustedForStructuralFrontier(
+	    maximumPointAggregation,
+	    pointAggregationOwnsStructuralFrontier,
+	    exactStructuralProjection, unresolvedStructuralCount,
+	    unaggregatableStructuralCount);
+    const bool structuralSuccessorBaseReady =
+	unresolvedStructuralPresentation && exactStructuralProjection &&
 	this->d->lodAutoSubmit && this->d->lodService &&
 	!this->d->lodInteractionSession.active() &&
-	/* A completed visibility census may deliberately report missing useful
-	 * coverage.  That is the condition this repair resolves, so requiring the
-	 * stronger all-covered proof here creates a closed wait with the last box.
-	 * The exact framebuffer classification and settled producers below keep
-	 * the repair frontier authoritative. */
 	this->d->lodCoveragePolicy.hasCompleteVisibleCount() &&
 	!this->d->lodSubmissionPass.active() &&
-	!budgetCalibrationBlocksStructuralRepair &&
 	!this->d->lodPresentationTransaction.barrierPending() &&
 	!this->d->lodRetainedRefinementPending &&
-	!pointCalibrationBlocksStructuralRepair &&
 	!this->d->lodPointQualityPhase.triangleRecoveryPending() &&
 	BObolLodAvailabilityScheduler::structuralRepairMayOwn(
 	    this->d->lodAvailabilityLedger.residentGrowthPending(),
 	    this->d->lodAvailabilityLedger.residencyDrainActive()) &&
 	externalProducersSettled &&
-	this->d->lodAvailabilityLedger.resultsPending() == 0 && activeTasks == 0 &&
-	queuedResults == 0;
-    if (unresolvedStructuralPresentation && maximumPointAggregation &&
+	this->d->lodAvailabilityLedger.resultsPending() == 0 &&
+	activeTasks == 0 && queuedResults == 0;
+    const bool pointCalibrationBlocksStructuralRepair =
+	this->d->lodPointQualityPhase.presentationPending() &&
+	!pointPolicyExhausted;
+    const bool budgetCalibrationBlocksStructuralRepair =
+	this->d->lodAdmissionEvidence.capacity().rescanAfterFrame() &&
+	!pointPolicyExhausted;
+
+    /* The first-wave histogram bounds provider admission, but a completed
+     * capacity search may prove that even that bounded tail does not fit.
+     * With no producer, calibration, or frame owner left, advance the point
+     * bracket from the exact unresolved frontier.  Previously this state had
+     * no enabled transition: convergence remained below 100 percent with
+     * thousands of boxes while every worker and control obligation was idle. */
+    const bool pointSuccessorOwnerPending =
+	pointCalibrationBlocksStructuralRepair ||
+	budgetCalibrationBlocksStructuralRepair;
+    if (structuralSuccessorBaseReady &&
+	BObolLodAdmissionPlanner::
+	    pointSuccessorRequiredForStructuralFrontier(
+		exactStructuralProjection, unresolvedStructuralCount,
+		pointPolicyExhausted, pointSuccessorOwnerPending)) {
+	const BObolLodAdmissionPlan pointPlan =
+	    BObolLodAdmissionPlanner::planPointStructuralCoverageBlocked(
+		this->d->lodAdmissionEvidence, this->d->lodAdmissionCursor,
+		this->d->lodPresentationPointProxyPixelThreshold,
+		unresolvedStructuralCount);
+	this->d->commitAdmissionPlan(pointPlan);
+	const BObolLodPointProxyEvidence::Decision &pointSuccessor =
+	    pointPlan.pointProxyDecision;
+	if (pointSuccessor.changed) {
+	    this->d->lodPresentationPointProxyPixelThreshold =
+		pointSuccessor.threshold;
+	    BObolViewLodState *presentationState =
+		this->d->viewAttachment->getViewLodState();
+	    if (presentationState)
+		presentationState->setCadPresentationPointProxyPixelThreshold(
+		    pointSuccessor.threshold);
+	    this->d->lodPointQualityPhase.requestCalibration();
+	    this->requestRender("lod-structural-frontier-point-successor");
+	    return;
+	}
+	/* A saturated point bracket has no further aggregation transition.  The
+	 * same exact frontier now belongs to bounded structural repair. */
+	pointPolicyExhausted = true;
+    }
+    const bool structuralRepairReady = structuralSuccessorBaseReady &&
+	pointPolicyExhausted &&
+	!budgetCalibrationBlocksStructuralRepair &&
+	!pointCalibrationBlocksStructuralRepair;
+    if (unresolvedStructuralPresentation && pointPolicyExhausted &&
 	!structuralRepairReady) {
 	SbString diagnostic;
 	diagnostic.sprintf("structural repair waiting "
@@ -1251,7 +1348,8 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	bu_log("BObol LoD structural repair unresolved=%d ready=%d "
 	       "exact=%d boxes=%zu failures=%zu interactive=%d gesture=%d "
 	       "coverage=%d submit=%d rescan=%d refinement_frame=%d "
-	       "retained=%d handoff=%d point=%d recovery=%d results=%d "
+	       "retained=%d handoff=%d point=%d point_exhausted=%d "
+	       "recovery=%d results=%d "
 	       "active_tasks=%zu queued_results=%zu\n",
 	       unresolvedStructuralPresentation ? 1 : 0,
 	       structuralRepairReady ? 1 : 0,
@@ -1265,23 +1363,17 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	       this->d->lodPresentationTransaction.barrierPending() ? 1 : 0,
 	       this->d->lodRetainedRefinementPending ? 1 : 0,
 	       this->d->lodPresentationPolicy.handoffPending() ? 1 : 0,
-	       this->d->lodPointQualityPhase.calibrationPending() ? 1 : 0,
+	       this->d->lodPointQualityPhase.presentationPending() ? 1 : 0,
+	       pointPolicyExhausted ? 1 : 0,
 	       this->d->lodPointQualityPhase.triangleRecoveryPending() ? 1 : 0,
 	       this->d->lodAvailabilityLedger.resultsPending(), activeTasks, queuedResults);
 
-    /* Once the point classifier reaches its 64-pixel bound, every remaining
-     * uncollapsed box is an irreducible coverage obligation.  Transfer the
+    /* Once point aggregation has no useful successor, every remaining
+     * uncollapsed box is a structural coverage obligation.  Transfer the
      * immediately preceding exact frame's hard-deadline headroom into one
      * structural admission transaction.  The policy rejects an unchanged
      * population after that attempt, preventing the preferred 20 Hz budget
      * from replaying the same sparse frontier indefinitely. */
-    const size_t unresolvedStructuralCount =
-	presentedStructuralBoxes > terminalOccurrenceFailures ?
-	    presentedStructuralBoxes - terminalOccurrenceFailures : 0;
-    const size_t unaggregatableStructuralCount = exactStructuralProjection ?
-	BObolLodAdmissionPlanner::unaggregatableStructuralCount(
-	    structuralProjection.cumulativeCount,
-	    structuralProjection.visibleCount) : 0;
     size_t structuralPresentedCost = 0;
     const bool exactStructuralCapacityFrame =
 	exactOccurrenceCoverage && viewLodState &&
@@ -1370,27 +1462,25 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	    structuralProjection, structuralRepairPlans);
     BObolLodStructuralAdmissionEvidence::Decision structuralAdmission;
     if (structuralRepairReady && exactStructuralCapacityFrame) {
-	/* The exact structural repair transaction supersedes the now-saturated
-	 * point-calibration replay. */
-	if (maximumPointAggregation) {
+	/* The exact structural repair transaction supersedes any point
+	 * calibration or ordinary capacity sample which cannot change this
+	 * frontier.  Consume those observations before installing the exclusive
+	 * repair owner below. */
+	if (this->d->lodPointQualityPhase.presentationPending())
 	    this->d->lodPointQualityPhase.completeCalibration();
-	    this->d->applyAdmissionEvidenceAction(
-	        BObolLodAdmissionPlanner::EvidenceAction::RESET_CAPACITY_MEASUREMENT);
-	}
-	this->d->lodStructuralCoverageCostReservation = 0;
+	this->d->applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::RESET_CAPACITY_MEASUREMENT);
+	this->d->lodStructuralRepair.clearCoverageCostReservation();
 	BObolLodStructuralAdmissionEvidence::Inputs inputs;
 	inputs.viewRevision = this->d->lodViewRevision.value();
 	inputs.policyRevision = this->d->lodPolicyRevision.value();
 	inputs.frontierDigest = structuralFrontierDigest;
 	inputs.unresolvedCount = unresolvedStructuralCount;
-	inputs.unaggregatableCount = unaggregatableStructuralCount;
 	inputs.activeCost = activePopulationCost;
 	inputs.currentBudget = this->d->lodAdmissionEvidence.capacity().currentBudget();
 	inputs.certifiedBudget = structuralCertifiedBudget;
 	inputs.exactProjection = exactStructuralProjection;
-	inputs.maximumThreshold =
-	    BObolLodAdmissionPlanner::pointAtMaximumPixelThreshold(
-		this->d->lodPresentationPointProxyPixelThreshold);
+	inputs.pointPolicyExhausted = pointPolicyExhausted;
 	const BObolLodAdmissionPlan structuralPlan =
 	    BObolLodAdmissionPlanner::planStructural(
 		this->d->lodAdmissionEvidence, this->d->lodAdmissionCursor, inputs);
@@ -1435,8 +1525,6 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	this->d->lodSubmissionEntryOffset = 0;
 	this->d->clearLodSubmissionPlan();
 	this->d->lodSubmissionPass.clearRescan();
-	this->d->lodSubmissionDeltaSources.clear();
-	this->d->lodSubmissionDeltaPlans.clear();
 	/* The completed framebuffer already performed the exact camera/frustum
 	 * classification.  Route only its visible, uncollapsed structural
 	 * occurrences back to the source loader.  A full compact scan here loads
@@ -1444,29 +1532,21 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	 * the view and can turn a 293-box repair into 47k unnecessary payloads.
 	 * Fall back to the complete scan if any retained identity cannot be mapped;
 	 * incomplete selective repair would violate the no-box terminal contract. */
-	for (auto &repairPlan : structuralRepairPlans) {
-	    this->d->lodSubmissionDeltaSources.push_back(repairPlan.first);
-	    this->d->lodSubmissionDeltaPlans.push_back(
-		std::move(repairPlan));
-	}
+	if (exactStructuralFrontier)
+	    this->d->lodSubmissionDelta.replaceSelectivePlans(
+		std::move(structuralRepairPlans));
+	else
+	    this->d->lodSubmissionDelta.reset();
 	if (getenv("BOBOL_LOD_TRACE_STRUCTURAL_REPAIR"))
 	    bu_log("BObol LoD structural repair frontier boxes=%zu "
 		   "mapped=%zu exact=%d sources=%zu\n",
 		   presentedStructuralBoxes, mappedStructuralEntries,
 		   exactStructuralFrontier ? 1 : 0,
-		   this->d->lodSubmissionDeltaPlans.size());
-	this->d->lodSubmissionDeltaActive =
-	    exactStructuralFrontier ? TRUE : FALSE;
-	if (!exactStructuralFrontier) {
-	    this->d->lodSubmissionDeltaSources.clear();
-	    this->d->lodSubmissionDeltaPlans.clear();
-	}
+		   this->d->lodSubmissionDelta.planCount());
 	this->d->lodSubmissionRefreshMissing = TRUE;
 	this->d->lodSubmissionReset = 0;
-	this->d->lodStructuralPresentationRepairPending = TRUE;
-	this->d->lodStructuralRepairFrontierCount =
-	    presentedStructuralBoxes - terminalOccurrenceFailures;
-	this->d->lodStructuralCoverageCostReservation = 0;
+	this->d->lodStructuralRepair.begin(
+	    presentedStructuralBoxes - terminalOccurrenceFailures);
 	/* This accumulator belongs to the newly closed repair transaction.  A
 	 * prior coverage/demand pass may have exhausted its budget while the
 	 * renderer was still classifying boxes; carrying that debt into this exact
@@ -1521,7 +1601,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
     const bool stableTerminalContext = this->d->lodAutoSubmit &&
 	this->d->lodService && !this->d->lodInteractionSession.active() &&
 	!this->d->lodInteractionSession.gestureActive() && defaultQualityScale &&
-	!this->d->lodUseForcedCut &&
+	!this->d->lodForcedCut &&
 	this->d->lodCoveragePolicy.coverageComplete() &&
 	activePayloads > 0 && memoryLimitedPayloads == 0 &&
 	!this->d->lodSubmissionPass.active() &&
@@ -1555,7 +1635,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	       this->d->lodPresentationTransaction.barrierPending() ? 1 : 0,
 	       this->d->lodRetainedRefinementPending ? 1 : 0,
 	       this->d->lodPresentationPolicy.handoffPending() ? 1 : 0,
-	       this->d->lodPointQualityPhase.calibrationPending() ? 1 : 0,
+	       this->d->lodPointQualityPhase.presentationPending() ? 1 : 0,
 	       this->d->lodPointQualityPhase.triangleRecoveryPending() ? 1 : 0,
 	       this->d->lodInteractiveProgressiveCeiling,
 	       this->d->lodAvailabilityLedger.resultsPending(), activeTasks, queuedResults,
@@ -1580,7 +1660,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 		this->d->lodInteractiveProgressiveCeiling,
 		this->d->lodStaticQualityTrial.inProgress(),
 		this->d->lodStaticQualityTrial.capacityRejected(),
-		activePayloads)) {
+		progressivePayloads)) {
 	const std::vector<SoBRLDatabaseSource *> sources =
 	    controller_render_database_source_roots(this);
 	if (!sources.empty()) {
@@ -1632,9 +1712,9 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
      * domain.  It may seed a later return to this exact view, but the live
      * allocator and deadline recovery still own admission and correction. */
     if (stableTerminalContext && exactCompletedFrame &&
-	this->d->lodViewSignatureValid) {
+	this->d->lodViewSignature) {
 	BObolLodViewQualityHistory::RememberInputs remembered;
-	remembered.view = this->d->lodViewSignature;
+	remembered.view = *this->d->lodViewSignature;
 	remembered.domainRevision =
 	    this->d->lodViewQualityDomainRevision;
 	remembered.sceneAvailable = viewLodState && activePayloads > 0;
@@ -1771,7 +1851,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
      * prefix with the occurrence-local plan.  Keep the ordinal staircase only
      * for its valid domain: one progressive payload. */
     const bool staticOverscanEligible = BObolLodAdmissionPlanner::
-	staticOrdinalOverscanApplicable(activePayloads) &&
+	staticOrdinalOverscanApplicable(progressivePayloads) &&
 	stableTerminalContext &&
 	exactCompletedFrame && actionableQualityDebt &&
 	!this->d->lodStaticQualityTrial.blocksNewTrial() &&
@@ -1802,7 +1882,8 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	       this->d->staticQualityPresentationDeadline() / 1000000.0,
 	       preferredQuietNanoseconds / 1000000.0);
     if (staticOverscanEligible) {
-	this->d->lodStaticQualityTrial.begin();
+	this->d->lodStaticQualityTrial.begin(
+	    this->d->lodPresentationPointProxyPixelThreshold);
 	BObolViewLodState *presentationState =
 	    this->d->viewAttachment->getViewLodState();
 	const int priorCeiling =
@@ -1811,7 +1892,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	    maximumActiveProgressiveCut() : -1;
 	const int baselineCeiling =
 	    BObolLodAdmissionPlanner::staticProgressiveBaselineCeiling(
-		priorCeiling, activeMaximum, activePayloads);
+		priorCeiling, activeMaximum, progressivePayloads);
 	if (baselineCeiling >= 0) {
 	    this->d->lodInteractiveProgressiveCeiling = baselineCeiling;
 	    presentationState->setCadPresentationProgressiveCutCeiling(
@@ -1823,7 +1904,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 		priorCeiling,
 		activeMaximum,
 		this->d->lodPresentationPointProxyPixelThreshold,
-		activePayloads);
+		progressivePayloads);
 	const bool retainAggregatedPresentation =
 	    BObolLodAdmissionPlanner::retainAggregatedPresentation(
 		priorCeiling,
@@ -1968,7 +2049,7 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 	       this->d->lodPresentationTransaction.barrierPending() ? 1 : 0,
 	       this->d->lodRetainedRefinementPending ? 1 : 0,
 	       this->d->lodPresentationPolicy.handoffPending() ? 1 : 0,
-	       this->d->lodPointQualityPhase.calibrationPending() ? 1 : 0,
+	       this->d->lodPointQualityPhase.presentationPending() ? 1 : 0,
 	       this->d->lodPointQualityPhase.triangleRecoveryPending() ? 1 : 0,
 	       this->d->lodInteractiveProgressiveCeiling,
 	       this->d->lodAvailabilityLedger.resultsPending(), activeTasks, queuedResults,
@@ -2003,15 +2084,35 @@ BObolViewController::armStableLodHeadroomProbeIfReady(void)
 }
 
 void
-BObolViewController::resumeLodAfterRetainedRecovery(void)
+BObolViewController::finishLodRetainedRecovery(void)
 {
     if (!this->d->confirmRetainedRecoveryPresentation(true))
 	return;
 
-    /* The recovery ceiling is a one-frame guard, not a fidelity policy.  Its
-     * coherent successor is now visible at the current point/mesh split, so
-     * let measured headroom grow from the retained population in bounded
-     * screen-priority waves. */
+    BObolViewLodState *presentationState = this->d->viewAttachment ?
+	this->d->viewAttachment->getViewLodState() : NULL;
+    const BObolRetainedAllocationResult &allocation =
+	this->d->lodRetainedAllocationCertificate;
+    const bool allocationPresentationReady =
+	this->d->retainedAllocationPresentationRealized(presentationState) &&
+	allocation.certifiedPresentationBudget >=
+	    allocation.selectedPresentationCost;
+    if (allocationPresentationReady) {
+	/* The recovery transaction already installed and presented the complete
+	 * occurrence allocation which fits its certified allowance.  Remaining
+	 * richer demand is quality debt beyond that allowance, not another
+	 * recovery pass.  Re-admitting it here recomputes the scene budget from
+	 * the just-completed frame, invalidates this certificate, and makes a
+	 * large static scene alternate between the same two allocations. */
+	this->d->lodRetainedRefinementPending = FALSE;
+	this->d->lodRetainedRefinementCutAdvanced = FALSE;
+	this->d->lodRetainedRefinementBudgetBlocked = FALSE;
+	return;
+    }
+
+    /* The recovery ceiling is a one-frame guard, not a fidelity policy.  A
+     * changed classifier or population has made the prior allocation stale,
+     * so rebuild it once from the coherent recovered presentation. */
     this->d->lodSubmissionSourceIndex = 0;
     this->d->lodSubmissionEntryOffset = 0;
     this->d->clearLodSubmissionPlan();
@@ -2027,7 +2128,6 @@ BObolViewController::completePointTriangleRecoveryIfReady(void)
 	this->d->lodInteractionSession.active() ||
 	this->d->lodSubmissionPass.active() ||
 	this->d->lodSubmissionPass.rescanPending() ||
-	this->d->lodRetainedRefinementPending ||
 	this->d->lodAdmissionEvidence.capacity().rescanAfterFrame() ||
 	this->d->lodPresentationPolicy.handoffPending() ||
 	this->d->lodPresentationTransaction.barrierPending() ||
@@ -2038,14 +2138,29 @@ BObolViewController::completePointTriangleRecoveryIfReady(void)
 	this->d->viewAttachment->getViewLodState() : NULL;
     const BObolRetainedAllocationResult &recoveryAllocation =
 	this->d->lodRetainedAllocationCertificate;
-    if (presentationState && recoveryAllocation.allocationPlanSerial != 0 &&
-	recoveryAllocation.viewRevision == this->d->lodViewRevision.value() &&
-	recoveryAllocation.policyRevision == this->d->lodPolicyRevision.value() &&
-	presentationState->cadAllocationPlanCoversCurrentPopulation(
-	    recoveryAllocation.allocationPlanSerial,
-	    recoveryAllocation.viewRevision,
-	    recoveryAllocation.policyRevision,
-	    recoveryAllocation.fixedCadPresentationCost))
+    const bool recoveryAllocationCurrent =
+	this->d->retainedAllocationCertificateCurrent(presentationState);
+    if (controller_lod_trace_enabled("BOBOL_LOD_TRACE_POINT",
+	    this->d->lodViewRevision.value())) {
+	static std::atomic<unsigned int> recoveryCompletionTraceCount(0);
+	static constexpr unsigned int recoveryCompletionTraceLimit = 256;
+	const unsigned int traceIndex =
+	    recoveryCompletionTraceCount.fetch_add(1);
+	if (traceIndex < recoveryCompletionTraceLimit)
+	    bu_log("BObol LoD triangle recovery completion retained_pending=%d "
+		   "allocation_current=%d plan=%llu active_plan=%llu\n",
+		   this->d->lodRetainedRefinementPending ? 1 : 0,
+		   recoveryAllocationCurrent ? 1 : 0,
+		   static_cast<unsigned long long>(
+		       recoveryAllocation.allocationPlanSerial),
+		   static_cast<unsigned long long>(presentationState ?
+		       presentationState->activeCadAllocationPlan() : 0));
+    }
+    if (this->d->lodPointQualityPhase.recoveryAdmissionPending(
+	    this->d->lodRetainedRefinementPending != FALSE,
+	    recoveryAllocationCurrent))
+	return FALSE;
+    if (recoveryAllocationCurrent)
 	this->d->lodPointProxyTriangleRecoverySaturatedPlanSerial =
 	    recoveryAllocation.allocationPlanSerial;
 
@@ -2078,10 +2193,10 @@ BObolViewController::completePointTriangleRecoveryIfReady(void)
     if (pointCutChanged && presentationState &&
 	presentationState->hasCadPresentationAssemblies())
 	this->d->lodPointQualityPhase.requestCalibration();
-    if (this->d->lodPointQualityPhase.calibrationPending())
+    if (this->d->lodPointQualityPhase.presentationPending())
 	this->requestRender("lod-stable-point-restore");
     else
-	this->resumeLodAfterRetainedRecovery();
+	this->finishLodRetainedRecovery();
     return TRUE;
 }
 
@@ -2371,6 +2486,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	    exactOccurrenceClassification != FALSE,
 	    presentedSubpixelOccurrences, presentedStructuralBoxes,
 	    this->d->lodInteractiveProgressiveCeiling,
+	    calibrationState ?
+		calibrationState->maximumActiveProgressiveCut() : -1,
 	    this->d->lodPresentationPointProxyPixelThreshold,
 	    activeCalibrationCost) ? TRUE : FALSE;
     if (exactRetainedPopulation) {
@@ -2431,12 +2548,11 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	    frameGpuResources.triangleAtlasSuffixUploadBytes);
     }
     const SbBool geometryUploadChanged = haveFrameGpuResources &&
-	(!this->d->lodLastCadGpuGeometryUploadBytesValid ||
-	 geometryUploadBytes != this->d->lodLastCadGpuGeometryUploadBytes) ?
+	(!this->d->lodLastCadGpuGeometryUploadBytes ||
+	 geometryUploadBytes != *this->d->lodLastCadGpuGeometryUploadBytes) ?
 	    TRUE : FALSE;
     if (haveFrameGpuResources) {
 	this->d->lodLastCadGpuGeometryUploadBytes = geometryUploadBytes;
-	this->d->lodLastCadGpuGeometryUploadBytesValid = TRUE;
     }
     /* Prepared multi-draw replay is one reusable presentation path, but it
      * is not the only one.  OSMesa deliberately uses retained ordinary VBOs;
@@ -2751,7 +2867,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
      * an exact zero-work frame for a CAD work record which cannot exist. */
     SbBool haveCurrentCadSourceTargets = FALSE;
     if (!haveCadPresentationAssemblies &&
-	this->d->lodPointQualityPhase.calibrationPending()) {
+	this->d->lodPointQualityPhase.presentationPending()) {
 	const std::vector<SoBRLDatabaseSource *> currentSources =
 	    controller_render_database_source_roots(this);
 	for (const SoBRLDatabaseSource *source : currentSources) {
@@ -2781,7 +2897,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	!this->d->lodSubmissionPass.active() ? TRUE : FALSE;
     const bool pointCalibrationOwnsCompletedFrame =
 	BObolLodAdmissionPlanner::pointCalibrationOwnsCompletedFrame(
-	    this->d->lodPointQualityPhase.calibrationPending(),
+	    this->d->lodPointQualityPhase.presentationPending(),
 	    this->d->lodAdmissionEvidence.capacity().rescanAfterFrame());
     if (pointCalibrationOwnsCompletedFrame &&
 	noVisibleCadPopulation) {
@@ -2824,6 +2940,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
     }
     if (pointCalibrationOwnsCompletedFrame &&
 	haveCadPresentationAssemblies) {
+	const bool handoffConfirmation =
+	    this->d->lodPointQualityPhase.handoffConfirmationPending();
 	this->d->lodPointQualityPhase.completeCalibration();
 	const long double stableTargetNanoseconds =
 	    this->d->quietAllocationTargetFps() > 0.0f ?
@@ -2872,7 +2990,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	    exactOccurrenceClassification &&
 	    unresolvedStructuralOccurrences == 0 ? TRUE : FALSE;
 	const SbBool startStaticOnePixelTrial =
-	    BObolLodAdmissionPlanner::
+	    !handoffConfirmation && BObolLodAdmissionPlanner::
 		startOnePixelTrialFromSettledPointFrame(
 		    this->d->lodInteractionSession.active(),
 		    exactReusablePointFrame != FALSE,
@@ -2894,6 +3012,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	    this->d->lodPresentationPointProxyPixelThreshold > 1.01f ?
 		TRUE : FALSE;
 	const SbBool acceptSettledOnePixelFrame =
+	    !handoffConfirmation &&
 	    BObolLodAdmissionPlanner::acceptSettledOnePixelFrame(
 		this->d->lodInteractionSession.active(),
 		exactReusablePointFrame != FALSE,
@@ -2930,7 +3049,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	     * witness.  Preserve it while one occurrence-local minimax pass spends
 	     * the capacity extrapolated to the hard deadline.  No point threshold,
 	     * renderer ceiling, resident suffix, or visible cut is reset. */
-	    this->d->lodStaticQualityTrial.begin();
+	    this->d->lodStaticQualityTrial.begin(
+		this->d->lodPresentationPointProxyPixelThreshold);
 	    this->d->lodDiscretePopulationTrialAvailable = TRUE;
 	    const size_t staticQualityBudget =
 		BObolLodQualityPolicy::staticPresentationRenderCostLimit(
@@ -2969,7 +3089,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	     * preceding complete framebuffer visible if this richer classification
 	     * is too expensive; its miss establishes the unsafe side of the point
 	     * bracket without a coarse triangle-allocation round trip. */
-	    this->d->lodStaticQualityTrial.begin();
+	    this->d->lodStaticQualityTrial.begin(
+		this->d->lodPresentationPointProxyPixelThreshold);
 	    this->d->lodDiscretePopulationTrialAvailable = TRUE;
 	    this->d->lodPresentationPointProxyPixelThreshold = 1.0f;
 	    this->d->applyAdmissionEvidenceAction(
@@ -2993,7 +3114,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	 * the point bracket converge while the importance allocator spends the
 	 * retained triangle budget on visible multi-pixel geometry.
 	 */
-	if (!restoredOnePixelCut && reusableStableSample &&
+	if (!handoffConfirmation && !restoredOnePixelCut &&
+	    reusableStableSample &&
 	    !unresolvedStructuralOccurrences &&
 	    BObolLodAdmissionPlanner::shouldRecoverTriangleDetail(
 		reducibleProgressiveDetail != FALSE,
@@ -3066,7 +3188,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	}
 
 	BObolLodPointProxyEvidence::Decision calibration;
-	if (!scheduledTriangleRecovery && !restoredOnePixelCut) {
+	if (!handoffConfirmation && !scheduledTriangleRecovery &&
+	    !restoredOnePixelCut) {
 	    const BObolLodAdmissionPlan calibrationPlan =
 		BObolLodAdmissionPlanner::planPointCompleted(
 		    this->d->lodAdmissionEvidence, this->d->lodAdmissionCursor,
@@ -3090,7 +3213,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 			calibration.threshold);
 	    this->d->lodPointQualityPhase.requestCalibration();
 	    this->requestRender("lod-stable-point-calibration");
-	} else if (!scheduledTriangleRecovery && !restoredOnePixelCut &&
+	} else if (!handoffConfirmation && !scheduledTriangleRecovery &&
+	    !restoredOnePixelCut &&
 	    !reusableStableSample &&
 	    !this->d->lodInteractionSession.active() &&
 	    !this->d->lodInteractionSession.gestureActive() &&
@@ -3127,7 +3251,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	if (!scheduledTriangleRecovery && !restoredOnePixelCut &&
 	    exactRetainedPopulation &&
 	    this->d->lodPresentationPointProxyPixelThreshold <= 1.01f)
-	    this->resumeLodAfterRetainedRecovery();
+	    this->finishLodRetainedRecovery();
     }
 
 	/* A retained-prefix recovery is complete only after its selected cut has
@@ -3224,7 +3348,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	ongoingStableWork ||
 	this->d->lodPresentationTransaction.publicationPending();
     if (BObolLodAdmissionPlanner::pointCalibrationYieldsToStructuralRepair(
-		this->d->lodPointQualityPhase.calibrationPending(),
+		this->d->lodPointQualityPhase.presentationPending(),
 		exactOccurrenceClassification != FALSE,
 		unresolvedStructuralOccurrences,
 		pointCalibrationFutureProducer)) {
@@ -3310,14 +3434,21 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	    const bool currentCapacityAllocation =
 		this->d->retainedAllocationPresentationRealized(
 		    calibrationState);
+	    const bool exactCapacityPopulation =
+		BObolLodAdmissionPlanner::capacitySamplePopulationReady(
+		    haveCadPresentationAssemblies != FALSE,
+		    calibrationState &&
+			calibrationState->lastCadPresentationFrameExact(),
+		    exactOccurrenceClassification != FALSE,
+		    presentedStructuralBoxes, currentCapacityAllocation);
 	    const size_t capacityPresentedCost = currentCapacityAllocation ?
 		calibrationCost : 0;
 	    const bool validCapacitySample =
 		!this->d->lodInteractionSession.active() &&
 		!this->d->lodInteractionSession.gestureActive() &&
-		exactRetainedPopulation && reusableCadWorkSample &&
+		exactCapacityPopulation && reusableCadWorkSample &&
 		!transientStablePublication && !transientStablePreparation &&
-		currentCapacityAllocation && capacityPresentedCost > 0 &&
+		capacityPresentedCost > 0 &&
 		calibrationElapsed > 0;
 	    inputs.presentedCost = validCapacitySample ?
 		capacityPresentedCost : 0;
@@ -3333,7 +3464,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 		bu_log("BObol LoD completed capacity frame phase=%u "
 		       "sample=%d restart=%d valid=%d presented=%zu "
 		       "elapsed_ms=%.3f remaining=%u allocation_current=%d "
-		       "active_cost=%zu selected_cost=%zu exact=%d reusable=%d "
+		       "active_cost=%zu selected_cost=%zu one_pixel=%d "
+		       "exact_capacity=%d reusable=%d "
 		       "publication=%d preparation=%d frame_exact=%d "
 		       "occurrence_exact=%d subpixel=%zu boxes=%zu\n",
 		       static_cast<unsigned int>(capacitySearch.phase()),
@@ -3348,6 +3480,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 		       activeCalibrationCost,
 		       capacityAllocation.selectedPresentationCost,
 		       exactRetainedPopulation ? 1 : 0,
+		       exactCapacityPopulation ? 1 : 0,
 		       reusableCadWorkSample ? 1 : 0,
 		       transientStablePublication ? 1 : 0,
 		       transientStablePreparation ? 1 : 0,

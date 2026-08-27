@@ -58,7 +58,8 @@ presentation_interrupt_deadline_tolerance_ms=5
 scale_50k_process_timeout=600
 scale_150k_process_timeout=900
 
-CACHE_READY_MARKER=".qged-gui-cache-ready-v1"
+CACHE_READY_MARKER_DIRECTORY=".qged-gui-cache-ready-v2"
+LEGACY_CACHE_READY_MARKER=".qged-gui-cache-ready-v1"
 # Retained PoP cuts are deliberately hysteretic: an existing cut may remain
 # visible until its certified projected error exceeds the requested target by
 # this factor.  Validate the physical error certificate, rather than treating
@@ -74,15 +75,30 @@ cache_database_signature()
     printf '%s\n%s\n' "$canonical" "$(stat -c '%d:%i:%s:%Y:%Z' "$canonical")"
 }
 
+cache_ready_marker()
+{
+    local cache="$1"
+    local db="$2"
+    local signature
+    local signature_hash
+    signature="$(cache_database_signature "$db")" || return 1
+    signature_hash="$(printf '%s' "$signature" | sha256sum)" || return 1
+    signature_hash="${signature_hash%% *}"
+    printf '%s/%s/%s\n' "$cache" "$CACHE_READY_MARKER_DIRECTORY" \
+	"$signature_hash"
+}
+
 cache_mark_ready()
 {
     local cache="$1"
     local db="$2"
-    local marker="$cache/$CACHE_READY_MARKER"
+    local marker
+    marker="$(cache_ready_marker "$cache" "$db")" || return 1
+    mkdir -p "$(dirname "$marker")" || return 1
     local temporary
-    temporary="$(mktemp "$cache/.qged-gui-cache-ready.XXXXXX")" || return 1
+    temporary="$(mktemp "${marker}.XXXXXX")" || return 1
     {
-	printf '%s\n' "$CACHE_READY_MARKER"
+	printf '%s\n' "$CACHE_READY_MARKER_DIRECTORY"
 	cache_database_signature "$db"
     } > "$temporary" || {
 	rm -f "$temporary"
@@ -95,12 +111,22 @@ cache_is_ready()
 {
     local cache="$1"
     local db="$2"
-    local marker="$cache/$CACHE_READY_MARKER"
-    [[ -f "$marker" ]] || return 1
+    local marker
+    marker="$(cache_ready_marker "$cache" "$db")" || return 1
     local expected
-    expected="$CACHE_READY_MARKER"$'\n'"$(cache_database_signature "$db")" ||
+    expected="$CACHE_READY_MARKER_DIRECTORY"$'\n'"$(cache_database_signature "$db")" ||
 	return 1
-    [[ "$(<"$marker")" == "$expected" ]]
+    if [[ -f "$marker" && "$(<"$marker")" == "$expected" ]]; then
+	return 0
+    fi
+
+    # Recognize the exact database certified by the former singleton marker.
+    # A successful warm run below writes the per-database form, after which
+    # this compatibility path is no longer involved.
+    marker="$cache/$LEGACY_CACHE_READY_MARKER"
+    expected="$LEGACY_CACHE_READY_MARKER"$'\n'"$(cache_database_signature "$db")" ||
+	return 1
+    [[ -f "$marker" && "$(<"$marker")" == "$expected" ]]
 }
 
 usage()
@@ -399,20 +425,20 @@ write_event_script()
     [[ "$mode" == "wire" ]] && draw_mode=0
     local hierarchy_events=""
     local hierarchy_expand_events=""
-    local first_payload_events=""
+    local first_coverage_events=""
     local background_completion_events=""
 
-    # A cold single, very large BoT can present a coherent global PoP prefix
-    # while its worker persists optional cache pages.  Record that user-visible
-    # milestone separately from the later terminal-idle contract; waiting for
-    # persistence here would turn a background optimization into a synthetic
-    # input stall.
+    # A cold single, very large BoT first presents a globally representative
+    # occupancy payload while its worker constructs spatial PoP pages.  Record
+    # that useful-coverage milestone separately from the first real mesh and
+    # from terminal cache persistence.  Calling the occupancy payload a mesh
+    # hid a 20+ second first-shaded-mesh delay in otherwise passing reports.
     if [[ "$case_name" == "lucy" ]]; then
-	first_payload_events=$(cat <<EOF
+	first_coverage_events=$(cat <<EOF
     {"target": ".", "action": "wait_progressive_payload_ready",
      "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
     {"target": "${canvas_target}", "action": "checkpoint",
-     "arguments": {"name": "${image_dir}/first-payload-ready.png"}},
+	"arguments": {"name": "${image_dir}/first-coverage-ready.png"}},
 EOF
 )
     fi
@@ -606,6 +632,8 @@ EOF
      "arguments": {"commands": ["ae 90 0", "autoview"]}},
     {"target": ".", "action": "wait_progressive_cad_mesh_ready",
      "arguments": {"timeout_ms": ${large_asset_cache_completion_deadline_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/first-cad-mesh-ready.png"}},
 EOF
 )
 	fi
@@ -1033,7 +1061,7 @@ EOF
     {"target": ".", "action": "wait", "arguments": {"ms": 1300}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/ae90-1500ms.png"}},
-${first_payload_events}
+${first_coverage_events}
 ${view_events}
 ${lighting_events}
 ${background_completion_events}
@@ -1085,6 +1113,17 @@ validate_report()
 	    has("lod_control_owner") and
 	    has("lod_control_violation_mask") and
 	    (.lod_control_violation_mask == 0))) and
+	# "View ready" is the faceplate terminal promise.  Validate the actual
+	# retained label text, not merely the controller readiness bit: a usable
+	# framebuffer may coexist with background work and an incomplete bar.
+	(all(.samples[];
+	    (((.lod_progress_label_text // "") |
+	      startswith("View ready")) | not) or
+	    ((.lod_convergence_has_state // false) == true and
+	     (.lod_convergence_terminal // false) == true and
+	     (.lod_convergence_view_ready // false) == true and
+	     (.lod_convergence_background_pending // false) == false and
+	     (.lod_convergence_fraction // 0) >= 1))) and
 	# Results may become owner-thread state immediately before the render
 	# traversal synchronizes their retained presentation.  That transient is
 	# not a displayed fallback frame; the stable/final sample is the
@@ -1249,13 +1288,21 @@ validate_report()
 		    endswith("/background-cache-complete.png")))) as $stable |
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
-		    endswith("/first-payload-ready.png")))) as $first_payload |
-	    ($first_payload != null) and
-	    (($first_payload.active_lod_cad_payloads // 0) >= 1) and
-	    (((($first_payload.active_progressive_cad_faces // 0) > 0) or
-	      (($first_payload.presented_cad_faces // 0) > 0) or
-	      (($first_payload.presented_cad_lines // 0) > 0))) and
-	    (($first_payload.visible_structural_fallback_boxes // 0) == 0) and
+		    endswith("/first-coverage-ready.png")))) as $first_coverage |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/first-cad-mesh-ready.png")))) as $first_mesh |
+	    ($first_coverage != null) and
+	    (($first_coverage.active_lod_cad_payloads // 0) >= 1) and
+	    (((($first_coverage.active_progressive_cad_faces // 0) > 0) or
+	      (($first_coverage.presented_cad_faces // 0) > 0) or
+	      (($first_coverage.presented_cad_lines // 0) > 0))) and
+	    (($first_coverage.visible_structural_fallback_boxes // 0) == 0) and
+	    ($first_mesh != null) and
+	    (($first_mesh.active_progressive_cad_faces // 0) > 0) and
+	    (if $mode == "shaded" then
+		(($first_mesh.presented_cad_faces // 0) > 0)
+	     else (($first_mesh.presented_cad_lines // 0) > 0) end) and
 	    (.samples[-1].compact_lod_entries // 0) >= 1 and
 	    (.samples[-1].compact_lod_entries_with_payload // 0) >= 1 and
 	    (.samples[-1].active_lod_cad_payloads // 0) >= 1 and
@@ -1279,8 +1326,7 @@ validate_report()
 		    true
 		 else
 		    (($stable.lod_max_cad_normalized_error //
-			9223372036854775807) <=
-			(($stable.lod_target_pixel_error // 1) * 1.251))
+			9223372036854775807) <= 1.251)
 		 end)
 	     else true end)
 	    ' "$report" >>"$validation" 2>&1; then
@@ -1292,13 +1338,13 @@ validate_report()
 	    --argjson deadline "$lucy_cold_payload_deadline_ms" '
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
-		    endswith("/first-payload-ready.png")))) as $first_payload |
-	    ($first_payload != null) and
-	    (($first_payload.elapsed_ms // 9223372036854775807) <= $deadline) and
-	    (($first_payload.active_lod_cad_payloads // 0) >= 1) and
-	    (($first_payload.visible_structural_fallback_boxes // 0) == 0)
+		    endswith("/first-coverage-ready.png")))) as $first_coverage |
+	    ($first_coverage != null) and
+	    (($first_coverage.elapsed_ms // 9223372036854775807) <= $deadline) and
+	    (($first_coverage.active_lod_cad_payloads // 0) >= 1) and
+	    (($first_coverage.visible_structural_fallback_boxes // 0) == 0)
 	    ' "$report" >>"$validation" 2>&1; then
-	    printf 'cold Lucy did not publish globally covered mesh content by %s ms\n' \
+	    printf 'cold Lucy did not publish globally representative coverage by %s ms\n' \
 		"$lucy_cold_payload_deadline_ms" >>"$validation"
 	    return 1
 	fi
@@ -1360,7 +1406,7 @@ validate_report()
 		 else
 		    (.lod_cad_quality_floor_violations // 0) == 0 and
 		    (.lod_max_cad_normalized_error // 9223372036854775807) <=
-			((.lod_target_pixel_error // 1) * 1.251)
+			1.251
 		 end))
 	    ' "$report" >>"$validation" 2>&1; then
 	    printf 'Hubble visual-importance allocator left a prominent quiet-view quality deficit\n' \
@@ -2376,7 +2422,19 @@ validate_report()
 		  9223372036854775807) <=
 	       (($held.presentation_deadline_current_ms // 0) +
 		$presentation_interrupt_deadline_tolerance_ms)))) and
-	    (($motion.last_render_ms // 9223372036854775807) <= 250) and
+	    # An interrupted motion frame does not replace last_render_ms; that
+	    # field continues to describe the preceding completed static frame.
+	    # Accept interruption only when no later frame completed and the
+	    # interruption itself met the active presentation deadline.
+	    ((($motion.last_render_ms // 9223372036854775807) <= 250) or
+	     ((($motion.render_completion_serial // -1) ==
+	       ($held.render_completion_serial // -2)) and
+	      (($motion.presentation_interrupted_frames // 0) >
+	       ($held.presentation_interrupted_frames // 0)) and
+	      (($motion.presentation_last_interrupted_ms //
+		  9223372036854775807) <=
+	       (($motion.presentation_deadline_current_ms // 0) +
+		$presentation_interrupt_deadline_tolerance_ms)))) and
 	    (if .backend == "system_gl" then
 		(if $expected_visited_assets > 0 then
 		    (($motion.active_lod_cad_payloads // 0) >=
@@ -3372,7 +3430,7 @@ for case_name in "${cases[@]}"; do
 		    cache="$warm_cache"
 		    if ! cache_is_ready "$cache" "$db"; then
 			echo "ERROR: --warm-cache has no validated completion marker for $db" >&2
-			echo "Run the cold/warm pair once; a successful cold run writes $CACHE_READY_MARKER." >&2
+			echo "Run the cold/warm pair once; a successful cold run writes a certificate under $CACHE_READY_MARKER_DIRECTORY." >&2
 			failures=$((failures + 1))
 			continue
 		    fi
@@ -3381,6 +3439,10 @@ for case_name in "${cases[@]}"; do
 			    "$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
 			validate_autoview_camera_contract "$case_name" "$backend" \
 			    "$mode" "$swap" "warm" || failures=$((failures + 1))
+			cache_mark_ready "$cache" "$db" || {
+			    echo "ERROR: could not update validated cache certificate: $cache" >&2
+			    failures=$((failures + 1))
+			}
 		    else
 			failures=$((failures + 1))
 		    fi

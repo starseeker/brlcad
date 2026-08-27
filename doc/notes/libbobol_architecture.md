@@ -403,6 +403,12 @@ models cover three control seams that have produced real failures:
   new publication and cannot mark the cache complete, and only final complete
   geometry may retire coverage.  It is a control-plane guard; retained-page
   tests and graphical qualification remain the data-plane evidence.
+- `ObolActiveProducerDemand.tla`: the stable-asset/changing-demand seam for a
+  coalesced producer.  It checks that intermediate and final publications are
+  stamped from current demand, an overtaken completion is superseded rather
+  than a provider failure, exact-demand failure state is retired on epoch advance,
+  and finite input reaches either a current presentation or a genuine current
+  terminal failure.
 
 TLC counterexamples must be converted into source-level invariants and focused
 tests.  ASan/UBSan, fake-clock coordinator exploration, graphical event replay,
@@ -427,6 +433,9 @@ java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
 java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
   -config doc/notes/ObolLiveSpatialPublication.cfg \
   doc/notes/ObolLiveSpatialPublication.tla
+java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
+  -config doc/notes/ObolActiveProducerDemand.cfg \
+  doc/notes/ObolActiveProducerDemand.tla
 ```
 
 ## Change rule

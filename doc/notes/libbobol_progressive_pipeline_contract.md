@@ -1,6 +1,6 @@
 # libBObol progressive-presentation contract
 
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-26
 
 This document is the canonical high-level control contract for progressive CAD
 presentation.  It exists to keep the implementation understandable while it
@@ -97,8 +97,25 @@ independent of success.  `viewReady` means
 distinguish exact pixel-justified readiness from a proven resource limit.  An
 error must never masquerade as readiness.  Background cache construction and
 persistence are reported separately and may continue after a terminal visible
-presentation.  A successful terminal scene contains no structural boxes.  A
-constrained scene may use a truthful aggregate or certified coarse mesh, but
+presentation.  A successful terminal scene contains no structural boxes.
+
+The retained HUD is an observer of this snapshot and may never retain a
+stronger claim across a state transition.  `View ready` is permitted only when
+`hasLodState && terminal && viewReady && !backgroundPending && fraction == 1`.
+Input handlers publish the inexpensive label/bar transition synchronously when
+they begin or end a view interaction; geometry rendering remains independently
+queued and coalescible.  A stale terminal label beside an active controller is
+therefore a contract violation, even if the following paint would correct it.
+
+Provider-memory evidence constrains availability, not view demand.  For its
+exact resident-admission revision, a denial prevents an allocation from naming
+an unavailable suffix, but it does not invalidate or block a same-or-coarser
+resident presentation.  The allocator retains the unconstrained pixel-demand
+cost in its certificate and includes the admission revision in semantic plan
+identity, so a capacity-release edge reopens planning without a special
+workload path.
+
+A constrained scene may use a truthful aggregate or certified coarse mesh, but
 not an unresolved structural fallback.
 
 Every active state identifies one witness from this finite set:
@@ -175,13 +192,26 @@ semantic inventory or durable cache identity.
 Frame capacity is learned by one bounded search certificate for a frozen
 population and revision tuple.  Each candidate is a complete scene-wide,
 visual-importance-ordered allocation, not an independently promoted object.
+A candidate is not eligible for measurement until every progressive
+occurrence stores the cut assigned by that exact allocation certificate and
+any renderer-wide ceiling is either removed or proven inert at or above every
+active cut.  A pass which changes those occurrence cuts may complete this
+handoff; requiring a mechanically unchanged successor would strand the search
+behind the obsolete ceiling.  Equal aggregate cost is not an identity proof
+for a multi-occurrence allocation because a different visual distribution may
+have the same total.  An applied allocation hidden by an effective ceiling may
+arm the candidate's sample-frame latch, but only its exact ceiling-free
+successor may consume a sample.  Invalid or differently constrained frames do
+not consume the candidate's bounded sample allowance.
 A completed measurement either consumes one of a fixed number of samples for
 that candidate or strictly narrows a known-safe/known-unsafe bracket.  A
 terminal search publishes one capacity certificate and cannot reopen without a
 new population or revision.  Throughput smoothing may propose a candidate; an
 EMA change, timer, or repaint is not evidence and cannot itself advance the
 capacity revision.  Search work is bounded by the candidate bracket, not scene
-cardinality or elapsed wall time.  `ObolCapacitySearch.tla` models this owner.
+cardinality or elapsed wall time.  `ObolCapacitySearch.tla` models this owner;
+`ObolCapacityPresentationHandoff.tla` models the allocation-application,
+ceiling-reconciliation, and exact-sample ordering boundary.
 
 An interrupted presentation has exactly one successor owner.  Strict progress
 on the same finite presentation transaction takes priority; otherwise an
@@ -347,6 +377,14 @@ exclusive progress is a sum type, not several independently set latches.  In
 particular, submission pass, retained allocation, publication handoff,
 point-proxy trial, static-quality trial, and interaction handoff must each
 have one typed owner and one explicit lifecycle.
+
+The retained occurrence-allocation request is one concrete application of
+this rule.  It is a finite value with `NONE`, preserve-budget,
+recompute-budget, and presentation-reconciliation alternatives.  Only the
+last alternative carries a reconciliation budget.  A weaker request cannot
+overwrite that completed-frame proof, and resetting the request cannot leave
+an orphaned budget.  Reintroducing separate pending, preserve, or budget
+fields would recreate invalid states and is prohibited.
 
 The following are not additional control states:
 
@@ -550,16 +588,56 @@ pure completed-pass successor now gives active drain completion precedence,
 then yields to pending resident growth, and permits capacity calibration only
 when availability has no claim on the population.
 
+The 2026-08-26 50k replay found the same ownership error at the next boundary.
+A finite point-to-triangle recovery allocation could cover the complete
+occurrence population while deliberately leaving richer pixel-target demand.
+The residual quality annotation was treated as unfinished recovery admission,
+and ordinary capacity calibration repeatedly reopened the same all-scene pass.
+Recovery now owns capacity after any resident-growth transaction retires.
+Residual quality debt is terminal for that recovery only when the current
+allocation certificate covers the current population; otherwise admission
+continues.  Ordinary capacity search cannot start until the recovery has
+either presented its changed cut or retired its proven no-op plan.
+
 `ObolResidentGrowth.tla` is the focused liveness model for that transaction.
 It includes an ordinary capacity-blocked cursor at the growth edge and proves
 that capacity cannot restart after resident growth becomes pending.  TLC
 checked 155 generated / 119 distinct states to depth 19 with no error.
-`ObolPointQualityOwnership.tla` additionally models a recovery frame whose
-callback is consumed by a stronger owner: the presented evidence retains a
-level-triggered pump successor and eventually retires.  These models establish
-transition composition and liveness, not elapsed time or visual quality; the
-50k OSMesa, 150k OSMesa, and Lucy System GL graphical rows remain the runtime
-authorities.
+`ObolPointQualityOwnership.tla` additionally distinguishes adaptive point-cut
+calibration, handoff confirmation of an already chosen cut, and retained
+triangle recovery.  A recovery frame whose callback is consumed by a stronger
+owner retains a level-triggered pump successor and eventually retires.  The
+model also covers certified no-op/residual-debt recovery, a point request which
+arrives while one finite capacity search drains, atomic rejection of a
+one-pixel static trial back to its retained threshold, and replacement of an
+adaptive frame by handoff confirmation.  Point recovery and ordinary capacity
+calibration remain mutually exclusive.  TLC checked 29 generated / 17 distinct
+states to depth 5 with no error.  These models establish transition composition
+and liveness, not elapsed time or visual quality; the 50k OSMesa, 150k OSMesa,
+and Lucy renderer rows remain the runtime authorities.
+
+`ObolStructuralFrontierOwnership.tla` refines the adjacent renderer-owned
+frontier which the point-quality model intentionally did not represent.  An
+exact completed frame containing non-terminal structural fallbacks must own
+one of two finite successors: another point-distribution frame while its
+threshold search can still reduce the frontier, or bounded mesh repair after
+that policy is exhausted.  An ownerless nonempty frontier is therefore an
+enabled planning obligation, never a terminal or merely diagnostic state.
+TLC checked all 30 distinct states to depth 14 for successor availability,
+owner/frontier compatibility, no premature readiness, and eventual readiness.
+The production abstraction mapping is
+`BObolLodControl::Inputs::structuralFrontier`,
+`pointSuccessorRequiredForStructuralFrontier`, and the exact structural
+histogram branch in `completeRenderTiming()`.  The executable refinement is
+the coordinator truth table plus the Lucy, 50k, and 150k OSMesa matrices.
+
+Camera-frame reuse is owned by the typed interaction session through its
+release debounce.  Button release is not a demand, capacity, or presentation
+event and may not disable reuse or start exact view classification itself.
+The quiet-successor transition performs that handoff after the finite debounce
+and then schedules exact classification and refinement.  This preserves the
+last complete responsive framebuffer while keeping the terminal exact-view
+contract unchanged.
 
 ## Counterexample classification protocol
 
@@ -767,14 +845,56 @@ bracket reduction, non-repetition of measured candidates, at most one goal
 transition, single terminal certificate publication, and eventual completion
 for a frozen tuple.
 
+`ObolCapacityPresentationHandoff.tla` isolates the exact-presentation boundary
+in front of that search.  On 2026-08-26 TLC explored 178 generated / 138
+distinct states to depth 9 with no invariant or liveness error.  It covers
+changed and already-applied occurrence plans, effective and inert global
+ceilings, and an applied occurrence allocation whose protected population
+exceeds its own certified budget.  It also models an initially unavailable
+assignment and requires availability restriction before the cut can be
+applied.  It proves that pre-handoff frames cannot
+consume a sample, an effective ceiling is removed before measurement, and the
+over-budget state has one finite owner: local representation reduction followed
+by either an exact sampled certificate or an explicit bounded constraint.  The
+executable mapping is `claimOverBudgetAllocation`,
+`capacitySampleRequiresCeilingFreeHandoff`,
+`cadAllocationPlanCutsApplied`, and `capacitySamplePopulationReady`; the
+focused coordinator/update-action tests and the 50k/multi-Lucy renderer
+replays are the refinement evidence.
+
+A presentation-required handoff retains the recovery budget computed from the
+interrupted richer frame even when its corrected renderer frame completes just
+beyond the endpoint timer and therefore supplies no new safe extrapolation.
+The model's over-budget handoff state represents this persistent evidence: it
+may transition only through local reduction or bounded constraint publication,
+never by reclassifying the unchanged population as fitting.  The executable
+mapping is `BObolLodPresentationPolicy::noteFramePresented`; the focused
+timer-edge test and Lucy OSMesa wire zoom lifecycle are the refinement evidence.
+
 `ObolPointQualityOwnership.tla` refines the high-level quality obligation into
-the mutually exclusive calibration and triangle-recovery phases.  TLC explored
-6 generated / 5 distinct states to depth 4.  It proves that each active phase
-has its required frame or producer witness, recovery cannot coexist with
-calibration, and finite work reaches a quiescent terminal state.  The focused
-C++ test additionally checks the production effect which schedules a frame
-when a completed recovery pass changed its cut.  These focused models do not
-prove timing classification, allocation quality, or renderer performance.
+mutually exclusive adaptive calibration, handoff confirmation, and triangle-
+recovery phases.  TLC explored 29 generated / 17 distinct states to depth 5.
+It proves that each active phase has its required frame or producer witness,
+an already-active capacity search drains before a waiting point frame,
+confirmation cannot enter adaptive recovery logic, rejected one-pixel trials
+restore their retained baseline, recovery cannot coexist with calibration,
+and finite work reaches a quiescent terminal state.  The focused C++ tests
+also check the production effects which schedule the point successor after a
+completed allocation pass and the recovery frame after a changed recovery
+pass.  These focused models do not prove timing classification, allocation
+quality, or renderer performance.
+
+The executable timing refinement must preserve the same distinction.  The
+broad `presentationPending` predicate means either an adaptive census or a
+confirmation frame is outstanding; only `adaptiveCalibrationPending` may
+authorize the finite 400 ms point-census allowance.  Confirmation is an
+already-selected presentation handoff and obeys the independently selected
+quiet/static-quality deadline without receiving the census extension merely
+because it is point work.
+Software raster calls are subdivided into 8K-triangle cancellation units so
+that the host can enforce that deadline without exposing a partial frame.
+This data-plane bound is established by perf and graphical response tests,
+not by the TLA+ model.
 
 The formal argument is compositional: `ObolProgressivePipeline.tla` defines the
 only high-level event and ledger grammar; each focused model refines one of its

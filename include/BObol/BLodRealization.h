@@ -73,7 +73,10 @@ enum BObolLodProviderStatus {
     BOBOL_LOD_PROVIDER_TERMINAL = 5,
     BOBOL_LOD_PROVIDER_FALLBACK = 6,
     BOBOL_LOD_PROVIDER_ERROR = 7,
-    BOBOL_LOD_PROVIDER_CANCELLED = 8
+    BOBOL_LOD_PROVIDER_CANCELLED = 8,
+    /* Valid work which no longer satisfies the service-owned active demand.
+     * This is a scheduling outcome, not a source/cache failure. */
+    BOBOL_LOD_PROVIDER_SUPERSEDED = 9
 };
 
 enum BObolLodGeometryHandleKind {
@@ -537,6 +540,8 @@ struct BOBOL_EXPORT BObolLodResult {
     double estimatedError;
     SbBool terminal;
     SbBool fallback;
+    /* Diagnostic compatibility flag for an unusable/outdated result.  Use
+     * providerStatus to distinguish invalid source data from superseded work. */
     SbBool stale;
     SbBool hasSnappedPoints;
     SbBool hasNormals;

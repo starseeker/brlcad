@@ -38,6 +38,17 @@ The source owner thread updates only the affected shared part set.  A producer
 worker builds `PartGeometry` off thread and publishes an immutable result; it
 never touches a Coin node.
 
+Camera and policy epochs are presentation demand, not immutable asset identity.
+One coalesced cold producer therefore retains the newest demand for its stable
+asset key.  Each live-page publication refreshes that demand before stamping
+the result, and the completed hierarchy refreshes once more before selecting
+visible pages.  The service validates the completion against the same retained
+demand.  A camera change after that final refresh makes the result genuinely
+superseded and schedules a cheap resident-hierarchy successor; it must not
+relabel a current result merely because the task originally began under an older
+camera.  Exact-demand terminal failures are discarded when their view or
+policy epoch advances because they can no longer suppress any valid request.
+
 ## Producer contract
 
 After the serialized stream has been partitioned, a page becomes live only
@@ -183,3 +194,27 @@ box-free terminal presentation, zoom-out compaction, and exact-view history
 restoration.  The corresponding OSMesa replay remained correct and box-free,
 but exposed a separate software-throughput quality-floor limit; it is not
 release evidence for the OSMesa visual-quality row.
+
+On 2026-08-26 the true-cold OSMesa lifecycle additionally proved the
+demand-rebinding boundary: coverage survived three wheel revisions, the final
+hierarchy published a real mesh after an `ae 90 0`/`autoview` change, and the
+complete cold matrix passed in 76 seconds.  The certified-warm replay passed in
+77 seconds.  Before the fix, page geometry and the final hierarchy were stamped
+with the launch request; the controller correctly rejected them and the view
+fell back to coverage indefinitely.  A first partial fix updated the provider
+result but the generic service validator still compared it to the launch
+request and manufactured a terminal `STALE` failure.  Keep provider refresh,
+service validation, and exact-demand failure lifetime as one contract.
+Service normalization reports an overtaken completion as
+`BOBOL_LOD_PROVIDER_SUPERSEDED`; `BOBOL_LOD_PROVIDER_STALE` remains reserved
+for invalid cache/source state.  Only the latter may enter the occurrence
+failure map.
+
+`ObolActiveProducerDemand.tla` isolates that changing-demand boundary from the
+page-publication protocol.  On 2026-08-26 TLC checked 678 generated / 340
+distinct states to depth 12, including temporal properties, with no error.  It
+proves within the bounded model that an immutable asset producer may outlive
+its launch demand, publications bind to current demand, an overtaken result is
+superseded rather than a provider failure, exact-demand failure state does not
+survive an epoch change, and finite closed input reaches a current
+presentation or a genuine current terminal failure.

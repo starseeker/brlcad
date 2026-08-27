@@ -791,6 +791,73 @@ progressive pump retire it idempotently when stronger barriers clear.  A typed
 obligation must always name a producer, a pending frame, or a level-triggered
 completion witness.
 
+### Coalesced asset work and view demand have different lifetimes
+
+A cold Lucy hierarchy continued correctly across camera changes, but its live
+pages and final result carried the request captured when construction began.
+The controller rejected those results, leaving only coverage.  Updating the
+provider stamp alone exposed the inverse error: the generic service validator
+compared the current result with the launch request and converted it into a
+terminal `STALE` result.  Old exact-demand failures then survived later policy
+epochs and could falsely terminate an otherwise healthy warm view.
+
+Rule: immutable asset production owns a stable asset key; page selection and
+result routing own the latest view/policy demand.  The producer must refresh
+demand immediately before view-dependent selection, and the service must
+validate against that same retained demand.  A later camera change may reject
+the completion but may not turn it into a current-demand provider failure.
+Failure suppression is exact-demand state and is discarded when its view or
+policy epoch advances.  Test the full sequence—launch, multiple demand changes,
+intermediate publication, final completion, normalization, owner-thread apply,
+and a subsequent warm refinement—not only the provider callback.
+
+Do not overload source validity with scheduling currency.  A stale cache or
+changed source metric is a provider failure for an exact demand; a valid result
+overtaken by newer demand is `SUPERSEDED` and is simply discarded.  Using one
+status for both made normal camera timing capable of terminating convergence.
+
+### Thread cleanup must retain registry entries through callbacks
+
+The source-realization shutdown contract test exposed two independent races on
+2026-08-26.  First, a job published its terminal state before retiring its final
+active-work and working-set accounting.  Under concurrent execution this made a
+terminal constrained request coexist with one stale active item.  Terminal is
+now the source coordinator's commit point: active accounting is retired before
+the release-store which publishes completion.
+
+A rarer process-exit crash remained.  Concurrent stress observed three raw
+segfaults in 800 pre-fix executions and one in 1,600 executions after the
+coordinator ordering fix.  Two debugger captures produced the same main-thread
+stack while a realization worker was deliberately still inside its shutdown
+cache callback:
+
+```text
+___pthread_mutex_lock(invalid cc_storage mutex)
+cc_mutex_lock
+CoinInternal::StorageRegistry::cleanupThread
+CoinInternal::ThreadCleanupTrigger::~ThreadCleanupTrigger
+__call_tls_dtors
+__run_exit_handlers
+```
+
+At the captured failure, the worker threads and coordinator were still alive;
+the main thread was running Obol's thread-local cleanup.  Obol's
+`StorageRegistry::cleanupThread()` had snapshotted raw `cc_storage *` entries,
+released the registry lock, and then invoked arbitrary storage destructors.
+Such a callback can unregister and destroy another snapshotted storage before
+the later raw pointer is visited.  Snapshotting prevents a registry-lock
+deadlock but does not provide object lifetime.  The durable contract is that a
+cleanup traversal must pin every entry it may dereference, or serialize entry
+destruction with a reentrant registry lifetime lock.  Exception suppression
+cannot make dereferencing a freed entry safe.
+
+The original crash report at
+`.build/src/libBObol/tests/test_bobol_source_realization-29-bomb.log` is older
+and records a distinct `db_clone_dbi` failure; do not conflate it with the two
+identical Obol TLS-cleanup stacks above.  Recheck current upstream Obol before
+implementing the storage-lifetime repair, then retain a focused thread-exit
+regression in Obol and the active-callback process-exit regression in libBObol.
+
 - Run actual graphical clients.  Headless scene assertions cannot detect GL
   flashes, camera jumps, wrong lighting, mouse-coordinate errors, or retained
   stale pixels.

@@ -330,6 +330,11 @@ public:
     size_t cadOccurrenceTerminalFailureCount(void) const;
     size_t cadOccurrenceTerminalFailureCountForSource(
 	const SoBRLDatabaseSource *source) const;
+    /* Failure suppression is exact-demand state.  Once the owning view or
+     * policy epoch advances, no retained entry can match a new request and
+     * keeping it would both grow stale bookkeeping and falsely report a
+     * terminal error for the new demand. */
+    void clearCadOccurrenceTerminalFailures(void);
     /* Change only a view-local PoP cut.  No source/cache work is performed;
      * the call succeeds only when the retained progressive asset already
      * contains the requested prefix. */
@@ -386,6 +391,11 @@ public:
     SbBool cadAllocationPlanCoversCurrentPopulation(
 	uint64_t planSerial, uint64_t viewRevision,
 	uint64_t policyRevision, size_t fixedCadPresentationCost) const;
+    /** TRUE when the current population certificate is valid and every
+     * progressive occurrence stores the active cut assigned by that plan. */
+    SbBool cadAllocationPlanCutsApplied(
+	uint64_t planSerial, uint64_t viewRevision,
+	uint64_t policyRevision, size_t fixedCadPresentationCost) const;
     /* Remove one view-local display binding while retaining its shared asset.
      * The source occurrence's structural fallback becomes visible again.
      * Used by scene-budget/frustum admission when an insignificant occurrence
@@ -402,6 +412,10 @@ public:
     size_t cadPayloadCountForSource(
 	const SoBRLDatabaseSource *source) const;
     size_t cadMeshPayloadCount(void) const;
+    /** Return the number of CAD mesh payloads backed by a progressive mesh.
+     * Full-detail siblings remain part of cadMeshPayloadCount(), but they do
+     * not make a renderer-wide PoP cut a multi-occurrence policy. */
+    size_t cadProgressivePayloadCount(void) const;
     /** True when at least one CAD payload has a view-refinable progressive
      * mesh.  A structural or sampled cold preview is useful presentation,
      * but it does not satisfy tests or clients which require PoP refinement. */
@@ -693,6 +707,7 @@ private:
      * made nominally cheap HUD and scene-budget queries O(scene size). */
     size_t cadValidPayloadCount;
     size_t cadMeshPayloadCountValue;
+    size_t cadProgressivePayloadCountValue;
     size_t cadLayeredProgressivePayloadCount;
     std::unordered_map<std::string, size_t> cadMeshPayloadCountsBySource;
     std::unordered_map<std::string,
@@ -738,6 +753,8 @@ private:
     uint64_t cadCertifiedAllocationViewRevision;
     uint64_t cadCertifiedAllocationPolicyRevision;
     size_t cadCertifiedFixedPresentationCost;
+    size_t cadStagedAllocationMismatchCount;
+    size_t cadActiveAllocationMismatchCount;
     void clearCadPayloadMetrics(void);
     void addCadPayloadMetrics(const CadPayload *payload);
     void removeCadPayloadMetrics(const CadPayload *payload);

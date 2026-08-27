@@ -141,6 +141,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	struct ged_view_context *sampleViewContext =
 	    ged_view_context_from_bv(view->viewContext());
 	if (sampleViewContext) {
+	    static const char lodProgressLabelName[] =
+		"_faceplate/lod_progress_label";
 	    sample.insert(QStringLiteral("lod_progress_track_present"),
 		ged_view_feature_exists(sampleViewContext,
 		    "_faceplate/lod_progress_track") != 0);
@@ -149,7 +151,19 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		    "_faceplate/lod_progress_fill") != 0);
 	    sample.insert(QStringLiteral("lod_progress_label_present"),
 		ged_view_feature_exists(sampleViewContext,
-		    "_faceplate/lod_progress_label") != 0);
+		    lodProgressLabelName) != 0);
+	    if (ged_view_feature_label_count(
+		    sampleViewContext, lodProgressLabelName) > 0) {
+		struct bu_vls labelText = BU_VLS_INIT_ZERO;
+		point_t labelPoint = VINIT_ZERO;
+		unsigned char labelColor[3] = {0, 0, 0};
+		if (ged_view_feature_label_copy(sampleViewContext,
+			lodProgressLabelName, 0, &labelText, labelPoint,
+			labelColor))
+		    sample.insert(QStringLiteral("lod_progress_label_text"),
+			QString::fromUtf8(bu_vls_addr(&labelText)));
+		bu_vls_free(&labelText);
+	    }
 	    const struct bv *sampleBv = bv_context_view_const(
 		ged_view_context_bv_const(sampleViewContext));
 	    struct bv_interactive_rect_state rect;
@@ -662,6 +676,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	convergence.terminalError ? true : false);
     sample.insert(QStringLiteral("lod_convergence_view_ready"),
 	convergence.viewReady ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_has_state"),
+	convergence.hasLodState ? true : false);
     sample.insert(QStringLiteral("lod_convergence_background_pending"),
 	convergence.backgroundPending ? true : false);
     sample.insert(QStringLiteral("lod_convergence_performance_limited"),
@@ -1100,7 +1116,12 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		const double projectedError =
 		    payload->progressiveMesh->projectedErrorAtCut(
 			presentationCut, diameter);
-		const double target = std::max(1.0,
+		/* Fractional pixel targets are part of the terminal view contract.
+		 * Clamping them to one pixel made this supposedly normalized value a
+		 * projected-error alias, hid missed quarter-pixel requests, and led test
+		 * callers to compare incompatible units. */
+		const double target = std::max(
+		    static_cast<double>(std::numeric_limits<float>::min()),
 		    static_cast<double>(payload->targetPixelError));
 		const double normalizedError = projectedError / target;
 		const bool prominent = footprint >=

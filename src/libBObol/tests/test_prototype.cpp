@@ -3811,14 +3811,16 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(mesh->lodProxyHalfExtents.getValue()[1], 1.0f))
 	FAIL("mesh shape should consume staged LoD proxy results");
 
-    BObolLodResult staleResult = stagedResult;
-    staleResult.request.viewRevision++;
-    staleResult.cacheKey = bobol_lod_cache_key(staleResult.request);
-    if (mesh->applyStagedLodResult(staleResult, &meshLodRequest) ||
+    BObolLodResult supersededResult = stagedResult;
+    supersededResult.request.viewRevision++;
+    supersededResult.cacheKey = bobol_lod_cache_key(
+	    supersededResult.request);
+    if (mesh->applyStagedLodResult(supersededResult, &meshLodRequest) ||
 	mesh->lodStagedAvailable.getValue() ||
-	mesh->lodProviderStatus.getValue() != BOBOL_LOD_PROVIDER_STALE ||
+	mesh->lodProviderStatus.getValue() !=
+	    BOBOL_LOD_PROVIDER_SUPERSEDED ||
 	mesh->lodAttributeName.getNum() != 0)
-	FAIL("mesh shape should reject stale staged LoD results");
+	FAIL("mesh shape should reject superseded staged LoD results");
 
     mesh->clearStagedLodResult();
     if (mesh->lodStagedAvailable.getValue() ||

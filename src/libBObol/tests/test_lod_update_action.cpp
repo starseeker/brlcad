@@ -24,6 +24,7 @@
 #include "BObol/BViewAttachment.h"
 #include "../cad_assembly_private.h"
 #include "../retained_allocation_private.h"
+#include "../view_lod_coordinator_state_private.h"
 #include "bv.h"
 #include "bu/app.h"
 #include "bu/env.h"
@@ -57,6 +58,116 @@
 #include <string.h>
 #include <thread>
 #include <vector>
+
+static int
+test_submission_delta_value(void)
+{
+    int sourceTokens[2] = {0, 0};
+    SoBRLDatabaseSource *sourceA =
+	reinterpret_cast<SoBRLDatabaseSource *>(&sourceTokens[0]);
+    SoBRLDatabaseSource *sourceB =
+	reinterpret_cast<SoBRLDatabaseSource *>(&sourceTokens[1]);
+    BObolLodSubmissionDelta delta;
+
+    if (delta.active() || delta.targets(sourceA) ||
+	delta.selectiveEntries(sourceA)) {
+	printf("FAIL: initial submission delta state\n");
+	return 1;
+    }
+
+    if (!delta.targetSelective(sourceA, {1, 3}) || !delta.active() ||
+	!delta.targets(sourceA) || delta.planCount() != 1) {
+	printf("FAIL: selective submission delta target\n");
+	return 1;
+    }
+    const std::vector<size_t> *sourceAEntries =
+	delta.selectiveEntries(sourceA);
+    if (!sourceAEntries || *sourceAEntries != std::vector<size_t>({1, 3}) ||
+	delta.targetSelective(sourceA, {5})) {
+	printf("FAIL: duplicate selective submission delta target\n");
+	return 1;
+    }
+
+    if (!delta.target(sourceB) || delta.selectiveEntries(sourceB) ||
+	delta.targetSelective(sourceB, {7})) {
+	printf("FAIL: full submission delta target was narrowed\n");
+	return 1;
+    }
+    delta.targetFull(sourceA);
+    if (!delta.targets(sourceA) || delta.selectiveEntries(sourceA) ||
+	delta.planCount() != 0) {
+	printf("FAIL: selective submission delta did not widen to full\n");
+	return 1;
+    }
+
+    std::vector<BObolLodSubmissionDelta::SourcePlan> replacement;
+    replacement.emplace_back(sourceA, std::vector<size_t>({2}));
+    replacement.emplace_back(sourceA, std::vector<size_t>({4}));
+    replacement.emplace_back(sourceB, std::vector<size_t>({6}));
+    delta.replaceSelectivePlans(std::move(replacement));
+    sourceAEntries = delta.selectiveEntries(sourceA);
+    const std::vector<size_t> *sourceBEntries =
+	delta.selectiveEntries(sourceB);
+    if (!delta.active() || delta.planCount() != 2 ||
+	!sourceAEntries || *sourceAEntries != std::vector<size_t>({2, 4}) ||
+	!sourceBEntries || *sourceBEntries != std::vector<size_t>({6})) {
+	printf("FAIL: replacement submission delta plans\n");
+	return 1;
+    }
+
+    delta.reset();
+    if (delta.active() || delta.planCount() || delta.targets(sourceA) ||
+	delta.targets(sourceB)) {
+	printf("FAIL: reset submission delta state\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_structural_repair_value(void)
+{
+    BObolLodStructuralRepair repair;
+    repair.reserveCoverageCost(9);
+    if (repair.active() || repair.frontierCount() ||
+	repair.coverageCostReservation()) {
+	printf("FAIL: initial structural repair state\n");
+	return 1;
+    }
+
+    repair.begin(7);
+    repair.reserveCoverageCost(11);
+    repair.reserveCoverageCost(13);
+    if (!repair.active() || repair.frontierCount() != 7 ||
+	repair.coverageCostReservation() != 11) {
+	printf("FAIL: structural repair reservation ownership\n");
+	return 1;
+    }
+
+    repair.clearCoverageCostReservation();
+    if (!repair.active() || repair.frontierCount() != 7 ||
+	repair.coverageCostReservation()) {
+	printf("FAIL: structural repair reservation reset\n");
+	return 1;
+    }
+
+    repair.begin(0);
+    if (repair.active() || repair.frontierCount() ||
+	repair.coverageCostReservation()) {
+	printf("FAIL: empty structural repair frontier\n");
+	return 1;
+    }
+
+    repair.begin(5);
+    repair.reserveCoverageCost(17);
+    repair.reset();
+    if (repair.active() || repair.frontierCount() ||
+	repair.coverageCostReservation()) {
+	printf("FAIL: retired structural repair state\n");
+	return 1;
+    }
+    return 0;
+}
 
 static void
 complete_test_hierarchy(struct BObolMeshLodHierarchyInfo &hierarchy)
@@ -10477,6 +10588,28 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	}
     }
 
+    /* A result overtaken by current demand is discarded, not retained as an
+     * occurrence failure.  Otherwise normal view churn can terminate a valid
+     * convergence pass with a timing-dependent error. */
+    if (!ret) {
+	BObolViewLodState supersededState;
+	BObolLodResult supersededResult;
+	supersededResult.request = results[0].request;
+	supersededResult.cacheKey = bobol_lod_cache_key(
+	    supersededResult.request);
+	supersededResult.providerStatus = BOBOL_LOD_PROVIDER_SUPERSEDED;
+	supersededResult.terminal = TRUE;
+	supersededResult.stale = TRUE;
+	supersededResult.diagnostic = "unit-test superseded demand";
+	if (supersededState.applySourceResult(source, supersededResult) ||
+	    supersededState.hasCadOccurrenceTerminalFailure(
+		source, supersededResult.request)) {
+	    printf("FAIL: superseded compact result became a terminal "
+		   "occurrence failure\n");
+	    ret = 1;
+	}
+    }
+
     /* A terminal provider failure must not turn a quiet view into an
      * unbounded submit/result/reject loop.  It covers the occurrence with
      * its structural fallback for this exact demand, while a new view epoch
@@ -11301,6 +11434,116 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				   limitedPayload->residentAdmissionRevision : 0),
 			       (unsigned long long)denialRevision);
 			ret = 1;
+		    }
+		}
+	    }
+
+	    if (!ret) {
+		/* A current memory denial suppresses provider growth, not a
+		 * certified resident allocation.  Even an unchanged allocated cut
+		 * must reach the retained-allocation path so its terminal
+		 * scene-quality witness can close the handoff. */
+		BObolLodResult allocatedLimitedResult = budgetResult;
+		allocatedLimitedResult.request.viewRevision = 81;
+		allocatedLimitedResult.request.policyRevision = 82;
+		allocatedLimitedResult.memoryLimited = TRUE;
+		allocatedLimitedResult.residentAdmissionRevision =
+		    service.residentMeshAdmissionRevision();
+		BObolViewLodState allocatedLimitedState;
+		if (!bindCurrentCompactPopulation(allocatedLimitedResult, 0) ||
+		    !allocatedLimitedState.applySourceResult(
+			source, allocatedLimitedResult)) {
+		    printf("FAIL: allocated memory-limited fixture apply\n");
+		    ret = 1;
+		} else {
+		    const BObolViewLodState::CadPayload *allocatedPayload =
+			allocatedLimitedState.findCadForResult(
+			    allocatedLimitedResult);
+		    std::vector<SoBRLDatabaseSource *> allocationSources(
+			1, source);
+		    BObolRetainedAllocationInputs allocationInputs;
+		    allocationInputs.sources = &allocationSources;
+		    allocationInputs.viewState = &allocatedLimitedState;
+		    allocationInputs.sceneBudget = 1000000;
+		    allocationInputs.maximumMarginalBudget =
+			allocationInputs.sceneBudget;
+		    allocationInputs.viewRevision = 81;
+		    allocationInputs.policyRevision = 82;
+		    allocationInputs.residentAdmissionRevision =
+			service.residentMeshAdmissionRevision();
+		    allocationInputs.pointProxyPixelThreshold = 1.0f;
+		    BObolRetainedAllocationResult allocation;
+		    std::shared_ptr<BObolRetainedAllocationTransaction>
+			allocationTransaction;
+		    const BObolRetainedAllocationStatus allocationStatus =
+			bobol_retained_allocation_advance(
+			    allocationTransaction, allocationInputs, 0,
+			    allocation);
+		    const uint64_t planSerial =
+			allocation.allocationPlanSerial;
+		    if (!allocatedPayload ||
+			allocationStatus != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+			!planSerial ||
+			allocatedLimitedState.currentCadAllocatedCut(
+			    allocatedPayload, 81, 82,
+			    allocatedPayload->drawMode) !=
+				allocatedPayload->activeCut ||
+			allocation.pixelDemandPresentationCost <=
+			    allocation.selectedPresentationCost) {
+			printf("FAIL: memory-limited allocation fixture plan\n");
+			ret = 1;
+		    } else {
+			SoBRLMeshLodSubmitAction applyAllocation;
+			applyAllocation.setService(&service);
+			applyAllocation.setDatabase(
+			    dbip, "db://compact-projected-test", 2026);
+			applyAllocation.setViewInfo(&view);
+			applyAllocation.setViewVolume(&budgetVolume, 1.0f);
+			applyAllocation.setGeneration(
+			    service.beginGeneration());
+			applyAllocation.setRevisions(81, 82);
+			applyAllocation.setViewLodState(
+			    &allocatedLimitedState);
+			applyAllocation.setAllowCutDowngrade(TRUE);
+			applyAllocation.setPreserveMeshCoverage(TRUE);
+			applyAllocation.setRetainedSceneUpgradeCostBudget(0);
+			applyAllocation.setSubmissionTaskLimit(0);
+			applyAllocation.apply(root);
+			allocatedPayload =
+			    allocatedLimitedState.findCadForResult(
+				allocatedLimitedResult);
+			if (!allocatedPayload ||
+			    applyAllocation.getSubmittedTaskCount() != 0 ||
+			    applyAllocation.getPendingRetainedRefinementCount() != 1 ||
+			    applyAllocation.getRefinementBudgetBlockedCount() != 1 ||
+			    applyAllocation.getRetainedQualityLimitedCount() != 1 ||
+			    !allocatedPayload->memoryLimited ||
+			    allocatedPayload->residentAdmissionRevision !=
+				service.residentMeshAdmissionRevision() ||
+			    !allocatedLimitedState.cadAllocationPlanCutsApplied(
+				planSerial, 81, 82, 0)) {
+			    printf("FAIL: memory denial blocked or was erased by a "
+				   "resident allocation (tasks=%u pending=%u "
+				   "blocked=%u quality=%u limited=%d "
+				   "admission=%llu/%llu applied=%d)\n",
+				   applyAllocation.getSubmittedTaskCount(),
+				   applyAllocation.
+				       getPendingRetainedRefinementCount(),
+				   applyAllocation.
+				       getRefinementBudgetBlockedCount(),
+				   applyAllocation.
+				       getRetainedQualityLimitedCount(),
+				   allocatedPayload &&
+				       allocatedPayload->memoryLimited ? 1 : 0,
+				   (unsigned long long)(allocatedPayload ?
+				       allocatedPayload->residentAdmissionRevision : 0),
+				   (unsigned long long)
+				       service.residentMeshAdmissionRevision(),
+				   allocatedLimitedState.
+				       cadAllocationPlanCutsApplied(
+					   planSerial, 81, 82, 0) ? 1 : 0);
+			    ret = 1;
+			}
 		    }
 		}
 	    }
@@ -12210,6 +12453,107 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		ret = 1;
 	    }
 	}
+	if (!ret) {
+	    /* Full-detail siblings contribute to the scene cost but do not turn
+	     * the one progressive occurrence's global cut into a multi-occurrence
+	     * policy.  Generic Twin has this exact population shape. */
+	    BObolViewLodState mixedState;
+	    BObolLodResult progressiveOccurrence = results[0];
+	    progressiveOccurrence.request.occurrenceKey =
+		"progressive-occurrence";
+	    progressiveOccurrence.request.sourceRoutingId = 0;
+	    progressiveOccurrence.request.sourcePopulationEpoch = 0;
+	    progressiveOccurrence.request.sourceEntryIndex = UINT32_MAX;
+	    BObolLodResult fullDetailSibling = progressiveOccurrence;
+	    fullDetailSibling.request.occurrenceKey =
+		"full-detail-sibling";
+	    fullDetailSibling.request.sourceRoutingId = 0;
+	    fullDetailSibling.request.sourcePopulationEpoch = 0;
+	    fullDetailSibling.request.sourceEntryIndex = UINT32_MAX;
+	    fullDetailSibling.request.requestedCut = -1;
+	    fullDetailSibling.request.requiredChunks.clear();
+	    fullDetailSibling.progressiveMesh.reset();
+	    fullDetailSibling.presentationLayers.clear();
+	    fullDetailSibling.resultKind = BOBOL_LOD_RESULT_FULL_DETAIL;
+	    fullDetailSibling.geometry.activeCut = -1;
+	    fullDetailSibling.resolvedCut = -1;
+	    fullDetailSibling.residentCut = -1;
+	    fullDetailSibling.terminal = TRUE;
+	    if (!mixedState.applySourceResult(source, progressiveOccurrence) ||
+		!mixedState.applySourceResult(source, fullDetailSibling) ||
+		mixedState.cadMeshPayloadCount() != 2 ||
+		mixedState.cadProgressivePayloadCount() != 1 ||
+		mixedState.singleCadProgressiveCutWithinRenderCost(
+		    mixedState.activeRenderCost()) !=
+			results[0].geometry.activeCut) {
+		printf("FAIL: full-detail sibling changed the single-progressive "
+		       "policy domain (meshes=%zu progressive=%zu predicted=%d "
+		       "expected=%d)\n",
+		       mixedState.cadMeshPayloadCount(),
+		       mixedState.cadProgressivePayloadCount(),
+		       mixedState.singleCadProgressiveCutWithinRenderCost(
+			   mixedState.activeRenderCost()),
+		       results[0].geometry.activeCut);
+		ret = 1;
+	    }
+	    const BObolViewLodState::CadPayload *progressivePayload =
+		mixedState.findCadForResult(source, progressiveOccurrence);
+	    int alternateCut = -1;
+	    if (progressivePayload && progressivePayload->progressiveMesh) {
+		const int minimumCut =
+		    progressivePayload->progressiveMesh->minimumCut();
+		const int maximumCut =
+		    progressivePayload->progressiveMesh->maximumCut();
+		if (progressivePayload->activeCut != minimumCut)
+		    alternateCut = minimumCut;
+		else if (progressivePayload->activeCut != maximumCut)
+		    alternateCut = maximumCut;
+	    }
+	    if (!ret && (!progressivePayload || alternateCut < 0)) {
+		printf("FAIL: allocation-application certificate fixture has no "
+		       "alternate cut\n");
+		ret = 1;
+	    }
+	    if (!ret) {
+		const uint64_t mismatchedPlan =
+		    mixedState.beginCadAllocationPlan();
+		if (!mixedState.stageCadAllocatedCut(
+			progressivePayload, alternateCut,
+			progressivePayload->viewRevision,
+			progressivePayload->policyRevision,
+			progressivePayload->drawMode, mismatchedPlan) ||
+		    !mixedState.commitCadAllocationPlan(
+			mismatchedPlan, mixedState.cadRevision(),
+			mixedState.residentMeshDemandRevision(),
+			progressivePayload->viewRevision,
+			progressivePayload->policyRevision, 0) ||
+		    mixedState.cadAllocationPlanCutsApplied(
+			mismatchedPlan, progressivePayload->viewRevision,
+			progressivePayload->policyRevision, 0)) {
+		    printf("FAIL: unapplied occurrence allocation was certified\n");
+		    ret = 1;
+		}
+	    }
+	    if (!ret) {
+		const uint64_t appliedPlan = mixedState.beginCadAllocationPlan();
+		if (!mixedState.stageCadAllocatedCut(
+			progressivePayload, progressivePayload->activeCut,
+			progressivePayload->viewRevision,
+			progressivePayload->policyRevision,
+			progressivePayload->drawMode, appliedPlan) ||
+		    !mixedState.commitCadAllocationPlan(
+			appliedPlan, mixedState.cadRevision(),
+			mixedState.residentMeshDemandRevision(),
+			progressivePayload->viewRevision,
+			progressivePayload->policyRevision, 0) ||
+		    !mixedState.cadAllocationPlanCutsApplied(
+			appliedPlan, progressivePayload->viewRevision,
+			progressivePayload->policyRevision, 0)) {
+		    printf("FAIL: applied occurrence allocation was not certified\n");
+		    ret = 1;
+		}
+	    }
+	}
     }
 
     /* An exact retained-frame audit may find a source box whose unchanged
@@ -12728,6 +13072,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    inputs.maximumProtectedBudget = inputs.sceneBudget;
 	    inputs.viewRevision = 65;
 	    inputs.policyRevision = 62;
+	    inputs.residentAdmissionRevision =
+		service.residentMeshAdmissionRevision();
 	    inputs.pointProxyPixelThreshold = 1.0f;
 	    BObolRetainedAllocationResult allocation;
 	    std::shared_ptr<BObolRetainedAllocationTransaction> transaction;
@@ -12748,6 +13094,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    viewState.residentMeshDemandRevision() ||
 		allocation.viewRevision != inputs.viewRevision ||
 		allocation.policyRevision != inputs.policyRevision ||
+		allocation.residentAdmissionRevision !=
+		    inputs.residentAdmissionRevision ||
 		std::fabs(allocation.pointProxyPixelThreshold -
 		    inputs.pointProxyPixelThreshold) > 1.0e-6f ||
 		allocation.selectedPresentationCost <
@@ -14191,6 +14539,11 @@ main(int argc, char **argv)
 	return 1;
     }
     bu_setprogname(argv[0]);
+
+    if (test_submission_delta_value())
+	return 1;
+    if (test_structural_repair_value())
+	return 1;
 
     char processCacheDir[MAXPATHLEN] = {0};
     bu_dir(processCacheDir, MAXPATHLEN, BU_DIR_CURR,

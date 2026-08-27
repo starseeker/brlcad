@@ -979,10 +979,26 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
     BObolLodConvergenceStatus status;
     controller->getLodConvergenceStatus(status);
 
+    if (!status.hasLodState) {
+	ged_obol_faceplate_remove(controller, view_ctx, track_name);
+	ged_obol_faceplate_remove(controller, view_ctx, fill_name);
+	ged_obol_faceplate_remove(controller, view_ctx, label_name);
+	return;
+    }
+
+    /* "View ready" is a terminal user contract, not a synonym for the
+     * controller's idle enum.  Keep this guard at the observation boundary so
+     * a defective or partially published snapshot degrades to "Finalizing"
+     * instead of making a false completion claim. */
+    const bool terminalReady =
+	status.phase == BOBOL_LOD_CONVERGENCE_IDLE && status.terminal &&
+	status.viewReady && !status.backgroundPending &&
+	status.fraction >= 1.0f;
+
     const bool show =
 	status.phase != BOBOL_LOD_CONVERGENCE_IDLE ||
 	status.backgroundPending || status.performanceLimited ||
-	status.failedSourceCount > 0;
+	status.failedSourceCount > 0 || !terminalReady;
     if (!show) {
 	ged_obol_faceplate_remove(controller, view_ctx, track_name);
 	ged_obol_faceplate_remove(controller, view_ctx, fill_name);
@@ -1095,15 +1111,15 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		    ged_obol_lod_compact_count(pending).c_str());
 	    break;
 	case BOBOL_LOD_CONVERGENCE_BACKGROUND:
-	color[0] = 112;
-	color[1] = 235;
-	color[2] = 135;
-	/* The moving segment below reports indeterminate background work.  Call
-	 * the accepted framebuffer usable, not ready: pairing "ready" with an
-	 * visibly incomplete activity bar gives the two HUD elements conflicting
-	 * completion semantics. */
-	if (pending > 0 || status.queuedCacheWrites > 0) {
-	    bu_vls_sprintf(&text,
+	    color[0] = 112;
+	    color[1] = 235;
+	    color[2] = 135;
+	    /* The moving segment below reports indeterminate background work.  Call
+	     * the accepted framebuffer usable, not ready: pairing "ready" with a
+	     * visibly incomplete activity bar gives the two HUD elements conflicting
+	     * completion semantics. */
+	    if (pending > 0 || status.queuedCacheWrites > 0) {
+		bu_vls_sprintf(&text,
 		    "Building reusable LoD cache  view usable");
 		const size_t cacheTasks = pending > SIZE_MAX -
 		    status.queuedCacheWrites ? SIZE_MAX : pending +
@@ -1111,9 +1127,10 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		bu_vls_printf(&text, "  %s background task%s",
 		    ged_obol_lod_compact_count(cacheTasks).c_str(),
 		    cacheTasks == 1 ? "" : "s");
-	} else {
-	    bu_vls_sprintf(&text, "Optimizing memory/cache  view usable");
-	}
+	    } else {
+		bu_vls_sprintf(&text,
+		    "Optimizing memory/cache  view usable");
+	    }
 	    if (status.residentMeshBytes > 0)
 		bu_vls_printf(&text, "  %.0f MB resident",
 		    static_cast<double>(status.residentMeshBytes) /
@@ -1132,10 +1149,16 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		status.failedSourceCount == 1 ? "" : "s");
 	    break;
 	case BOBOL_LOD_CONVERGENCE_IDLE:
-	default:
 	    color[0] = 112;
 	    color[1] = 235;
 	    color[2] = 135;
+	    if (!terminalReady) {
+		color[0] = 255;
+		color[1] = 205;
+		color[2] = 72;
+		bu_vls_sprintf(&text, "Finalizing view %d%%", percent);
+		break;
+	    }
 	    if (status.gpuMemoryPressure) {
 		color[0] = 255;
 		color[1] = 170;
@@ -1154,6 +1177,12 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 			"View ready  %s triangles",
 		    ged_obol_lod_compact_count(status.activeFaces).c_str());
 	    }
+	    break;
+	default:
+	    color[0] = 255;
+	    color[1] = 170;
+	    color[2] = 64;
+	    bu_vls_sprintf(&text, "View status unavailable");
 	    break;
     }
 

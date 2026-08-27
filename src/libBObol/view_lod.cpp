@@ -713,6 +713,7 @@ BObolViewLodState::BObolViewLodState(void) :
     cadGpuResourceStatusValid(FALSE),
     cadValidPayloadCount(0),
     cadMeshPayloadCountValue(0),
+    cadProgressivePayloadCountValue(0),
     cadLayeredProgressivePayloadCount(0),
     cadProxyPayloadCountValue(0),
     cadSatisfiedMeshPayloadCount(0),
@@ -728,7 +729,9 @@ BObolViewLodState::BObolViewLodState(void) :
     cadCertifiedAllocationPopulationRevision(0),
     cadCertifiedAllocationViewRevision(0),
     cadCertifiedAllocationPolicyRevision(0),
-    cadCertifiedFixedPresentationCost(0)
+    cadCertifiedFixedPresentationCost(0),
+    cadStagedAllocationMismatchCount(0),
+    cadActiveAllocationMismatchCount(0)
 {
     memset(this->cadProxyKindCounts, 0,
 	sizeof(this->cadProxyKindCounts));
@@ -911,6 +914,7 @@ BObolViewLodState::clearCadPayloadMetrics(void)
 	this->cadResidentDemandRevision++;
     this->cadValidPayloadCount = 0;
     this->cadMeshPayloadCountValue = 0;
+    this->cadProgressivePayloadCountValue = 0;
     this->cadLayeredProgressivePayloadCount = 0;
     this->cadProxyPayloadCountValue = 0;
     this->cadSatisfiedMeshPayloadCount = 0;
@@ -919,6 +923,8 @@ BObolViewLodState::clearCadPayloadMetrics(void)
     this->cadActiveRenderCost = 0;
     this->cadMinimumActiveRenderCost = 0;
     this->cadDisplayMeshBytes = 0;
+    this->cadStagedAllocationMismatchCount = 0;
+    this->cadActiveAllocationMismatchCount = 0;
     memset(this->cadProxyKindCounts, 0,
 	sizeof(this->cadProxyKindCounts));
     memset(this->cadProgressiveCutCounts, 0,
@@ -1091,6 +1097,9 @@ BObolViewLodState::addCadPayloadMetrics(const CadPayload *payload)
 	payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL) {
 	this->cadMeshPayloadCountValue =
 	    view_lod_saturating_add(this->cadMeshPayloadCountValue, 1);
+	if (payload->progressiveMesh)
+	    this->cadProgressivePayloadCountValue = view_lod_saturating_add(
+		this->cadProgressivePayloadCountValue, 1);
 	if (payload->progressiveMesh && payload->presentationLayers.size() > 1)
 	    this->cadLayeredProgressivePayloadCount = view_lod_saturating_add(
 		this->cadLayeredProgressivePayloadCount, 1);
@@ -1184,6 +1193,10 @@ BObolViewLodState::removeCadPayloadMetrics(const CadPayload *payload)
 	payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL) {
 	this->cadMeshPayloadCountValue =
 	    view_lod_saturating_subtract(this->cadMeshPayloadCountValue, 1);
+	if (payload->progressiveMesh)
+	    this->cadProgressivePayloadCountValue =
+		view_lod_saturating_subtract(
+		    this->cadProgressivePayloadCountValue, 1);
 	if (payload->progressiveMesh && payload->presentationLayers.size() > 1)
 	    this->cadLayeredProgressivePayloadCount =
 		view_lod_saturating_subtract(
@@ -2408,6 +2421,12 @@ BObolViewLodState::cadOccurrenceTerminalFailureCountForSource(
 	0 : failures->second.size();
 }
 
+void
+BObolViewLodState::clearCadOccurrenceTerminalFailures(void)
+{
+    this->cadOccurrenceFailures.clear();
+}
+
 const BObolViewLodState::CadPayload *
 BObolViewLodState::findCadForResult(
     const BObolLodResult &result) const
@@ -2665,6 +2684,22 @@ BObolViewLodState::retargetCadPayload(
 	payload->drawMode != demand.drawMode ||
 	payload->viewRevision != demand.viewRevision.value() ||
 	payload->policyRevision != demand.policyRevision.value();
+    /* A memory-denial witness owns only the unavailable suffix.  Applying a
+     * certified same-or-coarser resident presentation for the identical
+     * demand must not erase that witness and immediately retry the suffix. */
+    const bool preserveMemoryDenial = payload->memoryLimited &&
+	!allocationEpochChanged &&
+	payload->requestedCut == requestedCut &&
+	payload->requiredChunks == demand.requiredChunks &&
+	activeCut < requestedCut;
+    const uint64_t retainedResidentAdmissionRevision =
+	preserveMemoryDenial ? payload->residentAdmissionRevision : 0;
+    const SbBool retainedMemoryLimited =
+	preserveMemoryDenial ? TRUE : FALSE;
+    const bool activeAllocationCovered =
+	this->cadPayloadCoveredByActiveAllocation(payload.get());
+    const bool activeAllocationMismatch = activeAllocationCovered &&
+	payload->activeCut != payload->allocatedCut;
 
     /* A scene allocation is valid only for the exact demand epoch and
      * renderer channel it priced.  The controller installs a matching new
@@ -2709,8 +2744,9 @@ BObolViewLodState::retargetCadPayload(
 	    payload->projectedBoundsContained =
 		demand.projectedBoundsContained;
 	    payload->targetPixelError = demand.targetPixelError;
-	    payload->residentAdmissionRevision = 0;
-	    payload->memoryLimited = FALSE;
+	    payload->residentAdmissionRevision =
+		retainedResidentAdmissionRevision;
+	    payload->memoryLimited = retainedMemoryLimited;
 	    payload->viewRevision = demand.viewRevision.value();
 	    payload->policyRevision = demand.policyRevision.value();
 	    payload->visualEmphasis = demand.visualEmphasis;
@@ -2742,8 +2778,9 @@ BObolViewLodState::retargetCadPayload(
 	payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
 	payload->projectedBoundsContained = demand.projectedBoundsContained;
 	payload->targetPixelError = demand.targetPixelError;
-	payload->residentAdmissionRevision = 0;
-	payload->memoryLimited = FALSE;
+	payload->residentAdmissionRevision =
+	    retainedResidentAdmissionRevision;
+	payload->memoryLimited = retainedMemoryLimited;
 	payload->viewRevision = demand.viewRevision.value();
 	payload->policyRevision = demand.policyRevision.value();
 	payload->visualEmphasis = demand.visualEmphasis;
@@ -2787,7 +2824,8 @@ BObolViewLodState::retargetCadPayload(
 	    }
 	    this->addCadResidentDemand(payload.get());
 	}
-	if (!populationChanged && wasMemoryLimited)
+	if (!populationChanged && wasMemoryLimited &&
+	    !preserveMemoryDenial)
 	    this->cadMemoryLimitedMeshPayloadCount =
 		view_lod_saturating_subtract(
 		    this->cadMemoryLimitedMeshPayloadCount, 1);
@@ -2810,8 +2848,8 @@ BObolViewLodState::retargetCadPayload(
     payload->projectedPixelPerimeter = demand.projectedPixelPerimeter;
     payload->projectedBoundsContained = demand.projectedBoundsContained;
     payload->targetPixelError = demand.targetPixelError;
-    payload->residentAdmissionRevision = 0;
-    payload->memoryLimited = FALSE;
+    payload->residentAdmissionRevision = retainedResidentAdmissionRevision;
+    payload->memoryLimited = retainedMemoryLimited;
     payload->viewRevision = demand.viewRevision.value();
     payload->policyRevision = demand.policyRevision.value();
     payload->visualEmphasis = demand.visualEmphasis;
@@ -2819,6 +2857,17 @@ BObolViewLodState::retargetCadPayload(
     for (BObolLodPresentationLayer &layer : payload->presentationLayers)
 	layer.activeCut = activeCut;
     this->addCadPayloadMetrics(payload.get());
+    if (activeAllocationCovered &&
+	this->cadPayloadCoveredByActiveAllocation(payload.get())) {
+	const bool mismatch = payload->activeCut != payload->allocatedCut;
+	if (activeAllocationMismatch != mismatch) {
+	    this->cadActiveAllocationMismatchCount = mismatch ?
+		view_lod_saturating_add(
+		    this->cadActiveAllocationMismatchCount, 1) :
+		view_lod_saturating_subtract(
+		    this->cadActiveAllocationMismatchCount, 1);
+	}
+    }
     this->noteCadOccurrenceChanged(
 	payload->sourceBindingKey.getString(), payload->sourceInstanceKey,
 	allocationEpochChanged ||
@@ -2891,6 +2940,7 @@ BObolViewLodState::beginCadAllocationPlan(void)
     this->cadNextAllocationPlanSerial++;
     if (!this->cadNextAllocationPlanSerial)
 	this->cadNextAllocationPlanSerial++;
+    this->cadStagedAllocationMismatchCount = 0;
     return this->cadNextAllocationPlanSerial;
 }
 
@@ -2912,11 +2962,19 @@ BObolViewLodState::stageCadAllocatedCut(
 	return FALSE;
 
     CadPayload *payload = const_cast<CadPayload *>(target);
+    if (payload->allocationPlanSerial == planSerial &&
+	payload->activeCut != payload->allocatedCut)
+	this->cadStagedAllocationMismatchCount =
+	    view_lod_saturating_subtract(
+		this->cadStagedAllocationMismatchCount, 1);
     payload->allocatedCut = allocatedCut;
     payload->allocationDrawMode = drawMode;
     payload->allocationViewRevision = viewRevision;
     payload->allocationPolicyRevision = policyRevision;
     payload->allocationPlanSerial = planSerial;
+    if (payload->activeCut != allocatedCut)
+	this->cadStagedAllocationMismatchCount = view_lod_saturating_add(
+	    this->cadStagedAllocationMismatchCount, 1);
     return TRUE;
 }
 
@@ -2938,6 +2996,8 @@ BObolViewLodState::commitCadAllocationPlan(
     this->cadCertifiedAllocationViewRevision = viewRevision;
     this->cadCertifiedAllocationPolicyRevision = policyRevision;
     this->cadCertifiedFixedPresentationCost = fixedCadPresentationCost;
+    this->cadActiveAllocationMismatchCount =
+	this->cadStagedAllocationMismatchCount;
     return TRUE;
 }
 
@@ -2968,6 +3028,17 @@ BObolViewLodState::cadAllocationPlanCoversCurrentPopulation(
 	this->cadCertifiedAllocationPolicyRevision == policyRevision &&
 	this->cadCertifiedFixedPresentationCost == fixedCadPresentationCost ?
 	TRUE : FALSE;
+}
+
+SbBool
+BObolViewLodState::cadAllocationPlanCutsApplied(
+    uint64_t planSerial, uint64_t viewRevision,
+    uint64_t policyRevision, size_t fixedCadPresentationCost) const
+{
+    return this->cadAllocationPlanCoversCurrentPopulation(
+	planSerial, viewRevision, policyRevision,
+	fixedCadPresentationCost) &&
+	!this->cadActiveAllocationMismatchCount ? TRUE : FALSE;
 }
 
 SbBool
@@ -3150,6 +3221,12 @@ size_t
 BObolViewLodState::cadMeshPayloadCount(void) const
 {
     return this->cadMeshPayloadCountValue;
+}
+
+size_t
+BObolViewLodState::cadProgressivePayloadCount(void) const
+{
+    return this->cadProgressivePayloadCountValue;
 }
 
 SbBool
@@ -3852,7 +3929,7 @@ int
 BObolViewLodState::singleCadProgressiveCutWithinRenderCost(
 	size_t renderCost) const
 {
-    if (!renderCost || this->cadMeshPayloadCountValue != 1)
+    if (!renderCost || this->cadProgressivePayloadCount() != 1)
 	return -1;
 
     /* cadProgressiveCeilingRenderCosts is populated by the same layered-
@@ -3867,7 +3944,7 @@ float
 BObolViewLodState::singleCadProgressiveNextFractionWithinRenderCost(
 	size_t renderCost, int baseCut) const
 {
-    if (!renderCost || this->cadMeshPayloadCountValue != 1 ||
+    if (!renderCost || this->cadProgressivePayloadCount() != 1 ||
 	this->cadLayeredProgressivePayloadCount != 1 || baseCut < 0 ||
 	baseCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX - 1)
 	return 0.0f;

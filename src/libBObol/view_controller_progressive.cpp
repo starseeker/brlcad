@@ -375,7 +375,8 @@ BObolViewController::advanceProgressiveWork(
 		this->d->lodPresentationPointProxyPixelThreshold;
 	    BObolLodViewQualityHistory::Quality recalledViewQuality;
 	    BObolLodViewQualityHistory::RecallInputs recallInputs;
-	    recallInputs.view = this->d->lodViewSignature;
+	    recallInputs.view = this->d->lodViewSignature.value_or(
+		BObolLodViewSnapshot());
 	    recallInputs.domainRevision =
 		this->d->lodViewQualityDomainRevision;
 	    /* History is also useful after resident-memory compaction has reduced
@@ -383,7 +384,7 @@ BObolViewController::advanceProgressiveWork(
 	     * scene the entry belongs to; live provider and memory admission decide
 	     * how much of the remembered target can be restored. */
 	    recallInputs.sceneAvailable = viewState &&
-		this->d->lodViewSignatureValid &&
+		this->d->lodViewSignature &&
 		(haveRetainedMeshPayloads ||
 		 this->getActiveLodCadPayloadCount() > 0 ||
 		 !this->d->lodLastSubmittedSources.empty());
@@ -467,7 +468,6 @@ BObolViewController::advanceProgressiveWork(
 			restore.provenRenderCostCapacity));
 	    this->d->lodInteractionStartCertificate.reset();
 	    this->d->lodDiscretePopulationTrialAvailable = FALSE;
-	    this->d->lodReleaseCutFloorActive = FALSE;
 	    /* A motion ceiling also applies to native progressive wire stored in
 	     * the standing CAD assembly.  It has no view-state mesh payload and
 	     * therefore no occurrence pass capable of completing the mesh
@@ -566,7 +566,7 @@ BObolViewController::advanceProgressiveWork(
 	const SbBool submissionPausedByPresentation =
 	    BObolLodAdmissionPlanner::presentationPausesSubmission(
 		this->d->lodAdmissionPointProxyFramePending != FALSE,
-		this->d->lodPointQualityPhase.calibrationPending(),
+		this->d->lodPointQualityPhase.presentationPending(),
 		this->d->lodAdmissionEvidence.capacity().rescanAfterFrame(),
 		controller_has_cad_presentation(this->d->viewAttachment)) ?
 		TRUE : FALSE;
@@ -775,7 +775,7 @@ BObolViewController::advanceProgressiveWork(
      * structural placeholder assembly has no drawable CAD payload from which
      * to obtain its required timing witness; letting that barrier pause this
      * submission pass deadlocks discovery before the first mesh arrives. */
-    if (this->d->lodPointQualityPhase.calibrationPending() &&
+    if (this->d->lodPointQualityPhase.presentationPending() &&
 	this->getActiveLodCadPayloadCount() == 0) {
 	this->d->lodPointQualityPhase.completeCalibration();
 	this->d->lodPresentationPointProxyPixelThreshold = 1.0f;
@@ -849,9 +849,12 @@ BObolViewController::advanceProgressiveWork(
 	localStatus.queuedCacheWrites +=
 	    this->d->lodService->queuedCacheWriteCountForGeneration(
 		this->d->lodActiveGeneration);
-	localStatus.pendingTasks +=
-	    this->d->lodService->
-		pendingResidentMeshCompactionCountForDiagnostics();
+	/* Resident compaction planning is owner-thread work scoped to one view.
+	 * lodCompactionPolicy below owns this controller's plan, and completed
+	 * worker results wake only consumers which receive them.  The service's
+	 * aggregate diagnostic also includes plans belonging to inactive sibling
+	 * views; treating it as this controller's task kept an otherwise terminal
+	 * view pumping forever while no local transition could retire that work. */
 	localStatus.queuedResults +=
 	    this->d->lodService->
 		queuedResidentMeshCompactionResultCountForDiagnostics(
@@ -973,7 +976,7 @@ BObolViewController::advanceProgressiveWork(
     const bool publicationSubmissionPaused =
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
 	    this->d->lodAdmissionPointProxyFramePending != FALSE,
-	    this->d->lodPointQualityPhase.calibrationPending(),
+	    this->d->lodPointQualityPhase.presentationPending(),
 	    this->d->lodAdmissionEvidence.capacity().rescanAfterFrame(),
 	    controller_has_cad_presentation(this->d->viewAttachment));
     publicationInputs.streamIdle =
@@ -1018,7 +1021,7 @@ BObolViewController::advanceProgressiveWork(
 	 * When they become quiet, the still-pending latch reaches this branch on
 	 * the next pump and requests its one explicit reusable replay. */
 	const SbBool pointCalibrationWaitingForProducer =
-	    this->d->lodPointQualityPhase.calibrationPending() &&
+	    this->d->lodPointQualityPhase.presentationPending() &&
 	    BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
 		    this->d->lodSubmissionPass.active() != FALSE,
 		    publicationSubmissionPaused,
@@ -1032,7 +1035,6 @@ BObolViewController::advanceProgressiveWork(
 	    this->requestRender("lod-refinement-pending");
 	}
     }
-
     if (localStatus.hasMore)
 	this->markProgressiveWorkPending();
     else

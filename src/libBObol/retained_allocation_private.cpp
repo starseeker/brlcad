@@ -39,6 +39,7 @@ BObolRetainedAllocationInputKey::operator==(
 	this->maximumProtectedBudget == other.maximumProtectedBudget &&
 	this->viewRevision == other.viewRevision &&
 	this->policyRevision == other.policyRevision &&
+	this->residentAdmissionRevision == other.residentAdmissionRevision &&
 	std::memcmp(&this->pointProxyPixelThreshold,
 	    &other.pointProxyPixelThreshold, sizeof(float)) == 0 &&
 	this->allowProtectedFloor == other.allowProtectedFloor;
@@ -54,6 +55,7 @@ BObolRetainedAllocationInputs::inputKey(void) const
     key.maximumProtectedBudget = this->effectiveMaximumProtectedBudget();
     key.viewRevision = this->viewRevision;
     key.policyRevision = this->policyRevision;
+    key.residentAdmissionRevision = this->residentAdmissionRevision;
     key.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
     key.allowProtectedFloor = this->allowProtectedFloor;
     return key;
@@ -70,6 +72,7 @@ BObolRetainedAllocationResult::inputKey(void) const
 	this->maximumProtectedBudget : 0;
     key.viewRevision = this->viewRevision;
     key.policyRevision = this->policyRevision;
+    key.residentAdmissionRevision = this->residentAdmissionRevision;
     key.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
     key.allowProtectedFloor = this->allowProtectedFloor;
     return key;
@@ -104,6 +107,7 @@ public:
 	this->viewState = inputs.viewState;
 	this->viewRevision = inputs.viewRevision;
 	this->policyRevision = inputs.policyRevision;
+	this->residentAdmissionRevision = inputs.residentAdmissionRevision;
 	this->cadRevision = inputs.viewState ?
 	    inputs.viewState->cadRevision() : 0;
 	this->residentDemandRevision = inputs.viewState ?
@@ -583,6 +587,7 @@ public:
 	result.residentDemandRevision = this->residentDemandRevision;
 	result.viewRevision = this->viewRevision;
 	result.policyRevision = this->policyRevision;
+	result.residentAdmissionRevision = this->residentAdmissionRevision;
 	result.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
 	result.requestedSceneBudget = this->sceneBudget;
 	result.externalPresentationCost = this->externalPresentationCost;
@@ -782,9 +787,23 @@ private:
 	    return;
 	}
 	const int minimumCut = payload->progressiveMesh->minimumCut();
-	const int maximumCut = std::max(minimumCut,
+	const int requestedMaximumCut = std::max(minimumCut,
 	    std::min(payload->requestedCut,
 		payload->progressiveMesh->maximumCut()));
+	/* A current memory denial proves that the unavailable suffix cannot be
+	 * made resident in this admission epoch.  It does not make the retained
+	 * active prefix invalid.  Restrict this allocation to that prefix while
+	 * retaining the full view demand below for diagnostics and for the next
+	 * capacity epoch. */
+	const bool currentMemoryDenial = payload->memoryLimited &&
+	    payload->residentAdmissionRevision != 0 &&
+	    payload->residentAdmissionRevision ==
+		this->residentAdmissionRevision &&
+	    requestedMaximumCut > payload->activeCut;
+	const int maximumCut = currentMemoryDenial ?
+	    std::max(minimumCut,
+		std::min(requestedMaximumCut, payload->activeCut)) :
+	    requestedMaximumCut;
 	if (this->pointProxyIsPixelExact(source, payload)) {
 	    this->havePresentedErrorProof = true;
 	    this->maximumPresentedPixelError = std::max(
@@ -885,7 +904,7 @@ private:
 	    payload->projectedCutCountsMeshRevision == candidate.mesh->revision())
 	    candidate.visibleCounts = payload->projectedCutCounts;
 	const size_t demandedCost = bobol_lod_render_cost_units(
-	    this->countsAtCut(candidate, candidate.maximumCut),
+	    this->countsAtCut(candidate, requestedMaximumCut),
 	    candidate.drawMode, 1);
 	this->pixelDemandPresentationCost = demandedCost >
 		SIZE_MAX - this->pixelDemandPresentationCost ? SIZE_MAX :
@@ -1088,6 +1107,7 @@ private:
     size_t pixelDemandPresentationCost = 0;
     uint64_t viewRevision = 0;
     uint64_t policyRevision = 0;
+    uint64_t residentAdmissionRevision = 0;
     uint64_t cadRevision = 0;
     uint64_t residentDemandRevision = 0;
     uint64_t allocationPlanSerial = 0;

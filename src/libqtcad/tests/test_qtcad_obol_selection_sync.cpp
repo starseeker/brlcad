@@ -1134,9 +1134,9 @@ main(int argc, char **argv)
     int hidden_count = compact_hidden_count(pair);
     if (hidden_count != 1)
 	FAIL("nested visibility should hide exactly one aggregate occurrence");
-    if (pair->getDisplayMeshLodRevision() <=
+    if (pair->getDisplayMeshLodRevision() !=
 	lod_revision_before_visibility)
-	FAIL("visibility changes must invalidate view-aware mesh LoD demand");
+	FAIL("visibility changes must preserve resident mesh inventory");
     BObolCompactInstanceSummary box_hidden;
 	if (!pair->getCompactInstanceSummary(box_handle, box_hidden))
 	FAIL("nested visibility should retain the occurrence handle");

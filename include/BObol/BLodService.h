@@ -353,6 +353,13 @@ public:
     size_t submitBatch(const std::vector<BObolLodTask> &tasks,
 	std::vector<uint64_t> &taskIds,
 	SbBool skipActiveDuplicates = FALSE);
+    /** Record @p request as the newest demand for an equivalent active asset
+     * producer.  Returns TRUE while either that producer is active or its
+     * completed result is queued.  A cold producer uses the retained demand
+     * to stamp immutable page previews with the current camera/policy epoch;
+     * it never changes the producer's geometry identity or working-set
+     * reservation. */
+    SbBool updateActiveRequestDemand(const BObolLodRequest &request);
     SbBool hasActiveRequest(const BObolLodRequest &request) const;
     /**
      * Drain a bounded presentation wave.  maxEstimatedBytes applies to mesh

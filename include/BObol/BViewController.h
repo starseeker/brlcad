@@ -261,6 +261,10 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     SbBool terminal;
     SbBool terminalError;
     SbBool viewReady;
+    /* FALSE when the view has no LoD-managed scene or pending LoD work.  An
+     * empty status is not a zero-percent convergence operation and should not
+     * produce a progress HUD. */
+    SbBool hasLodState;
     SbBool backgroundPending;
     SbBool performanceLimited;
     SbBool memoryLimited;
@@ -986,7 +990,7 @@ private:
     void scheduleResidentGrowthReallocationIfReady(void);
     void armStableLodHeadroomProbeIfReady(void);
     SbBool completePointTriangleRecoveryIfReady(void);
-    void resumeLodAfterRetainedRecovery(void);
+    void finishLodRetainedRecovery(void);
     size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BObolLodService *service, void *userData);
     /* Rewrite the headlight direction from the last camera orientation so it

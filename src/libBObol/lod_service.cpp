@@ -1915,6 +1915,11 @@ struct BObolLodServicePrivate {
 	BObolLodResultSlotMapKeyHash> cacheWriteSlots;
     std::vector<BObolLodSubscriber> subscribers;
     std::unordered_map<std::string, size_t> activeRequestKeyCounts;
+    /* View and policy epochs are demand, not asset identity.  One coalesced
+     * cold producer retains the newest request for its stable active key so
+     * view-independent page publications do not become stale merely because
+     * the camera moved while source preparation continued. */
+    std::unordered_map<std::string, BObolLodRequest> latestActiveRequests;
     /* A completed producer still owns its request identity until the queued
      * presentation result is drained.  This prevents a fast cache hit from
      * being resubmitted while the GUI intentionally coalesces result waves. */
@@ -2389,8 +2394,34 @@ lod_active_request_key_remove_unlocked(BObolLodServicePrivate *p,
 	return;
     if (found->second > 1)
 	found->second--;
-    else
+    else {
 	p->activeRequestKeyCounts.erase(found);
+	p->latestActiveRequests.erase(key.getString());
+    }
+}
+
+static void
+lod_update_active_request_demand_unlocked(BObolLodServicePrivate *p,
+	const SbString &key, const BObolLodRequest &request)
+{
+    if (!p || key.getLength() == 0 ||
+	p->activeRequestKeyCounts.find(key.getString()) ==
+	    p->activeRequestKeyCounts.end())
+	return;
+
+    auto found = p->latestActiveRequests.find(key.getString());
+    if (found == p->latestActiveRequests.end()) {
+	p->latestActiveRequests.emplace(key.getString(), request);
+	return;
+    }
+    const BObolLodRequest &current = found->second;
+    if (request.databaseRevision < current.databaseRevision ||
+	request.sourceRevision < current.sourceRevision ||
+	request.viewRevision < current.viewRevision ||
+	(request.viewRevision == current.viewRevision &&
+	 request.policyRevision < current.policyRevision))
+	return;
+    found->second = request;
 }
 
 static void
@@ -2436,7 +2467,8 @@ lod_service_status_result(const BObolLodTask &task, int status,
     result.terminal = TRUE;
     result.diagnostic = diagnostic ? diagnostic : "";
     if (status == BOBOL_LOD_PROVIDER_CANCELLED ||
-	status == BOBOL_LOD_PROVIDER_STALE)
+	status == BOBOL_LOD_PROVIDER_STALE ||
+	status == BOBOL_LOD_PROVIDER_SUPERSEDED)
 	result.stale = TRUE;
 
     return result;
@@ -2488,26 +2520,27 @@ lod_wait_for_debug_delay(BObolLodServicePrivate *p,
 }
 
 static void
-lod_normalize_result(BObolLodResult &result, const BObolLodTask &task)
+lod_normalize_result(BObolLodResult &result,
+	const BObolLodRequest &expectedRequest)
 {
     if (!result.cacheKey.isValid()) {
 	if (lod_request_has_identity(result.request)) {
 	    result.cacheKey = bobol_lod_cache_key(result.request);
 	} else {
-	    result.request = task.request;
-	    result.cacheKey = bobol_lod_cache_key(task.request);
+	    result.request = expectedRequest;
+	    result.cacheKey = bobol_lod_cache_key(expectedRequest);
 	}
     }
 
     if (!lod_request_has_identity(result.request))
-	result.request = task.request;
+	result.request = expectedRequest;
 
-    if (!bobol_lod_result_matches_request(result, task.request)) {
-	result.providerStatus = BOBOL_LOD_PROVIDER_STALE;
+    if (!bobol_lod_result_matches_request(result, expectedRequest)) {
+	result.providerStatus = BOBOL_LOD_PROVIDER_SUPERSEDED;
 	result.stale = TRUE;
 	result.terminal = TRUE;
 	if (result.diagnostic.getLength() == 0)
-	    result.diagnostic = "LoD task returned stale request/result";
+	    result.diagnostic = "LoD task was superseded by current demand";
     }
     result.canonicalizePayload();
 }
@@ -2718,7 +2751,20 @@ lod_execute_task(BObolLodServicePrivate *p, const BObolLodTask &task)
 	return lod_service_status_result(task, BOBOL_LOD_PROVIDER_CANCELLED,
 					 "LoD task generation cancelled");
 
-    lod_normalize_result(result, task);
+    BObolLodRequest expectedRequest = task.request;
+    {
+	/* An asset producer may deliberately finish against a newer camera or
+	 * policy demand than the one which launched its immutable hierarchy work.
+	 * Validate that result against the service-owned latest demand.  If the
+	 * camera moved again after the provider's final refresh, the mismatch is
+	 * superseded work and the resident hierarchy will satisfy the next pass. */
+	std::lock_guard<std::mutex> lock(p->mutex);
+	const SbString activeKey = lod_request_active_key(task.request);
+	const auto latest = p->latestActiveRequests.find(activeKey.getString());
+	if (latest != p->latestActiveRequests.end())
+	    expectedRequest = latest->second;
+    }
+    lod_normalize_result(result, expectedRequest);
     return result;
 }
 
@@ -3688,6 +3734,7 @@ BObolLodService::stop(void)
 	this->p->resultReservations = 0;
 	this->p->cacheWriteReservations = 0;
 	this->p->activeRequestKeyCounts.clear();
+	this->p->latestActiveRequests.clear();
 	this->p->cacheWriterStopping = TRUE;
     }
     for (size_t i = 0; i < pending.size(); i++)
@@ -3834,6 +3881,7 @@ lod_progressive_delivery_cut(
 
 struct BObolColdMeshPreviewContext {
     BObolLodService *service = NULL;
+    BObolLodServicePrivate *serviceState = NULL;
     uint64_t generation = 0;
     BObolLodRequest request;
     BObolLodCacheKey assetKey;
@@ -3846,9 +3894,50 @@ struct BObolColdMeshPreviewContext {
     std::vector<BObolLodPresentationLayer> presentationLayers;
     size_t presentationRenderCost = 0;
     size_t publishedPageCount = 0;
+    BObolViewEpoch publishedViewRevision;
+    BObolPolicyEpoch publishedPolicyRevision;
+    SbString publishedOccurrenceKey;
+    uint32_t publishedSourceEntryIndex = UINT32_MAX;
     SbBool spatialLeafProducer = FALSE;
     SbBool spatialCoverageAdmitted = FALSE;
 };
+
+static void
+lod_cold_preview_refresh_demand(BObolColdMeshPreviewContext *context)
+{
+    if (!context || !context->serviceState)
+	return;
+    const SbString key = lod_request_active_key(context->request);
+    std::lock_guard<std::mutex> lock(context->serviceState->mutex);
+    const auto found = context->serviceState->latestActiveRequests.find(
+	key.getString());
+    if (found != context->serviceState->latestActiveRequests.end())
+	context->request = found->second;
+}
+
+static SbBool
+lod_cold_preview_demand_unpublished(
+    const BObolColdMeshPreviewContext *context)
+{
+    if (!context)
+	return FALSE;
+    return context->publishedViewRevision != context->request.viewRevision ||
+	context->publishedPolicyRevision != context->request.policyRevision ||
+	context->publishedOccurrenceKey != context->request.occurrenceKey ||
+	context->publishedSourceEntryIndex != context->request.sourceEntryIndex ?
+	    TRUE : FALSE;
+}
+
+static void
+lod_cold_preview_note_published(BObolColdMeshPreviewContext *context)
+{
+    if (!context)
+	return;
+    context->publishedViewRevision = context->request.viewRevision;
+    context->publishedPolicyRevision = context->request.policyRevision;
+    context->publishedOccurrenceKey = context->request.occurrenceKey;
+    context->publishedSourceEntryIndex = context->request.sourceEntryIndex;
+}
 
 /* Page callbacks are synchronous on the cold producer worker.  Publishing
  * every completed page would copy an ever-growing descriptor vector and
@@ -4155,9 +4244,65 @@ lod_publish_cold_coverage_preview(
 	return;
     const SbBool published = context->service->tryPublishIntermediateResult(
 	context->generation, std::move(result));
+    if (published)
+	lod_cold_preview_note_published(context);
     if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
 	bu_log("[obol-timing] cold coverage-voxel preview: points=%zu "
 	       "published=%d\n", data->point_count, published ? 1 : 0);
+}
+
+static void
+lod_publish_cold_spatial_layers(
+    BObolColdMeshPreviewContext *context, unsigned long long cacheKey,
+    int activeCut, const char *diagnostic)
+{
+    if (!context || !context->service || !cacheKey || activeCut < 0 ||
+	context->presentationLayers.empty())
+	return;
+
+    BObolLodResult result;
+    result.request = context->request;
+    result.cacheKey = bobol_lod_cache_key(context->request);
+    result.geometry.kind = BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
+    result.geometry.providerId = context->request.providerId;
+    result.geometry.providerVersion = context->request.providerVersion;
+    result.geometry.cacheKey = context->assetKey;
+    result.geometry.providerToken = cacheKey;
+    result.geometry.activeCut = activeCut;
+    result.resultKind = BOBOL_LOD_RESULT_MESH;
+    result.qualityTier = context->request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.bounds = context->request.bounds;
+    for (const BObolLodPresentationLayer &publishedLayer :
+	 context->presentationLayers)
+	lod_counts_accumulate(result.counts,
+	    lod_cad_geometry_counts(*publishedLayer.geometry));
+    result.presentationLayers = context->presentationLayers;
+    result.terminal = FALSE;
+    result.diagnostic = diagnostic ? diagnostic :
+	"cold validated spatial pages; cache generation continues";
+    result.canonicalizePayload();
+    if (!result.payloadIsConsistent())
+	return;
+
+    if (!context->service->tryPublishIntermediateResult(
+	    context->generation, std::move(result)))
+	return;
+    context->publishedPageCount = context->presentationLayers.size() -
+	(context->presentationLayers.front().coverage ? 1u : 0u);
+    lod_cold_preview_note_published(context);
+}
+
+static int
+lod_cold_spatial_latest_cut(const BObolColdMeshPreviewContext *context)
+{
+    if (!context)
+	return -1;
+    for (auto layer = context->presentationLayers.rbegin();
+	 layer != context->presentationLayers.rend(); ++layer)
+	if (!layer->coverage && layer->activeCut >= 0)
+	    return layer->activeCut;
+    return -1;
 }
 
 static void
@@ -4177,6 +4322,10 @@ lod_publish_cold_spatial_page_impl(
 	!page->data.point_orig_count)
 	return;
 
+    lod_cold_preview_refresh_demand(context);
+    const SbBool demandPublicationPending =
+	lod_cold_preview_demand_unpublished(context);
+
     const size_t remainingAllowance =
 	context->presentationRenderCost >= context->renderCostAllowance ? 0 :
 	context->renderCostAllowance - context->presentationRenderCost;
@@ -4192,6 +4341,10 @@ lod_publish_cold_spatial_page_impl(
 	}
     }
     if (selectedCut < page->hierarchy.min_cut || selectedCost == SIZE_MAX) {
+	if (demandPublicationPending)
+	    lod_publish_cold_spatial_layers(context, cacheKey,
+		lod_cold_spatial_latest_cut(context),
+		"cold spatial pages rebound to current view");
 	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
 	    bu_log("[obol-timing] cold spatial page deferred: page=%u "
 		   "cut=%d minimum=%d allowance=%zu used=%zu\n",
@@ -4244,39 +4397,19 @@ lod_publish_cold_spatial_page_impl(
 
     const size_t pageCount = context->presentationLayers.size() -
 	(context->presentationLayers.front().coverage ? 1u : 0u);
-    if (pageCount != 1 &&
+    if (!demandPublicationPending && pageCount != 1 &&
 	pageCount - context->publishedPageCount <
 	    lod_cold_spatial_publication_page_batch)
 	return;
 
-    BObolLodResult result;
-    result.request = context->request;
-    result.cacheKey = bobol_lod_cache_key(context->request);
-    result.geometry.kind = BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
-    result.geometry.providerId = context->request.providerId;
-    result.geometry.providerVersion = context->request.providerVersion;
-    result.geometry.cacheKey = context->assetKey;
-    result.geometry.providerToken = cacheKey;
-    result.geometry.activeCut = selectedCut;
-    result.resultKind = BOBOL_LOD_RESULT_MESH;
-    result.qualityTier = context->request.qualityTier;
-    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
-    result.bounds = context->request.bounds;
-    for (const BObolLodPresentationLayer &publishedLayer :
-	 context->presentationLayers)
-	lod_counts_accumulate(result.counts,
-	    lod_cad_geometry_counts(*publishedLayer.geometry));
-    result.presentationLayers = context->presentationLayers;
-    result.terminal = FALSE;
-    result.diagnostic =
-	"cold validated spatial pages; cache generation continues";
-    result.canonicalizePayload();
-    if (!result.payloadIsConsistent())
-	return;
-    const SbBool published = context->service->tryPublishIntermediateResult(
-	context->generation, std::move(result));
-    if (published)
-	context->publishedPageCount = pageCount;
+    const size_t priorPublishedPageCount = context->publishedPageCount;
+    const SbBool demandWasPending =
+	lod_cold_preview_demand_unpublished(context);
+    lod_publish_cold_spatial_layers(context, cacheKey, selectedCut,
+	"cold validated spatial pages; cache generation continues");
+    const SbBool published =
+	context->publishedPageCount != priorPublishedPageCount ||
+	(demandWasPending && !lod_cold_preview_demand_unpublished(context));
     if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
 	bu_log("[obol-timing] cold spatial page: page=%u cut=%d "
 	       "faces=%zu points=%zu layers=%zu cost=%zu published=%d\n",
@@ -4468,9 +4601,14 @@ lod_publish_cold_mesh_preview(
 
 BObolLodResult
 BObolLodService::realizeResidentMeshLod(
-    const BObolLodRequest &request,
+    const BObolLodRequest &submittedRequest,
     const BObolMeshLodProvider &provider)
 {
+    /* Asset preparation is stable across camera epochs, but the final chunk
+     * selection and result stamp are not.  A cold producer may run long enough
+     * for the camera to move several times, so retain a mutable demand copy and
+     * refresh it after the immutable hierarchy has been constructed. */
+    BObolLodRequest request = submittedRequest;
     struct db_i *dbip = provider.getDatabase();
     if (!dbip)
 	return lod_provider_status_result(request, BOBOL_LOD_PROVIDER_ERROR,
@@ -4526,6 +4664,7 @@ BObolLodService::realizeResidentMeshLod(
 	const bool exactVariant = provider.meshAssetContentHash != 0;
 	BObolColdMeshPreviewContext previewContext;
 	previewContext.service = provider.service;
+	previewContext.serviceState = this->p;
 	previewContext.generation = provider.generation;
 	previewContext.request = request;
 	previewContext.assetKey = assetKey;
@@ -4706,6 +4845,8 @@ BObolLodService::realizeResidentMeshLod(
 	    if (!resident->lod && !exactVariant)
 		resident->lod = bobol_mesh_lod_get_named_cached_prefix(
 		    dbip, name);
+	    lod_cold_preview_refresh_demand(&previewContext);
+	    request = previewContext.request;
 	    resident->limitedSpatialLayers =
 		std::move(previewContext.presentationLayers);
 	}
@@ -5942,9 +6083,13 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
 	item.task.generation = p->activeGeneration;
     }
 
+
     if (skipActiveDuplicate &&
-	lod_request_key_recorded_unlocked(p, activeKey))
+	lod_request_key_recorded_unlocked(p, activeKey)) {
+	lod_update_active_request_demand_unlocked(
+	    p, activeKey, task.request);
 	return 0;
+    }
 
     const uint64_t id = item.id;
     const uint64_t generation = item.task.generation;
@@ -5955,6 +6100,7 @@ lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
     p->pending.push_back(std::move(item));
     p->pendingQualityCounts[qualityTier]++;
     p->activeRequestKeyCounts[activeKey.getString()]++;
+    lod_update_active_request_demand_unlocked(p, activeKey, task.request);
     p->generationTaskCounts[generation]++;
     p->generationPendingTaskCounts[generation]++;
     p->taskGenerations[id] = generation;
@@ -6006,7 +6152,7 @@ BObolLodService::tryPublishIntermediateResult(
     BObolLodTask task;
     task.generation = generation;
     task.request = result.request;
-    lod_normalize_result(result, task);
+    lod_normalize_result(result, task.request);
     result.generation = generation;
 
     SbBool notifyResultReady = FALSE;
@@ -6104,6 +6250,20 @@ BObolLodService::submitBatch(
     if (accepted)
 	this->p->workerCv.notify_all();
     return accepted;
+}
+
+SbBool
+BObolLodService::updateActiveRequestDemand(
+    const BObolLodRequest &request)
+{
+    const SbString key = lod_request_active_key(request);
+
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const SbBool recorded =
+	lod_request_key_recorded_unlocked(this->p, key);
+    if (recorded)
+	lod_update_active_request_demand_unlocked(this->p, key, request);
+    return recorded;
 }
 
 SbBool

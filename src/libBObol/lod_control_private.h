@@ -143,6 +143,7 @@ public:
 	bool retainedAllocation = false;
 	bool residentGrowth = false;
 	bool pointTriangleRecovery = false;
+	bool structuralFrontier = false;
 	bool presentationReplay = false;
 	bool presentationBarrier = false;
 	bool capacityFrame = false;
@@ -223,7 +224,7 @@ public:
 	    snapshot.obligations |= bit(Work::PUBLICATION);
 	if (inputs.submission || inputs.submissionRescan ||
 	    inputs.retainedAllocation || inputs.residentGrowth ||
-	    inputs.pointTriangleRecovery)
+	    inputs.pointTriangleRecovery || inputs.structuralFrontier)
 	    snapshot.obligations |= bit(Work::PLANNING);
 	if (inputs.presentationReplay || inputs.presentationBarrier ||
 	    inputs.capacityFrame || inputs.pointAdmissionFrame ||

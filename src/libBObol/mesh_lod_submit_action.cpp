@@ -2333,6 +2333,16 @@ mesh_lod_debug_delay_milliseconds(const char *env_name)
     return (uint32_t)value;
 }
 
+static bool
+mesh_lod_trace_object_matches(const BObolLodRequest &request,
+    const char *filter)
+{
+    return filter && filter[0] &&
+	((filter[0] == '*' && filter[1] == '\0') ||
+	 strstr(request.objectName.getString(), filter) ||
+	 strstr(request.objectPath.getString(), filter));
+}
+
 /* Compact results published by current producers carry an entry hint, making
  * the common 50k/150k retained lookup allocation-free.  A current compact
  * entry index is also authoritative negative evidence: if its validated slot
@@ -2948,9 +2958,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    taskIndex < taskIds.size() ? taskIds[taskIndex] : 0;
 		const BObolLodRequest &request = task.request;
 		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
-		const bool trace = filter && filter[0] &&
-		    (strstr(request.objectName.getString(), filter) ||
-		     strstr(request.objectPath.getString(), filter));
+		const bool trace = mesh_lod_trace_object_matches(request, filter);
 		if (!taskId) {
 		    if (trace)
 			bu_log("BObol LoD submit trace object=%s cut=%d "
@@ -3227,10 +3235,26 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		!submitAction->useForcedCut &&
 		mesh_lod_payload_memory_limited_for_epoch(
 		    activePayload, request, submitAction->service);
+	    int retainedMinimumCut = -1;
+	    int retainedAllocatedCut = -1;
+	    SbBool residentAllocationRetargetAvailable = FALSE;
+	    if (activePayload && activePayload->progressiveMesh &&
+		submitAction->retainedSceneUpgradeCostBudget != SIZE_MAX) {
+		retainedMinimumCut =
+		    activePayload->progressiveMesh->minimumCut();
+		retainedAllocatedCut = mesh_lod_cad_allocated_cut(
+		    activePayload, request);
+		residentAllocationRetargetAvailable =
+		    retainedAllocatedCut >= retainedMinimumCut &&
+		    retainedAllocatedCut <= activePayload->activeCut &&
+		    mesh_lod_can_draw_chunks(
+			activePayload->progressiveMesh,
+			request.requiredChunks, retainedAllocatedCut) ?
+			TRUE : FALSE;
+	    }
 	    const char *memoryTrace = getenv("BOBOL_LOD_TRACE_OBJECT");
-	    if (memoryTrace && memoryTrace[0] && activePayload &&
-		(strstr(request.objectName.getString(), memoryTrace) ||
-		 strstr(request.objectPath.getString(), memoryTrace))) {
+	    if (activePayload &&
+		mesh_lod_trace_object_matches(request, memoryTrace)) {
 		bu_log("BObol LoD memory witness object=%s limited=%d "
 		       "payload=%d revision=%llu/%llu view=%llu/%llu "
 		       "policy=%llu/%llu cut=%d/%d\n",
@@ -3249,12 +3273,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		       static_cast<unsigned long long>(request.policyRevision.value()),
 		       activePayload->activeCut, request.requestedCut);
 	    }
-	    if (memoryLimitedForEpoch) {
+	    if (memoryLimitedForEpoch &&
+		!residentAllocationRetargetAvailable) {
 		/* The retained minimum/richer prior cut remains the stable
 		 * presentation.  Retrying the same suffix in the same capacity
 		 * epoch creates an unbounded worker loop without changing a
-		 * pixel.  A camera/policy change or reclaimed stable bytes
-		 * invalidates this suppression. */
+		 * pixel.  A certified same-or-coarser resident allocation is not
+		 * a suffix retry: it performs no I/O and must remain free to close
+		 * the allocator-to-presentation handoff.  A camera/policy change or
+		 * reclaimed stable bytes invalidates this suppression. */
 		submitAction->skippedMeshCount++;
 		continue;
 	    }
@@ -3267,10 +3294,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	     * order authoritative across all windows. */
 	    if (activePayload && activePayload->progressiveMesh &&
 		submitAction->retainedSceneUpgradeCostBudget != SIZE_MAX) {
-	    const int minimumCut =
-		activePayload->progressiveMesh->minimumCut();
-	    const int allocatedCut = mesh_lod_cad_allocated_cut(
-		activePayload, request);
+	    const int minimumCut = retainedMinimumCut;
+	    const int allocatedCut = retainedAllocatedCut;
 	    const SbBool stampedAllocation =
 		allocatedCut >= minimumCut ? TRUE : FALSE;
 	    int desiredCut = request.requestedCut;
@@ -3380,9 +3405,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    const size_t chargedUpgradeCost = stampedAllocation ? 0 :
 		upgradeCost;
 		const char *retainedTrace = getenv("BOBOL_LOD_TRACE_OBJECT");
-		if (retainedTrace && retainedTrace[0] &&
-		    (strstr(request.objectName.getString(), retainedTrace) ||
-		     strstr(request.objectPath.getString(), retainedTrace)))
+		if (mesh_lod_trace_object_matches(request, retainedTrace))
 		    bu_log("BObol LoD retained admission object=%s "
 			   "minimum_cut=%d target_cut=%d admitted_cut=%d "
 			   "active_cut=%d resident_cut=%d requested_cut=%d "
@@ -4043,9 +4066,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		mesh_lod_payload_memory_limited_for_epoch(
 		    activePayload, request, submitAction->service);
 	    const char *providerMemoryTrace = getenv("BOBOL_LOD_TRACE_OBJECT");
-	    if (providerMemoryTrace && providerMemoryTrace[0] && activePayload &&
-		(strstr(request.objectName.getString(), providerMemoryTrace) ||
-		 strstr(request.objectPath.getString(), providerMemoryTrace))) {
+	    if (activePayload &&
+		mesh_lod_trace_object_matches(request, providerMemoryTrace)) {
 		bu_log("BObol LoD provider memory witness object=%s limited=%d "
 		       "payload=%d revision=%llu/%llu view=%llu/%llu "
 		       "policy=%llu/%llu cut=%d/%d\n",
@@ -4171,9 +4193,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		if (submitAction->viewState->retargetCadPayload(
 		    activePayload, retargetCut, request)) {
 		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
-		if (filter && filter[0] &&
-		    (strstr(request.objectName.getString(), filter) ||
-		     strstr(request.objectPath.getString(), filter)))
+		if (mesh_lod_trace_object_matches(request, filter))
 		    bu_log("BObol LoD submit trace object=%s cut=%d "
 			   "retargeted_resident=%d\n",
 			   request.objectName.getString(),
@@ -4295,7 +4315,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    if (request.coalesceAssetProducer &&
 		(scheduledAssetProducers.find(assetProducerKey) !=
 			scheduledAssetProducers.end() ||
-		 submitAction->service->hasActiveRequest(request))) {
+		 submitAction->service->updateActiveRequestDemand(request))) {
 		/* One immutable asset producer is already constructing or loading
 		 * this hierarchy.  The completed result wakes the controller; its
 		 * next bounded pass binds this occurrence from the resident asset or
@@ -4632,7 +4652,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	(!submitAction->useForcedCut && submitAction->reset == 0) ?
 	TRUE : FALSE;
     if (suppressActiveDuplicate &&
-	submitAction->service->hasActiveRequest(request)) {
+	submitAction->service->updateActiveRequestDemand(request)) {
 	submitAction->skippedMeshCount++;
 	submitAction->appendDiagnostic(target,
 				       "current compact LoD request is already active");
@@ -4906,7 +4926,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	(!submitAction->useForcedCut && submitAction->reset == 0) ?
 	TRUE : FALSE;
     if (suppressActiveDuplicate &&
-	submitAction->service->hasActiveRequest(request)) {
+	submitAction->service->updateActiveRequestDemand(request)) {
 	submitAction->skippedMeshCount++;
 	submitAction->appendDiagnostic(target,
 				       "current LoD request is already active");

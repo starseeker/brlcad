@@ -288,8 +288,7 @@ void QgGL::mouseReleaseEvent(QMouseEvent *e)
 
     if (d->obol && d->lod_pointer_interaction_active &&
 	e->button() == Qt::LeftButton) {
-	d->obol->endLodInteraction();
-        d->lod_pointer_interaction_active = false;
+	qgcanvas_set_obol_pointer_interaction(*d, this, false);
     }
 
     if (!d->v) {
@@ -331,8 +330,7 @@ return;
 	    d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (d->obol && e->buttons().testFlag(Qt::LeftButton) &&
 	d->input.lastDispatchWasViewMotion()) {
-	d->obol->beginLodInteraction();
-	d->lod_pointer_interaction_active = true;
+	qgcanvas_set_obol_pointer_interaction(*d, this, true);
     }
     if (mret > 0) {
 qgcanvas_request_update(*d, BV_REFRESH_VIEW);

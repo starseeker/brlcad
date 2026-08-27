@@ -38,11 +38,14 @@
 #include <charconv>
 #include <climits>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <shared_mutex>
@@ -119,6 +122,129 @@
 #define CACHE_CHUNK_POINT_COUNTS "kp"
 #define CACHE_CHUNK_RESIDENT_BYTES "kx"
 #define CACHE_CHUNK_DATA_PREFIX "k"
+
+/* Reuse one bounded worker population across the classification and page
+ * preparation waves of a large spatial hierarchy.  Constructing and joining
+ * a fresh std::thread group for every one-million-face classification batch
+ * and every four-page preparation wave created hundreds of operating-system
+ * threads for Lucy even though no more than eight could do useful work at
+ * once.  This executor owns no work queue beyond the current synchronous
+ * wave, so the caller's existing memory bound and deterministic publication
+ * order remain unchanged. */
+class BObolBoundedParallelExecutor
+{
+public:
+    explicit BObolBoundedParallelExecutor(size_t maximumWorkers)
+    {
+	const size_t availableWorkers = static_cast<size_t>(
+	    std::max<size_t>(1, bu_avail_cpus()));
+	const size_t workerCount = std::min(maximumWorkers, availableWorkers);
+	if (workerCount <= 1)
+	    return;
+
+	try {
+	    workers.reserve(workerCount);
+	    for (size_t worker = 0; worker < workerCount; ++worker)
+		workers.emplace_back(&BObolBoundedParallelExecutor::workerLoop,
+		    this);
+	} catch (const std::system_error &) {
+	    stopWorkers();
+	} catch (const std::bad_alloc &) {
+	    stopWorkers();
+	}
+    }
+
+    ~BObolBoundedParallelExecutor()
+    {
+	stopWorkers();
+    }
+
+    BObolBoundedParallelExecutor(const BObolBoundedParallelExecutor &) =
+	delete;
+    BObolBoundedParallelExecutor &operator=(
+	const BObolBoundedParallelExecutor &) = delete;
+
+    void run(size_t workCount, const std::function<void(size_t)> &work)
+    {
+	if (!workCount)
+	    return;
+	if (workers.empty()) {
+	    for (size_t item = 0; item < workCount; ++item)
+		work(item);
+	    return;
+	}
+
+	std::unique_lock<std::mutex> lock(stateMutex);
+	currentWork = &work;
+	nextItem = 0;
+	totalItems = workCount;
+	remainingItems = workCount;
+	workerFailure = nullptr;
+	++generation;
+	workReady.notify_all();
+	workComplete.wait(lock, [this]() { return remainingItems == 0; });
+	currentWork = nullptr;
+	if (workerFailure)
+	    std::rethrow_exception(workerFailure);
+    }
+
+private:
+    void workerLoop(void)
+    {
+	uint64_t observedGeneration = 0;
+	std::unique_lock<std::mutex> lock(stateMutex);
+	for (;;) {
+	    workReady.wait(lock, [this, observedGeneration]() {
+		return stopping || generation != observedGeneration;
+	    });
+	    if (stopping)
+		return;
+	    observedGeneration = generation;
+	    while (nextItem < totalItems) {
+		const size_t item = nextItem++;
+		const std::function<void(size_t)> *work = currentWork;
+		lock.unlock();
+		std::exception_ptr failure;
+		try {
+		    (*work)(item);
+		} catch (...) {
+		    failure = std::current_exception();
+		}
+		lock.lock();
+		if (failure && !workerFailure)
+		    workerFailure = failure;
+		--remainingItems;
+		if (!remainingItems)
+		    workComplete.notify_one();
+	    }
+	}
+    }
+
+    void stopWorkers(void)
+    {
+	{
+	    std::lock_guard<std::mutex> lock(stateMutex);
+	    stopping = true;
+	}
+	workReady.notify_all();
+	for (std::thread &worker : workers)
+	    if (worker.joinable())
+		worker.join();
+	workers.clear();
+    }
+
+    std::mutex stateMutex;
+    std::condition_variable workReady;
+    std::condition_variable workComplete;
+    std::vector<std::thread> workers;
+    const std::function<void(size_t)> *currentWork = nullptr;
+    std::exception_ptr workerFailure;
+    size_t nextItem = 0;
+    size_t totalItems = 0;
+    size_t remainingItems = 0;
+    uint64_t generation = 0;
+    bool stopping = false;
+};
 
 static const uint8_t meshLodChunkMagic[8] = {
     'B', 'O', 'B', 'C', 'H', 'N', 'K', '1'
@@ -3977,6 +4103,8 @@ BObolPopState::cacheSpatialLeaves(void)
 	faceCount > UINT32_MAX || !cutCount)
 	return false;
     const int64_t started = bu_gettime();
+    BObolBoundedParallelExecutor spatialWorkers(
+	BOBOL_MESH_LOD_SPATIAL_CLASSIFICATION_MAX_WORKERS);
 
     std::array<FILE *, cellCount> spools = {};
     const auto closeSpools = [&spools]() {
@@ -4053,7 +4181,7 @@ BObolPopState::cacheSpatialLeaves(void)
 	return true;
     };
 
-    const auto prepareWave = [this, &publishPage](
+    const auto prepareWave = [this, &publishPage, &spatialWorkers](
 	std::vector<SpatialPageWork> &wave) {
 	if (wave.empty())
 	    return true;
@@ -4073,22 +4201,11 @@ BObolPopState::cacheSpatialLeaves(void)
 	    for (size_t index = 0; index < wave.size(); ++index)
 		prepareAt(index);
 	} else {
-	    std::atomic_size_t nextWork(0);
-	    const auto worker = [&nextWork, &prepareAt, &wave]() {
-		for (;;) {
-		    const size_t index = nextWork.fetch_add(
-			1, std::memory_order_relaxed);
-		    if (index >= wave.size())
-			return;
-		    prepareAt(index);
-		}
-	    };
-	    std::vector<std::thread> workers;
-	    workers.reserve(workerCount);
-	    for (size_t index = 0; index < workerCount; ++index)
-		workers.emplace_back(worker);
-	    for (std::thread &thread : workers)
-		thread.join();
+	    try {
+		spatialWorkers.run(wave.size(), prepareAt);
+	    } catch (const std::exception &) {
+		return false;
+	    }
 	}
 	for (SpatialPageWork &work : wave)
 	    if (!publishPage(work))
@@ -4199,19 +4316,20 @@ BObolPopState::cacheSpatialLeaves(void)
 	if (workerCount == 1) {
 	    classifyRange(0, batchCount);
 	} else {
-	    std::vector<std::thread> workers;
-	    workers.reserve(workerCount);
 	    const size_t workerFaces =
 		(batchCount + workerCount - 1) / workerCount;
-	    for (size_t worker = 0; worker < workerCount; ++worker) {
+	    const auto classifyWorker = [workerFaces, batchCount,
+		&classifyRange](size_t worker) {
 		const size_t begin = worker * workerFaces;
 		const size_t end = std::min(batchCount, begin + workerFaces);
-		if (begin >= end)
-		    break;
-		workers.emplace_back(classifyRange, begin, end);
+		if (begin < end)
+		    classifyRange(begin, end);
+	    };
+	    try {
+		spatialWorkers.run(workerCount, classifyWorker);
+	    } catch (const std::exception &) {
+		return fail();
 	    }
-	    for (std::thread &worker : workers)
-		worker.join();
 	}
 	if (batchCancelled.load(std::memory_order_relaxed) ||
 	    generationCancelled())
