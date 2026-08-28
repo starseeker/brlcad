@@ -1170,6 +1170,16 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		    bu_vls_printf(&text, "  %s pressure proxies",
 			ged_obol_lod_compact_count(
 			    status.gpuPressureProxyCount).c_str());
+	    } else if (status.memoryLimited) {
+		color[0] = 255;
+		color[1] = 170;
+		color[2] = 64;
+		/* This boundary may be a transient task working-set cap rather
+		 * than retained-residency pressure.  Report the common fact without
+		 * incorrectly blaming renderer cadence. */
+		bu_vls_sprintf(&text,
+		    "View usable  memory-limited  %s triangles",
+		    ged_obol_lod_compact_count(status.activeFaces).c_str());
 	    } else {
 		bu_vls_sprintf(&text,
 		    status.performanceLimited ?

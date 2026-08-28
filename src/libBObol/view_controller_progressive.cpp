@@ -742,14 +742,11 @@ BObolViewController::advanceProgressiveWork(
 		if (!this->d->lodSubmissionPass.active()) {
 		    this->d->advanceAdmissionRevision(
 			BObolLodAdmissionRevisionDomain::AVAILABILITY);
-		    this->d->lodSubmissionSourceIndex = 0;
-		    this->d->lodSubmissionEntryOffset = 0;
-		    this->d->clearLodSubmissionPlan();
-		    this->d->lodSubmissionPass.clearRescan();
+		    this->d->rewindLodSubmissionCursor();
 		    this->d->lodPlanningObligations.
 			setResidentAdmissionRetry(
 			    this->d->lodCoveragePolicy.effectiveComplete());
-		    this->d->lodSubmissionPass.activate();
+		    this->d->lodSubmissionPass.beginFresh();
 		    this->d->lodResidentAdmissionRevision =
 			admissionRevision;
 		    this->markProgressiveWorkPending();
@@ -781,23 +778,6 @@ BObolViewController::advanceProgressiveWork(
 	     refinementNow >=
 		this->d->lodRefinementNotBeforeMicroseconds)
 	this->d->lodRefinementNotBeforeMicroseconds = 0;
-
-    /* Point aggregation controls a populated SoCADAssembly only.  A retained
-     * structural placeholder assembly has no drawable CAD payload from which
-     * to obtain its required timing witness; letting that barrier pause this
-     * submission pass deadlocks discovery before the first mesh arrives. */
-    if (this->d->lodPointQualityPhase.presentationPending() &&
-	this->getActiveLodCadPayloadCount() == 0) {
-	this->d->lodPointQualityPhase.completeCalibration();
-	this->d->lodPresentationPointProxyPixelThreshold = 1.0f;
-	this->d->applyAdmissionEvidenceAction(
-	    BObolLodAdmissionPlanner::EvidenceAction::RESET_POINT_PROXY);
-	BObolViewLodState *presentationState = this->d->viewAttachment ?
-	    this->d->viewAttachment->getViewLodState() : NULL;
-	if (presentationState)
-	    presentationState->setCadPresentationPointProxyPixelThreshold(1.0f);
-	(void)this->d->confirmRetainedRecoveryPresentation(true);
-    }
 
     if (this->d->lodAutoSubmit && lodPolicy.policy != BV_LOD_OFF &&
 	lodPolicy.mesh_enabled && !refinementCooling) {
@@ -1031,17 +1011,30 @@ BObolViewController::advanceProgressiveWork(
 	 * each progressive timer tick serializes realization behind rasterization.
 	 * When they become quiet, the still-pending latch reaches this branch on
 	 * the next pump and requests its one explicit reusable replay. */
-	const SbBool pointCalibrationWaitingForProducer =
-	    this->d->lodPointQualityPhase.presentationPending() &&
+	const SbBool pointCalibrationPending =
+	    this->d->lodPointQualityPhase.presentationPending();
+	BObolLodAdmissionPlanner::PointCalibrationProducerInputs producerInputs;
+	producerInputs.submissionPending =
+	    this->d->lodSubmissionPass.active() != FALSE;
+	producerInputs.discoveryCalibrationPending =
+	    this->d->lodPointAdmissionFrame.pending();
+	producerInputs.stableCalibrationPending =
+	    this->d->lodPointQualityPhase.presentationPending();
+	producerInputs.capacitySamplePending =
+	    this->d->lodAdmissionEvidence.capacity().rescanAfterFrame();
+	producerInputs.stablePresentationAvailable =
+	    controller_has_cad_presentation(this->d->viewAttachment);
+	producerInputs.providerPending = providerPendingCount > 0;
+	producerInputs.servicePending = pending_service_work != 0;
+	producerInputs.publicationAwaitingFrameRequest =
+	    this->d->lodPresentationTransaction.
+		publicationAwaitingFrameRequest();
+	const SbBool pointCalibrationProducerOwnsFrame =
 	    BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
-		    this->d->lodSubmissionPass.active() != FALSE,
-		    publicationSubmissionPaused,
-		    providerPendingCount > 0,
-		    pending_service_work != 0,
-		    this->d->lodPresentationTransaction.
-			publicationAwaitingFrameRequest());
+		producerInputs) ? TRUE : FALSE;
 	if (!publicationDeadlinePending &&
-	    !pointCalibrationWaitingForProducer &&
+	    !(pointCalibrationPending &&
+	      pointCalibrationProducerOwnsFrame) &&
 	    !this->isRenderRequested()) {
 	    this->requestRender("lod-refinement-pending");
 	}

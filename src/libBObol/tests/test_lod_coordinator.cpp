@@ -81,8 +81,20 @@ static_assert(std::is_trivially_copyable<
 static_assert(std::is_trivially_copyable<
     BObolLodControlRefinement::Snapshot>::value,
     "control refinement snapshots must remain allocation-free values");
+static_assert(std::is_trivially_copyable<
+    BObolLodAdmissionPlanner::PointCalibrationProducerInputs>::value,
+    "point-calibration producer inputs must remain allocation-free values");
 static_assert(std::is_trivially_copyable<BObolLodSubmissionPass>::value,
     "submission-pass ownership must remain an allocation-free value");
+static_assert(std::is_trivially_copyable<
+    BObolLodDeadlineSafePresentation>::value,
+    "deadline-safe presentation evidence must remain allocation-free");
+static_assert(std::is_trivially_copyable<
+    BObolLodRetainedQualityEvidence>::value,
+    "retained quality evidence must remain allocation-free");
+static_assert(std::is_trivially_copyable<
+    BObolLodRendererPerformanceEvidence>::value,
+    "renderer performance evidence must remain allocation-free");
 static_assert(std::is_trivially_copyable<BObolLodSubmissionIntent>::value,
     "submission intent must remain an allocation-free value");
 static_assert(std::is_trivially_copyable<BObolLodPoseContinuity>::value,
@@ -114,7 +126,7 @@ test_submission_pass(void)
     }
 
     pass.activate();
-    pass.requestRescan();
+    pass.setRescanPending(true);
     if (pass.state() != Pass::State::ACTIVE_RESCAN || !pass.active() ||
 	!pass.rescanPending()) {
 	std::fprintf(stderr, "FAIL: active submission rescan\n");
@@ -129,20 +141,20 @@ test_submission_pass(void)
     }
 
     pass.activate();
-    pass.clearRescan();
+    pass.setRescanPending(false);
     if (pass.state() != Pass::State::ACTIVE || !pass.active() ||
 	pass.rescanPending()) {
 	std::fprintf(stderr, "FAIL: consumed submission rescan\n");
 	return 1;
     }
 
-    pass.setRescanPending(true);
+    pass.requestRescan();
     if (pass.state() != Pass::State::ACTIVE_RESCAN || !pass.active() ||
 	!pass.rescanPending()) {
 	std::fprintf(stderr, "FAIL: set submission rescan\n");
 	return 1;
     }
-    pass.setRescanPending(false);
+    pass.clearRescan();
     if (pass.state() != Pass::State::ACTIVE || !pass.active() ||
 	pass.rescanPending()) {
 	std::fprintf(stderr, "FAIL: clear submission rescan through setter\n");
@@ -151,10 +163,146 @@ test_submission_pass(void)
 
     pass.setActive(false);
     pass.requestRescan();
-    pass.reset();
+    pass.beginFresh();
+    if (pass.state() != Pass::State::ACTIVE || !pass.active() ||
+	pass.rescanPending()) {
+	std::fprintf(stderr,
+	    "FAIL: fresh submission pass inherited predecessor state\n");
+	return 1;
+    }
+    pass.requestRescan();
+    pass.retire();
     if (pass.state() != Pass::State::IDLE || pass.active() ||
 	pass.rescanPending()) {
-	std::fprintf(stderr, "FAIL: reset submission pass\n");
+	std::fprintf(stderr,
+	    "FAIL: retired submission pass preserved transaction debt\n");
+	return 1;
+    }
+    pass.beginFresh(false);
+    if (pass.state() != Pass::State::IDLE || pass.active() ||
+	pass.rescanPending()) {
+	std::fprintf(stderr,
+	    "FAIL: empty fresh submission pass did not remain idle\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_deadline_safe_presentation(void)
+{
+    BObolLodDeadlineSafePresentation presentation;
+    if (presentation.ceilingFor(3, 7) != -1) {
+	std::fprintf(stderr, "FAIL: empty deadline-safe presentation\n");
+	return 1;
+    }
+
+    presentation.remember(5, 3, 7);
+    presentation.remember(2, 3, 7);
+    if (presentation.ceilingFor(3, 7) != 5 ||
+	presentation.ceilingFor(4, 7) != -1 ||
+	presentation.ceilingFor(3, 8) != -1) {
+	std::fprintf(stderr, "FAIL: deadline-safe presentation keying\n");
+	return 1;
+    }
+
+    presentation.remember(4, 4, 8);
+    if (presentation.ceilingFor(3, 7) != -1 ||
+	presentation.ceilingFor(4, 8) != 4) {
+	std::fprintf(stderr, "FAIL: deadline-safe presentation replacement\n");
+	return 1;
+    }
+
+    presentation.remember(-1, 5, 9);
+    if (presentation.ceilingFor(4, 8) != 4) {
+	std::fprintf(stderr, "FAIL: invalid presentation replaced evidence\n");
+	return 1;
+    }
+
+    presentation.reset();
+    if (presentation.ceilingFor(4, 8) != -1) {
+	std::fprintf(stderr, "FAIL: deadline-safe presentation reset\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_retained_quality_evidence(void)
+{
+    static constexpr double TEST_EPSILON = 1.0e-12;
+    BObolLodRetainedQualityEvidence evidence;
+    if (std::isfinite(evidence.maximumNormalizedError()) ||
+	std::isfinite(evidence.maximumProjectedErrorPixelsFor(2, 3, 1.0f))) {
+	std::fprintf(stderr, "FAIL: empty retained quality evidence\n");
+	return 1;
+    }
+
+    evidence.remember(0.25, 0.75, 2, 3, 1.0f);
+    if (std::fabs(evidence.maximumNormalizedError() - 0.25) > TEST_EPSILON ||
+	std::fabs(evidence.maximumProjectedErrorPixelsFor(2, 3, 1.0f) - 0.75) >
+	    TEST_EPSILON ||
+	std::isfinite(evidence.maximumProjectedErrorPixelsFor(4, 3, 1.0f)) ||
+	std::isfinite(evidence.maximumProjectedErrorPixelsFor(2, 4, 1.0f)) ||
+	std::isfinite(evidence.maximumProjectedErrorPixelsFor(2, 3, 1.1f)) ||
+	std::isfinite(evidence.maximumProjectedErrorPixelsFor(2, 3,
+		std::numeric_limits<float>::quiet_NaN()))) {
+	std::fprintf(stderr, "FAIL: retained quality evidence keying\n");
+	return 1;
+    }
+
+    evidence.reset();
+    if (std::isfinite(evidence.maximumNormalizedError()) ||
+	std::isfinite(evidence.maximumProjectedErrorPixelsFor(2, 3, 1.0f))) {
+	std::fprintf(stderr, "FAIL: retained quality evidence reset\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_renderer_performance_evidence(void)
+{
+    BObolLodRendererPerformanceEvidence evidence;
+    if (evidence.lastGpuTimeNanoseconds() != 0 ||
+	!evidence.reusableCadPresentation()) {
+	std::fprintf(stderr, "FAIL: initial renderer performance evidence\n");
+	return 1;
+    }
+
+    if (!evidence.acceptGpuMeasurement(2, 100) ||
+	evidence.lastGpuTimeNanoseconds() != 100 ||
+	evidence.acceptGpuMeasurement(2, 200) ||
+	evidence.lastGpuTimeNanoseconds() != 100) {
+	std::fprintf(stderr, "FAIL: renderer GPU sample identity\n");
+	return 1;
+    }
+
+    evidence.noteCadPresentation(false, 200);
+    if (evidence.reusableCadPresentation()) {
+	std::fprintf(stderr, "FAIL: first retained upload marked reusable\n");
+	return 1;
+    }
+    evidence.noteCadPresentation(false, 200);
+    if (!evidence.reusableCadPresentation()) {
+	std::fprintf(stderr, "FAIL: unchanged retained upload not reusable\n");
+	return 1;
+    }
+    evidence.noteCadPresentation(true, std::optional<uint64_t>());
+    if (!evidence.reusableCadPresentation()) {
+	std::fprintf(stderr, "FAIL: prepared replay not reusable\n");
+	return 1;
+    }
+    evidence.noteCadPresentation(false, std::optional<uint64_t>());
+    if (evidence.reusableCadPresentation()) {
+	std::fprintf(stderr, "FAIL: unprepared unsampled frame reusable\n");
+	return 1;
+    }
+
+    evidence.reset();
+    if (evidence.lastGpuTimeNanoseconds() != 0 ||
+	!evidence.reusableCadPresentation()) {
+	std::fprintf(stderr, "FAIL: renderer performance evidence reset\n");
 	return 1;
     }
     return 0;
@@ -452,6 +600,19 @@ test_control_refinement(void)
 	!(wrongOwnerViolation & Refinement::bit(
 	    Refinement::Violation::INVALID_OWNER))) {
 	std::fprintf(stderr, "FAIL: invalid control-owner detection\n");
+	return 1;
+    }
+
+    inputs = Refinement::Inputs();
+    inputs.pointCalibration = true;
+    snapshot = Refinement::evaluate(inputs);
+    const uint32_t unwitnessedPresentation =
+	Refinement::validate(snapshot, false, false, false, false);
+    if (!(unwitnessedPresentation & Refinement::bit(
+	    Refinement::Violation::UNWITNESSED_PRESENTATION)) ||
+	Refinement::validate(snapshot, false, false, false, true) != 0) {
+	std::fprintf(stderr,
+	    "FAIL: point presentation without a progress witness was accepted\n");
 	return 1;
     }
     return 0;
@@ -1604,6 +1765,16 @@ test_static_quality_policy(void)
 	    true, 20, false, true)) {
 	std::fprintf(stderr,
 	    "FAIL: structural point successor ownership\n");
+	return 1;
+    }
+    if (!Policy::structuralCapacityFrameApplicable(true, true, 1, 1) ||
+	!Policy::structuralCapacityFrameApplicable(true, true, 10, 20) ||
+	Policy::structuralCapacityFrameApplicable(false, true, 10, 20) ||
+	Policy::structuralCapacityFrameApplicable(true, false, 10, 20) ||
+	Policy::structuralCapacityFrameApplicable(true, true, 0, 20) ||
+	Policy::structuralCapacityFrameApplicable(true, true, 10, 0)) {
+	std::fprintf(stderr,
+	    "FAIL: zero-cost structural capacity frame ownership\n");
 	return 1;
     }
     if (Policy::structuralFirstWaveOccurrenceLimit(SIZE_MAX) != SIZE_MAX ||
@@ -3335,11 +3506,70 @@ test_admission_capacity(void)
     if (!calibration.requestFrame || !calibration.sampleFrame ||
 	calibration.restartSubmission ||
 	policy.capacitySearch().phase() !=
-	    BObolLodCapacitySearchCertificate::Phase::MEASURING ||
+	    BObolLodCapacitySearchCertificate::Phase::PRESENTING ||
 	policy.capacitySearch().samplesRemaining() !=
-	    BObolLodCapacitySearchCertificate::sampleLimit()) {
+	    0) {
 	std::fprintf(stderr,
 	    "FAIL: applied hidden capacity candidate consumed a sample\n");
+	return 1;
+    }
+
+    /* Presentation-handoff frames are producer barriers, not invalid timing
+     * samples.  If one reaches the frame seam before completed-pass owner
+     * selection removes its ceiling, request the allocation-owner pass once
+     * rather than repainting an immutable hidden population. */
+    Policy::CompletedFrameInputs hiddenFrameInput;
+    hiddenFrameInput.searchKey = searchKey;
+    hiddenFrameInput.candidateBudget = searchCandidateBudget;
+    hiddenFrameInput.candidateState = Policy::CompletedFrameInputs::
+	CandidateState::PRESENTATION_PENDING;
+    Policy handoffGuardPolicy = policy;
+    BObolLodAdmissionCursor handoffGuardCursor = cursor;
+    completed = handoffGuardPolicy.completeCapacitySearchFrame(
+	handoffGuardCursor, hiddenFrameInput);
+    if (completed.requestSampleFrame || !completed.restartSubmission ||
+	completed.searchResult !=
+	    BObolLodCapacitySearchCertificate::Result::HANDOFF_REQUIRED ||
+	handoffGuardPolicy.rescanAfterFrame() ||
+	handoffGuardCursor.initialized()) {
+	std::fprintf(stderr,
+	    "FAIL: capacity presentation guard retained repaint ownership\n");
+	return 1;
+    }
+
+    /* A resident population change invalidates the candidate; it is not a
+     * presentation retry.  When the resident-growth producer owns the next
+     * allocation, retire the search without racing it or retaining a frame
+     * latch.  Without that producer, request one immediate reallocation. */
+    Policy deferredInvalidationPolicy = policy;
+    BObolLodAdmissionCursor deferredInvalidationCursor = cursor;
+    Policy::CompletedFrameInputs invalidatedFrameInput = hiddenFrameInput;
+    invalidatedFrameInput.candidateState = Policy::CompletedFrameInputs::
+	CandidateState::REALLOCATION_REQUIRED;
+    invalidatedFrameInput.reallocationProducerPending = true;
+    completed = deferredInvalidationPolicy.completeCapacitySearchFrame(
+	deferredInvalidationCursor, invalidatedFrameInput);
+    if (completed.requestSampleFrame || completed.restartSubmission ||
+	completed.searchResult !=
+	    BObolLodCapacitySearchCertificate::Result::STALE_POPULATION ||
+	deferredInvalidationPolicy.rescanAfterFrame() ||
+	deferredInvalidationCursor.initialized()) {
+	std::fprintf(stderr,
+	    "FAIL: resident-growth invalidation retained capacity ownership\n");
+	return 1;
+    }
+    Policy immediateInvalidationPolicy = policy;
+    BObolLodAdmissionCursor immediateInvalidationCursor = cursor;
+    invalidatedFrameInput.reallocationProducerPending = false;
+    completed = immediateInvalidationPolicy.completeCapacitySearchFrame(
+	immediateInvalidationCursor, invalidatedFrameInput);
+    if (completed.requestSampleFrame || !completed.restartSubmission ||
+	completed.searchResult !=
+	    BObolLodCapacitySearchCertificate::Result::STALE_POPULATION ||
+	immediateInvalidationPolicy.rescanAfterFrame() ||
+	immediateInvalidationCursor.initialized()) {
+	std::fprintf(stderr,
+	    "FAIL: unowned invalid capacity population did not reallocate\n");
 	return 1;
     }
 
@@ -3367,6 +3597,69 @@ test_admission_capacity(void)
 	    "candidate=%zu applied=%zu refinement=%zu retained=%d\n",
 	    searchCandidateBudget, decision.totalBudget,
 	    decision.refinementBudget, decision.retainedAdmission ? 1 : 0);
+	return 1;
+    }
+
+    /* The production deadline seam must carry an aborted measurement into
+     * the same certificate.  Updating the persistent ceiling may not make
+     * finishBlockedPass interpret the successor as a new key. */
+    static constexpr size_t deadlineCandidateBudget = 400;
+    policy.reset();
+    cursor.reset();
+    policy.reduceCurrentBudget(deadlineCandidateBudget);
+    searchKey = BObolLodCapacitySearchKey();
+    searchKey.inventory.set(1);
+    searchKey.availability.set(2);
+    searchKey.view.set(3);
+    searchKey.policy.set(4);
+    searchKey.preferredTargetNanoseconds = 50000000ULL;
+    searchKey.maximumTargetNanoseconds = 50000000ULL;
+    searchKey.demandedBudget = 800;
+    calibrationInput = Policy::CalibrationInputs();
+    calibrationInput.activeCost = deadlineCandidateBudget;
+    calibrationInput.allocationCutsApplied = true;
+    calibrationInput.boundedSearch = true;
+    calibrationInput.allocationPresentationRealized = true;
+    calibrationInput.searchKey = searchKey;
+    calibrationInput.candidateBudget = deadlineCandidateBudget;
+    calibrationInput.demandedBudget = searchKey.demandedBudget;
+    calibrationInput.observedNanoseconds = 10000000ULL;
+    calibration = policy.finishBlockedPass(calibrationInput);
+    if (!calibration.requestFrame ||
+	policy.capacitySearch().phase() !=
+	    BObolLodCapacitySearchCertificate::Phase::MEASURING) {
+	std::fprintf(stderr,
+	    "FAIL: deadline regression did not begin capacity measurement\n");
+	return 1;
+    }
+    policy.noteDeadlineCapacityMiss(
+	deadlineCandidateBudget, false, &cursor);
+    if (policy.capacitySearch().phase() ==
+	    BObolLodCapacitySearchCertificate::Phase::INACTIVE ||
+	policy.capacitySearch().measuredCandidateCount() != 1 ||
+	policy.currentBudget() >= deadlineCandidateBudget ||
+	cursor.initialized()) {
+	std::fprintf(stderr,
+	    "FAIL: deadline seam reset active capacity search "
+	    "phase=%u measured=%u budget=%zu\n",
+	    static_cast<unsigned int>(policy.capacitySearch().phase()),
+	    policy.capacitySearch().measuredCandidateCount(),
+	    policy.currentBudget());
+	return 1;
+    }
+    searchKey.preferredBudgetCeiling =
+	policy.deadlineCapacityCeiling();
+    calibrationInput.searchKey = searchKey;
+    calibrationInput.candidateBudget = policy.currentBudget();
+    calibrationInput.activeCost = policy.currentBudget();
+    calibrationInput.allocationPresentationRealized = false;
+    calibration = policy.finishBlockedPass(calibrationInput);
+    if (!calibration.requestFrame || calibration.restartSubmission ||
+	policy.capacitySearch().phase() !=
+	    BObolLodCapacitySearchCertificate::Phase::PRESENTING ||
+	policy.capacitySearch().measuredCandidateCount() != 1) {
+	std::fprintf(stderr,
+	    "FAIL: deadline successor reopened capacity certificate\n");
 	return 1;
     }
 
@@ -3736,6 +4029,24 @@ test_quality_policy(void)
 	    "FAIL: presentation measurement did not own submission pause\n");
 	return 1;
     }
+
+    /* Exercise the composition used by the completed-frame callback, not
+     * only its two predicates in isolation.  A stable CAD calibration owns
+     * the presentation and pauses the otherwise active submission cursor;
+     * that same cursor may therefore never stand in for the successor frame.
+     */
+    BObolLodAdmissionPlanner::PointCalibrationProducerInputs producerInputs;
+    producerInputs.submissionPending = true;
+    producerInputs.stableCalibrationPending = true;
+    producerInputs.stablePresentationAvailable = true;
+    if (!BObolLodAdmissionPlanner::presentationPausesSubmission(
+	    false, true, false, true) ||
+	BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
+	    producerInputs)) {
+	std::fprintf(stderr,
+	    "FAIL: stable point calibration formed a submission closed wait\n");
+	return 1;
+    }
     /* A newly armed one-pixel frame must not be replaced by another coarse
      * structural seed during the completion callback which armed it. */
     if (!BObolLodAdmissionPlanner::maySeedPointStructuralDistribution(false, false, false) ||
@@ -3749,14 +4060,75 @@ test_quality_policy(void)
     /* Admission is deliberately paused until the changed point population
      * has rendered.  That paused cursor cannot also be the producer which is
      * expected to publish the frame, or both transitions wait forever. */
-    if (BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(true, true, false, false, false) ||
-	!BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(true, false, false, false, false) ||
-	!BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(false, true, true, false, false) ||
-	!BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(false, true, false, true, false) ||
-	!BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(false, true, false, false, true)) {
+
+    producerInputs =
+	BObolLodAdmissionPlanner::PointCalibrationProducerInputs();
+    producerInputs.submissionPending = true;
+    producerInputs.stableCalibrationPending = true;
+    producerInputs.stablePresentationAvailable = true;
+    const bool pausedSubmissionOwnsFrame =
+	BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
+	    producerInputs);
+    producerInputs.stableCalibrationPending = false;
+    const bool activeSubmissionOwnsFrame =
+	BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
+	    producerInputs);
+    producerInputs =
+	BObolLodAdmissionPlanner::PointCalibrationProducerInputs();
+    producerInputs.stableCalibrationPending = true;
+    producerInputs.stablePresentationAvailable = true;
+    producerInputs.providerPending = true;
+    const bool providerOwnsFrame =
+	BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
+	    producerInputs);
+    producerInputs.providerPending = false;
+    producerInputs.servicePending = true;
+    const bool serviceOwnsFrame =
+	BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
+	    producerInputs);
+    producerInputs.servicePending = false;
+    producerInputs.publicationAwaitingFrameRequest = true;
+    const bool publicationOwnsFrame =
+	BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
+	    producerInputs);
+    if (pausedSubmissionOwnsFrame || !activeSubmissionOwnsFrame ||
+	!providerOwnsFrame || !serviceOwnsFrame || !publicationOwnsFrame) {
 	std::fprintf(stderr,
 	    "FAIL: point-calibration producer ownership permits a closed wait\n");
 	return 1;
+    }
+    for (unsigned int combination = 0; combination < 256; ++combination) {
+	producerInputs =
+	    BObolLodAdmissionPlanner::PointCalibrationProducerInputs();
+	producerInputs.submissionPending = (combination & (1u << 0)) != 0;
+	producerInputs.discoveryCalibrationPending =
+	    (combination & (1u << 1)) != 0;
+	producerInputs.stableCalibrationPending =
+	    (combination & (1u << 2)) != 0;
+	producerInputs.capacitySamplePending =
+	    (combination & (1u << 3)) != 0;
+	producerInputs.stablePresentationAvailable =
+	    (combination & (1u << 4)) != 0;
+	producerInputs.providerPending = (combination & (1u << 5)) != 0;
+	producerInputs.servicePending = (combination & (1u << 6)) != 0;
+	producerInputs.publicationAwaitingFrameRequest =
+	    (combination & (1u << 7)) != 0;
+	const bool submissionPaused =
+	    producerInputs.capacitySamplePending ||
+	    producerInputs.discoveryCalibrationPending ||
+	    (producerInputs.stableCalibrationPending &&
+	     producerInputs.stablePresentationAvailable);
+	const bool expectedProducer =
+	    producerInputs.publicationAwaitingFrameRequest ||
+	    producerInputs.providerPending || producerInputs.servicePending ||
+	    (producerInputs.submissionPending && !submissionPaused);
+	if (BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
+		producerInputs) != expectedProducer) {
+	    std::fprintf(stderr,
+		"FAIL: point-calibration producer combination %u\n",
+		combination);
+	    return 1;
+	}
     }
     if (!BObolLodAdmissionPlanner::pointCalibrationOwnsCompletedFrame(
 	    true, false) ||
@@ -3913,6 +4285,55 @@ test_quality_policy(void)
 	    "FAIL: reusable coarse point cut did not recover quality\n");
 	return 1;
     }
+    /* A coarse structural classifier cut cannot become terminal merely
+     * because cache/result scheduling omitted its stable replay.  The exact
+     * threshold must acquire a reusable timing witness, and a changed
+     * successor must acquire its own distinct witness. */
+    pointCalibration.reset();
+    if (!BObolLodAdmissionPlanner::pointTerminalReplayRequired(
+	    BObolLodAdmissionEvidence(pointCalibration), 8.0f)) {
+	std::fprintf(stderr,
+	    "FAIL: unsampled coarse point cut accepted as terminal\n");
+	return 1;
+    }
+    (void)apply_point_completed_plan(pointCalibration,
+	8.0f, 45000000ULL, 20.0f, false);
+    if (!BObolLodAdmissionPlanner::pointTerminalReplayRequired(
+	    BObolLodAdmissionEvidence(pointCalibration), 8.0f)) {
+	std::fprintf(stderr,
+	    "FAIL: transient point frame settled the terminal witness\n");
+	return 1;
+    }
+    const auto settledCoarse = apply_point_completed_plan(pointCalibration,
+	8.0f, 45000000ULL, 20.0f, true);
+    if (settledCoarse.changed ||
+	BObolLodAdmissionPlanner::pointTerminalReplayRequired(
+	    BObolLodAdmissionEvidence(pointCalibration), 8.0f)) {
+	std::fprintf(stderr,
+	    "FAIL: reusable point frame did not settle its exact threshold\n");
+	return 1;
+    }
+    pointCalibration.reset();
+    const auto finerCoarse = apply_point_completed_plan(pointCalibration,
+	8.0f, 10000000ULL, 20.0f, true);
+    if (!finerCoarse.changed ||
+	!BObolLodAdmissionPlanner::pointTerminalReplayRequired(
+	    BObolLodAdmissionEvidence(pointCalibration),
+	    finerCoarse.threshold)) {
+	std::fprintf(stderr,
+	    "FAIL: changed point cut inherited its predecessor's witness\n");
+	return 1;
+    }
+    pointCalibration.reset();
+    const auto saturatedCoarse = apply_point_interrupted_plan(
+	pointCalibration, 64.0f, 100000000ULL, 20.0f);
+    if (saturatedCoarse.changed ||
+	BObolLodAdmissionPlanner::pointTerminalReplayRequired(
+	    BObolLodAdmissionEvidence(pointCalibration), 64.0f)) {
+	std::fprintf(stderr,
+	    "FAIL: saturated point cut retained an endless replay\n");
+	return 1;
+    }
     if (BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(1.0f) ||
 	BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(
 	    std::numeric_limits<float>::quiet_NaN()) ||
@@ -3921,6 +4342,24 @@ test_quality_policy(void)
 	!BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(8.0f)) {
 	std::fprintf(stderr,
 	    "FAIL: point confirmation did not yield to structural repair\n");
+	return 1;
+    }
+    pointCalibration.reset();
+    if (!BObolLodAdmissionPlanner::pointTerminalReplayRequired(
+	    BObolLodAdmissionEvidence(pointCalibration), 8.0f)) {
+	std::fprintf(stderr,
+	    "FAIL: structural-limit test lacked an unsettled cut\n");
+	return 1;
+    }
+    const BObolLodAdmissionPlan structuralLimitPlan =
+	BObolLodAdmissionPlanner::settlePointAtStructuralLimit(
+	    BObolLodAdmissionEvidence(pointCalibration),
+	    BObolLodAdmissionCursor(), 8.0f);
+    pointCalibration = structuralLimitPlan.nextEvidence.pointProxy();
+    if (BObolLodAdmissionPlanner::pointTerminalReplayRequired(
+	    BObolLodAdmissionEvidence(pointCalibration), 8.0f)) {
+	std::fprintf(stderr,
+	    "FAIL: structural capacity limit did not settle point cut\n");
 	return 1;
     }
     if (!BObolLodAdmissionPlanner::pointCalibrationYieldsToStructuralRepair(true, true, 147, false) ||
@@ -5069,7 +5508,8 @@ test_presentation_policy(void)
 		    enabled(CAPACITY_SAMPLE_PENDING);
 		const bool consumeAnnotations =
 		    capacitySamplePending && ceiling >= 0 &&
-		    inputs.rescanAfterFrame && inputs.completed &&
+		    (inputs.rescanAfterFrame || inputs.changedCut) &&
+		    inputs.completed &&
 		    !inputs.submissionPending &&
 		    handoffState == AllocationHandoffState &&
 		    inputs.retainedAllocationCompleted &&
@@ -5116,6 +5556,24 @@ test_presentation_policy(void)
     /* An exact capacity sample cannot be taken through a renderer-wide
      * ceiling.  A complete handoff allocation removes that ceiling first,
      * while incomplete or unproved populations retain normal rescan order. */
+    constexpr unsigned int CapacityPendingInputCount = 3;
+    constexpr unsigned int CapacityPendingCombinationCount =
+	1u << CapacityPendingInputCount;
+    for (unsigned int combination = 0;
+	    combination < CapacityPendingCombinationCount; ++combination) {
+	const bool searchAwaiting = (combination & 1u) != 0;
+	const bool allocationCurrent = (combination & 2u) != 0;
+	const bool presentationRealized = (combination & 4u) != 0;
+	const bool expected = searchAwaiting ||
+	    (allocationCurrent && !presentationRealized);
+	if (Policy::capacitySamplePending(searchAwaiting, allocationCurrent,
+		presentationRealized) != expected) {
+	    std::fprintf(stderr,
+		"FAIL: predicted capacity sample combination=%u\n",
+		combination);
+	    return 1;
+	}
+    }
     policy.reset();
     policy.armHandoff(false);
     completed = Policy::CompletedPassInputs();
@@ -5139,6 +5597,16 @@ test_presentation_policy(void)
 	return 1;
     }
     completed.changedCut = false;
+    completed.rescanAfterFrame = false;
+    completed.changedCut = true;
+    if (!policy.capacitySampleRequiresCeilingFreeHandoff(
+	    completed, true, 4)) {
+	std::fprintf(stderr,
+	    "FAIL: changed capacity allocation did not yield to handoff\n");
+	return 1;
+    }
+    completed.changedCut = false;
+    completed.rescanAfterFrame = true;
     completed.presentationLimitsReconciled = false;
     if (policy.capacitySampleRequiresCeilingFreeHandoff(
 	    completed, true, 4)) {
@@ -5832,9 +6300,12 @@ test_availability_and_publication(void)
      * point-calibration presentation.  The requested publication frame is
      * that presentation obligation, not another producer which may justify
      * dropping its render edge. */
+    BObolLodAdmissionPlanner::PointCalibrationProducerInputs
+	publicationProducerInputs;
+    publicationProducerInputs.publicationAwaitingFrameRequest =
+	policy.publicationAwaitingFrameRequest();
     if (BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
-	    false, false, false, false,
-	    policy.publicationAwaitingFrameRequest())) {
+	    publicationProducerInputs)) {
 	std::fprintf(stderr,
 	    "FAIL: requested publication frame impersonates a future producer\n");
 	return 1;
@@ -7045,6 +7516,77 @@ test_capacity_search_certificate(void)
 	}
     }
 
+    /* An interrupted capacity frame is a typed unsafe observation of the
+     * active candidate.  Repeated hard misses must consume the same bounded
+     * certificate rather than changing a ceiling, rekeying, and restarting
+     * the search forever. */
+    {
+	Certificate certificate;
+	Certificate::Observation deadlineObservation;
+	deadlineObservation.key = capacity_search_key(demand);
+	deadlineObservation.candidateBudget = initialCandidate;
+	deadlineObservation.presentedCost = initialCandidate;
+	deadlineObservation.validSample = true;
+	deadlineObservation.observedNanoseconds =
+	    deadlineObservation.key.preferredTargetNanoseconds / 2;
+	Certificate::Decision deadlineDecision =
+	    certificate.observe(deadlineObservation);
+	unsigned int priorMeasured = 0;
+	for (unsigned int miss = 0;
+	     miss < Certificate::candidateLimit() &&
+		 !deadlineDecision.terminal(); ++miss) {
+	    const size_t candidate = certificate.candidateBudget();
+	    const size_t reduction = std::max<size_t>(1, candidate / 20);
+	    deadlineObservation.key.preferredBudgetCeiling = std::max(
+		certificate.safeBudget(), candidate - reduction);
+	    deadlineDecision = certificate.observeDeadlineMiss(
+		deadlineObservation.key);
+	    if (certificate.measuredCandidateCount() <= priorMeasured) {
+		std::fprintf(stderr,
+		    "FAIL: deadline miss restarted capacity certificate\n");
+		return 1;
+	    }
+	    priorMeasured = certificate.measuredCandidateCount();
+	    if (!deadlineDecision.requestsReallocation())
+		continue;
+	    deadlineObservation.candidateBudget = deadlineDecision.budget;
+	    deadlineObservation.presentedCost = deadlineDecision.budget;
+	    deadlineObservation.validSample = false;
+	    deadlineObservation.observedNanoseconds = 0;
+	    deadlineDecision = certificate.prepare(deadlineObservation);
+	    if (!deadlineDecision.requestsFrame() ||
+		certificate.phase() != Certificate::Phase::PRESENTING ||
+		certificate.measuredCandidateCount() != priorMeasured) {
+		std::fprintf(stderr,
+		    "FAIL: deadline successor rekeyed capacity search\n");
+		return 1;
+	    }
+	    /* The successor must become presentation-current before another hard
+	     * deadline can classify it.  prepare(), unlike observe(), binds that
+	     * exact population without consuming an ordinary timing sample. */
+	    deadlineObservation.validSample = true;
+	    deadlineObservation.presentedCost = deadlineDecision.budget;
+	    deadlineDecision = certificate.prepare(deadlineObservation);
+	    if (!deadlineDecision.requestsFrame() ||
+		certificate.phase() != Certificate::Phase::MEASURING) {
+		std::fprintf(stderr,
+		    "FAIL: exact deadline successor did not enter measurement\n");
+		return 1;
+	    }
+	}
+	if (!deadlineDecision.terminal() ||
+	    deadlineDecision.result != Result::CERTIFIED ||
+	    certificate.measuredCandidateCount() >
+		Certificate::candidateLimit()) {
+	    std::fprintf(stderr,
+		"FAIL: repeated deadline misses did not terminate "
+		"result=%u measured=%u\n",
+		static_cast<unsigned int>(deadlineDecision.result),
+		certificate.measuredCandidateCount());
+	    return 1;
+	}
+    }
+
     /* Pose continuity uses the event-driven deadline as its only goal.  A
      * retained population which already meets that deadline is a safe lower
      * bound: the search may enrich it, but must never replace it with a
@@ -7237,9 +7779,9 @@ test_capacity_search_certificate(void)
     observation.observedNanoseconds = 0;
     decision = currencyCertificate.prepare(observation);
     if (!decision.requestsFrame() ||
-	currencyCertificate.phase() != Certificate::Phase::MEASURING) {
+	currencyCertificate.phase() != Certificate::Phase::PRESENTING) {
 	std::fprintf(stderr,
-	    "FAIL: allocation barrier did not enter capacity measurement\n");
+	    "FAIL: allocation barrier consumed a capacity measurement\n");
 	return 1;
     }
     observation.presentedCost = decision.budget * 2;
@@ -7258,6 +7800,13 @@ test_capacity_search_certificate(void)
     observation = Certificate::Observation();
     observation.key = capacity_search_key(demand);
     observation.candidateBudget = 200;
+	observation.presentedCost = 200;
+	observation.observedNanoseconds = 10000000ULL;
+	observation.validSample = true;
+	decision = invalidCertificate.observe(observation);
+	observation.presentedCost = 0;
+	observation.observedNanoseconds = 0;
+	observation.validSample = false;
     for (unsigned int i = 0; i <= Certificate::invalidSampleLimit(); ++i)
 	decision = invalidCertificate.observe(observation);
     if (decision.result != Result::UNMEASURABLE || !decision.terminal()) {
@@ -7335,6 +7884,12 @@ main(int argc, char **argv)
     (void)argc;
     bu_setprogname(argv[0]);
     if (test_submission_pass())
+	return 1;
+    if (test_deadline_safe_presentation())
+	return 1;
+    if (test_retained_quality_evidence())
+	return 1;
+    if (test_renderer_performance_evidence())
 	return 1;
     if (test_submission_intent())
 	return 1;

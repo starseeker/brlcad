@@ -45,7 +45,7 @@ struct BObolLodCapacitySearchKey {
     size_t preferredBudgetCeiling = SIZE_MAX;
     size_t maximumBudgetCeiling = SIZE_MAX;
 
-    bool same(const BObolLodCapacitySearchKey &other) const
+    bool sameProblem(const BObolLodCapacitySearchKey &other) const
     {
 	return this->inventory == other.inventory &&
 	    this->availability == other.availability &&
@@ -55,7 +55,12 @@ struct BObolLodCapacitySearchKey {
 	    this->maximumTargetNanoseconds ==
 		other.maximumTargetNanoseconds &&
 	    this->demandedBudget == other.demandedBudget &&
-	    this->minimumBudget == other.minimumBudget &&
+	    this->minimumBudget == other.minimumBudget;
+    }
+
+    bool same(const BObolLodCapacitySearchKey &other) const
+    {
+	return this->sameProblem(other) &&
 	    this->preferredBudgetCeiling ==
 		other.preferredBudgetCeiling &&
 	    this->maximumBudgetCeiling == other.maximumBudgetCeiling;
@@ -99,6 +104,7 @@ public:
     enum class Phase : uint8_t {
 	INACTIVE = 0,
 	ALLOCATING,
+	PRESENTING,
 	MEASURING,
 	TERMINAL
     };
@@ -109,7 +115,8 @@ public:
 	REALLOCATE,
 	CERTIFIED,
 	UNMEASURABLE,
-	STALE_POPULATION
+	STALE_POPULATION,
+	HANDOFF_REQUIRED
     };
 
     struct Observation {
@@ -201,15 +208,19 @@ public:
 	if (began && this->phaseValue == Phase::ALLOCATING)
 	    return this->decision(Result::REALLOCATE,
 		this->candidateBudgetValue);
+	if (began && this->phaseValue == Phase::PRESENTING)
+	    return this->decision(Result::REQUEST_SAMPLE,
+		this->candidateBudgetValue);
 
 	const size_t candidate = std::max(this->goalMinimumBudget(),
 	    std::min(observation.candidateBudget,
 		this->goalMaximumBudget()));
-	bool allocationBarrier = false;
 	if (candidate != this->candidateBudgetValue) {
 	    if (this->measured(candidate))
 		return this->finish(Result::STALE_POPULATION);
-	    this->startCandidate(candidate, observation.presentedCost);
+	    this->startCandidate(candidate, observation.presentedCost,
+		observation.validSample ? Phase::MEASURING :
+		    Phase::PRESENTING);
 	} else if (this->phaseValue == Phase::ALLOCATING) {
 	    /* A reallocation decision names the next complete population, but it
 	     * does not own a framebuffer sample.  Admission describes the selected
@@ -219,14 +230,24 @@ public:
 	     * identity from the first completed frame below, not from this
 	     * allocation barrier.  Otherwise a discrete candidate which changes no
 	     * drawable cut is rejected as stale and reopens the same search forever. */
-	    this->phaseValue = Phase::MEASURING;
+	    /* Applying the occurrence cuts is not sufficient when a temporary
+	     * renderer ceiling still hides them.  Keep allocation ownership until
+	     * an exact completed presentation names the candidate.  Otherwise the
+	     * handoff frames consume the invalid-sample allowance and terminate a
+	     * perfectly measurable search before its population reaches screen. */
+	    this->phaseValue = observation.validSample ? Phase::MEASURING :
+		Phase::PRESENTING;
 	    this->candidatePresentedCostValue = 0;
 	    this->candidatePopulationSignatureValue = 0;
-	    allocationBarrier = !observation.validSample;
+	    if (this->phaseValue == Phase::PRESENTING)
+		return this->decision(Result::REQUEST_SAMPLE,
+		    this->candidateBudgetValue);
+	} else if (this->phaseValue == Phase::PRESENTING) {
+	    if (!observation.validSample)
+		return this->decision(Result::REQUEST_SAMPLE,
+		    this->candidateBudgetValue);
+	    this->phaseValue = Phase::MEASURING;
 	}
-	if (allocationBarrier)
-	    return this->decision(Result::REQUEST_SAMPLE,
-		this->candidateBudgetValue);
 	if (this->candidatePresentedCostValue && observation.presentedCost &&
 	    this->candidatePresentedCostValue != observation.presentedCost)
 	    return this->finish(Result::STALE_POPULATION);
@@ -255,6 +276,11 @@ public:
 	const Decision prepared = this->prepare(observation);
 	if (prepared.result != Result::REQUEST_SAMPLE)
 	    return prepared;
+	/* ALLOCATING requests the first exact presentation of the selected
+	 * population.  It is a producer barrier, not a failed timing sample. */
+	if (this->phaseValue == Phase::ALLOCATING ||
+	    this->phaseValue == Phase::PRESENTING)
+	    return prepared;
 
 	if (!observation.validSample || !observation.observedNanoseconds ||
 	    !observation.presentedCost) {
@@ -280,6 +306,45 @@ public:
 		this->candidateBudgetValue);
 
 	return this->classifyCandidate();
+    }
+
+    /* A hard renderer deadline is a completed unsafe observation of the
+     * active population, even though the framebuffer did not finish.  Fold
+     * that evidence into the current bracket.  Resetting the certificate here
+     * would turn every abort into a new search and permit an unchanged scene
+     * to alternate between the same allocations forever. */
+    Decision observeDeadlineMiss(const BObolLodCapacitySearchKey &updatedKey)
+    {
+	if (this->phaseValue != Phase::MEASURING ||
+	    !this->candidateBudgetValue)
+	    return Decision();
+	if (!this->keyValue.sameProblem(updatedKey))
+	    return this->finish(Result::STALE_POPULATION);
+
+	/* Deadline ceilings are monotone evidence within one semantic problem.
+	 * Keep the certificate key synchronized with the externally retained
+	 * evidence so the successor allocation cannot be mistaken for a rekey. */
+	this->keyValue.preferredBudgetCeiling = std::min(
+	    this->keyValue.preferredBudgetCeiling,
+	    updatedKey.preferredBudgetCeiling);
+	this->keyValue.maximumBudgetCeiling = std::min(
+	    this->keyValue.maximumBudgetCeiling,
+	    updatedKey.maximumBudgetCeiling);
+	const size_t activeCeiling = this->goalValue == Goal::STATIC ?
+	    this->keyValue.maximumBudgetCeiling :
+	    this->keyValue.preferredBudgetCeiling;
+	this->unsafeBudgetValue = std::min(this->unsafeBudgetValue,
+	    strictUpperBound(this->keyValue.demandedBudget, activeCeiling));
+
+	/* No timing extrapolation is available from an aborted frame.  Bisect the
+	 * remaining proven bracket; candidateLimit still bounds all subsequent
+	 * observations. */
+	const size_t maximum = this->goalMaximumBudget();
+	const size_t proposal = maximum > this->safeBudgetValue ?
+	    this->safeBudgetValue +
+		(maximum - this->safeBudgetValue) / 2 :
+	    this->safeBudgetValue;
+	return this->classifyCandidate(false, proposal);
     }
 
     Phase phase(void) const { return this->phaseValue; }
@@ -313,7 +378,12 @@ public:
 
     bool awaitingSample(void) const
     {
-	return this->phaseValue == Phase::MEASURING;
+	/* ALLOCATING waits for occurrence cuts, PRESENTING waits for their first
+	 * exact framebuffer, and MEASURING waits for unchanged timing frames.  All
+	 * three retain the capacity successor and its presentation edge. */
+	return this->phaseValue == Phase::ALLOCATING ||
+	    this->phaseValue == Phase::PRESENTING ||
+	    this->phaseValue == Phase::MEASURING;
     }
 
 private:
@@ -395,17 +465,19 @@ private:
 	const size_t knownSafe = std::min(
 	    observation.knownSafeBudget, candidate);
 	this->safeBudgetValue = knownSafe >= minimum ? knownSafe : 0;
-	const bool allocationPending = candidate != observation.candidateBudget;
+	const bool allocationPending =
+	    candidate != observation.candidateBudget;
+	const Phase initialPhase = allocationPending ? Phase::ALLOCATING :
+	    (observation.validSample ? Phase::MEASURING : Phase::PRESENTING);
 	this->startCandidate(candidate,
-	    allocationPending ? 0 : observation.presentedCost,
-	    allocationPending);
+	    observation.validSample ? observation.presentedCost : 0,
+	    initialPhase);
     }
 
     void startCandidate(size_t budget, size_t presentedCost,
-	bool allocationPending = false)
+	Phase phase = Phase::MEASURING)
     {
-	this->phaseValue = allocationPending ?
-	    Phase::ALLOCATING : Phase::MEASURING;
+	this->phaseValue = phase;
 	this->candidateBudgetValue = budget;
 	this->candidatePresentedCostValue = presentedCost;
 	this->candidatePopulationSignatureValue = 0;
@@ -528,7 +600,7 @@ private:
 	if (!next)
 	    return this->finish(Result::CERTIFIED);
 
-	this->startCandidate(next, 0, true);
+	this->startCandidate(next, 0, Phase::ALLOCATING);
 	return this->decision(Result::REALLOCATE, next);
     }
 
@@ -568,7 +640,7 @@ private:
 		SIZE_MAX : static_cast<size_t>(scaled);
 	}
 	const size_t candidate = std::max(lower, std::min(proposed, upper));
-	this->startCandidate(candidate, 0, true);
+	this->startCandidate(candidate, 0, Phase::ALLOCATING);
 	return this->decision(Result::REALLOCATE, candidate);
     }
 

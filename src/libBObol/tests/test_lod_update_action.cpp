@@ -216,6 +216,52 @@ test_structural_repair_value(void)
 	printf("FAIL: retired structural repair state\n");
 	return 1;
     }
+
+    repair.beginPointRelaxation(3, 4.0f);
+    if (!repair.active() || !repair.pointRelaxationPending() ||
+	repair.frontierCount() != 3 ||
+	std::fabs(repair.pointRelaxationTarget() - 4.0f) > 0.001f) {
+	printf("FAIL: point-relaxation repair state\n");
+	return 1;
+    }
+    repair.completePointRelaxationAdmission();
+    if (repair.active() || !repair.pointRelaxationPending() ||
+	!repair.pointRelaxationPresentationPending() ||
+	std::fabs(repair.pointRelaxationTarget() - 4.0f) > 0.001f) {
+	printf("FAIL: point-relaxation publication wait\n");
+	return 1;
+    }
+    repair.notePointRelaxationPresented();
+    if (repair.pointRelaxationPresentationPending()) {
+	printf("FAIL: point-relaxation presentation acknowledgement\n");
+	return 1;
+    }
+
+    repair.beginPointRelaxation(5, 2.0f);
+    repair.reserveCoverageCost(19);
+    repair.cancelPointRelaxation();
+    if (!repair.active() || repair.pointRelaxationPending() ||
+	repair.pointRelaxationPresentationPending() ||
+	repair.frontierCount() != 5 ||
+	repair.coverageCostReservation() != 19) {
+	printf("FAIL: active point-relaxation cancellation\n");
+	return 1;
+    }
+
+    repair.beginPointRelaxation(3, 4.0f);
+    repair.completePointRelaxationAdmission();
+    repair.cancelPointRelaxation();
+    if (repair.active() || repair.pointRelaxationPending() ||
+	repair.pointRelaxationPresentationPending() ||
+	repair.frontierCount() || repair.coverageCostReservation()) {
+	printf("FAIL: admitted point-relaxation cancellation\n");
+	return 1;
+    }
+    repair.reset();
+    if (repair.pointRelaxationPending()) {
+	printf("FAIL: point-relaxation reset\n");
+	return 1;
+    }
     return 0;
 }
 
@@ -13713,6 +13759,7 @@ test_view_controller_compact_direct_result_route(void)
     int ret = 0;
     {
 	BObolViewController controller(sceneRoot, NULL);
+	controller.setLodAutoSubmit(TRUE);
 	/* The source is deliberately absent from the render graph.  A generic
 	 * update action cannot discover it; only the scene-controller routing
 	 * index can apply this result. */
@@ -13872,6 +13919,8 @@ test_view_controller_compact_direct_result_route(void)
 	    const uint64_t retiredPopulationEpoch =
 		request.sourcePopulationEpoch.value();
 	    BObolLodTask stale;
+	    controller.clearProgressiveWorkPending();
+	    controller.clearRenderRequest();
 	    stale.generation = controller.beginLodGeneration();
 	    stale.request = request;
 	    stale.request.bounds = SbBox3f(SbVec3f(-40.0f, -40.0f, -40.0f),
@@ -13895,12 +13944,18 @@ test_view_controller_compact_direct_result_route(void)
 		    controller.processPendingLodResults(1, 0) != 1 ||
 		    controller.getLastLodAppliedResultCount() != 0 ||
 		    controller.getLastLodRejectedResultCount() != 1 ||
+		    !controller.hasProgressiveWorkPending() ||
+		    !controller.isRenderRequested() ||
 		    controller.getViewLodState()->findCadForSourceEntry(
 			source, 0, replacementSummary.sourceInstanceKey) != NULL) {
-		    printf("FAIL: retired compact population result was not "
-			   "rejected (applied=%u rejected=%u diagnostics=%s)\n",
+		    printf("FAIL: retired compact population result did not "
+			   "restart current demand (applied=%u rejected=%u "
+			   "pending=%d render=%d auto=%d diagnostics=%s)\n",
 			controller.getLastLodAppliedResultCount(),
 			controller.getLastLodRejectedResultCount(),
+			controller.hasProgressiveWorkPending() ? 1 : 0,
+			controller.isRenderRequested() ? 1 : 0,
+			controller.isLodAutoSubmitEnabled() ? 1 : 0,
 			controller.getLastLodDiagnostics().getString());
 		    ret = 1;
 		}
@@ -14629,6 +14684,26 @@ test_compact_occurrence_lod_identity(void)
 	    viewState.cadPayloadCount() != 2 || !obbPayload ||
 	    obbPayload->proxy.kind != BOBOL_LOD_PROXY_OBB) {
 	    printf("FAIL: late compact AABB displaced a better OBB\n");
+	    ret = 1;
+	}
+    }
+    if (!ret) {
+	/* A source traversal must expose the scheduling distinction between a
+	 * terminal provider failure and work superseded by current demand.  The
+	 * controller uses this count to install one successor pass. */
+	BObolLodResult superseded = firstResult;
+	superseded.providerStatus = BOBOL_LOD_PROVIDER_SUPERSEDED;
+	superseded.terminal = TRUE;
+	SoBRLLodUpdateAction supersededUpdate;
+	supersededUpdate.setViewLodState(&viewState);
+	supersededUpdate.addResult(superseded);
+	supersededUpdate.apply(root);
+	if (supersededUpdate.getMatchedResultCount() != 1 ||
+	    supersededUpdate.getAppliedResultCount() != 0 ||
+	    supersededUpdate.getRejectedResultCount() != 1 ||
+	    supersededUpdate.getCurrentDemandRetryResultCount() != 1) {
+	    printf("FAIL: superseded compact result lost its current-demand "
+		   "retry disposition\n");
 	    ret = 1;
 	}
     }

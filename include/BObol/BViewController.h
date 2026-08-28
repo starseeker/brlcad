@@ -161,7 +161,8 @@ enum BObolLodControlViolation {
     BOBOL_LOD_CONTROL_VIOLATION_OWNERLESS_WORK = 1u << 0,
     BOBOL_LOD_CONTROL_VIOLATION_TERMINAL_WITH_WORK = 1u << 1,
     BOBOL_LOD_CONTROL_VIOLATION_INVALID_READINESS = 1u << 2,
-    BOBOL_LOD_CONTROL_VIOLATION_INVALID_OWNER = 1u << 3
+    BOBOL_LOD_CONTROL_VIOLATION_INVALID_OWNER = 1u << 3,
+    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_PRESENTATION = 1u << 4
 };
 
 /** User-facing progress for one view epoch.
@@ -987,6 +988,10 @@ private:
     void scheduleLodRefinementFrame(const char *reason);
     void completePresentationBarrier(uint64_t elapsedNanoseconds,
 	size_t provenRenderCost = 0);
+    /** Present a structural point/box classifier change before mesh admission
+     * consumes it.  This transaction is mutually exclusive with stable mesh
+     * quality calibration and always publishes its required frame edge. */
+    void requestStructuralPointAdmissionFrame(const char *reason);
     void scheduleResidentGrowthReallocationIfReady(void);
     void armStableLodHeadroomProbeIfReady(void);
     SbBool completePointTriangleRecoveryIfReady(void);

@@ -8,9 +8,11 @@
 #ifndef LIBBOBOL_LOD_CONTROL_PRIVATE_H
 #define LIBBOBOL_LOD_CONTROL_PRIVATE_H
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 
 /*
  * One submission cursor may be active while a complete successor rescan is
@@ -67,7 +69,18 @@ public:
 	    this->clearRescan();
     }
 
-    void reset(void)
+    /* A new bounded pass never inherits rescan debt from its predecessor.
+     * Keep this as one transition: separate clearRescan()/activate() writes
+     * expose an invalid intermediate state to later maintenance edits. */
+    void beginFresh(bool active = true)
+    {
+	this->stateValue = active ? State::ACTIVE : State::IDLE;
+    }
+
+    /* Retiring a completed transaction consumes both its activity and rescan
+     * obligation.  deactivate() remains available only for deliberate pauses
+     * which must preserve a pending rescan. */
+    void retire(void)
     {
 	this->stateValue = State::IDLE;
     }
@@ -91,6 +104,170 @@ public:
 
 private:
     State stateValue = State::IDLE;
+};
+
+/* A completed renderer presentation is useful capacity evidence only for the
+ * exact view and source-quality domain which produced it.  Keep the key and
+ * value inseparable so a partial controller update cannot authorize a stale
+ * progressive cut. */
+class BObolLodDeadlineSafePresentation {
+public:
+    void reset(void)
+    {
+	this->progressiveCeiling = -1;
+	this->viewRevision = 0;
+	this->qualityDomainRevision = 0;
+    }
+
+    void remember(int candidateCeiling, uint64_t candidateViewRevision,
+	uint64_t candidateQualityDomainRevision)
+    {
+	if (candidateCeiling < 0)
+	    return;
+	if (this->validFor(candidateViewRevision,
+		candidateQualityDomainRevision)) {
+	    if (candidateCeiling > this->progressiveCeiling)
+		this->progressiveCeiling = candidateCeiling;
+	    return;
+	}
+	this->progressiveCeiling = candidateCeiling;
+	this->viewRevision = candidateViewRevision;
+	this->qualityDomainRevision = candidateQualityDomainRevision;
+    }
+
+    int ceilingFor(uint64_t candidateViewRevision,
+	uint64_t candidateQualityDomainRevision) const
+    {
+	return this->validFor(candidateViewRevision,
+		candidateQualityDomainRevision) ? this->progressiveCeiling : -1;
+    }
+
+private:
+    bool validFor(uint64_t candidateViewRevision,
+	uint64_t candidateQualityDomainRevision) const
+    {
+	return this->progressiveCeiling >= 0 &&
+	    this->viewRevision == candidateViewRevision &&
+	    this->qualityDomainRevision == candidateQualityDomainRevision;
+    }
+
+    int progressiveCeiling = -1;
+    uint64_t viewRevision = 0;
+    uint64_t qualityDomainRevision = 0;
+};
+
+/* The retained allocator's error bounds are meaningful only with the view,
+ * policy, and point-proxy threshold which produced them.  The normalized
+ * error also drives the next retained update, while the projected error is
+ * exported to exact-view history only when the complete key still matches. */
+class BObolLodRetainedQualityEvidence {
+public:
+    void reset(void)
+    {
+	this->maximumNormalizedErrorValue =
+	    std::numeric_limits<double>::infinity();
+	this->maximumProjectedErrorPixelsValue =
+	    std::numeric_limits<double>::infinity();
+	this->viewRevision = 0;
+	this->policyRevision = 0;
+	this->pointProxyPixelThreshold =
+	    std::numeric_limits<float>::quiet_NaN();
+    }
+
+    void remember(double maximumNormalizedError,
+	double maximumProjectedErrorPixels, uint64_t currentViewRevision,
+	uint64_t currentPolicyRevision, float currentPointProxyPixelThreshold)
+    {
+	this->maximumNormalizedErrorValue = maximumNormalizedError;
+	this->maximumProjectedErrorPixelsValue = maximumProjectedErrorPixels;
+	this->viewRevision = currentViewRevision;
+	this->policyRevision = currentPolicyRevision;
+	this->pointProxyPixelThreshold = currentPointProxyPixelThreshold;
+    }
+
+    double maximumNormalizedError(void) const
+    {
+	return this->maximumNormalizedErrorValue;
+    }
+
+    double maximumProjectedErrorPixelsFor(uint64_t currentViewRevision,
+	uint64_t currentPolicyRevision,
+	float currentPointProxyPixelThreshold) const
+    {
+	if (this->viewRevision != currentViewRevision ||
+	    this->policyRevision != currentPolicyRevision ||
+	    !std::isfinite(this->pointProxyPixelThreshold) ||
+	    !std::isfinite(currentPointProxyPixelThreshold) ||
+	    std::fabs(this->pointProxyPixelThreshold -
+		currentPointProxyPixelThreshold) > POINT_PROXY_THRESHOLD_EPSILON)
+	    return std::numeric_limits<double>::infinity();
+	return this->maximumProjectedErrorPixelsValue;
+    }
+
+private:
+    static constexpr float POINT_PROXY_THRESHOLD_EPSILON = 1.0e-6f;
+
+    double maximumNormalizedErrorValue =
+	std::numeric_limits<double>::infinity();
+    double maximumProjectedErrorPixelsValue =
+	std::numeric_limits<double>::infinity();
+    uint64_t viewRevision = 0;
+    uint64_t policyRevision = 0;
+    float pointProxyPixelThreshold =
+	std::numeric_limits<float>::quiet_NaN();
+};
+
+/* Renderer timing and retained-upload observations form one epoch-local
+ * sample.  Serial/time and upload/reuse bookkeeping must advance together;
+ * otherwise an old duration can be paired with a new frame or a first upload
+ * can be mistaken for sustainable retained replay. */
+class BObolLodRendererPerformanceEvidence {
+public:
+    void reset(void)
+    {
+	this->lastGpuSampleSerial = 0;
+	this->lastGpuTimeNanosecondsValue = 0;
+	this->lastGeometryUploadBytes.reset();
+	this->lastPresentationReusable = true;
+    }
+
+    bool acceptGpuMeasurement(uint64_t sampleSerial,
+	uint64_t elapsedNanoseconds)
+    {
+	if (sampleSerial == this->lastGpuSampleSerial)
+	    return false;
+	this->lastGpuSampleSerial = sampleSerial;
+	this->lastGpuTimeNanosecondsValue = elapsedNanoseconds;
+	return true;
+    }
+
+    void noteCadPresentation(bool preparedReplay,
+	const std::optional<uint64_t> &geometryUploadBytes)
+    {
+	const bool uploadChanged = geometryUploadBytes &&
+	    (!this->lastGeometryUploadBytes ||
+	     *geometryUploadBytes != *this->lastGeometryUploadBytes);
+	if (geometryUploadBytes)
+	    this->lastGeometryUploadBytes = geometryUploadBytes;
+	this->lastPresentationReusable = preparedReplay ||
+	    (geometryUploadBytes && !uploadChanged);
+    }
+
+    uint64_t lastGpuTimeNanoseconds(void) const
+    {
+	return this->lastGpuTimeNanosecondsValue;
+    }
+
+    bool reusableCadPresentation(void) const
+    {
+	return this->lastPresentationReusable;
+    }
+
+private:
+    uint64_t lastGpuSampleSerial = 0;
+    uint64_t lastGpuTimeNanosecondsValue = 0;
+    std::optional<uint64_t> lastGeometryUploadBytes;
+    bool lastPresentationReusable = true;
 };
 
 /* Immutable-in-meaning configuration retained while a bounded submission
@@ -469,7 +646,8 @@ public:
 	OWNERLESS_WORK = 1u << 0,
 	TERMINAL_WITH_WORK = 1u << 1,
 	INVALID_READINESS = 1u << 2,
-	INVALID_OWNER = 1u << 3
+	INVALID_OWNER = 1u << 3,
+	UNWITNESSED_PRESENTATION = 1u << 4
     };
 
     struct Inputs {
@@ -607,7 +785,8 @@ public:
     }
 
     static uint32_t validate(const Snapshot &snapshot, bool terminal,
-	bool viewReady, bool terminalError)
+	bool viewReady, bool terminalError,
+	bool presentationProgressWitness = true)
     {
 	uint32_t violations = 0;
 	if (snapshot.obligations != 0 && snapshot.owner == Owner::NONE)
@@ -620,6 +799,14 @@ public:
 	    violations |= bit(Violation::TERMINAL_WITH_WORK);
 	if (viewReady && (!terminal || terminalError))
 	    violations |= bit(Violation::INVALID_READINESS);
+	/* PRESENTATION is an active transition, not a descriptive phase label.
+	 * It must own a requested frame, an independent producer which can publish
+	 * that frame, or a finite publication timer.  A pump level alone is not a
+	 * witness because presentation calibration may itself pause the cursor the
+	 * pump would otherwise advance. */
+	if (snapshot.owner == Owner::PRESENTATION &&
+	    !presentationProgressWitness)
+	    violations |= bit(Violation::UNWITNESSED_PRESENTATION);
 	return violations;
     }
 };

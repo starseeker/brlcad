@@ -1,8 +1,10 @@
 -------------------- MODULE ObolActiveProducerDemand --------------------
 \* One immutable asset producer may outlive several view/policy demands.
 \* This model checks only that ownership seam: current-demand results may be
-\* applied, overtaken results are superseded rather than provider failures, and an
-\* exact-demand failure cannot survive a demand epoch change.
+\* applied, results overtaken by a demand or compact-population generation are
+\* superseded rather than provider failures, and an exact-demand failure cannot
+\* survive a demand epoch change.  Consuming a superseded result must leave
+\* NeedCurrentDemand true so fair submission installs its successor witness.
 
 EXTENDS Naturals, TLC
 
@@ -150,8 +152,9 @@ MonotonePublishedDemand ==
 FailureIsCurrentDemand ==
     failureDemand = NoneDemand \/ failureDemand = demand
 
-\* Service normalization classifies an overtaken completion as superseded;
-\* only an actual provider failure may create exact-demand failure state.
+\* Service normalization and source result routing classify an overtaken demand
+\* or retired compact population as superseded; only an actual provider failure
+\* may create exact-demand failure state.
 SupersededResultIsNotFailure ==
     resultState = "superseded" => failureDemand # resultDemand
 

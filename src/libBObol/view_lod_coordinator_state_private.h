@@ -220,7 +220,9 @@ private:
 };
 
 /* One exact non-terminal structural-box frontier and the per-occurrence cost
- * reservation derived for its bounded repair pass.  A zero frontier is
+ * reservation derived for its bounded repair pass.  The optional point
+ * relaxation transaction retains its candidate after admission until an
+ * exact presentation either commits or rejects it.  A zero frontier is
  * inactive; beginning or retiring a frontier also retires its reservation. */
 class BObolLodStructuralRepair {
 public:
@@ -228,12 +230,50 @@ public:
     {
 	this->frontierCountValue = frontierCount;
 	this->coverageCostReservationValue = 0;
+	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationPendingValue = false;
+	this->pointRelaxationPresentationPendingValue = false;
+    }
+
+    void beginPointRelaxation(size_t frontierCount, float targetThreshold)
+    {
+	this->frontierCountValue = frontierCount;
+	this->coverageCostReservationValue = 0;
+	this->pointRelaxationTargetValue = targetThreshold;
+	this->pointRelaxationPendingValue = true;
+	this->pointRelaxationPresentationPendingValue = false;
     }
 
     void reset(void)
     {
 	this->frontierCountValue = 0;
 	this->coverageCostReservationValue = 0;
+	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationPendingValue = false;
+	this->pointRelaxationPresentationPendingValue = false;
+    }
+
+    void completePointRelaxationAdmission(void)
+    {
+	this->frontierCountValue = 0;
+	this->coverageCostReservationValue = 0;
+	this->pointRelaxationPresentationPendingValue = true;
+    }
+
+    void cancelPointRelaxation(void)
+    {
+	if (!this->pointRelaxationPendingValue)
+	    return;
+	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationPendingValue = false;
+	this->pointRelaxationPresentationPendingValue = false;
+	/* A submitted selective frontier still owns finite useful mesh work.
+	 * Let it finish as ordinary structural admission, but an admitted
+	 * candidate awaiting presentation has no work left to preserve. */
+	if (!this->active()) {
+	    this->frontierCountValue = 0;
+	    this->coverageCostReservationValue = 0;
+	}
     }
 
     bool active(void) const
@@ -244,6 +284,26 @@ public:
     size_t frontierCount(void) const
     {
 	return this->frontierCountValue;
+    }
+
+    bool pointRelaxationPending(void) const
+    {
+	return this->pointRelaxationPendingValue;
+    }
+
+    float pointRelaxationTarget(void) const
+    {
+	return this->pointRelaxationTargetValue;
+    }
+
+    bool pointRelaxationPresentationPending(void) const
+    {
+	return this->pointRelaxationPresentationPendingValue;
+    }
+
+    void notePointRelaxationPresented(void)
+    {
+	this->pointRelaxationPresentationPendingValue = false;
     }
 
     size_t coverageCostReservation(void) const
@@ -265,6 +325,9 @@ public:
 private:
     size_t frontierCountValue = 0;
     size_t coverageCostReservationValue = 0;
+    float pointRelaxationTargetValue = 0.0f;
+    bool pointRelaxationPendingValue = false;
+    bool pointRelaxationPresentationPendingValue = false;
 };
 
 /**
@@ -671,21 +734,12 @@ struct BObolLodCoordinator {
 
     void resetDeadlineSafePresentation(void)
     {
-	lodDeadlineSafeProgressiveCeiling = -1;
-	lodDeadlineSafeViewRevision = 0;
-	lodDeadlineSafeQualityDomainRevision = 0;
+	lodDeadlineSafePresentation.reset();
     }
 
     void resetRetainedAdmissionQualityProof(void)
     {
-	lodRetainedAdmissionMaximumNormalizedError =
-	    std::numeric_limits<double>::infinity();
-	lodRetainedAdmissionMaximumProjectedErrorPixels =
-	    std::numeric_limits<double>::infinity();
-	lodRetainedAdmissionQualityViewRevision = 0;
-	lodRetainedAdmissionQualityPolicyRevision = 0;
-	lodRetainedAdmissionQualityPointProxyPixelThreshold =
-	    std::numeric_limits<float>::quiet_NaN();
+	lodRetainedAdmissionQualityEvidence.reset();
 	lodRetainedAllocationCertificate = BObolRetainedAllocationResult();
     }
 
@@ -727,11 +781,7 @@ struct BObolLodCoordinator {
 	lodStableCalibratedRenderCostPerSecond = 0.0L;
 	lastRenderTimeNanoseconds = 0;
 	smoothedRenderTimeNanoseconds = 0;
-	lodLastCadGpuSampleSerial = 0;
-	lodLastCadGpuTimeNanoseconds = 0;
-	lodLastCadGpuGeometryUploadBytes.reset();
-	lodLastRenderWasPreparedCadReplay = TRUE;
-	lodLastRenderWasReusableCadPresentation = TRUE;
+	lodRendererPerformanceEvidence.reset();
 	lodInteractionStartCertificate.reset();
 	resetRetainedPassAnnotations();
 
@@ -827,13 +877,9 @@ struct BObolLodCoordinator {
     uint64_t lastBackgroundRenderTimeNanoseconds = 0;
     uint64_t lastSceneRenderTimeNanoseconds = 0;
     /* Full CAD plan/atlas construction is a real latency problem, but not a
-     * measurement of steady triangle throughput.  Only an unchanged prepared
-     * replay may drive quiet-view capacity cuts. */
-    SbBool lodLastRenderWasPreparedCadReplay = TRUE;
-    SbBool lodLastRenderWasReusableCadPresentation = TRUE;
-    uint64_t lodLastCadGpuSampleSerial = 0;
-    uint64_t lodLastCadGpuTimeNanoseconds = 0;
-    std::optional<uint64_t> lodLastCadGpuGeometryUploadBytes;
+     * measurement of steady triangle throughput.  Only a prepared replay or
+     * an unchanged retained upload population may drive quiet capacity cuts. */
+    BObolLodRendererPerformanceEvidence lodRendererPerformanceEvidence;
     uint64_t lastProgressiveAdvanceTimeNanoseconds = 0;
     uint64_t lastLodResultProcessingTimeNanoseconds = 0;
     uint64_t lastProgressiveProviderTimeNanoseconds = 0;
@@ -884,14 +930,7 @@ struct BObolLodCoordinator {
     std::shared_ptr<BObolRetainedAllocationTransaction>
 	lodRetainedAllocationTransaction;
     BObolLodSubmissionIntent lodSubmissionIntent;
-    double lodRetainedAdmissionMaximumNormalizedError =
-	std::numeric_limits<double>::infinity();
-    double lodRetainedAdmissionMaximumProjectedErrorPixels =
-	std::numeric_limits<double>::infinity();
-    uint64_t lodRetainedAdmissionQualityViewRevision = 0;
-    uint64_t lodRetainedAdmissionQualityPolicyRevision = 0;
-    float lodRetainedAdmissionQualityPointProxyPixelThreshold =
-	std::numeric_limits<float>::quiet_NaN();
+    BObolLodRetainedQualityEvidence lodRetainedAdmissionQualityEvidence;
     BObolRetainedAllocationResult lodRetainedAllocationCertificate;
     BObolLodSubmissionVisibleCount lodSubmissionVisibleCount;
     /* Large compact scenes are consumed in bounded GUI-thread windows.  A
@@ -937,11 +976,21 @@ struct BObolLodCoordinator {
      * camera and source-inventory revisions invalidate it.
     */
     mutable BObolLodConvergencePolicy lodConvergencePolicy;
-    void clearLodSubmissionPlan(void)
+    void clearLodSubmissionSourceState(void)
     {
 	lodSubmissionSourcePlan.reset();
 	lodRetainedAllocationTransaction.reset();
 	lodSubmissionVisibleCount.reset();
+    }
+    void positionLodSubmissionCursor(size_t sourceIndex)
+    {
+	lodSubmissionSourceIndex = sourceIndex;
+	lodSubmissionEntryOffset = 0;
+	clearLodSubmissionSourceState();
+    }
+    void rewindLodSubmissionCursor(void)
+    {
+	positionLodSubmissionCursor(0);
     }
     void clearLodConvergenceCandidates(void)
     {
@@ -1233,9 +1282,7 @@ struct BObolLodCoordinator {
      * retained data or endpoint capacity.  If a later quiet probe misses,
      * return directly to this proven cut instead of replaying every
      * intervening PoP ordinal. */
-    int lodDeadlineSafeProgressiveCeiling = -1;
-    uint64_t lodDeadlineSafeViewRevision = 0;
-    uint64_t lodDeadlineSafeQualityDomainRevision = 0;
+    BObolLodDeadlineSafePresentation lodDeadlineSafePresentation;
     /*
      * Current renderer-side small-occurrence aggregation cut.  Interaction
      * raises it immediately when measured frames miss their target.  A quiet

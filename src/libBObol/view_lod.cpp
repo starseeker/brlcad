@@ -1559,16 +1559,50 @@ BObolViewLodState::consumeDisplayResult(const SoBRLMeshShape *shape,
     return this->applyProxyResultInternal(shape, result, TRUE);
 }
 
+void
+BObolViewLodState::recordCadOccurrenceFailure(
+    const std::string &sourceBindingKey,
+    const std::string &occurrenceKey,
+    const BObolLodResult &result,
+    int providerStatus)
+{
+    CadOccurrenceFailure &failure =
+	this->cadOccurrenceFailures[sourceBindingKey][occurrenceKey];
+    failure.databaseRevision = result.request.databaseRevision.value();
+    failure.sourceRevision = result.request.sourceRevision.value();
+    failure.sourceContentHash = result.request.sourceContentHash;
+    failure.viewRevision = result.request.viewRevision.value();
+    failure.policyRevision = result.request.policyRevision.value();
+    failure.requestedCut = result.request.requestedCut;
+    failure.drawMode = result.request.drawMode;
+    failure.qualityTier = result.request.qualityTier;
+    failure.providerStatus = providerStatus;
+
+    /* A retained lower cut remains useful, but this exact missing suffix is
+     * no longer refinement work.  Keep the payload and remove only its
+     * retry-frontier entry. */
+    if (result.request.occurrenceKey.getLength() == 0)
+	return;
+    const auto unsatisfied = this->cadUnsatisfiedOccurrencesBySource.find(
+	sourceBindingKey);
+    if (unsatisfied == this->cadUnsatisfiedOccurrencesBySource.end())
+	return;
+    unsatisfied->second.erase(occurrenceKey);
+    if (unsatisfied->second.empty())
+	this->cadUnsatisfiedOccurrencesBySource.erase(unsatisfied);
+}
+
 SbBool
 BObolViewLodState::applySourceResult(
     const SoBRLDatabaseSource *source,
     const BObolLodResult &result)
 {
     BObolLodResult copy = result;
-    return this->applySourceResultInternal(source, copy, FALSE);
+    return this->applySourceResultInternal(source, copy, FALSE) ==
+	SourceResultDisposition::ACCEPTED ? TRUE : FALSE;
 }
 
-SbBool
+BObolViewLodState::SourceResultDisposition
 BObolViewLodState::consumeSourceResult(
     const SoBRLDatabaseSource *source,
     BObolLodResult &result)
@@ -1576,14 +1610,14 @@ BObolViewLodState::consumeSourceResult(
     return this->applySourceResultInternal(source, result, TRUE);
 }
 
-SbBool
+BObolViewLodState::SourceResultDisposition
 BObolViewLodState::applySourceResultInternal(
     const SoBRLDatabaseSource *source,
     BObolLodResult &result,
     SbBool consume)
 {
     if (!source)
-	return FALSE;
+	return SourceResultDisposition::RETRY_CURRENT_DEMAND;
 
     /* A compact entry index is meaningful only inside one installed source
      * population.  Reject stale results before they can update failure maps,
@@ -1597,7 +1631,7 @@ BObolViewLodState::applySourceResultInternal(
 	 result.request.sourcePopulationEpoch == 0 ||
 	 result.request.sourcePopulationEpoch.value() !=
 	    source->getCompactPopulationEpoch()))
-	return FALSE;
+	return SourceResultDisposition::RETRY_CURRENT_DEMAND;
 
     /* Validate positional and semantic identity together once at the result
      * boundary.  Downstream bounded planning may then treat an empty current
@@ -1612,7 +1646,7 @@ BObolViewLodState::applySourceResultInternal(
 		result.request.occurrenceKey.getString(), resolvedEntryIndex) ||
 	    resolvedEntryIndex != static_cast<size_t>(
 		result.request.sourceEntryIndex))
-	    return FALSE;
+	    return SourceResultDisposition::RETRY_CURRENT_DEMAND;
     }
 
     const std::string sourceBindingKey = view_lod_source_primary_key(source);
@@ -1627,54 +1661,41 @@ BObolViewLodState::applySourceResultInternal(
 		   result.request.objectPath.getString(),
 		   result.providerStatus, result.request.requestedCut,
 		   result.diagnostic.getString());
-	CadOccurrenceFailure &failure =
-	    this->cadOccurrenceFailures[sourceBindingKey][occurrenceKey];
-	failure.databaseRevision = result.request.databaseRevision.value();
-	failure.sourceRevision = result.request.sourceRevision.value();
-	failure.sourceContentHash = result.request.sourceContentHash;
-	failure.viewRevision = result.request.viewRevision.value();
-	failure.policyRevision = result.request.policyRevision.value();
-	failure.requestedCut = result.request.requestedCut;
-	failure.drawMode = result.request.drawMode;
-	failure.qualityTier = result.request.qualityTier;
-	failure.providerStatus = result.providerStatus;
-
-	/* A retained lower cut remains useful, but this exact missing suffix is
-	 * no longer refinement work.  Keep the payload and remove only its
-	 * retry-frontier entry. */
-	if (result.request.occurrenceKey.getLength() > 0) {
-	    const auto unsatisfied =
-		this->cadUnsatisfiedOccurrencesBySource.find(
-		    sourceBindingKey);
-	    if (unsatisfied !=
-		    this->cadUnsatisfiedOccurrencesBySource.end()) {
-		unsatisfied->second.erase(occurrenceKey);
-		if (unsatisfied->second.empty())
-		    this->cadUnsatisfiedOccurrencesBySource.erase(
-			unsatisfied);
-	    }
-	}
-	return TRUE;
+	this->recordCadOccurrenceFailure(sourceBindingKey, occurrenceKey,
+	    result, result.providerStatus);
+	return SourceResultDisposition::ACCEPTED;
     }
+    if (result.providerStatus == BOBOL_LOD_PROVIDER_CANCELLED ||
+	result.providerStatus == BOBOL_LOD_PROVIDER_SUPERSEDED)
+	return SourceResultDisposition::RETRY_CURRENT_DEMAND;
     if (result.providerStatus != BOBOL_LOD_PROVIDER_READY)
-	return FALSE;
+	return SourceResultDisposition::RETRY_CURRENT_DEMAND;
 
     if ((result.resultKind == BOBOL_LOD_RESULT_MESH ||
 	 result.resultKind == BOBOL_LOD_RESULT_FULL_DETAIL) &&
 	!result.mesh.isValid() &&
 	!result.preparedCadGeometry &&
 	result.presentationLayers.empty() &&
-	(!result.progressiveMesh || !result.progressiveMesh->isValid()))
-	return FALSE;
+	(!result.progressiveMesh || !result.progressiveMesh->isValid())) {
+	this->recordCadOccurrenceFailure(sourceBindingKey, occurrenceKey,
+	    result, BOBOL_LOD_PROVIDER_ERROR);
+	return SourceResultDisposition::ACCEPTED;
+    }
     if ((result.resultKind == BOBOL_LOD_RESULT_AABB ||
 	 result.resultKind == BOBOL_LOD_RESULT_PROXY) &&
-	!result.proxy.isValid())
-	return FALSE;
+	!result.proxy.isValid()) {
+	this->recordCadOccurrenceFailure(sourceBindingKey, occurrenceKey,
+	    result, BOBOL_LOD_PROVIDER_ERROR);
+	return SourceResultDisposition::ACCEPTED;
+    }
     if (result.resultKind != BOBOL_LOD_RESULT_MESH &&
 	result.resultKind != BOBOL_LOD_RESULT_FULL_DETAIL &&
 	result.resultKind != BOBOL_LOD_RESULT_AABB &&
-	result.resultKind != BOBOL_LOD_RESULT_PROXY)
-	return FALSE;
+	result.resultKind != BOBOL_LOD_RESULT_PROXY) {
+	this->recordCadOccurrenceFailure(sourceBindingKey, occurrenceKey,
+	    result, BOBOL_LOD_PROVIDER_ERROR);
+	return SourceResultDisposition::ACCEPTED;
+    }
 
     /* Do not let an out-of-order older bootstrap erase a current demand's
      * known failure.  A successful result for the exact demand does prove
@@ -1881,7 +1902,7 @@ BObolViewLodState::applySourceResultInternal(
     if (current != sourcePayloads.end() && current->second &&
 	view_lod_cad_payload_rank(*current->second) >
 	    view_lod_cad_payload_rank(*payload))
-	return TRUE;
+	return SourceResultDisposition::ACCEPTED;
     CadPayloadPtr publishedPayload;
     if (current != sourcePayloads.end() && current->second) {
 	/* Provider results replace renderer generations, not the owner-thread
@@ -1994,7 +2015,7 @@ BObolViewLodState::applySourceResultInternal(
     else
 	this->noteResidentMeshesChanged("source-wide-result");
     (void)this->adoptSharedCadPresentation(payload);
-    return TRUE;
+    return SourceResultDisposition::ACCEPTED;
 }
 
 size_t
@@ -3740,8 +3761,15 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	}
 	counts.pointCount = work.positionCount;
 	counts.normalCount = work.normalCount;
+	/* Structural boxes are deliberately excluded from mesh-cost accounting:
+	 * they are the transient baseline against which the first mesh wave is
+	 * admitted.  An exact all-structural frame therefore has an observed mesh
+	 * cost of zero; it is not a missing observation.  Keep an actually empty
+	 * assembly invalid so idle scene state cannot masquerade as capacity
+	 * evidence. */
 	if (!work.exact ||
-	    (!counts.faceCount && !counts.lineCount && !counts.pointCount)) {
+	    (!counts.faceCount && !counts.lineCount && !counts.pointCount &&
+	     !structural)) {
 	    presentedRenderCostValid = FALSE;
 	} else {
 	    const size_t occurrences = work.occurrenceCount >
@@ -3890,8 +3918,7 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
     this->cadLastPresentedPrimitiveCountValid =
 	haveAssembly && presentedValid;
     this->cadLastPresentedRenderCostValid =
-	haveAssembly && presentedRenderCostValid &&
-	this->cadLastPresentedRenderCost > 0;
+	haveAssembly && presentedRenderCostValid;
     this->cadLastGpuMeasurementValid =
 	haveAssembly && gpuMeasurementValid &&
 	haveGpuPointProxyPixelThreshold;

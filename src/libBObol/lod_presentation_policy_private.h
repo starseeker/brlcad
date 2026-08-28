@@ -200,6 +200,13 @@ public:
 	    size_t certifiedPresentationBudget,
 	    size_t reconciliationBudget = 0);
 
+    /* Capacity ownership begins with the first exact presentation, not with
+     * construction of the search object.  Predict that pending sample when a
+     * complete allocation is still hidden by a renderer ceiling so completed
+     * pass ownership can remove the ceiling before calibration starts. */
+    static bool capacitySamplePending(bool searchAwaitingSample,
+	    bool allocationCurrent, bool allocationPresentationRealized);
+
     /* A complete occurrence allocation which exceeds its own certified
      * budget is not another capacity-search candidate.  It is the concrete
      * lower bound which the presentation-reconciliation policy must either

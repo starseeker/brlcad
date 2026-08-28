@@ -328,6 +328,12 @@ public:
     };
 
     struct CompletedFrameInputs {
+	enum class CandidateState : uint8_t {
+	    CURRENT = 0,
+	    PRESENTATION_PENDING,
+	    REALLOCATION_REQUIRED
+	};
+
 	BObolLodCapacitySearchKey searchKey;
 	size_t candidateBudget = 0;
 	size_t presentedCost = 0;
@@ -335,6 +341,14 @@ public:
 	size_t knownSafeBudget = 0;
 	uint64_t observedNanoseconds = 0;
 	bool validSample = false;
+	/* A current retained allocation may still be hidden by a reversible
+	 * renderer ceiling.  That state waits for presentation.  A changed
+	 * occurrence population or unapplied cut requires another allocation and
+	 * must never be treated as an invalid timing sample. */
+	CandidateState candidateState = CandidateState::CURRENT;
+	/* Resident-result growth owns the successor allocation when it is pending.
+	 * Retire the obsolete search without racing that coalesced producer. */
+	bool reallocationProducerPending = false;
     };
 
     struct CalibrationDecision {
@@ -351,6 +365,8 @@ public:
     struct CompletedFrameDecision {
 	bool requestSampleFrame = false;
 	bool restartSubmission = false;
+	BObolLodCapacitySearchCertificate::Result searchResult =
+	    BObolLodCapacitySearchCertificate::Result::NONE;
     };
 
 private:
@@ -371,6 +387,8 @@ private:
 	 * point; absent such an edge, initialize a no-op admission cursor and let
 	 * the completed frame supply the next sample. */
 	if (this->capacitySearchValue.phase() ==
+		BObolLodCapacitySearchCertificate::Phase::PRESENTING ||
+	    this->capacitySearchValue.phase() ==
 		BObolLodCapacitySearchCertificate::Phase::MEASURING) {
 	    const size_t candidateBudget =
 		this->capacitySearchValue.candidateBudget();
@@ -737,6 +755,7 @@ private:
 	BObolLodAdmissionCursor *cursor)
     {
 	CompletedFrameDecision decision;
+	decision.searchResult = search.result;
 	if (search.requestsFrame()) {
 	    this->stableBudgetLimitedValue = false;
 	    decision.requestSampleFrame = true;
@@ -865,9 +884,39 @@ public:
 	BObolLodAdmissionCursor &cursor,
 	const CompletedFrameInputs &inputs)
     {
-	if (this->capacitySearchValue.phase() !=
-		BObolLodCapacitySearchCertificate::Phase::MEASURING)
+	if (!this->capacitySearchValue.awaitingSample())
 	    return this->completeCalibrationFrame(cursor);
+	if (inputs.candidateState ==
+		CompletedFrameInputs::CandidateState::REALLOCATION_REQUIRED) {
+	    CompletedFrameDecision decision;
+	    decision.searchResult =
+		BObolLodCapacitySearchCertificate::Result::STALE_POPULATION;
+	    this->capacitySearchValue.reset();
+	    this->stableBudgetLimitedValue = false;
+	    cursor.reset();
+	    if (!inputs.reallocationProducerPending) {
+		this->retainedAllocationRequestValue.requestReallocation(true);
+		decision.restartSubmission = true;
+	    }
+	    return decision;
+	}
+	if (inputs.candidateState ==
+		CompletedFrameInputs::CandidateState::PRESENTATION_PENDING) {
+	    /* A completed pass normally transfers this case to the presentation
+	     * handoff before the search starts.  If asynchronous state ordering
+	     * reaches the frame seam first, repainting cannot remove the ceiling.
+	     * Retire the premature search and request one allocation-owner pass;
+	     * its immutable owner selection performs the handoff. */
+	    CompletedFrameDecision decision;
+	    decision.searchResult =
+		BObolLodCapacitySearchCertificate::Result::HANDOFF_REQUIRED;
+	    this->capacitySearchValue.reset();
+	    this->stableBudgetLimitedValue = false;
+	    this->retainedAllocationRequestValue.requestReallocation(true);
+	    cursor.reset();
+	    decision.restartSubmission = true;
+	    return decision;
+	}
 	BObolLodCapacitySearchCertificate::Observation observation;
 	observation.key = inputs.searchKey;
 	observation.candidateBudget = inputs.candidateBudget;
@@ -875,7 +924,9 @@ public:
 	observation.populationSignature = inputs.populationSignature;
 	observation.knownSafeBudget = inputs.knownSafeBudget;
 	observation.observedNanoseconds = inputs.observedNanoseconds;
-	observation.validSample = inputs.validSample;
+	observation.validSample = inputs.validSample &&
+	    inputs.candidateState ==
+		CompletedFrameInputs::CandidateState::CURRENT;
 	return this->applyCapacitySearchDecision(
 	    this->capacitySearchValue.observe(observation), &cursor);
     }
@@ -1029,17 +1080,28 @@ public:
      * more conservative budget; this ceiling governs later calibration once
      * that one-shot handoff is complete. */
     void noteDeadlineCapacityMiss(size_t attemptedBudget,
-	bool staticDeadline = false)
+	bool staticDeadline = false, BObolLodAdmissionCursor *cursor = NULL)
     {
 	if (attemptedBudget <= 1 || attemptedBudget == SIZE_MAX)
 	    return;
-	/* The interrupted frame is a typed unsafe witness owned by deadline
-	 * recovery.  Retire any unchanged-frame candidate so its pending samples
-	 * cannot later overwrite the stricter ceiling with stale safe evidence. */
-	this->capacitySearchValue.reset();
-	const size_t reduction = std::max<size_t>(1, attemptedBudget / 20);
-	const size_t strictCeiling = attemptedBudget - reduction;
-	if (staticDeadline) {
+	const bool activeSearch = this->capacitySearchValue.phase() ==
+	    BObolLodCapacitySearchCertificate::Phase::MEASURING;
+	const bool activeStaticGoal = activeSearch &&
+	    this->capacitySearchValue.goal() ==
+		BObolLodCapacitySearchCertificate::Goal::STATIC;
+	const bool effectiveStaticDeadline = staticDeadline || activeStaticGoal;
+	/* Allocation and submitted-render costs may use different currencies.
+	 * During a bounded search the allocation candidate is the only sound
+	 * bracket coordinate; outside one, the renderer's estimate remains the
+	 * best available recovery bound. */
+	const size_t failedBudget = activeSearch ?
+	    this->capacitySearchValue.candidateBudget() : attemptedBudget;
+	const size_t reduction = std::max<size_t>(1, failedBudget / 20);
+	const size_t provenSafeBudget = activeSearch ?
+	    this->capacitySearchValue.safeBudget() : 0;
+	const size_t strictCeiling = std::max(
+	    provenSafeBudget, failedBudget - reduction);
+	if (effectiveStaticDeadline) {
 	    this->staticDeadlineCapacityCeilingValue = std::min(
 		this->staticDeadlineCapacityCeilingValue, strictCeiling);
 	    /* A population which misses the longer static deadline is also unsafe
@@ -1050,11 +1112,23 @@ public:
 	    this->steadyDeadlineCapacityCeilingValue = std::min(
 		this->steadyDeadlineCapacityCeilingValue, strictCeiling);
 	}
-	const size_t activeCeiling = staticDeadline ?
+	const size_t activeCeiling = effectiveStaticDeadline ?
 	    this->staticDeadlineCapacityCeilingValue :
 	    this->steadyDeadlineCapacityCeilingValue;
-	this->currentBudgetValue = std::min(
-	    this->currentBudgetValue, activeCeiling);
+	if (activeSearch) {
+	    BObolLodCapacitySearchKey updatedKey =
+		this->capacitySearchValue.key();
+	    updatedKey.preferredBudgetCeiling =
+		this->steadyDeadlineCapacityCeilingValue;
+	    updatedKey.maximumBudgetCeiling =
+		this->staticDeadlineCapacityCeilingValue;
+	    const BObolLodCapacitySearchCertificate::Decision search =
+		this->capacitySearchValue.observeDeadlineMiss(updatedKey);
+	    (void)this->applyCapacitySearchDecision(search, cursor);
+	} else {
+	    this->currentBudgetValue = std::min(
+		this->currentBudgetValue, activeCeiling);
+	}
 	/* A protected floor above a hard failed-work bound cannot be defended by
 	 * another soft allocation.  Retire it for this capacity epoch while
 	 * keeping every immutable resident suffix available to a later view. */

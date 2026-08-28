@@ -128,10 +128,10 @@ BObolLodAdmissionPlanner::recordDeadlineCapacityMiss(
 	const BObolLodAdmissionCursor &cursor, size_t attemptedBudget,
 	bool staticDeadline)
 {
-	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
-	result.nextEvidence.capacityValue.noteDeadlineCapacityMiss(
-	    attemptedBudget, staticDeadline);
-	return result;
+    BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+    result.nextEvidence.capacityValue.noteDeadlineCapacityMiss(
+	    attemptedBudget, staticDeadline, &result.nextCursor);
+    return result;
 }
 
 BObolLodAdmissionPlan
@@ -392,6 +392,18 @@ BObolLodAdmissionPlanner::planPointCompleted(
 	return result;
 }
 
+BObolLodAdmissionPlan
+BObolLodAdmissionPlanner::settlePointAtStructuralLimit(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, float currentThreshold)
+{
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.pointProxyValue.settleAtStructuralLimit(
+	    currentThreshold);
+	result.pointProxyDecision.threshold = currentThreshold;
+	return result;
+}
+
 bool
 BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(float currentThreshold,
 	size_t unresolvedStructuralCount)
@@ -474,13 +486,17 @@ BObolLodAdmissionPlanner::pointDeadlineRequiresPopulationAggregation(
 }
 
 bool
-BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(bool submissionPending,
-	bool submissionPausedByCalibration, bool providerPending,
-	bool servicePending, bool publicationAwaitingFrameRequest)
+BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
+	const PointCalibrationProducerInputs &inputs)
 {
+	const bool submissionPaused = presentationPausesSubmission(
+	    inputs.discoveryCalibrationPending,
+	    inputs.stableCalibrationPending,
+	    inputs.capacitySamplePending,
+	    inputs.stablePresentationAvailable);
 	return BObolLodPointProxyEvidence::producerOwnsCalibrationFrame(
-	    submissionPending, submissionPausedByCalibration, providerPending,
-	    servicePending, publicationAwaitingFrameRequest);
+	    inputs.submissionPending, submissionPaused, inputs.providerPending,
+	    inputs.servicePending, inputs.publicationAwaitingFrameRequest);
 }
 
 bool
@@ -531,6 +547,13 @@ BObolLodAdmissionPlanner::pointAtMaximumPixelThreshold(float threshold)
 }
 
 bool
+BObolLodAdmissionPlanner::pointTerminalReplayRequired(
+	const BObolLodAdmissionEvidence &evidence, float threshold)
+{
+	return evidence.pointProxy().terminalReplayRequired(threshold);
+}
+
+bool
 BObolLodAdmissionPlanner::shouldRecoverTriangleDetail(
 	bool reducibleProgressiveDetail, bool stableSampleOverloaded,
 	bool coarsePointCut, bool protectedQualityOwnsCuts)
@@ -559,6 +582,19 @@ BObolLodAdmissionPlanner::planStructural(
 	result.structuralDecision =
 	    result.nextEvidence.structuralValue.planStructural(inputs);
 	return result;
+}
+
+bool
+BObolLodAdmissionPlanner::structuralCapacityFrameApplicable(bool exactFrame,
+	bool renderCostObserved, uint64_t renderNanoseconds,
+	uint64_t presentationDeadlineNanoseconds)
+{
+	/* A pure structural frame has a valid observed mesh cost of zero.  The
+	 * scene allocator's standing seed budget supplies its first-mesh
+	 * allowance; requiring positive mesh cost here strands that exact box
+	 * frontier without a producer. */
+	return exactFrame && renderCostObserved && renderNanoseconds > 0 &&
+	    presentationDeadlineNanoseconds > 0;
 }
 
 size_t

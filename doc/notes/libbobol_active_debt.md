@@ -1,6 +1,6 @@
 # libBObol active debt
 
-Last reviewed: 2026-08-27
+Last reviewed: 2026-08-28
 
 This is the sole remaining-work list for the Obol drawing stack.  It records
 work which is not complete; resolved failure analysis belongs in
@@ -53,7 +53,7 @@ debt under another name:
 
 Focused Obol CAD tests, libBObol rendering/realization/update tests,
 `ged_test_obol_draw_sync`, the pivot guard, and the installed-package consumer
-pass after the 2026-08-27 publication/API cleanup.  This is a development
+pass after the 2026-08-28 control-contract cleanup.  This is a development
 gate, not production clearance.
 
 ## P0: finish the control-state reduction
@@ -70,6 +70,12 @@ presentation transaction, bounded preparation evidence, and the control
 refinement map all have focused tests.  The former 6.1k-line coordinator
 header is now a small umbrella over independently compile-checked admission,
 capacity, delivery, scene-evidence, presentation, and view-policy boundaries.
+Submission source repositioning now atomically resets its source-local plan,
+allocation cursor, and visibility census.  Fresh/retired submission passes
+atomically consume predecessor rescan state, while deliberate inventory pauses
+retain it.  Deadline-safe cuts, retained visual-error bounds, and renderer
+timing/upload observations are keyed allocation-free evidence values rather
+than independently writable companion scalars.
 The production shape is nevertheless still concentrated in two places:
 
 - `lod_admission_policy_private.h` now retains the allocation-free evidence
@@ -78,8 +84,10 @@ The production shape is nevertheless still concentrated in two places:
   remain in the same 1.4k-line header because their small methods preserve the
   trivially-copyable value contract, but any further extraction must keep the
   header-alone compile and exhaustive policy tests.
-- `view_lod_coordinator_state_private.h` is about 1.3k lines and still exposes
-  many mutable companions around submission and repair work.
+- `view_lod_coordinator_state_private.h` is about 1.3k lines.  Submission
+  cursor/pass ownership and the timing-derived certificates are now cohesive;
+  remaining repair, capacity, and presentation companions still need the same
+  owner/key/retirement audit.
 - `view_controller.cpp` is about 6.5k lines after lifetime/camera/host-request,
   exact-picking, and residency extraction.  It remains both reducer caller and
   the LoD policy effect executor.  Exact-view quality history is now an
@@ -88,15 +96,19 @@ The production shape is nevertheless still concentrated in two places:
 
 Required completion work:
 
-1. Inventory every remaining mutable controller field by sole owner, revision
-   domain, progress witness, and terminal transition.  Delete write-only or
-   derivable fields.
+1. Finish inventorying the remaining mutable controller fields by sole owner,
+   revision domain, progress witness, and terminal transition.  Delete
+   write-only or derivable fields; do not split a keyed certificate back into
+   convenient writable scalars.
 2. Continue moving nontrivial pure-policy method bodies behind the new
    compile-checked private boundaries.  Keep hot occurrence storage dense and
    allocation-free; this is a responsibility split, not an object hierarchy.
 3. Route remaining direct lifecycle mutations through one typed reducer which
-   returns a complete successor plus bounded effects.  An unmapped transition
-   is debt unless it represents a genuinely new semantic event.
+   returns a complete successor plus bounded effects.  Submission cursor
+   positioning and fresh/retired pass transitions now satisfy this rule;
+   deliberate pause/resume operations preserve rescan debt explicitly.  An
+   unmapped transition is debt unless it represents a genuinely new semantic
+   event.
 4. Extend randomized refinement traces as each remaining effect writer moves
    behind the reducer, and retain the exhaustive focused value tests.  The
    completed-pass boundary now has full selector enumeration plus 512 seeded
@@ -110,6 +122,28 @@ Required completion work:
 Acceptance: unchanged evidence cannot reopen planning; an invalid/stale plan
 cannot commit; one event cannot select two successor owners; no terminal HUD
 state has foreground work; and no nonterminal state is ownerless.
+
+Two 2026-08-28 150k System-GL traces exposed the same missing refinement at
+different effect boundaries.  A point-calibration request pauses the active
+submission cursor, so that cursor cannot also be counted as the frame producer
+which will present the calibration.  Producer classification is now one typed
+input value, all 256 input combinations have an executable truth-table test,
+and the controller recomputes ownership after deadline effects mutate the
+calibration state.  Runtime refinement validation additionally rejects a
+`PRESENTATION` owner without a requested frame, independent producer, or
+finite publication timer.  Retain those checks while completing the reducer;
+an owner label, progressive-pump level, or paused cursor is not a progress
+witness.
+
+The current 150k warm System-GL replay terminates box-free in about 120 seconds
+with 78,341 mesh occurrences and 20.49M faces.  It progresses from structural
+coverage through increasingly rich mesh populations without returning to
+boxes, but the remaining high-cardinality realization and capacity work is
+still P0 performance debt.  Profile and remove redundant population,
+publication, and cache work using common policy events rather than an
+object-count regime.  Do not weaken the liveness or pixel-quality contract to
+hide that cost.  Independently qualify true-cold useful-preview latency for
+large spatial meshes.
 
 ## P0: complete physical responsibility extraction
 

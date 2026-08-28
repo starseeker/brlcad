@@ -15,7 +15,12 @@
 \* goal, preserving the steady-safe lower bound.  A ready pose-only view may
 \* start at the static goal: its retained presentation is the initial
 \* candidate and may be coarsened only if it misses that hard deadline.  No
-\* timer, repaint, or throughput-EMA update may reopen either search.
+\* timer, repaint, or throughput-EMA update may reopen either search.  A hard
+\* deadline abort is an immediate unsafe classification of the active
+\* candidate; it narrows this certificate instead of creating another one.
+\* Candidate allocation and exact presentation are explicit producer
+\* barriers.  Neither may consume timing samples, and measurement cannot
+\* begin until both have completed.
 \*
 \* This model proves ownership and termination.  It deliberately does not
 \* model the numeric frame classifier or perceptual ordering of candidates;
@@ -28,7 +33,7 @@ CONSTANT CandidateCount, SampleLimit, PopulationOf
 ASSUME /\ CandidateCount > 0
        /\ SampleLimit > 0
 
-Phases == {"choose", "measure", "goal_done", "terminal"}
+Phases == {"choose", "allocate", "present", "measure", "goal_done", "terminal"}
 Goals == {"steady", "static"}
 Candidates == 1..CandidateCount
 Populations == 1..CandidateCount
@@ -92,7 +97,7 @@ BracketSound == safe <= CandidateCapacity(goal)
     /\ CandidateCapacity(goal) < unsafe
 
 CandidateOwned ==
-    phase = "measure" =>
+    phase \in {"allocate", "present", "measure"} =>
         /\ safe < candidate
         /\ candidate < unsafe
         /\ candidate \notin measured
@@ -145,12 +150,32 @@ ChooseCandidate ==
           IF PopulationOf[safe + (unsafe - safe) \div 2] \in
                   (measuredSafePopulations \union measuredUnsafePopulations)
               THEN 0 ELSE SampleLimit
-    /\ phase' = "measure"
+    /\ phase' = "allocate"
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
                     staticEligible, startAtStatic, safe, unsafe, measured,
                     measuredSafePopulations, measuredUnsafePopulations,
                     certificateRevision, priorWidth, goalTransitions>>
+
+ApplyCandidateAllocation ==
+    /\ phase = "allocate"
+    /\ phase' = "present"
+    /\ narrowed' = FALSE
+    /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
+                    staticEligible, startAtStatic, safe, unsafe, candidate,
+                    samplesRemaining, measured, measuredSafePopulations,
+                    measuredUnsafePopulations, certificateRevision,
+                    priorWidth, goalTransitions>>
+
+PresentExactCandidate ==
+    /\ phase = "present"
+    /\ phase' = "measure"
+    /\ narrowed' = FALSE
+    /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
+                    staticEligible, startAtStatic, safe, unsafe, candidate,
+                    samplesRemaining, measured, measuredSafePopulations,
+                    measuredUnsafePopulations, certificateRevision,
+                    priorWidth, goalTransitions>>
 
 ConsumeSample ==
     /\ phase = "measure"
@@ -178,6 +203,28 @@ ClassifyCandidate ==
                /\ measuredSafePopulations' = measuredSafePopulations
                /\ measuredUnsafePopulations' =
                     measuredUnsafePopulations \union {PopulationOf[candidate]}
+    /\ candidate' = 0
+    /\ samplesRemaining' = 0
+    /\ narrowed' = TRUE
+    /\ IF unsafe' = safe' + 1
+          THEN /\ phase' = "goal_done"
+               /\ certificateRevision' = 0
+          ELSE /\ phase' = "choose"
+               /\ certificateRevision' = 0
+    /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
+                    staticEligible, startAtStatic, goalTransitions>>
+
+RejectAtDeadline ==
+    /\ phase = "measure"
+    /\ samplesRemaining > 0
+    /\ PopulationOf[candidate] > Capacity(goal)
+    /\ priorWidth' = unsafe - safe
+    /\ safe' = safe
+    /\ unsafe' = candidate
+    /\ measured' = measured \cup {candidate}
+    /\ measuredSafePopulations' = measuredSafePopulations
+    /\ measuredUnsafePopulations' =
+          measuredUnsafePopulations \union {PopulationOf[candidate]}
     /\ candidate' = 0
     /\ samplesRemaining' = 0
     /\ narrowed' = TRUE
@@ -249,8 +296,11 @@ PublishTerminalCertificate ==
 
 Next ==
     \/ ChooseCandidate
+    \/ ApplyCandidateAllocation
+    \/ PresentExactCandidate
     \/ ConsumeSample
     \/ ClassifyCandidate
+    \/ RejectAtDeadline
     \/ ReusePopulation
     \/ AdvanceToStaticGoal
     \/ PublishTerminalCertificate
@@ -259,6 +309,8 @@ Spec ==
     /\ Init
     /\ [][Next]_vars
     /\ WF_vars(ChooseCandidate)
+    /\ WF_vars(ApplyCandidateAllocation)
+    /\ WF_vars(PresentExactCandidate)
     /\ WF_vars(ConsumeSample)
     /\ WF_vars(ClassifyCandidate)
     /\ WF_vars(ReusePopulation)

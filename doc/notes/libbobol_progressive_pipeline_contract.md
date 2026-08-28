@@ -1,6 +1,6 @@
 # libBObol progressive-presentation contract
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-28
 
 This document is the canonical high-level control contract for progressive CAD
 presentation.  It exists to keep the implementation understandable while it
@@ -240,7 +240,7 @@ request.
 
 The model follows growth, coverage, presentation, allocation, cut
 presentation, population change, and same-population sample effects across
-successive passes.  On 2026-08-27 TLC explored 2,270 generated / 1,804 distinct
+successive passes.  On 2026-08-28 TLC explored 2,334 generated / 1,836 distinct
 states to depth 17 with no invariant or liveness error.  The executable mapping
 is `completedPassSelection`, the availability-scheduler successor values, and
 the pass-annotation/revision contracts.  The focused coordinator test exhausts
@@ -777,11 +777,13 @@ Completed items remain contractual constraints and may not be reintroduced:
   retained triangle recovery are one mutually exclusive sum type.  Recovery
   owns source admission until its changed cut has a presentation witness; a
   calibration request cannot displace or coexist with it;
-- **partially complete capacity boundary:** a revision-bound bounded search now
-  owns the retained pixel-demand endpoint, including the one-way steady-to-
-  static transition and a fixed sample/candidate bound.  Migrate the remaining
-  ordinary probe/calibration branches to that certificate and delete their
-  companion latches; an EMA may propose a candidate but may not own retry;
+- **complete bounded capacity-search boundary:** a revision-bound search owns
+  the retained pixel-demand endpoint, including explicit allocation,
+  presentation, and measurement phases, the one-way steady-to-static
+  transition, and fixed sample/candidate bounds.  A candidate invalidated by
+  resident growth yields to that producer; a candidate hidden by a renderer
+  ceiling yields to one exclusive presentation handoff.  An EMA may propose a
+  candidate but may not own retry;
 - **remaining:** retain visibility census and projected-demand caching as
   algorithms, not mutable policy authorities; and
 - **complete HUD publication boundary:** the render host samples convergence
@@ -869,8 +871,9 @@ availability, view, policy, and capacity have independent revisions.  A
 bounded plan captures their exact tuple; if any component changes before the
 plan finishes, the stale plan can only abort and cannot advance or commit.
 
-On 2026-08-25 TLC explored 2,986,118 generated and 1,427,962 distinct states to
-depth 42 with no invariant, deadlock, or liveness error.  It proves bounded
+On 2026-08-28 TLC explored 2,358,764 generated and 1,095,220 distinct states to
+depth 40 with both temporal branches and no invariant, deadlock, or liveness
+error.  It proves bounded
 preparation ownership, shared-asset reuse, no direct meshes in large profiles,
 atomic non-regressing same-view commits, evidence-gated planning, truthful
 terminal outcomes, stale-plan rejection, active progress witnesses, eventual
@@ -903,12 +906,18 @@ population, and three bounded samples for every previously unseen population.
 Equivalent populations reuse their prior classification and select a midpoint
 of the remaining proven bracket; they do not walk adjacent numeric cost units
 which cannot change the discrete PoP cuts.
+An aborted hard-deadline frame is a typed unsafe observation of the active
+candidate.  It narrows the existing bracket immediately; it does not reset or
+rekey the certificate.  This is essential because a reset followed by a
+slightly tighter ceiling can alternate forever on a frozen large scene.
 It includes the one-way transition from the preferred steady cadence to the
-independent static deadline.  TLC explored 2,918 generated / 2,918 distinct
-states to depth 27.  It proves sound strict bracket reduction, immediate reuse
+independent static deadline and distinct allocation, exact-presentation, and
+timing-measurement phases.  TLC explored 4,704 generated / 4,368 distinct
+states to depth 37.  It proves sound strict bracket reduction, immediate reuse
 of a previously classified population, non-repetition of measured budgets, at
 most one goal transition, single terminal certificate publication, and
-eventual completion for a frozen tuple.
+eventual completion for a frozen tuple.  Allocation and presentation barriers
+do not consume the invalid timing allowance.
 
 `ObolCapacityPresentationHandoff.tla` isolates the exact-presentation boundary
 in front of that search.  On 2026-08-27 TLC explored 572 generated / 390
@@ -962,6 +971,16 @@ Software raster calls are subdivided into 8K-triangle cancellation units so
 that the host can enforce that deadline without exposing a partial frame.
 This data-plane bound is established by perf and graphical response tests,
 not by the TLA+ model.
+
+Producer eligibility is evaluated after the effect which requests point
+calibration.  That request pauses an active submission cursor, so the cursor
+cannot be the calibration's frame witness; a pre-effect classification is
+stale.  Production expresses all pause and producer facts in
+`PointCalibrationProducerInputs`, exhaustively tests its 256 combinations, and
+requests an explicit frame whenever the post-effect state has no independent
+producer.  `PRESENTATION` without that frame, producer, or a finite publication
+timer is a runtime refinement violation even though the abstract owner value
+is otherwise valid.
 
 The formal argument is compositional: `ObolProgressivePipeline.tla` defines the
 only high-level event and ledger grammar; each focused model refines one of its

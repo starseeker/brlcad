@@ -36,6 +36,15 @@ BObolLodPresentationPolicy::presentationLimitsReconciled(
 }
 
 bool
+BObolLodPresentationPolicy::capacitySamplePending(
+    bool searchAwaitingSample, bool allocationCurrent,
+    bool allocationPresentationRealized)
+{
+    return searchAwaitingSample ||
+	(allocationCurrent && !allocationPresentationRealized);
+}
+
+bool
 BObolLodPresentationPolicy::claimOverBudgetAllocation(
     bool allocationCurrent, bool allocationCutsApplied,
     size_t selectedPresentationCost, size_t certifiedPresentationBudget,
@@ -82,7 +91,7 @@ BObolLodPresentationPolicy::capacitySampleRequiresCeilingFreeHandoff(
     int progressiveCeiling) const
 {
     return capacitySamplePending && progressiveCeiling >= 0 &&
-	inputs.rescanAfterFrame && inputs.completed &&
+	(inputs.rescanAfterFrame || inputs.changedCut) && inputs.completed &&
 	!inputs.submissionPending && this->handoffActive() &&
 	!this->presentationHandoffPending() &&
 	inputs.retainedAllocationCompleted &&

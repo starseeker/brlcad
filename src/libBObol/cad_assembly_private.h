@@ -80,6 +80,11 @@ public:
     void lastUncollapsedStructuralProxyOccurrenceKeys(
 	std::vector<SbString> &occurrenceKeys) const;
 
+    /* Exact source occurrence identities for structural fallbacks which may
+     * become visible if the point-proxy threshold is lowered to pixels. */
+    bool lastStructuralProxyOccurrenceKeysAbovePixels(
+	float pixels, std::vector<SbString> &occurrenceKeys) const;
+
     void render(SoGLRenderAction *action);
     void getBounds(SoGetBoundingBoxAction *action);
     void pickRay(SoRayPickAction *action);

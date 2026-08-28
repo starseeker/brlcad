@@ -856,6 +856,23 @@ are gated by that selected owner, and the unselected handoff reducer cannot run.
 The multi-pass model covers the successor effect and annotation lifetime, not
 just the valid owner set at one snapshot.
 
+The first implementation of that correction still started the search before
+the completed-pass snapshot could say that its first exact sample was pending.
+On a large scene the allocator had applied every cut, but a temporary global
+ceiling hid the candidate.  Repainting could not change either fact, so the
+controller repeatedly presented the same coarse population.  Capacity-sample
+ownership is now level-triggered: completed-pass selection predicts the first
+sample from the current allocation certificate and requires the ceiling-free
+handoff before constructing or advancing the search.
+
+Rule: applying an allocation is not presenting it, and presenting it is not
+measuring it.  Keep `ALLOCATING`, `PRESENTING`, and `MEASURING` as distinct
+certificate phases.  A population change invalidates the candidate and yields
+to the already-pending resident-growth producer.  A hidden candidate yields to
+one presentation handoff.  Only an exact current framebuffer may consume a
+timing sample or its bounded invalid-sample allowance.  Repainting is never a
+successor for an allocation or presentation ownership gap.
+
 ### A multi-step availability transaction belongs in one sum type
 
 Resident growth was represented by ledger debt plus a controller drain boolean.
@@ -890,6 +907,37 @@ Rule: preserve the fact that the recovery was presented and let the ordinary
 progressive pump retire it idempotently when stronger barriers clear.  A typed
 obligation must always name a producer, a pending frame, or a level-triggered
 completion witness.
+
+### Recompute ownership after effects change producer eligibility
+
+A 150k completion path classified an active submission cursor as the producer
+of a pending point-calibration frame.  Calibration then paused that same
+cursor.  No frame, provider, service result, or finite timer remained, but the
+controller kept only the progressive-pump level and waited forever.  A second
+variant occurred after a deadline correction: the pre-correction state chose
+population continuation, the correction requested calibration and paused the
+cursor, and the stale choice suppressed the explicit frame request.
+
+Rule: producer ownership is derived from the post-effect state.  Inputs which
+jointly pause or enable a producer belong in one named value, not positional
+booleans copied between call sites.  If an effect changes any input, recompute
+the successor before publishing it.  Exhaust the small Boolean boundary in an
+executable truth-table test; the current point-calibration boundary checks all
+256 combinations.
+
+### An owner label is not a progress witness
+
+The abstract control snapshot correctly reported `PRESENTATION`, so the
+ordinary ownerless-work invariant remained green even when presentation had
+no possible successor.  A scheduled pump did not help: its only candidate
+cursor was paused by the presentation obligation itself.
+
+Rule: validate owner and witness separately.  Presentation requires a queued
+host frame, an independent producer capable of publishing one, or a finite
+publication timer.  Runtime refinement validation now reports an explicit
+unwitnessed-presentation violation.  TLA+ proves the abstract
+`PhaseHasWitness` property; exhaustive value tests and sampled graphical
+reports prove that the concrete-to-abstract mapping supplies a real witness.
 
 ### Coalesced asset work and view demand have different lifetimes
 
@@ -989,6 +1037,30 @@ and records a distinct `db_clone_dbi` failure; do not conflate it with the two
 identical Obol TLS-cleanup stacks above.  Recheck current upstream Obol before
 implementing the storage-lifetime repair, then retain a focused thread-exit
 regression in Obol and the active-callback process-exit regression in libBObol.
+
+### Companion fields are hidden transition relations
+
+The submission cursor once reset its source index, entry offset, pinned source
+plan, retained-allocation cursor, and visibility count in separate statements
+at dozens of call sites.  Pass activity and rescan debt were likewise cleared
+in either order.  Each sequence was locally reasonable, but every omitted or
+reordered statement defined another reachable state: a new pass could inherit
+an old source plan, or a retired pass could retain an unowned rescan.
+
+The same hazard existed in evidence rather than work ownership.  A proven
+renderer cut was writable separately from its view and quality-domain key;
+retained error bounds were separable from their view/policy/point-threshold
+key; GPU elapsed time was separable from its sample serial and retained-upload
+replay state.  Partial updates could therefore authorize stale capacity or
+quality evidence even though every individual scalar looked valid.
+
+Rule: if values are valid, invalidated, or advanced together, represent them as
+one allocation-free value with semantic transitions.  Cursor repositioning,
+fresh pass start, pass retirement, evidence replacement, and renderer sample
+acceptance are operations, not repeated assignments.  Keep explicit pause and
+resume transitions only where debt deliberately survives.  Test key mismatch,
+predecessor debt, first-versus-repeated upload, and reset behavior at the value
+boundary before exercising the full controller.
 
 - Run actual graphical clients.  Headless scene assertions cannot detect GL
   flashes, camera jumps, wrong lighting, mouse-coordinate errors, or retained

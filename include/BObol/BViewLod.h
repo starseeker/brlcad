@@ -114,6 +114,15 @@ public:
 	NORMAL_SMOOTH = 2
     };
 
+    /* A source result is either consumed by the current compact population
+     * or overtaken by a source/demand generation and must be requested again.
+     * Malformed provider results are recorded as terminal occurrence failures
+     * and therefore count as accepted convergence evidence. */
+    enum class SourceResultDisposition {
+	ACCEPTED = 0,
+	RETRY_CURRENT_DEMAND
+    };
+
     struct BOBOL_EXPORT MeshPayload {
 	BObolLodMeshPayload mesh;
 	BObolLodProgressiveMeshPtr progressiveMesh;
@@ -298,7 +307,8 @@ public:
 			     const BObolLodResult &result);
     SbBool consumeDisplayResult(const SoBRLMeshShape *shape,
 	BObolLodResult &result);
-    SbBool consumeSourceResult(const SoBRLDatabaseSource *source,
+    SourceResultDisposition consumeSourceResult(
+	const SoBRLDatabaseSource *source,
 	BObolLodResult &result);
     const MeshPayload *findMesh(const SoBRLMeshShape *shape) const;
     const MeshPayload *findMeshForResult(const BObolLodResult &result) const;
@@ -637,8 +647,12 @@ private:
 	BObolLodResult &result, SbBool consume);
     SbBool applyProxyResultInternal(const SoBRLMeshShape *shape,
 	BObolLodResult &result, SbBool consume);
-    SbBool applySourceResultInternal(const SoBRLDatabaseSource *source,
-	BObolLodResult &result, SbBool consume);
+    SourceResultDisposition applySourceResultInternal(
+	const SoBRLDatabaseSource *source, BObolLodResult &result,
+	SbBool consume);
+    void recordCadOccurrenceFailure(const std::string &sourceBindingKey,
+	const std::string &occurrenceKey, const BObolLodResult &result,
+	int providerStatus);
     size_t adoptSharedCadPresentation(const CadPayload *publisher);
     std::unordered_map<std::string, MeshPayloadPtr> meshBindings;
     std::unordered_map<std::string, ProxyPayloadPtr> proxyBindings;

@@ -1,6 +1,6 @@
 # libBObol formal model catalog
 
-Last reviewed: 2026-08-27
+Last reviewed: 2026-08-28
 
 This is the authoritative index of the drawing stack's TLA+ models.  The
 models are small proof boundaries for ownership, safety, and liveness.  They
@@ -93,15 +93,16 @@ focused models named by the table for the touched boundaries.  Convert every
 counterexample into a source invariant and executable regression test; do not
 accept the model fix without the implementation guard.
 
-Current focused verification on 2026-08-27:
+Current focused verification through 2026-08-28:
 
 - `ObolProgressivePipeline`: 2,358,764 generated / 1,095,220
   distinct states, depth 40;
 - `ObolControlRefinement`: 4,194,302 generated / 2,097,152
   distinct states, depth 1;
-- `ObolCapacitySearch`: 2,918 generated / 2,918 distinct states,
-  depth 27;
-- `ObolCompletedPassOwnership`: 2,270 generated / 1,804 distinct states,
+- `ObolSubmissionPass`: 7 generated / 5 distinct states, depth 4;
+- `ObolCapacitySearch`: 4,704 generated / 4,368 distinct states,
+  depth 37;
+- `ObolCompletedPassOwnership`: 2,334 generated / 1,836 distinct states,
   depth 17;
 - `ObolPresentationPreparation`: 1,143 generated / 526 distinct states,
   depth 12;
@@ -111,6 +112,23 @@ Current focused verification on 2026-08-27:
 - `ObolResidentGrowth`: 525 generated / 377 distinct states, depth 23;
 - `ObolInteractionSession`: 468 generated / 132 distinct, depth 11; and
 - `ObolLiveSpatialPublication`: 343 generated / 212 distinct, depth 11.
+
+The 2026-08-28 canonical progressive rerun completed in 95 seconds with the
+same 2,358,764 generated / 1,095,220 distinct states and depth 40, including
+both temporal branches.  The point-quality rerun completed with 29 generated /
+17 distinct states and depth 5.  Production refines the point model's
+`PhaseHasWitness` predicate with the typed
+`PointCalibrationProducerInputs`, an exhaustive 256-case C++ truth table, and
+the runtime unwitnessed-presentation violation bit.  That bridge is required:
+TLC cannot prove that a positional Boolean call site supplied the concrete
+producer it abstracted.
+
+The capacity model now makes allocation, exact presentation, and timing
+measurement separate phases.  Its liveness proof therefore cannot spend an
+invalid timing allowance while occurrence cuts are still being applied or a
+temporary renderer ceiling still hides them.  The completed-pass model also
+predicts the first capacity sample before the search object exists, so the
+exclusive handoff owner removes that ceiling before calibration begins.
 
 All completed without errors.  These counts are diagnostic, not acceptance
 criteria.  Sanitizers, randomized C++ traces, image/APNG comparison, perf,

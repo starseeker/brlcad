@@ -30,6 +30,7 @@ SoBRLLodUpdateAction::SoBRLLodUpdateAction(void) :
     matchedResultCount(0),
     appliedResultCount(0),
     rejectedResultCount(0),
+    currentDemandRetryResultCount(0),
     unmatchedResultCount(0),
     diagnostics("")
 {
@@ -127,6 +128,12 @@ SoBRLLodUpdateAction::getRejectedResultCount(void) const
 }
 
 unsigned int
+SoBRLLodUpdateAction::getCurrentDemandRetryResultCount(void) const
+{
+    return this->currentDemandRetryResultCount;
+}
+
+unsigned int
 SoBRLLodUpdateAction::getUnmatchedResultCount(void) const
 {
     return this->unmatchedResultCount;
@@ -220,6 +227,7 @@ SoBRLLodUpdateAction::beginTraversal(SoNode *node)
     this->matchedResultCount = 0;
     this->appliedResultCount = 0;
     this->rejectedResultCount = 0;
+    this->currentDemandRetryResultCount = 0;
     this->unmatchedResultCount = 0;
     this->diagnostics = "";
 
@@ -265,10 +273,16 @@ SoBRLLodUpdateAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    continue;
 	}
 
-	if (updateAction->viewState->consumeSourceResult(source, result))
+	const BObolViewLodState::SourceResultDisposition disposition =
+	    updateAction->viewState->consumeSourceResult(source, result);
+	if (disposition ==
+	    BObolViewLodState::SourceResultDisposition::ACCEPTED)
 	    updateAction->appliedResultCount++;
 	else {
 	    updateAction->rejectedResultCount++;
+	    if (disposition == BObolViewLodState::SourceResultDisposition::
+		    RETRY_CURRENT_DEMAND)
+		updateAction->currentDemandRetryResultCount++;
 	    if (getenv("BOBOL_LOD_TRACE_REJECTIONS")) {
 		static unsigned int sourceRejectTraceCount = 0;
 		if (sourceRejectTraceCount++ < 64)

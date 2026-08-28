@@ -379,6 +379,18 @@ private:
 	return threshold >= maximumPixelThreshold() - 0.01f;
     }
 
+    bool terminalReplayRequired(float threshold) const
+    {
+	const float current = sanitize(threshold);
+	return current > 1.01f &&
+	    std::fabs(this->settledThreshold - current) > 0.01f;
+    }
+
+    void settleAtStructuralLimit(float threshold)
+    {
+	this->settledThreshold = sanitize(threshold);
+    }
+
 public:
     struct Decision {
 	float threshold = 1.0f;
@@ -551,6 +563,7 @@ public:
     {
 	this->unsafeThreshold = 0.0f;
 	this->safeThreshold = 0.0f;
+	this->settledThreshold = 0.0f;
     }
 
 private:
@@ -572,6 +585,7 @@ private:
 	decision.threshold = current;
 	if (!visibleCount || !maximumUncollapsedCount)
 	    return decision;
+	this->settledThreshold = 0.0f;
 
 	float limit = 1.0f;
 	float next = current;
@@ -642,6 +656,7 @@ private:
 	decision.threshold = next;
 	decision.changed = std::fabs(next - current) > 0.01f;
 	decision.continueRelaxation = decision.changed && next > 1.01f;
+	this->settledThreshold = decision.changed ? 0.0f : current;
 	return decision;
     }
 
@@ -667,6 +682,7 @@ private:
 	decision.threshold = current;
 	if (!unresolvedStructuralCount)
 	    return decision;
+	this->settledThreshold = 0.0f;
 
 	this->unsafeThreshold = std::max(this->unsafeThreshold, current);
 	if (this->safeThreshold > 0.0f &&
@@ -716,8 +732,10 @@ private:
 	 * either satisfy coverage or produce the explicit budget-blocked witness
 	 * above.  In particular, do not lower the threshold and re-expose boxes
 	 * before that proof exists. */
-	if (unresolvedStructuralCount)
+	if (unresolvedStructuralCount) {
+	    this->settledThreshold = 0.0f;
 	    return decision;
+	}
 
 	if (this->safeThreshold <= 0.0f || current < this->safeThreshold)
 	    this->safeThreshold = current;
@@ -728,16 +746,20 @@ private:
 	 * should be tried.  The remembered safe/unsafe bracket still makes the
 	 * search bounded and prevents threshold chatter near the deadline. */
 	if (current <= 1.01f ||
-	    static_cast<long double>(renderNanoseconds) >= target * 0.80L)
+	    static_cast<long double>(renderNanoseconds) >= target * 0.80L) {
+	    this->settledThreshold = current;
 	    return decision;
+	}
 
 	float next = current;
 	if (this->unsafeThreshold > 0.0f &&
 	    this->safeThreshold > this->unsafeThreshold) {
 	    /* Once the bracket is within eight percent, retaining the proven
 	     * safe side avoids visible threshold chatter for negligible quality. */
-	    if (this->safeThreshold / this->unsafeThreshold <= 1.08f)
+	    if (this->safeThreshold / this->unsafeThreshold <= 1.08f) {
+		this->settledThreshold = current;
 		return decision;
+	    }
 	    next = static_cast<float>(std::sqrt(
 		static_cast<double>(this->safeThreshold) *
 		static_cast<double>(this->unsafeThreshold)));
@@ -755,6 +777,7 @@ private:
 	decision.threshold = next;
 	decision.changed = std::fabs(next - current) > 0.01f;
 	decision.continueRelaxation = decision.changed && next > 1.01f;
+	this->settledThreshold = decision.changed ? 0.0f : current;
 	return decision;
     }
 
@@ -826,6 +849,11 @@ private:
 
     float unsafeThreshold = 0.0f;
     float safeThreshold = 0.0f;
+    /* A coarse point cut is terminal only after a reusable frame evaluated
+     * that exact threshold.  Keeping this witness in the same reset domain as
+     * the safe/unsafe bracket prevents source batching or cache warmth from
+     * deciding whether the final relaxation sample happens to be requested. */
+    float settledThreshold = 0.0f;
 };
 
 /* Structural proxies with no useful point-aggregation successor are a
@@ -1013,6 +1041,17 @@ static_assert(std::is_trivially_copyable<BObolLodAdmissionPlan>::value,
  * unit tests (and the formal coordinator model) can enforce that boundary. */
 class BObolLodAdmissionPlanner {
 public:
+    struct PointCalibrationProducerInputs {
+	bool submissionPending = false;
+	bool discoveryCalibrationPending = false;
+	bool stableCalibrationPending = false;
+	bool capacitySamplePending = false;
+	bool stablePresentationAvailable = false;
+	bool providerPending = false;
+	bool servicePending = false;
+	bool publicationAwaitingFrameRequest = false;
+    };
+
     enum class EvidenceAction : uint8_t {
 	RESET_CAPACITY = 0,
 	CLEAR_CAPACITY_LIMIT,
@@ -1167,6 +1206,10 @@ public:
 	uint64_t renderNanoseconds, float targetFps, bool reusableSample,
 	size_t unresolvedStructuralCount = 0);
 
+    static BObolLodAdmissionPlan settlePointAtStructuralLimit(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, float currentThreshold);
+
     static bool pointRequiresReusableConfirmation(float currentThreshold,
 	size_t unresolvedStructuralCount = 0);
 
@@ -1198,9 +1241,8 @@ public:
 	int presentedMaximum, int correctedCeiling,
 	size_t correctedRenderCostBudget);
 
-    static bool pointProducerOwnsCalibrationFrame(bool submissionPending,
-	bool submissionPausedByCalibration, bool providerPending,
-	bool servicePending, bool publicationAwaitingFrameRequest);
+    static bool pointProducerOwnsCalibrationFrame(
+	const PointCalibrationProducerInputs &inputs);
 
     /* One completed framebuffer may advance only one measurement owner.  A
      * bounded capacity search has already frozen the point/mesh population it
@@ -1229,6 +1271,9 @@ public:
 
     static bool pointAtMaximumPixelThreshold(float threshold);
 
+    static bool pointTerminalReplayRequired(
+	const BObolLodAdmissionEvidence &evidence, float threshold);
+
     static bool shouldRecoverTriangleDetail(
 	bool reducibleProgressiveDetail, bool stableSampleOverloaded,
 	bool coarsePointCut, bool protectedQualityOwnsCuts);
@@ -1240,6 +1285,15 @@ public:
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor,
 	const BObolLodStructuralAdmissionEvidence::Inputs &inputs);
+
+    /* An exact structural-only frame is valid admission evidence even though
+     * its CAD mesh cost is zero.  The current scene allowance supplies the
+     * bounded first-mesh budget; requiring a positive mesh measurement here
+     * leaves a cold all-box population with no transition capable of creating
+     * that first mesh. */
+    static bool structuralCapacityFrameApplicable(bool exactFrame,
+	bool renderCostObserved, uint64_t renderNanoseconds,
+	uint64_t presentationDeadlineNanoseconds);
 
     static size_t unaggregatableStructuralCount(
 	const std::array<size_t, 7> &cumulativeCount, size_t visibleCount);

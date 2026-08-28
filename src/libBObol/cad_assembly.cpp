@@ -151,6 +151,24 @@ SoBRLCadAssembly::lastUncollapsedStructuralProxyOccurrenceKeys(
     }
 }
 
+bool
+SoBRLCadAssembly::lastStructuralProxyOccurrenceKeysAbovePixels(
+    float pixels, std::vector<SbString> &occurrenceKeys) const
+{
+    occurrenceKeys.clear();
+    const std::vector<Obol::InstanceId> instances =
+	this->lastStructuralProxyInstancesAbovePixels(pixels);
+    occurrenceKeys.reserve(instances.size());
+    for (const Obol::InstanceId &instance : instances) {
+	const auto semantic = this->semantics.find(instance);
+	if (semantic == this->semantics.end() ||
+		semantic->second.sourceInstanceKey.getLength() == 0)
+	    return false;
+	occurrenceKeys.push_back(semantic->second.sourceInstanceKey);
+    }
+    return true;
+}
+
 void
 SoBRLCadAssembly::reserveCompactPresentationCapacity(
     size_t expectedOccurrences)

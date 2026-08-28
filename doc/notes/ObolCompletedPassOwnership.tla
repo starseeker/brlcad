@@ -94,7 +94,8 @@ Init ==
     /\ allocationCertified \in BOOLEAN
     /\ ceilingFreeSample \in BOOLEAN
     /\ ceilingFreeSample =>
-           handoff = "allocation" /\ rescanAfterFrame /\ allocationCertified
+           handoff = "allocation" /\
+           (rescanAfterFrame \/ changedCut) /\ allocationCertified
     /\ capacityPopulation \in Populations
     /\ capacityCandidate \in Populations
     /\ initialCapacityPopulation = capacityPopulation
