@@ -82,6 +82,57 @@ public:
     bool update_on_application_thread = true;
 };
 
+struct BoundedProgressState {
+    unsigned int calls = 0;
+    unsigned int target = 0;
+};
+
+static int
+bounded_progress_provider(BObolViewController *controller, void *data,
+	const BObolProgressiveOptions *options, BObolProgressiveStatus *status)
+{
+    BoundedProgressState *state = static_cast<BoundedProgressState *>(data);
+    if (!controller || !state || !options || !status || !state->target)
+	return -1;
+
+    state->calls++;
+    status->hasMore = state->calls < state->target ? 1 : 0;
+    return 1;
+}
+
+static int
+test_qtcad_progressive_timer_contract(void)
+{
+    QgSW canvas;
+    BObolViewController *controller = canvas.obolViewController();
+    CHECK(controller, "Qt software canvas exposes its Obol controller");
+
+    controller->setLodAutoSubmit(FALSE);
+    controller->clearProgressiveProviders();
+    controller->clearProgressiveWorkPending();
+    controller->clearRenderRequest();
+
+    BoundedProgressState state;
+    state.target = 24;
+    const uint64_t token = controller->registerProgressiveProvider(
+	bounded_progress_provider, &state);
+    CHECK(token != 0, "Qt progressive timer fixture registers its provider");
+
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while ((state.calls < state.target ||
+	    controller->hasProgressiveWorkPending()) && elapsed.elapsed() < 2000) {
+	QApplication::processEvents(QEventLoop::AllEvents, 20);
+	QThread::msleep(1);
+    }
+    CHECK(state.calls == state.target &&
+	!controller->hasProgressiveWorkPending(),
+	"Qt progressive timer drains a standing multi-slice work level");
+
+    controller->unregisterProgressiveProvider(token);
+    return 0;
+}
+
 static void
 add_visible_obol_content(BObolViewController *controller)
 {
@@ -903,6 +954,8 @@ main(int argc, char **argv)
 #endif
 
     if (test_qtcad_window_host_contract())
+	return 1;
+    if (test_qtcad_progressive_timer_contract())
 	return 1;
     if (test_qtcad_owned_window_host())
 	return 1;

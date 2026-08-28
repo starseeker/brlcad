@@ -524,6 +524,61 @@ test_compaction_preserves_coordinate_only_frontier(void)
 }
 
 static int
+test_repeated_compaction_bounds_drawable_frontier(void)
+{
+    point_t points[4];
+    uint32_t faces[6] = {0, 1, 2, 0, 2, 3};
+    VSET(points[0], 0.0, 0.0, 0.0);
+    VSET(points[1], 1.0, 0.0, 0.0);
+    VSET(points[2], 1.0, 1.0, 0.0);
+    VSET(points[3], 0.0, 1.0, 0.0);
+
+    struct BObolMeshLodData data = {};
+    data.faces = faces;
+    data.face_count = 2;
+    data.points = points;
+    data.point_count = 4;
+    data.points_orig = points;
+    data.point_orig_count = 4;
+    VSET(data.bmin, 0.0, 0.0, 0.0);
+    VSET(data.bmax, 1.0, 1.0, 0.0);
+
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    hierarchy.min_cut = 0;
+    hierarchy.max_cut = 2;
+    hierarchy.resident_cut = 2;
+    hierarchy.cuts[0].face_count = 1;
+    hierarchy.cuts[0].point_count = 3;
+    hierarchy.cuts[1].face_count = 1;
+    hierarchy.cuts[1].point_count = 3;
+    hierarchy.cuts[2].face_count = 2;
+    hierarchy.cuts[2].point_count = 4;
+    VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
+    VSET(hierarchy.quantization_max, 1.0, 1.0, 0.0);
+    complete_test_hierarchy(hierarchy);
+
+    BObolLodProgressiveMesh progressive;
+    if (!progressive.update(data, hierarchy, 2, FALSE) ||
+	!progressive.trim(1) || !progressive.trim(0)) {
+	printf("FAIL: repeated compaction fixture setup\n");
+	return 1;
+    }
+
+    const std::shared_ptr<const Obol::PartGeometry> trimmed =
+	progressive.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED, NULL);
+    if (!trimmed || !trimmed->shaded ||
+	trimmed->shaded->progressiveResidentCut != 1 ||
+	trimmed->shaded->indices.size() != 3 ||
+	trimmed->shaded->positions.size() != 3 ||
+	!progressive.canDrawCut(1) || progressive.canDrawCut(2)) {
+	printf("FAIL: repeated compaction advertised a nonresident topology cut\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_progressive_generation_rejects_corruption(void)
 {
     point_t points[3];
@@ -758,6 +813,8 @@ main(int argc, char **argv)
     if (test_worker_prepared_generation_lifetime())
 	return 1;
     if (test_compaction_preserves_coordinate_only_frontier())
+	return 1;
+    if (test_repeated_compaction_bounds_drawable_frontier())
 	return 1;
     if (test_progressive_generation_rejects_corruption())
 	return 1;

@@ -1,11 +1,15 @@
 --------------------------- MODULE ObolCapacitySearch --------------------------
 \* Bounded renderer-capacity search below the progressive drawing pipeline.
 \*
-\* Candidate indices denote complete, visual-importance-ordered scene
-\* allocations for one immutable revision tuple.  Zero is the known-safe
-\* coverage population and CandidateCount + 1 is an unsafe sentinel.  A
-\* candidate consumes at most SampleLimit measurements and then strictly
-\* narrows the safe/unsafe bracket.  A quiet view searches first for the
+\* Candidate indices denote numeric allocation budgets for one immutable
+\* revision tuple.  PopulationOf maps those budgets to complete, discrete,
+\* visual-importance-ordered scene populations; adjacent budgets may select
+\* the same PoP cuts.  Zero is the known-safe coverage population and
+\* CandidateCount + 1 is an unsafe sentinel.  A previously unseen population
+\* consumes at most SampleLimit measurements.  A different budget selecting
+\* an already classified population reuses that result without repainting,
+\* and either transition strictly narrows the safe/unsafe budget bracket.  A
+\* quiet view searches first for the
 \* preferred steady cadence.  If quality debt remains and the independent
 \* static deadline is available, it may advance exactly once to the static
 \* goal, preserving the steady-safe lower bound.  A ready pose-only view may
@@ -19,7 +23,7 @@
 
 EXTENDS FiniteSets, Naturals, TLC
 
-CONSTANT CandidateCount, SampleLimit
+CONSTANT CandidateCount, SampleLimit, PopulationOf
 
 ASSUME /\ CandidateCount > 0
        /\ SampleLimit > 0
@@ -27,6 +31,14 @@ ASSUME /\ CandidateCount > 0
 Phases == {"choose", "measure", "goal_done", "terminal"}
 Goals == {"steady", "static"}
 Candidates == 1..CandidateCount
+Populations == 1..CandidateCount
+PairedPopulationMap ==
+    [candidate \in Candidates |-> (candidate + 1) \div 2]
+
+ASSUME /\ PopulationOf \in [Candidates -> Populations]
+       /\ \A candidate \in Candidates : PopulationOf[candidate] <= candidate
+       /\ \A lower, upper \in Candidates :
+              lower <= upper => PopulationOf[lower] <= PopulationOf[upper]
 
 VARIABLES phase,
           goal,
@@ -39,6 +51,8 @@ VARIABLES phase,
           candidate,
           samplesRemaining,
           measured,
+          measuredSafePopulations,
+          measuredUnsafePopulations,
           certificateRevision,
           priorWidth,
           narrowed,
@@ -47,9 +61,12 @@ VARIABLES phase,
 vars == <<phase, goal, trueSteadyCapacity, trueStaticCapacity, staticEligible,
           startAtStatic,
           safe, unsafe, candidate, samplesRemaining, measured,
+          measuredSafePopulations, measuredUnsafePopulations,
           certificateRevision, priorWidth, narrowed, goalTransitions>>
 
 Capacity(g) == IF g = "steady" THEN trueSteadyCapacity ELSE trueStaticCapacity
+CandidateCapacity(g) ==
+    Cardinality({budget \in Candidates : PopulationOf[budget] <= Capacity(g)})
 
 TypeOK ==
     /\ phase \in Phases
@@ -63,24 +80,31 @@ TypeOK ==
     /\ candidate \in 0..CandidateCount
     /\ samplesRemaining \in 0..SampleLimit
     /\ measured \subseteq Candidates
+    /\ measuredSafePopulations \subseteq Populations
+    /\ measuredUnsafePopulations \subseteq Populations
+    /\ measuredSafePopulations \cap measuredUnsafePopulations = {}
     /\ certificateRevision \in 0..1
     /\ priorWidth \in 1..(CandidateCount + 1)
     /\ narrowed \in BOOLEAN
     /\ goalTransitions \in 0..1
 
-BracketSound == safe <= Capacity(goal) /\ Capacity(goal) < unsafe
+BracketSound == safe <= CandidateCapacity(goal)
+    /\ CandidateCapacity(goal) < unsafe
 
 CandidateOwned ==
     phase = "measure" =>
         /\ safe < candidate
         /\ candidate < unsafe
         /\ candidate \notin measured
-        /\ samplesRemaining > 0
+        /\ IF PopulationOf[candidate] \in
+                  (measuredSafePopulations \union measuredUnsafePopulations)
+              THEN samplesRemaining = 0
+              ELSE samplesRemaining > 0
 
 TerminalCertificate ==
     phase = "terminal" =>
         /\ unsafe = safe + 1
-        /\ safe = Capacity(goal)
+        /\ safe = CandidateCapacity(goal)
         /\ certificateRevision = 1
         /\ samplesRemaining = 0
         /\ \/ goal = "static"
@@ -106,6 +130,8 @@ Init ==
     /\ candidate = 0
     /\ samplesRemaining = 0
     /\ measured = {}
+    /\ measuredSafePopulations = {}
+    /\ measuredUnsafePopulations = {}
     /\ certificateRevision = 0
     /\ priorWidth = CandidateCount + 1
     /\ narrowed = FALSE
@@ -115,11 +141,15 @@ ChooseCandidate ==
     /\ phase = "choose"
     /\ unsafe > safe + 1
     /\ candidate' = safe + (unsafe - safe) \div 2
-    /\ samplesRemaining' = SampleLimit
+    /\ samplesRemaining' =
+          IF PopulationOf[safe + (unsafe - safe) \div 2] \in
+                  (measuredSafePopulations \union measuredUnsafePopulations)
+              THEN 0 ELSE SampleLimit
     /\ phase' = "measure"
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
                     staticEligible, startAtStatic, safe, unsafe, measured,
+                    measuredSafePopulations, measuredUnsafePopulations,
                     certificateRevision, priorWidth, goalTransitions>>
 
 ConsumeSample ==
@@ -129,6 +159,7 @@ ConsumeSample ==
     /\ narrowed' = FALSE
     /\ UNCHANGED <<phase, goal, trueSteadyCapacity, trueStaticCapacity,
                     staticEligible, startAtStatic, safe, unsafe, candidate, measured,
+                    measuredSafePopulations, measuredUnsafePopulations,
                     certificateRevision, priorWidth, goalTransitions>>
 
 ClassifyCandidate ==
@@ -136,11 +167,17 @@ ClassifyCandidate ==
     /\ samplesRemaining = 1
     /\ priorWidth' = unsafe - safe
     /\ measured' = measured \cup {candidate}
-    /\ IF candidate <= Capacity(goal)
+    /\ IF PopulationOf[candidate] <= Capacity(goal)
           THEN /\ safe' = candidate
                /\ unsafe' = unsafe
+               /\ measuredSafePopulations' =
+                    measuredSafePopulations \union {PopulationOf[candidate]}
+               /\ measuredUnsafePopulations' = measuredUnsafePopulations
           ELSE /\ safe' = safe
                /\ unsafe' = candidate
+               /\ measuredSafePopulations' = measuredSafePopulations
+               /\ measuredUnsafePopulations' =
+                    measuredUnsafePopulations \union {PopulationOf[candidate]}
     /\ candidate' = 0
     /\ samplesRemaining' = 0
     /\ narrowed' = TRUE
@@ -151,6 +188,30 @@ ClassifyCandidate ==
                /\ certificateRevision' = 0
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
                     staticEligible, startAtStatic, goalTransitions>>
+
+ReusePopulation ==
+    /\ phase = "measure"
+    /\ samplesRemaining = 0
+    /\ PopulationOf[candidate] \in
+          (measuredSafePopulations \union measuredUnsafePopulations)
+    /\ priorWidth' = unsafe - safe
+    /\ measured' = measured \union {candidate}
+    /\ IF PopulationOf[candidate] \in measuredSafePopulations
+          THEN /\ safe' = candidate
+               /\ unsafe' = unsafe
+          ELSE /\ safe' = safe
+               /\ unsafe' = candidate
+    /\ candidate' = 0
+    /\ narrowed' = TRUE
+    /\ IF unsafe' = safe' + 1
+          THEN /\ phase' = "goal_done"
+               /\ certificateRevision' = 0
+          ELSE /\ phase' = "choose"
+               /\ certificateRevision' = 0
+    /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
+                    staticEligible, startAtStatic, samplesRemaining,
+                    measuredSafePopulations, measuredUnsafePopulations,
+                    goalTransitions>>
 
 AdvanceToStaticGoal ==
     /\ phase = "goal_done"
@@ -163,6 +224,8 @@ AdvanceToStaticGoal ==
     /\ candidate' = 0
     /\ samplesRemaining' = 0
     /\ measured' = {}
+    /\ measuredSafePopulations' = {}
+    /\ measuredUnsafePopulations' = {}
     /\ certificateRevision' = 0
     /\ priorWidth' = CandidateCount + 1 - safe
     /\ narrowed' = FALSE
@@ -181,12 +244,14 @@ PublishTerminalCertificate ==
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
                     staticEligible, startAtStatic, safe, unsafe, candidate,
-                    samplesRemaining, measured, priorWidth, goalTransitions>>
+                    samplesRemaining, measured, measuredSafePopulations,
+                    measuredUnsafePopulations, priorWidth, goalTransitions>>
 
 Next ==
     \/ ChooseCandidate
     \/ ConsumeSample
     \/ ClassifyCandidate
+    \/ ReusePopulation
     \/ AdvanceToStaticGoal
     \/ PublishTerminalCertificate
 
@@ -196,6 +261,7 @@ Spec ==
     /\ WF_vars(ChooseCandidate)
     /\ WF_vars(ConsumeSample)
     /\ WF_vars(ClassifyCandidate)
+    /\ WF_vars(ReusePopulation)
     /\ WF_vars(AdvanceToStaticGoal)
     /\ WF_vars(PublishTerminalCertificate)
 

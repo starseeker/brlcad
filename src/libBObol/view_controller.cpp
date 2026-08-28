@@ -3227,12 +3227,18 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	this->d->lodRetainedPass.cutAdvanced();
     const bool completedPassBudgetBlocked = completedPass &&
 	this->d->lodRetainedPass.budgetBlocked();
+    const bool residentWorkPending = completedPass && service &&
+	(service->activeTaskCountForGeneration(generation) > 0 ||
+	 service->queuedResultCountForGeneration(generation) > 0 ||
+	 this->d->lodAvailabilityLedger.resultsPending() > 0);
     const BObolLodAvailabilityScheduler::CompletedPassSuccessor
 	completedPassSuccessor =
 	    BObolLodAvailabilityScheduler::completedPassSuccessor(
 		completedPass,
 		this->d->lodAvailabilityLedger.residencyDrainActive(),
 		this->d->lodAvailabilityLedger.residentGrowthPending(),
+		this->d->lodRetainedPass.residencyPending(),
+		residentWorkPending,
 		this->d->lodPointQualityPhase.triangleRecoveryPending(),
 		this->d->lodPointQualityPhase.presentationPending(),
 		completedPassBudgetBlocked);
@@ -3515,6 +3521,28 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	this->d->resetRetainedPassAnnotations();
 	if (completeResidencyDrain)
 	    (void)this->d->lodAvailabilityLedger.completeResidencyDrain();
+    } else if (BObolLodAvailabilityScheduler::
+	residentRefinementOwnsSuccessor(completedPassSuccessor)) {
+	/* A resident suffix is availability work, not another capacity sample.
+	 * Reallocating the unchanged occurrence population while its task is in
+	 * flight spins the owner thread and cannot make a cut drawable.  Yield to
+	 * the result edge when a producer exists; otherwise run one ordinary pass
+	 * which can submit the missing request. */
+	const bool submitResidentRequests = completedPassSuccessor ==
+	    BObolLodAvailabilityScheduler::CompletedPassSuccessor::
+		SUBMIT_RESIDENT_REQUESTS;
+	this->d->lodSubmissionSourceIndex = 0;
+	this->d->lodSubmissionEntryOffset = 0;
+	this->d->clearLodSubmissionPlan();
+	this->d->lodSubmissionPass.clearRescan();
+	this->d->lodSubmissionPass.setActive(
+	    submitResidentRequests && !sources.empty());
+	this->d->resetRetainedPassAnnotations();
+	if (this->d->lodSubmissionPass.active()) {
+	    this->d->advanceAdmissionRevision(
+		BObolLodAdmissionRevisionDomain::AVAILABILITY);
+	    this->markProgressiveWorkPending();
+	}
     } else if (completedPassSuccessor ==
 	BObolLodAvailabilityScheduler::CompletedPassSuccessor::
 	    PRESENT_POINT_CALIBRATION) {
@@ -3668,6 +3696,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	calibrationInputs.boundedSearch = currentCapacityAllocation;
 	calibrationInputs.candidateBudget = currentCapacityAllocation ?
 	    capacityAllocation.certifiedPresentationBudget : 0;
+	calibrationInputs.populationSignature = currentCapacityAllocation ?
+	    capacityAllocation.selectedPopulationSignature : 0;
 	calibrationInputs.demandedBudget = currentCapacityAllocation ?
 	    capacityAllocation.pixelDemandPresentationCost : 0;
 	/* The lower bracket belongs to the certificate's first target.  Seed only
@@ -3905,8 +3935,15 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		"scene LoD reached its calibrated face budget");
 	this->d->lodRetainedPass.clearAdmittedWork();
 	this->d->retireRetainedRefinementObservation();
-	this->d->advanceAdmissionRevision(
-	    BObolLodAdmissionRevisionDomain::CAPACITY);
+	/* The capacity revision names a candidate population, not a completed
+	 * mechanical scan.  Preserve it while a frame samples that candidate or
+	 * while a terminal decision consumes its current allocation certificate.
+	 * Advancing it after every no-op blocked pass invalidates the certificate
+	 * which the handoff below must consume, reopening the same allocation and
+	 * compaction forever. */
+	if (calibration.restartSubmission)
+	    this->d->advanceAdmissionRevision(
+		BObolLodAdmissionRevisionDomain::CAPACITY);
     } else {
 	this->d->lodSubmissionPass.setActive(!completedPass);
 	if (completedPass)
@@ -3952,27 +3989,6 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	!this->d->lodPresentationTransaction.barrierPending()) {
 	this->markProgressiveWorkPending();
 	this->requestRender("lod-static-overscan-allocation");
-    }
-
-    if (completedPass && this->d->lodRetainedPass.residencyPending() &&
-	!completedPassChangedCut && !this->d->lodSubmissionPass.active() &&
-	!this->d->lodPresentationTransaction.barrierPending()) {
-	/* The minimax allocation did not need to change the currently drawable
-	 * prefix, but one or more allocated levels still need a resident suffix.
-	 * There is no presentation barrier to wait for, so start the ordinary
-	 * provider pass now.  Treating this as a mere quality observation made a
-	 * quiet Hubble view report ready until an unrelated erase or selection
-	 * event happened to wake the missing cache requests. */
-	this->d->lodRetainedPass.clearResidencyPending();
-	this->d->lodSubmissionSourceIndex = 0;
-	this->d->lodSubmissionEntryOffset = 0;
-	this->d->clearLodSubmissionPlan();
-	this->d->lodSubmissionPass.clearRescan();
-	this->d->lodSubmissionPass.setActive(!sources.empty());
-	this->d->advanceAdmissionRevision(
-	    BObolLodAdmissionRevisionDomain::CAPACITY);
-	if (this->d->lodSubmissionPass.active())
-	    this->markProgressiveWorkPending();
     }
 
     /*
@@ -5542,7 +5558,7 @@ BObolViewController::beginLodInteraction(void)
 	BObolLodQualityPolicy::interactivePixelError(
 	    interactionTimingSample,
 	    this->d->lodInteractiveTargetFps);
-    if (this->d->retainedPointProxyAggregationApplicable()) {
+    if (this->d->pointProxyAggregationApplicableForCameraTransition()) {
 	this->d->lodPresentationPointProxyPixelThreshold =
 	    BObolLodQualityPolicy::pointProxyThreshold(
 		this->d->lodPresentationPointProxyPixelThreshold,
@@ -6262,9 +6278,7 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
      * transient zero must not discard an already proven aggregate point cut;
      * sample this presentation fact before invalidating the census. */
     const SbBool priorPointProxyAggregationApplicable =
-	BObolLodAdmissionPlanner::pointAggregationApplicableAcrossCameraInvalidation(
-		this->d->pointProxyAggregationApplicable(),
-		this->d->lodPresentationPointProxyPixelThreshold) ?
+	this->d->pointProxyAggregationApplicableForCameraTransition() ?
 	    TRUE : FALSE;
     SbBool priorViewReady = FALSE;
     if (this->d->lodAutoSubmit && !this->d->lodInteractionSession.active()) {

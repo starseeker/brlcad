@@ -579,6 +579,7 @@ public:
 	    std::numeric_limits<double>::infinity();
 	result.protectedFloorBudget = this->allocationBudget;
 	result.protectedFloorSignature = this->protectedFloorSignature;
+	result.selectedPopulationSignature = this->populationSignature();
 	result.selectedPresentationCost = this->finalCost;
 	result.pixelDemandPresentationCost = this->pixelDemandPresentationCost;
 	result.certifiedPresentationBudget = this->effectiveBudget;
@@ -627,6 +628,49 @@ public:
     }
 
 private:
+    static void hashPopulationValue(uint64_t &hash, uint64_t value)
+    {
+	static constexpr uint64_t prime = UINT64_C(1099511628211);
+	for (size_t byte = 0; byte < sizeof(value); ++byte) {
+	    hash ^= (value >> (byte * 8u)) & UINT64_C(0xff);
+	    hash *= prime;
+	}
+    }
+
+    uint64_t populationSignature(void) const
+    {
+	static constexpr uint64_t offset = UINT64_C(1469598103934665603);
+	uint64_t hash = offset;
+	this->hashPopulationValue(hash, this->fixedCadPresentationCost);
+	this->hashPopulationValue(hash, this->fixedAllocations.size());
+	for (const FixedAllocation &fixed : this->fixedAllocations) {
+	    this->hashPopulationValue(hash,
+		static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
+		    fixed.payload)));
+	    this->hashPopulationValue(hash,
+		static_cast<uint64_t>(static_cast<uint32_t>(fixed.cut)));
+	    this->hashPopulationValue(hash,
+		static_cast<uint64_t>(static_cast<uint32_t>(fixed.drawMode)));
+	}
+	this->hashPopulationValue(hash, this->candidates.size());
+	for (size_t i = 0; i < this->candidates.size(); ++i) {
+	    const Candidate &candidate = this->candidates[i];
+	    this->hashPopulationValue(hash,
+		static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
+		    candidate.payload)));
+	    this->hashPopulationValue(hash,
+		static_cast<uint64_t>(static_cast<uint32_t>(
+		    this->finalCuts[i])));
+	    this->hashPopulationValue(hash,
+		static_cast<uint64_t>(static_cast<uint32_t>(
+		    candidate.drawMode)));
+	    this->hashPopulationValue(hash,
+		this->finalPointProxies[i] ? UINT64_C(1) : UINT64_C(0));
+	}
+	/* Zero denotes an unavailable identity at the policy boundary. */
+	return hash ? hash : UINT64_C(1);
+    }
+
     /* A feature below this footprint is normally either small hardware or a
      * thin projected detail.  It still participates in marginal refinement,
      * but does not make the all-or-nothing prominent-feature floor fail for

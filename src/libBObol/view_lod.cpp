@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "bu/str.h"
+#include "bu/log.h"
 
 #include "BObol/BExportAction.h"
 #include "BObol/BDatabaseSource.h"
@@ -3627,11 +3628,36 @@ BObolViewLodState::refreshCadPresentationFrameStatus(void) const
 	    prior != this->cadPresentationFrameStartPreparationSnapshots.end() ?
 		prior->second :
 		Obol::CadPresentationPreparationSnapshot();
+	const Obol::CadPresentationPreparationSnapshot after =
+	    assembly->presentationPreparationSnapshot();
+	const BObolCadPreparationProgress preparationProgress =
+	    BObolCadPreparationPolicy::classify(before, after);
+	if (getenv("BOBOL_LOD_TRACE_PREPARATION") && after.hasTarget()) {
+	    const bool sameTarget = before.hasTarget() &&
+		before.target == after.target;
+	    bu_log("BObol CAD preparation assembly=%p same=%d progress=%d "
+		   "state=%d kind=%d obligation=%llu plan=%llu geometry=%llu "
+		   "ceiling=%d units=%llu/%llu prior=%llu/%llu bytes=%llu\n",
+		   static_cast<const void *>(assembly), sameTarget ? 1 : 0,
+		   static_cast<int>(preparationProgress),
+		   static_cast<int>(after.state),
+		   static_cast<int>(after.target.kind),
+		   static_cast<unsigned long long>(
+		       after.target.obligationRevision),
+		   static_cast<unsigned long long>(after.target.planRevision),
+		   static_cast<unsigned long long>(
+		       after.target.geometryRevision),
+		   after.target.progressiveCutCeiling,
+		   static_cast<unsigned long long>(after.completedUnits),
+		   static_cast<unsigned long long>(after.totalUnits),
+		   static_cast<unsigned long long>(before.completedUnits),
+		   static_cast<unsigned long long>(before.totalUnits),
+		   static_cast<unsigned long long>(after.reservedBytes));
+	}
 	this->cadLastPreparationProgress =
 	    BObolCadPreparationPolicy::combine(
 		this->cadLastPreparationProgress,
-		BObolCadPreparationPolicy::classify(
-		    before, assembly->presentationPreparationSnapshot()));
+		preparationProgress);
 	haveAssembly = TRUE;
 	const int tier = assembly->lastRenderTier();
 	const Obol::CadRenderedWork work = assembly->lastRenderedWork();

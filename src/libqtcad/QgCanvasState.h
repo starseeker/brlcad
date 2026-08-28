@@ -109,7 +109,8 @@ struct QgCanvasState {
     double y_press_pos = -INT_MAX;
     bool   obol_paint_initialized = false;
     bool   fb_update_queued = false;
-    bool   progressive_update_queued = false;
+    QTimer progressive_update_timer;
+    bool   progressive_update_connected = false;
     int    progressive_update_delay_msec = 16;
     /* Set only by the built-in camera drag action.  Selection/edit gestures
      * use the same Qt buttons but must not coarsen or restart scene LoD. */
@@ -358,7 +359,8 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	s.obol->getHostWorkSnapshot() : BObolHostWorkSnapshot();
     if (!s.obol || !w ||
 	(initialWork.flags == BOBOL_HOST_WORK_NONE &&
-	 !s.lod_progress_idle_tail_pending) || s.progressive_update_queued)
+	 !s.lod_progress_idle_tail_pending) ||
+	s.progressive_update_timer.isActive())
 	return;
 
     /* A controller pump is itself bounded and returns to Qt between slices.
@@ -368,9 +370,10 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
      * idle time after every 8 ms slice and could miss a 60-second liveness
      * gate despite having no worker, renderer, or cache work outstanding. */
     const int delay = s.progressive_update_delay_msec <= 1 ? 1 : 16;
-    s.progressive_update_queued = true;
-    QTimer::singleShot(delay, w, [&s, w]() {
-	s.progressive_update_queued = false;
+    if (!s.progressive_update_connected) {
+	s.progressive_update_timer.setSingleShot(true);
+	QObject::connect(&s.progressive_update_timer, &QTimer::timeout, w,
+	    [&s, w]() {
 	BObolHostWorkSnapshot work = s.obol ?
 	    s.obol->getHostWorkSnapshot() : BObolHostWorkSnapshot();
 	if (!s.obol)
@@ -471,6 +474,9 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	 * consumes the request and no provider work remains. */
 	qgcanvas_queue_obol_progressive_update(s, w);
     });
+	s.progressive_update_connected = true;
+    }
+    s.progressive_update_timer.start(delay);
 }
 
 /** Mirror the current RT view state into the Obol direct camera. */
@@ -761,6 +767,7 @@ qgcanvas_init_obol(QgCanvasState &s, QWidget *w,
 static inline void
 qgcanvas_destroy_obol(QgCanvasState &s, QWidget *w)
 {
+    s.progressive_update_timer.stop();
     delete s.offscreen_renderer;
     s.offscreen_renderer = nullptr;
     delete s.presentation_fbo;

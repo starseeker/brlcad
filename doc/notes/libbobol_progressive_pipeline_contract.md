@@ -199,7 +199,11 @@ active cut.  A pass which changes those occurrence cuts may complete this
 handoff; requiring a mechanically unchanged successor would strand the search
 behind the obsolete ceiling.  Equal aggregate cost is not an identity proof
 for a multi-occurrence allocation because a different visual distribution may
-have the same total.  An applied allocation hidden by an effective ceiling may
+have the same total.  The retained allocator therefore publishes a semantic-
+epoch-scoped signature of every occurrence cut and point representation.  A
+different numeric budget selecting that same signature reuses the population's
+completed measurements immediately; it does not repaint an unchanged view for
+another three-frame sample series.  An applied allocation hidden by an effective ceiling may
 arm the candidate's sample-frame latch, but only its exact ceiling-free
 successor may consume a sample.  Invalid or differently constrained frames do
 not consume the candidate's bounded sample allowance.
@@ -208,8 +212,13 @@ that candidate or strictly narrows a known-safe/known-unsafe bracket.  A
 terminal search publishes one capacity certificate and cannot reopen without a
 new population or revision.  Throughput smoothing may propose a candidate; an
 EMA change, timer, or repaint is not evidence and cannot itself advance the
-capacity revision.  Search work is bounded by the candidate bracket, not scene
-cardinality or elapsed wall time.  `ObolCapacitySearch.tla` models this owner;
+capacity revision.  Likewise, completing a mechanical allocation scan without
+selecting a successor population preserves the current capacity revision.  The
+revision advances only when the decision names a new population; otherwise the
+scan would invalidate the allocation certificate required by its own handoff
+and could reopen the same allocation indefinitely.  Search work is bounded by
+the candidate bracket, not scene cardinality or elapsed wall time.
+`ObolCapacitySearch.tla` models this owner;
 `ObolCapacityPresentationHandoff.tla` models the allocation-application,
 ceiling-reconciliation, and exact-sample ordering boundary.
 
@@ -838,24 +847,28 @@ proves that equivalent semantic certificates produce one identical successor
 despite different transient motion publication orders, that a prior-pose
 restore cannot bypass its current-pose proof, and that finite input terminates.
 `ObolCapacitySearch.tla` checks all modeled true capacities for eight ordered
-candidates and three bounded samples, including the one-way transition from
-the preferred steady cadence to the independent static deadline.  TLC explored
-1,792 generated / 1,792 distinct states to depth 31.  It proves sound strict
-bracket reduction, non-repetition of measured candidates, at most one goal
-transition, single terminal certificate publication, and eventual completion
-for a frozen tuple.
+budgets, a monotone map which pairs adjacent budgets onto the same discrete
+population, and three bounded samples for every previously unseen population.
+It includes the one-way transition from the preferred steady cadence to the
+independent static deadline.  TLC explored 2,918 generated / 2,918 distinct
+states to depth 27.  It proves sound strict bracket reduction, immediate reuse
+of a previously classified population, non-repetition of measured budgets, at
+most one goal transition, single terminal certificate publication, and
+eventual completion for a frozen tuple.
 
 `ObolCapacityPresentationHandoff.tla` isolates the exact-presentation boundary
-in front of that search.  On 2026-08-26 TLC explored 178 generated / 138
-distinct states to depth 9 with no invariant or liveness error.  It covers
+in front of that search.  On 2026-08-27 TLC explored 572 generated / 390
+distinct states to depth 10 with no invariant or liveness error.  It covers
 changed and already-applied occurrence plans, effective and inert global
 ceilings, and an applied occurrence allocation whose protected population
 exceeds its own certified budget.  It also models an initially unavailable
 assignment and requires availability restriction before the cut can be
-applied.  It proves that pre-handoff frames cannot
-consume a sample, an effective ceiling is removed before measurement, and the
-over-budget state has one finite owner: local representation reduction followed
-by either an exact sampled certificate or an explicit bounded constraint.  The
+applied.  A completed no-op allocation scan preserves the frozen population
+and allocation-certificate revisions.  It proves that pre-handoff frames
+cannot consume a sample, an effective ceiling is removed before measurement,
+and the over-budget state has one finite owner: local representation reduction
+followed by either an exact sampled certificate or an explicit bounded
+constraint.  The
 executable mapping is `claimOverBudgetAllocation`,
 `capacitySampleRequiresCeilingFreeHandoff`,
 `cadAllocationPlanCutsApplied`, and `capacitySamplePopulationReady`; the

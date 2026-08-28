@@ -324,12 +324,14 @@ public:
 	size_t candidateBudget = 0;
 	size_t demandedBudget = 0;
 	size_t knownSafeBudget = 0;
+	uint64_t populationSignature = 0;
     };
 
     struct CompletedFrameInputs {
 	BObolLodCapacitySearchKey searchKey;
 	size_t candidateBudget = 0;
 	size_t presentedCost = 0;
+	uint64_t populationSignature = 0;
 	size_t knownSafeBudget = 0;
 	uint64_t observedNanoseconds = 0;
 	bool validSample = false;
@@ -795,6 +797,7 @@ public:
 	    BObolLodCapacitySearchCertificate::Observation observation;
 	    observation.key = inputs.searchKey;
 	    observation.candidateBudget = inputs.candidateBudget;
+	    observation.populationSignature = inputs.populationSignature;
 	    /* A changed allocation pass freezes its pre-pass active cost in the
 	     * mechanical cursor.  Bind the new candidate only when its completed
 	     * frame supplies the post-commit population. */
@@ -869,6 +872,7 @@ public:
 	observation.key = inputs.searchKey;
 	observation.candidateBudget = inputs.candidateBudget;
 	observation.presentedCost = inputs.presentedCost;
+	observation.populationSignature = inputs.populationSignature;
 	observation.knownSafeBudget = inputs.knownSafeBudget;
 	observation.observedNanoseconds = inputs.observedNanoseconds;
 	observation.validSample = inputs.validSample;

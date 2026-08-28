@@ -116,6 +116,9 @@ public:
 	BObolLodCapacitySearchKey key;
 	size_t candidateBudget = 0;
 	size_t presentedCost = 0;
+	/* Exact retained-allocation identity for this semantic epoch.  Different
+	 * numeric budgets may select the same discrete set of PoP cuts. */
+	uint64_t populationSignature = 0;
 	size_t knownSafeBudget = 0;
 	uint64_t observedNanoseconds = 0;
 	bool validSample = false;
@@ -202,24 +205,47 @@ public:
 	const size_t candidate = std::max(this->goalMinimumBudget(),
 	    std::min(observation.candidateBudget,
 		this->goalMaximumBudget()));
+	bool allocationBarrier = false;
 	if (candidate != this->candidateBudgetValue) {
 	    if (this->measured(candidate))
 		return this->finish(Result::STALE_POPULATION);
 	    this->startCandidate(candidate, observation.presentedCost);
 	} else if (this->phaseValue == Phase::ALLOCATING) {
 	    /* A reallocation decision names the next complete population, but it
-	     * does not own a framebuffer sample.  Only the successor observation
-	     * proves that the population was applied and transfers the certificate
-	     * into its finite measurement phase. */
+	     * does not own a framebuffer sample.  Admission describes the selected
+	     * retained-allocation cost, while the renderer reports the canonical
+	     * submitted-work cost; those are deliberately different currencies on
+	     * paths such as OSMesa's expanded position stream.  Bind the population
+	     * identity from the first completed frame below, not from this
+	     * allocation barrier.  Otherwise a discrete candidate which changes no
+	     * drawable cut is rejected as stale and reopens the same search forever. */
 	    this->phaseValue = Phase::MEASURING;
-	    this->candidatePresentedCostValue = observation.presentedCost;
-	} else if (this->candidatePresentedCostValue &&
-	    observation.presentedCost &&
-	    this->candidatePresentedCostValue != observation.presentedCost) {
-	    return this->finish(Result::STALE_POPULATION);
-	} else if (!this->candidatePresentedCostValue) {
-	    this->candidatePresentedCostValue = observation.presentedCost;
+	    this->candidatePresentedCostValue = 0;
+	    this->candidatePopulationSignatureValue = 0;
+	    allocationBarrier = !observation.validSample;
 	}
+	if (allocationBarrier)
+	    return this->decision(Result::REQUEST_SAMPLE,
+		this->candidateBudgetValue);
+	if (this->candidatePresentedCostValue && observation.presentedCost &&
+	    this->candidatePresentedCostValue != observation.presentedCost)
+	    return this->finish(Result::STALE_POPULATION);
+	if (!this->candidatePresentedCostValue)
+	    this->candidatePresentedCostValue = observation.presentedCost;
+	if (this->candidatePopulationSignatureValue &&
+	    observation.populationSignature &&
+	    this->candidatePopulationSignatureValue !=
+		observation.populationSignature)
+	    return this->finish(Result::STALE_POPULATION);
+	if (!this->candidatePopulationSignatureValue)
+	    this->candidatePopulationSignatureValue =
+		observation.populationSignature;
+	const int equivalent = this->measuredPopulation(
+	    this->candidatePopulationSignatureValue,
+	    this->candidatePresentedCostValue);
+	if (equivalent >= 0)
+	    return this->classifyEquivalentPopulation(
+		static_cast<unsigned int>(equivalent));
 	return this->decision(Result::REQUEST_SAMPLE,
 	    this->candidateBudgetValue);
     }
@@ -382,6 +408,7 @@ private:
 	    Phase::ALLOCATING : Phase::MEASURING;
 	this->candidateBudgetValue = budget;
 	this->candidatePresentedCostValue = presentedCost;
+	this->candidatePopulationSignatureValue = 0;
 	this->sampleCountValue = 0;
 	this->safeSampleCountValue = 0;
 	this->invalidSampleCountValue = 0;
@@ -395,6 +422,17 @@ private:
 		return true;
 	}
 	return false;
+    }
+
+    int measuredPopulation(uint64_t signature, size_t presentedCost) const
+    {
+	if (!signature || !presentedCost)
+	    return -1;
+	for (unsigned int i = 0; i < this->measuredCandidateCountValue; ++i)
+	    if (this->measuredPopulationSignaturesValue[i] == signature &&
+		this->measuredPopulationCostsValue[i] == presentedCost)
+		return static_cast<int>(i);
+	return -1;
     }
 
     size_t unmeasuredCandidate(size_t preferred) const
@@ -417,12 +455,30 @@ private:
 	return !this->measured(lower) ? lower : 0;
     }
 
+    Decision classifyEquivalentPopulation(unsigned int measuredIndex)
+    {
+	return this->classifyCandidate(
+	    this->measuredPopulationSafeValue[measuredIndex],
+	    this->measuredPopulationProposalsValue[measuredIndex]);
+    }
+
     Decision classifyCandidate(void)
     {
-	const size_t candidate = this->candidateBudgetValue;
-	this->measuredCandidatesValue[this->measuredCandidateCountValue++] =
-	    candidate;
 	const bool safe = this->safeSampleCountValue * 2 >= sampleLimit();
+	return this->classifyCandidate(safe, median(this->proposalValues));
+    }
+
+    Decision classifyCandidate(bool safe, size_t proposal)
+    {
+	const size_t candidate = this->candidateBudgetValue;
+	const unsigned int measuredIndex = this->measuredCandidateCountValue++;
+	this->measuredCandidatesValue[measuredIndex] = candidate;
+	this->measuredPopulationSignaturesValue[measuredIndex] =
+	    this->candidatePopulationSignatureValue;
+	this->measuredPopulationCostsValue[measuredIndex] =
+	    this->candidatePresentedCostValue;
+	this->measuredPopulationSafeValue[measuredIndex] = safe;
+	this->measuredPopulationProposalsValue[measuredIndex] = proposal;
 	if (safe)
 	    this->safeBudgetValue = std::max(this->safeBudgetValue, candidate);
 	else
@@ -457,7 +513,6 @@ private:
 	 * to the proven bracket and supplies a midpoint when rounding names an
 	 * already measured endpoint, so progress and bracket soundness are
 	 * unchanged. */
-	const size_t proposal = median(this->proposalValues);
 	size_t next = proposal;
 	next = this->unmeasuredCandidate(next);
 	if (!next)
@@ -513,6 +568,7 @@ private:
 	this->terminalResultValue = result;
 	this->candidateBudgetValue = 0;
 	this->candidatePresentedCostValue = 0;
+	this->candidatePopulationSignatureValue = 0;
 	this->sampleCountValue = 0;
 	this->safeSampleCountValue = 0;
 	this->invalidSampleCountValue = 0;
@@ -539,12 +595,18 @@ private:
     size_t unsafeBudgetValue = SIZE_MAX;
     size_t candidateBudgetValue = 0;
     size_t candidatePresentedCostValue = 0;
+    uint64_t candidatePopulationSignatureValue = 0;
     unsigned int sampleCountValue = 0;
     unsigned int safeSampleCountValue = 0;
     unsigned int invalidSampleCountValue = 0;
     unsigned int measuredCandidateCountValue = 0;
     std::array<size_t, SampleLimit> proposalValues {{0, 0, 0}};
     std::array<size_t, CandidateLimit> measuredCandidatesValue {{}};
+    std::array<uint64_t, CandidateLimit>
+	measuredPopulationSignaturesValue {{}};
+    std::array<size_t, CandidateLimit> measuredPopulationCostsValue {{}};
+    std::array<bool, CandidateLimit> measuredPopulationSafeValue {{}};
+    std::array<size_t, CandidateLimit> measuredPopulationProposalsValue {{}};
 };
 
 static_assert(std::is_trivially_copyable<

@@ -100,6 +100,11 @@ struct BObolRetainedAllocationResult {
 	std::numeric_limits<double>::infinity();
     size_t protectedFloorBudget = 0;
     uint64_t protectedFloorSignature = 0;
+    /* Ephemeral identity of the complete occurrence representation selected
+     * by this transaction.  It is valid only inside the semantic revision
+     * tuple below and lets capacity search recognize different numeric
+     * budgets which map to the same discrete PoP population. */
+    uint64_t selectedPopulationSignature = 0;
     /*
      * Certificate for the complete occurrence-local presentation selected by
      * this transaction.  The temporary renderer-wide progressive ceiling is

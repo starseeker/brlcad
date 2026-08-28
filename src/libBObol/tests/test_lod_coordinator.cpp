@@ -2032,19 +2032,32 @@ test_availability_scheduler(void)
 	std::fprintf(stderr, "FAIL: progressive availability scheduling\n");
 	return 1;
     }
-    if (Policy::completedPassSuccessor(false, true, true, true, true, true) !=
+    if (Policy::completedPassSuccessor(
+	    false, true, true, true, true, true, true, true) !=
 	    Successor::NONE ||
-	Policy::completedPassSuccessor(true, true, true, true, true, true) !=
+	Policy::completedPassSuccessor(
+	    true, true, true, true, true, true, true, true) !=
 	    Successor::COMPLETE_RESIDENCY_DRAIN ||
-	Policy::completedPassSuccessor(true, false, true, true, true, true) !=
+	Policy::completedPassSuccessor(
+	    true, false, true, true, true, true, true, true) !=
 	    Successor::YIELD_TO_RESIDENT_GROWTH ||
-	Policy::completedPassSuccessor(true, false, false, true, true, true) !=
+	Policy::completedPassSuccessor(
+	    true, false, false, true, true, true, true, true) !=
+	    Successor::AWAIT_RESIDENT_RESULT ||
+	Policy::completedPassSuccessor(
+	    true, false, false, true, false, true, true, true) !=
+	    Successor::SUBMIT_RESIDENT_REQUESTS ||
+	Policy::completedPassSuccessor(
+	    true, false, false, false, false, true, true, true) !=
 	    Successor::NONE ||
-	Policy::completedPassSuccessor(true, false, false, false, true, true) !=
+	Policy::completedPassSuccessor(
+	    true, false, false, false, false, false, true, true) !=
 	    Successor::PRESENT_POINT_CALIBRATION ||
-	Policy::completedPassSuccessor(true, false, false, false, false, true) !=
+	Policy::completedPassSuccessor(
+	    true, false, false, false, false, false, false, true) !=
 	    Successor::CALIBRATE_CAPACITY ||
-	Policy::completedPassSuccessor(true, false, false, false, false, false) !=
+	Policy::completedPassSuccessor(
+	    true, false, false, false, false, false, false, false) !=
 	    Successor::NONE) {
 	std::fprintf(stderr,
 	    "FAIL: completed pass availability/capacity ownership\n");
@@ -3657,6 +3670,9 @@ test_quality_policy(void)
 	    "FAIL: point aggregation admitted a single prominent mesh\n");
 	return 1;
     }
+    /* Both an unbracketed camera invalidation and bracketed interaction entry
+     * must preserve an already presented aggregate-point population while the
+     * replacement visibility census is transiently empty. */
     if (BObolLodAdmissionPlanner::pointAggregationApplicableAcrossCameraInvalidation(false, 1.0f) ||
 	!BObolLodAdmissionPlanner::pointAggregationApplicableAcrossCameraInvalidation(true, 1.0f) ||
 	!BObolLodAdmissionPlanner::pointAggregationApplicableAcrossCameraInvalidation(false, 64.0f) ||
@@ -5629,6 +5645,18 @@ test_availability_growth(void)
 	    "FAIL: resident-growth successor ownership mismatch\n");
 	return 1;
     }
+    if (BObolLodAvailabilityScheduler::residentRefinementOwnsSuccessor(
+	    AvailabilitySuccessor::NONE) ||
+	BObolLodAvailabilityScheduler::residentRefinementOwnsSuccessor(
+	    AvailabilitySuccessor::CALIBRATE_CAPACITY) ||
+	!BObolLodAvailabilityScheduler::residentRefinementOwnsSuccessor(
+	    AvailabilitySuccessor::AWAIT_RESIDENT_RESULT) ||
+	!BObolLodAvailabilityScheduler::residentRefinementOwnsSuccessor(
+	    AvailabilitySuccessor::SUBMIT_RESIDENT_REQUESTS)) {
+	std::fprintf(stderr,
+	    "FAIL: resident-refinement successor ownership mismatch\n");
+	return 1;
+    }
     if (!BObolLodAvailabilityScheduler::
 	    presentationCutDowngradeAllowed(false, false, true, false, true) ||
 	!BObolLodAvailabilityScheduler::
@@ -6808,6 +6836,82 @@ test_capacity_search_certificate(void)
     if (decision.result != Result::STALE_POPULATION || !decision.terminal()) {
 	std::fprintf(stderr,
 	    "FAIL: capacity search accepted a changing candidate population\n");
+	return 1;
+    }
+
+    /* Numeric scene budgets are not discrete population identities.  A mesh
+     * cut staircase can map a wide interval of budgets to exactly the same
+     * occurrence cuts.  Once that population has three measurements, a
+     * successor budget selecting the same signature must reuse the result
+     * immediately instead of repainting the unchanged view three more times. */
+    {
+	Certificate equivalentCertificate;
+	Certificate::Observation equivalent;
+	equivalent.key = capacity_search_key(demand);
+	equivalent.candidateBudget = initialCandidate;
+	equivalent.presentedCost = 200;
+	equivalent.populationSignature = 0x4c554359ULL;
+	equivalent.validSample = true;
+	equivalent.observedNanoseconds =
+	    equivalent.key.preferredTargetNanoseconds / 2;
+	Certificate::Decision equivalentDecision;
+	for (unsigned int i = 0; i < Certificate::sampleLimit(); ++i)
+	    equivalentDecision = equivalentCertificate.observe(equivalent);
+	if (!equivalentDecision.requestsReallocation()) {
+	    std::fprintf(stderr,
+		"FAIL: equivalent-population test did not request a successor\n");
+	    return 1;
+	}
+	equivalent.candidateBudget = equivalentDecision.budget;
+	equivalentDecision = equivalentCertificate.observe(equivalent);
+	if (equivalentDecision.requestsFrame() ||
+	    equivalentDecision.samplesRemaining != 0 ||
+	    equivalentCertificate.measuredCandidateCount() != 2) {
+	    std::fprintf(stderr,
+		"FAIL: equivalent capacity population was remeasured\n");
+	    return 1;
+	}
+    }
+
+    /* Allocation and rendering use different cost currencies.  In
+     * particular, OSMesa expands an indexed retained allocation into a
+     * submitted position stream.  The allocation barrier may therefore not
+     * bind the completed-frame population identity; the first rendered frame
+     * owns that value. */
+    Certificate currencyCertificate;
+    observation = Certificate::Observation();
+    observation.key = capacity_search_key(demand);
+    observation.candidateBudget = 200;
+    observation.presentedCost = 200;
+    observation.validSample = true;
+    observation.observedNanoseconds = 100000000ULL;
+    for (unsigned int i = 0; i < Certificate::sampleLimit(); ++i)
+	decision = currencyCertificate.observe(observation);
+    if (!decision.requestsReallocation()) {
+	std::fprintf(stderr,
+	    "FAIL: capacity currency test did not request a successor\n");
+	return 1;
+    }
+    observation.candidateBudget = decision.budget;
+    observation.presentedCost = decision.budget;
+    observation.validSample = false;
+    observation.observedNanoseconds = 0;
+    decision = currencyCertificate.prepare(observation);
+    if (!decision.requestsFrame() ||
+	currencyCertificate.phase() != Certificate::Phase::MEASURING) {
+	std::fprintf(stderr,
+	    "FAIL: allocation barrier did not enter capacity measurement\n");
+	return 1;
+    }
+    observation.presentedCost = decision.budget * 2;
+    observation.validSample = true;
+    observation.observedNanoseconds = 10000000ULL;
+    decision = currencyCertificate.observe(observation);
+    if (!decision.requestsFrame() ||
+	decision.result == Result::STALE_POPULATION ||
+	decision.samplesRemaining != Certificate::sampleLimit() - 1) {
+	std::fprintf(stderr,
+	    "FAIL: allocation cost was mistaken for rendered population cost\n");
 	return 1;
     }
 

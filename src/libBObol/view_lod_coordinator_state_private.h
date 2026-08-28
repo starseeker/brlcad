@@ -1061,6 +1061,18 @@ struct BObolLodCoordinator {
 	    pointProxyAggregationApplicable(),
 	    lodRetainedAllocationCertificate.pointProxyCandidateCount);
     }
+    bool pointProxyAggregationApplicableForCameraTransition(void) const
+    {
+	/* Interaction entry precedes the first changed camera signature.  The
+	 * replacement visibility census may therefore be empty even though the
+	 * current framebuffer already contains a proven aggregate-point
+	 * population.  Preserve that presentation as the transition baseline;
+	 * exact frames in the new view will replace its capacity evidence. */
+	return BObolLodAdmissionPlanner::
+	    pointAggregationApplicableAcrossCameraInvalidation(
+		pointProxyAggregationApplicable(),
+		lodPresentationPointProxyPixelThreshold);
+    }
     void observeLodSourceLogicalOccurrenceCount(size_t count)
     {
 	if (count > 0)

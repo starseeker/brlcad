@@ -31,7 +31,7 @@ The production refinement target is the typed state in
 | `ObolInteractionSession` | gesture/debounce/quiet lifecycle | `BObolLodInteractionSession` |
 | `ObolQuietSuccessor` | schedule-independent retained-detail restoration | `lod_quiet_successor_private.h`, `BObolLodPresentationPolicy` |
 | `ObolDeadlineOwnership` | unique successor after an interrupted frame | `view_controller_render.cpp` |
-| `ObolCapacitySearch` | finite renderer-capacity bracket | `lod_capacity_search_private.h` |
+| `ObolCapacitySearch` | finite renderer-capacity bracket and discrete-population reuse | `lod_capacity_search_private.h` |
 | `ObolCapacityPresentationHandoff` | occurrence allocation to ceiling-free sample | `BObolLodPresentationPolicy` |
 | `ObolStaticQuality` | bounded quiet-view fidelity improvement | `BObolLodStaticQualityTrial` |
 | `ObolPointQualityOwnership` | exclusive point calibration/recovery owner | `BObolLodPointQualityPhase` |
@@ -96,8 +96,8 @@ Current focused verification on 2026-08-27:
   distinct states, depth 42;
 - `ObolControlRefinement`: 4,194,302 generated / 2,097,152
   distinct states, depth 1;
-- `ObolCapacitySearch`: 3,188 generated / 3,188 distinct states,
-  depth 31;
+- `ObolCapacitySearch`: 2,918 generated / 2,918 distinct states,
+  depth 27;
 - `ObolCadMutation`: 257,805 generated / 128,904 distinct states, depth 5;
 - `ObolCadViewPublication`: 1,422 generated / 480 distinct, depth 11;
 - `ObolInteractionSession`: 468 generated / 132 distinct, depth 11; and

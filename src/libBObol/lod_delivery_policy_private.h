@@ -43,6 +43,8 @@ public:
 	NONE = 0,
 	COMPLETE_RESIDENCY_DRAIN,
 	YIELD_TO_RESIDENT_GROWTH,
+	AWAIT_RESIDENT_RESULT,
+	SUBMIT_RESIDENT_REQUESTS,
 	PRESENT_POINT_CALIBRATION,
 	CALIBRATE_CAPACITY
     };
@@ -112,6 +114,7 @@ public:
      * all-scene pass indefinitely. */
     static CompletedPassSuccessor completedPassSuccessor(bool completed,
 	bool residencyDrainActive, bool residentGrowthPending,
+	bool residentRefinementPending, bool residentWorkPending,
 	bool pointTriangleRecovery, bool pointCalibrationPending,
 	bool capacityBlocked)
     {
@@ -121,6 +124,10 @@ public:
 	    return CompletedPassSuccessor::COMPLETE_RESIDENCY_DRAIN;
 	if (residentGrowthPending)
 	    return CompletedPassSuccessor::YIELD_TO_RESIDENT_GROWTH;
+	if (residentRefinementPending)
+	    return residentWorkPending ?
+		CompletedPassSuccessor::AWAIT_RESIDENT_RESULT :
+		CompletedPassSuccessor::SUBMIT_RESIDENT_REQUESTS;
 	if (pointTriangleRecovery)
 	    return CompletedPassSuccessor::NONE;
 	if (pointCalibrationPending)
@@ -135,6 +142,13 @@ public:
     {
 	return successor == CompletedPassSuccessor::COMPLETE_RESIDENCY_DRAIN ||
 	    successor == CompletedPassSuccessor::YIELD_TO_RESIDENT_GROWTH;
+    }
+
+    static bool residentRefinementOwnsSuccessor(
+	CompletedPassSuccessor successor)
+    {
+	return successor == CompletedPassSuccessor::AWAIT_RESIDENT_RESULT ||
+	    successor == CompletedPassSuccessor::SUBMIT_RESIDENT_REQUESTS;
     }
 
 private:

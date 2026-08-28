@@ -15,6 +15,12 @@
 \* makes it fit or publishes an explicit bounded constraint.  It must never
 \* fall back into another identical generic allocation.
 \*
+\* A completed mechanical scan which selects no successor is not a semantic
+\* population edge.  It preserves both the population revision and the
+\* allocation-certificate revision so the current handoff can consume that
+\* certificate.  Reopening the revision at this boundary would permit an
+\* infinite apply/scan/handoff loop with no changed population.
+\*
 \* This model proves ownership, safety, and liveness for a frozen allocation.
 \* It deliberately does not model frame-time classification, aggregate cost,
 \* or visual quality; those remain pure C++ and graphical tests.
@@ -39,13 +45,18 @@ VARIABLES phase,
           samplesRemaining,
           samplesConsumed,
           invalidFramesObserved,
+          noOpScanAvailable,
+          noOpScanCompleted,
+          populationRevision,
+          allocationRevision,
           certificatePublished,
           constraintPublished
 
 vars == <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
           allocationBudgetState,
           reductionAttempts, samplesRemaining, samplesConsumed,
-          invalidFramesObserved, certificatePublished,
+          invalidFramesObserved, noOpScanAvailable, noOpScanCompleted,
+          populationRevision, allocationRevision, certificatePublished,
           constraintPublished>>
 
 PresentationExact == cutsApplied /\ ceilingState # "effective"
@@ -60,8 +71,15 @@ TypeOK ==
     /\ samplesRemaining \in 0..SampleLimit
     /\ samplesConsumed \in 0..SampleLimit
     /\ invalidFramesObserved \in 0..2
+    /\ noOpScanAvailable \in BOOLEAN
+    /\ noOpScanCompleted \in BOOLEAN
+    /\ populationRevision \in Nat
+    /\ allocationRevision \in Nat
     /\ certificatePublished \in BOOLEAN
     /\ constraintPublished \in BOOLEAN
+
+CurrentAllocationCertificate ==
+    populationRevision = allocationRevision
 
 SampleAccounting ==
     samplesRemaining + samplesConsumed = SampleLimit
@@ -103,6 +121,10 @@ Init ==
     /\ samplesRemaining = SampleLimit
     /\ samplesConsumed = 0
     /\ invalidFramesObserved = 0
+    /\ noOpScanAvailable \in BOOLEAN
+    /\ noOpScanCompleted = FALSE
+    /\ populationRevision = 1
+    /\ allocationRevision = 1
     /\ certificatePublished = FALSE
     /\ constraintPublished = FALSE
 
@@ -114,7 +136,9 @@ ConstrainAllocationToAvailability ==
     /\ UNCHANGED <<phase, cutsApplied, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
-                    invalidFramesObserved, certificatePublished,
+                    invalidFramesObserved, noOpScanAvailable,
+                    noOpScanCompleted, populationRevision,
+                    allocationRevision, certificatePublished,
                     constraintPublished>>
 
 ApplyAssignedCuts ==
@@ -126,8 +150,22 @@ ApplyAssignedCuts ==
     /\ UNCHANGED <<assignedCutsDrawable, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
-                    invalidFramesObserved, certificatePublished,
+                    invalidFramesObserved, noOpScanAvailable,
+                    noOpScanCompleted, populationRevision,
+                    allocationRevision, certificatePublished,
                     constraintPublished>>
+
+CompleteNoOpAllocationScan ==
+    /\ phase \in {"handoff", "measure"}
+    /\ noOpScanAvailable
+    /\ ~noOpScanCompleted
+    /\ noOpScanCompleted' = TRUE
+    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
+                    allocationBudgetState, reductionAttempts,
+                    samplesRemaining, samplesConsumed,
+                    invalidFramesObserved, noOpScanAvailable,
+                    populationRevision, allocationRevision,
+                    certificatePublished, constraintPublished>>
 
 ReduceOverBudgetAllocation ==
     /\ phase = "handoff"
@@ -139,6 +177,8 @@ ReduceOverBudgetAllocation ==
     /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
                     samplesRemaining,
                     samplesConsumed, invalidFramesObserved,
+                    noOpScanAvailable, noOpScanCompleted,
+                    populationRevision, allocationRevision,
                     certificatePublished, constraintPublished>>
 
 ReconcileCeiling ==
@@ -152,7 +192,9 @@ ReconcileCeiling ==
     /\ UNCHANGED <<cutsApplied, assignedCutsDrawable,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
-                    invalidFramesObserved, certificatePublished,
+                    invalidFramesObserved, noOpScanAvailable,
+                    noOpScanCompleted, populationRevision,
+                    allocationRevision, certificatePublished,
                     constraintPublished>>
 
 PublishBoundedConstraint ==
@@ -165,7 +207,9 @@ PublishBoundedConstraint ==
     /\ UNCHANGED <<cutsApplied, assignedCutsDrawable, ceilingState,
                     allocationBudgetState,
                     reductionAttempts, samplesRemaining, samplesConsumed,
-                    invalidFramesObserved, certificatePublished>>
+                    invalidFramesObserved, noOpScanAvailable,
+                    noOpScanCompleted, populationRevision,
+                    allocationRevision, certificatePublished>>
 
 ObserveInvalidFrame ==
     /\ phase \in {"apply", "handoff"}
@@ -174,6 +218,8 @@ ObserveInvalidFrame ==
     /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
+                    noOpScanAvailable, noOpScanCompleted,
+                    populationRevision, allocationRevision,
                     certificatePublished, constraintPublished>>
 
 ConsumeSample ==
@@ -191,11 +237,14 @@ ConsumeSample ==
     /\ UNCHANGED <<cutsApplied, assignedCutsDrawable, ceilingState,
                     allocationBudgetState,
                     reductionAttempts, invalidFramesObserved,
+                    noOpScanAvailable, noOpScanCompleted,
+                    populationRevision, allocationRevision,
                     constraintPublished>>
 
 Next ==
     \/ ConstrainAllocationToAvailability
     \/ ApplyAssignedCuts
+    \/ CompleteNoOpAllocationScan
     \/ ReduceOverBudgetAllocation
     \/ ReconcileCeiling
     \/ PublishBoundedConstraint
@@ -207,6 +256,7 @@ Spec ==
     /\ [][Next]_vars
     /\ WF_vars(ConstrainAllocationToAvailability)
     /\ WF_vars(ApplyAssignedCuts)
+    /\ WF_vars(CompleteNoOpAllocationScan)
     /\ WF_vars(ReduceOverBudgetAllocation)
     /\ WF_vars(ReconcileCeiling)
     /\ WF_vars(PublishBoundedConstraint)

@@ -3429,6 +3429,8 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 		capacitySearch.candidateBudget();
 	    const BObolRetainedAllocationResult &capacityAllocation =
 		this->d->lodRetainedAllocationCertificate;
+	    inputs.populationSignature =
+		capacityAllocation.selectedPopulationSignature;
 	    const bool currentCapacityAllocation =
 		this->d->retainedAllocationPresentationRealized(
 		    calibrationState);
@@ -3457,7 +3459,9 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds,
 	     * inject a presentation accepted under a different deadline. */
 	    inputs.knownSafeBudget = capacitySearch.safeBudget();
 	    calibration = this->d->completeCapacitySearchFrame(inputs);
-	    if (controller_lod_trace_enabled("BOBOL_LOD_TRACE_PASS",
+	    if (controller_lod_trace_enabled("BOBOL_LOD_TRACE_CAPACITY",
+		    this->d->lodViewRevision.value()) ||
+		controller_lod_trace_enabled("BOBOL_LOD_TRACE_PASS",
 		    this->d->lodViewRevision.value()))
 		bu_log("BObol LoD completed capacity frame phase=%u "
 		       "sample=%d restart=%d valid=%d presented=%zu "

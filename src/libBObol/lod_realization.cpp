@@ -1117,11 +1117,18 @@ progressive_generation_prefix(
      */
     int drawableCut = cut;
     for (int candidate = cut + 1;
-	 candidate <= source.maximumCut; ++candidate) {
-	if (sourceMesh->positionCountAtCut(
-		static_cast<uint8_t>(candidate)) > mesh.positions.size() ||
-	    sourceMesh->indexCountAtCut(
-		static_cast<uint8_t>(candidate)) > mesh.indices.size())
+	 candidate <= source.maximumCut &&
+	 static_cast<size_t>(candidate) < sourceMesh->progressiveCuts.size();
+	 ++candidate) {
+	const Obol::ProgressiveTriangleCut &candidateInfo =
+	    sourceMesh->progressiveCuts[static_cast<size_t>(candidate)];
+	/* The public AtCut accessors clamp to progressiveResidentCut.  That is
+	 * correct for drawing, but not for deciding whether this newly trimmed
+	 * snapshot may advertise a later coordinate-only cut: after a second
+	 * compaction, clamping makes an actually richer nonresident cut look equal
+	 * to the current one.  Inspect the immutable hierarchy metadata directly. */
+	if (candidateInfo.positionCount > mesh.positions.size() ||
+	    candidateInfo.indexCount > mesh.indices.size())
 	    break;
 	drawableCut = candidate;
     }

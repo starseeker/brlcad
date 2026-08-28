@@ -231,6 +231,17 @@ delay_and_sample_render_deadline(void *data, SoAction *action)
 	static_cast<SoGLRenderAction *>(action)->abortNow();
 }
 
+static bool
+deadline_successor_scheduled(BObolViewController *controller)
+{
+    if (!controller)
+	return false;
+    if (controller->isRenderRequested())
+	return BU_STR_EQUAL(controller->getRenderReason().getString(),
+	    "render-deadline");
+    return controller->hasProgressiveWorkPending() != FALSE;
+}
+
 static SoBRLMeshShape *
 seed_managed_deadline_payload(BObolViewController *controller,
 	const char *identity)
@@ -618,9 +629,9 @@ main(int argc, char **argv)
     if (!deadlineLodMesh ||
 	!controller->isLodPresentationCapacityRelevant())
 	FAIL("QgSW deadline fixture should expose managed LoD capacity");
-    /* A deadline retry is meaningful only for an active policy transition.
-     * A quiet irreducible frame deliberately has no cheaper successor and is
-     * retained rather than aborted forever. */
+    /* Give the interrupted frame an active policy transition.  Its successor
+     * may be either a renderer replay or the standing population producer;
+     * both preserve the last completed image until coherent work advances. */
     controller->setLodAutoSubmit(TRUE);
     controller->beginLodInteraction();
     const uint64_t interruptedBefore =
@@ -639,9 +650,7 @@ main(int argc, char **argv)
     deadlinePainter.end();
     if (controller->getInterruptedPresentationFrameCount() !=
 	    interruptedBefore + 1u ||
-	!controller->isRenderRequested() ||
-	!BU_STR_EQUAL(controller->getRenderReason().getString(),
-	    "render-deadline")) {
+	!deadline_successor_scheduled(controller)) {
 	fprintf(stderr, "QgSW interruption diagnostics: count=%llu/%llu "
 		"requested=%d reason=%s capacity=%d\n",
 		(unsigned long long)
@@ -650,7 +659,7 @@ main(int argc, char **argv)
 		controller->isRenderRequested() ? 1 : 0,
 		controller->getRenderReason().getString(),
 		controller->isLodPresentationCapacityRelevant() ? 1 : 0);
-	FAIL("QgSW deadline interruption should schedule a coherent retry");
+	FAIL("QgSW deadline interruption should schedule a coherent successor");
 	}
     if (paintTarget != deadlineBaseline)
 	FAIL("QgSW deadline interruption should preserve the last completed frame");
@@ -1062,9 +1071,7 @@ main(int argc, char **argv)
 	    glCanvas.doneCurrent();
 	    if (paintController->getInterruptedPresentationFrameCount() !=
 		    glInterruptedBefore + 1u ||
-		!paintController->isRenderRequested() ||
-		!BU_STR_EQUAL(paintController->getRenderReason().getString(),
-		    "render-deadline")) {
+		!deadline_successor_scheduled(paintController)) {
 		fprintf(stderr, "QgGL interruption diagnostics: count=%llu/%llu "
 			"requested=%d reason=%s capacity=%d\n",
 			(unsigned long long)
@@ -1073,7 +1080,7 @@ main(int argc, char **argv)
 			paintController->isRenderRequested() ? 1 : 0,
 			paintController->getRenderReason().getString(),
 			paintController->isLodPresentationCapacityRelevant() ? 1 : 0);
-		FAIL("QgGL deadline interruption should schedule a coherent retry");
+		FAIL("QgGL deadline interruption should schedule a coherent successor");
 		}
 	    if (glDeadlineBaseline.isNull() ||
 		glDeadlineInterrupted != glDeadlineBaseline)
