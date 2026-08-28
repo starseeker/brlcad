@@ -4957,54 +4957,160 @@ test_presentation_policy(void)
 	return 1;
     }
 
-    /* A generic capacity successor is speculative.  It must not hide an
-     * already complete occurrence-local handoff proof, but concrete pass
-     * obligations retain precedence. */
+    /* Successor ownership is selected before generic capacity calibration can
+     * install a reallocation request.  An allocation handoff owns a clean
+     * completed pass while it waits for either a certificate or quiescence;
+     * concrete cut/rescan work retains precedence. */
     policy.reset();
     policy.armHandoff(false);
     completed = Policy::CompletedPassInputs();
     completed.completed = true;
-    completed.submissionPending = true;
-    completed.retainedAllocationCompleted = true;
-    completed.retainedAllocationCertified = true;
-    completed.populationQuiescent = true;
-    completed.presentationLimitsReconciled = true;
-    if (!policy.currentHandoffAllocationSupersedesCapacityRestart(
-	    completed, true)) {
+    if (policy.completedPassSelection(completed, true, false, -1).owner !=
+	    Policy::CompletedPassOwner::ALLOCATION_HANDOFF) {
 	std::fprintf(stderr,
-	    "FAIL: reconciled handoff did not supersede capacity restart\n");
+	    "FAIL: allocation handoff did not claim clean completed pass\n");
 	return 1;
     }
-    completed.presentationLimitsReconciled = false;
-    if (!policy.currentHandoffAllocationSupersedesCapacityRestart(
-	    completed, true)) {
-	std::fprintf(stderr,
-	    "FAIL: over-budget handoff did not supersede capacity restart\n");
-	return 1;
-    }
-    completed.presentationLimitsReconciled = true;
     completed.changedCut = true;
-    if (policy.currentHandoffAllocationSupersedesCapacityRestart(
-	    completed, true)) {
+    if (policy.completedPassSelection(completed, true, false, -1).owner !=
+	    Policy::CompletedPassOwner::CAPACITY) {
 	std::fprintf(stderr,
-	    "FAIL: changed handoff cut lost capacity successor\n");
+	    "FAIL: allocation handoff hid changed-cut successor\n");
 	return 1;
     }
     completed.changedCut = false;
     completed.rescanAfterFrame = true;
-    if (policy.currentHandoffAllocationSupersedesCapacityRestart(
-	    completed, true)) {
+    if (policy.completedPassSelection(completed, true, false, -1).owner !=
+	    Policy::CompletedPassOwner::CAPACITY) {
 	std::fprintf(stderr,
-	    "FAIL: handoff rescan lost capacity successor\n");
+	    "FAIL: allocation handoff hid frame-rescan successor\n");
 	return 1;
     }
+    completed.completed = false;
     completed.rescanAfterFrame = false;
-    policy.reset();
-    if (policy.currentHandoffAllocationSupersedesCapacityRestart(
-	    completed, true)) {
+
+    if (policy.completedPassSelection(completed, true, false, -1).owner !=
+	    Policy::CompletedPassOwner::NONE) {
 	std::fprintf(stderr,
-	    "FAIL: inactive handoff consumed capacity successor\n");
+	    "FAIL: incomplete pass selected a successor owner\n");
 	return 1;
+    }
+    completed.completed = true;
+    policy.reset();
+    if (policy.completedPassSelection(completed, true, false, -1).owner !=
+	    Policy::CompletedPassOwner::CAPACITY) {
+	std::fprintf(stderr,
+	    "FAIL: inactive handoff claimed completed pass\n");
+	return 1;
+    }
+    if (policy.completedPassSelection(completed, false, false, -1).owner !=
+	    Policy::CompletedPassOwner::NONE) {
+	std::fprintf(stderr,
+	    "FAIL: ineligible capacity path claimed completed pass\n");
+	return 1;
+    }
+    policy.armHandoff(true);
+    if (policy.completedPassSelection(completed, true, false, -1).owner !=
+	    Policy::CompletedPassOwner::PRESENTATION_HANDOFF) {
+	std::fprintf(stderr,
+	    "FAIL: presentation handoff did not claim clean completed pass\n");
+	return 1;
+    }
+
+    /* Exhaust the immutable selector's concrete Boolean domain.  This is the
+     * executable refinement map for ObolCompletedPassOwnership.tla: ceiling
+     * removal is part of owner selection, never a later cancellation of an
+     * already executed capacity effect. */
+    enum SelectionBit : unsigned int {
+	PASS_COMPLETED = 0,
+	SUBMISSION_PENDING,
+	RESCAN_AFTER_FRAME,
+	CHANGED_CUT,
+	ALLOCATION_COMPLETED,
+	ALLOCATION_CERTIFIED,
+	POPULATION_QUIESCENT,
+	LIMITS_RECONCILED,
+	CAPACITY_ELIGIBLE,
+	CAPACITY_SAMPLE_PENDING,
+	SELECTION_BIT_COUNT
+    };
+    const unsigned int selectionCombinationCount =
+	1u << SELECTION_BIT_COUNT;
+    constexpr unsigned int HandoffStateCount = 3;
+    constexpr unsigned int PresentationHandoffState = 1;
+    constexpr unsigned int AllocationHandoffState = 2;
+    for (unsigned int handoffState = 0;
+	    handoffState < HandoffStateCount; ++handoffState) {
+	for (int ceiling : {-1, 0}) {
+	    for (unsigned int combination = 0;
+		    combination < selectionCombinationCount; ++combination) {
+		auto enabled = [combination](SelectionBit bit) {
+		    return (combination & (1u << bit)) != 0;
+		};
+		Policy candidate;
+		if (handoffState == PresentationHandoffState)
+		    candidate.armHandoff(true);
+		else if (handoffState == AllocationHandoffState)
+		    candidate.armHandoff(false);
+		Policy::CompletedPassInputs inputs;
+		inputs.completed = enabled(PASS_COMPLETED);
+		inputs.submissionPending = enabled(SUBMISSION_PENDING);
+		inputs.rescanAfterFrame = enabled(RESCAN_AFTER_FRAME);
+		inputs.changedCut = enabled(CHANGED_CUT);
+		inputs.retainedAllocationCompleted =
+		    enabled(ALLOCATION_COMPLETED);
+		inputs.retainedAllocationCertified =
+		    enabled(ALLOCATION_CERTIFIED);
+		inputs.populationQuiescent = enabled(POPULATION_QUIESCENT);
+		inputs.presentationLimitsReconciled =
+		    enabled(LIMITS_RECONCILED);
+		const bool capacityEligible = enabled(CAPACITY_ELIGIBLE);
+		const bool capacitySamplePending =
+		    enabled(CAPACITY_SAMPLE_PENDING);
+		const bool consumeAnnotations =
+		    capacitySamplePending && ceiling >= 0 &&
+		    inputs.rescanAfterFrame && inputs.completed &&
+		    !inputs.submissionPending &&
+		    handoffState == AllocationHandoffState &&
+		    inputs.retainedAllocationCompleted &&
+		    inputs.retainedAllocationCertified &&
+		    inputs.populationQuiescent &&
+		    inputs.presentationLimitsReconciled;
+		const bool cleanPass =
+		    (!inputs.rescanAfterFrame && !inputs.changedCut) ||
+		    consumeAnnotations;
+		Policy::CompletedPassOwner expectedOwner =
+		    Policy::CompletedPassOwner::NONE;
+		if (inputs.completed && !inputs.submissionPending)
+		    expectedOwner = capacityEligible ?
+			Policy::CompletedPassOwner::CAPACITY :
+			Policy::CompletedPassOwner::NONE;
+		if (inputs.completed && !inputs.submissionPending &&
+			cleanPass && handoffState != 0)
+		    expectedOwner = handoffState == PresentationHandoffState ?
+			Policy::CompletedPassOwner::PRESENTATION_HANDOFF :
+			Policy::CompletedPassOwner::ALLOCATION_HANDOFF;
+		const Policy::CompletedPassSelection selection =
+		    candidate.completedPassSelection(inputs, capacityEligible,
+			capacitySamplePending, ceiling);
+		if (selection.owner != expectedOwner ||
+			selection.consumePassAnnotations != consumeAnnotations ||
+			selection.capacityOwns() !=
+			    (expectedOwner ==
+			     Policy::CompletedPassOwner::CAPACITY) ||
+			selection.handoffOwns() !=
+			    (expectedOwner ==
+				 Policy::CompletedPassOwner::PRESENTATION_HANDOFF ||
+			     expectedOwner ==
+				 Policy::CompletedPassOwner::ALLOCATION_HANDOFF)) {
+		    std::fprintf(stderr,
+			"FAIL: completed-pass selector combination=%u "
+			"handoff=%u ceiling=%d\n",
+			combination, handoffState, ceiling);
+		    return 1;
+		}
+	    }
+	}
     }
 
     /* An exact capacity sample cannot be taken through a renderer-wide
@@ -5113,6 +5219,225 @@ test_presentation_policy(void)
 	policy.handoffPending()) {
 	std::fprintf(stderr, "FAIL: payload-free presentation reset\n");
 	return 1;
+    }
+    return 0;
+}
+
+static int
+test_completed_pass_composed_lifecycle(void)
+{
+    using Policy = BObolLodPresentationPolicy;
+    using Scheduler = BObolLodAvailabilityScheduler;
+    constexpr uint64_t TraceCount = 512;
+    constexpr size_t StepBound = 20;
+    constexpr uint64_t RandomMultiplier = UINT64_C(6364136223846793005);
+    constexpr uint64_t RandomIncrement = UINT64_C(1442695040888963407);
+    constexpr unsigned int HandoffStateCount = 3;
+    constexpr unsigned int PresentationHandoffState = 1;
+    constexpr unsigned int AllocationHandoffState = 2;
+    constexpr unsigned int CapacityPopulationCount = 2;
+    constexpr size_t NonzeroPresentationCost = 1;
+
+    for (uint64_t trace = 1; trace <= TraceCount; ++trace) {
+	uint64_t randomState = trace;
+	auto random = [&randomState]() {
+	    randomState = randomState * RandomMultiplier + RandomIncrement;
+	    return randomState;
+	};
+	auto randomBool = [&random]() { return (random() & 1u) != 0; };
+
+	Policy policy;
+	const unsigned int initialHandoff =
+	    static_cast<unsigned int>(random() % HandoffStateCount);
+	if (initialHandoff == PresentationHandoffState)
+	    policy.armHandoff(true);
+	else if (initialHandoff == AllocationHandoffState)
+	    policy.armHandoff(false);
+
+	BObolLodRetainedPassAnnotations annotations;
+	if (randomBool())
+	    annotations.noteRefinementPending();
+	if (randomBool())
+	    annotations.noteResidencyPending();
+	if (randomBool())
+	    annotations.noteCutAdvanced();
+	if (randomBool())
+	    annotations.noteBudgetBlocked();
+	if (randomBool())
+	    annotations.noteAdmittedWork();
+
+	bool residencyDrainActive = randomBool();
+	bool residentGrowthPending = randomBool();
+	bool residentWorkPending = randomBool();
+	bool coveragePending = randomBool();
+	bool rescanAfterFrame = randomBool();
+	bool capacityEligible = randomBool() || rescanAfterFrame ||
+	    annotations.cutAdvanced() || annotations.budgetBlocked();
+	bool allocationCertified = randomBool();
+	const bool capacitySamplePending = randomBool();
+	const int progressiveCeiling = randomBool() ? 0 : -1;
+	unsigned int capacityPopulation =
+	    static_cast<unsigned int>(random() % CapacityPopulationCount);
+	const unsigned int capacityCandidate =
+	    static_cast<unsigned int>(random() % CapacityPopulationCount);
+	uint64_t capacityRevision = 0;
+	bool terminal = false;
+
+	for (size_t step = 0; step < StepBound && !terminal; ++step) {
+	    const Scheduler::CompletedPassSuccessor availabilityOwner =
+		Scheduler::completedPassSuccessor(true,
+		    residencyDrainActive, residentGrowthPending,
+		    annotations.residencyPending(), residentWorkPending,
+		    false, false, annotations.budgetBlocked());
+	    if (availabilityOwner ==
+		    Scheduler::CompletedPassSuccessor::COMPLETE_RESIDENCY_DRAIN) {
+		residencyDrainActive = false;
+		annotations.reset();
+		continue;
+	    }
+	    if (availabilityOwner ==
+		    Scheduler::CompletedPassSuccessor::YIELD_TO_RESIDENT_GROWTH) {
+		const Scheduler::ResidentGrowthSuccessor successor =
+		    Scheduler::residentGrowthSuccessor(!coveragePending);
+		residentGrowthPending = false;
+		coveragePending = successor ==
+		    Scheduler::ResidentGrowthSuccessor::RETRY_COVERAGE;
+		annotations.reset();
+		continue;
+	    }
+	    if (availabilityOwner ==
+		    Scheduler::CompletedPassSuccessor::AWAIT_RESIDENT_RESULT) {
+		residentWorkPending = false;
+		annotations.clearResidencyPending();
+		residentGrowthPending = true;
+		continue;
+	    }
+	    if (availabilityOwner ==
+		    Scheduler::CompletedPassSuccessor::SUBMIT_RESIDENT_REQUESTS) {
+		annotations.clearResidencyPending();
+		residentGrowthPending = true;
+		annotations.reset();
+		continue;
+	    }
+	    if (coveragePending) {
+		coveragePending = false;
+		annotations.reset();
+		continue;
+	    }
+	    if (availabilityOwner ==
+		    Scheduler::CompletedPassSuccessor::CALIBRATE_CAPACITY)
+		capacityEligible = true;
+
+	    Policy::CompletedPassInputs inputs;
+	    inputs.completed = true;
+	    inputs.rescanAfterFrame = rescanAfterFrame;
+	    inputs.changedCut = annotations.cutAdvanced();
+	    inputs.retainedAllocationCompleted = allocationCertified;
+	    inputs.retainedAllocationCertified = allocationCertified;
+	    inputs.populationQuiescent = true;
+	    inputs.presentationLimitsReconciled = allocationCertified;
+	    inputs.retainedRefinementPending =
+		annotations.refinementPending();
+	    inputs.retainedRefinementBudgetBlocked =
+		annotations.budgetBlocked();
+	    const Policy::CompletedPassSelection selection =
+		policy.completedPassSelection(inputs, capacityEligible,
+		    capacitySamplePending, progressiveCeiling);
+	    if (selection.consumePassAnnotations) {
+		inputs.rescanAfterFrame = false;
+		inputs.changedCut = false;
+	    }
+
+	    const uint64_t previousRevision = capacityRevision;
+	    const unsigned int previousPopulation = capacityPopulation;
+	    unsigned int effectCount = 0;
+	    bool successorPass = false;
+	    switch (selection.owner) {
+		case Policy::CompletedPassOwner::CAPACITY:
+		    ++effectCount;
+		    successorPass = true;
+		    if (inputs.rescanAfterFrame || inputs.changedCut) {
+			rescanAfterFrame = false;
+			annotations.reset();
+		    } else if (capacityPopulation != capacityCandidate) {
+			capacityPopulation = capacityCandidate;
+			++capacityRevision;
+			annotations.reset();
+		    } else {
+			capacityEligible = false;
+			annotations.reset();
+		    }
+		    break;
+		case Policy::CompletedPassOwner::PRESENTATION_HANDOFF:
+		    ++effectCount;
+		    successorPass = true;
+		    if (!policy.noteFramePresented(NonzeroPresentationCost,
+			    NonzeroPresentationCost)) {
+			std::fprintf(stderr,
+			    "FAIL: completed-pass presentation transition "
+			    "trace=%llu step=%zu\n",
+			    static_cast<unsigned long long>(trace), step);
+			return 1;
+		    }
+		    annotations.reset();
+		    rescanAfterFrame = false;
+		    break;
+		case Policy::CompletedPassOwner::ALLOCATION_HANDOFF: {
+		    ++effectCount;
+		    successorPass = true;
+		    const Policy::CompletedPassDecision decision =
+			policy.completePass(inputs);
+		    if (!allocationCertified) {
+			if (!decision.requestRetainedAllocation) {
+			    std::fprintf(stderr,
+				"FAIL: completed-pass allocation transition "
+				"trace=%llu step=%zu\n",
+				static_cast<unsigned long long>(trace), step);
+			    return 1;
+			}
+			allocationCertified = true;
+		    } else if (!decision.finishHandoff) {
+			std::fprintf(stderr,
+			    "FAIL: completed-pass finish transition "
+			    "trace=%llu step=%zu\n",
+			    static_cast<unsigned long long>(trace), step);
+			return 1;
+		    }
+		    annotations.reset();
+		    rescanAfterFrame = false;
+		    break;
+		}
+		case Policy::CompletedPassOwner::NONE:
+		    terminal = true;
+		    break;
+	    }
+
+	    if (effectCount > 1 ||
+		    (capacityRevision != previousRevision) !=
+			(capacityPopulation != previousPopulation) ||
+		    (capacityRevision != previousRevision &&
+		     selection.owner !=
+			 Policy::CompletedPassOwner::CAPACITY) ||
+		    (successorPass &&
+		     (annotations.refinementPending() ||
+		      annotations.residencyPending() ||
+		      annotations.cutAdvanced() ||
+		      annotations.budgetBlocked() ||
+		      annotations.admittedWork()))) {
+		std::fprintf(stderr,
+		    "FAIL: completed-pass composed invariant trace=%llu "
+		    "step=%zu owner=%u effects=%u\n",
+		    static_cast<unsigned long long>(trace), step,
+		    static_cast<unsigned int>(selection.owner), effectCount);
+		return 1;
+	    }
+	}
+	if (!terminal) {
+	    std::fprintf(stderr,
+		"FAIL: completed-pass trace did not terminate trace=%llu\n",
+		static_cast<unsigned long long>(trace));
+	    return 1;
+	}
     }
     return 0;
 }
@@ -5655,6 +5980,16 @@ test_availability_growth(void)
 	    AvailabilitySuccessor::SUBMIT_RESIDENT_REQUESTS)) {
 	std::fprintf(stderr,
 	    "FAIL: resident-refinement successor ownership mismatch\n");
+	return 1;
+    }
+    using ResidentGrowthSuccessor =
+	BObolLodAvailabilityScheduler::ResidentGrowthSuccessor;
+    if (BObolLodAvailabilityScheduler::residentGrowthSuccessor(false) !=
+	    ResidentGrowthSuccessor::RETRY_COVERAGE ||
+	BObolLodAvailabilityScheduler::residentGrowthSuccessor(true) !=
+	    ResidentGrowthSuccessor::REALLOCATE) {
+	std::fprintf(stderr,
+	    "FAIL: resident-growth coverage handoff mismatch\n");
 	return 1;
     }
     if (!BObolLodAvailabilityScheduler::
@@ -6863,12 +7198,16 @@ test_capacity_search_certificate(void)
 	    return 1;
 	}
 	equivalent.candidateBudget = equivalentDecision.budget;
+	const size_t repeatedPopulationBudget = equivalent.candidateBudget;
 	equivalentDecision = equivalentCertificate.observe(equivalent);
 	if (equivalentDecision.requestsFrame() ||
 	    equivalentDecision.samplesRemaining != 0 ||
-	    equivalentCertificate.measuredCandidateCount() != 2) {
+	    equivalentCertificate.measuredCandidateCount() != 2 ||
+	    (equivalentDecision.requestsReallocation() &&
+	     equivalentDecision.budget <= repeatedPopulationBudget + 1)) {
 	    std::fprintf(stderr,
-		"FAIL: equivalent capacity population was remeasured\n");
+		"FAIL: equivalent capacity population did not make bounded "
+		"progress\n");
 	    return 1;
 	}
     }
@@ -7056,6 +7395,8 @@ main(int argc, char **argv)
     if (test_quiet_successor_reducer())
 	return 1;
     if (test_presentation_policy())
+	return 1;
+    if (test_completed_pass_composed_lifecycle())
 	return 1;
     if (test_view_quality_history())
 	return 1;

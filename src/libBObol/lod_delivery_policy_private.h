@@ -49,6 +49,11 @@ public:
 	CALIBRATE_CAPACITY
     };
 
+    enum class ResidentGrowthSuccessor : uint8_t {
+	RETRY_COVERAGE,
+	REALLOCATE
+    };
+
     static uint64_t effectiveMicroseconds(uint64_t configuredMicroseconds,
 	bool controllerOwnedDefault, bool interactive)
     {
@@ -149,6 +154,17 @@ public:
     {
 	return successor == CompletedPassSuccessor::AWAIT_RESIDENT_RESULT ||
 	    successor == CompletedPassSuccessor::SUBMIT_RESIDENT_REQUESTS;
+    }
+
+    /* Coverage is an output of the resident drain, not a prerequisite for
+     * running it.  Once the drain is consumed, an incomplete occurrence
+     * population returns to exactly one ordinary coverage pass.  A complete
+     * population can proceed directly to scene-wide reallocation. */
+    static ResidentGrowthSuccessor residentGrowthSuccessor(
+	bool coverageComplete)
+    {
+	return coverageComplete ? ResidentGrowthSuccessor::REALLOCATE :
+	    ResidentGrowthSuccessor::RETRY_COVERAGE;
     }
 
 private:

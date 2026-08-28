@@ -160,6 +160,34 @@ public:
 	bool retireRetainedObservation = false;
     };
 
+    enum class CompletedPassOwner : uint8_t {
+	NONE = 0,
+	CAPACITY,
+	PRESENTATION_HANDOFF,
+	ALLOCATION_HANDOFF
+    };
+
+    struct CompletedPassSelection {
+	CompletedPassOwner owner = CompletedPassOwner::NONE;
+	/* A current allocation certificate may prove that the next useful
+	 * capacity sample must be taken without the temporary renderer ceiling.
+	 * In that case the handoff owns the completed-pass snapshot and consumes
+	 * its local cut/rescan annotations.  The still-pending capacity frame is
+	 * evidence for the successor presentation, not a second owner. */
+	bool consumePassAnnotations = false;
+
+	bool capacityOwns(void) const
+	{
+	    return this->owner == CompletedPassOwner::CAPACITY;
+	}
+
+	bool handoffOwns(void) const
+	{
+	    return this->owner == CompletedPassOwner::PRESENTATION_HANDOFF ||
+		this->owner == CompletedPassOwner::ALLOCATION_HANDOFF;
+	}
+    };
+
     /* A retained allocation is an authoritative replacement for a global
      * renderer ceiling only when the population it committed actually fits
      * the constrained frame's proven budget.  Merely completing the pass is
@@ -183,15 +211,12 @@ public:
 	    bool allocationCutsApplied, size_t selectedPresentationCost,
 	    size_t certifiedPresentationBudget, size_t presentedRenderCost);
 
-    /* Capacity calibration may speculatively schedule another allocation
-     * before the handoff reducer sees the pass which just completed.  Once
-     * that pass supplies a current, quiescent occurrence-local certificate
-     * for the constrained presentation, the speculative successor has no new
-     * evidence to seek.  Let the stronger handoff proof consume it; concrete
-     * cut, rescan, publication, or population work remains authoritative. */
-    bool currentHandoffAllocationSupersedesCapacityRestart(
-	    const CompletedPassInputs &inputs,
-	    bool capacityRestartScheduled) const;
+    /* Normalize the immutable completed-pass snapshot and choose its sole
+     * effect-producing owner before capacity calibration or handoff mutates
+     * evidence.  Callers execute only the selected owner. */
+    CompletedPassSelection completedPassSelection(
+	    const CompletedPassInputs &inputs, bool capacityEligible,
+	    bool capacitySamplePending, int progressiveCeiling) const;
 
     /* A capacity-search sample must describe the exact occurrence-local
      * allocation named by its certificate.  A renderer-wide handoff ceiling

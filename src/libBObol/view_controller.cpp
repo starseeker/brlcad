@@ -3227,6 +3227,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	this->d->lodRetainedPass.cutAdvanced();
     const bool completedPassBudgetBlocked = completedPass &&
 	this->d->lodRetainedPass.budgetBlocked();
+    const bool completedPassRefinementPending = completedPass &&
+	this->d->lodRetainedPass.refinementPending();
     const bool residentWorkPending = completedPass && service &&
 	(service->activeTaskCountForGeneration(generation) > 0 ||
 	 service->queuedResultCountForGeneration(generation) > 0 ||
@@ -3242,7 +3244,6 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		this->d->lodPointQualityPhase.triangleRecoveryPending(),
 		this->d->lodPointQualityPhase.presentationPending(),
 		completedPassBudgetBlocked);
-    bool completedPassCapacityRestartScheduled = false;
     if (completedPass && controller_lod_trace_enabled(
 	    "BOBOL_LOD_TRACE_PASS", this->d->lodViewRevision.value())) {
 	static std::atomic<unsigned int> completedPassTraceCount(0);
@@ -3311,6 +3312,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		    FALSE);
 	}
     }
+    bool capacityOwnsCompletedPass = false;
     if (coverageCompletion.completed && coverageCompletion.bounded) {
 	if (controller_lod_trace_enabled("BOBOL_LOD_TRACE_PASS",
 		this->d->lodViewRevision.value()))
@@ -3675,6 +3677,58 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		capacityAllocation.selectedPresentationCost,
 		capacityAllocation.certifiedPresentationBudget,
 		allocationPresentationCost);
+
+	/* Select the effect-producing owner from one immutable completed-pass
+	 * snapshot.  In particular, a current occurrence allocation may prove that
+	 * a pending capacity sample first needs a ceiling-free handoff.  That
+	 * normalization must happen before capacity calibration can alter evidence
+	 * or install its own retained-allocation request. */
+	BObolLodPresentationPolicy::CompletedPassInputs capacityHandoffInputs;
+	capacityHandoffInputs.completed = completedPass != FALSE;
+	/* The source cursor has reached its end.  Its mechanical retirement below
+	 * is part of this transaction and is not a successor submission. */
+	capacityHandoffInputs.submissionPending = false;
+	capacityHandoffInputs.rescanAfterFrame =
+	    this->d->lodAdmissionEvidence.capacity().rescanAfterFrame();
+	capacityHandoffInputs.changedCut = completedPassChangedCut != FALSE;
+	const bool handoffServiceQuiescent = !service ||
+	    (service->activeTaskCountForGeneration(generation) == 0 &&
+	     service->queuedResultCountForGeneration(generation) == 0 &&
+	     this->d->lodAvailabilityLedger.resultsPending() == 0);
+	const bool handoffPopulationQuiescent =
+	    handoffServiceQuiescent && retainedPopulationSettled &&
+	    !this->d->lodPresentationTransaction.barrierPending() &&
+	    !this->d->lodPresentationTransaction.publicationPending() &&
+	    !this->d->lodAvailabilityLedger.residentGrowthPending();
+	capacityHandoffInputs.populationQuiescent = handoffPopulationQuiescent;
+	const size_t handoffReconciliationBudget =
+	    this->d->lodPresentationPolicy.handoffReconciliationBudget();
+	const bool allocationCertificateCurrent =
+	    this->d->retainedAllocationCertificateCurrent(sceneLodState);
+	capacityHandoffInputs.retainedAllocationCompleted =
+	    allocationCertificateCurrent;
+	capacityHandoffInputs.retainedAllocationCertified = allocationCutsApplied;
+	capacityHandoffInputs.presentationLimitsReconciled =
+	    BObolLodPresentationPolicy::presentationLimitsReconciled(
+		capacityHandoffInputs.retainedAllocationCompleted,
+		allocationCutsApplied,
+		capacityAllocation.selectedPresentationCost,
+		capacityAllocation.certifiedPresentationBudget,
+		handoffReconciliationBudget);
+	capacityHandoffInputs.retainedRefinementPending =
+	    completedPassRefinementPending;
+	capacityHandoffInputs.retainedRefinementBudgetBlocked =
+	    completedPassBudgetBlocked;
+	const BObolLodPresentationPolicy::CompletedPassSelection
+	    capacityPassSelection =
+		this->d->lodPresentationPolicy.completedPassSelection(
+		    capacityHandoffInputs, !overBudgetAllocationClaimed,
+		    this->d->lodAdmissionEvidence.capacity().capacitySearch().
+			awaitingSample(),
+		    this->d->lodInteractiveProgressiveCeiling);
+	capacityOwnsCompletedPass = capacityPassSelection.capacityOwns();
+	const BObolLodPresentationPolicy::CompletedPassOwner completedPassOwner =
+	    capacityPassSelection.owner;
 	/* The allocation certificate belongs to the applied occurrence plan, not
 	 * to the mechanical pass which happened to create it.  An unchanged
 	 * presentation/barrier pass must continue the same bounded search using
@@ -3729,8 +3783,9 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	 * attempt, or a terminal constraint.  Sending it through the generic
 	 * fallback merely requests the same allocation again. */
 	const BObolLodCapacityEvidence::CalibrationDecision calibration =
-	    overBudgetAllocationClaimed ?
-		BObolLodCapacityEvidence::CalibrationDecision() :
+	    completedPassOwner !=
+		BObolLodPresentationPolicy::CompletedPassOwner::CAPACITY ?
+		    BObolLodCapacityEvidence::CalibrationDecision() :
 		this->d->finishBlockedCapacityPass(calibrationInputs);
 	/* A structural repair is already ordered by projected importance.  If its
 	 * finite scene allowance cannot replace the entire exact box frontier,
@@ -3744,7 +3799,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		completedMissingMeshBudgetBlockedCount : 0;
 	const float structuralPointThresholdBefore =
 	    this->d->lodPresentationPointProxyPixelThreshold;
-	if (structuralTailBlockedCount > 0 &&
+	if (capacityPassSelection.capacityOwns() &&
+	    structuralTailBlockedCount > 0 &&
 	    !this->d->lodInteractionSession.active() &&
 	    /* Structural coverage is discovered before the occurrence batch is
 	     * necessarily installed.  Point aggregation only changes that batch;
@@ -3793,6 +3849,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    const unsigned int traceIndex = passTraceCount.fetch_add(1);
 	    if (traceIndex < 256)
 		bu_log("BObol LoD completed budget pass "
+		       "owner=%u consume_annotations=%d "
 		       "active_faces=%zu active_cost=%zu cost_budget=%zu admitted=%d "
 		       "retained=%d pose_continuity=%d demanded=%zu "
 		       "preferred_ms=%.3f maximum_ms=%.3f "
@@ -3808,6 +3865,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		       "budget_finite=%d selected=%zu pixel_demand=%zu "
 		       "certified_budget=%zu requested_budget=%zu "
 		       "plan=%llu active_plan=%llu\n",
+		       static_cast<unsigned int>(capacityPassSelection.owner),
+		       capacityPassSelection.consumePassAnnotations ? 1 : 0,
 		       sceneActiveFaces, sceneActiveCost,
 		       this->d->lodAdmissionEvidence.capacity().currentBudget(),
 		       this->d->lodRetainedPass.admittedWork() ? 1 : 0,
@@ -3860,9 +3919,13 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	this->d->lodSubmissionPass.clearRescan();
 	this->d->lodSubmissionPass.deactivate();
 	if (calibration.restartSubmission) {
+	    /* The calibration decision starts a distinct pass.  None of the
+	     * completed pass's cut, budget, residency, or work annotations may be
+	     * inherited by that successor; doing so makes a clean handoff look as
+	     * though every no-op retry changed a cut. */
+	    this->d->resetRetainedPassAnnotations();
 	    this->d->lodSubmissionPass.activate();
 	    this->d->lodSubmissionPass.clearRescan();
-	    completedPassCapacityRestartScheduled = true;
 	    this->markProgressiveWorkPending();
 	}
 	if (calibration.requestFrame) {
@@ -3886,7 +3949,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	 * remain resident, so a later view or faster renderer restores them
 	 * without cache I/O or geometry rebuilding.
 	 */
-	if (!structuralAggregation.changed &&
+	if (capacityPassSelection.capacityOwns() &&
+	    !structuralAggregation.changed &&
 	    !this->d->lodAdmissionEvidence.capacity().rescanAfterFrame() &&
 	    this->d->lodAdmissionEvidence.capacity().stableBudgetLimited() &&
 	    !this->d->lodInteractionSession.active() &&
@@ -4001,14 +4065,6 @@ BObolViewController::submitLodRequests(BObolLodService *service,
      * frame.  Its measured calibration below will relax or tighten that
      * threshold without touching the immutable mesh generations.
      */
-    BObolLodPresentationPolicy::CompletedPassInputs handoffInputs;
-    handoffInputs.completed = completedPass != FALSE;
-    handoffInputs.submissionPending =
-	this->d->lodSubmissionPass.active() != FALSE;
-    handoffInputs.rescanAfterFrame =
-	this->d->lodAdmissionEvidence.capacity().rescanAfterFrame();
-    handoffInputs.changedCut = completedPassChangedCut != FALSE;
-
     /* A retained-allocation commit proves the owner-thread CAD revision it
      * observed, but it cannot predict a provider result which is still in
      * flight.  Releasing the global deadline ceiling while that stream was
@@ -4018,80 +4074,83 @@ BObolViewController::submitLodRequests(BObolLodService *service,
      * immutable-result stream and its presentation/coalescing edges are
      * quiet.  The resident-growth policy below supplies the eventual
      * scene-wide retry rather than busy-scanning while workers run. */
+    BObolLodPresentationPolicy::CompletedPassInputs handoffInputs;
+    handoffInputs.completed = completedPass != FALSE;
+    handoffInputs.submissionPending =
+	this->d->lodSubmissionPass.active() != FALSE;
+    handoffInputs.rescanAfterFrame =
+	this->d->lodAdmissionEvidence.capacity().rescanAfterFrame();
+    handoffInputs.changedCut = completedPassChangedCut != FALSE;
     const bool handoffServiceQuiescent = !service ||
 	(service->activeTaskCountForGeneration(generation) == 0 &&
 	 service->queuedResultCountForGeneration(generation) == 0 &&
 	 this->d->lodAvailabilityLedger.resultsPending() == 0);
-    const bool handoffPopulationQuiescent =
-	handoffServiceQuiescent &&
-	retainedPopulationSettled &&
+    handoffInputs.populationQuiescent =
+	handoffServiceQuiescent && retainedPopulationSettled &&
 	!this->d->lodPresentationTransaction.barrierPending() &&
 	!this->d->lodPresentationTransaction.publicationPending() &&
 	!this->d->lodAvailabilityLedger.residentGrowthPending();
-    handoffInputs.populationQuiescent =
-	handoffPopulationQuiescent;
     const size_t handoffReconciliationBudget =
 	this->d->lodPresentationPolicy.handoffReconciliationBudget();
     const BObolRetainedAllocationResult &allocationCertificate =
 	this->d->lodRetainedAllocationCertificate;
     const bool allocationCertificateCurrent =
 	this->d->retainedAllocationCertificateCurrent(sceneLodState);
-    const bool allocationCutsApplied =
+    const bool handoffAllocationCutsApplied =
 	this->d->retainedAllocationCutsApplied(sceneLodState);
-    /* Completion is a property of the current applied certificate, not of
-     * the mechanical pass which produced it.  Presentation-only successor
-     * passes must be able to consume that proof without rebuilding it. */
     handoffInputs.retainedAllocationCompleted =
 	allocationCertificateCurrent;
     handoffInputs.retainedAllocationCertified =
-	allocationCutsApplied;
+	handoffAllocationCutsApplied;
     handoffInputs.presentationLimitsReconciled =
 	BObolLodPresentationPolicy::presentationLimitsReconciled(
 	    handoffInputs.retainedAllocationCompleted,
-	    allocationCutsApplied,
+	    handoffAllocationCutsApplied,
 	    allocationCertificate.selectedPresentationCost,
 	    allocationCertificate.certifiedPresentationBudget,
 	    handoffReconciliationBudget);
     handoffInputs.retainedRefinementPending =
-	this->d->lodRetainedPass.refinementPending();
+	completedPassRefinementPending;
     handoffInputs.retainedRefinementBudgetBlocked =
 	completedPassBudgetBlocked;
-    const bool capacitySampleRequiresCeilingFreeHandoff =
-	this->d->lodPresentationPolicy.
-	    capacitySampleRequiresCeilingFreeHandoff(
-		handoffInputs,
+    BObolLodPresentationPolicy::CompletedPassSelection handoffSelection;
+    if (!capacityOwnsCompletedPass) {
+	handoffSelection =
+	    this->d->lodPresentationPolicy.completedPassSelection(
+		handoffInputs, false,
 		this->d->lodAdmissionEvidence.capacity().capacitySearch().
 		    awaitingSample(),
 		this->d->lodInteractiveProgressiveCeiling);
-    if (capacitySampleRequiresCeilingFreeHandoff) {
-	/* The applied occurrence-plan certificate proves the changed cuts as well
-	 * as an unchanged successor pass would.  Consume both mechanical pass
-	 * annotations so the handoff removes the renderer ceiling before the
-	 * capacity candidate's first sample frame. */
-	handoffInputs.rescanAfterFrame = false;
-	handoffInputs.changedCut = false;
+	if (handoffSelection.consumePassAnnotations) {
+	    handoffInputs.rescanAfterFrame = false;
+	    handoffInputs.changedCut = false;
+	}
     }
-    if (this->d->lodPresentationPolicy.
-	    currentHandoffAllocationSupersedesCapacityRestart(
-		handoffInputs, completedPassCapacityRestartScheduled)) {
-	this->d->lodSubmissionPass.deactivate();
-	handoffInputs.submissionPending = false;
-    }
-    const BObolLodPresentationPolicy::CompletedPassDecision handoff =
-	this->d->lodPresentationPolicy.completePass(handoffInputs);
+    BObolLodPresentationPolicy::CompletedPassDecision handoff;
+    /* A capacity-owned completion may retire unrelated observation data, but
+     * it may not run the handoff reducer after changing capacity evidence.
+     * Selection already normalized the one case where the handoff must
+     * precede a pending sample. */
+    if (!capacityOwnsCompletedPass)
+	handoff = this->d->lodPresentationPolicy.completePass(handoffInputs);
     if (completedPass && controller_lod_trace_enabled(
 	    "BOBOL_LOD_TRACE_PASS", this->d->lodViewRevision.value())) {
 	static std::atomic<unsigned int> handoffTraceCount(0);
 	const unsigned int traceIndex = handoffTraceCount.fetch_add(1);
 	if (traceIndex < 512)
-	    bu_log("BObol LoD handoff pass pending=%d rescan=%d changed=%d "
+	    bu_log("BObol LoD handoff pass owner=%u consume_annotations=%d "
+		   "pending=%d rescan=%d changed=%d "
 	       "reconciled=%d "
 	       "allocation=%d certified=%d selected=%zu budget=%zu "
 	       "quiescent=%d "
 	       "retained=%d blocked=%d presentation_pending=%d "
 	       "finish=%d request_allocation=%d request_rescan=%d "
-	       "request_local_reduction=%d retire=%d\n",
-	       handoffInputs.submissionPending ? 1 : 0,
+		   "request_local_reduction=%d retire=%d\n",
+		   static_cast<unsigned int>(capacityOwnsCompletedPass ?
+		       BObolLodPresentationPolicy::CompletedPassOwner::CAPACITY :
+		       handoffSelection.owner),
+		   handoffSelection.consumePassAnnotations ? 1 : 0,
+		   handoffInputs.submissionPending ? 1 : 0,
 	       handoffInputs.rescanAfterFrame ? 1 : 0,
 	       handoffInputs.changedCut ? 1 : 0,
 	       handoffInputs.presentationLimitsReconciled ? 1 : 0,
@@ -4404,11 +4463,6 @@ BObolViewController::submitLodRequests(BObolLodService *service,
      * for this frame or reopen a view which already reported stable. */
     if (completedPass)
 	this->armStableLodHeadroomProbeIfReady();
-    if (completedPass && !this->d->lodSubmissionPass.active() &&
-	!this->d->lodRetainedPass.refinementPending()) {
-	this->d->advanceAdmissionRevision(
-	    BObolLodAdmissionRevisionDomain::CAPACITY);
-    }
     if (completedPass && !this->d->lodSubmissionPass.active())
 	this->d->lodDiscretePopulationTrialPermit.revoke();
     if (completedPass)

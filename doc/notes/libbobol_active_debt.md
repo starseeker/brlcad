@@ -97,10 +97,12 @@ Required completion work:
 3. Route remaining direct lifecycle mutations through one typed reducer which
    returns a complete successor plus bounded effects.  An unmapped transition
    is debt unless it represents a genuinely new semantic event.
-4. Add randomized refinement traces and retain the exhaustive focused value
-   tests.  Every nonterminal state must identify a worker, cursor, scheduled
-   owner-thread pump, frame acknowledgement, or finite timer which can make
-   progress.
+4. Extend randomized refinement traces as each remaining effect writer moves
+   behind the reducer, and retain the exhaustive focused value tests.  The
+   completed-pass boundary now has full selector enumeration plus 512 seeded
+   multi-pass traces.  Every nonterminal state must identify a worker, cursor,
+   scheduled owner-thread pump, frame acknowledgement, or finite timer which
+   can make progress.
 5. Re-run the applicable TLC models after ownership/liveness changes and the
    graphical matrix after numeric policy changes.  Formal models do not judge
    visual quality or wall-clock performance.

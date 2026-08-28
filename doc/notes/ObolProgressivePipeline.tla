@@ -498,7 +498,10 @@ CompleteFrame ==
                     remainingBudget>>
 
 MeasureCapacity(newBudget) ==
-    /\ newBudget \in budget..3
+    \* Capacity revisions name a distinct admitted population.  Measuring the
+    \* already-active discrete population may update sample evidence, but it
+    \* cannot invalidate the revision tuple or reopen planning.
+    /\ newBudget \in (budget + 1)..3
     /\ ~inputOpen
     /\ profileCertified
     /\ AllAvailabilityTerminal
@@ -660,6 +663,9 @@ RetainedMeshDoesNotRegressAcrossViewEpochs ==
             /\ committedRep[occurrence] = "mesh"
             /\ committedQuality[occurrence] >=
                previousCommittedQuality[occurrence]
+
+CapacityRevisionNamesSemanticChange ==
+    [][capacityRevision' # capacityRevision => budget' # budget]_vars
 
 ActivePipelineHasProgressWitness ==
     Outcome = "active" =>

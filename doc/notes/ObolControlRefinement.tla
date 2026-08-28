@@ -1,8 +1,11 @@
 ---------------------- MODULE ObolControlRefinement ----------------------
 \* Executable control-refinement contract shared by the production C++ map
-\* and ObolProgressivePipeline.tla.  The twenty concrete facts are the
-\* remaining implementation inputs; they refine to nine finite obligations.
-\* This model deliberately excludes numeric planning and renderer work.
+\* and ObolProgressivePipeline.tla.  Twenty fact classes represent the
+\* twenty-one remaining implementation inputs and refine to nine finite
+\* obligations.  The production structuralFrontier and pointTriangleRecovery
+\* booleans are symmetry-equivalent here: both map only to planning, while the
+\* exhaustive C++ refinement test retains and checks them independently.  This
+\* model deliberately excludes numeric planning and renderer work.
 
 EXTENDS Naturals, FiniteSets, TLC
 

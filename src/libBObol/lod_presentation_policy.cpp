@@ -51,23 +51,29 @@ BObolLodPresentationPolicy::claimOverBudgetAllocation(
     return true;
 }
 
-bool
-BObolLodPresentationPolicy::
-currentHandoffAllocationSupersedesCapacityRestart(
-    const CompletedPassInputs &inputs, bool capacityRestartScheduled) const
+BObolLodPresentationPolicy::CompletedPassSelection
+BObolLodPresentationPolicy::completedPassSelection(
+    const CompletedPassInputs &inputs, bool capacityEligible,
+    bool capacitySamplePending, int progressiveCeiling) const
 {
-    /* Once a current, quiescent occurrence allocation exists, the handoff
-     * reducer owns the next decision.  A fitting allocation completes the
-     * handoff; an over-budget minimum requests local presentation reduction.
-     * Letting the generic capacity fallback restart first leaves
-     * submissionPending set, which prevents either handoff transition and
-     * creates an unbounded no-op allocation loop. */
-    return capacityRestartScheduled && inputs.completed &&
-	inputs.submissionPending && !inputs.rescanAfterFrame &&
-	!inputs.changedCut && this->handoffActive() &&
-	!this->presentationHandoffPending() &&
-	inputs.retainedAllocationCompleted &&
-	inputs.retainedAllocationCertified && inputs.populationQuiescent;
+    CompletedPassSelection selection;
+    if (!inputs.completed || inputs.submissionPending)
+	return selection;
+    selection.consumePassAnnotations =
+	this->capacitySampleRequiresCeilingFreeHandoff(inputs,
+	    capacitySamplePending, progressiveCeiling);
+    const bool cleanPass =
+	(!inputs.rescanAfterFrame && !inputs.changedCut) ||
+	selection.consumePassAnnotations;
+    if (cleanPass && this->handoffActive()) {
+	selection.owner = this->presentationHandoffPending() ?
+	    CompletedPassOwner::PRESENTATION_HANDOFF :
+	    CompletedPassOwner::ALLOCATION_HANDOFF;
+	return selection;
+    }
+    selection.owner = capacityEligible ? CompletedPassOwner::CAPACITY :
+	CompletedPassOwner::NONE;
+    return selection;
 }
 
 bool

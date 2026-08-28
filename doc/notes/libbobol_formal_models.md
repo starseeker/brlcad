@@ -32,6 +32,7 @@ The production refinement target is the typed state in
 | `ObolQuietSuccessor` | schedule-independent retained-detail restoration | `lod_quiet_successor_private.h`, `BObolLodPresentationPolicy` |
 | `ObolDeadlineOwnership` | unique successor after an interrupted frame | `view_controller_render.cpp` |
 | `ObolCapacitySearch` | finite renderer-capacity bracket and discrete-population reuse | `lod_capacity_search_private.h` |
+| `ObolCompletedPassOwnership` | multi-pass growth/coverage/handoff/capacity ownership, effects, annotation lifetime, and semantic revision | `BObolLodAvailabilityScheduler`, `BObolLodPresentationPolicy`, `BObolLodRetainedPassAnnotations`, `view_controller.cpp` |
 | `ObolCapacityPresentationHandoff` | occurrence allocation to ceiling-free sample | `BObolLodPresentationPolicy` |
 | `ObolStaticQuality` | bounded quiet-view fidelity improvement | `BObolLodStaticQualityTrial` |
 | `ObolPointQualityOwnership` | exclusive point calibration/recovery owner | `BObolLodPointQualityPhase` |
@@ -40,7 +41,7 @@ The production refinement target is the typed state in
 | `ObolLodArbitration` | budget-safe visual-importance ordering | `retained_allocation_private.cpp` |
 | `ObolLodConvergence` | finite convergence for single-large and many-object scenes | controller convergence snapshot and ledger |
 | `ObolSubmissionPass` | bounded submission cursor and rescan debt | `BObolLodSubmissionPass` |
-| `ObolResidentGrowth` | coalesced resident suffix drain and reallocation | availability ledger and planning obligations |
+| `ObolResidentGrowth` | coalesced resident suffix drain, coverage transfer, and reallocation | availability ledger and planning obligations |
 | `ObolResidentCompaction` | revision-safe background memory reclamation | `view_controller_residency.cpp`, `BLodService` |
 | `ObolActiveProducerDemand` | superseding demand for a stable asset producer | `BLodService`, mesh submission action |
 | `ObolPresentationPreparation` | finite renderer-side preparation | Obol `CadPresentationPreparation`, controller render executor |
@@ -94,17 +95,20 @@ accept the model fix without the implementation guard.
 
 Current focused verification on 2026-08-27:
 
-- `ObolProgressivePipeline`: 2,986,118 generated / 1,427,962
-  distinct states, depth 42;
+- `ObolProgressivePipeline`: 2,358,764 generated / 1,095,220
+  distinct states, depth 40;
 - `ObolControlRefinement`: 4,194,302 generated / 2,097,152
   distinct states, depth 1;
 - `ObolCapacitySearch`: 2,918 generated / 2,918 distinct states,
   depth 27;
+- `ObolCompletedPassOwnership`: 2,270 generated / 1,804 distinct states,
+  depth 17;
 - `ObolPresentationPreparation`: 1,143 generated / 526 distinct states,
   depth 12;
 - `ObolCadMutation`: 257,805 generated / 128,904 distinct states, depth 5;
 - `ObolCadViewPublication`: 1,422 generated / 480 distinct, depth 11;
 - `ObolSparsePlanIdentity`: 17 generated / 13 distinct states, depth 7;
+- `ObolResidentGrowth`: 525 generated / 377 distinct states, depth 23;
 - `ObolInteractionSession`: 468 generated / 132 distinct, depth 11; and
 - `ObolLiveSpatialPublication`: 343 generated / 212 distinct, depth 11.
 

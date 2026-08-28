@@ -835,17 +835,49 @@ whole sequence; weaker observers of the same completion may retire bookkeeping
 but may not start work.  Model and test the effect ordering, not merely the set
 of valid snapshot owners.
 
+A later multi-Lucy counterexample showed that the implementation still chose
+capacity first and asked the handoff whether it superseded that choice only
+afterward.  Capacity calibration had already changed its evidence and installed
+a retained-allocation request, so deactivating the visible submission did not
+cancel the hidden successor.  `completedPassSelection` now chooses one typed
+owner from the immutable completion snapshot before either controller runs.
+This is the production seam checked by `ObolCompletedPassOwnership.tla`.
+Starting the chosen successor also resets the complete pass-annotation
+transaction; a stale `changedCut` bit cannot make the next no-op pass look
+productive.  A legacy epilogue which advanced the capacity revision after a
+no-op terminal pass was removed for the same reason: revisions name semantic
+edges, not pump calls.
+
+A subsequent contract audit found that the ceiling-free capacity-sample
+exception was still normalized only after capacity calibration.  The later
+handoff could therefore run after the supposedly exclusive capacity owner.
+Normalization now belongs to the immutable selection, structural/point effects
+are gated by that selected owner, and the unselected handoff reducer cannot run.
+The multi-pass model covers the successor effect and annotation lifetime, not
+just the valid owner set at one snapshot.
+
 ### A multi-step availability transaction belongs in one sum type
 
 Resident growth was represented by ledger debt plus a controller drain boolean.
 The drain could finish while the debt still correctly prohibited allocation,
 and generic budget handling restarted the drain indefinitely.
 
+The first typed repair still omitted one guard from its formal abstraction.
+After an OSMesa Generic Twin zoom, useful coverage was incomplete and resident
+growth was required.  Coverage yielded to growth, but the growth scheduler
+required complete coverage before beginning its drain.  It consequently
+replayed the same incomplete coverage pass thousands of times with no task,
+result, or framebuffer capable of changing either premise.
+
 Rule: required, active, dirty-active, and allocation-ready are mutually
-exclusive phases owned by one ledger.  Drain completion has only two successors:
-another drain for a coalesced arrival, or exactly one allocation.  A new view
-interrupts the active drain back to required; it never silently consumes old-view
-work as a current allocation proof.
+exclusive phases owned by one ledger.  Coverage is an output of the resident
+drain, never its admission guard.  Drain completion has only three successors:
+another drain for a coalesced arrival, one scene-wide allocation when coverage
+is complete, or one ordinary coverage retry after consuming the growth edge
+when coverage remains incomplete.  A new view interrupts the active drain back
+to required; it never silently consumes old-view work as a current allocation
+proof.  The focused model must include every runtime guard on those successors;
+modeling phases without their coverage precondition did not prove this boundary.
 
 ### Presented evidence needs a level-triggered retirement path
 

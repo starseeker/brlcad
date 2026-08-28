@@ -4044,30 +4044,13 @@ BObolViewController::scheduleResidentGrowthReallocationIfReady(void)
 		   this->d->lodAdmissionEvidence.capacity().rescanAfterFrame() ? 1 : 0);
     }
 
-    /* A newly resident suffix can arrive just after the pass which proved
-     * minimum-mesh coverage.  If that pass ended with one or more missing
-     * prefixes, coverage is deliberately false—but resident growth is now
-     * the event which can satisfy it.  Waiting for coverage before scheduling
-     * another census leaves a closed cycle: no task, result, frame, or cursor
-     * remains to change either latch.  Resume (or start) the bounded coverage
-     * pass first; only its completed proof may consume the scene-wide
-     * reallocation below. */
-    if (this->d->lodAutoSubmit && streamIdle && presentationReady &&
-	allocationAllowed &&
-	!this->d->lodCoveragePolicy.effectiveComplete()) {
-	if (!this->d->lodCoveragePolicy.active()) {
-	    this->d->lodCoveragePolicy.activate(false);
-	    this->d->lodSubmissionSourceIndex = 0;
-	    this->d->lodSubmissionEntryOffset = 0;
-	    this->d->clearLodSubmissionPlan();
-	}
-	this->d->lodSubmissionPass.activate();
-	this->d->lodSubmissionPass.clearRescan();
-	this->markProgressiveWorkPending();
-	return;
-    }
-    const bool residentWorkReady = streamIdle && presentationReady &&
-	this->d->lodCoveragePolicy.effectiveComplete();
+    /* A newly resident suffix can be the fact which makes coverage possible.
+     * Coverage therefore cannot guard the drain itself: doing so makes an
+     * incomplete coverage pass yield to resident growth while resident growth
+     * restarts that same pass forever.  Drain the immutable suffix first;
+     * after it reaches REALLOCATION_READY, consume the growth edge and hand
+     * incomplete coverage to one ordinary successor below. */
+    const bool residentWorkReady = streamIdle && presentationReady;
     if (this->d->lodAvailabilityLedger.beginResidencyDrainIfReady(
 	    this->d->lodAutoSubmit != FALSE, residentWorkReady,
 	    allocationAllowed)) {
@@ -4111,6 +4094,16 @@ BObolViewController::scheduleResidentGrowthReallocationIfReady(void)
     this->d->resetRetainedPassAnnotations();
     this->d->advanceAdmissionRevision(
         BObolLodAdmissionRevisionDomain::CAPACITY);
+    const BObolLodAvailabilityScheduler::ResidentGrowthSuccessor successor =
+	BObolLodAvailabilityScheduler::residentGrowthSuccessor(
+	    this->d->lodCoveragePolicy.effectiveComplete());
+    if (successor == BObolLodAvailabilityScheduler::
+	    ResidentGrowthSuccessor::RETRY_COVERAGE) {
+	this->d->lodCoveragePolicy.activate(false);
+	this->d->lodSubmissionPass.activate();
+	this->markProgressiveWorkPending();
+	return;
+    }
     this->d->requestRetainedReallocation();
     /* This is an explicit pass in the current epoch.  Preserve the submitted
      * epoch witness so the wrapper cannot turn it into a view-change rescan. */

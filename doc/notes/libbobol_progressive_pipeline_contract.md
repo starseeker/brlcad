@@ -222,6 +222,30 @@ the candidate bracket, not scene cardinality or elapsed wall time.
 `ObolCapacityPresentationHandoff.tla` models the allocation-application,
 ceiling-reconciliation, and exact-sample ordering boundary.
 
+At the boundary between a completed mechanical pass and its successor,
+capacity calibration and presentation handoff are candidate owners, not
+independent cleanup stages.  `ObolCompletedPassOwnership.tla` requires that the
+owner be selected before either path mutates evidence.  Resident growth and
+coverage precede both.  A clean completed pass with an active presentation or
+allocation handoff belongs to that handoff; generic capacity calibration may
+run only when no stronger owner owns the boundary.  A current allocation may
+also consume its cut/rescan annotations when its already-pending capacity
+sample requires a ceiling-free presentation.  That normalization is part of
+the immutable owner selection, not a later cancellation of capacity work.
+Every effect-producing successor starts with fresh pass annotations, and a
+same-population capacity sample does not advance the semantic capacity
+revision.  Deactivating a capacity submission after calibration is
+insufficient because calibration also installs a retained-reallocation
+request.
+
+The model follows growth, coverage, presentation, allocation, cut
+presentation, population change, and same-population sample effects across
+successive passes.  On 2026-08-27 TLC explored 2,270 generated / 1,804 distinct
+states to depth 17 with no invariant or liveness error.  The executable mapping
+is `completedPassSelection`, the availability-scheduler successor values, and
+the pass-annotation/revision contracts.  The focused coordinator test exhausts
+the selector's Boolean input domain and runs 512 deterministic composed traces.
+
 An interrupted presentation has exactly one successor owner.  Strict progress
 on the same finite presentation transaction takes priority; otherwise an
 unfinished population cursor continues unchanged; only when both are quiescent
@@ -441,12 +465,14 @@ finite interaction, inventory, availability, publication, planning,
 presentation, handoff, compaction, and cache-write obligations, then selects
 one owner by fixed precedence.  Convergence consumes this projection rather
 than reconstructing separate Boolean unions, and qged records it for every
-sample.  Exhaustive C++ coverage checks all 1,048,576 combinations of its 20
+sample.  Exhaustive C++ coverage checks all 2,097,152 combinations of its 21
 concrete inputs for owner/obligation consistency.  The focused
-`ObolControlRefinement.tla` model checks the same domain with both terminal
-error values and proves that fair owner service strictly decreases and
-eventually retires the finite work set (4,194,302 generated / 2,097,152
-distinct states).  This projection is not a second scheduler and does not
+`ObolControlRefinement.tla` model symmetry-reduces structural-frontier and
+point-recovery inputs because both map only to the planning obligation; its 20
+fact classes are checked with both terminal-error values.  It proves that fair
+owner service strictly decreases and eventually retires the finite work set
+(4,194,302 generated / 2,097,152 distinct states).  This projection is not a
+second scheduler and does not
 satisfy the final reducer requirement by itself; each following migration
 must move one production effect writer behind the typed boundary and delete
 the superseded path.
@@ -628,9 +654,15 @@ continues.  Ordinary capacity search cannot start until the recovery has
 either presented its changed cut or retired its proven no-op plan.
 
 `ObolResidentGrowth.tla` is the focused liveness model for that transaction.
+It also models the incomplete-coverage boundary exposed by an OSMesa Generic
+Twin zoom: coverage cannot guard the resident drain which may make coverage
+possible.  A completed drain consumes its growth edge and transfers to either
+one ordinary coverage retry or one scene-wide reallocation.  Repeating the
+same incomplete coverage pass while the growth phase remains pending is not a
+legal transition.
 It includes an ordinary capacity-blocked cursor at the growth edge and proves
 that capacity cannot restart after resident growth becomes pending.  TLC
-checked 155 generated / 119 distinct states to depth 19 with no error.
+checked 525 generated / 377 distinct states to depth 23 with no error.
 `ObolPointQualityOwnership.tla` additionally distinguishes adaptive point-cut
 calibration, handoff confirmation of an already chosen cut, and retained
 triangle recovery.  A recovery frame whose callback is consumed by a stronger
@@ -868,6 +900,9 @@ restore cannot bypass its current-pose proof, and that finite input terminates.
 `ObolCapacitySearch.tla` checks all modeled true capacities for eight ordered
 budgets, a monotone map which pairs adjacent budgets onto the same discrete
 population, and three bounded samples for every previously unseen population.
+Equivalent populations reuse their prior classification and select a midpoint
+of the remaining proven bracket; they do not walk adjacent numeric cost units
+which cannot change the discrete PoP cuts.
 It includes the one-way transition from the preferred steady cadence to the
 independent static deadline.  TLC explored 2,918 generated / 2,918 distinct
 states to depth 27.  It proves sound strict bracket reduction, immediate reuse

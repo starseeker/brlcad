@@ -459,7 +459,7 @@ private:
     {
 	return this->classifyCandidate(
 	    this->measuredPopulationSafeValue[measuredIndex],
-	    this->measuredPopulationProposalsValue[measuredIndex]);
+	    this->measuredPopulationProposalsValue[measuredIndex], true);
     }
 
     Decision classifyCandidate(void)
@@ -468,7 +468,8 @@ private:
 	return this->classifyCandidate(safe, median(this->proposalValues));
     }
 
-    Decision classifyCandidate(bool safe, size_t proposal)
+    Decision classifyCandidate(bool safe, size_t proposal,
+	bool equivalentPopulation = false)
     {
 	const size_t candidate = this->candidateBudgetValue;
 	const unsigned int measuredIndex = this->measuredCandidateCountValue++;
@@ -513,7 +514,16 @@ private:
 	 * to the proven bracket and supplies a midpoint when rounding names an
 	 * already measured endpoint, so progress and bracket soundness are
 	 * unchanged. */
-	size_t next = proposal;
+	/* A numeric budget which selects an already measured population adds no
+	 * new timing evidence.  Reusing that population's proposal can name the
+	 * immediately adjacent integer budget, which the discrete allocator may
+	 * map to the same cuts again.  Move to the middle of the remaining proven
+	 * bracket instead.  This preserves safety while ensuring every reused
+	 * population consumes a meaningful part of the finite search interval. */
+	size_t next = equivalentPopulation ?
+	    this->safeBudgetValue +
+		(this->goalMaximumBudget() - this->safeBudgetValue) / 2 :
+	    proposal;
 	next = this->unmeasuredCandidate(next);
 	if (!next)
 	    return this->finish(Result::CERTIFIED);
