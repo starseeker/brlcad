@@ -884,6 +884,38 @@ changed source metric is a provider failure for an exact demand; a valid result
 overtaken by newer demand is `SUPERSEDED` and is simply discarded.  Using one
 status for both made normal camera timing capable of terminating convergence.
 
+### Hidden tombstones do not own a stable identity
+
+Sparse box-to-mesh publication retains an old hidden plan slot and appends the
+active mesh slot.  Both records deliberately carry the same stable
+`InstanceId`.  A later PoP cut-bin swap in the old group used to rewrite the
+global ID-to-index map unconditionally, so the hidden tombstone stole the
+active replacement's index.  The next cut update combined that old index with
+the new group's metadata, underflowed two zero bin counts to `UINT32_MAX`, and
+asked the renderer to scan more than eight billion phantom occurrences.
+
+Rule: a duplicate retained record may update an identity index only when the
+mapping still names the record's source slot.  Validate group cardinality,
+span membership, and source-bin ownership before the first sparse mutation;
+fall back to an authoritative rebuild on mismatch.  Test the complete shared
+part, replacement tombstone, old-group swap, active-replacement cut sequence.
+Checking only final instance count or one ordinary rebind does not exercise the
+aliasing failure.
+
+### Cancellation is not invalid geometry
+
+Flat atlas construction formerly returned one Boolean for malformed input and
+deadline interruption.  An abort after one committed range therefore changed
+a valid `Preparing` certificate into permanent `Failed`.  Separately, one
+source-authored PoP range could exceed the entire deadline, so retries never
+committed even their first unit.
+
+Rule: preparation outcomes are typed.  Split source ranges into bounded atomic
+units, retain complete units across frames, report interruption without
+changing validity, and reserve `Failed` for data which cannot become valid on
+retry.  A regression must interrupt inside a source range, observe strict
+partial progress, then resume the identical target to completion.
+
 ### Thread cleanup must retain registry entries through callbacks
 
 The source-realization shutdown contract test exposed two independent races on

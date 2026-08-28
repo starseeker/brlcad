@@ -523,6 +523,25 @@ compares the before/after snapshots and grants an unchanged retry only for a
 new target, strict same-target progress, or a completion edge.  The former raw
 preparation serial is diagnostic-only and has no policy consumer.
 
+The unit named by that certificate is a bounded cancellation atom, not an
+arbitrary source-authored range.  PoP cluster ranges may be much larger than a
+stable presentation deadline, so Obol splits flat-shaded atlas work into
+triangle-aligned ranges no larger than the executor cancellation quantum.
+Cancellation inside one range retains earlier committed ranges and leaves the
+target `Preparing`; it is not malformed geometry and cannot publish `Failed`.
+Only a complete range advances `completedUnits`.  This is the concrete
+refinement of `ObolPresentationPreparation.PrepareUnit`.
+
+Retained sparse-plan identity has the same single-owner rule.  A streamed
+box-to-mesh replacement may leave a hidden compiled tombstone with the same
+stable `InstanceId` as its appended active slot.  Reordering the tombstone
+inside its old cut group may update an ID-to-index mapping only when that
+mapping still names the moved source slot.  An inactive duplicate cannot steal
+the active slot's mapping.  Every cut patch validates the group span, bin
+cardinality, and active index before mutation; rejection rebuilds from the
+authoritative instance records.  `ObolSparsePlanIdentity.tla` and the Obol
+tombstone regression cover this aliasing boundary.
+
 Three further boundaries are now explicit.  Interaction phase, gesture kind,
 release timing, and quiet debounce are one typed interaction session rather
 than independent latches.  Retained-allocation reuse and in-flight matching use

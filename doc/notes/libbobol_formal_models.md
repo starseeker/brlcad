@@ -46,6 +46,7 @@ The production refinement target is the typed state in
 | `ObolPresentationPreparation` | finite renderer-side preparation | Obol `CadPresentationPreparation`, controller render executor |
 | `ObolCadViewPublication` | exact-view preparation/report acceptance | Obol `SoCADAssembly`, libBObol view attachment |
 | `ObolCadMutation` | validated retained-scene publication, notification, and resource denial | Obol `CadSceneMutation`, `SoCADAssembly::replaceScene` |
+| `ObolSparsePlanIdentity` | active-slot ownership when a hidden tombstone shares an `InstanceId` | Obol `CadPlanCache`, sparse PoP cut patching |
 | `ObolLodColdPreview` | coverage-safe cold preview and bounded admission | serialized source and compact coverage producer |
 | `ObolSpatialProducer` | cold spatial hierarchy and durable-cache lifecycle | mesh LoD cache/service producer |
 | `ObolLiveSpatialPublication` | additive immutable page publication | compact presentation staging and Obol assembly |
@@ -65,7 +66,8 @@ complete input, capacity, and coverage ownership.
 - Change visual-importance arithmetic in the retained-allocation oracle and
   property tests; TLA+ checks only its atomic budget/priority contract.
 - Change retained CAD publication in `ObolCadMutation` or
-  `ObolCadViewPublication`, plus Obol boundary tests.
+  `ObolCadViewPublication`, and change sparse retained identity ownership in
+  `ObolSparsePlanIdentity`, plus Obol boundary tests.
 - Change cold/cache ordering in `ObolLodColdPreview`, `ObolSpatialProducer`,
   or `ObolLiveSpatialPublication`, plus cold/warm GUI and memory tests.
 
@@ -98,8 +100,11 @@ Current focused verification on 2026-08-27:
   distinct states, depth 1;
 - `ObolCapacitySearch`: 2,918 generated / 2,918 distinct states,
   depth 27;
+- `ObolPresentationPreparation`: 1,143 generated / 526 distinct states,
+  depth 12;
 - `ObolCadMutation`: 257,805 generated / 128,904 distinct states, depth 5;
 - `ObolCadViewPublication`: 1,422 generated / 480 distinct, depth 11;
+- `ObolSparsePlanIdentity`: 17 generated / 13 distinct states, depth 7;
 - `ObolInteractionSession`: 468 generated / 132 distinct, depth 11; and
 - `ObolLiveSpatialPublication`: 343 generated / 212 distinct, depth 11.
 

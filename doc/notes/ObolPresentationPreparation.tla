@@ -118,7 +118,10 @@ BeginAttempt ==
                     totalUnits, remainingUnits, reservation,
                     committedRevision>>
 
-\* A unit is immutable and complete before it decrements the ledger.
+\* A unit is an admitted, cancellation-bounded atom.  An authored source
+\* range is not a unit when one deadline slice cannot finish it; the renderer
+\* must split that range before admission.  A unit is immutable and complete
+\* before it decrements the ledger.
 PrepareUnit ==
     /\ state = "preparing"
     /\ targetRevision = demandRevision
