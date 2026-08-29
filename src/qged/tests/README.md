@@ -14,7 +14,12 @@ The primary matrix dimensions are:
   itself must exist or libbu intentionally disables caching.)
 - Shaded and wireframe PoP presentations.
 - A deterministic 1100×800 top-level resize through the real Qt layout and GL
-  resize path, independent of the operator's saved qged window settings.
+  resize path.  Replay mode uses a process-private QSettings scope, so neither
+  saved window geometry nor plugin enablement can alter the run, and the run
+  cannot overwrite the operator's settings on exit.  Camera-critical resize
+  events request a bounded `stable_ms` interval; generation-tagged retries
+  prevent delayed native configure acknowledgements from restoring an older
+  scripted size.
 - Initial draw return, 50 ms, 200 ms, 1.5 seconds, and stable checkpoints.
 - `ae 90 0`, zoom in/out/return, sustained held-button rotation checkpoints,
   and post-release stable checkpoints.
@@ -203,6 +208,31 @@ not fall back to a broad tree scan.  Large OSMesa progressive scenes must
 demonstrate a smaller face cut and a render below 250 ms while rotation is
 held; their quiet terminal image remains a separate quality/performance
 measurement.
+
+`test_qged_measure_ui.json` is the focused measurement contract.  It uses a
+closed, oriented BoT and drives qged's actual palette and canvas through 2D
+and exact-hit 3D distance/angle gestures, degree/radian reporting,
+right-click cancellation, resize, and replacement by another view tool.  The
+single- and quad-layout CTests use OSMesa; the companion CMake runner accepts
+`USE_SYSTEM_GL=ON` for an X11 qualification run and `ARTIFACT_DIR` to retain
+its images.  The replay checks semantic overlay point counts and numeric
+readback, then compares its own captures: a completed guide must alter the
+framebuffer and cancellation must restore the exact baseline.  Measurement
+line layers deliberately disable depth testing so a 2D guide through shaded
+geometry remains visible; other line-layer overlays remain depth-tested by
+default.
+
+`test_qged_view_settings_ui.json` is the focused faceplate and view-settings
+contract.  It drives the real palette and toolbar in both single and quad
+layouts, then checks bidirectional GED/widget state for ADC, center dot, grid,
+axes, scale, parameter/FPS text, and framebuffer composition.  The replay also
+checks the corresponding retained Obol features, applies a world-space cutting
+plane to shaded geometry, requires a visible image delta, and requires
+disabling the plane to restore the exact baseline.  The companion CMake runner
+uses OSMesa by default and accepts `USE_SYSTEM_GL=ON` and `ARTIFACT_DIR` like
+the measurement runner.  Command-driven control refresh is keyed by libbv's
+monotonic frame revision; a renderer-consumable dirty latch is not a sufficient
+notification contract.
 
 Typical runs:
 

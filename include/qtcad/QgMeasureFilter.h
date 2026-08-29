@@ -67,6 +67,7 @@ class QTCAD_EXPORT QgMeasureFilter : public QgViewFilter {
 	double length1();
 	double length2();
 	double angle(bool radians);
+	void reset();
 
 	// Current state of the measurement tool (clients may need to
 	// know which information to report)

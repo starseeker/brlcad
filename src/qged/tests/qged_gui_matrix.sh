@@ -2,9 +2,11 @@
 #
 # Exercise qged through its real Qt canvas and write reproducible screenshots,
 # LoD/timing reports, logs, cache inventories, and optional perf/apitrace data.
-# Cold and warm are always a pair: the cold run starts with a newly created,
-# empty BU_DIR_CACHE (no format or data children), and the warm run reuses
-# exactly what that run produced.
+# By default cold and warm are a pair: the cold run starts with a newly
+# created, empty BU_DIR_CACHE (no format or data children), and the warm run
+# reuses exactly what that run produced.  Focused cold-only diagnostics retain
+# the same cold-cache and validation contracts without paying for a second
+# process.
 
 set -uo pipefail
 
@@ -30,6 +32,7 @@ process_kill_grace=5
 settle_override_ms=""
 capture_apng=0
 warm_cache=""
+cold_only=0
 canvas_ready_timeout_ms=5000
 # A true-cold Lucy cache builds a globally ordered 28M-face PoP hierarchy,
 # which is materially different from reopening a cache.  This is nevertheless
@@ -149,6 +152,7 @@ Usage: qged_gui_matrix.sh [options]
   --perf-frequency HZ      Sampling frequency (default: 499)
   --apitrace CASE          Trace one cold System GL case with apitrace
   --capture-apng           Capture every presented frame into an APNG
+  --cold-only              Run and validate cold without the warm replay
   --warm-cache DIR         Run only warm using an existing cache directory
   --timeout SECONDS        Per-process timeout (default: 180)
   --settle-ms MSEC         Override the per-view convergence deadline
@@ -179,6 +183,7 @@ while [[ $# -gt 0 ]]; do
 	--perf-frequency) perf_frequency="$2"; shift 2 ;;
 	--apitrace) apitrace_case="$2"; shift 2 ;;
 	--capture-apng) capture_apng=1; shift ;;
+	--cold-only) cold_only=1; shift ;;
 	--warm-cache) warm_cache="$2"; shift 2 ;;
 	--timeout) run_timeout="$2"; run_timeout_explicit=1; shift 2 ;;
 	--settle-ms) settle_override_ms="$2"; shift 2 ;;
@@ -217,6 +222,10 @@ esac
 [[ -n "$case_list" ]] || case_list="$default_cases"
 
 if [[ -n "$warm_cache" ]]; then
+    if [[ "$cold_only" -eq 1 ]]; then
+	echo "ERROR: --cold-only and --warm-cache are mutually exclusive" >&2
+	exit 2
+    fi
     if [[ ! -d "$warm_cache" ]]; then
 	echo "ERROR: --warm-cache is not a directory: $warm_cache" >&2
 	exit 2
@@ -1112,7 +1121,10 @@ validate_report()
 	    has("lod_control_obligation_mask") and
 	    has("lod_control_owner") and
 	    has("lod_control_violation_mask") and
-	    (.lod_control_violation_mask == 0))) and
+	    has("lod_convergence_constraint_evidence_mask") and
+	    (.lod_control_violation_mask == 0) and
+	    (((.lod_convergence_performance_limited // false) | not) or
+	     ((.lod_convergence_constraint_evidence_mask // 0) != 0)))) and
 	# "View ready" is the faceplate terminal promise.  Validate the actual
 	# retained label text, not merely the controller readiness bit: a usable
 	# framebuffer may coexist with background work and an incomplete bar.
@@ -2367,6 +2379,12 @@ validate_report()
 	    (($expected_visited_assets == 0) or
 		(($initial.lod_convergence_available_leaves // 0) >=
 		    $expected_visited_assets)) and
+	    # A sparse retained-allocation pass must not replace the completed
+	    # all-entry visibility census.  A populated qualification frame with a
+	    # zero denominator is a false empty-view proof, even if its retained
+	    # payloads happen to keep the framebuffer useful.
+	    (($expected_visited_assets == 0) or
+		(($initial.lod_convergence_visible_targets // 0) > 0)) and
 	    # The scene render-cost budget is a calibrated refinement allowance, not
 	    # permission to discard a visible leaf minimum coherent prefix.
 	    # Thousands of minimum prefixes may modestly exceed that soft budget.
@@ -2458,8 +2476,23 @@ validate_report()
 		    ($initial.active_lod_cad_payloads // 0))
 	     end) and
 	    (($stable.active_lod_aabb_payloads // 0) == 0) and
-	    (($stable.visible_structural_fallback_boxes // 0) == 0) and
-	    ((.samples[-1].visible_structural_fallback_boxes // 0) == 0) and
+		    (($stable.visible_structural_fallback_boxes // 0) == 0) and
+		    (($expected_visited_assets == 0) or
+			(($stable.lod_convergence_visible_targets // 0) > 0)) and
+		    # Prominent quality debt is terminal only with an explicit measured
+		    # capacity witness.  A Boolean "performance limited" label alone
+		    # formerly let a timing-dependent handoff strand the bounded search
+		    # and declare a visibly coarse scene ready.  The completed static
+		    # frame must also stay inside the hard interaction deadline and use
+		    # essentially all of its certified allowance.
+		    ((($stable.lod_prominent_cad_quality_floor_violations // 0) == 0) or
+		     (($stable.lod_convergence_performance_limited // false) == true and
+		      (($stable.lod_convergence_constraint_evidence_mask // 0) != 0) and
+		      (($stable.last_render_ms // 9223372036854775807) <=
+			$static_quality_render_limit_ms) and
+		      (($stable.active_lod_scene_render_cost // 0) >=
+			(($stable.lod_scene_render_cost_budget // 0) * 0.8)))) and
+		    ((.samples[-1].visible_structural_fallback_boxes // 0) == 0) and
 	    (($stable.lod_interactive_progressive_ceiling // -2) == -1) and
 	    ($stable.lod_submissions_pending == false) and
 	    (($stable.progressive_pending == false) or
@@ -2503,11 +2536,20 @@ validate_report()
 	    def resident_plan_is_current($sample):
 		($sample.lod_convergence_compaction_plan_current == true) and
 		(($sample.lod_convergence_compaction_candidates // -1) == 0);
+	    def resident_release_is_witnessed($sample; $before):
+		(($sample.lod_service_compactions // 0) >
+		 ($before.lod_service_compactions // 0)) or
+		# A provider may publish a smaller immutable working set while
+		# satisfying the new view, without scheduling the independent quiet
+		# compaction worker.  The service advances its admission revision on
+		# that exact resident-byte release.  Requiring the compaction counter
+		# alone misclassifies successful in-band reclamation as a leak.
+		(($sample.lod_service_resident_admission_revision // 0) >
+		 ($before.lod_service_resident_admission_revision // 0));
 	    def residency_is_settled($sample; $peak; $before):
 		if (($sample.lod_service_stable_resident_bytes // 0) <
 		    ($peak.lod_service_stable_resident_bytes // 0)) then
-		    (($sample.lod_service_compactions // 0) >
-		     ($before.lod_service_compactions // 0))
+		    resident_release_is_witnessed($sample; $before)
 		else
 		    resident_plan_is_current($sample) and
 		    (($sample.lod_service_stable_resident_bytes // 0) <=
@@ -2875,8 +2917,10 @@ validate_report()
     # distinguish the remaining CSG wires from success.  Do not, however,
     # require every subpixel occurrence to own a triangle payload: the normal
     # view-aware terminal representation for those leaves is the aggregate
-    # point path.  The base contract above has already rejected active AABB/
-    # OBB/sphere payloads and unmatched payloads.
+    # point path.  A safe scene may also admit the terminal mesh directly, so
+    # progressive-face presence is not itself a required endpoint.  The base
+    # contract above has already rejected active AABB/OBB/sphere payloads and
+    # unmatched payloads.
     if [[ "$case_name" == "generic_twin" && "$mode" == "shaded" ]]; then
 	if ! jq -e '
 	    (.samples[-1].active_lod_cad_payloads // 0) > 0 and
@@ -2899,7 +2943,7 @@ validate_report()
 	      (.samples[-1].active_cad_subpixel_proxy_points // 0)) ==
 	     709) and
 	    (.samples[-1].visible_structural_fallback_boxes // 0) == 0 and
-	    (.samples[-1].active_progressive_cad_faces // 0) > 0
+	    (.samples[-1].active_lod_scene_faces // 0) > 0
 	    ' "$report" >>"$validation" 2>&1; then
 	    printf 'Generic Twin wire draw lost coverage of its 709 LoD occurrences\n' \
 		>>"$validation"
@@ -2963,7 +3007,6 @@ run_current()
     local command=(env "${env_args[@]}" "$qged" "${qged_args[@]}")
     if [[ "$case_name" == "$perf_case" &&
 	    ("$perf_phase" == "both" || "$cache_state" == "$perf_phase") &&
-	    "$mode" == "shaded" &&
 	    "$swap" == "default" ]]; then
 	env_args+=("QGED_TEST_DEEP_LOD_REPORT=0")
 	command=(env "${env_args[@]}" "$qged" "${qged_args[@]}")
@@ -3469,12 +3512,17 @@ for case_name in "${cases[@]}"; do
 		    echo "SKIP: warm run requires a validated cold completion" >&2
 		    continue
 		fi
-		if ! cache_mark_ready "$cache" "$db"; then
+	if ! cache_mark_ready "$cache" "$db"; then
 		    echo "ERROR: could not mark validated cache ready: $cache" >&2
 		    failures=$((failures + 1))
-		    continue
-		fi
-		if run_current "$case_name" "$db" "$object" "$backend" \
+	    continue
+	fi
+	if [[ "$cold_only" -eq 1 ]]; then
+	    find "$cache" -type f -printf '%s %T@ %p\n' 2>/dev/null |
+		sort -n > "$pair/cache-files.txt"
+	    continue
+	fi
+	if run_current "$case_name" "$db" "$object" "$backend" \
 			"$mode" "$swap" "warm" "$cache" "$settle_ms" \
 			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
 		    validate_autoview_camera_contract "$case_name" "$backend" \

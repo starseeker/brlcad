@@ -141,6 +141,11 @@ BOBOL_EXPORT size_t
 bobol_lod_render_cost_units(const BObolLodCounts &counts, int drawMode,
     size_t occurrenceCount = 1);
 
+/* Physical cost of one renderer-batched aggregate proxy.  Points use the
+ * shared one-vertex stream; boxes follow the requested CAD draw channels. */
+BOBOL_EXPORT size_t
+bobol_lod_aggregate_proxy_render_cost(SbBool box, int drawMode);
+
 struct BOBOL_EXPORT BObolLodCacheKey {
     SbString value;
 
@@ -191,9 +196,34 @@ struct BOBOL_EXPORT BObolLodMeshPayload {
 };
 
 struct BObolLodProgressiveMeshPrivate;
+struct BObolLodProgressiveMeshGeneration;
 struct BObolLodProgressiveMeshTrim;
 typedef std::shared_ptr<const BObolLodProgressiveMeshTrim>
     BObolLodProgressiveMeshTrimPtr;
+
+/* One retained view of immutable progressive-selection metadata.  Allocation
+ * transactions use this object to make every decision against the same mesh
+ * generation without repeatedly acquiring its atomic shared pointer. */
+class BOBOL_EXPORT BObolLodProgressiveMeshSnapshot {
+public:
+    BObolLodProgressiveMeshSnapshot(void);
+
+    SbBool isValid(void) const;
+    uint64_t revision(void) const;
+    int minimumCut(void) const;
+    int maximumCut(void) const;
+    BObolLodCounts hierarchyCountsAtCut(int cut, SbBool hasNormals) const;
+    int cutForScreenError(double projectedPixelDiameter,
+	double targetPixelError) const;
+    double projectedErrorAtCut(int cut,
+	double projectedPixelDiameter) const;
+
+private:
+    friend class BObolLodProgressiveMesh;
+    explicit BObolLodProgressiveMeshSnapshot(
+	const std::shared_ptr<const BObolLodProgressiveMeshGeneration> &);
+    std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation;
+};
 
 /* One immutable renderer layer owned by an LoD result.  A layer is a
  * presentation subresource of one logical occurrence, never a second CAD
@@ -307,6 +337,7 @@ public:
     int maximumCut(void) const;
     int residentCut(void) const;
     uint64_t revision(void) const;
+    BObolLodProgressiveMeshSnapshot snapshot(void) const;
     size_t pointCount(int cut) const;
     size_t faceCount(int cut) const;
     /* Immutable hierarchy population, including cuts above the currently

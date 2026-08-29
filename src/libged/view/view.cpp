@@ -914,6 +914,32 @@ _view_cmd_can_mutate_obol_content(const char *command)
 	BU_STR_EQUAL(command, "objs") || BU_STR_EQUAL(command, "polygon"));
 }
 
+struct _view_shared_presentation_revision {
+    uint64_t features = 0;
+    uint64_t polygons = 0;
+
+    bool operator==(const _view_shared_presentation_revision &other) const
+    {
+	return features == other.features && polygons == other.polygons;
+    }
+
+    bool operator!=(const _view_shared_presentation_revision &other) const
+    {
+	return !(*this == other);
+    }
+};
+
+static _view_shared_presentation_revision
+_view_shared_presentation_revision_get(BObolViewController *controller)
+{
+    _view_shared_presentation_revision revision;
+    if (!controller)
+	return revision;
+    revision.features = controller->features().presentationRevision();
+    revision.polygons = controller->polygons().presentationRevision();
+    return revision;
+}
+
 int
 ged_view_core(struct ged *gedp, int argc, const char *argv[])
 {
@@ -1017,13 +1043,14 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
     BObolViewController *shared_controller =
 	_view_cmd_can_mutate_obol_content(argv[0]) ?
 	ged_bobol_shared_view_controller(gedp) : NULL;
-    const uint64_t shared_request_serial = shared_controller ?
-	shared_controller->getRenderRequestSerial() : 0;
+    const _view_shared_presentation_revision shared_presentation_revision =
+	_view_shared_presentation_revision_get(shared_controller);
     int ret;
     if (bu_cmd_valid(_view_cmds, argv[0]) == BRLCAD_OK &&
 	bu_cmd(_view_cmds, argc, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
 	if (ret == BRLCAD_OK && shared_controller &&
-	    shared_controller->getRenderRequestSerial() != shared_request_serial)
+	    _view_shared_presentation_revision_get(shared_controller) !=
+		shared_presentation_revision)
 	    ged_bobol_shared_view_presentation_request(gedp,
 		"ged-shared-view-content");
 	bu_vls_free(&vname);

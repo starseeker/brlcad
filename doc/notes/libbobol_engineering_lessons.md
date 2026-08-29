@@ -1,6 +1,6 @@
 # libBObol engineering lessons
 
-Last reviewed: 2026-08-27
+Last reviewed: 2026-08-29
 
 This document preserves durable lessons from the Obol drawing migration and
 production shake-down.  It is not a chronological status log.  Each entry
@@ -84,6 +84,82 @@ build.  A shared-library timestamp update alone is not evidence that Ninja
 rebuilt targets which were not requested.
 
 ## State and liveness
+
+### Resident progressive data still needs view-binding identity
+
+The first adaptive BREP wire path correctly retained all cut arrays in one
+immutable Obol part, but initially left the richest cut active because only
+service-backed mesh payloads entered view planning.  After direct cuts became
+view-managed, a second hazard remained: an in-place source edit could replace
+the immutable part while aggregate cut and convergence counters still
+described the old generation.
+
+Rule: availability and view binding are separate.  A fully resident
+progressive part needs no worker/cache payload, but it remains a logical
+progressive occurrence with requested/active cuts and render cost.  Authenticate
+that binding with routing ID, population epoch, occurrence key, and geometry
+revision.  Retire its metrics from the source's sparse mutation journal before
+planning the replacement; use an authoritative binding scan only when delta
+history is unavailable.  The renderer must receive the authored minimum when
+no authenticated view binding exists.
+
+### Terminal evidence is not an in-flight transaction
+
+A bounded renderer-capacity search correctly reached a certified Lucy wire
+budget, applied its final occurrence allocation, and then restarted from the
+same two populations.  The generic changed-cut completion path used a broad
+"reset calibration" operation which erased both mechanical frame state and
+the terminal certificate.  The search itself was finite; its caller made the
+same completed problem look new.
+
+Rule: distinguish retiring an in-flight measurement from invalidating semantic
+capacity evidence.  Applying a certified final cut and completing its generic
+pass preserve the terminal certificate and budget-limited witness.  Only an
+explicit population, view, policy, or resource-capacity invalidation may erase
+that evidence.  Model the post-certificate application path, regress the
+unchanged-problem rearm directly, and qualify it with the full interaction
+lifecycle rather than only the isolated search.
+
+Retaining the certificate is insufficient if ordinary planning ignores it.
+A follow-up Lucy trace showed the search finish at the affordable discrete
+population, after which the throughput planner immediately selected the
+adjacent known-slow population and caused another identical search.  A current
+terminal certificate therefore caps ordinary admission as well as preventing
+measurement rearm; only semantic invalidation or a separately bounded
+structural-coverage transaction may supersede it.
+
+### Exact capacity search is the wrong user-facing objective
+
+The warm 50k OSMesa lifecycle eventually satisfied the finite liveness model,
+but exposed 43 scene-allocation plans and 74 capacity frames.  After the last
+input event, the view spent roughly 129 seconds alternating between balancing
+and refinement.  The search was terminating correctly; it was repeatedly
+solving an unnecessarily exact problem as resident availability changed.
+
+Rule: renderer capacity is a guardrail, not the visual objective.  Preserve a
+proven-safe visual, enrich from it, and stop a goal after the first rejected
+richer population.  Bound cold recovery before any safe result.  A completed
+frame classifies every ordered deadline it meets, so changing from steady to
+static policy must not discard a population already proven safe for the static
+deadline.  Formal liveness must be paired with a bound on candidate
+publication and a graphical wall-time qualification; "eventually" alone says
+nothing about acceptable settling latency.
+
+### One typed request must not have two scalar truths
+
+The presentation-reconciliation request correctly retained the tighter of
+repeated budgets, but its surrounding evidence copied each caller's raw value
+into a separate active-budget field.  A weaker reassertion could therefore
+leave one transaction reporting a tight request and executing a looser
+allocation.  It also restarted the scene cursor even though no semantic input
+had changed.  Lucy exposed the split as a pending handoff whose selected cost
+matched neither the requested nor certified budget.
+
+Rule: a typed request owns its dependent scalar values.  Mutators report
+whether the canonical request changed, consumers read the canonical value
+back from the request, and bounded cursors restart only for a real tightening.
+Model duplicate requests explicitly and assert that the active allocator
+budget always equals the canonical request budget.
 
 ### Planning state must not mutate the live presentation
 
@@ -367,6 +443,22 @@ removes the structural constraint.  Verify this with frame-sequence evidence:
 one bounded capacity backoff is legitimate, but a return to a previously
 rejected denser population in the same epoch is a control-cycle failure.
 
+### Every aggregate producer must preserve the same extent contract
+
+The ordinary view classifier retained screen-significant aggregate bounds,
+but the indirect renderer's atlas-admission fallback constructed a separate
+center-only point record.  Large objects therefore became large raster points
+only in the highest-pressure regime, where ordinary model tests were least
+likely to exercise the defect.
+
+Rule: aggregate shape is a shared presentation contract, not a producer-local
+shortcut.  Every normal, append, and resource-pressure producer must carry the
+conservative world bounds and classify the complete current projection.  A
+point is valid only when that projection is fully classifiable and no larger
+than five pixels; clipped or larger projections remain boxes.  Exercise the
+pressure path with a deliberately undersized atlas and assert physical point,
+line, and triangle work, rather than relying on a nonempty framebuffer.
+
 ### PoP spatial clusters are not scene occurrences
 
 The one-Lucy mesh source carries many spatial PoP clusters so that zoomed views can
@@ -392,6 +484,24 @@ Rule: readiness combines exact live-source coverage, visible occurrence
 classification, affordable cut satisfaction, terminal failure/constraint
 reasons, drained publication, and acknowledgement of the current frame.
 
+### Constrained must name the evidence which stops refinement
+
+A 50k cold OSMesa endpoint could truthfully have no pending workers, results,
+or presentation transaction while retaining visible quality debt.  The old
+telemetry reported only `performanceLimited`, forcing a reviewer to infer from
+budgets and timing whether the allocator had reached a measured endpoint or
+had simply stopped early.  Trace logging also changed the scheduling enough to
+select a different affordable marginal population, making that inference even
+less reliable.
+
+Rule: a constrained terminal outcome carries a derived, nonempty evidence
+mask.  Name stable-frame capacity, renderer ceiling, subpixel aggregation,
+static-deadline rejection, memory pressure, or a bounded representation limit
+directly.  Never treat visual debt, an empty queue, or a coarse image as the
+constraint.  Keep the mask diagnostic and derived from the owning policy
+values so it cannot become another state machine.  Qualification rejects a
+constrained sample without this witness.
+
 ### A completed frame is capacity evidence even if new work is queued
 
 Lucy could draw a richer in-gesture cut inside the stable 100 ms deadline, but
@@ -408,6 +518,24 @@ renderer, or source-population changes invalidate it.  Preserve the exact
 fractional pixel target at every selection and allocation boundary.  The hard
 deadline still clamps an attempted richer replacement below the cut that
 actually missed.
+
+### CAD timing identity includes its presentation threshold
+
+A 150k System-GL view repeatedly alternated between 32- and 64-pixel point
+classification even though its CAD population was unchanged.  The expensive
+CAD traversal at one threshold was followed by a cheap faceplate-only repaint;
+the controller paired the cheap host duration with the retained CAD work
+record and falsely inferred headroom.  The Qt software host already measured
+whether CAD executed, but an omitted positional argument silently defaulted
+that fact to true.
+
+Rule: CAD work identity, point threshold, duration, upload/replay classifier,
+and execution fact form one sample.  A sample is reusable only at its stamped
+threshold.  A non-CAD frame may update user-facing host timing but cannot
+create or consume CAD capacity evidence.  Hosts supply capacity relevance and
+CAD execution through distinct required enum types, never defaulted Boolean
+arguments.  Preserve this boundary with `ObolCadTimingEvidence.tla`, focused
+evidence tests, and a high-cardinality terminal replay.
 
 ### First-useful-image timing starts after the canvas is presentable
 
@@ -570,6 +698,25 @@ Rule: every input/capture path records logical canvas size, device-pixel ratio,
 and physical viewport.  Test resize, maximize/fullscreen/restore, minimize,
 quad views, and HiDPI on actual widgets.
 
+### GUI replay owns an isolated desktop contract
+
+Skipping saved-window restoration did not make qged replay hermetic.  Plugins
+could still inherit the operator's enabled state, replay shutdown could write
+its final geometry back to the operator's QSettings, and a window manager
+could acknowledge an older configure request after `QWidget::resize()` had
+already reported the new local size.  Autoview then fitted the same model to a
+different aspect ratio in managed and full-detail runs even though both drawing
+policies were correct.
+
+Rule: test mode uses a process-private temporary QSettings scope before any
+client reads settings, and never persists window state.  A scripted top-level
+size or state request carries a monotonically increasing generation.  Delayed
+guards act only while that exact generation remains current, and a caller may
+request a bounded native-window stability interval before issuing camera
+commands.  Regress an injected late configure acknowledgement, run on a real
+window manager as well as offscreen, and compare the final camera across LoD
+policies rather than trusting the immediate resize return value.
+
 ### Stable repaint is not a semantic render request
 
 Always rendering on Qt exposure hid missing invalidation edges and made static
@@ -590,10 +737,20 @@ kept an old framebuffer even though an observational OSMesa traversal could
 appear correct.  Conversely, waking every view after every successful `view`
 command made read-only inspection needlessly redraw large scenes.
 
-Rule: a successful shared-store mutation advances the shared controller's
-request serial.  Compare that serial around command execution and fan out one
-presentation-only request to graphical views only when it changed.  Store
-updates remain renderer-neutral; queries remain passive.
+The first repair compared the shared controller's render-request serial around
+command execution.  That serial identifies a coalesced frame transaction, not
+content.  Because the shared controller has no endpoint to consume its latch,
+the first mutation advanced the serial and every later mutation joined the
+same request.  Selection and movement state were correct, but System GL kept
+the framebuffer produced before those later changes.
+
+Rule: each shared store owns a monotonic presentation revision which advances
+for every actual retained-content mutation, even while one frame request is
+latched.  Compare the store revision around command execution and fan out one
+presentation-only request to graphical views only when it changed.  Equal
+publication and read-only queries preserve the revision.  Render-request
+serials remain frame-transaction identity and must never stand in for content
+identity.
 
 ### Every new host-work level needs a retained witness
 
@@ -743,6 +900,24 @@ typed revision events and submit typed operations to the same session.  Plugin
 unload has a synchronous barrier which destroys filters, controls, dialogs,
 and retained presenters before unloading the DSO.
 
+### Command refresh needs a durable semantic witness
+
+The qged view-settings replay initially passed on OSMesa but failed on System
+GL: a faceplate command changed authoritative libbv state and the rendered
+scene, while the open settings panel retained its old checkbox value.  The
+post-command checkpoint compared the camera hash and a transient refresh-dirty
+latch.  A sufficiently fast renderer could consume that latch before the
+comparison, so unrelated later renderer work happened to hide the defect on
+the slower backend.
+
+Rule: command-to-widget notification must not depend on paint completion or a
+consumable wakeup latch.  Compare the retained monotonic presentation revision
+captured before command execution with the value after it.  Keep the dirty
+latch for explicit redraws which do not mutate state, but never use it as the
+sole proof of a semantic change.  Run the same command/widget replay through
+both fast and slow renderers; backend-dependent success is evidence of a
+missing ownership or revision boundary.
+
 ### Tool refresh is not a selection gesture
 
 The polygon editor once treated the combo box's first item as both a display
@@ -822,6 +997,24 @@ current demand and capacity evidence.  If a change helps one qualification
 profile but harms another, revert it and update the common refinement map;
 never retain it behind workload-shaped conditions.
 
+### A selective delta cannot drive a scene-wide successor
+
+A warm Generic Twin zoom completed an exact 14-entry source-delta pass while
+the motion-to-stable handoff needed a new allocation over all 709 mesh
+occurrences.  The handoff correctly requested that allocation, but the
+controller left the selective delta armed.  Each pump reconstructed the same
+14-entry plan, skipped its already-satisfied entries, and then observed that
+the full allocation was still unapplied.  The framebuffer was useful and the
+worker service was idle, but the planning/handoff pair could never terminate.
+
+Rule: a source delta owns one bounded source-local pass.  A scene-wide
+retained-allocation successor atomically consumes that delta, clears its pinned
+entry plan, resets pass annotations, and begins once from source zero.  Centralize
+that transition so reconciliation and local-reduction paths cannot implement
+different lifetimes.  `ObolCompletedPassOwnership.tla` now asserts that an
+allocation-handoff effect cannot retain a selective delta; the cross-renderer
+Generic Twin wire lifecycle is the executable regression.
+
 ### One completion event may select only one control successor
 
 A completed framebuffer simultaneously satisfied a retained presentation
@@ -872,6 +1065,44 @@ to the already-pending resident-growth producer.  A hidden candidate yields to
 one presentation handoff.  Only an exact current framebuffer may consume a
 timing sample or its bounded invalid-sample allowance.  Repainting is never a
 successor for an allocation or presentation ownership gap.
+
+### An older frame barrier precedes a newer capacity candidate
+
+Lucy OSMesa reached `ALLOCATING` while an ordinary changed-population frame
+barrier was still pending.  The broad "capacity search awaits a sample"
+predicate routed completed frames around generic barrier consumption, while
+the barrier itself paused submission.  Each owner therefore waited for the
+other and qged presented unchanged HUD-only frames indefinitely.  Once the
+barrier was consumed, its candidate successor initially reused the previous
+allocation plan's semantic revision; the runtime trace checker correctly
+rejected the two plan serials sharing one revision.
+
+Rule: completed-frame handling consumes the older typed barrier before
+dispatching search-phase work.  If a frozen candidate is already
+`ALLOCATING`, barrier completion transfers directly to that exact candidate;
+no heuristic may replace it and no generic presentation debt may survive.
+The transfer publishes a fresh capacity revision before the successor plan
+commits because the older population may already own a plan under the
+selection revision.  Preserve this boundary with the focused coordinator
+test, `ObolCapacitySearch.tla` plan-revision invariant, and the qged control-
+trace uniqueness check.
+
+A later 50k trace exposed the observational companion to this rule.  After
+the capacity revision advances, the renderer intentionally keeps the preceding
+committed allocation visible while it calculates the replacement.  That old
+plan is a safe presentation fallback, not a planning certificate for the new
+revision.  Reporting the active renderer plan as the current control plan made
+the trace checker appear to observe two plans under the new tuple even though
+the first was certified under the preceding tuple.
+
+Rule: retained allocation results carry the complete five-domain revision
+stamp.  Diagnostics report a nonzero current plan only when that stamp matches
+the controller stamp and the plan remains the renderer's active plan.  Report
+the older committed plan separately so safe presentation continuity cannot be
+confused with current planning authority.  The allocator input key includes
+the same stamp, and the focused C++ test advances capacity with otherwise
+identical numeric inputs to prove that the fallback becomes non-current and
+one distinct replacement is published.
 
 ### A multi-step availability transaction belongs in one sum type
 

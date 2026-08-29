@@ -1,6 +1,6 @@
 # libBObol active debt
 
-Last reviewed: 2026-08-28
+Last reviewed: 2026-08-29
 
 This is the sole remaining-work list for the Obol drawing stack.  It records
 work which is not complete; resolved failure analysis belongs in
@@ -44,9 +44,19 @@ debt under another name:
   `beginUpdate()`/`endUpdate()` pairing is no longer public.
 - One retained assembly presentation never chooses CAD LoD.  It executes the
   producer-certified cut and reports exact cost/resource evidence.
+- Progressive mesh policy reads one shared immutable generation snapshot per
+  allocation candidate; enrichment or compaction publishes a new generation
+  without invalidating an in-flight transaction.  Renderer timing evidence is
+  point-threshold stamped, and hosts must classify capacity relevance and
+  actual CAD execution with distinct required types.
 - Progressive spatial pages are storage/render partitions of one logical CAD
   occurrence.  They inherit its transform, style, selection, picking, and
   semantic path and are not promoted to independent CAD objects.
+- Optional PCA-oriented bounds are immutable cache/part metadata, not a LoD
+  state.  Monolithic retained parts use them for screen-significant batched
+  aggregate boxes in shaded and wire modes; AABB remains the validated
+  fallback.  The optional projection pass occurs after cold coverage can be
+  published, so it cannot delay the first useful preview.
 - Workload names and renderer names are qualification profiles, not control
   modes.  Lucy, Hubble, 50k, 150k, System GL, and OSMesa all use the same
   state transition relation.
@@ -76,19 +86,53 @@ atomically consume predecessor rescan state, while deliberate inventory pauses
 retain it.  Deadline-safe cuts, retained visual-error bounds, and renderer
 timing/upload observations are keyed allocation-free evidence values rather
 than independently writable companion scalars.
+Terminal renderer-capacity evidence now remains authoritative through both
+the final mechanical cut application and subsequent ordinary admission
+pumps.  The completed allocation is one typed policy transition: it either
+retires only in-flight measurement while preserving a current certificate, or
+atomically invalidates the certificate and its budget-limited witness.  A
+current terminal certificate caps ordinary planning at its safe budget, so a
+throughput estimate cannot immediately reselect the rejected discrete
+population and recreate the same search.
+Constrained terminal outcomes now expose a typed evidence mask and the runtime
+refinement checker rejects an unwitnessed constraint.  This distinguishes an
+honest deadline/memory/presentation endpoint from a controller which merely
+stops while visual debt remains.  Keep this evidence derived from the owning
+policy values; do not add another writable outcome-reason field.
+`ObolLodComposition.tla` now closes the former formal seam between admission,
+retained growth, exact presentation, capacity, structural repair, point
+quality, and terminal publication.  It does not close the remaining production
+refinement debt: not every imperative effect writer emits a typed transition
+record yet, so the offline trace checker still samples snapshots rather than
+checking a complete concrete execution against that transition relation.
+Finish that migration at semantic ledger boundaries and delete each superseded
+writer in the same change.  Do not add another policy model for the same state,
+and do not create a monolithic effect facade around already cohesive reducers.
+The 2026-08-29 ownership audit retired the last detached lifecycle combinations
+relevant to proxy admission: structural relaxation is one four-state value,
+the recovery-plan witness lives with point-quality state, renderer-feedback
+consumption lives with the interaction session, and the host render/capacity
+request is one three-way value.
+`ObolAssetPublicationComposition.tla` and `ObolCadFrameComposition.tla` also
+close the adjacent producer/cache and retained-scene/frame seams.  The first
+composition run found a real ownerless successor: a producer constrained under
+an old view demand did not resume for a newer demand.  Production now retries
+the current demand, and the focused service test proves a new-view result is
+actually published rather than merely clearing the old failure query.  The CAD
+frame seam rejects stale target reports across concurrent scene/view changes.
 The production shape is nevertheless still concentrated in two places:
 
 - `lod_admission_policy_private.h` now retains the allocation-free evidence
   values and planner declarations; the 71-method numeric planner is compiled
   independently in `lod_admission_policy.cpp`.  Point and structural evidence
-  remain in the same 1.4k-line header because their small methods preserve the
+  remain in the same 1.6k-line header because their small methods preserve the
   trivially-copyable value contract, but any further extraction must keep the
   header-alone compile and exhaustive policy tests.
-- `view_lod_coordinator_state_private.h` is about 1.3k lines.  Submission
-  cursor/pass ownership and the timing-derived certificates are now cohesive;
-  remaining repair, capacity, and presentation companions still need the same
-  owner/key/retirement audit.
-- `view_controller.cpp` is about 6.5k lines after lifetime/camera/host-request,
+- `view_lod_coordinator_state_private.h` is about 1.3k lines.  Submission,
+  repair, capacity, presentation, point-quality, and interaction ownership are
+  cohesive typed values.  Further changes should remove a measured effect-
+  shell responsibility, not add accessors or a generic lifecycle wrapper.
+- `view_controller.cpp` is about 6.9k lines after lifetime/camera/host-request,
   exact-picking, and residency extraction.  It remains both reducer caller and
   the LoD policy effect executor.  Exact-view quality history is now an
   independently compiled allocation-free policy rather than another inline
@@ -103,12 +147,13 @@ Required completion work:
 2. Continue moving nontrivial pure-policy method bodies behind the new
    compile-checked private boundaries.  Keep hot occurrence storage dense and
    allocation-free; this is a responsibility split, not an object hierarchy.
-3. Route remaining direct lifecycle mutations through one typed reducer which
-   returns a complete successor plus bounded effects.  Submission cursor
-   positioning and fresh/retired pass transitions now satisfy this rule;
-   deliberate pause/resume operations preserve rescan debt explicitly.  An
-   unmapped transition is debt unless it represents a genuinely new semantic
-   event.
+3. Route each remaining direct lifecycle mutation through the typed reducer
+   which owns that ledger and returns a complete successor plus bounded
+   effects.  Submission cursor positioning, fresh/retired pass transitions,
+   structural relaxation, point-recovery completion, interaction feedback,
+   and host render requests now satisfy this rule.  Deliberate pause/resume
+   operations preserve rescan debt explicitly.  An unmapped transition is
+   debt unless it represents a genuinely new semantic event.
 4. Extend randomized refinement traces as each remaining effect writer moves
    behind the reducer, and retain the exhaustive focused value tests.  The
    completed-pass boundary now has full selector enumeration plus 512 seeded
@@ -135,22 +180,31 @@ finite publication timer.  Retain those checks while completing the reducer;
 an owner label, progressive-pump level, or paused cursor is not a progress
 witness.
 
-The current 150k warm System-GL replay terminates box-free in about 120 seconds
-with 78,341 mesh occurrences and 20.49M faces.  It progresses from structural
-coverage through increasingly rich mesh populations without returning to
-boxes, but the remaining high-cardinality realization and capacity work is
-still P0 performance debt.  Profile and remove redundant population,
-publication, and cache work using common policy events rather than an
-object-count regime.  Do not weaken the liveness or pixel-quality contract to
-hide that cost.  Independently qualify true-cold useful-preview latency for
-large spatial meshes.
+After immutable generation snapshots removed repeated shared-generation loads
+and CAD timing became threshold stamped, the exact-current warm 150k shaded
+replays terminate box-free in about 40.4 seconds on System GL and 36.8 seconds
+on OSMesa.  The prior 32/64-pixel balancing cycle is gone: terminal samples
+have no owner, obligation, pending foreground/background work, or control
+violation.  This resolves the known same-population liveness defect, but not
+all scale debt.  Profile true-cold useful-preview latency and cache I/O using
+common policy events rather than an object-count regime.
+
+The pre-typed-host 150k OSMesa report had three quality-floor misses, including
+one prominent synthetic occurrence.  The rebuilt host rerun has zero total or
+prominent floor misses and zero visual-importance debt, confirming that the
+old faceplate/CAD timing mix affected the selected capacity rather than proving
+an allocator-ordering failure.  Realistic wheels/blades/hulls must still
+demonstrate that the scene-wide importance ordering preserves genuinely
+prominent forms.  Treat any future unaffordable residual as numeric
+allocation/qualification debt; do not reopen a terminal control search merely
+because proven-constrained quality demand remains.
 
 ## P0: complete physical responsibility extraction
 
 The initial extraction and the Obol renderer split are real improvements, but
 several units still obstruct review:
 
-- `database_source.cpp` is about 17.4k lines.  Compact CAD presentation is now
+- `database_source.cpp` is about 17.6k lines.  Compact CAD presentation is now
   an independently compiled 2.1k-line owner, and its bounded copy-on-write
   staging journal remains side-effect-free until Obol accepts the complete
   renderer transaction.  BoT geometry conversion and normal construction are
@@ -227,11 +281,25 @@ gate explicitly includes:
 - drive real mouse paths for polygon creation, resize, move, and boolean
   operations, not only equivalent GED commands;
 - cover point/rectangle selection and modifiers, hierarchy-scale tree row
-  styling, selection/highlight persistence across draw/erase/edit, every
-  measurement mode, lighting/navigation/axes/grid/framebuffer faceplate
-  control, single/quad layouts, resize, and fractional DPR; and
+  styling, selection/highlight persistence across draw/erase/edit,
+  lighting/navigation/axes/grid/framebuffer faceplate control, single/quad
+  layouts, resize, and fractional DPR; and
 - prove GUI widgets, command readback, retained manipulators, and database
   state agree regardless of which surface made the last change.
+
+The deterministic measurement gate now covers 2D and exact-hit 3D mouse
+gestures, distance/angle and degree/radian readback, cancellation, tool
+replacement, resize, single/quad layouts, and System GL/OSMesa presentation.
+It remains part of fractional-DPR hardware repetition, but is no longer an
+unimplemented interaction mode.
+
+The deterministic view-settings gate now covers bidirectional GED/widget
+state for ADC, center dot, grid, model/view axes, scale, parameter/FPS text,
+framebuffer composition, and the cutting plane in single/quad layouts on both
+renderers.  It verifies retained Obol feature presence, command readback,
+visible clipping, and exact restoration.  Fractional-DPR repetition and the
+interactive in-scene cutting-plane affordance remain; ordinary settings
+readback is no longer an unqualified control path.
 
 The existing edit runtime and deterministic GUI replays are regression
 substrate, not a substitute for physical-pointer, plugin-lifecycle,
@@ -247,13 +315,27 @@ hierarchy-scale, and renderer-backed qualification.
   separate workloads and both are required.
 - Qualify cold spatial previews as globally representative, budget-aware
   presentations.  A local source page may never replace whole-object coverage.
-- Qualify adaptive BREP wire/shaded tessellation growth and zoom-out
-  reclamation on the NIST corpus and at least one large real BREP.
+- Preserve the cross-renderer NIST adaptive-wire regression.  Complete shaded
+  adaptive tessellation growth, zoom-out reclamation, and memory-pressure
+  qualification on the NIST corpus and at least one large real BREP.
 - Verify constrained-memory cache reload, corrupt/incompatible cache
   invalidation, background compaction, and cancellation during persistence.
+- Qualify simultaneous true-cold qged processes against the same large-asset
+  cache.  LMDB transaction publication and the final completeness witness have
+  passed the Generic Twin cross-process correctness gate, but independent
+  processes still duplicate source classification until one publishes that
+  witness.  Measure the memory/CPU cost on a large unique asset and add a
+  crash-recoverable per-content generation lease if the stampede can violate
+  the working-set contract.
 - Measure frame, publication, cache, and resident-memory costs at 50k/150k and
   multi-gigabyte scale.  Preserve essential summaries and shared fixtures;
   remove disposable captures and duplicate large directories after each run.
+- Qualify persistent OBB proxies against no-LoD ground truth on heterogeneous
+  50k/150k scenes and realistic wheels, blades, booms, and hulls.  Record the
+  perceptual improvement over the AABB fallback and the cache-generation cost.
+  If multi-page assets need terminal proxying under measured pressure, add one
+  occurrence-level aggregate owner which suppresses/restores all pages
+  atomically; never attach the whole-source OBB independently to each page.
 
 ## Exit condition
 

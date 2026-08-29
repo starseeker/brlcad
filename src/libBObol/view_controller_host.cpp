@@ -939,9 +939,20 @@ BObolViewController::invalidateRendererPerformanceHistory(void)
 	* residency and the coherent currently presented cut, but invalidate every
 	* timing-derived proof and arrange one measured-frame rescan. */
     this->d->resetRendererPerformanceEvidence();
-    if (this->d->lodAutoSubmit)
+
+    const bool automaticLod =
+	this->automaticLodControlEnabled() != FALSE;
+
+    if (automaticLod) {
 	this->markProgressiveWorkPending();
-    this->requestRender("renderer-performance");
+	this->requestRender("renderer-performance");
+    } else {
+	/* resetRendererPerformanceEvidence() creates a fresh capacity-search
+	 * certificate.  Policy-off has no consumer for it, so retire that
+	 * automatic debt before requesting the ordinary style repaint. */
+	this->retireAutomaticLodControl();
+	this->requestPresentationRender("renderer-performance");
+    }
 }
 
 void
@@ -957,35 +968,43 @@ BObolViewController::requestPresentationRender(const char *reason)
 }
 
 void
+BObolViewController::retireLodCapacityRenderRequest(void)
+{
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    if (!this->d->renderRequest.retireCapacity())
+	return;
+
+    /* The repaint remains necessary, but LoD-off has no capacity contract
+     * which could consume its timing.  Preserve the existing host wakeup and
+     * downgrade only its evidence class. */
+    if (++this->d->hostWorkRevision == 0)
+	++this->d->hostWorkRevision;
+    if (++this->d->renderRequestSerial == 0)
+	++this->d->renderRequestSerial;
+}
+
+void
 BObolViewController::requestRenderImpl(const char *reason,
 	SbBool lodCapacityRelevant)
 {
+    /* Callers request a repaint and may additionally classify its timing as
+     * LoD capacity evidence.  The current view policy is authoritative: a
+     * camera, viewport, lighting, or renderer change while LoD is disabled
+     * remains an ordinary repaint and cannot recreate an automatic owner.
+     * Auto-submit is deliberately independent: requestRender() is also the
+     * explicit low-level capacity-sample API. */
+    const SbBool effectiveCapacityRelevant =
+	lodCapacityRelevant && this->lodViewPolicyEnabled() ? TRUE : FALSE;
     SbBool wakeEndpoint = FALSE;
     SbBool changed = FALSE;
     uint64_t requestSerial = 0;
     {
 	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
-	if (!this->d->renderRequested) {
-	    this->d->renderRequested = TRUE;
-	    this->d->renderLodCapacityRelevant = lodCapacityRelevant;
-	    this->d->renderReason = reason ? reason : "";
-	    wakeEndpoint = TRUE;
-	    changed = TRUE;
-	} else if (lodCapacityRelevant &&
-	    !this->d->renderLodCapacityRelevant) {
-	    /* Capacity evidence dominates a presentation-only request.  Duplicate
-	     * reasons are already covered by the newest retained state and must not
-	     * manufacture another transaction. */
-	    this->d->renderLodCapacityRelevant = TRUE;
-	    this->d->renderReason = reason ? reason : "";
-	    changed = TRUE;
-	} else if (lodCapacityRelevant ==
-	    this->d->renderLodCapacityRelevant) {
-	    /* Same-strength requests are one transaction.  Retain the newest
-	     * diagnostic label without advancing its evidence revision.  A weaker
-	     * presentation-only label never obscures a capacity request. */
-	    this->d->renderReason = reason ? reason : "";
-	}
+	const BObolRenderRequestState::Decision decision =
+	    this->d->renderRequest.request(reason,
+		effectiveCapacityRelevant != FALSE);
+	wakeEndpoint = decision.wakeEndpoint ? TRUE : FALSE;
+	changed = decision.changed ? TRUE : FALSE;
 	if (changed) {
 	    if (++this->d->hostWorkRevision == 0)
 		++this->d->hostWorkRevision;
@@ -1007,7 +1026,7 @@ BObolViewController::requestRenderImpl(const char *reason,
 		   this->d->lodPolicyRevision.value()),
 	       reason ? reason : "",
 	       this->hasProgressiveWorkPending() ? 1 : 0,
-	       lodCapacityRelevant ? 1 : 0);
+	       effectiveCapacityRelevant ? 1 : 0);
     if (wakeEndpoint)
 	this->notifyFrameRequest(reason);
 }
@@ -1140,9 +1159,9 @@ BObolViewController::getHostWorkSnapshot(void) const
     snapshot.renderRevision = this->d->renderRequestSerial;
     if (this->d->progressiveWorkPending)
 	snapshot.flags |= BOBOL_HOST_WORK_PUMP;
-    if (this->d->renderRequested) {
+    if (this->d->renderRequest.pending()) {
 	snapshot.flags |= BOBOL_HOST_WORK_RENDER;
-	if (this->d->renderLodCapacityRelevant)
+	if (this->d->renderRequest.capacityRelevant())
 	    snapshot.flags |= BOBOL_HOST_WORK_CAPACITY_SAMPLE;
     }
     return snapshot;
@@ -1152,12 +1171,7 @@ void
 BObolViewController::clearRenderRequest(void)
 {
     std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
-    const SbBool changed = this->d->renderRequested ||
-	this->d->renderLodCapacityRelevant ||
-	this->d->renderReason.getLength() > 0 ? TRUE : FALSE;
-    this->d->renderRequested = FALSE;
-    this->d->renderLodCapacityRelevant = FALSE;
-    this->d->renderReason = "";
+    const SbBool changed = this->d->renderRequest.clear() ? TRUE : FALSE;
     if (changed) {
 	if (++this->d->hostWorkRevision == 0)
 	    ++this->d->hostWorkRevision;
@@ -1171,14 +1185,8 @@ BObolViewController::consumeRenderRequest(SbString *reason,
 	SbBool *lodCapacityRelevant)
 {
     std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
-    const SbBool ret = this->d->renderRequested;
-    if (reason)
-	*reason = this->d->renderReason;
-    if (lodCapacityRelevant)
-	*lodCapacityRelevant = this->d->renderLodCapacityRelevant;
-    this->d->renderRequested = FALSE;
-    this->d->renderLodCapacityRelevant = FALSE;
-    this->d->renderReason = "";
+    const SbBool ret = this->d->renderRequest.consume(
+	reason, lodCapacityRelevant) ? TRUE : FALSE;
     if (ret) {
 	if (++this->d->hostWorkRevision == 0)
 	    ++this->d->hostWorkRevision;

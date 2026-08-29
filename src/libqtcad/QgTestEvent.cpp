@@ -25,6 +25,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMouseEvent>
@@ -36,10 +37,52 @@
 #include <QTimer>
 #include <QTreeView>
 #include <QUrl>
+#include <QVariant>
 #include <QWheelEvent>
 #include <QWidget>
 
+#include <cmath>
+
 namespace {
+
+static const char qg_test_requested_window_size_property[] =
+    "qgTestRequestedWindowSize";
+static const char qg_test_requested_window_size_generation_property[] =
+    "qgTestRequestedWindowSizeGeneration";
+static const char qg_test_requested_window_state_property[] =
+    "qgTestRequestedWindowState";
+static const char qg_test_requested_window_state_generation_property[] =
+    "qgTestRequestedWindowStateGeneration";
+static constexpr int qg_test_window_request_timeout_milliseconds = 5000;
+static constexpr int qg_test_window_request_retry_milliseconds = 10;
+static constexpr int qg_test_window_guard_delays_milliseconds[] = {
+    250, 500, 1000, 2000, 5000, 10000, 30000
+};
+
+static qulonglong
+qg_test_advance_request_generation(QObject *object, const char *propertyName)
+{
+    const qulonglong generation =
+	object->property(propertyName).toULongLong() + 1;
+    object->setProperty(propertyName, QVariant::fromValue(generation));
+    return generation;
+}
+
+static bool
+qg_test_numeric_text(const QString &text, double *value)
+{
+    if (!value)
+	return false;
+
+    bool converted = false;
+    const double numericValue = text.trimmed().section(
+	QLatin1Char(' '), 0, 0, QString::SectionSkipEmpty).toDouble(&converted);
+    if (!converted || !std::isfinite(numericValue))
+	return false;
+
+    *value = numericValue;
+    return true;
+}
 
 static QString
 qg_event_encode(const QString &text)
@@ -781,12 +824,51 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 		qobject_cast<QAbstractButton *>(target)) {
 	    text = button->text();
 	    hasText = true;
+	} else if (QLabel *label = qobject_cast<QLabel *>(target)) {
+	    text = label->text();
+	    hasText = true;
 	}
 	if (event.arguments.contains(QStringLiteral("text")) &&
 	    (!hasText || text !=
 		event.arguments.value(QStringLiteral("text")).toString()))
 	    return fail(QStringLiteral("assert_state text mismatch: '%1'")
 		.arg(text));
+	const QString textNumericKeys[] = {
+	    QStringLiteral("text_numeric_value"),
+	    QStringLiteral("text_numeric_gt"),
+	    QStringLiteral("text_numeric_ge"),
+	    QStringLiteral("text_numeric_lt"),
+	    QStringLiteral("text_numeric_le")
+	};
+	bool needsTextNumericValue = false;
+	for (const QString &key : textNumericKeys)
+	    needsTextNumericValue = needsTextNumericValue ||
+		event.arguments.contains(key);
+	if (needsTextNumericValue) {
+	    double actual = 0.0;
+	    if (!hasText || !qg_test_numeric_text(text, &actual))
+		return fail(QStringLiteral(
+		    "assert_state text has no finite numeric prefix: '%1'")
+		    .arg(text));
+	    for (const QString &key : textNumericKeys) {
+		if (!event.arguments.contains(key))
+		    continue;
+		const double expected = event.arguments.value(key).toDouble();
+		const double tolerance = event.arguments.value(
+		    QStringLiteral("tolerance")).toDouble(1.0e-9);
+		const bool matches = key == QLatin1String("text_numeric_value") ?
+		    qAbs(actual - expected) <= tolerance :
+		    key == QLatin1String("text_numeric_gt") ? actual > expected :
+		    key == QLatin1String("text_numeric_ge") ? actual >= expected :
+		    key == QLatin1String("text_numeric_lt") ? actual < expected :
+		    actual <= expected;
+		if (!matches)
+		    return fail(QStringLiteral(
+			"assert_state %1 mismatch: %2 versus %3")
+			.arg(key).arg(actual, 0, 'g', 17)
+			.arg(expected, 0, 'g', 17));
+	    }
+	}
 	const QString valueKeys[] = {
 	    QStringLiteral("value"), QStringLiteral("value_gt"),
 	    QStringLiteral("value_ge"), QStringLiteral("value_lt"),
@@ -926,8 +1008,67 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	const int height =
 	    event.arguments.value(QStringLiteral("height")).toInt();
 	if (widget && width > 0 && height > 0) {
-	    widget->resize(width, height);
-	    return widget->size() == QSize(width, height);
+	    const QSize requestedSize(width, height);
+	    const auto applySize = [widget, requestedSize]() {
+		widget->resize(requestedSize);
+	    };
+	    applySize();
+	    if (!widget->isWindow())
+		return widget->size() == requestedSize;
+
+	    /* A window manager may acknowledge an older configure request after
+	     * QWidget::resize() has already returned the requested local size.
+	     * Keep the latest scripted size authoritative, but tag every request
+	     * so a delayed guard can never resurrect a superseded size. */
+	    const qulonglong generation = qg_test_advance_request_generation(
+		widget, qg_test_requested_window_size_generation_property);
+	    widget->setProperty(qg_test_requested_window_size_property,
+		QVariant(requestedSize));
+	    for (int delay : qg_test_window_guard_delays_milliseconds) {
+		QTimer::singleShot(delay, widget,
+		    [widget, requestedSize, generation, applySize]() {
+			if (widget->property(
+				qg_test_requested_window_size_generation_property)
+				.toULongLong() != generation ||
+			    widget->property(
+				qg_test_requested_window_size_property).toSize() !=
+				requestedSize)
+			    return;
+			if (widget->size() != requestedSize)
+			    applySize();
+		    });
+	    }
+
+	    const int stableMilliseconds = qMax(0,
+		event.arguments.value(QStringLiteral("stable_ms")).toInt());
+	    if (!stableMilliseconds)
+		return widget->size() == requestedSize;
+	    const int timeoutMilliseconds = qMax(stableMilliseconds,
+		event.arguments.value(QStringLiteral("timeout_ms")).toInt(
+		    qg_test_window_request_timeout_milliseconds));
+	    QElapsedTimer elapsed;
+	    QElapsedTimer stable;
+	    elapsed.start();
+	    while (elapsed.elapsed() < timeoutMilliseconds) {
+		QGuiApplication::sync();
+		if (widget->size() == requestedSize) {
+		    if (!stable.isValid())
+			stable.start();
+		    if (stable.elapsed() >= stableMilliseconds)
+			return true;
+		} else {
+		    stable.invalidate();
+		    applySize();
+		}
+		QEventLoop loop;
+		QTimer::singleShot(qg_test_window_request_retry_milliseconds,
+		    &loop, &QEventLoop::quit);
+		loop.exec(QEventLoop::ExcludeUserInputEvents);
+	    }
+	    qg_event_error(error,
+		QStringLiteral("resize did not remain at %1x%2")
+		.arg(width).arg(height));
+	    return false;
 	}
     } else if (event.action == QLatin1String("window_state")) {
 	QWidget *widget = qobject_cast<QWidget *>(target);
@@ -947,9 +1088,9 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	    return false;
 	}
 	QWidget *window = widget->window();
-	static const char requestedStateProperty[] =
-	    "qgTestRequestedWindowState";
-	window->setProperty(requestedStateProperty, state);
+	const qulonglong generation = qg_test_advance_request_generation(
+	    window, qg_test_requested_window_state_generation_property);
+	window->setProperty(qg_test_requested_window_state_property, state);
 	const auto applyState = [window, state]() {
 	    if (state == QLatin1String("normal")) {
 		/* Clear the native state explicitly before showNormal().  On X11 an
@@ -972,12 +1113,16 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	 * expensive scene work immediately after restore.  Bounded delayed guards
 	 * repair that stale acknowledgement without blocking the event player or
 	 * fighting a later maximize/fullscreen request. */
-	const int guardDelays[] = {250, 500, 1000, 2000, 5000, 10000, 30000};
-	for (int delay : guardDelays) {
+	for (int delay : qg_test_window_guard_delays_milliseconds) {
 	    QTimer::singleShot(delay, window,
-		[window, state, applyState]() {
+		[window, state, generation, applyState]() {
 		    if (window->property(
-			    requestedStateProperty).toString() != state)
+			    qg_test_requested_window_state_generation_property)
+			    .toULongLong() != generation)
+			return;
+		    if (window->property(
+			    qg_test_requested_window_state_property).toString() !=
+			    state)
 			return;
 		    const bool reached = state == QLatin1String("minimized") ?
 			window->isMinimized() :
@@ -1018,7 +1163,8 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	 * though the final sample was already maximized/fullscreen.  Preserve the
 	 * 100 ms stability proof, but give asynchronous window-manager delivery a
 	 * bounded interval which includes several such complete frames. */
-	while (stateWait.elapsed() < 5000) {
+	while (stateWait.elapsed() <
+		qg_test_window_request_timeout_milliseconds) {
 	    QGuiApplication::sync();
 	    if (stateReached()) {
 		if (!stableWait.isValid())
@@ -1030,7 +1176,8 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 		applyState();
 	    }
 	    QEventLoop loop;
-	    QTimer::singleShot(10, &loop, &QEventLoop::quit);
+	    QTimer::singleShot(qg_test_window_request_retry_milliseconds,
+		&loop, &QEventLoop::quit);
 	    loop.exec(QEventLoop::ExcludeUserInputEvents);
 	}
 	qg_event_error(error,

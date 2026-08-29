@@ -63,18 +63,22 @@ BObolLodPresentationPolicy::claimOverBudgetAllocation(
 BObolLodPresentationPolicy::CompletedPassSelection
 BObolLodPresentationPolicy::completedPassSelection(
     const CompletedPassInputs &inputs, bool capacityEligible,
-    bool capacitySamplePending, int progressiveCeiling) const
+    bool capacitySuccessorPending, bool capacityPresentationPending,
+    int progressiveCeiling) const
 {
     CompletedPassSelection selection;
     if (!inputs.completed || inputs.submissionPending)
 	return selection;
     selection.consumePassAnnotations =
 	this->capacitySampleRequiresCeilingFreeHandoff(inputs,
-	    capacitySamplePending, progressiveCeiling);
+	    capacityPresentationPending, progressiveCeiling);
+    selection.deferredCapacitySuccessor =
+	selection.consumePassAnnotations && capacitySuccessorPending;
     const bool cleanPass =
-	(!inputs.rescanAfterFrame && !inputs.changedCut) ||
+	(!inputs.capacityTransactionPending && !inputs.changedCut) ||
 	selection.consumePassAnnotations;
-    if (cleanPass && this->handoffActive()) {
+    if (cleanPass && this->handoffActive() &&
+	(!capacitySuccessorPending || selection.consumePassAnnotations)) {
 	selection.owner = this->presentationHandoffPending() ?
 	    CompletedPassOwner::PRESENTATION_HANDOFF :
 	    CompletedPassOwner::ALLOCATION_HANDOFF;
@@ -86,12 +90,21 @@ BObolLodPresentationPolicy::completedPassSelection(
 }
 
 bool
+BObolLodPresentationPolicy::capacityProducerRequiredAfterHandoff(
+    bool deferredCapacitySuccessor, bool handoffFinished,
+    size_t progressivePayloadCount)
+{
+    return deferredCapacitySuccessor && handoffFinished &&
+	progressivePayloadCount > 1;
+}
+
+bool
 BObolLodPresentationPolicy::capacitySampleRequiresCeilingFreeHandoff(
-    const CompletedPassInputs &inputs, bool capacitySamplePending,
+    const CompletedPassInputs &inputs, bool capacityPresentationPending,
     int progressiveCeiling) const
 {
-    return capacitySamplePending && progressiveCeiling >= 0 &&
-	(inputs.rescanAfterFrame || inputs.changedCut) && inputs.completed &&
+    return capacityPresentationPending && progressiveCeiling >= 0 &&
+	(inputs.capacityTransactionPending || inputs.changedCut) && inputs.completed &&
 	!inputs.submissionPending && this->handoffActive() &&
 	!this->presentationHandoffPending() &&
 	inputs.retainedAllocationCompleted &&
@@ -243,7 +256,7 @@ BObolLodPresentationPolicy::completePass(const CompletedPassInputs &inputs)
 {
     CompletedPassDecision decision;
     if (!inputs.completed || inputs.submissionPending ||
-	    inputs.rescanAfterFrame || inputs.changedCut ||
+	    inputs.capacityTransactionPending || inputs.changedCut ||
 	    (inputs.retainedRefinementBudgetBlocked && !this->handoffActive()) ||
 	    this->presentationHandoffPending())
 	return decision;

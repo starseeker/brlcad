@@ -1,146 +1,184 @@
 --------------------------- MODULE ObolLodAdmission -------------------------
-\* Bounded admission model for the compact source -> view allocator boundary.
+\* Bounded representation-admission contract for one immutable view demand.
 \*
-\* A source profile is deliberately a conservative fast-path gate, not a
-\* quality decision.  Safe scenes may admit materially visible small meshes
-\* directly; large scenes use the normal progressive path.  In both cases a
-\* subpixel occurrence is represented by the aggregate channel and consumes
-\* neither mesh draw budget nor source-preparation capacity.
+\* Discovery and mesh availability are intentionally concurrent.  A cold
+\* source may therefore publish a useful PoP mesh before the complete source
+\* inventory proves that the scene is small enough for direct terminal
+\* geometry.  Certification must be allowed to promote that existing PoP
+\* representation atomically, charging only the replacement's marginal cost.
 \*
-\* This model does not represent rendering, I/O, or PoP cuts.  It verifies the
-\* policy combinations that must remain true before those implementations run:
-\* no direct escape from a large scene, no mesh demand for a subpixel leaf,
-\* bounded visible admission, and a terminal constrained state rather than an
-\* allocation/reclassification cycle.
+\* Structural boxes are truthful startup coverage, never a terminal
+\* representation.  A significant occurrence that cannot afford even its
+\* minimum mesh may become a persistent proxy only with an explicit capacity
+\* witness.  Tiny occurrences use the aggregate channel and consume no
+\* per-occurrence mesh budget.
 
 EXTENDS Naturals, TLC
 
-Profiles == {"safe", "large"}
+Profiles == {"unknown", "safe", "large"}
 Candidates == {"hero", "ordinary", "tiny"}
-Tiny == "tiny"
-Significant == Candidates \ {Tiny}
-Modes == {"box", "aggregate", "direct", "pop"}
-InitialBudgets == 0..3
+Significant == Candidates \ {"tiny"}
+Modes == {"box", "aggregate", "proxy", "pop", "direct"}
+InitialCapacities == 0..4
 
-Cost(candidate) == IF candidate = "hero" THEN 2 ELSE 1
+PopCost(candidate) == IF candidate = "hero" THEN 2 ELSE 1
+DirectCost(candidate) == 2
+
+ModeCost(candidate, candidateMode) ==
+    IF candidateMode = "pop" THEN PopCost(candidate)
+    ELSE IF candidateMode = "direct" THEN DirectCost(candidate)
+    ELSE 0
+
+TotalCost(candidateModes) ==
+    ModeCost("hero", candidateModes["hero"]) +
+    ModeCost("ordinary", candidateModes["ordinary"])
+
+Replace(candidateModes, candidate, replacement) ==
+    [candidateModes EXCEPT ![candidate] = replacement]
 
 VARIABLES profile,
-          budget,
+          capacity,
           mode,
-          allocationPending,
-          constrained
+          planning,
+          constraintWitness
 
-vars == <<profile, budget, mode, allocationPending, constrained>>
+vars == <<profile, capacity, mode, planning, constraintWitness>>
 
 TypeOK ==
     /\ profile \in Profiles
-    /\ budget \in 0..3
+    /\ capacity \in InitialCapacities
     /\ mode \in [Candidates -> Modes]
-    /\ allocationPending \in BOOLEAN
-    /\ constrained \in BOOLEAN
+    /\ planning \in BOOLEAN
+    /\ constraintWitness \in BOOLEAN
 
 Init ==
-    /\ profile \in Profiles
-    /\ budget \in InitialBudgets
+    /\ profile = "unknown"
+    /\ capacity \in InitialCapacities
     /\ mode = [candidate \in Candidates |-> "box"]
-    /\ allocationPending = TRUE
-    /\ constrained = FALSE
+    /\ planning = TRUE
+    /\ constraintWitness = FALSE
 
 ClassifyTiny ==
-    /\ allocationPending
-    /\ mode[Tiny] = "box"
-    /\ mode' = [mode EXCEPT ![Tiny] = "aggregate"]
-    /\ UNCHANGED <<profile, budget, allocationPending, constrained>>
+    /\ planning
+    /\ mode["tiny"] = "box"
+    /\ mode' = [mode EXCEPT !["tiny"] = "aggregate"]
+    /\ UNCHANGED <<profile, capacity, planning, constraintWitness>>
 
-AdmitDirect(candidate) ==
-    /\ candidate \in Significant
-    /\ profile = "safe"
-    /\ allocationPending
-    /\ mode[candidate] = "box"
-    /\ budget >= Cost(candidate)
-    /\ candidate = "hero" \/ mode["hero"] # "box" \/
-       budget < Cost("hero")
-    /\ mode' = [mode EXCEPT ![candidate] = "direct"]
-    /\ budget' = budget - Cost(candidate)
-    /\ UNCHANGED <<profile, allocationPending, constrained>>
+Discover(nextProfile) ==
+    /\ planning
+    /\ profile = "unknown"
+    /\ nextProfile \in {"safe", "large"}
+    /\ profile' = nextProfile
+    /\ UNCHANGED <<capacity, mode, planning, constraintWitness>>
 
 AdmitPop(candidate) ==
+    LET replacement == Replace(mode, candidate, "pop") IN
+    /\ planning
     /\ candidate \in Significant
-    /\ profile = "large"
-    /\ allocationPending
     /\ mode[candidate] = "box"
-    /\ budget >= Cost(candidate)
-    /\ candidate = "hero" \/ mode["hero"] # "box" \/
-       budget < Cost("hero")
-    /\ mode' = [mode EXCEPT ![candidate] = "pop"]
-    /\ budget' = budget - Cost(candidate)
-    /\ UNCHANGED <<profile, allocationPending, constrained>>
+    /\ TotalCost(replacement) <= capacity
+    /\ mode' = replacement
+    /\ UNCHANGED <<profile, capacity, planning, constraintWitness>>
 
-AllClassified == \A candidate \in Candidates: mode[candidate] # "box"
-AnyAffordable ==
-    \E candidate \in Significant:
-        /\ mode[candidate] = "box"
-        /\ budget >= Cost(candidate)
+AdmitDirect(candidate) ==
+    LET replacement == Replace(mode, candidate, "direct") IN
+    /\ planning
+    /\ profile = "safe"
+    /\ candidate \in Significant
+    /\ mode[candidate] \in {"box", "pop"}
+    /\ TotalCost(replacement) <= capacity
+    /\ mode' = replacement
+    /\ UNCHANGED <<profile, capacity, planning, constraintWitness>>
+
+PublishPersistentProxy(candidate) ==
+    LET popReplacement == Replace(mode, candidate, "pop")
+        directReplacement == Replace(mode, candidate, "direct") IN
+    /\ planning
+    /\ profile # "unknown"
+    /\ candidate \in Significant
+    /\ mode[candidate] = "box"
+    /\ TotalCost(popReplacement) > capacity
+    /\ (profile # "safe" \/ TotalCost(directReplacement) > capacity)
+    /\ mode' = Replace(mode, candidate, "proxy")
+    /\ constraintWitness' = TRUE
+    /\ UNCHANGED <<profile, capacity, planning>>
+
+AllPresented == \A candidate \in Candidates: mode[candidate] # "box"
+
+AffordableDesiredUpgrade(candidate) ==
+    IF profile = "safe"
+    THEN /\ mode[candidate] \in {"box", "pop"}
+         /\ TotalCost(Replace(mode, candidate, "direct")) <= capacity
+    ELSE /\ mode[candidate] = "box"
+         /\ TotalCost(Replace(mode, candidate, "pop")) <= capacity
+
+AnyAffordableDesiredUpgrade ==
+    \E candidate \in Significant: AffordableDesiredUpgrade(candidate)
 
 Complete ==
-    /\ allocationPending
-    /\ AllClassified
-    /\ allocationPending' = FALSE
-    /\ UNCHANGED <<profile, budget, mode, constrained>>
-
-Constrain ==
-    /\ allocationPending
-    /\ mode[Tiny] # "box"
-    /\ ~AnyAffordable
-    /\ ~AllClassified
-    /\ allocationPending' = FALSE
-    /\ constrained' = TRUE
-    /\ UNCHANGED <<profile, budget, mode>>
+    /\ planning
+    /\ profile # "unknown"
+    /\ AllPresented
+    /\ ~AnyAffordableDesiredUpgrade
+    /\ planning' = FALSE
+    /\ UNCHANGED <<profile, capacity, mode, constraintWitness>>
 
 Next ==
     \/ ClassifyTiny
-    \/ \E candidate \in Significant: AdmitDirect(candidate)
+    \/ \E nextProfile \in {"safe", "large"}: Discover(nextProfile)
     \/ \E candidate \in Significant: AdmitPop(candidate)
+    \/ \E candidate \in Significant: AdmitDirect(candidate)
+    \/ \E candidate \in Significant: PublishPersistentProxy(candidate)
     \/ Complete
-    \/ Constrain
 
 Spec ==
     /\ Init
     /\ [][Next]_vars
     /\ WF_vars(ClassifyTiny)
-    /\ \A candidate \in Significant: WF_vars(AdmitDirect(candidate))
+    /\ \A nextProfile \in {"safe", "large"}:
+           WF_vars(Discover(nextProfile))
     /\ \A candidate \in Significant: WF_vars(AdmitPop(candidate))
+    /\ \A candidate \in Significant: WF_vars(AdmitDirect(candidate))
+    /\ \A candidate \in Significant:
+           WF_vars(PublishPersistentProxy(candidate))
     /\ WF_vars(Complete)
-    /\ WF_vars(Constrain)
 
-BudgetSafety == budget >= 0
+BudgetSafety == TotalCost(mode) <= capacity
 
-\* A large scene never obtains a source-size-only direct escape hatch.
-LargeSceneHasNoDirectMeshes ==
-    profile = "large" =>
-        \A candidate \in Candidates: mode[candidate] # "direct"
+TinyNeverConsumesMeshBudget == mode["tiny"] \in {"box", "aggregate"}
 
-\* A tiny projected occurrence is not allowed to consume a mesh admission.
-TinyNeverConsumesMeshBudget == mode[Tiny] \in {"box", "aggregate"}
+\* A structural startup representation cannot be mistaken for convergence.
+TerminalHasNoStructuralBoxes ==
+    ~planning => \A candidate \in Candidates: mode[candidate] # "box"
 
-\* Every candidate has at least structural coverage throughout this model.
-CoverageNeverDisappears == \A candidate \in Candidates: mode[candidate] \in Modes
+\* A persistent proxy is a certified constrained choice, never an admission
+\* shortcut taken merely because discovery or source preparation is pending.
+PersistentProxyHasWitness ==
+    (\E candidate \in Significant: mode[candidate] = "proxy") =>
+        constraintWitness
 
-\* A terminal shortage is explicit and cannot conceal an affordable upgrade.
-TerminalDebtExplicit ==
-    /\ ~allocationPending /\ ~AllClassified
-    => constrained
+\* Once published, a richer representation cannot regress during the same
+\* immutable demand.  New view/policy/capacity revisions are outside this
+\* focused model and begin a new plan.
+DirectIsAbsorbing ==
+    \A candidate \in Significant:
+        [](mode[candidate] = "direct" => [](
+            mode[candidate] = "direct"))
 
-ConstrainedDebtHasNoAffordableUpgrade == constrained => ~AnyAffordable
+\* This is the cold-ordering regression boundary.  Once complete discovery
+\* certifies a safe scene, an affordable exact replacement remains reachable
+\* even when the occurrence already owns a useful PoP mesh.
+ZeroMarginalSafePopEventuallyDirect ==
+    \A candidate \in Significant:
+        [](profile = "safe" /\ planning /\ mode[candidate] = "pop" /\
+           TotalCost(Replace(mode, candidate, "direct")) = TotalCost(mode)
+           => <>(mode[candidate] = "direct"))
 
-SafeHeroEventuallyDirect ==
-    [](profile = "safe" /\ allocationPending /\ mode["hero"] = "box" /\
-       budget >= Cost("hero") => <>(mode["hero"] = "direct"))
+SafeFullCapacityEventuallyDirect ==
+    [](profile = "safe" /\ planning /\ capacity = 4
+       => <>(mode["hero"] = "direct" /\
+              mode["ordinary"] = "direct"))
 
-LargeHeroEventuallyPop ==
-    [](profile = "large" /\ allocationPending /\ mode["hero"] = "box" /\
-       budget >= Cost("hero") => <>(mode["hero"] = "pop"))
-
-EventuallyTerminal == <>(~allocationPending)
+EventuallyTerminal == <>(~planning)
 
 =============================================================================

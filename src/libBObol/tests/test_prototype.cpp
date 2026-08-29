@@ -71,6 +71,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits>
 #include <vector>
 
 #define FAIL(_msg) \
@@ -1715,16 +1716,132 @@ exercise_brep_lod_contract(struct db_i *dbip)
 	wireOccurrence.geometry->wire->isProgressive();
     if (wireValid) {
 	const Obol::WireRep &wire = *wireOccurrence.geometry->wire;
-	for (uint8_t level = 0; level < 16; ++level) {
+	wireValid = wire.hasProgressiveErrorBounds();
+	float previousError = std::numeric_limits<float>::infinity();
+	for (uint8_t level = wire.progressiveMinimumCut;
+	     wireValid && level <= wire.progressiveResidentCut; ++level) {
 	    const size_t first = wire.segmentFirstAtCut(level);
 	    const size_t count = wire.segmentCountAtCut(level);
+	    const float error = wire.normalizedErrorAtCut(level);
 	    if (first > wire.segmentCount() ||
-		count > wire.segmentCount() - first) {
+		count > wire.segmentCount() - first ||
+		error < 0.0f || error > previousError) {
 		wireValid = false;
 		break;
 	    }
+	    previousError = error;
 	}
-	wireValid = wireValid && wire.segmentCountAtCut(15) > 0;
+	wireValid = wireValid &&
+	    wire.segmentCountAtCut(wire.progressiveResidentCut) > 0 &&
+	    wire.normalizedErrorAtCut(wire.progressiveResidentCut) <=
+		std::numeric_limits<float>::epsilon();
+
+	BObolCompactLodPlanningSummary planning;
+	BObolCompactResidentProgressiveSummary progressive;
+	wireValid = wireValid &&
+	    wireSource->getCompactLodPlanningSummary(0, planning) &&
+	    planning.residentProgressiveGeometry &&
+	    wireSource->hasDisplayLodTargets() &&
+	    wireSource->getDisplayLodTargetCount() == 1 &&
+	    wireSource->hasDisplayResidentProgressiveGeometry() &&
+	    wireSource->getDisplayResidentProgressiveGeometryCount() == 1 &&
+	    !wireSource->hasDisplayMeshLodRequests() &&
+	    wireSource->getDisplayMeshLodRequestCount() == 0 &&
+	    wireSource->getCompactResidentProgressiveSummary(0, progressive) &&
+	    progressive.valid && progressive.wire &&
+	    progressive.minimumCut == wire.progressiveMinimumCut &&
+	    progressive.residentCut == wire.progressiveResidentCut;
+
+	BObolViewLodState viewState;
+	const uint64_t testViewRevision = 1;
+	const uint64_t testPolicyRevision = 1;
+	const std::vector<const BObolViewLodState::CadPayload *> noPayloads;
+	SoBRLCadAssembly *assembly = wireValid ?
+	    wireSource->compactViewLodAssembly(noPayloads, &viewState) : NULL;
+	std::vector<Obol::InstanceId> instanceIds = assembly ?
+	    assembly->instanceIds() : std::vector<Obol::InstanceId>();
+	std::optional<Obol::InstanceRecord> record = instanceIds.size() == 1 ?
+	    assembly->getInstanceRecord(instanceIds[0]) :
+	    std::optional<Obol::InstanceRecord>();
+	wireValid = wireValid && record &&
+	    record->lodCut == progressive.minimumCut &&
+	    viewState.residentCadProgressiveCount() == 0;
+	if (wireValid) {
+	    wireValid = viewState.retargetResidentCadProgressiveCut(
+		wireSource, 0, planning.sourceInstanceKey,
+		progressive.minimumCut, progressive.residentCut,
+		testViewRevision, testPolicyRevision) &&
+		viewState.residentCadProgressiveCut(wireSource, 0,
+		    planning.sourceInstanceKey, planning.geometryRevision) ==
+		    progressive.minimumCut &&
+		viewState.residentCadProgressiveCount() == 1 &&
+		viewState.minimumResidentCadProgressiveActiveCut() ==
+		    progressive.minimumCut &&
+		viewState.maximumResidentCadProgressiveActiveCut() ==
+		    progressive.minimumCut &&
+		viewState.minimumResidentCadProgressiveRequestedCut() ==
+		    progressive.residentCut &&
+		viewState.maximumResidentCadProgressiveRequestedCut() ==
+		    progressive.residentCut &&
+		wireSource->compactViewLodAssembly(noPayloads, &viewState) == assembly;
+	}
+	if (wireValid) {
+	    SoBRLMeshLodSubmitAction submit;
+	    submit.setViewLodState(&viewState);
+	    submit.setRevisions(testViewRevision + 1, testPolicyRevision);
+	    submit.setForcedCut(progressive.residentCut);
+	    submit.apply(wireRoot);
+	    wireValid = submit.getSubmittedTaskCount() == 0 &&
+		submit.getUpdatedCutCount() == 1 &&
+		viewState.residentCadProgressiveCut(wireSource, 0,
+		    planning.sourceInstanceKey, planning.geometryRevision) ==
+		    progressive.residentCut &&
+		viewState.residentCadProgressiveCount() == 1 &&
+		viewState.minimumResidentCadProgressiveActiveCut() ==
+		    progressive.residentCut &&
+		viewState.maximumResidentCadProgressiveActiveCut() ==
+		    progressive.residentCut &&
+		viewState.minimumResidentCadProgressiveRequestedCut() ==
+		    progressive.residentCut &&
+		viewState.maximumResidentCadProgressiveRequestedCut() ==
+		    progressive.residentCut &&
+		wireSource->compactViewLodAssembly(noPayloads, &viewState) == assembly;
+	    record = assembly->getInstanceRecord(instanceIds[0]);
+	    wireValid = wireValid && record &&
+		record->lodCut == progressive.residentCut;
+	}
+	if (wireValid) {
+	    Obol::WireRep replacementWire = wire;
+	    replacementWire.progressiveCuts.clear();
+	    replacementWire.progressiveMinimumCut =
+		Obol::ProgressiveCutUnspecified;
+	    replacementWire.progressiveResidentCut =
+		Obol::ProgressiveCutUnspecified;
+	    replacementWire.progressiveLineage = 0;
+	    replacementWire.progressiveClusters.clear();
+	    replacementWire.progressiveClusterGridResolution = 0;
+	    Obol::PartGeometryBuilder replacementBuilder;
+	    replacementBuilder.wire = std::move(replacementWire);
+	    const Obol::CadGeometryAdmission replacementAdmission =
+		Obol::cadAdmitPartGeometry(std::move(replacementBuilder));
+	    BObolCompactOccurrence replacementOccurrence = wireOccurrence;
+	    if (replacementAdmission)
+		replacementOccurrence.geometry =
+		    replacementAdmission.geometry.shared();
+	    replacementOccurrence.lodBacked = FALSE;
+	    replacementOccurrence.sourceMeshRequestValid = FALSE;
+	    replacementOccurrence.sourceMeshRequest.clear();
+	    wireValid = replacementAdmission &&
+		wireSource->mergeCompactOccurrences(
+		    {replacementOccurrence}, TRUE) == 1 &&
+		viewState.synchronizeResidentCadProgressiveSource(wireSource) == 1 &&
+		viewState.residentCadProgressiveCount() == 0 &&
+		viewState.cadProgressivePayloadCount() == 0 &&
+		viewState.minimumResidentCadProgressiveActiveCut() == -1 &&
+		viewState.maximumResidentCadProgressiveRequestedCut() == -1 &&
+		viewState.residentCadProgressiveCut(wireSource, 0,
+		    planning.sourceInstanceKey, planning.geometryRevision) == -1;
+	}
     }
     wireRoot->unref();
     if (!wireValid)

@@ -283,12 +283,15 @@ QgToolPalette::palette_displayElement(QgToolPaletteElement *element)
 		QWidget *controls = element->controlsWidget();
 		if (element == selected) {
 			if (!always_selected) {
-				if (element->buttonWidget()->isChecked()) element->buttonWidget()->setChecked(false);
+				if (element->buttonWidget()->isChecked())
+					element->buttonWidget()->setChecked(false);
 				if (controls)
 					controls->hide();
 				selected = nullptr;
 			}
 			else {
+				if (!element->buttonWidget()->isChecked())
+					element->buttonWidget()->setChecked(true);
 				element->buttonWidget()->setStyleSheet(selected_style);
 			}
 		}
@@ -319,7 +322,7 @@ QgToolPalette::palette_displayElement(QgToolPaletteElement *element)
 				}
 			}
 		}
-		emit palette_element_selected(element);
+		emit palette_element_selected(selected);
 	}
 }
 

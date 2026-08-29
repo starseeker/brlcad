@@ -29,6 +29,7 @@
 #include <Inventor/fields/SoSFUInt32.h>
 #include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoSeparator.h>
+#include <Obol/cad/CadProgressive.h>
 
 #include <memory>
 #include <array>
@@ -335,9 +336,27 @@ struct BOBOL_EXPORT BObolCompactLodPlanningSummary {
     SbBool meshGeometry;
     SbBool lodBacked;
     SbBool sourceMeshRequestValid;
+    /* The authored compact part itself contains producer-certified,
+     * view-selectable cuts.  Such geometry is retargeted in place and must
+     * never be routed through the asynchronous source-mesh provider. */
+    SbBool residentProgressiveGeometry;
     SbBool visible;
     SbBool selected;
     SbBool highlighted;
+};
+
+/* On-demand detail for an authored compact progressive part.  Keeping the
+ * fixed cut tables out of BObolCompactLodPlanningSummary avoids copying them
+ * while scanning ordinary 50k/150k occurrence populations. */
+struct BOBOL_EXPORT BObolCompactResidentProgressiveSummary {
+    BObolCompactResidentProgressiveSummary(void);
+
+    SbBool valid;
+    SbBool wire;
+    int minimumCut;
+    int residentCut;
+    std::array<size_t, Obol::ProgressiveCutLimit> primitiveCounts;
+    std::array<float, Obol::ProgressiveCutLimit> normalizedErrors;
 };
 
 struct BOBOL_EXPORT BObolAuxiliaryLineSetDisplayState {
@@ -1151,6 +1170,19 @@ public:
     SoBRLMeshShape *getRealizedMesh(int index) const;
     int getRealizedMeshCount(void) const;
     SbBool hasRealizedMeshGeometry(void) const;
+    /** True when the compact presentation contains any geometry whose
+     * displayed fidelity is selected by the view.  This includes both
+     * asynchronous source-mesh requests and immutable resident progressive
+     * parts; it is the controller scheduling predicate. */
+    SbBool hasDisplayLodTargets(void) const;
+    /** Number of current view-managed compact occurrences.  The count is
+     * maintained with the compact index so querying a 150k-object source is
+     * O(1). */
+    size_t getDisplayLodTargetCount(void) const;
+    /** True when at least one compact part owns immutable producer-certified
+     * cuts which the view retargets without a provider request. */
+    SbBool hasDisplayResidentProgressiveGeometry(void) const;
+    size_t getDisplayResidentProgressiveGeometryCount(void) const;
     /** True when compact occurrences can refine their current display
      * geometry from source-backed mesh requests validated for the source's
      * current source/inputs epoch.  Streamed contracts may be usable before
@@ -1283,6 +1315,8 @@ public:
 	BObolCompactLodProviderSummary &summary) const;
     SbBool getCompactLodPlanningSummary(int index,
 	BObolCompactLodPlanningSummary &summary) const;
+    SbBool getCompactResidentProgressiveSummary(int index,
+	BObolCompactResidentProgressiveSummary &summary) const;
     /* Constant-time occurrence lookup for scene-wide retained-LoD
      * admission.  This avoids rescanning every structural leaf when only
      * the already-displayed mesh bindings need to be coarsened. */

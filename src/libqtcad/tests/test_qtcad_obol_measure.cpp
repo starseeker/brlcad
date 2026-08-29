@@ -293,7 +293,7 @@ main(int argc, char **argv)
 	find_measure_overlay(controller, "tool:measurement");
     if (!overlay || overlay->getLayerShapeCount() != 1 ||
 	    overlay->getPointCount() != 2 ||
-	    overlay->selectable.getValue())
+	    overlay->selectable.getValue() || overlay->depthTest.getValue())
 	FAIL("qtcad Obol measure overlay should be a non-selectable line layer");
 
     if (!qg_obol_measure_clear_overlay(&view, "tool:measurement") ||

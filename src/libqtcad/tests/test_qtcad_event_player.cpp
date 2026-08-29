@@ -9,6 +9,7 @@
 
 #include "bu/app.h"
 #include "qtcad/QgTestEvent.h"
+#include "qtcad/QgToolPalette.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -18,6 +19,7 @@
 #include <QPushButton>
 #include <QStandardItemModel>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QTreeView>
 #include <QVBoxLayout>
 
@@ -62,6 +64,9 @@ main(int argc, char **argv)
     button.setProperty("qgTestId", QStringLiteral("apply-action"));
     QLineEdit edit(&root);
     edit.setObjectName(QStringLiteral("nameEdit"));
+    QLineEdit numericEdit(&root);
+    numericEdit.setText(QStringLiteral("12.5 mm"));
+    numericEdit.setProperty("qgTestId", QStringLiteral("numeric-edit"));
     QComboBox combo(&root);
     combo.setObjectName(QStringLiteral("modeCombo"));
     combo.addItems({QStringLiteral("Wire"), QStringLiteral("Shaded"),
@@ -79,6 +84,7 @@ main(int argc, char **argv)
     canvas.setParent(&root);
     layout.addWidget(&button);
     layout.addWidget(&edit);
+    layout.addWidget(&numericEdit);
     layout.addWidget(&combo);
     layout.addWidget(&tree);
     layout.addWidget(&canvas);
@@ -150,6 +156,20 @@ main(int argc, char **argv)
 	QStringLiteral("Generic_Twin"));
     CHECK(player.play(assertEdit, &error), error.toLocal8Bit().constData());
 
+    QgTestEvent assertNumericText;
+    assertNumericText.target = QStringLiteral("i:numeric-edit");
+    assertNumericText.action = QStringLiteral("assert_state");
+    assertNumericText.arguments.insert(QStringLiteral("text_numeric_gt"), 12.0);
+    assertNumericText.arguments.insert(QStringLiteral("text_numeric_lt"), 13.0);
+    CHECK(player.play(assertNumericText, &error),
+	error.toLocal8Bit().constData());
+    assertNumericText.arguments = QJsonObject{
+	{QStringLiteral("text_numeric_value"), 12.5},
+	{QStringLiteral("tolerance"), 1.0e-12}
+    };
+    CHECK(player.play(assertNumericText, &error),
+	error.toLocal8Bit().constData());
+
     const QString treePath = QgEventRecorder::objectPath(&root, &tree);
     QgTestEvent collapse;
     collapse.target = treePath;
@@ -183,6 +203,20 @@ main(int argc, char **argv)
     resize.arguments.insert(QStringLiteral("height"), 480);
     CHECK(player.play(resize, &error) && root.size() == QSize(640, 480),
 	"player did not deterministically resize its root widget");
+
+    /* Simulate a delayed native configure acknowledgement which arrives
+     * after QWidget::resize() initially reports success.  The current replay
+     * request must win, and retry guards from the superseded request above
+     * must not restore its older dimensions. */
+    QTimer::singleShot(50, &root, [&root]() {
+	root.resize(320, 240);
+    });
+    resize.arguments.insert(QStringLiteral("width"), 700);
+    resize.arguments.insert(QStringLiteral("height"), 520);
+    resize.arguments.insert(QStringLiteral("stable_ms"), 300);
+    resize.arguments.insert(QStringLiteral("timeout_ms"), 2000);
+    CHECK(player.play(resize, &error) && root.size() == QSize(700, 520),
+	"a delayed native configure request superseded the scripted resize");
 
     QgTestEvent windowState;
     windowState.target = QStringLiteral(".");
@@ -223,6 +257,35 @@ main(int argc, char **argv)
 	QStringLiteral("after-draw"));
     CHECK(player.play(checkpoint, &error) && checkpointSeen,
 	"checkpoint callback was not invoked");
+
+    {
+	QgToolPalette palette;
+	palette.setAlwaysSelected(0);
+	QgToolPaletteElement *element = new QgToolPaletteElement(
+	    nullptr, new QWidget);
+	QgToolPaletteElement *selectedElement = element;
+	QObject::connect(&palette, &QgToolPalette::palette_element_selected,
+	    [&selectedElement](QgToolPaletteElement *selected) {
+		selectedElement = selected;
+	    });
+	palette.addElement(element);
+	palette.palette_displayElement(element);
+	CHECK(palette.selectedElement() == element &&
+	    selectedElement == element && element->buttonWidget()->isChecked(),
+	    "optional palette did not activate its selected tool");
+	palette.palette_displayElement(element);
+	CHECK(!palette.selectedElement() && !selectedElement &&
+	    !element->buttonWidget()->isChecked(),
+	    "optional palette did not report semantic tool deactivation");
+	palette.setAlwaysSelected(1);
+	CHECK(palette.selectedElement() == element,
+	    "required palette did not restore an active tool");
+	element->buttonWidget()->setChecked(false);
+	palette.palette_displayElement(element);
+	CHECK(palette.selectedElement() == element &&
+	    element->buttonWidget()->isChecked(),
+	    "required palette allowed its active button to become unchecked");
+    }
 
     return 0;
 }

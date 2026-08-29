@@ -161,6 +161,17 @@ BObolCompactInstanceSummary::BObolCompactInstanceSummary(void) :
     meshAssetBounds.makeEmpty();
 }
 
+BObolCompactResidentProgressiveSummary::
+BObolCompactResidentProgressiveSummary(void) :
+    valid(FALSE),
+    wire(FALSE),
+    minimumCut(-1),
+    residentCut(-1)
+{
+    primitiveCounts.fill(0);
+    normalizedErrors.fill(-1.0f);
+}
+
 BObolCompactLodInstanceSummary::BObolCompactLodInstanceSummary(void) :
     valid(FALSE),
     sourceContentHash(0),
@@ -213,6 +224,7 @@ BObolCompactLodPlanningSummary::BObolCompactLodPlanningSummary(void) :
     meshGeometry(FALSE),
     lodBacked(FALSE),
     sourceMeshRequestValid(FALSE),
+    residentProgressiveGeometry(FALSE),
     visible(TRUE),
     selected(FALSE),
     highlighted(FALSE)

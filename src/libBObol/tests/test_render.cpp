@@ -818,8 +818,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     compactWireSource.shaded = compactWireMesh;
     const Obol::CadGeometryAdmission compactWireSourceAdmission =
 	Obol::cadAdmitPartGeometry(std::move(compactWireSource));
-    if (!compactWireSourceAdmission)
+
+    if (!compactWireSourceAdmission) {
+	fprintf(stderr, "compact wire source admission: %s\n",
+	    Obol::cadGeometryErrorName(
+		compactWireSourceAdmission.validation.error));
 	FAIL("compact wire source admission failed");
+    }
     Obol::WireRep compactWire;
     compactWire.triangleEdgeGeometry =
 	compactWireSourceAdmission.geometry.shared();
@@ -888,6 +893,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     lineageShaded.progressiveCuts[0].positionCount = 3u;
     lineageShaded.progressiveMinimumCut = 0u;
     lineageShaded.progressiveResidentCut = 0u;
+    lineageShaded.progressiveQuantizationMinimum =
+	lineageShaded.bounds.getMin();
+    lineageShaded.progressiveQuantizationMaximum =
+	lineageShaded.bounds.getMax();
     lineageShaded.progressiveLineage = UINT64_C(0x534841444544);
     lineageGeometry.shaded = lineageShaded;
     Obol::WireRep lineageWire;
@@ -898,8 +907,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	SbVec3f(-1.0f, -1.0f, 0.05f), SbVec3f(1.0f, 1.0f, 0.05f));
     lineageWire.progressiveCuts.resize(1);
     lineageWire.progressiveCuts[0].segmentCount = 1u;
+    lineageWire.progressiveCuts[0].maximumNormalizedError = 0.0f;
     lineageWire.progressiveMinimumCut = 0u;
     lineageWire.progressiveResidentCut = 0u;
+    lineageWire.progressiveQuantizationMinimum = lineageWire.bounds.getMin();
+    lineageWire.progressiveQuantizationMaximum = lineageWire.bounds.getMax();
     lineageWire.progressiveLineage = UINT64_C(0x574952453031);
     lineageGeometry.wire = lineageWire;
     const Obol::PartId lineagePart =

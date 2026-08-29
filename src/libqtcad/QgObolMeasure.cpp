@@ -234,7 +234,7 @@ qg_obol_measure_update_overlay(QgView *display,
     int realized = 0;
     if (ok)
 	realized = obol->replaceLineLayerOverlay(overlayId, builder, 0,
-		FALSE);
+		FALSE, FALSE);
     bg_line_layer_builder_free(builder);
 
     if (realized < 0)

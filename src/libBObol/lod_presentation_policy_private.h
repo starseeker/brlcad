@@ -121,7 +121,7 @@ public:
     struct CompletedPassInputs {
 	bool completed = false;
 	bool submissionPending = false;
-	bool rescanAfterFrame = false;
+	bool capacityTransactionPending = false;
 	bool changedCut = false;
 	/* A bounded source/delta scan is not a scene allocation proof.  Handoff
 	 * may consume only a completed retained-allocation transaction covering
@@ -172,9 +172,10 @@ public:
 	/* A current allocation certificate may prove that the next useful
 	 * capacity sample must be taken without the temporary renderer ceiling.
 	 * In that case the handoff owns the completed-pass snapshot and consumes
-	 * its local cut/rescan annotations.  The still-pending capacity frame is
-	 * evidence for the successor presentation, not a second owner. */
+	 * its local cut/rescan annotations.  Preserve the displaced capacity
+	 * successor explicitly so a completed handoff can restore its producer. */
 	bool consumePassAnnotations = false;
+	bool deferredCapacitySuccessor = false;
 
 	bool capacityOwns(void) const
 	{
@@ -187,6 +188,14 @@ public:
 		this->owner == CompletedPassOwner::ALLOCATION_HANDOFF;
 	}
     };
+
+    /* A multi-occurrence allocation needs the bounded capacity search to
+     * translate its temporary renderer-wide ceiling into occurrence-local
+     * cuts.  The single-occurrence static staircase already owns that exact
+     * presentation dimension and must not acquire a competing producer. */
+    static bool capacityProducerRequiredAfterHandoff(
+	    bool deferredCapacitySuccessor, bool handoffFinished,
+	    size_t progressivePayloadCount);
 
     /* A retained allocation is an authoritative replacement for a global
      * renderer ceiling only when the population it committed actually fits
@@ -223,7 +232,8 @@ public:
      * evidence.  Callers execute only the selected owner. */
     CompletedPassSelection completedPassSelection(
 	    const CompletedPassInputs &inputs, bool capacityEligible,
-	    bool capacitySamplePending, int progressiveCeiling) const;
+	    bool capacitySuccessorPending,
+	    bool capacityPresentationPending, int progressiveCeiling) const;
 
     /* A capacity-search sample must describe the exact occurrence-local
      * allocation named by its certificate.  A renderer-wide handoff ceiling
@@ -234,7 +244,7 @@ public:
      * search's frame latch, so the next ceiling-free presentation consumes
      * the same candidate rather than starting another allocation. */
     bool capacitySampleRequiresCeilingFreeHandoff(
-	    const CompletedPassInputs &inputs, bool capacitySamplePending,
+	    const CompletedPassInputs &inputs, bool capacityPresentationPending,
 	    int progressiveCeiling) const;
 
     void capturePrior(float targetPixelError, int progressiveCeiling,
@@ -273,6 +283,12 @@ public:
     size_t handoffReconciliationBudget(void) const
     {
 	return this->handoffReconciliationBudgetValue;
+    }
+    size_t allocationReconciliationBudget(
+	bool capacitySearchOwnsAllocation) const
+    {
+	return capacitySearchOwnsAllocation ? 0 :
+	    this->handoffReconciliationBudgetValue;
     }
     bool priorSnapshotValid(void) const
     {

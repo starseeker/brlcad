@@ -75,6 +75,13 @@ main(int argc, char **argv)
 	context.viewWidgetAccessor = [&view]() { return &view; };
 	settings.setContext(&context);
 	settings.checkbox_refresh(0);
+	CHECK(settings.property("qgTestId").toString() ==
+	    QStringLiteral("org.brlcad.qged.view.settings.controls") &&
+	    settings.grid_ckbx->property("qgTestId").toString() ==
+	    QStringLiteral("org.brlcad.qged.view.settings.grid") &&
+	    settings.cutting_normal[2]->property("qgTestId").toString() ==
+	    QStringLiteral("org.brlcad.qged.view.settings.cutting-normal-z"),
+	    "settings exposes stable replay identities");
 	CHECK(settings.fb_mode_combo->isEnabled() &&
 	    settings.fb_mode_combo->currentIndex() == 0,
 	    "settings reads the endpoint-owned initial framebuffer mode");

@@ -644,6 +644,38 @@ SoBRLDatabaseSource::getCompactLodInstanceSummary(
 }
 
 SbBool
+SoBRLDatabaseSource::getCompactResidentProgressiveSummary(
+    int index, BObolCompactResidentProgressiveSummary &summary) const
+{
+    summary = BObolCompactResidentProgressiveSummary();
+    if (!this->d->compactIndex || index < 0 ||
+	static_cast<size_t>(index) >= this->d->compactIndex->entries.size())
+	return FALSE;
+
+    const BObolCompactInstanceEntry &entry =
+	this->d->compactIndex->entries[static_cast<size_t>(index)];
+    if (!entry.geometry || !entry.geometry->wire)
+	return FALSE;
+    const Obol::WireRep &wire = *entry.geometry->wire;
+    if (!wire.isProgressive() || !wire.hasProgressiveErrorBounds() ||
+	wire.progressiveCuts.size() > summary.primitiveCounts.size())
+	return FALSE;
+
+    summary.valid = TRUE;
+    summary.wire = TRUE;
+    summary.minimumCut = wire.progressiveMinimumCut;
+    summary.residentCut = wire.progressiveResidentCut;
+    for (size_t cut = wire.progressiveMinimumCut;
+	 cut <= wire.progressiveResidentCut; ++cut) {
+	summary.primitiveCounts[cut] = wire.segmentCountAtCut(
+	    static_cast<uint8_t>(cut));
+	summary.normalizedErrors[cut] = wire.normalizedErrorAtCut(
+	    static_cast<uint8_t>(cut));
+    }
+    return TRUE;
+}
+
+SbBool
 SoBRLDatabaseSource::getCompactLodProviderSummary(
     int index, BObolCompactLodProviderSummary &summary) const
 {
@@ -722,6 +754,9 @@ SoBRLDatabaseSource::getCompactLodPlanningSummary(
     summary.meshGeometry = entry.meshGeometry;
     summary.lodBacked = entry.lodBacked;
     summary.sourceMeshRequestValid = entry.sourceMeshRequestValid;
+    summary.residentProgressiveGeometry =
+	bobol_compact_geometry_is_resident_progressive(entry.geometry) ?
+	    TRUE : FALSE;
     summary.visible = entry.visible;
     summary.selected = entry.selected;
     summary.highlighted = entry.highlighted;

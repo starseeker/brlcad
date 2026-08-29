@@ -39,7 +39,6 @@
 #include <QMenuBar>
 #include <QObject>
 #include <QSet>
-#include <QSettings>
 #include <QStatusBar>
 #include <QTreeView>
 
@@ -49,7 +48,6 @@
 #include "qtcad/QgQuadView.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgTreeView.h"
-#include "qtcad/QgView.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewCtrl.h"
 
@@ -100,8 +98,8 @@ class QgEdMainWindow : public QMainWindow
 	// different view in the quad-view layout.
 	void setActiveView(QgView *view);
 
-	// Utility wrapper for the closeEvent to save windowing dimensions
-	void closeEvent(QCloseEvent* e);
+	// Save the operator's windowing dimensions during an ordinary close.
+	void closeEvent(QCloseEvent *event) override;
 
     public slots:
 	//void save_image();

@@ -5,6 +5,8 @@
 \* mutates evidence.  Resident growth and coverage have precedence over
 \* presentation handoff and generic capacity calibration.  Every effect which
 \* starts a successor pass clears the complete pass-annotation transaction.
+\* A scene-wide allocation successor also consumes any selective source-delta
+\* plan owned by the pass which just completed.
 \* Capacity samples of the same discrete population update evidence without
 \* advancing the semantic capacity revision.
 \*
@@ -33,12 +35,15 @@ MaximumCompletedPassCount == 8
 VARIABLES phase,
           growthPending,
           coveragePending,
+          selectiveDelta,
           changedCut,
           rescanAfterFrame,
           handoff,
           allocationCertified,
           ceilingFreeSample,
+          capacityPending,
           capacityEligible,
+          capacityProducer,
           capacityPopulation,
           capacityCandidate,
           initialCapacityPopulation,
@@ -47,9 +52,9 @@ VARIABLES phase,
           effect,
           completedPassCount
 
-vars == <<phase, growthPending, coveragePending, changedCut,
+vars == <<phase, growthPending, coveragePending, selectiveDelta, changedCut,
           rescanAfterFrame, handoff, allocationCertified, ceilingFreeSample,
-          capacityEligible,
+          capacityPending, capacityEligible, capacityProducer,
           capacityPopulation, capacityCandidate, initialCapacityPopulation,
           capacityRevision, owner, effect, completedPassCount>>
 
@@ -59,21 +64,26 @@ NormalizedCleanPass == CleanPass \/ ceilingFreeSample
 ExpectedOwner ==
     IF growthPending THEN "growth"
     ELSE IF coveragePending THEN "coverage"
-    ELSE IF NormalizedCleanPass /\ handoff = "presentation" THEN "presentation"
-    ELSE IF NormalizedCleanPass /\ handoff = "allocation" THEN "allocation"
-    ELSE IF capacityEligible THEN "capacity"
+    ELSE IF NormalizedCleanPass /\ handoff = "presentation" /\
+            (~capacityPending \/ ceilingFreeSample) THEN "presentation"
+    ELSE IF NormalizedCleanPass /\ handoff = "allocation" /\
+            (~capacityPending \/ ceilingFreeSample) THEN "allocation"
+    ELSE IF capacityEligible /\ capacityProducer THEN "capacity"
     ELSE "none"
 
 TypeOK ==
     /\ phase \in Phases
     /\ growthPending \in BOOLEAN
     /\ coveragePending \in BOOLEAN
+    /\ selectiveDelta \in BOOLEAN
     /\ changedCut \in BOOLEAN
     /\ rescanAfterFrame \in BOOLEAN
     /\ handoff \in Handoffs
     /\ allocationCertified \in BOOLEAN
     /\ ceilingFreeSample \in BOOLEAN
+    /\ capacityPending \in BOOLEAN
     /\ capacityEligible \in BOOLEAN
+    /\ capacityProducer \in BOOLEAN
     /\ capacityPopulation \in Populations
     /\ capacityCandidate \in Populations
     /\ initialCapacityPopulation \in Populations
@@ -86,6 +96,7 @@ Init ==
     /\ phase = "completed"
     /\ growthPending \in BOOLEAN
     /\ coveragePending \in BOOLEAN
+    /\ selectiveDelta \in BOOLEAN
     /\ changedCut \in BOOLEAN
     /\ rescanAfterFrame \in BOOLEAN
     /\ capacityEligible \in BOOLEAN
@@ -93,6 +104,10 @@ Init ==
     /\ handoff \in Handoffs
     /\ allocationCertified \in BOOLEAN
     /\ ceilingFreeSample \in BOOLEAN
+    /\ capacityPending \in BOOLEAN
+    /\ ceilingFreeSample => capacityPending
+    /\ capacityPending => capacityEligible
+    /\ capacityProducer = capacityEligible
     /\ ceilingFreeSample =>
            handoff = "allocation" /\
            (rescanAfterFrame \/ changedCut) /\ allocationCertified
@@ -109,10 +124,15 @@ SelectOwner ==
     /\ phase' = "execute"
     /\ owner' = ExpectedOwner
     /\ effect' = "none"
+    /\ selectiveDelta' =
+           IF ExpectedOwner \in {"allocation", "capacity"}
+           THEN FALSE
+           ELSE selectiveDelta
     /\ UNCHANGED <<growthPending, coveragePending, changedCut,
                     rescanAfterFrame, handoff, allocationCertified,
-                    ceilingFreeSample,
-                    capacityEligible, capacityPopulation, capacityCandidate,
+                    ceilingFreeSample, capacityPending,
+                    capacityEligible, capacityProducer,
+                    capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision,
                     completedPassCount>>
 
@@ -125,9 +145,11 @@ ExecuteGrowth ==
     /\ rescanAfterFrame' = FALSE
     /\ effect' = "drainGrowth"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<coveragePending, handoff, allocationCertified,
-                    ceilingFreeSample,
-                    capacityEligible, capacityPopulation, capacityCandidate,
+    /\ UNCHANGED <<coveragePending, selectiveDelta, handoff,
+                    allocationCertified,
+                    ceilingFreeSample, capacityPending,
+                    capacityEligible, capacityProducer,
+                    capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner>>
 
 ExecuteCoverage ==
@@ -139,9 +161,11 @@ ExecuteCoverage ==
     /\ rescanAfterFrame' = FALSE
     /\ effect' = "retryCoverage"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, handoff, allocationCertified,
-                    ceilingFreeSample,
-                    capacityEligible, capacityPopulation, capacityCandidate,
+    /\ UNCHANGED <<growthPending, selectiveDelta, handoff,
+                    allocationCertified,
+                    ceilingFreeSample, capacityPending,
+                    capacityEligible, capacityProducer,
+                    capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner>>
 
 ExecutePresentationHandoff ==
@@ -153,9 +177,11 @@ ExecutePresentationHandoff ==
     /\ rescanAfterFrame' = FALSE
     /\ effect' = "presentHandoff"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, coveragePending, allocationCertified,
-                    ceilingFreeSample,
-                    capacityEligible, capacityPopulation, capacityCandidate,
+    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta,
+                    allocationCertified,
+                    ceilingFreeSample, capacityPending,
+                    capacityEligible, capacityProducer,
+                    capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner>>
 
 ExecuteAllocationHandoff ==
@@ -164,15 +190,19 @@ ExecuteAllocationHandoff ==
     /\ phase' = "completed"
     /\ changedCut' = FALSE
     /\ rescanAfterFrame' = FALSE
+    /\ selectiveDelta' = FALSE
     /\ completedPassCount' = completedPassCount + 1
+    /\ capacityProducer' = capacityEligible
     /\ IF allocationCertified
           THEN /\ handoff' = "none"
                /\ allocationCertified' = TRUE
+               /\ ceilingFreeSample' = FALSE
                /\ effect' = "finishHandoff"
           ELSE /\ handoff' = "allocation"
                /\ allocationCertified' = TRUE
+               /\ ceilingFreeSample' = ceilingFreeSample
                /\ effect' = "allocateHandoff"
-    /\ UNCHANGED <<growthPending, coveragePending, ceilingFreeSample,
+    /\ UNCHANGED <<growthPending, coveragePending, capacityPending,
                     capacityEligible,
                     capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner>>
@@ -186,8 +216,9 @@ ExecuteCapacityCut ==
     /\ rescanAfterFrame' = FALSE
     /\ effect' = "presentCut"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, coveragePending, handoff,
-                    allocationCertified, ceilingFreeSample, capacityEligible,
+    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta, handoff,
+                    allocationCertified, ceilingFreeSample, capacityPending,
+                    capacityEligible, capacityProducer,
                     capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner>>
 
@@ -201,10 +232,10 @@ ExecuteCapacityPopulation ==
     /\ capacityRevision' = capacityRevision + 1
     /\ effect' = "changePopulation"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, coveragePending, changedCut,
+    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta, changedCut,
                     rescanAfterFrame, handoff, allocationCertified,
-                    ceilingFreeSample,
-                    capacityEligible, capacityCandidate,
+                    ceilingFreeSample, capacityPending,
+                    capacityEligible, capacityProducer, capacityCandidate,
                     initialCapacityPopulation, owner>>
 
 ExecuteCapacitySample ==
@@ -214,11 +245,13 @@ ExecuteCapacitySample ==
     /\ capacityPopulation = capacityCandidate
     /\ phase' = "completed"
     /\ capacityEligible' = FALSE
+    /\ capacityPending' = FALSE
+    /\ capacityProducer' = FALSE
+    /\ ceilingFreeSample' = FALSE
     /\ effect' = "recordSample"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, coveragePending, changedCut,
+    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta, changedCut,
                     rescanAfterFrame, handoff, allocationCertified,
-                    ceilingFreeSample,
                     capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner>>
 
@@ -227,10 +260,11 @@ ExecuteNone ==
     /\ owner = "none"
     /\ phase' = "terminal"
     /\ effect' = "none"
-    /\ UNCHANGED <<growthPending, coveragePending, changedCut,
+    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta, changedCut,
                     rescanAfterFrame, handoff, allocationCertified,
-                    ceilingFreeSample,
-                    capacityEligible, capacityPopulation, capacityCandidate,
+                    ceilingFreeSample, capacityPending,
+                    capacityEligible, capacityProducer,
+                    capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner,
                     completedPassCount>>
 
@@ -274,12 +308,22 @@ SuccessorPassStartsFresh ==
     completedPassCount > 0 /\ phase = "completed" =>
         ~changedCut /\ ~rescanAfterFrame
 
+SceneWideAllocationConsumesDelta ==
+    phase = "execute" /\ owner \in {"allocation", "capacity"} =>
+        ~selectiveDelta
+
 CapacityRevisionMatchesPopulation ==
     /\ capacityRevision = 0 =>
            capacityPopulation = initialCapacityPopulation
     /\ capacityRevision = 1 =>
            capacityPopulation = capacityCandidate /\
            capacityCandidate # initialCapacityPopulation
+
+PendingCapacityHasProducer ==
+    capacityPending => capacityProducer
+
+FinishedHandoffRestoresCapacityProducer ==
+    effect = "finishHandoff" /\ capacityPending => capacityProducer
 
 TerminalHasNoOwner ==
     phase = "terminal" => owner = "none"

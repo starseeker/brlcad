@@ -60,6 +60,8 @@ CADViewMeasure::inputActionLayer()
     static const BObolInputBinding bindings[] = {
 	{BOBOL_INPUT_POINTER_PRESS, BOBOL_INPUT_ANY, 0, 0, modifier_mask,
 	 10, QG_MEASURE_INPUT_BEGIN},
+	{BOBOL_INPUT_POINTER_PRESS, BOBOL_INPUT_ANY, 2, 0, modifier_mask,
+	 10, QG_MEASURE_INPUT_CANCEL},
 	{BOBOL_INPUT_POINTER_MOTION, BOBOL_INPUT_ANY, BOBOL_INPUT_ANY, 0,
 	 modifier_mask, 10, QG_MEASURE_INPUT_UPDATE},
 	{BOBOL_INPUT_POINTER_RELEASE, BOBOL_INPUT_ANY, 0, 0, modifier_mask,
@@ -85,27 +87,42 @@ qged_measure_view_from_event_object(QObject *object)
     return nullptr;
 }
 
-CADViewMeasure::CADViewMeasure(QWidget *)
+CADViewMeasure::CADViewMeasure(QWidget *parent) : QWidget(parent)
 {
+    const QString testPrefix =
+	QStringLiteral("org.brlcad.qged.view.measure");
+
     QVBoxLayout *wl = new QVBoxLayout;
     wl->setAlignment(Qt::AlignTop);
 
+    setProperty("qgTestId", testPrefix + QStringLiteral(".controls"));
+
     measure_3d = new QCheckBox("Use 3D hit points");
+    measure_3d->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".use-3d"));
     wl->addWidget(measure_3d);
+    QObject::connect(measure_3d, &QCheckBox::toggled, this,
+	&CADViewMeasure::change_measure_mode);
 
     QLabel *ml1_label = new QLabel("Measured Length #1:");
     length1_report = new QLineEdit();
     length1_report->setReadOnly(true);
+    length1_report->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".length-1"));
     wl->addWidget(ml1_label);
     wl->addWidget(length1_report);
 
     QLabel *ml2_label = new QLabel("Measured Length #2:");
     length2_report = new QLineEdit();
     length2_report->setReadOnly(true);
+    length2_report->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".length-2"));
     wl->addWidget(ml2_label);
     wl->addWidget(length2_report);
 
     report_radians = new QCheckBox("Report angle in radians");
+    report_radians->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".radians"));
     wl->addWidget(report_radians);
 #if QT_VERSION < QT_VERSION_CHECK(6, 7, 0)
     QObject::connect(report_radians, &QCheckBox::stateChanged, this, &CADViewMeasure::adjust_text);
@@ -114,8 +131,12 @@ CADViewMeasure::CADViewMeasure(QWidget *)
 #endif
 
     ma_label = new QLabel("Measured Angle (deg):");
+    ma_label->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".angle-label"));
     angle_report = new QLineEdit();
     angle_report->setReadOnly(true);
+    angle_report->setProperty("qgTestId",
+	testPrefix + QStringLiteral(".angle"));
     wl->addWidget(ma_label);
     wl->addWidget(angle_report);
 
@@ -169,13 +190,29 @@ CADViewMeasure::detachFromView(QgView *view)
 	    m_input_endpoint, this);
     if (m_qt_filter_installed)
 	m_input_view->clear_event_filter(this);
-    if (f2d)
+    if (f2d) {
+	f2d->reset();
 	f2d->set_view_widget(nullptr);
-    if (f3d)
+	}
+    if (f3d) {
+	f3d->reset();
 	f3d->set_view_widget(nullptr);
+	}
     m_input_view = nullptr;
     m_input_endpoint = nullptr;
     m_qt_filter_installed = false;
+}
+
+void
+CADViewMeasure::change_measure_mode(bool use3d)
+{
+    if (f2d)
+	f2d->reset();
+    if (f3d)
+	f3d->reset();
+    mf = use3d ? (QgMeasureFilter *)f3d : (QgMeasureFilter *)f2d;
+    adjust_text();
+    update_color();
 }
 
 void

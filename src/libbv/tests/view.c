@@ -320,13 +320,16 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !bv_refresh_request(v, 0x8) || bv_refresh_dirty_get(v))
 	return fail("disabled refresh did not hold dirty flags");
     if (!bv_refresh_enabled_set(v, 1) || !bv_refresh_drawn_count_set(v, 7) ||
-	    bv_refresh_drawn_count_get(v) != 7)
+	bv_refresh_drawn_count_get(v) != 7)
 	return fail("refresh drawn count state failed");
+    const uint64_t revision_before_frametime = bv_frame_revision_get(v);
     if (!bv_frametime_set(v, 1234) || bv_frametime_get(v) != 1234 ||
+	    bv_frame_revision_get(v) != revision_before_frametime ||
 	    !bv_zclip_set(v, 1) || !bv_zclip_get(v) ||
 	    !bv_framebuffer_mode_set(v, 2) || bv_framebuffer_mode_get(v) != 2 ||
 	    !bv_cleared_set(v, 1) || !bv_cleared_get(v))
 	return fail("view bookkeeping state failed");
+    const uint64_t revision_before_grid = bv_frame_revision_get(v);
     grid.snap = 1;
     grid.res_h = 2.0;
     grid.res_major_h = 7;
@@ -334,6 +337,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !grid.snap || !near_fastf(grid.res_h, 2.0) ||
 	    grid.res_major_h != 7)
 	return fail("grid state set/get failed");
+    if (bv_frame_revision_get(v) <= revision_before_grid)
+	return fail("faceplate state did not advance the frame revision");
     lighting.profile = BV_LIGHTING_MGED;
     lighting.headlight_enabled = 0;
     lighting.scene_lights_enabled = 1;

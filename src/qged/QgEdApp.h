@@ -28,6 +28,8 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include <QApplication>
 #include <QObject>
 #include <QString>
@@ -46,6 +48,7 @@
 #include "QgEdMainWindow.h"
 
 class QgPluginManager;
+class QTemporaryDir;
 
 /* Command type for application level commands */
 
@@ -70,6 +73,7 @@ class QgEdApp : public QApplication
 	QgPluginContext *pluginContext() { return &m_plugin_context; }
 	QgPluginManager *pluginManager() const { return m_plugin_manager; }
 	QgPluginNotifier *pluginNotifier() const { return m_plugin_notifier; }
+	bool isTestMode() const { return m_test_mode; }
 
 	QgModel *mdl = NULL;
 
@@ -117,6 +121,8 @@ class QgEdApp : public QApplication
 	QgPluginContext m_plugin_context;
 	QgPluginNotifier *m_plugin_notifier = NULL;
 	QgPluginManager *m_plugin_manager = NULL;
+	bool m_test_mode = false;
+	std::unique_ptr<QTemporaryDir> m_test_settings_directory;
 };
 
 #endif // QGEDAPP_H

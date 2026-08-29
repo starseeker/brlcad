@@ -29,6 +29,7 @@
 #include "BObol/BHostFactory.h"
 #include "BObol/BInit.h"
 #include "BObol/BViewController.h"
+#include "BObol/BViewLod.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
@@ -856,9 +857,24 @@ private:
 	this->controller->synchronizePresentation();
 	this->controller->renderBackground();
 	const uint64_t started = this->controller->beginRenderTiming();
+	BObolViewLodState *presentation_state =
+	    this->controller->getViewLodState();
+	const uint64_t cad_execution_before = presentation_state ?
+	    presentation_state->cadPresentationExecutionSerial() : 0;
+	if (presentation_state)
+	    presentation_state->beginCadPresentationFrame();
 	if (this->controller->getCamera() && this->controller->getRenderRoot())
 	this->controller->getRenderManager()->render(static_cast<SbBool>(FALSE), static_cast<SbBool>(FALSE));
-	this->controller->completeRenderTiming(started);
+	const uint64_t cad_execution_after = presentation_state ?
+	    presentation_state->cadPresentationExecutionSerial() : 0;
+	if (presentation_state)
+	    presentation_state->refreshCadPresentationFrameStatus();
+	this->controller->completeRenderTiming(started,
+	    BObolPresentationTimingContext(
+		BObolLodCapacityRelevance::RELEVANT,
+		cad_execution_after != cad_execution_before ?
+		    BObolCadPresentationExecution::EXECUTED :
+		    BObolCadPresentationExecution::NOT_EXECUTED));
 	this->controller->clearRenderRequest();
 	if (present && double_buffered && !this->widget_command("swapbuffers"))
 	    return false;

@@ -8,11 +8,14 @@
 #ifndef LIBBOBOL_RETAINED_ALLOCATION_PRIVATE_H
 #define LIBBOBOL_RETAINED_ALLOCATION_PRIVATE_H
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <vector>
+
+#include "lod_revision_private.h"
 
 class BObolRetainedAllocationTransaction;
 class BObolViewLodState;
@@ -27,8 +30,7 @@ struct BObolRetainedAllocationInputKey {
     size_t sceneBudget = 0;
     size_t maximumMarginalBudget = 0;
     size_t maximumProtectedBudget = 0;
-    uint64_t viewRevision = 0;
-    uint64_t policyRevision = 0;
+    BObolLodAdmissionRevisionStamp revisionStamp;
     /* Provider-memory denials are valid only for the admission epoch which
      * observed them.  Allocation identity must include that epoch so a
      * reclaimed-capacity edge can reopen richer resident candidates. */
@@ -61,10 +63,19 @@ struct BObolRetainedAllocationInputs {
     size_t maximumMarginalBudget = 0;
     bool allowProtectedFloor = false;
     size_t maximumProtectedBudget = 0;
-    uint64_t viewRevision = 0;
-    uint64_t policyRevision = 0;
+    BObolLodAdmissionRevisionStamp revisionStamp;
     uint64_t residentAdmissionRevision = 0;
     float pointProxyPixelThreshold = 0.0f;
+
+    uint64_t viewRevision(void) const
+    {
+	return this->revisionStamp.view.value();
+    }
+
+    uint64_t policyRevision(void) const
+    {
+	return this->revisionStamp.policy.value();
+    }
 
     /* Inactive policy inputs are not evidence.  Timing calibration may keep
      * updating the diagnostic protected-floor allowance after a deadline
@@ -123,8 +134,7 @@ struct BObolRetainedAllocationResult {
     uint64_t allocationPlanSerial = 0;
     uint64_t cadRevision = 0;
     uint64_t residentDemandRevision = 0;
-    uint64_t viewRevision = 0;
-    uint64_t policyRevision = 0;
+    BObolLodAdmissionRevisionStamp revisionStamp;
     uint64_t residentAdmissionRevision = 0;
     float pointProxyPixelThreshold = 0.0f;
     size_t requestedSceneBudget = 0;
@@ -135,7 +145,43 @@ struct BObolRetainedAllocationResult {
     size_t pointProxyCandidateCount = 0;
     bool allowProtectedFloor = false;
 
+    uint64_t viewRevision(void) const
+    {
+	return this->revisionStamp.view.value();
+    }
+
+    uint64_t policyRevision(void) const
+    {
+	return this->revisionStamp.policy.value();
+    }
+
+    /** Return the plan only while it certifies the current control problem.
+     * The renderer may safely keep displaying an older committed plan while
+     * its replacement is being calculated; that fallback is not a current
+     * planning certificate and must not be reported as one. */
+    uint64_t currentPlanSerial(
+	const BObolLodAdmissionRevisionStamp &currentRevision,
+	uint64_t activePlanSerial) const
+    {
+	return this->allocationPlanSerial != 0 &&
+	    this->allocationPlanSerial == activePlanSerial &&
+	    this->revisionStamp.same(currentRevision) ?
+	    this->allocationPlanSerial : 0;
+    }
+
     BObolRetainedAllocationInputKey inputKey(void) const;
+
+    /* Capacity search may only request budgets which the allocator can
+     * realize under this certificate.  Pixel demand can exceed both the
+     * marginal allowance and the optional atomic protected-floor allowance;
+     * treating it as the search endpoint creates a successor for which no
+     * retained allocation can ever be published. */
+    size_t maximumCapacitySearchBudget(void) const
+    {
+	return std::min(this->pixelDemandPresentationCost,
+	    std::max(this->maximumMarginalBudget,
+		this->maximumProtectedBudget));
+    }
 };
 
 enum BObolRetainedAllocationStatus {

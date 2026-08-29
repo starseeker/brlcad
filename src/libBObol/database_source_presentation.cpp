@@ -52,14 +52,11 @@ cad_proxy_corners(const BObolLodProxy &proxy, SbVec3f corners[8])
     if (proxy.kind == BOBOL_LOD_PROXY_AABB) {
 	const SbVec3f bmin = proxy.bounds.getMin();
 	const SbVec3f bmax = proxy.bounds.getMax();
-	corners[0].setValue(bmin[0], bmin[1], bmin[2]);
-	corners[1].setValue(bmax[0], bmin[1], bmin[2]);
-	corners[2].setValue(bmax[0], bmax[1], bmin[2]);
-	corners[3].setValue(bmin[0], bmax[1], bmin[2]);
-	corners[4].setValue(bmin[0], bmin[1], bmax[2]);
-	corners[5].setValue(bmax[0], bmin[1], bmax[2]);
-	corners[6].setValue(bmax[0], bmax[1], bmax[2]);
-	corners[7].setValue(bmin[0], bmax[1], bmax[2]);
+	for (size_t corner = 0; corner < 8; ++corner)
+	    corners[corner].setValue(
+		(corner & 1u) ? bmax[0] : bmin[0],
+		(corner & 2u) ? bmax[1] : bmin[1],
+		(corner & 4u) ? bmax[2] : bmin[2]);
 	return 1;
     }
 
@@ -76,14 +73,11 @@ cad_proxy_corners(const BObolLodProxy &proxy, SbVec3f corners[8])
 	ax *= proxy.halfExtents[0];
 	ay *= proxy.halfExtents[1];
 	az *= proxy.halfExtents[2];
-	corners[0] = proxy.center - ax - ay - az;
-	corners[1] = proxy.center + ax - ay - az;
-	corners[2] = proxy.center + ax + ay - az;
-	corners[3] = proxy.center - ax + ay - az;
-	corners[4] = proxy.center - ax - ay + az;
-	corners[5] = proxy.center + ax - ay + az;
-	corners[6] = proxy.center + ax + ay + az;
-	corners[7] = proxy.center - ax + ay + az;
+	for (size_t corner = 0; corner < 8; ++corner)
+	    corners[corner] = proxy.center +
+		((corner & 1u) ? ax : -ax) +
+		((corner & 2u) ? ay : -ay) +
+		((corner & 4u) ? az : -az);
 	return 1;
     }
 
@@ -95,8 +89,8 @@ cad_wire_geometry_from_corners(const SbVec3f corners[8],
 			       Obol::PartGeometryBuilder &geometry)
 {
     static const int edges[12][2] = {
-	{0, 1}, {1, 2}, {2, 3}, {3, 0},
-	{4, 5}, {5, 6}, {6, 7}, {7, 4},
+	{0, 1}, {2, 3}, {4, 5}, {6, 7},
+	{0, 2}, {1, 3}, {4, 6}, {5, 7},
 	{0, 4}, {1, 5}, {2, 6}, {3, 7}
     };
 
@@ -120,18 +114,51 @@ cad_wire_geometry_from_corners(const SbVec3f corners[8],
 }
 
 static int
+cad_shaded_geometry_from_corners(const SbVec3f corners[8],
+	Obol::PartGeometryBuilder &geometry)
+{
+    static const uint32_t triangleIndices[36] = {
+	0, 4, 6, 0, 6, 2,
+	1, 3, 7, 1, 7, 5,
+	0, 1, 5, 0, 5, 4,
+	2, 6, 7, 2, 7, 3,
+	0, 2, 3, 0, 3, 1,
+	4, 5, 7, 4, 7, 6
+    };
+    Obol::TriMesh mesh;
+    mesh.positions.assign(corners, corners + 8);
+    mesh.indices.assign(triangleIndices, triangleIndices + 36);
+    mesh.bounds.makeEmpty();
+    for (const SbVec3f &corner : mesh.positions)
+	mesh.bounds.extendBy(corner);
+    if (mesh.bounds.isEmpty())
+	return 0;
+    geometry.shaded = std::move(mesh);
+    geometry.shadedCullBackfaces = false;
+    return 1;
+}
+
+static int
 cad_proxy_part_geometry(const BObolLodProxy &proxy,
+			int wire, int shaded,
 			Obol::PartGeometryBuilder &geometry)
 {
     SbVec3f corners[8];
-    if (!cad_proxy_corners(proxy, corners))
+    if ((!wire && !shaded) || !cad_proxy_corners(proxy, corners))
 	return 0;
-    if (!cad_wire_geometry_from_corners(corners, geometry))
+    if ((wire && !cad_wire_geometry_from_corners(corners, geometry)) ||
+	(shaded && !cad_shaded_geometry_from_corners(corners, geometry)))
 	return 0;
-    /* This is a view-LoD AABB/OBB, not authored wire geometry.  Obol may
-     * collapse it into a view-local point when the entire proxy is subpixel. */
+    /* An AABB is temporary structural coverage.  An OBB is a terminal
+     * renderer representation of the retained CAD object and must therefore
+     * retain its semantic selection/picking identity without participating
+     * in structural-proxy lifecycle decisions. */
     geometry.subpixelProxyEligible = true;
-    geometry.structuralProxy = true;
+    geometry.structuralProxy = proxy.kind == BOBOL_LOD_PROXY_AABB;
+    if (proxy.kind == BOBOL_LOD_PROXY_OBB)
+	geometry.aggregateProxyCorners = std::array<SbVec3f, 8>{
+	    corners[0], corners[1], corners[2], corners[3],
+	    corners[4], corners[5], corners[6], corners[7]};
     return 1;
 }
 
@@ -485,19 +512,20 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
     SoBRLPickDetail::PrimitiveKind primitiveKind =
 	SoBRLPickDetail::LINE_SEGMENT;
     const int sourceDrawMode = source_record_draw_mode(source);
+    const bool hiddenLine = sourceDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    const int wire =
+	(sourceDrawMode == BOBOL_LOD_DRAW_WIRE || hiddenLine ||
+	 payload->drawMode == BOBOL_LOD_DRAW_WIRE) ? 1 : 0;
+    const int shaded = hiddenLine || !wire ? 1 : 0;
     if (payload->resultKind == BOBOL_LOD_RESULT_AABB ||
 	payload->resultKind == BOBOL_LOD_RESULT_PROXY) {
-	if (!cad_proxy_part_geometry(payload->proxy, geometry))
+	if (!cad_proxy_part_geometry(payload->proxy, wire, shaded, geometry))
 	    return NULL;
-	wireCount = 1;
+	wireCount = geometry.wire ? 1 : 0;
+	shadedCount = geometry.shaded ? 1 : 0;
+	if (shadedCount)
+	    primitiveKind = SoBRLPickDetail::FACE;
     } else {
-	const bool hiddenLine =
-	    sourceDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
-	const int wire =
-	    (sourceDrawMode == BOBOL_LOD_DRAW_WIRE ||
-	     hiddenLine ||
-	     payload->drawMode == BOBOL_LOD_DRAW_WIRE) ? 1 : 0;
-	const int shaded = hiddenLine || !wire ? 1 : 0;
 	if (payload->preparedCadGeometry && !payload->progressiveMesh) {
 	    preparedGeometry = payload->preparedCadGeometry;
 	} else if (payload->progressiveMesh &&
@@ -561,7 +589,8 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
     record.boolOp = cad_source_boolean_operation(source);
     record.lodStructuralProxy =
 	payload->resultKind == BOBOL_LOD_RESULT_AABB ||
-	payload->resultKind == BOBOL_LOD_RESULT_PROXY;
+	(payload->resultKind == BOBOL_LOD_RESULT_PROXY &&
+	 payload->proxy.kind == BOBOL_LOD_PROXY_AABB);
     record.style = cad_source_style(source);
     Obol::InstanceUpdate update;
     update.instance = instanceId;
@@ -941,6 +970,16 @@ cad_compact_adjust_channel_count(uint8_t channels, bool add,
 	    (shadedCount ? shadedCount - 1 : 0);
 }
 
+static int
+cad_compact_default_progressive_cut(
+    const BObolCompactInstanceEntry &entry)
+{
+    if (!bobol_compact_geometry_is_resident_progressive(entry.geometry))
+	return -1;
+    const Obol::WireRep &wire = *entry.geometry->wire;
+    return static_cast<int>(wire.progressiveMinimumCut);
+}
+
 SoBRLCadAssembly *
 SoBRLDatabaseSource::compactViewLodAssembly(
     const std::vector<const BObolViewLodState::CadPayload *> &payloads,
@@ -1302,8 +1341,16 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	std::string payloadKey;
 	Obol::PartId desiredPart = entry.part;
 	uint8_t desiredChannels = presentationStaging.partChannel(entry.part);
-	bool desiredGeometryValid = false;
-	int desiredActiveCut = -1;
+	int desiredActiveCut = viewState->residentCadProgressiveCut(
+	    this, i <= static_cast<size_t>(UINT32_MAX) ?
+		static_cast<uint32_t>(i) : UINT32_MAX, occurrenceKey,
+	    entry.geometryRevision);
+	if (desiredActiveCut < 0)
+	    desiredActiveCut = cad_compact_default_progressive_cut(entry);
+	/* A direct progressive cut reuses the authored immutable part.  It is
+	 * view state, but not a cache/service payload and therefore must not
+	 * manufacture a second part identity or geometry publication. */
+	bool desiredGeometryValid = desiredActiveCut >= 0;
 	bool desiredLodStructuralProxy = entry.geometry &&
 	    entry.geometry->structuralProxy && entry.lodBacked;
 	if (payload) {
@@ -1428,7 +1475,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		} else if (payload->resultKind == BOBOL_LOD_RESULT_AABB ||
 		    payload->resultKind == BOBOL_LOD_RESULT_PROXY) {
 		    desiredGeometryValid =
-			cad_proxy_part_geometry(payload->proxy, geometry) != 0;
+			cad_proxy_part_geometry(
+			    payload->proxy, wire, shaded, geometry) != 0;
 		} else if (preparedGeometry) {
 		    desiredGeometryValid = true;
 		} else {
@@ -1511,7 +1559,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	else if (payload) {
 	    desiredLodStructuralProxy =
 		payload->resultKind == BOBOL_LOD_RESULT_AABB ||
-		payload->resultKind == BOBOL_LOD_RESULT_PROXY;
+		(payload->resultKind == BOBOL_LOD_RESULT_PROXY &&
+		 payload->proxy.kind == BOBOL_LOD_PROXY_AABB);
 	}
 
 	/* Structural proxies and source meshes generally do not share a local
@@ -2118,7 +2167,8 @@ cad_view_lod_assembly_for_action(SoAction *action,
 {
     const BObolViewLodState *viewState =
 	bobol_view_lod_state_for_action(action);
-    if (source && source->isCompactOccurrenceRegistry()) {
+    if (source && (source->isCompactOccurrenceRegistry() ||
+	    source->hasDisplayResidentProgressiveGeometry())) {
 	if (viewState) {
 	    SoBRLCadAssembly *current =
 		source->currentCompactViewLodAssembly(viewState);

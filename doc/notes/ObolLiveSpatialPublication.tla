@@ -6,8 +6,10 @@
 \* The model captures the implementation boundary described in
 \* live_spatial_publication.md.  A certified coverage part is the standing
 \* whole-object presentation.  Completed private pages are additive layers;
-\* they cannot replace coverage individually.  Only a complete final
-\* hierarchy may retire coverage and publish the durable cache marker.
+\* they cannot replace coverage individually.  Presentation is not a cache
+\* construction prerequisite: only a complete final hierarchy may retire
+\* coverage and publish the durable cache marker, even when some completed
+\* live pages were never independently presented.
 
 EXTENDS FiniteSets, TLC
 
@@ -78,7 +80,7 @@ PublishPage(page) ==
                     cancelledFinalGeometry>>
 
 Finalize ==
-    /\ partitioned /\ readyPages = Pages /\ publishedPages = Pages
+    /\ partitioned /\ readyPages = Pages
     /\ ~cancelled /\ ~constrained
     /\ finalGeometry' = TRUE
     /\ coverage' = FALSE
@@ -148,11 +150,11 @@ CancellationFreezesProducerPublication ==
                  /\ publishedPages = cancelledPublishedPages
                  /\ finalGeometry = cancelledFinalGeometry
 
-FinalRequiresCompletePublishedPageSet ==
-    finalGeometry => publishedPages = Pages
+FinalRequiresCompletePageSet ==
+    finalGeometry => readyPages = Pages
 
 CacheMarkerRequiresFinalHierarchy ==
-    cacheMarked => finalGeometry /\ publishedPages = Pages
+    cacheMarked => finalGeometry /\ readyPages = Pages
 
 CancellationNeverPublishesCacheMarker == cancelled => ~cacheMarked
 

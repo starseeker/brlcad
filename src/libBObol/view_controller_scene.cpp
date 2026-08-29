@@ -256,7 +256,8 @@ int
 BObolViewController::replaceLineLayerOverlay(const char *overlayId,
 	const struct bg_line_layer_builder *builder,
 	uint32_t sourceId,
-	SbBool selectable)
+	SbBool selectable,
+	SbBool depthTest)
 {
     if (!overlayId || !overlayId[0])
 	return -1;
@@ -279,6 +280,7 @@ BObolViewController::replaceLineLayerOverlay(const char *overlayId,
     overlay->overlayId = overlayId;
     overlay->sourceId = sourceId;
     overlay->selectable = selectable;
+    overlay->depthTest = depthTest;
     const int realized = overlay->rebuildGeometry(builder);
 
     if (childIndex >= 0)
@@ -975,4 +977,3 @@ BObolViewController::getDatabaseSourceSummary(int index,
 {
     return this->d->sceneController.getDatabaseSourceSummary(index, summary);
 }
-

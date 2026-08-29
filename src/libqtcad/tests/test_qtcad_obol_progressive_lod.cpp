@@ -612,7 +612,10 @@ qtcad_obol_present_view_frame(QgView &view,
     (void)controller->advanceProgressiveWork(NULL, NULL);
     const uint64_t started = controller->beginRenderTiming();
     view.get_viewport_image(image);
-    controller->completeRenderTiming(started);
+    controller->completeRenderTiming(started,
+	BObolPresentationTimingContext(
+	    BObolLodCapacityRelevance::RELEVANT,
+	    BObolCadPresentationExecution::EXECUTED));
     if (!image.isNull() && controller->isRenderRequested())
 	(void)controller->consumeRenderRequest(NULL);
 }

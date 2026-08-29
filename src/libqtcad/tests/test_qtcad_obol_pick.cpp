@@ -237,6 +237,12 @@ main(int argc, char **argv)
 
     controller->getViewport()->viewAll();
 
+    std::vector<QgObolPickRecord> displayPicks;
+    if (qg_obol_pick_display_point(&view, pickCenterX, pickCenterY,
+	    pickRadius, false, displayPicks) != 1 ||
+	    displayPicks[0].path != "/box.s")
+	FAIL("qtcad display-identity pick should find an attached database source without exact geometry work");
+
     std::vector<QgObolPickRecord> picks;
     if (qg_obol_pick_point(&view, pickCenterX, pickCenterY,
 	    pickRadius, false, picks) != 1)

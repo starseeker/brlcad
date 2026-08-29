@@ -1,6 +1,6 @@
 # libBObol progressive-presentation contract
 
-Last reviewed: 2026-08-28
+Last reviewed: 2026-08-29
 
 This document is the canonical high-level control contract for progressive CAD
 presentation.  It exists to keep the implementation understandable while it
@@ -73,6 +73,14 @@ This rule prevents the observed balancing/refining cycles: a controller cannot
 reconsider identical facts merely because a timer fired or a status label was
 redrawn.  Numeric planner output must also be deterministic for a tuple.
 
+The committed renderer population may belong to the preceding tuple while a
+replacement plan is being calculated.  Keeping it visible is required for
+presentation continuity and does not grant it authority in the new tuple.
+Retained allocation inputs and results therefore carry the complete revision
+stamp.  The diagnostic `lod_allocation_plan_serial` is nonzero only for a plan
+whose stamp equals the current tuple; the separately reported committed
+certificate serial may remain nonzero while the current-plan serial is zero.
+
 Planner identity is semantic rather than a bytewise snapshot of caller state.
 An input guarded by a disabled feature is absent from the identity key; changing
 its dormant raw value cannot invalidate a certificate or reopen planning.  One
@@ -116,7 +124,12 @@ identity, so a capacity-release edge reopens planning without a special
 workload path.
 
 A constrained scene may use a truthful aggregate or certified coarse mesh, but
-not an unresolved structural fallback.
+not an unresolved structural fallback.  It also carries a nonempty typed
+constraint-evidence mask.  Stable-frame capacity, a reversible progressive
+ceiling, subpixel aggregation, a rejected static deadline, memory pressure,
+and resource pressure are distinct witnesses.  A coarse image or remaining
+visual debt is not itself a witness.  Runtime refinement validation rejects
+`constrained` with an empty mask.
 
 Every active state identifies one witness from this finite set:
 
@@ -192,6 +205,12 @@ semantic inventory or durable cache identity.
 Frame capacity is learned by one bounded search certificate for a frozen
 population and revision tuple.  Each candidate is a complete scene-wide,
 visual-importance-ordered allocation, not an independently promoted object.
+A completed CAD timing sample binds the presented population, point-proxy
+threshold, elapsed duration, and retained-upload/replay classification.  A
+faceplate, overlay, cached-image, or other non-CAD frame may update generic
+frame telemetry but cannot satisfy a CAD sample or be paired with retained CAD
+work.  Host call sites state capacity relevance and CAD execution using the
+distinct required fields of `BObolPresentationTimingContext`.
 A candidate is not eligible for measurement until every progressive
 occurrence stores the cut assigned by that exact allocation certificate and
 any renderer-wide ceiling is either removed or proven inert at or above every
@@ -207,6 +226,14 @@ another three-frame sample series.  An applied allocation hidden by an effective
 arm the candidate's sample-frame latch, but only its exact ceiling-free
 successor may consume a sample.  Invalid or differently constrained frames do
 not consume the candidate's bounded sample allowance.
+
+The proxy threshold is classification state, not diagnostic metadata.  At
+most five projected pixels are represented by a point; a larger aggregated
+occurrence is one batched conservative box until mesh admission.  The
+allocator charges that box's 24 submitted positions and 12 line segments.
+Changing the threshold therefore invalidates the capacity-search problem even
+when every semantic scene epoch is otherwise unchanged.
+
 A completed measurement either consumes one of a fixed number of samples for
 that candidate or strictly narrows a known-safe/known-unsafe bracket.  A
 terminal search publishes one capacity certificate and cannot reopen without a
@@ -214,11 +241,28 @@ new population or revision.  Throughput smoothing may propose a candidate; an
 EMA change, timer, or repaint is not evidence and cannot itself advance the
 capacity revision.  Likewise, completing a mechanical allocation scan without
 selecting a successor population preserves the current capacity revision.  The
-revision advances only when the decision names a new population; otherwise the
-scan would invalidate the allocation certificate required by its own handoff
-and could reopen the same allocation indefinitely.  Search work is bounded by
-the candidate bracket, not scene cardinality or elapsed wall time.
-`ObolCapacitySearch.tla` models this owner;
+final cut selected by a certified search is also a mechanical application, not
+a new capacity problem.  Its changed-cut completion retires any frame latch but
+preserves the terminal certificate and budget-limited witness.  Explicit
+capacity invalidation remains separate.  Conflating those operations permits
+the certified allocation to erase its own proof and rearm the identical search.
+While that certificate remains current, ordinary throughput planning is
+bounded by its safe budget; otherwise the next pump can select the already
+rejected discrete population and make the completed problem look new.
+The revision advances when the decision names a new population.  It also advances
+when an older completed-population frame barrier transfers ownership to an
+already named candidate: the older population may have committed a plan under
+the selection revision, and its exact candidate successor must not share that
+revision.  The older barrier is consumed first, the exact `ALLOCATING`
+candidate becomes the sole successor, and the generic barrier may not pause
+that candidate.  Otherwise a mechanical no-op scan preserves the revision;
+advancing it would invalidate the allocation certificate required by its own
+handoff and could reopen the same allocation indefinitely.  Search work is
+bounded by the candidate bracket, not scene cardinality or elapsed wall time.
+`ObolCapacitySearch.tla` models this owner,
+`ObolRetainedAllocationPrefix.tla` discharges its fixed-revision monotone-
+population premise, and
+`ObolCadTimingEvidence.tla` models threshold-stamped sample coherence;
 `ObolCapacityPresentationHandoff.tla` models the allocation-application,
 ceiling-reconciliation, and exact-sample ordering boundary.
 
@@ -236,11 +280,15 @@ Every effect-producing successor starts with fresh pass annotations, and a
 same-population capacity sample does not advance the semantic capacity
 revision.  Deactivating a capacity submission after calibration is
 insufficient because calibration also installs a retained-reallocation
-request.
+request.  A selective source-delta plan is likewise scoped to the pass which
+consumes that delta.  If its completed-pass owner requests a scene-wide
+retained allocation, the successor atomically retires the delta and its pinned
+entry plan before starting at source zero.  Reusing the selective plan would
+make the full allocation permanently uncertifiable.
 
 The model follows growth, coverage, presentation, allocation, cut
 presentation, population change, and same-population sample effects across
-successive passes.  On 2026-08-28 TLC explored 2,334 generated / 1,836 distinct
+successive passes.  On 2026-08-28 TLC explored 7,538 generated / 5,684 distinct
 states to depth 17 with no invariant or liveness error.  The executable mapping
 is `completedPassSelection`, the availability-scheduler successor values, and
 the pass-annotation/revision contracts.  The focused coordinator test exhausts
@@ -371,8 +419,8 @@ limits remain reversible and do not rewrite this retained floor.
 ## Canonical implementation shape
 
 The C++ control plane must make the small abstract model visible in its types.
-The target is one value with four parts, not a collection of cooperating phase
-machines:
+The target is one logical product with four parts and one canonical work-ledger
+projection, not a collection of overlapping phase machines:
 
 ```text
 ProgressiveControlState
@@ -387,6 +435,16 @@ ProgressiveControlState
     WorkLedger
 ```
 
+This is a logical ownership shape, not a requirement to copy the entire
+controller into one concrete C++ aggregate or route every operation through a
+generic facade.  Inventory contains dense scene data, availability includes
+concurrent producer state, and presentation is host-facing; forcing those
+owners behind one giant effect enum would erase useful type boundaries and add
+copying or dispatch to scale-sensitive paths.  Each cohesive ledger must
+therefore converge on one typed reducer.  The composition models plus
+work-ledger projection prove that those owners agree; the remaining direct
+imperative writers are refinement debt tracked in `libbobol_active_debt.md`.
+
 `EvidenceSnapshot` is immutable planner input and carries the exact five-domain
 revision stamp.  `PlanExecution` contains only the bounded cursor and immutable
 plan it is applying.  `PresentationTransaction` owns the one candidate frame
@@ -395,12 +453,14 @@ entry type for each legitimate producer or owner-thread obligation; an absent
 entry means no such work exists.  Outcome, HUD phase, and progress are pure
 projections of these four values.
 
-The controller accepts only the finite event alphabet listed above.  Its
-reducer returns a complete successor state and a bounded list of effects.  The
-imperative shell performs those effects, reports typed results as later
-events, and never edits control evidence directly.  A toolkit wakeup may ask
-the shell to service an existing obligation, but cannot create an event or
-advance a revision merely by firing.
+The controller accepts only the finite semantic event alphabet listed above.
+The reducer which owns the affected ledger returns its complete successor and
+bounded effects.  The imperative shell performs those effects, reports typed
+results as later events, and never edits that ledger's evidence directly.
+Cross-ledger precedence is derived once by the finite work ledger; it is not a
+second policy reducer.  A toolkit wakeup may ask the shell to service an
+existing obligation, but cannot create an event or advance a revision merely
+by firing.
 
 State which remembers a proof is a typed, revision-bound certificate, not a
 boolean plus companion fields.  Examples include a completed-frame capacity
@@ -415,9 +475,13 @@ The retained occurrence-allocation request is one concrete application of
 this rule.  It is a finite value with `NONE`, preserve-budget,
 recompute-budget, and presentation-reconciliation alternatives.  Only the
 last alternative carries a reconciliation budget.  A weaker request cannot
-overwrite that completed-frame proof, and resetting the request cannot leave
-an orphaned budget.  Reintroducing separate pending, preserve, or budget
-fields would recreate invalid states and is prohibited.
+overwrite that completed-frame proof or the tighter canonical budget already
+owned by the request.  The allocator's active budget is always read back from
+that canonical value; it is never assigned independently from a caller's
+duplicate request.  Only a genuinely tighter request restarts its bounded
+cursor.  Resetting the request cannot leave an orphaned budget.  Reintroducing
+separate pending, preserve, active-budget, or request-budget fields would
+recreate invalid states and is prohibited.
 
 The following are not additional control states:
 
@@ -437,11 +501,13 @@ obligations above.
 
 ## Executable refinement map
 
-Formal and production state must be connected explicitly.  Each production
-transition is named by one abstract event and records, behind diagnostic
+Formal and production state must be connected explicitly.  Each semantic
+ledger transition is named by one abstract event and records, behind diagnostic
 enablement, its old and new revision stamp, obligation kind, plan identity,
-transaction identity, and typed outcome.  An offline trace checker and focused
-randomized reducer test must enforce:
+transaction identity, and typed outcome.  Cursor increments, renderer
+preparation units, and cache I/O batches are finite progress witnesses inside
+such a transition, not additional abstract events.  An offline trace checker
+and focused randomized reducer test must enforce:
 
 - no production transition exists outside the finite event alphabet;
 - an unchanged evidence tuple cannot create a second plan;
@@ -528,19 +594,20 @@ The long-term acceptance criterion is that a maintainer can enumerate every
 control state and transition from the types and event reducer without reading
 the renderer or workload-specific tests.
 
-The current C++ is not yet at that acceptance point.  The latest 2026-08-25
-mechanical audit still found 27 free top-level Boolean latches in the view
-coordinator and 491 direct `this->d->lod*` assignments across the controller,
-progressive pump, and render completion units.  The latter count includes
-legitimate counters, cursors, and numeric presentation controls, so it is an
-ownership-concentration indicator rather than a defect count.  Exact revision
-stamps make stale work safe, but they
-cannot make those combinations understandable.  Until the event reducer and
-finite work ledger replace them, these counts are a complexity ratchet: a
-change may reduce or encapsulate them, but may not add another free latch or
-mutation owner.  A numeric estimator or immutable cache structure is not
-control-state debt; preserving the measured data-plane algorithms is an
-explicit requirement of this bounded control-plane redesign.
+The 2026-08-29 mechanical audit no longer finds a free top-level lifecycle
+Boolean in the LoD coordinator.  Its remaining Booleans are configuration
+(`lodAutoSubmit`, deterministic terminal mode, and residency policy) or an
+immutable source-snapshot fact.  The host's render/capacity pair is now one
+three-way request value; structural point relaxation is one four-state
+transaction; its terminal plan witness lives with point-quality ownership; and
+interaction owns consumption of renderer feedback.  Counting all
+`this->d->lod*` assignments is no longer a useful acceptance metric because it
+mixes diagnostic counters, bounded cursor progress, numeric estimator output,
+and genuine lifecycle state.  Review instead audits sole writers, revision
+keys, retirement edges, and the work-ledger refinement.  A numeric estimator
+or immutable cache structure is not control-state debt; preserving the
+measured data-plane algorithms is an explicit requirement of this bounded
+control-plane redesign.
 
 The renderer-preparation counterexample is now closed at the production
 boundary.  Obol publishes an exact target, immutable total, monotone completed
@@ -662,7 +729,8 @@ same incomplete coverage pass while the growth phase remains pending is not a
 legal transition.
 It includes an ordinary capacity-blocked cursor at the growth edge and proves
 that capacity cannot restart after resident growth becomes pending.  TLC
-checked 525 generated / 377 distinct states to depth 23 with no error.
+checked 2,562 generated / 1,866 distinct states to depth 24 with no error; the
+expanded run checked 33,630 generated / 22,128 distinct states to depth 44.
 `ObolPointQualityOwnership.tla` additionally distinguishes adaptive point-cut
 calibration, handoff confirmation of an already chosen cut, and retained
 triangle recovery.  A recovery frame whose callback is consumed by a stronger
@@ -801,17 +869,16 @@ is no workload-mode dispatcher and no mutable HUD phase.
 
 The next simplification target is therefore:
 
-- replace the remaining overlapping controller latches with the canonical
-  `ProgressiveControlState`, typed certificates, finite work ledger, and one
-  event reducer;
+- keep each semantic ledger behind its cohesive typed reducer and reject a
+  monolithic lifecycle facade which merely wraps already valid owners;
 - extract the remaining controller shell by ledger and effect boundaries,
   without moving or duplicating performance-sensitive numeric algorithms;
 - retain source visibility census and projected-demand caches as derived
   algorithms rather than new policy owners;
 - preserve the progress-only HUD publication boundary; and
 - leave numeric estimators as stateless or revision-keyed helpers; and
-- preserve the observational sampled-trace checker while extending the
-  canonical reducer to record every abstract production transition.
+- preserve the observational sampled-trace checker while extending semantic
+  ledger boundaries to record every abstract production transition.
 
 ### Asset production and occurrence presentation
 
@@ -820,6 +887,15 @@ producer may build or load a given asset generation, while every occurrence
 retains its own transform, visibility, spatial-page demand, active cut, style,
 selection, and presentation commit.  Waiting for a coalesced producer is not
 pending owner-thread work; the producer result is the only wake edge.
+
+A producer may instead publish all of a bounded progressive representation as
+one immutable resident part.  That removes availability and worker
+obligations, not view policy: each occurrence still owns a requested and active
+cut and contributes to the canonical allocation, render-cost, and convergence
+counts.  Retargeting changes an instance cut in place.  Source population,
+occurrence, and geometry revision jointly authenticate the binding; a source
+delta which replaces any of them retires the old cut and its aggregate metrics
+before the successor can be planned.
 
 A payload's cache key or resident cut does not certify its retained renderer
 binding.  Presentation is complete only when the occurrence is bound to the
@@ -900,41 +976,64 @@ restoration and passed 1,242 generated / 924 distinct states to depth 5.  It
 proves that equivalent semantic certificates produce one identical successor
 despite different transient motion publication orders, that a prior-pose
 restore cannot bypass its current-pose proof, and that finite input terminates.
-`ObolCapacitySearch.tla` checks all modeled true capacities for eight ordered
+`ObolCapacitySearch.tla` checks all modeled true capacities for ordered
 budgets, a monotone map which pairs adjacent budgets onto the same discrete
-population, and three bounded samples for every previously unseen population.
-Equivalent populations reuse their prior classification and select a midpoint
-of the remaining proven bracket; they do not walk adjacent numeric cost units
-which cannot change the discrete PoP cuts.
+population, and bounded samples for every previously unseen population.
+`ObolRetainedAllocationPrefix.tla` proves that the retained allocator realizes
+that monotone map by extending one fixed importance prefix and terminating at
+the first unaffordable transition.  The allocator may not skip that transition
+to fill the remaining allowance with lower-ranked work: doing so lets a richer
+budget displace the lower-budget population and invalidates bracket reuse.
+Equivalent populations reuse their prior classification; they do not walk
+adjacent numeric cost units which cannot change the discrete PoP cuts.
+Capacity is a responsiveness guard rather than a quality maximizer: once one
+goal has a safe population and rejects one richer population, it preserves the
+safe visual instead of exposing exact binary refinement.  Four candidates per
+goal bound cold recovery before a safe population exists.  Measurements also
+classify the ordered longer deadline, so a candidate which misses only the
+steady target transfers directly into the static goal without a coarse/fine
+round trip.
 An aborted hard-deadline frame is a typed unsafe observation of the active
 candidate.  It narrows the existing bracket immediately; it does not reset or
 rekey the certificate.  This is essential because a reset followed by a
 slightly tighter ceiling can alternate forever on a frozen large scene.
 It includes the one-way transition from the preferred steady cadence to the
 independent static deadline and distinct allocation, exact-presentation, and
-timing-measurement phases.  TLC explored 4,704 generated / 4,368 distinct
-states to depth 37.  It proves sound strict bracket reduction, immediate reuse
-of a previously classified population, non-repetition of measured budgets, at
-most one goal transition, single terminal certificate publication, and
-eventual completion for a frozen tuple.  Allocation and presentation barriers
-do not consume the invalid timing allowance.
+timing-measurement phases.  An older population barrier may occupy the
+candidate-selection revision; its transfer must publish an unoccupied revision
+before the candidate plan commits.  A planning pass may wait on that producer
+without consuming a retry, but completed renderer attempts which still cannot
+name exact CAD work are bounded and terminate as unmeasurable.  This preserves
+the last safe presentation instead of manufacturing an infinite repaint loop.
+The current 32-budget/four-sample/four-candidate-per-goal/two-inexact-attempt
+model explored 189,853 generated / 139,661 distinct states to depth 44.  It
+proves sound strict bracket reduction, immediate reuse of a previously
+classified population, bounded candidate publication, one-sided settling
+after a safe result, at most one goal transition, single terminal certificate
+publication, and eventual completion for a frozen tuple.  Allocation and uncompleted
+presentation barriers do not consume the invalid timing allowance.
 
 `ObolCapacityPresentationHandoff.tla` isolates the exact-presentation boundary
-in front of that search.  On 2026-08-27 TLC explored 572 generated / 390
-distinct states to depth 10 with no invariant or liveness error.  It covers
+in front of that search.  On 2026-08-29 TLC explored 183,306 generated / 21,438
+distinct states to depth 20 with no invariant or liveness error.  It covers
 changed and already-applied occurrence plans, effective and inert global
 ceilings, and an applied occurrence allocation whose protected population
 exceeds its own certified budget.  It also models an initially unavailable
 assignment and requires availability restriction before the cut can be
 applied.  A completed no-op allocation scan preserves the frozen population
-and allocation-certificate revisions.  It proves that pre-handoff frames
+and allocation-certificate revisions.  A terminal certificate remains
+authoritative while its selected allocation is applied and the resulting
+generic pass completes.  It proves that pre-handoff frames
 cannot consume a sample, an effective ceiling is removed before measurement,
-and the over-budget state has one finite owner: local representation reduction
+zero renderer work is accepted only after an authoritative empty-visibility
+census, a nonempty census publishes real presentation work,
+the allocator always uses the canonical strongest reconciliation request, and
+the over-budget state has one finite owner: local representation reduction
 followed by either an exact sampled certificate or an explicit bounded
-constraint.  The
-executable mapping is `claimOverBudgetAllocation`,
+constraint.  The executable mapping is `claimOverBudgetAllocation`,
 `capacitySampleRequiresCeilingFreeHandoff`,
-`cadAllocationPlanCutsApplied`, and `capacitySamplePopulationReady`; the
+`cadAllocationPlanCutsApplied`, `capacitySamplePopulationReady`,
+`completeAppliedAllocation`, and the terminal-budget cap in `planPass`; the
 focused coordinator/update-action tests and the 50k/multi-Lucy renderer
 replays are the refinement evidence.
 
@@ -983,12 +1082,25 @@ timer is a runtime refinement violation even though the abstract owner value
 is otherwise valid.
 
 The formal argument is compositional: `ObolProgressivePipeline.tla` defines the
-only high-level event and ledger grammar; each focused model refines one of its
-typed obligations without adding a workload regime.  A focused model must name
-its abstraction mapping and executable production effect.  It may not expand
-the high-level event alphabet merely to describe an implementation latch.  A
-counterexample which cannot map back to inventory, availability, demand,
-planning, presentation, or resource release is architectural debt and stops
+only high-level event and ledger grammar, and `ObolLodComposition.tla` checks
+the shared admission/growth/presentation/capacity/structural/point seam rather
+than merely assuming that independently passing focused models compose.  On
+2026-08-29 the seam model explored 35,600 generated / 18,136 distinct states
+to depth 15.  It includes safe and constrained admission, retained growth both
+inside and outside a capacity candidate, ceiling reconciliation, exact empty
+and nonempty visibility, structural and point successors, and terminal
+publication.  `ObolAssetPublicationComposition.tla` continues that relation
+through superseding demand, live pages, and durable cache completion;
+`ObolCadFrameComposition.tla` continues it through atomic retained mutation,
+exact preparation, host-frame ownership, and report acceptance.  The asset
+model's first counterexample found a real missing current-demand successor,
+which now has an executable service retry regression.  Each remaining focused
+model refines one typed obligation
+without adding a workload regime.  A focused model must name its abstraction
+mapping and executable production effect.  It may not expand the high-level
+event alphabet merely to describe an implementation latch.  A counterexample
+which cannot map back to inventory, availability, demand, planning,
+presentation, or resource release is architectural debt and stops
 implementation until ownership is clarified.
 
 Every formal action requires an executable production refinement test.  The

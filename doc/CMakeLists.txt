@@ -61,14 +61,26 @@ set(
   notes/ObolLodAdmission.tla
   notes/ObolActiveProducerDemand.cfg
   notes/ObolActiveProducerDemand.tla
+  notes/ObolAssetPublicationComposition.cfg
+  notes/ObolAssetPublicationComposition.tla
   notes/ObolCadMutation.cfg
   notes/ObolCadMutation.tla
+  notes/ObolCadFrameComposition.cfg
+  notes/ObolCadFrameComposition.tla
   notes/ObolCadViewPublication.cfg
   notes/ObolCadViewPublication.tla
+  notes/ObolCadTimingEvidence.cfg
+  notes/ObolCadTimingEvidence.tla
+  notes/ObolCompletedPassOwnership.cfg
+  notes/ObolCompletedPassOwnership.tla
   notes/ObolCapacityPresentationHandoff.cfg
   notes/ObolCapacityPresentationHandoff.tla
   notes/ObolLodConvergence.cfg
   notes/ObolLodConvergence.tla
+  notes/ObolLodComposition.cfg
+  notes/ObolLodComposition.tla
+  notes/ObolLodPolicyDisable.cfg
+  notes/ObolLodPolicyDisable.tla
   notes/ObolProgressivePipeline.cfg
   notes/ObolProgressivePipeline.tla
   notes/ObolControlRefinement.cfg
@@ -79,6 +91,8 @@ set(
   notes/ObolSubmissionPass.tla
   notes/ObolResidentGrowth.cfg
   notes/ObolResidentGrowth.tla
+  notes/ObolRetainedAllocationPrefix.cfg
+  notes/ObolRetainedAllocationPrefix.tla
   notes/ObolInteractionSession.cfg
   notes/ObolInteractionSession.tla
   notes/ObolDeadlineOwnership.cfg
@@ -87,6 +101,8 @@ set(
   notes/ObolCapacitySearch.tla
   notes/ObolPointQualityOwnership.cfg
   notes/ObolPointQualityOwnership.tla
+  notes/ObolPointTerminalEvidence.cfg
+  notes/ObolPointTerminalEvidence.tla
   notes/ObolQuietSuccessor.cfg
   notes/ObolQuietSuccessor.tla
   notes/ObolResidentCompaction.cfg
@@ -101,8 +117,12 @@ set(
   notes/ObolLiveSpatialPublication.tla
   notes/ObolSpatialProducer.cfg
   notes/ObolSpatialProducer.tla
+  notes/ObolSparsePlanIdentity.cfg
+  notes/ObolSparsePlanIdentity.tla
   notes/ObolStructuralFrontierOwnership.cfg
   notes/ObolStructuralFrontierOwnership.tla
+  notes/ObolTerminalQualityOrdering.cfg
+  notes/ObolTerminalQualityOrdering.tla
   notes/obol_lod_control.cfg
   notes/obol_lod_control.tla
   pre_BRL-CAD.bib

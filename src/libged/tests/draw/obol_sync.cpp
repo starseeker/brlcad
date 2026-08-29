@@ -80,6 +80,14 @@ struct occurrence_visit_state {
     int valid;
 };
 
+static BObolPresentationTimingContext
+test_capacity_cad_timing(void)
+{
+    return BObolPresentationTimingContext(
+	BObolLodCapacityRelevance::RELEVANT,
+	BObolCadPresentationExecution::EXECUTED);
+}
+
 static int
 occurrence_visit_cb(const struct ged_scene_occurrence_info *occurrence,
 	void *client_data)
@@ -1960,7 +1968,8 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	if (controller->consumeRenderRequest(&render_reason)) {
 	    const uint64_t frame_started = controller->beginRenderTiming();
 	    std::this_thread::sleep_for(std::chrono::microseconds(1));
-	    controller->completeRenderTiming(frame_started);
+	    controller->completeRenderTiming(
+		frame_started, test_capacity_cad_timing());
 	}
 	std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -2022,7 +2031,8 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	    controller->consumeRenderRequest(&render_reason)) {
 	    const uint64_t frame_started = controller->beginRenderTiming();
 	    std::this_thread::sleep_for(std::chrono::microseconds(1));
-	    controller->completeRenderTiming(frame_started);
+	    controller->completeRenderTiming(
+		frame_started, test_capacity_cad_timing());
 	}
 	const uint64_t current_revision = bv_frame_revision_get(view);
 	if (current_revision == stable_autoview_revision) {
@@ -5188,7 +5198,7 @@ main(int argc, char **argv)
 			const uint64_t frame_started =
 			    box_view_controller->beginRenderTiming();
 			box_view_controller->completeRenderTiming(
-			    frame_started);
+			    frame_started, test_capacity_cad_timing());
 		    }
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));

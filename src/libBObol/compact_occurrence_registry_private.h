@@ -143,12 +143,22 @@ bobol_compact_geometry_identity_matches(
     return retained && candidate && retained.get() == candidate.get();
 }
 
+inline bool
+bobol_compact_geometry_is_resident_progressive(
+    const std::shared_ptr<const Obol::PartGeometry> &geometry)
+{
+    return geometry && geometry->wire && geometry->wire->isProgressive() &&
+	geometry->wire->hasProgressiveErrorBounds();
+}
+
 struct BObolCompactInstanceIndex {
     BObolCompactInstanceIndex(void) :
 	wireCount(0),
 	shadedCount(0),
 	viewDependentCsgGeometryCount(0),
-	sourceMeshRequestCount(0)
+	sourceMeshRequestCount(0),
+	residentProgressiveGeometryCount(0),
+	displayLodTargetCount(0)
     {
 	sourceBounds.makeEmpty();
     }
@@ -201,6 +211,8 @@ struct BObolCompactInstanceIndex {
     int shadedCount;
     size_t viewDependentCsgGeometryCount;
     size_t sourceMeshRequestCount;
+    size_t residentProgressiveGeometryCount;
+    size_t displayLodTargetCount;
 };
 
 #endif /* LIBBOBOL_COMPACT_OCCURRENCE_REGISTRY_PRIVATE_H */

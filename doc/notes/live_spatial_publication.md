@@ -174,8 +174,9 @@ those data-plane details:
 
 - an emitted page was first complete and validated;
 - coverage remains present throughout incomplete publication;
-- only a complete final hierarchy may retire coverage and mark the durable
-  cache; and
+- all page records must be complete before a final hierarchy may retire
+  coverage and mark the durable cache, but presenting every page separately
+  is not a cache-completion prerequisite; and
 - cancellation freezes publication and cannot create a discoverable cache
   marker.
 
@@ -188,7 +189,7 @@ java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
   doc/notes/ObolLiveSpatialPublication.tla
 ```
 
-On 2026-08-25 TLC explored 343 generated / 212 distinct states to depth 11
+On 2026-08-29 TLC explored 481 generated / 254 distinct states to depth 11
 with no invariant, deadlock, or liveness error.  The retained-page cache and
 LoD-service tests also cover page replacement and page-selective compaction.
 A warm System GL Lucy interaction replay passed with in-gesture refinement,

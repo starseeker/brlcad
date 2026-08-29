@@ -165,10 +165,14 @@ test_feature_nodes(BObolViewController &view)
      * starve a capacity-relevant LoD confirmation indefinitely. */
     view.clearRenderRequest();
     SoNode *hudNode = view.features().node(hudHandle);
+    const uint64_t unchangedHudPresentationRevision =
+	view.features().presentationRevision();
     BObolFeatureHandle unchangedHud = view.features().publishHudLabels(
 	"hud-labels", BObolFeatureScope::Shared, hudLabels);
     if (unchangedHud != hudHandle || view.features().node(unchangedHud) !=
-	    hudNode || view.isRenderRequested())
+	    hudNode || view.isRenderRequested() ||
+	view.features().presentationRevision() !=
+	    unchangedHudPresentationRevision)
 	FAIL("equal HUD publication should be an idempotent retained update");
     hudLabels[0].text = "changed store hud label";
     BObolFeatureHandle changedHud = view.features().publishHudLabels(
@@ -176,7 +180,9 @@ test_feature_nodes(BObolViewController &view)
     if (changedHud.id != hudHandle.id ||
 	changedHud.revision <= hudHandle.revision ||
 	view.features().node(changedHud) == hudNode ||
-	!view.isRenderRequested())
+	!view.isRenderRequested() ||
+	view.features().presentationRevision() <=
+	    unchangedHudPresentationRevision)
 	FAIL("changed HUD publication should replace the retained presentation");
     view.clearRenderRequest();
 
@@ -727,6 +733,27 @@ test_polygon_nodes_and_sketch(BObolViewController &view)
 	FAIL("polygon setFillColor should succeed");
     if (!view.polygons().setEdgeColor(handle, SbColor(1.0f, 0.0f, 0.0f)))
 	FAIL("polygon setEdgeColor should succeed");
+
+    /* A shared controller may have no display endpoint of its own, so its
+     * render latch can remain set while several commands mutate the store.
+     * Presentation identity must still advance for every visual mutation;
+     * attached views use this revision rather than the coalescing frame latch
+     * to notice the later commands. */
+    view.clearRenderRequest();
+    const uint64_t selectionRevision =
+	view.polygons().presentationRevision();
+    if (!view.polygons().setSelected(handle, TRUE) ||
+	view.polygons().presentationRevision() <= selectionRevision ||
+	!view.isRenderRequested())
+	FAIL("polygon selection should publish a presentation revision");
+    const uint64_t selectedRevision =
+	view.polygons().presentationRevision();
+    const uint64_t coalescedRenderRevision =
+	view.getRenderRequestSerial();
+    if (!view.polygons().setSelected(handle, FALSE) ||
+	view.polygons().presentationRevision() <= selectedRevision ||
+	view.getRenderRequestSerial() != coalescedRenderRevision)
+	FAIL("coalesced polygon mutations should retain independent presentation revisions");
 
     SoNode *node = view.polygons().node(handle);
     if (!node || !node->isOfType(SoGroup::getClassTypeId()))

@@ -1,0 +1,356 @@
+{
+  "schema": "brlcad.qtcad.events",
+  "version": 1,
+  "events": [
+    {
+      "target": ".",
+      "action": "resize",
+      "arguments": { "width": 1000, "height": 760, "stable_ms": 250, "timeout_ms": 5000 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+        "commands": [
+          "view clear",
+          "view faceplate adc 0",
+          "view faceplate center_dot 0",
+          "view faceplate grid 0",
+          "view faceplate model_axes 0",
+          "view faceplate scale 0",
+          "view faceplate view_axes 0",
+          "view faceplate params 0",
+          "view faceplate fb 0",
+          "view cutting enable 0",
+          "draw -m1 settings.r",
+          "ae 0 90",
+          "center 0 0 0",
+          "size 6"
+        ]
+      }
+    },
+    {
+      "target": ".",
+      "action": "wait_progressive_view_ready",
+      "arguments": { "timeout_ms": 30000, "quiet_ms": 50 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.activate",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.controls",
+      "action": "assert_state",
+      "arguments": { "enabled": true, "visible": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.grid",
+      "action": "assert_state",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-enabled",
+      "action": "assert_state",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-normal-z",
+      "action": "assert_state",
+      "arguments": { "value": 1.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+        "commands": [
+          "view faceplate adc 1",
+          "view faceplate center_dot 1",
+          "view faceplate grid 1",
+          "view faceplate model_axes 1",
+          "view faceplate scale 1",
+          "view faceplate view_axes 1",
+          "view faceplate params 1",
+          "view faceplate params fps 1",
+          "view faceplate fb 2"
+        ]
+      }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 200 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view faceplate adc", "contains": "1" }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.adc",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.center-dot",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.grid",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.model-axes",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.scale",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.view-axes",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.parameters-enabled",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.parameters-fps",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.framebuffer",
+      "action": "assert_state",
+      "arguments": { "index": 2, "text": "Underlay" }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": { "feature": "_faceplate/adc", "exists": true }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": { "feature": "_faceplate/center_dot", "exists": true }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": { "feature": "_faceplate/grid", "exists": true }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": { "feature": "_faceplate/model_axes/labels", "exists": true }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": { "feature": "_faceplate/scale", "exists": true }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": { "feature": "_faceplate/view_axes/labels", "exists": true }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": { "feature": "_faceplate/params", "exists": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.adc",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.center-dot",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.grid",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.model-axes",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.scale",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.view-axes",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.parameters-enabled",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.framebuffer",
+      "action": "set_index",
+      "arguments": { "index": 0 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view faceplate grid draw", "contains": "0" }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": { "command": "view faceplate fb", "contains": "0" }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": { "feature": "_faceplate/grid", "exists": false }
+    },
+    {
+      "target": ".",
+      "action": "assert_obol_feature",
+      "arguments": { "feature": "_faceplate/params", "exists": false }
+    },
+    {
+      "target": "i:qged.view.controls.framebuffer-mode",
+      "action": "activate"
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.framebuffer",
+      "action": "assert_state",
+      "arguments": { "index": 2, "text": "Underlay" }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.framebuffer",
+      "action": "set_index",
+      "arguments": { "index": 0 }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 30 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "checkpoint",
+      "arguments": { "name": "view-settings-base.png" }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-normal-x",
+      "action": "set_value",
+      "arguments": { "value": 1.0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-normal-z",
+      "action": "set_value",
+      "arguments": { "value": 0.0 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-enabled",
+      "action": "activate",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_expect",
+      "arguments": {
+        "command": "view cutting",
+        "contains": ["enable 1", "origin 0 0 0", "normal 1 0 0"]
+      }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 30 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "checkpoint",
+      "arguments": { "name": "view-settings-cut.png" }
+    },
+    {
+      "target": ".",
+      "action": "assert_image_delta",
+      "arguments": {
+        "reference": "view-settings-base.png",
+        "candidate": "view-settings-cut.png",
+        "min_changed_pixels": 100
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-enabled",
+      "action": "activate",
+      "arguments": { "checked": false }
+    },
+    {
+      "target": ".",
+      "action": "wait",
+      "arguments": { "ms": 30 }
+    },
+    {
+      "target": "./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas",
+      "action": "checkpoint",
+      "arguments": { "name": "view-settings-restored.png" }
+    },
+    {
+      "target": ".",
+      "action": "assert_image_delta",
+      "arguments": {
+        "reference": "view-settings-base.png",
+        "candidate": "view-settings-restored.png",
+        "max_changed_pixels": 0
+      }
+    },
+    {
+      "target": ".",
+      "action": "qged_command_batch",
+      "arguments": {
+        "commands": [
+          "view cutting normal 0 1 0",
+          "view cutting origin 0 1 0",
+          "view cutting enable 1"
+        ]
+      }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-enabled",
+      "action": "assert_state",
+      "arguments": { "checked": true }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-origin-y",
+      "action": "assert_state",
+      "arguments": { "value": 1.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-normal-y",
+      "action": "assert_state",
+      "arguments": { "value": 1.0, "tolerance": 0.000000001 }
+    },
+    {
+      "target": ".",
+      "action": "qged_command",
+      "arguments": { "command": "view cutting enable 0" }
+    },
+    {
+      "target": "i:org.brlcad.qged.view.settings.cutting-enabled",
+      "action": "assert_state",
+      "arguments": { "checked": false }
+    }
+  ]
+}

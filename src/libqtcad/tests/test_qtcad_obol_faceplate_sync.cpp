@@ -195,6 +195,18 @@ main(int argc, char **argv)
 	obolAdc->lineWidth.getValue() != 3)
 	FAIL("ADC state should map to separately styled Obol geometry");
 
+    SoNode *gridGeometry = obolGrid->getGeometryShape();
+    SoNode *modelAxesGeometry = obolModelAxes->getGeometryShape();
+    SoNode *viewAxesGeometry = obolViewAxes->getGeometryShape();
+    SoNode *adcGeometry = obolAdc->getGeometryShape();
+    controller->clearRenderRequest();
+    view.need_update(QG_VIEW_DRAWN);
+    if (obolGrid->getGeometryShape() != gridGeometry ||
+	obolModelAxes->getGeometryShape() != modelAxesGeometry ||
+	obolViewAxes->getGeometryShape() != viewAxesGeometry ||
+	obolAdc->getGeometryShape() != adcGeometry)
+	FAIL("an unchanged refresh should retain faceplate geometry");
+
     grid.draw = 0;
     modelAxes.draw = 0;
     viewAxes.draw = 0;

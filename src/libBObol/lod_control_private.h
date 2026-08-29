@@ -217,18 +217,30 @@ private:
 	std::numeric_limits<float>::quiet_NaN();
 };
 
-/* Renderer timing and retained-upload observations form one epoch-local
- * sample.  Serial/time and upload/reuse bookkeeping must advance together;
- * otherwise an old duration can be paired with a new frame or a first upload
- * can be mistaken for sustainable retained replay. */
+/* Renderer timing, point threshold, and retained-upload observations form one
+ * epoch-local sample.  Time and upload/reuse bookkeeping must advance
+ * together; otherwise an old duration can be paired with a new threshold or
+ * a first upload can be mistaken for sustainable retained replay. */
 class BObolLodRendererPerformanceEvidence {
 public:
+    static bool pointThresholdMatches(float first, float second)
+    {
+	return std::isfinite(first) && std::isfinite(second) &&
+	    std::fabs(first - second) <= POINT_THRESHOLD_SAMPLE_EPSILON;
+    }
+
     void reset(void)
     {
 	this->lastGpuSampleSerial = 0;
 	this->lastGpuTimeNanosecondsValue = 0;
 	this->lastGeometryUploadBytes.reset();
-	this->lastPresentationReusable = true;
+	this->lastPresentationReusable = false;
+	this->lastCadTimeNanosecondsValue = 0;
+	this->lastCadPointThreshold =
+	    std::numeric_limits<float>::quiet_NaN();
+	this->lastStructuralTimeNanosecondsValue = 0;
+	this->lastStructuralPointThreshold =
+	    std::numeric_limits<float>::quiet_NaN();
     }
 
     bool acceptGpuMeasurement(uint64_t sampleSerial,
@@ -241,7 +253,8 @@ public:
 	return true;
     }
 
-    void noteCadPresentation(bool preparedReplay,
+    void noteCadPresentation(uint64_t elapsedNanoseconds,
+	float pointProxyPixelThreshold, bool preparedReplay,
 	const std::optional<uint64_t> &geometryUploadBytes)
     {
 	const bool uploadChanged = geometryUploadBytes &&
@@ -251,6 +264,8 @@ public:
 	    this->lastGeometryUploadBytes = geometryUploadBytes;
 	this->lastPresentationReusable = preparedReplay ||
 	    (geometryUploadBytes && !uploadChanged);
+	this->lastCadTimeNanosecondsValue = elapsedNanoseconds;
+	this->lastCadPointThreshold = pointProxyPixelThreshold;
     }
 
     uint64_t lastGpuTimeNanoseconds(void) const
@@ -258,16 +273,56 @@ public:
 	return this->lastGpuTimeNanosecondsValue;
     }
 
-    bool reusableCadPresentation(void) const
+    bool reusableCadPresentationAt(float pointProxyPixelThreshold) const
     {
-	return this->lastPresentationReusable;
+	return this->lastPresentationReusable &&
+	    this->lastCadTimeNanosecondsValue > 0 &&
+	    pointThresholdMatches(this->lastCadPointThreshold,
+		pointProxyPixelThreshold);
+    }
+
+    uint64_t cadPresentationNanosecondsAt(
+	float pointProxyPixelThreshold) const
+    {
+	return this->reusableCadPresentationAt(pointProxyPixelThreshold) ?
+	    this->lastCadTimeNanosecondsValue : 0;
+    }
+
+    /* A point/box classifier frame contains no managed mesh population, so
+     * it must not calibrate sustainable mesh throughput.  It is nevertheless
+     * the only measured cost available when structural repair decides how
+     * many boxes may be replaced in its first mesh wave.  Keep that evidence
+     * in a separate channel so the repair planner can consume it without
+     * teaching the ordinary retained allocator from a transient frame. */
+    void noteStructuralPresentation(uint64_t elapsedNanoseconds,
+	float pointProxyPixelThreshold)
+    {
+	this->lastStructuralTimeNanosecondsValue = elapsedNanoseconds;
+	this->lastStructuralPointThreshold = pointProxyPixelThreshold;
+    }
+
+    uint64_t structuralPresentationNanosecondsAt(
+	float pointProxyPixelThreshold) const
+    {
+	return this->lastStructuralTimeNanosecondsValue > 0 &&
+	    pointThresholdMatches(this->lastStructuralPointThreshold,
+		pointProxyPixelThreshold) ?
+	    this->lastStructuralTimeNanosecondsValue : 0;
     }
 
 private:
+    static constexpr float POINT_THRESHOLD_SAMPLE_EPSILON = 0.01f;
+
     uint64_t lastGpuSampleSerial = 0;
     uint64_t lastGpuTimeNanosecondsValue = 0;
     std::optional<uint64_t> lastGeometryUploadBytes;
-    bool lastPresentationReusable = true;
+    bool lastPresentationReusable = false;
+    uint64_t lastCadTimeNanosecondsValue = 0;
+    float lastCadPointThreshold =
+	std::numeric_limits<float>::quiet_NaN();
+    uint64_t lastStructuralTimeNanosecondsValue = 0;
+    float lastStructuralPointThreshold =
+	std::numeric_limits<float>::quiet_NaN();
 };
 
 /* Immutable-in-meaning configuration retained while a bounded submission
@@ -492,6 +547,138 @@ private:
     State stateValue = State::IDLE;
 };
 
+/* One exact non-terminal structural-box frontier and the per-occurrence cost
+ * reservation derived for its bounded repair pass.  Point relaxation is one
+ * finite transaction: admission replaces every occurrence the candidate
+ * threshold would expose, one exact frame presents that replacement, and
+ * finalization either commits or rejects the threshold.  Encoding those
+ * stages as one state prevents a partial Boolean update from skipping or
+ * repeating a phase. */
+class BObolLodStructuralRepair {
+public:
+    enum class PointRelaxationState : uint8_t {
+	INACTIVE = 0,
+	ADMISSION_PENDING,
+	PRESENTATION_PENDING,
+	FINALIZATION_PENDING
+    };
+
+    void begin(size_t frontierCount)
+    {
+	this->frontierCountValue = frontierCount;
+	this->coverageCostReservationValue = 0;
+	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationStateValue = PointRelaxationState::INACTIVE;
+    }
+
+    void beginPointRelaxation(size_t frontierCount, float targetThreshold)
+    {
+	this->frontierCountValue = frontierCount;
+	this->coverageCostReservationValue = 0;
+	this->pointRelaxationTargetValue = targetThreshold;
+	this->pointRelaxationStateValue =
+	    PointRelaxationState::ADMISSION_PENDING;
+    }
+
+    void reset(void)
+    {
+	this->frontierCountValue = 0;
+	this->coverageCostReservationValue = 0;
+	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationStateValue = PointRelaxationState::INACTIVE;
+    }
+
+    void completePointRelaxationAdmission(void)
+    {
+	if (this->pointRelaxationStateValue !=
+		PointRelaxationState::ADMISSION_PENDING)
+	    return;
+	this->frontierCountValue = 0;
+	this->coverageCostReservationValue = 0;
+	this->pointRelaxationStateValue =
+	    PointRelaxationState::PRESENTATION_PENDING;
+    }
+
+    void notePointRelaxationPresented(void)
+    {
+	if (this->pointRelaxationStateValue ==
+		PointRelaxationState::PRESENTATION_PENDING)
+	    this->pointRelaxationStateValue =
+		PointRelaxationState::FINALIZATION_PENDING;
+    }
+
+    void cancelPointRelaxation(void)
+    {
+	if (this->pointRelaxationStateValue ==
+		PointRelaxationState::INACTIVE)
+	    return;
+	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationStateValue = PointRelaxationState::INACTIVE;
+	/* A submitted selective frontier still owns finite useful mesh work.
+	 * Let it finish as ordinary structural admission, but an admitted
+	 * candidate awaiting presentation has no work left to preserve. */
+	if (!this->active()) {
+	    this->frontierCountValue = 0;
+	    this->coverageCostReservationValue = 0;
+	}
+    }
+
+    bool active(void) const
+    {
+	return this->frontierCountValue > 0;
+    }
+
+    size_t frontierCount(void) const
+    {
+	return this->frontierCountValue;
+    }
+
+    bool pointRelaxationPending(void) const
+    {
+	return this->pointRelaxationStateValue !=
+	    PointRelaxationState::INACTIVE;
+    }
+
+    float pointRelaxationTarget(void) const
+    {
+	return this->pointRelaxationTargetValue;
+    }
+
+    bool pointRelaxationPresentationPending(void) const
+    {
+	return this->pointRelaxationStateValue ==
+	    PointRelaxationState::PRESENTATION_PENDING;
+    }
+
+    PointRelaxationState pointRelaxationState(void) const
+    {
+	return this->pointRelaxationStateValue;
+    }
+
+    size_t coverageCostReservation(void) const
+    {
+	return this->coverageCostReservationValue;
+    }
+
+    void clearCoverageCostReservation(void)
+    {
+	this->coverageCostReservationValue = 0;
+    }
+
+    void reserveCoverageCost(size_t reservation)
+    {
+	if (this->active() && !this->coverageCostReservationValue)
+	    this->coverageCostReservationValue = reservation;
+    }
+
+private:
+    size_t frontierCountValue = 0;
+    size_t coverageCostReservationValue = 0;
+    float pointRelaxationTargetValue = 0.0f;
+    PointRelaxationState pointRelaxationStateValue =
+	PointRelaxationState::INACTIVE;
+};
+
 /* Concurrent one-shot planning obligations owned by the current evidence
  * epoch.  These are work requests, not outcome flags: each must be explicitly
  * requested and retired by its sole effect owner. */
@@ -647,7 +834,8 @@ public:
 	TERMINAL_WITH_WORK = 1u << 1,
 	INVALID_READINESS = 1u << 2,
 	INVALID_OWNER = 1u << 3,
-	UNWITNESSED_PRESENTATION = 1u << 4
+	UNWITNESSED_PRESENTATION = 1u << 4,
+	UNWITNESSED_CONSTRAINT = 1u << 5
     };
 
     struct Inputs {
@@ -659,6 +847,11 @@ public:
 	bool submission = false;
 	bool submissionRescan = false;
 	bool retainedAllocation = false;
+	/* A bounded capacity candidate is planning work until its occurrence
+	 * allocation has been committed.  It must not masquerade as a frame
+	 * obligation merely because the same certificate will later require a
+	 * presentation sample. */
+	bool capacityAllocation = false;
 	bool residentGrowth = false;
 	bool pointTriangleRecovery = false;
 	bool structuralFrontier = false;
@@ -741,7 +934,8 @@ public:
 	if (inputs.result || inputs.publication)
 	    snapshot.obligations |= bit(Work::PUBLICATION);
 	if (inputs.submission || inputs.submissionRescan ||
-	    inputs.retainedAllocation || inputs.residentGrowth ||
+	    inputs.retainedAllocation || inputs.capacityAllocation ||
+	    inputs.residentGrowth ||
 	    inputs.pointTriangleRecovery || inputs.structuralFrontier)
 	    snapshot.obligations |= bit(Work::PLANNING);
 	if (inputs.presentationReplay || inputs.presentationBarrier ||
@@ -786,7 +980,9 @@ public:
 
     static uint32_t validate(const Snapshot &snapshot, bool terminal,
 	bool viewReady, bool terminalError,
-	bool presentationProgressWitness = true)
+	bool presentationProgressWitness = true,
+	bool constrainedOutcome = false,
+	bool constraintEvidence = true)
     {
 	uint32_t violations = 0;
 	if (snapshot.obligations != 0 && snapshot.owner == Owner::NONE)
@@ -807,6 +1003,11 @@ public:
 	if (snapshot.owner == Owner::PRESENTATION &&
 	    !presentationProgressWitness)
 	    violations |= bit(Violation::UNWITNESSED_PRESENTATION);
+	/* CONSTRAINED is a terminal proof, not a synonym for "the image is
+	 * coarse."  It must name completed capacity, presentation, or resource
+	 * evidence which prevents further foreground work in this epoch. */
+	if (constrainedOutcome && !constraintEvidence)
+	    violations |= bit(Violation::UNWITNESSED_CONSTRAINT);
 	return violations;
     }
 };

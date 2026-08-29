@@ -41,6 +41,7 @@ set(
   lod_presentation_policy_private.h
   lod_quiet_successor_private.h
   lod_scene_evidence_private.h
+  lod_terminal_quality_private.h
   lod_view_policy_private.h
   lod_view_snapshot_private.h
   retained_allocation_private.cpp
@@ -218,6 +219,7 @@ cmakefiles(
   lod_admission_policy.cpp
   lod_quiet_successor_private.h
   lod_scene_evidence_private.h
+  lod_terminal_quality_private.h
   lod_view_policy_private.h
   lod_view_snapshot_private.h
   lod_realization.cpp

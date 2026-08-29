@@ -113,6 +113,8 @@ main(int argc, char **argv)
     const Obol::CadGeometryAdmission geometryAdmission =
 	Obol::cadAdmitPartGeometry(std::move(geometry));
     if (!geometryAdmission) {
+	fprintf(stderr, "compact occurrence geometry admission: %s\n",
+	    Obol::cadGeometryErrorName(geometryAdmission.validation.error));
 	source->unref();
 	FAIL("compact occurrence geometry admission should succeed");
     }

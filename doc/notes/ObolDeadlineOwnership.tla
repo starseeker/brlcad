@@ -4,112 +4,167 @@
 \* A failed presentation has exactly one successor.  Strict progress on the
 \* same finite presentation transaction permits a retry.  Otherwise an active
 \* population producer retains its cursor and eventually supplies the next
-\* frame.  Capacity recovery is legal only after both owners are quiescent.
-\* The model deliberately omits render cost and geometry quality; those are
-\* numeric and graphical proof obligations.
+\* frame.  Once both are quiescent, an already active bounded capacity search
+\* owns the miss; generic renderer-ceiling recovery is legal only when no such
+\* search exists.  Selecting both successors was the 150k OSMesa livelock: the
+\* generic handoff changed the population which the bounded search was trying
+\* to classify, so each controller restarted the other.
+\*
+\* Search work is deliberately abstract.  Each unit stands for one strictly
+\* narrower candidate.  ObolCapacitySearch proves the numeric bracket and
+\* sample bound; this model proves cross-controller ownership.
 
 EXTENDS Naturals, TLC
 
-CONSTANT MaxPopulationWork, MaxTransactionWork
+CONSTANT MaxPopulationWork, MaxTransactionWork, MaxSearchWork
 
-Successors == {"none", "transaction", "population", "capacity"}
+Successors == {"none", "transaction", "population", "search", "generic"}
 
 VARIABLES populationRemaining,
           transactionRemaining,
+          searchRemaining,
           renderPending,
-          capacityRecoveryPending,
+          searchRecoveryPending,
+          genericRecoveryPending,
           capacityRevision,
           lastSuccessor,
           priorPopulationRemaining,
           priorTransactionRemaining,
+          priorSearchRemaining,
           priorCapacityRevision
 
-vars == <<populationRemaining, transactionRemaining, renderPending,
-          capacityRecoveryPending, capacityRevision, lastSuccessor,
-          priorPopulationRemaining, priorTransactionRemaining,
+vars == <<populationRemaining, transactionRemaining, searchRemaining,
+          renderPending, searchRecoveryPending, genericRecoveryPending,
+          capacityRevision, lastSuccessor, priorPopulationRemaining,
+          priorTransactionRemaining, priorSearchRemaining,
           priorCapacityRevision>>
 
 TypeOK ==
     /\ populationRemaining \in 0..MaxPopulationWork
     /\ transactionRemaining \in 0..MaxTransactionWork
+    /\ searchRemaining \in 0..MaxSearchWork
     /\ renderPending \in BOOLEAN
-    /\ capacityRecoveryPending \in BOOLEAN
-    /\ capacityRevision \in 0..1
+    /\ searchRecoveryPending \in BOOLEAN
+    /\ genericRecoveryPending \in BOOLEAN
+    /\ capacityRevision \in 0..(MaxSearchWork + 1)
     /\ lastSuccessor \in Successors
     /\ priorPopulationRemaining \in 0..MaxPopulationWork
     /\ priorTransactionRemaining \in 0..MaxTransactionWork
-    /\ priorCapacityRevision \in 0..1
+    /\ priorSearchRemaining \in 0..MaxSearchWork
+    /\ priorCapacityRevision \in 0..(MaxSearchWork + 1)
 
 Init ==
     /\ populationRemaining \in 0..MaxPopulationWork
     /\ transactionRemaining \in 0..MaxTransactionWork
-    /\ renderPending = (transactionRemaining > 0)
-    /\ capacityRecoveryPending = FALSE
+    /\ searchRemaining \in 0..MaxSearchWork
+    /\ renderPending = (transactionRemaining > 0 \/
+          (transactionRemaining = 0 /\ populationRemaining = 0 /\
+           searchRemaining > 0))
+    /\ searchRecoveryPending = FALSE
+    /\ genericRecoveryPending = FALSE
     /\ capacityRevision = 0
     /\ lastSuccessor = "none"
     /\ priorPopulationRemaining = populationRemaining
     /\ priorTransactionRemaining = transactionRemaining
+    /\ priorSearchRemaining = searchRemaining
     /\ priorCapacityRevision = capacityRevision
 
 PresentationDeadline ==
     /\ renderPending
+    /\ ~searchRecoveryPending
+    /\ ~genericRecoveryPending
     /\ priorPopulationRemaining' = populationRemaining
     /\ priorTransactionRemaining' = transactionRemaining
+    /\ priorSearchRemaining' = searchRemaining
     /\ priorCapacityRevision' = capacityRevision
     /\ IF transactionRemaining > 0
           THEN /\ transactionRemaining' = transactionRemaining - 1
-               /\ renderPending' = (transactionRemaining > 1)
+               /\ renderPending' = (transactionRemaining > 1 \/
+                    (transactionRemaining = 1 /\
+                     populationRemaining = 0 /\ searchRemaining > 0))
                /\ lastSuccessor' = "transaction"
-               /\ UNCHANGED <<populationRemaining,
-                               capacityRecoveryPending, capacityRevision>>
+               /\ UNCHANGED <<populationRemaining, searchRemaining,
+                               searchRecoveryPending,
+                               genericRecoveryPending, capacityRevision>>
           ELSE IF populationRemaining > 0
           THEN /\ renderPending' = FALSE
                /\ lastSuccessor' = "population"
                /\ UNCHANGED <<populationRemaining, transactionRemaining,
-                               capacityRecoveryPending, capacityRevision>>
-          ELSE /\ ~capacityRecoveryPending
-               /\ capacityRevision = 0
-               /\ capacityRecoveryPending' = TRUE
-               /\ capacityRevision' = 1
+                               searchRemaining, searchRecoveryPending,
+                               genericRecoveryPending, capacityRevision>>
+          ELSE IF searchRemaining > 0
+          THEN /\ searchRecoveryPending' = TRUE
+               /\ genericRecoveryPending' = FALSE
                /\ renderPending' = FALSE
-               /\ lastSuccessor' = "capacity"
-               /\ UNCHANGED <<populationRemaining, transactionRemaining>>
+               /\ lastSuccessor' = "search"
+               /\ UNCHANGED <<populationRemaining, transactionRemaining,
+                               searchRemaining, capacityRevision>>
+          ELSE /\ searchRecoveryPending' = FALSE
+               /\ genericRecoveryPending' = TRUE
+               /\ renderPending' = FALSE
+               /\ lastSuccessor' = "generic"
+               /\ UNCHANGED <<populationRemaining, transactionRemaining,
+                               searchRemaining, capacityRevision>>
 
 AdvancePopulation ==
     /\ populationRemaining > 0
     /\ ~renderPending
-    /\ ~capacityRecoveryPending
+    /\ ~searchRecoveryPending
+    /\ ~genericRecoveryPending
     /\ populationRemaining' = populationRemaining - 1
     /\ renderPending' = (populationRemaining = 1)
     /\ lastSuccessor' = "none"
-    /\ UNCHANGED <<transactionRemaining, capacityRecoveryPending,
+    /\ UNCHANGED <<transactionRemaining, searchRemaining,
+                    searchRecoveryPending, genericRecoveryPending,
                     capacityRevision, priorPopulationRemaining,
-                    priorTransactionRemaining, priorCapacityRevision>>
+                    priorTransactionRemaining, priorSearchRemaining,
+                    priorCapacityRevision>>
 
-CompleteCapacityRecovery ==
-    /\ capacityRecoveryPending
-    /\ capacityRecoveryPending' = FALSE
+AdvanceCapacitySearch ==
+    /\ searchRecoveryPending
+    /\ searchRemaining > 0
+    /\ searchRecoveryPending' = FALSE
+    /\ genericRecoveryPending' = FALSE
+    /\ searchRemaining' = searchRemaining - 1
+    /\ capacityRevision' = capacityRevision + 1
+    /\ renderPending' = (searchRemaining > 1)
     /\ lastSuccessor' = "none"
-    /\ UNCHANGED <<populationRemaining, transactionRemaining, renderPending,
-                    capacityRevision, priorPopulationRemaining,
-                    priorTransactionRemaining, priorCapacityRevision>>
+    /\ UNCHANGED <<populationRemaining, transactionRemaining,
+                    priorPopulationRemaining, priorTransactionRemaining,
+                    priorSearchRemaining, priorCapacityRevision>>
+
+CompleteGenericRecovery ==
+    /\ genericRecoveryPending
+    /\ genericRecoveryPending' = FALSE
+    /\ capacityRevision' = capacityRevision + 1
+    /\ lastSuccessor' = "none"
+    /\ UNCHANGED <<populationRemaining, transactionRemaining,
+                    searchRemaining, renderPending, searchRecoveryPending,
+                    priorPopulationRemaining, priorTransactionRemaining,
+                    priorSearchRemaining, priorCapacityRevision>>
 
 Next ==
     \/ PresentationDeadline
     \/ AdvancePopulation
-    \/ CompleteCapacityRecovery
+    \/ AdvanceCapacitySearch
+    \/ CompleteGenericRecovery
 
 Spec ==
     /\ Init
     /\ [][Next]_vars
     /\ WF_vars(PresentationDeadline)
     /\ WF_vars(AdvancePopulation)
-    /\ WF_vars(CompleteCapacityRecovery)
+    /\ WF_vars(AdvanceCapacitySearch)
+    /\ WF_vars(CompleteGenericRecovery)
+
+RecoveryOwnersAreExclusive ==
+    ~(searchRecoveryPending /\ genericRecoveryPending)
 
 PopulationDeadlinePreservesCursor ==
     lastSuccessor = "population" =>
         /\ populationRemaining = priorPopulationRemaining
         /\ transactionRemaining = priorTransactionRemaining
+        /\ searchRemaining = priorSearchRemaining
         /\ capacityRevision = priorCapacityRevision
         /\ ~renderPending
 
@@ -117,20 +172,36 @@ TransactionRetryMakesStrictProgress ==
     lastSuccessor = "transaction" =>
         /\ transactionRemaining < priorTransactionRemaining
         /\ populationRemaining = priorPopulationRemaining
+        /\ searchRemaining = priorSearchRemaining
         /\ capacityRevision = priorCapacityRevision
 
-CapacityRecoveryRequiresQuiescence ==
-    lastSuccessor = "capacity" =>
-        populationRemaining = 0 /\ transactionRemaining = 0
+SearchOwnsDeadline ==
+    lastSuccessor = "search" =>
+        /\ searchRecoveryPending
+        /\ ~genericRecoveryPending
+        /\ populationRemaining = 0
+        /\ transactionRemaining = 0
+        /\ searchRemaining > 0
+
+GenericRequiresNoSearch ==
+    lastSuccessor = "generic" =>
+        /\ genericRecoveryPending
+        /\ ~searchRecoveryPending
+        /\ populationRemaining = 0
+        /\ transactionRemaining = 0
+        /\ searchRemaining = 0
 
 ActiveStateHasOwner ==
-    renderPending \/ populationRemaining > 0 \/ capacityRecoveryPending =>
+    renderPending \/ populationRemaining > 0 \/ searchRecoveryPending \/
+        genericRecoveryPending =>
         \/ ENABLED PresentationDeadline
         \/ ENABLED AdvancePopulation
-        \/ ENABLED CompleteCapacityRecovery
+        \/ ENABLED AdvanceCapacitySearch
+        \/ ENABLED CompleteGenericRecovery
 
 EventuallyTerminal ==
     <> (~renderPending /\ populationRemaining = 0 /\
-        transactionRemaining = 0 /\ ~capacityRecoveryPending)
+        transactionRemaining = 0 /\ searchRemaining = 0 /\
+        ~searchRecoveryPending /\ ~genericRecoveryPending)
 
 =============================================================================

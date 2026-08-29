@@ -15,6 +15,7 @@
 #include "lod_delivery_policy_private.h"
 #include "lod_presentation_policy_private.h"
 #include "lod_scene_evidence_private.h"
+#include "lod_terminal_quality_private.h"
 #include "lod_view_policy_private.h"
 
 /* Private provider parameters for the budgeted terminal-display path.  These

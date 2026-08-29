@@ -552,11 +552,14 @@ public:
      * admission checks. */
     static bool admitTerminalMesh(bool safeScene, bool visible,
 	bool subpixelPresentation, bool botSource, bool supportedDrawMode,
-	size_t terminalCost, size_t remainingCost)
+	size_t terminalCost, size_t currentCost, size_t remainingCost)
     {
-	return safeScene && visible && !subpixelPresentation && botSource &&
-	    supportedDrawMode && terminalCost > 0 &&
-	    terminalCost <= remainingCost;
+	if (!safeScene || !visible || subpixelPresentation || !botSource ||
+	    !supportedDrawMode || terminalCost == 0)
+	    return false;
+	const size_t additionalCost = terminalCost > currentCost ?
+	    terminalCost - currentCost : 0;
+	return additionalCost <= remainingCost;
     }
 };
 
@@ -985,14 +988,7 @@ public:
 	     inputs.stableResidentMeshBytes > inputs.residentMeshLimitBytes);
 	decision.performanceLimited = decision.viewReady &&
 	    (inputs.stableBudgetLimited || inputs.presentationLimited ||
-	     decision.memoryLimited ||
-	     (inputs.visibleTargetCount > 0 &&
-	      (saturatingAdd(inputs.activePayloadCount,
-		   inputs.presentedSubpixelOccurrenceCount) <
-		   inputs.visibleTargetCount ||
-	       saturatingAdd(inputs.satisfiedPayloadCount,
-		   inputs.presentedSubpixelOccurrenceCount) <
-		   inputs.visibleTargetCount)));
+	     decision.memoryLimited);
 	decision.outcome = hasTerminalError ? Outcome::ERROR :
 	    !decision.terminal ? Outcome::ACTIVE :
 	    decision.performanceLimited ? Outcome::CONSTRAINED : Outcome::READY;

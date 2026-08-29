@@ -61,6 +61,7 @@
 #define BG_PCA_H
 
 #include "common.h"
+#include <stdint.h>
 #include "vmath.h"
 #include "bg/defines.h"
 
@@ -80,6 +81,41 @@ struct bg_pca_frame {
     vect_t zaxis;
     fastf_t singular_values[3];
 };
+
+/**
+ * Allocation-free, mergeable PCA source moments.
+ *
+ * This is the numerically stable parallel form of Welford's accumulator.
+ * scatter stores the symmetric centered sum in xx, xy, xz, yy, yz, zz
+ * order.  Producers may update it while streaming points and merge bounded
+ * worker results without retaining the source array.
+ */
+struct bg_pca_accumulator {
+    uint64_t point_count;
+    double mean[3];
+    double scatter[6];
+};
+
+#define BG_PCA_ACCUMULATOR_INIT {0, {0.0, 0.0, 0.0}, \
+    {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}}
+
+/** Initialize an empty PCA accumulator. */
+BG_EXPORT extern void bg_pca_accumulator_init(
+	struct bg_pca_accumulator *accumulator);
+
+/** Add one finite point to a PCA accumulator. */
+BG_EXPORT extern int bg_pca_accumulator_add(
+	struct bg_pca_accumulator *accumulator, const point_t point);
+
+/** Merge source moments into target without retaining either point stream. */
+BG_EXPORT extern int bg_pca_accumulator_merge(
+	struct bg_pca_accumulator *target,
+	const struct bg_pca_accumulator *source);
+
+/** Solve a principal-component frame from accumulated source moments. */
+BG_EXPORT extern int bg_pca_accumulator_frame(
+	struct bg_pca_frame *frame,
+	const struct bg_pca_accumulator *accumulator);
 
 
 /**

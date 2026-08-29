@@ -21,6 +21,7 @@
 #include <Inventor/SoViewport.h>
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -57,6 +58,94 @@ void controller_update_cutting_plane_affordance(SoViewport *viewport,
 	double horizontalSize,
 	double aspect);
 
+/* One level-triggered host render request.  Capacity sampling is a stronger
+ * form of the same request, not an independent latch: a weaker repaint cannot
+ * downgrade it, and consuming or clearing it retires the diagnostic reason at
+ * the same transition.  The controller's renderRequestMutex owns this value. */
+class BObolRenderRequestState {
+public:
+    enum class Kind : uint8_t {
+	NONE = 0,
+	PRESENTATION,
+	CAPACITY_SAMPLE
+    };
+
+    struct Decision {
+	bool changed = false;
+	bool wakeEndpoint = false;
+    };
+
+    Decision request(const char *reason, bool capacityRelevant)
+    {
+	Decision decision;
+	const Kind requested = capacityRelevant ?
+	    Kind::CAPACITY_SAMPLE : Kind::PRESENTATION;
+	if (this->kindValue == Kind::NONE) {
+	    this->kindValue = requested;
+	    this->reasonValue = reason ? reason : "";
+	    decision.changed = true;
+	    decision.wakeEndpoint = true;
+	} else if (this->kindValue == Kind::PRESENTATION &&
+		requested == Kind::CAPACITY_SAMPLE) {
+	    this->kindValue = requested;
+	    this->reasonValue = reason ? reason : "";
+	    decision.changed = true;
+	} else if (this->kindValue == requested) {
+	    /* Same-strength requests coalesce but retain the newest diagnostic. */
+	    this->reasonValue = reason ? reason : "";
+	}
+	return decision;
+    }
+
+    bool retireCapacity(void)
+    {
+	if (this->kindValue != Kind::CAPACITY_SAMPLE)
+	    return false;
+	this->kindValue = Kind::PRESENTATION;
+	return true;
+    }
+
+    bool clear(void)
+    {
+	const bool changed = this->kindValue != Kind::NONE ||
+	    this->reasonValue.getLength() > 0;
+	this->kindValue = Kind::NONE;
+	this->reasonValue = "";
+	return changed;
+    }
+
+    bool consume(SbString *reason, SbBool *capacityRelevant)
+    {
+	const bool wasPending = this->pending();
+	if (reason)
+	    *reason = this->reasonValue;
+	if (capacityRelevant)
+	    *capacityRelevant = this->capacityRelevant() ? TRUE : FALSE;
+	this->kindValue = Kind::NONE;
+	this->reasonValue = "";
+	return wasPending;
+    }
+
+    bool pending(void) const
+    {
+	return this->kindValue != Kind::NONE;
+    }
+
+    bool capacityRelevant(void) const
+    {
+	return this->kindValue == Kind::CAPACITY_SAMPLE;
+    }
+
+    const SbString &reason(void) const
+    {
+	return this->reasonValue;
+    }
+
+private:
+    Kind kindValue = Kind::NONE;
+    SbString reasonValue;
+};
+
 /* Uninstalled state shared by the responsibility-specific controller units.
  * It retains direct storage and one allocation: extracting scene forwarding
  * must not add virtual dispatch or accessors to LoD hot paths. */
@@ -68,6 +157,89 @@ struct BObolViewController::Impl : BObolLodCoordinator {
 	selectionStore(new BObolSelectionStore)
     {
     }
+
+    /* Renderer-only presentation limits are mirrored in BObolViewLodState.
+     * Keep publication in one owner operation: a controller value without
+     * the matching renderer value is not a valid intermediate state. */
+    void publishCadProgressiveCeiling(int ceiling,
+	float nextFraction = 0.0f)
+    {
+	ceiling = ceiling < 0 ? -1 : std::min<int>(
+	    BOBOL_MESH_LOD_CUT_COUNT_MAX - 1, ceiling);
+	nextFraction = ceiling < 0 || !std::isfinite(nextFraction) ? 0.0f :
+	    std::max(0.0f, std::min(1.0f, nextFraction));
+	this->lodInteractiveProgressiveCeiling = ceiling;
+	BObolViewLodState *state = this->viewAttachment ?
+	    this->viewAttachment->getViewLodState() : NULL;
+	if (state)
+	    state->setCadPresentationProgressiveCutCeiling(
+		ceiling, nextFraction);
+    }
+
+    static float normalizedCadPointProxyThreshold(float threshold)
+    {
+	if (!std::isfinite(threshold) ||
+	    threshold < POINT_PROXY_PIXEL_THRESHOLD_MINIMUM)
+	    return POINT_PROXY_PIXEL_THRESHOLD_MINIMUM;
+	return threshold > POINT_PROXY_PIXEL_THRESHOLD_MAXIMUM ?
+	    POINT_PROXY_PIXEL_THRESHOLD_MAXIMUM : threshold;
+    }
+
+    void publishCadPointProxyThreshold(float threshold)
+    {
+	threshold = normalizedCadPointProxyThreshold(threshold);
+	this->lodPresentationPointProxyPixelThreshold = threshold;
+	BObolViewLodState *state = this->viewAttachment ?
+	    this->viewAttachment->getViewLodState() : NULL;
+	if (state)
+	    state->setCadPresentationPointProxyPixelThreshold(threshold);
+    }
+
+    void publishCadDiscoveryPointProxyThreshold(float threshold)
+    {
+	threshold = normalizedCadPointProxyThreshold(threshold);
+	this->lodDiscoveryPointProxyPixelThreshold = threshold;
+	BObolViewLodState *state = this->viewAttachment ?
+	    this->viewAttachment->getViewLodState() : NULL;
+	if (state)
+	    state->setCadPresentationDiscoveryPointProxyPixelThreshold(
+		threshold);
+    }
+
+    void publishCadPointProxyThresholds(float presentationThreshold,
+	float discoveryThreshold)
+    {
+	presentationThreshold = normalizedCadPointProxyThreshold(
+	    presentationThreshold);
+	discoveryThreshold = normalizedCadPointProxyThreshold(
+	    discoveryThreshold);
+	this->lodPresentationPointProxyPixelThreshold = presentationThreshold;
+	this->lodDiscoveryPointProxyPixelThreshold = discoveryThreshold;
+	BObolViewLodState *state = this->viewAttachment ?
+	    this->viewAttachment->getViewLodState() : NULL;
+	if (state) {
+	    state->setCadPresentationPointProxyPixelThreshold(
+		presentationThreshold);
+	    state->setCadPresentationDiscoveryPointProxyPixelThreshold(
+		discoveryThreshold);
+	}
+    }
+
+    void publishCadPresentationLimits(int ceiling, float nextFraction,
+	float pointProxyThreshold)
+    {
+	this->publishCadProgressiveCeiling(ceiling, nextFraction);
+	this->publishCadPointProxyThreshold(pointProxyThreshold);
+    }
+
+    void resetCadPresentationLimits(void)
+    {
+	this->publishCadPresentationLimits(-1, 0.0f,
+	    POINT_PROXY_PIXEL_THRESHOLD_MINIMUM);
+    }
+
+    static constexpr float POINT_PROXY_PIXEL_THRESHOLD_MINIMUM = 1.0f;
+    static constexpr float POINT_PROXY_PIXEL_THRESHOLD_MAXIMUM = 64.0f;
 
     BObolSceneController sceneController;
     SoViewport *viewport = new SoViewport;
@@ -115,9 +287,7 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     double cuttingPlaneAffordanceAspect = 1.0;
     mutable std::mutex renderRequestMutex;
     SbBool progressiveWorkPending = FALSE;
-    SbBool renderRequested = FALSE;
-    SbBool renderLodCapacityRelevant = FALSE;
-    SbString renderReason = SbString("");
+    BObolRenderRequestState renderRequest;
     uint64_t hostWorkRevision = 0;
     uint64_t renderRequestSerial = 0;
     std::mutex frameRequestMutex;

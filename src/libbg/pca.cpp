@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <float.h>
+#include <stdint.h>
 #include <algorithm>
 #include <cmath>
 
@@ -53,6 +54,59 @@
 #include "vmath.h"
 #include "bn/mat.h"
 #include "bg/pca.h"
+
+static int
+pca_frame_from_moments(struct bg_pca_frame *frame, const double center[3],
+	const double covariance[6])
+{
+    if (!frame || !center || !covariance)
+	return BRLCAD_ERROR;
+    for (size_t i = 0; i < 3; ++i)
+	if (!isfinite(center[i]))
+	    return BRLCAD_ERROR;
+    for (size_t i = 0; i < 6; ++i)
+	if (!isfinite(covariance[i]))
+	    return BRLCAD_ERROR;
+
+    Eigen::Matrix3d covarianceMatrix;
+    covarianceMatrix << covariance[0], covariance[1], covariance[2],
+	covariance[1], covariance[3], covariance[4],
+	covariance[2], covariance[4], covariance[5];
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(covarianceMatrix);
+    if (solver.info() != Eigen::Success)
+	return BRLCAD_ERROR;
+
+    frame->center[X] = static_cast<fastf_t>(center[X]);
+    frame->center[Y] = static_cast<fastf_t>(center[Y]);
+    frame->center[Z] = static_cast<fastf_t>(center[Z]);
+    const Eigen::Matrix3d axes = solver.eigenvectors();
+    vect_t *outputAxes[3] = {&frame->xaxis, &frame->yaxis, &frame->zaxis};
+    for (int i = 0; i < 3; i++) {
+	const int axisIndex = 2 - i;
+	(*outputAxes[i])[X] = axes(0, axisIndex);
+	(*outputAxes[i])[Y] = axes(1, axisIndex);
+	(*outputAxes[i])[Z] = axes(2, axisIndex);
+	const double eigenvalue = std::max(0.0, solver.eigenvalues()(axisIndex));
+	frame->singular_values[i] = static_cast<fastf_t>(std::sqrt(eigenvalue));
+    }
+
+    return BRLCAD_OK;
+}
+
+static bool
+pca_accumulator_finite(const struct bg_pca_accumulator *accumulator)
+{
+    if (!accumulator)
+	return false;
+    for (size_t axis = 0; axis < 3; ++axis)
+	if (!isfinite(accumulator->mean[axis]))
+	    return false;
+    for (size_t value = 0; value < 6; ++value)
+	if (!isfinite(accumulator->scatter[value]))
+	    return false;
+    return true;
+}
 
 static int
 pca_frame(struct bg_pca_frame *frame, size_t npnts, const point_t *pnts)
@@ -102,34 +156,112 @@ pca_frame(struct bg_pca_frame *frame, size_t npnts, const point_t *pnts)
 	}
     }
 
-    Eigen::Matrix3d covarianceMatrix;
-    covarianceMatrix << covariance[0], covariance[1], covariance[2],
-	covariance[1], covariance[3], covariance[4],
-	covariance[2], covariance[4], covariance[5];
+    return pca_frame_from_moments(frame, center, covariance);
+}
 
-    // 3.  Solve the symmetric covariance matrix.  Eigenvalues are ascending;
-    // expose the corresponding singular-value magnitudes in descending order.
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(covarianceMatrix);
-    if (solver.info() != Eigen::Success)
+extern "C" void
+bg_pca_accumulator_init(struct bg_pca_accumulator *accumulator)
+{
+    if (!accumulator)
+	return;
+    *accumulator = BG_PCA_ACCUMULATOR_INIT;
+}
+
+extern "C" int
+bg_pca_accumulator_add(struct bg_pca_accumulator *accumulator,
+	const point_t point)
+{
+    if (!accumulator || !point || accumulator->point_count == UINT64_MAX ||
+	!isfinite(point[X]) || !isfinite(point[Y]) || !isfinite(point[Z]))
 	return BRLCAD_ERROR;
 
-    // 4.  Extract the principal axes.  A 3x3 solver always gives three axes,
-    // including for one- and two-point inputs.
-    frame->center[X] = static_cast<fastf_t>(center[X]);
-    frame->center[Y] = static_cast<fastf_t>(center[Y]);
-    frame->center[Z] = static_cast<fastf_t>(center[Z]);
-    const Eigen::Matrix3d axes = solver.eigenvectors();
-    vect_t *outputAxes[3] = {&frame->xaxis, &frame->yaxis, &frame->zaxis};
-    for (int i = 0; i < 3; i++) {
-	const int axisIndex = 2 - i;
-	(*outputAxes[i])[X] = axes(0, axisIndex);
-	(*outputAxes[i])[Y] = axes(1, axisIndex);
-	(*outputAxes[i])[Z] = axes(2, axisIndex);
-	const double eigenvalue = std::max(0.0, solver.eigenvalues()(axisIndex));
-	frame->singular_values[i] = static_cast<fastf_t>(std::sqrt(eigenvalue));
+    struct bg_pca_accumulator candidate = *accumulator;
+    const uint64_t nextCount = candidate.point_count + 1;
+    double delta[3] = {
+	static_cast<double>(point[X]) - candidate.mean[X],
+	static_cast<double>(point[Y]) - candidate.mean[Y],
+	static_cast<double>(point[Z]) - candidate.mean[Z]
+    };
+    const double inverseCount = 1.0 / static_cast<double>(nextCount);
+    for (size_t axis = 0; axis < 3; ++axis)
+	candidate.mean[axis] += delta[axis] * inverseCount;
+    const double updatedDelta[3] = {
+	static_cast<double>(point[X]) - candidate.mean[X],
+	static_cast<double>(point[Y]) - candidate.mean[Y],
+	static_cast<double>(point[Z]) - candidate.mean[Z]
+    };
+    const double products[6] = {
+	delta[X] * updatedDelta[X], delta[X] * updatedDelta[Y],
+	delta[X] * updatedDelta[Z], delta[Y] * updatedDelta[Y],
+	delta[Y] * updatedDelta[Z], delta[Z] * updatedDelta[Z]
+    };
+    for (size_t value = 0; value < 6; ++value) {
+	candidate.scatter[value] += products[value];
+	if (!isfinite(candidate.scatter[value]))
+	    return BRLCAD_ERROR;
     }
-
+    candidate.point_count = nextCount;
+    *accumulator = candidate;
     return BRLCAD_OK;
+}
+
+extern "C" int
+bg_pca_accumulator_merge(struct bg_pca_accumulator *target,
+	const struct bg_pca_accumulator *source)
+{
+    if (!pca_accumulator_finite(target) ||
+	!pca_accumulator_finite(source))
+	return BRLCAD_ERROR;
+    if (!source->point_count)
+	return BRLCAD_OK;
+    if (!target->point_count) {
+	*target = *source;
+	return BRLCAD_OK;
+    }
+    if (source->point_count > UINT64_MAX - target->point_count)
+	return BRLCAD_ERROR;
+
+    struct bg_pca_accumulator candidate = *target;
+    const uint64_t combinedCount =
+	candidate.point_count + source->point_count;
+    const double targetWeight = static_cast<double>(candidate.point_count);
+    const double sourceWeight = static_cast<double>(source->point_count);
+    const double combinedWeight = static_cast<double>(combinedCount);
+    const double delta[3] = {
+	source->mean[X] - candidate.mean[X],
+	source->mean[Y] - candidate.mean[Y],
+	source->mean[Z] - candidate.mean[Z]
+    };
+    const double crossWeight = targetWeight * sourceWeight / combinedWeight;
+    const double products[6] = {
+	delta[X] * delta[X], delta[X] * delta[Y], delta[X] * delta[Z],
+	delta[Y] * delta[Y], delta[Y] * delta[Z], delta[Z] * delta[Z]
+    };
+    for (size_t value = 0; value < 6; ++value) {
+	candidate.scatter[value] += source->scatter[value] +
+	    products[value] * crossWeight;
+	if (!isfinite(candidate.scatter[value]))
+	    return BRLCAD_ERROR;
+    }
+    for (size_t axis = 0; axis < 3; ++axis) {
+	candidate.mean[axis] += delta[axis] * sourceWeight / combinedWeight;
+	if (!isfinite(candidate.mean[axis]))
+	    return BRLCAD_ERROR;
+    }
+    candidate.point_count = combinedCount;
+    *target = candidate;
+    return BRLCAD_OK;
+}
+
+extern "C" int
+bg_pca_accumulator_frame(struct bg_pca_frame *frame,
+	const struct bg_pca_accumulator *accumulator)
+{
+    if (!frame || !accumulator || !accumulator->point_count ||
+	!pca_accumulator_finite(accumulator))
+	return BRLCAD_ERROR;
+    return pca_frame_from_moments(frame, accumulator->mean,
+	accumulator->scatter);
 }
 
 static int

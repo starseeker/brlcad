@@ -74,6 +74,18 @@ public:
 	    activeCutPreserved && richerResidentPrefix;
     }
 
+    /* A capacity candidate may request an immutable suffix in order to make
+     * its selected occurrence cut drawable.  The arriving suffix belongs to
+     * that already active allocation transaction; labeling it as independent
+     * resident growth creates two owners which wait for each other.  Ordinary
+     * result delivery still needs the resident-growth drain and scene-wide
+     * reallocation below. */
+    static bool needsIndependentResidentGrowth(bool richerResidentPrefix,
+	bool capacityCandidatePending)
+    {
+	return richerResidentPrefix && !capacityCandidatePending;
+    }
+
     static bool allocationPopulationSettled(bool providerInventorySettled,
 	bool serviceStreamIdle, bool resultDeliveryIdle,
 	bool growthTransactionPending, bool residencyDrainActive)
@@ -112,16 +124,18 @@ public:
     }
 
     /* Resident growth owns availability population before ordinary capacity
-     * calibration may restart the shared submission cursor.  Triangle
-     * recovery then owns its finite retained-allocation budget until its
-     * coherent pass is presented or proved unchanged.  Treating residual
-     * recovery quality debt as an ordinary capacity block restarts the same
-     * all-scene pass indefinitely. */
+     * calibration may restart the shared submission cursor.  A capacity
+     * candidate created while triangle recovery is active is the recovery
+     * pass's allocation transaction, not competing quality work.  Consume
+     * that candidate first; recovery cannot validate or present its result
+     * while the capacity transaction remains pending.  Once no capacity
+     * planning remains, triangle recovery retains its finite allocation and
+     * the point phase owns the resulting presentation. */
     static CompletedPassSuccessor completedPassSuccessor(bool completed,
 	bool residencyDrainActive, bool residentGrowthPending,
 	bool residentRefinementPending, bool residentWorkPending,
 	bool pointTriangleRecovery, bool pointCalibrationPending,
-	bool capacityBlocked)
+	bool capacityPlanningPending)
     {
 	if (!completed)
 	    return CompletedPassSuccessor::NONE;
@@ -133,12 +147,17 @@ public:
 	    return residentWorkPending ?
 		CompletedPassSuccessor::AWAIT_RESIDENT_RESULT :
 		CompletedPassSuccessor::SUBMIT_RESIDENT_REQUESTS;
+	/* ALLOCATING is itself a typed completion owner.  A candidate may satisfy
+	 * its complete pixel demand without exhausting its allowance; that clean
+	 * pass still has to prepare and present the candidate before the search can
+	 * sample or terminate.  Point recovery/calibration remains the successor;
+	 * it cannot present or retire while this stronger transaction is pending. */
+	if (capacityPlanningPending)
+	    return CompletedPassSuccessor::CALIBRATE_CAPACITY;
 	if (pointTriangleRecovery)
 	    return CompletedPassSuccessor::NONE;
 	if (pointCalibrationPending)
 	    return CompletedPassSuccessor::PRESENT_POINT_CALIBRATION;
-	if (capacityBlocked)
-	    return CompletedPassSuccessor::CALIBRATE_CAPACITY;
 	return CompletedPassSuccessor::NONE;
     }
 
@@ -511,6 +530,17 @@ public:
 	this->demandRevisionValue = 0;
 	this->deadlineValue = serviceAvailable ?
 	    deadlineAfter(nowMicroseconds, delayMicroseconds) : 0;
+    }
+
+    /* Policy disable is not a service replacement.  Retire this view's
+     * reclamation transaction without manufacturing a new delayed request;
+     * resident buffers and their shared service ownership remain intact. */
+    void retire(void)
+    {
+	this->pendingValue = false;
+	this->planningValue = false;
+	this->demandRevisionValue = 0;
+	this->deadlineValue = 0;
     }
 
     Decision decide(const Inputs &inputs)

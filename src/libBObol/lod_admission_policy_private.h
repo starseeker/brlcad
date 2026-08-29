@@ -209,6 +209,18 @@ public:
 	return this->residentGrowthPhaseValue != ResidentGrowthPhase::IDLE;
     }
 
+    bool transferResidentGrowthToCapacityCandidate(void)
+    {
+	if (!this->residentGrowthPending())
+	    return false;
+	/* The capacity candidate now owns both the already published prefix and
+	 * any suffix task still in flight.  Its population-settlement gate waits
+	 * for the service stream, so retaining a second growth phase adds no safety
+	 * and can only create a circular scheduler dependency. */
+	this->residentGrowthPhaseValue = ResidentGrowthPhase::IDLE;
+	return true;
+    }
+
     bool residencyDrainRequired(void) const
     {
 	return this->residentGrowthPhaseValue ==
@@ -278,6 +290,7 @@ public:
     enum class Phase {
 	IDLE,
 	ADAPTIVE_CALIBRATION,
+	STATIC_CALIBRATION,
 	HANDOFF_CONFIRMATION,
 	TRIANGLE_RECOVERY
     };
@@ -285,12 +298,18 @@ public:
     bool presentationPending(void) const
     {
 	return this->phase == Phase::ADAPTIVE_CALIBRATION ||
+	    this->phase == Phase::STATIC_CALIBRATION ||
 	    this->phase == Phase::HANDOFF_CONFIRMATION;
     }
 
     bool adaptiveCalibrationPending(void) const
     {
 	return this->phase == Phase::ADAPTIVE_CALIBRATION;
+    }
+
+    bool staticCalibrationPending(void) const
+    {
+	return this->phase == Phase::STATIC_CALIBRATION;
     }
 
     bool handoffConfirmationPending(void) const
@@ -329,8 +348,19 @@ public:
 
     void requestCalibration(void)
     {
-	if (this->phase != Phase::TRIANGLE_RECOVERY)
+	if (this->phase != Phase::TRIANGLE_RECOVERY &&
+	    this->phase != Phase::STATIC_CALIBRATION)
 	    this->phase = Phase::ADAPTIVE_CALIBRATION;
+    }
+
+    /* Event-driven static refinement is allowed to retain a framebuffer
+     * whose one-time render exceeds the ordinary streaming cadence.  Keep
+     * that deadline class in the sum-typed point owner until its exact
+     * candidate frame either settles or schedules its next bounded step. */
+    void requestStaticCalibration(void)
+    {
+	if (this->phase != Phase::TRIANGLE_RECOVERY)
+	    this->phase = Phase::STATIC_CALIBRATION;
     }
 
     void requestHandoffConfirmation(void)
@@ -350,19 +380,34 @@ public:
 	this->phase = Phase::TRIANGLE_RECOVERY;
     }
 
-    void completeTriangleRecovery(void)
+    void completeTriangleRecovery(uint64_t saturatedPlanSerial = 0)
     {
-	if (this->phase == Phase::TRIANGLE_RECOVERY)
+	if (this->phase == Phase::TRIANGLE_RECOVERY) {
 	    this->phase = Phase::IDLE;
+	    this->saturatedPlanSerialValue = saturatedPlanSerial;
+	}
+    }
+
+    bool triangleRecoverySaturatedBy(uint64_t planSerial) const
+    {
+	return planSerial != 0 &&
+	    this->saturatedPlanSerialValue == planSerial;
     }
 
     void reset(void)
     {
 	this->phase = Phase::IDLE;
+	this->saturatedPlanSerialValue = 0;
     }
 
 private:
     Phase phase = Phase::IDLE;
+    /* A completed constrained allocation must not be resubmitted merely
+     * because presentation-only point calibration follows it.  The active
+     * allocation's own revision stamp supplies freshness; keeping the serial
+     * with the point-quality owner prevents a detached controller latch from
+     * outliving this lifecycle. */
+    uint64_t saturatedPlanSerialValue = 0;
 };
 
 class BObolLodPointProxyEvidence {
@@ -372,6 +417,11 @@ private:
     static constexpr float maximumPixelThreshold(void)
     {
 	return 64.0f;
+    }
+
+    static constexpr float narrowBracketRatio(void)
+    {
+	return 1.08f;
     }
 
     static bool atMaximumPixelThreshold(float threshold)
@@ -499,6 +549,18 @@ private:
 	    allocationPresentationRealized;
     }
 
+    static bool capacitySampleYieldsToStructuralFrontier(
+	bool capacityPresentationPending, bool exactFrame,
+	bool exactOccurrenceClassification, size_t presentedStructuralBoxes)
+    {
+	/* Capacity timing deliberately excludes structural placeholders.  An
+	 * exact unchanged frame containing one can therefore never satisfy the
+	 * pending sample.  Release that sample so point classification or
+	 * structural repair can own the frontier instead of repainting it. */
+	return capacityPresentationPending && exactFrame &&
+	    exactOccurrenceClassification && presentedStructuralBoxes > 0;
+    }
+
     /* Decide when a quiet deadline miss has reached the per-occurrence floor
      * rather than merely an expensive triangle prefix.  The renderer may
      * have attempted a rich prefix, but its one-step cost predictor can prove
@@ -585,7 +647,6 @@ private:
 	decision.threshold = current;
 	if (!visibleCount || !maximumUncollapsedCount)
 	    return decision;
-	this->settledThreshold = 0.0f;
 
 	float limit = 1.0f;
 	float next = current;
@@ -605,6 +666,12 @@ private:
 	next = sanitize(next);
 	if (next <= current + 0.01f)
 	    return decision;
+	/* Replaying an unchanged, exact structural census is an idempotent
+	 * observation.  In particular, it must not erase the terminal witness
+	 * established when the current cut could not afford its finer preload.
+	 * Only a threshold transition changes the point/mesh population named by
+	 * that witness. */
+	this->settledThreshold = 0.0f;
 	/* Every threshold below the selected census boundary leaves too many
 	 * independently submitted occurrences for the first-wave allowance. */
 	this->unsafeThreshold = std::max(this->unsafeThreshold, current);
@@ -632,10 +699,24 @@ private:
 
 	float next = BObolLodQualityPolicy::pointProxyThreshold(
 	    current, renderNanoseconds, targetFps);
-	if (this->safeThreshold > this->unsafeThreshold)
-	    next = static_cast<float>(std::sqrt(
-		static_cast<double>(this->safeThreshold) *
-		static_cast<double>(this->unsafeThreshold)));
+	if (this->safeThreshold > this->unsafeThreshold) {
+	    /* The timing correction and the safe/unsafe bracket are independent
+	     * evidence about the same coarsening direction.  Honor the stronger
+	     * correction while keeping the candidate inside the proven bracket.
+	     * Falling back to geometric bisection alone can spend many expensive
+	     * frames on thresholds which classify the same large occurrence
+	     * population. */
+	    if (this->safeThreshold / this->unsafeThreshold <=
+		    narrowBracketRatio()) {
+		next = this->safeThreshold;
+	    } else {
+		const float midpoint = static_cast<float>(std::sqrt(
+		    static_cast<double>(this->safeThreshold) *
+		    static_cast<double>(this->unsafeThreshold)));
+		next = std::min(this->safeThreshold,
+		    std::max(midpoint, next));
+	    }
+	}
 	else if (next <= current + 0.01f && current < 64.0f) {
 	    /* pointProxyThreshold() deliberately ignores completed-frame timing
 	     * within five percent of its preferred cadence.  This entry point is
@@ -691,7 +772,8 @@ private:
 
 	float next = current;
 	if (this->safeThreshold > this->unsafeThreshold) {
-	    if (this->safeThreshold / this->unsafeThreshold <= 1.08f)
+	    if (this->safeThreshold / this->unsafeThreshold <=
+		    narrowBracketRatio())
 		next = this->safeThreshold;
 	    else
 		next = static_cast<float>(std::sqrt(
@@ -756,7 +838,8 @@ private:
 	    this->safeThreshold > this->unsafeThreshold) {
 	    /* Once the bracket is within eight percent, retaining the proven
 	     * safe side avoids visible threshold chatter for negligible quality. */
-	    if (this->safeThreshold / this->unsafeThreshold <= 1.08f) {
+	    if (this->safeThreshold / this->unsafeThreshold <=
+		    narrowBracketRatio()) {
 		this->settledThreshold = current;
 		return decision;
 	    }
@@ -1045,6 +1128,7 @@ public:
 	bool submissionPending = false;
 	bool discoveryCalibrationPending = false;
 	bool stableCalibrationPending = false;
+	bool capacityAllocationPending = false;
 	bool capacitySamplePending = false;
 	bool stablePresentationAvailable = false;
 	bool providerPending = false;
@@ -1055,7 +1139,7 @@ public:
     enum class EvidenceAction : uint8_t {
 	RESET_CAPACITY = 0,
 	CLEAR_CAPACITY_LIMIT,
-	RESET_CAPACITY_MEASUREMENT,
+	INVALIDATE_CAPACITY_MEASUREMENT,
 	RESET_CAPACITY_OVERLOAD,
 	CLEAR_RETAINED_QUALITY_FLOOR,
 	CLEAR_RETAINED_RECOVERY_CEILING,
@@ -1075,6 +1159,11 @@ public:
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor);
 
+    static BObolLodAdmissionPlan completeAppliedAllocation(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	const BObolLodCapacityEvidence::CompletedAllocationInputs &inputs);
+
     static BObolLodAdmissionPlan requestRetainedRecovery(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor, size_t budget);
@@ -1088,6 +1177,10 @@ public:
 	const BObolLodAdmissionCursor &cursor,
 	bool preserveCurrentBudget = true);
 
+    static BObolLodAdmissionPlan resumeCapacityCandidateAllocation(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor);
+
     static BObolLodAdmissionPlan requestPresentationReconciliation(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor, size_t budget);
@@ -1099,8 +1192,8 @@ public:
 
     static BObolLodAdmissionPlan recordDeadlineCapacityMiss(
 	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor, size_t attemptedBudget,
-	bool staticDeadline = false);
+	const BObolLodAdmissionCursor &cursor,
+	const BObolLodCapacityEvidence::DeadlineMissInputs &inputs);
 
     static BObolLodAdmissionPlan setRetainedQualityFloor(
 	const BObolLodAdmissionEvidence &evidence,
@@ -1213,6 +1306,24 @@ public:
     static bool pointRequiresReusableConfirmation(float currentThreshold,
 	size_t unresolvedStructuralCount = 0);
 
+    /* Coarsening hides additional occurrences and therefore cannot expose a
+     * structural box; preserve the exact timing-selected threshold.  A finer
+     * candidate can reveal meshes, so map it to the conservative lower
+     * projection bucket whose complete frontier must be preloaded first. */
+    static float pointStructuralPreloadThreshold(float currentThreshold,
+	float candidateThreshold);
+
+    /* A finer aggregate cut may require first meshes for every newly exposed
+     * structural occurrence.  Reject a candidate which exceeds either the
+     * bounded first-wave population or a conservative occurrence-scaled
+     * static presentation deadline before starting that irreversible
+     * preload. */
+    static bool pointRelaxationPreloadFitsDeadline(
+	size_t activeOccurrenceCount, size_t additionalOccurrenceCount,
+	uint64_t measuredRenderNanoseconds,
+	uint64_t presentationDeadlineNanoseconds,
+	size_t maximumAdditionalOccurrenceCount);
+
     static bool pointAggregationApplicable(size_t visibleOccurrenceCount);
 
     static bool pointAggregationApplicableAcrossCameraInvalidation(
@@ -1236,6 +1347,10 @@ public:
 	bool exactFrame, bool exactOccurrenceClassification,
 	size_t presentedStructuralBoxes, bool allocationPresentationRealized);
 
+    static bool capacitySampleYieldsToStructuralFrontier(
+	bool capacityPresentationPending, bool exactFrame,
+	bool exactOccurrenceClassification, size_t presentedStructuralBoxes);
+
     static bool pointDeadlineRequiresPopulationAggregation(
 	size_t activeRenderCost, size_t minimumRenderCost,
 	int presentedMaximum, int correctedCeiling,
@@ -1256,6 +1371,16 @@ public:
     static bool pointBlocksSourceAdmission(
 	bool discoveryCalibrationPending, bool stableCalibrationPending);
 
+    /* Missing meshes in an exact, quiet structural frontier are admitted only
+     * by the structural-repair transaction.  Ordinary source passes may still
+     * retarget resident meshes, but must not race point classification by
+     * replacing whatever boxes happen to be exposed by an intermediate
+     * threshold. */
+    static bool structuralFallbackAdmissionDeferred(
+	bool quietView, bool coverageComplete, bool exactFrame,
+	size_t presentedStructuralBoxes, size_t terminalOccurrenceFailures,
+	bool directPreviewAuthorized, bool structuralRepairActive);
+
     /* A presentation-owned measurement freezes the occurrence population it
      * is measuring.  An unchanged submission cursor must not run, or count as
      * a future geometry producer, until that frame completes.  Source and
@@ -1263,7 +1388,8 @@ public:
      * explicitly retire stale capacity evidence. */
     static bool presentationPausesSubmission(
 	bool discoveryCalibrationPending, bool stableCalibrationPending,
-	bool capacitySamplePending, bool stablePresentationAvailable);
+	bool capacityAllocationPending, bool capacitySamplePending,
+	bool stablePresentationAvailable);
 
     static bool maySeedPointStructuralDistribution(
 	bool discoveryCalibrationPending, bool stableCalibrationPending,
@@ -1358,18 +1484,6 @@ public:
     static bool progressivePresentationQualityDebt(int activeMaximumCut,
 	int presentationCeiling);
 
-    /* A renderer-wide PoP ceiling is a transient capacity guard for a
-	* multi-occurrence scene.  Once no live static staircase owns it (or that
-	* staircase has rejected its next step), an exact quiet frame must be
-	* translated into occurrence-local cuts before readiness.  For exactly one
-	* progressive occurrence the ordinal is already occurrence-local, so the
-	* proven ceiling is a valid terminal representation and avoids a redundant
-	* allocator/repaint transaction. */
-    static bool terminalGlobalCeilingRequiresReconciliation(
-	bool stableTerminalContext, bool exactCompletedFrame,
-	int progressiveCeiling, bool staticPhaseActive,
-	bool staticPhaseRejected, size_t progressivePayloadCount);
-
     /* Translate a renderer-wide CAD cut into the retained allocator's scene
      * currency.  Backend submitted-work records may expand indexed vertices,
      * normals, and triangles differently (OSMesa flat shading is the important
@@ -1462,6 +1576,23 @@ public:
 
     static bool retainedPointAggregationApplicable(
 	bool logicalPopulationApplicable, size_t pointProxyCandidateCount);
+
+    /* A structural admission frame is itself a certificate that a preceding
+     * exact census found a multi-occurrence population which the point cut can
+     * change.  Preserve that certificate while the replacement frame is
+     * incomplete: the live visibility census is intentionally inexact during
+     * an interrupted traversal, and consulting it alone can disable the only
+     * recovery control which makes the traversal cheaper. */
+    static bool deadlinePointAggregationApplicable(
+	bool retainedPopulationApplicable, bool structuralAdmissionPending,
+	size_t logicalOccurrenceCount);
+
+    /* A retained allocation counts only mesh-backed point candidates.  The
+     * point threshold is inert only when an exact renderer census also proves
+     * that no non-terminal structural fallback can use it. */
+    static bool pointProxyThresholdInert(size_t retainedCandidateCount,
+	bool exactStructuralProjection, size_t structuralOccurrenceCount,
+	size_t terminalFailureCount);
 
     static bool structuralPointAggregationRequired(
 	size_t logicalOccurrenceCount, size_t affordableOccurrenceCount);

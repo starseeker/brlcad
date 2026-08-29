@@ -230,8 +230,11 @@ qged_cutting_plane_set(const QgPluginContext *context, int enabled,
 	ged_exec(gedp, 4, enableArgv) == BRLCAD_OK;
 }
 
-CADViewSettings::CADViewSettings(QWidget *)
+CADViewSettings::CADViewSettings(QWidget *parent) : QWidget(parent)
 {
+    this->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.controls"));
+
     QVBoxLayout *wl = new QVBoxLayout;
     wl->setAlignment(Qt::AlignTop);
 
@@ -245,9 +248,30 @@ CADViewSettings::CADViewSettings(QWidget *)
     scale_ckbx = new QCheckBox("Scale");
     viewaxes_ckbx = new QCheckBox("View Axes");
 
+    acsg_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.adaptive-csg"));
+    amesh_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.adaptive-mesh"));
+    adc_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.adc"));
+    cdot_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.center-dot"));
+    grid_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.grid"));
+    mdlaxes_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.model-axes"));
+    scale_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.scale"));
+    viewaxes_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.view-axes"));
+
     cutting_grp = new QGroupBox("Cutting Plane");
+    cutting_grp->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.cutting"));
     QVBoxLayout *cuttingLayout = new QVBoxLayout;
     cutting_enabled_ckbx = new QCheckBox("Enable model-space cutting plane");
+    cutting_enabled_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.cutting-enabled"));
     cuttingLayout->addWidget(cutting_enabled_ckbx);
     const char *const coordinateNames[] = {"X", "Y", "Z"};
     QHBoxLayout *originLayout = new QHBoxLayout;
@@ -260,6 +284,12 @@ CADViewSettings::CADViewSettings(QWidget *)
 	    i == 2 ? 1.0 : 0.0);
 	cutting_origin[i]->setPrefix(QString("%1 ").arg(coordinateNames[i]));
 	cutting_normal[i]->setPrefix(QString("%1 ").arg(coordinateNames[i]));
+	cutting_origin[i]->setProperty("qgTestId",
+	    QStringLiteral("org.brlcad.qged.view.settings.cutting-origin-%1")
+	    .arg(QString::fromLatin1(coordinateNames[i]).toLower()));
+	cutting_normal[i]->setProperty("qgTestId",
+	    QStringLiteral("org.brlcad.qged.view.settings.cutting-normal-%1")
+	    .arg(QString::fromLatin1(coordinateNames[i]).toLower()));
 	originLayout->addWidget(cutting_origin[i]);
 	normalLayout->addWidget(cutting_normal[i]);
     }
@@ -275,6 +305,8 @@ CADViewSettings::CADViewSettings(QWidget *)
     fb_mode_combo->addItem("Overlay");  /* index 1 -> gv_fb_mode = 1 */
     fb_mode_combo->addItem("Underlay"); /* index 2 -> gv_fb_mode = 2 */
     fb_mode_combo->addItem("Interlay"); /* index 3 -> Obol interlay */
+    fb_mode_combo->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.framebuffer"));
     fbl->addWidget(fb_mode_combo);
     fbl->addStretch();
 
@@ -288,6 +320,22 @@ CADViewSettings::CADViewSettings(QWidget *)
     params_el_ckbx = new QCheckBox("Elevation");
     params_tw_ckbx = new QCheckBox("Twist");
     params_fps_ckbx = new QCheckBox("FPS");
+    params_grp->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.parameters"));
+    params_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.parameters-enabled"));
+    params_size_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.parameters-size"));
+    params_center_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.parameters-center"));
+    params_az_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.parameters-azimuth"));
+    params_el_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.parameters-elevation"));
+    params_tw_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.parameters-twist"));
+    params_fps_ckbx->setProperty("qgTestId",
+	QStringLiteral("org.brlcad.qged.view.settings.parameters-fps"));
     pgl->addWidget(params_ckbx);
     pgl->addWidget(params_size_ckbx);
     pgl->addWidget(params_center_ckbx);

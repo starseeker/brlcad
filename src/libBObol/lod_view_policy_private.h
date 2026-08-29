@@ -525,6 +525,23 @@ public:
 	this->settleAfterRenderSerialValue = 0;
 	this->lastViewChangeMicrosecondsValue = 0;
 	this->releaseCutFloorActiveValue = false;
+	this->ceilingFeedbackRenderSerialValue = 0;
+    }
+
+    bool hasNewCeilingFeedback(uint64_t renderCompletionSerial) const
+    {
+	return renderCompletionSerial !=
+	    this->ceilingFeedbackRenderSerialValue;
+    }
+
+    void noteCeilingFeedback(uint64_t renderCompletionSerial)
+    {
+	this->ceilingFeedbackRenderSerialValue = renderCompletionSerial;
+    }
+
+    void resetCeilingFeedback(void)
+    {
+	this->ceilingFeedbackRenderSerialValue = 0;
     }
 
     uint64_t settleAfterRenderSerial(void) const
@@ -549,6 +566,7 @@ private:
     uint64_t settleAfterRenderSerialValue = 0;
     int64_t lastViewChangeMicrosecondsValue = 0;
     bool releaseCutFloorActiveValue = false;
+    uint64_t ceilingFeedbackRenderSerialValue = 0;
 };
 
 static_assert(std::is_trivially_copyable<
@@ -741,6 +759,22 @@ public:
 	return true;
     }
 
+    /* A complete occurrence allocation may prove, without another rendered
+     * trial, that its protected minimum exceeds the hard presentation
+     * allowance.  Record that prediction directly as the terminal constraint.
+     * Routing it through reject() silently does nothing from IDLE and lets the
+     * identical over-budget allocation rearm its handoff forever. */
+    bool constrain(const Constraint &constraint)
+    {
+	if (!constraint.valid() || this->stateValue != State::IDLE)
+	    return false;
+	this->constraintValue = constraint;
+	this->acceptanceValue = Acceptance();
+	this->stateValue = State::REJECTED;
+	this->sampledCeilingValue = -1;
+	return true;
+    }
+
     bool acceptFractionalCeiling(const Acceptance &acceptance)
     {
 	if (!acceptance.valid() || !this->probing())
@@ -751,7 +785,6 @@ public:
 	this->sampledCeilingValue = -1;
 	return true;
     }
-
     bool probing(void) const
     {
 	return this->stateValue == State::PROBING;
@@ -1062,6 +1095,19 @@ public:
 	const size_t additional = presentationCostLimit - presentedCost;
 	return additional > SIZE_MAX - activeCost ?
 	    SIZE_MAX : activeCost + additional;
+    }
+
+    /* An exact first-use framebuffer is not reusable timing evidence.  The
+     * event-driven host must schedule one unchanged CAD replay before it may
+     * classify a terminal static-quality cut.  Keeping this predicate in the
+     * scalar policy makes the missing-sample successor explicit and testable;
+     * the controller remains responsible only for arming its existing
+     * presentation owner. */
+    static bool staticQualityTimingReplayRequired(bool stableContext,
+	bool exactCompletedFrame, uint64_t reusableCadNanoseconds)
+    {
+	return stableContext && exactCompletedFrame &&
+	    reusableCadNanoseconds == 0;
     }
 
     static float interactivePixelError(uint64_t renderNanoseconds,

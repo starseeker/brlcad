@@ -22,6 +22,7 @@ CONSTANT MaxInputEpoch
 
 Profiles == {"lucy", "scene"}
 WorkerStates == {"idle", "queued", "inflight", "result"}
+ConstraintWitnesses == {"none", "deadline", "memory", "presentation"}
 
 ProfileCoverage(p) == IF p = "lucy" THEN 1 ELSE 3
 ProfileResidency(p) == IF p = "lucy" THEN 2 ELSE 1
@@ -41,13 +42,14 @@ VARIABLES profile,
           framePending,
           handoffPending,
           submissionPending,
-          performanceLimited
+          performanceLimited,
+          constraintWitness
 
 vars == <<profile, inputEpoch, inputOpen, coverageRemaining,
           residencyRemaining, physicalDebtRemaining, qualityRemaining,
           scanActive, workerState,
           allocationPending, framePending, handoffPending,
-          submissionPending, performanceLimited>>
+          submissionPending, performanceLimited, constraintWitness>>
 
 TypeOK ==
     /\ profile \in Profiles
@@ -64,6 +66,7 @@ TypeOK ==
     /\ handoffPending \in BOOLEAN
     /\ submissionPending \in BOOLEAN
     /\ performanceLimited \in BOOLEAN
+    /\ constraintWitness \in ConstraintWitnesses
 
 Init ==
     /\ profile \in Profiles
@@ -80,6 +83,7 @@ Init ==
     /\ handoffPending = FALSE
     /\ submissionPending = TRUE
     /\ performanceLimited = FALSE
+    /\ constraintWitness = "none"
 
 \* A camera event starts a new bounded view epoch.  Resident mesh suffixes are
 \* cumulative and survive, while the visibility census and quality demand are
@@ -100,6 +104,7 @@ BeginInput ==
     /\ handoffPending' = FALSE
     /\ submissionPending' = (workerState = "idle")
     /\ performanceLimited' = FALSE
+    /\ constraintWitness' = "none"
     /\ UNCHANGED profile
 
 EndInput ==
@@ -114,7 +119,8 @@ EndInput ==
                     residencyRemaining, physicalDebtRemaining,
                     qualityRemaining, scanActive,
                     workerState, allocationPending, framePending,
-                    handoffPending, performanceLimited>>
+                    handoffPending, performanceLimited,
+                    constraintWitness>>
 
 StartCoverageScan ==
     /\ submissionPending
@@ -128,7 +134,7 @@ StartCoverageScan ==
                     residencyRemaining, physicalDebtRemaining,
                     qualityRemaining, workerState,
                     allocationPending, framePending, handoffPending,
-                    performanceLimited>>
+                    performanceLimited, constraintWitness>>
 
 AdvanceCoverageScan ==
     /\ scanActive
@@ -140,7 +146,8 @@ AdvanceCoverageScan ==
     /\ UNCHANGED <<profile, inputEpoch, inputOpen, residencyRemaining,
                     physicalDebtRemaining, qualityRemaining, workerState,
                     allocationPending,
-                    submissionPending, performanceLimited>>
+                    submissionPending, performanceLimited,
+                    constraintWitness>>
 
 QueueResidentLoad ==
     /\ submissionPending
@@ -156,7 +163,7 @@ QueueResidentLoad ==
                     residencyRemaining, physicalDebtRemaining,
                     qualityRemaining, scanActive,
                     allocationPending, framePending, handoffPending,
-                    performanceLimited>>
+                    performanceLimited, constraintWitness>>
 
 StartResidentLoad ==
     /\ workerState = "queued"
@@ -165,7 +172,8 @@ StartResidentLoad ==
                     residencyRemaining, physicalDebtRemaining,
                     qualityRemaining, scanActive,
                     allocationPending, framePending, handoffPending,
-                    submissionPending, performanceLimited>>
+                    submissionPending, performanceLimited,
+                    constraintWitness>>
 
 FinishResidentLoad ==
     /\ workerState = "inflight"
@@ -174,7 +182,8 @@ FinishResidentLoad ==
                     residencyRemaining, physicalDebtRemaining,
                     qualityRemaining, scanActive,
                     allocationPending, framePending, handoffPending,
-                    submissionPending, performanceLimited>>
+                    submissionPending, performanceLimited,
+                    constraintWitness>>
 
 ApplyResidentResult ==
     /\ workerState = "result"
@@ -190,7 +199,7 @@ ApplyResidentResult ==
     /\ submissionPending' = FALSE
     /\ UNCHANGED <<profile, inputEpoch, inputOpen, coverageRemaining,
                     qualityRemaining, scanActive, allocationPending,
-                    performanceLimited>>
+                    performanceLimited, constraintWitness>>
 
 StartAllocation ==
     /\ submissionPending
@@ -208,7 +217,7 @@ StartAllocation ==
                     residencyRemaining, physicalDebtRemaining,
                     qualityRemaining, scanActive,
                     workerState, framePending, handoffPending,
-                    performanceLimited>>
+                    performanceLimited, constraintWitness>>
 
 \* The allocator either admits one richer coherent population or proves that
 \* the current one is the richest sustainable population.  Both outcomes are
@@ -225,10 +234,12 @@ FinishAllocation ==
                   (IF physicalDebtRemaining > 0
                    THEN physicalDebtRemaining - 1
                    ELSE 0)
-           /\ UNCHANGED performanceLimited
+           /\ UNCHANGED <<performanceLimited, constraintWitness>>
        \/ /\ qualityRemaining' = 0
            /\ UNCHANGED physicalDebtRemaining
            /\ performanceLimited' = TRUE
+           /\ constraintWitness' \in
+                  (ConstraintWitnesses \ {"none"})
     /\ UNCHANGED <<profile, inputEpoch, inputOpen, coverageRemaining,
                     residencyRemaining, scanActive, workerState>>
 
@@ -264,7 +275,8 @@ CompleteFrame ==
     /\ UNCHANGED <<profile, inputEpoch, inputOpen, coverageRemaining,
                     residencyRemaining, physicalDebtRemaining,
                     qualityRemaining, scanActive,
-                    workerState, allocationPending, performanceLimited>>
+                    workerState, allocationPending, performanceLimited,
+                    constraintWitness>>
 
 \* A cursor can reach the end after the last bounded window or after a
 \* performance-limited allocation.  Retiring that empty level is a real
@@ -285,7 +297,7 @@ RetireEmptySubmission ==
                     residencyRemaining, physicalDebtRemaining,
                     qualityRemaining, scanActive,
                     workerState, allocationPending, framePending,
-                    performanceLimited>>
+                    performanceLimited, constraintWitness>>
 
 Next ==
     \/ BeginInput
@@ -365,6 +377,12 @@ PerformanceLimitIsTerminal ==
     performanceLimited =>
         /\ residencyRemaining = 0
         /\ qualityRemaining = 0
+
+\* Quality debt alone cannot justify a constrained terminal result.  The
+\* controller must retain completed deadline, memory, or presentation
+\* evidence for the unchanged view epoch.
+PerformanceLimitHasWitness ==
+    performanceLimited <=> constraintWitness # "none"
 
 \* A constrained scene may retain known physical pixel debt.  That debt is an
 \* input to a later capacity/view revision, not an enabled quiet-epoch loader.

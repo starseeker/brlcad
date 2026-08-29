@@ -23,8 +23,8 @@ BObolLodAdmissionPlanner::applyEvidenceAction(
 	    case EvidenceAction::CLEAR_CAPACITY_LIMIT:
 		result.nextEvidence.capacityValue.clearBudgetLimit();
 		break;
-	    case EvidenceAction::RESET_CAPACITY_MEASUREMENT:
-		result.nextEvidence.capacityValue.resetCalibration();
+	    case EvidenceAction::INVALIDATE_CAPACITY_MEASUREMENT:
+		result.nextEvidence.capacityValue.invalidateCalibration();
 		break;
 	    case EvidenceAction::RESET_CAPACITY_OVERLOAD:
 		result.nextEvidence.capacityValue.resetOverloadRecovery();
@@ -58,12 +58,23 @@ BObolLodAdmissionPlanner::applyEvidenceAction(
 }
 
 BObolLodAdmissionPlan
+BObolLodAdmissionPlanner::completeAppliedAllocation(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor,
+	const BObolLodCapacityEvidence::CompletedAllocationInputs &inputs)
+{
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.completeAppliedAllocation(inputs);
+	return result;
+}
+
+BObolLodAdmissionPlan
 BObolLodAdmissionPlanner::requestCapacityRescan(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor)
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
-	result.nextEvidence.capacityValue.requestRescanAfterFrame();
+	result.nextEvidence.capacityValue.requestPopulationBarrier();
 	return result;
 }
 
@@ -100,12 +111,28 @@ BObolLodAdmissionPlanner::requestRetainedReallocation(
 }
 
 BObolLodAdmissionPlan
+BObolLodAdmissionPlanner::resumeCapacityCandidateAllocation(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor)
+{
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.transitionChanged = result.nextEvidence.capacityValue.
+	    resumeCapacityCandidateAllocation();
+	if (result.transitionChanged)
+	    result.nextCursor.reset();
+	return result;
+}
+
+BObolLodAdmissionPlan
 BObolLodAdmissionPlanner::requestPresentationReconciliation(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor, size_t budget)
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
-	result.nextEvidence.capacityValue.requestPresentationReconciliation(budget);
+	result.transitionChanged = result.nextEvidence.capacityValue.
+	    requestPresentationReconciliation(budget);
+	if (result.transitionChanged)
+	    result.nextCursor.reset();
 	return result;
 }
 
@@ -125,12 +152,12 @@ BObolLodAdmissionPlanner::requestCoverageCompletion(
 BObolLodAdmissionPlan
 BObolLodAdmissionPlanner::recordDeadlineCapacityMiss(
 	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor, size_t attemptedBudget,
-	bool staticDeadline)
+	const BObolLodAdmissionCursor &cursor,
+	const BObolLodCapacityEvidence::DeadlineMissInputs &inputs)
 {
     BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
-    result.nextEvidence.capacityValue.noteDeadlineCapacityMiss(
-	    attemptedBudget, staticDeadline, &result.nextCursor);
+    result.completedFrameDecision = result.nextEvidence.capacityValue.
+	noteDeadlineCapacityMiss(inputs, &result.nextCursor);
     return result;
 }
 
@@ -406,10 +433,55 @@ BObolLodAdmissionPlanner::settlePointAtStructuralLimit(
 
 bool
 BObolLodAdmissionPlanner::pointRequiresReusableConfirmation(float currentThreshold,
-	size_t unresolvedStructuralCount)
+    size_t unresolvedStructuralCount)
 {
 	return BObolLodPointProxyEvidence::requiresReusableConfirmation(
 	    currentThreshold, unresolvedStructuralCount);
+}
+
+float
+BObolLodAdmissionPlanner::pointStructuralPreloadThreshold(
+    float currentThreshold, float candidateThreshold)
+{
+    const float current = BObolLodPointProxyEvidence::sanitize(
+	currentThreshold);
+    const float candidate = BObolLodPointProxyEvidence::sanitize(
+	candidateThreshold);
+    if (candidate >= current)
+	return candidate;
+
+    float bucketLimit = 1.0f;
+    while (bucketLimit * 2.0f <= candidate)
+	bucketLimit *= 2.0f;
+    return bucketLimit;
+}
+
+bool
+BObolLodAdmissionPlanner::pointRelaxationPreloadFitsDeadline(
+    size_t activeOccurrenceCount, size_t additionalOccurrenceCount,
+    uint64_t measuredRenderNanoseconds,
+    uint64_t presentationDeadlineNanoseconds,
+    size_t maximumAdditionalOccurrenceCount)
+{
+    if (!additionalOccurrenceCount)
+	return true;
+    if (additionalOccurrenceCount > maximumAdditionalOccurrenceCount)
+	return false;
+    if (!activeOccurrenceCount || !measuredRenderNanoseconds)
+	return false;
+    if (!presentationDeadlineNanoseconds)
+	return true;
+
+    const long double projectedOccurrenceCount =
+	static_cast<long double>(activeOccurrenceCount) +
+	static_cast<long double>(additionalOccurrenceCount);
+    const long double projectedNanoseconds =
+	static_cast<long double>(measuredRenderNanoseconds) *
+	projectedOccurrenceCount /
+	static_cast<long double>(activeOccurrenceCount);
+    return std::isfinite(projectedNanoseconds) &&
+	projectedNanoseconds <=
+	    static_cast<long double>(presentationDeadlineNanoseconds);
 }
 
 bool
@@ -474,6 +546,17 @@ BObolLodAdmissionPlanner::capacitySamplePopulationReady(bool haveCadAssemblies,
 }
 
 bool
+BObolLodAdmissionPlanner::capacitySampleYieldsToStructuralFrontier(
+	bool capacityPresentationPending, bool exactFrame,
+	bool exactOccurrenceClassification, size_t presentedStructuralBoxes)
+{
+	return BObolLodPointProxyEvidence::
+	    capacitySampleYieldsToStructuralFrontier(
+		capacityPresentationPending, exactFrame,
+		exactOccurrenceClassification, presentedStructuralBoxes);
+}
+
+bool
 BObolLodAdmissionPlanner::pointDeadlineRequiresPopulationAggregation(
 	size_t activeRenderCost, size_t minimumRenderCost,
 	int presentedMaximum, int correctedCeiling,
@@ -492,6 +575,7 @@ BObolLodAdmissionPlanner::pointProducerOwnsCalibrationFrame(
 	const bool submissionPaused = presentationPausesSubmission(
 	    inputs.discoveryCalibrationPending,
 	    inputs.stableCalibrationPending,
+	    inputs.capacityAllocationPending,
 	    inputs.capacitySamplePending,
 	    inputs.stablePresentationAvailable);
 	return BObolLodPointProxyEvidence::producerOwnsCalibrationFrame(
@@ -514,6 +598,17 @@ BObolLodAdmissionPlanner::pointBlocksSourceAdmission(
 	    discoveryCalibrationPending, stableCalibrationPending);
 }
 
+bool
+BObolLodAdmissionPlanner::structuralFallbackAdmissionDeferred(
+	bool quietView, bool coverageComplete, bool exactFrame,
+	size_t presentedStructuralBoxes, size_t terminalOccurrenceFailures,
+	bool directPreviewAuthorized, bool structuralRepairActive)
+{
+    return quietView && coverageComplete && exactFrame &&
+	presentedStructuralBoxes > terminalOccurrenceFailures &&
+	!directPreviewAuthorized && !structuralRepairActive;
+}
+
 
 
     /* A presentation-owned measurement freezes the occurrence population it
@@ -524,10 +619,16 @@ BObolLodAdmissionPlanner::pointBlocksSourceAdmission(
 bool
 BObolLodAdmissionPlanner::presentationPausesSubmission(
 	bool discoveryCalibrationPending, bool stableCalibrationPending,
-	bool capacitySamplePending, bool stablePresentationAvailable)
+	bool capacityAllocationPending, bool capacitySamplePending,
+	bool stablePresentationAvailable)
 {
-	return capacitySamplePending || discoveryCalibrationPending ||
-	    (stableCalibrationPending && stablePresentationAvailable);
+    /* ALLOCATING is a producer phase, not a presentation phase.  A point
+     * calibration may already be queued as the capacity transaction's
+     * successor, but it cannot pause the retained-allocation cursor which
+     * creates the candidate it is waiting behind. */
+    return capacitySamplePending || discoveryCalibrationPending ||
+	    (stableCalibrationPending && stablePresentationAvailable &&
+	     !capacityAllocationPending);
 }
 
 bool
@@ -734,20 +835,6 @@ BObolLodAdmissionPlanner::progressivePresentationQualityDebt(int activeMaximumCu
 	* progressive occurrence the ordinal is already occurrence-local, so the
 	* proven ceiling is a valid terminal representation and avoids a redundant
 	* allocator/repaint transaction. */
-bool
-BObolLodAdmissionPlanner::terminalGlobalCeilingRequiresReconciliation(
-	bool stableTerminalContext, bool exactCompletedFrame,
-	int progressiveCeiling, bool staticPhaseActive,
-	bool staticPhaseRejected, size_t progressivePayloadCount)
-{
-	return stableTerminalContext && exactCompletedFrame &&
-	    progressiveCeiling >= 0 &&
-	    progressivePayloadCount != 1 &&
-	    (!staticPhaseActive || staticPhaseRejected);
-}
-
-
-
     /* Translate a renderer-wide CAD cut into the retained allocator's scene
      * currency.  Backend submitted-work records may expand indexed vertices,
      * normals, and triangles differently (OSMesa flat shading is the important
@@ -873,7 +960,25 @@ bool
 BObolLodAdmissionPlanner::retainedPointAggregationApplicable(
 	bool logicalPopulationApplicable, size_t pointProxyCandidateCount)
 {
-	return logicalPopulationApplicable && pointProxyCandidateCount > 0;
+    return logicalPopulationApplicable && pointProxyCandidateCount > 0;
+}
+
+bool
+BObolLodAdmissionPlanner::deadlinePointAggregationApplicable(
+	bool retainedPopulationApplicable, bool structuralAdmissionPending,
+	size_t logicalOccurrenceCount)
+{
+    return retainedPopulationApplicable ||
+	(structuralAdmissionPending && logicalOccurrenceCount > 1);
+}
+
+bool
+BObolLodAdmissionPlanner::pointProxyThresholdInert(
+	size_t retainedCandidateCount, bool exactStructuralProjection,
+	size_t structuralOccurrenceCount, size_t terminalFailureCount)
+{
+    return retainedCandidateCount == 0 && exactStructuralProjection &&
+	structuralOccurrenceCount <= terminalFailureCount;
 }
 
 bool

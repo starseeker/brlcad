@@ -580,6 +580,44 @@ bobol_rectangle_query_callback(void *data, SoCallbackAction *action,
     return SoCallbackAction::PRUNE;
 }
 
+static int
+bobol_view_pick_registered_source_rectangle(
+	BObolViewController *controller,
+	const SbMatrix &viewProjection,
+	float minimumX,
+	float minimumY,
+	float maximumX,
+	float maximumY,
+	bool sourceBounds,
+	std::vector<BObolViewPickRecord> &records)
+{
+    if (!controller)
+	return -1;
+
+    const std::vector<SoBRLDatabaseSource *> sources =
+	controller->getRenderDatabaseSources();
+    if (sources.empty())
+	return -1;
+
+    SbMatrix identity;
+    identity.makeIdentity();
+    bool handled = false;
+    const size_t initialCount = records.size();
+    for (SoBRLDatabaseSource *source : sources) {
+	if (!source)
+	    continue;
+	const int count = sourceBounds ?
+	    source->querySourceRectangle(identity, viewProjection,
+		minimumX, minimumY, maximumX, maximumY, records) :
+	    source->queryCompactRectangle(identity, viewProjection,
+		minimumX, minimumY, maximumX, maximumY, records);
+	if (count >= 0)
+	    handled = true;
+    }
+
+    return handled ? static_cast<int>(records.size() - initialCount) : -1;
+}
+
 }
 
 static int
@@ -632,8 +670,18 @@ bobol_view_pick_rectangle_internal(BObolViewController *controller,
 	bobol_rectangle_query_callback, &state);
     action.apply(controller->getViewport()->getRoot());
     if (!state.handled) {
-	records.clear();
-	return -1;
+	/* Hosted views may render an application-owned shared scene while their
+	 * controller-local viewport graph contains only the per-view composition.
+	 * The controller's render-source inventory is authoritative in that case.
+	 * Sources found by the scene traversal retain their inherited model matrix;
+	 * the fallback is used only when no source node was traversed, and those
+	 * registered sources own placement in their drawMatrix. */
+	if (bobol_view_pick_registered_source_rectangle(controller,
+		state.viewProjection, state.minimumX, state.minimumY,
+		state.maximumX, state.maximumY, sourceBounds, records) < 0) {
+	    records.clear();
+	    return -1;
+	}
     }
 
     std::stable_sort(records.begin(), records.end(),

@@ -13,18 +13,20 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <type_traits>
 
 /*
  * Capacity evidence is the output of a search, so the search cannot use the
  * pipeline's changing capacity-output epoch as one of its own inputs.  The
- * other four semantic epochs, preferred and maximum target cadences, and
- * complete pixel-demand cost identify the frozen problem.  Publishing a
- * successor or terminal result advances the ordinary capacity epoch outside
- * this value.
+ * other four semantic epochs, preferred and maximum target cadences, and the
+ * allocator's maximum realizable budget identify the frozen problem.
+ * Publishing a successor or terminal result advances the ordinary capacity
+ * epoch outside this value.
  */
 struct BObolLodCapacitySearchKey {
     BObolLodInventoryEpoch inventory;
@@ -33,7 +35,14 @@ struct BObolLodCapacitySearchKey {
     BObolLodPolicyEpoch policy;
     uint64_t preferredTargetNanoseconds = 0;
     uint64_t maximumTargetNanoseconds = 0;
-    size_t demandedBudget = 0;
+    /* Point aggregation changes both occurrence membership and renderer
+     * cost.  A certificate measured at another threshold belongs to a
+     * different search problem even when the scene epochs are unchanged. */
+    float pointProxyPixelThreshold = 1.0f;
+    /* Largest complete retained allocation which the current allocator
+     * policy can realize.  The view's pixel demand may be larger and is not
+     * part of this finite search domain. */
+    size_t maximumCandidateBudget = 0;
     /* One complete occurrence-local minimum is the lowest candidate the
      * allocator can represent.  A search below this floor cannot produce a
      * different framebuffer and must advance to its next deadline goal. */
@@ -54,7 +63,9 @@ struct BObolLodCapacitySearchKey {
 		other.preferredTargetNanoseconds &&
 	    this->maximumTargetNanoseconds ==
 		other.maximumTargetNanoseconds &&
-	    this->demandedBudget == other.demandedBudget &&
+	    std::memcmp(&this->pointProxyPixelThreshold,
+		&other.pointProxyPixelThreshold, sizeof(float)) == 0 &&
+	    this->maximumCandidateBudget == other.maximumCandidateBudget &&
 	    this->minimumBudget == other.minimumBudget;
     }
 
@@ -71,8 +82,10 @@ struct BObolLodCapacitySearchKey {
 	return this->preferredTargetNanoseconds > 0 &&
 	    this->maximumTargetNanoseconds >=
 		this->preferredTargetNanoseconds &&
-	    this->demandedBudget > 0 &&
-	    this->minimumBudget <= this->demandedBudget;
+	    std::isfinite(this->pointProxyPixelThreshold) &&
+	    this->pointProxyPixelThreshold >= 1.0f &&
+	    this->maximumCandidateBudget > 0 &&
+	    this->minimumBudget <= this->maximumCandidateBudget;
     }
 };
 
@@ -82,8 +95,10 @@ struct BObolLodCapacitySearchKey {
  * consumes exactly sampleLimit valid unchanged frames, then strictly moves a
  * known-safe lower bound or a known-unsafe upper bound.  At most
  * candidateLimit distinct budgets may be measured for each of the key's two
- * ordered goals.  The optional static goal inherits the steady-safe lower
- * bound and cannot transition back.
+ * ordered goals.  Once a goal has both a safe population and a rejected
+ * richer population, it settles at the safe population instead of exposing a
+ * binary search for the exact adjacent integer budget.  The optional static
+ * goal inherits the steady-safe lower bound and cannot transition back.
  *
  * Throughput estimates are deliberately confined to proposing the next
  * candidate.  Only completed-frame classifications change the bracket.  This
@@ -92,7 +107,7 @@ struct BObolLodCapacitySearchKey {
 class BObolLodCapacitySearchCertificate {
 private:
     static constexpr unsigned int SampleLimit = 3;
-    static constexpr unsigned int CandidateLimit = 8;
+    static constexpr unsigned int CandidateLimit = 4;
     static constexpr unsigned int InvalidSampleLimit = 2;
 
 public:
@@ -116,7 +131,7 @@ public:
 	CERTIFIED,
 	UNMEASURABLE,
 	STALE_POPULATION,
-	HANDOFF_REQUIRED
+	PRESENTATION_REQUIRED
     };
 
     struct Observation {
@@ -138,6 +153,7 @@ public:
 	size_t unsafeBudget = SIZE_MAX;
 	unsigned int samplesRemaining = 0;
 	unsigned int measuredCandidates = 0;
+	unsigned int totalMeasuredCandidates = 0;
 
 	bool requestsFrame(void) const
 	{
@@ -162,6 +178,10 @@ public:
     {
 	return CandidateLimit;
     }
+    static constexpr unsigned int totalCandidateLimit(void)
+    {
+	return 2 * CandidateLimit;
+    }
     static constexpr unsigned int invalidSampleLimit(void)
     {
 	return InvalidSampleLimit;
@@ -170,7 +190,8 @@ public:
     static BObolLodCapacitySearchKey keyFor(
 	const BObolLodAdmissionRevisionStamp &stamp,
 	uint64_t preferredTargetNanoseconds,
-	uint64_t maximumTargetNanoseconds, size_t demandedBudget,
+	uint64_t maximumTargetNanoseconds, float pointProxyPixelThreshold,
+	size_t maximumCandidateBudget,
 	size_t minimumBudget = 0)
     {
 	BObolLodCapacitySearchKey key;
@@ -180,7 +201,8 @@ public:
 	key.policy = stamp.policy;
 	key.preferredTargetNanoseconds = preferredTargetNanoseconds;
 	key.maximumTargetNanoseconds = maximumTargetNanoseconds;
-	key.demandedBudget = demandedBudget;
+	key.pointProxyPixelThreshold = pointProxyPixelThreshold;
+	key.maximumCandidateBudget = maximumCandidateBudget;
 	key.minimumBudget = minimumBudget;
 	return key;
     }
@@ -278,9 +300,18 @@ public:
 	    return prepared;
 	/* ALLOCATING requests the first exact presentation of the selected
 	 * population.  It is a producer barrier, not a failed timing sample. */
-	if (this->phaseValue == Phase::ALLOCATING ||
-	    this->phaseValue == Phase::PRESENTING)
+	if (this->phaseValue == Phase::ALLOCATING)
 	    return prepared;
+	/* prepare() is also used by planning passes which cannot present a frame,
+	 * so it deliberately leaves PRESENTING retries uncounted.  observe(), on
+	 * the other hand, names a completed renderer attempt.  Bound completed
+	 * attempts which still cannot supply exact CAD work: interrupted software
+	 * frames can otherwise leave an unchanged view repainting forever. */
+	if (this->phaseValue == Phase::PRESENTING) {
+	    if (++this->invalidSampleCountValue <= invalidSampleLimit())
+		return prepared;
+	    return this->finish(Result::UNMEASURABLE);
+	}
 
 	if (!observation.validSample || !observation.observedNanoseconds ||
 	    !observation.presentedCost) {
@@ -295,10 +326,13 @@ public:
 	    this->activeTargetNanoseconds();
 	if (metTarget)
 	    this->safeSampleCountValue++;
+	if (observation.observedNanoseconds <=
+		observation.key.maximumTargetNanoseconds)
+	    this->maximumSafeSampleCountValue++;
 	this->proposalValues[this->sampleCountValue] = proposedBudget(
 	    observation.presentedCost, this->activeTargetNanoseconds(),
 	    observation.observedNanoseconds,
-	    observation.key.demandedBudget, this->candidateBudgetValue,
+	    observation.key.maximumCandidateBudget, this->candidateBudgetValue,
 	    metTarget);
 	this->sampleCountValue++;
 	if (this->sampleCountValue < sampleLimit())
@@ -308,14 +342,15 @@ public:
 	return this->classifyCandidate();
     }
 
-    /* A hard renderer deadline is a completed unsafe observation of the
-     * active population, even though the framebuffer did not finish.  Fold
-     * that evidence into the current bracket.  Resetting the certificate here
-     * would turn every abort into a new search and permit an unchanged scene
-     * to alternate between the same allocations forever. */
+    /* A hard renderer deadline is an unsafe operational observation of the
+     * active candidate transition, even when its exact framebuffer did not
+     * finish.  Fold that conservative bound into the current bracket.
+     * Resetting the certificate here would turn every abort into a new search
+     * and permit an unchanged scene to alternate between the same allocations
+     * forever. */
     Decision observeDeadlineMiss(const BObolLodCapacitySearchKey &updatedKey)
     {
-	if (this->phaseValue != Phase::MEASURING ||
+	if (!this->awaitingSample() ||
 	    !this->candidateBudgetValue)
 	    return Decision();
 	if (!this->keyValue.sameProblem(updatedKey))
@@ -334,7 +369,8 @@ public:
 	    this->keyValue.maximumBudgetCeiling :
 	    this->keyValue.preferredBudgetCeiling;
 	this->unsafeBudgetValue = std::min(this->unsafeBudgetValue,
-	    strictUpperBound(this->keyValue.demandedBudget, activeCeiling));
+	    strictUpperBound(this->keyValue.maximumCandidateBudget,
+		activeCeiling));
 
 	/* No timing extrapolation is available from an aborted frame.  Bisect the
 	 * remaining proven bracket; candidateLimit still bounds all subsequent
@@ -349,6 +385,7 @@ public:
 
     Phase phase(void) const { return this->phaseValue; }
     Goal goal(void) const { return this->goalValue; }
+    Result terminalResult(void) const { return this->terminalResultValue; }
     uint64_t activeTargetNanoseconds(void) const
     {
 	return this->goalValue == Goal::STATIC ?
@@ -369,6 +406,10 @@ public:
     {
 	return this->measuredCandidateCountValue;
     }
+    unsigned int totalMeasuredCandidateCount(void) const
+    {
+	return this->totalMeasuredCandidateCountValue;
+    }
     unsigned int samplesRemaining(void) const
     {
 	return this->phaseValue == Phase::MEASURING &&
@@ -383,6 +424,12 @@ public:
 	 * three retain the capacity successor and its presentation edge. */
 	return this->phaseValue == Phase::ALLOCATING ||
 	    this->phaseValue == Phase::PRESENTING ||
+	    this->phaseValue == Phase::MEASURING;
+    }
+
+    bool awaitingPresentationFrame(void) const
+    {
+	return this->phaseValue == Phase::PRESENTING ||
 	    this->phaseValue == Phase::MEASURING;
     }
 
@@ -401,13 +448,14 @@ private:
     size_t goalMaximumBudget(void) const
     {
 	return this->unsafeBudgetValue == SIZE_MAX ?
-	    this->keyValue.demandedBudget : this->unsafeBudgetValue - 1;
+	    this->keyValue.maximumCandidateBudget :
+	    this->unsafeBudgetValue - 1;
     }
 
     size_t goalMinimumBudget(void) const
     {
 	return std::min(this->keyValue.minimumBudget,
-	    this->keyValue.demandedBudget);
+	    this->keyValue.maximumCandidateBudget);
     }
 
     static size_t proposedBudget(size_t presentedCost,
@@ -448,7 +496,7 @@ private:
 	this->keyValue = observation.key;
 	this->goalValue = Goal::STEADY;
 	this->unsafeBudgetValue = strictUpperBound(
-	    observation.key.demandedBudget,
+	    observation.key.maximumCandidateBudget,
 	    observation.key.preferredBudgetCeiling);
 	const size_t maximum = this->goalMaximumBudget();
 	const size_t minimum = this->goalMinimumBudget();
@@ -483,6 +531,7 @@ private:
 	this->candidatePopulationSignatureValue = 0;
 	this->sampleCountValue = 0;
 	this->safeSampleCountValue = 0;
+	this->maximumSafeSampleCountValue = 0;
 	this->invalidSampleCountValue = 0;
 	this->proposalValues.fill(0);
     }
@@ -531,27 +580,45 @@ private:
     {
 	return this->classifyCandidate(
 	    this->measuredPopulationSafeValue[measuredIndex],
-	    this->measuredPopulationProposalsValue[measuredIndex], true);
+	    this->measuredPopulationProposalsValue[measuredIndex], true,
+	    this->measuredPopulationMaximumSafeValue[measuredIndex]);
     }
 
     Decision classifyCandidate(void)
     {
 	const bool safe = this->safeSampleCountValue * 2 >= sampleLimit();
-	return this->classifyCandidate(safe, median(this->proposalValues));
+	const bool maximumSafe =
+	    this->maximumSafeSampleCountValue * 2 >= sampleLimit();
+	return this->classifyCandidate(safe, median(this->proposalValues),
+	    false, maximumSafe);
     }
 
     Decision classifyCandidate(bool safe, size_t proposal,
-	bool equivalentPopulation = false)
+	bool equivalentPopulation = false, bool maximumSafe = false)
     {
 	const size_t candidate = this->candidateBudgetValue;
 	const unsigned int measuredIndex = this->measuredCandidateCountValue++;
+	this->totalMeasuredCandidateCountValue++;
 	this->measuredCandidatesValue[measuredIndex] = candidate;
 	this->measuredPopulationSignaturesValue[measuredIndex] =
 	    this->candidatePopulationSignatureValue;
 	this->measuredPopulationCostsValue[measuredIndex] =
 	    this->candidatePresentedCostValue;
 	this->measuredPopulationSafeValue[measuredIndex] = safe;
+	this->measuredPopulationMaximumSafeValue[measuredIndex] = maximumSafe;
 	this->measuredPopulationProposalsValue[measuredIndex] = proposal;
+	/* The same completed samples classify both ordered deadlines.  When a
+	 * candidate misses the preferred cadence but already meets the static hard
+	 * deadline, it is the static goal's proven safe visual.  Carry it forward
+	 * directly instead of first coarsening to the steady lower bound and then
+	 * rebuilding toward the population we just measured. */
+	if (!safe && maximumSafe && this->goalValue == Goal::STEADY &&
+	    this->keyValue.maximumTargetNanoseconds >
+		this->keyValue.preferredTargetNanoseconds) {
+	    this->safeBudgetValue = std::max(
+		this->safeBudgetValue, candidate);
+	    return this->advanceToStaticGoal();
+	}
 	if (safe)
 	    this->safeBudgetValue = std::max(this->safeBudgetValue, candidate);
 	else
@@ -564,8 +631,19 @@ private:
 	    this->unsafeBudgetValue != SIZE_MAX &&
 	    this->unsafeBudgetValue <= goalMinimum &&
 	    this->safeBudgetValue < goalMinimum;
+	/* Capacity is an operational guard, not a quality objective.  Once one
+	 * population is proven safe and a richer one is rejected, further
+	 * bisection can only trade a small amount of unused capacity for repeated
+	 * scene-wide reallocations and visible coarse/fine cycling.  Preserve the
+	 * safe framebuffer and let the visual-importance allocator spend that
+	 * budget.  A new semantic epoch may calibrate again from this evidence. */
+	const bool usefulBracketEstablished =
+	    this->safeBudgetValue > 0 &&
+	    this->unsafeBudgetValue <=
+		this->keyValue.maximumCandidateBudget;
 	if (this->safeBudgetValue >= goalMaximum ||
 	    exhaustedAtMinimum ||
+	    usefulBracketEstablished ||
 	    this->measuredCandidateCountValue >= candidateLimit() ||
 	    (this->unsafeBudgetValue != SIZE_MAX &&
 	     this->unsafeBudgetValue <=
@@ -573,7 +651,8 @@ private:
 	    if (this->goalValue == Goal::STEADY &&
 		this->keyValue.maximumTargetNanoseconds >
 		    this->keyValue.preferredTargetNanoseconds &&
-		this->safeBudgetValue < this->keyValue.demandedBudget)
+		this->safeBudgetValue <
+		    this->keyValue.maximumCandidateBudget)
 		return this->advanceToStaticGoal();
 	    return this->finish(Result::CERTIFIED);
 	}
@@ -613,7 +692,7 @@ private:
 	const size_t preferredProposal = median(this->proposalValues);
 	this->goalValue = Goal::STATIC;
 	this->unsafeBudgetValue = strictUpperBound(
-	    this->keyValue.demandedBudget,
+	    this->keyValue.maximumCandidateBudget,
 	    this->keyValue.maximumBudgetCeiling);
 	this->measuredCandidateCountValue = 0;
 	this->measuredCandidatesValue.fill(0);
@@ -653,6 +732,7 @@ private:
 	this->candidatePopulationSignatureValue = 0;
 	this->sampleCountValue = 0;
 	this->safeSampleCountValue = 0;
+	this->maximumSafeSampleCountValue = 0;
 	this->invalidSampleCountValue = 0;
 	return this->decision(result, this->safeBudgetValue);
     }
@@ -666,6 +746,7 @@ private:
 	value.unsafeBudget = this->unsafeBudgetValue;
 	value.samplesRemaining = this->samplesRemaining();
 	value.measuredCandidates = this->measuredCandidateCountValue;
+	value.totalMeasuredCandidates = this->totalMeasuredCandidateCountValue;
 	return value;
     }
 
@@ -680,14 +761,18 @@ private:
     uint64_t candidatePopulationSignatureValue = 0;
     unsigned int sampleCountValue = 0;
     unsigned int safeSampleCountValue = 0;
+    unsigned int maximumSafeSampleCountValue = 0;
     unsigned int invalidSampleCountValue = 0;
     unsigned int measuredCandidateCountValue = 0;
+    unsigned int totalMeasuredCandidateCountValue = 0;
     std::array<size_t, SampleLimit> proposalValues {{0, 0, 0}};
     std::array<size_t, CandidateLimit> measuredCandidatesValue {{}};
     std::array<uint64_t, CandidateLimit>
 	measuredPopulationSignaturesValue {{}};
     std::array<size_t, CandidateLimit> measuredPopulationCostsValue {{}};
     std::array<bool, CandidateLimit> measuredPopulationSafeValue {{}};
+    std::array<bool, CandidateLimit>
+	measuredPopulationMaximumSafeValue {{}};
     std::array<size_t, CandidateLimit> measuredPopulationProposalsValue {{}};
 };
 

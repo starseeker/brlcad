@@ -25,10 +25,16 @@ For every view:
 5. Retain and trim shared data independently from the active draw cut so a
    camera change normally changes prefix counts, not geometry objects.
 
-Boxes are a cold/missing-data fallback, not a normal interaction LoD.  A box
-may remain only for a visible occurrence whose minimum mesh prefix is not yet
-available or whose source has definitively failed.  OBB is an optional cached
-fallback and is not a required progression state.
+Retained structural boxes are a cold/missing-data fallback, not a normal
+interaction LoD.  A separate view-local aggregate channel may replace a
+budget-constrained occurrence with one raster point only while its projected
+width and height are at most five pixels.  A larger admitted aggregate retains
+its conservative extent as a batched box until the allocator promotes it to a
+mesh.  Wire mode draws the box edges, shaded modes draw its lit faces, and
+hidden-line mode draws faces plus edges.  These aggregate boxes are primitive
+records in one renderer batch, not retained scene nodes or per-box draw calls.
+OBB is an optional cached cold fallback and is not a required progression
+state.
 
 ## State domains
 
@@ -538,6 +544,40 @@ These must hold after every owner-thread transition:
     result wave, or window boundary may reset per-frame work allowance but may
     not rescan the whole population or change the pass currency.  Completing,
     cancelling, or invalidating the pass clears the snapshot.
+21. A terminal capacity certificate and its budget guard are one proof.  An
+    ordinary completed scan, occurrence-allocation application, or
+    presentation handoff preserves both.  A semantic inventory, availability,
+    view, policy, or coverage edge invalidates both; no state may retain the
+    terminal static deadline while allowing ordinary admission to exceed its
+    certified endpoint.
+22. One bounded capacity search has one immutable key and numeric domain.
+    Candidate allocations may map adjacent budget coordinates to the same
+    discrete occurrence population, but they may not derive a new maximum
+    candidate budget, deadline, or revision tuple from the population they
+    just selected.  A changed domain is a new search.  Capacity protects
+    responsiveness; it does not maximize visual quality.  Once a goal has a
+    proven-safe population and rejects one richer population, it settles at
+    the safe population without visibly bisecting the remaining budget
+    interval.  Cold recovery before any safe population exists and subsequent
+    enrichment are each bounded to four candidates per goal.  A steady sample
+    which already meets the ordered static deadline becomes that static goal's
+    safe population directly; the controller may not coarsen and reconstruct
+    the same visual merely to change deadline domains.  The aggregate-proxy
+    pixel threshold is part of that key: changing it changes point/box/mesh
+    membership and render cost, so no earlier population signature or timing
+    certificate may cross that boundary.
+23. Only a complete dense current-view census may replace the authoritative
+    visible-target denominator.  Sparse source deltas and retained-allocation
+    application passes may update their named occurrences, but preserve the
+    last complete denominator until a view or inventory edge requests another
+    dense census.
+24. Disabling automatic mesh LoD is one atomic ownership transition.  It
+    cancels the active generation and retires submission, allocation,
+    calibration, handoff, interaction, resident-growth, compaction, and
+    capacity-frame obligations.  It preserves the immutable resident payloads,
+    the renderer cut which produced the current framebuffer, independent
+    database-provider work, and one presentation-only policy repaint.  No
+    automatic producer may re-arm while the effective view policy is off.
 ## Liveness properties
 
 Using `[]` for “always” and `<>` for “eventually,” the implementation must
@@ -680,7 +720,7 @@ GPU upload, and memory pressure.  Passing one does not imply passing the other.
 | wire parity | shaded/wire active-cut and image matrix |
 | selection/edit | hierarchy selection, erase/redraw, promotion/demotion, and picking tests |
 | liveness | `ObolHostWork.tla`, `ObolLodConvergence.tla`, `ObolProgressivePipeline.tla`, `ObolLodColdPreview.tla`, and `ObolLiveSpatialPublication.tla` TLC checks; exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness, uncertified-source-sample replacement, incomplete live-page replacement, or stable-with-affordable-next states |
-| admission/arbitration | `ObolLodAdmission.tla`, `ObolLodArbitration.tla`, and the composed-mode TLC check plus `test_bobol_retained_allocation_oracle`; verify safe direct admission, large-scene PoP-only admission, subpixel aggregation, prominent-floor non-starvation, displayable constrained fallback, and explicit terminal constrained debt |
+| admission/arbitration | `ObolLodAdmission.tla`, `ObolLodArbitration.tla`, `ObolRetainedAllocationPrefix.tla`, `ObolCapacitySearch.tla`, `ObolCapacityPresentationHandoff.tla`, `ObolCompletedPassOwnership.tla`, and the cross-boundary `ObolLodComposition.tla` check, plus `test_bobol_retained_allocation_oracle` and the increasing-budget population sweep; verify a frozen search domain, deterministic nested populations, atomic terminal certificate/guard ownership, safe direct admission, large-scene PoP-only admission, subpixel aggregation, prominent-floor non-starvation, displayable constrained fallback, and explicit terminal constrained debt |
 
 Visual-importance arbitration has a bounded proof boundary:
 `ObolLodArbitration.tla` establishes coverage priority, prominent-floor

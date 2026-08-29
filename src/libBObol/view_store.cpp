@@ -64,6 +64,13 @@ store_reference_generation_next(void)
     return generation;
 }
 
+static void
+store_revision_advance(uint64_t &revision)
+{
+    if (++revision == 0)
+	++revision;
+}
+
 static std::string
 store_string(const SbString &s)
 {
@@ -979,13 +986,15 @@ store_primitive_metadata_for_record(const BObolFeatureStoreRecord *rec,
 struct BObolFeatureStore::Impl {
     BObolViewController *controller;
     uint64_t referenceGeneration;
+    uint64_t presentationRevision;
     uint64_t nextId;
     std::map<uint64_t, BObolFeatureStoreRecord *> records;
     std::map<std::string, uint64_t> names;
     std::map<std::string, uint64_t> ownerGenerations;
 
     Impl(void) : controller(NULL),
-	referenceGeneration(store_reference_generation_next()), nextId(1),
+	referenceGeneration(store_reference_generation_next()),
+	presentationRevision(0), nextId(1),
 	records(), names(), ownerGenerations()
     {
     }
@@ -1128,9 +1137,16 @@ struct BObolFeatureStore::Impl {
 	 * to compare equal (metadata and custom-node state need not live in fields). */
 	if (!changed && rollbackUnchangedPublish && rec->revision > 1)
 	    rec->revision--;
-	if (changed && controller)
-	    controller->requestPresentationRender("view-feature-store");
+	if (changed)
+	    requestPresentation("view-feature-store");
 	return changed;
+    }
+
+    void requestPresentation(const char *reason)
+    {
+	store_revision_advance(presentationRevision);
+	if (controller)
+	    controller->requestPresentationRender(reason);
     }
 
     void markOwnerGeneration(const BObolFeatureOwner &owner)
@@ -1658,10 +1674,19 @@ BObolFeatureStore::referenceGeneration(void) const
     return this->impl->referenceGeneration;
 }
 
+uint64_t
+BObolFeatureStore::presentationRevision(void) const
+{
+    return this->impl->presentationRevision;
+}
+
 void
 BObolFeatureStore::clear(void)
 {
+    const bool changed = !this->impl->records.empty();
     this->impl->clear();
+    if (changed)
+	this->impl->requestPresentation("view-feature-clear");
 }
 
 BObolFeatureHandle
@@ -1706,9 +1731,7 @@ BObolFeatureStore::remove(BObolFeatureHandle handle)
     store_feature_release_node(rec);
     this->impl->records.erase(rec->id);
     delete rec;
-    if (this->impl->controller)
-	this->impl->controller->requestPresentationRender(
-	    "view-feature-remove");
+    this->impl->requestPresentation("view-feature-remove");
     return TRUE;
 }
 
@@ -2120,9 +2143,7 @@ BObolFeatureStore::updateIndexedFaceSetPoints(
 
     this->impl->notify(rec, BObolCommandResultStatus::Updated,
 	"updateIndexedFaceSetPoints");
-    if (this->impl->controller)
-	this->impl->controller->requestPresentationRender(
-	    "view-feature-indexed-face-points");
+    this->impl->requestPresentation("view-feature-indexed-face-points");
     return TRUE;
 }
 
@@ -2800,9 +2821,7 @@ BObolFeatureStore::replaceSelectedPrimitives(BObolFeatureHandle handle,
 	    shape->touch();
 	this->impl->notify(rec, BObolCommandResultStatus::Updated,
 	    "replaceSelectedPrimitives");
-	if (this->impl->controller)
-	    this->impl->controller->requestPresentationRender(
-		"view-feature-selected-primitives");
+	this->impl->requestPresentation("view-feature-selected-primitives");
 	return TRUE;
     }
     SoNode *node = store_rebuild_node_for_feature(*rec);
@@ -2834,9 +2853,7 @@ BObolFeatureStore::replaceHighlightedPrimitives(BObolFeatureHandle handle,
 	    shape->touch();
 	this->impl->notify(rec, BObolCommandResultStatus::Updated,
 	    "replaceHighlightedPrimitives");
-	if (this->impl->controller)
-	    this->impl->controller->requestPresentationRender(
-		"view-feature-highlighted-primitives");
+	this->impl->requestPresentation("view-feature-highlighted-primitives");
 	return TRUE;
     }
     SoNode *node = store_rebuild_node_for_feature(*rec);
@@ -3088,13 +3105,15 @@ store_polygon_node(const BObolPolygonStoreRecord &rec);
 struct BObolPolygonStore::Impl {
     BObolViewController *controller;
     uint64_t referenceGeneration;
+    uint64_t presentationRevision;
     uint64_t nextId;
     std::map<uint64_t, BObolPolygonStoreRecord *> records;
     std::map<std::string, uint64_t> names;
     BObolPolygonHandle snapExclude;
 
     Impl(void) : controller(NULL),
-	referenceGeneration(store_reference_generation_next()), nextId(1),
+	referenceGeneration(store_reference_generation_next()),
+	presentationRevision(0), nextId(1),
 	records(), names(), snapExclude()
     {
     }
@@ -3161,8 +3180,14 @@ struct BObolPolygonStore::Impl {
 	if (rec->node == node)
 	    return;
 	store_set_node(controller, rec->node, node);
+	requestPresentation("view-polygon-store");
+    }
+
+    void requestPresentation(const char *reason)
+    {
+	store_revision_advance(presentationRevision);
 	if (controller)
-	    controller->requestRender("view-polygon-store");
+	    controller->requestPresentationRender(reason);
     }
 
     void realize(BObolPolygonStoreRecord *rec)
@@ -3787,6 +3812,12 @@ BObolPolygonStore::referenceGeneration(void) const
     return this->impl->referenceGeneration;
 }
 
+uint64_t
+BObolPolygonStore::presentationRevision(void) const
+{
+    return this->impl->presentationRevision;
+}
+
 const char *
 BObolPolygonStore::name(BObolPolygonHandle handle) const
 {
@@ -3797,7 +3828,10 @@ BObolPolygonStore::name(BObolPolygonHandle handle) const
 void
 BObolPolygonStore::clear(void)
 {
+    const bool changed = !this->impl->records.empty();
     this->impl->clear();
+    if (changed)
+	this->impl->requestPresentation("view-polygon-clear");
 }
 
 BObolPolygonHandle
@@ -4067,8 +4101,7 @@ BObolPolygonStore::remove(BObolPolygonHandle handle)
     bg_polygon_clear(&rec->polygon);
     this->impl->records.erase(rec->id);
     delete rec;
-    if (this->impl->controller)
-	this->impl->controller->requestRender("view-polygon-remove");
+    this->impl->requestPresentation("view-polygon-remove");
     return TRUE;
 }
 

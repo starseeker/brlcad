@@ -14,6 +14,8 @@
 #include "BObol/BViewLod.h"
 #include "cad_assembly_private.h"
 
+#include <Obol/cad/CadProjectedProxy.h>
+
 #include "bu/datetime.h"
 #include "bu/log.h"
 
@@ -37,8 +39,7 @@ BObolRetainedAllocationInputKey::operator==(
 	this->sceneBudget == other.sceneBudget &&
 	this->maximumMarginalBudget == other.maximumMarginalBudget &&
 	this->maximumProtectedBudget == other.maximumProtectedBudget &&
-	this->viewRevision == other.viewRevision &&
-	this->policyRevision == other.policyRevision &&
+	this->revisionStamp.same(other.revisionStamp) &&
 	this->residentAdmissionRevision == other.residentAdmissionRevision &&
 	std::memcmp(&this->pointProxyPixelThreshold,
 	    &other.pointProxyPixelThreshold, sizeof(float)) == 0 &&
@@ -53,8 +54,7 @@ BObolRetainedAllocationInputs::inputKey(void) const
     key.sceneBudget = this->sceneBudget;
     key.maximumMarginalBudget = this->maximumMarginalBudget;
     key.maximumProtectedBudget = this->effectiveMaximumProtectedBudget();
-    key.viewRevision = this->viewRevision;
-    key.policyRevision = this->policyRevision;
+    key.revisionStamp = this->revisionStamp;
     key.residentAdmissionRevision = this->residentAdmissionRevision;
     key.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
     key.allowProtectedFloor = this->allowProtectedFloor;
@@ -70,8 +70,7 @@ BObolRetainedAllocationResult::inputKey(void) const
     key.maximumMarginalBudget = this->maximumMarginalBudget;
     key.maximumProtectedBudget = this->allowProtectedFloor ?
 	this->maximumProtectedBudget : 0;
-    key.viewRevision = this->viewRevision;
-    key.policyRevision = this->policyRevision;
+    key.revisionStamp = this->revisionStamp;
     key.residentAdmissionRevision = this->residentAdmissionRevision;
     key.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
     key.allowProtectedFloor = this->allowProtectedFloor;
@@ -105,8 +104,7 @@ public:
     {
 	this->inputKey = inputs.inputKey();
 	this->viewState = inputs.viewState;
-	this->viewRevision = inputs.viewRevision;
-	this->policyRevision = inputs.policyRevision;
+	this->revisionStamp = inputs.revisionStamp;
 	this->residentAdmissionRevision = inputs.residentAdmissionRevision;
 	this->cadRevision = inputs.viewState ?
 	    inputs.viewState->cadRevision() : 0;
@@ -170,8 +168,7 @@ public:
     {
 	if (!inputs.sources || !inputs.viewState ||
 	    this->viewState != inputs.viewState ||
-	    this->viewRevision != inputs.viewRevision ||
-	    this->policyRevision != inputs.policyRevision ||
+	    !this->revisionStamp.same(inputs.revisionStamp) ||
 	    this->cadRevision != inputs.viewState->cadRevision() ||
 	    this->residentDemandRevision !=
 		inputs.viewState->residentMeshDemandRevision() ||
@@ -221,12 +218,6 @@ public:
 	    this->phaseMicroseconds[this->phase] +=
 		std::max<int64_t>(0, now - phaseStarted);
 	};
-	auto beginPopulationCost = [this](double targetCeiling) {
-	    this->populationCeiling = targetCeiling;
-	    this->populationCursor = 0;
-	    this->populationCost = this->fixedCost;
-	};
-
 	try {
 	    for (;;) {
 		switch (this->phase) {
@@ -326,110 +317,20 @@ public:
 			    transition(BASELINE);
 			    break;
 			}
-			/* A calibrated coarse point population is not merely a temporary
-			 * renderer switch.  It gives the stable-view allocator a cheap
-			 * representation for modest, non-selected occurrences.  Start those
-			 * occurrences at a point and spend the finite frame allowance on the
-			 * mesh admissions and refinements with the most visual value.  The
-			 * old all-mesh baseline made every modest part mandatory before a
-			 * wheel, blade, or hull panel could receive a richer cut. */
-			if (this->useOptionalPointCandidates) {
-			    this->baselineAtMinimum = true;
-			    this->beginBaseline();
-			    transition(BASELINE);
-			    break;
-			}
-			beginPopulationCost(1.0);
-			transition(SEARCH_ONE);
+			/* Capacity search is a bracket over numeric budgets and therefore
+			 * requires the allocator's selected populations to be nested.  A
+			 * budget-dependent common-error pre-pass could reshuffle several
+			 * cuts when the budget changed by one unit, even when the submitted
+			 * render cost stayed unchanged.  Start every request from the same
+			 * coherent point/minimum/protected floor and let the deterministic
+			 * marginal queue extend that population.  The queue's value-per-cost
+			 * and weighted-error ordering retains the visual minimax behavior
+			 * without creating a second, non-monotonic allocator. */
+			this->beginBaseline();
+			transition(BASELINE);
 			break;
 		    }
-		    case SEARCH_ONE:
-		    case SEARCH_MAXIMUM:
-		    case SEARCH_BINARY:
-			while (this->populationCursor <
-				this->candidates.size()) {
-			    const Candidate &candidate =
-				this->candidates[this->populationCursor++];
-			    const int cut = this->allocatedCut(candidate,
-				this->populationCeiling);
-			    const size_t cost = bobol_lod_render_cost_units(
-				this->countsAtCut(candidate, cut),
-				candidate.drawMode, 1);
-			    this->populationCost = cost >
-				    SIZE_MAX - this->populationCost ? SIZE_MAX :
-				this->populationCost + cost;
-			    if (shouldYield()) {
-				finishSlice();
-				return BOBOL_RETAINED_ALLOCATION_PENDING;
-			    }
-			}
-			if (this->phase == SEARCH_ONE) {
-			    if (this->populationCost <= this->effectiveBudget) {
-				this->baselineAtMinimum = false;
-				this->ceiling = 1.0;
-				this->beginBaseline();
-				transition(BASELINE);
-			    } else {
-				beginPopulationCost(this->maximumMinimumError);
-				transition(SEARCH_MAXIMUM);
-			    }
-			    break;
-			}
-			if (this->phase == SEARCH_MAXIMUM) {
-			    if (this->populationCost > this->effectiveBudget) {
-				/* No common error ceiling can fit.  The former
-				 * maximum-minimum-error baseline could still select
-				 * richer cuts for many candidates and therefore exceed
-				 * the budget without ever testing the true occurrence
-				 * floor.  Start at every candidate's actual minimum and
-				 * let marginal visual benefit spend any remainder. */
-				this->baselineAtMinimum = true;
-				this->ceiling = this->maximumMinimumError;
-				this->beginBaseline();
-				transition(BASELINE);
-			    } else {
-				this->baselineAtMinimum = false;
-				this->lowLog = 0.0;
-				this->highLog =
-				    std::log2(this->maximumMinimumError);
-				this->binaryIteration = 0;
-				beginPopulationCost(std::exp2(
-				    (this->lowLog + this->highLog) * 0.5));
-				transition(SEARCH_BINARY);
-			    }
-			    break;
-			}
-			if (this->populationCost <= this->effectiveBudget)
-			    this->highLog = std::log2(this->populationCeiling);
-			else
-			    this->lowLog = std::log2(this->populationCeiling);
-			this->binaryIteration++;
-			if (this->binaryIteration >= 14) {
-			    this->baselineAtMinimum = false;
-			    this->ceiling = std::exp2(this->highLog) *
-				(1.0 + 1.0e-9);
-			    this->beginBaseline();
-			    transition(BASELINE);
-			} else {
-			    beginPopulationCost(std::exp2(
-				(this->lowLog + this->highLog) * 0.5));
-			}
-			break;
 		    case BASELINE:
-			while (this->fixedStageCursor <
-				this->fixedAllocations.size()) {
-			    const FixedAllocation &fixed =
-				this->fixedAllocations[this->fixedStageCursor++];
-			    if (!this->stageAllocation(
-				    fixed.payload, fixed.cut, fixed.drawMode)) {
-				finishSlice();
-				return BOBOL_RETAINED_ALLOCATION_FAILED;
-			    }
-			    if (shouldYield()) {
-				finishSlice();
-				return BOBOL_RETAINED_ALLOCATION_PENDING;
-			    }
-			}
 			while (this->finalCursor < this->candidates.size()) {
 			    const size_t i = this->finalCursor++;
 			    const Candidate &candidate = this->candidates[i];
@@ -438,10 +339,8 @@ public:
 				candidate.pointProxyEligible;
 			    this->finalCuts[i] = this->finalPointProxies[i] ?
 				candidate.minimumCut :
-				(this->baselineAtMinimum ?
-				    (this->enforceProtectedFloor ?
-					candidate.protectedCut : candidate.minimumCut) :
-				    this->allocatedCut(candidate, this->ceiling));
+				(this->enforceProtectedFloor ?
+				    candidate.protectedCut : candidate.minimumCut);
 			    this->finalCosts[i] = this->finalPointProxies[i] ?
 				candidate.pointProxyCost :
 				bobol_lod_render_cost_units(
@@ -456,7 +355,12 @@ public:
 				this->observeError(candidate, this->finalCuts[i]);
 				this->protectPointProxyCandidate(candidate);
 			    }
-			    if (!this->stageAllocation(candidate.payload,
+			    /* A point allocation is already realized by the aggregate
+			     * presentation.  Stage a mesh cut only when this plan actually
+			     * selects a mesh; a later marginal point-to-mesh upgrade stages
+			     * its cut in MARGINAL_APPLY. */
+			    if (!this->finalPointProxies[i] &&
+				!this->stageAllocation(candidate.payload,
 				    this->finalCuts[i], candidate.drawMode)) {
 				finishSlice();
 				return BOBOL_RETAINED_ALLOCATION_FAILED;
@@ -508,6 +412,15 @@ public:
 				    this->candidates[upgrade.candidateIndex]);
 				this->marginalAccepted = true;
 				this->queueNextUpgrade(upgrade.candidateIndex);
+			    } else {
+				/* The selected population is a prefix of one stable
+				 * importance order.  Skipping an unaffordable high-ranked
+				 * upgrade lets a lower budget spend its remainder on later
+				 * upgrades which a higher budget may then displace.  Stop at
+				 * the first gap so a richer budget can only extend this exact
+				 * population. */
+				while (!this->upgrades.empty())
+				    this->upgrades.pop();
 			    }
 			    if (shouldYield()) {
 				finishSlice();
@@ -546,7 +459,7 @@ public:
 			    !this->viewState->commitCadAllocationPlan(
 				this->allocationPlanSerial, this->cadRevision,
 				this->residentDemandRevision,
-				this->viewRevision, this->policyRevision,
+				this->viewRevision(), this->policyRevision(),
 				this->fixedCadPresentationCost)) {
 			    finishSlice();
 			    return BOBOL_RETAINED_ALLOCATION_STALE;
@@ -586,8 +499,7 @@ public:
 	result.allocationPlanSerial = this->allocationPlanSerial;
 	result.cadRevision = this->cadRevision;
 	result.residentDemandRevision = this->residentDemandRevision;
-	result.viewRevision = this->viewRevision;
-	result.policyRevision = this->policyRevision;
+	result.revisionStamp = this->revisionStamp;
 	result.residentAdmissionRevision = this->residentAdmissionRevision;
 	result.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
 	result.requestedSceneBudget = this->sceneBudget;
@@ -603,9 +515,6 @@ public:
     {
 	const int64_t discovery = this->phaseMicroseconds[DISCOVERY] +
 	    this->phaseMicroseconds[PROTECTION_COMPARE];
-	const int64_t search = this->phaseMicroseconds[SEARCH_ONE] +
-	    this->phaseMicroseconds[SEARCH_MAXIMUM] +
-	    this->phaseMicroseconds[SEARCH_BINARY];
 	const int64_t marginal = this->phaseMicroseconds[MARGINAL_SEED] +
 	    this->phaseMicroseconds[MARGINAL_APPLY] +
 	    this->phaseMicroseconds[PROOF];
@@ -613,12 +522,11 @@ public:
 	for (int i = 0; i < PHASE_COUNT; ++i)
 	    total += this->phaseMicroseconds[i];
 	bu_log("BObol LoD retained allocator phases candidates=%zu "
-	       "scan_us=%lld floor_us=%lld search_us=%lld baseline_us=%lld "
+	       "scan_us=%lld floor_us=%lld baseline_us=%lld "
 	       "marginal_us=%lld publish_us=%lld total_us=%lld wall_us=%lld\n",
 	       this->candidates.size(),
 	       static_cast<long long>(discovery),
 	       static_cast<long long>(this->phaseMicroseconds[FLOOR]),
-	       static_cast<long long>(search),
 	       static_cast<long long>(this->phaseMicroseconds[BASELINE]),
 	       static_cast<long long>(marginal),
 	       static_cast<long long>(this->phaseMicroseconds[COMMIT]),
@@ -642,8 +550,8 @@ private:
 	static constexpr uint64_t offset = UINT64_C(1469598103934665603);
 	uint64_t hash = offset;
 	this->hashPopulationValue(hash, this->fixedCadPresentationCost);
-	this->hashPopulationValue(hash, this->fixedAllocations.size());
-	for (const FixedAllocation &fixed : this->fixedAllocations) {
+	this->hashPopulationValue(hash, this->fixedPointAllocations.size());
+	for (const FixedPointAllocation &fixed : this->fixedPointAllocations) {
 	    this->hashPopulationValue(hash,
 		static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
 		    fixed.payload)));
@@ -684,10 +592,9 @@ private:
      * from monopolizing a finite static-frame allowance. */
     static constexpr double visualImportanceAtProtectedFootprint = 24.0;
     static constexpr double visualImportanceMaximum = 128.0;
-
     struct Candidate {
 	const BObolViewLodState::CadPayload *payload = NULL;
-	BObolLodProgressiveMeshPtr mesh;
+	BObolLodProgressiveMeshSnapshot mesh;
 	int minimumCut = -1;
 	int maximumCut = -1;
 	int drawMode = BOBOL_LOD_DRAW_UNKNOWN;
@@ -705,9 +612,13 @@ private:
 	    BObolViewLodState::CadPayload::ProjectedCutCounts> visibleCounts;
     };
 
-    struct FixedAllocation {
+    /* Pixel-exact aggregate points are complete allocation records, but they
+     * do not request a mesh cut.  Keep their identity in the population
+     * signature without staging a minimum mesh prefix: doing both marks every
+     * aggregate point as an unapplied mesh mismatch and expands a sparse
+     * retained update back to the complete source population. */
+    struct FixedPointAllocation {
 	const BObolViewLodState::CadPayload *payload = NULL;
-	BObolLodProgressiveMeshPtr mesh;
 	int cut = -1;
 	int drawMode = BOBOL_LOD_DRAW_UNKNOWN;
     };
@@ -739,9 +650,6 @@ private:
 	DISCOVERY = 0,
 	PROTECTION_COMPARE,
 	FLOOR,
-	SEARCH_ONE,
-	SEARCH_MAXIMUM,
-	SEARCH_BINARY,
 	BASELINE,
 	MARGINAL_SEED,
 	MARGINAL_APPLY,
@@ -786,34 +694,27 @@ private:
 	    visualFootprint(payload) <= 1.0;
     }
 
+    static size_t aggregateProxyCost(
+	const BObolViewLodState::CadPayload *payload, int drawMode)
+    {
+	const SbBool box = payload && payload->projectedPixelDiameter >
+	    Obol::CadMaximumPointProxyExtentPixels ? TRUE : FALSE;
+	return bobol_lod_aggregate_proxy_render_cost(box, drawMode);
+    }
+
     BObolLodCounts countsAtCut(const Candidate &candidate, int cut) const
     {
 	return candidate.visibleCounts ?
 	    (*candidate.visibleCounts)[static_cast<size_t>(cut)] :
-	    bobol_lod_progressive_counts(
-		candidate.mesh, cut, candidate.hasNormals);
-    }
-
-    int allocatedCut(const Candidate &candidate, double target) const
-    {
-	const double targetError = candidate.errorWeight > 0.0 ?
-	    target / candidate.errorWeight : target;
-	int cut = candidate.mesh->cutForScreenError(
-	    candidate.projectedPixelDiameter, targetError);
-	if (cut < 0)
-	    cut = candidate.minimumCut;
-	cut = std::max(candidate.minimumCut,
-	    std::min(candidate.maximumCut, cut));
-	return this->enforceProtectedFloor ?
-	    std::max(cut, candidate.protectedCut) : cut;
+	    candidate.mesh.hierarchyCountsAtCut(cut, candidate.hasNormals);
     }
 
     void discover(const SourceSnapshot &source,
 	const BObolViewLodState::CadPayload *payload)
     {
 	if (!payload || !payload->isValid() ||
-	    payload->viewRevision != this->viewRevision ||
-	    payload->policyRevision != this->policyRevision)
+	    payload->viewRevision != this->viewRevision() ||
+	    payload->policyRevision != this->policyRevision())
 	    return;
 	if (!payload->progressiveMesh ||
 	    !payload->progressiveMesh->isValid()) {
@@ -830,10 +731,14 @@ private:
 		this->pixelDemandPresentationCost + cost;
 	    return;
 	}
-	const int minimumCut = payload->progressiveMesh->minimumCut();
+	const BObolLodProgressiveMeshSnapshot mesh =
+	    payload->progressiveMesh->snapshot();
+	if (!mesh.isValid())
+	    return;
+	const int minimumCut = mesh.minimumCut();
 	const int requestedMaximumCut = std::max(minimumCut,
 	    std::min(payload->requestedCut,
-		payload->progressiveMesh->maximumCut()));
+		mesh.maximumCut()));
 	/* A current memory denial proves that the unavailable suffix cannot be
 	 * made resident in this admission epoch.  It does not make the retained
 	 * active prefix invalid.  Restrict this allocation to that prefix while
@@ -863,12 +768,11 @@ private:
 	    this->pixelDemandPresentationCost = cost >
 		    SIZE_MAX - this->pixelDemandPresentationCost ? SIZE_MAX :
 		this->pixelDemandPresentationCost + cost;
-	    FixedAllocation fixed;
+	    FixedPointAllocation fixed;
 	    fixed.payload = payload;
-	    fixed.mesh = payload->progressiveMesh;
 	    fixed.cut = minimumCut;
 	    fixed.drawMode = source.drawMode;
-	    this->fixedAllocations.push_back(std::move(fixed));
+	    this->fixedPointAllocations.push_back(std::move(fixed));
 	    return;
 	}
 
@@ -903,17 +807,14 @@ private:
 	    errorWeight = 1.0;
 	Candidate candidate;
 	candidate.payload = payload;
-	candidate.mesh = payload->progressiveMesh;
+	candidate.mesh = mesh;
 	candidate.minimumCut = minimumCut;
 	candidate.maximumCut = maximumCut;
 	candidate.drawMode = source.drawMode;
 	candidate.hasNormals = payload->hasNormals;
 	candidate.projectedPixelDiameter = diameter;
 	candidate.pointProxyError = std::max(footprint, diameter);
-	BObolLodCounts point;
-	point.pointCount = 1;
-	candidate.pointProxyCost = bobol_lod_render_cost_units(
-	    point, source.drawMode, 0);
+	candidate.pointProxyCost = aggregateProxyCost(payload, source.drawMode);
 	candidate.errorWeight = errorWeight;
 	candidate.assembly = source.assembly;
 	candidate.pointProxyEligible =
@@ -943,9 +844,9 @@ private:
 	if (candidate.pointProxyEligible)
 	    this->pointProxyCandidateCount++;
 	if (payload->projectedCutCounts &&
-	    payload->projectedCutCountsViewRevision == this->viewRevision &&
-	    payload->projectedCutCountsPolicyRevision == this->policyRevision &&
-	    payload->projectedCutCountsMeshRevision == candidate.mesh->revision())
+	    payload->projectedCutCountsViewRevision == this->viewRevision() &&
+	    payload->projectedCutCountsPolicyRevision == this->policyRevision() &&
+	    payload->projectedCutCountsMeshRevision == candidate.mesh.revision())
 	    candidate.visibleCounts = payload->projectedCutCounts;
 	const size_t demandedCost = bobol_lod_render_cost_units(
 	    this->countsAtCut(candidate, requestedMaximumCut),
@@ -969,7 +870,7 @@ private:
 		    std::numeric_limits<double>::infinity()));
 	candidate.protectedCut = minimumCut;
 	if (std::isfinite(protectedError) && diameter > 0.0) {
-	    const int protectedCut = candidate.mesh->cutForScreenError(
+	    const int protectedCut = candidate.mesh.cutForScreenError(
 		diameter, protectedError);
 	    if (protectedCut >= 0)
 		candidate.protectedCut = std::max(minimumCut,
@@ -1003,12 +904,6 @@ private:
 	this->hasOptionalPointCandidates =
 	    this->hasOptionalPointCandidates ||
 	    this->candidates.back().pointProxyEligible;
-	const double minimumError =
-	    payload->progressiveMesh->projectedErrorAtCut(
-		minimumCut, diameter) * errorWeight;
-	if (std::isfinite(minimumError))
-	    this->maximumMinimumError = std::max(
-		this->maximumMinimumError, minimumError);
     }
 
     void beginBaseline(void)
@@ -1017,7 +912,6 @@ private:
 	this->finalCosts.assign(this->candidates.size(), 0);
 	this->finalPointProxies.assign(this->candidates.size(), false);
 	this->finalCursor = 0;
-	this->fixedStageCursor = 0;
 	this->finalCost = this->fixedCost;
 	this->fixedMaximumPresentedPixelError =
 	    this->maximumPresentedPixelError;
@@ -1027,7 +921,7 @@ private:
 
     void observeError(const Candidate &candidate, int cut)
     {
-	const double error = candidate.mesh->projectedErrorAtCut(
+	const double error = candidate.mesh.projectedErrorAtCut(
 	    cut, candidate.projectedPixelDiameter);
 	if (std::isfinite(error)) {
 	    this->havePresentedErrorProof = true;
@@ -1068,7 +962,7 @@ private:
 	    const size_t nextCost = bobol_lod_render_cost_units(
 		this->countsAtCut(candidate, candidate.minimumCut),
 		candidate.drawMode, 1);
-	    const double nextError = candidate.mesh->projectedErrorAtCut(
+	    const double nextError = candidate.mesh.projectedErrorAtCut(
 		candidate.minimumCut, candidate.projectedPixelDiameter);
 	    BObolRetainedMarginalUpgrade upgrade;
 	    upgrade.candidateIndex = candidateIndex;
@@ -1091,14 +985,14 @@ private:
 	if (currentCut < candidate.minimumCut ||
 	    currentCut >= candidate.maximumCut)
 	    return;
-	const double currentError = candidate.mesh->projectedErrorAtCut(
+	const double currentError = candidate.mesh.projectedErrorAtCut(
 	    currentCut, candidate.projectedPixelDiameter);
 	for (int nextCut = currentCut + 1;
 	     nextCut <= candidate.maximumCut; ++nextCut) {
 	    const size_t nextCost = bobol_lod_render_cost_units(
 		this->countsAtCut(candidate, nextCut),
 		candidate.drawMode, 1);
-	    const double nextError = candidate.mesh->projectedErrorAtCut(
+	    const double nextError = candidate.mesh.projectedErrorAtCut(
 		nextCut, candidate.projectedPixelDiameter);
 	    if (nextCost <= this->finalCosts[candidateIndex] &&
 		!(nextError < currentError))
@@ -1129,7 +1023,7 @@ private:
 	int cut, int drawMode)
     {
 	return this->viewState && this->viewState->stageCadAllocatedCut(
-	    target, cut, this->viewRevision, this->policyRevision, drawMode,
+	    target, cut, this->viewRevision(), this->policyRevision(), drawMode,
 	    this->allocationPlanSerial);
     }
 
@@ -1149,8 +1043,17 @@ private:
     size_t externalPresentationCost = 0;
     size_t fixedCadPresentationCost = 0;
     size_t pixelDemandPresentationCost = 0;
-    uint64_t viewRevision = 0;
-    uint64_t policyRevision = 0;
+    uint64_t viewRevision(void) const
+    {
+	return this->revisionStamp.view.value();
+    }
+
+    uint64_t policyRevision(void) const
+    {
+	return this->revisionStamp.policy.value();
+    }
+
+    BObolLodAdmissionRevisionStamp revisionStamp;
     uint64_t residentAdmissionRevision = 0;
     uint64_t cadRevision = 0;
     uint64_t residentDemandRevision = 0;
@@ -1165,8 +1068,7 @@ private:
     size_t sourceCursor = 0;
     size_t payloadCursor = 0;
     std::vector<Candidate> candidates;
-    std::vector<FixedAllocation> fixedAllocations;
-    size_t fixedStageCursor = 0;
+    std::vector<FixedPointAllocation> fixedPointAllocations;
     std::unordered_map<SoCADAssembly *, ProtectedSet>
 	pointProxyProtectedInstances;
     std::vector<SoCADAssembly *> pointProxyAssemblies;
@@ -1176,21 +1078,12 @@ private:
     size_t optionalPointCandidateCost = 0;
     uint64_t protectedFloorSignature = 0;
     uint64_t optionalPointCandidateSignature = 0;
-    double maximumMinimumError = 1.0;
     double maximumPresentedPixelError = 0.0;
     bool havePresentedErrorProof = false;
     size_t protectedFloorCost = 0;
     bool enforceProtectedFloor = false;
     size_t effectiveBudget = 0;
     size_t allocationBudget = 0;
-    double populationCeiling = 1.0;
-    size_t populationCursor = 0;
-    size_t populationCost = 0;
-    double lowLog = 0.0;
-    double highLog = 0.0;
-    int binaryIteration = 0;
-    double ceiling = 1.0;
-    bool baselineAtMinimum = false;
     bool hasOptionalPointCandidates = false;
     bool useOptionalPointCandidates = false;
     std::vector<int> finalCuts;

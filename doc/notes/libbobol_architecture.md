@@ -1,6 +1,6 @@
 # BRL-CAD Obol drawing architecture
 
-Last reviewed: 2026-08-27
+Last reviewed: 2026-08-29
 
 This is the entry point for the production drawing architecture shared by
 qged, MGED, gsh, Archer, rtwizard, and other GED clients.  Intermediate branch
@@ -32,12 +32,26 @@ Read these documents in this order:
 
 `ObolHostWork.tla`, `obol_lod_control.tla`, `ObolLodConvergence.tla`,
 `ObolLodAdmission.tla`, `ObolLodArbitration.tla`,
-`ObolProgressivePipeline.tla`, `ObolInteractionSession.tla`,
+`ObolProgressivePipeline.tla`, `ObolLodComposition.tla`,
+`ObolAssetPublicationComposition.tla`, `ObolCadFrameComposition.tla`,
+`ObolInteractionSession.tla`,
 `ObolDeadlineOwnership.tla`, and `ObolCapacitySearch.tla` are focused
 control-plane models.  They do not model mesh arrays, rendering, numeric
 resource policy, or workload cardinality.  `ObolProgressivePipeline` replaces
 the earlier mode-composition model: workload labels are model-checking
 profiles, never production control modes.
+
+`ObolLodComposition.tla` is the bounded seam check which the canonical model
+formerly described only informally.  It composes admission, retained growth,
+exact presentation, capacity, structural repair, and point quality through one
+owner and terminal contract.  Passing focused models without this seam check
+is not accepted as evidence that their assumptions are mutually compatible.
+
+The adjacent composition models continue that proof boundary through the data
+plane without modeling geometry arrays: `ObolAssetPublicationComposition`
+checks superseding demand, additive pages, final hierarchy, and durable cache
+publication; `ObolCadFrameComposition` checks atomic scene mutation, exact
+renderer preparation, host frame ownership, and report acceptance.
 
 `ObolCadViewPublication.tla` isolates the renderer boundary: preparation and
 completed-frame evidence carry an exact view identity, view changes cancel
@@ -110,16 +124,16 @@ capacity revision stamp; typed revision advancement is the sole production
 cursor-invalidation path, and stale certified commits are rejected.  See the
 canonical pipeline contract for the acceptance gate and change rules.
 
-That boundary is the target architecture, not yet a claim that the complete
-controller has reached its final maintainable form.  The current coordinator
-still carries overlapping submission, retained-allocation, quality-trial,
-point-proxy, interaction-handoff, and recovery latches.  They are historical
-implementation debt even when their individual tests pass.  The P0 control-
-state reduction in `libbobol_active_debt.md` must replace them with the
-canonical evidence snapshot, one bounded plan execution, one presentation
-transaction, a finite work ledger, and revision-bound typed certificates.
-Workload profiles and renderer backends must not survive that migration as
-control modes.
+That boundary is now physically represented by cohesive typed values for
+submission, retained allocation, quality trials, point recovery, interaction,
+presentation handoff, host render requests, and structural repair.  These
+values compose through one finite work-ledger projection; they are not wrapped
+in a monolithic lifecycle object.  Such a facade would add a large effect
+vocabulary without eliminating an owner, obscure independent concurrency, and
+invite copying of scale-sensitive state.  Remaining control debt is semantic-
+event trace coverage and further effect-shell extraction, not another phase
+machine.  Workload profiles and renderer backends remain qualification inputs,
+never control modes.
 
 Provider terminality, worker-result readiness/age, inventory-delta coalescing,
 and resident-growth obligation have one controller-owned availability ledger.
@@ -166,6 +180,39 @@ Unpaged assets use the ordinary one-part cumulative prefix.  A multi-page
 asset is never repacked into a monolithic renderer array during refinement or
 compaction.
 
+Aggregate proxy shape is immutable asset metadata, not another LoD result or
+control state.  Cache generation accumulates PCA moments during its existing
+bounded source scan and, after the first coverage preview is eligible for
+publication, performs one sequential projection pass.  Cache format 23 stores
+the binary-XYZ corners only when the PCA box is materially tighter than the
+source AABB.  Cache reads validate finiteness, orthogonality, corner topology,
+and conservative axis-aligned extent before admitting the metadata.  A miss,
+invalid record, or insignificant improvement simply retains the AABB.
+
+An admitted monolithic `PartGeometry` carries those optional corners beside
+the ordinary mesh; it does not replace or duplicate the mesh.  Obol consults
+them only when its existing view/load policy has already selected a batched
+box representation.  Wire mode emits 12 edges and shaded mode emits 12 lit
+triangles from the same transformed corners.  A startup AABB remains a
+temporary structural-coverage result, whereas an OBB used for an admitted
+mesh is a renderer representation of that same semantic occurrence and does
+not reopen discovery, availability, allocation, or convergence.  Spatial
+pages deliberately do not each inherit a whole-source OBB: persistent proxying
+of a multi-page occurrence requires one group-level aggregate owner which can
+atomically suppress or restore all pages.
+
+Not every progressive part requires a service/cache payload.  A source may
+publish an immutable, producer-certified progressive part directly, as the
+BREP wire producer does.  Such a part participates in the same view demand,
+allocation, render-cost, convergence, and diagnostic domains as a service-
+backed mesh, but changing its cut updates only the view-local instance record;
+it performs no worker, cache, array-copy, or part-publication work.  Direct cut
+bindings are authenticated by source routing ID, population epoch, occurrence
+key, and immutable geometry revision.  The source LoD delta journal retires
+replaced bindings in proportion to changed entries; a lost journal or replaced
+population triggers one scan of the view's direct bindings, never a routine
+whole-scene scan.
+
 ### Obol/Coin: retained presentation
 
 Obol owns retained scene nodes, frame planning, renderer batching, GPU/OSMesa
@@ -181,15 +228,17 @@ this prevents one view from invalidating another view's classifier, prepared
 commands, or completed-frame certificate without copying mesh arrays.
 
 `SoCADAssembly`'s subpixel classifier also remains semantic: it stores one
-logical point record per collapsed occurrence, which preserves exact coverage,
-selection, highlighting, picking, and later mesh promotion.  Only the
-software renderer may replace that immutable logical stream with a cached,
-camera-local screen-bin presentation stream.  Its deterministic representative
-priority is selected/hovered/color-emphasized, nearest depth, then stable
-instance ID; bins start at native-pixel resolution and grow only enough to
-honor the software point cap.  Hardware GL consumes the logical stream
-directly.  The physical submitted-point count is diagnostic-only and must
-never be used as LoD coverage or selection state.
+logical aggregate record per collapsed occurrence, which preserves exact
+coverage, selection, highlighting, picking, and later mesh promotion.  A
+genuinely tiny footprint becomes a point; a screen-significant collapsed
+occurrence remains one batched AABB or producer-certified OBB.  Only the
+software renderer may replace the immutable logical point stream with a
+cached, camera-local screen-bin presentation stream.  Its deterministic
+representative priority is selected/hovered/color-emphasized, nearest depth,
+then stable instance ID; bins start at native-pixel resolution and grow only
+enough to honor the software point cap.  Hardware GL consumes logical points
+directly, and both renderers batch boxes.  Physical submitted primitives are
+diagnostic-only and must never be used as LoD coverage or selection state.
 
 Discovery publishes an immutable source-profile summary for each completed
 compact draw epoch.  That summary is an admission gate only: a small bounded

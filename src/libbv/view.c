@@ -375,6 +375,8 @@ bv_copy(struct bv *dst, const struct bv *src)
     dst->interactive_rect = src->interactive_rect;
     dst->adc = src->adc;
     dst->grid = src->grid;
+    dst->lighting = src->lighting;
+    dst->shading = src->shading;
     dst->model_axes = src->model_axes;
     dst->view_axes = src->view_axes;
     dst->center_dot = src->center_dot;
@@ -424,8 +426,12 @@ bv_dimensions_set(struct bv *v, int width, int height)
     if (!bv_is_valid(v))
 	return 0;
 
+    if (v->width == width && v->height == height)
+	return 1;
+
     v->width = width;
     v->height = height;
+    v->frame_revision++;
     return 1;
 }
 
@@ -756,10 +762,16 @@ bv_zclip_get(const struct bv *v)
 int
 bv_zclip_set(struct bv *v, int zclip)
 {
+    const int enabled = zclip ? 1 : 0;
+
     if (!bv_is_valid(v))
 	return 0;
 
-    v->zclip = zclip ? 1 : 0;
+    if (v->zclip == enabled)
+	return 1;
+
+    v->zclip = enabled;
+    v->frame_revision++;
     return 1;
 }
 
@@ -775,7 +787,11 @@ bv_framebuffer_mode_set(struct bv *v, int mode)
     if (!bv_is_valid(v))
 	return 0;
 
+    if (v->framebuffer_mode == mode)
+	return 1;
+
     v->framebuffer_mode = mode;
+    v->frame_revision++;
     return 1;
 }
 
@@ -788,10 +804,16 @@ bv_cleared_get(const struct bv *v)
 int
 bv_cleared_set(struct bv *v, int cleared)
 {
+    const int is_cleared = cleared ? 1 : 0;
+
     if (!bv_is_valid(v))
 	return 0;
 
-    v->cleared = cleared ? 1 : 0;
+    if (v->cleared == is_cleared)
+	return 1;
+
+    v->cleared = is_cleared;
+    v->frame_revision++;
     return 1;
 }
 
@@ -872,6 +894,7 @@ bv_faceplate_defaults(struct bv *v)
     v->center_dot = center_dot;
     v->scale_overlay = scale_overlay;
     v->params = params;
+    v->frame_revision++;
 }
 
 void
@@ -907,6 +930,7 @@ bv_ ## _member ## _state_set(struct bv *v, const struct _type *record) \
     if (!bv_is_valid(v) || !record) \
 	return 0; \
     v->_member = *record; \
+    v->frame_revision++; \
     return 1; \
 }
 
@@ -1012,6 +1036,7 @@ bv_interactive_rect_state_set(struct bv *v, const struct bv_interactive_rect_sta
     if (!bv_is_valid(v) || !record)
 	return 0;
     v->interactive_rect = *record;
+    v->frame_revision++;
     return 1;
 }
 
@@ -1035,6 +1060,7 @@ bv_model_axes_state_set(struct bv *v, const struct bv_axes_state *record)
     if (!bv_is_valid(v) || !record)
 	return 0;
     v->model_axes = *record;
+    v->frame_revision++;
     return 1;
 }
 
@@ -1058,6 +1084,7 @@ bv_view_axes_state_set(struct bv *v, const struct bv_axes_state *record)
     if (!bv_is_valid(v) || !record)
 	return 0;
     v->view_axes = *record;
+    v->frame_revision++;
     return 1;
 }
 
@@ -1081,6 +1108,7 @@ bv_center_dot_state_set(struct bv *v, const struct bv_other_state *record)
     if (!bv_is_valid(v) || !record)
 	return 0;
     v->center_dot = *record;
+    v->frame_revision++;
     return 1;
 }
 
@@ -1104,6 +1132,7 @@ bv_scale_overlay_state_set(struct bv *v, const struct bv_other_state *record)
     if (!bv_is_valid(v) || !record)
 	return 0;
     v->scale_overlay = *record;
+    v->frame_revision++;
     return 1;
 }
 

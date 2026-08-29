@@ -116,6 +116,40 @@ enum BObolLodConvergencePhase {
     BOBOL_LOD_CONVERGENCE_PREPARING
 };
 
+/** Whether a completed presentation is valid evidence for retained LoD
+ * capacity control.  Keep this distinct from CAD execution: a frame can draw
+ * CAD while being requested solely for a selection or faceplate change. */
+enum class BObolLodCapacityRelevance : uint8_t {
+    EXCLUDED = 0,
+    RELEVANT
+};
+
+/** Whether the CAD presentation traversal actually executed in a frame. */
+enum class BObolCadPresentationExecution : uint8_t {
+    NOT_EXECUTED = 0,
+    EXECUTED
+};
+
+/** Classification facts which must remain attached to one presentation
+ * timing sample.  Distinct enum types make swapped or omitted host facts a
+ * compile-time error. */
+struct BOBOL_EXPORT BObolPresentationTimingContext {
+    BObolPresentationTimingContext(
+	BObolLodCapacityRelevance capacityRelevance,
+	BObolCadPresentationExecution cadExecution,
+	BObolCadPreparationProgress preparation =
+	    BOBOL_CAD_PREPARATION_NONE) :
+	lodCapacityRelevance(capacityRelevance),
+	cadPresentationExecution(cadExecution),
+	cadPreparation(preparation)
+    {
+    }
+
+    BObolLodCapacityRelevance lodCapacityRelevance;
+    BObolCadPresentationExecution cadPresentationExecution;
+    BObolCadPreparationProgress cadPreparation;
+};
+
 /** Derived result for the current visible presentation.  This is independent
  * of the user-facing phase: background cache persistence may continue after a
  * ready or constrained presentation. */
@@ -162,7 +196,23 @@ enum BObolLodControlViolation {
     BOBOL_LOD_CONTROL_VIOLATION_TERMINAL_WITH_WORK = 1u << 1,
     BOBOL_LOD_CONTROL_VIOLATION_INVALID_READINESS = 1u << 2,
     BOBOL_LOD_CONTROL_VIOLATION_INVALID_OWNER = 1u << 3,
-    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_PRESENTATION = 1u << 4
+    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_PRESENTATION = 1u << 4,
+    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_CONSTRAINT = 1u << 5
+};
+
+/** Typed evidence supporting a resource-constrained terminal presentation.
+ *
+ * More than one bit may apply.  In particular, a measured stable-frame
+ * budget can coexist with a rejected static-quality trial.  This mask makes
+ * a constrained outcome auditable without exposing the controller's private
+ * capacity state machine. */
+enum BObolLodConstraintEvidence {
+    BOBOL_LOD_CONSTRAINT_NONE = 0,
+    BOBOL_LOD_CONSTRAINT_STABLE_BUDGET = 1u << 0,
+    BOBOL_LOD_CONSTRAINT_PROGRESSIVE_CEILING = 1u << 1,
+    BOBOL_LOD_CONSTRAINT_SUBPIXEL_AGGREGATION = 1u << 2,
+    BOBOL_LOD_CONSTRAINT_STATIC_DEADLINE = 1u << 3,
+    BOBOL_LOD_CONSTRAINT_MEMORY = 1u << 4
 };
 
 /** User-facing progress for one view epoch.
@@ -183,6 +233,8 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     uint32_t controlObligationMask;
     int controlOwner;
     uint32_t controlViolationMask;
+    /** Nonempty for a constrained outcome; bits are defined above. */
+    uint32_t constraintEvidenceMask;
     size_t viewQualityHistoryEntryCount;
     size_t viewQualityHistoryRememberCount;
     size_t viewQualityHistoryRecallCount;
@@ -191,7 +243,16 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     uint64_t viewRevision;
     uint64_t policyRevision;
     uint64_t capacityRevision;
-    uint64_t allocationPlanSerial;
+    int capacitySearchPhase;
+    int capacitySearchGoal;
+    unsigned int capacitySearchSamplesRemaining;
+    unsigned int capacitySearchMeasuredCandidates;
+    unsigned int capacitySearchTotalMeasuredCandidates;
+    unsigned int capacitySearchCandidateLimit;
+    /** Allocation plan certified by the current five-domain revision tuple.
+     * Zero while an older committed presentation is retained during
+     * replacement planning. */
+    uint64_t currentAllocationPlanSerial;
     uint64_t presentationTransactionSerial;
     uint64_t presentationRequiredRenderSerial;
     uint64_t presentedFrameSerial;
@@ -220,7 +281,9 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t maximumMarginalPresentationBudget;
     size_t maximumProtectedPresentationBudget;
     size_t pointProxyCandidateCount;
-    uint64_t allocationCertificatePlanSerial;
+    /** Last committed renderer allocation, including a safe fallback from an
+     * older revision tuple while current planning is incomplete. */
+    uint64_t committedAllocationPlanSerial;
     size_t residentMeshBytes;
     size_t stableResidentMeshBytes;
     size_t reservedResidentMeshGrowthBytes;
@@ -525,7 +588,7 @@ public:
 			 SbString *reason = NULL);
     uint64_t beginRenderTiming(void) const;
     void completeRenderTiming(uint64_t startedNanoseconds,
-	SbBool lodCapacityRelevant = TRUE);
+	const BObolPresentationTimingContext &context);
     /** Bound a graphical traversal before it can monopolize the endpoint
      * thread.  Zero disables the corresponding deadline.  Interrupted
      * frames are not presentation samples; hosts preserve the last completed
@@ -541,10 +604,7 @@ public:
      * capacity-relevance bit returned by consumeRenderRequest(). */
     SbBool isLodPresentationCapacityRelevant(void) const;
     void notePresentationRenderInterrupted(uint64_t elapsedNanoseconds,
-	SbBool cadDrawAttempted = TRUE,
-	BObolCadPreparationProgress cadPreparation =
-	    BOBOL_CAD_PREPARATION_NONE,
-	SbBool lodCapacityRelevant = TRUE);
+	const BObolPresentationTimingContext &context);
     uint64_t getInterruptedPresentationFrameCount(void) const;
     uint64_t getLastInterruptedPresentationTimeNanoseconds(void) const;
     uint64_t getLastRenderTimeNanoseconds(void) const;
@@ -689,8 +749,8 @@ public:
     unsigned int getLastMeshBudgetEvictedDisplayMeshCount(void) const;
     SbBool hasPendingLodResults(void) const;
     SbBool hasPendingLodSubmissions(void) const;
-    /** True while a retained PoP cut or unchanged calibration probe must be
-     * presented before another refinement step may be submitted. */
+    /** True only while a retained PoP cut, presentation-stage handoff, or
+     * unchanged calibration probe requires a completed frame. */
     SbBool hasPendingLodRefinementFrame(void) const;
     size_t processPendingLodResults(size_t maxResults = 0,
 	uint64_t maxMicroseconds = 0);
@@ -776,7 +836,8 @@ public:
     int replaceLineLayerOverlay(const char *overlayId,
 				const struct bg_line_layer_builder *builder,
 				uint32_t sourceId = 0,
-				SbBool selectable = TRUE);
+				SbBool selectable = TRUE,
+				SbBool depthTest = TRUE);
     int replaceHUDLabelOverlay(const char *labelId,
 			       const char *text,
 			       const SbVec2f &position,
@@ -970,9 +1031,14 @@ private:
     void setEndpointGraphicalRenderingEnabled(SbBool enabled);
     void invalidateRendererPerformanceHistory(void);
     void requestRenderImpl(const char *reason, SbBool lodCapacityRelevant);
+    void retireLodCapacityRenderRequest(void);
     void notifyFrameRequest(const char *reason);
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);
+    SbBool lodViewPolicyEnabled(void) const;
+    SbBool automaticLodControlEnabled(void) const;
+    SbBool synchronizeAutomaticLodControl(void);
+    void retireAutomaticLodControl(void);
     void resetDiscoveryPointProxyFloor(SbBool requestFrame);
     void invalidateDatabaseSourceLodState(void);
     void syncRenderManager(void);
@@ -992,7 +1058,12 @@ private:
      * consumes it.  This transaction is mutually exclusive with stable mesh
      * quality calibration and always publishes its required frame edge. */
     void requestStructuralPointAdmissionFrame(const char *reason);
+    /** Start the sole submission successor selected by capacity evidence. */
+    void beginSceneWideCapacitySubmission(SbBool active = TRUE);
+    void restartLodCapacitySubmission(SbBool capacityCandidateChanged);
     void scheduleResidentGrowthReallocationIfReady(void);
+    SbBool scheduleCapacityCandidateAllocationIfReady(void);
+    SbBool schedulePendingLodHandoffAllocationIfReady(void);
     void armStableLodHeadroomProbeIfReady(void);
     SbBool completePointTriangleRecoveryIfReady(void);
     void finishLodRetainedRecovery(void);

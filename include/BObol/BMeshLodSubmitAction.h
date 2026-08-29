@@ -29,6 +29,7 @@ class BObolLodService;
 class BObolLodProjectedDemandCache;
 class BObolViewController;
 class BObolViewLodState;
+struct BObolCompactResidentProgressiveSummary;
 struct db_i;
 
 class BOBOL_EXPORT SoBRLMeshLodSubmitAction : public SoAction {
@@ -70,6 +71,11 @@ public:
      * resulting repair pass, require those otherwise eligible fallbacks to
      * enter the mesh provider path. */
     void setStructuralPresentationRepair(SbBool repair);
+    /* Preload the minimum prefixes needed by a private finer point threshold.
+     * The displayed aggregate-point cut remains authoritative, so this
+     * residency work is bounded by service memory/task limits rather than
+     * charged as simultaneously presented scene work. */
+    void setPointRelaxationPreload(SbBool preload);
     /* Divide one exact-frame structural repair allowance across the complete
      * unresolved frontier.  The controller supplies a per-occurrence share;
      * workers still report the exact minimum PoP population and the completed
@@ -261,6 +267,9 @@ private:
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
 	const std::vector<uint32_t> &chunkIds, int activeCut, int preferredCut,
 	int drawMode, SbBool hasNormals);
+    int reserveResidentProgressiveCut(
+	const BObolCompactResidentProgressiveSummary &progressive,
+	int activeCut, int preferredCut, int drawMode);
     int admitAllocatedRefinementCut(
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
 	const std::vector<uint32_t> &chunkIds, int activeCut, int preferredCut,
@@ -272,6 +281,8 @@ private:
     SbBool reserveInitialCost(uint64_t sourceFaces, uint64_t sourcePoints,
 	int drawMode, size_t &providerCostAllowance);
     SbBool reserveInitialCost(const BObolLodCounts &counts, int drawMode);
+    SbBool reserveReplacementCost(const BObolLodCounts &currentCounts,
+	const BObolLodCounts &replacementCounts, int drawMode);
 
     BObolLodService *service;
     struct db_i *dbip;
@@ -285,6 +296,7 @@ private:
     SbBool structuralCoverageOnly;
     SbBool allowTerminalMeshAdmission;
     SbBool structuralPresentationRepair;
+    SbBool pointRelaxationPreload;
     size_t structuralCoverageCostReservation;
     size_t selectedOccurrenceCount;
     uint64_t generation;

@@ -425,6 +425,20 @@ main(int argc, char **argv)
     if (!view.diff_hashes())
 	FAIL("qtcad view diffs should honor explicit non-camera refresh requests");
 
+    /* Retained state revisions, unlike the refresh latch, cannot be consumed
+     * by a fast renderer before qged performs its post-command comparison. */
+    (void)bv_refresh_complete(localView);
+    view.stash_hashes();
+    struct bv_adc_state revisionAdc = BV_ADC_STATE_INIT;
+    if (!bv_adc_state_get(&revisionAdc, localView))
+	FAIL("qtcad revision test should read ADC state");
+    revisionAdc.draw = revisionAdc.draw ? 0 : 1;
+    if (!bv_adc_state_set(localView, &revisionAdc) ||
+	bv_refresh_dirty_get(localView))
+	FAIL("qtcad retained state should advance without requiring a dirty latch");
+    if (!view.diff_hashes())
+	FAIL("qtcad view diffs should honor retained presentation revisions");
+
     /* A Qt repaint is allowed to replay the retained framebuffer until a
      * semantic refresh explicitly invalidates its pixels.  Verify the bridge
      * requests a presentation-only frame for draw/selection state without

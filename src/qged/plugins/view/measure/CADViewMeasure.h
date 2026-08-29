@@ -26,6 +26,7 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPointer>
 #include "BObol/BInput.h"
 #include "qtcad/QgSignalFlags.h"
 
@@ -71,6 +72,7 @@ class CADViewMeasure : public QWidget
 
     private slots:
 	void update_color();
+	void change_measure_mode(bool use3d);
 
     protected:
 	bool eventFilter(QObject *, QEvent *);
@@ -86,7 +88,7 @@ class CADViewMeasure : public QWidget
 	QMeasure2DFilter *f2d = NULL;
 	QMeasure3DFilter *f3d = NULL;
 	QgPluginContext *m_ctx = nullptr;
-	QgView *m_input_view = nullptr;
+	QPointer<QgView> m_input_view;
 	struct bobol_display_endpoint *m_input_endpoint = nullptr;
 	bool m_qt_filter_installed = false;
 };

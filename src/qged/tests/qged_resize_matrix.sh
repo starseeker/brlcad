@@ -17,6 +17,7 @@ mode_list="0,1,2,3,4,5"
 case_list="moss"
 run_timeout=180
 capture_apng=0
+minimum_selection_changed_pixels=256
 
 usage()
 {
@@ -122,7 +123,7 @@ case_spec()
 	hubble)
 	    printf '%s|%s|%s\n' \
 		"${BOBOL_HUBBLE_DB:-/home/cyapp/models/NASA/Hubble/Hubble_Space_Telescope.g}" \
-		'all.g' 'all.g/c360' ;;
+		'all.g' 'all.g/BODY' ;;
 	unique_mesh_50k_stress)
 	    printf '%s|%s|%s\n' \
 		"${BOBOL_UNIQUE_MESH_50K_STRESS_DB:-$build_dir/unique_mesh_50k_stress.g}" \
@@ -142,7 +143,7 @@ write_events()
     local hierarchy_path="${8:-}"
     local lod_value=1
     local hierarchy_select_events=""
-    local hierarchy_clear_events=""
+    local hierarchy_finish_events=""
     local opposite_lod_value=0
     local opposite_lod_name="disabled"
     local restored_lod_name="reenabled"
@@ -177,7 +178,9 @@ write_events()
   {\"target\":\".\",\"action\":\"wait\",\"arguments\":{\"ms\":50}},
   {\"target\":\"./n:Hierarchy/i:hierarchy-tree\",\"action\":\"checkpoint\",\"arguments\":{\"name\":\"${image_dir}/tree_selected.png\"}},
   {\"target\":\"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas\",\"action\":\"checkpoint\",\"arguments\":{\"name\":\"${image_dir}/selected_before_resize.png\"}},"
-	hierarchy_clear_events="  {\"target\":\"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas\",\"action\":\"checkpoint\",\"arguments\":{\"name\":\"${image_dir}/selected_after_storm.png\"}},
+	hierarchy_finish_events="  {\"target\":\"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas\",\"action\":\"checkpoint\",\"arguments\":{\"name\":\"${image_dir}/selected_after_storm.png\"}},
+  {\"target\":\".\",\"action\":\"wait_progressive_idle\",\"arguments\":{\"timeout_ms\":${settle_timeout_ms},\"quiet_ms\":100}},
+  {\"target\":\"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas\",\"action\":\"checkpoint\",\"arguments\":{\"name\":\"${image_dir}/selected_stable.png\"}},
   {\"target\":\"./n:Hierarchy/i:hierarchy-tree\",\"action\":\"clear_selection\",\"arguments\":{}},
   {\"target\":\".\",\"action\":\"wait\",\"arguments\":{\"ms\":50}},"
     fi
@@ -186,7 +189,8 @@ write_events()
  "schema":"brlcad.qtcad.events",
  "version":1,
  "events":[
-  {"target":".","action":"resize","arguments":{"width":1100,"height":800}},
+  {"target":".","action":"wait_canvas_ready","arguments":{"timeout_ms":10000}},
+  {"target":".","action":"resize","arguments":{"width":1100,"height":800,"stable_ms":250,"timeout_ms":5000}},
   {"target":".","action":"wait","arguments":{"ms":100}},
   {"target":".","action":"qged_command_batch","arguments":{"commands":["view lod ${lod_value}","draw -m${mode} ${object}","ae 90 0","autoview"]}},
   {"target":".","action":"wait","arguments":{"ms":100}},
@@ -224,7 +228,7 @@ ${hierarchy_select_events}
   {"target":".","action":"resize","arguments":{"width":947,"height":693}},
   {"target":".","action":"wait","arguments":{"ms":120}},
   {"target":"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas","action":"checkpoint","arguments":{"name":"${image_dir}/storm.png"}},
-${hierarchy_clear_events}
+${hierarchy_finish_events}
   {"target":".","action":"wait_progressive_idle","arguments":{"timeout_ms":${settle_timeout_ms},"quiet_ms":100}},
   {"target":"./i:cad-central/i:cad-quad/i:view-upper-right/i:cad-canvas","action":"checkpoint","arguments":{"name":"${image_dir}/stable.png"}},
   {"target":".","action":"qged_command_batch","arguments":{"commands":["view lod ${opposite_lod_value}"]}},
@@ -477,13 +481,21 @@ validate_run()
 	identify "$file" >>"$log" 2>&1 || return 1
     done
     if [[ -n "$hierarchy_path" ]]; then
-	for image in tree_selected selected_before_resize selected_after_storm; do
+	for image in tree_selected selected_before_resize selected_after_storm \
+	    selected_stable; do
 	    local file="$image_dir/$image.png"
 	    [[ -s "$file" ]] || {
 		echo "missing $file" >>"$log"; return 1;
 	    }
 	    identify "$file" >>"$log" 2>&1 || return 1
 	done
+	local selection_delta
+	selection_delta="$(compare -metric AE -fuzz 2% \
+	    "$image_dir/selected_stable.png" "$image_dir/stable.png" \
+	    null: 2>&1 || true)"
+	echo "stable selection changed pixels: $selection_delta" >>"$log"
+	[[ "$selection_delta" =~ ^[0-9]+$ ]] &&
+	    ((selection_delta >= minimum_selection_changed_pixels)) || return 1
     fi
 }
 

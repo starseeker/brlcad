@@ -50,6 +50,7 @@ qgviewctrl_ged(const QgViewCtrl *ctrl)
 QgViewCtrl::QgViewCtrl(QWidget *pparent, QgSession *session) : QToolBar(pparent)
 {
 	m_session = session;
+	this->setProperty("qgTestId", QStringLiteral("qged.view.controls"));
 
 	this->setStyleSheet("QToolButton{margin:0px;}");
 
@@ -63,6 +64,14 @@ QgViewCtrl::QgViewCtrl(QWidget *pparent, QgSession *session) : QToolBar(pparent)
 	raytrace = addAction(QIcon(QPixmap(":images/view/raytrace.png")), "Raytrace");
 	fb_mode = addAction(QIcon(QPixmap(":images/view/framebuffer_off.png")), "Framebuffer Off");
 	fb_clear = addAction(QIcon(QPixmap(":images/view/framebuffer_clear.png")), "Clear Framebuffer");
+
+	sca->setProperty("qgTestId", QStringLiteral("qged.view.controls.scale"));
+	rot->setProperty("qgTestId", QStringLiteral("qged.view.controls.rotate"));
+	tra->setProperty("qgTestId", QStringLiteral("qged.view.controls.translate"));
+	center->setProperty("qgTestId", QStringLiteral("qged.view.controls.center"));
+	raytrace->setProperty("qgTestId", QStringLiteral("qged.view.controls.raytrace"));
+	fb_mode->setProperty("qgTestId", QStringLiteral("qged.view.controls.framebuffer-mode"));
+	fb_clear->setProperty("qgTestId", QStringLiteral("qged.view.controls.framebuffer-clear"));
 
 	// Connect buttons to standard actions
 	connect(sca, &QAction::triggered, this, &QgViewCtrl::sca_mode);

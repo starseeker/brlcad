@@ -184,6 +184,11 @@ struct BObolMeshLodHierarchyInfo {
      * these records describe independently readable storage. */
     const struct BObolMeshLodChunkInfo *chunks;
     struct BObolMeshLodCutInfo cuts[BOBOL_MESH_LOD_CUT_COUNT_MAX];
+    /* PCA-oriented whole-source bounds persisted with the immutable
+     * hierarchy.  Corners use binary XYZ order (bit 0 selects +X, bit 1 +Y,
+     * bit 2 +Z).  They are presentation metadata, not a PoP level. */
+    int oriented_bounds_valid;
+    point_t oriented_bounds[8];
 };
 
 /* Stable status for a database object's mesh LoD cache entry. */
@@ -289,7 +294,12 @@ struct BObolMeshLodPreviewRequest {
     { -1, 0.0f, 0.0f, 0, 0, VINIT_ZERO, VINIT_ZERO, NULL, NULL, NULL, NULL }
 
 #define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
-#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, 0, 0, NULL, 0, NULL, {{0, 0, 0, 0.0, {0, 0, 0}, 0}} }
+#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { \
+    -1, -1, -1, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, 0, 0, NULL, 0, NULL, \
+    {{0, 0, 0, 0.0, {0, 0, 0}, 0}}, 0, \
+    {VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, \
+     VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO} \
+}
 #define BOBOL_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 #define BOBOL_MESH_LOD_CACHE_SUMMARY_INIT { 0, 0, 0, 0 }
 
@@ -492,6 +502,13 @@ BOBOL_EXPORT int
 bobol_mesh_lod_hierarchy_info_get(
 	const struct BObolMeshLod *lod,
 	struct BObolMeshLodHierarchyInfo *info);
+
+/* Validate optional binary-XYZ oriented bounds against their hierarchy
+ * domain.  A hierarchy without oriented bounds is valid; malformed or
+ * non-conservative metadata returns 0. */
+BOBOL_EXPORT int
+bobol_mesh_lod_oriented_bounds_validate(
+	const struct BObolMeshLodHierarchyInfo *info);
 
 /* True when this live asset retains only a bounded prefix because durable
  * cache publication was unavailable in its current capacity epoch.  It is

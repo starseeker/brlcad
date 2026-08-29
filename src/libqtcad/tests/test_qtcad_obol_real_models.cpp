@@ -691,7 +691,10 @@ wait_for_view_lod_idle(QgView &view, BObolViewController *controller,
 	    QImage feedback;
 	    const uint64_t renderStarted = controller->beginRenderTiming();
 	    view.get_viewport_image(feedback);
-	    controller->completeRenderTiming(renderStarted);
+	    controller->completeRenderTiming(renderStarted,
+		BObolPresentationTimingContext(
+		    BObolLodCapacityRelevance::RELEVANT,
+		    BObolCadPresentationExecution::EXECUTED));
 	    if (!feedback.isNull() && controller->isRenderRequested())
 		(void)controller->consumeRenderRequest(NULL);
 	}
@@ -1261,7 +1264,10 @@ sync_draw_case(const struct model_case &testCase)
 		QImage feedbackImage;
 		const uint64_t renderStarted = controller->beginRenderTiming();
 		view.get_viewport_image(feedbackImage);
-		controller->completeRenderTiming(renderStarted);
+		controller->completeRenderTiming(renderStarted,
+		    BObolPresentationTimingContext(
+			BObolLodCapacityRelevance::RELEVANT,
+			BObolCadPresentationExecution::EXECUTED));
 		if (!feedbackImage.isNull() && controller->isRenderRequested())
 		    (void)controller->consumeRenderRequest(NULL);
 		lastFeedbackFrame = bu_gettime();

@@ -138,6 +138,45 @@ _fp_bool_argument(struct ged *gedp, const char *argument, int *enabled)
     return 0;
 }
 
+static int
+_fp_cmd_adc(void *ds, int argc, const char **argv)
+{
+    const char *usage_string = "faceplate [options] adc [0|1]";
+    const char *purpose_string = "Enable or disable the angle/distance cursor.";
+    if (_fp_cmd_msgs(ds, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    argc--; argv++;
+
+    struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
+    struct ged *gedp = gd->gedp;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    struct bv_adc_state adc;
+    if (!bv_adc_state_get(&adc, view))
+	return BRLCAD_ERROR;
+
+    if (!argc) {
+	bu_vls_printf(gedp->ged_result_str, "%d", adc.draw);
+	return BRLCAD_OK;
+    }
+
+    if (argc == 1) {
+	int enabled = 0;
+	if (!_fp_bool_argument(gedp, argv[0], &enabled))
+	    return BRLCAD_ERROR;
+	if (ged_view_context_obol_endpoint_get(view_ctx))
+	    return _fp_bool_property_set(gedp, view_ctx,
+		"view.faceplate.adc.visible", enabled);
+	adc.draw = enabled;
+	bv_adc_state_set(view, &adc);
+	return BRLCAD_OK;
+    }
+
+    bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
+    return BRLCAD_ERROR;
+}
+
 
 int
 _fp_cmd_center_dot(void *ds, int argc, const char **argv)
@@ -479,6 +518,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 }
 
 const struct bu_cmdtab _fp_cmds[] = {
+    { "adc",             _fp_cmd_adc},
     { "center_dot",      _fp_cmd_center_dot},
     { "fb",              _fp_cmd_fb},
     { "grid",            _fp_cmd_grid},

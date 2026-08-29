@@ -427,6 +427,16 @@ public:
      */
     uint64_t referenceGeneration(void) const;
 
+    /**
+     * Monotonic revision of realized presentation content.
+     *
+     * Unlike a controller render-request serial, this advances for every
+     * actual retained-content mutation even when several mutations are
+     * coalesced into one frame.  Shared-scene hosts use it to wake every view
+     * which renders this store's scene root.
+     */
+    uint64_t presentationRevision(void) const;
+
     void clear(void);
     BObolFeatureHandle find(const SbString &name,
 	unsigned int scopeMask = BOBOL_FEATURE_SCOPE_ALL) const;
@@ -673,6 +683,9 @@ public:
 
     /** See BObolFeatureStore::referenceGeneration(). */
     uint64_t referenceGeneration(void) const;
+
+    /** See BObolFeatureStore::presentationRevision(). */
+    uint64_t presentationRevision(void) const;
 
     /**
      * Return the store-owned name for a live polygon handle.

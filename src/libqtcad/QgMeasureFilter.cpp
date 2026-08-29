@@ -89,6 +89,17 @@ QgMeasureFilter::update_measure_overlay(int point_count)
 		points, point_count, &measure_color);
 }
 
+void
+QgMeasureFilter::reset()
+{
+	clear_measure_overlay();
+	mode = 0;
+	VSETALL(p1, 0.0);
+	VSETALL(p2, 0.0);
+	VSETALL(p3, 0.0);
+	emit view_updated(QG_VIEW_REFRESH);
+}
+
 double
 QgMeasureFilter::length1()
 {
@@ -181,18 +192,11 @@ QgMeasureFilter::processMouseInput(QEvent::Type type, Qt::MouseButton button)
 
 	if (type == QEvent::MouseButtonPress) {
 		if (button == Qt::RightButton) {
-			clear_measure_overlay();
-			mode = 0;
-			VSETALL(p1, 0.0);
-			VSETALL(p2, 0.0);
-			VSETALL(p3, 0.0);
-			emit view_updated(QG_VIEW_REFRESH);
+			reset();
 			return true;
 		}
 		if (mode == 4) {
-			clear_measure_overlay();
-			mode = 0;
-			emit view_updated(QG_VIEW_REFRESH);
+			reset();
 			return true;
 		}
 		if (!mode) {

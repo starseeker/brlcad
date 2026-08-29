@@ -38,6 +38,7 @@
 
 #include "BObol/BEditManipulator.h"
 #include "BObol/BDisplayEndpoint.h"
+#include "BObol/BLineLayerOverlay.h"
 #include "BObol/BLodService.h"
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BInput.h"
@@ -808,6 +809,169 @@ qged_test_assert_obol_feature(QgEdApp &app,
 	    }
 	    shared = geometry;
 	}
+    }
+    return true;
+}
+
+static SoBRLLineLayerOverlay *
+qged_test_find_line_layer_overlay(BObolViewController *controller,
+	const QString &overlayId)
+{
+    SoNode *root = controller ? controller->getSceneRoot() : nullptr;
+    if (!root || !root->isOfType(SoGroup::getClassTypeId()))
+	return nullptr;
+
+    SoGroup *group = static_cast<SoGroup *>(root);
+    const QByteArray id = overlayId.toUtf8();
+    for (int i = 0; i < group->getNumChildren(); ++i) {
+	SoNode *node = group->getChild(i);
+	if (!node ||
+	    !node->isOfType(SoBRLLineLayerOverlay::getClassTypeId()))
+	    continue;
+	SoBRLLineLayerOverlay *overlay =
+	    static_cast<SoBRLLineLayerOverlay *>(node);
+	if (bu_strcmp(overlay->overlayId.getValue().getString(),
+		id.constData()) == 0)
+	    return overlay;
+    }
+    return nullptr;
+}
+
+static bool
+qged_test_assert_obol_line_layer_overlay(QgEdApp &app,
+	const QJsonObject &arguments, QString *error)
+{
+    std::vector<BObolViewController *> controllers;
+    if (arguments.value(QStringLiteral("all_views")).toBool())
+	controllers = qged_test_all_controllers(app);
+    else {
+	QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+	BObolViewController *controller = view ?
+	    view->obolViewController() : nullptr;
+	if (controller)
+	    controllers.push_back(controller);
+    }
+
+    const QString overlayId = arguments.value(
+	QStringLiteral("overlay_id")).toString();
+    if (controllers.empty() || overlayId.isEmpty()) {
+	if (error)
+	    *error = QStringLiteral(
+		"assert_obol_line_layer_overlay requires a view and overlay_id");
+	return false;
+    }
+
+    const bool expected = arguments.value(
+	QStringLiteral("exists")).toBool(true);
+    for (size_t i = 0; i < controllers.size(); ++i) {
+	SoBRLLineLayerOverlay *overlay = qged_test_find_line_layer_overlay(
+	    controllers[i], overlayId);
+	if ((overlay != nullptr) != expected) {
+	    if (error)
+		*error = QStringLiteral(
+		    "Obol line overlay %1 in view %2 is %3, expected %4")
+		    .arg(overlayId).arg(i)
+		    .arg(overlay ? QStringLiteral("present") :
+			QStringLiteral("absent"))
+		    .arg(expected ? QStringLiteral("present") :
+			QStringLiteral("absent"));
+	    return false;
+	}
+	if (overlay && arguments.contains(QStringLiteral("point_count")) &&
+	    overlay->getPointCount() != static_cast<size_t>(
+		arguments.value(QStringLiteral("point_count")).toInt())) {
+	    if (error)
+		*error = QStringLiteral(
+		    "Obol line overlay %1 in view %2 has %3 points, expected %4")
+		    .arg(overlayId).arg(i)
+		    .arg(static_cast<qulonglong>(overlay->getPointCount()))
+		    .arg(arguments.value(QStringLiteral("point_count")).toInt());
+	    return false;
+	}
+    }
+    return true;
+}
+
+static bool
+qged_test_assert_image_delta(const QJsonObject &arguments, QString *error)
+{
+    const QString referencePath = arguments.value(
+	QStringLiteral("reference")).toString();
+    const QString candidatePath = arguments.value(
+	QStringLiteral("candidate")).toString();
+    if (referencePath.isEmpty() || candidatePath.isEmpty()) {
+	if (error)
+	    *error = QStringLiteral(
+		"assert_image_delta requires reference and candidate paths");
+	return false;
+    }
+
+    QImage reference(referencePath);
+    QImage candidate(candidatePath);
+    if (reference.isNull() || candidate.isNull() ||
+	reference.size() != candidate.size()) {
+	if (error)
+	    *error = QStringLiteral(
+		"assert_image_delta could not load equally sized images");
+	return false;
+    }
+
+    reference = reference.convertToFormat(QImage::Format_RGBA8888);
+    candidate = candidate.convertToFormat(QImage::Format_RGBA8888);
+    const int channelTolerance = std::max(0, arguments.value(
+	QStringLiteral("channel_tolerance")).toInt());
+    static constexpr int colorChannelCount = 3;
+    static constexpr int bytesPerPixel = 4;
+    quint64 changedPixels = 0;
+    for (int y = 0; y < reference.height(); ++y) {
+	const uchar *referenceScanline = reference.constScanLine(y);
+	const uchar *candidateScanline = candidate.constScanLine(y);
+	for (int x = 0; x < reference.width(); ++x) {
+	    bool changed = false;
+	    const int offset = x * bytesPerPixel;
+	    for (int channel = 0; channel < colorChannelCount; ++channel) {
+		if (std::abs(static_cast<int>(referenceScanline[offset + channel]) -
+			static_cast<int>(candidateScanline[offset + channel])) >
+		    channelTolerance) {
+		    changed = true;
+		    break;
+		}
+	    }
+	    if (changed)
+		changedPixels++;
+	}
+    }
+
+    const double minimumChangedPixels = arguments.value(
+	QStringLiteral("min_changed_pixels")).toDouble(-1.0);
+    const double maximumChangedPixels = arguments.value(
+	QStringLiteral("max_changed_pixels")).toDouble(-1.0);
+    if ((arguments.contains(QStringLiteral("min_changed_pixels")) &&
+	(!std::isfinite(minimumChangedPixels) || minimumChangedPixels < 0.0)) ||
+	(arguments.contains(QStringLiteral("max_changed_pixels")) &&
+	(!std::isfinite(maximumChangedPixels) || maximumChangedPixels < 0.0))) {
+	if (error)
+	    *error = QStringLiteral(
+		"assert_image_delta thresholds must be finite and non-negative");
+	return false;
+    }
+    if (minimumChangedPixels >= 0.0 &&
+	static_cast<double>(changedPixels) < minimumChangedPixels) {
+	if (error)
+	    *error = QStringLiteral(
+		"assert_image_delta found %1 changed pixels, expected at least %2")
+		.arg(changedPixels)
+		.arg(minimumChangedPixels);
+	return false;
+    }
+    if (maximumChangedPixels >= 0.0 &&
+	static_cast<double>(changedPixels) > maximumChangedPixels) {
+	if (error)
+	    *error = QStringLiteral(
+		"assert_image_delta found %1 changed pixels, expected at most %2")
+		.arg(changedPixels)
+		.arg(maximumChangedPixels);
+	return false;
     }
     return true;
 }
@@ -2170,6 +2334,14 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		} else if (events[i].action ==
 		    QLatin1String("assert_obol_feature")) {
 		    success = qged_test_assert_obol_feature(app,
+			events[i].arguments, &error);
+		} else if (events[i].action ==
+		    QLatin1String("assert_obol_line_layer_overlay")) {
+		    success = qged_test_assert_obol_line_layer_overlay(app,
+			events[i].arguments, &error);
+		} else if (events[i].action ==
+		    QLatin1String("assert_image_delta")) {
+		    success = qged_test_assert_image_delta(
 			events[i].arguments, &error);
 		} else if (events[i].action ==
 		    QLatin1String("assert_edit_session_preview")) {

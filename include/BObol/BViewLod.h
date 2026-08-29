@@ -340,6 +340,25 @@ public:
     const CadPayload *findCadForAsset(
 	const SoBRLDatabaseSource *source,
 	const SbString &assetPath) const;
+    /** Return a view-local cut for progressive geometry retained directly by
+     * a compact source, or -1 when the instance should use its authored cut.
+     * The occurrence key and immutable geometry revision authenticate the
+     * positional hint across registry and part replacement. */
+    int residentCadProgressiveCut(const SoBRLDatabaseSource *source,
+	uint32_t sourceEntryIndex, const SbString &occurrenceKey,
+	uint64_t geometryRevision) const;
+    /** Retarget an authored progressive compact part without cache, worker,
+     * or geometry publication work.  Returns TRUE for a valid unchanged or
+     * changed binding and FALSE for stale identity or an invalid cut. */
+    SbBool retargetResidentCadProgressiveCut(
+	const SoBRLDatabaseSource *source, uint32_t sourceEntryIndex,
+	const SbString &occurrenceKey, int activeCut, int requestedCut,
+	uint64_t viewRevision, uint64_t policyRevision);
+    /** Retire direct progressive bindings whose source population or
+     * immutable part revision has been replaced.  Source delta journals keep
+     * the common mutation path proportional to changed entries. */
+    size_t synchronizeResidentCadProgressiveSource(
+	const SoBRLDatabaseSource *source);
     const CadPayload *findCadForResult(const BObolLodResult &result) const;
     const CadPayload *findCadForResult(const SoBRLDatabaseSource *source,
 	const BObolLodResult &result) const;
@@ -367,11 +386,13 @@ public:
      * contains the requested prefix. */
     SbBool retargetMeshPayload(const MeshPayload *payload, int activeCut,
 	int requestedCut, uint64_t viewRevision, uint64_t policyRevision);
-    /** Retarget one retained CAD occurrence to an already resident cut and
-     * record the exact view demand which selected it.  Keeping the projection
-     * with the payload lets later bounded recovery retain perceptual ordering
-     * without reprojecting or sorting an entire large scene on the owner
-     * thread. */
+    /** Retarget one retained CAD occurrence and record the exact view demand
+     * which selected it.  Progressive payloads may select any already
+     * resident cut.  A terminal full-detail payload retains its immutable
+     * geometry while refreshing only camera-dependent presentation metadata.
+     * Keeping the projection with either payload lets later bounded recovery
+     * retain perceptual ordering without reprojecting or sorting an entire
+     * large scene on the owner thread. */
     SbBool retargetCadPayload(const CadPayload *payload, int activeCut,
 	const BObolLodRequest &demand);
     /** Re-publish the retained representation binding for one occurrence.
@@ -439,10 +460,15 @@ public:
     size_t cadPayloadCountForSource(
 	const SoBRLDatabaseSource *source) const;
     size_t cadMeshPayloadCount(void) const;
-    /** Return the number of CAD mesh payloads backed by a progressive mesh.
-     * Full-detail siblings remain part of cadMeshPayloadCount(), but they do
-     * not make a renderer-wide PoP cut a multi-occurrence policy. */
+    /** Return the number of view-managed progressive CAD occurrences,
+     * including service payloads and immutable resident progressive parts.
+     * Full-detail siblings remain part of cadMeshPayloadCount(). */
     size_t cadProgressivePayloadCount(void) const;
+    size_t residentCadProgressiveCount(void) const;
+    int minimumResidentCadProgressiveActiveCut(void) const;
+    int maximumResidentCadProgressiveActiveCut(void) const;
+    int minimumResidentCadProgressiveRequestedCut(void) const;
+    int maximumResidentCadProgressiveRequestedCut(void) const;
     /** True when at least one CAD payload has a view-refinable progressive
      * mesh.  A structural or sampled cold preview is useful presentation,
      * but it does not satisfy tests or clients which require PoP refinement. */
@@ -672,6 +698,33 @@ private:
     std::unordered_map<std::string,
 	std::unordered_set<CadPayload *> > cadPayloadsByAssetKey;
     std::unordered_map<std::string, CadPayloadPtr> cadBindings;
+    struct ResidentCadProgressiveCut {
+	SbString occurrenceKey;
+	int activeCut = -1;
+	int requestedCut = -1;
+	uint64_t viewRevision = 0;
+	uint64_t policyRevision = 0;
+	uint64_t geometryRevision = 0;
+	size_t activeRenderCost = 0;
+	size_t minimumRenderCost = 0;
+	std::array<size_t, Obol::ProgressiveCutLimit> ceilingRenderCosts = {};
+    };
+    struct ResidentCadProgressiveSource {
+	uint64_t populationEpoch = 0;
+	uint64_t inventoryRevision = 0;
+	std::unordered_map<uint32_t, ResidentCadProgressiveCut> cuts;
+    };
+    std::unordered_map<uint64_t, ResidentCadProgressiveSource>
+	residentCadProgressiveCuts;
+    size_t residentCadProgressiveActiveCutCounts[
+	Obol::ProgressiveCutLimit];
+    size_t residentCadProgressiveRequestedCutCounts[
+	Obol::ProgressiveCutLimit];
+    size_t residentCadProgressiveCountValue;
+    size_t residentCadProgressiveActiveRenderCost;
+    size_t residentCadProgressiveMinimumRenderCost;
+    size_t residentCadProgressiveCeilingRenderCosts[
+	Obol::ProgressiveCutLimit];
     struct CadOccurrenceFailure {
 	uint64_t databaseRevision = 0;
 	uint64_t sourceRevision = 0;
@@ -792,6 +845,8 @@ private:
     void removeCadPayloadMetrics(const CadPayload *payload);
     void addCadResidentDemand(const CadPayload *payload);
     void removeCadResidentDemand(const CadPayload *payload);
+    void removeResidentCadProgressiveMetrics(
+	const ResidentCadProgressiveCut &binding);
     void invalidateCadAllocationCoverage(void);
     SbBool cadPayloadCoveredByActiveAllocation(
 	const CadPayload *payload) const;

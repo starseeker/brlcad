@@ -13,6 +13,8 @@
 
 #include "bg/line_layer.h"
 
+#include <Inventor/nodes/SoDepthBuffer.h>
+
 #include <vector>
 
 SO_NODE_SOURCE(SoBRLLineLayerOverlay);
@@ -25,6 +27,7 @@ SoBRLLineLayerOverlay::SoBRLLineLayerOverlay(void)
     SO_NODE_ADD_FIELD(sourceId, (0));
     SO_NODE_ADD_FIELD(visible, (TRUE));
     SO_NODE_ADD_FIELD(selectable, (TRUE));
+    SO_NODE_ADD_FIELD(depthTest, (TRUE));
 }
 
 SoBRLLineLayerOverlay::~SoBRLLineLayerOverlay(void)
@@ -70,6 +73,12 @@ SoBRLLineLayerOverlay::rebuildGeometry(const struct bg_line_layer_builder *build
     this->removeAllChildren();
     if (!this->visible.getValue() || !builder)
 	return 0;
+
+    SoDepthBuffer *depth = new SoDepthBuffer;
+    depth->test = this->depthTest.getValue();
+    depth->write = this->depthTest.getValue();
+    depth->function = SoDepthBuffer::LEQUAL;
+    this->addChild(depth);
 
     int realized = 0;
     size_t layerCount = bg_line_layer_builder_layer_count(builder);

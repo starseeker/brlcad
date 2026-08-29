@@ -30,7 +30,9 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QPlainTextEdit>
+#include <QSettings>
 #include <QTextStream>
+#include <QTemporaryDir>
 #include "brlcad_version.h"
 #include "bu/malloc.h"
 #include "bu/file.h"
@@ -205,12 +207,27 @@ struct qged_qcmd_cleanup {
 
 
 QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode,
-	int quad_mode, bool test_mode) :QApplication(argc, argv)
+	int quad_mode, bool test_mode) :QApplication(argc, argv),
+	m_test_mode(test_mode)
 {
     setOrganizationName("BRL-CAD");
     setOrganizationDomain("brlcad.org");
     setApplicationName("QGED");
     setApplicationVersion(brlcad_version());
+
+    /* GUI replay must not inherit disabled plugins or desktop geometry from
+     * the operator running the test, and it must never overwrite those
+     * choices on exit.  An application-owned temporary INI scope provides
+     * the same behavior on registry- and file-backed QSettings platforms. */
+    if (m_test_mode) {
+	m_test_settings_directory.reset(new QTemporaryDir());
+	if (!m_test_settings_directory->isValid())
+	    bu_exit(EXIT_FAILURE,
+		"qged: unable to create isolated GUI test settings directory\n");
+	QSettings::setDefaultFormat(QSettings::IniFormat);
+	QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+	    m_test_settings_directory->path());
+    }
     (void)qtcad_obol_host_factories_register();
 
     // NOTE - these env variables should ultimately be temporary - we are using
@@ -292,7 +309,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode,
     QSettings settings("BRL-CAD", "QGED");
 
     // (Debugging) Report settings filename
-    if (QFileInfo(settings.fileName()).exists())
+    if (!m_test_mode && QFileInfo(settings.fileName()).exists())
 	std::cout << "Reading settings from " << settings.fileName().toStdString() << "\n";
 
     /* A replay is a hermetic viewport test, not a continuation of the local
@@ -302,7 +319,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode,
      * arrive seconds later, temporarily changing the viewport and therefore
      * the fitted camera.  It also makes screenshots depend on personal dock
      * state. */
-    if (test_mode || !QFileInfo(settings.fileName()).exists()) {
+    if (m_test_mode || !QFileInfo(settings.fileName()).exists()) {
 	w->resize(QSize(1100, 800));
     } else {
 	//https://bugreports.qt.io/browse/QTBUG-16252?focusedCommentId=250562&page=com.atlassian.jira.plugin.system.issuetabpanels%3Acomment-tabpanel#comment-250562

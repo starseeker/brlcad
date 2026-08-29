@@ -73,6 +73,52 @@
 
 #include "QgCanvasInput.h"
 
+/* HUD publication observes user-visible convergence stages, not every
+ * coordinator subphase.  In particular, refining and capacity calibration
+ * are two internal owners of one settling episode.  Treating their handoff as
+ * a new visual transaction made the retained faceplate request an OSMesa
+ * scene traversal even when geometry and the useful progress contract were
+ * unchanged. */
+enum class QgLodProgressPhaseClass : unsigned char {
+    Uninitialized = 0,
+    Idle,
+    Discovering,
+    Preparing,
+    Interactive,
+    Settling,
+    Background,
+    Error
+};
+
+static constexpr QgLodProgressPhaseClass
+qgcanvas_lod_progress_phase_class(int phase)
+{
+    switch (phase) {
+    case BOBOL_LOD_CONVERGENCE_IDLE:
+	return QgLodProgressPhaseClass::Idle;
+    case BOBOL_LOD_CONVERGENCE_DISCOVERING:
+	return QgLodProgressPhaseClass::Discovering;
+    case BOBOL_LOD_CONVERGENCE_PREPARING:
+	return QgLodProgressPhaseClass::Preparing;
+    case BOBOL_LOD_CONVERGENCE_INTERACTIVE:
+	return QgLodProgressPhaseClass::Interactive;
+    case BOBOL_LOD_CONVERGENCE_REFINING:
+    case BOBOL_LOD_CONVERGENCE_CALIBRATING:
+	return QgLodProgressPhaseClass::Settling;
+    case BOBOL_LOD_CONVERGENCE_BACKGROUND:
+	return QgLodProgressPhaseClass::Background;
+    case BOBOL_LOD_CONVERGENCE_ERROR:
+	return QgLodProgressPhaseClass::Error;
+    }
+    return QgLodProgressPhaseClass::Error;
+}
+
+static_assert(qgcanvas_lod_progress_phase_class(
+	BOBOL_LOD_CONVERGENCE_REFINING) ==
+    qgcanvas_lod_progress_phase_class(
+	BOBOL_LOD_CONVERGENCE_CALIBRATING),
+    "refinement and calibration are one HUD publication episode");
+
 /**
  * Plain-data struct that consolidates the private state shared between
  * QgGL and QgSW.  It is held as a pimpl-style raw pointer in both canvas
@@ -95,6 +141,10 @@ struct QgCanvasState {
     /* ---- hash tracking for incremental updates ---- */
     unsigned long long prev_dhash = 0;
     unsigned long long prev_vhash = 0;
+    uint64_t prev_frame_revision = 0;
+    unsigned long long faceplate_view_hash = 0;
+    uint64_t faceplate_frame_revision = 0;
+    bool faceplate_sync_initialized = false;
 
     /* ---- input-binding flags ---- */
     bool use_default_keybindings   = true;
@@ -117,10 +167,10 @@ struct QgCanvasState {
     bool   lod_pointer_interaction_active = false;
     bool   lod_progress_idle_tail_pending = false;
     std::atomic<bool> frame_request_dispatch_queued {false};
-    bool   lod_progress_last_pending = false;
     bool   lod_progress_last_visible = false;
     bool   lod_progress_last_terminal_ready = false;
-    int    lod_progress_last_phase = -1;
+    QgLodProgressPhaseClass lod_progress_last_phase_class =
+	QgLodProgressPhaseClass::Uninitialized;
     bool   software_backend = false;
     QWidget *frame_request_widget = nullptr;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
@@ -641,20 +691,27 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     if (action && deadlineDuration)
 	action->setAbortCallback(
 	    deadlineContext.previous, deadlineContext.previousData);
+    const BObolPresentationTimingContext timingContext(
+	lodCapacityRelevant ?
+	    BObolLodCapacityRelevance::RELEVANT :
+	    BObolLodCapacityRelevance::EXCLUDED,
+	cadExecutionAfter != cadExecutionBefore ?
+	    BObolCadPresentationExecution::EXECUTED :
+	    BObolCadPresentationExecution::NOT_EXECUTED,
+	cadPreparation);
     /* Image export/checkpoint readback is a second traversal, not a frame the
      * viewport needed to present.  Feeding it into the scene LoD capacity
      * estimator makes screenshot frequency and PNG test checkpoints alter
      * the terminal PoP cut.  QgSW's paint path opts in below; diagnostic
      * image producers deliberately do not. */
-    if (recordPresentationTiming && !interrupted)
-	s.obol->completeRenderTiming(started, lodCapacityRelevant);
+    if (recordPresentationTiming && !interrupted) {
+	s.obol->completeRenderTiming(started, timingContext);
+    }
     if (interrupted) {
 	if (recordPresentationTiming) {
 	    s.obol->notePresentationRenderInterrupted(
 		completed > started ? completed - started : 1,
-		cadExecutionAfter != cadExecutionBefore ? TRUE : FALSE,
-		cadPreparation,
-		lodCapacityRelevant);
+		timingContext);
 	}
 	/* A retained frame is useful only for the same physical viewport.  In
 	 * particular, never present pre-resize pixels while an interrupted
@@ -745,6 +802,7 @@ qgcanvas_init_obol(QgCanvasState &s, QWidget *w,
     bobol_init(NULL);
     s.obol = controller;
     s.owns_obol = false;
+    s.faceplate_sync_initialized = false;
     if (!s.obol && create_controller) {
 	s.obol = new BObolViewController();
 	s.owns_obol = true;
@@ -807,6 +865,7 @@ qgcanvas_bind_obol_controller(QgCanvasState &s, QWidget *w,
     s.obol = controller;
     s.owns_obol = false;
     s.obol_paint_initialized = false;
+    s.faceplate_sync_initialized = false;
     /* A completed image belongs to its controller/scene identity.  Never
      * preserve pixels from the previous endpoint through a borrowed-controller
      * replacement. */
@@ -1014,10 +1073,21 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     if (!s.obol || !s.v)
 	return;
 
+    const struct bv *view = bv_context_view_const(s.v);
+    const unsigned long long viewHash = bv_hash(view);
+    const uint64_t frameRevision = bv_frame_revision_get(view);
+    if (s.faceplate_sync_initialized &&
+	s.faceplate_view_hash == viewHash &&
+	s.faceplate_frame_revision == frameRevision)
+	return;
+
     struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
     struct ged *gedp = ged_view_context_owner(view_ctx);
     if (gedp) {
 	(void)ged_view_faceplate_sync(gedp, view_ctx);
+	s.faceplate_view_hash = viewHash;
+	s.faceplate_frame_revision = frameRevision;
+	s.faceplate_sync_initialized = true;
 	return;
     }
 
@@ -1030,7 +1100,6 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     struct bv_axes_state modelAxes = {};
     struct bv_axes_state viewAxes = {};
     struct bv_adc_state adc = {};
-    const struct bv *view = bv_context_view_const(s.v);
     (void)bv_grid_state_get(&grid, view);
     (void)bv_model_axes_state_get(&modelAxes, view);
     (void)bv_view_axes_state_get(&viewAxes, view);
@@ -1040,6 +1109,9 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     qgcanvas_sync_obol_axes(s, group, "faceplate::model_axes", modelAxes);
     qgcanvas_sync_obol_axes(s, group, "faceplate::view_axes", viewAxes);
     qgcanvas_sync_obol_adc(s, group, adc);
+    s.faceplate_view_hash = viewHash;
+    s.faceplate_frame_revision = frameRevision;
+    s.faceplate_sync_initialized = true;
 }
 
 /**
@@ -1083,11 +1155,12 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
      * no second transition is observed.  Track the user-facing phase and
      * visibility contract explicitly so the final HUD removal owns a render
      * request even when no geometry work remains. */
+    const QgLodProgressPhaseClass phaseClass =
+	qgcanvas_lod_progress_phase_class(lod_status.phase);
     const bool lod_state_changed = lod_first ||
-	lod_pending != s.lod_progress_last_pending ||
 	lod_visible != s.lod_progress_last_visible ||
 	terminalReady != s.lod_progress_last_terminal_ready ||
-	static_cast<int>(lod_status.phase) != s.lod_progress_last_phase;
+	phaseClass != s.lod_progress_last_phase_class;
     const bool lod_publish = lod_state_changed ||
 	(allowPeriodic && lod_pending && (lod_first ||
 	    std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1095,10 +1168,9 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
     if (!lod_publish)
 	return false;
 
-    s.lod_progress_last_pending = lod_pending;
     s.lod_progress_last_visible = lod_visible;
     s.lod_progress_last_terminal_ready = terminalReady;
-    s.lod_progress_last_phase = static_cast<int>(lod_status.phase);
+    s.lod_progress_last_phase_class = phaseClass;
     s.lod_progress_last_publish = now;
     struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
     struct ged *gedp = ged_view_context_owner(view_ctx);
@@ -1250,7 +1322,9 @@ static inline void
 qgcanvas_stash_hashes(QgCanvasState &s)
 {
     s.prev_dhash = 0;
-    s.prev_vhash = bv_hash(bv_context_view_const(s.v));
+    const struct bv *view = bv_context_view_const(s.v);
+    s.prev_vhash = bv_hash(view);
+    s.prev_frame_revision = bv_frame_revision_get(view);
 }
 
 /** Request a semantic view refresh and wake the canvas backend. */
@@ -1292,12 +1366,16 @@ qgcanvas_diff_hashes_check(QgCanvasState &s)
     bool ret = false;
     const struct bv *view = bv_context_view_const(s.v);
     unsigned long long c_vhash = bv_hash(view);
+    const uint64_t frameRevision = bv_frame_revision_get(view);
 
-    /* Commands may change renderer policy without changing the camera hash
-     * (lighting, normal presentation, overlays, and similar state).  Honor
-     * libbv's explicit refresh request as well as transform differences so
-     * qged's post-command DisplayDiff path actually schedules a canvas paint. */
-    if (s.prev_vhash != c_vhash || bv_refresh_dirty_get(view)) {
+    /* Commands may change retained presentation state without changing the
+     * camera hash (lighting, faceplate overlays, and similar policy).  The
+     * frame revision is the durable record of that semantic change.  The
+     * dirty latch remains useful for explicit redraws with unchanged state,
+     * but a fast renderer is allowed to consume it before this comparison. */
+    if (s.prev_vhash != c_vhash ||
+	s.prev_frame_revision != frameRevision ||
+	bv_refresh_dirty_get(view)) {
 	qgcanvas_request_update(s, BV_REFRESH_VIEW | BV_REFRESH_DRAW);
 	ret = true;
     }

@@ -31,6 +31,7 @@ public:
     SoSFUInt32 sourceId;
     SoSFBool visible;
     SoSFBool selectable;
+    SoSFBool depthTest;
 
     SoBRLLineLayerOverlay(void);
     static void initClass(void);

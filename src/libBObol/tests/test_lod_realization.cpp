@@ -405,6 +405,10 @@ test_worker_prepared_generation_lifetime(void)
     const std::shared_ptr<const Obol::PartGeometry> coarse =
 	progressive.prepareCadGeometry(
 	    BOBOL_LOD_DRAW_SHADED, &coarseRevision);
+    const std::shared_ptr<const Obol::PartGeometry> coarseWire =
+	progressive.prepareCadGeometry(BOBOL_LOD_DRAW_WIRE, NULL);
+    const BObolLodProgressiveMeshSnapshot coarseSnapshot =
+	progressive.snapshot();
     const uint64_t progressiveLineage =
 	coarse && coarse->shaded ? coarse->shaded->progressiveLineage : 0;
 
@@ -418,16 +422,43 @@ test_worker_prepared_generation_lifetime(void)
     const std::shared_ptr<const Obol::PartGeometry> rich =
 	progressive.prepareCadGeometry(
 	    BOBOL_LOD_DRAW_SHADED, &richRevision);
+    const BObolLodProgressiveMeshSnapshot richSnapshot =
+	progressive.snapshot();
     const size_t richBytes = progressive.estimateBytes();
 
-    if (!coarse || !coarse->shaded || !rich || !rich->shaded ||
+    const Obol::TriMesh *coarseWireSource =
+	coarseWire && coarseWire->wire ?
+	    coarseWire->wire->triangleEdges() : NULL;
+    bool coarseWireCutsMatch = coarseWireSource && coarse && coarse->shaded &&
+	coarseWireSource == &*coarse->shaded &&
+	coarseWire->wire->progressiveCuts.size() ==
+	    coarse->shaded->progressiveCuts.size();
+    if (coarseWireCutsMatch) {
+	for (size_t cut = 0;
+	     cut < coarseWire->wire->progressiveCuts.size(); ++cut) {
+	    if (coarseWire->wire->progressiveCuts[cut].segmentCount !=
+		    coarse->shaded->progressiveCuts[cut].indexCount) {
+		coarseWireCutsMatch = false;
+		break;
+	    }
+	}
+    }
+
+    if (!coarse || !coarse->shaded || !coarseWireCutsMatch ||
+	!rich || !rich->shaded ||
 	coarseRevision == 0 || richRevision <= coarseRevision ||
+	!coarseSnapshot.isValid() || !richSnapshot.isValid() ||
+	coarseSnapshot.revision() != coarseRevision ||
+	richSnapshot.revision() != richRevision ||
+	coarseSnapshot.hierarchyCountsAtCut(0, FALSE).faceCount != 1 ||
+	richSnapshot.hierarchyCountsAtCut(1, FALSE).faceCount != 2 ||
 	progressiveLineage == 0 ||
 	rich->shaded->progressiveLineage != progressiveLineage ||
 	coarse->shaded->indices.size() != 3 ||
 	rich->shaded->indices.size() != 6 ||
 	!progressive.trim(0)) {
-	printf("FAIL: immutable progressive generation expansion\n");
+	printf("FAIL: immutable progressive generation expansion or derived-wire "
+	       "prefix identity\n");
 	return 1;
     }
 
@@ -438,6 +469,9 @@ test_worker_prepared_generation_lifetime(void)
     const size_t trimmedBytes = progressive.estimateBytes();
     if (!trimmed || !trimmed->shaded ||
 	trimmedRevision <= richRevision ||
+	coarseSnapshot.revision() != coarseRevision ||
+	richSnapshot.revision() != richRevision ||
+	progressive.snapshot().revision() != trimmedRevision ||
 	trimmed->shaded->progressiveLineage != progressiveLineage ||
 	trimmed->shaded->indices.size() != 3 ||
 	trimmedBytes >= richBytes ||

@@ -219,117 +219,6 @@ private:
     std::vector<SourcePlan> planValues;
 };
 
-/* One exact non-terminal structural-box frontier and the per-occurrence cost
- * reservation derived for its bounded repair pass.  The optional point
- * relaxation transaction retains its candidate after admission until an
- * exact presentation either commits or rejects it.  A zero frontier is
- * inactive; beginning or retiring a frontier also retires its reservation. */
-class BObolLodStructuralRepair {
-public:
-    void begin(size_t frontierCount)
-    {
-	this->frontierCountValue = frontierCount;
-	this->coverageCostReservationValue = 0;
-	this->pointRelaxationTargetValue = 0.0f;
-	this->pointRelaxationPendingValue = false;
-	this->pointRelaxationPresentationPendingValue = false;
-    }
-
-    void beginPointRelaxation(size_t frontierCount, float targetThreshold)
-    {
-	this->frontierCountValue = frontierCount;
-	this->coverageCostReservationValue = 0;
-	this->pointRelaxationTargetValue = targetThreshold;
-	this->pointRelaxationPendingValue = true;
-	this->pointRelaxationPresentationPendingValue = false;
-    }
-
-    void reset(void)
-    {
-	this->frontierCountValue = 0;
-	this->coverageCostReservationValue = 0;
-	this->pointRelaxationTargetValue = 0.0f;
-	this->pointRelaxationPendingValue = false;
-	this->pointRelaxationPresentationPendingValue = false;
-    }
-
-    void completePointRelaxationAdmission(void)
-    {
-	this->frontierCountValue = 0;
-	this->coverageCostReservationValue = 0;
-	this->pointRelaxationPresentationPendingValue = true;
-    }
-
-    void cancelPointRelaxation(void)
-    {
-	if (!this->pointRelaxationPendingValue)
-	    return;
-	this->pointRelaxationTargetValue = 0.0f;
-	this->pointRelaxationPendingValue = false;
-	this->pointRelaxationPresentationPendingValue = false;
-	/* A submitted selective frontier still owns finite useful mesh work.
-	 * Let it finish as ordinary structural admission, but an admitted
-	 * candidate awaiting presentation has no work left to preserve. */
-	if (!this->active()) {
-	    this->frontierCountValue = 0;
-	    this->coverageCostReservationValue = 0;
-	}
-    }
-
-    bool active(void) const
-    {
-	return this->frontierCountValue > 0;
-    }
-
-    size_t frontierCount(void) const
-    {
-	return this->frontierCountValue;
-    }
-
-    bool pointRelaxationPending(void) const
-    {
-	return this->pointRelaxationPendingValue;
-    }
-
-    float pointRelaxationTarget(void) const
-    {
-	return this->pointRelaxationTargetValue;
-    }
-
-    bool pointRelaxationPresentationPending(void) const
-    {
-	return this->pointRelaxationPresentationPendingValue;
-    }
-
-    void notePointRelaxationPresented(void)
-    {
-	this->pointRelaxationPresentationPendingValue = false;
-    }
-
-    size_t coverageCostReservation(void) const
-    {
-	return this->coverageCostReservationValue;
-    }
-
-    void clearCoverageCostReservation(void)
-    {
-	this->coverageCostReservationValue = 0;
-    }
-
-    void reserveCoverageCost(size_t reservation)
-    {
-	if (this->active() && !this->coverageCostReservationValue)
-	    this->coverageCostReservationValue = reservation;
-    }
-
-private:
-    size_t frontierCountValue = 0;
-    size_t coverageCostReservationValue = 0;
-    float pointRelaxationTargetValue = 0.0f;
-    bool pointRelaxationPendingValue = false;
-    bool pointRelaxationPresentationPendingValue = false;
-};
-
 /**
  * Owner-thread progressive-display state.  This first extraction preserves
  * the exact field layout and algorithms formerly embedded in Impl; it adds
@@ -365,18 +254,35 @@ struct BObolLodCoordinator {
     {
 	const BObolRetainedAllocationResult &allocation =
 	    this->lodRetainedAllocationCertificate;
-	return state && allocation.allocationPlanSerial != 0 &&
-	    allocation.allocationPlanSerial ==
-		state->activeCadAllocationPlan() &&
-	    allocation.viewRevision == this->lodViewRevision.value() &&
-	    allocation.policyRevision == this->lodPolicyRevision.value() &&
+	return state && allocation.currentPlanSerial(
+		this->admissionRevisionStamp(),
+		state->activeCadAllocationPlan()) != 0 &&
 	    std::isfinite(allocation.pointProxyPixelThreshold) &&
 	    std::fabs(allocation.pointProxyPixelThreshold -
 		this->lodPresentationPointProxyPixelThreshold) <= 1.0e-6f &&
 	    state->cadAllocationPlanCoversCurrentPopulation(
-		allocation.allocationPlanSerial, allocation.viewRevision,
-		allocation.policyRevision,
+		allocation.allocationPlanSerial, allocation.viewRevision(),
+		allocation.policyRevision(),
 		allocation.fixedCadPresentationCost);
+    }
+
+    bool retainedAllocationRepresentsCurrentView(void) const
+    {
+	const BObolRetainedAllocationResult &allocation =
+	    this->lodRetainedAllocationCertificate;
+	if (allocation.selectedPresentationCost > 0)
+	    return true;
+	/* Retained payloads outside the frustum remain bound so a later camera
+	 * change can reuse their immutable PoP data.  Consequently an exact empty
+	 * view has a valid zero-cost allocation even though the view state still
+	 * owns nonzero resident payloads.  Accept zero only with both halves of the
+	 * proof: the allocator found no current demand and the completed dense
+	 * visibility census found no visible occurrence.  This keeps a producer
+	 * failure which accidentally omitted visible payloads from masquerading as
+	 * a completed empty view. */
+	return allocation.pixelDemandPresentationCost == 0 &&
+	    this->lodCoveragePolicy.hasCompleteVisibleCount() &&
+	    this->lodConvergenceCandidateCount() == 0;
     }
 
     bool retainedAllocationCutsApplied(
@@ -386,11 +292,11 @@ struct BObolLodCoordinator {
 	    return false;
 	const BObolRetainedAllocationResult &allocation =
 	    this->lodRetainedAllocationCertificate;
-	if (!allocation.selectedPresentationCost)
+	if (!this->retainedAllocationRepresentsCurrentView())
 	    return false;
 	return state->cadAllocationPlanCutsApplied(
-		allocation.allocationPlanSerial, allocation.viewRevision,
-		allocation.policyRevision,
+		allocation.allocationPlanSerial, allocation.viewRevision(),
+		allocation.policyRevision(),
 		allocation.fixedCadPresentationCost);
     }
 
@@ -399,10 +305,10 @@ struct BObolLodCoordinator {
     {
 	if (!this->retainedAllocationCertificateCurrent(state))
 	    return false;
+	if (!this->retainedAllocationRepresentsCurrentView())
+	    return false;
 	const BObolRetainedAllocationResult &allocation =
 	    this->lodRetainedAllocationCertificate;
-	if (!allocation.selectedPresentationCost)
-	    return false;
 	if (this->lodInteractiveProgressiveCeiling < 0)
 	    return this->retainedAllocationCutsApplied(state);
 	/* A global cut is occurrence-local only for one progressive payload.
@@ -485,6 +391,14 @@ struct BObolLodCoordinator {
 	    this->lodAdmissionEvidence, this->lodAdmissionCursor));
     }
 
+    void completeAppliedAllocation(
+	const BObolLodCapacityEvidence::CompletedAllocationInputs &inputs)
+    {
+	this->commitAdmissionPlan(
+	    BObolLodAdmissionPlanner::completeAppliedAllocation(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor, inputs));
+    }
+
     void requestRetainedRecovery(size_t budget)
     {
 	this->commitAdmissionPlan(BObolLodAdmissionPlanner::requestRetainedRecovery(
@@ -506,6 +420,16 @@ struct BObolLodCoordinator {
 		preserveCurrentBudget));
     }
 
+    bool resumeCapacityCandidateAllocation(void)
+    {
+	const BObolLodAdmissionPlan plan =
+	    BObolLodAdmissionPlanner::resumeCapacityCandidateAllocation(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor);
+	if (!this->commitAdmissionPlan(plan))
+	    return false;
+	return plan.transitionChanged;
+    }
+
     void requestPresentationReconciliation(size_t budget)
     {
 	this->commitAdmissionPlan(
@@ -524,13 +448,15 @@ struct BObolLodCoordinator {
 	return plan.transitionValue;
     }
 
-    void recordDeadlineCapacityMiss(size_t attemptedBudget,
-	bool staticDeadline = false)
+    BObolLodCapacityEvidence::CompletedFrameDecision
+    recordDeadlineCapacityMiss(
+	const BObolLodCapacityEvidence::DeadlineMissInputs &inputs)
     {
-	this->commitAdmissionPlan(
+	const BObolLodAdmissionPlan plan =
 	    BObolLodAdmissionPlanner::recordDeadlineCapacityMiss(
-		this->lodAdmissionEvidence, this->lodAdmissionCursor,
-		attemptedBudget, staticDeadline));
+		this->lodAdmissionEvidence, this->lodAdmissionCursor, inputs);
+	this->commitAdmissionPlan(plan);
+	return plan.completedFrameDecision;
     }
 
     void setRetainedQualityFloor(size_t budget,
@@ -727,6 +653,7 @@ struct BObolLodCoordinator {
 	    capacitySearch.activeTargetNanoseconds() >
 		capacitySearch.key().preferredTargetNanoseconds;
 	if (lodStaticQualityTrial.usesStaticDeadline() ||
+	    lodPointQualityPhase.staticCalibrationPending() ||
 	    capacitySearchUsesStaticDeadline)
 	    return prominentQualityPresentationDeadline();
 	return stablePresentationFrameDeadlineNanoseconds;
@@ -807,8 +734,8 @@ struct BObolLodCoordinator {
 	    lodPointQualityPhase.requestCalibration();
 	lodStaticQualityTrial.restoreRendererCeiling(
 	    lodInteractiveProgressiveCeiling >= 0);
-	lodDiscretePopulationTrialPermit.reset();
-	lodInteractiveCeilingFeedbackRenderSerial = 0;
+	lodDiscretePopulationTrialPermit.revoke();
+	lodInteractionSession.resetCeilingFeedback();
 	lodPresentationTransaction.reset();
 	lodRefinementNotBeforeMicroseconds = 0;
 
@@ -823,6 +750,62 @@ struct BObolLodCoordinator {
 	    lastInteractivePresentationTimestampNanoseconds = 0;
 	    smoothedInteractivePresentationIntervalNanoseconds = 0;
 	}
+    }
+
+    /* Retire every automatic-LoD owner for a disabled view policy while
+     * retaining the immutable geometry and renderer cuts which produced the
+     * current framebuffer.  Those presentation values are a useful stable
+     * fallback; resetCadPresentationLimits() belongs to scene/service
+     * replacement, not to a policy toggle.
+     *
+     * Database progressive providers are intentionally absent from this
+     * transaction.  They also realize ordinary no-LoD geometry and therefore
+     * keep their independent providerPendingCount/wakeup contract. */
+    void retireAutomaticLodControl(void)
+    {
+	if (lodService && lodActiveGeneration != 0)
+	    lodService->cancelGeneration(lodActiveGeneration);
+	lodActiveGeneration = 0;
+	invalidateResidentMeshCompactionSnapshot();
+	lodAvailabilityLedger.resetResultQueue();
+	lodAvailabilityLedger.resetResidentGrowth();
+	rewindLodSubmissionCursor();
+	lodSubmissionPass.retire();
+	lodSubmissionIntent.reset();
+	lodSubmissionDelta.reset();
+	lodLastSubmittedViewRevision.reset();
+	lodLastSubmittedPolicyRevision.reset();
+	lodLastSubmittedSources.clear();
+	lodPlanningObligations.reset();
+	lodViewDemandPolicy.reset();
+	lodDiscretePopulationTrialPermit.revoke();
+	lodInteractionSession.reset();
+	lodInteractionStartCertificate.reset();
+	lodPoseContinuity.reset();
+	lodPresentationPolicy.reset();
+	lodPresentationTransaction.reset();
+	lodInterruptedPresentationReplay.retire();
+	lodPointAdmissionFrame.retire();
+	lodPointQualityPhase.reset();
+	lodStaticQualityTrial.reset();
+	lodStructuralRepair.reset();
+	resetRetainedPassAnnotations();
+	lodCompactionPolicy.retire();
+	lodRefinementNotBeforeMicroseconds = 0;
+	lodCoveragePolicy.reset();
+	lodCoveragePolicy.setRequired(false);
+	clearLodConvergenceCandidates();
+	resetLodConvergenceFraction();
+	applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::RESET_CAPACITY);
+	applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::CANCEL_HEADROOM_RETRY);
+	applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::RESET_POINT_PROXY);
+	applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::RESET_STRUCTURAL_ADMISSION);
+	applyAdmissionEvidenceAction(
+	    BObolLodAdmissionPlanner::EvidenceAction::MARK_RESOURCE_RECOVERY_HANDLED);
     }
 
     float quietAllocationTargetFps(void) const
@@ -841,6 +824,7 @@ struct BObolLodCoordinator {
 	    capacitySearch.goal() ==
 		BObolLodCapacitySearchCertificate::Goal::STATIC;
 	if ((!lodStaticQualityTrial.usesStaticDeadline() &&
+	     !lodPointQualityPhase.staticCalibrationPending() &&
 	     !capacitySearchUsesStaticDeadline) || !deadline)
 	    return lodStableTargetFps;
 	const long double deadlineFps = 1000000000.0L /
@@ -1110,6 +1094,12 @@ struct BObolLodCoordinator {
 	    pointProxyAggregationApplicable(),
 	    lodRetainedAllocationCertificate.pointProxyCandidateCount);
     }
+    bool deadlinePointProxyAggregationApplicable(void) const
+    {
+	return BObolLodAdmissionPlanner::deadlinePointAggregationApplicable(
+	    retainedPointProxyAggregationApplicable(),
+	    lodPointAdmissionFrame.pending(), lodSourceLogicalOccurrenceCount);
+    }
     bool pointProxyAggregationApplicableForCameraTransition(void) const
     {
 	/* Interaction entry precedes the first changed camera signature.  The
@@ -1315,8 +1305,6 @@ struct BObolLodCoordinator {
      * submit the same no-op triangle recovery again.  The plan serial plus
      * cadAllocationPlanCoversCurrentPopulation() make this witness expire
      * automatically on a view, policy, occurrence, or resident-mesh change. */
-    uint64_t lodPointProxyTriangleRecoverySaturatedPlanSerial = 0;
-    uint64_t lodInteractiveCeilingFeedbackRenderSerial = 0;
     std::optional<int> lodForcedCut;
     uint64_t maxExactFullDetailFaceCount = 0;
     uint64_t maxExactFullDetailPointCount = 0;

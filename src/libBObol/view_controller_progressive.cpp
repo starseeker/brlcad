@@ -251,19 +251,12 @@ BObolViewController::advanceProgressiveWork(
 	this->d->advanceAdmissionRevision(
 	    BObolLodAdmissionRevisionDomain::CAPACITY);
 	this->d->applyAdmissionEvidenceAction(
-	    BObolLodAdmissionPlanner::EvidenceAction::RESET_CAPACITY_MEASUREMENT);
+	    BObolLodAdmissionPlanner::EvidenceAction::INVALIDATE_CAPACITY_MEASUREMENT);
 	this->d->lodPresentationPolicy.cancelHandoff();
-	this->d->lodInteractiveProgressiveCeiling = -1;
-	this->d->lodPresentationPointProxyPixelThreshold = 1.0f;
+	this->d->resetCadPresentationLimits();
 	this->d->lodPointQualityPhase.reset();
 	this->d->applyAdmissionEvidenceAction(
 	    BObolLodAdmissionPlanner::EvidenceAction::RESET_POINT_PROXY);
-	BObolViewLodState *terminalViewState =
-	    this->d->viewAttachment->getViewLodState();
-	if (terminalViewState) {
-	    terminalViewState->setCadPresentationProgressiveCutCeiling(-1);
-	    terminalViewState->setCadPresentationPointProxyPixelThreshold(1.0f);
-	}
     }
     this->d->lastLodResultProcessingTimeNanoseconds = 0;
     this->d->lastProgressiveProviderTimeNanoseconds = 0;
@@ -278,6 +271,14 @@ BObolViewController::advanceProgressiveWork(
     if (this->d->lodInterruptedPresentationReplay.pending()) {
 	localStatus.hasMore = 1;
 	this->markProgressiveWorkPending();
+	/* The host consumes a render edge before traversal.  An abort can then
+	 * leave this closed replay transaction pending after that edge has gone,
+	 * particularly when a point-calibration transition simultaneously pauses
+	 * the retained submission cursor.  Replay ownership is level-triggered:
+	 * while no other scene mutation may proceed, its exact successor frame must
+	 * remain requested. */
+	if (!this->isRenderRequested())
+	    this->requestRender("lod-interrupted-presentation-replay");
 	if (status)
 	    *status = localStatus;
 	const uint64_t advanceCompleted = this->beginRenderTiming();
@@ -330,10 +331,8 @@ BObolViewController::advanceProgressiveWork(
 		 * data may already be much richer, but opening the ceiling directly to
 		 * that maximum makes a missed software frame back down through every
 		 * ordinal and permits later repaint edges to repeat the staircase. */
-		this->d->lodInteractiveProgressiveCeiling =
-		    probe.progressiveCeiling;
-		viewState->setCadPresentationProgressiveCutCeiling(
-		    this->d->lodInteractiveProgressiveCeiling);
+		this->d->publishCadProgressiveCeiling(
+		    probe.progressiveCeiling);
 		this->advanceLodPolicyRevision(
 		    LodPolicyTransition::PRESERVE_SCALE_DEMAND);
 		this->d->lodDiscretePopulationTrialPermit.grant();
@@ -440,17 +439,10 @@ BObolViewController::advanceProgressiveWork(
 		this->d->lodPresentationPolicy.beginQuiet(quietInputs);
 	    if (restore.apply) {
 		this->d->lodTargetPixelError = restore.targetPixelError;
-		this->d->lodInteractiveProgressiveCeiling =
-		    restore.progressiveCeiling;
-		this->d->lodPresentationPointProxyPixelThreshold =
-		    restore.pointProxyPixelThreshold;
-		if (viewState) {
-		    viewState->setCadPresentationProgressiveCutCeiling(
-			this->d->lodInteractiveProgressiveCeiling,
-			restore.progressiveNextFraction);
-		    viewState->setCadPresentationPointProxyPixelThreshold(
-			this->d->lodPresentationPointProxyPixelThreshold);
-		}
+		this->d->publishCadPresentationLimits(
+		    restore.progressiveCeiling,
+		    restore.progressiveNextFraction,
+		    restore.pointProxyPixelThreshold);
 	    }
 	    this->d->lodInteractionSession.finishQuiet();
 	    const SbBool completedScaleInteraction =
@@ -484,7 +476,7 @@ BObolViewController::advanceProgressiveWork(
 	     * handoff below.  Restore its stable range directly; the policy
 	     * revision already requests the one frame needed to present it. */
 	    this->d->applyAdmissionEvidenceAction(
-	        BObolLodAdmissionPlanner::EvidenceAction::RESET_CAPACITY_MEASUREMENT);
+	        BObolLodAdmissionPlanner::EvidenceAction::INVALIDATE_CAPACITY_MEASUREMENT);
 	    this->d->applyAdmissionEvidenceAction(
 	        BObolLodAdmissionPlanner::EvidenceAction::RESET_CAPACITY_OVERLOAD);
 	    this->d->lodPointQualityPhase.reset();
@@ -577,7 +569,8 @@ BObolViewController::advanceProgressiveWork(
 	    BObolLodAdmissionPlanner::presentationPausesSubmission(
 		this->d->lodPointAdmissionFrame.pending(),
 		this->d->lodPointQualityPhase.presentationPending(),
-		this->d->lodAdmissionEvidence.capacity().rescanAfterFrame(),
+		this->d->lodAdmissionEvidence.capacity().capacityAllocationPending(),
+		this->d->lodAdmissionEvidence.capacity().presentationFramePending(),
 		controller_has_cad_presentation(this->d->viewAttachment)) ?
 		TRUE : FALSE;
 	const SbBool continuingProducerStream =
@@ -720,10 +713,10 @@ BObolViewController::advanceProgressiveWork(
     struct bv_lod_policy lodPolicy;
     bv_lod_policy_init(&lodPolicy);
     this->d->viewAttachment->getLodPolicy(&lodPolicy);
-    this->d->lodCoveragePolicy.setRequired(
-	this->d->lodAutoSubmit && this->d->lodService &&
-	lodPolicy.policy != BV_LOD_OFF && lodPolicy.mesh_enabled);
-    if (this->d->lodService) {
+    const bool automaticLod =
+	this->automaticLodControlEnabled() != FALSE && this->d->lodService;
+    this->d->lodCoveragePolicy.setRequired(automaticLod);
+    if (automaticLod) {
 	const uint64_t admissionRevision =
 	    this->d->lodService->residentMeshAdmissionRevision();
 	if (this->d->lodResidentAdmissionRevision != 0 &&
@@ -743,8 +736,7 @@ BObolViewController::advanceProgressiveWork(
 		    this->d->advanceAdmissionRevision(
 			BObolLodAdmissionRevisionDomain::AVAILABILITY);
 		    this->d->rewindLodSubmissionCursor();
-		    this->d->lodPlanningObligations.
-			setResidentAdmissionRetry(
+		    this->d->lodPlanningObligations.setResidentAdmissionRetry(
 			    this->d->lodCoveragePolicy.effectiveComplete());
 		    this->d->lodSubmissionPass.beginFresh();
 		    this->d->lodResidentAdmissionRevision =
@@ -763,6 +755,11 @@ BObolViewController::advanceProgressiveWork(
 	}
     }
     this->scheduleResidentGrowthReallocationIfReady();
+    /* A bounded search in ALLOCATING has no framebuffer to measure yet.  Its
+     * immutable certificate is a level-triggered producer obligation: rebuild
+     * the retained-allocation cursor before weaker point or handoff phases can
+     * pause admission. */
+    (void)this->scheduleCapacityCandidateAllocationIfReady();
     /* Recovery can become enabled when its final capacity or handoff owner
      * retires without requesting another frame.  Treat the typed phase as a
      * level-triggered obligation so an idle renderer cannot strand it. */
@@ -779,8 +776,7 @@ BObolViewController::advanceProgressiveWork(
 		this->d->lodRefinementNotBeforeMicroseconds)
 	this->d->lodRefinementNotBeforeMicroseconds = 0;
 
-    if (this->d->lodAutoSubmit && lodPolicy.policy != BV_LOD_OFF &&
-	lodPolicy.mesh_enabled && !refinementCooling) {
+    if (automaticLod && !refinementCooling) {
 	const uint64_t submissionStarted = this->beginRenderTiming();
 	(void)this->submitLodRequestsIfNeeded();
 	/* A residency-drain cursor can retire in submitLodRequestsIfNeeded().
@@ -815,7 +811,7 @@ BObolViewController::advanceProgressiveWork(
 	 * frame to improve its throughput estimate.  Keep the host pump alive
 	 * until completeRenderTiming() turns that presented probe into a new
 	 * admission pass. */
-	if (this->d->lodAdmissionEvidence.capacity().rescanAfterFrame())
+	if (this->d->lodAdmissionEvidence.capacity().capacityTransactionPending())
 	    localStatus.hasMore = 1;
     }
 
@@ -876,7 +872,7 @@ BObolViewController::advanceProgressiveWork(
      * trim shared CPU prefixes to the aggregate maximum. */
     const int64_t compactionNow = bu_gettime();
     BObolLodCompactionPolicy::Inputs compactionInputs;
-    compactionInputs.automatic = this->d->lodAutoSubmit != FALSE;
+    compactionInputs.automatic = automaticLod;
     compactionInputs.interactive = this->d->lodInteractionSession.active() != FALSE;
     compactionInputs.coverageRequired =
 	lodPolicy.policy != BV_LOD_OFF && lodPolicy.mesh_enabled;
@@ -889,7 +885,7 @@ BObolViewController::advanceProgressiveWork(
 	 this->d->lodSubmissionPass.rescanPending() ||
 	 this->d->lodRetainedPass.refinementPending() ||
 	 this->d->lodRetainedPass.residencyPending() ||
-	 this->d->lodAdmissionEvidence.capacity().rescanAfterFrame() ||
+	 this->d->lodAdmissionEvidence.capacity().capacityTransactionPending() ||
 	 this->d->lodPresentationPolicy.handoffPending() ||
 	 this->d->lodPresentationTransaction.barrierPending() ||
 	 this->d->lodPresentationTransaction.publicationPending() ||
@@ -968,7 +964,8 @@ BObolViewController::advanceProgressiveWork(
 	BObolLodAdmissionPlanner::presentationPausesSubmission(
 	    this->d->lodPointAdmissionFrame.pending(),
 	    this->d->lodPointQualityPhase.presentationPending(),
-	    this->d->lodAdmissionEvidence.capacity().rescanAfterFrame(),
+	    this->d->lodAdmissionEvidence.capacity().capacityAllocationPending(),
+	    this->d->lodAdmissionEvidence.capacity().presentationFramePending(),
 	    controller_has_cad_presentation(this->d->viewAttachment));
     publicationInputs.streamIdle =
 	!BObolLodProducerPolicy::canProduceGeometry(
@@ -1020,8 +1017,10 @@ BObolViewController::advanceProgressiveWork(
 	    this->d->lodPointAdmissionFrame.pending();
 	producerInputs.stableCalibrationPending =
 	    this->d->lodPointQualityPhase.presentationPending();
+	producerInputs.capacityAllocationPending =
+	    this->d->lodAdmissionEvidence.capacity().capacityAllocationPending();
 	producerInputs.capacitySamplePending =
-	    this->d->lodAdmissionEvidence.capacity().rescanAfterFrame();
+	    this->d->lodAdmissionEvidence.capacity().presentationFramePending();
 	producerInputs.stablePresentationAvailable =
 	    controller_has_cad_presentation(this->d->viewAttachment);
 	producerInputs.providerPending = providerPendingCount > 0;
@@ -1039,6 +1038,10 @@ BObolViewController::advanceProgressiveWork(
 	    this->requestRender("lod-refinement-pending");
 	}
     }
+    if (this->scheduleCapacityCandidateAllocationIfReady())
+	localStatus.hasMore = 1;
+    if (this->schedulePendingLodHandoffAllocationIfReady())
+	localStatus.hasMore = 1;
     if (localStatus.hasMore)
 	this->markProgressiveWorkPending();
     else

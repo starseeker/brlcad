@@ -142,5 +142,47 @@ main(int UNUSED(argc), const char **argv)
     failures += expect("one point pca", bg_pca_get_frame(&first, 1,
 	collinear) == BRLCAD_OK);
 
+    struct bg_pca_accumulator streamed = BG_PCA_ACCUMULATOR_INIT;
+    struct bg_pca_accumulator left = BG_PCA_ACCUMULATOR_INIT;
+    struct bg_pca_accumulator right = BG_PCA_ACCUMULATOR_INIT;
+    for (size_t i = 0; i < 5; ++i) {
+	failures += expect("streaming PCA point",
+	    bg_pca_accumulator_add(&streamed, asymmetric[i]) == BRLCAD_OK);
+	struct bg_pca_accumulator *partition = i < 2 ? &left : &right;
+	failures += expect("partitioned PCA point",
+	    bg_pca_accumulator_add(partition, asymmetric[i]) == BRLCAD_OK);
+    }
+    failures += expect("merge PCA partitions",
+	bg_pca_accumulator_merge(&left, &right) == BRLCAD_OK);
+    struct bg_pca_frame arrayFrame;
+    struct bg_pca_frame streamFrame;
+    struct bg_pca_frame mergedFrame;
+    failures += expect("array PCA frame",
+	bg_pca_get_frame(&arrayFrame, 5, asymmetric) == BRLCAD_OK);
+    failures += expect("streaming PCA frame",
+	bg_pca_accumulator_frame(&streamFrame, &streamed) == BRLCAD_OK);
+    failures += expect("merged PCA frame",
+	bg_pca_accumulator_frame(&mergedFrame, &left) == BRLCAD_OK);
+    for (size_t axis = 0; axis < 3; ++axis) {
+	failures += expect("streaming PCA center",
+	    NEAR_EQUAL(arrayFrame.center[axis], streamFrame.center[axis],
+		1.0e-12));
+	failures += expect("merged PCA center",
+	    NEAR_EQUAL(arrayFrame.center[axis], mergedFrame.center[axis],
+		1.0e-12));
+	failures += expect("streaming PCA singular value",
+	    NEAR_EQUAL(arrayFrame.singular_values[axis],
+		streamFrame.singular_values[axis], 1.0e-10));
+	failures += expect("merged PCA singular value",
+	    NEAR_EQUAL(arrayFrame.singular_values[axis],
+		mergedFrame.singular_values[axis], 1.0e-10));
+    }
+    vect_t invalidPoint = {NAN, 0.0, 0.0};
+    const uint64_t validCount = streamed.point_count;
+    failures += expect("invalid PCA point rejected",
+	bg_pca_accumulator_add(&streamed, invalidPoint) == BRLCAD_ERROR);
+    failures += expect("invalid PCA point does not mutate",
+	streamed.point_count == validCount);
+
     return failures ? 1 : 0;
 }

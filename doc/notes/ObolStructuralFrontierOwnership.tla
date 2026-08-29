@@ -6,9 +6,11 @@
 \* point policy is exhausted.  Once repair clears the frontier, a retained
 \* coarse point cut also requires one stable-quality frame before it may
 \* publish the terminal "View ready" promise.  A finer point cut which would
-\* expose hidden structural records first preloads that exact sparse frontier;
-\* only its completed publication may commit the finer cut.  Structural
-\* admission, sparse prefetch, and stable calibration are distinct owners.
+\* expose hidden structural records first preloads that exact sparse frontier
+\* while the old cut and capacity certificate remain public.  The candidate
+\* then commits exactly once through an exact publication, or rejects exactly
+\* once without changing either public fact.  Structural admission, sparse
+\* prefetch, publication, and stable calibration are distinct owners.
 
 EXTENDS Naturals
 
@@ -16,13 +18,13 @@ CONSTANT MaxPointSteps
 
 Frontiers == {"clear", "aggregatable", "meshRequired"}
 Owners == {"none", "admissionFrame", "structuralRepair",
-           "structuralPrefetch", "stableCalibration"}
+           "structuralPrefetch", "pointPublication", "stableCalibration"}
 
 VARIABLES frontier, owner, pointStep, pointSettled, structuralBacking,
-          terminal
+          candidatePending, candidateStep, capacityRevision, terminal
 
 vars == <<frontier, owner, pointStep, pointSettled, structuralBacking,
-          terminal>>
+          candidatePending, candidateStep, capacityRevision, terminal>>
 
 TypeOK ==
     /\ frontier \in Frontiers
@@ -30,6 +32,9 @@ TypeOK ==
     /\ pointStep \in 0..MaxPointSteps
     /\ pointSettled \in BOOLEAN
     /\ structuralBacking \in BOOLEAN
+    /\ candidatePending \in BOOLEAN
+    /\ candidateStep \in 0..MaxPointSteps
+    /\ capacityRevision \in 0..MaxPointSteps
     /\ terminal \in BOOLEAN
 
 Init ==
@@ -38,6 +43,9 @@ Init ==
     /\ pointStep = 0
     /\ pointSettled = TRUE
     /\ structuralBacking = FALSE
+    /\ candidatePending = FALSE
+    /\ candidateStep = 0
+    /\ capacityRevision = 0
     /\ terminal = FALSE
 
 ClaimAdmissionFrame ==
@@ -47,6 +55,7 @@ ClaimAdmissionFrame ==
     /\ pointStep < MaxPointSteps
     /\ owner' = "admissionFrame"
     /\ UNCHANGED <<frontier, pointStep, pointSettled, structuralBacking,
+                    candidatePending, candidateStep, capacityRevision,
                     terminal>>
 
 CompleteAdmissionFrame ==
@@ -60,7 +69,8 @@ CompleteAdmissionFrame ==
         ELSE {"clear", "aggregatable"}
     /\ pointSettled' = FALSE
     /\ structuralBacking' = TRUE
-    /\ UNCHANGED terminal
+    /\ UNCHANGED <<candidatePending, candidateStep, capacityRevision,
+                    terminal>>
 
 ClaimStructuralRepair ==
     /\ ~terminal
@@ -68,6 +78,7 @@ ClaimStructuralRepair ==
     /\ frontier = "meshRequired"
     /\ owner' = "structuralRepair"
     /\ UNCHANGED <<frontier, pointStep, pointSettled, structuralBacking,
+                    candidatePending, candidateStep, capacityRevision,
                     terminal>>
 
 CompleteStructuralRepair ==
@@ -78,7 +89,8 @@ CompleteStructuralRepair ==
     /\ pointSettled' = (pointStep = 0)
     /\ structuralBacking' \in IF pointStep = 0 THEN {FALSE}
                              ELSE BOOLEAN
-    /\ UNCHANGED <<pointStep, terminal>>
+    /\ UNCHANGED <<pointStep, candidatePending, candidateStep,
+                    capacityRevision, terminal>>
 
 ClaimStableCalibration ==
     /\ ~terminal
@@ -88,6 +100,7 @@ ClaimStableCalibration ==
     /\ ~pointSettled
     /\ owner' = "stableCalibration"
     /\ UNCHANGED <<frontier, pointStep, pointSettled, structuralBacking,
+                    candidatePending, candidateStep, capacityRevision,
                     terminal>>
 
 CompleteStableCalibration ==
@@ -96,45 +109,81 @@ CompleteStableCalibration ==
     /\ \/ /\ owner' = "none"
            /\ pointSettled' = TRUE
            /\ UNCHANGED <<frontier, pointStep, structuralBacking,
-                           terminal>>
+                           candidatePending, candidateStep,
+                           capacityRevision, terminal>>
        \/ /\ pointStep > 0
            /\ ~structuralBacking
            /\ owner' = "none"
            /\ pointStep' = pointStep - 1
            /\ pointSettled' = (pointStep' = 0)
-           /\ UNCHANGED <<frontier, structuralBacking, terminal>>
+           /\ capacityRevision' = capacityRevision + 1
+           /\ UNCHANGED <<frontier, structuralBacking, candidatePending,
+                           candidateStep, terminal>>
        \/ /\ pointStep > 0
            /\ structuralBacking
            /\ owner' = "structuralPrefetch"
+           /\ candidatePending' = TRUE
+           /\ candidateStep' = pointStep - 1
            /\ UNCHANGED <<frontier, pointStep, pointSettled,
-                           structuralBacking, terminal>>
+                           structuralBacking, capacityRevision, terminal>>
 
 CompleteStructuralPrefetch ==
     /\ ~terminal
     /\ owner = "structuralPrefetch"
     /\ pointStep > 0
-    /\ owner' = "none"
-    /\ \/ /\ pointStep' = pointStep - 1
-           /\ pointSettled' = (pointStep' = 0)
-           /\ structuralBacking' \in BOOLEAN
-       \/ /\ UNCHANGED <<pointStep, structuralBacking>>
+    /\ candidatePending
+    /\ candidateStep = pointStep - 1
+    /\ \/ /\ owner' = "pointPublication"
+           /\ UNCHANGED <<pointSettled, structuralBacking,
+                           candidatePending, candidateStep>>
+       \/ /\ owner' = "none"
            /\ pointSettled' = TRUE
+           /\ candidatePending' = FALSE
+           /\ candidateStep' = 0
+           /\ UNCHANGED structuralBacking
+    /\ UNCHANGED <<frontier, pointStep, capacityRevision, terminal>>
+
+\* The old point cut remains active throughout preload.  Only this exact
+\* publication edge may expose the candidate and invalidate the capacity
+\* certificate.  If the exact frame still cannot replace its structural
+\* frontier, rejection preserves both the old cut and revision.
+CompletePointPublication ==
+    /\ ~terminal
+    /\ owner = "pointPublication"
+    /\ candidatePending
+    /\ candidateStep = pointStep - 1
+    /\ \/ /\ owner' = "none"
+           /\ pointStep' = candidateStep
+           /\ pointSettled' = (candidateStep = 0)
+           /\ candidatePending' = FALSE
+           /\ candidateStep' = 0
+           /\ capacityRevision' = capacityRevision + 1
+           /\ structuralBacking' \in BOOLEAN
+       \/ /\ owner' = "none"
+           /\ pointSettled' = TRUE
+           /\ candidatePending' = FALSE
+           /\ candidateStep' = 0
+           /\ UNCHANGED <<pointStep, structuralBacking,
+                           capacityRevision>>
     /\ UNCHANGED <<frontier, terminal>>
 
 PublishReady ==
     /\ ~terminal
     /\ frontier = "clear"
     /\ owner = "none"
+    /\ ~candidatePending
     /\ (pointStep = 0 \/ pointSettled)
     /\ terminal' = TRUE
     /\ UNCHANGED <<frontier, owner, pointStep, pointSettled,
-                    structuralBacking>>
+                    structuralBacking, candidatePending, candidateStep,
+                    capacityRevision>>
 
 ClaimSuccessor == ClaimAdmissionFrame \/ ClaimStructuralRepair \/
                   ClaimStableCalibration
 CompleteSuccessor == CompleteAdmissionFrame \/ CompleteStructuralRepair \/
                      CompleteStableCalibration \/
-                     CompleteStructuralPrefetch
+                     CompleteStructuralPrefetch \/
+                     CompletePointPublication
 
 Next ==
     \/ ClaimSuccessor
@@ -151,6 +200,7 @@ Spec ==
 NoPrematureReady == terminal =>
     /\ frontier = "clear"
     /\ owner = "none"
+    /\ ~candidatePending
     /\ (pointStep = 0 \/ pointSettled)
 
 OwnerMatchesFrontier ==
@@ -158,9 +208,26 @@ OwnerMatchesFrontier ==
     /\ (owner = "structuralRepair" => frontier = "meshRequired")
     /\ (owner = "structuralPrefetch" =>
            frontier = "clear" /\ pointStep > 0 /\ ~pointSettled /\
-           structuralBacking)
+           structuralBacking /\ candidatePending /\
+           candidateStep = pointStep - 1)
+    /\ (owner = "pointPublication" =>
+           frontier = "clear" /\ pointStep > 0 /\ ~pointSettled /\
+           candidatePending /\ candidateStep = pointStep - 1)
     /\ (owner = "stableCalibration" =>
            frontier = "clear" /\ pointStep > 0 /\ ~pointSettled)
+
+PrivateCandidateHasOneOwner ==
+    candidatePending =>
+        /\ owner \in {"structuralPrefetch", "pointPublication"}
+        /\ candidateStep = pointStep - 1
+
+\* Preload completion never mutates the public cut or capacity revision.
+\* The sole candidate-publication transition either advances both atomically
+\* or clears the candidate while preserving both.
+PrivatePreloadCannotPublish ==
+    owner = "structuralPrefetch" =>
+        /\ pointStep > 0
+        /\ candidateStep = pointStep - 1
 
 OwnerlessFrontierHasSuccessor ==
     owner = "none" /\

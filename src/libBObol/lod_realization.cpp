@@ -14,6 +14,7 @@
 #include "BObol/BLodRealization.h"
 #include "cad_publication_private.h"
 
+#include <Obol/cad/CadProjectedProxy.h>
 #include <Obol/cad/SoCADAssembly.h>
 
 #include <Inventor/SbVec3f.h>
@@ -26,6 +27,7 @@
 #include <cmath>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string.h>
 #include <system_error>
@@ -124,6 +126,41 @@ bobol_lod_render_cost_units(const BObolLodCounts &counts, int drawMode,
 	    break;
     }
     return cost;
+}
+
+size_t
+bobol_lod_aggregate_proxy_render_cost(SbBool box, int drawMode)
+{
+    BObolLodCounts counts;
+    if (!box) {
+	counts.pointCount = 1;
+	return bobol_lod_render_cost_units(
+	    counts, BOBOL_LOD_DRAW_WIRE, 0);
+    }
+
+    const bool knownMode = drawMode == BOBOL_LOD_DRAW_WIRE ||
+	drawMode == BOBOL_LOD_DRAW_SHADED ||
+	drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
+	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    const int effectiveDrawMode = knownMode ?
+	drawMode : BOBOL_LOD_DRAW_WIRE;
+    const bool wire = effectiveDrawMode == BOBOL_LOD_DRAW_WIRE ||
+	effectiveDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    const bool shaded = effectiveDrawMode == BOBOL_LOD_DRAW_SHADED ||
+	effectiveDrawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
+	effectiveDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    if (wire) {
+	counts.pointCount += Obol::CadAggregateProxyBoxPositionCount;
+	counts.lineCount = Obol::CadAggregateProxyBoxLineCount;
+    }
+    if (shaded) {
+	counts.pointCount +=
+	    Obol::CadAggregateProxyBoxTrianglePositionCount;
+	counts.normalCount +=
+	    Obol::CadAggregateProxyBoxTrianglePositionCount;
+	counts.faceCount = Obol::CadAggregateProxyBoxTriangleCount;
+    }
+    return bobol_lod_render_cost_units(counts, effectiveDrawMode, 0);
 }
 
 BObolLodProxy::BObolLodProxy(void)
@@ -261,6 +298,7 @@ struct BObolLodProgressiveMeshGeneration {
     SbBox3f bounds;
     SbVec3f quantizationMinimum;
     SbVec3f quantizationMaximum;
+    std::optional<std::array<SbVec3f, 8>> aggregateProxyCorners;
     int minimumCut = -1;
     int maximumCut = -1;
     int residentCut = -1;
@@ -352,6 +390,67 @@ progressive_cut_clamp(
     return cut;
 }
 
+static int
+progressive_hierarchy_cut_clamp(
+    const BObolLodProgressiveMeshGeneration *generation, int cut)
+{
+    if (!generation || generation->minimumCut < 0 ||
+	generation->maximumCut < generation->minimumCut)
+	return -1;
+    return std::max(generation->minimumCut,
+	std::min(generation->maximumCut, cut));
+}
+
+static int
+progressive_cut_for_screen_error(
+    const BObolLodProgressiveMeshGeneration *generation,
+    double projectedPixelDiameter, double targetPixelError)
+{
+    if (!generation || generation->cuts.empty() ||
+	!std::isfinite(projectedPixelDiameter) ||
+	!std::isfinite(targetPixelError) || projectedPixelDiameter <= 0.0 ||
+	targetPixelError <= 0.0)
+	return -1;
+    const SbVec3f extent = generation->quantizationMaximum -
+	generation->quantizationMinimum;
+    const double diagonal = std::sqrt(
+	static_cast<double>(extent.sqrLength()));
+    if (!(diagonal > 0.0))
+	return generation->maximumCut;
+    const double maximumObjectError =
+	targetPixelError * diagonal / projectedPixelDiameter;
+    int low = generation->minimumCut;
+    int high = generation->maximumCut;
+    while (low < high) {
+	const int middle = low + (high - low) / 2;
+	if (generation->cuts[static_cast<size_t>(middle)].object_error <=
+		maximumObjectError)
+	    high = middle;
+	else
+	    low = middle + 1;
+    }
+    return low;
+}
+
+static double
+progressive_projected_error_at_cut(
+    const BObolLodProgressiveMeshGeneration *generation, int cut,
+    double projectedPixelDiameter)
+{
+    if (!generation || cut < 0 ||
+	static_cast<size_t>(cut) >= generation->cuts.size() ||
+	!std::isfinite(projectedPixelDiameter) || projectedPixelDiameter <= 0.0)
+	return std::numeric_limits<double>::infinity();
+    const SbVec3f extent = generation->quantizationMaximum -
+	generation->quantizationMinimum;
+    const double diagonal = std::sqrt(
+	static_cast<double>(extent.sqrLength()));
+    if (!(diagonal > 0.0))
+	return 0.0;
+    return generation->cuts[static_cast<size_t>(cut)].object_error *
+	projectedPixelDiameter / diagonal;
+}
+
 static bool
 bobol_prepare_authored_corner_normals(
     Obol::TriMesh &mesh, const std::vector<SbVec3f> &cornerNormals);
@@ -404,6 +503,43 @@ bobol_lod_point_in_domain(const fastf_t *point,
 }
 
 static bool
+bobol_lod_oriented_bounds_valid(
+    const struct BObolMeshLodHierarchyInfo &hierarchy)
+{
+    return bobol_mesh_lod_oriented_bounds_validate(&hierarchy) != 0;
+}
+
+static std::optional<std::array<SbVec3f, 8>>
+bobol_lod_oriented_bounds(
+    const struct BObolMeshLodHierarchyInfo &hierarchy)
+{
+    if (hierarchy.oriented_bounds_valid != 1 ||
+	!bobol_lod_oriented_bounds_valid(hierarchy))
+	return std::nullopt;
+    std::array<SbVec3f, 8> corners;
+    for (size_t corner = 0; corner < corners.size(); ++corner)
+	corners[corner].setValue(
+	    static_cast<float>(hierarchy.oriented_bounds[corner][X]),
+	    static_cast<float>(hierarchy.oriented_bounds[corner][Y]),
+	    static_cast<float>(hierarchy.oriented_bounds[corner][Z]));
+    return corners;
+}
+
+static void
+bobol_lod_set_oriented_bounds(
+    struct BObolMeshLodHierarchyInfo &hierarchy,
+    const std::optional<std::array<SbVec3f, 8>> &corners)
+{
+    hierarchy.oriented_bounds_valid = corners ? 1 : 0;
+    if (!corners)
+	return;
+    for (size_t corner = 0; corner < corners->size(); ++corner)
+	VSET(hierarchy.oriented_bounds[corner],
+	    (*corners)[corner][0], (*corners)[corner][1],
+	    (*corners)[corner][2]);
+}
+
+static bool
 bobol_lod_hierarchy_valid(
     const struct BObolMeshLodData &data,
     const struct BObolMeshLodHierarchyInfo &hierarchy,
@@ -420,6 +556,7 @@ bobol_lod_hierarchy_valid(
 	!bobol_lod_valid_bounds(data.bmin, data.bmax) ||
 	!bobol_lod_valid_bounds(hierarchy.quantization_min,
 	    hierarchy.quantization_max) ||
+	!bobol_lod_oriented_bounds_valid(hierarchy) ||
 	((hierarchy.cluster_grid_resolution != 0 ||
 	  hierarchy.cluster_count != 0 || hierarchy.clusters != NULL) &&
 	 (hierarchy.cluster_grid_resolution !=
@@ -537,6 +674,7 @@ progressive_generation_from_data(
 	static_cast<float>(hierarchy.quantization_max[X]),
 	static_cast<float>(hierarchy.quantization_max[Y]),
 	static_cast<float>(hierarchy.quantization_max[Z]));
+    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(hierarchy);
     generation->shadedCullBackfaces = shadedCullBackfaces;
     generation->revision = revision ? revision : 1;
 
@@ -685,6 +823,7 @@ progressive_generation_from_data(
     geometry->shadedCullBackfaces =
 	shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = true;
+    geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
     const std::shared_ptr<const Obol::PartGeometry> completed =
 	bobol_cad_build_geometry(std::move(*geometry), "PoP generation");
     if (!completed)
@@ -803,6 +942,7 @@ progressive_generation_from_chunks(
 	static_cast<float>(hierarchy.quantization_max[X]),
 	static_cast<float>(hierarchy.quantization_max[Y]),
 	static_cast<float>(hierarchy.quantization_max[Z]));
+    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(hierarchy);
     generation->bounds = SbBox3f(
 	generation->quantizationMinimum, generation->quantizationMaximum);
     generation->cuts.assign(hierarchy.cuts,
@@ -941,6 +1081,7 @@ progressive_generation_from_chunks(
     geometry->conservativeBounds = generation->bounds;
     geometry->shadedCullBackfaces = shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = true;
+    geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
     const std::shared_ptr<const Obol::PartGeometry> completed =
 	bobol_cad_build_geometry(
 	    std::move(*geometry), "spatial PoP generation");
@@ -1047,6 +1188,7 @@ progressive_generation_prefix(
 	hierarchy.chunk_count = static_cast<uint32_t>(chunkInfos.size());
 	hierarchy.chunks = chunkInfos.data();
 	std::copy(source.cuts.begin(), source.cuts.end(), hierarchy.cuts);
+	bobol_lod_set_oriented_bounds(hierarchy, source.aggregateProxyCorners);
 	return progressive_generation_from_chunks(hierarchy, resident,
 	    source.shadedCullBackfaces, source.revision + 1, 0);
     }
@@ -1071,6 +1213,7 @@ progressive_generation_prefix(
     generation->bounds = source.bounds;
     generation->quantizationMinimum = source.quantizationMinimum;
     generation->quantizationMaximum = source.quantizationMaximum;
+    generation->aggregateProxyCorners = source.aggregateProxyCorners;
     generation->minimumCut = source.minimumCut;
     generation->maximumCut = source.maximumCut;
     generation->residentCut = cut;
@@ -1138,6 +1281,7 @@ progressive_generation_prefix(
     geometry->shadedCullBackfaces =
 	source.shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = true;
+    geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
     const std::shared_ptr<const Obol::PartGeometry> completed =
 	bobol_cad_build_geometry(
 	    std::move(*geometry), "trimmed PoP generation");
@@ -1152,6 +1296,75 @@ struct BObolLodProgressiveMeshTrim {
     std::shared_ptr<const BObolLodProgressiveMeshGeneration> source;
     std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation;
 };
+
+BObolLodProgressiveMeshSnapshot::BObolLodProgressiveMeshSnapshot(void) =
+    default;
+
+BObolLodProgressiveMeshSnapshot::BObolLodProgressiveMeshSnapshot(
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> &snapshot) :
+    generation(snapshot)
+{
+}
+
+SbBool
+BObolLodProgressiveMeshSnapshot::isValid(void) const
+{
+    return this->generation && this->generation->minimumCut >= 0 &&
+	this->generation->maximumCut >= this->generation->minimumCut ?
+	TRUE : FALSE;
+}
+
+uint64_t
+BObolLodProgressiveMeshSnapshot::revision(void) const
+{
+    return this->generation ? this->generation->revision : 0;
+}
+
+int
+BObolLodProgressiveMeshSnapshot::minimumCut(void) const
+{
+    return this->generation ? this->generation->minimumCut : -1;
+}
+
+int
+BObolLodProgressiveMeshSnapshot::maximumCut(void) const
+{
+    return this->generation ? this->generation->maximumCut : -1;
+}
+
+BObolLodCounts
+BObolLodProgressiveMeshSnapshot::hierarchyCountsAtCut(
+    int requestedCut, SbBool hasNormals) const
+{
+    BObolLodCounts counts;
+    const int cut = progressive_hierarchy_cut_clamp(
+	this->generation.get(), requestedCut);
+    if (cut < 0)
+	return counts;
+    counts.faceCount = this->generation->faceCount[cut];
+    counts.pointCount = this->generation->pointCount[cut];
+    counts.originalPointCount = counts.pointCount;
+    counts.normalCount = hasNormals ?
+	(counts.faceCount > UINT64_MAX / 3 ?
+	    UINT64_MAX : counts.faceCount * 3) : 0;
+    return counts;
+}
+
+int
+BObolLodProgressiveMeshSnapshot::cutForScreenError(
+    double projectedPixelDiameter, double targetPixelError) const
+{
+    return progressive_cut_for_screen_error(this->generation.get(),
+	projectedPixelDiameter, targetPixelError);
+}
+
+double
+BObolLodProgressiveMeshSnapshot::projectedErrorAtCut(
+    int cut, double projectedPixelDiameter) const
+{
+    return progressive_projected_error_at_cut(this->generation.get(), cut,
+	projectedPixelDiameter);
+}
 
 BObolLodProgressiveMesh::BObolLodProgressiveMesh(void) :
     p(new BObolLodProgressiveMeshPrivate)
@@ -1460,6 +1673,7 @@ BObolLodProgressiveMesh::extendFromCache(
     generation->bounds = prior->bounds;
     generation->quantizationMinimum = prior->quantizationMinimum;
     generation->quantizationMaximum = prior->quantizationMaximum;
+    generation->aggregateProxyCorners = prior->aggregateProxyCorners;
     generation->minimumCut = prior->minimumCut;
     generation->maximumCut = prior->maximumCut;
     generation->residentCut = residentCut;
@@ -1542,6 +1756,7 @@ BObolLodProgressiveMesh::extendFromCache(
     geometry->shadedCullBackfaces =
 	shadedCullBackfaces ? true : false;
     geometry->subpixelProxyEligible = true;
+    geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
     const std::shared_ptr<const Obol::PartGeometry> completed =
 	bobol_cad_build_geometry(
 	    std::move(*geometry), "extended PoP generation");
@@ -2258,6 +2473,14 @@ BObolLodProgressiveMesh::revision(void) const
     return generation ? generation->revision : 0;
 }
 
+BObolLodProgressiveMeshSnapshot
+BObolLodProgressiveMesh::snapshot(void) const
+{
+    return BObolLodProgressiveMeshSnapshot(
+	this->p ? progressive_generation_load(this->p) :
+	    std::shared_ptr<const BObolLodProgressiveMeshGeneration>());
+}
+
 size_t
 BObolLodProgressiveMesh::pointCount(int requestedCut) const
 {
@@ -2563,51 +2786,20 @@ BObolLodProgressiveMesh::cutForScreenError(
 	return -1;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-	if (!generation || generation->cuts.empty() ||
-	    !std::isfinite(projectedPixelDiameter) ||
-	    !std::isfinite(targetPixelError) ||
-	    projectedPixelDiameter <= 0.0 || targetPixelError <= 0.0)
-	return -1;
-    const SbVec3f extent = generation->quantizationMaximum -
-	generation->quantizationMinimum;
-    const double diagonal = std::sqrt(
-	static_cast<double>(extent.sqrLength()));
-    if (!(diagonal > 0.0))
-	return generation->maximumCut;
-    const double maximumObjectError =
-	targetPixelError * diagonal / projectedPixelDiameter;
-    int low = generation->minimumCut;
-    int high = generation->maximumCut;
-    while (low < high) {
-	const int middle = low + (high - low) / 2;
-	if (generation->cuts[static_cast<size_t>(middle)].object_error <=
-		maximumObjectError)
-	    high = middle;
-	else
-	    low = middle + 1;
-    }
-    return low;
+    return progressive_cut_for_screen_error(generation.get(),
+	projectedPixelDiameter, targetPixelError);
 }
 
 double
 BObolLodProgressiveMesh::projectedErrorAtCut(
     int cut, double projectedPixelDiameter) const
 {
-    if (!this->p || cut < 0 || !std::isfinite(projectedPixelDiameter) ||
-	projectedPixelDiameter <= 0.0)
+    if (!this->p)
 	return std::numeric_limits<double>::infinity();
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-    if (!generation || static_cast<size_t>(cut) >= generation->cuts.size())
-	return std::numeric_limits<double>::infinity();
-    const SbVec3f extent = generation->quantizationMaximum -
-	generation->quantizationMinimum;
-    const double diagonal = std::sqrt(
-	static_cast<double>(extent.sqrLength()));
-    if (!(diagonal > 0.0))
-	return 0.0;
-    return generation->cuts[static_cast<size_t>(cut)].object_error *
-	projectedPixelDiameter / diagonal;
+    return progressive_projected_error_at_cut(generation.get(), cut,
+	projectedPixelDiameter);
 }
 
 BObolLodCounts
@@ -3166,29 +3358,18 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 	/* Triangle-edge wire records are emitted in cumulative triangle-prefix
 	 * order.  They therefore inherit the source PoP stream's append-only
 	 * identity; native curve LoD records do not make this promise. */
-	wireRep.progressiveLineage = sourceMesh->progressiveLineage;
-	wireRep.progressiveCuts.resize(sourceMesh->progressiveCuts.size());
-	for (size_t cut = 0; cut < wireRep.progressiveCuts.size(); ++cut) {
-	    size_t segments = generation->faceCount[cut] * 3;
-	    if (sourceMesh->hasAdaptiveProgressiveClusters()) {
-		segments = 0;
-		for (const Obol::ProgressiveTriangleCluster &cluster :
-			sourceMesh->progressiveClusters) {
-		    for (const Obol::ProgressiveTriangleClusterRange &range :
-			    cluster.ranges) {
-			if (range.activationCut <= cut)
-			    segments = range.indexCount > SIZE_MAX - segments ?
-				SIZE_MAX : segments + range.indexCount;
-		    }
-		}
-	    }
-	    wireRep.progressiveCuts[cut].segmentFirst = 0;
-	    wireRep.progressiveCuts[cut].segmentCount =
-		static_cast<uint32_t>(std::min(
-		    segments,
-		    static_cast<size_t>(
-			std::numeric_limits<uint32_t>::max())));
-	    wireRep.progressiveCuts[cut].quantization =
+    wireRep.progressiveLineage = sourceMesh->progressiveLineage;
+    wireRep.progressiveCuts.resize(sourceMesh->progressiveCuts.size());
+    for (size_t cut = 0; cut < wireRep.progressiveCuts.size(); ++cut) {
+	wireRep.progressiveCuts[cut].segmentFirst = 0;
+	/* Each triangle index denotes one derived wire segment.  The admitted
+	 * source cut is the canonical global prefix.  Reconstructing that count
+	 * from hierarchy totals or spatial ranges is unsound: compacted arrays may
+	 * expose coordinate-only cuts, and spatial ranges need not form a disjoint
+	 * global prefix. */
+	wireRep.progressiveCuts[cut].segmentCount =
+	    sourceMesh->progressiveCuts[cut].indexCount;
+	wireRep.progressiveCuts[cut].quantization =
 		sourceMesh->progressiveCuts[cut].quantization;
 	}
 	if (sourceMesh->hasProgressiveClusters()) {
@@ -3224,6 +3405,7 @@ BObolLodProgressiveMesh::prepareCadGeometry(
 	    generation->shadedCullBackfaces ? true : false;
     }
     geometry->subpixelProxyEligible = true;
+    geometry->aggregateProxyCorners = generation->aggregateProxyCorners;
 
     std::shared_ptr<const Obol::PartGeometry> prepared =
 	bobol_cad_build_geometry(

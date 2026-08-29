@@ -453,6 +453,150 @@ load_terminal_cut(struct BObolMeshLod *lod)
     return bobol_mesh_lod_load_cut(lod, hierarchy.max_cut, 0);
 }
 
+static int
+check_oriented_proxy_cache_round_trip(struct db_i *dbip, const char *name)
+{
+    static constexpr double realizationTolerance = 1.0e-5;
+    static const int faces[36] = {
+	0, 2, 1, 1, 2, 3,
+	4, 5, 6, 5, 7, 6,
+	0, 1, 4, 1, 5, 4,
+	2, 6, 3, 3, 6, 7,
+	0, 4, 2, 2, 4, 6,
+	1, 3, 5, 3, 7, 5
+    };
+    point_t vertices[8];
+    const fastf_t angle = DEG2RAD * 31.0;
+    const fastf_t cosine = std::cos(angle);
+    const fastf_t sine = std::sin(angle);
+    const fastf_t halfExtent[3] = {10.0, 1.0, 0.5};
+    for (size_t corner = 0; corner < 8; ++corner) {
+	const fastf_t localX = (corner & 1u) ?
+	    halfExtent[X] : -halfExtent[X];
+	const fastf_t localY = (corner & 2u) ?
+	    halfExtent[Y] : -halfExtent[Y];
+	vertices[corner][X] = cosine * localX - sine * localY;
+	vertices[corner][Y] = sine * localX + cosine * localY;
+	vertices[corner][Z] = (corner & 4u) ?
+	    halfExtent[Z] : -halfExtent[Z];
+    }
+
+    struct BObolMeshLodCacheStatus status =
+	BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    if (bobol_mesh_lod_cache_store_mesh_variant(
+	    dbip, name, vertices, 8, NULL, faces, 12, 0, 1,
+	    &status) != BRLCAD_OK || !status.cache_key) {
+	printf("FAIL: oriented proxy cache generation\n");
+	return 1;
+    }
+
+    struct BObolMeshLod *first =
+	bobol_mesh_lod_get_cached_prefix(dbip, status.cache_key);
+    struct BObolMeshLodHierarchyInfo firstHierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    if (!first ||
+	!bobol_mesh_lod_hierarchy_info_get(first, &firstHierarchy) ||
+	firstHierarchy.oriented_bounds_valid != 1 ||
+	!bobol_mesh_lod_oriented_bounds_validate(&firstHierarchy)) {
+	printf("FAIL: oriented proxy metadata was not generated\n");
+	if (first)
+	    bobol_mesh_lod_destroy(first);
+	return 1;
+    }
+    BObolMeshLodHierarchyInfo malformedHierarchy = firstHierarchy;
+    malformedHierarchy.oriented_bounds[7][X] += 0.25;
+    if (bobol_mesh_lod_oriented_bounds_validate(&malformedHierarchy)) {
+	printf("FAIL: malformed oriented proxy metadata was accepted\n");
+	bobol_mesh_lod_destroy(first);
+	return 1;
+    }
+
+    const auto visualMeasure = [](const fastf_t extent[3]) {
+	return static_cast<double>(extent[X]) * extent[Y] +
+	    static_cast<double>(extent[X]) * extent[Z] +
+	    static_cast<double>(extent[Y]) * extent[Z];
+    };
+    const fastf_t aabbExtent[3] = {
+	firstHierarchy.quantization_max[X] -
+	    firstHierarchy.quantization_min[X],
+	firstHierarchy.quantization_max[Y] -
+	    firstHierarchy.quantization_min[Y],
+	firstHierarchy.quantization_max[Z] -
+	    firstHierarchy.quantization_min[Z]
+    };
+    const fastf_t obbExtent[3] = {
+	DIST_PNT_PNT(firstHierarchy.oriented_bounds[0],
+	    firstHierarchy.oriented_bounds[1]),
+	DIST_PNT_PNT(firstHierarchy.oriented_bounds[0],
+	    firstHierarchy.oriented_bounds[2]),
+	DIST_PNT_PNT(firstHierarchy.oriented_bounds[0],
+	    firstHierarchy.oriented_bounds[4])
+    };
+    if (!(visualMeasure(obbExtent) < visualMeasure(aabbExtent) * 0.8)) {
+	printf("FAIL: oriented proxy was not materially tighter than AABB\n");
+	bobol_mesh_lod_destroy(first);
+	return 1;
+    }
+
+    if (bobol_mesh_lod_load_resident_cut(
+	    first, firstHierarchy.max_cut, 0) != firstHierarchy.max_cut ||
+	!bobol_mesh_lod_hierarchy_info_get(first, &firstHierarchy)) {
+	printf("FAIL: oriented proxy terminal prefix load\n");
+	bobol_mesh_lod_destroy(first);
+	return 1;
+    }
+    struct BObolMeshLodData data = {};
+    BObolLodProgressiveMesh progressive;
+    if (!bobol_mesh_lod_data_get(first, &data) ||
+	!progressive.update(data, firstHierarchy,
+	    firstHierarchy.max_cut, TRUE)) {
+	printf("FAIL: oriented proxy realization\n");
+	bobol_mesh_lod_destroy(first);
+	return 1;
+    }
+    const std::shared_ptr<const Obol::PartGeometry> geometry =
+	progressive.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED);
+    if (!geometry || !geometry->aggregateProxyCorners) {
+	printf("FAIL: oriented proxy metadata was lost during realization\n");
+	bobol_mesh_lod_destroy(first);
+	return 1;
+    }
+    for (size_t corner = 0; corner < 8; ++corner)
+	for (size_t axis = 0; axis < 3; ++axis)
+	    if (std::fabs(
+		    (*geometry->aggregateProxyCorners)[corner][axis] -
+		    firstHierarchy.oriented_bounds[corner][axis]) >
+		    realizationTolerance) {
+		printf("FAIL: realized oriented proxy corner changed\n");
+		bobol_mesh_lod_destroy(first);
+		return 1;
+	    }
+    bobol_mesh_lod_destroy(first);
+
+    struct BObolMeshLod *reopened =
+	bobol_mesh_lod_get_cached_prefix(dbip, status.cache_key);
+    struct BObolMeshLodHierarchyInfo reopenedHierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    if (!reopened ||
+	!bobol_mesh_lod_hierarchy_info_get(reopened, &reopenedHierarchy) ||
+	reopenedHierarchy.oriented_bounds_valid != 1) {
+	printf("FAIL: oriented proxy cache reopen\n");
+	if (reopened)
+	    bobol_mesh_lod_destroy(reopened);
+	return 1;
+    }
+    for (size_t corner = 0; corner < 8; ++corner)
+	for (size_t axis = 0; axis < 3; ++axis)
+	    if (!fastf_equal(reopenedHierarchy.oriented_bounds[corner][axis],
+		    firstHierarchy.oriented_bounds[corner][axis])) {
+		printf("FAIL: oriented proxy cache round trip changed corner\n");
+		bobol_mesh_lod_destroy(reopened);
+		return 1;
+	    }
+    bobol_mesh_lod_destroy(reopened);
+    return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -701,6 +845,11 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
+    }
+
+    if (check_oriented_proxy_cache_round_trip(dbip, meshObjname)) {
+	ret = 1;
+	goto cleanup;
     }
 
     if (bobol_mesh_lod_cache_refresh(dbip, invalidBotObjname,

@@ -26,6 +26,7 @@
 #include <QTimer>
 #include <QDialog>
 #include <QMessageBox>
+#include <QSettings>
 #include "qtcad/QgPaletteController.h"
 #include "qtcad/QgPluginInterfaces.h"
 #include "qtcad/QgPluginManager.h"
@@ -605,20 +606,22 @@ QgEdMainWindow::isValid3D()
 void
 QgEdMainWindow::close()
 {
-    closeEvent(NULL);
     QMainWindow::close();
 }
 
 void
-QgEdMainWindow::closeEvent(QCloseEvent* e)
+QgEdMainWindow::closeEvent(QCloseEvent *event)
 {
-    QSettings settings("BRL-CAD", "QGED");
-    // https://bugreports.qt.io/browse/QTBUG-16252?focusedCommentId=250562&page=com.atlassian.jira.plugin.system.issuetabpanels%3Acomment-tabpanel#comment-250562
-    settings.setValue("geometry", QVariant(geometry()));
-    settings.setValue("windowState", saveState());
-    if (!e)
+    QgEdApp *app = qobject_cast<QgEdApp *>(QCoreApplication::instance());
+    if (!app || !app->isTestMode()) {
+	QSettings settings("BRL-CAD", "QGED");
+	// https://bugreports.qt.io/browse/QTBUG-16252
+	settings.setValue("geometry", QVariant(geometry()));
+	settings.setValue("windowState", saveState());
+    }
+    if (!event)
 	return;
-    QMainWindow::closeEvent(e);
+    QMainWindow::closeEvent(event);
 }
 
 /* We base conditionals on whether the target widget w is active.  Usually the

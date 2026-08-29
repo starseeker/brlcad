@@ -88,6 +88,48 @@ if(BRLCAD_ENABLE_QT)
     BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
   set_property(TEST qged_event_script_replay APPEND PROPERTY LABELS drawing_baseline)
 
+  brlcad_add_test(NAME qged_measure_ui_replay
+    COMMAND ${CMAKE_COMMAND}
+    -DBRLCAD_ROOT=${CMAKE_BINARY_DIR}
+    -DMGED=$<TARGET_FILE:mged>
+    -DQGED=$<TARGET_FILE:qged>
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test_qged_measure_ui.json
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_measure_ui.cmake)
+  set_property(TEST qged_measure_ui_replay APPEND PROPERTY LABELS
+    drawing_baseline)
+
+  brlcad_add_test(NAME qged_measure_ui_quad_replay
+    COMMAND ${CMAKE_COMMAND}
+    -DBRLCAD_ROOT=${CMAKE_BINARY_DIR}
+    -DMGED=$<TARGET_FILE:mged>
+    -DQGED=$<TARGET_FILE:qged>
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test_qged_measure_ui.json
+    -DQUAD=ON
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_measure_ui.cmake)
+  set_property(TEST qged_measure_ui_quad_replay APPEND PROPERTY LABELS
+    drawing_baseline)
+
+  brlcad_add_test(NAME qged_view_settings_ui_replay
+    COMMAND ${CMAKE_COMMAND}
+    -DBRLCAD_ROOT=${CMAKE_BINARY_DIR}
+    -DMGED=$<TARGET_FILE:mged>
+    -DQGED=$<TARGET_FILE:qged>
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test_qged_view_settings_ui.json
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_view_settings_ui.cmake)
+  set_property(TEST qged_view_settings_ui_replay APPEND PROPERTY LABELS
+    drawing_baseline)
+
+  brlcad_add_test(NAME qged_view_settings_ui_quad_replay
+    COMMAND ${CMAKE_COMMAND}
+    -DBRLCAD_ROOT=${CMAKE_BINARY_DIR}
+    -DMGED=$<TARGET_FILE:mged>
+    -DQGED=$<TARGET_FILE:qged>
+    -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/test_qged_view_settings_ui.json
+    -DQUAD=ON
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_view_settings_ui.cmake)
+  set_property(TEST qged_view_settings_ui_quad_replay APPEND PROPERTY LABELS
+    drawing_baseline)
+
   brlcad_add_test(NAME qged_polygon_ui_replay
     COMMAND qged --swrast --test-script
     "${CMAKE_CURRENT_SOURCE_DIR}/test_qged_polygon_ui.json")
@@ -253,6 +295,10 @@ set(
   main.cpp
   test_qged_obol_fbserv.cpp
   test_qged_event_script.json
+  test_qged_measure_ui.cmake
+  test_qged_measure_ui.json
+  test_qged_view_settings_ui.cmake
+  test_qged_view_settings_ui.json
   test_qged_polygon_ui.json
   test_qged_polygon_sketch_sync.cmake
   test_qged_polygon_sketch_sync.json

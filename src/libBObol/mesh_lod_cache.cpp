@@ -17,6 +17,7 @@
 #include "serialized_bot_source_private.h"
 
 #include "bg/trimesh.h"
+#include "bg/pca.h"
 #include "bu/app.h"
 #include "bu/cache.h"
 #include "bu/cv.h"
@@ -62,7 +63,7 @@
 
 #define POP_CUT_COUNT_MAX BOBOL_MESH_LOD_CUT_COUNT_MAX
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 22
+#define CACHE_CURRENT_FORMAT 23
 
 /* A spatial-cache seed page is an interruption-safe local mesh diagnostic,
  * not a complete source presentation.  Keep it small; the separately
@@ -104,6 +105,7 @@
 #define CACHE_VERTEX_COUNT "vc"
 #define CACHE_TRI_COUNT "tc"
 #define CACHE_OBJ_BOUNDS "bb"
+#define CACHE_OBJ_ORIENTED_BOUNDS "ob"
 #define CACHE_SHADED_CULL_BACKFACES "cb"
 #define CACHE_HAS_NORMALS "hn"
 #define CACHE_CUT_QUANTIZATION "qb"
@@ -121,6 +123,12 @@
 #define CACHE_CHUNK_FACE_COUNTS "kf"
 #define CACHE_CHUNK_POINT_COUNTS "kp"
 #define CACHE_CHUNK_RESIDENT_BYTES "kx"
+
+/* PCA bounds must be visibly tighter before they justify cache space and a
+ * more complex proxy silhouette.  Near-equivalent boxes retain the cheaper,
+ * deterministic AABB fallback. */
+static constexpr double
+    BOBOL_MESH_LOD_ORIENTED_BOUNDS_MINIMUM_RELATIVE_IMPROVEMENT = 0.05;
 #define CACHE_CHUNK_DATA_PREFIX "k"
 
 /* Reuse one bounded worker population across the classification and page
@@ -249,6 +257,78 @@ private:
 static const uint8_t meshLodChunkMagic[8] = {
     'B', 'O', 'B', 'C', 'H', 'N', 'K', '1'
 };
+
+int
+bobol_mesh_lod_oriented_bounds_validate(
+    const struct BObolMeshLodHierarchyInfo *info)
+{
+    if (!info || info->oriented_bounds_valid == 0)
+	return info ? 1 : 0;
+    if (info->oriented_bounds_valid != 1)
+	return 0;
+
+    point_t proxyMinimum = {
+	std::numeric_limits<fastf_t>::max(),
+	std::numeric_limits<fastf_t>::max(),
+	std::numeric_limits<fastf_t>::max()
+    };
+    point_t proxyMaximum = {
+	-std::numeric_limits<fastf_t>::max(),
+	-std::numeric_limits<fastf_t>::max(),
+	-std::numeric_limits<fastf_t>::max()
+    };
+    for (size_t corner = 0; corner < 8; ++corner) {
+	for (size_t axis = 0; axis < 3; ++axis) {
+	    const fastf_t value = info->oriented_bounds[corner][axis];
+	    if (!std::isfinite(value))
+		return 0;
+	    proxyMinimum[axis] = std::min(proxyMinimum[axis], value);
+	    proxyMaximum[axis] = std::max(proxyMaximum[axis], value);
+	}
+    }
+
+    vect_t axes[3];
+    VSUB2(axes[0], info->oriented_bounds[1], info->oriented_bounds[0]);
+    VSUB2(axes[1], info->oriented_bounds[2], info->oriented_bounds[0]);
+    VSUB2(axes[2], info->oriented_bounds[4], info->oriented_bounds[0]);
+    const fastf_t scale = std::max<fastf_t>(1.0,
+	std::max(MAGNITUDE(axes[0]),
+	    std::max(MAGNITUDE(axes[1]), MAGNITUDE(axes[2]))));
+    const fastf_t tolerance = 128.0 *
+	std::numeric_limits<fastf_t>::epsilon() * scale;
+    for (size_t corner = 0; corner < 8; ++corner) {
+	point_t expected;
+	VMOVE(expected, info->oriented_bounds[0]);
+	for (size_t axis = 0; axis < 3; ++axis)
+	    if (corner & (1u << axis))
+		VADD2(expected, expected, axes[axis]);
+	if (DIST_PNT_PNT(expected, info->oriented_bounds[corner]) > tolerance)
+	    return 0;
+    }
+    for (size_t left = 0; left < 3; ++left)
+	for (size_t right = left + 1; right < 3; ++right)
+	    if (std::abs(VDOT(axes[left], axes[right])) > tolerance * scale)
+		return 0;
+
+    for (size_t axis = 0; axis < 3; ++axis) {
+	if (!std::isfinite(info->quantization_min[axis]) ||
+	    !std::isfinite(info->quantization_max[axis]) ||
+	    info->quantization_min[axis] > info->quantization_max[axis])
+	    return 0;
+	const fastf_t boundScale = std::max<fastf_t>(1.0,
+	    std::max(std::abs(proxyMinimum[axis]),
+		std::max(std::abs(proxyMaximum[axis]),
+		    proxyMaximum[axis] - proxyMinimum[axis])));
+	const fastf_t boundTolerance = 128.0 *
+	    std::numeric_limits<fastf_t>::epsilon() * boundScale;
+	if (info->quantization_min[axis] <
+		proxyMinimum[axis] - boundTolerance ||
+	    info->quantization_max[axis] >
+		proxyMaximum[axis] + boundTolerance)
+	    return 0;
+    }
+    return 1;
+}
 
 /* Serialized cache records must not inherit compiler ABI padding or size_t
  * width.  Keep this format explicitly fixed so a hierarchy produced on one
@@ -1071,6 +1151,13 @@ public:
     unsigned long long hash = 0;
     point_t bbmin = VINIT_ZERO;
     point_t bbmax = VINIT_ZERO;
+    bool orientedBoundsValid = false;
+    point_t orientedBounds[8] = {
+	VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO,
+	VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO
+    };
+    struct bg_pca_accumulator sourcePcaMoments =
+	BG_PCA_ACCUMULATOR_INIT;
     struct BObolMeshLod *lod = NULL;
 
 private:
@@ -1084,6 +1171,7 @@ private:
     bool buildChunks(void);
     bool cacheSpatialLeaves(void);
     bool scanSourceBounds(void);
+    bool buildOrientedBounds(const struct bg_pca_accumulator &moments);
     bool publishSerializedCoveragePreview(void);
     int activationCutForTriangle(const BObolPopRec triangle[3]) const;
     bool classifySpatialFace(BObolPopSourceReader &reader,
@@ -2139,13 +2227,15 @@ BObolPopState::scanSourceBounds(void)
 {
     if (sourceBoundsScanned)
 	return true;
+    bg_pca_accumulator_init(&sourcePcaMoments);
     BObolPopSourceReader reader(*this, BObolPopPointAccess::Sequential);
     for (size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
 	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
 	    generationCancelled())
 	    return false;
 	point_t point;
-	if (!reader.point(vertexIndex, point))
+	if (!reader.point(vertexIndex, point) ||
+	    bg_pca_accumulator_add(&sourcePcaMoments, point) != BRLCAD_OK)
 	    return false;
 	minx = std::min(minx, point[X]);
 	miny = std::min(miny, point[Y]);
@@ -2157,9 +2247,114 @@ BObolPopState::scanSourceBounds(void)
     if (!std::isfinite(maxx - minx) || !std::isfinite(maxy - miny) ||
 	!std::isfinite(maxz - minz))
 	return false;
-    VSET(bbmin, minx, miny, minz);
-    VSET(bbmax, maxx, maxy, maxz);
+    if (hasSerializedSource) {
+	VSET(bbmin, minx, miny, minz);
+	VSET(bbmax, maxx, maxy, maxz);
+    }
     sourceBoundsScanned = true;
+    return true;
+}
+
+bool
+BObolPopState::buildOrientedBounds(
+    const struct bg_pca_accumulator &moments)
+{
+    orientedBoundsValid = false;
+    struct bg_pca_frame frame;
+    if (bg_pca_accumulator_frame(&frame, &moments) != BRLCAD_OK)
+	return false;
+
+    vect_t axes[3];
+    VMOVE(axes[0], frame.xaxis);
+    VMOVE(axes[1], frame.yaxis);
+    VMOVE(axes[2], frame.zaxis);
+    vect_t handedness;
+    VCROSS(handedness, axes[0], axes[1]);
+    if (VDOT(handedness, axes[2]) < 0.0)
+	VREVERSE(axes[2], axes[2]);
+
+    fastf_t projectionMinimum[3] = {
+	std::numeric_limits<fastf_t>::max(),
+	std::numeric_limits<fastf_t>::max(),
+	std::numeric_limits<fastf_t>::max()
+    };
+    fastf_t projectionMaximum[3] = {
+	-std::numeric_limits<fastf_t>::max(),
+	-std::numeric_limits<fastf_t>::max(),
+	-std::numeric_limits<fastf_t>::max()
+    };
+    BObolPopSourceReader reader(*this, BObolPopPointAccess::Sequential);
+    for (size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
+	if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
+	    generationCancelled())
+	    return false;
+	point_t point;
+	if (!reader.point(vertexIndex, point))
+	    return false;
+	vect_t delta;
+	VSUB2(delta, point, frame.center);
+	for (size_t axis = 0; axis < 3; ++axis) {
+	    const fastf_t projection = VDOT(delta, axes[axis]);
+	    projectionMinimum[axis] = std::min(
+		projectionMinimum[axis], projection);
+	    projectionMaximum[axis] = std::max(
+		projectionMaximum[axis], projection);
+	}
+    }
+
+    fastf_t orientedExtent[3] = {};
+    const fastf_t axisAlignedExtent[3] = {
+	maxx - minx, maxy - miny, maxz - minz
+    };
+    point_t center;
+    VMOVE(center, frame.center);
+    for (size_t axis = 0; axis < 3; ++axis) {
+	if (!std::isfinite(projectionMinimum[axis]) ||
+	    !std::isfinite(projectionMaximum[axis]) ||
+	    projectionMinimum[axis] > projectionMaximum[axis])
+	    return false;
+	orientedExtent[axis] =
+	    projectionMaximum[axis] - projectionMinimum[axis];
+	const fastf_t offset =
+	    (projectionMinimum[axis] + projectionMaximum[axis]) * 0.5;
+	point_t shiftedCenter;
+	VJOIN1(shiftedCenter, center, offset, axes[axis]);
+	VMOVE(center, shiftedCenter);
+    }
+
+    const auto visualMeasure = [](const fastf_t extent[3]) {
+	const double x = std::max<fastf_t>(0.0, extent[X]);
+	const double y = std::max<fastf_t>(0.0, extent[Y]);
+	const double z = std::max<fastf_t>(0.0, extent[Z]);
+	const double area = x * y + x * z + y * z;
+	return area > SMALL_FASTF ? area : x + y + z;
+    };
+    const double aabbMeasure = visualMeasure(axisAlignedExtent);
+    const double obbMeasure = visualMeasure(orientedExtent);
+    if (!(aabbMeasure > 0.0) ||
+	obbMeasure > aabbMeasure *
+	    (1.0 -
+	     BOBOL_MESH_LOD_ORIENTED_BOUNDS_MINIMUM_RELATIVE_IMPROVEMENT))
+	return false;
+
+    vect_t halfAxis[3];
+    for (size_t axis = 0; axis < 3; ++axis)
+	VSCALE(halfAxis[axis], axes[axis], orientedExtent[axis] * 0.5);
+    for (size_t corner = 0; corner < 8; ++corner) {
+	VMOVE(orientedBounds[corner], center);
+	for (size_t axis = 0; axis < 3; ++axis) {
+	    if (corner & (1u << axis))
+		VADD2(orientedBounds[corner], orientedBounds[corner],
+		    halfAxis[axis]);
+	    else
+		VSUB2(orientedBounds[corner], orientedBounds[corner],
+		    halfAxis[axis]);
+	}
+	if (!std::isfinite(orientedBounds[corner][X]) ||
+	    !std::isfinite(orientedBounds[corner][Y]) ||
+	    !std::isfinite(orientedBounds[corner][Z]))
+	    return false;
+    }
     return true;
 }
 
@@ -2502,34 +2697,13 @@ BObolPopState::initializeGeneration(
 		    vertexArray, vertexCount);
     }
 
-    if (!sourceBoundsScanned) {
-	BObolPopSourceReader boundsReader(*this,
-	    BObolPopPointAccess::Sequential);
-	generationFailureReason = "bounds scan";
-	for (size_t vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
-	    if ((vertexIndex & BOBOL_MESH_LOD_CANCELLATION_POLL_MASK) == 0 &&
-		generationCancelled()) {
-		generationFailureReason = "generation cancelled";
-		return;
-	    }
-	    point_t point;
-	    if (!boundsReader.point(vertexIndex, point))
-		return;
-	    minx = (point[X] < minx) ? point[X] : minx;
-	    miny = (point[Y] < miny) ? point[Y] : miny;
-	    minz = (point[Z] < minz) ? point[Z] : minz;
-	    maxx = (point[X] > maxx) ? point[X] : maxx;
-	    maxy = (point[Y] > maxy) ? point[Y] : maxy;
-	    maxz = (point[Z] > maxz) ? point[Z] : maxz;
-	}
-	if (hasSerializedSource) {
-	    VSET(bbmin, minx, miny, minz);
-	    VSET(bbmax, maxx, maxy, maxz);
-	}
-
-	if (!std::isfinite(maxx - minx) || !std::isfinite(maxy - miny) ||
-	    !std::isfinite(maxz - minz))
-	    return;
+    generationFailureReason = "bounds and oriented-proxy scan";
+    if (!scanSourceBounds())
+	return;
+    orientedBoundsValid = buildOrientedBounds(sourcePcaMoments);
+    if (generationCancelled()) {
+	generationFailureReason = "generation cancelled";
+	return;
     }
 
     const int64_t classifyStarted = bu_gettime();
@@ -2799,6 +2973,31 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	maxz = static_cast<fastf_t>(diskBounds[11]);
     }
     {
+	double diskOrientedBounds[25] = {};
+	if (!readMetadata(CACHE_OBJ_ORIENTED_BOUNDS,
+		diskOrientedBounds, sizeof(diskOrientedBounds)) ||
+	    !std::isfinite(diskOrientedBounds[0]) ||
+	    (std::abs(diskOrientedBounds[0]) > SMALL_FASTF &&
+	     std::abs(diskOrientedBounds[0] - 1.0) > SMALL_FASTF)) {
+	    cacheDone();
+	    return false;
+	}
+	orientedBoundsValid = diskOrientedBounds[0] > 0.5;
+	for (size_t corner = 0; corner < 8; ++corner) {
+	    VSET(orientedBounds[corner],
+		diskOrientedBounds[1 + corner * 3],
+		diskOrientedBounds[2 + corner * 3],
+		diskOrientedBounds[3 + corner * 3]);
+	    if (orientedBoundsValid &&
+		(!std::isfinite(orientedBounds[corner][X]) ||
+		 !std::isfinite(orientedBounds[corner][Y]) ||
+		 !std::isfinite(orientedBounds[corner][Z]))) {
+		cacheDone();
+		return false;
+	    }
+	}
+    }
+    {
 	const bool validBounds =
 	    std::isfinite(minx) && std::isfinite(miny) &&
 	    std::isfinite(minz) && std::isfinite(maxx) &&
@@ -2813,6 +3012,19 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	    std::isfinite(maxy - miny) &&
 	    std::isfinite(maxz - minz);
 	if (!validBounds) {
+	    cacheDone();
+	    return false;
+	}
+	BObolMeshLodHierarchyInfo proxyInfo =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	VSET(proxyInfo.quantization_min, minx, miny, minz);
+	VSET(proxyInfo.quantization_max, maxx, maxy, maxz);
+	proxyInfo.oriented_bounds_valid = orientedBoundsValid ? 1 : 0;
+	if (orientedBoundsValid)
+	    for (size_t corner = 0; corner < 8; ++corner)
+		VMOVE(proxyInfo.oriented_bounds[corner],
+		    orientedBounds[corner]);
+	if (!bobol_mesh_lod_oriented_bounds_validate(&proxyInfo)) {
 	    cacheDone();
 	    return false;
 	}
@@ -3845,6 +4057,10 @@ BObolPopState::hierarchyInfo(struct BObolMeshLodHierarchyInfo *info) const
     info->clusters = clusterInfos.empty() ? NULL : clusterInfos.data();
     info->chunk_count = static_cast<uint32_t>(chunkInfos.size());
     info->chunks = chunkInfos.empty() ? NULL : chunkInfos.data();
+    info->oriented_bounds_valid = orientedBoundsValid ? 1 : 0;
+    if (orientedBoundsValid)
+	for (size_t corner = 0; corner < 8; ++corner)
+	    VMOVE(info->oriented_bounds[corner], orientedBounds[corner]);
     uint64_t points = 0;
     uint64_t faces = 0;
     for (uint32_t cut = 0; cut <= static_cast<uint32_t>(availableMaxCut);
@@ -5163,6 +5379,26 @@ BObolPopState::cache(void)
 	stream.write(reinterpret_cast<const char *>(diskBounds),
 	    sizeof(diskBounds));
 	if (!cacheWrite(CACHE_OBJ_BOUNDS, stream)) {
+	    cacheLock.unlock();
+	    bu_semaphore_release(writeSem);
+	    return false;
+	}
+    }
+    {
+	double diskOrientedBounds[25] = {};
+	diskOrientedBounds[0] = orientedBoundsValid ? 1.0 : 0.0;
+	for (size_t corner = 0; corner < 8; ++corner) {
+	    diskOrientedBounds[1 + corner * 3] =
+		static_cast<double>(orientedBounds[corner][X]);
+	    diskOrientedBounds[2 + corner * 3] =
+		static_cast<double>(orientedBounds[corner][Y]);
+	    diskOrientedBounds[3 + corner * 3] =
+		static_cast<double>(orientedBounds[corner][Z]);
+	}
+	std::stringstream stream;
+	stream.write(reinterpret_cast<const char *>(diskOrientedBounds),
+	    sizeof(diskOrientedBounds));
+	if (!cacheWrite(CACHE_OBJ_ORIENTED_BOUNDS, stream)) {
 	    cacheLock.unlock();
 	    bu_semaphore_release(writeSem);
 	    return false;

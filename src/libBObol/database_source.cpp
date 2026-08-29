@@ -3002,6 +3002,8 @@ cad_progressive_wire_part_geometry_from_provider(
 	if (levelPoints.size() / 2 > UINT32_MAX ||
 	    wire.segmentCount() > UINT32_MAX - levelPoints.size() / 2)
 	    return 0;
+	wire.progressiveCuts[level].maximumNormalizedError = level == 15 ?
+	    0.0f : std::ldexp(1.0f, -static_cast<int>(level) - 2);
 	if (level > 0 && cad_wire_level_equal(levelPoints, levelIds,
 		previousPoints, previousIds)) {
 	    wire.progressiveCuts[level].segmentFirst = previousFirst;
@@ -8147,6 +8149,7 @@ cad_part_key_for_geometry(const char *kind,
 		hash.appendU32(cut.segmentFirst);
 		hash.appendU32(cut.segmentCount);
 		hash.appendQuantization(cut.quantization);
+		hash.appendFloat(cut.maximumNormalizedError);
 	    }
 	    hash.appendByte(wire.progressiveMinimumCut);
 	    hash.appendByte(wire.progressiveResidentCut);
@@ -8901,6 +8904,8 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
     entry.instance = instanceId;
     entry.part = partId;
     entry.geometry = geometry;
+    if (bobol_compact_geometry_is_resident_progressive(geometry))
+	index.residentProgressiveGeometryCount++;
     entry.wireGeometry = geometry->wire ? TRUE : FALSE;
     entry.pointGeometry = geometry->points ? TRUE : FALSE;
     /* These flags describe resident draw channels, not source semantics.  In
@@ -8917,6 +8922,9 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
 	entry.sourceMeshRequest = input.occurrence.sourceMeshRequest;
 	index.sourceMeshRequestCount++;
     }
+    if (entry.sourceMeshRequestValid ||
+	bobol_compact_geometry_is_resident_progressive(entry.geometry))
+	index.displayLodTargetCount++;
     entry.localToSource = matrix;
     entry.geometryTransform = input.occurrence.geometryTransform;
     entry.placementTransform = input.occurrence.localTransform;
@@ -9075,7 +9083,28 @@ compact_rebuild_entry_index(BObolCompactInstanceIndex &index)
 	    index.entryIndicesBySourceName[sourceName].push_back(i);
 	index.partReferenceCounts[index.entries[i].part]++;
 	compact_index_bounds_add(index, index.entries[i]);
-	}
+    }
+}
+
+static bool
+compact_replaces_overview_baseline(
+    const BObolRealizedShapeSummary &previous,
+    const BObolRealizedShapeSummary &replacement)
+{
+    return BU_STR_EQUAL(previous.recordRole.getString(), "lod-overview") &&
+	!BU_STR_EQUAL(replacement.recordRole.getString(), "lod-overview");
+}
+
+static void
+compact_apply_occurrence_baseline(BObolCompactInstanceEntry &entry,
+    const BObolRealizedShapeSummary &summary)
+{
+    entry.authoredVisible = summary.visible;
+    entry.visible = compact_effective_authored_visibility(entry);
+    entry.selectable = summary.selectable;
+    entry.selected = summary.selected;
+    entry.authoredHighlighted = summary.highlighted;
+    entry.highlighted = compact_effective_highlight(entry);
 }
 
 static void
@@ -9126,6 +9155,9 @@ compact_merge_runtime_state(const BObolCompactInstanceIndex *current,
 	}
 	if (previousEntry) {
 	    const BObolCompactInstanceEntry &previous = *previousEntry;
+	    const bool replacesOverview =
+		compact_replaces_overview_baseline(previous.shapeSummary,
+		    entry.shapeSummary);
 	    /* A source name or list position is not an occurrence identity:
 	     * multiple CAD paths routinely share both geometry and leaf names,
 	     * and a progressive current index may contain only one of them.
@@ -9141,20 +9173,26 @@ compact_merge_runtime_state(const BObolCompactInstanceIndex *current,
 		    next->instances[i].instance = previous.instance;
 		}
 	    }
-	    entry.authoredVisible = previous.authoredVisible;
+	    if (!replacesOverview) {
+		entry.authoredVisible = previous.authoredVisible;
+		entry.selectable = previous.selectable;
+		entry.selected = previous.selected;
+		entry.authoredHighlighted = previous.authoredHighlighted;
+	    }
 	    entry.presentationVisibleValid = previous.presentationVisibleValid;
 	    entry.presentationVisible = previous.presentationVisible;
-	    entry.visible = previous.visible;
-	    entry.selectable = previous.selectable;
-	    entry.selected = previous.selected;
-	    entry.authoredHighlighted = previous.authoredHighlighted;
 	    entry.presentationHighlightedValid =
 		previous.presentationHighlightedValid;
 	    entry.presentationHighlighted = previous.presentationHighlighted;
-	    entry.highlighted = previous.highlighted;
 	    entry.presentationTransparencyValid =
 		previous.presentationTransparencyValid;
 	    entry.presentationTransparency = previous.presentationTransparency;
+	    if (replacesOverview)
+		compact_apply_occurrence_baseline(entry, entry.shapeSummary);
+	    else {
+		entry.visible = previous.visible;
+		entry.highlighted = previous.highlighted;
+	    }
 	    entry.geometryRevision = previous.geometryRevision;
 	    if (entry.part != previous.part ||
 		entry.lodBacked != previous.lodBacked)
@@ -9168,6 +9206,16 @@ compact_merge_runtime_state(const BObolCompactInstanceIndex *current,
 	    entry.visibilityRevision = previous.visibilityRevision;
 	    entry.selectionRevision = previous.selectionRevision;
 	    entry.appearanceRevision = previous.appearanceRevision;
+	    if (replacesOverview &&
+		(entry.visible != previous.visible ||
+		 entry.selectable != previous.selectable))
+		entry.visibilityRevision = compact_next_revision(
+		    entry.visibilityRevision);
+	    if (replacesOverview &&
+		(entry.selected != previous.selected ||
+		 entry.highlighted != previous.highlighted))
+		entry.selectionRevision = compact_next_revision(
+		    entry.selectionRevision);
 	}
 	assignedInstances.insert(entry.instance);
 	entry.style = compact_effective_style(entry);
@@ -9347,12 +9395,28 @@ compact_geometry_tier(const char *geometryKind)
     return 2;
 }
 
+static void
+compact_set_instance_membership(std::vector<Obol::InstanceId> &instances,
+	const Obol::InstanceId &instance, bool member)
+{
+    const std::vector<Obol::InstanceId>::iterator found =
+	std::find(instances.begin(), instances.end(), instance);
+    if (member) {
+	if (found == instances.end())
+	    instances.push_back(instance);
+	return;
+    }
+    if (found != instances.end())
+	instances.erase(found);
+}
+
 /* Replace one leaf occurrence's drawing data in place: swap its part geometry,
  * transform, flags, and summary for the incoming higher-tier occurrence while
- * preserving the entry's instance identity, semantic key, and runtime
- * (visible/selected/pickable) state.  instances[i] runs parallel to entries[i]
- * (both are appended together by compact_add_occurrence and never reordered), so
- * the instance record is updated at the same index. */
+ * preserving the entry's instance identity, semantic key, and leaf runtime
+ * state.  An overview-to-leaf transition adopts the leaf's authored baseline.
+ * instances[i] runs parallel to entries[i] (both are appended together by
+ * compact_add_occurrence and never reordered), so the instance record is
+ * updated at the same index. */
 static bool
 compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 	BObolCompactInstanceIndex &index, size_t entryIdx,
@@ -9371,6 +9435,12 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 	    "lod-overview") &&
 	BU_STR_EQUAL(occurrence.summary.recordRole.getString(),
 	    "lod-overview");
+    const bool replacesOverview = compact_replaces_overview_baseline(
+	entry.shapeSummary, occurrence.summary);
+    const SbBool previousVisible = entry.visible;
+    const SbBool previousSelectable = entry.selectable;
+    const SbBool previousSelected = entry.selected;
+    const SbBool previousHighlighted = entry.highlighted;
 
     const char *partKind = geometry->shaded ? "mesh" :
 	(geometry->points && !geometry->wire ? "point" : "wire");
@@ -9424,6 +9494,13 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
     if (entry.viewDependentCsgGeometry &&
 	index.viewDependentCsgGeometryCount > 0)
 	index.viewDependentCsgGeometryCount--;
+    if ((entry.sourceMeshRequestValid ||
+	 bobol_compact_geometry_is_resident_progressive(entry.geometry)) &&
+	index.displayLodTargetCount > 0)
+	index.displayLodTargetCount--;
+    if (bobol_compact_geometry_is_resident_progressive(entry.geometry) &&
+	index.residentProgressiveGeometryCount > 0)
+	index.residentProgressiveGeometryCount--;
 
     SbMatrix geometryToSource = occurrence.geometryTransform;
     geometryToSource.multRight(occurrence.localTransform);
@@ -9431,6 +9508,8 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 
     entry.part = newPartId;
     entry.geometry = geometry;
+    if (bobol_compact_geometry_is_resident_progressive(geometry))
+	index.residentProgressiveGeometryCount++;
     entry.wireGeometry = geometry->wire ? TRUE : FALSE;
     entry.pointGeometry = geometry->points ? TRUE : FALSE;
     entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
@@ -9450,6 +9529,9 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 	else if (index.sourceMeshRequestCount > 0)
 	    index.sourceMeshRequestCount--;
     }
+    if (entry.sourceMeshRequestValid ||
+	bobol_compact_geometry_is_resident_progressive(entry.geometry))
+	index.displayLodTargetCount++;
     entry.localToSource = matrix;
     entry.geometryTransform = occurrence.geometryTransform;
     entry.placementTransform = occurrence.localTransform;
@@ -9460,6 +9542,29 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
     entry.shapeSummary.geometryKind = occurrence.summary.geometryKind;
     entry.shapeSummary.recordRole = occurrence.summary.recordRole;
     entry.shapeSummary.sourceType = occurrence.summary.sourceType;
+    if (replacesOverview) {
+	/* A whole-target overview is intentionally not selectable.  When the
+	 * draw root is itself a leaf, its authoritative occurrence has the same
+	 * path and upgrades that overview in place.  Presentation overlays still
+	 * belong to the path, but the replacement's authored interaction state is
+	 * the new baseline; inheriting the overview baseline makes a fully drawn
+	 * primitive visible yet impossible to select. */
+	compact_apply_occurrence_baseline(entry, occurrence.summary);
+	if (entry.visible != previousVisible ||
+	    entry.selectable != previousSelectable)
+	    entry.visibilityRevision = compact_next_revision(
+		entry.visibilityRevision);
+	if (entry.selected != previousSelected ||
+	    entry.highlighted != previousHighlighted)
+	    entry.selectionRevision = compact_next_revision(
+		entry.selectionRevision);
+	compact_set_instance_membership(index.hiddenInstances, entry.instance,
+	    !entry.visible);
+	compact_set_instance_membership(index.unpickableInstances,
+	    entry.instance, !entry.selectable);
+	compact_set_instance_membership(index.selectedInstances, entry.instance,
+	    entry.selected);
+    }
     entry.style = compact_effective_style(entry);
     compact_sync_shape_summary(entry);
     /*
@@ -9506,6 +9611,8 @@ compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
 	return false;
 
     BObolCompactInstanceEntry &entry = index.entries[entryIdx];
+    const bool wasDisplayLodTarget = entry.sourceMeshRequestValid ||
+	bobol_compact_geometry_is_resident_progressive(entry.geometry);
     bool changed = false;
     if (occurrence.viewDependentCsgGeometry &&
 	!entry.viewDependentCsgGeometry) {
@@ -9527,6 +9634,10 @@ compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
     }
     if (!changed)
 	return false;
+    if (!wasDisplayLodTarget &&
+	(entry.sourceMeshRequestValid ||
+	 bobol_compact_geometry_is_resident_progressive(entry.geometry)))
+	index.displayLodTargetCount++;
 
     /* Source semantics become authoritative with the request, but the
      * currently drawn arrays, proxy transform, placement, part, and runtime
@@ -9714,6 +9825,14 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	this->d->displayMeshLodContractInputsRevision =
 	    this->inputsRevision.getValue();
     }
+    if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT"))
+	bu_log("BObol LoD source contract merged compact occurrences path=%s "
+	       "changed=%d entries=%zu requests=%zu resident_progressive=%zu "
+	       "targets=%zu\n",
+	       this->path.getValue().getString(), changed,
+	       index.entries.size(), index.sourceMeshRequestCount,
+	       index.residentProgressiveGeometryCount,
+	       index.displayLodTargetCount);
 
     SbBox3f bounds;
     if (!this->hasExactSourceBounds() &&
@@ -10907,10 +11026,13 @@ SoBRLDatabaseSource::installCompactInstanceIndex(
 	this->inputsRevision.getValue();
     if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT"))
 	bu_log("BObol LoD source contract installed compact index path=%s "
-	       "entries=%zu requests=%zu registry=%d draw=%d threshold=%u "
+	       "entries=%zu requests=%zu resident_progressive=%zu "
+	       "targets=%zu registry=%d draw=%d threshold=%u "
 	       "view_dependent=%d mesh_lod=%d\n",
 	       this->path.getValue().getString(), index->entries.size(),
 	       index->sourceMeshRequestCount,
+	       index->residentProgressiveGeometryCount,
+	       index->displayLodTargetCount,
 	       occurrenceRegistry ? 1 : 0,
 	       source_record_draw_mode(this),
 	       this->lodBotThreshold.getValue(),
@@ -17028,6 +17150,36 @@ SoBRLDatabaseSource::hasDisplayMeshLodRequests(void) const
 	this->inputsRevision.getValue()) ? TRUE : FALSE;
 }
 
+SbBool
+SoBRLDatabaseSource::hasDisplayLodTargets(void) const
+{
+    return this->getDisplayLodTargetCount() > 0 ? TRUE : FALSE;
+}
+
+size_t
+SoBRLDatabaseSource::getDisplayLodTargetCount(void) const
+{
+    if (!this->d->compactIndexActive || !this->d->compactIndex)
+	return 0;
+    if (this->hasDisplayMeshLodRequests())
+	return this->d->compactIndex->displayLodTargetCount;
+    return this->d->compactIndex->residentProgressiveGeometryCount;
+}
+
+SbBool
+SoBRLDatabaseSource::hasDisplayResidentProgressiveGeometry(void) const
+{
+    return this->getDisplayResidentProgressiveGeometryCount() > 0 ?
+	TRUE : FALSE;
+}
+
+size_t
+SoBRLDatabaseSource::getDisplayResidentProgressiveGeometryCount(void) const
+{
+    return this->d->compactIndexActive && this->d->compactIndex ?
+	this->d->compactIndex->residentProgressiveGeometryCount : 0;
+}
+
 size_t
 SoBRLDatabaseSource::getDisplayMeshLodRequestCount(void) const
 {
@@ -17317,6 +17469,13 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	if ((entry.wireGeometry || entry.pointGeometry) &&
 	    this->d->compactIndex->wireCount > 0)
 	    this->d->compactIndex->wireCount--;
+	if ((entry.sourceMeshRequestValid ||
+	     bobol_compact_geometry_is_resident_progressive(entry.geometry)) &&
+	    this->d->compactIndex->displayLodTargetCount > 0)
+	    this->d->compactIndex->displayLodTargetCount--;
+	if (bobol_compact_geometry_is_resident_progressive(entry.geometry) &&
+	    this->d->compactIndex->residentProgressiveGeometryCount > 0)
+	    this->d->compactIndex->residentProgressiveGeometryCount--;
 	std::unordered_map<Obol::PartId, size_t, std::hash<Obol::PartId>>::iterator
 	    oldPartCount = this->d->compactIndex->partReferenceCounts.find(entry.part);
 	if (oldPartCount != this->d->compactIndex->partReferenceCounts.end() &&
@@ -17331,6 +17490,8 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	entry.localToSource = cad_instance_matrix(this, entry.localTransform);
 	entry.part = partId;
 	entry.geometry = geometry;
+	if (bobol_compact_geometry_is_resident_progressive(geometry))
+	    this->d->compactIndex->residentProgressiveGeometryCount++;
 	entry.wireGeometry = geometry->wire ? TRUE : FALSE;
 	entry.pointGeometry = geometry->points ? TRUE : FALSE;
 	entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
@@ -17358,6 +17519,9 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    else if (this->d->compactIndex->sourceMeshRequestCount > 0)
 		this->d->compactIndex->sourceMeshRequestCount--;
 	}
+	if (entry.sourceMeshRequestValid ||
+	    bobol_compact_geometry_is_resident_progressive(entry.geometry))
+	    this->d->compactIndex->displayLodTargetCount++;
 	entry.geometryRevision = compact_next_revision(entry.geometryRevision);
 	entry.semantic.sourceId = revision;
 	compact_sync_shape_summary(entry);
