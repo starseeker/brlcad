@@ -3889,6 +3889,12 @@ BObolViewLodState::activeCadRenderCost(void) const
 }
 
 size_t
+BObolViewLodState::allocationManagedCadRenderCost(void) const
+{
+    return this->cadActiveRenderCost;
+}
+
+size_t
 BObolViewLodState::minimumActiveRenderCost(void) const
 {
     size_t cost = 0;

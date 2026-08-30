@@ -1222,7 +1222,11 @@ test_coverage_policy(void)
     }
     policy.setRequired(true);
     if (!policy.required() || !policy.effectiveActive() ||
-	policy.effectiveComplete() || policy.compactionAllowed()) {
+	policy.effectiveComplete() || policy.compactionAllowed() ||
+	!policy.shouldResumeSubmission(false, false, false) ||
+	policy.shouldResumeSubmission(true, false, false) ||
+	policy.shouldResumeSubmission(false, true, false) ||
+	policy.shouldResumeSubmission(false, false, true)) {
 	std::fprintf(stderr, "FAIL: required coverage gate\n");
 	return 1;
     }
@@ -1255,7 +1259,8 @@ test_coverage_policy(void)
 	completion.coveredCount != 7 || policy.active() ||
 	policy.coverageComplete() || !policy.hasCompleteVisibleCount() ||
 	policy.completeVisibleCount() != 10 || policy.sawBoundedSource() ||
-	policy.visibleCount() != 0 || policy.coveredCount() != 0) {
+	policy.visibleCount() != 0 || policy.coveredCount() != 0 ||
+	policy.shouldResumeSubmission(false, false, false)) {
 	std::fprintf(stderr, "FAIL: missing bounded coverage proof\n");
 	return 1;
     }

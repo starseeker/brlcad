@@ -62,6 +62,15 @@ struct BObolCompactInstanceEntry;
 struct BObolCadBatchBuildState;
 namespace Obol { struct PartGeometry; }
 
+/** Build immutable structural box geometry.  Ordinary AABBs share a unit
+ * wire primitive through geometryTransform; oriented bounds retain their
+ * object-coordinate corners so Obol can classify and render them as OBBs. */
+BOBOL_EXPORT std::shared_ptr<const Obol::PartGeometry>
+bobol_cad_structural_bounds_geometry(
+    const SbBox3f &bounds,
+    SbMatrix &geometryTransform,
+    const SbVec3f orientedBounds[8] = nullptr);
+
 BOBOL_EXPORT SbBool bobol_database_source_fullpath_material_color(
 	struct db_i *dbip,
 	const struct db_full_path *pathp,
@@ -582,7 +591,7 @@ struct BOBOL_EXPORT BObolCompactOccurrence {
 };
 
 /* Immutable aggregate metadata for one complete compact-source discovery.
- * It is geometry-free: consumers may use it to bound planning work, but it
+ * It is mesh-buffer-free: consumers may use it to bound planning work, but it
  * never authorizes allocation or drawing by itself. */
 struct BOBOL_EXPORT BObolCompactSourceProfile {
     BObolCompactSourceProfile(void);
@@ -595,11 +604,10 @@ struct BOBOL_EXPORT BObolCompactSourceProfile {
     uint64_t reusedOccurrenceCount;
 };
 
-/** Lightweight, geometry-free persistence record for one authoritative
+/** Lightweight, mesh-buffer-free persistence record for one authoritative
  * compact occurrence.  A progressive producer may be drained by the scene
  * owner before detached realization completes, so the producer retains this
- * small immutable subset instead of a second occurrence registry or any mesh
- * buffers. */
+ * small immutable subset instead of a second occurrence registry. */
 struct BOBOL_EXPORT BObolCompactManifestOccurrence {
     BObolCompactManifestOccurrence(void);
 
@@ -607,6 +615,10 @@ struct BOBOL_EXPORT BObolCompactManifestOccurrence {
     SbString sourceName;
     SbMatrix localTransform;
     SbBox3f bounds;
+    /* Optional object-coordinate PCA bounds for a retained aggregate proxy.
+     * The AABB above remains the authoritative coverage contract. */
+    SbBool orientedBoundsValid;
+    std::array<SbVec3f, 8> orientedBounds;
     int booleanOperation;
     uint32_t occurrenceIndex;
     SbBool sourceMeshRequestValid;
@@ -690,8 +702,18 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
     size_t getExpectedCount(void) const;
     void setSourceProfile(const BObolCompactSourceProfile &profile);
     SbBool getSourceProfile(BObolCompactSourceProfile &profile) const;
+    /* A warm manifest may describe the complete semantic population while
+     * some non-mesh occurrences still need terminal geometry regeneration.
+     * Keep that census proof distinct from representation readiness: it
+     * authorizes selective replay, not declaring the source realized. */
+    void setWarmCensusComplete(bool complete);
+    bool hasWarmCensusComplete(void) const;
     void setWarmCoverageComplete(bool complete);
     bool hasWarmCoverageComplete(void) const;
+    void recordWarmTerminalOccurrence(
+	const BObolCompactManifestOccurrence &occurrence);
+    bool takeWarmTerminalOccurrences(
+	std::vector<BObolCompactManifestOccurrence> &occurrences);
     /* Publish/query the source-local extent of the draw target.  An early
      * value may be a conservative, monotonically growing overview.  Once
      * hasCoverageBoundsComplete() is true the value is immutable and

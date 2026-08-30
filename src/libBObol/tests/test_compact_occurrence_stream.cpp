@@ -48,6 +48,7 @@ test_priority_and_state(void)
 	std::fprintf(stderr, "FAIL: immutable source profile publication\n");
 	return 1;
     }
+    stream.setWarmCensusComplete(true);
     stream.setWarmCoverageComplete(true);
     const SbBox3f conservativeBounds(SbVec3f(-20.0f, -30.0f, -40.0f),
 	SbVec3f(50.0f, 60.0f, 70.0f));
@@ -89,6 +90,7 @@ test_priority_and_state(void)
     stream.setCoverageBoundsComplete(true);
 
     if (stream.getExpectedCount() != 100000 ||
+	!stream.hasWarmCensusComplete() ||
 	!stream.hasWarmCoverageComplete() ||
 	!stream.hasCoverageBoundsComplete() ||
 	!stream.getCoverageBounds(publishedBounds) ||
@@ -125,6 +127,44 @@ test_priority_and_state(void)
     stream.requestCancel();
     if (!stream.isCancelled()) {
 	std::fprintf(stderr, "FAIL: cancellation publication\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_warm_terminal_subset(void)
+{
+    BObolCompactOccurrenceStream stream;
+    stream.setWarmCensusComplete(true);
+
+    BObolCompactManifestOccurrence terminal;
+    terminal.path = "all/analytic";
+    terminal.sourceName = "analytic";
+    terminal.bounds = SbBox3f(SbVec3f(-1.0f, -2.0f, -3.0f),
+	SbVec3f(4.0f, 5.0f, 6.0f));
+    stream.recordWarmTerminalOccurrence(terminal);
+
+    BObolCompactManifestOccurrence lazyMesh = terminal;
+    lazyMesh.path = "all/mesh";
+    lazyMesh.sourceName = "mesh";
+    lazyMesh.sourceMeshRequestValid = TRUE;
+    stream.recordWarmTerminalOccurrence(lazyMesh);
+
+    std::vector<BObolCompactManifestOccurrence> pending;
+    if (!stream.hasWarmCensusComplete() ||
+	stream.hasWarmCoverageComplete() ||
+	!stream.takeWarmTerminalOccurrences(pending) ||
+	pending.size() != 1 ||
+	pending[0].path != terminal.path ||
+	stream.takeWarmTerminalOccurrences(pending)) {
+	std::fprintf(stderr, "FAIL: warm terminal subset contract\n");
+	return 1;
+    }
+
+    stream.setWarmCoverageComplete(true);
+    if (!stream.hasWarmCoverageComplete()) {
+	std::fprintf(stderr, "FAIL: warm representation completion\n");
 	return 1;
     }
     return 0;
@@ -200,6 +240,8 @@ main(int argc, char **argv)
     (void)argc;
     bu_setprogname(argv[0]);
     if (test_priority_and_state())
+	return 1;
+    if (test_warm_terminal_subset())
 	return 1;
     if (test_concurrent_producers())
 	return 1;

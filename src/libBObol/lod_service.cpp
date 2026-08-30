@@ -19,6 +19,7 @@
 
 #include "database_source_realization.h"
 #include "cad_publication_private.h"
+#include "draw_cache_private.h"
 #include "lod_coordinator_private.h"
 
 #include "raytrace.h"
@@ -1671,7 +1672,8 @@ struct BObolResidentMeshAsset {
 	publishedBytes(0),
 	publishedBackingPrefixBytes(0),
 	useRevision(0),
-	orderIndex(SIZE_MAX)
+	orderIndex(SIZE_MAX),
+	orientedBoundsPublished(false)
     {
     }
 
@@ -1711,6 +1713,10 @@ struct BObolResidentMeshAsset {
      * renewed input from retiring the asset underneath that new request. */
     std::atomic<uint64_t> useRevision;
     size_t orderIndex;
+    /* The draw-asset record is the coverage path's O(1) metadata carrier.
+     * Publish the hierarchy OBB there once; never make discovery reopen the
+     * much larger PoP payload merely to improve a terminal proxy. */
+    bool orientedBoundsPublished;
 };
 
 struct BObolResidentMeshDemandValue {
@@ -4601,6 +4607,36 @@ lod_publish_cold_mesh_preview(
     }
 }
 
+/* Return true when no later request needs to retry.  Failure to persist this
+ * optional presentation metadata must never turn a usable PoP hierarchy into
+ * a provider failure. */
+static bool
+lod_publish_draw_asset_oriented_bounds(
+    struct db_i *dbip, const char *name, const BObolLodRequest &request,
+    const struct BObolMeshLodHierarchyInfo &hierarchy)
+{
+    if (!dbip || !name || !name[0] ||
+	hierarchy.oriented_bounds_valid != 1 ||
+	!bobol_mesh_lod_oriented_bounds_validate(&hierarchy))
+	return true;
+
+    const int maximumCut = hierarchy.max_cut;
+    const bool cutValid = maximumCut >= 0 &&
+	static_cast<uint32_t>(maximumCut) < hierarchy.cut_count &&
+	maximumCut < BOBOL_MESH_LOD_CUT_COUNT_MAX;
+    const uint64_t faceCount = request.sourceCounts.faceCount ?
+	request.sourceCounts.faceCount :
+	(cutValid ? hierarchy.cuts[maximumCut].face_count : 0);
+    const uint64_t pointCount = request.sourceCounts.pointCount ?
+	request.sourceCounts.pointCount :
+	(cutValid ? hierarchy.cuts[maximumCut].point_count : 0);
+    if (!faceCount || !pointCount)
+	return false;
+    return bobol_draw_lod_asset_oriented_bounds_publish(
+	dbip, name, faceCount, pointCount, hierarchy.quantization_min,
+	hierarchy.quantization_max, hierarchy.oriented_bounds) == BRLCAD_OK;
+}
+
 BObolLodResult
 BObolLodService::realizeResidentMeshLod(
     const BObolLodRequest &submittedRequest,
@@ -4866,6 +4902,10 @@ BObolLodService::realizeResidentMeshLod(
 	return lod_provider_status_result(request,
 	    BOBOL_LOD_PROVIDER_CACHE_MISS,
 	    "resident mesh provider loaded no hierarchy metadata");
+    if (!resident->orientedBoundsPublished)
+	resident->orientedBoundsPublished =
+	    lod_publish_draw_asset_oriented_bounds(
+		dbip, name, request, hierarchy);
     int requestedCut = provider.useForcedCut ?
 	provider.forcedCut : request.requestedCut;
     if (!provider.useForcedCut && request.projectedPixelDiameter > 0.0f &&

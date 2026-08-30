@@ -36,15 +36,17 @@ struct BObolCompactOccurrenceStream::Impl {
     size_t pendingCount = 0;
     std::deque<std::shared_ptr<const BObolStagedSourceMesh>> stagedSources;
     size_t stagedSourceBytes = 0;
-    /* Geometry-free journal used only to create the next warm-start manifest.
-     * The GUI may drain pendingBatches before realization completes, so the
-     * queue itself cannot be the persistence authority. */
+    /* Mesh-buffer-free journal used only to create the next warm-start
+     * manifest.  The GUI may drain pendingBatches before realization
+     * completes, so the queue itself cannot be the persistence authority. */
     std::vector<BObolCompactManifestOccurrence> manifestOccurrences;
     std::unordered_map<std::string, size_t> manifestIndexByPath;
     bool manifestComplete = false;
-    /* A persisted leaf manifest already supplied every leaf AABB and immutable
-     * source-mesh request.  The authoritative semantics walk may therefore
-     * skip its otherwise redundant full-BoT coverage import pass. */
+    /* A persisted manifest can certify the complete occurrence census even
+     * when a small mixed-geometry subset still needs terminal regeneration. */
+    std::vector<BObolCompactManifestOccurrence> warmTerminalOccurrences;
+    std::atomic<bool> warmCensusComplete {false};
+    /* Every warm occurrence already has its terminal representation. */
     std::atomic<bool> warmCoverageComplete {false};
     std::atomic<bool> coverageBoundsComplete {false};
     SbBox3f coverageBounds;
@@ -130,6 +132,7 @@ BObolCompactOccurrenceStream::~BObolCompactOccurrenceStream(void)
 }
 
 BObolCompactManifestOccurrence::BObolCompactManifestOccurrence(void) :
+    orientedBoundsValid(FALSE),
     booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION), occurrenceIndex(0),
     sourceMeshRequestValid(FALSE), meshAssetContentHash(0),
     meshAssetTessellationAbsTol(0.0), meshAssetTessellationRelTol(0.0),
@@ -216,6 +219,10 @@ BObolCompactOccurrenceStream::recordManifestOccurrence(
     record.sourceName = occurrence.summary.sourceName;
     record.localTransform = occurrence.localTransform;
     record.bounds = occurrence.summary.bounds;
+    if (occurrence.geometry && occurrence.geometry->aggregateProxyCorners) {
+	record.orientedBoundsValid = TRUE;
+	record.orientedBounds = *occurrence.geometry->aggregateProxyCorners;
+    }
     record.booleanOperation = occurrence.booleanOperation;
     record.occurrenceIndex = occurrence.occurrenceIndex;
     record.regionId = occurrence.summary.regionId;
@@ -474,6 +481,18 @@ BObolCompactOccurrenceStream::getSourceProfile(
 }
 
 void
+BObolCompactOccurrenceStream::setWarmCensusComplete(bool complete)
+{
+    this->d->warmCensusComplete.store(complete, std::memory_order_release);
+}
+
+bool
+BObolCompactOccurrenceStream::hasWarmCensusComplete(void) const
+{
+    return this->d->warmCensusComplete.load(std::memory_order_acquire);
+}
+
+void
 BObolCompactOccurrenceStream::setWarmCoverageComplete(bool complete)
 {
     this->d->warmCoverageComplete.store(
@@ -484,6 +503,28 @@ bool
 BObolCompactOccurrenceStream::hasWarmCoverageComplete(void) const
 {
     return this->d->warmCoverageComplete.load(std::memory_order_acquire);
+}
+
+void
+BObolCompactOccurrenceStream::recordWarmTerminalOccurrence(
+    const BObolCompactManifestOccurrence &occurrence)
+{
+    if (occurrence.path.getLength() == 0 ||
+	occurrence.sourceName.getLength() == 0 || occurrence.bounds.isEmpty() ||
+	occurrence.sourceMeshRequestValid)
+	return;
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    this->d->warmTerminalOccurrences.push_back(occurrence);
+}
+
+bool
+BObolCompactOccurrenceStream::takeWarmTerminalOccurrences(
+    std::vector<BObolCompactManifestOccurrence> &occurrences)
+{
+    occurrences.clear();
+    std::lock_guard<std::mutex> guard(this->d->mutex);
+    occurrences.swap(this->d->warmTerminalOccurrences);
+    return !occurrences.empty();
 }
 
 void

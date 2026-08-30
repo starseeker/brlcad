@@ -15,6 +15,7 @@ set(
   db_attr.h
   db_diff.h
   db_discovery.h
+  display_bounds.h
   db_fullpath.h
   db_instance.h
   db_internal.h

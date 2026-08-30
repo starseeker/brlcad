@@ -14,6 +14,7 @@
 #include "bv.h"
 #include "BObol/BDrawCache.h"
 #include "BObol/BMeshLodCache.h"
+#include "draw_cache_private.h"
 #include "serialized_bot_source_private.h"
 
 #include "bg/trimesh.h"
@@ -5492,7 +5493,8 @@ mesh_lod_cache_generate(struct BObolMeshLodContext *context,
 			unsigned long long userKey,
 			bool shadedCullBackfaces,
 			BObolMeshLodPreviewCallback preview = NULL,
-			void *previewData = NULL)
+			void *previewData = NULL,
+			struct BObolMeshLodHierarchyInfo *generatedHierarchy = NULL)
 {
     if (!context || !vertices || !vertexCount || !faces || !faceCount)
 	return 0;
@@ -5500,6 +5502,8 @@ mesh_lod_cache_generate(struct BObolMeshLodContext *context,
     BObolPopState state(context, vertices, vertexCount, normals, faces,
 			  faceCount, userKey, shadedCullBackfaces,
 			  NULL, preview, previewData);
+    if (state.isValid && generatedHierarchy)
+	state.hierarchyInfo(generatedHierarchy);
     return state.isValid ? state.hash : 0;
 }
 
@@ -5961,6 +5965,8 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	RT_BOT_CK_MAGIC(bot);
 
     BObolPopState *generatedState = NULL;
+    struct BObolMeshLodHierarchyInfo generatedHierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
     unsigned long long key = 0;
     bool sourceLimited = false;
     if (useSerializedSource) {
@@ -5988,6 +5994,8 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 		       generatedState->generationFailure() : "unknown reason");
 	    key = generatedState && generatedState->isValid ?
 		generatedState->hash : 0;
+	    if (generatedState && generatedState->isValid)
+		generatedState->hierarchyInfo(&generatedHierarchy);
 	    sourceLimited = generatedState && generatedState->isValid &&
 		generatedState->sourceLimited();
 	} catch (const std::bad_alloc &) {
@@ -6068,13 +6076,15 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 		cullBackfaces, previewRequest, preview, previewData);
 	    key = generatedState && generatedState->isValid ?
 		generatedState->hash : 0;
+	    if (generatedState && generatedState->isValid)
+		generatedState->hierarchyInfo(&generatedHierarchy);
 	    sourceLimited = generatedState && generatedState->isValid &&
 		generatedState->sourceLimited();
 	} else {
 	    key = mesh_lod_cache_generate(
 		context, sourceVertices, sourceVertexCount,
 		botNormals, cacheFaces, sourceFaceCount, 0,
-		cullBackfaces, preview, previewData);
+		cullBackfaces, preview, previewData, &generatedHierarchy);
 	}
     } catch (const std::bad_alloc &) {
 	/* A display cache miss is recoverable.  In particular, do not turn a
@@ -6093,6 +6103,20 @@ mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
 	mesh_lod_context_destroy(context);
 	return BRLCAD_ERROR;
     }
+
+    const uint64_t generatedPointCount = useSerializedSource ?
+	static_cast<uint64_t>(serializedSource.vertexCount) :
+	static_cast<uint64_t>(bot->num_vertices);
+    const uint64_t generatedFaceCount = useSerializedSource ?
+	static_cast<uint64_t>(serializedSource.faceCount) :
+	static_cast<uint64_t>(bot->num_faces);
+    if (generatedHierarchy.oriented_bounds_valid == 1 &&
+	bobol_mesh_lod_oriented_bounds_validate(&generatedHierarchy))
+	(void)bobol_draw_lod_asset_oriented_bounds_publish(
+	    dbip, name, generatedFaceCount, generatedPointCount,
+	    generatedHierarchy.quantization_min,
+	    generatedHierarchy.quantization_max,
+	    generatedHierarchy.oriented_bounds);
 
     if (generatedState) {
 	struct BObolMeshLod *lod =
@@ -6256,9 +6280,12 @@ mesh_lod_cache_store_mesh_impl(
      * full topology build and defeats progressive time-to-first-content. */
     const bool cullBackfaces = shadedCullBackfaces != 0;
 
+    struct BObolMeshLodHierarchyInfo generatedHierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
     unsigned long long key = mesh_lod_cache_generate(
 				 context, vertices, vertexCount, normals, faces,
-				 faceCount, userKey, cullBackfaces);
+				 faceCount, userKey, cullBackfaces, NULL, NULL,
+				 &generatedHierarchy);
     if (!key || mesh_lod_key_put(context, name, key) != 0) {
 	if (status)
 	    *status = current;
@@ -6271,6 +6298,15 @@ mesh_lod_cache_store_mesh_impl(
     current.has_cached_payload = mesh_lod_payload_available(context, key);
     current.stale_cache_entry = current.has_cached_payload ? 0 : 1;
     current.generated_cache_entry = current.has_cached_payload ? 1 : 0;
+    if (current.has_cached_payload &&
+	generatedHierarchy.oriented_bounds_valid == 1 &&
+	bobol_mesh_lod_oriented_bounds_validate(&generatedHierarchy))
+	(void)bobol_draw_lod_asset_oriented_bounds_publish(
+	    dbip, name, static_cast<uint64_t>(faceCount),
+	    static_cast<uint64_t>(vertexCount),
+	    generatedHierarchy.quantization_min,
+	    generatedHierarchy.quantization_max,
+	    generatedHierarchy.oriented_bounds);
     if (status)
 	*status = current;
 

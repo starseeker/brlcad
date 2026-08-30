@@ -84,8 +84,8 @@ cad_proxy_corners(const BObolLodProxy &proxy, SbVec3f corners[8])
     return 0;
 }
 
-static int
-cad_wire_geometry_from_corners(const SbVec3f corners[8],
+int
+bobol_cad_wire_geometry_from_binary_corners(const SbVec3f corners[8],
 			       Obol::PartGeometryBuilder &geometry)
 {
     static const int edges[12][2] = {
@@ -111,6 +111,81 @@ cad_wire_geometry_from_corners(const SbVec3f corners[8],
 	return 0;
     geometry.wire = wire;
     return 1;
+}
+
+std::shared_ptr<const Obol::PartGeometry>
+bobol_cad_structural_bounds_geometry(const SbBox3f &bounds,
+	SbMatrix &geometryTransform, const SbVec3f orientedBounds[8])
+{
+    geometryTransform = SbMatrix::identity();
+    if (bounds.isEmpty())
+	return std::shared_ptr<const Obol::PartGeometry>();
+
+    if (orientedBounds) {
+	Obol::PartGeometryBuilder geometry;
+	if (bobol_cad_wire_geometry_from_binary_corners(
+		orientedBounds, geometry)) {
+	    geometry.aggregateProxyCorners = std::array<SbVec3f, 8>{
+		orientedBounds[0], orientedBounds[1],
+		orientedBounds[2], orientedBounds[3],
+		orientedBounds[4], orientedBounds[5],
+		orientedBounds[6], orientedBounds[7]};
+	    geometry.subpixelProxyEligible = true;
+	    geometry.structuralProxy = true;
+	    std::shared_ptr<const Obol::PartGeometry> oriented =
+		bobol_cad_build_geometry(
+		    std::move(geometry), "oriented structural bounds");
+	    if (oriented)
+		return oriented;
+	}
+    }
+
+    const SbVec3f minimum = bounds.getMin();
+    const SbVec3f maximum = bounds.getMax();
+    const SbVec3f extent = maximum - minimum;
+    if (extent[0] > SMALL_FASTF && extent[1] > SMALL_FASTF &&
+	extent[2] > SMALL_FASTF) {
+	static const std::shared_ptr<const Obol::PartGeometry> unitAabb = []() {
+	    const SbVec3f corners[8] = {
+		SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 0.0f, 0.0f),
+		SbVec3f(0.0f, 1.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f),
+		SbVec3f(0.0f, 0.0f, 1.0f), SbVec3f(1.0f, 0.0f, 1.0f),
+		SbVec3f(0.0f, 1.0f, 1.0f), SbVec3f(1.0f, 1.0f, 1.0f)
+	    };
+	    Obol::PartGeometryBuilder geometry;
+	    if (!bobol_cad_wire_geometry_from_binary_corners(corners, geometry))
+		return std::shared_ptr<const Obol::PartGeometry>();
+	    geometry.subpixelProxyEligible = true;
+	    geometry.structuralProxy = true;
+	    return bobol_cad_build_geometry(
+		std::move(geometry), "unit structural bounds");
+	}();
+	if (!unitAabb)
+	    return std::shared_ptr<const Obol::PartGeometry>();
+	geometryTransform.setScale(extent);
+	SbMatrix translation;
+	translation.setTranslate(minimum);
+	geometryTransform.multRight(translation);
+	return unitAabb;
+    }
+
+    const SbVec3f corners[8] = {
+	SbVec3f(minimum[0], minimum[1], minimum[2]),
+	SbVec3f(maximum[0], minimum[1], minimum[2]),
+	SbVec3f(minimum[0], maximum[1], minimum[2]),
+	SbVec3f(maximum[0], maximum[1], minimum[2]),
+	SbVec3f(minimum[0], minimum[1], maximum[2]),
+	SbVec3f(maximum[0], minimum[1], maximum[2]),
+	SbVec3f(minimum[0], maximum[1], maximum[2]),
+	SbVec3f(maximum[0], maximum[1], maximum[2])
+    };
+    Obol::PartGeometryBuilder geometry;
+    if (!bobol_cad_wire_geometry_from_binary_corners(corners, geometry))
+	return std::shared_ptr<const Obol::PartGeometry>();
+    geometry.subpixelProxyEligible = true;
+    geometry.structuralProxy = true;
+    return bobol_cad_build_geometry(
+	std::move(geometry), "structural bounds");
 }
 
 static int
@@ -146,7 +221,8 @@ cad_proxy_part_geometry(const BObolLodProxy &proxy,
     SbVec3f corners[8];
     if ((!wire && !shaded) || !cad_proxy_corners(proxy, corners))
 	return 0;
-    if ((wire && !cad_wire_geometry_from_corners(corners, geometry)) ||
+    if ((wire && !bobol_cad_wire_geometry_from_binary_corners(
+		    corners, geometry)) ||
 	(shaded && !cad_shaded_geometry_from_corners(corners, geometry)))
 	return 0;
     /* An AABB is temporary structural coverage.  An OBB is a terminal

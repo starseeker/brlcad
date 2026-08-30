@@ -106,9 +106,10 @@ struct BObolRetainedAllocationInputs {
 };
 
 struct BObolRetainedAllocationResult {
-    double normalizedError = std::numeric_limits<double>::infinity();
+    double maximumNormalizedError = std::numeric_limits<double>::infinity();
     double maximumProjectedErrorPixels =
 	std::numeric_limits<double>::infinity();
+    double visualImportanceDebt = 0.0;
     size_t protectedFloorBudget = 0;
     uint64_t protectedFloorSignature = 0;
     /* Ephemeral identity of the complete occurrence representation selected
@@ -143,6 +144,9 @@ struct BObolRetainedAllocationResult {
     size_t maximumMarginalBudget = 0;
     size_t maximumProtectedBudget = 0;
     size_t pointProxyCandidateCount = 0;
+    size_t selectedPointProxyCount = 0;
+    size_t prominentCandidateCount = 0;
+    size_t prominentQualityFloorViolationCount = 0;
     bool allowProtectedFloor = false;
 
     uint64_t viewRevision(void) const
@@ -199,9 +203,10 @@ struct BObolRetainedMarginalUpgrade {
     int nextCut = -1;
     size_t nextCost = 0;
     size_t addedCost = 0;
+    unsigned int visualEmphasis = 0;
     bool qualityFloorViolation = false;
-    double weightedError = 0.0;
-    double valuePerCost = 0.0;
+    double normalizedError = 0.0;
+    double visualBenefitPerCost = 0.0;
 };
 
 /** True when a ranks below b in the retained allocator's marginal queue. */

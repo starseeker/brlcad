@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "BObol/BViewLod.h"
+#include "lod_visual_importance_private.h"
 #include "retained_allocation_private.h"
 
 #include <cmath>
@@ -18,17 +19,20 @@ static bool
 oracle_lower_priority(const BObolRetainedMarginalUpgrade &a,
     const BObolRetainedMarginalUpgrade &b)
 {
+    if (a.visualEmphasis != b.visualEmphasis)
+	return a.visualEmphasis < b.visualEmphasis;
     if (a.qualityFloorViolation != b.qualityFloorViolation)
         return !a.qualityFloorViolation;
     if (a.qualityFloorViolation &&
-        (a.weightedError < b.weightedError ||
-         a.weightedError > b.weightedError))
-        return a.weightedError < b.weightedError;
-    if (a.valuePerCost < b.valuePerCost || a.valuePerCost > b.valuePerCost)
-        return a.valuePerCost < b.valuePerCost;
-    if (a.weightedError < b.weightedError ||
-        a.weightedError > b.weightedError)
-        return a.weightedError < b.weightedError;
+        (a.normalizedError < b.normalizedError ||
+         a.normalizedError > b.normalizedError))
+        return a.normalizedError < b.normalizedError;
+    if (a.visualBenefitPerCost < b.visualBenefitPerCost ||
+	a.visualBenefitPerCost > b.visualBenefitPerCost)
+        return a.visualBenefitPerCost < b.visualBenefitPerCost;
+    if (a.normalizedError < b.normalizedError ||
+        a.normalizedError > b.normalizedError)
+        return a.normalizedError < b.normalizedError;
     return a.candidateIndex > b.candidateIndex;
 }
 
@@ -65,19 +69,50 @@ main()
 	}
     }
 
-    const double errors[] = {0.25, 1.0, 4.0};
-    const double values[] = {0.25, 1.0, 4.0};
+    const double thinFootprint = bobol_lod_visual_footprint(
+	0.0, 64.0, 4.0);
+    if (std::fabs(thinFootprint - 16.0) > 1.0e-12 ||
+	!bobol_lod_visual_prominent(thinFootprint) ||
+	bobol_lod_visual_prominent(thinFootprint - 0.01)) {
+	fprintf(stderr, "projected visual-footprint contract mismatch\n");
+	return 1;
+    }
+    const double ordinaryProtected = bobol_lod_protected_visual_error(
+	BOBOL_LOD_VISUAL_ORDINARY, thinFootprint, 0.25);
+    const double smallProtected = bobol_lod_protected_visual_error(
+	BOBOL_LOD_VISUAL_ORDINARY, thinFootprint - 0.01, 0.25);
+    if (std::fabs(ordinaryProtected - 0.75) > 1.0e-12 ||
+	!std::isinf(smallProtected)) {
+	fprintf(stderr, "recognizable-feature floor contract mismatch\n");
+	return 1;
+    }
+    const double smallBenefit = bobol_lod_marginal_visual_benefit(
+	16.0, 2.0, 1.0, 0.25);
+    const double largeBenefit = bobol_lod_marginal_visual_benefit(
+	64.0, 2.0, 1.0, 0.25);
+    if (std::fabs(smallBenefit - 64.0) > 1.0e-12 ||
+	std::fabs(largeBenefit - 256.0) > 1.0e-12) {
+	fprintf(stderr, "marginal visual-benefit contract mismatch\n");
+	return 1;
+    }
+
+    const double errors[] = {0.25, 4.0};
+    const double values[] = {0.25, 4.0};
     std::vector<BObolRetainedMarginalUpgrade> domain;
-    for (int floor = 0; floor < 2; ++floor) {
-	for (double error : errors) {
-	    for (double value : values) {
-		for (size_t index = 0; index < 3; ++index) {
+    for (unsigned int emphasis = BOBOL_LOD_VISUAL_ORDINARY;
+	emphasis <= BOBOL_LOD_VISUAL_SELECTED; ++emphasis) {
+	for (int floor = 0; floor < 2; ++floor) {
+	    for (double error : errors) {
+		for (double value : values) {
+		    for (size_t index = 0; index < 2; ++index) {
 		    BObolRetainedMarginalUpgrade upgrade;
+		    upgrade.visualEmphasis = emphasis;
 		    upgrade.qualityFloorViolation = floor ? true : false;
-		    upgrade.weightedError = error;
-		    upgrade.valuePerCost = value;
+		    upgrade.normalizedError = error;
+		    upgrade.visualBenefitPerCost = value;
 		    upgrade.candidateIndex = index;
 		    domain.push_back(upgrade);
+		    }
 		}
 	    }
 	}

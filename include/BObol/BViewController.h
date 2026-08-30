@@ -281,6 +281,11 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t maximumMarginalPresentationBudget;
     size_t maximumProtectedPresentationBudget;
     size_t pointProxyCandidateCount;
+    size_t selectedPointProxyCount;
+    size_t prominentCandidateCount;
+    size_t prominentQualityFloorViolationCount;
+    double maximumNormalizedVisualError;
+    double visualImportanceDebt;
     /** Last committed renderer allocation, including a safe fallback from an
      * older revision tuple while current planning is incomplete. */
     uint64_t committedAllocationPlanSerial;

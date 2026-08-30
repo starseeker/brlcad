@@ -508,6 +508,11 @@ public:
     size_t activeRenderCost(void) const;
     /** O(1) CAD-only portion of activeRenderCost(). */
     size_t activeCadRenderCost(void) const;
+
+    /** Return the active cost of occurrence payloads whose cuts are owned by
+     * the retained CAD allocator.  Compact resident-progressive geometry has a
+     * separate cut owner and is therefore deliberately excluded. */
+    size_t allocationManagedCadRenderCost(void) const;
     /* Irreducible retained PoP population in the same weighted units as
      * activeRenderCost().  This is the cost after every currently displayed
      * progressive occurrence has been retargeted to its minimum drawable

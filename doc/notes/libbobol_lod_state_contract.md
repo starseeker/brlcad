@@ -322,6 +322,13 @@ view removes the coverage producer, retiring the associated compaction request
 also acknowledges that pressure-recovery revision.  It may not leave an
 unwitnessed background obligation.
 
+An active coverage census is foreground inventory work even while an older
+coherent framebuffer remains useful.  It must own an active/rescan submission
+cursor or a level-triggered pump which restores one after interaction or a
+stronger presentation owner retires.  A policy-only quality revision preserves
+the exact camera/source visibility proof and must not create another census;
+camera and population revisions remain the ordinary invalidators.
+
 Minimum-mesh coverage, user-visible convergence, aggregate scene budgeting,
 view-demand scheduling, renderer-independent quality calculation, resource-
 edge/recovery state, and the late calibrated-headroom retry witness use

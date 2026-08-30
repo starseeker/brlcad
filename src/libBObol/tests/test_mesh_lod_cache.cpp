@@ -20,6 +20,7 @@
 
 #include "common.h"
 
+#include "BObol/BDrawCache.h"
 #include "BObol/BLodRealization.h"
 #include "BObol/BMeshLodCache.h"
 
@@ -503,6 +504,26 @@ check_oriented_proxy_cache_round_trip(struct db_i *dbip, const char *name)
 	    bobol_mesh_lod_destroy(first);
 	return 1;
     }
+    struct directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
+    if (dp != RT_DIR_NULL &&
+	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
+	BObolDrawLodAssetRecord drawAsset;
+	if (bobol_draw_lod_asset_cache_get(dbip, name, &drawAsset) !=
+		BRLCAD_OK ||
+	    drawAsset.assetOrientedBoundsValid != 1) {
+	    printf("FAIL: oriented proxy metadata was not published for discovery\n");
+	    bobol_mesh_lod_destroy(first);
+	    return 1;
+	}
+	for (size_t corner = 0; corner < 8; ++corner)
+	    for (size_t axis = 0; axis < 3; ++axis)
+		if (!fastf_equal(drawAsset.assetOrientedBounds[corner][axis],
+			firstHierarchy.oriented_bounds[corner][axis])) {
+		    printf("FAIL: discovery OBB differs from PoP hierarchy\n");
+		    bobol_mesh_lod_destroy(first);
+		    return 1;
+		}
+    }
     BObolMeshLodHierarchyInfo malformedHierarchy = firstHierarchy;
     malformedHierarchy.oriented_bounds[7][X] += 0.25;
     if (bobol_mesh_lod_oriented_bounds_validate(&malformedHierarchy)) {
@@ -848,6 +869,12 @@ main(int argc, char *argv[])
     }
 
     if (check_oriented_proxy_cache_round_trip(dbip, meshObjname)) {
+	ret = 1;
+	goto cleanup;
+    }
+    if (check_oriented_proxy_cache_round_trip(dbip, objname) ||
+	bobol_mesh_lod_cache_invalidate(dbip, objname, &cacheStatus) !=
+	    BRLCAD_OK) {
 	ret = 1;
 	goto cleanup;
     }

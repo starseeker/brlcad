@@ -30,7 +30,7 @@
 #include <Inventor/nodes/SoSeparator.h>
 #include <OSMesa/osmesa.h>
 
-#include "nanort_context_manager.h"
+#include <Obol/render/SoNanoRTContextManager.h>
 
 #include <limits.h>
 #include <memory>

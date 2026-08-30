@@ -189,6 +189,17 @@ violation.  This resolves the known same-population liveness defect, but not
 all scale debt.  Profile true-cold useful-preview latency and cache I/O using
 common policy events rather than an object-count regime.
 
+The 2026-08-29 draw-metadata migration replay exposed a separate cross-owner
+gap: a policy revision could create a coverage census after the exact
+camera/source proof was already current, retire its cursor through a stronger
+capacity path, and leave compaction waiting on the orphaned census.  Coverage
+is now an explicit inventory obligation, its producer is level-triggered, and
+policy-only quality changes preserve the existing proof.  The corrected warm
+System-GL 50k/150k matrices both pass; the 50k endpoint is fully ownerless,
+while 150k presents a terminal box-free framebuffer and truthfully continues
+bounded resident-prefix compaction in the background.  Do not weaken that
+distinction by treating background reclamation as unfinished visual work.
+
 The pre-typed-host 150k OSMesa report had three quality-floor misses, including
 one prominent synthetic occurrence.  The rebuilt host rerun has zero total or
 prominent floor misses and zero visual-importance debt, confirming that the
@@ -330,10 +341,18 @@ hierarchy-scale, and renderer-backed qualification.
 - Measure frame, publication, cache, and resident-memory costs at 50k/150k and
   multi-gigabyte scale.  Preserve essential summaries and shared fixtures;
   remove disposable captures and duplicate large directories after each run.
-- Qualify persistent OBB proxies against no-LoD ground truth on heterogeneous
-  50k/150k scenes and realistic wheels, blades, booms, and hulls.  Record the
-  perceptual improvement over the AABB fallback and the cache-generation cost.
-  If multi-page assets need terminal proxying under measured pressure, add one
+- Extend the passing heterogeneous 10k OBB cold/warm matrix to no-LoD
+  ground-truth comparisons on realistic wheels, blades, booms, and hulls and
+  to the 50k/150k pressure range.  Persistence and cross-renderer selection are
+  already qualified: the constrained OSMesa pair deterministically retains
+  693 OBBs across cold-manifest and warm-manifest runs.  Record the perceptual
+  improvement over AABB and the cache-generation cost on real geometry.
+- Decide whether a first-cold discovery manifest should be enriched after
+  detached PoP characterization.  The live payload already carries its OBB;
+  the sealed discovery journal and its cache lifecycle lock deliberately make
+  the initial structural cue an AABB.  Any enrichment must remain bounded and
+  must not introduce nested draw-cache access or a second occurrence registry.
+- If multi-page assets need terminal proxying under measured pressure, add one
   occurrence-level aggregate owner which suppresses/restores all pages
   atomically; never attach the whole-source OBB independently to each page.
 

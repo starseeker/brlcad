@@ -189,6 +189,21 @@ source AABB.  Cache reads validate finiteness, orthogonality, corner topology,
 and conservative axis-aligned extent before admitting the metadata.  A miss,
 invalid record, or insignificant improvement simply retains the AABB.
 
+The draw cache is a carrier, not a second geometry authority.  LoD-asset
+record format 3 stores optional canonical-asset OBB metadata, and chunked
+manifest format 3 stores optional per-occurrence object-coordinate corners
+without allocating eight points for every AABB-only occurrence.  Manifest
+identity `leaf-v3` and chunk identity `manifest-chunk-v3` deliberately
+invalidate the intermediate records; there is no compatibility reader.  The
+directory-wide draw format remains 5 because mesh LoD and draw records share
+the same cache root: independently versioned draw metadata must not erase a
+valid multi-gigabyte PoP cache.  A manifest descriptor is published only after
+all bounded chunks, and readers stream those chunks without reassembling a
+whole-scene vector.  A first-cold manifest may be sealed before detached PoP
+characterization produces the OBB.  That session's live payload still carries
+the immutable corners, but the earliest structural coverage remains an AABB
+unless the hierarchy was already cached.
+
 An admitted monolithic `PartGeometry` carries those optional corners beside
 the ordinary mesh; it does not replace or duplicate the mesh.  Obol consults
 them only when its existing view/load policy has already selected a batched

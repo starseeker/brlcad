@@ -606,6 +606,12 @@ BObolLodConvergenceStatus::clear(void)
     this->maximumMarginalPresentationBudget = 0;
     this->maximumProtectedPresentationBudget = 0;
     this->pointProxyCandidateCount = 0;
+    this->selectedPointProxyCount = 0;
+    this->prominentCandidateCount = 0;
+    this->prominentQualityFloorViolationCount = 0;
+    this->maximumNormalizedVisualError =
+	std::numeric_limits<double>::infinity();
+    this->visualImportanceDebt = 0.0;
     this->committedAllocationPlanSerial = 0;
     this->residentMeshBytes = 0;
     this->stableResidentMeshBytes = 0;
@@ -2482,10 +2488,18 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	 * must discover it again in another interrupted presentation. */
 	const size_t retainedFrameCost = retainedViewState ?
 	    retainedViewState->activeRenderCost() : 0;
-	const size_t retainedCadCost = retainedViewState ?
-	    retainedViewState->activeCadRenderCost() : 0;
-	inputs.externalPresentationCost = retainedFrameCost > retainedCadCost ?
-	    retainedFrameCost - retainedCadCost : 0;
+	const size_t allocationManagedCadCost = retainedViewState ?
+	    retainedViewState->allocationManagedCadRenderCost() : 0;
+	/* Compact resident-progressive cuts are selected directly by the bounded
+	 * source pass, not by BObolRetainedAllocationTransaction.  Charge their
+	 * current cost with the rest of the fixed frame.  Omitting it produces a
+	 * zero-cost certificate for an already populated compact scene; the handoff
+	 * then correctly rejects that false certificate and requests it forever.
+	 * Resident-cut mutations already invalidate CAD allocation coverage, so the
+	 * certificate cannot outlive a real compact-presentation change. */
+	inputs.externalPresentationCost =
+	    retainedFrameCost > allocationManagedCadCost ?
+		retainedFrameCost - allocationManagedCadCost : 0;
 	inputs.sceneBudget = this->d->lodAdmissionEvidence.capacity().currentBudget();
 	inputs.maximumMarginalBudget = maximumMarginalBudget;
 	const BObolLodCapacitySearchCertificate &capacitySearch =
@@ -2637,7 +2651,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	const bool allocationSucceeded =
 	    allocationStatus != BOBOL_RETAINED_ALLOCATION_FAILED;
 	this->d->lodRetainedAdmissionQualityEvidence.remember(
-	    allocationSucceeded ? allocation.normalizedError :
+	    allocationSucceeded ? allocation.maximumNormalizedError :
 		std::numeric_limits<double>::infinity(),
 	    allocationSucceeded ? allocation.maximumProjectedErrorPixels :
 		std::numeric_limits<double>::infinity(),
@@ -5728,7 +5742,12 @@ BObolViewController::advanceLodPolicyRevision(
     this->d->lodPointQualityPhase.reset();
     this->d->applyAdmissionEvidenceAction(
         BObolLodAdmissionPlanner::EvidenceAction::RESET_POINT_PROXY);
-    this->d->lodCoveragePolicy.activate(false);
+    /* A policy-only transition keeps the camera and source population.  Its
+     * existing exact visibility/coverage proof therefore remains current;
+     * the policy revision itself starts the quality submission pass.  Marking
+     * coverage active here created a second census owner which some terminal
+     * capacity paths could retire without completing.  Compaction would then
+     * wait forever on that owner even though no census cursor remained. */
     this->d->lodViewDemandPolicy.refreshForPolicyRevision(
 	transition == LodPolicyTransition::PRESERVE_SCALE_DEMAND,
 	this->d->lodInteractionSession.active() != FALSE);
@@ -6109,6 +6128,13 @@ BObolViewController::getLodConvergenceStatus(
     status.maximumProtectedPresentationBudget =
 	allocation.maximumProtectedBudget;
     status.pointProxyCandidateCount = allocation.pointProxyCandidateCount;
+    status.selectedPointProxyCount = allocation.selectedPointProxyCount;
+    status.prominentCandidateCount = allocation.prominentCandidateCount;
+    status.prominentQualityFloorViolationCount =
+	allocation.prominentQualityFloorViolationCount;
+    status.maximumNormalizedVisualError =
+	allocation.maximumNormalizedError;
+    status.visualImportanceDebt = allocation.visualImportanceDebt;
     status.committedAllocationPlanSerial = allocation.allocationPlanSerial;
 
     const std::vector<SoBRLDatabaseSource *> sources =
@@ -6269,7 +6295,13 @@ BObolViewController::getLodConvergenceStatus(
     BObolLodControlRefinement::Inputs controlInputs;
     controlInputs.interaction =
 	this->d->lodInteractionSession.active() != FALSE;
-    controlInputs.inventory = structuralPending || structuralDiscovery;
+    /* Coverage is an inventory proof, not compaction state.  Keep its active
+     * census in the finite work ledger even when an older retained framebuffer
+     * still supplies a useful visual.  Otherwise that stale proof can make a
+     * new-camera census look terminal while compaction waits on it forever. */
+    controlInputs.inventory = structuralPending || structuralDiscovery ||
+	this->d->lodCoveragePolicy.effectiveActive() ||
+	this->d->lodPoseContinuity.visibilityCensusDeferred();
     controlInputs.availability = sourcePreparationPending != FALSE;
     controlInputs.result = resultPending != FALSE;
     controlInputs.publication = publicationPending != FALSE;
@@ -6343,7 +6375,6 @@ BObolViewController::getLodConvergenceStatus(
 	(this->d->lodPointQualityPhase.presentationPending() &&
 	 pointProducerOwnsFrame);
     const SbBool calibrationPending = control.calibrationPending() ? TRUE : FALSE;
-    const SbBool controlPending = control.controlPending() ? TRUE : FALSE;
     status.refinementFramePending =
 	(this->d->lodPresentationTransaction.barrierPending() ||
 	 capacityFramePending) ? TRUE : FALSE;
@@ -6408,7 +6439,11 @@ BObolViewController::getLodConvergenceStatus(
     convergenceInputs.resultPending = resultPending != FALSE;
     convergenceInputs.publicationPending = publicationPending != FALSE;
     convergenceInputs.calibrationPending = calibrationPending != FALSE;
-    convergenceInputs.controlPending = controlPending != FALSE;
+    /* The refinement ledger is the authoritative foreground-work projection.
+     * Individual fields above select the user-facing phase and progress
+     * denominator; this aggregate guard prevents a newly added work fact from
+     * being accidentally omitted from terminal readiness. */
+    convergenceInputs.controlPending = control.foregroundPending();
     convergenceInputs.interactive = this->d->lodInteractionSession.active() != FALSE;
     convergenceInputs.compactionPending =
 	this->d->lodCompactionPolicy.pending();

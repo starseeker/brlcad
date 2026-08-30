@@ -159,6 +159,9 @@ static int ged_obol_stream_cached_leaf_manifest(
     uint32_t source_revision,
     BObolCompactOccurrenceStream *stream,
     void *user_data);
+static int ged_obol_leaf_manifest_record_from_occurrence(
+    BObolCompactManifestOccurrence &record,
+    const BObolCompactOccurrence &occurrence);
 static int ged_obol_store_leaf_proxy_manifest(
     struct db_i *database,
     const SoBRLDatabaseSource *source,
@@ -4340,6 +4343,17 @@ ged_obol_lod_prewarm_submit_name(BObolLodService *service,
     if (!ged_obol_lod_prewarm_eligible(dp))
 	return 0;
 
+    /* "prewarm all" is intentionally fed to the bounded service in batches.
+     * A later invocation must advance to missing assets instead of spending
+     * its queue allowance reopening already-current payloads. */
+    struct BObolMeshLodCacheStatus cacheStatus =
+	BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    if (bobol_mesh_lod_cache_status(dbip, dp->d_namep, &cacheStatus) ==
+	    BRLCAD_OK &&
+	cacheStatus.has_cache_key && cacheStatus.has_cached_payload &&
+	!cacheStatus.stale_cache_entry)
+	return 0;
+
     BObolMeshLodProvider *provider = new BObolMeshLodProvider;
     provider->service = service;
     if (!provider->setDatabase(dbip)) {
@@ -7052,6 +7066,8 @@ struct ged_obol_structural_proxy_node {
     SbMatrix localMatrix;
     point_t boundsMin;
     point_t boundsMax;
+    int orientedBoundsValid = 0;
+    point_t orientedBounds[8];
     int publishBounds;
     int metadataValid;
     struct BObolDrawMetadataRecord metadata;
@@ -7213,126 +7229,34 @@ ged_obol_collect_structural_proxy_children(
 }
 
 static std::shared_ptr<const Obol::PartGeometry>
-ged_obol_admit_geometry(Obol::PartGeometryBuilder geometry)
+ged_obol_bounds_proxy_geometry(const point_t boundsMin, const point_t boundsMax,
+    SbMatrix *geometryTransform, const point_t orientedBounds[8] = NULL)
 {
-    Obol::CadGeometryAdmission admission =
-	Obol::cadAdmitPartGeometry(std::move(geometry));
-    if (!admission) {
-	bu_log("libged: rejected structural proxy geometry: %s\n",
-	    Obol::cadGeometryErrorName(admission.validation.error));
+    if (!boundsMin || !boundsMax)
 	return std::shared_ptr<const Obol::PartGeometry>();
+    const SbBox3f bounds(
+	SbVec3f(static_cast<float>(boundsMin[X]),
+	    static_cast<float>(boundsMin[Y]),
+	    static_cast<float>(boundsMin[Z])),
+	SbVec3f(static_cast<float>(boundsMax[X]),
+	    static_cast<float>(boundsMax[Y]),
+	    static_cast<float>(boundsMax[Z])));
+    SbVec3f oriented[8];
+    const SbVec3f *orientedPointer = NULL;
+    if (orientedBounds) {
+	for (size_t corner = 0; corner < 8; ++corner) {
+	    oriented[corner].setValue(
+		static_cast<float>(orientedBounds[corner][X]),
+		static_cast<float>(orientedBounds[corner][Y]),
+		static_cast<float>(orientedBounds[corner][Z]));
+	}
+	orientedPointer = oriented;
     }
-    return admission.geometry.shared();
-}
-
-static std::shared_ptr<const Obol::PartGeometry>
-ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max,
-    SbMatrix *geometry_transform)
-{
-    if (!bounds_min || !bounds_max)
-	return std::shared_ptr<const Obol::PartGeometry>();
-
-    if (geometry_transform)
-	*geometry_transform = SbMatrix::identity();
-
-    /*
-     * Structural AABBs are instances of one twelve-edge primitive.  Retain
-     * one unit cube and keep its geometry-to-object transform distinct from
-     * the hierarchy placement.  The distinction is required when a box is
-     * upgraded in place to native object-local mesh data.
-     */
-    const double sx = bounds_max[X] - bounds_min[X];
-    const double sy = bounds_max[Y] - bounds_min[Y];
-    const double sz = bounds_max[Z] - bounds_min[Z];
-    if (geometry_transform && isfinite(sx) && isfinite(sy) && isfinite(sz) &&
-	sx > SMALL_FASTF && sy > SMALL_FASTF && sz > SMALL_FASTF) {
-	static const std::shared_ptr<const Obol::PartGeometry> unit_geometry = []() {
-	    Obol::PartGeometryBuilder geometry;
-	    Obol::WireRep wire;
-	    const SbVec3f corners[8] = {
-		SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 0.0f, 0.0f),
-		SbVec3f(0.0f, 1.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f),
-		SbVec3f(0.0f, 0.0f, 1.0f), SbVec3f(1.0f, 0.0f, 1.0f),
-		SbVec3f(0.0f, 1.0f, 1.0f), SbVec3f(1.0f, 1.0f, 1.0f)
-	    };
-	    static const unsigned int edges[12][2] = {
-		{0, 1}, {1, 3}, {3, 2}, {2, 0},
-		{4, 5}, {5, 7}, {7, 6}, {6, 4},
-		{0, 4}, {1, 5}, {2, 6}, {3, 7}
-	    };
-	    wire.segmentPoints.reserve(24);
-	    wire.segmentIds.reserve(12);
-	    for (unsigned int edge = 0; edge < 12; edge++) {
-		wire.segmentPoints.push_back(corners[edges[edge][0]]);
-		wire.segmentPoints.push_back(corners[edges[edge][1]]);
-		wire.segmentIds.push_back(edge + 1);
-	    }
-	    wire.bounds = SbBox3f(corners[0], corners[7]);
-	    geometry.wire = std::move(wire);
-	    geometry.subpixelProxyEligible = true;
-	    geometry.structuralProxy = true;
-	    return ged_obol_admit_geometry(std::move(geometry));
-	}();
-	geometry_transform->setScale(
-	    SbVec3f(static_cast<float>(sx), static_cast<float>(sy),
-		static_cast<float>(sz)));
-	SbMatrix translation;
-	translation.setTranslate(
-	    SbVec3f(static_cast<float>(bounds_min[X]),
-		static_cast<float>(bounds_min[Y]),
-		static_cast<float>(bounds_min[Z])));
-	geometry_transform->multRight(translation);
-	return unit_geometry;
-    }
-
-    Obol::PartGeometryBuilder geometry;
-    Obol::WireRep wire;
-    const SbVec3f corners[8] = {
-	SbVec3f(static_cast<float>(bounds_min[X]),
-		static_cast<float>(bounds_min[Y]),
-		static_cast<float>(bounds_min[Z])),
-	SbVec3f(static_cast<float>(bounds_max[X]),
-		static_cast<float>(bounds_min[Y]),
-		static_cast<float>(bounds_min[Z])),
-	SbVec3f(static_cast<float>(bounds_min[X]),
-		static_cast<float>(bounds_max[Y]),
-		static_cast<float>(bounds_min[Z])),
-	SbVec3f(static_cast<float>(bounds_max[X]),
-		static_cast<float>(bounds_max[Y]),
-		static_cast<float>(bounds_min[Z])),
-	SbVec3f(static_cast<float>(bounds_min[X]),
-		static_cast<float>(bounds_min[Y]),
-		static_cast<float>(bounds_max[Z])),
-	SbVec3f(static_cast<float>(bounds_max[X]),
-		static_cast<float>(bounds_min[Y]),
-		static_cast<float>(bounds_max[Z])),
-	SbVec3f(static_cast<float>(bounds_min[X]),
-		static_cast<float>(bounds_max[Y]),
-		static_cast<float>(bounds_max[Z])),
-	SbVec3f(static_cast<float>(bounds_max[X]),
-		static_cast<float>(bounds_max[Y]),
-		static_cast<float>(bounds_max[Z]))
-    };
-    static const unsigned int edges[12][2] = {
-	{0, 1}, {1, 3}, {3, 2}, {2, 0},
-	{4, 5}, {5, 7}, {7, 6}, {6, 4},
-	{0, 4}, {1, 5}, {2, 6}, {3, 7}
-    };
-    wire.segmentPoints.reserve(24);
-    wire.segmentIds.reserve(12);
-    for (unsigned int edge = 0; edge < 12; edge++) {
-	wire.segmentPoints.push_back(corners[edges[edge][0]]);
-	wire.segmentPoints.push_back(corners[edges[edge][1]]);
-	wire.segmentIds.push_back(edge + 1);
-    }
-    wire.bounds = SbBox3f(corners[0], corners[7]);
-    geometry.wire = std::move(wire);
-    /* Structural bounds are conservative LoD proxies, not authored wire.
-     * SoCADAssembly may render a depth-tested point when every AABB corner
-     * projects into one pixel, while retaining the box for bounds and picks. */
-    geometry.subpixelProxyEligible = true;
-    geometry.structuralProxy = true;
-    return ged_obol_admit_geometry(std::move(geometry));
+    SbMatrix localTransform;
+    SbMatrix &transform = geometryTransform ?
+	*geometryTransform : localTransform;
+    return bobol_cad_structural_bounds_geometry(
+	bounds, transform, orientedPointer);
 }
 
 /* A bounded structural proxy may represent an assembly rather than a region.
@@ -7417,8 +7341,9 @@ ged_obol_structural_proxy_occurrence(
     const ged_obol_structural_proxy_node &node)
 {
     BObolCompactOccurrence occurrence;
-    occurrence.geometry = ged_obol_aabb_proxy_geometry(node.boundsMin,
-	node.boundsMax, &occurrence.geometryTransform);
+    occurrence.geometry = ged_obol_bounds_proxy_geometry(node.boundsMin,
+	node.boundsMax, &occurrence.geometryTransform,
+	node.orientedBoundsValid ? node.orientedBounds : NULL);
     occurrence.localTransform = node.localMatrix;
     occurrence.lodBacked = TRUE;
     occurrence.occurrenceIndex = static_cast<uint32_t>(node.row);
@@ -7499,6 +7424,11 @@ ged_obol_structural_proxy_manifest_occurrence(
     node.localMatrix = ged_obol_sbmatrix_from_mat(cached.localMatrix);
     VMOVE(node.boundsMin, cached.boundsMin);
     VMOVE(node.boundsMax, cached.boundsMax);
+    node.orientedBoundsValid = cached.orientedBoundsValid;
+    if (node.orientedBoundsValid) {
+	for (size_t corner = 0; corner < 8; ++corner)
+	    VMOVE(node.orientedBounds[corner], cached.orientedBounds[corner]);
+    }
     node.publishBounds = 1;
     node.metadataValid = cached.metadataValid;
     if (node.metadataValid)
@@ -7580,7 +7510,7 @@ ged_obol_leaf_manifest_cache_identity(const SoBRLDatabaseSource *source,
 	return std::string();
     char variant[320] = {0};
     snprintf(variant, sizeof(variant),
-	"|leaf-v2|draw=%d|representation=%d|bot=%u|tess=%.17g,%.17g,%.17g",
+	"|leaf-v4|draw=%d|representation=%d|bot=%u|tess=%.17g,%.17g,%.17g",
 	source->drawMode.getValue(), source->representationMode.getValue(),
 	source->lodBotThreshold.getValue(),
 	static_cast<double>(source->tessellationAbsTol.getValue()),
@@ -7595,8 +7525,9 @@ struct ged_obol_warm_manifest_stream_context {
     std::string rootPath;
     std::string cacheName;
     bool exactOverviewQueued = false;
-    bool complete = false;
+    bool censusComplete = false;
     size_t pushed = 0;
+    size_t terminalPending = 0;
 };
 
 static bool
@@ -7683,7 +7614,7 @@ ged_obol_warm_manifest_begin(const BObolDrawManifest *manifest,
      * demand while the cache mapping is still streaming its first leaves. */
     context->stream->setCoverageBoundsComplete(true);
     context->exactOverviewQueued = true;
-    context->complete = manifest->occurrenceCount > 0;
+    context->censusComplete = manifest->occurrenceCount > 0;
     return 1;
 }
 
@@ -7702,11 +7633,19 @@ ged_obol_warm_manifest_occurrence(
 	ged_obol_structural_proxy_manifest_occurrence(
 	    *context->proxyContext, *cached);
     if (!occurrence.geometry) {
-	context->complete = false;
+	context->censusComplete = false;
 	return 1;
     }
-    if (!occurrence.sourceMeshRequestValid)
-	context->complete = false;
+    if (!occurrence.sourceMeshRequestValid) {
+	BObolCompactManifestOccurrence terminal;
+	if (!ged_obol_leaf_manifest_record_from_occurrence(terminal,
+		occurrence)) {
+	    context->censusComplete = false;
+	    return 1;
+	}
+	context->stream->recordWarmTerminalOccurrence(terminal);
+	context->terminalPending++;
+    }
     context->stream->push(std::move(occurrence));
     context->pushed++;
     return 1;
@@ -7721,7 +7660,8 @@ ged_obol_warm_manifest_occurrence(
  * This is a presentation seed.  The following database walk still produces
  * authoritative material and hierarchy semantics, but it can skip the
  * redundant full-BoT coverage import when every manifest occurrence carries a
- * source-mesh request.
+ * source-mesh request.  A complete mixed census instead regenerates only its
+ * terminal non-mesh subset on the detached database handle.
  */
 static int
 ged_obol_stream_cached_leaf_manifest(
@@ -7761,16 +7701,23 @@ ged_obol_stream_cached_leaf_manifest(
     const int streamStatus = bobol_draw_manifest_cache_stream(database,
 	manifestIdentity.c_str(), ged_obol_warm_manifest_begin,
 	ged_obol_warm_manifest_occurrence, &streamContext);
-    const bool complete = streamStatus == BRLCAD_OK &&
-	streamContext.complete && streamContext.exactOverviewQueued &&
+    const bool completeCensus = streamStatus == BRLCAD_OK &&
+	streamContext.censusComplete && streamContext.exactOverviewQueued &&
 	streamContext.pushed;
-    if (complete)
+    if (completeCensus)
+	stream->setWarmCensusComplete(true);
+    const bool completeRepresentation = completeCensus &&
+	streamContext.terminalPending == 0;
+    if (completeRepresentation)
 	stream->setWarmCoverageComplete(true);
-    ged_obol_timing_log(complete ?
-	"job: stream warm leaf manifest" :
+    ged_obol_timing_log(completeCensus ?
+	(streamContext.terminalPending ?
+	 "job: stream warm mixed manifest" :
+	 "job: stream warm leaf manifest") :
 	"job: stream partial leaf manifest",
 	started, static_cast<long>(streamContext.pushed));
-    return complete ? 2 : (streamContext.pushed ? 1 : 0);
+    return completeRepresentation ? 2 :
+	(completeCensus || streamContext.pushed ? 1 : 0);
 }
 
 static int
@@ -7845,6 +7792,10 @@ ged_obol_leaf_manifest_record_from_occurrence(
     record.sourceName = occurrence.summary.sourceName;
     record.localTransform = occurrence.localTransform;
     record.bounds = occurrence.summary.bounds;
+    if (occurrence.geometry && occurrence.geometry->aggregateProxyCorners) {
+	record.orientedBoundsValid = TRUE;
+	record.orientedBounds = *occurrence.geometry->aggregateProxyCorners;
+    }
     record.booleanOperation = occurrence.booleanOperation;
     record.occurrenceIndex = occurrence.occurrenceIndex;
     record.regionId = occurrence.summary.regionId;
@@ -7894,6 +7845,14 @@ ged_obol_leaf_manifest_occurrence(
     const SbVec3f bmax = record.bounds.getMax();
     VSET(cached->boundsMin, bmin[0], bmin[1], bmin[2]);
     VSET(cached->boundsMax, bmax[0], bmax[1], bmax[2]);
+    cached->orientedBoundsValid = record.orientedBoundsValid ? 1 : 0;
+    if (cached->orientedBoundsValid) {
+	for (size_t corner = 0; corner < 8; ++corner) {
+	    const SbVec3f &point = record.orientedBounds[corner];
+	    VSET(cached->orientedBounds[corner],
+		point[0], point[1], point[2]);
+	}
+    }
     cached->booleanOperation = record.booleanOperation ==
 	SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? DB_OP_SUBTRACT :
 	(record.booleanOperation == SoBRLDatabaseSource::BOOLEAN_INTERSECT ?
@@ -8006,7 +7965,7 @@ ged_obol_store_leaf_proxy_manifest(
     std::vector<BObolCompactManifestOccurrence> records;
     /* The scene owner normally drains the producer before detached
      * realization completes, and the detached source deliberately retains no
-     * duplicate 50k/150k registry.  Persist its geometry-free journal; keep
+     * duplicate 50k/150k registry.  Persist its mesh-buffer-free journal; keep
      * the source-index fallback for synchronous callers. */
     if (stream)
 	(void)stream->takeManifest(records);
@@ -8414,7 +8373,7 @@ ged_obol_publish_view_envelope_overview(struct ged *gedp,
      * into object-local mesh coordinates.  Keep its lines in world/source
      * coordinates so a cold, view-derived envelope cannot inherit the shared
      * unit-box transform used by leaf coverage. */
-    overview.geometry = ged_obol_aabb_proxy_geometry(bmin, bmax, NULL);
+    overview.geometry = ged_obol_bounds_proxy_geometry(bmin, bmax, NULL);
     overview.geometryTransform = SbMatrix::identity();
     if (!overview.geometry)
 	return 0;
@@ -9980,12 +9939,15 @@ ged_obol_publish_deferred_realization(
 	    if (ged_obol_timing_enabled()) {
 		const SbBool warm_manifest = have_realization_result ?
 		    realization_result.warmManifest : FALSE;
+		const SbBool warm_census = job->items[i]->stream &&
+		    job->items[i]->stream->hasWarmCensusComplete();
 		const SbBool manifest_stored = have_realization_result ?
 		    realization_result.manifestStored : FALSE;
 		bu_log("[obol-timing] deferred manifest: %s n=%d\n",
 		    warm_manifest ? "warm-reused" :
+		    (warm_census ? "warm-census-reused" :
 		    (manifest_stored ?
-			"worker-stored" : "worker-store-failed"),
+			"worker-stored" : "worker-store-failed")),
 		    adopted_count);
 	    }
 	    /* A per-view worker can realize a synchronized scene while the

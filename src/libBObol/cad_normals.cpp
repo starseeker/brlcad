@@ -10,7 +10,7 @@
 #include "cad_normals_private.h"
 
 #include <cstring>
-#include <map>
+#include <unordered_map>
 #include <utility>
 
 void
@@ -78,15 +78,30 @@ struct CornerNormalVertexKey {
     uint32_t normalY;
     uint32_t normalZ;
 
-    bool operator<(const CornerNormalVertexKey &other) const
+    bool operator==(const CornerNormalVertexKey &other) const
     {
-	if (position != other.position)
-	    return position < other.position;
-	if (normalX != other.normalX)
-	    return normalX < other.normalX;
-	if (normalY != other.normalY)
-	    return normalY < other.normalY;
-	return normalZ < other.normalZ;
+	return position == other.position && normalX == other.normalX &&
+	    normalY == other.normalY && normalZ == other.normalZ;
+    }
+};
+
+struct CornerNormalVertexKeyHash {
+    size_t operator()(const CornerNormalVertexKey &key) const
+    {
+	/* A fixed-width FNV-style word mix is inexpensive for the four authored
+	 * bit fields.  Map iteration order is never observed: output vertices
+	 * retain their deterministic first-corner encounter order. */
+	static constexpr uint64_t offsetBasis = 14695981039346656037ULL;
+	static constexpr uint64_t prime = 1099511628211ULL;
+	uint64_t hash = offsetBasis;
+	const uint32_t fields[] = {
+	    key.position, key.normalX, key.normalY, key.normalZ
+	};
+	for (const uint32_t field : fields) {
+	    hash ^= field;
+	    hash *= prime;
+	}
+	return static_cast<size_t>(hash);
     }
 };
 
@@ -104,7 +119,9 @@ canonicalize_corner_normal_mesh(Obol::TriMesh &mesh,
     if (cornerNormals.size() != mesh.indices.size())
 	return 0;
 
-    std::map<CornerNormalVertexKey, uint32_t> vertexByCorner;
+    std::unordered_map<CornerNormalVertexKey, uint32_t,
+	CornerNormalVertexKeyHash> vertexByCorner;
+    vertexByCorner.reserve(mesh.indices.size());
     std::vector<SbVec3f> positions;
     std::vector<SbVec3f> normals;
     std::vector<uint32_t> indices;

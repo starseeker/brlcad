@@ -21,6 +21,7 @@
 
 #include "lod_coordinator_private.h"
 #include "lod_presentation_private.h"
+#include "lod_visual_importance_private.h"
 
 #include "raytrace.h"
 
@@ -1686,6 +1687,7 @@ mesh_lod_projected_cross(const MeshLodProjectedPoint &origin,
  * scan in the view-planning path. */
 static void
 mesh_lod_projected_hull_metrics(MeshLodProjectedPoint *points, int count,
+	float viewportWidth, float viewportHeight,
 	float &area, float &perimeter)
 {
     area = 0.0f;
@@ -1736,11 +1738,74 @@ mesh_lod_projected_hull_metrics(MeshLodProjectedPoint *points, int count,
     if (hullCount < 2)
 	return;
 
+    /* Geometric error uses the complete projected object extent, but visual
+     * benefit is proportional to the portion which can affect this image.  A
+     * hull extending far beyond the viewport otherwise monopolizes the scene
+     * budget even when only a narrow sliver is visible.  Clip the constant-size
+     * projected box hull before measuring its affected screen span. */
+    static constexpr int maximumClippedHullPoints = 24;
+    MeshLodProjectedPoint clipped[maximumClippedHullPoints];
+    MeshLodProjectedPoint scratch[maximumClippedHullPoints];
+    for (int i = 0; i < hullCount; ++i)
+	clipped[i] = hull[i];
+    int clippedCount = hullCount;
+    const float bounds[4] = {
+	0.0f, std::max(1.0f, viewportWidth),
+	0.0f, std::max(1.0f, viewportHeight)
+    };
+    for (int edge = 0; edge < 4 && clippedCount > 0; ++edge) {
+	const bool vertical = edge < 2;
+	const bool lower = edge == 0 || edge == 2;
+	const float boundary = bounds[edge];
+	auto inside = [vertical, lower, boundary](
+		const MeshLodProjectedPoint &point) {
+	    const float coordinate = vertical ? point.x : point.y;
+	    return lower ? coordinate >= boundary : coordinate <= boundary;
+	};
+	auto intersection = [vertical, boundary](
+		const MeshLodProjectedPoint &start,
+		const MeshLodProjectedPoint &end) {
+	    const float startCoordinate = vertical ? start.x : start.y;
+	    const float endCoordinate = vertical ? end.x : end.y;
+	    const float denominator = endCoordinate - startCoordinate;
+	    const float t = std::fabs(denominator) > FLT_EPSILON ?
+		(boundary - startCoordinate) / denominator : 0.0f;
+	    MeshLodProjectedPoint result;
+	    result.x = start.x + t * (end.x - start.x);
+	    result.y = start.y + t * (end.y - start.y);
+	    if (vertical)
+		result.x = boundary;
+	    else
+		result.y = boundary;
+	    return result;
+	};
+	int outputCount = 0;
+	MeshLodProjectedPoint start = clipped[clippedCount - 1];
+	bool startInside = inside(start);
+	for (int i = 0; i < clippedCount; ++i) {
+	    const MeshLodProjectedPoint end = clipped[i];
+	    const bool endInside = inside(end);
+	    if (startInside != endInside &&
+		outputCount < maximumClippedHullPoints)
+		scratch[outputCount++] = intersection(start, end);
+	    if (endInside && outputCount < maximumClippedHullPoints)
+		scratch[outputCount++] = end;
+	    start = end;
+	    startInside = endInside;
+	}
+	clippedCount = outputCount;
+	for (int i = 0; i < clippedCount; ++i)
+	    clipped[i] = scratch[i];
+    }
+    if (clippedCount < 2)
+	return;
+
     double twiceArea = 0.0;
     double boundary = 0.0;
-    for (int i = 0; i < hullCount; ++i) {
-	const MeshLodProjectedPoint &a = hull[i];
-	const MeshLodProjectedPoint &b = hull[(i + 1) % hullCount];
+
+    for (int i = 0; i < clippedCount; ++i) {
+	const MeshLodProjectedPoint &a = clipped[i];
+	const MeshLodProjectedPoint &b = clipped[(i + 1) % clippedCount];
 	twiceArea += static_cast<double>(a.x) * b.y -
 	    static_cast<double>(a.y) * b.x;
 	boundary += std::hypot(static_cast<double>(b.x - a.x),
@@ -1854,7 +1919,9 @@ mesh_lod_apply_projected_demand(BObolLodRequest &request,
     float projectedArea = 0.0f;
     float projectedPerimeter = 0.0f;
     mesh_lod_projected_hull_metrics(projectedPoints, projectedPointCount,
-	projectedArea, projectedPerimeter);
+	static_cast<float>(std::max(1, view.width)),
+	static_cast<float>(std::max(1, view.height)), projectedArea,
+	projectedPerimeter);
     request.projectedPixelDiameter = diameter;
     request.projectedPixelArea = projectedArea;
     request.projectedPixelPerimeter = projectedPerimeter;
@@ -2946,13 +3013,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		candidate.index = static_cast<size_t>(candidateIndex);
 		candidate.projectedPixels =
 		    projected.projectedPixelDiameter;
-		candidate.visualFootprint = std::max(
-		    std::sqrt(std::max(0.0,
-			static_cast<double>(projected.projectedPixelArea))),
-		    std::max(
-			static_cast<double>(projected.projectedPixelPerimeter) *
-			    0.25,
-			static_cast<double>(candidate.projectedPixels) * 0.25));
+		candidate.visualFootprint = bobol_lod_visual_footprint(
+		    projected.projectedPixelArea,
+		    projected.projectedPixelPerimeter,
+		    candidate.projectedPixels);
 		candidate.emphasis = summary.selected &&
 		    soleSelectedOccurrence ? 2 :
 		    (summary.highlighted ? 1 : 0);
@@ -3024,10 +3088,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    active->progressiveMesh->projectedErrorAtCut(
 			active->activeCut, candidate.projectedPixels) :
 		    std::numeric_limits<double>::infinity());
+		const double protectedError = bobol_lod_protected_visual_error(
+		    bobol_lod_visual_emphasis(candidate.emphasis),
+		    candidate.visualFootprint, projected.targetPixelError);
 		candidate.qualityFloorViolation = (directProgressive || active) &&
-		    candidate.projectedErrorPixels >
-			BObolViewLodState::prominentMaximumProjectedError(
-			    projected.targetPixelError);
+		    candidate.projectedErrorPixels > protectedError;
 		candidate.refinementValuePerCost =
 		    static_cast<double>(candidate.projectedPixels);
 		/* Rank already-covered leaves by visible PoP error reduction per
@@ -3065,9 +3130,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			    static_cast<size_t>(nextCut)]) *
 			candidate.projectedPixels;
 		    const double visibleBenefit =
-			std::max(1.0, candidate.visualFootprint) *
-			std::max(0.0,
-			    candidate.projectedErrorPixels - nextError);
+			bobol_lod_marginal_visual_benefit(
+			    candidate.visualFootprint,
+			    candidate.projectedErrorPixels, nextError,
+			    projected.targetPixelError);
 		    candidate.refinementValuePerCost = visibleBenefit /
 			static_cast<double>(addedCost);
 		} else if (active && active->progressiveMesh &&
@@ -3099,8 +3165,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			active->progressiveMesh->projectedErrorAtCut(
 			    nextCut, candidate.projectedPixels);
 		    const double visibleBenefit =
-			std::max(1.0, candidate.visualFootprint) *
-			std::max(0.0, currentError - nextError);
+			bobol_lod_marginal_visual_benefit(
+			    candidate.visualFootprint, currentError, nextError,
+			    projected.targetPixelError);
 		    candidate.refinementValuePerCost =
 			visibleBenefit / static_cast<double>(addedCost);
 		}

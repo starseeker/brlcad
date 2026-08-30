@@ -8,33 +8,61 @@ EXTENDS TLC
 
 States == {"idle", "active", "idle-rescan", "active-rescan"}
 
-VARIABLES state, inventoryComplete
+VARIABLES state, inventoryComplete, coveragePending, pumpPending
 
-vars == <<state, inventoryComplete>>
+vars == <<state, inventoryComplete, coveragePending, pumpPending>>
 
 Active == state \in {"active", "active-rescan"}
 RescanPending == state \in {"idle-rescan", "active-rescan"}
 
 Init ==
-    /\ state = "idle-rescan"
-    /\ inventoryComplete = FALSE
+    /\ state \in {"idle", "idle-rescan"}
+    /\ inventoryComplete = (state = "idle")
+    /\ coveragePending = TRUE
+    /\ pumpPending = (state = "idle")
 
 PublishCompleteInventory ==
     /\ ~inventoryComplete
     /\ inventoryComplete' = TRUE
-    /\ UNCHANGED state
+    /\ UNCHANGED <<state, coveragePending, pumpPending>>
 
 ResumeRescan ==
     /\ state = "idle-rescan"
     /\ state' = "active-rescan"
-    /\ UNCHANGED inventoryComplete
+    /\ pumpPending' = FALSE
+    /\ UNCHANGED <<inventoryComplete, coveragePending>>
 
 FinishRescanPass ==
     /\ state = "active-rescan"
     /\ state' = IF inventoryComplete THEN "idle" ELSE "idle-rescan"
+    /\ coveragePending' = IF inventoryComplete THEN FALSE
+                           ELSE coveragePending
+    /\ pumpPending' = FALSE
     /\ UNCHANGED inventoryComplete
 
-Next == PublishCompleteInventory \/ ResumeRescan \/ FinishRescanPass
+\* A pose-continuity or stronger-owner pause may leave the semantic coverage
+\* obligation active after its cursor retires.  Once producer inventory is
+\* closed, the level-triggered owner must restore one bounded cursor without
+\* waiting for another camera or source event.
+ResumeCoverage ==
+    /\ state = "idle"
+    /\ inventoryComplete
+    /\ coveragePending
+    /\ pumpPending
+    /\ state' = "active"
+    /\ pumpPending' = FALSE
+    /\ UNCHANGED <<inventoryComplete, coveragePending>>
+
+FinishCoveragePass ==
+    /\ state = "active"
+    /\ coveragePending
+    /\ state' = "idle"
+    /\ coveragePending' = FALSE
+    /\ pumpPending' = FALSE
+    /\ UNCHANGED inventoryComplete
+
+Next == PublishCompleteInventory \/ ResumeRescan \/ FinishRescanPass \/
+        ResumeCoverage \/ FinishCoveragePass
 
 Spec ==
     /\ Init
@@ -42,8 +70,14 @@ Spec ==
     /\ WF_vars(PublishCompleteInventory)
     /\ WF_vars(ResumeRescan)
     /\ WF_vars(FinishRescanPass)
+    /\ WF_vars(ResumeCoverage)
+    /\ WF_vars(FinishCoveragePass)
 
-TypeOK == state \in States /\ inventoryComplete \in BOOLEAN
+TypeOK ==
+    /\ state \in States
+    /\ inventoryComplete \in BOOLEAN
+    /\ coveragePending \in BOOLEAN
+    /\ pumpPending \in BOOLEAN
 
 PausedPassPreservesDebt == state = "idle-rescan" => ~Active /\ RescanPending
 
@@ -51,5 +85,10 @@ ActiveRescanOwnsBothFacts ==
     state = "active-rescan" => Active /\ RescanPending
 
 EventuallyConsumesRescan == <> (state = "idle" /\ ~RescanPending)
+
+CoverageHasProducer ==
+    coveragePending => Active \/ RescanPending \/ pumpPending
+
+EventuallyCompletesCoverage == <> (~coveragePending /\ state = "idle")
 
 =======================================================================

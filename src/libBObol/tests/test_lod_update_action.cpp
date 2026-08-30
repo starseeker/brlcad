@@ -14613,11 +14613,47 @@ test_compact_full_detail_source_coordinates(void)
     if (record)
 	record->localToRoot.multVecMatrix(SbVec3f(0.0f, 0.0f, 0.0f), origin);
     if (!ret && (!record || !geometry || !geometry->shaded.has_value() ||
-	std::fabs(origin[0] - 10.0f) > 1.0e-5f ||
-	std::fabs(origin[1]) > 1.0e-5f ||
-	std::fabs(origin[2]) > 1.0e-5f)) {
+	    std::fabs(origin[0] - 10.0f) > 1.0e-5f ||
+	    std::fabs(origin[1]) > 1.0e-5f ||
+	    std::fabs(origin[2]) > 1.0e-5f)) {
 	printf("FAIL: compact full-detail payload retained proxy coordinates\n");
 	ret = 1;
+    }
+
+    if (!ret) {
+	/* A terminal compact mesh may retire its source LoD target after
+	 * publication.  Its geometry remains exact in later camera epochs even
+	 * though no submission pass exists solely to refresh projected metadata. */
+	std::vector<SoBRLDatabaseSource *> sources(1, source);
+	BObolRetainedAllocationInputs inputs;
+	inputs.sources = &sources;
+	inputs.viewState = &viewState;
+	inputs.sceneBudget = viewState.activeRenderCost();
+	inputs.maximumMarginalBudget = inputs.sceneBudget;
+	inputs.revisionStamp = test_admission_revision(999, 998);
+	inputs.pointProxyPixelThreshold = 1.0f;
+	BObolRetainedAllocationResult allocation;
+	std::shared_ptr<BObolRetainedAllocationTransaction> transaction;
+	constexpr double exactErrorTolerance = 1.0e-12;
+	const BObolRetainedAllocationStatus status =
+	    bobol_retained_allocation_advance(
+		transaction, inputs, 0, allocation);
+	if (status != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+	    allocation.selectedPresentationCost !=
+		viewState.activeRenderCost() ||
+	    allocation.pixelDemandPresentationCost !=
+		viewState.activeRenderCost() ||
+	    std::fabs(allocation.maximumNormalizedError) > exactErrorTolerance) {
+	    printf("FAIL: stale-camera exact compact payload was not certified as "
+		   "fixed presentation (status=%d selected=%zu demand=%zu "
+		   "active=%zu error=%g)\n",
+		   static_cast<int>(status),
+		   allocation.selectedPresentationCost,
+		   allocation.pixelDemandPresentationCost,
+		   viewState.activeRenderCost(),
+		   allocation.maximumNormalizedError);
+	    ret = 1;
+	}
     }
 
     source->unref();

@@ -18,6 +18,7 @@ set(
   display_endpoint.cpp
   display_session.cpp
   draw_cache.cpp
+  draw_cache_private.h
   edit_manipulator.cpp
   edit_preview.cpp
   evaluated_points.cpp
@@ -42,6 +43,7 @@ set(
   lod_quiet_successor_private.h
   lod_scene_evidence_private.h
   lod_terminal_quality_private.h
+  lod_visual_importance_private.h
   lod_view_policy_private.h
   lod_view_snapshot_private.h
   retained_allocation_private.cpp
@@ -193,6 +195,7 @@ cmakefiles(
   display_endpoint.cpp
   display_session.cpp
   draw_cache.cpp
+  draw_cache_private.h
   edit_manipulator.cpp
   edit_preview.cpp
   evaluated_points.cpp
@@ -220,6 +223,7 @@ cmakefiles(
   lod_quiet_successor_private.h
   lod_scene_evidence_private.h
   lod_terminal_quality_private.h
+  lod_visual_importance_private.h
   lod_view_policy_private.h
   lod_view_snapshot_private.h
   lod_realization.cpp

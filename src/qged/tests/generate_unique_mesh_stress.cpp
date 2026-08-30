@@ -152,6 +152,46 @@ mesh_profile_unit(size_t mesh, uint64_t salt)
 	static_cast<double>(0x1fffffffffffffULL);
 }
 
+bool
+mesh_has_internal_orientation(size_t mesh)
+{
+    /* Combination transforms exercise instancing but leave each asset-local
+     * AABB as tight as its OBB.  Internally orient a deterministic fifth of
+     * the assets so scale fixtures also exercise cached PCA proxies found in
+     * real databases whose authored local frames do not follow the part. */
+    static const size_t populationPeriod = 5;
+    static const size_t selectedResidue = 2;
+    return mesh % populationPeriod == selectedResidue;
+}
+
+void
+orient_mesh_vertices(size_t mesh, std::vector<fastf_t> &vertices)
+{
+    if (!mesh_has_internal_orientation(mesh))
+	return;
+
+    static const double minimumAngleDegrees = 17.0;
+    static const double angleRangeDegrees = 31.0;
+    mat_t rotation;
+    bn_mat_angles(rotation,
+	minimumAngleDegrees + angleRangeDegrees *
+	    mesh_profile_unit(mesh, 0xa4093822299f31d0ULL),
+	minimumAngleDegrees + angleRangeDegrees *
+	    mesh_profile_unit(mesh, 0x082efa98ec4e6c89ULL),
+	minimumAngleDegrees + angleRangeDegrees *
+	    mesh_profile_unit(mesh, 0x452821e638d01377ULL));
+    for (size_t offset = 0; offset + 2 < vertices.size(); offset += 3) {
+	point_t source;
+	point_t oriented;
+	VSET(source, vertices[offset], vertices[offset + 1],
+	    vertices[offset + 2]);
+	MAT4X3PNT(oriented, rotation, source);
+	vertices[offset] = oriented[X];
+	vertices[offset + 1] = oriented[Y];
+	vertices[offset + 2] = oriented[Z];
+    }
+}
+
 MeshShape
 mesh_shape(size_t mesh, MeshTopology topology, size_t physicalBucket)
 {
@@ -611,6 +651,7 @@ main(int argc, char **argv)
     size_t closedManifoldCount = 0;
     size_t openSurfaceCount = 0;
     size_t nonManifoldCount = 0;
+    size_t internallyOrientedCount = 0;
     std::array<size_t, static_cast<size_t>(MeshShape::Count)> shapeCounts = {};
     double minimumAspectRatio = 1.0;
     double minimumPhysicalSpan = std::numeric_limits<double>::max();
@@ -706,6 +747,9 @@ main(int argc, char **argv)
 	    else
 		++nonManifoldCount;
 	}
+	orient_mesh_vertices(mesh, vertices);
+	if (mesh_has_internal_orientation(mesh))
+	    ++internallyOrientedCount;
 	const size_t vertexCount = vertices.size() / 3;
 	const size_t faceCount = faces.size() / 3;
 
@@ -897,6 +941,7 @@ main(int argc, char **argv)
     if (meshCount >= 1000) {
 	bool profileOk = minimumAspectRatio < 0.05 &&
 	    maximumPhysicalSpan > minimumPhysicalSpan * 100.0;
+	profileOk = profileOk && internallyOrientedCount >= meshCount / 6;
 	const size_t minimumShapePopulation = meshCount / 200;
 	for (size_t shape = 0;
 	     shape < static_cast<size_t>(MeshShape::Count); ++shape) {
@@ -906,7 +951,7 @@ main(int argc, char **argv)
 	}
 	if (!profileOk) {
 	    std::fprintf(stderr,
-		"generated profile lacks required size/aspect/shape diversity\n");
+		"generated profile lacks required size/aspect/shape/orientation diversity\n");
 	    return 1;
 	}
     }
@@ -922,7 +967,8 @@ main(int argc, char **argv)
 	 shape < static_cast<size_t>(MeshShape::Count); ++shape)
 	std::printf(" %s=%zu", mesh_shape_name(static_cast<MeshShape>(shape)),
 	    shapeCounts[shape]);
-    std::printf(", aspect-min=%.4f, physical-span-ratio=%.1f\n",
+    std::printf(", internally-oriented=%zu, aspect-min=%.4f, "
+	"physical-span-ratio=%.1f\n", internallyOrientedCount,
 	minimumAspectRatio,
 	maximumPhysicalSpan / std::max(0.001, minimumPhysicalSpan));
     return 0;

@@ -12,7 +12,7 @@ performance evidence.  Historical measurements belong in
 
 | Area | Current evidence | Release status |
 |---|---|---|
-| focused CTest gate | The dependency-complete 2026-08-29 build passes all 27 `bobol_headless` tests in 5.83 seconds, including renderer, LoD service/coordinator/update, cache, compact ownership, retained allocation, edit manipulator, host, API/symbol, and GED draw-sync contracts.  The policy-disable regression additionally proves that off/on/off transitions preserve the current presentation, retire every automatic owner, keep explicit manual generations usable, and cannot be rearmed by a renderer-style change or capacity-labelled repaint.  The focused eight-test LoD/draw-sync/control-trace gate also passes.  The service test proves that a coalesced asset producer may complete against its retained latest demand; the view-state test proves that a superseded result cannot create a terminal occurrence failure, while genuinely stale source/cache data retains its failure semantics.  Independent draw scope is exercised with a real local endpoint across draw/erase/redraw/zap.  The linked Obol CAD suite includes its 131,072-occurrence classifier-reservation regression.  The focused interaction gate also covers semantic selection, GED edit, qtcad primitive edit/preview/selection/measurement, qged event replay, polygon/sketch replay, and qged primitive-edit replay in single and quad layouts. | broader graphical production suite still required |
+| focused CTest gate | The dependency-complete 2026-08-29 build passes all 28 `bobol_headless` tests in 10.54 seconds, including renderer, LoD service/coordinator/update, cache, compact ownership, retained allocation, edit manipulator, host, API/symbol, and GED draw-sync contracts.  The policy-disable regression additionally proves that off/on/off transitions preserve the current presentation, retire every automatic owner, keep explicit manual generations usable, and cannot be rearmed by a renderer-style change or capacity-labelled repaint.  The focused eight-test LoD/draw-sync/control-trace gate also passes.  The service test proves that a coalesced asset producer may complete against its retained latest demand; the view-state test proves that a superseded result cannot create a terminal occurrence failure, while genuinely stale source/cache data retains its failure semantics.  Independent draw scope is exercised with a real local endpoint across draw/erase/redraw/zap.  The linked Obol CAD suite includes its 131,072-occurrence classifier-reservation regression.  The focused interaction gate also covers semantic selection, GED edit, qtcad primitive edit/preview/selection/measurement, qged event replay, polygon/sketch replay, and qged primitive-edit replay in single and quad layouts. | broader graphical production suite still required |
 | qged retained interaction | The final 2026-08-29 binaries pass the focused 12-test qtcad/qged interaction gate and the dual-backend graphical matrices.  `/tmp/qged-selection-presentation-revision-20260829` passes System GL and OSMesa point add/remove, fractional-DPR rectangle placement/commit, selected styling, erase-selected, and redraw-selected.  `/tmp/qged-polygon-visual-presentation-revision-20260829` passes retained polygon styling, selection, movement, resize, zoom, cleanup, and cross-renderer placement; immediate selection/move deltas are 1,583/4,894 pixels on System GL and 1,586/4,921 on OSMesa.  `/tmp/qged-framebuffer-presentation-revision-20260829` passes in 37/37 seconds and combines progressive Generic Twin drawing, hierarchy selection, an ellipsoid edit manipulator, faceplate center marker, external raytrace framebuffer underlay/overlay/interlay, resize, rerender, and framebuffer disable.  Shared feature/polygon stores now publish content revisions independently of their coalesced controller render latch, so every actual shared mutation wakes the attached views while queries and equal publication remain passive. | focused cross-renderer selection/polygon/framebuffer/edit gate green; full control, physical-pointer, and model matrix remains |
 | qged measurement | `qged_measure_ui_replay` and its quad-layout counterpart drive the actual palette and canvas through 2D and exact-hit 3D distance/angle gestures, degree/radian readback, cancellation, resize, and tool replacement.  They pass on OSMesa in the ordinary CTest gate and on final System OpenGL and OSMesa binaries in single and quad layouts; retained images are in `/tmp/qged-measure-{system,osmesa}-{single,quad}-final-20260829`.  The replay asserts line-layer point counts and field values, requires visible framebuffer deltas for both measurement modes, and requires cancellation to reproduce the exact baseline (zero changed pixels).  It exposed and fixed three production defects: no endpoint binding for right-click cancel, palette deactivation that failed to detach its semantic filter, and measurement lines hidden by shaded geometry.  Line-layer depth behavior is now explicit, with measurement guides depth-independent and other diagnostic overlays depth-tested by default. | dual-backend, single/quad, 2D/3D measurement gate green; fractional-DPR physical-device repetition remains |
 | qged view settings | `qged_view_settings_ui_replay` and its quad-layout counterpart pass on final System OpenGL and OSMesa binaries in single and quad layouts; retained frames are in `/tmp/qged-view-settings-{system,osmesa}-{single,quad}-20260829`.  The replay drives the real settings palette, toolbar, GED commands, endpoint properties, retained Obol features, and framebuffer.  It proves bidirectional ADC/center-dot/grid/model-axes/scale/view-axes/parameter/FPS/framebuffer state, exact cutting-plane command readback, a visible shaded clipping delta, and pixel-exact restoration when clipping is disabled.  Stable replay IDs cover every exercised control.  System GL exposed a host race in which a fast renderer consumed the transient refresh latch before qged's post-command comparison; canvas checkpoints now compare libbv's monotonic frame revision as the durable semantic witness. | dual-backend, single/quad settings and cutting-plane control gate green; fractional-DPR and in-scene plane-affordance qualification remain |
@@ -48,9 +48,46 @@ System GL and OSMesa.  `/tmp/qged-obb-generic-20260829` additionally passes
 the final-binary Generic Twin shaded cold/warm matrix on both renderers: all
 four terminal frames have 709 direct full-detail meshes and zero AABB, OBB,
 generic proxy, progressive, or structural-fallback payloads.  This proves the
-OBB path does not defeat direct-to-mesh admission for a modest scene.  A
-heterogeneous pressure-driven graphical comparison and group-level multi-page
-aggregate ownership remain open qualification items.
+OBB path does not defeat direct-to-mesh admission for a modest scene.
+
+The heterogeneous 10k fixture at
+`/tmp/obol-current-cache-matrix/unique-obb-10k` mixes mesh size, topology,
+color, hierarchy, and baked non-axis-aligned local geometry.  A fresh two-pass
+prewarm generated all 10,000 PoP hierarchies (8,349 then 1,651) and retained
+1,960 materially tighter PCA boxes in both the asset and draw caches.  Under a
+deliberately constrained OSMesa policy, the cold-manifest and warm-manifest
+runs select the same 693 OBBs, 2,856 AABBs, 6,442 aggregate points, and nine
+mesh payloads, with 29,571 presented faces, no structural fallback, and a
+terminal ready state in 1.78/1.83 seconds.  The paired warm System-GL run
+instead admits 6,962 mesh payloads and represents only 3,587 subpixel
+occurrences as points; it terminates box-free with 920,108 presented faces.
+The GUI matrix now derives its smooth-zoom target from database bounds, so
+these images cannot pass by examining an empty fixed coordinate.  Repeated
+explicit prewarm also skips valid current cache entries instead of resubmitting
+the same prefix indefinitely.
+
+The independently versioned draw metadata was then migrated over the preserved
+current-format PoP caches instead of erasing 8.8 GiB of valid hierarchy data.
+The final System-GL warm interaction replays pass at both pressure scales:
+`/tmp/obol-current-cache-matrix/unique_mesh-50k-coverage-contract-warm`
+finishes ownerless and box-free in 29 seconds with 34,746 active mesh payloads,
+17,906 subpixel occurrences, and 4.59 million presented faces;
+`/tmp/obol-current-cache-matrix/unique_mesh-150k-coverage-contract-warm-v2`
+passes in 62 seconds with 13,937 resident mesh payloads, 97,087 aggregate
+points, 8.86 million presented faces, and zero structural boxes or control
+violations.  The 150k final framebuffer is already terminal and usable while
+the HUD correctly reports its remaining bounded resident-prefix compaction as
+background memory/cache work.  A policy-only revision no longer manufactures
+a redundant coverage census; an active current-view census is now explicit
+foreground inventory work and is reattached to a bounded cursor if a stronger
+owner had paused it.
+
+This clears persistence, cross-renderer semantics, and heterogeneous synthetic
+pressure as implementation risks.  Real wheels/blades/booms/hulls still need
+perceptual comparison against no-LoD ground truth.  Multi-page terminal proxy
+ownership and optional enrichment of a manifest sealed before first-cold PoP
+characterization also remain open; the active cold payload already carries
+the OBB, but the initial structural cue deliberately remains an AABB.
 The final Generic Twin resize/policy matrix at
 `/tmp/qged-production-generic-resize-policy-disable-final-20260829` passes
 auto and initially-off shaded cases on System GL in 6/10 seconds and OSMesa in

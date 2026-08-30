@@ -130,6 +130,10 @@ check_manifest(const BObolDrawManifest *manifest)
 	!fastf_equal(manifest->occurrences[0].localMatrix[MDX], 11.0) ||
 	!fastf_equal(manifest->occurrences[1].localMatrix[MDY], 13.0) ||
 	!fastf_equal(manifest->occurrences[0].boundsMin[X], -1.0) ||
+	!manifest->occurrences[0].orientedBoundsValid ||
+	!point_equal(manifest->occurrences[0].orientedBounds[7],
+	    manifest->occurrences[0].boundsMax) ||
+	manifest->occurrences[1].orientedBoundsValid ||
 	!fastf_equal(manifest->occurrences[1].boundsMax[Z], 9.0)) {
 	printf("FAIL: draw manifest data\n");
 	return 1;
@@ -177,6 +181,13 @@ make_manifest(BObolDrawManifest *manifest)
     MAT_DELTAS(leaf.localMatrix, 11.0, 12.0, 13.0);
     VSET(leaf.boundsMin, -1.0, -2.0, -3.0);
     VSET(leaf.boundsMax, 4.0, 5.0, 6.0);
+    leaf.orientedBoundsValid = 1;
+    for (size_t corner = 0; corner < 8; ++corner) {
+	VSET(leaf.orientedBounds[corner],
+	    (corner & 1u) ? leaf.boundsMax[X] : leaf.boundsMin[X],
+	    (corner & 2u) ? leaf.boundsMax[Y] : leaf.boundsMin[Y],
+	    (corner & 4u) ? leaf.boundsMax[Z] : leaf.boundsMin[Z]);
+    }
     leaf.booleanOperation = DB_OP_UNION;
     leaf.occurrenceIndex = 3;
     leaf.metadataValid = 1;
@@ -460,6 +471,7 @@ main(int argc, char *argv[])
     point_t aabbMax;
     point_t aabbPoints[2];
     point_t obbPoints[8];
+    point_t assetObbPoints[8];
 
     bu_setprogname(argv[0]);
     bobol_draw_manifest_init(&manifest);
@@ -484,6 +496,9 @@ main(int argc, char *argv[])
     for (size_t i = 0; i < 8; i++)
 	VSET(obbPoints[i], (fastf_t)i, (fastf_t)(i + 10),
 	     (fastf_t)(i + 20));
+    for (size_t i = 0; i < 8; i++)
+	VSET(assetObbPoints[i], (i & 1) ? 4.0 : 0.0,
+	    (i & 2) ? 2.0 : 0.0, (i & 4) ? 1.0 : 0.0);
 
     {
 	FILE *fp = bu_temp_file(dbpath, MAXPATHLEN);
@@ -551,6 +566,19 @@ main(int argc, char *argv[])
     VSET(lodAsset.assetBoundsMin, 0.0, 0.0, 0.0);
     VSET(lodAsset.assetBoundsMax, 4.0, 2.0, 1.0);
     MAT_DELTAS(lodAsset.assetToObject, 10.0, -3.0, 2.0);
+    lodAsset.assetOrientedBoundsValid = 1;
+    for (size_t i = 0; i < 8; ++i)
+	VMOVE(lodAsset.assetOrientedBounds[i], assetObbPoints[i]);
+    {
+	BObolDrawLodAssetRecord malformed = lodAsset;
+	malformed.assetOrientedBounds[7][X] += 0.5;
+	if (bobol_draw_lod_asset_cache_store(dbip, lod_copy_name,
+		&malformed) != BRLCAD_ERROR) {
+	    printf("FAIL: malformed LoD asset OBB accepted\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+    }
     if (bobol_draw_lod_asset_cache_store(dbip, lod_copy_name,
 	    &lodAsset) != BRLCAD_OK ||
 	bobol_draw_lod_asset_cache_get(dbip, lod_copy_name,
@@ -563,12 +591,33 @@ main(int argc, char *argv[])
 	    lodAsset.assetBoundsMin) ||
 	!point_equal(loadedLodAsset.assetBoundsMax,
 	    lodAsset.assetBoundsMax) ||
+	loadedLodAsset.assetOrientedBoundsValid != 1 ||
+	!point_equal(loadedLodAsset.assetOrientedBounds[0],
+	    assetObbPoints[0]) ||
+	!point_equal(loadedLodAsset.assetOrientedBounds[7],
+	    assetObbPoints[7]) ||
 	!fastf_equal(loadedLodAsset.assetToObject[MDX], 10.0) ||
 	!fastf_equal(loadedLodAsset.assetToObject[MDY], -3.0) ||
 	!fastf_equal(loadedLodAsset.assetToObject[MDZ], 2.0)) {
 	printf("FAIL: transformed LoD asset cache store/get\n");
 	ret = 1;
 	goto cleanup;
+    }
+
+    {
+	BObolDrawLodAssetRecord laterProof = lodAsset;
+	laterProof.assetOrientedBoundsValid = 0;
+	if (bobol_draw_lod_asset_cache_store(dbip, lod_copy_name,
+		&laterProof) != BRLCAD_OK ||
+	    bobol_draw_lod_asset_cache_get(dbip, lod_copy_name,
+		&loadedLodAsset) != BRLCAD_OK ||
+	    loadedLodAsset.assetOrientedBoundsValid != 1 ||
+	    !point_equal(loadedLodAsset.assetOrientedBounds[7],
+		assetObbPoints[7])) {
+	    printf("FAIL: later LoD proof discarded cached OBB\n");
+	    ret = 1;
+	    goto cleanup;
+	}
     }
 
     {
@@ -793,6 +842,9 @@ main(int argc, char *argv[])
     if (bobol_draw_lod_asset_cache_get(dbip, lod_copy_name,
 	    &loadedLodAsset) != BRLCAD_OK ||
 	bu_strcmp(loadedLodAsset.assetName, lod_asset_name) != 0 ||
+	loadedLodAsset.assetOrientedBoundsValid != 1 ||
+	!point_equal(loadedLodAsset.assetOrientedBounds[7],
+	    assetObbPoints[7]) ||
 	!fastf_equal(loadedLodAsset.assetToObject[MDX], 10.0)) {
 	printf("FAIL: transformed LoD asset cache persistent reopen data\n");
 	ret = 1;
@@ -931,6 +983,20 @@ main(int argc, char *argv[])
     if (bobol_draw_manifest_cache_store(dbip, path_top_name, &manifest) !=
 	BRLCAD_ERROR) {
 	printf("FAIL: draw manifest accepted invalid coverage bounds\n");
+	ret = 1;
+	goto cleanup;
+    }
+    bobol_draw_manifest_free(&manifest);
+
+    if (!make_manifest(&manifest)) {
+	printf("FAIL: draw manifest invalid-OBB setup\n");
+	ret = 1;
+	goto cleanup;
+    }
+    manifest.occurrences[0].orientedBounds[7][X] = INFINITY;
+    if (bobol_draw_manifest_cache_store(dbip, path_top_name, &manifest) !=
+	BRLCAD_ERROR) {
+	printf("FAIL: draw manifest accepted invalid oriented bounds\n");
 	ret = 1;
 	goto cleanup;
     }

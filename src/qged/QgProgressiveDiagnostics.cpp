@@ -674,6 +674,18 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<qint64>(convergence.maximumProtectedPresentationBudget));
     sample.insert(QStringLiteral("lod_scene_point_proxy_candidates"),
 	static_cast<qint64>(convergence.pointProxyCandidateCount));
+    sample.insert(QStringLiteral("lod_scene_selected_point_proxies"),
+	static_cast<qint64>(convergence.selectedPointProxyCount));
+    sample.insert(QStringLiteral("lod_scene_prominent_candidates"),
+	static_cast<qint64>(convergence.prominentCandidateCount));
+    sample.insert(
+	QStringLiteral("lod_scene_prominent_quality_floor_violations"),
+	static_cast<qint64>(
+	    convergence.prominentQualityFloorViolationCount));
+    sample.insert(QStringLiteral("lod_scene_maximum_normalized_visual_error"),
+	convergence.maximumNormalizedVisualError);
+    sample.insert(QStringLiteral("lod_scene_visual_importance_debt"),
+	convergence.visualImportanceDebt);
     sample.insert(QStringLiteral("lod_allocation_certificate_plan_serial"),
 	static_cast<qint64>(convergence.committedAllocationPlanSerial));
     sample.insert(QStringLiteral("lod_allocation_plan_serial"),
@@ -890,6 +902,10 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     std::vector<CadProgressivePayloadSample> cadProgressivePayloadSamples;
     qint64 activeCadSubpixelProxyPoints = 0;
     qint64 activeCadSubpixelProxyDrawPoints = 0;
+    qint64 activeCadAggregatePoints = 0;
+    qint64 activeCadAggregateAabbs = 0;
+    qint64 activeCadAggregateObbs = 0;
+    bool cadAggregateWorkExact = true;
     qint64 visibleStructuralFallbackBoxes = 0;
     qint64 cadOccurrenceTerminalFailures = 0;
     qint64 presentedCadFaces = 0;
@@ -911,6 +927,12 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     int cadRenderTierMax = -1;
     int cadIndirectStatusMin = INT_MAX;
     int cadIndirectStatusMax = -1;
+    const auto addReportedWork = [](qint64 current, uint64_t value) {
+	return value > static_cast<uint64_t>(
+	    std::numeric_limits<qint64>::max() - current) ?
+	    std::numeric_limits<qint64>::max() :
+	    current + static_cast<qint64>(value);
+    };
     std::unordered_set<const SoCADAssembly *> sampledCadPresentations;
     int activeProgressiveCadCutMin = viewLodState ?
 	viewLodState->minimumResidentCadProgressiveActiveCut() : -1;
@@ -983,15 +1005,29 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		    renderedWork.viewState.viewId == expectedViewId;
 		if (!currentRenderedWork) {
 		    presentedCadWorkExact = false;
+		    cadAggregateWorkExact = false;
 		    cadPreparedReplayAll = false;
 		    continue;
 		}
 		cadPreparedReplayAll = cadPreparedReplayAll &&
 		    presentation->lastRenderUsedPreparedReplay();
-		activeCadSubpixelProxyPoints += static_cast<qint64>(
+		activeCadSubpixelProxyPoints = addReportedWork(
+		    activeCadSubpixelProxyPoints,
 		    presentation->lastSubpixelProxyCount());
-		activeCadSubpixelProxyDrawPoints += static_cast<qint64>(
+		activeCadSubpixelProxyDrawPoints = addReportedWork(
+		    activeCadSubpixelProxyDrawPoints,
 		    presentation->lastSubpixelProxyDrawPointCount());
+		const Obol::CadAggregateProxyPresentationWork aggregateWork =
+		    presentation->lastAggregateProxyPresentationWork();
+		activeCadAggregatePoints = addReportedWork(
+		    activeCadAggregatePoints, aggregateWork.pointCount);
+		activeCadAggregateAabbs = addReportedWork(
+		    activeCadAggregateAabbs,
+		    aggregateWork.axisAlignedBoxCount);
+		activeCadAggregateObbs = addReportedWork(
+		    activeCadAggregateObbs, aggregateWork.orientedBoxCount);
+		cadAggregateWorkExact = cadAggregateWorkExact &&
+		    aggregateWork.exact;
 		cadPointProxyPixelThresholdMax = std::max(
 		    cadPointProxyPixelThresholdMax,
 		    static_cast<double>(renderedWork.viewState.
@@ -1000,21 +1036,15 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		    presentation->lastUncollapsedStructuralProxyCount());
 		presentedCadWorkExact =
 		    presentedCadWorkExact && renderedWork.exact;
-		const auto addRenderedWork = [](qint64 current, uint64_t value) {
-		    return value > static_cast<uint64_t>(
-			std::numeric_limits<qint64>::max() - current) ?
-			std::numeric_limits<qint64>::max() :
-			current + static_cast<qint64>(value);
-		};
-		presentedCadFaces = addRenderedWork(
+		presentedCadFaces = addReportedWork(
 		    presentedCadFaces, renderedWork.triangleCount);
-		presentedCadLines = addRenderedWork(
+		presentedCadLines = addReportedWork(
 		    presentedCadLines, renderedWork.lineCount);
-		presentedCadPositions = addRenderedWork(
+		presentedCadPositions = addReportedWork(
 		    presentedCadPositions, renderedWork.positionCount);
-		presentedCadNormals = addRenderedWork(
+		presentedCadNormals = addReportedWork(
 		    presentedCadNormals, renderedWork.normalCount);
-		presentedCadOccurrences = addRenderedWork(
+		presentedCadOccurrences = addReportedWork(
 		    presentedCadOccurrences, renderedWork.occurrenceCount);
 		const uint64_t gpuSampleSerial =
 		    presentation->gpuTimerSampleSerial();
@@ -1552,6 +1582,14 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	activeCadSubpixelProxyPoints);
     sample.insert(QStringLiteral("active_cad_subpixel_proxy_draw_points"),
 	activeCadSubpixelProxyDrawPoints);
+    sample.insert(QStringLiteral("active_cad_aggregate_points"),
+	activeCadAggregatePoints);
+    sample.insert(QStringLiteral("active_cad_aggregate_aabbs"),
+	activeCadAggregateAabbs);
+    sample.insert(QStringLiteral("active_cad_aggregate_obbs"),
+	activeCadAggregateObbs);
+    sample.insert(QStringLiteral("cad_aggregate_work_exact"),
+	cadPresentationCount > 0 && cadAggregateWorkExact);
     sample.insert(QStringLiteral("cad_point_proxy_pixel_threshold_max"),
 	cadPointProxyPixelThresholdMax);
     sample.insert(QStringLiteral("visible_structural_fallback_boxes"),

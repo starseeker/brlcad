@@ -10,6 +10,9 @@
 
 #include "BObol/BDrawCache.h"
 #include "BObol/BLodRealization.h"
+#include "BObol/BMeshLodCache.h"
+
+#include "draw_cache_private.h"
 
 #include "raytrace.h"
 
@@ -40,6 +43,9 @@
 #include <vector>
 
 #define BOBOL_DRAW_CACHE_FORMAT_FILE "draw_data.format"
+/* Mesh LoD and draw records share BOBOL_DRAW_CACHE_DIR.  Keep the directory
+ * format stable when only an independently versioned record changes; bumping
+ * this value erases valid multi-gigabyte PoP caches as well as draw metadata. */
 #define BOBOL_DRAW_CACHE_CURRENT_FORMAT 5
 #define BOBOL_DRAW_CACHE_AABB "bb"
 #define BOBOL_DRAW_CACHE_OBB "obb"
@@ -52,16 +58,13 @@
 #define BOBOL_DRAW_PROXY_DISK_MAGIC 0x4f425058u /* OBPX */
 #define BOBOL_DRAW_PROXY_DISK_VERSION 1u
 #define BOBOL_DRAW_LOD_ASSET_DISK_MAGIC 0x4f424c41u /* OBLA */
-/* Version 1 mappings may have been poisoned when an already-transformed warm
- * reference was reused as the representative of another PCA proof without
- * composing transforms.  The record layout is unchanged, but those proofs
- * are not trustworthy; invalidate them unconditionally. */
-#define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 2u
-#define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
-#define BOBOL_DRAW_MANIFEST_DISK_VERSION 11u
+/* Version 3 adds optional canonical-asset OBB metadata.  Version 1 mappings
+ * may also have been poisoned by an uncomposed reuse transform, so neither
+ * older version is suitable for migration. */
+#define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 3u
 #define BOBOL_DRAW_MANIFEST_CHUNKED_DISK_MAGIC 0x4f424d43u /* OBMC */
 #define BOBOL_DRAW_MANIFEST_CHUNK_DISK_MAGIC 0x4f424d4bu /* OBMK */
-#define BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION 2u
+#define BOBOL_DRAW_MANIFEST_CHUNK_DISK_VERSION 3u
 
 /* Keep cache serialization bounded even for assemblies with hundreds of
  * thousands of leaves.  A descriptor is published only after every chunk has
@@ -74,6 +77,7 @@ struct BObolDrawCacheContext {
     db_i *validationDb;
     uint64_t validationFingerprint;
     std::unordered_set<std::string> *lodAssetKeys;
+    std::unordered_set<std::string> *lodAssetOrientedBoundsKeys;
     bool lodAssetKeysLoaded;
 };
 
@@ -146,7 +150,7 @@ struct BObolDrawLodAssetDiskHeader {
     uint32_t assetDirectoryFlags;
     uint32_t assetDirectoryMajorType;
     uint32_t assetDirectoryMinorType;
-    uint32_t reserved;
+    uint32_t assetOrientedBoundsValid;
     uint64_t databaseFingerprint;
     uint64_t directoryAddress;
     uint64_t directoryLength;
@@ -159,21 +163,7 @@ struct BObolDrawLodAssetDiskHeader {
     point_t assetBoundsMin;
     point_t assetBoundsMax;
     mat_t assetToObject;
-};
-
-struct BObolDrawManifestDiskHeader {
-    uint32_t magic;
-    uint32_t version;
-    uint64_t databaseFingerprint;
-    uint64_t occurrenceCount;
-    uint64_t uniqueAssetCount;
-    uint64_t encodedSourceBytes;
-    uint64_t largestAssetBytes;
-    uint32_t rootPathLength;
-    uint32_t coverageBoundsValid;
-    point_t coverageBoundsMin;
-    point_t coverageBoundsMax;
-    uint32_t reserved;
+    point_t assetOrientedBounds[8];
 };
 
 struct BObolDrawManifestChunkedDiskHeader {
@@ -210,7 +200,7 @@ struct BObolDrawManifestOccurrenceDiskHeader {
     uint32_t metadataValid;
     uint32_t sourceMeshRequestValid;
     uint32_t meshAssetKind;
-    uint32_t reserved;
+    uint32_t orientedBoundsValid;
     uint64_t meshAssetContentHash;
     uint64_t sourceFaceCount;
     uint64_t sourcePointCount;
@@ -317,6 +307,7 @@ bobol_draw_cache_context_close(BObolDrawCacheContext *context)
     if (context->registryKey)
 	bu_free(context->registryKey, "bobol draw cache registry key");
     delete context->lodAssetKeys;
+    delete context->lodAssetOrientedBoundsKeys;
     BU_PUT(context, BObolDrawCacheContext);
 }
 
@@ -447,6 +438,26 @@ bobol_draw_cache_database_fingerprint(const db_i *dbip)
 static int bobol_draw_proxy_bbox_valid(const point_t bmin,
 	const point_t bmax);
 
+static int
+bobol_draw_lod_asset_oriented_bounds_valid(
+	const BObolDrawLodAssetRecord *record)
+{
+    if (!record || record->assetOrientedBoundsValid == 0)
+	return record ? 1 : 0;
+    if (record->assetOrientedBoundsValid != 1)
+	return 0;
+
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    VMOVE(hierarchy.quantization_min, record->assetBoundsMin);
+    VMOVE(hierarchy.quantization_max, record->assetBoundsMax);
+    hierarchy.oriented_bounds_valid = 1;
+    for (size_t corner = 0; corner < 8; ++corner)
+	VMOVE(hierarchy.oriented_bounds[corner],
+	    record->assetOrientedBounds[corner]);
+    return bobol_mesh_lod_oriented_bounds_validate(&hierarchy);
+}
+
 static size_t
 bobol_draw_proxy_disk_size(size_t name_length, size_t point_count)
 {
@@ -548,7 +559,8 @@ bobol_draw_lod_asset_disk_pack(std::vector<unsigned char> &buffer,
 	!record->pointCount ||
 	!bobol_draw_proxy_bbox_valid(record->boundsMin, record->boundsMax) ||
 	!bobol_draw_proxy_bbox_valid(record->assetBoundsMin,
-	    record->assetBoundsMax))
+	    record->assetBoundsMax) ||
+	!bobol_draw_lod_asset_oriented_bounds_valid(record))
 	return 0;
 
     const size_t nameLength = strlen(name);
@@ -617,6 +629,12 @@ bobol_draw_lod_asset_disk_pack(std::vector<unsigned char> &buffer,
     VMOVE(header.assetBoundsMin, record->assetBoundsMin);
     VMOVE(header.assetBoundsMax, record->assetBoundsMax);
     MAT_COPY(header.assetToObject, record->assetToObject);
+    header.assetOrientedBoundsValid =
+	static_cast<uint32_t>(record->assetOrientedBoundsValid);
+    if (record->assetOrientedBoundsValid)
+	for (size_t corner = 0; corner < 8; ++corner)
+	    VMOVE(header.assetOrientedBounds[corner],
+		record->assetOrientedBounds[corner]);
     memcpy(buffer.data(), &header, sizeof(header));
     memcpy(buffer.data() + sizeof(header), name, nameLength);
     memcpy(buffer.data() + sizeof(header) + nameLength, record->assetName,
@@ -653,6 +671,7 @@ bobol_draw_lod_asset_disk_unpack(const void *data, size_t dataSize,
 	header.directoryAddress != static_cast<uint64_t>(dp->d_addr) ||
 	header.directoryLength != static_cast<uint64_t>(dp->d_len) ||
 	!header.faceCount || !header.pointCount ||
+	header.assetOrientedBoundsValid > 1 ||
 	!bobol_draw_proxy_bbox_valid(header.boundsMin, header.boundsMax) ||
 	!bobol_draw_proxy_bbox_valid(header.assetBoundsMin,
 	    header.assetBoundsMax))
@@ -690,6 +709,14 @@ bobol_draw_lod_asset_disk_unpack(const void *data, size_t dataSize,
     VMOVE(record->assetBoundsMin, header.assetBoundsMin);
     VMOVE(record->assetBoundsMax, header.assetBoundsMax);
     MAT_COPY(record->assetToObject, header.assetToObject);
+    record->assetOrientedBoundsValid =
+	static_cast<int>(header.assetOrientedBoundsValid);
+    if (record->assetOrientedBoundsValid)
+	for (size_t corner = 0; corner < 8; ++corner)
+	    VMOVE(record->assetOrientedBounds[corner],
+		header.assetOrientedBounds[corner]);
+    if (!bobol_draw_lod_asset_oriented_bounds_valid(record))
+	return 0;
     return 1;
 }
 
@@ -994,6 +1021,8 @@ bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
 	context->validationDb = NULL;
 	context->validationFingerprint = 0;
 	context->lodAssetKeys = new std::unordered_set<std::string>;
+	context->lodAssetOrientedBoundsKeys =
+	    new std::unordered_set<std::string>;
 	context->lodAssetKeysLoaded = false;
 	if (!context->cache) {
 	    bobol_draw_cache_context_close(context);
@@ -1083,6 +1112,7 @@ bobol_draw_cache_clear_database(db_i *dbip)
 	opened = bu_cache_clear_all(handle.cache) == BRLCAD_OK ? 1 : 0;
 	if (opened && handle.context) {
 	    handle.context->lodAssetKeys->clear();
+	    handle.context->lodAssetOrientedBoundsKeys->clear();
 	    handle.context->lodAssetKeysLoaded = true;
 	}
     }
@@ -1120,6 +1150,7 @@ bobol_draw_manifest_cache_invalidate_database(db_i *dbip)
 	    opened = 0;
 	if (opened && handle.context) {
 	    handle.context->lodAssetKeys->clear();
+	    handle.context->lodAssetOrientedBoundsKeys->clear();
 	    handle.context->lodAssetKeysLoaded = true;
 	}
     }
@@ -1338,13 +1369,41 @@ bobol_draw_lod_asset_cache_store(db_i *dbip, const char *name,
 	db_i *validationDb = handle.context &&
 	    handle.context->validationDb ?
 	    handle.context->validationDb : dbip;
+	BObolDrawLodAssetRecord merged = *record;
+	/* A cold reuse proof may finish after the resident PoP worker has
+	 * published its OBB.  Preserve that optional field when the canonical
+	 * identity is unchanged.  The process-local positive hint prevents this
+	 * merge from adding a read transaction to ordinary 50k-scale stores. */
+	if (!merged.assetOrientedBoundsValid && handle.context &&
+	    handle.context->lodAssetOrientedBoundsKeys->find(key) !=
+		handle.context->lodAssetOrientedBoundsKeys->end()) {
+	    void *priorData = NULL;
+	    const size_t priorSize = bu_cache_get(
+		&priorData, key, handle.cache, NULL);
+	    BObolDrawLodAssetRecord prior;
+	    if (priorData && bobol_draw_lod_asset_disk_unpack(
+		    priorData, priorSize, dbip, validationDb, name, &prior) &&
+		BU_STR_EQUAL(prior.assetName, merged.assetName) &&
+		prior.assetOrientedBoundsValid == 1) {
+		merged.assetOrientedBoundsValid = 1;
+		for (size_t corner = 0; corner < 8; ++corner)
+		    VMOVE(merged.assetOrientedBounds[corner],
+			prior.assetOrientedBounds[corner]);
+	    }
+	    if (priorData)
+		bu_free(priorData, "prior draw LoD asset data");
+	}
 	if (bobol_draw_lod_asset_disk_pack(disk, dbip, validationDb, name,
-		record))
+		&merged))
 	    written = bu_cache_write(disk.data(), disk.size(), key,
 		handle.cache, NULL);
 	if (!disk.empty() && written == disk.size()) {
 	    bobol_draw_cache_load_lod_asset_keys(handle.context);
 	    handle.context->lodAssetKeys->insert(key);
+	    if (merged.assetOrientedBoundsValid)
+		handle.context->lodAssetOrientedBoundsKeys->insert(key);
+	    else
+		handle.context->lodAssetOrientedBoundsKeys->erase(key);
 	}
 	bobol_draw_cache_close(&handle);
     }
@@ -1394,6 +1453,8 @@ bobol_draw_lod_asset_cache_get(db_i *dbip, const char *name,
 		handle.context->validationDb : dbip;
 	    valid = bobol_draw_lod_asset_disk_unpack(data, dataSize,
 		dbip, validationDb, name, record);
+	    if (valid && record->assetOrientedBoundsValid == 1)
+		handle.context->lodAssetOrientedBoundsKeys->insert(key);
 	}
 	/* A key deleted by another process after our snapshot is safe to retire
 	 * locally.  An invalid nonempty payload remains indexed: database edits
@@ -1408,6 +1469,39 @@ bobol_draw_lod_asset_cache_get(db_i *dbip, const char *name,
     if (data)
 	bu_free(data, "bobol draw LoD asset data");
     return valid ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
+int
+bobol_draw_lod_asset_oriented_bounds_publish(
+    struct db_i *dbip, const char *name, uint64_t faceCount,
+    uint64_t pointCount, const point_t boundsMin, const point_t boundsMax,
+    const point_t orientedBounds[8])
+{
+    if (!dbip || !name || !name[0] || !faceCount || !pointCount ||
+	!orientedBounds || !bobol_draw_proxy_bbox_valid(boundsMin, boundsMax))
+	return BRLCAD_ERROR;
+
+    BObolDrawLodAssetRecord record;
+    if (bobol_draw_lod_asset_cache_get(dbip, name, &record) != BRLCAD_OK) {
+	bobol_draw_lod_asset_record_init(&record);
+	bu_strlcpy(record.assetName, name, sizeof(record.assetName));
+	record.faceCount = faceCount;
+	record.pointCount = pointCount;
+	VMOVE(record.boundsMin, boundsMin);
+	VMOVE(record.boundsMax, boundsMax);
+	VMOVE(record.assetBoundsMin, boundsMin);
+	VMOVE(record.assetBoundsMax, boundsMax);
+    } else if (!BU_STR_EQUAL(record.assetName, name)) {
+	/* orientedBounds describe name itself, not an alias target. */
+	return BRLCAD_ERROR;
+    } else if (record.assetOrientedBoundsValid == 1) {
+	return BRLCAD_OK;
+    }
+
+    record.assetOrientedBoundsValid = 1;
+    for (size_t corner = 0; corner < 8; ++corner)
+	VMOVE(record.assetOrientedBounds[corner], orientedBounds[corner]);
+    return bobol_draw_lod_asset_cache_store(dbip, name, &record);
 }
 
 extern "C" int
@@ -2268,6 +2362,26 @@ bobol_draw_manifest_profile_valid_or_empty(uint64_t occurrenceCount,
 	largestAssetBytes > 0 && largestAssetBytes <= encodedSourceBytes;
 }
 
+static int
+bobol_draw_manifest_oriented_bounds_valid(
+	const BObolDrawManifestOccurrence &occurrence)
+{
+    if (!occurrence.orientedBoundsValid)
+	return occurrence.orientedBoundsValid == 0;
+    if (occurrence.orientedBoundsValid != 1)
+	return 0;
+
+    BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    VMOVE(hierarchy.quantization_min, occurrence.boundsMin);
+    VMOVE(hierarchy.quantization_max, occurrence.boundsMax);
+    hierarchy.oriented_bounds_valid = 1;
+    for (size_t corner = 0; corner < 8; ++corner)
+	VMOVE(hierarchy.oriented_bounds[corner],
+	    occurrence.orientedBounds[corner]);
+    return bobol_mesh_lod_oriented_bounds_validate(&hierarchy);
+}
+
 extern "C" void
 bobol_draw_manifest_init(BObolDrawManifest *manifest)
 {
@@ -2360,6 +2474,7 @@ bobol_draw_manifest_cache_store_with_provider(db_i *dbip,
 	    occurrence.meshAssetTessellationAbsTol < 0.0 ||
 	    occurrence.meshAssetTessellationRelTol < 0.0 ||
 	    occurrence.meshAssetTessellationNormTol < 0.0 ||
+	    !bobol_draw_manifest_oriented_bounds_valid(occurrence) ||
 	    !bobol_draw_manifest_boolean_valid(occurrence.booleanOperation) ||
 	    !bobol_draw_manifest_matrix_valid(occurrence.localMatrix) ||
 	    !bobol_draw_proxy_bbox_valid(occurrence.boundsMin,
@@ -2412,7 +2527,7 @@ bobol_draw_manifest_cache_store_with_provider(db_i *dbip,
 	header.occurrenceCount = chunkOccurrenceCount;
 	memcpy(chunk.data(), &header, sizeof(header));
 	std::string chunkIdentity = std::string(rootPath) +
-	    "|manifest-chunk-v1|" + std::to_string(chunkIndex);
+	    "|manifest-chunk-v3|" + std::to_string(chunkIndex);
 	char chunkKey[BU_CACHE_KEY_MAXLEN] = {0};
 	bobol_draw_cache_key(chunkKey, chunkIdentity.c_str(),
 	    BOBOL_DRAW_CACHE_MANIFEST);
@@ -2442,11 +2557,22 @@ bobol_draw_manifest_cache_store_with_provider(db_i *dbip,
 	    strlen(occurrence.meshAssetPath) : 0;
 	const size_t meshAssetNameLength = occurrence.meshAssetName ?
 	    strlen(occurrence.meshAssetName) : 0;
-	const size_t occurrenceSize = sizeof(BObolDrawManifestOccurrenceDiskHeader) +
-	    pathLength + sourceNameLength + meshAssetPathLength +
-	    meshAssetNameLength;
-	if (occurrenceSize < pathLength ||
-	    chunk.size() > SIZE_MAX - occurrenceSize) {
+	const size_t orientedBoundsBytes = occurrence.orientedBoundsValid ?
+	    sizeof(occurrence.orientedBounds) : 0;
+	size_t occurrenceSize = sizeof(BObolDrawManifestOccurrenceDiskHeader);
+	const size_t fieldSizes[] = {
+	    pathLength, sourceNameLength, meshAssetPathLength,
+	    meshAssetNameLength, orientedBoundsBytes
+	};
+	bool sizeValid = true;
+	for (const size_t fieldSize : fieldSizes) {
+	    if (fieldSize > SIZE_MAX - occurrenceSize) {
+		sizeValid = false;
+		break;
+	    }
+	    occurrenceSize += fieldSize;
+	}
+	if (!sizeValid || chunk.size() > SIZE_MAX - occurrenceSize) {
 	    status = BRLCAD_ERROR;
 	    break;
 	}
@@ -2479,6 +2605,8 @@ bobol_draw_manifest_cache_store_with_provider(db_i *dbip,
 	    occurrence.sourceMeshRequestValid ? 1u : 0u;
 	occurrenceHeader.meshAssetKind =
 	    static_cast<uint32_t>(occurrence.meshAssetKind);
+	occurrenceHeader.orientedBoundsValid =
+	    occurrence.orientedBoundsValid ? 1u : 0u;
 	occurrenceHeader.meshAssetContentHash =
 	    occurrence.meshAssetContentHash;
 	occurrenceHeader.sourceFaceCount = occurrence.sourceFaceCount;
@@ -2523,8 +2651,12 @@ bobol_draw_manifest_cache_store_with_provider(db_i *dbip,
 	    memcpy(write, occurrence.meshAssetPath, meshAssetPathLength);
 	    write += meshAssetPathLength;
 	}
-	if (meshAssetNameLength)
+	if (meshAssetNameLength) {
 	    memcpy(write, occurrence.meshAssetName, meshAssetNameLength);
+	    write += meshAssetNameLength;
+	}
+	if (orientedBoundsBytes)
+	    memcpy(write, occurrence.orientedBounds, orientedBoundsBytes);
 	chunkOccurrenceCount++;
     }
 
@@ -2619,12 +2751,18 @@ bobol_draw_manifest_stream_chunk(const unsigned char *bytes, size_t dataSize,
 	const size_t sourceNameLength = header.sourceNameLength;
 	const size_t assetPathLength = header.meshAssetPathLength;
 	const size_t assetNameLength = header.meshAssetNameLength;
+	const size_t orientedBoundsBytes = header.orientedBoundsValid ?
+	    sizeof(point_t) * 8 : 0;
 	if (!pathLength || pathLength > dataSize - offset ||
 	    sourceNameLength > dataSize - offset - pathLength ||
 	    assetPathLength > dataSize - offset - pathLength - sourceNameLength ||
 	    assetNameLength > dataSize - offset - pathLength - sourceNameLength -
-		assetPathLength || header.metadataValid > 1 ||
+		assetPathLength ||
+	    orientedBoundsBytes > dataSize - offset - pathLength -
+		sourceNameLength - assetPathLength - assetNameLength ||
+	    header.metadataValid > 1 ||
 	    header.sourceMeshRequestValid > 1 ||
+	    header.orientedBoundsValid > 1 ||
 	    header.meshAssetKind > BOBOL_DRAW_CACHE_MESH_ASSET_BREP ||
 	    !std::isfinite(header.meshAssetTessellationAbsTol) ||
 	    !std::isfinite(header.meshAssetTessellationRelTol) ||
@@ -2678,6 +2816,7 @@ bobol_draw_manifest_stream_chunk(const unsigned char *bytes, size_t dataSize,
 	occurrence.occurrenceIndex = header.occurrenceIndex;
 	occurrence.metadataValid = header.metadataValid ? 1 : 0;
 	occurrence.sourceMeshRequestValid = header.sourceMeshRequestValid ? 1 : 0;
+	occurrence.orientedBoundsValid = header.orientedBoundsValid ? 1 : 0;
 	occurrence.meshAssetKind = static_cast<int>(header.meshAssetKind);
 	occurrence.meshAssetContentHash = header.meshAssetContentHash;
 	occurrence.sourceFaceCount = header.sourceFaceCount;
@@ -2693,6 +2832,13 @@ bobol_draw_manifest_stream_chunk(const unsigned char *bytes, size_t dataSize,
 	if (occurrence.sourceMeshRequestValid) {
 	    VMOVE(occurrence.meshAssetBoundsMin, header.meshAssetBoundsMin);
 	    VMOVE(occurrence.meshAssetBoundsMax, header.meshAssetBoundsMax);
+	}
+	if (occurrence.orientedBoundsValid) {
+	    memcpy(occurrence.orientedBounds, bytes + offset,
+		orientedBoundsBytes);
+	    offset += orientedBoundsBytes;
+	    if (!bobol_draw_manifest_oriented_bounds_valid(occurrence))
+		return BRLCAD_ERROR;
 	}
 	bobol_draw_metadata_from_disk(&occurrence.metadata, &header.metadata);
 	if (!visit(&occurrence, *visited, userData))
@@ -2729,7 +2875,7 @@ bobol_draw_manifest_cache_stream(db_i *dbip, const char *rootPath,
 	 * them.  PoP mesh data uses its own cache and remains fully concurrent. */
 	dataSize = bu_cache_get(&data, key, handle.cache, &transaction);
     }
-    if (!data || dataSize < sizeof(BObolDrawManifestDiskHeader)) {
+    if (!data || dataSize < sizeof(BObolDrawManifestChunkedDiskHeader)) {
 	if (getenv("BOBOL_DRAW_TIMING"))
 	    bu_log("[obol-timing] manifest cache record unavailable for %s "
 		"(bytes=%zu)\n", rootPath, dataSize);
@@ -2800,7 +2946,7 @@ bobol_draw_manifest_cache_stream(db_i *dbip, const char *rootPath,
 	    int valid = 1;
 	    for (uint32_t i = 0; valid && i < descriptor.chunkCount; i++) {
 		std::string chunkIdentity = std::string(rootPath) +
-		    "|manifest-chunk-v1|" + std::to_string(i);
+		    "|manifest-chunk-v3|" + std::to_string(i);
 		char chunkKey[BU_CACHE_KEY_MAXLEN] = {0};
 		bobol_draw_cache_key(chunkKey, chunkIdentity.c_str(),
 		    BOBOL_DRAW_CACHE_MANIFEST);
@@ -2837,227 +2983,10 @@ bobol_draw_manifest_cache_stream(db_i *dbip, const char *rootPath,
 	}
     }
 
-    BObolDrawManifestDiskHeader header;
-    memcpy(&header, data, sizeof(header));
-    const size_t rootLength = strlen(rootPath);
-    const uint64_t currentFingerprint =
-	bobol_draw_cache_database_fingerprint(dbip);
-    if (rootLength > UINT32_MAX ||
-	header.magic != BOBOL_DRAW_MANIFEST_DISK_MAGIC ||
-	header.version != BOBOL_DRAW_MANIFEST_DISK_VERSION ||
-	header.databaseFingerprint != currentFingerprint ||
-	header.rootPathLength != rootLength || !header.occurrenceCount ||
-	!bobol_draw_manifest_profile_valid_or_empty(
-	    header.occurrenceCount, header.uniqueAssetCount,
-	    header.encodedSourceBytes, header.largestAssetBytes) ||
-	header.coverageBoundsValid > 1 ||
-	(header.coverageBoundsValid &&
-	 (!bobol_draw_proxy_bbox_valid(header.coverageBoundsMin,
-	      header.coverageBoundsMax))) ||
-	header.occurrenceCount > SIZE_MAX / sizeof(BObolDrawManifestOccurrence)) {
-	if (getenv("BOBOL_DRAW_TIMING"))
-	    bu_log("[obol-timing] manifest cache header rejected for %s "
-		"(magic=%08x version=%u fingerprint=%llu/%llu "
-		"root_length=%u/%zu occurrences=%llu bytes=%zu)\n",
-		rootPath, header.magic, header.version,
-		(unsigned long long)header.databaseFingerprint,
-		(unsigned long long)currentFingerprint,
-		header.rootPathLength, rootLength,
-		(unsigned long long)header.occurrenceCount, dataSize);
-	bu_cache_get_done(&transaction);
-	bobol_draw_cache_close(&handle);
-	bu_semaphore_release(sem);
-	return BRLCAD_ERROR;
-    }
-
-    const unsigned char *bytes = static_cast<const unsigned char *>(data);
-    size_t offset = sizeof(header);
-    if (rootLength > dataSize - offset ||
-	memcmp(bytes + offset, rootPath, rootLength) != 0) {
-	if (getenv("BOBOL_DRAW_TIMING"))
-	    bu_log("[obol-timing] manifest cache root rejected for %s\n",
-		rootPath);
-	bu_cache_get_done(&transaction);
-	bobol_draw_cache_close(&handle);
-	bu_semaphore_release(sem);
-	return BRLCAD_ERROR;
-    }
-    offset += rootLength;
-
-    BObolDrawManifest description;
-    bobol_draw_manifest_init(&description);
-    description.coverageBoundsValid = header.coverageBoundsValid ? 1 : 0;
-    if (description.coverageBoundsValid) {
-	VMOVE(description.coverageBoundsMin, header.coverageBoundsMin);
-	VMOVE(description.coverageBoundsMax, header.coverageBoundsMax);
-    }
-    description.occurrenceCount = static_cast<size_t>(header.occurrenceCount);
-    description.uniqueAssetCount = header.uniqueAssetCount;
-    description.encodedSourceBytes = header.encodedSourceBytes;
-    description.largestAssetBytes = header.largestAssetBytes;
-    if (begin && !begin(&description, userData)) {
-	bu_cache_get_done(&transaction);
-	bobol_draw_cache_close(&handle);
-	bu_semaphore_release(sem);
-	return BRLCAD_ERROR;
-    }
-
-    /* A description-only caller has all of the fixed-size information it
-     * requested.  Do not validate or decode the variable occurrence body on
-     * the latency-sensitive owner thread.  Full streaming and cache_get still
-     * validate every occurrence below. */
-    if (!visit) {
-	bu_cache_get_done(&transaction);
-	bobol_draw_cache_close(&handle);
-	bu_semaphore_release(sem);
-	return BRLCAD_OK;
-    }
-
-    int valid = 1;
-    for (size_t i = 0; valid && i < description.occurrenceCount; i++) {
-	if (offset > dataSize ||
-	    dataSize - offset < sizeof(BObolDrawManifestOccurrenceDiskHeader)) {
-	    valid = 0;
-	    break;
-	}
-	BObolDrawManifestOccurrenceDiskHeader occurrenceHeader;
-	memcpy(&occurrenceHeader, bytes + offset, sizeof(occurrenceHeader));
-	offset += sizeof(occurrenceHeader);
-	const size_t pathLength = occurrenceHeader.pathLength;
-	const size_t sourceNameLength = occurrenceHeader.sourceNameLength;
-	const size_t meshAssetPathLength =
-	    occurrenceHeader.meshAssetPathLength;
-	const size_t meshAssetNameLength =
-	    occurrenceHeader.meshAssetNameLength;
-	if (!pathLength || pathLength > dataSize - offset ||
-	    sourceNameLength > dataSize - offset - pathLength ||
-	    meshAssetPathLength >
-		dataSize - offset - pathLength - sourceNameLength ||
-	    meshAssetNameLength >
-		dataSize - offset - pathLength - sourceNameLength -
-		    meshAssetPathLength ||
-	    occurrenceHeader.metadataValid > 1 ||
-	    occurrenceHeader.sourceMeshRequestValid > 1 ||
-	    occurrenceHeader.meshAssetKind >
-		BOBOL_DRAW_CACHE_MESH_ASSET_BREP ||
-	    !std::isfinite(occurrenceHeader.meshAssetTessellationAbsTol) ||
-	    !std::isfinite(occurrenceHeader.meshAssetTessellationRelTol) ||
-	    !std::isfinite(occurrenceHeader.meshAssetTessellationNormTol) ||
-	    occurrenceHeader.meshAssetTessellationAbsTol < 0.0 ||
-	    occurrenceHeader.meshAssetTessellationRelTol < 0.0 ||
-	    occurrenceHeader.meshAssetTessellationNormTol < 0.0 ||
-	    (occurrenceHeader.sourceMeshRequestValid &&
-	     (!meshAssetPathLength || !meshAssetNameLength ||
-	      !bobol_draw_manifest_matrix_valid(
-		  occurrenceHeader.meshAssetMatrix) ||
-	      !bobol_draw_proxy_bbox_valid(
-		  occurrenceHeader.meshAssetBoundsMin,
-		  occurrenceHeader.meshAssetBoundsMax))) ||
-	    !bobol_draw_manifest_boolean_valid(
-		occurrenceHeader.booleanOperation) ||
-	    !bobol_draw_manifest_matrix_valid(occurrenceHeader.localMatrix) ||
-	    !bobol_draw_proxy_bbox_valid(occurrenceHeader.boundsMin,
-		occurrenceHeader.boundsMax) ||
-	    memchr(bytes + offset, '\0', pathLength) ||
-	    memchr(bytes + offset + pathLength, '\0', sourceNameLength) ||
-	    (meshAssetPathLength &&
-	     memchr(bytes + offset + pathLength + sourceNameLength, '\0',
-		 meshAssetPathLength)) ||
-	    (meshAssetNameLength &&
-	     memchr(bytes + offset + pathLength + sourceNameLength +
-		 meshAssetPathLength, '\0', meshAssetNameLength)) ||
-	    (occurrenceHeader.metadataValid &&
-	     !bobol_draw_metadata_disk_valid(&occurrenceHeader.metadata,
-		 sizeof(occurrenceHeader.metadata)))) {
-	    if (getenv("BOBOL_DRAW_TIMING"))
-		bu_log("[obol-timing] manifest cache occurrence rejected for "
-		    "%s at %zu/%zu (offset=%zu bytes=%zu)\n", rootPath, i,
-		    description.occurrenceCount, offset, dataSize);
-	    valid = 0;
-	    break;
-	}
-	/* Reusable callback-local strings eliminate four persistent allocations
-	 * per occurrence.  The consumer must copy anything it retains, as stated
-	 * by the public streaming contract. */
-	std::string path(reinterpret_cast<const char *>(bytes + offset),
-	    pathLength);
-	offset += pathLength;
-	std::string sourceName(
-	    reinterpret_cast<const char *>(bytes + offset), sourceNameLength);
-	offset += sourceNameLength;
-	std::string meshAssetPath;
-	std::string meshAssetName;
-	if (meshAssetPathLength) {
-	    meshAssetPath.assign(
-		reinterpret_cast<const char *>(bytes + offset),
-		meshAssetPathLength);
-	    offset += meshAssetPathLength;
-	}
-	if (meshAssetNameLength) {
-	    meshAssetName.assign(
-		reinterpret_cast<const char *>(bytes + offset),
-		meshAssetNameLength);
-	    offset += meshAssetNameLength;
-	}
-	BObolDrawManifestOccurrence occurrence;
-	memset(&occurrence, 0, sizeof(occurrence));
-	occurrence.path = const_cast<char *>(path.c_str());
-	occurrence.sourceName = const_cast<char *>(sourceName.c_str());
-	occurrence.meshAssetPath = meshAssetPathLength ?
-	    const_cast<char *>(meshAssetPath.c_str()) : NULL;
-	occurrence.meshAssetName = meshAssetNameLength ?
-	    const_cast<char *>(meshAssetName.c_str()) : NULL;
-	occurrence.booleanOperation = occurrenceHeader.booleanOperation;
-	occurrence.occurrenceIndex = occurrenceHeader.occurrenceIndex;
-	occurrence.metadataValid = occurrenceHeader.metadataValid ? 1 : 0;
-	occurrence.sourceMeshRequestValid =
-	    occurrenceHeader.sourceMeshRequestValid ? 1 : 0;
-	occurrence.meshAssetKind =
-	    static_cast<int>(occurrenceHeader.meshAssetKind);
-	occurrence.meshAssetContentHash =
-	    occurrenceHeader.meshAssetContentHash;
-	occurrence.sourceFaceCount = occurrenceHeader.sourceFaceCount;
-	occurrence.sourcePointCount = occurrenceHeader.sourcePointCount;
-	occurrence.meshAssetTessellationAbsTol =
-	    occurrenceHeader.meshAssetTessellationAbsTol;
-	occurrence.meshAssetTessellationRelTol =
-	    occurrenceHeader.meshAssetTessellationRelTol;
-	occurrence.meshAssetTessellationNormTol =
-	    occurrenceHeader.meshAssetTessellationNormTol;
-	memcpy(occurrence.localMatrix, occurrenceHeader.localMatrix,
-	    sizeof(occurrence.localMatrix));
-	memcpy(occurrence.meshAssetMatrix,
-	    occurrenceHeader.meshAssetMatrix,
-	    sizeof(occurrence.meshAssetMatrix));
-	VMOVE(occurrence.boundsMin, occurrenceHeader.boundsMin);
-	VMOVE(occurrence.boundsMax, occurrenceHeader.boundsMax);
-	if (occurrence.sourceMeshRequestValid) {
-	    VMOVE(occurrence.meshAssetBoundsMin,
-		occurrenceHeader.meshAssetBoundsMin);
-	    VMOVE(occurrence.meshAssetBoundsMax,
-		occurrenceHeader.meshAssetBoundsMax);
-	}
-	bobol_draw_metadata_from_disk(&occurrence.metadata,
-	    &occurrenceHeader.metadata);
-	if (visit && !visit(&occurrence, i, userData)) {
-	    valid = 0;
-	    break;
-	}
-    }
-    if (!valid || offset != dataSize) {
-	if (getenv("BOBOL_DRAW_TIMING"))
-	    bu_log("[obol-timing] manifest cache body rejected for %s "
-		"(offset=%zu bytes=%zu)\n", rootPath, offset, dataSize);
-	bu_cache_get_done(&transaction);
-	bobol_draw_cache_close(&handle);
-	bu_semaphore_release(sem);
-	return BRLCAD_ERROR;
-    }
-
     bu_cache_get_done(&transaction);
     bobol_draw_cache_close(&handle);
     bu_semaphore_release(sem);
-    return BRLCAD_OK;
+    return BRLCAD_ERROR;
 }
 
 struct BObolDrawManifestDescriptionContext {

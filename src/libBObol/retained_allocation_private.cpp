@@ -13,6 +13,7 @@
 #include "BObol/BLodRealization.h"
 #include "BObol/BViewLod.h"
 #include "cad_assembly_private.h"
+#include "lod_visual_importance_private.h"
 
 #include <Obol/cad/CadProjectedProxy.h>
 
@@ -82,18 +83,20 @@ bobol_retained_marginal_lower_priority(
     const BObolRetainedMarginalUpgrade &a,
     const BObolRetainedMarginalUpgrade &b)
 {
+    if (a.visualEmphasis != b.visualEmphasis)
+	return a.visualEmphasis < b.visualEmphasis;
     if (a.qualityFloorViolation != b.qualityFloorViolation)
 	return !a.qualityFloorViolation;
     if (a.qualityFloorViolation &&
-	(a.weightedError < b.weightedError ||
-	 a.weightedError > b.weightedError))
-	return a.weightedError < b.weightedError;
-    if (a.valuePerCost < b.valuePerCost ||
-	a.valuePerCost > b.valuePerCost)
-	return a.valuePerCost < b.valuePerCost;
-    if (a.weightedError < b.weightedError ||
-	a.weightedError > b.weightedError)
-	return a.weightedError < b.weightedError;
+	(a.normalizedError < b.normalizedError ||
+	 a.normalizedError > b.normalizedError))
+	return a.normalizedError < b.normalizedError;
+    if (a.visualBenefitPerCost < b.visualBenefitPerCost ||
+	a.visualBenefitPerCost > b.visualBenefitPerCost)
+	return a.visualBenefitPerCost < b.visualBenefitPerCost;
+    if (a.normalizedError < b.normalizedError ||
+	a.normalizedError > b.normalizedError)
+	return a.normalizedError < b.normalizedError;
     return a.candidateIndex > b.candidateIndex;
 }
 
@@ -429,7 +432,7 @@ public:
 			}
 			if (this->marginalAccepted) {
 			    this->finalCursor = 0;
-			    this->realizedCeiling = 1.0;
+			    this->maximumNormalizedError = 1.0;
 			    this->maximumPresentedPixelError =
 				this->fixedMaximumPresentedPixelError;
 			    this->havePresentedErrorProof =
@@ -483,9 +486,10 @@ public:
 
     void result(BObolRetainedAllocationResult &result) const
     {
-	result.normalizedError = this->candidates.empty() ?
-	    std::numeric_limits<double>::infinity() :
-	    this->realizedCeiling;
+	result.maximumNormalizedError = this->candidates.empty() ?
+	    (this->havePresentedErrorProof ? 0.0 :
+		std::numeric_limits<double>::infinity()) :
+	    this->maximumNormalizedError;
 	result.maximumProjectedErrorPixels =
 	    this->havePresentedErrorProof ?
 	    this->maximumPresentedPixelError :
@@ -508,6 +512,29 @@ public:
 	result.maximumMarginalBudget = this->maximumMarginalBudget;
 	result.maximumProtectedBudget = this->maximumProtectedBudget;
 	result.pointProxyCandidateCount = this->pointProxyCandidateCount;
+	for (size_t i = 0; i < this->candidates.size(); ++i) {
+	    const Candidate &candidate = this->candidates[i];
+	    const bool pointProxy = i < this->finalPointProxies.size() &&
+		this->finalPointProxies[i];
+	    const int cut = i < this->finalCuts.size() ?
+		this->finalCuts[i] : candidate.minimumCut;
+	    const double error = pointProxy ? candidate.pointProxyError :
+		candidate.mesh.projectedErrorAtCut(cut,
+		    candidate.projectedPixelDiameter);
+	    const double normalizedError = bobol_lod_normalized_visual_error(
+		error, candidate.targetPixelError);
+	    if (pointProxy)
+		result.selectedPointProxyCount++;
+	    const bool prominent = bobol_lod_visual_prominent(
+		candidate.visualFootprint);
+	    if (prominent)
+		result.prominentCandidateCount++;
+	    if (prominent && error > candidate.protectedErrorPixels)
+		result.prominentQualityFloorViolationCount++;
+	    if (std::isfinite(normalizedError))
+		result.visualImportanceDebt += candidate.visualFootprint *
+		    std::max(0.0, normalizedError - 1.0);
+	}
 	result.allowProtectedFloor = this->allowProtectedFloor;
     }
 
@@ -584,14 +611,6 @@ private:
      * but does not make the all-or-nothing prominent-feature floor fail for
      * an entire vehicle view. */
     static constexpr size_t protectedFloorTrialDivisor = 4;
-    static constexpr double highlightedFeatureMaximumErrorPixels = 1.5;
-    /* At the recognizable-footprint threshold, visual error gets that many
-     * units of weight.  Above it the square-root curve stays sublinear, but
-     * no longer collapses a wheel, blade, tail, or large panel into the same
-     * priority band as a small fastener.  The cap still prevents one hull
-     * from monopolizing a finite static-frame allowance. */
-    static constexpr double visualImportanceAtProtectedFootprint = 24.0;
-    static constexpr double visualImportanceMaximum = 128.0;
     struct Candidate {
 	const BObolViewLodState::CadPayload *payload = NULL;
 	BObolLodProgressiveMeshSnapshot mesh;
@@ -600,9 +619,13 @@ private:
 	int drawMode = BOBOL_LOD_DRAW_UNKNOWN;
 	SbBool hasNormals = FALSE;
 	double projectedPixelDiameter = 0.0;
+	double visualFootprint = 0.0;
 	double pointProxyError = 0.0;
 	size_t pointProxyCost = 0;
-	double errorWeight = 1.0;
+	double targetPixelError = 1.0;
+	double protectedErrorPixels =
+	    std::numeric_limits<double>::infinity();
+	unsigned int visualEmphasis = BOBOL_LOD_VISUAL_ORDINARY;
 	int protectedCut = -1;
 	SoCADAssembly *assembly = NULL;
 	Obol::InstanceId instance;
@@ -664,11 +687,9 @@ private:
     {
 	if (!payload)
 	    return 0.0;
-	return std::max(std::sqrt(std::max(0.0,
-		static_cast<double>(payload->projectedPixelArea))),
-	    std::max(static_cast<double>(
-		    payload->projectedPixelPerimeter) * 0.25,
-		static_cast<double>(payload->projectedPixelDiameter) * 0.25));
+	return bobol_lod_visual_footprint(payload->projectedPixelArea,
+	    payload->projectedPixelPerimeter,
+	    payload->projectedPixelDiameter);
     }
 
     bool pointProxyEligible(const SourceSnapshot &source,
@@ -712,13 +733,24 @@ private:
     void discover(const SourceSnapshot &source,
 	const BObolViewLodState::CadPayload *payload)
     {
-	if (!payload || !payload->isValid() ||
-	    payload->viewRevision != this->viewRevision() ||
-	    payload->policyRevision != this->policyRevision())
+	if (!payload || !payload->isValid())
 	    return;
-	if (!payload->progressiveMesh ||
-	    !payload->progressiveMesh->isValid()) {
-	    this->havePresentedErrorProof = true;
+	const bool progressive = payload->progressiveMesh &&
+	    payload->progressiveMesh->isValid();
+	const bool exact = payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL;
+	/* Exact geometry is view independent and has no allocator-owned cut.  A
+	 * compact source may retire its LoD target inventory after publishing that
+	 * geometry, so no later submission pass exists merely to refresh projection
+	 * metadata.  Count it as fixed presentation for every view.  Requiring its
+	 * old view/policy stamp here manufactures an empty allocation certificate
+	 * for a populated exact scene and makes stable handoff retry forever.
+	 * Proxies still require current projection evidence because their visual
+	 * error is view dependent. */
+	if (!progressive &&
+	    (exact || (payload->viewRevision == this->viewRevision() &&
+		payload->policyRevision == this->policyRevision()))) {
+	    this->havePresentedErrorProof =
+		this->havePresentedErrorProof || exact;
 	    const size_t cost = bobol_lod_render_cost_units(
 		payload->counts, source.drawMode, 1);
 	    this->fixedCadPresentationCost = cost >
@@ -731,6 +763,9 @@ private:
 		this->pixelDemandPresentationCost + cost;
 	    return;
 	}
+	if (!progressive || payload->viewRevision != this->viewRevision() ||
+	    payload->policyRevision != this->policyRevision())
+	    return;
 	const BObolLodProgressiveMeshSnapshot mesh =
 	    payload->progressiveMesh->snapshot();
 	if (!mesh.isValid())
@@ -776,35 +811,15 @@ private:
 	    return;
 	}
 
-	const double emphasis = payload->visualEmphasis >= 2 ? 4.0 :
-	    (payload->visualEmphasis == 1 ? 2.0 : 1.0);
 	/* The source request has already sanitized this value.  In particular, a
 	 * fractional target is part of the view contract, not a hint that may be
 	 * rounded up to one pixel by the scene-wide allocator. */
 	const double target = std::max(
 	    static_cast<double>(std::numeric_limits<float>::min()),
 	    static_cast<double>(payload->targetPixelError));
-	const double area = std::max(0.0,
-	    static_cast<double>(payload->projectedPixelArea));
-	const double perimeter = std::max(0.0,
-	    static_cast<double>(payload->projectedPixelPerimeter));
 	const double diameter = std::max(0.0,
 	    static_cast<double>(payload->projectedPixelDiameter));
-	const double footprint = std::max(std::sqrt(area),
-	    std::max(perimeter * 0.25, diameter * 0.25));
-	/* Weight projected error by visible feature scale, not just object count.
-	 * A previous low cap compressed a conspicuous wheel or tail into almost
-	 * the same priority as surrounding hardware.  Square-root growth remains
-	 * deliberately sub-linear, while its reference point makes a recognizable
-	 * feature materially more valuable than a tiny one without letting a hull
-	 * consume the whole finite static-frame allowance. */
-	const double significance = std::max(1.0,
-	    std::min(visualImportanceMaximum,
-		std::sqrt(footprint *
-		    visualImportanceAtProtectedFootprint)));
-	double errorWeight = emphasis * significance / target;
-	if (!std::isfinite(errorWeight) || errorWeight <= 0.0)
-	    errorWeight = 1.0;
+	const double footprint = visualFootprint(payload);
 	Candidate candidate;
 	candidate.payload = payload;
 	candidate.mesh = mesh;
@@ -813,9 +828,12 @@ private:
 	candidate.drawMode = source.drawMode;
 	candidate.hasNormals = payload->hasNormals;
 	candidate.projectedPixelDiameter = diameter;
+	candidate.visualFootprint = footprint;
 	candidate.pointProxyError = std::max(footprint, diameter);
 	candidate.pointProxyCost = aggregateProxyCost(payload, source.drawMode);
-	candidate.errorWeight = errorWeight;
+	candidate.targetPixelError = target;
+	candidate.visualEmphasis = bobol_lod_visual_emphasis(
+	    payload->visualEmphasis);
 	candidate.assembly = source.assembly;
 	candidate.pointProxyEligible =
 	    this->pointProxyEligible(source, payload);
@@ -861,13 +879,9 @@ private:
 	 * producer request remains the lower bound, and a measured budget may still
 	 * reject this atomic candidate floor; the marginal queue then preserves the
 	 * same feature priority. */
-	const double protectedError = payload->visualEmphasis >= 2 ? target :
-	    (payload->visualEmphasis == 1 ?
-		std::max(target, highlightedFeatureMaximumErrorPixels) :
-		(footprint >= BObolViewLodState::ProminentFootprintPixels ?
-		    BObolViewLodState::prominentMaximumProjectedError(
-			target) :
-		    std::numeric_limits<double>::infinity()));
+	const double protectedError = bobol_lod_protected_visual_error(
+	    candidate.visualEmphasis, footprint, target);
+	candidate.protectedErrorPixels = protectedError;
 	candidate.protectedCut = minimumCut;
 	if (std::isfinite(protectedError) && diameter > 0.0) {
 	    const int protectedCut = candidate.mesh.cutForScreenError(
@@ -916,7 +930,7 @@ private:
 	this->fixedMaximumPresentedPixelError =
 	    this->maximumPresentedPixelError;
 	this->fixedPresentedErrorProof = this->havePresentedErrorProof;
-	this->realizedCeiling = 1.0;
+	this->maximumNormalizedError = 1.0;
     }
 
     void observeError(const Candidate &candidate, int cut)
@@ -928,10 +942,11 @@ private:
 	    this->maximumPresentedPixelError = std::max(
 		this->maximumPresentedPixelError, error);
 	}
-	const double weightedError = error * candidate.errorWeight;
-	if (std::isfinite(weightedError))
-	    this->realizedCeiling = std::max(
-		this->realizedCeiling, weightedError);
+	const double normalizedError = bobol_lod_normalized_visual_error(
+	    error, candidate.targetPixelError);
+	if (std::isfinite(normalizedError))
+	    this->maximumNormalizedError = std::max(
+		this->maximumNormalizedError, normalizedError);
     }
 
     void observePointProxyError(const Candidate &candidate)
@@ -942,10 +957,11 @@ private:
 	    this->maximumPresentedPixelError = std::max(
 		this->maximumPresentedPixelError, error);
 	}
-	const double weightedError = error * candidate.errorWeight;
-	if (std::isfinite(weightedError))
-	    this->realizedCeiling = std::max(
-		this->realizedCeiling, weightedError);
+	const double normalizedError = bobol_lod_normalized_visual_error(
+	    error, candidate.targetPixelError);
+	if (std::isfinite(normalizedError))
+	    this->maximumNormalizedError = std::max(
+		this->maximumNormalizedError, normalizedError);
     }
 
     void protectPointProxyCandidate(const Candidate &candidate)
@@ -970,13 +986,15 @@ private:
 	    upgrade.nextCost = nextCost;
 	    upgrade.addedCost = nextCost > this->finalCosts[candidateIndex] ?
 		nextCost - this->finalCosts[candidateIndex] : 0;
-	    const double weightedError =
-		candidate.pointProxyError * candidate.errorWeight;
-	    upgrade.weightedError = std::isfinite(weightedError) ?
-		weightedError : std::numeric_limits<double>::max();
-	    const double benefit = std::max(0.0,
-		(candidate.pointProxyError - nextError) * candidate.errorWeight);
-	    upgrade.valuePerCost = upgrade.addedCost > 0 ?
+	    upgrade.visualEmphasis = candidate.visualEmphasis;
+	    upgrade.qualityFloorViolation =
+		candidate.pointProxyError > candidate.protectedErrorPixels;
+	    upgrade.normalizedError = bobol_lod_normalized_visual_error(
+		candidate.pointProxyError, candidate.targetPixelError);
+	    const double benefit = bobol_lod_marginal_visual_benefit(
+		candidate.visualFootprint, candidate.pointProxyError, nextError,
+		candidate.targetPixelError);
+	    upgrade.visualBenefitPerCost = upgrade.addedCost > 0 ?
 		benefit / static_cast<double>(upgrade.addedCost) : benefit + 1.0;
 	    this->upgrades.push(upgrade);
 	    return;
@@ -1003,15 +1021,15 @@ private:
 	    upgrade.nextCost = nextCost;
 	    upgrade.addedCost = nextCost > this->finalCosts[candidateIndex] ?
 		nextCost - this->finalCosts[candidateIndex] : 0;
+	    upgrade.visualEmphasis = candidate.visualEmphasis;
 	    upgrade.qualityFloorViolation =
-		candidate.protectedCut > currentCut;
-	    const double weightedError =
-		currentError * candidate.errorWeight;
-	    upgrade.weightedError = std::isfinite(weightedError) ?
-		weightedError : std::numeric_limits<double>::max();
-	    const double benefit = std::max(0.0,
-		(currentError - nextError) * candidate.errorWeight);
-	    upgrade.valuePerCost = upgrade.addedCost > 0 ?
+		currentError > candidate.protectedErrorPixels;
+	    upgrade.normalizedError = bobol_lod_normalized_visual_error(
+		currentError, candidate.targetPixelError);
+	    const double benefit = bobol_lod_marginal_visual_benefit(
+		candidate.visualFootprint, currentError, nextError,
+		candidate.targetPixelError);
+	    upgrade.visualBenefitPerCost = upgrade.addedCost > 0 ?
 		benefit / static_cast<double>(upgrade.addedCost) :
 		benefit + 1.0;
 	    this->upgrades.push(upgrade);
@@ -1093,7 +1111,7 @@ private:
     size_t finalCost = 0;
     double fixedMaximumPresentedPixelError = 0.0;
     bool fixedPresentedErrorProof = false;
-    double realizedCeiling = 1.0;
+    double maximumNormalizedError = 1.0;
     bool marginalAccepted = false;
     std::priority_queue<BObolRetainedMarginalUpgrade,
 	std::vector<BObolRetainedMarginalUpgrade>, MarginalUpgradeLess> upgrades;

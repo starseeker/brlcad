@@ -716,6 +716,19 @@ BObolViewController::advanceProgressiveWork(
     const bool automaticLod =
 	this->automaticLodControlEnabled() != FALSE && this->d->lodService;
     this->d->lodCoveragePolicy.setRequired(automaticLod);
+    /* An exact census may be paused while pose-only input reuses the retained
+     * framebuffer, or while a stronger presentation owner completes.  Once
+     * the view is quiet and the database producer has closed, an active census
+     * must own a bounded submission cursor.  Re-arm that level-triggered
+     * producer rather than relying on another camera or source edge. */
+    if (automaticLod && this->d->lodCoveragePolicy.shouldResumeSubmission(
+	    this->d->lodInteractionSession.active() != FALSE,
+	    this->d->lodSubmissionPass.active(), providerPendingCount > 0)) {
+	this->d->rewindLodSubmissionCursor();
+	this->d->lodCoveragePolicy.clearPassCounters();
+	this->d->lodSubmissionPass.beginFresh();
+	this->markProgressiveWorkPending();
+    }
     if (automaticLod) {
 	const uint64_t admissionRevision =
 	    this->d->lodService->residentMeshAdmissionRevision();

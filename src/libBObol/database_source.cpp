@@ -56,6 +56,7 @@
 #include "rt/db4.h"
 #include "rt/nongeom.h"
 #include "rt/db_fullpath.h"
+#include "rt/display_bounds.h"
 #include "rt/eval_wireframe.h"
 #include "rt/primitives/annot.h"
 #include "rt/tree.h"
@@ -3629,11 +3630,10 @@ local_bounds_from_internal(struct rt_db_internal *intern, SbBox3f &bounds)
     return bounds.isEmpty() ? FALSE : TRUE;
 }
 
-/* Obtain the representation-independent librt bound for one database path.
- * This is deliberately called by detached realization workers after their
- * ordinary geometry walk, never by the GUI's coarse-first publication path.
- * Display unions cannot certify this fact: CSG construction geometry may
- * include subtractive tools, sampled plots, or tessellation overshoot. */
+/* Obtain a representation-independent, Boolean-aware bound for one database
+ * path without constructing raytracing regions or acceleration structures.
+ * This remains detached-worker work: primitive fallback plotting and nested
+ * combination imports do not belong on the GUI publication path. */
 static SbBool
 source_bounds_from_database_path(SoBRLDatabaseSource *source,
 	const char *path, SbBox3f &bounds)
@@ -3647,7 +3647,7 @@ source_bounds_from_database_path(SoBRLDatabaseSource *source,
     point_t bmax;
     struct bu_vls messages = BU_VLS_INIT_ZERO;
     const char *paths[1] = {path};
-    const int ret = rt_obj_bounds(&messages, dbip, 1, paths, 0, bmin, bmax);
+    const int ret = rt_display_bounds(&messages, dbip, 1, paths, bmin, bmax);
     bu_vls_free(&messages);
     if (ret != BRLCAD_OK || !point_bbox_valid(bmin, bmax))
 	return FALSE;
@@ -14221,40 +14221,38 @@ compact_coverage_broad_key(const compact_coverage_asset &asset)
     return std::string(key);
 }
 
-static std::shared_ptr<const Obol::PartGeometry>
-compact_coverage_aabb_geometry(const SbBox3f &bounds,
-	SbMatrix &geometryTransform)
+static bool
+compact_coverage_lod_asset_oriented_bounds(
+	struct db_i *dbip, const BObolDrawLodAssetRecord &mapping,
+	std::array<SbVec3f, 8> &objectBounds)
 {
-    geometryTransform = SbMatrix::identity();
-    if (bounds.isEmpty())
-	return std::shared_ptr<const Obol::PartGeometry>();
-    const SbVec3f minimum = bounds.getMin();
-    const SbVec3f maximum = bounds.getMax();
-    const SbVec3f extent = maximum - minimum;
-    if (extent[0] > SMALL_FASTF && extent[1] > SMALL_FASTF &&
-	extent[2] > SMALL_FASTF) {
-	static const std::shared_ptr<const Obol::PartGeometry> unitAabb = []() {
-	    Obol::PartGeometryBuilder geometry;
-	    const SbBox3f unitBounds(SbVec3f(0.0f, 0.0f, 0.0f),
-		SbVec3f(1.0f, 1.0f, 1.0f));
-	    if (!cad_wire_part_geometry_from_aabb(unitBounds, geometry))
-		return std::shared_ptr<const Obol::PartGeometry>();
-	    geometry.subpixelProxyEligible = true;
-	    geometry.structuralProxy = true;
-	    return bobol_cad_build_geometry(
-		std::move(geometry), "unit structural bounds");
-	}();
-	geometryTransform.setScale(extent);
-	SbMatrix translation;
-	translation.setTranslate(minimum);
-	geometryTransform.multRight(translation);
-	return unitAabb;
+    if (!dbip || !mapping.assetName[0])
+	return false;
+
+    const BObolDrawLodAssetRecord *metadata = &mapping;
+    BObolDrawLodAssetRecord canonical;
+    if (mapping.assetOrientedBoundsValid != 1) {
+	if (bobol_draw_lod_asset_cache_get(dbip, mapping.assetName,
+		&canonical) != BRLCAD_OK ||
+	    canonical.assetOrientedBoundsValid != 1 ||
+	    !BU_STR_EQUAL(canonical.assetName, mapping.assetName))
+	    return false;
+	metadata = &canonical;
     }
-    Obol::PartGeometryBuilder geometry;
-    if (!cad_wire_part_geometry_from_aabb(bounds, geometry))
-	return std::shared_ptr<const Obol::PartGeometry>();
-    return bobol_cad_build_geometry(
-	std::move(geometry), "structural bounds");
+
+    const SbMatrix assetToObject = mat_to_sbmatrix(mapping.assetToObject);
+    for (size_t corner = 0; corner < objectBounds.size(); ++corner) {
+	const point_t &point = metadata->assetOrientedBounds[corner];
+	const SbVec3f source(
+	    static_cast<float>(point[X]), static_cast<float>(point[Y]),
+	    static_cast<float>(point[Z]));
+	assetToObject.multVecMatrix(source, objectBounds[corner]);
+	if (!std::isfinite(objectBounds[corner][0]) ||
+	    !std::isfinite(objectBounds[corner][1]) ||
+	    !std::isfinite(objectBounds[corner][2]))
+	    return false;
+    }
+    return true;
 }
 
 static std::shared_ptr<const Obol::PartGeometry>
@@ -14351,6 +14349,93 @@ compact_coverage_leaf_occurrence(const compact_coverage_asset &asset,
     return occurrence;
 }
 
+/* Rehydrate only the terminal subset of a complete warm manifest.  Lazy mesh
+ * records are already sufficient for view-driven LoD and must not be scanned
+ * again.  Analytic/BREP records retain their semantic occurrence state in the
+ * manifest, so this seed recreates the ordinary detail-work inputs without a
+ * second hierarchy walk. */
+static bool
+compact_coverage_seed_warm_terminal_work(
+	SoBRLDatabaseSource *source,
+	BObolCompactOccurrenceStream *stream,
+	compact_coverage_collect &collect,
+	uint32_t revision)
+{
+    if (!source || !stream || !source->getDatabase() ||
+	!stream->hasWarmCensusComplete() ||
+	stream->hasWarmCoverageComplete())
+	return false;
+
+    std::vector<BObolCompactManifestOccurrence> records;
+    if (!stream->takeWarmTerminalOccurrences(records) || records.empty())
+	return false;
+
+    std::unordered_map<struct directory *, compact_coverage_asset *>
+	assetsByDirectory;
+    assetsByDirectory.reserve(records.size());
+    for (const BObolCompactManifestOccurrence &record : records) {
+	const char *sourceName = record.sourceName.getString();
+	const char *path = record.path.getString();
+	if (!sourceName || !sourceName[0] || !path || !path[0] ||
+	    record.bounds.isEmpty() || record.sourceMeshRequestValid)
+	    return false;
+	struct directory *dp = db_lookup(source->getDatabase(), sourceName,
+	    LOOKUP_QUIET);
+	if (dp == RT_DIR_NULL ||
+	    dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
+	    return false;
+
+	compact_coverage_asset *asset = NULL;
+	auto found = assetsByDirectory.find(dp);
+	if (found == assetsByDirectory.end()) {
+	    std::unique_ptr<compact_coverage_asset> owned(
+		new compact_coverage_asset);
+	    owned->dp = dp;
+	    owned->assetPath = sourceName;
+	    owned->estimatedWorkingSetBytes =
+		compact_coverage_working_set_estimate(
+		    source->getDatabase(), dp);
+	    owned->coverageBounds = record.bounds;
+	    owned->coverageGeometry = bobol_cad_structural_bounds_geometry(
+		record.bounds, owned->proxyGeometryTransform);
+	    owned->coverageReady = owned->coverageGeometry ? true : false;
+	    asset = owned.get();
+	    collect.assets.push_back(std::move(owned));
+	    assetsByDirectory.emplace(dp, asset);
+	} else {
+	    asset = found->second;
+	}
+	if (!asset || !asset->coverageReady)
+	    return false;
+
+	compact_coverage_occurrence occurrence;
+	occurrence.localTransform = record.localTransform;
+	occurrence.assetPath = sourceName;
+	occurrence.occurrenceIndex = record.occurrenceIndex;
+	occurrence.booleanOperation = record.booleanOperation;
+	occurrence.summary = compact_occurrence_summary(source, path,
+	    sourceName, "primitive", "aabb", revision,
+	    BObolRealizedShapeSummary::SHAPE_MESH);
+	occurrence.summary.regionId = record.regionId;
+	occurrence.summary.airCode = record.airCode;
+	occurrence.summary.materialId = record.materialId;
+	occurrence.summary.los = record.los;
+	occurrence.summary.materialColorValid = record.materialColorValid;
+	occurrence.summary.materialColor = record.materialColor;
+	occurrence.summary.materialShader = record.materialShader;
+	occurrence.summary.boundsValid = TRUE;
+	occurrence.summary.bounds = record.bounds;
+
+	compact_coverage_work_item item;
+	item.asset = asset;
+	item.occurrence = std::move(occurrence);
+	collect.detailWork.push_back(std::move(item));
+    }
+
+    collect.occurrenceCount = stream->getExpectedCount();
+    return collect.occurrenceCount > 0 && !collect.detailWork.empty();
+}
+
 static int
 compact_stream_publish_parallel_coverage(
 	SoBRLDatabaseSource *source,
@@ -14374,8 +14459,12 @@ compact_stream_publish_parallel_coverage(
     collect.stream = stream;
     collect.materialSweep = &materialSweep;
     collect.revision = revision;
+    const bool selectiveWarmReplay =
+	compact_coverage_seed_warm_terminal_work(source, stream, collect,
+	    revision);
     compact_coverage_mapped_database mappedDatabase;
-    if (compact_coverage_can_map_database(source->getDatabase())) {
+    if (!selectiveWarmReplay &&
+	compact_coverage_can_map_database(source->getDatabase())) {
 	mappedDatabase.file = bu_open_mapped_file(
 	    source->getDatabase()->dbi_filename,
 	    "obol-coverage-reuse-v1");
@@ -14386,6 +14475,13 @@ compact_stream_publish_parallel_coverage(
     std::mutex aggregateMutex;
     SbBox3f aggregateBounds;
     aggregateBounds.makeEmpty();
+    SbBox3f certifiedWarmBounds;
+    const bool haveCertifiedWarmBounds =
+	stream->hasCoverageBoundsComplete() &&
+	stream->getCoverageBounds(certifiedWarmBounds) &&
+	!certifiedWarmBounds.isEmpty();
+    if (selectiveWarmReplay)
+	publishedBoxes.store(collect.occurrenceCount);
     int64_t lastOverviewPublication = 0;
     size_t workerCount = bu_avail_cpus();
     workerCount = std::max<size_t>(1, std::min<size_t>(workerCount, 32));
@@ -14463,7 +14559,7 @@ compact_stream_publish_parallel_coverage(
 			    DB5_MINORTYPE_BRLCAD_BREP;
 		}
 		if (asset.coverageReady) {
-		    asset.coverageGeometry = compact_coverage_aabb_geometry(
+		    asset.coverageGeometry = bobol_cad_structural_bounds_geometry(
 			asset.coverageBounds, asset.proxyGeometryTransform);
 		    asset.coverageReady =
 			asset.coverageGeometry ? true : false;
@@ -14526,6 +14622,20 @@ compact_stream_publish_parallel_coverage(
 				    mat_to_sbmatrix(cachedAsset.assetToObject);
 				asset.sourceMeshMappingCached = true;
 				asset.deferSourceMeshContract = false;
+				std::array<SbVec3f, 8> orientedBounds;
+				if (compact_coverage_lod_asset_oriented_bounds(
+					source->getDatabase(), cachedAsset,
+					orientedBounds)) {
+				    std::shared_ptr<const Obol::PartGeometry>
+					orientedCoverage =
+					    bobol_cad_structural_bounds_geometry(
+						asset.coverageBounds,
+						asset.proxyGeometryTransform,
+						orientedBounds.data());
+				    if (orientedCoverage)
+					asset.coverageGeometry =
+					    std::move(orientedCoverage);
+				}
 			    }
 			}
 			/* The first member of a rigid-invariant group may begin loading
@@ -14575,7 +14685,7 @@ compact_stream_publish_parallel_coverage(
 			lastOverviewPublication = now;
 		    }
 		}
-		if (!overviewSnapshot.isEmpty()) {
+		if (!haveCertifiedWarmBounds && !overviewSnapshot.isEmpty()) {
 		    BObolCompactOccurrence overview =
 			compact_coverage_overview_occurrence(source, treeName,
 			    overviewSnapshot, revision);
@@ -14663,7 +14773,7 @@ compact_stream_publish_parallel_coverage(
 			if (asset.coverageReady && asset.coverageGeometry) {
 			    asset.geometry = asset.coverageGeometry;
 			} else {
-			    asset.geometry = compact_coverage_aabb_geometry(
+			    asset.geometry = bobol_cad_structural_bounds_geometry(
 				asset.sourceMeshRequest.bounds,
 				asset.proxyGeometryTransform);
 			}
@@ -14757,7 +14867,7 @@ compact_stream_publish_parallel_coverage(
 			    cacheStatus.cache_key;
 			asset.geometry = asset.coverageReady &&
 			    asset.coverageGeometry ? asset.coverageGeometry :
-			    compact_coverage_aabb_geometry(
+			    bobol_cad_structural_bounds_geometry(
 				asset.sourceMeshRequest.bounds,
 				asset.proxyGeometryTransform);
 			asset.ready = asset.geometry ? true : false;
@@ -14906,8 +15016,10 @@ compact_stream_publish_parallel_coverage(
     };
     std::vector<std::thread> workers;
     workers.reserve(workerCount);
-    for (size_t i = 0; i < workerCount; i++)
-	workers.push_back(std::thread(coverageWorker));
+    if (!selectiveWarmReplay) {
+	for (size_t i = 0; i < workerCount; i++)
+	    workers.push_back(std::thread(coverageWorker));
+    }
 
     /*
      * Enumeration is the producer, not a prerequisite.  The old two-phase
@@ -14916,18 +15028,21 @@ compact_stream_publish_parallel_coverage(
      * idle.  Workers now import bounds and publish the expanding overview/
      * leaf boxes while db_walk_tree continues discovering later branches.
      */
-    struct db_tree_state initialState;
-    db_init_db_tree_state(&initialState, source->getDatabase());
-    initialState.ts_stop_at_regions = 0;
-    const char *treeNames[1] = {treeName};
-    const int walkResult = db_walk_tree_leaf_instances(
-	source->getDatabase(), 1, treeNames, 1, &initialState, NULL, NULL,
-	compact_coverage_collect_leaf, &collect);
-    db_free_db_tree_state(&initialState);
+    int walkResult = 0;
+    if (!selectiveWarmReplay) {
+	struct db_tree_state initialState;
+	db_init_db_tree_state(&initialState, source->getDatabase());
+	initialState.ts_stop_at_regions = 0;
+	const char *treeNames[1] = {treeName};
+	walkResult = db_walk_tree_leaf_instances(
+	    source->getDatabase(), 1, treeNames, 1, &initialState, NULL, NULL,
+	    compact_coverage_collect_leaf, &collect);
+	db_free_db_tree_state(&initialState);
+    }
     /* Publish the final occurrence cardinality as soon as enumeration ends,
      * while bound workers are still draining. */
     BObolCompactSourceProfile profile;
-    if (walkResult >= 0) {
+    if (walkResult >= 0 && !selectiveWarmReplay) {
 	profile.valid = TRUE;
 	profile.occurrenceCount = collect.occurrenceCount;
 	profile.uniqueAssetCount = collect.assets.size();
@@ -15102,16 +15217,22 @@ compact_stream_publish_parallel_coverage(
      */
     if (!aggregateBounds.isEmpty()) {
 	/* The aggregate overview remains useful even when it is conservative:
-	 * it is the earliest complete visual scope of the draw target. */
-	stream->setCoverageBounds(aggregateBounds);
-	BObolCompactOccurrence overview =
-	    compact_coverage_overview_occurrence(source, treeName,
-		aggregateBounds, revision);
-	if (overview.geometry)
-	    stream->pushPriority(overview);
+	 * it is the earliest complete visual scope of the draw target.  A warm
+	 * exact extent is stronger evidence and must never be replaced by this
+	 * provisional union. */
+	if (!haveCertifiedWarmBounds) {
+	    stream->setCoverageBounds(aggregateBounds);
+	    BObolCompactOccurrence overview =
+		compact_coverage_overview_occurrence(source, treeName,
+		    aggregateBounds, revision);
+	    if (overview.geometry)
+		stream->pushPriority(overview);
+	}
 
-	SbBox3f terminalBounds = aggregateBounds;
-	bool terminalBoundsExact = collect.aggregateBoundsExact;
+	SbBox3f terminalBounds = haveCertifiedWarmBounds ?
+	    certifiedWarmBounds : aggregateBounds;
+	bool terminalBoundsExact = haveCertifiedWarmBounds ||
+	    collect.aggregateBoundsExact;
 	if (!terminalBoundsExact) {
 	    SbBox3f semanticBounds;
 	    if (source_bounds_from_database_path(source, treeName,
@@ -15122,7 +15243,7 @@ compact_stream_publish_parallel_coverage(
 	}
 	if (terminalBoundsExact) {
 	    stream->setCoverageBounds(terminalBounds);
-	    if (terminalBounds != aggregateBounds) {
+	    if (!haveCertifiedWarmBounds && terminalBounds != aggregateBounds) {
 		BObolCompactOccurrence exactOverview =
 		    compact_coverage_overview_occurrence(source, treeName,
 			terminalBounds, revision);
@@ -15418,6 +15539,8 @@ bobol_database_source_realize_mesh_compact_with_cache(
 	    (void)source->setSourceBoundsState(TRUE, bounds.getMin(),
 		bounds.getMax(), TRUE);
 	}
+	if (stream->hasWarmCensusComplete())
+	    stream->setWarmCoverageComplete(true);
 	mark_source_realized_current(source);
 	bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
 	bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,

@@ -13,6 +13,7 @@
 #include "cad_assembly_private.h"
 
 #include <Inventor/SbMatrix.h>
+#include <Inventor/SbVec3f.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -78,5 +79,10 @@ Obol::CadDrawMode cad_presentation_draw_mode(int sourceDrawMode,
     size_t shadedCount, size_t wireCount);
 SoBRLCadAssembly *cad_view_lod_assembly_for_action(SoAction *action,
     const SoBRLDatabaseSource *source);
+
+/* Build the twelve edges of binary-XYZ box corners.  The corner order is the
+ * shared aggregate-proxy contract used by Obol validation and PoP metadata. */
+int bobol_cad_wire_geometry_from_binary_corners(
+    const SbVec3f corners[8], Obol::PartGeometryBuilder &geometry);
 
 #endif /* LIBBOBOL_DATABASE_SOURCE_PRESENTATION_PRIVATE_H */

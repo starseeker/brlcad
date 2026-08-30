@@ -390,6 +390,13 @@ public:
 	return this->effectiveComplete();
     }
 
+    bool shouldResumeSubmission(bool interactive, bool submissionActive,
+	bool providerPending) const
+    {
+	return this->effectiveActive() && !interactive &&
+	    !submissionActive && !providerPending;
+    }
+
     void deactivate(void)
     {
 	this->activeValue = false;

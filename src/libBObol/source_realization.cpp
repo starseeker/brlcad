@@ -12,6 +12,7 @@
 
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BLodService.h"
+#include "draw_cache_private.h"
 #include "bu/app.h"
 #include "bu/file.h"
 #include "bu/parallel.h"
@@ -31,7 +32,6 @@
 /* Internal cache lifetime barriers.  Construct the lazy cache registries
  * before the process-wide worker coordinator so reverse static destruction
  * joins every worker before either registry is released. */
-void bobol_draw_cache_runtime_prepare(void);
 void bobol_mesh_lod_cache_runtime_prepare(void);
 
 struct SourceRealizationItem {
@@ -302,6 +302,7 @@ source_realize_item(const std::shared_ptr<BObolSourceRealizationJobPrivate> &job
 	}
 	if (success &&
 	    !item->warmManifest.load(std::memory_order_acquire) &&
+	    !(stream && stream->hasWarmCensusComplete()) &&
 	    item->storeManifest &&
 	    !source_job_cancelled(job.get()))
 	    item->manifestStored.store(

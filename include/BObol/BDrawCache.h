@@ -64,6 +64,11 @@ struct BObolDrawLodAssetRecord {
     point_t assetBoundsMin;
     point_t assetBoundsMax;
     mat_t assetToObject;
+    /* Optional whole-asset PCA bounds in canonical asset coordinates.
+     * These are presentation metadata for a terminal aggregate proxy; the
+     * AABB fields above remain the authoritative coverage contract. */
+    int assetOrientedBoundsValid;
+    point_t assetOrientedBounds[8];
 };
 
 struct BObolDrawMetadataRecord {
@@ -121,6 +126,10 @@ struct BObolDrawManifestOccurrence {
     mat_t localMatrix;
     point_t boundsMin;
     point_t boundsMax;
+    /* Optional object-coordinate PCA proxy corners.  The AABB remains the
+     * conservative coverage and view-framing contract. */
+    int orientedBoundsValid;
+    point_t orientedBounds[8];
     int booleanOperation;
     uint32_t occurrenceIndex;
     int metadataValid;
@@ -135,7 +144,7 @@ struct BObolDrawManifest {
     int coverageBoundsValid;
     point_t coverageBoundsMin;
     point_t coverageBoundsMax;
-    /* Complete, geometry-free population proof captured by cold discovery.
+    /* Complete, mesh-buffer-free population proof captured by cold discovery.
      * A warm consumer may use these aggregate facts to select its bounded
      * admission policy before occurrence chunks finish streaming.  Zero
      * values mean that this is a structural-only manifest. */

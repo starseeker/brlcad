@@ -59,7 +59,7 @@ The production refinement target is the typed state in
 | `ObolLodAdmission` | safe direct admission and bounded large-scene path | `BObolLodAdmissionPlanner` |
 | `ObolLodArbitration` | budget-safe visual-importance ordering | `retained_allocation_private.cpp` |
 | `ObolLodConvergence` | finite convergence and witnessed constrained endpoints for single-large and many-object scenes | controller convergence snapshot and ledger |
-| `ObolSubmissionPass` | bounded submission cursor and rescan debt | `BObolLodSubmissionPass` |
+| `ObolSubmissionPass` | bounded submission cursor, rescan debt, and level-triggered coverage-census ownership | `BObolLodSubmissionPass`, controller progressive pump |
 | `ObolResidentGrowth` | coalesced resident suffix drain, coverage transfer, and reallocation | availability ledger and planning obligations |
 | `ObolResidentCompaction` | revision-safe background memory reclamation | `view_controller_residency.cpp`, `BLodService` |
 | `ObolActiveProducerDemand` | superseding demand for a stable asset producer | `BLodService`, mesh submission action |
@@ -134,7 +134,8 @@ Current focused verification through 2026-08-29:
 - `ObolCadFrameComposition`: 8,186 generated / 2,338 distinct states,
   depth 18;
 - `ObolHostWork`: 2,007 generated / 714 distinct states, depth 15;
-- `ObolSubmissionPass`: 7 generated / 5 distinct states, depth 4;
+- `ObolSubmissionPass`: 10 generated / 7 distinct states, depth 3, including
+  an active coverage obligation whose cursor was paused by a stronger owner;
 - `ObolCapacitySearch`: 261,250 generated / 182,647 distinct states,
   depth 60;
 - `ObolRetainedAllocationPrefix`: 81,371 generated / 46,576 distinct states,
@@ -181,6 +182,17 @@ must be complete before the final hierarchy/cache marker, but every page need
 not have been independently presented first.  Presentation remains bounded
 and optional; cache completeness remains authoritative.
 
+The submission-pass boundary was extended after the 150k draw-metadata
+migration found a terminal framebuffer coexisting with an active coverage
+census and an idle cursor.  Compaction then owned the only reported obligation
+but could not pass its coverage gate.  The model now requires every coverage
+obligation to have an active/rescan cursor or a level-triggered pump witness
+and proves that closed inventory eventually retires both the cursor and
+census.  Production maps an active census to foreground inventory work,
+re-arms its bounded cursor after a stronger owner retires, and preserves an
+exact visibility proof across policy-only quality revisions instead of
+creating a redundant census.
+
 The point-terminal-evidence boundary was added after a warm 150k trace proved
 that a rejected finer structural preload correctly recorded a terminal
 witness, but an immediately repeated, unchanged structural census erased it.
@@ -189,9 +201,11 @@ allows only a semantic view, policy, population, or threshold change to renew
 the consumed decision.  Its executable refinement is the no-op structural
 seed regression in `test_bobol_lod_coordinator`.
 
-The 2026-08-28 canonical progressive rerun completed in 95 seconds with the
-same 2,358,764 generated / 1,095,220 distinct states and depth 40, including
-both temporal branches.  The point-quality rerun completed with 29 generated /
+The 2026-08-29 canonical progressive rerun completed with the same 2,358,764
+generated / 1,095,220 distinct states and depth 40, including both temporal
+branches.  The concrete refinement rerun independently enumerated all
+2,097,152 fact combinations (4,194,302 generated transitions), and both checks
+reported no error.  The point-quality rerun completed with 29 generated /
 17 distinct states and depth 5.  Production refines the point model's
 `PhaseHasWitness` predicate with the typed
 `PointCalibrationProducerInputs`, an exhaustive 256-case C++ truth table, and

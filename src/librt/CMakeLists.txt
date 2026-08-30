@@ -124,6 +124,7 @@ set(
   db_corrupt.c
   db_diff.c
   db_discovery.cpp
+  display_bounds.cpp
   db_flags.c
   db_flip.c
   db_fullpath.cpp
@@ -471,6 +472,7 @@ brlcad_addlib(librt "${LIBRT_SOURCES}" "${RT_INCLUDE_DIRS}" "${RT_LOCAL_INCLUDE_
   #   subdirectory unsafe to batch.
   UNITY_BUILD_SKIP
     db_discovery.cpp
+    display_bounds.cpp
     rt_init.cpp
     search.cpp
     search_old.cpp

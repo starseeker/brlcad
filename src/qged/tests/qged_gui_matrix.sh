@@ -52,6 +52,11 @@ static_quality_render_limit_ms=400
 # scheduling/command-boundary interval.  This is a qualification tolerance,
 # not additional controller rendering time.
 presentation_interrupt_deadline_tolerance_ms=5
+# Generic Twin is the bounded ordinary-model latency sentinel.  This is a
+# terminal draw-to-idle deadline, not merely a first-pixel allowance: its
+# complete 4 MiB scene must not inherit the multi-second progressive pacing
+# intended for high-cardinality or exceptional-mesh inputs.
+generic_twin_terminal_deadline_ms=5000
 
 # The scale scripts deliberately exercise several independent settle points:
 # draw, camera release, zoom, selection, and subpath redraw.  Their process
@@ -157,8 +162,8 @@ Usage: qged_gui_matrix.sh [options]
   --timeout SECONDS        Per-process timeout (default: 180)
   --settle-ms MSEC         Override the per-view convergence deadline
 
-Cases: generic_twin, lucy, multi_lucy, multi_lucy_xpush, stanford, havoc,
-       hubble, nist, many_lucy_stress, unique_mesh_stress,
+Cases: generic_twin, lucy, multi_lucy, multi_lucy_xpush, stanford, bigboy,
+       havoc, hubble, nist, many_lucy_stress, unique_mesh_stress,
        unique_mesh_50k_stress, unique_mesh_150k_stress
 
 The smoke profile uses generic_twin and lucy.  Full adds havoc and Hubble.
@@ -325,7 +330,8 @@ case_spec()
 	    ;;
 	bigboy)
 	    printf '%s|%s|||\n' \
-		"${BOBOL_BIGBOY_DB:-$build_dir/bigboy.g}" "all"
+		"${BOBOL_BIGBOY_DB:-$build_dir/bigboy.g}" \
+		"${BOBOL_BIGBOY_OBJECT:-Default}"
 	    ;;
 	multi_lucy)
 	    printf '%s|%s|||\n' "$stanford" "multi_lucy"
@@ -339,11 +345,12 @@ case_spec()
 		"many_lucy_stress"
 	    ;;
 	unique_mesh_stress)
-	    printf '%s|%s|%s|%s|%s\n' \
+	    printf '%s|%s|%s|%s|%s|%s\n' \
 		"${BOBOL_UNIQUE_MESH_STRESS_DB:-$build_dir/unique_mesh_stress.g}" \
 		"unique_mesh_stress" "unique_mesh_stress" \
 		"unique_level_02_000000.c" \
-		"unique_mesh_stress/unique_level_02_000000.c/unique_level_01_000000.c/unique_level_00_000000.c/unique_region_000000.r"
+		"unique_mesh_stress/unique_level_02_000000.c/unique_level_01_000000.c/unique_level_00_000000.c/unique_region_000000.r" \
+		"unique_mesh_stress/unique_level_02_000000.c/unique_level_01_000000.c/unique_level_00_000001.c/unique_region_000012.r/unique_closed_000199.bot"
 	    ;;
 	unique_mesh_50k_stress)
 	    printf '%s|%s|%s|%s|%s\n' \
@@ -383,6 +390,28 @@ case_spec()
 	    ;;
 	*) return 1 ;;
     esac
+}
+
+database_path_center()
+{
+    local db="$1"
+    local path="$2"
+    local output
+    local center
+
+    output="$(printf 'bb -m %s\nq\n' "$path" | "$gsh" "$db" 2>&1)" ||
+	return 1
+    center="$(sed -n 's/^Mid Point: (\([^)]*\))$/\1/p' <<< "$output" |
+	tail -n 1)"
+    # Only pass the three numeric fields into the generated JSON command.
+    # Besides rejecting a stale fixture path, this prevents diagnostic text
+    # from becoming part of an executable qged command.
+    if [[ ! "$center" =~ ^[[:space:]]*-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?[[:space:]]+-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?[[:space:]]+-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?[[:space:]]*$ ]]; then
+	printf 'ERROR: could not resolve bounding-box center for %s in %s\n%s\n' \
+	    "$path" "$db" "$output" >&2
+	return 1
+    fi
+    printf '%s\n' "$center"
 }
 
 contains_csv()
@@ -429,6 +458,7 @@ write_event_script()
     local hierarchy_path="$8"
     local case_name="$9"
     local cache_state="${10}"
+    local smooth_zoom_center="${11}"
     local initial_settle_ms="$settle_ms"
     local draw_mode=1
     [[ "$mode" == "wire" ]] && draw_mode=0
@@ -436,6 +466,7 @@ write_event_script()
     local hierarchy_expand_events=""
     local first_coverage_events=""
     local background_completion_events=""
+    local initial_observation_events=""
 
     # A cold single, very large BoT first presents a globally representative
     # occupancy payload while its worker constructs spatial PoP pages.  Record
@@ -615,6 +646,30 @@ EOF
 EOF
 )
     fi
+
+    if [[ "$case_name" == "generic_twin" ]]; then
+	# A fixed sleep inside the GUI driver's nested event loop may leave a
+	# coalesced System GL update unpresented until the next scripted action.
+	# Use the endpoint's level-triggered idle barrier so the measured latency
+	# includes every required source, LoD, and presentation obligation without
+	# making the harness itself postpone the calibration frame.
+	initial_observation_events=$(cat <<EOF
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${initial_settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/initial-ready.png"}},
+EOF
+)
+    else
+	# Retain deterministic transient samples for exceptional and scale cases;
+	# their evolving presentation is part of the qualification evidence.
+	initial_observation_events=$(cat <<EOF
+    {"target": ".", "action": "wait", "arguments": {"ms": 1300}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/ae90-1500ms.png"}},
+EOF
+)
+    fi
     if [[ "$case_name" == "unique_mesh_stress" ||
 	    "$case_name" == "lucy" ]]; then
 	# Approach a large mesh with actual wheel events so every intermediate
@@ -625,14 +680,19 @@ EOF
 	# single-asset memory-reclamation stress.
 	local smooth_zoom_steps=12
 	if [[ "$case_name" == "unique_mesh_stress" ]]; then
+	    local smooth_zoom_initial_size=2500
+	    if [[ -z "$smooth_zoom_center" ]]; then
+		printf 'ERROR: unique-mesh smooth zoom has no target center\n' >&2
+		return 1
+	    fi
 	    smooth_zoom_steps=16
 	    smooth_zoom_events=$(cat <<EOF
     {"target": ".", "action": "qged_command",
      "arguments": {"command": "ae 90 0"}},
     {"target": ".", "action": "qged_command",
-     "arguments": {"command": "center -2289 109 -1300"}},
+	 "arguments": {"command": "center ${smooth_zoom_center}"}},
     {"target": ".", "action": "qged_command",
-     "arguments": {"command": "size 2500"}},
+	 "arguments": {"command": "size ${smooth_zoom_initial_size}"}},
 EOF
 )
 	else
@@ -1067,9 +1127,7 @@ EOF
     {"target": ".", "action": "wait", "arguments": {"ms": 200}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/ae90-0200ms.png"}},
-    {"target": ".", "action": "wait", "arguments": {"ms": 1300}},
-    {"target": "${canvas_target}", "action": "checkpoint",
-     "arguments": {"name": "${image_dir}/ae90-1500ms.png"}},
+${initial_observation_events}
 ${first_coverage_events}
 ${view_events}
 ${lighting_events}
@@ -1211,6 +1269,27 @@ validate_report()
     fi
 
     if [[ "$case_name" == "generic_twin" ]]; then
+	if ! jq -e --arg object "$object" \
+		--argjson deadline "$generic_twin_terminal_deadline_ms" '
+	    (first(.samples[] |
+		select((.command? // "") | startswith("draw ")) |
+		select((.command? // "") | endswith(" " + $object)))) as $draw |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/initial-ready.png")))) as $ready |
+	    ($draw != null) and ($ready != null) and
+	    (($ready.elapsed_ms - $draw.elapsed_ms) <= $deadline) and
+	    (($ready.lod_convergence_terminal // false) == true) and
+	    (($ready.lod_convergence_view_ready // false) == true) and
+	    ($ready.lod_convergence_background_pending == false) and
+	    (($ready.lod_convergence_fraction // 0) >= 1) and
+	    ($ready.progressive_pending == false) and
+	    (($ready.visible_structural_fallback_boxes // 1) == 0)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Generic Twin did not reach terminal mesh presentation within %s ms\n' \
+		"$generic_twin_terminal_deadline_ms" >>"$validation"
+	    return 1
+	fi
 	if ! jq -e --argjson error_factor "$LOD_SCREEN_ERROR_HYSTERESIS_FACTOR" \
 	    --argjson error_roundoff "$LOD_SCREEN_ERROR_ROUNDOFF_PIXELS" '
 	    (first(.samples[] |
@@ -1485,6 +1564,10 @@ validate_report()
     # Exclude the border, HUD strip, and right-side convergence indicator.
     local first_useful="$image_dir/ae90-1500ms.png"
     local first_useful_limit_ms=5000
+    if [[ "$case_name" == "generic_twin" ]]; then
+	first_useful="$image_dir/initial-ready.png"
+	first_useful_limit_ms="$generic_twin_terminal_deadline_ms"
+    fi
     if [[ "$cache_state" == "cold" ]]; then
 	if [[ "$case_name" == "unique_mesh_150k_stress" ]]; then
 	    first_useful="$image_dir/realization-6s.png"
@@ -2503,6 +2586,27 @@ validate_report()
 		>>"$validation"
 	    return 1
 	fi
+
+	# The default distinct-mesh fixture includes a dedicated smooth-zoom
+	# target.  Controller quiescence over an empty frustum is valid production
+	# behavior, but it is not a valid test of view-local refinement.  Require
+	# the resolved target to remain represented at both zoom endpoints.
+	if [[ "$case_name" == "unique_mesh_stress" ]] && ! jq -e '
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-start-stable.png")))) as $start |
+	    (last(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/smooth-zoom-close-stable.png")))) as $close |
+	    (all([$start, $close][];
+		((.presented_cad_faces // 0) > 0) and
+		((.presented_cad_occurrences // 0) > 0) and
+		((.lod_convergence_visible_targets // 0) > 0)))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'distinct-mesh smooth zoom lost its resolved target\n' \
+		>>"$validation"
+	    return 1
+	fi
     fi
 
     # A single large PoP asset exercises the other side of the residency
@@ -2972,6 +3076,7 @@ run_current()
     local hierarchy_root="${10}"
     local hierarchy_child="${11}"
     local hierarchy_path="${12}"
+    local smooth_zoom_center="${13}"
     local effective_timeout="$run_timeout"
     local swap_tag="${swap//-/_}"
     local run_name="${case_name}-${backend}-${mode}-swap${swap_tag}-${cache_state}"
@@ -2980,7 +3085,7 @@ run_current()
     mkdir -p "$out/images"
     write_event_script "$events" "$out/images" "$mode" "$object" \
 	"$settle_ms" "$hierarchy_root" "$hierarchy_child" "$hierarchy_path" \
-	"$case_name" "$cache_state"
+	"$case_name" "$cache_state" "$smooth_zoom_center"
 
     local env_args=("BU_DIR_CACHE=$cache_dir")
     # Deep per-occurrence diagnostic arrays are valuable for focused small
@@ -3401,11 +3506,19 @@ for case_name in "${cases[@]}"; do
 	continue
     }
     IFS='|' read -r db object hierarchy_root hierarchy_child hierarchy_path \
-	<<< "$spec"
+	smooth_zoom_target <<< "$spec"
     if [[ ! -r "$db" ]]; then
 	echo "ERROR: missing database for $case_name: $db" >&2
 	failures=$((failures + 1))
 	continue
+    fi
+    smooth_zoom_center=""
+    if [[ -n "$smooth_zoom_target" ]]; then
+	smooth_zoom_center="$(database_path_center \
+	    "$db" "$smooth_zoom_target")" || {
+	    failures=$((failures + 1))
+	    continue
+	}
     fi
     write_inventory "$case_name" "$db" "$object" "$hierarchy_root" \
 	"$hierarchy_child" "$hierarchy_path"
@@ -3479,7 +3592,8 @@ for case_name in "${cases[@]}"; do
 		    fi
 		    if run_current "$case_name" "$db" "$object" "$backend" \
 			    "$mode" "$swap" "warm" "$cache" "$settle_ms" \
-			    "$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
+			    "$hierarchy_root" "$hierarchy_child" "$hierarchy_path" \
+			    "$smooth_zoom_center"; then
 			validate_autoview_camera_contract "$case_name" "$backend" \
 			    "$mode" "$swap" "warm" || failures=$((failures + 1))
 			cache_mark_ready "$cache" "$db" || {
@@ -3501,7 +3615,8 @@ for case_name in "${cases[@]}"; do
 		cold_succeeded=0
 		if run_current "$case_name" "$db" "$object" "$backend" \
 			"$mode" "$swap" "cold" "$cache" "$settle_ms" \
-			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
+			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path" \
+			"$smooth_zoom_center"; then
 		    validate_autoview_camera_contract "$case_name" "$backend" \
 			"$mode" "$swap" "cold" && cold_succeeded=1 ||
 			failures=$((failures + 1))
@@ -3524,7 +3639,8 @@ for case_name in "${cases[@]}"; do
 	fi
 	if run_current "$case_name" "$db" "$object" "$backend" \
 			"$mode" "$swap" "warm" "$cache" "$settle_ms" \
-			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path"; then
+			"$hierarchy_root" "$hierarchy_child" "$hierarchy_path" \
+			"$smooth_zoom_center"; then
 		    validate_autoview_camera_contract "$case_name" "$backend" \
 			"$mode" "$swap" "warm" || failures=$((failures + 1))
 		else
