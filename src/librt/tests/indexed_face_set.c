@@ -321,10 +321,141 @@ check_tor(void)
     return 1;
 }
 
-int
-main(void)
+static int
+check_database_object(const char *database, const char *object)
 {
-    bu_setprogname("indexed_face_set");
+    struct db_i *dbip = DBI_NULL;
+    struct directory *dp = RT_DIR_NULL;
+    struct rt_db_internal intern;
+    struct rt_primitive_indexed_face_set set = {0};
+    struct bg_tess_tol ttol = BG_TESS_TOL_INIT_ZERO;
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+    struct bv_view_info view = BV_VIEW_INFO_INIT;
+    point_t mesh_min = VINIT_ZERO;
+    point_t mesh_max = VINIT_ZERO;
+    point_t source_min = VINIT_ZERO;
+    point_t source_max = VINIT_ZERO;
+    unsigned char *referenced = NULL;
+    size_t referenced_count = 0;
+    double volume = 0.0;
+    int closed_check = -1;
+    int result = 1;
+
+    if (!database || !object)
+	return 0;
+
+    dbip = db_open(database, DB_OPEN_READONLY);
+    if (dbip == DBI_NULL || db_dirbuild(dbip) < 0) {
+	bu_log("Unable to open database %s\n", database);
+	goto cleanup;
+    }
+    dp = db_lookup(dbip, object, LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL) {
+	bu_log("Unable to find object %s\n", object);
+	goto cleanup;
+    }
+
+    RT_DB_INTERNAL_INIT(&intern);
+    if (rt_db_get_internal(&intern, dp, dbip, NULL) < 0) {
+	bu_log("Unable to import object %s\n", object);
+	goto cleanup;
+    }
+    if (!intern.idb_meth || !intern.idb_meth->ft_indexed_face_set) {
+	bu_log("Object %s has no indexed-face-set provider\n", object);
+	rt_db_free_internal(&intern);
+	goto cleanup;
+    }
+
+    ttol.rel = 0.01;
+    if (intern.idb_meth->ft_indexed_face_set(&set, &intern, &ttol, &tol,
+	    &view) != BRLCAD_OK || !set.points || !set.indices ||
+	    !set.point_count || !set.index_count) {
+	bu_log("Object %s did not produce an indexed face set\n", object);
+	rt_db_free_internal(&intern);
+	goto cleanup;
+    }
+
+    VMOVE(mesh_min, set.points[0]);
+    VMOVE(mesh_max, set.points[0]);
+    for (size_t i = 0; i < set.point_count; i++) {
+	if (!isfinite(set.points[i][X]) || !isfinite(set.points[i][Y]) ||
+	    !isfinite(set.points[i][Z])) {
+	    bu_log("Object %s produced a non-finite point\n", object);
+	    rt_db_free_internal(&intern);
+	    goto cleanup;
+	}
+	VMINMAX(mesh_min, mesh_max, set.points[i]);
+    }
+    for (size_t i = 0; i < set.index_count; i++) {
+	if (set.indices[i] < -1 ||
+	    (set.indices[i] >= 0 && (size_t)set.indices[i] >= set.point_count)) {
+	    bu_log("Object %s produced an invalid index\n", object);
+	    rt_db_free_internal(&intern);
+	    goto cleanup;
+	}
+    }
+
+    referenced = (unsigned char *)bu_calloc(set.point_count,
+	sizeof(unsigned char), "indexed-face referenced points");
+    for (size_t i = 0; i < set.index_count; i++) {
+	if (set.indices[i] >= 0)
+	    referenced[set.indices[i]] = 1;
+    }
+    int have_referenced_bounds = 0;
+    for (size_t i = 0; i < set.point_count; i++) {
+	if (!referenced[i])
+	    continue;
+	if (!have_referenced_bounds) {
+	    VMOVE(mesh_min, set.points[i]);
+	    VMOVE(mesh_max, set.points[i]);
+	    have_referenced_bounds = 1;
+	} else {
+	    VMINMAX(mesh_min, mesh_max, set.points[i]);
+	}
+	referenced_count++;
+    }
+
+    /* The simple closure helper is intentionally quadratic and bounded to
+     * small unit-test meshes.  Report an unevaluated check distinctly from a
+     * mesh which was actually tested and found open. */
+    if (set.point_count <= 1024)
+	closed_check = face_set_closed_volume(&set, &volume);
+    const int source_bounds = rt_bound_internal(dbip, dp, source_min,
+	source_max) == 0;
+    bu_log("%s: points=%zu referenced=%zu indices=%zu closed_check=%d "
+	"volume=%.17g "
+	"mesh_min=(%.17g %.17g %.17g) mesh_max=(%.17g %.17g %.17g)",
+	object, set.point_count, referenced_count, set.index_count, closed_check,
+	volume,
+	V3ARGS(mesh_min), V3ARGS(mesh_max));
+    if (source_bounds)
+	bu_log(" source_min=(%.17g %.17g %.17g) "
+	    "source_max=(%.17g %.17g %.17g)",
+	    V3ARGS(source_min), V3ARGS(source_max));
+    bu_log("\n");
+
+    rt_db_free_internal(&intern);
+    result = 0;
+
+cleanup:
+    if (referenced)
+	bu_free(referenced, "indexed-face referenced points");
+    face_set_free(&set);
+    if (dbip != DBI_NULL)
+	db_close(dbip);
+    return result;
+}
+
+int
+main(int argc, char **argv)
+{
+    bu_setprogname(argv[0]);
+    if (argc == 3)
+	return check_database_object(argv[1], argv[2]);
+    if (argc != 1) {
+	bu_log("Usage: %s [file.g object]\n", argv[0]);
+	return 1;
+    }
     if (!check_arb()) {
 	bu_log("ARB indexed-face validation failed\n");
 	return 1;

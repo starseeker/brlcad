@@ -143,6 +143,11 @@ public:
 	bool presentationLimitsReconciled = false;
 	bool retainedRefinementPending = false;
 	bool retainedRefinementBudgetBlocked = false;
+	/* An exact completed frame still contains nonterminal structural
+	 * fallbacks.  Their bounded repair owns the next planning transition;
+	 * occurrence allocation cannot select records which do not have a CAD
+	 * presentation yet. */
+	bool structuralFrontierPending = false;
     };
 
     struct CompletedPassDecision {
@@ -162,6 +167,8 @@ public:
 
     enum class CompletedPassOwner : uint8_t {
 	NONE = 0,
+	STRUCTURAL_FRONTIER,
+	RETAINED_OBSERVATION,
 	CAPACITY,
 	PRESENTATION_HANDOFF,
 	ALLOCATION_HANDOFF
@@ -180,6 +187,16 @@ public:
 	bool capacityOwns(void) const
 	{
 	    return this->owner == CompletedPassOwner::CAPACITY;
+	}
+
+	bool structuralFrontierOwns(void) const
+	{
+	    return this->owner == CompletedPassOwner::STRUCTURAL_FRONTIER;
+	}
+
+	bool retainedObservationOwns(void) const
+	{
+	    return this->owner == CompletedPassOwner::RETAINED_OBSERVATION;
 	}
 
 	bool handoffOwns(void) const
@@ -215,6 +232,23 @@ public:
      * pass ownership can remove the ceiling before calibration starts. */
     static bool capacitySamplePending(bool searchAwaitingSample,
 	    bool allocationCurrent, bool allocationPresentationRealized);
+
+    /* Only fallbacks which survived into an exact framebuffer are structural
+     * repair debt.  Structural source records represented by a proven
+     * subpixel aggregate are terminal occurrence presentations and must not
+     * preempt allocation handoff merely because they still appear in the
+     * renderer's projection histogram. */
+    static bool nonterminalStructuralFrontier(bool occurrenceCoverageExact,
+	    size_t structuralFallbackCount, size_t terminalFailureCount);
+
+    /* A style-only frame cannot manufacture geometry-planning work.  An
+     * LoD-owned frame may advance planning when it presents an existing
+     * transaction or exposes an exact nonterminal fallback frontier. */
+    static bool presentationOnlyFrameAdvancesPlanning(
+	    bool lodPlanningRelevant,
+	    bool pointAdmissionFramePending,
+	    bool lodPresentationBarrierPending,
+	    bool nonterminalStructuralFrontierPending);
 
     /* A complete occurrence allocation which exceeds its own certified
      * budget is not another capacity-search candidate.  It is the concrete
@@ -267,6 +301,10 @@ public:
 	size_t reconciliationBudgetLimit = 0);
     bool noteFramePresented(size_t provenRenderCost = 0,
 	size_t reconciliationBudget = 0);
+    /* A terminal capacity certificate was measured from the exact,
+     * ceiling-free occurrence population.  It therefore supersedes every
+     * older renderer-ceiling reconciliation for the same semantic epoch. */
+    void acceptCapacityCertificate(void);
     void cancelHandoff(void);
     void viewInvalidated(void);
     void reset(void);

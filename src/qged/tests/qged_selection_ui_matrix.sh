@@ -9,6 +9,7 @@ set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_root="$(cd "$script_dir/../../.." && pwd)"
+source "$script_dir/qged_test_display.sh"
 build_dir="$source_root/.build"
 artifact_dir=""
 backend_list="system,osmesa"
@@ -41,13 +42,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "${DISPLAY:-}" && "${QT_QPA_PLATFORM:-}" != "offscreen" ]]; then
-    if ! command -v xvfb-run >/dev/null 2>&1; then
-	echo "ERROR: a display or xvfb-run is required" >&2
-	exit 2
-    fi
-    exec xvfb-run -a "$0" "${original_arguments[@]}"
-fi
+qged_test_ensure_display "$0" "${original_arguments[@]}"
 
 build_dir="$(realpath -m "$build_dir")"
 qged="$build_dir/bin/qged"
@@ -88,19 +83,23 @@ write_events()
   "schema": "brlcad.qtcad.events",
   "version": 1,
   "events": [
-    {"target": ".", "action": "resize", "arguments": {"width": 1000, "height": 760}},
-    {"target": ".", "action": "qged_command_batch", "arguments": {"commands": ["view clear", "in qged_select_probe.s rpp -100 100 -100 100 -100 100", "draw -m1 qged_select_probe.s", "ae 35 25", "autoview"]}},
-    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 30000, "quiet_ms": 100}},
+    {"target": ".", "action": "resize", "arguments": {"width": 1000, "height": 760, "stable_ms": 250, "timeout_ms": 5000}},
+    {"target": ".", "action": "qged_command_batch", "arguments": {"commands": ["view clear", "view faceplate params 0", "in qged_select_probe.s rpp -100 100 -100 100 -100 100", "draw -m1 qged_select_probe.s", "ae 35 25", "autoview"]}},
+    {"target": ".", "action": "wait_progressive_view_ready", "arguments": {"timeout_ms": 30000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$images/unselected.png"}},
 
     {"target": "i:org.brlcad.qged.view.select.activate", "action": "activate", "arguments": {"checked": true}},
     {"target": "i:org.brlcad.qged.view.select.add", "action": "activate", "arguments": {"checked": true}},
     {"target": "i:org.brlcad.qged.view.select.point", "action": "activate", "arguments": {"checked": true}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
     {"target": "$canvas_target", "action": "mouse_press", "arguments": {"x": 0.5, "y": 0.5, "button": 1, "buttons": 1, "modifiers": 0}},
     {"target": "$canvas_target", "action": "mouse_release", "arguments": {"x": 0.5, "y": 0.5, "button": 1, "buttons": 0, "modifiers": 0}},
     {"target": ".", "action": "wait", "arguments": {"ms": 100}},
     {"target": "i:org.brlcad.qged.view.select.selection-list", "action": "assert_state", "arguments": {"count": 1}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$images/point-selected.png"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 1000}},
+    {"target": "i:org.brlcad.qged.view.select.selection-list", "action": "assert_state", "arguments": {"count": 1}},
+    {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$images/point-selected-stable.png"}},
 
     {"target": "i:org.brlcad.qged.view.select.remove", "action": "activate", "arguments": {"checked": true}},
     {"target": "$canvas_target", "action": "mouse_press", "arguments": {"x": 0.5, "y": 0.5, "button": 1, "buttons": 1, "modifiers": 0}},
@@ -123,7 +122,7 @@ write_events()
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$images/erased.png"}},
     {"target": "i:org.brlcad.qged.view.select.draw-selected", "action": "activate"},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "who", "contains": "qged_select_probe.s"}},
-    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 30000, "quiet_ms": 100}},
+    {"target": ".", "action": "wait_progressive_view_ready", "arguments": {"timeout_ms": 30000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$images/redrawn.png"}}
   ]
 }
@@ -136,9 +135,29 @@ validate_report()
     local images="$2"
     jq -e '
       .success == true and
-      (first(.samples[] | select(.action == "wait_progressive_idle"))) as $stable |
+      (first(.samples[] | select(.action == "wait_progressive_view_ready"))) as $stable |
+	(first(.samples[] | select((.checkpoint? // "") |
+	  endswith("/rectangle-selected.png")))) as $selectionEnd |
       (.samples | any(.action == "assert_state" and .selection_count == 1)) and
       (.samples | any(.action == "assert_state" and .selection_count == 0)) and
+	# Selection is a semantic presentation transaction.  It may briefly own
+	# one exact frame, but by the UI observation boundary it must be idle and
+	# must never have upgraded that frame into renderer-capacity evidence.
+	(all(.samples[];
+	  if (.event_index > $stable.event_index and
+	      .event_index <= $selectionEnd.event_index)
+	  then ((.render_capacity_sample_requested // false) == false and
+		(.lod_policy_revision == $stable.lod_policy_revision))
+	  else true end)) and
+	(all(.samples[] | select(.action == "assert_state");
+	  (.lod_convergence_phase // -1) == 0 and
+	  (.lod_convergence_view_ready // false) == true and
+	  (.progressive_pending == false) and
+	  (.lod_control_obligation_mask // -1) == 0 and
+	  (.lod_service_pending_tasks // -1) == 0)) and
+	(all(.samples[] | select(
+	  .lod_convergence_semantic_presentation_frame_pending // false);
+	  (.lod_progress_label_present // false) == false)) and
       (first(.samples[] | select(.action == "mouse_move" and
         .selection_rect_draw == true))) as $drag |
       ($drag.lod_gesture_active == false) and
@@ -161,7 +180,7 @@ validate_report()
     ' "$report" >/dev/null || return 1
 
     local name
-    for name in unselected point-selected rectangle-held rectangle-selected erased redrawn; do
+    for name in unselected point-selected point-selected-stable rectangle-held rectangle-selected erased redrawn; do
 	[[ -s "$images/$name.png" ]] || return 1
     done
     local delta
@@ -169,6 +188,10 @@ validate_report()
 	"$images/point-selected.png" null: 2>&1 || true)"
     delta="${delta%% *}"
     [[ "$delta" =~ ^[0-9]+$ && "$delta" -gt 0 ]] || return 1
+    delta="$(compare -metric AE "$images/point-selected.png" \
+	"$images/point-selected-stable.png" null: 2>&1 || true)"
+    delta="${delta%% *}"
+    [[ "$delta" == "0" ]] || return 1
     return 0
 }
 

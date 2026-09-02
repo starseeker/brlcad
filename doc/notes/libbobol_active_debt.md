@@ -1,6 +1,6 @@
 # libBObol active debt
 
-Last reviewed: 2026-08-29
+Last reviewed: 2026-09-01
 
 This is the sole remaining-work list for the Obol drawing stack.  It records
 work which is not complete; resolved failure analysis belongs in
@@ -69,7 +69,8 @@ gate, not production clearance.
 ## P0: finish the control-state reduction
 
 The canonical contract is `libbobol_progressive_pipeline_contract.md`: one
-five-domain evidence stamp (inventory, availability, view, policy, capacity),
+six-domain evidence stamp (inventory, availability, visibility, view, policy,
+capacity),
 at most one bounded plan cursor, at most one presentation transaction, and a
 finite work ledger.  HUD outcome is a projection of those values, never a
 second phase machine.
@@ -99,15 +100,88 @@ refinement checker rejects an unwitnessed constraint.  This distinguishes an
 honest deadline/memory/presentation endpoint from a controller which merely
 stops while visual debt remains.  Keep this evidence derived from the owning
 policy values; do not add another writable outcome-reason field.
-`ObolLodComposition.tla` now closes the former formal seam between admission,
+`ObolLodComposition.tla` now closes the formal seam between admission,
 retained growth, exact presentation, capacity, structural repair, point
-quality, and terminal publication.  It does not close the remaining production
-refinement debt: not every imperative effect writer emits a typed transition
-record yet, so the offline trace checker still samples snapshots rather than
-checking a complete concrete execution against that transition relation.
+quality, static quality, and terminal publication.
+`ObolTerminalConvergenceComposition.tla` closes the previously atomic tail of
+that seam.  It permits the production relationships which matter near
+termination—an exact visibility census followed by its exact framebuffer
+classification before reallocation, a distinct static population reopening a
+bounded capacity search,
+each exact presentation consuming monotone renderer-preparation units, an
+over-budget allocation consuming a strictly coarser local representation, and
+quiet compaction after foreground convergence—but requires every re-entry to
+consume a finite semantic member.  Its current 2026-08-31 TLC run checked 639
+  distinct states to depth 81.  The corresponding executable handoff now
+removes the temporary global ceiling after a successful occurrence-local
+allocation; only a revision-bound protected-minimum constraint may retain it.
+This eliminates the former path which re-walked global PoP ordinals after the
+local allocation had already succeeded.
+`ObolControlLifecycleComposition.tla` closes the orthogonal policy/provider/
+host seam.  It proves that provider registration is not provider work,
+policy-off camera bookkeeping cannot arm automatic demand, exact-frame debt
+distinguishes work awaiting a request from work already attached to a frame,
+the first capacity-relevant hard-deadline miss owns quality recovery and a
+fresh exact-frame obligation, and terminal/HUD outcome is derived rather than
+stored.  The 2026-09-01 TLC pass checked 1,092,377 generated / 227,787 distinct
+lifecycle states to depth 32.  It includes two bounded interruptions which
+retire a runnable demand cursor without discharging its level-triggered
+importance-census obligation, and semantic-only selection/style mutations
+before and during exact presentation.  Those mutations advance their own
+presentation revision but preserve every LoD control fact; even an interrupted
+semantic-only frame may request only an exact repaint, never capacity recovery.
+The subsequently hardened
+28-fact refinement map checked 57,344 states: every concrete field
+independently and every combination of its ten distinct owner classes.  The
+offline checker now requires that complete fact mask, independently projects
+its obligations and fixed-precedence owner, and includes it in A/B/A cycle
+identity.  Its adversarial gate rejects alias-only cycles, owner/obligation
+mismatches, a presentation owner without a typed finite successor, and a
+missing concrete mask.  Dense 50k OSMesa tracing then found two refinement
+defects which sparse event samples had missed: a consumed capacity candidate
+could publish a replacement plan without advancing the capacity domain, and
+the runtime validator did not recognize the controller-scoped PUMP-to-RENDER
+transition already present in both `ObolControlLifecycleComposition` and
+`ObolHostWork`.  Capacity replacement now advances its semantic revision, and
+presentation diagnostics export the exact witness source; an unrelated shared
+host pump cannot satisfy that check.  The resulting dense trace passes the
+refinement checker, although the 30-second 50k OSMesa gate can still expire
+while monotone command preparation and worker realization are active.  This
+was distinguished from an end-state cycle by an extended full workflow: the
+warm 50k OSMesa selection/erase/redraw replay completed in 31.6 seconds, and
+its three post-selection convergence waits returned to ownerless readiness in
+0.55--0.92 seconds with no obligation or violation.  This
+does not close the remaining production refinement debt: not every imperative
+effect writer emits a typed transition record yet, and preparation's remaining
+unit rank is not yet exported into the dense trace, so the checker still
+samples states rather than checking a complete concrete execution against the
+transition relation.
 Finish that migration at semantic ledger boundaries and delete each superseded
 writer in the same change.  Do not add another policy model for the same state,
 and do not create a monolithic effect facade around already cohesive reducers.
+The 2026-08-30 implementation refinement now gives exact-frame debt distinct
+request-required and frame-awaited states, including reattachment to a
+coalesced host request after a newer semantic mutation supersedes its target.
+Provider registration and provider pending remain separate at the host/status
+boundary.  One derived controller-local pump projection covers all reducer
+obligations, while service queues and provider work are composed at the host
+boundary.  The policy-off transaction asserts the complete modeled retirement
+postcondition and also retires the inventory-coalescing deadline.  The
+controller-to-ledger projection is now canonical as well: inventory
+coalescing, visibility deferral, source deltas, quality probes, resumable
+retained allocation, importance census, and resident-admission retry can no
+longer keep the pump active while disappearing from convergence diagnostics.
+The public diagnostic snapshot now also carries the concrete 28-fact mask;
+this distinguishes those aliases without exposing private reducer objects.
+Focused
+off/on/off, idle-provider, exact-frame, and host-wakeup tests exercise these
+bridges.  Requesting an exact or batched-publication frame now transfers the
+runnable host level from PUMP to RENDER instead of polling an action which
+cannot advance before that frame completes; `BObolProgressiveStatus::hasMore`
+still reports the unfinished transaction without becoming a second scheduler.
+The HUD audit found no independently writable terminal outcome or controller
+phase: its phase and completion are projections of current evidence, while Qt
+retains only publication-change observations.
 The 2026-08-29 ownership audit retired the last detached lifecycle combinations
 relevant to proxy admission: structural relaxation is one four-state value,
 the recovery-plan witness lives with point-quality state, renderer-feedback
@@ -181,13 +255,25 @@ an owner label, progressive-pump level, or paused cursor is not a progress
 witness.
 
 After immutable generation snapshots removed repeated shared-generation loads
-and CAD timing became threshold stamped, the exact-current warm 150k shaded
-replays terminate box-free in about 40.4 seconds on System GL and 36.8 seconds
-on OSMesa.  The prior 32/64-pixel balancing cycle is gone: terminal samples
+and CAD timing became threshold stamped, the 2026-08-28 warm 150k shaded
+replays terminated box-free in about 40.4 seconds on System GL and 36.8 seconds
+on OSMesa.  The prior 32/64-pixel balancing cycle was gone: terminal samples
 have no owner, obligation, pending foreground/background work, or control
 violation.  This resolves the known same-population liveness defect, but not
 all scale debt.  Profile true-cold useful-preview latency and cache I/O using
 common policy events rather than an object-count regime.
+
+The stricter 2026-08-31 matched-quality workflow selects materially richer
+populations.  Its initial 150k System-GL view reaches 20.49M faces through
+78,341 meshed occurrences in 220 seconds; OSMesa reaches its constrained
+1.17M-face endpoint in 51 seconds.  Both are ownerless, box-free, proxy-free,
+and have no prominent-floor violation.  A current 50k `perf` replay confirms
+that the former 13.6% Obol scene-mutation snapshot hotspot has been retired;
+no current exclusive symbol exceeds 3%.  Treat the remaining 150k latency as
+distributed realization/publication throughput debt.  Instrument phase-level
+work and test batching or parallel publication before proposing another local
+micro-optimization.  `obol_lod_visual_quality.md` owns the exact metrics and
+the distinction between matched controls and unsafe whole-scene controls.
 
 The 2026-08-29 draw-metadata migration replay exposed a separate cross-owner
 gap: a policy revision could create a coverage census after the exact
@@ -199,6 +285,46 @@ System-GL 50k/150k matrices both pass; the 50k endpoint is fully ownerless,
 while 150k presents a terminal box-free framebuffer and truthfully continues
 bounded resident-prefix compaction in the background.  Do not weaken that
 distinction by treating background reclamation as unfinished visual work.
+
+A subsequent 50k exact-subpath erase exposed a different revision-boundary
+defect: compact retained visibility changed without changing immutable mesh
+inventory, so the presentation was correct while the convergence denominator
+remained at 50,000.  Mesh inventory and effective presentation visibility now
+have independent monotonic revisions and bounded journals.  The controller
+unions their changed-entry sets, while the host performs a level-triggered
+revision check after presentation synchronization.  Exact visibility is also
+a first-class revision in retained-allocation plans.  It requires one
+successor allocation after its bounded source delta is applied and the
+resulting framebuffer has been classified exactly.  The source census alone
+is insufficient: a restored occurrence may have lost its retained payload
+while hidden, and only the successor frame exposes the structural replacement
+work which must precede allocation.  This edge does not
+invalidate the renderer-capacity certificate: visibility changes allocation,
+not the cost model.  A newer exact edit supersedes an unpublished predecessor
+allocation so the latest delta cannot be stranded behind stale work.
+
+The final warm OSMesa 50k workflow updates 50,000 to 49,984 and back in
+1.36/1.40 seconds while retaining 1,206,806 faces, zero boxes, and the same
+5,130,680-unit certified budget.  The corresponding 150k workflow updates
+150,000 to 149,984 and back in 6.05/3.96 seconds while retaining 835,318 faces,
+zero boxes, and the same 1,446,651-unit budget within one rounding unit.  Both
+terminate ownerless and the six-domain runtime trace passes.  Preserve this
+distinction: visibility
+is a planning input, not a geometry-inventory or renderer-capacity mutation,
+and presentation-only edits still require a progress witness.
+
+A later timing-sensitive 50k replay made this ordering failure deterministic:
+erase-time allocation retired three visible mesh payloads, redraw updated the
+50,000-occurrence census, and immediate allocation inspected the predecessor
+frame.  Sixteen restored occurrences were absent from both the terminal ledger
+and every producer.  The controller now requires an exact presentation frame
+on every exact visibility delta, and
+`BObolLodPlanningObligations::exactVisibilityReallocationReady` is the sole
+gate from that frame to reallocation.  The strengthened submission and
+terminal-composition models prove the ordering and quiescent liveness.  The
+post-fix warm 50k OSMesa workflow at
+`/tmp/qged-visibility-prerequisite-50k-osmesa-20260901` restores all 50,000
+occurrences in 0.83 seconds, box-free and ownerless.
 
 The pre-typed-host 150k OSMesa report had three quality-floor misses, including
 one prominent synthetic occurrence.  The rebuilt host rerun has zero total or
@@ -257,6 +383,9 @@ where applicable, LoD on/off, resize and fractional DPR, zoom, rotation,
 translation, selection, exact/subpath erase-redraw, and memory turnover.
 Compare System GL and OSMesa semantics/images within declared tolerances.
 Use APNG and apitrace when diagnosing corruption, flashes, or camera jumps.
+Use the matched full-detail methodology and provisional corpus targets in
+`obol_lod_visual_quality.md`; libicv SSIM/PHASH and silhouette disagreement are
+required evidence, not substitutes for named-feature inspection.
 
 Release evidence must prove:
 
@@ -326,9 +455,17 @@ hierarchy-scale, and renderer-backed qualification.
   separate workloads and both are required.
 - Qualify cold spatial previews as globally representative, budget-aware
   presentations.  A local source page may never replace whole-object coverage.
-- Preserve the cross-renderer NIST adaptive-wire regression.  Complete shaded
-  adaptive tessellation growth, zoom-out reclamation, and memory-pressure
-  qualification on the NIST corpus and at least one large real BREP.
+- Preserve the cross-renderer NIST adaptive-wire regression and the passing
+  shaded NIST growth/zoom-out/reclamation/cache-restore lifecycle.  Repeat the
+  same constrained-residency qualification on at least one large real BREP;
+  the partial Big Boy BoT is not evidence for its original BREP hierarchy.
+  The current indexed-face guard rejects the known partial Big Boy tire and
+  cache version 3 prevents its replay, while fresh-cache NIST remains green.
+  This is only fail-closed containment.  Replace the legacy aggregate-success
+  CDT call with one bounded provider contract carrying deadline,
+  memory/result limits, cancellation, per-face completion, and typed outcome.
+  Both LoD-on and LoD-off shaded drawing must consume that same validated mesh
+  before the original Big Boy hierarchy can become a release gate.
 - Verify constrained-memory cache reload, corrupt/incompatible cache
   invalidation, background compaction, and cancellation during persistence.
 - Qualify simultaneous true-cold qged processes against the same large-asset

@@ -115,6 +115,9 @@ BObolMeshLodProvider::clear(void)
     transientMemoryLimited = FALSE;
     usePresentationCutLimit = FALSE;
     presentationCutLimit = -1;
+    presentationAdmissionCertified = FALSE;
+    presentationAdmissionViewRevision = 0;
+    presentationAdmissionPolicyRevision = 0;
     atomicRepresentationHandoff = FALSE;
     forcedCut = 0;
     resetExisting = FALSE;
@@ -380,7 +383,7 @@ lod_obb_proxy_from_points(BObolLodProxy &proxy, const point_t *points,
 
     vect_t xaxis, yaxis, zaxis;
     VSUB2(xaxis, points[1], points[0]);
-    VSUB2(yaxis, points[3], points[0]);
+    VSUB2(yaxis, points[2], points[0]);
     VSUB2(zaxis, points[4], points[0]);
     const fastf_t xlen = MAGNITUDE(xaxis);
     const fastf_t ylen = MAGNITUDE(yaxis);
@@ -3489,6 +3492,14 @@ lod_finish_resident_compaction(
 	}
     }
     p->workerCv.notify_all();
+    /* An obsolete asset has no current consumer and therefore produces no
+     * presentation result, but freeing its stable bytes advances the
+     * admission epoch.  Notify subscribers so memory-limited current assets
+     * can consume that capacity edge; otherwise a quiet view can terminate
+     * with ample reclaimed headroom and no event capable of starting its
+     * sparse retry pass. */
+    if (reclaimedStorage)
+	notifyResultReady = TRUE;
     if (notifyResultReady)
 	lod_notify_result_ready(p);
 }
@@ -3831,6 +3842,42 @@ lod_refinement_growth_budget(size_t current, size_t initial,
     return std::max(initial, growthBudget);
 }
 
+static BObolLodCounts
+lod_progressive_delivery_counts(
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    const std::vector<uint32_t> *requiredChunks, int cut)
+{
+    BObolLodCounts counts;
+    if (cut < hierarchy.min_cut || cut > hierarchy.max_cut)
+	return counts;
+
+    if (!hierarchy.chunks || !requiredChunks || requiredChunks->empty()) {
+	counts.faceCount = hierarchy.cuts[cut].face_count;
+	counts.pointCount = hierarchy.cuts[cut].point_count;
+    } else {
+	for (uint32_t chunk : *requiredChunks) {
+	    if (chunk >= hierarchy.chunk_count) {
+		counts.clear();
+		return counts;
+	    }
+	    const BObolMeshLodChunkCutInfo &population =
+		hierarchy.chunks[chunk].cuts[cut];
+	    counts.faceCount = population.face_count >
+		    UINT64_MAX - counts.faceCount ?
+		UINT64_MAX : counts.faceCount + population.face_count;
+	    counts.pointCount = population.point_count >
+		    UINT64_MAX - counts.pointCount ?
+		UINT64_MAX : counts.pointCount + population.point_count;
+	}
+    }
+    counts.originalPointCount = counts.pointCount;
+    /* Preserve the existing delivery-price convention.  Renderer admission
+     * accounts for any later corner-normal expansion from exact prepared
+     * geometry; this estimate only bounds one progressive worker step. */
+    counts.normalCount = hierarchy.has_normals ? counts.pointCount : 0;
+    return counts;
+}
+
 /* Select one bounded presentation step toward the producer-resolved
  * screen-error target.  This helper only prevents a first box->mesh
  * replacement from allocating and uploading an arbitrarily large cumulative
@@ -3839,7 +3886,8 @@ static int
 lod_progressive_delivery_cut(
     const struct BObolMeshLodHierarchyInfo &hierarchy,
     int requestedCut, int currentCut, int drawMode,
-    const BObolMeshLodProvider &provider)
+    const BObolMeshLodProvider &provider,
+    const std::vector<uint32_t> *requiredChunks)
 {
     int target = std::max(hierarchy.min_cut,
 	std::min(hierarchy.max_cut, requestedCut));
@@ -3850,13 +3898,8 @@ lod_progressive_delivery_cut(
 	provider.resetExisting || currentCut >= target)
 	return target;
 
-    BObolLodCounts currentCounts;
-    if (currentCut >= hierarchy.min_cut) {
-	currentCounts.faceCount = hierarchy.cuts[currentCut].face_count;
-	currentCounts.pointCount = hierarchy.cuts[currentCut].point_count;
-	currentCounts.normalCount = hierarchy.has_normals ?
-	    currentCounts.pointCount : 0;
-    }
+    const BObolLodCounts currentCounts = lod_progressive_delivery_counts(
+	hierarchy, requiredChunks, currentCut);
     const size_t currentCost = bobol_lod_render_cost_units(
 	currentCounts, drawMode, 1);
     const size_t costBudget = lod_refinement_growth_budget(currentCost,
@@ -3864,15 +3907,30 @@ lod_progressive_delivery_cut(
 	provider.refinementGrowthFactor);
 
     int selected = hierarchy.min_cut;
+    bool selectedPopulatedCut = false;
     for (int cut = hierarchy.min_cut; cut <= target; ++cut) {
-	BObolLodCounts counts;
-	counts.faceCount = hierarchy.cuts[cut].face_count;
-	counts.pointCount = hierarchy.cuts[cut].point_count;
-	counts.normalCount = hierarchy.has_normals ? counts.pointCount : 0;
+	const BObolLodCounts counts = lod_progressive_delivery_counts(
+	    hierarchy, requiredChunks, cut);
+	const bool populated = counts.faceCount && counts.pointCount;
+	if (!populated) {
+	    if (!selectedPopulatedCut)
+		selected = cut;
+	    continue;
+	}
 	if (bobol_lod_render_cost_units(counts, drawMode, 1) >
-	    costBudget)
+	    costBudget) {
+	    /* A page set's first drawable population is indivisible.  The scene
+	     * reservation estimates rather than opens every cold hierarchy on the
+	     * owner thread; when that estimate is low, publish the smallest useful
+	     * prefix and let the next measured frame correct the allowance.
+	     * Returning the preceding empty cut turns a valid hierarchy into a
+	     * terminal provider failure. */
+	    if (!selectedPopulatedCut)
+		selected = cut;
 	    break;
+	}
 	selected = cut;
+	selectedPopulatedCut = true;
     }
 
     /*
@@ -4962,6 +5020,13 @@ BObolLodService::realizeResidentMeshLod(
 		"bounded spatial coverage retained; no resident page is visible";
 	    lod_use_limited_spatial_layers(
 		result, resident->limitedSpatialLayers);
+	    result.presentationAdmissionCertified =
+		provider.presentationAdmissionCertified;
+	    result.presentationAdmissionViewRevision =
+		provider.presentationAdmissionViewRevision;
+	    result.presentationAdmissionPolicyRevision =
+		provider.presentationAdmissionPolicyRevision;
+	    result.presentationAdmissionCut = result.geometry.activeCut;
 	    result.canonicalizePayload();
 	    return result;
 	}
@@ -4991,7 +5056,8 @@ BObolLodService::realizeResidentMeshLod(
     int residentTarget = requestedCut;
     if (requestedCut >= 0)
 	residentTarget = lod_progressive_delivery_cut(hierarchy, requestedCut,
-	    deliveryCut, request.drawMode, provider);
+	    deliveryCut, request.drawMode, provider,
+	    chunked ? &requiredChunks : NULL);
     if (residentTarget < hierarchy.min_cut)
 	residentTarget = hierarchy.min_cut;
     if (residentTarget > hierarchy.max_cut)
@@ -5280,6 +5346,23 @@ BObolLodService::realizeResidentMeshLod(
 	    return lod_provider_status_result(request,
 		BOBOL_LOD_PROVIDER_ERROR,
 		"resident mesh provider could not prepare spatial renderer pages");
+	if (result.presentationLayers.empty()) {
+	    std::vector<uint32_t> populatedChunks;
+	    if (!resident->mesh->populatedChunkIdsAtCut(
+		    requiredChunks, drawCut, populatedChunks) ||
+		!populatedChunks.empty())
+		return lod_provider_status_result(request,
+		    BOBOL_LOD_PROVIDER_ERROR,
+		    "resident mesh provider omitted populated spatial renderer pages");
+	    /* bobol_lod_result_from_mesh_lod_info() conservatively classifies a
+	     * zero-count mesh as a cache miss.  For a spatial hierarchy, however,
+	     * zero view-local faces at this global cut are an exact drawable state.
+	     * The retained progressive generation proves the distinction. */
+	    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+	    result.diagnostic =
+		"view-local spatial page population is empty at the active cut";
+	    result.canonicalizePayload();
+	}
     } else {
 	result.preparedCadGeometry =
 	    resident->mesh->prepareCadGeometry(
@@ -5299,6 +5382,13 @@ BObolLodService::realizeResidentMeshLod(
 	result.diagnostic =
 	    "bounded spatial coverage and validated pages; durable cache capacity limited";
     }
+    result.presentationAdmissionCertified =
+	provider.presentationAdmissionCertified;
+    result.presentationAdmissionViewRevision =
+	provider.presentationAdmissionViewRevision;
+    result.presentationAdmissionPolicyRevision =
+	provider.presentationAdmissionPolicyRevision;
+    result.presentationAdmissionCut = result.geometry.activeCut;
     /* The renderer generation above is self-contained.  Keeping the cache
      * reader's cumulative arrays duplicates every point/index and previously
      * required one background compaction job per asset merely to release
@@ -5364,10 +5454,12 @@ BObolLodService::realizeResidentMeshLod(
 	  strstr(request.objectPath.getString(), traceFilter)))) {
 	bu_log("BObol resident LoD trace object=%s submitted_cut=%d "
 	       "resolved_cut=%d draw_cut=%d resident_cut=%d "
-	       "faces=%zu points=%zu memory_limited=%d admission=%llu "
+	       "pixels=%.9g target_error=%.9g faces=%zu points=%zu "
+	       "memory_limited=%d admission=%llu "
 	       "asset_revision=%llu load=%d compact=%d terminal=%d\n",
 	       name, request.requestedCut, result.resolvedCut, drawCut,
-	       residentCut,
+	       residentCut, request.projectedPixelDiameter,
+	       request.targetPixelError,
 	       result.counts.faceCount, result.counts.pointCount,
 	       result.memoryLimited ? 1 : 0,
 	       static_cast<unsigned long long>(
@@ -5379,9 +5471,10 @@ BObolLodService::realizeResidentMeshLod(
 	    for (int cut = hierarchy.min_cut;
 		 cut <= hierarchy.max_cut; ++cut)
 		bu_log("BObol resident hierarchy object=%s cut=%d "
-		       "faces=%zu points=%zu%s\n",
+		       "faces=%zu points=%zu object_error=%.17g%s\n",
 		       name, cut, hierarchy.cuts[cut].face_count,
 		       hierarchy.cuts[cut].point_count,
+		       hierarchy.cuts[cut].object_error,
 		       cut == hierarchy.max_cut ? " terminal" : "");
 	}
     }

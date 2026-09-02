@@ -936,7 +936,7 @@ ged_obol_faceplate_sync_params(BObolViewController *controller,
 }
 
 static std::string
-ged_obol_lod_compact_count(size_t value)
+ged_obol_lod_compact_count(uint64_t value)
 {
     struct bu_vls text = BU_VLS_INIT_ZERO;
     if (value >= 1000000)
@@ -946,7 +946,7 @@ ged_obol_lod_compact_count(size_t value)
 	bu_vls_sprintf(&text, "%.1fk",
 	    static_cast<double>(value) / 1000.0);
     else
-	bu_vls_sprintf(&text, "%zu", value);
+	bu_vls_sprintf(&text, "%" PRIu64, value);
     const std::string result = bu_vls_cstr(&text);
     bu_vls_free(&text);
     return result;
@@ -978,6 +978,9 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
     }
     BObolLodConvergenceStatus status;
     controller->getLodConvergenceStatus(status);
+    const size_t displayedPrimitiveCount =
+	status.presentedPrimitiveCountValid ?
+	status.presentedPrimitiveCount : status.activeFaces;
 
     if (!status.hasLodState) {
 	ged_obol_faceplate_remove(controller, view_ctx, track_name);
@@ -994,6 +997,20 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	status.phase == BOBOL_LOD_CONVERGENCE_IDLE && status.terminal &&
 	status.viewReady && !status.backgroundPending &&
 	status.fraction >= 1.0f;
+
+    /* Selection, highlighting, and manipulator changes own one exact
+     * presentation frame, but they do not rebalance LoD.  The shared control
+     * ledger deliberately tracks that frame so terminal waiters cannot race
+     * its style update; do not turn the same bookkeeping into a misleading
+     * "Balancing detail" flash.  Real capacity, point, publication, or
+     * background work contributes another obligation or one of the explicit
+     * calibration flags and continues through the normal HUD path. */
+    if (status.semanticPresentationFramePending) {
+	ged_obol_faceplate_remove(controller, view_ctx, track_name);
+	ged_obol_faceplate_remove(controller, view_ctx, fill_name);
+	ged_obol_faceplate_remove(controller, view_ctx, label_name);
+	return;
+    }
 
     const bool show =
 	status.phase != BOBOL_LOD_CONVERGENCE_IDLE ||
@@ -1013,7 +1030,151 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	    100.0f + 0.5f));
     const size_t pending = status.pendingTasks > SIZE_MAX - status.inFlight ?
 	SIZE_MAX : status.pendingTasks + status.inFlight;
-	switch (status.phase) {
+    const size_t pendingGeometry = pending > SIZE_MAX - status.queuedResults ?
+	SIZE_MAX : pending + status.queuedResults;
+    const auto append_settling_detail = [&]() {
+	if (status.visibleTargetCount > 0) {
+	    const size_t represented = status.satisfiedPayloadCount >
+		    SIZE_MAX - status.presentedSubpixelOccurrenceCount ?
+		SIZE_MAX : status.satisfiedPayloadCount +
+		    status.presentedSubpixelOccurrenceCount;
+	    bu_vls_printf(&text, "  %s/%s targets resolved",
+		ged_obol_lod_compact_count(std::min(
+		    represented, status.visibleTargetCount)).c_str(),
+		ged_obol_lod_compact_count(
+		    status.visibleTargetCount).c_str());
+	}
+	if (pendingGeometry > 0)
+	    bu_vls_printf(&text, "  %s geometry item%s pending",
+		ged_obol_lod_compact_count(pendingGeometry).c_str(),
+		pendingGeometry == 1 ? "" : "s");
+    };
+    const auto format_renderer_preparation = [&]() {
+	if (!status.rendererPreparationPreparingTargetCount)
+	    return false;
+	color[0] = 96;
+	color[1] = 190;
+	color[2] = 255;
+	if (status.rendererPreparationTotalUnits > 0) {
+	    const double preparationFraction =
+		static_cast<double>(
+		    std::min(status.rendererPreparationCompletedUnits,
+			status.rendererPreparationTotalUnits)) /
+		static_cast<double>(status.rendererPreparationTotalUnits);
+	    const int preparationPercent = static_cast<int>(std::floor(
+		preparationFraction * 100.0 + 0.5));
+	    bu_vls_sprintf(&text,
+		"Preparing renderer %d%%  view %d%%  %s/%s units",
+		preparationPercent, percent,
+		ged_obol_lod_compact_count(
+		    status.rendererPreparationCompletedUnits).c_str(),
+		ged_obol_lod_compact_count(
+		    status.rendererPreparationTotalUnits).c_str());
+	} else {
+	    bu_vls_sprintf(&text, "Finalizing renderer  view %d%%", percent);
+	}
+	if (status.rendererPreparationPreparingTargetCount > 1)
+	    bu_vls_printf(&text, "  %s targets",
+		ged_obol_lod_compact_count(
+		    status.rendererPreparationPreparingTargetCount).c_str());
+	return true;
+    };
+    const auto format_capacity_search = [&]() {
+	if (status.capacitySearchPhase ==
+		BOBOL_LOD_CAPACITY_SEARCH_INACTIVE ||
+	    status.capacitySearchPhase ==
+		BOBOL_LOD_CAPACITY_SEARCH_TERMINAL ||
+	    status.capacitySearchMaximumCandidates == 0)
+	    return false;
+	color[0] = 255;
+	color[1] = 170;
+	color[2] = 64;
+	const char *goal = status.capacitySearchGoal ==
+		BOBOL_LOD_CAPACITY_SEARCH_STATIC ? "static" : "responsive";
+	const unsigned int probe = std::min(
+	    status.capacitySearchTotalMeasuredCandidates + 1,
+	    status.capacitySearchMaximumCandidates);
+	if (status.capacitySearchTotalUnits > 0) {
+	    const uint64_t completedUnits = std::min(
+		status.capacitySearchCompletedUnits,
+		status.capacitySearchTotalUnits);
+	    const int searchPercent = static_cast<int>(std::floor(
+		100.0 * static_cast<double>(completedUnits) /
+		static_cast<double>(status.capacitySearchTotalUnits) + 0.5));
+	    bu_vls_sprintf(&text,
+		"Tuning %s detail  search %d%%  view %d%%  probe %u/%u max",
+		goal, searchPercent, percent, probe,
+		status.capacitySearchMaximumCandidates);
+	} else {
+	    bu_vls_sprintf(&text,
+		"Tuning %s detail  view %d%%  probe %u/%u max",
+		goal, percent, probe, status.capacitySearchMaximumCandidates);
+	}
+	if (status.capacitySearchPhase ==
+		BOBOL_LOD_CAPACITY_SEARCH_ALLOCATING) {
+	    bu_vls_printf(&text, "  allocating geometry");
+	} else if (status.capacitySearchPhase ==
+		BOBOL_LOD_CAPACITY_SEARCH_PRESENTING) {
+	    bu_vls_printf(&text, "  presenting");
+	} else if (status.capacitySearchPhase ==
+		BOBOL_LOD_CAPACITY_SEARCH_MEASURING) {
+	    const unsigned int completedSamples =
+		status.capacitySearchSampleLimit >
+			status.capacitySearchSamplesRemaining ?
+		status.capacitySearchSampleLimit -
+			status.capacitySearchSamplesRemaining : 0;
+	    bu_vls_printf(&text, "  sample %u/%u", completedSamples,
+		status.capacitySearchSampleLimit);
+	}
+	bu_vls_printf(&text, "  %s render primitives",
+	    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
+	return true;
+    };
+    const auto format_finalization = [&]() {
+	/* The last percent is the coherent allocation/publication/presentation
+	 * handoff, not another unbounded quality search.  Name its authoritative
+	 * control owner so a slow software frame or a large occurrence pass does
+	 * not look like an unexplained 99-percent stall.  Capacity search and
+	 * renderer preparation have exact ranks and are formatted above. */
+	if (percent < 99)
+	    return false;
+	color[0] = 255;
+	color[1] = 190;
+	color[2] = 72;
+	const char *operation = NULL;
+	switch (status.controlOwner) {
+	    case BOBOL_LOD_CONTROL_OWNER_INVENTORY:
+		operation = "Verifying visible geometry";
+		break;
+	    case BOBOL_LOD_CONTROL_OWNER_AVAILABILITY:
+		operation = "Loading final geometry";
+		break;
+	    case BOBOL_LOD_CONTROL_OWNER_PUBLICATION:
+		operation = "Publishing final detail";
+		break;
+	    case BOBOL_LOD_CONTROL_OWNER_PLANNING:
+		operation = status.capacitySearchPhase ==
+			BOBOL_LOD_CAPACITY_SEARCH_TERMINAL ?
+		    "Applying tuned detail" : "Allocating visible detail";
+		break;
+	    case BOBOL_LOD_CONTROL_OWNER_PRESENTATION:
+		operation = "Presenting final detail";
+		break;
+	    case BOBOL_LOD_CONTROL_OWNER_HANDOFF:
+		operation = "Finalizing stable view";
+		break;
+	    case BOBOL_LOD_CONTROL_OWNER_COMPACTION:
+		operation = "Optimizing retained detail";
+		break;
+	    default:
+		return false;
+	}
+	bu_vls_sprintf(&text, "%s  %s render primitives", operation,
+	    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
+	append_settling_detail();
+	return true;
+    };
+    switch (status.phase) {
 	case BOBOL_LOD_CONVERGENCE_DISCOVERING:
 	    if (status.expectedLeafCount > status.availableLeafCount) {
 		/* The bar is whole-view convergence, not just leaf enumeration.
@@ -1039,11 +1200,30 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	    color[0] = 96;
 	    color[1] = 190;
 	    color[2] = 255;
-	    /* Producer callbacks do not expose a trustworthy total-work
-	     * denominator.  The bar remains whole-view progress, but do not label
-	     * its monotonic fraction as a preparation percentage. */
-	    bu_vls_sprintf(&text, "Preparing LoD data");
-	    if (status.expectedLeafCount > 0) {
+	    if (status.sourcePreparationTotalUnits > 0) {
+		const uint64_t completed = std::min(
+		    status.sourcePreparationCompletedUnits,
+		    status.sourcePreparationTotalUnits);
+		const int preparationPercent = static_cast<int>(std::floor(
+		    100.0 * static_cast<double>(completed) /
+		    static_cast<double>(status.sourcePreparationTotalUnits) +
+		    0.5));
+		bu_vls_sprintf(&text,
+		    "%s %s/%s (%d%%)  view %d%%",
+		    completed < status.sourcePreparationTotalUnits ?
+			"Preparing geometry" : "Publishing geometry",
+		    ged_obol_lod_compact_count(completed).c_str(),
+		    ged_obol_lod_compact_count(
+			status.sourcePreparationTotalUnits).c_str(),
+		    preparationPercent, percent);
+	    } else {
+		/* Coverage can begin before a producer has enumerated a finite
+		 * representation queue.  Report that state without manufacturing a
+		 * percentage or time estimate. */
+		bu_vls_sprintf(&text, "Preparing LoD data");
+	    }
+	    if (status.sourcePreparationTotalUnits == 0 &&
+		status.expectedLeafCount > 0) {
 		const size_t represented = status.activePayloadCount >
 			SIZE_MAX - status.presentedSubpixelOccurrenceCount ?
 		    SIZE_MAX : status.activePayloadCount +
@@ -1054,7 +1234,8 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		    ged_obol_lod_compact_count(
 			status.expectedLeafCount).c_str());
 	    }
-	    if (status.sourcePreparationProviderCount > 0)
+	    if (status.sourcePreparationTotalUnits == 0 &&
+		status.sourcePreparationProviderCount > 0)
 		bu_vls_printf(&text, "  %s producer%s",
 		    ged_obol_lod_compact_count(
 			status.sourcePreparationProviderCount).c_str(),
@@ -1064,51 +1245,33 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 	    color[0] = 255;
 	    color[1] = 205;
 	    color[2] = 72;
-	    bu_vls_sprintf(&text, "Interactive detail  %s triangles",
-		ged_obol_lod_compact_count(status.activeFaces).c_str());
+	    bu_vls_sprintf(&text, "Interactive detail  %s render primitives",
+		ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
 	    break;
 	case BOBOL_LOD_CONVERGENCE_CALIBRATING:
-	    color[0] = 255;
-	    color[1] = 170;
-	    color[2] = 64;
-	    bu_vls_sprintf(&text,
-		"Balancing detail for %.0f FPS  %s triangles",
-		static_cast<double>(controller->getLodStableTargetFps()),
-		ged_obol_lod_compact_count(status.activeFaces).c_str());
+	    if (!format_renderer_preparation() && !format_capacity_search() &&
+		!format_finalization()) {
+		color[0] = 255;
+		color[1] = 170;
+		color[2] = 64;
+		bu_vls_sprintf(&text,
+		    "Improving view %d%%  target %.0f FPS  %s render primitives",
+		    percent,
+		    static_cast<double>(controller->getLodStableTargetFps()),
+		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
+		append_settling_detail();
+	    }
 	    break;
 	case BOBOL_LOD_CONVERGENCE_REFINING:
-	    bu_vls_sprintf(&text, "Refining view %d%%", percent);
-	    if (status.visibleTargetCount > 0) {
-		const size_t represented = status.satisfiedPayloadCount >
-			SIZE_MAX - status.presentedSubpixelOccurrenceCount ?
-		    SIZE_MAX : status.satisfiedPayloadCount +
-			status.presentedSubpixelOccurrenceCount;
-		bu_vls_printf(&text, "  %s/%s targets resolved",
-		    ged_obol_lod_compact_count(std::min(
-			represented, status.visibleTargetCount)).c_str(),
-		    ged_obol_lod_compact_count(
-			status.visibleTargetCount).c_str());
+	    if (!format_renderer_preparation() && !format_capacity_search() &&
+		!format_finalization()) {
+		bu_vls_sprintf(&text,
+		    "Improving view %d%%  target %.0f FPS  %s render primitives",
+		    percent,
+		    static_cast<double>(controller->getLodStableTargetFps()),
+		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
+		append_settling_detail();
 	    }
-	    {
-		const size_t unresolvedBoxes =
-		    status.presentedStructuralBoxCount >
-			status.terminalOccurrenceFailureCount ?
-		    status.presentedStructuralBoxCount -
-			status.terminalOccurrenceFailureCount : 0;
-		const size_t richTarget = status.activePayloadCount >
-			SIZE_MAX - unresolvedBoxes ?
-		    SIZE_MAX : status.activePayloadCount + unresolvedBoxes;
-		if (richTarget > 0 &&
-		    status.satisfiedPayloadCount < richTarget)
-		    bu_vls_printf(&text, "  %s/%s detailed parts",
-			ged_obol_lod_compact_count(std::min(
-			    status.satisfiedPayloadCount,
-			    richTarget)).c_str(),
-			ged_obol_lod_compact_count(richTarget).c_str());
-	    }
-	    if (pending > 0)
-		bu_vls_printf(&text, "  %s loading",
-		    ged_obol_lod_compact_count(pending).c_str());
 	    break;
 	case BOBOL_LOD_CONVERGENCE_BACKGROUND:
 	    color[0] = 112;
@@ -1164,8 +1327,8 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		color[1] = 170;
 		color[2] = 64;
 		bu_vls_sprintf(&text,
-		    "View usable  GPU-memory-limited  %s triangles",
-		    ged_obol_lod_compact_count(status.activeFaces).c_str());
+		    "View usable  GPU-memory-limited  %s render primitives",
+		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
 		if (status.gpuPressureProxyCount > 0)
 		    bu_vls_printf(&text, "  %s pressure proxies",
 			ged_obol_lod_compact_count(
@@ -1178,14 +1341,14 @@ ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
 		 * than retained-residency pressure.  Report the common fact without
 		 * incorrectly blaming renderer cadence. */
 		bu_vls_sprintf(&text,
-		    "View usable  memory-limited  %s triangles",
-		    ged_obol_lod_compact_count(status.activeFaces).c_str());
+		    "View usable  memory-limited  %s render primitives",
+		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
 	    } else {
 		bu_vls_sprintf(&text,
 		    status.performanceLimited ?
-			"View usable  responsiveness-limited  %s triangles" :
-			"View ready  %s triangles",
-		    ged_obol_lod_compact_count(status.activeFaces).c_str());
+			"View usable  responsiveness-limited  %s render primitives" :
+			"View ready  %s render primitives",
+		    ged_obol_lod_compact_count(displayedPrimitiveCount).c_str());
 	    }
 	    break;
 	default:

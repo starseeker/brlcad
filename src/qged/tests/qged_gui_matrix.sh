@@ -311,12 +311,14 @@ case_spec()
 {
     local case_name="$1"
     local generic="$build_dir/Generic_Twin.g"
-    local stanford="${BOBOL_STANFORD_DB:-$build_dir/stanford.g}"
+    # The shared stanford.g asset may intentionally be a symlink to archival
+    # storage.  Prefer the explicitly maintained local copy so cold-start
+    # latency measures discovery rather than an unrelated removable disk.
+    local stanford="$build_dir/stanford_local.g"
+    [[ -r "$stanford" ]] || stanford="$build_dir/stanford.g"
+    [[ -z "${BOBOL_STANFORD_DB:-}" ]] || stanford="$BOBOL_STANFORD_DB"
     if [[ ! -f "$generic" ]] || [[ "$(stat -c %s "$generic")" -lt 1000 ]]; then
 	generic="$build_dir/share/db/faa/Generic_Twin.g"
-    fi
-    if [[ ! -r "$stanford" && -r "$build_dir/stanford_local.g" ]]; then
-	stanford="$build_dir/stanford_local.g"
     fi
     case "$case_name" in
 	generic_twin)
@@ -888,7 +890,8 @@ ${hierarchy_expand_events}
      "arguments": {"name": "${image_dir}/tree-expanded.png"}},
     {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "set_current",
      "arguments": {"labels": [${hierarchy_selection_labels}]}},
-    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": ".", "action": "wait_progressive_view_ready",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 50}},
     {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/tree-selected.png"}},
     {"target": "${canvas_target}", "action": "checkpoint",
@@ -1229,20 +1232,34 @@ validate_report()
 	 ((.samples[-1].lod_convergence_memory_limited // false) == true and
 	  (.samples[-1].lod_convergence_view_ready // false) == true and
 	  (.samples[-1].lod_convergence_fraction // 0) >= 1 and
-	  (.samples[-1].progressive_pending == false))) and
+	  ((.samples[-1].progressive_pending == false) or
+	   ((.samples[-1].lod_convergence_background_pending // false) == true)))) and
 	(((.samples[-1].lod_gpu_pressure_proxies // 0) == 0) or
 	 ((.samples[-1].lod_gpu_memory_pressure // false) == true and
 	  (.samples[-1].lod_convergence_memory_limited // false) == true and
 	  (.samples[-1].lod_convergence_view_ready // false) == true and
 	  (.samples[-1].lod_convergence_fraction // 0) >= 1 and
-	  (.samples[-1].progressive_pending == false))) and
+	  ((.samples[-1].progressive_pending == false) or
+	   ((.samples[-1].lod_convergence_background_pending // false) == true)))) and
 	((.samples[-1].lod_service_pending_tasks // 0) == 0) and
 	((.samples[-1].lod_service_active_requests // 0) == 0) and
 	((.samples[-1].lod_service_queued_results // 0) == 0) and
 	((.samples[-1].lod_service_queued_cache_writes // 0) == 0) and
-	((.samples[-1].active_lod_aabb_payloads // 0) == 0) and
-	((.samples[-1].active_lod_obb_payloads // 0) == 0) and
-	((.samples[-1].active_lod_sphere_payloads // 0) == 0) and
+	# Terminal structural proxies are valid only when the controller has an
+	# explicit memory or renderer-performance constraint proof.  Hubble and
+	# the large fixtures may retain a small least-important proxy suffix after
+	# a costly pose, while unconstrained scenes (especially Generic Twin) must
+	# retire every startup proxy.
+	((((.samples[-1].active_lod_aabb_payloads // 0) +
+	   (.samples[-1].active_lod_obb_payloads // 0) +
+	   (.samples[-1].active_lod_sphere_payloads // 0)) == 0) or
+	 ((.samples[-1].lod_convergence_view_ready // false) == true and
+	  (.samples[-1].lod_convergence_fraction // 0) >= 1 and
+	  ((.samples[-1].progressive_pending == false) or
+	   ((.samples[-1].lod_convergence_background_pending // false) == true)) and
+	  (((.samples[-1].lod_convergence_memory_limited // false) == true) or
+	   ((.samples[-1].lod_convergence_performance_limited // false) == true)) and
+	  ((.samples[-1].lod_convergence_constraint_evidence_mask // 0) != 0))) and
 	# Compact entries outside the current view intentionally need no payload:
 	# requiring one for every leaf defeats view-aware LoD memory management.
 	# Existing payloads must instead form a one-to-one, entry-backed subset.
@@ -1950,11 +1967,11 @@ validate_report()
 	    (if .backend == "system_gl" and
 		(($beforeRotate.last_render_ms // 9223372036854775807) <=
 		    (1050.0 /
-			($beforeRotate.lod_interactive_target_fps // 60.0)))
+			($beforeRotate.lod_interactive_target_fps // 20.0)))
 	     then
 		(if $rotationPeakMs <=
 		      (1050.0 /
-		       ($beforeRotate.lod_interactive_target_fps // 60.0))
+		       ($beforeRotate.lod_interactive_target_fps // 20.0))
 		 then
 		    (($held.lod_target_pixel_error // 9223372036854775807) <=
 			1.01) and
@@ -2039,6 +2056,9 @@ validate_report()
     if [[ -n "$hierarchy_path" ]]; then
 	if ! jq -e --arg object "$object" --arg path "$hierarchy_path" '
 	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/tree-expanded.png")))) as $preSelection |
+	    (first(.samples[] |
 		select(.action == "set_current") | .event_index)) as $selected |
 	    (first(.samples[] |
 		select(.command? == ("erase " + $path)) |
@@ -2053,18 +2073,35 @@ validate_report()
 		.selection_paths? != null and
 		(.selection_paths | index($path)) != null)) and
 	    # Selection must not restart camera-visible LoD work.  Resident-prefix
-	    # compaction is deliberately allowed to continue in the background;
-	    # progressive_pending includes that memory housekeeping even when the
-	    # selected presentation is already complete and view-ready.
+	    # compaction is deliberately allowed to continue in the background, but
+	    # every standing pump must have a concrete controller, provider, or
+	    # service witness.  A bare progressive_pending bit used to survive the
+	    # OSMesa selection frame and misreport endless background work.
 	    (all(.samples[];
 		if (.event_index > $selected and .event_index < $erased)
 		then (.lod_submissions_pending == false and
 		      .lod_results_pending == false and
 		      .lod_refinement_frame_pending == false and
+		      (.render_capacity_sample_requested == false) and
 		      ((.lod_service_pending_tasks // 0) == 0) and
 		      ((.lod_service_active_requests // 0) == 0) and
-		      ((.lod_service_queued_results // 0) == 0))
+		      ((.lod_service_queued_results // 0) == 0) and
+		      ((.progressive_pending == false) or
+		       ((.lod_control_obligation_mask // 0) != 0) or
+		       ((.lod_convergence_source_preparation_providers // 0) > 0) or
+		       ((.lod_service_queued_cache_writes // 0) > 0)))
 		else true end)) and
+	    # Selection is a presentation-only transaction.  Once its exact style
+	    # frame commits, it must return to the pre-selection convergence state
+	    # without changing the view policy or retained geometry population.
+	    (($selectedShot.lod_convergence_phase // -1) ==
+	     ($preSelection.lod_convergence_phase // -2)) and
+	    (($selectedShot.lod_policy_revision // -1) ==
+	     ($preSelection.lod_policy_revision // -2)) and
+	    (($selectedShot.active_lod_scene_faces // -1) ==
+	     ($preSelection.active_lod_scene_faces // -2)) and
+	    (($selectedShot.visible_structural_fallback_boxes // -1) ==
+	     ($preSelection.visible_structural_fallback_boxes // -2)) and
 	    (any(.samples[];
 		.command? == ("erase " + $path) and
 		((.draw_frontier_count // 0) > 0) and
@@ -2863,7 +2900,7 @@ validate_report()
 	    # were historically isolated.
 	    (($active | submitted) > 0) and
 	    (if (($active.last_render_ms // 9223372036854775807) <=
-		    (1000.0 / ($close.lod_stable_target_fps // 20.0)))
+		    (1000.0 / ($close.lod_stable_target_fps // 10.0)))
 	     then
 		(($close.active_progressive_cad_cut_max // -1) >=
 		 ([($active.active_progressive_cad_cut_max // -1),

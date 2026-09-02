@@ -14,17 +14,22 @@
 
 EXTENDS Naturals
 
-CONSTANT MaxPointSteps
+CONSTANTS MaxPointSteps, MaxPrefetch, MaxPrefetchBatch
 
 Frontiers == {"clear", "aggregatable", "meshRequired"}
 Owners == {"none", "admissionFrame", "structuralRepair",
-           "structuralPrefetch", "pointPublication", "stableCalibration"}
+           "terminalProxy", "structuralPrefetch", "pointPublication",
+           "stableCalibration"}
 
 VARIABLES frontier, owner, pointStep, pointSettled, structuralBacking,
-          candidatePending, candidateStep, capacityRevision, terminal
+          candidatePending, candidateStep, capacityRevision,
+          structuralCapacityRejected, prefetchRemaining, prefetchBatch,
+          terminal
 
 vars == <<frontier, owner, pointStep, pointSettled, structuralBacking,
-          candidatePending, candidateStep, capacityRevision, terminal>>
+          candidatePending, candidateStep, capacityRevision,
+          structuralCapacityRejected, prefetchRemaining, prefetchBatch,
+          terminal>>
 
 TypeOK ==
     /\ frontier \in Frontiers
@@ -35,6 +40,9 @@ TypeOK ==
     /\ candidatePending \in BOOLEAN
     /\ candidateStep \in 0..MaxPointSteps
     /\ capacityRevision \in 0..MaxPointSteps
+    /\ structuralCapacityRejected \in BOOLEAN
+    /\ prefetchRemaining \in 0..MaxPrefetch
+    /\ prefetchBatch \in 0..MaxPrefetchBatch
     /\ terminal \in BOOLEAN
 
 Init ==
@@ -46,6 +54,9 @@ Init ==
     /\ candidatePending = FALSE
     /\ candidateStep = 0
     /\ capacityRevision = 0
+    /\ structuralCapacityRejected = FALSE
+    /\ prefetchRemaining = 0
+    /\ prefetchBatch = 0
     /\ terminal = FALSE
 
 ClaimAdmissionFrame ==
@@ -56,7 +67,8 @@ ClaimAdmissionFrame ==
     /\ owner' = "admissionFrame"
     /\ UNCHANGED <<frontier, pointStep, pointSettled, structuralBacking,
                     candidatePending, candidateStep, capacityRevision,
-                    terminal>>
+                    structuralCapacityRejected, prefetchRemaining,
+                    prefetchBatch, terminal>>
 
 CompleteAdmissionFrame ==
     /\ ~terminal
@@ -70,27 +82,63 @@ CompleteAdmissionFrame ==
     /\ pointSettled' = FALSE
     /\ structuralBacking' = TRUE
     /\ UNCHANGED <<candidatePending, candidateStep, capacityRevision,
-                    terminal>>
+                    structuralCapacityRejected, prefetchRemaining,
+                    prefetchBatch, terminal>>
 
 ClaimStructuralRepair ==
     /\ ~terminal
     /\ owner = "none"
     /\ frontier = "meshRequired"
+    /\ ~structuralCapacityRejected
     /\ owner' = "structuralRepair"
     /\ UNCHANGED <<frontier, pointStep, pointSettled, structuralBacking,
                     candidatePending, candidateStep, capacityRevision,
-                    terminal>>
+                    structuralCapacityRejected, prefetchRemaining,
+                    prefetchBatch, terminal>>
 
-CompleteStructuralRepair ==
+CompleteStructuralRepairSuccess ==
     /\ ~terminal
     /\ owner = "structuralRepair"
-    /\ frontier' = "clear"
     /\ owner' = "none"
+    /\ frontier' = "clear"
     /\ pointSettled' = (pointStep = 0)
     /\ structuralBacking' \in IF pointStep = 0 THEN {FALSE}
                              ELSE BOOLEAN
+    /\ structuralCapacityRejected' = structuralCapacityRejected
     /\ UNCHANGED <<pointStep, candidatePending, candidateStep,
-                    capacityRevision, terminal>>
+                    capacityRevision, prefetchRemaining, prefetchBatch,
+                    terminal>>
+
+RejectStructuralRepair ==
+    /\ ~terminal
+    /\ owner = "structuralRepair"
+    /\ owner' = "none"
+    /\ structuralCapacityRejected' = TRUE
+    /\ UNCHANGED <<frontier, pointStep, pointSettled, structuralBacking,
+                    candidatePending, candidateStep, capacityRevision,
+                    prefetchRemaining, prefetchBatch, terminal>>
+
+ClaimTerminalProxy ==
+    /\ ~terminal
+    /\ owner = "none"
+    /\ frontier = "meshRequired"
+    /\ structuralCapacityRejected
+    /\ owner' = "terminalProxy"
+    /\ UNCHANGED <<frontier, pointStep, pointSettled, structuralBacking,
+                    candidatePending, candidateStep, capacityRevision,
+                    structuralCapacityRejected, prefetchRemaining,
+                    prefetchBatch, terminal>>
+
+CompleteTerminalProxy ==
+    /\ ~terminal
+    /\ owner = "terminalProxy"
+    /\ frontier' = "clear"
+    /\ owner' = "none"
+    /\ pointSettled' = TRUE
+    /\ structuralBacking' = FALSE
+    /\ UNCHANGED <<pointStep, candidatePending, candidateStep,
+                    capacityRevision, structuralCapacityRejected,
+                    prefetchRemaining, prefetchBatch, terminal>>
 
 ClaimStableCalibration ==
     /\ ~terminal
@@ -101,7 +149,8 @@ ClaimStableCalibration ==
     /\ owner' = "stableCalibration"
     /\ UNCHANGED <<frontier, pointStep, pointSettled, structuralBacking,
                     candidatePending, candidateStep, capacityRevision,
-                    terminal>>
+                    structuralCapacityRejected, prefetchRemaining,
+                    prefetchBatch, terminal>>
 
 CompleteStableCalibration ==
     /\ ~terminal
@@ -110,7 +159,8 @@ CompleteStableCalibration ==
            /\ pointSettled' = TRUE
            /\ UNCHANGED <<frontier, pointStep, structuralBacking,
                            candidatePending, candidateStep,
-                           capacityRevision, terminal>>
+                           capacityRevision, structuralCapacityRejected,
+                           prefetchRemaining, prefetchBatch, terminal>>
        \/ /\ pointStep > 0
            /\ ~structuralBacking
            /\ owner' = "none"
@@ -118,30 +168,62 @@ CompleteStableCalibration ==
            /\ pointSettled' = (pointStep' = 0)
            /\ capacityRevision' = capacityRevision + 1
            /\ UNCHANGED <<frontier, structuralBacking, candidatePending,
-                           candidateStep, terminal>>
+                           candidateStep, structuralCapacityRejected,
+                           prefetchRemaining, prefetchBatch, terminal>>
        \/ /\ pointStep > 0
            /\ structuralBacking
            /\ owner' = "structuralPrefetch"
            /\ candidatePending' = TRUE
            /\ candidateStep' = pointStep - 1
+           /\ prefetchRemaining' \in 1..MaxPrefetch
+           /\ prefetchBatch' \in 1..MaxPrefetchBatch
+           /\ prefetchBatch' <= prefetchRemaining'
            /\ UNCHANGED <<frontier, pointStep, pointSettled,
-                           structuralBacking, capacityRevision, terminal>>
+                           structuralBacking, capacityRevision,
+                           structuralCapacityRejected, terminal>>
 
-CompleteStructuralPrefetch ==
+\* Each exact bounded-batch completion either clears the frontier or exposes a
+\* strictly smaller remainder.  The completed batch can replace between one
+\* and every selected occurrence; a nonzero remainder receives another bounded
+\* batch.  Provider publication changes inventory while fulfilling this action,
+\* but does not change the candidate's semantic occurrence/projection domain
+\* and therefore cannot cancel it.
+AdvanceStructuralPrefetch ==
     /\ ~terminal
     /\ owner = "structuralPrefetch"
     /\ pointStep > 0
     /\ candidatePending
     /\ candidateStep = pointStep - 1
-    /\ \/ /\ owner' = "pointPublication"
-           /\ UNCHANGED <<pointSettled, structuralBacking,
-                           candidatePending, candidateStep>>
-       \/ /\ owner' = "none"
-           /\ pointSettled' = TRUE
-           /\ candidatePending' = FALSE
-           /\ candidateStep' = 0
-           /\ UNCHANGED structuralBacking
-    /\ UNCHANGED <<frontier, pointStep, capacityRevision, terminal>>
+    /\ prefetchRemaining > 0
+    /\ prefetchBatch > 0
+    /\ \E nextRemaining \in 0..(prefetchRemaining - 1):
+          /\ prefetchRemaining <= nextRemaining + prefetchBatch
+          /\ prefetchRemaining' = nextRemaining
+          /\ IF nextRemaining = 0
+                THEN /\ owner' = "pointPublication"
+                     /\ prefetchBatch' = 0
+                ELSE /\ owner' = "structuralPrefetch"
+                     /\ prefetchBatch' \in 1..MaxPrefetchBatch
+                     /\ prefetchBatch' <= nextRemaining
+    /\ UNCHANGED <<frontier, pointStep, pointSettled, structuralBacking,
+                    candidatePending, candidateStep, capacityRevision,
+                    structuralCapacityRejected, terminal>>
+
+\* A true domain change or a pass with no strict progress rejects the private
+\* candidate without changing the public point cut or capacity evidence.
+RejectStructuralPrefetch ==
+    /\ ~terminal
+    /\ owner = "structuralPrefetch"
+    /\ candidatePending
+    /\ prefetchRemaining > 0
+    /\ owner' = "none"
+    /\ pointSettled' = TRUE
+    /\ candidatePending' = FALSE
+    /\ candidateStep' = 0
+    /\ prefetchRemaining' = 0
+    /\ prefetchBatch' = 0
+    /\ UNCHANGED <<frontier, pointStep, capacityRevision,
+                    structuralBacking, structuralCapacityRejected, terminal>>
 
 \* The old point cut remains active throughout preload.  Only this exact
 \* publication edge may expose the candidate and invalidate the capacity
@@ -152,6 +234,8 @@ CompletePointPublication ==
     /\ owner = "pointPublication"
     /\ candidatePending
     /\ candidateStep = pointStep - 1
+    /\ prefetchRemaining = 0
+    /\ prefetchBatch = 0
     /\ \/ /\ owner' = "none"
            /\ pointStep' = candidateStep
            /\ pointSettled' = (candidateStep = 0)
@@ -165,24 +249,32 @@ CompletePointPublication ==
            /\ candidateStep' = 0
            /\ UNCHANGED <<pointStep, structuralBacking,
                            capacityRevision>>
-    /\ UNCHANGED <<frontier, terminal>>
+    /\ UNCHANGED <<frontier, structuralCapacityRejected,
+                    prefetchRemaining, prefetchBatch, terminal>>
 
 PublishReady ==
     /\ ~terminal
     /\ frontier = "clear"
     /\ owner = "none"
     /\ ~candidatePending
+    /\ prefetchRemaining = 0
+    /\ prefetchBatch = 0
     /\ (pointStep = 0 \/ pointSettled)
     /\ terminal' = TRUE
     /\ UNCHANGED <<frontier, owner, pointStep, pointSettled,
                     structuralBacking, candidatePending, candidateStep,
-                    capacityRevision>>
+                    capacityRevision, structuralCapacityRejected,
+                    prefetchRemaining, prefetchBatch>>
 
 ClaimSuccessor == ClaimAdmissionFrame \/ ClaimStructuralRepair \/
-                  ClaimStableCalibration
-CompleteSuccessor == CompleteAdmissionFrame \/ CompleteStructuralRepair \/
+                  ClaimTerminalProxy \/ ClaimStableCalibration
+CompleteSuccessor == CompleteAdmissionFrame \/
+                     CompleteStructuralRepairSuccess \/
+                     RejectStructuralRepair \/
+                     CompleteTerminalProxy \/
                      CompleteStableCalibration \/
-                     CompleteStructuralPrefetch \/
+                     AdvanceStructuralPrefetch \/
+                     RejectStructuralPrefetch \/
                      CompletePointPublication
 
 Next ==
@@ -201,18 +293,24 @@ NoPrematureReady == terminal =>
     /\ frontier = "clear"
     /\ owner = "none"
     /\ ~candidatePending
+    /\ prefetchRemaining = 0
+    /\ prefetchBatch = 0
     /\ (pointStep = 0 \/ pointSettled)
 
 OwnerMatchesFrontier ==
     /\ (owner = "admissionFrame" => frontier = "aggregatable")
     /\ (owner = "structuralRepair" => frontier = "meshRequired")
+    /\ (owner = "terminalProxy" =>
+           frontier = "meshRequired" /\ structuralCapacityRejected)
     /\ (owner = "structuralPrefetch" =>
            frontier = "clear" /\ pointStep > 0 /\ ~pointSettled /\
            structuralBacking /\ candidatePending /\
-           candidateStep = pointStep - 1)
+           candidateStep = pointStep - 1 /\ prefetchRemaining > 0 /\
+           prefetchBatch > 0 /\ prefetchBatch <= prefetchRemaining)
     /\ (owner = "pointPublication" =>
            frontier = "clear" /\ pointStep > 0 /\ ~pointSettled /\
-           candidatePending /\ candidateStep = pointStep - 1)
+           candidatePending /\ candidateStep = pointStep - 1 /\
+           prefetchRemaining = 0)
     /\ (owner = "stableCalibration" =>
            frontier = "clear" /\ pointStep > 0 /\ ~pointSettled)
 
@@ -221,6 +319,13 @@ PrivateCandidateHasOneOwner ==
         /\ owner \in {"structuralPrefetch", "pointPublication"}
         /\ candidateStep = pointStep - 1
 
+PrefetchRankOwned ==
+    /\ (prefetchRemaining > 0) <=> (owner = "structuralPrefetch")
+    /\ (prefetchBatch > 0) <=> (owner = "structuralPrefetch")
+    /\ prefetchBatch <= prefetchRemaining
+
+BoundedPrefetchBatch == prefetchBatch <= MaxPrefetchBatch
+
 \* Preload completion never mutates the public cut or capacity revision.
 \* The sole candidate-publication transition either advances both atomically
 \* or clears the candidate while preserving both.
@@ -228,6 +333,11 @@ PrivatePreloadCannotPublish ==
     owner = "structuralPrefetch" =>
         /\ pointStep > 0
         /\ candidateStep = pointStep - 1
+        /\ prefetchRemaining > 0
+        /\ prefetchBatch > 0
+
+TerminalProxyRequiresCapacityWitness ==
+    owner = "terminalProxy" => structuralCapacityRejected
 
 OwnerlessFrontierHasSuccessor ==
     owner = "none" /\

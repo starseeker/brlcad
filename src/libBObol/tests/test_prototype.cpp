@@ -3323,20 +3323,24 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    viewController.consumeRenderRequest(NULL))
 	    FAIL("view controller should consume render requests atomically");
 	SbBool lodCapacityRelevant = TRUE;
+	SbBool lodPlanningRelevant = TRUE;
 	viewController.requestPresentationRender("selection-style");
 	if (!viewController.consumeRenderRequest(&renderReason,
-		&lodCapacityRelevant) || lodCapacityRelevant ||
+		&lodCapacityRelevant, &lodPlanningRelevant) ||
+	    lodCapacityRelevant || lodPlanningRelevant ||
 	    bu_strcmp(renderReason.getString(), "selection-style") != 0)
-	    FAIL("presentation-only requests should not become LoD capacity samples");
+	    FAIL("presentation-only requests should not become LoD work");
 	viewController.requestPresentationRender("selection-style");
-	viewController.requestRender("lod-cut");
+	viewController.requestLodCapacityRender("lod-cut");
 	if (!viewController.consumeRenderRequest(NULL,
-		&lodCapacityRelevant) || !lodCapacityRelevant)
-	    FAIL("a coalesced LoD request should preserve capacity relevance");
-	viewController.requestRender("lod-cut");
+		&lodCapacityRelevant, &lodPlanningRelevant) ||
+	    !lodCapacityRelevant || !lodPlanningRelevant)
+	    FAIL("a coalesced LoD request should preserve LoD relevance");
+	viewController.requestLodCapacityRender("lod-cut");
 	viewController.requestPresentationRender("selection-style");
 	if (!viewController.consumeRenderRequest(NULL,
-		&lodCapacityRelevant) || !lodCapacityRelevant)
+		&lodCapacityRelevant, &lodPlanningRelevant) ||
+	    !lodCapacityRelevant || !lodPlanningRelevant)
 	    FAIL("a presentation repaint should not mask pending LoD work");
 	if (viewController.renderPending(FALSE, FALSE, NULL) ||
 	    viewController.isRenderRequested())
@@ -4728,6 +4732,44 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    FAIL("direct primitive realization should stream one compact occurrence");
 	}
 	streamSource->unref();
+    }
+
+    /* A path ending in a primitive is still an assembled occurrence.  The
+     * direct-leaf optimization must retain every parent member transform even
+     * though it imports only the terminal primitive payload. */
+    for (int drawMode : {SoBRLDatabaseSource::WIREFRAME,
+	SoBRLDatabaseSource::SHADED}) {
+	SoBRLDatabaseSource *transformedSource = new SoBRLDatabaseSource;
+	transformedSource->ref();
+	transformedSource->setDatabase(dbip);
+	transformedSource->path = "assembly.c/left.c/box.s";
+	transformedSource->drawMode = drawMode;
+	transformedSource->sourceRevision = drawMode ==
+	    SoBRLDatabaseSource::WIREFRAME ? 15 : 16;
+	BObolCompactOccurrenceStream transformedStream;
+	const SbBool transformedRealized = drawMode ==
+	    SoBRLDatabaseSource::WIREFRAME ?
+	    transformedSource->realizeDatabaseWireframe(&transformedStream) :
+	    transformedSource->realizeDatabaseMesh(&transformedStream);
+	std::vector<BObolCompactOccurrence> transformedOccurrences;
+	(void)transformedStream.drain(transformedOccurrences, 4);
+	SbVec3f transformedOrigin;
+	if (transformedOccurrences.size() == 1)
+	    transformedOccurrences[0].localTransform.multVecMatrix(
+		SbVec3f(0.0f, 0.0f, 0.0f), transformedOrigin);
+	SoGetBoundingBoxAction transformedBounds(viewport);
+	transformedBounds.apply(transformedSource);
+	const SbBox3f transformedBox = transformedBounds.getBoundingBox();
+	if (!transformedRealized || transformedOccurrences.size() != 1 ||
+	    !transformedOccurrences[0].geometry ||
+	    !nearly_equal(transformedOrigin[0], 10.0f) ||
+	    transformedBox.isEmpty() ||
+	    !nearly_equal(transformedBox.getMin()[0], 8.0f) ||
+	    !nearly_equal(transformedBox.getMax()[0], 13.0f)) {
+	    transformedSource->unref();
+	    FAIL("direct primitive realization should preserve its full-path transform");
+	}
+	transformedSource->unref();
     }
 
     root = new SoSeparator;

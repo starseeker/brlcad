@@ -8,6 +8,7 @@ set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_root="$(cd "$script_dir/../../.." && pwd)"
+source "$script_dir/qged_test_display.sh"
 build_dir="$source_root/.build"
 database=""
 artifact_dir=""
@@ -40,13 +41,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "${DISPLAY:-}" ]]; then
-    if ! command -v xvfb-run >/dev/null 2>&1; then
-	echo "ERROR: a display or xvfb-run is required" >&2
-	exit 2
-    fi
-    exec xvfb-run -a "$0" "${original_arguments[@]}"
-fi
+qged_test_ensure_display "$0" "${original_arguments[@]}"
 
 build_dir="$(realpath -m "$build_dir")"
 qged="$build_dir/bin/qged"
@@ -110,14 +105,18 @@ write_events()
     {"target": "i:org.brlcad.qged.edit.ell.activate", "action": "activate", "arguments": {"checked": true}},
     {"target": "i:primitiveEdit.target", "action": "set_text", "arguments": {"text": "edit.c/edit.s"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "edit edit.c/edit.s status", "contains": "ell"}},
+    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 10000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/edit.png"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "ert -P 1 -H 16"}},
     {"target": ".", "action": "wait_subprocess_idle", "arguments": {"timeout_ms": 120000, "quiet_ms": 100}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view faceplate fb", "contains": "2"}},
+    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 10000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/underlay.png"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view faceplate fb 1"}},
+    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 10000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/overlay.png"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view faceplate fb 3"}},
+    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 10000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/interlay.png"}},
     {"target": ".", "action": "resize", "arguments": {"width": 1100, "height": 760}},
     {"target": ".", "action": "qged_command_batch", "arguments": {"commands": ["ae 35 25", "autoview"]}},
@@ -125,6 +124,7 @@ write_events()
     {"target": ".", "action": "wait_subprocess_idle", "arguments": {"timeout_ms": 120000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/resized.png"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view faceplate fb 0"}},
+    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 10000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/off.png"}}
   ]
 }

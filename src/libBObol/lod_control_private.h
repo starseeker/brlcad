@@ -8,6 +8,7 @@
 #ifndef LIBBOBOL_LOD_CONTROL_PRIVATE_H
 #define LIBBOBOL_LOD_CONTROL_PRIVATE_H
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -75,6 +76,19 @@ public:
     void beginFresh(bool active = true)
     {
 	this->stateValue = active ? State::ACTIVE : State::IDLE;
+    }
+
+    /* Discovery may finish a predecessor pass while compact inventory is
+     * still open.  Once the producer closes, consume the preserved successor
+     * obligation as the new active pass.  activate() is intentionally not
+     * used here: ACTIVE_RESCAN means an active predecessor still owes a later
+     * full pass, whereas this transition starts that full pass itself. */
+    bool beginPendingRescan(void)
+    {
+	if (this->stateValue != State::IDLE_RESCAN)
+	    return false;
+	this->stateValue = State::ACTIVE;
+	return true;
     }
 
     /* Retiring a completed transaction consumes both its activity and rescan
@@ -236,9 +250,11 @@ public:
 	this->lastGeometryUploadBytes.reset();
 	this->lastPresentationReusable = false;
 	this->lastCadTimeNanosecondsValue = 0;
+	this->lastCadRenderCostValue.reset();
 	this->lastCadPointThreshold =
 	    std::numeric_limits<float>::quiet_NaN();
 	this->lastStructuralTimeNanosecondsValue = 0;
+	this->lastStructuralRenderCostValue.reset();
 	this->lastStructuralPointThreshold =
 	    std::numeric_limits<float>::quiet_NaN();
     }
@@ -254,7 +270,8 @@ public:
     }
 
     void noteCadPresentation(uint64_t elapsedNanoseconds,
-	float pointProxyPixelThreshold, bool preparedReplay,
+	float pointProxyPixelThreshold,
+	const std::optional<size_t> &presentedRenderCost, bool preparedReplay,
 	const std::optional<uint64_t> &geometryUploadBytes)
     {
 	const bool uploadChanged = geometryUploadBytes &&
@@ -265,6 +282,7 @@ public:
 	this->lastPresentationReusable = preparedReplay ||
 	    (geometryUploadBytes && !uploadChanged);
 	this->lastCadTimeNanosecondsValue = elapsedNanoseconds;
+	this->lastCadRenderCostValue = presentedRenderCost;
 	this->lastCadPointThreshold = pointProxyPixelThreshold;
     }
 
@@ -288,6 +306,15 @@ public:
 	    this->lastCadTimeNanosecondsValue : 0;
     }
 
+    uint64_t cadPresentationNanosecondsAt(
+	float pointProxyPixelThreshold, size_t presentedRenderCost) const
+    {
+	return this->reusableCadPresentationAt(pointProxyPixelThreshold) &&
+	    this->lastCadRenderCostValue &&
+	    *this->lastCadRenderCostValue == presentedRenderCost ?
+		this->lastCadTimeNanosecondsValue : 0;
+    }
+
     /* A point/box classifier frame contains no managed mesh population, so
      * it must not calibrate sustainable mesh throughput.  It is nevertheless
      * the only measured cost available when structural repair decides how
@@ -295,9 +322,10 @@ public:
      * in a separate channel so the repair planner can consume it without
      * teaching the ordinary retained allocator from a transient frame. */
     void noteStructuralPresentation(uint64_t elapsedNanoseconds,
-	float pointProxyPixelThreshold)
+	float pointProxyPixelThreshold, size_t presentedRenderCost)
     {
 	this->lastStructuralTimeNanosecondsValue = elapsedNanoseconds;
+	this->lastStructuralRenderCostValue = presentedRenderCost;
 	this->lastStructuralPointThreshold = pointProxyPixelThreshold;
     }
 
@@ -305,6 +333,17 @@ public:
 	float pointProxyPixelThreshold) const
     {
 	return this->lastStructuralTimeNanosecondsValue > 0 &&
+	    pointThresholdMatches(this->lastStructuralPointThreshold,
+		pointProxyPixelThreshold) ?
+	    this->lastStructuralTimeNanosecondsValue : 0;
+    }
+
+    uint64_t structuralPresentationNanosecondsAt(
+	float pointProxyPixelThreshold, size_t presentedRenderCost) const
+    {
+	return this->lastStructuralTimeNanosecondsValue > 0 &&
+	    this->lastStructuralRenderCostValue &&
+	    *this->lastStructuralRenderCostValue == presentedRenderCost &&
 	    pointThresholdMatches(this->lastStructuralPointThreshold,
 		pointProxyPixelThreshold) ?
 	    this->lastStructuralTimeNanosecondsValue : 0;
@@ -318,9 +357,11 @@ private:
     std::optional<uint64_t> lastGeometryUploadBytes;
     bool lastPresentationReusable = false;
     uint64_t lastCadTimeNanosecondsValue = 0;
+    std::optional<size_t> lastCadRenderCostValue;
     float lastCadPointThreshold =
 	std::numeric_limits<float>::quiet_NaN();
     uint64_t lastStructuralTimeNanosecondsValue = 0;
+    std::optional<size_t> lastStructuralRenderCostValue;
     float lastStructuralPointThreshold =
 	std::numeric_limits<float>::quiet_NaN();
 };
@@ -381,25 +422,51 @@ private:
     bool resetExistingValue = false;
 };
 
-/* Pose-only continuity proof for one interaction handoff.  Cut retention and
- * its deferred exact-visibility census are related but not interchangeable:
- * motion may keep a proven presentation immediately, while quiet readiness
- * still waits for a current-camera census. */
-class BObolLodPoseContinuity {
+/* Retained-presentation proof for one interaction-to-quiet handoff.
+ *
+ * A ready view supplies two independent facts.  An orthographic pose-only
+ * change may reuse its exact occurrence cuts because projected depth does not
+ * change demand.  Any ready view with retained meshes, including a zoom, may
+ * start capacity calibration at the event-driven static deadline: its
+ * coherent presentation is already useful and must not first be discarded to
+ * rediscover the preferred redraw cadence.  The current-view visibility
+ * census remains a separate readiness obligation. */
+class BObolLodRetainedViewContinuity {
 public:
-    void setRetainOccurrenceCuts(bool retain)
+    void beginQuiet(bool orthographic, bool scaleChanged,
+	bool startedFromReadyView, bool retainedMeshPayloads)
     {
-	this->retainOccurrenceCutsValue = retain;
+	const bool retainedReadyPresentation =
+	    startedFromReadyView && retainedMeshPayloads;
+	this->retainOccurrenceCutsValue = retainedReadyPresentation &&
+	    orthographic && !scaleChanged;
+	this->startCapacityAtStaticValue = retainedReadyPresentation;
     }
 
-    void clearRetainOccurrenceCuts(void)
+    void beginStableMutation(bool retainedMeshPayloads)
+    {
+	/* A visibility-only hierarchy edit keeps the camera and immutable mesh
+	 * population unchanged.  Its current occurrence cuts are therefore the
+	 * coherent baseline, and any replacement capacity question belongs to the
+	 * event-driven static deadline rather than the interactive redraw target. */
+	this->retainOccurrenceCutsValue = retainedMeshPayloads;
+	this->startCapacityAtStaticValue = retainedMeshPayloads;
+    }
+
+    void clearHandoff(void)
     {
 	this->retainOccurrenceCutsValue = false;
+	this->startCapacityAtStaticValue = false;
     }
 
     bool retainOccurrenceCuts(void) const
     {
 	return this->retainOccurrenceCutsValue;
+    }
+
+    bool startCapacityAtStatic(void) const
+    {
+	return this->startCapacityAtStaticValue;
     }
 
     void deferVisibilityCensus(void)
@@ -419,12 +486,13 @@ public:
 
     void reset(void)
     {
-	this->retainOccurrenceCutsValue = false;
+	this->clearHandoff();
 	this->visibilityCensusDeferredValue = false;
     }
 
 private:
     bool retainOccurrenceCutsValue = false;
+    bool startCapacityAtStaticValue = false;
     bool visibilityCensusDeferredValue = false;
 };
 
@@ -520,6 +588,78 @@ private:
     State stateValue = State::IDLE;
 };
 
+/* Level-triggered proof obligation for the current CAD presentation and its
+ * renderer controls.  Unlike BObolLodInterruptedPresentationReplay this latch
+ * does not freeze scene publication: a producer may supersede the incomplete
+ * target, but some exact successor frame must still commit before the view can
+ * become terminal. */
+class BObolLodExactPresentationFrame {
+public:
+    enum class State : uint8_t {
+	CURRENT = 0,
+	REQUEST_REQUIRED,
+	AWAITING_FRAME
+    };
+
+    /* A semantic mutation supersedes every frame which began at or before
+     * the mutation boundary.  The timestamp is captured from the same steady
+     * clock as presentation timing, so an older in-flight frame cannot retire
+     * a newer style or geometry obligation merely because it completed last. */
+    void require(uint64_t mutationBoundaryNanoseconds)
+    {
+	this->stateValue = State::REQUEST_REQUIRED;
+	this->mutationNanoseconds = std::max(
+	    this->mutationNanoseconds, mutationBoundaryNanoseconds);
+    }
+    void noteFrameRequested(void)
+    {
+	if (this->stateValue == State::REQUEST_REQUIRED)
+	    this->stateValue = State::AWAITING_FRAME;
+    }
+    void noteRequestRetired(void)
+    {
+	if (this->stateValue == State::AWAITING_FRAME)
+	    this->stateValue = State::REQUEST_REQUIRED;
+    }
+    bool confirm(uint64_t frameStartedNanoseconds)
+    {
+	if (this->stateValue != State::CURRENT &&
+	    frameStartedNanoseconds <= this->mutationNanoseconds)
+	    return false;
+	this->stateValue = State::CURRENT;
+	this->mutationNanoseconds = 0;
+	return true;
+    }
+    void reset(void)
+    {
+	this->stateValue = State::CURRENT;
+	this->mutationNanoseconds = 0;
+    }
+    bool pending(void) const
+    {
+	return this->stateValue != State::CURRENT;
+    }
+    bool requestPending(void) const
+    {
+	return this->stateValue == State::REQUEST_REQUIRED;
+    }
+    bool framePending(void) const
+    {
+	return this->stateValue == State::AWAITING_FRAME;
+    }
+    static bool recoveryRequired(bool automatic, bool hasPresentation,
+	bool exactPresentationCurrent, bool foregroundWorkPending)
+    {
+	return automatic && hasPresentation && !exactPresentationCurrent &&
+	    !foregroundWorkPending;
+    }
+    State state(void) const { return this->stateValue; }
+
+private:
+    State stateValue = State::CURRENT;
+    uint64_t mutationNanoseconds = 0;
+};
+
 /* One classifier-changing point threshold must be presented before source
  * admission may consume it.  This is a frame obligation, not a free boolean
  * or a stable point-quality calibration phase. */
@@ -549,13 +689,19 @@ private:
 
 /* One exact non-terminal structural-box frontier and the per-occurrence cost
  * reservation derived for its bounded repair pass.  Point relaxation is one
- * finite transaction: admission replaces every occurrence the candidate
- * threshold would expose, one exact frame presents that replacement, and
- * finalization either commits or rejects the threshold.  Encoding those
- * stages as one state prevents a partial Boolean update from skipping or
- * repeating a phase. */
+ * finite transaction composed of bounded admission batches: each batch
+ * replaces part of the occurrence population the candidate threshold would
+ * expose, an exact frame proves the remaining population is strictly smaller,
+ * and only a zero remainder permits publication.  Encoding those stages and
+ * that decreasing rank here prevents a partial Boolean update from skipping
+ * or repeating a phase. */
 class BObolLodStructuralRepair {
 public:
+    enum class Representation : uint8_t {
+	MESH = 0,
+	TERMINAL_PROXY
+    };
+
     enum class PointRelaxationState : uint8_t {
 	INACTIVE = 0,
 	ADMISSION_PENDING,
@@ -566,25 +712,45 @@ public:
     void begin(size_t frontierCount)
     {
 	this->frontierCountValue = frontierCount;
+	this->representationValue = Representation::MESH;
 	this->coverageCostReservationValue = 0;
 	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationRemainingRankValue = 0;
 	this->pointRelaxationStateValue = PointRelaxationState::INACTIVE;
     }
 
-    void beginPointRelaxation(size_t frontierCount, float targetThreshold)
+    void beginTerminalProxy(size_t frontierCount)
     {
 	this->frontierCountValue = frontierCount;
+	this->representationValue = Representation::TERMINAL_PROXY;
+	this->coverageCostReservationValue = 0;
+	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationRemainingRankValue = 0;
+	this->pointRelaxationStateValue = PointRelaxationState::INACTIVE;
+    }
+
+    bool beginPointRelaxation(size_t batchCount, size_t remainingRank,
+	float targetThreshold)
+    {
+	if (!batchCount || batchCount > remainingRank)
+	    return false;
+	this->frontierCountValue = batchCount;
+	this->pointRelaxationRemainingRankValue = remainingRank;
+	this->representationValue = Representation::MESH;
 	this->coverageCostReservationValue = 0;
 	this->pointRelaxationTargetValue = targetThreshold;
 	this->pointRelaxationStateValue =
 	    PointRelaxationState::ADMISSION_PENDING;
+	return true;
     }
 
     void reset(void)
     {
 	this->frontierCountValue = 0;
+	this->representationValue = Representation::MESH;
 	this->coverageCostReservationValue = 0;
 	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationRemainingRankValue = 0;
 	this->pointRelaxationStateValue = PointRelaxationState::INACTIVE;
     }
 
@@ -597,6 +763,33 @@ public:
 	this->coverageCostReservationValue = 0;
 	this->pointRelaxationStateValue =
 	    PointRelaxationState::PRESENTATION_PENDING;
+    }
+
+    bool retryPointRelaxationAdmission(size_t batchCount,
+	size_t remainingRank)
+    {
+	if (this->pointRelaxationStateValue !=
+		PointRelaxationState::FINALIZATION_PENDING ||
+	    !batchCount || batchCount > remainingRank ||
+	    remainingRank >= this->pointRelaxationRemainingRankValue)
+	    return false;
+	this->frontierCountValue = batchCount;
+	this->pointRelaxationRemainingRankValue = remainingRank;
+	this->coverageCostReservationValue = 0;
+	this->pointRelaxationStateValue =
+	    PointRelaxationState::ADMISSION_PENDING;
+	return true;
+    }
+
+    static bool pointRelaxationDomainChanged(bool viewOrPolicyChanged,
+	bool visibilityChanged, bool sourceCoverageInvalidated)
+    {
+	/* Resident-result publication changes inventory revision while fulfilling
+	 * this transaction.  It is expected progress, not a new candidate domain.
+	 * Only changes which alter the selected occurrence population or its
+	 * projection invalidate the private threshold. */
+	return viewOrPolicyChanged || visibilityChanged ||
+	    sourceCoverageInvalidated;
     }
 
     void notePointRelaxationPresented(void)
@@ -613,6 +806,7 @@ public:
 		PointRelaxationState::INACTIVE)
 	    return;
 	this->pointRelaxationTargetValue = 0.0f;
+	this->pointRelaxationRemainingRankValue = 0;
 	this->pointRelaxationStateValue = PointRelaxationState::INACTIVE;
 	/* A submitted selective frontier still owns finite useful mesh work.
 	 * Let it finish as ordinary structural admission, but an admitted
@@ -626,6 +820,12 @@ public:
     bool active(void) const
     {
 	return this->frontierCountValue > 0;
+    }
+
+    bool terminalProxy(void) const
+    {
+	return this->active() &&
+	    this->representationValue == Representation::TERMINAL_PROXY;
     }
 
     size_t frontierCount(void) const
@@ -642,6 +842,11 @@ public:
     float pointRelaxationTarget(void) const
     {
 	return this->pointRelaxationTargetValue;
+    }
+
+    size_t pointRelaxationRemainingRank(void) const
+    {
+	return this->pointRelaxationRemainingRankValue;
     }
 
     bool pointRelaxationPresentationPending(void) const
@@ -673,8 +878,10 @@ public:
 
 private:
     size_t frontierCountValue = 0;
+    Representation representationValue = Representation::MESH;
     size_t coverageCostReservationValue = 0;
     float pointRelaxationTargetValue = 0.0f;
+    size_t pointRelaxationRemainingRankValue = 0;
     PointRelaxationState pointRelaxationStateValue =
 	PointRelaxationState::INACTIVE;
 };
@@ -686,7 +893,8 @@ class BObolLodPlanningObligations {
 private:
     enum class Work : uint8_t {
 	RETAINED_IMPORTANCE_CENSUS = 1u << 0,
-	RESIDENT_ADMISSION_RETRY = 1u << 1
+	RESIDENT_ADMISSION_RETRY = 1u << 1,
+	EXACT_VISIBILITY_REALLOCATION = 1u << 2
     };
 
     static constexpr uint8_t bit(Work work)
@@ -763,6 +971,34 @@ public:
 	return this->pending(Work::RESIDENT_ADMISSION_RETRY);
     }
 
+    void requestExactVisibilityReallocation(void)
+    {
+	this->request(Work::EXACT_VISIBILITY_REALLOCATION);
+    }
+
+    void retireExactVisibilityReallocation(void)
+    {
+	this->retire(Work::EXACT_VISIBILITY_REALLOCATION);
+    }
+
+    bool exactVisibilityReallocationPending(void) const
+    {
+	return this->pending(Work::EXACT_VISIBILITY_REALLOCATION);
+    }
+
+    /* The exact visibility census and the exact framebuffer classification
+     * are separate prerequisites.  Reallocation must also yield to structural
+     * repair and existing capacity/presentation owners. */
+    bool exactVisibilityReallocationReady(bool submissionPending,
+	bool exactPresentationPending, bool structuralRepairPending,
+	bool capacityTransactionPending, bool presentationBarrierPending) const
+    {
+	return this->exactVisibilityReallocationPending() &&
+	    !submissionPending && !exactPresentationPending &&
+	    !structuralRepairPending && !capacityTransactionPending &&
+	    !presentationBarrierPending;
+    }
+
 private:
     uint8_t workValue = 0;
 };
@@ -804,6 +1040,42 @@ private:
  */
 class BObolLodControlRefinement {
 public:
+    /* Concrete production facts are kept distinct even when they refine to
+     * the same abstract work class.  The stable diagnostic mask is the
+     * executable bridge to ObolControlRefinement.tla and makes a stuck alias
+     * identifiable without reconstructing private controller state. */
+    enum class Fact : uint32_t {
+	INTERACTION = 1u << 0,
+	INVENTORY = 1u << 1,
+	AVAILABILITY = 1u << 2,
+	RESULT = 1u << 3,
+	PUBLICATION = 1u << 4,
+	SUBMISSION = 1u << 5,
+	SUBMISSION_RESCAN = 1u << 6,
+	SUBMISSION_DELTA = 1u << 7,
+	QUALITY_PROBE = 1u << 8,
+	RETAINED_ALLOCATION = 1u << 9,
+	RETAINED_ALLOCATION_TRANSACTION = 1u << 10,
+	IMPORTANCE_CENSUS = 1u << 11,
+	RESIDENT_ADMISSION_RETRY = 1u << 12,
+	CAPACITY_ALLOCATION = 1u << 13,
+	RESIDENT_GROWTH = 1u << 14,
+	POINT_TRIANGLE_RECOVERY = 1u << 15,
+	STRUCTURAL_FRONTIER = 1u << 16,
+	PRESENTATION_REPLAY = 1u << 17,
+	PRESENTATION_BARRIER = 1u << 18,
+	CAPACITY_FRAME = 1u << 19,
+	POINT_ADMISSION_FRAME = 1u << 20,
+	POINT_CALIBRATION = 1u << 21,
+	CAPACITY_CALIBRATION = 1u << 22,
+	HEADROOM_PROBE = 1u << 23,
+	HANDOFF = 1u << 24,
+	COMPACTION = 1u << 25,
+	CACHE_WRITE = 1u << 26,
+	DEMAND_REFRESH = 1u << 27,
+	EXACT_PRESENTATION = 1u << 28
+    };
+
     enum class Work : uint32_t {
 	INTERACTION = 1u << 0,
 	INVENTORY = 1u << 1,
@@ -835,7 +1107,42 @@ public:
 	INVALID_READINESS = 1u << 2,
 	INVALID_OWNER = 1u << 3,
 	UNWITNESSED_PRESENTATION = 1u << 4,
-	UNWITNESSED_CONSTRAINT = 1u << 5
+	UNWITNESSED_CONSTRAINT = 1u << 5,
+	UNWITNESSED_PLANNING = 1u << 6,
+	NONTERMINAL_WITHOUT_PROGRESS = 1u << 7
+    };
+
+    enum class PresentationWitness : uint32_t {
+	RENDER = 1u << 0,
+	CONTROLLER_PUMP = 1u << 1,
+	TIMER = 1u << 2,
+	INDEPENDENT_PRODUCER = 1u << 3
+    };
+
+    struct PresentationProgress {
+	bool renderPending = false;
+	bool controllerPumpPending = false;
+	bool finiteTimerPending = false;
+	bool independentProducerPending = false;
+
+	uint32_t witnessMask(void) const
+	{
+	    uint32_t mask = 0;
+	    if (this->renderPending)
+		mask |= bit(PresentationWitness::RENDER);
+	    if (this->controllerPumpPending)
+		mask |= bit(PresentationWitness::CONTROLLER_PUMP);
+	    if (this->finiteTimerPending)
+		mask |= bit(PresentationWitness::TIMER);
+	    if (this->independentProducerPending)
+		mask |= bit(PresentationWitness::INDEPENDENT_PRODUCER);
+	    return mask;
+	}
+
+	bool witnessed(void) const
+	{
+	    return this->witnessMask() != 0;
+	}
     };
 
     struct Inputs {
@@ -845,8 +1152,14 @@ public:
 	bool result = false;
 	bool publication = false;
 	bool submission = false;
+	bool demandRefresh = false;
 	bool submissionRescan = false;
+	bool submissionDelta = false;
+	bool qualityProbe = false;
 	bool retainedAllocation = false;
+	bool retainedAllocationTransaction = false;
+	bool importanceCensus = false;
+	bool residentAdmissionRetry = false;
 	/* A bounded capacity candidate is planning work until its occurrence
 	 * allocation has been committed.  It must not masquerade as a frame
 	 * obligation merely because the same certificate will later require a
@@ -855,7 +1168,12 @@ public:
 	bool residentGrowth = false;
 	bool pointTriangleRecovery = false;
 	bool structuralFrontier = false;
+	/* An interrupted replay is an exclusive transaction.  Exact-frame debt
+	 * is not: a newer capacity allocation may supersede its target before the
+	 * eventual exact presentation.  Keep the facts distinct so owner
+	 * precedence cannot turn downstream frame debt into an allocation block. */
 	bool presentationReplay = false;
+	bool exactPresentation = false;
 	bool presentationBarrier = false;
 	bool capacityFrame = false;
 	bool pointAdmissionFrame = false;
@@ -904,9 +1222,59 @@ public:
 	return static_cast<uint32_t>(work);
     }
 
+    static constexpr uint32_t bit(Fact fact)
+    {
+	return static_cast<uint32_t>(fact);
+    }
+
+    static uint32_t factMask(const Inputs &inputs)
+    {
+	uint32_t mask = 0;
+	const auto add = [&mask](bool active, Fact fact) {
+	    if (active)
+		mask |= bit(fact);
+	};
+	add(inputs.interaction, Fact::INTERACTION);
+	add(inputs.inventory, Fact::INVENTORY);
+	add(inputs.availability, Fact::AVAILABILITY);
+	add(inputs.result, Fact::RESULT);
+	add(inputs.publication, Fact::PUBLICATION);
+	add(inputs.submission, Fact::SUBMISSION);
+	add(inputs.demandRefresh, Fact::DEMAND_REFRESH);
+	add(inputs.submissionRescan, Fact::SUBMISSION_RESCAN);
+	add(inputs.submissionDelta, Fact::SUBMISSION_DELTA);
+	add(inputs.qualityProbe, Fact::QUALITY_PROBE);
+	add(inputs.retainedAllocation, Fact::RETAINED_ALLOCATION);
+	add(inputs.retainedAllocationTransaction,
+	    Fact::RETAINED_ALLOCATION_TRANSACTION);
+	add(inputs.importanceCensus, Fact::IMPORTANCE_CENSUS);
+	add(inputs.residentAdmissionRetry, Fact::RESIDENT_ADMISSION_RETRY);
+	add(inputs.capacityAllocation, Fact::CAPACITY_ALLOCATION);
+	add(inputs.residentGrowth, Fact::RESIDENT_GROWTH);
+	add(inputs.pointTriangleRecovery, Fact::POINT_TRIANGLE_RECOVERY);
+	add(inputs.structuralFrontier, Fact::STRUCTURAL_FRONTIER);
+	add(inputs.presentationReplay, Fact::PRESENTATION_REPLAY);
+	add(inputs.exactPresentation, Fact::EXACT_PRESENTATION);
+	add(inputs.presentationBarrier, Fact::PRESENTATION_BARRIER);
+	add(inputs.capacityFrame, Fact::CAPACITY_FRAME);
+	add(inputs.pointAdmissionFrame, Fact::POINT_ADMISSION_FRAME);
+	add(inputs.pointCalibration, Fact::POINT_CALIBRATION);
+	add(inputs.capacityCalibration, Fact::CAPACITY_CALIBRATION);
+	add(inputs.headroomProbe, Fact::HEADROOM_PROBE);
+	add(inputs.handoff, Fact::HANDOFF);
+	add(inputs.compaction, Fact::COMPACTION);
+	add(inputs.cacheWrite, Fact::CACHE_WRITE);
+	return mask;
+    }
+
     static constexpr uint32_t bit(Violation violation)
     {
 	return static_cast<uint32_t>(violation);
+    }
+
+    static constexpr uint32_t bit(PresentationWitness witness)
+    {
+	return static_cast<uint32_t>(witness);
     }
 
     static constexpr uint32_t ownerObligation(Owner owner)
@@ -933,12 +1301,17 @@ public:
 	    snapshot.obligations |= bit(Work::AVAILABILITY);
 	if (inputs.result || inputs.publication)
 	    snapshot.obligations |= bit(Work::PUBLICATION);
-	if (inputs.submission || inputs.submissionRescan ||
-	    inputs.retainedAllocation || inputs.capacityAllocation ||
-	    inputs.residentGrowth ||
+	if (inputs.submission || inputs.demandRefresh ||
+	    inputs.submissionRescan ||
+	    inputs.submissionDelta || inputs.qualityProbe ||
+	    inputs.retainedAllocation ||
+	    inputs.retainedAllocationTransaction ||
+	    inputs.importanceCensus || inputs.residentAdmissionRetry ||
+	    inputs.capacityAllocation || inputs.residentGrowth ||
 	    inputs.pointTriangleRecovery || inputs.structuralFrontier)
 	    snapshot.obligations |= bit(Work::PLANNING);
-	if (inputs.presentationReplay || inputs.presentationBarrier ||
+	if (inputs.presentationReplay || inputs.exactPresentation ||
+	    inputs.presentationBarrier ||
 	    inputs.capacityFrame || inputs.pointAdmissionFrame ||
 	    inputs.pointCalibration || inputs.capacityCalibration ||
 	    inputs.headroomProbe)
@@ -964,6 +1337,12 @@ public:
 	    snapshot.owner = Owner::INVENTORY;
 	} else if (inputs.availability) {
 	    snapshot.owner = Owner::AVAILABILITY;
+	} else if (inputs.capacityAllocation) {
+	    /* The candidate's exact frame is a successor of its occurrence
+	     * allocation.  An older exact-frame or presentation-barrier latch may
+	     * remain visible while the candidate is installed, but it cannot be
+	     * the enabled owner until this planning edge completes. */
+	    snapshot.owner = Owner::PLANNING;
 	} else if (snapshot.has(Work::PRESENTATION)) {
 	    snapshot.owner = Owner::PRESENTATION;
 	} else if (snapshot.has(Work::PLANNING)) {
@@ -978,11 +1357,30 @@ public:
 	return snapshot;
     }
 
+    static uint32_t validateProducers(const Inputs &inputs)
+    {
+	/* A source-delta fact is a mode of the bounded submission cursor, not
+	 * durable semantic debt.  Once the cursor retires the selective scope must
+	 * retire atomically; otherwise it can claim planning ownership while
+	 * blocking the broader demand pass which should follow it. */
+	uint32_t violations = inputs.submissionDelta && !inputs.submission ?
+	    bit(Violation::UNWITNESSED_PLANNING) : 0;
+	/* The retained importance census is consumed by either a complete
+	 * current-view demand pass or the bounded inventory/coverage pass which
+	 * proves that every current occurrence was considered.  Submission by
+	 * itself is not a witness: it may be a selective source-delta pass which
+	 * cannot retire scene-wide census debt. */
+	const bool importanceProducer = inputs.demandRefresh ||
+	    (inputs.submission && inputs.inventory);
+	if (inputs.importanceCensus && !importanceProducer)
+	    violations |= bit(Violation::UNWITNESSED_PLANNING);
+	return violations;
+    }
+
     static uint32_t validate(const Snapshot &snapshot, bool terminal,
 	bool viewReady, bool terminalError,
-	bool presentationProgressWitness = true,
-	bool constrainedOutcome = false,
-	bool constraintEvidence = true)
+	bool presentationProgressWitness, bool constrainedOutcome,
+	bool constraintEvidence)
     {
 	uint32_t violations = 0;
 	if (snapshot.obligations != 0 && snapshot.owner == Owner::NONE)
@@ -997,9 +1395,10 @@ public:
 	    violations |= bit(Violation::INVALID_READINESS);
 	/* PRESENTATION is an active transition, not a descriptive phase label.
 	 * It must own a requested frame, an independent producer which can publish
-	 * that frame, or a finite publication timer.  A pump level alone is not a
-	 * witness because presentation calibration may itself pause the cursor the
-	 * pump would otherwise advance. */
+	 * that frame, a finite publication timer, or the controller-scoped pump
+	 * which converts its standing obligation into a render request.  A generic
+	 * shared host pump is not sufficient: an unrelated provider wakeup must not
+	 * conceal a stalled presentation reducer. */
 	if (snapshot.owner == Owner::PRESENTATION &&
 	    !presentationProgressWitness)
 	    violations |= bit(Violation::UNWITNESSED_PRESENTATION);
@@ -1009,6 +1408,18 @@ public:
 	if (constrainedOutcome && !constraintEvidence)
 	    violations |= bit(Violation::UNWITNESSED_CONSTRAINT);
 	return violations;
+    }
+
+    /* The abstract convergence machine gives every nonterminal state a
+     * finite successor.  Service workers are independent producers and may
+     * legitimately own that successor outside this controller ledger; absent
+     * either kind of witness, a nonterminal LoD state is a liveness defect. */
+    static uint32_t validateLiveness(const Snapshot &snapshot, bool terminal,
+	bool hasLodState, bool externalProgressWitness)
+    {
+	return hasLodState && !terminal && !snapshot.foregroundPending() &&
+	    !externalProgressWitness ?
+	    bit(Violation::NONTERMINAL_WITHOUT_PROGRESS) : 0;
     }
 };
 

@@ -332,6 +332,7 @@ public:
 	bool completed = false;
 	bool bounded = false;
 	bool missing = false;
+	bool demandDeferred = false;
 	size_t visibleCount = 0;
 	size_t coveredCount = 0;
     };
@@ -356,6 +357,8 @@ public:
 	this->activeValue = true;
 	if (invalidateCoverage) {
 	    this->coverageCompleteValue = false;
+	    this->demandCensusRequiredValue = false;
+	    this->demandDeferredValue = false;
 	    /* The counters belong to one exact view/inventory pass.  A camera or
 	     * population epoch may begin while the preceding bounded pass is only
 	     * partly consumed; carrying those observations into the replacement
@@ -418,9 +421,42 @@ public:
 	    this->coveredCountValue, coveredCount);
     }
 
+    /* A structural-only coverage pass proves where visible occurrences are,
+     * but deliberately does not create their mesh demand.  Keep that fact
+     * separate from the visibility proof: a sparse unsatisfied frontier is
+     * authoritative only after one later dense demand census has visited the
+     * complete visible population. */
+    void noteDemandDeferred(void)
+    {
+	if (this->activeValue || this->demandCensusRequiredValue)
+	    this->demandDeferredValue = true;
+    }
+
+    bool demandCensusRequired(void) const
+    {
+	return this->demandCensusRequiredValue;
+    }
+
+    /* Return true only when this completed pass actually established demand.
+     * A point-classification owner may defer mesh admission again; retain the
+     * requirement in that case so a later ordinary pass cannot use a sparse
+     * frontier whose missing-payload entries were never recorded. */
+    bool completeDemandCensus(void)
+    {
+	if (!this->demandCensusRequiredValue)
+	    return false;
+	if (this->demandDeferredValue) {
+	    this->demandDeferredValue = false;
+	    return false;
+	}
+	this->demandCensusRequiredValue = false;
+	return true;
+    }
+
     void clearPassCounters(void)
     {
 	this->sawBoundedSourceValue = false;
+	this->demandDeferredValue = false;
 	this->visibleCountValue = 0;
 	this->coveredCountValue = 0;
     }
@@ -432,10 +468,13 @@ public:
 	    return completion;
 	completion.completed = true;
 	completion.bounded = this->sawBoundedSourceValue;
+	completion.demandDeferred = this->demandDeferredValue;
 	completion.visibleCount = this->visibleCountValue;
 	completion.coveredCount = this->coveredCountValue;
 	completion.missing = completion.coveredCount < completion.visibleCount;
 	this->coverageCompleteValue = !completion.missing;
+	this->demandCensusRequiredValue =
+	    !completion.missing && completion.demandDeferred;
 	this->completeVisibleCountValue = completion.visibleCount;
 	this->completeVisibleCountValidValue = true;
 	this->activeValue = false;
@@ -478,6 +517,8 @@ public:
     {
 	this->activeValue = false;
 	this->coverageCompleteValue = false;
+	this->demandCensusRequiredValue = false;
+	this->demandDeferredValue = false;
 	this->clearPassCounters();
 	this->clearCompleteVisibleCount();
     }
@@ -513,6 +554,12 @@ private:
     bool sawBoundedSourceValue = false;
     bool coverageCompleteValue = false;
     bool completeVisibleCountValidValue = false;
+
+    /* Coverage and demand are distinct proofs.  The first flag survives the
+     * completed structural pass; the second records whether an attempted
+     * successor was itself deferred by a stronger presentation owner. */
+    bool demandCensusRequiredValue = false;
+    bool demandDeferredValue = false;
     size_t visibleCountValue = 0;
     size_t coveredCountValue = 0;
     size_t completeVisibleCountValue = 0;
@@ -870,6 +917,7 @@ public:
     struct Inputs {
 	BObolLodViewEpoch viewEpoch;
 	BObolLodPolicyEpoch policyEpoch;
+	bool enabled = true;
 	size_t expectedLeafCount = 0;
 	size_t availableLeafCount = 0;
 	size_t visibleTargetCount = 0;
@@ -877,6 +925,7 @@ public:
 	size_t satisfiedPayloadCount = 0;
 	size_t presentedSubpixelOccurrenceCount = 0;
 	size_t presentedStructuralBoxCount = 0;
+	size_t terminalProxyOccurrenceCount = 0;
 	size_t terminalOccurrenceFailureCount = 0;
 	size_t memoryLimitedPayloadCount = 0;
 	size_t pendingTasks = 0;
@@ -895,16 +944,30 @@ public:
 	 * population.  Published prefixes remain useful, but calibration against
 	 * the partial population is not terminal work. */
 	bool sourcePreparationPending = false;
+	uint64_t sourcePreparationCompletedUnits = 0;
+	uint64_t sourcePreparationTotalUnits = 0;
 	bool submissionPending = false;
 	bool resultPending = false;
 	bool publicationPending = false;
 	bool calibrationPending = false;
+	uint64_t capacitySearchCompletedUnits = 0;
+	uint64_t capacitySearchTotalUnits = 0;
 	bool controlPending = false;
 	bool interactive = false;
 	bool compactionPending = false;
 	bool progressiveWorkPending = false;
 	bool gpuMemoryPressure = false;
 	bool stableBudgetLimited = false;
+	/* A current allocation which selected the complete pixel-demand
+	 * population has been presented exactly.  This is stronger than the
+	 * occurrence-local satisfied counter, which cannot express fractional PoP
+	 * cuts between two integer hierarchy ordinals. */
+	bool pixelDemandPresentationProven = false;
+	/* A completed capacity allocation or static hard-deadline trial may
+	 * deliberately retain cuts below pixel demand.  This is terminal quality
+	 * only when exact current-revision evidence proves the represented
+	 * population was presented. */
+	bool constrainedPresentationProven = false;
 	/* The retained occurrence population may be richer than the completed
 	 * framebuffer when a renderer-only PoP ceiling or point-proxy threshold
 	 * protects the presentation deadline.  This is a valid terminal view, but
@@ -930,6 +993,13 @@ public:
     Decision evaluate(const Inputs &inputs)
     {
 	Decision decision;
+	/* Full-detail rendering does not publish into the LoD occurrence ledger.
+	 * Disabling LoD therefore terminates this coordinator by policy rather
+	 * than asking absent LoD counters to prove the ordinary draw path. */
+	if (!inputs.enabled) {
+	    decision.viewReady = true;
+	    return decision;
+	}
 	/* Once a source reports a terminal failure, its missing inventory has no
 	 * enabled discovery edge.  Other sources remain active through their
 	 * explicit discovery, preparation, and task witnesses below; treating the
@@ -942,18 +1012,24 @@ public:
 		inputs.terminalOccurrenceFailureCount ?
 	    inputs.presentedStructuralBoxCount -
 		inputs.terminalOccurrenceFailureCount : 0;
-	const bool foregroundPending =
+	const bool nonResultForegroundPending =
 	    structuralPending || inputs.structuralDiscovery ||
 	    inputs.sourcePreparationPending ||
 	    inputs.submissionPending ||
-	    inputs.resultPending || inputs.publicationPending ||
+	    inputs.publicationPending ||
 	    inputs.calibrationPending || inputs.controlPending ||
 	    unresolvedStructuralBoxes > 0;
 	const size_t representedPayloads = saturatingAdd(
-	    inputs.activePayloadCount, inputs.presentedSubpixelOccurrenceCount);
+	    saturatingAdd(inputs.activePayloadCount,
+		inputs.presentedSubpixelOccurrenceCount),
+	    saturatingAdd(inputs.terminalProxyOccurrenceCount,
+		inputs.terminalOccurrenceFailureCount));
 	const size_t satisfiedPayloads = saturatingAdd(
-	    inputs.satisfiedPayloadCount,
-	    inputs.presentedSubpixelOccurrenceCount);
+	    saturatingAdd(inputs.satisfiedPayloadCount,
+		inputs.presentedSubpixelOccurrenceCount),
+	    saturatingAdd(inputs.memoryLimitedPayloadCount,
+		saturatingAdd(inputs.terminalProxyOccurrenceCount,
+		    inputs.terminalOccurrenceFailureCount)));
 	/* A serialized PoP builder can keep one worker occupied persisting its
 	 * reusable hierarchy after the current view is already completely
 	 * represented.  That work must not make the HUD claim the visible scene is
@@ -966,17 +1042,39 @@ public:
 	 * a positive target count made that worker hold an empty view in REFINING. */
 	const bool emptyViewResolved = inputs.visibilityCensusComplete &&
 	    inputs.visibleTargetCount == 0;
+	const bool allocationQualityProven =
+	    inputs.pixelDemandPresentationProven ||
+	    inputs.constrainedPresentationProven;
+	const size_t terminalSatisfiedPayloads = allocationQualityProven ?
+	    representedPayloads : satisfiedPayloads;
 	const bool populatedViewResolved = inputs.visibleTargetCount > 0 &&
 	    representedPayloads >= inputs.visibleTargetCount &&
-	    satisfiedPayloads >= inputs.visibleTargetCount;
+	    terminalSatisfiedPayloads >= inputs.visibleTargetCount;
+	const bool noVisiblePopulation = inputs.expectedLeafCount == 0 &&
+	    inputs.availableLeafCount == 0 &&
+	    inputs.visibleTargetCount == 0 &&
+	    inputs.presentedStructuralBoxCount == 0;
+	const bool failedSourceResolved = inputs.failedSourceCount > 0;
 	const bool viewPresentationResolved =
-	    !foregroundPending && !inputs.interactive &&
-	    (emptyViewResolved || populatedViewResolved);
+	    !nonResultForegroundPending && !inputs.interactive &&
+	    (noVisiblePopulation || emptyViewResolved || populatedViewResolved ||
+	     failedSourceResolved);
+	/* A queued result is foreground only while the current view still needs
+	 * it for coverage or quality.  Once the current presentation is complete,
+	 * an in-flight reusable-cache producer and its eventual result are one
+	 * background transaction.  Reclassifying the result as foreground merely
+	 * because it crossed the worker/owner-thread boundary reopens a terminal
+	 * view without a semantic revision.  Applying a result which changes the
+	 * represented scene advances the appropriate revision and starts the next
+	 * foreground epoch normally. */
 	const bool backgroundTaskWork = viewPresentationResolved &&
-	    (inputs.pendingTasks > 0 || inputs.inFlight > 0);
-	decision.visualPending = foregroundPending ||
+	    (inputs.pendingTasks > 0 || inputs.inFlight > 0 ||
+	     inputs.resultPending);
+	decision.visualPending = nonResultForegroundPending ||
+	    !viewPresentationResolved ||
 	    (!backgroundTaskWork &&
-	     (inputs.pendingTasks > 0 || inputs.inFlight > 0));
+	     (inputs.pendingTasks > 0 || inputs.inFlight > 0 ||
+	      inputs.resultPending));
 	decision.terminal =
 	    !decision.visualPending && !inputs.interactive;
 	const bool hasTerminalError = inputs.failedSourceCount > 0 ||
@@ -1002,12 +1100,19 @@ public:
 	decision.hasLodState =
 	    inputs.expectedLeafCount > 0 || inputs.availableLeafCount > 0 ||
 	    inputs.visibleTargetCount > 0 || inputs.activePayloadCount > 0 ||
+	    inputs.terminalProxyOccurrenceCount > 0 ||
 	    inputs.gpuTrackedBufferBytes > 0 || decision.visualPending ||
 	    decision.backgroundPending;
 	if (!decision.hasLodState)
 	    return decision;
 
-	if (structuralPending || inputs.structuralDiscovery) {
+	/* An unfinished leaf census owns discovery.  Once that census is complete,
+	 * the source producer is the more useful user-facing owner even if an
+	 * autoview revision has not yet rebuilt its visibility census.  Reporting
+	 * the derived structuralDiscovery alias first made a cold draw appear to
+	 * restart at zero while its exact source-preparation rank remained intact. */
+	if (structuralPending ||
+	    (inputs.structuralDiscovery && !inputs.sourcePreparationPending)) {
 	    decision.phase = Phase::DISCOVERING;
 	    const long double coverage =
 		structuralPending && inputs.expectedLeafCount > 0 ?
@@ -1017,28 +1122,42 @@ public:
 		std::min<long double>(0.40L, 0.40L * coverage));
 	} else if (inputs.sourcePreparationPending) {
 	    decision.phase = Phase::PREPARING;
-	    /* The visibility census may itself still be streaming while source
-	     * preparation is active.  Using that partial census as the denominator
-	     * made the fraction jump to 75 percent as soon as the first batch was
-	     * represented, regardless of how much of a large model remained.  Use
-	     * the known structural population until the producer closes; the exact
-	     * visible denominator takes over in the refining phase. */
-	    const size_t preparationTarget = std::max(
-		inputs.visibleTargetCount, inputs.availableLeafCount);
-	    if (preparationTarget == 0) {
-		decision.fraction = 0.40f;
-	    } else {
-		const size_t prepared = std::min(
-		    saturatingAdd(inputs.activePayloadCount,
-			inputs.presentedSubpixelOccurrenceCount),
-		    preparationTarget);
+	    if (inputs.sourcePreparationTotalUnits > 0) {
+		const uint64_t completed = std::min(
+		    inputs.sourcePreparationCompletedUnits,
+		    inputs.sourcePreparationTotalUnits);
 		const long double coverage =
-		    static_cast<long double>(prepared) /
-		    static_cast<long double>(preparationTarget);
-		/* Reserve the final quarter for coherent presentation, allocation,
-		 * and calibration after the producer closes. */
+		    static_cast<long double>(completed) /
+		    static_cast<long double>(
+			inputs.sourcePreparationTotalUnits);
+		/* Structural coverage owns the first 40 percent.  Exact finite
+		 * source preparation owns the next 35 percent; coherent view
+		 * allocation and presentation retain the final quarter. */
 		decision.fraction = static_cast<float>(
 		    0.40L + std::min<long double>(0.35L, 0.35L * coverage));
+	    } else {
+		/* The visibility census may itself still be streaming while source
+		 * preparation is active.  Using that partial census as the
+		 * denominator made the fraction jump to 75 percent as soon as the
+		 * first batch was represented, regardless of how much of a large
+		 * model remained.  Fall back to the known structural population
+		 * only until the producer publishes an exact work rank. */
+		const size_t preparationTarget = std::max(
+		    inputs.visibleTargetCount, inputs.availableLeafCount);
+		if (preparationTarget == 0) {
+		decision.fraction = 0.40f;
+		} else {
+		    const size_t prepared = std::min(
+			saturatingAdd(inputs.activePayloadCount,
+			    inputs.presentedSubpixelOccurrenceCount),
+			preparationTarget);
+		    const long double coverage =
+			static_cast<long double>(prepared) /
+			static_cast<long double>(preparationTarget);
+		    decision.fraction = static_cast<float>(
+			0.40L + std::min<long double>(
+			    0.35L, 0.35L * coverage));
+		}
 	    }
 	} else if (inputs.interactive) {
 	    decision.phase = Phase::INTERACTIVE;
@@ -1098,6 +1217,10 @@ public:
 private:
     static float visualWorkFraction(const Inputs &inputs)
     {
+	static constexpr long double discoveryWeight = 0.40L;
+	static constexpr long double representationWeight = 0.35L;
+	static constexpr long double richQualityWeight = 0.19L;
+	static constexpr long double capacitySearchWeight = 0.05L;
 	size_t target = std::max(
 	    inputs.visibleTargetCount, inputs.activePayloadCount);
 	if (!inputs.visibilityCensusComplete)
@@ -1121,29 +1244,45 @@ private:
 	    inputs.activePayloadCount, unresolvedStructuralBoxes);
 	long double richCoverage = 0.0L;
 	if (richTarget > 0) {
+	    const size_t terminalSatisfiedPayloads =
+		inputs.constrainedPresentationProven ?
+		    inputs.activePayloadCount : inputs.satisfiedPayloadCount;
 	    richCoverage =
 		static_cast<long double>(std::min(
-		    inputs.satisfiedPayloadCount, richTarget)) /
+		    terminalSatisfiedPayloads, richTarget)) /
 		static_cast<long double>(richTarget);
 	} else if (inputs.visibilityCensusComplete && represented == target) {
 	    /* An exact all-subpixel view has no rich tail to resolve. */
 	    richCoverage = 1.0L;
 	}
 	/* Structural discovery owns the first 40 percent and initial useful
-	 * representations the next 35.  The final visible-mesh tail is weighted
+	 * representations the next 35.  The visible-mesh tail is weighted
 	 * separately: classifying one terminal subpixel proxy is much cheaper than
 	 * loading, publishing, and validating one mesh, so treating both as equal
 	 * objects made a 150k-part scene jump directly to 99 percent with hundreds
 	 * of expensive mesh replacements still outstanding.  Gate rich progress
 	 * by representation coverage so a partial visibility census cannot claim a
-	 * nearly complete tail.  The last percent remains the coherent-frame
-	 * handoff obligation; only a proven ready view reports 100 percent. */
+	 * nearly complete tail.  A bounded capacity proof owns the next five
+	 * percent, using its exact allocation/presentation/sample rank instead of
+	 * leaving the bar at 99 percent throughout the search.  The last percent
+	 * remains the coherent-frame handoff obligation; only a proven ready view
+	 * reports 100 percent. */
+	long double capacitySearchCoverage = 0.0L;
+	if (inputs.capacitySearchTotalUnits > 0) {
+	    capacitySearchCoverage =
+		static_cast<long double>(std::min(
+		    inputs.capacitySearchCompletedUnits,
+		    inputs.capacitySearchTotalUnits)) /
+		static_cast<long double>(inputs.capacitySearchTotalUnits);
+	}
 	return static_cast<float>(
-	    0.40L +
-	    std::min<long double>(0.35L,
-		0.35L * representationCoverage) +
-	    std::min<long double>(0.24L,
-		0.24L * representationCoverage * richCoverage));
+	    discoveryWeight +
+	    std::min(representationWeight,
+		representationWeight * representationCoverage) +
+	    std::min(richQualityWeight,
+		richQualityWeight * representationCoverage * richCoverage) +
+	    std::min(capacitySearchWeight,
+		capacitySearchWeight * capacitySearchCoverage));
     }
 
     static size_t saturatingAdd(size_t left, size_t right)

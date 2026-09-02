@@ -60,7 +60,7 @@ into a mesh, or reopen completed work.
 Every plan is certified by one revision tuple:
 
 ```text
-(inventory, availability, view, policy, capacity)
+(inventory, availability, visibility, view, policy, capacity)
 ```
 
 A planner invocation records the tuple it consumed.  The same tuple cannot
@@ -123,6 +123,17 @@ cost in its certificate and includes the admission revision in semantic plan
 identity, so a capacity-release edge reopens planning without a special
 workload path.
 
+The worker stamps every prepared presentation with the exact view revision,
+policy revision, and cut whose admission it consumed.  The owner thread may
+advance to that cut when the current retained allocation still authorizes it,
+or when this result-owned certificate exactly matches the current revisions
+and covers the returned active cut.  This second authority is necessary
+because publishing the worker's new immutable mesh generation invalidates the
+old allocation census before result adoption.  It is not permission to rebase
+stale work: request coalescing may update latest demand but cannot rewrite the
+certificate, and stale or insufficient certificates clamp to the prior active
+presentation.
+
 A constrained scene may use a truthful aggregate or certified coarse mesh, but
 not an unresolved structural fallback.  It also carries a nonempty typed
 constraint-evidence mask.  Stable-frame capacity, a reversible progressive
@@ -145,6 +156,12 @@ If no foreground witness is enabled, the visible state is terminal or
 defective.  A UI polling timer is not a progress witness.  Background cache
 work has the same owner and resource rules, but does not make an already
 complete visible frame unready.
+
+Population counts obey the same rule.  Only a source which can produce an LoD
+target or already owns realized mesh geometry belongs to the LoD planning and
+convergence domain.  A compact index used solely by ordinary analytic/wire
+drawing, picking, or hierarchy synchronization is not an LoD work witness and
+must not contribute an unsatisfiable progress denominator.
 
 A witness is valid only when it advances a finite measure for one exact
 revision-bound target.  Renderer-side preparation therefore reports a typed
@@ -263,8 +280,9 @@ bounded by the candidate bracket, not scene cardinality or elapsed wall time.
 `ObolRetainedAllocationPrefix.tla` discharges its fixed-revision monotone-
 population premise, and
 `ObolCadTimingEvidence.tla` models threshold-stamped sample coherence;
-`ObolCapacityPresentationHandoff.tla` models the allocation-application,
-ceiling-reconciliation, and exact-sample ordering boundary.
+`ObolCapacityPresentationHandoff.tla` models the resident-availability retry,
+allocation-application, ceiling-reconciliation, and exact-sample ordering
+boundary.
 
 At the boundary between a completed mechanical pass and its successor,
 capacity calibration and presentation handoff are candidate owners, not
@@ -288,7 +306,7 @@ make the full allocation permanently uncertifiable.
 
 The model follows growth, coverage, presentation, allocation, cut
 presentation, population change, and same-population sample effects across
-successive passes.  On 2026-08-28 TLC explored 7,538 generated / 5,684 distinct
+successive passes.  On 2026-08-30 TLC explored 24,418 generated / 16,988 distinct
 states to depth 17 with no invariant or liveness error.  The executable mapping
 is `completedPassSelection`, the availability-scheduler successor values, and
 the pass-annotation/revision contracts.  The focused coordinator test exhausts
@@ -318,7 +336,37 @@ history paths must apply this vector atomically.
 HUD and faceplate drawing observe an immutable progress snapshot.  Updating
 diagnostic presentation may request a presentation-only redraw, but it must not
 change a LoD revision, satisfy or create a LoD obligation, or overwrite the
-typed reason for a pending transaction.
+typed reason for a pending transaction.  The same exclusion applies to
+selection, highlighting, and other semantic style-only frames.  A
+presentation-only timing sample may advance the planning reducer only when its
+render transaction is explicitly LoD-planning relevant and it presents an
+already-owned LoD classifier/barrier transaction or reveals an exact
+nonterminal structural fallback.  A semantic style frame is never so
+classified; its changed work identity is not a missing CAD timing sample.
+Selection/style publication nevertheless owns one exact presentation
+revision.  A frame which began before that revision cannot acknowledge it;
+the successor remains presentation-only and therefore neither changes the
+retained allocation nor supplies capacity evidence.  Idle recovery applies
+only when neither a queued request nor an in-flight frame already owns that
+revision; it is itself presentation-only.  This boundary is modeled by
+`ObolSemanticPresentation.tla` and implemented by the timestamped exact-CAD
+presentation latch.  The user-facing convergence snapshot marks a sole
+semantic presentation explicitly.  Both the libged HUD publisher and the Qt
+host use that same fact: selection must not flash a detail-calibration label,
+and disagreement between the two publishers must not manufacture a delayed
+HUD-removal frame after selection has already settled.
+
+Application code must preserve that distinction at the endpoint boundary.
+`bobol_display_endpoint_request_presentation_frame()` is the host-waking API
+for selection styles, highlighting, manipulators, HUDs, and other retained
+presentation changes.  `bobol_display_endpoint_request_frame()` remains the
+capacity-relevant request for camera-visible workload changes.  A plugin must
+not issue both for one semantic mutation: the stronger request would
+legitimately dominate the coalesced transaction and reopen capacity policy.
+For direct GL, a queued exact-presentation barrier is rendered immediately on
+the GUI thread when ordinary `QOpenGLWidget::update()` coalescing would leave
+it as the only outstanding work.  This is delivery of the already-owned
+bounded frame, not a new policy or geometry transition.
 
 ## Complexity budget
 
@@ -388,20 +436,35 @@ tests above:
 - reapplying an already planned tuple is an idempotent no-op;
 - same-view commits cannot lose coverage or regress quality without a new
   typed capacity constraint;
-- a cursor cannot survive superseding inventory, availability, view, or policy
-  revisions; and
+- a cursor cannot survive superseding inventory, availability, visibility,
+  view, or policy revisions; and
 - every active outcome names exactly one enabled owner or a finite set of
   independent enabled owners.
 
 These are architecture acceptance criteria, not aspirations.  Capacity and
 admission evidence is now controller-read-only, and the bounded execution
 cursor is a separate allocation-free value.  Plans and cursors now carry the
-exact five-domain revision stamp.  Inventory, availability, and capacity edges
-advance through one typed coordinator operation; view and policy advance at
+exact six-domain revision stamp.  Inventory, availability, visibility, and
+capacity edges advance through one typed coordinator operation; view and
+policy advance at
 their existing sole owners.  Each operation retires the preceding cursor, and
 commit rejects a certified plan whose stamp no longer matches.  Thus no cursor
 or plan can survive a superseding input, and an unchanged tuple cannot
 manufacture another planning obligation.
+
+The renderer-capacity search key deliberately projects that stamp to
+inventory, availability, view, and policy.  Capacity is the search output, and
+exact visibility is an occurrence-allocation input rather than a change to the
+renderer cost model.  An exact visibility edge therefore applies its bounded
+source delta, preserves a safe capacity certificate, obtains one exact
+framebuffer classification for the new census, and only then owns one
+allocation successor stamped with all six domains.  Census-current and
+presentation-current are deliberately separate facts: a restored occurrence
+may need structural repair which the predecessor framebuffer cannot report.
+A newer visibility edit
+supersedes an unpublished predecessor allocation.  Terminal liveness is
+required after inputs become quiescent; it is not promised during an infinite
+stream of user edits.
 The focused TLA+ model covers transition ownership and liveness; compile-time
 encapsulation and executable transition tests connect that abstraction to C++.
 Independent numeric oracles, fuzz/property tests, sanitizers, perf, and image
@@ -445,7 +508,7 @@ therefore converge on one typed reducer.  The composition models plus
 work-ledger projection prove that those owners agree; the remaining direct
 imperative writers are refinement debt tracked in `libbobol_active_debt.md`.
 
-`EvidenceSnapshot` is immutable planner input and carries the exact five-domain
+`EvidenceSnapshot` is immutable planner input and carries the exact six-domain
 revision stamp.  `PlanExecution` contains only the bounded cursor and immutable
 plan it is applying.  `PresentationTransaction` owns the one candidate frame
 which may atomically replace the committed frame.  `WorkLedger` has a fixed
@@ -544,17 +607,22 @@ must move one production effect writer behind the typed boundary and delete
 the superseded path.
 
 The first runtime trace acceptance boundary is also executable.  The qged
-diagnostic snapshot records the complete five-domain revision tuple, current
+diagnostic snapshot records the complete six-domain revision tuple, current
 retained allocation plan, presentation transaction and required frame, and
-committed-frame serial.  A standalone checker rejects sampled revision or
-serial regression, more than one nonzero plan for an unchanged tuple,
-spontaneous terminal reopening, observer disagreement, and A/B/A control
-oscillation without an input or progress witness.  It intentionally accepts
-an unchanged state while finite worker/cache work is active and recognizes an
-explicit host command before its owner-thread revision synchronization.  The
-checker is observational test code and cannot schedule work.  This closes the
-sampled-trace gate, not the final requirement above to name and record every
-production reducer transition with its finite remaining-work measure.
+committed-frame serial.  It also records the complete 29-fact concrete mask.
+A standalone checker independently projects that mask to the nine obligations
+and fixed-precedence owner, then rejects a concrete/abstract mismatch, sampled
+revision or serial regression, more than one nonzero plan for an unchanged
+tuple, spontaneous terminal reopening, observer disagreement, and A/B/A
+control oscillation without an input or progress witness.  Including the fact
+mask in cycle identity prevents two planning or presentation aliases from
+collapsing to the same abstract owner and hiding a concrete A/B/A cycle.  It
+intentionally accepts an unchanged state while finite worker/cache work is
+active and recognizes an explicit host command before its owner-thread
+revision synchronization.  The checker is observational test code and cannot
+schedule work.  This closes the sampled-state refinement gate, not the final
+requirement above to name and record every production reducer transition with
+its finite remaining-work measure.
 
 Numeric allocation remains a separate proof obligation.  Its pure snapshot-to-
 plan function is checked against an independent oracle and property tests for
@@ -599,8 +667,13 @@ Boolean in the LoD coordinator.  Its remaining Booleans are configuration
 (`lodAutoSubmit`, deterministic terminal mode, and residency policy) or an
 immutable source-snapshot fact.  The host's render/capacity pair is now one
 three-way request value; structural point relaxation is one four-state
-transaction; its terminal plan witness lives with point-quality ownership; and
-interaction owns consumption of renderer feedback.  Counting all
+transaction with a strictly decreasing remaining-occurrence rank and a bounded
+provider batch; its terminal plan witness lives with point-quality ownership;
+and interaction owns
+consumption of renderer feedback.  Inventory revisions produced by that
+private preload are transaction progress, not a semantic-domain change; only
+source/coverage, visibility, view, or policy changes cancel the candidate.
+Counting all
 `this->d->lod*` assignments is no longer a useful acceptance metric because it
 mixes diagnostic counters, bounded cursor progress, numeric estimator output,
 and genuine lifecycle state.  Review instead audits sole writers, revision
@@ -643,6 +716,15 @@ cannot manufacture a new plan.  Deadline handling selects one typed successor:
 transaction retry, population continuation, or presentation recovery.  The
 focused C++ transition matrices and `ObolInteractionSession.tla` and
 `ObolDeadlineOwnership.tla` cover those boundaries.
+
+Interrupted replay cannot outrank an enabled quiet transition.  An
+unbracketed camera change may complete its required motion frame and then
+remain in the finite debounce interval.  If a later software traversal misses
+its deadline after that interval expires, the deadline observation retires
+the replay latch and wakes the ordinary motion-to-quiet reducer.  The same
+rule applies when the deadline observation itself retires a still-standing
+motion-frame gate.  Replaying either interactive traversal would prevent the
+quiet reducer from ever running.
 
 The quiet-restoration counterexample is closed at a narrow functional-core
 boundary.  `BObolLodQuietSuccessorReducer` consumes the current presentation,
@@ -739,8 +821,8 @@ model also covers certified no-op/residual-debt recovery, a point request which
 arrives while one finite capacity search drains, atomic rejection of a
 one-pixel static trial back to its retained threshold, and replacement of an
 adaptive frame by handoff confirmation.  Point recovery and ordinary capacity
-calibration remain mutually exclusive.  TLC checked 29 generated / 17 distinct
-states to depth 5 with no error.  These models establish transition composition
+calibration remain mutually exclusive.  The 2026-08-31 TLC rerun checked 66
+generated / 36 distinct states to depth 8 with no error.  These models establish transition composition
 and liveness, not elapsed time or visual quality; the 50k OSMesa, 150k OSMesa,
 and Lucy renderer rows remain the runtime authorities.
 
@@ -750,13 +832,24 @@ exact completed frame containing non-terminal structural fallbacks must own
 one of two finite successors: another point-distribution frame while its
 threshold search can still reduce the frontier, or bounded mesh repair after
 that policy is exhausted.  An ownerless nonempty frontier is therefore an
-enabled planning obligation, never a terminal or merely diagnostic state.
-TLC checked all 30 distinct states to depth 14 for successor availability,
-owner/frontier compatibility, no premature readiness, and eventual readiness.
+enabled planning obligation, never a terminal or merely diagnostic state.  A
+private finer-cut preload may need more than one binding pass when several
+occurrences share an immutable resident record or when its complete frontier
+exceeds one provider-service quantum.  Candidate pricing uses the complete
+population, while each deterministic preload batch is independently bounded.
+Every successful batch must strictly reduce its exact remaining-occurrence
+rank; a non-decreasing pass rejects the private candidate without changing the
+public cut.  TLC checked 60,535 generated / 29,266 distinct states to depth
+386 for successor availability, owner/frontier compatibility, bounded-batch
+ownership, private-candidate isolation, strict prefetch progress, no premature
+readiness, and eventual readiness.
 The production abstraction mapping is
 `BObolLodControl::Inputs::structuralFrontier`,
-`pointSuccessorRequiredForStructuralFrontier`, and the exact structural
-histogram branch in `completeRenderTiming()`.  The executable refinement is
+`pointSuccessorRequiredForStructuralFrontier`, and the exact uncollapsed-
+fallback coverage reported by `lastCadPresentationOccurrenceCoverage()`.
+The structural projection histogram includes source records already represented
+by terminal subpixel aggregates and therefore is admission evidence, not the
+terminal structural-frontier predicate.  The executable refinement is
 the coordinator truth table plus the Lucy, 50k, and 150k OSMesa matrices.
 
 Camera-frame reuse is owned by the typed interaction session through its
@@ -811,10 +904,10 @@ Completed items remain contractual constraints and may not be reintroduced:
   controller only through const views, and the per-pass execution cursor is a
   physically separate value;
 - **complete revision boundary:** every admission plan and bounded cursor
-  carries `(inventory, availability, view, policy, capacity)`.  The roughly
-  forty free-form production cursor resets were replaced by the five semantic
-  revision owners, all five domains now use one allocation-free executable
-  revision transition, external policy-epoch synchronization retires the
+  carries `(inventory, availability, visibility, view, policy, capacity)`.
+  The roughly forty free-form production cursor resets were replaced by the
+  six semantic revision owners.  All six domains now use one allocation-free
+  executable revision transition, external policy-epoch synchronization retires the
   cursor through that boundary, and stale certified commits are rejected;
 - **complete for coordination bookkeeping:** provider terminality, result
   readiness/age, inventory-delta coalescing, and resident-growth obligation
@@ -833,7 +926,11 @@ Completed items remain contractual constraints and may not be reintroduced:
   executable tests reject a partial restore;
 - **complete semantic allocation identity:** certificate reuse, in-flight
   transaction matching, and allocator input comparison use one canonical key;
-  guarded-off inputs are normalized out of that identity;
+  guarded-off inputs are normalized out of that identity.  Retained render
+  cost outside occurrence-local CAD allocation is an environmental input.  It
+  is computed from the retained view's unmanaged cost, never reconstructed by
+  subtracting a managed population from a completed-frame presentation; an
+  allocation application therefore cannot invalidate its own input key;
 - **complete deadline-successor boundary:** a presentation deadline chooses
   exactly one of finite-transaction retry, monotone population continuation,
   or presentation recovery; it cannot reset a live producer cursor;
@@ -968,8 +1065,9 @@ finite final input reaches complete, constrained, or failed.  It deliberately
 does not estimate upload throughput or choose a representation; those remain
 Obol data-plane tests and graphical/perf qualification.
 
-`ObolInteractionSession.tla` isolates input ownership and passed 98 generated /
-44 distinct states to depth 10.  `ObolDeadlineOwnership.tla` isolates deadline
+`ObolInteractionSession.tla` isolates input ownership and interrupted-replay
+priority and passed 949 generated / 216 distinct states to depth 12.
+`ObolDeadlineOwnership.tla` isolates deadline
 successor priority and passed 43 generated / 34 distinct states to depth 5.
 `ObolQuietSuccessor.tla` isolates schedule-independent motion-to-quiet
 restoration and passed 1,242 generated / 924 distinct states to depth 5.  It
@@ -977,11 +1075,15 @@ proves that equivalent semantic certificates produce one identical successor
 despite different transient motion publication orders, that a prior-pose
 restore cannot bypass its current-pose proof, and that finite input terminates.
 `ObolCapacitySearch.tla` checks all modeled true capacities for ordered
-budgets, a monotone map which pairs adjacent budgets onto the same discrete
+budgets spanning the complete currently resident pixel-demand endpoint, a
+monotone map which pairs adjacent budgets onto the same discrete
 population, and bounded samples for every previously unseen population.
 `ObolRetainedAllocationPrefix.tla` proves that the retained allocator realizes
 that monotone map by extending one fixed importance prefix and terminating at
-the first unaffordable transition.  The allocator may not skip that transition
+the first unaffordable positive-cost transition.  Zero-cost precision
+successors are part of the same canonical population and are always consumed,
+even when the numeric budget is saturated.  The allocator may not skip an
+unaffordable transition
 to fill the remaining allowance with lower-ranked work: doing so lets a richer
 budget displace the lower-budget population and invalidates bracket reuse.
 Equivalent populations reuse their prior classification; they do not walk
@@ -1005,22 +1107,24 @@ before the candidate plan commits.  A planning pass may wait on that producer
 without consuming a retry, but completed renderer attempts which still cannot
 name exact CAD work are bounded and terminate as unmeasurable.  This preserves
 the last safe presentation instead of manufacturing an infinite repaint loop.
-The current 32-budget/four-sample/four-candidate-per-goal/two-inexact-attempt
-model explored 189,853 generated / 139,661 distinct states to depth 44.  It
-proves sound strict bracket reduction, immediate reuse of a previously
+The canonical 32-budget/three-sample/four-candidate-per-goal/two-inexact-attempt
+model includes the current protected minimum in its numeric search domain.
+Its current exploration counts are recorded in `libbobol_formal_models.md`.
+It proves sound strict bracket reduction, immediate reuse of a previously
 classified population, bounded candidate publication, one-sided settling
 after a safe result, at most one goal transition, single terminal certificate
 publication, and eventual completion for a frozen tuple.  Allocation and uncompleted
 presentation barriers do not consume the invalid timing allowance.
 
 `ObolCapacityPresentationHandoff.tla` isolates the exact-presentation boundary
-in front of that search.  On 2026-08-29 TLC explored 183,306 generated / 21,438
-distinct states to depth 20 with no invariant or liveness error.  It covers
+in front of that search.  On 2026-09-01 TLC explored 159,114 generated / 17,598
+distinct states to depth 19 with no invariant or liveness error.  It covers
 changed and already-applied occurrence plans, effective and inert global
 ceilings, and an applied occurrence allocation whose protected population
 exceeds its own certified budget.  It also models an initially unavailable
-assignment and requires availability restriction before the cut can be
-applied.  A completed no-op allocation scan preserves the frozen population
+assignment as a required/requested/resolved-or-constrained transaction.  A
+changed capacity epoch cannot be consumed as a no-op while the requested cut
+is still unavailable.  A completed no-op allocation scan preserves the frozen population
 and allocation-certificate revisions.  A terminal certificate remains
 authoritative while its selected allocation is applied and the resulting
 generic pass completes.  It proves that pre-handoff frames
@@ -1030,7 +1134,8 @@ census, a nonempty census publishes real presentation work,
 the allocator always uses the canonical strongest reconciliation request, and
 the over-budget state has one finite owner: local representation reduction
 followed by either an exact sampled certificate or an explicit bounded
-constraint.  The executable mapping is `claimOverBudgetAllocation`,
+constraint.  The executable mapping includes
+`residentPrefetchPastAllocationAllowed`, `claimOverBudgetAllocation`,
 `capacitySampleRequiresCeilingFreeHandoff`,
 `cadAllocationPlanCutsApplied`, `capacitySamplePopulationReady`,
 `completeAppliedAllocation`, and the terminal-budget cap in `planPass`; the
@@ -1048,7 +1153,8 @@ timer-edge test and Lucy OSMesa wire zoom lifecycle are the refinement evidence.
 
 `ObolPointQualityOwnership.tla` refines the high-level quality obligation into
 mutually exclusive adaptive calibration, handoff confirmation, and triangle-
-recovery phases.  TLC explored 29 generated / 17 distinct states to depth 5.
+recovery phases.  The 2026-08-31 TLC rerun explored 66 generated / 36 distinct
+states to depth 8.
 It proves that each active phase has its required frame or producer witness,
 an already-active capacity search drains before a waiting point frame,
 confirmation cannot enter adaptive recovery logic, rejected one-pixel trials

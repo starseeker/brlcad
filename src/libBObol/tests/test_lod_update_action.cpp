@@ -67,7 +67,10 @@ test_capacity_cad_timing(void)
 {
     return BObolPresentationTimingContext(
 	BObolLodCapacityRelevance::RELEVANT,
-	BObolCadPresentationExecution::EXECUTED);
+	BObolLodPlanningRelevance::RELEVANT,
+	BObolCadPresentationExecution::EXECUTED,
+	BOBOL_CAD_PREPARATION_NONE,
+	BObolCadPresentationCompleteness::EXACT);
 }
 
 static BObolPresentationTimingContext
@@ -75,7 +78,10 @@ test_presentation_cad_timing(void)
 {
     return BObolPresentationTimingContext(
 	BObolLodCapacityRelevance::EXCLUDED,
-	BObolCadPresentationExecution::EXECUTED);
+	BObolLodPlanningRelevance::EXCLUDED,
+	BObolCadPresentationExecution::EXECUTED,
+	BOBOL_CAD_PREPARATION_NONE,
+	BObolCadPresentationCompleteness::EXACT);
 }
 
 static BObolLodAdmissionRevisionStamp
@@ -246,7 +252,8 @@ test_structural_repair_value(void)
 	return 1;
     }
 
-    repair.beginPointRelaxation(3, 4.0f);
+    if (!repair.beginPointRelaxation(3, 5, 4.0f))
+	return 1;
     if (!repair.active() || !repair.pointRelaxationPending() ||
 	repair.frontierCount() != 3 ||
 	std::fabs(repair.pointRelaxationTarget() - 4.0f) > 0.001f) {
@@ -266,7 +273,8 @@ test_structural_repair_value(void)
 	return 1;
     }
 
-    repair.beginPointRelaxation(5, 2.0f);
+    if (!repair.beginPointRelaxation(5, 5, 2.0f))
+	return 1;
     repair.reserveCoverageCost(19);
     repair.cancelPointRelaxation();
     if (!repair.active() || repair.pointRelaxationPending() ||
@@ -277,7 +285,8 @@ test_structural_repair_value(void)
 	return 1;
     }
 
-    repair.beginPointRelaxation(3, 4.0f);
+    if (!repair.beginPointRelaxation(3, 3, 4.0f))
+	return 1;
     repair.completePointRelaxationAdmission();
     repair.cancelPointRelaxation();
     if (repair.active() || repair.pointRelaxationPending() ||
@@ -658,12 +667,16 @@ test_view_controller_presentation_deadline_contract(void)
     int ret = 0;
     {
 	BObolViewController controller(root, NULL);
-	if (controller.getInteractivePresentationFrameDeadline() !=
-		40000000ULL ||
+	if (fabsf(controller.getLodInteractiveTargetFps() - 20.0f) >
+		std::numeric_limits<float>::epsilon() ||
+	    fabsf(controller.getLodStableTargetFps() - 10.0f) >
+		std::numeric_limits<float>::epsilon() ||
+	    controller.getInteractivePresentationFrameDeadline() !=
+		50000000ULL ||
 	    controller.getStablePresentationFrameDeadline() !=
 		100000000ULL ||
 	    controller.getCurrentPresentationFrameDeadline() !=
-		100000000ULL) {
+		0) {
 	    printf("FAIL: presentation deadline defaults\n");
 	    ret = 1;
 	}
@@ -674,7 +687,7 @@ test_view_controller_presentation_deadline_contract(void)
 	     controller.getStablePresentationFrameDeadline() !=
 		200000000ULL ||
 	     controller.getCurrentPresentationFrameDeadline() !=
-		200000000ULL)) {
+		0)) {
 	    printf("FAIL: frame-rate target did not align the bounded "
 		   "presentation deadline\n");
 	    ret = 1;
@@ -752,7 +765,10 @@ test_view_controller_presentation_deadline_contract(void)
 	    123000000ULL,
 	    BObolPresentationTimingContext(
 		BObolLodCapacityRelevance::EXCLUDED,
-		BObolCadPresentationExecution::NOT_EXECUTED));
+		BObolLodPlanningRelevance::EXCLUDED,
+		BObolCadPresentationExecution::NOT_EXECUTED,
+		BOBOL_CAD_PREPARATION_NONE,
+		BObolCadPresentationCompleteness::EXACT));
 	if (!ret &&
 	    (controller.getInterruptedPresentationFrameCount() != 2 ||
 	     !controller.isRenderRequested() ||
@@ -780,8 +796,10 @@ test_view_controller_presentation_deadline_contract(void)
 	    123000000ULL,
 	    BObolPresentationTimingContext(
 		BObolLodCapacityRelevance::RELEVANT,
+		BObolLodPlanningRelevance::RELEVANT,
 		BObolCadPresentationExecution::EXECUTED,
-		BOBOL_CAD_PREPARATION_STARTED));
+		BOBOL_CAD_PREPARATION_STARTED,
+		BObolCadPresentationCompleteness::EXACT));
 	if (!ret &&
 		(controller.getInterruptedPresentationFrameCount() != 1 ||
 		 !controller.isRenderRequested() ||
@@ -798,8 +816,10 @@ test_view_controller_presentation_deadline_contract(void)
 	    123000000ULL,
 	    BObolPresentationTimingContext(
 		BObolLodCapacityRelevance::RELEVANT,
+		BObolLodPlanningRelevance::RELEVANT,
 		BObolCadPresentationExecution::EXECUTED,
-		BOBOL_CAD_PREPARATION_ADVANCED));
+		BOBOL_CAD_PREPARATION_ADVANCED,
+		BObolCadPresentationCompleteness::EXACT));
 	if (!ret &&
 	    (controller.getInterruptedPresentationFrameCount() != 2 ||
 	     !controller.isRenderRequested() ||
@@ -859,6 +879,53 @@ test_view_controller_presentation_deadline_contract(void)
 	    ret = 1;
 	}
     }
+    {
+	BObolViewController controller(root, NULL);
+	/* An incomplete CAD traversal is useful as a preview but is not a commit.
+	 * Even a zero-duration host observation must retain the level-triggered
+	 * obligation after its original render edge has been consumed. */
+	controller.notePresentationRenderInterrupted(
+	    0,
+	    BObolPresentationTimingContext(
+		BObolLodCapacityRelevance::EXCLUDED,
+		BObolLodPlanningRelevance::EXCLUDED,
+		BObolCadPresentationExecution::NOT_EXECUTED,
+		BOBOL_CAD_PREPARATION_STARTED,
+		BObolCadPresentationCompleteness::INCOMPLETE));
+	if (!ret && !controller.hasPendingLodRefinementFrame()) {
+	    printf("FAIL: incomplete CAD presentation lost its exact successor\n");
+	    ret = 1;
+	}
+	controller.clearRenderRequest();
+	BObolProgressiveStatus status;
+	(void)controller.advanceProgressiveWork(NULL, &status);
+	if (!ret &&
+	    (!status.hasMore || !controller.isRenderRequested() ||
+	     bu_strcmp(controller.getRenderReason().getString(),
+		 "lod-refinement-pending") != 0)) {
+	    printf("FAIL: exact CAD presentation obligation had no frame owner\n");
+	    ret = 1;
+	}
+
+	SbBool exactCapacityRelevant = TRUE;
+	SbBool exactPlanningRelevant = TRUE;
+	if (!ret && (!controller.consumeRenderRequest(NULL,
+		    &exactCapacityRelevant, &exactPlanningRelevant) ||
+		exactCapacityRelevant || exactPlanningRelevant)) {
+	    printf("FAIL: exact CAD presentation repair became LoD evidence\n");
+	    ret = 1;
+	}
+	const uint64_t exactStarted = controller.beginRenderTiming();
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	controller.completeRenderTiming(
+	    exactStarted, test_presentation_cad_timing());
+	if (!ret && (controller.hasPendingLodRefinementFrame() ||
+		controller.hasProgressiveWorkPending())) {
+	    printf("FAIL: exact CAD presentation did not retire its obligation "
+		   "and host-work level\n");
+	    ret = 1;
+	}
+    }
     root->unref();
     return ret;
 }
@@ -871,6 +938,10 @@ test_view_controller_terminal_mode_transition(void)
     int ret = 0;
     {
 	BObolViewController controller(root, NULL);
+	/* Terminal-mode policy epochs are an automatic-LoD contract.  Exercise
+	 * that enabled path explicitly; a controller with automatic submission
+	 * disabled deliberately retires the whole automatic revision domain. */
+	controller.setLodAutoSubmit(TRUE);
 	BObolProgressiveOptions options;
 	BObolProgressiveStatus progressiveStatus;
 	BObolLodConvergenceStatus initialStatus;
@@ -7642,11 +7713,13 @@ test_view_controller_policy_disable_retires_automatic_work(void)
 	 * invalidation reached through a public style control. */
 	if (!ret) {
 	    SbBool capacityRelevant = TRUE;
-	    (void)controller.consumeRenderRequest(NULL, &capacityRelevant);
-	    controller.requestRender("policy-disabled-repaint");
-	    if (!controller.consumeRenderRequest(NULL, &capacityRelevant) ||
-		capacityRelevant) {
-		printf("FAIL: policy-disabled repaint retained LoD capacity relevance\n");
+	    SbBool planningRelevant = TRUE;
+	    (void)controller.consumeRenderRequest(NULL, &capacityRelevant,
+		&planningRelevant);
+	    controller.requestLodCapacityRender("policy-disabled-repaint");
+	    if (!controller.consumeRenderRequest(NULL, &capacityRelevant,
+		    &planningRelevant) || capacityRelevant || planningRelevant) {
+		printf("FAIL: policy-disabled repaint retained LoD relevance\n");
 		ret = 1;
 	    }
 	}
@@ -7654,10 +7727,12 @@ test_view_controller_policy_disable_retires_automatic_work(void)
 	    controller.setDepthTestEnabled(
 		controller.isDepthTestEnabled() ? FALSE : TRUE);
 	    SbBool capacityRelevant = TRUE;
+	    SbBool planningRelevant = TRUE;
 	    BObolLodConvergenceStatus status;
 	    controller.getLodConvergenceStatus(status);
-	    if (!controller.consumeRenderRequest(NULL, &capacityRelevant) ||
-		capacityRelevant || controller.hasProgressiveWorkPending() ||
+	    if (!controller.consumeRenderRequest(NULL, &capacityRelevant,
+		    &planningRelevant) || capacityRelevant || planningRelevant ||
+		controller.hasProgressiveWorkPending() ||
 		controller.hasPendingLodSubmissions() ||
 		controller.hasPendingLodRefinementFrame() ||
 		status.controlObligationMask !=
@@ -7665,6 +7740,30 @@ test_view_controller_policy_disable_retires_automatic_work(void)
 		status.controlViolationMask !=
 		    BOBOL_LOD_CONTROL_VIOLATION_NONE) {
 		printf("FAIL: policy-disabled renderer change recreated automatic work\n");
+		ret = 1;
+	    }
+	}
+	if (!ret) {
+	    /* Camera revision bookkeeping remains active while LoD is off, but it
+	     * must not recreate demand, an exact LoD frame, or a capacity owner.
+	     * The host's ordinary camera repaint is a separate presentation edge. */
+	    const SbViewportRegion priorViewport =
+		controller.getViewportRegion();
+	    const SbVec2s priorSize = priorViewport.getViewportSizePixels();
+	    controller.setViewportSize(
+		static_cast<unsigned int>(priorSize[0]) + 1,
+		static_cast<unsigned int>(priorSize[1]) + 1);
+	    BObolLodConvergenceStatus status;
+	    controller.getLodConvergenceStatus(status);
+	    if (controller.hasProgressiveWorkPending() ||
+		controller.hasPendingLodSubmissions() ||
+		controller.hasPendingLodRefinementFrame() ||
+		status.controlObligationMask !=
+		    BOBOL_LOD_CONTROL_OBLIGATION_NONE ||
+		status.controlOwner != BOBOL_LOD_CONTROL_OWNER_NONE ||
+		status.controlViolationMask !=
+		    BOBOL_LOD_CONTROL_VIOLATION_NONE) {
+		printf("FAIL: policy-disabled camera revision recreated automatic work\n");
 		ret = 1;
 	    }
 	}
@@ -8380,17 +8479,26 @@ test_compact_many_leaf_scene_admission(void)
     if (!ret) {
 	const uint64_t beforeVisibility =
 	    source->getDisplayMeshLodRevision();
+	const uint64_t beforeVisibilityPlanning =
+	    source->getDisplayMeshLodVisibilityRevision();
 	std::vector<SbString> paths(1, occurrences[7].summary.path);
 	std::vector<SbBool> states(1, FALSE);
 	if (source->setCompactInstanceVisibilityOverrides(paths, states) <= 0 ||
-	    source->getDisplayMeshLodRevision() != beforeVisibility) {
-	    printf("FAIL: compact visibility changed mesh inventory\n");
+	    source->getDisplayMeshLodRevision() != beforeVisibility ||
+	    source->getDisplayMeshLodVisibilityRevision() ==
+		beforeVisibilityPlanning) {
+	    printf("FAIL: compact visibility did not advance planning without "
+		   "changing mesh inventory\n");
 	    ret = 1;
 	} else {
+	    const uint64_t hiddenVisibilityPlanning =
+		source->getDisplayMeshLodVisibilityRevision();
 	    if (source->clearCompactInstanceVisibilityFrontier() <= 0 ||
-		source->getDisplayMeshLodRevision() != beforeVisibility) {
-		printf("FAIL: compact visibility restore changed mesh "
-		       "inventory\n");
+		source->getDisplayMeshLodRevision() != beforeVisibility ||
+		source->getDisplayMeshLodVisibilityRevision() ==
+		    hiddenVisibilityPlanning) {
+		printf("FAIL: compact visibility restore did not advance planning "
+		       "without changing mesh inventory\n");
 		ret = 1;
 	    }
 	}
@@ -8578,23 +8686,106 @@ test_compact_many_leaf_scene_admission(void)
 	sharedReuse.setRevisions(1, 1);
 	sharedReuse.setViewLodState(&sharedViewState);
 	const size_t residentOccurrenceCost = 69;
+	BObolCompactInstanceHandle previewHandle;
+	BObolCompactInstanceSummary previewSummary;
+	BObolCompactLodPlanningSummary previewPlanning;
+	BObolLodCounts previewCounts;
+	previewCounts.faceCount = 1;
+	previewCounts.pointCount = 3;
+	BObolLodResult previewResult;
+	if (!source->getCompactInstanceHandle(
+		static_cast<int>(pinnedPlan[2]), previewHandle) ||
+	    !source->getCompactInstanceSummary(
+		previewHandle, previewSummary) ||
+	    !source->getCompactLodPlanningSummary(
+		static_cast<int>(pinnedPlan[2]), previewPlanning)) {
+	    printf("FAIL: many-leaf cold preview identity setup\n");
+	    ret = 1;
+	} else {
+	    previewResult.request.databaseId = "db://many-leaf-test";
+	    previewResult.request.databaseRevision = 2026;
+	    previewResult.request.sourceRevision =
+		source->sourceRevision.getValue();
+	    previewResult.request.sourceContentHash =
+		previewSummary.sourceContentHash;
+	    previewResult.request.objectPath = previewSummary.meshAssetPath;
+	    previewResult.request.objectName = previewSummary.meshAssetName;
+	    previewResult.request.occurrenceKey =
+		previewSummary.sourceInstanceKey;
+	    previewResult.request.sourceRoutingId =
+		source->getCompactSourceRoutingId();
+	    previewResult.request.sourcePopulationEpoch =
+		source->getCompactPopulationEpoch();
+	    previewResult.request.sourceEntryIndex =
+		static_cast<uint32_t>(pinnedPlan[2]);
+	    previewResult.request.viewRevision = 1;
+	    previewResult.request.policyRevision = 1;
+	    previewResult.request.drawMode = BOBOL_LOD_DRAW_SHADED;
+	    previewResult.request.providerId = "bobol_mesh_lod";
+	    previewResult.request.providerVersion =
+		BOBOL_MESH_LOD_PROVIDER_VERSION;
+	    previewResult.request.qualityTier =
+		BOBOL_LOD_QUALITY_FAST_DISPLAY;
+	    previewResult.request.requestedCut = 4;
+	    previewResult.request.bounds = previewPlanning.localBounds;
+	    previewResult.cacheKey = bobol_lod_cache_key(
+		previewResult.request);
+	    previewResult.geometry.kind =
+		BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
+	    previewResult.geometry.providerId =
+		previewResult.request.providerId;
+	    previewResult.geometry.providerVersion =
+		previewResult.request.providerVersion;
+	    previewResult.geometry.cacheKey = bobol_lod_asset_cache_key(
+		previewResult.request);
+	    previewResult.geometry.activeCut = -1;
+	    previewResult.preparedCadGeometry =
+		compact_native_triangle_geometry();
+	    previewResult.preparedCadGeometryRevision = 1;
+	    previewResult.resultKind = BOBOL_LOD_RESULT_MESH;
+	    previewResult.qualityTier = BOBOL_LOD_QUALITY_FAST_DISPLAY;
+	    previewResult.providerStatus = BOBOL_LOD_PROVIDER_READY;
+	    previewResult.bounds = previewPlanning.localBounds;
+	    previewResult.counts = previewCounts;
+	    previewResult.terminal = FALSE;
+	    if (!previewResult.preparedCadGeometry ||
+		!sharedViewState.applySourceResult(source, previewResult)) {
+		printf("FAIL: many-leaf cold preview binding setup\n");
+		ret = 1;
+	    }
+	}
+	BObolLodCounts residentCounts;
+	residentCounts.faceCount = 4;
+	residentCounts.pointCount = 4;
+	residentCounts.originalPointCount = 4;
+	const size_t previewCost = bobol_lod_render_cost_units(
+	    previewCounts, BOBOL_LOD_DRAW_SHADED, 1);
+	const size_t replacementCost = bobol_lod_render_cost_units(
+	    residentCounts, BOBOL_LOD_DRAW_SHADED, 1);
+	const size_t replacementIncrement = replacementCost > previewCost ?
+	    replacementCost - previewCost : 0;
 	sharedReuse.setRefinementCostBudget(residentOccurrenceCost);
 	sharedReuse.setCompactEntryPlan(pinnedPlan);
 	sharedReuse.setCompactEntryRange(2, 1);
-	sharedReuse.apply(source);
+	if (!ret)
+	    sharedReuse.apply(source);
 	if (sharedReuse.getVisitedMeshCount() != 1 ||
 	    sharedReuse.getSubmittedTaskCount() != 0 ||
 	    sharedReuse.getUpdatedCutCount() != 1 ||
 	    sharedReuse.getRefinementCostBudgetUsed() !=
-		residentOccurrenceCost ||
-	    sharedViewState.cadMeshPayloadCount() != 2) {
-	    printf("FAIL: many-leaf shared PoP asset was not bound directly "
-		   "(visited=%u tasks=%u cuts=%u used=%zu payloads=%zu)\n",
+		replacementIncrement ||
+	    sharedViewState.cadMeshPayloadCount() != 2 ||
+	    sharedViewState.cadProgressivePayloadCount() != 2) {
+	    printf("FAIL: many-leaf shared PoP asset did not replace its cold "
+		   "preview directly (visited=%u tasks=%u cuts=%u used=%zu "
+		   "expected_used=%zu payloads=%zu progressive=%zu)\n",
 		   sharedReuse.getVisitedMeshCount(),
 		   sharedReuse.getSubmittedTaskCount(),
 		   sharedReuse.getUpdatedCutCount(),
 		   sharedReuse.getRefinementCostBudgetUsed(),
-		   sharedViewState.cadMeshPayloadCount());
+		   replacementIncrement,
+		   sharedViewState.cadMeshPayloadCount(),
+		   sharedViewState.cadProgressivePayloadCount());
 	    ret = 1;
 	}
     }
@@ -9137,11 +9328,38 @@ test_compact_many_leaf_scene_admission(void)
 			priorityInputs.sceneBudget;
 		    priorityInputs.revisionStamp =
 			test_admission_revision(6, 6);
-		    priorityInputs.pointProxyPixelThreshold = 32.0f;
 		    BObolRetainedAllocationResult priorityAllocation;
 		    std::shared_ptr<BObolRetainedAllocationTransaction>
 			priorityTransaction;
-		    const BObolRetainedAllocationStatus priorityStatus =
+		    priorityInputs.pointProxyPixelThreshold = 1.0f;
+		    BObolRetainedAllocationStatus priorityStatus =
+			bobol_retained_allocation_advance(priorityTransaction,
+			    priorityInputs, 0, priorityAllocation);
+		    if (priorityStatus != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+			priorityAllocation.pointProxyCandidateCount != 0 ||
+			priorityAllocation.reachablePointProxyCandidateCount !=
+			    priorityOrdinaryOccurrenceCount ||
+			!priorityAllocation.pointProxyProtectionChanged ||
+			priorityAssembly->pointProxyProtectionRevision() ==
+			    priorityAssembly->
+				lastClassifiedPointProxyProtectionRevision()) {
+			printf("FAIL: point calibration did not distinguish current "
+			       "from reachable candidates or presentation debt "
+			       "(status=%d current=%zu reachable=%zu changed=%d "
+			       "classified=%d)\n",
+			       static_cast<int>(priorityStatus),
+			       priorityAllocation.pointProxyCandidateCount,
+			       priorityAllocation.reachablePointProxyCandidateCount,
+			       priorityAllocation.pointProxyProtectionChanged ? 1 : 0,
+			       priorityAssembly->pointProxyProtectionRevision() ==
+				priorityAssembly->
+				    lastClassifiedPointProxyProtectionRevision() ? 1 : 0);
+			ret = 1;
+		    }
+		    priorityTransaction.reset();
+		    priorityAllocation = BObolRetainedAllocationResult();
+		    priorityInputs.pointProxyPixelThreshold = 32.0f;
+		    priorityStatus =
 			bobol_retained_allocation_advance(priorityTransaction,
 			    priorityInputs, 0, priorityAllocation);
 		    BObolCompactInstanceHandle smallHandle;
@@ -9171,6 +9389,7 @@ test_compact_many_leaf_scene_admission(void)
 			smallAllocatedCut != -1 ||
 			priorityAllocation.pointProxyCandidateCount !=
 			    priorityOrdinaryOccurrenceCount ||
+			!priorityAllocation.pointProxyProtectionChanged ||
 			priorityAllocation.selectedPresentationCost >
 			    priorityAllocation.certifiedPresentationBudget) {
 			printf("FAIL: retained allocator did not preserve the "
@@ -9183,13 +9402,47 @@ test_compact_many_leaf_scene_admission(void)
 			       priorityAllocation.pointProxyCandidateCount,
 			       priorityAllocation.selectedPresentationCost,
 			       priorityAllocation.certifiedPresentationBudget);
-			ret = 1;
-		    }
-		    /* Capacity search assumes that increasing a numeric scene
-		     * allowance extends one deterministic population.  Exercise
-		     * every integer budget in this small mixed-scale fixture: cuts
-		     * may only rise, selected cost may only rise, and equal-cost
-		     * budgets must retain the exact population signature. */
+			    ret = 1;
+			}
+			/* A protected floor may replace eligible mesh candidates with
+			 * aggregate points, but those points remain mandatory presentation
+			 * cost.  Certify the exact mixed baseline so capacity search cannot
+			 * reject a completed plan and reopen the same allocation problem. */
+			if (!ret) {
+			    priorityTransaction.reset();
+			    priorityAllocation = BObolRetainedAllocationResult();
+			    priorityInputs.sceneBudget = 0;
+			    priorityInputs.maximumMarginalBudget = 0;
+			    priorityInputs.maximumProtectedBudget = SIZE_MAX;
+			    priorityInputs.allowProtectedFloor = true;
+			    priorityStatus = bobol_retained_allocation_advance(
+				priorityTransaction, priorityInputs, 0,
+				priorityAllocation);
+			    if (priorityStatus != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+				priorityAllocation.pointProxyCandidateCount !=
+				    priorityOrdinaryOccurrenceCount ||
+				priorityAllocation.protectedFloorBudget == 0 ||
+				priorityAllocation.selectedPresentationCost !=
+				    priorityAllocation.protectedFloorBudget ||
+				priorityAllocation.selectedPresentationCost >
+				    priorityAllocation.certifiedPresentationBudget) {
+				printf("FAIL: protected point-proxy floor cost was not "
+				       "fully certified (status=%d points=%zu "
+				       "selected=%zu floor=%zu budget=%zu)\n",
+				       static_cast<int>(priorityStatus),
+				       priorityAllocation.pointProxyCandidateCount,
+				       priorityAllocation.selectedPresentationCost,
+				       priorityAllocation.protectedFloorBudget,
+				       priorityAllocation.certifiedPresentationBudget);
+				ret = 1;
+			    }
+			    priorityInputs.allowProtectedFloor = false;
+			}
+			/* Capacity search assumes that increasing a numeric scene
+			 * allowance extends one deterministic population.  Exercise
+			 * every integer budget in this small mixed-scale fixture: cuts
+			 * may only rise, selected cost may only rise, and equal-cost
+			 * budgets must retain the exact population signature. */
 		    if (!ret) {
 			const BObolLodCounts minimumCounts =
 			    bobol_lod_progressive_counts(priorityMesh, 0, FALSE);
@@ -9212,12 +9465,13 @@ test_compact_many_leaf_scene_admission(void)
 			std::vector<int> previousCuts(orderedPayloads.size(), -1);
 			size_t previousCost = 0;
 			uint64_t previousSignature = 0;
-			const size_t budgetSpan = maximumBudget >= minimumBudget ?
-			    maximumBudget - minimumBudget : 0;
-			const size_t budgetStep = budgetSpan <= 4096 ? 1 :
-			    std::max<size_t>(1, budgetSpan / 4096);
-			for (size_t budget = minimumBudget;
-			     budget <= maximumBudget;) {
+			    const size_t budgetSpan = maximumBudget >= minimumBudget ?
+				maximumBudget - minimumBudget : 0;
+			    const size_t budgetStep = budgetSpan <= 4096 ? 1 :
+				std::max<size_t>(1, budgetSpan / 4096);
+			    priorityTransaction.reset();
+			    for (size_t budget = minimumBudget;
+				 budget <= maximumBudget;) {
 			    priorityInputs.sceneBudget = budget;
 			    priorityInputs.maximumMarginalBudget = budget;
 			    priorityInputs.maximumProtectedBudget = budget;
@@ -9225,9 +9479,20 @@ test_compact_many_leaf_scene_admission(void)
 			    const BObolRetainedAllocationStatus status =
 				bobol_retained_allocation_advance(priorityTransaction,
 				    priorityInputs, 0, population);
-			    bool nested = status ==
-				BOBOL_RETAINED_ALLOCATION_COMPLETE &&
-				population.selectedPresentationCost >= previousCost;
+				    bool nested = status ==
+					BOBOL_RETAINED_ALLOCATION_COMPLETE &&
+					population.selectedPresentationCost >= previousCost;
+				    if (nested &&
+					population.nextDistinctPresentationBudgetKnown) {
+					const size_t next =
+					    population.nextDistinctPresentationBudget;
+					if ((next &&
+						next <= population.certifiedPresentationBudget) ||
+					    (!next &&
+						population.selectedPresentationCost !=
+						    population.pixelDemandPresentationCost))
+					    nested = false;
+				    }
 			    for (size_t i = 0;
 				 nested && i < orderedPayloads.size(); ++i) {
 				const int cut = priorityState.currentCadAllocatedCut(
@@ -9246,13 +9511,16 @@ test_compact_many_leaf_scene_admission(void)
 				printf("FAIL: retained allocation population was not "
 				       "a monotonic importance prefix (budget=%zu "
 				       "prior_cost=%zu cost=%zu "
-				       "prior_signature=%llu signature=%llu)\n",
+				       "prior_signature=%llu signature=%llu next=%zu "
+				       "next_known=%d)\n",
 				       budget, previousCost,
 				       population.selectedPresentationCost,
 				       static_cast<unsigned long long>(
 					   previousSignature),
 				       static_cast<unsigned long long>(
-					   population.selectedPopulationSignature));
+					   population.selectedPopulationSignature),
+				       population.nextDistinctPresentationBudget,
+				       population.nextDistinctPresentationBudgetKnown ? 1 : 0);
 				ret = 1;
 				break;
 			    }
@@ -9263,6 +9531,56 @@ test_compact_many_leaf_scene_admission(void)
 				break;
 			    budget = maximumBudget - budget < budgetStep ?
 				maximumBudget : budget + budgetStep;
+			}
+		    }
+		    if (!ret) {
+			/* A new policy epoch leaves the retained meshes drawable,
+			 * but their old projection cannot be used to allocate the
+			 * new view.  Report that dependency explicitly so the
+			 * controller runs the source census instead of accepting an
+			 * empty allocation and retrying it forever. */
+			priorityInputs.revisionStamp =
+			    test_admission_revision(7, 7);
+			const uint64_t retainedPlan =
+			    priorityState.activeCadAllocationPlan();
+			BObolRetainedAllocationResult staleProjection;
+			std::shared_ptr<BObolRetainedAllocationTransaction>
+			    staleTransaction;
+			const BObolRetainedAllocationStatus staleStatus =
+			    bobol_retained_allocation_advance(staleTransaction,
+				priorityInputs, 0, staleProjection);
+			if (staleStatus != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+			    staleProjection.allocationPlanSerial != 0 ||
+			    priorityState.activeCadAllocationPlan() != retainedPlan ||
+			    staleProjection.unresolvedViewDependentPayloadCount !=
+				priorityOccurrences.size() ||
+			    staleProjection.projectionRefreshPlans.size() != 1 ||
+			    staleProjection.projectionRefreshPlans[0].source !=
+				prioritySource ||
+			    staleProjection.projectionRefreshPlans[0].
+				compactEntryIndices.size() !=
+				priorityOccurrences.size() ||
+			    staleProjection.projectionRefreshPlans[0].
+				denseRefreshRequired ||
+			    staleProjection.selectedPresentationCost != 0 ||
+			    staleProjection.pixelDemandPresentationCost != 0) {
+			    printf("FAIL: stale retained projection was accepted as "
+				   "current allocation evidence (status=%d plan=%llu "
+				   "active=%llu retained=%llu "
+				   "unresolved=%zu expected=%zu selected=%zu "
+				   "demand=%zu)\n",
+				   static_cast<int>(staleStatus),
+				   static_cast<unsigned long long>(
+				       staleProjection.allocationPlanSerial),
+				   static_cast<unsigned long long>(
+				       priorityState.activeCadAllocationPlan()),
+				   static_cast<unsigned long long>(retainedPlan),
+				   staleProjection.
+				       unresolvedViewDependentPayloadCount,
+				   priorityOccurrences.size(),
+				   staleProjection.selectedPresentationCost,
+				   staleProjection.pixelDemandPresentationCost);
+			    ret = 1;
 			}
 		    }
 		}
@@ -9980,10 +10298,18 @@ test_view_controller_compact_append_preserves_submission_cursor(void)
 	if (!ret) {
 	    std::vector<SbString> paths(1, finalOccurrence.summary.path);
 	    std::vector<SbBool> states(1, FALSE);
-	    if (source->setCompactInstanceVisibilityOverrides(paths, states) != 1 ||
-		controller.submitLodRequestsIfNeeded() != 0 ||
+	    const uint64_t meshRevision = source->getDisplayMeshLodRevision();
+	    const uint64_t visibilityRevision =
+		source->getDisplayMeshLodVisibilityRevision();
+	    const int hiddenChanged =
+		source->setCompactInstanceVisibilityOverrides(paths, states);
+	    const int hiddenSubmitted = controller.submitLodRequestsIfNeeded();
+	    if (hiddenChanged != 1 || hiddenSubmitted != 0 ||
 		controller.getLastLodVisitedMeshCount() > 1 ||
-		controller.hasPendingLodSubmissions()) {
+		controller.hasPendingLodSubmissions() ||
+		source->getDisplayMeshLodRevision() != meshRevision ||
+		source->getDisplayMeshLodVisibilityRevision() ==
+		    visibilityRevision) {
 		printf("FAIL: exact local visibility delta reopened full scene "
 		       "coverage (visited=%u pending=%d diagnostics=%s)\n",
 		       controller.getLastLodVisitedMeshCount(),
@@ -10004,6 +10330,180 @@ test_view_controller_compact_append_preserves_submission_cursor(void)
 		       controller.getLastLodDiagnostics().getString());
 		ret = 1;
 	    }
+	}
+	controller.setLodService(NULL);
+    }
+
+    camera->unref();
+    service.stop();
+    root->unref();
+    bobol_mesh_lod_cache_clear_database(dbip);
+    db_close(dbip);
+    bu_file_delete(dbpath);
+    return ret;
+}
+
+static int
+test_view_controller_visibility_delta_revises_census(void)
+{
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    if (make_submit_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    Obol::PartGeometryBuilder builder;
+    Obol::WireRep wire;
+    wire.segmentPoints = {
+	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f)};
+    wire.bounds = SbBox3f(
+	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f));
+    wire.progressiveCuts.resize(1);
+    wire.progressiveCuts[0].segmentCount = 1;
+    wire.progressiveCuts[0].maximumNormalizedError = 0.0f;
+    wire.progressiveMinimumCut = 0;
+    wire.progressiveResidentCut = 0;
+    builder.wire = std::move(wire);
+    const std::shared_ptr<const Obol::PartGeometry> geometry =
+	compact_admit_geometry(std::move(builder));
+    if (!geometry) {
+	printf("FAIL: visibility-census progressive geometry setup\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    SoBRLViewLodGroup *root = new SoBRLViewLodGroup;
+    root->ref();
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "visibility-root.c";
+    source->instanceKey = "visibility-source";
+    source->drawMode = SoBRLDatabaseSource::WIREFRAME;
+    source->representationMode = SoBRLDatabaseSource::REPRESENTATION_WIRE;
+    root->addChild(source);
+
+    BObolCompactOccurrence occurrence;
+    occurrence.geometry = geometry;
+    occurrence.summary.valid = TRUE;
+    occurrence.summary.shapeKind = BObolRealizedShapeSummary::SHAPE_VLIST;
+    occurrence.summary.path = "visibility-root.c/line.s";
+    occurrence.summary.sourceName = "line.s";
+    occurrence.summary.sourceType = "primitive";
+    occurrence.summary.geometryKind = "line";
+    occurrence.summary.visible = TRUE;
+    occurrence.summary.selectable = TRUE;
+    occurrence.lodBacked = FALSE;
+    occurrence.sourceMeshRequestValid = FALSE;
+
+    int ret = 0;
+    if (source->setCompactOccurrenceRegistry({occurrence}) != 1 ||
+	!source->hasDisplayResidentProgressiveGeometry()) {
+	printf("FAIL: visibility-census compact source setup\n");
+	ret = 1;
+    }
+
+    BObolLodService service;
+    if (!ret && !service.start(1, TRUE)) {
+	printf("FAIL: visibility-census service setup\n");
+	ret = 1;
+    }
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->ref();
+    camera->position = SbVec3f(0.5f, 0.5f, 5.0f);
+    camera->height = 2.0f;
+
+    if (!ret) {
+	BObolViewController controller(root, camera);
+	controller.setViewportSize(640, 480);
+	controller.setLodService(&service);
+	controller.setLodAutoSubmit(TRUE);
+	const auto finishSubmission = [&controller]() {
+	    size_t visited = 0;
+	    for (size_t attempt = 0; attempt < 8; ++attempt) {
+		if (controller.submitLodRequestsIfNeeded() != 0)
+		    return std::make_pair(false, visited);
+		visited += controller.getLastLodVisitedMeshCount();
+		if (!controller.hasPendingLodSubmissions())
+		    return std::make_pair(true, visited);
+	    }
+	    return std::make_pair(false, visited);
+	};
+
+	const std::pair<bool, size_t> initial = finishSubmission();
+	BObolLodConvergenceStatus initialStatus;
+	controller.getLodConvergenceStatus(initialStatus);
+	const uint64_t meshRevision = source->getDisplayMeshLodRevision();
+	const uint64_t visibleRevision =
+	    source->getDisplayMeshLodVisibilityRevision();
+	std::vector<SbString> paths(1, occurrence.summary.path);
+	std::vector<SbBool> states(1, FALSE);
+	controller.clearProgressiveWorkPending();
+	const int hiddenChanged =
+	    source->setCompactInstanceVisibilityOverrides(paths, states);
+	controller.synchronizePresentation();
+	const bool hiddenWake = controller.hasProgressiveWorkPending();
+	/* Exercise the generic host-work reduction without consuming the source
+	 * delta.  unregisterProgressiveProvider() synchronizes that level even
+	 * when the requested token is absent.  An unsubmitted visibility revision
+	 * must survive this seam while a render cooldown or stronger owner delays
+	 * the next planner pass. */
+	constexpr uint64_t absentProviderToken = UINT64_MAX;
+	controller.unregisterProgressiveProvider(absentProviderToken);
+	const bool hiddenReducedWake =
+	    controller.hasProgressiveWorkPending();
+	const std::pair<bool, size_t> hidden = finishSubmission();
+	BObolLodConvergenceStatus hiddenStatus;
+	controller.getLodConvergenceStatus(hiddenStatus);
+
+	states[0] = TRUE;
+	controller.clearProgressiveWorkPending();
+	const int restoredChanged =
+	    source->setCompactInstanceVisibilityOverrides(paths, states);
+	controller.synchronizePresentation();
+	const bool restoredWake = controller.hasProgressiveWorkPending();
+	const std::pair<bool, size_t> restored = finishSubmission();
+	BObolLodConvergenceStatus restoredStatus;
+	controller.getLodConvergenceStatus(restoredStatus);
+
+	if (!initial.first || initialStatus.visibleTargetCount != 1 ||
+	    hiddenChanged != 1 || !hiddenWake || !hidden.first ||
+	    !hiddenReducedWake ||
+	    hidden.second > 1 ||
+	    hiddenStatus.visibleTargetCount != 0 || restoredChanged != 1 ||
+	    !(hiddenStatus.controlObligationMask &
+		BOBOL_LOD_CONTROL_OBLIGATION_PRESENTATION) ||
+	    hiddenStatus.inventoryRevision != initialStatus.inventoryRevision ||
+	    hiddenStatus.visibilityRevision == initialStatus.visibilityRevision ||
+	    !restoredWake || !restored.first || restored.second > 1 ||
+	    restoredStatus.visibleTargetCount != 1 ||
+	    !(restoredStatus.controlObligationMask &
+		BOBOL_LOD_CONTROL_OBLIGATION_PRESENTATION) ||
+	    restoredStatus.inventoryRevision != initialStatus.inventoryRevision ||
+	    restoredStatus.visibilityRevision == hiddenStatus.visibilityRevision ||
+	    source->getDisplayMeshLodRevision() != meshRevision ||
+	    source->getDisplayMeshLodVisibilityRevision() == visibleRevision) {
+	    printf("FAIL: exact visibility delta did not revise the completed "
+		   "census in O(delta) (initial=%d/%zu hidden=%d/%zu/%zu "
+		   "wake=%d/%d exact=%d restored=%d/%zu/%zu wake=%d exact=%d "
+		   "inventory=%llu/%llu "
+		   "visibility=%llu/%llu)\n",
+		   initial.first ? 1 : 0, initialStatus.visibleTargetCount,
+		   hidden.first ? 1 : 0, hidden.second,
+		   hiddenStatus.visibleTargetCount, hiddenWake ? 1 : 0,
+		   hiddenReducedWake ? 1 : 0,
+		   (hiddenStatus.controlObligationMask &
+		    BOBOL_LOD_CONTROL_OBLIGATION_PRESENTATION) ? 1 : 0,
+		   restored.first ? 1 : 0, restored.second,
+		   restoredStatus.visibleTargetCount, restoredWake ? 1 : 0,
+		   (restoredStatus.controlObligationMask &
+		    BOBOL_LOD_CONTROL_OBLIGATION_PRESENTATION) ? 1 : 0,
+		   static_cast<unsigned long long>(meshRevision),
+		   static_cast<unsigned long long>(
+		       source->getDisplayMeshLodRevision()),
+		   static_cast<unsigned long long>(visibleRevision),
+		   static_cast<unsigned long long>(
+		       source->getDisplayMeshLodVisibilityRevision()));
+	    ret = 1;
 	}
 	controller.setLodService(NULL);
     }
@@ -10918,15 +11418,17 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    coverage.getVisibleMeshCount() != 1 ||
 	    coverage.getCoveredVisibleMeshCount() != 1 ||
 	    coverage.getSubmittedTaskCount() != 0 ||
-	    coverage.getPendingRetainedRefinementCount() != 1) {
+	    coverage.getPendingRetainedRefinementCount() != 1 ||
+	    coverage.getDeferredMeshDemandCount() != 1) {
 	    printf("FAIL: compact structural coverage did not retain its "
 		   "mesh convergence obligation (visited=%u visible=%zu "
-		   "covered=%zu tasks=%u pending=%u)\n",
+		   "covered=%zu tasks=%u pending=%u deferred=%u)\n",
 		   coverage.getVisitedMeshCount(),
 		   coverage.getVisibleMeshCount(),
 		   coverage.getCoveredVisibleMeshCount(),
 		   coverage.getSubmittedTaskCount(),
-		   coverage.getPendingRetainedRefinementCount());
+		   coverage.getPendingRetainedRefinementCount(),
+		   coverage.getDeferredMeshDemandCount());
 	    ret = 1;
 	}
     }
@@ -11108,6 +11610,62 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		ret = 1;
 		} else {
 		    results.swap(refinedResults);
+		}
+	    }
+	}
+    }
+
+    /* A same-cut page-set retarget is a renderer mutation.  It can hide an
+     * occurrence when its spatial demand becomes empty, or expose resident
+     * pages after a retained-frontier redraw.  The occurrence journal must
+     * carry that change even though no PoP cut or worker result changed. */
+    if (!ret) {
+	BObolViewLodState pageSetState;
+	if (!pageSetState.applySourceResult(source, results[0])) {
+	    printf("FAIL: spatial-demand journal fixture apply\n");
+	    ret = 1;
+	} else {
+	    const BObolViewLodState::CadPayload *payload =
+		pageSetState.findCadForResult(results[0]);
+	    BObolLodRequest changedDemand = results[0].request;
+	    if (payload) {
+		changedDemand.drawMode = payload->drawMode;
+		changedDemand.requestedCut = payload->requestedCut;
+		changedDemand.requiredChunks = payload->requiredChunks;
+		changedDemand.projectedPixelDiameter =
+		    payload->projectedPixelDiameter;
+		changedDemand.projectedPixelArea = payload->projectedPixelArea;
+		changedDemand.projectedPixelPerimeter =
+		    payload->projectedPixelPerimeter;
+		changedDemand.projectedBoundsContained =
+		    payload->projectedBoundsContained;
+		changedDemand.targetPixelError = payload->targetPixelError;
+		changedDemand.viewRevision = payload->viewRevision;
+		changedDemand.policyRevision = payload->policyRevision;
+		changedDemand.visualEmphasis = payload->visualEmphasis;
+	    }
+	    if (changedDemand.requiredChunks.empty())
+		changedDemand.requiredChunks.push_back(0);
+	    else
+		changedDemand.requiredChunks.clear();
+	    const uint64_t before = pageSetState.cadRevision();
+	    pageSetState.acknowledgeCadOccurrenceChanges(source, before);
+	    std::vector<SbString> changedOccurrences;
+	    SbBool fullResync = FALSE;
+	    if (!payload || !pageSetState.retargetCadPayload(
+		    payload, payload->activeCut, changedDemand)) {
+		printf("FAIL: same-cut spatial-demand retarget was rejected\n");
+		ret = 1;
+	    } else {
+		pageSetState.cadOccurrenceChangesSince(source, before,
+		    changedOccurrences, fullResync);
+		if (pageSetState.cadRevision() != before + 1 || fullResync ||
+		    changedOccurrences.size() != 1 ||
+		    bu_strcmp(changedOccurrences[0].getString(),
+			payload->sourceInstanceKey.getString()) != 0) {
+		    printf("FAIL: same-cut spatial-demand retarget did not "
+			   "publish one exact occurrence\n");
+		    ret = 1;
 		}
 	    }
 	}
@@ -11619,7 +12177,23 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 					rebaseController.getLodPolicyRevision();
 				    sameEpoch.request.requestedCut = 1;
 				    sameEpoch.resolvedCut = 1;
-				    if (!before ||
+				    BObolLodRequest retainedPresentationDemand =
+					sameEpoch.request;
+				    retainedPresentationDemand.requestedCut = 2;
+				    retainedPresentationDemand.projectedPixelDiameter =
+					before ? before->projectedPixelDiameter : 0.0f;
+				    retainedPresentationDemand.projectedPixelArea =
+					before ? before->projectedPixelArea : 0.0f;
+				    retainedPresentationDemand.projectedPixelPerimeter =
+					before ? before->projectedPixelPerimeter : 0.0f;
+				    retainedPresentationDemand.projectedBoundsContained =
+					before ? before->projectedBoundsContained : FALSE;
+				    retainedPresentationDemand.targetPixelError =
+					before ? before->targetPixelError : 1.0f;
+				    retainedPresentationDemand.visualEmphasis =
+					before ? before->visualEmphasis : 0;
+				    if (!before || !rebaseState->retargetCadPayload(
+					    before, 1, retainedPresentationDemand) ||
 					!rebaseState->applySourceResult(source, sameEpoch)) {
 					printf("FAIL: same-epoch cumulative result apply\n");
 					ret = 1;
@@ -11627,6 +12201,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 					const BObolViewLodState::CadPayload *afterSameEpoch =
 					    rebaseState->findCadForResult(rebaseSeed);
 					if (afterSameEpoch != before ||
+					    afterSameEpoch->activeCut != 1 ||
 					    afterSameEpoch->requestedCut != 2 ||
 					    afterSameEpoch->viewRevision !=
 						rebaseController.getLodViewRevision() ||
@@ -11634,9 +12209,12 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 						rebaseController.getLodPolicyRevision()) {
 					    printf("FAIL: same-epoch cumulative result "
 						   "replaced current demand "
-						   "(before=%p after=%p requested=%d)\n",
+						   "(before=%p after=%p active=%d "
+						   "requested=%d)\n",
 						   (const void *)before,
 						   (const void *)afterSameEpoch,
+						   afterSameEpoch ?
+						       afterSameEpoch->activeCut : -1,
 						   afterSameEpoch ?
 						       afterSameEpoch->requestedCut : -1);
 					    ret = 1;
@@ -11955,13 +12533,58 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    coordinateSeed.counts.originalPointCount = 3;
 		    coordinateSeed.counts.normalCount = 0;
 		    coordinateSeed.terminal = FALSE;
-		    if (!bindCurrentCompactPopulation(coordinateSeed, 0) ||
-			!coordinateState.applySourceResult(
-			    source, coordinateSeed)) {
-			printf("FAIL: coordinate-only retained allocation seed\n");
-			ret = 1;
-		    } else {
-			SoBRLMeshLodSubmitAction coordinateSubmit;
+			if (!bindCurrentCompactPopulation(coordinateSeed, 0) ||
+			    !coordinateState.applySourceResult(
+				source, coordinateSeed)) {
+			    printf("FAIL: coordinate-only retained allocation seed\n");
+			    ret = 1;
+			} else {
+			    /* A saturated numeric budget must still select every richer
+			     * coordinate-only cut.  Those cuts change no submitted population,
+			     * so leaving them behind the marginal queue creates ownerless
+			     * refinement debt after the allocator has certified pixel demand. */
+			    std::vector<SoBRLDatabaseSource *> coordinateSources(1,
+				source);
+			    BObolRetainedAllocationInputs coordinateInputs;
+			    coordinateInputs.sources = &coordinateSources;
+			    coordinateInputs.viewState = &coordinateState;
+			    coordinateInputs.sceneBudget =
+				coordinateState.activeRenderCost();
+			    coordinateInputs.maximumMarginalBudget =
+				coordinateInputs.sceneBudget;
+			    coordinateInputs.revisionStamp = test_admission_revision(
+				coordinateSeed.request.viewRevision.value(),
+				coordinateSeed.request.policyRevision.value());
+			    BObolRetainedAllocationResult coordinateAllocation;
+			    std::shared_ptr<BObolRetainedAllocationTransaction>
+				coordinateTransaction;
+			    const BObolRetainedAllocationStatus coordinateStatus =
+				bobol_retained_allocation_advance(coordinateTransaction,
+				    coordinateInputs, 0, coordinateAllocation);
+			    const BObolViewLodState::CadPayload *coordinatePayload =
+				coordinateState.findCadForResult(coordinateSeed);
+			    const int coordinateAllocatedCut = coordinatePayload ?
+				coordinateState.currentCadAllocatedCut(coordinatePayload,
+				    coordinateSeed.request.viewRevision.value(),
+				    coordinateSeed.request.policyRevision.value(),
+				    BOBOL_LOD_DRAW_SHADED) : -1;
+			    if (coordinateStatus !=
+				    BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+				coordinateAllocatedCut != 2 ||
+				coordinateAllocation.selectedPresentationCost !=
+				    coordinateAllocation.pixelDemandPresentationCost) {
+				printf("FAIL: retained allocation stranded a free "
+				       "coordinate-only cut (status=%d cut=%d "
+				       "selected=%zu demand=%zu)\n",
+				       static_cast<int>(coordinateStatus),
+				       coordinateAllocatedCut,
+				       coordinateAllocation.selectedPresentationCost,
+				       coordinateAllocation.pixelDemandPresentationCost);
+				ret = 1;
+			    }
+			}
+			if (!ret) {
+			    SoBRLMeshLodSubmitAction coordinateSubmit;
 			coordinateSubmit.setService(&service);
 			coordinateSubmit.setDatabase(
 			    dbip, "db://compact-projected-test", 2026);
@@ -11979,7 +12602,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			coordinateSubmit.setSubmissionTaskLimit(0);
 			coordinateSubmit.setCompactEntryRange(0, 1);
 			coordinateSubmit.apply(root);
-			const BObolViewLodState::CadPayload *coordinatePayload =
+			    const BObolViewLodState::CadPayload *coordinatePayload =
 			    coordinateState.findCadForResult(coordinateSeed);
 			if (!coordinatePayload ||
 			    coordinatePayload->activeCut != 2 ||
@@ -12028,6 +12651,7 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    printf("FAIL: memory-limited frontier fixture apply\n");
 		    ret = 1;
 		} else {
+		    BObolViewLodState unlimitedState;
 		    std::vector<SbString> blockedFrontier;
 		    limitedState.unsatisfiedCadOccurrenceKeys(
 			source, denialRevision, blockedFrontier);
@@ -12055,7 +12679,19 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    repeatedDenial.apply(root);
 		    const BObolViewLodState::CadPayload *limitedPayload =
 			limitedState.findCadForResult(limitedResult);
-		    if (!blockedFrontier.empty() ||
+		    if (bobol_retained_allocation_resident_admission_revision(
+			    &unlimitedState, denialRevision) != 0 ||
+			bobol_retained_allocation_resident_admission_revision(
+			    &limitedState, denialRevision) != denialRevision ||
+			limitedState.hasRetriableMemoryLimitedCadPayload(
+			    denialRevision) ||
+			limitedState.hasRetriableMemoryLimitedPayload(
+			    denialRevision) ||
+			!limitedState.hasRetriableMemoryLimitedCadPayload(
+			    service.residentMeshAdmissionRevision()) ||
+			!limitedState.hasRetriableMemoryLimitedPayload(
+			    service.residentMeshAdmissionRevision()) ||
+			!blockedFrontier.empty() ||
 			reopenedFrontier.size() != 1 ||
 			!blockedCapacityFrontier.empty() ||
 			reopenedCapacityFrontier.size() != 1 ||
@@ -12084,6 +12720,41 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 				   limitedPayload->residentAdmissionRevision : 0),
 			       (unsigned long long)denialRevision);
 			ret = 1;
+		    }
+		    if (!ret) {
+			/* A provider may report that richer residency was denied even
+			 * though its admitted cut already satisfies the current view.
+			 * Keep that resource fact in telemetry, but do not turn it into
+			 * actionable refinement work after every later compaction. */
+			BObolLodResult satisfiedLimitedResult = limitedResult;
+			satisfiedLimitedResult.request.requestedCut = 0;
+			satisfiedLimitedResult.resolvedCut = 0;
+			satisfiedLimitedResult.geometry.activeCut = 0;
+			BObolViewLodState satisfiedLimitedState;
+			if (!satisfiedLimitedState.applySourceResult(
+				source, satisfiedLimitedResult) ||
+			    satisfiedLimitedState.memoryLimitedPayloadCount() != 1 ||
+			    satisfiedLimitedState.
+				hasRetriableMemoryLimitedCadPayload(denialRevision) ||
+			    satisfiedLimitedState.
+				hasRetriableMemoryLimitedCadPayload(
+				    service.residentMeshAdmissionRevision()) ||
+			    satisfiedLimitedState.
+				hasRetriableMemoryLimitedPayload(
+				    service.residentMeshAdmissionRevision())) {
+			    printf("FAIL: satisfied memory-limited payload became "
+				   "actionable capacity work (count=%zu current=%d "
+				   "reclaimed=%d)\n",
+				   satisfiedLimitedState.memoryLimitedPayloadCount(),
+				   satisfiedLimitedState.
+				       hasRetriableMemoryLimitedCadPayload(
+					   denialRevision) ? 1 : 0,
+				   satisfiedLimitedState.
+				       hasRetriableMemoryLimitedCadPayload(
+					   service.residentMeshAdmissionRevision()) ?
+				       1 : 0);
+			    ret = 1;
+			}
 		    }
 		}
 	    }
@@ -13165,23 +13836,60 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		ret = 1;
 	    }
 	    if (!ret) {
-		const uint64_t mismatchedPlan =
+		const uint64_t allocationPlan =
 		    mixedState.beginCadAllocationPlan();
+		const size_t unmanagedCost =
+		    mixedState.allocationUnmanagedRenderCost();
 		if (!mixedState.stageCadAllocatedCut(
 			progressivePayload, alternateCut,
 			progressivePayload->viewRevision,
 			progressivePayload->policyRevision,
-			progressivePayload->drawMode, mismatchedPlan) ||
+			progressivePayload->drawMode, allocationPlan) ||
 		    !mixedState.commitCadAllocationPlan(
-			mismatchedPlan, mixedState.cadRevision(),
+			allocationPlan, mixedState.cadRevision(),
 			mixedState.residentMeshDemandRevision(),
 			progressivePayload->viewRevision,
 			progressivePayload->policyRevision, 0) ||
 		    mixedState.cadAllocationPlanCutsApplied(
-			mismatchedPlan, progressivePayload->viewRevision,
+			allocationPlan, progressivePayload->viewRevision,
 			progressivePayload->policyRevision, 0)) {
 		    printf("FAIL: unapplied occurrence allocation was certified\n");
 		    ret = 1;
+		}
+		if (!ret) {
+		    BObolLodRequest retainedDemand = progressiveOccurrence.request;
+		    retainedDemand.drawMode = progressivePayload->drawMode;
+		    retainedDemand.requestedCut = progressivePayload->requestedCut;
+		    retainedDemand.requiredChunks =
+			progressivePayload->requiredChunks;
+		    retainedDemand.projectedPixelDiameter =
+			progressivePayload->projectedPixelDiameter;
+		    retainedDemand.projectedPixelArea =
+			progressivePayload->projectedPixelArea;
+		    retainedDemand.projectedPixelPerimeter =
+			progressivePayload->projectedPixelPerimeter;
+		    retainedDemand.projectedBoundsContained =
+			progressivePayload->projectedBoundsContained;
+		    retainedDemand.targetPixelError =
+			progressivePayload->targetPixelError;
+		    retainedDemand.viewRevision = progressivePayload->viewRevision;
+		    retainedDemand.policyRevision =
+			progressivePayload->policyRevision;
+		    retainedDemand.visualEmphasis =
+			progressivePayload->visualEmphasis;
+		    if (!mixedState.retargetCadPayload(
+			    progressivePayload, alternateCut, retainedDemand) ||
+			!mixedState.cadAllocationPlanCoversCurrentPopulation(
+			    allocationPlan, progressivePayload->viewRevision,
+			    progressivePayload->policyRevision, 0) ||
+			!mixedState.cadAllocationPlanCutsApplied(
+			    allocationPlan, progressivePayload->viewRevision,
+			    progressivePayload->policyRevision, 0) ||
+			mixedState.allocationUnmanagedRenderCost() != unmanagedCost) {
+			printf("FAIL: applying a retained allocation changed its "
+			       "external-cost input or invalidated its certificate\n");
+			ret = 1;
+		    }
 		}
 	    }
 	    if (!ret) {
@@ -13638,8 +14346,22 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		const uint64_t consumerId = 0xc011daULL;
 		const uint64_t demandRevision =
 		    viewState.residentMeshDemandRevision();
+		const uint64_t compactionPlan =
+		    viewState.beginCadAllocationPlan();
+		if (!compactionPlan ||
+		    !viewState.stageCadAllocatedCut(
+			payload, minimumCut, 65, 62,
+			payload->drawMode, compactionPlan) ||
+		    !viewState.commitCadAllocationPlan(
+			compactionPlan, viewState.cadRevision(),
+			demandRevision, 65, 62, 0)) {
+		    printf("FAIL: resident-compaction fixture could not commit "
+			   "its current presentation allocation\n");
+		    ret = 1;
+		}
 		SbBool planningComplete = FALSE;
-		const size_t queued = service.scheduleResidentMeshCompaction(
+		const size_t queued = ret ? 0 :
+		    service.scheduleResidentMeshCompaction(
 		    consumerId, demandRevision,
 		    std::vector<BObolLodResidentDemand>(1, trimDemand),
 		    &planningComplete);
@@ -13649,8 +14371,10 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		if (!waitResult)
 		    service.drainResidentMeshCompactions(
 			consumerId, completions);
-		const size_t published = completions.size() == 1 ?
-		    viewState.applyResidentMeshCompaction(completions[0]) : 0;
+		BObolViewLodState::ResidentMeshCompactionAdoption adoption;
+		if (completions.size() == 1)
+		    adoption =
+			viewState.applyResidentMeshCompaction(completions[0]);
 		std::vector<BObolLodResidentDemand> afterDemands;
 		viewState.residentMeshDemands(afterDemands);
 		size_t active = 0;
@@ -13663,7 +14387,12 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    beforeDemands[0].cut != richCut ||
 		    completions.size() != 1 ||
 		    completions[0].consumerDemandRevision != demandRevision ||
-		    published != 1 ||
+		    adoption.publishedSourceCount != 1 ||
+		    adoption.allocationInvalidated ||
+		    !viewState.cadAllocationPlanCoversCurrentPopulation(
+			compactionPlan, 65, 62, 0) ||
+		    !viewState.cadAllocationPlanCutsApplied(
+			compactionPlan, 65, 62, 0) ||
 		    payload->progressiveMesh->residentCut() != minimumCut ||
 		    payload->residentCut != minimumCut ||
 		    afterDemands.size() != 1 ||
@@ -13671,13 +14400,19 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    active != 1 || satisfied != 0 || memoryLimited != 0) {
 		    printf("FAIL: compacted resident generation left a stale "
 			   "incremental demand (complete=%d queued=%zu wait=%d "
-			   "before=%zu/%d completions=%zu published=%zu "
+			   "before=%zu/%d completions=%zu published=%zu invalidated=%d "
+			   "allocation=%d/%d "
 			   "mesh/payload=%d/%d after=%zu/%d "
 			   "convergence=%zu/%zu/%zu)\n",
 			   planningComplete ? 1 : 0, queued, waitResult,
 			   beforeDemands.size(), beforeDemands.empty() ? -1 :
 			       beforeDemands[0].cut,
-			   completions.size(), published,
+			   completions.size(), adoption.publishedSourceCount,
+			   adoption.allocationInvalidated ? 1 : 0,
+			   viewState.cadAllocationPlanCoversCurrentPopulation(
+			       compactionPlan, 65, 62, 0) ? 1 : 0,
+			   viewState.cadAllocationPlanCutsApplied(
+			       compactionPlan, 65, 62, 0) ? 1 : 0,
 			   payload->progressiveMesh->residentCut(),
 			   payload->residentCut, afterDemands.size(),
 			   afterDemands.empty() ? -1 : afterDemands[0].cut,
@@ -13703,6 +14438,8 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    extra.request.objectPath = key;
 	    extra.request.objectName = key;
 	    extra.request.sourceEntryIndex = UINT32_MAX;
+	    extra.request.viewRevision = 65;
+	    extra.request.policyRevision = 62;
 	    if (!viewState.applySourceResult(source, extra)) {
 		printf("FAIL: retained-allocation stale fixture payload %zu\n", i);
 		ret = 1;
@@ -13729,12 +14466,24 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	    const BObolRetainedAllocationStatus first =
 		bobol_retained_allocation_advance(
 		    transaction, inputs, 1, allocation);
+	    const BObolRetainedAllocationStatus second =
+		bobol_retained_allocation_advance(
+		    transaction, inputs, 1, allocation);
+	    const BObolRetainedAllocationStatus third =
+		bobol_retained_allocation_advance(
+		    transaction, inputs, 1, allocation);
+	    const bool slicedPlanPending =
+		bobol_retained_allocation_pending(transaction);
 	    (void)viewState.beginCadAllocationPlan();
 	    const BObolRetainedAllocationStatus recovered =
 		bobol_retained_allocation_advance(
 		    transaction, inputs, 0, allocation);
 	    if (first != BOBOL_RETAINED_ALLOCATION_PENDING ||
+		second != BOBOL_RETAINED_ALLOCATION_PENDING ||
+		third != BOBOL_RETAINED_ALLOCATION_PENDING ||
+		!slicedPlanPending ||
 		recovered != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+		bobol_retained_allocation_pending(transaction) ||
 		!transaction || viewState.activeCadAllocationPlan() == 0 ||
 		allocation.allocationPlanSerial !=
 		    viewState.activeCadAllocationPlan() ||
@@ -13766,10 +14515,11 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 		    allocation.selectedPresentationCost) {
 		printf("FAIL: stale retained allocation was not retired and "
 		       "restarted with a bounded presentation certificate "
-		       "(first=%d recovered=%d transaction=%d "
+		       "(slices=%d/%d/%d recovered=%d transaction=%d "
 		       "active_plan=%llu certificate=%llu selected=%zu "
 		       "budget=%zu)\n",
-		       static_cast<int>(first), static_cast<int>(recovered),
+		       static_cast<int>(first), static_cast<int>(second),
+		       static_cast<int>(third), static_cast<int>(recovered),
 		       transaction ? 1 : 0,
 		       static_cast<unsigned long long>(
 			   viewState.activeCadAllocationPlan()),
@@ -13926,6 +14676,57 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
     bu_file_delete(dbpath);
     bu_dirclear(cacheDir);
     return ret;
+}
+
+static int
+test_pixel_demand_allocation_identity(void)
+{
+    BObolRetainedAllocationInputs inputs;
+    inputs.externalPresentationCost = 97;
+    inputs.sceneBudget = 4096;
+    inputs.maximumMarginalBudget = 4096;
+    inputs.revisionStamp = test_admission_revision(4, 5);
+    inputs.pointProxyPixelThreshold = 1.0f;
+
+    BObolRetainedAllocationResult allocation;
+    allocation.externalPresentationCost = inputs.externalPresentationCost;
+    allocation.requestedSceneBudget = inputs.sceneBudget;
+    allocation.maximumMarginalBudget = inputs.maximumMarginalBudget;
+    allocation.revisionStamp = inputs.revisionStamp;
+    allocation.pointProxyPixelThreshold = inputs.pointProxyPixelThreshold;
+    allocation.selectedPresentationCost = 2048;
+    allocation.pixelDemandPresentationCost = 2048;
+
+    BObolRetainedAllocationInputs protectedInputs = inputs;
+    protectedInputs.allowProtectedFloor = true;
+    protectedInputs.maximumProtectedBudget = 8192;
+    if (!allocation.pixelDemandInputEquivalent(protectedInputs)) {
+	printf("FAIL: protected-floor enablement changed a complete "
+	       "pixel-demand allocation identity\n");
+	return 1;
+    }
+
+    allocation.pixelDemandPresentationCost++;
+    if (allocation.pixelDemandInputEquivalent(protectedInputs)) {
+	printf("FAIL: incomplete allocation ignored protected-floor inputs\n");
+	return 1;
+    }
+    allocation.pixelDemandPresentationCost--;
+
+    protectedInputs.sceneBudget++;
+    if (allocation.pixelDemandInputEquivalent(protectedInputs)) {
+	printf("FAIL: complete allocation ignored a changed scene budget\n");
+	return 1;
+    }
+    protectedInputs.sceneBudget--;
+    protectedInputs.revisionStamp = BObolLodRevisionContract::advance(
+	protectedInputs.revisionStamp,
+	BObolLodAdmissionRevisionDomain::CAPACITY);
+    if (allocation.pixelDemandInputEquivalent(protectedInputs)) {
+	printf("FAIL: complete allocation crossed a semantic revision\n");
+	return 1;
+    }
+    return 0;
 }
 
 static int
@@ -14661,6 +15462,182 @@ test_compact_full_detail_source_coordinates(void)
 }
 
 static int
+test_terminal_proxy_projection_refresh(void)
+{
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->ref();
+    source->path = "terminal-proxy-root.c";
+    source->instanceKey = "terminal-proxy-root";
+    source->sourceRevision = 37;
+
+    BObolCompactOccurrence occurrence;
+    occurrence.geometry = compact_projected_proxy_geometry();
+    occurrence.summary.valid = TRUE;
+    occurrence.summary.shapeKind = BObolRealizedShapeSummary::SHAPE_MESH;
+    occurrence.summary.path = "terminal-proxy-root.c/leaf.bot";
+    occurrence.summary.sourceName = "leaf.bot";
+    occurrence.summary.sourceType = "bot";
+    occurrence.summary.sourceId = 37;
+    occurrence.summary.visible = TRUE;
+    occurrence.summary.selectable = TRUE;
+    occurrence.lodBacked = TRUE;
+    occurrence.sourceMeshRequestValid = TRUE;
+    occurrence.sourceMeshRequest.path = occurrence.summary.path;
+    occurrence.sourceMeshRequest.sourceName = occurrence.summary.sourceName;
+    occurrence.sourceMeshRequest.meshAssetPath = occurrence.summary.sourceName;
+    occurrence.sourceMeshRequest.meshAssetName = occurrence.summary.sourceName;
+    occurrence.sourceMeshRequest.meshAssetContentHash = 37;
+    occurrence.sourceMeshRequest.faceCount = 4096;
+    occurrence.sourceMeshRequest.pointCount = 2048;
+    occurrence.sourceMeshRequest.bounds = SbBox3f(
+	SbVec3f(-1.0f, -2.0f, -3.0f), SbVec3f(1.0f, 2.0f, 3.0f));
+    occurrence.sourceMeshRequest.meshAssetBounds =
+	occurrence.sourceMeshRequest.bounds;
+
+    int ret = 0;
+    if (source->setCompactOccurrenceRegistry({occurrence}) != 1) {
+	printf("FAIL: terminal proxy projection-refresh fixture\n");
+	ret = 1;
+    }
+
+    BObolCompactInstanceHandle handle;
+    BObolCompactInstanceSummary summary;
+    if (!ret && (!source->getCompactInstanceHandle(0, handle) ||
+	!source->getCompactInstanceSummary(handle, summary))) {
+	printf("FAIL: terminal proxy projection-refresh identity\n");
+	ret = 1;
+    }
+
+    BObolLodRequest request = make_request(
+	occurrence.summary.path.getString(),
+	occurrence.summary.sourceName.getString());
+    request.databaseRevision = 11;
+    request.sourceRevision = source->sourceRevision.getValue();
+    request.sourceContentHash = 37;
+    request.sourceRoutingId = source->getCompactSourceRoutingId();
+    request.sourcePopulationEpoch = source->getCompactPopulationEpoch();
+    request.sourceEntryIndex = 0;
+    request.occurrenceKey = summary.sourceInstanceKey;
+    request.drawMode = BOBOL_LOD_DRAW_SHADED;
+    request.requestedCut = -1;
+    request.viewRevision = 7;
+    request.policyRevision = 5;
+    request.projectedPixelDiameter = 17.0f;
+    request.projectedPixelArea = 103.0f;
+    request.projectedPixelPerimeter = 41.0f;
+    request.projectedBoundsContained = TRUE;
+
+    BObolLodProxy proxy;
+    proxy.kind = BOBOL_LOD_PROXY_OBB;
+    proxy.bounds = occurrence.sourceMeshRequest.bounds;
+    proxy.center.setValue(0.0f, 0.0f, 0.0f);
+    proxy.axisX.setValue(1.0f, 0.0f, 0.0f);
+    proxy.axisY.setValue(0.0f, 1.0f, 0.0f);
+    proxy.axisZ.setValue(0.0f, 0.0f, 1.0f);
+    proxy.halfExtents.setValue(1.0f, 2.0f, 3.0f);
+    BObolLodCounts proxyCounts;
+    proxyCounts.faceCount = 12;
+    proxyCounts.pointCount = 8;
+    proxyCounts.originalPointCount = 8;
+    proxyCounts.normalCount = 36;
+    BObolLodResult result = bobol_lod_proxy_result(
+	request, proxy, &proxyCounts);
+    result.terminal = TRUE;
+
+    BObolViewLodState viewState;
+    if (!ret && !viewState.applySourceResult(source, result)) {
+	printf("FAIL: terminal proxy result application\n");
+	ret = 1;
+    }
+    const BObolViewLodState::CadPayload *payload =
+	!ret ? viewState.findCadForResult(source, result) : NULL;
+
+    std::vector<SoBRLDatabaseSource *> sources(1, source);
+    BObolRetainedAllocationInputs inputs;
+    inputs.sources = &sources;
+    inputs.viewState = &viewState;
+    inputs.sceneBudget = 1000;
+    inputs.maximumMarginalBudget = inputs.sceneBudget;
+    inputs.revisionStamp = test_admission_revision(8, 5);
+    inputs.pointProxyPixelThreshold = 1.0f;
+    BObolRetainedAllocationResult staleAllocation;
+    std::shared_ptr<BObolRetainedAllocationTransaction> transaction;
+    const BObolRetainedAllocationStatus staleStatus = !ret ?
+	bobol_retained_allocation_advance(
+	    transaction, inputs, 0, staleAllocation) :
+	BOBOL_RETAINED_ALLOCATION_FAILED;
+    if (!ret && (staleStatus != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+	staleAllocation.allocationPlanSerial != 0 ||
+	staleAllocation.unresolvedViewDependentPayloadCount != 1 ||
+	staleAllocation.projectionRefreshPlans.size() != 1 ||
+	staleAllocation.projectionRefreshPlans[0].compactEntryIndices.size() != 1 ||
+	staleAllocation.projectionRefreshPlans[0].compactEntryIndices[0] != 0)) {
+	printf("FAIL: stale terminal proxy did not request one typed projection "
+	       "refresh (status=%d unresolved=%zu plans=%zu)\n",
+	       static_cast<int>(staleStatus),
+	       staleAllocation.unresolvedViewDependentPayloadCount,
+	       staleAllocation.projectionRefreshPlans.size());
+	ret = 1;
+    }
+
+    BObolLodRequest currentDemand = request;
+    currentDemand.viewRevision = 8;
+    currentDemand.projectedPixelDiameter = 29.0f;
+    currentDemand.projectedPixelArea = 211.0f;
+    currentDemand.projectedPixelPerimeter = 61.0f;
+    if (!ret && (!payload ||
+	!viewState.retargetCadProxyPayload(
+	    payload, currentDemand, proxyCounts) ||
+	payload->resultKind != BOBOL_LOD_RESULT_PROXY ||
+	payload->proxy.kind != BOBOL_LOD_PROXY_OBB ||
+	payload->viewRevision != 8 ||
+	std::fabs(payload->projectedPixelDiameter - 29.0f) > 1.0e-6f ||
+	viewState.cadAllocationPlanCoversCurrentPopulation(
+	    staleAllocation.allocationPlanSerial,
+	    staleAllocation.viewRevision(), staleAllocation.policyRevision(),
+	    staleAllocation.fixedCadPresentationCost))) {
+	printf("FAIL: terminal proxy view demand was not refreshed in place\n");
+	ret = 1;
+    }
+
+    transaction.reset();
+    BObolRetainedAllocationResult currentAllocation;
+    const BObolRetainedAllocationStatus currentStatus = !ret ?
+	bobol_retained_allocation_advance(
+	    transaction, inputs, 0, currentAllocation) :
+	BOBOL_RETAINED_ALLOCATION_FAILED;
+    const size_t fixedProxyCost = bobol_lod_render_cost_units(
+	proxyCounts, request.drawMode, 1);
+    if (!ret && (currentStatus != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+	currentAllocation.unresolvedViewDependentPayloadCount != 0 ||
+	currentAllocation.selectedPresentationCost != fixedProxyCost ||
+	!viewState.cadAllocationPlanCutsApplied(
+	    currentAllocation.allocationPlanSerial,
+	    currentAllocation.viewRevision(), currentAllocation.policyRevision(),
+	    currentAllocation.fixedCadPresentationCost))) {
+	printf("FAIL: refreshed terminal proxy did not produce one complete "
+	       "allocation certificate (status=%d unresolved=%zu selected=%zu "
+	       "expected=%zu)\n", static_cast<int>(currentStatus),
+	       currentAllocation.unresolvedViewDependentPayloadCount,
+	       currentAllocation.selectedPresentationCost, fixedProxyCost);
+	ret = 1;
+    }
+    if (!ret && (!viewState.retargetCadProxyPayload(
+	    payload, currentDemand, proxyCounts) ||
+	!viewState.cadAllocationPlanCutsApplied(
+	    currentAllocation.allocationPlanSerial,
+	    currentAllocation.viewRevision(), currentAllocation.policyRevision(),
+	    currentAllocation.fixedCadPresentationCost))) {
+	printf("FAIL: unchanged terminal proxy refresh invalidated its current "
+	       "allocation\n");
+	ret = 1;
+    }
+
+    source->unref();
+    return ret;
+}
+
+static int
 test_compact_live_spatial_layers(void)
 {
     SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
@@ -14973,6 +15950,117 @@ test_compact_live_spatial_layers(void)
 			    satisfied != 0) {
 			    printf("FAIL: unprepared spatial pages were certified "
 				   "as presented\n");
+			    ret = 1;
+			} else {
+			    const uint64_t plan =
+				viewState.beginCadAllocationPlan();
+			    if (!viewState.stageCadAllocatedCut(
+				    payload, payload->activeCut,
+				    payload->viewRevision,
+				    payload->policyRevision,
+				    payload->drawMode, plan) ||
+				!viewState.commitCadAllocationPlan(
+				    plan, viewState.cadRevision(),
+				    viewState.residentMeshDemandRevision(),
+				    payload->viewRevision,
+				    payload->policyRevision, 0) ||
+				!viewState.cadAllocationPlanCoversCurrentPopulation(
+				    plan, payload->viewRevision,
+				    payload->policyRevision, 0) ||
+				viewState.cadAllocatedPresentationApplied(
+				    payload, payload->viewRevision,
+				    payload->policyRevision,
+				    payload->drawMode) ||
+				viewState.cadAllocationPlanCutsApplied(
+				    plan, payload->viewRevision,
+				    payload->policyRevision, 0)) {
+				printf("FAIL: allocation certified an unprepared "
+				       "spatial presentation\n");
+				ret = 1;
+			    }
+			}
+		    }
+		}
+
+		/* A capacity-limited spatial result is a fixed composition: its
+		 * coverage layer preserves the whole object while the available page
+		 * layers add bounded detail.  The retained allocator must count that
+		 * representation without staging an impossible globally ordered cut,
+		 * and demand retargeting must not claim that absent pages appeared. */
+		if (!ret) {
+		    BObolLodResult limited = progressiveResult;
+		    limited.request.requiredChunks = {0};
+		    limited.geometry.activeCut = 1;
+		    limited.resolvedCut = 2;
+		    limited.counts.faceCount = 60;
+		    limited.presentationLayers.resize(1);
+		    limited.presentationLayers.front().activeCut = 1;
+		    limited.memoryLimited = TRUE;
+		    limited.residentAdmissionRevision = 73;
+		    limited.terminal = TRUE;
+		    limited.canonicalizePayload();
+		    BObolViewLodState limitedState;
+		    if (!limited.payloadIsConsistent() ||
+			!limitedState.applySourceResult(source, limited)) {
+			printf("FAIL: bounded spatial coverage result application\n");
+			ret = 1;
+		    } else {
+			const BObolViewLodState::CadPayload *payload =
+			    limitedState.findCadForResult(source, limited);
+			std::vector<SoBRLDatabaseSource *> sources(1, source);
+			BObolRetainedAllocationInputs inputs;
+			inputs.sources = &sources;
+			inputs.viewState = &limitedState;
+			inputs.sceneBudget = 1000;
+			inputs.maximumMarginalBudget = inputs.sceneBudget;
+			inputs.revisionStamp = test_admission_revision(5, 7);
+			inputs.residentAdmissionRevision = 73;
+			inputs.pointProxyPixelThreshold = 1.0f;
+			BObolRetainedAllocationResult allocation;
+			std::shared_ptr<BObolRetainedAllocationTransaction>
+			    transaction;
+			const BObolRetainedAllocationStatus status =
+			    bobol_retained_allocation_advance(
+				transaction, inputs, 0, allocation);
+			if (!payload || !payload->presentedChunks.empty() ||
+			    !payload->memoryLimited ||
+			    status != BOBOL_RETAINED_ALLOCATION_COMPLETE ||
+			    allocation.selectedPresentationCost !=
+				bobol_lod_render_cost_units(
+				    payload->counts, payload->drawMode, 1) ||
+			    limitedState.currentCadAllocatedCut(
+				payload, 5, 7, payload->drawMode) >= 0 ||
+			    !limitedState.cadAllocationPlanCutsApplied(
+				allocation.allocationPlanSerial, 5, 7,
+				allocation.fixedCadPresentationCost)) {
+			    printf("FAIL: bounded spatial coverage did not settle as "
+				   "one fixed constrained presentation "
+				   "(payload=%d chunks=%zu limited=%d status=%d "
+				   "selected=%zu expected=%zu allocated=%d applied=%d "
+				   "layers=%zu)\n",
+				   payload ? 1 : 0,
+				   payload ? payload->presentedChunks.size() : 0,
+				   payload && payload->memoryLimited ? 1 : 0,
+				   static_cast<int>(status),
+				   allocation.selectedPresentationCost,
+				   payload ? bobol_lod_render_cost_units(
+				       payload->counts, payload->drawMode, 1) : 0,
+				   payload ? limitedState.currentCadAllocatedCut(
+				       payload, 5, 7, payload->drawMode) : -2,
+				   limitedState.cadAllocationPlanCutsApplied(
+				       allocation.allocationPlanSerial, 5, 7,
+				       allocation.fixedCadPresentationCost) ? 1 : 0,
+				   payload ? payload->presentationLayers.size() : 0);
+			    ret = 1;
+			} else if (!limitedState.retargetCadPayload(
+				payload, payload->activeCut, limited.request) ||
+			    !payload->presentedChunks.empty() ||
+			    !payload->memoryLimited ||
+			    !limitedState.cadAllocationPlanCutsApplied(
+				allocation.allocationPlanSerial, 5, 7,
+				allocation.fixedCadPresentationCost)) {
+			    printf("FAIL: unchanged bounded spatial demand invented "
+				   "page coverage or invalidated its allocation\n");
 			    ret = 1;
 			}
 		    }
@@ -15411,7 +16499,11 @@ main(int argc, char **argv)
 	return 1;
     if (runIsolated(test_view_controller_compact_append_preserves_submission_cursor))
 	return 1;
+    if (runIsolated(test_view_controller_visibility_delta_revises_census))
+	return 1;
     if (runIsolated(test_compact_aabb_stream_upgrade))
+	return 1;
+    if (runIsolated(test_pixel_demand_allocation_identity))
 	return 1;
     if (runIsolated(test_allocated_presentation_bounds_resident_prefetch))
 	return 1;
@@ -15435,6 +16527,8 @@ main(int argc, char **argv)
     if (runIsolated(test_view_controller_compact_direct_result_route))
 	return 1;
     if (runIsolated(test_compact_full_detail_source_coordinates))
+	return 1;
+    if (runIsolated(test_terminal_proxy_projection_refresh))
 	return 1;
     if (runIsolated(test_compact_live_spatial_layers))
 	return 1;

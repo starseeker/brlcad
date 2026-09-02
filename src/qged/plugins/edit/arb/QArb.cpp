@@ -275,7 +275,7 @@ QArb::mode_changed(int mode)
 	manipulator->node->setSelectionDomain(domain);
 	manipulator->node->setSelectedIndex(-1);
 	if (manipulator->controller)
-	    manipulator->controller->requestRender("arb-edit-mode");
+	    manipulator->controller->requestPresentationRender("arb-edit-mode");
     }
     emit view_updated(QG_VIEW_REFRESH);
 }
@@ -407,8 +407,7 @@ QArb::update_manipulators(uint64_t revision)
 	    state->selection_domain == mode ? state->selected_feature : -1);
 	if (manipulator->active >= 0)
 	    manipulator->node->setActiveIndex(manipulator->active);
-	controller->requestRender("arb-edit-manipulator-update");
-	(void)bobol_display_endpoint_request_frame(endpoint,
+	(void)bobol_display_endpoint_request_presentation_frame(endpoint,
 	    "arb-edit-manipulator-update");
     }
 }
@@ -475,7 +474,8 @@ QArb::sync_session_selection(int commandId)
 	    static_cast<SoBRLIndexedEditManipulator::Domain>(domain + 1));
 	manipulator->node->setSelectedIndex(feature);
 	if (manipulator->controller)
-	    manipulator->controller->requestRender("arb-edit-selection-sync");
+	    manipulator->controller->requestPresentationRender(
+		"arb-edit-selection-sync");
     }
 }
 
@@ -703,7 +703,8 @@ QArb::handle_manipulator_input(QArbManipulatorState *manipulator,
 	manipulator->active_edit_index = editIndex;
 	manipulator->node->setActiveIndex(feature);
 	manipulator->node->setHoverIndex(feature);
-	manipulator->controller->requestRender("arb-edit-manipulator-press");
+	manipulator->controller->requestPresentationRender(
+	    "arb-edit-manipulator-press");
 	return BOBOL_INPUT_RESULT_HANDLED;
     }
 
@@ -715,7 +716,7 @@ QArb::handle_manipulator_input(QArbManipulatorState *manipulator,
 		hover;
 	    manipulator->node->setHoverIndex(hover);
 	    if (changed)
-		manipulator->controller->requestRender(
+		manipulator->controller->requestPresentationRender(
 		    "arb-edit-manipulator-hover");
 	    return hover < 0 ? BOBOL_INPUT_RESULT_UNHANDLED :
 		BOBOL_INPUT_RESULT_HANDLED;
@@ -758,7 +759,7 @@ QArb::handle_manipulator_input(QArbManipulatorState *manipulator,
 		(void)ged_edit_session_revert(getGed(), editor->session());
 	    else
 		editor->refreshFromSession();
-	    manipulator->controller->requestRender(
+	    manipulator->controller->requestLodCapacityRender(
 		"arb-edit-manipulator-rejected");
 	}
 	return BOBOL_INPUT_RESULT_HANDLED;
@@ -773,7 +774,7 @@ QArb::handle_manipulator_input(QArbManipulatorState *manipulator,
 	manipulator->node->setActiveIndex(-1);
 	manipulator->node->setHoverIndex(manipulator->node->hitTest(domain,
 	    event->x, event->y, width, height, camera));
-	manipulator->controller->requestRender(
+	manipulator->controller->requestPresentationRender(
 	    "arb-edit-manipulator-release");
 	return BOBOL_INPUT_RESULT_HANDLED;
     }

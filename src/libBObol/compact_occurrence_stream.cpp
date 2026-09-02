@@ -52,6 +52,8 @@ struct BObolCompactOccurrenceStream::Impl {
     SbBox3f coverageBounds;
     std::atomic<bool> cancelled {false};
     std::atomic<size_t> expectedCount {0};
+    std::atomic<size_t> preparationWorkCompleted {0};
+    std::atomic<size_t> preparationWorkTotal {0};
     BObolCompactSourceProfile sourceProfile;
 };
 
@@ -459,6 +461,39 @@ size_t
 BObolCompactOccurrenceStream::getExpectedCount(void) const
 {
     return this->d->expectedCount.load(std::memory_order_acquire);
+}
+
+void
+BObolCompactOccurrenceStream::setPreparationWorkCount(size_t count)
+{
+    this->d->preparationWorkCompleted.store(0, std::memory_order_release);
+    this->d->preparationWorkTotal.store(count, std::memory_order_release);
+}
+
+void
+BObolCompactOccurrenceStream::notePreparationWorkCompleted(void)
+{
+    const size_t total = this->d->preparationWorkTotal.load(
+	std::memory_order_acquire);
+    if (!total)
+	return;
+
+    size_t completed = this->d->preparationWorkCompleted.load(
+	std::memory_order_acquire);
+    while (completed < total &&
+	!this->d->preparationWorkCompleted.compare_exchange_weak(
+	    completed, completed + 1, std::memory_order_release,
+	    std::memory_order_acquire)) {
+    }
+}
+
+void
+BObolCompactOccurrenceStream::getPreparationWorkCount(
+    size_t &completed, size_t &total) const
+{
+    total = this->d->preparationWorkTotal.load(std::memory_order_acquire);
+    completed = std::min(this->d->preparationWorkCompleted.load(
+	std::memory_order_acquire), total);
 }
 
 void

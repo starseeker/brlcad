@@ -16,6 +16,7 @@
 #include "retained_allocation_private.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -225,6 +226,16 @@ private:
  * no allocation, virtual dispatch, or per-occurrence indirection.
  */
 struct BObolLodCoordinator {
+    static constexpr float defaultInteractiveTargetFps(void)
+    {
+	return 20.0f;
+    }
+
+    static constexpr float defaultStableTargetFps(void)
+    {
+	return 10.0f;
+    }
+
     uint64_t residentMeshConsumerId(void) const
     {
 	return static_cast<uint64_t>(
@@ -243,6 +254,7 @@ struct BObolLodCoordinator {
 	BObolLodAdmissionRevisionStamp stamp;
 	stamp.inventory = this->lodAdmissionInventoryRevision;
 	stamp.availability = this->lodAdmissionAvailabilityRevision;
+	stamp.visibility = this->lodAdmissionVisibilityRevision;
 	stamp.view = this->lodViewRevision;
 	stamp.policy = this->lodPolicyRevision;
 	stamp.capacity = this->lodAdmissionCapacityRevision;
@@ -270,6 +282,8 @@ struct BObolLodCoordinator {
     {
 	const BObolRetainedAllocationResult &allocation =
 	    this->lodRetainedAllocationCertificate;
+	if (allocation.unresolvedViewDependentPayloadCount > 0)
+	    return false;
 	if (allocation.selectedPresentationCost > 0)
 	    return true;
 	/* Retained payloads outside the frustum remain bound so a later camera
@@ -307,8 +321,21 @@ struct BObolLodCoordinator {
 	    return false;
 	if (!this->retainedAllocationRepresentsCurrentView())
 	    return false;
+	/* Applied occurrence metadata is not framebuffer evidence.  A retained
+	 * exact frame remains valid across a no-op allocation, while any changed
+	 * cut, spatial page set, renderer channel, or classifier invalidates that
+	 * witness until its successor traversal completes. */
+	if (!state->lastCadPresentationFrameExact())
+	    return false;
 	const BObolRetainedAllocationResult &allocation =
 	    this->lodRetainedAllocationCertificate;
+	/* Point aggregation is an occurrence-classification mutation, not a PoP
+	 * cut.  Its allocation commit leaves the preceding coherent classifier
+	 * output live while Obol prepares a replacement.  Never treat cut metadata
+	 * alone as proof that the replacement reached an exact framebuffer. */
+	if (allocation.pointProxyProtectionChanged &&
+		!state->cadPointProxyProtectionClassified())
+	    return false;
 	if (this->lodInteractiveProgressiveCeiling < 0)
 	    return this->retainedAllocationCutsApplied(state);
 	/* A global cut is occurrence-local only for one progressive payload.
@@ -345,6 +372,7 @@ struct BObolLodCoordinator {
 		this->admissionRevisionStamp(), domain);
 	this->lodAdmissionInventoryRevision = next.inventory;
 	this->lodAdmissionAvailabilityRevision = next.availability;
+	this->lodAdmissionVisibilityRevision = next.visibility;
 	this->lodViewRevision = next.view;
 	this->lodPolicyRevision = next.policy;
 	this->lodAdmissionCapacityRevision = next.capacity;
@@ -389,6 +417,13 @@ struct BObolLodCoordinator {
     {
 	this->commitAdmissionPlan(BObolLodAdmissionPlanner::requestCapacityRescan(
 	    this->lodAdmissionEvidence, this->lodAdmissionCursor));
+    }
+
+    void acceptStaticPresentationConstraint(size_t budget)
+    {
+	this->commitAdmissionPlan(
+	    BObolLodAdmissionPlanner::acceptStaticPresentationConstraint(
+		this->lodAdmissionEvidence, this->lodAdmissionCursor, budget));
     }
 
     void completeAppliedAllocation(
@@ -473,15 +508,6 @@ struct BObolLodCoordinator {
     {
 	const BObolLodAdmissionPlan plan =
 	    BObolLodAdmissionPlanner::recordRetainedQualityFloorMiss(
-		this->lodAdmissionEvidence, this->lodAdmissionCursor);
-	this->commitAdmissionPlan(plan);
-	return plan.transitionChanged;
-    }
-
-    bool rejectRetainedQualityFloor(void)
-    {
-	const BObolLodAdmissionPlan plan =
-	    BObolLodAdmissionPlanner::rejectRetainedQualityFloor(
 		this->lodAdmissionEvidence, this->lodAdmissionCursor);
 	this->commitAdmissionPlan(plan);
 	return plan.transitionChanged;
@@ -628,6 +654,29 @@ struct BObolLodCoordinator {
 	    std::min(lodStableTargetFps, bounded) : bounded;
     }
 
+    /* Point evidence is partitioned by presentation contract.  Bind each
+     * evidence domain to its deadline here rather than asking callers to
+     * reconstruct the relationship from transient phase latches.  The
+     * terminal reducer runs after its STATIC_CALIBRATION latch is consumed;
+     * using staticQualityTargetFps() there silently falls back to the ordinary
+     * quiet cadence and turns a safe event-driven frame into responsive
+     * pressure. */
+    float pointCalibrationTargetFps(
+	BObolLodPointCalibrationGoal goal) const
+    {
+	return BObolLodAdmissionPlanner::pointCalibrationTargetFps(
+	    goal, this->lodStableTargetFps,
+	    this->prominentQualityTargetFps());
+    }
+
+    uint64_t pointCalibrationPresentationDeadline(
+	BObolLodPointCalibrationGoal goal) const
+    {
+	return BObolLodAdmissionPlanner::pointCalibrationPresentationDeadline(
+	    goal, this->stablePresentationFrameDeadlineNanoseconds,
+	    this->prominentQualityPresentationDeadline());
+    }
+
     uint64_t staticQualityPresentationDeadline(void) const
     {
 	/* Static overscan is the one-shot proof for quality which exceeds the
@@ -636,6 +685,9 @@ struct BObolLodCoordinator {
 	 * floor cannot become active until its complete cut already fits the very
 	 * trial this deadline enables.  Give the whole bounded static phase the
 	 * longer allowance while the preceding framebuffer remains available.
+	 * A ready retained-view handoff also starts its capacity proof in this
+	 * domain.  Giving its first candidate only the preferred deadline would
+	 * classify that candidate as unsafe before the static search existed.
 	 * A rejected rich cut retains this allowance after its bounded handoff:
 	 * REJECTED is the terminal certificate that the occurrence-local
 	 * population is the richest one proven under this event-driven deadline.
@@ -654,6 +706,7 @@ struct BObolLodCoordinator {
 		capacitySearch.key().preferredTargetNanoseconds;
 	if (lodStaticQualityTrial.usesStaticDeadline() ||
 	    lodPointQualityPhase.staticCalibrationPending() ||
+	    lodRetainedViewContinuity.startCapacityAtStatic() ||
 	    capacitySearchUsesStaticDeadline)
 	    return prominentQualityPresentationDeadline();
 	return stablePresentationFrameDeadlineNanoseconds;
@@ -737,6 +790,7 @@ struct BObolLodCoordinator {
 	lodDiscretePopulationTrialPermit.revoke();
 	lodInteractionSession.resetCeilingFeedback();
 	lodPresentationTransaction.reset();
+	lodExactPresentationFrame.reset();
 	lodRefinementNotBeforeMicroseconds = 0;
 
 	/* Delivery-rate telemetry is also renderer-specific.  It is protected
@@ -750,6 +804,134 @@ struct BObolLodCoordinator {
 	    lastInteractivePresentationTimestampNanoseconds = 0;
 	    smoothedInteractivePresentationIntervalNanoseconds = 0;
 	}
+    }
+
+    bool lodPresentationFramePending(void) const
+    {
+	return lodPresentationTransaction.barrierPending() ||
+	    lodExactPresentationFrame.pending() ||
+	    lodAdmissionEvidence.capacity().presentationFramePending() ||
+	    lodPresentationPolicy.handoffPresentationPending() ||
+	    lodPointAdmissionFrame.pending() ||
+	    lodPointQualityPhase.presentationPending() ||
+	    lodAdmissionEvidence.headroom().retryPending();
+    }
+
+    /* Canonical refinement from concrete controller latches to the finite
+     * work ledger.  Callers may add facts owned outside this coordinator
+     * (database discovery, provider preparation, and cache writes), but must
+     * not reconstruct these controller-local obligations independently.
+     *
+     * This describes unfinished work, not which host level currently owns
+     * its next effect.  lodControllerPumpPending() performs the latter
+     * projection because a requested presentation transfers ownership from
+     * PUMP to RENDER without retiring the underlying obligation. */
+    BObolLodControlRefinement::Inputs lodControllerControlInputs(void) const
+    {
+	BObolLodControlRefinement::Inputs inputs;
+	inputs.interaction = lodInteractionSession.active();
+	inputs.inventory = lodCoveragePolicy.effectiveActive() ||
+	    lodRetainedViewContinuity.visibilityCensusDeferred() ||
+	    lodAvailabilityLedger.inventoryFirstPendingMicroseconds() > 0;
+	inputs.result = lodAvailabilityLedger.resultsPending();
+	inputs.publication = lodPresentationTransaction.publicationPending();
+	inputs.submission = lodSubmissionPass.active();
+	inputs.demandRefresh = lodViewDemandPolicy.demandRefreshActive();
+	inputs.submissionRescan = lodSubmissionPass.rescanPending();
+	inputs.submissionDelta = lodSubmissionDelta.active();
+	inputs.qualityProbe = lodViewDemandPolicy.qualityProbePending();
+	inputs.retainedAllocation = lodRetainedPass.refinementPending() ||
+	    lodRetainedPass.residencyPending() ||
+	    lodPlanningObligations.exactVisibilityReallocationPending();
+	inputs.retainedAllocationTransaction =
+	    bobol_retained_allocation_pending(
+		lodRetainedAllocationTransaction);
+	inputs.importanceCensus =
+	    lodPlanningObligations.importanceCensusPending();
+	inputs.residentAdmissionRetry =
+	    lodPlanningObligations.residentAdmissionRetryPending();
+	inputs.capacityAllocation =
+	    lodAdmissionEvidence.capacity().capacityAllocationPending();
+	inputs.residentGrowth = lodAvailabilityLedger.residentGrowthPending();
+	inputs.pointTriangleRecovery =
+	    lodPointQualityPhase.triangleRecoveryPending();
+	inputs.structuralFrontier = lodStructuralRepair.active() ||
+	    lodStructuralRepair.pointRelaxationPending();
+	inputs.presentationReplay = lodInterruptedPresentationReplay.pending();
+	inputs.exactPresentation = lodExactPresentationFrame.pending();
+	inputs.presentationBarrier = lodPresentationTransaction.barrierPending();
+	inputs.capacityCalibration =
+	    lodAdmissionEvidence.capacity().presentationFramePending();
+	inputs.pointAdmissionFrame = lodPointAdmissionFrame.pending();
+	inputs.pointCalibration = lodPointQualityPhase.presentationPending();
+	inputs.headroomProbe = lodAdmissionEvidence.headroom().retryPending();
+	inputs.handoff = lodPresentationPolicy.handoffPending();
+	inputs.compaction = lodCompactionPolicy.pending();
+	return inputs;
+    }
+
+    /* Presentation obligations use the controller pump only until their
+     * render request is standing.  Keep this projection separate from the
+     * aggregate pump predicate so runtime refinement can prove that a shared
+     * host wakeup actually belongs to the presentation owner. */
+    bool lodControllerPresentationPumpPending(bool renderPending) const
+    {
+	return lodExactPresentationFrame.requestPending() ||
+	    (lodPresentationTransaction.publicationAwaitingFrameRequest() &&
+	     !renderPending) ||
+	    (!renderPending &&
+	     (lodInterruptedPresentationReplay.pending() ||
+	      lodPresentationTransaction.barrierPending() ||
+	      lodAdmissionEvidence.capacity().presentationFramePending() ||
+	      lodPresentationPolicy.handoffPresentationPending() ||
+	      lodPointAdmissionFrame.pending() ||
+	      lodPointQualityPhase.presentationPending() ||
+	      lodAdmissionEvidence.headroom().retryPending()));
+    }
+
+    /* Pure controller-local host-pump projection.  Service queues and
+     * database providers are independent concurrent producers and are added
+     * by synchronizeProgressiveWorkPending().  Keeping this list beside the
+     * state prevents status, host, and policy-off paths from inventing
+     * different meanings for the same controller obligation.
+     *
+     * Presentation debt transfers to the render level once a request is
+     * standing.  Retaining both owners makes the host poll an action which
+     * cannot advance until that frame completes. */
+    bool lodControllerPumpPending(bool renderPending) const
+    {
+	const BObolLodControlRefinement::Inputs inputs =
+	    this->lodControllerControlInputs();
+	const BObolLodControlRefinement::Snapshot work =
+	    BObolLodControlRefinement::evaluate(inputs);
+	const bool capacityPumpPending =
+	    lodAdmissionEvidence.capacity().capacityAllocationPending() ||
+	    (lodAdmissionEvidence.capacity().capacityTransactionPending() &&
+	     !renderPending);
+	const bool handoffPumpPending =
+	    lodPresentationPolicy.handoffPending() &&
+	    (!lodPresentationPolicy.handoffPresentationPending() ||
+	     !renderPending);
+	const bool pointQualityPumpPending =
+	    lodPointQualityPhase.triangleRecoveryPending() ||
+	    (lodPointQualityPhase.presentationPending() && !renderPending);
+	const bool pointRelaxationPumpPending =
+	    lodStructuralRepair.pointRelaxationPending() &&
+	    (!lodStructuralRepair.pointRelaxationPresentationPending() ||
+	     !renderPending);
+	const bool presentationPumpPending =
+	    this->lodControllerPresentationPumpPending(renderPending);
+
+	return work.has(BObolLodControlRefinement::Work::INTERACTION) ||
+	    work.has(BObolLodControlRefinement::Work::INVENTORY) ||
+	    work.has(BObolLodControlRefinement::Work::PLANNING) ||
+	    capacityPumpPending ||
+	    handoffPumpPending ||
+	    pointQualityPumpPending ||
+	    pointRelaxationPumpPending ||
+	    lodAvailabilityLedger.resultsPending() ||
+	    work.has(BObolLodControlRefinement::Work::COMPACTION) ||
+	    presentationPumpPending;
     }
 
     /* Retire every automatic-LoD owner for a disabled view policy while
@@ -769,6 +951,7 @@ struct BObolLodCoordinator {
 	invalidateResidentMeshCompactionSnapshot();
 	lodAvailabilityLedger.resetResultQueue();
 	lodAvailabilityLedger.resetResidentGrowth();
+	lodAvailabilityLedger.commitInventoryDelta();
 	rewindLodSubmissionCursor();
 	lodSubmissionPass.retire();
 	lodSubmissionIntent.reset();
@@ -781,10 +964,11 @@ struct BObolLodCoordinator {
 	lodDiscretePopulationTrialPermit.revoke();
 	lodInteractionSession.reset();
 	lodInteractionStartCertificate.reset();
-	lodPoseContinuity.reset();
+	lodRetainedViewContinuity.reset();
 	lodPresentationPolicy.reset();
 	lodPresentationTransaction.reset();
 	lodInterruptedPresentationReplay.retire();
+	lodExactPresentationFrame.reset();
 	lodPointAdmissionFrame.retire();
 	lodPointQualityPhase.reset();
 	lodStaticQualityTrial.reset();
@@ -806,6 +990,74 @@ struct BObolLodCoordinator {
 	    BObolLodAdmissionPlanner::EvidenceAction::RESET_STRUCTURAL_ADMISSION);
 	applyAdmissionEvidenceAction(
 	    BObolLodAdmissionPlanner::EvidenceAction::MARK_RESOURCE_RECOVERY_HANDLED);
+    }
+
+    /* Derived postcondition for the automatic-domain retirement transaction.
+     * This mirrors AutomaticDomains in ObolLodPolicyDisable.tla without
+     * introducing a second writable work ledger.  Registered providers and
+     * their pending work are intentionally excluded: they also realize
+     * ordinary geometry when automatic LoD is disabled. */
+    bool automaticLodControlRetired(void) const
+    {
+	const bool serviceRetired = lodActiveGeneration == 0;
+	const bool availabilityRetired =
+	    !lodAvailabilityLedger.resultsPending() &&
+	    !lodAvailabilityLedger.residentGrowthPending() &&
+	    lodAvailabilityLedger.inventoryFirstPendingMicroseconds() == 0;
+	const bool submissionRetired =
+	    !lodSubmissionPass.active() && !lodSubmissionPass.rescanPending() &&
+	    !lodSubmissionDelta.active() &&
+	    !lodRetainedAllocationTransaction &&
+	    lodSubmissionSourceIndex == 0 && lodSubmissionEntryOffset == 0;
+	const bool planningRetired =
+	    !lodPlanningObligations.importanceCensusPending() &&
+	    !lodPlanningObligations.residentAdmissionRetryPending() &&
+	    !lodPlanningObligations.exactVisibilityReallocationPending() &&
+	    !lodDiscretePopulationTrialPermit.available();
+	const bool viewDemandRetired =
+	    !lodViewDemandPolicy.demandRefreshActive() &&
+	    !lodViewDemandPolicy.viewScaleChanging() &&
+	    !lodViewDemandPolicy.interactionScaleChanged() &&
+	    !lodViewDemandPolicy.qualityProbeActive() &&
+	    !lodViewDemandPolicy.qualityProbePending() &&
+	    !lodViewDemandPolicy.qualityBudgetActive();
+	const bool coverageRetired =
+	    !lodCoveragePolicy.required() && !lodCoveragePolicy.active() &&
+	    !lodCoveragePolicy.demandCensusRequired();
+	const bool interactionRetired =
+	    !lodInteractionSession.active() &&
+	    !lodInteractionStartCertificate.captured() &&
+	    !lodRetainedViewContinuity.retainOccurrenceCuts() &&
+	    !lodRetainedViewContinuity.startCapacityAtStatic() &&
+	    !lodRetainedViewContinuity.visibilityCensusDeferred();
+	const bool presentationRetired =
+	    !lodPresentationPolicy.handoffPending() &&
+	    !lodPresentationTransaction.barrierPending() &&
+	    !lodPresentationTransaction.publicationPending() &&
+	    !lodInterruptedPresentationReplay.pending() &&
+	    !lodExactPresentationFrame.pending() &&
+	    !lodPointAdmissionFrame.pending();
+	const bool pointQualityRetired = !lodPointQualityPhase.pending();
+	const bool staticQualityRetired = !lodStaticQualityTrial.blocksNewTrial();
+	const bool structuralRepairRetired =
+	    !lodStructuralRepair.active() &&
+	    !lodStructuralRepair.pointRelaxationPending();
+	const bool compactionRetired =
+	    !lodCompactionPolicy.pending() && !lodCompactionPolicy.planning();
+	const BObolLodAdmissionEvidence &evidence = lodAdmissionEvidence;
+	const bool capacityHostRetired =
+	    !evidence.capacity().capacityTransactionPending() &&
+	    !evidence.capacity().capacityAllocationPending() &&
+	    !evidence.capacity().presentationFramePending() &&
+	    !evidence.headroom().retryPending() &&
+	    !evidence.resources().recoveryPending() &&
+	    !lodAdmissionCursor.initialized();
+
+	return serviceRetired && availabilityRetired && submissionRetired &&
+	    planningRetired && viewDemandRetired && coverageRetired &&
+	    interactionRetired && presentationRetired && pointQualityRetired &&
+	    staticQualityRetired && structuralRepairRetired &&
+	    compactionRetired && capacityHostRetired;
     }
 
     float quietAllocationTargetFps(void) const
@@ -841,7 +1093,7 @@ struct BObolLodCoordinator {
 	/* Once the ordinary one-pixel frame is exact and terminal, a static
 	 * event-driven view may use the separately configured hard frame deadline
 	 * to test a finer pixel target.  The framebuffer is retained afterward,
-	 * so requiring every such terminal quality step to meet the ordinary 20 Hz
+	 * so requiring every such terminal quality step to meet the ordinary quiet
 	 * refinement cadence makes warm-cache convergence depend on one upload or
 	 * command-preparation sample. */
 	const uint64_t deadline = staticQualityPresentationDeadline();
@@ -870,9 +1122,13 @@ struct BObolLodCoordinator {
     uint64_t lastLodSubmissionTimeNanoseconds = 0;
     uint64_t lastPresentationSyncTimeNanoseconds = 0;
     uint64_t interactivePresentationFrameDeadlineNanoseconds =
-	defaultInteractivePresentationDeadline();
+	targetPresentationDeadline(defaultInteractiveTargetFps(),
+	    defaultInteractivePresentationDeadline(),
+	    maximumInteractivePresentationDeadline());
     uint64_t stablePresentationFrameDeadlineNanoseconds =
-	defaultStablePresentationDeadline();
+	targetPresentationDeadline(defaultStableTargetFps(),
+	    defaultStablePresentationDeadline(),
+	    maximumStablePresentationDeadline());
     uint64_t prominentQualityFrameDeadlineNanoseconds =
 	defaultProminentQualityDeadline();
     uint64_t interruptedPresentationFrameCount = 0;
@@ -884,6 +1140,7 @@ struct BObolLodCoordinator {
      * work between deadline slices.  Workers remain free to fill their
      * bounded queues while the presentation transaction is closed. */
     BObolLodInterruptedPresentationReplay lodInterruptedPresentationReplay;
+    BObolLodExactPresentationFrame lodExactPresentationFrame;
     uint64_t renderCompletionSerial = 0;
     mutable std::mutex presentationTimingMutex;
     uint64_t presentedFrameSerial = 0;
@@ -945,7 +1202,7 @@ struct BObolLodCoordinator {
      * progressive pump calls; a function-local flag lets a later empty pump
      * publish the preceding pose's visibility count as if it described the
      * new camera. */
-    BObolLodPoseContinuity lodPoseContinuity;
+    BObolLodRetainedViewContinuity lodRetainedViewContinuity;
     size_t lodSourceLogicalOccurrenceCount = 0;
     /* Camera/geometric projection evidence is denser than the visibility
      * census but still bounded (roughly a few dozen bytes per occurrence).
@@ -979,7 +1236,7 @@ struct BObolLodCoordinator {
     void clearLodConvergenceCandidates(void)
     {
 	lodConvergenceCandidateCensus.clear();
-	lodPoseContinuity.completeVisibilityCensus();
+	lodRetainedViewContinuity.completeVisibilityCensus();
 	lodCoveragePolicy.clearCompleteVisibleCount();
     }
     void resetLodConvergenceFraction(void)
@@ -1092,7 +1349,7 @@ struct BObolLodCoordinator {
 	 * population and repeatedly raised an inert threshold. */
 	return BObolLodAdmissionPlanner::retainedPointAggregationApplicable(
 	    pointProxyAggregationApplicable(),
-	    lodRetainedAllocationCertificate.pointProxyCandidateCount);
+	    lodRetainedAllocationCertificate.reachablePointProxyCandidateCount);
     }
     bool deadlinePointProxyAggregationApplicable(void) const
     {
@@ -1152,6 +1409,7 @@ struct BObolLodCoordinator {
 	struct db_i *database = NULL;
 	BObolLodSourceRoutingId routingId;
 	BObolLodInventoryEpoch inventoryRevision;
+	uint64_t visibilityRevision = 0;
 	SbString databaseId;
 	SbString path;
 	int drawMode = 0;
@@ -1228,17 +1486,28 @@ struct BObolLodCoordinator {
     BObolLodAdmissionCursor lodAdmissionCursor;
     BObolLodInventoryEpoch lodAdmissionInventoryRevision {1};
     BObolLodAvailabilityEpoch lodAdmissionAvailabilityRevision {1};
+    BObolLodVisibilityEpoch lodAdmissionVisibilityRevision {1};
     BObolLodCapacityEpoch lodAdmissionCapacityRevision {1};
-    uint64_t lodResidentAdmissionRevision = 0;
+    /* Read by the service's worker-thread availability callback and advanced
+     * by the presentation owner after it observes that capacity epoch. */
+    std::atomic<uint64_t> lodResidentAdmissionRevision {0};
+    /* Presentation-owner cursor for the capacity epoch against which a
+     * memory-denial retry pass has actually been started.  A service epoch
+     * authorizes at most one such pass; another attempt requires a genuine
+     * reclamation or limit-growth edge. */
+    uint64_t lodResidentAdmissionRetryRevision = 0;
     /* Applied results and their frame acknowledgement are one revision-bound
      * transaction.  A publication frame may include one-time CPU/GPU buffer
      * construction, so it controls refinement pacing without teaching the
      * steady-state capacity estimator that later frames cost the same. */
     BObolLodPresentationTransaction lodPresentationTransaction;
+    /* Cadence constraint for an already-owned successor.  This timestamp is
+     * never itself a pump reason: the submission/capacity transaction whose
+     * execution it delays supplies the finite progress witness. */
     int64_t lodRefinementNotBeforeMicroseconds = 0;
     float lodTargetPixelError = 1.0f;
-    float lodInteractiveTargetFps = 60.0f;
-    float lodStableTargetFps = 20.0f;
+    float lodInteractiveTargetFps = defaultInteractiveTargetFps();
+    float lodStableTargetFps = defaultStableTargetFps();
     /* Event-driven static quality and its terminal capacity witness share one
      * explicit lifecycle.  Internal policy bookkeeping may deactivate a
      * trial while preserving its constraint; genuine camera, service, user

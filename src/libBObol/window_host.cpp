@@ -353,7 +353,7 @@ BObolWindowHost::applyInputAction(BObolInputAction action,
     if (!this->p->controller)
 	return -1;
 
-    this->p->controller->requestRender("input-action");
+    this->p->controller->requestLodCapacityRender("input-action");
     return 1;
 }
 
@@ -437,7 +437,7 @@ BObolWindowHost::openFramebuffer(imgstream_fb_t *fb,
     attachment.composition = BOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY;
     this->p->framebuffers.push_back(attachment);
 	this->p->controller->getFramebufferOverlayRoot()->addChild(viewport);
-    this->p->controller->requestRender("fb-open");
+    this->p->controller->requestLodCapacityRender("fb-open");
     return 0;
 }
 
@@ -454,7 +454,7 @@ BObolWindowHost::closeFramebuffer(imgstream_fb_t *fb)
 	this->p->framebuffers[i].source->unref();
 	this->p->framebuffers.erase(this->p->framebuffers.begin() + (ptrdiff_t)i);
 	if (this->p->controller)
-	    this->p->controller->requestRender("fb-close");
+	    this->p->controller->requestLodCapacityRender("fb-close");
 	return;
     }
 }
@@ -489,7 +489,7 @@ BObolWindowHost::setFramebufferComposition(imgstream_fb_t *fb,
 	if (viewport->rebuildGeometry() != 0)
 	    return -1;
 	attachment->composition = composition;
-	controller->requestRender("fb-composition");
+	controller->requestLodCapacityRender("fb-composition");
 	return 0;
     }
 
@@ -518,7 +518,7 @@ BObolWindowHost::setFramebufferComposition(imgstream_fb_t *fb,
 	return -1;
     layer->addChild(viewport);
     attachment->composition = composition;
-    controller->requestRender("fb-composition");
+    controller->requestLodCapacityRender("fb-composition");
     return 0;
 }
 
@@ -534,7 +534,7 @@ BObolWindowHost::flushFramebuffer(imgstream_fb_t *fb)
 	attachment->viewport->syncFromSource() != 0)
 	return -1;
     if (this->p->controller)
-	this->p->controller->requestRender("fb-flush");
+	this->p->controller->requestLodCapacityRender("fb-flush");
     return 0;
 }
 
@@ -554,7 +554,7 @@ BObolWindowHost::resetFramebuffer(imgstream_fb_t *fb)
     if (attachment->viewport->syncFromSource() != 0)
 	return -1;
     if (this->p->controller)
-	this->p->controller->requestRender("fb-reset");
+	this->p->controller->requestLodCapacityRender("fb-reset");
     return 0;
 }
 
@@ -586,7 +586,7 @@ BObolWindowHost::setFramebufferViewport(imgstream_fb_t *fb,
     if (attachment->viewport->syncFromSource() != 0)
 	return -1;
     if (this->p->controller)
-	this->p->controller->requestRender("fb-viewport");
+	this->p->controller->requestLodCapacityRender("fb-viewport");
     return 0;
 }
 
@@ -612,7 +612,7 @@ BObolWindowHost::setFramebufferView(imgstream_fb_t *fb,
     if (attachment->viewport->rebuildGeometry() != 0)
 	return -1;
     if (this->p->controller)
-	this->p->controller->requestRender("fb-view");
+	this->p->controller->requestLodCapacityRender("fb-view");
     return 0;
 }
 
@@ -631,7 +631,7 @@ BObolWindowHost::setFramebufferCursor(imgstream_fb_t *fb,
     attachment->viewport->cursorShape = cursor->mode ?
 					SoBRLViewportImage::CURSOR_DEFAULT : SoBRLViewportImage::CURSOR_NONE;
     if (this->p->controller)
-	this->p->controller->requestRender("fb-cursor");
+	this->p->controller->requestLodCapacityRender("fb-cursor");
     return 0;
 }
 
@@ -649,7 +649,7 @@ BObolWindowHost::setFramebufferScreenCursor(imgstream_fb_t *fb,
     attachment->viewport->cursorShape = mode ?
 					SoBRLViewportImage::CURSOR_DEFAULT : SoBRLViewportImage::CURSOR_NONE;
     if (this->p->controller)
-	this->p->controller->requestRender("fb-screen-cursor");
+	this->p->controller->requestLodCapacityRender("fb-screen-cursor");
     return 0;
 }
 
@@ -671,7 +671,7 @@ BObolWindowHost::setFramebufferCursorShape(imgstream_fb_t *fb,
 					    SoBRLViewportImage::CURSOR_DEFAULT : SoBRLViewportImage::CURSOR_NONE;
     }
     if (this->p->controller)
-	this->p->controller->requestRender("fb-cursor-shape");
+	this->p->controller->requestLodCapacityRender("fb-cursor-shape");
     return 0;
 }
 

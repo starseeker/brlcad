@@ -3329,6 +3329,111 @@ brep_indexed_face_normal(const int *faces,
 	VSETALL(normal, 0.0);
 }
 
+static void
+brep_indexed_face_arrays_free(int **faces, vect_t **normals, point_t **points)
+{
+    if (faces && *faces) {
+	bu_free(*faces, "brep cdt faces");
+	*faces = NULL;
+    }
+    if (normals && *normals) {
+	bu_free(*normals, "brep cdt normals");
+	*normals = NULL;
+    }
+    if (points && *points) {
+	bu_free(*points, "brep cdt points");
+	*points = NULL;
+    }
+}
+
+
+static int
+brep_indexed_faces_cover_source(struct rt_db_internal *ip,
+	const struct bg_tess_tol *ttol, const struct bn_tol *tol,
+	const int *faces, int face_count, const point_t *points, int point_count)
+{
+    point_t boundary_min = VINIT_ZERO;
+    point_t boundary_max = VINIT_ZERO;
+    point_t envelope_min = VINIT_ZERO;
+    point_t envelope_max = VINIT_ZERO;
+    point_t mesh_min = VINIT_ZERO;
+    point_t mesh_max = VINIT_ZERO;
+    int have_boundary_bounds = 0;
+    int have_mesh_bounds = 0;
+
+    if (!ip || !ttol || !tol || !faces || face_count <= 0 || !points ||
+	point_count <= 0 || rt_brep_bbox(ip, &envelope_min, &envelope_max,
+	    tol) != 0)
+	return 0;
+
+    const struct rt_brep_internal *bi =
+	(const struct rt_brep_internal *)ip->idb_ptr;
+    RT_BREP_CK_MAGIC(bi);
+    if (!bi->brep)
+	return 0;
+    /* Surface control hulls can extend well outside trimmed faces, so the
+     * ordinary BREP box is only an upper envelope.  BREP vertices are cheap,
+     * exact boundary witnesses: every valid face tessellation must cover them
+     * even when it need not cover the untrimmed surface extents. */
+    for (int vertex_idx = 0; vertex_idx < bi->brep->m_V.Count();
+	    vertex_idx++) {
+	const ON_3dPoint vertex = bi->brep->m_V[vertex_idx].Point();
+	if (!vertex.IsValid())
+	    continue;
+	if (!have_boundary_bounds) {
+	    VMOVE(boundary_min, vertex);
+	    VMOVE(boundary_max, vertex);
+	    have_boundary_bounds = 1;
+	} else {
+	    VMINMAX(boundary_min, boundary_max, vertex);
+	}
+    }
+    if (!have_boundary_bounds)
+	return 0;
+
+    for (int face_idx = 0; face_idx < face_count; face_idx++) {
+	if (!brep_indexed_face_valid(faces, face_idx, point_count))
+	    continue;
+	for (int corner = 0; corner < 3; corner++) {
+	    const fastf_t *point = points[faces[face_idx * 3 + corner]];
+	    if (!isfinite(point[X]) || !isfinite(point[Y]) ||
+		!isfinite(point[Z]))
+		return 0;
+	    if (!have_mesh_bounds) {
+		VMOVE(mesh_min, point);
+		VMOVE(mesh_max, point);
+		have_mesh_bounds = 1;
+	    } else {
+		VMINMAX(mesh_min, mesh_max, point);
+	    }
+	}
+    }
+    if (!have_mesh_bounds)
+	return 0;
+
+    vect_t boundary_diagonal;
+    VSUB2(boundary_diagonal, boundary_max, boundary_min);
+    const fastf_t relative_tolerance = ttol->rel > 0.0 ?
+	ttol->rel * MAGNITUDE(boundary_diagonal) : 0.0;
+    const fastf_t absolute_tolerance = ttol->abs > 0.0 ? ttol->abs : 0.0;
+    fastf_t coverage_tolerance = std::max(tol->dist,
+	std::max(relative_tolerance, absolute_tolerance));
+    /* A faceted approximation need not sample an analytic extremum exactly.
+     * Permit twice the requested chord tolerance, but reject a result which
+     * omits boundary witnesses or exceeds the source surface envelope. */
+    static const fastf_t coverage_tolerance_factor = 2.0;
+    coverage_tolerance *= coverage_tolerance_factor;
+
+    for (int axis = 0; axis < 3; axis++) {
+	if (mesh_min[axis] > boundary_min[axis] + coverage_tolerance ||
+	    mesh_max[axis] < boundary_max[axis] - coverage_tolerance ||
+	    mesh_min[axis] < envelope_min[axis] - coverage_tolerance ||
+	    mesh_max[axis] > envelope_max[axis] + coverage_tolerance)
+	    return 0;
+    }
+    return 1;
+}
+
 
 extern "C" int
 rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
@@ -3356,30 +3461,19 @@ rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
     ret = brep_cdt_fast(&faces, &face_count, &corner_normals, &points,
 	    &point_count, bi->brep, -1, ttol, tol);
     if (ret != BRLCAD_OK) {
-	if (faces)
-	    bu_free(faces, "brep cdt faces");
-	if (corner_normals)
-	    bu_free(corner_normals, "brep cdt normals");
-	if (points)
-	    bu_free(points, "brep cdt points");
+	brep_indexed_face_arrays_free(&faces, &corner_normals, &points);
 	return BRLCAD_ERROR;
     }
 
     if (!faces || !points || face_count <= 0 || point_count <= 0) {
-	if (faces)
-	    bu_free(faces, "brep cdt faces");
-	if (corner_normals)
-	    bu_free(corner_normals, "brep cdt normals");
-	if (points)
-	    bu_free(points, "brep cdt points");
+	brep_indexed_face_arrays_free(&faces, &corner_normals, &points);
 	return BRLCAD_OK;
     }
 
-    if (point_count > INT_MAX) {
-	bu_free(faces, "brep cdt faces");
-	if (corner_normals)
-	    bu_free(corner_normals, "brep cdt normals");
-	bu_free(points, "brep cdt points");
+
+    if (!brep_indexed_faces_cover_source(ip, ttol, tol, faces, face_count,
+	    (const point_t *)points, point_count)) {
+	brep_indexed_face_arrays_free(&faces, &corner_normals, &points);
 	return BRLCAD_ERROR;
     }
 
@@ -3390,10 +3484,7 @@ rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
     }
 
     if (!valid_faces) {
-	bu_free(faces, "brep cdt faces");
-	if (corner_normals)
-	    bu_free(corner_normals, "brep cdt normals");
-	bu_free(points, "brep cdt points");
+	brep_indexed_face_arrays_free(&faces, &corner_normals, &points);
 	return BRLCAD_OK;
     }
 
@@ -3436,9 +3527,7 @@ rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
     face_set->source_identity = (uint64_t)(uintptr_t)bi;
     face_set->geometry_revision++;
 
-    bu_free(faces, "brep cdt faces");
-    if (corner_normals)
-	bu_free(corner_normals, "brep cdt normals");
+    brep_indexed_face_arrays_free(&faces, &corner_normals, NULL);
     return BRLCAD_OK;
 }
 

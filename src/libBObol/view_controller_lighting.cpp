@@ -689,7 +689,7 @@ BObolViewController::setCamera(SoCamera *camera)
     (void)controller_scene_lights_group(this->d->viewport);
     this->syncRenderManager();
     this->syncLodViewSignature(TRUE);
-    this->requestRender("camera");
+    this->requestLodCapacityRender("camera");
 }
 
 SoCamera *
@@ -705,7 +705,7 @@ BObolViewController::setViewportRegion(const SbViewportRegion &region)
     this->d->viewport->setViewportRegion(region);
     this->syncRenderManager();
     this->syncLodViewSignature(TRUE);
-    this->requestRender("viewport");
+    this->requestLodCapacityRender("viewport");
 }
 
 const SbViewportRegion &
@@ -742,7 +742,7 @@ BObolViewController::setViewportSize(unsigned int width, unsigned int height)
     this->d->viewport->setViewportRegion(this->d->viewportRegion);
     this->syncRenderManager();
     this->syncLodViewSignature(TRUE);
-    this->requestRender("viewport-size");
+    this->requestLodCapacityRender("viewport-size");
 }
 
 void
@@ -756,7 +756,7 @@ BObolViewController::setBackgroundColors(const SbColor &bottom,
     SoEnvironment *environment = controller_environment(this->d->viewport);
     if (environment)
 	environment->fogColor = top;
-    this->requestRender("background");
+    this->requestLodCapacityRender("background");
 }
 
 const SbColor &
@@ -781,7 +781,7 @@ BObolViewController::setDepthTestEnabled(SbBool enabled)
     depth->test = enabled;
     depth->write = enabled;
     this->invalidateRendererPerformanceHistory();
-    this->requestRender("depth-test");
+    this->requestLodCapacityRender("depth-test");
 }
 
 SbBool
@@ -804,7 +804,7 @@ BObolViewController::setTransparencyEnabled(SbBool enabled)
     if (this->d->imageRenderer)
 	this->d->imageRenderer->getGLRenderAction()->setTransparencyType(type);
     this->invalidateRendererPerformanceHistory();
-    this->requestRender("transparency");
+    this->requestLodCapacityRender("transparency");
 }
 
 SbBool
@@ -829,7 +829,7 @@ BObolViewController::setAntialiasingEnabled(SbBool enabled)
 	}
     }
     this->invalidateRendererPerformanceHistory();
-    this->requestRender("antialiasing");
+    this->requestLodCapacityRender("antialiasing");
 }
 
 SbBool
@@ -856,7 +856,7 @@ BObolViewController::setClipBounds(double minimum, double maximum)
     this->d->clipMinimum = minimum;
     this->d->clipMaximum = maximum;
     this->invalidateRendererPerformanceHistory();
-    this->requestRender("clip-bounds");
+    this->requestLodCapacityRender("clip-bounds");
     return TRUE;
 }
 
@@ -884,7 +884,7 @@ BObolViewController::setCuttingPlaneEnabled(SbBool enabled)
 	this->d->cuttingPlane, enabled,
 	this->d->cuttingPlaneAffordanceHorizontalSize,
 	this->d->cuttingPlaneAffordanceAspect);
-    this->requestRender("cutting-plane");
+    this->requestLodCapacityRender("cutting-plane");
 }
 
 SbBool
@@ -911,7 +911,7 @@ BObolViewController::setCuttingPlane(const SbPlane &plane)
 	this->d->cuttingPlaneEnabled,
 	this->d->cuttingPlaneAffordanceHorizontalSize,
 	this->d->cuttingPlaneAffordanceAspect);
-    this->requestRender("cutting-plane");
+    this->requestLodCapacityRender("cutting-plane");
     return TRUE;
 }
 
@@ -999,7 +999,7 @@ BObolViewController::setLightingEnabled(SbBool enabled)
     }
     if (changed) {
 	this->invalidateRendererPerformanceHistory();
-	this->requestRender("lighting");
+	this->requestLodCapacityRender("lighting");
     }
 }
 
@@ -1047,7 +1047,7 @@ BObolViewController::setLightingProfile(LightingProfile profile)
     lights[1]->on = lightOn && studio;
     lights[2]->on = lightOn && studio;
     this->applyTrackedHeadlight(TRUE);
-    this->requestRender("lighting-profile");
+    this->requestLodCapacityRender("lighting-profile");
 }
 
 BObolViewController::LightingProfile
@@ -1077,7 +1077,7 @@ BObolViewController::setNormalStyle(BObolViewLodState::NormalStyle style,
     if (viewState->getNormalStyle() != beforeStyle ||
 	std::fabs(viewState->getNormalCreaseAngle() - beforeAngle) > 1.0e-6f) {
 	this->invalidateRendererPerformanceHistory();
-	this->requestRender("normal-style");
+	this->requestLodCapacityRender("normal-style");
     }
 }
 
@@ -1117,7 +1117,7 @@ BObolViewController::setHeadlightEnabled(SbBool enabled)
 	if (lightOn)
 	    this->applyTrackedHeadlight(TRUE);
     }
-    this->requestRender("lighting");
+    this->requestLodCapacityRender("lighting");
 }
 
 SbBool
@@ -1137,7 +1137,7 @@ BObolViewController::setHeadlightCameraTracked(SbBool tracked)
      * Disabling: leave the current direction in place (scene-fixed). */
     if (tracked)
 	this->applyTrackedHeadlight();
-    this->requestRender("lighting");
+    this->requestLodCapacityRender("lighting");
 }
 
 SbBool
@@ -1156,7 +1156,7 @@ BObolViewController::setHeadlightOffset(const SbVec3f &eyeDir)
 	return;
     this->d->headlightOffsetEye = dir;
     this->applyTrackedHeadlight(TRUE);
-    this->requestRender("lighting");
+    this->requestLodCapacityRender("lighting");
 }
 
 SbVec3f
@@ -1217,7 +1217,7 @@ BObolViewController::setSceneLightsEnabled(SbBool enabled)
 		static_cast<SoLight *>(child)->on = enabled;
 	}
     }
-    this->requestRender("lighting");
+    this->requestLodCapacityRender("lighting");
 }
 
 SbBool
@@ -1305,7 +1305,7 @@ BObolViewController::setHeadlightColor(const SbColor &color)
     if (light->color.getValue() == clamped)
 	return;
     light->color = clamped;
-    this->requestRender("lighting");
+    this->requestLodCapacityRender("lighting");
 }
 
 SbColor
@@ -1325,7 +1325,7 @@ BObolViewController::setHeadlightIntensity(float intensity)
     if (std::fabs(light->intensity.getValue() - clamped) <= 1.0e-6f)
 	return;
     light->intensity = clamped;
-    this->requestRender("lighting");
+    this->requestLodCapacityRender("lighting");
 }
 
 float
@@ -1350,7 +1350,7 @@ BObolViewController::setDepthCueEnabled(SbBool enabled)
     /* Zero delegates visibility distance to the active camera volume. */
     environment->fogVisibility = 0.0f;
     this->invalidateRendererPerformanceHistory();
-    this->requestRender("depth-cue");
+    this->requestLodCapacityRender("depth-cue");
 }
 
 SbBool
@@ -1376,7 +1376,7 @@ BObolViewController::setSoftwareWireMode(SoftwareWireMode mode)
     if (batch)
 	batch->setSoftwareWireMode(mode);
     this->invalidateRendererPerformanceHistory();
-    this->requestRender("software-wire-mode");
+    this->requestLodCapacityRender("software-wire-mode");
 }
 
 BObolViewController::SoftwareWireMode

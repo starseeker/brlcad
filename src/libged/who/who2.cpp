@@ -25,52 +25,12 @@
 
 #include "common.h"
 
-#include <algorithm>
-#include <set>
-#include <string>
-#include <vector>
-
-#include "BObol/BDatabaseSource.h"
-#include "BObol/BSceneController.h"
 #include "ged.h"
 
-#include "../ged_bobol_private.hpp"
+#include "../ged_draw_private.h"
 #include "../ged_private.h"
 
 extern "C" int ged_who_solids_core(struct ged *gedp, int argc, const char *argv[]);
-
-static void
-who_bobol_paths(struct ged *gedp, struct ged_view_context *view_ctx,
-	int mode, int expand, struct bu_vls *result)
-{
-    BObolSceneController *scene = ged_bobol_scene(gedp);
-    if (!scene || !result)
-	return;
-
-    std::set<std::string> paths;
-    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
-	BObolDatabaseSourceSummary summary;
-	if (!scene->getDatabaseSourceSummary(i, summary) ||
-	    !ged_bobol_source_in_view(view_ctx, summary) || !summary.visible)
-	    continue;
-	const int representation_mode = summary.representationMode >= 0 ?
-	    summary.representationMode : GED_DRAW_MODE_WIRE;
-	if (mode >= 0 && representation_mode != mode)
-	    continue;
-
-	const char *path = summary.path.getString();
-	if (!expand && summary.parentGroupPath.getLength() &&
-	    !BU_STR_EQUAL(summary.parentGroupPath.getString(), "/"))
-	    path = summary.parentGroupPath.getString();
-	while (path && *path == '/')
-	    path++;
-	if (path && path[0])
-	    paths.insert(path);
-    }
-
-    for (const std::string &path : paths)
-	bu_vls_printf(result, "%s\n", path.c_str());
-}
 
 /*
  * List the db objects currently drawn
@@ -153,7 +113,10 @@ ged_who2_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    who_bobol_paths(gedp, v, mode, expand, gedp->ged_result_str);
+    /* Draw intent is authoritative for the ordinary listing and is available
+     * immediately after a command transaction.  Expanded listings describe
+     * realized occurrences and may therefore follow renderer realization. */
+    ged_draw_list_paths(gedp, v, mode, expand, gedp->ged_result_str);
 
     return BRLCAD_OK;
 }

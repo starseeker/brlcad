@@ -312,8 +312,10 @@ set(
   tests/lod_control_trace.jq
   tests/qged_apng_encode.cpp
   tests/qged_gui_matrix.sh
+  tests/qged_lod_quality_matrix.sh
   tests/qged_resize_matrix.sh
   tests/qged_selection_ui_matrix.sh
+  tests/qged_test_display.sh
   tests/test_lod_control_trace.sh
   qged_signals.eps
   qged_signals.dia

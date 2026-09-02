@@ -419,7 +419,7 @@ ged_draw_obol_overlay_erase_name_context(
 	(void)scene->removeGroup("_overlays");
     if (removed > 0) {
 	scene->realizePending();
-	controller->requestRender("overlay-remove");
+	controller->requestLodCapacityRender("overlay-remove");
     }
     (void)gedp;
     return removed > 0 ? 1 : 0;
@@ -483,7 +483,7 @@ ged_draw_obol_overlay_geometry_insert_context(
 
     if (shape_path_out)
 	*shape_path_out = bu_strdup(shape_path.c_str());
-    controller->requestRender("overlay-insert");
+    controller->requestLodCapacityRender("overlay-insert");
     (void)gedp;
     return 1;
 }

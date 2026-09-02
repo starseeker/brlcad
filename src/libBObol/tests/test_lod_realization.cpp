@@ -367,6 +367,82 @@ test_worker_prepared_authored_normals(void)
 }
 
 static int
+test_optional_oriented_bounds_fall_back_to_aabb(void)
+{
+    point_t points[3];
+    uint32_t faces[3] = {0, 1, 2};
+    VSET(points[0], 0.0, 0.0, 0.0);
+    VSET(points[1], 1.0, 0.0, 0.0);
+    VSET(points[2], 0.0, 1.0, 0.0);
+
+    struct BObolMeshLodData data = {};
+    data.faces = faces;
+    data.face_count = 1;
+    data.points = points;
+    data.point_count = 3;
+    data.points_orig = points;
+    data.point_orig_count = 3;
+    /* Source bounds may conservatively exceed the occupied quantization
+     * domain.  That makes an otherwise well-formed cached OBB unsuitable for
+     * this immutable renderer generation, but does not invalidate the mesh. */
+    VSET(data.bmin, -0.25, 0.0, 0.0);
+    VSET(data.bmax, 1.0, 1.0, 1.0);
+
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    hierarchy.min_cut = 0;
+    hierarchy.max_cut = 0;
+    hierarchy.resident_cut = 0;
+    hierarchy.cuts[0].face_count = 1;
+    hierarchy.cuts[0].point_count = 3;
+    VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
+    VSET(hierarchy.quantization_max, 1.0, 1.0, 1.0);
+    hierarchy.oriented_bounds_valid = 1;
+    for (size_t corner = 0; corner < 8; ++corner)
+	VSET(hierarchy.oriented_bounds[corner],
+	    (corner & 1u) ? 1.0 : 0.0,
+	    (corner & 2u) ? 1.0 : 0.0,
+	    (corner & 4u) ? 1.0 : 0.0);
+    complete_test_hierarchy(hierarchy);
+
+    if (!bobol_mesh_lod_oriented_bounds_validate(&hierarchy)) {
+	printf("FAIL: optional OBB fallback fixture is not cache-valid\n");
+	return 1;
+    }
+
+    BObolLodProgressiveMesh progressive;
+    if (!progressive.update(data, hierarchy, 0, FALSE)) {
+	printf("FAIL: optional invalid renderer OBB rejected valid mesh\n");
+	return 1;
+    }
+    const std::shared_ptr<const Obol::PartGeometry> geometry =
+	progressive.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED, NULL);
+    if (!geometry || !geometry->shaded ||
+	geometry->aggregateProxyCorners) {
+	printf("FAIL: optional invalid renderer OBB did not use AABB fallback\n");
+	return 1;
+    }
+
+    hierarchy.oriented_bounds[7][X] += 0.25;
+    if (bobol_mesh_lod_oriented_bounds_validate(&hierarchy)) {
+	printf("FAIL: malformed optional OBB fixture was accepted\n");
+	return 1;
+    }
+    if (!progressive.update(data, hierarchy, 0, FALSE)) {
+	printf("FAIL: malformed optional OBB rejected valid mesh\n");
+	return 1;
+    }
+    const std::shared_ptr<const Obol::PartGeometry> malformedGeometry =
+	progressive.prepareCadGeometry(BOBOL_LOD_DRAW_SHADED, NULL);
+    if (!malformedGeometry || !malformedGeometry->shaded ||
+	malformedGeometry->aggregateProxyCorners) {
+	printf("FAIL: malformed optional OBB did not use AABB fallback\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_worker_prepared_generation_lifetime(void)
 {
     point_t points[4];
@@ -401,6 +477,20 @@ test_worker_prepared_generation_lifetime(void)
     BObolLodProgressiveMesh progressive;
     if (!progressive.update(data, hierarchy, 0, FALSE))
 	return 1;
+    std::array<BObolLodCounts, BOBOL_MESH_LOD_CUT_COUNT_MAX>
+	spatialCounts;
+    BObolLodCounts selectedCount;
+    int spatialMinimumCut = -1;
+    int spatialMaximumCut = -1;
+    if (progressive.canDrawChunksAtCut({0}, 0) ||
+	progressive.countsForChunksAtCut(
+	    {0}, 0, FALSE, &selectedCount) ||
+	progressive.drawableCountsAtCuts(
+	    {0}, FALSE, spatialCounts.data(), spatialCounts.size(),
+	    &spatialMinimumCut, &spatialMaximumCut)) {
+	printf("FAIL: whole-prefix preview claimed private spatial-page residency\n");
+	return 1;
+    }
     uint64_t coarseRevision = 0;
     const std::shared_ptr<const Obol::PartGeometry> coarse =
 	progressive.prepareCadGeometry(
@@ -843,6 +933,8 @@ main(int argc, char **argv)
     if (test_rt_mesh_payload_copy())
 	return 1;
     if (test_worker_prepared_authored_normals())
+	return 1;
+    if (test_optional_oriented_bounds_fall_back_to_aabb())
 	return 1;
     if (test_worker_prepared_generation_lifetime())
 	return 1;

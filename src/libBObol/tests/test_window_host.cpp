@@ -258,6 +258,18 @@ test_pending_progress_provider(BObolViewController *controller,
     return 1;
 }
 
+static int
+test_idle_progress_provider(BObolViewController *controller,
+	void *data, const BObolProgressiveOptions *options,
+	BObolProgressiveStatus *status)
+{
+    PendingProgressState *state = static_cast<PendingProgressState *>(data);
+    if (!controller || !state || !options || !status)
+	return -1;
+    state->calls++;
+    return 0;
+}
+
 struct PublishedProgressState {
     int calls = 0;
     bool remainsPending = true;
@@ -273,6 +285,7 @@ test_published_progress_provider(BObolViewController *controller,
     if (!controller || !state || !options || !status)
 	return -1;
     state->calls++;
+    status->sourceAvailabilityChanged = 1;
     status->changed = 1;
     status->hasMore = state->remainsPending ? 1 : 0;
     return 1;
@@ -653,6 +666,32 @@ test_progressive_status_contract(void)
     controller.unregisterProgressiveProvider(token);
     controller.clearProgressiveWorkPending();
 
+    /* Registration is conservatively pending only until one complete pass
+     * observes the provider.  Keeping an idle provider registered must not
+     * manufacture source work or hold the host pump level indefinitely. */
+    BObolViewController idleController;
+    PendingProgressState idleState;
+    const uint64_t idleToken = idleController.registerProgressiveProvider(
+	test_idle_progress_provider, &idleState);
+    idleController.clearRenderRequest();
+    status.clear();
+    const int idleAdvance = idleController.advanceProgressiveWork(NULL,
+	&status);
+    if (!(idleToken != 0 && idleAdvance == 0 &&
+	idleState.calls == 1 && idleController.hasProgressiveProviders() &&
+	!status.hasMore && !idleController.hasProgressiveWorkPending() &&
+	!idleController.isRenderRequested())) {
+	std::fprintf(stderr, "FAIL: registered idle provider did not retire "
+	    "its conservative pending level (advance=%d calls=%d providers=%d "
+	    "more=%d pump=%d render=%d)\n", idleAdvance, idleState.calls,
+	    idleController.hasProgressiveProviders() ? 1 : 0,
+	    status.hasMore ? 1 : 0,
+	    idleController.hasProgressiveWorkPending() ? 1 : 0,
+	    idleController.isRenderRequested() ? 1 : 0);
+	return 1;
+    }
+    idleController.unregisterProgressiveProvider(idleToken);
+
     /* A continuing provider's bounded owner-thread mutation is not authority
      * for one full scene traversal per pump.  Keep pumping it behind the
      * adaptive publication deadline.  Conversely, the final mutation has an
@@ -662,14 +701,31 @@ test_progressive_status_contract(void)
     const uint64_t batchedToken = batchedController.registerProgressiveProvider(
 	test_published_progress_provider, &batchedState);
     batchedController.clearRenderRequest();
+    BObolLodConvergenceStatus availabilityBefore;
+    batchedController.getLodConvergenceStatus(availabilityBefore);
     status.clear();
     CHECK(batchedToken != 0 &&
 	batchedController.advanceProgressiveWork(NULL, &status) > 0 &&
 	status.changed && status.hasMore &&
+	status.sourceAvailabilityChanged &&
 	batchedController.hasProgressiveWorkPending() &&
 	!batchedController.isRenderRequested(),
 	"continuing provider mutation is publication-batched");
+    BObolLodConvergenceStatus availabilityAfter;
+    batchedController.getLodConvergenceStatus(availabilityAfter);
+    CHECK(availabilityAfter.availabilityRevision ==
+	availabilityBefore.availabilityRevision + 1,
+	"source publication advances one availability epoch per pump");
+    /* Any already-requested full presentation will include the applied
+     * retained mutation.  Once the independent provider retires, that render
+     * owns the publication debt and the batching timer must not remain a
+     * duplicate host-pump reason. */
+    batchedController.requestPresentationRender(
+	"test-batched-publication-coalescing");
     batchedController.unregisterProgressiveProvider(batchedToken);
+    CHECK(batchedController.isRenderRequested() &&
+	!batchedController.hasProgressiveWorkPending(),
+	"standing render absorbs batched publication pump ownership");
 
     BObolViewController terminalController;
     PublishedProgressState terminalState;
@@ -679,11 +735,18 @@ test_progressive_status_contract(void)
 	    test_published_progress_provider, &terminalState);
     terminalController.clearRenderRequest();
     status.clear();
-    CHECK(terminalToken != 0 &&
-	terminalController.advanceProgressiveWork(NULL, &status) > 0 &&
-	status.changed && status.hasMore &&
-	terminalController.isRenderRequested(),
-	"terminal provider mutation requests its idle-stream frame");
+    const int terminalAdvance =
+	terminalController.advanceProgressiveWork(NULL, &status);
+    if (!(terminalToken != 0 && terminalAdvance > 0 && status.changed &&
+	status.hasMore && terminalController.isRenderRequested() &&
+	!terminalController.hasProgressiveWorkPending())) {
+	std::fprintf(stderr, "FAIL: terminal provider mutation did not transfer "
+	    "to its idle-stream frame (advance=%d changed=%d more=%d pump=%d "
+	    "render=%d)\n", terminalAdvance, status.changed, status.hasMore,
+	    terminalController.hasProgressiveWorkPending() ? 1 : 0,
+	    terminalController.isRenderRequested() ? 1 : 0);
+	return 1;
+    }
     terminalController.unregisterProgressiveProvider(terminalToken);
     return 0;
 }
@@ -714,7 +777,7 @@ test_progressive_frame_wakeup_contract(void)
 	&providerState);
     providerController.clearRenderRequest();
     providerController.markProgressiveWorkPending();
-    providerController.requestRender("test-standing-render");
+    providerController.requestLodCapacityRender("test-standing-render");
     const int beforeRegistration = providerState.calls;
     PendingProgressState progressState;
     const uint64_t token = providerController.registerProgressiveProvider(
@@ -726,6 +789,42 @@ test_progressive_frame_wakeup_contract(void)
     providerController.clearProgressiveWorkPending();
     providerController.clearRenderRequest();
     providerController.clearFrameRequestCallback(&providerState);
+
+    /* Provider teardown retires only that producer.  Geometry installed by
+     * its final mutation may still owe an exact frame after an interrupted
+     * traversal, and that independent level must retain its host witness. */
+    BObolViewController refinementController;
+    PendingProgressState refinementState;
+    const uint64_t refinementToken =
+	refinementController.registerProgressiveProvider(
+	    test_pending_progress_provider, &refinementState);
+    const BObolPresentationTimingContext incompletePresentation(
+	BObolLodCapacityRelevance::RELEVANT,
+	BObolLodPlanningRelevance::RELEVANT,
+	BObolCadPresentationExecution::EXECUTED,
+	BOBOL_CAD_PREPARATION_NONE,
+	BObolCadPresentationCompleteness::INCOMPLETE);
+    refinementController.notePresentationRenderInterrupted(
+	1, incompletePresentation);
+    CHECK(refinementToken != 0 &&
+	refinementController.hasPendingLodRefinementFrame() &&
+	refinementController.hasProgressiveWorkPending(),
+	"interrupted presentation publishes exact-frame work");
+    refinementController.unregisterProgressiveProvider(refinementToken);
+    CHECK(!refinementController.hasProgressiveProviders() &&
+	refinementController.hasPendingLodRefinementFrame() &&
+	refinementController.hasProgressiveWorkPending(),
+	"provider teardown preserves independent exact-frame work");
+    refinementController.clearRenderRequest();
+    BObolLodConvergenceStatus requestRequiredStatus;
+    refinementController.getLodConvergenceStatus(requestRequiredStatus);
+    CHECK((requestRequiredStatus.controlViolationMask &
+	BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_PRESENTATION) == 0,
+	"exact-frame request debt recognizes its scheduled pump witness");
+    CHECK(refinementController.advanceProgressiveWork(NULL, NULL) > 0 &&
+	refinementController.isRenderRequested() &&
+	!refinementController.hasProgressiveWorkPending(),
+	"exact-frame work transfers from its pump to the successor render");
     return 0;
 }
 
@@ -753,7 +852,7 @@ test_host_work_snapshot_contract(void)
 	!work.capacitySampleRequested(),
 	"presentation work composes with a standing pump level");
 
-    controller.requestRender("host-work-capacity");
+    controller.requestLodCapacityRender("host-work-capacity");
     work = controller.getHostWorkSnapshot();
     CHECK(work.capacitySampleRequested(),
 	"capacity-relevant render dominates a coalesced presentation request");
@@ -767,8 +866,9 @@ test_host_work_snapshot_contract(void)
     /* Claiming the pending level starts the frame.  Work published after the
      * claim is necessarily a distinct successor transaction. */
     SbBool capacityRelevant = FALSE;
-    CHECK(controller.consumeRenderRequest(NULL, &capacityRelevant) &&
-	capacityRelevant,
+    SbBool planningRelevant = FALSE;
+    CHECK(controller.consumeRenderRequest(NULL, &capacityRelevant,
+	&planningRelevant) && capacityRelevant && planningRelevant,
 	"the host claims the capacity transaction before traversal");
     controller.requestPresentationRender("host-work-during-frame");
     const BObolHostWorkSnapshot newer = controller.getHostWorkSnapshot();
@@ -777,7 +877,10 @@ test_host_work_snapshot_contract(void)
 	!newer.capacitySampleRequested(),
 	"work published during traversal creates a successor transaction");
 
-    CHECK(controller.consumeRenderRequest(NULL),
+    capacityRelevant = TRUE;
+    planningRelevant = TRUE;
+    CHECK(controller.consumeRenderRequest(NULL, &capacityRelevant,
+	&planningRelevant) && !capacityRelevant && !planningRelevant,
 	"the host can claim the successor transaction");
     work = controller.getHostWorkSnapshot();
     CHECK(work.pumpPending() && !work.renderPending(),
@@ -1305,10 +1408,28 @@ test_host_factory_contract(void)
 	  high_state.vsync == 1,
 	  "typed vsync property dispatches to a capable presentation host");
 
-	const int frames_before_request = high_state.frames;
+    BObolViewController *endpoint_controller =
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint));
+    endpoint_controller->clearRenderRequest();
+    const int frames_before_request = high_state.frames;
     CHECK(bobol_display_endpoint_request_frame(endpoint, "test-frame") &&
-	  high_state.frames == frames_before_request + 1,
+	  high_state.frames == frames_before_request + 1 &&
+	  endpoint_controller->getHostWorkSnapshot().capacitySampleRequested(),
 	  "factory dispatches frame requests");
+    endpoint_controller->clearRenderRequest();
+    const int frames_before_presentation = high_state.frames;
+    const int presentation_requested =
+	bobol_display_endpoint_request_presentation_frame(endpoint,
+	    "test-presentation-frame");
+    const BObolHostWorkSnapshot presentation_work =
+	endpoint_controller->getHostWorkSnapshot();
+    CHECK(presentation_requested &&
+	  high_state.frames == frames_before_presentation + 1 &&
+	  presentation_work.renderPending() &&
+	  !presentation_work.capacitySampleRequested(),
+	  "presentation frame dispatch preserves non-capacity evidence class");
+    endpoint_controller->clearRenderRequest();
     CHECK(bobol_display_endpoint_resize(endpoint, 10, 7, 1.5) &&
 	  high_state.resizes == 1 &&
 	  instance->controller == bobol_display_endpoint_controller(endpoint),

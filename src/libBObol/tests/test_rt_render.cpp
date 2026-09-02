@@ -1024,7 +1024,7 @@ main(int argc, char **argv)
 	    ret = 1;
 	}
 	camera->position.setValue(20.0f, 0.0f, 10.0f);
-	controller.requestRender("camera");
+	controller.requestLodCapacityRender("camera");
 	unsigned char *cameraOwnerImage = NULL;
 	if (!ret && controller.renderToImage(&cameraOwnerImage, 0, 0, NULL,
 	    NULL, NULL) != BRLCAD_OK) {
@@ -1063,7 +1063,7 @@ main(int argc, char **argv)
 	    ret = 1;
 	}
 	camera->position.setValue(2.0f, 0.0f, 10.0f);
-	controller.requestRender("camera");
+	controller.requestLodCapacityRender("camera");
 	cameraOwnerImage = NULL;
 	if (!ret && controller.renderToImage(&cameraOwnerImage, 0, 0, NULL,
 	    NULL, NULL) != BRLCAD_OK) {
@@ -1257,7 +1257,7 @@ main(int argc, char **argv)
 		 * notice that request, restart the retained ray job, and present its
 		 * result without any Coin access from the worker thread. */
 		source->color = SbColor(0.0f, 1.0f, 0.0f);
-		controller.requestRender("database-source");
+		controller.requestLodCapacityRender("database-source");
 		unsigned char *ownerImage = NULL;
 		if (!ret && controller.renderToImage(&ownerImage, 0, 0, NULL,
 		    NULL, NULL) != BRLCAD_OK) {

@@ -71,24 +71,6 @@ public:
     void runMouseMoveForTest(QMouseEvent *event) { this->mouseMoveEvent(event); }
     void runPaintGLForTest(void) { this->paintGL(); }
     void runWheelForTest(QWheelEvent *event) { this->wheelEvent(event); }
-    QImage readCurrentFramebufferForTest(void)
-    {
-	const qreal dpr = this->devicePixelRatioF();
-	const int width = std::max(1,
-	    static_cast<int>(std::ceil(this->width() * dpr)));
-	const int height = std::max(1,
-	    static_cast<int>(std::ceil(this->height() * dpr)));
-	QImage image(width, height, QImage::Format_RGBA8888);
-	if (image.isNull())
-	    return image;
-	GLint oldPackAlignment = 4;
-	glGetIntegerv(GL_PACK_ALIGNMENT, &oldPackAlignment);
-	glPixelStorei(GL_PACK_ALIGNMENT, 4);
-	glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE,
-	    image.bits());
-	glPixelStorei(GL_PACK_ALIGNMENT, oldPackAlignment);
-	return image.flipped(Qt::Vertical);
-    }
 };
 #endif
 
@@ -217,7 +199,7 @@ request_render_during_traversal(void *data, SoAction *)
     if (!request || request->fired || !request->controller)
 	return;
     request->fired = true;
-    request->controller->requestRender("sw-render-followup");
+    request->controller->requestLodCapacityRender("sw-render-followup");
 }
 
 static void
@@ -447,17 +429,21 @@ main(int argc, char **argv)
     uint64_t semanticSerial = controller->renderRequestSerialGet();
     view.need_update(QG_VIEW_DRAWN);
     SbBool semanticCapacityRelevant = TRUE;
+    SbBool semanticPlanningRelevant = TRUE;
     if (controller->renderRequestSerialGet() <= semanticSerial ||
 	!controller->consumeRenderRequest(NULL,
-	    &semanticCapacityRelevant) || semanticCapacityRelevant)
+	    &semanticCapacityRelevant, &semanticPlanningRelevant) ||
+	semanticCapacityRelevant || semanticPlanningRelevant)
 	FAIL("draw-state refresh should request one presentation-only Obol frame");
 
     semanticSerial = controller->renderRequestSerialGet();
     view.need_update(QG_VIEW_SELECT);
     semanticCapacityRelevant = TRUE;
+    semanticPlanningRelevant = TRUE;
     if (controller->renderRequestSerialGet() <= semanticSerial ||
 	!controller->consumeRenderRequest(NULL,
-	    &semanticCapacityRelevant) || semanticCapacityRelevant)
+	    &semanticCapacityRelevant, &semanticPlanningRelevant) ||
+	semanticCapacityRelevant || semanticPlanningRelevant)
 	FAIL("selection refresh should request one presentation-only Obol frame");
 
     semanticSerial = controller->renderRequestSerialGet();
@@ -470,7 +456,7 @@ main(int argc, char **argv)
     if (controller->isRenderRequested() ||
 	controller->consumeRenderRequest(NULL))
 	FAIL("Obol view controller should clear the render request");
-    controller->requestRender("qtcad-test");
+    controller->requestLodCapacityRender("qtcad-test");
     if (!controller->isRenderRequested() ||
 	    bu_strcmp(controller->getRenderReason().getString(), "qtcad-test") != 0)
 	FAIL("Obol view controller should retain render requests");
@@ -549,7 +535,7 @@ main(int argc, char **argv)
 	obolImage.pixelColor(2, obolImage.height() - 3))
 	FAIL("QgView Obol capture should preserve configured gradient endpoints");
 
-    controller->requestRender("sw-visible-readback");
+    controller->requestLodCapacityRender("sw-visible-readback");
     QImage visibleImage;
     view.get_viewport_image(visibleImage);
     if (visibleImage.isNull() || lit_pixel_count(visibleImage) < 10)
@@ -563,7 +549,7 @@ main(int argc, char **argv)
     fpsParams.draw = 1;
     fpsParams.draw_fps = 1;
     (void)bv_params_state_set(fpsView, &fpsParams);
-    controller->requestRender("sw-visible-paint");
+    controller->requestLodCapacityRender("sw-visible-paint");
     view.show();
     QImage paintTarget(view.size(), QImage::Format_RGBA8888);
     paintTarget.fill(0);
@@ -610,7 +596,7 @@ main(int argc, char **argv)
     followupNode->setCallback(
 	request_render_during_traversal, &followup);
     sceneRoot->addChild(followupNode);
-    controller->requestRender("sw-followup-base");
+    controller->requestLodCapacityRender("sw-followup-base");
     paintTarget.fill(0);
     QPainter followupPainter(&paintTarget);
     view.render(&followupPainter);
@@ -628,7 +614,7 @@ main(int argc, char **argv)
      * cheaper; unmanaged Coin-only scenes deliberately disable this deadline.
      * Establish a completed frame, then interrupt a later traversal and
      * require the immutable cached image and successor request to survive. */
-    controller->requestRender("sw-deadline-baseline");
+    controller->requestLodCapacityRender("sw-deadline-baseline");
     paintTarget.fill(0);
     QPainter deadlineBaselinePainter(&paintTarget);
     view.render(&deadlineBaselinePainter);
@@ -657,7 +643,7 @@ main(int argc, char **argv)
     sceneRoot->addChild(deadlineNode);
     sceneRoot->addChild(new SoCube);
     controller->setPresentationFrameDeadlines(1000000ULL, 1000000ULL);
-    controller->requestRender("sw-deadline-interrupt");
+    controller->requestLodCapacityRender("sw-deadline-interrupt");
     paintTarget.fill(0);
     QPainter deadlinePainter(&paintTarget);
     view.render(&deadlinePainter);
@@ -938,7 +924,7 @@ main(int argc, char **argv)
 	glRoot->addChild(glCube);
 	glController->getViewport()->viewAll();
 
-	glController->requestRender("gl-visible-readback");
+	glController->requestLodCapacityRender("gl-visible-readback");
 	QImage glVisibleImage;
 	glView.get_viewport_image(glVisibleImage);
 	if (glVisibleImage.isNull() || lit_pixel_count(glVisibleImage) < 10)
@@ -1029,7 +1015,7 @@ main(int argc, char **argv)
 	    if (paintController->isLodGestureActive() ||
 		!paintController->isLodInteractionActive())
 		FAIL("QgGL release should end the gesture but retain the quiet debounce");
-	    paintController->requestRender("gl-visible-paint");
+	    paintController->requestLodCapacityRender("gl-visible-paint");
 
 	    glCanvas.makeCurrent();
 	    glCanvas.runPaintGLForTest();
@@ -1054,12 +1040,29 @@ main(int argc, char **argv)
 		paintController->isRenderRequested())
 		FAIL("QgGL idle Qt paint should reuse the completed framebuffer");
 
-	    paintController->requestRender("gl-deadline-baseline");
+	    const uint64_t passiveReadbackCompletion =
+		paintController->getRenderCompletionSerial();
+	    const uint64_t passiveReadbackRequest =
+		paintController->getRenderRequestSerial();
+	    const bool passiveReadbackPending =
+		paintController->isRenderRequested();
+	    QImage passiveReadback;
+	    glCanvas.get_presented_frame_image(passiveReadback);
+	    if (passiveReadback.isNull() || lit_pixel_count(passiveReadback) < 10)
+		FAIL("QgGL passive readback should capture the presented framebuffer");
+	    if (paintController->getRenderCompletionSerial() !=
+		    passiveReadbackCompletion ||
+		paintController->getRenderRequestSerial() !=
+		    passiveReadbackRequest ||
+		paintController->isRenderRequested() != passiveReadbackPending)
+		FAIL("QgGL passive readback should not advance presentation state");
+
+	    paintController->requestLodCapacityRender("gl-deadline-baseline");
 	    glCanvas.makeCurrent();
 	    glCanvas.runPaintGLForTest();
-	    const QImage glDeadlineBaseline =
-		glCanvas.readCurrentFramebufferForTest();
 	    glCanvas.doneCurrent();
+	    QImage glDeadlineBaseline;
+	    glCanvas.get_presented_frame_image(glDeadlineBaseline);
 	    SoBRLMeshShape *glDeadlineLodMesh =
 		seed_managed_deadline_payload(
 		    paintController, "/gl-deadline-managed.mesh");
@@ -1077,12 +1080,12 @@ main(int argc, char **argv)
 	    paintRoot->addChild(new SoCube);
 	    paintController->setPresentationFrameDeadlines(
 		1000000ULL, 1000000ULL);
-	    paintController->requestRender("gl-deadline-interrupt");
+	    paintController->requestLodCapacityRender("gl-deadline-interrupt");
 	    glCanvas.makeCurrent();
 	    glCanvas.runPaintGLForTest();
-	    const QImage glDeadlineInterrupted =
-		glCanvas.readCurrentFramebufferForTest();
 	    glCanvas.doneCurrent();
+	    QImage glDeadlineInterrupted;
+	    glCanvas.get_presented_frame_image(glDeadlineInterrupted);
 	    if (paintController->getInterruptedPresentationFrameCount() !=
 		    glInterruptedBefore + 1u ||
 		!deadline_successor_scheduled(paintController)) {

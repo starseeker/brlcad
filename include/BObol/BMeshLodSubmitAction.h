@@ -71,6 +71,10 @@ public:
      * resulting repair pass, require those otherwise eligible fallbacks to
      * enter the mesh provider path. */
     void setStructuralPresentationRepair(SbBool repair);
+    /** Replace the selected structural frontier with view-local terminal
+     * proxies instead of opening mesh providers.  This mode is valid only
+     * after the controller has an exact capacity witness for that frontier. */
+    void setStructuralTerminalProxy(SbBool terminalProxy);
     /* Preload the minimum prefixes needed by a private finer point threshold.
      * The displayed aggregate-point cut remains authoritative, so this
      * residency work is bounded by service memory/task limits rather than
@@ -224,6 +228,10 @@ public:
     unsigned int getSubmittedTaskCount(void) const;
     unsigned int getUpdatedCutCount(void) const;
     unsigned int getPendingRetainedRefinementCount(void) const;
+    /* Visible occurrences whose mesh demand was deliberately suppressed by
+     * a structural-coverage pass.  A true subpixel proxy is terminal for the
+     * current view and is not included. */
+    unsigned int getDeferredMeshDemandCount(void) const;
     /* Retained allocation found a pixel-demanded cut whose immutable PoP
      * suffix is not resident yet.  Unlike a budget-limited richer-cut
      * observation, this is an actionable provider-work witness. */
@@ -296,6 +304,7 @@ private:
     SbBool structuralCoverageOnly;
     SbBool allowTerminalMeshAdmission;
     SbBool structuralPresentationRepair;
+    SbBool structuralTerminalProxy;
     SbBool pointRelaxationPreload;
     size_t structuralCoverageCostReservation;
     size_t selectedOccurrenceCount;
@@ -352,6 +361,7 @@ private:
     unsigned int submittedTaskCount;
     unsigned int updatedCutCount;
     unsigned int pendingRetainedRefinementCount;
+    unsigned int deferredMeshDemandCount;
     unsigned int pendingResidentRefinementCount;
     unsigned int skippedMeshCount;
     size_t visibleMeshCount;

@@ -573,7 +573,7 @@ private:
 	    size_t correctedRenderCostBudget)
     {
 	return activeRenderCost <= minimumRenderCost ||
-	    presentedMaximum == 0 ||
+	    presentedMaximum <= 0 ||
 	    (correctedCeiling == 0 && correctedRenderCostBudget > 0 &&
 	     minimumRenderCost > correctedRenderCostBudget);
     }
@@ -795,7 +795,8 @@ private:
 
     Decision completed(float currentThreshold,
 	uint64_t renderNanoseconds, float targetFps,
-	bool reusableSample, size_t unresolvedStructuralCount = 0)
+	bool reusableSample, bool allowCoarsening,
+	size_t unresolvedStructuralCount = 0)
     {
 	Decision decision;
 	const float current = sanitize(currentThreshold);
@@ -806,6 +807,14 @@ private:
 	const long double target = 1000000000.0L /
 	    static_cast<long double>(targetFps);
 	if (static_cast<long double>(renderNanoseconds) > target * 1.10L) {
+	    if (!allowCoarsening) {
+		/* A compact scene is governed by the independently bounded static
+		 * deadline, not by the preferred quiet redraw cadence.  Do not
+		 * contaminate its point bracket with an ordinary-frame miss before
+		 * that hard trial has supplied negative capacity evidence. */
+		this->settledThreshold = current;
+		return decision;
+	    }
 	    return this->interrupted(
 		current, renderNanoseconds, targetFps);
 	}
@@ -939,6 +948,16 @@ private:
     float settledThreshold = 0.0f;
 };
 
+/* Point aggregation serves two different presentation contracts.  The
+ * responsive bracket targets the ordinary quiet redraw cadence, while the
+ * static bracket targets the longer interruptible endpoint deadline.  A
+ * threshold which misses the former may be safely inside the latter, so
+ * their safe/unsafe observations must never share one evidence domain. */
+enum class BObolLodPointCalibrationGoal : uint8_t {
+    RESPONSIVE,
+    STATIC
+};
+
 /* Structural proxies with no useful point-aggregation successor are a
  * coverage floor: they can disappear only when their first mesh prefix is
  * admitted.  The point policy is exhausted either because the remaining
@@ -1050,7 +1069,8 @@ public:
     explicit BObolLodAdmissionEvidence(
 	const BObolLodHeadroomEvidence &value) : headroomValue(value) {}
     explicit BObolLodAdmissionEvidence(
-	const BObolLodPointProxyEvidence &value) : pointProxyValue(value) {}
+	const BObolLodPointProxyEvidence &value) :
+	responsivePointProxyValue(value), staticPointProxyValue(value) {}
     explicit BObolLodAdmissionEvidence(
 	const BObolLodStructuralAdmissionEvidence &value) :
 	structuralValue(value) {}
@@ -1069,7 +1089,13 @@ public:
     }
     const BObolLodPointProxyEvidence &pointProxy(void) const
     {
-	return this->pointProxyValue;
+	return this->responsivePointProxyValue;
+    }
+    const BObolLodPointProxyEvidence &pointProxy(
+	BObolLodPointCalibrationGoal goal) const
+    {
+	return goal == BObolLodPointCalibrationGoal::STATIC ?
+	    this->staticPointProxyValue : this->responsivePointProxyValue;
     }
     const BObolLodStructuralAdmissionEvidence &structural(void) const
     {
@@ -1082,7 +1108,8 @@ private:
     BObolLodCapacityEvidence capacityValue;
     BObolLodResourceEvidence resourcesValue;
     BObolLodHeadroomEvidence headroomValue;
-    BObolLodPointProxyEvidence pointProxyValue;
+    BObolLodPointProxyEvidence responsivePointProxyValue;
+    BObolLodPointProxyEvidence staticPointProxyValue;
     BObolLodStructuralAdmissionEvidence structuralValue;
 };
 
@@ -1159,6 +1186,10 @@ public:
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor);
 
+    static BObolLodAdmissionPlan acceptStaticPresentationConstraint(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, size_t budget);
+
     static BObolLodAdmissionPlan completeAppliedAllocation(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor,
@@ -1202,10 +1233,6 @@ public:
 	size_t minimumActiveCost);
 
     static BObolLodAdmissionPlan recordRetainedQualityFloorMiss(
-	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor);
-
-    static BObolLodAdmissionPlan rejectRetainedQualityFloor(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor);
 
@@ -1285,7 +1312,8 @@ public:
 
     static BObolLodAdmissionPlan planPointInterrupted(
 	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor, float currentThreshold,
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodPointCalibrationGoal goal, float currentThreshold,
 	uint64_t renderNanoseconds, float targetFps);
 
     static BObolLodAdmissionPlan planPointStructuralCoverageBlocked(
@@ -1295,13 +1323,24 @@ public:
 
     static BObolLodAdmissionPlan planPointCompleted(
 	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor, float currentThreshold,
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodPointCalibrationGoal goal, float currentThreshold,
 	uint64_t renderNanoseconds, float targetFps, bool reusableSample,
+	bool allowCoarsening,
 	size_t unresolvedStructuralCount = 0);
+
+    /* A compact, fully classified source profile earns one direct static
+     * quality attempt before presentation-only small-part aggregation may
+     * hide multi-pixel occurrences.  Large or incomplete profiles retain the
+     * adaptive path immediately; a compact profile enters it only after the
+     * hard static deadline supplies a negative capacity witness. */
+    static bool adaptivePointAggregationAllowed(bool meshFirstSceneSafe,
+	bool staticQualityCapacityRejected);
 
     static BObolLodAdmissionPlan settlePointAtStructuralLimit(
 	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor, float currentThreshold);
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodPointCalibrationGoal goal, float currentThreshold);
 
     static bool pointRequiresReusableConfirmation(float currentThreshold,
 	size_t unresolvedStructuralCount = 0);
@@ -1314,15 +1353,13 @@ public:
 	float candidateThreshold);
 
     /* A finer aggregate cut may require first meshes for every newly exposed
-     * structural occurrence.  Reject a candidate which exceeds either the
-     * bounded first-wave population or a conservative occurrence-scaled
-     * static presentation deadline before starting that irreversible
-     * preload. */
-    static bool pointRelaxationPreloadFitsDeadline(
+     * structural occurrence.  Reject a candidate whose complete projected
+     * population exceeds the static presentation deadline.  Admission itself
+     * is independently split into bounded first-wave batches. */
+    static bool pointRelaxationFitsDeadline(
 	size_t activeOccurrenceCount, size_t additionalOccurrenceCount,
 	uint64_t measuredRenderNanoseconds,
-	uint64_t presentationDeadlineNanoseconds,
-	size_t maximumAdditionalOccurrenceCount);
+	uint64_t presentationDeadlineNanoseconds);
 
     static bool pointAggregationApplicable(size_t visibleOccurrenceCount);
 
@@ -1381,6 +1418,14 @@ public:
 	size_t presentedStructuralBoxes, size_t terminalOccurrenceFailures,
 	bool directPreviewAuthorized, bool structuralRepairActive);
 
+    /* Terminal/offline refinement has no interactive structural-repair
+     * successor.  Keep the complete structural-only decision in one tested
+     * mode-domain predicate so it cannot create ownerless mesh debt. */
+    static bool structuralCoverageOnly(
+	bool terminalRefinement, bool coverageActive,
+	bool demandRefreshActive, bool directPreviewAuthorized,
+	bool fallbackAdmissionDeferred);
+
     /* A presentation-owned measurement freezes the occurrence population it
      * is measuring.  An unchanged submission cursor must not run, or count as
      * a future geometry producer, until that frame completes.  Source and
@@ -1397,8 +1442,25 @@ public:
 
     static bool pointAtMaximumPixelThreshold(float threshold);
 
+    /* Keep timing evidence and its deadline class in the same mapping.  A
+     * transient controller phase may retire before terminal reduction, but
+     * that must not change which target governs the evidence domain. */
+    static float pointCalibrationTargetFps(
+	BObolLodPointCalibrationGoal goal, float responsiveTargetFps,
+	float staticTargetFps);
+
+    static uint64_t pointCalibrationPresentationDeadline(
+	BObolLodPointCalibrationGoal goal, uint64_t responsiveDeadline,
+	uint64_t staticDeadline);
+
+    static float maximumPointProxyPixelThreshold(void)
+    {
+	return BObolLodPointProxyEvidence::maximumPixelThreshold();
+    }
+
     static bool pointTerminalReplayRequired(
-	const BObolLodAdmissionEvidence &evidence, float threshold);
+	const BObolLodAdmissionEvidence &evidence,
+	BObolLodPointCalibrationGoal goal, float threshold);
 
     static bool shouldRecoverTriangleDetail(
 	bool reducibleProgressiveDetail, bool stableSampleOverloaded,
@@ -1421,6 +1483,13 @@ public:
 	bool renderCostObserved, uint64_t renderNanoseconds,
 	uint64_t presentationDeadlineNanoseconds);
 
+    /* Compact scenes which passed the complete source-profile gate may use
+     * the one-shot prominent-quality deadline for structural replacement.
+     * Unbounded scenes retain the tighter finite-census deadline. */
+    static uint64_t structuralRepairPresentationDeadline(
+	bool directMeshScene, uint64_t stableDeadlineNanoseconds,
+	uint64_t prominentDeadlineNanoseconds, uint64_t censusMultiplier);
+
     static size_t unaggregatableStructuralCount(
 	const std::array<size_t, 7> &cumulativeCount, size_t visibleCount);
 
@@ -1431,11 +1500,11 @@ public:
 	size_t activeCost, size_t unresolvedCount);
 
     /* noteDeadlineCapacityMiss() records an already strict, view-local upper
-     * bound: it is five percent below the population which missed the hard
-     * deadline.  Marginal recovery has its own throughput safety factor
-     * before reaching this helper.  Applying that factor to this bound again
-     * needlessly discards a second fifth of capacity and leaves prominent
-     * geometry coarse even though a smaller allocation is still admissible. */
+     * bound: it is the immediate predecessor of the candidate which missed
+     * the hard deadline.  Marginal recovery has its own throughput safety
+     * factor before reaching this helper.  Applying another factor to this
+     * exact bound would discard untested capacity and can skip a useful
+     * discrete PoP population. */
     static size_t capBudgetAtDeadlineCeiling(size_t estimatedBudget,
 	size_t deadlineCapacityCeiling);
 
@@ -1475,7 +1544,7 @@ public:
      * requested suffix resident while a motion/quiet-cadence ceiling still
      * hides most of it.  Treat that reversible presentation gap as actionable
      * static quality debt; otherwise provider satisfaction falsely terminates
-     * the event-driven quality pass after a pose-only interaction. */
+     * the event-driven quality pass after a retained-view interaction. */
     static bool actionableProgressiveQualityDebt(
 	size_t activePayloadCount, size_t satisfiedPayloadCount,
 	size_t memoryLimitedPayloadCount, int activeMaximumCut,
@@ -1537,8 +1606,8 @@ public:
      * already proved the transition which a coarse point frame would need to
      * trial.  Enter the event-driven quality phase directly.  Sending this
      * frame through ordinary point/triangle overload recovery first coarsens
-     * it to the 20 Hz budget; the later static pass then restores the same
-     * population at 10 Hz, producing a visible and potentially unbounded
+     * it to the preferred quiet budget; the later static pass then restores
+     * the same population at its longer deadline, producing a visible cycle
      * balance/refine cycle on software renderers.
      *
      * A renderer-wide ceiling, live handoff, producer, structural fallback,

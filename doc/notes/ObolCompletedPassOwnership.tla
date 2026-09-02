@@ -3,7 +3,11 @@
 \*
 \* Selection is made from one immutable completion snapshot before any owner
 \* mutates evidence.  Resident growth and coverage have precedence over
-\* presentation handoff and generic capacity calibration.  Every effect which
+\* structural-frontier repair, presentation handoff, and generic capacity
+\* calibration.  Structural-only occurrences cannot participate in an
+\* occurrence allocation or renderer-capacity sample; their exact projected
+\* frontier therefore invalidates any stale sample and owns a finite repair
+\* successor before either operation.  Every effect which
 \* starts a successor pass clears the complete pass-annotation transaction.
 \* A scene-wide allocation successor also consumes any selective source-delta
 \* plan owned by the pass which just completed.
@@ -21,20 +25,24 @@ EXTENDS Naturals, TLC
 
 Phases == {"completed", "execute", "terminal"}
 Handoffs == {"none", "presentation", "allocation"}
-Owners == {"none", "growth", "coverage", "presentation", "allocation",
-           "capacity"}
-Effects == {"none", "drainGrowth", "retryCoverage", "presentHandoff",
+Owners == {"none", "growth", "coverage", "structural", "presentation",
+           "allocation", "capacity", "observation"}
+Effects == {"none", "drainGrowth", "retryCoverage", "repairStructural",
+            "presentHandoff",
             "allocateHandoff", "finishHandoff", "presentCut",
-            "changePopulation", "recordSample"}
+            "changePopulation", "recordSample", "retireObservation"}
 Populations == 0..1
 \* At most growth, coverage, three handoff effects (presentation, allocation,
-\* finish), and three capacity effects can precede terminal selection in this
+\* finish), one structural repair, three capacity effects, and one retained
+\* observation retirement can precede terminal selection in this
 \* symmetry-reduced transaction.
-MaximumCompletedPassCount == 8
+MaximumCompletedPassCount == 10
 
 VARIABLES phase,
           growthPending,
           coveragePending,
+          structuralPending,
+          retainedRefinementPending,
           selectiveDelta,
           changedCut,
           rescanAfterFrame,
@@ -52,7 +60,9 @@ VARIABLES phase,
           effect,
           completedPassCount
 
-vars == <<phase, growthPending, coveragePending, selectiveDelta, changedCut,
+vars == <<phase, growthPending, coveragePending, structuralPending,
+          retainedRefinementPending,
+          selectiveDelta, changedCut,
           rescanAfterFrame, handoff, allocationCertified, ceilingFreeSample,
           capacityPending, capacityEligible, capacityProducer,
           capacityPopulation, capacityCandidate, initialCapacityPopulation,
@@ -64,17 +74,21 @@ NormalizedCleanPass == CleanPass \/ ceilingFreeSample
 ExpectedOwner ==
     IF growthPending THEN "growth"
     ELSE IF coveragePending THEN "coverage"
+    ELSE IF structuralPending THEN "structural"
     ELSE IF NormalizedCleanPass /\ handoff = "presentation" /\
             (~capacityPending \/ ceilingFreeSample) THEN "presentation"
     ELSE IF NormalizedCleanPass /\ handoff = "allocation" /\
             (~capacityPending \/ ceilingFreeSample) THEN "allocation"
     ELSE IF capacityEligible /\ capacityProducer THEN "capacity"
+    ELSE IF retainedRefinementPending THEN "observation"
     ELSE "none"
 
 TypeOK ==
     /\ phase \in Phases
     /\ growthPending \in BOOLEAN
     /\ coveragePending \in BOOLEAN
+    /\ structuralPending \in BOOLEAN
+    /\ retainedRefinementPending \in BOOLEAN
     /\ selectiveDelta \in BOOLEAN
     /\ changedCut \in BOOLEAN
     /\ rescanAfterFrame \in BOOLEAN
@@ -96,6 +110,8 @@ Init ==
     /\ phase = "completed"
     /\ growthPending \in BOOLEAN
     /\ coveragePending \in BOOLEAN
+    /\ structuralPending \in BOOLEAN
+    /\ retainedRefinementPending \in BOOLEAN
     /\ selectiveDelta \in BOOLEAN
     /\ changedCut \in BOOLEAN
     /\ rescanAfterFrame \in BOOLEAN
@@ -128,7 +144,9 @@ SelectOwner ==
            IF ExpectedOwner \in {"allocation", "capacity"}
            THEN FALSE
            ELSE selectiveDelta
-    /\ UNCHANGED <<growthPending, coveragePending, changedCut,
+    /\ UNCHANGED <<growthPending, coveragePending, structuralPending,
+                    retainedRefinementPending,
+                    changedCut,
                     rescanAfterFrame, handoff, allocationCertified,
                     ceilingFreeSample, capacityPending,
                     capacityEligible, capacityProducer,
@@ -141,11 +159,12 @@ ExecuteGrowth ==
     /\ owner = "growth"
     /\ phase' = "completed"
     /\ growthPending' = FALSE
+    /\ retainedRefinementPending' = FALSE
     /\ changedCut' = FALSE
     /\ rescanAfterFrame' = FALSE
     /\ effect' = "drainGrowth"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<coveragePending, selectiveDelta, handoff,
+    /\ UNCHANGED <<coveragePending, structuralPending, selectiveDelta, handoff,
                     allocationCertified,
                     ceilingFreeSample, capacityPending,
                     capacityEligible, capacityProducer,
@@ -157,14 +176,34 @@ ExecuteCoverage ==
     /\ owner = "coverage"
     /\ phase' = "completed"
     /\ coveragePending' = FALSE
+    /\ retainedRefinementPending' = FALSE
     /\ changedCut' = FALSE
     /\ rescanAfterFrame' = FALSE
     /\ effect' = "retryCoverage"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, selectiveDelta, handoff,
+    /\ UNCHANGED <<growthPending, structuralPending, selectiveDelta, handoff,
                     allocationCertified,
                     ceilingFreeSample, capacityPending,
                     capacityEligible, capacityProducer,
+                    capacityPopulation, capacityCandidate,
+                    initialCapacityPopulation, capacityRevision, owner>>
+
+ExecuteStructural ==
+    /\ phase = "execute"
+    /\ owner = "structural"
+    /\ phase' = "completed"
+    /\ structuralPending' = FALSE
+    /\ retainedRefinementPending' = FALSE
+    /\ changedCut' = FALSE
+    /\ rescanAfterFrame' = FALSE
+    /\ allocationCertified' = FALSE
+    /\ ceilingFreeSample' = FALSE
+    /\ capacityPending' = FALSE
+    /\ capacityEligible' = FALSE
+    /\ capacityProducer' = FALSE
+    /\ effect' = "repairStructural"
+    /\ completedPassCount' = completedPassCount + 1
+    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta, handoff,
                     capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner>>
 
@@ -173,11 +212,13 @@ ExecutePresentationHandoff ==
     /\ owner = "presentation"
     /\ phase' = "completed"
     /\ handoff' = "allocation"
+    /\ retainedRefinementPending' = FALSE
     /\ changedCut' = FALSE
     /\ rescanAfterFrame' = FALSE
     /\ effect' = "presentHandoff"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta,
+    /\ UNCHANGED <<growthPending, coveragePending, structuralPending,
+                    selectiveDelta,
                     allocationCertified,
                     ceilingFreeSample, capacityPending,
                     capacityEligible, capacityProducer,
@@ -189,6 +230,7 @@ ExecuteAllocationHandoff ==
     /\ owner = "allocation"
     /\ phase' = "completed"
     /\ changedCut' = FALSE
+    /\ retainedRefinementPending' = FALSE
     /\ rescanAfterFrame' = FALSE
     /\ selectiveDelta' = FALSE
     /\ completedPassCount' = completedPassCount + 1
@@ -202,7 +244,8 @@ ExecuteAllocationHandoff ==
                /\ allocationCertified' = TRUE
                /\ ceilingFreeSample' = ceilingFreeSample
                /\ effect' = "allocateHandoff"
-    /\ UNCHANGED <<growthPending, coveragePending, capacityPending,
+    /\ UNCHANGED <<growthPending, coveragePending, structuralPending,
+                    capacityPending,
                     capacityEligible,
                     capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner>>
@@ -213,10 +256,12 @@ ExecuteCapacityCut ==
     /\ (changedCut \/ rescanAfterFrame)
     /\ phase' = "completed"
     /\ changedCut' = FALSE
+    /\ retainedRefinementPending' = FALSE
     /\ rescanAfterFrame' = FALSE
     /\ effect' = "presentCut"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta, handoff,
+    /\ UNCHANGED <<growthPending, coveragePending, structuralPending,
+                    selectiveDelta, handoff,
                     allocationCertified, ceilingFreeSample, capacityPending,
                     capacityEligible, capacityProducer,
                     capacityPopulation, capacityCandidate,
@@ -229,10 +274,12 @@ ExecuteCapacityPopulation ==
     /\ capacityPopulation # capacityCandidate
     /\ phase' = "completed"
     /\ capacityPopulation' = capacityCandidate
+    /\ retainedRefinementPending' = FALSE
     /\ capacityRevision' = capacityRevision + 1
     /\ effect' = "changePopulation"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta, changedCut,
+    /\ UNCHANGED <<growthPending, coveragePending, structuralPending,
+                    selectiveDelta, changedCut,
                     rescanAfterFrame, handoff, allocationCertified,
                     ceilingFreeSample, capacityPending,
                     capacityEligible, capacityProducer, capacityCandidate,
@@ -245,13 +292,29 @@ ExecuteCapacitySample ==
     /\ capacityPopulation = capacityCandidate
     /\ phase' = "completed"
     /\ capacityEligible' = FALSE
+    /\ retainedRefinementPending' = FALSE
     /\ capacityPending' = FALSE
     /\ capacityProducer' = FALSE
     /\ ceilingFreeSample' = FALSE
     /\ effect' = "recordSample"
     /\ completedPassCount' = completedPassCount + 1
-    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta, changedCut,
+    /\ UNCHANGED <<growthPending, coveragePending, structuralPending,
+                    selectiveDelta, changedCut,
                     rescanAfterFrame, handoff, allocationCertified,
+                    capacityPopulation, capacityCandidate,
+                    initialCapacityPopulation, capacityRevision, owner>>
+
+ExecuteRetainedObservation ==
+    /\ phase = "execute"
+    /\ owner = "observation"
+    /\ phase' = "completed"
+    /\ retainedRefinementPending' = FALSE
+    /\ effect' = "retireObservation"
+    /\ completedPassCount' = completedPassCount + 1
+    /\ UNCHANGED <<growthPending, coveragePending, structuralPending,
+                    selectiveDelta, changedCut, rescanAfterFrame, handoff,
+                    allocationCertified, ceilingFreeSample, capacityPending,
+                    capacityEligible, capacityProducer,
                     capacityPopulation, capacityCandidate,
                     initialCapacityPopulation, capacityRevision, owner>>
 
@@ -260,7 +323,9 @@ ExecuteNone ==
     /\ owner = "none"
     /\ phase' = "terminal"
     /\ effect' = "none"
-    /\ UNCHANGED <<growthPending, coveragePending, selectiveDelta, changedCut,
+    /\ UNCHANGED <<growthPending, coveragePending, structuralPending,
+                    retainedRefinementPending,
+                    selectiveDelta, changedCut,
                     rescanAfterFrame, handoff, allocationCertified,
                     ceilingFreeSample, capacityPending,
                     capacityEligible, capacityProducer,
@@ -272,11 +337,13 @@ Next ==
     \/ SelectOwner
     \/ ExecuteGrowth
     \/ ExecuteCoverage
+    \/ ExecuteStructural
     \/ ExecutePresentationHandoff
     \/ ExecuteAllocationHandoff
     \/ ExecuteCapacityCut
     \/ ExecuteCapacityPopulation
     \/ ExecuteCapacitySample
+    \/ ExecuteRetainedObservation
     \/ ExecuteNone
 
 Spec ==
@@ -285,11 +352,13 @@ Spec ==
     /\ WF_vars(SelectOwner)
     /\ WF_vars(ExecuteGrowth)
     /\ WF_vars(ExecuteCoverage)
+    /\ WF_vars(ExecuteStructural)
     /\ WF_vars(ExecutePresentationHandoff)
     /\ WF_vars(ExecuteAllocationHandoff)
     /\ WF_vars(ExecuteCapacityCut)
     /\ WF_vars(ExecuteCapacityPopulation)
     /\ WF_vars(ExecuteCapacitySample)
+    /\ WF_vars(ExecuteRetainedObservation)
     /\ WF_vars(ExecuteNone)
 
 OwnerMatchesSnapshot ==
@@ -298,15 +367,17 @@ OwnerMatchesSnapshot ==
 EffectHasExclusiveOwner ==
     /\ effect = "drainGrowth" => owner = "growth"
     /\ effect = "retryCoverage" => owner = "coverage"
+    /\ effect = "repairStructural" => owner = "structural"
     /\ effect = "presentHandoff" => owner = "presentation"
     /\ effect \in {"allocateHandoff", "finishHandoff"} =>
            owner = "allocation"
     /\ effect \in {"presentCut", "changePopulation", "recordSample"} =>
            owner = "capacity"
+    /\ effect = "retireObservation" => owner = "observation"
 
 SuccessorPassStartsFresh ==
     completedPassCount > 0 /\ phase = "completed" =>
-        ~changedCut /\ ~rescanAfterFrame
+        ~changedCut /\ ~rescanAfterFrame /\ ~retainedRefinementPending
 
 SceneWideAllocationConsumesDelta ==
     phase = "execute" /\ owner \in {"allocation", "capacity"} =>
@@ -325,8 +396,21 @@ PendingCapacityHasProducer ==
 FinishedHandoffRestoresCapacityProducer ==
     effect = "finishHandoff" /\ capacityPending => capacityProducer
 
+StructuralFrontierPrecedesAllocation ==
+    phase = "execute" /\ structuralPending /\
+    ~growthPending /\ ~coveragePending => owner = "structural"
+
+StructuralRepairInvalidatesCapacity ==
+    effect = "repairStructural" =>
+        /\ ~capacityPending
+        /\ ~capacityEligible
+        /\ ~capacityProducer
+        /\ ~allocationCertified
+        /\ ~retainedRefinementPending
+
 TerminalHasNoOwner ==
-    phase = "terminal" => owner = "none"
+    phase = "terminal" =>
+        owner = "none" /\ ~structuralPending /\ ~retainedRefinementPending
 
 CapacityRevisionNamesSemanticChange ==
     [][capacityRevision' # capacityRevision =>

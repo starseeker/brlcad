@@ -18,6 +18,21 @@
 #include "qtcad/QgTestEvent.h"
 
 class QgEdApp;
+class BObolViewController;
+struct BObolLodConvergenceStatus;
+
+BObolViewController *qged_progressive_event_controller(
+    QgEdApp &app, const QgTestEvent &event);
+
+/**
+ * Append the compact controller fields used by the progressive-control
+ * refinement checker.  Keeping this projection in one function prevents the
+ * per-event report and the denser wait-loop trace from acquiring different
+ * meanings for the same controller state.
+ */
+void qged_append_progressive_control_diagnostics(
+    QJsonObject &sample, const BObolViewController &controller,
+    const BObolLodConvergenceStatus &status);
 
 /**
  * Collect one progressive-display diagnostic sample.  Kept separate from the
@@ -38,4 +53,3 @@ void qged_schedule_gui_test(
     bool softwareRenderer);
 
 #endif
-

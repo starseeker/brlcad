@@ -109,6 +109,20 @@ find_framebuffer_nodes(SoNode *node, SoBRLImageSource **source,
 	find_framebuffer_nodes(group->getChild(i), source, viewport);
 }
 
+static int
+child_occurrence_count(SoGroup *group, SoNode *node)
+{
+    if (!group || !node)
+	return 0;
+
+    int count = 0;
+    for (int i = 0; i < group->getNumChildren(); i++) {
+	if (group->getChild(i) == node)
+	    count++;
+    }
+    return count;
+}
+
 class ConditionalCompositionHost : public BObolWindowHost {
 public:
     ConditionalCompositionHost() : reject(false) { }
@@ -335,8 +349,15 @@ test_qged_obol_fbserv_backend(void)
 	bobol_display_endpoint_host(secondView.displayEndpoint()));
     GED_CHECK(secondHost && secondHost->getFramebufferCount() == 1,
 	"qged framebuffer switch must bind the stream to the new endpoint host");
+    SoBRLImageSource *secondSource = NULL;
+    SoBRLViewportImage *secondViewport = NULL;
+    find_framebuffer_nodes(secondController->getRenderRoot(), NULL,
+	&secondViewport);
+    if (secondViewport)
+	secondSource = secondViewport->getImageSource();
     GED_CHECK(secondHost->getController() == secondController &&
-	secondController->getFramebufferOverlayRoot()->getNumChildren() == 1,
+	child_occurrence_count(
+	    secondController->getFramebufferOverlayRoot(), secondViewport) == 1,
 	"qged framebuffer switch must retain its image in the new controller overlay");
 
     SoBRLImageSource *firstSource = NULL;
@@ -345,12 +366,6 @@ test_qged_obol_fbserv_backend(void)
 	&firstViewport);
     GED_CHECK(firstSource == NULL && firstViewport == NULL,
 	"qged framebuffer switch must detach retained nodes from the old endpoint");
-    SoBRLImageSource *secondSource = NULL;
-    SoBRLViewportImage *secondViewport = NULL;
-    find_framebuffer_nodes(secondController->getRenderRoot(), NULL,
-	&secondViewport);
-    if (secondViewport)
-	secondSource = secondViewport->getImageSource();
     GED_CHECK(secondSource != NULL && secondViewport != NULL,
 	"qged framebuffer switch must attach retained nodes to the new endpoint");
 

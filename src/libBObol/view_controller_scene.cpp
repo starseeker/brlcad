@@ -228,7 +228,7 @@ BObolViewController::replaceEditPreviewWithIntent(const char *previewId,
     if (childIndex < 0)
 	group->addChild(preview);
 
-    this->requestRender("edit-preview");
+    this->requestLodCapacityRender("edit-preview");
     return 1;
 }
 
@@ -248,7 +248,7 @@ BObolViewController::removeEditPreview(const char *previewId)
 	return 0;
 
     group->removeChild(childIndex);
-    this->requestRender("edit-preview");
+    this->requestLodCapacityRender("edit-preview");
     return 1;
 }
 
@@ -271,7 +271,7 @@ BObolViewController::replaceLineLayerOverlay(const char *overlayId,
     if (!builder) {
 	if (childIndex >= 0) {
 	    group->removeChild(childIndex);
-	    this->requestRender("line-layer-overlay");
+	    this->requestLodCapacityRender("line-layer-overlay");
 	}
 	return 0;
     }
@@ -288,7 +288,7 @@ BObolViewController::replaceLineLayerOverlay(const char *overlayId,
     else
 	group->addChild(overlay);
 
-    this->requestRender("line-layer-overlay");
+    this->requestLodCapacityRender("line-layer-overlay");
     return realized;
 }
 
@@ -327,7 +327,7 @@ BObolViewController::replaceHUDLabelOverlay(const char *labelId,
     if (childIndex < 0)
 	group->addChild(label);
 
-    this->requestRender("hud-label-overlay");
+    this->requestLodCapacityRender("hud-label-overlay");
     return 1;
 }
 
@@ -347,7 +347,7 @@ BObolViewController::removeHUDLabelOverlay(const char *labelId)
 	return 0;
 
     group->removeChild(childIndex);
-    this->requestRender("hud-label-overlay");
+    this->requestLodCapacityRender("hud-label-overlay");
     return 1;
 }
 
@@ -363,7 +363,7 @@ BObolViewController::ensureGroup(const char *groupPath)
     const uint64_t revision = this->d->sceneController.getStructuralRevision();
     SoGroup *group = this->d->sceneController.ensureGroup(groupPath);
     if (group && this->d->sceneController.getStructuralRevision() != revision)
-	this->requestRender("scene-group");
+	this->requestLodCapacityRender("scene-group");
     return group;
 }
 
@@ -379,7 +379,7 @@ BObolViewController::setGroupDrawIntent(const char *groupPath,
 			intentPath, drawMode, fallbackDrawMode, overlayIntent,
 			revalidationRevision);
     if (changed > 0)
-	this->requestRender("scene-group");
+	this->requestLodCapacityRender("scene-group");
     return changed;
 }
 
@@ -402,7 +402,7 @@ BObolViewController::setGroupDisplayState(const char *groupPath,
 			    lineWidth, transparency, colorOverride, color,
 			    materialColorValid, materialColor, materialRevision);
     if (changed > 0)
-	this->requestRender("scene-group");
+	this->requestLodCapacityRender("scene-group");
     return changed;
 }
 
@@ -413,7 +413,7 @@ BObolViewController::renameGroup(const char *groupPath,
     const int changed =
 	this->d->sceneController.renameGroup(groupPath, newLeafName);
     if (changed > 0)
-	this->requestRender("scene-group");
+	this->requestLodCapacityRender("scene-group");
     return changed;
 }
 
@@ -424,7 +424,7 @@ BObolViewController::appendChildToGroup(const char *groupPath,
     const int changed =
 	this->d->sceneController.appendChildToGroup(groupPath, child);
     if (changed > 0)
-	this->requestRender("scene-group");
+	this->requestLodCapacityRender("scene-group");
     return changed;
 }
 
@@ -435,7 +435,7 @@ BObolViewController::removeChildFromGroup(const char *groupPath,
     const int changed =
 	this->d->sceneController.removeChildFromGroup(groupPath, child);
     if (changed > 0)
-	this->requestRender("scene-group");
+	this->requestLodCapacityRender("scene-group");
     return changed;
 }
 
@@ -446,7 +446,7 @@ BObolViewController::eraseGroupSubpath(const char *parentGroupPath,
     const int changed =
 	this->d->sceneController.eraseGroupSubpath(parentGroupPath, subpath);
     if (changed > 0)
-	this->requestRender("scene-group");
+	this->requestLodCapacityRender("scene-group");
     return changed;
 }
 
@@ -455,7 +455,7 @@ BObolViewController::removeGroup(const char *groupPath)
 {
     const int removed = this->d->sceneController.removeGroup(groupPath);
     if (removed > 0)
-	this->requestRender("scene-group");
+	this->requestLodCapacityRender("scene-group");
     return removed;
 }
 
@@ -464,7 +464,7 @@ BObolViewController::clearGroup(const char *groupPath)
 {
     const int removed = this->d->sceneController.clearGroup(groupPath);
     if (removed > 0)
-	this->requestRender("scene-group");
+	this->requestLodCapacityRender("scene-group");
     return removed;
 }
 
@@ -507,7 +507,7 @@ BObolViewController::moveShapeToGroup(const char *shapePath,
     const int changed =
 	this->d->sceneController.moveShapeToGroup(shapePath, groupPath);
     if (changed > 0)
-	this->requestRender("scene-shape");
+	this->requestLodCapacityRender("scene-shape");
     return changed;
 }
 
@@ -516,7 +516,7 @@ BObolViewController::removeShape(const char *shapePath)
 {
     const int removed = this->d->sceneController.removeShape(shapePath);
     if (removed > 0)
-	this->requestRender("scene-shape");
+	this->requestLodCapacityRender("scene-shape");
     return removed;
 }
 
@@ -530,7 +530,7 @@ BObolViewController::setShapeDrawState(const char *shapePath,
     const int changed = this->d->sceneController.setShapeDrawState(shapePath,
 			drawMode, databaseIntent, overlayIntent, hudIntent);
     if (changed > 0)
-	this->requestRender("scene-shape");
+	this->requestLodCapacityRender("scene-shape");
     return changed;
 }
 
@@ -553,7 +553,7 @@ BObolViewController::setShapeDisplayState(const char *shapePath,
 			    transparency, colorOverride, color, materialColorValid,
 			    materialColor, materialRevision);
     if (changed > 0)
-	this->requestRender("scene-shape");
+	this->requestLodCapacityRender("scene-shape");
     return changed;
 }
 
@@ -570,7 +570,7 @@ BObolViewController::setShapePlacementState(const char *shapePath,
 			    shapePath, drawMatrixValid, drawMatrix, drawCenterValid,
 			    drawCenter, drawSizeValid, drawSize);
     if (changed > 0)
-	this->requestRender("scene-shape");
+	this->requestLodCapacityRender("scene-shape");
     return changed;
 }
 
@@ -598,7 +598,7 @@ BObolViewController::setShapeSourceState(const char *shapePath,
 			    ownerRealizationDiagnostic, ownerRealizationIdentity,
 			    ownerSourceStale, ownerStaleReason);
     if (changed > 0)
-	this->requestRender("scene-shape");
+	this->requestLodCapacityRender("scene-shape");
     return changed;
 }
 
@@ -613,7 +613,7 @@ BObolViewController::replaceDatabaseSource(const char *sourcePath,
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -631,7 +631,7 @@ BObolViewController::replaceDatabaseSourceInstance(
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -676,7 +676,7 @@ BObolViewController::setDatabaseSourceState(const char *sourcePath,
 	    source->staleReason.getValue() != previousStaleReason)
 	    this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -723,7 +723,7 @@ BObolViewController::setDatabaseSourceInstanceState(
 	    source->staleReason.getValue() != previousStaleReason)
 	    this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -736,7 +736,7 @@ BObolViewController::setDatabaseSourceDisplayPatch(const char *sourcePath,
 			    sourcePath, patch);
     if (changed > 0) {
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -751,7 +751,7 @@ BObolViewController::setDatabaseSourceInstanceDisplayPatch(
 	    sourceInstanceKey, patch);
     if (changed > 0) {
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -764,7 +764,7 @@ BObolViewController::setDatabaseSourceDisplayName(const char *sourcePath,
 			    sourcePath, displayName);
     if (changed > 0) {
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -779,7 +779,7 @@ BObolViewController::setDatabaseSourceInstanceDisplayName(
 	    sourceInstanceKey, displayName);
     if (changed > 0) {
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -797,7 +797,7 @@ BObolViewController::setDatabaseSourceBoundsState(const char *sourcePath,
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -817,7 +817,7 @@ BObolViewController::setDatabaseSourceInstanceBoundsState(
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -831,7 +831,7 @@ BObolViewController::setDatabaseSourceMaterialPolicy(
 			    sourcePath, materialPolicy);
     if (changed > 0) {
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -846,7 +846,7 @@ BObolViewController::setDatabaseSourceInstanceMaterialPolicy(
 	    sourceInstanceKey, materialPolicy);
     if (changed > 0) {
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -860,7 +860,7 @@ BObolViewController::markDatabaseSourceStale(const char *sourcePath,
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -875,7 +875,7 @@ BObolViewController::markDatabaseSourceInstanceStale(
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return changed;
 }
@@ -887,7 +887,7 @@ BObolViewController::removeDatabaseSource(const char *sourcePath)
     if (removed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return removed;
 }
@@ -901,7 +901,7 @@ BObolViewController::removeDatabaseSourceInstance(
     if (removed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return removed;
 }
@@ -914,7 +914,7 @@ BObolViewController::moveDatabaseSourceToGroup(const char *sourcePath,
 		groupPath);
     if (moved > 0) {
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return moved;
 }
@@ -928,7 +928,7 @@ BObolViewController::moveDatabaseSourceInstanceToGroup(
 		    sourceInstanceKey, groupPath);
     if (moved > 0) {
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return moved;
 }
@@ -940,7 +940,7 @@ BObolViewController::clearDatabaseSources(void)
     if (removed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
-	this->requestRender("database-source");
+	this->requestLodCapacityRender("database-source");
     }
     return removed;
 }

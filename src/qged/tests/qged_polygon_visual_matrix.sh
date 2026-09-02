@@ -9,6 +9,7 @@ set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_root="$(cd "$script_dir/../../.." && pwd)"
+source "$script_dir/qged_test_display.sh"
 build_dir="$source_root/.build"
 database=""
 artifact_dir=""
@@ -47,13 +48,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "${DISPLAY:-}" && "${QT_QPA_PLATFORM:-}" != "offscreen" ]]; then
-    if ! command -v xvfb-run >/dev/null 2>&1; then
-	echo "ERROR: a display or xvfb-run is required" >&2
-	exit 2
-    fi
-    exec xvfb-run -a "$0" "${original_arguments[@]}"
-fi
+qged_test_ensure_display "$0" "${original_arguments[@]}"
 
 build_dir="$(realpath -m "$build_dir")"
 qged="$build_dir/bin/qged"
@@ -115,14 +110,17 @@ write_events()
     {"target": ".", "action": "qged_command_batch", "arguments": {"commands": ["view polygon create visual_outer 180 140 rectangle", "view polygon update visual_outer 540 430", "view polygon create visual_hole 300 230 rectangle", "view polygon update visual_hole 420 340", "view polygon csg visual_outer - visual_hole", "view feature delete visual_hole", "view feature style set visual_outer color 255/0/255", "view polygon fill_color visual_outer 0/255/255", "view polygon fill visual_outer 1 1 8"]}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view polygon point_count visual_outer", "numeric_gt": 4}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view polygon selected visual_outer", "contains": "0"}},
+    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 10000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/styled.png"}},
 
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view polygon selected visual_outer 1"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view polygon selected visual_outer", "contains": "1"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view polygon select visual_outer 180 140"}},
+    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 10000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/selected.png"}},
 
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view polygon move visual_outer 500 120"}},
+    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 10000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/moved.png"}},
 
     {"target": ".", "action": "resize", "arguments": {"width": 1100, "height": 800}},
@@ -136,6 +134,7 @@ write_events()
 
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view feature delete visual_outer"}},
     {"target": ".", "action": "qged_command_expect", "arguments": {"command": "view feature list visual_outer", "not_contains": "visual_outer"}},
+    {"target": ".", "action": "wait_progressive_idle", "arguments": {"timeout_ms": 10000, "quiet_ms": 100}},
     {"target": "$canvas_target", "action": "checkpoint", "arguments": {"name": "$image_dir/clean.png"}}
   ]
 }

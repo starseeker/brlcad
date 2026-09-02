@@ -216,6 +216,45 @@ controller_synchronize_compact_cad_presentations(
 	(void)source->compactViewLodAssembly(noPayloads, viewState);
     }
 }
+
+bool
+controller_lod_source_inputs_unsubmitted(
+    const std::vector<SoBRLDatabaseSource *> &sources,
+    const std::vector<BObolLodCoordinator::LodSourceSnapshot> &submitted)
+{
+    for (SoBRLDatabaseSource *source : sources) {
+	if (!source || !source->hasDisplayLodTargets())
+	    continue;
+	const uint64_t routingId = source->getCompactSourceRoutingId();
+	const auto found = std::find_if(submitted.begin(), submitted.end(),
+	    [routingId](const BObolLodCoordinator::LodSourceSnapshot &snapshot) {
+		return snapshot.routingId.value() == routingId;
+	    });
+	const uint64_t inventoryRevision =
+	    source->getDisplayMeshLodRevision();
+	const uint64_t visibilityRevision =
+	    source->getDisplayMeshLodVisibilityRevision();
+	if (found == submitted.end() ||
+	    found->inventoryRevision.value() != inventoryRevision ||
+	    found->visibilityRevision != visibilityRevision) {
+	    if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT"))
+		bu_log("BObol LoD source contract unsubmitted source=%p "
+		       "path=%s inventory=%llu/%llu visibility=%llu/%llu\n",
+		       static_cast<void *>(source),
+		       source->path.getValue().getString(),
+		       static_cast<unsigned long long>(
+			   found == submitted.end() ? 0 :
+			   found->inventoryRevision.value()),
+		       static_cast<unsigned long long>(inventoryRevision),
+		       static_cast<unsigned long long>(
+			   found == submitted.end() ? 0 :
+			   found->visibilityRevision),
+		       static_cast<unsigned long long>(visibilityRevision));
+	    return true;
+	}
+    }
+    return false;
+}
 /*
  * All normal views in a process share resident mesh assets, worker threads,
  * cache writes, and memory governors.  Each controller still owns an isolated
@@ -404,7 +443,7 @@ BObolViewController::setSceneRoot(SoNode *root, SbBool preserveLodState)
 	this->setViewportSceneGraphWithLod(root);
     }
     this->syncRenderManager();
-    this->requestRender("scene-root");
+    this->requestLodCapacityRender("scene-root");
 }
 
 SoNode *
@@ -423,7 +462,7 @@ BObolViewController::setRenderSceneRoot(SoNode *root, SbBool preserveLodState)
 	this->d->viewAttachment->clearViewLodState();
     this->setViewportSceneGraphWithLod(root);
     this->syncRenderManager();
-    this->requestRender("render-scene-root");
+    this->requestLodCapacityRender("render-scene-root");
 }
 
 SoNode *
@@ -495,7 +534,7 @@ BObolViewController::setViewAttachment(BObolViewAttachment *attachment)
 	renderScene->unref();
     this->clearRtPickCaches();
     this->syncRenderManager();
-    this->requestRender("view-attachment");
+    this->requestLodCapacityRender("view-attachment");
 }
 
 BObolViewAttachment *
@@ -806,7 +845,7 @@ BObolViewController::syncCameraFromViewContext(const void *viewCtx,
 
     if (changed) {
 	this->syncLodViewSignature(TRUE);
-	this->requestRender("rt-view-camera");
+	this->requestLodCapacityRender("rt-view-camera");
     }
     if (changedOut)
 	*changedOut = changed;
@@ -875,7 +914,7 @@ SbBool
 BObolViewController::realizePending(void)
 {
     const SbBool ret = this->d->sceneController.realizePending();
-    this->requestRender(ret ? "realize" : "realize-failed");
+    this->requestLodCapacityRender(ret ? "realize" : "realize-failed");
     return ret;
 }
 
@@ -926,7 +965,7 @@ BObolViewController::setEndpointGraphicalRenderingEnabled(SbBool enabled)
 	return;
     this->syncRenderManager();
     if (requested)
-	this->requestRender("render-engine");
+	this->requestLodCapacityRender("render-engine");
     else
 	this->clearRenderRequest();
 }
@@ -944,8 +983,14 @@ BObolViewController::invalidateRendererPerformanceHistory(void)
 	this->automaticLodControlEnabled() != FALSE;
 
     if (automaticLod) {
+	const BObolViewLodState *presentationState =
+	    this->d->viewAttachment ?
+		this->d->viewAttachment->getViewLodState() : NULL;
+	if (presentationState &&
+	    presentationState->hasCadPresentationAssemblies())
+	    this->d->requireExactPresentationFrame();
 	this->markProgressiveWorkPending();
-	this->requestRender("renderer-performance");
+	this->requestLodCapacityRender("renderer-performance");
     } else {
 	/* resetRendererPerformanceEvidence() creates a fresh capacity-search
 	 * certificate.  Policy-off has no consumer for it, so retire that
@@ -956,15 +1001,33 @@ BObolViewController::invalidateRendererPerformanceHistory(void)
 }
 
 void
-BObolViewController::requestRender(const char *reason)
+BObolViewController::requestLodCapacityRender(const char *reason)
 {
-    this->requestRenderImpl(reason, TRUE);
+    this->requestRenderImpl(reason, RenderRequestIntent::LOD_CAPACITY);
 }
 
 void
 BObolViewController::requestPresentationRender(const char *reason)
 {
-    this->requestRenderImpl(reason, FALSE);
+    this->requestRenderImpl(reason, RenderRequestIntent::PRESENTATION);
+}
+
+void
+BObolViewController::requestLodPresentationRender(const char *reason)
+{
+    this->requestRenderImpl(reason, RenderRequestIntent::LOD_PLANNING);
+}
+
+void
+BObolViewController::requestExactCadPresentationRender(const char *reason)
+{
+    const BObolViewLodState *presentationState =
+	this->d->viewAttachment ?
+	    this->d->viewAttachment->getViewLodState() : NULL;
+    if (this->automaticLodControlEnabled() && presentationState &&
+	presentationState->hasCadPresentationAssemblies())
+	this->d->requireExactPresentationFrame();
+    this->requestRenderImpl(reason, RenderRequestIntent::PRESENTATION);
 }
 
 void
@@ -985,16 +1048,22 @@ BObolViewController::retireLodCapacityRenderRequest(void)
 
 void
 BObolViewController::requestRenderImpl(const char *reason,
-	SbBool lodCapacityRelevant)
+	RenderRequestIntent intent)
 {
     /* Callers request a repaint and may additionally classify its timing as
      * LoD capacity evidence.  The current view policy is authoritative: a
      * camera, viewport, lighting, or renderer change while LoD is disabled
      * remains an ordinary repaint and cannot recreate an automatic owner.
-     * Auto-submit is deliberately independent: requestRender() is also the
+     * Auto-submit is deliberately independent: requestLodCapacityRender() is also the
      * explicit low-level capacity-sample API. */
+    const bool capacityRequested =
+	intent == RenderRequestIntent::LOD_CAPACITY;
+    const bool planningRequested = capacityRequested ||
+	intent == RenderRequestIntent::LOD_PLANNING;
     const SbBool effectiveCapacityRelevant =
-	lodCapacityRelevant && this->lodViewPolicyEnabled() ? TRUE : FALSE;
+	capacityRequested && this->lodViewPolicyEnabled() ? TRUE : FALSE;
+    const SbBool effectivePlanningRelevant =
+	planningRequested && this->lodViewPolicyEnabled() ? TRUE : FALSE;
     SbBool wakeEndpoint = FALSE;
     SbBool changed = FALSE;
     uint64_t requestSerial = 0;
@@ -1002,7 +1071,13 @@ BObolViewController::requestRenderImpl(const char *reason,
 	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
 	const BObolRenderRequestState::Decision decision =
 	    this->d->renderRequest.request(reason,
-		effectiveCapacityRelevant != FALSE);
+		effectiveCapacityRelevant != FALSE,
+		effectivePlanningRelevant != FALSE);
+	/* Any full presentation request which is now standing owns the current
+	 * exact-frame debt.  Record that attachment even when this request merely
+	 * coalesced with an existing stronger request. */
+	if (this->d->renderRequest.pending())
+	    this->d->lodExactPresentationFrame.noteFrameRequested();
 	wakeEndpoint = decision.wakeEndpoint ? TRUE : FALSE;
 	changed = decision.changed ? TRUE : FALSE;
 	if (changed) {
@@ -1018,7 +1093,8 @@ BObolViewController::requestRenderImpl(const char *reason,
 	    "BOBOL_LOD_TRACE_RENDER_REQUEST",
 	    this->d->lodViewRevision.value()))
 	bu_log("BObol LoD render request serial=%llu view=%llu "
-	       "policy=%llu reason=%s progressive=%d capacity=%d\n",
+	       "policy=%llu reason=%s progressive=%d planning=%d "
+	       "capacity=%d\n",
 	       static_cast<unsigned long long>(requestSerial),
 	       static_cast<unsigned long long>(
 		   this->d->lodViewRevision.value()),
@@ -1026,6 +1102,7 @@ BObolViewController::requestRenderImpl(const char *reason,
 		   this->d->lodPolicyRevision.value()),
 	       reason ? reason : "",
 	       this->hasProgressiveWorkPending() ? 1 : 0,
+	       effectivePlanningRelevant ? 1 : 0,
 	       effectiveCapacityRelevant ? 1 : 0);
     if (wakeEndpoint)
 	this->notifyFrameRequest(reason);
@@ -1120,6 +1197,17 @@ BObolViewController::synchronizePresentation(void)
     if (callback)
 	(*callback)(userData);
     controller_synchronize_compact_cad_presentations(this);
+    /* Presentation-only hierarchy edits do not enqueue provider work.  They
+     * still change the exact LoD visibility denominator, so rendering their
+     * retained instance delta must wake the bounded planner which consumes
+     * the source journal.  Keep this level-triggered: a frame may coalesce
+     * the original GED mutation notification, and an already-consumed source
+     * revision is an O(source-count) no-op. */
+    if (this->automaticLodControlEnabled() &&
+	controller_lod_source_inputs_unsubmitted(
+	    controller_render_database_source_roots(this),
+	    this->d->lodLastSubmittedSources))
+	this->markProgressiveWorkPending();
     const uint64_t completed = this->beginRenderTiming();
     this->d->lastPresentationSyncTimeNanoseconds =
 	(completed > started) ? completed - started : 0;
@@ -1170,23 +1258,32 @@ BObolViewController::getHostWorkSnapshot(void) const
 void
 BObolViewController::clearRenderRequest(void)
 {
-    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
-    const SbBool changed = this->d->renderRequest.clear() ? TRUE : FALSE;
-    if (changed) {
-	if (++this->d->hostWorkRevision == 0)
-	    ++this->d->hostWorkRevision;
-	if (++this->d->renderRequestSerial == 0)
-	    ++this->d->renderRequestSerial;
+    SbBool exactRequestRetired = FALSE;
+    {
+	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+	const SbBool changed = this->d->renderRequest.clear() ? TRUE : FALSE;
+	if (changed) {
+	    if (++this->d->hostWorkRevision == 0)
+		++this->d->hostWorkRevision;
+	    if (++this->d->renderRequestSerial == 0)
+		++this->d->renderRequestSerial;
+	    if (this->d->lodExactPresentationFrame.framePending()) {
+		this->d->lodExactPresentationFrame.noteRequestRetired();
+		exactRequestRetired = TRUE;
+	    }
+	}
     }
+    if (exactRequestRetired)
+	this->markProgressiveWorkPending();
 }
 
 SbBool
 BObolViewController::consumeRenderRequest(SbString *reason,
-	SbBool *lodCapacityRelevant)
+	SbBool *lodCapacityRelevant, SbBool *lodPlanningRelevant)
 {
     std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
     const SbBool ret = this->d->renderRequest.consume(
-	reason, lodCapacityRelevant) ? TRUE : FALSE;
+	reason, lodCapacityRelevant, lodPlanningRelevant) ? TRUE : FALSE;
     if (ret) {
 	if (++this->d->hostWorkRevision == 0)
 	    ++this->d->hostWorkRevision;

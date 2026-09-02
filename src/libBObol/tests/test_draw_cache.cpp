@@ -24,9 +24,11 @@
 #include "rt/wdb.h"
 #include "wdb.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 
 static const char *path_leaf_name = "path_leaf.s";
@@ -65,6 +67,46 @@ check_proxy_point(const char *label,
 	!point_equal(record->points[index], expected)) {
 	printf("FAIL: %s proxy point %zu\n", label, index);
 	return 1;
+    }
+    return 0;
+}
+
+static int
+check_canonical_obb(const BObolDrawProxyRecord *record)
+{
+    if (!record || record->kind != BOBOL_LOD_PROXY_OBB ||
+	record->pointCount != 8)
+	return 1;
+
+    vect_t axes[3];
+    VSUB2(axes[0], record->points[1], record->points[0]);
+    VSUB2(axes[1], record->points[2], record->points[0]);
+    VSUB2(axes[2], record->points[4], record->points[0]);
+    const fastf_t scale = std::max<fastf_t>(1.0,
+	std::max(MAGNITUDE(axes[0]),
+	    std::max(MAGNITUDE(axes[1]), MAGNITUDE(axes[2]))));
+    const fastf_t tolerance = 128.0 *
+	std::numeric_limits<fastf_t>::epsilon() * scale;
+    for (size_t left = 0; left < 3; ++left)
+	for (size_t right = left + 1; right < 3; ++right)
+	    if (std::fabs(VDOT(axes[left], axes[right])) >
+		tolerance * scale) {
+		printf("OBB axes %zu/%zu dot=%g\n", left, right,
+		    VDOT(axes[left], axes[right]));
+		return 1;
+	    }
+
+    for (size_t corner = 0; corner < 8; ++corner) {
+	point_t expected;
+	VMOVE(expected, record->points[0]);
+	for (size_t axis = 0; axis < 3; ++axis)
+	    if (corner & (1u << axis))
+		VADD2(expected, expected, axes[axis]);
+	if (DIST_PNT_PNT(expected, record->points[corner]) > tolerance) {
+	    printf("OBB corner %zu expected=(%g,%g,%g) actual=(%g,%g,%g)\n",
+		corner, V3ARGS(expected), V3ARGS(record->points[corner]));
+	    return 1;
+	}
     }
     return 0;
 }
@@ -493,9 +535,18 @@ main(int argc, char *argv[])
     VSET(aabbMax, 5.0, 6.0, 7.0);
 	VMOVE(aabbPoints[0], aabbMin);
 	VMOVE(aabbPoints[1], aabbMax);
-    for (size_t i = 0; i < 8; i++)
-	VSET(obbPoints[i], (fastf_t)i, (fastf_t)(i + 10),
-	     (fastf_t)(i + 20));
+    const point_t obbOrigin = {1.0, 2.0, 3.0};
+    const vect_t obbAxes[3] = {
+	{2.0, 2.0, 0.0},
+	{-1.0, 1.0, 0.0},
+	{0.0, 0.0, 1.0}
+    };
+    for (size_t corner = 0; corner < 8; ++corner) {
+	VMOVE(obbPoints[corner], obbOrigin);
+	for (size_t axis = 0; axis < 3; ++axis)
+	    if (corner & (1u << axis))
+		VADD2(obbPoints[corner], obbPoints[corner], obbAxes[axis]);
+    }
     for (size_t i = 0; i < 8; i++)
 	VSET(assetObbPoints[i], (i & 1) ? 4.0 : 0.0,
 	    (i & 2) ? 2.0 : 0.0, (i & 4) ? 1.0 : 0.0);
@@ -664,10 +715,34 @@ main(int argc, char *argv[])
     }
 
     if (bobol_draw_proxy_cache_store(dbip, objname, BOBOL_LOD_PROXY_OBB,
-				       obbPoints, 8, &status) != BRLCAD_OK ||
+			       obbPoints, 8, &status) != BRLCAD_OK ||
 	!status.directoryFound || !status.hasCachedPayload ||
 	!status.generatedCacheEntry) {
 	printf("FAIL: draw cache OBB store\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    {
+	point_t malformedObb[8];
+	for (size_t corner = 0; corner < 8; ++corner)
+	    VMOVE(malformedObb[corner], obbPoints[corner]);
+	malformedObb[7][X] += 0.5;
+	if (bobol_draw_proxy_cache_store(dbip, lod_copy_name,
+		BOBOL_LOD_PROXY_OBB, malformedObb, 8, NULL) !=
+	    BRLCAD_ERROR) {
+	    printf("FAIL: malformed draw proxy OBB accepted\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+    }
+
+    if (bobol_draw_proxy_cache_refresh(dbip, lod_asset_name,
+	    BOBOL_LOD_PROXY_OBB, &status) != BRLCAD_OK ||
+	bobol_draw_proxy_cache_get(dbip, lod_asset_name,
+	    BOBOL_LOD_PROXY_OBB, &proxy) != BRLCAD_OK ||
+	check_canonical_obb(&proxy)) {
+	printf("FAIL: refreshed draw proxy OBB is not in canonical corner order\n");
 	ret = 1;
 	goto cleanup;
     }

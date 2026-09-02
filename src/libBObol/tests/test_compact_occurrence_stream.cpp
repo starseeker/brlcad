@@ -29,6 +29,23 @@ test_priority_and_state(void)
 {
     BObolCompactOccurrenceStream stream;
     stream.setExpectedCount(100000);
+    size_t preparationCompleted = 1;
+    size_t preparationTotal = 1;
+    stream.getPreparationWorkCount(preparationCompleted, preparationTotal);
+    if (preparationCompleted != 0 || preparationTotal != 0) {
+	std::fprintf(stderr, "FAIL: initial preparation work rank\n");
+	return 1;
+    }
+    stream.setPreparationWorkCount(3);
+    stream.notePreparationWorkCompleted();
+    stream.notePreparationWorkCompleted();
+    stream.notePreparationWorkCompleted();
+    stream.notePreparationWorkCompleted();
+    stream.getPreparationWorkCount(preparationCompleted, preparationTotal);
+    if (preparationCompleted != 3 || preparationTotal != 3) {
+	std::fprintf(stderr, "FAIL: bounded preparation work rank\n");
+	return 1;
+    }
     BObolCompactSourceProfile profile;
     profile.valid = TRUE;
     profile.occurrenceCount = 100000;

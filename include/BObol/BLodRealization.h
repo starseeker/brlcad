@@ -378,7 +378,9 @@ public:
     /* Publish selected spatial pages without flattening them into one large
      * allocation.  Every returned layer uses activeCut, so neighboring pages
      * retain a coherent quantization boundary while their immutable storage
-     * may have different resident high-water marks. */
+     * may have different resident high-water marks.  A valid page set may
+     * produce an empty layer vector when none of its faces is active at the
+     * requested cut; that is a successful zero-draw presentation. */
     SbBool prepareCadPresentationLayers(int drawMode,
 	const std::vector<uint32_t> &chunkIds, int activeCut,
 	std::vector<BObolLodPresentationLayer> &layers) const;
@@ -551,6 +553,14 @@ struct BOBOL_EXPORT BObolLodResult {
      * without mutating the task identity copied into request. */
     int resolvedCut;
     int residentCut;
+    /* Transient owner-budget certificate for geometry.activeCut.  This is
+     * intentionally independent of request.viewRevision: coalescing may
+     * update the worker request to a newer camera while the provider retains
+     * the budget under which its presentation cut was selected. */
+    SbBool presentationAdmissionCertified;
+    BObolViewEpoch presentationAdmissionViewRevision;
+    BObolPolicyEpoch presentationAdmissionPolicyRevision;
+    int presentationAdmissionCut;
     /* The service could publish a useful retained mesh, but deliberately
      * withheld a richer suffix to honor its stable resident-byte target.
      * residentAdmissionRevision identifies the capacity epoch which made

@@ -21,25 +21,27 @@ public:
 	using State = Obol::CadPresentationPreparationState;
 	if (!after.hasTarget())
 	    return BOBOL_CAD_PREPARATION_NONE;
+	const bool sameTarget = before.hasTarget() &&
+	    before.target == after.target;
+	/* Validate the finite-work certificate before interpreting its terminal
+	 * state.  A newly published or constrained target is not permission to
+	 * bypass the same bounds and monotonicity contract. */
+	if (after.completedUnits > after.totalUnits ||
+		(after.state == State::Complete &&
+		 after.completedUnits != after.totalUnits) ||
+		(sameTarget &&
+		 (before.totalUnits != after.totalUnits ||
+		  after.completedUnits < before.completedUnits)))
+	    return BOBOL_CAD_PREPARATION_FAILED;
 	if (after.state == State::Failed)
 	    return BOBOL_CAD_PREPARATION_FAILED;
 	if (after.state == State::Constrained)
 	    return BOBOL_CAD_PREPARATION_CONSTRAINED;
 
-	const bool sameTarget = before.hasTarget() &&
-	    before.target == after.target;
 	if (!sameTarget)
 	    return after.state == State::Complete ?
 		BOBOL_CAD_PREPARATION_COMPLETED :
 		BOBOL_CAD_PREPARATION_STARTED;
-
-	/* A target's total is immutable and its completed work is monotone.
-	 * Classify a broken producer certificate as failure rather than granting
-	 * the unbounded retry the certificate exists to prevent. */
-	if (before.totalUnits != after.totalUnits ||
-		after.completedUnits < before.completedUnits ||
-		after.completedUnits > after.totalUnits)
-	    return BOBOL_CAD_PREPARATION_FAILED;
 	if (after.state == State::Complete &&
 		before.state != State::Complete)
 	    return BOBOL_CAD_PREPARATION_COMPLETED;

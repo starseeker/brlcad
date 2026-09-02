@@ -72,6 +72,18 @@ public:
 	int progressiveCeiling = -1;
     };
 
+    struct DemandPassInputs {
+	bool submissionActive = false;
+	bool rescanPending = false;
+	bool selectivePass = false;
+	bool structuralRepair = false;
+	bool retainedAllocation = false;
+	/* A stronger finite transaction may temporarily own the shared source
+	 * cursor.  The demand obligation remains level-triggered until that owner
+	 * retires, but it must not create a competing ordinary pass meanwhile. */
+	bool strongerOwnerPending = false;
+    };
+
     CameraChangeDecision observeCameraChange(bool scaleChanged,
 	uint64_t lastRenderNanoseconds)
     {
@@ -239,7 +251,7 @@ public:
 		BOBOL_MESH_LOD_CUT_COUNT_MAX - 1 : presentedMaximum + 1);
 	/* A stable cut which was presented within the hard zoom-quality
 	 * deadline is a stronger starting point than the deliberately coarser
-	 * 60 Hz motion cut.  Replaying it does not expose new immutable data and
+	 * coarser motion cut.  Replaying it does not expose new immutable data and
 	 * is still protected by the presentation deadline.  This avoids walking
 	 * back through several PoP populations every time wheel input pauses. */
 	if (this->qualityFloorValue >= 0)
@@ -314,27 +326,61 @@ public:
 
     void refreshForViewRevision(bool interactive)
     {
-	this->scaleDemandRefreshActiveValue =
+	this->demandRefreshActiveValue =
 	    this->viewScaleChangingValue ||
 	    (interactive && this->interactionScaleChangedValue);
     }
 
-    void refreshForPolicyRevision(bool preserveScaleDemandRefresh,
+    /* A policy epoch which changes physical mesh demand needs one complete
+     * occurrence retarget pass.  This is broader than camera-scale demand:
+     * quiet static-quality tiers and explicit forced-cut changes also alter
+     * the requested prefix without invalidating the visibility census. */
+    void refreshForPolicyRevision(bool demandRefreshRequired,
 	bool interactive)
     {
-	this->scaleDemandRefreshActiveValue =
-	    preserveScaleDemandRefresh ||
+	this->demandRefreshActiveValue =
+	    demandRefreshRequired ||
 	    (interactive && this->interactionScaleChangedValue);
     }
 
     void clearDemandRefresh(void)
     {
-	this->scaleDemandRefreshActiveValue = false;
+	this->demandRefreshActiveValue = false;
+    }
+
+    void requestDemandRefresh(void)
+    {
+	this->demandRefreshActiveValue = true;
+    }
+
+    bool completeDemandRefresh(bool completedPass, bool selectivePass,
+	bool rescanPending, bool structuralRepair, bool retainedAllocation)
+    {
+	if (!this->demandRefreshActiveValue || !completedPass ||
+	    selectivePass || rescanPending || structuralRepair ||
+	    retainedAllocation)
+	    return false;
+	this->clearDemandRefresh();
+	return true;
+    }
+
+    /* Demand refresh is level-triggered.  A policy transition normally
+     * starts its dense pass through the revision-mismatch path, but a
+     * stronger presentation owner may retire that cursor without consuming
+     * the demand obligation.  Once no specialized pass owns the cursor, the
+     * ordinary current-view census must be re-armed even if every revision
+     * and source signature is unchanged. */
+    bool demandPassRequired(const DemandPassInputs &inputs) const
+    {
+	return this->demandRefreshActiveValue && !inputs.submissionActive &&
+	    !inputs.rescanPending && !inputs.selectivePass &&
+	    !inputs.structuralRepair && !inputs.retainedAllocation &&
+	    !inputs.strongerOwnerPending;
     }
 
     void reset(void)
     {
-	this->scaleDemandRefreshActiveValue = false;
+	this->demandRefreshActiveValue = false;
 	this->viewScaleChangingValue = false;
 	this->interactionScaleChangedValue = false;
 	this->qualityProbeActiveValue = false;
@@ -346,9 +392,9 @@ public:
 	this->qualityCeilingFailedWorkValue = 0;
     }
 
-    bool scaleDemandRefreshActive(void) const
+    bool demandRefreshActive(void) const
     {
-	return this->scaleDemandRefreshActiveValue;
+	return this->demandRefreshActiveValue;
     }
     bool viewScaleChanging(void) const
     {
@@ -397,7 +443,7 @@ public:
     }
 
 private:
-    bool scaleDemandRefreshActiveValue = false;
+    bool demandRefreshActiveValue = false;
     bool viewScaleChangingValue = false;
     bool interactionScaleChangedValue = false;
     bool qualityProbeActiveValue = false;
@@ -650,7 +696,8 @@ public:
 	NONE = 0,
 	PRESENTATION_DEADLINE,
 	PREDICTED_NEXT_CUT,
-	PROTECTED_MINIMUM
+	PROTECTED_MINIMUM,
+	ALLOCATION_SATURATED
     };
 
     struct Constraint {
@@ -704,6 +751,12 @@ public:
 	}
     };
 
+    struct HandoffCompletion {
+	bool completedRejectedConstraint = false;
+	bool releaseRendererCeiling = false;
+	bool measureCeilingFreeCandidate = false;
+    };
+
     void reset(void)
     {
 	this->stateValue = State::IDLE;
@@ -748,6 +801,33 @@ public:
 	return true;
     }
 
+    /* A completed occurrence-local handoff is the sole commit edge for the
+     * renderer guard which protected its allocation.  A probing trial keeps
+     * its quality owner but must expose the newly allocated population in one
+     * ceiling-free, deadline-bounded frame.  A rejected trial completes its
+     * constraint reconciliation.  Only the narrow protected-minimum outcome
+     * is allowed to retain the renderer ceiling as terminal presentation
+     * policy.
+     *
+     * Keeping the old ceiling merely because the allocated population is
+     * richer re-enters the same global-ordinal walk.  On large multi-object
+     * scenes that can alternate allocation and reconciliation indefinitely
+     * even though the occurrence-local handoff has already succeeded. */
+    HandoffCompletion completeOccurrenceHandoff(
+	const BObolLodAdmissionRevisionStamp &stamp, int rendererCeiling)
+    {
+	HandoffCompletion completion;
+	completion.completedRejectedConstraint =
+	    this->completeReconciliation();
+	const bool retainRendererCeiling =
+	    this->retainsRendererCeilingFor(stamp, rendererCeiling);
+	completion.releaseRendererCeiling = rendererCeiling >= 0 &&
+	    !retainRendererCeiling;
+	completion.measureCeilingFreeCandidate = this->probing() &&
+	    completion.releaseRendererCeiling;
+	return completion;
+    }
+
     bool reject(const Constraint &constraint)
     {
 	if (!constraint.valid() || !this->inProgress())
@@ -767,6 +847,23 @@ public:
     bool constrain(const Constraint &constraint)
     {
 	if (!constraint.valid() || this->stateValue != State::IDLE)
+	    return false;
+	this->constraintValue = constraint;
+	this->acceptanceValue = Acceptance();
+	this->stateValue = State::REJECTED;
+	this->sampledCeilingValue = -1;
+	return true;
+    }
+
+    /* The retained framebuffer may itself be the only presentation that
+     * fits the hard deadline when an occurrence-local allocation cannot
+     * encode its renderer-wide cut.  That case has no reconciliation effect
+     * left to run: retain the exact completed presentation as the terminal
+     * constraint instead of manufacturing an ownerless RECONCILING state. */
+    bool constrainPresented(const Constraint &constraint)
+    {
+	if (!constraint.valid() || this->stateValue == State::ACCEPTED ||
+	    this->stateValue == State::REJECTED)
 	    return false;
 	this->constraintValue = constraint;
 	this->acceptanceValue = Acceptance();
@@ -820,6 +917,35 @@ public:
 	    this->stateValue == State::REJECTED;
     }
 
+    bool rejectedFor(const BObolLodAdmissionRevisionStamp &stamp) const
+    {
+	if (this->stateValue != State::REJECTED ||
+	    !this->constraintValue.valid())
+	    return false;
+	const BObolLodAdmissionRevisionStamp &rejected =
+	    this->constraintValue.revisionStamp;
+	/* The completed frame may itself advance the capacity ledger.  Geometry,
+	 * availability, camera, or policy changes alter the represented
+	 * population and must obtain a new constraint proof. */
+	return rejected.inventory == stamp.inventory &&
+	    rejected.availability == stamp.availability &&
+	    rejected.view == stamp.view && rejected.policy == stamp.policy;
+    }
+
+    /* An occurrence-local allocation cannot always reproduce a renderer-wide
+     * cut: the minimum cut of many independent meshes may itself exceed the
+     * completed framebuffer's hard presentation allowance.  In that case the
+     * exact framebuffer and its reversible renderer ceiling are the terminal
+     * presentation for this semantic epoch.  Keep this exception narrow and
+     * revision-bound; every other ceiling remains reconciliation debt. */
+    bool retainsRendererCeilingFor(
+	const BObolLodAdmissionRevisionStamp &stamp, int ceiling) const
+    {
+	return ceiling >= 0 && this->rejectedFor(stamp) &&
+	    this->constraintValue.reason == ConstraintReason::PROTECTED_MINIMUM &&
+	    this->constraintValue.committedCeiling == ceiling;
+    }
+
     const Constraint &constraint(void) const
     {
 	return this->constraintValue;
@@ -844,6 +970,17 @@ public:
 	    accepted.availability == stamp.availability &&
 	    accepted.view == stamp.view && accepted.policy == stamp.policy ?
 		this->acceptanceValue.presentedCost : 0;
+    }
+
+    size_t constrainedPresentationBudgetFor(
+	const BObolLodAdmissionRevisionStamp &stamp) const
+    {
+	/* A completed static rejection is a terminal presentation proof for the
+	 * same immutable scene/view problem.  Its reconciled occurrence budget
+	 * supersedes the older steady-cadence capacity certificate; otherwise the
+	 * next ordinary plan can restore that certificate's cheaper predecessor
+	 * and reopen the static handoff indefinitely. */
+	return this->rejectedFor(stamp) ? this->constraintValue.allowedCost : 0;
     }
 
     int sampledCeiling(void) const
@@ -969,6 +1106,17 @@ public:
 	if (staticQualityOwnsDeadline || !structuralRepairPending)
 	    return staticQualityDeadline;
 	return structuralRepairDeadline;
+    }
+
+    static bool quietPresentationIrreducible(bool interactive,
+	bool presentationAvailable, int progressiveCeiling,
+	size_t activeRenderCost, size_t minimumRenderCost,
+	size_t progressivePayloadCount, bool pointTransitionPending)
+    {
+	return !interactive && presentationAvailable &&
+	    (progressiveCeiling == 0 || progressivePayloadCount == 0 ||
+	     (activeRenderCost > 0 && activeRenderCost <= minimumRenderCost)) &&
+	    !pointTransitionPending;
     }
 
     static float staticFrameTargetFps(float preferredFps,
@@ -1119,10 +1267,18 @@ public:
 	if (static_cast<double>(renderNanoseconds) <=
 	    targetNanoseconds * 1.05)
 	    return 1.0f;
+	/* Surface work grows approximately with inverse squared screen error.
+	 * Scaling the error by sqrt(observed / target) is therefore the direct
+	 * correction supported by the completed frame.  The former additional
+	 * factor of two made progressiveCeiling() discard one extra PoP
+	 * population on every feedback sample.  During a held gesture that error
+	 * compounded once per mouse event: Lucy reached a 6--10 ms cut while the
+	 * configured target required only 16.7 ms.  Retain a minimum factor of two
+	 * after a real miss so a discrete hierarchy always makes progress. */
 	const double scale = std::sqrt(
 	    static_cast<double>(renderNanoseconds) / targetNanoseconds);
 	return static_cast<float>(std::max(2.0,
-	    std::min(64.0, 2.0 * scale)));
+	    std::min(64.0, scale)));
     }
 
     /*

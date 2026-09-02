@@ -331,6 +331,22 @@ bobol_mesh_lod_oriented_bounds_validate(
     return 1;
 }
 
+static bool
+bobol_mesh_lod_oriented_bounds_valid_for_domain(
+    const point_t quantizationMinimum,
+    const point_t quantizationMaximum,
+    const point_t orientedBounds[8])
+{
+    struct BObolMeshLodHierarchyInfo proxyInfo =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    VMOVE(proxyInfo.quantization_min, quantizationMinimum);
+    VMOVE(proxyInfo.quantization_max, quantizationMaximum);
+    proxyInfo.oriented_bounds_valid = 1;
+    for (size_t corner = 0; corner < 8; ++corner)
+	VMOVE(proxyInfo.oriented_bounds[corner], orientedBounds[corner]);
+    return bobol_mesh_lod_oriented_bounds_validate(&proxyInfo) != 0;
+}
+
 /* Serialized cache records must not inherit compiler ABI padding or size_t
  * width.  Keep this format explicitly fixed so a hierarchy produced on one
  * supported host cannot turn a range offset into a wild mesh index on
@@ -573,41 +589,63 @@ mesh_lod_arrays_validate(const int *faces,
 			 size_t pointOrigCountIn,
 			 int *faceCount,
 			 int *pointCount,
-			 int *pointOrigCount)
+			 int *pointOrigCount,
+			 const char **failure = NULL)
 {
     int fcnt = 0;
     int pcnt = 0;
     int porigCnt = 0;
 
+    if (failure)
+	*failure = NULL;
+
     if (!mesh_lod_size_to_int(faceCountIn, &fcnt) ||
 	!mesh_lod_size_to_int(pointCountIn, &pcnt) ||
-	!mesh_lod_size_to_int(pointOrigCountIn, &porigCnt))
+	!mesh_lod_size_to_int(pointOrigCountIn, &porigCnt)) {
+	if (failure)
+	    *failure = "array count exceeds the fixed-width PoP index domain";
 	return 0;
+    }
     if (!faces || fcnt <= 0 || !points || pcnt <= 0 ||
-	!pointsOrig || porigCnt <= 0)
+	!pointsOrig || porigCnt <= 0) {
+	if (failure)
+	    *failure = "required face or point array is empty";
 	return 0;
-    if (faceCountIn > ((size_t)-1) / 3)
+    }
+    if (faceCountIn > ((size_t)-1) / 3) {
+	if (failure)
+	    *failure = "face index count overflows size_t";
 	return 0;
+    }
 
     for (size_t pointIndex = 0; pointIndex < pointCountIn; ++pointIndex) {
 	for (size_t axis = 0; axis < 3; ++axis) {
-	    if (!std::isfinite(points[pointIndex][axis]))
+	    if (!std::isfinite(points[pointIndex][axis])) {
+		if (failure)
+		    *failure = "display point array contains a non-finite value";
 		return 0;
+	    }
 	}
     }
     for (size_t pointIndex = 0; pointIndex < pointOrigCountIn;
 	 pointIndex++) {
 	for (size_t axis = 0; axis < 3; ++axis) {
-	    if (!std::isfinite(pointsOrig[pointIndex][axis]))
+	    if (!std::isfinite(pointsOrig[pointIndex][axis])) {
+		if (failure)
+		    *failure = "source point array contains a non-finite value";
 		return 0;
+	    }
 	}
     }
 
     const size_t indexCount = faceCountIn * 3;
     for (size_t index = 0; index < indexCount; index++) {
 	if (faces[index] < 0 || faces[index] >= pcnt ||
-	    faces[index] >= porigCnt)
+	    faces[index] >= porigCnt) {
+	    if (failure)
+		*failure = "face array contains an out-of-domain vertex index";
 	    return 0;
+	}
     }
 
     if (faceCount)
@@ -2356,7 +2394,12 @@ BObolPopState::buildOrientedBounds(
 	    !std::isfinite(orientedBounds[corner][Z]))
 	    return false;
     }
-    return true;
+    point_t quantizationMinimum;
+    point_t quantizationMaximum;
+    VSET(quantizationMinimum, minx, miny, minz);
+    VSET(quantizationMaximum, maxx, maxy, maxz);
+    return bobol_mesh_lod_oriented_bounds_valid_for_domain(
+	quantizationMinimum, quantizationMaximum, orientedBounds);
 }
 
 bool
@@ -2976,26 +3019,19 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
     {
 	double diskOrientedBounds[25] = {};
 	if (!readMetadata(CACHE_OBJ_ORIENTED_BOUNDS,
-		diskOrientedBounds, sizeof(diskOrientedBounds)) ||
-	    !std::isfinite(diskOrientedBounds[0]) ||
-	    (std::abs(diskOrientedBounds[0]) > SMALL_FASTF &&
-	     std::abs(diskOrientedBounds[0] - 1.0) > SMALL_FASTF)) {
+		diskOrientedBounds, sizeof(diskOrientedBounds))) {
 	    cacheDone();
 	    return false;
 	}
-	orientedBoundsValid = diskOrientedBounds[0] > 0.5;
+	const bool validFlag = std::isfinite(diskOrientedBounds[0]) &&
+	    (std::abs(diskOrientedBounds[0]) <= SMALL_FASTF ||
+	     std::abs(diskOrientedBounds[0] - 1.0) <= SMALL_FASTF);
+	orientedBoundsValid = validFlag && diskOrientedBounds[0] > 0.5;
 	for (size_t corner = 0; corner < 8; ++corner) {
 	    VSET(orientedBounds[corner],
 		diskOrientedBounds[1 + corner * 3],
 		diskOrientedBounds[2 + corner * 3],
 		diskOrientedBounds[3 + corner * 3]);
-	    if (orientedBoundsValid &&
-		(!std::isfinite(orientedBounds[corner][X]) ||
-		 !std::isfinite(orientedBounds[corner][Y]) ||
-		 !std::isfinite(orientedBounds[corner][Z]))) {
-		cacheDone();
-		return false;
-	    }
 	}
     }
     {
@@ -3016,18 +3052,17 @@ BObolPopState::loadCachedHeader(bool retainHeaderSnapshot)
 	    cacheDone();
 	    return false;
 	}
-	BObolMeshLodHierarchyInfo proxyInfo =
-	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-	VSET(proxyInfo.quantization_min, minx, miny, minz);
-	VSET(proxyInfo.quantization_max, maxx, maxy, maxz);
-	proxyInfo.oriented_bounds_valid = orientedBoundsValid ? 1 : 0;
-	if (orientedBoundsValid)
-	    for (size_t corner = 0; corner < 8; ++corner)
-		VMOVE(proxyInfo.oriented_bounds[corner],
-		    orientedBounds[corner]);
-	if (!bobol_mesh_lod_oriented_bounds_validate(&proxyInfo)) {
-	    cacheDone();
-	    return false;
+	if (orientedBoundsValid) {
+	    point_t quantizationMinimum;
+	    point_t quantizationMaximum;
+	    VSET(quantizationMinimum, minx, miny, minz);
+	    VSET(quantizationMaximum, maxx, maxy, maxz);
+	    if (!bobol_mesh_lod_oriented_bounds_valid_for_domain(
+		    quantizationMinimum, quantizationMaximum,
+		    orientedBounds)) {
+		orientedBoundsValid = false;
+		memset(orientedBounds, 0, sizeof(orientedBounds));
+	    }
 	}
 
 	/* This format has one canonical anisotropic schedule.  Rebuild it from
@@ -5500,8 +5535,13 @@ mesh_lod_cache_generate(struct BObolMeshLodContext *context,
 	return 0;
 
     BObolPopState state(context, vertices, vertexCount, normals, faces,
-			  faceCount, userKey, shadedCullBackfaces,
-			  NULL, preview, previewData);
+		  faceCount, userKey, shadedCullBackfaces,
+		  NULL, preview, previewData);
+    if (!state.isValid && getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	bu_log("[obol-timing] pop cache generation failed: %s "
+	       "(faces=%zu points=%zu)\n",
+	       state.generationFailure() ? state.generationFailure() :
+	       "unspecified generation failure", faceCount, vertexCount);
     if (state.isValid && generatedHierarchy)
 	state.hierarchyInfo(generatedHierarchy);
     return state.isValid ? state.hash : 0;
@@ -6242,14 +6282,29 @@ mesh_lod_cache_store_mesh_impl(
 	return BRLCAD_ERROR;
 
     struct BObolMeshLodContext *context = mesh_lod_context_create_for_db(dbip);
-    if (!context)
+    if (!context) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] pop cache store unavailable for %s: "
+		   "cache context is unavailable\n", name);
 	return BRLCAD_ERROR;
+	}
 
     mesh_lod_status_current(dbip, context, name, &current);
-    if (!current.directory_found ||
-	!vertices || !vertexCount || !faces || !faceCount ||
-	!mesh_lod_arrays_validate(faces, faceCount, vertices, vertexCount,
-				  vertices, vertexCount, NULL, NULL, NULL)) {
+    const char *arrayFailure = NULL;
+    const bool arraysValid = vertices && vertexCount && faces && faceCount &&
+	mesh_lod_arrays_validate(faces, faceCount, vertices, vertexCount,
+	    vertices, vertexCount, NULL, NULL, NULL, &arrayFailure);
+    if (!current.directory_found || !arraysValid) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE")) {
+	    if (!current.directory_found)
+		bu_log("[obol-timing] pop cache store unavailable for %s: "
+		       "database object was not found\n", name);
+	    else
+		bu_log("[obol-timing] pop input rejected for %s: %s "
+		       "(faces=%zu points=%zu)\n", name,
+		       arrayFailure ? arrayFailure : "invalid mesh arrays",
+		       faceCount, vertexCount);
+	}
 	if (status)
 	    *status = current;
 	mesh_lod_context_destroy(context);
@@ -6286,7 +6341,13 @@ mesh_lod_cache_store_mesh_impl(
 				 context, vertices, vertexCount, normals, faces,
 				 faceCount, userKey, cullBackfaces, NULL, NULL,
 				 &generatedHierarchy);
-    if (!key || mesh_lod_key_put(context, name, key) != 0) {
+    const int keyStored = key ? mesh_lod_key_put(context, name, key) : -1;
+    if (!key || keyStored != 0) {
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] pop cache %s for %s "
+		   "(faces=%zu points=%zu)\n",
+		   key ? "mapping write failed" : "generation failed", name,
+		   faceCount, vertexCount);
 	if (status)
 	    *status = current;
 	mesh_lod_context_destroy(context);
@@ -6309,6 +6370,10 @@ mesh_lod_cache_store_mesh_impl(
 	    generatedHierarchy.oriented_bounds);
     if (status)
 	*status = current;
+
+    if (!current.has_cached_payload && getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	bu_log("[obol-timing] pop cache store failed for %s: "
+	       "generated hierarchy could not be reopened\n", name);
 
     mesh_lod_context_destroy(context);
     return current.has_cached_payload ? BRLCAD_OK : BRLCAD_ERROR;

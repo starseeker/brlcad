@@ -13,6 +13,8 @@
 #include "BObol/BLodRealization.h"
 #include "BObol/BViewLod.h"
 #include "cad_assembly_private.h"
+#include "lod_admission_policy_private.h"
+#include "lod_presentation_private.h"
 #include "lod_visual_importance_private.h"
 
 #include <Obol/cad/CadProjectedProxy.h>
@@ -21,6 +23,7 @@
 #include "bu/log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <cstdint>
@@ -31,6 +34,20 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+static size_t
+bobol_saturating_size_add(size_t first, size_t second)
+{
+    return second > SIZE_MAX - first ? SIZE_MAX : first + second;
+}
+
+uint64_t
+bobol_retained_allocation_resident_admission_revision(
+    const BObolViewLodState *viewState, uint64_t serviceRevision)
+{
+    return viewState && viewState->memoryLimitedPayloadCount() > 0 ?
+	serviceRevision : 0;
+}
 
 bool
 BObolRetainedAllocationInputKey::operator==(
@@ -79,6 +96,27 @@ BObolRetainedAllocationResult::inputKey(void) const
 }
 
 bool
+BObolRetainedAllocationResult::pixelDemandInputEquivalent(
+    const BObolRetainedAllocationInputs &inputs) const
+{
+    if (!this->selectsPixelDemand())
+	return false;
+
+    BObolRetainedAllocationInputKey prior = this->inputKey();
+    BObolRetainedAllocationInputKey current = inputs.inputKey();
+    /* A protected floor is only a route to a richer population.  Once the
+     * complete pixel-demand endpoint is selected, its enable bit and trial
+     * allowance are inert.  Keep all other fields in the comparison so a
+     * budget, classifier threshold, or semantic revision change still starts
+     * a distinct plan. */
+    prior.allowProtectedFloor = false;
+    prior.maximumProtectedBudget = 0;
+    current.allowProtectedFloor = false;
+    current.maximumProtectedBudget = 0;
+    return prior == current;
+}
+
+bool
 bobol_retained_marginal_lower_priority(
     const BObolRetainedMarginalUpgrade &a,
     const BObolRetainedMarginalUpgrade &b)
@@ -113,8 +151,6 @@ public:
 	    inputs.viewState->cadRevision() : 0;
 	this->residentDemandRevision = inputs.viewState ?
 	    inputs.viewState->residentMeshDemandRevision() : 0;
-	this->allocationPlanSerial = inputs.viewState ?
-	    inputs.viewState->beginCadAllocationPlan() : 0;
 	this->externalPresentationCost = inputs.externalPresentationCost;
 	this->fixedCost = inputs.externalPresentationCost;
 	this->pixelDemandPresentationCost = inputs.externalPresentationCost;
@@ -175,8 +211,9 @@ public:
 	    this->cadRevision != inputs.viewState->cadRevision() ||
 	    this->residentDemandRevision !=
 		inputs.viewState->residentMeshDemandRevision() ||
-	    !inputs.viewState->isCadAllocationPlanCurrent(
-	    this->allocationPlanSerial) ||
+	    (this->allocationPlanSerial != 0 &&
+	     !inputs.viewState->isCadAllocationPlanCurrent(
+		 this->allocationPlanSerial)) ||
 	    this->inputKey != inputs.inputKey() ||
 	    this->sources.size() != inputs.sources->size())
 	    return false;
@@ -241,6 +278,22 @@ public:
 			    this->payloadCursor = 0;
 			    this->sourceCursor++;
 			}
+			/* Stale projection evidence is a prerequisite request, not an
+			 * allocation plan.  Starting or committing a plan here would
+			 * invalidate the retained fallback and let one semantic revision
+			 * publish both an incomplete plan and its post-refresh successor.
+			 * Return the typed refresh frontier without touching plan state;
+			 * the controller must run one successor allocation after refresh. */
+			if (this->unresolvedViewDependentPayloadCount > 0) {
+			    transition(COMPLETE);
+			    break;
+			}
+			this->allocationPlanSerial =
+			    this->viewState->beginCadAllocationPlan();
+			if (!this->allocationPlanSerial) {
+			    finishSlice();
+			    return BOBOL_RETAINED_ALLOCATION_FAILED;
+			}
 			transition(FLOOR);
 			break;
 		    case PROTECTION_COMPARE:
@@ -280,16 +333,19 @@ public:
 			if (this->useOptionalPointCandidates) {
 			    this->protectedCandidateCost =
 				this->protectedCandidateCost == SIZE_MAX ||
-				this->optionalPointCandidateCost == SIZE_MAX ?
+				this->optionalPointCandidateMeshCost == SIZE_MAX ?
 				    SIZE_MAX : this->protectedCandidateCost -
-				    this->optionalPointCandidateCost;
+				    this->optionalPointCandidateMeshCost;
 			    this->protectedFloorSignature ^=
 				this->optionalPointCandidateSignature;
 			}
-			this->protectedFloorCost =
-			    this->protectedCandidateCost >
-				SIZE_MAX - this->fixedCost ? SIZE_MAX :
-			    this->fixedCost + this->protectedCandidateCost;
+			const size_t protectedPresentationCost =
+			    this->useOptionalPointCandidates ?
+				bobol_saturating_size_add(this->protectedCandidateCost,
+				    this->optionalPointProxyCost) :
+				this->protectedCandidateCost;
+			this->protectedFloorCost = bobol_saturating_size_add(
+			    this->fixedCost, protectedPresentationCost);
 			this->protectedFloorSignature ^=
 			    static_cast<uint64_t>(this->candidates.size()) *
 				0x9e3779b97f4a7c15ULL;
@@ -349,6 +405,9 @@ public:
 				bobol_lod_render_cost_units(
 				    this->countsAtCut(candidate, this->finalCuts[i]),
 				    candidate.drawMode, 1);
+			    if (!this->finalPointProxies[i])
+				this->finalCuts[i] = this->canonicalCutAtCost(
+				    candidate, this->finalCuts[i], this->finalCosts[i]);
 			    this->finalCost = this->finalCosts[i] >
 				SIZE_MAX - this->finalCost ? SIZE_MAX :
 				this->finalCost + this->finalCosts[i];
@@ -400,22 +459,28 @@ public:
 				    this->effectiveBudget - this->finalCost) {
 				this->finalCost += upgrade.addedCost;
 				this->finalPointProxies[upgrade.candidateIndex] = FALSE;
+				const Candidate &candidate =
+				    this->candidates[upgrade.candidateIndex];
 				this->finalCuts[upgrade.candidateIndex] =
-				    upgrade.nextCut;
+				    this->canonicalCutAtCost(candidate,
+					upgrade.nextCut, upgrade.nextCost);
 				this->finalCosts[upgrade.candidateIndex] =
 				    upgrade.nextCost;
 				if (!this->stageAllocation(
-					this->candidates[upgrade.candidateIndex].payload,
-					upgrade.nextCut,
-					this->candidates[upgrade.candidateIndex].drawMode)) {
+					candidate.payload,
+					this->finalCuts[upgrade.candidateIndex],
+					candidate.drawMode)) {
 				    finishSlice();
 				    return BOBOL_RETAINED_ALLOCATION_FAILED;
 				}
-				this->protectPointProxyCandidate(
-				    this->candidates[upgrade.candidateIndex]);
+				this->protectPointProxyCandidate(candidate);
 				this->marginalAccepted = true;
 				this->queueNextUpgrade(upgrade.candidateIndex);
 			    } else {
+				this->nextDistinctPresentationBudget =
+				    upgrade.addedCost > SIZE_MAX - this->finalCost ?
+					SIZE_MAX : this->finalCost + upgrade.addedCost;
+				this->nextDistinctPresentationBudgetKnown = true;
 				/* The selected population is a prefix of one stable
 				 * importance order.  Skipping an unaffordable high-ranked
 				 * upgrade lets a lower budget spend its remainder on later
@@ -429,6 +494,25 @@ public:
 				finishSlice();
 				return BOBOL_RETAINED_ALLOCATION_PENDING;
 			    }
+			}
+			/* Landing exactly on the budget leaves the next transition in
+			 * the queue.  Exhausting the queue proves that no richer resident
+			 * pixel-demand population exists.  The MARGINAL_SEED fast path
+			 * deliberately leaves this interval unknown when the immutable
+			 * baseline already consumes the allowance; avoiding an otherwise
+			 * unused O(N log N) queue is more important than this optional
+			 * search acceleration at the irreducible floor. */
+			if (!this->nextDistinctPresentationBudgetKnown) {
+			    if (this->upgrades.empty()) {
+				this->nextDistinctPresentationBudget = 0;
+			    } else {
+				const BObolRetainedMarginalUpgrade &next =
+				    this->upgrades.top();
+				this->nextDistinctPresentationBudget =
+				    next.addedCost > SIZE_MAX - this->finalCost ?
+					SIZE_MAX : this->finalCost + next.addedCost;
+			    }
+			    this->nextDistinctPresentationBudgetKnown = true;
 			}
 			if (this->marginalAccepted) {
 			    this->finalCursor = 0;
@@ -484,8 +568,37 @@ public:
 	}
     }
 
+    bool pending(void) const
+    {
+	return this->phase != COMPLETE;
+    }
+
     void result(BObolRetainedAllocationResult &result) const
     {
+	result.cadRevision = this->cadRevision;
+	result.residentDemandRevision = this->residentDemandRevision;
+	result.revisionStamp = this->revisionStamp;
+	result.residentAdmissionRevision = this->residentAdmissionRevision;
+	result.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
+	result.requestedSceneBudget = this->sceneBudget;
+	result.externalPresentationCost = this->externalPresentationCost;
+	result.maximumMarginalBudget = this->maximumMarginalBudget;
+	result.maximumProtectedBudget = this->maximumProtectedBudget;
+	result.unresolvedViewDependentPayloadCount =
+	    this->unresolvedViewDependentPayloadCount;
+	for (const SourceSnapshot &source : this->sources) {
+	    if (!source.denseProjectionRefreshRequired &&
+		    source.projectionRefreshEntries.empty())
+		continue;
+	    BObolRetainedProjectionRefreshPlan plan;
+	    plan.source = source.source;
+	    plan.compactEntryIndices = source.projectionRefreshEntries;
+	    plan.denseRefreshRequired = source.denseProjectionRefreshRequired;
+	    result.projectionRefreshPlans.push_back(std::move(plan));
+	}
+	if (this->unresolvedViewDependentPayloadCount > 0)
+	    return;
+
 	result.maximumNormalizedError = this->candidates.empty() ?
 	    (this->havePresentedErrorProof ? 0.0 :
 		std::numeric_limits<double>::infinity()) :
@@ -497,21 +610,27 @@ public:
 	result.protectedFloorBudget = this->allocationBudget;
 	result.protectedFloorSignature = this->protectedFloorSignature;
 	result.selectedPopulationSignature = this->populationSignature();
+	result.nextDistinctPresentationBudget =
+	    this->nextDistinctPresentationBudget;
+	result.nextDistinctPresentationBudgetKnown =
+	    this->nextDistinctPresentationBudgetKnown;
 	result.selectedPresentationCost = this->finalCost;
 	result.pixelDemandPresentationCost = this->pixelDemandPresentationCost;
 	result.certifiedPresentationBudget = this->effectiveBudget;
 	result.allocationPlanSerial = this->allocationPlanSerial;
-	result.cadRevision = this->cadRevision;
-	result.residentDemandRevision = this->residentDemandRevision;
-	result.revisionStamp = this->revisionStamp;
-	result.residentAdmissionRevision = this->residentAdmissionRevision;
-	result.pointProxyPixelThreshold = this->pointProxyPixelThreshold;
-	result.requestedSceneBudget = this->sceneBudget;
-	result.externalPresentationCost = this->externalPresentationCost;
 	result.fixedCadPresentationCost = this->fixedCadPresentationCost;
-	result.maximumMarginalBudget = this->maximumMarginalBudget;
-	result.maximumProtectedBudget = this->maximumProtectedBudget;
 	result.pointProxyCandidateCount = this->pointProxyCandidateCount;
+	result.reachablePointProxyCandidateCount =
+	    this->reachablePointProxyCandidateCount;
+	for (SoCADAssembly *assembly : this->pointProxyAssemblies) {
+	    const auto protection =
+		this->pointProxyProtectedInstances.find(assembly);
+	    if (protection != this->pointProxyProtectedInstances.end() &&
+		    protection->second.changed) {
+		result.pointProxyProtectionChanged = true;
+		break;
+	    }
+	}
 	for (size_t i = 0; i < this->candidates.size(); ++i) {
 	    const Candidate &candidate = this->candidates[i];
 	    const bool pointProxy = i < this->finalPointProxies.size() &&
@@ -549,9 +668,14 @@ public:
 	for (int i = 0; i < PHASE_COUNT; ++i)
 	    total += this->phaseMicroseconds[i];
 	bu_log("BObol LoD retained allocator phases candidates=%zu "
+	       "phase=%u sources=%zu/%zu payload=%zu final=%zu "
+	       "upgrades=%zu "
 	       "scan_us=%lld floor_us=%lld baseline_us=%lld "
 	       "marginal_us=%lld publish_us=%lld total_us=%lld wall_us=%lld\n",
 	       this->candidates.size(),
+	       static_cast<unsigned int>(this->phase),
+	       this->sourceCursor, this->sources.size(), this->payloadCursor,
+	       this->finalCursor, this->upgrades.size(),
 	       static_cast<long long>(discovery),
 	       static_cast<long long>(this->phaseMicroseconds[FLOOR]),
 	       static_cast<long long>(this->phaseMicroseconds[BASELINE]),
@@ -651,6 +775,8 @@ private:
 	SoCADAssembly *assembly = NULL;
 	int drawMode = BOBOL_LOD_DRAW_UNKNOWN;
 	std::vector<const BObolViewLodState::CadPayload *> payloads;
+	std::vector<uint32_t> projectionRefreshEntries;
+	bool denseProjectionRefreshRequired = false;
     };
 
     struct ProtectedSet {
@@ -692,20 +818,50 @@ private:
 	    payload->projectedPixelDiameter);
     }
 
-    bool pointProxyEligible(const SourceSnapshot &source,
-	const BObolViewLodState::CadPayload *payload) const
+    void noteUnresolvedViewDependentPayload(SourceSnapshot &source,
+	const BObolViewLodState::CadPayload *payload)
+    {
+	if (this->unresolvedViewDependentPayloadCount != SIZE_MAX)
+	    this->unresolvedViewDependentPayloadCount++;
+	size_t entryIndex = payload ? payload->sourceEntryIndex : SIZE_MAX;
+	const bool storedIndexCurrent = payload && source.source &&
+	    entryIndex != UINT32_MAX &&
+	    payload->sourcePopulationEpoch != 0 &&
+	    payload->sourcePopulationEpoch ==
+		source.source->getCompactPopulationEpoch();
+	if (!storedIndexCurrent && payload && source.source &&
+		payload->sourceInstanceKey.getLength() > 0 &&
+		!source.source->getCompactInstanceIndex(
+		    payload->sourceInstanceKey.getString(), entryIndex))
+	    entryIndex = SIZE_MAX;
+	if (entryIndex <= UINT32_MAX) {
+	    source.projectionRefreshEntries.push_back(
+		static_cast<uint32_t>(entryIndex));
+	    return;
+	}
+	source.denseProjectionRefreshRequired = true;
+    }
+
+    static bool pointProxyEligibleAtThreshold(const SourceSnapshot &source,
+	const BObolViewLodState::CadPayload *payload, float threshold)
     {
 	if (!source.source || !payload || !payload->progressiveMesh ||
 	    !payload->progressiveMesh->isValid() ||
-	    !std::isfinite(this->pointProxyPixelThreshold) ||
-	    this->pointProxyPixelThreshold <= 0.0f ||
+	    !std::isfinite(threshold) || threshold <= 0.0f ||
 	    !std::isfinite(payload->projectedPixelDiameter) ||
 	    payload->projectedPixelDiameter <= 0.0f ||
 	    !payload->projectedBoundsContained ||
 	    payload->visualEmphasis >= 2 || !source.assembly)
 	    return false;
 	return payload->projectedPixelDiameter <=
-	    this->pointProxyPixelThreshold * 0.75f;
+	    threshold * 0.75f;
+    }
+
+    bool pointProxyEligible(const SourceSnapshot &source,
+	const BObolViewLodState::CadPayload *payload) const
+    {
+	return pointProxyEligibleAtThreshold(source, payload,
+	    this->pointProxyPixelThreshold);
     }
 
     bool pointProxyIsPixelExact(const SourceSnapshot &source,
@@ -730,7 +886,7 @@ private:
 	    candidate.mesh.hierarchyCountsAtCut(cut, candidate.hasNormals);
     }
 
-    void discover(const SourceSnapshot &source,
+    void discover(SourceSnapshot &source,
 	const BObolViewLodState::CadPayload *payload)
     {
 	if (!payload || !payload->isValid())
@@ -738,6 +894,10 @@ private:
 	const bool progressive = payload->progressiveMesh &&
 	    payload->progressiveMesh->isValid();
 	const bool exact = payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL;
+	const bool boundedCoverage = progressive &&
+	    bobol_lod_terminal_coverage_is_drawable(
+		payload->presentationLayers, payload->memoryLimited,
+		payload->drawMode, payload->activeCut);
 	/* Exact geometry is view independent and has no allocator-owned cut.  A
 	 * compact source may retire its LoD target inventory after publishing that
 	 * geometry, so no later submission pass exists merely to refresh projection
@@ -745,31 +905,58 @@ private:
 	 * old view/policy stamp here manufactures an empty allocation certificate
 	 * for a populated exact scene and makes stable handoff retry forever.
 	 * Proxies still require current projection evidence because their visual
-	 * error is view dependent. */
-	if (!progressive &&
+	 * error is view dependent.
+	 *
+	 * Price the payload's requested channel, not the source's mutable current
+	 * mode.  Publication and source-mode propagation are separate transactions;
+	 * mixing their currencies can certify a hidden-line frame at wire or shaded
+	 * cost while that exact retained payload is still what the renderer draws. */
+	if ((!progressive || boundedCoverage) &&
 	    (exact || (payload->viewRevision == this->viewRevision() &&
 		payload->policyRevision == this->policyRevision()))) {
 	    this->havePresentedErrorProof =
 		this->havePresentedErrorProof || exact;
 	    const size_t cost = bobol_lod_render_cost_units(
-		payload->counts, source.drawMode, 1);
+		payload->counts, payload->drawMode, 1);
 	    this->fixedCadPresentationCost = cost >
 		    SIZE_MAX - this->fixedCadPresentationCost ? SIZE_MAX :
 		this->fixedCadPresentationCost + cost;
 	    this->fixedCost = cost > SIZE_MAX - this->fixedCost ?
 		SIZE_MAX : this->fixedCost + cost;
-	    this->pixelDemandPresentationCost = cost >
+	    size_t demandedCost = cost;
+	    if (boundedCoverage) {
+		const BObolLodProgressiveMeshSnapshot mesh =
+		    payload->progressiveMesh->snapshot();
+		if (mesh.isValid()) {
+		    const int requestedCut = std::max(mesh.minimumCut(),
+			std::min(payload->requestedCut, mesh.maximumCut()));
+		    const BObolLodCounts counts = payload->projectedCutCounts &&
+			static_cast<size_t>(requestedCut) <
+			    payload->projectedCutCounts->size() ?
+			(*payload->projectedCutCounts)[
+			    static_cast<size_t>(requestedCut)] :
+			mesh.hierarchyCountsAtCut(
+			    requestedCut, payload->hasNormals);
+		    demandedCost = bobol_lod_render_cost_units(
+			counts, payload->drawMode, 1);
+		}
+	    }
+	    this->pixelDemandPresentationCost = demandedCost >
 		    SIZE_MAX - this->pixelDemandPresentationCost ? SIZE_MAX :
-		this->pixelDemandPresentationCost + cost;
+		this->pixelDemandPresentationCost + demandedCost;
 	    return;
 	}
 	if (!progressive || payload->viewRevision != this->viewRevision() ||
-	    payload->policyRevision != this->policyRevision())
+	    payload->policyRevision != this->policyRevision()) {
+	    this->noteUnresolvedViewDependentPayload(source, payload);
 	    return;
+	}
 	const BObolLodProgressiveMeshSnapshot mesh =
 	    payload->progressiveMesh->snapshot();
-	if (!mesh.isValid())
+	if (!mesh.isValid()) {
+	    this->noteUnresolvedViewDependentPayload(source, payload);
 	    return;
+	}
 	const int minimumCut = mesh.minimumCut();
 	const int requestedMaximumCut = std::max(minimumCut,
 	    std::min(payload->requestedCut,
@@ -797,7 +984,7 @@ private:
 	    BObolLodCounts point;
 	    point.pointCount = 1;
 	    const size_t cost = bobol_lod_render_cost_units(
-		point, source.drawMode, 0);
+		point, payload->drawMode, 0);
 	    this->fixedCost = cost > SIZE_MAX - this->fixedCost ?
 		SIZE_MAX : this->fixedCost + cost;
 	    this->pixelDemandPresentationCost = cost >
@@ -806,7 +993,7 @@ private:
 	    FixedPointAllocation fixed;
 	    fixed.payload = payload;
 	    fixed.cut = minimumCut;
-	    fixed.drawMode = source.drawMode;
+	    fixed.drawMode = payload->drawMode;
 	    this->fixedPointAllocations.push_back(std::move(fixed));
 	    return;
 	}
@@ -825,12 +1012,13 @@ private:
 	candidate.mesh = mesh;
 	candidate.minimumCut = minimumCut;
 	candidate.maximumCut = maximumCut;
-	candidate.drawMode = source.drawMode;
+	candidate.drawMode = payload->drawMode;
 	candidate.hasNormals = payload->hasNormals;
 	candidate.projectedPixelDiameter = diameter;
 	candidate.visualFootprint = footprint;
 	candidate.pointProxyError = std::max(footprint, diameter);
-	candidate.pointProxyCost = aggregateProxyCost(payload, source.drawMode);
+	candidate.pointProxyCost = aggregateProxyCost(
+	    payload, payload->drawMode);
 	candidate.targetPixelError = target;
 	candidate.visualEmphasis = bobol_lod_visual_emphasis(
 	    payload->visualEmphasis);
@@ -861,6 +1049,9 @@ private:
 	    candidate.hasInstance;
 	if (candidate.pointProxyEligible)
 	    this->pointProxyCandidateCount++;
+	if (candidate.hasInstance && pointProxyEligibleAtThreshold(source, payload,
+		BObolLodAdmissionPlanner::maximumPointProxyPixelThreshold()))
+	    this->reachablePointProxyCandidateCount++;
 	if (payload->projectedCutCounts &&
 	    payload->projectedCutCountsViewRevision == this->viewRevision() &&
 	    payload->projectedCutCountsPolicyRevision == this->policyRevision() &&
@@ -909,9 +1100,10 @@ private:
 	token ^= token >> 31;
 	this->protectedFloorSignature ^= token;
 	if (candidate.pointProxyEligible) {
-	    this->optionalPointCandidateCost = protectedCost >
-		SIZE_MAX - this->optionalPointCandidateCost ? SIZE_MAX :
-		this->optionalPointCandidateCost + protectedCost;
+	    this->optionalPointCandidateMeshCost = bobol_saturating_size_add(
+		this->optionalPointCandidateMeshCost, protectedCost);
+	    this->optionalPointProxyCost = bobol_saturating_size_add(
+		this->optionalPointProxyCost, candidate.pointProxyCost);
 	    this->optionalPointCandidateSignature ^= token;
 	}
 	this->candidates.push_back(std::move(candidate));
@@ -971,6 +1163,28 @@ private:
 		candidate.instance);
     }
 
+    int canonicalCutAtCost(const Candidate &candidate, int cut,
+	    size_t cost) const
+    {
+	/* PoP cuts can add quantization precision without adding a vertex or
+	 * primitive.  Such a cut consumes no renderer capacity and therefore is
+	 * not a marginal-allocation decision.  Publishing the richest equivalent
+	 * cut gives every numeric budget one canonical population and prevents a
+	 * full budget from stranding free visual refinement behind the marginal
+	 * queue. */
+	int canonical = cut;
+	for (int candidateCut = cut + 1;
+	     candidateCut <= candidate.maximumCut; ++candidateCut) {
+	    const size_t candidateCost = bobol_lod_render_cost_units(
+		this->countsAtCut(candidate, candidateCut),
+		candidate.drawMode, 1);
+	    if (candidateCost != cost)
+		break;
+	    canonical = candidateCut;
+	}
+	return canonical;
+    }
+
     void queueNextUpgrade(size_t candidateIndex)
     {
 	const Candidate &candidate = this->candidates[candidateIndex];
@@ -1012,8 +1226,7 @@ private:
 		candidate.drawMode, 1);
 	    const double nextError = candidate.mesh.projectedErrorAtCut(
 		nextCut, candidate.projectedPixelDiameter);
-	    if (nextCost <= this->finalCosts[candidateIndex] &&
-		!(nextError < currentError))
+	    if (nextCost <= this->finalCosts[candidateIndex])
 		continue;
 	    BObolRetainedMarginalUpgrade upgrade;
 	    upgrade.candidateIndex = candidateIndex;
@@ -1081,6 +1294,8 @@ private:
     bool allowProtectedFloor = false;
     size_t maximumProtectedBudget = 0;
     size_t pointProxyCandidateCount = 0;
+    size_t reachablePointProxyCandidateCount = 0;
+    size_t unresolvedViewDependentPayloadCount = 0;
     float pointProxyPixelThreshold = 0.0f;
     std::vector<SourceSnapshot> sources;
     size_t sourceCursor = 0;
@@ -1093,7 +1308,8 @@ private:
     size_t pointProxyAssemblyCursor = 0;
     size_t fixedCost = 0;
     size_t protectedCandidateCost = 0;
-    size_t optionalPointCandidateCost = 0;
+    size_t optionalPointCandidateMeshCost = 0;
+    size_t optionalPointProxyCost = 0;
     uint64_t protectedFloorSignature = 0;
     uint64_t optionalPointCandidateSignature = 0;
     double maximumPresentedPixelError = 0.0;
@@ -1109,6 +1325,8 @@ private:
     std::vector<bool> finalPointProxies;
     size_t finalCursor = 0;
     size_t finalCost = 0;
+    size_t nextDistinctPresentationBudget = 0;
+    bool nextDistinctPresentationBudgetKnown = false;
     double fixedMaximumPresentedPixelError = 0.0;
     bool fixedPresentedErrorProof = false;
     double maximumNormalizedError = 1.0;
@@ -1142,6 +1360,13 @@ bobol_retained_allocation_advance(
     }
     const BObolRetainedAllocationStatus status =
 	transaction->advance(inputs, sliceMicroseconds);
+    if (status == BOBOL_RETAINED_ALLOCATION_PENDING &&
+	getenv("BOBOL_LOD_TRACE_ALLOCATOR")) {
+	static std::atomic<unsigned int> pendingTraceCount(0);
+	static constexpr unsigned int pendingTraceInterval = 128;
+	if (pendingTraceCount.fetch_add(1) % pendingTraceInterval == 0)
+	    transaction->trace();
+    }
     if (status == BOBOL_RETAINED_ALLOCATION_COMPLETE)
 	transaction->result(result);
     else if (status == BOBOL_RETAINED_ALLOCATION_STALE ||
@@ -1152,6 +1377,13 @@ bobol_retained_allocation_advance(
 	 * later advances retry the same impossible publication forever. */
 	transaction.reset();
     return status;
+}
+
+bool
+bobol_retained_allocation_pending(
+    const std::shared_ptr<BObolRetainedAllocationTransaction> &transaction)
+{
+    return transaction && transaction->pending();
 }
 
 void

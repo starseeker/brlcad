@@ -201,6 +201,33 @@ ApplyResidentResult ==
                     qualityRemaining, scanActive, allocationPending,
                     performanceLimited, constraintWitness>>
 
+\* A residency-drain publication may deliberately preserve the completed
+\* framebuffer.  If it leaves current quality unresolved, it must transfer
+\* ownership to another resident load, coverage scan, or quiet allocation.
+\* Merely labeling the result "retained" cannot consume the only progress
+\* edge.  This is the abstract counterpart of the production retained-result
+\* successor rule.
+ApplyRetainedResidentResult ==
+    /\ workerState = "result"
+    /\ residencyRemaining > 0
+    /\ qualityRemaining > 0
+    /\ residencyRemaining' = residencyRemaining - 1
+    /\ physicalDebtRemaining' =
+           (IF physicalDebtRemaining > 0
+            THEN physicalDebtRemaining - 1
+            ELSE 0)
+    /\ workerState' = "idle"
+    /\ submissionPending' =
+           IF coverageRemaining > 0 \/ residencyRemaining > 1 \/
+              (~inputOpen /\ qualityRemaining > 0)
+           THEN TRUE ELSE FALSE
+    /\ framePending' = FALSE
+    /\ handoffPending' = FALSE
+    /\ UNCHANGED <<profile, inputEpoch, inputOpen, coverageRemaining,
+                    qualityRemaining, scanActive,
+                    allocationPending, performanceLimited,
+                    constraintWitness>>
+
 StartAllocation ==
     /\ submissionPending
     /\ ~inputOpen
@@ -308,6 +335,7 @@ Next ==
     \/ StartResidentLoad
     \/ FinishResidentLoad
     \/ ApplyResidentResult
+    \/ ApplyRetainedResidentResult
     \/ StartAllocation
     \/ FinishAllocation
     \/ CompleteFrame
@@ -324,6 +352,7 @@ Spec ==
     /\ WF_vars(StartResidentLoad)
     /\ WF_vars(FinishResidentLoad)
     /\ WF_vars(ApplyResidentResult)
+    /\ WF_vars(ApplyRetainedResidentResult)
     /\ WF_vars(StartAllocation)
     /\ WF_vars(FinishAllocation)
     /\ WF_vars(CompleteFrame)
@@ -339,6 +368,15 @@ SubmissionCanProgress ==
 \* always have a legal next owner-thread action in the current state.
 PendingSubmissionHasWitness ==
     submissionPending => SubmissionCanProgress
+
+\* Once input has closed, unresolved quality cannot exist at the quiet owner
+\* boundary without the allocation cursor which can consume it.  This is the
+\* reverse direction omitted by a work-only ownership map and is what rejects
+\* an ownerless 99-percent terminal stall.
+QuietQualityDebtHasOwner ==
+    (~inputOpen /\ coverageRemaining = 0 /\ residencyRemaining = 0 /\
+     qualityRemaining > 0 /\ ~scanActive /\ workerState = "idle" /\
+     ~allocationPending /\ ~framePending) => submissionPending
 
 \* Progress ownership is level-triggered but exclusive.  A transition may
 \* leave more work desired; it must not assert a new submission cursor while

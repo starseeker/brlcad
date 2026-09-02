@@ -331,9 +331,12 @@ memory for image fidelity without exposing PoP implementation details:
 * `view lod fps [interactive [stable]]` reports or sets the minimum frame-rate
   targets used by the adaptive scene budget.  One value sets both targets; two
   values permit a responsive motion target and a slower settled-view target.
-  The defaults are 60 FPS while interacting and 20 FPS while progressively
+  The defaults are 20 FPS while interacting and 10 FPS while progressively
   refining a stable view.  These are control targets, not guarantees: a single
-  unavoidable draw may still exceed the available frame time.
+  unavoidable draw may still exceed the available frame time.  They are also
+  distinct from hard presentation deadlines.  A quiet high-fidelity frame is
+  retained without repeated rendering, while bounded traversal and
+  cancellation points preserve prompt input recovery when interaction resumes.
 * `view lod memory [auto|available_percent]` reports or sets the process-shared
   resident PoP mesh ceiling.  An explicit percentage is applied to a snapshot
   of memory currently available to the operating system.  The query reports

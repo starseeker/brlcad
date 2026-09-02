@@ -1428,6 +1428,26 @@ ged_obol_collect_view_database_sources(
     return 1;
 }
 
+static int
+ged_obol_request_exact_selection_presentation(
+    struct ged_view_context *UNUSED(view_ctx),
+    BObolViewController *controller, void *UNUSED(userdata))
+{
+    if (controller)
+	controller->requestExactCadPresentationRender(
+	    "ged-selection-presentation");
+    return 1;
+}
+
+static void
+ged_obol_selection_presentation_request(struct ged *gedp, int changed)
+{
+    if (!gedp || changed <= 0)
+	return;
+    ged_bobol_view_controllers_foreach(gedp,
+	ged_obol_request_exact_selection_presentation, NULL);
+}
+
 static bool
 ged_obol_path_in_selected_set(const char *candidate,
 	const char *const *paths, size_t path_count)
@@ -1499,6 +1519,7 @@ ged_draw_obol_database_sources_sync_selected_paths(
 	if (changed > 0)
 	    applied++;
     }
+    ged_obol_selection_presentation_request(gedp, applied);
     return applied;
 }
 
@@ -1616,6 +1637,7 @@ ged_draw_obol_database_sources_apply_selection_delta(
 	    }
 	}
     }
+    ged_obol_selection_presentation_request(gedp, applied);
     return applied;
 }
 

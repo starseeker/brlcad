@@ -4148,7 +4148,7 @@ ged_draw_obol_view_lod_policy_changed(struct ged *gedp, struct ged_view_context 
 	    (void)scene->realizePending();
     }
 
-    view_controller->requestRender("view-lod-policy");
+    view_controller->requestLodCapacityRender("view-lod-policy");
     return changed;
 }
 
@@ -4264,7 +4264,7 @@ ged_draw_obol_lod_service_start(struct ged *gedp,
 	return 0;
 
     controller->setLodAutoSubmit(TRUE);
-    controller->requestRender("lod-service-start");
+    controller->requestLodCapacityRender("lod-service-start");
     return 1;
 }
 
@@ -4278,7 +4278,7 @@ ged_draw_obol_lod_service_stop(struct ged *gedp,
 	return 0;
 
     controller->stopManagedLodService();
-    controller->requestRender("lod-service-stop");
+    controller->requestLodCapacityRender("lod-service-stop");
     return 1;
 }
 
@@ -5957,7 +5957,7 @@ ged_draw_obol_database_sources_redraw(struct ged *gedp,
 		(void)scene->realizePending();
 	    BObolViewController *controller = ged_draw_obol_controller(gedp);
 	    if (controller && source_count > 0)
-		controller->requestRender(needs_realization ?
+		controller->requestLodCapacityRender(needs_realization ?
 		    "ged-redraw-realized" : "ged-redraw-retained");
 	    return source_count > 0 ? 1 : 0;
 	}
@@ -5991,7 +5991,7 @@ ged_draw_obol_database_sources_redraw(struct ged *gedp,
 
     BObolViewController *controller = ged_draw_obol_controller(gedp);
     if (controller)
-	controller->requestRender(needs_realization ?
+	controller->requestLodCapacityRender(needs_realization ?
 	    "ged-redraw-realized" : "ged-redraw-retained");
     return 1;
 }
@@ -8974,7 +8974,7 @@ ged_obol_database_source_expand_children_impl(
 	BObolViewController *controller = ged_bobol_view_controller(view_ctx);
 	if (controller) {
 	    controller->clearViewLodState();
-	    controller->requestRender("database-source-expand");
+	    controller->requestLodCapacityRender("database-source-expand");
 	}
     }
 
@@ -10265,6 +10265,29 @@ ged_obol_deferred_streams_pending(
     return false;
 }
 
+static void
+ged_obol_source_preparation_progress(
+    const std::shared_ptr<ged_obol_deferred_realization_job> &job,
+    uint64_t &completed, uint64_t &total)
+{
+    if (!job)
+	return;
+    for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
+	 job->items) {
+	if (!item || !item->stream)
+	    continue;
+	size_t itemCompleted = 0;
+	size_t itemTotal = 0;
+	item->stream->getPreparationWorkCount(itemCompleted, itemTotal);
+	const uint64_t completedValue = static_cast<uint64_t>(itemCompleted);
+	const uint64_t totalValue = static_cast<uint64_t>(itemTotal);
+	completed = completedValue > UINT64_MAX - completed ? UINT64_MAX :
+	    completed + completedValue;
+	total = totalValue > UINT64_MAX - total ? UINT64_MAX :
+	    total + totalValue;
+    }
+}
+
 int
 ged_obol_progressive_advance_provider(
     BObolViewController *controller,
@@ -10402,7 +10425,17 @@ ged_obol_progressive_advance_provider(
     if (stream_more)
 	has_pending_job = 1;
 
+    for (const std::shared_ptr<ged_obol_deferred_realization_job> &job :
+	 data->pending_jobs)
+	ged_obol_source_preparation_progress(job,
+	    local_status.sourcePreparationCompletedUnits,
+	    local_status.sourcePreparationTotalUnits);
+    ged_obol_source_preparation_progress(data->deferred_job,
+	local_status.sourcePreparationCompletedUnits,
+	local_status.sourcePreparationTotalUnits);
+
     local_status.changed = refined > 0 ? 1 : 0;
+    local_status.sourceAvailabilityChanged = refined > 0 ? 1 : 0;
     local_status.hasMore = has_pending_job;
     local_status.inFlight = has_pending_job ? 1 : 0;
     if (has_pending_job && getenv("BOBOL_DRAW_TIMING_VERBOSE")) {
@@ -11964,7 +11997,7 @@ ged_obol_apply_redraw_transaction(
     }
     BObolViewController *controller = ged_draw_obol_controller(gedp);
     if (controller)
-	controller->requestRender("ged-redraw-transaction");
+	controller->requestLodCapacityRender("ged-redraw-transaction");
     return 1;
 }
 
@@ -12698,7 +12731,7 @@ ged_obol_progressive_autoview_apply_exact_proxy_bounds(
 	if (!ged_obol_progressive_autoview_apply(data))
 	return;
     controller->syncCameraFromViewContext(view_ctx, TRUE);
-    controller->requestRender("ged-exact-root-proxy-autoview");
+    controller->requestLodCapacityRender("ged-exact-root-proxy-autoview");
 }
 
 static void

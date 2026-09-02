@@ -88,11 +88,153 @@ qged_test_event_view(QgEdApp &app, const QgTestEvent &event)
     return app.w ? app.w->CurrentDisplay() : nullptr;
 }
 
-static BObolViewController *
-qged_test_event_controller(QgEdApp &app, const QgTestEvent &event)
+BObolViewController *
+qged_progressive_event_controller(QgEdApp &app, const QgTestEvent &event)
 {
     QgView *view = qged_test_event_view(app, event);
     return view ? view->obolViewController() : nullptr;
+}
+
+void
+qged_append_progressive_control_diagnostics(
+    QJsonObject &sample, const BObolViewController &controller,
+    const BObolLodConvergenceStatus &status)
+{
+    sample.insert(QStringLiteral("controller_available"), true);
+    sample.insert(QStringLiteral("lod_control_fact_mask"),
+	static_cast<qint64>(status.controlFactMask));
+    sample.insert(QStringLiteral("lod_control_obligation_mask"),
+	static_cast<qint64>(status.controlObligationMask));
+    sample.insert(QStringLiteral("lod_control_owner"),
+	static_cast<qint64>(status.controlOwner));
+    sample.insert(QStringLiteral("lod_control_violation_mask"),
+	static_cast<qint64>(status.controlViolationMask));
+    sample.insert(QStringLiteral("lod_control_presentation_witness_mask"),
+	static_cast<qint64>(status.controlPresentationWitnessMask));
+    const BObolHostWorkSnapshot hostWork =
+	controller.getHostWorkSnapshot();
+    sample.insert(QStringLiteral("host_work_flags"),
+	static_cast<qint64>(hostWork.flags));
+    sample.insert(QStringLiteral("lod_inventory_revision"),
+	static_cast<qint64>(status.inventoryRevision));
+    sample.insert(QStringLiteral("lod_availability_revision"),
+	static_cast<qint64>(status.availabilityRevision));
+    sample.insert(QStringLiteral("lod_visibility_revision"),
+	static_cast<qint64>(status.visibilityRevision));
+    sample.insert(QStringLiteral("lod_control_view_revision"),
+	static_cast<qint64>(status.viewRevision));
+    sample.insert(QStringLiteral("lod_control_policy_revision"),
+	static_cast<qint64>(status.policyRevision));
+    sample.insert(QStringLiteral("lod_capacity_revision"),
+	static_cast<qint64>(status.capacityRevision));
+    sample.insert(QStringLiteral("lod_cad_revision"),
+	static_cast<qint64>(status.cadRevision));
+    sample.insert(QStringLiteral("lod_resident_demand_revision"),
+	static_cast<qint64>(status.residentDemandRevision));
+    sample.insert(QStringLiteral("lod_view_revision"),
+	static_cast<qint64>(controller.getLodViewRevision()));
+    sample.insert(QStringLiteral("lod_policy_revision"),
+	static_cast<qint64>(controller.getLodPolicyRevision()));
+    sample.insert(QStringLiteral("lod_allocation_plan_serial"),
+	static_cast<qint64>(status.currentAllocationPlanSerial));
+    sample.insert(QStringLiteral("lod_presentation_transaction_serial"),
+	static_cast<qint64>(status.presentationTransactionSerial));
+    sample.insert(QStringLiteral("lod_presentation_required_render_serial"),
+	static_cast<qint64>(status.presentationRequiredRenderSerial));
+    sample.insert(QStringLiteral("lod_control_presented_frame_serial"),
+	static_cast<qint64>(status.presentedFrameSerial));
+    sample.insert(QStringLiteral("lod_convergence_phase"), status.phase);
+    sample.insert(QStringLiteral("lod_convergence_outcome"), status.outcome);
+    sample.insert(QStringLiteral("lod_convergence_terminal"),
+	status.terminal ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_view_ready"),
+	status.viewReady ? true : false);
+    sample.insert(QStringLiteral("lod_interactive"),
+	controller.isLodInteractionActive() ? true : false);
+
+    /* These counters are observational finite-progress witnesses.  Serial
+     * clocks alone do not prove convergence: a defective controller can keep
+     * presenting equivalent frames forever. */
+    sample.insert(QStringLiteral("lod_capacity_search_phase"),
+	status.capacitySearchPhase);
+    sample.insert(QStringLiteral("lod_capacity_search_goal"),
+	status.capacitySearchGoal);
+    sample.insert(QStringLiteral("lod_capacity_search_samples_remaining"),
+	static_cast<qint64>(status.capacitySearchSamplesRemaining));
+    sample.insert(QStringLiteral("lod_capacity_search_measured_candidates"),
+	static_cast<qint64>(status.capacitySearchMeasuredCandidates));
+    sample.insert(QStringLiteral("lod_capacity_search_total_measured_candidates"),
+	static_cast<qint64>(status.capacitySearchTotalMeasuredCandidates));
+    sample.insert(QStringLiteral("lod_capacity_search_candidate_limit"),
+	static_cast<qint64>(status.capacitySearchCandidateLimit));
+    sample.insert(QStringLiteral("lod_capacity_search_maximum_candidates"),
+	static_cast<qint64>(status.capacitySearchMaximumCandidates));
+    sample.insert(QStringLiteral("lod_capacity_search_sample_limit"),
+	static_cast<qint64>(status.capacitySearchSampleLimit));
+    sample.insert(QStringLiteral("lod_capacity_search_completed_units"),
+	static_cast<qint64>(status.capacitySearchCompletedUnits));
+    sample.insert(QStringLiteral("lod_capacity_search_total_units"),
+	static_cast<qint64>(status.capacitySearchTotalUnits));
+    sample.insert(QStringLiteral("lod_submission_source_index"),
+	static_cast<qint64>(status.submissionSourceIndex));
+    sample.insert(QStringLiteral("lod_submission_entry_offset"),
+	static_cast<qint64>(status.submissionEntryOffset));
+    sample.insert(QStringLiteral("lod_convergence_expected_leaves"),
+	static_cast<qint64>(status.expectedLeafCount));
+    sample.insert(QStringLiteral("lod_convergence_available_leaves"),
+	static_cast<qint64>(status.availableLeafCount));
+    sample.insert(QStringLiteral("lod_convergence_satisfied_payloads"),
+	static_cast<qint64>(status.satisfiedPayloadCount));
+    sample.insert(QStringLiteral("lod_convergence_pending_tasks"),
+	static_cast<qint64>(status.pendingTasks));
+    sample.insert(QStringLiteral("lod_convergence_in_flight"),
+	static_cast<qint64>(status.inFlight));
+    sample.insert(QStringLiteral("lod_convergence_queued_results"),
+	static_cast<qint64>(status.queuedResults));
+    sample.insert(QStringLiteral("lod_convergence_source_preparation_providers"),
+	static_cast<qint64>(status.sourcePreparationProviderCount));
+    sample.insert(QStringLiteral("lod_source_preparation_completed_units"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.sourcePreparationCompletedUnits,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_source_preparation_total_units"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.sourcePreparationTotalUnits,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_renderer_preparation_target_signature"),
+	static_cast<qint64>(status.rendererPreparationTargetSignature));
+    sample.insert(QStringLiteral("lod_renderer_preparation_total_units"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.rendererPreparationTotalUnits,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_renderer_preparation_completed_units"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.rendererPreparationCompletedUnits,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_renderer_preparation_remaining_units"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.rendererPreparationRemainingUnits,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_renderer_preparation_reserved_bytes"),
+	static_cast<qint64>(std::min<uint64_t>(
+	    status.rendererPreparationReservedBytes,
+	    static_cast<uint64_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_renderer_preparation_target_count"),
+	static_cast<qint64>(status.rendererPreparationTargetCount));
+    sample.insert(QStringLiteral("lod_renderer_preparation_preparing_targets"),
+	static_cast<qint64>(status.rendererPreparationPreparingTargetCount));
+    sample.insert(QStringLiteral("lod_renderer_preparation_constrained_targets"),
+	static_cast<qint64>(status.rendererPreparationConstrainedTargetCount));
+    sample.insert(QStringLiteral("lod_renderer_preparation_failed_targets"),
+	static_cast<qint64>(status.rendererPreparationFailedTargetCount));
+    sample.insert(QStringLiteral("lod_renderer_preparation_invalid_targets"),
+	static_cast<qint64>(status.rendererPreparationInvalidTargetCount));
+    sample.insert(QStringLiteral("lod_convergence_compactions"),
+	static_cast<qint64>(status.residentCompactionCount));
+    sample.insert(QStringLiteral("lod_convergence_compaction_candidates"),
+	static_cast<qint64>(status.residentCompactionCandidateCount));
+    sample.insert(QStringLiteral("lod_convergence_fraction"),
+	static_cast<double>(status.fraction));
 }
 
 QJsonObject
@@ -361,7 +503,7 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     }
 
     BObolViewController *controller =
-	qged_test_event_controller(app, event);
+	qged_progressive_event_controller(app, event);
     if (!controller) {
 	sample.insert(QStringLiteral("controller_available"), false);
 	return sample;
@@ -426,6 +568,16 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    static_cast<double>(position[1]));
 	sample.insert(QStringLiteral("camera_position_z"),
 	    static_cast<double>(position[2]));
+	SbVec3f cameraForward;
+	orientation.multVec(SbVec3f(0.0f, 0.0f, -1.0f), cameraForward);
+	const SbVec3f cameraTarget = position +
+	    cameraForward * camera->focalDistance.getValue();
+	sample.insert(QStringLiteral("camera_target_x"),
+	    static_cast<double>(cameraTarget[0]));
+	sample.insert(QStringLiteral("camera_target_y"),
+	    static_cast<double>(cameraTarget[1]));
+	sample.insert(QStringLiteral("camera_target_z"),
+	    static_cast<double>(cameraTarget[2]));
 	sample.insert(QStringLiteral("camera_focal_distance"),
 	    static_cast<double>(camera->focalDistance.getValue()));
 	sample.insert(QStringLiteral("camera_near_distance"),
@@ -554,8 +706,14 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<double>(
 	    controller->getLastPresentationSyncTimeNanoseconds()) /
 	    1000000.0);
+    const BObolHostWorkSnapshot hostWork =
+	controller->getHostWorkSnapshot();
+    sample.insert(QStringLiteral("host_work_flags"),
+	static_cast<qint64>(hostWork.flags));
     sample.insert(QStringLiteral("render_requested"),
-	controller->isRenderRequested() ? true : false);
+	hostWork.renderPending());
+    sample.insert(QStringLiteral("render_capacity_sample_requested"),
+	hostWork.capacitySampleRequested());
     sample.insert(QStringLiteral("render_reason"),
 	QString::fromLocal8Bit(controller->getRenderReason().getString()));
     sample.insert(QStringLiteral("progressive_pending"),
@@ -566,10 +724,6 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	controller->hasPendingLodSubmissions() ? true : false);
     sample.insert(QStringLiteral("lod_refinement_frame_pending"),
 	controller->hasPendingLodRefinementFrame() ? true : false);
-    sample.insert(QStringLiteral("lod_view_revision"),
-	static_cast<qint64>(controller->getLodViewRevision()));
-    sample.insert(QStringLiteral("lod_policy_revision"),
-	static_cast<qint64>(controller->getLodPolicyRevision()));
     sample.insert(QStringLiteral("lod_interactive"),
 	controller->isLodInteractionActive() ? true : false);
     sample.insert(QStringLiteral("lod_gesture_active"),
@@ -618,48 +772,16 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<qint64>(controller->getActiveLodCadPayloadCount()));
     BObolLodConvergenceStatus convergence;
     controller->getLodConvergenceStatus(convergence);
-    sample.insert(QStringLiteral("lod_convergence_phase"),
-	convergence.phase);
+    qged_append_progressive_control_diagnostics(
+	sample, *controller, convergence);
     sample.insert(QStringLiteral("lod_view_quality_history_entries"),
 	static_cast<qint64>(convergence.viewQualityHistoryEntryCount));
     sample.insert(QStringLiteral("lod_view_quality_history_remembers"),
 	static_cast<qint64>(convergence.viewQualityHistoryRememberCount));
     sample.insert(QStringLiteral("lod_view_quality_history_recalls"),
 	static_cast<qint64>(convergence.viewQualityHistoryRecallCount));
-    sample.insert(QStringLiteral("lod_convergence_fraction"),
-	static_cast<double>(convergence.fraction));
-    sample.insert(QStringLiteral("lod_convergence_outcome"),
-	static_cast<qint64>(convergence.outcome));
-    sample.insert(QStringLiteral("lod_control_obligation_mask"),
-	static_cast<qint64>(convergence.controlObligationMask));
-    sample.insert(QStringLiteral("lod_control_owner"),
-	static_cast<qint64>(convergence.controlOwner));
-    sample.insert(QStringLiteral("lod_control_violation_mask"),
-	static_cast<qint64>(convergence.controlViolationMask));
     sample.insert(QStringLiteral("lod_convergence_constraint_evidence_mask"),
 	static_cast<qint64>(convergence.constraintEvidenceMask));
-    sample.insert(QStringLiteral("lod_inventory_revision"),
-	static_cast<qint64>(convergence.inventoryRevision));
-    sample.insert(QStringLiteral("lod_availability_revision"),
-	static_cast<qint64>(convergence.availabilityRevision));
-    sample.insert(QStringLiteral("lod_control_view_revision"),
-	static_cast<qint64>(convergence.viewRevision));
-    sample.insert(QStringLiteral("lod_control_policy_revision"),
-	static_cast<qint64>(convergence.policyRevision));
-    sample.insert(QStringLiteral("lod_capacity_revision"),
-	static_cast<qint64>(convergence.capacityRevision));
-    sample.insert(QStringLiteral("lod_capacity_search_phase"),
-	convergence.capacitySearchPhase);
-    sample.insert(QStringLiteral("lod_capacity_search_goal"),
-	convergence.capacitySearchGoal);
-    sample.insert(QStringLiteral("lod_capacity_search_samples_remaining"),
-	static_cast<qint64>(convergence.capacitySearchSamplesRemaining));
-    sample.insert(QStringLiteral("lod_capacity_search_measured_candidates"),
-	static_cast<qint64>(convergence.capacitySearchMeasuredCandidates));
-    sample.insert(QStringLiteral("lod_capacity_search_total_measured_candidates"),
-	static_cast<qint64>(convergence.capacitySearchTotalMeasuredCandidates));
-    sample.insert(QStringLiteral("lod_capacity_search_candidate_limit"),
-	static_cast<qint64>(convergence.capacitySearchCandidateLimit));
     sample.insert(QStringLiteral("lod_scene_selected_presentation_cost"),
 	static_cast<qint64>(convergence.selectedPresentationCost));
     sample.insert(QStringLiteral("lod_scene_certified_presentation_budget"),
@@ -674,6 +796,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	static_cast<qint64>(convergence.maximumProtectedPresentationBudget));
     sample.insert(QStringLiteral("lod_scene_point_proxy_candidates"),
 	static_cast<qint64>(convergence.pointProxyCandidateCount));
+    sample.insert(QStringLiteral("lod_scene_reachable_point_proxy_candidates"),
+	static_cast<qint64>(convergence.reachablePointProxyCandidateCount));
     sample.insert(QStringLiteral("lod_scene_selected_point_proxies"),
 	static_cast<qint64>(convergence.selectedPointProxyCount));
     sample.insert(QStringLiteral("lod_scene_prominent_candidates"),
@@ -688,36 +812,25 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	convergence.visualImportanceDebt);
     sample.insert(QStringLiteral("lod_allocation_certificate_plan_serial"),
 	static_cast<qint64>(convergence.committedAllocationPlanSerial));
-    sample.insert(QStringLiteral("lod_allocation_plan_serial"),
-	static_cast<qint64>(convergence.currentAllocationPlanSerial));
-    sample.insert(QStringLiteral("lod_presentation_transaction_serial"),
-	static_cast<qint64>(convergence.presentationTransactionSerial));
-    sample.insert(QStringLiteral("lod_presentation_required_render_serial"),
-	static_cast<qint64>(convergence.presentationRequiredRenderSerial));
-    sample.insert(QStringLiteral("lod_control_presented_frame_serial"),
-	static_cast<qint64>(convergence.presentedFrameSerial));
-    sample.insert(QStringLiteral("lod_convergence_terminal"),
-	convergence.terminal ? true : false);
     sample.insert(QStringLiteral("lod_convergence_terminal_error"),
 	convergence.terminalError ? true : false);
-    sample.insert(QStringLiteral("lod_convergence_view_ready"),
-	convergence.viewReady ? true : false);
     sample.insert(QStringLiteral("lod_convergence_has_state"),
 	convergence.hasLodState ? true : false);
     sample.insert(QStringLiteral("lod_convergence_background_pending"),
 	convergence.backgroundPending ? true : false);
     sample.insert(QStringLiteral("lod_convergence_performance_limited"),
 	convergence.performanceLimited ? true : false);
-    sample.insert(QStringLiteral("lod_convergence_expected_leaves"),
-	static_cast<qint64>(convergence.expectedLeafCount));
-    sample.insert(QStringLiteral("lod_convergence_available_leaves"),
-	static_cast<qint64>(convergence.availableLeafCount));
     sample.insert(QStringLiteral("lod_convergence_visible_targets"),
 	static_cast<qint64>(convergence.visibleTargetCount));
     sample.insert(QStringLiteral("lod_convergence_active_payloads"),
 	static_cast<qint64>(convergence.activePayloadCount));
-    sample.insert(QStringLiteral("lod_convergence_satisfied_payloads"),
-	static_cast<qint64>(convergence.satisfiedPayloadCount));
+    sample.insert(QStringLiteral(
+	"lod_convergence_presented_primitive_count_valid"),
+	convergence.presentedPrimitiveCountValid ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_presented_primitives"),
+	static_cast<qint64>(std::min<size_t>(
+	    convergence.presentedPrimitiveCount,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
     sample.insert(QStringLiteral("lod_convergence_presented_subpixel_occurrences"),
 	static_cast<qint64>(std::min<size_t>(
 	    convergence.presentedSubpixelOccurrenceCount,
@@ -729,6 +842,10 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     sample.insert(QStringLiteral("lod_convergence_terminal_occurrence_failures"),
 	static_cast<qint64>(std::min<size_t>(
 	    convergence.terminalOccurrenceFailureCount,
+	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
+    sample.insert(QStringLiteral("lod_convergence_terminal_proxy_occurrences"),
+	static_cast<qint64>(std::min<size_t>(
+	    convergence.terminalProxyOccurrenceCount,
 	    static_cast<size_t>(std::numeric_limits<qint64>::max()))));
     sample.insert(QStringLiteral("lod_convergence_resident_mesh_bytes"),
 	static_cast<qint64>(convergence.residentMeshBytes));
@@ -746,10 +863,6 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	convergence.refinementFramePending ? true : false);
     sample.insert(QStringLiteral("lod_active_generation"),
 	static_cast<qint64>(convergence.activeGeneration));
-    sample.insert(QStringLiteral("lod_submission_source_index"),
-	static_cast<qint64>(convergence.submissionSourceIndex));
-    sample.insert(QStringLiteral("lod_submission_entry_offset"),
-	static_cast<qint64>(convergence.submissionEntryOffset));
     sample.insert(QStringLiteral("lod_convergence_budget_calibration_pending"),
 	convergence.budgetCalibrationPending ? true : false);
     sample.insert(QStringLiteral(
@@ -772,20 +885,17 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	convergence.residentGrowthReallocationPending ? true : false);
     sample.insert(QStringLiteral("lod_convergence_publication_frame_pending"),
 	convergence.publicationFramePending ? true : false);
+    sample.insert(QStringLiteral(
+	"lod_convergence_semantic_presentation_frame_pending"),
+	convergence.semanticPresentationFramePending ? true : false);
     sample.insert(QStringLiteral("lod_convergence_source_preparation_pending"),
 	convergence.sourcePreparationPending ? true : false);
-    sample.insert(QStringLiteral("lod_convergence_source_preparation_providers"),
-	static_cast<qint64>(convergence.sourcePreparationProviderCount));
     sample.insert(QStringLiteral("lod_convergence_active_working_set_bytes"),
 	static_cast<qint64>(convergence.activeWorkingSetBytes));
     sample.insert(QStringLiteral("lod_convergence_peak_working_set_bytes"),
 	static_cast<qint64>(convergence.peakWorkingSetBytes));
-    sample.insert(QStringLiteral("lod_convergence_compactions"),
-	static_cast<qint64>(convergence.residentCompactionCount));
     sample.insert(QStringLiteral("lod_convergence_compaction_plan_revision"),
 	static_cast<qint64>(convergence.residentCompactionPlanRevision));
-    sample.insert(QStringLiteral("lod_convergence_compaction_candidates"),
-	static_cast<qint64>(convergence.residentCompactionCandidateCount));
     sample.insert(QStringLiteral("lod_convergence_compaction_plan_current"),
 	convergence.residentCompactionPlanCurrent ? true : false);
     sample.insert(QStringLiteral("lod_gpu_tracked_buffer_bytes"),
@@ -890,12 +1000,18 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	std::string sourceName;
 	std::string occurrenceKey;
 	int activeCut;
+	int presentationCut;
 	int residentCut;
 	int requestedCut;
 	double diameter;
 	double area;
 	double perimeter;
+	double footprint;
 	double targetError;
+	double projectedError;
+	double normalizedError;
+	bool prominent;
+	bool floorViolation;
 	uint64_t faces;
 	uint64_t points;
     };
@@ -944,6 +1060,7 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	viewLodState->maximumResidentCadProgressiveRequestedCut() : -1;
     uint64_t activeProgressiveCadOccurrenceHash = 0;
     QJsonArray supersededFallbackPaths;
+    QJsonArray activeStructuralFallbackPaths;
     QJsonArray databaseSourceBounds;
     QJsonArray compactPlanningBounds;
     QJsonArray compactMissingPayloadBounds;
@@ -1129,25 +1246,6 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		activeFullDetailCadPayloads++;
 	    if (!payload->progressiveMesh)
 		continue;
-	    if (collectDeepLodDiagnostics &&
-		cadProgressivePayloadSamples.size() < 16) {
-		CadProgressivePayloadSample progressiveSample;
-		progressiveSample.sourcePath = payload->sourcePath.getString();
-		progressiveSample.sourceName = payload->sourceName.getString();
-		progressiveSample.occurrenceKey =
-		    payload->sourceInstanceKey.getString();
-		progressiveSample.activeCut = payload->activeCut;
-		progressiveSample.residentCut = payload->residentCut;
-		progressiveSample.requestedCut = payload->requestedCut;
-		progressiveSample.diameter = payload->projectedPixelDiameter;
-		progressiveSample.area = payload->projectedPixelArea;
-		progressiveSample.perimeter = payload->projectedPixelPerimeter;
-		progressiveSample.targetError = payload->targetPixelError;
-		progressiveSample.faces = payload->counts.faceCount;
-		progressiveSample.points = payload->counts.pointCount;
-		cadProgressivePayloadSamples.push_back(
-		    std::move(progressiveSample));
-	    }
 	    /*
 	     * Keep this order-independent so the unordered payload store does
 	     * not perturb reports.  Hash each key independently and combine the
@@ -1224,6 +1322,31 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 		    BObolViewLodState::ProminentFootprintPixels;
 		const bool floorViolation = projectedError >
 		    BObolViewLodState::prominentMaximumProjectedError(target);
+		if (collectDeepLodDiagnostics &&
+		    cadProgressivePayloadSamples.size() < 16) {
+		    CadProgressivePayloadSample progressiveSample;
+		    progressiveSample.sourcePath = payload->sourcePath.getString();
+		    progressiveSample.sourceName = payload->sourceName.getString();
+		    progressiveSample.occurrenceKey =
+			payload->sourceInstanceKey.getString();
+		    progressiveSample.activeCut = payload->activeCut;
+		    progressiveSample.presentationCut = presentationCut;
+		    progressiveSample.residentCut = payload->residentCut;
+		    progressiveSample.requestedCut = payload->requestedCut;
+		    progressiveSample.diameter = diameter;
+		    progressiveSample.area = area;
+		    progressiveSample.perimeter = perimeter;
+		    progressiveSample.footprint = footprint;
+		    progressiveSample.targetError = target;
+		    progressiveSample.projectedError = projectedError;
+		    progressiveSample.normalizedError = normalizedError;
+		    progressiveSample.prominent = prominent;
+		    progressiveSample.floorViolation = floorViolation;
+		    progressiveSample.faces = payload->counts.faceCount;
+		    progressiveSample.points = payload->counts.pointCount;
+		    cadProgressivePayloadSamples.push_back(
+			std::move(progressiveSample));
+		}
 		prominentCadPayloads += prominent ? 1 : 0;
 		cadQualityFloorViolations += floorViolation ? 1 : 0;
 		prominentCadQualityFloorViolations +=
@@ -1393,6 +1516,14 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 			    QString::fromStdString(key));
 			missingSample.insert(QStringLiteral("eligible"),
 			    lodTarget);
+			missingSample.insert(QStringLiteral("lod_backed"),
+			    planning.lodBacked ? true : false);
+			missingSample.insert(
+			    QStringLiteral("source_request_valid"),
+			    planning.sourceMeshRequestValid ? true : false);
+			missingSample.insert(QStringLiteral("geometry_kind"),
+			    QString::fromLocal8Bit(
+				summary.geometryKind.getString()));
 			if (!worldBounds.isEmpty()) {
 			    const SbVec3f worldMinimum =
 				worldBounds.getMin();
@@ -1432,8 +1563,14 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    supersededFallbackPresentations +=
 		source->getCompactViewLodSupersededFallbackCount(viewLodState,
 		&supersededPaths);
+	    std::vector<SbString> activeFallbacks;
 	    activeStructuralFallbackPresentations +=
-		source->getCompactViewLodActiveFallbackCount(viewLodState);
+		source->getCompactViewLodActiveFallbackCount(viewLodState,
+		    collectDeepLodDiagnostics ? &activeFallbacks : NULL);
+	    for (const SbString &path : activeFallbacks)
+		if (activeStructuralFallbackPaths.size() < 32)
+		    activeStructuralFallbackPaths.append(
+			QString::fromLocal8Bit(path.getString()));
 	    for (const SbString &path : supersededPaths)
 		if (supersededFallbackPaths.size() < 16)
 		    supersededFallbackPaths.append(
@@ -1464,6 +1601,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
     sample.insert(QStringLiteral("superseded_fallback_paths"),
 	supersededFallbackPaths);
     if (collectDeepLodDiagnostics) {
+	sample.insert(QStringLiteral("active_structural_fallback_paths"),
+	    activeStructuralFallbackPaths);
 	sample.insert(QStringLiteral("database_source_bounds"),
 	    databaseSourceBounds);
 	sample.insert(QStringLiteral("compact_planning_bounds"),
@@ -1545,6 +1684,8 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    item.insert(QStringLiteral("occurrence_key"),
 		QString::fromStdString(payload.occurrenceKey));
 	    item.insert(QStringLiteral("active_cut"), payload.activeCut);
+	    item.insert(QStringLiteral("presentation_cut"),
+		payload.presentationCut);
 	    item.insert(QStringLiteral("resident_cut"), payload.residentCut);
 	    item.insert(QStringLiteral("requested_cut"), payload.requestedCut);
 	    item.insert(QStringLiteral("projected_diameter_pixels"),
@@ -1552,8 +1693,17 @@ qged_collect_progressive_sample(QgEdApp &app, int eventIndex,
 	    item.insert(QStringLiteral("projected_area_pixels"), payload.area);
 	    item.insert(QStringLiteral("projected_perimeter_pixels"),
 		payload.perimeter);
+	    item.insert(QStringLiteral("visual_footprint_pixels"),
+		payload.footprint);
 	    item.insert(QStringLiteral("target_error_pixels"),
 		payload.targetError);
+	    item.insert(QStringLiteral("projected_error_pixels"),
+		payload.projectedError);
+	    item.insert(QStringLiteral("normalized_error"),
+		payload.normalizedError);
+	    item.insert(QStringLiteral("prominent"), payload.prominent);
+	    item.insert(QStringLiteral("quality_floor_violation"),
+		payload.floorViolation);
 	    item.insert(QStringLiteral("faces"),
 		static_cast<qint64>(std::min<uint64_t>(payload.faces,
 		    static_cast<uint64_t>(

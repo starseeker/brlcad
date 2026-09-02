@@ -100,7 +100,18 @@ struct BOBOL_EXPORT BObolProgressiveStatus {
     size_t inFlight;
     size_t queuedResults;
     size_t queuedCacheWrites;
+    /** Exact aggregate rank reported by source-preparation providers.  A zero
+     * total means the provider has not established a finite denominator; it
+     * does not imply that its work is complete. */
+    uint64_t sourcePreparationCompletedUnits;
+    uint64_t sourcePreparationTotalUnits;
+    /** The provider published source geometry, bounds, or occurrence
+     * metadata which changes the representations available to LoD planning.
+     * Camera-only and style-only presentation changes leave this clear. */
+    int sourceAvailabilityChanged;
     int changed;
+    /** The progressive transaction is unfinished.  This is diagnostic return
+     * state, not a runnable host level; schedule from getHostWorkSnapshot(). */
     int hasMore;
 };
 
@@ -124,10 +135,28 @@ enum class BObolLodCapacityRelevance : uint8_t {
     RELEVANT
 };
 
+/** Whether a completed presentation may advance an already-owned LoD
+ * planning transaction.  This is deliberately independent of capacity: an
+ * initial structural classifier has no measurable mesh population, while a
+ * selection repaint may traverse that same population without owning any
+ * geometry work. */
+enum class BObolLodPlanningRelevance : uint8_t {
+    EXCLUDED = 0,
+    RELEVANT
+};
+
 /** Whether the CAD presentation traversal actually executed in a frame. */
 enum class BObolCadPresentationExecution : uint8_t {
     NOT_EXECUTED = 0,
     EXECUTED
+};
+
+/** Whether every CAD assembly in a host traversal produced an exact report
+ * for the current scene and view.  An incomplete traversal may still supply a
+ * useful progressive image, but it cannot retire presentation obligations. */
+enum class BObolCadPresentationCompleteness : uint8_t {
+    INCOMPLETE = 0,
+    EXACT
 };
 
 /** Classification facts which must remain attached to one presentation
@@ -136,18 +165,23 @@ enum class BObolCadPresentationExecution : uint8_t {
 struct BOBOL_EXPORT BObolPresentationTimingContext {
     BObolPresentationTimingContext(
 	BObolLodCapacityRelevance capacityRelevance,
+	BObolLodPlanningRelevance planningRelevance,
 	BObolCadPresentationExecution cadExecution,
-	BObolCadPreparationProgress preparation =
-	    BOBOL_CAD_PREPARATION_NONE) :
+	BObolCadPreparationProgress preparation,
+	BObolCadPresentationCompleteness completeness) :
 	lodCapacityRelevance(capacityRelevance),
+	lodPlanningRelevance(planningRelevance),
 	cadPresentationExecution(cadExecution),
-	cadPreparation(preparation)
+	cadPreparation(preparation),
+	cadPresentationCompleteness(completeness)
     {
     }
 
     BObolLodCapacityRelevance lodCapacityRelevance;
+    BObolLodPlanningRelevance lodPlanningRelevance;
     BObolCadPresentationExecution cadPresentationExecution;
     BObolCadPreparationProgress cadPreparation;
+    BObolCadPresentationCompleteness cadPresentationCompleteness;
 };
 
 /** Derived result for the current visible presentation.  This is independent
@@ -197,7 +231,23 @@ enum BObolLodControlViolation {
     BOBOL_LOD_CONTROL_VIOLATION_INVALID_READINESS = 1u << 2,
     BOBOL_LOD_CONTROL_VIOLATION_INVALID_OWNER = 1u << 3,
     BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_PRESENTATION = 1u << 4,
-    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_CONSTRAINT = 1u << 5
+    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_CONSTRAINT = 1u << 5,
+    BOBOL_LOD_CONTROL_VIOLATION_UNWITNESSED_PLANNING = 1u << 6,
+    BOBOL_LOD_CONTROL_VIOLATION_NONTERMINAL_WITHOUT_PROGRESS = 1u << 7
+};
+
+/** Concrete finite-progress sources for the current presentation owner.
+ *
+ * A shared host pump is evidence only when the controller's presentation
+ * reducer is one of its standing reasons.  Reporting the sources separately
+ * keeps an unrelated provider wakeup from concealing a stalled presentation
+ * transaction in runtime refinement traces. */
+enum BObolLodPresentationWitness {
+    BOBOL_LOD_PRESENTATION_WITNESS_NONE = 0,
+    BOBOL_LOD_PRESENTATION_WITNESS_RENDER = 1u << 0,
+    BOBOL_LOD_PRESENTATION_WITNESS_CONTROLLER_PUMP = 1u << 1,
+    BOBOL_LOD_PRESENTATION_WITNESS_TIMER = 1u << 2,
+    BOBOL_LOD_PRESENTATION_WITNESS_INDEPENDENT_PRODUCER = 1u << 3
 };
 
 /** Typed evidence supporting a resource-constrained terminal presentation.
@@ -212,7 +262,23 @@ enum BObolLodConstraintEvidence {
     BOBOL_LOD_CONSTRAINT_PROGRESSIVE_CEILING = 1u << 1,
     BOBOL_LOD_CONSTRAINT_SUBPIXEL_AGGREGATION = 1u << 2,
     BOBOL_LOD_CONSTRAINT_STATIC_DEADLINE = 1u << 3,
-    BOBOL_LOD_CONSTRAINT_MEMORY = 1u << 4
+    BOBOL_LOD_CONSTRAINT_MEMORY = 1u << 4,
+    BOBOL_LOD_CONSTRAINT_TERMINAL_PROXY = 1u << 5
+};
+
+/** Current phase of the bounded renderer-capacity search. */
+enum BObolLodCapacitySearchPhase {
+    BOBOL_LOD_CAPACITY_SEARCH_INACTIVE = 0,
+    BOBOL_LOD_CAPACITY_SEARCH_ALLOCATING,
+    BOBOL_LOD_CAPACITY_SEARCH_PRESENTING,
+    BOBOL_LOD_CAPACITY_SEARCH_MEASURING,
+    BOBOL_LOD_CAPACITY_SEARCH_TERMINAL
+};
+
+/** Deadline currently being certified by the renderer-capacity search. */
+enum BObolLodCapacitySearchGoal {
+    BOBOL_LOD_CAPACITY_SEARCH_STEADY = 0,
+    BOBOL_LOD_CAPACITY_SEARCH_STATIC
 };
 
 /** User-facing progress for one view epoch.
@@ -230,9 +296,14 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
 
     int phase;
     int outcome;
+    /** Concrete control facts corresponding one-for-one with the refinement
+     * contract.  This diagnostic identifies an unfinished alias when several
+     * implementation facts share one abstract obligation. */
+    uint32_t controlFactMask;
     uint32_t controlObligationMask;
     int controlOwner;
     uint32_t controlViolationMask;
+    uint32_t controlPresentationWitnessMask;
     /** Nonempty for a constrained outcome; bits are defined above. */
     uint32_t constraintEvidenceMask;
     size_t viewQualityHistoryEntryCount;
@@ -240,16 +311,27 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t viewQualityHistoryRecallCount;
     uint64_t inventoryRevision;
     uint64_t availabilityRevision;
+    uint64_t visibilityRevision;
     uint64_t viewRevision;
     uint64_t policyRevision;
     uint64_t capacityRevision;
+    /** View-local retained CAD population revisions which complete the
+     * allocation transaction identity beyond the six admission domains. */
+    uint64_t cadRevision;
+    uint64_t residentDemandRevision;
+    /** Bounded capacity-search diagnostics.  Progress units are an exact
+     * finite rank for the active search, not renderer-time estimates. */
     int capacitySearchPhase;
     int capacitySearchGoal;
     unsigned int capacitySearchSamplesRemaining;
     unsigned int capacitySearchMeasuredCandidates;
     unsigned int capacitySearchTotalMeasuredCandidates;
     unsigned int capacitySearchCandidateLimit;
-    /** Allocation plan certified by the current five-domain revision tuple.
+    unsigned int capacitySearchMaximumCandidates;
+    unsigned int capacitySearchSampleLimit;
+    uint64_t capacitySearchCompletedUnits;
+    uint64_t capacitySearchTotalUnits;
+    /** Allocation plan certified by the current eight-domain revision tuple.
      * Zero while an older committed presentation is retained during
      * replacement planning. */
     uint64_t currentAllocationPlanSerial;
@@ -266,11 +348,31 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t satisfiedPayloadCount;
     size_t presentedSubpixelOccurrenceCount;
     size_t presentedStructuralBoxCount;
+    /** Visible occurrence-scoped OBBs installed only after an exact
+     * renderer-capacity witness rejected their minimum mesh population. */
+    size_t terminalProxyOccurrenceCount;
     size_t terminalOccurrenceFailureCount;
     size_t pendingTasks;
     size_t inFlight;
     size_t queuedResults;
     size_t queuedCacheWrites;
+    /** Aggregate exact-target retained-renderer preparation rank.  A stable
+     * nonzero signature identifies one immutable work denominator. */
+    uint64_t rendererPreparationTargetSignature;
+    uint64_t rendererPreparationTotalUnits;
+    uint64_t rendererPreparationCompletedUnits;
+    uint64_t rendererPreparationRemainingUnits;
+    uint64_t rendererPreparationReservedBytes;
+    size_t rendererPreparationTargetCount;
+    size_t rendererPreparationPreparingTargetCount;
+    size_t rendererPreparationConstrainedTargetCount;
+    size_t rendererPreparationFailedTargetCount;
+    size_t rendererPreparationInvalidTargetCount;
+    /** Exact CAD primitives submitted by the most recently completed frame.
+     * Unlike activeFaces, this includes direct full-detail and wire channels.
+     * The value is meaningful only when presentedPrimitiveCountValid is true. */
+    SbBool presentedPrimitiveCountValid;
+    size_t presentedPrimitiveCount;
     size_t activeFaces;
     size_t activeRenderCost;
     size_t renderCostBudget;
@@ -281,6 +383,7 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     size_t maximumMarginalPresentationBudget;
     size_t maximumProtectedPresentationBudget;
     size_t pointProxyCandidateCount;
+    size_t reachablePointProxyCandidateCount;
     size_t selectedPointProxyCount;
     size_t prominentCandidateCount;
     size_t prominentQualityFloorViolationCount;
@@ -350,10 +453,19 @@ struct BOBOL_EXPORT BObolLodConvergenceStatus {
     SbBool pointProxyTriangleRecoveryPending;
     SbBool residentGrowthReallocationPending;
     SbBool publicationFramePending;
+    /** One exact style/overlay frame is pending without LoD allocation,
+     * calibration, publication, or background work.  Hosts use this to avoid
+     * presenting a detail-progress HUD for selection and manipulator repaints. */
+    SbBool semanticPresentationFramePending;
     /* Foreground cold-start work which is still publishing the immutable
      * population against which terminal view allocation will be proved. */
     SbBool sourcePreparationPending;
     size_t sourcePreparationProviderCount;
+    /** Exact finite source-representation rank for providers which have
+     * established a denominator.  It describes completed work items, not an
+     * elapsed-time estimate. */
+    uint64_t sourcePreparationCompletedUnits;
+    uint64_t sourcePreparationTotalUnits;
     unsigned int failedSourceCount;
 };
 
@@ -365,8 +477,10 @@ typedef int (*BObolProgressiveAdvanceCallback)(
 typedef void (*BObolProgressiveUserDataFreeCallback)(void *userData);
 
 /* A positive callback result records provider progress.  Set status->changed
- * only when that progress published a visible scene update; status->hasMore
- * independently requests a subsequent frame for pending work. */
+ * only when that progress published a visible scene update, and additionally
+ * set sourceAvailabilityChanged when the update changes source data available
+ * to LoD planning.  status->hasMore independently requests a subsequent pump
+ * for pending work. */
 
 typedef void (*BObolFrameRequestCallback)(void *userData,
     const char *reason);
@@ -413,6 +527,8 @@ struct BOBOL_EXPORT BObolProgressiveProviderRecord {
     BObolProgressiveAdvanceCallback callback;
     void *userData;
     BObolProgressiveUserDataFreeCallback userDataFree;
+    uint64_t sourcePreparationCompletedUnits;
+    uint64_t sourcePreparationTotalUnits;
 };
 
 /**
@@ -564,15 +680,20 @@ public:
     unsigned int getLastFailedSourceCount(void) const;
     const SbString &getLastDiagnostics(void) const;
 
-    /** Request a frame whose completed CAD traversal is valid evidence for
-     * LoD capacity and deadline control. */
-    void requestRender(const char *reason = NULL);
+    /** Request an LoD-owned frame whose completed CAD traversal may advance
+     * planning and supply capacity/deadline evidence. */
+    void requestLodCapacityRender(const char *reason = NULL);
     /** Request a presentation-only frame.  Selection, highlighting, HUD, and
-     * other style changes must become visible, but their one-time patch cost
-     * is not evidence that the retained geometry cut is unsustainable.  If a
-     * capacity-relevant request is already pending, the combined frame remains
-     * capacity relevant. */
+     * other style changes must become visible, but they neither advance LoD
+     * planning nor provide evidence that the retained geometry cut is
+     * unsustainable.  If an LoD-owned request is already pending, the combined
+     * frame retains that stronger classification. */
     void requestPresentationRender(const char *reason = NULL);
+    /** Request a presentation-only frame after an external mutation to
+     * retained CAD appearance state.  The successor frame must traverse the
+     * current CAD assemblies exactly before LoD readiness may be reported,
+     * but its one-time style-update cost is not capacity evidence. */
+    void requestExactCadPresentationRender(const char *reason = NULL);
     void setFrameRequestCallback(BObolFrameRequestCallback callback,
 	void *userData);
     void clearFrameRequestCallback(void *userData);
@@ -585,8 +706,11 @@ public:
      * while either PUMP or RENDER remains asserted. */
     BObolHostWorkSnapshot getHostWorkSnapshot(void) const;
     void clearRenderRequest(void);
+    /** Claim the current frame transaction.  The optional outputs classify
+     * its timing independently for capacity estimation and LoD planning. */
     SbBool consumeRenderRequest(SbString *reason = NULL,
-	SbBool *lodCapacityRelevant = NULL);
+	SbBool *lodCapacityRelevant = NULL,
+	SbBool *lodPlanningRelevant = NULL);
     uint64_t renderRequestSerialGet(void) const;
     SbBool renderPending(SbBool clearWindow = TRUE,
 			 SbBool clearZBuffer = TRUE,
@@ -1029,15 +1153,23 @@ public:
 private:
     friend struct bobol_display_endpoint;
 
+    enum class RenderRequestIntent : uint8_t {
+	PRESENTATION,
+	LOD_PLANNING,
+	LOD_CAPACITY
+    };
+
     /* Display endpoints own renderer selection.  These private hooks let an
      * endpoint retain this controller's scene while preventing every host
      * path (including direct toolkit repaints) from treating NONE or
      * DIAGNOSTIC as a graphical renderer. */
     void setEndpointGraphicalRenderingEnabled(SbBool enabled);
     void invalidateRendererPerformanceHistory(void);
-    void requestRenderImpl(const char *reason, SbBool lodCapacityRelevant);
+    void requestRenderImpl(const char *reason, RenderRequestIntent intent);
+    void requestLodPresentationRender(const char *reason);
     void retireLodCapacityRenderRequest(void);
     void notifyFrameRequest(const char *reason);
+    void synchronizeProgressiveWorkPending(void);
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);
     SbBool lodViewPolicyEnabled(void) const;
@@ -1058,7 +1190,7 @@ private:
     void syncLodViewSignature(SbBool advanceOnChange = TRUE);
     void scheduleLodRefinementFrame(const char *reason);
     void completePresentationBarrier(uint64_t elapsedNanoseconds,
-	size_t provenRenderCost = 0);
+	SbBool exactFrame, size_t provenRenderCost = 0);
     /** Present a structural point/box classifier change before mesh admission
      * consumes it.  This transaction is mutually exclusive with stable mesh
      * quality calibration and always publishes its required frame edge. */

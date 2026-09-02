@@ -14,6 +14,7 @@
 #include "BObol/BLodRealization.h"
 #include "cad_publication_private.h"
 
+#include <Obol/cad/CadGeometryValidation.h>
 #include <Obol/cad/CadProjectedProxy.h>
 #include <Obol/cad/SoCADAssembly.h>
 
@@ -511,7 +512,8 @@ bobol_lod_oriented_bounds_valid(
 
 static std::optional<std::array<SbVec3f, 8>>
 bobol_lod_oriented_bounds(
-    const struct BObolMeshLodHierarchyInfo &hierarchy)
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    const SbBox3f &geometryBounds)
 {
     if (hierarchy.oriented_bounds_valid != 1 ||
 	!bobol_lod_oriented_bounds_valid(hierarchy))
@@ -522,6 +524,18 @@ bobol_lod_oriented_bounds(
 	    static_cast<float>(hierarchy.oriented_bounds[corner][X]),
 	    static_cast<float>(hierarchy.oriented_bounds[corner][Y]),
 	    static_cast<float>(hierarchy.oriented_bounds[corner][Z]));
+
+    /* The persistent cache certifies double-precision corners against its
+     * quantization domain.  Renderer geometry has independently conservative
+     * float bounds, and the conversion above can also contract a boundary.
+     * Reuse Obol's producer-boundary invariant before attaching this optional
+     * optimization: an unusable OBB must fall back to the authoritative AABB,
+     * never reject otherwise valid mesh geometry. */
+    Obol::PartGeometryBuilder proxy;
+    proxy.conservativeBounds = geometryBounds;
+    proxy.aggregateProxyCorners = corners;
+    if (!Obol::cadValidatePartGeometry(proxy))
+	return std::nullopt;
     return corners;
 }
 
@@ -543,8 +557,15 @@ static bool
 bobol_lod_hierarchy_valid(
     const struct BObolMeshLodData &data,
     const struct BObolMeshLodHierarchyInfo &hierarchy,
-    int residentCut)
+    int residentCut, const char **failureReason = NULL)
 {
+    const auto fail = [failureReason](const char *reason) {
+	if (failureReason)
+	    *failureReason = reason;
+	return false;
+    };
+    if (failureReason)
+	*failureReason = NULL;
     if (hierarchy.min_cut < 0 ||
 	hierarchy.max_cut < hierarchy.min_cut ||
 	hierarchy.max_cut >= BOBOL_MESH_LOD_CUT_COUNT_MAX ||
@@ -552,19 +573,25 @@ bobol_lod_hierarchy_valid(
 	    static_cast<uint32_t>(hierarchy.max_cut + 1) ||
 	residentCut < hierarchy.min_cut ||
 	residentCut > hierarchy.max_cut ||
-	hierarchy.resident_cut != residentCut ||
-	!bobol_lod_valid_bounds(data.bmin, data.bmax) ||
-	!bobol_lod_valid_bounds(hierarchy.quantization_min,
-	    hierarchy.quantization_max) ||
-	!bobol_lod_oriented_bounds_valid(hierarchy) ||
-	((hierarchy.cluster_grid_resolution != 0 ||
-	  hierarchy.cluster_count != 0 || hierarchy.clusters != NULL) &&
-	 (hierarchy.cluster_grid_resolution !=
-	      BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION ||
-	  !hierarchy.cluster_count ||
-	  hierarchy.cluster_count > BOBOL_MESH_LOD_CLUSTER_COUNT ||
-	  !hierarchy.clusters)))
-	return false;
+	hierarchy.resident_cut != residentCut)
+	return fail("cut interval");
+    if (!bobol_lod_valid_bounds(data.bmin, data.bmax))
+	return fail("mesh bounds");
+    if (!bobol_lod_valid_bounds(hierarchy.quantization_min,
+	    hierarchy.quantization_max))
+	return fail("quantization bounds");
+    /* Oriented bounds are an optional proxy optimization.  They are
+     * validated immediately before renderer publication, where invalid
+     * metadata falls back to the authoritative AABB.  It must not reject an
+     * otherwise valid progressive mesh hierarchy. */
+    if ((hierarchy.cluster_grid_resolution != 0 ||
+	 hierarchy.cluster_count != 0 || hierarchy.clusters != NULL) &&
+	(hierarchy.cluster_grid_resolution !=
+	     BOBOL_MESH_LOD_CLUSTER_GRID_RESOLUTION ||
+	 !hierarchy.cluster_count ||
+	 hierarchy.cluster_count > BOBOL_MESH_LOD_CLUSTER_COUNT ||
+	 !hierarchy.clusters))
+	return fail("cluster layout");
 
     uint64_t priorPoints = 0;
     uint64_t priorFaces = 0;
@@ -580,7 +607,7 @@ bobol_lod_hierarchy_valid(
 		std::numeric_limits<int32_t>::max()) ||
 	    faces > static_cast<size_t>(
 		std::numeric_limits<int32_t>::max()) / 3)
-	    return false;
+	    return fail("cut record");
 	priorPoints = points;
 	priorFaces = faces;
 	priorError = hierarchy.cuts[cut].object_error;
@@ -590,12 +617,12 @@ bobol_lod_hierarchy_valid(
 	    if (bits < 1 || bits > BOBOL_MESH_LOD_QUANTIZATION_BITS ||
 		(cut > 0 && bits <
 		 hierarchy.cuts[cut - 1].quantization_bits[axis]))
-		return false;
+		return fail("quantization schedule");
 	}
     }
     if (!hierarchy.cuts[hierarchy.max_cut].exact ||
 	hierarchy.cuts[hierarchy.max_cut].object_error > 0.0)
-	return false;
+	return fail("terminal cut");
     uint64_t clusteredIndices = 0;
     for (uint32_t cluster = 0; cluster < hierarchy.cluster_count;
 	 cluster++) {
@@ -605,7 +632,7 @@ bobol_lod_hierarchy_valid(
 	     hierarchy.clusters[cluster - 1].cluster_id) ||
 	    !info.range_count || !info.ranges ||
 	    !bobol_lod_valid_bounds(info.bmin, info.bmax))
-	    return false;
+	    return fail("cluster record");
 	for (uint32_t rangeIndex = 0; rangeIndex < info.range_count;
 	     ++rangeIndex) {
 	    const BObolMeshLodClusterRange &range = info.ranges[rangeIndex];
@@ -615,17 +642,18 @@ bobol_lod_hierarchy_valid(
 		static_cast<uint64_t>(range.first_index) +
 		    range.index_count >
 		    hierarchy.cuts[range.activation_cut].face_count * 3)
-		return false;
+		return fail("cluster range");
 	    clusteredIndices += range.index_count;
 	}
     }
     if (hierarchy.cluster_count && clusteredIndices !=
 	hierarchy.cuts[hierarchy.max_cut].face_count * 3)
-	return false;
-    return hierarchy.cuts[residentCut].point_count ==
-	data.point_orig_count &&
-	hierarchy.cuts[residentCut].face_count == data.face_count &&
-	data.point_orig_count > 0 && data.face_count > 0;
+	return fail("cluster coverage");
+    if (hierarchy.cuts[residentCut].point_count != data.point_orig_count ||
+	hierarchy.cuts[residentCut].face_count != data.face_count ||
+	!data.point_orig_count || !data.face_count)
+	return fail("resident population");
+    return true;
 }
 
 static std::shared_ptr<BObolLodProgressiveMeshGeneration>
@@ -633,9 +661,18 @@ progressive_generation_from_data(
     const struct BObolMeshLodData &data,
     const struct BObolMeshLodHierarchyInfo &hierarchy,
     int residentCut, SbBool shadedCullBackfaces,
-    uint64_t revision, uint64_t progressiveLineage)
+    uint64_t revision, uint64_t progressiveLineage,
+    const char **failureReason)
 {
-    if (!bobol_lod_hierarchy_valid(data, hierarchy, residentCut))
+    const auto fail = [failureReason](const char *reason) {
+	if (failureReason)
+	    *failureReason = reason;
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    };
+    if (failureReason)
+	*failureReason = NULL;
+    if (!bobol_lod_hierarchy_valid(
+	    data, hierarchy, residentCut, failureReason))
 	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
     std::shared_ptr<BObolLodProgressiveMeshGeneration> generation(
 	new BObolLodProgressiveMeshGeneration);
@@ -674,7 +711,8 @@ progressive_generation_from_data(
 	static_cast<float>(hierarchy.quantization_max[X]),
 	static_cast<float>(hierarchy.quantization_max[Y]),
 	static_cast<float>(hierarchy.quantization_max[Z]));
-    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(hierarchy);
+    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(
+	hierarchy, generation->bounds);
     generation->shadedCullBackfaces = shadedCullBackfaces;
     generation->revision = revision ? revision : 1;
 
@@ -683,7 +721,7 @@ progressive_generation_from_data(
 	if (!bobol_lod_point_in_domain(data.points_orig[i],
 		hierarchy.quantization_min,
 		hierarchy.quantization_max))
-	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    return fail("point outside quantization domain");
 	mesh.positions[i] = SbVec3f(
 	    static_cast<float>(data.points_orig[i][X]),
 	    static_cast<float>(data.points_orig[i][Y]),
@@ -692,7 +730,7 @@ progressive_generation_from_data(
 
     if (data.face_count >
 	    std::numeric_limits<size_t>::max() / 3)
-	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	return fail("face count overflow");
     const size_t indexCount = data.face_count * 3;
     std::array<size_t, BOBOL_MESH_LOD_CUT_COUNT_MAX> cutIndexCount = {};
     for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
@@ -714,7 +752,7 @@ progressive_generation_from_data(
     }
     for (size_t i = 0; i < indexCount; ++i) {
 	if (static_cast<size_t>(data.faces[i]) >= mesh.positions.size())
-	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    return fail("vertex index");
 	mesh.indices[i] = static_cast<uint32_t>(data.faces[i]);
 	maximumIndex = std::max(maximumIndex, mesh.indices[i]);
 	while (completedCut < static_cast<int>(hierarchy.cut_count) &&
@@ -729,7 +767,7 @@ progressive_generation_from_data(
 	cornerNormals.resize(indexCount);
 	for (size_t i = 0; i < indexCount; ++i) {
 	    if (!bobol_lod_finite_vector(data.normals[i]))
-		return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+		return fail("non-finite normal");
 	    cornerNormals[i] = SbVec3f(
 		static_cast<float>(data.normals[i][X]),
 		static_cast<float>(data.normals[i][Y]),
@@ -737,14 +775,14 @@ progressive_generation_from_data(
 	}
 	if (!bobol_prepare_authored_corner_normals(
 		mesh, cornerNormals))
-	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	    return fail("corner-normal preparation");
     }
 
     if (mesh.positions.empty() || mesh.indices.size() < 3 ||
 	mesh.indices.size() % 3 != 0 ||
 	(!mesh.normals.empty() &&
 	 mesh.normals.size() != mesh.positions.size()))
-	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	return fail("renderer mesh arrays");
     mesh.bounds = generation->bounds;
     mesh.progressiveMinimumCut =
 	static_cast<uint8_t>(std::max(0, generation->minimumCut));
@@ -827,7 +865,7 @@ progressive_generation_from_data(
     const std::shared_ptr<const Obol::PartGeometry> completed =
 	bobol_cad_build_geometry(std::move(*geometry), "PoP generation");
     if (!completed)
-	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	return fail("CAD geometry admission");
     generation->shadedGeometry = completed;
     return generation;
 }
@@ -942,9 +980,10 @@ progressive_generation_from_chunks(
 	static_cast<float>(hierarchy.quantization_max[X]),
 	static_cast<float>(hierarchy.quantization_max[Y]),
 	static_cast<float>(hierarchy.quantization_max[Z]));
-    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(hierarchy);
     generation->bounds = SbBox3f(
 	generation->quantizationMinimum, generation->quantizationMaximum);
+    generation->aggregateProxyCorners = bobol_lod_oriented_bounds(
+	hierarchy, generation->bounds);
     generation->cuts.assign(hierarchy.cuts,
 	hierarchy.cuts + hierarchy.cut_count);
     for (uint32_t cut = 0; cut < hierarchy.cut_count; ++cut) {
@@ -1384,24 +1423,31 @@ BObolLodProgressiveMesh::update(
     int residentCut,
     SbBool shadedCullBackfaces)
 {
+    const auto reject = [](const char *reason) {
+	if (getenv("BOBOL_LOD_TRACE_REALIZATION"))
+	    bu_log("BObol PoP realization rejected: %s\n", reason);
+	return FALSE;
+    };
     if (!this->p || !data.faces || !data.points_orig ||
 	data.face_count == 0 || data.point_orig_count == 0 ||
 	residentCut < hierarchy.min_cut ||
 	residentCut > hierarchy.max_cut ||
 	residentCut >= BOBOL_MESH_LOD_CUT_COUNT_MAX)
-	return FALSE;
+	return reject("arguments");
 
-    if (!bobol_lod_hierarchy_valid(data, hierarchy, residentCut))
-	return FALSE;
+    const char *hierarchyFailure = NULL;
+    if (!bobol_lod_hierarchy_valid(
+	    data, hierarchy, residentCut, &hierarchyFailure))
+	return reject(hierarchyFailure ? hierarchyFailure : "hierarchy");
 
     if (data.point_orig_count >
 	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
 	data.face_count >
 	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) / 3)
-	return FALSE;
+	return reject("renderer address range");
     const size_t indexCount = data.face_count * 3;
     if (data.normals && data.normal_count != indexCount)
-	return FALSE;
+	return reject("normal count");
 
     std::lock_guard<std::mutex> updateLock(this->p->updateMutex);
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> prior =
@@ -1409,11 +1455,17 @@ BObolLodProgressiveMesh::update(
     uint64_t revision = prior ? prior->revision + 1 : 1;
     if (!revision)
 	revision = 1;
+    const char *failureReason = NULL;
     const std::shared_ptr<BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_from_data(data, hierarchy, residentCut,
-	    shadedCullBackfaces, revision, this->p->lineage);
-    if (!generation)
+	    shadedCullBackfaces, revision, this->p->lineage,
+	    &failureReason);
+    if (!generation) {
+	if (getenv("BOBOL_LOD_TRACE_REALIZATION"))
+	    bu_log("BObol PoP realization rejected: %s\n",
+		failureReason ? failureReason : "unknown");
 	return FALSE;
+    }
     progressive_generation_store(this->p, generation);
     return TRUE;
 }
@@ -2165,6 +2217,11 @@ BObolLodProgressiveMesh::drawableCountsAtCuts(
 	*minimumCut = generation->minimumCut;
 
     if (generation->chunks.empty()) {
+	/* A nonempty selection names private spatial pages.  A whole-prefix
+	 * preview can draw the same logical leaf, but it cannot prove residency
+	 * for page identifiers belonging to a later durable spatial generation. */
+	if (!chunkIds.empty())
+	    return FALSE;
 	if (!mesh || mesh->positions.empty() || mesh->indices.size() < 3 ||
 	    mesh->indices.size() % 3 != 0 ||
 	    (!mesh->normals.empty() &&
@@ -2299,8 +2356,10 @@ BObolLodProgressiveMesh::canDrawChunksAtCut(
 	return FALSE;
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-    if (!generation || generation->chunks.empty())
-	return canDrawCut(requestedCut);
+    if (!generation)
+	return FALSE;
+    if (generation->chunks.empty())
+	return FALSE;
     if (requestedCut < generation->minimumCut ||
 	requestedCut > generation->maximumCut || chunkIds.empty())
 	return FALSE;
@@ -3220,27 +3279,58 @@ BObolLodProgressiveMesh::prepareCadPresentationLayers(
     std::vector<BObolLodPresentationLayer> &layers) const
 {
     layers.clear();
-    if (!this->p || chunkIds.empty())
+    const bool traceFailures =
+	getenv("BOBOL_LOD_TRACE_PRESENTATION_LAYERS") != NULL;
+    const auto traceFailure = [traceFailures, drawMode, activeCut](
+	const char *reason, uint32_t chunkId, uint64_t faceCount,
+	uint64_t pointCount, size_t residentPoints, size_t residentIndices,
+	int residentCut) {
+	if (!traceFailures)
+	    return;
+	bu_log("BObol spatial presentation preparation failure reason=%s "
+	       "chunk=%u draw=%d active=%d faces=%llu points=%llu "
+	       "resident_points=%zu resident_indices=%zu resident_cut=%d\n",
+	       reason, chunkId, drawMode, activeCut,
+	       static_cast<unsigned long long>(faceCount),
+	       static_cast<unsigned long long>(pointCount), residentPoints,
+	       residentIndices, residentCut);
+    };
+    if (!this->p || chunkIds.empty()) {
+	traceFailure("invalid-input", 0, 0, 0, 0, 0, -1);
 	return FALSE;
+	}
     const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
 	progressive_generation_load(this->p);
-    if (!generation || generation->chunks.empty() ||
-	activeCut < generation->minimumCut ||
-	activeCut > generation->maximumCut)
+    if (!generation || generation->chunks.empty()) {
+	traceFailure("missing-spatial-generation", 0, 0, 0, 0, 0, -1);
 	return FALSE;
+	}
+    if (activeCut < generation->minimumCut ||
+	activeCut > generation->maximumCut) {
+	traceFailure("invalid-active-cut", 0, 0, 0, 0, 0, -1);
+	return FALSE;
+	}
     for (size_t selected = 0; selected < chunkIds.size(); ++selected) {
 	const uint32_t chunkId = chunkIds[selected];
 	if (chunkId >= generation->chunks.size() ||
-	    (selected && chunkId <= chunkIds[selected - 1]))
+	    (selected && chunkId <= chunkIds[selected - 1])) {
+	    traceFailure("invalid-page-set", chunkId, 0, 0, 0, 0, -1);
 	    return FALSE;
+	}
 	const auto &cut = generation->chunks[chunkId].cuts[activeCut];
 	if (!cut.face_count)
 	    continue;
 	const auto &resident = generation->residentChunks[chunkId];
 	if (!resident || cut.point_count > resident->positions.size() ||
 	    static_cast<uint64_t>(cut.face_count) * 3u >
-		resident->indices.size())
+		resident->indices.size()) {
+	    traceFailure("incomplete-resident-page", chunkId,
+		cut.face_count, cut.point_count,
+		resident ? resident->positions.size() : 0,
+		resident ? resident->indices.size() : 0,
+		resident ? resident->residentCut : -1);
 	    return FALSE;
+	}
     }
     layers.reserve(chunkIds.size());
     for (uint32_t chunkId : chunkIds) {
@@ -3255,6 +3345,10 @@ BObolLodProgressiveMesh::prepareCadPresentationLayers(
 	layer.geometry = bobol_prepare_spatial_page_geometry(
 	    *generation, *resident, drawMode, this->p->lineage);
 	if (!layer.geometry) {
+	    const auto &cut = generation->chunks[chunkId].cuts[activeCut];
+	    traceFailure("renderer-geometry-rejected", chunkId,
+		cut.face_count, cut.point_count, resident->positions.size(),
+		resident->indices.size(), resident->residentCut);
 	    layers.clear();
 	    return FALSE;
 	}
@@ -3264,7 +3358,11 @@ BObolLodProgressiveMesh::prepareCadPresentationLayers(
 	layer.coverage = FALSE;
 	layers.push_back(std::move(layer));
     }
-    return layers.empty() ? FALSE : TRUE;
+    /* Spatial pages are private storage, not independent surfaces.  At a
+     * coarse global PoP cut every face carried by a view-local page set may
+     * legitimately have collapsed into other pages.  An empty selection is
+     * therefore a valid zero-draw result, not corrupt renderer data. */
+    return TRUE;
 }
 
 std::shared_ptr<const Obol::PartGeometry>
@@ -3513,6 +3611,10 @@ BObolLodResult::clear(void)
     presentationLayers.clear();
     resolvedCut = -1;
     residentCut = -1;
+    presentationAdmissionCertified = FALSE;
+    presentationAdmissionViewRevision = 0;
+    presentationAdmissionPolicyRevision = 0;
+    presentationAdmissionCut = -1;
     residentAdmissionRevision = 0;
     payloadKind = BOBOL_LOD_PAYLOAD_NONE;
     resultKind = BOBOL_LOD_RESULT_NONE;

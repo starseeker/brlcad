@@ -6,6 +6,58 @@ not as a short CTest.  Each run writes screenshots, command logs, controller
 timing/LoD samples, cache inventories, and a summary into a new artifact
 directory.
 
+`qged_lod_quality_matrix.sh` isolates terminal image quality.  It renders the
+same scene, camera, canvas, lighting, and draw mode with automatic LoD and with
+LoD disabled, verifies those comparison inputs, and records libicv SSIM and
+perceptual hashes.  It also measures foreground-silhouette disagreement so a
+high whole-frame score cannot hide a missing thin or visually prominent
+feature.  Both exact and one-physical-pixel-tolerant silhouette disagreement
+are retained: the former is regression-sensitive, while the latter separates
+raster-edge/antialias variation from a genuinely missing feature.  The Big Boy
+side view additionally records named front-wheel, running-gear, and boiler/cab
+crops in `feature_metrics.csv`.  Scores use a documented crop which excludes
+the progress bar and
+caption while preserving the uncropped checkpoints as user-visible evidence.
+Both LoD and LoD-off crops must contain foreground pixels; a blank image is a
+failed oracle, never a perfect or acceptable comparison.
+`matched_assessment.csv` classifies each view as safe-direct, unconstrained
+pixel-target, or constrained.  Safe-direct views enforce their photometric
+SSIM floor.  Larger views enforce exact-work, geometric-error, silhouette,
+proxy, prominent-floor, and constraint-evidence contracts; shaded SSIM is an
+advisory review signal because simplified normals may change illumination even
+when the screen-space geometry and silhouette are correct.  A low advisory
+score cannot hide a topology failure, and it cannot by itself reject a
+resource-constrained but geometrically valid view.
+The runner records one SHA-256 digest for each distinct database and captures
+device, inode, size, mtime, and ctime around every rendering process.  It
+rehashes only if that metadata changes, and a LoD/control pair is comparable
+only when the content digests match.  This avoids two extra multi-gigabyte
+reads per policy while retaining the mutation guard.  Database mtime alone is
+not an identity: opening a writable `.g` may update it without changing the
+file's bytes, while a concurrent conversion can change the actual oracle.
+Big Boy is opt-in and uses the partial `big_boy.bot` mesh hierarchy.  Its
+LoD-off image is a control for allocation quality within that hierarchy, not a
+completeness check against the original BREP model or failed facetizations.
+Scenes whose LoD-off image would exceed the host's safe memory or frame-time
+envelope use `--managed-only`.  That mode runs the identical LoD camera
+sequence and writes `managed_metrics.csv` with allocation, error, constraint,
+proxy, residency, and renderer-memory evidence.  Deep diagnostics also write
+the bounded per-occurrence sample and worst visual-importance witnesses to
+`managed_payload_metrics.csv` and `managed_outlier_metrics.csv`.  It
+deliberately produces no SSIM or silhouette score: those claims require a
+matched control.  Large-scene qualification combines this bounded whole-scene
+evidence with full-detail controls of representative semantic subsets and
+named-feature crops.
+`managed_assessment.csv` checks the corresponding presentation, pixel-error,
+and typed-constraint telemetry but always marks the result for visual review:
+without a safe matched control it is not image-quality proof.
+Every policy run records `/usr/bin/time -v` resource evidence.  On Linux,
+`--memory-limit-mib` places qged in a transient user scope with `MemoryMax`
+and no swap allowance; use it for intentionally hostile fixtures so a failed
+memory contract cannot take down the desktop.  `--initial-view-only` is the
+bounded diagnostic form for measuring one settled `ae 90 0` allocation before
+testing camera-transition retention separately.
+
 The primary matrix dimensions are:
 
 - System OpenGL and qged's `-s` OSMesa/software path.
@@ -19,7 +71,9 @@ The primary matrix dimensions are:
   cannot overwrite the operator's settings on exit.  Camera-critical resize
   events request a bounded `stable_ms` interval; generation-tagged retries
   prevent delayed native configure acknowledgements from restoring an older
-  scripted size.
+  scripted size.  The initial barrier requires a full second of native geometry
+  stability, and the resize matrix records the geometry again at the semantic
+  draw command so a late configure cannot silently change autoview.
 - Initial draw return, 50 ms, 200 ms, 1.5 seconds, and stable checkpoints.
 - `ae 90 0`, zoom in/out/return, sustained held-button rotation checkpoints,
   and post-release stable checkpoints.
@@ -32,6 +86,15 @@ The primary matrix dimensions are:
   declared hierarchy probe.
 - Production-main qged reference captures where an X11 display is available.
 - Default or explicitly selected swap intervals.
+
+The graphical scripts source `qged_test_display.sh`.  It accepts an existing
+display only after `xdpyinfo` proves it is live and otherwise starts a private
+Xvfb server.  This prevents a stale inherited `DISPLAY` from turning a product
+test into an unrelated connection failure.  A checkpoint after a retained
+scene mutation is an observation barrier: wait for progressive idle and an
+actual presentation before sampling pixels.  OSMesa export performs that
+presentation naturally, while a fast System-GL front buffer can otherwise
+retain the preceding frame.
 
 The model profiles are:
 
@@ -49,8 +112,9 @@ ninja -C .build qged_unique_mesh_stress_generator
 ```
 
 The default fixture has 5,000 independently stored, independently perturbed
-BoTs spanning approximately 500 to 100,000 faces, with an aggregate near 42
-million source faces.  Exactly 95 percent are closed, consistently oriented,
+BoTs spanning approximately 500 to 100,000 faces.  The current deterministic
+distribution contains 4,962,125 source faces; its long tail reaches 100k
+without making every leaf large.  Exactly 95 percent are closed, consistently oriented,
 shared-index manifold meshes.  The remaining five percent is divided equally
 between open surfaces and deliberately non-manifold closed meshes; leaf names
 identify all three topology classes.  This ratio makes normal vehicle-part
@@ -190,16 +254,14 @@ buffer grows) device-copy bytes.  The following quiet checkpoints wait past
 the 750 ms memory-maintenance delay and prove that prefetched residency is
 compacted without losing the useful same-scale return cut.
 
-`QOpenGLWidget::grabFramebuffer()` can itself request and time a render.  A
-checkpoint is therefore instrumentation, not a passive sample.  Stable zoom
-checkpoints use repeated capture/idle settling and validation selects the final
-sample for that name; the start and same-scale return include a final recovery
-round because a cold discrete cut may cross the hard presentation deadline
-only after several otherwise unchanged samples.  Without that round, the
-script can label the deadline-triggered recovery sample stable and immediately
-begin another gesture.  Continuous-interaction checkpoints intentionally do
-not settle, since their purpose is to measure the bounded behavior while
-events are still arriving.
+Quality checkpoints are passive samples.  The System-GL canvas reads its
+already-presented Qt framebuffer without requesting another paint; the OSMesa
+canvas uses an observational export traversal which does not advance
+progressive admission or report a presentation-timing sample.  This is a
+deliberate distinction from `QOpenGLWidget::grabFramebuffer()`, which can
+request and time a render and thereby make capture frequency alter the LoD
+cut.  Continuous-interaction checkpoints likewise observe the bounded state
+while events are still arriving rather than forcing extra progress.
 
 For hierarchy probes, framebuffer comparisons additionally require visible
 whole-row tree selection, selected-subpath erase, redraw, and selection-clear

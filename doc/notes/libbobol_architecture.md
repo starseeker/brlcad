@@ -23,11 +23,13 @@ Read these documents in this order:
 5. `libbobol_platform_threading_matrix.md` defines owner-thread and host
    requirements.
 6. `libbobol_active_debt.md` is the only active drawing-system TODO list.
-7. `obol_production_readiness.md` is the executable release matrix.
-8. `qged_editing.md` is the detailed primitive/sketch editing workstream.
-9. `libbobol_engineering_lessons.md` records resolved failures whose causes and
+7. `obol_lod_visual_quality.md` defines the image-comparison method and the
+   user-visible quality contract.
+8. `obol_production_readiness.md` is the executable release matrix.
+9. `qged_editing.md` is the detailed primitive/sketch editing workstream.
+10. `libbobol_engineering_lessons.md` records resolved failures whose causes and
    guards must not be rediscovered.
-10. `libbobol_formal_models.md` maps every TLA+ boundary to its sole production
+11. `libbobol_formal_models.md` maps every TLA+ boundary to its sole production
     owner and defines when each model must change.
 
 `ObolHostWork.tla`, `obol_lod_control.tla`, `ObolLodConvergence.tla`,
@@ -113,14 +115,15 @@ LibBObol owns the retained CAD data plane:
   host-work contract.
 
 The progressive control plane is a functional core behind an imperative
-controller shell.  Inventory, availability, demand, policy, and capacity facts
+controller shell.  Inventory, availability, visibility, demand, policy, and
+capacity facts
 are revisioned inputs; the allocation planner returns a complete successor
 evidence value and typed decision.  A bounded execution cursor may resume the
 mechanical application of a plan, but it does not decide quality or readiness.
 The controller is an effect executor, not another policy owner.  The current
 implementation enforces the evidence/cursor split and const evidence boundary.
-Plans and cursors carry the exact inventory, availability, view, policy, and
-capacity revision stamp; typed revision advancement is the sole production
+Plans and cursors carry the exact inventory, availability, visibility, view,
+policy, and capacity revision stamp; typed revision advancement is the sole production
 cursor-invalidation path, and stale certified commits are rejected.  See the
 canonical pipeline contract for the acceptance gate and change rules.
 
@@ -193,8 +196,9 @@ The draw cache is a carrier, not a second geometry authority.  LoD-asset
 record format 3 stores optional canonical-asset OBB metadata, and chunked
 manifest format 3 stores optional per-occurrence object-coordinate corners
 without allocating eight points for every AABB-only occurrence.  Manifest
-identity `leaf-v3` and chunk identity `manifest-chunk-v3` deliberately
-invalidate the intermediate records; there is no compatibility reader.  The
+identity `leaf-v4` and chunk identity `manifest-chunk-v3` deliberately
+invalidate the intermediate leaf-semantics records; there is no compatibility
+reader.  The
 directory-wide draw format remains 5 because mesh LoD and draw records share
 the same cache root: independently versioned draw metadata must not erase a
 valid multi-gigabyte PoP cache.  A manifest descriptor is published only after
@@ -203,6 +207,23 @@ whole-scene vector.  A first-cold manifest may be sealed before detached PoP
 characterization produces the OBB.  That session's live payload still carries
 the immutable corners, but the earliest structural coverage remains an AABB
 unless the hierarchy was already cached.
+
+Warm-start completeness has two independent witnesses.  A complete census
+proves every semantic occurrence, transform, material, Boolean role, and bound
+is known, but does not imply every terminal representation is resident.  A
+mesh record is already sufficient for lazy view-driven PoP realization;
+analytic and BREP records without such a source contract are replayed through
+the terminal converter only.  Representation completion is published after
+that bounded subset succeeds.  A rejected or stale subset clears the census
+witness before falling back to ordinary discovery, so a partial replay cannot
+be persisted as authoritative.
+
+Whole-target framing uses librt's read-only `rt_display_bounds` traversal.
+It evaluates combination operators from transformed primitive bounds without
+constructing regions, soltabs, BVHs, or other raytracing preparation.  The
+result is conservative for subtraction and intersection and is an immutable
+display-extent certificate; it is not a claim that evaluated CSG tightly
+occupies every point in the box.
 
 An admitted monolithic `PartGeometry` carries those optional corners beside
 the ordinary mesh; it does not replace or duplicate the mesh.  Obol consults
@@ -440,8 +461,12 @@ terminal reason, and the exact current frame has been acknowledged.
   Finer physical pixel demand remains quality evidence, but cannot repeatedly
   populate suffixes which the current scene allocation cannot present.  Active
   scale interaction may prefetch one bounded transition past a stale allocation
-  so a large mesh can refine while zooming; the next allocation remains the
-  authority over its visible cut.
+  so a large mesh can refine while zooming.  A changed resident-capacity epoch
+  may likewise probe the current physical demand past the stale allocation:
+  consuming that retry while still clamping demand to the allocation would be a
+  no-op and could strand a coarse cut forever.  In both cases the service byte
+  governor remains authoritative, and the next scene allocation owns the
+  visible presentation cut.
 - Structural boxes are unresolved/failure fallbacks, not a routine motion LoD.
 - Subpixel aggregation is a terminal representation only when exact coverage,
   visibility classification, and the applicable performance or memory limit

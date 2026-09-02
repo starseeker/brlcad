@@ -246,7 +246,8 @@ QSketch::mode_changed(int mode)
 	manipulator->node->setSelectionDomain(domain);
 	manipulator->node->setSelectedIndex(-1);
 	if (manipulator->controller)
-	    manipulator->controller->requestRender("sketch-edit-mode");
+	    manipulator->controller->requestPresentationRender(
+		"sketch-edit-mode");
     }
     emit view_updated(QG_VIEW_REFRESH);
 }
@@ -378,8 +379,7 @@ QSketch::update_manipulators(uint64_t revision)
 	    state->selection_domain == mode ? state->selected_feature : -1);
 	if (manipulator->active >= 0)
 	    manipulator->node->setActiveIndex(manipulator->active);
-	controller->requestRender("sketch-edit-manipulator-update");
-	(void)bobol_display_endpoint_request_frame(endpoint,
+	(void)bobol_display_endpoint_request_presentation_frame(endpoint,
 	    "sketch-edit-manipulator-update");
     }
 }
@@ -424,7 +424,7 @@ QSketch::sync_session_selection(int commandId)
 	    SoBRLIndexedEditManipulator::DOMAIN_EDGE);
 	manipulator->node->setSelectedIndex(feature);
 	if (manipulator->controller)
-	    manipulator->controller->requestRender(
+	    manipulator->controller->requestPresentationRender(
 		"sketch-edit-selection-sync");
     }
 }
@@ -599,7 +599,7 @@ QSketch::handle_manipulator_input(QSketchManipulatorState *manipulator,
 	manipulator->active_domain = domainIndex;
 	manipulator->node->setActiveIndex(feature);
 	manipulator->node->setHoverIndex(feature);
-	manipulator->controller->requestRender("sketch-edit-press");
+	manipulator->controller->requestPresentationRender("sketch-edit-press");
 	return BOBOL_INPUT_RESULT_HANDLED;
     }
 
@@ -610,7 +610,8 @@ QSketch::handle_manipulator_input(QSketchManipulatorState *manipulator,
 	    const bool changed = manipulator->node->hoverIndex.getValue() != hover;
 	    manipulator->node->setHoverIndex(hover);
 	    if (changed)
-		manipulator->controller->requestRender("sketch-edit-hover");
+		manipulator->controller->requestPresentationRender(
+		    "sketch-edit-hover");
 	    return hover < 0 ? BOBOL_INPUT_RESULT_UNHANDLED :
 		BOBOL_INPUT_RESULT_HANDLED;
 	}
@@ -647,7 +648,8 @@ QSketch::handle_manipulator_input(QSketchManipulatorState *manipulator,
 		(void)ged_edit_session_revert(getGed(), editor->session());
 	    else
 		editor->refreshFromSession();
-	    manipulator->controller->requestRender("sketch-edit-rejected");
+	    manipulator->controller->requestPresentationRender(
+		"sketch-edit-rejected");
 	}
 	return BOBOL_INPUT_RESULT_HANDLED;
     }
@@ -660,7 +662,8 @@ QSketch::handle_manipulator_input(QSketchManipulatorState *manipulator,
 	manipulator->node->setActiveIndex(-1);
 	manipulator->node->setHoverIndex(manipulator->node->hitTest(domain,
 	    event->x, event->y, width, height, camera));
-	manipulator->controller->requestRender("sketch-edit-release");
+	manipulator->controller->requestPresentationRender(
+	    "sketch-edit-release");
 	return BOBOL_INPUT_RESULT_HANDLED;
     }
     return BOBOL_INPUT_RESULT_UNHANDLED;

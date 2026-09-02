@@ -173,4 +173,12 @@ ActiveHasTimingWitness == ~terminal =>
 
 EventuallyTerminal == <>terminal
 
+\* A presentation-only host/style frame may change user-facing timing
+\* telemetry, but it cannot create, consume, or replace a CAD timing owner.
+NonCadFramePreservesTimingOwner ==
+    [][hostOutcome' # hostOutcome =>
+        UNCHANGED <<cut, unsafeCut, safeCut, sampleCut, sampleOutcome,
+                    sustainableCut, initialFramePending, replayPending,
+                    terminal>>]_vars
+
 =============================================================================

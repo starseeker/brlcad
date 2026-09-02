@@ -94,6 +94,7 @@ public:
 	NONE = 0,
 	PRESERVE_BUDGET,
 	RECOMPUTE_BUDGET,
+	CAPACITY_CANDIDATE,
 	PRESENTATION_RECONCILIATION
     };
 
@@ -103,15 +104,17 @@ public:
 	this->reconciliationBudgetValue = SIZE_MAX;
     }
 
-    void requestReallocation(bool preserveBudget)
+    bool requestReallocation(bool preserveBudget)
     {
 	/* A reconciliation request carries a completed-frame capacity proof.
 	 * A weaker reallocation request cannot discard or reinterpret it. */
-	if (this->kindValue == Kind::PRESENTATION_RECONCILIATION)
-	    return;
+	if (this->kindValue == Kind::PRESENTATION_RECONCILIATION ||
+	    this->kindValue == Kind::CAPACITY_CANDIDATE)
+	    return false;
 	this->kindValue = preserveBudget ? Kind::PRESERVE_BUDGET :
 	    Kind::RECOMPUTE_BUDGET;
 	this->reconciliationBudgetValue = SIZE_MAX;
+	return true;
     }
 
     void requestCapacityCandidateAllocation(void)
@@ -119,13 +122,14 @@ public:
 	/* A bounded search candidate is newer completed-frame evidence than a
 	 * pending handoff reconciliation.  It owns the next exact allocation and
 	 * must replace, rather than inherit, that older scalar request. */
-	this->kindValue = Kind::PRESERVE_BUDGET;
+	this->kindValue = Kind::CAPACITY_CANDIDATE;
 	this->reconciliationBudgetValue = SIZE_MAX;
     }
 
     bool requestPresentationReconciliation(size_t budget)
     {
-	if (!budget || budget == SIZE_MAX)
+	if (!budget || budget == SIZE_MAX ||
+	    this->kindValue == Kind::CAPACITY_CANDIDATE)
 	    return false;
 	if (this->kindValue != Kind::PRESENTATION_RECONCILIATION) {
 	    this->kindValue = Kind::PRESENTATION_RECONCILIATION;
@@ -141,7 +145,17 @@ public:
     bool pending(void) const { return this->kindValue != Kind::NONE; }
     bool preservesBudget(void) const
     {
-	return this->kindValue == Kind::PRESERVE_BUDGET;
+	return this->kindValue == Kind::PRESERVE_BUDGET ||
+	    this->kindValue == Kind::CAPACITY_CANDIDATE;
+    }
+    bool capacityCandidate(void) const
+    {
+	return this->kindValue == Kind::CAPACITY_CANDIDATE;
+    }
+    void retireCapacityCandidate(void)
+    {
+	if (this->capacityCandidate())
+	    this->reset();
     }
     bool reconcilesPresentation(void) const
     {
@@ -279,11 +293,12 @@ public:
 	 * imposing the ordinary 4x/1.25x refinement ladder here only creates
 	 * visible intermediate stages or a no-progress repair loop. */
 	bool hardDeadlinePresentation = false;
-	/* Orthographic pose-only handoff starts from an already useful retained
-	 * population.  Its reversible motion ceiling is not evidence that those
-	 * occurrence cuts are unaffordable.  Preserve at least the currently
-	 * presented population until a completed deadline miss establishes a real
-	 * capacity ceiling. */
+	/* A ready-view handoff starts from an already useful retained population.
+	 * Its reversible motion ceiling is not evidence that the presentation is
+	 * unaffordable.  Preserve at least the currently presented population until
+	 * a completed static-deadline miss establishes a real capacity ceiling.
+	 * For zoom, the allocator may redistribute this floor to satisfy changed
+	 * pixel demand without reducing its aggregate capacity. */
 	bool preserveActivePopulation = false;
 	/* Replacing a visible structural box with the minimum drawable mesh is a
 	 * coverage obligation, not ordinary triangle-detail recovery.  A retained
@@ -336,6 +351,9 @@ public:
 	size_t maximumCandidateBudget = 0;
 	size_t knownSafeBudget = 0;
 	uint64_t populationSignature = 0;
+	size_t populationMinimumBudget = 0;
+	size_t nextDistinctPopulationBudget = 0;
+	bool nextDistinctPopulationBudgetKnown = false;
     };
 
     struct CompletedFrameInputs {
@@ -349,6 +367,9 @@ public:
 	size_t candidateBudget = 0;
 	size_t presentedCost = 0;
 	uint64_t populationSignature = 0;
+	size_t populationMinimumBudget = 0;
+	size_t nextDistinctPopulationBudget = 0;
+	bool nextDistinctPopulationBudgetKnown = false;
 	size_t knownSafeBudget = 0;
 	uint64_t observedNanoseconds = 0;
 	bool validSample = false;
@@ -473,6 +494,10 @@ private:
 	    inputs.activeCost +
 		this->requestedCoverageCompletionAdditionalCostValue;
 	const size_t retainedReallocationBudget = this->currentBudgetValue;
+	const bool capacityCandidateAllocation =
+	    this->retainedAllocationRequestValue.capacityCandidate() &&
+	    this->capacitySearchValue.phase() ==
+		BObolLodCapacitySearchCertificate::Phase::ALLOCATING;
 
 	const long double targetNanoseconds = inputs.targetFps > 0.0f ?
 	    1000000000.0L / static_cast<long double>(inputs.targetFps) : 0.0L;
@@ -619,7 +644,7 @@ private:
 	    costBudget = std::max(costBudget, inputs.activeCost);
 	/* Static presentation is allowed to use the hard deadline.  Preserve an
 	 * exact population which meets it even when the preferred quiet target is
-	 * stricter; otherwise a pose-only rotation can replace a proven mesh view
+	 * stricter; otherwise a ready camera handoff can replace a proven mesh view
 	 * with boxes before structural repair has a chance to run. */
 	if (observedWithinHardPresentationDeadline && costBudget != SIZE_MAX)
 	    costBudget = std::max(costBudget, inputs.activeCost);
@@ -677,10 +702,10 @@ private:
 	    costBudget = std::min(
 		costBudget, this->retainedRecoveryCeilingValue);
 	/* Recognizable prominent geometry is a harder quiet-view contract than
-	 * the preferred 20 Hz cadence, provided its measured population remains
+	 * the preferred quiet cadence, provided its measured population remains
 	 * inside the separate hard quality-frame deadline.  Persist that floor
 	 * across overload passes; otherwise every 60-90 ms OSMesa wire frame
-	 * alternates between the 20 Hz recovery budget and the same protected
+	 * alternates between the ordinary recovery budget and the same protected
 	 * allocation forever. */
 	if (!inputs.interactive && !inputs.forceTerminal &&
 	    this->retainedQualityFloorBudgetValue > 0)
@@ -701,7 +726,8 @@ private:
 	const bool capacitySearchInactive =
 	    this->capacitySearchValue.phase() ==
 		BObolLodCapacitySearchCertificate::Phase::INACTIVE;
-	const bool staticQualityBudget = staticCapacitySearch ||
+	const bool staticQualityBudget = inputs.hardDeadlinePresentation ||
+	    staticCapacitySearch ||
 	    (capacitySearchInactive &&
 	     this->retainedQualityFloorBudgetValue > 0);
 	const size_t deadlineCapacityCeiling = staticQualityBudget ?
@@ -711,18 +737,18 @@ private:
 	    deadlineCapacityCeiling != SIZE_MAX)
 	    costBudget = std::min(
 		costBudget, deadlineCapacityCeiling);
-	/* A pose-only handoff may redistribute the existing scene allowance after
-	 * its current-camera visibility census, but it must not infer a smaller
-	 * allowance from the temporary motion ceiling.  Explicit deadline and
-	 * recovery ceilings are completed-frame evidence and therefore remain
-	 * stronger than this continuity witness. */
-	const bool posePopulationHasNoUnsafeWitness =
+	/* A retained ready-view handoff may redistribute the existing scene
+	 * allowance after its current-camera visibility census, but it must not
+	 * infer a smaller allowance from the temporary motion ceiling.  Explicit
+	 * deadline and recovery ceilings are completed-frame evidence and therefore
+	 * remain stronger than this continuity witness. */
+	const bool retainedPopulationHasNoUnsafeWitness =
 	    this->steadyDeadlineCapacityCeilingValue == SIZE_MAX &&
 	    this->staticDeadlineCapacityCeilingValue == SIZE_MAX &&
 	    this->retainedRecoveryCeilingValue == SIZE_MAX &&
 	    this->requestedRetainedRecoveryBudgetValue == SIZE_MAX;
 	if (inputs.preserveActivePopulation &&
-	    posePopulationHasNoUnsafeWitness && costBudget != SIZE_MAX)
+	    retainedPopulationHasNoUnsafeWitness && costBudget != SIZE_MAX)
 	    costBudget = std::max(costBudget, inputs.activeCost);
 	/* A completed constrained framebuffer is a hard presentation-capacity
 	 * witness, not another soft quality preference.  Reconcile the hidden
@@ -758,6 +784,15 @@ private:
 	    !inputs.structuralCoverageRepair)
 	    costBudget = std::min(costBudget, std::max<size_t>(
 		1, this->capacitySearchValue.safeBudget()));
+	/* A bounded capacity search owns its ALLOCATING candidate just as it owns
+	 * the following PRESENTING and MEASURING frames.  Point-recovery and
+	 * deadline ceilings may select a later candidate, but they cannot silently
+	 * replace this one while it is being applied: doing so presents a different
+	 * population, makes the certificate correctly reject it as stale, and
+	 * restarts the same search forever.  The completed candidate frame remains
+	 * subject to the endpoint deadline and may narrow the search normally. */
+	if (capacityCandidateAllocation)
+	    costBudget = this->capacitySearchValue.candidateBudget();
 
 	this->currentBudgetValue = costBudget;
 	/* Freeze the exact cost currencies which initialized this bounded pass.
@@ -844,9 +879,17 @@ private:
 	if (search.result ==
 		BObolLodCapacitySearchCertificate::Result::STALE_POPULATION) {
 	    this->capacitySearchValue.reset();
+	    this->retainedAllocationRequestValue.retireCapacityCandidate();
 	    this->stableBudgetLimitedValue = false;
 	    if (cursor)
 		cursor->reset();
+	    /* The stale certificate and the replacement allocation are different
+	     * semantic capacity problems even when the camera and user policy did
+	     * not change.  Publish that boundary before a new allocator plan is
+	     * committed; otherwise two distinct plans can share one revision stamp
+	     * and the terminal-convergence refinement no longer has a unique
+	     * successor. */
+	    decision.capacityCandidateChanged = true;
 	    decision.restartSubmission = true;
 	    return decision;
 	}
@@ -881,6 +924,12 @@ public:
 	    observation.key = inputs.searchKey;
 	    observation.candidateBudget = inputs.candidateBudget;
 	    observation.populationSignature = inputs.populationSignature;
+	    observation.populationMinimumBudget =
+		inputs.populationMinimumBudget;
+	    observation.nextDistinctPopulationBudget =
+		inputs.nextDistinctPopulationBudget;
+	    observation.nextDistinctPopulationBudgetKnown =
+		inputs.nextDistinctPopulationBudgetKnown;
 	    /* A changed allocation pass freezes its pre-pass active cost in the
 	     * mechanical cursor.  Bind the new candidate only when its completed
 	     * frame supplies the post-commit population. */
@@ -980,8 +1029,10 @@ public:
 	    decision.searchResult =
 		BObolLodCapacitySearchCertificate::Result::STALE_POPULATION;
 	    this->capacitySearchValue.reset();
+	    this->retainedAllocationRequestValue.retireCapacityCandidate();
 	    this->stableBudgetLimitedValue = false;
 	    cursor.reset();
+	    decision.capacityCandidateChanged = true;
 	    if (!inputs.reallocationProducerPending) {
 		this->retainedAllocationRequestValue.requestReallocation(true);
 		decision.restartSubmission = true;
@@ -1008,6 +1059,11 @@ public:
 	observation.candidateBudget = inputs.candidateBudget;
 	observation.presentedCost = inputs.presentedCost;
 	observation.populationSignature = inputs.populationSignature;
+	observation.populationMinimumBudget = inputs.populationMinimumBudget;
+	observation.nextDistinctPopulationBudget =
+	    inputs.nextDistinctPopulationBudget;
+	observation.nextDistinctPopulationBudgetKnown =
+	    inputs.nextDistinctPopulationBudgetKnown;
 	observation.knownSafeBudget = inputs.knownSafeBudget;
 	observation.observedNanoseconds = inputs.observedNanoseconds;
 	observation.validSample = inputs.validSample &&
@@ -1039,6 +1095,7 @@ public:
 	 * Any numeric candidate awaiting a sample is therefore stale; the new
 	 * population must obtain a fresh complete allocation after this barrier. */
 	this->capacitySearchValue.reset();
+	this->retainedAllocationRequestValue.retireCapacityCandidate();
 	this->frameBarrierValue.requestReplan();
 	this->stableBudgetLimitedValue = false;
     }
@@ -1061,6 +1118,24 @@ public:
 	this->frameBarrierValue.reset();
 	this->stableBudgetLimitedValue = false;
 	this->capacitySearchValue.reset();
+	this->retainedAllocationRequestValue.retireCapacityCandidate();
+    }
+
+    void acceptStaticPresentationConstraint(size_t budget)
+    {
+	if (!budget || budget == SIZE_MAX)
+	    return;
+	/* Static-quality reconciliation has completed a stronger, longer-deadline
+	 * terminal transaction for this unchanged view.  The preceding steady
+	 * capacity certificate is now historical evidence, not an admission
+	 * authority.  Retire it atomically with adopting the reconciled budget so
+	 * no intervening plan can observe the old terminal clamp with the new
+	 * occurrence population. */
+	this->frameBarrierValue.reset();
+	this->capacitySearchValue.reset();
+	this->retainedAllocationRequestValue.reset();
+	this->stableBudgetLimitedValue = false;
+	this->currentBudgetValue = budget;
     }
 
     /* Retire mechanical measurement work after applying an occurrence cut.
@@ -1078,6 +1153,7 @@ public:
 	    return;
 	this->stableBudgetLimitedValue = false;
 	this->capacitySearchValue.reset();
+	this->retainedAllocationRequestValue.retireCapacityCandidate();
     }
 
     /* Complete the mechanical pass which applied one retained allocation.
@@ -1086,6 +1162,26 @@ public:
     void completeAppliedAllocation(const CompletedAllocationInputs &inputs)
     {
 	const size_t allocationBudget = this->currentBudgetValue;
+	const bool appliedActiveCandidate =
+	    inputs.allocationCertificateCurrent &&
+	    inputs.allocationCutsApplied &&
+	    inputs.requestedSceneBudget == allocationBudget &&
+	    this->capacitySearchValue.phase() ==
+		BObolLodCapacitySearchCertificate::Phase::ALLOCATING &&
+	    this->capacitySearchValue.candidateBudget() == allocationBudget &&
+	    this->capacitySearchValue.key().coversRevisions(
+		inputs.revisionStamp);
+	if (appliedActiveCandidate) {
+	    /* Applying the candidate is the ALLOCATING -> PRESENTING boundary of
+	     * the same bounded search.  The following exact frame performs that
+	     * transition through prepare()/observe(); erasing the certificate here
+	     * makes ordinary budgeting immediately replace the proven candidate.
+	     * Any older generic barrier has been superseded by this exact
+	     * occurrence allocation. */
+	    this->frameBarrierValue.reset();
+	    this->stableBudgetLimitedValue = false;
+	    return;
+	}
 	const bool appliedTerminalAllocation =
 	    inputs.allocationCertificateCurrent &&
 	    inputs.allocationCutsApplied &&
@@ -1161,9 +1257,9 @@ public:
      * smaller renderer capacity and therefore installs no persistent budget
      * ceiling.  The request is consumed by exactly one complete admission
      * pass; a later view census must explicitly request another one. */
-    void requestRetainedReallocation(bool preserveCurrentBudget = true)
+    bool requestRetainedReallocation(bool preserveCurrentBudget = true)
     {
-	this->retainedAllocationRequestValue.requestReallocation(
+	return this->retainedAllocationRequestValue.requestReallocation(
 	    preserveCurrentBudget);
     }
 
@@ -1234,11 +1330,14 @@ public:
     }
 
     /* Record a strict upper bound after a quiet, capacity-relevant render
-     * abort.  Five percent separates the successor from harmless timer jitter
-     * and, more importantly, proves monotonic progress if another
-     * intermediate trial also misses.  The immediate recovery may choose a
-     * more conservative budget; this ceiling governs later calibration once
-     * that one-shot handoff is complete. */
+     * abort.  Only the candidate which actually missed is negative evidence.
+     * A throughput estimate may propose a more conservative recovery budget,
+     * but it cannot prove that smaller allocator budgets are unsafe: with
+     * discrete PoP populations, even a small arbitrary haircut can skip the
+     * next substantially better and affordable cut.  Store the exact
+     * predecessor of the failed candidate as the inclusive ceiling.  The
+     * bounded certificate supplies monotone progress if another candidate
+     * also misses. */
     CompletedFrameDecision noteDeadlineCapacityMiss(
 	const DeadlineMissInputs &inputs,
 	BObolLodAdmissionCursor *cursor = NULL)
@@ -1259,18 +1358,16 @@ public:
 	 * During a bounded search the allocation candidate is the only stable
 	 * bracket coordinate; outside one, the renderer's estimate remains the
 	 * best available recovery bound.  An abort while allocating or presenting
-	 * is conservative operational evidence: even the transition toward that
-	 * candidate exceeded the responsiveness deadline, so it cannot remain the
-	 * next candidate indefinitely. */
+	 * is conservative operational evidence for that candidate, but not for an
+	 * arbitrary interval below it. */
 	const size_t failedBudget = activeSearch ?
 	    this->capacitySearchValue.candidateBudget() :
 	    (beginBoundedSearch ? inputs.candidateBudget :
 		inputs.attemptedBudget);
-	const size_t reduction = std::max<size_t>(1, failedBudget / 20);
 	const size_t provenSafeBudget = activeSearch ?
 	    this->capacitySearchValue.safeBudget() : 0;
 	const size_t strictCeiling = std::max(
-	    provenSafeBudget, failedBudget - reduction);
+	    provenSafeBudget, failedBudget - 1);
 	if (effectiveStaticDeadline) {
 	    this->staticDeadlineCapacityCeilingValue = std::min(
 		this->staticDeadlineCapacityCeilingValue, strictCeiling);
@@ -1329,7 +1426,7 @@ public:
 	return this->noteDeadlineCapacityMiss(inputs, cursor);
     }
 
-    /* A view-significance floor may deliberately trade some of the 20 Hz
+    /* A view-significance floor may deliberately trade some of the quiet
      * stable target for recognizable prominent geometry, but only after the
      * controller proves that population fits its separately bounded hard
      * quality-frame allowance.  Update all three currencies of the already
@@ -1402,23 +1499,6 @@ public:
 	return true;
     }
 
-    /* A protected floor is allowed to exceed the preferred quiet cadence
-     * only while it remains inside the independently interruptible static
-     * frame deadline.  A miss from the explicit static-quality trial is not
-     * one of the transient setup samples counted above: that trial is the
-     * endpoint contract itself.  Retire the floor for this policy epoch so a
-     * recovery allocation cannot immediately restore the population which
-     * just failed.  Resident PoP data and occurrence demand are untouched. */
-    bool rejectRetainedQualityFloor(void)
-    {
-	const bool hadFloor = this->retainedQualityFloorBudgetValue > 0;
-	this->retainedQualityFloorBudgetValue = 0;
-	this->retainedQualityFloorSignatureValue = 0;
-	this->retainedQualityFloorMissCountValue = 0;
-	this->retainedQualityFloorRejectedValue = true;
-	return hadFloor;
-    }
-
     bool noteRetainedQualityFloorMet(bool exactProtectedPopulation,
 	uint64_t populationSignature, size_t presentedCost)
     {
@@ -1445,6 +1525,25 @@ public:
     size_t retainedQualityFloorBudget(void) const
     {
 	return this->retainedQualityFloorBudgetValue;
+    }
+
+    /* A protected visual floor is part of the capacity-search population,
+     * not an allocator override outside its numeric domain.  When the
+     * current allocation carries the exact active floor, make that floor the
+     * search's lower bound.  Every candidate then maps to a nested population
+     * whose selected cost is no greater than its candidate budget. */
+    size_t capacitySearchMinimumBudget(size_t ordinaryMinimumBudget,
+	size_t allocationFloorBudget,
+	uint64_t allocationFloorSignature) const
+    {
+	const bool currentFloor = allocationFloorBudget > 0 &&
+	    allocationFloorBudget == this->retainedQualityFloorBudgetValue &&
+	    allocationFloorSignature ==
+		this->retainedQualityFloorSignatureValue &&
+	    !this->retainedQualityFloorRejectedValue;
+	return currentFloor ?
+	    std::max(ordinaryMinimumBudget, allocationFloorBudget) :
+	    ordinaryMinimumBudget;
     }
 
     uint64_t retainedQualityFloorSignature(void) const
@@ -1562,9 +1661,7 @@ public:
 		BObolLodCapacitySearchCertificate::Phase::TERMINAL &&
 	    this->capacitySearchValue.terminalResult() ==
 		BObolLodCapacitySearchCertificate::Result::CERTIFIED &&
-	    key.inventory == stamp.inventory &&
-	    key.availability == stamp.availability &&
-	    key.view == stamp.view && key.policy == stamp.policy &&
+	    key.coversRevisions(stamp) &&
 	    std::max<size_t>(1, this->capacitySearchValue.safeBudget()) ==
 		budget && this->currentBudgetValue == budget;
     }

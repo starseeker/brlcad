@@ -332,8 +332,7 @@ QEll::update_manipulator(const point_t center, const vect_t axis_a,
 	    static_cast<float>(axis_b[2])),
 	SbVec3f(static_cast<float>(axis_c[0]), static_cast<float>(axis_c[1]),
 	    static_cast<float>(axis_c[2])));
-	controller->requestRender("ell-edit-manipulator-update");
-	(void)bobol_display_endpoint_request_frame(endpoint,
+	(void)bobol_display_endpoint_request_presentation_frame(endpoint,
 	    "ell-edit-manipulator-update");
     }
 }
@@ -404,7 +403,8 @@ QEll::handle_manipulator_input(QEllManipulatorState *state,
 	state->drag_fy = f01 - f0;
 	state->node->setActiveHandle(handle);
 	state->node->setHoverHandle(handle);
-	state->controller->requestRender("ell-edit-manipulator-press");
+	state->controller->requestPresentationRender(
+	    "ell-edit-manipulator-press");
 	return BOBOL_INPUT_RESULT_HANDLED;
     }
 
@@ -416,7 +416,8 @@ QEll::handle_manipulator_input(QEllManipulatorState *state,
 		static_cast<int>(hover);
 	    state->node->setHoverHandle(hover);
 	    if (changed)
-		state->controller->requestRender("ell-edit-manipulator-hover");
+		state->controller->requestPresentationRender(
+		    "ell-edit-manipulator-hover");
 	    return hover == SoBRLEditManipulator::HANDLE_NONE ?
 		BOBOL_INPUT_RESULT_UNHANDLED : BOBOL_INPUT_RESULT_HANDLED;
 	}
@@ -446,7 +447,7 @@ QEll::handle_manipulator_input(QEllManipulatorState *state,
 		(void)ged_edit_session_revert(getGed(), editor->session());
 	    else
 		editor->refreshFromSession();
-	    state->controller->requestRender(
+	    state->controller->requestLodCapacityRender(
 		"ell-edit-manipulator-rejected");
 	}
 	return BOBOL_INPUT_RESULT_HANDLED;
@@ -459,7 +460,8 @@ QEll::handle_manipulator_input(QEllManipulatorState *state,
 	state->node->setActiveHandle(SoBRLEditManipulator::HANDLE_NONE);
 	state->node->setHoverHandle(state->node->hitTest(event->x, event->y,
 	    width, height, camera));
-	state->controller->requestRender("ell-edit-manipulator-release");
+	state->controller->requestPresentationRender(
+	    "ell-edit-manipulator-release");
 	return BOBOL_INPUT_RESULT_HANDLED;
     }
     return BOBOL_INPUT_RESULT_UNHANDLED;

@@ -85,7 +85,10 @@ test_capacity_cad_timing(void)
 {
     return BObolPresentationTimingContext(
 	BObolLodCapacityRelevance::RELEVANT,
-	BObolCadPresentationExecution::EXECUTED);
+	BObolLodPlanningRelevance::RELEVANT,
+	BObolCadPresentationExecution::EXECUTED,
+	BOBOL_CAD_PREPARATION_NONE,
+	BObolCadPresentationCompleteness::EXACT);
 }
 
 static int

@@ -115,6 +115,14 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
      * governs the active draw cut published with the result. */
     SbBool usePresentationCutLimit;
     int presentationCutLimit;
+    /* The owner-thread submit action has charged this task's visible cut to
+     * one view/policy budget.  The shared mesh generation may invalidate the
+     * allocation table before its result is drained; retain the admission
+     * epoch separately so result adoption need not discard valid prepared
+     * geometry and request the identical work again. */
+    SbBool presentationAdmissionCertified;
+    uint64_t presentationAdmissionViewRevision;
+    uint64_t presentationAdmissionPolicyRevision;
     /* A finer adaptive representation must not replace a coherent standing
      * representation with its own minimum prefix.  Materialize the complete
      * requested prefix off the presentation path and publish it atomically.

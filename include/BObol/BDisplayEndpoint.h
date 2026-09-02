@@ -167,6 +167,14 @@ BOBOL_EXPORT int
 bobol_display_endpoint_request_frame(bobol_display_endpoint_t *endpoint,
 	const char *reason);
 
+/** Schedule a presentation-only frame for an open host.  Use this for
+ * retained style, overlay, and manipulator changes which do not alter the
+ * camera-visible CAD demand or provide renderer-capacity evidence.  @p reason
+ * is borrowed for the call. */
+BOBOL_EXPORT int
+bobol_display_endpoint_request_presentation_frame(
+	bobol_display_endpoint_t *endpoint, const char *reason);
+
 /** Resize endpoint viewport and host.  Dimensions are physical pixels and
  * device_pixel_ratio must be positive. */
 BOBOL_EXPORT int

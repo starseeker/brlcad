@@ -1934,10 +1934,24 @@ realize_walk_stream_push_current(struct realize_walk_data *data,
     realize_walk_stream_push(data, occurrence);
 }
 
+static void
+canonicalize_affine_tail(SbMatrix &matrix)
+{
+    /* BRL-CAD object and draw transforms are affine by contract.  Relative
+     * frame calculations may nevertheless leave roundoff in the homogeneous
+     * column; preserving that residue turns a valid CAD placement into a
+     * projective matrix at the retained-scene validation boundary. */
+    matrix[0][3] = 0.0f;
+    matrix[1][3] = 0.0f;
+    matrix[2][3] = 0.0f;
+    matrix[3][3] = 1.0f;
+}
+
 static SbMatrix
 mat_to_sbmatrix(const mat_t mat)
 {
-    return SbMatrix(
+
+    SbMatrix matrix(
 	       static_cast<float>(mat[0]), static_cast<float>(mat[4]),
 	       static_cast<float>(mat[8]), static_cast<float>(mat[12]),
 	       static_cast<float>(mat[1]), static_cast<float>(mat[5]),
@@ -1946,19 +1960,69 @@ mat_to_sbmatrix(const mat_t mat)
 	       static_cast<float>(mat[10]), static_cast<float>(mat[14]),
 	       static_cast<float>(mat[3]), static_cast<float>(mat[7]),
 	       static_cast<float>(mat[11]), static_cast<float>(mat[15]));
+    canonicalize_affine_tail(matrix);
+    return matrix;
+}
+
+static std::string database_source_full_path_string(const SbString &path);
+
+static SoSeparator *
+realize_matrix_leaf_separator(const SbMatrix &matrix)
+{
+    SoSeparator *leaf = new SoSeparator;
+    if (matrix.equals(SbMatrix::identity(), 0.0f))
+	return leaf;
+
+    SoMatrixTransform *transform = new SoMatrixTransform;
+    transform->matrix = matrix;
+    leaf->addChild(transform);
+    return leaf;
 }
 
 static SoSeparator *
 realize_instance_leaf_separator(const struct db_tree_state *tsp)
 {
-    SoSeparator *leaf = new SoSeparator;
-    if (!tsp || bn_mat_is_identity(tsp->ts_mat))
-	return leaf;
+    return realize_matrix_leaf_separator(tsp ? mat_to_sbmatrix(tsp->ts_mat) :
+	SbMatrix::identity());
+}
 
-    SoMatrixTransform *transform = new SoMatrixTransform;
-    transform->matrix = mat_to_sbmatrix(tsp->ts_mat);
-    leaf->addChild(transform);
-    return leaf;
+/* The direct-leaf fast path imports the terminal primitive without walking
+ * its parent combinations.  Preserve the path placement explicitly; semantic
+ * bounds are already evaluated in model coordinates, and publishing local
+ * geometry with an identity placement would put the representation outside
+ * the camera selected from those bounds.  If the path cannot be resolved,
+ * decline the optimization and let the ordinary tree walk diagnose it. */
+static SbBool
+database_source_path_matrix(struct db_i *dbip, const SbString &sourcePath,
+	SbMatrix &matrix)
+{
+    matrix.makeIdentity();
+    if (!dbip)
+	return FALSE;
+
+    const std::string fullPath =
+	database_source_full_path_string(sourcePath);
+    if (fullPath.empty())
+	return FALSE;
+
+    struct db_full_path path;
+    db_full_path_init(&path);
+    if (db_string_to_path(&path, dbip, fullPath.c_str()) != 0 ||
+	path.fp_len == 0 || path.fp_len > static_cast<size_t>(INT_MAX)) {
+	db_free_full_path(&path);
+	return FALSE;
+    }
+
+    mat_t pathMatrix;
+    MAT_IDN(pathMatrix);
+    const int valid = db_path_to_mat(dbip, &path, pathMatrix,
+	static_cast<int>(path.fp_len) - 1);
+    db_free_full_path(&path);
+    if (!valid)
+	return FALSE;
+
+    matrix = mat_to_sbmatrix(pathMatrix);
+    return TRUE;
 }
 
 static std::string
@@ -3704,6 +3768,10 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 
     const std::string fullPath =
 	database_source_full_path_string(source->path.getValue());
+    SbMatrix pathMatrix;
+    if (!database_source_path_matrix(dbip, source->path.getValue(),
+	pathMatrix))
+	return 0;
     SoBRLVListShape *sharedShape = NULL;
     SbBox3f localBounds;
     SbBool localBoundsValid = FALSE;
@@ -3780,7 +3848,7 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 		source->realizationDiagnostic = msg;
 		return -1;
 	    }
-	    SoSeparator *leaf = new SoSeparator;
+	    SoSeparator *leaf = realize_matrix_leaf_separator(pathMatrix);
 	    assign_material_identity(materialObject,
 				     fullPath.c_str(),
 				     dp->d_namep, typeLabel, revision);
@@ -3826,7 +3894,7 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 
     {
 	BObolPerformanceTimer timer(BOBOL_PERF_REALIZED_INSTANCE_NODE_US);
-	SoSeparator *leaf = new SoSeparator;
+	SoSeparator *leaf = realize_matrix_leaf_separator(pathMatrix);
 	SoBRLVListShape *shape = new SoBRLVListShape;
 	assign_realized_identity(shape, NULL, fullPath.c_str(),
 				 dp->d_namep, typeLabel, revision, source);
@@ -3873,6 +3941,10 @@ realize_direct_leaf_wireframe_compact(
 
     const std::string fullPath =
 	database_source_full_path_string(source->path.getValue());
+    SbMatrix pathMatrix;
+    if (!database_source_path_matrix(dbip, source->path.getValue(),
+	pathMatrix))
+	return 0;
     SbBox3f localBounds;
     SbBool localBoundsValid = FALSE;
     std::string cacheKey = realize_geometry_cache_key(dp);
@@ -3949,7 +4021,7 @@ realize_direct_leaf_wireframe_compact(
 		source->realizationDiagnostic = msg;
 		return -1;
 	    }
-	    SoSeparator *leaf = new SoSeparator;
+	    SoSeparator *leaf = realize_matrix_leaf_separator(pathMatrix);
 	    assign_material_identity(materialObject, fullPath.c_str(),
 		dp->d_namep, typeLabel, revision);
 	    leaf->addChild(materialObject);
@@ -4007,6 +4079,7 @@ realize_direct_leaf_wireframe_compact(
 	geometryKind, revision, BObolRealizedShapeSummary::SHAPE_VLIST);
     occurrence.occurrenceIndex = source->occurrenceIndex.getValue();
     occurrence.booleanOperation = source->booleanOperation.getValue();
+    occurrence.localTransform = pathMatrix;
     const int compacted = source->setCompactOccurrence(occurrence);
     if (!localBoundsValid && cadGeometry) {
 	localBounds = compact_part_geometry_bounds(cadGeometry);
@@ -4502,6 +4575,62 @@ struct BObolOwnedStagedTriangleMesh {
     std::vector<int> faces;
 };
 
+static int
+cad_mesh_part_geometry_from_staged_source(
+	const BObolStagedSourceMesh &staged,
+	Obol::PartGeometryBuilder &geometry)
+{
+    if (!staged.isValid() ||
+	staged.pointCount > static_cast<size_t>(UINT32_MAX) ||
+	staged.faceCount > SIZE_MAX / 3)
+	return 0;
+
+    Obol::TriMesh mesh;
+    mesh.bounds.makeEmpty();
+    mesh.positions.reserve(staged.pointCount);
+    for (size_t i = 0; i < staged.pointCount; ++i) {
+	const SbVec3f point(
+	    static_cast<float>(staged.points[i][X]),
+	    static_cast<float>(staged.points[i][Y]),
+	    static_cast<float>(staged.points[i][Z]));
+	mesh.positions.push_back(point);
+	mesh.bounds.extendBy(point);
+    }
+
+    const size_t indexCount = staged.faceCount * 3;
+    std::vector<int32_t> indices;
+    indices.reserve(indexCount);
+    for (size_t i = 0; i < indexCount; ++i) {
+	const int index = staged.faces[i];
+	if (index < 0 || static_cast<size_t>(index) >= staged.pointCount)
+	    return 0;
+	indices.push_back(static_cast<int32_t>(index));
+    }
+
+    std::vector<SbVec3f> normals;
+    if (staged.normals) {
+	normals.reserve(indexCount);
+	for (size_t i = 0; i < indexCount; ++i) {
+	    normals.push_back(SbVec3f(
+		static_cast<float>(staged.normals[i][X]),
+		static_cast<float>(staged.normals[i][Y]),
+		static_cast<float>(staged.normals[i][Z])));
+	}
+    }
+    sanitize_triangle_normals(normals, mesh.positions, indices);
+
+    mesh.indices.reserve(indexCount);
+    for (const int32_t index : indices)
+	mesh.indices.push_back(static_cast<uint32_t>(index));
+    if (mesh.bounds.isEmpty() || mesh.indices.empty() ||
+	!canonicalize_corner_normal_mesh(mesh, normals))
+	return 0;
+
+    geometry.shaded = std::move(mesh);
+    geometry.shadedCullBackfaces = staged.shadedCullBackfaces != 0;
+    return 1;
+}
+
 static unsigned long long
 cad_brep_shaded_asset_key(struct db_i *dbip, struct directory *dp,
 	const struct bg_tess_tol *ttol, const struct bn_tol *tol)
@@ -4512,8 +4641,11 @@ cad_brep_shaded_asset_key(struct db_i *dbip, struct directory *dp,
     if (db_get_external(&external, dp, dbip) != 0)
 	return 0;
     struct bu_data_hash_state *hash = bu_data_hash_create();
+    /* Version three requires a validated indexed-face-set whose referenced
+     * triangles cover the source BREP boundary.  Earlier caches may contain
+     * a successful subset after one or more CDT faces failed. */
     static const char contract[] =
-	"BObol-display-asset:shaded-triangles:brep-indexed-face-set-v2:";
+	"BObol-display-asset:shaded-triangles:brep-indexed-face-set-v3:";
     bu_data_hash_update(hash, contract, sizeof(contract));
     bu_data_hash_update(hash, BOBOL_MESH_LOD_PROVIDER_VERSION,
 	strlen(BOBOL_MESH_LOD_PROVIDER_VERSION));
@@ -5024,6 +5156,20 @@ compact_mesh_prefill_bot(const compact_mesh_prefill_job &job)
 }
 
 static bool
+database_source_terminal_empty_bot(const struct rt_db_internal *intern)
+{
+    if (!intern || intern->idb_type != ID_BOT || !intern->idb_ptr)
+	return false;
+    const struct rt_bot_internal *bot =
+	static_cast<const struct rt_bot_internal *>(intern->idb_ptr);
+    /* A zero-face BoT has no drawable surface.  It is a valid no-op leaf,
+     * commonly produced when a partial conversion cannot facetize one source
+     * component.  A face-bearing BoT with missing vertices remains malformed
+     * and follows the ordinary hard-failure path. */
+    return bot->num_faces == 0;
+}
+
+static bool
 compact_mesh_prefill_bot_cacheable(const struct rt_bot_internal *bot)
 {
     /* Authored corner normals are geometry data.  A future extension can
@@ -5300,6 +5446,10 @@ compact_mesh_prefill_import_filter_reuse_bounded(
 	imported.sourceType = primitive_type_label(&imported.intern);
 
 	const int internalType = imported.intern.idb_type;
+	if (database_source_terminal_empty_bot(&imported.intern)) {
+	    compact_mesh_prefill_release_internal(imported);
+	    continue;
+	}
 	const bool wireInstead =
 	    (drawMode == BOBOL_LOD_DRAW_WIRE ||
 	     (drawMode == BOBOL_LOD_DRAW_SHADED_BOTS &&
@@ -5704,6 +5854,8 @@ compact_mesh_prefill_import_and_filter(compact_mesh_prefill_collect &collect,
 	    continue;
 	}
 	const int internalType = job.intern.idb_type;
+	if (database_source_terminal_empty_bot(&job.intern))
+	    continue;
 	const bool wireInstead =
 	    (drawMode == BOBOL_LOD_DRAW_WIRE ||
 	     (drawMode == BOBOL_LOD_DRAW_SHADED_BOTS &&
@@ -6066,6 +6218,10 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 
     const std::string fullPath =
 	database_source_full_path_string(source->path.getValue());
+    SbMatrix pathMatrix;
+    if (!database_source_path_matrix(dbip, source->path.getValue(),
+	pathMatrix))
+	return 0;
     SoBRLVListShape *sharedVListShape = NULL;
     SoBRLMeshShape *sharedMeshShape = NULL;
     SbBox3f cacheBounds;
@@ -6122,7 +6278,7 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 		source->realizationDiagnostic = msg;
 		return -1;
 	    }
-	    SoSeparator *leaf = new SoSeparator;
+	    SoSeparator *leaf = realize_matrix_leaf_separator(pathMatrix);
 	    assign_material_identity(materialObject,
 				     fullPath.c_str(),
 				     dp->d_namep, typeLabel, revision);
@@ -6191,7 +6347,7 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 	}
     }
 
-    SoSeparator *leaf = new SoSeparator;
+    SoSeparator *leaf = realize_matrix_leaf_separator(pathMatrix);
     if (sharedVListShape) {
 	SoBRLVListShape *vlistShape = new SoBRLVListShape;
 	assign_realized_identity(vlistShape, NULL, fullPath.c_str(),
@@ -6252,6 +6408,10 @@ realize_direct_leaf_mesh_compact(
 
     const std::string fullPath =
 	database_source_full_path_string(source->path.getValue());
+    SbMatrix pathMatrix;
+    if (!database_source_path_matrix(dbip, source->path.getValue(),
+	pathMatrix))
+	return 0;
     SoBRLVListShape *sharedVListShape = NULL;
     SoBRLMeshShape *sharedMeshShape = NULL;
     SbBox3f cacheBounds;
@@ -6319,7 +6479,7 @@ realize_direct_leaf_mesh_compact(
 		source->realizationDiagnostic = msg;
 		return -1;
 	    }
-	    SoSeparator *leaf = new SoSeparator;
+	    SoSeparator *leaf = realize_matrix_leaf_separator(pathMatrix);
 	    assign_material_identity(materialObject, fullPath.c_str(),
 		dp->d_namep, directTypeLabel, revision);
 	    leaf->addChild(materialObject);
@@ -6626,6 +6786,7 @@ realize_direct_leaf_mesh_compact(
 
     occurrence.occurrenceIndex = source->occurrenceIndex.getValue();
     occurrence.booleanOperation = source->booleanOperation.getValue();
+    occurrence.localTransform = pathMatrix;
     const int compacted = source->setCompactOccurrence(occurrence);
     if (compacted > 0 && stream && !stream->isCancelled())
 	stream->push(occurrence);
@@ -7103,6 +7264,8 @@ static union tree *
 			validInternal.ownsLocal ? &validInternal.local : NULL);
 		return TREE_NULL;
 	    }
+	    if (database_source_terminal_empty_bot(localIntern))
+		return make_nop_tree();
 
 	    const int internalType = localIntern->idb_type;
 	    const int drawMode = source_record_draw_mode(data->source);
@@ -7345,6 +7508,8 @@ static union tree *
 		validInternal.ownsLocal ? &validInternal.local : NULL);
 	    return TREE_NULL;
 	}
+	if (database_source_terminal_empty_bot(localIntern))
+	    return make_nop_tree();
 
 	typeLabel = primitive_type_label(localIntern);
 	const int internalType = localIntern->idb_type;
@@ -8430,6 +8595,7 @@ cad_instance_matrix(const SoBRLDatabaseSource *source,
     SbMatrix matrix = localMatrix;
     if (source && source->drawMatrixValid.getValue())
 	matrix.multRight(source->drawMatrix.getValue());
+    canonicalize_affine_tail(matrix);
     return matrix;
 }
 
@@ -10898,41 +11064,61 @@ SoBRLDatabaseSource::markDisplayMeshLodDirty(void)
 	this->d->displayMeshLodRevision;
 }
 
-void
-SoBRLDatabaseSource::markDisplayMeshLodDirty(
-    const std::vector<size_t> &entryIndices, SbBool coverageInvalidated)
+static const size_t display_mesh_lod_delta_batch_limit = 256;
+static const size_t display_mesh_lod_delta_entry_limit = 65536;
+
+template <typename Delta>
+static void
+database_source_record_display_mesh_lod_delta(
+    uint64_t &revision, uint64_t &floorRevision, size_t &retainedEntryCount,
+    std::deque<Delta> &deltas, const std::vector<size_t> &entryIndices,
+    SbBool coverageInvalidated)
 {
     if (entryIndices.empty())
 	return;
-    if (++this->d->displayMeshLodRevision == 0)
-	this->d->displayMeshLodRevision = 1;
+    if (++revision == 0)
+	revision = 1;
 
-    Impl::DisplayMeshLodDelta delta;
-    delta.revision = this->d->displayMeshLodRevision;
+    Delta delta;
+    delta.revision = revision;
     delta.entryIndices = entryIndices;
     delta.coverageInvalidated = coverageInvalidated;
     std::sort(delta.entryIndices.begin(), delta.entryIndices.end());
     delta.entryIndices.erase(std::unique(delta.entryIndices.begin(),
 	delta.entryIndices.end()), delta.entryIndices.end());
-    this->d->displayMeshLodDeltaEntryCount += delta.entryIndices.size();
-    this->d->displayMeshLodDeltas.push_back(std::move(delta));
+    retainedEntryCount += delta.entryIndices.size();
+    deltas.push_back(std::move(delta));
 
-    /* A visibility/edit burst normally records a handful of entries.  Bound
-     * pathological history without penalizing independent views: a lagging
-     * view receives FALSE below and performs one authoritative rescan. */
-    static const size_t maxDeltaBatches = 256;
-    static const size_t maxDeltaEntries = 65536;
-    while (this->d->displayMeshLodDeltas.size() > maxDeltaBatches ||
-	this->d->displayMeshLodDeltaEntryCount > maxDeltaEntries) {
-	const Impl::DisplayMeshLodDelta &front =
-	    this->d->displayMeshLodDeltas.front();
-	this->d->displayMeshLodDeltaEntryCount -=
-	    front.entryIndices.size();
-	this->d->displayMeshLodDeltaFloorRevision =
-	    std::max(this->d->displayMeshLodDeltaFloorRevision,
-		front.revision);
-	this->d->displayMeshLodDeltas.pop_front();
+    while (deltas.size() > display_mesh_lod_delta_batch_limit ||
+	retainedEntryCount > display_mesh_lod_delta_entry_limit) {
+	const Delta &front = deltas.front();
+	retainedEntryCount -= front.entryIndices.size();
+	floorRevision = std::max(floorRevision, front.revision);
+	deltas.pop_front();
     }
+}
+
+void
+SoBRLDatabaseSource::markDisplayMeshLodDirty(
+    const std::vector<size_t> &entryIndices, SbBool coverageInvalidated)
+{
+    database_source_record_display_mesh_lod_delta(
+	this->d->displayMeshLodRevision,
+	this->d->displayMeshLodDeltaFloorRevision,
+	this->d->displayMeshLodDeltaEntryCount,
+	this->d->displayMeshLodDeltas, entryIndices,
+	coverageInvalidated);
+}
+
+void
+SoBRLDatabaseSource::markDisplayMeshLodVisibilityDirty(
+    const std::vector<size_t> &entryIndices)
+{
+    database_source_record_display_mesh_lod_delta(
+	this->d->displayMeshLodVisibilityRevision,
+	this->d->displayMeshLodVisibilityDeltaFloorRevision,
+	this->d->displayMeshLodVisibilityDeltaEntryCount,
+	this->d->displayMeshLodVisibilityDeltas, entryIndices, FALSE);
 }
 
 uint64_t
@@ -13373,6 +13559,11 @@ struct compact_coverage_asset {
      * those transforms can write a non-identity self mapping for the
      * canonical object and draw later warm meshes at the wrong location. */
     bool sourceMeshMappingCached = false;
+    /* A syntactically valid BoT with no faces has no drawable occurrence.
+     * Distinguish that terminal no-op from malformed nonempty data: the
+     * former is excluded from the producer's final drawable census, while
+     * the latter must still prevent authoritative stream adoption. */
+    bool terminalEmpty = false;
     std::string realizedSourceType;
     std::string realizedGeometryKind;
     bool viewDependentCsgGeometry = false;
@@ -13588,7 +13779,13 @@ compact_coverage_try_acquire_parallel_vertex_scan(void)
  * import fallback because its record layout does not offer the same compact
  * body contract.
  */
-static bool
+enum class CompactCoverageBotStatus : uint8_t {
+    INVALID = 0,
+    EMPTY,
+    READY
+};
+
+static CompactCoverageBotStatus
 compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 	SbBox3f &bounds, size_t &vertexCount, size_t &faceCount,
 	unsigned char &mode, unsigned char &orientation, unsigned char &flags,
@@ -13605,33 +13802,41 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     sampleFingerprintValid = false;
     if (!dbip || !dp ||
 	dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
-	return false;
+	return CompactCoverageBotStatus::INVALID;
 
     if (db_version(dbip) != 5) {
 	struct rt_db_internal intern;
 	RT_DB_INTERNAL_INIT(&intern);
 	if (rt_db_get_internal(&intern, dp, dbip, NULL) < 0)
-	    return false;
+	    return CompactCoverageBotStatus::INVALID;
 	const struct rt_bot_internal *bot =
 	    intern.idb_type == ID_BOT && intern.idb_ptr ?
 	    static_cast<const struct rt_bot_internal *>(intern.idb_ptr) :
 	    NULL;
+	CompactCoverageBotStatus status = CompactCoverageBotStatus::INVALID;
 	if (bot) {
-	    BObolSourceMeshRequest request;
-	    if (cad_source_mesh_request_from_bot(request, bot)) {
-		bounds = request.bounds;
-		vertexCount = bot->num_vertices;
-		faceCount = bot->num_faces;
-		mode = bot->mode;
-		orientation = bot->orientation;
-		flags = bot->bot_flags;
-		sampleFingerprintValid =
-		    compact_stream_lod_sample_fingerprint(
-			sampleFingerprint, bot);
+	    vertexCount = bot->num_vertices;
+	    faceCount = bot->num_faces;
+	    mode = bot->mode;
+	    orientation = bot->orientation;
+	    flags = bot->bot_flags;
+	    if (!faceCount) {
+		status = CompactCoverageBotStatus::EMPTY;
+	    } else if (vertexCount) {
+		BObolSourceMeshRequest request;
+		if (cad_source_mesh_request_from_bot(request, bot)) {
+		    bounds = request.bounds;
+		    sampleFingerprintValid =
+			compact_stream_lod_sample_fingerprint(
+			    sampleFingerprint, bot);
+		    status = bounds.isEmpty() ?
+			CompactCoverageBotStatus::INVALID :
+			CompactCoverageBotStatus::READY;
+		}
 	    }
 	}
 	rt_db_free_internal(&intern);
-	return !bounds.isEmpty();
+	return status;
     }
 
     struct bu_external external;
@@ -13650,7 +13855,7 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     }
     if (!borrowed) {
 	if (db_get_external(&external, dp, dbip) < 0)
-	    return false;
+	    return CompactCoverageBotStatus::INVALID;
 	serialized = external.ext_buf;
 	serializedBytes = external.ext_nbytes;
     }
@@ -13697,24 +13902,31 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     if (!rawValid) {
 	if (!borrowed)
 	    bu_free_external(&external);
-	return false;
+	return CompactCoverageBotStatus::INVALID;
     }
 
     const unsigned char *body = raw.body.ext_buf;
     const size_t vertices = static_cast<size_t>(BU_GLONG(body));
     const size_t faces = static_cast<size_t>(
 	BU_GLONG(body + SIZEOF_NETWORK_LONG));
+    vertexCount = vertices;
+    faceCount = faces;
     const size_t fixedBytes = 2 * SIZEOF_NETWORK_LONG + 3;
     const size_t vertexStride =
 	SIZEOF_NETWORK_DOUBLE * ELEMENTS_PER_POINT;
     const size_t faceStride = 3 * SIZEOF_NETWORK_LONG;
+    if (!faces) {
+	if (!borrowed)
+	    bu_free_external(&external);
+	return CompactCoverageBotStatus::EMPTY;
+    }
     if (!vertices || vertices > (SIZE_MAX - fixedBytes) / vertexStride ||
 	fixedBytes + vertices * vertexStride > raw.body.ext_nbytes ||
 	faces > (raw.body.ext_nbytes -
 	    (fixedBytes + vertices * vertexStride)) / faceStride) {
 	if (!borrowed)
 	    bu_free_external(&external);
-	return false;
+	return CompactCoverageBotStatus::INVALID;
     }
 
     orientation = body[2 * SIZEOF_NETWORK_LONG];
@@ -13830,7 +14042,7 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
     if (!borrowed)
 	bu_free_external(&external);
     if (!vertexBounds.finiteVertices)
-	return false;
+	return CompactCoverageBotStatus::INVALID;
 
     bounds = SbBox3f(
 	SbVec3f(static_cast<float>(vertexBounds.minimum[X]),
@@ -13839,9 +14051,8 @@ compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
 	SbVec3f(static_cast<float>(vertexBounds.maximum[X]),
 	    static_cast<float>(vertexBounds.maximum[Y]),
 	    static_cast<float>(vertexBounds.maximum[Z])));
-    vertexCount = vertices;
-    faceCount = faces;
-    return !bounds.isEmpty();
+    return bounds.isEmpty() ? CompactCoverageBotStatus::INVALID :
+	CompactCoverageBotStatus::READY;
 }
 
 struct compact_coverage_mapped_database {
@@ -14369,7 +14580,17 @@ compact_coverage_seed_warm_terminal_work(
     std::vector<BObolCompactManifestOccurrence> records;
     if (!stream->takeWarmTerminalOccurrences(records) || records.empty())
 	return false;
+    const auto rejectWarmCensus = [stream]() {
+	stream->setWarmCensusComplete(false);
+	return false;
+    };
 
+    /* Validate the complete replay set before publishing it to collect.  A
+     * stale or malformed record falls back to the ordinary hierarchy walk;
+     * it must not leave partial assets or duplicate detail work behind. */
+    std::vector<std::unique_ptr<compact_coverage_asset>> stagedAssets;
+    stagedAssets.reserve(records.size());
+    std::deque<compact_coverage_work_item> stagedWork;
     std::unordered_map<struct directory *, compact_coverage_asset *>
 	assetsByDirectory;
     assetsByDirectory.reserve(records.size());
@@ -14378,12 +14599,12 @@ compact_coverage_seed_warm_terminal_work(
 	const char *path = record.path.getString();
 	if (!sourceName || !sourceName[0] || !path || !path[0] ||
 	    record.bounds.isEmpty() || record.sourceMeshRequestValid)
-	    return false;
+	    return rejectWarmCensus();
 	struct directory *dp = db_lookup(source->getDatabase(), sourceName,
 	    LOOKUP_QUIET);
 	if (dp == RT_DIR_NULL ||
 	    dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
-	    return false;
+	    return rejectWarmCensus();
 
 	compact_coverage_asset *asset = NULL;
 	auto found = assetsByDirectory.find(dp);
@@ -14400,13 +14621,13 @@ compact_coverage_seed_warm_terminal_work(
 		record.bounds, owned->proxyGeometryTransform);
 	    owned->coverageReady = owned->coverageGeometry ? true : false;
 	    asset = owned.get();
-	    collect.assets.push_back(std::move(owned));
+	    stagedAssets.push_back(std::move(owned));
 	    assetsByDirectory.emplace(dp, asset);
 	} else {
 	    asset = found->second;
 	}
 	if (!asset || !asset->coverageReady)
-	    return false;
+	    return rejectWarmCensus();
 
 	compact_coverage_occurrence occurrence;
 	occurrence.localTransform = record.localTransform;
@@ -14429,11 +14650,16 @@ compact_coverage_seed_warm_terminal_work(
 	compact_coverage_work_item item;
 	item.asset = asset;
 	item.occurrence = std::move(occurrence);
-	collect.detailWork.push_back(std::move(item));
+	stagedWork.push_back(std::move(item));
     }
 
-    collect.occurrenceCount = stream->getExpectedCount();
-    return collect.occurrenceCount > 0 && !collect.detailWork.empty();
+    const size_t occurrenceCount = stream->getExpectedCount();
+    if (occurrenceCount == 0 || stagedWork.empty())
+	return rejectWarmCensus();
+    collect.assets = std::move(stagedAssets);
+    collect.detailWork = std::move(stagedWork);
+    collect.occurrenceCount = occurrenceCount;
+    return true;
 }
 
 static int
@@ -14472,6 +14698,7 @@ compact_stream_publish_parallel_coverage(
     std::atomic<size_t> publishedBoxes(0);
     std::atomic<size_t> publishedTerminalOnly(0);
     std::atomic<size_t> publishedContracts(0);
+    std::atomic<size_t> terminalEmptyOccurrences(0);
     std::mutex aggregateMutex;
     SbBox3f aggregateBounds;
     aggregateBounds.makeEmpty();
@@ -14540,13 +14767,18 @@ compact_stream_publish_parallel_coverage(
 		    return;
 		if (!stream->isCancelled() && asset.dp &&
 		    asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
-		    asset.coverageReady = compact_coverage_bot_bounds(
+		    const CompactCoverageBotStatus coverageStatus =
+			compact_coverage_bot_bounds(
 			source->getDatabase(), asset.dp,
 			asset.coverageBounds, asset.vertexCount,
 			asset.faceCount, asset.mode, asset.orientation,
 			asset.flags, asset.sampleFingerprint,
 			asset.sampleFingerprintValid,
 			mappedDatabase.file);
+		    asset.coverageReady =
+			coverageStatus == CompactCoverageBotStatus::READY;
+		    asset.terminalEmpty =
+			coverageStatus == CompactCoverageBotStatus::EMPTY;
 		    asset.lodEligible = asset.coverageReady &&
 			asset.faceCount >=
 			    source->lodBotThreshold.getValue();
@@ -14660,6 +14892,11 @@ compact_stream_publish_parallel_coverage(
 		bobol_lod_working_set_release(coverageWorkingSet);
 	    });
 
+	    if (asset.terminalEmpty) {
+		terminalEmptyOccurrences.fetch_add(1);
+		continue;
+	    }
+
 	    if (asset.coverageReady && !stream->isCancelled()) {
 		/*
 		 * Publish a synthetic, unselectable draw-target extent before
@@ -14730,16 +14967,20 @@ compact_stream_publish_parallel_coverage(
 		item = std::move(collect.detailWork.front());
 		collect.detailWork.pop_front();
 	    }
-	    if (!item.asset || stream->isCancelled())
+	    if (!item.asset || stream->isCancelled()) {
+		stream->notePreparationWorkCompleted();
 		continue;
+	    }
 	    compact_coverage_asset &asset = *item.asset;
 	    /* Authored BoTs already published a complete lazy source contract in
 	     * the coverage phase.  Their arrays and PoP hierarchy are view-demand
 	     * work and must not be imported merely because the leaf exists.  BREP
 	     * and analytic primitives still need terminal representation here. */
 	    if (asset.dp &&
-		asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
+		asset.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
+		stream->notePreparationWorkCompleted();
 		continue;
+	    }
 	    std::call_once(asset.realizeOnce, [&]() {
 		if (!bobol_lod_working_set_acquire(
 		    asset.estimatedWorkingSetBytes))
@@ -14873,6 +15114,25 @@ compact_stream_publish_parallel_coverage(
 			asset.ready = asset.geometry ? true : false;
 			asset.sourceMeshReady = asset.ready;
 		    }
+		    if (!asset.ready) {
+			/* Tessellation is presentation data; PoP derivation and cache
+			 * persistence are optional accelerators.  Preserve a valid
+			 * staged mesh if either operation is unavailable or fails.
+			 * Discarding it made the compact stream non-authoritative and
+			 * forced the fallback hierarchy walk to repeat the same
+			 * expensive BREP tessellation before anything but boxes could
+			 * be shown. */
+			Obol::PartGeometryBuilder terminalGeometry;
+			if (cad_mesh_part_geometry_from_staged_source(
+				*staged, terminalGeometry)) {
+			    asset.geometry = bobol_cad_build_geometry(
+				std::move(terminalGeometry),
+				"terminal BREP tessellation");
+			    asset.ready = asset.geometry ? true : false;
+			    asset.sourceMeshReady = false;
+			    asset.lodEligible = false;
+			}
+		    }
 		    if (asset.ready && !stream->isCancelled() &&
 			stream->retainStagedSource(staged))
 			asset.sourceMeshRequest.stagedSource = staged;
@@ -14940,8 +15200,10 @@ compact_stream_publish_parallel_coverage(
 		    asset.estimatedWorkingSetBytes);
 	    });
 
-	    if (!asset.ready || stream->isCancelled())
+	    if (!asset.ready || stream->isCancelled()) {
+		stream->notePreparationWorkCompleted();
 		continue;
+	    }
 
 	    BObolCompactOccurrence occurrence;
 	    occurrence.geometry = asset.geometry;
@@ -15012,6 +15274,7 @@ compact_stream_publish_parallel_coverage(
 	    if (!asset.coverageReady)
 		publishedTerminalOnly.fetch_add(1);
 	    publishedContracts.fetch_add(1);
+	    stream->notePreparationWorkCompleted();
 	}
     };
     std::vector<std::thread> workers;
@@ -15039,8 +15302,12 @@ compact_stream_publish_parallel_coverage(
 	    compact_coverage_collect_leaf, &collect);
 	db_free_db_tree_state(&initialState);
     }
-    /* Publish the final occurrence cardinality as soon as enumeration ends,
-     * while bound workers are still draining. */
+    /* Publish the semantic source profile as soon as enumeration ends, while
+     * bound workers are still draining.  The drawable occurrence cardinality
+     * is intentionally withheld until those workers have distinguished
+     * terminal-empty BoTs from invalid nonempty records.  Treating the raw
+     * hierarchy count as final permanently stranded streams containing valid
+     * zero-face conversion placeholders. */
     BObolCompactSourceProfile profile;
     if (walkResult >= 0 && !selectiveWarmReplay) {
 	profile.valid = TRUE;
@@ -15060,7 +15327,6 @@ compact_stream_publish_parallel_coverage(
 		UINT64_MAX - profile.encodedSourceBytes ? UINT64_MAX :
 		profile.encodedSourceBytes + encodedBytes;
 	}
-	stream->setExpectedCount(collect.occurrenceCount);
 	stream->setSourceProfile(profile);
     }
     {
@@ -15076,8 +15342,19 @@ compact_stream_publish_parallel_coverage(
 	thread.join();
     if (walkResult < 0 || stream->isCancelled())
 	return -1;
+    const size_t emptyOccurrenceCount = terminalEmptyOccurrences.load();
+    const size_t drawableOccurrenceCount =
+	emptyOccurrenceCount >= collect.occurrenceCount ? 0 :
+	collect.occurrenceCount - emptyOccurrenceCount;
+    stream->setExpectedCount(drawableOccurrenceCount);
     if (collect.assets.empty())
 	return 0;
+
+    /* Coverage has now produced the exact finite terminal-representation
+     * queue.  Publish its denominator before reuse proof or detail workers
+     * begin so the owner can distinguish a productive long tessellation from
+     * an unranked provider stall. */
+    stream->setPreparationWorkCount(collect.detailWork.size());
 
     /* Resolve only the ambiguous broad groups.  The proof scans borrowed
      * serialized arrays and therefore has a tiny, bounded working set even
@@ -15276,8 +15553,37 @@ compact_stream_publish_parallel_coverage(
 	thread.join();
     if (stream->isCancelled())
 	return -1;
-    if (profile.valid)
-	source->setCompactSourceProfile(profile);
+    if (profile.valid) {
+	profile.occurrenceCount = drawableOccurrenceCount;
+	profile.uniqueAssetCount = 0;
+	profile.encodedSourceBytes = 0;
+	profile.largestAssetBytes = 0;
+	for (const std::unique_ptr<compact_coverage_asset> &asset :
+	     collect.assets) {
+	    if (!asset || asset->terminalEmpty)
+		continue;
+	    profile.uniqueAssetCount++;
+	    const uint64_t encodedBytes =
+		compact_coverage_encoded_source_bytes(source->getDatabase(),
+		    asset->dp);
+	    profile.largestAssetBytes = std::max(
+		profile.largestAssetBytes, encodedBytes);
+	    profile.encodedSourceBytes = encodedBytes >
+		UINT64_MAX - profile.encodedSourceBytes ? UINT64_MAX :
+		profile.encodedSourceBytes + encodedBytes;
+	}
+	profile.reusedOccurrenceCount = profile.occurrenceCount >
+	    profile.uniqueAssetCount ? profile.occurrenceCount -
+	    profile.uniqueAssetCount : 0;
+	profile.valid = profile.occurrenceCount > 0 &&
+	    profile.uniqueAssetCount > 0 &&
+	    profile.uniqueAssetCount <= profile.occurrenceCount &&
+	    profile.encodedSourceBytes > 0 &&
+	    profile.largestAssetBytes > 0;
+	stream->setSourceProfile(profile);
+	if (profile.valid)
+	    source->setCompactSourceProfile(profile);
+    }
     const int64_t detailCompleted = bu_gettime();
 
     /* A unique broad signature cannot be a rigid transformed copy of another
@@ -15348,8 +15654,8 @@ compact_stream_publish_parallel_coverage(
      * publication already completed above. */
     const size_t publishedOccurrenceCoverage =
 	publishedBoxes.load() + publishedTerminalOnly.load();
-    bool authoritativeStream = collect.occurrenceCount > 0 &&
-	publishedOccurrenceCoverage == collect.occurrenceCount;
+    bool authoritativeStream = drawableOccurrenceCount > 0 &&
+	publishedOccurrenceCoverage == drawableOccurrenceCount;
     size_t uncertifiedCoverage = 0;
     size_t uncertifiedRepresentation = 0;
     for (const std::unique_ptr<compact_coverage_asset> &asset :
@@ -15359,6 +15665,8 @@ compact_stream_publish_parallel_coverage(
 	    authoritativeStream = false;
 	    continue;
 	}
+	if (asset->terminalEmpty)
+	    continue;
 	const bool lazyMesh = asset->lodEligible && asset->sourceMeshReady;
 	const bool terminalGeometry = asset->ready && asset->geometry &&
 	    !asset->geometry->structuralProxy;
@@ -15391,16 +15699,18 @@ compact_stream_publish_parallel_coverage(
     }
     if (getenv("BOBOL_DRAW_TIMING"))
 	bu_log("[obol-timing] coverage certification: authoritative=%d "
-	       "occurrences=%zu boxes=%zu terminal_only=%zu assets=%zu "
+	       "occurrences=%zu drawable=%zu empty=%zu boxes=%zu "
+	       "terminal_only=%zu assets=%zu "
 	       "missing_bounds=%zu "
 	       "missing_terminal=%zu\n", authoritativeStream ? 1 : 0,
-	       collect.occurrenceCount, publishedBoxes.load(),
+	       collect.occurrenceCount, drawableOccurrenceCount,
+	       emptyOccurrenceCount, publishedBoxes.load(),
 	       publishedTerminalOnly.load(), collect.assets.size(),
 	       uncertifiedCoverage,
 	       uncertifiedRepresentation);
     if (authoritativeStreamOut)
 	*authoritativeStreamOut = authoritativeStream;
-    (void)stream->sealManifest(collect.occurrenceCount);
+    (void)stream->sealManifest(drawableOccurrenceCount);
     return publishedBoxes.load() > static_cast<size_t>(INT_MAX) ? INT_MAX :
 	static_cast<int>(publishedBoxes.load());
 }
@@ -17316,22 +17626,22 @@ SoBRLDatabaseSource::getDisplayMeshLodRevision(void) const
     return this->d->displayMeshLodRevision;
 }
 
-SbBool
-SoBRLDatabaseSource::getDisplayMeshLodChangedEntries(
-    uint64_t revision, std::vector<size_t> &entryIndices,
-    SbBool *coverageInvalidated) const
+template <typename Delta>
+static SbBool
+database_source_display_mesh_lod_changed_entries(
+    uint64_t revision, uint64_t currentRevision, uint64_t floorRevision,
+    const std::deque<Delta> &deltas, std::vector<size_t> &entryIndices,
+    SbBool *coverageInvalidated)
 {
     entryIndices.clear();
     if (coverageInvalidated)
 	*coverageInvalidated = FALSE;
-    if (revision == this->d->displayMeshLodRevision)
+    if (revision == currentRevision)
 	return TRUE;
-    if (!revision || revision > this->d->displayMeshLodRevision ||
-	revision < this->d->displayMeshLodDeltaFloorRevision)
+    if (!revision || revision > currentRevision || revision < floorRevision)
 	return FALSE;
 
-    for (const Impl::DisplayMeshLodDelta &delta :
-	this->d->displayMeshLodDeltas) {
+    for (const Delta &delta : deltas) {
 	if (delta.revision <= revision)
 	    continue;
 	entryIndices.insert(entryIndices.end(), delta.entryIndices.begin(),
@@ -17345,6 +17655,33 @@ SoBRLDatabaseSource::getDisplayMeshLodChangedEntries(
     entryIndices.erase(std::unique(entryIndices.begin(),
 	entryIndices.end()), entryIndices.end());
     return TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::getDisplayMeshLodChangedEntries(
+    uint64_t revision, std::vector<size_t> &entryIndices,
+    SbBool *coverageInvalidated) const
+{
+    return database_source_display_mesh_lod_changed_entries(
+	revision, this->d->displayMeshLodRevision,
+	this->d->displayMeshLodDeltaFloorRevision,
+	this->d->displayMeshLodDeltas, entryIndices, coverageInvalidated);
+}
+
+uint64_t
+SoBRLDatabaseSource::getDisplayMeshLodVisibilityRevision(void) const
+{
+    return this->d->displayMeshLodVisibilityRevision;
+}
+
+SbBool
+SoBRLDatabaseSource::getDisplayMeshLodVisibilityChangedEntries(
+    uint64_t revision, std::vector<size_t> &entryIndices) const
+{
+    return database_source_display_mesh_lod_changed_entries(
+	revision, this->d->displayMeshLodVisibilityRevision,
+	this->d->displayMeshLodVisibilityDeltaFloorRevision,
+	this->d->displayMeshLodVisibilityDeltas, entryIndices, NULL);
 }
 
 int

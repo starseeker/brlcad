@@ -545,7 +545,7 @@ main(int argc, char **argv)
 	FAIL("observer-synced GED draw should realize Obol wire geometry");
 
     controller->getViewport()->viewAll();
-    controller->requestRender("observer-draw-visible");
+    controller->requestLodCapacityRender("observer-draw-visible");
     QCoreApplication::processEvents();
     QImage observerImage;
     view.get_viewport_image(observerImage);
@@ -577,7 +577,7 @@ main(int argc, char **argv)
 	FAIL("GED autoview should update qtcad Obol camera through view refresh");
     if (fabsf(autoviewCamera[0]) > 25.0f)
 	FAIL("GED autoview should recenter qtcad Obol camera near drawn geometry");
-    controller->requestRender("observer-autoview-visible");
+    controller->requestLodCapacityRender("observer-autoview-visible");
     QCoreApplication::processEvents();
     QImage autoviewImage;
     view.get_viewport_image(autoviewImage);
@@ -714,7 +714,7 @@ main(int argc, char **argv)
 	FAIL("Obol draw sync should publish box.s as the authoritative source owner");
 
     controller->getViewport()->viewAll();
-    controller->requestRender("draw-sync-visible");
+    controller->requestLodCapacityRender("draw-sync-visible");
     QCoreApplication::processEvents();
     QImage visibleImage;
     view.get_viewport_image(visibleImage);

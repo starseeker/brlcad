@@ -31,7 +31,11 @@
 \* or visual quality; those remain pure C++ and graphical tests.  It does
 \* model the exact-empty boundary: zero renderer work is a valid sample only
 \* after an authoritative visibility census proves that no occurrence should
-\* have been presented.
+\* have been presented.  It also models the resident-availability retry which
+\* precedes this handoff: an allocation selected against an older resident
+\* prefix may not consume a newer capacity revision as a no-op.  The retry
+\* must either make the assigned cut drawable or publish a bounded availability
+\* constraint.
 
 EXTENDS Naturals, TLC
 
@@ -46,10 +50,12 @@ Phases == {"apply", "handoff", "present_exact", "measure",
 CeilingStates == {"effective", "inert", "none"}
 BudgetStates == {"fits", "over"}
 VisibilityStates == {"unknown", "empty", "nonempty"}
+AvailabilityRetryStates == {"required", "requested", "resolved", "constrained"}
 
 VARIABLES phase,
           cutsApplied,
           assignedCutsDrawable,
+	  availabilityRetryState,
           ceilingState,
           allocationBudgetState,
           reductionAttempts,
@@ -72,7 +78,8 @@ VARIABLES phase,
 	  visibilityCensus,
 	  presentedWork
 
-vars == <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
+vars == <<phase, cutsApplied, assignedCutsDrawable, availabilityRetryState,
+          ceilingState,
           allocationBudgetState,
           reductionAttempts, samplesRemaining, samplesConsumed,
           invalidFramesObserved, noOpScanAvailable, noOpScanCompleted,
@@ -95,6 +102,7 @@ TypeOK ==
     /\ phase \in Phases
     /\ cutsApplied \in BOOLEAN
     /\ assignedCutsDrawable \in BOOLEAN
+    /\ availabilityRetryState \in AvailabilityRetryStates
     /\ ceilingState \in CeilingStates
     /\ allocationBudgetState \in BudgetStates
     /\ reductionAttempts \in 0..ReductionLimit
@@ -125,6 +133,16 @@ SampleAccounting ==
 
 AppliedCutsAreDrawable ==
     cutsApplied => assignedCutsDrawable
+
+AvailabilityRetryIsBounded ==
+    /\ (assignedCutsDrawable <=> availabilityRetryState = "resolved")
+    /\ (availabilityRetryState \in {"required", "requested"} =>
+           phase = "apply" /\ ~cutsApplied)
+    /\ (availabilityRetryState = "constrained" =>
+           /\ phase = "terminal"
+           /\ ~cutsApplied
+           /\ reconciliationBudget = 0
+           /\ activeBudget = 0)
 
 SampleRequiresExactPresentation ==
     samplesConsumed > 0 =>
@@ -158,6 +176,11 @@ TerminalCertificateApplication ==
 TerminalCertificateGuardIsAtomic ==
     terminalBudgetGuard = certificatePublished
 
+TerminalCertificateRetiresHandoffDebt ==
+    certificatePublished =>
+        /\ reconciliationBudget = 0
+        /\ activeBudget = 0
+
 CanonicalReconciliationBudget ==
     activeBudget = reconciliationBudget
 
@@ -169,7 +192,9 @@ TerminalConstraintIsBounded ==
         /\ reductionAttempts = ReductionLimit
 
 NoPrematureTerminal ==
-    phase = "terminal" => certificatePublished \/ constraintPublished
+    phase = "terminal" =>
+        certificatePublished \/ constraintPublished \/
+        availabilityRetryState = "constrained"
 
 CeilingFreeFrameOwnership ==
     /\ (phase = "present_exact" =>
@@ -180,6 +205,8 @@ CeilingFreeFrameOwnership ==
 
 Init ==
     /\ assignedCutsDrawable \in BOOLEAN
+    /\ availabilityRetryState =
+           IF assignedCutsDrawable THEN "resolved" ELSE "required"
     /\ cutsApplied \in BOOLEAN
     /\ cutsApplied => assignedCutsDrawable
     /\ ceilingState \in {"effective", "inert"}
@@ -205,11 +232,31 @@ Init ==
     /\ visibilityCensus = "unknown"
     /\ presentedWork = FALSE
 
-ConstrainAllocationToAvailability ==
+RequestAvailabilityRetry ==
     /\ phase = "apply"
     /\ ~cutsApplied
     /\ ~assignedCutsDrawable
+    /\ availabilityRetryState = "required"
+    /\ availabilityRetryState' = "requested"
+    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
+                    allocationBudgetState, reductionAttempts,
+                    samplesRemaining, samplesConsumed,
+                    invalidFramesObserved, noOpScanAvailable,
+		    noOpScanCompleted, populationRevision,
+		    allocationRevision, ceilingFreeFrameRequested,
+		    certificatePublished,
+		    terminalBudgetGuard,
+		    certificateApplied, certificatePassCompleted,
+		    constraintPublished, reconciliationBudget, activeBudget,
+		    actualVisible, visibilityCensus, presentedWork>>
+
+CompleteAvailabilityRetry ==
+    /\ phase = "apply"
+    /\ ~cutsApplied
+    /\ ~assignedCutsDrawable
+    /\ availabilityRetryState = "requested"
     /\ assignedCutsDrawable' = TRUE
+    /\ availabilityRetryState' = "resolved"
     /\ UNCHANGED <<phase, cutsApplied, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
@@ -222,13 +269,34 @@ ConstrainAllocationToAvailability ==
 		    constraintPublished, reconciliationBudget, activeBudget,
 		    actualVisible, visibilityCensus, presentedWork>>
 
+PublishAvailabilityConstraint ==
+    /\ phase = "apply"
+    /\ ~cutsApplied
+    /\ ~assignedCutsDrawable
+    /\ availabilityRetryState = "requested"
+    /\ phase' = "terminal"
+    /\ availabilityRetryState' = "constrained"
+    /\ reconciliationBudget' = 0
+    /\ activeBudget' = 0
+    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable, ceilingState,
+                    allocationBudgetState, reductionAttempts,
+                    samplesRemaining, samplesConsumed,
+                    invalidFramesObserved, noOpScanAvailable,
+		    noOpScanCompleted, populationRevision,
+		    allocationRevision, ceilingFreeFrameRequested,
+		    certificatePublished,
+		    terminalBudgetGuard,
+		    certificateApplied, certificatePassCompleted,
+		    constraintPublished, actualVisible, visibilityCensus,
+		    presentedWork>>
+
 ApplyAssignedCuts ==
     /\ phase = "apply"
     /\ ~cutsApplied
     /\ assignedCutsDrawable
     /\ cutsApplied' = TRUE
     /\ phase' = "handoff"
-    /\ UNCHANGED <<assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<assignedCutsDrawable, availabilityRetryState, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
                     invalidFramesObserved, noOpScanAvailable,
@@ -245,7 +313,8 @@ CompleteNoOpAllocationScan ==
     /\ noOpScanAvailable
     /\ ~noOpScanCompleted
     /\ noOpScanCompleted' = TRUE
-    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
                     invalidFramesObserved, noOpScanAvailable,
@@ -263,7 +332,8 @@ ReduceOverBudgetAllocation ==
     /\ reductionAttempts < ReductionLimit
     /\ reductionAttempts' = reductionAttempts + 1
     /\ allocationBudgetState' \in BudgetStates
-    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
                     samplesRemaining,
                     samplesConsumed, invalidFramesObserved,
                     noOpScanAvailable, noOpScanCompleted,
@@ -284,6 +354,7 @@ ReconcileCeiling ==
     /\ phase' = "present_exact"
     /\ ceilingFreeFrameRequested' = TRUE
     /\ UNCHANGED <<cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
                     invalidFramesObserved, noOpScanAvailable,
@@ -298,7 +369,8 @@ CertifyVisibilityCensus ==
     /\ phase = "present_exact"
     /\ visibilityCensus = "unknown"
     /\ visibilityCensus' = IF actualVisible THEN "nonempty" ELSE "empty"
-    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
                     invalidFramesObserved, noOpScanAvailable,
@@ -314,7 +386,8 @@ PublishPresentedWork ==
     /\ visibilityCensus = "nonempty"
     /\ ~presentedWork
     /\ presentedWork' = TRUE
-    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
                     invalidFramesObserved, noOpScanAvailable,
@@ -332,7 +405,8 @@ PresentCeilingFreeCandidate ==
     /\ CurrentAllocationCertificate
     /\ phase' = "measure"
     /\ ceilingFreeFrameRequested' = FALSE
-    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
                     invalidFramesObserved, noOpScanAvailable,
@@ -350,7 +424,8 @@ PublishBoundedConstraint ==
     /\ reductionAttempts = ReductionLimit
     /\ phase' = "terminal"
     /\ constraintPublished' = TRUE
-    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
                     allocationBudgetState,
                     reductionAttempts, samplesRemaining, samplesConsumed,
                     invalidFramesObserved, noOpScanAvailable,
@@ -366,7 +441,8 @@ ObserveInvalidFrame ==
     /\ phase \in {"apply", "handoff"}
     /\ invalidFramesObserved < 2
     /\ invalidFramesObserved' = invalidFramesObserved + 1
-    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
                     allocationBudgetState, reductionAttempts,
                     samplesRemaining, samplesConsumed,
                     noOpScanAvailable, noOpScanCompleted,
@@ -388,17 +464,21 @@ ConsumeSample ==
 	  THEN /\ phase' = "apply_certificate"
 	       /\ certificatePublished' = TRUE
 	       /\ terminalBudgetGuard' = TRUE
+	       /\ reconciliationBudget' = 0
+	       /\ activeBudget' = 0
           ELSE /\ phase' = phase
 	       /\ certificatePublished' = FALSE
 	       /\ terminalBudgetGuard' = FALSE
-    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable, ceilingState,
+	       /\ UNCHANGED <<reconciliationBudget, activeBudget>>
+    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
                     allocationBudgetState,
                     reductionAttempts, invalidFramesObserved,
 		    noOpScanAvailable, noOpScanCompleted,
 		    populationRevision, allocationRevision,
 		    ceilingFreeFrameRequested, certificateApplied,
 		    certificatePassCompleted, constraintPublished,
-		    reconciliationBudget, activeBudget, actualVisible,
+		    actualVisible,
 		    visibilityCensus, presentedWork>>
 
 ApplyCertifiedAllocation ==
@@ -407,7 +487,8 @@ ApplyCertifiedAllocation ==
     /\ ~certificateApplied
     /\ phase' = "complete_certificate"
     /\ certificateApplied' = TRUE
-    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
 		    allocationBudgetState, reductionAttempts,
 		    samplesRemaining, samplesConsumed,
 		    invalidFramesObserved, noOpScanAvailable,
@@ -425,7 +506,8 @@ CompleteCertifiedAllocationPass ==
     /\ ~certificatePassCompleted
     /\ phase' = "terminal"
     /\ certificatePassCompleted' = TRUE
-    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
 		    allocationBudgetState, reductionAttempts,
 		    samplesRemaining, samplesConsumed,
 		    invalidFramesObserved, noOpScanAvailable,
@@ -441,6 +523,7 @@ CompleteCertifiedAllocationPass ==
 \* overwrite the active scalar used by the allocation pass.
 RequestReconciliation ==
     /\ phase # "terminal"
+    /\ ~certificatePublished
     /\ \E budget \in 1..BudgetLevelCount :
          LET canonicalBudget ==
              IF reconciliationBudget = 0 \/ budget < reconciliationBudget
@@ -448,7 +531,8 @@ RequestReconciliation ==
              ELSE reconciliationBudget
          IN /\ reconciliationBudget' = canonicalBudget
             /\ activeBudget' = canonicalBudget
-    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable, ceilingState,
+    /\ UNCHANGED <<phase, cutsApplied, assignedCutsDrawable,
+                    availabilityRetryState, ceilingState,
 		    allocationBudgetState, reductionAttempts,
 		    samplesRemaining, samplesConsumed,
 		    invalidFramesObserved, noOpScanAvailable,
@@ -460,7 +544,9 @@ RequestReconciliation ==
 		    actualVisible, visibilityCensus, presentedWork>>
 
 Next ==
-    \/ ConstrainAllocationToAvailability
+    \/ RequestAvailabilityRetry
+    \/ CompleteAvailabilityRetry
+    \/ PublishAvailabilityConstraint
     \/ ApplyAssignedCuts
     \/ CompleteNoOpAllocationScan
     \/ ReduceOverBudgetAllocation
@@ -478,7 +564,9 @@ Next ==
 Spec ==
     /\ Init
     /\ [][Next]_vars
-    /\ WF_vars(ConstrainAllocationToAvailability)
+    /\ WF_vars(RequestAvailabilityRetry)
+    /\ WF_vars(CompleteAvailabilityRetry)
+    /\ WF_vars(PublishAvailabilityConstraint)
     /\ WF_vars(ApplyAssignedCuts)
     /\ WF_vars(CompleteNoOpAllocationScan)
     /\ WF_vars(ReduceOverBudgetAllocation)
@@ -492,7 +580,8 @@ Spec ==
     /\ WF_vars(CompleteCertifiedAllocationPass)
 
 EventuallyReady == <>(phase = "terminal" /\
-    (certificatePassCompleted \/ constraintPublished))
+    (certificatePassCompleted \/ constraintPublished \/
+     availabilityRetryState = "constrained"))
 
 \* Production refinement includes every ordinary planning pump, not only the
 \* bounded search.  Once terminal evidence is current, no unmodeled planner

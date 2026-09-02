@@ -12,8 +12,10 @@
 #include "bu/app.h"
 
 #include "BObol.h"
+#include "BObol/BDatabaseSource.h"
 #include "BObol/BHUDLabelOverlay.h"
 #include "BObol/BRealizeAction.h"
+#include "BObol/BViewLod.h"
 #include "BObol/BVListShape.h"
 
 #include <Inventor/SbColor.h>
@@ -690,9 +692,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     directCamera->nearDistance = 1.0f;
     directCamera->farDistance = 20.0f;
     directRoot->addChild(directCamera);
-    SoCADViewState *directViewState = new SoCADViewState;
-    directViewState->softwareWireMode = SoCADViewState::SOFTWARE_WIRE_FAST;
-    directRoot->addChild(directViewState);
+    BObolViewLodState directLodState;
+    SoBRLViewLodGroup *directLodGroup = new SoBRLViewLodGroup;
+    directLodGroup->setViewLodState(&directLodState);
+    directLodGroup->setSoftwareWireMode(SoCADViewState::SOFTWARE_WIRE_FAST);
+    directRoot->addChild(directLodGroup);
     SoCADAssembly *directAssembly = new SoCADAssembly;
     Obol::WireRep directWire;
     directWire.segmentPoints = {
@@ -716,14 +720,21 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     directInstance.localToRoot.makeIdentity();
     if (!directAssembly->upsertInstanceAuto(directInstance))
 	FAIL("direct wire instance publication failed");
-    directRoot->addChild(directAssembly);
+    directLodGroup->addChild(directAssembly);
+    SoBRLDatabaseSource *directSource = new SoBRLDatabaseSource;
+    directSource->ref();
+    directSource->path = "render-direct-wire.c";
+    directSource->instanceKey = "render-direct-wire-instance";
+    directLodState.setCadPresentation(directSource, directAssembly);
 
     SoOffscreenRenderer directRenderer(&contextManager, viewport);
     directRenderer.setComponents(SoOffscreenRenderer::RGB);
     directRenderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+    directLodState.beginCadPresentationFrame();
     if (!directRenderer.render(directRoot) ||
 	!directAssembly->lastRenderUsedDirectSoftwareWire())
 	FAIL("FAST retained wire geometry should use the direct OSMesa executor");
+    directLodState.refreshCadPresentationFrameStatus();
     const Obol::CadRenderedWork directWork =
 	directAssembly->lastRenderedWork();
     const Obol::CadGpuResourceSnapshot directResources =
@@ -732,11 +743,47 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	directWork.positionCount != 8 || directWork.occurrenceCount != 1 ||
 	!directResources.frameSerial)
 	FAIL("direct OSMesa executor should publish exact completed CAD work");
-    const uint64_t directFrameSerial = directResources.frameSerial;
+    if (!directLodState.lastCadPresentationFrameExact())
+	FAIL("matching CAD presentation controls should produce an exact frame");
+
+    /* Renderer controls are part of the frame certificate.  A preceding work
+     * report is not exact for a newly published point threshold, even though
+     * the assembly and stable view identity are unchanged. */
+    directLodState.setCadPresentationPointProxyPixelThreshold(4.0f);
+    if (directLodState.lastCadPresentationFrameExact())
+	FAIL("stale CAD presentation controls should invalidate frame exactness");
+    directLodState.beginCadPresentationFrame();
+    if (!directRenderer.render(directRoot))
+	FAIL("updated CAD presentation control render failed");
+    directLodState.refreshCadPresentationFrameStatus();
+    if (!directLodState.lastCadPresentationFrameExact() ||
+	std::fabs(directAssembly->lastRenderedWork().viewState.
+	    pointProxyPixelThreshold - 4.0f) > 1.0e-6f)
+	FAIL("updated CAD presentation controls did not commit exactly");
+
+    /* A retained occurrence mutation does not necessarily replace the
+     * assembly node or its allocation certificate.  It must nevertheless
+     * invalidate the historical renderer/classifier report until a new frame
+     * presents the changed population. */
+    directLodState.noteResidentMeshesChanged("render-test-mutation");
+    if (directLodState.lastCadPresentationFrameExact())
+	FAIL("retained CAD mutation left the preceding frame exact");
+    directLodState.beginCadPresentationFrame();
+    if (!directRenderer.render(directRoot))
+	FAIL("retained CAD mutation successor render failed");
+    directLodState.refreshCadPresentationFrameStatus();
+    if (!directLodState.lastCadPresentationFrameExact())
+	FAIL("retained CAD mutation successor did not commit exactly");
+
+    const uint64_t directFrameSerial =
+	directAssembly->gpuResourceSnapshot().frameSerial;
+    directLodState.beginCadPresentationFrame();
     if (!directRenderer.render(directRoot) ||
 	directAssembly->gpuResourceSnapshot().frameSerial <= directFrameSerial)
 	FAIL("direct OSMesa executor should advance the completed frame token");
+    directLodState.refreshCadPresentationFrameStatus();
     directRoot->unref();
+    directSource->unref();
 
     /* A cut's declared positionCount is its complete index domain.  Keeping
      * richer positions resident must not make a malformed coarse prefix look

@@ -513,7 +513,7 @@ endpoint_rt_publish(bobol_display_endpoint_t *endpoint,
 	state->readyHeight = height;
 	state->ready = true;
     }
-    endpoint->controller->requestRender("rt-frame");
+    endpoint->controller->requestLodCapacityRender("rt-frame");
     endpoint_frame_requested(endpoint, "rt-frame");
 }
 
@@ -648,7 +648,7 @@ endpoint_rt_start(bobol_display_endpoint_t *endpoint)
 	return 0;
 	}
 	endpoint_rt_clear_presentation(endpoint);
-	endpoint->controller->requestRender("rt-restart");
+	endpoint->controller->requestLodCapacityRender("rt-restart");
 	endpoint_frame_requested(endpoint, "rt-restart");
 	/* Renderer policy is valid before GED has supplied a camera.  Keep the
 	 * opaque presentation surface installed and start work on the next view
@@ -1623,9 +1623,9 @@ bobol_display_endpoint_host_capabilities(
 	bobol_host_factory_capabilities(endpoint->factory) : 0;
 }
 
-extern "C" int
-bobol_display_endpoint_request_frame(bobol_display_endpoint_t *endpoint,
-	const char *reason)
+static int
+endpoint_request_frame(bobol_display_endpoint_t *endpoint,
+	const char *reason, bool capacity_relevant)
 {
     if (!endpoint || !endpoint->controller)
 	return 0;
@@ -1635,16 +1635,43 @@ bobol_display_endpoint_request_frame(bobol_display_endpoint_t *endpoint,
     }
     if (endpoint->engine == BOBOL_RENDER_ENGINE_DIAGNOSTIC)
 	return endpoint_diagnostic_refresh(endpoint);
+    const bool render_already_pending =
+	endpoint->controller->isRenderRequested() != FALSE;
     const SbString pending_reason = endpoint->controller->getRenderReason();
-    endpoint->controller->requestRender(reason);
-	if (endpoint->engine == BOBOL_RENDER_ENGINE_RT &&
+
+    if (capacity_relevant)
+	endpoint->controller->requestLodCapacityRender(reason);
+    else
+	endpoint->controller->requestPresentationRender(reason);
+
+    if (capacity_relevant && endpoint->engine == BOBOL_RENDER_ENGINE_RT &&
 	(endpoint_rt_scene_request(pending_reason.getString()) ||
 	 endpoint_rt_scene_request(reason)) && !endpoint_rt_start(endpoint))
 	return 0;
     if (!endpoint->factory)
 	return 1;
+    /* A new request wakes the bound host through the controller callback.
+     * Explicitly replay only an already-standing level; doing both for a new
+     * request queues duplicate paints and can expose a transient LoD state to
+     * one of them. */
+    if (!render_already_pending)
+	return 1;
     return bobol_host_factory_instance_request_frame(endpoint->factory,
 	endpoint->factory_instance, reason);
+}
+
+extern "C" int
+bobol_display_endpoint_request_frame(bobol_display_endpoint_t *endpoint,
+	const char *reason)
+{
+    return endpoint_request_frame(endpoint, reason, true);
+}
+
+extern "C" int
+bobol_display_endpoint_request_presentation_frame(
+	bobol_display_endpoint_t *endpoint, const char *reason)
+{
+    return endpoint_request_frame(endpoint, reason, false);
 }
 
 extern "C" int
@@ -1950,7 +1977,7 @@ bobol_display_endpoint_render_engine_set(
     } else if (engine == BOBOL_RENDER_ENGINE_NONE) {
 	endpoint->controller->clearRenderRequest();
     } else {
-	endpoint->controller->requestRender("render-engine");
+	endpoint->controller->requestLodCapacityRender("render-engine");
 	endpoint_frame_requested(endpoint, "render-engine");
     }
     return 1;
@@ -2376,7 +2403,7 @@ bobol_display_endpoint_property_set(
 	if (ret == BV_DISPLAY_PROPERTY_OK) {
 	    if (bu_strncmp(name, "renderer.", 9) == 0)
 		endpoint->rendererPerformanceChanged();
-	    endpoint->controller->requestRender("external property");
+	    endpoint->controller->requestLodCapacityRender("external property");
 	}
 	return ret;
     } else {

@@ -106,6 +106,14 @@ struct BObolCompactOccurrenceRegistryState {
     uint64_t displayMeshLodDeltaFloorRevision = 1;
     size_t displayMeshLodDeltaEntryCount = 0;
     std::deque<DisplayMeshLodDelta> displayMeshLodDeltas;
+    /* Presentation visibility changes do not mutate immutable mesh inventory,
+     * but they do change the view's exact projected-demand denominator.  Keep
+     * their journal independent so a subpath erase is O(delta) without
+     * pretending source geometry was replaced. */
+    uint64_t displayMeshLodVisibilityRevision = 1;
+    uint64_t displayMeshLodVisibilityDeltaFloorRevision = 1;
+    size_t displayMeshLodVisibilityDeltaEntryCount = 0;
+    std::deque<DisplayMeshLodDelta> displayMeshLodVisibilityDeltas;
     /*
      * A streamed compact contract is usable before the owning source's full
      * detached realization is complete.  Record the source epoch at the

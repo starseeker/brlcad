@@ -28,6 +28,7 @@
 #include "bu/str.h"
 
 #include <Inventor/actions/SoAction.h>
+#include <Obol/cad/CadGeometryValidation.h>
 #include <Obol/cad/CadProjectedProxy.h>
 
 #include <algorithm>
@@ -132,11 +133,20 @@ bobol_cad_structural_bounds_geometry(const SbBox3f &bounds,
 		orientedBounds[6], orientedBounds[7]};
 	    geometry.subpixelProxyEligible = true;
 	    geometry.structuralProxy = true;
-	    std::shared_ptr<const Obol::PartGeometry> oriented =
-		bobol_cad_build_geometry(
-		    std::move(geometry), "oriented structural bounds");
-	    if (oriented)
-		return oriented;
+	    /* A cached OBB is an optional presentation optimization.  Float
+	     * conversion or an older cache producer may leave its corners outside
+	     * Obol's current orthogonality/conservativeness tolerance.  Reject it
+	     * before the reporting publication boundary and use the authoritative
+	     * AABB below.  Re-reporting the same optional miss on every retained
+	     * scene rebuild both obscures real producer errors and adds avoidable
+	     * owner-thread work. */
+	    if (Obol::cadValidatePartGeometry(geometry)) {
+		std::shared_ptr<const Obol::PartGeometry> oriented =
+		    bobol_cad_build_geometry(
+			std::move(geometry), "oriented structural bounds");
+		if (oriented)
+		    return oriented;
+	    }
 	}
     }
 
@@ -1071,13 +1081,22 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 
     SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
 	viewState->findCadPresentation(this));
+    const bool newAssembly = assembly == NULL;
     if (!assembly) {
 	assembly = new SoBRLCadAssembly;
-	viewState->setCadPresentation(this, assembly);
     }
-    assembly->reserveCompactPresentationCapacity(std::max(
-	this->d->compactExpectedInstanceCount,
-	this->d->compactIndex->entries.size()));
+    if (!assembly->reserveCompactPresentationCapacity(std::max(
+	    this->d->compactExpectedInstanceCount,
+	    this->d->compactIndex->entries.size()))) {
+	if (newAssembly) {
+	    assembly->ref();
+	    assembly->unref();
+	    return NULL;
+	}
+	return assembly;
+    }
+    if (newAssembly)
+	viewState->setCadPresentation(this, assembly);
 
     const int sourceDrawMode = source_record_draw_mode(this);
     const uint64_t payloadRevision = viewState->cadRevision();
@@ -1988,8 +2007,25 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		}
 		if (!bobol_cad_validate_instance(
 			compactInstances[instanceIndex], instanceIndex,
-			"compact incremental preflight"))
+			"compact incremental preflight")) {
+		    if (presentationDebugEnabled &&
+			instanceIndex < this->d->compactIndex->entries.size()) {
+			const BObolCompactInstanceEntry &entry =
+			    this->d->compactIndex->entries[instanceIndex];
+			const SbMatrix &matrix = compactInstances[instanceIndex].
+			    record.localToRoot;
+			bu_log("libBObol: invalid compact transform path=%s "
+			       "source=%s asset=%s\n",
+			    entry.semantic.path.getString(),
+			    entry.semantic.sourceName.getString(),
+			    entry.sourceMeshRequest.meshAssetName.getString());
+			for (int row = 0; row < 4; ++row)
+			    bu_log("libBObol: transform[%d] %.9g %.9g %.9g %.9g\n",
+				row, matrix[row][0], matrix[row][1],
+				matrix[row][2], matrix[row][3]);
+		    }
 		    return assembly;
+		}
 	    }
 	}
 	/* Complete auxiliary upserts are staged whenever a remembered physical

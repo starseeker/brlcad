@@ -23,15 +23,19 @@ using BObolLodInventoryEpoch = BObolInventoryEpoch;
 using BObolLodSourceRoutingId = BObolSourceRoutingId;
 
 struct BObolLodAvailabilityEpochTag;
+struct BObolLodVisibilityEpochTag;
 struct BObolLodCapacityEpochTag;
 using BObolLodAvailabilityEpoch =
     BObolLodStrongUInt64<BObolLodAvailabilityEpochTag>;
+using BObolLodVisibilityEpoch =
+    BObolLodStrongUInt64<BObolLodVisibilityEpochTag>;
 using BObolLodCapacityEpoch =
     BObolLodStrongUInt64<BObolLodCapacityEpochTag>;
 
 enum class BObolLodAdmissionRevisionDomain : uint8_t {
     INVENTORY = 0,
     AVAILABILITY,
+    VISIBILITY,
     VIEW,
     POLICY,
     CAPACITY
@@ -43,6 +47,7 @@ enum class BObolLodAdmissionRevisionDomain : uint8_t {
 struct BObolLodAdmissionRevisionStamp {
     BObolLodInventoryEpoch inventory;
     BObolLodAvailabilityEpoch availability;
+    BObolLodVisibilityEpoch visibility;
     BObolLodViewEpoch view;
     BObolLodPolicyEpoch policy;
     BObolLodCapacityEpoch capacity;
@@ -51,6 +56,7 @@ struct BObolLodAdmissionRevisionStamp {
     {
 	return this->inventory == other.inventory &&
 	    this->availability == other.availability &&
+	    this->visibility == other.visibility &&
 	    this->view == other.view &&
 	    this->policy == other.policy &&
 	    this->capacity == other.capacity;
@@ -59,7 +65,8 @@ struct BObolLodAdmissionRevisionStamp {
     bool empty(void) const
     {
 	return this->inventory == 0 && this->availability == 0 &&
-	    this->view == 0 && this->policy == 0 && this->capacity == 0;
+	    this->visibility == 0 && this->view == 0 &&
+	    this->policy == 0 && this->capacity == 0;
     }
 };
 
@@ -67,7 +74,7 @@ static_assert(std::is_trivially_copyable<
 	BObolLodAdmissionRevisionStamp>::value,
     "admission revision stamps must remain allocation-free values");
 
-/* Executable refinement boundary for the five-domain formal revision tuple.
+/* Executable refinement boundary for the six-domain formal revision tuple.
  * Production revision owners use this pure value transition, and focused
  * tests exercise it without constructing a Coin controller. */
 class BObolLodRevisionContract {
@@ -89,6 +96,9 @@ public:
 		break;
 	    case BObolLodAdmissionRevisionDomain::AVAILABILITY:
 		next.availability.advance();
+		break;
+	    case BObolLodAdmissionRevisionDomain::VISIBILITY:
+		next.visibility.advance();
 		break;
 	    case BObolLodAdmissionRevisionDomain::VIEW:
 		next.view.advance();

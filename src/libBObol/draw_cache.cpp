@@ -56,7 +56,8 @@
 #define BOBOL_DRAW_CACHE_MANIFEST "manifest"
 #define BOBOL_DRAW_METADATA_DISK_MAGIC 0x4f424d45u /* OBME */
 #define BOBOL_DRAW_PROXY_DISK_MAGIC 0x4f425058u /* OBPX */
-#define BOBOL_DRAW_PROXY_DISK_VERSION 1u
+/* Version 2 defines OBB corners by binary axis bits. */
+#define BOBOL_DRAW_PROXY_DISK_VERSION 2u
 #define BOBOL_DRAW_LOD_ASSET_DISK_MAGIC 0x4f424c41u /* OBLA */
 /* Version 3 adds optional canonical-asset OBB metadata.  Version 1 mappings
  * may also have been poisoned by an uncomposed reuse transform, so neither
@@ -740,6 +741,28 @@ bobol_draw_proxy_bbox_valid(const point_t bmin,
 }
 
 
+static int
+bobol_draw_proxy_obb_valid(const point_t points[8])
+{
+    if (!points)
+	return 0;
+
+    BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    VSETALL(hierarchy.quantization_min, INFINITY);
+    VSETALL(hierarchy.quantization_max, -INFINITY);
+    hierarchy.oriented_bounds_valid = 1;
+    for (size_t corner = 0; corner < 8; ++corner) {
+	if (!bobol_draw_proxy_point_finite(points[corner]))
+	    return 0;
+	VMINMAX(hierarchy.quantization_min, hierarchy.quantization_max,
+	    points[corner]);
+	VMOVE(hierarchy.oriented_bounds[corner], points[corner]);
+    }
+    return bobol_mesh_lod_oriented_bounds_validate(&hierarchy);
+}
+
+
 static void
 bobol_draw_cache_key(char *key, const char *name, const char *component)
 {
@@ -1269,6 +1292,11 @@ bobol_draw_proxy_cache_store(db_i *dbip,
     if (!dbip || !name || !points || !expectedCount ||
 	pointCount != expectedCount)
 	return BRLCAD_ERROR;
+    if ((kind == BOBOL_LOD_PROXY_AABB &&
+	    !bobol_draw_proxy_bbox_valid(points[0], points[1])) ||
+	(kind == BOBOL_LOD_PROXY_OBB &&
+	    !bobol_draw_proxy_obb_valid(points)))
+	return BRLCAD_ERROR;
     bobol_draw_cache_status_init(&current);
 
     directory *dp = RT_DIR_NULL;
@@ -1560,14 +1588,20 @@ bobol_draw_proxy_cache_refresh(db_i *dbip,
 	}
     } else if (kind == BOBOL_LOD_PROXY_OBB) {
 	rt_arb_internal arb;
+	/* rt_arb_internal walks each quad perimeter (0,1,2,3,4,5,6,7),
+	 * while every PoP and draw-cache OBB uses binary axis bits. */
+	static const size_t arbToBinaryCorner[8] = {
+	    0, 1, 3, 2, 4, 5, 7, 6
+	};
 	arb.magic = RT_ARB_INTERNAL_MAGIC;
 	if (intern.idb_meth && intern.idb_meth->ft_oriented_bbox &&
 	    intern.idb_meth->ft_oriented_bbox(&arb, &intern,
-					      BN_TOL_DIST) == 0) {
-	    for (size_t i = 0; i < 8; i++)
-		VMOVE(points[i], arb.pt[i]);
+				      BN_TOL_DIST) == 0) {
+	    for (size_t arbCorner = 0; arbCorner < 8; ++arbCorner)
+		VMOVE(points[arbToBinaryCorner[arbCorner]],
+		    arb.pt[arbCorner]);
 	    ret = bobol_draw_proxy_cache_store(dbip, name, kind, points,
-						 8, status);
+					 8, status);
 	}
     }
 

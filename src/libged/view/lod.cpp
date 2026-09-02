@@ -436,7 +436,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	     * prefixes after an increase.  A progressive/render edge is also
 	     * needed for a lower ceiling to schedule stable compaction. */
 	    view_controller->markProgressiveWorkPending();
-	    view_controller->requestRender("lod-memory-limit");
+	    view_controller->requestLodCapacityRender("lod-memory-limit");
 	    redraw_view();
 	}
 	const double percent =
@@ -578,7 +578,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 	    view_controller->setLodAutoSubmit(TRUE);
-	    view_controller->requestRender("lod-service-start");
+	    view_controller->requestLodCapacityRender("lod-service-start");
 	    redraw_view();
 	    return BRLCAD_OK;
 	}
@@ -594,7 +594,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 	    view_controller->stopManagedLodService();
-	    view_controller->requestRender("lod-service-stop");
+	    view_controller->requestLodCapacityRender("lod-service-stop");
 	    redraw_view();
 	    return BRLCAD_OK;
 	}

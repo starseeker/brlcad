@@ -121,6 +121,12 @@ QgGL::isPresentationInitialized() const
 
 void QgGL::paintGL()
 {
+    QTCAD_SLOT("QgGL::paintGL", 1);
+    render_pending_frame();
+}
+
+void QgGL::render_pending_frame()
+{
     int w = width();
     int h = height();
     // Zero size == nothing to do
@@ -223,8 +229,29 @@ void QgGL::present_frame()
 
 void QgGL::queued_update()
 {
+    QTCAD_SLOT("QgGL::queued_update", 1);
     d->fb_update_queued = false;
-    update();
+    const BObolHostWorkSnapshot work = d->obol ?
+	d->obol->getHostWorkSnapshot() : BObolHostWorkSnapshot();
+    /* A selection/style change can owe one exact retained presentation while
+     * having no producer work that will generate another wake.  QOpenGLWidget
+     * may indefinitely coalesce update() inside qged's nested command/test
+     * event loops, leaving that frame latched and the HUD in Publishing.
+     * Present this bounded barrier synchronously; ordinary progressive work
+     * remains coalesced so large result waves cannot monopolize the GUI
+     * thread. */
+    if (isValid() && context() && d->obol && work.renderPending() &&
+	(d->obol->hasPendingLodRefinementFrame() || !work.pumpPending())) {
+	/* QOpenGLWidget::repaint() is itself reduced to a deferred update on
+	 * some window systems.  Enter the widget context explicitly so the exact
+	 * presentation cannot remain pending behind another coalesced event. */
+	makeCurrent();
+	render_pending_frame();
+	doneCurrent();
+	update();
+    } else {
+	update();
+    }
 }
 
 void QgGL::keyPressEvent(QKeyEvent *k)
@@ -417,6 +444,55 @@ void QgGL::get_viewport_image(QImage &img)
 void QgGL::get_obol_viewport_image(QImage &img)
 {
     qgcanvas_get_obol_viewport_image(*d, this, img);
+}
+
+void QgGL::get_presented_frame_image(QImage &img)
+{
+    img = QImage();
+    if (!d || !isValid() || !context())
+	return;
+
+    QOpenGLContext *previousContext = QOpenGLContext::currentContext();
+    QSurface *previousSurface = previousContext ?
+	previousContext->surface() : nullptr;
+    const bool switchContext = previousContext != context();
+    if (switchContext) {
+	makeCurrent();
+	if (QOpenGLContext::currentContext() != context()) {
+	    if (previousContext && previousSurface)
+		previousContext->makeCurrent(previousSurface);
+	    return;
+	}
+    }
+
+    initializeOpenGLFunctions();
+    const QSize renderSize = qgcanvas_render_size(this);
+    const GLuint presentedFramebuffer = defaultFramebufferObject();
+    if (!renderSize.isEmpty() && presentedFramebuffer != 0) {
+	QImage frame(renderSize, QImage::Format_RGBA8888);
+	if (!frame.isNull()) {
+	    GLint oldFramebuffer = 0;
+	    GLint oldPackAlignment = 4;
+	    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &oldFramebuffer);
+	    glGetIntegerv(GL_PACK_ALIGNMENT, &oldPackAlignment);
+	    glBindFramebuffer(GL_FRAMEBUFFER, presentedFramebuffer);
+	    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	    glReadPixels(0, 0, renderSize.width(), renderSize.height(),
+		GL_RGBA, GL_UNSIGNED_BYTE, frame.bits());
+	    glPixelStorei(GL_PACK_ALIGNMENT, oldPackAlignment);
+	    glBindFramebuffer(GL_FRAMEBUFFER,
+		static_cast<GLuint>(oldFramebuffer));
+	    frame = frame.flipped(Qt::Vertical);
+	    frame.setDevicePixelRatio(devicePixelRatioF());
+	    img = frame;
+	}
+    }
+
+    if (switchContext) {
+	doneCurrent();
+	if (previousContext && previousSurface)
+	    previousContext->makeCurrent(previousSurface);
+    }
 }
 
 void QgGL::aet(double a, double e, double t)

@@ -68,10 +68,13 @@ navgizmo_request_frame(NavgizmoState *state, const char *reason)
 {
     if (!state)
 	return;
+    if (state->endpoint) {
+	(void)bobol_display_endpoint_request_presentation_frame(
+	    state->endpoint, reason);
+	return;
+    }
     if (state->controller)
-	state->controller->requestRender(reason);
-    if (state->endpoint)
-	(void)bobol_display_endpoint_request_frame(state->endpoint, reason);
+	state->controller->requestPresentationRender(reason);
 }
 
 static void

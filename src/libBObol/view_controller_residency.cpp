@@ -179,7 +179,7 @@ BObolViewController::evictMeshPayloadsToBudget(
 
     size_t freedBytes = this->getLastMeshBudgetFreedResidentBytes();
     if (freedBytes > 0)
-	this->requestRender("lod-memory-budget");
+	this->requestLodCapacityRender("lod-memory-budget");
     return freedBytes;
 }
 

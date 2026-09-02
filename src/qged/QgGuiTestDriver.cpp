@@ -60,6 +60,8 @@
 #include "QgGuiTestDriver.h"
 
 static constexpr int qged_test_canvas_ready_timeout_milliseconds = 5000;
+static constexpr int qged_test_event_pump_interval_milliseconds = 16;
+static constexpr qsizetype qged_test_control_trace_record_limit = 32768;
 
 static std::vector<BObolViewController *>
 qged_test_all_controllers(QgEdApp &app)
@@ -1045,6 +1047,25 @@ qged_test_present_controller_frame(QgEdApp &app,
 	!controller)
 	return;
 
+    const auto present = [](QgCanvasBase *canvas) {
+	if (!canvas)
+	    return;
+	canvas->present_frame();
+	QWidget *widget = canvas->canvasWidget();
+	if (!widget || !widget->isVisible())
+	    return;
+	/* QOpenGLWidget::repaint() may remain an asynchronous compositor
+	 * request inside this test driver's nested event loop.  A framebuffer
+	 * readback forces Qt to service the real paint path and therefore the
+	 * controller's standing render latch.  Software widgets repaint
+	 * synchronously without that GL-specific presentation barrier. */
+	if (QOpenGLWidget *glWidget =
+		qobject_cast<QOpenGLWidget *>(widget))
+	    (void)glWidget->grabFramebuffer();
+	else
+	    widget->repaint();
+    };
+
     /* A quad/switchable display may retain hidden QgView instances which
      * share the endpoint controller.  update() on such a widget is legally
      * ignored by Qt, so prefer the active display before considering the
@@ -1054,10 +1075,7 @@ qged_test_present_controller_frame(QgEdApp &app,
 	current->obolViewController() == controller) {
 	QgCanvasBase *canvas = current->canvasBase();
 	if (canvas) {
-	    canvas->present_frame();
-	    QWidget *widget = canvas->canvasWidget();
-	    if (widget && widget->isVisible())
-		widget->repaint();
+	    present(canvas);
 	    return;
 	}
     }
@@ -1068,12 +1086,7 @@ qged_test_present_controller_frame(QgEdApp &app,
 	    view->obolViewController() != controller)
 	    continue;
 	QgCanvasBase *canvas = view->canvasBase();
-	if (canvas) {
-	    canvas->present_frame();
-	    QWidget *widget = canvas->canvasWidget();
-	    if (widget && widget->isVisible())
-		widget->repaint();
-	}
+	present(canvas);
 	return;
     }
 }
@@ -1461,6 +1474,78 @@ private:
     QString error_;
 };
 
+/* The event-level report is intentionally sparse, but a stabilization wait
+ * may service hundreds of controller and presentation transitions.  Retain a
+ * compact, bounded trace of distinct control states so the offline refinement
+ * checker can see an internal terminal reopen or A/B/A cycle.  This observer
+ * never feeds production policy. */
+class QgedProgressiveControlTrace {
+public:
+    void observe(BObolViewController *controller,
+	const BObolLodConvergenceStatus &status, int eventIndex,
+	const QString &action, qint64 elapsedMilliseconds, bool force = false)
+    {
+	if (!controller)
+	    return;
+
+	QJsonObject identity;
+	qged_append_progressive_control_diagnostics(
+	    identity, *controller, status);
+	if (!force && haveLastIdentity_ && identity == lastIdentity_)
+	    return;
+	lastIdentity_ = identity;
+	haveLastIdentity_ = true;
+
+	if (records_.size() >= qged_test_control_trace_record_limit) {
+	    ++dropped_;
+	    return;
+	}
+
+	QJsonObject record = identity;
+	record.insert(QStringLiteral("transition_observation"),
+	    static_cast<qint64>(observed_++));
+	record.insert(QStringLiteral("event_index"), eventIndex);
+	record.insert(QStringLiteral("action"), action);
+	record.insert(QStringLiteral("elapsed_ms"), elapsedMilliseconds);
+	records_.append(record);
+    }
+
+    void observe(BObolViewController *controller, int eventIndex,
+	const QString &action, qint64 elapsedMilliseconds, bool force = false)
+    {
+	if (!controller)
+	    return;
+	BObolLodConvergenceStatus status;
+	controller->getLodConvergenceStatus(status);
+	this->observe(controller, status, eventIndex, action,
+	    elapsedMilliseconds, force);
+    }
+
+    const QJsonArray &records(void) const
+    {
+	return records_;
+    }
+
+    qint64 dropped(void) const
+    {
+	return dropped_;
+    }
+
+private:
+    QJsonArray records_;
+    QJsonObject lastIdentity_;
+    qint64 observed_ = 0;
+    qint64 dropped_ = 0;
+    bool haveLastIdentity_ = false;
+};
+
+static bool
+qged_test_is_explicit_control_input(const QString &action)
+{
+    return !action.isEmpty() && action != QLatin1String("checkpoint") &&
+	!action.startsWith(QLatin1String("wait"));
+}
+
 static bool
 qged_test_wait_subprocess_idle(QgEdApp &app, int timeoutMilliseconds,
     int quietMilliseconds, QString *error)
@@ -1513,9 +1598,48 @@ qged_test_wait_subprocess_idle(QgEdApp &app, int timeoutMilliseconds,
 static void qged_test_present_controller_frame(QgEdApp &app,
 	BObolViewController *controller);
 
+/* A scripted delay represents time returned to qged's ordinary GUI event
+ * loop.  A nested QEventLoop services timers and worker notifications, but
+ * QOpenGLWidget may coalesce update() until the outer loop resumes.  That
+ * leaves System GL frozen during transient checkpoints while the software
+ * widget repaints synchronously, making cross-backend timing evidence
+ * observer-dependent.  Service a surviving presentation request at the same
+ * bounded cadence as the other GUI-test waits.  The presentation still uses
+ * the real visible canvas and ordinary controller completion path. */
+static void
+qged_test_wait(QgEdApp &app, int waitMilliseconds,
+    QgedProgressiveControlTrace *controlTrace, int eventIndex,
+    const QElapsedTimer &sessionElapsed)
+{
+    waitMilliseconds = std::max(0, waitMilliseconds);
+    QElapsedTimer elapsed;
+    elapsed.start();
+
+    do {
+	const int remaining = waitMilliseconds -
+	    static_cast<int>(elapsed.elapsed());
+	QEventLoop loop;
+	QTimer::singleShot(std::max(0, std::min(
+	    qged_test_event_pump_interval_milliseconds, remaining)),
+	    &loop, &QEventLoop::quit);
+	loop.exec(QEventLoop::AllEvents);
+
+	QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+	BObolViewController *controller = view ?
+	    view->obolViewController() : nullptr;
+	if (controller && controller->isRenderRequested())
+	    qged_test_present_controller_frame(app, controller);
+	if (controlTrace)
+	    controlTrace->observe(controller, eventIndex,
+		QStringLiteral("wait"), sessionElapsed.elapsed());
+    } while (elapsed.elapsed() < waitMilliseconds);
+}
+
 static bool
 qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
-    int quietMilliseconds, QString *error)
+    int quietMilliseconds, QString *error,
+    QgedProgressiveControlTrace *controlTrace, int eventIndex,
+    const QElapsedTimer &sessionElapsed)
 {
     QgView *currentView = app.w ? app.w->CurrentDisplay() : nullptr;
     BObolViewController *currentController = currentView ?
@@ -1541,6 +1665,10 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
     elapsed.start();
 
     while (elapsed.elapsed() <= timeoutMilliseconds) {
+	if (controlTrace)
+	    controlTrace->observe(currentController, eventIndex,
+		QStringLiteral("wait_progressive_idle"),
+		sessionElapsed.elapsed());
 	bool idle = true;
 	for (BObolViewController *controller : controllers) {
 	    BObolLodService *service = controller->getLodService();
@@ -1671,7 +1799,9 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
  * request cannot make an already terminal visible view unready. */
 static bool
 qged_test_wait_progressive_view_ready(QgEdApp &app,
-    int timeoutMilliseconds, int quietMilliseconds, QString *error)
+    int timeoutMilliseconds, int quietMilliseconds, QString *error,
+    QgedProgressiveControlTrace *controlTrace, int eventIndex,
+    const QElapsedTimer &sessionElapsed)
 {
     QgView *currentView = app.w ? app.w->CurrentDisplay() : nullptr;
     BObolViewController *controller = currentView ?
@@ -1694,6 +1824,10 @@ qged_test_wait_progressive_view_ready(QgEdApp &app,
 	if (controller->isRenderRequested())
 	    qged_test_present_controller_frame(app, controller);
 	controller->getLodConvergenceStatus(status);
+	if (controlTrace)
+	    controlTrace->observe(controller, status, eventIndex,
+		QStringLiteral("wait_progressive_view_ready"),
+		sessionElapsed.elapsed());
 	if (status.terminalError) {
 	    if (error)
 		*error = QStringLiteral(
@@ -1709,8 +1843,32 @@ qged_test_wait_progressive_view_ready(QgEdApp &app,
 	if (ready) {
 	    if (!quiet.isValid())
 		quiet.start();
-	    if (quiet.elapsed() >= quietMilliseconds)
-		return true;
+	    if (quiet.elapsed() >= quietMilliseconds) {
+		/* A background compaction may request its next frame after the
+		 * controller has already published viewReady.  Checkpoints are
+		 * framebuffer evidence, so consume that request once before
+		 * returning; otherwise telemetry can describe the terminal HUD while
+		 * the captured front buffer still contains the preceding balancing
+		 * label.  Do not wait for all background work: a request produced by
+		 * this presentation is deliberately left to the normal host pump. */
+		if (controller->isRenderRequested())
+		    qged_test_present_controller_frame(app, controller);
+		controller->getLodConvergenceStatus(status);
+		if (controlTrace)
+		    controlTrace->observe(controller, status, eventIndex,
+			QStringLiteral("wait_progressive_view_ready"),
+			sessionElapsed.elapsed());
+		if (status.terminalError) {
+		    if (error)
+			*error = QStringLiteral(
+			    "progressive view terminated with an error after "
+			    "its endpoint presentation");
+		    return false;
+		}
+		if (status.viewReady)
+		    return true;
+		quiet.invalidate();
+	    }
 	} else {
 	    quiet.invalidate();
 	}
@@ -1902,6 +2060,17 @@ qged_test_wait_canvas_ready(QgEdApp &app, int timeoutMilliseconds,
 	if (widget->isVisible() && initialized)
 	    return true;
 
+	/* The scheduled test itself runs inside a nested event loop.  A canvas
+	 * update queued immediately before that loop may be coalesced until the
+	 * outer application loop resumes, leaving a valid initial render request
+	 * stranded.  Present through the real canvas endpoint just as the other
+	 * bounded test waits do; initialization must observe a completed frame,
+	 * not depend on backend-specific repaint timing. */
+	BObolViewController *controller = view ?
+	    view->obolViewController() : nullptr;
+	if (controller && controller->isRenderRequested())
+	    qged_test_present_controller_frame(app, controller);
+
 	QEventLoop loop;
 	const int remaining = timeoutMilliseconds -
 	    static_cast<int>(elapsed.elapsed());
@@ -2026,7 +2195,7 @@ qged_test_wait_progressive_scope_ready(QgEdApp &app,
 		for (BObolViewController *controller : visibleControllers) {
 		    scopePresentationBarriers.emplace_back(controller,
 			controller->getPresentedFrameSerial());
-		    controller->requestRender("qged-test-scope-ready");
+		    controller->requestLodCapacityRender("qged-test-scope-ready");
 		    qged_test_present_controller_frame(app, controller);
 		}
 		quiet.invalidate();
@@ -2084,7 +2253,9 @@ qged_test_wait_progressive_scope_ready(QgEdApp &app,
 
 static bool
 qged_test_wait_progressive_discovery_complete(QgEdApp &app,
-    int timeoutMilliseconds, int quietMilliseconds, QString *error)
+    int timeoutMilliseconds, int quietMilliseconds, QString *error,
+    QgedProgressiveControlTrace *controlTrace, int eventIndex,
+    const QElapsedTimer &sessionElapsed)
 {
     QgView *currentView = app.w ? app.w->CurrentDisplay() : nullptr;
     BObolViewController *controller = currentView ?
@@ -2109,6 +2280,10 @@ qged_test_wait_progressive_discovery_complete(QgEdApp &app,
     while (elapsed.elapsed() <= timeoutMilliseconds) {
 	BObolLodConvergenceStatus status;
 	controller->getLodConvergenceStatus(status);
+	if (controlTrace)
+	    controlTrace->observe(controller, status, eventIndex,
+		QStringLiteral("wait_progressive_discovery_complete"),
+		sessionElapsed.elapsed());
 	lastAvailable = status.availableLeafCount;
 	lastExpected = status.expectedLeafCount;
 	lastPhase = status.phase;
@@ -2168,6 +2343,7 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 	    QgEventPlayer player(app.w);
 	    QElapsedTimer elapsed;
 	    QJsonArray samples;
+	    QgedProgressiveControlTrace controlTrace;
 	    QHash<QString, QString> commandCaptures;
 	    QJsonObject report;
 	    std::shared_ptr<QgedPresentedFrameCapture> frameCapture;
@@ -2220,9 +2396,12 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		    return false;
 		}
 		bool saved = false;
-	if (QOpenGLWidget *glWidget =
-			qobject_cast<QOpenGLWidget *>(widget)) {
-		    const QImage frame = glWidget->grabFramebuffer();
+	if (QgGL *glWidget = qobject_cast<QgGL *>(widget)) {
+		    /* Capturing a quality checkpoint is observation, not another
+		     * presentation.  QOpenGLWidget::grabFramebuffer() may initiate a
+		     * paint and make the checkpoint alter LoD timing and convergence. */
+		    QImage frame;
+		    glWidget->get_presented_frame_image(frame);
 		    saved = !frame.isNull() && frame.save(name);
 		} else if (QgSW *softwareWidget =
 			qobject_cast<QgSW *>(widget)) {
@@ -2282,9 +2461,13 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			 * autoview.  Execute that transaction without exposing the
 			 * deliberately invalid intermediate camera as a one-frame GUI
 			 * flash; controller state and final rendering remain ordinary. */
-			const bool updatesEnabled = app.w &&
-			    app.w->updatesEnabled();
-			if (app.w && updatesEnabled)
+			/* A one-command "batch" has no intermediate state to hide.
+			 * Disabling its parent window can consume the command's only
+			 * queued software-canvas update before paints are re-enabled,
+			 * stranding a valid camera render request. */
+			const bool suppressIntermediateUpdates = commands.size() > 1 &&
+			    app.w && app.w->updatesEnabled();
+			if (suppressIntermediateUpdates)
 			    app.w->setUpdatesEnabled(false);
 			for (const QJsonValue &value : commands) {
 			    const QString command = value.toString();
@@ -2296,7 +2479,7 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			    }
 			    app.run_qcmd(command);
 			}
-			if (app.w && updatesEnabled) {
+			if (suppressIntermediateUpdates) {
 			    app.w->setUpdatesEnabled(true);
 			    /* A batch deliberately suppresses intermediate paints.  Updating
 			     * only the top-level window after re-enabling updates can leave a
@@ -2366,7 +2549,7 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			    QStringLiteral("timeout_ms")).toInt(30000),
 			events[i].arguments.value(
 			    QStringLiteral("quiet_ms")).toInt(100),
-		    &error);
+		    &error, &controlTrace, i, elapsed);
 	} else if (events[i].action ==
 	    QLatin1String("wait_progressive_view_ready")) {
 	    success = qged_test_wait_progressive_view_ready(app,
@@ -2374,7 +2557,7 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		    QStringLiteral("timeout_ms")).toInt(30000),
 		events[i].arguments.value(
 		    QStringLiteral("quiet_ms")).toInt(100),
-		&error);
+		&error, &controlTrace, i, elapsed);
 	} else if (events[i].action ==
 		    QLatin1String("wait_progressive_payload_ready")) {
 		    success = qged_test_wait_progressive_payload_ready(app,
@@ -2406,14 +2589,18 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 			events[i].arguments.value(
 			    QStringLiteral("quiet_ms")).toInt(50),
 			&error);
-		} else if (events[i].action ==
-		    QLatin1String("wait_progressive_discovery_complete")) {
+	} else if (events[i].action ==
+	    QLatin1String("wait_progressive_discovery_complete")) {
 		    success = qged_test_wait_progressive_discovery_complete(app,
 			events[i].arguments.value(
 			    QStringLiteral("timeout_ms")).toInt(30000),
 			events[i].arguments.value(
 			    QStringLiteral("quiet_ms")).toInt(50),
-			&error);
+			&error, &controlTrace, i, elapsed);
+		} else if (events[i].action == QLatin1String("wait")) {
+		    qged_test_wait(app, events[i].arguments.value(
+			QStringLiteral("ms")).toInt(), &controlTrace, i,
+			elapsed);
 		} else {
 		    success = player.play(events[i], &error);
 		}
@@ -2423,9 +2610,9 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		}
 
 		/* Commands and synthetic input dispatch synchronously.  Explicit
-		 * wait events, rather than a processEvents drain after every
-		 * input, provide real event-loop intervals without consuming a
-		 * progressive-frame backlog. */
+		 * wait events provide the real event-loop intervals in which queued
+		 * presentation and progressive work may advance; do not add an
+		 * observer-induced drain after every input. */
 		const qint64 eventMicroseconds =
 		    eventElapsed.nsecsElapsed() / 1000;
 		const char *deepReportMode =
@@ -2452,10 +2639,19 @@ qged_schedule_gui_test(QgEdApp &app, const QString &script,
 		sample.insert(QStringLiteral("sample_duration_us"),
 		    sampleElapsed.nsecsElapsed() / 1000);
 		samples.append(sample);
+		controlTrace.observe(qged_progressive_event_controller(app, events[i]), i,
+		    events[i].action, elapsed.elapsed(),
+		    qged_test_is_explicit_control_input(events[i].action));
 	    }
 	    report.insert(QStringLiteral("success"), success);
 	    report.insert(QStringLiteral("elapsed_ms"), elapsed.elapsed());
 	    report.insert(QStringLiteral("samples"), samples);
+	    report.insert(QStringLiteral("control_transitions"),
+		controlTrace.records());
+	    report.insert(QStringLiteral("control_transition_trace_dropped"),
+		controlTrace.dropped());
+	    report.insert(QStringLiteral("control_transition_trace_truncated"),
+		controlTrace.dropped() != 0);
 	    if (frameCapture) {
 		frameCapture->finish();
 		report.insert(QStringLiteral("presented_frame_capture"),

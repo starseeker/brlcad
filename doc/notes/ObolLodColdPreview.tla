@@ -7,6 +7,11 @@
 \* overview.  Only a coverage-certified preview may do that.  A producer is
 \* admitted only when its bounded working set fits remaining headroom; a
 \* refusal leaves the overview visible and reports an explicit constraint.
+\*
+\* Binding is occurrence-local.  A coverage preview may use the adaptive mesh
+\* result channel, but it is not a resident progressive binding.  Readiness
+\* requires every occurrence to bind the completed hierarchy, including a
+\* provisional occurrence which happened to publish the shared asset first.
 
 EXTENDS Naturals, TLC
 
@@ -18,14 +23,16 @@ Coverage == "coverage"
 Mesh == "mesh"
 Aggregate == "aggregate"
 Presentations == {Overview, Coverage, Mesh, Aggregate}
+BindingStates == {"coverage", "resident"}
+GenerationKinds == {"whole", "spatial"}
 
 VARIABLES epoch, inputOpen, headroom, producerWorkingSet, producerPending,
-          sampleReady, coverageCertified, preview, mesh, framePending,
-          constrained
+          sampleReady, coverageCertified, generationKind, preview, binding,
+          framePending, constrained
 
 vars == <<epoch, inputOpen, headroom, producerWorkingSet, producerPending,
-          sampleReady, coverageCertified, preview, mesh, framePending,
-          constrained>>
+          sampleReady, coverageCertified, generationKind, preview, binding,
+          framePending, constrained>>
 
 TypeOK ==
     /\ epoch \in 0..MaxEpoch
@@ -35,8 +42,9 @@ TypeOK ==
     /\ producerPending \in BOOLEAN
     /\ sampleReady \in BOOLEAN
     /\ coverageCertified \in BOOLEAN
+    /\ generationKind \in GenerationKinds
     /\ preview \in Presentations
-    /\ mesh \in [Candidates -> BOOLEAN]
+    /\ binding \in [Candidates -> BindingStates]
     /\ framePending \in BOOLEAN
     /\ constrained \in BOOLEAN
 
@@ -48,8 +56,9 @@ Init ==
     /\ producerPending = FALSE
     /\ sampleReady = FALSE
     /\ coverageCertified = FALSE
+    /\ generationKind = "whole"
     /\ preview = Overview
-    /\ mesh = [candidate \in Candidates |-> FALSE]
+    /\ binding = [candidate \in Candidates |-> "coverage"]
     /\ framePending = FALSE
     /\ constrained = FALSE
 
@@ -59,7 +68,8 @@ StartProducer ==
     /\ producerWorkingSet <= headroom
     /\ producerPending' = TRUE
     /\ UNCHANGED <<epoch, inputOpen, headroom, producerWorkingSet, sampleReady,
-                    coverageCertified, preview, mesh, framePending, constrained>>
+                    coverageCertified, generationKind, preview, binding,
+                    framePending, constrained>>
 
 RefuseProducer ==
     /\ ~inputOpen /\ ~producerPending /\ ~coverageCertified
@@ -68,14 +78,15 @@ RefuseProducer ==
     /\ preview' = Aggregate
     /\ framePending' = TRUE
     /\ UNCHANGED <<epoch, inputOpen, headroom, producerWorkingSet, producerPending,
-                    sampleReady, coverageCertified, mesh>>
+                    sampleReady, coverageCertified, generationKind, binding>>
 
 PublishSample ==
     /\ producerPending /\ ~sampleReady
     /\ sampleReady' = TRUE
     /\ framePending' = TRUE
     /\ UNCHANGED <<epoch, inputOpen, headroom, producerWorkingSet, producerPending,
-                    coverageCertified, preview, mesh, constrained>>
+                    coverageCertified, generationKind, preview, binding,
+                    constrained>>
 
 CertifyCoverage ==
     /\ producerPending /\ sampleReady /\ ~coverageCertified
@@ -83,16 +94,26 @@ CertifyCoverage ==
     /\ preview' = Coverage
     /\ framePending' = TRUE
     /\ UNCHANGED <<epoch, inputOpen, headroom, producerWorkingSet, producerPending,
-                    sampleReady, mesh, constrained>>
+                    sampleReady, generationKind, binding, constrained>>
+
+CompleteSpatialHierarchy ==
+    /\ producerPending /\ coverageCertified
+    /\ generationKind = "whole"
+    /\ generationKind' = "spatial"
+    /\ producerPending' = FALSE
+    /\ framePending' = TRUE
+    /\ UNCHANGED <<epoch, inputOpen, headroom, producerWorkingSet, sampleReady,
+                    coverageCertified, preview, binding, constrained>>
 
 PublishMesh(candidate) ==
     /\ candidate \in Candidates
-    /\ coverageCertified /\ ~mesh[candidate]
-    /\ mesh' = [mesh EXCEPT ![candidate] = TRUE]
+    /\ coverageCertified /\ generationKind = "spatial"
+    /\ binding[candidate] = "coverage"
+    /\ binding' = [binding EXCEPT ![candidate] = "resident"]
     /\ preview' = Mesh
     /\ framePending' = TRUE
     /\ UNCHANGED <<epoch, inputOpen, headroom, producerWorkingSet, producerPending,
-                    sampleReady, coverageCertified, constrained>>
+                    sampleReady, coverageCertified, generationKind, constrained>>
 
 Constrain ==
     /\ ~inputOpen /\ ~constrained
@@ -102,32 +123,36 @@ Constrain ==
     /\ preview' = Aggregate
     /\ framePending' = TRUE
     /\ UNCHANGED <<epoch, inputOpen, headroom, producerWorkingSet, sampleReady,
-                    coverageCertified, mesh>>
+                    coverageCertified, generationKind, binding>>
 
 CompleteFrame ==
     /\ framePending
     /\ framePending' = FALSE
     /\ UNCHANGED <<epoch, inputOpen, headroom, producerWorkingSet, producerPending,
-                    sampleReady, coverageCertified, preview, mesh, constrained>>
+                    sampleReady, coverageCertified, generationKind, preview,
+                    binding, constrained>>
 
 BeginInput ==
     /\ ~inputOpen /\ ~framePending /\ epoch < MaxEpoch
     /\ epoch' = epoch + 1
     /\ inputOpen' = TRUE
     /\ UNCHANGED <<headroom, producerWorkingSet, producerPending, sampleReady,
-                    coverageCertified, preview, mesh, framePending, constrained>>
+                    coverageCertified, generationKind, preview, binding,
+                    framePending, constrained>>
 
 EndInput ==
     /\ inputOpen
     /\ inputOpen' = FALSE
     /\ UNCHANGED <<epoch, headroom, producerWorkingSet, producerPending, sampleReady,
-                    coverageCertified, preview, mesh, framePending, constrained>>
+                    coverageCertified, generationKind, preview, binding,
+                    framePending, constrained>>
 
 Next ==
     \/ StartProducer
     \/ RefuseProducer
     \/ PublishSample
     \/ CertifyCoverage
+    \/ CompleteSpatialHierarchy
     \/ \E candidate \in Candidates: PublishMesh(candidate)
     \/ Constrain
     \/ CompleteFrame
@@ -141,6 +166,7 @@ Spec ==
     /\ WF_vars(RefuseProducer)
     /\ WF_vars(PublishSample)
     /\ WF_vars(CertifyCoverage)
+    /\ WF_vars(CompleteSpatialHierarchy)
     /\ \A candidate \in Candidates: WF_vars(PublishMesh(candidate))
     /\ WF_vars(Constrain)
     /\ WF_vars(CompleteFrame)
@@ -157,6 +183,10 @@ WorkingSetNeverOvercommitted == producerPending => producerWorkingSet <= headroo
 \* Every state retains an immediately displayable representation.
 AlwaysDisplayable == preview \in Presentations
 
+ResidentBindingRequiresSpatial ==
+    (\E c \in Candidates: binding[c] = "resident")
+    => generationKind = "spatial"
+
 \* A finite input sequence has no quiet ownerless middle state.
 QuietIncompleteHasOwner ==
     ~inputOpen /\ ~framePending /\ ~constrained /\ ~coverageCertified
@@ -165,7 +195,9 @@ QuietIncompleteHasOwner ==
 Stable ==
     /\ epoch = MaxEpoch
     /\ ~inputOpen /\ ~producerPending /\ ~framePending
-    /\ (constrained \/ (coverageCertified /\ \A c \in Candidates: mesh[c]))
+    /\ (constrained \/
+        (coverageCertified /\ generationKind = "spatial" /\
+         \A c \in Candidates: binding[c] = "resident"))
 
 StableNeverUsesOverview == Stable => preview \in {Coverage, Mesh, Aggregate}
 

@@ -5,8 +5,11 @@
 \* Scene mutation and rendering execute on one owner thread in production,
 \* but a mutation may supersede an already prepared or requested target
 \* between frames.  A completed historical preparation/report is harmless;
-\* only a report whose complete scene/view stamp is still current may replace
-\* the committed framebuffer.
+\* only a report whose complete scene/view-control stamp is still current may
+\* replace the committed framebuffer.  viewRevision abstracts both camera
+\* changes and renderer-local presentation controls (progressive ceiling,
+\* fractional cut, point threshold, and motion reuse); production may prove
+\* the latter by direct value equality rather than a separate numeric stamp.
 
 EXTENDS Naturals, TLC
 
@@ -26,6 +29,7 @@ VARIABLES inputOpen,
           preparationRemaining,
           renderPending,
           renderInFlight,
+          exactFrameRequired,
           reportSceneRevision,
           reportViewRevision,
           committedSceneRevision,
@@ -34,7 +38,8 @@ VARIABLES inputOpen,
 vars == <<inputOpen, sceneRevision, viewRevision, mutationStaged,
           updateOpen, mutationRemaining, preparationState,
           targetSceneRevision, targetViewRevision, preparationRemaining,
-          renderPending, renderInFlight, reportSceneRevision,
+          renderPending, renderInFlight, exactFrameRequired,
+          reportSceneRevision,
           reportViewRevision, committedSceneRevision,
           committedViewRevision>>
 
@@ -51,6 +56,7 @@ TypeOK ==
     /\ preparationRemaining \in 0..MaxUnits
     /\ renderPending \in BOOLEAN
     /\ renderInFlight \in BOOLEAN
+    /\ exactFrameRequired \in BOOLEAN
     /\ reportSceneRevision \in 0..MaxSceneRevision
     /\ reportViewRevision \in 0..MaxViewRevision
     /\ committedSceneRevision \in 0..MaxSceneRevision
@@ -69,6 +75,7 @@ Init ==
     /\ preparationRemaining = 0
     /\ renderPending = FALSE
     /\ renderInFlight = FALSE
+    /\ exactFrameRequired = FALSE
     /\ reportSceneRevision = 0
     /\ reportViewRevision = 0
     /\ committedSceneRevision = 0
@@ -90,6 +97,7 @@ StageMutation ==
                     mutationRemaining, preparationState,
                     targetSceneRevision, targetViewRevision,
                     preparationRemaining, renderPending, renderInFlight,
+                    exactFrameRequired,
                     reportSceneRevision, reportViewRevision,
                     committedSceneRevision, committedViewRevision>>
 
@@ -102,6 +110,7 @@ BeginMutation ==
                     preparationState, targetSceneRevision,
                     targetViewRevision, preparationRemaining,
                     renderPending, renderInFlight, reportSceneRevision,
+                    exactFrameRequired,
                     reportViewRevision, committedSceneRevision,
                     committedViewRevision>>
 
@@ -113,6 +122,7 @@ ApplyMutationBatch ==
                     updateOpen, preparationState, targetSceneRevision,
                     targetViewRevision, preparationRemaining,
                     renderPending, renderInFlight, reportSceneRevision,
+                    exactFrameRequired,
                     reportViewRevision, committedSceneRevision,
                     committedViewRevision>>
 
@@ -126,16 +136,18 @@ CommitMutation ==
     /\ mutationRemaining' = 0
     /\ ResetPreparation
     /\ renderPending' = TRUE
+    /\ exactFrameRequired' = TRUE
     /\ UNCHANGED <<inputOpen, viewRevision, renderInFlight,
                     reportSceneRevision, reportViewRevision,
                     committedSceneRevision, committedViewRevision>>
 
-ChangeView ==
+ChangeViewOrPresentationControls ==
     /\ inputOpen
     /\ viewRevision < MaxViewRevision
     /\ viewRevision' = viewRevision + 1
     /\ ResetPreparation
     /\ renderPending' = TRUE
+    /\ exactFrameRequired' = TRUE
     /\ UNCHANGED <<inputOpen, sceneRevision, mutationStaged, updateOpen,
                     mutationRemaining, renderInFlight, reportSceneRevision,
                     reportViewRevision, committedSceneRevision,
@@ -149,14 +161,21 @@ StartPreparation(units) ==
     /\ targetViewRevision' = viewRevision
     /\ preparationRemaining' = units
     /\ preparationState' = IF units = 0 THEN "complete" ELSE "preparing"
+    /\ renderPending' = TRUE
+    /\ exactFrameRequired' = TRUE
     /\ UNCHANGED <<inputOpen, sceneRevision, viewRevision, mutationStaged,
-                    updateOpen, mutationRemaining, renderPending,
-                    renderInFlight, reportSceneRevision, reportViewRevision,
+                    updateOpen, mutationRemaining, renderInFlight,
+                    reportSceneRevision, reportViewRevision,
                     committedSceneRevision, committedViewRevision>>
 
 Start == \E units \in 0..MaxUnits: StartPreparation(units)
 
-PrepareUnit ==
+
+\* SoCADAssembly command preparation is render-sliced: an inexact traversal
+\* may advance one bounded unit, but it cannot publish a report or consume the
+\* exact-presentation obligation.  The next frame edge is level-triggered.
+IncompleteFrame ==
+    /\ renderInFlight
     /\ preparationState = "preparing"
     /\ targetSceneRevision = sceneRevision
     /\ targetViewRevision = viewRevision
@@ -164,14 +183,36 @@ PrepareUnit ==
     /\ preparationRemaining' = preparationRemaining - 1
     /\ preparationState' =
         IF preparationRemaining = 1 THEN "complete" ELSE "preparing"
+    /\ renderInFlight' = FALSE
+    /\ renderPending' = TRUE
+    /\ exactFrameRequired' = TRUE
     /\ UNCHANGED <<inputOpen, sceneRevision, viewRevision, mutationStaged,
                     updateOpen, mutationRemaining, targetSceneRevision,
-                    targetViewRevision, renderPending, renderInFlight,
+                    targetViewRevision,
                     reportSceneRevision, reportViewRevision,
                     committedSceneRevision, committedViewRevision>>
 
+\* A scene/view supersession may invalidate the preparation target while an
+\* older host frame is in flight.  Its completion is not a report; it merely
+\* transfers ownership back to the current level-triggered frame request.
+AbandonStaleFrame ==
+    /\ renderInFlight
+    /\ \/ preparationState = "idle"
+       \/ targetSceneRevision # sceneRevision
+       \/ targetViewRevision # viewRevision
+    /\ renderInFlight' = FALSE
+    /\ renderPending' = TRUE
+    /\ exactFrameRequired' = TRUE
+    /\ UNCHANGED <<inputOpen, sceneRevision, viewRevision, mutationStaged,
+                    updateOpen, mutationRemaining, preparationState,
+                    targetSceneRevision, targetViewRevision,
+                    preparationRemaining, reportSceneRevision,
+                    reportViewRevision, committedSceneRevision,
+                    committedViewRevision>>
+
 ConstrainPreparation ==
     /\ preparationState = "preparing"
+    /\ ~renderInFlight
     /\ targetSceneRevision = sceneRevision
     /\ targetViewRevision = viewRevision
     /\ preparationState' = "constrained"
@@ -179,19 +220,23 @@ ConstrainPreparation ==
     /\ UNCHANGED <<inputOpen, sceneRevision, viewRevision, mutationStaged,
                     updateOpen, mutationRemaining, targetSceneRevision,
                     targetViewRevision, preparationRemaining, renderInFlight,
+                    exactFrameRequired,
                     reportSceneRevision, reportViewRevision,
                     committedSceneRevision, committedViewRevision>>
 
 RequestFrame ==
+    /\ exactFrameRequired
     /\ preparationState \in {"complete", "constrained"}
     /\ targetSceneRevision = sceneRevision
     /\ targetViewRevision = viewRevision
     /\ ~renderInFlight
+    /\ ~renderPending
     /\ renderPending' = TRUE
     /\ UNCHANGED <<inputOpen, sceneRevision, viewRevision, mutationStaged,
                     updateOpen, mutationRemaining, preparationState,
                     targetSceneRevision, targetViewRevision,
                     preparationRemaining, renderInFlight,
+                    exactFrameRequired,
                     reportSceneRevision, reportViewRevision,
                     committedSceneRevision, committedViewRevision>>
 
@@ -204,6 +249,7 @@ BeginFrame ==
                     updateOpen, mutationRemaining, preparationState,
                     targetSceneRevision, targetViewRevision,
                     preparationRemaining, reportSceneRevision,
+                    exactFrameRequired,
                     reportViewRevision, committedSceneRevision,
                     committedViewRevision>>
 
@@ -212,6 +258,9 @@ BeginFrame ==
 \* never acknowledge future or stale work.
 CompleteFrame ==
     /\ renderInFlight
+    /\ preparationState \in {"complete", "constrained"}
+    /\ targetSceneRevision = sceneRevision
+    /\ targetViewRevision = viewRevision
     /\ reportSceneRevision' = targetSceneRevision
     /\ reportViewRevision' = targetViewRevision
     /\ renderInFlight' = FALSE
@@ -219,6 +268,7 @@ CompleteFrame ==
                     updateOpen, mutationRemaining, preparationState,
                     targetSceneRevision, targetViewRevision,
                     preparationRemaining, renderPending,
+                    exactFrameRequired,
                     committedSceneRevision, committedViewRevision>>
 
 AcceptReport ==
@@ -229,6 +279,7 @@ AcceptReport ==
     /\ targetViewRevision = reportViewRevision
     /\ committedSceneRevision' = reportSceneRevision
     /\ committedViewRevision' = reportViewRevision
+    /\ exactFrameRequired' = FALSE
     /\ UNCHANGED <<inputOpen, sceneRevision, viewRevision, mutationStaged,
                     updateOpen, mutationRemaining, preparationState,
                     targetSceneRevision, targetViewRevision,
@@ -242,6 +293,7 @@ CloseInput ==
                     mutationRemaining, preparationState,
                     targetSceneRevision, targetViewRevision,
                     preparationRemaining, renderPending, renderInFlight,
+                    exactFrameRequired,
                     reportSceneRevision, reportViewRevision,
                     committedSceneRevision, committedViewRevision>>
 
@@ -260,12 +312,13 @@ Next ==
     \/ BeginMutation
     \/ ApplyMutationBatch
     \/ CommitMutation
-    \/ ChangeView
+    \/ ChangeViewOrPresentationControls
     \/ Start
-    \/ PrepareUnit
     \/ ConstrainPreparation
     \/ RequestFrame
     \/ BeginFrame
+    \/ IncompleteFrame
+    \/ AbandonStaleFrame
     \/ CompleteFrame
     \/ AcceptReport
     \/ CloseInput
@@ -278,10 +331,11 @@ Spec ==
     /\ WF_vars(ApplyMutationBatch)
     /\ WF_vars(CommitMutation)
     /\ WF_vars(Start)
-    /\ WF_vars(PrepareUnit)
     /\ WF_vars(ConstrainPreparation)
     /\ WF_vars(RequestFrame)
     /\ WF_vars(BeginFrame)
+    /\ WF_vars(IncompleteFrame)
+    /\ WF_vars(AbandonStaleFrame)
     /\ WF_vars(CompleteFrame)
     /\ WF_vars(AcceptReport)
     /\ WF_vars(CloseInput)
@@ -309,12 +363,23 @@ NoUnpreparedCurrentCommit ==
         /\ targetSceneRevision = sceneRevision
         /\ targetViewRevision = viewRevision
 
+ExactPresentationHasSuccessor ==
+    exactFrameRequired =>
+        \/ renderPending
+        \/ renderInFlight
+        \/ /\ reportSceneRevision = sceneRevision
+           /\ reportViewRevision = viewRevision
+           /\ preparationState \in {"complete", "constrained"}
+           /\ targetSceneRevision = reportSceneRevision
+           /\ targetViewRevision = reportViewRevision
+
 Terminal ==
     /\ ~inputOpen
     /\ ~mutationStaged
     /\ ~updateOpen
     /\ ~renderPending
     /\ ~renderInFlight
+    /\ ~exactFrameRequired
     /\ committedSceneRevision = sceneRevision
     /\ committedViewRevision = viewRevision
 

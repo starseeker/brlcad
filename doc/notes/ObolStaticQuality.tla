@@ -1,11 +1,14 @@
 --------------------------- MODULE ObolStaticQuality -----------------------
 \* Control-plane model for quiet-view quality admission.
 \*
-\* A protected visual floor is an atomic request and may be too expensive even
-\* when one smaller occurrence-local improvement still fits.  The production
-\* controller must then keep the last complete framebuffer, enter its marginal
-\* path, and either present bounded improvements or retain an explicit capacity
-\* witness.  It must not restart ordinary convergence in the same quiet epoch.
+\* A rich static overscan population and the protected visual floor are
+\* distinct requests.  Rejecting overscan is not evidence that the cheaper
+\* floor is unaffordable.  The floor itself is atomic and may still be too
+\* expensive even when one smaller occurrence-local improvement fits.  The
+\* production controller must then keep the last complete framebuffer, enter
+\* its marginal path, and either present bounded improvements or retain an
+\* explicit capacity witness.  It must not restart ordinary convergence in the
+\* same quiet epoch.
 \*
 \* Quality units stand for ordered renderer cuts, not equal triangle counts or
 \* equal elapsed time.  TLC is checking ownership, preservation, termination,
@@ -15,9 +18,9 @@ EXTENDS Naturals, TLC
 
 CONSTANTS MaxInputEpoch, MaxQuality
 
-Phases == {"input", "ordinary", "floor", "marginal", "present", "reconcile",
+Phases == {"input", "ordinary", "overscan", "floor", "marginal", "present", "reconcile",
            "ready", "accepted", "constrained"}
-Origins == {"none", "floor", "marginal"}
+Origins == {"none", "overscan", "floor", "marginal"}
 
 VARIABLES inputEpoch,
           inputOpen,
@@ -27,15 +30,17 @@ VARIABLES inputEpoch,
           presentedQuality,
           candidateQuality,
           candidateOrigin,
+          overscanRejected,
           protectedFloorRejected,
           nextCutRejected,
           globalCeiling,
+          terminalCeiling,
           staticStarts
 
 vars == <<inputEpoch, inputOpen, capacity, phase, committedQuality,
           presentedQuality, candidateQuality, candidateOrigin,
-          protectedFloorRejected, nextCutRejected, globalCeiling,
-          staticStarts>>
+          overscanRejected, protectedFloorRejected, nextCutRejected, globalCeiling,
+          terminalCeiling, staticStarts>>
 
 Terminal == phase \in {"ready", "accepted", "constrained"}
 
@@ -53,9 +58,11 @@ TypeOK ==
     /\ presentedQuality \in 0..MaxQuality
     /\ candidateQuality \in 0..MaxQuality
     /\ candidateOrigin \in Origins
+    /\ overscanRejected \in BOOLEAN
     /\ protectedFloorRejected \in BOOLEAN
     /\ nextCutRejected \in BOOLEAN
     /\ globalCeiling \in BOOLEAN
+    /\ terminalCeiling \in BOOLEAN
     /\ staticStarts \in 0..1
 
 Init ==
@@ -67,9 +74,11 @@ Init ==
     /\ presentedQuality = 0
     /\ candidateQuality = 0
     /\ candidateOrigin = "none"
+    /\ overscanRejected = FALSE
     /\ protectedFloorRejected = FALSE
     /\ nextCutRejected = FALSE
     /\ globalCeiling = FALSE
+    /\ terminalCeiling = FALSE
     /\ staticStarts = 0
 
 \* Input invalidates view-local trials, but cumulative resident/presented
@@ -82,9 +91,11 @@ BeginInput ==
     /\ phase' = "input"
     /\ candidateQuality' = 0
     /\ candidateOrigin' = "none"
+    /\ overscanRejected' = FALSE
     /\ protectedFloorRejected' = FALSE
     /\ nextCutRejected' = FALSE
     /\ globalCeiling' = FALSE
+    /\ terminalCeiling' = FALSE
     /\ staticStarts' = 0
     /\ UNCHANGED <<capacity, committedQuality, presentedQuality>>
 
@@ -94,19 +105,19 @@ EndInput ==
     /\ phase' = "ordinary"
     /\ UNCHANGED <<inputEpoch, capacity, committedQuality,
                     presentedQuality, candidateQuality, candidateOrigin,
-                    protectedFloorRejected, nextCutRejected, globalCeiling,
-                    staticStarts>>
+                    overscanRejected, protectedFloorRejected, nextCutRejected, globalCeiling,
+                    terminalCeiling, staticStarts>>
 
 StartStatic ==
     /\ ~inputOpen
     /\ phase = "ordinary"
     /\ committedQuality < MaxQuality
-    /\ phase' = "floor"
+    /\ phase' = "overscan"
     /\ staticStarts' = staticStarts + 1
     /\ UNCHANGED <<inputEpoch, capacity, committedQuality,
                     presentedQuality, candidateQuality, candidateOrigin,
-                    protectedFloorRejected, nextCutRejected, globalCeiling,
-                    inputOpen>>
+                    overscanRejected, protectedFloorRejected, nextCutRejected, globalCeiling,
+                    terminalCeiling, inputOpen>>
 
 FinishAlreadyRich ==
     /\ ~inputOpen
@@ -115,8 +126,32 @@ FinishAlreadyRich ==
     /\ phase' = "ready"
     /\ UNCHANGED <<inputEpoch, capacity, committedQuality,
                     presentedQuality, candidateQuality, candidateOrigin,
-                    protectedFloorRejected, nextCutRejected, staticStarts,
-                    globalCeiling, inputOpen>>
+                    overscanRejected, protectedFloorRejected, nextCutRejected, staticStarts,
+                    globalCeiling, terminalCeiling, inputOpen>>
+
+\* The richest static population is a separate opportunistic candidate.  Its
+\* rejection advances to the cheaper protected floor without changing the
+\* floor's evidence state.
+AdmitStaticOverscan ==
+    /\ phase = "overscan"
+    /\ capacity >= MaxQuality
+    /\ candidateQuality' = MaxQuality
+    /\ candidateOrigin' = "overscan"
+    /\ phase' = "present"
+    /\ UNCHANGED <<inputEpoch, inputOpen, capacity, committedQuality,
+                    presentedQuality, overscanRejected,
+                    protectedFloorRejected, nextCutRejected, globalCeiling,
+                    terminalCeiling, staticStarts>>
+
+RejectStaticOverscan ==
+    /\ phase = "overscan"
+    /\ capacity < MaxQuality
+    /\ overscanRejected' = TRUE
+    /\ phase' = "floor"
+    /\ UNCHANGED <<inputEpoch, inputOpen, capacity, committedQuality,
+                    presentedQuality, candidateQuality, candidateOrigin,
+                    protectedFloorRejected, nextCutRejected, globalCeiling,
+                    terminalCeiling, staticStarts>>
 
 AdmitProtectedFloor ==
     /\ phase = "floor"
@@ -125,8 +160,9 @@ AdmitProtectedFloor ==
     /\ candidateOrigin' = "floor"
     /\ phase' = "present"
     /\ UNCHANGED <<inputEpoch, inputOpen, capacity, committedQuality,
-                    presentedQuality, protectedFloorRejected,
+                    presentedQuality, overscanRejected, protectedFloorRejected,
                     nextCutRejected, globalCeiling, staticStarts>>
+    /\ UNCHANGED terminalCeiling
 
 RejectProtectedFloor ==
     /\ phase = "floor"
@@ -135,7 +171,8 @@ RejectProtectedFloor ==
     /\ phase' = "marginal"
     /\ UNCHANGED <<inputEpoch, inputOpen, capacity, committedQuality,
                     presentedQuality, candidateQuality, candidateOrigin,
-                    nextCutRejected, globalCeiling, staticStarts>>
+                    overscanRejected, nextCutRejected, globalCeiling, staticStarts>>
+    /\ UNCHANGED terminalCeiling
 
 \* This is the critical fallback.  It must remain enabled while the static
 \* phase is active even though the complete protected floor did not fit.
@@ -147,8 +184,9 @@ AdmitMarginal ==
     /\ candidateOrigin' = "marginal"
     /\ phase' = "present"
     /\ UNCHANGED <<inputEpoch, inputOpen, capacity, committedQuality,
-                    presentedQuality, protectedFloorRejected,
+                    presentedQuality, overscanRejected, protectedFloorRejected,
                     nextCutRejected, globalCeiling, staticStarts>>
+    /\ UNCHANGED terminalCeiling
 
 RejectMarginal ==
     /\ phase = "marginal"
@@ -159,7 +197,8 @@ RejectMarginal ==
     /\ phase' = "reconcile"
     /\ UNCHANGED <<inputEpoch, inputOpen, capacity, committedQuality,
                     presentedQuality, candidateQuality, candidateOrigin,
-                    protectedFloorRejected, staticStarts>>
+                    overscanRejected, protectedFloorRejected, staticStarts>>
+    /\ UNCHANGED terminalCeiling
 
 \* A rejected richer renderer cut leaves a temporary global safety ceiling.
 \* One certified occurrence-local allocation consumes that guard and makes
@@ -172,13 +211,29 @@ CompleteRejectedReconciliation ==
     /\ globalCeiling' = FALSE
     /\ UNCHANGED <<inputEpoch, inputOpen, capacity, committedQuality,
                     presentedQuality, candidateQuality, candidateOrigin,
-                    protectedFloorRejected, nextCutRejected, staticStarts>>
+                    overscanRejected, protectedFloorRejected, nextCutRejected, staticStarts>>
+    /\ UNCHANGED terminalCeiling
+
+\* Some renderer-wide cuts cannot be represented by a different occurrence-
+\* local allocation.  The last completed framebuffer is then the exact hard-
+\* deadline proof.  Retain its ceiling as terminal policy rather than leaving
+\* the reconciliation phase without an effect owner.
+RetainPresentedMinimum ==
+    /\ phase = "reconcile"
+    /\ nextCutRejected
+    /\ globalCeiling
+    /\ phase' = "constrained"
+    /\ globalCeiling' = FALSE
+    /\ terminalCeiling' = TRUE
+    /\ UNCHANGED <<inputEpoch, inputOpen, capacity, committedQuality,
+                    presentedQuality, candidateQuality, candidateOrigin,
+                    overscanRejected, protectedFloorRejected, nextCutRejected, staticStarts>>
 
 \* Only a completed frame commits a richer cut.  Until this edge, the previous
 \* complete framebuffer remains the presentation authority.
 CompleteFrame ==
     /\ phase = "present"
-    /\ candidateOrigin \in {"floor", "marginal"}
+    /\ candidateOrigin \in {"overscan", "floor", "marginal"}
     /\ candidateQuality > committedQuality
     /\ committedQuality' = candidateQuality
     /\ presentedQuality' = candidateQuality
@@ -188,8 +243,8 @@ CompleteFrame ==
                  THEN "ready"
                  ELSE "marginal"
     /\ UNCHANGED <<inputEpoch, inputOpen, capacity,
-                    protectedFloorRejected, nextCutRejected, staticStarts>>
-    /\ UNCHANGED globalCeiling
+                    overscanRejected, protectedFloorRejected, nextCutRejected, staticStarts>>
+    /\ UNCHANGED <<globalCeiling, terminalCeiling>>
 
 \* A completed fractional population may be the richest presentation proved
 \* affordable by the hard static deadline even though the next complete cut
@@ -207,19 +262,22 @@ AcceptCompletedBoundedFrame ==
     /\ candidateOrigin' = "none"
     /\ phase' = "accepted"
     /\ UNCHANGED <<inputEpoch, inputOpen, capacity,
-                    protectedFloorRejected, nextCutRejected, staticStarts>>
-    /\ UNCHANGED globalCeiling
+                    overscanRejected, protectedFloorRejected, nextCutRejected, staticStarts>>
+    /\ UNCHANGED <<globalCeiling, terminalCeiling>>
 
 Next ==
     \/ BeginInput
     \/ EndInput
     \/ StartStatic
     \/ FinishAlreadyRich
+    \/ AdmitStaticOverscan
+    \/ RejectStaticOverscan
     \/ AdmitProtectedFloor
     \/ RejectProtectedFloor
     \/ AdmitMarginal
     \/ RejectMarginal
     \/ CompleteRejectedReconciliation
+    \/ RetainPresentedMinimum
     \/ CompleteFrame
     \/ AcceptCompletedBoundedFrame
 
@@ -230,11 +288,14 @@ Spec ==
     /\ WF_vars(EndInput)
     /\ WF_vars(StartStatic)
     /\ WF_vars(FinishAlreadyRich)
+    /\ WF_vars(AdmitStaticOverscan)
+    /\ WF_vars(RejectStaticOverscan)
     /\ WF_vars(AdmitProtectedFloor)
     /\ WF_vars(RejectProtectedFloor)
     /\ WF_vars(AdmitMarginal)
     /\ WF_vars(RejectMarginal)
     /\ WF_vars(CompleteRejectedReconciliation)
+    /\ WF_vars(RetainPresentedMinimum)
     /\ WF_vars(CompleteFrame)
     /\ WF_vars(AcceptCompletedBoundedFrame)
 
@@ -244,6 +305,13 @@ CompleteFrameIsCommitAuthority == committedQuality = presentedQuality
 
 CandidateDoesNotReplacePresentation ==
     phase = "present" => presentedQuality < candidateQuality
+
+OverscanRejectionPreservesAffordableFloor ==
+    overscanRejected /\ capacity >= FloorTarget =>
+        ~protectedFloorRejected
+
+ProtectedFloorRejectionHasExactEvidence ==
+    protectedFloorRejected => capacity < FloorTarget
 
 ProtectedFloorFallbackHasOwner ==
     protectedFloorRejected /\ ~nextCutRejected /\ ~Terminal =>
@@ -265,6 +333,9 @@ ConstrainedHasCapacityWitness ==
 
 RejectedCeilingHasOneOwner ==
     globalCeiling => phase = "reconcile" /\ nextCutRejected
+
+TerminalCeilingIsPolicy ==
+    terminalCeiling => phase = "constrained" /\ nextCutRejected
 
 ReadyIsRichest == phase = "ready" => committedQuality = MaxQuality
 

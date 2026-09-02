@@ -45,6 +45,25 @@ BObolLodPresentationPolicy::capacitySamplePending(
 }
 
 bool
+BObolLodPresentationPolicy::nonterminalStructuralFrontier(
+    bool occurrenceCoverageExact, size_t structuralFallbackCount,
+    size_t terminalFailureCount)
+{
+    return occurrenceCoverageExact &&
+	structuralFallbackCount > terminalFailureCount;
+}
+
+bool
+BObolLodPresentationPolicy::presentationOnlyFrameAdvancesPlanning(
+    bool lodPlanningRelevant, bool pointAdmissionFramePending,
+    bool lodPresentationBarrierPending,
+    bool nonterminalStructuralFrontierPending)
+{
+    return lodPlanningRelevant && (pointAdmissionFramePending ||
+	lodPresentationBarrierPending || nonterminalStructuralFrontierPending);
+}
+
+bool
 BObolLodPresentationPolicy::claimOverBudgetAllocation(
     bool allocationCurrent, bool allocationCutsApplied,
     size_t selectedPresentationCost, size_t certifiedPresentationBudget,
@@ -74,6 +93,20 @@ BObolLodPresentationPolicy::completedPassSelection(
 	    capacityPresentationPending, progressiveCeiling);
     selection.deferredCapacitySuccessor =
 	selection.consumePassAnnotations && capacitySuccessorPending;
+
+    /* Structural-only occurrences cannot participate in retained allocation
+     * or capacity measurement.  Their exact projected frontier therefore
+     * owns the completed-pass boundary before either a renderer-ceiling
+     * handoff or a new capacity transaction.  The controller invalidates any
+     * stale capacity sample and routes this owner to its finite classifier,
+     * mesh-repair, or terminal-proxy successor. */
+    if (inputs.structuralFrontierPending) {
+	selection.consumePassAnnotations = false;
+	selection.deferredCapacitySuccessor = false;
+	selection.owner = CompletedPassOwner::STRUCTURAL_FRONTIER;
+	return selection;
+    }
+
     const bool cleanPass =
 	(!inputs.capacityTransactionPending && !inputs.changedCut) ||
 	selection.consumePassAnnotations;
@@ -84,8 +117,18 @@ BObolLodPresentationPolicy::completedPassSelection(
 	    CompletedPassOwner::ALLOCATION_HANDOFF;
 	return selection;
     }
-    selection.owner = capacityEligible ? CompletedPassOwner::CAPACITY :
-	CompletedPassOwner::NONE;
+    if (capacityEligible) {
+	selection.owner = CompletedPassOwner::CAPACITY;
+	return selection;
+    }
+    /* Wanting a richer retained cut is an observation, not a producer.  Give
+     * its bounded retirement an explicit owner so the completed-pass
+     * transaction cannot become terminal while the planning ledger still
+     * contains that observation. */
+    if (cleanPass && !this->handoffActive() &&
+	inputs.retainedRefinementPending &&
+	!inputs.retainedRefinementBudgetBlocked)
+	selection.owner = CompletedPassOwner::RETAINED_OBSERVATION;
     return selection;
 }
 
@@ -173,13 +216,29 @@ BObolLodPresentationPolicy::beginQuiet(const QuietInputs &quietInputs)
     successorInputs.current.pointProxyPixelThreshold =
 	inputs.currentPointProxyPixelThreshold;
 
-    const bool priorMatches = inputs.orthographic && !inputs.scaleChanged &&
-	this->priorStableValue.valid &&
+    const bool priorControlsAvailable = inputs.orthographic &&
+	this->priorStableValue.valid;
+    const bool priorPopulationMatches = priorControlsAvailable &&
 	populationMatches(this->priorStableValue.population, inputs.population);
-    if (priorMatches)
+    if (priorControlsAvailable) {
 	successorInputs.priorStable = targetFromSnapshot(
 	    this->priorStableValue);
-    const bool provenMatches = !priorMatches && inputs.scaleChanged &&
+	/* Resident publication may enlarge the drawable population during an
+	 * interaction without changing the stable pixel/proxy targets captured
+	 * at its start.  The old renderer ceiling is not transferable to that
+	 * population, however.  Keep the current motion ceiling as a private
+	 * presentation guard while the allocator recomputes demand from the
+	 * restored semantic controls. */
+	if (!priorPopulationMatches) {
+	    successorInputs.priorStable.progressiveCeiling =
+		inputs.currentProgressiveCeiling;
+	    successorInputs.priorStable.progressiveNextFraction =
+		inputs.currentProgressiveNextFraction;
+	}
+	successorInputs.priorStableCutsReusable =
+	    priorPopulationMatches && !inputs.scaleChanged;
+    }
+    const bool provenMatches = inputs.scaleChanged &&
 	this->provenQualityValue.valid &&
 	this->provenQualityValue.viewEpoch == inputs.viewEpoch &&
 	populationMatches(this->provenQualityValue.population,
@@ -232,8 +291,9 @@ BObolLodPresentationPolicy::beginQuiet(const QuietInputs &quietInputs)
     this->handoffReconciliationBudgetValue = 0;
     this->handoffReconciliationBudgetLimitValue = 0;
     /* A proven scale target carries the exact cost of the completed frame it
-     * restores.  Other handoffs establish their cost through completed-frame
-     * evidence. */
+     * restores.  A prior stable control vector is only a starting point after
+     * zoom and therefore carries no current-projection cost proof.  Other
+     * handoffs establish their cost through completed-frame evidence. */
     this->handoffCostFloorValue =
 	decision.handoff == Reducer::Handoff::ALLOCATION &&
 	decision.restoredProvenQuality ? decision.provenRenderCostFloor : 0;
@@ -255,8 +315,20 @@ BObolLodPresentationPolicy::CompletedPassDecision
 BObolLodPresentationPolicy::completePass(const CompletedPassInputs &inputs)
 {
     CompletedPassDecision decision;
-    if (!inputs.completed || inputs.submissionPending ||
-	    inputs.capacityTransactionPending || inputs.changedCut ||
+    if (!inputs.completed || inputs.submissionPending)
+	return decision;
+    /* Structural repair precedes an allocation handoff.  The retained
+     * allocator operates on published CAD occurrences, so asking it to
+     * replace structural-only records produces an empty allocation and can
+     * re-arm the same handoff indefinitely.  Its exact frontier also owns the
+     * completed-pass boundary ahead of capacity and budget evidence, so the
+     * ordinary pass's richer-cut observation must not block that successor. */
+    if (inputs.structuralFrontierPending) {
+	decision.retireRetainedObservation =
+	    inputs.retainedRefinementPending;
+	return decision;
+    }
+    if (inputs.capacityTransactionPending || inputs.changedCut ||
 	    (inputs.retainedRefinementBudgetBlocked && !this->handoffActive()) ||
 	    this->presentationHandoffPending())
 	return decision;
@@ -337,6 +409,12 @@ BObolLodPresentationPolicy::noteFramePresented(
     if (boundedBudget)
 	this->handoffReconciliationBudgetValue = boundedBudget;
     return released;
+}
+
+void
+BObolLodPresentationPolicy::acceptCapacityCertificate(void)
+{
+    this->clearHandoff();
 }
 
 void

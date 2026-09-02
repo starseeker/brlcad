@@ -37,6 +37,14 @@ std::vector<SoBRLDatabaseSource *> controller_render_database_sources(
     const BObolViewController *controller);
 std::vector<SoBRLDatabaseSource *> controller_render_database_source_roots(
     const BObolViewController *controller);
+bool controller_lod_source_inputs_unsubmitted(
+    const std::vector<SoBRLDatabaseSource *> &sources,
+    const std::vector<BObolLodCoordinator::LodSourceSnapshot> &submitted);
+bool controller_lod_mesh_first_scene_safe(
+    const std::vector<SoBRLDatabaseSource *> &sources);
+bool controller_lod_adaptive_point_aggregation_allowed(
+    const BObolViewController *controller,
+    bool staticQualityCapacityRejected);
 const char *controller_database_id(const struct db_i *dbip);
 bool controller_lod_trace_enabled(const char *name, uint64_t viewRevision);
 BObolLodPresentationPolicy::Population controller_lod_presentation_population(
@@ -58,15 +66,18 @@ void controller_update_cutting_plane_affordance(SoViewport *viewport,
 	double horizontalSize,
 	double aspect);
 
-/* One level-triggered host render request.  Capacity sampling is a stronger
- * form of the same request, not an independent latch: a weaker repaint cannot
- * downgrade it, and consuming or clearing it retires the diagnostic reason at
- * the same transition.  The controller's renderRequestMutex owns this value. */
+/* One level-triggered host render request.  Semantic presentation, LoD
+ * planning presentation, and capacity sampling are increasing strengths of
+ * the same request, not independent latches.  A weaker repaint cannot
+ * downgrade a stronger transaction, and consuming or clearing it retires the
+ * diagnostic reason at the same transition.  The controller's
+ * renderRequestMutex owns this value. */
 class BObolRenderRequestState {
 public:
     enum class Kind : uint8_t {
 	NONE = 0,
 	PRESENTATION,
+	LOD_PRESENTATION,
 	CAPACITY_SAMPLE
     };
 
@@ -75,18 +86,20 @@ public:
 	bool wakeEndpoint = false;
     };
 
-    Decision request(const char *reason, bool capacityRelevant)
+    Decision request(const char *reason, bool capacityRelevant,
+	bool planningRelevant)
     {
 	Decision decision;
 	const Kind requested = capacityRelevant ?
-	    Kind::CAPACITY_SAMPLE : Kind::PRESENTATION;
+	    Kind::CAPACITY_SAMPLE : planningRelevant ?
+	    Kind::LOD_PRESENTATION : Kind::PRESENTATION;
 	if (this->kindValue == Kind::NONE) {
 	    this->kindValue = requested;
 	    this->reasonValue = reason ? reason : "";
 	    decision.changed = true;
 	    decision.wakeEndpoint = true;
-	} else if (this->kindValue == Kind::PRESENTATION &&
-		requested == Kind::CAPACITY_SAMPLE) {
+	} else if (static_cast<uint8_t>(requested) >
+		static_cast<uint8_t>(this->kindValue)) {
 	    this->kindValue = requested;
 	    this->reasonValue = reason ? reason : "";
 	    decision.changed = true;
@@ -114,13 +127,16 @@ public:
 	return changed;
     }
 
-    bool consume(SbString *reason, SbBool *capacityRelevant)
+    bool consume(SbString *reason, SbBool *capacityRelevant,
+	SbBool *planningRelevant)
     {
 	const bool wasPending = this->pending();
 	if (reason)
 	    *reason = this->reasonValue;
 	if (capacityRelevant)
 	    *capacityRelevant = this->capacityRelevant() ? TRUE : FALSE;
+	if (planningRelevant)
+	    *planningRelevant = this->planningRelevant() ? TRUE : FALSE;
 	this->kindValue = Kind::NONE;
 	this->reasonValue = "";
 	return wasPending;
@@ -134,6 +150,12 @@ public:
     bool capacityRelevant(void) const
     {
 	return this->kindValue == Kind::CAPACITY_SAMPLE;
+    }
+
+    bool planningRelevant(void) const
+    {
+	return this->kindValue == Kind::LOD_PRESENTATION ||
+	    this->kindValue == Kind::CAPACITY_SAMPLE;
     }
 
     const SbString &reason(void) const
@@ -151,6 +173,7 @@ private:
  * must not add virtual dispatch or accessors to LoD hot paths. */
 struct BObolViewController::Impl : BObolLodCoordinator {
     explicit Impl(BObolViewController *owner) :
+	controller(owner),
 	headlightOffsetEye(bobol_headlight_default_offset()),
 	featureStore(new BObolFeatureStore(owner)),
 	polygonStore(new BObolPolygonStore(owner)),
@@ -158,9 +181,27 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     {
     }
 
+    void requireExactPresentationFrame(void)
+    {
+	const uint64_t mutationNanoseconds = this->controller ?
+	    this->controller->beginRenderTiming() : 0;
+	this->lodExactPresentationFrame.require(mutationNanoseconds);
+	if (this->controller)
+	    this->controller->markProgressiveWorkPending();
+    }
+
     /* Renderer-only presentation limits are mirrored in BObolViewLodState.
      * Keep publication in one owner operation: a controller value without
      * the matching renderer value is not a valid intermediate state. */
+    void requireCadPresentationCommitIfChanged(
+	BObolViewLodState *state,
+	const Obol::CadViewState &previous)
+    {
+	if (state && state->hasCadPresentationAssemblies() &&
+	    previous != state->cadPresentationViewState())
+	    this->requireExactPresentationFrame();
+    }
+
     void publishCadProgressiveCeiling(int ceiling,
 	float nextFraction = 0.0f)
     {
@@ -171,9 +212,13 @@ struct BObolViewController::Impl : BObolLodCoordinator {
 	this->lodInteractiveProgressiveCeiling = ceiling;
 	BObolViewLodState *state = this->viewAttachment ?
 	    this->viewAttachment->getViewLodState() : NULL;
-	if (state)
+	if (state) {
+	    const Obol::CadViewState previous =
+		state->cadPresentationViewState();
 	    state->setCadPresentationProgressiveCutCeiling(
 		ceiling, nextFraction);
+	    this->requireCadPresentationCommitIfChanged(state, previous);
+	}
     }
 
     static float normalizedCadPointProxyThreshold(float threshold)
@@ -188,22 +233,45 @@ struct BObolViewController::Impl : BObolLodCoordinator {
     void publishCadPointProxyThreshold(float threshold)
     {
 	threshold = normalizedCadPointProxyThreshold(threshold);
+	const bool changed = std::fabs(
+	    this->lodPresentationPointProxyPixelThreshold - threshold) >
+	    1.0e-6f;
 	this->lodPresentationPointProxyPixelThreshold = threshold;
 	BObolViewLodState *state = this->viewAttachment ?
 	    this->viewAttachment->getViewLodState() : NULL;
-	if (state)
+	if (state) {
+	    const Obol::CadViewState previous =
+		state->cadPresentationViewState();
 	    state->setCadPresentationPointProxyPixelThreshold(threshold);
+	    this->requireCadPresentationCommitIfChanged(state, previous);
+	}
+	/* The point classifier is an allocator input.  The formal capacity
+	 * machine treats it as part of its immutable revision tuple, so publish
+	 * that edge here rather than relying on every calibration caller to
+	 * remember a matching revision update. */
+	if (changed)
+	    this->advanceAdmissionRevision(
+		BObolLodAdmissionRevisionDomain::CAPACITY);
     }
 
     void publishCadDiscoveryPointProxyThreshold(float threshold)
     {
 	threshold = normalizedCadPointProxyThreshold(threshold);
+	const bool changed = std::fabs(
+	    this->lodDiscoveryPointProxyPixelThreshold - threshold) > 1.0e-6f;
 	this->lodDiscoveryPointProxyPixelThreshold = threshold;
 	BObolViewLodState *state = this->viewAttachment ?
 	    this->viewAttachment->getViewLodState() : NULL;
-	if (state)
+	if (state) {
+	    const Obol::CadViewState previous =
+		state->cadPresentationViewState();
 	    state->setCadPresentationDiscoveryPointProxyPixelThreshold(
 		threshold);
+	    this->requireCadPresentationCommitIfChanged(state, previous);
+	}
+	if (changed)
+	    this->advanceAdmissionRevision(
+		BObolLodAdmissionRevisionDomain::CAPACITY);
     }
 
     void publishCadPointProxyThresholds(float presentationThreshold,
@@ -213,16 +281,39 @@ struct BObolViewController::Impl : BObolLodCoordinator {
 	    presentationThreshold);
 	discoveryThreshold = normalizedCadPointProxyThreshold(
 	    discoveryThreshold);
+	const bool changed = std::fabs(
+	    this->lodPresentationPointProxyPixelThreshold -
+		presentationThreshold) > 1.0e-6f ||
+	    std::fabs(this->lodDiscoveryPointProxyPixelThreshold -
+		discoveryThreshold) > 1.0e-6f;
 	this->lodPresentationPointProxyPixelThreshold = presentationThreshold;
 	this->lodDiscoveryPointProxyPixelThreshold = discoveryThreshold;
 	BObolViewLodState *state = this->viewAttachment ?
 	    this->viewAttachment->getViewLodState() : NULL;
 	if (state) {
+	    const Obol::CadViewState previous =
+		state->cadPresentationViewState();
 	    state->setCadPresentationPointProxyPixelThreshold(
 		presentationThreshold);
 	    state->setCadPresentationDiscoveryPointProxyPixelThreshold(
 		discoveryThreshold);
+	    this->requireCadPresentationCommitIfChanged(state, previous);
 	}
+	if (changed)
+	    this->advanceAdmissionRevision(
+		BObolLodAdmissionRevisionDomain::CAPACITY);
+    }
+
+    void publishCadCameraMotionFrameReuse(SbBool enabled)
+    {
+	BObolViewLodState *state = this->viewAttachment ?
+	    this->viewAttachment->getViewLodState() : NULL;
+	if (!state)
+	    return;
+	const Obol::CadViewState previous =
+	    state->cadPresentationViewState();
+	state->setCadPresentationCameraMotionFrameReuse(enabled);
+	this->requireCadPresentationCommitIfChanged(state, previous);
     }
 
     void publishCadPresentationLimits(int ceiling, float nextFraction,
@@ -243,6 +334,7 @@ struct BObolViewController::Impl : BObolLodCoordinator {
 
     BObolSceneController sceneController;
     SoViewport *viewport = new SoViewport;
+    BObolViewController *controller = NULL;
     SoBRLViewLodGroup *renderLodRoot = NULL;
     SoNode *renderBatchRoot = NULL;
     SoNode *renderPresentationRoot = NULL;

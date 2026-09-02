@@ -56,6 +56,12 @@ public:
 
     struct Inputs {
 	bool retainedMeshPayloads = false;
+	/* Prior stable controls remain a valid starting point after an
+	 * orthographic zoom, but only a pose-only change may reuse their exact
+	 * occurrence cuts.  Keep those facts separate: conflating them made a
+	 * zoom inherit the coarse motion-time point threshold and then visibly
+	 * rebuild the stable population. */
+	bool priorStableCutsReusable = false;
 	Target current;
 	Target priorStable;
 	Target provenScale;
@@ -86,18 +92,31 @@ public:
 	    decision.target = sanitize(inputs.exactView, false);
 	} else if (!inputs.retainedMeshPayloads) {
 	    decision.clearPresentationLimits = true;
-	} else if (inputs.priorStable.valid) {
-	    decision.source = Source::PRIOR_STABLE;
-	    decision.target = sanitize(inputs.priorStable, false);
-	    /* A pose change preserves immutable occurrence cuts, not a capacity
-	     * measurement for the new projection.  Present the restored renderer
-	     * controls once before any allocator may translate or replace them. */
-	    decision.handoff = Handoff::PRESENTATION;
 	} else if (inputs.provenScale.valid) {
 	    decision.source = Source::PROVEN_SCALE;
 	    decision.target = sanitize(inputs.provenScale, false);
+	    if (inputs.priorStable.valid) {
+		const Target stableControls = sanitize(
+		    inputs.priorStable, false);
+		/* The current-scale frame proves a drawable presentation and its
+		 * cost, not a new user-facing fidelity target.  Preserve its
+		 * renderer ceiling while recomputing occurrence demand from the
+		 * stable pixel and proxy controls captured before motion. */
+		decision.target.targetPixelError =
+		    stableControls.targetPixelError;
+		decision.target.pointProxyPixelThreshold =
+		    stableControls.pointProxyPixelThreshold;
+	    }
 	    decision.handoff = constrained(decision.target) ?
 		Handoff::ALLOCATION : Handoff::NONE;
+	} else if (inputs.priorStable.valid) {
+	    decision.source = Source::PRIOR_STABLE;
+	    decision.target = sanitize(inputs.priorStable, false);
+	    /* Pose-only orthographic motion preserves immutable occurrence cuts.
+	     * Scale changes preserve only the stable control vector; their new
+	     * projected demand still needs one atomic retained allocation. */
+	    decision.handoff = inputs.priorStableCutsReusable ?
+		Handoff::PRESENTATION : Handoff::ALLOCATION;
 	} else {
 	    /* Preserve only the renderer safety controls while the allocator
 	     * translates them.  The semantic pixel demand is stable and therefore

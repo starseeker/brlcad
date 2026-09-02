@@ -74,6 +74,17 @@ void get_viewport_image(QImage &img)   override;
 void get_obol_viewport_image(QImage &img) override;
 void request_update(uint32_t refresh_flags) override;
 
+/**
+ * Copy the framebuffer already presented by this widget into @p img.
+ *
+ * Unlike get_viewport_image(), this method performs no scene traversal and
+ * does not schedule a paint.  It is intended for passive diagnostics which
+ * must not influence progressive-render timing.  The caller must run on the
+ * widget's GUI thread.  Any context current on entry is restored before the
+ * method returns.
+ */
+void get_presented_frame_image(QImage &img);
+
 void enableDefaultKeyBindings()    override;
 void disableDefaultKeyBindings()   override;
 void enableDefaultMouseBindings()  override;
@@ -110,6 +121,7 @@ void mouseReleaseEvent(QMouseEvent *e) override;
 void wheelEvent(QWheelEvent *e)        override;
 
 private:
+void render_pending_frame();
 QgCanvasState *d = nullptr;
 };
 

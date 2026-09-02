@@ -4,9 +4,9 @@
 \* Candidate indices denote allocator-realizable budgets for one immutable
 \* revision tuple.  That tuple includes the aggregate point/box
 \* classification rule and pixel threshold; changing either starts a new
-\* instance of this machine.  RequestedDemandCount records the potentially larger raw
-\* projected demand; it is not a searchable index.  PopulationOf maps the
-\* realizable budgets to complete, discrete,
+\* instance of this machine.  The candidate domain spans the complete
+\* currently resident pixel-demand cost.  PopulationOf maps those valid scene
+\* budgets to complete, discrete,
 \* visual-importance-ordered scene populations; adjacent budgets may select
 \* the same PoP cuts.  Zero is the known-safe coverage population and
 \* CandidateCount + 1 is an unsafe sentinel.  A previously unseen population
@@ -16,16 +16,29 @@
 \* quiet view searches first for the
 \* preferred steady cadence.  If quality debt remains and the independent
 \* static deadline is available, it may advance exactly once to the static
-\* goal, preserving the steady-safe lower bound.  A ready pose-only view may
-\* start at the static goal: its retained presentation is the initial
-\* candidate and may be coarsened only if it misses that hard deadline.  No
+\* goal, preserving the steady-safe lower bound.  Any ready view with a
+\* retained mesh presentation, after pose or zoom, starts at the static goal:
+\* its retained presentation is the initial candidate and may be coarsened
+\* only if it misses that hard deadline.  Zoom still recomputes pixel demand;
+\* this rule governs the capacity lower bound, not occurrence-cut reuse.  No
 \* timer, repaint, or throughput-EMA update may reopen either search.  A hard
-\* deadline abort is an immediate unsafe classification of the active
+\* deadline abort is an immediate unsafe classification of exactly the active
 \* candidate; it narrows this certificate instead of creating another one.
+\* A throughput-derived recovery hint may select a lower successor, but may
+\* not move the unsafe boundary below the candidate which actually missed.
+\* That distinction is essential when adjacent budgets map to different,
+\* widely separated PoP populations.
+\* SearchMinimum is the allocator's irreducible lower endpoint.  When a
+\* protected visual floor is active, production sets it to that floor's exact
+\* cost rather than allowing the allocator to select the floor as an override
+\* for a smaller capacity candidate.  Consequently every selected population
+\* remains inside its candidate budget and a terminal certificate cannot be
+\* followed by restoration of an out-of-domain floor.
 \* Capacity is a responsiveness guard, not a visual-quality objective.  Once
-\* a goal has both a proven-safe population and a rejected richer population,
-\* it settles immediately at the safe population.  It does not expose a
-\* binary search for the exact adjacent integer budget.  CandidateAttemptLimit
+\* the final goal has both a proven-safe population and a rejected richer
+\* population, it may publish one midpoint bridge before settling.  This
+\* recovers a wide unused bracket without exposing an open-ended binary search
+\* or repeated quality staircase.  CandidateAttemptLimit
 \* independently bounds cold recovery before any safe population is known.
 \* Candidate allocation and exact presentation are explicit producer
 \* barriers.  Neither may consume timing samples, and measurement cannot
@@ -44,11 +57,11 @@
 
 EXTENDS FiniteSets, Naturals, TLC
 
-CONSTANT CandidateCount, RequestedDemandCount, SampleLimit,
+CONSTANT CandidateCount, SearchMinimum, SampleLimit,
          CandidateAttemptLimit, PresentationAttemptLimit, PopulationOf
 
 ASSUME /\ CandidateCount > 0
-       /\ RequestedDemandCount >= CandidateCount
+       /\ SearchMinimum \in 1..CandidateCount
        /\ SampleLimit > 0
        /\ CandidateAttemptLimit > 0
        /\ PresentationAttemptLimit > 0
@@ -56,6 +69,7 @@ ASSUME /\ CandidateCount > 0
 Phases == {"choose", "allocate", "present", "measure", "goal_done",
            "terminal", "unmeasurable"}
 Goals == {"steady", "static"}
+HandoffKinds == {"cold", "readyPose", "readyZoom"}
 Candidates == 1..CandidateCount
 Populations == 1..CandidateCount
 PairedPopulationMap ==
@@ -71,7 +85,7 @@ VARIABLES phase,
           trueSteadyCapacity,
           trueStaticCapacity,
           staticEligible,
-          startAtStatic,
+          handoffKind,
           safe,
           unsafe,
           candidate,
@@ -86,19 +100,22 @@ VARIABLES phase,
           goalAttempts,
           candidatePublications,
           postSafeFailure,
+          bracketBridgeUsed,
           priorFrameBarrier,
           revisionHasPlan,
           inexactPresentations
 
 vars == <<phase, goal, trueSteadyCapacity, trueStaticCapacity, staticEligible,
-          startAtStatic,
+          handoffKind,
           safe, unsafe, candidate, samplesRemaining, measured,
           measuredSafePopulations, measuredUnsafePopulations,
           certificateRevision, priorWidth, narrowed, goalTransitions,
           goalAttempts, candidatePublications, postSafeFailure,
-          priorFrameBarrier, revisionHasPlan, inexactPresentations>>
+          bracketBridgeUsed, priorFrameBarrier, revisionHasPlan,
+          inexactPresentations>>
 
 Capacity(g) == IF g = "steady" THEN trueSteadyCapacity ELSE trueStaticCapacity
+StartAtStatic == handoffKind \in {"readyPose", "readyZoom"}
 CandidateCapacity(g) ==
     Cardinality({budget \in Candidates : PopulationOf[budget] <= Capacity(g)})
 
@@ -108,7 +125,7 @@ TypeOK ==
     /\ trueSteadyCapacity \in 0..CandidateCount
     /\ trueStaticCapacity \in trueSteadyCapacity..CandidateCount
     /\ staticEligible \in BOOLEAN
-    /\ startAtStatic \in BOOLEAN
+    /\ handoffKind \in HandoffKinds
     /\ safe \in 0..CandidateCount
     /\ unsafe \in 1..(CandidateCount + 1)
     /\ candidate \in 0..CandidateCount
@@ -124,6 +141,7 @@ TypeOK ==
     /\ goalAttempts \in 0..CandidateAttemptLimit
     /\ candidatePublications \in 0..(2 * CandidateAttemptLimit)
     /\ postSafeFailure \in BOOLEAN
+    /\ bracketBridgeUsed \in BOOLEAN
     /\ priorFrameBarrier \in BOOLEAN
     /\ revisionHasPlan \in BOOLEAN
     /\ inexactPresentations \in 0..PresentationAttemptLimit
@@ -135,6 +153,7 @@ CandidateOwned ==
     phase \in {"allocate", "present", "measure"} =>
         /\ safe < candidate
         /\ candidate < unsafe
+        /\ candidate >= SearchMinimum
         /\ candidate \notin measured
         /\ IF PopulationOf[candidate] \in
                   (measuredSafePopulations \union measuredUnsafePopulations)
@@ -157,6 +176,8 @@ TerminalCertificate ==
         /\ \/ unsafe = safe + 1
            \/ safe = CandidateCount
            \/ goalAttempts = CandidateAttemptLimit
+           \/ /\ safe < SearchMinimum
+              /\ unsafe <= SearchMinimum
            \/ /\ safe > 0
               /\ unsafe <= CandidateCount
         /\ \/ goal = "static"
@@ -169,24 +190,29 @@ UnmeasurableCertificate ==
         /\ samplesRemaining = 0
 
 GoalMonotonic ==
-    /\ (goal = "steady" => /\ ~startAtStatic
+    /\ (goal = "steady" => /\ ~StartAtStatic
                               /\ goalTransitions = 0)
     /\ (goal = "static" => goalTransitions = 1)
 
+RetainedHandoffStartsAtStatic == StartAtStatic => goal = "static"
+
 CandidatePublicationBound ==
     candidatePublications <=
-        IF startAtStatic THEN CandidateAttemptLimit
+        IF StartAtStatic THEN CandidateAttemptLimit
         ELSE 2 * CandidateAttemptLimit
 
-PostSafeFailureEndsGoal ==
-    postSafeFailure => phase \in {"goal_done", "terminal"}
+PostSafeFailureTransfersOnce ==
+    postSafeFailure =>
+        \/ phase \in {"goal_done", "terminal"}
+        \/ /\ phase = "choose"
+           /\ ~bracketBridgeUsed
 
 StrictNarrowing == narrowed => unsafe - safe < priorWidth
 
 Init ==
     /\ phase = "choose"
-    /\ startAtStatic \in BOOLEAN
-    /\ goal = IF startAtStatic THEN "static" ELSE "steady"
+    /\ handoffKind \in HandoffKinds
+    /\ goal = IF StartAtStatic THEN "static" ELSE "steady"
     /\ trueSteadyCapacity \in 0..CandidateCount
     /\ trueStaticCapacity \in trueSteadyCapacity..CandidateCount
     /\ staticEligible \in BOOLEAN
@@ -200,21 +226,26 @@ Init ==
     /\ certificateRevision = 0
     /\ priorWidth = CandidateCount + 1
     /\ narrowed = FALSE
-    /\ goalTransitions = IF startAtStatic THEN 1 ELSE 0
+    /\ goalTransitions = IF StartAtStatic THEN 1 ELSE 0
     /\ goalAttempts = 0
     /\ candidatePublications = 0
     /\ postSafeFailure = FALSE
+    /\ bracketBridgeUsed = FALSE
     /\ priorFrameBarrier = FALSE
     /\ revisionHasPlan = FALSE
     /\ inexactPresentations = 0
 
 ChooseCandidate ==
     /\ phase = "choose"
-    /\ unsafe > safe + 1
+    /\ unsafe > IF safe + 1 > SearchMinimum
+                  THEN safe + 1 ELSE SearchMinimum
     /\ goalAttempts < CandidateAttemptLimit
-    /\ candidate' = safe + (unsafe - safe) \div 2
+    /\ candidate' =
+          IF safe + (unsafe - safe) \div 2 < SearchMinimum
+          THEN SearchMinimum
+          ELSE safe + (unsafe - safe) \div 2
     /\ samplesRemaining' =
-          IF PopulationOf[safe + (unsafe - safe) \div 2] \in
+          IF PopulationOf[candidate'] \in
                   (measuredSafePopulations \union measuredUnsafePopulations)
               THEN 0 ELSE SampleLimit
     /\ \E barrier \in BOOLEAN :
@@ -224,9 +255,11 @@ ChooseCandidate ==
     /\ goalAttempts' = goalAttempts + 1
     /\ candidatePublications' = candidatePublications + 1
     /\ postSafeFailure' = FALSE
+    /\ bracketBridgeUsed' =
+          (bracketBridgeUsed \/ (safe > 0 /\ unsafe <= CandidateCount))
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, safe, unsafe, measured,
+                    staticEligible, handoffKind, safe, unsafe, measured,
                     measuredSafePopulations, measuredUnsafePopulations,
                     certificateRevision, priorWidth, goalTransitions,
                     inexactPresentations>>
@@ -238,12 +271,12 @@ ConsumePriorFrameBarrier ==
     /\ revisionHasPlan' = FALSE
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, safe, unsafe, candidate,
+                    staticEligible, handoffKind, safe, unsafe, candidate,
                     samplesRemaining, measured, measuredSafePopulations,
                     measuredUnsafePopulations, certificateRevision,
                     priorWidth, goalTransitions, goalAttempts,
                     candidatePublications, postSafeFailure, phase,
-                    inexactPresentations>>
+                    bracketBridgeUsed, inexactPresentations>>
 
 ApplyCandidateAllocation ==
     /\ phase = "allocate"
@@ -253,12 +286,12 @@ ApplyCandidateAllocation ==
     /\ revisionHasPlan' = TRUE
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, safe, unsafe, candidate,
+                    staticEligible, handoffKind, safe, unsafe, candidate,
                     samplesRemaining, measured, measuredSafePopulations,
                     measuredUnsafePopulations, certificateRevision,
                     priorWidth, goalTransitions, goalAttempts,
                     candidatePublications, postSafeFailure,
-                    priorFrameBarrier>>
+                    bracketBridgeUsed, priorFrameBarrier>>
 
 PresentExactCandidate ==
     /\ phase = "present"
@@ -266,12 +299,12 @@ PresentExactCandidate ==
     /\ inexactPresentations' = 0
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, safe, unsafe, candidate,
+                    staticEligible, handoffKind, safe, unsafe, candidate,
                     samplesRemaining, measured, measuredSafePopulations,
                     measuredUnsafePopulations, certificateRevision,
                     priorWidth, goalTransitions, goalAttempts,
                     candidatePublications, postSafeFailure, priorFrameBarrier,
-                    revisionHasPlan>>
+                    revisionHasPlan, bracketBridgeUsed>>
 
 RecordInexactPresentation ==
     /\ phase = "present"
@@ -279,12 +312,12 @@ RecordInexactPresentation ==
     /\ inexactPresentations' = inexactPresentations + 1
     /\ narrowed' = FALSE
     /\ UNCHANGED <<phase, goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, safe, unsafe, candidate,
+                    staticEligible, handoffKind, safe, unsafe, candidate,
                     samplesRemaining, measured, measuredSafePopulations,
                     measuredUnsafePopulations, certificateRevision,
                     priorWidth, goalTransitions, goalAttempts,
                     candidatePublications, postSafeFailure, priorFrameBarrier,
-                    revisionHasPlan>>
+                    revisionHasPlan, bracketBridgeUsed>>
 
 RetireUnmeasurablePresentation ==
     /\ phase = "present"
@@ -295,11 +328,12 @@ RetireUnmeasurablePresentation ==
     /\ certificateRevision' = 1
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, safe, unsafe, measured,
+                    staticEligible, handoffKind, safe, unsafe, measured,
                     measuredSafePopulations, measuredUnsafePopulations,
                     priorWidth, goalTransitions, goalAttempts,
                     candidatePublications, postSafeFailure, priorFrameBarrier,
-                    revisionHasPlan, inexactPresentations>>
+                    revisionHasPlan, inexactPresentations,
+                    bracketBridgeUsed>>
 
 ResolvePresentation ==
     PresentExactCandidate \/ RecordInexactPresentation
@@ -311,12 +345,12 @@ ConsumeSample ==
     /\ samplesRemaining' = samplesRemaining - 1
     /\ narrowed' = FALSE
     /\ UNCHANGED <<phase, goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, safe, unsafe, candidate, measured,
+                    staticEligible, handoffKind, safe, unsafe, candidate, measured,
                     measuredSafePopulations, measuredUnsafePopulations,
                     certificateRevision, priorWidth, goalTransitions,
                     goalAttempts, candidatePublications, postSafeFailure,
                     priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations>>
+                    inexactPresentations, bracketBridgeUsed>>
 
 ClassifyCandidate ==
     /\ phase = "measure"
@@ -346,17 +380,22 @@ ClassifyCandidate ==
     /\ IF \/ unsafe' = safe' + 1
            \/ safe' = CandidateCount
            \/ goalAttempts = CandidateAttemptLimit
+           \/ /\ safe' < SearchMinimum
+              /\ unsafe' <= SearchMinimum
            \/ /\ safe' > 0
               /\ unsafe' <= CandidateCount
+              /\ \/ bracketBridgeUsed
+                 \/ /\ goal = "steady"
+                    /\ staticEligible
           THEN /\ phase' = "goal_done"
                /\ certificateRevision' = 0
           ELSE /\ phase' = "choose"
                /\ certificateRevision' = 0
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, goalTransitions,
+                    staticEligible, handoffKind, goalTransitions,
                     goalAttempts, candidatePublications,
                     priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations>>
+                    inexactPresentations, bracketBridgeUsed>>
 
 PromoteStaticSafeCandidate ==
     /\ phase = "measure"
@@ -379,8 +418,9 @@ PromoteStaticSafeCandidate ==
     /\ goalTransitions' = 1
     /\ goalAttempts' = 0
     /\ postSafeFailure' = FALSE
+    /\ bracketBridgeUsed' = FALSE
     /\ phase' = IF candidate = CandidateCount THEN "goal_done" ELSE "choose"
-    /\ UNCHANGED <<trueSteadyCapacity, trueStaticCapacity, startAtStatic,
+    /\ UNCHANGED <<trueSteadyCapacity, trueStaticCapacity, handoffKind,
                     staticEligible, candidatePublications,
                     priorFrameBarrier, revisionHasPlan,
                     inexactPresentations>>
@@ -402,17 +442,22 @@ RejectAtDeadline ==
     /\ narrowed' = TRUE
     /\ IF \/ unsafe' = safe' + 1
            \/ goalAttempts = CandidateAttemptLimit
+           \/ /\ safe' < SearchMinimum
+              /\ unsafe' <= SearchMinimum
            \/ /\ safe' > 0
               /\ unsafe' <= CandidateCount
+              /\ \/ bracketBridgeUsed
+                 \/ /\ goal = "steady"
+                    /\ staticEligible
           THEN /\ phase' = "goal_done"
                /\ certificateRevision' = 0
           ELSE /\ phase' = "choose"
                /\ certificateRevision' = 0
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, goalTransitions,
+                    staticEligible, handoffKind, goalTransitions,
                     goalAttempts, candidatePublications,
                     priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations>>
+                    inexactPresentations, bracketBridgeUsed>>
 
 ReusePopulation ==
     /\ phase = "measure"
@@ -434,18 +479,23 @@ ReusePopulation ==
     /\ IF \/ unsafe' = safe' + 1
            \/ safe' = CandidateCount
            \/ goalAttempts = CandidateAttemptLimit
+           \/ /\ safe' < SearchMinimum
+              /\ unsafe' <= SearchMinimum
            \/ /\ safe' > 0
               /\ unsafe' <= CandidateCount
+              /\ \/ bracketBridgeUsed
+                 \/ /\ goal = "steady"
+                    /\ staticEligible
           THEN /\ phase' = "goal_done"
                /\ certificateRevision' = 0
           ELSE /\ phase' = "choose"
                /\ certificateRevision' = 0
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, samplesRemaining,
+                    staticEligible, handoffKind, samplesRemaining,
                     measuredSafePopulations, measuredUnsafePopulations,
                     goalTransitions, goalAttempts, candidatePublications,
                     priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations>>
+                    inexactPresentations, bracketBridgeUsed>>
 
 AdvanceToStaticGoal ==
     /\ phase = "goal_done"
@@ -466,8 +516,9 @@ AdvanceToStaticGoal ==
     /\ goalTransitions' = 1
     /\ goalAttempts' = 0
     /\ postSafeFailure' = FALSE
+    /\ bracketBridgeUsed' = FALSE
     /\ UNCHANGED <<trueSteadyCapacity, trueStaticCapacity, staticEligible,
-                    startAtStatic,
+                    handoffKind,
                     safe, candidatePublications,
                     priorFrameBarrier, revisionHasPlan,
                     inexactPresentations>>
@@ -481,12 +532,12 @@ PublishTerminalCertificate ==
     /\ certificateRevision' = 1
     /\ narrowed' = FALSE
     /\ UNCHANGED <<goal, trueSteadyCapacity, trueStaticCapacity,
-                    staticEligible, startAtStatic, safe, unsafe, candidate,
+                    staticEligible, handoffKind, safe, unsafe, candidate,
                     samplesRemaining, measured, measuredSafePopulations,
                     measuredUnsafePopulations, priorWidth, goalTransitions,
                     goalAttempts, candidatePublications, postSafeFailure,
                     priorFrameBarrier, revisionHasPlan,
-                    inexactPresentations>>
+                    inexactPresentations, bracketBridgeUsed>>
 
 Next ==
     \/ ChooseCandidate

@@ -36,6 +36,16 @@ records in one renderer batch, not retained scene nodes or per-box draw calls.
 OBB is an optional cached cold fallback and is not a required progression
 state.
 
+A valid source tessellation is drawable content independently of the PoP
+service.  PoP admission requires finite vertex data, a fixed-width index count
+that fits the persistent format, and every face index within the vertex
+domain.  Cache-context creation, cache I/O, and hierarchy construction are
+separate accelerator outcomes; their failure cannot relabel a valid
+tessellation as rejected or leave its occurrence permanently at structural
+coverage.  When acceleration is unavailable, the source publishes the valid
+tessellation as a non-LoD terminal mesh.  This preserves correctness while
+making the lost view-aware memory and draw optimization explicit.
+
 ## State domains
 
 The model distinguishes four identities which must never be conflated:
@@ -160,6 +170,16 @@ will produce its first image.
 `COVERAGE`
 : Every visible mesh-backed occurrence receives its minimum coherent PoP
   prefix before any already-covered occurrence receives optional refinement.
+  A cold spatial/coverage preview is not a coherent PoP prefix merely because
+  it uses the adaptive mesh result channel.  Until it owns a valid progressive
+  hierarchy it remains provisional, must not enter retained-cut fast paths,
+  and must be atomically replaced or rebound when that hierarchy becomes
+  resident.  Shared-asset publication does not exempt the occurrence which
+  first published the preview from this per-occurrence obligation.
+  A drawable whole-prefix preview is not proof that any private spatial-page
+  identifier is resident.  Nonempty page demand requires a spatial generation;
+  a valid spatial page set with no active faces at the selected global cut is
+  an exact zero-draw presentation rather than a provider failure.
   A scale-only camera refresh is not cold coverage: it retains the preceding
   cuts and may refine them while its bounded scan verifies current visibility.
   New source/inventory coverage retains the strict minimum-mesh-first rule.
@@ -201,7 +221,7 @@ will produce its first image.
   tested by its final signature rather than by the presence of wheel events.
   Release retains the responsive motion presentation through the debounce.
   On entry to quiet state, one reducer restores the prior stable target and
-  replaces the transient 60 FPS allowance.  A pose restore first enters a
+  replaces the transient interactive allowance.  A pose restore first enters a
   current-pose presentation-proof handoff; no pre-quiet frame may publish
   persistent capacity evidence or report the motion ceiling as ready.
 
@@ -322,6 +342,14 @@ view removes the coverage producer, retiring the associated compaction request
 also acknowledges that pressure-recovery revision.  It may not leave an
 unwitnessed background obligation.
 
+The coverage and convergence denominators contain exactly the sources which
+can participate in LoD planning.  A compact source index may also exist for
+picking, tree synchronization, or ordinary analytic/wire presentation.  If a
+source has neither LoD targets nor realized mesh geometry, those compact
+entries are outside the LoD population; counting them would create a visible
+target which no submission action can satisfy.  Source planning and progress
+reporting use one shared eligibility predicate.
+
 An active coverage census is foreground inventory work even while an older
 coherent framebuffer remains useful.  It must own an active/rescan submission
 cursor or a level-triggered pump which restores one after interaction or a
@@ -346,9 +374,23 @@ pass may preserve it and avoid a whole-hierarchy recount.
 The convergence policy is a scene-pointer-free projection of those retained
 proofs and progress witnesses.  It alone decides ready/background status,
 memory- and performance-limited terminal states, the public HUD phase, and the
-monotonic fraction for one typed view/policy epoch.  A diagnostic query may
+monotonic fraction for one typed view/policy epoch.  Discovery, useful
+representation, rich visible coverage, bounded capacity certification, and
+the terminal coherent handoff have distinct progress weight.  The capacity
+component uses the search's exact finite rank: allocation, exact presentation,
+and three timing samples for each of at most four candidates per deadline.
+An early terminal proof consumes the unused suffix.  A diagnostic query may
 sample this value but cannot introduce another scheduler, hierarchy traversal,
-or alternate interpretation of readiness.
+or alternate interpretation of readiness.  Once a source publishes its exact
+preparation inventory, completed and total source-work units form a bounded,
+monotonic rank for that active source set.  Before that denominator is known,
+producer work remains indeterminate and the HUD must describe it without
+inventing a completion percentage.  After structural discovery completes,
+outstanding source preparation owns the public `PREPARING` phase even if a
+new provisional-camera revision makes representation coverage temporarily
+incomplete.  The phase label may not imply that the database inventory was
+discarded, and the exact preparation rank may not be replaced by the derived
+representation count.
 
 The budget policy treats projected per-occurrence error as demand and measured
 renderer cost as total-scene admission.  It owns the current allowance, the
@@ -418,7 +460,11 @@ service planning continues only when its resident-demand revision still
 matches.  LoD-disabled drawing has no mesh-coverage prerequisite.  If active
 LoD coverage is incomplete but has no worker, submission, provider, frame, or
 timer capable of advancing it, the compaction request is retired; it cannot
-keep the progressive pump or HUD pending by itself.
+keep the progressive pump or HUD pending by itself.  Resident storage is also
+an explicit work witness: a delayed request against zero resident mesh bytes
+retires without entering background convergence.  Publishing the first
+resident result creates a fresh request, so this rule cannot suppress real
+memory reclamation.
 
 ## Transition obligations
 
@@ -426,7 +472,7 @@ Every pending flag has exactly one progress witness:
 
 | Pending condition | Required witness | Completion |
 |---|---|---|
-| source realization | provider task or source callback | fallback or source data published |
+| source realization | provider task or source callback, with exact bounded rank once known | fallback or source data published |
 | minimum-mesh coverage | bounded compact-index cursor or full-rescan obligation | complete pass publishes visible/covered proof |
 | admitted asset suffix | queued/in-flight/cache task | result applied or definitive failure |
 | applied result batch | adaptive timer, then exactly one requested frame | completed frame presents the batch |
@@ -498,7 +544,15 @@ These must hold after every owner-thread transition:
    occurrence receives a second optional prefix increment.
 7. Off-frustum occurrences issue no draw calls and consume no scene face
    budget.  Their shared asset may remain resident.
-8. Selection/highlight changes priority and style, not asset identity.
+8. Selection/highlight changes priority and style, not asset identity.  It
+   requires one exact successor presentation, and a frame which began before
+   the mutation may not retire that obligation; the frame is not capacity
+   evidence and does not reopen allocation.  Endpoint clients express this
+   with `bobol_display_endpoint_request_presentation_frame()`; using the
+   capacity-relevant endpoint request for a manipulator or style repaint is a
+   contract violation.  The convergence snapshot identifies this exact
+   semantic-only frame separately so hosts do not label it as detail
+   calibration or schedule a progress-HUD removal successor.
 9. A source edit invalidates affected content; a camera edit does not.
 10. Direct GL rendering restores GL state and invalidates Coin state caches
     before returning.
@@ -573,6 +627,11 @@ These must hold after every owner-thread transition:
     pixel threshold is part of that key: changing it changes point/box/mesh
     membership and render cost, so no earlier population signature or timing
     certificate may cross that boundary.
+    The exact current protected minimum is the lower endpoint of this domain,
+    not an out-of-domain post-allocation override.  While the search owns that
+    immutable domain, live timing EMAs may provide samples but may not retarget
+    its renderer allowances.  A changed lower bound or allowance domain starts
+    a new search rather than producing a 1/minimum allocation cycle.
 23. Only a complete dense current-view census may replace the authoritative
     visible-target denominator.  Sparse source deltas and retained-allocation
     application passes may update their named occurrences, but preserve the
@@ -585,6 +644,53 @@ These must hold after every owner-thread transition:
     the renderer cut which produced the current framebuffer, independent
     database-provider work, and one presentation-only policy repaint.  No
     automatic producer may re-arm while the effective view policy is off.
+25. Retained render cost outside occurrence-local CAD allocation is a fixed
+    input to one allocation transaction.  It is obtained from the retained
+    view's unmanaged cost, not inferred from a completed frame whose point,
+    mesh, or renderer-ceiling presentation is an output of that allocation.
+    Applying occurrence cuts or point protection therefore cannot change the
+    allocation key which selected them.
+26. A worker result may advance an occurrence beyond its prior active cut only
+    when the current retained allocation covers the result or the result
+    carries a certificate for the exact current view and policy whose cut
+    covers the result.  Publishing a new immutable mesh generation may
+    invalidate the allocation census, but it does not invalidate that
+    provider-owned proof.  Coalescing may replace result payloads but may not
+    rewrite certificate provenance.  A stale view, stale policy, insufficient
+    cut, or absent certificate cannot authorize an advance.
+27. An interrupted-presentation replay may not outrank an enabled
+    motion-to-quiet transition.  Deadline observation must retire replay when
+    the interaction debounce is complete, both after a normally completed
+    motion frame and when that observation retires a still-standing motion
+    frame gate.  The existing render request wakes the quiet reducer; it must
+    not repeat the interactive frame.
+28. Interrupted presentation replay and ordinary exact-presentation debt are
+    different facts.  Replay closes an already allocated transaction and has
+    absolute presentation priority.  An exact frame requested by a newly
+    selected capacity candidate is downstream of that candidate's allocation;
+    while both facts are visible, capacity allocation owns the next step.
+    General presentation debt may not disguise or preempt that prerequisite.
+29. Public capacity progress is the same finite rank used by the contract:
+    completed candidates plus the active candidate's allocation,
+    presentation, and sample edges.  The reported rank never regresses for an
+    unchanged search key, never exceeds its total, and becomes complete when
+    the search reaches a terminal proof.  Frame or transaction serial growth
+    alone is not progress.
+30. A selective source-delta scope exists only while its bounded submission
+    cursor is active.  Completing that cursor retires the scope before any
+    presentation, capacity, or scene-wide demand successor begins.  A broader
+    standing demand subsumes the completed delta; the delta may neither claim
+    planning ownership without a cursor nor make the successor selective.
+31. Physical-demand refresh is level-triggered and retires only when a dense,
+    ordinary, non-selective current-view pass completes.  Completion of
+    coverage, retained allocation, or structural repair may pause that pass
+    behind a stronger owner, but may neither clear its refresh fact nor leave
+    a retained importance census without a producer.
+32. Protected-floor trial controls are semantically irrelevant after a
+    retained allocation has selected complete pixel demand.  With every other
+    input unchanged, that endpoint reuses the current plan identity; it may not
+    publish a second plan under the same revision tuple.
+
 ## Liveness properties
 
 Using `[]` for “always” and `<>` for “eventually,” the implementation must
@@ -715,19 +821,21 @@ GPU upload, and memory pressure.  Passing one does not imply passing the other.
 | resident retarget | unit test proving no provider/cache work |
 | resident suffix/trim | cache test proving suffix-only reads leave no reader prefix, realization test proving exact-capacity trim, and Lucy zoom memory telemetry |
 | continuous zoom refinement | cold/warm Lucy held-gesture checkpoints proving resident growth and a richer effective cut before release on System GL and OSMesa |
+| motion deadline to quiet | interaction-session unit transitions, `ObolInteractionSession.tla`, and a software-rendered zoom whose first motion frame completes but whose later debounce frame exceeds its deadline; the final checkpoint must be quiet, ready, and render-idle |
 | discrete prefix progress | unit test with an active cut below a richer resident prefix and an unaffordable direct jump |
 | view working-set turnover | close multi-instance occurrence hashes and images across view directions |
 | unique asset fan-out | thousands-of-distinct-mesh cold/warm stress, worker/cache telemetry, and perf |
 | saturated residency | hard-cap cold/warm stress proving a quiet memory-limited terminal cut, bounded task count, and resubmission only after an admission revision edge |
 | queued-result ownership | service test proving duplicate rejection before result drain and readmission after drain; warm stress proving bounded task fan-out |
+| provider-result admission | exhaustive pure-policy checks for current allocation, revision-matched certificate, stale view, stale policy, insufficient certified cut, and absent certificate; Lucy OSMesa replay proving finite suffix tasks and visible cut progress after immutable-generation publication |
 | scene budget | held-motion and stable face/FPS telemetry |
 | tail/silhouette quality | Generic Twin multi-angle image comparison |
 | renderer packet semantics | independent exhaustive oracle over sparse ownership, hidden/proxy channel rules, retained ranges, and the full explicit-cut input domain |
 | GL state | deep before/after state sentinel on every exercised System GL and OSMesa route, with apitrace for any failure |
 | wire parity | shaded/wire active-cut and image matrix |
-| selection/edit | hierarchy selection, erase/redraw, promotion/demotion, and picking tests |
-| liveness | `ObolHostWork.tla`, `ObolLodConvergence.tla`, `ObolProgressivePipeline.tla`, `ObolLodColdPreview.tla`, and `ObolLiveSpatialPublication.tla` TLC checks; exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness, uncertified-source-sample replacement, incomplete live-page replacement, or stable-with-affordable-next states |
-| admission/arbitration | `ObolLodAdmission.tla`, `ObolLodArbitration.tla`, `ObolRetainedAllocationPrefix.tla`, `ObolCapacitySearch.tla`, `ObolCapacityPresentationHandoff.tla`, `ObolCompletedPassOwnership.tla`, and the cross-boundary `ObolLodComposition.tla` check, plus `test_bobol_retained_allocation_oracle` and the increasing-budget population sweep; verify a frozen search domain, deterministic nested populations, atomic terminal certificate/guard ownership, safe direct admission, large-scene PoP-only admission, subpixel aggregation, prominent-floor non-starvation, displayable constrained fallback, and explicit terminal constrained debt |
+| selection/edit | hierarchy selection, erase/redraw, promotion/demotion, and picking tests; System GL and OSMesa reports must show that the exact selection frame drains without a capacity sample, LoD policy revision, progress-HUD flash, or delayed image change |
+| liveness | `ObolHostWork.tla`, `ObolLodConvergence.tla`, `ObolProgressivePipeline.tla`, `ObolTerminalConvergenceComposition.tla`, `ObolLodColdPreview.tla`, and `ObolLiveSpatialPublication.tla` TLC checks; exhaustive scalar phase/event canonicalization; 512 seeded 96-event fake-clock/fake-service sequences; explicit checkpoint/failure/cancellation-pressure scenarios; and reports rejecting pending-without-witness, uncertified-source-sample replacement, incomplete live-page replacement, or stable-with-affordable-next states |
+| admission/arbitration | `ObolLodAdmission.tla`, `ObolLodArbitration.tla`, `ObolRetainedAllocationPrefix.tla`, `ObolCapacitySearch.tla`, `ObolCapacityPresentationHandoff.tla`, `ObolCompletedPassOwnership.tla`, `ObolTerminalConvergenceComposition.tla`, and the cross-boundary `ObolLodComposition.tla` check, plus `test_bobol_retained_allocation_oracle` and the increasing-budget population sweep; verify a frozen search domain, deterministic nested populations, atomic terminal certificate/guard ownership, finite cross-owner re-entry, safe direct admission, large-scene PoP-only admission, subpixel aggregation, prominent-floor non-starvation, displayable constrained fallback, and explicit terminal constrained debt |
 
 Visual-importance arbitration has a bounded proof boundary:
 `ObolLodArbitration.tla` establishes coverage priority, prominent-floor

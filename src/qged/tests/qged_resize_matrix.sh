@@ -18,6 +18,13 @@ case_list="moss"
 run_timeout=180
 capture_apng=0
 minimum_selection_changed_pixels=256
+initial_window_width=1100
+initial_window_height=800
+# A native configure acknowledgement from startup can arrive after a shorter
+# apparently stable interval.  Keep the first scripted geometry authoritative
+# until the event stream has crossed the delayed X11 configure window.
+initial_geometry_stable_ms=1000
+initial_geometry_timeout_ms=5000
 
 usage()
 {
@@ -190,7 +197,7 @@ write_events()
  "version":1,
  "events":[
   {"target":".","action":"wait_canvas_ready","arguments":{"timeout_ms":10000}},
-  {"target":".","action":"resize","arguments":{"width":1100,"height":800,"stable_ms":250,"timeout_ms":5000}},
+  {"target":".","action":"resize","arguments":{"width":${initial_window_width},"height":${initial_window_height},"stable_ms":${initial_geometry_stable_ms},"timeout_ms":${initial_geometry_timeout_ms}}},
   {"target":".","action":"wait","arguments":{"ms":100}},
   {"target":".","action":"qged_command_batch","arguments":{"commands":["view lod ${lod_value}","draw -m${mode} ${object}","ae 90 0","autoview"]}},
   {"target":".","action":"wait","arguments":{"ms":100}},
@@ -254,13 +261,19 @@ validate_run()
     # following wait/checkpoint must have a positive canvas whose controller
     # viewport matches its physical pixel size (within integer DPR rounding).
     echo "validate: resize-state" >>"$log"
-    jq -e --arg lod "$lod" '
+    jq -e --arg lod "$lod" \
+	--argjson initial_width "$initial_window_width" \
+	--argjson initial_height "$initial_window_height" '
       def okdims:
         (.controller_available == true) and
         (.canvas_width > 0 and .canvas_height > 0) and
         (.viewport_width > 0 and .viewport_height > 0) and
         ((.viewport_width - (.canvas_width * .canvas_device_pixel_ratio)) | abs) <= 2 and
         ((.viewport_height - (.canvas_height * .canvas_device_pixel_ratio)) | abs) <= 2;
+      (first(.samples[] | select(.action == "qged_command_batch" and
+	any((.commands // [])[]; startswith("draw -m"))))) as $draw |
+      ($draw.window_width == $initial_width and
+	$draw.window_height == $initial_height) and
       all(.samples[] | select(.action == "resize");
         .window_width == .requested_width and
         .window_height == .requested_height) and

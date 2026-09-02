@@ -22,7 +22,7 @@ Significant == Candidates \ {"tiny"}
 Profiles == {"unknown", "safe", "large"}
 Modes == {"box", "aggregate", "proxy", "pop", "direct"}
 Owners == {"admission", "growth", "presentation", "reconcile",
-           "capacity", "structural", "point", "none"}
+           "capacity", "structural", "point", "static", "none"}
 VisibilityStates == {"unknown", "empty", "nonempty"}
 Outcomes == {"none", "ready", "constrained"}
 InitialCapacities == 0..4
@@ -56,6 +56,7 @@ VARIABLES profile,
           capacityPending,
           structuralPending,
           pointPending,
+          staticPending,
           samplesRemaining,
           allocationRevision,
           allocationCurrent,
@@ -65,7 +66,7 @@ VARIABLES profile,
 vars == <<profile, capacity, mode, owner, actualVisible, visibilityCensus,
           presentationExact, presentedWork, ceilingEffective,
           independentGrowthPending, capacityGrowthPending, capacityPending,
-          structuralPending, pointPending, samplesRemaining,
+          structuralPending, pointPending, staticPending, samplesRemaining,
           allocationRevision, allocationCurrent, constraintWitness, outcome>>
 
 AllPresented == \A candidate \in Candidates: mode[candidate] # "box"
@@ -89,8 +90,9 @@ PresentationSuccessor ==
     IF independentGrowthPending THEN "growth"
     ELSE IF ceilingEffective THEN "reconcile"
     ELSE IF structuralPending THEN "structural"
-    ELSE IF capacityPending THEN "capacity"
     ELSE IF pointPending THEN "point"
+    ELSE IF capacityPending THEN "capacity"
+    ELSE IF staticPending THEN "static"
     ELSE "none"
 
 TypeOK ==
@@ -108,6 +110,7 @@ TypeOK ==
     /\ capacityPending \in BOOLEAN
     /\ structuralPending \in BOOLEAN
     /\ pointPending \in BOOLEAN
+    /\ staticPending \in BOOLEAN
     /\ samplesRemaining \in 0..SampleLimit
     /\ allocationRevision \in 0..1
     /\ allocationCurrent \in BOOLEAN
@@ -130,6 +133,7 @@ Init ==
     /\ capacityGrowthPending => capacityPending
     /\ structuralPending \in BOOLEAN
     /\ pointPending \in BOOLEAN
+    /\ staticPending \in BOOLEAN
     /\ samplesRemaining = SampleLimit
     /\ allocationRevision = 0
     /\ allocationCurrent = FALSE
@@ -146,7 +150,8 @@ CertifyProfile(nextProfile) ==
                     presentationExact, presentedWork, ceilingEffective,
                     independentGrowthPending, capacityGrowthPending,
                     capacityPending, structuralPending, pointPending,
-                    samplesRemaining, allocationRevision, allocationCurrent,
+                    staticPending, samplesRemaining, allocationRevision,
+                    allocationCurrent,
                     constraintWitness, outcome>>
 
 ClassifyTiny ==
@@ -157,7 +162,8 @@ ClassifyTiny ==
                     visibilityCensus, presentationExact, presentedWork,
                     ceilingEffective, independentGrowthPending,
                     capacityGrowthPending, capacityPending,
-                    structuralPending, pointPending, samplesRemaining,
+                    structuralPending, pointPending, staticPending,
+                    samplesRemaining,
                     allocationRevision, allocationCurrent,
                     constraintWitness, outcome>>
 
@@ -172,7 +178,8 @@ AdmitPop(candidate) ==
                     visibilityCensus, presentationExact, presentedWork,
                     ceilingEffective, independentGrowthPending,
                     capacityGrowthPending, capacityPending,
-                    structuralPending, pointPending, samplesRemaining,
+                    structuralPending, pointPending, staticPending,
+                    samplesRemaining,
                     allocationRevision, allocationCurrent,
                     constraintWitness, outcome>>
 
@@ -188,7 +195,8 @@ AdmitDirect(candidate) ==
                     visibilityCensus, presentationExact, presentedWork,
                     ceilingEffective, independentGrowthPending,
                     capacityGrowthPending, capacityPending,
-                    structuralPending, pointPending, samplesRemaining,
+                    structuralPending, pointPending, staticPending,
+                    samplesRemaining,
                     allocationRevision, allocationCurrent,
                     constraintWitness, outcome>>
 
@@ -207,7 +215,8 @@ PublishPersistentProxy(candidate) ==
                     visibilityCensus, presentationExact, presentedWork,
                     ceilingEffective, independentGrowthPending,
                     capacityGrowthPending, capacityPending,
-                    structuralPending, pointPending, samplesRemaining,
+                    structuralPending, pointPending, staticPending,
+                    samplesRemaining,
                     allocationRevision, allocationCurrent, outcome>>
 
 CompleteAdmission ==
@@ -223,7 +232,7 @@ CompleteAdmission ==
                     visibilityCensus, ceilingEffective,
                     independentGrowthPending, capacityGrowthPending,
                     capacityPending, structuralPending, pointPending,
-                    samplesRemaining, allocationRevision,
+                    staticPending, samplesRemaining, allocationRevision,
                     constraintWitness, outcome>>
 
 CompletePresentation ==
@@ -238,7 +247,8 @@ CompletePresentation ==
                     visibilityCensus, ceilingEffective,
                     independentGrowthPending, capacityGrowthPending,
                     capacityPending, structuralPending, pointPending,
-                    samplesRemaining, allocationRevision, allocationCurrent,
+                    staticPending, samplesRemaining, allocationRevision,
+                    allocationCurrent,
                     constraintWitness, outcome>>
 
 CompleteIndependentGrowth ==
@@ -253,7 +263,8 @@ CompleteIndependentGrowth ==
     /\ UNCHANGED <<profile, capacity, mode, actualVisible,
                     visibilityCensus, ceilingEffective,
                     capacityGrowthPending, capacityPending,
-                    structuralPending, pointPending, samplesRemaining,
+                    structuralPending, pointPending, staticPending,
+                    samplesRemaining,
                     constraintWitness, outcome>>
 
 CompleteReconciliation ==
@@ -266,7 +277,8 @@ CompleteReconciliation ==
     /\ UNCHANGED <<profile, capacity, mode, actualVisible,
                     visibilityCensus, independentGrowthPending,
                     capacityGrowthPending, capacityPending,
-                    structuralPending, pointPending, samplesRemaining,
+                    structuralPending, pointPending, staticPending,
+                    samplesRemaining,
                     allocationRevision, allocationCurrent,
                     constraintWitness, outcome>>
 
@@ -278,7 +290,8 @@ AbsorbCapacityGrowth ==
                     visibilityCensus, presentationExact, presentedWork,
                     ceilingEffective, independentGrowthPending,
                     capacityPending, structuralPending, pointPending,
-                    samplesRemaining, allocationRevision, allocationCurrent,
+                    staticPending, samplesRemaining, allocationRevision,
+                    allocationCurrent,
                     constraintWitness, outcome>>
 
 ConsumeCapacitySample ==
@@ -296,7 +309,8 @@ ConsumeCapacitySample ==
     /\ UNCHANGED <<profile, capacity, mode, actualVisible,
                     visibilityCensus, ceilingEffective,
                     independentGrowthPending, capacityGrowthPending,
-                    structuralPending, pointPending, allocationRevision,
+                    structuralPending, pointPending, staticPending,
+                    allocationRevision,
                     allocationCurrent, constraintWitness, outcome>>
 
 CompleteStructuralRepair ==
@@ -309,7 +323,8 @@ CompleteStructuralRepair ==
     /\ UNCHANGED <<profile, capacity, mode, actualVisible,
                     visibilityCensus, ceilingEffective,
                     independentGrowthPending, capacityGrowthPending,
-                    capacityPending, pointPending, samplesRemaining,
+                    capacityPending, pointPending, staticPending,
+                    samplesRemaining,
                     allocationRevision, allocationCurrent,
                     constraintWitness, outcome>>
 
@@ -323,9 +338,42 @@ CompletePointQuality ==
     /\ UNCHANGED <<profile, capacity, mode, actualVisible,
                     visibilityCensus, ceilingEffective,
                     independentGrowthPending, capacityGrowthPending,
-                    capacityPending, structuralPending, samplesRemaining,
+                    capacityPending, structuralPending, staticPending,
+                    samplesRemaining,
                     allocationRevision, allocationCurrent,
                     constraintWitness, outcome>>
+
+CompleteStaticQuality ==
+    /\ owner = "static"
+    /\ staticPending
+    /\ staticPending' = FALSE
+    /\ owner' = "presentation"
+    /\ presentationExact' = FALSE
+    /\ presentedWork' = FALSE
+    /\ UNCHANGED <<profile, capacity, mode, actualVisible,
+                    visibilityCensus, ceilingEffective,
+                    independentGrowthPending, capacityGrowthPending,
+                    capacityPending, structuralPending, pointPending,
+                    samplesRemaining, allocationRevision, allocationCurrent,
+                    constraintWitness, outcome>>
+
+\* A rejected static-quality successor is terminal evidence only after its
+\* retained framebuffer is presented exactly.  It cannot merely clear the
+\* owner and let the composition publish an unwitnessed ready result.
+ConstrainStaticQuality ==
+    /\ owner = "static"
+    /\ staticPending
+    /\ staticPending' = FALSE
+    /\ constraintWitness' = TRUE
+    /\ owner' = "presentation"
+    /\ presentationExact' = FALSE
+    /\ presentedWork' = FALSE
+    /\ UNCHANGED <<profile, capacity, mode, actualVisible,
+                    visibilityCensus, ceilingEffective,
+                    independentGrowthPending, capacityGrowthPending,
+                    capacityPending, structuralPending, pointPending,
+                    samplesRemaining, allocationRevision, allocationCurrent,
+                    outcome>>
 
 PublishTerminal ==
     /\ owner = "none"
@@ -337,13 +385,15 @@ PublishTerminal ==
     /\ ~capacityPending
     /\ ~structuralPending
     /\ ~pointPending
+    /\ ~staticPending
     /\ AllPresented
     /\ outcome' = IF constraintWitness THEN "constrained" ELSE "ready"
     /\ UNCHANGED <<profile, capacity, mode, owner, actualVisible,
                     visibilityCensus, presentationExact, presentedWork,
                     ceilingEffective, independentGrowthPending,
                     capacityGrowthPending, capacityPending,
-                    structuralPending, pointPending, samplesRemaining,
+                    structuralPending, pointPending, staticPending,
+                    samplesRemaining,
                     allocationRevision, allocationCurrent,
                     constraintWitness>>
 
@@ -361,6 +411,8 @@ Next ==
     \/ ConsumeCapacitySample
     \/ CompleteStructuralRepair
     \/ CompletePointQuality
+    \/ CompleteStaticQuality
+    \/ ConstrainStaticQuality
     \/ PublishTerminal
 
 Spec ==
@@ -381,6 +433,8 @@ Spec ==
     /\ WF_vars(ConsumeCapacitySample)
     /\ WF_vars(CompleteStructuralRepair)
     /\ WF_vars(CompletePointQuality)
+    /\ WF_vars(CompleteStaticQuality)
+    /\ WF_vars(ConstrainStaticQuality)
     /\ WF_vars(PublishTerminal)
 
 BudgetSafety == TotalCost(mode) <= capacity
@@ -405,6 +459,7 @@ TerminalIsExactAndQuiescent ==
         /\ ~capacityPending
         /\ ~structuralPending
         /\ ~pointPending
+        /\ ~staticPending
         /\ AllPresented
 
 TerminalHasNoStructuralBoxes ==

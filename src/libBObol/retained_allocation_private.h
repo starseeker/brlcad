@@ -21,6 +21,12 @@ class BObolRetainedAllocationTransaction;
 class BObolViewLodState;
 class SoBRLDatabaseSource;
 
+/* The service-wide resident epoch is allocation evidence only while this view
+ * carries a memory-denial witness.  Ordinary cache growth and compaction in a
+ * shared service must not invalidate an unrelated drawable scene plan. */
+uint64_t bobol_retained_allocation_resident_admission_revision(
+    const BObolViewLodState *viewState, uint64_t serviceRevision);
+
 /* Canonical semantic identity of one retained-allocation request.  Fields
  * which are inactive under current policy are normalized before they enter
  * this value.  Transaction matching and completed-certificate reuse must use
@@ -105,6 +111,14 @@ struct BObolRetainedAllocationInputs {
     BObolRetainedAllocationInputKey inputKey(void) const;
 };
 
+struct BObolRetainedProjectionRefreshPlan {
+    SoBRLDatabaseSource *source = NULL;
+    std::vector<uint32_t> compactEntryIndices;
+    /* A payload without a current compact entry identity cannot be refreshed
+     * selectively.  Its source must perform the ordinary dense pass. */
+    bool denseRefreshRequired = false;
+};
+
 struct BObolRetainedAllocationResult {
     double maximumNormalizedError = std::numeric_limits<double>::infinity();
     double maximumProjectedErrorPixels =
@@ -117,6 +131,13 @@ struct BObolRetainedAllocationResult {
      * tuple below and lets capacity search recognize different numeric
      * budgets which map to the same discrete PoP population. */
     uint64_t selectedPopulationSignature = 0;
+    /* The selected PoP population is discrete even though capacity search is
+     * expressed in numeric render-cost units.  When known, this is the least
+     * budget which can select a strictly richer population.  A zero value with
+     * nextDistinctPresentationBudgetKnown set means the current population is
+     * already the complete resident pixel-demand endpoint. */
+    size_t nextDistinctPresentationBudget = 0;
+    bool nextDistinctPresentationBudgetKnown = false;
     /*
      * Certificate for the complete occurrence-local presentation selected by
      * this transaction.  The temporary renderer-wide progressive ceiling is
@@ -143,8 +164,26 @@ struct BObolRetainedAllocationResult {
     size_t fixedCadPresentationCost = 0;
     size_t maximumMarginalBudget = 0;
     size_t maximumProtectedBudget = 0;
+    /* Candidates eligible at the allocation's current point threshold. */
     size_t pointProxyCandidateCount = 0;
+    /* Candidates which could become eligible within the supported point
+     * threshold range.  This is the structural proof that threshold
+     * calibration has useful work to do; it must not be inferred from the
+     * current-threshold population. */
+    size_t reachablePointProxyCandidateCount = 0;
+    /* Retained view-dependent payloads whose projection evidence does not
+     * belong to this allocation epoch.  This makes the result a typed refresh
+     * request rather than an allocation certificate: allocationPlanSerial and
+     * all selected/certified population fields remain zero.  The source pass
+     * must refresh these entries before one successor allocation may begin. */
+    size_t unresolvedViewDependentPayloadCount = 0;
+    std::vector<BObolRetainedProjectionRefreshPlan> projectionRefreshPlans;
     size_t selectedPointProxyCount = 0;
+    /* The transaction changed at least one assembly's occurrence-level
+     * point/mesh classification policy.  Unlike a PoP cut mutation this does
+     * not stage CadPayload metadata, so it carries its own presentation
+     * obligation. */
+    bool pointProxyProtectionChanged = false;
     size_t prominentCandidateCount = 0;
     size_t prominentQualityFloorViolationCount = 0;
     bool allowProtectedFloor = false;
@@ -175,16 +214,44 @@ struct BObolRetainedAllocationResult {
 
     BObolRetainedAllocationInputKey inputKey(void) const;
 
-    /* Capacity search may only request budgets which the allocator can
-     * realize under this certificate.  Pixel demand can exceed both the
-     * marginal allowance and the optional atomic protected-floor allowance;
-     * treating it as the search endpoint creates a successor for which no
-     * retained allocation can ever be published. */
+    /** Whether @p inputs can reuse this plan after it selected the complete
+     * resident pixel-demand endpoint.  Enabling or disabling a protected-floor
+     * trial cannot change a population which is already maximally rich; every
+     * other allocation input remains semantic and must match exactly. */
+    bool pixelDemandInputEquivalent(
+	const BObolRetainedAllocationInputs &inputs) const;
+
+    /* Every positive scene budget is a valid input to the deterministic
+     * marginal allocator.  maximumMarginalBudget and maximumProtectedBudget
+     * describe extra allowance enabled for this allocation pass; they are not
+     * limits on what a later capacity candidate can request.  The richest
+     * currently resident pixel-demand population is therefore the bounded
+     * search endpoint.  Conflating the current pass allowance with that
+     * endpoint made a conservative throughput estimate self-certifying and
+     * prevented static views from ever testing visibly richer populations. */
     size_t maximumCapacitySearchBudget(void) const
     {
-	return std::min(this->pixelDemandPresentationCost,
-	    std::max(this->maximumMarginalBudget,
-		this->maximumProtectedBudget));
+	return this->pixelDemandPresentationCost;
+    }
+
+    /** Whether this allocation selected every view-dependent representation
+     * required by the current pixel-error demand.  Presentation and revision
+     * validity are separate proofs owned by the controller. */
+    bool selectsPixelDemand(void) const
+    {
+	return this->pixelDemandPresentationCost > 0 &&
+	    this->selectedPresentationCost ==
+		this->pixelDemandPresentationCost;
+    }
+
+    /** Whether the selected population is exactly the protected floor.
+     * Marginal upgrades always have positive cost, so a selected cost above
+     * protectedFloorBudget names a strictly richer population.  A deadline
+     * miss from that richer population is not evidence against the floor. */
+    bool selectsProtectedFloor(void) const
+    {
+	return this->protectedFloorBudget > 0 &&
+	    this->selectedPresentationCost == this->protectedFloorBudget;
     }
 };
 
@@ -226,6 +293,10 @@ BObolRetainedAllocationStatus bobol_retained_allocation_advance(
     const BObolRetainedAllocationInputs &inputs,
     uint64_t sliceMicroseconds,
     BObolRetainedAllocationResult &result);
+
+/** True only while the retained transaction has executable planning phases. */
+bool bobol_retained_allocation_pending(
+    const std::shared_ptr<BObolRetainedAllocationTransaction> &transaction);
 
 /** Emit opt-in per-phase timing for a completed transaction. */
 void bobol_retained_allocation_trace(

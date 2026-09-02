@@ -1,21 +1,25 @@
 ---------------------- MODULE ObolControlRefinement ----------------------
 \* Executable control-refinement contract shared by the production C++ map
-\* and ObolProgressivePipeline.tla.  Twenty fact classes represent the
-\* twenty-one remaining implementation inputs and refine to nine finite
-\* obligations.  The production structuralFrontier and pointTriangleRecovery
-\* booleans are symmetry-equivalent here: both map only to planning, while the
-\* exhaustive C++ refinement test retains and checks them independently.  This
-\* model deliberately excludes numeric planning and renderer work.
+\* and ObolProgressivePipeline.tla.  Every production input is represented
+\* independently here and refines to one of nine finite obligations.  Keeping
+\* the map one-to-one is intentional: adding an implementation fact without
+\* updating this model must be visible as contract drift even when two facts
+\* currently refine to the same obligation.  This model deliberately excludes
+\* numeric planning and renderer work.
 
 EXTENDS Naturals, FiniteSets, TLC
 
 Facts == {
     "interaction", "inventory", "availability", "result", "publication",
-    "submission", "submissionRescan", "retainedAllocation",
-    "residentGrowth", "pointTriangleRecovery", "presentationReplay",
-    "presentationBarrier", "capacityFrame", "pointAdmissionFrame",
-    "pointCalibration", "capacityCalibration", "headroomProbe", "handoff",
-    "compaction", "cacheWrite"
+    "submission", "demandRefresh", "submissionRescan", "submissionDelta",
+    "qualityProbe",
+    "retainedAllocation", "retainedAllocationTransaction",
+    "importanceCensus", "residentAdmissionRetry", "capacityAllocation",
+    "residentGrowth", "pointTriangleRecovery", "structuralFrontier",
+    "presentationReplay", "exactPresentation", "presentationBarrier",
+    "capacityFrame",
+    "pointAdmissionFrame", "pointCalibration", "capacityCalibration",
+    "headroomProbe", "handoff", "compaction", "cacheWrite"
 }
 
 Work == {
@@ -25,18 +29,40 @@ Work == {
 
 Background == {"compaction", "cacheWrite"}
 
+PlanningFacts == {
+    "submission", "demandRefresh", "submissionRescan", "submissionDelta",
+    "qualityProbe",
+    "retainedAllocation", "retainedAllocationTransaction",
+    "importanceCensus", "residentAdmissionRetry", "capacityAllocation",
+    "residentGrowth", "pointTriangleRecovery", "structuralFrontier"
+}
+
+PresentationFacts == {
+    "presentationReplay", "exactPresentation", "presentationBarrier",
+    "capacityFrame",
+    "pointAdmissionFrame", "pointCalibration", "capacityCalibration",
+    "headroomProbe"
+}
+
+\* Aliases inside PlanningFacts and PresentationFacts cannot change owner
+\* precedence.  Explore all combinations of the semantically distinct
+\* classes plus presentationReplay, whose closed transaction deliberately
+\* precedes every other owner, and capacityAllocation, whose exact frame is a
+\* downstream successor.  CorrectFactMap below still checks every concrete
+\* production fact independently.
+RepresentativeFacts == {
+    "interaction", "inventory", "availability", "result", "submission",
+    "capacityAllocation", "presentationReplay", "exactPresentation",
+    "presentationBarrier", "handoff", "compaction", "cacheWrite"
+}
+
 FactWork(fact) ==
     IF fact = "interaction" THEN "interaction"
     ELSE IF fact = "inventory" THEN "inventory"
     ELSE IF fact = "availability" THEN "availability"
     ELSE IF fact \in {"result", "publication"} THEN "publication"
-    ELSE IF fact \in {"submission", "submissionRescan",
-                       "retainedAllocation", "residentGrowth",
-                       "pointTriangleRecovery"} THEN "planning"
-    ELSE IF fact \in {"presentationReplay", "presentationBarrier",
-                       "capacityFrame", "pointAdmissionFrame",
-                       "pointCalibration", "capacityCalibration",
-                       "headroomProbe"} THEN "presentation"
+    ELSE IF fact \in PlanningFacts THEN "planning"
+    ELSE IF fact \in PresentationFacts THEN "presentation"
     ELSE IF fact = "handoff" THEN "handoff"
     ELSE IF fact = "compaction" THEN "compaction"
     ELSE "cacheWrite"
@@ -50,6 +76,7 @@ Owner(factSet) ==
         "publication"
     ELSE IF "inventory" \in factSet THEN "inventory"
     ELSE IF "availability" \in factSet THEN "availability"
+    ELSE IF "capacityAllocation" \in factSet THEN "planning"
     ELSE IF "presentation" \in Obligations(factSet) THEN "presentation"
     ELSE IF "planning" \in Obligations(factSet) THEN "planning"
     ELSE IF "handoff" \in factSet THEN "handoff"
@@ -57,18 +84,32 @@ Owner(factSet) ==
     ELSE IF "cacheWrite" \in factSet THEN "cacheWrite"
     ELSE "none"
 
-VARIABLES facts, error
+VARIABLES facts, error, probeFact
 
-vars == <<facts, error>>
+vars == <<facts, error, probeFact>>
 
 Foreground == Obligations(facts) \ Background
 Terminal == Foreground = {}
 Ready == Terminal /\ ~error
 
 TypeOK ==
-    /\ facts \subseteq Facts
+    /\ facts \subseteq RepresentativeFacts
     /\ error \in BOOLEAN
+    /\ probeFact \in Facts
     /\ Obligations(facts) \subseteq Work
+
+CorrectFactMap ==
+    /\ FactWork("interaction") = "interaction"
+    /\ FactWork("inventory") = "inventory"
+    /\ FactWork("availability") = "availability"
+    /\ \A fact \in {"result", "publication"}:
+           FactWork(fact) = "publication"
+    /\ \A fact \in PlanningFacts: FactWork(fact) = "planning"
+    /\ \A fact \in PresentationFacts: FactWork(fact) = "presentation"
+    /\ FactWork("handoff") = "handoff"
+    /\ FactWork("compaction") = "compaction"
+    /\ FactWork("cacheWrite") = "cacheWrite"
+    /\ FactWork(probeFact) \in Work
 
 OwnerIsValid ==
     /\ (Owner(facts) = "none") = (facts = {})
@@ -78,13 +119,14 @@ TerminalHasNoForegroundWork == Terminal => Foreground = {}
 ReadyIsValid == Ready => Terminal /\ ~error
 
 Init ==
-    /\ facts \in SUBSET Facts
+    /\ facts \in SUBSET RepresentativeFacts
     /\ error \in BOOLEAN
+    /\ probeFact \in Facts
 
 DischargeOwner ==
     /\ Owner(facts) # "none"
     /\ facts' = {fact \in facts : FactWork(fact) # Owner(facts)}
-    /\ UNCHANGED error
+    /\ UNCHANGED <<error, probeFact>>
 
 Next == DischargeOwner
 

@@ -230,7 +230,7 @@ test_qtcad_window_host_contract(void)
 	    if (count)
 		++(*count);
 	}, &presentation_syncs);
-    canvas.obolViewController()->requestRender("qtcad-window-host-render");
+    canvas.obolViewController()->requestLodCapacityRender("qtcad-window-host-render");
     CHECK(host.poll(NULL) == 1, "qtcad window host drains pending render");
     CHECK(presentation_syncs > 0,
 	"qtcad canvas synchronizes endpoint presentation before readback");
@@ -269,7 +269,7 @@ test_qtcad_owned_window_host(void)
     CHECK(widget->isVisible(), "owned qtcad window host shows requested visible widget");
 
     add_visible_obol_content(host.getController());
-    host.getController()->requestRender("owned-qtcad-window-host-render");
+    host.getController()->requestLodCapacityRender("owned-qtcad-window-host-render");
     CHECK(host.poll(NULL) == 1, "owned qtcad window host drains pending render");
     CHECK(!host.lastFrameImage().isNull() && lit_pixel_count(host.lastFrameImage()) > 0,
 	"owned qtcad window host records visible readback pixels");

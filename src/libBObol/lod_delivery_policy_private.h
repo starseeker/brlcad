@@ -26,6 +26,26 @@ public:
 	    return admittedPresentationCut;
 	return desiredResidentCut;
     }
+
+    /* A current allocation remains the primary presentation authority.  Its
+     * census may be invalidated when the worker publishes a new immutable
+     * mesh generation, however, so the result also carries the exact
+     * view/policy decision which admitted its prepared cut. */
+    static int authorizedPresentationCut(int currentAllocatedCut,
+	bool admissionCertified, uint64_t admissionViewRevision,
+	uint64_t admissionPolicyRevision, int admissionCut,
+	uint64_t currentViewRevision, uint64_t currentPolicyRevision,
+	int resultActiveCut)
+    {
+	if (currentAllocatedCut >= 0)
+	    return currentAllocatedCut;
+	if (!admissionCertified ||
+	    admissionViewRevision != currentViewRevision ||
+	    admissionPolicyRevision != currentPolicyRevision ||
+	    admissionCut < resultActiveCut)
+	    return -1;
+	return admissionCut;
+    }
 };
 
 /*
@@ -86,6 +106,19 @@ public:
 	return richerResidentPrefix && !capacityCandidatePending;
     }
 
+    /* A residency-drain result may leave the existing framebuffer untouched,
+     * but that optimization is valid only while another finite owner can
+     * resolve any remaining occurrence demand.  If the result did not create
+     * an independent resident-growth transaction, transfer actionable quality
+     * debt back to the current-demand cursor immediately. */
+    static bool retainedPublicationRequiresDemandReplay(
+	bool retainedPresentationBatch, bool actionableQualityDebt,
+	bool successorOwned)
+    {
+	return retainedPresentationBatch && actionableQualityDebt &&
+	    !successorOwned;
+    }
+
     static bool allocationPopulationSettled(bool providerInventorySettled,
 	bool serviceStreamIdle, bool resultDeliveryIdle,
 	bool growthTransactionPending, bool residencyDrainActive)
@@ -110,6 +143,19 @@ public:
 	if (retainedAllocation)
 	    return true;
 	return scaleDemandChanged && !residencyDrainActive;
+    }
+
+    /* A scene allocation deliberately caps ordinary quiet prefetch: resident
+     * data which cannot improve the allocated frame only wastes memory.  Two
+     * events invalidate that conclusion.  Zoom changes physical pixel demand,
+     * while a resident-admission retry proves that the service's memory
+     * capacity changed after the allocation was stamped.  In both cases the
+     * service byte governor, not the stale draw allocation, must decide
+     * whether the current demanded suffix can become resident. */
+    static bool residentPrefetchPastAllocationAllowed(bool scaleInteraction,
+	bool residentAdmissionRetry)
+    {
+	return scaleInteraction || residentAdmissionRetry;
     }
 
     /* Structural repair and resident growth both consume the shared source
@@ -247,12 +293,13 @@ public:
 	Decision decision;
 	if (!this->unpresentedCountValue)
 	    return decision;
-	decision.keepPumpAlive = true;
 	if (this->publicationFramePendingValue)
 	    return decision;
+	decision.keepPumpAlive = true;
 	if (!inputs.firstUseful && !inputs.streamIdle && !due(inputs))
 	    return decision;
 	this->publicationFramePendingValue = true;
+	decision.keepPumpAlive = false;
 	decision.requestFrame = true;
 	return decision;
     }
@@ -273,7 +320,7 @@ public:
     }
 
     Completion complete(uint64_t completedRenderSerial,
-	uint64_t viewEpoch, uint64_t policyEpoch)
+	uint64_t viewEpoch, uint64_t policyEpoch, bool exactFrame)
     {
 	Completion result;
 	if (!this->active())
@@ -284,6 +331,12 @@ public:
 	    this->clear();
 	    return result;
 	}
+	/* A traversal serial proves only that the host attempted a frame.  A
+	 * deadline-stopped CAD traversal deliberately retains the preceding
+	 * coherent framebuffer and cannot acknowledge either a cut barrier or a
+	 * result-publication batch. */
+	if (!exactFrame)
+	    return result;
 	if (this->barrierPendingValue &&
 	    completedRenderSerial < this->requiredRenderSerialValue)
 	    return result;
@@ -380,6 +433,30 @@ public:
 	    std::min<uint64_t>(static_cast<uint64_t>(maximum), scaled)));
     }
 
+    /* A slow completed presentation normally yields one render-duration
+     * cooldown so new input can preempt the next immutable-prefix request.
+     * A scene-wide capacity transaction is different: its allocation already
+     * bounds the complete candidate, its provider requests jump directly to
+     * the selected quiet cuts, and its result-publication transaction supplies
+     * the independent frame cadence.  Cooling that producer after every
+     * partial frame starves the worker queue on many-leaf wire scenes and
+     * turns a finite allocation into one small cache wave per expensive
+     * render. */
+    static int64_t refinementCooldownMicroseconds(
+	uint64_t observedRenderNanoseconds, bool capacityOwnsSuccessor)
+    {
+	if (capacityOwnsSuccessor ||
+	    observedRenderNanoseconds <= responsiveFrameNanoseconds())
+	    return 0;
+	const uint64_t observedMicroseconds =
+	    observedRenderNanoseconds / nanosecondsPerMicrosecond();
+	return static_cast<int64_t>(std::max<uint64_t>(
+	    static_cast<uint64_t>(minimumCooldownMicroseconds()),
+	    std::min<uint64_t>(
+		static_cast<uint64_t>(maximumCooldownMicroseconds()),
+		observedMicroseconds)));
+    }
+
 private:
     static constexpr int64_t interactiveMinimumIntervalMicroseconds()
     {
@@ -409,6 +486,21 @@ private:
     static constexpr uint64_t nanosecondsPerMicrosecond()
     {
 	return 1000;
+    }
+
+    static constexpr uint64_t responsiveFrameNanoseconds()
+    {
+	return 33333334;
+    }
+
+    static constexpr int64_t minimumCooldownMicroseconds()
+    {
+	return 50000;
+    }
+
+    static constexpr int64_t maximumCooldownMicroseconds()
+    {
+	return 2000000;
     }
 
     bool active(void) const
@@ -498,6 +590,7 @@ public:
 	bool realizationPending = false;
 	bool submissionPending = false;
 	bool serviceAvailable = false;
+	bool residentDataAvailable = false;
 	int64_t nowMicroseconds = 0;
     };
 
@@ -546,6 +639,17 @@ public:
     Decision decide(const Inputs &inputs)
     {
 	Decision decision;
+	/* A timer is only an admission edge; resident storage is the work
+	 * witness.  Camera and service changes may request quiet reclamation
+	 * before the first mesh arrives, and retaining that request would expose
+	 * background work which can only execute an empty plan.  A later result
+	 * publication requests compaction again after resident data exists. */
+	if (this->pendingValue && !inputs.residentDataAvailable &&
+	    !inputs.realizationPending && !inputs.submissionPending) {
+	    this->retire();
+	    decision.retiredRequest = true;
+	    return decision;
+	}
 	if (!inputs.automatic || !this->pendingValue || inputs.interactive ||
 	    this->deadlineValue <= 0)
 	    return decision;

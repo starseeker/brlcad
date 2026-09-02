@@ -25,6 +25,7 @@
 #include <Inventor/nodes/SoGroup.h>
 
 #include <array>
+#include <map>
 #include <memory>
 #include <stddef.h>
 #include <string>
@@ -106,6 +107,26 @@ public:
         uint64_t triangleAtlasReclamationCount = 0;
         uint64_t sampleSerial = 0;
         SbBool memoryPressure = FALSE;
+    };
+
+    /** Aggregate finite-work certificate for the exact retained renderer
+     * targets sampled after the most recent CAD presentation traversal.
+     *
+     * targetSignature is diagnostic identity only.  Renderer control uses
+     * exact CadPresentationPreparationTarget equality; the signature lets
+     * trace consumers compare ranks without exposing Obol implementation
+     * types through BObol's controller status. */
+    struct BOBOL_EXPORT CadPresentationPreparationStatus {
+        uint64_t targetSignature = 0;
+        uint64_t totalUnits = 0;
+        uint64_t completedUnits = 0;
+        uint64_t remainingUnits = 0;
+        uint64_t reservedBytes = 0;
+        size_t targetCount = 0;
+        size_t preparingTargetCount = 0;
+        size_t constrainedTargetCount = 0;
+        size_t failedTargetCount = 0;
+        size_t invalidTargetCount = 0;
     };
 
     enum NormalStyle {
@@ -395,6 +416,15 @@ public:
      * large scene on the owner thread. */
     SbBool retargetCadPayload(const CadPayload *payload, int activeCut,
 	const BObolLodRequest &demand);
+    /** Refresh the view-local demand carried by a retained terminal proxy.
+     * The proxy geometry remains unchanged and may still be replaced by a
+     * richer result.  @p presentationCounts must describe that proxy in the
+     * requested renderer channel so the next allocation prices it correctly.
+     * This transition invalidates an allocation for the preceding demand
+     * epoch without journaling a geometry mutation. */
+    SbBool retargetCadProxyPayload(const CadPayload *payload,
+	const BObolLodRequest &demand,
+	const BObolLodCounts &presentationCounts);
     /** Re-publish the retained representation binding for one occurrence.
      * This is a presentation repair only: it neither changes mesh data nor
      * invalidates the scene allocation.  Callers use it when an exact render
@@ -440,10 +470,16 @@ public:
 	uint64_t planSerial, uint64_t viewRevision,
 	uint64_t policyRevision, size_t fixedCadPresentationCost) const;
     /** TRUE when the current population certificate is valid and every
-     * progressive occurrence stores the active cut assigned by that plan. */
+     * progressive occurrence stores a drawable presentation of the cut and
+     * spatial population assigned by that plan. */
     SbBool cadAllocationPlanCutsApplied(
 	uint64_t planSerial, uint64_t viewRevision,
 	uint64_t policyRevision, size_t fixedCadPresentationCost) const;
+    /** TRUE when this occurrence realizes its current allocation's cut,
+     * spatial population, and renderer channel. */
+    SbBool cadAllocatedPresentationApplied(
+	const CadPayload *payload, uint64_t viewRevision,
+	uint64_t policyRevision, int drawMode) const;
     /* Remove one view-local display binding while retaining its shared asset.
      * The source occurrence's structural fallback becomes visible again.
      * Used by scene-budget/frustum admission when an insignificant occurrence
@@ -491,6 +527,17 @@ public:
         const SoBRLDatabaseSource *source,
         uint64_t residentAdmissionRevision,
         std::vector<SbString> &occurrenceKeys) const;
+    /** TRUE when at least one compact CAD occurrence carries a resident-
+     * memory denial from an older service admission epoch.  This query is
+     * maintained at payload mutation points and is therefore O(1), including
+     * for very large compact occurrence populations. */
+    SbBool hasRetriableMemoryLimitedCadPayload(
+	uint64_t residentAdmissionRevision) const;
+    /** Include legacy direct-shape payloads in the stale-denial query.
+     * Compact CAD remains O(1); the legacy population is intentionally small
+     * and is scanned only when the service reports a new admission epoch. */
+    SbBool hasRetriableMemoryLimitedPayload(
+	uint64_t residentAdmissionRevision) const;
     size_t cadProxyPayloadCount(int proxyKind = BOBOL_LOD_PROXY_NONE) const;
     /** Count current display payloads and those which have reached their
      * recorded view target.  This is telemetry only and does not mutate or
@@ -513,6 +560,11 @@ public:
      * the retained CAD allocator.  Compact resident-progressive geometry has a
      * separate cut owner and is therefore deliberately excluded. */
     size_t allocationManagedCadRenderCost(void) const;
+    /** Return retained render work outside occurrence-local CAD allocation.
+     * Applying a CAD allocation changes activeRenderCost() and
+     * allocationManagedCadRenderCost() by the same amount, so this remains a
+     * stable allocator input rather than feedback from the presented cut. */
+    size_t allocationUnmanagedRenderCost(void) const;
     /* Irreducible retained PoP population in the same weighted units as
      * activeRenderCost().  This is the cost after every currently displayed
      * progressive occurrence has been retargeted to its minimum drawable
@@ -540,6 +592,11 @@ public:
      * successful current-view coverage proof. */
     SbBool lastCadPresentationOccurrenceCoverage(
 	size_t &subpixelOccurrences, size_t &structuralBoxes) const;
+    /** TRUE when every active assembly's complete point classifier consumed
+     * its current view-allocation protection set.  This certifies retained
+     * plan state; lastCadPresentationFrameExact() separately certifies that
+     * the plan reached the framebuffer. */
+    SbBool cadPointProxyProtectionClassified(void) const;
     /** Aggregate 1/2/4/8/16/32/64-pixel cumulative distribution produced by
      * the renderer's exact current-view structural proxy classifier. */
     SbBool lastCadStructuralProjectionHistogram(
@@ -560,6 +617,11 @@ public:
     /** Exact finite-work result observed during the most recent frame. */
     BObolCadPreparationProgress
         cadPresentationPreparationProgress(void) const;
+    /** Exact-target renderer preparation rank observed in the latest CAD
+     * frame.  For an unchanged nonzero targetSignature, remainingUnits must
+     * decrease on every productive retry until the target is terminal. */
+    CadPresentationPreparationStatus
+	cadPresentationPreparationStatus(void) const;
     /** Snapshot the retained CAD assemblies immediately before one endpoint
      * presentation traversal.  The matching refresh call can then reject a
      * stale exact work record when a deadline stops traversal between CAD
@@ -629,11 +691,17 @@ public:
     void residentMeshDemands(
 	std::vector<BObolLodResidentDemand> &demands) const;
     uint64_t residentMeshDemandRevision(void) const;
+    struct ResidentMeshCompactionAdoption {
+	size_t publishedSourceCount = 0;
+	SbBool allocationInvalidated = FALSE;
+    };
     /* Adopt a compacted immutable asset generation and journal one exact
      * occurrence per affected source assembly.  Since every occurrence of
      * the asset references the same retained part, one source-local
-     * publication swaps its geometry without scanning all instances. */
-    size_t applyResidentMeshCompaction(
+     * publication swaps its geometry without scanning all instances.  A
+     * backing-store trim which preserves every allocated active cut also
+     * preserves the current scene-allocation certificate. */
+    ResidentMeshCompactionAdoption applyResidentMeshCompaction(
 	const BObolLodResidentCompaction &result);
     uint64_t cadRevision(void) const;
     /* Compact presentations consume occurrence-local changes without
@@ -772,8 +840,13 @@ private:
 	Obol::CadPresentationPreparationSnapshot>
 	cadPresentationFrameStartPreparationSnapshots;
     mutable SbBool cadPresentationFrameObservationArmed;
+    /* The assembly renderer report is historical.  Pair its frame-start
+     * observation with the retained occurrence revision so a mesh/result
+     * publication cannot leave an earlier exact classifier report current. */
+    mutable uint64_t cadPresentationFrameStartBindingsRevision;
     mutable SbBool cadPresentationFrameStatusValid;
     mutable BObolCadPreparationProgress cadLastPreparationProgress;
+    mutable CadPresentationPreparationStatus cadLastPreparationStatus;
     mutable SbBool cadLastPresentedPrimitiveCountValid;
     mutable size_t cadLastPresentedPrimitiveCount;
     mutable SbBool cadLastPresentedRenderCostValid;
@@ -806,6 +879,12 @@ private:
     size_t cadProxyPayloadCountValue;
     size_t cadSatisfiedMeshPayloadCount;
     size_t cadMemoryLimitedMeshPayloadCount;
+    /* Capacity epochs for memory-limited CAD payloads which still miss their
+     * current pixel demand.  memoryLimitedPayloadCount() deliberately counts
+     * every constrained payload for telemetry; only this actionable subset
+     * may reopen provider work after reclamation. */
+    std::map<uint64_t, size_t>
+	cadUnsatisfiedMemoryLimitedAdmissionRevisionCounts;
     size_t cadActiveFaceCount;
     size_t cadActiveRenderCost;
     size_t cadMinimumActiveRenderCost;
@@ -846,13 +925,15 @@ private:
     size_t cadStagedAllocationMismatchCount;
     size_t cadActiveAllocationMismatchCount;
     void clearCadPayloadMetrics(void);
+    void addCadMemoryLimitedMetric(const CadPayload *payload);
+    void removeCadMemoryLimitedMetric(const CadPayload *payload);
     void addCadPayloadMetrics(const CadPayload *payload);
     void removeCadPayloadMetrics(const CadPayload *payload);
     void addCadResidentDemand(const CadPayload *payload);
     void removeCadResidentDemand(const CadPayload *payload);
     void removeResidentCadProgressiveMetrics(
 	const ResidentCadProgressiveCut &binding);
-    void invalidateCadAllocationCoverage(void);
+    void invalidateCadAllocationCoverage(const char *reason);
     SbBool cadPayloadCoveredByActiveAllocation(
 	const CadPayload *payload) const;
     void noteCadOccurrenceChanged(const std::string &sourceBindingKey,

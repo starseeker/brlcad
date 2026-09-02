@@ -113,6 +113,22 @@ qgcanvas_lod_progress_phase_class(int phase)
     return QgLodProgressPhaseClass::Error;
 }
 
+/* A provider/result handoff may briefly make BACKGROUND the controller's
+ * internal owner while the foreground view is still unfinished.  That is not
+ * a user-visible phase transition: the following owner-thread allocation
+ * slice returns to REFINING, and publishing both states makes the retained HUD
+ * request a complete scene traversal for every handoff.  A genuinely ready
+ * view with optional cache/compaction work remains Background. */
+static inline QgLodProgressPhaseClass
+qgcanvas_lod_progress_publication_phase_class(
+    const BObolLodConvergenceStatus &status)
+{
+    const QgLodProgressPhaseClass phaseClass =
+	qgcanvas_lod_progress_phase_class(status.phase);
+    return phaseClass == QgLodProgressPhaseClass::Background &&
+	!status.viewReady ? QgLodProgressPhaseClass::Settling : phaseClass;
+}
+
 static_assert(qgcanvas_lod_progress_phase_class(
 	BOBOL_LOD_CONVERGENCE_REFINING) ==
     qgcanvas_lod_progress_phase_class(
@@ -478,7 +494,7 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	/* A bounded pump can publish the terminal convergence transition without
 	 * changing geometry.  Synchronize that user-facing state here, not only
 	 * after a rendered frame: otherwise the work latch is already empty and
-	 * no future paint exists to remove the last "Refining view" HUD. */
+	 * no future paint exists to remove the last LoD progress HUD. */
 	const bool lodProgressPublish =
 	    qgcanvas_sync_obol_lod_progress(s, false);
 	if (lodProgressPublish)
@@ -601,10 +617,16 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
      * Consuming first also makes requests published during traversal distinct
      * and self-waking. */
     SbBool lodCapacityRelevant = TRUE;
+    SbBool lodPlanningRelevant = TRUE;
     if (recordPresentationTiming && consumeRenderRequest)
-	(void)s.obol->consumeRenderRequest(NULL, &lodCapacityRelevant);
-    if (!s.obol->isLodPresentationCapacityRelevant())
+	(void)s.obol->consumeRenderRequest(NULL, &lodCapacityRelevant,
+	    &lodPlanningRelevant);
+    if (!recordPresentationTiming || !consumeRenderRequest) {
 	lodCapacityRelevant = FALSE;
+	lodPlanningRelevant = FALSE;
+    } else if (!s.obol->isLodPresentationCapacityRelevant()) {
+	lodCapacityRelevant = FALSE;
+    }
 
     const SbViewportRegion &region = s.obol->getViewportRegion();
     SbVec2s size = region.getViewportSizePixels();
@@ -695,10 +717,16 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	lodCapacityRelevant ?
 	    BObolLodCapacityRelevance::RELEVANT :
 	    BObolLodCapacityRelevance::EXCLUDED,
+	lodPlanningRelevant ?
+	    BObolLodPlanningRelevance::RELEVANT :
+	    BObolLodPlanningRelevance::EXCLUDED,
 	cadExecutionAfter != cadExecutionBefore ?
 	    BObolCadPresentationExecution::EXECUTED :
 	    BObolCadPresentationExecution::NOT_EXECUTED,
-	cadPreparation);
+	cadPreparation,
+	cadFrameIncomplete ?
+	    BObolCadPresentationCompleteness::INCOMPLETE :
+	    BObolCadPresentationCompleteness::EXACT);
     /* Image export/checkpoint readback is a second traversal, not a frame the
      * viewport needed to present.  Feeding it into the scene LoD capacity
      * estimator makes screenshot frequency and PNG test checkpoints alter
@@ -885,7 +913,7 @@ qgcanvas_bind_obol_controller(QgCanvasState &s, QWidget *w,
     /* The endpoint's GED view seeds renderer policy at attachment.  Host
      * canvases have their own passive view state, so applying it here would
      * overwrite a retained endpoint property during host replacement. */
-    s.obol->requestRender("qt-controller-bind");
+    s.obol->requestLodCapacityRender("qt-controller-bind");
 }
 
 static inline bool
@@ -1143,6 +1171,7 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
      * incomplete idle snapshot remains visible as "Finalizing" and a
      * no-state snapshot removes historical telemetry. */
     const bool lod_visible = lod_status.hasLodState &&
+	!lod_status.semanticPresentationFramePending &&
 	(lod_status.phase != BOBOL_LOD_CONVERGENCE_IDLE ||
 	 lod_status.backgroundPending || lod_status.performanceLimited ||
 	 lod_status.failedSourceCount > 0 || !terminalReady);
@@ -1150,13 +1179,13 @@ qgcanvas_sync_obol_lod_progress(QgCanvasState &s, bool allowPeriodic)
 	s.lod_progress_last_publish.time_since_epoch().count() == 0;
     /* The host-work latch may clear one coordinator transition before the
      * convergence state machine publishes IDLE.  Keying the HUD solely on
-     * that latch can therefore retain "Refining view" indefinitely in the
+     * that latch can therefore retain the settling HUD indefinitely in the
      * completed framebuffer: when IDLE arrives, pending is already false and
      * no second transition is observed.  Track the user-facing phase and
      * visibility contract explicitly so the final HUD removal owns a render
      * request even when no geometry work remains. */
     const QgLodProgressPhaseClass phaseClass =
-	qgcanvas_lod_progress_phase_class(lod_status.phase);
+	qgcanvas_lod_progress_publication_phase_class(lod_status);
     const bool lod_state_changed = lod_first ||
 	lod_visible != s.lod_progress_last_visible ||
 	terminalReady != s.lod_progress_last_terminal_ready ||
@@ -1232,6 +1261,13 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
     if (s.obol->isRenderRequested() &&
 	(lod_publish || s.obol->hasPendingLodRefinementFrame()))
 	w->update();
+
+    /* Presenting a frame is itself a control transition.  The completed
+     * timing sample may open capacity-search, handoff, or demand-rescan work
+     * after the previous progressive timer has gone idle.  Always re-evaluate
+     * the level-triggered host-work predicate here so that work cannot depend
+     * on an unrelated mouse event or paint request to make progress. */
+    qgcanvas_queue_obol_progressive_update(s, w);
 
     /* Never make the FPS label a periodic scene-render timer.  The pre-render
 	 * faceplate synchronization folds its newest value into every independently

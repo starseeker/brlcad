@@ -19,6 +19,7 @@
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
+#include "bu/process.h"
 #include "bu/str.h"
 #include "bu/datetime.h"
 #include "ged.h"
@@ -47,6 +48,7 @@
 #include <set>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include <string.h>
 #include <thread>
 #include <chrono>
@@ -80,6 +82,50 @@ struct geometry_counts {
     int segmentCount;
     int meshCount;
     int triangleCount;
+};
+
+/* A single BREP source item may legitimately spend tens of seconds in the
+ * production tessellator without publishing an intermediate completion.  The
+ * external 180-second CTest timeout remains the hang guard; this smaller
+ * deadline catches a stalled progressive handoff without misclassifying a
+ * productive cold tessellation as a LoD liveliness failure. */
+static constexpr int64_t REAL_MODEL_PROGRESSIVE_SETTLE_TIMEOUT_US = 120000000;
+
+class real_model_test_cache {
+public:
+    real_model_test_cache()
+    {
+	const char *configured = getenv("BU_DIR_CACHE");
+	if (configured && configured[0]) {
+	    available = true;
+	    return;
+	}
+
+	const std::string leaf = "qtcad_obol_real_models_" +
+	    std::to_string(bu_pid()) + "_cache";
+	bu_dir(path, MAXPATHLEN, BU_DIR_CURR, leaf.c_str(), NULL);
+	bu_dirclear(path);
+	bu_mkdir(path);
+	available = bu_file_directory(path) &&
+	    bu_setenv("BU_DIR_CACHE", path, 1) == 0;
+	owned = available;
+    }
+
+    ~real_model_test_cache()
+    {
+	if (owned)
+	    bu_dirclear(path);
+    }
+
+    bool isAvailable() const
+    {
+	return available;
+    }
+
+private:
+    char path[MAXPATHLEN] = {0};
+    bool available = false;
+    bool owned = false;
 };
 
 static int
@@ -686,7 +732,7 @@ wait_for_view_lod_idle(QgView &view, BObolViewController *controller,
 	if (controller->hasPendingLodRefinementFrame() ||
 	    controller->isRenderRequested()) {
 	    view.need_update(QG_VIEW_REFRESH);
-	    controller->requestRender("real-model-lod-settle");
+	    controller->requestLodCapacityRender("real-model-lod-settle");
 	    QCoreApplication::processEvents();
 	    QImage feedback;
 	    const uint64_t renderStarted = controller->beginRenderTiming();
@@ -694,7 +740,10 @@ wait_for_view_lod_idle(QgView &view, BObolViewController *controller,
 	    controller->completeRenderTiming(renderStarted,
 		BObolPresentationTimingContext(
 		    BObolLodCapacityRelevance::RELEVANT,
-		    BObolCadPresentationExecution::EXECUTED));
+		    BObolLodPlanningRelevance::RELEVANT,
+		    BObolCadPresentationExecution::EXECUTED,
+		    BOBOL_CAD_PREPARATION_NONE,
+		    BObolCadPresentationCompleteness::EXACT));
 	    if (!feedback.isNull() && controller->isRenderRequested())
 		(void)controller->consumeRenderRequest(NULL);
 	}
@@ -1045,7 +1094,7 @@ sync_draw_case(const struct model_case &testCase)
     }
     controller->setViewportSize(viewportWidth, viewportHeight);
     controller->clearDatabaseSources();
-    controller->requestRender("real-model-empty-baseline");
+    controller->requestLodCapacityRender("real-model-empty-baseline");
     QCoreApplication::processEvents();
     QImage emptyImage;
     view.get_viewport_image(emptyImage);
@@ -1141,7 +1190,7 @@ sync_draw_case(const struct model_case &testCase)
      * leaves eager/LoD-off runs at the default 1000-unit view size. */
     const char *initialAutoviewCommand[1] = {"autoview"};
     (void)ged_exec_autoview(gedp, 1, initialAutoviewCommand);
-    controller->requestRender("real-model-visible");
+    controller->requestLodCapacityRender("real-model-visible");
     QCoreApplication::processEvents();
     phaseStart = bu_gettime();
     QImage visibleImage;
@@ -1168,7 +1217,7 @@ sync_draw_case(const struct model_case &testCase)
 	    const char *autoviewCommand[1] = {"autoview"};
 	    (void)ged_exec_autoview(gedp, 1, autoviewCommand);
 	    view.need_update(QG_VIEW_REFRESH);
-	    controller->requestRender("real-model-first-progressive-visual");
+	    controller->requestLodCapacityRender("real-model-first-progressive-visual");
 	    QCoreApplication::processEvents();
 	    view.get_viewport_image(visibleImage);
 	    litPixels = lit_pixel_count(visibleImage);
@@ -1244,7 +1293,8 @@ sync_draw_case(const struct model_case &testCase)
     if (progressiveDraw) {
 	BObolProgressiveStatus progressiveStatus;
 	int settled = 0;
-	const int64_t settleDeadline = bu_gettime() + 30000000;
+	const int64_t settleDeadline = bu_gettime() +
+	    REAL_MODEL_PROGRESSIVE_SETTLE_TIMEOUT_US;
 	int64_t lastFeedbackFrame = 0;
 	for (int attempt = 0; bu_gettime() < settleDeadline; attempt++) {
 	    QCoreApplication::processEvents();
@@ -1259,7 +1309,7 @@ sync_draw_case(const struct model_case &testCase)
 		(controller->hasPendingLodRefinementFrame() ||
 		 lastFeedbackFrame == 0 || now - lastFeedbackFrame >= 100000)) {
 		view.need_update(QG_VIEW_REFRESH);
-		controller->requestRender("real-model-progressive-feedback");
+		controller->requestLodCapacityRender("real-model-progressive-feedback");
 		QCoreApplication::processEvents();
 		QImage feedbackImage;
 		const uint64_t renderStarted = controller->beginRenderTiming();
@@ -1267,7 +1317,10 @@ sync_draw_case(const struct model_case &testCase)
 		controller->completeRenderTiming(renderStarted,
 		    BObolPresentationTimingContext(
 			BObolLodCapacityRelevance::RELEVANT,
-			BObolCadPresentationExecution::EXECUTED));
+			BObolLodPlanningRelevance::RELEVANT,
+			BObolCadPresentationExecution::EXECUTED,
+			BOBOL_CAD_PREPARATION_NONE,
+			BObolCadPresentationCompleteness::EXACT));
 		if (!feedbackImage.isNull() && controller->isRenderRequested())
 		    (void)controller->consumeRenderRequest(NULL);
 		lastFeedbackFrame = bu_gettime();
@@ -1334,7 +1387,7 @@ sync_draw_case(const struct model_case &testCase)
 	const char *settledAutoviewCommand[1] = {"autoview"};
 	(void)ged_exec_autoview(gedp, 1, settledAutoviewCommand);
 	view.need_update(QG_VIEW_REFRESH);
-	controller->requestRender("real-model-deferred-settled");
+	controller->requestLodCapacityRender("real-model-deferred-settled");
 	QCoreApplication::processEvents();
 	QImage settledImage;
 	view.get_viewport_image(settledImage);
@@ -1849,6 +1902,10 @@ main(int argc, char **argv)
 {
     bu_setprogname(argv[0]);
     bu_setenv("LIBRT_USE_COMB_INSTANCE_SPECIFIERS", "1", 1);
+
+    real_model_test_cache cache;
+    if (!cache.isAvailable())
+	FAIL("could not create an isolated writable LoD cache");
 
     QApplication app(argc, argv);
 

@@ -49,6 +49,8 @@ struct BObolDrawCacheStatus {
 struct BObolDrawProxyRecord {
     int kind;
     size_t pointCount;
+    /* OBB corners use binary axis bits: point 0 is the origin corner and
+     * points 1, 2, and 4 are its three orthogonal edge neighbors. */
     point_t points[8];
 };
 
@@ -269,6 +271,7 @@ bobol_draw_proxy_cache_invalidate(struct db_i *dbip,
 				    int kind,
 				    struct BObolDrawCacheStatus *status);
 
+/* OBB points use BObolDrawProxyRecord's binary corner order. */
 BOBOL_EXPORT int
 bobol_draw_proxy_cache_store(struct db_i *dbip,
 			       const char *name,

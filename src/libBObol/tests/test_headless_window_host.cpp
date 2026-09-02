@@ -87,7 +87,7 @@ public:
 	if (this->requestController) {
 	    BObolViewController *controller = this->requestController;
 	    this->requestController = NULL;
-	    controller->requestRender("during-render");
+	    controller->requestLodCapacityRender("during-render");
 	}
 
 	const size_t byteCount = (size_t)width * (size_t)height * (size_t)nrcomponents;
@@ -225,7 +225,7 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
 	  "headless host preserves rendered pixels");
 
     CHECK(host.poll(NULL) == 0, "headless poll is idle without pending render");
-    host.getController()->requestRender("poll-render");
+    host.getController()->requestLodCapacityRender("poll-render");
     CHECK(host.poll(NULL) == 1, "headless poll drains pending render");
     CHECK(bu_strcmp(host.getLastRenderReason().getString(), "poll-render") == 0,
 	  "headless poll records render reason");
@@ -238,7 +238,7 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
      * snapshots the current request but before the renderer returns.  The
      * completed frame retires only the older serial; the newer request must
      * survive for the next poll. */
-    host.getController()->requestRender("race-start");
+    host.getController()->requestLodCapacityRender("race-start");
     manager->requestController = host.getController();
     CHECK(host.renderPending() == 1,
 	  "headless host renders the older request in a request race");

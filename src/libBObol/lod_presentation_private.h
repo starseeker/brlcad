@@ -24,4 +24,13 @@ bool bobol_lod_select_prepared_layers(
     int drawMode, int activeCut,
     std::vector<BObolLodPresentationLayer> &selected);
 
+/* A capacity-limited spatial result may retain one whole-object coverage
+ * layer plus only the detail pages which fit its working-set allowance.  That
+ * representation is drawable and terminal for the current admission epoch,
+ * but it is not an exact certificate for the absent pages and cannot be
+ * retargeted as one globally ordered PoP prefix. */
+BOBOL_EXPORT bool bobol_lod_terminal_coverage_is_drawable(
+    const std::vector<BObolLodPresentationLayer> &layers,
+    SbBool memoryLimited, int drawMode, int activeCut);
+
 #endif /* LIBBOBOL_LOD_PRESENTATION_PRIVATE_H */

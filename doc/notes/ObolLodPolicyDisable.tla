@@ -1,47 +1,42 @@
 ----------------------- MODULE ObolLodPolicyDisable -----------------------
 \* Focused ownership contract for toggling automatic mesh LoD.
 \*
-\* A policy-off transition retires every automatic producer, cursor, and
-\* capacity-labelled frame atomically.  It does not delete the immutable
-\* presentation already on screen, cancel an independent database provider,
-\* or suppress the one presentation-only repaint needed to show the policy
-\* change.  The model deliberately abstracts geometry and numeric quality.
+\* A policy-off transition retires every automatic owner atomically.  It does
+\* not delete the immutable presentation already on screen, cancel an
+\* independent database provider, or suppress the presentation-only repaint
+\* needed to show the policy change.  Camera bookkeeping remains active while
+\* policy is off, but it may not manufacture automatic demand.
+\*
+\* AutomaticDomains is the stable reducer-level map, not a second phase
+\* machine.  The production fields represented by each domain are documented
+\* in libbobol_formal_models.md and checked independently by the C++ retirement
+\* test.  Geometry and numeric quality are deliberately abstracted.
 
-EXTENDS Naturals, TLC
+EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANT MaxPolicyEpoch
 
-WorkerStates == {"idle", "queued", "inflight", "result"}
+AutomaticDomains == {
+    "service", "availability", "submission", "planning", "viewDemand",
+    "coverage", "interaction", "presentation", "pointQuality",
+    "staticQuality", "structuralRepair", "compaction", "capacityHost"
+}
 
 VARIABLES automatic,
           policyEpoch,
           retainedPresentation,
-          workerState,
-          submissionPending,
-          allocationPending,
-          presentationPending,
-          interactionActive,
-          compactionPending,
-          capacityRenderPending,
+          automaticWork,
           repaintPending,
           providerPending
 
-vars == <<automatic, policyEpoch, retainedPresentation, workerState,
-          submissionPending, allocationPending, presentationPending,
-          interactionActive, compactionPending, capacityRenderPending,
+vars == <<automatic, policyEpoch, retainedPresentation, automaticWork,
           repaintPending, providerPending>>
 
 TypeOK ==
     /\ automatic \in BOOLEAN
     /\ policyEpoch \in 0..MaxPolicyEpoch
     /\ retainedPresentation \in BOOLEAN
-    /\ workerState \in WorkerStates
-    /\ submissionPending \in BOOLEAN
-    /\ allocationPending \in BOOLEAN
-    /\ presentationPending \in BOOLEAN
-    /\ interactionActive \in BOOLEAN
-    /\ compactionPending \in BOOLEAN
-    /\ capacityRenderPending \in BOOLEAN
+    /\ automaticWork \subseteq AutomaticDomains
     /\ repaintPending \in BOOLEAN
     /\ providerPending \in BOOLEAN
 
@@ -49,18 +44,13 @@ Init ==
     /\ automatic = TRUE
     /\ policyEpoch = 0
     /\ retainedPresentation = TRUE
-    /\ workerState \in (WorkerStates \ {"idle"})
-    /\ submissionPending \in BOOLEAN
-    /\ allocationPending \in BOOLEAN
-    /\ presentationPending \in BOOLEAN
-    /\ interactionActive \in BOOLEAN
-    /\ compactionPending \in BOOLEAN
-    /\ capacityRenderPending \in BOOLEAN
+    /\ automaticWork \in SUBSET AutomaticDomains
     /\ repaintPending \in BOOLEAN
     /\ providerPending \in BOOLEAN
 
-\* Odd transitions disable; even transitions re-enable.  Re-enable starts a
-\* fresh worker/submission epoch but continues to display the retained image.
+\* Odd transitions disable; even transitions re-enable.  Disable is one
+\* reducer transition.  Re-enable starts only the minimum fresh-view work;
+\* every other domain must be armed by its owning producer.
 TogglePolicy ==
     /\ policyEpoch < MaxPolicyEpoch
     /\ policyEpoch' = policyEpoch + 1
@@ -68,98 +58,84 @@ TogglePolicy ==
     /\ retainedPresentation' = retainedPresentation
     /\ repaintPending' = TRUE
     /\ providerPending' = providerPending
-    /\ IF automatic
-          THEN /\ workerState' = "idle"
-               /\ submissionPending' = FALSE
-               /\ allocationPending' = FALSE
-               /\ presentationPending' = FALSE
-               /\ interactionActive' = FALSE
-               /\ compactionPending' = FALSE
-               /\ capacityRenderPending' = FALSE
-          ELSE /\ workerState' = "queued"
-               /\ submissionPending' = TRUE
-               /\ allocationPending' = FALSE
-               /\ presentationPending' = FALSE
-               /\ interactionActive' = FALSE
-               /\ compactionPending' = FALSE
-               /\ capacityRenderPending' = TRUE
+    /\ automaticWork' =
+        IF automatic
+        THEN {}
+        ELSE {"service", "submission", "coverage", "capacityHost"}
 
-\* Automatic policy may accumulate any combination of bounded work before a
-\* later toggle.  The disable transition must retire all combinations, not
-\* only the state produced by one expected ordering.
-ArmAutomaticWork ==
+\* Automatic policy may accumulate any combination of reducer domains before
+\* a later toggle.  Modeling them as a set makes the atomic retirement rule
+\* explicit and keeps adding an implementation owner from silently escaping
+\* the policy-off transaction.
+ArmAutomaticWork(domain) ==
     /\ automatic
-    /\ \/ /\ workerState = "idle"
-           /\ workerState' \in (WorkerStates \ {"idle"})
-           /\ UNCHANGED <<submissionPending, allocationPending,
-                           presentationPending, interactionActive,
-                           compactionPending, capacityRenderPending>>
-       \/ /\ submissionPending' = TRUE
-           /\ UNCHANGED <<workerState, allocationPending,
-                           presentationPending, interactionActive,
-                           compactionPending, capacityRenderPending>>
-       \/ /\ allocationPending' = TRUE
-           /\ UNCHANGED <<workerState, submissionPending,
-                           presentationPending, interactionActive,
-                           compactionPending, capacityRenderPending>>
-       \/ /\ presentationPending' = TRUE
-           /\ UNCHANGED <<workerState, submissionPending,
-                           allocationPending, interactionActive,
-                           compactionPending, capacityRenderPending>>
-       \/ /\ interactionActive' = TRUE
-           /\ UNCHANGED <<workerState, submissionPending,
-                           allocationPending, presentationPending,
-                           compactionPending, capacityRenderPending>>
-       \/ /\ compactionPending' = TRUE
-           /\ UNCHANGED <<workerState, submissionPending,
-                           allocationPending, presentationPending,
-                           interactionActive, capacityRenderPending>>
-       \/ /\ capacityRenderPending' = TRUE
-           /\ UNCHANGED <<workerState, submissionPending,
-                           allocationPending, presentationPending,
-                           interactionActive, compactionPending>>
+    /\ domain \in AutomaticDomains
+    /\ domain \notin automaticWork
+    /\ automaticWork' = automaticWork \union {domain}
     /\ UNCHANGED <<automatic, policyEpoch, retainedPresentation,
                     repaintPending, providerPending>>
+
+CompleteAutomaticWork(domain) ==
+    /\ automatic
+    /\ domain \in automaticWork
+    /\ automaticWork' = automaticWork \ {domain}
+    /\ UNCHANGED <<automatic, policyEpoch, retainedPresentation,
+                    repaintPending, providerPending>>
+
+\* A view revision is still recorded while policy is disabled.  Only enabled
+\* policy may translate it into view-demand work.  This is the formal guard
+\* for advanceLodViewRevision and similar camera-side entry points.
+CameraChange ==
+    /\ ~repaintPending \/
+       (automatic /\ "viewDemand" \notin automaticWork)
+    /\ repaintPending' = TRUE
+    /\ automaticWork' =
+        IF automatic
+        THEN automaticWork \union {"viewDemand"}
+        ELSE automaticWork
+    /\ UNCHANGED <<automatic, policyEpoch, retainedPresentation,
+                    providerPending>>
 
 CompleteProvider ==
     /\ providerPending
     /\ providerPending' = FALSE
     /\ UNCHANGED <<automatic, policyEpoch, retainedPresentation,
-                    workerState, submissionPending, allocationPending,
-                    presentationPending, interactionActive,
-                    compactionPending, capacityRenderPending, repaintPending>>
+                    automaticWork, repaintPending>>
 
 PresentRepaint ==
     /\ repaintPending
     /\ repaintPending' = FALSE
     /\ UNCHANGED <<automatic, policyEpoch, retainedPresentation,
-                    workerState, submissionPending, allocationPending,
-                    presentationPending, interactionActive,
-                    compactionPending, capacityRenderPending, providerPending>>
+                    automaticWork, providerPending>>
 
-Next == TogglePolicy \/ ArmAutomaticWork \/ CompleteProvider \/ PresentRepaint
+Next ==
+    \/ TogglePolicy
+    \/ \E domain \in AutomaticDomains: ArmAutomaticWork(domain)
+    \/ \E domain \in AutomaticDomains: CompleteAutomaticWork(domain)
+    \/ CameraChange
+    \/ CompleteProvider
+    \/ PresentRepaint
 
 Spec ==
     /\ Init
     /\ [][Next]_vars
     /\ WF_vars(TogglePolicy)
+    /\ \A domain \in AutomaticDomains:
+           WF_vars(CompleteAutomaticWork(domain))
     /\ WF_vars(CompleteProvider)
     /\ WF_vars(PresentRepaint)
 
-NoAutomaticOwner ==
-    /\ workerState = "idle"
-    /\ ~submissionPending
-    /\ ~allocationPending
-    /\ ~presentationPending
-    /\ ~interactionActive
-    /\ ~compactionPending
-    /\ ~capacityRenderPending
+NoAutomaticOwner == automaticWork = {}
 
 RetainedPresentationSurvives == retainedPresentation
 
 DisabledOwnsNoAutomaticWork == ~automatic => NoAutomaticOwner
 
-DisabledRenderIsPresentationOnly == ~automatic => ~capacityRenderPending
+DisabledRenderIsPresentationOnly ==
+    ~automatic => "capacityHost" \notin automaticWork
+
+DisabledCameraCreatesNoDemand ==
+    ~automatic => "viewDemand" \notin automaticWork
 
 EventuallyQuiescentAfterFinalDisable ==
     <> (policyEpoch = MaxPolicyEpoch /\ ~automatic /\ NoAutomaticOwner /\

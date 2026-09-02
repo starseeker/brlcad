@@ -872,9 +872,17 @@ private:
 	this->controller->completeRenderTiming(started,
 	    BObolPresentationTimingContext(
 		BObolLodCapacityRelevance::RELEVANT,
+		BObolLodPlanningRelevance::RELEVANT,
 		cad_execution_after != cad_execution_before ?
 		    BObolCadPresentationExecution::EXECUTED :
-		    BObolCadPresentationExecution::NOT_EXECUTED));
+		    BObolCadPresentationExecution::NOT_EXECUTED,
+		presentation_state ?
+		    presentation_state->cadPresentationPreparationProgress() :
+		    BOBOL_CAD_PREPARATION_NONE,
+		presentation_state &&
+		    !presentation_state->lastCadPresentationFrameExact() ?
+		    BObolCadPresentationCompleteness::INCOMPLETE :
+		    BObolCadPresentationCompleteness::EXACT));
 	this->controller->clearRenderRequest();
 	if (present && double_buffered && !this->widget_command("swapbuffers"))
 	    return false;

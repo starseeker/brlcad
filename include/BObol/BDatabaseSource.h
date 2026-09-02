@@ -345,9 +345,10 @@ struct BOBOL_EXPORT BObolCompactLodPlanningSummary {
     SbBool meshGeometry;
     SbBool lodBacked;
     SbBool sourceMeshRequestValid;
-    /* The authored compact part itself contains producer-certified,
-     * view-selectable cuts.  Such geometry is retargeted in place and must
-     * never be routed through the asynchronous source-mesh provider. */
+    /* The authored compact part contains a producer-certified progressive
+     * WireRep.  It is retargeted directly for wire drawing.  If a separate
+     * source-mesh request exists, shaded and hybrid modes still require that
+     * provider channel. */
     SbBool residentProgressiveGeometry;
     SbBool visible;
     SbBool selected;
@@ -700,6 +701,13 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
     size_t size(void);
     void setExpectedCount(size_t count);
     size_t getExpectedCount(void) const;
+    /** Publish an exact finite denominator for the source-representation work
+     * which follows structural coverage.  Completion is monotonic for the
+     * lifetime of this stream and counts resolved producer items whether they
+     * produce LoD-backed or terminal geometry. */
+    void setPreparationWorkCount(size_t count);
+    void notePreparationWorkCompleted(void);
+    void getPreparationWorkCount(size_t &completed, size_t &total) const;
     void setSourceProfile(const BObolCompactSourceProfile &profile);
     SbBool getSourceProfile(BObolCompactSourceProfile &profile) const;
     /* A warm manifest may describe the complete semantic population while
@@ -1227,6 +1235,15 @@ public:
     SbBool getDisplayMeshLodChangedEntries(uint64_t revision,
 	std::vector<size_t> &entryIndices,
 	SbBool *coverageInvalidated = NULL) const;
+    /** Monotonic revision for exact occurrence-visibility changes.  Visibility
+     * is a view-planning input, not immutable mesh inventory, so it has a
+     * separate source-local journal. */
+    uint64_t getDisplayMeshLodVisibilityRevision(void) const;
+    /** Return occurrence indices whose effective presentation visibility
+     * changed after @p revision.  FALSE requires one authoritative source
+     * rescan because the bounded non-consuming history is no longer complete. */
+    SbBool getDisplayMeshLodVisibilityChangedEntries(uint64_t revision,
+	std::vector<size_t> &entryIndices) const;
     SoBRLMaterialObject *getRealizedMaterialObject(void) const;
     SoBRLMaterialObject *getRealizedMaterialObject(int index) const;
     int getRealizedMaterialObjectCount(void) const;
@@ -1544,6 +1561,8 @@ private:
     void markDisplayMeshLodDirty(
 	const std::vector<size_t> &entryIndices,
 	SbBool coverageInvalidated = FALSE);
+    void markDisplayMeshLodVisibilityDirty(
+	const std::vector<size_t> &entryIndices);
     uint64_t cadBatchRevisionGet(void) const;
     void clearCompactInstanceIndex(void);
     void discardCompactInstanceHistory(void);

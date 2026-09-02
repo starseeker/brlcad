@@ -579,7 +579,7 @@ qtcad_obol_autoview_refresh(struct ged *gedp,
 
     view.need_update(QG_VIEW_REFRESH);
     if (controller)
-	controller->requestRender(render_reason ? render_reason :
+	controller->requestLodCapacityRender(render_reason ? render_reason :
 				  "progressive-lod-autoview");
     QCoreApplication::processEvents();
     return 1;
@@ -591,7 +591,7 @@ qtcad_obol_request_view_frame(QgView &view,
 {
     view.need_update(QG_VIEW_REFRESH);
     if (controller)
-	controller->requestRender(render_reason ? render_reason :
+	controller->requestLodCapacityRender(render_reason ? render_reason :
 		"progressive-lod-frame");
     QCoreApplication::processEvents();
 }
@@ -615,7 +615,10 @@ qtcad_obol_present_view_frame(QgView &view,
     controller->completeRenderTiming(started,
 	BObolPresentationTimingContext(
 	    BObolLodCapacityRelevance::RELEVANT,
-	    BObolCadPresentationExecution::EXECUTED));
+	    BObolLodPlanningRelevance::RELEVANT,
+	    BObolCadPresentationExecution::EXECUTED,
+	    BOBOL_CAD_PREPARATION_NONE,
+	    BObolCadPresentationCompleteness::EXACT));
     if (!image.isNull() && controller->isRenderRequested())
 	(void)controller->consumeRenderRequest(NULL);
 }

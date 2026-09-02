@@ -3170,6 +3170,121 @@ test_rt_mesh_provider_task(void)
 	    printf("FAIL: resident page-union fixture is not chunked\n");
 	    ret = 1;
 	} else {
+	    uint32_t latePage = UINT32_MAX;
+	    int latePageFirstCut = -1;
+	    for (uint32_t chunk = 0; chunk < unionHierarchy.chunk_count;
+		    ++chunk) {
+		for (int cut = unionHierarchy.min_cut;
+			cut <= unionHierarchy.max_cut; ++cut) {
+		    if (!unionHierarchy.chunks[chunk].cuts[cut].face_count)
+			continue;
+		    if (cut > unionHierarchy.min_cut) {
+			latePage = chunk;
+			latePageFirstCut = cut;
+		    }
+		    break;
+		}
+		if (latePage != UINT32_MAX)
+		    break;
+	    }
+	    if (latePage == UINT32_MAX) {
+		printf("FAIL: resident page-union fixture has no delayed page "
+		       "population\n");
+		ret = 1;
+	    } else {
+		BObolLodCounts firstPageCounts;
+		firstPageCounts.faceCount = unionHierarchy.chunks[latePage].
+		    cuts[latePageFirstCut].face_count;
+		firstPageCounts.pointCount = unionHierarchy.chunks[latePage].
+		    cuts[latePageFirstCut].point_count;
+		firstPageCounts.originalPointCount =
+		    firstPageCounts.pointCount;
+		firstPageCounts.normalCount = unionHierarchy.has_normals ?
+		    firstPageCounts.pointCount : 0;
+		BObolLodService latePageService;
+		BObolMeshLodProvider latePageProvider;
+		latePageProvider.service = &latePageService;
+		latePageProvider.setDatabase(dbip);
+		latePageProvider.refreshMissing = FALSE;
+		latePageProvider.initialRefinementCostBudget =
+		    bobol_lod_render_cost_units(
+			firstPageCounts, BOBOL_LOD_DRAW_SHADED, 1);
+		BObolLodRequest latePageRequest = stagedRequest;
+		latePageRequest.requestedCut = unionHierarchy.max_cut;
+		latePageRequest.requiredChunks = {latePage};
+		latePageRequest.occurrenceKey = "late-page-occurrence";
+		BObolLodResult latePageResult =
+		    latePageService.realizeResidentMeshLod(
+			latePageRequest, latePageProvider);
+		if (latePageResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+		    latePageResult.geometry.activeCut < latePageFirstCut ||
+		    latePageResult.counts.faceCount == 0 ||
+		    latePageResult.presentationLayers.empty()) {
+		    printf("FAIL: delayed visible page population became a "
+			   "terminal empty delivery (page=%u first=%d active=%d "
+			   "status=%d faces=%llu layers=%zu diagnostic=%s)\n",
+			   latePage, latePageFirstCut,
+			   latePageResult.geometry.activeCut,
+			   latePageResult.providerStatus,
+			   static_cast<unsigned long long>(
+			       latePageResult.counts.faceCount),
+			   latePageResult.presentationLayers.size(),
+			   latePageResult.diagnostic.getString());
+		    ret = 1;
+		}
+		latePageProvider.initialRefinementCostBudget = 1;
+		latePageProvider.resetExisting = TRUE;
+		BObolLodResult indivisiblePageResult =
+		    latePageService.realizeResidentMeshLod(
+			latePageRequest, latePageProvider);
+		if (indivisiblePageResult.providerStatus !=
+			BOBOL_LOD_PROVIDER_READY ||
+		    indivisiblePageResult.geometry.activeCut <
+			latePageFirstCut ||
+		    indivisiblePageResult.counts.faceCount == 0 ||
+		    indivisiblePageResult.presentationLayers.empty()) {
+		    printf("FAIL: an underestimated first-page reservation "
+			   "published an empty or failed spatial delivery "
+			   "(page=%u first=%d active=%d status=%d faces=%llu "
+			   "layers=%zu diagnostic=%s)\n",
+			   latePage, latePageFirstCut,
+			   indivisiblePageResult.geometry.activeCut,
+			   indivisiblePageResult.providerStatus,
+			   static_cast<unsigned long long>(
+			       indivisiblePageResult.counts.faceCount),
+			   indivisiblePageResult.presentationLayers.size(),
+			   indivisiblePageResult.diagnostic.getString());
+		    ret = 1;
+		}
+		BObolLodRequest emptyPageRequest = latePageRequest;
+		emptyPageRequest.requestedCut = latePageFirstCut - 1;
+		BObolLodResult emptyPageResult =
+		    latePageService.realizeResidentMeshLod(
+			emptyPageRequest, latePageProvider);
+		if (emptyPageResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+		    !emptyPageResult.progressiveMesh ||
+		    !emptyPageResult.progressiveMesh->isValid() ||
+		    emptyPageResult.geometry.activeCut !=
+			emptyPageRequest.requestedCut ||
+		    emptyPageResult.counts.faceCount != 0 ||
+		    !emptyPageResult.presentationLayers.empty() ||
+		    !emptyPageResult.payloadIsConsistent() ||
+		    !emptyPageResult.terminal) {
+		    printf("FAIL: a valid empty spatial population was not "
+			   "published as a terminal zero-draw mesh "
+			   "(requested=%d active=%d status=%d faces=%llu "
+			   "layers=%zu terminal=%d diagnostic=%s)\n",
+			   emptyPageRequest.requestedCut,
+			   emptyPageResult.geometry.activeCut,
+			   emptyPageResult.providerStatus,
+			   static_cast<unsigned long long>(
+			       emptyPageResult.counts.faceCount),
+			   emptyPageResult.presentationLayers.size(),
+			   emptyPageResult.terminal ? 1 : 0,
+			   emptyPageResult.diagnostic.getString());
+		    ret = 1;
+		}
+	    }
 	    unionRequest.requestedCut = unionHierarchy.max_cut;
 	    unionRequest.requiredChunks.resize(unionHierarchy.chunk_count);
 	    std::iota(unionRequest.requiredChunks.begin(),
@@ -4232,24 +4347,65 @@ test_detached_database_snapshot(void)
 static int
 test_rt_obb_proxy_provider_request_bounds(void)
 {
-    BObolLodRequest request = make_request("/proxy.bot");
-    BObolRtProxyProvider provider;
+    {
+	BObolLodRequest request = make_request("/proxy.bot");
+	BObolRtProxyProvider provider;
 
+	provider.proxyKind = BOBOL_LOD_PROXY_OBB;
+	provider.useRequestBounds = TRUE;
+	BObolLodResult result = bobol_rt_proxy_provider_task(request,
+							  &provider);
+	if (result.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	    result.resultKind != BOBOL_LOD_RESULT_PROXY ||
+	    result.proxy.kind != BOBOL_LOD_PROXY_OBB ||
+	    !result.proxy.isValid() ||
+	    result.proxy.bounds != request.bounds ||
+	    result.proxy.center != SbVec3f(0.0f, 0.0f, 0.0f) ||
+	    result.proxy.halfExtents != SbVec3f(1.0f, 1.0f, 1.0f)) {
+	    printf("FAIL: LoD OBB proxy provider did not preserve the OBB stage from request bounds\n");
+	    return 1;
+	}
+    }
+
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    if (make_provider_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    BObolLodRequest request = make_request("/lod-provider.bot");
+    request.objectName = "lod-provider.bot";
+    BObolRtProxyProvider provider;
     provider.proxyKind = BOBOL_LOD_PROXY_OBB;
-    provider.useRequestBounds = TRUE;
-    BObolLodResult result = bobol_rt_proxy_provider_task(request,
-						      &provider);
+    provider.useRequestBounds = FALSE;
+    if (!provider.setDatabase(dbip)) {
+	printf("FAIL: LoD OBB proxy provider database lease\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const BObolLodResult result = bobol_rt_proxy_provider_task(request,
+	&provider);
+    const float xy = result.proxy.axisX.dot(result.proxy.axisY);
+    const float xz = result.proxy.axisX.dot(result.proxy.axisZ);
+    const float yz = result.proxy.axisY.dot(result.proxy.axisZ);
+    constexpr float orthogonalityTolerance = 1.0e-5f;
     if (result.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	result.resultKind != BOBOL_LOD_RESULT_PROXY ||
 	result.proxy.kind != BOBOL_LOD_PROXY_OBB ||
 	!result.proxy.isValid() ||
-	result.proxy.bounds != request.bounds ||
-	result.proxy.center != SbVec3f(0.0f, 0.0f, 0.0f) ||
-	result.proxy.halfExtents != SbVec3f(1.0f, 1.0f, 1.0f)) {
-	printf("FAIL: LoD OBB proxy provider did not preserve the OBB stage from request bounds\n");
+	std::fabs(xy) > orthogonalityTolerance ||
+	std::fabs(xz) > orthogonalityTolerance ||
+	std::fabs(yz) > orthogonalityTolerance) {
+	printf("FAIL: cached LoD OBB proxy lost canonical orthogonal axes\n");
+	provider.clear();
+	db_close(dbip);
+	bu_file_delete(dbpath);
 	return 1;
     }
 
+    provider.clear();
+    db_close(dbip);
+    bu_file_delete(dbpath);
     return 0;
 }
 

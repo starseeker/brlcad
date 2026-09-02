@@ -1117,7 +1117,8 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPathMatch(
 	this->markCadBatchDirty();
 	if (anyVisibilityChanged &&
 	    !this->d->compactVisibilityFrontierActive)
-	    this->markDisplayMeshLodDirty(visibilityChangedEntries);
+	    this->markDisplayMeshLodVisibilityDirty(
+		visibilityChangedEntries);
 	this->touch();
     }
     return changed;
@@ -1489,14 +1490,21 @@ SoBRLDatabaseSource::reapplyCompactInstanceVisibilityFrontier(
 	}
 	this->markCompiledAssemblyDirty();
 	this->markCadBatchDirty(changedEntries);
-	/* A hierarchy visibility frontier changes which retained instances are
-	 * presented; it does not change mesh inventory or immutable availability.
-	 * Keep the view payload bound so an erase/redraw can hide and restore it in
-	 * one presentation transaction.  Advancing the mesh-inventory revision
-	 * here made the LoD delta pass remove hidden payloads and briefly commit an
-	 * empty frame before an asynchronous redraw reattached the same resident
-	 * asset.  Camera, policy, and resource-pressure revisions still perform the
-	 * normal view allocation and may compact hidden data when warranted. */
+	/* The immutable mesh inventory is unchanged, but the view planner must
+	 * consume these exact entry indices to revise its visibility census.  A
+	 * presentation refresh alone can hide the instances while leaving the
+	 * completed census denominator stale, producing an ownerless 100-percent
+	 * "refining" state after a subpath erase.  The non-invalidating delta keeps
+	 * this O(changed entries); population changes still request a complete
+	 * source census. */
+	this->markDisplayMeshLodVisibilityDirty(changedEntries);
+	if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT"))
+	    bu_log("BObol LoD source contract visibility delta source=%p "
+		   "path=%s changed=%zu revision=%llu\n",
+		   static_cast<void *>(this),
+		   this->path.getValue().getString(), changedEntries.size(),
+		   static_cast<unsigned long long>(
+		       this->getDisplayMeshLodVisibilityRevision()));
 	this->touch();
     }
     return changed;

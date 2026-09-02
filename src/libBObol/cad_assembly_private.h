@@ -136,7 +136,7 @@ private:
 	uint64_t geometryRevision = 0;
     };
 
-    void reserveCompactPresentationCapacity(size_t expectedOccurrences);
+    bool reserveCompactPresentationCapacity(size_t expectedOccurrences);
 
     std::unordered_map<Obol::InstanceId, InstanceSemantic,
 	std::hash<Obol::InstanceId>> semantics;

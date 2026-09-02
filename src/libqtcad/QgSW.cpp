@@ -155,6 +155,7 @@ void QgSW::present_frame()
 
 void QgSW::queued_update()
 {
+    QTCAD_SLOT("QgSW::queued_update", 1);
     d->fb_update_queued = false;
     update();
 }

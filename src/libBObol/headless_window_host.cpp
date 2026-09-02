@@ -277,7 +277,7 @@ BObolHeadlessWindowHost::renderPending(void)
     controller->noteFramePresented();
     this->hp->lastRenderReason = requestedReason;
     if (controller->hasProgressiveWorkPending())
-	controller->requestRender("progressive-pending");
+	controller->requestLodCapacityRender("progressive-pending");
     this->hp->renderCount++;
     return 1;
 }
@@ -441,7 +441,7 @@ headless_factory_request_frame(void *instance, const char *reason,
 	static_cast<BObolHeadlessWindowHost *>(instance);
     if (!host || !host->getController())
 	return 0;
-    host->getController()->requestRender(reason);
+    host->getController()->requestLodCapacityRender(reason);
     return 1;
 }
 
@@ -469,7 +469,7 @@ headless_factory_capture(void *instance, unsigned char **pixels, size_t *size,
 	return 0;
 
     if (host->getController())
-	host->getController()->requestRender("capture");
+	host->getController()->requestLodCapacityRender("capture");
     if (host->renderPending() < 0 || !host->getLastFrameBuffer())
 	return 0;
 

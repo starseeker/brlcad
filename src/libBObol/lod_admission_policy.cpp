@@ -41,8 +41,9 @@ BObolLodAdmissionPlanner::applyEvidenceAction(
 	    case EvidenceAction::CANCEL_HEADROOM_RETRY:
 		result.nextEvidence.headroomValue.cancelRetry();
 		break;
-	    case EvidenceAction::RESET_POINT_PROXY:
-		result.nextEvidence.pointProxyValue.reset();
+	case EvidenceAction::RESET_POINT_PROXY:
+		result.nextEvidence.responsivePointProxyValue.reset();
+		result.nextEvidence.staticPointProxyValue.reset();
 		break;
 	    case EvidenceAction::RESET_STRUCTURAL_ADMISSION:
 		result.nextEvidence.structuralValue.reset();
@@ -79,6 +80,17 @@ BObolLodAdmissionPlanner::requestCapacityRescan(
 }
 
 BObolLodAdmissionPlan
+BObolLodAdmissionPlanner::acceptStaticPresentationConstraint(
+	const BObolLodAdmissionEvidence &evidence,
+	const BObolLodAdmissionCursor &cursor, size_t budget)
+{
+	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
+	result.nextEvidence.capacityValue.acceptStaticPresentationConstraint(budget);
+	result.nextCursor.reset();
+	return result;
+}
+
+BObolLodAdmissionPlan
 BObolLodAdmissionPlanner::requestRetainedRecovery(
 	const BObolLodAdmissionEvidence &evidence,
 	const BObolLodAdmissionCursor &cursor, size_t budget)
@@ -105,8 +117,17 @@ BObolLodAdmissionPlanner::requestRetainedReallocation(
 	bool preserveCurrentBudget)
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
-	result.nextEvidence.capacityValue.requestRetainedReallocation(
-	    preserveCurrentBudget);
+	const bool requestAccepted = result.nextEvidence.capacityValue.
+	    requestRetainedReallocation(preserveCurrentBudget);
+	/* A retained reallocation is a request for a new complete population
+	 * traversal.  Its evidence latch is consumed only while initializing the
+	 * admission cursor, so carrying an initialized cursor from the preceding
+	 * pass makes the request permanently pending but non-executable.  Reset the
+	 * mechanical cursor whenever this request is accepted.  A weaker request
+	 * cannot displace an already pending presentation reconciliation and must
+	 * leave that transaction untouched. */
+	if (requestAccepted)
+	    result.nextCursor.reset();
 	return result;
 }
 
@@ -183,17 +204,6 @@ BObolLodAdmissionPlanner::recordRetainedQualityFloorMiss(
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
 	result.transitionChanged =
 	    result.nextEvidence.capacityValue.noteRetainedQualityFloorMiss();
-	return result;
-}
-
-BObolLodAdmissionPlan
-BObolLodAdmissionPlanner::rejectRetainedQualityFloor(
-	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor)
-{
-	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
-	result.transitionChanged =
-	    result.nextEvidence.capacityValue.rejectRetainedQualityFloor();
 	return result;
 }
 
@@ -374,7 +384,8 @@ BObolLodAdmissionPlanner::planPointStructuralDistribution(
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
 	result.pointProxyDecision =
-	    result.nextEvidence.pointProxyValue.seedFromStructuralDistribution(
+	    result.nextEvidence.responsivePointProxyValue.
+		seedFromStructuralDistribution(
 		currentThreshold, cumulativeCount, visibleCount,
 		maximumUncollapsedCount);
 	return result;
@@ -383,11 +394,16 @@ BObolLodAdmissionPlanner::planPointStructuralDistribution(
 BObolLodAdmissionPlan
 BObolLodAdmissionPlanner::planPointInterrupted(
 	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor, float currentThreshold,
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodPointCalibrationGoal goal, float currentThreshold,
 	uint64_t renderNanoseconds, float targetFps)
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
-	result.pointProxyDecision = result.nextEvidence.pointProxyValue.interrupted(
+	BObolLodPointProxyEvidence &pointEvidence =
+	    goal == BObolLodPointCalibrationGoal::STATIC ?
+		result.nextEvidence.staticPointProxyValue :
+		result.nextEvidence.responsivePointProxyValue;
+	result.pointProxyDecision = pointEvidence.interrupted(
 	    currentThreshold, renderNanoseconds, targetFps);
 	return result;
 }
@@ -400,7 +416,8 @@ BObolLodAdmissionPlanner::planPointStructuralCoverageBlocked(
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
 	result.pointProxyDecision =
-	    result.nextEvidence.pointProxyValue.structuralCoverageBlocked(
+	    result.nextEvidence.responsivePointProxyValue.
+		structuralCoverageBlocked(
 		currentThreshold, unresolvedStructuralCount);
 	return result;
 }
@@ -408,25 +425,43 @@ BObolLodAdmissionPlanner::planPointStructuralCoverageBlocked(
 BObolLodAdmissionPlan
 BObolLodAdmissionPlanner::planPointCompleted(
 	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor, float currentThreshold,
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodPointCalibrationGoal goal, float currentThreshold,
 	uint64_t renderNanoseconds, float targetFps, bool reusableSample,
+	bool allowCoarsening,
 	size_t unresolvedStructuralCount)
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
-	result.pointProxyDecision = result.nextEvidence.pointProxyValue.completed(
+	BObolLodPointProxyEvidence &pointEvidence =
+	    goal == BObolLodPointCalibrationGoal::STATIC ?
+		result.nextEvidence.staticPointProxyValue :
+		result.nextEvidence.responsivePointProxyValue;
+	result.pointProxyDecision = pointEvidence.completed(
 	    currentThreshold, renderNanoseconds, targetFps, reusableSample,
+	    allowCoarsening,
 	    unresolvedStructuralCount);
 	return result;
+}
+
+bool
+BObolLodAdmissionPlanner::adaptivePointAggregationAllowed(
+	bool meshFirstSceneSafe, bool staticQualityCapacityRejected)
+{
+	return !meshFirstSceneSafe || staticQualityCapacityRejected;
 }
 
 BObolLodAdmissionPlan
 BObolLodAdmissionPlanner::settlePointAtStructuralLimit(
 	const BObolLodAdmissionEvidence &evidence,
-	const BObolLodAdmissionCursor &cursor, float currentThreshold)
+	const BObolLodAdmissionCursor &cursor,
+	BObolLodPointCalibrationGoal goal, float currentThreshold)
 {
 	BObolLodAdmissionPlan result = beginPlan(evidence, cursor);
-	result.nextEvidence.pointProxyValue.settleAtStructuralLimit(
-	    currentThreshold);
+	BObolLodPointProxyEvidence &pointEvidence =
+	    goal == BObolLodPointCalibrationGoal::STATIC ?
+		result.nextEvidence.staticPointProxyValue :
+		result.nextEvidence.responsivePointProxyValue;
+	pointEvidence.settleAtStructuralLimit(currentThreshold);
 	result.pointProxyDecision.threshold = currentThreshold;
 	return result;
 }
@@ -457,16 +492,13 @@ BObolLodAdmissionPlanner::pointStructuralPreloadThreshold(
 }
 
 bool
-BObolLodAdmissionPlanner::pointRelaxationPreloadFitsDeadline(
+BObolLodAdmissionPlanner::pointRelaxationFitsDeadline(
     size_t activeOccurrenceCount, size_t additionalOccurrenceCount,
     uint64_t measuredRenderNanoseconds,
-    uint64_t presentationDeadlineNanoseconds,
-    size_t maximumAdditionalOccurrenceCount)
+    uint64_t presentationDeadlineNanoseconds)
 {
     if (!additionalOccurrenceCount)
 	return true;
-    if (additionalOccurrenceCount > maximumAdditionalOccurrenceCount)
-	return false;
     if (!activeOccurrenceCount || !measuredRenderNanoseconds)
 	return false;
     if (!presentationDeadlineNanoseconds)
@@ -609,13 +641,17 @@ BObolLodAdmissionPlanner::structuralFallbackAdmissionDeferred(
 	!directPreviewAuthorized && !structuralRepairActive;
 }
 
+bool
+BObolLodAdmissionPlanner::structuralCoverageOnly(
+	bool terminalRefinement, bool coverageActive,
+	bool demandRefreshActive, bool directPreviewAuthorized,
+	bool fallbackAdmissionDeferred)
+{
+    return !terminalRefinement &&
+	((coverageActive && !demandRefreshActive &&
+	  !directPreviewAuthorized) || fallbackAdmissionDeferred);
+}
 
-
-    /* A presentation-owned measurement freezes the occurrence population it
-     * is measuring.  An unchanged submission cursor must not run, or count as
-     * a future geometry producer, until that frame completes.  Source and
-     * inventory invalidation are handled before callers apply this gate and
-     * explicitly retire stale capacity evidence. */
 bool
 BObolLodAdmissionPlanner::presentationPausesSubmission(
 	bool discoveryCalibrationPending, bool stableCalibrationPending,
@@ -644,14 +680,33 @@ BObolLodAdmissionPlanner::maySeedPointStructuralDistribution(
 bool
 BObolLodAdmissionPlanner::pointAtMaximumPixelThreshold(float threshold)
 {
-	return BObolLodPointProxyEvidence::atMaximumPixelThreshold(threshold);
+    return BObolLodPointProxyEvidence::atMaximumPixelThreshold(threshold);
+}
+
+float
+BObolLodAdmissionPlanner::pointCalibrationTargetFps(
+	BObolLodPointCalibrationGoal goal, float responsiveTargetFps,
+	float staticTargetFps)
+{
+    return goal == BObolLodPointCalibrationGoal::STATIC ?
+	staticTargetFps : responsiveTargetFps;
+}
+
+uint64_t
+BObolLodAdmissionPlanner::pointCalibrationPresentationDeadline(
+	BObolLodPointCalibrationGoal goal, uint64_t responsiveDeadline,
+	uint64_t staticDeadline)
+{
+    return goal == BObolLodPointCalibrationGoal::STATIC ?
+	staticDeadline : responsiveDeadline;
 }
 
 bool
 BObolLodAdmissionPlanner::pointTerminalReplayRequired(
-	const BObolLodAdmissionEvidence &evidence, float threshold)
+	const BObolLodAdmissionEvidence &evidence,
+	BObolLodPointCalibrationGoal goal, float threshold)
 {
-	return evidence.pointProxy().terminalReplayRequired(threshold);
+	return evidence.pointProxy(goal).terminalReplayRequired(threshold);
 }
 
 bool
@@ -698,6 +753,19 @@ BObolLodAdmissionPlanner::structuralCapacityFrameApplicable(bool exactFrame,
 	    presentationDeadlineNanoseconds > 0;
 }
 
+uint64_t
+BObolLodAdmissionPlanner::structuralRepairPresentationDeadline(
+	bool directMeshScene, uint64_t stableDeadlineNanoseconds,
+	uint64_t prominentDeadlineNanoseconds, uint64_t censusMultiplier)
+{
+	const uint64_t censusDeadline = stableDeadlineNanoseconds > 0 &&
+	    censusMultiplier > UINT64_MAX / stableDeadlineNanoseconds ?
+		UINT64_MAX : stableDeadlineNanoseconds * censusMultiplier;
+	return directMeshScene ?
+	    std::max(censusDeadline, prominentDeadlineNanoseconds) :
+	    censusDeadline;
+}
+
 size_t
 BObolLodAdmissionPlanner::unaggregatableStructuralCount(
 	const std::array<size_t, 7> &cumulativeCount, size_t visibleCount)
@@ -726,11 +794,11 @@ BObolLodAdmissionPlanner::structuralPerOccurrenceReservation(size_t admittedBudg
 
 
     /* noteDeadlineCapacityMiss() records an already strict, view-local upper
-     * bound: it is five percent below the population which missed the hard
-     * deadline.  Marginal recovery has its own throughput safety factor
-     * before reaching this helper.  Applying that factor to this bound again
-     * needlessly discards a second fifth of capacity and leaves prominent
-     * geometry coarse even though a smaller allocation is still admissible. */
+     * bound: it is the immediate predecessor of the candidate which missed
+     * the hard deadline.  Marginal recovery has its own throughput safety
+     * factor before reaching this helper.  Applying another factor to this
+     * exact bound would discard untested capacity and can skip a useful
+     * discrete PoP population. */
 size_t
 BObolLodAdmissionPlanner::capBudgetAtDeadlineCeiling(size_t estimatedBudget,
 	size_t deadlineCapacityCeiling)

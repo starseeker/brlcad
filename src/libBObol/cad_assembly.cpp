@@ -22,6 +22,7 @@
 #include <Obol/cad/SoCADViewState.h>
 
 #include <map>
+#include <new>
 #include <optional>
 #include <vector>
 
@@ -169,18 +170,26 @@ SoBRLCadAssembly::lastStructuralProxyOccurrenceKeysAbovePixels(
     return true;
 }
 
-void
+bool
 SoBRLCadAssembly::reserveCompactPresentationCapacity(
     size_t expectedOccurrences)
 {
     if (!expectedOccurrences)
-	return;
-    this->reserveStreamingCapacity(expectedOccurrences);
-    this->semantics.reserve(expectedOccurrences);
-    this->compactInstancePresentations.reserve(expectedOccurrences);
-    this->compactActivePartReferences.reserve(expectedOccurrences);
-    this->compactPartChannels.reserve(expectedOccurrences);
-    this->compactLodParts.reserve(expectedOccurrences);
+	return true;
+    try {
+	this->reserveStreamingCapacity(expectedOccurrences);
+	this->semantics.reserve(expectedOccurrences);
+	this->compactInstancePresentations.reserve(expectedOccurrences);
+	this->compactActivePartReferences.reserve(expectedOccurrences);
+	this->compactPartChannels.reserve(expectedOccurrences);
+	this->compactLodParts.reserve(expectedOccurrences);
+    } catch (const std::bad_alloc &) {
+	/* Capacity reservation is only an optimization.  Retain every existing
+	 * record and let the controller keep the preceding coherent presentation
+	 * rather than converting memory pressure into process termination. */
+	return false;
+    }
+    return true;
 }
 
 void
