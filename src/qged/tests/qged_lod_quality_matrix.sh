@@ -231,11 +231,11 @@ if [[ -e "$artifact_dir" ]]; then
 fi
 mkdir -p "$artifact_dir"/{cases,caches,events,metrics}
 printf 'status,run,seconds,reason\n' > "$artifact_dir/results.csv"
-printf 'case,backend,mode,view,ssim,phash_hamming,changed_pixel_fraction,silhouette_disagreement,silhouette_disagreement_1px,control_foreground_pixels,lod_faces,lod_render_cost,lod_budget,max_normalized_error,performance_limited,memory_limited,prominent_floor_violations,scene_prominent_floor_violations,structural_boxes,terminal_proxies,point_proxy_threshold,last_render_ms,presented_work_exact,constraint_evidence_mask\n' \
+printf 'case,backend,mode,view,ssim,phash_hamming,changed_pixel_fraction,silhouette_disagreement,silhouette_disagreement_1px,control_foreground_pixels,lod_faces,lod_render_cost,lod_budget,presented_max_normalized_error,performance_limited,memory_limited,prominent_floor_violations,scene_prominent_floor_violations,structural_boxes,terminal_proxies,point_proxy_threshold,last_render_ms,presented_work_exact,constraint_evidence_mask,allocation_max_normalized_error\n' \
     > "$artifact_dir/metrics.csv"
 printf 'case,backend,mode,view,feature,crop,ssim,phash_hamming,changed_pixel_fraction,silhouette_disagreement,silhouette_disagreement_1px,control_foreground_pixels\n' \
     > "$artifact_dir/feature_metrics.csv"
-printf 'case,backend,mode,view,faces,lines,render_cost,budget,max_normalized_error,max_projected_error_pixels,max_visual_footprint_pixels,performance_limited,memory_limited,prominent_candidates,prominent_payloads,prominent_floor_violations,scene_prominent_floor_violations,visual_importance_debt,scene_visual_importance_debt,structural_boxes,terminal_proxies,point_proxy_threshold,subpixel_occurrences,subpixel_points,last_render_ms,smoothed_render_ms,presented_work_exact,constraint_evidence_mask,resident_mesh_bytes,resident_mesh_limit_bytes,gpu_live_bytes,gpu_capacity_bytes,visible_targets,presented_occurrences,lod_payloads\n' \
+printf 'case,backend,mode,view,faces,lines,render_cost,budget,presented_max_normalized_error,max_projected_error_pixels,max_visual_footprint_pixels,performance_limited,memory_limited,prominent_candidates,prominent_payloads,prominent_floor_violations,scene_prominent_floor_violations,visual_importance_debt,scene_visual_importance_debt,structural_boxes,terminal_proxies,point_proxy_threshold,subpixel_occurrences,subpixel_points,last_render_ms,smoothed_render_ms,presented_work_exact,constraint_evidence_mask,resident_mesh_bytes,resident_mesh_limit_bytes,gpu_live_bytes,gpu_capacity_bytes,visible_targets,presented_occurrences,lod_payloads,allocation_max_normalized_error\n' \
     > "$artifact_dir/managed_metrics.csv"
 printf 'case,backend,mode,view,source_path,source_name,occurrence_key,active_cut,presentation_cut,resident_cut,requested_cut,projected_diameter_pixels,projected_area_pixels,projected_perimeter_pixels,visual_footprint_pixels,target_error_pixels,projected_error_pixels,normalized_error,prominent,quality_floor_violation,faces,points\n' \
     > "$artifact_dir/managed_payload_metrics.csv"
@@ -885,12 +885,17 @@ compare_pair()
     local lod_sample
     lod_sample="$(checkpoint_sample "$lod_out/report.json" "$view")" || return 1
     local telemetry
+    # The image contract is the error of the exact presented cuts.  The
+    # retained allocator's maximum describes its candidate plan and can be
+    # coarser than an already resident cut deliberately preserved across a
+    # pose-only camera change.  Keep that planning value as a diagnostic, but
+    # never use it to reject a demonstrably richer framebuffer.
     telemetry="$(jq -r '[
 	(.active_lod_scene_faces // 0),
 	(.active_lod_scene_render_cost // 0),
 	(.lod_scene_render_cost_budget // 0),
-	(.lod_scene_maximum_normalized_visual_error //
-	 .lod_max_cad_normalized_error // 0),
+	(.lod_max_cad_normalized_error //
+	 .lod_scene_maximum_normalized_visual_error // 0),
 	(.lod_convergence_performance_limited // false),
 	(.lod_convergence_memory_limited // false),
 	(.lod_prominent_cad_quality_floor_violations // 0),
@@ -900,7 +905,8 @@ compare_pair()
 	(.cad_point_proxy_pixel_threshold_max // 1),
 	(.last_render_ms // 0),
 	(.presented_cad_work_exact // false),
-	(.lod_convergence_constraint_evidence_mask // 0)] | @csv' \
+	(.lod_convergence_constraint_evidence_mask // 0),
+	(.lod_scene_maximum_normalized_visual_error // 0)] | @csv' \
 	<<< "$lod_sample")" ||
 	return 1
 
@@ -923,8 +929,8 @@ record_managed_metrics()
 	(.presented_cad_lines // 0),
 	(.active_lod_scene_render_cost // 0),
 	(.lod_scene_render_cost_budget // 0),
-	(.lod_scene_maximum_normalized_visual_error //
-	 .lod_max_cad_normalized_error // 0),
+	(.lod_max_cad_normalized_error //
+	 .lod_scene_maximum_normalized_visual_error // 0),
 	(.lod_max_cad_projected_error_pixels // 0),
 	(.lod_max_cad_visual_footprint_pixels // 0),
 	(.lod_convergence_performance_limited // false),
@@ -950,7 +956,8 @@ record_managed_metrics()
 	(.lod_gpu_atlas_configured_capacity_bytes // 0),
 	(.lod_convergence_visible_targets // 0),
 	(.presented_cad_occurrences // 0),
-	(.active_lod_cad_payloads // 0)] | @csv' <<< "$sample")" ||
+	(.active_lod_cad_payloads // 0),
+	(.lod_scene_maximum_normalized_visual_error // 0)] | @csv' <<< "$sample")" ||
 	return 1
     printf '%s,%s,%s,%s,%s\n' "$case_name" "$backend" "$mode" \
 	"$view" "$telemetry" >> "$artifact_dir/managed_metrics.csv"

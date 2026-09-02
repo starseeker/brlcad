@@ -401,6 +401,16 @@ public:
 	return this->modeValue == Mode::RETAINED_ADMISSION;
     }
 
+    /* A retained allocation is one complete scene transaction.  Temporary
+     * loss of its eligibility predicate while its bounded cursor is applying
+     * cuts must not reinterpret the remaining cursor as an ordinary pass.
+     * Semantic invalidation retires the pass itself; an idle intent may
+     * therefore follow the current request immediately. */
+    bool retainedAdmissionForPass(bool requested, bool passActive) const
+    {
+	return requested || (passActive && this->retainedAdmission());
+    }
+
     bool refreshMissing(void) const
     {
 	return this->refreshMissingValue;

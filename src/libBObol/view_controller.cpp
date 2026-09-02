@@ -2618,19 +2618,24 @@ BObolViewController::submitLodRequests(BObolLodService *service,
      * O(scene) work and makes the HUD alternate BALANCING/REFINING.  Continue
      * the bounded delta/coverage path while the producer is active, then
      * allocate once on its terminal inventory edge. */
-	const bool beginRetainedAdmission =
+	const bool retainedAdmissionRequested =
 	    budget.retainedAdmission && retainedPopulationSettled &&
 	    !this->d->lodCoveragePolicy.demandCensusRequired();
+	const bool retainAdmissionMode =
+	    this->d->lodSubmissionIntent.retainedAdmissionForPass(
+		retainedAdmissionRequested,
+		this->d->lodSubmissionPass.active());
 	/* A sparse unsatisfied-refinement plan is not a retained-recovery plan.
 	 * Reusing it lets its first subset consume the complete upgrade allowance;
 	 * the later all-occurrence pass then sees zero and normalizes everything
-	 * else to minimum.  Give the mode transition an explicit plan epoch and
-	 * restart at the first source. */
-	if (beginRetainedAdmission &&
+	 * else to minimum.  Give an idle mode transition an explicit plan epoch
+	 * and restart at the first source.  Once that retained cursor starts, its
+	 * mode is immutable until completion or explicit semantic invalidation. */
+	if (retainAdmissionMode &&
 	    !this->d->lodSubmissionIntent.retainedAdmission()) {
 	    this->d->rewindLodSubmissionCursor();
 	    this->d->lodSubmissionIntent.setRetainedAdmission(true);
-	} else if (!beginRetainedAdmission &&
+	} else if (!retainAdmissionMode &&
 	    this->d->lodSubmissionIntent.retainedAdmission()) {
 	    this->d->rewindLodSubmissionCursor();
 	    this->d->lodSubmissionIntent.setRetainedAdmission(false);

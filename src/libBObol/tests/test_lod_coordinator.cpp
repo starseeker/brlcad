@@ -368,7 +368,9 @@ test_submission_intent(void)
     intent.setRetainedAdmission(true);
     if (intent.mode() != Intent::Mode::RETAINED_ADMISSION ||
 	!intent.retainedAdmission() || intent.refreshMissing() ||
-	!intent.resetExisting()) {
+	!intent.resetExisting() ||
+	!intent.retainedAdmissionForPass(false, true) ||
+	intent.retainedAdmissionForPass(false, false)) {
 	std::fprintf(stderr, "FAIL: configured submission intent\n");
 	return 1;
     }
@@ -376,7 +378,9 @@ test_submission_intent(void)
     intent.reset();
     if (intent.mode() != Intent::Mode::ORDINARY ||
 	intent.retainedAdmission() || !intent.refreshMissing() ||
-	intent.resetExisting()) {
+	intent.resetExisting() ||
+	!intent.retainedAdmissionForPass(true, false) ||
+	intent.retainedAdmissionForPass(false, true)) {
 	std::fprintf(stderr, "FAIL: reset submission intent\n");
 	return 1;
     }

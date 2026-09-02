@@ -34,9 +34,13 @@ progress-HUD bands, then records:
 - exact foreground-mask disagreement and disagreement after allowing a
   one-physical-pixel boundary displacement, both relative to the union of the
   silhouettes;
-- presented faces, render cost and budget, maximum normalized visual error,
-  prominent-floor debt, point threshold, structural boxes, exact-work status,
-  render time, and the typed performance/memory constraint witnesses.
+- presented faces, render cost and budget, maximum normalized visual error of
+  the exact presented cuts, prominent-floor debt, point threshold, structural
+  boxes, exact-work status, render time, and the typed performance/memory
+  constraint witnesses.  The allocator candidate's maximum normalized error
+  is retained in a separate column.  A pose-only view change may preserve a
+  richer resident cut than the allocator's currently affordable candidate;
+  image acceptance measures the framebuffer, not that unused coarser plan.
 
 The original uncropped images and both foreground masks remain with the test
 artifact.  SSIM is the primary whole-image signal, but it is never a topology
@@ -226,6 +230,19 @@ Boy comparisons preserve the mixed-size and named prominent features.  Both
 managed high-cardinality searches reach their exact finite 40/40 capacity
 rank and terminate with owner, obligation, violation, structural-box,
 terminal-proxy, and prominent-floor counts all zero.
+
+The current-binary Lucy audit at
+`/tmp/qged-lod-quality-current-lucy-20260901` and
+`/tmp/qged-lod-quality-current-lucy-osmesa-presented-20260901` records
+103/140-second full-detail controls versus 36/25-second managed System-GL and
+warm OSMesa rows.  Across both backends, exact silhouette disagreement is
+0.31--1.10 percent and becomes zero at a one-pixel tolerance; inspection shows
+no wing, drapery, hand, base, or spatial-page hole.  The OSMesa `ae35` view
+also exercises pose continuity: cut 24 remains presented at 0.712 normalized
+error even though the new allocator candidate is the coarser cut 23 at 1.103.
+Qualification now records both values and correctly applies the presented
+value to the captured-image contract.  The close and return views remain
+explicitly constrained when their presented error exceeds one.
 
 `/tmp/qged-lod-quality-hubble-contract-final-20260901` supersedes the Hubble
 rows after the terminal-handoff audit.  Modes 0 and 4 pass on both renderers;

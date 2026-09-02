@@ -28,6 +28,12 @@ advisory review signal because simplified normals may change illumination even
 when the screen-space geometry and silhouette are correct.  A low advisory
 score cannot hide a topology failure, and it cannot by itself reject a
 resource-constrained but geometrically valid view.
+The error contract uses `presented_max_normalized_error`, measured from the
+exact cuts in the captured framebuffer.  `allocation_max_normalized_error` is
+retained separately as planning evidence: after a pose-only change the
+allocator may describe a coarser affordable candidate while the renderer
+deliberately preserves a richer resident cut.  A planning candidate cannot
+make that demonstrably richer exact presentation fail its image contract.
 The runner records one SHA-256 digest for each distinct database and captures
 device, inode, size, mtime, and ctime around every rendering process.  It
 rehashes only if that metadata changes, and a LoD/control pair is comparable

@@ -440,6 +440,22 @@ the current exact frame with its current budget and protected-quality result;
 raw work from an earlier view is neither a fidelity ordering nor a valid
 capacity predicate after view-local clustering and recalibration.
 
+### A candidate allocation is not the captured framebuffer
+
+After a pose-only Lucy change, OSMesa correctly retained resident cut 24 at
+0.712 normalized presented error.  The new allocator plan described the
+coarser affordable cut 23 at 1.103.  The visual-quality harness preferred that
+planning maximum and rejected an exact framebuffer which was demonstrably
+richer than the unused candidate.
+
+Rule: framebuffer qualification uses error recomputed from the exact presented
+cuts and requires an exact completed-work record.  Keep the allocator's
+maximum as separate planning evidence for capacity and convergence audits.
+Never use a candidate, requested cut, resident suffix, or stale certificate as
+a proxy for pixels which the renderer actually presented.  Conversely, a
+coarser exact framebuffer cannot borrow the error of a richer candidate; the
+two values remain independently named.
+
 ### A first static frame is not necessarily steady-state capacity evidence
 
 Lucy could complete an approximately 95 ms static frame after a first attempt
@@ -1219,6 +1235,34 @@ commits because the older population may already own a plan under the
 selection revision.  Preserve this boundary with the focused coordinator
 test, `ObolCapacitySearch.tla` plan-revision invariant, and the qged control-
 trace uniqueness check.
+
+### A bounded retained cursor keeps its allocation mode until retirement
+
+A timing-perturbed 150k OSMesa replay committed allocation plan 1 and then
+applied that plan over several bounded source windows.  Cut application
+temporarily made the generic population-settled predicate false.  The
+controller consequently changed the still-active cursor back to ordinary
+admission and discarded its retained allocation certificate; plan 2 was then
+committed for the same inventory, availability, visibility, view, policy, and
+capacity revision tuple.  The allocator and per-occurrence cut publication
+were deterministic—the cursor-mode transition had destroyed their owner.
+
+Rule: the eligibility predicate may start a retained pass, but it may not
+retire one.  A retained pass keeps its mode until the bounded cursor completes
+or an explicit semantic invalidation retires that cursor.  Frame publication,
+resident-demand bookkeeping, and intermediate population-settlement changes
+may pause the pass but cannot reinterpret its unconsumed tail.  This is the
+production expression of the complete-population transaction in contract rule
+20.  `BObolLodSubmissionIntent::retainedAdmissionForPass()` centralizes that
+edge, and the coordinator test covers both active-pass retention and idle-pass
+retirement.
+
+Post-fix warm OSMesa replays at
+`/tmp/qged-lod-{50k,150k}-retained-pass-pin-20260901` pass the external
+six-domain trace in 70 and 157 seconds.  Their plan serial remains unchanged
+through every bounded application window; each later plan is paired with a
+new availability or capacity revision.  Neither replay leaves a qged process
+behind.
 
 A later Hubble OSMesa hierarchy replay exposed the adjacent implementation
 boundary.  Selection itself retired its exact presentation frame, but the
