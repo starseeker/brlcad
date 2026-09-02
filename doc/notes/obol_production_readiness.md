@@ -8,6 +8,10 @@ model, renderer, cache state, event script, viewport/DPR, report, images, and
 performance evidence.  Historical measurements belong in
 `libbobol_engineering_lessons.md`, not here.
 
+TLC counts retained in evidence narratives are dated snapshots.  The sole
+current formal-suite result and count source is
+`tla/baselines/tlc-2.19.json`.
+
 ## Current evidence snapshot
 
 | Area | Current evidence | Release status |

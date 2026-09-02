@@ -1,0 +1,796 @@
+{
+  "schemaVersion": 2,
+  "toolchain": {
+    "release": "1.7.4",
+    "tlcVersion": "2.19",
+    "revision": "5a47802",
+    "sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+    "minimumJava": 11
+  },
+  "semanticAudit": {
+    "environmentActions": [
+      "BeginGesture", "BeginInput", "CameraChange", "CameraChanged",
+      "Cancel", "ChangeDemand", "ChangePolicy", "ChangeRoute",
+      "ChangeSemanticPopulation", "ChangeView",
+      "ChangeViewOrPresentationControls", "ChangeVisibility", "CloseConsumer",
+      "CloseCoverage", "CloseInput", "CloseProviders", "EndGesture", "EndInput",
+      "EndInteraction", "JoinConsumer", "MoveDemand", "PublishDemand",
+      "RegisterProvider", "ReplacePopulation", "RequestImportanceCensus",
+      "SemanticMutation", "SourceIdentityChange", "StageInvalid",
+      "StageUnavailable", "StageValid", "TogglePolicy"
+    ],
+    "deadlockChecked": [
+      "ObolAssetPublicationComposition", "ObolCadFrameComposition",
+      "ObolCadMutation", "ObolPointCalibrationDomains"
+    ],
+    "deadlockTerminalPredicates": {
+      "ObolControlRefinement": "Terminal",
+      "ObolProgressivePipeline": "Terminal",
+      "ObolActiveProducerDemand": "Terminal",
+      "ObolLiveSpatialPublication": "Stable",
+      "ObolLodColdPreview": "Stable",
+      "ObolOccurrenceControl": "Terminal",
+      "ObolResidentCompaction": "EventuallyRetireFinalWork endpoint",
+      "ObolResultAuthentication": "Terminal",
+      "ObolSharedAssetLease": "Terminal",
+      "ObolSpatialProducer": "phase in complete, constrained, or cancelled",
+      "ObolDeadlineOwnership": "EventuallyTerminal endpoint",
+      "ObolDeferredAutoview": "DeferredFitEventuallyTerminates endpoint",
+      "ObolHostWork": "EventuallyQuiescent endpoint",
+      "ObolInteractionSession": "quiet with no finite handoff",
+      "ObolLodPolicyDisable": "final disabled quiescence",
+      "ObolQuietSuccessor": "phase = terminal",
+      "ObolSubmissionPass": "idle with no pending pass",
+      "ObolCadTimingEvidence": "terminal",
+      "ObolCapacityPresentationHandoff": "phase = terminal",
+      "ObolCapacitySearch": "phase in terminal or unmeasurable",
+      "ObolCompletedPassOwnership": "phase = terminal",
+      "ObolLodAdmission": "not planning",
+      "ObolLodArbitration": "input closed and allocation not pending",
+      "ObolLodConvergence": "Settled",
+      "ObolPointQualityOwnership": "terminal",
+      "ObolPointTerminalEvidence": "Terminal",
+      "ObolResidentGrowth": "phase = terminal",
+      "ObolRetainedAllocationPrefix": "both cursors done",
+      "ObolStaticQuality": "Terminal",
+      "ObolStructuralFrontierOwnership": "terminal",
+      "ObolCadViewPublication": "preparationState in TerminalStates",
+      "ObolPresentationPreparation": "state in TerminalStates",
+      "ObolRetainedAllocationPresentation": "phase = realized",
+      "ObolSemanticPresentation": "Ready",
+      "ObolSparsePlanIdentity": "phase in patched or done",
+      "ObolControlLifecycleComposition": "Terminal",
+      "ObolLodComposition": "Terminal",
+      "ObolTerminalQualityOrdering": "Terminal",
+      "ObolTerminalConvergenceComposition": "Terminal"
+    },
+    "localPhaseMeanings": {
+      "ObolInteractionSession": "interaction-session phase",
+      "ObolQuietSuccessor": "quiet-successor handoff phase",
+      "ObolSpatialProducer": "durable spatial-producer phase",
+      "ObolCapacitySearch": "bounded capacity-search phase",
+      "ObolCapacityPresentationHandoff": "capacity-result presentation phase",
+      "ObolCompletedPassOwnership": "completed-pass disposition phase",
+      "ObolPointQualityOwnership": "point-quality ownership phase",
+      "ObolPointTerminalEvidence": "point terminal-evidence phase",
+      "ObolResidentGrowth": "resident-growth/drain transaction phase",
+      "ObolStaticQuality": "static-quality trial phase",
+      "ObolSparsePlanIdentity": "sparse retained-plan patch phase",
+      "ObolRetainedAllocationPresentation": "retained-allocation presentation phase",
+      "ObolTerminalQualityOrdering": "terminal-quality policy phase",
+      "ObolTerminalConvergenceComposition": "terminal-convergence work phase"
+    },
+    "requiredActions": {
+      "ObolControlRefinement": ["DischargeOwner"],
+      "ObolProgressivePipeline": ["ChangeVisibility", "AbortStalePlan"],
+      "ObolLodArbitration": ["Complete", "Constrain"],
+      "ObolLodConvergence": ["RetireEmptySubmission"],
+      "ObolOccurrenceControl": [
+        "CompleteLoadSuccess", "CompleteLoadRetryable",
+        "CompleteLoadTerminalFailure", "RequestRepair", "SourceIdentityChange"
+      ],
+      "ObolResultAuthentication": [
+        "SubmitCurrent", "CompleteResult", "ApplyCurrentResult",
+        "RejectSupersededResult", "ReplacePopulation", "ChangeDemand",
+        "ChangeRoute"
+      ],
+      "ObolSharedAssetLease": [
+        "CompleteSharedBuild", "PublishTo", "CloseConsumer",
+        "JoinConsumer", "CancelUnownedBuild"
+      ],
+      "ObolInteractionSession": ["EndGesture", "CloseInput"],
+      "ObolPointTerminalEvidence": [
+        "RejectFinerCandidate", "ObserveUnchangedCensus",
+        "ChangeSemanticPopulation", "Finish"
+      ],
+      "ObolSpatialProducer": ["BuildLeaf", "PublishDescriptor", "Cancel"],
+      "ObolCadMutation": [
+        "StageInvalid", "StageUnavailable", "RejectInvalid",
+        "RejectUnavailable", "CloseCommit"
+      ],
+      "ObolAssetPublicationComposition": [
+        "FinalizeAsset", "PublishFinal", "Constrain", "Fail",
+        "RestartConstrained", "RestartFailed", "Cancel"
+      ]
+    }
+  },
+  "compositionContracts": {
+    "ObolLodComposition": {
+      "assumptions": [
+        "ObolLodAdmission.BudgetSafety",
+        "ObolLodArbitration.CoveragePriority",
+        "ObolCompletedPassOwnership.EffectHasExclusiveOwner",
+        "ObolResidentGrowth.DrainCompletionHasTypedSuccessor",
+        "ObolRetainedAllocationPrefix.NestedTerminalPopulations",
+        "ObolRetainedAllocationPresentation.ChangedCommitHasProducer",
+        "ObolCapacitySearch.TerminalCertificate",
+        "ObolCapacityPresentationHandoff.TerminalCertificateIsExact",
+        "ObolStructuralFrontierOwnership.OwnerMatchesFrontier",
+        "ObolPointQualityOwnership.PointWaitsForExistingCapacity",
+        "ObolStaticQuality.CompleteFrameIsCommitAuthority",
+        "ObolLodConvergence.SingleProgressOwner",
+        "ObolCadTimingEvidence.SampleIsCoherent",
+        "ObolOccurrenceControl.NoFalseStructuralObligation"
+      ],
+      "guarantees": [
+        "ObolLodComposition.BudgetSafety",
+        "ObolLodComposition.CapacitySampleRequiresExactPopulation",
+        "ObolLodComposition.TerminalIsExactAndQuiescent",
+        "ObolLodComposition.EventuallyTerminal"
+      ]
+    },
+    "ObolTerminalConvergenceComposition": {
+      "assumptions": [
+        "ObolSubmissionPass.AllocationRequiresExactVisibilityPresentation",
+        "ObolPresentationPreparation.CompletedWorkIsFinite",
+        "ObolRetainedAllocationPresentation.RealizedAllocationWasPresented",
+        "ObolCapacitySearch.TerminalCertificate",
+        "ObolCapacityPresentationHandoff.TerminalDoesNotReopen",
+        "ObolStaticQuality.TerminalIsQuiescent",
+        "ObolResidentCompaction.StaleWorkCannotCommit",
+        "ObolTerminalQualityOrdering.TerminalIsQuiescent"
+      ],
+      "guarantees": [
+        "ObolTerminalConvergenceComposition.ExactTerminalPresentation",
+        "ObolTerminalConvergenceComposition.PresentationHasOneCurrentPlan",
+        "ObolTerminalConvergenceComposition.CompactionDoesNotReopenForeground",
+        "ObolTerminalConvergenceComposition.EventuallyTerminal"
+      ]
+    },
+    "ObolControlLifecycleComposition": {
+      "assumptions": [
+        "ObolHostWork.PendingWorkHasWitness",
+        "ObolInteractionSession.FiniteHandoffHasProgressWitness",
+        "ObolLodPolicyDisable.DisabledOwnsNoAutomaticWork",
+        "ObolDeadlineOwnership.ActiveStateHasOwner",
+        "ObolQuietSuccessor.AtMostOneSuccessor",
+        "ObolSubmissionPass.DemandHasProducer",
+        "ObolDeferredAutoview.PendingFitHasLivenessWitness",
+        "ObolSemanticPresentation.OwnedSuccessorNeedsNoRecovery"
+      ],
+      "guarantees": [
+        "ObolControlLifecycleComposition.PumpMatchesStandingWork",
+        "ObolControlLifecycleComposition.DeadlineMissHasRecoveryOwner",
+        "ObolControlLifecycleComposition.TerminalIsCurrentAndQuiescent",
+        "ObolControlLifecycleComposition.EventuallySettlesAfterInputsClose"
+      ]
+    },
+    "ObolAssetPublicationComposition": {
+      "assumptions": [
+        "ObolActiveProducerDemand.SupersededResultIsNotFailure",
+        "ObolResultAuthentication.AuthenticatedResultIsCurrent",
+        "ObolSharedAssetLease.SurvivingConsumerPreventsCancellation",
+        "ObolLodColdPreview.UncertifiedSampleRetainsOverview",
+        "ObolSpatialProducer.AtomicDescriptor",
+        "ObolLiveSpatialPublication.PagesAreCompletedBeforePublication",
+        "ObolResidentCompaction.CompletedResultIsCertified",
+        "ObolOccurrenceControl.RegisteredPartSemantic",
+        "ObolOccurrenceControl.TerminalFailureOwnsNoWork"
+      ],
+      "guarantees": [
+        "ObolAssetPublicationComposition.ReadyBeforePublication",
+        "ObolAssetPublicationComposition.CacheRequiresCompleteAsset",
+        "ObolAssetPublicationComposition.CoverageRetiresOnlyForFinalGeometry",
+        "ObolAssetPublicationComposition.TypedOutcomeIsExclusive",
+        "ObolAssetPublicationComposition.EventuallyTerminalAfterInputCloses"
+      ]
+    },
+    "ObolCadFrameComposition": {
+      "assumptions": [
+        "ObolCadMutation.PublishedSceneWasNotified",
+        "ObolCadViewPublication.PublishedWorkIsStamped",
+        "ObolPresentationPreparation.TargetIsRevisionBound",
+        "ObolSemanticPresentation.StaleFrameCannotCommit",
+        "ObolSparsePlanIdentity.OneActiveSlotPerIdentity"
+      ],
+      "guarantees": [
+        "ObolCadFrameComposition.OpenMutationOwnsFiniteWork",
+        "ObolCadFrameComposition.NoUnpreparedCurrentCommit",
+        "ObolCadFrameComposition.ExactPresentationHasSuccessor",
+        "ObolCadFrameComposition.EventuallyTerminalAfterInputCloses"
+      ]
+    },
+    "ObolTerminalQualityOrdering": {
+      "assumptions": [
+        "ObolStructuralFrontierOwnership.OwnerMatchesFrontier",
+        "ObolPointQualityOwnership.PointWaitsForExistingCapacity",
+        "ObolPointCalibrationDomains.DeadlineBoundToEvidenceDomain",
+        "ObolPointTerminalEvidence.ConsumedRejectionHasWitness",
+        "ObolStaticQuality.TerminalCeilingIsPolicy",
+        "ObolCapacityPresentationHandoff.TerminalCertificateIsExact"
+      ],
+      "guarantees": [
+        "ObolTerminalQualityOrdering.StructuralDemandPrecedesQuality",
+        "ObolTerminalQualityOrdering.PointDemandPrecedesNewCapacity",
+        "ObolTerminalQualityOrdering.ReadyHasNoQualityDebt",
+        "ObolTerminalQualityOrdering.EventuallyTerminal"
+      ]
+    }
+  },
+  "models": [
+    {
+      "module": "ObolProgressivePipeline",
+      "tier": "canonical",
+      "domain": "control",
+      "path": "canonical/ObolProgressivePipeline.tla",
+      "config": "canonical/ObolProgressivePipeline.cfg",
+      "flows": ["canonical", "progressive", "terminal", "lifecycle", "asset-publication", "cad-frame", "terminal-quality"],
+      "parents": [],
+      "components": ["ObolControlRefinement", "ObolLodComposition", "ObolTerminalConvergenceComposition", "ObolControlLifecycleComposition", "ObolAssetPublicationComposition", "ObolCadFrameComposition", "ObolTerminalQualityOrdering"],
+      "productionOwners": ["BObolLodControl", "BObolViewController"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/qged/tests/test_lod_control_trace.sh"],
+      "runtimeClass": "large"
+    },
+    {
+      "module": "ObolControlRefinement",
+      "tier": "canonical",
+      "domain": "refinement",
+      "path": "canonical/ObolControlRefinement.tla",
+      "config": "canonical/ObolControlRefinement.cfg",
+      "flows": ["canonical"],
+      "parents": ["ObolProgressivePipeline"],
+      "components": [],
+      "productionOwners": ["BObolLodControlRefinement"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/qged/tests/test_lod_control_trace.sh"],
+      "runtimeClass": "large"
+    },
+
+    {
+      "module": "ObolLodComposition",
+      "tier": "composition",
+      "domain": "progressive",
+      "path": "compositions/progressive/ObolLodComposition.tla",
+      "config": "compositions/progressive/ObolLodComposition.cfg",
+      "flows": ["progressive"],
+      "parents": ["ObolProgressivePipeline"],
+      "components": ["ObolLodAdmission", "ObolLodArbitration", "ObolCompletedPassOwnership", "ObolResidentGrowth", "ObolRetainedAllocationPrefix", "ObolRetainedAllocationPresentation", "ObolCapacitySearch", "ObolCapacityPresentationHandoff", "ObolStructuralFrontierOwnership", "ObolPointQualityOwnership", "ObolStaticQuality", "ObolLodConvergence", "ObolCadTimingEvidence", "ObolOccurrenceControl"],
+      "productionOwners": ["BObolLodAdmissionPlanner", "BObolViewController"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_retained_allocation_oracle.cpp"],
+      "runtimeClass": "medium"
+    },
+    {
+      "module": "ObolTerminalConvergenceComposition",
+      "tier": "composition",
+      "domain": "terminal",
+      "path": "compositions/terminal/ObolTerminalConvergenceComposition.tla",
+      "config": "compositions/terminal/ObolTerminalConvergenceComposition.cfg",
+      "flows": ["terminal"],
+      "parents": ["ObolProgressivePipeline"],
+      "components": ["ObolSubmissionPass", "ObolPresentationPreparation", "ObolRetainedAllocationPresentation", "ObolCapacitySearch", "ObolCapacityPresentationHandoff", "ObolStaticQuality", "ObolResidentCompaction", "ObolTerminalQualityOrdering"],
+      "productionOwners": ["BObolLodPlanningObligations", "BObolLodPresentationPolicy"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_render.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolControlLifecycleComposition",
+      "tier": "composition",
+      "domain": "lifecycle",
+      "path": "compositions/lifecycle/ObolControlLifecycleComposition.tla",
+      "config": "compositions/lifecycle/ObolControlLifecycleComposition.cfg",
+      "flows": ["lifecycle"],
+      "parents": ["ObolProgressivePipeline"],
+      "components": ["ObolHostWork", "ObolInteractionSession", "ObolLodPolicyDisable", "ObolDeadlineOwnership", "ObolQuietSuccessor", "ObolSubmissionPass", "ObolDeferredAutoview", "ObolSemanticPresentation"],
+      "productionOwners": ["BObolViewController", "BObolWindowHost"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_window_host.cpp"],
+      "runtimeClass": "large"
+    },
+    {
+      "module": "ObolAssetPublicationComposition",
+      "tier": "composition",
+      "domain": "asset-publication",
+      "path": "compositions/asset-publication/ObolAssetPublicationComposition.tla",
+      "config": "compositions/asset-publication/ObolAssetPublicationComposition.cfg",
+      "flows": ["asset-publication"],
+      "parents": ["ObolProgressivePipeline"],
+      "components": ["ObolActiveProducerDemand", "ObolResultAuthentication", "ObolSharedAssetLease", "ObolLodColdPreview", "ObolSpatialProducer", "ObolLiveSpatialPublication", "ObolResidentCompaction", "ObolOccurrenceControl"],
+      "productionOwners": ["BObolLodService", "BObolViewLodState", "BObolMeshLodCache"],
+      "tests": ["src/libBObol/tests/test_lod_service.cpp", "src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolCadFrameComposition",
+      "tier": "composition",
+      "domain": "cad-frame",
+      "path": "compositions/cad-frame/ObolCadFrameComposition.tla",
+      "config": "compositions/cad-frame/ObolCadFrameComposition.cfg",
+      "flows": ["cad-frame"],
+      "parents": ["ObolProgressivePipeline"],
+      "components": ["ObolCadMutation", "ObolCadViewPublication", "ObolPresentationPreparation", "ObolSemanticPresentation", "ObolSparsePlanIdentity"],
+      "productionOwners": ["CadSceneMutation", "SoCADAssembly", "BObolViewAttachment"],
+      "tests": ["src/libBObol/tests/test_render.cpp", "src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolTerminalQualityOrdering",
+      "tier": "composition",
+      "domain": "terminal-quality",
+      "path": "compositions/terminal-quality/ObolTerminalQualityOrdering.tla",
+      "config": "compositions/terminal-quality/ObolTerminalQualityOrdering.cfg",
+      "flows": ["terminal-quality", "terminal"],
+      "parents": ["ObolProgressivePipeline", "ObolTerminalConvergenceComposition"],
+      "components": ["ObolStructuralFrontierOwnership", "ObolPointQualityOwnership", "ObolPointCalibrationDomains", "ObolPointTerminalEvidence", "ObolStaticQuality", "ObolCapacityPresentationHandoff"],
+      "productionOwners": ["BObolLodTerminalQualityReducer"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+
+    {
+      "module": "ObolHostWork",
+      "tier": "component",
+      "domain": "lifecycle",
+      "path": "components/lifecycle/ObolHostWork.tla",
+      "config": "components/lifecycle/ObolHostWork.cfg",
+      "flows": ["lifecycle"],
+      "parents": ["ObolControlLifecycleComposition"],
+      "components": [],
+      "productionOwners": ["BObolViewController", "BObolWindowHost"],
+      "tests": ["src/libBObol/tests/test_window_host.cpp", "src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "medium"
+    },
+    {
+      "module": "ObolInteractionSession",
+      "tier": "component",
+      "domain": "lifecycle",
+      "path": "components/lifecycle/ObolInteractionSession.tla",
+      "config": "components/lifecycle/ObolInteractionSession.cfg",
+      "flows": ["lifecycle"],
+      "parents": ["ObolControlLifecycleComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodInteractionSession"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolLodPolicyDisable",
+      "tier": "component",
+      "domain": "lifecycle",
+      "path": "components/lifecycle/ObolLodPolicyDisable.tla",
+      "config": "components/lifecycle/ObolLodPolicyDisable.cfg",
+      "flows": ["lifecycle"],
+      "parents": ["ObolControlLifecycleComposition"],
+      "components": [],
+      "productionOwners": ["BObolViewController", "BObolLodCoordinator"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "large"
+    },
+    {
+      "module": "ObolDeadlineOwnership",
+      "tier": "component",
+      "domain": "lifecycle",
+      "path": "components/lifecycle/ObolDeadlineOwnership.tla",
+      "config": "components/lifecycle/ObolDeadlineOwnership.cfg",
+      "flows": ["lifecycle", "terminal"],
+      "parents": ["ObolControlLifecycleComposition"],
+      "components": [],
+      "productionOwners": ["BObolViewController"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolQuietSuccessor",
+      "tier": "component",
+      "domain": "lifecycle",
+      "path": "components/lifecycle/ObolQuietSuccessor.tla",
+      "config": "components/lifecycle/ObolQuietSuccessor.cfg",
+      "flows": ["lifecycle", "terminal-quality"],
+      "parents": ["ObolControlLifecycleComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodPresentationPolicy"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolSubmissionPass",
+      "tier": "component",
+      "domain": "lifecycle",
+      "path": "components/lifecycle/ObolSubmissionPass.tla",
+      "config": "components/lifecycle/ObolSubmissionPass.cfg",
+      "flows": ["lifecycle", "terminal"],
+      "parents": ["ObolControlLifecycleComposition", "ObolTerminalConvergenceComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodSubmissionPass", "BObolLodPlanningObligations"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolDeferredAutoview",
+      "tier": "component",
+      "domain": "lifecycle",
+      "path": "components/lifecycle/ObolDeferredAutoview.tla",
+      "config": "components/lifecycle/ObolDeferredAutoview.cfg",
+      "flows": ["lifecycle"],
+      "parents": ["ObolControlLifecycleComposition"],
+      "components": [],
+      "productionOwners": ["ged_draw_obol_progressive_autoview"],
+      "tests": ["src/libged/tests/draw/obol_sync.cpp"],
+      "runtimeClass": "small"
+    },
+
+    {
+      "module": "ObolLodAdmission",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolLodAdmission.tla",
+      "config": "components/planning-quality/ObolLodAdmission.cfg",
+      "flows": ["progressive"],
+      "parents": ["ObolLodComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodAdmissionPlanner"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolLodArbitration",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolLodArbitration.tla",
+      "config": "components/planning-quality/ObolLodArbitration.cfg",
+      "flows": ["progressive"],
+      "parents": ["ObolLodComposition"],
+      "components": [],
+      "productionOwners": ["BObolRetainedAllocation"],
+      "tests": ["src/libBObol/tests/test_retained_allocation_oracle.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolCompletedPassOwnership",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolCompletedPassOwnership.tla",
+      "config": "components/planning-quality/ObolCompletedPassOwnership.cfg",
+      "flows": ["progressive"],
+      "parents": ["ObolLodComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodAvailabilityScheduler", "BObolLodPresentationPolicy"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "medium"
+    },
+    {
+      "module": "ObolRetainedAllocationPrefix",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolRetainedAllocationPrefix.tla",
+      "config": "components/planning-quality/ObolRetainedAllocationPrefix.cfg",
+      "flows": ["progressive"],
+      "parents": ["ObolLodComposition"],
+      "components": [],
+      "productionOwners": ["BObolRetainedAllocation"],
+      "tests": ["src/libBObol/tests/test_retained_allocation_oracle.cpp"],
+      "runtimeClass": "medium"
+    },
+    {
+      "module": "ObolResidentGrowth",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolResidentGrowth.tla",
+      "config": "components/planning-quality/ObolResidentGrowth.cfg",
+      "flows": ["progressive"],
+      "parents": ["ObolLodComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodAvailabilityLedger"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_lod_service.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolCapacitySearch",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolCapacitySearch.tla",
+      "config": "components/planning-quality/ObolCapacitySearch.cfg",
+      "flows": ["progressive", "terminal"],
+      "parents": ["ObolLodComposition", "ObolTerminalConvergenceComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodCapacitySearch"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "large"
+    },
+    {
+      "module": "ObolCapacityPresentationHandoff",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolCapacityPresentationHandoff.tla",
+      "config": "components/planning-quality/ObolCapacityPresentationHandoff.cfg",
+      "flows": ["progressive", "terminal", "terminal-quality"],
+      "parents": ["ObolLodComposition", "ObolTerminalConvergenceComposition", "ObolTerminalQualityOrdering"],
+      "components": [],
+      "productionOwners": ["BObolLodAvailabilityScheduler", "BObolLodPresentationPolicy"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "large"
+    },
+    {
+      "module": "ObolStaticQuality",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolStaticQuality.tla",
+      "config": "components/planning-quality/ObolStaticQuality.cfg",
+      "flows": ["progressive", "terminal", "terminal-quality"],
+      "parents": ["ObolLodComposition", "ObolTerminalConvergenceComposition", "ObolTerminalQualityOrdering"],
+      "components": [],
+      "productionOwners": ["BObolLodStaticQualityTrial"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "medium"
+    },
+    {
+      "module": "ObolPointQualityOwnership",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolPointQualityOwnership.tla",
+      "config": "components/planning-quality/ObolPointQualityOwnership.cfg",
+      "flows": ["progressive", "terminal-quality"],
+      "parents": ["ObolLodComposition", "ObolTerminalQualityOrdering"],
+      "components": [],
+      "productionOwners": ["BObolLodPointQualityPhase"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolPointCalibrationDomains",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolPointCalibrationDomains.tla",
+      "config": "components/planning-quality/ObolPointCalibrationDomains.cfg",
+      "flows": ["terminal-quality"],
+      "parents": ["ObolTerminalQualityOrdering"],
+      "components": [],
+      "productionOwners": ["BObolLodAdmissionEvidence"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolPointTerminalEvidence",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolPointTerminalEvidence.tla",
+      "config": "components/planning-quality/ObolPointTerminalEvidence.cfg",
+      "flows": ["terminal-quality"],
+      "parents": ["ObolTerminalQualityOrdering"],
+      "components": [],
+      "productionOwners": ["BObolLodPointProxyEvidence"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolStructuralFrontierOwnership",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolStructuralFrontierOwnership.tla",
+      "config": "components/planning-quality/ObolStructuralFrontierOwnership.cfg",
+      "flows": ["progressive", "terminal-quality"],
+      "parents": ["ObolLodComposition", "ObolTerminalQualityOrdering"],
+      "components": [],
+      "productionOwners": ["BObolLodStructuralRepair"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "medium"
+    },
+    {
+      "module": "ObolLodConvergence",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolLodConvergence.tla",
+      "config": "components/planning-quality/ObolLodConvergence.cfg",
+      "flows": ["progressive"],
+      "parents": ["ObolLodComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodConvergencePolicy", "BObolViewController"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolCadTimingEvidence",
+      "tier": "component",
+      "domain": "planning-quality",
+      "path": "components/planning-quality/ObolCadTimingEvidence.tla",
+      "config": "components/planning-quality/ObolCadTimingEvidence.cfg",
+      "flows": ["progressive", "terminal-quality"],
+      "parents": ["ObolLodComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodRendererPerformanceEvidence"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_render.cpp"],
+      "runtimeClass": "small"
+    },
+
+    {
+      "module": "ObolCadMutation",
+      "tier": "component",
+      "domain": "retained-publication",
+      "path": "components/retained-publication/ObolCadMutation.tla",
+      "config": "components/retained-publication/ObolCadMutation.cfg",
+      "flows": ["cad-frame"],
+      "parents": ["ObolCadFrameComposition"],
+      "components": [],
+      "productionOwners": ["CadSceneMutation", "SoCADAssembly"],
+      "tests": ["src/libBObol/tests/test_render.cpp", "src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "medium"
+    },
+    {
+      "module": "ObolCadViewPublication",
+      "tier": "component",
+      "domain": "retained-publication",
+      "path": "components/retained-publication/ObolCadViewPublication.tla",
+      "config": "components/retained-publication/ObolCadViewPublication.cfg",
+      "flows": ["cad-frame"],
+      "parents": ["ObolCadFrameComposition"],
+      "components": [],
+      "productionOwners": ["SoCADAssembly", "BObolViewAttachment"],
+      "tests": ["src/libBObol/tests/test_render.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolPresentationPreparation",
+      "tier": "component",
+      "domain": "retained-publication",
+      "path": "components/retained-publication/ObolPresentationPreparation.tla",
+      "config": "components/retained-publication/ObolPresentationPreparation.cfg",
+      "flows": ["cad-frame", "terminal"],
+      "parents": ["ObolCadFrameComposition", "ObolTerminalConvergenceComposition"],
+      "components": [],
+      "productionOwners": ["CadPresentationPreparation"],
+      "tests": ["src/libBObol/tests/test_render.cpp", "src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolRetainedAllocationPresentation",
+      "tier": "component",
+      "domain": "retained-publication",
+      "path": "components/retained-publication/ObolRetainedAllocationPresentation.tla",
+      "config": "components/retained-publication/ObolRetainedAllocationPresentation.cfg",
+      "flows": ["progressive", "terminal"],
+      "parents": ["ObolLodComposition", "ObolTerminalConvergenceComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodPresentationPolicy", "BObolViewController"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolSemanticPresentation",
+      "tier": "component",
+      "domain": "retained-publication",
+      "path": "components/retained-publication/ObolSemanticPresentation.tla",
+      "config": "components/retained-publication/ObolSemanticPresentation.cfg",
+      "flows": ["lifecycle", "cad-frame"],
+      "parents": ["ObolControlLifecycleComposition", "ObolCadFrameComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodExactPresentationFrame", "BObolViewController"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_render.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolSparsePlanIdentity",
+      "tier": "component",
+      "domain": "retained-publication",
+      "path": "components/retained-publication/ObolSparsePlanIdentity.tla",
+      "config": "components/retained-publication/ObolSparsePlanIdentity.cfg",
+      "flows": ["cad-frame"],
+      "parents": ["ObolCadFrameComposition"],
+      "components": [],
+      "productionOwners": ["BObolCompactInstanceIndex"],
+      "tests": ["src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    },
+
+    {
+      "module": "ObolActiveProducerDemand",
+      "tier": "component",
+      "domain": "asset-production-residency",
+      "path": "components/asset-production-residency/ObolActiveProducerDemand.tla",
+      "config": "components/asset-production-residency/ObolActiveProducerDemand.cfg",
+      "flows": ["asset-publication"],
+      "parents": ["ObolAssetPublicationComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodService"],
+      "tests": ["src/libBObol/tests/test_lod_service.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolLodColdPreview",
+      "tier": "component",
+      "domain": "asset-production-residency",
+      "path": "components/asset-production-residency/ObolLodColdPreview.tla",
+      "config": "components/asset-production-residency/ObolLodColdPreview.cfg",
+      "flows": ["asset-publication", "progressive"],
+      "parents": ["ObolAssetPublicationComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodService", "BObolViewLodState"],
+      "tests": ["src/libBObol/tests/test_lod_service.cpp", "src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolResultAuthentication",
+      "tier": "component",
+      "domain": "asset-production-residency",
+      "path": "components/asset-production-residency/ObolResultAuthentication.tla",
+      "config": "components/asset-production-residency/ObolResultAuthentication.cfg",
+      "flows": ["asset-publication"],
+      "parents": ["ObolAssetPublicationComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodService", "BObolCompactInstanceIndex"],
+      "tests": ["src/libBObol/tests/test_lod_service.cpp", "src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolSharedAssetLease",
+      "tier": "component",
+      "domain": "asset-production-residency",
+      "path": "components/asset-production-residency/ObolSharedAssetLease.tla",
+      "config": "components/asset-production-residency/ObolSharedAssetLease.cfg",
+      "flows": ["asset-publication"],
+      "parents": ["ObolAssetPublicationComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodService", "BObolViewController"],
+      "tests": ["src/libBObol/tests/test_lod_service.cpp", "src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolSpatialProducer",
+      "tier": "component",
+      "domain": "asset-production-residency",
+      "path": "components/asset-production-residency/ObolSpatialProducer.tla",
+      "config": "components/asset-production-residency/ObolSpatialProducer.cfg",
+      "flows": ["asset-publication"],
+      "parents": ["ObolAssetPublicationComposition"],
+      "components": [],
+      "productionOwners": ["BObolMeshLodCache", "BObolLodService"],
+      "tests": ["src/libBObol/tests/test_mesh_lod_cache.cpp", "src/libBObol/tests/test_lod_service.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolLiveSpatialPublication",
+      "tier": "component",
+      "domain": "asset-production-residency",
+      "path": "components/asset-production-residency/ObolLiveSpatialPublication.tla",
+      "config": "components/asset-production-residency/ObolLiveSpatialPublication.cfg",
+      "flows": ["asset-publication"],
+      "parents": ["ObolAssetPublicationComposition"],
+      "components": [],
+      "productionOwners": ["BObolCompactPresentationStaging", "SoCADAssembly"],
+      "tests": ["src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolResidentCompaction",
+      "tier": "component",
+      "domain": "asset-production-residency",
+      "path": "components/asset-production-residency/ObolResidentCompaction.tla",
+      "config": "components/asset-production-residency/ObolResidentCompaction.cfg",
+      "flows": ["asset-publication", "terminal"],
+      "parents": ["ObolAssetPublicationComposition", "ObolTerminalConvergenceComposition"],
+      "components": [],
+      "productionOwners": ["BObolLodService", "BObolViewController"],
+      "tests": ["src/libBObol/tests/test_lod_service.cpp", "src/libBObol/tests/test_lod_coordinator.cpp"],
+      "runtimeClass": "small"
+    },
+    {
+      "module": "ObolOccurrenceControl",
+      "tier": "component",
+      "domain": "asset-production-residency",
+      "path": "components/asset-production-residency/ObolOccurrenceControl.tla",
+      "config": "components/asset-production-residency/ObolOccurrenceControl.cfg",
+      "flows": ["progressive", "asset-publication"],
+      "parents": ["ObolLodComposition", "ObolAssetPublicationComposition"],
+      "components": [],
+      "productionOwners": ["BObolViewLodState", "SoBRLLodUpdateAction"],
+      "tests": ["src/libBObol/tests/test_lod_update_action.cpp"],
+      "runtimeClass": "small"
+    }
+  ]
+}

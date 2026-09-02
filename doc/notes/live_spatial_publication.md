@@ -8,6 +8,9 @@ immediate visual, but it is intentionally too coarse to be the only result
 while spatial pages are being built.  A completed spatial page must therefore
 be publishable before the final cache marker exists.
 
+Any TLC state count retained below is a dated observation.  The sole current
+formal-suite result and count source is `tla/baselines/tlc-2.19.json`.
+
 ## Ownership and representation
 
 Use the existing `SoCADAssembly` multi-part capability.  Do not add mutable
@@ -184,13 +187,15 @@ Run it when changing the producer callback, payload layering, or cache-marker
 ordering:
 
 ```
-java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar -workers 1 \
-  -config doc/notes/ObolLiveSpatialPublication.cfg \
-  doc/notes/ObolLiveSpatialPublication.tla
+cmake -DTLA2TOOLS_JAR=/home/cyapp/tla+/tla2tools.jar \
+  -DTLA_MODE=check -DTLA_MODEL=ObolLiveSpatialPublication \
+  -DTLA_WORK_DIR=/tmp/obol-tlc-live-spatial \
+  -P misc/CMake/RunTLA.cmake
 ```
 
-On 2026-08-29 TLC explored 481 generated / 254 distinct states to depth 11
-with no invariant, deadlock, or liveness error.  The retained-page cache and
+As a historical observation, on 2026-08-29 TLC explored 481 generated / 254
+distinct states to depth 11 with no invariant, deadlock, or liveness error.
+The retained-page cache and
 LoD-service tests also cover page replacement and page-selective compaction.
 A warm System GL Lucy interaction replay passed with in-gesture refinement,
 box-free terminal presentation, zoom-out compaction, and exact-view history

@@ -53,81 +53,65 @@ set(
   notes/obol_overlay_coverage.txt
   notes/obol_realization_coverage.txt
   notes/qged_editing.md
-  notes/ObolHostWork.cfg
-  notes/ObolHostWork.tla
-  notes/ObolLodArbitration.cfg
-  notes/ObolLodArbitration.tla
-  notes/ObolLodAdmission.cfg
-  notes/ObolLodAdmission.tla
-  notes/ObolActiveProducerDemand.cfg
-  notes/ObolActiveProducerDemand.tla
-  notes/ObolAssetPublicationComposition.cfg
-  notes/ObolAssetPublicationComposition.tla
-  notes/ObolCadMutation.cfg
-  notes/ObolCadMutation.tla
-  notes/ObolCadFrameComposition.cfg
-  notes/ObolCadFrameComposition.tla
-  notes/ObolCadViewPublication.cfg
-  notes/ObolCadViewPublication.tla
-  notes/ObolCadTimingEvidence.cfg
-  notes/ObolCadTimingEvidence.tla
-  notes/ObolCompletedPassOwnership.cfg
-  notes/ObolCompletedPassOwnership.tla
-  notes/ObolCapacityPresentationHandoff.cfg
-  notes/ObolCapacityPresentationHandoff.tla
-  notes/ObolLodConvergence.cfg
-  notes/ObolLodConvergence.tla
-  notes/ObolLodComposition.cfg
-  notes/ObolLodComposition.tla
-  notes/ObolLodPolicyDisable.cfg
-  notes/ObolLodPolicyDisable.tla
-  notes/ObolProgressivePipeline.cfg
-  notes/ObolProgressivePipeline.tla
-  notes/ObolControlRefinement.cfg
-  notes/ObolControlRefinement.tla
-  notes/ObolDeferredAutoview.cfg
-  notes/ObolDeferredAutoview.tla
-  notes/ObolSubmissionPass.cfg
-  notes/ObolSubmissionPass.tla
-  notes/ObolResidentGrowth.cfg
-  notes/ObolResidentGrowth.tla
-  notes/ObolRetainedAllocationPrefix.cfg
-  notes/ObolRetainedAllocationPrefix.tla
-  notes/ObolInteractionSession.cfg
-  notes/ObolInteractionSession.tla
-  notes/ObolDeadlineOwnership.cfg
-  notes/ObolDeadlineOwnership.tla
-  notes/ObolCapacitySearch.cfg
-  notes/ObolCapacitySearch.tla
-  notes/ObolPointQualityOwnership.cfg
-  notes/ObolPointQualityOwnership.tla
-  notes/ObolPointTerminalEvidence.cfg
-  notes/ObolPointTerminalEvidence.tla
-  notes/ObolQuietSuccessor.cfg
-  notes/ObolQuietSuccessor.tla
-  notes/ObolResidentCompaction.cfg
-  notes/ObolResidentCompaction.tla
-  notes/ObolPresentationPreparation.cfg
-  notes/ObolPresentationPreparation.tla
-  notes/ObolStaticQuality.cfg
-  notes/ObolStaticQuality.tla
-  notes/ObolLodColdPreview.cfg
-  notes/ObolLodColdPreview.tla
-  notes/ObolLiveSpatialPublication.cfg
-  notes/ObolLiveSpatialPublication.tla
-  notes/ObolSpatialProducer.cfg
-  notes/ObolSpatialProducer.tla
-  notes/ObolSparsePlanIdentity.cfg
-  notes/ObolSparsePlanIdentity.tla
-  notes/ObolStructuralFrontierOwnership.cfg
-  notes/ObolStructuralFrontierOwnership.tla
-  notes/ObolTerminalQualityOrdering.cfg
-  notes/ObolTerminalQualityOrdering.tla
-  notes/obol_lod_control.cfg
-  notes/obol_lod_control.tla
   pre_BRL-CAD.bib
 )
+
 add_doc(documentation_DATA ".")
+
+# models.json is the authoritative TLA+ inventory.  Deriving the package list
+# from it prevents a moved or newly cataloged model from silently disappearing
+# from source and binary documentation archives.
+set(
+  tla_documentation_DATA
+  notes/tla/README.md
+  notes/tla/GLOSSARY.md
+  notes/tla/AUDIT.md
+  notes/tla/FAIRNESS.md
+  notes/tla/TERMINOLOGY.md
+  notes/tla/RISK_COVERAGE.md
+  notes/tla/models.json
+  notes/tla/verification.md
+)
+add_doc(tla_documentation_DATA "tla")
+set(tla_baseline_DATA notes/tla/baselines/tlc-2.19.json)
+add_doc(tla_baseline_DATA "tla/baselines")
+unset(tla_baseline_DATA)
+
+set(tla_model_catalog "${CMAKE_CURRENT_SOURCE_DIR}/notes/tla/models.json")
+file(READ "${tla_model_catalog}" tla_model_catalog_json)
+string(JSON tla_model_count LENGTH "${tla_model_catalog_json}" models)
+math(EXPR tla_model_last "${tla_model_count} - 1")
+set(tla_model_directories)
+foreach(tla_model_index RANGE 0 ${tla_model_last})
+  string(JSON tla_model_path GET "${tla_model_catalog_json}" models ${tla_model_index} path)
+  string(JSON tla_config_path GET "${tla_model_catalog_json}" models ${tla_model_index} config)
+  get_filename_component(tla_model_directory "${tla_model_path}" DIRECTORY)
+  string(MAKE_C_IDENTIFIER "${tla_model_directory}" tla_model_group)
+  set(tla_model_group "tla_${tla_model_group}_DATA")
+  list(
+    APPEND ${tla_model_group}
+    "notes/tla/${tla_model_path}"
+    "notes/tla/${tla_config_path}"
+  )
+  list(APPEND tla_model_directories "${tla_model_directory}")
+endforeach()
+list(REMOVE_DUPLICATES tla_model_directories)
+foreach(tla_model_directory IN LISTS tla_model_directories)
+  string(MAKE_C_IDENTIFIER "${tla_model_directory}" tla_model_group)
+  set(tla_model_group "tla_${tla_model_group}_DATA")
+  add_doc(${tla_model_group} "tla/${tla_model_directory}")
+  unset(${tla_model_group})
+endforeach()
+unset(tla_model_group)
+unset(tla_model_directory)
+unset(tla_model_directories)
+unset(tla_config_path)
+unset(tla_model_path)
+unset(tla_model_index)
+unset(tla_model_last)
+unset(tla_model_count)
+unset(tla_model_catalog_json)
+unset(tla_model_catalog)
 
 set(
   documentation_mged_old_DATA

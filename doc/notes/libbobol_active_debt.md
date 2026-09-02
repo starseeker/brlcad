@@ -8,6 +8,10 @@ work which is not complete; resolved failure analysis belongs in
 `obol_production_readiness.md`.  Historical timing directories and
 chronological debugging logs are not design authority.
 
+Any TLC state count retained below is a dated historical observation.  The
+sole current formal-suite result and count source is
+`tla/baselines/tlc-2.19.json`.
+
 ## Current implementation baseline
 
 The following architecture is implemented and must not be reintroduced as
@@ -130,7 +134,7 @@ importance-census obligation, and semantic-only selection/style mutations
 before and during exact presentation.  Those mutations advance their own
 presentation revision but preserve every LoD control fact; even an interrupted
 semantic-only frame may request only an exact repaint, never capacity recovery.
-The subsequently hardened
+The then-current
 28-fact refinement map checked 57,344 states: every concrete field
 independently and every combination of its ten distinct owner classes.  The
 offline checker now requires that complete fact mask, independently projects
@@ -171,10 +175,12 @@ controller-to-ledger projection is now canonical as well: inventory
 coalescing, visibility deferral, source deltas, quality probes, resumable
 retained allocation, importance census, and resident-admission retry can no
 longer keep the pump active while disappearing from convergence diagnostics.
-The public diagnostic snapshot now also carries the concrete 28-fact mask;
-this distinguishes those aliases without exposing private reducer objects.
-Focused
-off/on/off, idle-provider, exact-frame, and host-wakeup tests exercise these
+At that stage the public diagnostic snapshot also began carrying the complete
+concrete fact mask; the current 29-fact inventory is defined by
+`ObolControlRefinement` and the exhaustive C++ map, and its proof boundary is
+cataloged in `tla/models.json`.
+This distinguishes those aliases without exposing private reducer objects.
+Focused off/on/off, idle-provider, exact-frame, and host-wakeup tests exercise these
 bridges.  Requesting an exact or batched-publication frame now transfers the
 runnable host level from PUMP to RENDER instead of polling an action which
 cannot advance before that frame completes; `BObolProgressiveStatus::hasMore`
@@ -212,7 +218,8 @@ The production shape is nevertheless still concentrated in two places:
   independently compiled allocation-free policy rather than another inline
   controller implementation.
 
-Required completion work:
+Required completion work (`tla/RISK_COVERAGE.md` supplies the detailed
+formal/executable evidence mapping for the audit-derived items):
 
 1. Finish inventorying the remaining mutable controller fields by sole owner,
    revision domain, progress witness, and terminal transition.  Delete
@@ -237,10 +244,29 @@ Required completion work:
 5. Re-run the applicable TLC models after ownership/liveness changes and the
    graphical matrix after numeric policy changes.  Formal models do not judge
    visual quality or wall-clock performance.
+6. Add a table-driven asynchronous-result matrix crossing current/stale
+   population epoch, demand revision, source-route revision, and typed
+   completion outcome.  A mismatch must supersede without publishing or
+   creating failure for a newer demand.
+7. Add shared-producer lifetime regressions for one consumer closing during a
+   coalesced build, a late consumer joining, and the final consumer closing
+   while a result is queued.  Only the final lease may authorize cancellation.
+8. Add allocator/resource failure injection immediately before retained-scene,
+   presentation, and durable-cache commit boundaries.  Failure must preserve
+   the prior committed object and its notification pair.
+9. Add endpoint-loss and close-during-gesture regressions.  Every in-flight
+   frame, timer, worker, and callback owner must receive a typed completion or
+   cancellation during teardown; retain ASan/TSan coverage for these paths.
+10. Audit all six-domain evidence-stamp constructors and every asynchronous
+    identity counter.  Companion fields may not default across epochs, and
+    counter overflow must invalidate dependent evidence rather than permit an
+    ABA match.
 
 Acceptance: unchanged evidence cannot reopen planning; an invalid/stale plan
 cannot commit; one event cannot select two successor owners; no terminal HUD
-state has foreground work; and no nonterminal state is ownerless.
+state has foreground work; no nonterminal state is ownerless; asynchronous
+results authenticate their complete identity; shared cancellation has no live
+consumer lease; and constraint evidence is never relabeled as failure.
 
 Two 2026-08-28 150k System-GL traces exposed the same missing refinement at
 different effect boundaries.  A point-calibration request pauses the active

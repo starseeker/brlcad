@@ -2,10 +2,15 @@
 
 Last reviewed: 2026-09-01
 
-This is the authoritative index of the drawing stack's TLA+ models.  The
-models are small proof boundaries for ownership, safety, and liveness.  They
+The authoritative suite index, proof-flow graph, shared vocabulary, and
+verification policy are in `tla/README.md`, `tla/models.json`,
+`tla/GLOSSARY.md`, and `tla/verification.md`.  This document explains the
+architectural intent and production mapping.  The models are small bounded
+model-checking boundaries for ownership, safety, and liveness.  They
 are not alternate implementations, workload-specific controllers, or proofs
 of visual quality, floating-point projection, memory use, or elapsed time.
+All state counts retained in this narrative are dated historical observations;
+the sole current result source is `tla/baselines/tlc-2.19.json`.
 Representation-only metadata such as cached PCA OBB corners therefore does
 not add a state variable: runtime validation proves its geometric contract,
 and renderer tests prove equivalent shaded/wire batching.  If proxy shape ever
@@ -100,17 +105,19 @@ behavior, and a passing composition model is not production clearance.
 | `ObolResidentGrowth` | coalesced resident suffix drain, coverage transfer, and reallocation | availability ledger and planning obligations |
 | `ObolResidentCompaction` | revision-safe background memory reclamation | `view_controller_residency.cpp`, `BLodService` |
 | `ObolActiveProducerDemand` | superseding demand for a stable asset producer | `BLodService`, mesh submission action |
-| `ObolAssetPublicationComposition` | producer demand, additive live pages, final hierarchy, and durable cache publication | `BLodService`, source presentation staging, mesh LoD cache |
+| `ObolResultAuthentication` | population-, demand-, and route-authenticated asynchronous result acceptance | `BLodService`, compact-population lookup, mesh result reducer |
+| `ObolSharedAssetLease` | multi-view producer lifetime, late join, and final-consumer cancellation | `BLodService` coalescing and consumer subscription lifecycle |
+| `ObolAssetPublicationComposition` | producer demand, typed constraint/failure, additive live pages, final hierarchy, and durable cache publication | `BLodService`, source presentation staging, mesh LoD cache |
 | `ObolPresentationPreparation` | finite renderer-side preparation | Obol `CadPresentationPreparation`, controller render executor |
 | `ObolCadViewPublication` | exact-view preparation/report acceptance | Obol `SoCADAssembly`, libBObol view attachment |
 | `ObolCadMutation` | validated retained-scene publication, notification, and resource denial | Obol `CadSceneMutation`, `SoCADAssembly::replaceScene` |
 | `ObolCadFrameComposition` | atomic scene mutation through exact-target preparation, host frame claim, and report acceptance | Obol `SoCADAssembly`, renderer preparation/reporting, libBObol host boundary |
-| `ObolSparsePlanIdentity` | active-slot ownership when a hidden tombstone shares an `InstanceId` | Obol `CadPlanCache`, sparse PoP cut patching |
+| `ObolSparsePlanIdentity` | active-slot ownership when a hidden tombstone shares an `InstanceId` | `BObolCompactInstanceIndex`, sparse PoP cut patching |
 | `ObolLodColdPreview` | coverage-safe cold preview, bounded admission, and per-occurrence replacement by a resident progressive binding | serialized source, compact coverage producer, mesh submission action, and view state |
 | `ObolSpatialProducer` | cold spatial hierarchy and durable-cache lifecycle | mesh LoD cache/service producer |
 | `ObolLiveSpatialPublication` | additive immutable page publication | compact presentation staging and Obol assembly |
 | `ObolDeferredAutoview` | one-shot progressive fit ownership | libged Obol draw adapter |
-| `obol_lod_control` | one-occurrence fallback/mesh/repair acknowledgement | source presentation and LoD update action |
+| `ObolOccurrenceControl` | one-occurrence fallback/mesh/repair acknowledgement | source presentation and LoD update action |
 
 `ObolLodColdPreview` supersedes the former `ObolColdPresentation` model.  The
 older model was removed because it represented the same boundary with less
@@ -191,13 +198,14 @@ contract.
 
 ## Running TLC
 
-Always put TLC state files outside the source tree.  For example:
+Use the catalog-aware runner so every check first validates and parses the
+complete suite and always puts TLC state outside the source tree.  For example:
 
 ```text
-java -XX:+UseParallelGC -jar /home/cyapp/tla+/tla2tools.jar \
-  -workers 1 -metadir /tmp/obol-tlc-cad-mutation \
-  -config doc/notes/ObolCadMutation.cfg \
-  doc/notes/ObolCadMutation.tla
+cmake -DTLA2TOOLS_JAR=/home/cyapp/tla+/tla2tools.jar \
+  -DTLA_MODE=check -DTLA_MODEL=ObolCadMutation \
+  -DTLA_WORK_DIR=/tmp/obol-tlc-cad-mutation \
+  -P misc/CMake/RunTLA.cmake
 ```
 
 Run the canonical pair for every control-plane ownership change and the
@@ -205,7 +213,9 @@ focused models named by the table for the touched boundaries.  Convert every
 counterexample into a source invariant and executable regression test; do not
 accept the model fix without the implementation guard.
 
-Current focused verification through 2026-09-01:
+The following are historical verification observations through 2026-09-01.
+They explain why guards exist but are not the current baseline.  The sole
+machine-checked counts are in `tla/baselines/tlc-2.19.json`:
 
 - `ObolProgressivePipeline`: 2,358,764 generated / 1,095,220
   distinct states, depth 40;

@@ -14,6 +14,10 @@ error, importance, memory, and frame-cost calculations are pure algorithms
 below this boundary.  Mesh construction and rendering are data-plane work.
 Neither may create another control owner.
 
+Any TLC state count retained below is historical verification context.  The
+sole current formal-suite result and count source is
+`tla/baselines/tlc-2.19.json`.
+
 ## Canonical pipeline
 
 ```text

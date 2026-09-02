@@ -20,6 +20,7 @@ Read these documents in this order:
 4. `ged_draw_api.md`, `libbobol_api_contract.md`, and
    `obol_endpoint_lifecycle.md` define the installed interfaces and lifetime
    rules.
+
 5. `libbobol_platform_threading_matrix.md` defines owner-thread and host
    requirements.
 6. `libbobol_active_debt.md` is the only active drawing-system TODO list.
@@ -32,10 +33,15 @@ Read these documents in this order:
 11. `libbobol_formal_models.md` maps every TLA+ boundary to its sole production
     owner and defines when each model must change.
 
-`ObolHostWork.tla`, `obol_lod_control.tla`, `ObolLodConvergence.tla`,
+Any TLC state count retained in this architecture narrative is historical.
+The sole current formal-suite result and count source is
+`tla/baselines/tlc-2.19.json`.
+
+`ObolHostWork.tla`, `ObolOccurrenceControl.tla`, `ObolLodConvergence.tla`,
 `ObolLodAdmission.tla`, `ObolLodArbitration.tla`,
 `ObolProgressivePipeline.tla`, `ObolLodComposition.tla`,
 `ObolAssetPublicationComposition.tla`, `ObolCadFrameComposition.tla`,
+`ObolResultAuthentication.tla`, `ObolSharedAssetLease.tla`,
 `ObolInteractionSession.tla`,
 `ObolDeadlineOwnership.tla`, and `ObolCapacitySearch.tla` are focused
 control-plane models.  They do not model mesh arrays, rendering, numeric

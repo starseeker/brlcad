@@ -9,6 +9,10 @@ visually poor allocation.  Conversely, a constrained terminal view is not
 expected to contain every source triangle when those triangles cannot affect
 the current image.
 
+TLC counts quoted below are dated qualification context, not the active formal
+baseline.  Current formal-suite results live only in
+`tla/baselines/tlc-2.19.json`.
+
 ## Comparison method
 
 `src/qged/tests/qged_lod_quality_matrix.sh` renders full-detail and managed-LoD
