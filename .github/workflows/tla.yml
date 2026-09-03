@@ -1,0 +1,142 @@
+name: BObol TLA+
+
+on:
+  push:
+    paths:
+      - 'doc/notes/tla/**'
+      - 'misc/CMake/RunTLA.cmake'
+      - 'misc/CMake/ValidateBObolConformance.cmake'
+      - '.github/workflows/tla.yml'
+  pull_request:
+    paths:
+      - 'doc/notes/tla/**'
+      - 'misc/CMake/RunTLA.cmake'
+      - 'misc/CMake/ValidateBObolConformance.cmake'
+      - '.github/workflows/tla.yml'
+  schedule:
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+
+env:
+  TLA_TOOLS_URL: https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+  TLA_TOOLS_SHA256: 936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Catalog and SANY
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Fetch pinned TLA+ tools
+        run: |
+          curl --fail --location --silent --show-error \
+            "$TLA_TOOLS_URL" --output "$RUNNER_TEMP/tla2tools.jar"
+          echo "$TLA_TOOLS_SHA256  $RUNNER_TEMP/tla2tools.jar" | sha256sum --check
+      - name: Validate catalog and parse models
+        run: |
+          cmake \
+            -DTLA2TOOLS_JAR="$RUNNER_TEMP/tla2tools.jar" \
+            -DTLA_MODE=lint \
+            -P misc/CMake/RunTLA.cmake
+
+  affected:
+    name: Affected proof flows
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: lint
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fetch pinned TLA+ tools
+        run: |
+          curl --fail --location --silent --show-error \
+            "$TLA_TOOLS_URL" --output "$RUNNER_TEMP/tla2tools.jar"
+          echo "$TLA_TOOLS_SHA256  $RUNNER_TEMP/tla2tools.jar" | sha256sum --check
+      - name: Identify changed models
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            BASE_SHA="$(git rev-list --max-parents=0 "$HEAD_SHA")"
+          fi
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'doc/notes/tla/*.tla' 'doc/notes/tla/**/*.tla' 'doc/notes/tla/*.cfg' 'doc/notes/tla/**/*.cfg' |
+            sed -E 's#^.*/([^/]+)\.(tla|cfg)$#\1#' |
+            sort -u > "$RUNNER_TEMP/changed-tla-models"
+          if ! git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+              doc/notes/tla/models.json \
+              doc/notes/tla/baselines/tlc-2.19.json \
+              misc/CMake/RunTLA.cmake \
+              .github/workflows/tla.yml; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+            echo 'full=true' >> "$GITHUB_OUTPUT"
+          elif test -s "$RUNNER_TEMP/changed-tla-models"; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+            # Each affected-flow run includes the canonical pair.  More than
+            # one changed model is cheaper and less error-prone as one full
+            # suite than as repeated canonical searches.
+            if test "$(wc -l < "$RUNNER_TEMP/changed-tla-models")" -gt 1; then
+              echo 'full=true' >> "$GITHUB_OUTPUT"
+            else
+              echo 'full=false' >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo 'full=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check changed models and parent flows
+        if: steps.changed.outputs.present == 'true' && steps.changed.outputs.full == 'false'
+        run: |
+          while IFS= read -r model; do
+            cmake \
+              -DTLA2TOOLS_JAR="$RUNNER_TEMP/tla2tools.jar" \
+              -DTLA_MODE=check \
+              -DTLA_AFFECTED_MODEL="$model" \
+              -DTLA_COMPARE_BASELINE=ON \
+              -DTLA_WORK_DIR="$RUNNER_TEMP/tla-$model" \
+              -P misc/CMake/RunTLA.cmake
+          done < "$RUNNER_TEMP/changed-tla-models"
+      - name: Check suite after a broad model change
+        if: steps.changed.outputs.full == 'true'
+        run: |
+          cmake \
+            -DTLA2TOOLS_JAR="$RUNNER_TEMP/tla2tools.jar" \
+            -DTLA_MODE=check \
+            -DTLA_COMPARE_BASELINE=ON \
+            -DTLA_WORK_DIR="$RUNNER_TEMP/tla-broad-change" \
+            -P misc/CMake/RunTLA.cmake
+
+  full:
+    name: Complete model suite
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: lint
+    steps:
+      - uses: actions/checkout@v6
+      - name: Fetch pinned TLA+ tools
+        run: |
+          curl --fail --location --silent --show-error \
+            "$TLA_TOOLS_URL" --output "$RUNNER_TEMP/tla2tools.jar"
+          echo "$TLA_TOOLS_SHA256  $RUNNER_TEMP/tla2tools.jar" | sha256sum --check
+      - name: Run complete suite
+        run: |
+          cmake \
+            -DTLA2TOOLS_JAR="$RUNNER_TEMP/tla2tools.jar" \
+            -DTLA_MODE=check \
+            -DTLA_COMPARE_BASELINE=ON \
+            -DTLA_WORK_DIR="$RUNNER_TEMP/brlcad-tla" \
+            -P misc/CMake/RunTLA.cmake
+      - name: Upload TLC logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brlcad-tla-results
+          path: ${{ runner.temp }}/brlcad-tla

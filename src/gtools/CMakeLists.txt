@@ -14,6 +14,17 @@ if(TARGET ged_draw_perf)
       add_dependencies(ged_draw_perf ${tdp})
     endif ()
   endforeach()
+  add_custom_target(bobol_performance_qualification
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+      "${CMAKE_BINARY_DIR}/Testing/obol-performance"
+    COMMAND ${SH_EXEC} "${CMAKE_SOURCE_DIR}/misc/tools/obol_draw_perf.sh"
+      "${CMAKE_BINARY_DIR}"
+      "${CMAKE_BINARY_DIR}/Testing/obol-performance"
+      1 quick "${CMAKE_BINARY_DIR}"
+    DEPENDS ged_draw_perf
+    USES_TERMINAL)
+  set_target_properties(bobol_performance_qualification PROPERTIES
+    FOLDER "BRL-CAD Tests")
 endif(TARGET ged_draw_perf)
 brlcad_addexec(gex "gex.cpp" "libbu;librt")
 brlcad_addexec(glint glint.cpp "librt;${M_LIBRARY}")

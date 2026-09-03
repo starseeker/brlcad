@@ -1592,6 +1592,13 @@ private:
 	    static_cast<qint64>(status.currentAllocationPlanSerial));
 	record.insert(QStringLiteral("transition_prior_transaction_serial"),
 	    static_cast<qint64>(status.presentationTransactionSerial));
+	record.insert(QStringLiteral(
+		"transition_prior_required_render_serial"),
+	    static_cast<qint64>(status.presentationRequiredRenderSerial));
+	record.insert(QStringLiteral("transition_prior_presented_frame_serial"),
+	    static_cast<qint64>(status.presentedFrameSerial));
+	record.insert(QStringLiteral("transition_prior_render_completion_serial"),
+	    static_cast<qint64>(state.renderCompletionSerial));
 	record.insert(QStringLiteral("transition_prior_outcome"), status.outcome);
 	record.insert(QStringLiteral(
 		"transition_prior_renderer_preparation_target_signature"),

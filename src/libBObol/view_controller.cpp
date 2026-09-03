@@ -618,6 +618,7 @@ BObolLodConvergenceStatus::BObolLodConvergenceStatus(void)
 }
 
 BObolLodControlTraceState::BObolLodControlTraceState(void) :
+    renderCompletionSerial(0),
     viewRevision(0),
     policyRevision(0),
     interactionActive(FALSE)
@@ -675,6 +676,7 @@ controller_lod_control_trace_state_equal(
     return left.hostWork.revision == right.hostWork.revision &&
 	left.hostWork.renderRevision == right.hostWork.renderRevision &&
 	left.hostWork.flags == right.hostWork.flags &&
+	left.renderCompletionSerial == right.renderCompletionSerial &&
 	left.viewRevision == right.viewRevision &&
 	left.policyRevision == right.policyRevision &&
 	left.interactionActive == right.interactionActive &&
@@ -6080,7 +6082,12 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	    activePayloads - satisfiedPayloads : 0;
 	const bool actionableQualityDebt =
 	    unsatisfiedPayloads > memoryLimitedPayloads;
-	if (actionableQualityDebt) {
+	/* A manually begun generation owns only the submitted request.  Its result
+	 * may still require a presentation barrier, but it cannot manufacture the
+	 * automatic demand cursor whose terminality contract is disabled. */
+	const bool automaticQualityDebt =
+	    this->automaticLodControlEnabled() && actionableQualityDebt;
+	if (automaticQualityDebt) {
 	    /* Current-view quality debt is semantic, level-triggered work.  A
 	     * selective result/delta, capacity candidate, or presentation barrier
 	     * may temporarily own the shared cursor, but none of those mechanical
@@ -6096,7 +6103,7 @@ BObolViewController::applyLodResults(BObolLodService *service,
 		capacityTransactionPending();
 	if (BObolLodAvailabilityScheduler::
 		retainedPublicationRequiresDemandReplay(
-		    retainedPresentationBatch, actionableQualityDebt,
+		    retainedPresentationBatch, automaticQualityDebt,
 		    retainedPublicationSuccessorOwned)) {
 	    /* A retained publication which neither presents the newly resident
 	     * population nor creates a resident-growth transaction has not
@@ -6104,7 +6111,7 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	     * cursor now; otherwise the HUD can remain in REFINING with no task,
 	     * frame, or planning owner. */
 	    currentDemandReplayCandidate = TRUE;
-	} else if (!retainedPresentationBatch && actionableQualityDebt) {
+	} else if (!retainedPresentationBatch && automaticQualityDebt) {
 	    partialRefinementCandidate = TRUE;
 	}
     }
@@ -6223,6 +6230,15 @@ BObolViewController::applyLodResults(BObolLodService *service,
 		this->d->lodPolicyRevision.value());
 	}
 	if (publicationDecision.requestFrame) {
+	    /* Every requested result publication needs an exact successor
+	     * identity, including the final non-partial batch.  Relying only on
+	     * publicationFramePending lets a later completion clear the batch
+	     * without proving that its render serial follows this publication. */
+	    (void)this->d->lodPresentationTransaction.arm(
+		BObolLodPresentationTransaction::REASON_RESULT_PUBLICATION,
+		this->d->renderCompletionSerial,
+		this->d->lodViewRevision.value(),
+		this->d->lodPolicyRevision.value());
 	    this->requestLodCapacityRender("lod-result");
 	}
 	this->d->lodCompactionPolicy.requestAfter(bu_gettime(), 750000);
@@ -6845,6 +6861,7 @@ BObolViewController::captureLodControlTraceState(void) const
     BObolLodControlTraceState state;
     this->getLodConvergenceStatus(state.convergence);
     state.hostWork = this->getHostWorkSnapshot();
+    state.renderCompletionSerial = this->getRenderCompletionSerial();
     state.viewRevision = this->getLodViewRevision();
     state.policyRevision = this->getLodPolicyRevision();
     state.interactionActive = this->isLodInteractionActive();

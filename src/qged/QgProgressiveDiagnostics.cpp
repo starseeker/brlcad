@@ -99,7 +99,8 @@ static void
 qged_append_progressive_control_diagnostic_values(
     QJsonObject &sample, const BObolLodConvergenceStatus &status,
     const BObolHostWorkSnapshot &hostWork, uint64_t viewRevision,
-    uint64_t policyRevision, SbBool interactionActive)
+    uint64_t policyRevision, uint64_t renderCompletionSerial,
+    SbBool interactionActive)
 {
     sample.insert(QStringLiteral("controller_available"), true);
     sample.insert(QStringLiteral("lod_control_fact_mask"),
@@ -142,6 +143,8 @@ qged_append_progressive_control_diagnostic_values(
 	static_cast<qint64>(status.presentationRequiredRenderSerial));
     sample.insert(QStringLiteral("lod_control_presented_frame_serial"),
 	static_cast<qint64>(status.presentedFrameSerial));
+    sample.insert(QStringLiteral("lod_render_completion_serial"),
+	static_cast<qint64>(renderCompletionSerial));
     sample.insert(QStringLiteral("lod_convergence_phase"), status.phase);
     sample.insert(QStringLiteral("lod_convergence_outcome"), status.outcome);
     sample.insert(QStringLiteral("lod_convergence_terminal"),
@@ -243,7 +246,7 @@ qged_append_progressive_control_diagnostics(
 {
     qged_append_progressive_control_diagnostic_values(sample, status,
 	controller.getHostWorkSnapshot(), controller.getLodViewRevision(),
-	controller.getLodPolicyRevision(),
+	controller.getLodPolicyRevision(), controller.getRenderCompletionSerial(),
 	controller.isLodInteractionActive());
 }
 
@@ -253,7 +256,8 @@ qged_append_progressive_control_diagnostics(
 {
     qged_append_progressive_control_diagnostic_values(sample,
 	state.convergence, state.hostWork, state.viewRevision,
-	state.policyRevision, state.interactionActive);
+	state.policyRevision, state.renderCompletionSerial,
+	state.interactionActive);
 }
 
 QJsonObject

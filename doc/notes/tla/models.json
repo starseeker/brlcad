@@ -267,7 +267,7 @@
       "parents": ["ObolProgressivePipeline"],
       "components": [],
       "productionOwners": ["BObolLodControlRefinement", "BObolLodControlTransitionScope", "BObolViewController transition journal"],
-      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_window_host.cpp", "src/qged/tests/test_lod_control_trace.sh"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_model_conformance.cpp", "src/libBObol/tests/test_window_host.cpp", "src/qged/tests/test_lod_control_trace.sh"],
       "runtimeClass": "large"
     },
 
@@ -307,7 +307,7 @@
       "parents": ["ObolProgressivePipeline"],
       "components": ["ObolHostWork", "ObolInteractionSession", "ObolLodPolicyDisable", "ObolDeadlineOwnership", "ObolQuietSuccessor", "ObolSubmissionPass", "ObolDeferredAutoview", "ObolSemanticPresentation"],
       "productionOwners": ["BObolViewController", "BObolHostWorkSnapshot claimed-frame witness", "BObolWindowHost"],
-      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_window_host.cpp"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_model_conformance.cpp", "src/libBObol/tests/test_window_host.cpp"],
       "runtimeClass": "large"
     },
     {
@@ -621,7 +621,7 @@
       "parents": ["ObolLodComposition"],
       "components": [],
       "productionOwners": ["BObolLodRendererPerformanceEvidence"],
-      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_render.cpp"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_model_conformance.cpp", "src/libBObol/tests/test_render.cpp"],
       "runtimeClass": "small"
     },
 
@@ -687,7 +687,7 @@
       "parents": ["ObolControlLifecycleComposition", "ObolCadFrameComposition"],
       "components": [],
       "productionOwners": ["BObolLodExactPresentationFrame", "BObolViewController"],
-      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_render.cpp"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_model_conformance.cpp", "src/libBObol/tests/test_render.cpp"],
       "runtimeClass": "small"
     },
     {
@@ -740,7 +740,7 @@
       "parents": ["ObolAssetPublicationComposition"],
       "components": [],
       "productionOwners": ["BObolLodService", "BObolViewController", "BObolViewLodState", "BObolLodResultAuthenticationContract"],
-      "tests": ["src/libBObol/tests/test_lod_service.cpp", "src/libBObol/tests/test_lod_update_action.cpp"],
+      "tests": ["src/libBObol/tests/test_lod_service.cpp", "src/libBObol/tests/test_lod_update_action.cpp", "src/libBObol/tests/test_model_conformance.cpp"],
       "runtimeClass": "small"
     },
     {
@@ -753,7 +753,7 @@
       "parents": ["ObolAssetPublicationComposition"],
       "components": [],
       "productionOwners": ["BObolLodStrongUInt64", "identity_counter_private.h", "BObolViewController transition journal"],
-      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_window_host.cpp"],
+      "tests": ["src/libBObol/tests/test_lod_coordinator.cpp", "src/libBObol/tests/test_model_conformance.cpp", "src/libBObol/tests/test_window_host.cpp"],
       "runtimeClass": "small"
     },
     {

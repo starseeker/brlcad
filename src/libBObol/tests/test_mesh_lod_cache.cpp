@@ -43,6 +43,11 @@
 #include <thread>
 #include <vector>
 
+static constexpr BObolTransactionFaultPoint durablePublicationFaults[] = {
+    BObolTransactionFaultPoint::DURABLE_CACHE_WRITE,
+    BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT
+};
+
 static int
 fastf_equal(fastf_t a, fastf_t b)
 {
@@ -843,6 +848,17 @@ main(int argc, char *argv[])
 	}
     }
 
+    {
+	ScopedTransactionFault fault(
+	    BObolTransactionFaultPoint::DURABLE_CACHE_OPEN);
+	if (bobol_mesh_lod_cache_status(dbip, objname, &cacheStatus) !=
+		BRLCAD_ERROR) {
+	    printf("FAIL: denied durable-cache open reported success\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+    }
+
     if (bobol_mesh_lod_cache_status(dbip, objname, &cacheStatus) !=
 	BRLCAD_OK ||
 	!cacheStatus.directory_found || !cacheStatus.is_bot ||
@@ -869,11 +885,11 @@ main(int argc, char *argv[])
 	}
     }
 
-    {
+    for (const BObolTransactionFaultPoint faultPoint :
+	    durablePublicationFaults) {
 	int refreshStatus = BRLCAD_OK;
 	{
-	    ScopedTransactionFault fault(
-		BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT);
+	    ScopedTransactionFault fault(faultPoint);
 	    refreshStatus = bobol_mesh_lod_cache_refresh(
 		dbip, objname, &cacheStatus);
 	}
@@ -883,8 +899,9 @@ main(int argc, char *argv[])
 		BRLCAD_OK ||
 	    cacheStatus.has_cache_key || cacheStatus.has_cached_payload ||
 	    failed) {
-	    printf("FAIL: denied durable-cache commit became discoverable "
-		   "status=%d key=%d payload=%d lod=%p\n", refreshStatus,
+	    printf("FAIL: denied durable-cache %s became discoverable "
+		   "status=%d key=%d payload=%d lod=%p\n",
+		   bobol_transaction_fault_name(faultPoint), refreshStatus,
 		   cacheStatus.has_cache_key, cacheStatus.has_cached_payload,
 		   static_cast<void *>(failed));
 	    if (failed)
@@ -903,7 +920,8 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
-    {
+    for (const BObolTransactionFaultPoint faultPoint :
+	    durablePublicationFaults) {
 	struct BObolMeshLodCacheStatus before =
 	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
 	struct BObolMeshLodCacheStatus denied =
@@ -920,8 +938,7 @@ main(int argc, char *argv[])
 
 	int refreshStatus = BRLCAD_OK;
 	{
-	    ScopedTransactionFault fault(
-		BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT);
+	    ScopedTransactionFault fault(faultPoint);
 	    refreshStatus = bobol_mesh_lod_cache_refresh(
 		dbip, objname, &denied);
 	}
@@ -934,9 +951,10 @@ main(int argc, char *argv[])
 	    after.cache_key != before.cache_key ||
 	    !after.has_cached_payload || !preserved ||
 	    first_available_cut(preserved) < 0) {
-	    printf("FAIL: denied durable-cache replacement did not preserve "
+	    printf("FAIL: denied durable-cache %s replacement did not preserve "
 		   "the prior hierarchy old=%llu denied=%llu after=%llu "
 		   "refresh=%d lod=%p\n",
+		   bobol_transaction_fault_name(faultPoint),
 		   before.cache_key, denied.cache_key, after.cache_key,
 		   refreshStatus, static_cast<void *>(preserved));
 	    if (preserved)

@@ -12,6 +12,8 @@ brlcad_find_package(OSMESA REQUIRED)
 brlcad_addexec(test_bobol_render test_render.cpp "libBObol;libbu;Obol::Obol;${OSMESA_LIBRARY}" TEST ALL_CXX)
 target_include_directories(test_bobol_render SYSTEM PRIVATE ${OSMESA_INCLUDE_DIR} ${BOBOL_OPENGL_INCLUDE_DIRS})
 brlcad_add_test(NAME libBObol_render COMMAND test_bobol_render)
+set_property(TEST libBObol_render APPEND PROPERTY
+  LABELS "bobol_graphics_qualification;bobol_graphics_osmesa")
 
 brlcad_addexec(test_bobol_image_source test_image_source.cpp "libBObol;libimgstream;libicv;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_image_source COMMAND test_bobol_image_source)
@@ -59,6 +61,31 @@ set_source_files_properties(
 target_include_directories(test_bobol_lod_coordinator PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/..)
 brlcad_add_test(NAME libBObol_lod_coordinator COMMAND test_bobol_lod_coordinator)
+
+brlcad_addexec(test_bobol_model_conformance test_model_conformance.cpp
+  "libBObol;libbu;Obol::Obol" TEST ALL_CXX)
+target_include_directories(test_bobol_model_conformance PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/..)
+foreach(_bobol_conformance_scenario
+    control-refinement
+    public-observation
+    result-authentication
+    identity-evidence
+    presentation-transaction
+    trace-refinement)
+  string(REPLACE "-" "_" _bobol_conformance_test
+    "${_bobol_conformance_scenario}")
+  brlcad_add_test(NAME libBObol_conformance_${_bobol_conformance_test}
+    COMMAND test_bobol_model_conformance "${_bobol_conformance_scenario}")
+  set_tests_properties(libBObol_conformance_${_bobol_conformance_test}
+    PROPERTIES LABELS "bobol_conformance;bobol_headless;bobol_sanitizer")
+endforeach()
+brlcad_add_test(NAME libBObol_conformance_catalog
+  COMMAND "${CMAKE_COMMAND}"
+    "-DBRLCAD_SOURCE_ROOT=${CMAKE_SOURCE_DIR}"
+    -P "${CMAKE_SOURCE_DIR}/misc/CMake/ValidateBObolConformance.cmake")
+set_tests_properties(libBObol_conformance_catalog PROPERTIES
+  LABELS "bobol_conformance;bobol_headless")
 
 brlcad_addexec(test_bobol_compact_occurrence_stream
   test_compact_occurrence_stream.cpp
@@ -182,6 +209,8 @@ if(Obol_NanoRTContextManager_FOUND)
     ${Obol_NanoRTContextManager_INCLUDE_DIR}
   )
   brlcad_add_test(NAME libBObol_nanort_render COMMAND test_bobol_nanort_render)
+  set_property(TEST libBObol_nanort_render APPEND PROPERTY
+    LABELS "bobol_graphics_qualification;bobol_graphics_osmesa")
 endif()
 
 # This label is a contract: every listed test must pass without an X11 or
@@ -226,20 +255,44 @@ endforeach()
 # to ownership, stale-handle, endpoint, or worker/publication boundaries.
 set(_bobol_sanitizer_tests
   libBObol_lod_service
+  libBObol_lod_update_action
   libBObol_lod_coordinator
   libBObol_compact_occurrence_stream
   libBObol_source_realization
+  libBObol_draw_cache
+  libBObol_mesh_lod_cache
   libBObol_view_store
   libBObol_compact_edit
   libBObol_scene_representation_lifecycle
   libBObol_edit_manipulator
   libBObol_rt_render
+  libBObol_window_host
   libBObol_headless_window_host)
 foreach(_bobol_test IN LISTS _bobol_sanitizer_tests)
   if(TEST ${_bobol_test})
     set_property(TEST ${_bobol_test} APPEND PROPERTY LABELS bobol_sanitizer)
   endif()
 endforeach()
+
+set(_bobol_sanitizer_targets
+  test_bobol_model_conformance
+  test_bobol_lod_service
+  test_bobol_lod_update_action
+  test_bobol_lod_coordinator
+  test_bobol_compact_occurrence_stream
+  test_bobol_source_realization
+  test_bobol_draw_cache
+  test_bobol_mesh_lod_cache
+  test_bobol_view_store
+  test_bobol_compact_edit
+  test_bobol_scene_representation_lifecycle
+  test_bobol_edit_manipulator
+  test_bobol_rt_render
+  test_bobol_window_host
+  test_bobol_headless_window_host)
+add_custom_target(bobol_sanitizer_tests DEPENDS ${_bobol_sanitizer_targets})
+set_target_properties(bobol_sanitizer_tests PROPERTIES
+  FOLDER "BRL-CAD Tests/libBObol")
 
 cmakefiles(
   CMakeLists.txt
@@ -251,6 +304,9 @@ cmakefiles(
   test_image_source.cpp
   test_lod_realization.cpp
   test_lod_coordinator.cpp
+  model_conformance_harness_private.h
+  model_trace_refinement_checker_private.h
+  test_model_conformance.cpp
   test_lod_service.cpp
   test_lod_update_action.cpp
   test_retained_allocation_oracle.cpp

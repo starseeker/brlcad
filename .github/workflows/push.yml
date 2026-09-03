@@ -122,6 +122,10 @@ jobs:
           cmake --build build_linux --config Release --target check
           cmake --build build_linux --config Release --target package
 
+      - name: Model-to-C++ conformance gate
+        if: steps.build_parallel.outcome == 'success'
+        run: ctest --test-dir build_linux -L bobol_conformance --output-on-failure
+
   # A full distcheck is too expensive for the runners, but we can run the
   # repository integrity check and make sure we can build source archives.
   archives:

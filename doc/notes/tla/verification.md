@@ -61,6 +61,16 @@ under `semanticAudit`.  Those fields are gate inputs, not advisory prose: a
 missing required coverage line, fair environment action, broad fairness on
 `Next`, or unclassified deadlock configuration fails the run.
 
+`conformance.json` is the implementation side of that contract.  Every
+`semanticAudit.requiredActions` entry must map to an existing C++ regression;
+stepwise mappings must execute the formal action name explicitly and check the
+shared observation invariants after the action.  Run its Java-independent
+drift check with:
+
+```sh
+cmake -P misc/CMake/ValidateBObolConformance.cmake
+```
+
 ## Verification tiers
 
 - **Lint:** catalog/schema/link checks and SANY parsing for all models.
@@ -68,6 +78,9 @@ missing required coverage line, fair environment action, broad fairness on
   catalog, and the canonical/refinement pair.
 - **Full:** all configurations with coverage and baseline comparison.
 - **Tool upgrade:** complete old/new tool runs before changing the pin.
+- **C++ conformance:** run `ctest -L bobol_conformance`; use the separately
+  labeled sanitizer, graphics, and performance gates for behavior outside the
+  bounded formal abstraction.
 
 TLC metadata and logs belong under a caller-selected build or temporary
 directory.  The runner also assigns a private Java temporary directory so

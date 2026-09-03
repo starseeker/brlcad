@@ -220,11 +220,9 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t3.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t4.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t5.g)
 
-# GED draw transaction to Obol controller bridge regression.  Supply the core
-# implementation objects directly so the test can exercise private seams
-# without exporting them from the shared ABI.  Resolve the command entry points
-# from the static command archive.  Mixing these objects with shared libged
-# creates duplicate translation-unit statics and owner records.
+# GED draw transaction to Obol controller bridge regression.  The static
+# archive exposes the private in-tree seams to this executable without loading
+# a second shared copy of the same process-global owner records.
 # Keep this unusually large white-box executable in sanitizer/debug builds:
 # optimized GCC builds would otherwise perform a second whole-GED LTO link
 # whose peak working set can exceed practical CI and developer-machine limits.
@@ -232,12 +230,6 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t5.g)
 if(NOT MSVC AND NOT BRLCAD_OPTIMIZED)
   brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp"
     "libged-static;libBObol-static;libwdb-static" TEST)
-  if(TARGET ged_test_obol_draw_sync AND TARGET libged-obj)
-    set(_ged_obol_private_object_regex
-      "/(draw|draw_obol|ged_obol_pick_private|ged_obol_polygon_private|ged_obol_presentation_private|ged_obol_selection_private|ged_view_export_private|ged_view_feature_batch|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")
-    target_sources(ged_test_obol_draw_sync PRIVATE
-      "$<FILTER:$<TARGET_OBJECTS:libged-obj>,INCLUDE,${_ged_obol_private_object_regex}>")
-  endif()
   foreach(tdp ${test_deps})
     if(TARGET ${tdp})
       add_dependencies(ged_test_obol_draw_sync ${tdp})

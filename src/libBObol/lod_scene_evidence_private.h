@@ -990,9 +990,24 @@ public:
     {
 	Decision decision;
 	/* Full-detail rendering does not publish into the LoD occurrence ledger.
-	 * Disabling LoD therefore terminates this coordinator by policy rather
-	 * than asking absent LoD counters to prove the ordinary draw path. */
+	 * Disabling automatic LoD therefore normally terminates this coordinator
+	 * rather than asking absent LoD counters to prove the ordinary draw path.
+	 * A caller may still submit an explicit progressive generation, however,
+	 * and its immutable result is not presented until the publication barrier
+	 * observes a completed frame.  Keep that concrete transaction and any
+	 * downstream reducer obligation visible even though automatic scheduling
+	 * remains disabled. */
 	if (!inputs.enabled) {
+	    if (inputs.publicationPending || inputs.controlPending) {
+		decision.phase = Phase::REFINING;
+		decision.outcome = Outcome::ACTIVE;
+		decision.fraction = 0.0f;
+		decision.terminal = false;
+		decision.viewReady = false;
+		decision.visualPending = true;
+		decision.hasLodState = true;
+		return decision;
+	    }
 	    decision.viewReady = true;
 	    return decision;
 	}

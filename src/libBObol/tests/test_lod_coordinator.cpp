@@ -2897,6 +2897,25 @@ test_convergence_policy(void)
 	return 1;
     }
 
+    input.publicationPending = true;
+    decision = policy.evaluate(input);
+    if (decision.phase != Policy::Phase::REFINING || decision.terminal ||
+	decision.outcome != Policy::Outcome::ACTIVE || decision.viewReady ||
+	!decision.visualPending || !decision.hasLodState) {
+	std::fprintf(stderr,
+	    "FAIL: explicit publication hidden by disabled automatic control\n");
+	return 1;
+    }
+
+    input.publicationPending = false;
+    input.controlPending = true;
+    decision = policy.evaluate(input);
+    if (decision.terminal || decision.viewReady || !decision.visualPending) {
+	std::fprintf(stderr,
+	    "FAIL: manual control debt hidden by disabled automatic control\n");
+	return 1;
+    }
+
     input = baseInput();
     input.expectedLeafCount = 10;
     input.availableLeafCount = 4;

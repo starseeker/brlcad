@@ -42,6 +42,7 @@ make_report()
             lod_presentation_transaction_serial: 3,
             lod_presentation_required_render_serial: 0,
             lod_control_presented_frame_serial: 4,
+            lod_render_completion_serial: 4,
             lod_renderer_preparation_target_signature: 0,
             lod_renderer_preparation_total_units: 0,
             lod_renderer_preparation_completed_units: 0,
@@ -116,6 +117,12 @@ make_report()
               $before.lod_allocation_plan_serial,
             transition_prior_transaction_serial:
               $before.lod_presentation_transaction_serial,
+            transition_prior_required_render_serial:
+              $before.lod_presentation_required_render_serial,
+            transition_prior_presented_frame_serial:
+              $before.lod_control_presented_frame_serial,
+            transition_prior_render_completion_serial:
+              $before.lod_render_completion_serial,
             transition_prior_outcome: $before.lod_convergence_outcome,
             transition_prior_renderer_preparation_target_signature:
               $before.lod_renderer_preparation_target_signature,
@@ -131,6 +138,21 @@ make_report()
             control_transitions: [
               transition($initial; $initial; 1; "initial"),
               transition($terminal; $initial; 2; "planning")
+            ]
+          }
+        elif $scenario == "complete-owner-transfer" then
+          (sample(3; 6; 7; false) |
+            .lod_control_fact_mask = 262144 |
+            .lod_control_obligation_mask = 32) as $presentation |
+          (sample(3; 4; 7; false) |
+            .lod_control_fact_mask = 16 |
+            .lod_control_obligation_mask = 8) as $publication |
+          {
+            samples: [$publication],
+            control_transition_trace_complete: true,
+            control_transitions: [
+              transition($presentation; $presentation; 1; "initial"),
+              transition($publication; $presentation; 2; "publication")
             ]
           }
         elif $scenario == "complete-multi-controller" then
@@ -372,6 +394,7 @@ expect_reject()
 
 expect_accept valid
 expect_accept complete-valid
+expect_accept complete-owner-transfer
 expect_accept complete-multi-controller
 expect_accept input-reopen
 expect_accept progress-cycle

@@ -521,8 +521,10 @@ struct BOBOL_EXPORT BObolHostWorkSnapshot {
 /** Finite event alphabet for the opt-in production control-transition
  * journal.  The nine owner events are numerically aligned with
  * BObolLodControlOwner; EXTERNAL_INPUT is the only event allowed to introduce
- * arbitrary new work.  UNNAMED is emitted by the journal's audit boundary
- * when observable state changed outside a registered reducer scope. */
+ * arbitrary new work.  PUBLICATION also carries the typed worker result-ready
+ * notification until the owner thread can expose its publication obligation.
+ * UNNAMED is emitted by the journal's audit boundary when observable state
+ * changed outside a registered reducer scope. */
 enum BObolLodControlTransitionEvent {
     BOBOL_LOD_CONTROL_TRANSITION_UNNAMED = 0,
     BOBOL_LOD_CONTROL_TRANSITION_INITIAL,
@@ -548,6 +550,10 @@ struct BOBOL_EXPORT BObolLodControlTraceState {
 
     BObolLodConvergenceStatus convergence;
     BObolHostWorkSnapshot hostWork;
+    /** Exact CAD-frame completion clock used by presentation barriers.  This
+     * is distinct from convergence.presentedFrameSerial, which counts host
+     * presentations whether or not they satisfy the CAD control contract. */
+    uint64_t renderCompletionSerial;
     uint64_t viewRevision;
     uint64_t policyRevision;
     SbBool interactionActive;

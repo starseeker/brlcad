@@ -70,6 +70,7 @@ set(
   notes/tla/FAIRNESS.md
   notes/tla/TERMINOLOGY.md
   notes/tla/RISK_COVERAGE.md
+  notes/tla/conformance.json
   notes/tla/models.json
   notes/tla/verification.md
 )

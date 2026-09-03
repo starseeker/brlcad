@@ -37,6 +37,7 @@ esac
 mkdir -p "$output_dir"
 summary="$output_dir/results.txt"
 failures=0
+cases_run=0
 : > "$summary"
 
 run_case()
@@ -53,6 +54,7 @@ run_case()
 	return
     fi
 
+    cases_run=$((cases_run + 1))
     echo "case=$label database=$database root=$root mode=${mode:-wire}" | tee -a "$summary"
     if [ -n "$mode" ]; then
 	"$perf_bin" --profile --autoview --render --repeat "$repeat" \
@@ -64,9 +66,15 @@ run_case()
 	    > "$log" 2>&1
     fi
     status=$?
+    iteration_count=$(grep -c '^iter=' "$log")
     grep '^iter=' "$log" | tee -a "$summary"
     if [ "$status" -ne 0 ]; then
 	echo "case=$label status=failed log=$log" | tee -a "$summary"
+	failures=$((failures + 1))
+	return
+    fi
+    if [ "$iteration_count" -lt "$repeat" ]; then
+	echo "case=$label status=failed reason=incomplete_profile expected=$repeat actual=$iteration_count log=$log" | tee -a "$summary"
 	failures=$((failures + 1))
 	return
     fi
@@ -95,6 +103,11 @@ if [ "$tier" = "full" ]; then
     run_case havoc_hidden "$data_build_dir/share/db/havoc.g" havoc -m4
     run_case generic_twin_hidden \
 	"$data_build_dir/share/db/faa/Generic_Twin.g" all -m4
+fi
+
+if [ "$cases_run" -eq 0 ]; then
+    echo "status=failed reason=no_performance_inputs" | tee -a "$summary"
+    exit 1
 fi
 
 if [ "$failures" -ne 0 ]; then

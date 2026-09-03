@@ -931,6 +931,15 @@ mesh_lod_context_create(const char *name)
     bu_vls_sprintf(&nameCachePath, "%s/%s_namekey", POP_CACHEDIR,
 		   bu_vls_cstr(&fname));
 
+    if (bobol_transaction_fault_requested(
+	    BObolTransactionFaultPoint::DURABLE_CACHE_OPEN)) {
+	bu_vls_free(&lodCachePath);
+	bu_vls_free(&nameCachePath);
+	bu_vls_free(&fname);
+	mesh_lod_context_close(context);
+	return NULL;
+    }
+
     /*
      * View scheduling opens unrelated asset prefixes in screen-value order,
      * not LMDB page order.  Kernel readahead on a multi-gigabyte PoP cache
@@ -1124,6 +1133,8 @@ mesh_lod_key_put(struct BObolMeshLodContext *context,
 	return -1;
 
     if (bobol_transaction_fault_requested(
+	    BObolTransactionFaultPoint::DURABLE_CACHE_WRITE) ||
+	bobol_transaction_fault_requested(
 	    BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT))
 	return -1;
 
@@ -4223,6 +4234,9 @@ BObolPopState::cacheWriteData(const char *component, const void *data,
      * are immutable and CACHE_POP_MAX_CUT is committed last, so no reader can
      * discover this partial generation through the name map. */
     struct bu_cache_txn *transaction = NULL;
+    if (bobol_transaction_fault_requested(
+	    BObolTransactionFaultPoint::DURABLE_CACHE_WRITE))
+	return false;
     const size_t written = bu_cache_write(const_cast<void *>(data), size,
 	keystr, context->i->lodCache, &transaction);
     if (written != size || !transaction) {
@@ -4248,6 +4262,11 @@ BObolPopState::cacheWriteSpatialData(const char *component, const void *data,
     char keystr[64] = {0};
     if (!cacheComponentKey(keystr, sizeof(keystr), component))
 	return false;
+    if (bobol_transaction_fault_requested(
+	    BObolTransactionFaultPoint::DURABLE_CACHE_WRITE)) {
+	abortSpatialWrites();
+	return false;
+    }
     const size_t written = bu_cache_write(const_cast<void *>(data), size,
 	keystr, context->i->lodCache, &spatialWriteTxn);
     if (written != size || !spatialWriteTxn) {

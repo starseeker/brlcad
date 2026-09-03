@@ -164,7 +164,8 @@ if(TARGET test_qtcad_obol_window_host)
   set_property(TEST test_qtcad_obol_window_host
     APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
   set_property(TEST test_qtcad_obol_window_host
-    APPEND PROPERTY LABELS drawing_baseline)
+    APPEND PROPERTY LABELS
+    "drawing_baseline;bobol_graphics_qualification;bobol_graphics_offscreen")
   if(BRLCAD_ENABLE_OPENGL AND UNIX)
     find_program(XVFB_RUN_EXECUTABLE xvfb-run)
     if(XVFB_RUN_EXECUTABLE)
@@ -178,7 +179,8 @@ if(TARGET test_qtcad_obol_window_host)
       set_property(TEST test_qtcad_obol_window_host_x11_gl
         PROPERTY SKIP_RETURN_CODE 125)
       set_property(TEST test_qtcad_obol_window_host_x11_gl
-        APPEND PROPERTY LABELS drawing_baseline)
+        APPEND PROPERTY LABELS
+        "drawing_baseline;bobol_graphics_qualification;bobol_graphics_system_gl")
     endif(XVFB_RUN_EXECUTABLE)
   endif(BRLCAD_ENABLE_OPENGL AND UNIX)
 endif(TARGET test_qtcad_obol_window_host)

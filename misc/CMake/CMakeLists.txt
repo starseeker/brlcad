@@ -74,6 +74,8 @@ set(
   TrackFiles.cmake
   BObol_pivot_guard.cmake
   BObol_pivot_guard_rules.cmake
+  RunTLA.cmake
+  ValidateBObolConformance.cmake
   static_link_test_main.cpp
   compat/README
   compat/README.compat

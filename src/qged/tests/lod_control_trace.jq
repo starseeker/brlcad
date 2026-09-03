@@ -24,6 +24,7 @@ def required_control_fields:
     "lod_presentation_transaction_serial",
     "lod_presentation_required_render_serial",
     "lod_control_presented_frame_serial",
+    "lod_render_completion_serial",
     "lod_capacity_search_phase",
     "lod_capacity_search_goal",
     "lod_capacity_search_samples_remaining",
@@ -88,6 +89,7 @@ def control_state:
     (.lod_presentation_transaction_serial // 0),
     (.lod_presentation_required_render_serial // 0),
     (.lod_control_presented_frame_serial // 0),
+    (.lod_render_completion_serial // 0),
     (.lod_convergence_phase // 0),
     (.lod_convergence_outcome // 0),
     (.lod_convergence_terminal // false),
@@ -271,6 +273,9 @@ def transition_endpoint:
     (.lod_capacity_revision // 0),
     (.lod_allocation_plan_serial // 0),
     (.lod_presentation_transaction_serial // 0),
+    (.lod_presentation_required_render_serial // 0),
+    (.lod_control_presented_frame_serial // 0),
+    (.lod_render_completion_serial // 0),
     (.lod_convergence_outcome // 0),
     (.lod_renderer_preparation_target_signature // 0),
     (.lod_renderer_preparation_remaining_units // 0)
@@ -289,6 +294,9 @@ def transition_prior_endpoint:
     (.transition_prior_capacity_revision // 0),
     (.transition_prior_allocation_plan_serial // 0),
     (.transition_prior_transaction_serial // 0),
+    (.transition_prior_required_render_serial // 0),
+    (.transition_prior_presented_frame_serial // 0),
+    (.transition_prior_render_completion_serial // 0),
     (.transition_prior_outcome // 0),
     (.transition_prior_renderer_preparation_target_signature // 0),
     (.transition_prior_renderer_preparation_remaining_units // 0)
@@ -322,7 +330,11 @@ def complete_transition_trace_violations($samples; $required):
        "transition_prior_policy_revision",
        "transition_prior_capacity_revision",
        "transition_prior_allocation_plan_serial",
-       "transition_prior_transaction_serial", "transition_prior_outcome",
+       "transition_prior_transaction_serial",
+       "transition_prior_required_render_serial",
+       "transition_prior_presented_frame_serial",
+       "transition_prior_render_completion_serial",
+       "transition_prior_outcome",
        "transition_prior_renderer_preparation_target_signature",
        "transition_prior_renderer_preparation_remaining_units"][] as $field |
       select(($entry.value | has($field)) | not) |
@@ -379,10 +391,13 @@ def complete_transition_trace_violations($samples; $required):
       select($event_owner != null) |
       ($samples[$index].transition_prior_owner // 0) as $before_owner |
       ($samples[$index].lod_control_owner // 0) as $after_owner |
-      (if $before_owner != 0 then $before_owner else $after_owner end) as $owner |
-      select($event_owner != $owner) |
+      select(($event_owner != $before_owner and
+              $event_owner != $after_owner) and
+        (($event == "publication" and $before_owner == 0 and
+          $after_owner == 0) | not)) |
       {kind: "transition-owner-mismatch", sample: $index, event: $event,
-       expected_owner: $owner, event_owner: $event_owner}
+       before_owner: $before_owner, after_owner: $after_owner,
+       event_owner: $event_owner}
     ])
   else []
   end;
@@ -725,6 +740,9 @@ controller_samples as $samples |
   serial_regressions($samples;
     "lod_control_presented_frame_serial";
     "presented-frame-regression") +
+  serial_regressions($samples;
+    "lod_render_completion_serial";
+    "render-completion-regression") +
   duplicate_plan_violations($samples) +
   terminal_reopen_violations($samples) +
   nonprogress_cycle_violations($samples) +

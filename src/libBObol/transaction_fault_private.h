@@ -17,6 +17,8 @@
 enum class BObolTransactionFaultPoint {
     RETAINED_SCENE_COMMIT = 0,
     PRESENTATION_COMMIT,
+    DURABLE_CACHE_OPEN,
+    DURABLE_CACHE_WRITE,
     DURABLE_CACHE_COMMIT
 };
 
@@ -31,6 +33,10 @@ bobol_transaction_fault_name(BObolTransactionFaultPoint point)
 	    return "retained-scene-commit";
 	case BObolTransactionFaultPoint::PRESENTATION_COMMIT:
 	    return "presentation-commit";
+	case BObolTransactionFaultPoint::DURABLE_CACHE_OPEN:
+	    return "durable-cache-open";
+	case BObolTransactionFaultPoint::DURABLE_CACHE_WRITE:
+	    return "durable-cache-write";
 	case BObolTransactionFaultPoint::DURABLE_CACHE_COMMIT:
 	    return "durable-cache-commit";
     }

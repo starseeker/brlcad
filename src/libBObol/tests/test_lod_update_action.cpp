@@ -28,6 +28,7 @@
 #include "../lod_result_authentication_private.h"
 #include "../retained_allocation_private.h"
 #include "../view_lod_coordinator_state_private.h"
+#include "model_trace_refinement_checker_private.h"
 #include "transaction_fault_test_private.h"
 #include "bv.h"
 #include "bu/app.h"
@@ -6731,7 +6732,8 @@ test_view_controller_lod_submit_and_apply(void)
 	    if (settlePayload &&
 		settlePayload->activeCut == settlePayload->requestedCut &&
 		service.pendingTaskCountForDiagnostics() == 0 &&
-		service.queuedResultCountForDiagnostics() == 0)
+		service.queuedResultCountForDiagnostics() == 0 &&
+		!controller.hasPendingLodRefinementFrame())
 		break;
 	    const uint64_t presentedStarted = controller.beginRenderTiming();
 	    controller.completeRenderTiming(
@@ -7565,6 +7567,9 @@ test_view_controller_shared_lod_is_view_local(void)
 static int
 test_view_controller_progressive_lod_results(void)
 {
+    static constexpr size_t ExpectedPublishedResultCount = 2;
+    static constexpr std::chrono::milliseconds ResultPresentationFrameDuration(
+	1);
     SoSeparator *root = new SoSeparator;
     root->ref();
     SoBRLLodMeshShape *mesh = make_lod_mesh("/progress/lod.bot", "lod.bot");
@@ -7586,6 +7591,14 @@ test_view_controller_progressive_lod_results(void)
 	std::atomic<unsigned int> frameRequestCount(0);
 	controller.setFrameRequestCallback(
 	    count_frame_request, &frameRequestCount);
+	static constexpr size_t ResultPresentationTraceLimit = 1024;
+	controller.setLodControlTransitionTracing(
+	    TRUE, ResultPresentationTraceLimit);
+	const auto completeResultPresentationFrame = [&controller]() {
+	    const uint64_t started = controller.beginRenderTiming();
+	    std::this_thread::sleep_for(ResultPresentationFrameDuration);
+	    controller.completeRenderTiming(started, test_capacity_cad_timing());
+	};
 
 	BObolLodRequest request = make_request("/progress/lod.bot", "lod.bot");
 	request.viewRevision = controller.getLodViewRevision();
@@ -7648,10 +7661,7 @@ test_view_controller_progressive_lod_results(void)
 	}
 
 	if (!ret) {
-	    const uint64_t started = controller.beginRenderTiming();
-	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-	    controller.completeRenderTiming(
-		started, test_capacity_cad_timing());
+	    completeResultPresentationFrame();
 	    if (controller.hasPendingLodRefinementFrame() ||
 		!controller.hasProgressiveWorkPending() ||
 		!controller.isRenderRequested()) {
@@ -7693,6 +7703,57 @@ test_view_controller_progressive_lod_results(void)
 		ret = 1;
 	    }
 	}
+
+	if (!ret) {
+	    completeResultPresentationFrame();
+	}
+
+	if (!ret) {
+	    std::vector<BObolLodControlTransitionRecord> records;
+	    controller.drainLodControlTransitions(records);
+	    const BObolTraceRefinementResult trace =
+		BObolResultPresentationTraceChecker::check(
+		    records,
+		    controller.getDroppedLodControlTransitionCount());
+	    if (!trace.valid ||
+		    trace.statistics.completedPublicationBarriers !=
+			ExpectedPublishedResultCount) {
+		printf("FAIL: result-to-presentation trace refinement "
+		       "record=%zu serial=%llu event=%s completed=%zu/%zu: %s\n",
+		       trace.failure.recordIndex,
+		       static_cast<unsigned long long>(trace.failure.serial),
+		       bobol_lod_control_transition_event_name(
+			   trace.failure.event),
+		       trace.statistics.completedPublicationBarriers,
+		       ExpectedPublishedResultCount,
+		       trace.failure.detail.c_str());
+		for (const BObolLodControlTransitionRecord &record : records) {
+		    printf("  trace serial=%llu event=%s owner=%d->%d "
+			   "facts=%u->%u transaction=%llu->%llu "
+			   "required=%llu->%llu completed=%llu->%llu\n",
+			   static_cast<unsigned long long>(record.serial),
+			   bobol_lod_control_transition_event_name(record.event),
+			   record.before.convergence.controlOwner,
+			   record.after.convergence.controlOwner,
+			   record.before.convergence.controlFactMask,
+			   record.after.convergence.controlFactMask,
+			   static_cast<unsigned long long>(record.before.convergence.
+			       presentationTransactionSerial),
+			   static_cast<unsigned long long>(record.after.convergence.
+			       presentationTransactionSerial),
+			   static_cast<unsigned long long>(record.before.convergence.
+			       presentationRequiredRenderSerial),
+			   static_cast<unsigned long long>(record.after.convergence.
+			       presentationRequiredRenderSerial),
+			   static_cast<unsigned long long>(
+			       record.before.renderCompletionSerial),
+			   static_cast<unsigned long long>(
+			       record.after.renderCompletionSerial));
+		}
+		ret = 1;
+	    }
+	}
+	controller.setLodControlTransitionTracing(FALSE);
 	controller.clearFrameRequestCallback(&frameRequestCount);
     }
 

@@ -57,7 +57,7 @@ occurrence authentication.
 | Proof boundary | Production enforcement | Executable evidence | Status |
 |---|---|---|---|
 | `ObolProgressivePipeline`: one six-domain stamp, one bounded cursor, one finite owner, derived terminal outcome | `lod_revision_private.h`, `lod_control_private.h`, coordinator evidence values and controller effect executors; exact Obol GPU keys; exact/interned capacity, structural-frontier, and compact-presentation credentials | `test_lod_coordinator.cpp` six-domain revision, owner, witness, typed-outcome, equivalent-population, and collision tests; retained-allocation identity tests; randomized completed-pass and transition-journal tests; focused Obol renderer tests | **Conforming** after `CXX-STAMP-001`: partial and caller-assembled planning stamps are unrepresentable, every domain independently invalidates stored plans and allocation keys, and mutable-state cache authorization retains exact inputs rather than a folded digest. |
-| `ObolControlRefinement`: 29 independent facts refine to nine work classes and one fixed-precedence owner | `BObolLodControlRefinement`, `BObolLodControlTransitionScope`, controller transition journal, and runtime violation projection | per-field and exhaustive owner combinations in `test_lod_coordinator.cpp`; randomized journal test; complete graphical trace checker | **Conforming** after `CXX-TRACE-001`: every retained transition has typed endpoints and the audit sentinel rejects an unmapped writer. |
+| `ObolControlRefinement`: 29 independent facts refine to nine work classes and one fixed-precedence owner | `BObolLodControlRefinement`, `BObolLodControlTransitionScope`, controller transition journal, and runtime violation projection | per-field and exhaustive owner combinations in `test_lod_coordinator.cpp`; randomized journal test; complete graphical trace checker; result-to-presentation trace oracle | **Conforming** after `CXX-TRACE-001` and `CXX-VTRACE-001`: every retained transition has typed endpoints, the audit sentinel rejects an unmapped writer, and authenticated result publication remains causally paired with its exact completed frame. |
 | `ObolResultAuthentication`: independent route, population, and demand authentication before publish/failure/retry | service result normalization, `lod_result_authentication_private.h`, controller publication gate, view-state reducer | direct disposition table plus the 50-case asynchronous controller matrix in `test_lod_update_action.cpp`; service request-matching tests | **Conforming** after `CXX-RP-001`. |
 | `ObolIdentityExhaustion`: a fixed-width identity advances without reuse or fail-stops before a semantic mutation | `BObolLodStrongUInt64`, libBObol `identity_counter_private.h`, and Obol `CadIdentityCounter.h` across retained-plan, classifier, preparation, timing, and resource evidence | successor boundary tests in `test_lod_coordinator.cpp` and Obol `test_cad_instance_records.cpp`; cross-session trace-token regression in `test_window_host.cpp` | **Conforming** after `CXX-ABA-001`. |
 | `ObolSharedAssetLease`: a surviving or late consumer retains shared build/result ownership; only the final lease cancels | typed shared-producer state, generation leases, producer-aware cancellation, and per-generation payload/replay drains in `BObolLodService` | same-generation coalescing plus six cross-generation build/result/cancellation lifecycle cases in `test_lod_service.cpp` | **Conforming** after `CXX-SL-001`. |
@@ -198,6 +198,56 @@ host level and presentation witness and retires it only at completed or
 interrupted-frame reduction.  The repaired representative trace contains 57
 transitions, 15 claimed-frame endpoints, no unnamed events or drops, and
 passes the independent refinement checker.
+
+## Closed vertical finding: result-to-presentation trace refinement
+
+### CXX-VTRACE-001 — valid snapshots did not prove publication reached a frame
+
+The complete transition journal closed the gaps between sampled control
+states, but the generic checker still treated transaction and presentation
+serials as diagnostic clocks.  It did not prove the vertical causal chain from
+an asynchronous result-ready notification, through owner-thread publication
+and an exact-frame barrier, to retirement by the required completed CAD
+render.  In particular, a trace made entirely of locally valid snapshots could
+still lose, replace, or retire that barrier at the wrong frame.
+
+`BObolResultPresentationTraceChecker` is a test-side observer over the public
+journal.  It rejects missing or dropped prefixes, unnamed events,
+noncontiguous serials, discontinuous endpoints, invalid production states,
+event/owner mismatches, revision or clock regressions, and disagreement
+between the concrete 29-fact mask and an independently recomputed obligation
+and owner.  Once a current result arms a publication barrier, the checker
+retains its transaction, view, policy, and required-render identities.  Only a
+matching completed-render clock may retire it; a typed external-input revision
+may instead supersede it.  The exact render-completion clock is now part of the
+public trace endpoint and qged's JSON endpoint schema, distinct from the
+broader host presentation counter.
+
+The production integration witness submits delayed coarse and refined results
+through the real worker service, publishes each immutable payload on the
+controller thread, completes both render transactions, drains the bounded
+journal, and requires at least one fully retired publication barrier.  Small
+synthetic traces independently prove that the oracle rejects lost serials,
+discontinuous endpoints, unnamed and wrong-owner events, missing completed
+frames, and traces with no vertical flow.
+
+Running that witness exposed three adjacent defects.  Final non-partial result
+batches requested a frame but, unlike partial prefixes, did not arm its numeric
+publication barrier.  A manually submitted generation was also manufacturing
+an automatic demand-refresh successor after result delivery even though
+automatic LoD was disabled.  Conversely, the disabled convergence shortcut
+reported `terminal` while the manual result's publication or presentation
+reducer still owned foreground work.  Every requested result frame now has an
+exact successor identity, manual delivery owns only its submitted request, and
+the disabled shortcut remains active until any explicit publication/control
+debt reaches its frame.  The ordinary no-LoD path is unchanged and immediately
+ready.
+
+No formula change was needed.  With `automatic = FALSE`,
+`ObolControlLifecycleComposition.CompleteProvider` already creates no demand
+pass but does create exact-frame debt; `QueueExactFrame`, `BeginRender`, and
+`CompleteCurrentRender` carry that debt to a current presentation.  The new
+conformance-catalog entry maps the live C++ trace to exactly those actions.
 
 ## Closed vertical finding: complete evidence stamps
 
@@ -420,6 +470,61 @@ cover zero, the final valid successor, exhausted detection, local/atomic
 allocation, and diagnostic saturation without deliberately terminating the
 test process.
 
+## Operational model-to-implementation gate
+
+`tla/conformance.json` is the machine-readable bridge from formal actions to
+C++ evidence.  It defines one shared observation vector for control ownership,
+consumer generation, exact request identity, authenticated result disposition,
+terminal lifecycle, semantic presentation debt, render-barrier transaction,
+source identity, and evidence validity.  The C++ harness copies those values
+from production reducers; it is an observer and never becomes a second
+scheduler or source of policy.
+
+The same harness adapts the public `BObolLodConvergenceStatus` and
+`BObolHostWorkSnapshot` pair into that vector.  Its public-observation scenario
+checks render request/retirement and worker-generation attachment/detachment,
+so lifecycle and generation fields cannot remain catalog-only placeholders.
+
+`test_model_conformance.cpp` executes the highest-risk reducer sequences one
+formal action at a time and checks the common invariants after every action.
+Its deterministic scenarios cover owner discharge; current, failed, retrying,
+and late superseded results; exact-set reordering, invalidation, ABA
+non-reuse, and numeric exhaustion; coherent retained-replay timing; and early,
+incomplete, current, and stale presentation frames.  The semantic-frame steps
+use formal action names, while implementation-only barrier steps are identified
+as such.  The trace-refinement scenario also mutates a valid vertical witness
+to prove each structural rejection, while the asynchronous staged-result test
+checks the same oracle against production worker and renderer transitions.
+Existing asynchronous tests remain the witnesses for worker
+cancellation, callback teardown/reuse, shared producer leases, and full
+controller behavior.  The manifest connects both kinds of test to every action
+singled out by `models.json.semanticAudit.requiredActions`.
+
+`ValidateBObolConformance.cmake` fails if an observation domain disappears, a
+model or action is renamed without updating its C++ scenario, a test source is
+missing, a stepwise scenario stops executing its formal action name, or any
+required semantic-audit action loses its mapping.  It runs as a focused CTest
+and from the TLA+ runner, so the bridge is checked by both implementation and
+proof changes.
+
+The runtime gates are deliberately separate:
+
+- `ctest -L bobol_conformance` is the fast ordinary-CI contract;
+- `bobol_sanitizer_tests` plus `ctest -L bobol_sanitizer` is the shared
+  ASan/UBSan contract and the nightly TSan contract;
+- `bobol_graphics_offscreen`, `bobol_graphics_osmesa`, and
+  `bobol_graphics_system_gl` keep software/offscreen, OSMesa, and native
+  X11/System-GL evidence distinct; and
+- `bobol_performance_qualification` records cold quick-profile evidence and
+  fails if no database or expected iteration result was actually exercised.
+
+The durable-cache fault matrix now denies opening the backing store, writing
+staged payload data, and committing the authoritative name mapping.  Initial
+publication remains undiscoverable at every edge, and replacement failure
+preserves the prior complete hierarchy.  This checks transactional visibility;
+power-loss durability and storage-device behavior remain release/platform
+qualification rather than a TLA+ claim.
+
 ## Remaining audit findings
 
 All identified formal-to-C++ vertical findings are closed.  The independent
@@ -435,7 +540,8 @@ terminal outcome must update together:
 1. the focused component model and applicable composition;
 2. its production typed value/reducer rather than a parallel latch;
 3. the executable table or lifecycle matrix at the real asynchronous seam;
-4. `tla/models.json` ownership/test metadata and this ledger; and
+4. `tla/models.json`, `tla/conformance.json`, ownership/test metadata, and this
+   ledger; and
 5. the focused TLC baseline after review, plus the complete formal-suite gate.
 
 Passing TLC cannot close numeric quality, geometry validity, memory magnitude,
